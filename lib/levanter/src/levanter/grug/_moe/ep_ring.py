@@ -18,6 +18,7 @@ from levanter.grug._moe.common import (
     MoeRaggedDotOps,
 )
 from levanter.grug._moe.ep_common import _prefix_cap_counts, _resolve_ragged_dot_fns
+from levanter.grug._moe.fp8_wire import fp8_all_gather, fp8_psum_scatter
 from levanter.grug.sharding import _batch_axes
 
 
@@ -32,12 +33,16 @@ def _moe_mlp_ep_ring_local(
     activation_fn: Callable[[jax.Array], jax.Array],
     num_experts: int,
     capacity_factor: float,
+    fp8_wire: bool = False,
 ) -> tuple[Float[Array, "Tlocal H"], Int[Array, ""]]:
     """Ring-style EP routed path: all-gather dispatch + psum-scatter collect."""
     # #2710 ring EP strategy: gather tokens and their selected-expert routing
     # assignments across expert shards, then psum-scatter back to local tokens.
     with jax.named_scope("gather"):
-        x_global = jax.lax.all_gather(x_local, "expert", tiled=True)
+        if fp8_wire:
+            x_global = fp8_all_gather(x_local, "expert")
+        else:
+            x_global = jax.lax.all_gather(x_local, "expert", tiled=True)
         selected_experts_global = jax.lax.all_gather(selected_experts_local, "expert", tiled=True)
         combine_weights_global = jax.lax.all_gather(combine_weights_local, "expert", tiled=True)
 
@@ -114,6 +119,9 @@ def _moe_mlp_ep_ring_local(
         out_global = jnp.zeros_like(x_global).at[token_local].add(out_dispatch * weight_dispatch[:, None], mode="drop")
         # #2710 ring EP strategy: collect only this shard's token slice after
         # reducing contributions from experts across the EP mesh.
-        out_local = jax.lax.psum_scatter(out_global, "expert", scatter_dimension=0, tiled=True)
+        if fp8_wire:
+            out_local = fp8_psum_scatter(out_global, "expert")
+        else:
+            out_local = jax.lax.psum_scatter(out_global, "expert", scatter_dimension=0, tiled=True)
         dropped_total = jax.lax.psum(dropped_local, _batch_axes(jax.sharding.get_abstract_mesh()))
     return out_local, dropped_total

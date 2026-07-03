@@ -13,6 +13,7 @@ from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P
 
 from levanter.grug._moe.ep_common import _shard_a2a_params
 from levanter.grug._moe.fp8_wire import fp8_all_gather, fp8_psum_scatter, fp8_ragged_a2a
+from levanter.grug.grug_moe import moe_mlp
 
 
 def _expert_mesh_or_skip(min_shards: int = 2) -> Mesh:
@@ -170,3 +171,91 @@ def test_fp8_ragged_a2a_forward_and_backward_within_wire_tolerance():
 
     assert _relfrob(got, want) < 0.05  # E4M3 forward
     assert _relfrob(g_wire, g_native) < 0.15  # E5M2 backward
+
+
+def _ep_moe_mesh_or_skip(expert: int = 2) -> Mesh:
+    devices = jax.devices()
+    if len(devices) < expert or len(devices) % expert != 0:
+        pytest.skip(f"needs >= {expert} devices with expert-divisible count")
+    mesh_devices = np.array(devices).reshape(len(devices) // expert, expert, 1)
+    return Mesh(
+        mesh_devices,
+        axis_names=("data", "expert", "model"),
+        axis_types=(AxisType.Explicit, AxisType.Explicit, AxisType.Explicit),
+    )
+
+
+def test_moe_mlp_ring_fp8_wire_parity():
+    # End-to-end: values and input gradients stay within FP8 wire tolerance of
+    # the bf16-wire path (E4M3 dispatch fwd, E5M2 combine-transpose bwd).
+    mesh = _ep_moe_mesh_or_skip()
+    t, d, i, e, k = 64, 32, 16, 16, 4
+    key = jax.random.key(0)
+    kx, ks, kw, k1, k2, kc = jax.random.split(key, 6)
+    batch = P(("data", "expert"))
+    with jax.set_mesh(mesh):
+        x = jax.device_put(jax.random.normal(kx, (t, d), dtype=jnp.float32), NamedSharding(mesh, batch))
+        sel = jax.device_put(
+            jnp.argsort(jax.random.uniform(ks, (t, e)), axis=-1)[:, :k].astype(jnp.int32),
+            NamedSharding(mesh, batch),
+        )
+        cw = jax.device_put(jax.nn.softmax(jax.random.normal(kw, (t, k))), NamedSharding(mesh, batch))
+        w13 = jax.device_put(jax.random.normal(k1, (e, d, 2 * i)) * 0.05, NamedSharding(mesh, P("expert", None, None)))
+        w2 = jax.device_put(jax.random.normal(k2, (e, i, d)) * 0.05, NamedSharding(mesh, P("expert", None, None)))
+        cot = jax.device_put(jax.random.normal(kc, (t, d), dtype=jnp.float32), NamedSharding(mesh, batch))
+
+        def loss(x_, *, wire):
+            out = moe_mlp(x_, sel, cw, w13, w2, implementation="ring", mesh=mesh, fp8_wire=wire)
+            return jnp.sum(out * cot)
+
+        out_wire = moe_mlp(x, sel, cw, w13, w2, implementation="ring", mesh=mesh, fp8_wire=True)
+        out_ref = moe_mlp(x, sel, cw, w13, w2, implementation="ring", mesh=mesh)
+        g_wire = jax.jit(jax.grad(lambda v: loss(v, wire=True)))(x)
+        g_ref = jax.jit(jax.grad(lambda v: loss(v, wire=False)))(x)
+
+    assert _relfrob(out_wire, out_ref) < 0.1
+    assert _relfrob(g_wire, g_ref) < 0.2
+
+
+@pytest.mark.skipif(jax.default_backend() != "gpu", reason="ragged_all_to_all has no CPU lowering")
+def test_moe_mlp_ragged_a2a_fp8_wire_parity():
+    mesh = _ep_moe_mesh_or_skip()
+    t, d, i, e, k = 64, 32, 16, 16, 4
+    key = jax.random.key(0)
+    kx, ks, kw, k1, k2 = jax.random.split(key, 5)
+    batch = P(("data", "expert"))
+    with jax.set_mesh(mesh):
+        x = jax.device_put(jax.random.normal(kx, (t, d), dtype=jnp.float32), NamedSharding(mesh, batch))
+        sel = jax.device_put(
+            jnp.argsort(jax.random.uniform(ks, (t, e)), axis=-1)[:, :k].astype(jnp.int32),
+            NamedSharding(mesh, batch),
+        )
+        cw = jax.device_put(jax.nn.softmax(jax.random.normal(kw, (t, k))), NamedSharding(mesh, batch))
+        w13 = jax.device_put(jax.random.normal(k1, (e, d, 2 * i)) * 0.05, NamedSharding(mesh, P("expert", None, None)))
+        w2 = jax.device_put(jax.random.normal(k2, (e, i, d)) * 0.05, NamedSharding(mesh, P("expert", None, None)))
+
+        out_wire = moe_mlp(x, sel, cw, w13, w2, implementation="ragged_all_to_all", mesh=mesh, fp8_wire=True)
+        out_ref = moe_mlp(x, sel, cw, w13, w2, implementation="ragged_all_to_all", mesh=mesh)
+    assert _relfrob(out_wire, out_ref) < 0.1
+
+
+def test_moe_mlp_rejects_fp8_wire_without_expert_axis():
+    # Contract: fp8_wire only exists on the EP dispatch/combine collectives; a
+    # silent bf16 fallback would let runs believe they measure the FP8 wire.
+    devices = jax.devices()
+    mesh_devices = np.array(devices).reshape(len(devices), 1)
+    mesh = Mesh(mesh_devices, axis_names=("data", "model"), axis_types=(AxisType.Explicit, AxisType.Explicit))
+    t, d, i, e, k = 16, 8, 4, 4, 2
+    key = jax.random.key(0)
+    kx, ks, kw, k1, k2 = jax.random.split(key, 5)
+    with jax.set_mesh(mesh):
+        x = jax.device_put(jax.random.normal(kx, (t, d), dtype=jnp.float32), NamedSharding(mesh, P("data")))
+        sel = jax.device_put(
+            jnp.argsort(jax.random.uniform(ks, (t, e)), axis=-1)[:, :k].astype(jnp.int32),
+            NamedSharding(mesh, P("data")),
+        )
+        cw = jax.device_put(jax.nn.softmax(jax.random.normal(kw, (t, k))), NamedSharding(mesh, P("data")))
+        w13 = jax.device_put(jax.random.normal(k1, (e, d, 2 * i)) * 0.05, NamedSharding(mesh, P(None, None, None)))
+        w2 = jax.device_put(jax.random.normal(k2, (e, i, d)) * 0.05, NamedSharding(mesh, P(None, None, None)))
+        with pytest.raises(NotImplementedError, match="fp8_wire"):
+            moe_mlp(x, sel, cw, w13, w2, implementation="ring", mesh=mesh, fp8_wire=True)
