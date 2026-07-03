@@ -133,11 +133,18 @@ improvement over the stock Llama-3 tokenizer** for target grug-moe models.
 
   | ratio | 0.25 | 0.5 | 0.75 | 1.0 | 2.0 |
   |---|---|---|---|---|---|
-  | BPB | _pend_ | **1.2353 (−0.2%)** | _pend_ | 1.2505 | 1.2838 |
+  | BPB | **1.2328 (−0.4%)** | 1.2353 (−0.2%) | 1.2412 (+0.3%) | 1.2505 (+1.0%) | 1.2838 (+3.7%) |
 
-- **Conclusion (partial)**: monotone in ratio — a light n-gram (0.5) is the first config to beat
-  baseline, heavier injects noise. The proxy-scale gain is small (−0.2%); magnitude is the scale
-  question → EXP-007.
+- **Conclusion**: **strictly monotone in ratio** — the lighter the n-gram, the better; ratio 0.25 is
+  the proxy-scale optimum at **−0.4% BPB**, and the gain vanishes (then reverses) as the ratio grows.
+  This is the residual-init story: at ratio 1.0 the random-initialized n-gram terms enter the
+  post-embedding RMSNorm with equal norm to the trained base embedding, so early training fights
+  noise; a small ratio injects the n-gram signal as a gentle perturbation. The proxy-scale gain is
+  real but small (−0.4%). Its magnitude, not its sign, is the open question → EXP-007. Also note the
+  gain shrinks with more training: at s8000 the ratio-1.0 n-gram is already ~neutral (marin+b4M
+  1.1462 vs baseline 1.1469), i.e. the base model recovers the n-gram's head-start given enough
+  steps — so the n-gram buys *sample efficiency*, and its feBPB value depends on operating below the
+  point where the plain baseline catches up.
 
 ## EXP-007 — does the n-gram gain grow with model scale? _(running)_
 
@@ -146,10 +153,18 @@ improvement over the stock Llama-3 tokenizer** for target grug-moe models.
   should widen the marin-vs-(marin+n-gram) BPB gap, evidencing that the lever pays off at the 20B-
   activated target.
 - **Config**: hidden **2048** (16 layers, 32 experts, top-4; ~4× params), marin-128k baseline vs
-  marin-128k + n-gram (b4M, ratio 0.5, rank 256), at s3500 + s8000. SCALE_RAM 512g.
-- **Reproduce**: `w2048` helper (SCALE_HIDDEN_DIM=2048 …; job-names `grug-w2048[-ngram]-marin-128k-s<steps>`).
+  marin-128k + n-gram, at s3500 + s8000. SCALE_RAM 512g. The n-gram is held at the **exact
+  hidden-1024 best point** (b4M buckets, mean, orders 2,3,4, rank 128, **ratio 0.25**) so that the
+  only variable across scales is the model width — Δ(ngram−base) is then a clean read on how the
+  fixed lever's value moves with model size.
+- **Reproduce**: `scratchpad/relaunch_w2048_ngram.py` (SCALE_HIDDEN_DIM=2048 + the fixed n-gram env;
+  job-names `grug-w2048-marin-128k-s<steps>` baseline / `grug-w2048-ngram-marin-128k-s<steps>-r2`).
+- **Infra note**: the first hidden-2048 n-gram launch failed in 10 s with `exec: RUN_ID: not found`
+  (exit 127) — a shell-quoting bug in the hand-built command, **not** an OOM; relaunched from a
+  Python script that builds the arg list directly (`-r2`).
 - **Result / Conclusion**: _pending_ — compare the hidden-2048 Δ(ngram−base) to the hidden-1024 Δ
-  (−0.2% at ratio 0.5). A larger negative Δ = the lever scales.
+  (−0.4% at this same config). A larger negative Δ = the lever scales with model size (the paper's
+  claim, and the basis for extrapolating value to the 20B-activated target).
 
 ## EXP-005 — n-gram (paper config b4M) stacked on superbpe-128k _(pending)_
 
