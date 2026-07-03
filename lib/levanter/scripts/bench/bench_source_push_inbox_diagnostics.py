@@ -20,6 +20,7 @@ from levanter.grug._moe.source_push_inbox import (
     DIAGNOSTIC_INPUT_MODE_COMPACT_ROUTING,
     DIAGNOSTIC_INPUT_MODE_SYNTHETIC_BLOCKS,
     PushInboxConfig,
+    SLOW_USEFUL_W13_TFLOPS_PER_RANK,
     SourcePushInboxRunSettings,
     run_source_push_inbox_diagnostic,
     source_push_inbox_profile,
@@ -37,7 +38,6 @@ SUMMARY_METRICS = (
     "lower_compile_time",
     "first_run_time",
 )
-SLOW_USEFUL_W13_TFLOPS_PER_RANK = 160.0
 
 
 def _parse_variant_csv(value: str) -> tuple[str, ...]:

@@ -35,6 +35,7 @@ from levanter.grug._moe.source_push_inbox import (
     BYTES_PER_BF16,
     HostInputs,
     PushInboxConfig,
+    SLOW_USEFUL_W13_TFLOPS_PER_RANK,
     SourcePushInboxRunSettings,
     TimingResult,
     _block_until_ready,
@@ -79,7 +80,6 @@ FORWARD_STAGES = (FORWARD_STAGE_W13, FORWARD_STAGE_W2_RETURN, FORWARD_STAGE_COMB
 SOURCE_PUSH_FORWARD_IMPLEMENTATION_REFERENCE = "reference"
 SOURCE_PUSH_FORWARD_IMPLEMENTATION_PALLAS_MGPU = "pallas_mgpu"
 SourcePushForwardImplementation: TypeAlias = Literal["reference", "pallas_mgpu"]
-SLOW_USEFUL_W13_TFLOPS_PER_RANK = 160.0
 FORWARD_SUMMARY_METRICS = (
     "steady_state_time",
     "bytes_per_rank",
@@ -995,15 +995,15 @@ def _forward_summary_row(rows: list[dict[str, Any]], *, stage: str) -> dict[str,
         "error": None,
         "error_type": None,
         "error_message": None,
-        "min_steady_state_time": _min_field(rows, "steady_state_time"),
-        "max_steady_state_time": _max_field(rows, "steady_state_time"),
+        "min_steady_state_time": _min_optional_field(rows, "steady_state_time"),
+        "max_steady_state_time": _max_optional_field(rows, "steady_state_time"),
         "p90_steady_state_time": _percentile_field(rows, "steady_state_time", 0.90),
         "p95_steady_state_time": _percentile_field(rows, "steady_state_time", 0.95),
     }
     if isinstance(queue_stats, dict):
         summary.update(queue_stats)
     for metric in FORWARD_SUMMARY_METRICS:
-        summary[f"median_{metric}"] = _median_field(rows, metric)
+        summary[f"median_{metric}"] = _median_optional_field(rows, metric)
     if stage == FORWARD_STAGE_W13:
         useful_w13_values = [
             row["useful_w13_tflops_per_rank"] for row in rows if row.get("useful_w13_tflops_per_rank") is not None
@@ -1014,27 +1014,27 @@ def _forward_summary_row(rows: list[dict[str, Any]], *, stage: str) -> dict[str,
                 "slow_useful_w13_threshold": SLOW_USEFUL_W13_TFLOPS_PER_RANK,
                 "slow_useful_w13_repeats": slow_repeats,
                 "slow_useful_w13_fraction": slow_repeats / len(useful_w13_values) if useful_w13_values else None,
-                "min_useful_w13_tflops_per_rank": _min_field(rows, "useful_w13_tflops_per_rank"),
+                "min_useful_w13_tflops_per_rank": _min_optional_field(rows, "useful_w13_tflops_per_rank"),
             }
         )
     return summary
 
 
-def _median_field(rows: list[dict[str, Any]], field: str) -> float | int | None:
+def _median_optional_field(rows: list[dict[str, Any]], field: str) -> float | int | None:
     values = [row[field] for row in rows if row.get(field) is not None]
     if not values:
         return None
     return median(values)
 
 
-def _min_field(rows: list[dict[str, Any]], field: str) -> float | int | None:
+def _min_optional_field(rows: list[dict[str, Any]], field: str) -> float | int | None:
     values = [row[field] for row in rows if row.get(field) is not None]
     if not values:
         return None
     return min(values)
 
 
-def _max_field(rows: list[dict[str, Any]], field: str) -> float | int | None:
+def _max_optional_field(rows: list[dict[str, Any]], field: str) -> float | int | None:
     values = [row[field] for row in rows if row.get(field) is not None]
     if not values:
         return None

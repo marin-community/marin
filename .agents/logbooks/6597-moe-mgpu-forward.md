@@ -1054,6 +1054,8 @@ does not require manual JSONL post-processing.
     `combine` when repeat rows are present.
   - Summary rows include median metrics, min/max/p90/p95 `steady_state_time`, flattened queue stats, and W13 slow-repeat
     accounting against the existing `<160 useful TFLOP/s/rank` threshold.
+  - The slow W13 threshold is now defined once in `source_push_inbox.py` and shared by diagnostics plus full-forward
+    summaries.
   - Error rows remain unchanged; summary rows are added only for successful repeat rows.
 - Local verification:
   - `uv run --package marin-levanter --group test pytest lib/levanter/tests/grug/test_source_push_inbox.py -q -k 'forward_adds_summary or source_push_forward_runner_returns_structured_validation_errors or source_push_forward_bench_cli_imports or source_push_forward_cli_passes_profile_defaults'`
