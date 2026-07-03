@@ -13,6 +13,7 @@ import argparse
 import base64
 import dataclasses
 import hashlib
+import importlib
 import importlib.metadata as md
 import importlib.util
 import io
@@ -59,7 +60,13 @@ VLLM_TENSOR_PARALLEL_SIZE = 1
 VLLM_DATA_PARALLEL_SIZE = 8
 VLLM_EXPERT_PARALLEL_SIZE = 8
 VLLM_MAX_NUM_SEQS = 16
+WORKER_EXTENSION_MODULE = "grugmoe_gpu_real_checkpoint_backend"
+WORKER_EXTENSION_CLASS = "GrugMoeDiagnosticsWorkerExtension"
+WORKER_EXTENSION_CLS = f"{WORKER_EXTENSION_MODULE}.{WORKER_EXTENSION_CLASS}"
 VLLM_ATTENTION_BACKEND_ENV = "MARIN_GRUGMOE_VLLM_ATTENTION_BACKEND"
+RUN_ID_ENV = "MARIN_GRUGMOE_GPU_E2E_RUN_ID"
+OUTPUT_DIR_ENV = "MARIN_GRUGMOE_GPU_E2E_OUTPUT_DIR"
+INSTALL_REPORT_PATH_ENV = "MARIN_GRUGMOE_GPU_E2E_INSTALL_REPORT_PATH"
 VLLM_DEFAULT_ATTENTION_BACKEND = "TRITON_ATTN"
 VLLM_ATTENTION_BACKENDS_UNDER_TEST = ("TRITON_ATTN", "FLASH_ATTN")
 LEVANTER_MOE_CAPACITY_FACTOR = float(EXPECTED_GPU_COUNT)
@@ -254,6 +261,20 @@ def _write_json(path: str, payload: dict[str, Any]) -> None:
         f.write("\n")
 
 
+def _copy_local_file(source_path: str, destination_path: str) -> None:
+    _require_coreweave_path("destination_path", destination_path)
+    if destination_path.startswith("s3://"):
+        _configure_coreweave_s3_env()
+
+    import fsspec  # noqa: PLC0415
+
+    parent = destination_path.rsplit("/", 1)[0]
+    fs, plain_parent = _fs_path(parent)
+    fs.makedirs(plain_parent, exist_ok=True)
+    with open(source_path, "rb") as src, fsspec.open(destination_path, "wb") as dst:
+        shutil.copyfileobj(src, dst)
+
+
 def _read_json(path: str) -> dict[str, Any]:
     _require_coreweave_path("json_path", path)
     if path.startswith("s3://"):
@@ -406,6 +427,36 @@ def _version(package: str) -> str:
         return md.version(package)
     except md.PackageNotFoundError:
         return "not-installed"
+
+
+def _module_import_check(module_name: str) -> dict[str, Any]:
+    started = time.time()
+    try:
+        module = importlib.import_module(module_name)
+    except Exception as exc:
+        return {
+            "ok": False,
+            "module": module_name,
+            "error_type": type(exc).__name__,
+            "error": str(exc),
+            "elapsed_seconds": time.time() - started,
+        }
+    return {
+        "ok": True,
+        "module": module_name,
+        "file": getattr(module, "__file__", None),
+        "version": getattr(module, "__version__", None),
+        "elapsed_seconds": time.time() - started,
+    }
+
+
+def _vllm_import_checks() -> dict[str, Any]:
+    return {
+        "vllm": _module_import_check("vllm"),
+        "vllm._C": _module_import_check("vllm._C"),
+        "grugmoe": _module_import_check("vllm.model_executor.models.grugmoe"),
+        "marin_worker_extension": _module_import_check(WORKER_EXTENSION_MODULE),
+    }
 
 
 def _torch_cuda_snapshot() -> dict[str, Any]:
@@ -571,6 +622,14 @@ def _prepend_env_path(name: str, values: list[str]) -> None:
     os.environ[name] = os.pathsep.join(list(dict.fromkeys([*values, *existing])))
 
 
+def _ensure_worker_extension_import_path() -> str:
+    extension_dir = str(Path(__file__).resolve().parent)
+    if extension_dir not in sys.path:
+        sys.path.insert(0, extension_dir)
+    _prepend_env_path("PYTHONPATH", [extension_dir])
+    return extension_dir
+
+
 def _configure_cuda_library_path() -> dict[str, Any]:
     library_dirs = _python_library_dirs()
     _prepend_env_path("LD_LIBRARY_PATH", library_dirs)
@@ -587,9 +646,18 @@ def _configure_vllm_gpu_env() -> dict[str, Any]:
     os.environ["VLLM_TARGET_DEVICE"] = "cuda"
     os.environ["VLLM_ENABLE_V1_MULTIPROCESSING"] = "0"
     os.environ["VLLM_USE_FLASHINFER_SAMPLER"] = "0"
+    os.environ.setdefault("VLLM_LOGGING_LEVEL", "DEBUG")
     os.environ.setdefault("MODEL_IMPL_TYPE", "vllm")
     os.environ.setdefault("PYTHONUNBUFFERED", "1")
-    return _configure_cuda_library_path()
+    worker_extension_path = _ensure_worker_extension_import_path()
+    cuda_library_path = _configure_cuda_library_path()
+    return {
+        **cuda_library_path,
+        "vllm_logging_level": os.environ.get("VLLM_LOGGING_LEVEL"),
+        "worker_extension_module": WORKER_EXTENSION_MODULE,
+        "worker_extension_cls": WORKER_EXTENSION_CLS,
+        "worker_extension_path": worker_extension_path,
+    }
 
 
 def _require_torch_cuda_runtime() -> dict[str, Any]:
@@ -993,6 +1061,55 @@ def _owners_for_linear_expert_placement(
     return sorted(owners)
 
 
+def _copy_vllm_server_logs(log_dir: str | None, output_dir: str) -> dict[str, Any]:
+    if not log_dir:
+        return {"copied": False, "reason": "no log directory available"}
+    log_root = Path(log_dir)
+    if not log_root.is_dir():
+        return {"copied": False, "reason": f"log directory does not exist: {log_dir}"}
+
+    artifact_dir = _join_path(output_dir, "vllm-server-logs")
+    files: list[dict[str, Any]] = []
+    for source_path in sorted(path for path in log_root.iterdir() if path.is_file()):
+        destination_path = _join_path(artifact_dir, source_path.name)
+        _copy_local_file(str(source_path), destination_path)
+        files.append(
+            {
+                "name": source_path.name,
+                "local_path": str(source_path),
+                "artifact_path": destination_path,
+                "bytes": source_path.stat().st_size,
+            }
+        )
+    return {
+        "copied": bool(files),
+        "local_log_dir": log_dir,
+        "artifact_dir": artifact_dir,
+        "files": files,
+    }
+
+
+def _latest_vllm_server_log_dir(*, since: float) -> str | None:
+    candidates = [
+        path
+        for path in Path(tempfile.gettempdir()).glob("vllm_server_*")
+        if path.is_dir() and path.stat().st_mtime >= since - 1
+    ]
+    if not candidates:
+        return None
+    return str(max(candidates, key=lambda path: path.stat().st_mtime))
+
+
+def _exception_summary(exc: BaseException) -> dict[str, Any]:
+    message = str(exc)
+    max_message_length = 8000
+    return {
+        "type": type(exc).__name__,
+        "message": message[:max_message_length],
+        "message_truncated": len(message) > max_message_length,
+    }
+
+
 def _vllm_backend(args: argparse.Namespace) -> None:
     _require_constants_are_coreweave(
         E2EPaths(
@@ -1008,6 +1125,7 @@ def _vllm_backend(args: argparse.Namespace) -> None:
     s3_env = _configure_coreweave_s3_env()
     cuda_library_path = _configure_vllm_gpu_env()
     torch_runtime = _require_torch_cuda_runtime()
+    vllm_import_checks = _vllm_import_checks()
     artifact_config_path = _join_path(args.artifact_dir, "config.json")
     _require_file("artifact config.json", artifact_config_path)
     artifact_config = _read_json(artifact_config_path)
@@ -1045,7 +1163,7 @@ def _vllm_backend(args: argparse.Namespace) -> None:
         "linear",
         "--enable-return-routed-experts",
         "--worker-extension-cls",
-        "tests.vllm.grugmoe_gpu_real_checkpoint_backend.GrugMoeDiagnosticsWorkerExtension",
+        WORKER_EXTENSION_CLS,
         "--moe-backend",
         "triton",
         "--attention-backend",
@@ -1061,39 +1179,79 @@ def _vllm_backend(args: argparse.Namespace) -> None:
     started = time.time()
     previous_dev_mode = os.environ.get("VLLM_SERVER_DEV_MODE")
     os.environ["VLLM_SERVER_DEV_MODE"] = "1"
+    log_artifacts: dict[str, Any] = {}
     try:
-        with VllmEnvironment(model=model, timeout_seconds=SERVER_TIMEOUT_SECONDS, extra_args=extra_args) as env:
-            print("vllm_gpu_server_initialized=True", flush=True)
-            print("vllm_gpu_server_url=" + env.server_url, flush=True)
-            print("vllm_gpu_model_path=" + staged_artifact.vllm_model_path, flush=True)
-            print("vllm_gpu_artifact_staging=" + json.dumps(staged_artifact.staging, sort_keys=True), flush=True)
-            print("vllm_gpu_server_log_dir=" + (env.vllm_server.log_dir if env.vllm_server else ""), flush=True)
-            worker_ep_states = _collect_grug_moe_worker_ep_states(env)
-            worker_ep_summary = _assert_grug_moe_worker_ep_states(worker_ep_states, num_experts=num_experts)
-            single_payload = _completion_payload(
-                env,
-                prompts=[PROMPT],
-                data_parallel_rank=0,
-            )
-            payloads: list[dict[str, Any]] = []
-            rank_request_batches: list[dict[str, Any]] = []
-            for data_parallel_rank in range(VLLM_DATA_PARALLEL_SIZE):
-                prompts = list(PROMPTS[data_parallel_rank * 2 : data_parallel_rank * 2 + 2])
-                payload = _completion_payload(
+        try:
+            with VllmEnvironment(model=model, timeout_seconds=SERVER_TIMEOUT_SECONDS, extra_args=extra_args) as env:
+                print("vllm_gpu_server_initialized=True", flush=True)
+                print("vllm_gpu_server_url=" + env.server_url, flush=True)
+                print("vllm_gpu_model_path=" + staged_artifact.vllm_model_path, flush=True)
+                print("vllm_gpu_artifact_staging=" + json.dumps(staged_artifact.staging, sort_keys=True), flush=True)
+                print("vllm_gpu_server_log_dir=" + (env.vllm_server.log_dir if env.vllm_server else ""), flush=True)
+                worker_ep_states = _collect_grug_moe_worker_ep_states(env)
+                worker_ep_summary = _assert_grug_moe_worker_ep_states(worker_ep_states, num_experts=num_experts)
+                single_payload = _completion_payload(
                     env,
-                    prompts=prompts,
-                    data_parallel_rank=data_parallel_rank,
+                    prompts=[PROMPT],
+                    data_parallel_rank=0,
                 )
-                payloads.append(payload)
-                rank_request_batches.append(
-                    {
-                        "data_parallel_rank": data_parallel_rank,
-                        "prompt_indices": [data_parallel_rank * 2, data_parallel_rank * 2 + 1],
-                        "batch_size": len(prompts),
-                    }
+                payloads: list[dict[str, Any]] = []
+                rank_request_batches: list[dict[str, Any]] = []
+                for data_parallel_rank in range(VLLM_DATA_PARALLEL_SIZE):
+                    prompts = list(PROMPTS[data_parallel_rank * 2 : data_parallel_rank * 2 + 2])
+                    payload = _completion_payload(
+                        env,
+                        prompts=prompts,
+                        data_parallel_rank=data_parallel_rank,
+                    )
+                    payloads.append(payload)
+                    rank_request_batches.append(
+                        {
+                            "data_parallel_rank": data_parallel_rank,
+                            "prompt_indices": [data_parallel_rank * 2, data_parallel_rank * 2 + 1],
+                            "batch_size": len(prompts),
+                        }
+                    )
+                logs_tail = env.logs_tail(max_lines=160)
+                log_artifacts = _copy_vllm_server_logs(
+                    env.vllm_server.log_dir if env.vllm_server else None,
+                    args.output_dir,
                 )
-            logs_tail = env.logs_tail(max_lines=160)
-            model_id = env.model_id
+                model_id = env.model_id
+        except Exception as exc:
+            log_artifacts = _copy_vllm_server_logs(_latest_vllm_server_log_dir(since=started), args.output_dir)
+            failure_result = {
+                "phase": "vllm",
+                "checkpoint_path": args.checkpoint_path,
+                "tokenizer_path": args.tokenizer_path,
+                "artifact_dir": args.artifact_dir,
+                "result_path": args.result_path,
+                "passed": False,
+                "failure": _exception_summary(exc),
+                "served_model_name": SERVED_MODEL_NAME,
+                "vllm_model_path": staged_artifact.vllm_model_path,
+                "artifact_staging": staged_artifact.staging,
+                "vllm_engine_kwargs": model.engine_kwargs,
+                "vllm_args": extra_args,
+                "vllm_attention_backend_env_var": VLLM_ATTENTION_BACKEND_ENV,
+                "vllm_tensor_parallel_size": VLLM_TENSOR_PARALLEL_SIZE,
+                "vllm_data_parallel_size": VLLM_DATA_PARALLEL_SIZE,
+                "vllm_expert_parallel_size": VLLM_EXPERT_PARALLEL_SIZE,
+                "vllm_attention_backend": VLLM_ATTENTION_BACKEND,
+                "vllm_max_num_seqs": VLLM_MAX_NUM_SEQS,
+                "vllm_server_dev_mode_enabled": True,
+                "expected_gpu_count": EXPECTED_GPU_COUNT,
+                "coreweave_s3": s3_env,
+                "cuda_library_path": cuda_library_path,
+                "torch_runtime": torch_runtime,
+                "vllm_import_checks": vllm_import_checks,
+                "vllm_log_artifacts": log_artifacts,
+                "runtime": _runtime_snapshot(include_grugmoe_spec=True, include_torch_cuda=True),
+                "elapsed_seconds": time.time() - started,
+            }
+            _write_json(args.result_path, failure_result)
+            print("grugmoe_gpu_real_checkpoint_vllm_result=" + json.dumps(failure_result, sort_keys=True), flush=True)
+            raise
     finally:
         if previous_dev_mode is None:
             os.environ.pop("VLLM_SERVER_DEV_MODE", None)
@@ -1126,10 +1284,9 @@ def _vllm_backend(args: argparse.Namespace) -> None:
     completion = completions[0] if completions else ""
     if len(completions) != PROMPT_BATCH_SIZE:
         raise AssertionError(f"expected {PROMPT_BATCH_SIZE} completions, got {len(completions)}")
-    if any(item != completion for item in completions):
-        raise AssertionError(f"expected identical completions for repeated prompts, got {completions!r}")
-    if sorted(routed_owner_ranks) != list(range(VLLM_EXPERT_PARALLEL_SIZE)):
-        raise AssertionError(f"routed experts did not cover all EP owner ranks: {sorted(routed_owner_ranks)!r}")
+    completion_counts = {item: completions.count(item) for item in sorted(set(completions))}
+    repeated_prompt_identical = len(completion_counts) == 1
+    routed_owner_rank_coverage = sorted(routed_owner_ranks) == list(range(VLLM_EXPERT_PARALLEL_SIZE))
     result = {
         "phase": "vllm",
         "checkpoint_path": args.checkpoint_path,
@@ -1142,9 +1299,14 @@ def _vllm_backend(args: argparse.Namespace) -> None:
         "single_prompt_completion": single_completion,
         "single_prompt_routed_experts": single_routed_experts,
         "completions": completions,
+        "completion_counts": completion_counts,
+        "repeated_prompt_identical": repeated_prompt_identical,
         "expected_continuation": EXPECTED_CONTINUATION,
         "passed": (
-            single_completion == EXPECTED_CONTINUATION and all(item == EXPECTED_CONTINUATION for item in completions)
+            single_completion == EXPECTED_CONTINUATION
+            and all(item == EXPECTED_CONTINUATION for item in completions)
+            and repeated_prompt_identical
+            and routed_owner_rank_coverage
         ),
         "served_model_name": SERVED_MODEL_NAME,
         "vllm_model_id": model_id,
@@ -1167,11 +1329,13 @@ def _vllm_backend(args: argparse.Namespace) -> None:
         "routed_experts_by_completion": routed_experts_by_completion,
         "routed_expert_num_experts": num_experts,
         "routed_expert_owner_ranks": sorted(routed_owner_ranks),
-        "routed_expert_owner_rank_coverage": sorted(routed_owner_ranks) == list(range(VLLM_EXPERT_PARALLEL_SIZE)),
+        "routed_expert_owner_rank_coverage": routed_owner_rank_coverage,
         "expected_gpu_count": EXPECTED_GPU_COUNT,
         "coreweave_s3": s3_env,
         "cuda_library_path": cuda_library_path,
         "torch_runtime": torch_runtime,
+        "vllm_import_checks": vllm_import_checks,
+        "vllm_log_artifacts": log_artifacts,
         "raw_responses": payloads,
         "vllm_logs_tail": logs_tail,
         "runtime": _runtime_snapshot(include_grugmoe_spec=True, include_torch_cuda=True),
@@ -1181,7 +1345,8 @@ def _vllm_backend(args: argparse.Namespace) -> None:
     print("grugmoe_gpu_real_checkpoint_vllm_result=" + json.dumps(result, sort_keys=True), flush=True)
     if result["passed"] is not True:
         raise AssertionError(
-            f"GPU vLLM single={single_completion!r}, batched={completions!r} != expected {EXPECTED_CONTINUATION!r}"
+            f"GPU vLLM single={single_completion!r}, completion_counts={completion_counts!r}, "
+            f"routed_owner_ranks={sorted(routed_owner_ranks)!r} != expected {EXPECTED_CONTINUATION!r}"
         )
 
 

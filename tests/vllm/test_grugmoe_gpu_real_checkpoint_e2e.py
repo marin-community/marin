@@ -96,6 +96,16 @@ def _repo_git_sha() -> str:
         return f"unavailable:{exc!r}"
 
 
+def _resolve_run_id() -> str:
+    run_id = os.environ.get(backend.RUN_ID_ENV)
+    if run_id:
+        if "/" in run_id or run_id in {".", ".."}:
+            raise ValueError(f"{backend.RUN_ID_ENV} must be a path segment, got {run_id!r}")
+        return run_id
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+    return f"{stamp}-{uuid.uuid4().hex[:8]}"
+
+
 @pytest.fixture(scope="module")
 def no_active_xdist(request: pytest.FixtureRequest) -> None:
     _require_no_active_xdist(request)
@@ -123,9 +133,8 @@ def gpu_lock(no_active_xdist: None):
 def e2e_paths(gpu_lock: None) -> backend.E2EPaths:
     del gpu_lock
     backend._require_runtime_region()
-    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
-    run_id = f"{stamp}-{uuid.uuid4().hex[:8]}"
-    output_dir = backend._join_path(backend.OUTPUT_ROOT, run_id)
+    run_id = _resolve_run_id()
+    output_dir = os.environ.get(backend.OUTPUT_DIR_ENV) or backend._join_path(backend.OUTPUT_ROOT, run_id)
     paths = backend.E2EPaths(
         output_dir=output_dir,
         cache_dir=backend._join_path(backend.CACHE_ROOT, run_id),
@@ -231,6 +240,7 @@ def _write_summary_update(
                 "vllm": e2e_paths.vllm_result_path,
                 "levanter": e2e_paths.levanter_result_path,
                 "summary": e2e_paths.summary_result_path,
+                "install_report": os.environ.get(backend.INSTALL_REPORT_PATH_ENV),
             },
             "runtime": backend._runtime_snapshot(include_grugmoe_spec=True),
             "backend_results": {},
@@ -308,13 +318,55 @@ def test_grugmoe_gpu_real_checkpoint_e2e_static_preconditions() -> None:
     assert backend.VLLM_DATA_PARALLEL_SIZE == 8
     assert backend.VLLM_EXPERT_PARALLEL_SIZE == 8
     assert backend.VLLM_MAX_NUM_SEQS >= backend.PROMPT_BATCH_SIZE
+    assert backend.WORKER_EXTENSION_MODULE == "grugmoe_gpu_real_checkpoint_backend"
+    assert backend.WORKER_EXTENSION_CLASS == "GrugMoeDiagnosticsWorkerExtension"
+    assert backend.WORKER_EXTENSION_CLS == "grugmoe_gpu_real_checkpoint_backend.GrugMoeDiagnosticsWorkerExtension"
     assert backend.VLLM_DEFAULT_ATTENTION_BACKEND == "TRITON_ATTN"
     assert backend.VLLM_ATTENTION_BACKEND in backend.VLLM_ATTENTION_BACKENDS_UNDER_TEST
     assert backend.VLLM_ATTENTION_BACKEND_ENV == "MARIN_GRUGMOE_VLLM_ATTENTION_BACKEND"
+    assert backend.RUN_ID_ENV == "MARIN_GRUGMOE_GPU_E2E_RUN_ID"
+    assert backend.OUTPUT_DIR_ENV == "MARIN_GRUGMOE_GPU_E2E_OUTPUT_DIR"
+    assert backend.INSTALL_REPORT_PATH_ENV == "MARIN_GRUGMOE_GPU_E2E_INSTALL_REPORT_PATH"
     assert backend.LEVANTER_MOE_CAPACITY_FACTOR == float(backend.EXPECTED_GPU_COUNT)
     assert backend.LEVANTER_DECODE_USE_ACTIVE_PREFIX is True
     assert backend.CHECKPOINT_PATH.startswith(backend.COREWEAVE_S3_PREFIX)
     assert backend.TOKENIZER_PATH.startswith(backend.COREWEAVE_S3_PREFIX)
+
+
+def test_grugmoe_gpu_e2e_run_id_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(backend.RUN_ID_ENV, "manual-coherent-install-triton")
+    assert _resolve_run_id() == "manual-coherent-install-triton"
+
+    monkeypatch.setenv(backend.RUN_ID_ENV, "bad/name")
+    with pytest.raises(ValueError, match=backend.RUN_ID_ENV):
+        _resolve_run_id()
+
+
+def test_vllm_gpu_env_enables_debug_logging(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("VLLM_LOGGING_LEVEL", raising=False)
+    monkeypatch.delenv("PYTHONPATH", raising=False)
+    snapshot = backend._configure_vllm_gpu_env()
+    assert os.environ["VLLM_LOGGING_LEVEL"] == "DEBUG"
+    assert snapshot["vllm_logging_level"] == "DEBUG"
+    assert snapshot["worker_extension_module"] == backend.WORKER_EXTENSION_MODULE
+    assert snapshot["worker_extension_cls"] == backend.WORKER_EXTENSION_CLS
+    assert snapshot["worker_extension_path"] == str(BACKEND_PATH.parent)
+    assert os.environ["PYTHONPATH"].split(os.pathsep)[0] == snapshot["worker_extension_path"]
+
+
+def test_vllm_server_logs_are_copied_to_output_prefix(tmp_path: Path) -> None:
+    log_dir = tmp_path / "logs"
+    log_dir.mkdir()
+    (log_dir / "stdout.log").write_text("stdout full log\n")
+    (log_dir / "stderr.log").write_text("stderr full log\n")
+
+    artifacts = backend._copy_vllm_server_logs(str(log_dir), str(tmp_path / "result-prefix"))
+
+    assert artifacts["copied"] is True
+    assert artifacts["artifact_dir"] == str(tmp_path / "result-prefix" / "vllm-server-logs")
+    assert {item["name"] for item in artifacts["files"]} == {"stdout.log", "stderr.log"}
+    assert (tmp_path / "result-prefix" / "vllm-server-logs" / "stdout.log").read_text() == "stdout full log\n"
+    assert (tmp_path / "result-prefix" / "vllm-server-logs" / "stderr.log").read_text() == "stderr full log\n"
 
 
 def test_grugmoe_worker_extension_reports_structured_ep_state() -> None:
