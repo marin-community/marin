@@ -206,6 +206,30 @@ def _record_from_executor_info(text: str) -> ArtifactRecord:
     )
 
 
+# Record-native identity fields a genuine ArtifactRecord sets; a pre-#6649 bare payload has none.
+_RECORD_IDENTITY_FIELDS = ("name", "fingerprint", "result_type", "result")
+_RECORD_FIELDS = frozenset(ArtifactRecord.model_fields)
+
+
+def _parse_record(text: str) -> ArtifactRecord:
+    """Parse an ``.artifact.json``, adopting a pre-#6649 bare payload as the record's ``result``.
+
+    Before #6649 the value model was serialized straight into ``.artifact.json`` (e.g.
+    ``{"version": "v1", "output_dir": ..., "counters": ...}``), so it parses as an
+    :class:`ArtifactRecord` with every native field defaulted and the real payload dropped as
+    ignored extras — leaving ``read_artifact`` with no ``result``. Detect that shape (no record
+    identity, but keys foreign to the record schema) and take the whole document as ``result`` so
+    those caches load. A genuine record never carries foreign keys, so it is untouched.
+    """
+    record = ArtifactRecord.model_validate_json(text)
+    if any(getattr(record, field) for field in _RECORD_IDENTITY_FIELDS):
+        return record
+    document = json.loads(text)
+    if isinstance(document, dict) and document.keys() - _RECORD_FIELDS:
+        return ArtifactRecord(result=document)
+    return record
+
+
 def read_record(output_path: str) -> ArtifactRecord | None:
     """The record at ``{output_path}/.artifact.json``, else ``None``.
 
@@ -216,7 +240,7 @@ def read_record(output_path: str) -> ArtifactRecord | None:
     output_path = _resolved(output_path)
     text = _read_text(output_path, RECORD_FILENAME)
     if text is not None:
-        return ArtifactRecord.model_validate_json(text)
+        return _parse_record(text)
     executor_info = _read_text(output_path, _LEGACY_EXECUTOR_INFO_FILENAME)
     if executor_info is not None:
         return _record_from_executor_info(executor_info)

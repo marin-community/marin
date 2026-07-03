@@ -208,3 +208,39 @@ def test_read_record_prefers_modern_record_over_executor_info(tmp_path):
     record = read_record(tmp_path.as_posix())
     assert record.name == "modern"
     assert record.config == {"tokenizer": "gpt2"}
+
+
+# --- the pre-#6649 bare-payload .artifact.json ---------------------------------
+
+# Before #6649 the value model was serialized straight into ``.artifact.json`` with no record
+# wrapper: every payload field sits at top level and there is no name/fingerprint/result_type/result.
+_LEGACY_BARE_PAYLOAD = json.dumps(
+    {"version": "v1", "output_dir": "gs://bucket/datakit/embed/cp/peps_52c03790", "counters": {"rows": 128}}
+)
+
+
+class _EmbedPayload(BaseModel):
+    version: str
+    output_dir: str
+    counters: dict
+
+
+def test_read_artifact_adopts_pre_6649_bare_payload(tmp_path):
+    """A pre-#6649 bare ``.artifact.json`` loads: the whole document becomes the result payload."""
+    (tmp_path / ".artifact.json").write_text(_LEGACY_BARE_PAYLOAD)
+
+    loaded = read_artifact(tmp_path.as_posix(), _EmbedPayload)
+    assert loaded == _EmbedPayload(
+        version="v1", output_dir="gs://bucket/datakit/embed/cp/peps_52c03790", counters={"rows": 128}
+    )
+
+
+def test_read_record_leaves_a_genuine_data_record_untouched(tmp_path):
+    """A modern record with identity but no ``result`` is not mistaken for a bare payload."""
+    (tmp_path / ".artifact.json").write_text(
+        '{"name": "datasets/x", "version": "v1", "fingerprint": "abc", "result": null}'
+    )
+
+    record = read_record(tmp_path.as_posix())
+    assert record.name == "datasets/x"
+    assert record.result is None
