@@ -9,6 +9,7 @@ import gc
 import logging as pylogging
 import operator
 import os
+import re
 import threading
 import time
 from collections.abc import Iterable, Iterator, Mapping
@@ -25,6 +26,7 @@ import tensorstore as ts
 from dataclasses_json import dataclass_json
 from fray import ResourceConfig
 from fsspec import AbstractFileSystem
+from haliax.jax_utils import broadcast_one_to_all
 from jaxtyping import PyTree
 from tqdm_loggable.tqdm_logging import tqdm_logging
 from zephyr import Dataset, ZephyrContext
@@ -33,10 +35,9 @@ from rigging.filesystem import atomic_rename
 from zephyr.writers import ThreadedBatchWriter, batchify, ensure_parent_dir
 
 from levanter.data.dataset import AsyncDataset
-from levanter.utils.jax_utils import broadcast_one_to_all
 from levanter.utils.thread_utils import blocking_wait
 
-from levanter.data._preprocessor import BatchProcessor, BatchResult, dict_from_record_batch
+from levanter.data._preprocessor import BatchProcessor, BatchResult, canonicalize_batch, dict_from_record_batch
 from levanter.data.sharded_datasource import ShardedDataSource
 from .jagged_array import JaggedArrayStore, _no_cache_read_context
 from .tree_store import TreeStore
@@ -811,7 +812,7 @@ class SerialCacheWriter:
         if isinstance(batch, pa.RecordBatch):
             batch = dict_from_record_batch(batch)
 
-        cbatch = _canonicalize_batch(batch)  # type: ignore[arg-type]
+        cbatch = canonicalize_batch(batch)  # type: ignore[arg-type]
         self._tree_store.extend(cbatch)
 
 
@@ -863,11 +864,11 @@ def write_levanter_cache(
             with ThreadedBatchWriter(_drain_batches) as threaded:
                 threaded.submit([exemplar])
                 count += 1
-                zephyr_counters.increment("zephyr/records_out")
+                zephyr_counters.pipeline.update_counter("zephyr/records_out", 1)
                 for batch in batchify(record_iter, n=batch_size):
                     threaded.submit(batch)
                     count += len(batch)
-                    zephyr_counters.increment("zephyr/records_out", len(batch))
+                    zephyr_counters.pipeline.update_counter("zephyr/records_out", len(batch))
                     logger.info("write_levanter_cache: %s — %d records so far", output_path, count)
 
     logger.info("write_levanter_cache: finished %s — %d records", output_path, count)
@@ -976,12 +977,12 @@ def _build_single_shard_cache(
             batch.append(example)
             if len(batch) >= options.batch_size:
                 processed = processor(batch)
-                yield from _canonicalize_batch(processed)
+                yield from canonicalize_batch(processed)
                 batch.clear()
             pbar.update(1)
         if batch:
             processed = processor(batch)
-            yield from _canonicalize_batch(processed)
+            yield from canonicalize_batch(processed)
 
     result = write_levanter_cache(records(), shard_path, metadata=metadata.preprocessor_metadata or {})
 
@@ -1378,7 +1379,19 @@ async def _consolidate_metadata(dest_path: str, exemplar: dict, shard_infos: lis
                 raise
 
 
+def _collapse_duplicate_slashes(path: str) -> str:
+    """Collapse duplicate ``/`` in a path while preserving a URL scheme's ``://``.
+
+    Matches the normalization ``zephyr.dataset.format_shard_path`` applies when
+    writing shards, so consolidation is insensitive to a trailing slash in
+    ``MARIN_PREFIX`` (which yields ``//`` after the ``StepSpec`` path join).
+    """
+    return re.sub(r"(?<!:)//+", "/", path)
+
+
 def _relative_shard_path(output_path: str, shard_path: str) -> str:
+    output_path = _collapse_duplicate_slashes(output_path)
+    shard_path = _collapse_duplicate_slashes(shard_path)
     if "://" in output_path or "://" in shard_path:
         prefix = output_path.rstrip("/") + "/"
         if shard_path.startswith(prefix):
@@ -1426,19 +1439,6 @@ def _render_path_elem(path_elem) -> str:
 def _sanitize_shard_name(name: str) -> str:
     safe = "".join(ch if ch.isalnum() or ch in ("-", "_", ".") else "_" for ch in name)
     return safe or "shard"
-
-
-def _canonicalize_batch(batch: Union[dict, List[dict]]) -> List[dict]:
-    if isinstance(batch, pa.RecordBatch):
-        batch = dict_from_record_batch(batch)
-
-    if isinstance(batch, dict):
-        keys = list(batch.keys())
-        values = list(batch.values())
-        num_rows = len(values[0]) if values else 0
-        return [{key: values[i][j] for i, key in enumerate(keys)} for j in range(num_rows)]
-    else:
-        return list(batch)
 
 
 def _try_load(path, metadata):

@@ -12,8 +12,8 @@ import { onMounted, onUnmounted } from 'vue'
 import {
   SEGMENT_COLORS,
   SEGMENT_ORDER,
-  SLICE_BADGE_ORDER,
-  SLICE_STATE_STYLES,
+  SLICE_STATUS_STYLES,
+  SLICE_STATUS_SUMMARY_ORDER,
   STATUS_COLOR_ORDER,
   stateDisplayName,
   statusColors,
@@ -40,7 +40,7 @@ onUnmounted(() => {
 })
 
 // -- Availability badge examples --
-// These mirror groupAvailabilityBadge() in AutoscalerTab.vue. Keep label text
+// These mirror groupAvailabilityBadge() in CapacityTab.vue. Keep label text
 // in sync with the logic there.
 interface AvailabilityExample {
   label: string
@@ -125,44 +125,34 @@ const ACTION_GLYPHS: GlyphExample[] = [
       </div>
 
       <div class="px-5 py-4 space-y-6 text-sm">
-        <!-- Slice state badges -->
+        <!-- Slice status badges -->
         <section>
           <h3 class="text-xs font-semibold uppercase tracking-wider text-text-secondary mb-2">
-            Slice Lifecycle Badges
+            Slice Status
           </h3>
           <p class="text-xs text-text-muted mb-3">
-            Shown in the Autoscaler tab next to each scaling group. The number preceding
-            each letter is the count of slices in that state.
+            Shown in the Autoscaler tab next to each scaling group, and in the expanded
+            slice list. The number is a count of <strong>slices</strong> in that status —
+            never per-host — so a group with 5 slices never reads "40" of anything.
           </p>
           <ul class="space-y-1.5">
             <li
-              v-for="state in SLICE_BADGE_ORDER"
-              :key="state"
+              v-for="status in SLICE_STATUS_SUMMARY_ORDER"
+              :key="status"
               class="flex items-center gap-3"
             >
               <span
                 :class="[
-                  'inline-flex items-center justify-center w-9 px-1.5 py-0.5 rounded border text-xs font-semibold',
-                  SLICE_STATE_STYLES[state].bg,
-                  SLICE_STATE_STYLES[state].text,
-                  SLICE_STATE_STYLES[state].border,
+                  'inline-flex items-center gap-1.5 px-1.5 py-0.5 rounded border text-xs font-semibold',
+                  SLICE_STATUS_STYLES[status].bg,
+                  SLICE_STATUS_STYLES[status].text,
+                  SLICE_STATUS_STYLES[status].border,
                 ]"
               >
-                {n}{{ SLICE_STATE_STYLES[state].letter }}
+                <span class="w-1.5 h-1.5 rounded-full" :class="SLICE_STATUS_STYLES[status].dot" />
+                {n} {{ SLICE_STATUS_STYLES[status].label }}
               </span>
-              <span class="text-text">{{ SLICE_STATE_STYLES[state].label }}</span>
-            </li>
-            <li class="flex items-center gap-3">
-              <span
-                class="inline-flex items-center justify-center px-1.5 py-0.5 rounded border text-xs font-semibold
-                       bg-status-warning-bg text-status-warning border-status-warning-border"
-              >
-                {n} idle
-              </span>
-              <span class="text-text">
-                Ready slice that has been idle past its idle threshold and is
-                a candidate for scale-down
-              </span>
+              <span class="text-text">{{ SLICE_STATUS_STYLES[status].description }}</span>
             </li>
           </ul>
         </section>

@@ -8,8 +8,6 @@ Finelog treats keys as opaque strings — any structure (e.g.
 concern.
 """
 
-from __future__ import annotations
-
 from typing import Protocol
 
 from connectrpc.code import Code

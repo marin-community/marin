@@ -1,8 +1,6 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-from __future__ import annotations
-
 import io
 import json
 from pathlib import Path
@@ -43,7 +41,7 @@ class _FakeResponse:
         for line in self.raw.getvalue().splitlines():
             yield line.decode("utf-8") if decode_unicode else line
 
-    def __enter__(self) -> _FakeResponse:
+    def __enter__(self) -> "_FakeResponse":
         return self
 
     def __exit__(self, exc_type, exc, tb) -> None:

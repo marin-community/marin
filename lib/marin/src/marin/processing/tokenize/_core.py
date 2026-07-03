@@ -12,8 +12,6 @@ Used by:
 
 Public API lives in those modules; helpers here are package-private.
 """
-from __future__ import annotations
-
 import json
 import logging
 import os
@@ -217,8 +215,8 @@ def tokenize_batches_with_id(
         batch_count += 1
         for record in processor(batch):
             n_tokens = len(record.get("input_ids", []))
-            counters.increment("tokenize/docs_out", 1)
-            counters.increment("tokenize/tokens_out", n_tokens)
+            counters.pipeline.update_counter("tokenize/docs_out", 1)
+            counters.pipeline.update_counter("tokenize/tokens_out", n_tokens)
             record_count += 1
             token_count += n_tokens
             yield record

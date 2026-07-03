@@ -6,14 +6,13 @@
 import json
 import logging
 import os
-from collections.abc import Iterator
 
-import zstandard
 from fray.cluster import ResourceConfig
 from rigging.filesystem import atomic_rename, open_url
 from zephyr import Dataset, ZephyrContext
 
 from marin.datakit.download.http_session import build_retrying_session
+from marin.datakit.download.zstd_jsonl import iter_jsonl_from_zstd_stream
 from marin.datakit.normalize import normalize_step
 from marin.execution.step_spec import StepSpec
 from marin.utils import fsspec_exists
@@ -23,27 +22,6 @@ logger = logging.getLogger(__name__)
 myagent = "marin-nemotron-ingress/1.0"
 NCC_BASE_URL = "https://data.commoncrawl.org"
 NCC_PATHS_SUFFIX = "contrib/Nemotron/Nemotron-CC/data-jsonl.paths.gz"
-
-
-def _iter_jsonl_from_zstd_stream(raw_stream) -> Iterator[dict]:
-    """Yield parsed JSON objects from a zstd-compressed JSONL stream."""
-    dctx = zstandard.ZstdDecompressor()
-    with dctx.stream_reader(raw_stream) as reader:
-        buf = bytearray()
-        while True:
-            chunk = reader.read(1048576)
-            if not chunk:
-                break
-            buf.extend(chunk)
-            while True:
-                newline_pos = buf.find(b"\n")
-                if newline_pos < 0:
-                    break
-                line_bytes = bytes(buf[:newline_pos])
-                del buf[: newline_pos + 1]
-                if not line_bytes.strip():
-                    continue
-                yield json.loads(line_bytes)
 
 
 def download_single_nemotron_path(input_file_path: str, output_file_path: str, base_url: str = NCC_BASE_URL) -> dict:
@@ -59,7 +37,7 @@ def download_single_nemotron_path(input_file_path: str, output_file_path: str, b
     num_records = 0
     with atomic_rename(output_file_path) as temp_path:
         with open_url(temp_path, "w", compression="zstd") as out:
-            for record in _iter_jsonl_from_zstd_stream(response.raw):
+            for record in iter_jsonl_from_zstd_stream(response.raw):
                 dolma_record = {
                     "id": record["warc_record_id"],
                     "text": record["text"],

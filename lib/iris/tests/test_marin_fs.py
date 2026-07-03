@@ -37,7 +37,8 @@ def _mock_urlopen(zone_bytes: bytes) -> MagicMock:
 
 def test_region_from_metadata_parses_zone():
     with patch(
-        "rigging.filesystem.urllib.request.urlopen", return_value=_mock_urlopen(b"projects/12345/zones/us-central2-b")
+        "rigging.filesystem.urllib.request.urlopen",
+        return_value=_mock_urlopen(b"projects/12345/zones/us-central2-b"),
     ):
         assert region_from_metadata() == "us-central2"
 
@@ -120,7 +121,8 @@ def test_marin_region_none_when_unresolvable():
 
 def test_marin_temp_bucket_from_metadata():
     with patch(
-        "rigging.filesystem.urllib.request.urlopen", return_value=_mock_urlopen(b"projects/12345/zones/us-central2-b")
+        "rigging.filesystem.urllib.request.urlopen",
+        return_value=_mock_urlopen(b"projects/12345/zones/us-central2-b"),
     ):
         assert marin_temp_bucket(ttl_days=30, prefix="compilation-cache") == (
             "gs://marin-us-central2/tmp/ttl=30d/compilation-cache"
@@ -168,8 +170,53 @@ def test_marin_temp_bucket_uses_source_prefix_region_from_local_launcher():
         ) == ("gs://marin-us-east5/tmp/ttl=14d/" "checkpoints-temp/marin-us-east5/experiments/grug/run/checkpoints")
 
 
+def test_marin_temp_bucket_r2_uses_bucket_root_ttl_path():
+    """An R2 marin prefix resolves temp to the bucket root, dropping the marin/ subdir."""
+    with (
+        patch("rigging.filesystem.urllib.request.urlopen", side_effect=OSError("not on GCP")),
+        patch.dict(os.environ, {"MARIN_PREFIX": "s3://marin-na/marin"}),
+    ):
+        assert marin_temp_bucket(ttl_days=1, prefix="zephyr") == "s3://marin-na/tmp/ttl=1d/zephyr"
+        assert marin_temp_bucket(ttl_days=14) == "s3://marin-na/tmp/ttl=14d"
+
+
+def test_marin_temp_bucket_r2_uses_source_prefix_bucket():
+    with (
+        patch("rigging.filesystem.urllib.request.urlopen", side_effect=OSError("not on GCP")),
+        patch.dict(os.environ, {}, clear=True),
+    ):
+        assert (
+            marin_temp_bucket(ttl_days=3, prefix="ferry", source_prefix="s3://marin-na/experiments/grug")
+            == "s3://marin-na/tmp/ttl=3d/ferry"
+        )
+
+
+def test_marin_temp_bucket_r2_source_prefix_overrides_gcs_launcher():
+    """An explicit R2 source_prefix wins over a gs:// MARIN_PREFIX and GCP metadata."""
+    with (
+        patch(
+            "rigging.filesystem.urllib.request.urlopen",
+            return_value=_mock_urlopen(b"projects/12345/zones/us-central1-a"),
+        ),
+        patch.dict(os.environ, {"MARIN_PREFIX": "gs://marin-us-central1/scratch"}),
+    ):
+        assert (
+            marin_temp_bucket(ttl_days=7, prefix="out", source_prefix="s3://marin-na/experiments/grug")
+            == "s3://marin-na/tmp/ttl=7d/out"
+        )
+
+
+def test_marin_temp_bucket_unknown_s3_bucket_falls_back_to_flat_path():
+    """Unknown S3 buckets have no lifecycle rules, so they get the flat non-TTL fallback."""
+    with (
+        patch("rigging.filesystem.urllib.request.urlopen", side_effect=OSError("not on GCP")),
+        patch.dict(os.environ, {"MARIN_PREFIX": "s3://some-other-bucket/marin"}),
+    ):
+        assert marin_temp_bucket(ttl_days=1, prefix="x") == "s3://some-other-bucket/marin/tmp/x"
+
+
 def test_marin_temp_bucket_falls_back_to_marin_prefix_when_no_region():
-    # Unknown region in MARIN_PREFIX → no entry in REGION_TO_DATA_BUCKET → falls back to marin_prefix/tmp
+    # Unknown region in MARIN_PREFIX → no entry in DataConfig.region_buckets → falls back to marin_prefix/tmp
     with (
         patch("rigging.filesystem.urllib.request.urlopen", side_effect=OSError("not on GCP")),
         patch.dict(os.environ, {"MARIN_PREFIX": "gs://marin-antarctica-south1/scratch"}),
@@ -195,7 +242,8 @@ def test_marin_temp_bucket_no_prefix():
 
 def test_marin_temp_bucket_strips_prefix_slashes():
     with patch(
-        "rigging.filesystem.urllib.request.urlopen", return_value=_mock_urlopen(b"projects/12345/zones/us-central1-a")
+        "rigging.filesystem.urllib.request.urlopen",
+        return_value=_mock_urlopen(b"projects/12345/zones/us-central1-a"),
     ):
         assert marin_temp_bucket(ttl_days=3, prefix="/foo/bar/") == "gs://marin-us-central1/tmp/ttl=3d/foo/bar"
 

@@ -2,7 +2,8 @@
 # Mirrors production marin.yaml with isolated state and smaller scale caps.
 # Usage: uv run iris --cluster=marin-dev cluster start
 
-log_server_config: marin-dev
+finelog:
+  config: marin-dev
 dashboard_url: https://iris-dev.oa.dev
 
 platform:
@@ -131,7 +132,7 @@ scale_groups:
     slice_template:
       gcp:
         service_account: iris-worker@hai-gcp-models.iam.gserviceaccount.com
-        mode: GCP_SLICE_MODE_VM
+        mode: vm
         machine_type: n2-highmem-2
 
 # ---------------------------------------------------------------------------

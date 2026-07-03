@@ -63,14 +63,18 @@ export function formatDuration(startMs: number, endMs?: number): string {
   return `${hours}h ${mins}m`
 }
 
-/** Format epoch ms as "HH:MM:SS.mmm". */
-export function formatLogTime(epochMs: number): string {
+/**
+ * Format epoch ms as "HH:MM:SS.mmm" in the browser's local zone, or in UTC when
+ * `utc` is set. UTC matches the timestamps most processes embed in their raw log
+ * lines, so the rendered prefix lines up with the line text.
+ */
+export function formatLogTime(epochMs: number, utc = false): string {
   if (!epochMs) return ''
   const d = new Date(epochMs)
-  const hh = String(d.getHours()).padStart(2, '0')
-  const mm = String(d.getMinutes()).padStart(2, '0')
-  const ss = String(d.getSeconds()).padStart(2, '0')
-  const ms = String(d.getMilliseconds()).padStart(3, '0')
+  const hh = String(utc ? d.getUTCHours() : d.getHours()).padStart(2, '0')
+  const mm = String(utc ? d.getUTCMinutes() : d.getMinutes()).padStart(2, '0')
+  const ss = String(utc ? d.getUTCSeconds() : d.getSeconds()).padStart(2, '0')
+  const ms = String(utc ? d.getUTCMilliseconds() : d.getMilliseconds()).padStart(3, '0')
   return `${hh}:${mm}:${ss}.${ms}`
 }
 

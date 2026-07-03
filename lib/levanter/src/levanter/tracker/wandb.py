@@ -147,10 +147,15 @@ class WandbTracker(Tracker):
             return
 
         logger.info("Finishing wandb run...")
-        # Finish wandb first to ensure all metrics are synced to the summary
-        self.run.finish()
-        # Then write the replicate file with the complete summary
-        self._write_replicate_file()
+        try:
+            # Finish wandb first so the summary reflects every synced metric.
+            self.run.finish()
+        finally:
+            # Always write the replicate file, even when run.finish() hangs or
+            # raises (e.g. HandleAbandonedError on a wedged upload). The summary
+            # is already populated in memory, so a healthy run must still emit
+            # tracker_metrics.jsonl for the canary metrics gate.
+            self._write_replicate_file()
 
     def _write_replicate_file(self):
         if self._replicate_path is None:
@@ -405,7 +410,10 @@ class WandbConfig(TrackerConfig):
                 suppress_logging=not is_primary_process,
                 minimum_log_step=minimum_log_step,
             ),
-            enabled=self.background,
+            # Only the primary process actually logs; a suppressed tracker no-ops every
+            # call, so wrapping it in a background thread is pure overhead — and would
+            # make non-primary hosts stage (copy) large profile artifacts they discard.
+            enabled=self.background and is_primary_process,
             max_queue_size=self.background_max_queue_size,
             finish_timeout=self.background_finish_timeout,
         )

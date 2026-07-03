@@ -24,7 +24,8 @@ from iris.cluster.lifecycle import connect_cluster
 from iris.cluster.types import Entrypoint, ResourceSpec
 from rigging.timing import ExponentialBackoff
 from zephyr import load_file
-from zephyr.execution import ZephyrContext
+from zephyr.execution import ZephyrContext, ZephyrCoordinator
+from zephyr.stage_io import ZephyrTaskResources
 
 # Path to zephyr root (from tests/conftest.py -> tests -> lib/zephyr)
 ZEPHYR_ROOT = Path(__file__).resolve().parents[1]
@@ -137,6 +138,23 @@ def integration_ctx(integration_client, tmp_path_factory):
     )
     yield ctx
     ctx.shutdown()
+
+
+_TEST_WORKER_RAM = 1 << 30
+_TEST_TASK_COST = ZephyrTaskResources(cpu=1.0, memory=_TEST_WORKER_RAM)
+_TEST_WORKER_AVAILABLE = ZephyrTaskResources(cpu=1.0, memory=_TEST_WORKER_RAM)
+
+
+def _make_test_coordinator(tmp_path, **kwargs) -> ZephyrCoordinator:
+    prefix = str(tmp_path / "chunks")
+    return ZephyrCoordinator(prefix, _TEST_TASK_COST, _TEST_TASK_COST, **kwargs)
+
+
+@pytest.fixture
+def coordinator(actor_context, tmp_path):
+    coord = _make_test_coordinator(tmp_path)
+    yield coord
+    coord.shutdown()
 
 
 @pytest.fixture

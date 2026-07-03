@@ -1,0 +1,71 @@
+# EXAMPLE: the auth block for an Iris cluster fronted by Google Identity-Aware
+# Proxy (IAP). This is a template, not a deployable cluster.
+#
+# The platform/controller/scale_groups below are shown as `local` purely so this
+# file validates and the auth.iap schema is easy to read in isolation. A real
+# IAP deployment fronts a gcp/coreweave controller with the ingress stood up via
+# lib/iris/scripts/iap_gclb.py (GCLB + IAP); copy the `auth:` block into that
+# cluster's config.
+#
+# Login + use:
+#   pip install "marin-iris[iap]"          # desktop OAuth flow needs this extra
+#   iris --cluster=iap-example login        # opens a browser, caches IAP + Iris creds
+#   iris --cluster=iap-example job run -- python train.py
+#
+# The CLI talks directly to auth.iap.url over HTTPS (no SSH tunnel); IAP gates
+# the ingress. Each RPC carries the IAP OIDC ID token in Proxy-Authorization and
+# the Iris JWT in Authorization.
+
+platform:
+  local:
+
+controller:
+  local:
+    port: 0  # auto-assign
+
+worker_provider: {}
+
+auth:
+  iap:
+    # Public HTTPS URL of the IAP ingress (GCLB managed-cert domain, or the
+    # Cloud Run service URL).
+    url: https://iris-example.YOUR_DOMAIN
+    # Desktop OAuth client the CLI drives for the browser login flow. Installed-
+    # app client secrets are non-confidential (RFC 8252 §8.5).
+    oauth_client_id: REPLACE_WITH_DESKTOP_CLIENT_ID.apps.googleusercontent.com
+    oauth_client_secret: REPLACE_WITH_DESKTOP_CLIENT_SECRET
+    # Accepted OIDC ID-token audiences: the desktop client id (user flow) and/or
+    # the IAP-secured OAuth client id (service-account flow).
+    audiences:
+      - REPLACE_WITH_DESKTOP_CLIENT_ID.apps.googleusercontent.com
+    # Audience of IAP's signed X-Goog-IAP-JWT-Assertion header (the backend
+    # service resource path). When set, an IAP-authenticated caller is
+    # authenticated as the asserted email, resolved to its provisioned role:
+    # an admin_users / provisioned email gets full access with no `iris login`,
+    # an unprovisioned browser gets the read-only `dashboard` role (view only,
+    # no submit/cancel/manage). The deploy script prints this; leave empty to
+    # disable implicit IAP auth.
+    signed_header_audience: /projects/PROJECT_NUMBER/global/backendServices/BACKEND_SERVICE_ID
+  admin_users:
+    - russell.power@gmail.com
+  # With signed_header_audience set, callers behind IAP are authenticated by
+  # their verified email (provisioned role, or read-only dashboard otherwise);
+  # optional=false still rejects tokenless calls that did NOT pass IAP (no valid
+  # assertion), so the controller is never open to anonymous.
+  optional: false
+
+scale_groups:
+  cpu:
+    num_vms: 1
+    resources:
+      cpu: 16
+      ram: 32GB
+      disk: 100GB
+      device_type: cpu
+      device_variant: cpu
+      capacity_type: on-demand
+    buffer_slices: 1
+    max_slices: 4
+    slice_template:
+      num_vms: 1
+      local:

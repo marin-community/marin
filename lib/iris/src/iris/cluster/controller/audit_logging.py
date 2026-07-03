@@ -30,7 +30,7 @@ def log_event(
     it for externally-caused events and the line renders ``trigger=-``.
 
     These lines are captured by the Iris log server and queried via the normal
-    ``iris process logs`` / log-store DuckDB interface — there is no SQLite
+    ``iris process logs`` / log-store query interface — there is no SQLite
     audit table.
     """
     extras = " ".join(f"{k}={v}" for k, v in details.items() if v is not None)

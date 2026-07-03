@@ -12,7 +12,7 @@ from levanter.store import TreeCache
 from levanter.tokenizers import load_tokenizer
 from marin.processing.tokenize.download_pretokenized import (
     PretokenizedCacheDownloadConfig,
-    _actually_download_pretokenized_cache,
+    fetch_pretokenized_cache,
 )
 
 HF_REPO_ID = "marin-community/fineweb-edu-pretokenized-10K"
@@ -44,7 +44,7 @@ def test_download_and_load_cache():
         )
 
         try:
-            returned_config = _actually_download_pretokenized_cache(config)
+            returned_config = fetch_pretokenized_cache(config)
             assert returned_config.cache_path == tmpdir
         except (ValueError, HfHubHTTPError, requests.exceptions.RequestException) as e:
             # ValueError can be raised by hf_download_logic if no files are found or path is unwritable.

@@ -37,7 +37,7 @@ from concurrent.futures import ThreadPoolExecutor
 from fray import ResourceConfig
 from marin.datakit.decon import DeconAttributes
 from marin.datakit.sources import all_sources
-from marin.execution.artifact import Artifact
+from marin.execution.artifact import read_artifact
 from marin.processing.classification.deduplication.fuzzy_dups import FuzzyDupsAttrData
 from marin.processing.tokenize.attributes import TokenizedAttrData
 from rigging.filesystem import url_to_fs
@@ -128,7 +128,7 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    dedup = Artifact.from_path(DEDUP_PATH, FuzzyDupsAttrData)
+    dedup = read_artifact(DEDUP_PATH, FuzzyDupsAttrData)
 
     sources_to_resolve = list(all_sources())
 
@@ -143,10 +143,10 @@ def main() -> None:
     def _resolve(name: str) -> tuple[str, TokenizedAttrData, DeconAttributes, AssignmentAttrData, LlmQualityOutput]:
         return (
             name,
-            Artifact.from_path(tokenize_index[name], TokenizedAttrData),
-            Artifact.from_path(decontam_index[name], DeconAttributes),
-            Artifact.from_path(cluster_assign_index[name], AssignmentAttrData),
-            Artifact.from_path(quality_index[name], LlmQualityOutput),
+            read_artifact(tokenize_index[name], TokenizedAttrData),
+            read_artifact(decontam_index[name], DeconAttributes),
+            read_artifact(cluster_assign_index[name], AssignmentAttrData),
+            read_artifact(quality_index[name], LlmQualityOutput),
         )
 
     tokenize: dict[str, TokenizedAttrData] = {}
@@ -154,7 +154,7 @@ def main() -> None:
     cluster_assign: dict[str, AssignmentAttrData] = {}
     quality: dict[str, LlmQualityOutput] = {}
 
-    # Index lookups are O(1); only the 4 ``Artifact.from_path`` reads per
+    # Index lookups are O(1); only the 4 ``read_artifact`` reads per
     # source need parallelization. Threadpool of 16 fans those out without
     # the gcsfs cache blow-up we saw at 32+.
     logger.info("loading typed artifacts for %d sources (ThreadPoolExecutor=16)", len(sources_to_resolve))

@@ -100,7 +100,6 @@ class ActiveTaskRow:
     preemption_count: int
     max_retries_failure: int
     max_retries_preemption: int
-    is_reservation_holder: bool
     has_coscheduling: bool
 
 

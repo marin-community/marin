@@ -69,8 +69,6 @@ Usage::
         --dest-prefix s3://marin-na/marin
 """
 
-from __future__ import annotations
-
 import argparse
 import logging
 import re
@@ -80,9 +78,9 @@ from enum import StrEnum
 import fsspec
 from fray import ResourceConfig
 from marin.datakit.sources import DatakitSource, all_sources
-from marin.execution.executor_step_status import STATUS_SUCCESS, StatusFile, StepAlreadyDone, step_lock
 from marin.execution.step_runner import StepRunner
 from marin.execution.step_spec import StepSpec
+from marin.execution.step_status import STATUS_SUCCESS, StatusFile, StepAlreadyDone, step_lock
 from rigging.filesystem import atomic_rename, marin_prefix
 from rigging.log_setup import configure_logging
 from zephyr import Dataset, ZephyrContext, counters
@@ -265,9 +263,9 @@ def _copy_shard(
         for fut in as_completed(futures):
             bytes_copied += fut.result()
 
-    counters.increment("upload/shards_copied")
-    counters.increment("upload/files_copied", len(entries))
-    counters.increment("upload/bytes_copied", bytes_copied)
+    counters.pipeline.update_counter("upload/shards_copied", 1)
+    counters.pipeline.update_counter("upload/files_copied", len(entries))
+    counters.pipeline.update_counter("upload/bytes_copied", bytes_copied)
     return {"shard_hash": _shard_hash(entries), "files": len(entries), "bytes": bytes_copied}
 
 
@@ -374,7 +372,7 @@ def _remove_tmp_orphans(dst_dir: str) -> None:
         return
     logger.info("Removing %d .tmp.<uuid> orphan(s) under %s", len(orphans), dst_dir)
     dst_fs.rm(orphans)
-    counters.increment("upload/tmp_orphans_removed", len(orphans))
+    counters.pipeline.update_counter("upload/tmp_orphans_removed", len(orphans))
 
 
 def _shard(items: list[tuple[str, str]], shard_size: int) -> list[list[tuple[str, str]]]:

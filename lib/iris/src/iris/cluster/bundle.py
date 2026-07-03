@@ -11,8 +11,6 @@ i.e. on workers). Eviction from the in-memory cache does not delete from
 fsspec storage.
 """
 
-from __future__ import annotations
-
 import hashlib
 import io
 import logging

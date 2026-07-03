@@ -17,8 +17,6 @@ no-behavior wire-size + CPU win.
 Idempotent. Safe to import from multiple modules.
 """
 
-from __future__ import annotations
-
 import threading
 
 from connectrpc import _codec

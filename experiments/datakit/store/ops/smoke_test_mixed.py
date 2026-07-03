@@ -28,7 +28,7 @@ import logging
 
 from fray import ResourceConfig
 from marin.datakit.decon import DeconAttributes
-from marin.execution.artifact import Artifact
+from marin.execution.artifact import read_artifact
 from marin.processing.classification.deduplication.fuzzy_dups import FuzzyDupsAttrData
 from marin.processing.tokenize.attributes import TokenizedAttrData
 from rigging.log_setup import configure_logging
@@ -72,7 +72,7 @@ MAX_WORKERS = 2048
 def main() -> None:
     configure_logging(logging.INFO)
 
-    dedup = Artifact.from_path(DEDUP_PATH, FuzzyDupsAttrData)
+    dedup = read_artifact(DEDUP_PATH, FuzzyDupsAttrData)
 
     tokenize_index = _build_resolution_index(TOKENIZE_ROOT)
     decontam_index = _build_resolution_index(DECONTAM_ROOT)
@@ -85,10 +85,10 @@ def main() -> None:
     quality: dict[str, LlmQualityOutput] = {}
 
     for source_name in SMOKE_SOURCES:
-        tokenize[source_name] = Artifact.from_path(tokenize_index[source_name], TokenizedAttrData)
-        decontam[source_name] = Artifact.from_path(decontam_index[source_name], DeconAttributes)
-        cluster_assign[source_name] = Artifact.from_path(cluster_assign_index[source_name], AssignmentAttrData)
-        quality[source_name] = Artifact.from_path(quality_index[source_name], LlmQualityOutput)
+        tokenize[source_name] = read_artifact(tokenize_index[source_name], TokenizedAttrData)
+        decontam[source_name] = read_artifact(decontam_index[source_name], DeconAttributes)
+        cluster_assign[source_name] = read_artifact(cluster_assign_index[source_name], AssignmentAttrData)
+        quality[source_name] = read_artifact(quality_index[source_name], LlmQualityOutput)
 
     logger.info("mixed-smoke: %d sources -> %s", len(tokenize), OUTPUT_PATH)
 

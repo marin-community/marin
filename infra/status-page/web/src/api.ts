@@ -18,8 +18,10 @@ export interface FerryRun {
   actor: string;
 }
 
-export interface FerryWorkflowStatus {
-  name: string;
+// One strip within a ferry card. `label` is the tier caption (e.g. "tier1");
+// null for single-workflow ferries, where `file` is shown as the subtitle.
+export interface FerryTierStatus {
+  label: string | null;
   file: string;
   latest: FerryRun | null;
   history: FerryRun[];
@@ -28,9 +30,14 @@ export interface FerryWorkflowStatus {
   error?: string;
 }
 
+export interface FerryGroupStatus {
+  name: string;
+  tiers: FerryTierStatus[];
+}
+
 export interface FerryResponse {
-  windowDays: number;
-  workflows: FerryWorkflowStatus[];
+  runLimit: number;
+  groups: FerryGroupStatus[];
 }
 
 // Per-commit aggregate check-run status for the last N commits on main.
@@ -155,6 +162,26 @@ export interface WorkerSample {
 
 export interface WorkersHistoryResponse {
   samples: WorkerSample[];
+  windowMs: number;
+  fetchedAt: string;
+  error?: string;
+}
+
+// Per-cycle create-success ratio over the trailing 24h: a fleet average plus a
+// per-region rollup (region omitted for a cycle with zero resolved attempts).
+// `fleet` is null for a cycle that resolved zero attempts. Ratios are 0..1.
+// Mirrors server/sources/clusterHistory.ts.
+export interface ProvisioningHistorySample {
+  t: number; // epoch millis
+  fleet: number | null;
+  regions: Record<string, number>;
+}
+
+export interface ProvisioningHistoryResponse {
+  samples: ProvisioningHistorySample[];
+  windowMs: number;
+  fetchedAt: string;
+  error?: string;
 }
 
 export interface JobStateCount {
@@ -176,6 +203,56 @@ export interface JobsSnapshot {
   error?: string;
 }
 
+// Synthetic-canary probes, read from finelog's `infra.canary.metrics`. Mirrors
+// server/sources/probes.ts.
+export interface ProbeCheck {
+  probe: string;
+  up: boolean;
+  latencyMs: number | null;
+  collectedAt: string;
+}
+
+export interface ProvisionPool {
+  resourceType: string;
+  scaleGroup: string;
+  zone: string;
+  ready: number;
+  stockout: number;
+  error: number;
+  preempted: number;
+  outcomes: number;
+  successRatio: number | null;
+  latencyP50Seconds: number | null;
+  latencyP95Seconds: number | null;
+}
+
+export interface ProvisionFleet {
+  ready: number;
+  stockout: number;
+  error: number;
+  preempted: number;
+  outcomes: number;
+  successRatio: number | null;
+  poolsPlacing: number;
+  poolsStockoutDead: number;
+  latencyP50Seconds: number | null;
+  latencyP95Seconds: number | null;
+}
+
+export interface ProvisioningSnapshot {
+  windowHours: number | null;
+  collectedAt: string | null;
+  fleet: ProvisionFleet | null;
+  pools: ProvisionPool[];
+}
+
+export interface ProbesSnapshot {
+  checks: ProbeCheck[];
+  provisioning: ProvisioningSnapshot;
+  fetchedAt: string;
+  error?: string;
+}
+
 async function getJson<T>(path: string): Promise<T> {
   const res = await fetch(path);
   if (!res.ok) {
@@ -191,4 +268,7 @@ export const fetchControlPlaneHealth = () =>
   getJson<ServiceHealthResponse>("/api/control-plane/health");
 export const fetchWorkers = () => getJson<WorkersSnapshot>("/api/workers");
 export const fetchWorkersHistory = () => getJson<WorkersHistoryResponse>("/api/workers/history");
+export const fetchProvisioningHistory = () =>
+  getJson<ProvisioningHistoryResponse>("/api/provisioning/history");
 export const fetchJobs = () => getJson<JobsSnapshot>("/api/jobs");
+export const fetchProbes = () => getJson<ProbesSnapshot>("/api/probes");

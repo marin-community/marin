@@ -1,8 +1,6 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-from __future__ import annotations
-
 import dataclasses
 import hashlib
 import json
@@ -15,8 +13,6 @@ from urllib.parse import urlparse
 from fray.types import ResourceConfig
 from rigging.filesystem import marin_prefix
 
-from marin.execution.types import THIS_OUTPUT_PATH, ExecutorStep, VersionedValue
-
 
 def _is_relative_path(url_or_path: str) -> bool:
     """Return True if the path is relative (not a URL and doesn't start with /)."""
@@ -26,24 +22,17 @@ def _is_relative_path(url_or_path: str) -> bool:
 
 
 @dataclass(frozen=True)
-class _StepSpecMigrationConfig:
-    """Carries StepSpec version + dependency state into the dataclass shape
-    that ``Executor.compute_version`` traverses, so a StepSpec-authored step
-    can be embedded in an ``Executor.run()`` pipeline.
-    """
-
-    output_path: Any
-    attrs: Any
-    deps: list = dataclasses.field(default_factory=list)
-
-
-@dataclass(frozen=True)
 class StepSpec:
     """Step identity, dependencies, and execution configuration.
 
     StepSpec is a pure data object: it describes *what* to run, not *how*.
     Caching, locking, heartbeats, and status writes are handled explicitly
     by the step runner.
+
+    A StepSpec freezes nothing at construction: ``output_path`` resolves
+    ``marin_prefix()`` lazily and ``fn`` pulls the live environment (prefix,
+    region) from a ``RunContext`` at run time. So it is safe to build anywhere —
+    it carries no separate build phase.
     """
 
     # Identity
@@ -51,7 +40,7 @@ class StepSpec:
     """Name of the step, used for readability and in the output path."""
     output_path_prefix: str | None = None
     """Output path prefix for the step. If not provided, it will be taken from the MARIN_PREFIX environment variable."""
-    deps: list[StepSpec] = dataclasses.field(default_factory=list)
+    deps: "list[StepSpec]" = dataclasses.field(default_factory=list)
     """Steps that this step depends on. Their output paths are used for dependency tracking and cache invalidation."""
     hash_attrs: dict[str, Any] = dataclasses.field(default_factory=dict)
     """Attributes to include in the hash calculation for the step. Used for cache invalidation.
@@ -60,6 +49,19 @@ class StepSpec:
     """
     override_output_path: str | None = None
     """Override the default output path for the step."""
+
+    fingerprint_payload: str | None = None
+    """For a lazy artifact, the canonical config JSON behind its fingerprint
+    (:mod:`marin.execution.fingerprint`). Recorded as provenance and used to render a
+    field-level diff when the drift check sees a changed recipe. Diagnostics only: it
+    never enters :attr:`hash_id`."""
+
+    writes_record: bool = False
+    """Whether the step's ``fn`` already writes its own :class:`~marin.execution.artifact.ArtifactRecord`.
+
+    Lazy-artifact steps set this so the runner does not overwrite the full record with a
+    minimal one. A plain ``StepSpec`` leaves it ``False`` and the runner saves the fn's
+    return via :func:`~marin.execution.artifact.write_artifact`."""
 
     # Execution
     fn: Callable[[str], Any] | None = None
@@ -116,30 +118,3 @@ class StepSpec:
                 return f"{prefix}/{self.override_output_path}"
             return self.override_output_path
         return f"{prefix}/{self.name_with_hash}"
-
-    def as_executor_step(self) -> ExecutorStep:
-        """Convert to an ``ExecutorStep`` for use in ``Executor.run()`` pipelines.
-
-        The resulting ``ExecutorStep`` preserves this step's output path and
-        caching identity via ``override_output_path``. Round-tripping through
-        ``resolve_executor_step`` returns the original ``StepSpec``.
-        """
-        dep_steps = [dep.as_executor_step() for dep in self.deps]
-
-        config = _StepSpecMigrationConfig(
-            output_path=THIS_OUTPUT_PATH,
-            attrs=VersionedValue(self.hash_attrs),
-            deps=dep_steps,
-        )
-
-        result = ExecutorStep(
-            name=self.name,
-            fn=self.fn,
-            config=config,
-            override_output_path=self.output_path,
-            resources=self.resources,
-        )
-        # ExecutorStep is frozen; object.__setattr__ stashes the original
-        # StepSpec for round-trip recovery in resolve_executor_step.
-        object.__setattr__(result, "_original_step_spec", self)
-        return result

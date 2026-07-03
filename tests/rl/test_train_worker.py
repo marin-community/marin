@@ -30,7 +30,7 @@ def test_drop_bootstrap_model_references_clears_reference_model_when_kl_disabled
     assert worker.reference_model is None
 
 
-@pytest.mark.parametrize("mode", [KLMode.K2_LOSS, KLMode.K3_LOSS])
+@pytest.mark.parametrize("mode", [KLMode.K1_LOSS, KLMode.K2_LOSS, KLMode.K3_LOSS])
 def test_drop_bootstrap_model_references_preserves_reference_model_when_kl_enabled(mode: KLMode):
     worker = TrainWorker.__new__(TrainWorker)
     model = object()
@@ -166,7 +166,7 @@ def test_train_bootstraps_fresh_run_with_step_minus_one(monkeypatch):
         optimizer=SimpleNamespace(build=lambda num_steps: object()),
         weight_transfer=SimpleNamespace(debug_weight_transfer=False, sync_interval_steps=1),
     )
-    worker.loss_module = SimpleNamespace(create_loss_fn=lambda reference_model, _: lambda model, batch, key: 0.0)
+    worker.loss_module = SimpleNamespace(create_loss_fn=lambda reference_model: lambda model, batch, key: 0.0)
     worker.reference_model = object()
     worker.initial_model = object()
     worker.replay_buffer = SimpleNamespace(set_current_step=replay_steps.append)
@@ -244,7 +244,7 @@ def test_train_reuses_recovered_step_on_resume(monkeypatch):
         optimizer=SimpleNamespace(build=lambda num_steps: object()),
         weight_transfer=SimpleNamespace(debug_weight_transfer=False, sync_interval_steps=1),
     )
-    worker.loss_module = SimpleNamespace(create_loss_fn=lambda reference_model, _: lambda model, batch, key: 0.0)
+    worker.loss_module = SimpleNamespace(create_loss_fn=lambda reference_model: lambda model, batch, key: 0.0)
     worker.reference_model = object()
     worker.initial_model = object()
     worker.replay_buffer = SimpleNamespace(set_current_step=replay_steps.append)

@@ -1,8 +1,6 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-from __future__ import annotations
-
 import gzip
 import json
 import sys
@@ -10,6 +8,7 @@ from pathlib import Path
 from types import ModuleType, SimpleNamespace
 
 import marin.profiling.cli as cli_module
+import marin.profiling.ingest as ingest_module
 import marin.profiling.xplane as xplane_module
 import pytest
 from marin.profiling.ingest import summarize_profile_artifact, summarize_trace
@@ -24,6 +23,7 @@ from marin.profiling.xplane import (
     summarize_xplane,
     summarize_xplane_tables,
 )
+from rigging.filesystem import url_to_fs
 
 
 def test_summarize_trace_produces_deterministic_breakdown_and_hot_ops(tmp_path: Path) -> None:
@@ -582,21 +582,29 @@ def test_summarize_cli_xplane_file_honors_breakdown_mode(tmp_path: Path, monkeyp
     assert summary.time_breakdown.duration_basis == "exclusive_duration_global_timeline"
 
 
-def test_summarize_cli_artifact_honors_download_root(tmp_path: Path, monkeypatch, capsys) -> None:
+def test_summarize_cli_run_target_honors_download_root(tmp_path: Path, monkeypatch, capsys) -> None:
     seen_download_root = []
+    seen_run_target = []
     output_path = tmp_path / "summary.json"
     download_root = tmp_path / "downloads"
 
-    def download_artifact(artifact_ref: str, *, download_root: Path | None = None):
+    def download_profile_dir(
+        run_target: str,
+        *,
+        entity: str | None = None,
+        project: str | None = None,
+        download_root: Path | None = None,
+    ):
         seen_download_root.append(download_root)
-        return SimpleNamespace(artifact_dir=tmp_path / "artifact", run_metadata=None)
+        seen_run_target.append((run_target, entity, project))
+        return SimpleNamespace(profile_dir=tmp_path / "artifact", run_metadata=None)
 
     def summarize_artifact(*args, **kwargs):
         trace_path = tmp_path / "trace.json.gz"
         _write_trace(trace_path, step_durations=[100], softmax_duration=10)
         return summarize_trace(trace_path, warmup_steps=0)
 
-    monkeypatch.setattr(cli_module, "download_wandb_profile_artifact", download_artifact)
+    monkeypatch.setattr(cli_module, "download_profile_dir_for_run", download_profile_dir)
     monkeypatch.setattr(cli_module, "summarize_profile_artifact", summarize_artifact)
     monkeypatch.setattr(
         sys,
@@ -604,8 +612,8 @@ def test_summarize_cli_artifact_honors_download_root(tmp_path: Path, monkeypatch
         [
             "profile_summary.py",
             "summarize",
-            "--artifact",
-            "entity/project/artifact:v0",
+            "--run-target",
+            "entity/project/run",
             "--download-root",
             str(download_root),
             "--output",
@@ -617,6 +625,38 @@ def test_summarize_cli_artifact_honors_download_root(tmp_path: Path, monkeypatch
 
     assert capsys.readouterr().out.strip() == str(output_path)
     assert seen_download_root == [download_root]
+    assert seen_run_target == [("entity/project/run", None, None)]
+
+
+def test_download_profile_dir_for_run_mirrors_remote_log_dir(tmp_path: Path, monkeypatch) -> None:
+    source = "memory://wandb/logs/trainer-456/profiler"
+    fs, fs_path = url_to_fs(source)
+    fs.makedirs(f"{fs_path}/plugins/profile/2026_05_11_12_00_00", exist_ok=True)
+    with fs.open(f"{fs_path}/plugins/profile/2026_05_11_12_00_00/perfetto_trace.json.gz", "wb") as handle:
+        handle.write(b"trace")
+
+    fake_run = SimpleNamespace(
+        path=["entity", "project", "run-123"],
+        id="run-123",
+        config={"trainer": {"id": "trainer-456", "log_dir": "memory://wandb/logs"}},
+        summary={},
+    )
+
+    class FakeApi:
+        def run(self, run_path: str):
+            assert run_path == "entity/project/run-123"
+            return fake_run
+
+    monkeypatch.setattr(ingest_module.wandb, "Api", lambda: FakeApi())
+
+    downloaded = ingest_module.download_profile_dir_for_run(
+        "entity/project/run-123",
+        download_root=tmp_path / "downloads",
+    )
+
+    assert downloaded.profile_dir == tmp_path / "downloads" / "trainer-456" / "profiler"
+    assert downloaded.run_metadata.run_id == "run-123"
+    assert (downloaded.profile_dir / "plugins" / "profile" / "2026_05_11_12_00_00" / "perfetto_trace.json.gz").exists()
 
 
 def test_summarize_xplane_with_installed_xprof_exports_tables(tmp_path: Path) -> None:

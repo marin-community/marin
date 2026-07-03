@@ -14,8 +14,6 @@ All discovered files are merged into a single output: main records land in
 ``<output_path>/outputs/dups/``. Input directory structure is not preserved.
 """
 
-from __future__ import annotations
-
 import logging
 import os
 import re
@@ -76,7 +74,7 @@ class NormalizedData(BaseModel):
     version: str = "v1"
     main_output_dir: str
     dup_output_dir: str
-    counters: dict[str, int]
+    counters: dict[str, int | float]
 
 
 def generate_id(text: str) -> str:
@@ -233,7 +231,7 @@ def _make_whitespace_compactor(max_whitespace_run_chars: int) -> Callable[[dict[
         text = record["text"]
         compacted = pattern.sub(lambda m: m.group(0)[:max_whitespace_run_chars], text)
         if len(compacted) != len(text):
-            counters.increment(COMPACTED_WHITESPACE_COUNTER)
+            counters.pipeline.update_counter(COMPACTED_WHITESPACE_COUNTER, 1)
             record = {**record, "text": compacted, "id": generate_id(compacted)}
         return record
 
@@ -291,10 +289,10 @@ def _make_split_writer(
         ):
             for item in records:
                 if isinstance(item, MainOutput):
-                    counters.increment("normalize/unique_records_out")
+                    counters.pipeline.update_counter("normalize/unique_records_out", 1)
                     main_writer.submit(item.data)
                 else:
-                    counters.increment("normalize/duplicate_records_out")
+                    counters.pipeline.update_counter("normalize/duplicate_records_out", 1)
                     dup_writer.submit(item.data)
 
         yield results
@@ -333,7 +331,7 @@ def _build_pipeline(
     def has_text(record: dict[str, Any]) -> bool:
         text = record.get(text_field)
         if text is None or str(text).strip() == "":
-            counters.increment("normalize/empty_text_filtered")
+            counters.pipeline.update_counter("normalize/empty_text_filtered", 1)
             return False
         return True
 

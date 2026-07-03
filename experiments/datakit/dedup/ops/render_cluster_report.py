@@ -17,8 +17,6 @@ Run locally (small parquet, cheap cross-region read) or on iris in us-central2:
     uv run python experiments/datakit/dedup/ops/render_cluster_report.py
 """
 
-from __future__ import annotations
-
 import argparse
 import html
 import logging

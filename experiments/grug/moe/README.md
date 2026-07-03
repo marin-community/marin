@@ -162,7 +162,7 @@ Predicted macro uses `loss(C) = 1.6 + 95.18 · C^(-0.0941)`.
   `run_grug` (dispatches a Fray job).
 - [`heuristic.py`](./heuristic.py) — `MoeAdamHHeuristic` and
   `build_from_heuristic` entry point.
-- [`launch.py`](./launch.py) — `GrugMoeLaunchConfig`, baseline `ExecutorStep`,
-  and `executor_main` wiring.
+- [`launch.py`](./launch.py) — `GrugMoeLaunchConfig`, the `grug_moe_baseline()`
+  lazy `Checkpoint`, and `StepRunner` wiring.
 - [`adamh.py`](./adamh.py) — shared AdamH utilities.
 - [`agent.md`](./agent.md) — agent guide for running ablation experiments on Iris.

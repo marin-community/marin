@@ -1,8 +1,6 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-from __future__ import annotations
-
 import contextlib
 import logging
 import uuid
@@ -27,6 +25,7 @@ from marin.inference.worker import (
     InferenceWorker,
     run_inference_worker,
 )
+from marin.training.run_environment import env_vars_for_dependency_groups
 
 logger = logging.getLogger(__name__)
 
@@ -97,7 +96,7 @@ class BrokeredVllmSystemConfig:
     broker_resources: ResourceConfig = field(
         default_factory=lambda: ResourceConfig.with_cpu(cpu=2, ram="8g", disk="20g")
     )
-    # Worker jobs need the TPU/vLLM extras; the CPU parent only needs the base Marin environment.
+    # Worker jobs need the generic TPU stack plus the TPU-vLLM runtime stack; the CPU parent only needs base Marin.
     worker_environment_extras: tuple[str, ...] = ("tpu", "vllm")
     # TPU/vLLM-specific env vars stay explicit at the entrypoint.
     worker_env_vars: Mapping[str, str] = field(default_factory=dict)
@@ -161,9 +160,14 @@ def start_iris_brokered_vllm(config: BrokeredVllmSystemConfig) -> Iterator[Runni
         broker_handle = broker_group.wait_ready(count=1, timeout=config.broker_ready_timeout_seconds)[0]
         request_provider = cast(InferenceRequestProvider, broker_handle)
         response_provider = cast(InferenceResponseProvider, broker_handle)
+        worker_extras = list(config.worker_environment_extras)
         worker_environment = create_environment(
-            extras=config.worker_environment_extras,
-            env_vars=dict(config.worker_env_vars),
+            extras=worker_extras,
+            env_vars=env_vars_for_dependency_groups(
+                config.worker_resources,
+                worker_extras,
+                dict(config.worker_env_vars),
+            ),
         )
         for worker_index in range(config.workers.count):
             job = client.submit(

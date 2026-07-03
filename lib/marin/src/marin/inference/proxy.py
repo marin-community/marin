@@ -1,8 +1,6 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-from __future__ import annotations
-
 import logging
 import socket
 import threading
@@ -84,7 +82,7 @@ class InferenceProxy:
             ],
         )
 
-    def __enter__(self) -> InferenceProxy:
+    def __enter__(self) -> "InferenceProxy":
         self.start_response_poller()
         return self
 

@@ -3,8 +3,6 @@
 
 """Unit tests for the AIMD backoff detector."""
 
-from __future__ import annotations
-
 import math
 
 import pytest

@@ -40,11 +40,11 @@ from levanter.dpo import (
     DpoModel,
     ReferenceEvalCacheConfig,
     ValidationDatasetSpec,
-    _logp_sum,
     build_or_load_reference_eval_cache,
     dpo_loss,
     dpo_loss_from_logps,
     load_reference_eval_cache,
+    logp_sum,
     reference_eval_cache_metadata,
     reference_eval_cache_path,
 )
@@ -424,8 +424,8 @@ def test_dpo_loss_matches_cached_reference_values():
 
     example = _make_dpo_example(key=jrandom.PRNGKey(2))
 
-    logp_ref_chosen = _logp_sum(reference_model, example.chosen, key=None)
-    logp_ref_rejected = _logp_sum(reference_model, example.rejected, key=None)
+    logp_ref_chosen = logp_sum(reference_model, example.chosen, key=None)
+    logp_ref_rejected = logp_sum(reference_model, example.rejected, key=None)
     cached_example = CachedDpoExample(
         chosen=example.chosen,
         rejected=example.rejected,
@@ -535,10 +535,10 @@ def test_build_or_load_reference_eval_cache_matches_direct_logps(tmp_path: Path)
         )
 
     expected_chosen = np.asarray(
-        [float(np.asarray(_logp_sum(reference_model, ex.chosen, key=None).array)) for ex in examples], dtype=np.float32
+        [float(np.asarray(logp_sum(reference_model, ex.chosen, key=None).array)) for ex in examples], dtype=np.float32
     )
     expected_rejected = np.asarray(
-        [float(np.asarray(_logp_sum(reference_model, ex.rejected, key=None).array)) for ex in examples],
+        [float(np.asarray(logp_sum(reference_model, ex.rejected, key=None).array)) for ex in examples],
         dtype=np.float32,
     )
 
@@ -560,7 +560,7 @@ def test_logp_sum_passes_key_for_dropout():
     tokens = hax.named(jnp.arange(Pos.size, dtype=jnp.int32) % Vocab.size, Pos)
     example = LmExample.causal(tokens)
 
-    out = _logp_sum(model, example, key=jrandom.PRNGKey(1))
+    out = logp_sum(model, example, key=jrandom.PRNGKey(1))
     assert isinstance(out, hax.NamedArray)
 
 
@@ -698,9 +698,9 @@ def test_restore_policy_model_from_partial_checkpoint_recovers_base_model():
     )
 
     example = _make_dpo_example(seq_len=8, vocab_size=Vocab.size, key=example_key)
-    trained_logp = _logp_sum(inference_mode(trained_policy, True), example.chosen).scalar()
-    wrong_logp = _logp_sum(inference_mode(wrong_resumed_policy, True), example.chosen).scalar()
-    restored_logp = _logp_sum(inference_mode(restored_policy, True), example.chosen).scalar()
+    trained_logp = logp_sum(inference_mode(trained_policy, True), example.chosen).scalar()
+    wrong_logp = logp_sum(inference_mode(wrong_resumed_policy, True), example.chosen).scalar()
+    restored_logp = logp_sum(inference_mode(restored_policy, True), example.chosen).scalar()
 
     assert wrong_logp != pytest.approx(trained_logp)
     assert restored_logp == pytest.approx(trained_logp)

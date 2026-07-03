@@ -6,18 +6,36 @@
 from unittest.mock import patch
 
 from iris.cli.cluster import _build_cluster_images
-from iris.rpc import config_pb2
+from iris.cluster.config import (
+    ControllerVmConfig,
+    DefaultsConfig,
+    GcpControllerConfig,
+    GcpSliceConfig,
+    IrisClusterConfig,
+    ScaleGroupConfig,
+    SliceConfig,
+    WorkerConfig,
+)
 
 
 def test_build_cluster_images_pushes_worker_controller_and_task_to_ghcr() -> None:
     """Cluster image build should build and push all three image types to GHCR."""
-    config = config_pb2.IrisClusterConfig()
-    config.defaults.worker.docker_image = "ghcr.io/marin-community/iris-worker:v1"
-    config.controller.image = "ghcr.io/marin-community/iris-controller:v1"
-    config.defaults.worker.default_task_image = "ghcr.io/marin-community/iris-task:v1"
-    config.controller.gcp.zone = "us-west1-b"
-    config.scale_groups["east"].slice_template.gcp.zone = "us-east1-d"
-    config.scale_groups["eu"].slice_template.gcp.zone = "europe-west4-b"
+    config = IrisClusterConfig(
+        defaults=DefaultsConfig(
+            worker=WorkerConfig(
+                docker_image="ghcr.io/marin-community/iris-worker:v1",
+                default_task_image="ghcr.io/marin-community/iris-task:v1",
+            )
+        ),
+        controller=ControllerVmConfig(
+            image="ghcr.io/marin-community/iris-controller:v1",
+            gcp=GcpControllerConfig(zone="us-west1-b"),
+        ),
+        scale_groups={
+            "east": ScaleGroupConfig(slice_template=SliceConfig(gcp=GcpSliceConfig(zone="us-east1-d"))),
+            "eu": ScaleGroupConfig(slice_template=SliceConfig(gcp=GcpSliceConfig(zone="europe-west4-b"))),
+        },
+    )
 
     with patch("iris.cli.cluster._build_and_push_image") as build_and_push_image:
 
