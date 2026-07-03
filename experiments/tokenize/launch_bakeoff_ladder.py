@@ -65,11 +65,14 @@ def build_cell(arm_name: str, steps: int, cluster: str) -> LadderCell:
     arm = arm_by_name(arm_name)  # validates the arm exists and is registered
     run_id = f"bakeoff-{arm.name}-s{steps}"
     env = {**PROXY_SHAPE, "BAKEOFF_ARM": arm.name, "SCALE_STEPS": str(steps), "RUN_ID": run_id}
+    # --no-wait detaches so all ladder cells run concurrently; iris job run otherwise blocks
+    # until the job completes, which would serialize the whole ladder.
     cmd = [
         "iris",
         f"--cluster={cluster}",
         "job",
         "run",
+        "--no-wait",
         "--cpu",
         "2",
         "--memory",
