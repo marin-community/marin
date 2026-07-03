@@ -60,9 +60,35 @@ BASELINE_ARMS: tuple[TokenizerArm, ...] = (
     TokenizerArm("gemma3-262k", "google/gemma-3-4b-pt", 262_145, Axis.BASELINE, "largest vocab, multilingual"),
 )
 
+# Phase 3 SuperBPE (axis C): pretrained superword tokenizers from "SuperBPE: Space Travel
+# for Language Models" (arXiv 2503.13423). The marin tokenize pipeline loads these through
+# levanter.load_tokenizer, which reads tokenizer.json directly (tokenizers.Tokenizer.from_file)
+# and therefore honors the Sequence pretokenizer that lets BPE merges bridge whitespace,
+# yielding the superword fertility win (measured ~-21% tokens/byte vs Llama-3 on a mixed
+# English+code sample; the paper reports up to -33% at 200k vocab). Loading these same refs
+# through transformers.AutoTokenizer.from_pretrained instead gives subword-only output: their
+# tokenizer_config sets tokenizer_class=GPT2Tokenizer, and GPT2TokenizerFast overwrites the
+# pretokenizer with a whitespace-splitting ByteLevel so the superword tokens never fire.
+SUPERBPE_ARMS: tuple[TokenizerArm, ...] = (
+    TokenizerArm(
+        "superbpe-128k",
+        "alisawuffles/superbpe-tokenizer-128k",
+        128_001,
+        Axis.SUPERBPE,
+        "English superword BPE, Llama-3-comparable vocab, ~-21% tok/byte",
+    ),
+    TokenizerArm(
+        "superbpe-180k",
+        "allenai/superbpe-experimental_v0.1.0",
+        180_021,
+        Axis.SUPERBPE,
+        "experimental superword BPE, larger vocab",
+    ),
+)
+
 # Registered arms. Extended in later phases as built tokenizers land (their refs will be
 # HF ids under marin-community/ or S3 paths under the cw-rno2a prefix).
-ALL_ARMS: tuple[TokenizerArm, ...] = BASELINE_ARMS
+ALL_ARMS: tuple[TokenizerArm, ...] = BASELINE_ARMS + SUPERBPE_ARMS
 
 # Vocab sizes to add to marin.processing.tokenize.data_configs._KNOWN_VOCAB_SIZES so
 # dry-runs/fingerprints don't hit the Hub. Kept here next to the arm definitions.

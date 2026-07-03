@@ -20,7 +20,7 @@ import json
 import logging
 
 import datasets
-from transformers import AutoTokenizer
+from levanter.tokenizers import load_tokenizer
 
 from experiments.tokenize.bakeoff_tokenizers import ALL_ARMS, TokenizerArm
 from experiments.tokenize.flop_equivalent import DEFAULT_SERVING, arm_cost, fertility_of
@@ -79,7 +79,11 @@ def measure_arm(arm: TokenizerArm, corpus: dict[str, str]) -> dict:
     Stores counts (not just ratios) so a different domain weighting or a different serving
     cost model can be recomputed offline without re-tokenizing (replayability).
     """
-    tok = AutoTokenizer.from_pretrained(arm.ref)
+    # Load through levanter (tokenizers.Tokenizer.from_file), the exact path marin's tokenize
+    # pipeline uses. This matters for SuperBPE: AutoTokenizer.from_pretrained would honor the
+    # repo's GPT2Tokenizer class and overwrite the superword pretokenizer, silently measuring a
+    # worse-than-baseline fertility; from_file preserves it so the measured cost matches training.
+    tok = load_tokenizer(arm.ref)
     real_vocab = len(tok.get_vocab())
     if real_vocab != arm.vocab_size:
         logger.warning("%s: registered vocab %d != loaded %d; using loaded", arm.name, arm.vocab_size, real_vocab)
