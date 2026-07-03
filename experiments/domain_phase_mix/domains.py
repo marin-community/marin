@@ -31,7 +31,7 @@ from levanter.data.text import ChatLmDatasetFormat
 
 from experiments.defaults import default_tokenize
 from experiments.domain_phase_mix.config import DatasetComponent, Domain
-from experiments.marin_models import MARIN_CHAT_TEMPLATE, marin_tokenizer
+from experiments.marin_tokenizer import MARIN_CHAT_TEMPLATE, marin_tokenizer
 from experiments.posttrain.instruction_datasets import get_instruction_dataset
 from experiments.pretraining_datasets.dolmino import tokenize_dolmino_subset
 from experiments.pretraining_datasets.nemotron import tokenize_nemotron

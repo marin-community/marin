@@ -61,7 +61,7 @@ from experiments.evals.formal_methods_ppl import formal_methods_hardware_rtl_raw
 from experiments.evals.gh_archive_structured_output import gh_archive_structured_output_raw_validation_sets
 from experiments.evals.long_tail_ppl_runnable import runnable_long_tail_raw_validation_sets
 from experiments.evals.raw_web_markup_ppl import raw_web_markup_raw_validation_sets
-from experiments.marin_models import marin_tokenizer
+from experiments.marin_tokenizer import marin_tokenizer
 
 logger = logging.getLogger(__name__)
 

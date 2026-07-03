@@ -49,7 +49,7 @@ from marin.transform.stack_edu.hydrate import StackEduHydrationConfig
 from marin.transform.stack_edu.hydrate import hydrate_stack_edu as hydrate_stack_edu_text
 
 from experiments.llama import llama3_tokenizer
-from experiments.marin_models import marin_tokenizer
+from experiments.marin_tokenizer import marin_tokenizer
 from experiments.midtraining_datasets import finemath_3_plus_tokenized
 from experiments.pretraining_datasets.dolma import tokenize_dolma
 

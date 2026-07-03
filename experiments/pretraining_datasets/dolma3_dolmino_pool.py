@@ -427,7 +427,7 @@ def tokenize_dolmino_pool_subset(
         )
 
     if tokenizer is None:
-        from experiments.marin_models import marin_tokenizer
+        from experiments.marin_tokenizer import marin_tokenizer
 
         tokenizer = marin_tokenizer
 

@@ -63,7 +63,7 @@ from experiments.domain_phase_mix.experiment import MixtureExperiment
 from experiments.domain_phase_mix.proxy_sweep import regmix_60m_proxy
 from experiments.domain_phase_mix.weight_sampler import DirichletSamplingParams, SamplingStrategy, compute_unimax_weights
 from experiments.evals.task_configs import CORE_TASKS, MMLU_TASKS, convert_to_task_metrics
-from experiments.marin_models import marin_tokenizer
+from experiments.marin_tokenizer import marin_tokenizer
 from experiments.pretraining_datasets.dolma3_pool import (
     COMMON_CRAWL_TOPICS,
     DOLMA3_POOL_TOKEN_COUNTS_B,

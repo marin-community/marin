@@ -41,7 +41,7 @@ from rigging.filesystem import filesystem as marin_filesystem
 from experiments.grug.moe.heuristic import build_from_heuristic
 from experiments.grug.moe.legacy_model import LegacyTransformer
 from experiments.grug.moe.model import GrugModelConfig, Transformer
-from experiments.marin_models import marin_tokenizer
+from experiments.marin_tokenizer import marin_tokenizer
 
 logger = logging.getLogger(__name__)
 

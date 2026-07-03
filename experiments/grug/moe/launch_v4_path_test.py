@@ -49,7 +49,7 @@ from experiments.domain_phase_mix.two_phase_dolma3_dolmino_top_level import (
 from experiments.grug.moe.heuristic import build_from_heuristic
 from experiments.grug.moe.launch import GrugMoeLaunchConfig
 from experiments.grug.moe.train import GrugEvalConfig, GrugRunConfig, GrugTrainerConfig, run_grug
-from experiments.marin_models import marin_tokenizer
+from experiments.marin_tokenizer import marin_tokenizer
 
 GCS_GRUG_PREFIX = "gs://marin-us-east5/grug"
 ENDPOINT_EXECUTOR_ROOTS = {

@@ -44,7 +44,7 @@ from experiments.domain_phase_mix.weight_sampler import (
     compute_unimax_weights,
 )
 from experiments.evals.task_configs import MMLU_5_SHOT, MMLU_PRO_5_SHOT, MMLU_SL_VERB_5_SHOT
-from experiments.marin_models import marin_tokenizer
+from experiments.marin_tokenizer import marin_tokenizer
 from experiments.pretraining_datasets.dolma3_dolmino_pool import tokenize_dolmino_pool_subset
 from experiments.pretraining_datasets.dolma3_pool import tokenize_dolma3_pool_subset
 

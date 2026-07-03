@@ -78,7 +78,7 @@ from experiments.domain_phase_mix.launch_300m_mcq_smooth_proxy_evals import (
 )
 from experiments.domain_phase_mix.launch_300m_raw_ppl_evals import PRIORITY_BUNDLE, build_raw_ppl_datasets
 from experiments.evals.exp1600_uncheatable_evals import uncheatable_eval_raw_validation_sets
-from experiments.marin_models import marin_tokenizer
+from experiments.marin_tokenizer import marin_tokenizer
 from experiments.paloma import paloma_raw_validation_sets
 
 logger = logging.getLogger(__name__)

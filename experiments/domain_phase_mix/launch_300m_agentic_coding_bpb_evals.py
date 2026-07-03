@@ -49,7 +49,7 @@ from experiments.domain_phase_mix.launch_300m_gsm8k_humaneval_evals import (
     _slug,
     _string_value,
 )
-from experiments.marin_models import marin_tokenizer
+from experiments.marin_tokenizer import marin_tokenizer
 
 logger = logging.getLogger(__name__)
 
