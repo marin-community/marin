@@ -1,36 +1,242 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""`ducky query` — run a SQL query against a ducky service from the CLI.
+"""Programmatic ``DuckyClient`` + the ``ducky query`` CLI.
 
-ducky is reached through the controller endpoint proxy, which sits behind IAP. The
-CLI hides that: with ``--cluster <name>`` it drives ``iris cluster dashboard`` to
-open a local tunnel, resolves the ``/proxy/<endpoint>`` path itself, runs the query,
-and tears the tunnel down — so you just run::
+ducky runs behind the Iris controller's endpoint proxy and speaks an async
+protocol: ``POST /query {"sql": ...}`` returns a ``query_id``; poll
+``GET /result/{query_id}`` until ``status != "running"`` (dodging the proxy's
+~30 s request cap).
+
+:class:`DuckyClient` is the reusable client for that protocol. It is transport-
+and auth-agnostic via ``base_url`` + a ``token_provider``:
+
+* CLI / open tunnel — ``base_url`` of the tunnel, no token (the tunnel auths).
+* IAP proxy (e.g. dashboards) — :func:`iap_token_provider` mints a service-
+  account OIDC token for the desktop OAuth audience, sent as ``Authorization``.
+* in-cluster — the controller's internal proxy URL, no token.
+
+Because ducky is **preemptible** (it can vanish and re-register at any time) and
+reads object storage per query, both preemptions and transient network/DNS blips
+surface as errors; :meth:`DuckyClient.run` retries those with exponential backoff
+for up to ``retry_budget`` seconds. Deterministic errors (SQL, missing file) and
+query timeouts fail fast.
+
+CLI::
 
     ducky query --cluster marin "SELECT count(*) FROM read_parquet('gs://…/*.parquet')"
-
-Alternatively pass ``--base-url`` to target an already-open tunnel (or set
-``DUCKY_BASE_URL``). The command submits, polls until done, prints the capped
-preview as a table, and writes a stats line (rows, time, result size, cached, and
-the full-result GCS path) to stderr.
 """
 
 from __future__ import annotations
 
+import dataclasses
 import json
+import logging
 import os
 import time
+from collections.abc import Callable
 
 import click
 import httpx
+from httpx import HTTPError
 
 from ducky.tunnel import cluster_tunnel
 
+logger = logging.getLogger(__name__)
+
 DEFAULT_BASE_URL = "http://127.0.0.1:10000/proxy/ducky"
-# Per-request HTTP timeout. Each submit/poll call is fast (the query runs async on the
-# server), so this only bounds a single round-trip — not the query.
+# Per-request HTTP timeout. Each submit/poll call is fast (the query runs async on
+# the server), so this only bounds a single round-trip — not the query.
 _HTTP_TIMEOUT = 30
+# Default overall wait for a query to finish (poll deadline). Kept above ducky's
+# own ``query_timeout`` (600 s) so a genuinely slow query is interrupted server
+# side (a clean error) rather than tripping this deadline first.
+DEFAULT_QUERY_TIMEOUT = 900.0
+
+TokenProvider = Callable[[], str | None]
+
+# Substrings marking a *retryable* failure: transient network/DNS/object-store
+# blips AND ducky being unavailable (preemptible — proxy "No endpoint", or a
+# 502/504 upstream timeout while it restarts). Deterministic errors (SQL binder,
+# file-not-found) are absent so they fail fast.
+_RETRYABLE_MARKERS = (
+    "could not resolve hostname",
+    "connection reset",
+    "connection refused",
+    "connection aborted",
+    "connection timed out",
+    "timed out",
+    "temporarily unavailable",
+    "network is unreachable",
+    "failed to establish",
+    "no endpoint",  # controller proxy: ducky endpoint not registered (preempted)
+    "upstream timeout",  # controller proxy: ducky didn't respond (restarting)
+    "http 429",
+    "http 500",
+    "http 502",
+    "http 503",
+    "http 504",
+)
+
+
+def _is_retryable(message: str) -> bool:
+    m = message.lower()
+    return any(marker in m for marker in _RETRYABLE_MARKERS)
+
+
+class DuckyError(RuntimeError):
+    """A ducky query failed, timed out, or the service returned an HTTP error."""
+
+
+@dataclasses.dataclass(frozen=True)
+class QueryResult:
+    """A completed ducky query: capped preview rows plus full-result metadata."""
+
+    columns: list[str]
+    rows: list[list]
+    total_rows: int
+    truncated: bool
+    result_path: str | None
+    cached: bool
+    elapsed_ms: int
+    result_bytes: int
+
+    def dicts(self) -> list[dict]:
+        return [dict(zip(self.columns, row, strict=True)) for row in self.rows]
+
+    def scalar(self):
+        """The single cell of a 1x1 result (e.g. a ``count(*)``)."""
+        if not self.rows or not self.rows[0]:
+            raise DuckyError("scalar() on an empty result")
+        return self.rows[0][0]
+
+
+def iap_token_provider(audience: str | None = None) -> TokenProvider:
+    """Token provider that mints an IAP OIDC token from ambient service-account creds.
+
+    The audience defaults to Marin's desktop OAuth client (the one on the IAP
+    allowlist).
+    """
+    from rigging.auth import (  # noqa: PLC0415 — lazy: the CLI tunnel path needs no IAP/rigging deps
+        MARIN_DESKTOP_OAUTH_CLIENT,
+        IapServiceAccountTokenProvider,
+    )
+
+    return IapServiceAccountTokenProvider(audience or MARIN_DESKTOP_OAUTH_CLIENT.client_id).get_token
+
+
+def _error_message(response: httpx.Response) -> str:
+    try:
+        return str(response.json().get("error", response.text))
+    except (ValueError, KeyError):
+        return f"HTTP {response.status_code}: {response.text[:200]}"
+
+
+class DuckyClient:
+    """Submit SQL to ducky and block until the result is ready, riding out preemptions.
+
+    Args:
+        base_url: ducky root — a tunnel URL, the IAP proxy, or an in-cluster
+            controller proxy.
+        token_provider: returns a bearer token per request, or ``None`` for no
+            auth (tunnel / in-cluster direct).
+        poll_interval: seconds between ``/result`` polls.
+        timeout: overall seconds to wait for one query to finish.
+        retry_budget: total wall-clock spent retrying retryable failures, with
+            exponential backoff (``retry_base`` doubling, capped at ``retry_cap``).
+    """
+
+    def __init__(
+        self,
+        base_url: str = DEFAULT_BASE_URL,
+        *,
+        token_provider: TokenProvider | None = None,
+        poll_interval: float = 1.0,
+        timeout: float = DEFAULT_QUERY_TIMEOUT,
+        retry_budget: float = 150.0,
+        retry_base: float = 2.0,
+        retry_cap: float = 20.0,
+    ):
+        self._base_url = base_url.rstrip("/")
+        self._token_provider = token_provider
+        self._poll_interval = poll_interval
+        self._timeout = timeout
+        self._retry_budget = retry_budget
+        self._retry_base = retry_base
+        self._retry_cap = retry_cap
+
+    def _request(self, method: str, path: str, body: dict | None = None, timeout: float = _HTTP_TIMEOUT) -> dict:
+        url = f"{self._base_url}{path}"
+        kwargs: dict = {"timeout": timeout}
+        if self._token_provider is not None:
+            token = self._token_provider()
+            if token:
+                kwargs["headers"] = {"Authorization": f"Bearer {token}"}
+        try:
+            resp = httpx.post(url, json=body, **kwargs) if method == "POST" else httpx.get(url, **kwargs)
+        except HTTPError as e:
+            raise DuckyError(f"ducky {method} {path} unreachable: {e}") from e
+        if resp.status_code not in (200, 202):
+            raise DuckyError(f"ducky {method} {path} -> HTTP {resp.status_code}: {_error_message(resp)}")
+        return resp.json()
+
+    def healthy(self) -> bool:
+        """Quick ``/health`` probe (short timeout, no retry) — is ducky reachable now?"""
+        try:
+            return self._request("GET", "/health", timeout=5.0).get("status") == "healthy"
+        except DuckyError:
+            return False
+
+    def run(self, sql: str, use_cache: bool = True) -> QueryResult:
+        """Submit ``sql`` and poll until done, retrying while ducky is unavailable."""
+        start = time.monotonic()
+        attempt = 0
+        while True:
+            try:
+                return self._run_once(sql, use_cache)
+            except DuckyError as e:
+                retryable = _is_retryable(str(e))
+                elapsed = time.monotonic() - start
+                if retryable and elapsed < self._retry_budget:
+                    wait = min(self._retry_cap, self._retry_base * (2**attempt))
+                    attempt += 1
+                    logger.warning(
+                        "ducky unavailable/transient (retry %d, %.0fs/%.0fs elapsed), sleeping %.0fs: %s",
+                        attempt,
+                        elapsed,
+                        self._retry_budget,
+                        wait,
+                        str(e).splitlines()[0][:140],
+                    )
+                    time.sleep(wait)
+                    continue
+                # Not retryable, or the retry budget is exhausted: re-raise with
+                # the original detail (HTTP status / "No endpoint" / "upstream
+                # timeout") so callers can see what actually failed.
+                raise
+
+    def _run_once(self, sql: str, use_cache: bool) -> QueryResult:
+        query_id = self._request("POST", "/query", {"sql": sql, "use_cache": use_cache})["query_id"]
+        deadline = time.monotonic() + self._timeout
+        while True:
+            state = self._request("GET", f"/result/{query_id}")
+            status = state.get("status")
+            if status == "done":
+                return QueryResult(
+                    columns=state["columns"],
+                    rows=state["rows"],
+                    total_rows=state["total_rows"],
+                    truncated=state.get("truncated", False),
+                    result_path=state.get("result_path"),
+                    cached=state.get("cached", False),
+                    elapsed_ms=state.get("elapsed_ms", 0),
+                    result_bytes=state.get("result_bytes", 0),
+                )
+            if status == "error":
+                raise DuckyError(f"query failed: {state.get('error')}\nSQL: {sql[:500]}")
+            if time.monotonic() > deadline:
+                raise DuckyError(f"query {query_id} still running after {self._timeout:.0f}s")
+            time.sleep(self._poll_interval)
 
 
 def _render_table(columns: list[str], rows: list[list]) -> str:
@@ -49,44 +255,25 @@ def _render_table(columns: list[str], rows: list[list]) -> str:
     return "\n".join(lines)
 
 
-def _error_message(response: httpx.Response) -> str:
-    try:
-        return str(response.json().get("error", response.text))
-    except (ValueError, KeyError):
-        return f"HTTP {response.status_code}: {response.text[:200]}"
-
-
 def _run_query(base: str, sql: str, output_format: str, poll_interval: float, timeout: int, use_cache: bool) -> None:
-    base = base.rstrip("/")
-    submit = httpx.post(f"{base}/query", json={"sql": sql, "use_cache": use_cache}, timeout=_HTTP_TIMEOUT)
-    if submit.status_code != 202:
-        raise click.ClickException(_error_message(submit))
-    query_id = submit.json()["query_id"]
-
-    deadline = time.monotonic() + timeout
-    while True:
-        resp = httpx.get(f"{base}/result/{query_id}", timeout=_HTTP_TIMEOUT)
-        if resp.status_code != 200:
-            raise click.ClickException(_error_message(resp))
-        result = resp.json()
-        if result.get("status") != "running":
-            break
-        if time.monotonic() > deadline:
-            raise click.ClickException(f"Query still running after {timeout}s (id {query_id}).")
-        time.sleep(poll_interval)
-
-    if result["status"] == "error":
-        raise click.ClickException(result["error"])
+    # CLI fails fast (retry_budget=0): a persistent error surfaces immediately
+    # rather than blocking an interactive user. Programmatic callers keep the
+    # default budget to ride out preemptions.
+    client = DuckyClient(base, token_provider=None, poll_interval=poll_interval, timeout=timeout, retry_budget=0)
+    try:
+        result = client.run(sql, use_cache=use_cache)
+    except DuckyError as e:
+        raise click.ClickException(str(e)) from e
 
     if output_format == "json":
-        click.echo(json.dumps(result, indent=2))
+        click.echo(json.dumps(dataclasses.asdict(result), indent=2))
         return
 
-    click.echo(_render_table(result["columns"], result["rows"]))
-    count = f"{len(result['rows'])} of {result['total_rows']}" if result["truncated"] else str(result["total_rows"])
-    cached = "cached" if result["cached"] else "computed"
-    click.echo(f"\n{count} rows · {result['elapsed_ms']} ms · {result['result_bytes']} B · {cached}", err=True)
-    click.echo(f"full result: {result['result_path']}", err=True)
+    click.echo(_render_table(result.columns, result.rows))
+    count = f"{len(result.rows)} of {result.total_rows}" if result.truncated else str(result.total_rows)
+    cached = "cached" if result.cached else "computed"
+    click.echo(f"\n{count} rows · {result.elapsed_ms} ms · {result.result_bytes} B · {cached}", err=True)
+    click.echo(f"full result: {result.result_path}", err=True)
 
 
 @click.command("query")
