@@ -1311,3 +1311,53 @@ source-visible W2-return commits.
   - The direct W2-return integration did not regress the checked public H100 source-push forward correctness path.
   - The remaining source-push work is performance/integration refinement, not a correctness regression from the direct
     return change.
+
+## 2026-07-03 11:55 - Stage-specific H100 source-push pytest coverage
+
+Added a checked H100-only pytest for the individual source-push forward stages. The existing public full-forward H100
+smoke covered the integrated `pallas_mgpu_source_push` path, but the spec also calls out stage-level coverage for W13
+expert-major placement, W2 return identity, and source combine.
+
+- Commit Hash: `253e8b989` plus local diff in `lib/levanter/tests/grug/test_grugformer_moe.py`.
+- Code:
+  - `lib/levanter/tests/grug/test_grugformer_moe.py`
+- Change:
+  - Added `test_source_push_stage_kernels_match_references_on_h100`.
+  - Shape: `EP=8`, `T/rank=64`, `K=2`, `D=128`, `I=128`, `E_local=2`.
+  - The test runs:
+    - `run_source_push_inbox_source_plan(..., check=True)` and asserts source-plan metadata, zero metadata mismatches,
+      expert-major W13 hidden diff within bf16 tolerance, and zero unwritten-row diff.
+    - `run_source_push_w2_return_source_plan(..., hidden_input_mode="w13_reference", return_mode="direct_remote",
+      check=True)` and asserts direct source-visible return plus source-queue diff within bf16 tolerance.
+    - `run_source_push_combine_source_plan(..., check=True)` and asserts route-buffer gather/sum combine diff within
+      bf16 tolerance.
+- Local verification:
+  - `uv run --package marin-levanter --group test pytest lib/levanter/tests/grug/test_grugformer_moe.py -q -n 0 -k 'source_push_stage_kernels_match_references_on_h100'`
+    - Result: `1 skipped, 22 deselected, 1 warning` on non-H100 local hardware.
+  - `uv run --package marin-levanter --group test pytest lib/levanter/tests/grug/test_grugformer_moe.py -q -n 0 -k source_push`
+    - Result: `1 passed, 3 skipped, 19 deselected, 1 warning` on non-H100 local hardware.
+- H100 verification:
+  - Job: `/dlwh/source-push-stage-h100-pytest-253e8b989-local-20260703-185057`
+  - Cluster: `cw-us-east-02a`
+  - Command:
+    ```bash
+    uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job run --no-wait \
+      --job-name source-push-stage-h100-pytest-253e8b989-local-20260703-185057 \
+      --cpu 16 --memory 128GB --disk 16GB --gpu H100x8 --reserve H100x8 \
+      --enable-extra-resources --extra gpu -- \
+      timeout 3600s uv run --package marin-levanter --group test pytest \
+      lib/levanter/tests/grug/test_grugformer_moe.py -q -n 0 -k source_push
+    ```
+  - Iris summary:
+    - State: `succeeded`
+    - Task count: `1`
+    - Exit code: `0`
+    - Duration: `124687 ms`
+    - Failure count: `0`
+    - Preemption count: `0`
+  - Pytest result:
+    - `4 passed, 19 deselected, 1 warning in 100.56s`
+- Interpretation:
+  - The source-push H100 pytest selection now directly exercises the W13, direct W2-return, and source-combine stages in
+    addition to the public full-forward backend smokes.
+  - This closes the objective's stage-specific H100 correctness coverage gap for the current staged forward path.

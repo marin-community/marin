@@ -15,8 +15,11 @@ from haliax.nn.ragged_dot import ragged_dot
 import levanter.grug.grug_moe as grug_moe
 from levanter.grug._moe.common import _prepare_moe_dispatch, _prepare_moe_dispatch_indices_with_assignment_ids
 from levanter.grug._moe.ep_deepep import _pack_deepep_local_assignments
+import levanter.grug._moe.source_push_combine as source_push_combine
 from levanter.grug._moe.source_push_forward import make_source_push_forward_source_plan_raw_inputs
+import levanter.grug._moe.source_push_inbox as source_push_inbox
 from levanter.grug._moe.source_push_inbox import PushInboxConfig
+import levanter.grug._moe.source_push_w2_return as source_push_w2_return
 from levanter.grug._moe.sonic import sonic_gather_sum
 from levanter.grug.grug_moe import (
     MoEExpertMlp,
@@ -754,6 +757,82 @@ def test_source_push_forward_matches_public_ep_backends_on_h100():
         assert int(jax.device_get(baseline_dropped)) == 0
         assert float(np.max(diff)) <= 0.03125
         assert float(np.mean(diff)) <= 0.002
+
+
+def test_source_push_stage_kernels_match_references_on_h100():
+    _skip_without_h100x8()
+
+    config = PushInboxConfig(
+        ep_size=8,
+        entries_per_rank=2,
+        inbox_slots=1,
+        hidden_dim=128,
+        intermediate_dim=128,
+        block_m=64,
+        block_n=128,
+        block_k=64,
+        n_group=1,
+        n_groups_per_job=1,
+        experts_per_rank=2,
+        send_worker_programs_per_peer=1,
+        worker_programs_per_peer=8,
+        send_pipeline_depth=1,
+        routing="balanced",
+        tokens_per_rank=64,
+        topk=2,
+        capacity_factor=1.25,
+    )
+
+    w13_rows = source_push_inbox.run_source_push_inbox_source_plan(
+        config,
+        warmup=0,
+        steps=1,
+        repeat_runs=1,
+        check=True,
+        debug_exceptions=True,
+    )
+    w13_row = w13_rows[0]
+    assert w13_row["error_type"] is None
+    assert w13_row["metadata_mismatches"] == 0
+    assert w13_row["input_mode"] == "source_push_plan"
+    assert w13_row["row_start_mode"] == "source_padded_row_start"
+    assert w13_row["hidden_max_abs_diff"] <= 0.03125
+    assert w13_row["hidden_mean_abs_diff"] <= 0.002
+    assert w13_row["hidden_unwritten_max_abs"] == 0.0
+
+    w2_rows = source_push_w2_return.run_source_push_w2_return_source_plan(
+        config,
+        warmup=0,
+        steps=1,
+        repeat_runs=1,
+        check=True,
+        debug_exceptions=True,
+        hidden_input_mode=source_push_w2_return.W2_HIDDEN_INPUT_W13_REFERENCE,
+        return_mode=source_push_w2_return.W2_RETURN_MODE_DIRECT_REMOTE,
+    )
+    w2_row = w2_rows[0]
+    assert w2_row["error_type"] is None
+    assert w2_row["return_mode"] == source_push_w2_return.W2_RETURN_MODE_DIRECT_REMOTE
+    assert w2_row["direct_to_source"]
+    assert w2_row["w2_input_mode"] == "source_push_plan"
+    assert w2_row["w2_hidden_input_mode"] == source_push_w2_return.W2_HIDDEN_INPUT_W13_REFERENCE
+    assert w2_row["source_queue_max_abs_diff"] <= 0.03125
+    assert w2_row["mean_abs_diff"] <= 0.002
+
+    combine_rows = source_push_combine.run_source_push_combine_source_plan(
+        config,
+        warmup=0,
+        steps=1,
+        repeat_runs=1,
+        check=True,
+        debug_exceptions=True,
+    )
+    combine_row = combine_rows[0]
+    assert combine_row["error_type"] is None
+    assert combine_row["combine_mode"] == "route_buffer_gather_sum"
+    assert combine_row["dropped_routes"] == 0
+    assert combine_row["max_abs_diff"] <= 0.03125
+    assert combine_row["mean_abs_diff"] <= 0.002
 
 
 def test_source_push_forward_handles_tail_blocks_empty_experts_topk4_on_h100():
