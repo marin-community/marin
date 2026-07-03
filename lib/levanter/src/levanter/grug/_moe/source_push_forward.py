@@ -16,6 +16,7 @@ from typing import Any, Callable
 import jax
 import jax.numpy as jnp
 import numpy as np
+from jax import lax, shard_map
 from jax.sharding import Mesh, NamedSharding, PartitionSpec as P
 from jaxtyping import Array, Bool, Float, Int
 
@@ -275,6 +276,7 @@ def reference_source_push_forward(
 def _sharded_source_push_forward_kernel(mesh: Mesh, config: PushInboxConfig):
     w13_kernel = _sharded_kernel(mesh, config)
     w2_return_kernel = _sharded_w2_return_to_source_kernel(mesh, config)
+    remote_write_barrier = _sharded_remote_write_completion_barrier(mesh)
     combine_kernel = _sharded_source_combine_kernel(mesh, config)
 
     def fn(
@@ -300,6 +302,7 @@ def _sharded_source_push_forward_kernel(mesh: Mesh, config: PushInboxConfig):
             w_gate_up,
         )
         _, source_return = w2_return_kernel(hidden, recv_meta, w_down)
+        source_return = remote_write_barrier(source_return)
         return combine_kernel(
             source_return,
             queue_dst_ord,
@@ -310,6 +313,26 @@ def _sharded_source_push_forward_kernel(mesh: Mesh, config: PushInboxConfig):
         )
 
     return fn
+
+
+def _sharded_remote_write_completion_barrier(mesh: Mesh):
+    """Synchronize ranks after return-copy remote writes before source-local reads."""
+
+    def local_fn(source_return_local: Float[Array, "1 DST Q M D"]):
+        source_return_local = source_return_local[0]
+        marker = source_return_local[0, 0, 0, 0].astype(jnp.float32)
+        barrier = lax.psum(marker, AXIS)
+        zero = (barrier - lax.optimization_barrier(barrier)).astype(source_return_local.dtype)
+        source_return_local = source_return_local.at[0, 0, 0, 0].add(zero)
+        return source_return_local[None, ...]
+
+    return shard_map(
+        local_fn,
+        mesh=mesh,
+        in_specs=P(AXIS, None, None, None, None),
+        out_specs=P(AXIS, None, None, None, None),
+        check_vma=False,
+    )
 
 
 def _time_staged_source_push_forward(
