@@ -30,13 +30,13 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 from jax import Ref, lax, shard_map
-from jax._src.pallas import primitives as pallas_primitives
 from jax.experimental import pallas as pl
 from jax.experimental.pallas import mosaic_gpu as mgpu
 from jax.sharding import Mesh, NamedSharding, PartitionSpec as P
 from jaxtyping import Array, Float, Int
 from levanter.grug._moe.common import _prepare_moe_dispatch_indices_with_assignment_ids
 from levanter.grug._moe.source_push_plan import (
+    SourcePushPlan,
     build_source_push_plan,
     pack_source_push_tokens,
     source_push_plan_row_stats,
@@ -496,68 +496,31 @@ def _make_kernel(
                 return expert_base_ref[expert] + src_base_by_expert_ref[src_rank, expert] + local_row_start
             return recv_meta_ref[src_ordinal, entry, 2]
 
-        def _valid_row_tile_mask(valid_rows, cols: int):
-            row_indices = mgpu.layout_cast(
-                lax.broadcasted_iota(jnp.int32, (config.block_m, cols), 0),
-                mgpu.Layout.WGMMA,
-            )
-            return row_indices < valid_rows
-
         def _store_hidden(src_ordinal, entry, n_tile, hidden) -> None:
             dst_row_start = _hidden_row_start(src_ordinal, entry)
-            valid_rows = recv_meta_ref[src_ordinal, entry, 3]
             if stores_tiny_output:
                 output = hidden[:, :TINY_OUTPUT_COLUMNS_PER_N_TILE].astype(hidden_ref.dtype)
                 idx = (
                     pl.ds(dst_row_start, config.block_m),
                     pl.ds(n_tile * TINY_OUTPUT_COLUMNS_PER_N_TILE, TINY_OUTPUT_COLUMNS_PER_N_TILE),
                 )
-                if use_exact_expert_major:
-                    pallas_primitives.store(
-                        hidden_ref,
-                        idx,
-                        output,
-                        mask=_valid_row_tile_mask(valid_rows, TINY_OUTPUT_COLUMNS_PER_N_TILE),
-                    )
-                else:
-                    hidden_ref[idx] = output
+                hidden_ref[idx] = output
             else:
                 output = hidden.astype(hidden_ref.dtype)
                 idx = (
                     pl.ds(dst_row_start, config.block_m),
                     pl.ds(n_tile * config.block_n, config.block_n),
                 )
-                if use_exact_expert_major:
-                    pallas_primitives.store(
-                        hidden_ref,
-                        idx,
-                        output,
-                        mask=_valid_row_tile_mask(valid_rows, config.block_n),
-                    )
-                else:
-                    hidden_ref[idx] = output
+                hidden_ref[idx] = output
 
         def _store_zero_hidden(src_ordinal, entry, n_tile) -> None:
             dst_row_start = _hidden_row_start(src_ordinal, entry)
-            valid_rows = recv_meta_ref[src_ordinal, entry, 3]
             idx = (
                 pl.ds(dst_row_start, config.block_m),
                 pl.ds(n_tile * config.block_n, config.block_n),
             )
-            if use_exact_expert_major:
-                zeros = mgpu.layout_cast(
-                    jnp.zeros((config.block_m, config.block_n), dtype=hidden_ref.dtype),
-                    mgpu.Layout.WGMMA,
-                )
-                pallas_primitives.store(
-                    hidden_ref,
-                    idx,
-                    zeros,
-                    mask=_valid_row_tile_mask(valid_rows, config.block_n),
-                )
-            else:
-                zeros = jnp.zeros((config.block_m, config.block_n), dtype=hidden_ref.dtype)
-                hidden_ref[idx] = zeros
+            zeros = jnp.zeros((config.block_m, config.block_n), dtype=hidden_ref.dtype)
+            hidden_ref[idx] = zeros
 
         def _store_zero_n_group(src_ordinal, entry, n_group_i) -> None:
             if config.n_group == 1:
@@ -1127,6 +1090,24 @@ def _src_base_by_expert_for_dst(src_base: np.ndarray) -> np.ndarray:
     return np.transpose(src_base, (1, 0, 2)).astype(np.int32)
 
 
+def _source_padded_plan_row_bases(plan: SourcePushPlan, block_m: int) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    counts = np.asarray(plan.counts_by_src_dst_expert, dtype=np.int32)
+    rounded_counts = ((counts + block_m - 1) // block_m) * block_m
+    rows_per_local_expert = np.sum(rounded_counts, axis=0, dtype=np.int32)
+    expert_base = np.zeros_like(rows_per_local_expert)
+    src_base_by_expert = np.zeros((counts.shape[1], counts.shape[0], counts.shape[2]), dtype=np.int32)
+    for dst in range(counts.shape[1]):
+        row = 0
+        for expert in range(counts.shape[2]):
+            expert_base[dst, expert] = row
+            src_running = 0
+            for src in range(counts.shape[0]):
+                src_base_by_expert[dst, src, expert] = src_running
+                src_running += int(rounded_counts[src, dst, expert])
+            row += src_running
+    return rounded_counts, expert_base, src_base_by_expert
+
+
 def _make_routing_inputs(config: PushInboxConfig) -> HostInputs:
     counts = _routing_counts(config)
     _, expert_base, src_base = _routing_row_bases(config, counts)
@@ -1258,7 +1239,12 @@ def _make_compact_routing_inputs(config: PushInboxConfig) -> HostInputs:
 
 
 def _make_source_push_plan_inputs(config: PushInboxConfig) -> HostInputs:
-    """Build exact expert-major queue inputs from the invertible source-push plan."""
+    """Build expert-major queue inputs from the invertible source-push plan.
+
+    Lane lowering does not currently support masked GMEM stores from the WGMMA
+    path, so v0 gives each source slice `block_m`-rounded room inside an expert.
+    Invalid packed rows are zero and remain source-owned padding.
+    """
     counts = _routing_counts(config)
     selected_experts = np.stack(
         [_selected_experts_from_counts(config, counts[src], src) for src in range(config.ep_size)],
@@ -1278,10 +1264,11 @@ def _make_source_push_plan_inputs(config: PushInboxConfig) -> HostInputs:
     x_host = np.asarray(pack_source_push_tokens(jnp.asarray(source_tokens, dtype=jnp.float32), plan), dtype=np.float32)
     send_meta = np.asarray(plan.send_meta, dtype=np.int32)
     recv_meta = np.asarray(plan.recv_meta, dtype=np.int32)
+    rounded_counts, expert_base, src_base_by_expert = _source_padded_plan_row_bases(plan, config.block_m)
     stats = _queue_stats(config, send_meta)
     plan_stats = source_push_plan_row_stats(plan)
     stats["input_mode"] = "source_push_plan"
-    stats["row_start_mode"] = "local_row_start"
+    stats["row_start_mode"] = "local_row_start_source_padded"
     stats["dropped_routes"] = plan_stats.dropped_routes
     stats["dropped_entries_total"] = 0
     stats["dropped_rows_total"] = plan_stats.dropped_routes
@@ -1292,12 +1279,14 @@ def _make_source_push_plan_inputs(config: PushInboxConfig) -> HostInputs:
     stats["plan_live_entries_total"] = plan_stats.live_entries
     stats["plan_row_efficiency"] = plan_stats.row_efficiency
     stats["plan_masked_row_fraction"] = plan_stats.masked_row_fraction
+    stats["plan_padded_rows_total"] = int(np.sum(rounded_counts))
+    stats["plan_padded_rows_per_rank_mean"] = float(np.sum(rounded_counts) / config.ep_size)
     return HostInputs(
         x=x_host,
         send_meta=send_meta,
         recv_meta=recv_meta,
-        expert_base=np.asarray(plan.expert_base, dtype=np.int32),
-        src_base_by_expert=np.asarray(plan.src_base_by_expert, dtype=np.int32),
+        expert_base=expert_base,
+        src_base_by_expert=src_base_by_expert,
         queue_stats=stats,
         use_exact_expert_major=True,
     )

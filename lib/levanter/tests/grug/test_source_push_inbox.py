@@ -236,9 +236,10 @@ def test_source_push_plan_inputs_use_exact_local_row_starts():
 
     assert host_inputs.use_exact_expert_major
     assert host_inputs.queue_stats["input_mode"] == "source_push_plan"
-    assert host_inputs.queue_stats["row_start_mode"] == "local_row_start"
+    assert host_inputs.queue_stats["row_start_mode"] == "local_row_start_source_padded"
     assert int(np.sum(exact_live_mask)) == int(np.sum(valid_rows))
     assert int(np.sum(live_entries) * config.block_m) > int(np.sum(valid_rows))
+    assert host_inputs.queue_stats["plan_padded_rows_total"] == int(np.sum(live_entries) * config.block_m)
 
     src = 1
     dst = 0
