@@ -11,10 +11,10 @@ FP8 (activations E4M3, output-grad E5M2) and fed to ``cute_wgrad`` -- a real
 E4M3×E5M2 grouped GEMM (the TE recipe), not a bf16 fallback. ``WgradMode.BF16``
 keeps the (bf16-exact, dequantize-based) Task-2 wgrad for A/B testing.
 
-Delayed per-tensor scaling reuses ``_src/fp8.py``: ``in_q`` threads the two
-forward-operand scale/amax states through its own custom_vjp; the output-grad
-state is threaded by ``quantized_ragged_dot``'s custom_vjp. The weight is
-transposed in bf16 (hardware-legal) then cast to FP8 for the k-contiguous forward.
+Delayed per-tensor scaling reuses ``_src/fp8.py``: ``_dual_write_q`` threads the two
+forward-operand scale/amax states through its own custom_vjp (while a single fused
+cast-transpose emits each operand's forward and wgrad FP8 layouts in one HBM read);
+the output-grad state is threaded by ``quantized_ragged_dot``'s custom_vjp.
 """
 
 import functools
@@ -24,12 +24,53 @@ import jax
 import jax.numpy as jnp
 from jax import custom_vjp
 
-from .fp8 import in_q, quantize, update_fp8_meta
-from .fp8_cast_transpose import cast_transpose
+from .fp8 import compute_amax_history, compute_scale, get_fp8_max, update_fp8_meta
+from .fp8_cast_transpose import cast_transpose, cast_transpose_weight
 from .ragged_dot_cute import cute_ragged_dot, cute_wgrad
 
 _E4M3 = jnp.float8_e4m3fn
 _E5M2 = jnp.float8_e5m2
+
+
+def _scale_from_history(q_dtype, scale, amax_history):
+    """Delayed-scaling next-step scale from the amax history alone (no read of the
+    operand). Matches ``fp8.update_fp8_meta``'s scale, split out so the operand is
+    read exactly once -- by the fused dual-write kernel -- not again for the scale."""
+    dtype_max = get_fp8_max(q_dtype, jnp.float32)
+    return compute_scale(jnp.max(amax_history, axis=0), scale, dtype_max)
+
+
+@functools.partial(custom_vjp, nondiff_argnums=(0, 1, 2))
+def _dual_write_q(cast_transpose_fn, q_dtype, compute_dtype, x, scale, amax_history):
+    """Delayed-scaling fused dual-write quantize of ``x`` -> ``(row_major, token_major, new_scale)``.
+
+    Replaces ``in_q(x)`` + a separate transpose: one fused cast-transpose reads ``x``
+    once and emits both the contraction-natural (forward/dgrad) FP8 layout and its
+    token-major (wgrad) transpose, with the same per-tensor scale. The custom VJP
+    threads the next-step scale + rolled amax history as cotangents so they overwrite
+    the persisted delayed-scaling state (identical semantics to ``fp8.in_q``).
+    ``cast_transpose_fn`` is ``cast_transpose`` (2-D activations) or
+    ``cast_transpose_weight`` (per-expert ``[E,K,N]`` weights)."""
+    new_scale = _scale_from_history(q_dtype, scale, amax_history)
+    row, col = cast_transpose_fn(x, new_scale, out_dtype=q_dtype, compute_dtype=compute_dtype)
+    return row, col, new_scale
+
+
+def _dual_write_q_fwd(cast_transpose_fn, q_dtype, compute_dtype, x, scale, amax_history):
+    new_scale = _scale_from_history(q_dtype, scale, amax_history)
+    row, col = cast_transpose_fn(x, new_scale, out_dtype=q_dtype, compute_dtype=compute_dtype)
+    new_history = compute_amax_history(x, amax_history)
+    return (row, col, new_scale), (new_scale, new_history)
+
+
+def _dual_write_q_bwd(cast_transpose_fn, q_dtype, compute_dtype, res, _cotangents):
+    # No gradient flows to x/scale/amax_history; pass the updated scale and history
+    # through as the scale/amax_history cotangents (OverwriteWithGradient).
+    new_scale, new_history = res
+    return None, new_scale, new_history
+
+
+_dual_write_q.defvjp(_dual_write_q_fwd, _dual_write_q_bwd)
 
 
 class WgradMode(StrEnum):
@@ -177,16 +218,15 @@ def fp8_scaled_ragged_dot(
         [T, N] output array in ``lhs.dtype``.
     """
     comp = quantize_compute_type
-    q_lhs, new_lhs_scale = in_q(comp, fwd_dtype, lhs, lhs_scale, lhs_amax_history)
-    # Token-major activation for the FP8 wgrad. This is the transpose of the same
-    # E4M3 forward operand (bit-identical to cast_transpose's token-major output),
-    # so no second quantize is paid; a fused cast-transpose kernel would later
-    # fold in_q's quantize and this transpose into one HBM pass.
-    q_lhs_t = jnp.swapaxes(q_lhs, 0, 1)
-    # Quantize rhs in natural layout [E,K,N] for the dgrad (contracts N).
-    q_rhs, new_rhs_scale = in_q(comp, fwd_dtype, rhs, rhs_scale, rhs_amax_history)
-    # Transpose to [E,N,K] for the forward pass (CuTe kernel contracts K, the last axis).
-    q_rhs_t = quantize(jnp.swapaxes(rhs, 1, 2), fwd_dtype, new_rhs_scale, comp)
+    # Fused dual-write quantize of each operand: one HBM read -> both the
+    # contraction-natural (forward/dgrad) FP8 layout and its token-major (wgrad)
+    # transpose. lhs[T,K] -> q_lhs[T,K] (forward) + q_lhs_t[K,T] (wgrad); rhs[E,K,N]
+    # -> q_rhs[E,K,N] (dgrad) + q_rhs_t[E,N,K] (forward, K-contiguous). Replaces the
+    # old in_q + separate swapaxes/quantize (three HBM reads of each weight).
+    q_lhs, q_lhs_t, new_lhs_scale = _dual_write_q(cast_transpose, fwd_dtype, comp, lhs, lhs_scale, lhs_amax_history)
+    q_rhs, q_rhs_t, new_rhs_scale = _dual_write_q(
+        cast_transpose_weight, fwd_dtype, comp, rhs, rhs_scale, rhs_amax_history
+    )
     # out_scale = 1/(lhs_scale*rhs_scale): dequant is a MULTIPLY by the scale product,
     # but the kernel epilogue DIVIDES by out_scale, so pass the reciprocal (shape (1,)
     # float32 to match the epilogue divisor).

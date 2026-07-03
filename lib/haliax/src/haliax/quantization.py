@@ -10,6 +10,7 @@ import functools
 import re
 import warnings
 from dataclasses import dataclass
+from enum import StrEnum
 from typing import Protocol, TypeVar
 
 import aqt.jax.v2.config as aqt_config
@@ -247,6 +248,21 @@ class RaggedDotOp(Protocol):
     def __call__(self, lhs, rhs, group_sizes) -> jnp.ndarray: ...
 
 
+class Fp8RaggedDotBackend(StrEnum):
+    """Grouped-GEMM backend for [Fp8RaggedDotOp][].
+
+    ``CUTE`` (default) is the vendored NVIDIA Hopper TMA warp-specialized persistent
+    kernel driven through ``cutlass.jax.cutlass_call`` (no forked jaxlib). Its WGMMA
+    path contracts genuinely mixed E5M2×E4M3 operands, so it supports the real
+    mixed-precision backward. ``MOSAIC`` is the stock-jaxlib Mosaic ``wgmma`` recipe,
+    whose contraction requires both operands to share one dtype (jax-ml/jax#38859);
+    it is the same-dtype-only extension point and is not vendored in this build.
+    """
+
+    MOSAIC = "mosaic"
+    CUTE = "cute"
+
+
 class Fp8RaggedDotOp(OverwriteWithGradient):
     """Direct-quantization FP8 ``ragged_dot`` op for MoE grouped matmuls.
 
@@ -260,20 +276,14 @@ class Fp8RaggedDotOp(OverwriteWithGradient):
     ``partition_for_grad_overwrite`` / ``apply_updates`` and stays out of the
     optimizer/EMA state.
 
-    The FP8 fast path is a Mosaic-GPU ``wgmma`` kernel and therefore requires
-    Hopper (SM90). Ports of this recipe to other architectures should plug in
-    as additional kernels dispatched behind this same op (analogous to
-    ``ragged_dot``'s ``implementation="auto"``); a different scaling recipe
-    (e.g. Blackwell hardware block scaling, which carries no delayed-scaling
-    state) is a new op class.
-
-    Unlike [Fp8DotGeneralOp][], whose output-gradient dtype defaults to E5M2,
-    ``rev_dtype`` here defaults to E4M3, matching ``fwd_dtype``: stock-jaxlib
-    Mosaic ``wgmma`` requires both operands of a contraction to share one
-    dtype, and re-quantizing *weights* down to E5M2 to match an E5M2 gradient
-    costs too much mantissa. The uniform ``e4m3 × e4m3`` backward is therefore
-    an approximation; ``init`` rejects mixed dtype pairs until mixed-dtype
-    ``wgmma`` is available upstream (jax-ml/jax#38859).
+    The default ``backend`` is the CuTe DSL Hopper TMA warp-specialized grouped
+    GEMM (requires SM90); its WGMMA path handles mixed E5M2×E4M3 contractions, so
+    the genuine mixed-precision backward is available. ``rev_dtype`` still defaults
+    to E4M3 (matching ``fwd_dtype``, a uniform backward) for backward compatibility;
+    pass ``rev_dtype=E5M2`` for the genuine mixed backward (the TE recipe) -- allowed
+    under the default ``CUTE`` backend. The ``MOSAIC`` backend keeps the stock-jaxlib
+    same-dtype constraint: ``init`` rejects ``fwd_dtype != rev_dtype`` there, since
+    mixed-dtype Mosaic ``wgmma`` is not available upstream (jax-ml/jax#38859).
     """
 
     input_scale: jnp.ndarray
@@ -286,6 +296,7 @@ class Fp8RaggedDotOp(OverwriteWithGradient):
     fwd_dtype: DTypeLike = eqx.field(static=True)
     rev_dtype: DTypeLike = eqx.field(static=True)
     wgrad_mode: WgradMode = eqx.field(static=True, default=WgradMode.FP8)
+    backend: Fp8RaggedDotBackend = eqx.field(static=True, default=Fp8RaggedDotBackend.CUTE)
 
     @classmethod
     def init(
@@ -295,13 +306,14 @@ class Fp8RaggedDotOp(OverwriteWithGradient):
         fwd_dtype: DTypeLike = jnp.float8_e4m3fn,
         rev_dtype: DTypeLike = jnp.float8_e4m3fn,
         wgrad_mode: WgradMode = WgradMode.FP8,
+        backend: Fp8RaggedDotBackend = Fp8RaggedDotBackend.CUTE,
     ):
-        if jnp.dtype(fwd_dtype) != jnp.dtype(rev_dtype):
+        if backend is Fp8RaggedDotBackend.MOSAIC and jnp.dtype(fwd_dtype) != jnp.dtype(rev_dtype):
             raise ValueError(
-                "Fp8RaggedDotOp requires fwd_dtype == rev_dtype: stock-jaxlib Mosaic wgmma only "
-                "contracts same-dtype operands, so the backward runs uniform GEMMs in fwd_dtype. "
+                "Fp8RaggedDotOp(backend=MOSAIC) requires fwd_dtype == rev_dtype: stock-jaxlib Mosaic "
+                "wgmma only contracts same-dtype operands, so the backward runs uniform GEMMs in fwd_dtype. "
                 f"Got fwd_dtype={jnp.dtype(fwd_dtype).name}, rev_dtype={jnp.dtype(rev_dtype).name}. "
-                "The genuine mixed E5M2×E4M3 backward needs mixed-dtype wgmma (jax-ml/jax#38859)."
+                "The genuine mixed E5M2×E4M3 backward needs the CUTE backend (default)."
             )
         return cls(
             input_scale=jnp.ones(1, dtype=jnp.float32),
@@ -314,9 +326,15 @@ class Fp8RaggedDotOp(OverwriteWithGradient):
             fwd_dtype=fwd_dtype,
             rev_dtype=rev_dtype,
             wgrad_mode=wgrad_mode,
+            backend=backend,
         )
 
     def __call__(self, lhs, rhs, group_sizes):
+        if self.backend is not Fp8RaggedDotBackend.CUTE:
+            raise NotImplementedError(
+                f"Fp8RaggedDotOp backend={self.backend} is not vendored in this build; "
+                "only the CUTE backend is wired. Construct with backend=Fp8RaggedDotBackend.CUTE."
+            )
         comp_dtype = rhs.dtype if self.compute_dtype is None else self.compute_dtype
         lhs = jnp.asarray(lhs, comp_dtype)
         rhs = jnp.asarray(rhs, comp_dtype)

@@ -20,7 +20,7 @@ row-major output is bit-consistent with the forward operand ``in_q`` builds.
 import jax.numpy as jnp
 
 from .fp8 import quantize
-from .ragged_dot_cute import cute_available, cute_cast_transpose
+from .ragged_dot_cute import cute_available, cute_cast_transpose, cute_cast_transpose_weight
 
 # Fused GPU kernel handles bf16 inputs with an f32 accumulator and an N tile of 64.
 _CUTE_CAST_TRANSPOSE_TILE_N = 64
@@ -29,21 +29,23 @@ _CUTE_CAST_TRANSPOSE_TILE_N = 64
 def cast_transpose_reference(x, scale, *, out_dtype, compute_dtype=jnp.float32):
     """Pure-JAX cast-transpose: (row-major FP8, token-major FP8). Correct on any backend.
 
-    ``x`` is ``[M, F]`` (tokens M leading). Returns ``(xq[M,F], xq_t[F,M])`` where
-    ``xq`` is bit-identical to ``fp8.quantize(x, out_dtype, scale, compute_dtype)``.
+    ``x`` is ``[..., M, F]`` (tokens M leading). Returns ``(xq, xq_t)`` where ``xq``
+    is bit-identical to ``fp8.quantize(x, out_dtype, scale, compute_dtype)`` and
+    ``xq_t`` swaps its last two axes (per-expert transpose for a batched ``x``).
     """
     xq = quantize(x, out_dtype, scale, compute_dtype)
     return xq, jnp.swapaxes(xq, -2, -1)
 
 
 def _fused_conforming(x, compute_dtype) -> bool:
-    """The fused CuTe kernel handles bf16 inputs, an f32 accumulator, and N%tile_n==0."""
+    """The fused CuTe kernel handles bf16 inputs, an f32 accumulator, and the two
+    tiled dims (F, and per-expert M for a batched weight) divisible by the tile."""
     return (
         cute_available()
         and x.dtype == jnp.bfloat16
         and compute_dtype == jnp.float32
-        and x.ndim == 2
-        and x.shape[1] % _CUTE_CAST_TRANSPOSE_TILE_N == 0
+        and x.ndim in (2, 3)
+        and all(x.shape[d] % _CUTE_CAST_TRANSPOSE_TILE_N == 0 for d in (x.ndim - 2, x.ndim - 1))
     )
 
 
@@ -59,3 +61,16 @@ def cast_transpose(x, scale, *, out_dtype, compute_dtype=jnp.float32):
     if _fused_conforming(x, compute_dtype):
         return cute_cast_transpose(x, scale, out_dtype=out_dtype)
     return cast_transpose_reference(x, scale, out_dtype=out_dtype, compute_dtype=compute_dtype)
+
+
+def cast_transpose_weight(rhs, scale, *, out_dtype, compute_dtype=jnp.float32):
+    """Per-expert dual-write weight quantize: ``rhs[E,K,N]`` -> ``(q_rhs[E,K,N], q_rhs_t[E,N,K])``.
+
+    ``q_rhs`` is bit-identical to ``quantize(rhs, out_dtype, scale)`` (the dgrad
+    operand, natural layout) and ``q_rhs_t`` is its per-expert transpose (the
+    K-contiguous forward operand). One fused HBM read produces both on a conforming
+    GPU; otherwise the pure-JAX reference runs.
+    """
+    if _fused_conforming(rhs, compute_dtype):
+        return cute_cast_transpose_weight(rhs, scale, out_dtype=out_dtype)
+    return cast_transpose_reference(rhs, scale, out_dtype=out_dtype, compute_dtype=compute_dtype)

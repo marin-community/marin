@@ -59,15 +59,19 @@ _CAST_TRANSPOSE_VEC = _UNIVERSAL_COPY_BITS // 16  # bf16 elems per 128-bit read 
 
 
 def _cast_transpose_launcher(*, tile, out_maxv, m_vec_aligned):
-    """Build the ``@cute.jit`` fused cast-transpose launcher for ``cutlass_call``.
+    """Build the ``@cute.jit`` batched fused cast-transpose launcher for ``cutlass_call``.
 
-    Reads bf16 ``mX[M,N]`` once and writes ``mY[M,N]`` (row-major FP8, bit-identical
-    to ``quantize(x, out_dtype, scale)``) and ``mYt[N,M]`` (its transpose). The
-    quantize divides by ``mScale[0]`` and clips to ``[-out_maxv, out_maxv]`` before
-    the FP8 cast, matching ``_src/fp8.quantize`` exactly. ``out_maxv`` is the FP8
-    dtype's finite max (448 for E4M3, 57344 for E5M2). ``m_vec_aligned`` (M % vec == 0)
-    selects the coalesced vectorized token-major store; otherwise a per-element store
-    keeps arbitrary M correct (row bases of ``mYt`` are unaligned when M % vec != 0).
+    Reads bf16 ``mX[E,M,N]`` once and writes ``mY[E,M,N]`` (row-major FP8,
+    bit-identical to ``quantize(x, out_dtype, scale)``) and ``mYt[E,N,M]`` (its
+    per-expert transpose). ``E`` is a batch (expert) axis mapped to ``blockIdx.z``:
+    ``E=1`` is the plain 2-D cast-transpose (activations / output-grad); ``E>1`` is
+    the per-expert weight dual-write (``rhs[E,K,N] -> q_rhs[E,K,N] + q_rhs_t[E,N,K]``)
+    -- both fp8 weight layouts from one HBM read. The quantize divides by
+    ``mScale[0]`` and clips to ``[-out_maxv, out_maxv]`` before the FP8 cast, matching
+    ``_src/fp8.quantize`` exactly. ``out_maxv`` is the FP8 dtype's finite max (448 for
+    E4M3, 57344 for E5M2). ``m_vec_aligned`` (M % vec == 0) selects the coalesced
+    vectorized token-major store; otherwise a per-element store keeps arbitrary M
+    correct (row bases of ``mYt`` are unaligned when M % vec != 0).
     """
     cuda = importlib.import_module("cuda.bindings.driver")
 
@@ -113,9 +117,10 @@ def _cast_transpose_launcher(*, tile, out_maxv, m_vec_aligned):
             class SharedStorage:
                 sQ: cute.struct.Align[cute.struct.MemRange[c_dtype, tile * tile], 1024]
 
-            m_total = mX.shape[0]
-            n_total = mX.shape[1]
-            grid = (cute.ceil_div(m_total, tile), cute.ceil_div(n_total, tile), 1)
+            e_total = mX.shape[0]
+            m_total = mX.shape[1]
+            n_total = mX.shape[2]
+            grid = (cute.ceil_div(m_total, tile), cute.ceil_div(n_total, tile), e_total)
             self.kernel(
                 mX,
                 mScale,
@@ -142,8 +147,13 @@ def _cast_transpose_launcher(*, tile, out_maxv, m_vec_aligned):
             SharedStorage: cutlass.Constexpr,
         ):
             tidx, _, _ = cute.arch.thread_idx()
-            bm, bn, _ = cute.arch.block_idx()
-            m_total = mX.shape[0]
+            bm, bn, be = cute.arch.block_idx()
+            # Slice this block's expert: mX/mY are [E,M,N], mYt is [E,N,M]. E=1 leaves
+            # the plain 2-D cast-transpose; E>1 is the per-expert weight dual-write.
+            mXe = mX[(be, None, None)]
+            mYe = mY[(be, None, None)]
+            mYte = mYt[(be, None, None)]
+            m_total = mXe.shape[0]
 
             smem = cutlass.utils.SmemAllocator()
             storage = smem.allocate(SharedStorage)
@@ -156,8 +166,8 @@ def _cast_transpose_launcher(*, tile, out_maxv, m_vec_aligned):
             thr_fp8 = fp8_copy.get_slice(tidx)
 
             # --- Phase 1: coalesced bf16 read -> quantize -> row-major FP8 + smem stage.
-            gX = cute.local_tile(mX, (tile, tile), (bm, bn))
-            gY = cute.local_tile(mY, (tile, tile), (bm, bn))
+            gX = cute.local_tile(mXe, (tile, tile), (bm, bn))
+            gY = cute.local_tile(mYe, (tile, tile), (bm, bn))
             cId = cute.make_identity_tensor((tile, tile))
             tXgX = thr_in.partition_S(gX)
             tXcId = thr_in.partition_S(cId)
@@ -187,7 +197,7 @@ def _cast_transpose_launcher(*, tile, out_maxv, m_vec_aligned):
             cute.arch.sync_threads()
 
             # --- Phase 2: read smem transposed -> coalesced token-major FP8 store.
-            gYt = cute.local_tile(mYt, (tile, tile), (bn, bm))
+            gYt = cute.local_tile(mYte, (tile, tile), (bn, bm))
             cIdT = cute.make_identity_tensor((tile, tile))
             tPsQt = thr_fp8.partition_S(sQt)
             tPgYt = thr_fp8.partition_D(gYt)
@@ -211,9 +221,35 @@ def _cast_transpose_launcher(*, tile, out_maxv, m_vec_aligned):
                     # token-major element individually (correctness path for odd M).
                     for v in cutlass.range_constexpr(vec):
                         if base_m + v < m_total:
-                            mYt[gn, base_m + v] = frag_t[v, rn, 0]
+                            mYte[gn, base_m + v] = frag_t[v, rn, 0]
 
     return CastTransposeFp8()
+
+
+def _cast_transpose_call(x3, scale, *, out_dtype):
+    """Run the batched dual-write kernel on ``x3[E,M,N]`` -> ``([E,M,N], [E,N,M])``."""
+    tile = _CAST_TRANSPOSE_TILE
+    e, m, n = x3.shape
+    if n % tile != 0:
+        raise ValueError(f"cute_cast_transpose: N={n} is not divisible by tile={tile}")
+    out_maxv = float(jnp.finfo(out_dtype).max)
+    scale_1 = jnp.reshape(scale.astype(jnp.float32), (1,))
+    launcher = _cast_transpose_launcher(tile=tile, out_maxv=out_maxv, m_vec_aligned=(m % _CAST_TRANSPOSE_VEC == 0))
+    x_spec = cjax.TensorSpec(mode=(0, 1, 2), divisibility=(1, 1, _CAST_TRANSPOSE_VEC), static=True)
+    scale_spec = cjax.TensorSpec(mode=(0,), static=True)
+    y_spec = cjax.TensorSpec(mode=(0, 1, 2), divisibility=(1, 1, 1), static=True)
+    yt_spec = cjax.TensorSpec(mode=(0, 1, 2), divisibility=(1, 1, 1), static=True)
+    call = cjax.cutlass_call(
+        launcher,
+        output_shape_dtype=(
+            jax.ShapeDtypeStruct((e, m, n), out_dtype),
+            jax.ShapeDtypeStruct((e, n, m), out_dtype),
+        ),
+        input_spec=(x_spec, scale_spec),
+        output_spec=(y_spec, yt_spec),
+        use_static_tensors=True,
+    )
+    return call(x3, scale_1)
 
 
 def cute_cast_transpose(x, scale, *, out_dtype):
@@ -226,25 +262,23 @@ def cute_cast_transpose(x, scale, *, out_dtype):
     the tile and a bf16 input (guarded by the caller in ``cast_transpose``)."""
     if not cute_available():
         raise RuntimeError("cute_cast_transpose requires the CuTe DSL on a GPU backend")
-    tile = _CAST_TRANSPOSE_TILE
     m, n = x.shape
-    if n % tile != 0:
-        raise ValueError(f"cute_cast_transpose: N={n} is not divisible by tile={tile}")
-    out_maxv = float(jnp.finfo(out_dtype).max)
-    scale_1 = jnp.reshape(scale.astype(jnp.float32), (1,))
-    launcher = _cast_transpose_launcher(tile=tile, out_maxv=out_maxv, m_vec_aligned=(m % _CAST_TRANSPOSE_VEC == 0))
-    x_spec = cjax.TensorSpec(mode=(0, 1), divisibility=(1, _CAST_TRANSPOSE_VEC), static=True)
-    scale_spec = cjax.TensorSpec(mode=(0,), static=True)
-    y_spec = cjax.TensorSpec(mode=(0, 1), divisibility=(1, 1), static=True)
-    yt_spec = cjax.TensorSpec(mode=(0, 1), divisibility=(1, 1), static=True)
-    call = cjax.cutlass_call(
-        launcher,
-        output_shape_dtype=(jax.ShapeDtypeStruct((m, n), out_dtype), jax.ShapeDtypeStruct((n, m), out_dtype)),
-        input_spec=(x_spec, scale_spec),
-        output_spec=(y_spec, yt_spec),
-        use_static_tensors=True,
-    )
-    return call(x, scale_1)
+    row, col = _cast_transpose_call(x[None], scale, out_dtype=out_dtype)
+    return row[0], col[0]
+
+
+def cute_cast_transpose_weight(rhs, scale, *, out_dtype):
+    """Fused dual-write per-expert weight quantize: bf16 ``rhs[E,K,N]`` -> both FP8
+    layouts in one HBM read.
+
+    Returns ``(q_rhs[E,K,N], q_rhs_t[E,N,K])`` where ``q_rhs`` is bit-identical to
+    ``quantize(rhs, out_dtype, scale)`` (natural layout, the dgrad operand) and
+    ``q_rhs_t`` is its per-expert transpose ``quantize(swapaxes(rhs,1,2), ...)`` (the
+    K-contiguous forward operand). Collapses the previous ``in_q(rhs)`` +
+    ``quantize(swapaxes(rhs))`` (three HBM reads of ``rhs``) to one."""
+    if not cute_available():
+        raise RuntimeError("cute_cast_transpose_weight requires the CuTe DSL on a GPU backend")
+    return _cast_transpose_call(rhs, scale, out_dtype=out_dtype)
 
 
 # CTA tile of the TMA grouped-GEMM kernel: N must be a multiple of tile_n and K a

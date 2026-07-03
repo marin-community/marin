@@ -164,9 +164,19 @@ def test_op_with_explicit_implementation_raises():
         ragged_dot(lhs, rhs, gs, implementation="xla", op=op)
 
 
-def test_init_rejects_mixed_fp8_dtypes():
+def test_mosaic_backend_rejects_mixed_fp8_dtypes():
+    """The MOSAIC backend keeps the stock-jaxlib same-dtype wgmma constraint."""
+    from haliax.quantization import Fp8RaggedDotBackend  # noqa: PLC0415
+
     with pytest.raises(ValueError, match="fwd_dtype == rev_dtype"):
-        Fp8RaggedDotOp.init(rev_dtype=jnp.float8_e5m2)
+        Fp8RaggedDotOp.init(rev_dtype=jnp.float8_e5m2, backend=Fp8RaggedDotBackend.MOSAIC)
+
+
+def test_cute_backend_allows_mixed_fp8_dtypes():
+    """The default CuTe backend constructs the genuine mixed E5M2×E4M3 backward."""
+    op = Fp8RaggedDotOp.init(rev_dtype=jnp.float8_e5m2)
+    assert jnp.dtype(op.rev_dtype) == jnp.dtype(jnp.float8_e5m2)
+    assert jnp.dtype(op.fwd_dtype) == jnp.dtype(jnp.float8_e4m3fn)
 
 
 def test_op_state_partitions_as_overwrite():
