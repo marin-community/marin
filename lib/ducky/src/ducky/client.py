@@ -19,7 +19,10 @@ and auth-agnostic via ``base_url`` + a ``token_provider``:
 Because ducky is **preemptible** (it can vanish and re-register at any time) and
 reads object storage per query, both preemptions and transient network/DNS blips
 surface as errors; :meth:`DuckyClient.run` retries those with exponential backoff
-for up to ``retry_budget`` seconds. Deterministic errors (SQL, missing file) and
+for up to ``retry_budget`` seconds. A transient poll failure re-polls the same
+``query_id`` (never resubmitting a query that may still be running); the query is
+resubmitted only when ducky restarted and no longer knows the id, or the query
+itself died to a transient error. Deterministic errors (SQL, missing file) and
 query timeouts fail fast.
 
 CLI::
@@ -78,6 +81,11 @@ _RETRYABLE_MARKERS = (
     "http 504",
 )
 
+# ducky's query state is process-local: after a preemption+restart, polling a
+# pre-restart query_id gets HTTP 404 "unknown query_id". Not in the markers
+# above because it changes the retry *mode* — resubmit, don't re-poll.
+_QUERY_LOST_MARKER = "unknown query_id"
+
 
 def _is_retryable(message: str) -> bool:
     m = message.lower()
@@ -86,6 +94,10 @@ def _is_retryable(message: str) -> bool:
 
 class DuckyError(RuntimeError):
     """A ducky query failed, timed out, or the service returned an HTTP error."""
+
+
+class _QueryFailed(DuckyError):
+    """The query reached a terminal ``error`` state server-side; re-polling cannot help."""
 
 
 @dataclasses.dataclass(frozen=True)
@@ -106,8 +118,8 @@ class QueryResult:
 
     def scalar(self):
         """The single cell of a 1x1 result (e.g. a ``count(*)``)."""
-        if not self.rows or not self.rows[0]:
-            raise DuckyError("scalar() on an empty result")
+        if len(self.rows) != 1 or len(self.rows[0]) != 1:
+            raise DuckyError(f"scalar() requires a 1x1 result, got {self.total_rows} rows x {len(self.columns)} columns")
         return self.rows[0][0]
 
 
@@ -188,36 +200,56 @@ class DuckyClient:
             return False
 
     def run(self, sql: str, use_cache: bool = True) -> QueryResult:
-        """Submit ``sql`` and poll until done, retrying while ducky is unavailable."""
+        """Submit ``sql`` and poll until done, retrying while ducky is unavailable.
+
+        A transient failure while polling re-polls the same ``query_id`` — the
+        query may still be running, and resubmitting would duplicate object-store
+        reads (and could change results for non-deterministic SQL). The query is
+        resubmitted only when ducky restarted and lost the id ("unknown
+        query_id") or the query itself died to a transient error.
+        """
         start = time.monotonic()
         attempt = 0
+        query_id: str | None = None
+        deadline = 0.0
         while True:
             try:
-                return self._run_once(sql, use_cache)
+                if query_id is None:
+                    query_id = self._request("POST", "/query", {"sql": sql, "use_cache": use_cache})["query_id"]
+                    deadline = time.monotonic() + self._timeout
+                return self._poll(query_id, deadline, sql)
             except DuckyError as e:
-                retryable = _is_retryable(str(e))
+                if isinstance(e, _QueryFailed):
+                    # Terminal server-side error: re-polling returns it forever,
+                    # so a retry must resubmit.
+                    retryable, resubmit = _is_retryable(str(e)), True
+                elif _QUERY_LOST_MARKER in str(e).lower():
+                    retryable, resubmit = True, True
+                else:
+                    # Submit/poll transport blip; the submitted query (if any)
+                    # may still be running, so keep its id and re-poll.
+                    retryable, resubmit = _is_retryable(str(e)), False
                 elapsed = time.monotonic() - start
-                if retryable and elapsed < self._retry_budget:
-                    wait = min(self._retry_cap, self._retry_base * (2**attempt))
-                    attempt += 1
-                    logger.warning(
-                        "ducky unavailable/transient (retry %d, %.0fs/%.0fs elapsed), sleeping %.0fs: %s",
-                        attempt,
-                        elapsed,
-                        self._retry_budget,
-                        wait,
-                        str(e).splitlines()[0][:140],
-                    )
-                    time.sleep(wait)
-                    continue
-                # Not retryable, or the retry budget is exhausted: re-raise with
-                # the original detail (HTTP status / "No endpoint" / "upstream
-                # timeout") so callers can see what actually failed.
-                raise
+                if not retryable or elapsed >= self._retry_budget:
+                    # Re-raise with the original detail (HTTP status / "No
+                    # endpoint" / "upstream timeout") so callers can see what
+                    # actually failed.
+                    raise
+                if resubmit:
+                    query_id = None
+                wait = min(self._retry_cap, self._retry_base * (2**attempt))
+                attempt += 1
+                logger.warning(
+                    "ducky unavailable/transient (retry %d, %.0fs/%.0fs elapsed), sleeping %.0fs: %s",
+                    attempt,
+                    elapsed,
+                    self._retry_budget,
+                    wait,
+                    str(e).splitlines()[0][:140],
+                )
+                time.sleep(wait)
 
-    def _run_once(self, sql: str, use_cache: bool) -> QueryResult:
-        query_id = self._request("POST", "/query", {"sql": sql, "use_cache": use_cache})["query_id"]
-        deadline = time.monotonic() + self._timeout
+    def _poll(self, query_id: str, deadline: float, sql: str) -> QueryResult:
         while True:
             state = self._request("GET", f"/result/{query_id}")
             status = state.get("status")
@@ -233,7 +265,7 @@ class DuckyClient:
                     result_bytes=state.get("result_bytes", 0),
                 )
             if status == "error":
-                raise DuckyError(f"query failed: {state.get('error')}\nSQL: {sql[:500]}")
+                raise _QueryFailed(f"query failed: {state.get('error')}\nSQL: {sql[:500]}")
             if time.monotonic() > deadline:
                 raise DuckyError(f"query {query_id} still running after {self._timeout:.0f}s")
             time.sleep(self._poll_interval)

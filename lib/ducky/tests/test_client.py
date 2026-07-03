@@ -4,9 +4,10 @@
 import json
 
 import httpx
+import pytest
 from click.testing import CliRunner
 from ducky import client
-from ducky.client import _render_table, query
+from ducky.client import DuckyClient, DuckyError, QueryResult, _render_table, query
 
 _BASE = "http://ducky.test/proxy/ducky"
 _DONE = {
@@ -81,6 +82,106 @@ def test_query_poll_http_error_exits_cleanly(monkeypatch):
     result = CliRunner().invoke(query, ["SELECT 1", "--base-url", _BASE])
     assert result.exit_code != 0
     assert "upstream timeout" in result.output
+
+
+class _ScriptedHttp:
+    """Scripted ducky transport: pops one canned (status, payload) per request."""
+
+    def __init__(self, posts: list[tuple[int, dict]], gets: list[tuple[int, dict]]):
+        self._posts = list(posts)
+        self._gets = list(gets)
+        self.post_count = 0
+        self.polled_query_ids: list[str] = []
+
+    def post(self, url, json=None, timeout=None):
+        self.post_count += 1
+        status, payload = self._posts.pop(0)
+        return httpx.Response(status, json=payload, request=httpx.Request("POST", url))
+
+    def get(self, url, timeout=None):
+        self.polled_query_ids.append(url.rsplit("/", 1)[-1])
+        status, payload = self._gets.pop(0)
+        return httpx.Response(status, json=payload, request=httpx.Request("GET", url))
+
+
+def _client(**kwargs) -> DuckyClient:
+    return DuckyClient(_BASE, poll_interval=0, retry_base=0.01, retry_cap=0.01, **kwargs)
+
+
+def test_run_repolls_same_query_after_transient_poll_blip(monkeypatch):
+    # A 503 on /result must not resubmit: the query may still be running, and a
+    # duplicate submission re-reads object storage (and can change results for
+    # non-deterministic SQL).
+    http = _ScriptedHttp(
+        posts=[(202, {"query_id": "q1"})],
+        gets=[(503, {"error": "service unavailable"}), (200, _DONE)],
+    )
+    monkeypatch.setattr(client, "httpx", http)
+    result = _client(retry_budget=5).run("SELECT 1")
+    assert result.total_rows == 2
+    assert http.post_count == 1
+    assert http.polled_query_ids == ["q1", "q1"]
+
+
+def test_run_resubmits_when_restarted_ducky_forgot_the_query(monkeypatch):
+    # ducky's query state is process-local: after a preemption+restart, polling
+    # the pre-restart id 404s with "unknown query_id" — the client must resubmit.
+    http = _ScriptedHttp(
+        posts=[(202, {"query_id": "q1"}), (202, {"query_id": "q2"})],
+        gets=[(404, {"error": "unknown query_id"}), (200, _DONE)],
+    )
+    monkeypatch.setattr(client, "httpx", http)
+    result = _client(retry_budget=5).run("SELECT 1")
+    assert result.total_rows == 2
+    assert http.polled_query_ids == ["q1", "q2"]
+
+
+def test_run_resubmits_query_that_died_to_transient_error(monkeypatch):
+    # A terminal "error" state with a transient marker (object-store blip) can
+    # only be retried by resubmitting — re-polling returns the error forever.
+    http = _ScriptedHttp(
+        posts=[(202, {"query_id": "q1"}), (202, {"query_id": "q2"})],
+        gets=[
+            (200, {"status": "error", "error": "Connection reset by peer reading gs://b/x.parquet"}),
+            (200, _DONE),
+        ],
+    )
+    monkeypatch.setattr(client, "httpx", http)
+    result = _client(retry_budget=5).run("SELECT 1")
+    assert result.total_rows == 2
+    assert http.post_count == 2
+
+
+def test_run_fails_fast_on_deterministic_query_error(monkeypatch):
+    http = _ScriptedHttp(
+        posts=[(202, {"query_id": "q1"})],
+        gets=[(200, {"status": "error", "error": "Catalog Error: nope"})],
+    )
+    monkeypatch.setattr(client, "httpx", http)
+    with pytest.raises(DuckyError, match="Catalog Error"):
+        _client(retry_budget=5).run("SELECT * FROM nope")
+    assert http.post_count == 1
+
+
+def _result(columns: list[str], rows: list[list]) -> QueryResult:
+    return QueryResult(
+        columns=columns,
+        rows=rows,
+        total_rows=len(rows),
+        truncated=False,
+        result_path=None,
+        cached=False,
+        elapsed_ms=0,
+        result_bytes=0,
+    )
+
+
+def test_scalar_requires_1x1_result():
+    assert _result(["n"], [[7]]).scalar() == 7
+    with pytest.raises(DuckyError, match="1x1"):
+        _result(["n"], [[1], [2]]).scalar()
+    with pytest.raises(DuckyError, match="1x1"):
+        _result(["a", "b"], [[1, 2]]).scalar()
 
 
 def test_query_requires_sql():
