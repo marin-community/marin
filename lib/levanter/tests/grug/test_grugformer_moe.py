@@ -840,6 +840,53 @@ def test_source_push_stage_kernels_match_references_on_h100(ep_size, topk):
     assert combine_row["mean_abs_diff"] <= 0.002
 
 
+def test_source_push_exact_expert_major_w13_matches_reference_on_h100():
+    _skip_without_h100x8()
+
+    config = PushInboxConfig(
+        ep_size=2,
+        entries_per_rank=2,
+        inbox_slots=1,
+        hidden_dim=128,
+        intermediate_dim=128,
+        block_m=64,
+        block_n=128,
+        block_k=64,
+        n_group=1,
+        n_groups_per_job=1,
+        experts_per_rank=2,
+        send_worker_programs_per_peer=1,
+        worker_programs_per_peer=8,
+        send_pipeline_depth=1,
+        routing="balanced",
+        tokens_per_rank=128,
+        topk=2,
+        capacity_factor=1.25,
+    )
+
+    rows = source_push_inbox._run_one(
+        config,
+        source_push_inbox.SourcePushInboxRunSettings(
+            warmup=0,
+            steps=1,
+            repeat_runs=1,
+            check=True,
+            debug_exceptions=True,
+        ),
+        input_builder=source_push_inbox._make_exact_source_push_plan_inputs,
+    )
+
+    row = rows[0]
+    assert row["error_type"] is None
+    assert row["metadata_mismatches"] == 0
+    assert row["row_start_mode"] == source_push_inbox.ROW_START_MODE_EXACT_EXPERT_MAJOR
+    assert row["row_layout"] == source_push_inbox.ROW_LAYOUT_EXACT_EXPERT_MAJOR
+    assert row["plan_layout_padding_rows_total"] == 0
+    assert row["hidden_max_abs_diff"] <= 0.03125
+    assert row["hidden_mean_abs_diff"] <= 0.002
+    assert row["hidden_unwritten_max_abs"] == 0.0
+
+
 def test_source_push_forward_handles_tail_blocks_empty_experts_topk4_on_h100():
     _skip_without_h100x8()
 

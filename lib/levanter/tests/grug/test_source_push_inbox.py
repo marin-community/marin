@@ -265,10 +265,15 @@ def test_source_push_plan_inputs_use_source_padded_row_starts():
 
     assert not host_inputs.use_exact_expert_major
     assert host_inputs.queue_stats["input_mode"] == "source_push_plan"
-    assert host_inputs.queue_stats["row_start_mode"] == "source_padded_row_start"
+    assert host_inputs.queue_stats["row_start_mode"] == source_push_inbox.ROW_START_MODE_SOURCE_PADDED
+    assert host_inputs.queue_stats["row_layout"] == source_push_inbox.ROW_LAYOUT_SOURCE_PADDED_EXPERT_MAJOR
     assert int(np.sum(live_mask)) == int(np.sum(live_entries) * config.block_m)
     assert int(np.sum(live_entries) * config.block_m) > int(np.sum(valid_rows))
     assert host_inputs.queue_stats["plan_padded_rows_total"] == int(np.sum(live_entries) * config.block_m)
+    assert host_inputs.queue_stats["plan_layout_rows_total"] == host_inputs.queue_stats["plan_padded_rows_total"]
+    assert host_inputs.queue_stats["plan_layout_padding_rows_total"] == int(
+        host_inputs.queue_stats["plan_layout_rows_total"] - np.sum(valid_rows)
+    )
 
     src = 1
     dst = 0
@@ -277,6 +282,79 @@ def test_source_push_plan_inputs_use_source_padded_row_starts():
     row_start = host_inputs.send_meta[src, dst_ordinal, first_live_entry, 2]
 
     assert row_start >= config.block_m
+
+
+def test_exact_source_push_plan_inputs_use_count_derived_row_starts():
+    config = source_push_inbox.PushInboxConfig(
+        ep_size=2,
+        entries_per_rank=1,
+        inbox_slots=1,
+        hidden_dim=8,
+        intermediate_dim=8,
+        block_m=2,
+        block_k=4,
+        block_n=4,
+        experts_per_rank=1,
+        send_worker_programs_per_peer=1,
+        worker_programs_per_peer=4,
+        routing="balanced",
+        tokens_per_rank=4,
+        topk=1,
+        capacity_factor=1.25,
+    )
+
+    host_inputs = source_push_inbox._make_exact_source_push_plan_inputs(config)
+    valid_rows = host_inputs.send_meta[..., 3]
+    live_mask = source_push_inbox._hidden_live_row_mask(
+        config,
+        host_inputs.send_meta,
+        host_inputs.expert_base,
+        host_inputs.src_base_by_expert,
+        use_exact_expert_major=host_inputs.use_exact_expert_major,
+    )
+
+    assert host_inputs.use_exact_expert_major
+    assert host_inputs.queue_stats["row_start_mode"] == source_push_inbox.ROW_START_MODE_EXACT_EXPERT_MAJOR
+    assert host_inputs.queue_stats["row_layout"] == source_push_inbox.ROW_LAYOUT_EXACT_EXPERT_MAJOR
+    assert host_inputs.queue_stats["plan_layout_padding_rows_total"] == 0
+    assert host_inputs.queue_stats["plan_layout_rows_total"] == int(np.sum(valid_rows))
+    assert int(np.sum(live_mask)) == int(np.sum(valid_rows))
+
+    src = 1
+    dst = 0
+    dst_ordinal = source_push_inbox._dst_ordinal(config, src, dst)
+    entry = 0
+    recv_src_ordinal = source_push_inbox._recv_src_ordinal(config, dst, src)
+
+    assert host_inputs.send_meta[src, dst_ordinal, entry, 2] == 0
+    np.testing.assert_array_equal(
+        host_inputs.recv_meta[dst, recv_src_ordinal, entry],
+        host_inputs.send_meta[src, dst_ordinal, entry],
+    )
+    assert host_inputs.expert_base[dst, 0] + host_inputs.src_base_by_expert[dst, src, 0] == config.block_m
+
+
+def test_exact_source_push_plan_inputs_reject_tail_blocks():
+    config = source_push_inbox.PushInboxConfig(
+        ep_size=2,
+        entries_per_rank=2,
+        inbox_slots=1,
+        hidden_dim=8,
+        intermediate_dim=8,
+        block_m=2,
+        block_k=4,
+        block_n=4,
+        experts_per_rank=1,
+        send_worker_programs_per_peer=1,
+        worker_programs_per_peer=4,
+        routing="balanced",
+        tokens_per_rank=5,
+        topk=1,
+        capacity_factor=1.25,
+    )
+
+    with pytest.raises(ValueError, match="block_m-aligned live blocks"):
+        source_push_inbox._make_exact_source_push_plan_inputs(config)
 
 
 def test_exact_reference_hidden_masks_tail_rows_before_next_source_slice():

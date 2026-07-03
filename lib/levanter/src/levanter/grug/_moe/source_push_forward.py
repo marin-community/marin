@@ -38,6 +38,9 @@ from levanter.grug._moe.source_push_inbox import (
     SLOW_USEFUL_W13_TFLOPS_PER_RANK,
     SourcePushInboxRunSettings,
     TimingResult,
+    ROW_LAYOUT_SOURCE_PADDED_EXPERT_MAJOR,
+    ROW_START_MODE_SOURCE_PADDED,
+    _add_source_push_plan_queue_stats,
     _block_until_ready,
     _device_inputs_from_host,
     _make_mesh,
@@ -57,7 +60,6 @@ from levanter.grug._moe.source_push_plan import (
     build_source_push_plan,
     pack_source_push_tokens,
     source_push_combine,
-    source_push_plan_row_stats,
     source_push_source_padded_row_bases,
     source_push_w2_return,
 )
@@ -275,26 +277,23 @@ def _make_source_push_forward_inputs_from_plan(
     route_inverse = _make_route_inverse(config, plan)
     valid_mask = np.asarray(jax.device_get(plan.valid_mask), dtype=np.bool_)
     queue_stats = _queue_stats(config, send_meta)
-    plan_stats = source_push_plan_row_stats(plan)
     combine_stats = _combine_queue_stats(config, valid_mask, int(jax.device_get(plan.dropped_routes)))
+    layout_rows_total = int(np.sum(rounded_counts))
+    _add_source_push_plan_queue_stats(
+        config,
+        queue_stats,
+        plan,
+        row_start_mode=ROW_START_MODE_SOURCE_PADDED,
+        row_layout=ROW_LAYOUT_SOURCE_PADDED_EXPERT_MAJOR,
+        layout_rows_total=layout_rows_total,
+    )
     queue_stats.update(
         {
             "input_mode": input_mode,
             "forward_mode": "w13_w2_direct_return_combine",
-            "row_start_mode": "source_padded_row_start",
             "combine_mode": combine_stats["combine_mode"],
-            "dropped_routes": plan_stats.dropped_routes,
-            "dropped_entries_total": 0,
-            "dropped_rows_total": plan_stats.dropped_routes,
-            "routing_assignments_per_source": config.tokens_per_rank * config.topk,
-            "compact_pack_rows_total": int(plan_stats.useful_rows),
-            "plan_useful_rows_total": plan_stats.useful_rows,
-            "plan_rounded_rows_total": plan_stats.rounded_rows,
-            "plan_live_entries_total": plan_stats.live_entries,
-            "plan_row_efficiency": plan_stats.row_efficiency,
-            "plan_masked_row_fraction": plan_stats.masked_row_fraction,
-            "plan_padded_rows_total": int(np.sum(rounded_counts)),
-            "plan_padded_rows_per_rank_mean": float(np.sum(rounded_counts) / config.ep_size),
+            "plan_padded_rows_total": layout_rows_total,
+            "plan_padded_rows_per_rank_mean": float(layout_rows_total / config.ep_size),
             "route_buffer_elements_per_rank": combine_stats["route_buffer_elements_per_rank"],
             "output_elements_per_rank": combine_stats["output_elements_per_rank"],
         }

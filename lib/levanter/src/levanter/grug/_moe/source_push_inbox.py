@@ -73,6 +73,10 @@ DIAGNOSTIC_INPUT_MODES = (
     DIAGNOSTIC_INPUT_MODE_COMPACT_ROUTING,
     DIAGNOSTIC_INPUT_MODE_SOURCE_PUSH_PLAN,
 )
+ROW_START_MODE_SOURCE_PADDED = "source_padded_row_start"
+ROW_START_MODE_EXACT_EXPERT_MAJOR = "exact_expert_major_row_start"
+ROW_LAYOUT_SOURCE_PADDED_EXPERT_MAJOR = "source_padded_expert_major"
+ROW_LAYOUT_EXACT_EXPERT_MAJOR = "exact_expert_major"
 ROUTING_MODES = (
     "balanced",
     "roughly_balanced",
@@ -1257,14 +1261,7 @@ def _make_compact_routing_inputs(config: PushInboxConfig) -> HostInputs:
     )
 
 
-def _make_source_push_plan_inputs(config: PushInboxConfig) -> HostInputs:
-    """Build expert-major queue inputs from the invertible source-push plan.
-
-    The plan owns the inverse map and source-local row identity. Before the
-    hot kernel launches, the host converts each block's local row start into a
-    source-padded expert-major row start, avoiding per-store base lookups in the
-    WGMMA path. Invalid packed rows are zero and remain source-owned padding.
-    """
+def _source_push_plan_and_packed_x(config: PushInboxConfig) -> tuple[SourcePushPlan, np.ndarray]:
     counts = _routing_counts(config)
     selected_experts = np.stack(
         [_selected_experts_from_counts(config, counts[src], src) for src in range(config.ep_size)],
@@ -1282,25 +1279,77 @@ def _make_source_push_plan_inputs(config: PushInboxConfig) -> HostInputs:
     )
     source_tokens = np.stack([_make_source_tokens(config, src) for src in range(config.ep_size)], axis=0)
     x_host = np.asarray(pack_source_push_tokens(jnp.asarray(source_tokens, dtype=jnp.float32), plan), dtype=np.float32)
+    return plan, x_host
+
+
+def _add_source_push_plan_queue_stats(
+    config: PushInboxConfig,
+    stats: dict[str, Any],
+    plan: SourcePushPlan,
+    *,
+    row_start_mode: str,
+    row_layout: str,
+    layout_rows_total: int,
+) -> None:
+    plan_stats = source_push_plan_row_stats(plan)
+    hidden_capacity_rows_total = config.ep_size * config.hidden_rows_per_rank
+    stats.update(
+        {
+            "input_mode": DIAGNOSTIC_INPUT_MODE_SOURCE_PUSH_PLAN,
+            "row_start_mode": row_start_mode,
+            "row_layout": row_layout,
+            "dropped_routes": plan_stats.dropped_routes,
+            "dropped_entries_total": 0,
+            "dropped_rows_total": plan_stats.dropped_routes,
+            "routing_assignments_per_source": config.tokens_per_rank * config.topk,
+            "compact_pack_rows_total": int(plan_stats.useful_rows),
+            "plan_exact_rows_total": plan_stats.useful_rows,
+            "plan_useful_rows_total": plan_stats.useful_rows,
+            "plan_rounded_rows_total": plan_stats.rounded_rows,
+            "plan_live_entries_total": plan_stats.live_entries,
+            "plan_row_efficiency": plan_stats.row_efficiency,
+            "plan_masked_row_fraction": plan_stats.masked_row_fraction,
+            "plan_layout_rows_total": int(layout_rows_total),
+            "plan_layout_rows_per_rank_mean": float(layout_rows_total / config.ep_size),
+            "plan_layout_padding_rows_total": int(layout_rows_total - plan_stats.useful_rows),
+            "plan_layout_padding_fraction": float(
+                (layout_rows_total - plan_stats.useful_rows) / max(float(layout_rows_total), 1.0)
+            ),
+            "hidden_capacity_rows_total": int(hidden_capacity_rows_total),
+            "hidden_capacity_rows_per_rank": int(config.hidden_rows_per_rank),
+            "hidden_capacity_unused_rows_total": int(hidden_capacity_rows_total - layout_rows_total),
+            "hidden_capacity_unused_fraction": float(
+                (hidden_capacity_rows_total - layout_rows_total) / max(float(hidden_capacity_rows_total), 1.0)
+            ),
+        }
+    )
+
+
+def _make_source_push_plan_inputs(config: PushInboxConfig) -> HostInputs:
+    """Build source-padded expert-major queue inputs from the invertible plan.
+
+    The exact plan owns the inverse map and source-local row identity. Before
+    the hot kernel launches, the host converts each block's local row start into
+    a source-padded expert-major row start. That preserves expert-major order
+    while giving each source full-block room so Lane/WGMMA stores never clobber
+    a following source slice.
+    """
+    plan, x_host = _source_push_plan_and_packed_x(config)
     rounded_counts, expert_base, src_base_by_expert = source_push_source_padded_row_bases(plan, config.block_m)
     send_meta = _source_padded_plan_send_meta(plan, expert_base, src_base_by_expert)
     recv_meta = _recv_meta_from_send_meta(config, send_meta)
     stats = _queue_stats(config, send_meta)
-    plan_stats = source_push_plan_row_stats(plan)
-    stats["input_mode"] = "source_push_plan"
-    stats["row_start_mode"] = "source_padded_row_start"
-    stats["dropped_routes"] = plan_stats.dropped_routes
-    stats["dropped_entries_total"] = 0
-    stats["dropped_rows_total"] = plan_stats.dropped_routes
-    stats["routing_assignments_per_source"] = config.tokens_per_rank * config.topk
-    stats["compact_pack_rows_total"] = int(plan_stats.useful_rows)
-    stats["plan_useful_rows_total"] = plan_stats.useful_rows
-    stats["plan_rounded_rows_total"] = plan_stats.rounded_rows
-    stats["plan_live_entries_total"] = plan_stats.live_entries
-    stats["plan_row_efficiency"] = plan_stats.row_efficiency
-    stats["plan_masked_row_fraction"] = plan_stats.masked_row_fraction
-    stats["plan_padded_rows_total"] = int(np.sum(rounded_counts))
-    stats["plan_padded_rows_per_rank_mean"] = float(np.sum(rounded_counts) / config.ep_size)
+    layout_rows_total = int(np.sum(rounded_counts))
+    _add_source_push_plan_queue_stats(
+        config,
+        stats,
+        plan,
+        row_start_mode=ROW_START_MODE_SOURCE_PADDED,
+        row_layout=ROW_LAYOUT_SOURCE_PADDED_EXPERT_MAJOR,
+        layout_rows_total=layout_rows_total,
+    )
+    stats["plan_padded_rows_total"] = layout_rows_total
+    stats["plan_padded_rows_per_rank_mean"] = float(layout_rows_total / config.ep_size)
     return HostInputs(
         x=x_host,
         send_meta=send_meta,
@@ -1308,6 +1357,47 @@ def _make_source_push_plan_inputs(config: PushInboxConfig) -> HostInputs:
         expert_base=expert_base,
         src_base_by_expert=src_base_by_expert,
         queue_stats=stats,
+    )
+
+
+def _make_exact_source_push_plan_inputs(config: PushInboxConfig) -> HostInputs:
+    """Build exact expert-major queue inputs when every live block is full.
+
+    The current W13 kernel stores full `block_m` rows. Exact count-derived bases
+    are therefore safe only when each accepted `(src, dst, expert)` run is
+    block-aligned; tail blocks must keep using the source-padded layout.
+    """
+    plan, x_host = _source_push_plan_and_packed_x(config)
+    send_meta = np.asarray(jax.device_get(plan.send_meta), dtype=np.int32)
+    valid_rows = send_meta[..., 3]
+    tail_blocks = (valid_rows > 0) & (valid_rows < config.block_m)
+    if np.any(tail_blocks):
+        raise ValueError(
+            "exact source-push W13 layout requires block_m-aligned live blocks; "
+            "use the source-padded layout for tail blocks"
+        )
+
+    expert_base = np.asarray(jax.device_get(plan.expert_base), dtype=np.int32)
+    src_base_by_expert = np.asarray(jax.device_get(plan.src_base_by_expert), dtype=np.int32)
+    recv_meta = np.asarray(jax.device_get(plan.recv_meta), dtype=np.int32)
+    stats = _queue_stats(config, send_meta)
+    layout_rows_total = int(np.sum(jax.device_get(plan.rows_per_local_expert)))
+    _add_source_push_plan_queue_stats(
+        config,
+        stats,
+        plan,
+        row_start_mode=ROW_START_MODE_EXACT_EXPERT_MAJOR,
+        row_layout=ROW_LAYOUT_EXACT_EXPERT_MAJOR,
+        layout_rows_total=layout_rows_total,
+    )
+    return HostInputs(
+        x=x_host,
+        send_meta=send_meta,
+        recv_meta=recv_meta,
+        expert_base=expert_base,
+        src_base_by_expert=src_base_by_expert,
+        queue_stats=stats,
+        use_exact_expert_major=True,
     )
 
 
