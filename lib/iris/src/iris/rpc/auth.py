@@ -91,9 +91,7 @@ def authorize_method(identity: VerifiedIdentity, method_name: str) -> None:
 
     An endpoint-scoped token (``identity.audience`` set) has zero RPC authority:
     it may reach only its endpoint's /proxy path (enforced there), never the
-    control RPC surface. This is the single choke point every RPC mount's
-    interceptor routes through, so denying here closes the over-grant for all
-    current and future RPCs.
+    control RPC surface.
 
     The ``dashboard`` role is read-only: it may call only the methods in
     ``DASHBOARD_READABLE_RPCS``. Other roles are unrestricted here — their

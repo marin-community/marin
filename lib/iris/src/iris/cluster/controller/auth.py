@@ -338,12 +338,10 @@ class ControllerAuth:
 
 
 def request_auth_policy(auth: ControllerAuth | None) -> RequestAuthPolicy:
-    """Build the request-auth policy the dashboard/RPC surfaces apply.
+    """Build the request-auth policy the controller's surfaces apply.
 
-    The single place a resolved ``ControllerAuth`` becomes an authenticator
-    chain, so HTTP, RPC, and proxy gates cannot wire it differently. With no
-    provider (null-auth) the chain is permissive — every request is admitted,
-    but a worker JWT still attributes the caller.
+    With no provider (null-auth) the chain is permissive — every request is
+    admitted, but a worker JWT still attributes the caller.
     """
     if auth is None or auth.provider is None:
         return RequestAuthPolicy.permissive(verifier=auth.verifier if auth else None)

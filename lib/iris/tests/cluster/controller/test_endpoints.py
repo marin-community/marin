@@ -26,7 +26,7 @@ from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.types import EndpointAccess, JobName, TaskAttempt
 from iris.rpc import controller_pb2, job_pb2
 from iris.time_proto import duration_to_proto
-from rigging.server_auth import VerifiedIdentity, _verified_identity
+from rigging.server_auth import VerifiedIdentity, identity_scope
 from rigging.timing import Duration, ExponentialBackoff, Timestamp
 from sqlalchemy import update as sa_update
 
@@ -330,11 +330,8 @@ def test_mint_endpoint_token_by_owner(state, mock_controller, log_client, tmp_pa
         _register_with_access("/serve/foo", task, attempt, controller_pb2.Controller.ENDPOINT_ACCESS_BEARER), None
     )
 
-    token = _verified_identity.set(VerifiedIdentity(user_id=task.user, role="user"))
-    try:
+    with identity_scope(VerifiedIdentity(user_id=task.user, role="user")):
         resp = service.mint_endpoint_token(_mint_request("/serve/foo"), None)
-    finally:
-        _verified_identity.reset(token)
 
     identity = auth.jwt_manager.verify(resp.token)
     assert identity.audience == "/serve/foo"
@@ -348,23 +345,15 @@ def test_mint_endpoint_token_denies_non_owner(state, mock_controller, log_client
         _register_with_access("/serve/foo", task, attempt, controller_pb2.Controller.ENDPOINT_ACCESS_BEARER), None
     )
 
-    token = _verified_identity.set(VerifiedIdentity(user_id="intruder", role="user"))
-    try:
-        with pytest.raises(ConnectError) as exc:
-            service.mint_endpoint_token(_mint_request("/serve/foo"), None)
-    finally:
-        _verified_identity.reset(token)
+    with identity_scope(VerifiedIdentity(user_id="intruder", role="user")), pytest.raises(ConnectError) as exc:
+        service.mint_endpoint_token(_mint_request("/serve/foo"), None)
     assert exc.value.code is Code.PERMISSION_DENIED
 
 
 def test_mint_endpoint_token_unknown_endpoint(state, mock_controller, log_client, tmp_path):
     service, _, _ = _mint_service(state, mock_controller, log_client, tmp_path)
-    token = _verified_identity.set(VerifiedIdentity(user_id="owner", role="admin"))
-    try:
-        with pytest.raises(ConnectError) as exc:
-            service.mint_endpoint_token(_mint_request("/serve/missing"), None)
-    finally:
-        _verified_identity.reset(token)
+    with identity_scope(VerifiedIdentity(user_id="owner", role="admin")), pytest.raises(ConnectError) as exc:
+        service.mint_endpoint_token(_mint_request("/serve/missing"), None)
     assert exc.value.code is Code.NOT_FOUND
 
 
@@ -376,11 +365,8 @@ def test_mint_endpoint_token_clamps_ttl(state, mock_controller, log_client, tmp_
         _register_with_access("/serve/foo", task, attempt, controller_pb2.Controller.ENDPOINT_ACCESS_BEARER), None
     )
 
-    token = _verified_identity.set(VerifiedIdentity(user_id=task.user, role="user"))
-    try:
+    with identity_scope(VerifiedIdentity(user_id=task.user, role="user")):
         resp = service.mint_endpoint_token(_mint_request("/serve/foo", ttl=Duration.from_hours(72)), None)
-    finally:
-        _verified_identity.reset(token)
 
     ttl_ms = resp.expires_at.epoch_ms - Timestamp.now().epoch_ms()
     assert ttl_ms <= (MAX_ENDPOINT_TOKEN_TTL_SECONDS + 5) * 1000

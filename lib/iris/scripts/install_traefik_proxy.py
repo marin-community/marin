@@ -31,20 +31,15 @@ stops. With ``--apply`` it installs them, then reads the Traefik LoadBalancer's
 allocated ``*.coreweave.app`` FQDN and prints the DNS record to create and the
 restart/config step.
 
-``--uninstall`` tears the whole stack back down — releases, namespaces, and the
+``uninstall`` tears the whole stack back down — releases, namespaces, and the
 cluster-scoped CRDs/webhooks/RBAC/IngressClass a namespace delete would orphan —
-then verifies nothing remains. Like install, it only prints the plan without
+then verifies nothing remains. Both subcommands only print the plan without
 ``--apply``.
 
 Usage:
-    uv run lib/iris/scripts/install_traefik_proxy.py --cluster cw-us-east-02a \\
-        --acme-email you@oa.dev                                              # dry run
-    uv run lib/iris/scripts/install_traefik_proxy.py --cluster cw-us-east-02a \\
-        --acme-email you@oa.dev --apply
-    uv run lib/iris/scripts/install_traefik_proxy.py --cluster cw-us-east-02a \\
-        --uninstall                                                          # dry run
-    uv run lib/iris/scripts/install_traefik_proxy.py --cluster cw-us-east-02a \\
-        --uninstall --apply
+    uv run lib/iris/scripts/install_traefik_proxy.py install --cluster cw-us-east-02a \\
+        --acme-email you@oa.dev [--apply]
+    uv run lib/iris/scripts/install_traefik_proxy.py uninstall --cluster cw-us-east-02a [--apply]
 """
 
 import subprocess
@@ -546,12 +541,51 @@ def _derive_from_cluster(name: str) -> ClusterIngressSettings:
     )
 
 
-@click.command()
-@click.option(
-    "--cluster",
-    default="",
-    help="Iris cluster name; derives --host, --ingress-class, and --kubeconfig from its controller.coreweave block.",
-)
+def _shared_options(fn):
+    options = [
+        click.option(
+            "--cluster",
+            default="",
+            help="Iris cluster name; derives --host, --ingress-class, and --kubeconfig "
+            "from its controller.coreweave block.",
+        ),
+        click.option(
+            "--ingress-class",
+            default="traefik",
+            show_default=True,
+            help="IngressClass the HTTP-01 solver routes through.",
+        ),
+        click.option("--traefik-namespace", default="traefik", show_default=True),
+        click.option("--traefik-release", default="traefik", show_default=True, help="helm release name for Traefik."),
+        click.option("--cert-manager-namespace", default="cert-manager", show_default=True),
+        click.option(
+            "--cert-manager-release",
+            default="cert-manager",
+            show_default=True,
+            help="helm release name for cert-manager.",
+        ),
+        click.option("--kubeconfig", default=None, help="kubeconfig to use (else $KUBECONFIG / ~/.kube/config)."),
+        click.option("--context", default=None, help="kube context to target."),
+        click.option("--apply/--no-apply", default=False, help="Actually mutate the cluster (default: dry-run only)."),
+    ]
+    for option in reversed(options):
+        fn = option(fn)
+    return fn
+
+
+def _cluster_default(ctx: click.Context, derived_value: str | None, name: str, cli_value):
+    """Fill a flag from the cluster config unless it was passed explicitly."""
+    explicit = ctx.get_parameter_source(name) == ParameterSource.COMMANDLINE
+    return cli_value if explicit else (derived_value or cli_value)
+
+
+@click.group()
+def main() -> None:
+    """Traefik + cert-manager + HTTP-01 issuers for the CoreWeave /proxy ingress."""
+
+
+@main.command("install")
+@_shared_options
 @click.option(
     "--acme-email",
     default=None,
@@ -560,33 +594,13 @@ def _derive_from_cluster(name: str) -> ClusterIngressSettings:
 @click.option(
     "--host", default="", help="Public endpoint host (e.g. iris-cw.oa.dev); used to print the exact DNS + config."
 )
-@click.option(
-    "--ingress-class", default="traefik", show_default=True, help="IngressClass the HTTP-01 solver routes through."
-)
-@click.option("--traefik-namespace", default="traefik", show_default=True)
-@click.option("--traefik-release", default="traefik", show_default=True, help="helm release name for Traefik.")
-@click.option("--cert-manager-namespace", default="cert-manager", show_default=True)
-@click.option(
-    "--cert-manager-release", default="cert-manager", show_default=True, help="helm release name for cert-manager."
-)
 @click.option("--traefik-version", default=None, help="Pin the Traefik chart version (default: latest).")
 @click.option("--cert-manager-version", default=None, help="Pin the cert-manager chart version (default: latest).")
 @click.option("--skip-traefik", is_flag=True, help="Do not install Traefik (already present).")
 @click.option("--skip-cert-manager", is_flag=True, help="Do not install cert-manager (already present).")
 @click.option("--skip-issuers", is_flag=True, help="Do not create the HTTP-01 ClusterIssuers.")
-@click.option("--kubeconfig", default=None, help="kubeconfig to use (else $KUBECONFIG / ~/.kube/config).")
-@click.option("--context", default=None, help="kube context to target.")
-@click.option("--apply/--no-apply", default=False, help="Actually mutate the cluster (default: dry-run only).")
-@click.option(
-    "--uninstall",
-    "uninstall_mode",
-    is_flag=True,
-    help="Tear down instead of installing: delete the ClusterIssuers, helm-uninstall both releases, "
-    "delete their namespaces, sweep the cluster-scoped leftovers (CRDs, webhook configurations, "
-    "ClusterRoles/Bindings, IngressClass), and verify nothing remains.",
-)
 @click.pass_context
-def main(
+def install_cmd(
     ctx: click.Context,
     cluster: str,
     acme_email: str | None,
@@ -604,50 +618,13 @@ def main(
     kubeconfig: str | None,
     context: str | None,
     apply: bool,
-    uninstall_mode: bool,
 ) -> None:
-    """Install (or with --uninstall tear down) Traefik + cert-manager + issuers for the CoreWeave /proxy ingress."""
+    """Install the cluster-wide ingress prerequisites."""
     if cluster:
-        # Fill host / ingress-class / kubeconfig from the cluster config, but let
-        # an explicitly-passed flag win over the derived value.
         derived = _derive_from_cluster(cluster)
-
-        def pick(name: str, cli_value, cfg_value):
-            explicit = ctx.get_parameter_source(name) == ParameterSource.COMMANDLINE
-            return cli_value if explicit else (cfg_value or cli_value)
-
-        host = pick("host", host, derived.host)
-        ingress_class = pick("ingress_class", ingress_class, derived.ingress_class)
-        kubeconfig = pick("kubeconfig", kubeconfig, derived.kubeconfig)
-
-    if uninstall_mode:
-        install_only = (
-            "acme_email",
-            "host",
-            "traefik_version",
-            "cert_manager_version",
-            "skip_traefik",
-            "skip_cert_manager",
-            "skip_issuers",
-        )
-        explicit = [
-            f"--{name.replace('_', '-')}"
-            for name in install_only
-            if ctx.get_parameter_source(name) == ParameterSource.COMMANDLINE
-        ]
-        if explicit:
-            raise click.ClickException(f"--uninstall does not take install-only flags: {', '.join(explicit)}")
-        uninstall(
-            ingress_class=ingress_class,
-            traefik_namespace=traefik_namespace,
-            traefik_release=traefik_release,
-            cert_manager_namespace=cert_manager_namespace,
-            cert_manager_release=cert_manager_release,
-            kubeconfig=kubeconfig,
-            context=context,
-            apply=apply,
-        )
-        return
+        host = _cluster_default(ctx, derived.host, "host", host)
+        ingress_class = _cluster_default(ctx, derived.ingress_class, "ingress_class", ingress_class)
+        kubeconfig = _cluster_default(ctx, derived.kubeconfig, "kubeconfig", kubeconfig)
 
     install(
         acme_email=acme_email,
@@ -663,6 +640,39 @@ def main(
         skip_traefik=skip_traefik,
         skip_cert_manager=skip_cert_manager,
         skip_issuers=skip_issuers,
+        kubeconfig=kubeconfig,
+        context=context,
+        apply=apply,
+    )
+
+
+@main.command("uninstall")
+@_shared_options
+@click.pass_context
+def uninstall_cmd(
+    ctx: click.Context,
+    cluster: str,
+    ingress_class: str,
+    traefik_namespace: str,
+    traefik_release: str,
+    cert_manager_namespace: str,
+    cert_manager_release: str,
+    kubeconfig: str | None,
+    context: str | None,
+    apply: bool,
+) -> None:
+    """Tear the whole stack back down and verify nothing remains."""
+    if cluster:
+        derived = _derive_from_cluster(cluster)
+        ingress_class = _cluster_default(ctx, derived.ingress_class, "ingress_class", ingress_class)
+        kubeconfig = _cluster_default(ctx, derived.kubeconfig, "kubeconfig", kubeconfig)
+
+    uninstall(
+        ingress_class=ingress_class,
+        traefik_namespace=traefik_namespace,
+        traefik_release=traefik_release,
+        cert_manager_namespace=cert_manager_namespace,
+        cert_manager_release=cert_manager_release,
         kubeconfig=kubeconfig,
         context=context,
         apply=apply,

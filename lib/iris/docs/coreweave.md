@@ -153,13 +153,13 @@ register the endpoint `PRIVATE` (a cluster identity / JWT), `PUBLIC` (open), or
 
 CKS ships **no** ingress controller and no TLS issuer, so two cluster-wide,
 install-once prerequisites must be in place first — install them with
-`scripts/install_traefik_proxy.py` (operator-run, safe-by-default; mirrors
-`install_kueue.py`):
+`scripts/install_traefik_proxy.py` (operator-run; dry-run without `--apply`):
 
 ```bash
 # Traefik (CoreWeave's blessed ingress controller) + cert-manager + HTTP-01 issuers.
-uv run lib/iris/scripts/install_traefik_proxy.py --acme-email you@oa.dev            # dry run
-uv run lib/iris/scripts/install_traefik_proxy.py --acme-email you@oa.dev --apply
+uv run lib/iris/scripts/install_traefik_proxy.py install --cluster <name> --acme-email you@oa.dev --apply
+# Tear it back down (releases, namespaces, CRDs/webhooks/RBAC/IngressClass), verified:
+uv run lib/iris/scripts/install_traefik_proxy.py uninstall --cluster <name> --apply
 ```
 
 Then configure the controller's `coreweave` block. `start_controller` reconciles
@@ -188,7 +188,7 @@ Ingress keeps only `/proxy` public.
 
 The external address is served by **Traefik's** LoadBalancer, not the controller
 Pod, and CoreWeave gives it a **stable FQDN** under `*.coreweave.app` — you never
-chase a churning IP. `install_traefik_proxy.py --apply` prints the exact CNAME
+chase a churning IP. `install_traefik_proxy.py install --apply` prints the exact CNAME
 record to create (`<public_proxy_host>  CNAME  <that FQDN>`); `oa.dev` DNS is at
 **Namecheap**, Advanced DNS panel.
 
