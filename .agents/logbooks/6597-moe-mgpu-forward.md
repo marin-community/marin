@@ -99,3 +99,74 @@ Added the first host-side planner for the revised invertible source-push contrac
 - Next action:
   - Adapt the source-push W13 kernel to consume `SourcePushPlan` metadata and store W13/SwiGLU directly into
     expert-major rows.
+
+## 2026-07-03 metadata-row-start W13 store
+
+Changed the current source-push inbox W13 store to use metadata row starts instead of queue-order rows:
+
+- Commit Hash: `f158cc2c6`
+- Code:
+  - `lib/levanter/src/levanter/grug/_moe/source_push_inbox.py`
+  - `lib/levanter/tests/grug/test_source_push_inbox.py`
+- Change:
+  - `_store_hidden` and `_store_zero_hidden` now use `recv_meta[..., 2]` for the hidden row start.
+  - CPU validation/reference helpers now use `send_meta[..., 2]`.
+  - Added a regression test where metadata row start and queue-order row start intentionally differ.
+- Local verification:
+  - `uv run --package marin-levanter --group test pytest lib/levanter/tests/grug/test_source_push_inbox.py lib/levanter/tests/grug/test_source_push_plan.py -q`
+  - `21 passed, 11 warnings`
+  - `./infra/pre-commit.py --changed-files --fix`
+  - all checks passed
+
+H100 validation/perf run:
+
+- Job: `/dlwh/source-push-inbox-metadata-offset-f158cc2c6-20260703-0026`
+- Cluster: `cw-us-east-02a`
+- Command:
+
+  ```bash
+  uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job run --no-wait \
+    --job-name source-push-inbox-metadata-offset-f158cc2c6-20260703-0026 \
+    --cpu 16 --memory 128GB --disk 16GB --gpu H100x8 --reserve H100x8 \
+    --enable-extra-resources --extra gpu -- \
+    timeout 3600s uv run --package marin-levanter --group test python \
+    lib/levanter/scripts/bench/bench_source_push_inbox.py \
+    --source-push-profile hopper_source_push_inbox_rough_balanced_216 \
+    --warmup 1 --steps 3 --repeat-runs 12 --check \
+    --jsonl scratch/source_push_inbox_metadata_offset_f158cc2c6.jsonl
+  ```
+
+- Result: `JOB_STATE_SUCCEEDED`, exit code 0.
+- Median rows from 12 repeats:
+
+| metric | median | min | max |
+| --- | ---: | ---: | ---: |
+| `steady_state_time` | `0.008677s` | `0.008287s` | `0.014664s` |
+| `w13_tflops_per_rank` | `210.05` | `124.29` | `219.93` |
+| `send_gbps_per_rank` | `82.05` | `48.55` | `85.91` |
+| `max_abs_diff` | `0.250900` | `0.250900` | `0.250900` |
+| `hidden_mean_abs_diff` | `0.021131` | `0.021131` | `0.021131` |
+| `hidden_unwritten_max_abs` | `0.001564` | `0.001564` | `0.001564` |
+| `metadata_mismatches` | `0` | `0` | `0` |
+
+Queue stats:
+
+- `dropped_rows_total=0`
+- `dropped_entries_total=0`
+- `valid_rows_per_rank_mean=131072`
+- `rounded_rows_per_rank_mean=139056`
+- `masked_row_fraction=0.0574157`
+
+Interpretation:
+
+- The metadata-row-start W13 store lowers and runs on H100.
+- This run is slower than the earlier stable source-push inbox median (`8.677 ms` vs `8.2915 ms`) and should not be
+  treated as a performance win.
+- The benchmark still uses the old padded destination row-start metadata, not the new exact `SourcePushPlan`
+  local-row-start plus `expert_base/src_base` contract.
+- Exact `SourcePushPlan` expert-major stores still need masked tail-row stores; writing a full `block_m` at exact
+  unrounded row starts would corrupt the next contiguous source/expert slice.
+- The nonzero synthetic-reference diff needs a like-for-like baseline check before using it as a correctness gate; this
+  benchmark reports it but does not fail on it.
+- Next action: implement exact expert-major stores behind a separate path that passes count-derived bases and masks tail
+  rows, then validate on a small H100 shape before re-running the target profile.
