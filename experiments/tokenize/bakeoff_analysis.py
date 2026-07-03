@@ -132,14 +132,21 @@ def main() -> None:
         header += f" {'feBPB':>8s}"
     print(header)
 
-    def score(r: dict) -> float:
-        if not has_febpb or r["name"] not in bpb_points or len(bpb_points[r["name"]]) < 3:
-            return r["cost"].infer_flops_per_byte  # fall back to serving-cost ordering
-        fit = fit_bpb_curve([tuple(p) for p in bpb_points[r["name"]]])
+    def febpb_value(r: dict) -> float | None:
+        """The arm's feBPB, or None when it lacks the >= 3 BPB points needed to fit BPB(C)."""
+        pts = bpb_points.get(r["name"], [])
+        if not has_febpb or len(pts) < 3:
+            return None
+        fit = fit_bpb_curve([tuple(p) for p in pts])
         rel = r["cost"].infer_flops_per_byte / ref_infer
         return febpb(fit, ref_train_flops, rel, args.serving_ratio)
 
-    for r in sorted(rows, key=score):
+    def sort_key(r: dict) -> tuple[int, float]:
+        # Trained arms rank first, by feBPB; fertility-only arms follow, ordered by serving cost.
+        fe = febpb_value(r)
+        return (0, fe) if fe is not None else (1, r["cost"].infer_flops_per_byte)
+
+    for r in sorted(rows, key=sort_key):
         c = r["cost"]
         line = (
             f"{r['name']:16s} {r['vocab']:7d} {1.0 / r['fertility']:6.2f} {c.infer_flops_per_byte:10.3e} "
@@ -147,8 +154,9 @@ def main() -> None:
             f"{c.attention_flop_fraction * 100:4.1f}%"
         )
         if has_febpb:
-            fe = score(r)
-            line += f" {'inf' if fe == math.inf else f'{fe:8.4f}':>8s}"
+            fe = febpb_value(r)
+            cell = "n/a" if fe is None else ("inf" if fe == math.inf else f"{fe:.4f}")
+            line += f" {cell:>8s}"
         print(line)
 
     if not has_febpb:
