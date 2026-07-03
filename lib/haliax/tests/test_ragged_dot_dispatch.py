@@ -215,3 +215,5 @@ def test_fp8_op_state_partitions_as_overwrite():
     # and do NOT appear as pytree leaves.
     leaves = [l for l in jax.tree_util.tree_leaves(overwrites) if l is not None]
     assert len(leaves) == 6, f"expected 6 (3 scales + 3 amax histories), got {len(leaves)}"
+    # Nothing of the op partitions to the grad side: all its dynamic state is overwrite-only.
+    assert jax.tree_util.tree_leaves(grads) == []

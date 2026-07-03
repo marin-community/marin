@@ -1,12 +1,12 @@
 # FP8 CuTe ragged_dot — implementation notes
 
-Branch: `fp8-ragged-cute`. Final state as of task A3 close-out.
+Branch: `fp8-ragged-cute`.
 
 ## Headline
 
 **No forked jaxlib.** The Hopper TMA warp-specialized grouped GEMM runs entirely
-through `cutlass.jax.cutlass_call` (NVIDIA CuTe DSL + stock Anthropic-distributed
-jaxlib). The standard `nvidia-cutlass-dsl` wheel is the only new dependency.
+through `cutlass.jax.cutlass_call` (NVIDIA CuTe DSL + stock upstream jaxlib).
+The standard `nvidia-cutlass-dsl` wheel is the only new dependency.
 
 ## TMA through the FFI — what we proved
 
@@ -109,9 +109,9 @@ backward compatibility.
 
 | tpe | bf16 Triton | single-shot | amort N=2 | amort N=4 | ceiling (amortized steady-state) |
 |-----|-------------|-------------|-----------|-----------|----------------------------------|
-| 512  | 3.58 ms | 3.96 ms / 0.906× | 1.002× | 1.058× | 3.20 ms / 1.120× |
+| 512  | 3.58 ms | 3.96 ms / 0.906× | 1.002× | 1.058× | 3.20 ms / **1.120×** |
 | **1024** | **6.15 ms** | **5.60 ms / 1.097×** | 1.173× | **1.215× PASS** | **4.88 ms / 1.260× PASS** |
-| 2048 | 11.51 ms | 9.50 ms / 1.212× | 1.262× | 1.288× | 8.75 ms / 1.315× |
+| 2048 | 11.51 ms | 9.50 ms / 1.212× | 1.262× | 1.288× | 8.75 ms / **1.315×** |
 
 **Gate (≥1.2× amortized e2e, gate config tpe=1024): MET.**
 
