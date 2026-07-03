@@ -92,7 +92,7 @@ jobs:
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
         run: |
           cd lib/iris && uv run --group dev iris -v \
-            --config=config/coreweave-ci.yaml \
+            --config=config/ci-coreweave.yaml \
             cluster start --fresh
 
       - name: Connect to iris-ci controller

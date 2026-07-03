@@ -18,7 +18,7 @@ the execution backend.
    Common mappings:
    - `marin` / `marin_prod` -> `lib/iris/config/marin.yaml`
    - `marin_dev` / `marin-dev` -> `lib/iris/config/marin-dev.yaml`
-   - `coreweave` -> `lib/iris/config/coreweave.yaml`
+   - `coreweave` / `cw-us-east-02a` -> `lib/iris/config/cw-us-east-02a.yaml`; `cw-rno2a` -> `lib/iris/config/cw-rno2a.yaml`
 3. `resubmit_command` — exact Iris submit command for resubmission; must include `--no-wait`
 4. For Marin TPU training jobs, use `--extra marin-core:tpu` (not `--extra marin-core:cpu`)
 5. For TPU jobs, the resubmit command must request TPU resources with `--tpu <variant>`.

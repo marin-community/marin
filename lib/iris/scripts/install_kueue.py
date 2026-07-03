@@ -11,15 +11,18 @@ Kueue chart, so this script renders that configuration and installs it.
 
 Two variants share one code path (``--variant``):
 
-  * ``coreweave`` — the CoreWeave ``cks-kueue`` helm chart (wraps upstream kueue),
-    which TEMPLATES its CRDs and renders Topology CRs from ``topologies:`` values.
-    Because the CRDs are templated (not in the chart's ``crds/`` dir), a first
-    install needs a two-phase bootstrap (CRDs first, then the Topology CRs).
+  * ``coreweave`` — the CoreWeave ``cks-kueue`` helm chart (wraps upstream kueue).
   * ``upstream`` — the upstream OCI helm chart
     (``oci://registry.k8s.io/kueue/charts/kueue``), used for kind / generic
-    clusters. CRDs ship in the chart, TAS is enabled via ``controllerManager``
-    feature gates, and the Topology CRs are applied with kubectl after install.
-    The smoke harness (tests/e2e/gpu_gang_smoke.py) drives this variant on kind.
+    clusters. TAS is enabled via ``controllerManager`` feature gates. The smoke
+    harness (tests/e2e/gpu_gang_smoke.py) drives this variant on kind.
+
+Neither variant uses cks-kueue's ``topologies:`` values templating: the chart
+(1.3.0) renders Topology CRs at ``kueue.x-k8s.io/v1alpha1`` while the CRD it
+itself installs serves only v1beta1+, so any helm pass carrying ``topologies``
+fails with 'no matches for kind "Topology"'. Instead both variants apply the
+Topology CRs with kubectl after install, at the apiVersion the installed CRD
+actually serves.
 
 Both variants:
   1. Install the operator into ``kueue-system`` (``helm upgrade --install``).
@@ -226,10 +229,12 @@ def build_controller_manager_config(pod_namespaces: Sequence[str] = DEFAULT_POD_
 
 
 def build_cks_values(pod_namespaces: Sequence[str] = DEFAULT_POD_NAMESPACES) -> dict:
-    """Return the ``cks-kueue`` (CoreWeave) helm values: managerConfig + topologies.
+    """Return the ``cks-kueue`` (CoreWeave) helm values (managerConfig only).
 
-    cks-kueue nests the upstream kueue subchart under ``kueue:`` and renders
-    Topology CRs from a top-level ``topologies:`` list.
+    cks-kueue nests the upstream kueue subchart under ``kueue:``. The chart's
+    ``topologies:`` value is deliberately NOT set — it renders Topology CRs at an
+    apiVersion the CRD no longer serves (see module docstring); the Topology CRs
+    are kubectl-applied after install instead.
 
     NB: the chart already enables ``--feature-gates=TopologyAwareScheduling=true``
     by default (its ``controllerManager.featureGates`` value is a *list*), so we
@@ -244,7 +249,6 @@ def build_cks_values(pod_namespaces: Sequence[str] = DEFAULT_POD_NAMESPACES) -> 
             "enableKueueViz": False,
             "managerConfig": {"controllerManagerConfigYaml": config_yaml},
         },
-        "topologies": [{"name": name, "levels": levels} for name, levels in TOPOLOGIES.items()],
     }
 
 
@@ -253,9 +257,7 @@ def build_upstream_values(pod_namespaces: Sequence[str] = DEFAULT_POD_NAMESPACES
 
     The upstream chart puts ``managerConfig`` at the top level and takes feature
     gates as a *list* under ``controllerManager.featureGates``. TopologyAwareScheduling
-    is NOT on by default upstream, so we enable it here. The chart ships CRDs in
-    ``crds/`` (installed by helm before templates), so no bootstrap pass is needed;
-    the Topology CRs are applied with kubectl after the operator is up.
+    is NOT on by default upstream, so we enable it here.
     """
     config_yaml = yaml.safe_dump(
         build_controller_manager_config(pod_namespaces), default_flow_style=False, sort_keys=False
@@ -270,7 +272,7 @@ def build_upstream_values(pod_namespaces: Sequence[str] = DEFAULT_POD_NAMESPACES
 
 
 def build_topology_cr(name: str, levels: list[str], api_version: str) -> dict:
-    """Return a Topology CR dict (for the upstream variant's kubectl-applied CRs)."""
+    """Return a Topology CR dict at ``api_version`` (the CRD's served version)."""
     return {
         "apiVersion": api_version,
         "kind": "Topology",
@@ -365,16 +367,6 @@ def write_values_file(values: dict) -> str:
     with os.fdopen(fd, "w") as handle:
         yaml.safe_dump(values, handle, default_flow_style=False, sort_keys=False)
     return path
-
-
-def crd_exists(crd: str, kc_flags: list[str]) -> bool:
-    """Return True if the named CRD is present on the cluster."""
-    result = run(
-        ["kubectl", *kc_flags, "get", "crd", crd],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
-    return result.returncode == 0
 
 
 def topology_api_version(kc_flags: list[str]) -> str:
@@ -555,50 +547,25 @@ def _apply(
 ) -> None:
     """Install/upgrade Kueue, then ensure the Topology CRs exist.
 
-    One flow for both charts; the only difference is data (whether the values
-    carry a ``topologies`` key), not control flow:
-
-      * cks-kueue (coreweave) TEMPLATES its CRDs and renders the Topology CRs from
-        the ``topologies:`` value. On a fresh cluster you cannot create the
-        Topology CRD and a Topology CR in one ``helm install`` (helm maps every
-        manifest against live discovery first, and the CRD does not exist yet), so
-        when ``topologies`` is in the values and the CRD is absent, do a BOOTSTRAP
-        pass with no topologies (CRDs get created cleanly), wait for the CRD to be
-        Established, then the full pass.
-      * the upstream OCI chart ships its CRDs in ``crds/`` and carries no
-        ``topologies`` value, so it installs in one pass; the Topology CRs are
-        applied with kubectl afterwards (reading the served apiVersion off the
-        installed CRD).
-
-    Re-runs on an already-installed cluster collapse to a single idempotent pass.
+    One helm pass installs the operator + CRDs for both charts (cks-kueue templates
+    its CRDs, the upstream chart ships them in ``crds/`` — either way the CRDs land
+    before any Topology CR is needed). The Topology CRs are then kubectl-applied at
+    the apiVersion the installed CRD actually serves; see the module docstring for
+    why the cks chart cannot template them itself. Idempotent on re-runs.
     """
-    chart_templates_topologies = "topologies" in values
-    full_file = write_values_file(values)
-
-    if chart_templates_topologies and not crd_exists(TOPOLOGY_CRD, kflags):
-        bootstrap = {k: v for k, v in values.items() if k != "topologies"}
-        click.secho(
-            f"==> Topology CRD absent — BOOTSTRAP pass to create CRDs (release '{release}', no topologies)",
-            fg="blue",
-            bold=True,
-        )
-        _helm_upgrade(chart, release, write_values_file(bootstrap), hflags, version_args)
-        click.secho(f"==> Waiting for {TOPOLOGY_CRD} to be Established", fg="blue", bold=True)
-        run(
-            ["kubectl", *kflags, "wait", "--for=condition=Established", f"crd/{TOPOLOGY_CRD}", "--timeout=120s"],
-            check=True,
-        )
-
     click.secho(f"==> Installing/upgrading {chart} as '{release}' in {OPERATOR_NS}", fg="blue", bold=True)
-    _helm_upgrade(chart, release, full_file, hflags, version_args)
+    _helm_upgrade(chart, release, write_values_file(values), hflags, version_args)
+    click.secho(f"==> Waiting for {TOPOLOGY_CRD} to be Established", fg="blue", bold=True)
+    run(
+        ["kubectl", *kflags, "wait", "--for=condition=Established", f"crd/{TOPOLOGY_CRD}", "--timeout=120s"],
+        check=True,
+    )
     _wait_controller(kflags)
 
-    # Charts that don't template the Topology CRs (upstream) get them via kubectl.
-    if not chart_templates_topologies:
-        api_version = topology_api_version(kflags)
-        click.secho(f"==> Applying Topology CRs ({api_version})", fg="blue", bold=True)
-        topology_docs = [build_topology_cr(name, levels, api_version) for name, levels in TOPOLOGIES.items()]
-        kubectl_apply_docs(topology_docs, kflags)
+    api_version = topology_api_version(kflags)
+    click.secho(f"==> Applying Topology CRs ({api_version})", fg="blue", bold=True)
+    topology_docs = [build_topology_cr(name, levels, api_version) for name, levels in TOPOLOGIES.items()]
+    kubectl_apply_docs(topology_docs, kflags)
 
     click.secho("==> Topologies on the cluster:", fg="blue", bold=True)
     kubectl_get_topologies(kflags)

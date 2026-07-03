@@ -34,9 +34,9 @@ public ``iris-task:latest``; only the controller image is built from this branch
 Usage:
     cd lib/iris
     uv run --group dev python tests/e2e/gpu_gang_smoke.py \
-        --config config/kind-controller-gpu-smoke.yaml --target kind
+        --config config/ci-kind-gpu-smoke.yaml --target kind
     uv run --group dev python tests/e2e/gpu_gang_smoke.py \
-        --config config/coreweave-controller-gpu-smoke.yaml --target coreweave \
+        --config config/ci-coreweave-gpu-smoke.yaml --target coreweave \
         --i-understand-the-cost
 """
 

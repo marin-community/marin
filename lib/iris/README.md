@@ -350,7 +350,7 @@ dashboard rendering, log levels, profiling, and constraint routing.
 uv run pytest lib/iris/tests/e2e/test_smoke.py -m requires_cluster -o "addopts=" -v
 
 # Cloud mode: start cluster via CLI, then run tests against it
-# iris --cluster=smoke-gcp cluster start-smoke --label-prefix my-test --url-file /tmp/url --wait-for-workers 1
+# iris --cluster=ci-gcp-smoke cluster start-smoke --label-prefix my-test --url-file /tmp/url --wait-for-workers 1
 uv run pytest lib/iris/tests/e2e/test_smoke.py -m requires_cluster --iris-controller-url "$(cat /tmp/url)" -o "addopts="
 
 # Cloud mode: connect to existing cluster
