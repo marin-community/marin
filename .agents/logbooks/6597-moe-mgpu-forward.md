@@ -849,3 +849,44 @@ Added explicit useful-row and rounded-row W13 throughput fields to source-push b
 - Interpretation:
   - Future W13 benchmark rows can report the denominator required by the invertible source-push spec: useful routed rows
     separately from rounded WGMMA rows.
+
+## 2026-07-03 07:16 - Current W13 target gate rows with useful denominator
+
+Ran the source-push W13-only target benchmark gate on current PR #6841 head with explicit useful-vs-rounded throughput
+fields.
+
+- Commit Hash: `ddab3fc37`
+- Job: `/dlwh/source-push-w13-gate-ddab3fc37-20260703`
+- Iris summary: succeeded, one task, `exit_code=0`, `duration_ms=260035`.
+- Command:
+  ```bash
+  uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job run --no-wait \
+    --job-name source-push-w13-gate-ddab3fc37-20260703 \
+    --cpu 16 --memory 128GB --disk 16GB --gpu H100x8 --reserve H100x8 \
+    --enable-extra-resources --extra gpu -- \
+    timeout 7200s bash -lc 'set -euo pipefail
+  JSONL=scratch/source_push_w13_gate_ddab3fc37_20260703.jsonl
+  rm -f "$JSONL"
+  COMMON="uv run --package marin-levanter --group test python lib/levanter/scripts/bench/bench_source_push_inbox.py --source-push-profile hopper_source_push_inbox_rough_balanced_216 --input-mode source_push_plan --no-check --warmup 2 --steps 5 --repeat-runs 9 --separate-compile --no-progress-events --git-sha ddab3fc37 --jsonl $JSONL"
+  $COMMON --routing balanced --capacity-factor 1.0
+  $COMMON --routing balanced --capacity-factor 1.25
+  $COMMON --routing roughly_balanced --capacity-factor 1.25
+  '
+  ```
+- Result rows:
+
+  | routing | capacity | repeats | median time | rounded W13 TFLOP/s/rank | useful W13 TFLOP/s/rank | row efficiency | masked rows | drops |
+  | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+  | balanced | `1.0` | 9 | `7.997 ms` | `214.84` | `214.84` | `1.000000` | `0.000000` | 0 |
+  | balanced | `1.25` | 9 | `7.959 ms` | `215.85` | `215.85` | `1.000000` | `0.000000` | 0 |
+  | roughly_balanced | `1.25` | 9 | `8.508 ms` | `214.23` | `201.93` | `0.942584` | `0.057416` | 0 |
+
+- Repeat times:
+  - balanced cf1.0: `[8.172, 8.064, 8.064, 8.046, 7.997, 7.948, 7.986, 7.992, 7.966] ms`
+  - balanced cf1.25: `[8.207, 8.170, 7.914, 8.007, 7.936, 7.959, 7.968, 7.926, 7.929] ms`
+  - roughly-balanced cf1.25: `[8.384, 8.381, 8.424, 8.356, 9.152, 14.492, 10.025, 8.550, 8.508] ms`
+- Interpretation:
+  - The current source-push W13 path meets the target rough-balanced acceptance bar on the median:
+    useful throughput `201.93 TFLOP/s/rank` and median time `8.508 ms`.
+  - There is a slow-tail signal in rough-balanced repeats (`14.492 ms`, `10.025 ms`, one `9.152 ms`), so the
+    slow-tail investigation item remains open even though the median gate passes.
