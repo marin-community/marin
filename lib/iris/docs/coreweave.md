@@ -374,7 +374,7 @@ installs JAX another way must stage the toolchain itself — call
 
 ### Grug MoE Multinode Smoke
 
-Multi-host GPU jobs are gang-admitted by Kueue (see §Kueue below) — no warm-node
+Multi-host GPU jobs are gang-admitted by Kueue (see the Kueue section above) — no warm-node
 preflight or `targetNodes` patching is needed. Submit a small
 `experiments.grug.moe.launch_cw_scale` run as the smoke; the driver is a tiny
 CPU job that dispatches the GPU gang itself:

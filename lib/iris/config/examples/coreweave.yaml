@@ -14,11 +14,11 @@
 #      `iris cluster start` creates a K8s Secret from these env vars automatically.
 #
 #   2. Start the cluster (creates RBAC, shared NodePools, ConfigMap, Deployment, Service):
-#        iris --config=lib/iris/config/coreweave.yaml cluster start
+#        iris --config=lib/iris/config/examples/coreweave.yaml cluster start
 #
 #   3. Use the Iris CLI:
-#        iris --config=lib/iris/config/coreweave.yaml cluster status
-#        iris --config=lib/iris/config/coreweave.yaml cluster dashboard
+#        iris --config=lib/iris/config/examples/coreweave.yaml cluster status
+#        iris --config=lib/iris/config/examples/coreweave.yaml cluster dashboard
 #
 # This config file is used by:
 #   - The CLI on the operator's laptop (for `cluster start`, `cluster status`, job submission)
