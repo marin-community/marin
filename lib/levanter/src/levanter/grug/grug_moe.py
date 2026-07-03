@@ -33,6 +33,7 @@ from levanter.grug._moe.common import (
     MoEExpertMlpPspecs,
     MoeActivation,
     MoeImplementation,
+    MoeRaggedDotOps,
     PspecAxis,
     resolve_moe_implementation,
     split_moe_w13_output,
@@ -135,6 +136,8 @@ def moe_mlp(
     mesh: jax.sharding.Mesh | jax.sharding.AbstractMesh | None = None,
     capacity_factor: float = _DEFAULT_EP_CAPACITY_FACTOR,
     report_capacity_overflow: bool = False,
+    ragged_dot_ops: MoeRaggedDotOps | None = None,
+    fp8_wire: bool = False,
 ) -> Float[Array, "T D"] | tuple[Float[Array, "T D"], Int[Array, ""]]:
     """Functional routed MoE MLP core used by Grug modules and benchmarks.
 
@@ -144,6 +147,15 @@ def moe_mlp(
 
     Set `report_capacity_overflow=True` to also return a scalar count of
     dropped expert assignments from EP capacity clipping.
+
+    ``ragged_dot_ops`` supplies stateful grouped-matmul ops for the two expert
+    GEMMs (e.g. FP8 quantized ops, see [MoeRaggedDotOps][]); ``None`` keeps the
+    default bf16 kernels. Only the EP ring / ragged_all_to_all backends support
+    ops.
+
+    ``fp8_wire=True`` switches the EP dispatch/combine collectives to carry FP8
+    over the wire (E4M3 activations forward, E5M2 gradients backward; see
+    ``levanter.grug._moe.fp8_wire``). Currently ring-only.
     """
     resolved_implementation = resolve_moe_implementation(implementation)
 
@@ -178,6 +190,17 @@ def moe_mlp(
 
     has_expert_axis = _mesh_has_axis(mesh, "expert")
     expert_axis_size = _mesh_axis_size(mesh, "expert")
+
+    if ragged_dot_ops is not None:
+        has_ep = _mesh_has_axis(mesh, "expert") and _mesh_axis_size(mesh, "expert") > 1
+        if not has_ep or resolved_implementation not in ("ring", "ragged_all_to_all"):
+            raise NotImplementedError(
+                "ragged_dot_ops is only wired into the EP ring / ragged_all_to_all backends; "
+                f"got implementation={resolved_implementation!r} with expert axis "
+                f"size={_mesh_axis_size(mesh, 'expert')}"
+            )
+    if fp8_wire and resolved_implementation != "ring":
+        raise NotImplementedError(f"fp8_wire is only wired into the EP ring backend, got {resolved_implementation!r}")
 
     if mesh is None or mesh.empty:
         out, dropped = _moe_mlp_local(
@@ -224,12 +247,14 @@ def moe_mlp(
         w_up_gate = _reshard_for_shard_map(w_up_gate, mesh, w_up_gate_spec)
         w_down = _reshard_for_shard_map(w_down, mesh, w_down_spec)
 
+        backend_kwargs = {"fp8_wire": fp8_wire} if resolved_implementation == "ring" else {}
         shard_fn = shard_map(
             partial(
                 shard_local_fn,
                 activation_fn=activation_fn,
                 num_experts=num_experts,
                 capacity_factor=capacity_factor,
+                **backend_kwargs,
             ),
             mesh=mesh,
             in_specs=(
@@ -238,11 +263,12 @@ def moe_mlp(
                 batch_spec,
                 w_up_gate_spec,
                 w_down_spec,
+                P(),  # ragged-dot op state is replicated across the mesh
             ),
             out_specs=(batch_spec, P()),
             check_vma=False,
         )
-        out, dropped = shard_fn(x, selected_experts, combine_weights, w_up_gate, w_down)
+        out, dropped = shard_fn(x, selected_experts, combine_weights, w_up_gate, w_down, ragged_dot_ops)
         if report_capacity_overflow:
             return out, dropped
         return out

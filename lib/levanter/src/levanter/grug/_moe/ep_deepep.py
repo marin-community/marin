@@ -103,6 +103,7 @@ def _moe_mlp_ep_deepep_local(
     combine_weights_local: Float[Array, "Tlocal K"],
     moe_w13_local: Float[Array, "Elocal H I2"],
     moe_w2_local: Float[Array, "Elocal I H"],
+    ops=None,
     *,
     activation_fn: Callable[[jax.Array], jax.Array],
     num_experts: int,
@@ -110,6 +111,8 @@ def _moe_mlp_ep_deepep_local(
 ) -> tuple[Float[Array, "Tlocal H"], Int[Array, ""]]:
     """DeepEP dispatch/combine path for an intranode expert mesh."""
     del capacity_factor
+    if ops is not None:
+        raise NotImplementedError("ragged-dot ops are not wired into the DeepEP backend")
     local_experts = moe_w13_local.shape[0]
     if num_experts % local_experts != 0:
         raise ValueError(

@@ -37,6 +37,36 @@ def _sort_activations_custom_bwd(
 _sort_activations_custom.defvjp(_sort_activations_custom_fwd, _sort_activations_custom_bwd)
 
 
+def _pmax_replicated_cotangent(tree):
+    """Identity on ``tree`` that makes its shard_map cotangent combine as a max.
+
+    A replicated (``P()``) shard_map input gets its cotangent ``psum``-ed across
+    the mesh by the shard_map transpose. Delayed-scaling quantization state
+    (amax histories / scales, carried as ``OverwriteWithGradient`` cotangents)
+    must instead combine as the *maximum* over shards — the global amax. Each
+    shard contributes ``pmax(ct)/mesh_size`` so the outer psum reconstructs
+    exactly ``pmax(ct)``.
+    """
+    mesh = jax.sharding.get_abstract_mesh()
+    axes = tuple(mesh.axis_names)
+    mesh_size = 1
+    for axis in axes:
+        mesh_size *= int(mesh.shape[axis])
+
+    @jax.custom_vjp
+    def _ident(t):
+        return t
+
+    def _fwd(t):
+        return t, None
+
+    def _bwd(_, ct):
+        return (jax.tree.map(lambda c: jax.lax.pmax(c, axes) / mesh_size, ct),)
+
+    _ident.defvjp(_fwd, _bwd)
+    return _ident(tree)
+
+
 def _prefix_cap_counts(counts: Int[Array, "E"], *, capacity: int) -> Int[Array, "E"]:
     accepted = []
     remaining = jnp.array(capacity, dtype=jnp.int32)
