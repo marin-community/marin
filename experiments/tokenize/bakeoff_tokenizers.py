@@ -48,10 +48,9 @@ class TokenizerArm:
     note: str = ""
 
 
-# Phase 2 baselines: off-the-shelf, all confirmed loadable with vocab sizes measured
-# via len(get_vocab()). marin-128k is the incumbent baseline (Llama-3 vocab + Marin
-# chat template). o200k (gpt-oss) and gemma-3 were the two arms that edged out Llama-3
-# in the prior sweep (#5821) after the byte-accounting fix.
+# Off-the-shelf baseline tokenizers, vocab sizes measured via len(get_vocab()). marin-128k is
+# the incumbent (Llama-3 vocab + Marin chat template); the rest span the vocab-size axis from
+# gpt-neox's 50k to gemma-3's 262k so serving cost can be read against quality across scales.
 BASELINE_ARMS: tuple[TokenizerArm, ...] = (
     TokenizerArm("marin-128k", "marin-community/marin-tokenizer", 128_256, Axis.BASELINE, "incumbent (Llama-3 vocab)"),
     TokenizerArm("gpt-neox-50k", "EleutherAI/gpt-neox-20b", 50_277, Axis.BASELINE, "small vocab reference"),

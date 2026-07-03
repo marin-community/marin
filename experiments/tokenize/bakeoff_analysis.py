@@ -35,11 +35,22 @@ import math
 
 from experiments.tokenize.flop_equivalent import (
     TARGET_MODEL_SHAPE,
+    ArmCost,
     ServingCostModel,
     arm_cost,
     febpb,
     fit_bpb_curve,
 )
+
+
+@dataclasses.dataclass(frozen=True)
+class ArmRow:
+    """One arm's serving-cost line: its name, vocab, weighted fertility, and computed cost."""
+
+    name: str
+    vocab: int
+    fertility: float
+    cost: ArmCost
 
 
 def _weighted_fertility(by_domain: dict[str, dict], weights: dict[str, float] | None) -> float:
@@ -109,17 +120,17 @@ def main() -> None:
     for arm in fert["arms"]:
         fertility = _weighted_fertility(arm["by_domain"], weights)
         cost = arm_cost(arm["name"], arm["vocab_size"], fertility, serving)
-        rows.append({"name": arm["name"], "vocab": arm["vocab_size"], "fertility": fertility, "cost": cost})
+        rows.append(ArmRow(name=arm["name"], vocab=arm["vocab_size"], fertility=fertility, cost=cost))
 
-    ref = next((r for r in rows if r["name"] == args.reference), rows[0])
-    ref_infer = ref["cost"].infer_flops_per_byte
+    ref = next((r for r in rows if r.name == args.reference), rows[0])
+    ref_infer = ref.cost.infer_flops_per_byte
     ref_train_flops = None
     if bpb_points.get(args.reference):
         # C_ref = the middle compute point of the reference arm.
         pts = sorted(bpb_points[args.reference])
         ref_train_flops = pts[len(pts) // 2][0]
 
-    attn = serving.attention_flop_fraction(ref["vocab"]) * 100
+    attn = serving.attention_flop_fraction(ref.vocab) * 100
     print(
         f"=== re-scored @ ctx={serving.context_len}, window={serving.attention_window}, "
         f"1:{serving.global_layer_period - 1} global:local, speed={serving.speed_factor}, "
@@ -132,24 +143,24 @@ def main() -> None:
         header += f" {'feBPB':>8s}"
     print(header)
 
-    def febpb_value(r: dict) -> float | None:
+    def febpb_value(r: ArmRow) -> float | None:
         """The arm's feBPB, or None when it lacks the >= 3 BPB points needed to fit BPB(C)."""
-        pts = bpb_points.get(r["name"], [])
+        pts = bpb_points.get(r.name, [])
         if not has_febpb or len(pts) < 3:
             return None
         fit = fit_bpb_curve([tuple(p) for p in pts])
-        rel = r["cost"].infer_flops_per_byte / ref_infer
+        rel = r.cost.infer_flops_per_byte / ref_infer
         return febpb(fit, ref_train_flops, rel, args.serving_ratio)
 
-    def sort_key(r: dict) -> tuple[int, float]:
+    def sort_key(r: ArmRow) -> tuple[int, float]:
         # Trained arms rank first, by feBPB; fertility-only arms follow, ordered by serving cost.
         fe = febpb_value(r)
-        return (0, fe) if fe is not None else (1, r["cost"].infer_flops_per_byte)
+        return (0, fe) if fe is not None else (1, r.cost.infer_flops_per_byte)
 
     for r in sorted(rows, key=sort_key):
-        c = r["cost"]
+        c = r.cost
         line = (
-            f"{r['name']:16s} {r['vocab']:7d} {1.0 / r['fertility']:6.2f} {c.infer_flops_per_byte:10.3e} "
+            f"{r.name:16s} {r.vocab:7d} {1.0 / r.fertility:6.2f} {c.infer_flops_per_byte:10.3e} "
             f"{c.infer_flops_per_byte / ref_infer:9.3f} {c.lm_head_flop_fraction * 100:4.1f}% "
             f"{c.attention_flop_fraction * 100:4.1f}%"
         )

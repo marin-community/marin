@@ -150,17 +150,16 @@ def collect_job(job: LadderJob, cluster: str, env: dict[str, str], max_log_lines
     return CollectResult(job=job, point=point, skip_reason=None)
 
 
-def _state_reason(state: str) -> str:
-    if not state:
-        return "not found on controller"
-    short = state[len(_STATE_PREFIX) :] if state.startswith(_STATE_PREFIX) else state
-    return f"state {short}"
-
-
 def _short_state(state: str) -> str:
+    """State enum with the ``STATE_`` prefix stripped; ``MISSING`` when the controller has no such job."""
     if not state:
         return "MISSING"
     return state[len(_STATE_PREFIX) :] if state.startswith(_STATE_PREFIX) else state
+
+
+def _state_reason(state: str) -> str:
+    """Why a non-succeeded job was skipped, phrased for the report."""
+    return "not found on controller" if not state else f"state {_short_state(state)}"
 
 
 def print_table(cluster: str, results: list[CollectResult]) -> None:
