@@ -35,6 +35,11 @@ from levanter.grug._moe.source_push_inbox import (
     _time_jitted,
     _wgmma_smem,
 )
+from levanter.grug._moe.source_push_plan import (
+    SOURCE_PUSH_META_LOCAL_EXPERT,
+    SOURCE_PUSH_META_LOCAL_ROW_START,
+    SOURCE_PUSH_META_VALID_ROWS,
+)
 
 
 KERNEL_NAME = "source_push_w2_return"
@@ -178,11 +183,11 @@ def reference_w2_return_by_destination(
     for dst in range(config.ep_size):
         for src_ordinal in range(config.ep_size):
             for entry in range(config.entries_per_rank):
-                valid_rows = int(recv_meta_host[dst, src_ordinal, entry, 3])
+                valid_rows = int(recv_meta_host[dst, src_ordinal, entry, SOURCE_PUSH_META_VALID_ROWS])
                 if valid_rows <= 0:
                     continue
-                expert = int(recv_meta_host[dst, src_ordinal, entry, 1])
-                row_start = int(recv_meta_host[dst, src_ordinal, entry, 2])
+                expert = int(recv_meta_host[dst, src_ordinal, entry, SOURCE_PUSH_META_LOCAL_EXPERT])
+                row_start = int(recv_meta_host[dst, src_ordinal, entry, SOURCE_PUSH_META_LOCAL_ROW_START])
                 hidden_rows = hidden_host[dst, row_start : row_start + config.block_m]
                 return_by_destination[dst, src_ordinal, entry] = hidden_rows @ w_down_host[dst, expert]
     return jnp.asarray(return_by_destination)
@@ -249,12 +254,12 @@ def _make_w2_return_kernel(config: PushInboxConfig):
         src_ordinal = pl.program_id(0)
         entry = pl.program_id(1)
         n_tile = pl.program_id(2)
-        valid_rows = recv_meta_ref[src_ordinal, entry, 3]
+        valid_rows = recv_meta_ref[src_ordinal, entry, SOURCE_PUSH_META_VALID_ROWS]
 
         @pl.when(valid_rows > 0)
         def _compute_return_block() -> None:
-            expert = recv_meta_ref[src_ordinal, entry, 1]
-            row_start = recv_meta_ref[src_ordinal, entry, 2]
+            expert = recv_meta_ref[src_ordinal, entry, SOURCE_PUSH_META_LOCAL_EXPERT]
+            row_start = recv_meta_ref[src_ordinal, entry, SOURCE_PUSH_META_LOCAL_ROW_START]
 
             def acc_scope(acc_ref) -> jax.Array:
                 def smem_scope(hidden_smem, w_down_smem, ready_barrier) -> None:
@@ -370,12 +375,12 @@ def _make_w2_return_direct_to_source_kernel(config: PushInboxConfig):
                     src,
                     device_id_type=pl.DeviceIdType.LOGICAL,
                 )
-            valid_rows = recv_meta_ref[static_src_ordinal, entry, 3]
+            valid_rows = recv_meta_ref[static_src_ordinal, entry, SOURCE_PUSH_META_VALID_ROWS]
 
             @pl.when(valid_rows > 0)
             def _compute_return_block() -> None:
-                expert = recv_meta_ref[static_src_ordinal, entry, 1]
-                row_start = recv_meta_ref[static_src_ordinal, entry, 2]
+                expert = recv_meta_ref[static_src_ordinal, entry, SOURCE_PUSH_META_LOCAL_EXPERT]
+                row_start = recv_meta_ref[static_src_ordinal, entry, SOURCE_PUSH_META_LOCAL_ROW_START]
 
                 def acc_scope(acc_ref) -> jax.Array:
                     def smem_scope(hidden_smem, w_down_smem, ready_barrier) -> None:
@@ -525,7 +530,7 @@ def _make_return_copy_kernel(config: PushInboxConfig):
                     src,
                     device_id_type=pl.DeviceIdType.LOGICAL,
                 )
-            valid_rows = recv_meta_ref[static_src_ordinal, entry, 3]
+            valid_rows = recv_meta_ref[static_src_ordinal, entry, SOURCE_PUSH_META_VALID_ROWS]
 
             @pl.when(valid_rows > 0)
             def _copy_entry_tile() -> None:
@@ -642,7 +647,7 @@ def _validate_w2_return(
     observed = np.asarray(jax.device_get(return_by_destination), dtype=np.float32)
     expected_host = np.asarray(jax.device_get(expected), dtype=np.float32)
     diff = np.abs(observed - expected_host)
-    live_entries = recv_meta_host[..., 3] > 0
+    live_entries = recv_meta_host[..., SOURCE_PUSH_META_VALID_ROWS] > 0
     if np.any(live_entries):
         live_diff = diff[live_entries]
         max_abs_diff = float(np.max(live_diff))
