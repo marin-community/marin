@@ -682,7 +682,7 @@ def test_extract_proxy_subdomain(host: str, expected: str | None) -> None:
 class _DictEndpointService:
     """Minimal endpoint_service for the subdomain middleware in tests.
 
-    Backs ``resolve_endpoint_row`` with the same ``name -> address`` dict the
+    Backs ``resolve_proxy_target`` with the same ``name -> address`` dict the
     proxy resolves against, delegating the wire-name decode to production's
     ``proxy_name_to_endpoint_names`` so it cannot drift. All endpoints resolve as
     PRIVATE; the subdomain tests run with the default (auth-disabled) policy,
@@ -693,7 +693,7 @@ class _DictEndpointService:
     def __init__(self, endpoints: dict[str, str]):
         self._endpoints = endpoints
 
-    def resolve_endpoint_row(self, encoded_name: str) -> ResolvedEndpoint | None:
+    def resolve_proxy_target(self, encoded_name: str) -> ResolvedEndpoint | None:
         for name in proxy_name_to_endpoint_names(encoded_name):
             address = self._endpoints.get(name)
             if address is not None:

@@ -240,12 +240,12 @@ def test_register_defaults_to_private_and_persists_access(state):
         _register_with_access("/j/bearer", task, attempt, controller_pb2.Controller.ENDPOINT_ACCESS_BEARER), None
     )
 
-    assert svc.resolve_endpoint_row("j.private").access == EndpointAccess.ENDPOINT_ACCESS_PRIVATE
-    assert svc.resolve_endpoint_row("j.public").access == EndpointAccess.ENDPOINT_ACCESS_PUBLIC
-    assert svc.resolve_endpoint_row("j.bearer").access == EndpointAccess.ENDPOINT_ACCESS_BEARER
+    assert svc.resolve_proxy_target("j.private").access == EndpointAccess.ENDPOINT_ACCESS_PRIVATE
+    assert svc.resolve_proxy_target("j.public").access == EndpointAccess.ENDPOINT_ACCESS_PUBLIC
+    assert svc.resolve_proxy_target("j.bearer").access == EndpointAccess.ENDPOINT_ACCESS_BEARER
 
 
-def test_resolve_endpoint_row_decodes_slash_names(state):
+def test_resolve_proxy_target_decodes_slash_names(state):
     """A slash-containing wire name is reachable via its dotted encoded form.
 
     Regression for the encode/decode namespace bug: quick-serve's default
@@ -265,20 +265,20 @@ def test_resolve_endpoint_row_decodes_slash_names(state):
         None,
     )
 
-    resolved = svc.resolve_endpoint_row("serve.foo")
+    resolved = svc.resolve_proxy_target("serve.foo")
     assert resolved is not None
     assert (resolved.name, resolved.address, resolved.access) == (
         "/serve/foo",
         "up:8000",
         EndpointAccess.ENDPOINT_ACCESS_BEARER,
     )
-    assert svc.resolve_endpoint_row("nope.missing") is None
+    assert svc.resolve_proxy_target("nope.missing") is None
 
 
-def test_resolve_endpoint_row_system_endpoint_is_private(state):
+def test_resolve_proxy_target_system_endpoint_is_private(state):
     svc = _service(state)
     svc.register_system_endpoint("/system/log-server", "logs:9000")
-    resolved = svc.resolve_endpoint_row("system.log-server")
+    resolved = svc.resolve_proxy_target("system.log-server")
     assert resolved is not None
     assert resolved.access == EndpointAccess.ENDPOINT_ACCESS_PRIVATE
     assert resolved.address == "logs:9000"

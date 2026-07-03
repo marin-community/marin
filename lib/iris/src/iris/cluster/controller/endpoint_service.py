@@ -225,12 +225,10 @@ class EndpointServiceImpl:
                 return row
         return None
 
-    def resolve_endpoint_row(self, encoded_name: str) -> ResolvedEndpoint | None:
+    def resolve_proxy_target(self, encoded_name: str) -> ResolvedEndpoint | None:
         """Resolve a proxy request's ``encoded_name`` to its target, or None.
 
-        One lookup returns access mode, address, and canonical name so
-        authorization and forwarding cannot drift. ``/system/`` endpoints
-        always resolve as ``PRIVATE``.
+        ``/system/`` endpoints always resolve as ``PRIVATE``.
         """
         for name in proxy_name_to_endpoint_names(encoded_name):
             row = self._endpoints.resolve(name)

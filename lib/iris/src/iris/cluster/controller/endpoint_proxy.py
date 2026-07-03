@@ -253,10 +253,9 @@ class EndpointProxy:
         ``X-Forwarded-Prefix``; pass ``""`` when the public URL already
         roots the upstream (subdomain style).
 
-        ``address`` lets the caller pass an already-resolved upstream (the
-        controller's auth layer resolves the endpoint once — for its access
-        mode — and hands the same address here so authorization and forwarding
-        never disagree). When omitted, the endpoint is resolved via the
+        ``address`` is the upstream for a caller that already resolved (and
+        authorized) the endpoint — authorization and forwarding must use the
+        same resolution. When omitted, the endpoint is resolved via the
         injected ``resolve`` callable, using the same decode.
         """
         if address is None:

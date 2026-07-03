@@ -539,6 +539,7 @@ class K8sControllerProvider:
         self._kubectl.delete(K8sResource.PDBS, "iris-controller-pdb")
         self._kubectl.delete(K8sResource.CONFIGMAPS, "iris-cluster-config")
         self._kubectl.delete(K8sResource.PERSISTENT_VOLUME_CLAIMS, _CONTROLLER_STATE_PVC_NAME)
+        self._kubectl.delete(K8sResource.INGRESSES, _CONTROLLER_PROXY_INGRESS_NAME)
         if self.uses_s3_storage(config) or config.defaults.inject_env:
             self._kubectl.delete(K8sResource.SECRETS, TASK_ENV_SECRET_NAME)
 

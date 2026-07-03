@@ -29,6 +29,7 @@ Auth model:
 import functools
 import logging
 import os
+from typing import Protocol
 from urllib.parse import urlparse
 
 import httpx
@@ -122,10 +123,16 @@ def _authorize_proxy(
     return None
 
 
+class ProxyTargetResolver(Protocol):
+    """What the proxy surfaces need from the endpoint service."""
+
+    def resolve_proxy_target(self, encoded_name: str) -> ResolvedEndpoint | None: ...
+
+
 def _resolve_and_authorize_proxy(
     request: Request,
     encoded_name: str,
-    endpoint_service: EndpointServiceImpl,
+    endpoint_service: ProxyTargetResolver,
     policy: RequestAuthPolicy,
     *,
     token: str | None = None,
@@ -134,7 +141,7 @@ def _resolve_and_authorize_proxy(
     access mode. Returns ``(resolved, deny)``; send ``deny`` and stop when it is
     not None.
     """
-    resolved = endpoint_service.resolve_endpoint_row(encoded_name)
+    resolved = endpoint_service.resolve_proxy_target(encoded_name)
     deny = _authorize_proxy(request, resolved, policy, token=token)
     return resolved, deny
 
@@ -241,7 +248,7 @@ class _SubdomainProxyMiddleware:
         app: ASGIApp,
         *,
         endpoint_proxy: EndpointProxy,
-        endpoint_service: EndpointServiceImpl,
+        endpoint_service: ProxyTargetResolver,
         auth_policy: RequestAuthPolicy = RequestAuthPolicy(),
     ):
         self._app = app
