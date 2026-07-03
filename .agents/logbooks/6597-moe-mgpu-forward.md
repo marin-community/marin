@@ -1407,3 +1407,50 @@ full H100 mesh case.
   - The H100 source-push pytest now includes both the small EP=2 stage case requested by the spec and the full EP=8
     stage case used by the target mesh.
   - This is a coverage/proof-strength patch only; it does not change kernel behavior or performance.
+
+## 2026-07-03 12:44 - Add top-k=4 H100 source-push stage coverage
+
+Extended the stage-specific H100 source-push pytest matrix to include the spec's `top_k=4` source-combine case.
+
+- Commit Hash: `3af5b5322` plus local diff in `lib/levanter/tests/grug/test_grugformer_moe.py`.
+- Code:
+  - `lib/levanter/tests/grug/test_grugformer_moe.py`
+- Change:
+  - `test_source_push_stage_kernels_match_references_on_h100` now runs:
+    - `EP=2`, `topk=2`
+    - `EP=2`, `topk=4`
+    - `EP=8`, `topk=2`
+  - The new `EP=2`, `topk=4` case runs the same stage-level W13, direct W2-return, and route-buffer source-combine
+    checks with references enabled.
+- Local verification:
+  - `uv run --package marin-levanter --group test pytest lib/levanter/tests/grug/test_grugformer_moe.py -q -n 0 -k 'source_push_stage_kernels_match_references_on_h100'`
+    - Result: `3 skipped, 22 deselected, 1 warning` on non-H100 local hardware.
+  - `uv run --package marin-levanter --group test pytest lib/levanter/tests/grug/test_grugformer_moe.py -q -n 0 -k source_push`
+    - Result: `1 passed, 5 skipped, 19 deselected, 1 warning` on non-H100 local hardware.
+  - `./infra/pre-commit.py --changed-files --fix`
+    - Result: all checks passed.
+- H100 verification:
+  - Job: `/dlwh/source-push-stage-topk4-h100-pytest-3af5b532-local-20260703-194134`
+  - Cluster: `cw-us-east-02a`
+  - Command:
+    ```bash
+    uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job run --no-wait \
+      --job-name source-push-stage-topk4-h100-pytest-3af5b532-local-20260703-194134 \
+      --cpu 16 --memory 128GB --disk 16GB --gpu H100x8 --reserve H100x8 \
+      --enable-extra-resources --extra gpu -- \
+      timeout 3600s uv run --package marin-levanter --group test pytest \
+      lib/levanter/tests/grug/test_grugformer_moe.py -q -n 0 -k source_push
+    ```
+  - Iris summary:
+    - State: `succeeded`
+    - Task count: `1`
+    - Exit code: `0`
+    - Duration: `136904 ms`
+    - Failure count: `0`
+    - Preemption count: `0`
+  - Pytest result:
+    - `6 passed, 19 deselected, 1 warning in 111.01s`.
+- Interpretation:
+  - The H100 source-push stage coverage now includes `topk=2` and `topk=4` source-combine reference checks, plus the
+    small EP=2 W13/W2 round-trip case and the full EP=8 stage case.
+  - This is a coverage/proof-strength patch only; it does not change kernel behavior or performance.

@@ -759,8 +759,12 @@ def test_source_push_forward_matches_public_ep_backends_on_h100():
         assert float(np.mean(diff)) <= 0.002
 
 
-@pytest.mark.parametrize("ep_size", [2, 8], ids=["ep2", "ep8"])
-def test_source_push_stage_kernels_match_references_on_h100(ep_size):
+@pytest.mark.parametrize(
+    ("ep_size", "topk"),
+    [(2, 2), (2, 4), (8, 2)],
+    ids=["ep2_topk2", "ep2_topk4", "ep8_topk2"],
+)
+def test_source_push_stage_kernels_match_references_on_h100(ep_size, topk):
     _skip_without_h100x8()
 
     config = PushInboxConfig(
@@ -780,7 +784,7 @@ def test_source_push_stage_kernels_match_references_on_h100(ep_size):
         send_pipeline_depth=1,
         routing="balanced",
         tokens_per_rank=64,
-        topk=2,
+        topk=topk,
         capacity_factor=1.25,
     )
 
