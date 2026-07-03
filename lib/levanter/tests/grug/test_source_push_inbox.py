@@ -11,6 +11,7 @@ import numpy as np
 import pytest
 
 import levanter.grug._moe.source_push_inbox as source_push_inbox
+import levanter.grug._moe.source_push_w2_return as source_push_w2_return
 from levanter.grug._moe.source_push_inbox_profiles import (
     SOURCE_PUSH_PROFILE_STABLE_216,
     SOURCE_PUSH_PROFILES,
@@ -20,6 +21,7 @@ from levanter.grug._moe.source_push_inbox_profiles import (
 
 SCRIPT_PATH = Path(__file__).resolve().parents[2] / "scripts" / "bench" / "bench_source_push_inbox.py"
 REPRO_SCRIPT_PATH = Path(__file__).resolve().parents[2] / "scripts" / "bench" / "repro_source_push_inbox_queue.py"
+W2_SCRIPT_PATH = Path(__file__).resolve().parents[2] / "scripts" / "bench" / "bench_source_push_w2_return.py"
 SCRIPT_SPEC = importlib.util.spec_from_file_location("bench_source_push_inbox", SCRIPT_PATH)
 assert SCRIPT_SPEC is not None
 source_push_cli = importlib.util.module_from_spec(SCRIPT_SPEC)
@@ -357,6 +359,121 @@ def test_source_push_reference_hidden_uses_metadata_row_start():
     )
 
 
+def test_source_push_w2_destination_return_reorders_to_source_queue():
+    config = source_push_inbox.PushInboxConfig(
+        ep_size=3,
+        entries_per_rank=1,
+        hidden_dim=1,
+        intermediate_dim=1,
+        block_m=1,
+        block_k=1,
+        block_n=1,
+    )
+    return_by_destination = np.zeros((3, 3, 1, 1, 1), dtype=np.float32)
+    for dst in range(config.ep_size):
+        for src_ordinal in range(config.ep_size):
+            return_by_destination[dst, src_ordinal, 0, 0, 0] = 100 * dst + src_ordinal
+
+    source_queue = np.asarray(
+        source_push_w2_return.source_queue_from_destination_return(config, return_by_destination)
+    )
+
+    for src in range(config.ep_size):
+        for dst_ordinal in range(config.ep_size):
+            dst = (src + dst_ordinal) % config.ep_size
+            recv_src_ordinal = (src - dst) % config.ep_size
+            assert source_queue[src, dst_ordinal, 0, 0, 0] == 100 * dst + recv_src_ordinal
+
+
+def test_source_push_w2_reference_uses_recv_metadata_for_expert_major_rows():
+    config = source_push_inbox.PushInboxConfig(
+        ep_size=2,
+        entries_per_rank=2,
+        inbox_slots=1,
+        hidden_dim=3,
+        intermediate_dim=2,
+        block_m=2,
+        block_k=1,
+        block_n=1,
+        experts_per_rank=2,
+        send_worker_programs_per_peer=1,
+        worker_programs_per_peer=2,
+        tokens_per_rank=2,
+        topk=1,
+    )
+    hidden = np.arange(config.ep_size * 8 * config.intermediate_dim, dtype=np.float32).reshape(
+        config.ep_size, 8, config.intermediate_dim
+    )
+    recv_meta = np.zeros(
+        (config.ep_size, config.ep_size, config.entries_per_rank, source_push_inbox.META_FIELDS),
+        dtype=np.int32,
+    )
+    w_down = (
+        np.arange(
+            config.ep_size * config.experts_per_rank * config.intermediate_dim * config.hidden_dim,
+            dtype=np.float32,
+        ).reshape(config.ep_size, config.experts_per_rank, config.intermediate_dim, config.hidden_dim)
+        + 1.0
+    )
+    dst = 1
+    src_ordinal = 1
+    entry = 0
+    expert = 1
+    row_start = 3
+    recv_meta[dst, src_ordinal, entry, :] = (0, expert, row_start, config.block_m)
+
+    return_by_destination = np.asarray(
+        source_push_w2_return.reference_w2_return_by_destination(config, hidden, recv_meta, w_down)
+    )
+
+    expected = hidden[dst, row_start : row_start + config.block_m] @ w_down[dst, expert]
+    np.testing.assert_allclose(return_by_destination[dst, src_ordinal, entry], expected)
+    assert not np.any(return_by_destination[0])
+    assert not np.any(return_by_destination[dst, 0])
+
+
+def test_source_push_w2_source_plan_inputs_match_reference_layout():
+    config = source_push_inbox.PushInboxConfig(
+        ep_size=2,
+        entries_per_rank=4,
+        inbox_slots=2,
+        hidden_dim=8,
+        intermediate_dim=8,
+        block_m=2,
+        block_k=4,
+        block_n=4,
+        experts_per_rank=2,
+        send_worker_programs_per_peer=1,
+        worker_programs_per_peer=4,
+        routing="balanced",
+        tokens_per_rank=5,
+        topk=2,
+        capacity_factor=1.25,
+    )
+
+    inputs = source_push_w2_return.make_w2_return_source_plan_inputs(config)
+    return_by_destination = source_push_w2_return.reference_w2_return_by_destination(
+        config,
+        inputs.hidden,
+        inputs.recv_meta,
+        inputs.w_down,
+    )
+    source_queue = np.asarray(
+        source_push_w2_return.source_queue_from_destination_return(config, return_by_destination)
+    )
+
+    assert inputs.queue_stats["w2_input_mode"] == "source_push_plan"
+    assert inputs.hidden.shape == (config.ep_size, config.hidden_rows_per_rank, config.intermediate_dim)
+    assert source_queue.shape == (
+        config.ep_size,
+        config.ep_size,
+        config.entries_per_rank,
+        config.block_m,
+        config.hidden_dim,
+    )
+    assert np.count_nonzero(source_queue) > 0
+
+
 def test_source_push_package_private_runner_returns_structured_validation_errors():
     config = source_push_inbox.PushInboxConfig(ep_size=1)
 
@@ -374,9 +491,37 @@ def test_source_push_package_private_runner_returns_structured_validation_errors
     assert rows[0]["repeat_runs"] == 1
 
 
+def test_source_push_w2_runner_returns_structured_validation_errors():
+    config = source_push_inbox.PushInboxConfig(ep_size=1)
+
+    rows = source_push_w2_return.run_source_push_w2_return_source_plan(
+        config,
+        warmup=0,
+        steps=1,
+        repeat_runs=1,
+        check=False,
+    )
+
+    assert len(rows) == 1
+    assert rows[0]["error_type"] == "ValueError"
+    assert rows[0]["kernel"] == "source_push_w2_return"
+    assert rows[0]["repeat_runs"] == 1
+
+
 def test_source_push_repro_wrapper_imports_active_bench_cli():
     result = subprocess.run(
         [sys.executable, str(REPRO_SCRIPT_PATH), "--help"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
+def test_source_push_w2_bench_cli_imports():
+    result = subprocess.run(
+        [sys.executable, str(W2_SCRIPT_PATH), "--help"],
         check=False,
         capture_output=True,
         text=True,
