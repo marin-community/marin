@@ -9,7 +9,7 @@ mixed-FP8 ``wgrad``: the weight gradient ``drhs_e[k,n] = sum_m lhs_e[m,k]·g_e[m
 contracts the token axis M, so both operands are cast-transposed to token-major
 FP8 (activations E4M3, output-grad E5M2) and fed to ``cute_wgrad`` -- a real
 E4M3×E5M2 grouped GEMM (the TE recipe), not a bf16 fallback. ``WgradMode.BF16``
-keeps the (bf16-exact, dequantize-based) Task-2 wgrad for A/B testing.
+keeps the dequantize-based BF16 Triton wgrad as a numerically-exact control baseline.
 
 Delayed per-tensor scaling reuses ``_src/fp8.py``: ``_dual_write_q`` threads the two
 forward-operand scale/amax states through its own custom_vjp (while a single fused

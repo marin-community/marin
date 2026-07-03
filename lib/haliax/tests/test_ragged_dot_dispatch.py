@@ -10,7 +10,7 @@ import numpy as np
 import pytest
 
 from haliax.nn import ragged_dot
-from haliax.quantization import Fp8RaggedDotOp, partition_for_grad_overwrite
+from haliax.quantization import Fp8RaggedDotBackend, Fp8RaggedDotOp, partition_for_grad_overwrite
 
 ragged_dot_module = importlib.import_module("haliax.nn.ragged_dot")
 
@@ -166,8 +166,6 @@ def test_op_with_explicit_implementation_raises():
 
 def test_mosaic_backend_rejects_mixed_fp8_dtypes():
     """The MOSAIC backend keeps the stock-jaxlib same-dtype wgmma constraint."""
-    from haliax.quantization import Fp8RaggedDotBackend  # noqa: PLC0415
-
     with pytest.raises(ValueError, match="fwd_dtype == rev_dtype"):
         Fp8RaggedDotOp.init(rev_dtype=jnp.float8_e5m2, backend=Fp8RaggedDotBackend.MOSAIC)
 
@@ -195,3 +193,25 @@ def test_op_state_partitions_as_overwrite():
     # Regular parameters are not overwritten; they stay in the grad/optimizer partition.
     assert overwrites["weight"] is None
     np.testing.assert_array_equal(np.asarray(grads["weight"]), np.asarray(regular_param))
+
+
+def test_op_none_default_matches_xla_and_op_is_opt_in():
+    """op=None (the default) is numerically identical to the XLA path; FP8 is opt-in only."""
+    lhs, rhs, group_sizes = _inputs()
+    default_out = ragged_dot(lhs, rhs, group_sizes, op=None)
+    xla_out = ragged_dot(lhs, rhs, group_sizes, implementation="xla")
+    assert jnp.allclose(default_out, xla_out, rtol=1e-5, atol=1e-5)
+    # FP8 op is constructible but never activated unless explicitly passed via op=.
+    op = Fp8RaggedDotOp.init()
+    assert op.backend is Fp8RaggedDotBackend.CUTE  # default backend
+
+
+def test_fp8_op_state_partitions_as_overwrite():
+    """Fp8RaggedDotOp exposes exactly 6 dynamic leaves: 3 scales + 3 amax histories."""
+    op = Fp8RaggedDotOp.init(amax_history_length=8)
+    overwrites, grads = partition_for_grad_overwrite(op)
+    # op is an OverwriteWithGradient, so the full object lands in the overwrite partition;
+    # static fields (fwd_dtype, rev_dtype, wgrad_mode, backend) are eqx.field(static=True)
+    # and do NOT appear as pytree leaves.
+    leaves = [l for l in jax.tree_util.tree_leaves(overwrites) if l is not None]
+    assert len(leaves) == 6, f"expected 6 (3 scales + 3 amax histories), got {len(leaves)}"

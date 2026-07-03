@@ -171,8 +171,6 @@ class HopperGroupedGemmPersistentKernel:
         acc_dtype: type[cutlass.Numeric],
         tile_shape_mn: tuple[int, int],
         cluster_shape_mn: tuple[int, int],
-        swizzle_size: int,
-        raster_along_m: bool,
         tensormap_update_mode: utils.TensorMapUpdateMode = utils.TensorMapUpdateMode.SMEM,
         wgrad: bool = False,
     ):
@@ -204,8 +202,6 @@ class HopperGroupedGemmPersistentKernel:
         self.acc_dtype = acc_dtype
 
         self.cluster_shape_mn = cluster_shape_mn
-        self.swizzle_size = swizzle_size
-        self.raster_along_m = raster_along_m
         self.mma_inst_shape_mn = None
         # K dimension is deferred in _setup_attributes
         self.tile_shape_mnk = (*tile_shape_mn, 1)
@@ -1597,6 +1593,9 @@ _NUM_TENSORMAPS = HopperGroupedGemmPersistentKernel.num_tensormaps  # 3 (A, B, C
 _TENSORMAP_I64_WORDS = _TENSORMAP_BYTES // 8  # 16 Int64 words per tensormap
 # 128-bit contiguous alignment for the fp8 TMA operands (16 fp8 elems).
 _FP8_TMA_VEC = 16
+# CuTe DSL target arch for Hopper (H100) — exported via CUTE_DSL_ARCH and passed as
+# compile_options to every cutlass_call. All three uses must agree.
+_HOPPER_CUTE_ARCH = "sm_90a"
 
 
 def ensure_hopper_arch() -> None:
@@ -1608,13 +1607,13 @@ def ensure_hopper_arch() -> None:
     it. Only called on the GPU backend (guarded by ``cute_available``).
     """
     dev = jax.devices()[0]
-    cc = getattr(dev, "compute_capability", None)  # "9.0" on H100
-    if cc is None or not str(cc).startswith("9"):
+    cc = dev.compute_capability  # "9.0" on H100
+    if not str(cc).startswith("9"):
         raise RuntimeError(
             "cute_ragged_dot TMA kernel requires a Hopper (sm_90) GPU; got device "
             f"{dev} with compute_capability={cc!r}"
         )
-    os.environ.setdefault("CUTE_DSL_ARCH", "sm_90a")
+    os.environ.setdefault("CUTE_DSL_ARCH", _HOPPER_CUTE_ARCH)
 
 
 def _cluster_tile_mn(cluster_shape_mn):
@@ -1686,8 +1685,6 @@ def _build_tma_launcher(
                 cutlass.Float32,
                 _TILE_SHAPE_MN,
                 cluster_shape_mn,
-                swizzle_size=1,
-                raster_along_m=True,
                 tensormap_update_mode=utils.TensorMapUpdateMode.SMEM,
             )
             kernel(
@@ -1817,7 +1814,7 @@ def tma_grouped_gemm(a, b, group_sizes, *, out_dtype, out_scale, cluster_shape_m
         input_spec=(a_spec, b_spec, gs_spec, scale_spec, init_a_spec, init_b_spec, init_c_spec),
         output_spec=(c_spec, ps_spec, st_spec, addr_spec, tmap_spec),
         use_static_tensors=True,
-        compile_options=(cute.GPUArch("sm_90a"),),
+        compile_options=(cute.GPUArch(_HOPPER_CUTE_ARCH),),
     )
 
     init_a = jnp.zeros((1, 128, 128), a_dtype)
@@ -1849,8 +1846,6 @@ def _build_tma_wgrad_launcher(
     m_total,
     total_num_clusters,
     max_active_clusters,
-    a_bytes,
-    b_bytes,
     c_bytes,
 ):
     """Build the stream-first ``@cute.jit`` wgrad adapter launcher for ``cutlass_call``.
@@ -1892,8 +1887,6 @@ def _build_tma_wgrad_launcher(
                 cutlass.Float32,
                 _TILE_SHAPE_MN,
                 cluster_shape_mn,
-                swizzle_size=1,
-                raster_along_m=True,
                 tensormap_update_mode=utils.TensorMapUpdateMode.SMEM,
                 wgrad=True,
             )
@@ -2051,8 +2044,6 @@ def tma_grouped_wgrad(a_t, b_t, group_sizes, *, out_dtype, out_scale, cluster_sh
         m_total=m_total,
         total_num_clusters=total_num_clusters,
         max_active_clusters=max_active_clusters,
-        a_bytes=_dtype_bytes(a_dtype),
-        b_bytes=_dtype_bytes(b_dtype),
         c_bytes=_dtype_bytes(out_dtype),
     )
 
@@ -2086,7 +2077,7 @@ def tma_grouped_wgrad(a_t, b_t, group_sizes, *, out_dtype, out_scale, cluster_sh
         input_spec=(a_spec, b_spec, gs_spec, scale_spec, init_a_spec, init_b_spec, init_c_spec),
         output_spec=(c_spec, ps_spec, st_spec, addr_spec, tmap_spec, off_spec),
         use_static_tensors=True,
-        compile_options=(cute.GPUArch("sm_90a"),),
+        compile_options=(cute.GPUArch(_HOPPER_CUTE_ARCH),),
     )
 
     init_a = jnp.zeros((1, 128, 128), a_dtype)
