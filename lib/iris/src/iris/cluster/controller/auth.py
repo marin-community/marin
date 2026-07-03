@@ -38,10 +38,8 @@ logger = logging.getLogger(__name__)
 WORKER_USER = "system:worker"
 DEFAULT_JWT_TTL_SECONDS = 86400 * 30  # 30 days
 
-# Provider name reported when auth is enabled by trusted_cidrs alone (no
-# gcp/static/iap login arm). There is no `iris login` flow for it: in-network
-# callers get ambient identity by network location, everything else needs a
-# bearer token (worker JWT, API key, or a scoped endpoint token at the proxy).
+# Provider name when trusted_cidrs alone enables auth. No `iris login` flow:
+# in-network callers get identity by location, everything else needs a token.
 CIDR_PROVIDER = "cidr"
 
 # Role carried by an endpoint-scoped proxy token. It has zero RPC authority
@@ -51,9 +49,7 @@ ENDPOINT_TOKEN_ROLE = "endpoint"
 # Scope claim marking a token as endpoint-scoped; verify() surfaces its aud as
 # the identity's audience only when this scope is present.
 ENDPOINT_TOKEN_SCOPE = "proxy"
-# Default lifetime of a minted endpoint token when the caller requests none.
 DEFAULT_ENDPOINT_TOKEN_TTL_SECONDS = 3600  # 1 hour
-# Hard ceiling on a requested endpoint-token TTL.
 MAX_ENDPOINT_TOKEN_TTL_SECONDS = 86400  # 24 hours
 
 
@@ -275,8 +271,6 @@ class JwtTokenManager:
 
         self._maybe_touch(jti)
 
-        # A scoped proxy token carries its endpoint wire name in aud; any other
-        # token is a full identity (audience=None).
         audience = payload.get("aud") if payload.get("scope") == ENDPOINT_TOKEN_SCOPE else None
         return VerifiedIdentity(
             user_id=payload["sub"],
@@ -344,18 +338,20 @@ class ControllerAuth:
 
 
 def request_auth_policy(auth: ControllerAuth | None) -> RequestAuthPolicy:
-    """Build the request-auth policy the dashboard/RPC surfaces enforce.
+    """Build the request-auth policy the dashboard/RPC surfaces apply.
 
     The single place a resolved ``ControllerAuth`` becomes an authenticator
-    stack, so HTTP, RPC, and proxy gates cannot wire it differently.
+    chain, so HTTP, RPC, and proxy gates cannot wire it differently. With no
+    provider (null-auth) the chain is permissive — every request is admitted,
+    but a worker JWT still attributes the caller.
     """
-    if auth is None:
-        return RequestAuthPolicy()
-    return RequestAuthPolicy.from_verifiers(
+    if auth is None or auth.provider is None:
+        return RequestAuthPolicy.permissive(verifier=auth.verifier if auth else None)
+    return RequestAuthPolicy.enforcing(
         verifier=auth.verifier,
-        optional=auth.optional,
         iap_assertion_verifier=auth.iap_assertion_verifier,
         trusted_cidrs=auth.trusted_cidrs,
+        optional=auth.optional,
     )
 
 

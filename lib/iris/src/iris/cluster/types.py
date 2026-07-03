@@ -29,7 +29,7 @@ from rigging.timing import Timestamp
 
 from iris.cluster.setup_scripts import cuda_toolchain_setup_script, default_setup_script, setup_is_quiet, wants_gpu_extra
 from iris.cluster.tpu_topology import get_tpu_topology
-from iris.rpc import job_pb2
+from iris.rpc import controller_pb2, job_pb2
 
 
 class AcceleratorType(StrEnum):
@@ -872,6 +872,7 @@ def is_task_finished(state: int) -> bool:
 
 JobState = job_pb2.JobState
 TaskState = job_pb2.TaskState
+EndpointAccess = controller_pb2.Controller.EndpointAccess
 
 
 # TPU topology table and lookup helpers live in iris.cluster.tpu_topology so

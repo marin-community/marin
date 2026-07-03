@@ -13,7 +13,6 @@ from iris.cluster.bundle import BundleStore
 from iris.cluster.config import AuthConfig
 from iris.cluster.controller import reads, writes
 from iris.cluster.controller.auth import (
-    CIDR_PROVIDER,
     WORKER_USER,
     JwtTokenManager,
     _get_or_create_signing_key,
@@ -28,25 +27,23 @@ from iris.cluster.controller.auth import (
 )
 from iris.cluster.controller.backend import BackendCapability
 from iris.cluster.controller.dashboard import (
+    _UNAUTHENTICATED_RPCS,
     ControllerDashboard,
-    _DashboardAuthInterceptor,
-    _RouteAuthMiddleware,
     _SubdomainProxyMiddleware,
-    requires_auth,
 )
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.endpoint_service import EndpointServiceImpl
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.types import DEFAULT_BACKEND_ID
-from iris.rpc.auth import DASHBOARD_ROLE, SESSION_COOKIE
+from iris.rpc.auth import DASHBOARD_ROLE, SESSION_COOKIE, authorize_method
 from rigging.server_auth import (
-    AuthRequest,
+    PolicyAuthInterceptor,
     RequestAuthPolicy,
+    RouteAuthMiddleware,
     StaticTokenVerifier,
     VerifiedIdentity,
-    build_request_authenticators,
     get_verified_identity,
-    resolve_auth,
+    requires_auth,
 )
 from rigging.timing import Timestamp
 from sqlalchemy import text
@@ -106,7 +103,7 @@ def authed_client(service, verifier):
     dashboard = ControllerDashboard(
         service,
         auth_provider="gcp",
-        auth_policy=RequestAuthPolicy.from_verifiers(verifier=verifier),
+        auth_policy=RequestAuthPolicy.enforcing(verifier=verifier),
     )
     return TestClient(dashboard.app)
 
@@ -231,8 +228,8 @@ def test_rpc_routes_skip_middleware(authed_client):
     assert resp.status_code != 401
 
 
-def test_no_middleware_when_auth_disabled(noauth_client):
-    """All routes accessible when auth is not configured."""
+def test_all_routes_accessible_when_auth_disabled(noauth_client):
+    """The permissive chain admits every route when auth is not configured."""
     for path in ["/job/123", "/worker/456", "/health", "/auth/config"]:
         assert noauth_client.get(path).status_code == 200
 
@@ -366,10 +363,8 @@ def test_cidr_only_auth_config_enables_request_auth(db: ControllerDB):
     through the same policy.
     """
     auth = create_controller_auth(AuthConfig(trusted_cidrs=["10.0.0.0/8"]), db=db)
-    assert auth.provider == CIDR_PROVIDER
-
     policy = request_auth_policy(auth)
-    assert policy.request_auth_enabled
+    assert not policy.allows_anonymous
 
     inside = policy.resolve(None, client_address="10.1.2.3:5555", headers={})
     assert inside is not None
@@ -397,7 +392,7 @@ def optional_auth_client(service, verifier):
     dashboard = ControllerDashboard(
         service,
         auth_provider="static",
-        auth_policy=RequestAuthPolicy.from_verifiers(verifier=verifier, optional=True),
+        auth_policy=RequestAuthPolicy.enforcing(verifier=verifier, optional=True),
     )
     return TestClient(dashboard.app)
 
@@ -452,40 +447,7 @@ def test_auth_config_reports_not_optional(authed_client):
     assert data["optional"] is False
 
 
-# -- resolve_auth parity: gRPC and HTTP agree on allow/deny ----------------
-
-
-@pytest.mark.parametrize(
-    "token, optional, should_succeed",
-    [
-        (None, False, False),
-        (None, True, True),
-        (_TEST_TOKEN, False, True),
-        (_TEST_TOKEN, True, True),
-        ("bad-token", False, False),
-        ("bad-token", True, False),
-    ],
-    ids=[
-        "no-token-required",
-        "no-token-optional",
-        "valid-required",
-        "valid-optional",
-        "invalid-required",
-        "invalid-optional",
-    ],
-)
-def test_resolve_auth_policy(verifier, token, optional, should_succeed):
-    """resolve_auth encodes the single auth policy used by both gRPC and HTTP."""
-    if should_succeed:
-        identity = resolve_auth(AuthRequest(token=token, headers={}), build_request_authenticators(verifier), optional)
-        if token == _TEST_TOKEN:
-            assert identity is not None
-            assert identity.user_id == _TEST_USER
-        else:
-            assert identity is None
-    else:
-        with pytest.raises(ValueError):
-            resolve_auth(AuthRequest(token=token, headers={}), build_request_authenticators(verifier), optional)
+# -- Route middleware parity: HTTP agrees with the auth chain ----------------
 
 
 @pytest.mark.parametrize(
@@ -507,11 +469,11 @@ def test_resolve_auth_policy(verifier, token, optional, should_succeed):
         "invalid-optional",
     ],
 )
-def test_route_auth_middleware_uses_resolve_auth(service, verifier, token, optional, should_allow):
-    """_RouteAuthMiddleware applies the same resolve_auth policy as the gRPC interceptor.
+def test_route_auth_middleware_matches_rpc_policy(service, verifier, token, optional, should_allow):
+    """RouteAuthMiddleware applies the same auth chain as the RPC interceptor.
 
     We build a dashboard with a @requires_auth route injected and verify it
-    agrees with resolve_auth for every (token, optional) combination.
+    agrees with the chain for every (token, optional) combination.
     """
 
     @requires_auth
@@ -521,12 +483,12 @@ def test_route_auth_middleware_uses_resolve_auth(service, verifier, token, optio
     dashboard = ControllerDashboard(
         service,
         auth_provider="static",
-        auth_policy=RequestAuthPolicy.from_verifiers(verifier=verifier, optional=optional),
+        auth_policy=RequestAuthPolicy.enforcing(verifier=verifier, optional=optional),
     )
     # Inject a @requires_auth route. Walk down to the Starlette router so the
     # new route participates in route matching.
     app = dashboard.app
-    while isinstance(app, _SubdomainProxyMiddleware | _RouteAuthMiddleware):
+    while isinstance(app, _SubdomainProxyMiddleware | RouteAuthMiddleware):
         app = app._app
     app.router.routes.insert(0, Route("/test-protected", _protected))
 
@@ -543,6 +505,17 @@ def test_route_auth_middleware_uses_resolve_auth(service, verifier, token, optio
 
 
 # -- IAP implicit dashboard role through the live auth interceptor ------------
+
+
+def _dashboard_interceptor(**verifiers):
+    """The interceptor exactly as the dashboard wires it (RPC exemptions + RBAC)."""
+    policy = RequestAuthPolicy.enforcing(verifier=StaticTokenVerifier({}), **verifiers)
+    return PolicyAuthInterceptor(
+        policy,
+        cookie_name=SESSION_COOKIE,
+        unauthenticated_methods=_UNAUTHENTICATED_RPCS,
+        authorize=authorize_method,
+    )
 
 
 class _StubAssertionVerifier:
@@ -573,11 +546,7 @@ def _assertion_ctx(method_name: str):
 
 
 def test_dashboard_interceptor_allows_read_for_iap_browser():
-    interceptor = _DashboardAuthInterceptor(
-        RequestAuthPolicy.from_verifiers(
-            verifier=StaticTokenVerifier({}), optional=False, iap_assertion_verifier=_StubAssertionVerifier()
-        )
-    )
+    interceptor = _dashboard_interceptor(iap_assertion_verifier=_StubAssertionVerifier())
     seen = []
 
     def handler(_req, _ctx):
@@ -590,11 +559,7 @@ def test_dashboard_interceptor_allows_read_for_iap_browser():
 
 
 def test_dashboard_interceptor_denies_mutation_for_iap_browser():
-    interceptor = _DashboardAuthInterceptor(
-        RequestAuthPolicy.from_verifiers(
-            verifier=StaticTokenVerifier({}), optional=False, iap_assertion_verifier=_StubAssertionVerifier()
-        )
-    )
+    interceptor = _dashboard_interceptor(iap_assertion_verifier=_StubAssertionVerifier())
     ran = []
 
     def handler(_req, _ctx):
@@ -627,11 +592,7 @@ def test_dashboard_interceptor_allows_mutation_for_provisioned_iap_admin():
     # The point of resolving the IAP identity to its real role: a provisioned
     # admin behind IAP (no Iris JWT) resolves to the admin role and so reaches a
     # gated mutation that the read-only dashboard role would be denied.
-    interceptor = _DashboardAuthInterceptor(
-        RequestAuthPolicy.from_verifiers(
-            verifier=StaticTokenVerifier({}), optional=False, iap_assertion_verifier=_RoleAssertionVerifier("admin")
-        )
-    )
+    interceptor = _dashboard_interceptor(iap_assertion_verifier=_RoleAssertionVerifier("admin"))
     seen = []
 
     def handler(_req, _ctx):
@@ -648,13 +609,7 @@ def test_dashboard_interceptor_login_reachable_for_unprovisioned_iap_browser():
     # even an unprovisioned IAP caller (read-only dashboard role) reaches the
     # Login handler — `iris login` is never blocked by the dashboard gate. Guards
     # against accidentally moving the role check ahead of that exemption.
-    interceptor = _DashboardAuthInterceptor(
-        RequestAuthPolicy.from_verifiers(
-            verifier=StaticTokenVerifier({}),
-            optional=False,
-            iap_assertion_verifier=_RoleAssertionVerifier(DASHBOARD_ROLE),
-        )
-    )
+    interceptor = _dashboard_interceptor(iap_assertion_verifier=_RoleAssertionVerifier(DASHBOARD_ROLE))
     result = interceptor.intercept_unary_sync(lambda _req, _ctx: "ok", "req", _assertion_ctx("Login"))
     assert result == "ok"
 

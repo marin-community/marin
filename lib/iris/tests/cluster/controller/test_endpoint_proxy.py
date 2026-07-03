@@ -25,9 +25,9 @@ from iris.cluster.controller.endpoint_proxy import (
     EndpointProxy,
     _rewrite_location,
 )
-from iris.cluster.controller.endpoint_service import ResolvedEndpoint, wire_name_candidates
-from iris.cluster.controller.projections.endpoints import EndpointAccess
+from iris.cluster.controller.endpoint_service import ResolvedEndpoint, proxy_name_to_endpoint_names
 from iris.cluster.dashboard_common import on_shutdown
+from iris.cluster.types import EndpointAccess
 from iris.managed_thread import ThreadContainer
 from rigging.timing import Duration, ExponentialBackoff
 from starlette.applications import Starlette
@@ -684,7 +684,7 @@ class _DictEndpointService:
 
     Backs ``resolve_endpoint_row`` with the same ``name -> address`` dict the
     proxy resolves against, delegating the wire-name decode to production's
-    ``wire_name_candidates`` so it cannot drift. All endpoints resolve as
+    ``proxy_name_to_endpoint_names`` so it cannot drift. All endpoints resolve as
     PRIVATE; the subdomain tests run with the default (auth-disabled) policy,
     so the access mode does not gate — they exercise dispatch, not
     authorization.
@@ -694,10 +694,10 @@ class _DictEndpointService:
         self._endpoints = endpoints
 
     def resolve_endpoint_row(self, encoded_name: str) -> ResolvedEndpoint | None:
-        for name in wire_name_candidates(encoded_name):
+        for name in proxy_name_to_endpoint_names(encoded_name):
             address = self._endpoints.get(name)
             if address is not None:
-                return ResolvedEndpoint(name=name, address=address, access=EndpointAccess.PRIVATE)
+                return ResolvedEndpoint(name=name, address=address, access=EndpointAccess.ENDPOINT_ACCESS_PRIVATE)
         return None
 
 

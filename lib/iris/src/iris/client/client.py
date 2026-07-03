@@ -45,10 +45,10 @@ from iris.cluster.constraints import (
     merge_constraints,
     region_constraint,
 )
-from iris.cluster.controller.projections.endpoints import EndpointAccess
 from iris.cluster.log_keys import build_log_source
 from iris.cluster.types import (
     CoschedulingConfig,
+    EndpointAccess,
     Entrypoint,
     EnvironmentSpec,
     JobName,
@@ -319,7 +319,7 @@ class EndpointRegistry(Protocol):
         name: str,
         address: str,
         metadata: dict[str, str] | None = None,
-        access: EndpointAccess = EndpointAccess.PRIVATE,
+        access: int = EndpointAccess.ENDPOINT_ACCESS_PRIVATE,
     ) -> str:
         """Register an endpoint for actor discovery.
 
@@ -361,7 +361,7 @@ class NamespacedEndpointRegistry:
         name: str,
         address: str,
         metadata: dict[str, str] | None = None,
-        access: EndpointAccess = EndpointAccess.PRIVATE,
+        access: int = EndpointAccess.ENDPOINT_ACCESS_PRIVATE,
     ) -> str:
         """Register an endpoint, auto-prefixing with namespace.
 

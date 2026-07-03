@@ -16,7 +16,7 @@ disk.
 import logging
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
-from enum import IntEnum, StrEnum
+from enum import StrEnum
 from threading import RLock
 from typing import ClassVar
 
@@ -27,7 +27,7 @@ from iris.cluster.controller import db
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.projections import PROJECTIONS
 from iris.cluster.controller.schema import endpoints_table, tasks_table
-from iris.cluster.types import TERMINAL_TASK_STATES, JobName
+from iris.cluster.types import TERMINAL_TASK_STATES, EndpointAccess, JobName
 
 
 @dataclass(frozen=True)
@@ -39,22 +39,9 @@ class EndpointQuery:
     limit: int | None = None
 
 
-class EndpointAccess(IntEnum):
-    """Who may reach an endpoint through the controller's /proxy route.
-
-    Values mirror the ``Controller.EndpointAccess`` proto enum (the wire-only
-    ``UNSPECIFIED = 0`` sentinel is normalized to ``PRIVATE`` at the boundary
-    and never stored). A NULL ``access`` column also reads as ``PRIVATE``.
-    """
-
-    PRIVATE = 1  # a full cluster identity is required (today's behavior)
-    PUBLIC = 2  # no auth on /proxy/<name>/*
-    BEARER = 3  # a scoped endpoint token (or a full cluster identity)
-
-
-def access_from_db(value: int | None) -> EndpointAccess:
-    """Decode a stored ``access`` column (NULL ⇒ PRIVATE) to an EndpointAccess."""
-    return EndpointAccess.PRIVATE if value is None else EndpointAccess(value)
+def access_from_db(value: int | None) -> int:
+    """Decode a stored ``access`` column (NULL ⇒ PRIVATE) to an EndpointAccess value."""
+    return EndpointAccess.ENDPOINT_ACCESS_PRIVATE if value is None else value
 
 
 @dataclass(frozen=True, slots=True)
@@ -70,7 +57,8 @@ class EndpointRow:
     # Lease expiry; ``None`` never expires (only fixtures that skip leasing).
     # A passed deadline is hidden from reads and swept by ``sweep_expired``.
     lease_deadline: Timestamp | None = None
-    access: EndpointAccess = EndpointAccess.PRIVATE
+    # A Controller.EndpointAccess value; who may reach this endpoint via /proxy.
+    access: int = EndpointAccess.ENDPOINT_ACCESS_PRIVATE
 
     def is_expired(self, now: Timestamp) -> bool:
         return self.lease_deadline is not None and self.lease_deadline <= now
@@ -289,7 +277,7 @@ class EndpointsProjection:
                 "metadata_json": endpoint.metadata,
                 "registered_at_ms": endpoint.registered_at,
                 "lease_deadline_ms": endpoint.lease_deadline,
-                "access": int(endpoint.access),
+                "access": endpoint.access,
             },
         )
 

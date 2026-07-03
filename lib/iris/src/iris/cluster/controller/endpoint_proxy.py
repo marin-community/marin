@@ -58,7 +58,7 @@ from starlette.background import BackgroundTask
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response, StreamingResponse
 
-from iris.cluster.controller.endpoint_service import wire_name_candidates
+from iris.cluster.controller.endpoint_service import proxy_name_to_endpoint_names
 
 logger = logging.getLogger(__name__)
 
@@ -260,7 +260,7 @@ class EndpointProxy:
         injected ``resolve`` callable, using the same decode.
         """
         if address is None:
-            slashed, bare = wire_name_candidates(encoded_name)
+            slashed, bare = proxy_name_to_endpoint_names(encoded_name)
             address = self._resolve(slashed) or self._resolve(bare)
         if address is None:
             logger.warning("Proxy %s %s -> no endpoint %r", request.method, request.url.path, encoded_name)

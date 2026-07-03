@@ -57,11 +57,9 @@ class Controller(_message.Message):
     WORKER_SORT_FIELD_DEVICE_TYPE: Controller.WorkerSortField
     class EndpointAccess(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
         __slots__ = ()
-        ENDPOINT_ACCESS_UNSPECIFIED: _ClassVar[Controller.EndpointAccess]
         ENDPOINT_ACCESS_PRIVATE: _ClassVar[Controller.EndpointAccess]
         ENDPOINT_ACCESS_PUBLIC: _ClassVar[Controller.EndpointAccess]
         ENDPOINT_ACCESS_BEARER: _ClassVar[Controller.EndpointAccess]
-    ENDPOINT_ACCESS_UNSPECIFIED: Controller.EndpointAccess
     ENDPOINT_ACCESS_PRIVATE: Controller.EndpointAccess
     ENDPOINT_ACCESS_PUBLIC: Controller.EndpointAccess
     ENDPOINT_ACCESS_BEARER: Controller.EndpointAccess

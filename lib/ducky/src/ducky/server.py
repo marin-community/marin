@@ -32,7 +32,8 @@ from pathlib import Path
 import uvicorn
 from iris.client.client import iris_ctx
 from iris.cluster.client.job_info import get_job_info
-from iris.cluster.dashboard_common import on_shutdown, public, requires_auth
+from iris.cluster.dashboard_common import on_shutdown
+from rigging.server_auth import public, requires_auth
 from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse

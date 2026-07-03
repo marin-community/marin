@@ -22,12 +22,11 @@ from rigging.timing import Duration, Timestamp
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.projections.endpoints import (
     AddEndpointOutcome,
-    EndpointAccess,
     EndpointQuery,
     EndpointRow,
     EndpointsProjection,
 )
-from iris.cluster.types import JobName
+from iris.cluster.types import EndpointAccess, JobName
 from iris.rpc import controller_pb2, job_pb2
 from iris.time_proto import duration_from_proto, duration_to_proto
 
@@ -44,43 +43,26 @@ ENDPOINT_LEASE = Duration.from_hours(120)
 MIN_ENDPOINT_LEASE = Duration.from_minutes(3)
 
 
-def _access_from_proto(access: int) -> EndpointAccess:
-    """Normalize a proto EndpointAccess to a stored EndpointAccess.
-
-    The wire-only ``UNSPECIFIED = 0`` sentinel registers as ``PRIVATE`` (today's
-    cluster-identity-required default), so an old client that never sets the
-    field keeps the safe behavior.
-    """
-    if access == controller_pb2.Controller.ENDPOINT_ACCESS_UNSPECIFIED:
-        return EndpointAccess.PRIVATE
-    return EndpointAccess(access)
-
-
-def wire_name_candidates(encoded_name: str) -> tuple[str, str]:
-    """Decode a proxy ``encoded_name`` into wire-name lookup candidates.
+def proxy_name_to_endpoint_names(proxy_name: str) -> tuple[str, str]:
+    """Decode a proxy ``.``-encoded name into endpoint-name lookup candidates.
 
     Proxy URLs and subdomains encode ``/`` as ``.`` (``user.jobX.dash`` ->
-    ``/user/jobX/dash``); the encode side lives in the dashboard and the actor
-    ``ProxyResolver``. Iris wire names start with ``/``, so the slash-prefixed
-    form is tried first; the bare form covers endpoints registered without a
-    leading slash.
+    ``/user/jobX/dash``). Endpoint names start with ``/``, so the
+    slash-prefixed form is tried first; the bare form covers endpoints
+    registered without a leading slash.
     """
-    slashed = encoded_name.replace(".", "/")
+    slashed = proxy_name.replace(".", "/")
     return f"/{slashed}", slashed
 
 
 @dataclass(frozen=True, slots=True)
 class ResolvedEndpoint:
-    """A proxy request's resolved target: canonical wire name, address, access.
-
-    Produced by :meth:`EndpointServiceImpl.resolve_endpoint_row` in one lookup
-    so the proxy's authorization (access mode + ``aud`` compare against ``name``)
-    and its forwarding (``address``) can never disagree.
-    """
+    """A proxy request's resolved target: canonical endpoint name, address, and access mode."""
 
     name: str
     address: str
-    access: EndpointAccess
+    # A Controller.EndpointAccess value.
+    access: int
 
 
 class EndpointServiceImpl:
@@ -147,7 +129,7 @@ class EndpointServiceImpl:
             metadata=dict(request.metadata),
             registered_at=Timestamp.now(),
             lease_deadline=Timestamp.now().add(granted),
-            access=_access_from_proto(request.access),
+            access=request.access,
         )
 
         # Validation runs inside the writer transaction in
@@ -212,7 +194,7 @@ class EndpointServiceImpl:
                     address=e.address,
                     task_id=e.task_id.to_wire(),
                     metadata=e.metadata,
-                    access=int(e.access),
+                    access=e.access,
                 )
                 for e in endpoints
             ]
@@ -235,9 +217,9 @@ class EndpointServiceImpl:
 
         Used for owner authorization on token minting; ``/system/`` endpoints
         (no owning task) are intentionally not returned. Accepts either the
-        ``/``-prefixed wire name or the bare form.
+        ``/``-prefixed name or the bare form.
         """
-        for candidate in wire_name_candidates(name):
+        for candidate in proxy_name_to_endpoint_names(name):
             row = self._endpoints.resolve(candidate)
             if row is not None:
                 return row
@@ -246,19 +228,17 @@ class EndpointServiceImpl:
     def resolve_endpoint_row(self, encoded_name: str) -> ResolvedEndpoint | None:
         """Resolve a proxy request's ``encoded_name`` to its target, or None.
 
-        Applies :func:`wire_name_candidates` (the same decode the proxy's
-        forwarding path uses), returning the endpoint's access mode, address,
-        and canonical wire name in a single lookup so authorization and
-        forwarding cannot drift. ``/system/`` endpoints come from the in-memory
-        map, which has no access column, and always resolve as ``PRIVATE``.
+        One lookup returns access mode, address, and canonical name so
+        authorization and forwarding cannot drift. ``/system/`` endpoints
+        always resolve as ``PRIVATE``.
         """
-        for name in wire_name_candidates(encoded_name):
+        for name in proxy_name_to_endpoint_names(encoded_name):
             row = self._endpoints.resolve(name)
             if row is not None:
                 return ResolvedEndpoint(name=row.name, address=row.address, access=row.access)
             address = self._system_endpoints.get(name)
             if address is not None:
-                return ResolvedEndpoint(name=name, address=address, access=EndpointAccess.PRIVATE)
+                return ResolvedEndpoint(name=name, address=address, access=EndpointAccess.ENDPOINT_ACCESS_PRIVATE)
         return None
 
     def _list_system_endpoints(self, prefix: str, *, exact: bool) -> controller_pb2.Controller.ListEndpointsResponse:

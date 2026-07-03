@@ -31,10 +31,9 @@ from iris.client import IrisClient, Job
 from iris.cluster.composer import provider_bundle
 from iris.cluster.config import load_config
 from iris.cluster.constraints import region_constraint
-from iris.cluster.controller.projections.endpoints import EndpointAccess
 from iris.cluster.local_cluster import LocalCluster
 from iris.cluster.tpu_topology import get_tpu_topology
-from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec, is_job_finished, tpu_device
+from iris.cluster.types import EndpointAccess, Entrypoint, EnvironmentSpec, ResourceSpec, is_job_finished, tpu_device
 from rigging.config_discovery import resolve_cluster_config
 from rigging.connect import proxy_path
 from rigging.timing import Duration
@@ -233,7 +232,7 @@ def main(
     if "." in endpoint:
         raise click.ClickException("--endpoint-name cannot contain '.' (it breaks controller proxy routing).")
 
-    endpoint_access = EndpointAccess[access.upper()]
+    endpoint_access = EndpointAccess.Value(f"ENDPOINT_ACCESS_{access.upper()}")
 
     config = QuickServeConfig(
         model=model,
@@ -289,7 +288,7 @@ def main(
 
             if not wait:
                 click.echo("Submitted. Open the dashboard from the Iris UI once vLLM has booted.")
-                if endpoint_access is EndpointAccess.BEARER:
+                if endpoint_access == EndpointAccess.ENDPOINT_ACCESS_BEARER:
                     click.echo("Re-run with --wait once vLLM registers to mint the off-cluster bearer token.")
                 return
 
@@ -301,7 +300,7 @@ def main(
             if dashboard_url:
                 click.echo(f"        share:     {dashboard_url.rstrip('/')}{proxy_path(endpoint)}/")
             click.echo("")
-            if endpoint_access is EndpointAccess.BEARER:
+            if endpoint_access == EndpointAccess.ENDPOINT_ACCESS_BEARER:
                 # Mint after the endpoint registers (the controller resolves the row
                 # for owner authz), so the token is bound to a live endpoint.
                 _mint_and_print_bearer_access(client, endpoint, dashboard_url, timeout_hours)

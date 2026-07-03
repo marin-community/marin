@@ -126,15 +126,14 @@ Add an enum to the endpoint proto and persist it on the endpoint row.
 ```proto
 // controller.proto, inside message Controller
 enum EndpointAccess {
-  ENDPOINT_ACCESS_UNSPECIFIED = 0;  // treated as PRIVATE
-  ENDPOINT_ACCESS_PRIVATE = 1;      // cluster identity required (today's behavior)
-  ENDPOINT_ACCESS_PUBLIC  = 2;      // no auth on /proxy/<name>/*
-  ENDPOINT_ACCESS_BEARER  = 3;      // scoped endpoint token (or full cluster identity)
+  ENDPOINT_ACCESS_PRIVATE = 0;  // cluster identity required (the default)
+  ENDPOINT_ACCESS_PUBLIC  = 1;  // no auth on /proxy/<name>/*
+  ENDPOINT_ACCESS_BEARER  = 2;  // scoped endpoint token (or full cluster identity)
 }
 
 message RegisterEndpointRequest {
   // … existing fields 1-7 …
-  EndpointAccess access = 8;        // default UNSPECIFIED → PRIVATE
+  EndpointAccess access = 8;    // unset = PRIVATE (proto3 zero value)
 }
 message Endpoint { /* … fields 1-5 … */ EndpointAccess access = 6; }
 ```

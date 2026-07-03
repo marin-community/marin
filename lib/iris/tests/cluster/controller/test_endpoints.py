@@ -20,10 +20,10 @@ from iris.cluster.client.endpoint_client import EndpointClient, EndpointLeaseRen
 from iris.cluster.config import AuthConfig
 from iris.cluster.controller.auth import MAX_ENDPOINT_TOKEN_TTL_SECONDS, create_controller_auth
 from iris.cluster.controller.endpoint_service import ENDPOINT_LEASE, MIN_ENDPOINT_LEASE, EndpointServiceImpl
-from iris.cluster.controller.projections.endpoints import EndpointAccess, EndpointRow, EndpointsProjection
+from iris.cluster.controller.projections.endpoints import EndpointRow, EndpointsProjection
 from iris.cluster.controller.schema import tasks_table
 from iris.cluster.controller.service import ControllerServiceImpl
-from iris.cluster.types import JobName, TaskAttempt
+from iris.cluster.types import EndpointAccess, JobName, TaskAttempt
 from iris.rpc import controller_pb2, job_pb2
 from iris.time_proto import duration_to_proto
 from rigging.server_auth import VerifiedIdentity, _verified_identity
@@ -240,9 +240,9 @@ def test_register_defaults_to_private_and_persists_access(state):
         _register_with_access("/j/bearer", task, attempt, controller_pb2.Controller.ENDPOINT_ACCESS_BEARER), None
     )
 
-    assert svc.resolve_endpoint_row("j.private").access is EndpointAccess.PRIVATE
-    assert svc.resolve_endpoint_row("j.public").access is EndpointAccess.PUBLIC
-    assert svc.resolve_endpoint_row("j.bearer").access is EndpointAccess.BEARER
+    assert svc.resolve_endpoint_row("j.private").access == EndpointAccess.ENDPOINT_ACCESS_PRIVATE
+    assert svc.resolve_endpoint_row("j.public").access == EndpointAccess.ENDPOINT_ACCESS_PUBLIC
+    assert svc.resolve_endpoint_row("j.bearer").access == EndpointAccess.ENDPOINT_ACCESS_BEARER
 
 
 def test_resolve_endpoint_row_decodes_slash_names(state):
@@ -267,7 +267,11 @@ def test_resolve_endpoint_row_decodes_slash_names(state):
 
     resolved = svc.resolve_endpoint_row("serve.foo")
     assert resolved is not None
-    assert (resolved.name, resolved.address, resolved.access) == ("/serve/foo", "up:8000", EndpointAccess.BEARER)
+    assert (resolved.name, resolved.address, resolved.access) == (
+        "/serve/foo",
+        "up:8000",
+        EndpointAccess.ENDPOINT_ACCESS_BEARER,
+    )
     assert svc.resolve_endpoint_row("nope.missing") is None
 
 
@@ -276,7 +280,7 @@ def test_resolve_endpoint_row_system_endpoint_is_private(state):
     svc.register_system_endpoint("/system/log-server", "logs:9000")
     resolved = svc.resolve_endpoint_row("system.log-server")
     assert resolved is not None
-    assert resolved.access is EndpointAccess.PRIVATE
+    assert resolved.access == EndpointAccess.ENDPOINT_ACCESS_PRIVATE
     assert resolved.address == "logs:9000"
 
 

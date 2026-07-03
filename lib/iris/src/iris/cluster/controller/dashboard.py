@@ -14,13 +14,16 @@ All data fetching happens via Connect RPC calls from the browser JavaScript.
 The Python layer only serves HTML shells; all rendering is done client-side.
 
 Auth model:
+- One RequestAuthPolicy chain is applied everywhere, unconditionally: the
+  RPC mounts through PolicyAuthInterceptor, the HTTP routes through
+  RouteAuthMiddleware, and the /proxy routes through their per-endpoint
+  access mode (_authorize_proxy). Null-auth is a permissive chain, not a
+  bypass, so no surface branches on whether auth is "on".
 - HTML shell routes are public — they contain no data, just the SPA skeleton.
-- RPC routes have their own auth interceptor chain (AuthInterceptor / NullAuthInterceptor).
 - Bundle downloads use capability URLs (SHA-256 hash = 256 bits of entropy).
 - Auth endpoints (/auth/*) handle session management (CSRF-protected).
-- Each route handler is annotated @public or @requires_auth. The middleware
-  denies any route that lacks an annotation, so forgetting to annotate a new
-  route is a safe failure.
+- Each route handler is annotated @public or @requires_auth; an unannotated
+  route is denied, so forgetting to annotate a new route is a safe failure.
 """
 
 import functools
@@ -29,36 +32,33 @@ import os
 from urllib.parse import urlparse
 
 import httpx
-from connectrpc.code import Code
-from connectrpc.errors import ConnectError
 from rigging.server_auth import (
-    NullAuthInterceptor,
+    PolicyAuthInterceptor,
     RequestAuthPolicy,
+    RouteAuthMiddleware,
     extract_bearer_token,
-    identity_scope,
+    public,
+    requires_auth,
 )
 from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
-from starlette.routing import Match, Mount, Route
+from starlette.routing import Mount, Route
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from iris.cluster.controller import endpoint_proxy
 from iris.cluster.controller.backend import backend_descriptor
 from iris.cluster.controller.endpoint_proxy import EndpointProxy
 from iris.cluster.controller.endpoint_service import EndpointServiceImpl, ResolvedEndpoint
-from iris.cluster.controller.projections.endpoints import EndpointAccess
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.dashboard_common import (
-    _AUTH_POLICY_ATTR,
     favicon_route,
     html_shell,
     on_shutdown,
-    public,
-    requires_auth,
     static_files_mount,
 )
 from iris.cluster.endpoints import LOG_SERVER_ENDPOINT_NAME
+from iris.cluster.types import EndpointAccess
 from iris.rpc.async_adapter import AsyncServiceAdapter
 from iris.rpc.auth import SESSION_COOKIE, authorize_method
 from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
@@ -71,69 +71,11 @@ from iris.rpc.stats_service import RpcStatsService
 logger = logging.getLogger(__name__)
 
 
-def _scope_headers(scope: Scope) -> dict[str, str]:
-    """Lowercase header dict from an ASGI scope."""
-    return {k.decode().lower(): v.decode() for k, v in scope.get("headers", [])}
-
-
-def _scope_client_address(scope: Scope) -> str | None:
-    """Return the transport peer as ``host:port``, or None.
-
-    This is uvicorn's ``scope["client"]`` — the genuine peer for a direct
-    connection, or a forwarded value (port 0) when derived from
-    ``X-Forwarded-For``. ``is_trusted_loopback`` relies on that distinction.
-    """
-    client = scope.get("client")
-    if not client:
-        return None
-    return f"{client[0]}:{client[1]}"
-
-
-async def _enforce_http_auth(
-    scope: Scope,
-    receive: Receive,
-    send: Send,
-    policy: RequestAuthPolicy,
-) -> bool:
-    """Resolve auth for an ASGI scope; on failure send a 401 and return False.
-
-    On success, sets ``scope["auth_identity"]`` if a verified identity is
-    present and returns True. Used by ``_RouteAuthMiddleware`` (which runs
-    against route-annotated ``@requires_auth`` routes).
-
-    An endpoint-scoped token (``identity.audience`` set) is rejected here with
-    403: such a token is only ever valid at the per-endpoint proxy (see
-    ``_authorize_proxy``), never on a whole-dashboard ``@requires_auth`` route
-    such as ``_legacy_log_service``. This keeps ``_authorize_proxy`` the single
-    acceptor of scoped tokens and future-proofs any new ``@requires_auth`` route.
-    """
-    headers = _scope_headers(scope)
-    token = extract_bearer_token(headers, cookie_name=SESSION_COOKIE)
-    try:
-        identity = policy.resolve(
-            token,
-            client_address=_scope_client_address(scope),
-            headers=headers,
-        )
-    except ValueError:
-        response = JSONResponse({"error": "authentication required"}, status_code=401)
-        await response(scope, receive, send)
-        return False
-    if identity is not None and identity.audience is not None:
-        response = JSONResponse({"error": "endpoint-scoped token cannot access this route"}, status_code=403)
-        await response(scope, receive, send)
-        return False
-    if identity is not None:
-        scope["auth_identity"] = identity
-    return True
-
-
 def _authorize_proxy(
     request: Request,
     resolved: ResolvedEndpoint | None,
     policy: RequestAuthPolicy,
     *,
-    auth_enabled: bool,
     token: str | None = None,
 ) -> Response | None:
     """Authorize a ``/proxy`` request against its endpoint's access mode.
@@ -149,20 +91,12 @@ def _authorize_proxy(
     - ``PRIVATE`` (and unknown): a full cluster identity is required; a scoped
       token is rejected.
 
-    ``token`` overrides where the credential comes from: the URL-token fallback
-    passes the token lifted from the path; otherwise it is read from the
-    ``Authorization`` header or session cookie. ``auth_enabled`` is the
-    dashboard's own "auth is enforced" signal (an auth provider is configured
-    *and* the policy has a verifier) — the same condition that installs
-    ``_RouteAuthMiddleware``. When it is false the controller is in null-auth
-    mode (note a DB-backed null-auth controller still has a JWT verifier for
-    worker tokens, so ``policy.request_auth_enabled`` alone is not enough), so
-    every request is allowed, matching the rest of the dashboard.
+    ``token`` is the credential source: the URL-token fallback passes the token
+    lifted from the path; otherwise the ``Authorization`` header / session
+    cookie is used.
     """
-    access = resolved.access if resolved is not None else EndpointAccess.PRIVATE
-    if access is EndpointAccess.PUBLIC:
-        return None
-    if not auth_enabled:
+    access = resolved.access if resolved is not None else EndpointAccess.ENDPOINT_ACCESS_PRIVATE
+    if access == EndpointAccess.ENDPOINT_ACCESS_PUBLIC:
         return None
     headers = dict(request.headers)
     if token is None:
@@ -177,8 +111,8 @@ def _authorize_proxy(
     except ValueError:
         return JSONResponse({"error": "authentication required"}, status_code=401)
 
-    scoped = identity is not None and identity.audience is not None
-    if access is EndpointAccess.BEARER:
+    scoped = identity.audience is not None
+    if access == EndpointAccess.ENDPOINT_ACCESS_BEARER:
         if scoped and identity.audience != resolved.name:
             return JSONResponse({"error": "token not valid for this endpoint"}, status_code=403)
         return None
@@ -194,84 +128,18 @@ def _resolve_and_authorize_proxy(
     endpoint_service: EndpointServiceImpl,
     policy: RequestAuthPolicy,
     *,
-    auth_enabled: bool,
     token: str | None = None,
 ) -> tuple[ResolvedEndpoint | None, Response | None]:
-    """Resolve a proxy request's target and run the per-endpoint access check.
-
-    The shared prelude of every proxy entry point (path-style, URL-token,
-    redirect, subdomain): resolve once (access + address + wire name), then
-    apply the endpoint's access mode via :func:`_authorize_proxy`. Returns
-    ``(resolved, deny)``: when ``deny`` is not None the caller must send it and
-    stop; otherwise ``resolved`` is the target (``None`` for an unknown name,
-    which the forwarding layer answers with a 404).
+    """Resolve a proxy request's target and authorize it against the endpoint's
+    access mode. Returns ``(resolved, deny)``; send ``deny`` and stop when it is
+    not None.
     """
     resolved = endpoint_service.resolve_endpoint_row(encoded_name)
-    deny = _authorize_proxy(request, resolved, policy, auth_enabled=auth_enabled, token=token)
+    deny = _authorize_proxy(request, resolved, policy, token=token)
     return resolved, deny
 
 
-class _RouteAuthMiddleware:
-    """ASGI middleware that enforces per-route auth policy annotations.
-
-    Looks up the matched Starlette route's endpoint function and checks its
-    @public / @requires_auth annotation. Routes without an annotation are
-    denied (default-deny). RPC Mount routes and static file mounts are
-    skipped (they have their own auth).
-
-    Uses resolve_auth() — the same policy function as the gRPC interceptor —
-    so HTTP and gRPC layers agree on allow/deny for every token state.
-    """
-
-    def __init__(self, app: Starlette, policy: RequestAuthPolicy):
-        self._app = app
-        self._policy = policy
-        self._router = app.router
-
-    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        if scope["type"] != "http":
-            return await self._app(scope, receive, send)
-
-        policy = self._resolve_policy(scope)
-
-        if policy == "public":
-            return await self._app(scope, receive, send)
-
-        if policy == "requires_auth":
-            return await self._check_auth(scope, receive, send)
-
-        # No policy (Mount for RPC/static, or unknown) — pass through.
-        # RPC routes have their own interceptor; static mounts serve assets.
-        if policy == "skip":
-            return await self._app(scope, receive, send)
-
-        # Default-deny: route exists but has no annotation.
-        response = JSONResponse({"error": "authentication required"}, status_code=401)
-        return await response(scope, receive, send)
-
-    def _resolve_policy(self, scope: Scope) -> str:
-        """Resolve the auth policy for the matched route."""
-
-        for route in self._router.routes:
-            if isinstance(route, Mount):
-                if route.matches(scope)[0] != Match.NONE:
-                    return "skip"
-                continue
-            if isinstance(route, Route):
-                match_result, _ = route.matches(scope)
-                if match_result == Match.FULL:
-                    return getattr(route.endpoint, _AUTH_POLICY_ATTR, "deny")
-
-        # No route matched — let Starlette handle 404.
-        return "skip"
-
-    async def _check_auth(self, scope: Scope, receive: Receive, send: Send) -> None:
-        if not await _enforce_http_auth(scope, receive, send, self._policy):
-            return
-        await self._app(scope, receive, send)
-
-
-_UNAUTHENTICATED_RPCS = {"Login", "GetAuthInfo"}
+_UNAUTHENTICATED_RPCS = frozenset({"Login", "GetAuthInfo"})
 
 
 def _check_csrf(request: Request) -> bool:
@@ -314,66 +182,6 @@ def _set_session_cookie(response: Response, token: str, request: Request) -> Non
     )
 
 
-class _DashboardAuthInterceptor:
-    """RPC auth interceptor that uses the policy's authenticator stack — same
-    policy as the HTTP middleware.
-
-    Login and GetAuthInfo RPCs are always unauthenticated. All other RPCs go
-    through ``policy.resolve`` (the ``[Jwt, IapAssertion?, Loopback]`` stack):
-    - token present + valid → authenticated identity
-    - token present + invalid → rejected
-    - no token + loopback peer → anonymous/admin (loopback trust)
-    - no token + optional → anonymous/admin fallback via NullAuthInterceptor
-    - no token + required → rejected
-    """
-
-    def __init__(self, policy: RequestAuthPolicy):
-        self._policy = policy
-        self._null = NullAuthInterceptor(verifier=policy.verifier, cookie_name=SESSION_COOKIE)
-
-    def _resolve_or_raise(self, ctx):
-        """Returns (identity, fallback_to_null). Raises ConnectError on rejection."""
-
-        headers = ctx.request_headers()
-        token = extract_bearer_token(headers, cookie_name=SESSION_COOKIE)
-        try:
-            identity = self._policy.resolve(
-                token,
-                client_address=ctx.client_address(),
-                headers=headers,
-            )
-        except ValueError as exc:
-            if token is None:
-                raise ConnectError(Code.UNAUTHENTICATED, str(exc)) from exc
-            logger.warning("Authentication failed: %s", exc)
-            raise ConnectError(Code.UNAUTHENTICATED, "Authentication failed") from exc
-        return identity
-
-    def intercept_unary_sync(self, call_next, request, ctx):
-        if ctx.method().name in _UNAUTHENTICATED_RPCS:
-            return call_next(request, ctx)
-
-        identity = self._resolve_or_raise(ctx)
-        if identity is None:
-            return self._null.intercept_unary_sync(call_next, request, ctx)
-
-        authorize_method(identity, ctx.method().name)
-        with identity_scope(identity):
-            return call_next(request, ctx)
-
-    async def intercept_unary(self, call_next, request, ctx):
-        if ctx.method().name in _UNAUTHENTICATED_RPCS:
-            return await call_next(request, ctx)
-
-        identity = self._resolve_or_raise(ctx)
-        if identity is None:
-            return await self._null.intercept_unary(call_next, request, ctx)
-
-        authorize_method(identity, ctx.method().name)
-        with identity_scope(identity):
-            return await call_next(request, ctx)
-
-
 # DNS marker label that flags a Host as a per-endpoint subdomain. A request
 # whose Host contains a ``proxy`` label routes the labels left of it to the
 # endpoint proxy: ``<encoded_name>.proxy.<base>`` -> endpoint ``<encoded_name>``
@@ -414,11 +222,10 @@ def _extract_proxy_subdomain(host: str) -> str | None:
 class _SubdomainProxyMiddleware:
     """Dispatch ``<encoded_name>.proxy.<base>`` requests to the endpoint proxy.
 
-    Subdomain requests don't match any Starlette route on the inner app,
-    so :class:`_RouteAuthMiddleware`'s default-allow-on-no-route would
-    leave them unauthenticated. This middleware therefore enforces auth
-    itself — running ``policy.resolve`` (the same authenticator stack as the
-    route-level ``@requires_auth`` annotations) before dispatching to the proxy.
+    Subdomain requests don't match any Starlette route on the inner app, so
+    :class:`RouteAuthMiddleware` would pass them through unauthenticated. This
+    middleware therefore applies the per-endpoint access check itself before
+    dispatching to the proxy.
 
     Hosts without a ``proxy`` label pass through to the wrapped app
     unchanged.
@@ -436,13 +243,11 @@ class _SubdomainProxyMiddleware:
         endpoint_proxy: EndpointProxy,
         endpoint_service: EndpointServiceImpl,
         auth_policy: RequestAuthPolicy = RequestAuthPolicy(),
-        auth_enabled: bool = False,
     ):
         self._app = app
         self._endpoint_proxy = endpoint_proxy
         self._endpoint_service = endpoint_service
         self._auth_policy = auth_policy
-        self._auth_enabled = auth_enabled
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http":
@@ -460,7 +265,6 @@ class _SubdomainProxyMiddleware:
             encoded_name,
             self._endpoint_service,
             self._auth_policy,
-            auth_enabled=self._auth_enabled,
         )
         if deny is not None:
             await deny(scope, receive, send)
@@ -514,13 +318,6 @@ class ControllerDashboard:
         self._port = port
         self._auth_provider = auth_provider
         self._auth_policy = auth_policy
-        # Auth is enforced exactly when a provider is configured AND the policy
-        # has a verifier. A DB-backed null-auth controller still has a JWT
-        # verifier (for worker tokens), so request_auth_enabled alone would
-        # wrongly enable auth. Every auth gate in the dashboard (RPC
-        # interceptor, route middleware, proxy authorization) keys off this one
-        # flag so the gates cannot drift.
-        self._auth_enabled = auth_provider is not None and auth_policy.request_auth_enabled
         # In-process RPC statistics. Fed by RequestTimingInterceptor on the
         # ControllerService chain only; LogService's chatty FetchLogs traffic
         # would dominate the numbers if included.
@@ -540,12 +337,12 @@ class ControllerDashboard:
         # use the generic endpoint proxy and are measured by the log server.
         include_tb = bool(os.environ.get("IRIS_DEBUG"))
         controller_timing = RequestTimingInterceptor(include_traceback=include_tb, collector=self._stats_collector)
-        if self._auth_enabled:
-            auth_interceptor = _DashboardAuthInterceptor(self._auth_policy)
-        else:
-            # Null-auth mode: no provider configured. Verify worker tokens
-            # when present but treat everything as anonymous/admin.
-            auth_interceptor = NullAuthInterceptor(verifier=self._auth_policy.verifier, cookie_name=SESSION_COOKIE)
+        auth_interceptor = PolicyAuthInterceptor(
+            self._auth_policy,
+            cookie_name=SESSION_COOKIE,
+            unauthenticated_methods=_UNAUTHENTICATED_RPCS,
+            authorize=authorize_method,
+        )
         controller_interceptors = [auth_interceptor, controller_timing]
         # @on_loop handlers run inline on the event loop; everything else
         # is dispatched to a thread by AsyncServiceAdapter.
@@ -583,9 +380,7 @@ class ControllerDashboard:
         @public
         async def _proxy_endpoint(request: Request) -> Response:
             name = request.path_params["endpoint_name"]
-            resolved, deny = _resolve_and_authorize_proxy(
-                request, name, self._endpoint_service, self._auth_policy, auth_enabled=self._auth_enabled
-            )
+            resolved, deny = _resolve_and_authorize_proxy(request, name, self._endpoint_service, self._auth_policy)
             if deny is not None:
                 return deny
             return await self._endpoint_proxy.dispatch(
@@ -604,7 +399,7 @@ class ControllerDashboard:
             token = request.path_params["token"]
             name = request.path_params["endpoint_name"]
             resolved, deny = _resolve_and_authorize_proxy(
-                request, name, self._endpoint_service, self._auth_policy, auth_enabled=self._auth_enabled, token=token
+                request, name, self._endpoint_service, self._auth_policy, token=token
             )
             if deny is not None:
                 return deny
@@ -626,9 +421,7 @@ class ControllerDashboard:
             # internal bind IP. A path-only Location resolves against the
             # browser's current origin, so no internal address leaks.
             name = request.path_params["endpoint_name"]
-            _, deny = _resolve_and_authorize_proxy(
-                request, name, self._endpoint_service, self._auth_policy, auth_enabled=self._auth_enabled
-            )
+            _, deny = _resolve_and_authorize_proxy(request, name, self._endpoint_service, self._auth_policy)
             if deny is not None:
                 return deny
             query = f"?{request.url.query}" if request.url.query else ""
@@ -687,7 +480,7 @@ class ControllerDashboard:
         ]
         routes.append(static_files_mount())
 
-        app: Starlette | _RouteAuthMiddleware = Starlette(
+        app = Starlette(
             routes=routes,
             lifespan=on_shutdown(self._endpoint_proxy.close),
         )
@@ -701,18 +494,14 @@ class ControllerDashboard:
         # ``redirect_slashes`` is a Router attribute, not a Starlette ctor
         # kwarg, so we flip it after construction.
         app.router.redirect_slashes = False
-        wrapped: ASGIApp = app
-        if self._auth_enabled:
-            wrapped = _RouteAuthMiddleware(app, self._auth_policy)
+        wrapped: ASGIApp = RouteAuthMiddleware(app, self._auth_policy, cookie_name=SESSION_COOKIE)
         # Subdomain dispatch wraps everything: subdomain requests don't match
-        # any Starlette route, so _RouteAuthMiddleware would default-allow
-        # them. This middleware enforces auth itself before forwarding.
+        # any Starlette route, so RouteAuthMiddleware would pass them through.
         wrapped = _SubdomainProxyMiddleware(
             wrapped,
             endpoint_proxy=self._endpoint_proxy,
             endpoint_service=self._endpoint_service,
             auth_policy=self._auth_policy,
-            auth_enabled=self._auth_enabled,
         )
         return wrapped
 
@@ -757,7 +546,7 @@ class ControllerDashboard:
                     "name": representative.name,
                     "capabilities": representative.capabilities,
                 },
-                "optional": self._auth_policy.optional,
+                "optional": self._auth_policy.allows_anonymous,
             }
         )
 
