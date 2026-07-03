@@ -754,3 +754,30 @@ Wired the source-push full-forward callable behind an explicit public `moe_mlp` 
 - Interpretation:
   - The public opt-in backend now reaches the same H100 full-forward comparison gate as the package-private callable.
   - The path remains intentionally narrow and host-plan/staged; it is not yet a fully jittable production training backend.
+
+## 2026-07-03 05:50 - Public source-push deterministic repeat smoke
+
+Added an H100 integration assertion for deterministic repeated public source-push runs under fixed inputs.
+
+- Commit Hash: `ffa3ea279`
+- Code:
+  - `lib/levanter/tests/grug/test_grugformer_moe.py`
+- Change:
+  - `test_source_push_forward_matches_public_ep_backends_on_h100` now calls
+    `moe_mlp(..., implementation="pallas_mgpu_source_push")` twice with the same sharded inputs and explicit H100 mesh.
+  - The test asserts exact output equality between the two source-push calls and identical dropped-route counts before
+    comparing against `ragged_all_to_all` and `ring`.
+- Local verification:
+  - `uv run --package marin-levanter --group test pytest lib/levanter/tests/grug/test_grugformer_moe.py -q -k 'source_push' -n 0`
+    - Result: `1 passed, 1 skipped, 19 deselected, 1 warning in 1.99s`.
+  - `./infra/pre-commit.py --changed-files --fix`
+    - Result: all checks passed.
+- H100 verification:
+  - Job: `/dlwh/source-push-public-determinism-h100-pytest-ffa3ea279-20260703-124725`
+  - Command:
+    `uv run --package marin-levanter --group test pytest lib/levanter/tests/grug/test_grugformer_moe.py -q -n 0 -k source_push`
+  - Result: succeeded, `2 passed, 19 deselected, 1 warning in 55.97s`.
+  - Iris summary: succeeded, one task, `exit_code=0`, `duration_ms=75734`.
+- Interpretation:
+  - The public opt-in source-push backend now has direct H100 coverage for the integration acceptance requirement that
+    repeated fixed-seed/fixed-input runs are deterministic.
