@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { useBackends } from '@/composables/useBackends'
+import { useBackends, firstQueryValue } from '@/composables/useBackends'
 
 // Above this threshold we switch from a plain <select> to a searchable combo.
 const COMBOBOX_THRESHOLD = 8
@@ -35,15 +35,10 @@ const options = computed<ScopeOption[]>(() => [
 const targetCount = computed(() => backends.value.length + peers.value.length)
 const isCombobox = computed(() => targetCount.value > COMBOBOX_THRESHOLD)
 
-function queryStr(v: unknown): string {
-  if (Array.isArray(v)) return (v[0] as string) ?? ''
-  return (v as string) ?? ''
-}
-
 const selectedValue = computed(() => {
-  const backend = queryStr(route.query.backend)
+  const backend = firstQueryValue(route.query.backend)
   if (backend) return `${BACKEND_SCOPE_PREFIX}${backend}`
-  const cluster = queryStr(route.query.cluster)
+  const cluster = firstQueryValue(route.query.cluster)
   if (cluster) return `${CLUSTER_SCOPE_PREFIX}${cluster}`
   return ''
 })

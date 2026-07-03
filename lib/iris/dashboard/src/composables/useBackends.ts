@@ -10,6 +10,11 @@ import type { LocationQueryValue, RouteLocationNormalizedLoaded } from 'vue-rout
 import { controllerRpcCall } from '@/composables/useRpc'
 import type { BackendInfo, ListBackendsResponse, ListPeersResponse, PeerSummary } from '@/types/rpc'
 
+/** First string value of a route query param (``?k=a&k=b`` → ``a``), or ``''``. */
+export function firstQueryValue(raw: LocationQueryValue | LocationQueryValue[]): string {
+  return (Array.isArray(raw) ? raw[0] : raw) ?? ''
+}
+
 /**
  * Resolve a scope query param to a validated id. Returns undefined when the
  * param is absent, or when a non-empty ``knownIds`` roster does not contain it.
@@ -19,7 +24,7 @@ function resolveScopeId(
   raw: LocationQueryValue | LocationQueryValue[],
   knownIds: string[],
 ): string | undefined {
-  const idStr = Array.isArray(raw) ? (raw[0] ?? '') : (raw ?? '')
+  const idStr = firstQueryValue(raw)
   if (!idStr) return undefined
   if (knownIds.length > 0 && !knownIds.includes(idStr)) return undefined
   return idStr
