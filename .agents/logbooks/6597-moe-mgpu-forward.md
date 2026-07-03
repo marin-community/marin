@@ -1454,3 +1454,59 @@ Extended the stage-specific H100 source-push pytest matrix to include the spec's
   - The H100 source-push stage coverage now includes `topk=2` and `topk=4` source-combine reference checks, plus the
     small EP=2 W13/W2 round-trip case and the full EP=8 stage case.
   - This is a coverage/proof-strength patch only; it does not change kernel behavior or performance.
+
+## 2026-07-03 13:12 - Current-head source-push full-forward target gate
+
+Refreshed the three target full-forward rows on the current PR head after the source-push wrapper, production-kernel
+cleanup, and H100 smoke coverage commits.
+
+- Commit Hash: `89f3267fc`
+- Job: `/dlwh/source-push-forward-current-head-gate-89f3267fc-20260703-200306`
+- Cluster: `cw-us-east-02a`
+- Command:
+  ```bash
+  uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job run --no-wait \
+    --job-name source-push-forward-current-head-gate-89f3267fc-20260703-200306 \
+    --cpu 16 --memory 128GB --disk 16GB --gpu H100x8 --reserve H100x8 \
+    --enable-extra-resources --extra gpu -- \
+    timeout 7200s bash -lc 'set -euo pipefail
+  JSONL=scratch/source_push_forward_current_head_gate_89f3267fc_20260703.jsonl
+  rm -f "$JSONL"
+  COMMON="uv run --package marin-levanter --group test python lib/levanter/scripts/bench/bench_source_push_forward.py --source-push-profile hopper_source_push_inbox_rough_balanced_216 --execution-mode staged_host_sync --warmup 1 --steps 3 --repeat-runs 5 --separate-compile --no-check --no-progress-events --git-sha 89f3267fc --jsonl $JSONL"
+  $COMMON --routing balanced --capacity-factor 1.0
+  $COMMON --routing balanced --capacity-factor 1.25
+  $COMMON --routing roughly_balanced --capacity-factor 1.25
+  '
+  ```
+- Iris summary:
+  - State: `succeeded`
+  - Task count: `1`
+  - Exit code: `0`
+  - Failure count: `0`
+  - Preemption count: `0`
+
+Summary medians over 5 repeats:
+
+| routing | cf | stage | median time | useful TFLOP/s/rank | rounded TFLOP/s/rank | row efficiency | masked rows | drops |
+| --- | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| balanced | 1.0 | total | `13.462 ms` | `191.43` | `191.43` | `1.000000` | `0.000000` | `0` |
+| balanced | 1.0 | W13 | `8.070 ms` | `212.88` | `212.88` | `1.000000` | `0.000000` | `0` |
+| balanced | 1.0 | W2 return | `3.943 ms` | - | - | `1.000000` | `0.000000` | `0` |
+| balanced | 1.0 | combine | `1.331 ms` | - | - | `1.000000` | `0.000000` | `0` |
+| balanced | 1.25 | total | `13.448 ms` | `191.63` | `191.63` | `1.000000` | `0.000000` | `0` |
+| balanced | 1.25 | W13 | `8.057 ms` | `213.23` | `213.23` | `1.000000` | `0.000000` | `0` |
+| balanced | 1.25 | W2 return | `3.910 ms` | - | - | `1.000000` | `0.000000` | `0` |
+| balanced | 1.25 | combine | `1.338 ms` | - | - | `1.000000` | `0.000000` | `0` |
+| roughly_balanced | 1.25 | total | `13.876 ms` | `185.72` | `197.03` | `0.942584` | `0.057416` | `0` |
+| roughly_balanced | 1.25 | W13 | `8.415 ms` | `204.17` | `216.60` | `0.942584` | `0.057416` | `0` |
+| roughly_balanced | 1.25 | W2 return | `4.050 ms` | - | - | `0.942584` | `0.057416` | `0` |
+| roughly_balanced | 1.25 | combine | `1.338 ms` | - | - | `0.942584` | `0.057416` | `0` |
+
+- Slow W13 repeats: `0` for all three rows.
+- Interpretation:
+  - Current PR head still clears the initial W13 rough-balanced gate: useful `204.17 TFLOP/s/rank` and `8.415 ms`
+    median, with no row drops.
+  - The full staged forward remains around `185.72` useful TFLOP/s/rank on rough-balanced because the measured total
+    includes W13, direct W2 return, and source combine.
+  - The balanced rows remain stable against the earlier direct-return gate; rough-balanced improves slightly relative to
+    the prior `8.536 ms` W13 median and `13.992 ms` full-forward median.
