@@ -46,6 +46,7 @@ _FINELOG_NAMESPACES: tuple[tuple[str, str], ...] = (
     ("iris.provisioning", "Slice provisioning outcomes (ready/stockout/error/preempted)."),
     ("zephyr.stage", "Per-stage completion stats: throughput + aggregated resource usage."),
     ("zephyr.worker", "Per-shard stats emitted at start / sample interval / end."),
+    ("ducky.query", "Every SQL query submitted to ducky: text, outcome, and cost (rows/bytes/elapsed)."),
 )
 
 # Curated datakit normalized datasets (view name, step-name path segment, description).
@@ -164,6 +165,13 @@ def _finelog_examples(views: list[View]) -> list[ExampleQuery]:
             "Completed zephyr stages ranked by byte rate.",
             f"SELECT execution_id, stage_name, status, elapsed, items, item_rate, byte_rate\n"
             f"FROM {by_name['zephyr.stage']}\nORDER BY ts DESC\nLIMIT 100",
+        ),
+        ExampleQuery(
+            "ducky query history",
+            "Recent queries submitted to ducky with their cost — the log ducky keeps of itself. "
+            "Sort by elapsed_ms or result_bytes to find the expensive ones worth optimizing.",
+            f"SELECT ts, status, cached, elapsed_ms, total_rows, result_bytes, left(sql, 200) AS sql\n"
+            f"FROM {by_name['ducky.query']}\nORDER BY ts DESC\nLIMIT 100",
         ),
     ]
 

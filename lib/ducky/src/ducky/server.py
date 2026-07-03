@@ -41,6 +41,7 @@ from starlette.staticfiles import StaticFiles
 
 from ducky.catalog import Catalog, build_catalog
 from ducky.config import ENDPOINT_NAME, PORT_NAME, DuckyConfig
+from ducky.query_log import QueryLog, QueryLogRow, now_utc
 from ducky.runner import DuckyError, QueryResult, QueryRunner
 
 logger = logging.getLogger(__name__)
@@ -93,8 +94,13 @@ class QueryManager:
         cache_ttl: float = 0.0,
         max_retained_states: int = 1024,
         max_cache_entries: int = 256,
+        query_log: QueryLog | None = None,
     ) -> None:
         self._runner = runner
+        # Optional finelog sink: every submitted query (done, error, or cache hit) is
+        # recorded to the `ducky.query` namespace for later analysis. None disables it
+        # (tests, and any deploy without an in-cluster finelog endpoint).
+        self._query_log = query_log
         self._executor = executor or ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="ducky-query")
         # Bounded LRU maps: an always-on service would otherwise grow the heap unbounded,
         # since each result retains up to preview_row_cap rows. Oldest entries are evicted;
@@ -125,19 +131,25 @@ class QueryManager:
         served earlier returns instantly from the cache; pass ``use_cache=False`` to force a
         fresh run (e.g. when the underlying data changed) — it still refreshes the cache."""
         query_id = uuid.uuid4().hex
+        hit_state: QueryState | None = None
         with self._lock:
             cached = self._cached_result(sql) if use_cache else None
             if cached is not None:
-                self._set_state(query_id, QueryState(QueryStatus.DONE, result=cached, cached=True))
-                logger.info(
-                    "query %s cache hit (%d rows, %s): %s",
-                    query_id,
-                    cached.total_rows,
-                    _human_bytes(cached.result_bytes),
-                    _log_sql(sql),
-                )
-                return query_id
-            self._set_state(query_id, QueryState(QueryStatus.RUNNING))
+                hit_state = QueryState(QueryStatus.DONE, result=cached, cached=True)
+                self._set_state(query_id, hit_state)
+            else:
+                self._set_state(query_id, QueryState(QueryStatus.RUNNING))
+        if hit_state is not None:
+            assert cached is not None
+            logger.info(
+                "query %s cache hit (%d rows, %s): %s",
+                query_id,
+                cached.total_rows,
+                _human_bytes(cached.result_bytes),
+                _log_sql(sql),
+            )
+            self._record(query_id, sql, hit_state)
+            return query_id
         logger.info("query %s submitted: %s", query_id, _log_sql(sql))
         self._executor.submit(self._run, sql, query_id)
         return query_id
@@ -168,13 +180,17 @@ class QueryManager:
             result = self._runner.run_query(sql, query_id)
         except DuckyError as e:
             logger.warning("query %s failed: %s", query_id, str(e).splitlines()[0])
+            error_state = QueryState(QueryStatus.ERROR, error=str(e))
             with self._lock:
-                self._set_state(query_id, QueryState(QueryStatus.ERROR, error=str(e)))
+                self._set_state(query_id, error_state)
+            self._record(query_id, sql, error_state)
             return
         except Exception as e:  # background task: record instead of hanging in RUNNING forever
             logger.exception("query %s crashed", query_id)
+            error_state = QueryState(QueryStatus.ERROR, error=f"internal error: {e}")
             with self._lock:
-                self._set_state(query_id, QueryState(QueryStatus.ERROR, error=f"internal error: {e}"))
+                self._set_state(query_id, error_state)
+            self._record(query_id, sql, error_state)
             return
         logger.info(
             "query %s done: %d rows, %s, %d ms",
@@ -183,9 +199,31 @@ class QueryManager:
             _human_bytes(result.result_bytes),
             result.elapsed_ms,
         )
+        done_state = QueryState(QueryStatus.DONE, result=result, cached=False)
         with self._lock:
             self._store_cache(sql, result)
-            self._set_state(query_id, QueryState(QueryStatus.DONE, result=result, cached=False))
+            self._set_state(query_id, done_state)
+        self._record(query_id, sql, done_state)
+
+    def _record(self, query_id: str, sql: str, state: QueryState) -> None:
+        """Persist one terminal query state to the finelog query log (best-effort no-op if disabled)."""
+        if self._query_log is None:
+            return
+        result = state.result
+        self._query_log.record(
+            QueryLogRow(
+                ts=now_utc(),
+                query_id=query_id,
+                sql=sql,
+                status=state.status.value,
+                cached=state.cached,
+                elapsed_ms=result.elapsed_ms if result is not None else None,
+                total_rows=result.total_rows if result is not None else None,
+                result_bytes=result.result_bytes if result is not None else None,
+                result_path=result.result_path if result is not None else None,
+                error=state.error,
+            )
+        )
 
     def shutdown(self) -> None:
         self._executor.shutdown(wait=False)
@@ -270,10 +308,16 @@ def _catalog_payload(catalog: Catalog) -> dict:
     }
 
 
-def create_app(runner: QueryRunner, config: DuckyConfig, executor: Executor | None = None) -> Starlette:
+def create_app(
+    runner: QueryRunner,
+    config: DuckyConfig,
+    executor: Executor | None = None,
+    query_log: QueryLog | None = None,
+) -> Starlette:
     """Build the ducky Starlette app over a query runner. No Iris context required.
 
     ``executor`` overrides the query executor (tests inject a synchronous one).
+    ``query_log``, when given, records every submitted query to finelog.
     """
     dist = _dashboard_dist()
     # Advertise only the views the runner actually created — an absent dataset or a root
@@ -284,6 +328,7 @@ def create_app(runner: QueryRunner, config: DuckyConfig, executor: Executor | No
         executor=executor,
         max_workers=config.max_concurrent_queries,
         cache_ttl=config.result_ttl_days * 86400,
+        query_log=query_log,
     )
 
     @requires_auth
@@ -352,12 +397,19 @@ def _serve() -> None:
     logging.getLogger("uvicorn.access").addFilter(_QuietPolls())
     config = DuckyConfig.from_environment()
     runner = QueryRunner(config)
-    app = create_app(runner, config)
 
     ctx = iris_ctx()
     job_info = get_job_info()
     if job_info is None:
         raise RuntimeError("No Iris job info available — ducky must run inside an Iris job")
+
+    # Persist submitted queries to finelog (best-effort). Needs an in-cluster iris client to
+    # resolve the log server; if absent (e.g. a standalone smoke), skip the sink rather than fail.
+    query_log = QueryLog.connect(ctx) if ctx.client is not None else None
+    if query_log is None:
+        logger.warning("no in-cluster iris client — query logging to finelog disabled")
+    app = create_app(runner, config, query_log=query_log)
+
     port = ctx.get_port(PORT_NAME)
     address = f"http://{job_info.advertise_host}:{port}"
 
@@ -367,6 +419,8 @@ def _serve() -> None:
     async def _on_shutdown() -> None:
         ctx.registry.unregister(endpoint_id)
         app.state.query_manager.shutdown()
+        if query_log is not None:
+            query_log.close()
         logger.info("ducky endpoint unregistered")
 
     app.router.lifespan_context = on_shutdown(_on_shutdown)

@@ -244,3 +244,53 @@ def test_cache_entry_expires_after_ttl():
     manager._cache["SELECT 2"] = (result, time.monotonic())  # fresh
     assert manager._cached_result("SELECT 1") is None
     assert manager._cached_result("SELECT 2") is result
+
+
+class _RecordingQueryLog:
+    """Captures the rows a QueryManager would persist to finelog (duck-types QueryLog.record)."""
+
+    def __init__(self):
+        self.rows = []
+
+    def record(self, row):
+        self.rows.append(row)
+
+
+def test_successful_query_is_recorded_with_cost():
+    log = _RecordingQueryLog()
+    runner = _FakeRunner(QueryResult(["x"], [[1]], 7, False, "gs://b/ducky/q.parquet", 50, 99))
+    manager = QueryManager(runner, executor=_InlineExecutor(), query_log=log)
+
+    query_id = manager.submit("SELECT 1")
+
+    (row,) = log.rows
+    assert (row.query_id, row.sql, row.status, row.cached) == (query_id, "SELECT 1", "done", False)
+    assert (row.total_rows, row.result_bytes, row.elapsed_ms) == (7, 99, 50)
+    assert row.result_path == "gs://b/ducky/q.parquet"
+    assert row.error is None
+
+
+def test_failed_query_is_recorded_with_error():
+    log = _RecordingQueryLog()
+    runner = _FakeRunner(error=QueryError("Catalog Error: table not found"))
+    manager = QueryManager(runner, executor=_InlineExecutor(), query_log=log)
+
+    manager.submit("SELECT * FROM nope")
+
+    (row,) = log.rows
+    assert row.status == "error"
+    assert row.error == "Catalog Error: table not found"
+    assert row.total_rows is None and row.result_bytes is None and row.result_path is None
+
+
+def test_cache_hit_is_recorded_as_cached():
+    log = _RecordingQueryLog()
+    runner = _CountingRunner(QueryResult(["x"], [[1]], 1, False, "gs://b/x.parquet", 1, 1))
+    manager = QueryManager(runner, executor=_InlineExecutor(), query_log=log)
+
+    manager.submit("SELECT 1")  # executed + recorded (cached=False)
+    manager.submit("SELECT 1")  # cache hit + recorded (cached=True)
+
+    assert runner.calls == 1
+    assert [r.cached for r in log.rows] == [False, True]
+    assert {r.status for r in log.rows} == {"done"}
