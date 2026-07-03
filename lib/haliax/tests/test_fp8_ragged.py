@@ -275,8 +275,21 @@ def test_cute_wgrad_matches_reference():
     assert _rel_fro(drhs, ref) < 8e-2
 
 
+# Wgrad guard: sizes with non-16-multiple values, a size-0 group, and a size-1 group,
+# covering all offset residue classes. Small case (K=N=256) stays fast; large case
+# (K=N=2560, matching canonical d2560 hidden dim) is a separate parametrization.
+_WGRAD_GUARD_SIZES = np.array([17, 33, 0, 1, 49, 65, 129], np.int64)
+
+
 @gpu_only
-def test_cute_wgrad_non_aligned_group_sizes():
+@pytest.mark.parametrize(
+    "K, N, sizes",
+    [
+        pytest.param(256, 256, _WGRAD_GUARD_SIZES, id="small"),
+        pytest.param(2560, 2560, _WGRAD_GUARD_SIZES, id="large"),
+    ],
+)
+def test_cute_wgrad_non_aligned_group_sizes(K, N, sizes):
     """Wgrad with group sizes NOT multiples of 16 -- the token-axis TMA alignment risk.
 
     The contraction is the ragged token axis, so each group's slice starts at an
@@ -284,14 +297,12 @@ def test_cute_wgrad_non_aligned_group_sizes():
     would be non-16B-aligned (illegal for a TMA ``globalAddress``); the kernel instead
     keeps the aligned full-buffer base and folds the offset into the TMA element
     coordinate, bounding the ragged tail with the per-group descriptor extent (native
-    zero-fill). Correctness vs the f32 token-contracting reference -- plus a size-1
-    group and offsets at every residue -- guards that path against contamination.
+    zero-fill). Correctness vs the f32 token-contracting reference -- plus size-0 and
+    size-1 groups and offsets at every residue -- guards that path against contamination.
     """
     from haliax._src.fp8_cast_transpose import cast_transpose  # noqa: PLC0415
     from haliax._src.ragged_dot_cute import cute_wgrad  # noqa: PLC0415
 
-    K, N = 256, 256
-    sizes = np.array([17, 33, 1, 49, 65, 129], np.int64)  # each == 1 (mod 16); offsets unaligned
     T = int(sizes.sum())
     gs = jnp.asarray(sizes, jnp.int32)
     rng = np.random.default_rng(3)
@@ -319,7 +330,7 @@ def test_cute_wgrad_non_aligned_group_sizes():
     # would break per-group accuracy well beyond the E5M2 quant floor.
     assert _rel_fro(drhs, ref) < 8e-2
     # A stale coordinate or a non-deterministic tail would also perturb bits.
-    for _ in range(3):
+    for _ in range(8):
         assert np.array_equal(np.asarray(jax.block_until_ready(fn(lhs_t, g_t))), drhs)
 
 

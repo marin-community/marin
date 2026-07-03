@@ -45,7 +45,7 @@ through three successive calls with distinct XLA-reallocated buffers.
    defaults to `sm_100a` (Blackwell) → a cubin that will not load on H100 with a sticky
    `ILLEGAL_INSTRUCTION`. `compile_options=(cute.GPUArch("sm_90a"),)` does NOT set the
    trace arch — only the env var does. The `ensure_hopper_arch()` helper in
-   `_tma_grouped_gemm.py` exports it at call-site construction time.
+   `_tma_grouped_adapter.py` exports it at call-site construction time.
 
 4. **Bounded modern group scheduler.** The deprecated
    `GroupedGemmTileSchedulerHelper` has an unbounded while-loop that hangs on an
@@ -137,6 +137,10 @@ Single-shot and N=2 are below 1.2× due to the odd-group wgrad repack. The ident
 follow-up to recover it: fuse the padding into the token-major PRODUCERS (grad
 cast-transpose + lhs transpose already write the token-major operands — emit them
 pre-padded), removing the two standalone gathers. Not attempted (kernel scope).
+
+**Note on test coverage:** The CPU test suite does not exercise the numeric or
+determinism invariants — all such tests are `gpu_only`. An H100 run of
+`lib/haliax/tests/test_fp8_ragged.py` is mandatory before trusting a green CPU CI.
 
 ## Comparison: CuTe vs Mosaic-GPU
 

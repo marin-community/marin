@@ -307,8 +307,8 @@ def cute_ragged_dot(a, b, group_sizes, *, out_dtype, out_scale):
             f"cute_ragged_dot: K={k} is not divisible by {_FP8_WGMMA_K_GRANULARITY} "
             "(FP8 WGMMA K granularity); pad or reshape before calling"
         )
-    # Guarded optional-dep import: the vendored TMA kernel hard-imports cutlass.
-    from haliax._src._tma_grouped_gemm import tma_grouped_gemm  # noqa: PLC0415
+    # Guarded optional-dep import: the adapter hard-imports cutlass.
+    from haliax._src._tma_grouped_adapter import tma_grouped_gemm  # noqa: PLC0415
 
     return tma_grouped_gemm(a, b, group_sizes, out_dtype=out_dtype, out_scale=out_scale)
 
@@ -335,7 +335,7 @@ def cute_wgrad(a_t, b_t, group_sizes, *, out_dtype, out_scale):
         raise ValueError(f"cute_wgrad: K={k} is not divisible by tile_m={_TMA_TILE_M}; pad or reshape before calling")
     if n % _TMA_TILE_N != 0:
         raise ValueError(f"cute_wgrad: N={n} is not divisible by tile_n={_TMA_TILE_N}; pad or reshape before calling")
-    # Guarded optional-dep import: the vendored TMA kernel hard-imports cutlass.
-    from haliax._src._tma_grouped_gemm import tma_grouped_wgrad  # noqa: PLC0415
+    # Guarded optional-dep import: the adapter hard-imports cutlass.
+    from haliax._src._tma_grouped_adapter import tma_grouped_wgrad  # noqa: PLC0415
 
     return tma_grouped_wgrad(a_t, b_t, group_sizes, out_dtype=out_dtype, out_scale=out_scale)

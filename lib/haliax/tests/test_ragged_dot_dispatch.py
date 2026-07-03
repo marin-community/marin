@@ -195,8 +195,8 @@ def test_op_state_partitions_as_overwrite():
     np.testing.assert_array_equal(np.asarray(grads["weight"]), np.asarray(regular_param))
 
 
-def test_op_none_default_matches_xla_and_op_is_opt_in():
-    """op=None (the default) is numerically identical to the XLA path; FP8 is opt-in only."""
+def test_op_none_matches_xla_and_default_backend_is_cute():
+    """op=None (the default) is numerically identical to the XLA path; CUTE is the default backend."""
     lhs, rhs, group_sizes = _inputs()
     default_out = ragged_dot(lhs, rhs, group_sizes, op=None)
     xla_out = ragged_dot(lhs, rhs, group_sizes, implementation="xla")
