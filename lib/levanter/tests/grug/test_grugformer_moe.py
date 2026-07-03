@@ -678,6 +678,17 @@ def test_source_push_forward_matches_public_ep_backends_on_h100():
             capacity_factor=config.capacity_factor,
             report_capacity_overflow=True,
         )
+        source_push_out_repeat, source_push_dropped_repeat = moe_mlp(
+            x,
+            selected_experts,
+            combine_weights,
+            w_gate_up,
+            w_down,
+            implementation="pallas_mgpu_source_push",
+            mesh=mesh,
+            capacity_factor=config.capacity_factor,
+            report_capacity_overflow=True,
+        )
         baselines = {
             implementation: moe_mlp(
                 x,
@@ -693,7 +704,12 @@ def test_source_push_forward_matches_public_ep_backends_on_h100():
             for implementation in ("ragged_all_to_all", "ring")
         }
 
-    source_push_host = np.asarray(jax.device_get(source_push_out), dtype=np.float32)
+    source_push_raw = np.asarray(jax.device_get(source_push_out))
+    source_push_repeat_raw = np.asarray(jax.device_get(source_push_out_repeat))
+    np.testing.assert_array_equal(source_push_repeat_raw, source_push_raw)
+    assert int(jax.device_get(source_push_dropped_repeat)) == int(jax.device_get(source_push_dropped))
+
+    source_push_host = np.asarray(source_push_raw, dtype=np.float32)
     assert source_push_host.shape == (config.ep_size * config.tokens_per_rank, config.hidden_dim)
     assert int(jax.device_get(source_push_dropped)) == 0
     for baseline_out, baseline_dropped in baselines.values():
