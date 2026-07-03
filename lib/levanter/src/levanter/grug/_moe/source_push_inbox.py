@@ -496,10 +496,16 @@ def _make_kernel(
                 return expert_base_ref[expert] + src_base_by_expert_ref[src_rank, expert] + local_row_start
             return recv_meta_ref[src_ordinal, entry, 2]
 
+        def _valid_row_tile_mask(valid_rows, cols: int):
+            row_indices = mgpu.layout_cast(
+                lax.broadcasted_iota(jnp.int32, (config.block_m, cols), 0),
+                mgpu.Layout.WGMMA,
+            )
+            return row_indices < valid_rows
+
         def _store_hidden(src_ordinal, entry, n_tile, hidden) -> None:
             dst_row_start = _hidden_row_start(src_ordinal, entry)
             valid_rows = recv_meta_ref[src_ordinal, entry, 3]
-            row_mask = jnp.arange(config.block_m, dtype=jnp.int32) < valid_rows
             if stores_tiny_output:
                 output = hidden[:, :TINY_OUTPUT_COLUMNS_PER_N_TILE].astype(hidden_ref.dtype)
                 idx = (
@@ -507,7 +513,12 @@ def _make_kernel(
                     pl.ds(n_tile * TINY_OUTPUT_COLUMNS_PER_N_TILE, TINY_OUTPUT_COLUMNS_PER_N_TILE),
                 )
                 if use_exact_expert_major:
-                    pallas_primitives.store(hidden_ref, idx, output, mask=row_mask[:, None])
+                    pallas_primitives.store(
+                        hidden_ref,
+                        idx,
+                        output,
+                        mask=_valid_row_tile_mask(valid_rows, TINY_OUTPUT_COLUMNS_PER_N_TILE),
+                    )
                 else:
                     hidden_ref[idx] = output
             else:
@@ -517,22 +528,35 @@ def _make_kernel(
                     pl.ds(n_tile * config.block_n, config.block_n),
                 )
                 if use_exact_expert_major:
-                    pallas_primitives.store(hidden_ref, idx, output, mask=row_mask[:, None])
+                    pallas_primitives.store(
+                        hidden_ref,
+                        idx,
+                        output,
+                        mask=_valid_row_tile_mask(valid_rows, config.block_n),
+                    )
                 else:
                     hidden_ref[idx] = output
 
         def _store_zero_hidden(src_ordinal, entry, n_tile) -> None:
             dst_row_start = _hidden_row_start(src_ordinal, entry)
             valid_rows = recv_meta_ref[src_ordinal, entry, 3]
-            row_mask = jnp.arange(config.block_m, dtype=jnp.int32) < valid_rows
             idx = (
                 pl.ds(dst_row_start, config.block_m),
                 pl.ds(n_tile * config.block_n, config.block_n),
             )
-            zeros = jnp.zeros((config.block_m, config.block_n), dtype=hidden_ref.dtype)
             if use_exact_expert_major:
-                pallas_primitives.store(hidden_ref, idx, zeros, mask=row_mask[:, None])
+                zeros = mgpu.layout_cast(
+                    jnp.zeros((config.block_m, config.block_n), dtype=hidden_ref.dtype),
+                    mgpu.Layout.WGMMA,
+                )
+                pallas_primitives.store(
+                    hidden_ref,
+                    idx,
+                    zeros,
+                    mask=_valid_row_tile_mask(valid_rows, config.block_n),
+                )
             else:
+                zeros = jnp.zeros((config.block_m, config.block_n), dtype=hidden_ref.dtype)
                 hidden_ref[idx] = zeros
 
         def _store_zero_n_group(src_ordinal, entry, n_group_i) -> None:
