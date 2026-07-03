@@ -26,9 +26,10 @@ Both variants:
   2. Enable the plain-Pod integration via the controller-manager ``Configuration``
      (``integrations.frameworks: ["batch/job","pod"]``). ``manageJobsWithoutQueueName``
      stays false, so Kueue only gates pods carrying ``kueue.x-k8s.io/queue-name``
-     (the ones Iris stamps). The plain-Pod *admission webhook* is opt-in scoped via
-     ``integrations.podOptions.namespaceSelector`` to only ``--pod-namespace``
-     (default ``iris``) — NOT the chart default (every namespace except
+     (the ones Iris stamps). The *admission webhooks* are opt-in scoped via the
+     top-level ``managedJobsNamespaceSelector`` (which both charts render into
+     every webhook's ``namespaceSelector``) to only ``--pod-namespace`` (default
+     ``iris``) — NOT the chart default (every namespace except
      kube-system/kueue-system), which fail-closed-intercepts CNI/system pods on a
      shared cluster and deadlocks node delivery. See build_controller_manager_config.
   3. Create the Topology CRs (infiniband + multinode-nvlink-ib) so TAS can resolve
@@ -104,7 +105,7 @@ RELEASE_DEFAULT = "kueue"
 OPERATOR_NS = "kueue-system"
 
 # Namespace(s) Iris submits gang pods into (the k8s provider namespace, default
-# "iris"). The plain-Pod webhook is scoped to ONLY these — see
+# "iris"). Kueue's admission webhooks are scoped to ONLY these — see
 # build_controller_manager_config for why a broad selector is dangerous.
 DEFAULT_POD_NAMESPACES = ("iris",)
 
@@ -180,16 +181,19 @@ def build_controller_manager_config(pod_namespaces: Sequence[str] = DEFAULT_POD_
     internalCertManagement is enabled so Kueue self-signs its webhook certs (no
     cert-manager dependency); the names match both charts' webhook service/secret.
 
-    ``podOptions.namespaceSelector`` scopes the pod *admission webhook* to only
+    ``managedJobsNamespaceSelector`` scopes Kueue's *admission webhooks* to only
     ``pod_namespaces`` (the namespace Iris submits into). This is critical and
     separate from ``manageJobsWithoutQueueName``: that flag governs whether Kueue
-    *gates* an already-intercepted pod, but the fail-closed webhook still
-    *intercepts* every CREATE in every selected namespace. Kueue's default
-    selector excludes only kube-system/kueue-system, so on a shared CoreWeave
-    cluster it would intercept CNI/system pods (e.g. cilium in cw-cilium-system).
-    On a freshly delivered node the CNI pod is then gated by a webhook it can't
-    reach (no network yet) → the pod is rejected → the node never goes Ready.
-    Opt-in scoping keeps the webhook off every namespace but our own.
+    *gates* an already-intercepted pod, but the fail-closed webhooks still
+    *intercept* every CREATE in every selected namespace. Both charts' webhook
+    templates render each webhook's ``namespaceSelector`` from this top-level key
+    (NOT from the legacy ``integrations.podOptions.namespaceSelector``, which
+    never reaches the webhook objects), falling back to a broad selector that
+    excludes only kube-system + the release namespace. On a shared CoreWeave
+    cluster that broad default intercepts CNI/system pods (e.g. cilium in
+    cw-cilium-system): a freshly delivered node's CNI pod is gated by a webhook
+    it can't reach (no network yet) → the pod is rejected → the node never goes
+    Ready. Opt-in scoping keeps the webhooks off every namespace but our own.
     """
     return {
         "apiVersion": "config.kueue.x-k8s.io/v1beta1",
@@ -198,6 +202,18 @@ def build_controller_manager_config(pod_namespaces: Sequence[str] = DEFAULT_POD_
         "metrics": {"bindAddress": ":8080"},
         "webhook": {"port": 9443},
         "manageJobsWithoutQueueName": False,
+        # Rendered by the charts into every webhook's namespaceSelector; also
+        # scopes controller-side management. Must NOT match kube-system or the
+        # kueue namespace (kueue config validation rejects it).
+        "managedJobsNamespaceSelector": {
+            "matchExpressions": [
+                {
+                    "key": "kubernetes.io/metadata.name",
+                    "operator": "In",
+                    "values": list(pod_namespaces),
+                }
+            ]
+        },
         "internalCertManagement": {
             "enable": True,
             "webhookServiceName": "kueue-webhook-service",
@@ -205,17 +221,6 @@ def build_controller_manager_config(pod_namespaces: Sequence[str] = DEFAULT_POD_
         },
         "integrations": {
             "frameworks": ["batch/job", "pod"],
-            "podOptions": {
-                "namespaceSelector": {
-                    "matchExpressions": [
-                        {
-                            "key": "kubernetes.io/metadata.name",
-                            "operator": "In",
-                            "values": list(pod_namespaces),
-                        }
-                    ]
-                }
-            },
         },
     }
 
