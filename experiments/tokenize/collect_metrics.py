@@ -16,7 +16,7 @@ into the ``{arms: {name: [[flops, bpb], ...]}}`` file that
 Metric keys (confirmed from a live run's json_logger stream):
   eval/bpb                              held-out bits-per-byte  (REQUIRES compute_bpb=True)
   eval/macro_bpb                        macro-averaged BPB across domains, when present
-  throughput/total_gflops               cumulative achieved GFLOPs (fwd+bwd) — the train-FLOP axis
+  throughput/total_gflops               cumulative analytic training GFLOPs (fwd+bwd) — the train-FLOP axis
   throughput/total_tokens               cumulative tokens seen
   throughput/flops_per_token_analytic   analytic fwd FLOPs/token (for a model-based cross-check)
   train/loss, train/cross_entropy_loss  final training loss
@@ -88,7 +88,7 @@ class RunPoint:
 def collect_run(lines: Iterable[str], arm: str) -> RunPoint:
     """Reduce one run's metric stream to its final ladder point.
 
-    ``total_train_flops`` prefers the logged cumulative ``throughput/total_gflops`` (achieved
+    ``total_train_flops`` prefers the logged cumulative ``throughput/total_gflops`` (analytic
     fwd+bwd FLOPs); if absent it reconstructs ``3 * flops_per_token_analytic * total_tokens``.
     """
     last: dict[str, float] = {}

@@ -47,7 +47,7 @@ from marin.experiment.data import mixture, tokenized
 from marin.experiment.namespacing import user_namespaced_name
 from marin.training.training import LevanterCheckpoint
 
-from experiments.datasets.uncheatable import uncheatable_datasets
+from experiments.datasets.uncheatable import UNCHEATABLE_SUBSETS, uncheatable_raw
 from experiments.grug.moe.launch import GrugMoeLaunchConfig, env_int, run_grug_moe_trial
 from experiments.grug.moe.launch_cw_scale import (
     _SLIMPAJAMA_SHUFFLE,
@@ -71,19 +71,41 @@ BAKEOFF_SUBDIR = f"{OUTPUT_SUBDIR}/tokenizer-bakeoff"
 _STEPS_PER_EVAL = 500
 
 
-def slimpajama_6b_for(tokenizer: str) -> ArtifactStep:
+def slimpajama_6b_for(arm_name: str, tokenizer: str) -> ArtifactStep:
     """SlimPajama-6B tokenized with ``tokenizer`` — the bake-off's shared training corpus.
 
-    Same source and cache name as the scale launcher's llama3 handle; the tokenizer is part
-    of the cache identity, so each arm gets its own cache and no arm reads another's tokens.
+    The cache name is suffixed with the arm so each arm builds its own tokenization rather
+    than adopting a pre-existing cache registered under a shared name (the artifact store
+    adopts by name@version, so a shared name would silently reuse another tokenizer's tokens).
     """
     return tokenized(
-        "slimpajama-6b",
+        f"bakeoff-train/slimpajama-6b-{arm_name}",
         source="DKYoon/SlimPajama-6B",
         tokenizer=tokenizer,
         resources=_SLIMPAJAMA_TOKENIZE_RESOURCES,
         version="2026.06.28",
     )
+
+
+def bakeoff_validation(arm_name: str, tokenizer: str) -> list[ArtifactStep]:
+    """The Uncheatable-Eval subsets tokenized with ``tokenizer`` as held-out validation.
+
+    Named per arm for the same reason as the training corpus: the shared
+    ``uncheatable_datasets`` handles are registered under ``-llama3`` names and would be
+    adopted with the llama3 tokenizer regardless of the tokenizer requested here.
+    """
+    raw = uncheatable_raw()
+    return [
+        tokenized(
+            f"bakeoff-val/{subset}-{arm_name}",
+            tokenizer=tokenizer,
+            version="2026.06.28",
+            raw=raw,
+            glob=UNCHEATABLE_SUBSETS[subset],
+            validation=True,
+        )
+        for subset in UNCHEATABLE_SUBSETS
+    ]
 
 
 def build_bakeoff_checkpoint(*, version: str = "dev") -> ArtifactStep[LevanterCheckpoint]:
@@ -122,8 +144,8 @@ def build_bakeoff_checkpoint(*, version: str = "dev") -> ArtifactStep[LevanterCh
     )
     mp = os.environ.get("SCALE_MP", "params=float32,compute=bfloat16,output=bfloat16")
 
-    train = slimpajama_6b_for(arm.ref)
-    validation = list(uncheatable_datasets(tokenizer=arm.ref).values())
+    train = slimpajama_6b_for(arm.name, arm.ref)
+    validation = bakeoff_validation(arm.name, arm.ref)
     name = f"grug-bakeoff-{arm.name}-d{model.hidden_dim}-L{model.num_layers}"
 
     def build_config(ctx: StepContext) -> GrugMoeLaunchConfig:
