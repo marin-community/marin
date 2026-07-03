@@ -38,7 +38,9 @@ from levanter.grug._moe.source_push_inbox import (
     SLOW_USEFUL_W13_TFLOPS_PER_RANK,
     SourcePushInboxRunSettings,
     TimingResult,
+    ROW_LAYOUT_EXACT_EXPERT_MAJOR,
     ROW_LAYOUT_SOURCE_PADDED_EXPERT_MAJOR,
+    ROW_START_MODE_EXACT_EXPERT_MAJOR,
     ROW_START_MODE_SOURCE_PADDED,
     _add_source_push_plan_queue_stats,
     _block_until_ready,
@@ -132,6 +134,7 @@ class SourcePushForwardHostInputs:
     route_valid_mask: np.ndarray
     plan: SourcePushPlan
     queue_stats: dict[str, Any]
+    use_exact_expert_major: bool = False
 
 
 @dataclass(frozen=True)
@@ -162,6 +165,7 @@ class SourcePushForwardDeviceInputs:
     route_combine_weights: jax.Array
     route_valid_mask: jax.Array
     queue_stats: dict[str, Any]
+    use_exact_expert_major: bool
 
 
 @dataclass(frozen=True)
@@ -189,6 +193,7 @@ def make_source_push_forward_inputs(
     w_down: Float[Array, "S E I D"],
     *,
     input_mode: str = "real_arrays",
+    use_exact_expert_major: bool = False,
 ) -> SourcePushForwardHostInputs:
     """Build full-forward source-push inputs from real source-local MoE arrays."""
 
@@ -224,6 +229,7 @@ def make_source_push_forward_inputs(
         w_gate_up_host,
         w_down_host,
         input_mode=input_mode,
+        use_exact_expert_major=use_exact_expert_major,
     )
 
 
@@ -239,6 +245,22 @@ def make_source_push_forward_source_plan_inputs(config: PushInboxConfig) -> Sour
         raw_inputs.w_gate_up,
         raw_inputs.w_down,
         input_mode="source_push_plan",
+    )
+
+
+def make_source_push_forward_exact_source_plan_inputs(config: PushInboxConfig) -> SourcePushForwardHostInputs:
+    """Build exact expert-major full-forward inputs for block-aligned plans."""
+
+    raw_inputs = make_source_push_forward_source_plan_raw_inputs(config)
+    return make_source_push_forward_inputs(
+        config,
+        raw_inputs.x,
+        raw_inputs.selected_experts,
+        raw_inputs.combine_weights,
+        raw_inputs.w_gate_up,
+        raw_inputs.w_down,
+        input_mode="exact_source_push_plan",
+        use_exact_expert_major=True,
     )
 
 
@@ -270,21 +292,40 @@ def _make_source_push_forward_inputs_from_plan(
     w_down: np.ndarray,
     *,
     input_mode: str,
+    use_exact_expert_major: bool = False,
 ) -> SourcePushForwardHostInputs:
-    rounded_counts, expert_base, src_base_by_expert = source_push_source_padded_row_bases(plan, config.block_m)
-    send_meta = _source_padded_plan_send_meta(plan, expert_base, src_base_by_expert)
-    recv_meta = _recv_meta_from_send_meta(config, send_meta)
+    if use_exact_expert_major:
+        send_meta = np.asarray(jax.device_get(plan.send_meta), dtype=np.int32)
+        valid_rows = send_meta[..., 3]
+        tail_blocks = (valid_rows > 0) & (valid_rows < config.block_m)
+        if np.any(tail_blocks):
+            raise ValueError(
+                "exact source-push full forward layout requires block_m-aligned live blocks; "
+                "use the source-padded layout for tail blocks"
+            )
+        expert_base = np.asarray(jax.device_get(plan.expert_base), dtype=np.int32)
+        src_base_by_expert = np.asarray(jax.device_get(plan.src_base_by_expert), dtype=np.int32)
+        recv_meta = np.asarray(jax.device_get(plan.recv_meta), dtype=np.int32)
+        row_start_mode = ROW_START_MODE_EXACT_EXPERT_MAJOR
+        row_layout = ROW_LAYOUT_EXACT_EXPERT_MAJOR
+        layout_rows_total = int(np.sum(jax.device_get(plan.rows_per_local_expert)))
+    else:
+        rounded_counts, expert_base, src_base_by_expert = source_push_source_padded_row_bases(plan, config.block_m)
+        send_meta = _source_padded_plan_send_meta(plan, expert_base, src_base_by_expert)
+        recv_meta = _recv_meta_from_send_meta(config, send_meta)
+        row_start_mode = ROW_START_MODE_SOURCE_PADDED
+        row_layout = ROW_LAYOUT_SOURCE_PADDED_EXPERT_MAJOR
+        layout_rows_total = int(np.sum(rounded_counts))
     route_inverse = _make_route_inverse(config, plan)
     valid_mask = np.asarray(jax.device_get(plan.valid_mask), dtype=np.bool_)
     queue_stats = _queue_stats(config, send_meta)
     combine_stats = _combine_queue_stats(config, valid_mask, int(jax.device_get(plan.dropped_routes)))
-    layout_rows_total = int(np.sum(rounded_counts))
     _add_source_push_plan_queue_stats(
         config,
         queue_stats,
         plan,
-        row_start_mode=ROW_START_MODE_SOURCE_PADDED,
-        row_layout=ROW_LAYOUT_SOURCE_PADDED_EXPERT_MAJOR,
+        row_start_mode=row_start_mode,
+        row_layout=row_layout,
         layout_rows_total=layout_rows_total,
     )
     queue_stats.update(
@@ -313,6 +354,7 @@ def _make_source_push_forward_inputs_from_plan(
         route_valid_mask=route_inverse["route_valid_mask"],
         plan=plan,
         queue_stats=queue_stats,
+        use_exact_expert_major=use_exact_expert_major,
     )
 
 
@@ -365,7 +407,7 @@ def device_source_push_forward_inputs_from_host(
             expert_base=host_inputs.expert_base,
             src_base_by_expert=host_inputs.src_base_by_expert,
             queue_stats=host_inputs.queue_stats,
-            use_exact_expert_major=False,
+            use_exact_expert_major=host_inputs.use_exact_expert_major,
         ),
     )
     return SourcePushForwardDeviceInputs(
@@ -382,6 +424,7 @@ def device_source_push_forward_inputs_from_host(
         route_combine_weights=jnp.asarray(host_inputs.route_combine_weights, dtype=jnp.bfloat16),
         route_valid_mask=jnp.asarray(host_inputs.route_valid_mask, dtype=jnp.bool_),
         queue_stats=host_inputs.queue_stats,
+        use_exact_expert_major=host_inputs.use_exact_expert_major,
     )
 
 
@@ -398,7 +441,7 @@ def reference_source_push_forward(
         host_inputs.w_gate_up,
         host_inputs.expert_base,
         host_inputs.src_base_by_expert,
-        use_exact_expert_major=False,
+        use_exact_expert_major=host_inputs.use_exact_expert_major,
     )
     source_return = source_push_w2_return(
         jnp.asarray(hidden, dtype=jnp.bfloat16),
@@ -459,9 +502,13 @@ def source_push_forward(
     return out, host_inputs.plan.dropped_routes
 
 
-def _sharded_source_push_forward_kernel(mesh: Mesh, config: PushInboxConfig):
-    w13_kernel = _sharded_kernel(mesh, config)
-    w2_return_kernel = _sharded_w2_return_direct_to_source_kernel(mesh, config)
+def _sharded_source_push_forward_kernel(mesh: Mesh, config: PushInboxConfig, *, use_exact_expert_major: bool = False):
+    w13_kernel = _sharded_kernel(mesh, config, use_exact_expert_major=use_exact_expert_major)
+    w2_return_kernel = _sharded_w2_return_direct_to_source_kernel(
+        mesh,
+        config,
+        use_exact_expert_major=use_exact_expert_major,
+    )
     remote_write_barrier = _sharded_remote_write_completion_barrier(mesh)
     combine_kernel = _sharded_source_combine_kernel(mesh, config)
 
@@ -562,6 +609,7 @@ def _shard_source_push_forward_inputs(
         ),
         route_valid_mask=jax.device_put(inputs.route_valid_mask, NamedSharding(mesh, P(AXIS, None, None))),
         queue_stats=inputs.queue_stats,
+        use_exact_expert_major=inputs.use_exact_expert_major,
     )
 
 
@@ -573,8 +621,14 @@ def _call_source_push_forward_device_inputs(
     execution_mode: str,
 ) -> Float[Array, "S T D"]:
     if execution_mode == FORWARD_EXECUTION_STAGED_HOST_SYNC:
-        w13_fn = jax.jit(_sharded_kernel(mesh, config))
-        w2_return_fn = jax.jit(_sharded_w2_return_direct_to_source_kernel(mesh, config))
+        w13_fn = jax.jit(_sharded_kernel(mesh, config, use_exact_expert_major=inputs.use_exact_expert_major))
+        w2_return_fn = jax.jit(
+            _sharded_w2_return_direct_to_source_kernel(
+                mesh,
+                config,
+                use_exact_expert_major=inputs.use_exact_expert_major,
+            )
+        )
         combine_fn = jax.jit(_sharded_source_combine_kernel(mesh, config))
         _, hidden = w13_fn(
             inputs.x,
@@ -602,7 +656,9 @@ def _call_source_push_forward_device_inputs(
             inputs.route_valid_mask,
         )
 
-    fn = jax.jit(_sharded_source_push_forward_kernel(mesh, config))
+    fn = jax.jit(
+        _sharded_source_push_forward_kernel(mesh, config, use_exact_expert_major=inputs.use_exact_expert_major)
+    )
     return fn(
         inputs.x,
         inputs.send_meta,
@@ -639,11 +695,18 @@ def _time_staged_source_push_forward(
     steps: int,
     repeat_runs: int,
     progress: Callable[[str], None] | None = None,
+    use_exact_expert_major: bool = False,
 ) -> SourcePushForwardTiming:
     """Run full forward as three host-synchronized JIT stages for ordering diagnostics."""
 
-    w13_fn = jax.jit(_sharded_kernel(mesh, config))
-    w2_return_fn = jax.jit(_sharded_w2_return_direct_to_source_kernel(mesh, config))
+    w13_fn = jax.jit(_sharded_kernel(mesh, config, use_exact_expert_major=use_exact_expert_major))
+    w2_return_fn = jax.jit(
+        _sharded_w2_return_direct_to_source_kernel(
+            mesh,
+            config,
+            use_exact_expert_major=use_exact_expert_major,
+        )
+    )
     combine_fn = jax.jit(_sharded_source_combine_kernel(mesh, config))
 
     def call_stages(*, record_stage_times: bool = False):
@@ -803,9 +866,16 @@ def _run_forward_one(
                 steps=settings.steps,
                 repeat_runs=settings.repeat_runs,
                 progress=lambda event: _emit_progress(config, settings.progress_events, event),
+                use_exact_expert_major=inputs.use_exact_expert_major,
             )
         else:
-            fn = jax.jit(_sharded_source_push_forward_kernel(mesh, config))
+            fn = jax.jit(
+                _sharded_source_push_forward_kernel(
+                    mesh,
+                    config,
+                    use_exact_expert_major=inputs.use_exact_expert_major,
+                )
+            )
             timing = _source_push_forward_timing_from_base(
                 _time_jitted(
                     fn,
@@ -1084,6 +1154,37 @@ def run_source_push_forward_source_plan(
         progress_events=progress_events,
     )
     return _run_forward_one(config, settings, execution_mode=execution_mode)
+
+
+def run_source_push_forward_exact_source_plan(
+    config: PushInboxConfig,
+    *,
+    warmup: int,
+    steps: int,
+    repeat_runs: int,
+    check: bool,
+    debug_exceptions: bool = False,
+    separate_compile: bool = False,
+    progress_events: bool = False,
+    execution_mode: str = FORWARD_EXECUTION_SINGLE_JIT,
+) -> list[dict[str, Any]]:
+    """Run W13, W2 return, and deterministic combine using exact row starts."""
+
+    settings = SourcePushInboxRunSettings(
+        warmup=warmup,
+        steps=steps,
+        repeat_runs=repeat_runs,
+        check=check,
+        debug_exceptions=debug_exceptions,
+        separate_compile=separate_compile,
+        progress_events=progress_events,
+    )
+    return _run_forward_one(
+        config,
+        settings,
+        input_builder=make_source_push_forward_exact_source_plan_inputs,
+        execution_mode=execution_mode,
+    )
 
 
 def _emit_progress(config: PushInboxConfig, progress_events: bool, event: str) -> None:

@@ -807,6 +807,95 @@ def test_source_push_forward_inputs_share_one_plan_across_all_stages():
     assert int(np.asarray(inputs.plan.route_slots[src, dst_ord, entry, row])) == int(route_slot)
 
 
+def test_source_push_forward_exact_inputs_match_source_padded_reference_for_block_aligned_plan():
+    config = source_push_inbox.PushInboxConfig(
+        ep_size=2,
+        entries_per_rank=1,
+        inbox_slots=1,
+        hidden_dim=8,
+        intermediate_dim=8,
+        block_m=2,
+        block_k=4,
+        block_n=4,
+        experts_per_rank=1,
+        send_worker_programs_per_peer=1,
+        worker_programs_per_peer=4,
+        routing="balanced",
+        tokens_per_rank=4,
+        topk=1,
+        capacity_factor=1.25,
+    )
+    raw_inputs = source_push_forward.make_source_push_forward_source_plan_raw_inputs(config)
+    source_padded_inputs = source_push_forward.make_source_push_forward_inputs(
+        config,
+        raw_inputs.x,
+        raw_inputs.selected_experts,
+        raw_inputs.combine_weights,
+        raw_inputs.w_gate_up,
+        raw_inputs.w_down,
+        input_mode="source_push_plan",
+    )
+    exact_inputs = source_push_forward.make_source_push_forward_inputs(
+        config,
+        raw_inputs.x,
+        raw_inputs.selected_experts,
+        raw_inputs.combine_weights,
+        raw_inputs.w_gate_up,
+        raw_inputs.w_down,
+        input_mode="exact_source_push_plan",
+        use_exact_expert_major=True,
+    )
+    source_padded_out = np.asarray(
+        source_push_forward.reference_source_push_forward(config, source_padded_inputs),
+        dtype=np.float32,
+    )
+    exact_out = np.asarray(source_push_forward.reference_source_push_forward(config, exact_inputs), dtype=np.float32)
+
+    src = 1
+    dst = 0
+    dst_ordinal = source_push_inbox._dst_ordinal(config, src, dst)
+    entry = 0
+    local_row_start = exact_inputs.send_meta[
+        src, dst_ordinal, entry, source_push_plan.SOURCE_PUSH_META_LOCAL_ROW_START
+    ]
+    expert = exact_inputs.send_meta[src, dst_ordinal, entry, source_push_plan.SOURCE_PUSH_META_LOCAL_EXPERT]
+    exact_row_start = (
+        exact_inputs.expert_base[dst, expert] + exact_inputs.src_base_by_expert[dst, src, expert] + local_row_start
+    )
+
+    assert exact_inputs.use_exact_expert_major
+    assert exact_inputs.queue_stats["input_mode"] == "exact_source_push_plan"
+    assert exact_inputs.queue_stats["row_start_mode"] == source_push_inbox.ROW_START_MODE_EXACT_EXPERT_MAJOR
+    assert exact_inputs.queue_stats["row_layout"] == source_push_inbox.ROW_LAYOUT_EXACT_EXPERT_MAJOR
+    assert exact_inputs.queue_stats["plan_layout_padding_rows_total"] == 0
+    assert local_row_start == 0
+    assert exact_row_start == config.block_m
+    np.testing.assert_allclose(exact_out, source_padded_out, atol=1e-5, rtol=1e-5)
+
+
+def test_source_push_forward_exact_inputs_reject_tail_blocks():
+    config = source_push_inbox.PushInboxConfig(
+        ep_size=2,
+        entries_per_rank=2,
+        inbox_slots=1,
+        hidden_dim=8,
+        intermediate_dim=8,
+        block_m=2,
+        block_k=4,
+        block_n=4,
+        experts_per_rank=1,
+        send_worker_programs_per_peer=1,
+        worker_programs_per_peer=4,
+        routing="balanced",
+        tokens_per_rank=5,
+        topk=1,
+        capacity_factor=1.25,
+    )
+
+    with pytest.raises(ValueError, match="block_m-aligned live blocks"):
+        source_push_forward.make_source_push_forward_exact_source_plan_inputs(config)
+
+
 def test_source_push_forward_real_inputs_match_independent_moe_reference():
     config = source_push_inbox.PushInboxConfig(
         ep_size=2,

@@ -16,6 +16,7 @@ import levanter.grug.grug_moe as grug_moe
 from levanter.grug._moe.common import _prepare_moe_dispatch, _prepare_moe_dispatch_indices_with_assignment_ids
 from levanter.grug._moe.ep_deepep import _pack_deepep_local_assignments
 import levanter.grug._moe.source_push_combine as source_push_combine
+import levanter.grug._moe.source_push_forward as source_push_forward
 from levanter.grug._moe.source_push_forward import make_source_push_forward_source_plan_raw_inputs
 import levanter.grug._moe.source_push_inbox as source_push_inbox
 from levanter.grug._moe.source_push_inbox import PushInboxConfig
@@ -936,6 +937,54 @@ def test_source_push_exact_expert_major_w2_return_matches_reference_on_h100():
     assert row["row_start_mode"] == source_push_inbox.ROW_START_MODE_EXACT_EXPERT_MAJOR
     assert row["row_layout"] == source_push_inbox.ROW_LAYOUT_EXACT_EXPERT_MAJOR
     assert row["source_queue_max_abs_diff"] <= 0.03125
+    assert row["mean_abs_diff"] <= 0.002
+
+
+def test_source_push_exact_expert_major_forward_matches_reference_on_h100():
+    _skip_without_h100x8()
+
+    config = PushInboxConfig(
+        ep_size=2,
+        entries_per_rank=2,
+        inbox_slots=1,
+        hidden_dim=128,
+        intermediate_dim=128,
+        block_m=64,
+        block_n=128,
+        block_k=64,
+        n_group=1,
+        n_groups_per_job=1,
+        experts_per_rank=2,
+        send_worker_programs_per_peer=1,
+        worker_programs_per_peer=8,
+        send_pipeline_depth=1,
+        routing="balanced",
+        tokens_per_rank=128,
+        topk=2,
+        capacity_factor=1.25,
+    )
+
+    rows = source_push_forward.run_source_push_forward_exact_source_plan(
+        config,
+        warmup=0,
+        steps=1,
+        repeat_runs=1,
+        check=True,
+        debug_exceptions=True,
+        execution_mode=source_push_forward.FORWARD_EXECUTION_STAGED_HOST_SYNC,
+    )
+
+    row = next(
+        row for row in rows if row["row_type"] == "repeat" and row["stage"] == source_push_forward.FORWARD_STAGE_TOTAL
+    )
+    assert row["error_type"] is None
+    assert row["execution_mode"] == source_push_forward.FORWARD_EXECUTION_STAGED_HOST_SYNC
+    assert row["input_mode"] == "exact_source_push_plan"
+    assert row["row_start_mode"] == source_push_inbox.ROW_START_MODE_EXACT_EXPERT_MAJOR
+    assert row["row_layout"] == source_push_inbox.ROW_LAYOUT_EXACT_EXPERT_MAJOR
+    assert row["plan_layout_padding_rows_total"] == 0
+    assert row["dropped_routes"] == 0
+    assert row["max_abs_diff"] <= 0.03125
     assert row["mean_abs_diff"] <= 0.002
 
 
