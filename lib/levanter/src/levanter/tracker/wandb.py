@@ -170,12 +170,16 @@ class WandbTracker(Tracker):
         fs, _, _ = fsspec.get_fs_token_paths(metrics_file)
         fs.makedirs(self._replicate_path, exist_ok=True)
 
-        with fs.open(metrics_file, "w") as f:
-            record = {
-                "config": _convert_value_to_loggable_rec(dict(self.run.config)),
-                "summary": _convert_value_to_loggable_rec(_summary_for_replicate(self.run)),
-            }
+        record = {
+            "config": _convert_value_to_loggable_rec(dict(self.run.config)),
+            "summary": _convert_value_to_loggable_rec(_summary_for_replicate(self.run)),
+        }
+        # Write to a temp name and rename into place so a failed write can never
+        # truncate an existing tracker_metrics.jsonl (e.g. the pre-finish copy).
+        tmp_file = f"{metrics_file}.tmp"
+        with fs.open(tmp_file, "w") as f:
             f.write(json.dumps(record, sort_keys=True, default=str) + "\n")
+        fs.mv(tmp_file, metrics_file)
 
 
 def _summary_for_replicate(run: WandbRun) -> dict[str, Any]:
