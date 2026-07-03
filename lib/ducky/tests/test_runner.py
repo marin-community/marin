@@ -153,6 +153,83 @@ def test_httpfs_retries_are_configured(make_runner):
     assert cursor.execute("SELECT current_setting('http_retries')").fetchone()[0] == 10
 
 
+def test_parquet_footer_cache_is_enabled(make_runner):
+    # repeat queries over the same object-store files should reuse cached parquet footers;
+    # GLOBAL so the per-query cursor inherits it.
+    cursor = make_runner()._con.cursor()
+    assert cursor.execute("SELECT current_setting('parquet_metadata_cache')").fetchone()[0] is True
+
+
+def _write_parquet(con, path: Path, sql: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    con.execute(f"COPY ({sql}) TO '{path}'")
+
+
+def test_catalog_views_are_queryable(make_runner, tmp_path):
+    # a finelog-like local layout: <root>/<namespace>/seg_L*.parquet
+    finelog_root = tmp_path / "finelog"
+    con = duckdb.connect()
+    _write_parquet(con, finelog_root / "log" / "seg_L0_0.parquet", "SELECT 1 AS level, 'hi' AS data")
+    _write_parquet(con, finelog_root / "iris.task" / "seg_L0_0.parquet", "SELECT 'task-1' AS task_id")
+    con.close()
+
+    runner = make_runner(finelog_root=str(finelog_root))
+    assert runner.run_query('SELECT data FROM finelog."log"', uuid.uuid4().hex).preview_rows == [["hi"]]
+    # the dotted namespace resolves as a quoted view name
+    assert runner.run_query('SELECT task_id FROM finelog."iris.task"', uuid.uuid4().hex).preview_rows == [["task-1"]]
+    # created views are tracked (so the server advertises only what exists)
+    assert {'finelog."log"', 'finelog."iris.task"'} <= runner.created_view_names
+
+
+def test_configured_root_readable_despite_restrictive_allowlist(make_runner, tmp_path):
+    # configuring finelog_root declares it readable, so its views are created and queryable
+    # even when allowed_buckets doesn't cover it (the root joins effective_allowed_buckets).
+    finelog_root = tmp_path / "finelog"
+    con = duckdb.connect()
+    _write_parquet(con, finelog_root / "log" / "seg_L0_0.parquet", "SELECT 1 AS level")
+    con.close()
+
+    runner = make_runner(finelog_root=str(finelog_root), allowed_buckets=("gs://marin-us-east5",))
+    assert 'finelog."log"' in runner.created_view_names
+    assert runner.run_query('SELECT * FROM finelog."log"', uuid.uuid4().hex).total_rows == 1
+
+
+def test_configured_root_extends_literal_read_allowlist():
+    # a literal read_parquet of the configured root prefix is allowed — consistent with the
+    # view — while a different bucket in the same region stays blocked.
+    config = DuckyConfig(
+        scratch_bucket="/tmp/ducky",
+        allowed_buckets=("gs://marin-us-east5",),
+        finelog_root="gs://marin-us-central2/finelog/marin",
+    )
+    eff = config.effective_allowed_buckets
+    assert disallowed_uris("read('gs://marin-us-central2/finelog/marin/log/s.parquet')", eff) == []
+    assert disallowed_uris("read('gs://marin-us-central2/other/x.parquet')", eff) == [
+        "gs://marin-us-central2/other/x.parquet"
+    ]
+
+
+def test_datakit_view_globs_hashed_dir(make_runner, tmp_path):
+    datakit_root = tmp_path / "normalized"
+    con = duckdb.connect()
+    # <root>/<name>_<hash8>/outputs/main/part-*.parquet — the view must glob past the hash
+    part = datakit_root / "finetranslations_abcd1234" / "outputs" / "main" / "part-00000-of-00001.parquet"
+    _write_parquet(con, part, "SELECT 'doc-1' AS id, 'hello' AS text")
+    con.close()
+
+    runner = make_runner(datakit_root=str(datakit_root))
+    assert runner.run_query('SELECT id FROM datakit."finetranslations"', uuid.uuid4().hex).preview_rows == [["doc-1"]]
+
+
+def test_missing_catalog_dataset_is_skipped_not_fatal(make_runner, tmp_path):
+    # a root with no matching parquet: view creation fails per-view, but the runner still
+    # comes up and serves ordinary queries.
+    runner = make_runner(finelog_root=str(tmp_path / "empty-finelog"))
+    assert runner.run_query("SELECT 1 AS a", uuid.uuid4().hex).preview_rows == [[1]]
+    with pytest.raises(QueryError):  # the un-created view is simply absent
+        runner.run_query('SELECT * FROM finelog."log"', uuid.uuid4().hex)
+
+
 def test_run_query_is_concurrency_safe(make_runner):
     runner = make_runner()  # one runner shared across threads; each query uses its own cursor
 

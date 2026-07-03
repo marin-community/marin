@@ -48,6 +48,31 @@ _BACKEND_ENV = {
 PORT_NAME = "ducky"
 ENDPOINT_NAME = "/ducky"
 
+# Default object-store roots for the pre-baked catalog (see catalog.py), applied by
+# `from_environment` when the DUCKY_* env var is unset; set `DUCKY_FINELOG_ROOT=`/
+# `DUCKY_DATAKIT_ROOT=` (empty) to disable a source's views. Catalog views over a root
+# outside `allowed_buckets` are skipped, so these defaults never silently egress across
+# regions — the allowlist gates them (see QueryRunner._create_catalog_views).
+#
+# finelog's marin deployment writes to us-central2. datakit normalized parquet lives under
+# `<MARIN_PREFIX>/normalized`, so its root is derived from the MARIN_PREFIX env when set
+# (the datakit corpus is canonical in eu-west4); the constant is only a last-resort fallback.
+DEFAULT_FINELOG_ROOT = "gs://marin-us-central2/finelog/marin"
+DEFAULT_DATAKIT_ROOT = "gs://marin-us-east5/normalized"
+_MARIN_PREFIX_ENV = "MARIN_PREFIX"
+
+
+def _resolve_datakit_root() -> str | None:
+    """Datakit normalized-parquet root: explicit DUCKY_DATAKIT_ROOT wins (empty disables),
+    else ``<MARIN_PREFIX>/normalized`` when MARIN_PREFIX is set, else the fallback constant."""
+    explicit = os.environ.get(f"{_ENV_PREFIX}DATAKIT_ROOT")
+    if explicit is not None:
+        return explicit or None
+    marin_prefix = os.environ.get(_MARIN_PREFIX_ENV)
+    if marin_prefix:
+        return f"{marin_prefix.rstrip('/')}/normalized"
+    return DEFAULT_DATAKIT_ROOT
+
 
 @dataclasses.dataclass(frozen=True)
 class DuckyConfig:
@@ -79,6 +104,16 @@ class DuckyConfig:
     cw_scope: str = "s3://marin-us-east-02a"
     """DuckDB SECRET scope for the CoreWeave backend."""
 
+    finelog_root: str | None = None
+    """Object-store root of the finelog store (``<root>/<namespace>/seg_L*.parquet``).
+    Pre-baked ``finelog.*`` views are created over it. ``None``/empty skips them.
+    `from_environment` supplies :data:`DEFAULT_FINELOG_ROOT`; direct construction defaults
+    to ``None`` so unit tests don't reach the network binding views."""
+    datakit_root: str | None = None
+    """Object-store root of datakit normalized parquet
+    (``<root>/<name>_<hash>/outputs/main/*.parquet``). Curated ``datakit.*`` views are
+    created over it. ``None``/empty skips them; see :attr:`finelog_root` on the default."""
+
     preview_row_cap: int = 10_000
     """Max rows returned inline to the browser. The full result always spills to parquet."""
 
@@ -109,6 +144,19 @@ class DuckyConfig:
 
     result_ttl_days: int = 7
     """Informational — enforced by the scratch bucket's lifecycle rule, not by ducky (ducky only writes)."""
+
+    @property
+    def effective_allowed_buckets(self) -> tuple[str, ...]:
+        """Object-store prefixes a query may read: the configured allowlist plus the catalog
+        roots. Configuring a catalog root (``finelog_root``/``datakit_root``) declares that
+        prefix readable, so a pre-baked view and a literal ``read_parquet`` of the same prefix
+        behave identically — the view can't reach a bucket a literal URI couldn't. An empty
+        allowlist means allow-all and stays empty (adding roots would turn it into a
+        restrictive list)."""
+        if not self.allowed_buckets:
+            return ()
+        roots = tuple(root for root in (self.finelog_root, self.datakit_root) if root)
+        return self.allowed_buckets + roots
 
     @property
     def gcs_enabled(self) -> bool:
@@ -164,5 +212,7 @@ class DuckyConfig:
             result_ttl_days=int(os.environ.get(f"{_ENV_PREFIX}RESULT_TTL_DAYS", cls.result_ttl_days)),
             r2_scope=os.environ.get(f"{_ENV_PREFIX}R2_SCOPE", cls.r2_scope),
             cw_scope=os.environ.get(f"{_ENV_PREFIX}CW_SCOPE", cls.cw_scope),
+            finelog_root=os.environ.get(f"{_ENV_PREFIX}FINELOG_ROOT", DEFAULT_FINELOG_ROOT) or None,
+            datakit_root=_resolve_datakit_root(),
             **creds,
         )

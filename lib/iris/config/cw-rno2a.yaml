@@ -1,0 +1,138 @@
+# CoreWeave RNO2A cluster (cluster name: cw-rno2a).
+#
+# Reserved H100 fleet: 64x gd-8xh100ib-i128 (8 GPU each, 512 H100 total) plus a
+# single turin-gp-l CPU node for the controller. Same KubernetesProvider model
+# as cw-us-east-02a: task Pods dispatch directly to the k8s API (Pod-per-task),
+# Kueue gang-admits coscheduled groups, and CoreWeave's cluster autoscaler
+# provisions nodes. See lib/iris/docs/coreweave.md.
+#
+# The H100 pool is pinned fully warm (buffer_slices: 64 = the reservation): the
+# fleet is prepaid, so there is nothing to save by autoscaling it down.
+#
+# Workflow:
+#   1. Set CoreWeave AI Object Storage credentials (console -> Object Storage ->
+#      Access Keys). The env var names are historical — they feed any
+#      S3-compatible backend, and `iris cluster start` turns them into the
+#      iris-task-env Secret (addressing style is derived from the endpoint
+#      domain):
+#        export R2_ACCESS_KEY_ID=<coreweave-access-key-id>
+#        export R2_SECRET_ACCESS_KEY=<coreweave-access-key-secret>
+#   2. Point kubectl/iris at the region kubeconfig:
+#        export KUBECONFIG=~/.kube/coreweave-iris-rno2a   # context marin-rn02a_RNO2A
+#   3. Start / inspect the cluster:
+#        uv run iris --cluster=cw-rno2a cluster start
+#        uv run iris --cluster=cw-rno2a cluster status
+
+# External finelog log server (in-cluster k8s Deployment, namespace `iris`).
+# Resolves to k8s://finelog-cw-rno2a.iris; see lib/finelog/config/cw-rno2a.yaml.
+# Without this the controller falls back to an in-process MemStore (logs lost on
+# restart). Deploy the server first: `uv run finelog deploy up cw-rno2a`.
+finelog:
+  config: cw-rno2a
+
+platform:
+  label_prefix: cw-rno2a
+  coreweave:
+    region: RNO2A
+    namespace: iris
+    kubeconfig_path: ~/.kube/coreweave-iris-rno2a
+    # CoreWeave AI Object Storage via LOTA, the in-cluster local cache
+    # endpoint (use https://cwobject.com from outside CoreWeave). Bare
+    # endpoint only: buckets use virtual-hosted addressing
+    # (http://<bucket>.cwlota.com), which iris detects from this domain.
+    object_storage_endpoint: http://cwlota.com
+
+storage:
+  remote_state_dir: s3://marin-us-east-02a/iris/cw-rno2a/state
+
+kubernetes_provider:
+  namespace: iris
+  default_image: ghcr.io/marin-community/iris-task:latest
+  host_network: true                # Required for NCCL/IB multi-host traffic
+  cache_dir: /mnt/local/iris-cache  # NVMe; default /cache hits the 15GB ramdisk on bare-metal nodes
+  controller_address: http://iris-controller-svc.iris.svc.cluster.local:10000
+  kueue:
+    # Enables Kueue gang admission for multi-host GPU jobs. The ClusterQueue
+    # (cluster-scoped) and ResourceFlavor cw-ib are created out-of-band by
+    # lib/iris/scripts/install_kueue.py --with-queues; Iris reconciles the
+    # namespaced LocalQueue (cw-rno2a-lq) bound to it at controller start.
+    cluster_queue: iris-cq
+  # CoreWeave's node health checker runs preemptible (priority -1) GPU
+  # verification pods on idle nodes. Kueue TAS counts them as fixed node usage
+  # and cannot preempt non-Kueue pods, so gangs queue behind every NHC sweep;
+  # Iris evicts them itself when it has gang work.
+  preempt_namespaces: ["cw-hpc-verification"]
+
+controller:
+  image: ghcr.io/marin-community/iris-controller:latest
+  coreweave:
+    port: 10000
+    service_name: iris-controller-svc
+    scale_group: cpu-turin
+
+defaults:
+  autoscaler:
+    evaluation_interval:
+      milliseconds: 10000
+    scale_up_delay:
+      milliseconds: 60000
+    scale_down_delay:
+      milliseconds: 300000
+  task_env:
+    # The shared CoreWeave bucket (everything lives in marin-us-east-02a; LOTA
+    # caches reads locally). Task pods carry ONE endpoint/credential set, so R2
+    # data under s3://marin-na/ is not reachable from jobs unless they override
+    # AWS_ENDPOINT_URL and credentials themselves.
+    MARIN_PREFIX: s3://marin-us-east-02a/marin
+    # H100 hostNetwork pods also see IB and SR-IOV link-local interfaces; pin the
+    # NCCL bootstrap socket to the host ethernet PF (carries the node IP).
+    NCCL_SOCKET_IFNAME: =enp90s0np0
+  worker:
+    docker_image: ghcr.io/marin-community/iris-worker:latest
+    port: 10001
+    cache_dir: /mnt/local/iris-cache
+    runtime: kubernetes
+    default_task_image: ghcr.io/marin-community/iris-task:latest
+
+scale_groups:
+  cpu-turin:
+    num_vms: 1
+    resources:
+      cpu: 192        # turin-gp-l: AMD Turin 9655P (96 cores / 192 vCPUs), high storage
+      ram: 1536GB     # ~1.5 TiB allocatable on the live node
+      disk: 29TB      # allocatable ephemeral-storage on the live node
+      device_type: cpu
+      capacity_type: on-demand
+    worker:
+      attributes:
+        pool: cpu-turin
+    buffer_slices: 1     # one CPU node always warm for the controller
+    max_slices: 1
+    priority: 50
+    slice_template:
+      num_vms: 1
+      coreweave:
+        region: RNO2A
+        instance_type: turin-gp-l
+
+  h100-8x:
+    num_vms: 1
+    resources:
+      cpu: 128
+      ram: 2048GB
+      disk: 1TB
+      device_type: gpu
+      device_variant: H100
+      device_count: 8
+      capacity_type: on-demand
+    worker:
+      attributes:
+        pool: h100-8x
+    buffer_slices: 64    # pin the full reserved (prepaid) fleet warm; no autoscaling headroom needed
+    max_slices: 64
+    priority: 100
+    slice_template:
+      num_vms: 1
+      coreweave:
+        region: RNO2A
+        instance_type: gd-8xh100ib-i128

@@ -9,8 +9,8 @@ from dataclasses import dataclass
 
 from rigging.timing import Timestamp
 
-from iris.cluster.backends.types import SliceHandle
 from iris.cluster.controller.autoscaler.scaling_group import ScalingGroup
+from iris.cluster.platforms.types import SliceHandle
 from iris.rpc import vm_pb2
 
 logger = logging.getLogger(__name__)

@@ -18,11 +18,12 @@ from iris.cluster.backends.k8s.tasks import (
     _RUNTIME_LABEL_VALUE,
     K8sTaskProvider,
 )
+from iris.cluster.backends.rpc.backend import RpcTaskBackend
 from iris.cluster.bundle import BundleStore
 from iris.cluster.constraints import WellKnownAttribute
 from iris.cluster.controller import ops, reads
-from iris.cluster.controller.autoscaler.status import PendingHint
-from iris.cluster.controller.backend import BackendCapability
+from iris.cluster.controller.autoscaler.status import PendingHint, overlay_worker_usability
+from iris.cluster.controller.backend import BackendCapability, BackendRuntime
 from iris.cluster.controller.codec import constraints_from_json, device_counts_from_json, device_variant_from_json
 from iris.cluster.controller.dashboard import ControllerDashboard
 from iris.cluster.controller.endpoint_service import EndpointServiceImpl
@@ -39,7 +40,7 @@ from iris.cluster.controller.scheduling.scheduler import (
     worker_snapshot_from_row,
 )
 from iris.cluster.controller.schema import jobs_table, task_attempts_table, tasks_table
-from iris.cluster.controller.service import ControllerServiceImpl, _overlay_worker_usability
+from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.platforms.k8s.fake import InMemoryK8sService
 from iris.cluster.platforms.k8s.types import K8sResource
 from iris.cluster.types import DEFAULT_BACKEND_ID, JobName, UserBudgetDefaults, WorkerId, WorkerUsability
@@ -124,6 +125,30 @@ def scheduler():
     return Scheduler()
 
 
+def _worker_backend(state, autoscaler, backend_id=DEFAULT_BACKEND_ID):
+    """A real ``RpcTaskBackend`` bound to the test DB and shared liveness tracker.
+
+    It authors its own ``status()`` / ``autoscaler_status()`` exactly as in
+    production — health counts from its tracker, per-VM usability + running-task
+    overlay from its own state, groups tagged with its own ``backend_id`` — so the
+    controller reads the result verbatim. The stub factory is unused by the status
+    paths, so a bare ``Mock`` suffices."""
+    backend = RpcTaskBackend(stub_factory=Mock())
+    backend.health = state._health
+    backend.autoscaler = autoscaler
+    backend.bind_runtime(
+        BackendRuntime(
+            backend_id=backend_id,
+            db=state._db,
+            endpoints=state._endpoints,
+            run_template_cache=state._run_template_cache,
+            owns_scale_group=lambda _scale_group: True,
+            budget_defaults=UserBudgetDefaults(),
+        )
+    )
+    return backend
+
+
 def _make_controller_mock(state, scheduler, autoscaler=None):
     """Build a mock that implements the ControllerProtocol for testing.
 
@@ -202,6 +227,12 @@ def _make_controller_mock(state, scheduler, autoscaler=None):
     # reads liveness through the controller's union over the backends' trackers.
     controller_mock.provider.health = state._health
     controller_mock.provider.worker_attrs = state._worker_attrs
+    # status()/autoscaler_status() are delegated to a real backend bound to the same
+    # DB + tracker, so the provider authors them exactly as production — the service
+    # overlays nothing on top.
+    _authoring_backend = _worker_backend(state, autoscaler)
+    controller_mock.provider.autoscaler_status.side_effect = _authoring_backend.autoscaler_status
+    controller_mock.provider.status.side_effect = _authoring_backend.status
     controller_mock.capabilities = worker_caps
     controller_mock.backends = {DEFAULT_BACKEND_ID: controller_mock.provider}
     controller_mock.backend_id_for_scale_group = Mock(return_value=DEFAULT_BACKEND_ID)
@@ -760,7 +791,7 @@ def test_overlay_worker_usability_tags_vms_and_per_slice_degraded_count():
     }
     running = {WorkerId("w-healthy"): {"task-1"}}
 
-    _overlay_worker_usability(status, usability_by_id, running)
+    overlay_worker_usability(status, usability_by_id, running)
 
     group = status.groups[0]
     s1, s2 = group.slices
@@ -796,7 +827,7 @@ def test_overlay_capacity_status_busy_healthy_slice_is_in_use():
         ]
     )
     usability = {"a": WorkerUsability.HEALTHY, "b": WorkerUsability.HEALTHY}
-    _overlay_worker_usability(status, usability, {WorkerId("a"): {"t1"}, WorkerId("b"): {"t2"}})
+    overlay_worker_usability(status, usability, {WorkerId("a"): {"t1"}, WorkerId("b"): {"t2"}})
 
     assert status.groups[0].slices[0].capacity_status == "in_use"
 
@@ -1668,6 +1699,16 @@ def _backend_mock(name, capabilities, autoscaler=None, cluster_status=None, allo
         backend.status.return_value = controller_pb2.Controller.BackendStatus(
             worker=controller_pb2.Controller.WorkerFleetDetail(autoscaler=autoscaler_status)
         )
+
+    # autoscaler_status() authors this backend's groups tagged with its own id (the
+    # dict key is the backend_id in these tests), mirroring the real backend.
+    def _autoscaler_status():
+        status = autoscaler.get_status() if autoscaler is not None else vm_pb2.AutoscalerStatus()
+        for group in status.groups:
+            group.backend_id = name
+        return status
+
+    backend.autoscaler_status.side_effect = _autoscaler_status
     return backend
 
 
@@ -1928,19 +1969,14 @@ def test_list_backends_returns_per_backend_summary(state, scheduler, tmp_path, l
 
 
 def test_list_backends_worker_detail_reports_autoscaler_and_health_counts(state, scheduler, tmp_path, log_client):
-    """ListBackends.detail.worker carries the backend's autoscaler groups plus DB-derived health counts."""
+    """ListBackends.detail.worker carries the backend's autoscaler groups plus the
+    health counts the backend authors from its own liveness tracker."""
     client = _multi_backend_client(
         state,
         scheduler,
         tmp_path,
         log_client,
-        {
-            DEFAULT_BACKEND_ID: _backend_mock(
-                "worker",
-                frozenset({BackendCapability.WORKER_DAEMON, BackendCapability.IRIS_AUTOSCALER}),
-                autoscaler=_status_autoscaler("tpu-v5e-us"),
-            )
-        },
+        {DEFAULT_BACKEND_ID: _worker_backend(state, _status_autoscaler("tpu-v5e-us"))},
     )
     register_worker(state, "w-healthy-1", "10.0.0.1:8080", make_worker_metadata(), scale_group="tpu-v5e")
     register_worker(state, "w-healthy-2", "10.0.0.2:8080", make_worker_metadata(), scale_group="tpu-v5e")
@@ -1979,13 +2015,7 @@ def test_list_backends_worker_detail_overlays_running_task_counts(state, schedul
         scheduler,
         tmp_path,
         log_client,
-        {
-            DEFAULT_BACKEND_ID: _backend_mock(
-                "worker",
-                frozenset({BackendCapability.WORKER_DAEMON, BackendCapability.IRIS_AUTOSCALER}),
-                autoscaler=autoscaler,
-            )
-        },
+        {DEFAULT_BACKEND_ID: _worker_backend(state, autoscaler)},
     )
     # Place a running task on the VM's worker so the overlay's DB lookup finds it.
     wid = register_worker(state, "w-run", "10.0.0.9:8080", make_worker_metadata(), scale_group="tpu-v5e")

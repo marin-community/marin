@@ -12,9 +12,9 @@ GcpWorkerProvider.
 from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass
 
-from iris.cluster.backends.types import default_stop_all
 from iris.cluster.config import ControllerVmConfig, IrisClusterConfig
 from iris.cluster.platforms.manual.workers import ManualWorkerProvider
+from iris.cluster.platforms.types import default_stop_all
 from iris.cluster.platforms.vm_lifecycle import restart_controller as vm_restart_controller
 from iris.cluster.platforms.vm_lifecycle import start_controller as vm_start_controller
 from iris.cluster.platforms.vm_lifecycle import stop_controller as vm_stop_controller

@@ -55,13 +55,13 @@ def _resolve_cluster_endpoints(cluster_config: IrisClusterConfig) -> dict[str, s
     for name, spec in cluster_config.endpoints.items():
         resolved[name] = resolve_endpoint_uri(spec.uri, dict(spec.metadata))
 
-    if cluster_config.log_server_config:
+    if cluster_config.finelog.config:
         if LOG_SERVER_ENDPOINT_NAME in cluster_config.endpoints:
             raise ValueError(
-                f"cannot set both log_server_config={cluster_config.log_server_config!r} "
+                f"cannot set both finelog.config={cluster_config.finelog.config!r} "
                 f"and endpoints[{LOG_SERVER_ENDPOINT_NAME}] in the same cluster config"
             )
-        fcfg = load_finelog_config(cluster_config.log_server_config)
+        fcfg = load_finelog_config(cluster_config.finelog.config)
         uri, meta = derive_endpoint_uri(fcfg)
         resolved[LOG_SERVER_ENDPOINT_NAME] = resolve_endpoint_uri(uri, meta)
     return resolved
@@ -170,6 +170,7 @@ def run_controller_serve(
         autoscaler_evaluation_interval=cluster_config.defaults.autoscaler.evaluation_interval,
         cluster_id=cluster_config.name,
         peers=cluster_config.peers,
+        finelog=cluster_config.finelog,
     )
 
     # Each worker-daemon backend constructs and owns its liveness tracker, sized by

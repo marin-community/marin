@@ -89,6 +89,16 @@ def test_peers_config_rejects_static_token_without_cluster():
 
 
 # ---------------------------------------------------------------------------
+# finelog relay: validation
+# ---------------------------------------------------------------------------
+
+
+def test_finelog_relay_rejects_short_delegation_key():
+    with pytest.raises(ValueError, match="delegation_key must be at least 16 bytes"):
+        parse_config(_config(finelog={"relay_address": "dns:///g:1", "delegation_key": "short"}))
+
+
+# ---------------------------------------------------------------------------
 # peer heartbeat + ListPeers view (the parent side)
 # ---------------------------------------------------------------------------
 

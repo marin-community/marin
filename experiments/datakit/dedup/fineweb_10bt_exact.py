@@ -4,7 +4,7 @@
 """Download fineweb-edu 10BT sample (~10GB) and run exact paragraph dedup locally.
 
 Usage:
-    MARIN_PREFIX=/tmp/marin uv run iris --config=lib/iris/config/local.yaml job run -- \\
+    MARIN_PREFIX=/tmp/marin uv run iris --config=lib/iris/config/examples/local.yaml job run -- \\
         python experiments/datakit/dedup/fineweb_10bt_exact.py [--max-parallelism N]
 """
 

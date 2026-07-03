@@ -3,6 +3,7 @@
 
 """Tests for `finelog.deploy.config`."""
 
+import json
 import textwrap
 from pathlib import Path
 
@@ -12,6 +13,7 @@ from finelog.deploy.config import (
     FinelogConfig,
     GcpDeployment,
     K8sDeployment,
+    auth_policy_json,
     derive_endpoint_uri,
     load_finelog_config,
 )
@@ -129,3 +131,54 @@ def test_derive_endpoint_uri_k8s() -> None:
     uri, metadata = derive_endpoint_uri(cfg)
     assert uri == "k8s://finelog-x.iris"
     assert metadata == {"port": "10001"}
+
+
+def test_auth_layers_serialize_to_finelog_policy_json(tmp_path: Path) -> None:
+    """An ordered cidr+jwt `auth:` list serializes to the exact `FINELOG_AUTH_POLICY`
+    JSON the finelog Rust server parses — order preserved, snake_case tags."""
+    cfg_path = tmp_path / "authed.yaml"
+    _write_config(
+        cfg_path,
+        """
+        name: finelog-authed
+        port: 10001
+        image: ghcr.io/test/finelog:latest
+        remote_log_dir: gs://bucket/x
+        deployment:
+          gcp:
+            project: p
+            zone: us-central1-a
+        auth:
+          - type: cidr
+            cidrs: [10.0.0.0/8, "::1/128"]
+          - type: jwt
+            keys:
+              - {cluster: marin, secret: 0123456789abcdef0123456789abcdef}
+        """,
+    )
+    cfg = load_finelog_config(str(cfg_path))
+    assert json.loads(auth_policy_json(cfg.auth)) == [
+        {"type": "cidr", "cidrs": ["10.0.0.0/8", "::1/128"]},
+        {"type": "jwt", "keys": [{"cluster": "marin", "secret": "0123456789abcdef0123456789abcdef"}]},
+    ]
+
+
+def test_auth_unknown_layer_type_rejected(tmp_path: Path) -> None:
+    cfg_path = tmp_path / "bad.yaml"
+    _write_config(
+        cfg_path,
+        """
+        name: finelog-bad
+        port: 10001
+        image: ghcr.io/test/finelog:latest
+        remote_log_dir: gs://bucket/x
+        deployment:
+          gcp:
+            project: p
+            zone: us-central1-a
+        auth:
+          - type: mtls
+        """,
+    )
+    with pytest.raises(ValueError, match="unknown type 'mtls'"):
+        load_finelog_config(str(cfg_path))

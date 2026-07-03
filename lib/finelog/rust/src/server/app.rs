@@ -30,6 +30,7 @@ use connectrpc::{ConnectRpcService, Limits, Router as ConnectRouter};
 
 use crate::proto::finelog::logging::LogServiceExt;
 use crate::proto::finelog::stats::StatsServiceExt;
+use crate::server::auth::{auth_gate, AuthInterceptor, AuthPolicy};
 use crate::server::interceptors::{
     ConcurrencyInterceptor, SlowRpcInterceptor, DEFAULT_SLOW_RPC_THRESHOLD_MS,
     MAX_CONCURRENT_FETCH_LOGS, MAX_CONCURRENT_QUERY,
@@ -43,7 +44,7 @@ use super::MAX_MESSAGE_BYTES;
 
 /// Server-shell tuning. The interceptor caps + slow threshold are fields so a
 /// cargo/parity test can lower them; production uses [`ServerConfig::default`].
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct ServerConfig {
     /// Mount the non-proto `--debug-admin` `/debug/*` routes.
     pub debug_admin: bool,
@@ -53,6 +54,12 @@ pub struct ServerConfig {
     pub max_concurrent_query: usize,
     /// Default per-method slow-RPC threshold (ms); `<= 0` disables.
     pub slow_rpc_threshold_ms: i64,
+    /// The authenticated-ingress policy. Always enforced — the
+    /// interceptor gates every RPC and the policy is default-deny. The default
+    /// ([`AuthPolicy::allow_localhost`]) admits loopback only, so a bare finelog
+    /// is reachable for local debugging but never open to its network; a shared
+    /// global finelog sets a `cidr`+`jwt` stack.
+    pub auth: Arc<AuthPolicy>,
 }
 
 impl Default for ServerConfig {
@@ -62,6 +69,7 @@ impl Default for ServerConfig {
             max_concurrent_fetch_logs: MAX_CONCURRENT_FETCH_LOGS,
             max_concurrent_query: MAX_CONCURRENT_QUERY,
             slow_rpc_threshold_ms: DEFAULT_SLOW_RPC_THRESHOLD_MS,
+            auth: Arc::new(AuthPolicy::allow_localhost()),
         }
     }
 }
@@ -73,6 +81,13 @@ impl ServerConfig {
             debug_admin,
             ..Self::default()
         }
+    }
+
+    /// Set the authenticated-ingress policy (chainable). Replaces the
+    /// allow-localhost default; the policy is always default-deny.
+    pub fn with_auth(mut self, policy: AuthPolicy) -> Self {
+        self.auth = Arc::new(policy);
+        self
     }
 }
 
@@ -98,6 +113,10 @@ fn build_connect_service(
         // SlowRpc registered FIRST -> outermost -> times the whole chain
         // including the concurrency wait.
         .with_interceptor(SlowRpcInterceptor::new(config.slow_rpc_threshold_ms))
+        // Auth sits just inside SlowRpc (so a rejected request is still timed) and
+        // outside Concurrency (so it is rejected before consuming a permit). Always
+        // installed; the default policy admits loopback only.
+        .with_interceptor(AuthInterceptor::new(Arc::clone(&config.auth)))
         .with_interceptor(ConcurrencyInterceptor::new(
             config.max_concurrent_fetch_logs,
             config.max_concurrent_query,
@@ -113,8 +132,14 @@ pub fn build_app(store: Arc<Store>, config: ServerConfig) -> Router {
 
     let mut app = Router::new().route("/health", get(|| async { "ok" }));
     if config.debug_admin {
-        // Mounted BEFORE the connect fallback so /debug/* is not shadowed.
-        app = app.merge(debug::debug_router(Arc::clone(&store)));
+        // Mounted BEFORE the connect fallback so /debug/* is not shadowed. These
+        // admin routes bypass the Connect interceptor chain, so they are gated by
+        // the same auth policy here via `auth_gate` (default-deny, loopback-only
+        // by default) — the admin surface is never more open than the RPCs.
+        let debug = debug::debug_router(Arc::clone(&store)).layer(
+            axum::middleware::from_fn_with_state(Arc::clone(&config.auth), auth_gate),
+        );
+        app = app.merge(debug);
     }
     // SPA routes BEFORE the connect fallback so unmatched GETs serve index.html.
     // The SPA catch-all forwards NON-GET (RPC POSTs) to a clone of the connect

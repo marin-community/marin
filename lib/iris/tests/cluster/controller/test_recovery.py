@@ -4,7 +4,6 @@
 """Restore-path behavior for scale groups that left config (drain mode)."""
 
 import pytest
-from iris.cluster.backends.types import CloudSliceState, ListedSlice
 from iris.cluster.config import ScaleGroupConfig
 from iris.cluster.controller.autoscaler.recovery import AutoscalerCheckpoint, restore_autoscaler_state
 from iris.cluster.controller.autoscaler.scaling_group import (
@@ -13,6 +12,7 @@ from iris.cluster.controller.autoscaler.scaling_group import (
     SliceLifecycleState,
     SliceSnapshot,
 )
+from iris.cluster.platforms.types import CloudSliceState, ListedSlice
 from iris.cluster.types import WorkerStatus
 from rigging.timing import Duration, Timestamp
 from tests.cluster.backends.conftest import make_fake_slice_handle, make_mock_platform

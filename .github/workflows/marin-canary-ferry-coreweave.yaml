@@ -69,7 +69,7 @@ jobs:
       CANARY_MAX_LOSS: "8.0"
       WANDB_ENTITY: marin-community
       WANDB_PROJECT: marin
-      IRIS_CONFIG: lib/iris/config/coreweave-ci.yaml
+      IRIS_CONFIG: lib/iris/config/ci-coreweave.yaml
       IRIS_NAMESPACE: iris-ci
       IRIS_MANAGED_LABEL: iris-iris-ci-managed
 

@@ -18,12 +18,6 @@ from pathlib import Path
 
 from rigging.timing import Duration, Timestamp
 
-from iris.cluster.backends.types import (
-    InfraError,
-    Labels,
-    QuotaExhaustedError,
-    find_free_port,
-)
 from iris.cluster.bundle import BundleStore
 from iris.cluster.config import SliceConfig
 from iris.cluster.config import WorkerConfig as WireWorkerConfig
@@ -41,6 +35,12 @@ from iris.cluster.platforms.gcp.service import (
     validate_resource_name,
     validate_tpu_create,
     validate_vm_create,
+)
+from iris.cluster.platforms.types import (
+    InfraError,
+    Labels,
+    QuotaExhaustedError,
+    find_free_port,
 )
 from iris.cluster.runtime.process import ProcessRuntime
 from iris.cluster.service_mode import ServiceMode

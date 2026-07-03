@@ -51,6 +51,13 @@ RECORD_FILENAME = ".artifact.json"
 # so we read it as a last resort to recover the record. Never written.
 _LEGACY_EXECUTOR_INFO_FILENAME = ".executor_info"
 
+# The lazy ``StepRunner`` also writes a ``.executor_info`` — but at *schedule* time, before the
+# step runs — tagged with this ``executor_version``. Unlike a genuine legacy Ray sidecar, its
+# ``config`` is the identity ``hash_attrs`` (deps/fingerprint/version), not the materialized
+# config. ``read_record`` ignores it so an incomplete step's stub can never be served as a
+# record — which would present, e.g., a tokenizer-less tokenized cache (#6836).
+STEP_RUNNER_EXECUTOR_VERSION = "step_runner"
+
 # Keys under ``StepSpec.hash_attrs`` carrying the artifact's identity, so the runner can
 # apply the drift check without knowing about the lazy layer.
 FINGERPRINT_KEY = "fingerprint"
@@ -189,15 +196,22 @@ def _read_text(output_path: str, filename: str) -> str | None:
         return f.read()
 
 
-def _record_from_executor_info(text: str) -> ArtifactRecord:
+def _record_from_executor_info(text: str) -> ArtifactRecord | None:
     """Map an old Ray executor ``.executor_info`` sidecar into an :class:`ArtifactRecord`.
 
     Only the fields a consumer reads back are carried across: ``name``, the materialized
     ``config`` (where a tokenized cache keeps its tokenizer/format/tags), ``output_path``, and
     ``dependencies`` (recorded as output paths, not ``name@version``). The legacy ``version`` is a
     per-dependency dict rather than a string, so it is dropped rather than coerced.
+
+    Returns ``None`` for a schedule-time ``StepRunner`` stub (``executor_version`` is
+    ``STEP_RUNNER_EXECUTOR_VERSION``): that file predates the step's own record and carries only
+    the identity ``hash_attrs`` under ``config``, so serving it would present a config-less (e.g.
+    tokenizer-less) record for a cache that may never have finished (#6836).
     """
     info = json.loads(text)
+    if info.get("executor_version") == STEP_RUNNER_EXECUTOR_VERSION:
+        return None
     return ArtifactRecord(
         name=info.get("name") or "",
         config=info.get("config"),
@@ -206,17 +220,43 @@ def _record_from_executor_info(text: str) -> ArtifactRecord:
     )
 
 
+# Record-native identity fields a genuine ArtifactRecord sets; a pre-#6649 bare payload has none.
+_RECORD_IDENTITY_FIELDS = ("name", "fingerprint", "result_type", "result")
+_RECORD_FIELDS = frozenset(ArtifactRecord.model_fields)
+
+
+def _parse_record(text: str) -> ArtifactRecord:
+    """Parse an ``.artifact.json``, adopting a pre-#6649 bare payload as the record's ``result``.
+
+    Before #6649 the value model was serialized straight into ``.artifact.json`` (e.g.
+    ``{"version": "v1", "output_dir": ..., "counters": ...}``), so it parses as an
+    :class:`ArtifactRecord` with every native field defaulted and the real payload dropped as
+    ignored extras — leaving ``read_artifact`` with no ``result``. Detect that shape (no record
+    identity, but keys foreign to the record schema) and take the whole document as ``result`` so
+    those caches load. A genuine record never carries foreign keys, so it is untouched.
+    """
+    record = ArtifactRecord.model_validate_json(text)
+    if any(getattr(record, field) for field in _RECORD_IDENTITY_FIELDS):
+        return record
+    document = json.loads(text)
+    if isinstance(document, dict) and document.keys() - _RECORD_FIELDS:
+        return ArtifactRecord(result=document)
+    return record
+
+
 def read_record(output_path: str) -> ArtifactRecord | None:
     """The record at ``{output_path}/.artifact.json``, else ``None``.
 
-    Falls back to an old Ray executor ``.executor_info`` sidecar when no record file is present, so
-    caches built before the record file existed still resolve their config. A corrupt/partial file
-    raises :class:`pydantic.ValidationError`.
+    Falls back to a genuine legacy Ray executor ``.executor_info`` sidecar when no record file is
+    present, so caches built before the record file existed still resolve their config. A
+    schedule-time ``StepRunner`` stub (see :data:`STEP_RUNNER_EXECUTOR_VERSION`) is *not* honored:
+    it carries no materialized config, so such an output reads back as having no record. A
+    corrupt/partial file raises :class:`pydantic.ValidationError`.
     """
     output_path = _resolved(output_path)
     text = _read_text(output_path, RECORD_FILENAME)
     if text is not None:
-        return ArtifactRecord.model_validate_json(text)
+        return _parse_record(text)
     executor_info = _read_text(output_path, _LEGACY_EXECUTOR_INFO_FILENAME)
     if executor_info is not None:
         return _record_from_executor_info(executor_info)

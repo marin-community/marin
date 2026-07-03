@@ -21,6 +21,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -649,6 +650,19 @@ def _summary_md(log_dir: pathlib.Path, run: ReviewRun) -> str:
     return "\n".join(lines) + "\n"
 
 
+def _review_log_dir(branch: str | None, started: float) -> pathlib.Path:
+    """Create and return this run's log directory.
+
+    Runs are namespaced by branch so concurrent worktrees on one host don't interleave,
+    and the leaf is `mkdtemp`-unique so two runs starting in the same second don't
+    clobber each other: `/tmp/marin-linter/<sanitized-branch>/<timestamp>-<uniq>/`.
+    """
+    branch_root = LINT_REVIEW_LOG_ROOT / re.sub(r"[^\w.-]+", "-", branch or "detached")
+    branch_root.mkdir(parents=True, exist_ok=True)
+    stamp = time.strftime("%Y%m%dT%H%M%S", time.gmtime(started))
+    return pathlib.Path(tempfile.mkdtemp(prefix=f"{stamp}-", dir=branch_root))
+
+
 def _write_review_log(log_dir: pathlib.Path, run: ReviewRun) -> None:
     """Persist the raw per-arm prompts/outputs, the combined findings, and a run summary.
 
@@ -768,7 +782,6 @@ def run_lint_review(agent_command: str, lane_names: list[str] | None = None, com
         leads = complexity_leads.compute_leads(_read_worktree, _changed_py_files(merge_base))
     env = _lint_review_env()
     started = time.time()
-    log_dir = LINT_REVIEW_LOG_ROOT / time.strftime("%Y%m%dT%H%M%S", time.gmtime(started))
 
     lane_results = _run_lanes(lanes, shared_text, merge_base, stat, leads, agent_cmd, env)
     for r in lane_results:
@@ -789,10 +802,11 @@ def run_lint_review(agent_command: str, lane_names: list[str] | None = None, com
     branch = _git(["rev-parse", "--abbrev-ref", "HEAD"])
     run = ReviewRun(lane_results, outcome, merge_base, diff_stats, time.time() - started, branch)
     try:
+        log_dir = _review_log_dir(branch, started)
         _write_review_log(log_dir, run)
         click.echo(f"  Lint review logs: {log_dir}")
     except OSError as e:
-        click.echo(f"  ⚠ Lint review: could not write logs to {log_dir}: {e}")
+        click.echo(f"  ⚠ Lint review: could not write logs under {LINT_REVIEW_LOG_ROOT}: {e}")
 
     if all(r.returncode != 0 for r in lane_results):
         click.echo("  ⚠ Lint review: every lane failed to run (is the agent CLI working?)")

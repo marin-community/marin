@@ -653,6 +653,35 @@ class PeerConfig(_Config):
     static_token: str = ""  # client token for a peer whose manifest uses static auth
 
 
+class ClusterFinelogConfig(_Config):
+    """This cluster's finelog: the local log store, and optionally a relay to a shared one.
+
+    ``config`` names the finelog deployment that serves this cluster (iris derives
+    ``/system/log-server`` from it). Set ``relay_address`` to also run a durable relay
+    that forwards this cluster's logs to a shared global finelog; leave it empty and the
+    log plane stays single-cluster (no relay, local reads, byte-identical behavior).
+
+    The relay authenticates its pushes with a delegation credential the global finelog
+    verifies on ingress:
+
+    - ``delegation_key`` — a shared HS256 secret. When set, the relay mints a short-lived
+      JWT signed with it, and the global finelog carries a matching ``jwt`` layer keyed on
+      ``{cluster: <this cluster's name>, secret: <delegation_key>}``. Dedicated (not the
+      control-plane signing key), so the shared store can *verify* this cluster's tokens
+      without gaining the power to *mint* control-plane tokens. HS256-only: an IAP/GCP
+      token would not verify.
+    - ``static_token`` — a pre-minted bearer used verbatim, for a simple/local deployment.
+      Lower-preference than ``delegation_key``.
+    - Neither — no bearer; the global finelog must admit this controller by a ``cidr``
+      layer (a same-VPC/loopback dev store).
+    """
+
+    config: str = ""  # finelog deploy-config name; iris derives /system/log-server from it
+    relay_address: str = ""  # shared global finelog to forward logs to (empty = single-cluster)
+    delegation_key: str = ""  # shared HS256 secret; the relay mints short-lived JWTs with it
+    static_token: str = ""  # pre-minted static bearer (alternative to delegation_key)
+
+
 # ---------------------------------------------------------------------------
 # Root
 # ---------------------------------------------------------------------------
@@ -683,8 +712,10 @@ class IrisClusterConfig(_OneofConfig):
     # cluster may delegate whole jobs to. Absent/empty leaves federation inert —
     # a single-cluster deployment is unchanged.
     peers: dict[str, PeerConfig] = Field(default_factory=dict)
-    # When set, iris auto-derives /system/log-server from this finelog config name.
-    log_server_config: str = ""
+    # This cluster's finelog: the local log store (`finelog.config` names the deploy
+    # config iris derives /system/log-server from) and an optional `finelog.relay_address`
+    # for a shared global finelog. Setting `finelog.relay_address` turns on the forwarder.
+    finelog: ClusterFinelogConfig = Field(default_factory=ClusterFinelogConfig)
     # Public dashboard origin (e.g. "https://iris.oa.dev"); enables clickable job URLs.
     dashboard_url: str = ""
 
@@ -952,10 +983,22 @@ def _validate_peers(config: IrisClusterConfig) -> None:
             )
 
 
+def _validate_finelog_relay(config: IrisClusterConfig) -> None:
+    """Validate the finelog relay credential (only when ``finelog.relay_address`` is set)."""
+    finelog = config.finelog
+    if not finelog.relay_address.strip():
+        return
+    # The finelog HS256 verifier rejects a delegation secret shorter than 16 bytes
+    # (MIN_SECRET_BYTES); fail fast here rather than at the store on first push.
+    if finelog.delegation_key and len(finelog.delegation_key.encode()) < 16:
+        raise ValueError("finelog.delegation_key must be at least 16 bytes.")
+
+
 def validate_config(config: IrisClusterConfig) -> None:
     """Validate cluster config; raises ValueError on the first violation."""
     _validate_backends(config)
     _validate_peers(config)
+    _validate_finelog_relay(config)
     _validate_provider_platform_compat(config)
     _validate_accelerator_types(config)
     validate_scale_group_resources(config.scale_groups)

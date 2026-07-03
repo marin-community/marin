@@ -4,7 +4,7 @@
 import os
 
 import pytest
-from ducky.config import DuckyConfig
+from ducky.config import DEFAULT_DATAKIT_ROOT, DEFAULT_FINELOG_ROOT, DuckyConfig
 
 _BASE_ENV = {"DUCKY_SCRATCH_BUCKET": "/tmp/ducky"}
 _GCS_ENV = {"DUCKY_GCS_HMAC_KEY_ID": "k", "DUCKY_GCS_HMAC_SECRET": "s"}
@@ -47,3 +47,58 @@ def test_partial_backend_creds_raise(monkeypatch):
     _set(monkeypatch, {**_BASE_ENV, "DUCKY_GCS_HMAC_KEY_ID": "k"})  # secret missing
     with pytest.raises(ValueError, match="partially configured"):
         DuckyConfig.from_environment()
+
+
+def test_catalog_roots_default_to_real_locations(monkeypatch):
+    monkeypatch.delenv("MARIN_PREFIX", raising=False)
+    _set(monkeypatch, _BASE_ENV)
+    config = DuckyConfig.from_environment()
+    assert config.finelog_root == DEFAULT_FINELOG_ROOT
+    assert config.datakit_root == DEFAULT_DATAKIT_ROOT  # fallback when MARIN_PREFIX unset
+
+
+def test_datakit_root_derived_from_marin_prefix(monkeypatch):
+    _set(monkeypatch, {**_BASE_ENV, "MARIN_PREFIX": "gs://marin-eu-west4"})
+    assert DuckyConfig.from_environment().datakit_root == "gs://marin-eu-west4/normalized"
+
+
+def test_catalog_root_override_and_disable(monkeypatch):
+    # explicit DUCKY_DATAKIT_ROOT wins over MARIN_PREFIX; empty disables the source
+    _set(
+        monkeypatch,
+        {
+            **_BASE_ENV,
+            "MARIN_PREFIX": "gs://marin-eu-west4",
+            "DUCKY_FINELOG_ROOT": "gs://elsewhere/finelog",
+            "DUCKY_DATAKIT_ROOT": "",
+        },
+    )
+    config = DuckyConfig.from_environment()
+    assert config.finelog_root == "gs://elsewhere/finelog"
+    assert config.datakit_root is None
+
+
+def test_directly_constructed_config_has_no_catalog_roots():
+    # Unit tests build DuckyConfig directly; roots must default to None so a runner doesn't
+    # reach the network binding views.
+    config = DuckyConfig(scratch_bucket="/tmp/ducky")
+    assert config.finelog_root is None
+    assert config.datakit_root is None
+
+
+def test_effective_allowlist_includes_configured_roots():
+    config = DuckyConfig(
+        scratch_bucket="/tmp/ducky",
+        allowed_buckets=("gs://marin-us-east5",),
+        finelog_root="gs://marin-us-central2/finelog/marin",
+        datakit_root="gs://marin-us-east5/normalized",
+    )
+    eff = config.effective_allowed_buckets
+    assert "gs://marin-us-east5" in eff
+    assert "gs://marin-us-central2/finelog/marin" in eff  # cross-region finelog root is readable
+
+
+def test_effective_allowlist_empty_stays_allow_all():
+    # an empty allowlist means allow-all; adding roots must not turn it into a restrictive list
+    config = DuckyConfig(scratch_bucket="/tmp/ducky", allowed_buckets=(), finelog_root="gs://x/finelog")
+    assert config.effective_allowed_buckets == ()

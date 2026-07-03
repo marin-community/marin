@@ -79,6 +79,10 @@ class BackendWorkerStore(TransitionReader, Protocol):
         """Each owned worker's idle/running status."""
         ...
 
+    def running_tasks(self, worker_ids: set[WorkerId]) -> dict[WorkerId, set[JobName]]:
+        """The running-task ids on each of ``worker_ids``."""
+        ...
+
     def worker_address(self, worker_id: WorkerId) -> str | None:
         """The worker's address, or ``None`` if it has none."""
         ...
@@ -182,6 +186,14 @@ class DbBackendWorkerStore:
                 usability=usability[wid],
             )
         return result
+
+    def running_tasks(self, worker_ids: set[WorkerId]) -> dict[WorkerId, set[JobName]]:
+        """The running-task ids on each of ``worker_ids``, read from the general
+        pool (never the control-only pool the control-loop tick reserves)."""
+        if not worker_ids:
+            return {}
+        with self.db.read_snapshot() as snap:
+            return reads.running_tasks_by_worker(snap, worker_ids)
 
     def worker_address(self, worker_id: WorkerId) -> str | None:
         with self.db.control_read_snapshot() as snap:

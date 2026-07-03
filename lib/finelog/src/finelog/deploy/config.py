@@ -10,6 +10,7 @@ and explicit; finelog owns its deployment knobs so iris's cluster yaml only
 has to reference the config by name.
 """
 
+import json
 from dataclasses import dataclass
 from importlib.resources import files
 from pathlib import Path
@@ -63,6 +64,72 @@ class K8sDeployment:
 
 
 @dataclass(frozen=True)
+class CidrAuthLayer:
+    """Admit a request whose transport peer is in one of ``cidrs``.
+
+    Reproduces intra-cluster reachability: a finelog serving its own cluster lists
+    that cluster's loopback/VPC ranges (e.g. ``10.0.0.0/8``, ``127.0.0.0/8``) so
+    local clients keep working without a token. Matches the transport peer only,
+    never a spoofable forwarded header.
+    """
+
+    cidrs: tuple[str, ...]
+
+    def to_policy_dict(self) -> dict:
+        return {"type": "cidr", "cidrs": list(self.cidrs)}
+
+
+@dataclass(frozen=True)
+class JwtKeyEntry:
+    """A trusted cluster and its HS256 delegation secret."""
+
+    cluster: str
+    secret: str
+
+
+@dataclass(frozen=True)
+class JwtAuthLayer:
+    """Admit a bearer JWT whose HS256 signature verifies against one of ``keys``.
+
+    Each key is a trusted cluster's HS256 delegation secret; every configured key
+    admits equally. The keys are secret material, so a jwt layer may not be inlined
+    into a plaintext deploy artifact — the deploy path rejects it and requires a
+    secret source instead.
+    """
+
+    keys: tuple[JwtKeyEntry, ...]
+
+    def to_policy_dict(self) -> dict:
+        return {"type": "jwt", "keys": [{"cluster": k.cluster, "secret": k.secret} for k in self.keys]}
+
+
+# One entry in the ordered auth stack. Evaluation order == list order (first
+# Allow admits, first Reject denies, none → deny; see the Rust `AuthPolicy`).
+AuthLayer = CidrAuthLayer | JwtAuthLayer
+
+
+def auth_policy_json(layers: tuple[AuthLayer, ...]) -> str:
+    """Serialize an ordered auth-layer stack to the `FINELOG_AUTH_POLICY` JSON the
+    finelog server parses."""
+    return json.dumps([layer.to_policy_dict() for layer in layers], separators=(",", ":"))
+
+
+def assert_inlineable_auth(cfg: "FinelogConfig") -> None:
+    """Raise if the auth stack carries secret material that must not be inlined.
+
+    A `jwt` layer holds HS256 delegation keys; both deploy paths bake the policy into a
+    plaintext artifact (GCE startup-script metadata, a k8s manifest), so jwt keys must
+    instead come through a secret source (the finelog-env Secret, or an operator-managed
+    metadata secret). A cidr-only policy carries no secrets and inlines safely.
+    """
+    if any(isinstance(layer, JwtAuthLayer) for layer in cfg.auth):
+        raise ValueError(
+            f"{cfg.name}: jwt auth layers carry secret keys and cannot be inlined into a plaintext "
+            "deploy artifact; supply FINELOG_AUTH_POLICY through a secret source instead"
+        )
+
+
+@dataclass(frozen=True)
 class Deployment:
     """Backend selector. Exactly one of `gcp` or `k8s` must be set."""
 
@@ -89,6 +156,9 @@ class FinelogConfig:
     # Rigging transport URL clients use to reach this server through the controller proxy
     # (e.g. `iap+https://iris.oa.dev/proxy/system.log-server`); unset = fall back to SSH/k8s tunnel.
     client_url: str | None = None
+    # Ordered authenticated-ingress layer stack. Empty leaves the server on its
+    # allow-localhost default (loopback only, never open).
+    auth: tuple[AuthLayer, ...] = ()
 
 
 def _config_search_paths(name_or_path: str) -> list[Path]:
@@ -112,6 +182,24 @@ def _build_gcp(raw: dict) -> GcpDeployment:
         service_account=raw.get("service_account"),
         network_tags=tuple(tags),
     )
+
+
+def _build_auth_layers(raw: list, path: Path) -> tuple[AuthLayer, ...]:
+    """Parse the `auth:` YAML list into an ordered layer stack. List order is
+    evaluation order (see the Rust `AuthPolicy`)."""
+    layers: list[AuthLayer] = []
+    for i, item in enumerate(raw):
+        if not isinstance(item, dict) or "type" not in item:
+            raise ValueError(f"{path}: auth[{i}] must be a mapping with a `type` key")
+        layer_type = item["type"]
+        if layer_type == "cidr":
+            layers.append(CidrAuthLayer(cidrs=tuple(item.get("cidrs") or ())))
+        elif layer_type == "jwt":
+            keys = tuple(JwtKeyEntry(cluster=k["cluster"], secret=k["secret"]) for k in item.get("keys") or ())
+            layers.append(JwtAuthLayer(keys=keys))
+        else:
+            raise ValueError(f"{path}: auth[{i}] has unknown type {layer_type!r} (expected cidr|jwt)")
+    return tuple(layers)
 
 
 def _build_k8s(raw: dict) -> K8sDeployment:
@@ -153,6 +241,11 @@ def _load_from_path(path: Path) -> FinelogConfig:
     k8s = _build_k8s(deploy_raw["k8s"]) if "k8s" in deploy_raw else None
     deployment = Deployment(gcp=gcp, k8s=k8s)
 
+    auth_raw = raw.get("auth")
+    if auth_raw is not None and not isinstance(auth_raw, list):
+        raise ValueError(f"{path}: `auth` must be a list of layers")
+    auth = _build_auth_layers(auth_raw, path) if auth_raw else ()
+
     return FinelogConfig(
         name=raw["name"],
         port=int(raw["port"]),
@@ -160,6 +253,7 @@ def _load_from_path(path: Path) -> FinelogConfig:
         remote_log_dir=raw.get("remote_log_dir", ""),
         deployment=deployment,
         client_url=raw.get("client_url"),
+        auth=auth,
     )
 
 

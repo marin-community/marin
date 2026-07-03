@@ -7,7 +7,7 @@
 #
 # kind has no GPUs, so the gang is CPU-shaped (jax CPU via the `cpu` extra); it
 # validates the whole software path short of real CUDA/IB. See
-# coreweave-controller-gpu-smoke.yaml for the real H100 variant.
+# ci-coreweave-gpu-smoke.yaml for the real H100 variant.
 
 platform:
   label_prefix: iris

@@ -15,7 +15,14 @@ from finelog.deploy._k8s import (
     _render_manifest,
     _s3_secret_name,
 )
-from finelog.deploy.config import Deployment, FinelogConfig, K8sDeployment
+from finelog.deploy.config import (
+    CidrAuthLayer,
+    Deployment,
+    FinelogConfig,
+    JwtAuthLayer,
+    JwtKeyEntry,
+    K8sDeployment,
+)
 
 
 def _s3_cfg(**k8s_overrides) -> FinelogConfig:
@@ -71,6 +78,35 @@ def test_render_deployment_threads_port_to_env_and_probes(cfg: FinelogConfig) ->
     assert "name: FINELOG_PORT" in rendered
     assert 'value: "20001"' in rendered
     assert 'value: "gs://bucket/logs"' in rendered
+
+
+def test_render_deployment_inlines_cidr_auth_policy() -> None:
+    cfg = FinelogConfig(
+        name="finelog",
+        port=10001,
+        image="img",
+        remote_log_dir="gs://bucket/logs",
+        deployment=Deployment(k8s=K8sDeployment(namespace="iris")),
+        auth=(CidrAuthLayer(cidrs=("10.0.0.0/8",)),),
+    )
+    rendered = _render_manifest(_K8S_MANIFEST_DIR / "02-deployment.yaml.tmpl", cfg)
+    assert "name: FINELOG_AUTH_POLICY" in rendered
+    assert '"type":"cidr"' in rendered
+
+
+def test_render_deployment_rejects_inline_jwt_secret() -> None:
+    # jwt keys are secret material; the manifest is plaintext, so the deploy path must
+    # refuse to inline them (they belong in the finelog-env Secret).
+    cfg = FinelogConfig(
+        name="finelog",
+        port=10001,
+        image="img",
+        remote_log_dir="gs://bucket/logs",
+        deployment=Deployment(k8s=K8sDeployment(namespace="iris")),
+        auth=(JwtAuthLayer(keys=(JwtKeyEntry(cluster="marin", secret="0123456789abcdef0123456789abcdef"),)),),
+    )
+    with pytest.raises(ValueError, match="jwt auth layers carry secret"):
+        _render_manifest(_K8S_MANIFEST_DIR / "02-deployment.yaml.tmpl", cfg)
 
 
 def test_render_service_uses_configured_port(cfg: FinelogConfig) -> None:

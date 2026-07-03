@@ -33,7 +33,6 @@ except ImportError:
 from rigging.log_setup import slow_log
 from rigging.timing import Deadline, ExponentialBackoff
 
-from iris.cluster.backends.types import find_free_port
 from iris.cluster.platforms.k8s.types import (
     ExecResult,
     K8sResource,
@@ -45,6 +44,7 @@ from iris.cluster.platforms.k8s.types import (
     parse_k8s_quantity,
     parse_k8s_timestamp,
 )
+from iris.cluster.platforms.types import find_free_port
 
 logger = logging.getLogger(__name__)
 

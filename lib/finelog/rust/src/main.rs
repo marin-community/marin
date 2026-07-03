@@ -10,8 +10,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use clap::Parser;
-use finelog::server::build_app;
 use finelog::server::diagnostics::spawn_pool_diagnostics;
+use finelog::server::{build_app_with_config, AuthPolicy, ServerConfig};
 use finelog::store::Store;
 use tokio::sync::Notify;
 
@@ -52,6 +52,16 @@ struct Args {
     /// production.
     #[arg(long, env = "FINELOG_DEBUG_ADMIN", default_value_t = false)]
     debug_admin: bool,
+
+    /// Authenticated-ingress policy as a JSON list of layers (env
+    /// `FINELOG_AUTH_POLICY`), e.g.
+    /// `[{"type":"cidr","cidrs":["10.0.0.0/8","127.0.0.0/8"]},{"type":"jwt","keys":[{"cluster":"marin","secret":"<hex>"}]}]`.
+    /// List order is evaluation order (first Allow admits, first Reject denies,
+    /// none → deny). Empty (the default) installs the private allow-localhost
+    /// policy: reachable from loopback for local debugging, never open to the
+    /// network. A shared global finelog sets a `cidr`+`jwt` stack.
+    #[arg(long = "auth-policy", env = "FINELOG_AUTH_POLICY", default_value = "")]
+    auth_policy: String,
 }
 
 #[tokio::main]
@@ -80,7 +90,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // below. The server serves — and /health is green — while archived rows are
     // still being reconciled into the catalog.
     store.bootstrap_maintenance();
-    let app = build_app(Arc::clone(&store), args.debug_admin);
+    // Auth is ALWAYS enforced (default-deny). No policy → the private
+    // allow-localhost default (loopback only); a shared global finelog sets a
+    // cidr+jwt stack. A malformed policy fails startup rather than mis-admitting.
+    // The /debug/* admin routes are gated by this same policy (see `build_app`).
+    let auth = if args.auth_policy.trim().is_empty() {
+        AuthPolicy::allow_localhost()
+    } else {
+        AuthPolicy::parse(&args.auth_policy)
+            .map_err(|e| format!("invalid FINELOG_AUTH_POLICY: {e}"))?
+    };
+    tracing::info!(policy = %auth.describe(), "finelog-server: auth policy active");
+    let config = ServerConfig::with_debug_admin(args.debug_admin).with_auth(auth);
+    let app = build_app_with_config(Arc::clone(&store), config);
 
     // Periodic pool/RSS diagnostics task; cancelled on shutdown via a latched
     // stop flag (set before the Notify, so a notify that races the task's emit
@@ -98,9 +120,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let listener = tokio::net::TcpListener::bind(addr).await?;
     // Graceful shutdown: stop accepting and drain in-flight requests on the
     // first SIGTERM/SIGINT, then shut the store's background tasks down.
-    axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal())
-        .await?;
+    // `into_make_service_with_connect_info` records each connection's peer
+    // address so the auth CIDR rule can read it.
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .with_graceful_shutdown(shutdown_signal())
+    .await?;
     tracing::info!("finelog-server draining background tasks");
 
     // Stop the diagnostics task, then cooperatively cancel + join the

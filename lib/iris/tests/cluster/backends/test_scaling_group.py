@@ -11,13 +11,6 @@ import logging
 from pathlib import Path
 
 import pytest
-from iris.cluster.backends.types import (
-    CloudSliceState,
-    CloudWorkerState,
-    Labels,
-    QuotaExhaustedError,
-    SliceStatus,
-)
 from iris.cluster.config import (
     CoreweaveSliceConfig,
     GcpSliceConfig,
@@ -36,6 +29,13 @@ from iris.cluster.controller.autoscaler.scaling_group import (
     _zones_from_config,
     prepare_slice_config,
     slice_state_to_proto,
+)
+from iris.cluster.platforms.types import (
+    CloudSliceState,
+    CloudWorkerState,
+    Labels,
+    QuotaExhaustedError,
+    SliceStatus,
 )
 from iris.cluster.types import AcceleratorType, CapacityType, WorkerStatus, WorkerUsability
 from iris.rpc import vm_pb2
@@ -1145,9 +1145,9 @@ class TestPrepareSliceConfigGpuCount:
         assert result.gpu_count == 0
 
     def test_coreweave_yaml_gpu_count_flows_through(self):
-        """Loading coreweave.yaml and running prepare_slice_config produces correct gpu_count."""
+        """Loading ci-coreweave.yaml and running prepare_slice_config produces correct gpu_count."""
 
-        yaml_path = Path(__file__).parents[3] / "config" / "coreweave-ci.yaml"
+        yaml_path = Path(__file__).parents[3] / "config" / "ci-coreweave.yaml"
         config = load_config(yaml_path)
 
         h100_sg = config.scale_groups["h100-8x"]

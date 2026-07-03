@@ -72,7 +72,7 @@ from iris.cluster.controller.scheduling.scheduler import (
 from iris.cluster.controller.task_state import RunningTaskEntry
 from iris.cluster.controller.worker_health import WorkerHealthTracker
 from iris.cluster.types import JobName, PendingTask, UserBudgetDefaults, WorkerId
-from iris.rpc import controller_pb2, job_pb2, worker_pb2
+from iris.rpc import controller_pb2, job_pb2, vm_pb2, worker_pb2
 
 logger = logging.getLogger(__name__)
 
@@ -439,6 +439,9 @@ class BackendRuntime:
     Passed to :meth:`TaskBackend.bind_runtime` at startup.
     """
 
+    backend_id: str
+    """The id the controller assigned this backend. The backend stamps it onto the
+    autoscaler groups it authors, so the controller never has to tag them afterward."""
     db: ControllerDB
     """The controller database."""
     endpoints: EndpointsProjection
@@ -525,9 +528,20 @@ class TaskBackend(Protocol):
         Each backend authors its own ``BackendStatus`` variant uniformly,
         selected by :attr:`capabilities`: a ``CLUSTER_VIEW`` backend fills
         ``kubernetes`` from its cached cluster-state snapshot; a
-        ``WORKER_DAEMON`` backend fills ``worker`` from its autoscaler. The
-        contract stays DB-less — the controller overlays the DB-derived worker
-        health counts onto the ``worker`` variant after this returns.
+        ``WORKER_DAEMON`` backend fills ``worker`` in full from the state it owns
+        — its liveness tracker (health counts + per-VM usability) and running-task
+        rows, with its :meth:`autoscaler_status` embedded. The controller reads the
+        result verbatim; it overlays nothing.
+        """
+        ...
+
+    def autoscaler_status(self) -> vm_pb2.AutoscalerStatus:
+        """This backend's autoscaler status, fully populated and self-contained.
+
+        Every group is tagged with this backend's id and every VM carries its
+        usability / running-task-count / capacity verdict, so the controller can
+        merge statuses across backends without reaching into any backend's state.
+        Empty for a backend with no autoscaler.
         """
         ...
 

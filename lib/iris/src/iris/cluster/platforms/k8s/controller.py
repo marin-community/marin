@@ -21,7 +21,6 @@ import fsspec.config
 import s3fs
 from rigging.timing import Deadline
 
-from iris.cluster.backends.types import InfraError, Labels, local_queue_name
 from iris.cluster.config import (
     ControllerVmConfig,
     CoreweaveControllerConfig,
@@ -39,6 +38,7 @@ from iris.cluster.platforms.k8s.types import (
     K8sResource,
     parse_k8s_timestamp,
 )
+from iris.cluster.platforms.types import InfraError, Labels, local_queue_name
 
 logger = logging.getLogger(__name__)
 

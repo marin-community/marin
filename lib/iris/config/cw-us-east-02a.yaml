@@ -25,7 +25,8 @@
 # Resolves to k8s://finelog-cw-use02a.iris; see lib/finelog/config/cw-us-east-02a.yaml.
 # Without this the controller falls back to an in-process MemStore (logs lost on
 # restart). Deploy the server first: `uv run finelog deploy up cw-us-east-02a`.
-log_server_config: cw-us-east-02a
+finelog:
+  config: cw-us-east-02a
 
 # Public origin for off-cluster proxy links. Only /proxy is served here (see
 # controller.coreweave.public_proxy_host); marin-serve uses this to print the

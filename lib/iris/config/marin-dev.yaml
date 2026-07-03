@@ -2,7 +2,8 @@
 # Mirrors production marin.yaml with isolated state and smaller scale caps.
 # Usage: uv run iris --cluster=marin-dev cluster start
 
-log_server_config: marin-dev
+finelog:
+  config: marin-dev
 dashboard_url: https://iris-dev.oa.dev
 
 platform:
