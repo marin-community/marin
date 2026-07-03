@@ -16,7 +16,7 @@ from typing import Any, Callable
 import jax
 import jax.numpy as jnp
 import numpy as np
-from jax import Ref, shard_map
+from jax import Ref, lax, shard_map
 from jax.experimental import pallas as pl
 from jax.experimental.pallas import mosaic_gpu as mgpu
 from jax.sharding import Mesh, NamedSharding, PartitionSpec as P
@@ -38,6 +38,7 @@ from levanter.grug._moe.source_push_inbox import (
 
 
 KERNEL_NAME = "source_push_w2_return"
+RETURN_COPY_KERNEL_NAME = "source_push_w2_return_copy"
 W2_HIDDEN_INPUT_W13_REFERENCE = "w13_reference"
 W2_HIDDEN_INPUT_SYNTHETIC = "synthetic"
 W2_HIDDEN_INPUT_MODES = (W2_HIDDEN_INPUT_W13_REFERENCE, W2_HIDDEN_INPUT_SYNTHETIC)
@@ -338,12 +339,143 @@ def _sharded_w2_return_kernel(mesh: Mesh, config: PushInboxConfig):
     )
 
 
+def _make_return_copy_kernel(config: PushInboxConfig):
+    validate_w2_return_config(config)
+    n_tiles = config.hidden_dim // config.block_n
+    src_offsets = tuple(range(config.ep_size))
+
+    def body(
+        return_by_src_ref: Float[Ref, "SRC Q M D"],
+        recv_meta_ref: Int[Ref, "SRC Q F"],
+        source_return_ref: Float[Ref, "DST Q M D"],
+    ) -> None:
+        rank = lax.axis_index(AXIS)
+        src_ordinal = pl.program_id(0)
+        entry = pl.program_id(1)
+        n_tile = pl.program_id(2)
+
+        def _copy_to_src(static_src_ordinal: int) -> None:
+            src = (rank + static_src_ordinal) % config.ep_size
+            dst_ordinal = (-static_src_ordinal) % config.ep_size
+            remote_source_return_ref = None
+            if static_src_ordinal != 0:
+                remote_source_return_ref = mgpu.remote_ref(
+                    source_return_ref,
+                    src,
+                    device_id_type=pl.DeviceIdType.LOGICAL,
+                )
+            valid_rows = recv_meta_ref[static_src_ordinal, entry, 3]
+
+            @pl.when(valid_rows > 0)
+            def _copy_entry_tile() -> None:
+                def _copy_scope(tile_smem) -> None:
+                    tile_smem[:, :] = return_by_src_ref[
+                        static_src_ordinal,
+                        entry,
+                        pl.ds(0, config.block_m),
+                        pl.ds(n_tile * config.block_n, config.block_n),
+                    ]
+                    mgpu.commit_smem()
+                    if static_src_ordinal == 0:
+                        mgpu.copy_smem_to_gmem(
+                            tile_smem,
+                            source_return_ref.at[
+                                dst_ordinal,
+                                entry,
+                                pl.ds(0, config.block_m),
+                                pl.ds(n_tile * config.block_n, config.block_n),
+                            ],
+                        )
+                    else:
+                        mgpu.copy_smem_to_gmem(
+                            tile_smem,
+                            remote_source_return_ref.at[
+                                dst_ordinal,
+                                entry,
+                                pl.ds(0, config.block_m),
+                                pl.ds(n_tile * config.block_n, config.block_n),
+                            ],
+                        )
+                    mgpu.wait_smem_to_gmem(0, wait_read_only=False)
+
+                pl.run_scoped(
+                    _copy_scope,
+                    tile_smem=mgpu.SMEM((config.block_m, config.block_n), dtype=return_by_src_ref.dtype),
+                )
+
+        def _switch_copy_to_src(dynamic_src_ordinal) -> None:
+            def _branch(static_src_ordinal: int):
+                def _copy_branch(_) -> None:
+                    _copy_to_src(static_src_ordinal)
+
+                return _copy_branch
+
+            branches = tuple(_branch(static_src_ordinal) for static_src_ordinal in src_offsets)
+            lax.switch(dynamic_src_ordinal, branches, None)
+
+        _switch_copy_to_src(src_ordinal)
+
+    out_shape = jax.ShapeDtypeStruct(
+        (config.ep_size, config.entries_per_rank, config.block_m, config.hidden_dim),
+        jnp.bfloat16,
+    )
+    compiler_params = mgpu.CompilerParams(lowering_semantics=mgpu.LoweringSemantics.Lane)
+    return mgpu.kernel(
+        body,
+        out_shape=out_shape,
+        grid=(config.ep_size, config.entries_per_rank, n_tiles),
+        grid_names=("src_ordinal", "entry", "n_tile"),
+        compiler_params=compiler_params,
+    )
+
+
+def _sharded_return_copy_kernel(mesh: Mesh, config: PushInboxConfig):
+    kernel = _make_return_copy_kernel(config)
+
+    def local_fn(
+        return_by_destination_local: Float[Array, "1 SRC Q M D"],
+        recv_meta_local: Int[Array, "1 SRC Q F"],
+    ):
+        return_by_destination_local = return_by_destination_local[0]
+        recv_meta_local = recv_meta_local[0]
+        source_return = kernel(return_by_destination_local, recv_meta_local)
+        return source_return[None, ...]
+
+    return shard_map(
+        local_fn,
+        mesh=mesh,
+        in_specs=(
+            P(AXIS, None, None, None, None),
+            P(AXIS, None, None, None),
+        ),
+        out_specs=P(AXIS, None, None, None, None),
+        check_vma=False,
+    )
+
+
+def _sharded_w2_return_to_source_kernel(mesh: Mesh, config: PushInboxConfig):
+    w2_kernel = _sharded_w2_return_kernel(mesh, config)
+    return_copy_kernel = _sharded_return_copy_kernel(mesh, config)
+
+    def fn(
+        hidden: Float[Array, "Dst rows I"],
+        recv_meta: Int[Array, "Dst SRC Q F"],
+        w_down: Float[Array, "Dst E I D"],
+    ):
+        return_by_destination = w2_kernel(hidden, recv_meta, w_down)
+        source_return = return_copy_kernel(return_by_destination, recv_meta)
+        return return_by_destination, source_return
+
+    return fn
+
+
 def _validate_w2_return(
     config: PushInboxConfig,
     hidden_host: np.ndarray,
     recv_meta_host: np.ndarray,
     w_down_host: np.ndarray,
     return_by_destination: jax.Array,
+    source_return: jax.Array | None = None,
 ) -> W2ReturnValidationMetrics:
     expected = reference_w2_return_by_destination(config, hidden_host, recv_meta_host, w_down_host)
     observed = np.asarray(jax.device_get(return_by_destination), dtype=np.float32)
@@ -357,7 +489,10 @@ def _validate_w2_return(
     else:
         max_abs_diff = 0.0
         mean_abs_diff = 0.0
-    source_observed = source_queue_from_destination_return(config, observed)
+    if source_return is None:
+        source_observed = source_queue_from_destination_return(config, observed)
+    else:
+        source_observed = source_return
     source_expected = source_queue_from_destination_return(config, expected_host)
     source_queue_diff = np.abs(
         np.asarray(jax.device_get(source_observed), dtype=np.float32)
@@ -377,6 +512,7 @@ def _run_w2_return_one(
     input_builder: Callable[[PushInboxConfig], W2ReturnHostInputs],
     *,
     row_metadata: dict[str, Any] | None = None,
+    copy_to_source: bool = False,
 ) -> list[dict[str, Any]]:
     row_metadata = row_metadata or {}
     try:
@@ -393,7 +529,10 @@ def _run_w2_return_one(
         recv_meta = jax.device_put(inputs.recv_meta, NamedSharding(mesh, P(AXIS, None, None, None)))
         w_down = jax.device_put(inputs.w_down, NamedSharding(mesh, P(AXIS, None, None, None)))
         _emit_progress(config, settings.progress_events, "jit_start")
-        fn = jax.jit(_sharded_w2_return_kernel(mesh, config))
+        if copy_to_source:
+            fn = jax.jit(_sharded_w2_return_to_source_kernel(mesh, config))
+        else:
+            fn = jax.jit(_sharded_w2_return_kernel(mesh, config))
 
         timing = _time_jitted(
             fn,
@@ -408,12 +547,15 @@ def _run_w2_return_one(
         )
         validation = None
         if settings.check:
+            return_by_destination = timing.output[0] if copy_to_source else timing.output
+            source_return = timing.output[1] if copy_to_source else None
             validation = _validate_w2_return(
                 config,
                 host_inputs.hidden,
                 host_inputs.recv_meta,
                 host_inputs.w_down,
-                timing.output,
+                return_by_destination,
+                source_return,
             )
 
         queue_stats = inputs.queue_stats
@@ -425,7 +567,8 @@ def _run_w2_return_one(
         for repeat_run, steady_state_time in enumerate(timing.steady_state_times):
             row = {
                 "kernel": KERNEL_NAME,
-                "implementation": KERNEL_NAME,
+                "implementation": RETURN_COPY_KERNEL_NAME if copy_to_source else KERNEL_NAME,
+                "copy_to_source": copy_to_source,
                 "depends_on_kernel": W13_KERNEL_NAME,
                 "config": asdict(config),
                 "queue_stats": queue_stats,
@@ -455,7 +598,8 @@ def _run_w2_return_one(
             raise
         row = {
             "kernel": KERNEL_NAME,
-            "implementation": KERNEL_NAME,
+            "implementation": RETURN_COPY_KERNEL_NAME if copy_to_source else KERNEL_NAME,
+            "copy_to_source": copy_to_source,
             "config": asdict(config),
             "compile_time": None,
             "lower_compile_time": None,
@@ -492,6 +636,7 @@ def run_source_push_w2_return_source_plan(
     separate_compile: bool = False,
     progress_events: bool = False,
     hidden_input_mode: str = W2_HIDDEN_INPUT_SYNTHETIC,
+    copy_to_source: bool = False,
 ) -> list[dict[str, Any]]:
     """Run destination-local W2 over source-padded SourcePushPlan hidden rows."""
 
@@ -511,6 +656,7 @@ def run_source_push_w2_return_source_plan(
             run_config,
             hidden_input_mode=hidden_input_mode,
         ),
+        copy_to_source=copy_to_source,
     )
 
 

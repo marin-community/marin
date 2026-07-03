@@ -535,6 +535,24 @@ def test_source_push_w2_runner_returns_structured_validation_errors():
     assert rows[0]["repeat_runs"] == 1
 
 
+def test_source_push_w2_runner_tags_copy_to_source_errors():
+    config = source_push_inbox.PushInboxConfig(ep_size=1)
+
+    rows = source_push_w2_return.run_source_push_w2_return_source_plan(
+        config,
+        warmup=0,
+        steps=1,
+        repeat_runs=1,
+        check=False,
+        copy_to_source=True,
+    )
+
+    assert len(rows) == 1
+    assert rows[0]["error_type"] == "ValueError"
+    assert rows[0]["implementation"] == "source_push_w2_return_copy"
+    assert rows[0]["copy_to_source"]
+
+
 def test_source_push_repro_wrapper_imports_active_bench_cli():
     result = subprocess.run(
         [sys.executable, str(REPRO_SCRIPT_PATH), "--help"],

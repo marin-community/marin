@@ -69,6 +69,7 @@ def parse_source_push_w2_return_args(argv: Sequence[str] | None = None) -> argpa
         choices=W2_HIDDEN_INPUT_MODES,
         default=default("hidden_input_mode", W2_HIDDEN_INPUT_SYNTHETIC),
     )
+    parser.add_argument("--copy-to-source", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--warmup", type=int, default=default("warmup", 1))
     parser.add_argument("--steps", type=int, default=default("steps", 5))
     parser.add_argument("--repeat-runs", type=int, default=default("repeat_runs", 1))
@@ -125,6 +126,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         separate_compile=args.separate_compile,
         progress_events=args.progress_events,
         hidden_input_mode=args.hidden_input_mode,
+        copy_to_source=args.copy_to_source,
     )
     for row in rows:
         if args.git_sha is not None:
