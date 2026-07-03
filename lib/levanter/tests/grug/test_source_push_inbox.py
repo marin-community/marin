@@ -892,7 +892,7 @@ def test_source_push_forward_cli_passes_profile_defaults(monkeypatch, capsys):
     calls = []
 
     def fake_run_source_push_forward_source_plan(config, **kwargs):
-        calls.append((config.routing, config.entries_per_rank, kwargs["repeat_runs"]))
+        calls.append((config.routing, config.entries_per_rank, kwargs["repeat_runs"], kwargs["execution_mode"]))
         return [{"kernel": "source_push_forward", "repeat_runs": kwargs["repeat_runs"]}]
 
     monkeypatch.setattr(
@@ -907,11 +907,13 @@ def test_source_push_forward_cli_passes_profile_defaults(monkeypatch, capsys):
             SOURCE_PUSH_PROFILE_STABLE_216,
             "--repeat-runs",
             "3",
+            "--execution-mode",
+            "staged_host_sync",
             "--git-sha",
             "abc123",
         ]
     )
 
     rows = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
-    assert calls == [("roughly_balanced", 288, 3)]
+    assert calls == [("roughly_balanced", 288, 3, "staged_host_sync")]
     assert rows == [{"git_sha": "abc123", "kernel": "source_push_forward", "repeat_runs": 3}]

@@ -34,6 +34,8 @@ from levanter.grug._moe.source_push_inbox import (
     HostInputs,
     PushInboxConfig,
     SourcePushInboxRunSettings,
+    TimingResult,
+    _block_until_ready,
     _device_inputs_from_host,
     _make_mesh,
     _make_source_tokens,
@@ -64,6 +66,9 @@ from levanter.grug._moe.source_push_w2_return import (
 
 
 KERNEL_NAME = "source_push_forward"
+FORWARD_EXECUTION_SINGLE_JIT = "single_jit"
+FORWARD_EXECUTION_STAGED_HOST_SYNC = "staged_host_sync"
+FORWARD_EXECUTION_MODES = (FORWARD_EXECUTION_SINGLE_JIT, FORWARD_EXECUTION_STAGED_HOST_SYNC)
 
 
 @dataclass(frozen=True)
@@ -312,6 +317,89 @@ def _sharded_remote_write_completion_barrier(mesh: Mesh):
     )
 
 
+def _time_staged_source_push_forward(
+    mesh: Mesh,
+    config: PushInboxConfig,
+    x: jax.Array,
+    send_meta: jax.Array,
+    recv_meta: jax.Array,
+    expert_base: jax.Array,
+    src_base_by_expert: jax.Array,
+    w_gate_up: jax.Array,
+    w_down: jax.Array,
+    queue_dst_ord: jax.Array,
+    queue_entry: jax.Array,
+    queue_row: jax.Array,
+    route_combine_weights: jax.Array,
+    route_valid_mask: jax.Array,
+    *,
+    warmup: int,
+    steps: int,
+    repeat_runs: int,
+    progress: Callable[[str], None] | None = None,
+) -> TimingResult:
+    """Run full forward as three host-synchronized JIT stages for ordering diagnostics."""
+
+    w13_fn = jax.jit(_sharded_kernel(mesh, config))
+    w2_return_fn = jax.jit(_sharded_w2_return_to_source_kernel(mesh, config))
+    combine_fn = jax.jit(_sharded_source_combine_kernel(mesh, config))
+
+    def call_stages():
+        _, hidden = w13_fn(
+            x,
+            send_meta,
+            recv_meta,
+            expert_base,
+            src_base_by_expert,
+            w_gate_up,
+        )
+        _block_until_ready(hidden)
+        _, source_return = w2_return_fn(hidden, recv_meta, w_down)
+        _block_until_ready(source_return)
+        out = combine_fn(
+            source_return,
+            queue_dst_ord,
+            queue_entry,
+            queue_row,
+            route_combine_weights,
+            route_valid_mask,
+        )
+        _block_until_ready(out)
+        return out
+
+    if progress is not None:
+        progress("first_call_start")
+    start = time.perf_counter()
+    out = call_stages()
+    compile_time = time.perf_counter() - start
+    if progress is not None:
+        progress("first_call_done")
+
+    if progress is not None:
+        progress("warmup_start")
+    for _ in range(warmup):
+        out = call_stages()
+
+    steady_state_times = []
+    for _ in range(repeat_runs):
+        if progress is not None:
+            progress("steady_state_start")
+        start = time.perf_counter()
+        for _ in range(steps):
+            out = call_stages()
+        steady_state_times.append((time.perf_counter() - start) / steps)
+        if progress is not None:
+            progress("steady_state_done")
+
+    return TimingResult(
+        compile_time=compile_time,
+        steady_state_times=steady_state_times,
+        output=out,
+        lower_compile_time=None,
+        first_run_time=None,
+    )
+
+
 def _validate_source_push_forward(
     config: PushInboxConfig,
     host_inputs: SourcePushForwardHostInputs,
@@ -333,10 +421,14 @@ def _run_forward_one(
     input_builder: Callable[
         [PushInboxConfig], SourcePushForwardHostInputs
     ] = make_source_push_forward_source_plan_inputs,
+    *,
+    execution_mode: str = FORWARD_EXECUTION_SINGLE_JIT,
 ) -> list[dict[str, Any]]:
     try:
         if settings.repeat_runs <= 0:
             raise ValueError(f"repeat_runs must be positive, got {settings.repeat_runs}")
+        if execution_mode not in FORWARD_EXECUTION_MODES:
+            raise ValueError(f"unknown execution_mode={execution_mode!r}; expected one of {FORWARD_EXECUTION_MODES}")
         validate_source_push_forward_config(config)
         _emit_progress(config, settings.progress_events, "mesh_start")
         mesh = _make_mesh(config.ep_size)
@@ -360,27 +452,49 @@ def _run_forward_one(
         )
         route_valid_mask = jax.device_put(inputs.route_valid_mask, NamedSharding(mesh, P(AXIS, None, None)))
         _emit_progress(config, settings.progress_events, "jit_start")
-        fn = jax.jit(_sharded_source_push_forward_kernel(mesh, config))
-        timing = _time_jitted(
-            fn,
-            x,
-            send_meta,
-            recv_meta,
-            expert_base,
-            src_base_by_expert,
-            w_gate_up,
-            w_down,
-            queue_dst_ord,
-            queue_entry,
-            queue_row,
-            route_combine_weights,
-            route_valid_mask,
-            warmup=settings.warmup,
-            steps=settings.steps,
-            repeat_runs=settings.repeat_runs,
-            separate_compile=settings.separate_compile,
-            progress=lambda event: _emit_progress(config, settings.progress_events, event),
-        )
+        if execution_mode == FORWARD_EXECUTION_STAGED_HOST_SYNC:
+            timing = _time_staged_source_push_forward(
+                mesh,
+                config,
+                x,
+                send_meta,
+                recv_meta,
+                expert_base,
+                src_base_by_expert,
+                w_gate_up,
+                w_down,
+                queue_dst_ord,
+                queue_entry,
+                queue_row,
+                route_combine_weights,
+                route_valid_mask,
+                warmup=settings.warmup,
+                steps=settings.steps,
+                repeat_runs=settings.repeat_runs,
+                progress=lambda event: _emit_progress(config, settings.progress_events, event),
+            )
+        else:
+            fn = jax.jit(_sharded_source_push_forward_kernel(mesh, config))
+            timing = _time_jitted(
+                fn,
+                x,
+                send_meta,
+                recv_meta,
+                expert_base,
+                src_base_by_expert,
+                w_gate_up,
+                w_down,
+                queue_dst_ord,
+                queue_entry,
+                queue_row,
+                route_combine_weights,
+                route_valid_mask,
+                warmup=settings.warmup,
+                steps=settings.steps,
+                repeat_runs=settings.repeat_runs,
+                separate_compile=settings.separate_compile,
+                progress=lambda event: _emit_progress(config, settings.progress_events, event),
+            )
         validation = _validate_source_push_forward(config, host_inputs, timing.output) if settings.check else None
         queue_stats = inputs.queue_stats
         rounded_rows = queue_stats["rounded_rows_per_rank_mean"]
@@ -398,6 +512,7 @@ def _run_forward_one(
             row = {
                 "kernel": KERNEL_NAME,
                 "implementation": KERNEL_NAME,
+                "execution_mode": execution_mode,
                 "config": asdict(config),
                 "queue_stats": queue_stats,
                 **queue_stats,
@@ -428,6 +543,7 @@ def _run_forward_one(
             {
                 "kernel": KERNEL_NAME,
                 "implementation": KERNEL_NAME,
+                "execution_mode": execution_mode,
                 "config": asdict(config),
                 "compile_time": None,
                 "lower_compile_time": None,
@@ -463,6 +579,7 @@ def run_source_push_forward_source_plan(
     debug_exceptions: bool = False,
     separate_compile: bool = False,
     progress_events: bool = False,
+    execution_mode: str = FORWARD_EXECUTION_SINGLE_JIT,
 ) -> list[dict[str, Any]]:
     """Run W13, W2 return-copy, and deterministic source combine from one source-push plan."""
 
@@ -475,7 +592,7 @@ def run_source_push_forward_source_plan(
         separate_compile=separate_compile,
         progress_events=progress_events,
     )
-    return _run_forward_one(config, settings)
+    return _run_forward_one(config, settings, execution_mode=execution_mode)
 
 
 def _emit_progress(config: PushInboxConfig, progress_events: bool, event: str) -> None:

@@ -11,7 +11,7 @@ import os
 from collections.abc import Sequence
 from typing import Any
 
-from levanter.grug._moe.source_push_forward import run_source_push_forward_source_plan
+from levanter.grug._moe.source_push_forward import FORWARD_EXECUTION_MODES, run_source_push_forward_source_plan
 from levanter.grug._moe.source_push_inbox import PushInboxConfig
 from levanter.grug._moe.source_push_inbox_profiles import SOURCE_PUSH_PROFILES, source_push_profile_defaults
 
@@ -73,6 +73,9 @@ def parse_source_push_forward_args(argv: Sequence[str] | None = None) -> argpars
     parser.add_argument(
         "--progress-events", action=argparse.BooleanOptionalAction, default=default("progress_events", False)
     )
+    parser.add_argument(
+        "--execution-mode", choices=FORWARD_EXECUTION_MODES, default=default("execution_mode", "single_jit")
+    )
     parser.add_argument("--git-sha", type=str, default=None)
     parser.add_argument("--jsonl", type=str, default=None)
     return parser.parse_args(argv)
@@ -115,6 +118,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         debug_exceptions=args.debug_exceptions,
         separate_compile=args.separate_compile,
         progress_events=args.progress_events,
+        execution_mode=args.execution_mode,
     )
     for row in rows:
         if args.git_sha is not None:
