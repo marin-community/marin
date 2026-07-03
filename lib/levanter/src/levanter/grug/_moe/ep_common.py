@@ -3,9 +3,16 @@
 
 """Shared expert-parallel routing helpers for Grug MoE."""
 
+from collections.abc import Callable
+from functools import partial
+
+import equinox as eqx
 import jax
 import jax.numpy as jnp
 from jaxtyping import Array, Bool, Float, Int
+
+from haliax.nn.ragged_dot import ragged_dot
+from haliax.quantization import OverwriteWithGradient, partition_for_grad_overwrite
 
 
 def _sort_activations(inputs: Float[Array, "N *tail"], sort_indices: Int[Array, "N"]) -> Float[Array, "N *tail"]:
@@ -35,6 +42,53 @@ def _sort_activations_custom_bwd(
 
 
 _sort_activations_custom.defvjp(_sort_activations_custom_fwd, _sort_activations_custom_bwd)
+
+
+def _pmax_replicated_cotangent(tree):
+    """Identity on ``tree`` that makes ``OverwriteWithGradient`` cotangents combine as a max.
+
+    A replicated (``P()``) shard_map input gets its cotangent ``psum``-ed across
+    the mesh by the shard_map transpose. That is correct for ordinary trainable
+    parameters (the total gradient is the sum of per-shard partials), so those
+    leaves pass through untouched. Delayed-scaling quantization state (amax
+    histories / scales, carried as ``OverwriteWithGradient`` cotangents) must
+    instead combine as the *maximum* over shards — the global amax. Each such
+    leaf contributes ``pmax(ct)/mesh_size`` so the outer psum reconstructs
+    exactly ``pmax(ct)``.
+    """
+    mesh = jax.sharding.get_abstract_mesh()
+    axes = tuple(mesh.axis_names)
+    mesh_size = 1
+    for axis in axes:
+        mesh_size *= int(mesh.shape[axis])
+
+    @jax.custom_vjp
+    def _ident(t):
+        return t
+
+    def _fwd(t):
+        return t, None
+
+    def _bwd(_, ct):
+        overwrite, rest = partition_for_grad_overwrite(ct)
+        overwrite = jax.tree.map(lambda c: jax.lax.pmax(c, axes) / mesh_size, overwrite)
+        combined = eqx.combine(overwrite, rest, is_leaf=lambda x: isinstance(x, OverwriteWithGradient))
+        return (combined,)
+
+    _ident.defvjp(_fwd, _bwd)
+    return _ident(tree)
+
+
+def _resolve_ragged_dot_fns(ops) -> tuple[Callable, Callable]:
+    """Return the (w13, w2) grouped-matmul callables for an EP backend.
+
+    With ``ops`` set, each GEMM binds its stateful op and the op state's
+    shard_map cotangent combine is fixed up by ``_pmax_replicated_cotangent``.
+    """
+    if ops is None:
+        return ragged_dot, ragged_dot
+    ops = _pmax_replicated_cotangent(ops)
+    return partial(ragged_dot, op=ops.w13), partial(ragged_dot, op=ops.w2)
 
 
 def _prefix_cap_counts(counts: Int[Array, "E"], *, capacity: int) -> Int[Array, "E"]:
