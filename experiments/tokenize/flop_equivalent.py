@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""FLOP-equivalent scoring for the tokenizer bake-off (weaver #385, issue #6796).
+"""FLOP-equivalent scoring for the tokenizer bake-off.
 
 Cross-tokenizer quality is scored with bits-per-byte (BPB), which is byte-anchored
 and therefore comparable across vocabularies. The remaining question is *cost*: a
@@ -243,12 +243,20 @@ REFERENCE_SERVICE_BYTES = 100e9
 # --- fertility measurement --------------------------------------------------------
 
 
-def fertility_of(encode: Callable[[str], Sequence[int]], corpus: Iterable[str]) -> tuple[float, int, int]:
+@dataclass(frozen=True)
+class FertilityMeasurement:
+    """Tokens/byte for one tokenizer over a corpus, with the raw counts behind it."""
+
+    fertility: float  # tokens per byte
+    total_tokens: int
+    total_bytes: int
+
+
+def fertility_of(encode: Callable[[str], Sequence[int]], corpus: Iterable[str]) -> FertilityMeasurement:
     """Measure tokens/byte for an encode function over a corpus of strings.
 
     ``encode`` maps a str to a list of token ids (e.g.
-    ``lambda s: tokenizer.encode(s, add_special_tokens=False)``). Returns
-    ``(fertility, total_tokens, total_bytes)``.
+    ``lambda s: tokenizer.encode(s, add_special_tokens=False)``).
     """
     total_tokens = 0
     total_bytes = 0
@@ -257,7 +265,7 @@ def fertility_of(encode: Callable[[str], Sequence[int]], corpus: Iterable[str]) 
         total_bytes += len(text.encode("utf-8"))
     if total_bytes == 0:
         raise ValueError("empty corpus: cannot measure fertility")
-    return total_tokens / total_bytes, total_tokens, total_bytes
+    return FertilityMeasurement(fertility=total_tokens / total_bytes, total_tokens=total_tokens, total_bytes=total_bytes)
 
 
 def _proxy_model(vocab: int) -> GrugModelConfig:
