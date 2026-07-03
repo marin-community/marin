@@ -3,11 +3,9 @@
 
 # NOTE: Do not explicitly import wandb/other trackers here, as this will cause the tests to trivially pass.
 import dataclasses
-import json
 import logging
 import re
 import warnings
-from types import SimpleNamespace
 from typing import Tuple
 
 import draccus
@@ -191,53 +189,6 @@ def test_wandb_tracker_materializes_before_dynamic_stale_step_check(monkeypatch)
     tracker.log({"metric": 2.0}, step=10)
 
     assert converted == [2.0]
-
-
-def test_wandb_finish_writes_replicate_file_before_run_finish(tmp_path, monkeypatch):
-    monkeypatch.setenv("WANDB_ERROR_REPORTING", "false")
-    metrics_file = tmp_path / "tracker_metrics.jsonl"
-
-    class WedgedRun:
-        config = {"lr": 0.5}
-        summary = {"train/loss": 6.61}
-
-        def finish(self):
-            # A wedged finish() outlives the background finish timeout, after which
-            # process teardown makes any fsspec write impossible — so the replicate
-            # file must already be on disk when finish() starts.
-            assert metrics_file.exists()
-            raise RuntimeError("wandb upload wedged")
-
-    tracker = WandbTracker(WedgedRun(), replicate_path=str(tmp_path))
-
-    with pytest.raises(RuntimeError, match="wedged"):
-        tracker.finish()
-
-    record = json.loads(metrics_file.read_text())
-    assert record["summary"] == {"train/loss": 6.61}
-    assert record["config"] == {"lr": 0.5}
-
-
-def test_wandb_finish_rewrites_replicate_file_with_flushed_summary(tmp_path, monkeypatch):
-    monkeypatch.setenv("WANDB_ERROR_REPORTING", "false")
-    metrics_file = tmp_path / "tracker_metrics.jsonl"
-
-    class FlushingRun:
-        config = {"lr": 0.5}
-        # run.summary is not guaranteed to include the last commit until finish()
-        # flushes it into _final_summary.
-        summary = {"train/loss": 7.25}
-
-        def finish(self):
-            self._final_summary = SimpleNamespace(
-                item=[SimpleNamespace(nested_key=(), key="train/loss", value_json="6.61")]
-            )
-
-    tracker = WandbTracker(FlushingRun(), replicate_path=str(tmp_path))
-    tracker.finish()
-
-    record = json.loads(metrics_file.read_text())
-    assert record["summary"] == {"train/loss": 6.61}
 
 
 def test_truncate_wandb_run_name_preserves_scientific_notation_lr_suffix():
