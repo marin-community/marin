@@ -146,16 +146,21 @@ class WandbTracker(Tracker):
         if self._suppress_logging:
             return
 
-        logger.info("Finishing wandb run...")
+        # Write the replicate file before touching wandb: run.finish() can wedge
+        # past the background finish timeout, and by the time it raises the
+        # process is tearing down and fsspec can no longer schedule writes.
+        # This write is best-effort insurance — its failure must not keep
+        # run.finish() from running — and its summary may miss the final
+        # commit, so a successful finish rewrites the file with the flushed
+        # values below.
         try:
-            # Finish wandb first so the summary reflects every synced metric.
-            self.run.finish()
-        finally:
-            # Always write the replicate file, even when run.finish() hangs or
-            # raises (e.g. HandleAbandonedError on a wedged upload). The summary
-            # is already populated in memory, so a healthy run must still emit
-            # tracker_metrics.jsonl for the canary metrics gate.
             self._write_replicate_file()
+        except Exception:
+            logger.exception("Pre-finish replicate write failed; retrying after wandb finish.")
+
+        logger.info("Finishing wandb run...")
+        self.run.finish()
+        self._write_replicate_file()
 
     def _write_replicate_file(self):
         if self._replicate_path is None:
