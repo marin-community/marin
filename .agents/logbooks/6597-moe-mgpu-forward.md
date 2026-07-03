@@ -1811,3 +1811,59 @@ production profile fed by production-like compact routing metadata, not the olde
   - The refactored `SourcePushPlan` path preserves the known rough-balanced W13 performance envelope.
   - This is slightly faster than the prior `8.415 ms` rough-balanced reference and comparable to the previous
     precomputed SourcePushPlan row (`8.441 ms`), with no drops and the expected `5.74%` padded-row tax.
+
+## 2026-07-03 16:31 - Current-head source-push full-forward gate
+
+Reran the three target full-forward rows on current PR head after the exact-layout, planner, and combine-mask commits.
+This exercises the integrated `W13 -> W2 direct return -> deterministic source combine` path with the production
+source-padded expert-major layout.
+
+- Commit Hash: `0f5e3fa0fcebc1be81267cc57b59be00bef78878`
+- Job: `/dlwh/source-push-forward-current-head-gate-0f5e3fa0fc-20260703-232731`
+- Cluster: `cw-us-east-02a`
+- Command:
+  ```bash
+  uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job run --no-wait \
+    --job-name source-push-forward-current-head-gate-0f5e3fa0fc-20260703-232731 \
+    --cpu 16 --memory 128GB --disk 16GB --gpu H100x8 --reserve H100x8 \
+    --enable-extra-resources --extra gpu -- \
+    timeout 7200s bash -lc 'set -euo pipefail
+  JSONL=scratch/source_push_forward_current_head_gate_0f5e3fa0fc_20260703.jsonl
+  rm -f "$JSONL"
+  COMMON="uv run --package marin-levanter --group test python lib/levanter/scripts/bench/bench_source_push_forward.py --source-push-profile hopper_source_push_inbox_rough_balanced_216 --execution-mode staged_host_sync --warmup 1 --steps 3 --repeat-runs 5 --separate-compile --no-check --no-progress-events --git-sha 0f5e3fa0fc --jsonl $JSONL"
+  $COMMON --routing balanced --capacity-factor 1.0
+  $COMMON --routing balanced --capacity-factor 1.25
+  $COMMON --routing roughly_balanced --capacity-factor 1.25
+  '
+  ```
+- Iris summary:
+  - State: `succeeded`
+  - Exit code: `0`
+  - Task duration: `167099 ms`
+  - Failure count: `0`
+  - Preemption count: `0`
+
+Summary medians over 5 repeats:
+
+| routing | cf | stage | median time | useful TFLOP/s/rank | rounded TFLOP/s/rank | row efficiency | masked rows | drops |
+| --- | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| balanced | 1.0 | total | `13.461 ms` | `191.44` | `191.44` | `1.000000` | `0.000000` | `0` |
+| balanced | 1.0 | W13 | `8.072 ms` | `212.82` | `212.82` | `1.000000` | `0.000000` | `0` |
+| balanced | 1.0 | W2 return | `3.929 ms` | - | - | `1.000000` | `0.000000` | `0` |
+| balanced | 1.0 | combine | `1.341 ms` | - | - | `1.000000` | `0.000000` | `0` |
+| balanced | 1.25 | total | `13.487 ms` | `191.07` | `191.07` | `1.000000` | `0.000000` | `0` |
+| balanced | 1.25 | W13 | `8.133 ms` | `211.24` | `211.24` | `1.000000` | `0.000000` | `0` |
+| balanced | 1.25 | W2 return | `3.899 ms` | - | - | `1.000000` | `0.000000` | `0` |
+| balanced | 1.25 | combine | `1.336 ms` | - | - | `1.000000` | `0.000000` | `0` |
+| roughly_balanced | 1.25 | total | `14.100 ms` | `182.76` | `193.90` | `0.942584` | `0.057416` | `0` |
+| roughly_balanced | 1.25 | W13 | `8.529 ms` | `201.44` | `213.71` | `0.942584` | `0.057416` | `0` |
+| roughly_balanced | 1.25 | W2 return | `4.112 ms` | - | - | `0.942584` | `0.057416` | `0` |
+| roughly_balanced | 1.25 | combine | `1.337 ms` | - | - | `0.942584` | `0.057416` | `0` |
+
+- Interpretation:
+  - Current head still clears the W13 rough-balanced target gate: useful `201.44 TFLOP/s/rank` and median `8.529 ms`,
+    with no row drops.
+  - The integrated full forward is a little slower than the prior `89f3267fc` gate on rough-balanced total
+    (`13.876 ms` -> `14.100 ms`) and W13 (`8.415 ms` -> `8.529 ms`), but remains within the W13 acceptance bar.
+  - W2 return and combine are stable at about `4.1 ms` and `1.34 ms`; the route-buffer combine remains a meaningful
+    full-forward tax after proving invertibility.
