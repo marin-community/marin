@@ -8,20 +8,28 @@ the running runs.
 
 ## TL;DR
 
-Two independent, compute-fair levers beat the stock Llama-3 tokenizer we ship with grug-moe,
-and they compose:
+**Swapping the grug-moe tokenizer from stock Llama-3 to SuperBPE-128k is a clear,
+compute-fair win: −4.7% FLOP-equivalent BPB at equal vocabulary.** It wins on *both* axes at
+once:
 
-1. **Swap the tokenizer to SuperBPE-128k** — *same vocabulary size* as Llama-3 (128k), so the
-   output head and its FLOPs are unchanged, but it emits **~18% fewer tokens per byte** on
-   grug-moe's English/math/code mix. Fewer tokens per byte is fewer forward passes per byte at
-   serving time: a **~18% cut in serving FLOPs/byte at equal model quality-per-byte**. This is a
-   pure win on the cost axis of the FLOP-equivalent score.
-2. **Add a hashed n-gram input embedding** (Over-Tokenized / LongCat style) — extra input-side
-   embedding parameters that cost **~0 additional serving FLOPs** (a gather, not a matmul; the
-   output head is untouched) and buy quality (BPB). This is a win on the quality axis at (almost)
-   no cost.
+- **Quality**: at identical training FLOPs and identical 128k vocab, SuperBPE-128k reaches **~3%
+  lower BPB than Llama-3 at every point on the isoFLOP ladder** — because packing more bytes per
+  token lets it ingest ~30% more text per training FLOP.
+- **Cost**: it emits **~18% fewer tokens per byte** on grug-moe's English/math/code mix, so it
+  makes ~18% fewer forward passes per served byte — a −18% cut in serving FLOPs/byte with the
+  output head unchanged (same vocab).
 
-Both are measured under the FLOP-equivalent rubric (below): quality is bits-per-byte (BPB,
+The combined FLOP-equivalent BPB (feBPB) is **1.179 vs Llama-3's 1.238 (−4.7%)**, and SuperBPE
+wins under every deployment assumption we replayed (natural multilingual mix −1.9%, 64k context
+−4.7%, serving-heavy −6.0%).
+
+A second lever we built and tested — a **hashed n-gram input embedding** (Over-Tokenized /
+LongCat style, ~0 added serving FLOPs) — did **not** pay off at this flash-scale proxy: it is a
+small BPB *regression* that narrows with training budget, consistent with the literature's
+finding that n-gram embeddings help only at larger model/token scale. It is implemented, correct,
+and gated off by default; see §N-gram.
+
+Everything is measured under the FLOP-equivalent rubric (below): quality is bits-per-byte (BPB,
 tokenizer-agnostic); cost is priced at the **250B-total / ~20B-active deployment target** with a
 16k-token context, Llama-encoder attention, and 5:1 local:global attention sparsity. All numbers
 are **replayable** — every score is recomputed from stored measurements under
@@ -104,36 +112,86 @@ A critical implementation note: SuperBPE repos ship a `GPT2Tokenizer` class, so
 *worse-than-baseline* fertility. Only the `from_file` path (which marin's tokenize pipeline uses)
 honors it. The fertility harness was switched to that path so the reported cost matches training.
 
-## Quality axis (BPB isoFLOP ladder) — [in-flight]
+## Quality axis (BPB isoFLOP ladder) — measured
 
-Ladder running on cw-rno2a: 6 arms (marin baseline, marin+n-gram, gpt-oss, qwen3, gpt-neox,
-superbpe-128k) x 3 compute points = 18 runs. BPB collected with
-`experiments.tokenize.collect_metrics` into `ladder.json` as each completes.
+Full 3-point ladder on cw-rno2a (proxy model held fixed: hidden 1024, 16 layers, 32 experts,
+top-4, seq 1024, batch 128; only `vocab_size` follows the arm). Held-out BPB on the
+Uncheatable-Eval subsets at each training-FLOP budget (raw points in
+`experiments/tokenize/results/ladder.json`):
 
-_To be filled: per-arm `BPB(C)` fit and held-out BPB at matched budget._
+| arm | s1500 | s3500 | s8000 | BPB vs marin @ matched FLOPs |
+|---|---|---|---|---|
+| **superbpe-128k** | **1.336** | **1.200** | **1.114** | **−3.0% / −3.0% / −2.9%** |
+| marin / llama3-128k | 1.378 | 1.238 | 1.147 | reference |
+| gpt-oss-200k | 1.366 | 1.230 | 1.135 | better raw BPB, but +30–60% FLOPs (bigger head) |
+| qwen3-152k | 1.377 | 1.241 | 1.148 | ~equal to marin |
+| gpt-neox-50k | 1.332 | 1.206 | (rerun) | best raw BPB, but small vocab → expensive serving |
 
-## FLOP-equivalent ranking (feBPB) — [in-flight]
+superbpe-128k sits at a strictly lower BPB than marin at every budget, at essentially identical
+training FLOPs (same vocab): 3.93e17→1.336, 9.17e17→1.200, 2.10e18→1.114 versus marin's
+1.378/1.238/1.147. gpt-oss-200k reaches a comparable BPB only by spending 30–60% more training
+FLOPs on its larger output head — exactly the inefficiency the rubric is built to expose.
 
-_To be filled from the ladder via `bakeoff_analysis.py`, at the 250B/20B target, 16k context._
+## FLOP-equivalent ranking (feBPB) — measured
 
-## N-gram free-quality result — [in-flight]
+At the 250B/20B deployment target, 16k context, grug-moe's English/math serving mix
+(`bakeoff_analysis.py --domain-weights english_web=0.8,math=0.2`; reference = marin-128k):
 
-marin-128k vs marin-128k+n-gram, identical tokenizer and compute — the BPB delta is the n-gram
-uplift at ~0 serving cost. Config: orders (2,3), 2 hashes, 65537 buckets/table, sum-combine, causal
-rolling hash. `NgramInputEmbed` is a verified bit-exact no-op when disabled and strictly causal.
+| arm | vocab | rel. serving cost | feBPB | vs marin |
+|---|---|---|---|---|
+| **superbpe-128k** | 128k | **0.816** | **1.179** | **−4.7%** |
+| marin / llama3-128k | 128k | 1.000 | 1.238 | reference |
+| gpt-oss-200k | 200k | 0.993 | 1.257 | +1.6% |
+| qwen3-152k | 152k | 1.158 | 1.275 | +3.2% |
 
-_To be filled: BPB(marin+ngram) − BPB(marin) at matched budget; the implied feBPB improvement._
+superbpe-128k wins by combining its raw-BPB edge with the serving discount reinvested into
+training. The win is robust across replayed deployment assumptions:
 
-## Recommendations — [in-flight, pending BPB]
+| scenario | superbpe feBPB | vs marin |
+|---|---|---|
+| English/math, 16k context | 1.179 | −4.7% |
+| natural multilingual mix, 16k | 1.214 | −1.9% |
+| English/math, 64k context | 1.180 | −4.7% |
+| English/math, serving-ratio 2 | 1.163 | −6.0% |
 
-Provisional, on the serving-cost axis alone (BPB pending):
+The margin shrinks on the multilingual mix (superbpe-128k's Chinese fertility is poor) and grows
+when serving is weighted more heavily — both the expected directions.
 
-- For an English/code/math deployment, **SuperBPE-128k is the recommended tokenizer swap**: ~18%
-  cheaper to serve at equal vocab and equal head cost, contingent on BPB holding (measuring now).
-- **Add the n-gram input embedding** as a free-quality lever on top of whatever base tokenizer is
-  chosen; it is orthogonal to the tokenizer swap.
-- A multilingual target must *not* use superbpe-128k (Chinese regression); superbpe-180k retains the
-  win across languages at the cost of a larger head.
+## N-gram result — measured (does not pay off at flash scale)
+
+marin-128k with vs without the hashed n-gram input embedding (identical tokenizer, identical
+FLOPs; `init_std_scale=0` clean-ablation start). The n-gram adds input-side embedding parameters
+at ~0 serving FLOPs — but at this proxy scale it is a small BPB *regression*, not an uplift:
+
+| budget | marin | marin + n-gram (init 0) | Δ | marin + n-gram (init 1.0) |
+|---|---|---|---|---|
+| s1500 | 1.378 | 1.424 | +3.3% | 1.475 |
+| s3500 | 1.238 | 1.261 | +1.9% | 1.278 |
+| s8000 | 1.147 | 1.157 | +0.9% | 1.174 |
+
+Two clean sub-findings: (a) `init_std_scale=0` (start identical to baseline, let the zero tables
+grow) beats `init_std_scale=1.0` at every budget — a large nonzero init injects input noise
+several times the base embedding and the model spends its budget recovering; (b) even with the
+good init, the gap to marin *narrows monotonically with training* (+3.3% → +1.9% → +0.9%). The
+converging trend is consistent with Over-Tokenized (arXiv 2501.16975) / LongCat, where n-gram
+input embeddings pay off at model and token scales well beyond this flash-scale proxy. The module
+(`levanter.grug.NgramInputEmbed`) is implemented, verified a bit-exact no-op when off and strictly
+causal, and left gated off — worth revisiting at target scale, not adopted now.
+
+## Recommendations
+
+1. **Adopt SuperBPE-128k as the grug-moe tokenizer for English/code/math.** It is a −4.7%
+   FLOP-equivalent improvement over stock Llama-3 at equal vocabulary — better quality per byte
+   *and* ~18% cheaper to serve — robust across context length and serving weight. It is a
+   drop-in swap: same 128k vocab, same output head, loaded through the existing
+   `levanter.load_tokenizer` path (which preserves the superword pretokenizer;
+   `AutoTokenizer.from_pretrained` does not — see below).
+2. **Do not use superbpe-128k for a multilingual target** — it regresses badly on Chinese
+   (−37% bytes/token). superbpe-180k keeps the cross-lingual fertility win but at a larger head
+   (180k vocab); re-score it with a trained ladder before committing.
+3. **Do not add the n-gram input embedding at flash scale** — it does not help here. Keep the
+   implementation for a larger-scale revisit; the converging trend suggests it may pay off past
+   ~5e18 training FLOPs / larger hidden size.
 
 ## Reproduce
 
