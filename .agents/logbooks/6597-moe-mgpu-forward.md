@@ -63,3 +63,39 @@ Initial tax reading:
 - Full hidden store tax relative to tiny output is about `0.3171 ms`.
 - The full path median is `8.2915 ms`, comparable to recent stable source-push medians and faster than the
   `9.692 ms` ring-prologue + Pallas-W13 hybrid estimate.
+
+## 2026-07-03 invertible source-push planner phase 1
+
+Added the first host-side planner for the revised invertible source-push contract:
+
+- Commit Hash: `cf5df315b`
+- Code:
+  - `lib/levanter/src/levanter/grug/_moe/source_push_plan.py`
+  - `lib/levanter/tests/grug/test_source_push_plan.py`
+- Scope:
+  - Builds source-major queue metadata from real `selected_experts` and `combine_weights`.
+  - Preserves source-owned inverse metadata:
+    `assignment_id -> token_id, route_slot, combine_weight`.
+  - Uses transport order `[src, dst_ordinal, entry, row_in_block]`.
+  - Stores compact kernel metadata fields:
+    `src_rank`, `local_expert`, `local_row_start_within_src_expert`, `valid_rows`.
+  - Derives destination-side expert-major offsets from accepted counts:
+    `expert_base[dst, expert] + src_base_by_expert[dst, src, expert] + local_row_start + row`.
+  - Uses existing `_clip_receiver_group_sizes` for deterministic receiver-capacity clipping, so accepted/dropped
+    assignment sets match the current EP reference policy.
+  - Adds reference helpers for packing source tokens into queue order and scattering returned rows into a
+    deterministic `[source, token, route_slot, D]` route buffer.
+  - Adds row accounting for useful rows, rounded rows, live entries, row efficiency, masked row fraction, and drops.
+- Verification:
+  - `uv run --package marin-levanter --group test pytest lib/levanter/tests/grug/test_source_push_inbox.py lib/levanter/tests/grug/test_source_push_plan.py -q`
+  - `20 passed, 11 warnings`
+  - `./infra/pre-commit.py --changed-files --fix`
+  - all checks passed
+- Interpretation:
+  - This is Phase 1 only: planner/inverse-map correctness and CPU/JAX checks.
+  - The existing source-push inbox kernel is intentionally unchanged because its current `send_meta` field 2 is a
+    destination row start, while the new invertible plan makes field 2 the source-local row start and computes the
+    destination expert-major offset from compact count-derived bases.
+- Next action:
+  - Adapt the source-push W13 kernel to consume `SourcePushPlan` metadata and store W13/SwiGLU directly into
+    expert-major rows.
