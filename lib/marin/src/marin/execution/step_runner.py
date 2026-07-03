@@ -29,7 +29,14 @@ from fray.types import Entrypoint, JobRequest, ResourceConfig, create_environmen
 from rigging.filesystem import open_url, url_to_fs
 from rigging.log_setup import configure_logging
 
-from marin.execution.artifact import FINGERPRINT_KEY, VERSION_KEY, check_drift, is_mutable_version, write_artifact
+from marin.execution.artifact import (
+    FINGERPRINT_KEY,
+    STEP_RUNNER_EXECUTOR_VERSION,
+    VERSION_KEY,
+    check_drift,
+    is_mutable_version,
+    write_artifact,
+)
 from marin.execution.remote import RemoteCallable, _sanitize_job_name
 from marin.execution.step_spec import StepSpec
 
@@ -60,13 +67,18 @@ def _write_executor_info(step: StepSpec) -> None:
 
     Skips writing if the file already exists (e.g. ``Executor.write_infos()``
     wrote a richer version before this step launched).
+
+    This runs at schedule time, before the step produces its ``.artifact.json``, and its
+    ``config`` is the identity ``hash_attrs`` — not the materialized config. It is tagged
+    ``STEP_RUNNER_EXECUTOR_VERSION`` so ``read_record`` ignores it as a record source and never
+    mistakes the stub for a completed cache (#6836).
     """
     info_path = os.path.join(step.output_path, ".executor_info")
     fs = url_to_fs(info_path, use_listings_cache=False)[0]
     if fs.exists(info_path):
         return
     info = {
-        "executor_version": "step_runner",
+        "executor_version": STEP_RUNNER_EXECUTOR_VERSION,
         "name": step.name,
         "fn_name": str(step.fn) if step.fn is not None else "None",
         "config": step.hash_attrs,

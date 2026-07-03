@@ -244,3 +244,26 @@ def test_read_record_leaves_a_genuine_data_record_untouched(tmp_path):
     record = read_record(tmp_path.as_posix())
     assert record.name == "datasets/x"
     assert record.result is None
+
+
+# --- the schedule-time StepRunner .executor_info stub --------------------------
+
+# A schedule-time ``StepRunner`` stub: same filename, but ``executor_version == "step_runner"`` and
+# a ``config`` that is the identity ``hash_attrs`` (no materialized tokenizer/format/tags).
+_STEP_RUNNER_STUB = json.dumps(
+    {
+        "executor_version": "step_runner",
+        "name": "paloma/4chan-llama3",
+        "config": {"fingerprint": "449bd131", "version": "2026.06.28", "deps": []},
+        "output_path": "gs://bucket/paloma/4chan-llama3/2026.06.28",
+    }
+)
+
+
+def test_read_record_ignores_step_runner_stub(tmp_path):
+    """A schedule-time ``StepRunner`` ``.executor_info`` stub is not served as a record — it
+    carries no materialized config, so the output reads back as record-less rather than as a
+    tokenizer-less cache (#6836)."""
+    (tmp_path / ".executor_info").write_text(_STEP_RUNNER_STUB)
+
+    assert read_record(tmp_path.as_posix()) is None
