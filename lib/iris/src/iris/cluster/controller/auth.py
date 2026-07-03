@@ -488,13 +488,16 @@ def create_controller_auth(
             iap_assertion_verifier = IapAssertionVerifier(signed_header_audience, role_resolver=role_resolver)
 
     optional = auth_config.optional
+    # Only the CIDR *count* is logged: CodeQL's sensitive-data heuristics treat
+    # any value read off auth_config as a potential secret, and the cluster
+    # config file is the authoritative place to read the ranges anyway.
     logger.info(
-        "Auth enabled: provider=%s, db=%s, jwt=%s, optional=%s, trusted_cidrs=%s (loopback always trusted as admin)",
+        "Auth enabled: provider=%s, db=%s, jwt=%s, optional=%s, trusted_cidrs=%d (loopback always trusted as admin)",
         provider,
         "yes" if db else "no",
         "yes" if jwt_mgr else "no",
         optional,
-        list(auth_config.trusted_cidrs) or "-",
+        len(auth_config.trusted_cidrs),
     )
     return ControllerAuth(
         verifier=verifier,
