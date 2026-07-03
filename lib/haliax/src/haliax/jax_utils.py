@@ -6,20 +6,19 @@ import functools as ft
 import typing
 import warnings
 import zlib
-
-import opt_einsum
 from typing import Any, Callable, Sequence
 
 import equinox as eqx
 import jax
 import numpy as np
+import opt_einsum
 from jax import Array
 from jax import numpy as jnp
 from jax import random as jrandom
-from jax.experimental.multihost_utils import host_local_array_to_global_array
-from jax.sharding import PartitionSpec
 from jax._src.state.indexing import Slice
 from jax.ad_checkpoint import checkpoint_name
+from jax.experimental.multihost_utils import host_local_array_to_global_array
+from jax.sharding import PartitionSpec
 from jax.typing import DTypeLike
 from jaxtyping import PRNGKeyArray
 
@@ -33,7 +32,9 @@ try:
     )
 except ImportError:
     # jax v0.5.0 or older
-    from jax._src.numpy import lax_numpy as jax_einsum  # pylint: disable=g-import-not-at-top
+    from jax._src.numpy import (
+        lax_numpy as jax_einsum,  # pylint: disable=g-import-not-at-top
+    )
 
 
 F = typing.TypeVar("F", bound=Callable[..., Any])
@@ -283,7 +284,8 @@ def _jittable_dg_einsum(
 
     contractions = tuple((a, frozenset(b), c) for a, b, c, *_ in contractions)
 
-    einsum = eqx.filter_jit(jax_einsum._einsum, inline=True)
+    # filter_jit forwards **jitkwargs (here `inline`) to jax.jit; the equinox stub omits **kwargs.
+    einsum = eqx.filter_jit(jax_einsum._einsum, inline=True)  # pyrefly: ignore[unexpected-keyword]
     if spec is not None:
         einsum = jax.named_call(einsum, name=spec)
     return einsum(operands, contractions, precision, preferred_element_type, _dot_general, out_sharding=out_sharding)  # type: ignore[operator]
@@ -350,10 +352,3 @@ def multilevel_scan(f, carry, xs, outer_size, length, reverse=False, unroll=1):
             return x
 
     return carry, jax.tree.map(_deshape, scanned)
-
-
-def to_jax_shape(shape):
-    from haliax.core import Axis, ensure_tuple  # circular import: jax_utils -> core -> jax_utils
-
-    shape = ensure_tuple(shape)
-    return tuple(axis.size if isinstance(axis, Axis) else axis for axis in shape)

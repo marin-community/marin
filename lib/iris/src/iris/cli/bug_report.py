@@ -8,19 +8,22 @@ structured Markdown report suitable for GitHub issues or agent consumption.
 """
 
 import logging
+import signal
 import subprocess
 from dataclasses import dataclass, field
 
 from finelog.client import LogClient
 from finelog.rpc import logging_pb2
+from rigging.connect import proxy_path
+from rigging.credentials import ClientCredentials
 
+from iris.cluster.endpoints import LOG_SERVER_ENDPOINT_NAME
 from iris.cluster.log_keys import build_log_source
 from iris.cluster.types import JobName
 from iris.rpc import controller_pb2, job_pb2
-from iris.rpc.auth import AuthTokenInjector, TokenProvider
 from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
 from iris.rpc.controller_connect import ControllerServiceClientSync
-from iris.rpc.proto_display import format_resources, job_state_friendly, task_state_friendly
+from iris.rpc.proto_display import format_resources, job_state_friendly, signal_name, task_state_friendly
 from iris.time_proto import timestamp_from_proto
 
 logger = logging.getLogger(__name__)
@@ -116,10 +119,10 @@ def gather_bug_report(
     job_id: JobName,
     *,
     tail: int = 50,
-    token_provider: TokenProvider | None = None,
+    credentials: ClientCredentials | None = None,
 ) -> BugReport:
     """Gather all diagnostic data for a job into a BugReport."""
-    interceptors = [AuthTokenInjector(token_provider)] if token_provider else []
+    interceptors = credentials.interceptors() if credentials is not None else []
     client = ControllerServiceClientSync(
         controller_url,
         timeout_ms=30000,
@@ -127,7 +130,11 @@ def gather_bug_report(
         accept_compression=IRIS_RPC_COMPRESSIONS,
         send_compression=None,
     )
-    log_client = LogClient.connect(controller_url, timeout_ms=30000, interceptors=interceptors)
+    log_client = LogClient.connect(
+        f"{controller_url.rstrip('/')}{proxy_path(LOG_SERVER_ENDPOINT_NAME)}",
+        timeout_ms=30000,
+        interceptors=interceptors,
+    )
     try:
         return _gather(client, log_client, job_id, tail=tail)
     finally:
@@ -360,9 +367,10 @@ def _format_exit_code(code: int) -> str:
         return "0 (success)"
     if code > 128:
         signal_num = code - 128
-        signals = {9: "SIGKILL (likely OOM)", 15: "SIGTERM", 6: "SIGABRT"}
-        sig_name = signals.get(signal_num, f"signal {signal_num}")
-        return f"{code} ({sig_name})"
+        name = signal_name(signal_num)
+        if signal_num == signal.SIGKILL:
+            name = f"{name} (likely OOM)"
+        return f"{code} ({name})"
     return str(code)
 
 

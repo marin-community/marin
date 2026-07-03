@@ -3,6 +3,7 @@
 
 import logging
 import re
+from typing import NotRequired, TypedDict
 
 from bs4 import BeautifulSoup
 from resiliparse.extract.html2text import extract_simplified_dom
@@ -16,6 +17,19 @@ from marin.schemas.web.convert import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+class ConvertedPage(TypedDict):
+    """Result of converting an HTML page to text/markdown.
+
+    ``title`` is None when the source page has no title; ``content`` and ``html``
+    are always present. ``url`` is included only when a URL was supplied.
+    """
+
+    title: str | None
+    content: str
+    html: str
+    url: NotRequired[str]
 
 
 def extract_content_from_dom(
@@ -53,7 +67,7 @@ def convert_page_with_resiliparse(
     html: str,
     url: str | None = None,
     config: ResiliparseConfig = ResiliparseConfig(),
-) -> dict[str, str]:
+) -> ConvertedPage:
     """
     Convert HTML to text[non-markdown] using Resiliparse.
 
@@ -69,7 +83,8 @@ def convert_page_with_resiliparse(
         config (ResiliparseConfig): Configuration for Resiliparse.
 
     Returns:
-        dict[str, str]: Dictionary containing the title, content, and HTML of the page.
+        ConvertedPage: Title, content, and HTML of the page. The title may be None
+            when the page has no title.
     """
     tree = HTMLTree.parse(html)
     title = tree.title or None
@@ -82,7 +97,7 @@ def convert_page_with_resiliparse(
 
         content = f"# {title}\n\n{content}"
 
-    out = {"title": title, "content": content, "html": html}
+    out: ConvertedPage = {"title": title, "content": content, "html": html}
 
     if url:
         out["url"] = url
@@ -95,7 +110,7 @@ def convert_page(
     url: str | None = None,
     extract_method: str = "resiliparse",
     config: ExtractionConfig = ResiliparseConfig(),
-) -> dict[str, str]:
+) -> ConvertedPage:
     """
     Convert HTML to text/markdown using Resiliparse.
 
@@ -106,7 +121,8 @@ def convert_page(
         config (ExtractionConfig): Configuration for the extraction method.
 
     Returns:
-        dict[str, str]: Dictionary containing the title, content, and HTML of the page.
+        ConvertedPage: Title, content, and HTML of the page. The title may be None
+            when the page has no title.
     """
     if extract_method != "resiliparse":
         raise ValueError(f"Only 'resiliparse' extraction method is supported, got: {extract_method}")

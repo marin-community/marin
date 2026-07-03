@@ -28,7 +28,8 @@ from levanter.checkpoint import (
     register_debug_checkpointer_state_provider,
     unregister_debug_checkpointer_state_provider,
 )
-from levanter.layers.attention import DEFAULT_SPLASH_BLOCK_SIZE, AttentionBackend
+from levanter.kernels.pallas.splash_attention import DEFAULT_SPLASH_BLOCK_SIZE
+from levanter.layers.attention import AttentionBackend
 from levanter.models.flash_attention import BLOCK_SIZE as DEFAULT_FLASH_BLOCK_SIZE
 from levanter.models.lm_model import LmConfig, LmHeadModel
 from levanter.optim import OptimizerConfig
@@ -425,14 +426,9 @@ class TrainWorker:
         replay_stats = self.replay_buffer.get_stats()
         replay_stats["current_step"] = self.replay_buffer._current_step
 
-        transfer_snapshot: dict[str, object] = {}
-        if hasattr(self.transfer_server, "get_debug_snapshot"):
-            maybe_snapshot = self.transfer_server.get_debug_snapshot()
-            transfer_snapshot = dict(maybe_snapshot)
-
         return {
             "replay_buffer": replay_stats,
-            "weight_transfer": transfer_snapshot,
+            "weight_transfer": dict(self.transfer_server.get_debug_snapshot()),
         }
 
     def train(self):
@@ -454,7 +450,7 @@ class TrainWorker:
         try:
             config = self.config
             optimizer = config.optimizer.build(config.trainer.num_train_steps)
-            loss_fn = self.loss_module.create_loss_fn(self.reference_model, None)
+            loss_fn = self.loss_module.create_loss_fn(self.reference_model)
 
             @jax.jit
             def _loss_function(model, batch, key):

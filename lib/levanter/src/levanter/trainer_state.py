@@ -12,7 +12,6 @@ import haliax
 from haliax.quantization import QuantizationConfig, apply_updates, partition_for_grad_overwrite, quantize_linear_layers
 from haliax.types import IntScalar, Scalar
 from jax import numpy as jnp
-from jax._src.random import PRNGKey
 from jaxtyping import PRNGKeyArray, PyTree
 from optax import GradientTransformation, OptState
 
@@ -112,8 +111,9 @@ class TrainerState(eqx.Module, Generic[M]):
 
         trainable_model = trainables_only(model, is_trainable)
 
+        averaging: ModelAveraging[M] | None = None
         if model_averaging is not None:
-            model_averaging = model_averaging.create(trainable_model)
+            averaging = model_averaging.create(trainable_model)
 
         opt_state = init_optimizer_for_trainables(optimizer, trainable_model)
 
@@ -125,7 +125,7 @@ class TrainerState(eqx.Module, Generic[M]):
             key,
             is_trainable=is_trainable,
             mp=mp,
-            model_averaging=model_averaging,
+            model_averaging=averaging,
             *args,
             **kwargs,
         )
@@ -136,7 +136,7 @@ class TrainerState(eqx.Module, Generic[M]):
         *,
         obj_fun: Callable[[M], Scalar] | None = None,
         loss: float | None = None,
-        key: PRNGKey,
+        key: PRNGKeyArray,
     ) -> tuple[S, M]:
         assert isinstance(self, TrainerState)  # make mypy happy
         model, opt_state, updates = take_train_step(

@@ -3,8 +3,6 @@
 
 """Connect/RPC interceptors shared across Marin RPC servers."""
 
-from __future__ import annotations
-
 import asyncio
 import logging
 import threading

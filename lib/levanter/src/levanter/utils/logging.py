@@ -9,6 +9,7 @@ from typing import Iterable, Iterator, TypeVar, Union
 
 import jax
 import rigging.log_setup as iris_logging
+import wandb
 
 from levanter.tracker.wandb import is_wandb_available
 
@@ -56,8 +57,6 @@ def save_xla_dumps_to_wandb(initial_time: float):
     if not is_wandb_available():
         pylogger.warning("Wandb is not available, so we can't save XLA dumps")
         return
-
-    import wandb
 
     # attempt to parse xla_flags to see if we're dumping assembly files
     flags = os.getenv("XLA_FLAGS", None)

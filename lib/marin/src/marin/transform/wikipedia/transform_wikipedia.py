@@ -104,9 +104,9 @@ def remove_references_from_html(html: str) -> str:
 def unwrap_eqn(html: str):
     """Extract equations from math elements and convert to LaTeX inline/block quotes,
     wrapping display math in <p> tags."""
-    html = BeautifulSoup(html, "html.parser")
+    soup = BeautifulSoup(html, "html.parser")
     # Find all annotations containing equations
-    annotations = html.findAll("annotation", {"encoding": "application/x-tex"})
+    annotations = soup.find_all("annotation", {"encoding": "application/x-tex"})
 
     for annotation in annotations:
         # Extract the LaTeX content and remove \displaystyle wrapper
@@ -153,12 +153,12 @@ def unwrap_eqn(html: str):
         # Format equations
         if is_display:
             # Create a new <p> tag and insert the br tags plus the display math
-            p_tag = html.new_tag("p")
-            p_tag.append(html.new_tag("br"))
-            p_tag.append(html.new_tag("br"))
+            p_tag = soup.new_tag("p")
+            p_tag.append(soup.new_tag("br"))
+            p_tag.append(soup.new_tag("br"))
             p_tag.append(BeautifulSoup(f"$${latex}$$", "html.parser"))
-            p_tag.append(html.new_tag("br"))
-            p_tag.append(html.new_tag("br"))
+            p_tag.append(soup.new_tag("br"))
+            p_tag.append(soup.new_tag("br"))
             span_element.replace_with(p_tag)
         else:
             # Inline math: handle spacing
@@ -169,10 +169,12 @@ def unwrap_eqn(html: str):
             formatted_latex = f"{left_space}${latex}$"
             span_element.replace_with(formatted_latex)
 
-    return str(html)
+    return str(soup)
 
 
-def postprocess_content(content: str, digit_threshold: int, word_threshold: int, special_char_threshold: float) -> str:
+def postprocess_content(
+    content: str, digit_threshold: int, word_threshold: int, special_char_threshold: float
+) -> str | None:
     """
     Postprocesses the content by deleting it if its is mainly digits, words, and special characters.
     """

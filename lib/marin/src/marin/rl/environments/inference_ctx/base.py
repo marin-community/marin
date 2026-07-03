@@ -9,6 +9,7 @@ as well as methods for tokenization and logprob extraction from an OpenAI ChatCo
 """
 
 import logging
+from collections.abc import Mapping
 from typing import Any
 
 import numpy as np
@@ -19,6 +20,22 @@ from openai.types.chat import ChatCompletion
 from openai.types.chat.chat_completion import Choice
 
 logger = logging.getLogger(__name__)
+
+
+def _extract_input_ids(tokenizer_output: Any) -> list[int]:
+    """Return token IDs from HF/Levanter tokenizer outputs."""
+    if isinstance(tokenizer_output, Mapping):
+        tokenizer_output = tokenizer_output["input_ids"]
+
+    if hasattr(tokenizer_output, "tolist"):
+        tokenizer_output = tokenizer_output.tolist()
+
+    if tokenizer_output and isinstance(tokenizer_output[0], list):
+        if len(tokenizer_output) != 1:
+            raise ValueError(f"Expected one tokenized prompt, got {len(tokenizer_output)}")
+        tokenizer_output = tokenizer_output[0]
+
+    return list(tokenizer_output)
 
 
 class BaseInferenceContext:
@@ -60,7 +77,7 @@ class BaseInferenceContext:
             if not tokens:
                 raise ValueError(f"Failed to tokenize: {prompt[:100]}...") from None
 
-        return np.array(tokens, dtype=np.int32)
+        return np.array(_extract_input_ids(tokens), dtype=np.int32)
 
     def response_tokens_from_choice(self, choice: Choice) -> np.ndarray:
         """Extract token IDs with BPE round-trip."""

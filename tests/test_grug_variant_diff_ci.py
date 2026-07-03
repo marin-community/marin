@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from scripts.grug_variant_diff_ci import directory_distance, find_closest_variant, list_variants_at_ref
+from scripts.ci.grug_variant_diff_ci import directory_distance, find_closest_variant, list_variants_at_ref
 
 
 def _write(path: Path, content: str) -> None:
@@ -52,7 +52,7 @@ def test_list_variants_at_ref_raises_on_git_error(monkeypatch: pytest.MonkeyPatc
     def _fake_run(*args, **kwargs):
         return _Result()
 
-    monkeypatch.setattr("scripts.grug_variant_diff_ci.subprocess.run", _fake_run)
+    monkeypatch.setattr("scripts.ci.grug_variant_diff_ci.subprocess.run", _fake_run)
 
     with pytest.raises(RuntimeError, match="bad revision"):
         list_variants_at_ref(ref="does-not-exist")

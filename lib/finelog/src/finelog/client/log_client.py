@@ -1,8 +1,6 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-from __future__ import annotations
-
 import dataclasses
 import io
 import logging
@@ -36,14 +34,14 @@ from finelog.errors import (
     SchemaValidationError,
     StatsError,
 )
+from finelog.policy import StoragePolicy
 from finelog.rpc import finelog_stats_pb2 as stats_pb2
 from finelog.rpc import logging_pb2
 from finelog.rpc.finelog_stats_connect import StatsServiceClientSync
 from finelog.rpc.logging_connect import LogServiceClientSync
-from finelog.store.log_namespace import LOG_REGISTERED_SCHEMA
-from finelog.store.policy import StoragePolicy
-from finelog.store.schema import (
+from finelog.schema import (
     IMPLICIT_SEQ_COLUMN,
+    LOG_REGISTERED_SCHEMA,
     Column,
     ColumnTypeValue,
     Schema,
@@ -101,6 +99,13 @@ class FlushResult(StrEnum):
 
 def _format_exc_summary(exc: BaseException) -> str:
     if isinstance(exc, ConnectError):
+        # The server detail (e.g. "column \"ts\": nullable mismatch
+        # registered=true requested=false") is the whole point of the log —
+        # without it a FAILED_PRECONDITION is undiagnosable. Keep the code too
+        # so the retryable classification stays legible.
+        detail = exc.message.strip()
+        if detail:
+            return f"{type(exc).__name__}({exc.code.name}: {detail})"
         return f"{type(exc).__name__}({exc.code.name})"
     return f"{type(exc).__name__}: {exc}"
 
@@ -153,14 +158,20 @@ def schema_from_dataclass(cls: type) -> Schema:
                 f"dataclass {cls.__name__}: field {field.name!r} is reserved " f"(server-assigned implicit column)"
             )
         annotation = type_hints.get(field.name, field.type)
-        inner, nullable = _strip_optional(annotation)
+        # Every column is registered nullable regardless of whether the field is
+        # declared Optional. Finelog adopts compacted segments as all-nullable
+        # (DuckDB's COPY drops Arrow non-nullability), so a column registered
+        # non-nullable would conflict with its own adopted schema after a catalog
+        # rebuild and wedge all writes. _strip_optional still runs to unwrap the
+        # inner type of ``T | None`` fields and to reject unsupported unions.
+        inner, _nullable = _strip_optional(annotation)
         col_type = _PRIMITIVE_TYPE_MAP.get(inner)
         if col_type is None:
             raise SchemaValidationError(
                 f"dataclass {cls.__name__}: field {field.name!r} has unsupported "
                 f"type {annotation!r} (supported: str, int, float, bool, bytes, datetime)"
             )
-        columns.append(Column(name=field.name, type=col_type, nullable=nullable))
+        columns.append(Column(name=field.name, type=col_type, nullable=True))
     key_column = getattr(cls, "key_column", "")
     if not isinstance(key_column, str):
         raise SchemaValidationError(
@@ -478,7 +489,7 @@ class LogClient:
         resolver: Callable[[str], str] | None = None,
         timeout_ms: int = 10_000,
         interceptors: Iterable[Interceptor] = (),
-    ) -> LogClient:
+    ) -> "LogClient":
         """Construct a LogClient against ``endpoint``.
 
         ``endpoint`` is either an HTTP URL string or a ``(host, port)``
@@ -528,6 +539,28 @@ class LogClient:
             return
         table = self._get_log_table()
         table.write(_log_entries_to_rows(key, messages))
+
+    def push_batch(self, key: str, entries: Sequence[logging_pb2.LogEntry]) -> None:
+        """Append ``entries`` under ``key`` via ``LogService.PushLogs``, synchronously.
+
+        Unlike :meth:`write_batch` (which enqueues to a lossy in-memory Table and
+        acks nothing), this awaits the server's response, which the store returns
+        only after the batch is durably persisted. It therefore raises on any
+        failure and a successful return means the batch landed — the ack the
+        durable log relay needs to advance its watermark.
+        """
+        if not entries:
+            return
+        client = self._get_log_service_client()
+        try:
+            client.push_logs(logging_pb2.PushLogsRequest(key=key, entries=list(entries)))
+        except ConnectError as exc:
+            if is_retryable_error(exc):
+                self._invalidate(_format_exc_summary(exc))
+            raise _translate_connect_error(exc) from exc
+        except (ConnectionError, OSError, TimeoutError) as exc:
+            self._invalidate(_format_exc_summary(exc))
+            raise
 
     def fetch_logs(self, request: logging_pb2.FetchLogsRequest) -> logging_pb2.FetchLogsResponse:
         """Read from the ``log`` namespace via ``LogService.FetchLogs``.

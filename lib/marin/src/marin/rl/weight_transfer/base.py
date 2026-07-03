@@ -10,6 +10,7 @@ weight transfer implementations.
 
 import logging
 from abc import ABC, abstractmethod
+from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import Enum
 
@@ -114,10 +115,10 @@ class WeightTransferServer(ABC):
         pass
 
     @abstractmethod
-    def get_metrics(self) -> dict:
+    def get_metrics(self) -> WeightTransferServerMetrics:
         pass
 
-    def get_debug_snapshot(self) -> dict[str, object]:
+    def get_debug_snapshot(self) -> Mapping[str, object]:
         """Return lightweight server-local debug state for checkpoint diagnostics."""
         return {}
 

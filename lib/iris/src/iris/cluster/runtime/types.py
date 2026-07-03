@@ -86,6 +86,7 @@ class ContainerConfig:
     env: dict[str, str]
     workdir: str = "/app"
     resources: job_pb2.ResourceSpecProto | None = None
+    container_profile: int = job_pb2.CONTAINER_PROFILE_UNSPECIFIED
     timeout_seconds: int | None = None
     mounts: list[MountSpec] = field(default_factory=list)
     network_mode: str = "host"  # e.g. "host" for --network=host
@@ -96,6 +97,7 @@ class ContainerConfig:
     job_id: str | None = None
     worker_id: str | None = None
     worker_metadata: job_pb2.WorkerMetadata | None = None
+    ports: dict[str, int] = field(default_factory=dict)
 
     def get_cpu_millicores(self) -> int | None:
         if not self.resources or not self.resources.cpu_millicores:
@@ -136,12 +138,6 @@ class ContainerStatus:
     error: str | None = None
     error_kind: ContainerErrorKind = ContainerErrorKind.NONE
     oom_killed: bool = False
-
-
-@dataclass
-class ImageInfo:
-    tag: str
-    created_at: str
 
 
 class RuntimeLogReader(Protocol):
@@ -285,6 +281,7 @@ class DiscoveredContainer:
     exit_code: int | None
     started_at: str  # ISO 8601 timestamp from Docker
     workdir_host_path: str  # host path of the /app mount
+    ports: dict[str, int] = field(default_factory=dict)  # allocated host ports, name -> port
 
 
 class ContainerRuntime(Protocol):
@@ -324,10 +321,6 @@ class ContainerRuntime(Protocol):
         stage the bundle into ``workdir`` directly. Kubernetes runtime may no-op
         and materialize inside the task Pod instead.
         """
-        ...
-
-    def list_containers(self) -> list[ContainerHandle]:
-        """List all managed containers."""
         ...
 
     def list_iris_containers(self, all_states: bool = True) -> list[str]:
@@ -378,5 +371,3 @@ class ImageBuilder(Protocol):
     def exists(self, tag: str) -> bool: ...
 
     def remove(self, tag: str) -> None: ...
-
-    def list_images(self, pattern: str) -> list[ImageInfo]: ...

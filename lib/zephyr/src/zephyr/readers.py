@@ -6,8 +6,6 @@
 Supports reading from local filesystems, cloud storage (gs://, s3://) and HuggingFace Hub (hf://) via fsspec.
 """
 
-from __future__ import annotations
-
 import fnmatch
 import logging
 import zipfile
@@ -123,6 +121,24 @@ def _as_spec(source: str | InputFileSpec) -> InputFileSpec:
     if isinstance(source, InputFileSpec):
         return source
     return InputFileSpec(path=source)
+
+
+def _strip_injected_file_path_column(spec: InputFileSpec, file_path_column: str) -> InputFileSpec:
+    """Drop the injected file-path column from a reader projection.
+
+    When a caller projects ``columns`` and also requests ``include_file_paths``,
+    the path column must appear in the projection (it is appended after the
+    read) but must not be passed to the underlying reader (it is not in the
+    file). Returns a spec with that column stripped from ``columns``.
+
+    Raises:
+        RuntimeError: If ``file_path_column`` is missing from the projection.
+    """
+    assert spec.columns is not None
+    if file_path_column not in spec.columns:
+        raise RuntimeError(f"Column filter must include file path column '{file_path_column}'.")
+    reader_columns = [c for c in spec.columns if c != file_path_column]
+    return replace(spec, columns=reader_columns or None)
 
 
 # Register HuggingFace filesystem with authentication if HF_TOKEN is available
@@ -249,7 +265,7 @@ def load_jsonl(source: str | InputFileSpec) -> Iterator[dict]:
                 continue
             if columns is not None:
                 record = {k: record[k] for k in columns if k in record}
-            counters.increment("zephyr/records_in")
+            counters.pipeline.update_counter("zephyr/records_in", 1)
             yield record
 
 
@@ -294,7 +310,7 @@ def load_parquet_batch(source: str | InputFileSpec) -> Iterator[pa.RecordBatch]:
             table = table.filter(pa_filter)
         if need_project:
             table = table.select(spec.columns)
-        counters.increment("zephyr/records_in", len(table))
+        counters.pipeline.update_counter("zephyr/records_in", len(table))
         yield from table.to_batches()
 
 
@@ -366,15 +382,13 @@ def load_vortex(source: str | InputFileSpec) -> Iterator[dict]:
         return
 
     if spec.row_start is not None and spec.row_end is not None:
-        indices = np.arange(spec.row_start, spec.row_end, dtype=np.uint64)
-        indices = pa.array(indices)
+        indices = pa.array(np.arange(spec.row_start, spec.row_end, dtype=np.uint64))
         table = dataset.take(indices, columns=columns, filter=pa_filter)
-        counters.increment("zephyr/records_in", len(table))
-        yield from table.to_pylist()
     else:
         table = dataset.to_table(columns=columns, filter=pa_filter)
-        counters.increment("zephyr/records_in", len(table))
-        yield from table.to_pylist()
+
+    counters.pipeline.update_counter("zephyr/records_in", len(table))
+    yield from table.to_pylist()
 
 
 SUPPORTED_EXTENSIONS = tuple(
@@ -432,11 +446,7 @@ def load_file(
         raise ValueError(f"Unsupported extension: {spec.path}.")
 
     if include_file_paths and spec.columns is not None:
-        if file_path_column not in spec.columns:
-            raise RuntimeError(f"Column filter must include file path column '{file_path_column}'.")
-        # Strip the injected column from the reader projection — it isn't in the file.
-        reader_columns = [c for c in spec.columns if c != file_path_column]
-        spec = replace(spec, columns=reader_columns or None)
+        spec = _strip_injected_file_path_column(spec, file_path_column)
 
     if spec.path.endswith(".parquet"):
         records = load_parquet(spec)
@@ -484,11 +494,7 @@ def load_file_batch(
     if not spec.path.endswith(".parquet"):
         raise RuntimeError(f"load_file_batch only supports Parquet files, got: {spec.path}")
     if include_file_paths and spec.columns is not None:
-        if file_path_column not in spec.columns:
-            raise RuntimeError(f"Column filter does not include the file path column '{file_path_column}'.")
-        # Strip the injected column from the parquet projection — it isn't in the file.
-        parquet_columns = [c for c in spec.columns if c != file_path_column]
-        spec = replace(spec, columns=parquet_columns or None)
+        spec = _strip_injected_file_path_column(spec, file_path_column)
     for batch in load_parquet_batch(spec):
         if include_file_paths:
             if file_path_column in batch.schema.names:
@@ -529,7 +535,7 @@ def load_zip_members(source: str | InputFileSpec, pattern: str = "*") -> Iterato
             for member_name in zf.namelist():
                 if not member_name.endswith("/") and fnmatch.fnmatch(member_name, pattern):
                     with zf.open(member_name, "r") as member_file:
-                        counters.increment("zephyr/records_in")
+                        counters.pipeline.update_counter("zephyr/records_in", 1)
                         yield {
                             "filename": member_name,
                             "content": member_file.read(),

@@ -14,8 +14,6 @@ shows the user-facing unfiltered names, but what actually downloads (and what
 the staged dirs on GCS hold) is the ``_filtered`` version.
 """
 
-from __future__ import annotations
-
 from marin.datakit.download.hf_simple_util import hf_normalize_steps
 from marin.execution.step_spec import StepSpec
 

@@ -16,8 +16,6 @@ Token resolution order:
      ``--marin-yaml`` override) — the same file iris reads
 """
 
-from __future__ import annotations
-
 import argparse
 import io
 import logging

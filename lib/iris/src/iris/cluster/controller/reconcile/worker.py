@@ -76,17 +76,30 @@ class WorkerReconcilePlan:
 
 
 @dataclass(frozen=True)
-class ReconcileResult:
+class WorkerReconcileResult:
     """Unified per-worker reconcile outcome.
 
     ``observations`` is the (possibly empty) list of proto observations the
     apply layer should consume. ``error`` is set when the reconcile RPC
-    outright failed; ``observations`` is then empty.
+    outright failed; ``observations`` is then empty. ``self_healthy`` is the
+    worker's own health verdict from the Reconcile response (always ``True`` on
+    an RPC error, where it is meaningless): a worker that responds but reports
+    unhealthy — e.g. a failed disk — is still counted as a liveness failure so
+    it is eventually reaped.
+
+    ``responder_worker_id`` is the ``worker_id`` the responding daemon stamped on
+    its Reconcile response. It is the *answerer's* identity, which can differ
+    from the targeted :attr:`worker_id` if the controller dialed a stale address
+    that a different live worker now owns (GCP recycles a deleted worker's
+    internal IP onto a new VM). ``None`` on an RPC error or when the daemon did
+    not report an id.
     """
 
     worker_id: WorkerId
     observations: list[worker_pb2.Worker.AttemptObservation]
     error: str | None = None
+    self_healthy: bool = True
+    responder_worker_id: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -111,8 +124,8 @@ def _reconcile_worker(
         if row.task_state in _ASSIGNED_STATES:
             spec = job_specs.get(row.job_id)
             if spec is None:
-                # Reservation holder or job disappeared mid-tick; the
-                # scheduler reissues on a subsequent tick.
+                # Job disappeared mid-tick; the scheduler reissues on a
+                # subsequent tick.
                 continue
             req = job_pb2.RunTaskRequest()
             req.CopyFrom(spec)
@@ -122,8 +135,6 @@ def _reconcile_worker(
             desired.append(
                 worker_pb2.Worker.DesiredAttempt(
                     attempt_uid=row.attempt_uid,
-                    task_id=wire_task_id,
-                    attempt_id=row.attempt_id,
                     run=worker_pb2.Worker.AttemptSpec(request=req),
                 )
             )
@@ -131,8 +142,6 @@ def _reconcile_worker(
             desired.append(
                 worker_pb2.Worker.DesiredAttempt(
                     attempt_uid=row.attempt_uid,
-                    task_id=wire_task_id,
-                    attempt_id=row.attempt_id,
                     run=worker_pb2.Worker.AttemptSpec(),
                 )
             )
@@ -140,8 +149,6 @@ def _reconcile_worker(
             desired.append(
                 worker_pb2.Worker.DesiredAttempt(
                     attempt_uid=row.attempt_uid,
-                    task_id=wire_task_id,
-                    attempt_id=row.attempt_id,
                     stop=worker_pb2.Worker.STOP_REASON_CANCELLED,
                 )
             )
@@ -149,8 +156,6 @@ def _reconcile_worker(
             desired.append(
                 worker_pb2.Worker.DesiredAttempt(
                     attempt_uid=row.attempt_uid,
-                    task_id=wire_task_id,
-                    attempt_id=row.attempt_id,
                     stop=worker_pb2.Worker.STOP_REASON_PREEMPTED,
                 )
             )
@@ -173,8 +178,6 @@ def _reconcile_worker(
                 desired.append(
                     worker_pb2.Worker.DesiredAttempt(
                         attempt_uid=row.attempt_uid,
-                        task_id=wire_task_id,
-                        attempt_id=row.attempt_id,
                         stop=stop_reason,
                     )
                 )
@@ -187,8 +190,6 @@ def _reconcile_worker(
                 desired.append(
                     worker_pb2.Worker.DesiredAttempt(
                         attempt_uid=row.attempt_uid,
-                        task_id=wire_task_id,
-                        attempt_id=row.attempt_id,
                         run=worker_pb2.Worker.AttemptSpec(),
                     )
                 )
@@ -208,8 +209,6 @@ def _reconcile_worker(
             desired.append(
                 worker_pb2.Worker.DesiredAttempt(
                     attempt_uid=row.attempt_uid,
-                    task_id=wire_task_id,
-                    attempt_id=row.attempt_id,
                     stop=worker_pb2.Worker.STOP_REASON_PREEMPTED,
                 )
             )

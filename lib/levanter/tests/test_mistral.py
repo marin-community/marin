@@ -14,6 +14,7 @@ from test_utils import (
     check_load_config,
     check_model_works_with_seqlen,
     parameterize_with_configs,
+    skip_if_hf_model_not_accessible,
     skip_if_no_torch,
     use_test_mesh,
 )
@@ -24,6 +25,7 @@ from levanter.models.mistral import MistralConfig, MistralLMHeadModel
 
 
 @skip_if_no_torch
+@skip_if_hf_model_not_accessible("mistralai/Mistral-7B-v0.1")
 def test_mistral_config():
     # load HF config and convert to levanter config
     hf_config = transformers.MistralConfig.from_pretrained("mistralai/Mistral-7B-v0.1")
@@ -86,16 +88,20 @@ def test_mistral_lm_head_model_bwd(use_flash, num_kv_heads):
 
 @skip_if_no_torch
 @pytest.mark.parametrize("num_kv_heads", [1, 2, 4])
-def test_mistral_roundtrip(num_kv_heads):
-    import torch
-    from transformers import AutoModelForCausalLM, MistralForCausalLM
+def test_mistral_roundtrip(num_kv_heads, local_gpt2_tokenizer_path):
+    import torch  # noqa: PLC0415  # optional dep: torch
+    from transformers import AutoModelForCausalLM, MistralForCausalLM  # noqa: PLC0415  # optional dep: torch
 
+    # Local tokenizer + no remote reference keeps the roundtrip off the Hub; the
+    # tokenizer is incidental (random inputs, logit-equivalence only).
     config = MistralConfig(
         max_seq_len=128,
         hidden_dim=16,
         num_heads=4,
         num_kv_heads=num_kv_heads,
         gradient_checkpointing=False,
+        reference_checkpoint=None,
+        tokenizer=local_gpt2_tokenizer_path,
     )
     converter = config.hf_checkpoint_converter()
 
@@ -120,7 +126,7 @@ def test_mistral_roundtrip(num_kv_heads):
         torch_model.save_pretrained(f"{tmpdir}/torch_model")
 
         model = converter.load_pretrained(
-            converter.default_config.model_type, ref=f"{tmpdir}/torch_model", resize_vocab_to_match_tokenizer=False
+            MistralLMHeadModel, ref=f"{tmpdir}/torch_model", resize_vocab_to_match_tokenizer=False
         )
 
         def compute(input):
@@ -133,7 +139,7 @@ def test_mistral_roundtrip(num_kv_heads):
         assert torch_out.shape == jax_out.shape, f"{torch_out.shape} != {jax_out.shape}"
         assert np.isclose(torch_out, np.array(jax_out), rtol=1e-4, atol=1e-4).all(), f"{torch_out} != {jax_out}"
 
-        converter.save_pretrained(model, f"{tmpdir}/lev_model", save_reference_code=False)
+        converter.save_pretrained(model, f"{tmpdir}/lev_model", save_reference_code=False, save_tokenizer=False)
         torch_model2 = AutoModelForCausalLM.from_pretrained(f"{tmpdir}/lev_model")
         torch_model2.eval()
 

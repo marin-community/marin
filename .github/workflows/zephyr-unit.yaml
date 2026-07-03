@@ -9,6 +9,9 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
 jobs:
   changes:
     runs-on: ubuntu-latest
@@ -45,14 +48,13 @@ jobs:
           python-version: "3.12"
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: "22"
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v6
+        uses: astral-sh/setup-uv@v7
         with:
-          version: "0.7.20"
           enable-cache: true
 
       - name: Install dependencies
@@ -62,5 +64,4 @@ jobs:
 
       - name: Test with pytest
         run: |
-          # important: don't cd into lib/zephyr so that ray uv integration doesn't freak out
-          uv run --package marin-zephyr --frozen pytest --durations=5 --tb=short -m 'not slow and not tpu_ci' -v lib/zephyr/tests/
+          uv run --package marin-zephyr --frozen pytest --durations=5 --tb=short -v lib/zephyr/tests/

@@ -22,8 +22,6 @@ Supported archive formats: ``tar``, ``tar.gz`` (``.tgz``), ``tar.bz2``, ``tar.xz
 the issue discussion and not supported by this module.
 """
 
-from __future__ import annotations
-
 import fnmatch
 import gzip
 import io
@@ -34,7 +32,7 @@ import tarfile
 import zipfile
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 
 import zstandard
 from rigging.filesystem import atomic_rename, open_url
@@ -48,7 +46,6 @@ from marin.datakit.ingestion_manifest import (
     write_ingestion_metadata_json,
 )
 from marin.execution.step_spec import StepSpec
-from marin.execution.types import THIS_OUTPUT_PATH
 from marin.utils import fsspec_mkdirs
 
 logger = logging.getLogger(__name__)
@@ -135,7 +132,7 @@ class DownloadArchiveSliceConfig:
     """Runtime config for :func:`download_archive_slice`."""
 
     source: ArchiveSourceConfig
-    output_path: str = THIS_OUTPUT_PATH
+    output_path: str = ""
     output_filename: str = DEFAULT_OUTPUT_FILENAME
     http_timeout_seconds: int = DEFAULT_HTTP_TIMEOUT_SECONDS
 
@@ -182,7 +179,7 @@ def _required_metadata_str_tuple(manifest: IngestionSourceManifest, key: str) ->
         raise ValueError(f"staging.metadata[{key!r}] must be a non-empty string list")
     if not all(isinstance(item, str) and item for item in value):
         raise ValueError(f"staging.metadata[{key!r}] must contain only non-empty strings")
-    return tuple(value)
+    return cast(tuple[str, ...], tuple(value))
 
 
 def _optional_metadata_str_tuple(manifest: IngestionSourceManifest, key: str) -> tuple[str, ...]:
@@ -191,7 +188,7 @@ def _optional_metadata_str_tuple(manifest: IngestionSourceManifest, key: str) ->
         raise ValueError(f"staging.metadata[{key!r}] must be a string list")
     if not all(isinstance(item, str) and item for item in value):
         raise ValueError(f"staging.metadata[{key!r}] must contain only non-empty strings")
-    return tuple(value)
+    return cast(tuple[str, ...], tuple(value))
 
 
 def _optional_metadata_str(manifest: IngestionSourceManifest, key: str, *, default: str | None = None) -> str | None:

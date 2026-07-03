@@ -7,8 +7,6 @@ The CLI command itself opens a real connection (gcsfs in production); these
 tests cover the testable seams against a local parquet directory.
 """
 
-from __future__ import annotations
-
 import os
 from pathlib import Path
 

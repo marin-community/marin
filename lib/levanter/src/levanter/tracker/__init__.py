@@ -13,7 +13,6 @@ from levanter.tracker.tracker_fns import (
     log,
     log_configuration,
     log_hyperparameters,
-    log_metrics,
     log_summary,
     set_global_tracker,
 )
@@ -35,7 +34,6 @@ __all__ = [
     "log_hyperparameters",
     "set_global_tracker",
     "capture_time",
-    "log_metrics",
     "LoggableValue",
     "defer_tracker_for_jit",
     "NoopConfig",

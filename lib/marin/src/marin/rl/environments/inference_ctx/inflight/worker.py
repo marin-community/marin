@@ -35,11 +35,11 @@ def _apply_worker_extension_mro_fix():
     See: https://github.com/vllm-project/vllm/issues/XXXX (TODO: file upstream issue)
     """
     try:
-        from vllm.config import set_current_vllm_config
-        from vllm.multimodal import MULTIMODAL_REGISTRY
-        from vllm.multimodal.cache import worker_receiver_cache_from_config
-        from vllm.utils.import_utils import resolve_obj_by_qualname
-        from vllm.v1.worker.worker_base import WorkerWrapperBase
+        from vllm.config import set_current_vllm_config  # noqa: PLC0415  # optional dep: vllm
+        from vllm.multimodal import MULTIMODAL_REGISTRY  # noqa: PLC0415  # optional dep: vllm
+        from vllm.multimodal.cache import worker_receiver_cache_from_config  # noqa: PLC0415  # optional dep: vllm
+        from vllm.utils.import_utils import resolve_obj_by_qualname  # noqa: PLC0415  # optional dep: vllm
+        from vllm.v1.worker.worker_base import WorkerWrapperBase  # noqa: PLC0415  # optional dep: vllm
     except ImportError:
         logger.warning("Could not import vLLM V1 worker modules for MRO fix")
         return
@@ -51,7 +51,7 @@ def _apply_worker_extension_mro_fix():
         assert self.vllm_config is not None, "vllm_config is required to initialize the worker"
         self.vllm_config.enable_trace_function_call_for_thread()
 
-        from vllm.plugins import load_general_plugins
+        from vllm.plugins import load_general_plugins  # noqa: PLC0415  # optional dep: vllm
 
         load_general_plugins()
 
@@ -137,7 +137,7 @@ def deserialize_state_dict_from_rpc(serialized_state_dict: dict) -> dict:
     Inverse of serialize_state_dict_for_rpc in async_vllm.py.
     Note: RPC serialization may convert tuples to lists, so we handle both.
     """
-    state_dict = {}
+    state_dict: dict = {}
     for key, value in serialized_state_dict.items():
         if isinstance(value, (tuple, list)) and len(value) == 3:
             data_bytes, dtype_str, shape = value
@@ -216,7 +216,7 @@ class SyncVLLMWrapper:
         logger.info(f"Engine initialized: {engine}")
         return engine
 
-    def generate(self, prompts: list[str], sampling_params: SamplingParams) -> str:
+    def generate(self, prompts: list[str], sampling_params: SamplingParams) -> list[str]:
         """
         Synchronous generate method - runs async code under the hood.
 

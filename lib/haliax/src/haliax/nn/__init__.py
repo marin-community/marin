@@ -13,8 +13,8 @@ import haliax.nn.activations
 import haliax.nn.attention as attention
 import haliax.nn.normalization
 
-from ..axis import Axis
-from ..core import NamedArray
+from haliax.axis import Axis
+from haliax.core import NamedArray
 from .activations import (
     celu,
     elu,

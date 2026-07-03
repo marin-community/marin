@@ -4,7 +4,7 @@
 from dataclasses import dataclass
 from functools import partial
 from itertools import chain
-from typing import List, Optional, Tuple, Union
+from typing import List, Optional, Tuple, Union, cast
 
 import haliax as hax
 import jax
@@ -144,8 +144,11 @@ def scale_by_soap(
     Returns:
         optax.GradientTransformationExtraArgs: The SOAP optimizer.
     """
-    mu_dtype = canonicalize_dtype(mu_dtype) if mu_dtype is not None else None
-    precond_dtype = canonicalize_dtype(precond_dtype) if precond_dtype is not None else None
+    # optax.canonicalize_dtype is stubbed with a broad return; it normalizes to a concrete dtype here.
+    mu_dtype = cast(Optional[Union[str, jnp.dtype]], canonicalize_dtype(mu_dtype)) if mu_dtype is not None else None
+    precond_dtype = (
+        cast(Optional[Union[str, jnp.dtype]], canonicalize_dtype(precond_dtype)) if precond_dtype is not None else None
+    )
     shampoo_beta = shampoo_beta if shampoo_beta >= 0 else b2
 
     def init_fn(params: Updates) -> dict:
@@ -800,8 +803,9 @@ def get_orthogonal_matrix_QR(
         power_iter = jnp.matmul(m, o, precision=precision)
         Q_new, _ = jnp.linalg.qr(power_iter)
         final_Q.append(Q_new)
-    final_Q = otu.tree_cast(final_Q, precond_dtype)
-    exp_avg_sq = otu.tree_cast(exp_avg_sq, mu_dtype)
+    # tree_cast only rewrites leaf dtypes; the pytree structure (and thus the declared types) is preserved.
+    final_Q = cast(List[Union[Array, None]], otu.tree_cast(final_Q, precond_dtype))
+    exp_avg_sq = cast(Array, otu.tree_cast(exp_avg_sq, mu_dtype))
     return final_Q, exp_avg_sq
 
 

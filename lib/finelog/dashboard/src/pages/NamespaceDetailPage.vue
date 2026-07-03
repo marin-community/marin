@@ -50,13 +50,20 @@ const keyColumn = computed<string | null>(() => {
 })
 
 // Recent-rows window. We filter on the implicit ``seq`` column (always
-// present, monotonically increasing on insert) before sorting. DuckDB pushes
-// the ``seq`` predicate down to parquet row group statistics, so only the
+// present, monotonically increasing on insert) before sorting, so only the
 // latest segment(s) are read — a SELECT * ORDER BY <ts> DESC LIMIT 100 on a
-// multi-GB namespace would otherwise scan every segment to compute the
-// top-N. ``RECENT_SEQ_WINDOW`` is the rolling number of newest rows
-// considered; 10x the visible page so concurrent writers can't shrink the
+// multi-GB namespace would otherwise scan every segment (reading the full row
+// payload) to compute the top-N, which OOMs the server on the billion-row
+// ``log`` namespace. ``RECENT_SEQ_WINDOW`` is the rolling number of newest
+// rows considered; 10x the visible page so concurrent writers can't shrink the
 // post-filter set below LIMIT.
+//
+// The bound MUST be a literal: the seq floor is resolved with a separate
+// ``max(seq)`` query and inlined. A scalar subquery (``seq > (SELECT max(seq))
+// - W``) does NOT prune in DataFusion — the bound isn't constant at plan time,
+// so the parquet row-group pruning predicate never forms and the engine
+// full-scans every segment. A literal lets the pruning_predicate
+// (``seq_max > floor``) drop all but the newest segments.
 const RECENT_SEQ_WINDOW = 1000
 
 async function load() {
@@ -67,12 +74,18 @@ async function load() {
     const schemaResp = await statsRpcCall<GetTableSchemaResponse>('GetTableSchema', { namespace: ns })
     schema.value = schemaResp.schema ?? null
 
+    // Resolve the seq floor as a literal (see RECENT_SEQ_WINDOW note) so the
+    // sample query prunes to the newest segments instead of full-scanning.
+    const maxSeqResp = await statsRpcCall<QueryResponse>('Query', {
+      sql: `SELECT max("seq") AS m FROM "${ns}"`,
+    })
+    const maxSeqCell = (decodeArrowIpc(maxSeqResp.arrowIpc).rows[0] as { m?: number | string } | undefined)?.m
+    const maxSeq = maxSeqCell == null ? null : Number(maxSeqCell)
+    const seqFloor = maxSeq == null ? 0 : maxSeq - RECENT_SEQ_WINDOW
+
     const orderBy = keyColumn.value ? `"${keyColumn.value}" DESC` : '"seq" DESC'
     const rows = await statsRpcCall<QueryResponse>('Query', {
-      sql:
-        `SELECT * FROM "${ns}" ` +
-        `WHERE "seq" > coalesce((SELECT max("seq") FROM "${ns}"), 0) - ${RECENT_SEQ_WINDOW} ` +
-        `ORDER BY ${orderBy} LIMIT 100`,
+      sql: `SELECT * FROM "${ns}" WHERE "seq" > ${seqFloor} ORDER BY ${orderBy} LIMIT 100`,
     })
     sample.value = decodeArrowIpc(rows.arrowIpc)
   } catch (e) {

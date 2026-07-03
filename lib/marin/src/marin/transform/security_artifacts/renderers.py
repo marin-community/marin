@@ -17,8 +17,6 @@ The public surface:
   ``#separator`` / ``#fields`` / ``#types`` headers and ``#close`` trailer.
 """
 
-from __future__ import annotations
-
 import logging
 from collections.abc import Iterable, Mapping, Sequence
 from typing import Any

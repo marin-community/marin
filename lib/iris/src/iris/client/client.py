@@ -18,7 +18,7 @@ Example:
 """
 
 import logging
-from collections.abc import Generator
+from collections.abc import Generator, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
@@ -27,6 +27,7 @@ from typing import Protocol, cast
 
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
+from rigging.credentials import ClientCredentials
 from rigging.timing import Duration, Timestamp
 
 from iris.actor.resolver import ResolvedEndpoint, Resolver, ResolveResult
@@ -37,22 +38,28 @@ from iris.cluster.client import (
     get_job_info,
     resolve_job_user,
 )
-from iris.cluster.constraints import Constraint, WellKnownAttribute, merge_constraints, region_constraint
+from iris.cluster.constraints import (
+    Constraint,
+    WellKnownAttribute,
+    is_any_region_marker,
+    merge_constraints,
+    region_constraint,
+)
 from iris.cluster.log_keys import build_log_source
 from iris.cluster.types import (
     CoschedulingConfig,
+    EndpointAccess,
     Entrypoint,
     EnvironmentSpec,
     JobName,
     Namespace,
-    ReservationEntry,
     ResourceSpec,
     TaskAttempt,
     adjust_tpu_replicas,
+    get_gpu_count,
     is_job_finished,
 )
 from iris.rpc import controller_pb2, job_pb2
-from iris.rpc.auth import AuthTokenInjector, TokenProvider
 from iris.rpc.proto_display import job_state_friendly
 from iris.time_proto import timestamp_from_proto
 
@@ -312,6 +319,7 @@ class EndpointRegistry(Protocol):
         name: str,
         address: str,
         metadata: dict[str, str] | None = None,
+        access: int = EndpointAccess.ENDPOINT_ACCESS_PRIVATE,
     ) -> str:
         """Register an endpoint for actor discovery.
 
@@ -319,6 +327,7 @@ class EndpointRegistry(Protocol):
             name: Actor name for discovery
             address: Address where actor is listening (host:port)
             metadata: Optional metadata for the endpoint
+            access: Proxy access mode — PRIVATE (default), PUBLIC, or BEARER.
 
         Returns:
             Unique endpoint ID for later unregistration
@@ -352,6 +361,7 @@ class NamespacedEndpointRegistry:
         name: str,
         address: str,
         metadata: dict[str, str] | None = None,
+        access: int = EndpointAccess.ENDPOINT_ACCESS_PRIVATE,
     ) -> str:
         """Register an endpoint, auto-prefixing with namespace.
 
@@ -359,6 +369,7 @@ class NamespacedEndpointRegistry:
             name: Actor name for discovery (will be prefixed)
             address: Address where actor is listening (host:port)
             metadata: Optional metadata
+            access: Proxy access mode — PRIVATE (default), PUBLIC, or BEARER.
 
         Returns:
             Endpoint ID
@@ -373,6 +384,7 @@ class NamespacedEndpointRegistry:
             address=address,
             task_attempt=self._task_attempt,
             metadata=metadata,
+            access=access,
         )
 
     def unregister(self, endpoint_id: str) -> None:
@@ -440,6 +452,44 @@ class LocalClientConfig:
     max_workers: int = 4
 
 
+# Module path of the in-task GPU process supervisor (see iris/runtime/multigpu.py).
+_MULTIGPU_MODULE = "iris.runtime.multigpu"
+
+
+def _wrap_entrypoint_for_multiprocess(
+    entrypoint: Entrypoint, resources: ResourceSpec, processes_per_task: int
+) -> Entrypoint:
+    """Wrap an entrypoint so each task runs ``processes_per_task`` GPU processes.
+
+    Prepends ``python -m iris.runtime.multigpu --nproc N --devices-per-proc D --``
+    to the command. The supervisor spawns N children, each pinned to a contiguous
+    group of D of the task's GPUs. Requires a GPU device whose count is divisible
+    by ``processes_per_task``.
+    """
+    device = resources.device
+    gpu_count = get_gpu_count(device) if device is not None and device.HasField("gpu") else 0
+    if gpu_count <= 0:
+        raise ValueError("processes_per_task > 1 requires a GPU device")
+    if gpu_count % processes_per_task != 0:
+        raise ValueError(f"processes_per_task ({processes_per_task}) must divide the GPU count ({gpu_count})")
+    devices_per_proc = gpu_count // processes_per_task
+    wrapper = [
+        "python",
+        "-m",
+        _MULTIGPU_MODULE,
+        "--nproc",
+        str(processes_per_task),
+        "--devices-per-proc",
+        str(devices_per_proc),
+        "--",
+    ]
+    return Entrypoint(
+        command=[*wrapper, *entrypoint.command],
+        workdir_files=entrypoint.workdir_files,
+        workdir_file_refs=entrypoint.workdir_file_refs,
+    )
+
+
 class IrisClient:
     """High-level client with automatic job hierarchy and namespace-based actor discovery.
 
@@ -485,7 +535,8 @@ class IrisClient:
         workspace: Path | None = None,
         bundle_id: str | None = None,
         timeout_ms: int = 30000,
-        token_provider: TokenProvider | None = None,
+        credentials: ClientCredentials | None = None,
+        extra_bundle_includes: Sequence[str] = (),
     ) -> "IrisClient":
         """Create an IrisClient for an external client (CLI, laptop, notebook).
 
@@ -501,7 +552,12 @@ class IrisClient:
             bundle_id: Workspace bundle identifier for sub-job inheritance.
                 When set, sub-jobs use this bundle ID instead of creating new bundles.
             timeout_ms: RPC timeout in milliseconds
-            token_provider: When set, attaches bearer tokens to all outgoing RPCs.
+            credentials: Auth material for outgoing RPCs — the Iris JWT and, for
+                an IAP-fronted cluster, the IAP OIDC ID token. None sends neither
+                (a loopback-trusted tunnel).
+            extra_bundle_includes: Glob patterns (relative to ``workspace``) for
+                gitignored files the caller needs in the task bundle — e.g. a package's
+                built frontend ``dist``. Bundled in addition to the git-tracked files.
 
         Returns:
             IrisClient wrapping RemoteClusterClient
@@ -511,8 +567,9 @@ class IrisClient:
             workspace=workspace,
             bundle_id=bundle_id,
             timeout_ms=timeout_ms,
-            token_provider=token_provider,
+            credentials=credentials,
             use_controller_proxy=True,
+            extra_bundle_includes=extra_bundle_includes,
         )
 
     @classmethod
@@ -523,22 +580,22 @@ class IrisClient:
         workspace: Path | None = None,
         bundle_id: str | None = None,
         timeout_ms: int = 30000,
-        token_provider: TokenProvider | None = None,
+        credentials: ClientCredentials | None = None,
     ) -> "IrisClient":
         """Create an IrisClient for code running inside the cluster (in-task).
 
         Same as :meth:`remote`, except finelog logs/stats are written straight
         to the resolved finelog server instead of through the controller's
-        StatsServiceProxy — so high-frequency task-status pushes don't compete
-        for the controller's RPC thread pool. Only valid where the finelog
-        server's internal address is reachable (i.e. inside the cluster).
+        endpoint proxy — so high-frequency task-status pushes don't compete for
+        the controller's HTTP proxy. Only valid where the finelog server's
+        internal address is reachable (i.e. inside the cluster).
         """
         return cls._make(
             controller_address,
             workspace=workspace,
             bundle_id=bundle_id,
             timeout_ms=timeout_ms,
-            token_provider=token_provider,
+            credentials=credentials,
             use_controller_proxy=False,
         )
 
@@ -550,12 +607,11 @@ class IrisClient:
         workspace: Path | None,
         bundle_id: str | None,
         timeout_ms: int,
-        token_provider: TokenProvider | None,
         use_controller_proxy: bool,
+        credentials: ClientCredentials | None = None,
+        extra_bundle_includes: Sequence[str] = (),
     ) -> "IrisClient":
-        interceptors = []
-        if token_provider is not None:
-            interceptors.append(AuthTokenInjector(token_provider))
+        interceptors = credentials.interceptors() if credentials is not None else []
 
         cluster = RemoteClusterClient(
             controller_address=controller_address,
@@ -564,6 +620,7 @@ class IrisClient:
             timeout_ms=timeout_ms,
             interceptors=interceptors,
             use_controller_proxy=use_controller_proxy,
+            extra_bundle_includes=extra_bundle_includes,
         )
         return cls(cluster)
 
@@ -600,15 +657,17 @@ class IrisClient:
         constraints: list[Constraint] | None = None,
         coscheduling: CoschedulingConfig | None = None,
         replicas: int = 1,
+        processes_per_task: int = 1,
         max_retries_failure: int = 0,
         max_retries_preemption: int = 1000,
+        max_task_failures: int = 0,
         timeout: Duration | None = None,
         user: str | None = None,
-        reservation: list[ReservationEntry] | None = None,
         preemption_policy: job_pb2.JobPreemptionPolicy = job_pb2.JOB_PREEMPTION_POLICY_UNSPECIFIED,
         existing_job_policy: job_pb2.ExistingJobPolicy = job_pb2.EXISTING_JOB_POLICY_UNSPECIFIED,
         task_image: str | None = None,
         priority_band: job_pb2.PriorityBand = job_pb2.PRIORITY_BAND_UNSPECIFIED,
+        container_profile: job_pb2.ContainerProfile = job_pb2.CONTAINER_PROFILE_UNSPECIFIED,
         submit_argv: list[str] | None = None,
     ) -> Job:
         """Submit a job with automatic job_id hierarchy.
@@ -623,15 +682,25 @@ class IrisClient:
             constraints: Constraints for filtering workers by attribute
             coscheduling: Configuration for atomic multi-task scheduling
             replicas: Number of tasks to create for gang scheduling (default: 1)
+            processes_per_task: Number of JAX processes to run inside each task,
+                one per GPU group, so ``jax.process_count()`` equals
+                ``replicas * processes_per_task`` (default: 1, one process per
+                task). Must divide the task's GPU count, and requires a GPU
+                device. ``1`` is a strict no-op.
             max_retries_failure: Max retries per task on failure (default: 0)
             max_retries_preemption: Max retries per task on preemption (default: 100)
+            max_task_failures: Cumulative failed task attempts the job tolerates before
+                it fails (default: 0 = fail on the first failure). Counts across retries,
+                so set this to allow a job to ride out a few inconsistent failures.
             timeout: Per-task timeout (None = no timeout)
             user: Optional explicit user override for top-level jobs
-            reservation: Resource entries to pre-provision before scheduling (None = no reservation)
             task_image: Optional override for the task container image. When None,
                 the worker uses its cluster-configured default_task_image. Used for
                 jobs that need a custom runtime (e.g. an image with runsc/skopeo
                 for sandboxing untrusted child workloads).
+            container_profile: Container security profile. UNSPECIFIED resolves to
+                DEFAULT. Elevated profiles (DOCKER_ACCESS, PRIVILEGED) require the
+                admin role at submission when auth is enabled.
 
         Returns:
             Job handle for the submitted job
@@ -646,6 +715,11 @@ class IrisClient:
             raise ValueError(f"replicas must be >= 1, got {replicas}")
         replicas = adjust_tpu_replicas(resources.device, replicas)
 
+        if processes_per_task < 1:
+            raise ValueError(f"processes_per_task must be >= 1, got {processes_per_task}")
+        if processes_per_task > 1:
+            entrypoint = _wrap_entrypoint_for_multiprocess(entrypoint, resources, processes_per_task)
+
         # Get parent job ID from context
         ctx = get_iris_ctx()
         parent_job_id = ctx.job_id if ctx else None
@@ -656,28 +730,34 @@ class IrisClient:
         else:
             job_id = JobName.root(resolve_job_user(user), name)
 
-        # If running inside a job, inherit env vars, extras, and pip_packages from parent.
-        # Child-specified values take precedence over inherited ones.
+        # If running inside a job, inherit env vars and the parent's resolved setup
+        # from the parent. A child that specifies its own setup (explicit
+        # setup_scripts, or builder inputs to rebuild the default) takes control of
+        # its environment; one that specifies only env vars (or nothing) reuses the
+        # parent's setup so it lands in the same environment.
         if parent_job_id:
             job_info = get_job_info()
             inherited = dict(job_info.env) if job_info else {}
             child_env = {**inherited, **(environment.env_vars or {})} if environment else inherited
 
-            parent_extras = job_info.extras if job_info else []
-            parent_pip = job_info.pip_packages if job_info else []
+            parent_setup_scripts = job_info.setup_scripts if job_info else None
 
             if environment:
+                child_owns_setup = (
+                    environment.setup_scripts is not None
+                    or environment.extras
+                    or environment.pip_packages
+                    or environment.sync_packages
+                )
                 environment = EnvironmentSpec(
-                    pip_packages=environment.pip_packages or parent_pip,
+                    pip_packages=environment.pip_packages,
                     env_vars=child_env,
-                    extras=environment.extras or parent_extras,
+                    extras=environment.extras,
+                    setup_scripts=environment.setup_scripts if child_owns_setup else parent_setup_scripts,
+                    sync_packages=environment.sync_packages,
                 )
             else:
-                environment = EnvironmentSpec(
-                    env_vars=child_env,
-                    extras=parent_extras,
-                    pip_packages=parent_pip,
-                )
+                environment = EnvironmentSpec(env_vars=child_env, setup_scripts=parent_setup_scripts)
 
             parent_constraints = list(job_info.constraints) if job_info else []
             if constraints is None:
@@ -690,22 +770,30 @@ class IrisClient:
             # Always inherit the parent's region unless the child already has
             # an explicit region constraint.  This applies even when the caller
             # passes constraints=[] to clear other inherited constraints —
-            # region pinning ensures children stay co-located with the
-            # reservation's claimed workers.
+            # region pinning keeps a child co-located with the worker that
+            # launched it (where its in-region data and resources live).
+            #
+            # An explicit region constraint (any op carrying the region key) opts out:
+            # a PINNED region (region_constraint) or the ANY marker (any_region_constraint,
+            # a region-EXISTS constraint meaning "run anywhere; don't inherit") both satisfy
+            # this guard, so neither gets the parent's region appended.
             if job_info and job_info.worker_region and not any(c.key == WellKnownAttribute.REGION for c in constraints):
                 inherited_region = region_constraint([job_info.worker_region])
                 constraints = [*constraints, inherited_region]
+
+        # The ANY-region marker's only job is the inheritance opt-out above (and clearing
+        # any inherited pin via merge_constraints). Once that decision is made it carries no
+        # requirement, so drop it before the wire: as a hard region-EXISTS constraint it
+        # would otherwise exclude every worker/scaling group that advertises no region
+        # attribute. Stripping here keeps the controller's matching paths unaware of it.
+        if constraints:
+            constraints = [c for c in constraints if not is_any_region_marker(c)]
 
         # Convert to wire format
         resources_proto = resources.to_proto()
         environment_proto = environment.to_proto() if environment else None
         constraints_proto = [c.to_proto() for c in constraints or []]
         coscheduling_proto = coscheduling.to_proto() if coscheduling else None
-        reservation_proto = None
-        if reservation:
-            reservation_proto = job_pb2.ReservationConfig(
-                entries=[e.to_proto() for e in reservation],
-            )
 
         try:
             canonical_id = self._cluster_client.submit_job(
@@ -720,12 +808,13 @@ class IrisClient:
                 replicas=replicas,
                 max_retries_failure=max_retries_failure,
                 max_retries_preemption=max_retries_preemption,
+                max_task_failures=max_task_failures,
                 timeout=timeout,
-                reservation=reservation_proto,
                 preemption_policy=preemption_policy,
                 existing_job_policy=existing_job_policy,
                 task_image=task_image,
                 priority_band=priority_band,
+                container_profile=container_profile,
                 submit_argv=submit_argv,
             )
         except ConnectError as e:
@@ -848,6 +937,10 @@ class IrisClient:
         """Push markdown status text for the running task to finelog (fire-and-forget)."""
         self._cluster_client.report_task_status_text(task_id, attempt_id, detail_md, summary_md)
 
+    def resolve_endpoint(self, url: str) -> str:
+        """Resolve a logical endpoint URL to a concrete HTTP address via the controller registry."""
+        return self._cluster_client.resolve_endpoint(url)
+
     def list_tasks(self, job_id: JobName) -> list[job_pb2.TaskStatus]:
         """List all tasks for a job.
 
@@ -858,6 +951,22 @@ class IrisClient:
             List of TaskStatus protos, one per task
         """
         return self._cluster_client.list_tasks(job_id)
+
+    def kick_tasks(
+        self,
+        targets: list[str],
+        *,
+        desired_state: job_pb2.TaskState,
+        reason: str = "",
+    ) -> list[controller_pb2.Controller.KickResult]:
+        """Force task attempts into a terminal state out-of-band (emergency override).
+
+        ``targets`` are task, task-attempt, or job ids; a job id expands to its
+        active tasks. ``desired_state`` is ``TASK_STATE_PREEMPTED`` (retried if
+        budget remains) or ``TASK_STATE_FAILED`` (no retry). Returns one
+        ``KickResult`` per resolved task reporting whether it was queued.
+        """
+        return self._cluster_client.kick_tasks(targets, desired_state, reason)
 
     def fetch_task_logs(
         self,
@@ -1094,7 +1203,7 @@ def get_iris_ctx() -> IrisContext | None:
     if job_info.controller_address:
         bundle_id = job_info.bundle_id
         # In-task code runs inside the cluster and can reach the finelog server
-        # directly, so task-status pushes bypass the controller's StatsServiceProxy.
+        # directly, so task-status pushes bypass the controller's endpoint proxy.
         client = IrisClient.in_cluster(
             controller_address=job_info.controller_address,
             bundle_id=bundle_id,

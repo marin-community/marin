@@ -9,17 +9,14 @@ import jax
 import jax.numpy as jnp
 from jax.typing import DTypeLike
 
-
-import haliax.debug as debug
 import haliax.nn as nn
 import haliax.quantization as quantization
 import haliax.random as random
-import haliax.state_dict as state_dict
 import haliax.ref as ref  # noqa: F401
+import haliax.state_dict as state_dict
 import haliax.tree as tree  # noqa: F401
 import haliax.tree_util as tree_util
 import haliax.util as util
-from .field import field
 
 from ._src.dot import dot
 from ._src.einsum import einsum
@@ -68,49 +65,6 @@ from .core import (
     unflatten_axis,
     updated_slice,
 )
-from .ref import NamedRef, freeze, get, new_ref, swap
-from .haxtyping import Named
-from .hof import fold, map, scan, vmap
-from .jax_utils import tree_checkpoint_name
-from .ops import (
-    clip,
-    allclose,
-    array_equal,
-    array_equiv,
-    isclose,
-    pad_left,
-    pad,
-    trace,
-    tril,
-    triu,
-    nonzero,
-    unique,
-    unique_values,
-    unique_counts,
-    unique_inverse,
-    unique_all,
-    packbits,
-    unpackbits,
-    searchsorted,
-    bincount,
-    where,
-)
-
-from .poly import (
-    poly,
-    polyadd,
-    polysub,
-    polymul,
-    polydiv,
-    polyint,
-    polyder,
-    polyval,
-    polyfit,
-    roots,
-    trim_zeros,
-    vander,
-)
-
 from .fft import (
     fft,
     fftfreq,
@@ -123,6 +77,33 @@ from .fft import (
     rfft,
     rfftfreq,
 )
+from .field import field
+from .haxtyping import Named
+from .hof import fold, map, scan, vmap
+from .jax_utils import tree_checkpoint_name
+from .ops import (
+    allclose,
+    array_equal,
+    array_equiv,
+    bincount,
+    clip,
+    isclose,
+    nonzero,
+    packbits,
+    pad,
+    pad_left,
+    searchsorted,
+    trace,
+    tril,
+    triu,
+    unique,
+    unique_all,
+    unique_counts,
+    unique_inverse,
+    unique_values,
+    unpackbits,
+    where,
+)
 from .partitioning import (
     auto_sharded,
     axis_mapping,
@@ -133,6 +114,21 @@ from .partitioning import (
     shard_map,
     shard_with_axis_mapping,
 )
+from .poly import (
+    poly,
+    polyadd,
+    polyder,
+    polydiv,
+    polyfit,
+    polyint,
+    polymul,
+    polysub,
+    polyval,
+    roots,
+    trim_zeros,
+    vander,
+)
+from .ref import NamedRef, freeze, get, new_ref, swap
 from .specialized_fns import top_k
 from .types import Scalar
 from .util import is_named_array
@@ -144,6 +140,10 @@ from .wrap import (
     wrap_elemwise_unary,
     wrap_reduction_call,
 )
+
+# debug must be imported after tree_util (above): importing it earlier triggers the
+# tree_util -> nn -> _src.state_dict -> partitioning -> tree_util initialization cycle.
+import haliax.debug as debug  # isort: skip
 
 T = t.TypeVar("T")
 A = t.TypeVar("A", Scalar, NamedArray, jnp.ndarray)

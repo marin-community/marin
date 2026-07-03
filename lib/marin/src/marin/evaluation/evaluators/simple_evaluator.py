@@ -128,7 +128,7 @@ class SimpleEvaluator(Evaluator):
         max_eval_instances: int | None = None,
         wandb_tags: list[str] | None = None,
     ) -> None:
-        from vllm import LLM, SamplingParams
+        from vllm import LLM, SamplingParams  # noqa: PLC0415  # optional dep: vllm
 
         # Download and load the model with vLLM
         # Use the model name if a path is not specified (e.g., for Hugging Face models)
@@ -157,7 +157,7 @@ class SimpleEvaluator(Evaluator):
 
             # Print the outputs for debugging
             for output in outputs:
-                prompt: str = output.prompt
+                prompt = output.prompt or ""
                 print(f"Prompt: {prompt!r}")
                 for i, generation in enumerate(output.outputs):
                     print(f"Generation (#{i + 1} of {test_plan.num_outputs}): {generation.text!r}")

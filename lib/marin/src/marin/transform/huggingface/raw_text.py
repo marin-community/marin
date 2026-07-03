@@ -3,8 +3,6 @@
 
 """Materialize Hugging Face dataset rows as raw-text eval shards."""
 
-from __future__ import annotations
-
 import json
 import logging
 import posixpath

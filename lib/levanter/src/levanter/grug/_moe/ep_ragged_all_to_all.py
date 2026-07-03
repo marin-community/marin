@@ -8,6 +8,7 @@ from collections.abc import Callable
 
 import jax
 import jax.numpy as jnp
+from jaxtyping import Array, Float, Int
 
 from haliax.nn.ragged_dot import ragged_dot
 from levanter.grug._moe.ep_common import (
@@ -21,19 +22,20 @@ from levanter.grug._moe.ep_common import (
     _sort_activations,
     _unpermute_from_global_expert,
 )
+from levanter.grug.sharding import _batch_axes
 
 
 def _moe_mlp_ep_ragged_a2a_local(
-    x_local: jax.Array,
-    selected_experts_local: jax.Array,
-    combine_weights_local: jax.Array,
-    moe_w13_local: jax.Array,
-    moe_w2_local: jax.Array,
+    x_local: Float[Array, "Tlocal H"],
+    selected_experts_local: Int[Array, "Tlocal K"],
+    combine_weights_local: Float[Array, "Tlocal K"],
+    moe_w13_local: Float[Array, "Elocal H I2"],
+    moe_w2_local: Float[Array, "Elocal I H"],
     *,
     activation_fn: Callable[[jax.Array], jax.Array],
     num_experts: int,
     capacity_factor: float,
-) -> tuple[jax.Array, jax.Array]:
+) -> tuple[Float[Array, "Tlocal H"], Int[Array, ""]]:
     local_experts = moe_w13_local.shape[0]
     if num_experts % local_experts != 0:
         raise ValueError(
@@ -118,5 +120,5 @@ def _moe_mlp_ep_ragged_a2a_local(
             topk=topk,
         ).astype(x_local.dtype)
         dropped_local = jnp.sum(group_sizes, dtype=jnp.int32) - jnp.sum(sender_group_sizes, dtype=jnp.int32)
-        dropped_total = jax.lax.psum(dropped_local, ("data", "expert"))
+        dropped_total = jax.lax.psum(dropped_local, _batch_axes(jax.sharding.get_abstract_mesh()))
     return out_local, dropped_total

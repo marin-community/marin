@@ -176,6 +176,7 @@ class InferenceContext:
         """Unload the inference model to free up resources."""
         logger.info("Unloading inference model...")
         with self.model_lock:
+            # pyrefly: ignore[bad-assignment]  # unload() deliberately clears the model; reload() restores it
             self.model = None
             self.engine = None  # type: ignore[assignment]
         logger.info("Inference model unloaded.")

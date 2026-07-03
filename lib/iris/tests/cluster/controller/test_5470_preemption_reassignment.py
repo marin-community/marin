@@ -25,7 +25,7 @@ from iris.cluster.controller.controller import SchedulingOutcome
 from iris.cluster.controller.ops.task import Assignment
 from iris.cluster.controller.reads import WorkerResourceUsage
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
-from iris.cluster.controller.scheduler import (
+from iris.cluster.controller.scheduling.scheduler import (
     DEFAULT_MAX_ASSIGNMENTS_PER_WORKER,
     JobRequirements,
     Scheduler,
@@ -37,7 +37,6 @@ from iris.cluster.types import JobName, UserBudgetDefaults, WorkerId
 from iris.rpc import controller_pb2, job_pb2
 from rigging.timing import Timestamp
 from sqlalchemy import func, select, update
-
 from tests.cluster.controller._test_support import ControllerTestState
 from tests.cluster.controller.transition_driver import WorkerTaskUpdates, apply_task_observations
 
@@ -55,6 +54,9 @@ from .conftest import (
 )
 from .conftest import query_job as _query_job
 from .conftest import query_task as _query_task
+from .conftest import (
+    schedulable_tasks as _schedulable_tasks,
+)
 
 CHIPS_PER_VM = 4
 VMS_PER_SLICE = 8
@@ -147,15 +149,11 @@ def _build_context(scheduler, state):
         user_spend={},
         user_budget_limits={},
         requested_bands={},
-        reserved_job_ids=frozenset(),
-        reservation_entry_counts={},
         user_budget_defaults=UserBudgetDefaults(),
     )
 
 
 def _schedulable_tasks_for_test(state):
-    from .conftest import schedulable_tasks as _schedulable_tasks
-
     return _schedulable_tasks(state)
 
 
@@ -297,7 +295,7 @@ class TestPreemptionReassignment:
         Under the new contract the trigger task IS finalized via the
         heartbeat path that delivered WORKER_FAILED, but the siblings
         bounced by ``_requeue_coscheduled_siblings`` use
-        ``finalize_attempt=False``. So one worker in each slice has its
+        ``stamp_attempt_finished=False``. So one worker in each slice has its
         capacity released; the other 7 hold ``CHIPS_PER_VM`` until their
         own terminal heartbeats arrive.
         """
@@ -430,9 +428,9 @@ class TestPreemptionReassignment:
         ctrl = make_controller(remote_state_dir="file:///tmp/iris-5470-test")
         state = ControllerTestState(
             ctrl._db,
-            health=ctrl._health,
+            health=ctrl.provider.health,
             endpoints=ctrl._endpoints,
-            worker_attrs=ctrl._worker_attrs,
+            worker_attrs=ctrl.provider.worker_attrs,
             run_template_cache=ctrl._run_template_cache,
         )
 
@@ -479,7 +477,7 @@ class TestPreemptionReassignment:
             apply_task_observations(
                 cur,
                 [fail_request],
-                health=ctrl._health,
+                health=ctrl.provider.health,
                 endpoints=ctrl._endpoints,
                 now=Timestamp.now(),
             )

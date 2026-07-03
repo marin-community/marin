@@ -1,16 +1,17 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for budget migration and DB accessors."""
+"""Tests for budget DB accessors and tier reconciliation."""
 
 from pathlib import Path
 
 import pytest
+from iris.cluster.config import UserBudgetTier
 from iris.cluster.controller import reads, writes
 from iris.cluster.controller.budget import reconcile_user_budget_tiers
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.reads import UserBudget
-from iris.rpc import config_pb2, job_pb2
+from iris.rpc import job_pb2
 from rigging.timing import Timestamp
 from sqlalchemy import text
 
@@ -38,43 +39,6 @@ def _get_user_budget(db: ControllerDB, user_id: str) -> UserBudget | None:
 def _list_user_budgets(db: ControllerDB) -> list[UserBudget]:
     with db.read_snapshot() as snap:
         return reads.list_user_budgets(snap)
-
-
-def test_migration_creates_user_budgets_table(db: ControllerDB) -> None:
-    """The 0013 migration creates the user_budgets table."""
-    with db.read_snapshot() as q:
-        row = q.execute(text("SELECT name FROM sqlite_master WHERE type='table' AND name='user_budgets'")).first()
-    assert row is not None
-
-
-def test_migration_adds_priority_band_column(db: ControllerDB) -> None:
-    """The 0013 migration adds priority_band column to tasks."""
-    with db.read_snapshot() as q:
-        columns = {row[1] for row in q.execute(text("PRAGMA table_info(tasks)")).all()}
-    assert "priority_band" in columns
-
-
-def test_migration_seeds_budgets_for_existing_users(tmp_path: Path) -> None:
-    """Users created before the migration get seeded budget rows."""
-    # Create a DB, add a user, then verify the migration seeded a budget row.
-    # ControllerDB.__init__ applies all migrations including 0013, but users
-    # table is empty at that point. We test the INSERT OR IGNORE path by
-    # adding a user and re-running the seed SQL.
-    db = ControllerDB(db_dir=tmp_path)
-    _create_user(db, "alice", created_at_ms=5000)
-    # Re-run the seed statement (idempotent)
-    with db.transaction() as tx:
-        tx.execute(
-            text(
-                "INSERT OR IGNORE INTO user_budgets(user_id, budget_limit, max_band, updated_at_ms) "
-                "SELECT user_id, 0, 2, created_at_ms FROM users"
-            )
-        )
-    budget = _get_user_budget(db, "alice")
-    assert budget is not None
-    assert budget.budget_limit == 0
-    assert budget.max_band == 2
-    db.close()
 
 
 def test_pending_index_includes_priority_band(db: ControllerDB) -> None:
@@ -144,8 +108,8 @@ def test_list_user_budgets_empty(db: ControllerDB) -> None:
 # --- reconcile_user_budget_tiers ------------------------------------------------
 
 
-def _tier(user_ids: list[str], budget_limit: int, max_band: int) -> config_pb2.UserBudgetTier:
-    return config_pb2.UserBudgetTier(user_ids=user_ids, budget_limit=budget_limit, max_band=max_band)
+def _tier(user_ids: list[str], budget_limit: int, max_band: int) -> UserBudgetTier:
+    return UserBudgetTier(user_ids=user_ids, budget_limit=budget_limit, max_band=max_band)
 
 
 def test_reconcile_creates_rows_for_fresh_users(db: ControllerDB) -> None:

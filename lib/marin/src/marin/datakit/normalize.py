@@ -14,8 +14,6 @@ All discovered files are merged into a single output: main records land in
 ``<output_path>/outputs/dups/``. Input directory structure is not preserved.
 """
 
-from __future__ import annotations
-
 import logging
 import os
 import re
@@ -32,6 +30,7 @@ from zephyr import Dataset, ShardInfo, ZephyrContext, counters, write_parquet_fi
 from zephyr.readers import SUPPORTED_EXTENSIONS, load_file
 from zephyr.writers import ThreadedBatchWriter
 
+from marin.datakit import partition_filename
 from marin.execution.step_spec import StepSpec
 
 logger = logging.getLogger(__name__)
@@ -75,7 +74,7 @@ class NormalizedData(BaseModel):
     version: str = "v1"
     main_output_dir: str
     dup_output_dir: str
-    counters: dict[str, int]
+    counters: dict[str, int | float]
 
 
 def generate_id(text: str) -> str:
@@ -232,7 +231,7 @@ def _make_whitespace_compactor(max_whitespace_run_chars: int) -> Callable[[dict[
         text = record["text"]
         compacted = pattern.sub(lambda m: m.group(0)[:max_whitespace_run_chars], text)
         if len(compacted) != len(text):
-            counters.increment(COMPACTED_WHITESPACE_COUNTER)
+            counters.pipeline.update_counter(COMPACTED_WHITESPACE_COUNTER, 1)
             record = {**record, "text": compacted, "id": generate_id(compacted)}
         return record
 
@@ -270,8 +269,9 @@ def _make_split_writer(
         shard: ShardInfo,
     ) -> Iterator[dict[str, dict[str, Any]]]:
         # NOTE: we could add support for split_existing - but we intentionally don't
-        main_path = f"{output_dir}/outputs/main/part-{shard.shard_idx:05d}-of-{shard.total_shards:05d}.parquet"
-        dup_path = f"{output_dir}/outputs/dups/part-{shard.shard_idx:05d}-of-{shard.total_shards:05d}.parquet"
+        shard_filename = partition_filename(shard.shard_idx, shard.total_shards)
+        main_path = f"{output_dir}/outputs/main/{shard_filename}"
+        dup_path = f"{output_dir}/outputs/dups/{shard_filename}"
 
         # Results are populated by each writer thread. Safe to read only after
         # the ThreadedBatchWriter context exits (which joins the thread).
@@ -289,10 +289,10 @@ def _make_split_writer(
         ):
             for item in records:
                 if isinstance(item, MainOutput):
-                    counters.increment("normalize/unique_records_out")
+                    counters.pipeline.update_counter("normalize/unique_records_out", 1)
                     main_writer.submit(item.data)
                 else:
-                    counters.increment("normalize/duplicate_records_out")
+                    counters.pipeline.update_counter("normalize/duplicate_records_out", 1)
                     dup_writer.submit(item.data)
 
         yield results
@@ -331,7 +331,7 @@ def _build_pipeline(
     def has_text(record: dict[str, Any]) -> bool:
         text = record.get(text_field)
         if text is None or str(text).strip() == "":
-            counters.increment("normalize/empty_text_filtered")
+            counters.pipeline.update_counter("normalize/empty_text_filtered", 1)
             return False
         return True
 
@@ -393,11 +393,12 @@ def normalize_to_parquet(
             tokenization. Affected records are counted via the
             ``datakit_normalize_compacted_whitespace`` Zephyr counter.
         worker_resources: Per-worker resource request for the Zephyr pipeline.
-            Defaults to 2 CPU / 16GB RAM / 10GB disk, sized for
-            ``target_partition_bytes`` of 256MB.  Scale up when increasing
-            partition size.
+            Defaults to 2 CPU / 32GB RAM / 10GB disk, sized for
+            ``target_partition_bytes`` of 256MB plus headroom for heavier
+            sources (mid-tier subsets that don't get a per-subset override).
+            Scale up when increasing partition size.
         max_workers: Maximum number of Zephyr workers for the pipeline.
-            Defaults to Zephyr's own default (128 for distributed backends).
+            Defaults to 1024.
         file_extensions: Tuple of file extensions to include (e.g.
             ``(".parquet",)``).  Defaults to all extensions supported by
             ``zephyr.readers.load_file``.
@@ -410,7 +411,9 @@ def normalize_to_parquet(
         A :class:`NormalizedData` describing the output directories and
         aggregated zephyr counters.
     """
-    resources = worker_resources or ResourceConfig(cpu=2, ram="16g", disk="10g")
+    resources = worker_resources or ResourceConfig(cpu=2, ram="32g", disk="10g")
+    if max_workers is None:
+        max_workers = 1024
 
     files = _discover_files(input_path, file_extensions=file_extensions)
     if not files:

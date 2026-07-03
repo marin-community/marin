@@ -15,8 +15,6 @@ No real GPUs or Iris cluster needed — uses a thread-safe in-memory endpoint
 store and mocks jax.distributed.initialize.
 """
 
-from __future__ import annotations
-
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor

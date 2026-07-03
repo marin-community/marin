@@ -6,9 +6,9 @@ import re
 from textwrap import fill
 
 import markdownify
+import regex
 from bs4 import BeautifulSoup, Comment, Doctype, NavigableString
 from markdownify import MarkdownConverter
-from regex import regex
 
 from marin.schemas.web.convert import HtmlToMarkdownConfig
 

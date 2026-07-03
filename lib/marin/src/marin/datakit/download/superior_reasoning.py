@@ -7,14 +7,12 @@ GPT-OSS-120B reasoning rollouts with chain-of-thought in <think> tags.
 Each row has a math prompt and a model response with reasoning traces.
 """
 
-import hashlib
-
 from fray import ResourceConfig
 from zephyr import Dataset, ZephyrContext, counters
 from zephyr.readers import load_jsonl
 
 from marin.datakit.download.huggingface import download_hf_step
-from marin.datakit.download.rollout_transforms import strip_think_tags
+from marin.datakit.download.rollout_transforms import strip_think_tags, text_document
 from marin.datakit.normalize import normalize_step
 from marin.execution.step_spec import StepSpec
 
@@ -31,24 +29,18 @@ def row_to_doc(row: dict) -> list[dict]:
     prompt = row.get("input") or ""
     response = row.get("output") or ""
     if not prompt or not response:
-        counters.increment("superior_reasoning/dropped")
+        counters.pipeline.update_counter("superior_reasoning/dropped", 1)
         return []
 
     response = strip_think_tags(response)
     if not response:
-        counters.increment("superior_reasoning/dropped")
+        counters.pipeline.update_counter("superior_reasoning/dropped", 1)
         return []
 
     text = f"<user>\n{prompt}\n</user>\n\n<assistant>\n{response}\n</assistant>"
 
-    counters.increment("superior_reasoning/kept")
-    return [
-        {
-            "id": hashlib.sha256(text.encode("utf-8")).hexdigest(),
-            "text": text,
-            "source": "Alibaba-Apsara/Superior-Reasoning-SFT-gpt-oss-120b",
-        }
-    ]
+    counters.pipeline.update_counter("superior_reasoning/kept", 1)
+    return [text_document(text, "Alibaba-Apsara/Superior-Reasoning-SFT-gpt-oss-120b")]
 
 
 def transform(input_path: str, output_path: str) -> None:

@@ -4,22 +4,22 @@
 """Aggregate-scoped commands for tasks and attempts.
 
 The glues here are small per-tick wrappers around the transition kernel: load
-a closed snapshot covering the affected tasks via a scoped loader, call the
-matching ``ReconcileState`` verb, drain effects through ``commit_effects``.
-``finalize`` wraps the kernel's ``finalize_tasks``; ``apply_direct_provider_updates``
-wraps ``record_updates``. ``assign`` is the only scheduler-driven write that
-doesn't go through the kernel — PENDING → ASSIGNED is a direct-write transition
-with no cascade semantics.
+a closed snapshot covering the affected tasks, call the matching
+``ReconcileState`` verb, return the effects. ``finalize`` wraps the kernel's
+``finalize_tasks`` against the caller's write transaction and commits; the
+backend-facing ``apply_dispatch_updates`` wraps ``record_updates`` against the
+backend's read snapshot and returns the effects uncommitted (the controller
+commits them via ``commit_effects``). ``assign`` is the only scheduler-driven
+write that doesn't go through the kernel — PENDING → ASSIGNED is a direct-write
+transition with no cascade semantics.
 
-Worker-reported task states land through ``ops.worker.apply_reconcile``
+Worker-reported task states are authored through ``ops.worker.apply_reconcile``
 (the reconcile loop), not here.
 """
 
 from dataclasses import dataclass
 
 from rigging.timing import Timestamp
-from sqlalchemy import case, func
-from sqlalchemy import update as sa_update
 
 from iris.cluster.controller import reads, writes
 from iris.cluster.controller.audit_logging import log_event
@@ -32,8 +32,7 @@ from iris.cluster.controller.reconcile import (
     TerminalDecision,
 )
 from iris.cluster.controller.reconcile.commit import commit_effects
-from iris.cluster.controller.reconcile.loader import load_closed_snapshot
-from iris.cluster.controller.schema import jobs_table
+from iris.cluster.controller.reconcile.loader import TransitionReader, load_closed_snapshot
 from iris.cluster.controller.task_state import task_row_can_be_scheduled
 from iris.cluster.controller.worker_health import WorkerHealthTracker
 from iris.cluster.types import JobName, WorkerId
@@ -67,18 +66,14 @@ def assign(
 ) -> None:
     """Commit assignments to ``tasks.state = ASSIGNED`` + ``task_attempts``.
 
-    Worker-bound dispatch is driven by the polling reconcile loop, which
-    reads ``tasks.state = ASSIGNED`` rows from a snapshot and fans out
-    Reconcile RPCs. This method does not enqueue or fan out anything;
-    callers are responsible for waking ``_polling_wake`` after commit so
-    the reconcile loop sees the new ASSIGNED rows on its next tick.
-
-    Reservation-holder assignments are admitted (they anchor the worker
-    for taint-injection) but never produce a worker-bound RunTaskRequest.
+    Worker-bound dispatch is driven by the control tick's reconcile phase, which
+    reads ``tasks.state = ASSIGNED`` rows from a snapshot and fans out Reconcile
+    RPCs. This method does not enqueue or fan out anything; the next reconcile
+    phase picks up the new ASSIGNED rows (a fresh assignment forces one).
     """
     accepted: list[Assignment] = []
     now_ms = Timestamp.now().epoch_ms()
-    jobs_to_update: set[str] = set()
+    jobs_to_update: set[JobName] = set()
 
     task_map = reads.bulk_get_task_detail(cur, [a.task_id for a in assignments])
 
@@ -110,23 +105,10 @@ def assign(
             now_ms,
             assignment.priority_band,
         )
-        jobs_to_update.add(task.job_id.to_wire())
+        jobs_to_update.add(task.job_id)
         accepted.append(assignment)
-    for job_id_wire in jobs_to_update:
-        cur.execute(
-            sa_update(jobs_table)
-            .where(jobs_table.c.job_id == JobName.from_wire(job_id_wire))
-            .values(
-                state=case(
-                    (jobs_table.c.state == job_pb2.JOB_STATE_PENDING, job_pb2.JOB_STATE_RUNNING),
-                    else_=jobs_table.c.state,
-                ),
-                started_at_ms=func.coalesce(jobs_table.c.started_at_ms, now_ms),
-            )
-        )
-    for a in accepted:
-        task_wire = a.task_id.to_wire()
-        worker_wire = str(a.worker_id)
+        task_wire = assignment.task_id.to_wire()
+        worker_wire = str(assignment.worker_id)
         cur.register(
             lambda tw=task_wire, ww=worker_wire: log_event(
                 "assignment_queued",
@@ -134,39 +116,40 @@ def assign(
                 worker=ww,
             )
         )
+    writes.mark_jobs_running(cur, jobs_to_update, now_ms)
 
 
-def apply_direct_provider_updates(
-    cur: Tx,
+def apply_dispatch_updates(
+    source: TransitionReader,
     updates: list[TaskUpdate],
     *,
-    health: WorkerHealthTracker,
-    endpoints: EndpointsProjection,
     now: Timestamp,
 ) -> ControllerEffects:
-    """Load snapshot for direct-provider updates, run state machine, apply effects."""
+    """Author effects for direct-provider updates from a read snapshot (no commit).
+
+    The cluster backend's reconcile glue: load a snapshot covering the updated
+    tasks through the backend's own read surface, run the direct-dispatch state
+    machine, and return the effects for the controller to commit. ``now`` stamps
+    the snapshot, which ``record_updates`` reads for its transition timestamps.
+    """
     relevant_task_ids = [
         update.task_id
         for update in updates
         if update.new_state not in (job_pb2.TASK_STATE_UNSPECIFIED, job_pb2.TASK_STATE_PENDING)
     ]
     attempt_keys = [(update.task_id, update.attempt_id) for update in updates]
-    snapshot = load_closed_snapshot(
-        cur,
+    snapshot = source.transition_snapshot(
         now=now,
         seed_task_ids=relevant_task_ids,
         extra_attempt_keys=attempt_keys,
     )
-    effects = ReconcileState.open(snapshot).record_updates(updates)
-    commit_effects(cur, effects, health=health, endpoints=endpoints, now=now)
-    return effects
+    return ReconcileState.open(snapshot).record_updates(updates)
 
 
 def finalize(
     cur: Tx,
     decisions: list[TerminalDecision],
     *,
-    health: WorkerHealthTracker,
     endpoints: EndpointsProjection,
     now: Timestamp,
 ) -> ControllerEffects:
@@ -183,5 +166,5 @@ def finalize(
     all_task_ids: list[JobName] = sorted({d.task_id for d in decisions}, key=lambda tid: tid.to_wire())
     snapshot = load_closed_snapshot(cur, now=now, seed_task_ids=all_task_ids)
     effects = ReconcileState.open(snapshot).finalize_tasks(decisions)
-    commit_effects(cur, effects, health=health, endpoints=endpoints, now=now)
+    commit_effects(cur, effects, endpoints=endpoints)
     return effects

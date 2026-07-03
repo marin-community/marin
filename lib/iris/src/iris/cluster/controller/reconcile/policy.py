@@ -14,21 +14,25 @@ from iris.rpc import job_pb2
 MAX_REPLICAS_PER_JOB = 10000
 """Maximum replicas allowed per job to prevent resource exhaustion."""
 
+MAX_ACTIVE_TASKS_PER_USER = 16000
+"""Maximum non-terminal tasks a single user may have admitted at once.
+
+A submission that would push a user past this is rejected up front, before its
+tasks are materialized, to keep one user's burst from OOMing the controller. A
+launcher job that admits tasks gradually stays under the cap as earlier tasks
+finish and free budget. Raise as controller capacity improves (#6411)."""
+
 DEFAULT_MAX_RETRIES_PREEMPTION = 100
 """Default preemption retries. High because worker failures are typically transient."""
-
-RESERVATION_HOLDER_JOB_NAME = ":reservation:"
-"""Well-known name component for synthetic reservation holder child jobs.
-
-Uses colons to clearly distinguish from user-created jobs and avoid
-accidental collision with normal job names."""
 
 
 # ---------------------------------------------------------------------------
 # Predicate sets
 # ---------------------------------------------------------------------------
 
-# Failure states that trigger coscheduled sibling cascades.
+# Failure states that trigger coscheduled sibling cascades. Also reused to pick
+# the cascade *direction* from a transition's resolved task state: a member here
+# tears the gang down, a non-member (PENDING) requeues it.
 FAILURE_TASK_STATES: frozenset[int] = frozenset(
     {
         job_pb2.TASK_STATE_FAILED,
@@ -36,6 +40,15 @@ FAILURE_TASK_STATES: frozenset[int] = frozenset(
         job_pb2.TASK_STATE_PREEMPTED,
     }
 )
+
+# Worker-reported states that, on a coscheduled task, must fan out to the gang.
+# KILLED joins the failure states because a worker only reports it on an
+# out-of-band container stop (slice reclaimed for a higher-priority job, node
+# drain, spot/preemptible reclaim) — an infra event the whole gang must react to,
+# exactly like WORKER_FAILED. This gates *whether* to cascade; the resolved task
+# state (via FAILURE_TASK_STATES) still decides requeue-vs-terminate downstream,
+# so KILLED is deliberately kept out of FAILURE_TASK_STATES itself.
+PEER_CASCADE_TRIGGER_STATES: frozenset[int] = FAILURE_TASK_STATES | {job_pb2.TASK_STATE_KILLED}
 
 # Non-terminal task states (ACTIVE plus PENDING). Used as the snapshot's
 # per-job ``active_tasks_by_job`` state filter so a single read covers both

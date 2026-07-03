@@ -1,7 +1,9 @@
 # Iris production configuration for Marin cluster
 # Usage: uv run iris --cluster=marin cluster start
 
-log_server_config: marin
+finelog:
+  config: marin
+dashboard_url: https://iris.oa.dev
 
 platform:
   label_prefix: marin
@@ -26,6 +28,30 @@ defaults:
 storage:
   remote_state_dir: gs://marin-us-central2/iris/marin/state
 
+# Request auth. External traffic traverses the IAP GCLB (iris.oa.dev) and is
+# authenticated by the cryptographically verified X-Goog-IAP-JWT-Assertion
+# header — never by the LB's source ranges (130.211.0.0/22, 35.191.0.0/16),
+# which must NOT appear in trusted_cidrs: every anonymous internet request
+# arrives from them. trusted_cidrs admits only *direct* VPC peers (worker VMs
+# and tasks; loopback covers SSH tunnels); anything forwarded through the LB
+# carries X-Forwarded-For and never matches a CIDR.
+auth:
+  iap:
+    url: https://iris.oa.dev
+    # `iris login` drives the browser flow with the Marin desktop OAuth client
+    # shipped in rigging.auth.MARIN_DESKTOP_OAUTH_CLIENT (no oauth_client_id /
+    # oauth_client_secret override here). The controller accepts login ID
+    # tokens minted for that client:
+    audiences:
+      - 748532799086-qf8m6mvovtdmd71npm07gk1ohijsr3q5.apps.googleusercontent.com
+    # Audience of IAP's signed assertion: the iris-marin-be backend service in
+    # hai-gcp-models (project number 748532799086).
+    signed_header_audience: /projects/748532799086/global/backendServices/2663834686758326555
+    # IAP's allowlist already restricts who reaches the controller; anyone
+    # Google admits acts as admin (a provisioned user still gets their DB role).
+    unprovisioned_role: admin
+  trusted_cidrs: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 127.0.0.0/8, "::1/128"]
+
 worker_provider: {}
 
 controller:
@@ -46,6 +72,7 @@ controller:
 tpu_pools:
   # v5e (v5litepod) — europe-west4-b, us-west4-a
   # Per-VM: ct5lp-hightpu-4t — 112 vCPU, 192 GiB RAM
+  # max_slices capped to the v5e serving quota (us-west4-a: 128 cores).
   v5e-serving:
     family: v5e
     zones: [europe-west4-b, us-west4-a]
@@ -56,8 +83,8 @@ tpu_pools:
         service_account: iris-worker@hai-gcp-models.iam.gserviceaccount.com
         runtime_version: v2-alpha-tpuv5-lite
     sizes:
-      4:   { buffer_slices: 2, max_slices: 1024 }
-      8:   { buffer_slices: 2, max_slices: 512 }
+      4:   { buffer_slices: 2, max_slices: 32 }
+      8:   { buffer_slices: 2, max_slices: 16 }
 
   v5e-preemptible:
     family: v5e
@@ -168,11 +195,16 @@ tpu_pools:
 scale_groups:
   # Low-priority fallback CPU VM group for on-demand scheduling.
   # n2-highmem-2: 2 vCPU / 16 GiB, available in all target zones including us-central2-b.
+  # cpu here is the advertised scheduling capacity (canonical), not the physical
+  # core count: entrypoint jobs are almost always small, and these VMs are
+  # on-demand (non-preemptible, no sudden reclaim), so we over-commit CPU 4x to
+  # fill slots that would otherwise sit idle. ram stays physical — it's the real
+  # packing limit and over-committing it would OOM the host.
   cpu_vm_e2_highmem_2_ondemand:
     zones: [us-central1-a, us-central2-b, us-east1-b, us-east1-d, us-east5-a, us-east5-b, us-west1-a, us-west4-a, europe-west4-a, europe-west4-b]
     num_vms: 1
     priority: 500
-    resources: { cpu: 2, ram: 16GB, disk: 100GB, device_type: cpu, capacity_type: on-demand }
+    resources: { cpu: 8, ram: 16GB, disk: 100GB, device_type: cpu, capacity_type: on-demand }
     buffer_slices: 0
     max_slices: 6
     # Override the default /dev/shm tmpfs so disk health and metrics reflect the
@@ -183,7 +215,7 @@ scale_groups:
     slice_template:
       gcp:
         service_account: iris-worker@hai-gcp-models.iam.gserviceaccount.com
-        mode: GCP_SLICE_MODE_VM
+        mode: vm
         machine_type: n2-highmem-2
 
 # ---------------------------------------------------------------------------
@@ -224,5 +256,6 @@ user_budgets:
       - ryan
       - marinazh
       - benjaminfeuer
+      - morrisy
     budget_limit: 75000
     max_band: PRIORITY_BAND_INTERACTIVE

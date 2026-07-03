@@ -1,8 +1,6 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-from __future__ import annotations
-
 import io
 import logging
 import threading
@@ -24,7 +22,7 @@ from finelog.errors import (
 )
 from finelog.rpc import finelog_stats_pb2 as stats_pb2
 from finelog.rpc import logging_pb2
-from finelog.store.schema import Column, Schema, schema_to_proto
+from finelog.schema import Column, Schema, schema_from_proto, schema_to_proto
 
 
 class FakeLogClient:
@@ -423,6 +421,19 @@ def test_get_table_registration_conflict_drops_batch(tracked_clients, monkeypatc
         client.close()
 
 
+def test_format_exc_summary_surfaces_connect_detail():
+    """A ConnectError's server detail must survive into the log summary.
+
+    A bare ``FAILED_PRECONDITION`` is undiagnosable; the schema-conflict detail
+    it carries (which column, which mismatch) is the actionable part.
+    """
+    summary = log_client_mod._format_exc_summary(
+        ConnectError(Code.FAILED_PRECONDITION, 'column "mem_bytes": type mismatch registered=int64 requested=float64')
+    )
+    assert "FAILED_PRECONDITION" in summary
+    assert 'column "mem_bytes": type mismatch registered=int64 requested=float64' in summary
+
+
 def test_get_table_retries_transient_registration_failure(tracked_clients, monkeypatch):
     """A retryable registration failure is retried on the flush thread.
 
@@ -578,7 +589,7 @@ def test_table_overflow_drops_oldest(tracked_clients, caplog):
         client.close()
 
 
-def test_schema_from_dataclass_basic():
+def test_schema_from_dataclass_all_columns_nullable():
     @dataclass
     class Stat:
         worker_id: str
@@ -590,8 +601,10 @@ def test_schema_from_dataclass_basic():
     assert s.key_column == ""
     names = [c.name for c in s.columns]
     assert names == ["worker_id", "timestamp_ms", "mem_bytes", "note"]
-    note_col = next(c for c in s.columns if c.name == "note")
-    assert note_col.nullable is True
+    # Every column is nullable regardless of whether the field is Optional:
+    # finelog adopts compacted segments as all-nullable, so a non-nullable
+    # registration would conflict with its own adopted schema and wedge writes.
+    assert all(c.nullable for c in s.columns)
 
 
 def test_schema_from_dataclass_classvar_key():
@@ -699,3 +712,20 @@ def test_schema_from_proto_consistency():
         assert proto_col.name == src_col.name
         assert proto_col.type == src_col.type
         assert proto_col.nullable == src_col.nullable
+        assert proto_col.index.trigram == src_col.trigram_index
+
+
+def test_trigram_index_round_trips_through_proto():
+    s = Schema(
+        columns=(
+            Column(name="data", type=stats_pb2.COLUMN_TYPE_STRING, nullable=False, trigram_index=True),
+            Column(name="level", type=stats_pb2.COLUMN_TYPE_INT32, nullable=False),
+            Column(name="timestamp_ms", type=stats_pb2.COLUMN_TYPE_INT64, nullable=False),
+        ),
+    )
+    back = schema_from_proto(schema_to_proto(s))
+    assert {c.name: c.trigram_index for c in back.columns} == {
+        "data": True,
+        "level": False,
+        "timestamp_ms": False,
+    }

@@ -7,14 +7,14 @@
 # ///
 """Select experiment issues for agent-authored TL;DR maintenance."""
 
-from __future__ import annotations
-
 import argparse
 import json
 import logging
 import os
 import re
 from typing import TYPE_CHECKING, Any
+
+from github import Github
 
 if TYPE_CHECKING:
     from github.Issue import Issue
@@ -90,7 +90,7 @@ def extract_existing_doc_issue_number(body: str | None) -> int | None:
     return int(match.group(1))
 
 
-def collect_issue_context(issue: Issue) -> tuple[str, list[str]]:
+def collect_issue_context(issue: "Issue") -> tuple[str, list[str]]:
     comments = list(issue.get_comments())[:MAX_COMMENT_COUNT]
     comment_blocks = []
     candidate_links = extract_urls(issue.body or "")
@@ -126,7 +126,7 @@ def collect_issue_context(issue: Issue) -> tuple[str, list[str]]:
     return context, dedupe_preserving_order(candidate_links)
 
 
-def issue_needs_summary_refresh(issue: Issue, *, refresh_existing: bool) -> bool:
+def issue_needs_summary_refresh(issue: "Issue", *, refresh_existing: bool) -> bool:
     has_managed_block = issue_has_managed_block(issue.body)
     has_tldr_label = any(label.name == TLDR_LABEL for label in issue.labels)
     if refresh_existing:
@@ -136,7 +136,7 @@ def issue_needs_summary_refresh(issue: Issue, *, refresh_existing: bool) -> bool
     return not has_tldr_label
 
 
-def issue_candidates(repo: Repository, args: argparse.Namespace) -> list[Issue]:
+def issue_candidates(repo: "Repository", args: argparse.Namespace) -> "list[Issue]":
     if args.issue_number is not None:
         issue = repo.get_issue(args.issue_number)
         return [issue]
@@ -155,7 +155,7 @@ def issue_candidates(repo: Repository, args: argparse.Namespace) -> list[Issue]:
     return candidates
 
 
-def serialize_issue(issue: Issue) -> dict[str, object]:
+def serialize_issue(issue: "Issue") -> dict[str, object]:
     issue_context, candidate_links = collect_issue_context(issue)
     labels = [label.name for label in issue.labels]
     return {
@@ -175,8 +175,6 @@ def serialize_issue(issue: Issue) -> dict[str, object]:
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
     args = parse_args()
-
-    from github import Github
 
     github_token = ensure_env("GITHUB_TOKEN")
     github = Github(github_token)

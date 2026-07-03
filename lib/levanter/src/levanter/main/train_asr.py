@@ -62,8 +62,7 @@ def main(config: TrainASRConfig):
 
         assert isinstance(config.model, HFCompatConfig)
         converter = config.model.hf_checkpoint_converter()
-        if hasattr(tokenizer, "vocab") and tokenizer.vocab != converter.tokenizer.vocab:
-            logger.warning("The tokenizers appear to be different. You may want to check this.")
+        converter.warn_if_tokenizer_mismatch(tokenizer)
 
         if isinstance(config.initialize_from_hf, str):
             converter = converter.replaced(
@@ -176,6 +175,10 @@ def main(config: TrainASRConfig):
             trainer.add_eval_hook(hax_eval_dataset, name=name)
 
         trainer.add_hook(callbacks.log_performance_stats(Pos.size, trainer.config.train_batch_size), every=1)
+        trainer.add_hook(
+            callbacks.iris_status_reporter(Pos.size, trainer.config.train_batch_size, trainer.config.num_train_steps),
+            every=10,
+        )
         if config.hf_save_path is not None:
             assert converter is not None, "converter must be set when saving HF checkpoints"
             full_save_path = os.path.join(config.hf_save_path, trainer.run_id)

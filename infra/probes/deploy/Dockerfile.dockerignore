@@ -1,0 +1,14 @@
+# Build context is infra/probes/ — exclude everything except what's needed.
+*
+
+!pyproject.toml
+!uv.lock
+!src/
+
+# Exclude build artifacts within included paths
+**/__pycache__
+**/*.pyc
+**/*.pyo
+**/.pytest_cache
+**/.mypy_cache
+**/.venv

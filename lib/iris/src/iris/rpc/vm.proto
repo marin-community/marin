@@ -17,7 +17,6 @@ edition = "2023";
 package iris.vm;
 
 import "time.proto";
-import "config.proto";
 
 // VM lifecycle states
 enum VmState {
@@ -63,6 +62,11 @@ message VmInfo {
   // Worker info (populated after registration)
   string worker_id = 10;
   bool worker_healthy = 11;
+  // WorkerUsability classification: "healthy" | "degraded" | "dead".
+  // String vocabulary (like state/availability_status); empty when the worker
+  // is not in the liveness roster. "degraded" means reachable-but-failing:
+  // reconciled, but not a placement target and not reclaimable idle capacity.
+  string usability = 12;
 
   // Initialization tracking
   string init_phase = 20;
@@ -88,6 +92,29 @@ message SliceInfo {
   iris.time.Timestamp last_active = 6;
   // True if the slice is currently eligible for scale-down (idle >= idle_threshold)
   bool idle = 7;
+
+  // Authoritative slice lifecycle state from the autoscaler:
+  // "requesting", "booting", "initializing", "ready", or "failed"
+  // (same vocabulary as ScaleGroupStatus.slice_state_counts keys).
+  // Clients MUST render this directly and MUST NOT infer state from `vms`:
+  // `vms` is empty until the slice's workers register, so a booting slice
+  // has no VMs yet. (Previously clients showed such slices as "unknown".)
+  string state = 8;
+
+  // Count of DEGRADED hosts (reachable-but-failing) among `vms`, surfaced as
+  // detail. Computed in the status handler.
+  int32 degraded_slot_count = 9;
+
+  // Placement-readiness of a *ready* slice, derived in the status handler from
+  // host usability + running tasks. One of:
+  //   "available" — all hosts healthy, no tasks: free to place on now.
+  //   "in_use"    — all hosts healthy, at least one task running.
+  //   "idle"      — all hosts healthy, no tasks, idle past the scale-down
+  //                 threshold (also reflected in `idle`): a scale-down candidate.
+  //   "degraded"  — no hosts, or any host not healthy: not a placement target.
+  // Empty for non-ready slices, whose `state` already describes them. This is
+  // slice-granular: a fully-booked healthy slice is "in_use", never schedulable.
+  string capacity_status = 10;
 }
 
 // A scaling decision
@@ -101,7 +128,17 @@ message ScalingDecision {
 // Runtime state of a scale group (for status API)
 message ScaleGroupStatus {
   string name = 1;
-  iris.config.ScaleGroupConfig config = 2;
+  // Owning backend id. GetAutoscalerStatus merges every backend's autoscaler into
+  // one status; this disambiguates the merged groups list. Empty from a single
+  // autoscaler that does not stamp it.
+  string backend_id = 2;
+  // Config summary surfaced to clients (the full cluster config is not on the
+  // wire). device_type is "cpu"|"gpu"|"tpu"|"".
+  string device_type = 80;
+  string device_variant = 81;
+  string quota_pool = 82;
+  int32 allocation_tier = 83;
+  string region = 84;
 
   // Current demand
   int32 current_demand = 20;

@@ -23,6 +23,7 @@ References:
 import dataclasses
 import json
 import logging
+import os
 import random
 import tempfile
 import time
@@ -53,10 +54,11 @@ from levanter.inference.engine import InferenceEngine, InferenceEngineConfig
 from levanter.inference.engine import Request as GenRequest
 from levanter.inference.jit_scheduler import SeqDecodingParams
 from levanter.inference.utils import INVALID
+from levanter.layers.attention import AttentionMask
 from levanter.models.gpt2 import Gpt2Config
-from levanter.models.loss import fused_cross_entropy_loss_and_logsumexp_penalty
-from levanter.utils.background_iterable import BackgroundIterator
+from levanter.models.loss import fused_cross_entropy_loss_and_logsumexp_penalty, next_token_loss_weight
 from levanter.tokenizers import MarinTokenizer
+from levanter.utils.background_iterable import BackgroundIterator
 from levanter.utils.py_utils import set_global_rng_seeds
 
 try:
@@ -267,8 +269,7 @@ class _LmEvalHarnessWorker:
             Pos = pred_embeddings.resolve_axis(self.EvalPos.name)
 
             target_y = hax.roll(packed_example.tokens, -1, Pos)
-            not_last_mask = hax.logical_not(hax.nn.one_hot(-1, Pos, dtype=jnp.bool_))
-            loss_weight = packed_example.loss_weight.astype(jnp.float32) * not_last_mask.astype(jnp.float32)
+            loss_weight = next_token_loss_weight(Pos, packed_example.loss_weight.astype(jnp.float32))
 
             loss, pred_targets = fused_cross_entropy_loss_and_logsumexp_penalty(
                 pred_embeddings,
@@ -392,10 +393,12 @@ def get_segment_ids_from_batch(batch: LmExample, max_segments_per_ex: int) -> li
     """
     Extract unique segment IDs from a batch (on host).
     """
-    if batch.attn_mask.segment_ids is None:
+    attn_mask = batch.attn_mask
+    assert isinstance(attn_mask, AttentionMask), "expected a structured AttentionMask with segment ids"
+    if attn_mask.segment_ids is None:
         segment_ids = []
     else:
-        segment_ids = jax.device_get(batch.attn_mask.segment_ids[0].array)
+        segment_ids = jax.device_get(attn_mask.segment_ids[0].array)
 
     unique_segs = np.unique(segment_ids).tolist()
 
@@ -431,6 +434,7 @@ def _eval_pad_token_id(tokenizer: MarinTokenizer) -> int:
     return eos_token_id
 
 
+# pyrefly: ignore[invalid-inheritance]  # TemplateLM falls back to `object` when the optional lm_eval dep is absent
 class LevanterHarnessLM(TemplateLM):
     """
     Levanter implementation of the LM Eval Harness TemplateLM interface.
@@ -549,10 +553,6 @@ class LevanterHarnessLM(TemplateLM):
 
         return None
 
-    def _log_profiler_artifact(self):
-        """Log profiler artifact to the tracker."""
-        levanter.tracker.current_tracker().log_artifact(self.profiler_config.profile_path, type="jax_profile")
-
     def _handle_profiler_step(self):
         """Check if we should start or stop the profiler at this step."""
         if not self.profiler_config.enabled:
@@ -581,7 +581,6 @@ class LevanterHarnessLM(TemplateLM):
             logger.info(f"Stopping profiler at step {self._current_step}")
             jax.profiler.stop_trace()
             self._profiler_started = False
-            self._log_profiler_artifact()
 
     def _stop_profiler_if_needed(self):
         """Ensure profiler is stopped if it was started."""
@@ -589,7 +588,6 @@ class LevanterHarnessLM(TemplateLM):
             logger.info("Stopping profiler (end of evaluation).")
             jax.profiler.stop_trace()
             self._profiler_started = False
-            self._log_profiler_artifact()
 
     def _loglikelihood_tokens(self, requests, disable_tqdm: bool = False):
         raise NotImplementedError("_loglikelihood_tokens is not yet supported")
@@ -739,6 +737,7 @@ class LevanterHarnessLM(TemplateLM):
             return None
 
         # Process stop sequences to ensure EOS is included
+        # pyrefly: ignore[not-callable]  # handle_stop_sequences is None only when the optional lm_eval dep is absent
         processed_until = handle_stop_sequences(until, eos=eos)
 
         if not processed_until:
@@ -926,6 +925,7 @@ class LevanterHarnessLM(TemplateLM):
                 text = self.tokenizer.decode(full_tokens, skip_special_tokens=True)
 
                 # Post-process the generated text using the imported utility function
+                # pyrefly: ignore[not-callable]  # postprocess_generated_text is None only when the optional lm_eval dep is absent
                 text = postprocess_generated_text(
                     text, gen_kwargs.get("until"), None  # think_end_token - could be made configurable if needed
                 )
@@ -1131,7 +1131,7 @@ class LmEvalHarnessConfig:
         downloading evaluation datasets.
         """
         logger.info("Loading tasks...")
-        import lm_eval.tasks as tasks
+        import lm_eval.tasks as tasks  # noqa: PLC0415  # optional dep: lm_eval
 
         manager = tasks.TaskManager()
         # we need to do it this way b/c i can't figure out how to run e.g. hellaswag 0 shot and 10 shot in a single run
@@ -1165,7 +1165,7 @@ class LmEvalHarnessConfig:
 
         Uses retry logic with exponential backoff to handle HuggingFace rate limits.
         """
-        import lm_eval.tasks as tasks
+        import lm_eval.tasks as tasks  # noqa: PLC0415  # optional dep: lm_eval
 
         task_name = task if isinstance(task, str) else task["task"]
 
@@ -1179,8 +1179,8 @@ class LmEvalHarnessConfig:
         return this_task
 
     def _rename_tasks_for_eval_harness(self, this_task, lm_eval_task_name, our_name):
-        from lm_eval.api.group import ConfigurableGroup
-        from lm_eval.api.task import ConfigurableTask
+        from lm_eval.api.group import ConfigurableGroup  # noqa: PLC0415  # optional dep: lm_eval
+        from lm_eval.api.task import ConfigurableTask  # noqa: PLC0415  # optional dep: lm_eval
 
         # hacky, but this allows us to run multiple instances of the same task with different fewshot settings
         if isinstance(this_task, dict):
@@ -1229,7 +1229,7 @@ class LmEvalHarnessConfig:
         return lm_eval_name
 
     def _get_child_tasks(self, task_group):
-        from lm_eval.api.group import ConfigurableGroup
+        from lm_eval.api.group import ConfigurableGroup  # noqa: PLC0415  # optional dep: lm_eval
 
         out = []
         for k, v in task_group.items():
@@ -1501,11 +1501,14 @@ def run_eval_harness_main(config: EvalHarnessMainConfig):
             model_config = config.model
             converter: HFCheckpointConverter = model_config.hf_checkpoint_converter()
             converter = converter.replaced(reference_checkpoint=config.checkpoint_path, tokenizer=tokenizer)
-            model = converter.load_pretrained(
-                model_config.model_type,
-                ref=config.checkpoint_path,
-                dtype=config.trainer.mp.compute_dtype,  # type: ignore
-                axis_mapping=parameter_axis_mapping,
+            model = typing.cast(
+                LmHeadModel,
+                converter.load_pretrained(
+                    model_config.model_type,
+                    ref=config.checkpoint_path,
+                    dtype=config.trainer.mp.compute_dtype,  # type: ignore
+                    axis_mapping=parameter_axis_mapping,
+                ),
             )
         else:
             with use_cpu_device():

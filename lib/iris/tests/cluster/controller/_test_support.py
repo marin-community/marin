@@ -18,9 +18,9 @@ from dataclasses import dataclass
 from iris.cluster.constraints import AttributeValue
 from iris.cluster.controller import writes
 from iris.cluster.controller.db import ControllerDB
-from iris.cluster.controller.direct_provider import RunTemplateCache, new_run_template_cache
 from iris.cluster.controller.projections.endpoints import EndpointsProjection
 from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
+from iris.cluster.controller.run_template import RunTemplateCache, new_run_template_cache
 from iris.cluster.controller.schema import (
     tasks_table,
     worker_attributes_table,
@@ -40,9 +40,11 @@ class ControllerTestState:
     """Projection bundle for tests that drive ``commands.*`` / ``reconcile_io.*``
     without booting a full ``Controller``.
 
-    Field names match the underscored ones on :class:`Controller`
-    (``_db``, ``_health``, ``_endpoints``, ``_worker_attrs``,
-    ``_run_template_cache``) so the same helpers work against either.
+    Field names match the underscored ones a single-backend :class:`Controller`
+    exposes through its default backend (``_db``, ``_health``, ``_endpoints``,
+    ``_run_template_cache``) so the same helpers work against either. Unlike a
+    real backend's scale-group-scoped projections, ``_worker_attrs`` here claims
+    every worker by default, since tests built on this state simulate one backend.
     """
 
     _db: ControllerDB
@@ -63,7 +65,7 @@ class ControllerTestState:
         self._db = db
         self._health = health or WorkerHealthTracker()
         self._endpoints = endpoints or EndpointsProjection(db)
-        self._worker_attrs = worker_attrs or WorkerAttrsProjection(db)
+        self._worker_attrs = worker_attrs or WorkerAttrsProjection(db, owns_scale_group=lambda _scale_group: True)
         self._run_template_cache = run_template_cache or new_run_template_cache()
 
 

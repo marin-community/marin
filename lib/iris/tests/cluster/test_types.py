@@ -93,6 +93,59 @@ def test_job_name_roundtrip_and_hierarchy():
     assert not parsed.is_ancestor_of(JobName.root("test-user", "root"), include_self=False)
 
 
+def test_job_name_with_root_job_rebases_below_the_root():
+    # A direct task and a nested-child task both keep everything below the root.
+    remote_root = JobName.from_string("/alice/cw~job")
+    assert JobName.from_string("/alice/job/0").with_root_job(remote_root) == JobName.from_string("/alice/cw~job/0")
+    assert JobName.from_string("/alice/job/child/0").with_root_job(remote_root) == JobName.from_string(
+        "/alice/cw~job/child/0"
+    )
+    # The root itself rebases to the new root.
+    assert JobName.from_string("/alice/job").with_root_job(remote_root) == remote_root
+
+
+def test_job_name_with_root_job_requires_a_root():
+    with pytest.raises(ValueError):
+        JobName.from_string("/alice/job/0").with_root_job(JobName.from_string("/alice/cw~job/child"))
+
+
+def test_federated_remote_root_encodes_and_reverses():
+    root = JobName.from_string("/alice/train")
+    remote = JobName.federated_remote_root("cw", root)
+    assert remote == JobName.from_string("/alice/cw~train")
+    assert remote.is_federated_remote
+    assert remote.split_federated_root() == ("cw", root)
+    # Reversible even when the original name itself contains the delimiter: the
+    # cluster id is delimiter-free, so the first '~' is the join.
+    weird = JobName.federated_remote_root("cw", JobName.from_string("/alice/a~b"))
+    assert weird.split_federated_root() == ("cw", JobName.from_string("/alice/a~b"))
+
+
+def test_federated_remote_root_rejects_bad_cluster_id_and_non_root():
+    with pytest.raises(ValueError):
+        JobName.federated_remote_root("", JobName.from_string("/alice/train"))
+    with pytest.raises(ValueError):
+        JobName.federated_remote_root("c~w", JobName.from_string("/alice/train"))
+    with pytest.raises(ValueError):
+        JobName.federated_remote_root("cw", JobName.from_string("/alice/train/child"))
+
+
+def test_split_federated_root_rejects_a_local_name():
+    local = JobName.from_string("/alice/train/0")
+    assert not local.is_federated_remote
+    with pytest.raises(ValueError):
+        local.split_federated_root()
+
+
+@pytest.mark.parametrize("base", ["https://iris.oa.dev", "https://iris.oa.dev/"])
+def test_job_name_dashboard_url(base: str):
+    job = JobName.from_string("/rav/datakit-ref-smoke-20260604-135004")
+    assert job.dashboard_url(base) == "https://iris.oa.dev/#/job/%2Frav%2Fdatakit-ref-smoke-20260604-135004"
+    # Nested task names percent-encode every slash.
+    task = JobName.from_string("/rav/root/child/0")
+    assert task.dashboard_url("https://iris.oa.dev") == "https://iris.oa.dev/#/job/%2Frav%2Froot%2Fchild%2F0"
+
+
 @pytest.mark.parametrize(
     "value",
     ["", "root", "/root", "/test-user//child", "/test-user/root/ ", "/test-user/root/", "/test-user/root//0"],
@@ -580,6 +633,15 @@ def test_adjust_tpu_replicas_single_host_and_edge_cases():
     assert adjust_tpu_replicas(tpu_device("v6e-4"), replicas=1) == 1
     assert adjust_tpu_replicas(None, replicas=1) == 1
     assert adjust_tpu_replicas(tpu_device("v99-unknown", count=4), replicas=1) == 1
+
+
+@pytest.mark.parametrize("bad_count", [0, -1])
+def test_gpu_device_rejects_non_positive_count(bad_count):
+    # Regression: zero is coerced to 1 by get_gpu_count (`count or 1`) and a
+    # negative count flows through as a negative req_gpu_count that inflates
+    # advertised scheduler capacity. Reject both at the construction boundary.
+    with pytest.raises(ValueError, match="positive integer"):
+        gpu_device("H100", count=bad_count)
 
 
 def test_merge_auto_constraints_with_user_variant_override():

@@ -4,19 +4,18 @@
 import json
 import tempfile
 
+import haliax as hax
 import numpy as np
 import pytest
 from jax import random
-
-import haliax as hax
+from test_utils import skip_if_no_torch, use_test_mesh
 
 from levanter.layers.attention import AttentionMask
 from levanter.models.llama import LlamaConfig, LlamaLMHeadModel
-from test_utils import skip_if_no_torch, use_test_mesh
 
 
 def get_config(vocab_size=1000):
-    from transformers import LlamaConfig
+    from transformers import LlamaConfig  # noqa: PLC0415  # guarded: name shadow (levanter LlamaConfig at module top)
 
     llama3_cfg = json.loads(
         """
@@ -70,14 +69,16 @@ def get_config(vocab_size=1000):
 
 @skip_if_no_torch
 @pytest.mark.parametrize("test_seq_len", [128, 256, 512])
-def test_llama3_roundtrip(test_seq_len):
-    import torch
-    from transformers import AutoModelForCausalLM, LlamaForCausalLM
+def test_llama3_roundtrip(test_seq_len, local_gpt2_tokenizer_path):
+    import torch  # noqa: PLC0415  # optional dep: torch
+    from transformers import AutoModelForCausalLM, LlamaForCausalLM  # noqa: PLC0415  # optional dep: torch
 
     Vocab = hax.Axis("vocab", 1000)
     hf_config = get_config(Vocab.size)
 
-    converter = LlamaConfig().hf_checkpoint_converter()
+    # Local tokenizer + no remote reference keeps the roundtrip off the Hub; the
+    # tokenizer is incidental (random inputs, logit-equivalence only).
+    converter = LlamaConfig(reference_checkpoint=None, tokenizer=local_gpt2_tokenizer_path).hf_checkpoint_converter()
 
     config = LlamaConfig.from_hf_config(hf_config)
 
@@ -116,7 +117,7 @@ def test_llama3_roundtrip(test_seq_len):
         # now we're going to magnify the model parameters enough that differences should actualy show up
         jax_out = compute(model, input).array
 
-        converter.save_pretrained(model, f"{tmpdir}/lev_model", save_reference_code=False)
+        converter.save_pretrained(model, f"{tmpdir}/lev_model", save_reference_code=False, save_tokenizer=False)
         torch_model2 = AutoModelForCausalLM.from_pretrained(f"{tmpdir}/lev_model")
         torch_model2.eval()
 
@@ -128,9 +129,11 @@ def test_llama3_roundtrip(test_seq_len):
 
 @skip_if_no_torch
 def test_llama3_rotary_embedding():
-    import torch
-    from transformers.models.llama.modeling_llama import LlamaRotaryEmbedding as HFLlamaRotaryEmbedding
-    from transformers.models.llama.modeling_llama import apply_rotary_pos_emb
+    import torch  # noqa: PLC0415  # optional dep: torch
+    import transformers.models.llama.modeling_llama as modeling_llama  # noqa: PLC0415  # optional dep: torch
+
+    HFLlamaRotaryEmbedding = modeling_llama.LlamaRotaryEmbedding
+    apply_rotary_pos_emb = modeling_llama.apply_rotary_pos_emb
 
     llama_config = get_config()
     device = "cpu"

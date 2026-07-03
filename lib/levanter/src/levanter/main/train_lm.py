@@ -20,6 +20,7 @@ import levanter.callbacks
 import levanter.eval
 import levanter.eval_harness
 from levanter import callbacks
+from levanter.callbacks.labeled_eval import LabeledLmEvalConfig, add_labeled_lm_eval_callbacks
 from levanter.adaptor import AdaptorConfig, AdaptorExportConfig, NoAdaptorConfig
 from levanter.callbacks.tensorstore_callbacks import install_tensorstore_metrics_hook_if_enabled
 from levanter.checkpoint import latest_checkpoint_path, load_checkpoint
@@ -79,6 +80,7 @@ class TrainLmConfig:
     """
     eval_harness: Optional[LmEvalHarnessConfig] = None
     eval_harness_steps: int = 10000
+    labeled_eval: LabeledLmEvalConfig | None = None
 
     # TODO: really need to add callback framework
     log_entropy: bool = False
@@ -138,8 +140,7 @@ def main(config: TrainLmConfig):
 
         assert isinstance(config.model, HFCompatConfig)
         converter = config.model.hf_checkpoint_converter()
-        if hasattr(tokenizer, "vocab") and tokenizer.vocab != converter.tokenizer.vocab:
-            logger.warning("The tokenizers appear to be different. You may want to check this.")
+        converter.warn_if_tokenizer_mismatch(tokenizer)
 
         if isinstance(config.initialize_from_hf, str):
             converter = converter.replaced(reference_checkpoint=config.initialize_from_hf, tokenizer=tokenizer)
@@ -317,10 +318,30 @@ def main(config: TrainLmConfig):
             )
             trainer.add_hook(cb, every=config.trainer.steps_per_eval)
 
+        if config.labeled_eval is not None:
+            add_labeled_lm_eval_callbacks(
+                trainer,
+                labeled_eval_config=config.labeled_eval,
+                data_config=config.data,
+                trainer_config=config.trainer,
+                EvalBatch=EvalBatch,
+                Pos=Pos,
+                tokenizer=tokenizer,
+                device_mesh=trainer.device_mesh,
+                axis_mapping=compute_axis_mapping,
+                max_eval_examples_per_dataset=max_eval_examples_per_ds,
+            )
+
         flops_per_token = config.model.flops_per_token(vocab_size, Pos.size)
         flops_per_example = 3 * flops_per_token * Pos.size if flops_per_token is not None else None
         trainer.add_hook(
             callbacks.log_performance_stats(Pos.size, trainer.config.batch_schedule, flops_per_example), every=1
+        )
+        trainer.add_hook(
+            callbacks.iris_status_reporter(
+                Pos.size, trainer.config.batch_schedule, trainer.config.num_train_steps, flops_per_example
+            ),
+            every=10,
         )
 
         if isinstance(train_dataset, MixtureDataset):

@@ -118,8 +118,8 @@ types even in startup-polling loops.
   `@pytest.mark.requires_cluster`.
 - Docker-dependent tests must also be marked `@pytest.mark.docker`.
 - E2E tests live in `tests/e2e/`.
-- Shared fakes live in `src/iris/cluster/providers/gcp/fake.py`
-  (`InMemoryGcpService`), `src/iris/cluster/providers/k8s/fake.py`
+- Shared fakes live in `src/iris/cluster/backends/gcp/fake.py`
+  (`InMemoryGcpService`), `src/iris/cluster/backends/k8s/fake.py`
   (`InMemoryK8sService`), or `src/iris/test_util.py`. Do not duplicate
   fakes across files.
 
@@ -184,7 +184,7 @@ IRIS_SCREENSHOT_DIR=/tmp/shots uv run pytest lib/iris/tests/e2e/test_smoke.py -o
 uv run pytest lib/iris/tests/e2e/test_smoke.py -m requires_cluster --iris-controller-url http://localhost:8080 -o "addopts="
 
 # Cloud mode: full lifecycle (start cluster, then pass URL to pytest)
-# Step 1: iris --cluster=smoke-gcp cluster start-smoke --label-prefix my-test --url-file /tmp/url --wait-for-workers 1
+# Step 1: iris --cluster=ci-gcp-smoke cluster start-smoke --label-prefix my-test --url-file /tmp/url --wait-for-workers 1
 # Step 2: uv run pytest lib/iris/tests/e2e/test_smoke.py -m requires_cluster --iris-controller-url "$(cat /tmp/url)" -o "addopts="
 
 # K8s runtime tests (requires a running cluster — kind, k3d, minikube, etc.)

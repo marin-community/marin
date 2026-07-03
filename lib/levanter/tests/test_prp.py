@@ -3,7 +3,6 @@
 
 import jax.numpy as jnp
 import jax.random as jrandom
-import numpy
 import numpy as np
 import pytest
 
@@ -37,7 +36,7 @@ def test_permutation_with_array_returns_correct_values(PermutationClass):
     permutation = PermutationClass(length, prng_key)
     indices = jnp.arange(length)
     results = permutation(indices)
-    assert isinstance(results, numpy.ndarray)
+    assert isinstance(results, np.ndarray)
     assert len(results) == length
     assert jnp.sum(results == indices) <= 2
 

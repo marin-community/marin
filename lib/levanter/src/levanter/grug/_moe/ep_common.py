@@ -5,25 +5,31 @@
 
 import jax
 import jax.numpy as jnp
-from jaxtyping import Array, Bool, Int
+from jaxtyping import Array, Bool, Float, Int
 
 
-def _sort_activations(inputs: jax.Array, sort_indices: jax.Array) -> jax.Array:
+def _sort_activations(inputs: Float[Array, "N *tail"], sort_indices: Int[Array, "N"]) -> Float[Array, "N *tail"]:
     if inputs.shape[0] != sort_indices.shape[0]:
         raise ValueError(f"Expected matching leading dims, got {inputs.shape[0]} and {sort_indices.shape[0]}")
     return _sort_activations_custom(inputs, sort_indices)
 
 
 @jax.custom_vjp
-def _sort_activations_custom(inputs: jax.Array, sort_indices: jax.Array) -> jax.Array:
+def _sort_activations_custom(
+    inputs: Float[Array, "N *tail"], sort_indices: Int[Array, "N"]
+) -> Float[Array, "N *tail"]:
     return inputs[sort_indices, ...]
 
 
-def _sort_activations_custom_fwd(inputs: jax.Array, sort_indices: jax.Array) -> tuple[jax.Array, jax.Array]:
+def _sort_activations_custom_fwd(
+    inputs: Float[Array, "N *tail"], sort_indices: Int[Array, "N"]
+) -> tuple[Float[Array, "N *tail"], Int[Array, "N"]]:
     return _sort_activations_custom(inputs, sort_indices), sort_indices
 
 
-def _sort_activations_custom_bwd(residuals: jax.Array, grads: jax.Array) -> tuple[jax.Array, None]:
+def _sort_activations_custom_bwd(
+    residuals: Int[Array, "N"], grads: Float[Array, "N *tail"]
+) -> tuple[Float[Array, "N *tail"], None]:
     sort_indices = residuals
     return _sort_activations_custom(grads, jnp.argsort(sort_indices)), None
 
@@ -42,11 +48,11 @@ def _prefix_cap_counts(counts: Int[Array, "E"], *, capacity: int) -> Int[Array, 
 
 
 def _permute_by_global_expert(
-    x_local: jax.Array,
-    selected_experts_local: jax.Array,
+    x_local: Float[Array, "Tlocal H"],
+    selected_experts_local: Int[Array, "Tlocal K"],
     *,
     num_experts: int,
-) -> tuple[jax.Array, jax.Array, jax.Array]:
+) -> tuple[Float[Array, "TK H"], Int[Array, "TK"], Int[Array, "E"]]:
     topk = selected_experts_local.shape[1]
     flat_selected = selected_experts_local.reshape(-1)
     sorted_indices = jnp.argsort(flat_selected)
@@ -57,13 +63,13 @@ def _permute_by_global_expert(
 
 
 def _unpermute_from_global_expert(
-    intermediate: jax.Array,
-    sorted_indices: jax.Array,
-    combine_weights_local: jax.Array,
+    intermediate: Float[Array, "TK H"],
+    sorted_indices: Int[Array, "TK"],
+    combine_weights_local: Float[Array, "Tlocal K"],
     *,
     tokens_per_shard: int,
     topk: int,
-) -> jax.Array:
+) -> Float[Array, "Tlocal H"]:
     unsorted = _sort_activations(intermediate, jnp.argsort(sorted_indices))
     reshaped = unsorted.reshape(tokens_per_shard, topk, -1)
     return jnp.einsum(
@@ -72,9 +78,9 @@ def _unpermute_from_global_expert(
 
 
 def _shard_a2a_params(
-    shard_counts: jax.Array,
-    shard_id: jax.Array,
-) -> tuple[jax.Array, jax.Array, jax.Array, jax.Array]:
+    shard_counts: Int[Array, "S S"],
+    shard_id: Int[Array, ""],
+) -> tuple[Int[Array, "S"], Int[Array, "S"], Int[Array, "S"], Int[Array, "S"]]:
     row = shard_counts[shard_id]
     input_offsets = jnp.cumsum(jnp.concatenate((jnp.array([0], dtype=row.dtype), row[:-1])))
     send_sizes = row
@@ -90,12 +96,12 @@ def _shard_a2a_params(
 
 
 def _local_permute_from_counts(
-    inputs: jax.Array,
-    global_group_sizes: jax.Array,
+    inputs: Float[Array, "C H"],
+    global_group_sizes: Int[Array, "S E"],
     *,
     local_expert_size: int,
-    shard_index: jax.Array,
-) -> tuple[jax.Array, jax.Array, jax.Array]:
+    shard_index: Int[Array, ""],
+) -> tuple[Float[Array, "C H"], Int[Array, "C"], Int[Array, "Elocal"]]:
     all_shard_local_sizes = jax.lax.dynamic_slice_in_dim(
         global_group_sizes,
         start_index=shard_index * local_expert_size,
@@ -155,7 +161,7 @@ def _expert_prefix_keep_mask(
     accepted_group_sizes: Int[Array, "E"],
     *,
     total_size: int,
-) -> Bool[Array, "T"]:
+) -> Bool[Array, "TK"]:
     segment_ends = jnp.cumsum(group_sizes, dtype=jnp.int32)
     segment_starts = jnp.concatenate((jnp.array([0], dtype=segment_ends.dtype), segment_ends[:-1]))
     positions = jnp.arange(total_size, dtype=jnp.int32)
@@ -169,7 +175,7 @@ def _expert_prefix_keep_mask(
     return local_rank < accepted
 
 
-def _compact_by_keep_mask(inputs: jax.Array, keep_mask: Bool[Array, "T"]) -> jax.Array:
+def _compact_by_keep_mask(inputs: Float[Array, "N *tail"], keep_mask: Bool[Array, "N"]) -> Float[Array, "N *tail"]:
     total_size = inputs.shape[0]
     positions = jnp.arange(total_size, dtype=jnp.int32)
     sort_key = jnp.where(keep_mask, positions, positions + total_size)
@@ -178,7 +184,7 @@ def _compact_by_keep_mask(inputs: jax.Array, keep_mask: Bool[Array, "T"]) -> jax
     return jnp.where(valid[:, None], compacted, 0)
 
 
-def _expand_from_keep_mask(compacted: jax.Array, keep_mask: Bool[Array, "T"]) -> jax.Array:
+def _expand_from_keep_mask(compacted: Float[Array, "N *tail"], keep_mask: Bool[Array, "N"]) -> Float[Array, "N *tail"]:
     keep_i32 = keep_mask.astype(jnp.int32)
     compact_index = jnp.cumsum(keep_i32, dtype=jnp.int32) - 1
     gathered = jnp.take(compacted, jnp.maximum(compact_index, 0), axis=0)

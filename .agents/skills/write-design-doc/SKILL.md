@@ -43,18 +43,18 @@ Once you have a framing paragraph, proceed directly to research. Don't batch a l
 
 ## 2. Research
 
-Spawn an `Explore` subagent (do not search yourself — keep the digest out of main context). Brief it with the framing paragraph and ask for:
+Use the `background-research` skill in design-doc mode. Prefer an isolated
+Explore subagent when available so the detailed digest stays out of main
+context. Use `low` or `medium` effort by default.
 
-- Relevant files with line numbers (the doc must reference real code).
-- Related designs in `.agents/projects/` — read them, note overlap.
-- Related GitHub issues/PRs via `gh` if the user named any, plus a quick `gh issue list --search` on the topic.
-- Existing utilities or abstractions the proposal might reuse (per `AGENTS.md` "Code Reuse").
+The research output must cover in-repo findings, prior-art shape when relevant,
+what surprised you, and what remains unclear. Ask whether the framing should
+shift before drafting.
 
-**For proposals that reinvent a category of system** (logger, stats store, queue, scheduler, KV, service-discovery layer, workflow engine, etc.), also do a **prior-art pass via web search** — in parallel with the in-repo Explore. Spawn a `general-purpose` agent (has WebSearch/WebFetch) with a focused brief: *what is the established shape of this kind of system, 2–4 representative implementations (OSS or well-known), and what design choices do they converge or disagree on?* Cap to ~5 results, ask for a bulleted digest under 200 words. The point is to surface obvious patterns we'd reinvent badly and give reviewers reference points — not a literature review. Skip for in-repo refactors, internal API tweaks, or anything where the category is novel to the world.
-
-Return a bulleted digest combining both passes: *"in-repo findings, prior-art shape, what surprised me, what's still unclear."* Ask whether the framing should shift before drafting.
-
-**Persist the research.** Save the full digest (in-repo findings with file:line refs, prior-art digest, anything load-bearing that won't fit the 1-pager) to `.agents/projects/<slug>/research.md`. The design doc gets a short `## Background` section (3–5 sentences) linking to `research.md`.
+**Persist the research.** Save the full digest (in-repo findings with file:line
+refs, prior-art digest, anything load-bearing that won't fit the 1-pager) to
+`.agents/projects/<slug>/research.md`. The design doc gets a short
+`## Background` section (3-5 sentences) linking to `research.md`.
 
 ## 3. Interrogate
 
@@ -109,7 +109,7 @@ Show the user a brief summary: what you incorporated (design vs spec), what you'
 
 Two actions, can run together. After this, the skill is done.
 
-1. **Commit and PR** via the `author-pr` skill. Branch `design/<slug>`. Single commit adding the `.agents/projects/<slug>/` directory (design.md, research.md, spec.md — all three always present). PR title `[Design] <slug>`. PR body is a short summary (3–6 sentences) — the framing paragraph plus the one-line gist — with explicit links to the three sibling files and a "Discussion welcome — see Open Questions in `design.md`" footer. Use absolute branch-rooted URLs for those links (relative paths 404 from PR descriptions — see "Linking conventions"). The full 1-pager lives in `design.md` on the branch; reviewers click through. Labels `design` and `agent-generated`.
+1. **Commit and PR** via the `commit` skill. Branch `design/<slug>`. Single commit adding the `.agents/projects/<slug>/` directory (design.md, research.md, spec.md — all three always present). PR title `[Design] <slug>`. PR body is a short summary (3–6 sentences) — the framing paragraph plus the one-line gist — with explicit links to the three sibling files and a "Discussion welcome — see Open Questions in `design.md`" footer. Use absolute branch-rooted URLs for those links (relative paths 404 from PR descriptions — see "Linking conventions"). The full 1-pager lives in `design.md` on the branch; reviewers click through. Labels `design` and `agent-generated`.
 
 2. **Discord ping.** Run `python scripts/ops/discord.py --channel code-review` with a 2-line message: PR title + URL + the framing paragraph (or a one-sentence compression). Send it; no need to confirm exact text unless asked.
 
@@ -129,4 +129,4 @@ Once both happen, you're done. Feedback lives on the PR; the user starts impleme
 - **The template and canonical worked example live in `.agents/projects/design-template.md`.** Read it before drafting. Don't use other docs in `.agents/projects/` as style references — they predate this skill.
 - `design` label: create it if missing (`gh label create design --description "Design doc / 1-pager for review"`).
 - If the user wants to skip a phase ("just write it, I know what I want"), honor that — but still produce the Open Questions section in `design.md`, still write `spec.md` (Phase 5), and still run the Stress-test (Phase 6).
-- Implementation is out of scope. After Publish the skill is done — hand off to `fix-issue` or `author-pr` for the work itself only if the user asks.
+- Implementation is out of scope. After Publish the skill is done — hand off to `fix-issue` or `commit` for the work itself only if the user asks.

@@ -43,7 +43,7 @@ For PRs that add a new `experiments/grug/<variant>/`, CI posts a visual diff com
 For a local fallback, generate the diff report manually and link the report in the archive entry:
 
 ```bash
-uv run python scripts/grug_dir_diff.py \
+uv run python scripts/ci/grug_dir_diff.py \
   experiments/grug/base \
   experiments/grug/<variant> \
   --out /tmp/grug-diff

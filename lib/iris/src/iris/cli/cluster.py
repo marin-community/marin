@@ -9,6 +9,7 @@ controller VM management, VM operations via controller RPC, and the dashboard tu
 
 import json
 import signal
+import subprocess
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -16,9 +17,12 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import click
+import uvicorn
+from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from finelog.deploy.cli import down_cmd, logs_cmd, restart_cmd, status_cmd, up_cmd
 from rigging.config_discovery import list_cluster_configs
+from rigging.filesystem import marin_temp_bucket
 from rigging.timing import Duration, ExponentialBackoff, Timestamp
 
 from iris.cli.build import (
@@ -26,17 +30,24 @@ from iris.cli.build import (
     find_marin_root,
     get_git_sha,
 )
-from iris.cli.connect import IRIS_CLUSTER_CONFIG_DIRS, require_controller_url, rpc_client
-from iris.cluster.config import IrisConfig, clear_remote_state, make_local_config
+from iris.cli.connect import IRIS_CLUSTER_CONFIG_DIRS, require_controller_url, rpc_client_for_ctx
+from iris.cluster.composer import provider_bundle
+from iris.cluster.config import clear_remote_state, make_local_config
 from iris.cluster.controller.autoscaler.scaling_group import (
     _zone_from_template,
     build_worker_config_for_group,
     prepare_slice_config,
 )
-from iris.cluster.providers.gcp.bootstrap import build_worker_bootstrap_script
-from iris.cluster.providers.gcp.workers import GcpWorkerProvider
-from iris.cluster.providers.types import Labels
-from iris.rpc import config_pb2, controller_pb2, job_pb2, query_pb2, vm_pb2
+from iris.cluster.controller.dashboard import ProxyControllerDashboard
+from iris.cluster.controller.main import run_controller_serve
+from iris.cluster.dashboard_common import VUE_DIST_DIR
+from iris.cluster.inject_env import with_injected_task_env
+from iris.cluster.local_cluster import LocalCluster
+from iris.cluster.platforms.gcp.worker_bootstrap import build_worker_bootstrap_script
+from iris.cluster.platforms.gcp.workers import GcpWorkerProvider
+from iris.cluster.platforms.types import Labels
+from iris.cluster.provenance import provenance_from_proto
+from iris.rpc import controller_pb2, job_pb2, query_pb2, vm_pb2
 from iris.rpc.proto_display import format_accelerator_display, vm_state_name
 from iris.time_proto import timestamp_from_proto
 
@@ -106,14 +117,16 @@ def _format_status_table(status: vm_pb2.AutoscalerStatus) -> str:
     return "\n".join(lines)
 
 
-def _get_autoscaler_status(controller_url: str) -> vm_pb2.AutoscalerStatus:
-    with rpc_client(controller_url) as client:
+def _get_autoscaler_status(ctx: click.Context, controller_url: str) -> vm_pb2.AutoscalerStatus:
+    with rpc_client_for_ctx(ctx, url=controller_url) as client:
         request = controller_pb2.Controller.GetAutoscalerStatusRequest()
         return client.get_autoscaler_status(request).status
 
 
-def _get_worker_status(controller_url: str, worker_id: str) -> controller_pb2.Controller.GetWorkerStatusResponse:
-    with rpc_client(controller_url) as client:
+def _get_worker_status(
+    ctx: click.Context, controller_url: str, worker_id: str
+) -> controller_pb2.Controller.GetWorkerStatusResponse:
+    with rpc_client_for_ctx(ctx, url=controller_url) as client:
         request = controller_pb2.Controller.GetWorkerStatusRequest(id=worker_id)
         return client.get_worker_status(request)
 
@@ -268,7 +281,7 @@ def cluster_start(ctx, local: bool, fresh: bool):
         raise click.ClickException("--config is required for cluster start")
     if local:
         config = make_local_config(config)
-    is_local = config.controller.WhichOneof("controller") == "local"
+    is_local = config.controller.controller_kind() == "local"
     if not is_local:
         git_sha = get_git_sha()
         _pin_latest_images(config, git_sha)
@@ -281,8 +294,6 @@ def cluster_start(ctx, local: bool, fresh: bool):
     click.echo("Starting controller...")
     try:
         if is_local:
-            from iris.cluster.providers.local.cluster import LocalCluster
-
             cluster = LocalCluster(config)
             address = cluster.start()
             click.echo(f"Controller started at {address}")
@@ -298,8 +309,7 @@ def cluster_start(ctx, local: bool, fresh: bool):
                 signal.signal(signal.SIGTERM, lambda *_: cluster.close())
             cluster.wait()
         else:
-            iris_config = IrisConfig(config)
-            bundle = iris_config.provider_bundle()
+            bundle = provider_bundle(config)
             address = bundle.controller.start_controller(config, fresh=fresh)
             click.echo(f"Controller started at {address}")
             click.echo("\nController is running with integrated autoscaler.")
@@ -330,8 +340,6 @@ def cluster_start_smoke(ctx, label_prefix, url_file, min_workers, worker_timeout
 
     # Set ephemeral state dir via marin_temp_bucket, which resolves
     # region-appropriate storage from MARIN_PREFIX.
-    from rigging.filesystem import marin_temp_bucket
-
     config.storage.remote_state_dir = marin_temp_bucket(ttl_days=7, prefix=f"iris/state/{label_prefix}")
 
     git_sha = get_git_sha()
@@ -339,8 +347,7 @@ def cluster_start_smoke(ctx, label_prefix, url_file, min_workers, worker_timeout
     verbose = ctx.obj.get("verbose", False)
     _build_cluster_images(config, git_sha, verbose=verbose)
 
-    iris_config = IrisConfig(config)
-    bundle = iris_config.provider_bundle()
+    bundle = provider_bundle(config)
 
     try:
         bundle.controller.stop_all(config)
@@ -366,7 +373,7 @@ def cluster_start_smoke(ctx, label_prefix, url_file, min_workers, worker_timeout
         with bundle.controller.tunnel(address) as url:
             click.echo(f"Tunnel ready: {url}")
 
-            with rpc_client(url) as client:
+            with rpc_client_for_ctx(ctx, url=url) as client:
                 deadline = time.monotonic() + worker_timeout
                 healthy_count = 0
                 while time.monotonic() < deadline:
@@ -405,8 +412,7 @@ def cluster_stop(ctx, dry_run: bool, label_override: str | None):
         click.echo("Stopping cluster (controller + all slices)...")
 
     try:
-        iris_config = IrisConfig(config)
-        bundle = iris_config.provider_bundle()
+        bundle = provider_bundle(config)
         try:
             names = bundle.controller.stop_all(config, dry_run=dry_run, label_prefix=label_override)
         finally:
@@ -442,19 +448,18 @@ def cluster_restart(ctx):
 
 @cluster.group("log-server")
 def log_server() -> None:
-    """Manage the log server referenced by this cluster's log_server_config."""
+    """Manage the log server referenced by this cluster's finelog.config."""
 
 
 def _require_log_server_config(ctx: click.Context) -> str:
     cfg = ctx.obj.get("config")
     if cfg is None:
         raise click.ClickException("--config is required for cluster log-server commands")
-    if not cfg.log_server_config:
+    if not cfg.finelog.config:
         raise click.ClickException(
-            "cluster does not declare log_server_config; "
-            "set it or manage the log server via `finelog deploy` directly"
+            "cluster does not declare finelog.config; " "set it or manage the log server via `finelog deploy` directly"
         )
-    return cfg.log_server_config
+    return cfg.finelog.config
 
 
 @log_server.command("up")
@@ -469,7 +474,7 @@ def _require_log_server_config(ctx: click.Context) -> str:
 def log_server_up(ctx: click.Context, build: bool) -> None:
     """Provision/refresh the cluster's finelog deployment (idempotent)."""
     name = _require_log_server_config(ctx)
-    up_cmd.callback(name=name, build=build)
+    ctx.invoke(up_cmd, name=name, build=build)
 
 
 @log_server.command("down")
@@ -478,7 +483,7 @@ def log_server_up(ctx: click.Context, build: bool) -> None:
 def log_server_down(ctx: click.Context, yes: bool) -> None:
     """Tear down the cluster's finelog deployment."""
     name = _require_log_server_config(ctx)
-    down_cmd.callback(name=name, yes=yes)
+    ctx.invoke(down_cmd, name=name, yes=yes)
 
 
 @log_server.command("restart")
@@ -493,7 +498,7 @@ def log_server_down(ctx: click.Context, yes: bool) -> None:
 def log_server_restart(ctx: click.Context, build: bool) -> None:
     """Restart the cluster's finelog deployment."""
     name = _require_log_server_config(ctx)
-    restart_cmd.callback(name=name, build=build)
+    ctx.invoke(restart_cmd, name=name, build=build)
 
 
 @log_server.command("status")
@@ -501,7 +506,7 @@ def log_server_restart(ctx: click.Context, build: bool) -> None:
 def log_server_status(ctx: click.Context) -> None:
     """Show the cluster's finelog deployment status."""
     name = _require_log_server_config(ctx)
-    status_cmd.callback(name=name)
+    ctx.invoke(status_cmd, name=name)
 
 
 @log_server.command("logs")
@@ -511,7 +516,7 @@ def log_server_status(ctx: click.Context) -> None:
 def log_server_logs(ctx: click.Context, tail: int, follow: bool) -> None:
     """Tail the cluster's finelog deployment logs."""
     name = _require_log_server_config(ctx)
-    logs_cmd.callback(name=name, tail=tail, follow=follow)
+    ctx.invoke(logs_cmd, name=name, tail=tail, follow=follow)
 
 
 @cluster.command("create-slice")
@@ -529,7 +534,7 @@ def cluster_create_slice(ctx, scale_group_name: str):
     config = ctx.obj.get("config")
     if not config:
         raise click.ClickException("--config is required for cluster create-slice")
-    if config.controller.WhichOneof("controller") == "local":
+    if config.controller.controller_kind() == "local":
         raise click.ClickException("create-slice is not supported for local clusters")
 
     sg_config = config.scale_groups.get(scale_group_name)
@@ -541,13 +546,12 @@ def cluster_create_slice(ctx, scale_group_name: str):
     # returned URL may be a tunnel endpoint that's only reachable from the CLI
     # host; workers need the cluster-internal address instead, resolved below.
     require_controller_url(ctx)
-    iris_config = IrisConfig(config)
-    bundle = ctx.obj.get("provider_bundle") or iris_config.provider_bundle()
+    bundle = ctx.obj.get("provider_bundle") or provider_bundle(config)
 
     # Resolve the address workers will connect to. Prefer an explicit value in
     # defaults.worker.controller_address, then discover it via the provider
     # (e.g., GCE label lookup). Never pass the CLI-local tunnel URL here.
-    worker_controller_address = iris_config.controller_address()
+    worker_controller_address = config.controller_address()
     if not worker_controller_address:
         worker_controller_address = bundle.controller.discover_controller(config.controller)
 
@@ -557,11 +561,12 @@ def cluster_create_slice(ctx, scale_group_name: str):
     slice_config = prepare_slice_config(sg_config.slice_template, sg_config, label_prefix)
     slice_config.labels[labels.iris_manual] = "true"
 
-    base_worker_config = config_pb2.WorkerConfig()
-    base_worker_config.CopyFrom(config.defaults.worker)
+    # Fold operator-injected env (defaults.inject_env) into task_env so manually
+    # created slices match autoscaler-provisioned workers.
+    base_worker_config = with_injected_task_env(config).defaults.worker.model_copy(deep=True)
     if not base_worker_config.controller_address:
         base_worker_config.controller_address = worker_controller_address
-    base_worker_config.platform.CopyFrom(config.platform)
+    base_worker_config.platform = config.platform.model_copy(deep=True)
     if config.storage.remote_state_dir:
         base_worker_config.storage_prefix = config.storage.remote_state_dir
 
@@ -593,11 +598,10 @@ def cluster_delete_slice(ctx, slice_id: str):
     config = ctx.obj.get("config")
     if not config:
         raise click.ClickException("--config is required for cluster delete-slice")
-    if config.controller.WhichOneof("controller") == "local":
+    if config.controller.controller_kind() == "local":
         raise click.ClickException("delete-slice is not supported for local clusters")
 
-    iris_config = IrisConfig(config)
-    bundle = ctx.obj.get("provider_bundle") or iris_config.provider_bundle()
+    bundle = ctx.obj.get("provider_bundle") or provider_bundle(config)
 
     label_prefix = config.platform.label_prefix or "iris"
     labels = Labels(label_prefix)
@@ -627,7 +631,7 @@ def cluster_status_cmd(ctx):
     controller_url = require_controller_url(ctx)
     click.echo("Checking controller status...")
     try:
-        with rpc_client(controller_url) as client:
+        with rpc_client_for_ctx(ctx, url=controller_url) as client:
             proc = client.get_process_status(job_pb2.GetProcessStatusRequest()).process_info
             workers = client.list_workers(controller_pb2.Controller.ListWorkersRequest()).workers
             as_status = client.get_autoscaler_status(controller_pb2.Controller.GetAutoscalerStatusRequest()).status
@@ -636,7 +640,7 @@ def cluster_status_cmd(ctx):
         click.echo("  Running: True")
         click.echo("  Healthy: True")
         click.echo(f"  Address: {controller_url}")
-        click.echo(f"  Git Hash: {proc.git_hash}")
+        click.echo(f"  Version: {provenance_from_proto(proc.provenance)}")
         click.echo(f"  Workers: {healthy}/{len(workers)} healthy")
         click.echo("\nAutoscaler Status:")
         if not as_status.groups:
@@ -683,14 +687,6 @@ def cluster_dashboard_proxy(ctx, port: int):
     the upstream controller. Open the rsbuild URL (printed on startup) in
     your browser.
     """
-    import signal
-    import subprocess
-
-    import uvicorn
-
-    from iris.cluster.controller.dashboard import ProxyControllerDashboard
-    from iris.cluster.dashboard_common import VUE_DIST_DIR
-
     controller_url = require_controller_url(ctx)
     dashboard = ProxyControllerDashboard(upstream_url=controller_url, port=port)
     click.echo(f"Proxying to controller at {controller_url}")
@@ -737,7 +733,7 @@ def vm_status(ctx, scale_group):
     """Show VM and slice status from the controller."""
     controller_url = require_controller_url(ctx)
     try:
-        as_status = _get_autoscaler_status(controller_url)
+        as_status = _get_autoscaler_status(ctx, controller_url)
     except Exception as e:
         click.echo(f"Error connecting to controller: {e}", err=True)
         raise SystemExit(1) from None
@@ -750,9 +746,7 @@ def vm_status(ctx, scale_group):
         counts = dict(group.slice_state_counts)
         total = sum(counts.values())
         click.echo(f"\nScale Group: {group.name}")
-        accel_display = format_accelerator_display(
-            group.config.resources.device_type, group.config.resources.device_variant
-        )
+        accel_display = format_accelerator_display(group.device_type, group.device_variant)
         click.echo(f"  Accelerator: {accel_display}")
         click.echo(f"  Slices: {counts.get('ready', 0)}/{total} ready")
         click.echo(f"    Booting: {counts.get('booting', 0)}")
@@ -773,10 +767,7 @@ def vm_status(ctx, scale_group):
         if group.slices:
             click.echo("  Slices:")
             for si in group.slices:
-                all_ready = bool(si.vms) and all(vm.state == vm_pb2.VM_STATE_READY for vm in si.vms)
-                any_failed = any(vm.state in (vm_pb2.VM_STATE_FAILED, vm_pb2.VM_STATE_PREEMPTED) for vm in si.vms)
-                ss = "READY" if all_ready else ("FAILED" if any_failed else "PENDING")
-                click.echo(f"    {si.slice_id}: {ss}")
+                click.echo(f"    {si.slice_id}: {si.state.upper()}")
                 for vi in si.vms:
                     click.echo(f"      {vi.vm_id}: {vm_state_name(vi.state)} ({vi.address})")
                     if vi.init_error:
@@ -792,10 +783,8 @@ def vm_logs(ctx, vm_id):
     """Show VM initialization logs."""
     controller_url = require_controller_url(ctx)
     try:
-        resp = _get_worker_status(controller_url, vm_id)
+        resp = _get_worker_status(ctx, controller_url, vm_id)
     except ConnectError as e:
-        from connectrpc.code import Code
-
         if e.code == Code.NOT_FOUND:
             click.echo(f"Worker not found: {vm_id}", err=True)
         else:
@@ -876,8 +865,6 @@ def controller_serve(ctx, host, port, checkpoint_path, checkpoint_interval, dry_
         iris --config=cluster.yaml cluster controller serve --dry-run \\
             --checkpoint-path gs://bucket/controller-state/1234567890
     """
-    from iris.cluster.controller.main import run_controller_serve
-
     config = ctx.obj.get("config")
     if not config:
         raise click.ClickException("--config is required for controller serve")
@@ -904,7 +891,7 @@ def controller_checkpoint(ctx, stop: bool):
     briefly and writes a consistent checkpoint DB copy.
     """
     controller_url = require_controller_url(ctx)
-    with rpc_client(controller_url) as client:
+    with rpc_client_for_ctx(ctx, url=controller_url) as client:
         try:
             resp = client.begin_checkpoint(controller_pb2.Controller.BeginCheckpointRequest(), timeout_ms=60_000)
         except Exception as e:
@@ -922,10 +909,7 @@ def controller_checkpoint(ctx, stop: bool):
         if not config:
             click.echo("--stop requires --config", err=True)
             raise SystemExit(1)
-        from iris.cluster.config import IrisConfig
-
-        iris_config = IrisConfig(config)
-        bundle = iris_config.provider_bundle()
+        bundle = provider_bundle(config)
         try:
             bundle.controller.stop_controller(config)
             click.echo("Controller stopped.")
@@ -956,15 +940,14 @@ def controller_restart(ctx, skip_checkpoint: bool, checkpoint_timeout: int):
     if not config:
         raise click.ClickException("--config is required")
 
-    is_local = config.controller.WhichOneof("controller") == "local"
+    is_local = config.controller.controller_kind() == "local"
     if is_local:
         raise click.ClickException(
             "controller restart is not supported for local clusters. "
             "Stop and restart the 'iris cluster start --local' process instead."
         )
 
-    iris_config = IrisConfig(config)
-    bundle = iris_config.provider_bundle()
+    bundle = provider_bundle(config)
 
     # Try to discover existing controller for checkpoint + restart.
     # If none exists, fall back to a fresh start (idempotent).
@@ -993,7 +976,7 @@ def controller_restart(ctx, skip_checkpoint: bool, checkpoint_timeout: int):
         click.echo("Skipping pre-restart checkpoint.")
     else:
         click.echo(f"Taking checkpoint (timeout {checkpoint_timeout}s)...")
-        with rpc_client(controller_url) as client:
+        with rpc_client_for_ctx(ctx, url=controller_url) as client:
             try:
                 resp = client.begin_checkpoint(
                     controller_pb2.Controller.BeginCheckpointRequest(),
@@ -1085,8 +1068,7 @@ def worker_restart(
     config = ctx.obj.get("config")
     if not config:
         raise click.ClickException("--config is required for worker-restart")
-    iris_config = IrisConfig(config)
-    bundle = ctx.obj.get("provider_bundle") or iris_config.provider_bundle()
+    bundle = ctx.obj.get("provider_bundle") or provider_bundle(config)
     if not isinstance(bundle.workers, GcpWorkerProvider):
         raise click.ClickException("worker-restart is only supported on GCP clusters")
 
@@ -1105,21 +1087,22 @@ def worker_restart(
         _build_and_push_image(config.defaults.worker.default_task_image, "task", git_sha, verbose=verbose)
 
     # Resolve the controller address workers will reconnect to (matches cluster_create_slice).
-    worker_controller_address = iris_config.controller_address()
+    worker_controller_address = config.controller_address()
     if not worker_controller_address:
         worker_controller_address = bundle.controller.discover_controller(config.controller)
 
-    base_worker_config = config_pb2.WorkerConfig()
-    base_worker_config.CopyFrom(config.defaults.worker)
+    # Fold operator-injected env (defaults.inject_env) into task_env so restarted
+    # workers match autoscaler-provisioned ones.
+    base_worker_config = with_injected_task_env(config).defaults.worker.model_copy(deep=True)
     if not base_worker_config.controller_address:
         base_worker_config.controller_address = worker_controller_address
-    base_worker_config.platform.CopyFrom(config.platform)
+    base_worker_config.platform = config.platform.model_copy(deep=True)
     if config.storage.remote_state_dir:
         base_worker_config.storage_prefix = config.storage.remote_state_dir
 
     scale_groups = dict(config.scale_groups)
 
-    with rpc_client(controller_url) as client:
+    with rpc_client_for_ctx(ctx, url=controller_url) as client:
         workers_resp = client.list_workers(controller_pb2.Controller.ListWorkersRequest())
         all_workers = workers_resp.workers
 
@@ -1139,7 +1122,7 @@ def worker_restart(
                 click.echo(f"--skip-current-hash requires a known git_hash (got: {target_hash!r})", err=True)
                 raise SystemExit(1)
             before = len(workers)
-            workers = [w for w in workers if w.metadata.git_hash != target_hash]
+            workers = [w for w in workers if w.metadata.provenance.tree_hash != target_hash]
             skipped = before - len(workers)
             click.echo(f"Skipping {skipped}/{before} worker(s) already at local git_hash {target_hash}")
 

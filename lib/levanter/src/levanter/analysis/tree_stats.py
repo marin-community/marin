@@ -1,7 +1,7 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import Any
+from typing import Any, cast
 
 import jax
 import optax
@@ -94,7 +94,7 @@ def summary_statistics_for_tree(
         if include_per_parameter_norms:
             to_log[f"{prefix}/norm/{key}"] = value
 
-    to_log[f"{prefix}/norm/total"] = optax.global_norm(tree)
+    to_log[f"{prefix}/norm/total"] = cast(jax.Array, optax.global_norm(tree))
 
     for key, hist in hists_to_log.items():
         to_log[f"{prefix}/hist/{key}"] = hist

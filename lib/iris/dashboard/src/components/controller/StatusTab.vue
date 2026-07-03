@@ -5,11 +5,11 @@ import { useAutoRefresh, DEFAULT_REFRESH_MS } from '@/composables/useAutoRefresh
 import { useProfileAction } from '@/composables/useProfileAction'
 import type { GetProcessStatusResponse, ProcessInfo } from '@/types/rpc'
 import { formatBytes, formatCpuMillicores, formatUptime } from '@/utils/formatting'
+import { formatProvenance } from '@/utils/provenance'
 import InfoCard from '@/components/shared/InfoCard.vue'
 import InfoRow from '@/components/shared/InfoRow.vue'
 import LogViewer from '@/components/shared/LogViewer.vue'
 import ProfileButtons from '@/components/shared/ProfileButtons.vue'
-import ProfileHistory from '@/components/shared/ProfileHistory.vue'
 import RpcStatsPanel from '@/components/controller/RpcStatsPanel.vue'
 
 const { data, loading, error, refresh } = useControllerRpc<GetProcessStatusResponse>('GetProcessStatus')
@@ -71,8 +71,8 @@ const totalBytes = computed(() => {
         <InfoRow label="Uptime">
           <span class="font-mono">{{ formatUptime(info.uptimeMs) }}</span>
         </InfoRow>
-        <InfoRow v-if="info.gitHash" label="Git Hash">
-          <span class="font-mono text-xs">{{ info.gitHash }}</span>
+        <InfoRow v-if="info.provenance" label="Version">
+          <span class="font-mono text-xs">{{ formatProvenance(info.provenance) }}</span>
         </InfoRow>
       </InfoCard>
 
@@ -111,12 +111,10 @@ const totalBytes = computed(() => {
       <RpcStatsPanel />
     </div>
 
-    <ProfileHistory source="/system/controller" />
-
     <!-- Process logs -->
     <div>
       <h3 class="text-sm font-semibold text-text mb-3">Controller Logs</h3>
-      <LogViewer source="controller" />
+      <LogViewer />
     </div>
   </div>
 </template>

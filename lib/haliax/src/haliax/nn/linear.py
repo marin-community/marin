@@ -8,7 +8,6 @@ from typing import Optional
 
 import equinox as eqx
 import jax
-from jax.random import PRNGKey
 from jaxtyping import PRNGKeyArray
 
 import haliax as hax
@@ -17,19 +16,19 @@ import haliax as hax
 from . import mup
 from .ragged_dot import ragged_dot
 from .mup import AbstractLinearReparam, ReparamEnabled, LinearStandardParam
-from .._src.state_dict import (
+from haliax._src.state_dict import (
     Mod,
     ModuleWithStateDictSerialization,
     StateDict,
     default_eqx_module_from_state_dict,
     default_eqx_module_to_state_dict,
 )
-from ..axis import Axis, AxisSpec
-from ..core import NamedArray
-from ..jax_utils import named_call
-from ..partitioning import ResourceAxis, shard_map
-from ..quantization import DotGeneralOp
-from ..util import ensure_tuple
+from haliax.axis import Axis, AxisSpec
+from haliax.core import NamedArray
+from haliax.jax_utils import named_call
+from haliax.partitioning import ResourceAxis, shard_map
+from haliax.quantization import DotGeneralOp
+from haliax.util import ensure_tuple
 
 
 class Linear(ModuleWithStateDictSerialization, ReparamEnabled):
@@ -54,7 +53,7 @@ class Linear(ModuleWithStateDictSerialization, ReparamEnabled):
         In: AxisSpec,
         Out: AxisSpec,
         *,
-        key: PRNGKey,
+        key: PRNGKeyArray,
         use_bias: bool = True,
         out_first: bool = True,
         dot_general: DotGeneralOp | None = None,
@@ -206,7 +205,7 @@ class MoELinear(eqx.Module):
         In: Axis,
         Out: Axis,
         *,
-        key: PRNGKey,
+        key: PRNGKeyArray,
         use_bias: bool = True,
         out_first: bool = False,
         init_scale: float = 1.0,

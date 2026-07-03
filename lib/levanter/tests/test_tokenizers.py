@@ -13,15 +13,19 @@ import os
 import pathlib
 import re
 import shutil
+from typing import cast
 from unittest.mock import patch
 
+import jinja2.exceptions
 import pytest
 from huggingface_hub import __version__ as _hf_hub_version
+from tokenizers import Tokenizer as HfBaseTokenizer
 
 import levanter.tokenizers as tk
 from levanter.data.text._batch_tokenizer import BatchTokenizer
 from levanter.data.text.formats import ChatProcessor
 from levanter.tokenizers import (
+    HfMarinTokenizer,
     MarinTokenizer,
     TokenizerBackend,
     _load_tokenizer_config,
@@ -50,7 +54,6 @@ def _can_load_model() -> bool:
 _MODEL_AVAILABLE = _can_load_model()
 
 requires_model = pytest.mark.skipif(not _MODEL_AVAILABLE, reason="HF auth or network unavailable for gated model")
-
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -1019,6 +1022,24 @@ def test_chat_template_add_generation_prompt(chat_tokenizer):
     assert len(with_prompt) >= len(without)
 
 
+def test_chat_template_blocks_python_internal_attribute_access():
+    tokenizer = HfMarinTokenizer(
+        _tokenizer=cast(HfBaseTokenizer, object()),
+        _name_or_path="malicious-tokenizer",
+        _bos_id=None,
+        _eos_id=None,
+        _pad_id=None,
+        _bos_token=None,
+        _eos_token=None,
+        _chat_template="{{ ''.__class__.__mro__[1].__subclasses__() }}",
+        _vocab_size=0,
+        _all_special_ids=[],
+    )
+
+    with pytest.raises(jinja2.exceptions.SecurityError):
+        tokenizer.apply_chat_template([{"role": "user", "content": "hi"}], tokenize=False)
+
+
 @requires_model
 def test_chat_template_no_template_raises(backend_tokenizer):
     """Llama 3.1 base model has no chat template; should raise ValueError."""
@@ -1422,7 +1443,7 @@ def test_stage_from_mirror_copies_files(tmp_path, fake_tokenizer_dir):
         return False
 
     with (
-        patch("levanter.tokenizers.fsspec.filesystem", return_value=FakeMirrorFS()),
+        patch("levanter.tokenizers.filesystem", return_value=FakeMirrorFS()),
         patch("levanter.tokenizers._fetch_file_atomic", side_effect=fake_fetch),
     ):
         result = _stage_from_mirror("org/model", str(local_dir))
@@ -1443,7 +1464,7 @@ def test_stage_from_mirror_absent(tmp_path):
         def ls(self, path, detail=False):
             return []
 
-    with patch("levanter.tokenizers.fsspec.filesystem", return_value=FakeMirrorFS()):
+    with patch("levanter.tokenizers.filesystem", return_value=FakeMirrorFS()):
         result = _stage_from_mirror("org/model", str(local_dir))
 
     assert result is False
@@ -1530,7 +1551,7 @@ def test_stage_from_mirror_tolerates_broken_fs(tmp_path):
         def exists(self, path):
             raise OSError("mirror unreachable")
 
-    with patch("levanter.tokenizers.fsspec.filesystem", return_value=BrokenMirrorFS()):
+    with patch("levanter.tokenizers.filesystem", return_value=BrokenMirrorFS()):
         result = _stage_from_mirror("org/model", str(local_dir))
 
     assert result is False

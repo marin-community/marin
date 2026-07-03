@@ -285,7 +285,7 @@ onMounted(async () => {
       <!-- Task logs -->
       <div>
         <h3 class="text-sm font-semibold text-text mb-3">Logs</h3>
-        <LogViewer :task-id="taskId" source="worker" />
+        <LogViewer :task-id="taskId" />
       </div>
     </template>
 

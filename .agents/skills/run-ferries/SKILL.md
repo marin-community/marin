@@ -150,7 +150,7 @@ Recommendation / victory decision: <next action>
 
 #### 7) Seal and open log-only PR
 - Create and push a sealing tag for the exact launch commit (the commit containing the `experiments/ferries/daily.py` used for the run).
-- Open a PR that updates only `docs/experiments/daily-ferry-log.md`, following `.agents/skills/author-pr/SKILL.md` for description format.
+- Open a PR that updates only `docs/experiments/daily-ferry-log.md`, following `.agents/skills/commit/SKILL.md` for description format.
 - Keep all detailed launch/retry/debug narrative in the run issue, not in the PR.
 - Apply canonical labels: `ferry`, `ferry-daily`, `ferry-log-only`, `ferry-sealed`.
 
@@ -166,7 +166,7 @@ uv run iris --config=lib/iris/config/marin.yaml \
 
 Launch (GPU / CoreWeave):
 ```bash
-uv run iris --config=lib/iris/config/coreweave.yaml \
+uv run iris --cluster=cw-us-east-02a \
   job run --memory=16G --disk=16G --cpu=1 --extra=cpu \
   -e MARIN_PREFIX s3://marin-na/marin \
   -e CANARY_ACCELERATOR gpu \

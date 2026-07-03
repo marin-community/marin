@@ -13,8 +13,6 @@ Bacterial / fungal RefSeq subdivisions are far larger; if you want them, build
 another step with their FTP URLs.
 """
 
-from __future__ import annotations
-
 from marin.datakit.download.bio_chem._runtime import (
     NotationFormat,
     NotationSliceSpec,

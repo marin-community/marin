@@ -280,7 +280,10 @@ class GenState(eqx.Module):
         )
 
     def clone_sequence(
-        self, parent_local_id: int, child_local_id: int | None = None, seq_params: SeqDecodingParams | None = None
+        self,
+        parent_local_id: int | jax.Array,
+        child_local_id: int | jax.Array | None = None,
+        seq_params: SeqDecodingParams | None = None,
     ) -> tuple["GenState", int]:
         """Clone a sequence into a new local slot, sharing full pages and using a fresh page for the last partial page.
 

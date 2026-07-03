@@ -138,4 +138,4 @@ def deepep_get_dispatch_layout(
         result_shape_dtypes,
         vmap_method="broadcast_all",
     )(topk_idx_i32)
-    return results[:3]
+    return results[0], results[1], results[2]

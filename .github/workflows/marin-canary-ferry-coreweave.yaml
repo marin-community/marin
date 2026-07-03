@@ -26,6 +26,15 @@ on:
         type: number
         default: 1
         required: false
+      attention_implementation:
+        description: 'GPU attention backend'
+        type: choice
+        options:
+          - gpu_fa4_cute
+          - gpu_fa4_thd
+          - reference
+        default: gpu_fa4_cute
+        required: false
 
 permissions:
   contents: read   # actions/checkout
@@ -48,6 +57,7 @@ jobs:
     env:
       RUN_ID: canary-gpu-${{ github.run_id }}-${{ github.run_attempt }}
       CANARY_ACCELERATOR: gpu
+      CANARY_ATTENTION_IMPLEMENTATION: ${{ github.event_name == 'workflow_dispatch' && inputs.attention_implementation || 'gpu_fa4_cute' }}
       CANARY_BATCH_SIZE: "16"
       CANARY_GPU_REPLICAS: ${{ github.event_name == 'workflow_dispatch' && format('{0}', inputs.gpu_replicas) || '1' }}
       # TODO(#5524): remove this override once Levanter profiler stop is
@@ -59,7 +69,7 @@ jobs:
       CANARY_MAX_LOSS: "8.0"
       WANDB_ENTITY: marin-community
       WANDB_PROJECT: marin
-      IRIS_CONFIG: lib/iris/config/coreweave-ci.yaml
+      IRIS_CONFIG: lib/iris/config/ci-coreweave.yaml
       IRIS_NAMESPACE: iris-ci
       IRIS_MANAGED_LABEL: iris-iris-ci-managed
 
@@ -123,6 +133,7 @@ jobs:
             -e MARIN_PREFIX s3://marin-na/marin/ \
             -e RUN_ID "$RUN_ID" \
             -e CANARY_ACCELERATOR "$CANARY_ACCELERATOR" \
+            -e CANARY_ATTENTION_IMPLEMENTATION "$CANARY_ATTENTION_IMPLEMENTATION" \
             -e CANARY_BATCH_SIZE "$CANARY_BATCH_SIZE" \
             -e CANARY_GPU_REPLICAS "$CANARY_GPU_REPLICAS" \
             -e CANARY_PROFILER_NUM_STEPS "$CANARY_PROFILER_NUM_STEPS" \
@@ -144,20 +155,27 @@ jobs:
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           CANARY_TARGET_TOKENS: ${{ inputs.target_tokens || env.CANARY_TARGET_TOKENS }}
 
+      # Keep the wait below the job timeout (180) so a hung ferry fails this
+      # *step* (failure(), runner stays alive for Claude triage) rather than
+      # tripping the job timeout (cancelled(), which force-kills triage after
+      # GitHub's short grace — exit 143). The monitor --timeout (120m) exits
+      # gracefully; timeout-minutes is a hard backstop if the monitor wedges
+      # between polls. Healthy runs finish in ~35m, leaving ~55m for triage.
       - name: Wait for canary ferry
+        timeout-minutes: 125
         shell: bash -l {0}
         run: |
-          uv run python scripts/workflows/iris_monitor.py wait \
+          uv run python scripts/ci/iris_monitor.py wait \
             --job-id "${{ steps.submit.outputs.job_id }}" \
             --iris-config "$IRIS_CONFIG" \
             --poll-interval 30 \
-            --timeout 10500 \
+            --timeout 7200 \
             --github-output
 
       - name: Validate canary metrics
         continue-on-error: ${{ inputs.target_tokens != '' }}
         shell: bash -l {0}
-        run: .venv/bin/python scripts/canary/validate_canary_metrics.py
+        run: .venv/bin/python scripts/ci/validate_canary_metrics.py
         env:
           MARIN_PREFIX: s3://marin-na/marin/
           AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
@@ -186,7 +204,7 @@ jobs:
           DIAG_DIR: /tmp/canary-diag
         run: |
           mkdir -p "$DIAG_DIR"
-          uv run python scripts/workflows/iris_monitor.py collect \
+          uv run python scripts/ci/iris_monitor.py collect \
             --job-id "$JOB_ID" \
             --iris-config "$IRIS_CONFIG" \
             --provider coreweave \
@@ -198,7 +216,7 @@ jobs:
 
       - name: Upload diagnostics bundle
         if: failure() || cancelled()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: canary-diag-${{ github.run_id }}
           path: /tmp/canary-diag
@@ -230,7 +248,7 @@ jobs:
       # hides the transcript with "full output hidden for security".
       - name: Upload Claude triage log
         if: (failure() || cancelled()) && github.event_name == 'schedule'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: claude-triage-log-${{ github.run_id }}
           path: /home/runner/work/_temp/claude-execution-output.json
@@ -244,7 +262,7 @@ jobs:
       # https://github.com/marin-community/marin/actions/runs/24498461666.
       - name: Upload Slack message
         if: failure() || cancelled()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: slack-message
           path: slack_message.md

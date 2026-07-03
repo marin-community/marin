@@ -12,7 +12,7 @@ import asyncio
 import logging
 import threading
 from dataclasses import dataclass, replace
-from typing import Any
+from typing import Any, cast
 
 import haliax as hax
 from jax.sharding import Mesh
@@ -154,12 +154,15 @@ class LevanterInferenceContext(BaseInferenceContext):
         client = self.openai_client()
 
         async def create_completion(prompt: str) -> ChatCompletion:
-            return await client.chat.completions.create(
+            # `request_kwargs` never sets `stream`, so spreading it as untyped kwargs prevents
+            # the non-streaming overload from being selected; the result is always a ChatCompletion.
+            completion = await client.chat.completions.create(
                 model=getattr(self._inference_server.config, "model_name", "test-model"),
                 messages=[{"role": "user", "content": prompt}],
                 **request_kwargs,
                 timeout=30,
             )
+            return cast(ChatCompletion, completion)
 
         # Batch with concurrency control
         # Each prompt with n choices counts as n requests to the server

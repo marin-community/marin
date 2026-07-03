@@ -7,6 +7,7 @@ from typing import Sequence, TypeAlias, TypeVar
 
 import equinox
 
+import haliax
 from haliax.jax_utils import is_jax_array_like
 
 T = TypeVar("T")
@@ -16,10 +17,8 @@ UNSPECIFIED = Unspecified()
 
 
 def is_named_array(leaf):
-    from .core import NamedArray  # circular import: core -> axis -> util -> core
-
     "Typically used as the is_leaf predicate in tree_map"
-    return isinstance(leaf, NamedArray)
+    return isinstance(leaf, haliax.NamedArray)
 
 
 def ensure_tuple(x: Sequence[T] | T) -> tuple[T, ...]:

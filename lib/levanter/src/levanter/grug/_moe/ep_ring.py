@@ -18,19 +18,20 @@ from levanter.grug._moe.common import (
     _CHECKPOINT_EXPERT_HIDDEN,
 )
 from levanter.grug._moe.ep_common import _prefix_cap_counts
+from levanter.grug.sharding import _batch_axes
 
 
 def _moe_mlp_ep_ring_local(
-    x_local: Float[Array, "TL D"],
-    selected_experts_local: Int[Array, "TL K"],
-    combine_weights_local: Float[Array, "TL K"],
-    moe_w13_local: Float[Array, "EL D I2"],
-    moe_w2_local: Float[Array, "EL I D"],
+    x_local: Float[Array, "Tlocal H"],
+    selected_experts_local: Int[Array, "Tlocal K"],
+    combine_weights_local: Float[Array, "Tlocal K"],
+    moe_w13_local: Float[Array, "Elocal H I2"],
+    moe_w2_local: Float[Array, "Elocal I H"],
     *,
     activation_fn: Callable[[jax.Array], jax.Array],
     num_experts: int,
     capacity_factor: float,
-) -> tuple[Float[Array, "TL D"], Int[Array, ""]]:
+) -> tuple[Float[Array, "Tlocal H"], Int[Array, ""]]:
     """Ring-style EP routed path: all-gather dispatch + psum-scatter collect."""
     # #2710 ring EP strategy: gather tokens and their selected-expert routing
     # assignments across expert shards, then psum-scatter back to local tokens.
@@ -57,7 +58,7 @@ def _moe_mlp_ep_ring_local(
 
         expert_axis = jax.lax.axis_index("expert")
         expert_start = expert_axis * local_experts
-        local_expert = expert_flat - expert_start
+        local_expert: jax.Array = expert_flat - expert_start
         local_mask = jnp.logical_and(local_expert >= 0, local_expert < local_experts)
 
         # Keep only the assignments this shard will execute, ordered by
@@ -111,5 +112,5 @@ def _moe_mlp_ep_ring_local(
         # #2710 ring EP strategy: collect only this shard's token slice after
         # reducing contributions from experts across the EP mesh.
         out_local = jax.lax.psum_scatter(out_global, "expert", scatter_dimension=0, tiled=True)
-        dropped_total = jax.lax.psum(dropped_local, ("data", "expert"))
+        dropped_total = jax.lax.psum(dropped_local, _batch_axes(jax.sharding.get_abstract_mesh()))
     return out_local, dropped_total

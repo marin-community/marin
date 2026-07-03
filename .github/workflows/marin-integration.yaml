@@ -8,6 +8,9 @@ on:
   workflow_dispatch:
 
 
+permissions:
+  contents: read
+
 jobs:
   marin-integration:
     if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
@@ -26,7 +29,7 @@ jobs:
           python-version: "3.12"
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: "22"
 
@@ -46,7 +49,7 @@ jobs:
 
       - name: Start local Iris cluster
         run: |
-          uv run iris --config lib/iris/config/test.yaml \
+          uv run iris --config lib/iris/config/ci-test.yaml \
             cluster start --local > /tmp/iris-cluster.log 2>&1 &
           CLUSTER_PID=$!
           echo "CLUSTER_PID=$CLUSTER_PID" >> "$GITHUB_ENV"
@@ -85,7 +88,11 @@ jobs:
           timeout 600 uv run pytest tests/test_integration_test.py \
             -m integration -o "addopts=" --timeout=600 -v -s
         env:
-          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          # The pipeline uses a vendored tokenizer fixture and degrades gracefully
+          # when the reference HF config is unreachable, so it must not touch HF Hub.
+          # HF_HUB_OFFLINE makes any accidental Hub access fail fast instead of
+          # reintroducing a flaky network dependency.
+          HF_HUB_OFFLINE: "1"
           WANDB_MODE: disabled
           WANDB_API_KEY: ""
           JAX_TRACEBACK_FILTERING: off

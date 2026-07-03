@@ -6,16 +6,13 @@ on:
     paths:
       - "lib/iris/**"
       - ".github/workflows/iris-smoke-coreweave.yaml"
-      - "scripts/workflows/iris_monitor.py"
-  issue_comment:
-    types: [created]
+      - "scripts/ci/iris_monitor.py"
   workflow_dispatch:
 
 permissions:
   contents: read
   packages: write
-  pull-requests: read   # needed for issue_comment to access PR metadata
-  statuses: write       # post commit status from issue_comment trigger
+  statuses: write       # post commit status from workflow_dispatch trigger
 
 # Shared concurrency group with marin-canary-ferry-coreweave.yaml — both rebuild/roll
 # the shared iris-ci controller and submit against the shared H100 in
@@ -29,17 +26,7 @@ jobs:
   cw-ci-test:
     if: >-
       (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) ||
-      github.event_name == 'workflow_dispatch' ||
-      (
-        github.event_name == 'issue_comment' &&
-        github.event.issue.pull_request &&
-        contains(github.event.comment.body, '/iris-ci-cw') &&
-        (
-          github.event.comment.author_association == 'MEMBER' ||
-          github.event.comment.author_association == 'COLLABORATOR' ||
-          github.event.comment.author_association == 'OWNER'
-        )
-      )
+      github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 60
     env:
@@ -49,11 +36,9 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
-        with:
-          ref: ${{ github.event_name == 'issue_comment' && format('refs/pull/{0}/head', github.event.issue.number) || '' }}
 
       - name: Set commit status to pending
-        if: github.event_name == 'issue_comment' || github.event_name == 'workflow_dispatch'
+        if: github.event_name == 'workflow_dispatch'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -107,12 +92,12 @@ jobs:
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
         run: |
           cd lib/iris && uv run --group dev iris -v \
-            --config=config/coreweave-ci.yaml \
+            --config=config/ci-coreweave.yaml \
             cluster start --fresh
 
       - name: Connect to iris-ci controller
         run: |
-          uv run python scripts/workflows/iris_monitor.py coreweave-controller \
+          uv run python scripts/ci/iris_monitor.py coreweave-controller \
             --namespace "$IRIS_NAMESPACE" \
             --kubeconfig "$HOME/.kube/coreweave-iris" \
             --log-path "$RUNNER_TEMP/iris-cw-port-forward.log"
@@ -124,7 +109,7 @@ jobs:
           JAX_TRACEBACK_FILTERING: off
           # When set, the marin-on-iris test uploads fixtures and writes
           # intermediate data to S3 (R2) so remote Zephyr pods can access them.
-          MARIN_CI_S3_PREFIX: s3://marin-na/temp/ci
+          MARIN_CI_S3_PREFIX: s3://marin-na/tmp/ttl=3d/ci
           AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           AWS_ENDPOINT_URL: https://74981a43be0de7712369306c7b19133d.r2.cloudflarestorage.com
@@ -142,7 +127,7 @@ jobs:
           WANDB_MODE: disabled
           WANDB_API_KEY: ""
           JAX_TRACEBACK_FILTERING: off
-          MARIN_CI_S3_PREFIX: s3://marin-na/temp/ci
+          MARIN_CI_S3_PREFIX: s3://marin-na/tmp/ttl=3d/ci
           AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           AWS_ENDPOINT_URL: https://74981a43be0de7712369306c7b19133d.r2.cloudflarestorage.com
@@ -163,7 +148,7 @@ jobs:
           fi
           # No job submitted in this lane, so the iris.job_id selector matches
           # nothing — continue-on-error tolerates the empty kubernetes-pods.json.
-          uv run python scripts/workflows/iris_monitor.py collect \
+          uv run python scripts/ci/iris_monitor.py collect \
             --job-id "ci-smoke" \
             --controller-url "$IRIS_CONTROLLER_URL" \
             --provider coreweave \
@@ -174,7 +159,7 @@ jobs:
 
       - name: Upload failure diagnostics
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: iris-cw-ci-logs
           path: iris-cw-logs/
@@ -191,7 +176,7 @@ jobs:
           pkill -f "kubectl.*port-forward.*$IRIS_NAMESPACE.*pod/iris-controller" 2>/dev/null || true
 
       - name: Set commit status to result
-        if: always() && (github.event_name == 'issue_comment' || github.event_name == 'workflow_dispatch')
+        if: always() && github.event_name == 'workflow_dispatch'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |

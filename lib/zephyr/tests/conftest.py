@@ -18,16 +18,20 @@ from fray import ResourceConfig
 from fray.actor import ActorContext, _reset_current_actor, _set_current_actor
 from fray.iris_backend import FrayIrisClient
 from fray.local_backend import LocalClient
-from iris.cluster.config import connect_cluster, load_config, make_local_config
+from iris.client.client import IrisClient, IrisContext, iris_ctx_scope
+from iris.cluster.config import load_config, make_local_config
+from iris.cluster.lifecycle import connect_cluster
+from iris.cluster.types import Entrypoint, ResourceSpec
 from rigging.timing import ExponentialBackoff
 from zephyr import load_file
-from zephyr.execution import ZephyrContext
+from zephyr.execution import ZephyrContext, ZephyrCoordinator
+from zephyr.stage_io import ZephyrTaskResources
 
 # Path to zephyr root (from tests/conftest.py -> tests -> lib/zephyr)
 ZEPHYR_ROOT = Path(__file__).resolve().parents[1]
 
 # Use Iris demo config as base
-IRIS_CONFIG = Path(__file__).resolve().parents[2] / "iris" / "config" / "test.yaml"
+IRIS_CONFIG = Path(__file__).resolve().parents[2] / "iris" / "config" / "ci-test.yaml"
 
 
 @pytest.fixture(scope="module")
@@ -93,9 +97,6 @@ def integration_client(request):
         yield client
         client.shutdown(wait=True)
     elif request.param == "iris":
-        from iris.client.client import IrisClient, IrisContext, iris_ctx_scope
-        from iris.cluster.types import Entrypoint, ResourceSpec
-
         iris_cluster = request.getfixturevalue("iris_cluster")
         iris_client = IrisClient.remote(iris_cluster, workspace=ZEPHYR_ROOT)
         client = FrayIrisClient.from_iris_client(iris_client)
@@ -137,6 +138,23 @@ def integration_ctx(integration_client, tmp_path_factory):
     )
     yield ctx
     ctx.shutdown()
+
+
+_TEST_WORKER_RAM = 1 << 30
+_TEST_TASK_COST = ZephyrTaskResources(cpu=1.0, memory=_TEST_WORKER_RAM)
+_TEST_WORKER_AVAILABLE = ZephyrTaskResources(cpu=1.0, memory=_TEST_WORKER_RAM)
+
+
+def _make_test_coordinator(tmp_path, **kwargs) -> ZephyrCoordinator:
+    prefix = str(tmp_path / "chunks")
+    return ZephyrCoordinator(prefix, _TEST_TASK_COST, _TEST_TASK_COST, **kwargs)
+
+
+@pytest.fixture
+def coordinator(actor_context, tmp_path):
+    coord = _make_test_coordinator(tmp_path)
+    yield coord
+    coord.shutdown()
 
 
 @pytest.fixture

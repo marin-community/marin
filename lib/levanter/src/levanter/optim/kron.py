@@ -175,7 +175,7 @@ except ImportError:
     have_hax = False
 
 
-def precond_update_prob_schedule(max_prob=1.0, min_prob=0.03, decay=0.001, flat_start=500):
+def precond_update_prob_schedule(max_prob=1.0, min_prob=0.03, decay=0.001, flat_start=500) -> Callable[[int], float]:
     """Anneal preconditioner update probability during beginning of training.
 
     PSGD benefits from more preconditioner updates at the beginning of training,
@@ -187,9 +187,10 @@ def precond_update_prob_schedule(max_prob=1.0, min_prob=0.03, decay=0.001, flat_
     training regimes.
     """
 
-    def _schedule(n):
+    def _schedule(n: int) -> float:
         """Exponential anneal with flat start."""
-        return jnp.clip(max_prob * jnp.exp(-decay * (n - flat_start)), min_prob, max_prob)
+        # jnp.clip yields a scalar Array; it is consumed as a float probability.
+        return cast(float, jnp.clip(max_prob * jnp.exp(-decay * (n - flat_start)), min_prob, max_prob))
 
     return _schedule
 
@@ -267,8 +268,9 @@ def scale_by_kron(
     Returns:
         optax.GradientTransformation
     """
-    mu_dtype = canonicalize_dtype(mu_dtype)
-    precond_dtype = canonicalize_dtype(precond_dtype or jnp.float32)
+    # optax.canonicalize_dtype is stubbed with a broad return; it normalizes to a concrete dtype here.
+    mu_dtype = cast(Optional[Union[str, jnp.dtype]], canonicalize_dtype(mu_dtype))
+    precond_dtype = cast(Optional[Union[str, jnp.dtype]], canonicalize_dtype(precond_dtype or jnp.float32))
     lax_map = lax_map_scanned_layers
     bs = lax_map_batch_size
     scanned_layers = None
@@ -484,7 +486,7 @@ def scale_by_kron(
             balance_counter=jnp.zeros([], jnp.int32),
         )
 
-    def update_fn(updates: base.Updates, state: dict, params: base.Params = None):
+    def update_fn(updates: base.Updates, state: dict, params: Optional[base.Params] = None):
         del params
         count_inc = safe_int32_increment(state["count"])
         key, subkey = jax.random.split(state["key"])
@@ -1087,7 +1089,7 @@ def _init_Q_exprs(
         params_specs = param_sharding
         if param_sharding is None:
             params_specs = PartitionSpec(*((None,) * len(t_shape)))
-        sharding_out = [None] * len(t_shape)
+        sharding_out: list[PartitionSpec | None] = [None] * len(t_shape)
         if have_qs_sharding:
             sharding_out = [PartitionSpec(None)] * len(t_shape)
 

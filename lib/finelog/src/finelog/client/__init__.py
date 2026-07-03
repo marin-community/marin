@@ -22,7 +22,7 @@ from finelog.errors import (
     SchemaValidationError,
     StatsError,
 )
-from finelog.store.policy import StoragePolicy
+from finelog.policy import StoragePolicy
 
 __all__ = [
     "FlushResult",

@@ -81,7 +81,7 @@ independent job state machine.
 | `SUCCEEDED` | 4 | Yes | No | Worker Reconcile observation; task exited with code 0 | `succeeded` (green) |
 | `FAILED` | 5 | Yes | Yes | Worker Reconcile observation; task exited with non-zero code | `failed` (red) |
 | `KILLED` | 6 | Yes | No | Controller: job cancellation (`_on_job_cancelled`), job failure cascade (`_mark_remaining_tasks_killed`), per-task timeout | `killed` (grey) |
-| `WORKER_FAILED` | 7 | Yes | Yes | Controller: worker death cascade (`_on_worker_failed`) | `worker_failed` (purple) |
+| `WORKER_FAILED` | 7 | Yes | Yes | Controller: worker death cascade (`ops.worker.fail`) | `worker_failed` (purple) |
 | `UNSCHEDULABLE` | 8 | Yes | No | Controller: scheduling timeout expired (`apply_terminal_decisions_batch`) | `unschedulable` (red) |
 | `PREEMPTED` | 10 | Yes | Yes | Controller: priority preemption with budget exhausted (`apply_terminal_decisions_batch`) | `preempted` (orange) |
 | `COSCHED_FAILED` | 11 | Yes | No | Controller: coscheduled sibling cascade (`_terminate_coscheduled_siblings`) | `cosched_failed` (red) |
@@ -169,9 +169,9 @@ Set by the controller in three scenarios:
 
 ### WORKER_FAILED
 
-Set by the controller when a worker dies. `_on_worker_failed` iterates all
-tasks on the dead worker and emits `TaskStateChangedEvent` with
-`TASK_STATE_WORKER_FAILED` for each non-terminal task.
+Set by the controller when a worker dies. Worker failure (`ops.worker.fail`)
+closes all tasks on the dead worker, emitting a `TASK_STATE_WORKER_FAILED`
+transition for each non-terminal task.
 
 Retry evaluation uses the preemption budget:
 
@@ -189,7 +189,7 @@ from hanging on collective operations.
 ### PREEMPTED
 
 Set by the controller when a higher-priority task evicts a lower-priority
-running task. The preemption loop (`_run_preemption_pass`) selects victims
+running task. The preemption pass (`apply_preemptions`) selects victims
 from lower priority bands and submits them to `apply_terminal_decisions_batch`.
 
 Retry evaluation uses `_resolve_task_failure_state` with the preemption budget:

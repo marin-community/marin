@@ -102,9 +102,9 @@ def compute_and_visualize_log_probs(path: str, model, tokenizer, log_prob_fn, te
     Returns:
 
     """
-    log_probs: list = []
-    targets: list = []
-    argmaxes: list = []
+    log_probs = []
+    targets = []
+    argmaxes = []
     for batch in test_data:
         b_logprobs, b_argmaxes = _split_logprobs_argmaxes(log_prob_fn(model, batch))
         log_probs.append(b_logprobs)
@@ -263,9 +263,9 @@ def compute_and_diff_log_probs(path: str, model, comparison_model, tokenizer, lo
         max_docs: Maximum number of documents to visualize.
     """
 
-    log_probs_a: list = []
-    log_probs_b: list = []
-    targets: list = []
+    log_probs_a = []
+    log_probs_b = []
+    targets = []
     for batch in test_data:
         targets.append(batch)
 

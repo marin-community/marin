@@ -3,23 +3,87 @@
 
 import dataclasses
 import importlib
+import json
 import logging
 import math
 import os
 import urllib.parse
+from collections.abc import Mapping
 from copy import deepcopy
 from dataclasses import dataclass, replace
-from typing import TypeVar, cast
+from typing import Any, TypeVar, cast
 
-import draccus
-from fray import CpuConfig, GpuConfig, ResourceConfig, TpuConfig
+from draccus.utils import DataclassInstance
+from fray import CpuConfig, ResourceConfig, TpuConfig
+from levanter.adaptor import NoAdaptorConfig
+from levanter.checkpoint import CheckpointerConfig
+from levanter.main.train_dpo import TrainDpoConfig
+from levanter.main.train_lm import TrainLmConfig
+from levanter.schedule import BatchSchedule
 from mergedeep import mergedeep
-from rigging.filesystem import check_gcs_paths_same_region, marin_temp_bucket
+from pydantic import BaseModel
+from rigging.filesystem import check_gcs_paths_same_region, marin_temp_bucket, open_url, url_to_fs
 
-from marin.execution.executor import materialize
+from marin.execution.artifact import Artifact
+from marin.processing.tokenize import read_tokenized_cache_stats
 from marin.training.run_environment import add_run_env_variables
 
 logger = logging.getLogger(__name__)
+
+# The subdirectory Levanter writes rolling checkpoints into, relative to a run's output dir.
+_CHECKPOINTS_SUBDIR = "checkpoints"
+# The final-metrics file a run mirrors next to its output via the WandB ``replicate_path``.
+_TRACKER_METRICS_FILE = "tracker_metrics.jsonl"
+
+
+class TrainMetrics(BaseModel):
+    """A finished run's final metrics, read on demand from its output.
+
+    ``summary`` is the full mirrored WandB summary (keys like ``train/loss``, ``eval/loss``,
+    ``eval/<name>/loss``); ``train_loss``/``eval_loss`` are the common scalars pulled out, each
+    ``None`` when the run did not log it.
+    """
+
+    summary: dict[str, Any]
+    train_loss: float | None = None
+    eval_loss: float | None = None
+
+
+def _as_float(value: object) -> float | None:
+    return float(value) if isinstance(value, int | float) else None
+
+
+class LevanterCheckpoint(Artifact):
+    """A Levanter training run's output: rolling checkpoints, config, and mirrored metrics.
+
+    The realized artifact for every :func:`~marin.experiment.train.train_lm` handle. ``load`` is
+    a path ref; the checkpoint structure and metrics are exposed as accessors so callers never
+    hard-code the layout.
+    """
+
+    @property
+    def checkpoint_dir(self) -> str:
+        """The directory holding this run's rolling checkpoints."""
+        return f"{self.path}/{_CHECKPOINTS_SUBDIR}"
+
+    def training_metrics(self) -> TrainMetrics:
+        """This run's final metrics, parsed from ``tracker_metrics.jsonl`` under its output.
+
+        Raises :class:`FileNotFoundError` if the run wrote no metrics file.
+        """
+        path = f"{self.path}/{_TRACKER_METRICS_FILE}"
+        if not url_to_fs(path, use_listings_cache=False)[0].exists(path):
+            raise FileNotFoundError(f"no {_TRACKER_METRICS_FILE} for checkpoint at {self.path}")
+        with open_url(path, "r") as f:
+            lines = [line for line in f.read().splitlines() if line.strip()]
+        if not lines:
+            raise FileNotFoundError(f"empty {_TRACKER_METRICS_FILE} at {path}")
+        summary = json.loads(lines[-1]).get("summary", {})
+        return TrainMetrics(
+            summary=summary,
+            train_loss=_as_float(summary.get("train/loss")),
+            eval_loss=_as_float(summary.get("eval/loss")),
+        )
 
 
 @dataclass(frozen=True)
@@ -29,13 +93,7 @@ class TrainLmOnPodConfig:
     train_config: object
     resources: ResourceConfig
     output_path: str | None = None
-    """Base output directory to be used for training, mainly for use with executor framework."""
-    impute_run_id_from_output_path: bool = True
-    """
-    If true and out_path is not None, the run id will be set to the basename of the out_path plus a random string.
-
-    Note that trainer.id and the RUN_ID env variable take precedence, in that order.
-    """
+    """Base output directory for the run. The checkpointer, HF export, and run id derive from it."""
     env_vars: dict[str, str] | None = None
     """Environment variables to pass to the training task (e.g., WANDB_MODE, WANDB_API_KEY)."""
     auto_build_caches: bool = False
@@ -54,13 +112,7 @@ class TrainDpoOnPodConfig:
     train_config: object
     resources: ResourceConfig
     output_path: str | None = None
-    """Base output directory to be used for training, mainly for use with executor framework."""
-    impute_run_id_from_output_path: bool = True
-    """
-    If true and out_path is not None, the run id will be set to the basename of the out_path plus a random string.
-
-    Note that trainer.id and the RUN_ID env variable take precedence, in that order.
-    """
+    """Base output directory for the run. The checkpointer, HF export, and run id derive from it."""
     env_vars: dict[str, str] | None = None
     """Environment variables to pass to the training task (e.g., WANDB_MODE, WANDB_API_KEY)."""
     auto_build_caches: bool = False
@@ -109,107 +161,65 @@ def temporary_checkpoint_base_path(output_path: str) -> str:
     )
 
 
-def bake_output_path(train_config: TrainConfigT, output_path: str) -> TrainConfigT:
-    """Bake ``output_path`` into the trainer's checkpointer and HF save path.
+def resolve_checkpointer_output_path(checkpointer: CheckpointerConfig, output_path: str) -> CheckpointerConfig:
+    """Point ``checkpointer`` at ``output_path``: rolling checkpoints under ``<output_path>/checkpoints``
+    and time-policy (temporary) checkpoints on region-local storage keyed off ``output_path``.
 
-    Sets:
-    * ``trainer.checkpointer.base_path`` → ``<output_path>/checkpoints``
-    * ``trainer.checkpointer.temporary_base_path`` → region-local temp bucket
-    * ``hf_save_path`` → ``<output_path>/hf``
-
-    The ``append_run_id_to_base_path`` flag is NOT changed here; callers that
-    impute a run id from the output path should also set it to ``False`` via
-    ``impute_run_id``.
+    ``append_run_id_to_base_path`` is ``False`` because ``output_path`` already encodes the run's
+    identity, so a run id suffix would double it up. Every other checkpointer field is preserved.
     """
-    trainer = replace(
-        train_config.trainer,
-        checkpointer=replace(
-            train_config.trainer.checkpointer,
-            base_path=os.path.join(output_path, DEFAULT_CHECKPOINTS_PATH),
-            temporary_base_path=temporary_checkpoint_base_path(output_path),
-        ),
+    return replace(
+        checkpointer,
+        base_path=os.path.join(output_path, DEFAULT_CHECKPOINTS_PATH),
+        temporary_base_path=temporary_checkpoint_base_path(output_path),
+        append_run_id_to_base_path=False,
     )
-    return replace(  # type: ignore[bad-specialization]
+
+
+def apply_output_path(train_config: TrainConfigT, output_path: str) -> TrainConfigT:
+    """Set every run-scoped path on ``train_config`` from ``output_path``.
+
+    Points the checkpointer at ``output_path`` and sets ``hf_save_path`` to ``<output_path>/hf``.
+    Adapter LM/DPO exports PEFT rather than a merged HF model, so for those the merged ``hf_save_path``
+    is cleared and ``peft_save_path`` takes the HF location.
+    """
+    config = replace(  # type: ignore[bad-specialization]
         train_config,
-        trainer=trainer,
+        trainer=replace(
+            train_config.trainer,
+            checkpointer=resolve_checkpointer_output_path(train_config.trainer.checkpointer, output_path),
+        ),
         hf_save_path=os.path.join(output_path, DEFAULT_HF_CHECKPOINTS_PATH),
     )
 
-
-def impute_run_id(
-    train_config: TrainConfigT,
-    *,
-    output_path: str | None,
-    env_run_id: str | None = None,
-    impute_from_output_path: bool = True,
-) -> tuple[TrainConfigT, str]:
-    """Pick a stable run id and stamp it into ``train_config``.
-
-    Priority:
-    1. ``train_config.trainer.id`` (already set by the caller)
-    2. ``env_run_id`` (e.g. from ``config.env_vars["RUN_ID"]``)
-    3. ``RUN_ID`` environment variable
-    4. ``basename(output_path)`` when ``impute_from_output_path`` is True
-    5. Random UID (last resort, logged as a warning)
-
-    When the run id is imputed from ``output_path`` (case 4), the path already
-    encodes identity so ``append_run_id_to_base_path`` is set to ``False`` to
-    avoid double-suffixing.  For all other cases it follows
-    ``not impute_from_output_path``.
-
-    Returns:
-        ``(updated_train_config, run_id)``
-    """
-    run_id = train_config.trainer.id
-
-    if run_id is None:
-        run_id = env_run_id or os.environ.get("RUN_ID")
-
-    from_output_path = False
-    if run_id is None and impute_from_output_path and output_path is not None:
-        path = output_path.rstrip("/")
-        run_id = os.path.basename(path)
-        from_output_path = True
-        logger.info(f"Imputing run ID from out path: {run_id}")
-
-    if not run_id:
-        run_id = _cli_helpers_module().default_run_id()
-        logger.warning(f"Run ID not set. Using default: {run_id}")
-
-    append_id_to_checkpoints = not (impute_from_output_path and from_output_path) and not impute_from_output_path
-    checkpointer_config = replace(train_config.trainer.checkpointer, append_run_id_to_base_path=append_id_to_checkpoints)
-    updated = replace(train_config, trainer=replace(train_config.trainer, id=run_id, checkpointer=checkpointer_config))  # type: ignore[bad-specialization]
-    return updated, run_id
-
-
-def _update_config_to_use_out_path(pod_config: TrainOnPodConfigT) -> TrainOnPodConfigT:
-    """
-    Update the config to use the out_path as the base output directory for training.
-
-    This will set the following paths to be subdirectories of the out_path:
-    * checkpoints (in $out_path/checkpoints)
-    * hf checkpoints (in $out_path/hf)
-    * logging (in $out_path/log)
-
-    This is useful when running with the executor framework, where the output path is set by the executor.
-    """
-    if pod_config.output_path is None:
-        return pod_config
-
-    config = bake_output_path(pod_config.train_config, pod_config.output_path)
-
-    from levanter.adaptor import NoAdaptorConfig
-    from levanter.main.train_dpo import TrainDpoConfig
-    from levanter.main.train_lm import TrainLmConfig
-
-    # Adapter LM/DPO exports PEFT by default; merged HF export is explicit.
     if isinstance(config, (TrainDpoConfig, TrainLmConfig)) and not isinstance(config.adapter, NoAdaptorConfig):
         peft_save_path = config.peft_save_path
         if peft_save_path is None and config.hf_save_steps is not None:
             peft_save_path = config.hf_save_path
         config = replace(config, hf_save_path=None, peft_save_path=peft_save_path)
 
-    return replace(pod_config, train_config=config)
+    return config
+
+
+def _resolve_run_id(
+    train_config: TrainConfigT, *, output_path: str | None, env_run_id: str | None
+) -> tuple[TrainConfigT, str]:
+    """Pick a stable run id and stamp it into ``train_config.trainer.id``.
+
+    A stable id is required so a run resumes into the same W&B run and checkpoint directory after
+    preemption. Priority: ``trainer.id`` already set by the caller, then ``env_run_id`` (from
+    ``env_vars["RUN_ID"]``), then the ``RUN_ID`` environment variable, then ``basename(output_path)``,
+    and finally a random UID as a last resort.
+    """
+    run_id = train_config.trainer.id or env_run_id or os.environ.get("RUN_ID")
+    if run_id is None and output_path is not None:
+        run_id = os.path.basename(output_path.rstrip("/"))
+        logger.info("Imputing run ID from output path: %s", run_id)
+    if not run_id:
+        run_id = _cli_helpers_module().default_run_id()
+        logger.warning("Run ID not set. Using default: %s", run_id)
+    updated = replace(train_config, trainer=replace(train_config.trainer, id=run_id))  # type: ignore[bad-specialization]
+    return updated, run_id
 
 
 def _num_validation_sequences(total_sequences: int, fraction: float) -> int:
@@ -241,8 +251,6 @@ def _dpo_training_components(config: object) -> dict[str, object]:
 
 
 def _dpo_training_dataset_size(config: object) -> int:
-    from marin.processing.tokenize import read_tokenized_cache_stats
-
     training_components = _dpo_training_components(config.data)
     if len(training_components) != 1:
         raise ValueError(
@@ -274,8 +282,6 @@ def _dpo_training_dataset_size(config: object) -> int:
 
 
 def _num_train_steps_for_examples(batch_size: object, total_examples: int) -> int:
-    from levanter.schedule import BatchSchedule
-
     if total_examples <= 0:
         raise ValueError(f"total_examples must be positive, got {total_examples}")
 
@@ -313,7 +319,7 @@ def _maybe_auto_resolve_dpo_schedule(config: TrainDpoOnPodConfig) -> TrainDpoOnP
             num_train_steps,
         )
         trainer = replace(trainer, num_train_steps=num_train_steps)
-        train_config = replace(train_config, trainer=trainer)
+        train_config = replace(cast(DataclassInstance, train_config), trainer=trainer)
 
     if config.auto_validation_runs is not None:
         eval_steps = _scheduled_dpo_eval_steps(train_config.trainer.num_train_steps, config.auto_validation_runs)
@@ -322,7 +328,7 @@ def _maybe_auto_resolve_dpo_schedule(config: TrainDpoOnPodConfig) -> TrainDpoOnP
             eval_steps,
         )
         train_config = replace(
-            train_config,
+            cast(DataclassInstance, train_config),
             run_initial_eval=True,
             scheduled_eval_steps=eval_steps,
         )
@@ -339,31 +345,9 @@ def _maybe_override_auto_build_caches(config: TrainConfigT, auto_build: bool) ->
     data = config.data
     if data.auto_build_caches != auto_build:
         logger.info("Overriding auto_build_caches to %s", auto_build)
-        data = dataclasses.replace(data, auto_build_caches=auto_build)
-        config = replace(config, data=data)
+        data = dataclasses.replace(cast(DataclassInstance, data), auto_build_caches=auto_build)
+        config = cast(TrainConfigT, replace(cast(DataclassInstance, config), data=data))
     return config
-
-
-def _enforce_run_id(config: TrainOnPodConfigT) -> TrainOnPodConfigT:
-    """
-    Levanter will auto-generate a run ID if it's not set. We want to enforce that it's set, so that it resumes
-    properly after preemption.
-
-    Look for:
-        * config.trainer.id
-        * environment variable RUN_ID in config.env_vars
-        * environment variable RUN_ID
-        * default to a random UID
-    """
-    env_run_id = (config.env_vars or {}).get("RUN_ID")
-    inner_config, run_id = impute_run_id(
-        config.train_config,
-        output_path=config.output_path,
-        env_run_id=env_run_id,
-        impute_from_output_path=config.impute_run_id_from_output_path,
-    )
-    logger.info(f"Using run ID: {run_id}")
-    return replace(config, train_config=inner_config)
 
 
 def _normalize_jax_compilation_cache_dir(path: str) -> str:
@@ -431,20 +415,6 @@ def resolve_training_env(
     return env
 
 
-def extras_for_resources(resources: ResourceConfig) -> list[str]:
-    """Return the uv extras (``["tpu"]`` / ``["gpu"]`` / ``[]``) for a device config.
-
-    Worker JobRequests must declare the matching extras so accelerator-only
-    Python dependencies (e.g. ``jax[tpu]``, ``jax[cuda]``) are installed.
-    """
-    device = resources.device
-    if isinstance(device, TpuConfig):
-        return ["tpu"]
-    if isinstance(device, GpuConfig):
-        return ["gpu"]
-    return []
-
-
 def _prepare_training_run(
     config: TrainOnPodConfigT,
 ) -> tuple[TrainOnPodConfigT, object, dict[str, str]]:
@@ -454,25 +424,31 @@ def _prepare_training_run(
     environment dict that callers should merge into ``os.environ`` before
     invoking the Levanter main.
     """
+    train_config = config.train_config
     if config.output_path is not None:
         logger.info(f"Using output path: {config.output_path}")
-        config = _update_config_to_use_out_path(config)
+        train_config = apply_output_path(train_config, config.output_path)
+
+    train_config, run_id = _resolve_run_id(
+        train_config,
+        output_path=config.output_path,
+        env_run_id=(config.env_vars or {}).get("RUN_ID"),
+    )
+    logger.info(f"Using run ID: {run_id}")
+    config = replace(config, train_config=train_config)
 
     if isinstance(config, TrainDpoOnPodConfig):
         config = cast(TrainOnPodConfigT, _maybe_auto_resolve_dpo_schedule(config))
+        train_config = config.train_config
 
     env = resolve_training_env(config.env_vars, config.resources)
 
-    config = _enforce_run_id(config)
-    logger.info(f"Using run ID: {config.train_config.trainer.id}")
-
-    train_config = config.train_config
     train_config = _maybe_override_auto_build_caches(train_config, config.auto_build_caches)
 
     # disable accelerator requirement when running without GPU/TPU resources
     if config.resources.device.kind == "cpu":
         trainer = replace(train_config.trainer, require_accelerator=False)
-        train_config = replace(train_config, trainer=trainer)
+        train_config = replace(cast(DataclassInstance, train_config), trainer=trainer)
 
     if not isinstance(config.resources.device, CpuConfig):
         doublecheck_paths(config)
@@ -504,8 +480,6 @@ def run_levanter_train_lm(config: TrainLmOnPodConfig):
     - WANDB_API_KEY is set.
     - It checks that configured GCS paths are in the same region as the VM (except train/validation source URLs).
     """
-    # Run upstream ExecutorStep deps in the worker's region and substitute placeholders.
-    config = materialize(config)
     config, train_config, env = _prepare_training_run(config)
 
     model_config = train_config.model
@@ -524,8 +498,6 @@ def run_levanter_train_lm(config: TrainLmOnPodConfig):
 
 def run_levanter_train_dpo(config: TrainDpoOnPodConfig):
     """Run the Levanter DPO training main function in the current process."""
-    # Run upstream ExecutorStep deps in the worker's region and substitute placeholders.
-    config = materialize(config)
     config, train_config, env = _prepare_training_run(config)
     _apply_env_to_process(env)
     importlib.import_module("levanter.main.train_dpo").main(train_config)
@@ -557,14 +529,13 @@ def doublecheck_paths(config: TrainOnPodConfigT) -> TrainOnPodConfigT:
     return config
 
 
-def _add_default_env_variables(env: dict, default_env: dict | None):
+def _add_default_env_variables(env: dict, default_env: dict | None) -> dict:
+    merged: Mapping = env
     if default_env is not None:
-        default_env = deepcopy(default_env)
-        env = mergedeep.merge(default_env, env)
+        merged = mergedeep.merge(deepcopy(default_env), env)
 
     # Task environment values are serialized as strings.
-    env = {str(k): str(v) for k, v in env.items()}
-    return env
+    return {str(k): str(v) for k, v in merged.items()}
 
 
 def _check_for_wandb_key(env):
@@ -579,7 +550,3 @@ def _check_for_wandb_key(env):
                     "WANDB_API_KEY must be set in the environment. Please add it to your .config, export "
                     "WANDB_API_KEY=..., or add it to the env dict."
                 )
-
-
-if __name__ == "__main__":
-    draccus.wrap()(run_levanter_train_lm)()

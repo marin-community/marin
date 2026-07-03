@@ -27,10 +27,11 @@ from marin.datakit.download.diagnostic_logs import (
 )
 from marin.datakit.normalize import NormalizedData
 from marin.datakit.sources import all_sources
-from marin.execution.artifact import Artifact
+from marin.execution.artifact import read_artifact
+from marin.execution.lazy import materialized_config
 from marin.execution.step_runner import StepRunner
 
-from experiments.pretraining_datasets.diagnostic_logs import ghalogs_normalized, tokenize_ghalogs
+from experiments.datasets.diagnostic_logs import _ghalogs_normalized, ghalogs_dataset
 
 
 def _read_jsonl(path: str) -> list[dict[str, object]]:
@@ -141,12 +142,14 @@ def test_all_sources_includes_normalized_ghalogs_public():
     assert source.normalized.deps == [source.normalize_steps[1]]
 
 
-def test_tokenize_ghalogs_reads_datakit_normalized_output():
-    step = tokenize_ghalogs(tokenizer="test-tokenizer")
+def test_ghalogs_dataset_reads_datakit_normalized_output():
+    step = ghalogs_dataset(tokenizer="test-tokenizer")
+    normalized = _ghalogs_normalized()
 
-    assert ghalogs_normalized.name == "normalized/ghalogs/public"
-    assert step.config.train_paths == [ghalogs_normalized.as_input_name() / "outputs/main/*.parquet"]
-    assert step.config.validation_paths.value == []
+    assert normalized.name == "normalized/ghalogs/public"
+    cfg = materialized_config(step, "gs://prefix")
+    assert cfg.train_paths == [f"{normalized.path('gs://prefix')}/outputs/main/*.parquet"]
+    assert cfg.validation_paths == []
 
 
 def test_extract_diagnostic_logs_is_sample_capped(tmp_path):
@@ -305,7 +308,7 @@ def test_extract_ghalogs_step_persists_typed_artifact(tmp_path):
     )
     StepRunner().run([step])
 
-    loaded = Artifact.from_path(step, ExtractedPartitionedDiagnosticLogs)
+    loaded = read_artifact(step.output_path, ExtractedPartitionedDiagnosticLogs)
     assert loaded.source_label == "ghalogs"
     assert loaded.record_count == 1
     assert loaded.metadata_path.endswith("/metadata.json")
@@ -392,7 +395,7 @@ def test_ghalogs_public_normalize_steps_write_datakit_normalized_train_partition
     )
     StepRunner().run(list(steps))
 
-    normalized = Artifact.from_path(steps[-1], NormalizedData)
+    normalized = read_artifact(steps[-1].output_path, NormalizedData)
     rows = _read_parquet_rows(Path(normalized.main_output_dir))
 
     assert len(rows) == 1

@@ -12,8 +12,8 @@ import jax
 import numpy as np
 from rigging.filesystem import url_to_fs
 
-from levanter.tracker import Tracker, TrackerConfig
 from levanter.tracker.histogram import SummaryStats
+from levanter.tracker.tracker import Tracker, TrackerConfig
 
 pylogger = logging.getLogger(__name__)
 
@@ -145,7 +145,7 @@ class TensorboardConfig(TrackerConfig):
 
         pylogger.info(f"Writing Tensorboard logs to {dir_to_write}")
 
-        from tensorboardX import SummaryWriter  # noqa: F811
+        from tensorboardX import SummaryWriter  # noqa: F811, PLC0415  # optional dep: tensorboardx
 
         writer = SummaryWriter(
             dir_to_write,

@@ -28,6 +28,7 @@ from marin.datakit.download.davinci_dev import (
 )
 from marin.datakit.download.diagnostic_logs import GHALOGS_ROUGH_TOKENS_B, ghalogs_public_normalize_steps
 from marin.datakit.download.finepdfs import finepdfs_normalize_steps
+from marin.datakit.download.finetranslations import finetranslations_normalize_steps
 from marin.datakit.download.gpt_oss_rollouts import gpt_oss_rollouts_normalize_steps
 from marin.datakit.download.hplt import hplt_v3_normalize_steps
 from marin.datakit.download.institutional_books import institutional_books_normalize_steps
@@ -122,13 +123,6 @@ def _rows_nemotron(
 # .executor_status marker, so we can't confirm the staging run completed
 # cleanly. Re-enable once the staging is re-verified.
 #
-# TODO: confirm there's a download module for HuggingFaceFW/finetranslations.
-# Staging at ``raw/finetranslations_d17a789b`` is still in progress — no
-# provenance.json, no .executor_status=SUCCESS yet. The upstream is a parallel
-# corpus of original multilingual text + machine-translated English; splitting
-# into /multilingual and /web needs different text_field, hf_urls_glob, or
-# data_subdir so the two accounting slices don't normalize to identical rows.
-#
 @cache
 def all_sources() -> dict[str, DatakitSource]:
     """Return the canonical active source set as ``{name: DatakitSource}``.
@@ -148,6 +142,7 @@ def all_sources() -> dict[str, DatakitSource]:
         ("coderforge", coderforge_normalize_steps, 10.29),
         ("davinci-dev/ctx-native", davinci_dev_ctx_native_normalize_steps, 57.57),
         ("davinci-dev/env-native", davinci_dev_env_native_normalize_steps, 2.58),
+        ("finetranslations", finetranslations_normalize_steps, 3040.0),
         ("ghalogs/public", ghalogs_public_normalize_steps, GHALOGS_ROUGH_TOKENS_B),
         ("gpt-oss-rollouts", gpt_oss_rollouts_normalize_steps, 3.20),
         ("hplt_v3", hplt_v3_normalize_steps, 612.7),

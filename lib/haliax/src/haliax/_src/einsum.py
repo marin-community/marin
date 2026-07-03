@@ -4,18 +4,19 @@
 
 import functools
 from types import EllipsisType
+from typing import cast
 
 import jax.lax
 
 import haliax
 
 from .dot import _infer_out_sharding
-from ..axis import Axis, AxisSelector, axis_name, eliminate_axes, rearrange_for_partial_order, union_axes
-from ..core import NamedArray
-from ..jax_utils import _jittable_dg_einsum
-from ..quantization import DotGeneralOp
-from ..types import DTypeLike, PrecisionLike
-from ..util import ensure_tuple
+from haliax.axis import Axis, AxisSelector, axis_name, eliminate_axes, rearrange_for_partial_order, union_axes
+from haliax.core import NamedArray
+from haliax.jax_utils import _jittable_dg_einsum
+from haliax.quantization import DotGeneralOp
+from haliax.types import DTypeLike, PrecisionLike
+from haliax.util import ensure_tuple
 from .parsing import AliasTable, parse_einsum, raise_parse_error
 
 
@@ -24,7 +25,7 @@ def einsum(
     *arrays: NamedArray,
     precision: PrecisionLike = None,
     preferred_element_type: DTypeLike | None = None,
-    _dot_general: DotGeneralOp = jax.lax.dot_general,
+    _dot_general: DotGeneralOp | None = None,
     out_sharding=None,
     **axis_aliases: AxisSelector,
 ) -> NamedArray:
@@ -59,6 +60,10 @@ def einsum(
     Returns:
        The result of the einsum.
     """
+    if _dot_general is None:
+        # jax.lax.dot_general satisfies DotGeneralOp at runtime; its stub omits the **kwargs the Protocol allows.
+        _dot_general = cast(DotGeneralOp, jax.lax.dot_general)
+
     lhses, rhs = parse_einsum(equation)
 
     # we have essentially 3 cases:

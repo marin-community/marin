@@ -124,7 +124,7 @@ class SequenceTable(eqx.Module):
         return self._reserve_slot(slot_id)
 
     @eqx.filter_jit(donate="all")
-    def _reserve_slot(self, slot_id: jnp.ndarray | None = None) -> tuple["SequenceTable", int]:
+    def _reserve_slot(self, slot_id: jnp.ndarray | int | None = None) -> tuple["SequenceTable", int]:
         if slot_id is None:
             slot_id = INVALID
 

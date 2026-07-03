@@ -3,7 +3,8 @@
 
 import logging
 import math
-from typing import Literal, cast
+from collections.abc import Iterable
+from typing import Any, Literal, cast
 
 from datasets import Dataset, concatenate_datasets, get_dataset_config_names, load_dataset
 from levanter.tokenizers import MarinTokenizer
@@ -99,17 +100,18 @@ def _get_hendrycks_math_train() -> Dataset:
     # resulting in 12000 train and 500 test problems.
 
     test_problems: set[str] = {
-        problem["problem"]  # pyright: ignore[reportArgumentType, reportCallIssue]
-        for problem in _get_hendrycks_math_test()
+        problem["problem"] for problem in cast(Iterable[dict[str, Any]], _get_hendrycks_math_test())
     }
 
     dataset_name = "EleutherAI/hendrycks_math"
     configs = get_dataset_config_names(dataset_name)
-    pieces = []
+    pieces: list[Dataset] = []
     for cfg in configs:
         for split in ("train", "test"):
+            # Passing a single `split` yields a `Dataset`; `filter`'s decorators erase the
+            # return type, so re-narrow to `Dataset` for `concatenate_datasets`.
             ds = load_dataset(dataset_name, name=cfg, split=split)
-            ds = ds.filter(lambda example: example["problem"] not in test_problems)
+            ds = cast(Dataset, ds.filter(lambda example: example["problem"] not in test_problems))
             pieces.append(ds)
     full_dataset = concatenate_datasets(pieces)
 

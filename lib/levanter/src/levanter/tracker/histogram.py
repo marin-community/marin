@@ -7,19 +7,17 @@ import equinox
 import jax
 import jax.numpy as jnp
 import numpy as np
-from jax._src.state.indexing import dslice
-from jax.experimental import pallas as pl
-from jax.experimental.pallas import tpu as pltpu
 from jax.sharding import PartitionSpec as P
 from jaxtyping import ArrayLike, Scalar
 
 import haliax as hax
 from haliax import NamedArray
 from haliax.partitioning import shard_map
-from levanter.kernels.pallas.cost_estimate_utils import with_io_bytes_accessed
 
 
 ReduceMesh: TypeAlias = tuple[str, ...]
+
+TILE_SIZE = 1024  # tile width for the chunked histogram loop; can tune based on memory pressure
 
 
 class Histogram(equinox.Module):
@@ -239,88 +237,3 @@ def _array_spec(a: jax.Array) -> P:
         return spec
 
     return P(*([None] * a.ndim))
-
-
-TILE_SIZE = 1024  # Can tune based on memory pressure
-
-
-def _histogram_cost_reference(a: jax.Array, bin_edges: jax.Array) -> jax.Array:
-    # Mirror tile-wise histogram math without `pl.program_id` so estimate_cost can trace it.
-    a_tiled = a.reshape((-1, TILE_SIZE))
-    left_edges = bin_edges[:-1]
-    right_edges = bin_edges[1:]
-    in_bin = (a_tiled[..., None] >= left_edges[None, None, :]) & (a_tiled[..., None] < right_edges[None, None, :])
-    return in_bin.sum(axis=(0, 1), dtype=jnp.int32)
-
-
-def _histogram_cost_estimate(
-    a: jax.Array,
-    bin_edges: jax.Array,
-    *,
-    kernel_inputs_specs,
-    kernel_outputs_specs,
-) -> pl.CostEstimate | None:
-    body_cost = pl.estimate_cost(_histogram_cost_reference, a, bin_edges)
-    return with_io_bytes_accessed(
-        body_cost,
-        kernel_inputs_specs=kernel_inputs_specs,
-        kernel_outputs_specs=kernel_outputs_specs,
-    )
-
-
-def histogram_tile_kernel(a_ref, bin_edges_ref, counts_ref) -> None:
-    @pl.when(pl.program_id(0) == 0)
-    def _() -> None:
-        counts_ref[...] = jnp.zeros_like(counts_ref)
-
-    pid = pl.program_id(0)
-    start = pid * TILE_SIZE
-    # end = start + TILE_SIZE
-
-    # Load tile of a
-    a_tile = a_ref[dslice(start, TILE_SIZE)]
-    bin_edges = bin_edges_ref[...]
-
-    # Compute which bin each a_tile[i] belongs to
-    # (TILE_SIZE, num_bins)
-    in_bin = (a_tile[:, None] >= bin_edges[:-1][None, :]) & (a_tile[:, None] < bin_edges[1:][None, :])
-
-    # Sum over axis 0 → shape: (num_bins,)
-    bin_counts = in_bin.sum(axis=0)
-
-    # Accumulate into output counts (safe since grid is sequential)
-    counts_ref[...] += bin_counts
-
-
-def histogram_large_a(a: jax.Array, bin_edges: jax.Array) -> jax.Array:
-    num_bins = bin_edges.shape[0] - 1
-    padded_len = ((a.shape[0] + TILE_SIZE - 1) // TILE_SIZE) * TILE_SIZE
-
-    # Pad a if needed to make all tiles full
-    if padded_len > a.shape[0]:
-        pad_len = padded_len - a.shape[0]
-        a = jnp.pad(a, (0, pad_len), constant_values=jnp.inf)  # inf ensures they don’t fall into any bin
-
-    num_tiles = padded_len // TILE_SIZE
-    out_shape = jax.ShapeDtypeStruct((num_bins,), jnp.int32)
-
-    return pl.pallas_call(
-        histogram_tile_kernel,
-        out_shape=out_shape,
-        in_specs=[
-            pl.BlockSpec((TILE_SIZE,), lambda i: (i * TILE_SIZE,)),  # Each kernel gets one tile
-            pl.BlockSpec(bin_edges.shape, lambda i: (0,)),  # bin_edges shared to all
-        ],
-        out_specs=pl.BlockSpec((num_bins,), lambda i: (0,)),  # Shared counts across all tiles
-        grid=(num_tiles,),
-        compiler_params=pltpu.TPUCompilerParams(
-            dimension_semantics=["arbitrary"]  # Ensure sequential grid (needed for += safety)
-        ),
-        cost_estimate=_histogram_cost_estimate(
-            a,
-            bin_edges,
-            kernel_inputs_specs=(a, bin_edges),
-            kernel_outputs_specs=out_shape,
-        ),
-        interpret=True,
-    )(a, bin_edges)

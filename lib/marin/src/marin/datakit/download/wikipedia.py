@@ -59,7 +59,11 @@ def process_file(input_file: str, output_path: str) -> Iterable[str]:
         with open_url(input_file) as f:
             with tarfile.open(fileobj=f, mode="r:gz") as tr:
                 for info in tr:
-                    with tr.extractfile(info) as file:
+                    file = tr.extractfile(info)
+                    if file is None:
+                        # Non-regular members (e.g. directories) have no extractable content.
+                        continue
+                    with file:
                         file_content = file.read()
                         file_path = os.path.join(output_path, info.name + ".gz")
 

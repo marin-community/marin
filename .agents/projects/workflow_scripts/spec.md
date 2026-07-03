@@ -279,13 +279,13 @@ def collect_diagnostics(request: DiagnosticsRequest) -> Path:
 CLI:
 
 ```bash
-uv run python scripts/workflows/iris_monitor.py wait \
+uv run python scripts/ci/iris_monitor.py wait \
   --job-id "$JOB_ID" \
   --iris-config "$IRIS_CONFIG" \
   --poll-interval 30 \
   --github-output
 
-uv run python scripts/workflows/iris_monitor.py collect \
+uv run python scripts/ci/iris_monitor.py collect \
   --job-id "$JOB_ID" \
   --iris-config "$IRIS_CONFIG" \
   --provider gcp \

@@ -12,16 +12,18 @@ have otherwise had to flag*.
 
 | Surface | Trigger | Output | Persisted? |
 |---|---|---|---|
-| `pre-commit.py --review` | Local, advisory | Free-text findings to stdout, citing `ml-…` codes from `infra/lint.md` | No |
+| `pre-commit.py --review` | Local, advisory | Free-text findings to stdout, citing `ml-…` codes from `infra/lint/` | No |
 | `/code-review` skill (low/med/high/ultra) | Local on diff; `--comment` posts inline | Text findings; optional inline GH comments | Only if `--comment` |
 | `/review-pr` skill | Local or via GHA on PR | Multi-agent findings; `--comment` posts inline | Only if `--comment` |
-| `ops-claude-review.yaml` | GHA: PR open/ready, or "claude review this" comment | Calls `/review-pr --comment` → GH inline comments | Yes (in GH API) |
+| `ops-claude-review.yaml` | GHA: PR open/ready/reopened | Calls `/review-pr --comment` → GH inline comments | Yes (in GH API) |
 | `marin-lint.yaml` | GHA on every push/PR | pre-commit pass/fail; exit code | GHA logs only |
 | Human PR review comments | Reviewers on PRs | GH review/review-comments | Yes (in GH API) |
 
 Existing telemetry plumbing we could reuse: **Finelog** (`lib/finelog`, Arrow
-IPC + DuckDB-backed, already used by Iris) and **W&B `marin-monitoring`**
-(`infra/github_wandb_metrics.py` already logs weekly GH metrics there).
+IPC + DuckDB-backed, already used by Iris) and **W&B `marin-monitoring`**. (An
+earlier weekly-metrics script, `infra/github_wandb_metrics.py`, targeted that
+project, but its cron and entry point were dropped in the monorepo migration and
+the script was later removed as dead code — there is no live cron to reuse.)
 
 ---
 
@@ -70,8 +72,8 @@ elapsed time, agent model. Stored in a new Finelog table
   only as we instrument more of CI.
 
 ### Option D — Just log to W&B `marin-monitoring`
-Reuse `infra/github_wandb_metrics.py`'s existing weekly cron. Add a new run
-that logs review-automation tables/metrics there.
+Stand up a new weekly cron (the old `infra/github_wandb_metrics.py` cron no
+longer exists) that logs review-automation tables/metrics to the project.
 
 - Pros: dashboarding is free (W&B charts), already authed in CI, already on
   weekly cadence.
@@ -120,8 +122,7 @@ Approximated as:
      option; off by default, on in CI.
 
 3. **Daily aggregator** — new script
-   `infra/codehealth/review.py` (cron'd via GHA, similar shape to
-   `github_wandb_metrics.py`):
+   `infra/codehealth/review.py` (cron'd via GHA):
    - List PRs merged in the last 24h.
    - For each: pull review threads + inline comments via `gh api`
      (`/repos/{owner}/{repo}/pulls/{n}/comments`,

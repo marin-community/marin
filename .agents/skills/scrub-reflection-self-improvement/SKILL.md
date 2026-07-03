@@ -48,7 +48,7 @@ turning ad-hoc scrub judgment into explicit repeatable guidance).
 
 - Keep rationale explicit: observed gap, change made (or plan), and expected impact.
 - Prefer durable artifacts over transient notes: land guidance updates in `AGENTS.md` and/or recipe docs when that is the primary improvement.
-- Treat local-only edits as incomplete work. If you modify files, publish the result (commit/push and open or update a PR per `.agents/skills/author-pr/SKILL.md`) before finishing this scrub run.
+- Treat local-only edits as incomplete work. If you modify files, publish the result (commit/push and open or update a PR per `.agents/skills/commit/SKILL.md`) before finishing this scrub run.
 - If publish is blocked (auth, permissions, CI infra, etc.), report the blocker and set a future `needs_followup_at` instead of ending the run.
 - If you choose no-op, include explicit inspected signals and why no justified improvement exists now.
 - End the run with exactly one footer line of valid one-line JSON: `HARNESS_SCRUB_LOOP {"needs_followup_at":null}`. Set `needs_followup_at` to null when the run is complete, or a future RFC 3339 timestamp when another follow-up turn is needed.

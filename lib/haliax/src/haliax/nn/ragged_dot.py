@@ -11,7 +11,7 @@ from typing import Literal, TypeAlias
 import jax
 import jax.numpy as jnp
 
-from ..partitioning import ResourceAxis
+from haliax.partitioning import ResourceAxis
 
 logger = logging.getLogger(__name__)
 

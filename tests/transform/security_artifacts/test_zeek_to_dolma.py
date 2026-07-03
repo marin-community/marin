@@ -3,8 +3,6 @@
 
 """Tests for the Zeek → Dolma transform."""
 
-from __future__ import annotations
-
 import gzip
 import json
 from pathlib import Path

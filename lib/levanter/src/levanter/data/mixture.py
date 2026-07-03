@@ -208,7 +208,7 @@ class MixtureDataset(AsyncDataset[T]):
     def _get_stage_for_block(self, block_id: int) -> int:
         block_start = block_id * self.block_size
         stage_starts = np.array([start for start, _ in self.weight_stages])
-        return max(0, np.searchsorted(stage_starts, block_start, side="right") - 1)
+        return int(max(0, np.searchsorted(stage_starts, block_start, side="right") - 1))
 
     @functools.lru_cache(maxsize=32)
     def _get_block(self, index: int) -> np.ndarray:

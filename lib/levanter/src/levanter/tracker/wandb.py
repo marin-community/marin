@@ -1,33 +1,32 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import hashlib
+import json
 import logging
 import os
+import subprocess
 import tempfile
 import typing
 import warnings
-import json
-import hashlib
 from dataclasses import dataclass
 from typing import Any, List, Optional, Union
 
+import fsspec
 import jax
 import numpy as np
+import wandb
 from draccus import field
 from git import InvalidGitRepositoryError, NoSuchPathError, Repo
 
-from levanter.tracker import Tracker
 from levanter.tracker.background import maybe_wrap_background
 from levanter.tracker.helpers import generate_pip_freeze, infer_experiment_git_root
 from levanter.tracker.histogram import SummaryStats
-from levanter.tracker.tracker import TrackerConfig
+from levanter.tracker.tracker import Tracker, TrackerConfig
 from levanter.utils import jax_utils
-
 
 if typing.TYPE_CHECKING:
     import wandb.sdk.lib.disabled
-
-    import wandb
 
 
 logger = logging.getLogger(__name__)
@@ -49,8 +48,6 @@ class WandbTracker(Tracker):
         suppress_logging: bool = False,
         minimum_log_step: int = 0,
     ):
-        import wandb
-
         if run is None:
             if wandb.run is None:
                 logger.warning("Wandb run is not initialized. Initializing a new run.")
@@ -132,8 +129,6 @@ class WandbTracker(Tracker):
         )
 
     def log_html(self, key: str, html_path, *, step: Optional[int], commit: Optional[bool] = None):
-        import wandb
-
         if step is None and not commit:
             step = self.run.step
         if step is not None and step < self.run.step:
@@ -151,28 +146,40 @@ class WandbTracker(Tracker):
         if self._suppress_logging:
             return
 
+        # Write the replicate file before touching wandb: run.finish() can wedge
+        # past the background finish timeout, and by the time it raises the
+        # process is tearing down and fsspec can no longer schedule writes.
+        # This write is best-effort insurance — its failure must not keep
+        # run.finish() from running — and its summary may miss the final
+        # commit, so a successful finish rewrites the file with the flushed
+        # values below.
+        try:
+            self._write_replicate_file()
+        except Exception:
+            logger.exception("Pre-finish replicate write failed; retrying after wandb finish.")
+
         logger.info("Finishing wandb run...")
-        # Finish wandb first to ensure all metrics are synced to the summary
         self.run.finish()
-        # Then write the replicate file with the complete summary
         self._write_replicate_file()
 
     def _write_replicate_file(self):
         if self._replicate_path is None:
             return
 
-        import fsspec
-
         metrics_file = f"{self._replicate_path}/tracker_metrics.jsonl"
         fs, _, _ = fsspec.get_fs_token_paths(metrics_file)
         fs.makedirs(self._replicate_path, exist_ok=True)
 
-        with fs.open(metrics_file, "w") as f:
-            record = {
-                "config": _convert_value_to_loggable_rec(dict(self.run.config)),
-                "summary": _convert_value_to_loggable_rec(_summary_for_replicate(self.run)),
-            }
+        record = {
+            "config": _convert_value_to_loggable_rec(dict(self.run.config)),
+            "summary": _convert_value_to_loggable_rec(_summary_for_replicate(self.run)),
+        }
+        # Write to a temp name and rename into place so a failed write can never
+        # truncate an existing tracker_metrics.jsonl (e.g. the pre-finish copy).
+        tmp_file = f"{metrics_file}.tmp"
+        with fs.open(tmp_file, "w") as f:
             f.write(json.dumps(record, sort_keys=True, default=str) + "\n")
+        fs.mv(tmp_file, metrics_file)
 
 
 def _summary_for_replicate(run: WandbRun) -> dict[str, Any]:
@@ -256,8 +263,6 @@ def _convert_value_to_loggable_rec(value: Any):
 
 
 def _convert_summary_stats_to_loggable(prefix: str, value: SummaryStats, *, include_prefix: bool = True):
-    import wandb
-
     out: dict[str, Any] = {}
     base = f"{prefix}/" if include_prefix and prefix else ""
     out[f"{base}min"] = _convert_value_to_loggable_rec(value.min)
@@ -276,11 +281,7 @@ def _convert_summary_stats_to_loggable(prefix: str, value: SummaryStats, *, incl
 
 
 def is_wandb_available():
-    try:
-        import wandb
-    except ImportError:
-        return False
-    return wandb is not None and wandb.run is not None
+    return wandb.run is not None
 
 
 @TrackerConfig.register_subclass("wandb")
@@ -329,8 +330,6 @@ class WandbConfig(TrackerConfig):
     """Maximum seconds to wait for the background thread to drain on finish()."""
 
     def init(self, run_id: Optional[str]) -> Tracker:
-        import wandb
-
         if run_id is not None and self.id is not None and run_id != self.id:
             warnings.warn(
                 f"Both trainer's id {run_id} and WandB's id {self.id} are set. WandB will use the id set in its"
@@ -420,7 +419,10 @@ class WandbConfig(TrackerConfig):
                 suppress_logging=not is_primary_process,
                 minimum_log_step=minimum_log_step,
             ),
-            enabled=self.background,
+            # Only the primary process actually logs; a suppressed tracker no-ops every
+            # call, so wrapping it in a background thread is pure overhead — and would
+            # make non-primary hosts stage (copy) large profile artifacts they discard.
+            enabled=self.background and is_primary_process,
             max_queue_size=self.background_max_queue_size,
             finish_timeout=self.background_finish_timeout,
         )
@@ -462,8 +464,6 @@ class WandbConfig(TrackerConfig):
             if "SHA is empty" in str(e):
                 # we have another workaround, which is to use the git command line
                 # git --git-dir={code_dir}/.git rev-parse HEAD
-                import subprocess
-
                 try:
                     out = subprocess.run(
                         ["git", "--git-dir", f"{code_dir}/.git", "rev-parse", "HEAD"], check=True, capture_output=True

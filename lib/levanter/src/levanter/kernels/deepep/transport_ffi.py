@@ -23,6 +23,7 @@ import jax
 import jax.numpy as jnp
 import jaxlib
 import numpy as np
+
 from levanter.kernels.deepep.availability import (
     BUILD_WITH_TORCH_EXTENSION_ENV,
     DISABLE_SM90_ENV,
@@ -243,7 +244,7 @@ def _prepared_cuda_sources(build_dir: Path, deepep_root: Path) -> tuple[Path, ..
 
 
 def _preload_torch_shared_libraries() -> None:
-    import torch
+    import torch  # noqa: PLC0415  # optional dep: torch
 
     lib_dir = Path(torch.__file__).resolve().parent / "lib"
     if not lib_dir.is_dir():
@@ -478,7 +479,7 @@ def _build_shared_library(artifact: BuildArtifact) -> None:
 
 
 def _build_with_torch_extension(out_path: Path, deepep_root: Path, compatibility_flags: list[str]) -> None:
-    from torch.utils import cpp_extension
+    from torch.utils import cpp_extension  # noqa: PLC0415  # optional dep: torch
 
     build_dir = out_path.parent
     name = f"deepep_transport_ffi_{build_dir.name}"
@@ -902,7 +903,18 @@ def _dispatch_intranode_impl(
         is_token_in_rank,
         num_experts=np.int32(num_experts),
     )
-    return results[:10]
+    return (
+        results[0],
+        results[1],
+        results[2],
+        results[3],
+        results[4],
+        results[5],
+        results[6],
+        results[7],
+        results[8],
+        results[9],
+    )
 
 
 def _dispatch_intranode_cached_impl(

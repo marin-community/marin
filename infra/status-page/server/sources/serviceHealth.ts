@@ -248,6 +248,18 @@ export function serviceHealthSeries(): ServiceHealthSeries[] {
   return ACTIVE_SERVICE_HEALTH_CONFIGS.map(metadata);
 }
 
+// Base URL of the active environment's finelog log-server (port 10001),
+// honouring the same overrides + GCE discovery the health probe uses. The
+// probes panel queries this server's StatsService for the canary metrics.
+export async function activeFinelogUrl(): Promise<string> {
+  const config = ACTIVE_SERVICE_HEALTH_CONFIGS.find((c) => c.service === "finelog");
+  if (!config) {
+    throw new Error(`no finelog service configured for environment ${ACTIVE_SERVICE_ENVIRONMENT}`);
+  }
+  const url = await discoverGceUrl(config);
+  return url.replace(/\/$/, "");
+}
+
 export async function serviceHealthSnapshot(): Promise<ServiceHealthSnapshot[]> {
   return Promise.all(ACTIVE_SERVICE_HEALTH_CONFIGS.map(probe));
 }

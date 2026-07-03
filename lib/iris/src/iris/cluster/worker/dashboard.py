@@ -4,15 +4,15 @@
 """HTTP dashboard with Connect RPC and web UI for worker monitoring."""
 
 from starlette.applications import Starlette
-from starlette.middleware.wsgi import WSGIMiddleware
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse
 from starlette.routing import Mount, Route
 
 from iris.cluster.dashboard_common import favicon_route, html_shell, static_files_mount
 from iris.cluster.worker.service import WorkerServiceImpl
+from iris.rpc.async_adapter import AsyncServiceAdapter
 from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
-from iris.rpc.worker_connect import WorkerServiceWSGIApplication
+from iris.rpc.worker_connect import WorkerServiceASGIApplication
 
 
 class WorkerDashboard:
@@ -38,8 +38,12 @@ class WorkerDashboard:
         return self._app
 
     def _create_app(self) -> Starlette:
-        rpc_wsgi_app = WorkerServiceWSGIApplication(service=self._service, compressions=IRIS_RPC_COMPRESSIONS)
-        rpc_app = WSGIMiddleware(rpc_wsgi_app)
+        # The ASGI connect app awaits each handler; AsyncServiceAdapter dispatches
+        # the sync WorkerServiceImpl methods to a thread.
+        rpc_app = WorkerServiceASGIApplication(
+            service=AsyncServiceAdapter(self._service),
+            compressions=IRIS_RPC_COMPRESSIONS,
+        )
 
         # Vue Router handles client-side routing, so every SPA path serves the same shell.
         routes = [
@@ -49,7 +53,7 @@ class WorkerDashboard:
             Route("/task/{task_id:path}", self._dashboard),
             Route("/status", self._dashboard),
             static_files_mount(),
-            Mount(rpc_wsgi_app.path, app=rpc_app),
+            Mount(rpc_app.path, app=rpc_app),
         ]
         return Starlette(routes=routes)
 

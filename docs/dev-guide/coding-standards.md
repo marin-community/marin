@@ -310,13 +310,12 @@ dependencies. Cleanup workflows should flag any violation.
 
 ## 11. Testing Standards
 
-- Use `pytest` with fixtures and parameterization. Top-level `def test_*`
-  functions, not test classes.
-- Prefer integration-style tests that validate observable behavior.
-- No tautological tests (asserting that a constructor sets an attribute).
-- No mocks except at I/O boundaries. Prefer fakes backed by in-memory state.
-- Every test function must contain at least one `assert` or `pytest.raises`.
-- Run relevant tests before submitting: `uv run pytest -m 'not slow' <paths>`.
+Root `TESTING.md` is the canonical project-wide testing policy. Read it before
+writing or reviewing tests.
+
+For tests under `lib/*`, also read the nearest module `AGENTS.md` and any module
+`TESTING.md` it references. Module docs define local commands, markers, fakes,
+mocks, optional dependencies, and integration-test boundaries.
 
 ---
 

@@ -12,7 +12,7 @@ import numpy as np
 from haliax.jax_utils import is_jax_array_like
 from jaxtyping import PyTree
 
-from .jagged_array import JaggedArrayStore
+from .jagged_array import JaggedArrayStore, charge_store_read_budget
 
 T = TypeVar("T", bound=PyTree)
 
@@ -55,6 +55,8 @@ class TreeStore(Generic[T]):
         """
         Open a TreeStoreBuilder from a file.
         """
+        if mode == "r":
+            charge_store_read_budget(path)
         tree = _construct_builder_tree(exemplar, path, mode, cache_metadata)
         return TreeStore(tree, path, mode)
 
@@ -63,6 +65,8 @@ class TreeStore(Generic[T]):
         """
         Open a TreeStoreBuilder from a file asynchronously.
         """
+        if mode == "r":
+            charge_store_read_budget(path)
         tree = await _construct_builder_tree_async(exemplar, path, mode, cache_metadata)
         return TreeStore(tree, path, mode)
 
@@ -215,14 +219,12 @@ async def _construct_builder_tree_async(exemplar, path, mode, cache_metadata):
 
 
 def _render_path_elem(x):
-    match x:
-        case jtu.DictKey(key):
-            return f"{key}"
-        case jtu.GetAttrKey(key):
-            return f"{key}"
-        case jtu.SequenceKey(i):
-            return f"{i}"
-        case jtu.FlattenedIndexKey(i):
-            return f"{i}"
-        case _:
-            return str(x)
+    if isinstance(x, jtu.DictKey):
+        return f"{x.key}"
+    if isinstance(x, jtu.GetAttrKey):
+        return f"{x.name}"
+    if isinstance(x, jtu.SequenceKey):
+        return f"{x.idx}"
+    if isinstance(x, jtu.FlattenedIndexKey):
+        return f"{x.key}"
+    return str(x)

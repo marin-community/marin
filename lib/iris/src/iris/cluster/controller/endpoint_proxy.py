@@ -58,6 +58,8 @@ from starlette.background import BackgroundTask
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response, StreamingResponse
 
+from iris.cluster.controller.endpoint_service import proxy_name_to_endpoint_names
+
 logger = logging.getLogger(__name__)
 
 # Resolves an endpoint wire name (e.g. ``/system/log-server``) to an
@@ -104,7 +106,14 @@ _LOCATION_HEADERS: frozenset[str] = frozenset({"location", "content-location"})
 
 # Bound the connection pool explicitly so httpx default drift cannot silently
 # change resource usage on the controller.
-_HTTPX_LIMITS = httpx.Limits(max_connections=100, max_keepalive_connections=20)
+#
+# max_keepalive_connections=0 disables connection reuse to upstreams. Reuse
+# races with upstream keepalive lifecycle — the browser fires a burst of asset
+# requests and cancels in-flight ones on refresh, leaving a pooled connection
+# half-read; the next request on it fails mid-stream with httpx.ReadError, which
+# surfaces as an uncaught 500. Dashboard-proxy traffic is low, so a fresh
+# connection per request is a fine trade for eliminating that flakiness.
+_HTTPX_LIMITS = httpx.Limits(max_connections=100, max_keepalive_connections=0)
 
 
 def _build_forwarded_headers(request: Request, *, proxy_prefix: str) -> dict[str, str]:
@@ -173,6 +182,21 @@ def _rewrite_location(loc: str, *, upstream_base: str, proxy_prefix: str) -> str
     return loc
 
 
+def _request_has_body(request: Request) -> bool:
+    """Whether the inbound request carries a body to forward upstream.
+
+    A body is present when Content-Length is non-zero or Transfer-Encoding is
+    set. Bodyless requests (typically GET/HEAD) must NOT be forwarded with a
+    streamed body: ``content=request.stream()`` makes httpx frame an empty
+    chunked body, which some upstreams (e.g. hyper) answer by closing the
+    connection — poisoning a reused keepalive connection for the next request.
+    """
+    content_length = request.headers.get("content-length")
+    if content_length is not None and content_length != "0":
+        return True
+    return "transfer-encoding" in request.headers
+
+
 class EndpointProxy:
     """Forwards arbitrary HTTP requests to a registered endpoint.
 
@@ -218,6 +242,7 @@ class EndpointProxy:
         encoded_name: str,
         sub_path: str,
         proxy_prefix: str,
+        address: str | None = None,
     ) -> Response:
         """Forward ``request`` to ``encoded_name`` and stream the response back.
 
@@ -227,12 +252,15 @@ class EndpointProxy:
         ``Location`` / ``Content-Location`` values and forwarded as
         ``X-Forwarded-Prefix``; pass ``""`` when the public URL already
         roots the upstream (subdomain style).
+
+        ``address`` is the upstream for a caller that already resolved (and
+        authorized) the endpoint — authorization and forwarding must use the
+        same resolution. When omitted, the endpoint is resolved via the
+        injected ``resolve`` callable, using the same decode.
         """
-        # Iris wire-format names start with '/'. Try the slash-prefixed form
-        # first (the common case for task-registered endpoints), then the bare
-        # form for endpoints registered without a leading slash.
-        slashed = encoded_name.replace(".", "/")
-        address = self._resolve(f"/{slashed}") or self._resolve(slashed)
+        if address is None:
+            slashed, bare = proxy_name_to_endpoint_names(encoded_name)
+            address = self._resolve(slashed) or self._resolve(bare)
         if address is None:
             logger.warning("Proxy %s %s -> no endpoint %r", request.method, request.url.path, encoded_name)
             return JSONResponse(
@@ -250,11 +278,15 @@ class EndpointProxy:
         forward_headers = {k: v for k, v in request.headers.items() if k.lower() not in _HOP_BY_HOP}
         forward_headers.update(_build_forwarded_headers(request, proxy_prefix=proxy_prefix))
 
+        # Only forward a body when the request has one; a bodyless GET sent with
+        # content=request.stream() becomes a chunked empty body (see
+        # _request_has_body). content=None is httpx's "no body".
+        body = request.stream() if _request_has_body(request) else None
         upstream_req = self._client.build_request(
             request.method,
             upstream_url,
             headers=forward_headers,
-            content=request.stream(),
+            content=body,
         )
         try:
             upstream_resp = await self._client.send(upstream_req, stream=True)

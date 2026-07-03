@@ -8,12 +8,11 @@ Long-form video captioning dataset. Each row carries a paragraph-level
 row as the merged caption followed by timestamp-labeled frame captions.
 """
 
-import hashlib
-
 from fray import ResourceConfig
 from zephyr import Dataset, ZephyrContext, counters, load_parquet
 
 from marin.datakit.download.huggingface import download_hf_step
+from marin.datakit.download.rollout_transforms import text_document
 from marin.datakit.normalize import normalize_step
 from marin.execution.step_spec import StepSpec
 
@@ -27,7 +26,7 @@ def row_to_doc(row: dict) -> list[dict]:
     frame_captions = row.get("frame_captions") or []
 
     if not merged.strip():
-        counters.increment("molmo2_cap/dropped")
+        counters.pipeline.update_counter("molmo2_cap/dropped", 1)
         return []
 
     parts = [merged.strip()]
@@ -39,14 +38,8 @@ def row_to_doc(row: dict) -> list[dict]:
 
     text = "\n\n".join(parts)
 
-    counters.increment("molmo2_cap/kept")
-    return [
-        {
-            "id": hashlib.sha256(text.encode("utf-8")).hexdigest(),
-            "text": text,
-            "source": HF_DATASET_ID,
-        }
-    ]
+    counters.pipeline.update_counter("molmo2_cap/kept", 1)
+    return [text_document(text, HF_DATASET_ID)]
 
 
 def transform(input_path: str, output_path: str) -> None:

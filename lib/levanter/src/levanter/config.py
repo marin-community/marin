@@ -142,7 +142,7 @@ def _maybe_get_config_path_and_cmdline_args(args: List[str]):
                 temp_file = tempfile.NamedTemporaryFile(prefix="config", suffix=".yaml", delete=False)
                 temp_config_path = temp_file.name
                 temp_file.close()
-                atexit.register(lambda path=temp_config_path: os.unlink(path))
+                atexit.register(lambda path=temp_config_path: os.unlink(path))  # pyrefly: ignore[missing-argument]
                 fs.get(fs_path, temp_config_path)
                 config_path = temp_config_path
 
@@ -158,7 +158,7 @@ def _maybe_get_config_path_and_cmdline_args(args: List[str]):
             temp_merged_config_path = tempfile.NamedTemporaryFile(prefix="config_merged", suffix=".yaml", delete=False)
             merged_config_path = temp_merged_config_path.name
             temp_merged_config_path.close()
-            atexit.register(lambda path=merged_config_path: os.unlink(path))
+            atexit.register(lambda path=merged_config_path: os.unlink(path))  # pyrefly: ignore[missing-argument]
             with open(merged_config_path, "w") as f:
                 for config_path in config_paths:
                     with open(config_path) as config_file:

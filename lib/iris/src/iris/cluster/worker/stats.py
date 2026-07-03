@@ -6,8 +6,7 @@
 - ``iris.worker`` / ``iris.task`` — worker-emitted host and per-attempt
   resource rows. Replace the controller's old in-memory history tables.
 - ``iris.task_status`` — markdown status text pushed from inside a running
-  task via ``RemoteClusterClient.report_task_status_text``. Replaces the
-  in-memory dict that previously backed ``ControllerService.SetTaskStatusText``.
+  task via ``RemoteClusterClient.report_task_status_text``.
 
 The ``iris.profile`` schema lives in ``iris.cluster.runtime.profile`` next to
 the capture machinery — see ``IrisProfile`` and ``PROFILE_NAMESPACE`` there.
@@ -17,10 +16,8 @@ schema is registered lazily on first ``report_task_status_text`` call so a
 CLI that never touches status text doesn't open a finelog connection.
 """
 
-from __future__ import annotations
-
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime
 from enum import StrEnum
 from typing import ClassVar
 
@@ -51,7 +48,7 @@ def stats_timestamp() -> datetime:
     datetime column (stored as TIMESTAMP_MS by finelog). Built from rigging's
     ``Timestamp.now()`` so the time source stays consistent with the rest of iris.
     """
-    return datetime.fromtimestamp(Timestamp.now().epoch_seconds(), tz=timezone.utc).replace(tzinfo=None)
+    return Timestamp.now().as_naive_utc()
 
 
 class WorkerStatus(StrEnum):
