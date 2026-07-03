@@ -38,6 +38,9 @@ from levanter.grug._moe.source_push_inbox import (
 
 
 KERNEL_NAME = "source_push_w2_return"
+W2_HIDDEN_INPUT_W13_REFERENCE = "w13_reference"
+W2_HIDDEN_INPUT_SYNTHETIC = "synthetic"
+W2_HIDDEN_INPUT_MODES = (W2_HIDDEN_INPUT_W13_REFERENCE, W2_HIDDEN_INPUT_SYNTHETIC)
 
 
 @dataclass(frozen=True)
@@ -83,7 +86,7 @@ def validate_w2_return_config(config: PushInboxConfig) -> None:
         raise ValueError(f"hidden_dim must be divisible by block_n for W2, got {config.hidden_dim=} {config.block_n=}")
 
 
-def make_w_down(config: PushInboxConfig) -> jax.Array:
+def make_w_down(config: PushInboxConfig) -> np.ndarray:
     """Create deterministic W2 weights for source-push W2 return benchmarks."""
 
     expert_scale = (((np.arange(config.experts_per_rank, dtype=np.float32) % 5) + 1.0) / config.intermediate_dim)[
@@ -97,7 +100,18 @@ def make_w_down(config: PushInboxConfig) -> jax.Array:
     w_down = (
         expert_scale + dst_scale + (k_component * n_component) / (32.0 * config.intermediate_dim * config.hidden_dim)
     )
-    return jnp.asarray(w_down, dtype=jnp.bfloat16)
+    return w_down.astype(np.float32)
+
+
+def make_synthetic_hidden(config: PushInboxConfig) -> np.ndarray:
+    """Create deterministic expert-major hidden rows for W2-only timing."""
+
+    hidden = np.empty((config.ep_size, config.hidden_rows_per_rank, config.intermediate_dim), dtype=np.float32)
+    k_component = (np.arange(config.intermediate_dim, dtype=np.float32) % 17)[None, :] * 0.0001
+    for dst in range(config.ep_size):
+        row_component = (np.arange(config.hidden_rows_per_rank, dtype=np.float32)[:, None] % 2048) * 0.00001
+        hidden[dst] = 0.125 + 0.03125 * dst + row_component + k_component
+    return hidden
 
 
 def source_queue_from_destination_return(
@@ -169,26 +183,39 @@ def reference_w2_return_by_destination(
     return jnp.asarray(return_by_destination)
 
 
-def make_w2_return_source_plan_inputs(config: PushInboxConfig) -> W2ReturnHostInputs:
+def make_w2_return_source_plan_inputs(
+    config: PushInboxConfig,
+    *,
+    hidden_input_mode: str = W2_HIDDEN_INPUT_SYNTHETIC,
+) -> W2ReturnHostInputs:
     """Build W2 inputs from the current source-padded SourcePushPlan W13 layout."""
 
     validate_w2_return_config(config)
+    if hidden_input_mode not in W2_HIDDEN_INPUT_MODES:
+        raise ValueError(f"unknown hidden_input_mode={hidden_input_mode!r}; expected one of {W2_HIDDEN_INPUT_MODES}")
     host_inputs = _make_source_push_plan_inputs(config)
-    w_gate_up = np.asarray(jax.device_get(_make_weights(config)), dtype=np.float32)
-    hidden = _reference_hidden(
-        config,
-        host_inputs.x,
-        host_inputs.send_meta,
-        w_gate_up,
-        host_inputs.expert_base,
-        host_inputs.src_base_by_expert,
-        use_exact_expert_major=host_inputs.use_exact_expert_major,
-    )
+    if hidden_input_mode == W2_HIDDEN_INPUT_W13_REFERENCE:
+        w_gate_up = np.asarray(jax.device_get(_make_weights(config)), dtype=np.float32)
+        hidden = _reference_hidden(
+            config,
+            host_inputs.x,
+            host_inputs.send_meta,
+            w_gate_up,
+            host_inputs.expert_base,
+            host_inputs.src_base_by_expert,
+            use_exact_expert_major=host_inputs.use_exact_expert_major,
+        )
+    else:
+        hidden = make_synthetic_hidden(config)
     return W2ReturnHostInputs(
         hidden=hidden.astype(np.float32),
         recv_meta=host_inputs.recv_meta,
-        w_down=np.asarray(jax.device_get(make_w_down(config)), dtype=np.float32),
-        queue_stats={**host_inputs.queue_stats, "w2_input_mode": "source_push_plan"},
+        w_down=make_w_down(config),
+        queue_stats={
+            **host_inputs.queue_stats,
+            "w2_input_mode": "source_push_plan",
+            "w2_hidden_input_mode": hidden_input_mode,
+        },
     )
 
 
@@ -347,7 +374,7 @@ def _validate_w2_return(
 def _run_w2_return_one(
     config: PushInboxConfig,
     settings: SourcePushInboxRunSettings,
-    input_builder: Callable[[PushInboxConfig], W2ReturnHostInputs] = make_w2_return_source_plan_inputs,
+    input_builder: Callable[[PushInboxConfig], W2ReturnHostInputs],
     *,
     row_metadata: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
@@ -464,6 +491,7 @@ def run_source_push_w2_return_source_plan(
     debug_exceptions: bool = False,
     separate_compile: bool = False,
     progress_events: bool = False,
+    hidden_input_mode: str = W2_HIDDEN_INPUT_SYNTHETIC,
 ) -> list[dict[str, Any]]:
     """Run destination-local W2 over source-padded SourcePushPlan hidden rows."""
 
@@ -476,7 +504,14 @@ def run_source_push_w2_return_source_plan(
         separate_compile=separate_compile,
         progress_events=progress_events,
     )
-    return _run_w2_return_one(config, settings)
+    return _run_w2_return_one(
+        config,
+        settings,
+        input_builder=lambda run_config: make_w2_return_source_plan_inputs(
+            run_config,
+            hidden_input_mode=hidden_input_mode,
+        ),
+    )
 
 
 def _emit_progress(config: PushInboxConfig, progress_events: bool, event: str) -> None:

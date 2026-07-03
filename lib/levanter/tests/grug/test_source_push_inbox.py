@@ -463,6 +463,7 @@ def test_source_push_w2_source_plan_inputs_match_reference_layout():
     )
 
     assert inputs.queue_stats["w2_input_mode"] == "source_push_plan"
+    assert inputs.queue_stats["w2_hidden_input_mode"] == "synthetic"
     assert inputs.hidden.shape == (config.ep_size, config.hidden_rows_per_rank, config.intermediate_dim)
     assert source_queue.shape == (
         config.ep_size,
@@ -472,6 +473,32 @@ def test_source_push_w2_source_plan_inputs_match_reference_layout():
         config.hidden_dim,
     )
     assert np.count_nonzero(source_queue) > 0
+
+
+def test_source_push_w2_source_plan_inputs_can_use_w13_reference_hidden():
+    config = source_push_inbox.PushInboxConfig(
+        ep_size=2,
+        entries_per_rank=4,
+        inbox_slots=2,
+        hidden_dim=8,
+        intermediate_dim=8,
+        block_m=2,
+        block_k=4,
+        block_n=4,
+        experts_per_rank=2,
+        send_worker_programs_per_peer=1,
+        worker_programs_per_peer=4,
+        routing="balanced",
+        tokens_per_rank=5,
+        topk=2,
+        capacity_factor=1.25,
+    )
+
+    inputs = source_push_w2_return.make_w2_return_source_plan_inputs(config, hidden_input_mode="w13_reference")
+
+    assert inputs.queue_stats["w2_hidden_input_mode"] == "w13_reference"
+    assert inputs.hidden.shape == (config.ep_size, config.hidden_rows_per_rank, config.intermediate_dim)
+    assert np.count_nonzero(inputs.hidden) > 0
 
 
 def test_source_push_package_private_runner_returns_structured_validation_errors():
