@@ -11,7 +11,14 @@ import marin.execution.step_runner as step_runner_module
 import pytest
 from fray.current_client import current_client, set_current_client
 from fray.types import ResourceConfig
-from marin.execution.artifact import FINGERPRINT_KEY, VERSION_KEY, Artifact, read_artifact, write_artifact
+from marin.execution.artifact import (
+    FINGERPRINT_KEY,
+    VERSION_KEY,
+    Artifact,
+    read_artifact,
+    read_record,
+    write_artifact,
+)
 from marin.execution.remote import RemoteCallable, remote
 from marin.execution.step_runner import StepRunner
 from marin.execution.step_spec import StepSpec
@@ -147,6 +154,39 @@ def test_runner_saves_artifact_automatically(tmp_path):
 
     loaded = read_artifact(out, Artifact)
     assert loaded.path == out
+
+
+def test_runner_record_carries_lineage(tmp_path):
+    """A runner-saved record carries identity + lineage (name, deps, config), not just the payload.
+
+    ``deps`` holds each parent's ``name_with_hash`` -- the region-independent identity that
+    reconstructs the parent's output directory -- so a produced artifact is walkable back to its
+    inputs by reading records alone.
+    """
+    prefix = tmp_path.as_posix()
+    parent = StepSpec(
+        name="parent",
+        output_path_prefix=prefix,
+        hash_attrs={"source": "fineweb"},
+        fn=lambda output_path: TokenizeMetadata(path=output_path, num_tokens=5),
+    )
+    child = StepSpec(
+        name="child",
+        output_path_prefix=prefix,
+        deps=[parent],
+        hash_attrs={"tokenizer": "gpt2"},
+        fn=lambda output_path: TokenizeMetadata(path=output_path, num_tokens=7),
+    )
+
+    StepRunner().run([child])  # runs parent, then child
+
+    rec = read_record(child.output_path)
+    assert rec is not None
+    assert rec.name == "child"
+    assert rec.config == {"tokenizer": "gpt2"}
+    assert parent.name_with_hash in rec.deps
+    # payload still round-trips, and provenance is best-effort (a value or None, never a crash)
+    assert read_artifact(child.output_path, TokenizeMetadata).num_tokens == 7
 
 
 def _build_three_level_dag(prefix: str) -> tuple[StepSpec, StepSpec, StepSpec]:

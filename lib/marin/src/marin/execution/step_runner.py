@@ -35,7 +35,7 @@ from marin.execution.artifact import (
     VERSION_KEY,
     check_drift,
     is_mutable_version,
-    write_artifact,
+    write_step_record,
 )
 from marin.execution.remote import RemoteCallable, _sanitize_job_name
 from marin.execution.step_spec import StepSpec
@@ -390,13 +390,28 @@ def check_cache(output_path: str) -> bool:
     return False
 
 
+def _step_record_identity(step: StepSpec) -> dict[str, Any]:
+    """The step's record identity (name, dep refs, config, fingerprint) as a plain dict.
+
+    One mapping for both write sites, and plain/serializable so the remote worker closure
+    captures only this -- never the ``StepSpec`` (which carries ``fn``).
+    """
+    return {
+        "name": step.name,
+        "deps": step.dep_names,
+        "config": step.hash_attrs,
+        "fingerprint_payload": step.fingerprint_payload,
+    }
+
+
 def run_step(step: StepSpec) -> None:
     """Execute a single step with explicit cache check, locking, heartbeat, and artifact saving.
 
     An inline step that does not write its own record (``writes_record=False``) has its
-    return saved via :func:`~marin.execution.artifact.write_artifact`. For ``RemoteCallable``
-    steps (or any step with explicit ``resources``), the raw function + artifact save are
-    submitted as a Fray job; the runner process only manages the lock and status file.
+    return saved via :func:`~marin.execution.artifact.write_step_record` (identity + lineage +
+    payload). For ``RemoteCallable`` steps (or any step with explicit ``resources``), the raw
+    function + artifact save are submitted as a Fray job; the runner process only manages the
+    lock and status file.
     """
     output_path = step.output_path
     step_label = step.name_with_hash
@@ -420,9 +435,10 @@ def run_step(step: StepSpec) -> None:
                     _run_remote_step(step, output_path)
                 else:
                     result = step.fn(output_path)  # pyrefly: ignore[not-callable]
-                    # A lazy step writes its own full record; a plain step's return is saved.
+                    # A lazy step writes its own full record; a plain step's return is saved
+                    # with its identity + lineage (name, deps, config) so the output is traceable.
                     if not step.writes_record:
-                        write_artifact(result, output_path)
+                        write_step_record(output_path=output_path, result=result, **_step_record_identity(step))
                 elapsed = timedelta(seconds=time.monotonic() - t0)
 
                 # 4. Mark success
@@ -447,13 +463,16 @@ def _submit_iris_job(
     """Submit ``raw_fn(output_path)`` as a Fray job and block until completion.
 
     ``raw_fn`` is wrapped to also persist its return value via
-    :func:`~marin.execution.artifact.write_artifact` inside the submitted job, since Fray
+    :func:`~marin.execution.artifact.write_step_record` inside the submitted job, since Fray
     jobs cannot return values back to the caller.
     """
+    # Extract identity as plain data (not the StepSpec, which carries ``fn``) so the worker
+    # closure serializes only JSON-able fields.
+    identity = _step_record_identity(step)
 
     def _fn_with_artifact_save() -> None:
         result = raw_fn(output_path)
-        write_artifact(result, output_path)
+        write_step_record(output_path=output_path, result=result, **identity)
 
     job_name = _sanitize_job_name(f"{step.name_with_hash}-{uuid.uuid4().hex[:8]}")
     dependency_groups = dependency_groups_for_resources(resources, pip_dependency_groups)

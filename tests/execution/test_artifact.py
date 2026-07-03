@@ -19,6 +19,7 @@ from marin.execution.artifact import (
     read_artifact,
     read_record,
     write_artifact,
+    write_step_record,
 )
 from marin.execution.lazy import ArtifactStep, run
 from pydantic import BaseModel
@@ -267,3 +268,44 @@ def test_read_record_ignores_step_runner_stub(tmp_path):
     (tmp_path / ".executor_info").write_text(_STEP_RUNNER_STUB)
 
     assert read_record(tmp_path.as_posix()) is None
+
+
+class _Meta(BaseModel):
+    path: str
+    n: int
+
+
+def test_write_step_record_roundtrips_identity_and_payload(tmp_path):
+    """The full step record carries name/deps/config/fingerprint_payload + the typed payload, and
+    stamps best-effort provenance without failing when git is unavailable."""
+    out = tmp_path.as_posix()
+    write_step_record(
+        name="child",
+        output_path=out,
+        deps=["parent_ab12cd34"],
+        config={"tokenizer": "gpt2"},
+        result=_Meta(path=out, n=7),
+        fingerprint_payload="fp-json",
+    )
+
+    rec = read_record(out)
+    assert rec is not None
+    assert rec.name == "child"
+    assert rec.deps == ["parent_ab12cd34"]
+    assert rec.config == {"tokenizer": "gpt2"}
+    assert rec.fingerprint_payload == "fp-json"
+    assert rec.result == {"path": out, "n": 7}
+    # provenance is best-effort: a value in a checkout, None on a git-less bundle; never raises
+    assert read_artifact(out, _Meta).n == 7
+
+
+def test_write_step_record_tolerates_none_result(tmp_path):
+    """A side-effect step (fn returns None) records identity + lineage with a null payload."""
+    out = tmp_path.as_posix()
+    write_step_record(name="train", output_path=out, deps=[], config={"seed": 42}, result=None)
+
+    rec = read_record(out)
+    assert rec is not None
+    assert rec.name == "train"
+    assert rec.config == {"seed": 42}
+    assert rec.result is None
