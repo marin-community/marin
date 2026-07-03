@@ -237,3 +237,34 @@ Next action:
 - Use `source_padded_row_start` as the Phase 2 W13 layout for integration.
 - Carry the richer source-owned inverse metadata forward into W2 return/combine; exact contiguous source slices can be
   revisited only if a supported tail-store path or separate compaction kernel is added.
+
+## 2026-07-03 W2 return/combine reference contract
+
+Added the Phase 3/4 CPU/JAX reference contract for source-push W2 return and deterministic combine.
+
+- Commit Hash: `62ff3394b`
+- Code:
+  - `lib/levanter/src/levanter/grug/_moe/source_push_plan.py`
+  - `lib/levanter/src/levanter/grug/_moe/source_push_inbox.py`
+  - `lib/levanter/tests/grug/test_source_push_plan.py`
+- Change:
+  - Added `source_push_w2_return(hidden_expert_major, w_down, plan, ...)`, which reads destination expert-major hidden
+    rows and writes W2 output back into the source-visible queue layout `[src, dst_ordinal, entry, row, D]`.
+  - Added `source_push_combine(return_y, plan)`, which scatters returned route rows through the source-owned inverse
+    metadata and sums fixed route slots in `[T, K, D]` order.
+  - Promoted the source-padded expert-major row-base derivation into `source_push_plan.py` so W13 and W2 references use
+    the same padded row layout.
+  - Kept the exact contiguous plan bases supported as the default reference, while allowing explicit source-padded bases
+    for the current production-relevant W13 layout.
+- Verification:
+  - `uv run --package marin-levanter --group test pytest lib/levanter/tests/grug/test_source_push_inbox.py lib/levanter/tests/grug/test_source_push_plan.py -q`
+  - `26 passed, 11 warnings`
+  - `./infra/pre-commit.py --changed-files --fix`
+  - all checks passed
+- Interpretation:
+  - The source-owned inverse metadata now proves the full identity round trip at the reference level:
+    queue row -> expert-major hidden row -> W2 return queue row -> `(token_id, route_slot)` combine.
+  - This is not yet a Pallas W2/return kernel and does not include a new H100 benchmark row.
+- Next action:
+  - Implement Kernel B against this reference: destination-side W2 over source-padded expert-major hidden and return
+    writes into source queue slots, then validate on a small H100 shape.
