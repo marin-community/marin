@@ -72,7 +72,7 @@ def test_wait_for_child_job_times_out_when_no_child_starts(monkeypatch: pytest.M
     def fake_open(**_kwargs):
         yield fake
 
-    monkeypatch.setattr(iris_monitor, "_open_iris_client", fake_open)
+    monkeypatch.setattr(iris_monitor, "open_iris_client", fake_open)
     monkeypatch.setattr(iris_monitor.time, "sleep", lambda _s: None)
     times = iter([0.0, 100.0, 5000.0])
     monkeypatch.setattr(iris_monitor.time, "monotonic", lambda: next(times))
@@ -102,7 +102,7 @@ def test_wait_for_child_job_real_child_running_drops_timeout(monkeypatch: pytest
     def fake_open(**_kwargs):
         yield fake
 
-    monkeypatch.setattr(iris_monitor, "_open_iris_client", fake_open)
+    monkeypatch.setattr(iris_monitor, "open_iris_client", fake_open)
     monkeypatch.setattr(iris_monitor.time, "sleep", lambda _s: None)
     # Second poll lands past the deadline; the run must still succeed because the real
     # child already dropped the queue timeout on the first poll.

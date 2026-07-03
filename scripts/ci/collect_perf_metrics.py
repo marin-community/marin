@@ -24,23 +24,19 @@ import os
 import re
 import subprocess
 import sys
-from collections.abc import Iterator
-from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol
 
 import click
+from connectrpc.errors import ConnectError
 from google.protobuf import json_format
 from iris.cli.job import build_job_summary
-from iris.cli.main import client_credentials, resolve_cluster_name
-from iris.client import IrisClient
-from iris.cluster.composer import provider_bundle
-from iris.cluster.config import load_config
-from iris.cluster.local_cluster import LocalCluster
 from iris.cluster.types import JobName
 from iris.rpc import job_pb2
 from rigging.filesystem import url_to_fs
+
+from scripts.ci.iris_client import open_iris_client
 
 logger = logging.getLogger(__name__)
 
@@ -84,9 +80,8 @@ FAILURE_BUCKETS: tuple[str, ...] = (
     "other",
 )
 
-# Must match job_pb2.TASK_STATE_SUCCEEDED — kept as a literal to avoid
-# importing iris internals from this script.
-_TASK_STATE_SUCCEEDED = 4
+# SQL stores task states by numeric enum value.
+_TASK_STATE_SUCCEEDED = job_pb2.TASK_STATE_SUCCEEDED
 
 # Wrapped in an outer SELECT so the query starts with SELECT (required by ExecuteRawQuery).
 _TASK_WALL_TIME_SQL = """\
@@ -202,29 +197,6 @@ def _run_iris(args: list[str], iris_config: Path) -> subprocess.CompletedProcess
     return result
 
 
-@contextmanager
-def open_iris_client(iris_config: Path, repo_root: Path) -> Iterator[IrisClient]:
-    """Open an Iris client using the same config path accepted by the CLI."""
-    config = load_config(iris_config)
-    cluster_name = resolve_cluster_name(config, None, None)
-    credentials = client_credentials(config, cluster_name)
-
-    if config.controller.controller_kind() == "local":
-        cluster = LocalCluster(config)
-        try:
-            with IrisClient.remote(cluster.start(), workspace=repo_root, credentials=credentials) as client:
-                yield client
-        finally:
-            cluster.close()
-        return
-
-    bundle = provider_bundle(config)
-    controller_address = config.controller_address() or bundle.controller.discover_controller(config.controller)
-    with bundle.controller.tunnel(address=controller_address) as tunnel_url:
-        with IrisClient.remote(tunnel_url, workspace=repo_root, credentials=credentials) as client:
-            yield client
-
-
 def _job_status_to_dict(job: job_pb2.JobStatus) -> dict:
     data = json_format.MessageToDict(job, preserving_proto_field_name=True)
     data["has_children"] = bool(job.has_children)
@@ -236,7 +208,7 @@ def fetch_job_summary(client: IrisJobReader, job_id: str) -> dict | None:
     try:
         job_name = JobName.from_wire(job_id)
         return build_job_summary(client.status(job_name), client.list_tasks(job_name))
-    except Exception as exc:
+    except ConnectError as exc:
         logger.warning("iris client job summary failed for %s: %s", job_id, exc)
         return None
 
@@ -253,7 +225,7 @@ def fetch_job_tree(client: IrisJobReader, job_id: str) -> list[dict] | None:
         jobs = client.list_jobs(prefix=job_id)
         jobs.sort(key=lambda j: j.submitted_at.epoch_ms, reverse=True)
         return [_job_status_to_dict(job) for job in jobs]
-    except Exception as exc:
+    except ConnectError as exc:
         logger.warning("iris client job list failed for prefix %s: %s", job_id, exc)
         return None
 
@@ -696,7 +668,7 @@ def main(
         "commit_sha": os.environ.get("GITHUB_SHA"),
     }
 
-    with open_iris_client(iris_config, _REPO_ROOT) as client:
+    with open_iris_client(iris_config=iris_config, repo_root=_REPO_ROOT) as client:
         summary = fetch_job_summary(client, job_id)
         job_tree = fetch_job_tree(client, job_id)
         leaf_summaries = fetch_leaf_summaries(client, job_tree) if job_tree else []
