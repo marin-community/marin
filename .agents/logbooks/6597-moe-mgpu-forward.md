@@ -313,3 +313,51 @@ Added a package-private Phase 3 W2-return harness that consumes source-padded ex
 - Next action:
   - Add the remote/source-visible return stage for W2 output, either as a separate return-copy kernel or by extending
     the W2 kernel if Mosaic supports remote stores from this Lane/WGMMA path.
+
+## 2026-07-03 Source-visible W2 return-copy kernel
+
+Added a separate MGPU return-copy kernel after destination-local W2. The new kernel reads each destination's
+`[src_ordinal, entry, block_m, D]` W2 output and writes it back to the owning source rank's return queue at
+`[dst_ordinal, entry, block_m, D]` using remote GMEM stores through SMEM. This keeps W2 math and return transport
+separate for now; it does not fuse remote stores into the WGMMA kernel.
+
+- Commit Hash: `971ac17c2`
+- Code:
+  - `lib/levanter/src/levanter/grug/_moe/source_push_w2_return.py`
+  - `lib/levanter/scripts/bench/bench_source_push_w2_return.py`
+  - `lib/levanter/tests/grug/test_source_push_inbox.py`
+- Local verification:
+  - `uv run --package marin-levanter --group test pytest lib/levanter/tests/grug/test_source_push_inbox.py lib/levanter/tests/grug/test_source_push_plan.py -q`
+  - `33 passed, 11 warnings`
+  - `./infra/pre-commit.py --changed-files --fix`
+  - all checks passed
+- H100 correctness smoke:
+  - Job: `/dlwh/source-push-w2-return-copy-smoke-971ac17c2-20260703-0918`
+  - Config: `EP=8`, `T/rank=16`, `K=2`, `D=128`, `I=128`, `E_local=2`, `block_m=64`,
+    `block_k=64`, `block_n=64`, `hidden_input_mode=w13_reference`, `copy_to_source=true`, `check=true`.
+  - Result: succeeded, `steady_state_time=0.00231898s`, `max_abs_diff=0.00789702`,
+    `source_queue_max_abs_diff=0.00789702`, no drops/errors.
+- Target W2 + return-copy timing:
+  - Job: `/dlwh/source-push-w2-return-copy-target-971ac17c2-20260703-0921`
+  - Command: `uv run --package marin-levanter --group test python lib/levanter/scripts/bench/bench_source_push_w2_return.py --source-push-profile hopper_source_push_inbox_rough_balanced_216 --hidden-input-mode synthetic --copy-to-source --no-check --warmup 1 --steps 3 --repeat-runs 5 --separate-compile --no-progress-events --git-sha 971ac17c2 --jsonl scratch/source_push_w2_return_copy_target_971ac17c2.jsonl`
+  - Rows: `rounded_rows_per_rank=139056`, `useful_rows_per_rank=131072`, `row_efficiency=0.942584`,
+    `masked_row_fraction=0.057416`, `dropped_routes=0`.
+  - Repeat times: `[6.027, 6.021, 5.935, 5.890, 5.911] ms`.
+  - Median: `steady_state_time=5.935 ms`, `w2_tflops_per_rank=153.55`, `return_gbps_per_rank=179.94`.
+- Comparison:
+
+| path | target median | rounded TFLOP/s/rank | note |
+| --- | ---: | ---: | --- |
+| W2 destination-local only (`f3a9dc5e7`) | `2.899 ms` | `314.35` | no source-visible return |
+| W2 + separate return-copy (`971ac17c2`) | `5.935 ms` | `153.55` | writes source-owned return queue |
+
+- Interpretation:
+  - Separate remote return-copy costs about `3.036 ms` at the target rough-balanced layout.
+  - The source-visible return path is now correct on a small H100 smoke, but a separate full-buffer copy roughly halves
+    effective W2 throughput. Fusing return writes into the W2 kernel or pipelining copy with downstream combine is likely
+    necessary if this tax shows up in full forward.
+  - Estimated source-push W13 (`8.441 ms`) + W2+return-copy (`5.935 ms`) is about `14.376 ms` before source combine.
+- Next action:
+  - Wire the source-visible return queue into deterministic source combine, then benchmark W13 + W2 + return + combine
+    end to end. In parallel, investigate whether W2 can directly remote-store output tiles without the separate
+    GMEM-to-SMEM-to-remote-GMEM return-copy kernel.
