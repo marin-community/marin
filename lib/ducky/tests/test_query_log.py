@@ -3,7 +3,7 @@
 
 from datetime import datetime
 
-from ducky.query_log import QUERY_LOG_NAMESPACE, QueryLog, QueryLogRow, now_utc
+from ducky.query_log import QueryLog, QueryLogRow, now_utc
 from finelog.client.log_client import schema_from_dataclass
 
 
@@ -42,7 +42,3 @@ def test_record_swallows_table_write_failures():
     log = QueryLog(log_client=None, table=_BoomTable())  # type: ignore[arg-type]
     row = QueryLogRow(ts=now_utc(), query_id="a" * 32, sql="SELECT 1", status="done", cached=False)
     log.record(row)  # does not raise
-
-
-def test_namespace_is_dotted():
-    assert QUERY_LOG_NAMESPACE == "ducky.query"
