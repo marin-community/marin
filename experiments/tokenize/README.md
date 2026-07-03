@@ -17,7 +17,8 @@ token/byte counts; the cost model is applied only at analysis time.
 | `flop_equivalent.py` | The scoring core: `ServingCostModel` (target shape, context, attention sparsity, speed), BPB-curve fit, and `febpb`. Run it directly for a self-check. |
 | `fertility_report.py` | Phase-1 pre-filter: measures tokens/byte per arm over a held-out corpus and writes raw counts to `fertility_raw.json`. No training. |
 | `launch_bakeoff_ladder.py` | Submits the isoFLOP ladder (one grug-moe run per arm × compute point) to a cluster. Prints the plan by default; `--run` submits. |
-| `collect_metrics.py` | Reduces a finished run's json_logger stream to its `(train_flops, BPB)` point; assembles per-arm points into a ladder JSON. |
+| `collect_metrics.py` | Reduces one finished run's json_logger stream to its `(train_flops, BPB)` point; the shared parsing used by `collect_ladder.py`. |
+| `collect_ladder.py` | Failure-safe ladder collection: queries job state first (`iris job list --json`), pulls logs only for succeeded jobs (per-job timeout, skip+report on failures), and writes `ladder.json`. Discovery (`--prefix`) or explicit (`--point arm=job`) mode. |
 | `bakeoff_analysis.py` | Re-scores stored fertility + ladder results under a `ServingCostModel` chosen on the CLI (context, sparsity, target size, speed, serving ratio, domain mix). |
 | `../grug/moe/launch_tokenizer_bakeoff.py` | One grug-moe proxy run for a single arm: `BAKEOFF_ARM` sets both data tokenization and model `vocab_size`; held-out validation attached; `compute_bpb` on. |
 
