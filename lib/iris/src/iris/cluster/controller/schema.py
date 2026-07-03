@@ -590,8 +590,6 @@ federated_jobs_table = Table(
     Column("remote_job_id", String),
     Column("handoff_state", Integer),  # SENT only: PENDING_HANDOFF | HANDED_OFF
     Column("cancel_intent_version", Integer, nullable=False, server_default="0"),
-    Column("last_sync_ms", TimestampMsType),
-    Column("terminal_error", String),
     Index("idx_federated_jobs_direction_peer", "direction", "peer_id"),
 )
 
@@ -602,7 +600,6 @@ federation_sync_state_table = Table(
     Column("peer_id", String, primary_key=True),
     # Opaque monotonic watermark into the peer's changelog; one row per peer.
     Column("cursor", String, nullable=False, server_default=""),
-    Column("last_full_resync_ms", TimestampMsType),
 )
 
 

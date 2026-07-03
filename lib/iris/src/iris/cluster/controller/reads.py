@@ -1865,7 +1865,7 @@ def changelog_min_seq(tx: Tx) -> int:
     return int(tx.execute(select(func.coalesce(func.min(federation_changelog_table.c.seq), 0))).scalar() or 0)
 
 
-def active_received_jobs(tx: Tx, requester_id: str) -> list[JobName]:
+def received_jobs_for_requester(tx: Tx, requester_id: str) -> list[JobName]:
     """Every still-present job this peer received from ``requester_id`` (the full set
     a stale/first-contact requester is resynced with)."""
     rows = tx.execute(

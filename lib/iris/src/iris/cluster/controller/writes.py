@@ -352,7 +352,6 @@ def insert_received_handle(
     job_id: JobName,
     requester_id: str,
     owner_principal: str,
-    now_ms: int,
 ) -> None:
     """Record that ``job_id`` was handed to this peer by ``requester_id`` as a
     RECEIVED ``federated_jobs`` row (``peer_id`` is the requester; the SENT-only
@@ -369,7 +368,6 @@ def insert_received_handle(
             direction=int(FederationDirection.RECEIVED),
             peer_id=requester_id,
             owner_principal=owner_principal,
-            last_sync_ms=now_ms,
         )
         .on_conflict_do_update(
             index_elements=["job_id"],
@@ -777,7 +775,6 @@ def insert_federated_handle(
     remote_job_id: str,
     owner_principal: str,
     handoff_state: int,
-    now_ms: int,
 ) -> None:
     """Insert the SENT ``federated_jobs`` handle for a job handed off to ``peer_id``."""
     tx.execute(
@@ -789,18 +786,15 @@ def insert_federated_handle(
             owner_principal=owner_principal,
             handoff_state=handoff_state,
             cancel_intent_version=0,
-            last_sync_ms=now_ms,
         )
     )
 
 
 @writes_to(federated_jobs_table)
-def set_handoff_state(tx: Tx, job_id: JobName, handoff_state: int, *, now_ms: int) -> None:
-    """Flip a handle's ``handoff_state`` and stamp ``last_sync_ms``."""
+def set_handoff_state(tx: Tx, job_id: JobName, handoff_state: int) -> None:
+    """Flip a handle's ``handoff_state``."""
     tx.execute(
-        update(federated_jobs_table)
-        .where(federated_jobs_table.c.job_id == job_id)
-        .values(handoff_state=handoff_state, last_sync_ms=now_ms)
+        update(federated_jobs_table).where(federated_jobs_table.c.job_id == job_id).values(handoff_state=handoff_state)
     )
 
 
@@ -980,10 +974,10 @@ def mirror_federated_attempts(
 
 
 @writes_to(federation_sync_state_table)
-def upsert_sync_cursor(tx: Tx, peer_id: str, cursor: str, *, now_ms: int) -> None:
+def upsert_sync_cursor(tx: Tx, peer_id: str, cursor: str) -> None:
     """Persist the delta-sync cursor for ``peer_id``."""
     tx.execute(
         sqlite_insert(federation_sync_state_table)
-        .values(peer_id=peer_id, cursor=cursor, last_full_resync_ms=now_ms)
+        .values(peer_id=peer_id, cursor=cursor)
         .on_conflict_do_update(index_elements=["peer_id"], set_={"cursor": cursor})
     )

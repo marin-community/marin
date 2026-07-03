@@ -286,7 +286,6 @@ def insert_job_and_config(
             job_id=job_id,
             requester_id=request.federation.requester_id,
             owner_principal=request.federation.owner_principal,
-            now_ms=ts.epoch_ms(),
         )
 
     # Record the job-level creation for any requester federating with this peer (a

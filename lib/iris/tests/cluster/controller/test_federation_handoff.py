@@ -347,7 +347,7 @@ def test_full_resync_drops_a_handle_absent_from_the_peers_active_set(tmp_path, l
         with peer_state._db.transaction() as cur:
             writes.delete_job(cur, remote_job_id)
         with parent_state._db.transaction() as cur:
-            writes.upsert_sync_cursor(cur, "cw", "", now_ms=0)
+            writes.upsert_sync_cursor(cur, "cw", "")
         manager.sync_once()
 
         assert _handle(parent_state, parent_job_id) is None
@@ -394,7 +394,7 @@ def test_redrive_of_a_handle_the_peer_already_has_is_idempotent(tmp_path, log_cl
         # same id and the peer's KEEP policy dedups — no second job, no error, and
         # the handle settles in HANDED_OFF.
         with parent_state._db.transaction() as cur:
-            writes.set_handoff_state(cur, parent_job_id, int(HandoffState.PENDING_HANDOFF), now_ms=0)
+            writes.set_handoff_state(cur, parent_job_id, int(HandoffState.PENDING_HANDOFF))
         manager.sync_once()
 
         assert connection.launch_calls == 2  # re-sent once
@@ -413,7 +413,7 @@ def test_admit_persists_a_pending_handle_and_is_idempotent(tmp_path, log_client)
         store = ControllerFederationStore(parent_state._db, run_template_cache=RunTemplateCache(256))
         parent_job_id = JobName.root(_USER, "fed-job")
         spec = HandoffSpec(
-            parent_job_id=parent_job_id,
+            local_job_id=parent_job_id,
             remote_job_id=encode_remote_job_id("parent", parent_job_id),
             peer_id="cw",
             owner_principal=_USER,

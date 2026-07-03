@@ -683,7 +683,7 @@ export interface PeerSummary {
   /** Last capability heartbeat succeeded. */
   reachable?: boolean
   /** Last successful contact, ms since epoch (0/absent if never contacted). int64 → string. */
-  lastSyncMs?: string
+  lastContactMs?: string
   activeFederatedJobs?: number
   /** Aggregate spend across this peer's federated jobs, micros. int64 → string. */
   aggregateSpendMicros?: string

@@ -52,13 +52,13 @@ class ControllerFederationStore:
     def admit_and_persist_handoff(self, spec: HandoffSpec) -> HandoffAdmission:
         now = Timestamp.now()
         with self._db.transaction() as cur:
-            if reads.get_job_state(cur, spec.parent_job_id) is not None:
+            if reads.get_job_state(cur, spec.local_job_id) is not None:
                 # A handle already exists — a retried/idempotent resubmit.
                 return HandoffAdmission.ALREADY_EXISTS
 
             ops.job.insert_job_and_config(
                 cur,
-                job_id=spec.parent_job_id,
+                job_id=spec.local_job_id,
                 request=spec.request,
                 ts=now,
                 run_template_cache=self._run_template_cache,
@@ -66,18 +66,17 @@ class ControllerFederationStore:
             )
             writes.insert_federated_handle(
                 cur,
-                job_id=spec.parent_job_id,
+                job_id=spec.local_job_id,
                 peer_id=spec.peer_id,
                 remote_job_id=spec.remote_job_id,
                 owner_principal=spec.owner_principal,
                 handoff_state=int(HandoffState.PENDING_HANDOFF),
-                now_ms=now.epoch_ms(),
             )
         return HandoffAdmission.ADMITTED
 
-    def mark_handed_off(self, parent_job_id: JobName, *, now_ms: int) -> None:
+    def mark_handed_off(self, local_job_id: JobName) -> None:
         with self._db.transaction() as cur:
-            writes.set_handoff_state(cur, parent_job_id, int(HandoffState.HANDED_OFF), now_ms=now_ms)
+            writes.set_handoff_state(cur, local_job_id, int(HandoffState.HANDED_OFF))
 
     def pending_handoffs(self) -> list[HandoffSpec]:
         with self._db.read_snapshot() as tx:
@@ -89,7 +88,7 @@ class ControllerFederationStore:
                     continue
                 pending.append(
                     HandoffSpec(
-                        parent_job_id=handle.job_id,
+                        local_job_id=handle.job_id,
                         remote_job_id=handle.remote_job_id,
                         peer_id=handle.peer_id,
                         owner_principal=handle.owner_principal,
@@ -100,37 +99,37 @@ class ControllerFederationStore:
 
     # -- cancel --------------------------------------------------------------
 
-    def bump_cancel_intent(self, parent_job_id: JobName) -> CancelTarget | None:
+    def bump_cancel_intent(self, local_job_id: JobName) -> CancelTarget | None:
         """Bump a SENT handle's cancel intent and return the peer/remote-id to cancel.
 
-        Returns ``None`` when ``parent_job_id`` is not a SENT handle. A handle the
+        Returns ``None`` when ``local_job_id`` is not a SENT handle. A handle the
         peer never received (still ``PENDING_HANDOFF``) is terminated locally here —
         the re-drive now skips it, so no sync will ever mirror it terminal. A
         delivered handle keeps its synced state: the routed cancel drives it terminal
         on the peer and the next sync reflects it.
         """
         with self._db.transaction() as cur:
-            handle = reads.federated_handle(cur, parent_job_id)
+            handle = reads.federated_handle(cur, local_job_id)
             if handle is None:
                 return None
-            writes.bump_cancel_intent(cur, parent_job_id)
+            writes.bump_cancel_intent(cur, local_job_id)
             if handle.handoff_state == int(HandoffState.PENDING_HANDOFF):
                 writes.mark_federated_job_killed(
-                    cur, parent_job_id, now_ms=Timestamp.now().epoch_ms(), error="Cancelled before handoff"
+                    cur, local_job_id, now_ms=Timestamp.now().epoch_ms(), error="Cancelled before handoff"
                 )
-            return CancelTarget(parent_job_id=parent_job_id, peer_id=handle.peer_id, remote_job_id=handle.remote_job_id)
+            return CancelTarget(local_job_id=local_job_id, peer_id=handle.peer_id, remote_job_id=handle.remote_job_id)
 
     def pending_cancels(self) -> list[CancelTarget]:
         with self._db.read_snapshot() as tx:
             return [
-                CancelTarget(parent_job_id=h.job_id, peer_id=h.peer_id, remote_job_id=h.remote_job_id)
+                CancelTarget(local_job_id=h.job_id, peer_id=h.peer_id, remote_job_id=h.remote_job_id)
                 for h in reads.pending_cancel_handles(tx)
             ]
 
-    def mark_cancel_satisfied(self, parent_job_id: JobName, *, now_ms: int) -> None:
+    def mark_cancel_satisfied(self, local_job_id: JobName, *, now_ms: int) -> None:
         with self._db.transaction() as cur:
             writes.mark_federated_job_killed(
-                cur, parent_job_id, now_ms=now_ms, error="Cancelled (peer reported the job gone)"
+                cur, local_job_id, now_ms=now_ms, error="Cancelled (peer reported the job gone)"
             )
 
     # -- sync ----------------------------------------------------------------
@@ -151,7 +150,6 @@ class ControllerFederationStore:
         next_cursor: str,
         cursor_stale: bool,
     ) -> None:
-        now_ms = Timestamp.now().epoch_ms()
         with self._db.transaction() as cur:
             for delta in deltas:
                 local_job_id = reads.federated_job_for_remote_id(cur, peer_id, delta.remote_job_id)
@@ -165,7 +163,7 @@ class ControllerFederationStore:
             if cursor_stale:
                 self._set_replace(cur, peer_id, deltas)
 
-            writes.upsert_sync_cursor(cur, peer_id, next_cursor, now_ms=now_ms)
+            writes.upsert_sync_cursor(cur, peer_id, next_cursor)
 
     def _mirror_delta(self, cur, peer_id: str, local_job_id: JobName, delta) -> None:
         summary = delta.summary

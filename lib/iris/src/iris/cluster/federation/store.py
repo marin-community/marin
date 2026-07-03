@@ -55,7 +55,7 @@ class HandoffSpec:
     needed to deliver.
     """
 
-    parent_job_id: JobName  # this cluster's local (root) job id
+    local_job_id: JobName  # this cluster's local (root) job id
     remote_job_id: str  # deterministic, globally-unique id the peer runs it under
     peer_id: str
     owner_principal: str  # end-user identity asserted to the peer
@@ -66,7 +66,7 @@ class HandoffSpec:
 class CancelTarget:
     """What a routed cancel must address on the peer, plus the local handle it backs."""
 
-    parent_job_id: JobName  # this cluster's local job id, to terminalize on NOT_FOUND
+    local_job_id: JobName  # this cluster's local job id, to terminalize on NOT_FOUND
     peer_id: str
     remote_job_id: str
 
@@ -82,7 +82,7 @@ class FederationStore(Protocol):
         resubmit."""
         ...
 
-    def mark_handed_off(self, parent_job_id: JobName, *, now_ms: int) -> None:
+    def mark_handed_off(self, local_job_id: JobName) -> None:
         """Flip a handle to ``HANDED_OFF`` after the peer acks its ``LaunchJob``."""
         ...
 
@@ -96,7 +96,7 @@ class FederationStore(Protocol):
         until the peer acks or sync observes it terminal/pruned."""
         ...
 
-    def mark_cancel_satisfied(self, parent_job_id: JobName, *, now_ms: int) -> None:
+    def mark_cancel_satisfied(self, local_job_id: JobName, *, now_ms: int) -> None:
         """Terminalize the local mirrored job after a peer ``NOT_FOUND`` (the peer
         already pruned it), so it drops out of :meth:`pending_cancels`."""
         ...
@@ -120,9 +120,9 @@ class FederationStore(Protocol):
         set-replace: drop any local handle for ``peer_id`` absent from it."""
         ...
 
-    def bump_cancel_intent(self, parent_job_id: JobName) -> CancelTarget | None:
+    def bump_cancel_intent(self, local_job_id: JobName) -> CancelTarget | None:
         """Bump ``cancel_intent_version`` and return the peer/remote-id to cancel,
-        or ``None`` if ``parent_job_id`` is not a federated handle."""
+        or ``None`` if ``local_job_id`` is not a federated handle."""
         ...
 
     def active_federated_job_count(self, peer_id: str) -> int:

@@ -141,7 +141,7 @@ class FederationManager:
     def submit_federated_handle(
         self,
         *,
-        parent_job_id: JobName,
+        local_job_id: JobName,
         request: controller_pb2.Controller.LaunchJobRequest,
         peer_id: str,
         owner_principal: str,
@@ -159,9 +159,9 @@ class FederationManager:
             raise RuntimeError("federation handoff requires a store")
         self._require_peer(peer_id)
 
-        remote_job_id = encode_remote_job_id(self._cluster_id, parent_job_id)
+        remote_job_id = encode_remote_job_id(self._cluster_id, local_job_id)
         spec = HandoffSpec(
-            parent_job_id=parent_job_id,
+            local_job_id=local_job_id,
             remote_job_id=remote_job_id,
             peer_id=peer_id,
             owner_principal=owner_principal,
@@ -172,7 +172,7 @@ class FederationManager:
 
     # -- cancel (parent side) ------------------------------------------------
 
-    def cancel_federated(self, parent_job_id: JobName) -> None:
+    def cancel_federated(self, local_job_id: JobName) -> None:
         """Route a versioned cancel for a federated job to its peer.
 
         Bumps ``cancel_intent_version`` (so a cancelled pending handoff is never
@@ -183,7 +183,7 @@ class FederationManager:
         """
         if self._store is None:
             raise RuntimeError("federation cancel requires a store")
-        target = self._store.bump_cancel_intent(parent_job_id)
+        target = self._store.bump_cancel_intent(local_job_id)
         if target is not None:
             self._deliver_cancel(target)
 
@@ -198,25 +198,25 @@ class FederationManager:
         peer = self._peers.get(target.peer_id)
         if peer is None:
             logger.warning(
-                "Cannot cancel federated job %s: peer %s is not configured", target.parent_job_id, target.peer_id
+                "Cannot cancel federated job %s: peer %s is not configured", target.local_job_id, target.peer_id
             )
             return
         try:
             peer.terminate_job(JobName.from_wire(target.remote_job_id))
         except ConnectError as exc:
             if exc.code == Code.NOT_FOUND:
-                self._store.mark_cancel_satisfied(target.parent_job_id, now_ms=Timestamp.now().epoch_ms())
+                self._store.mark_cancel_satisfied(target.local_job_id, now_ms=Timestamp.now().epoch_ms())
                 return
             logger.warning(
                 "Routed cancel of %s to peer %s failed (will retry): %s",
-                target.parent_job_id,
+                target.local_job_id,
                 target.peer_id,
                 exc,
             )
         except (ConnectionError, OSError) as exc:
             logger.warning(
                 "Routed cancel of %s to peer %s failed (will retry): %s",
-                target.parent_job_id,
+                target.local_job_id,
                 target.peer_id,
                 exc,
             )
@@ -318,15 +318,15 @@ class FederationManager:
         assert self._store is not None
         peer = self._peers.get(spec.peer_id)
         if peer is None:
-            logger.warning("Cannot hand off %s: peer %s is not configured", spec.parent_job_id, spec.peer_id)
+            logger.warning("Cannot hand off %s: peer %s is not configured", spec.local_job_id, spec.peer_id)
             return
         handoff = self._build_handoff_request(spec.request, spec.remote_job_id, spec.owner_principal)
         try:
             peer.launch_job(handoff)
         except _PEER_RPC_ERRORS as exc:
-            logger.warning("Handoff of %s to peer %s failed (will retry): %s", spec.parent_job_id, spec.peer_id, exc)
+            logger.warning("Handoff of %s to peer %s failed (will retry): %s", spec.local_job_id, spec.peer_id, exc)
             return
-        self._store.mark_handed_off(spec.parent_job_id, now_ms=Timestamp.now().epoch_ms())
+        self._store.mark_handed_off(spec.local_job_id)
 
     def _sync_peer(self, peer: FederationPeer) -> None:
         assert self._store is not None
@@ -381,7 +381,7 @@ class FederationManager:
             controller_address=peer.controller_address,
             dashboard_url=peer.dashboard_url,
             reachable=heartbeat.reachable,
-            last_sync_ms=heartbeat.last_contact_ms,
+            last_contact_ms=heartbeat.last_contact_ms,
             active_federated_jobs=active,
             backends=heartbeat.backends,
         )

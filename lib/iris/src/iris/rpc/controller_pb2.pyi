@@ -742,12 +742,12 @@ class Controller(_message.Message):
         __slots__ = ()
         def __init__(self) -> None: ...
     class PeerSummary(_message.Message):
-        __slots__ = ("peer_id", "controller_address", "dashboard_url", "reachable", "last_sync_ms", "active_federated_jobs", "aggregate_spend_micros", "backends")
+        __slots__ = ("peer_id", "controller_address", "dashboard_url", "reachable", "last_contact_ms", "active_federated_jobs", "aggregate_spend_micros", "backends")
         PEER_ID_FIELD_NUMBER: _ClassVar[int]
         CONTROLLER_ADDRESS_FIELD_NUMBER: _ClassVar[int]
         DASHBOARD_URL_FIELD_NUMBER: _ClassVar[int]
         REACHABLE_FIELD_NUMBER: _ClassVar[int]
-        LAST_SYNC_MS_FIELD_NUMBER: _ClassVar[int]
+        LAST_CONTACT_MS_FIELD_NUMBER: _ClassVar[int]
         ACTIVE_FEDERATED_JOBS_FIELD_NUMBER: _ClassVar[int]
         AGGREGATE_SPEND_MICROS_FIELD_NUMBER: _ClassVar[int]
         BACKENDS_FIELD_NUMBER: _ClassVar[int]
@@ -755,11 +755,11 @@ class Controller(_message.Message):
         controller_address: str
         dashboard_url: str
         reachable: bool
-        last_sync_ms: int
+        last_contact_ms: int
         active_federated_jobs: int
         aggregate_spend_micros: int
         backends: _containers.RepeatedCompositeFieldContainer[Controller.BackendSummary]
-        def __init__(self, peer_id: _Optional[str] = ..., controller_address: _Optional[str] = ..., dashboard_url: _Optional[str] = ..., reachable: _Optional[bool] = ..., last_sync_ms: _Optional[int] = ..., active_federated_jobs: _Optional[int] = ..., aggregate_spend_micros: _Optional[int] = ..., backends: _Optional[_Iterable[_Union[Controller.BackendSummary, _Mapping]]] = ...) -> None: ...
+        def __init__(self, peer_id: _Optional[str] = ..., controller_address: _Optional[str] = ..., dashboard_url: _Optional[str] = ..., reachable: _Optional[bool] = ..., last_contact_ms: _Optional[int] = ..., active_federated_jobs: _Optional[int] = ..., aggregate_spend_micros: _Optional[int] = ..., backends: _Optional[_Iterable[_Union[Controller.BackendSummary, _Mapping]]] = ...) -> None: ...
     class ListPeersResponse(_message.Message):
         __slots__ = ("peers",)
         PEERS_FIELD_NUMBER: _ClassVar[int]

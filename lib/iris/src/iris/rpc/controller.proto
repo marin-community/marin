@@ -656,7 +656,7 @@ message Controller {
     string controller_address = 2;
     string dashboard_url = 3;
     bool reachable = 4;               // last capability heartbeat succeeded
-    int64 last_sync_ms = 5;           // last successful contact, ms since epoch
+    int64 last_contact_ms = 5;        // last successful capability heartbeat, ms since epoch
     int32 active_federated_jobs = 6;
     int64 aggregate_spend_micros = 7;
     // The peer's backends, forwarded from its ListBackends: the underlying

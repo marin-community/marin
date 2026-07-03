@@ -1111,7 +1111,7 @@ class ControllerServiceImpl:
                 f"Job {job_id} is not a root job; only whole root jobs may be federated to a peer.",
             )
         self._controller.federation.submit_federated_handle(
-            parent_job_id=job_id,
+            local_job_id=job_id,
             request=request,
             peer_id=peer_id,
             owner_principal=job_id.user,
@@ -1478,7 +1478,6 @@ class ControllerServiceImpl:
             routing = self._controller.federation.route_submit(
                 RoutingRequest(
                     constraints=constraints,
-                    user=job_id.user,
                     local_feasible=feasible,
                     cluster_pin=cluster_pin or "",
                 )
@@ -3157,7 +3156,7 @@ class ControllerServiceImpl:
             stale = (not cursor) or (min_seq > 0 and cursor_seq < min_seq - 1)
 
             if stale:
-                for job_id in reads.active_received_jobs(q, requester_id):
+                for job_id in reads.received_jobs_for_requester(q, requester_id):
                     delta = self._federated_job_delta(q, job_id, all_tasks=True, task_indexes=set())
                     if delta is not None:
                         deltas.append(delta)

@@ -163,7 +163,7 @@ function peerPendingCount(p: PeerSummary): number {
 }
 
 function peerNeverContacted(p: PeerSummary): boolean {
-  return !p.lastSyncMs || p.lastSyncMs === '0'
+  return !p.lastContactMs || p.lastContactMs === '0'
 }
 
 function peerHealthDotClass(p: PeerSummary): string {
@@ -176,8 +176,8 @@ function peerHealthLabel(p: PeerSummary): string {
   return peerNeverContacted(p) ? 'never contacted' : 'unreachable'
 }
 
-function peerLastSync(p: PeerSummary): string {
-  const ms = Number(p.lastSyncMs ?? '0')
+function peerLastContact(p: PeerSummary): string {
+  const ms = Number(p.lastContactMs ?? '0')
   return ms > 0 ? formatRelativeTime(ms) : 'never'
 }
 </script>
@@ -476,7 +476,7 @@ function peerLastSync(p: PeerSummary): string {
         <div class="px-4 pb-4 space-y-2">
           <InfoRow label="kind">peer</InfoRow>
           <InfoRow label="status">{{ peerHealthLabel(p) }}</InfoRow>
-          <InfoRow label="last contact">{{ peerLastSync(p) }}</InfoRow>
+          <InfoRow label="last contact">{{ peerLastContact(p) }}</InfoRow>
 
           <!-- Advertised device chips, unioned across the peer's backends -->
           <div v-if="peerDeviceChips(p).length > 0" class="flex items-start gap-2 text-sm">
