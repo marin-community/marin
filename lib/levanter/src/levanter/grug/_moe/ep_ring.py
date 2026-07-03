@@ -11,13 +11,13 @@ import jax.numpy as jnp
 from haliax.jax_utils import tree_checkpoint_name
 from jaxtyping import Array, Float, Int
 
-from haliax.nn.ragged_dot import ragged_dot
 from levanter.grug._moe.common import (
     _CHECKPOINT_DISPATCH_INPUT,
     _CHECKPOINT_DISPATCH_OUTPUT,
     _CHECKPOINT_EXPERT_HIDDEN,
+    MoeRaggedDotOps,
 )
-from levanter.grug._moe.ep_common import _prefix_cap_counts
+from levanter.grug._moe.ep_common import _prefix_cap_counts, _resolve_ragged_dot_fns
 from levanter.grug.sharding import _batch_axes
 
 
@@ -27,6 +27,7 @@ def _moe_mlp_ep_ring_local(
     combine_weights_local: Float[Array, "Tlocal K"],
     moe_w13_local: Float[Array, "Elocal H I2"],
     moe_w2_local: Float[Array, "Elocal I H"],
+    ops: MoeRaggedDotOps | None = None,
     *,
     activation_fn: Callable[[jax.Array], jax.Array],
     num_experts: int,
@@ -98,12 +99,14 @@ def _moe_mlp_ep_ring_local(
     # boundaries aligned by attributing padding to the final expert segment.
     group_sizes = group_sizes.at[-1].add(local_capacity - jnp.sum(group_sizes, dtype=jnp.int32))
 
+    rd_w13, rd_w2 = _resolve_ragged_dot_fns(ops)
+
     with jax.named_scope("moe_up_down"):
-        w13_out = tree_checkpoint_name(ragged_dot(x_dispatch, moe_w13_local, group_sizes), _CHECKPOINT_EXPERT_HIDDEN)
+        w13_out = tree_checkpoint_name(rd_w13(x_dispatch, moe_w13_local, group_sizes), _CHECKPOINT_EXPERT_HIDDEN)
         moe_dim = moe_w2_local.shape[1]
         gate, up = jnp.split(w13_out, [moe_dim], axis=-1)
         out_dispatch = tree_checkpoint_name(
-            ragged_dot(activation_fn(gate) * up, moe_w2_local, group_sizes),
+            rd_w2(activation_fn(gate) * up, moe_w2_local, group_sizes),
             _CHECKPOINT_DISPATCH_OUTPUT,
         )
 
