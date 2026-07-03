@@ -55,7 +55,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
-      IRIS_CONTROLLER_SERVICE_ACCOUNT: iris-controller@hai-gcp-models.iam.gserviceaccount.com
       # ducky's tunnel spawns the iris CLI; drive it through uv from the repo.
       DUCKY_IRIS_CMD: "uv run iris"
       # Deploy defaults — single source of truth; dispatch inputs override.
@@ -102,15 +101,20 @@ jobs:
         with:
           project_id: ${{ secrets.GCP_PROJECT_ID }}
 
-      - name: Set up OS Login SSH key
+      # Persistent CI keypair already registered on the prod controller — the
+      # same key the canary ferry uses to tunnel to lib/iris/config/marin.yaml.
+      # A freshly-generated `os-login ssh-keys add` key is not honored by the
+      # prod controller in time, so ducky's tunnel never comes up.
+      - name: Install SSH key
+        env:
+          SSH_KEY: ${{ secrets.IRIS_CI_GCP_SSH_KEY }}
+          SSH_KEY_PUB: ${{ secrets.IRIS_CI_GCP_SSH_KEY_PUB }}
         run: |
           mkdir -p ~/.ssh
-          ssh-keygen -t rsa -b 4096 -f ~/.ssh/google_compute_engine -N "" -q -C "gha-${{ github.run_id }}-${{ github.run_attempt }}"
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/google_compute_engine
+          printf '%s\n' "$SSH_KEY_PUB" > ~/.ssh/google_compute_engine.pub
           chmod 600 ~/.ssh/google_compute_engine
-          gcloud compute os-login ssh-keys add \
-            --key-file ~/.ssh/google_compute_engine.pub \
-            --impersonate-service-account="$IRIS_CONTROLLER_SERVICE_ACCOUNT" \
-            --ttl=2h
+          chmod 644 ~/.ssh/google_compute_engine.pub
 
       - name: Deploy ducky
         env:
@@ -135,10 +139,3 @@ jobs:
             --tpu "${{ inputs.tpu || env.DEF_TPU }}" \
             --cpu "${{ inputs.cpu || env.DEF_CPU }}" \
             --memory "${{ inputs.memory || env.DEF_MEMORY }}"
-
-      - name: Remove OS Login SSH key
-        if: always()
-        run: |
-          gcloud compute os-login ssh-keys remove \
-            --impersonate-service-account="$IRIS_CONTROLLER_SERVICE_ACCOUNT" \
-            --key-file ~/.ssh/google_compute_engine.pub || true
