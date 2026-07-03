@@ -17,7 +17,7 @@ from levanter.grug._moe.source_push_forward import (
     SOURCE_PUSH_FORWARD_IMPLEMENTATION_PALLAS_MGPU,
     source_push_forward,
 )
-from levanter.grug._moe.source_push_inbox import AXIS, PushInboxConfig, _make_mesh
+from levanter.grug._moe.source_push_inbox import AXIS, PushInboxConfig
 from levanter.grug._moe.source_push_plan import build_source_push_plan
 from levanter.utils.activation import ActivationFunctionEnum
 
@@ -102,7 +102,7 @@ def moe_mlp_ep_source_push_mgpu(
         w_down_source,
         implementation=SOURCE_PUSH_FORWARD_IMPLEMENTATION_PALLAS_MGPU,
         execution_mode=FORWARD_EXECUTION_STAGED_HOST_SYNC,
-        mesh=_make_mesh(ep_size),
+        mesh=mesh,
     )
     out = out_source.reshape(x.shape)
     return jax.device_put(out, NamedSharding(mesh, batch_spec)), dropped
