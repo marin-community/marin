@@ -36,6 +36,7 @@ from levanter.grug._moe.source_push_inbox import (
     _wgmma_smem,
 )
 from levanter.grug._moe.source_push_plan import (
+    SOURCE_PUSH_META_FIELDS,
     SOURCE_PUSH_META_LOCAL_EXPERT,
     SOURCE_PUSH_META_LOCAL_ROW_START,
     SOURCE_PUSH_META_VALID_ROWS,
@@ -907,11 +908,9 @@ def _validate_reference_shapes(
 ) -> None:
     if hidden.ndim != 3:
         raise ValueError(f"hidden must have shape [dst, rows, I], got {hidden.shape}")
-    if recv_meta.shape != (config.ep_size, config.ep_size, config.entries_per_rank, 4):
-        raise ValueError(
-            "recv_meta shape must be "
-            f"{(config.ep_size, config.ep_size, config.entries_per_rank, 4)}, got {recv_meta.shape}"
-        )
+    expected_recv_meta = (config.ep_size, config.ep_size, config.entries_per_rank, SOURCE_PUSH_META_FIELDS)
+    if recv_meta.shape != expected_recv_meta:
+        raise ValueError("recv_meta shape must be " f"{expected_recv_meta}, got {recv_meta.shape}")
     if w_down.shape != (config.ep_size, config.experts_per_rank, config.intermediate_dim, config.hidden_dim):
         raise ValueError(
             "w_down shape must be "
