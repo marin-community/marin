@@ -16,6 +16,7 @@ from jax.sharding import NamedSharding
 from jax.sharding import PartitionSpec as P
 from test_utils import MLP, arrays_only, assert_trees_not_close, use_test_mesh
 
+import levanter.tensorstore_serialization as lev_ts
 from levanter.models.gpt2 import Gpt2Mlp
 from levanter.tensorstore_serialization import tree_deserialize_leaves_tensorstore, tree_serialize_leaves_tensorstore
 
@@ -194,3 +195,37 @@ def test_tensorstore_ok_with_missing():
             m3 = tree_deserialize_leaves_tensorstore(tmpdir, m2, allow_missing=True)
             assert hax.all(m3.a == hax.full(A, 4))
             assert hax.all(m3.b == hax.zeros(A))
+
+
+def test_serialize_stages_shards_through_pageable_host_transfer():
+    # The pinned-host leak fix works by swapping JAX's `_transfer_shard_to_host` for
+    # levanter's pageable variant for the duration of each save. That seam is a
+    # cross-package monkeypatch: if a JAX upgrade renames or stops calling the
+    # patched attribute, the fix silently stops applying and the per-save host-RAM
+    # ratchet returns with no other test failing. This asserts the seam holds: a
+    # save must route shard transfers through the pageable function, and the write
+    # must still round-trip.
+    calls = []
+    original = lev_ts._transfer_shard_to_pageable_host
+
+    async def recording_transfer(shard):
+        calls.append(shard)
+        return await original(shard)
+
+    A = hax.Axis("A", 16)
+
+    class MyModule(eqx.Module):
+        a: Any
+
+    m = MyModule(a=hax.arange(A, dtype=jnp.float32))
+
+    with use_test_mesh():
+        with TemporaryDirectory() as tmpdir:
+            lev_ts._transfer_shard_to_pageable_host = recording_transfer
+            try:
+                tree_serialize_leaves_tensorstore(tmpdir, m)
+            finally:
+                lev_ts._transfer_shard_to_pageable_host = original
+            assert calls, "serialize did not stage shards through the pageable host transfer"
+            restored = tree_deserialize_leaves_tensorstore(tmpdir, MyModule(a=hax.zeros(A)))
+            assert hax.all(restored.a == m.a)

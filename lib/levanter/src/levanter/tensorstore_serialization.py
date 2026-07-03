@@ -97,23 +97,50 @@ def build_kvstore_spec(path: str) -> dict:
         raise ValueError(f"Unsupported URI scheme for tensorstore: {parsed.scheme!r} in {path!r}")
 
 
+async def _transfer_shard_to_pageable_host(shard) -> np.ndarray:
+    """Stage a shard in ordinary pageable host memory instead of pinned host memory.
+
+    JAX's ``_transfer_shard_to_host`` routes every shard through a ``pinned_host``
+    ``device_put`` whenever the device exposes pinned host memory (i.e. on TPU). Pinned
+    allocations come from the TPU runtime's registered-host arena, which grows to fit each
+    save's full per-host state and is never returned to the OS: on large models the cgroup
+    ``anon`` floor ratchets up 15-25 GB per checkpoint save until the container OOMs, even
+    though the buffers are logically freed after the write commits. Copying through pageable
+    memory (JAX's own path for devices without pinned host memory) avoids the pinned arena
+    entirely; the large staging buffers are returned to the OS when the commit drops them.
+    """
+    data = shard.data
+    data.copy_to_host_async()
+    # Allow other transfers to be scheduled simultaneously.
+    await asyncio.sleep(0)
+    # Zero-copy view of the now-host-resident literal, as in JAX's implementation.
+    return np.array(data, copy=False)
+
+
 @contextlib.contextmanager
-def _serialize_with_fresh_ts_context():
-    """Route ``GlobalAsyncCheckpointManager.serialize`` through a fresh tensorstore ``Context``.
+def _serialize_with_bounded_host_memory():
+    """Route ``GlobalAsyncCheckpointManager.serialize`` around two per-save host-RAM leaks.
 
     JAX serializes every checkpoint with one process-lifetime ``Context`` singleton
     (``tensorstore_impl._TS_CONTEXT``) that strongly owns its cache pool. Each save writes a
     distinct OCDBT database (fresh ``step-{N}`` dir → new cache keys), so caches accumulate in
-    the shared ``Context`` and are never reused or reclaimed. The pinned-host source buffers they
-    reference grow as anonymous host RAM until the cgroup OOM-kills training.
+    the shared ``Context`` and are never reused or reclaimed. The source buffers they reference
+    grow as anonymous host RAM until the cgroup OOM-kills training.
 
     Injecting a fresh ``Context`` per save releases the prior save's pool once its commit drains
     (``serialize`` waits on the previous commit first), bounding live host RAM to one save. The
     ``Context`` clones the JAX config (same pool sizes and concurrency limits), so write behavior
     is unchanged.
+
+    Separately, JAX stages each shard in *pinned* host memory on TPU, and the TPU runtime's
+    pinned arena grows monotonically per save (see :func:`_transfer_shard_to_pageable_host`).
+    Swapping in the pageable transfer bounds that growth too. Both patches only need to cover
+    the synchronous portion of ``serialize`` (``asyncio.run`` inside it awaits every copy
+    future), so restoring them on exit is safe while the commit continues in the background.
     """
     fresh_context = ts.Context(ts_impl._TS_CONTEXT.spec)
     original_async_serialize = ts_impl.async_serialize
+    original_transfer = ts_impl._transfer_shard_to_host
 
     @functools.wraps(original_async_serialize)
     def async_serialize_with_fresh_context(*args, **kwargs):
@@ -121,10 +148,12 @@ def _serialize_with_fresh_ts_context():
         return original_async_serialize(*args, **kwargs)
 
     ts_impl.async_serialize = async_serialize_with_fresh_context
+    ts_impl._transfer_shard_to_host = _transfer_shard_to_pageable_host
     try:
         yield
     finally:
         ts_impl.async_serialize = original_async_serialize
+        ts_impl._transfer_shard_to_host = original_transfer
 
 
 def _create_ocdbt_spec(checkpoint_root: str, array_path: str | None) -> dict:
@@ -248,7 +277,7 @@ def tree_serialize_leaves_tensorstore(
     if debug_checkpointer:
         logger.info("Checkpoint tensorstore serialize entering manager.serialize for %s", checkpoint_dir)
         flush_debug_output(logger)
-    with _serialize_with_fresh_ts_context():
+    with _serialize_with_bounded_host_memory():
         manager.serialize(arrays, tspecs, on_commit_callback=commit_callback)
     if debug_checkpointer:
         logger.info("Checkpoint tensorstore serialize returned from manager.serialize for %s", checkpoint_dir)
