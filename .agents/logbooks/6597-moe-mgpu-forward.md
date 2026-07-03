@@ -670,3 +670,35 @@ package-private source-push forward callable and public `moe_mlp` EP backends.
   - This is a correctness/integration smoke only; it is not a target performance row.
   - Remaining production gap: wiring behind public `MoeImplementation` still needs a decision about host-side
     `SourcePushPlan` construction versus a device/JAX-compatible planner inside the existing public EP dispatch path.
+
+## 2026-07-03 05:04 - H100 pytest for public EP forward comparison
+
+Promoted the package-private source-push vs public EP full-forward comparison into a checked-in H100-only pytest.
+
+- Commit Hash: `59792faf5`
+- Code:
+  - `lib/levanter/tests/grug/test_grugformer_moe.py`
+- Change:
+  - Added `test_source_push_forward_matches_public_ep_backends_on_h100`.
+  - The test is selected by the objective command's `-k 'source_push'`, skips unless 8 visible H100 devices are present,
+    and asserts:
+    - no structured compare errors;
+    - source-push and public dropped-route counts are both zero;
+    - dropped-route delta is zero;
+    - output shape is `[8, 64, 128]`;
+    - `max_abs_diff <= 0.03125`;
+    - `mean_abs_diff <= 0.002`.
+- Local verification:
+  - `uv run --package marin-levanter --group test pytest lib/levanter/tests/grug/test_grugformer_moe.py -q -k 'source_push' -n 0`
+  - Result: `1 skipped, 19 deselected` on non-H100 local environment.
+  - `./infra/pre-commit.py --changed-files --fix`
+  - Result: all checks passed.
+- H100 verification:
+  - Job: `/dlwh/source-push-forward-h100-pytest-59792faf5-20260703-120023`
+  - Command:
+    `uv run --package marin-levanter --group test pytest lib/levanter/tests/grug/test_grugformer_moe.py -q -n 0 -k 'source_push'`
+  - Result: succeeded, `1 passed, 19 deselected, 1 warning in 53.48s`.
+  - Iris summary: succeeded, one task, `exit_code=0`.
+- Interpretation:
+  - The integration acceptance smoke is now a durable pytest gate for H100x8, not only an ad hoc benchmark script.
+  - This still validates the package-private callable path; public `MoeImplementation` wiring remains future work.
