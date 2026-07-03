@@ -21,20 +21,15 @@ import logging
 import re
 import time
 import uuid
-from contextlib import AbstractContextManager
 from pathlib import Path
 
 import click
 import requests
-from iris.cli.connect import IRIS_CLUSTER_CONFIG_DIRS
+from iris.cli.connect import open_controller_endpoint
 from iris.client import IrisClient, Job
-from iris.cluster.composer import provider_bundle
-from iris.cluster.config import load_config
 from iris.cluster.constraints import region_constraint
-from iris.cluster.local_cluster import LocalCluster
 from iris.cluster.tpu_topology import get_tpu_topology
 from iris.cluster.types import EndpointAccess, Entrypoint, EnvironmentSpec, ResourceSpec, is_job_finished, tpu_device
-from rigging.config_discovery import resolve_cluster_config
 from rigging.connect import proxy_path
 from rigging.timing import Duration
 
@@ -64,38 +59,6 @@ def _resolve_chat_template(spec: str | None) -> str | None:
     if not path.is_file():
         raise click.ClickException(f"--chat-template {spec!r} is not a readable file or a http(s) URL.")
     return path.read_text()
-
-
-def _resolve_controller(cluster: str | None, controller: str | None) -> tuple[AbstractContextManager[str], str | None]:
-    """Resolve a reachable controller URL and the cluster's public dashboard origin.
-
-    Returns a context manager yielding the controller URL to talk to (a local SSH
-    tunnel for a named ``--cluster``), plus the public dashboard origin (e.g.
-    ``https://iris.oa.dev``) used to build shareable proxy links, or ``None`` when
-    a bare ``--controller`` is given (no cluster config to read it from).
-    """
-    if controller:
-        return contextlib.nullcontext(controller), None
-    if not cluster:
-        raise click.ClickException("Either --controller or --cluster is required.")
-
-    try:
-        resolved = resolve_cluster_config(cluster, dirs=IRIS_CLUSTER_CONFIG_DIRS)
-    except FileNotFoundError as exc:
-        raise click.ClickException(f"Unknown cluster {cluster!r}; run `iris cluster list`.") from exc
-
-    iris_config = load_config(str(resolved))
-    dashboard_url = iris_config.dashboard_url or None
-    bundle = provider_bundle(iris_config)
-    if iris_config.controller.controller_kind() == "local":
-        controller_address = LocalCluster(iris_config).start()
-        return contextlib.nullcontext(controller_address), dashboard_url
-
-    controller_address = iris_config.controller_address() or bundle.controller.discover_controller(
-        iris_config.controller
-    )
-    click.echo(f"Opening SSH tunnel to controller {controller_address} …")
-    return bundle.controller.tunnel(address=controller_address), dashboard_url
 
 
 def _wait_for_endpoint(client: IrisClient, job: Job, endpoint_name: str, timeout_seconds: float) -> str:
@@ -258,10 +221,12 @@ def main(
         if regions:
             constraints = [region_constraint(regions)]
 
-    controller_cm, dashboard_url = _resolve_controller(cluster, controller)
-    with controller_cm as controller_url:
+    endpoint_cluster = cluster if controller is None else None
+    with open_controller_endpoint(cluster_name=endpoint_cluster, controller_url=controller) as endpoint_info:
+        controller_url = endpoint_info.url
+        dashboard_url = endpoint_info.config.dashboard_url if endpoint_info.config else None
         click.echo(f"Using controller {controller_url}")
-        with IrisClient.remote(controller_url, workspace=Path.cwd()) as client:
+        with IrisClient.remote(controller_url, workspace=Path.cwd(), credentials=endpoint_info.credentials) as client:
             job = client.submit(
                 entrypoint=Entrypoint.from_callable(serve_in_job, config),
                 name=job_name,
@@ -283,7 +248,10 @@ def main(
             else:
                 click.echo(f"  proxy path   {proxy_path(endpoint)}/")
             click.echo(f"  timeout      {timeout_hours:g}h")
-            click.echo(f"  stop with    iris job stop {job} --cluster {cluster or ''}".rstrip())
+            if controller is None and cluster:
+                click.echo(f"  stop with    iris --cluster {cluster} job stop {job}")
+            else:
+                click.echo(f"  stop with    iris --controller-url {controller_url} job stop {job}")
             click.echo("")
 
             if not wait:

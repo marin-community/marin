@@ -16,13 +16,12 @@ from typing import Literal
 
 import click
 from google.protobuf import json_format
+from iris.cli.connect import open_iris_client
 from iris.cluster.backends.k8s.tasks import _sanitize_label_value
 from iris.cluster.types import JobName, is_job_finished
 from iris.rpc import job_pb2
 from rigging.redaction import redact_value
 from rigging.timing import ExponentialBackoff
-
-from scripts.ci.iris_client import open_iris_client
 
 _REPO_ROOT = Path(__file__).parents[2]
 
@@ -106,7 +105,7 @@ def job_status(
     controller_url: str | None = None,
 ) -> job_pb2.JobStatus:
     prefix = _job_id_prefix(job_id)
-    with open_iris_client(iris_config=iris_config, repo_root=repo_root, controller_url=controller_url) as client:
+    with open_iris_client(config_file=iris_config, workspace=repo_root, controller_url=controller_url) as client:
         for job in client.list_jobs(prefix=prefix):
             if job.job_id == job_id:
                 return job
@@ -126,7 +125,7 @@ def wait_for_job(
     """Poll until the job reaches a terminal state. Raises TimeoutError if `timeout` elapses."""
     prefix = _job_id_prefix(job_id)
     start = time.monotonic()
-    with open_iris_client(iris_config=iris_config, repo_root=repo_root, controller_url=controller_url) as client:
+    with open_iris_client(config_file=iris_config, workspace=repo_root, controller_url=controller_url) as client:
         while True:
             job = next((j for j in client.list_jobs(prefix=prefix) if j.job_id == job_id), None)
             if job is None:
@@ -162,7 +161,7 @@ def wait_for_child_job(
         jitter=0.0,
     )
     child_running = False
-    with open_iris_client(iris_config=iris_config, repo_root=repo_root, controller_url=controller_url) as client:
+    with open_iris_client(config_file=iris_config, workspace=repo_root, controller_url=controller_url) as client:
         while True:
             jobs = client.list_jobs(prefix=prefix)
             parent = next((j for j in jobs if j.job_id == job_id), None)

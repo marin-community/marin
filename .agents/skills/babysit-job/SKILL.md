@@ -127,10 +127,6 @@ part of the setup. The state file allows resume after context reset.
 3. CHECK STATUS
    uv run iris --config <CONFIG> job list --prefix <JOB_ID>
 
-   Terminal success: succeeded
-   Terminal non-success: failed, killed, worker_failed, unschedulable
-   Non-terminal: pending, building, running
-
    If `pending_reason` indicates worker scale-up/capacity wait, treat as scheduler
    capacity wait — do not run cluster update/recreate/restart actions. Continue
    waiting on cadence, or stop+resubmit only if user explicitly asks.
@@ -145,9 +141,6 @@ part of the setup. The state file allows resume after context reset.
 
    Fast postmortem: e.g. "13/14 shards peaked near the container memory limit
    and failed with exit 137" → cgroup OOM, raise `--memory` on resubmit.
-
-   For machine-readable automation, use the Iris Python client directly instead
-   of parsing CLI output.
 
 4. PRINT W&B RUN IDS/LINKS (once per training run)
    - For normal runs, record the active W&B run id/display name/link when W&B is

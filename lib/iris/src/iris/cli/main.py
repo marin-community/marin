@@ -11,87 +11,26 @@ import sys
 
 import click
 from rigging.auth import MARIN_DESKTOP_OAUTH_CLIENT, GcpAccessTokenProvider, StaticTokenProvider, run_iap_desktop_login
-from rigging.cluster_manifest import AuthProvider, ClusterAuth, IapAuth
 from rigging.config_discovery import resolve_cluster_config
-from rigging.credential_store import CredentialRecord, cluster_name_from_url, save_credentials
-from rigging.credentials import ClientCredentials, credentials_for
+from rigging.credential_store import CredentialRecord, save_credentials
+from rigging.credentials import ClientCredentials
 from rigging.log_setup import configure_logging
 
 from iris.cli.connect import (
     IRIS_CLUSTER_CONFIG_DIRS,
+    client_credentials,
     iap_config,
     require_controller_url,
+    resolve_cluster_name,
     rpc_client,
     rpc_client_for_ctx,
 )
-from iris.cluster.config import AuthConfig, IapAuthConfig, IrisClusterConfig, load_config
+from iris.cluster.config import IapAuthConfig, load_config
 from iris.cluster.platforms.k8s.controller import configure_client_s3
 from iris.rpc import controller_pb2, job_pb2
 from iris.rpc.proto_display import PRIORITY_BAND_NAMES, priority_band_name, priority_band_value
 
 logger = logging.getLogger(__name__)
-
-
-def resolve_cluster_name(
-    config: IrisClusterConfig | None,
-    controller_url: str | None,
-    cli_cluster_name: str | None,
-) -> str:
-    if cli_cluster_name:
-        return cli_cluster_name
-    if config and config.name:
-        return config.name
-    if config and config.controller.controller_kind() == "local":
-        return "local"
-    if controller_url:
-        return cluster_name_from_url(controller_url)
-    return "default"
-
-
-def _cluster_auth_from_config(auth: AuthConfig) -> ClusterAuth:
-    """Adapt iris's ``AuthConfig`` to rigging's ``ClusterAuth``.
-
-    The single boundary where iris's wire config meets the shared credential
-    vocabulary; everything downstream resolves through ``rigging.credentials``.
-    """
-    provider = auth.provider_kind()
-    if provider == "iap":
-        # ``audiences`` are the login audiences the controller accepts; they
-        # include the desktop client id (interactive flow). A service-account
-        # edge token must carry an IAP-secured audience — never the desktop one,
-        # which IAP rejects — so the desktop client id is dropped here and only
-        # genuine programmatic audiences reach the service-account token path.
-        # When the config fronts no cluster-specific client, the effective
-        # desktop client is the Marin one (the same fallback the login flow and
-        # rigging.credentials use), so its id is dropped from the programmatic
-        # set too.
-        desktop_oauth_client_id = auth.iap.oauth_client_id or None
-        effective_desktop_id = desktop_oauth_client_id or MARIN_DESKTOP_OAUTH_CLIENT.client_id
-        programmatic_audiences = tuple(a for a in auth.iap.audiences if a != effective_desktop_id)
-        return ClusterAuth(
-            AuthProvider.IAP,
-            iap=IapAuth(
-                url=auth.iap.url,
-                desktop_oauth_client_id=desktop_oauth_client_id,
-                desktop_oauth_client_secret=auth.iap.oauth_client_secret or None,
-                programmatic_audiences=programmatic_audiences,
-                signed_header_audience=auth.iap.signed_header_audience or None,
-            ),
-        )
-    if provider == "gcp":
-        return ClusterAuth(AuthProvider.GCP)
-    if provider == "static":
-        return ClusterAuth(AuthProvider.STATIC)
-    return ClusterAuth(AuthProvider.NONE)
-
-
-def client_credentials(config: IrisClusterConfig | None, cluster_name: str) -> ClientCredentials:
-    """Resolve the cluster's client credentials via the shared rigging resolver."""
-    if config is None or config.auth is None:
-        return credentials_for(cluster_name, ClusterAuth(AuthProvider.NONE))
-    auth = config.auth
-    static_token = next(iter(auth.static.tokens), None) if auth.provider_kind() == "static" else None
-    return credentials_for(cluster_name, _cluster_auth_from_config(auth), static_token=static_token)
 
 
 def _configure_client_s3(config) -> None:

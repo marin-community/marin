@@ -29,13 +29,13 @@ from pathlib import Path
 import click
 from connectrpc.errors import ConnectError
 from google.protobuf import json_format
+from iris.cli.connect import open_iris_connection
 from iris.cli.job import build_job_summary
 from iris.client import IrisClient
 from iris.cluster.types import JobName
-from iris.rpc import job_pb2
+from iris.rpc import job_pb2, query_pb2
+from iris.rpc.controller_connect import ControllerServiceClientSync
 from rigging.filesystem import url_to_fs
-
-from scripts.ci.iris_client import open_iris_client
 
 logger = logging.getLogger(__name__)
 
@@ -226,31 +226,40 @@ def fetch_leaf_summaries(client: IrisClient, job_tree: list[dict]) -> list[dict]
     return summaries
 
 
-def fetch_raw_query_task_wall_ms(client: IrisClient, job_id: str, *, include_failed: bool = False) -> int | None:
+def _query_rows(controller: ControllerServiceClientSync, sql: str) -> list[dict[str, object]]:
+    response = controller.execute_raw_query(query_pb2.RawQueryRequest(sql=sql))
+    columns = [column.name for column in response.columns]
+    rows = [json.loads(row) for row in response.rows]
+    return [dict(zip(columns, row, strict=True)) for row in rows]
+
+
+def fetch_raw_query_task_wall_ms(
+    controller: ControllerServiceClientSync, job_id: str, *, include_failed: bool = False
+) -> int | None:
     """Sum per-attempt wall-clock durations across the subtree via ExecuteRawQuery."""
     state_filter = "" if include_failed else f"AND t.state = {_TASK_STATE_SUCCEEDED}"
     sql = _TASK_WALL_TIME_SQL.format(job_id=job_id.replace("'", "''"), state_filter=state_filter)
     try:
-        rows = client.query(sql)
+        rows = _query_rows(controller, sql)
         if not rows:
             return None
         val = rows[0]["task_wall_ms"]
         return int(val) if val is not None else 0
-    except (ConnectError, KeyError, ValueError) as exc:
+    except (ConnectError, json.JSONDecodeError, KeyError, ValueError) as exc:
         logger.warning("iris query task_wall_ms failed: %s", exc)
         return None
 
 
 def fetch_raw_query_task_wall_ms_by_child(
-    client: IrisClient, job_id: str, *, include_failed: bool = False
+    controller: ControllerServiceClientSync, job_id: str, *, include_failed: bool = False
 ) -> dict[str, int] | None:
     """Return per-direct-child task wall ms via ExecuteRawQuery, keyed by child job_id."""
     state_filter = "" if include_failed else f"AND t.state = {_TASK_STATE_SUCCEEDED}"
     sql = _TASK_WALL_TIME_BY_CHILD_SQL.format(job_id=job_id.replace("'", "''"), state_filter=state_filter)
     try:
-        rows = client.query(sql)
-        return {row["child_job_id"]: int(row["task_wall_ms"]) for row in rows}
-    except (ConnectError, KeyError, ValueError) as exc:
+        rows = _query_rows(controller, sql)
+        return {str(row["child_job_id"]): int(row["task_wall_ms"]) for row in rows}
+    except (ConnectError, json.JSONDecodeError, KeyError, ValueError) as exc:
         logger.warning("iris query by_child failed: %s", exc)
         return None
 
@@ -633,7 +642,7 @@ def main(
         "commit_sha": os.environ.get("GITHUB_SHA"),
     }
 
-    with open_iris_client(iris_config=iris_config, repo_root=_REPO_ROOT) as client:
+    with open_iris_connection(config_file=iris_config, workspace=_REPO_ROOT) as (client, controller):
         summary = fetch_job_summary(client, job_id)
         job_tree = fetch_job_tree(client, job_id)
         leaf_summaries = fetch_leaf_summaries(client, job_tree) if job_tree else []
@@ -649,12 +658,12 @@ def main(
         )
 
         if fetch_raw_query_cpu_time:
-            task_wall_ms = fetch_raw_query_task_wall_ms(client, job_id)
+            task_wall_ms = fetch_raw_query_task_wall_ms(controller, job_id)
             if task_wall_ms is None:
                 report.warnings.append("iris query task_wall_ms: failed; sum_task_wall_seconds_total unset")
             else:
                 report.sum_task_wall_seconds_total = task_wall_ms / 1000.0
-            by_child = fetch_raw_query_task_wall_ms_by_child(client, job_id)
+            by_child = fetch_raw_query_task_wall_ms_by_child(controller, job_id)
             if by_child is None:
                 report.warnings.append("iris query by_child: failed; stage_sum_task_wall_seconds empty")
             else:

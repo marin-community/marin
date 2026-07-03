@@ -23,7 +23,7 @@ from rigging.timing import Duration, Timestamp
 from tabulate import tabulate
 
 from iris.cli.bug_report import file_github_issue, format_bug_report, gather_bug_report
-from iris.cli.connect import require_controller_url
+from iris.cli.connect import iris_client_for_ctx, require_controller_url
 from iris.client import IrisClient
 from iris.client.client import Job, JobFailedError
 from iris.cluster.constraints import (
@@ -74,13 +74,7 @@ _STATE_MAP: dict[str, job_pb2.JobState] = {
 
 
 def _remote_client(ctx: click.Context) -> IrisClient:
-    """Build an IrisClient for the current cluster, threading the auth credentials
-    (the Iris JWT and, for IAP-fronted clusters, the IAP ID token) from context."""
-    return IrisClient.remote(
-        require_controller_url(ctx),
-        workspace=Path.cwd(),
-        credentials=ctx.obj.get("credentials"),
-    )
+    return iris_client_for_ctx(ctx, workspace=Path.cwd())
 
 
 def _terminate_jobs(
