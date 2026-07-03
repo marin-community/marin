@@ -1510,3 +1510,61 @@ Summary medians over 5 repeats:
     includes W13, direct W2 return, and source combine.
   - The balanced rows remain stable against the earlier direct-return gate; rough-balanced improves slightly relative to
     the prior `8.536 ms` W13 median and `13.992 ms` full-forward median.
+
+## 2026-07-03 13:43 - Add exact expert-major W13 layout proof for block-aligned plans
+
+Added a private exact expert-major input builder for the W13 source-push inbox path and row-layout accounting fields
+shared by the W13 and full-forward benchmark rows. The production/source-padded performance path remains unchanged.
+
+- Commit Hash: `4fda5d101`
+- Code:
+  - `lib/levanter/src/levanter/grug/_moe/source_push_inbox.py`
+  - `lib/levanter/src/levanter/grug/_moe/source_push_forward.py`
+  - `lib/levanter/tests/grug/test_source_push_inbox.py`
+  - `lib/levanter/tests/grug/test_grugformer_moe.py`
+- Change:
+  - Added row layout labels:
+    - `source_padded_expert_major`
+    - `exact_expert_major`
+  - Added counters separating useful/exact rows, WGMMA-rounded rows, layout rows, layout padding, and hidden-capacity
+    unused rows.
+  - Added `_make_exact_source_push_plan_inputs`, a private exact-layout builder that uses the plan's count-derived
+    `expert_base + src_base + local_row_start` addressing when every live block is full.
+  - The exact builder rejects tail-block plans because the current Lane/WGMMA kernel stores full `block_m` rows and would
+    clobber a following exact source slice otherwise.
+  - Added a Hopper-only W13 smoke that proves the exact count-derived row-start path lowers and matches reference for a
+    block-aligned EP=2 case.
+- Local verification:
+  - `uv run --package marin-levanter --group test pytest lib/levanter/tests/grug/test_source_push_inbox.py -q -k 'source_push_plan_inputs or exact_source_push_plan_inputs'`
+    - Result: `3 passed, 11 warnings in 22.25s`.
+  - `uv run --package marin-levanter --group test pytest lib/levanter/tests/grug/test_source_push_inbox.py -q`
+    - Result: `41 passed, 11 warnings in 24.61s`.
+  - `uv run --package marin-levanter --group test pytest lib/levanter/tests/grug/test_grugformer_moe.py -q -n 0 -k source_push`
+    - Result: `1 passed, 6 skipped, 19 deselected, 1 warning in 4.47s` on non-H100 local hardware.
+  - `./infra/pre-commit.py --changed-files --fix`
+    - Result: all checks passed.
+- H100 verification:
+  - Job: `/dlwh/source-push-exact-layout-h100-pytest-1a7c5743c-local-20260703-203844`
+  - Cluster: `cw-us-east-02a`
+  - Command:
+    ```bash
+    uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job run --no-wait \
+      --job-name source-push-exact-layout-h100-pytest-1a7c5743c-local-20260703-203844 \
+      --cpu 16 --memory 128GB --disk 16GB --gpu H100x8 --reserve H100x8 \
+      --enable-extra-resources --extra gpu -- \
+      timeout 3600s uv run --package marin-levanter --group test pytest \
+      lib/levanter/tests/grug/test_grugformer_moe.py -q -n 0 -k source_push
+    ```
+  - Iris summary:
+    - State: `succeeded`
+    - Task count: `1`
+    - Exit code: `0`
+    - Duration: `131388 ms`
+    - Failure count: `0`
+    - Preemption count: `0`
+  - Pytest result:
+    - `7 passed, 19 deselected, 1 warning in 109.95s`.
+- Interpretation:
+  - This does not switch the target rough-balanced path away from source-padded expert-major rows.
+  - It proves the exact count-derived row-start path is valid for block-aligned cases, including balanced target-style
+    counts, while keeping the source-padded layout as the only safe current path for tail blocks.
