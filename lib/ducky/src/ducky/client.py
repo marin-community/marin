@@ -19,7 +19,9 @@ and auth-agnostic via ``base_url`` + a ``token_provider``:
 Because ducky is **preemptible** (it can vanish and re-register at any time) and
 reads object storage per query, both preemptions and transient network/DNS blips
 surface as errors; :meth:`DuckyClient.run` retries those with exponential backoff
-for up to ``retry_budget`` seconds. A transient poll failure re-polls the same
+for up to ``retry_budget`` seconds per outage (any successful request resets the
+budget, so healthy polling on a long query does not consume it). A transient poll
+failure re-polls the same
 ``query_id`` (never resubmitting a query that may still be running); the query is
 resubmitted only when ducky restarted and no longer knows the id, or the query
 itself died to a transient error. Deterministic errors (SQL, missing file) and
@@ -154,8 +156,10 @@ class DuckyClient:
             auth (tunnel / in-cluster direct).
         poll_interval: seconds between ``/result`` polls.
         timeout: overall seconds to wait for one query to finish.
-        retry_budget: total wall-clock spent retrying retryable failures, with
-            exponential backoff (``retry_base`` doubling, capped at ``retry_cap``).
+        retry_budget: wall-clock spent retrying *consecutive* retryable failures
+            (one outage), with exponential backoff (``retry_base`` doubling,
+            capped at ``retry_cap``). Any successful request resets the budget
+            and backoff.
     """
 
     def __init__(
@@ -176,6 +180,9 @@ class DuckyClient:
         self._retry_budget = retry_budget
         self._retry_base = retry_base
         self._retry_cap = retry_cap
+        # Successful-request counter; ``run()`` compares snapshots of it to tell
+        # consecutive failures (one outage) from a fresh failure after progress.
+        self._ok_requests = 0
 
     def _request(self, method: str, path: str, body: dict | None = None, timeout: float = _HTTP_TIMEOUT) -> dict:
         url = f"{self._base_url}{path}"
@@ -190,6 +197,7 @@ class DuckyClient:
             raise DuckyError(f"ducky {method} {path} unreachable: {e}") from e
         if resp.status_code not in (200, 202):
             raise DuckyError(f"ducky {method} {path} -> HTTP {resp.status_code}: {_error_message(resp)}")
+        self._ok_requests += 1
         return resp.json()
 
     def healthy(self) -> bool:
@@ -207,11 +215,16 @@ class DuckyClient:
         reads (and could change results for non-deterministic SQL). The query is
         resubmitted only when ducky restarted and lost the id ("unknown
         query_id") or the query itself died to a transient error.
+
+        ``retry_budget`` bounds one outage — consecutive retryable failures —
+        not total query wall-clock: any successful request resets it, so a blip
+        after minutes of healthy polling still gets the full budget.
         """
-        start = time.monotonic()
         attempt = 0
         query_id: str | None = None
         deadline = 0.0
+        streak_start = 0.0
+        ok_at_last_failure = -1
         while True:
             try:
                 if query_id is None:
@@ -229,7 +242,14 @@ class DuckyClient:
                     # Submit/poll transport blip; the submitted query (if any)
                     # may still be running, so keep its id and re-poll.
                     retryable, resubmit = _is_retryable(str(e)), False
-                elapsed = time.monotonic() - start
+                now = time.monotonic()
+                if self._ok_requests != ok_at_last_failure:
+                    # Progress since the last failure: this failure starts a new
+                    # outage streak with a fresh budget and backoff.
+                    streak_start = now
+                    attempt = 0
+                ok_at_last_failure = self._ok_requests
+                elapsed = now - streak_start
                 if not retryable or elapsed >= self._retry_budget:
                     # Re-raise with the original detail (HTTP status / "No
                     # endpoint" / "upstream timeout") so callers can see what

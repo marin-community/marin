@@ -34,56 +34,6 @@ def test_render_table_aligns_and_marks_null():
     assert lines[0].index("|") == lines[2].index("|")
 
 
-class _FakeHttp:
-    """Routes ducky's POST /query + GET /result to canned responses."""
-
-    def __init__(self, result: dict, submit_status: int = 202, get_status: int = 200):
-        self._result = result
-        self._submit_status = submit_status
-        self._get_status = get_status
-
-    def post(self, url, json=None, timeout=None):
-        return httpx.Response(self._submit_status, json={"query_id": "abc"}, request=httpx.Request("POST", url))
-
-    def get(self, url, timeout=None):
-        return httpx.Response(self._get_status, json=self._result, request=httpx.Request("GET", url))
-
-
-def test_query_prints_table_and_stats(monkeypatch):
-    monkeypatch.setattr(client, "httpx", _FakeHttp(_DONE))
-    result = CliRunner().invoke(query, ["SELECT 1", "--base-url", _BASE])
-
-    assert result.exit_code == 0, result.output
-    assert "a | b" in result.stdout
-    assert "NULL" in result.stdout
-    assert "2 rows · 42 ms · 99 B · computed" in result.stderr
-    assert "gs://b/ducky/q.parquet" in result.stderr
-
-
-def test_query_json_format(monkeypatch):
-    monkeypatch.setattr(client, "httpx", _FakeHttp(_DONE))
-    result = CliRunner().invoke(query, ["SELECT 1", "--base-url", _BASE, "--format", "json"])
-    assert result.exit_code == 0
-    assert json.loads(result.output)["columns"] == ["a", "b"]
-
-
-def test_query_error_exits_nonzero(monkeypatch):
-    err = {"status": "error", "error": "Catalog Error: nope"}
-    monkeypatch.setattr(client, "httpx", _FakeHttp(err))
-    result = CliRunner().invoke(query, ["SELECT * FROM nope", "--base-url", _BASE])
-    assert result.exit_code != 0
-    assert "Catalog Error: nope" in result.output
-
-
-def test_query_poll_http_error_exits_cleanly(monkeypatch):
-    # a non-200 /result (e.g. server restart, proxy failure) must surface as a CLI error,
-    # not a KeyError on the missing "status" field
-    monkeypatch.setattr(client, "httpx", _FakeHttp({"error": "upstream timeout"}, get_status=504))
-    result = CliRunner().invoke(query, ["SELECT 1", "--base-url", _BASE])
-    assert result.exit_code != 0
-    assert "upstream timeout" in result.output
-
-
 class _ScriptedHttp:
     """Scripted ducky transport: pops one canned (status, payload) per request."""
 
@@ -105,7 +55,43 @@ class _ScriptedHttp:
 
 
 def _client(**kwargs) -> DuckyClient:
-    return DuckyClient(_BASE, poll_interval=0, retry_base=0.01, retry_cap=0.01, **kwargs)
+    return DuckyClient(_BASE, **{"poll_interval": 0, "retry_base": 0.01, "retry_cap": 0.01, **kwargs})
+
+
+def test_query_prints_table_and_stats(monkeypatch):
+    monkeypatch.setattr(client, "httpx", _ScriptedHttp(posts=[(202, {"query_id": "abc"})], gets=[(200, _DONE)]))
+    result = CliRunner().invoke(query, ["SELECT 1", "--base-url", _BASE])
+
+    assert result.exit_code == 0, result.output
+    assert "a | b" in result.stdout
+    assert "NULL" in result.stdout
+    assert "2 rows · 42 ms · 99 B · computed" in result.stderr
+    assert "gs://b/ducky/q.parquet" in result.stderr
+
+
+def test_query_json_format(monkeypatch):
+    monkeypatch.setattr(client, "httpx", _ScriptedHttp(posts=[(202, {"query_id": "abc"})], gets=[(200, _DONE)]))
+    result = CliRunner().invoke(query, ["SELECT 1", "--base-url", _BASE, "--format", "json"])
+    assert result.exit_code == 0
+    assert json.loads(result.output)["columns"] == ["a", "b"]
+
+
+def test_query_error_exits_nonzero(monkeypatch):
+    err = {"status": "error", "error": "Catalog Error: nope"}
+    monkeypatch.setattr(client, "httpx", _ScriptedHttp(posts=[(202, {"query_id": "abc"})], gets=[(200, err)]))
+    result = CliRunner().invoke(query, ["SELECT * FROM nope", "--base-url", _BASE])
+    assert result.exit_code != 0
+    assert "Catalog Error: nope" in result.output
+
+
+def test_query_poll_http_error_exits_cleanly(monkeypatch):
+    # a non-200 /result (e.g. server restart, proxy failure) must surface as a CLI error,
+    # not a KeyError on the missing "status" field; the CLI default budget of 0 fails fast
+    http = _ScriptedHttp(posts=[(202, {"query_id": "abc"})], gets=[(504, {"error": "upstream timeout"})])
+    monkeypatch.setattr(client, "httpx", http)
+    result = CliRunner().invoke(query, ["SELECT 1", "--base-url", _BASE])
+    assert result.exit_code != 0
+    assert "upstream timeout" in result.output
 
 
 def test_run_repolls_same_query_after_transient_poll_blip(monkeypatch):
@@ -150,6 +136,35 @@ def test_run_resubmits_query_that_died_to_transient_error(monkeypatch):
     result = _client(retry_budget=5).run("SELECT 1")
     assert result.total_rows == 2
     assert http.post_count == 2
+
+
+class _FakeClock:
+    """Replaces the ``time`` module in the client: ``sleep`` advances ``monotonic``."""
+
+    def __init__(self):
+        self.now = 0.0
+
+    def monotonic(self) -> float:
+        return self.now
+
+    def sleep(self, seconds: float) -> None:
+        self.now += seconds
+
+
+def test_healthy_polling_does_not_consume_retry_budget(monkeypatch):
+    # retry_budget bounds one outage, not total query wall-clock: a blip after
+    # minutes of healthy polling on a long query must still get retried.
+    clock = _FakeClock()
+    monkeypatch.setattr(client, "time", clock)
+    running = (200, {"status": "running"})
+    http = _ScriptedHttp(
+        posts=[(202, {"query_id": "q1"})],
+        gets=[running] * 60 + [(503, {"error": "service unavailable"}), (200, _DONE)],
+    )
+    monkeypatch.setattr(client, "httpx", http)
+    result = _client(poll_interval=1.0, retry_budget=10).run("SELECT 1")  # blip lands at t=60 > budget
+    assert result.total_rows == 2
+    assert http.post_count == 1
 
 
 def test_run_fails_fast_on_deterministic_query_error(monkeypatch):
