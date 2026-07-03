@@ -255,11 +255,18 @@ def _render_table(columns: list[str], rows: list[list]) -> str:
     return "\n".join(lines)
 
 
-def _run_query(base: str, sql: str, output_format: str, poll_interval: float, timeout: int, use_cache: bool) -> None:
-    # CLI fails fast (retry_budget=0): a persistent error surfaces immediately
-    # rather than blocking an interactive user. Programmatic callers keep the
-    # default budget to ride out preemptions.
-    client = DuckyClient(base, token_provider=None, poll_interval=poll_interval, timeout=timeout, retry_budget=0)
+def _run_query(
+    base: str,
+    sql: str,
+    output_format: str,
+    poll_interval: float,
+    timeout: int,
+    use_cache: bool,
+    retry_budget: float,
+) -> None:
+    client = DuckyClient(
+        base, token_provider=None, poll_interval=poll_interval, timeout=timeout, retry_budget=retry_budget
+    )
     try:
         result = client.run(sql, use_cache=use_cache)
     except DuckyError as e:
@@ -289,6 +296,12 @@ def _run_query(base: str, sql: str, output_format: str, poll_interval: float, ti
 @click.option("--poll-interval", default=1.0, show_default=True, help="Seconds between status polls.")
 @click.option("--timeout", default=3600, show_default=True, help="Max seconds to wait for the query to finish.")
 @click.option("--no-cache", is_flag=True, help="Force a fresh run instead of reusing a prior identical query's result.")
+@click.option(
+    "--retry-budget",
+    default=0.0,
+    show_default=True,
+    help="Wall-clock seconds to retry transient failures (ducky preempted, network blips); 0 fails fast.",
+)
 def query(
     sql: str | None,
     cluster: str | None,
@@ -298,6 +311,7 @@ def query(
     poll_interval: float,
     timeout: int,
     no_cache: bool,
+    retry_budget: float,
 ) -> None:
     """Run SQL against a ducky service and print the result. SQL comes from the argument or stdin."""
     if cluster and base_url:
@@ -311,10 +325,11 @@ def query(
     use_cache = not no_cache
     if cluster:
         with cluster_tunnel(cluster) as controller_url:
-            _run_query(f"{controller_url}/proxy/{endpoint}", sql, output_format, poll_interval, timeout, use_cache)
+            base = f"{controller_url}/proxy/{endpoint}"
+            _run_query(base, sql, output_format, poll_interval, timeout, use_cache, retry_budget)
     else:
         base = base_url or os.environ.get("DUCKY_BASE_URL", DEFAULT_BASE_URL)
-        _run_query(base, sql, output_format, poll_interval, timeout, use_cache)
+        _run_query(base, sql, output_format, poll_interval, timeout, use_cache, retry_budget)
 
 
 if __name__ == "__main__":
