@@ -21,6 +21,10 @@ token/byte counts; the cost model is applied only at analysis time.
 | `collect_ladder.py` | Failure-safe ladder collection: queries job state first (`iris job list --json`), pulls logs only for succeeded jobs (per-job timeout, skip+report on failures), and writes `ladder.json`. Discovery (`--prefix`) or explicit (`--point arm=job`) mode. |
 | `bakeoff_analysis.py` | Re-scores stored fertility + ladder results under a `ServingCostModel` chosen on the CLI (context, sparsity, target size, speed, serving ratio, domain mix). |
 | `../grug/moe/launch_tokenizer_bakeoff.py` | One grug-moe proxy run for a single arm: `BAKEOFF_ARM` sets both data tokenization and model `vocab_size`; held-out validation attached; `compute_bpb` on. |
+| `corpus.py` | Track C: builds the ~1.5 GB English/code/math raw-text sample `train_tokenizers.py` learns from, as a lazy `raw_download` `ArtifactStep` (build-opt-in under `--run`, cacheable by name@version). |
+| `superbpe_trainer.py` | Track C: trains plain BPE (stock Rust `BpeTrainer`) and SuperBPE (two-stage superword BPE, a from-scratch reimplementation of arXiv:2503.13423's algorithm — see the module docstring for why) from raw text. |
+| `train_tokenizers.py` | Track C: the sweep — plain BPE and SuperBPE at a range of (vocab, transition-point) configs — trained on `corpus.py`'s sample; exports each as an HF `tokenizer.json` + `tokenizer_config.json`. |
+| `push_trained_tokenizers.py` | Track C: stages each trained tokenizer into the `mirror://tokenizers/...` cache `levanter.load_tokenizer` reads, so cluster workers can load a trained arm by name with no code changes. |
 
 ## Run it
 
@@ -52,3 +56,47 @@ uv run python -m experiments.tokenize.bakeoff_analysis --fertility fertility_raw
 Step 4 recomputes the Pareto frontier and feBPB from the stored measurements — change the
 cost assumptions and re-run to answer "what's optimal if we serve at 64k / a 400B model / a
 code-heavy traffic mix?" without touching the cluster.
+
+## Track C: train our own tokenizers
+
+Trains plain-BPE/SuperBPE tokenizers on the grug-moe data mix instead of borrowing off-the-shelf
+ones; see `EXPERIMENT_LOG.md` EXP-008 for the sweep and results.
+
+```bash
+# 1. build the ~1.5 GB English/code/math training corpus (a lazy ArtifactStep; run once, then
+#    cached by name@version). CPU-only; on a big CPU node, submit as an iris job (see below).
+uv run python -m experiments.tokenize.corpus --run
+
+# 2. train the sweep (11 configs in train_tokenizers.TRAIN_SPECS) — --jobs N trains N arms
+#    concurrently in separate processes.
+uv run python -m experiments.tokenize.train_tokenizers \
+  --corpus-dir <output_path printed by step 1> \
+  --out-dir experiments/tokenize/results/trained_tokenizers --jobs 11
+
+# 3. stage every trained tokenizer where levanter.load_tokenizer("trained/<name>") finds it
+uv run python -m experiments.tokenize.push_trained_tokenizers \
+  --tokenizers-dir experiments/tokenize/results/trained_tokenizers
+
+# 4. fertility pre-filter the trained arms against the usual baselines
+uv run python -m experiments.tokenize.fertility_report \
+  --arms trained-bpe-64k,trained-bpe-96k,trained-bpe-128k,trained-superbpe-96k-t38k,trained-superbpe-96k-t77k,trained-superbpe-128k-t51k,trained-superbpe-128k-t102k,trained-superbpe-160k-t64k,trained-superbpe-160k-t128k,trained-superbpe-64k-t32k,trained-superbpe-80k-t40k,superbpe-128k,gpt-neox-50k,marin-128k \
+  --out experiments/tokenize/results/fertility_trained.json
+
+# 5. score with the same English-dominant weighting EXP-002 used
+uv run python -m experiments.tokenize.bakeoff_analysis \
+  --fertility experiments/tokenize/results/fertility_trained.json \
+  --domain-weights english_web=0.8,math=0.2
+```
+
+Steps 1-2 are CPU-heavy; on cw-rno2a (a single 192-vCPU/1.5 TB node), submit them as an `iris`
+job rather than running locally, e.g.:
+
+```bash
+uv run iris --cluster=cw-rno2a job run --cpu 128 --memory 1000GB --extra cpu --enable-extra-resources \
+  -e RAYON_NUM_THREADS 12 \
+  -- python -m experiments.tokenize.train_tokenizers --corpus-dir s3://... --jobs 11
+```
+
+Leave headroom below the node's full capacity — the iris controller for cw-rno2a runs on that
+same single node, and a job that claims nearly all of it can starve the controller's own
+rescheduling if it restarts for an unrelated reason.

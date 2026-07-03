@@ -24,6 +24,7 @@ class Axis(StrEnum):
 
     BASELINE = "baseline"  # off-the-shelf vocab families (axis A)
     DERIVED_VOCAB = "derived_vocab"  # rank-truncated Marin 32k/64k (axis A)
+    TRAINED_BPE = "trained_bpe"  # plain BPE trained on the grug-moe mix, not borrowed (axis A)
     PRETOK = "pretok"  # number-aware / capcode (axis B)
     SUPERBPE = "superbpe"  # superword merges (axis C)
     NGRAM = "ngram"  # Over-Tokenized n-gram input embeddings (axis D)
@@ -85,9 +86,90 @@ SUPERBPE_ARMS: tuple[TokenizerArm, ...] = (
     ),
 )
 
+# Track C (issue #6796): tokenizers trained from scratch on the grug-moe data mix (English web
+# + code + math; see corpus.py/train_tokenizers.py), rather than borrowed off-the-shelf. Refs
+# resolve through the `mirror://tokenizers/trained/<name>/...` cache that
+# push_trained_tokenizers.py populates (see that module for why a bare ref, not a raw s3:// path).
+# Vocab sizes are each spec's requested size + 1 (the added `<|endoftext|>` special token);
+# every config in the sweep reached its full requested vocab (see
+# experiments/tokenize/results/trained_tokenizers_manifest.json for per-arm training time).
+TRAINED_BPE_ARMS: tuple[TokenizerArm, ...] = (
+    TokenizerArm(
+        "trained-bpe-64k", "trained/trained-bpe-64k", 64_001, Axis.TRAINED_BPE, "plain BPE, trained on our mix"
+    ),
+    TokenizerArm(
+        "trained-bpe-96k", "trained/trained-bpe-96k", 96_001, Axis.TRAINED_BPE, "plain BPE, trained on our mix"
+    ),
+    TokenizerArm(
+        "trained-bpe-128k", "trained/trained-bpe-128k", 128_001, Axis.TRAINED_BPE, "plain BPE, trained on our mix"
+    ),
+)
+
+# Track C SuperBPE: our own two-stage superword BPE (superbpe_trainer.py, a from-scratch
+# reimplementation of arXiv:2503.13423 — see that module's docstring), trained on the same mix,
+# at a (vocab, transition-point t) sweep plus a small-vocab pair. `note` records t/vocab.
+TRAINED_SUPERBPE_ARMS: tuple[TokenizerArm, ...] = (
+    TokenizerArm(
+        "trained-superbpe-64k-t32k",
+        "trained/trained-superbpe-64k-t32k",
+        64_001,
+        Axis.SUPERBPE,
+        "trained SuperBPE, t/vocab=32k/64k",
+    ),
+    TokenizerArm(
+        "trained-superbpe-80k-t40k",
+        "trained/trained-superbpe-80k-t40k",
+        80_001,
+        Axis.SUPERBPE,
+        "trained SuperBPE, t/vocab=40k/80k",
+    ),
+    TokenizerArm(
+        "trained-superbpe-96k-t38k",
+        "trained/trained-superbpe-96k-t38k",
+        96_001,
+        Axis.SUPERBPE,
+        "trained SuperBPE, t/vocab=38k/96k",
+    ),
+    TokenizerArm(
+        "trained-superbpe-96k-t77k",
+        "trained/trained-superbpe-96k-t77k",
+        96_001,
+        Axis.SUPERBPE,
+        "trained SuperBPE, t/vocab=77k/96k",
+    ),
+    TokenizerArm(
+        "trained-superbpe-128k-t51k",
+        "trained/trained-superbpe-128k-t51k",
+        128_001,
+        Axis.SUPERBPE,
+        "trained SuperBPE, t/vocab=51k/128k",
+    ),
+    TokenizerArm(
+        "trained-superbpe-128k-t102k",
+        "trained/trained-superbpe-128k-t102k",
+        128_001,
+        Axis.SUPERBPE,
+        "trained SuperBPE, t/vocab=102k/128k",
+    ),
+    TokenizerArm(
+        "trained-superbpe-160k-t64k",
+        "trained/trained-superbpe-160k-t64k",
+        160_001,
+        Axis.SUPERBPE,
+        "trained SuperBPE, t/vocab=64k/160k",
+    ),
+    TokenizerArm(
+        "trained-superbpe-160k-t128k",
+        "trained/trained-superbpe-160k-t128k",
+        160_001,
+        Axis.SUPERBPE,
+        "trained SuperBPE, t/vocab=128k/160k",
+    ),
+)
+
 # Registered arms. Extended in later phases as built tokenizers land (their refs will be
 # HF ids under marin-community/ or S3 paths under the cw-rno2a prefix).
-ALL_ARMS: tuple[TokenizerArm, ...] = BASELINE_ARMS + SUPERBPE_ARMS
+ALL_ARMS: tuple[TokenizerArm, ...] = BASELINE_ARMS + SUPERBPE_ARMS + TRAINED_BPE_ARMS + TRAINED_SUPERBPE_ARMS
 
 # Vocab sizes to add to marin.processing.tokenize.data_configs._KNOWN_VOCAB_SIZES so
 # dry-runs/fingerprints don't hit the Hub. Kept here next to the arm definitions.

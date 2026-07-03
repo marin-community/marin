@@ -1,0 +1,373 @@
+{
+  "domains": [
+    "english_web",
+    "math",
+    "multilingual_zh"
+  ],
+  "arms": [
+    {
+      "name": "marin-128k",
+      "ref": "marin-community/marin-tokenizer",
+      "axis": "baseline",
+      "vocab_size": 128256,
+      "fertility_overall": 0.30298381937422214,
+      "total_tokens": 3646170,
+      "total_bytes": 12034207,
+      "by_domain": {
+        "english_web": {
+          "tokens": 894412,
+          "bytes": 4001234,
+          "fertility": 0.2235340397487375
+        },
+        "math": {
+          "tokens": 1530033,
+          "bytes": 4004322,
+          "fertility": 0.3820953959247034
+        },
+        "multilingual_zh": {
+          "tokens": 1221725,
+          "bytes": 4028651,
+          "fertility": 0.3032590810174423
+        }
+      }
+    },
+    {
+      "name": "gpt-neox-50k",
+      "ref": "EleutherAI/gpt-neox-20b",
+      "axis": "baseline",
+      "vocab_size": 50277,
+      "fertility_overall": 0.36900802853067094,
+      "total_tokens": 4440719,
+      "total_bytes": 12034207,
+      "by_domain": {
+        "english_web": {
+          "tokens": 932271,
+          "bytes": 4001234,
+          "fertility": 0.23299587077386627
+        },
+        "math": {
+          "tokens": 1517937,
+          "bytes": 4004322,
+          "fertility": 0.3790746598300536
+        },
+        "multilingual_zh": {
+          "tokens": 1990511,
+          "bytes": 4028651,
+          "fertility": 0.4940887160491192
+        }
+      }
+    },
+    {
+      "name": "superbpe-128k",
+      "ref": "alisawuffles/superbpe-tokenizer-128k",
+      "axis": "superbpe",
+      "vocab_size": 128001,
+      "fertility_overall": 0.3336150026337423,
+      "total_tokens": 4014792,
+      "total_bytes": 12034207,
+      "by_domain": {
+        "english_web": {
+          "tokens": 691988,
+          "bytes": 4001234,
+          "fertility": 0.172943646884936
+        },
+        "math": {
+          "tokens": 1398618,
+          "bytes": 4004322,
+          "fertility": 0.3492771060868731
+        },
+        "multilingual_zh": {
+          "tokens": 1924186,
+          "bytes": 4028651,
+          "fertility": 0.4776253887467542
+        }
+      }
+    },
+    {
+      "name": "trained-bpe-64k",
+      "ref": "trained/trained-bpe-64k",
+      "axis": "trained_bpe",
+      "vocab_size": 64001,
+      "fertility_overall": 0.3824614284929618,
+      "total_tokens": 4602620,
+      "total_bytes": 12034207,
+      "by_domain": {
+        "english_web": {
+          "tokens": 907090,
+          "bytes": 4001234,
+          "fertility": 0.22670256225954294
+        },
+        "math": {
+          "tokens": 1466467,
+          "bytes": 4004322,
+          "fertility": 0.36622104815746587
+        },
+        "multilingual_zh": {
+          "tokens": 2229063,
+          "bytes": 4028651,
+          "fertility": 0.5533025819312718
+        }
+      }
+    },
+    {
+      "name": "trained-bpe-96k",
+      "ref": "trained/trained-bpe-96k",
+      "axis": "trained_bpe",
+      "vocab_size": 96001,
+      "fertility_overall": 0.3586067615423268,
+      "total_tokens": 4315548,
+      "total_bytes": 12034207,
+      "by_domain": {
+        "english_web": {
+          "tokens": 885171,
+          "bytes": 4001234,
+          "fertility": 0.22122450224105863
+        },
+        "math": {
+          "tokens": 1450844,
+          "bytes": 4004322,
+          "fertility": 0.3623195137653765
+        },
+        "multilingual_zh": {
+          "tokens": 1979533,
+          "bytes": 4028651,
+          "fertility": 0.4913637344113451
+        }
+      }
+    },
+    {
+      "name": "trained-bpe-128k",
+      "ref": "trained/trained-bpe-128k",
+      "axis": "trained_bpe",
+      "vocab_size": 128001,
+      "fertility_overall": 0.3425036647616249,
+      "total_tokens": 4121760,
+      "total_bytes": 12034207,
+      "by_domain": {
+        "english_web": {
+          "tokens": 873076,
+          "bytes": 4001234,
+          "fertility": 0.2182016847802453
+        },
+        "math": {
+          "tokens": 1428566,
+          "bytes": 4004322,
+          "fertility": 0.3567560251148634
+        },
+        "multilingual_zh": {
+          "tokens": 1820118,
+          "bytes": 4028651,
+          "fertility": 0.45179341670449985
+        }
+      }
+    },
+    {
+      "name": "trained-superbpe-64k-t32k",
+      "ref": "trained/trained-superbpe-64k-t32k",
+      "axis": "superbpe",
+      "vocab_size": 64001,
+      "fertility_overall": 0.3946419568817455,
+      "total_tokens": 4749203,
+      "total_bytes": 12034207,
+      "by_domain": {
+        "english_web": {
+          "tokens": 750049,
+          "bytes": 4001234,
+          "fertility": 0.18745442031133394
+        },
+        "math": {
+          "tokens": 1398610,
+          "bytes": 4004322,
+          "fertility": 0.3492751082455407
+        },
+        "multilingual_zh": {
+          "tokens": 2600544,
+          "bytes": 4028651,
+          "fertility": 0.645512356369415
+        }
+      }
+    },
+    {
+      "name": "trained-superbpe-80k-t40k",
+      "ref": "trained/trained-superbpe-80k-t40k",
+      "axis": "superbpe",
+      "vocab_size": 80001,
+      "fertility_overall": 0.3784979766427485,
+      "total_tokens": 4554923,
+      "total_bytes": 12034207,
+      "by_domain": {
+        "english_web": {
+          "tokens": 728335,
+          "bytes": 4001234,
+          "fertility": 0.18202759448710074
+        },
+        "math": {
+          "tokens": 1378730,
+          "bytes": 4004322,
+          "fertility": 0.34431047253442654
+        },
+        "multilingual_zh": {
+          "tokens": 2447858,
+          "bytes": 4028651,
+          "fertility": 0.6076123248203927
+        }
+      }
+    },
+    {
+      "name": "trained-superbpe-96k-t38k",
+      "ref": "trained/trained-superbpe-96k-t38k",
+      "axis": "superbpe",
+      "vocab_size": 96001,
+      "fertility_overall": 0.3705635111644664,
+      "total_tokens": 4459438,
+      "total_bytes": 12034207,
+      "by_domain": {
+        "english_web": {
+          "tokens": 710772,
+          "bytes": 4001234,
+          "fertility": 0.17763819861572705
+        },
+        "math": {
+          "tokens": 1370848,
+          "bytes": 4004322,
+          "fertility": 0.34234209936163973
+        },
+        "multilingual_zh": {
+          "tokens": 2377818,
+          "bytes": 4028651,
+          "fertility": 0.5902268526114572
+        }
+      }
+    },
+    {
+      "name": "trained-superbpe-96k-t77k",
+      "ref": "trained/trained-superbpe-96k-t77k",
+      "axis": "superbpe",
+      "vocab_size": 96001,
+      "fertility_overall": 0.3466399572485333,
+      "total_tokens": 4171537,
+      "total_bytes": 12034207,
+      "by_domain": {
+        "english_web": {
+          "tokens": 720877,
+          "bytes": 4001234,
+          "fertility": 0.1801636695079568
+        },
+        "math": {
+          "tokens": 1353417,
+          "bytes": 4004322,
+          "fertility": 0.3379890528284189
+        },
+        "multilingual_zh": {
+          "tokens": 2097243,
+          "bytes": 4028651,
+          "fertility": 0.520581951625991
+        }
+      }
+    },
+    {
+      "name": "trained-superbpe-128k-t51k",
+      "ref": "trained/trained-superbpe-128k-t51k",
+      "axis": "superbpe",
+      "vocab_size": 128001,
+      "fertility_overall": 0.35090255635456497,
+      "total_tokens": 4222834,
+      "total_bytes": 12034207,
+      "by_domain": {
+        "english_web": {
+          "tokens": 686006,
+          "bytes": 4001234,
+          "fertility": 0.1714486081043998
+        },
+        "math": {
+          "tokens": 1338714,
+          "bytes": 4004322,
+          "fertility": 0.3343172701895602
+        },
+        "multilingual_zh": {
+          "tokens": 2198114,
+          "bytes": 4028651,
+          "fertility": 0.5456203577822949
+        }
+      }
+    },
+    {
+      "name": "trained-superbpe-128k-t102k",
+      "ref": "trained/trained-superbpe-128k-t102k",
+      "axis": "superbpe",
+      "vocab_size": 128001,
+      "fertility_overall": 0.33056311894917545,
+      "total_tokens": 3978065,
+      "total_bytes": 12034207,
+      "by_domain": {
+        "english_web": {
+          "tokens": 697305,
+          "bytes": 4001234,
+          "fertility": 0.1742724869377797
+        },
+        "math": {
+          "tokens": 1332330,
+          "bytes": 4004322,
+          "fertility": 0.3327229928062728
+        },
+        "multilingual_zh": {
+          "tokens": 1948430,
+          "bytes": 4028651,
+          "fertility": 0.48364328406704876
+        }
+      }
+    },
+    {
+      "name": "trained-superbpe-160k-t64k",
+      "ref": "trained/trained-superbpe-160k-t64k",
+      "axis": "superbpe",
+      "vocab_size": 160001,
+      "fertility_overall": 0.33940923568956394,
+      "total_tokens": 4084521,
+      "total_bytes": 12034207,
+      "by_domain": {
+        "english_web": {
+          "tokens": 668533,
+          "bytes": 4001234,
+          "fertility": 0.16708170529391683
+        },
+        "math": {
+          "tokens": 1328368,
+          "bytes": 4004322,
+          "fertility": 0.33173356188638176
+        },
+        "multilingual_zh": {
+          "tokens": 2087620,
+          "bytes": 4028651,
+          "fertility": 0.5181933108626188
+        }
+      }
+    },
+    {
+      "name": "trained-superbpe-160k-t128k",
+      "ref": "trained/trained-superbpe-160k-t128k",
+      "axis": "superbpe",
+      "vocab_size": 160001,
+      "fertility_overall": 0.317076148017065,
+      "total_tokens": 3815760,
+      "total_bytes": 12034207,
+      "by_domain": {
+        "english_web": {
+          "tokens": 681528,
+          "bytes": 4001234,
+          "fertility": 0.1703294533636373
+        },
+        "math": {
+          "tokens": 1312722,
+          "bytes": 4004322,
+          "fertility": 0.32782628370046163
+        },
+        "multilingual_zh": {
+          "tokens": 1821510,
+          "bytes": 4028651,
+          "fertility": 0.4521389417946603
+        }
+      }
+    }
+  ]
+}

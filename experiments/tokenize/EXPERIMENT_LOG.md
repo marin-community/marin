@@ -41,7 +41,9 @@ improvement over the stock Llama-3 tokenizer** for target grug-moe models.
 4. 🔄 n-gram embedding **rebuilt to the real Over-Encoding/LongCat method** (EXP-004: 65k→4M
    buckets, mean-combine, norm-matched init, low-rank); OOM fixed (512g); bucket screen + b4M
    ladders on marin & superbpe running.
-5. ⏳ **Track C — train our own tokenizers** (below): the main remaining lever to reach 10% feBPB.
+5. ✅ **Track C — train our own tokenizers** (EXP-008): 11 trained plain-BPE/SuperBPE configs;
+   4 SuperBPE configs beat off-the-shelf superbpe-128k on bytes/token (up to +4.2%), two of
+   them at the *same* vocab. Fertility pre-filter only — GPU isoFLOP ladder not run.
 
 ## EXP-002 — isoFLOP tokenizer ladder (5 arms × 3 points)
 
@@ -186,25 +188,77 @@ run; SuperBPE-128k remains the tokenizer lever.** The uplift path to 10% feBPB i
 
 ---
 
-## Track C — train our own tokenizers (IN SCOPE) _(queued after n-gram validation)_
+## Track C — train our own tokenizers (IN SCOPE)
 
 Off-the-shelf arms only sample what other teams optimized for other data. The point of this work is
-to explore the full space, so we train our own tokenizers on the grug-moe data mix using current
-research and score them on the same feBPB rubric. Delegated to sub-agents; each trained tokenizer
-exports an HF `tokenizer.json`, registers as a `TokenizerArm`, and runs fertility → ladder → feBPB.
+to explore the full space, so we train our own tokenizers on the grug-moe data mix and score them on
+the same feBPB rubric.
 
 Motivation from EXP-002: gpt-neox-50k (small vocab) and superbpe-128k (superword) each win a
 different regime. A tokenizer that is *both* superword *and* right-sized for our mix could dominate.
 
-- **C1 — SuperBPE, trained on our mix, (vocab × transition-point) sweep.** SuperBPE (allenai,
-  arXiv 2503.13423) trains a subword BPE then continues with whitespace-spanning merges past a
-  transition point `t`. Off-the-shelf superbpe-128k fixes one `(vocab, t)`; we sweep both on our
-  English/math/code mix. Vocab ∈ {64k, 96k, 128k, 160k}; `t` ∈ a few fractions. Highest-value cell.
-- **C2 — plain BPE vocab-size sweep on our mix** (control: does training on our own data beat the
-  off-the-shelf BPE arms at matched vocab?).
-- **C3 — newer methods**: survey + train the promising of BoundlessBPE, Picky-BPE, SaGe,
-  scaffold-BPE, digit-grouping/pretokenization variants; keep whatever clears the fertility filter.
-- **Compose with n-gram**: the best trained tokenizer × the best n-gram config is the final
-  candidate for the 10% feBPB target.
-- **Reproduce/replay**: training harness + per-tokenizer configs will live under
-  `experiments/tokenize/` with their own EXP entries and launch/collect commands as they run.
+## EXP-008 — train our own tokenizers: plain BPE + SuperBPE, on the grug-moe mix
+
+- **Research**: SuperBPE (Liu, Hayase, Hofmann, Oh, Smith, Choi; arXiv:2503.13423) trains a
+  whitespace-respecting BPE to a transition vocab `t`, then continues merging past `t` without
+  the whitespace constraint so later merges span former word boundaries ("superwords", e.g.
+  `` of the`` as one token). The authors' implementation needs a custom Rust fork of
+  `tokenizers` (`alisawuffles/tokenizers-superbpe`) that conflicts with the stock package this
+  repo depends on everywhere else, so `superbpe_trainer.py` reimplements the *algorithm* on
+  stock `tokenizers`: the Rust `BpeTrainer` for stage 1, a from-scratch vectorized (numpy)
+  greedy BPE merge learner for stage 2. Newer methods surveyed for this pass: BoundlessBPE and
+  Picky-BPE (both extend/prune a standard BPE trainer with no reference implementation
+  compatible with stock `tokenizers` — same reimplementation cost as SuperBPE for a less-tested
+  gain); SaGe and scaffold-BPE (need a full custom trainer, no worked open implementation);
+  digit pretokenization (already exercised by qwen3-152k in EXP-002). Practically trainable in
+  this pass: plain BPE and SuperBPE.
+- **Harness**: `corpus.py` builds a ~1.5 GB English/code/math raw-text sample (70/20/10 split:
+  `DKYoon/SlimPajama-6B`, `codeparrot/codeparrot-clean-valid`, `HuggingFaceTB/finemath`) as a
+  lazy `raw_download` `ArtifactStep`, following the `experiments/datasets/` convention.
+  `train_tokenizers.py` trains a sweep of plain-BPE/SuperBPE configs on it and exports each as
+  an HF `tokenizer.json`/`tokenizer_config.json` pair; `push_trained_tokenizers.py` stages them
+  into the `mirror://tokenizers/trained/<name>/...` cache `levanter.load_tokenizer` reads, so a
+  trained arm loads by name with no code changes (verified on-cluster).
+- **Sweep**: plain BPE at {64k, 96k, 128k}; SuperBPE at (vocab × t) ∈ {96k×{38k,77k},
+  128k×{51k,102k}, 160k×{64k,128k}} plus a small-vocab pair {64k×32k, 80k×40k} — 11 configs.
+  **Feasibility**: the first vectorized merge learner (one `np.unique`/`bincount` pass per
+  single merge) measured ~2-5ms/merge on a 60 MB sample, but that cost is a near-fixed per-call
+  overhead, not per-merge work — projected to hours per config at full corpus scale. Fixed by
+  batching up to 2000 merges per global recount (conflicts between simultaneously-chosen pairs
+  resolve via one left-to-right sweep; a loser is simply picked up in the next round's
+  recount — a documented approximation of strict one-at-a-time greedy BPE, not a correctness
+  gap). Stage 2 additionally runs on a 300 MB bounded subsample of the corpus
+  (`STAGE2_SAMPLE_BYTES`) to keep the flattened pair array tractable; stage 1 (stock Rust
+  trainer) always uses the full 1.5 GB. **All 11 configs reached their full requested vocab**
+  (no early stopping); wall time on cw-rno2a (128 CPU, 11-way parallel) ranged 297s (plain BPE
+  64k) to 780s (SuperBPE 160k×t64k, ~96k merges — the largest merge count in the sweep).
+  Reproduce: `uv run python -m experiments.tokenize.corpus --run` then
+  `uv run python -m experiments.tokenize.train_tokenizers --corpus-dir <printed output_path> --jobs 11`.
+- **Fertility pre-filter**: registered all 11 as `TokenizerArm`s (axis `trained_bpe`/`superbpe`)
+  in `bakeoff_tokenizers.py`; measured with `fertility_report.py` on the same held-out sample as
+  EXP-001 (code domain unavailable — same `github-code-clean` legacy-script failure noted
+  there). Raw per-domain counts: `results/fertility_trained.json`.
+  Reproduce: `uv run python -m experiments.tokenize.fertility_report --arms <names> --out results/fertility_trained.json`.
+- **Result** (bytes/token, English-dominant weighting matching EXP-002's replay convention —
+  `bakeoff_analysis --domain-weights english_web=0.8,math=0.2`; higher = fewer tokens = cheaper):
+
+  | arm | vocab | B/tok | rel_serve | vs superbpe-128k |
+  |---|---|---|---|---|
+  | trained-superbpe-160k-t64k | 160,001 | 5.00 | 0.787 | **+4.2%** |
+  | trained-superbpe-160k-t128k | 160,001 | 4.95 | 0.794 | **+3.1%** |
+  | trained-superbpe-128k-t51k | 128,001 | 4.90 | 0.799 | **+2.1%** (same vocab) |
+  | trained-superbpe-128k-t102k | 128,001 | 4.86 | 0.807 | **+1.3%** (same vocab) |
+  | superbpe-128k (off-the-shelf) | 128,001 | 4.80 | 0.816 | ref |
+  | trained-superbpe-96k-t38k | 96,001 | 4.75 | 0.822 | −1.0% (smaller vocab) |
+  | trained-bpe-128k | 128,001 | 4.07 | 0.963 | −15.2% |
+  | marin-128k | 128,256 | 3.92 | 1.000 | −18.3% |
+  | gpt-neox-50k | 50,277 | 3.81 | 1.017 | −20.6% |
+
+- **Conclusion**: 4 of 8 trained SuperBPE configs beat off-the-shelf superbpe-128k on
+  bytes/token; two do it at the *same* vocab (128k) — the cleanest win, identical LM-head cost
+  for strictly more bytes/token. Training our own SuperBPE on the deployment mix, not just
+  borrowing an off-the-shelf English-web tokenizer, is a real additional lever beyond EXP-002's
+  off-the-shelf ladder. Plain BPE trained on our mix beats matched-vocab off-the-shelf BPE
+  (marin-128k) but stays well below any SuperBPE variant — the superword mechanism dominates
+  the vocab-training effect. Shortlist for a GPU isoFLOP ladder (not run here): `trained-superbpe-128k-t51k`,
+  `trained-superbpe-160k-t64k`, `trained-superbpe-128k-t102k`, `trained-superbpe-160k-t128k`.
