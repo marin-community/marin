@@ -1108,6 +1108,28 @@ def _source_padded_plan_row_bases(plan: SourcePushPlan, block_m: int) -> tuple[n
     return rounded_counts, expert_base, src_base_by_expert
 
 
+def _source_padded_plan_send_meta(
+    plan: SourcePushPlan,
+    expert_base: np.ndarray,
+    src_base_by_expert: np.ndarray,
+) -> np.ndarray:
+    send_meta = np.asarray(plan.send_meta, dtype=np.int32).copy()
+    ep_size = send_meta.shape[0]
+    for src in range(ep_size):
+        for dst_ordinal in range(send_meta.shape[1]):
+            dst = (src + dst_ordinal) % ep_size
+            for entry in range(send_meta.shape[2]):
+                valid_rows = int(send_meta[src, dst_ordinal, entry, 3])
+                if valid_rows <= 0:
+                    continue
+                expert = int(send_meta[src, dst_ordinal, entry, 1])
+                local_row_start = int(send_meta[src, dst_ordinal, entry, 2])
+                send_meta[src, dst_ordinal, entry, 2] = (
+                    int(expert_base[dst, expert]) + int(src_base_by_expert[dst, src, expert]) + local_row_start
+                )
+    return send_meta
+
+
 def _make_routing_inputs(config: PushInboxConfig) -> HostInputs:
     counts = _routing_counts(config)
     _, expert_base, src_base = _routing_row_bases(config, counts)
@@ -1241,9 +1263,10 @@ def _make_compact_routing_inputs(config: PushInboxConfig) -> HostInputs:
 def _make_source_push_plan_inputs(config: PushInboxConfig) -> HostInputs:
     """Build expert-major queue inputs from the invertible source-push plan.
 
-    Lane lowering does not currently support masked GMEM stores from the WGMMA
-    path, so v0 gives each source slice `block_m`-rounded room inside an expert.
-    Invalid packed rows are zero and remain source-owned padding.
+    The plan owns the inverse map and source-local row identity. Before the
+    hot kernel launches, the host converts each block's local row start into a
+    source-padded expert-major row start, avoiding per-store base lookups in the
+    WGMMA path. Invalid packed rows are zero and remain source-owned padding.
     """
     counts = _routing_counts(config)
     selected_experts = np.stack(
@@ -1262,13 +1285,13 @@ def _make_source_push_plan_inputs(config: PushInboxConfig) -> HostInputs:
     )
     source_tokens = np.stack([_make_source_tokens(config, src) for src in range(config.ep_size)], axis=0)
     x_host = np.asarray(pack_source_push_tokens(jnp.asarray(source_tokens, dtype=jnp.float32), plan), dtype=np.float32)
-    send_meta = np.asarray(plan.send_meta, dtype=np.int32)
-    recv_meta = np.asarray(plan.recv_meta, dtype=np.int32)
     rounded_counts, expert_base, src_base_by_expert = _source_padded_plan_row_bases(plan, config.block_m)
+    send_meta = _source_padded_plan_send_meta(plan, expert_base, src_base_by_expert)
+    recv_meta = _recv_meta_from_send_meta(config, send_meta)
     stats = _queue_stats(config, send_meta)
     plan_stats = source_push_plan_row_stats(plan)
     stats["input_mode"] = "source_push_plan"
-    stats["row_start_mode"] = "local_row_start_source_padded"
+    stats["row_start_mode"] = "source_padded_row_start"
     stats["dropped_routes"] = plan_stats.dropped_routes
     stats["dropped_entries_total"] = 0
     stats["dropped_rows_total"] = plan_stats.dropped_routes
@@ -1288,7 +1311,6 @@ def _make_source_push_plan_inputs(config: PushInboxConfig) -> HostInputs:
         expert_base=expert_base,
         src_base_by_expert=src_base_by_expert,
         queue_stats=stats,
-        use_exact_expert_major=True,
     )
 
 

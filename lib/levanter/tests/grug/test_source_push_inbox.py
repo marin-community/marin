@@ -204,7 +204,7 @@ def test_compact_routing_inputs_match_synthetic_queue_metadata():
     assert not np.all(compact_inputs.x[0, 0, 0, 0, :] == compact_inputs.x[0, 0, 0, 0, 0])
 
 
-def test_source_push_plan_inputs_use_exact_local_row_starts():
+def test_source_push_plan_inputs_use_source_padded_row_starts():
     config = source_push_inbox.PushInboxConfig(
         ep_size=2,
         entries_per_rank=4,
@@ -226,18 +226,18 @@ def test_source_push_plan_inputs_use_exact_local_row_starts():
     host_inputs = source_push_inbox._make_source_push_plan_inputs(config)
     valid_rows = host_inputs.send_meta[..., 3]
     live_entries = valid_rows > 0
-    exact_live_mask = source_push_inbox._hidden_live_row_mask(
+    live_mask = source_push_inbox._hidden_live_row_mask(
         config,
         host_inputs.send_meta,
         host_inputs.expert_base,
         host_inputs.src_base_by_expert,
-        use_exact_expert_major=True,
+        use_exact_expert_major=host_inputs.use_exact_expert_major,
     )
 
-    assert host_inputs.use_exact_expert_major
+    assert not host_inputs.use_exact_expert_major
     assert host_inputs.queue_stats["input_mode"] == "source_push_plan"
-    assert host_inputs.queue_stats["row_start_mode"] == "local_row_start_source_padded"
-    assert int(np.sum(exact_live_mask)) == int(np.sum(valid_rows))
+    assert host_inputs.queue_stats["row_start_mode"] == "source_padded_row_start"
+    assert int(np.sum(live_mask)) == int(np.sum(live_entries) * config.block_m)
     assert int(np.sum(live_entries) * config.block_m) > int(np.sum(valid_rows))
     assert host_inputs.queue_stats["plan_padded_rows_total"] == int(np.sum(live_entries) * config.block_m)
 
@@ -245,15 +245,9 @@ def test_source_push_plan_inputs_use_exact_local_row_starts():
     dst = 0
     dst_ordinal = source_push_inbox._dst_ordinal(config, src, dst)
     first_live_entry = int(np.flatnonzero(live_entries[src, dst_ordinal])[0])
-    local_expert = host_inputs.send_meta[src, dst_ordinal, first_live_entry, 1]
-    local_row_start = host_inputs.send_meta[src, dst_ordinal, first_live_entry, 2]
-    exact_row_start = (
-        host_inputs.expert_base[dst, local_expert]
-        + host_inputs.src_base_by_expert[dst, src, local_expert]
-        + local_row_start
-    )
+    row_start = host_inputs.send_meta[src, dst_ordinal, first_live_entry, 2]
 
-    assert local_row_start < exact_row_start
+    assert row_start >= config.block_m
 
 
 def test_exact_reference_hidden_masks_tail_rows_before_next_source_slice():
