@@ -923,3 +923,58 @@ this check.
     queue-slot reuse/semaphore skew or WGMMA scheduling variance. The most direct follow-up is a bounded diagnostic
     run on rough-balanced cf1.25 comparing full W13 against `copy_release_only` and `compute_only_local` with the same
     queue metadata, reporting p90/p95 and slow-repeat count rather than only medians.
+
+## 2026-07-03 08:06 - W13 slow-tail decomposition with source-plan diagnostics
+
+Ran the bounded rough-balanced source-plan diagnostic proposed above on H100s. This uses the PR #6841 source-push
+profile and identical source-plan queue metadata across variants.
+
+- Commit Hash: `eb27dbc86`
+- Job: `/dlwh/source-push-w13-tail-diag-eb27dbc86-20260703`
+- Cluster: `cw-us-east-02a`
+- Iris summary: succeeded, one task, `exit_code=0`.
+- Command:
+  ```bash
+  uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job run --no-wait \
+    --job-name source-push-w13-tail-diag-eb27dbc86-20260703 \
+    --cpu 16 --memory 128GB --disk 16GB --gpu H100x8 --reserve H100x8 \
+    --enable-extra-resources --extra gpu -- \
+    timeout 7200s uv run --package marin-levanter --group test python \
+    lib/levanter/scripts/bench/bench_source_push_inbox_diagnostics.py \
+    --source-push-profile hopper_source_push_inbox_rough_balanced_216 \
+    --input-mode source_push_plan \
+    --variants full,copy_release_only,compute_only_local \
+    --repeat-runs 24 --warmup 2 --steps 5 --separate-compile --no-progress-events \
+    --git-sha eb27dbc86 --jsonl scratch/source_push_w13_tail_diag_eb27dbc86_20260703.jsonl
+  ```
+- Summary rows:
+
+  | variant | repeats | median time | p90 | p95 | max | rounded W13 TFLOP/s/rank | useful W13 TFLOP/s/rank | min useful | slow repeats `<160` |
+  | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+  | `full` | 24 | `8.395 ms` | `11.390 ms` | `12.955 ms` | `13.826 ms` | `217.11` | `204.64` | `124.26` | `3/24 = 12.5%` |
+  | `copy_release_only` | 24 | `5.611 ms` | `5.711 ms` | `7.032 ms` | `10.037 ms` | `324.84` | `306.19` | `171.17` | `0/24 = 0.0%` |
+  | `compute_only_local` | 24 | `6.571 ms` | `6.621 ms` | `6.633 ms` | `7.596 ms` | `277.38` | `261.45` | `226.16` | `0/24 = 0.0%` |
+
+- Shared queue metadata:
+  - `live_entries_total=17382`, `payload_send_entries_total=17382`, `masked_rows_total=63872`.
+  - `send_masked_row_fraction=0.057416`, `slot_empty_waits=17382`, `slot_full_waits=86910`.
+  - `tail_entries_total=2032`, `max_slot_reuse_depth=23`, drops `0`.
+- Slowest repeats:
+  - `full`: `12.556 ms`, `13.025 ms`, `13.826 ms` (`136.8`, `131.9`, `124.3` useful TFLOP/s/rank).
+  - `copy_release_only`: `7.264 ms`, `10.037 ms` (`236.5`, `171.2` useful TFLOP/s/rank).
+  - `compute_only_local`: one `7.596 ms` repeat (`226.2` useful TFLOP/s/rank); otherwise the slowest cluster is
+    `6.596-6.635 ms`.
+- Interpretation:
+  - The full path reproduces the slow-tail trigger (`3/24 = 12.5%` below `160` useful TFLOP/s/rank), matching the
+    prior 9-repeat and 48-repeat evidence.
+  - `copy_release_only` has a milder tail but does not cross the slow threshold; `compute_only_local` is tighter still.
+    That argues against either standalone remote copy/semaphore traffic or standalone local WGMMA being sufficient to
+    explain the severe full-path tail.
+  - Median full time (`8.395 ms`) is much less than the serial sum of median `copy_release_only + compute_only_local`
+    (`12.182 ms`), so the combined kernel is overlapping work on the median path. The remaining issue is a combined-path
+    interaction tail, likely from queue-slot/arrival skew plus compute scheduling rather than from a pure copy-only or
+    compute-only floor.
+- Next action:
+  - Keep this as the current slow-tail decomposition baseline for PR #6841. If more perf work is needed before landing,
+    the next diagnostic should instrument per-slot/per-phase wait distribution or split producer/consumer scheduling,
+    not blindly tune the existing full kernel.
