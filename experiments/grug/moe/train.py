@@ -40,6 +40,7 @@ from levanter.utils.logging import LoadingTimeTrackerIterator
 from experiments.grug.checkpointing import restore_grug_state_from_checkpoint
 from experiments.grug.dispatch import dispatch_grug_training_run
 from experiments.grug.moe.model import GrugModelConfig, Transformer
+from experiments.grug.sharding_dump import dump_grug_state_sharding_artifact
 
 # This file intentionally mirrors `experiments/grug/base/train.py` with
 # variant-specific model/loss/FLOP wiring, per the grug copy-first workflow in
@@ -67,6 +68,7 @@ class GrugTrainerConfig:
     # slice) and expert_axis_size>1 (expert parallelism over the intra-slice devices).
     expert_axis_size: int = 1
     replica_axis_size: int | None = None
+    sharding_dump_path: str | None = None
 
 
 @dataclass(frozen=True)
@@ -436,6 +438,8 @@ def _run_grug_local(config: GrugRunConfig) -> None:
             mesh=mesh,
             allow_partial=trainer.allow_partial_checkpoint,
         )
+        if config.trainer.sharding_dump_path is not None:
+            dump_grug_state_sharding_artifact(state, config.trainer.sharding_dump_path)
 
         levanter.tracker.log_summary({"parameter_count": parameter_count(state.params)})
 
