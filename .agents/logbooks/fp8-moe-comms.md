@@ -217,3 +217,24 @@ relfrob(dx) 1.2e-1. fp8gemm alone was only 92.2, so ~36 ms came from the wire le
 than byte-halving explains; the custom transpose also replaces jax's builtin
 ragged_all_to_all AD transpose, which is apparently a large part of the bf16 backward cost.
 Still 2.4x slower than ring bf16 intra-node — a2a remains cross-node-only material.
+
+### FP8MOE-006 — deliverable branches sealed (2026-07-03)
+
+Spike code reorganized into the two review-optimized branches (base `fp8-ragged-dot-mixed-fork`
+amended once: the vendored setup script's stale usage path, per `--review` finding):
+
+- **`fp8-moe-mlp`** (1 commit): `MoeRaggedDotOps` + `_pmax_replicated_cotangent` + threading
+  through moe_mlp / MoEExpertMlp / ring / a2a backends + CPU tests
+  (`test_moe_ragged_dot_ops.py`, incl. a direct pmax-vs-psum semantics test).
+- **`fp8-moe-mlp-comms`** (2 commits): `fp8_wire` module (permutation-legs-only design), then
+  the `fp8_wire` flag through moe_mlp into ring + a2a + tests (`test_moe_fp8_wire.py`; the
+  ragged-a2a parity test is GPU-only).
+
+Validation of the final branch code: 10/10 tests on the 8x H100 pod; cross-node spot check
+reproduces the headline — ring EP16 bf16 33.47 -> fp8wire 23.28 ms (**1.438x**). Bench harness
+(`bench_fp8_moe_layer.py`) and this logbook stay on `research/fp8-moe-comms` only.
+
+Left as follow-ups: grug trainer opt-in plumbing (OverwriteWithGradient handling exists
+generically in levanter's trainer; grug configs need an FP8 switch — default stays bf16),
+H3 (fp8 permutes), H4 (wire->GEMM QDQ elision), a2a backend intra-node permute costs,
+scientific validation of relfrob(dx) ~1e-1 before any training run.
