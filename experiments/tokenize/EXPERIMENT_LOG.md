@@ -108,8 +108,46 @@ improvement over the stock Llama-3 tokenizer** for target grug-moe models.
   `SCALE_RAM=512g` (nodes have ~1.5 TB) — verified by a 10-step smoke. NOT a config error; the
   n-gram method itself trains fine (steady-state fits GPU; only the checkpoint gather overflowed).
   10-step eval BPB was finite. The original 256g wave was killed and relaunched at 512g (rev 2).
-- **Result**: _pending (512g wave)_
-- **Conclusion**: _pending_
+- **Result** (BPB @ s3500, marin-128k baseline = 1.2376; ratio 1.0, orders 2,3,4, rank 128):
+
+  | buckets | 65k | 786k | 3.1M | 4M |
+  |---|---|---|---|---|
+  | BPB | 1.2560 | 1.2497 | 1.2425 | 1.2505 |
+
+- **Conclusion**: **collision diagnosis confirmed** — BPB improves monotonically 65k→786k→3.1M as
+  the hash vocabulary grows (my original 65k "negative" was collision noise, not the method). It
+  plateaus by ~3M (4M ≈ 3M within noise). BUT at ratio 1.0 even large buckets stay slightly *above*
+  baseline — the fix is the contribution ratio, not just buckets → EXP-006.
+
+## EXP-006 — n-gram contribution-ratio sweep (the real knob at proxy scale)
+
+- **Hypothesis**: with norm-matched init, ratio 1.0 makes the (initially random) n-gram terms
+  compete equally with the base embedding through the post-embedding RMSNorm, drowning signal in
+  noise. A *lighter* n-gram (smaller ratio) should help; a heavier one should hurt.
+- **Config**: marin-128k, b4M (4M buckets, mean, orders 2,3,4, rank 128), s3500, ratio swept.
+- **Reproduce**: env `…BAKEOFF_NGRAM_RATIO=<r>…` on `launch_tokenizer_bakeoff` (see the ratio_run
+  helper in the campaign; also `launch_ngram_sweep`'s b4M-r0p5/b4M-r2 cells).
+- **Result** (BPB @ s3500, baseline 1.2376):
+
+  | ratio | 0.25 | 0.5 | 0.75 | 1.0 | 2.0 |
+  |---|---|---|---|---|---|
+  | BPB | _pend_ | **1.2353 (−0.2%)** | _pend_ | 1.2505 | 1.2838 |
+
+- **Conclusion (partial)**: monotone in ratio — a light n-gram (0.5) is the first config to beat
+  baseline, heavier injects noise. The proxy-scale gain is small (−0.2%); magnitude is the scale
+  question → EXP-007.
+
+## EXP-007 — does the n-gram gain grow with model scale? _(running)_
+
+- **Hypothesis**: the paper's gain "appears at high sparsity and grows with activated params" — our
+  hidden-1024 (~200M activated) proxy is at their smallest scale, hence the tiny gain. A wider proxy
+  should widen the marin-vs-(marin+n-gram) BPB gap, evidencing that the lever pays off at the 20B-
+  activated target.
+- **Config**: hidden **2048** (16 layers, 32 experts, top-4; ~4× params), marin-128k baseline vs
+  marin-128k + n-gram (b4M, ratio 0.5, rank 256), at s3500 + s8000. SCALE_RAM 512g.
+- **Reproduce**: `w2048` helper (SCALE_HIDDEN_DIM=2048 …; job-names `grug-w2048[-ngram]-marin-128k-s<steps>`).
+- **Result / Conclusion**: _pending_ — compare the hidden-2048 Δ(ngram−base) to the hidden-1024 Δ
+  (−0.2% at ratio 0.5). A larger negative Δ = the lever scales.
 
 ## EXP-005 — n-gram (paper config b4M) stacked on superbpe-128k _(pending)_
 
