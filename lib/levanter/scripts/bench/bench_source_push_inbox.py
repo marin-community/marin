@@ -15,6 +15,8 @@ from levanter.grug._moe.source_push_inbox import (
     ROUTING_MODES,
     PushInboxConfig,
     run_source_push_inbox,
+    run_source_push_inbox_compact_routing,
+    run_source_push_inbox_source_plan,
 )
 from levanter.grug._moe.source_push_inbox_profiles import SOURCE_PUSH_PROFILES, source_push_profile_defaults
 
@@ -80,6 +82,12 @@ def parse_source_push_inbox_args(argv: Sequence[str] | None = None) -> argparse.
     parser.add_argument("--tokens-per-rank", type=int, default=default("tokens_per_rank", 32768))
     parser.add_argument("--topk", type=int, default=default("topk", 4))
     parser.add_argument("--routing-seed", type=int, default=default("routing_seed", 0))
+    parser.add_argument("--capacity-factor", type=float, default=default("capacity_factor", 1.25))
+    parser.add_argument(
+        "--input-mode",
+        choices=("synthetic_blocks", "compact_routing", "source_push_plan"),
+        default=default("input_mode", "synthetic_blocks"),
+    )
     parser.add_argument("--warmup", type=int, default=default("warmup", 1))
     parser.add_argument("--steps", type=int, default=default("steps", 5))
     parser.add_argument("--repeat-runs", type=int, default=default("repeat_runs", 1))
@@ -145,8 +153,14 @@ def main(argv: Sequence[str] | None = None) -> None:
                                                 tokens_per_rank=args.tokens_per_rank,
                                                 topk=args.topk,
                                                 routing_seed=args.routing_seed,
+                                                capacity_factor=args.capacity_factor,
                                             )
-                                            rows = run_source_push_inbox(
+                                            run_fn = {
+                                                "synthetic_blocks": run_source_push_inbox,
+                                                "compact_routing": run_source_push_inbox_compact_routing,
+                                                "source_push_plan": run_source_push_inbox_source_plan,
+                                            }[args.input_mode]
+                                            rows = run_fn(
                                                 config,
                                                 warmup=args.warmup,
                                                 steps=args.steps,

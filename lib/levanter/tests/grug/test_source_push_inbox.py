@@ -204,6 +204,117 @@ def test_compact_routing_inputs_match_synthetic_queue_metadata():
     assert not np.all(compact_inputs.x[0, 0, 0, 0, :] == compact_inputs.x[0, 0, 0, 0, 0])
 
 
+def test_source_push_plan_inputs_use_exact_local_row_starts():
+    config = source_push_inbox.PushInboxConfig(
+        ep_size=2,
+        entries_per_rank=4,
+        inbox_slots=2,
+        hidden_dim=8,
+        intermediate_dim=8,
+        block_m=2,
+        block_k=4,
+        block_n=4,
+        experts_per_rank=2,
+        send_worker_programs_per_peer=1,
+        worker_programs_per_peer=4,
+        routing="balanced",
+        tokens_per_rank=5,
+        topk=2,
+        capacity_factor=1.25,
+    )
+
+    host_inputs = source_push_inbox._make_source_push_plan_inputs(config)
+    valid_rows = host_inputs.send_meta[..., 3]
+    live_entries = valid_rows > 0
+    exact_live_mask = source_push_inbox._hidden_live_row_mask(
+        config,
+        host_inputs.send_meta,
+        host_inputs.expert_base,
+        host_inputs.src_base_by_expert,
+        use_exact_expert_major=True,
+    )
+
+    assert host_inputs.use_exact_expert_major
+    assert host_inputs.queue_stats["input_mode"] == "source_push_plan"
+    assert host_inputs.queue_stats["row_start_mode"] == "local_row_start"
+    assert int(np.sum(exact_live_mask)) == int(np.sum(valid_rows))
+    assert int(np.sum(live_entries) * config.block_m) > int(np.sum(valid_rows))
+
+    src = 1
+    dst = 0
+    dst_ordinal = source_push_inbox._dst_ordinal(config, src, dst)
+    first_live_entry = int(np.flatnonzero(live_entries[src, dst_ordinal])[0])
+    local_expert = host_inputs.send_meta[src, dst_ordinal, first_live_entry, 1]
+    local_row_start = host_inputs.send_meta[src, dst_ordinal, first_live_entry, 2]
+    exact_row_start = (
+        host_inputs.expert_base[dst, local_expert]
+        + host_inputs.src_base_by_expert[dst, src, local_expert]
+        + local_row_start
+    )
+
+    assert local_row_start < exact_row_start
+
+
+def test_exact_reference_hidden_masks_tail_rows_before_next_source_slice():
+    config = source_push_inbox.PushInboxConfig(
+        ep_size=2,
+        entries_per_rank=1,
+        inbox_slots=1,
+        hidden_dim=2,
+        intermediate_dim=1,
+        block_m=2,
+        block_k=1,
+        block_n=1,
+        experts_per_rank=1,
+        send_worker_programs_per_peer=1,
+        worker_programs_per_peer=2,
+        tokens_per_rank=2,
+        topk=1,
+    )
+    x_host = np.zeros((config.ep_size, config.traffic_fanout, config.entries_per_rank, config.block_m, 2))
+    send_meta = np.zeros(
+        (config.ep_size, config.traffic_fanout, config.entries_per_rank, source_push_inbox.META_FIELDS),
+        dtype=np.int32,
+    )
+    expert_base = np.zeros((config.ep_size, config.experts_per_rank), dtype=np.int32)
+    src_base_by_expert = np.zeros((config.ep_size, config.ep_size, config.experts_per_rank), dtype=np.int32)
+    src_base_by_expert[0, 1, 0] = 1
+    w_host = np.ones((config.ep_size, config.experts_per_rank, config.hidden_dim, 2 * config.intermediate_dim))
+
+    dst = 0
+    src0_dst_ordinal = source_push_inbox._dst_ordinal(config, 0, dst)
+    src1_dst_ordinal = source_push_inbox._dst_ordinal(config, 1, dst)
+    send_meta[0, src0_dst_ordinal, 0, :] = (0, 0, 0, 1)
+    send_meta[1, src1_dst_ordinal, 0, :] = (1, 0, 0, 2)
+    x_host[0, src0_dst_ordinal, 0, 0, :] = 1.0
+    x_host[0, src0_dst_ordinal, 0, 1, :] = 100.0
+    x_host[1, src1_dst_ordinal, 0, :, :] = 2.0
+
+    hidden = source_push_inbox._reference_hidden(
+        config,
+        x_host,
+        send_meta,
+        w_host,
+        expert_base,
+        src_base_by_expert,
+        use_exact_expert_major=True,
+    )
+    live_mask = source_push_inbox._hidden_live_row_mask(
+        config,
+        send_meta,
+        expert_base,
+        src_base_by_expert,
+        use_exact_expert_major=True,
+    )
+
+    src0_expected = 2.0 * (1.0 / (1.0 + np.exp(-2.0))) * 2.0
+    src1_expected = 4.0 * (1.0 / (1.0 + np.exp(-4.0))) * 4.0
+    np.testing.assert_allclose(hidden[dst, 0, 0], src0_expected)
+    np.testing.assert_allclose(hidden[dst, 1, 0], src1_expected)
+    np.testing.assert_array_equal(live_mask[dst, :3], [True, True, True])
+    assert not np.any(hidden[dst, 3:, :])
+
+
 def test_source_push_reference_hidden_uses_metadata_row_start():
     config = source_push_inbox.PushInboxConfig(
         ep_size=2,
@@ -319,6 +430,31 @@ def test_source_push_cli_runs_every_send_pipeline_depth_sweep_value(monkeypatch,
     rows = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
     assert calls == [(1, 1), (2, 1)]
     assert [row["send_pipeline_depth"] for row in rows] == [1, 2]
+
+
+def test_source_push_cli_selects_source_push_plan_input_mode(monkeypatch, capsys):
+    calls = []
+
+    def fake_run_source_push_inbox_source_plan(config, **kwargs):
+        calls.append((config.capacity_factor, kwargs["repeat_runs"]))
+        return [{"input_mode": "source_push_plan", "capacity_factor": config.capacity_factor}]
+
+    monkeypatch.setattr(source_push_cli, "run_source_push_inbox_source_plan", fake_run_source_push_inbox_source_plan)
+
+    source_push_cli.main(
+        [
+            "--input-mode",
+            "source_push_plan",
+            "--capacity-factor",
+            "1.0",
+            "--repeat-runs",
+            "1",
+        ]
+    )
+
+    rows = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    assert calls == [(1.0, 1)]
+    assert rows == [{"capacity_factor": 1.0, "input_mode": "source_push_plan"}]
 
 
 def test_source_push_diagnostic_cli_runs_requested_variants(monkeypatch, capsys):

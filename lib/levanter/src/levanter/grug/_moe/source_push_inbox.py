@@ -30,11 +30,17 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 from jax import Ref, lax, shard_map
+from jax._src.pallas import primitives as pallas_primitives
 from jax.experimental import pallas as pl
 from jax.experimental.pallas import mosaic_gpu as mgpu
 from jax.sharding import Mesh, NamedSharding, PartitionSpec as P
 from jaxtyping import Array, Float, Int
 from levanter.grug._moe.common import _prepare_moe_dispatch_indices_with_assignment_ids
+from levanter.grug._moe.source_push_plan import (
+    build_source_push_plan,
+    pack_source_push_tokens,
+    source_push_plan_row_stats,
+)
 from levanter.grug._moe.source_push_inbox_profiles import source_push_profile_defaults
 
 
@@ -121,6 +127,7 @@ class PushInboxConfig:
     tokens_per_rank: int = 32768
     topk: int = 4
     routing_seed: int = 0
+    capacity_factor: float = 1.25
 
     def validate(self) -> None:
         if self.ep_size <= 1:
@@ -173,6 +180,8 @@ class PushInboxConfig:
             raise ValueError(f"tokens_per_rank must be positive, got {self.tokens_per_rank}")
         if self.topk <= 0:
             raise ValueError(f"topk must be positive, got {self.topk}")
+        if self.capacity_factor <= 0:
+            raise ValueError(f"capacity_factor must be positive, got {self.capacity_factor}")
 
     @property
     def traffic_fanout(self) -> int:
@@ -205,7 +214,10 @@ class HostInputs:
     x: np.ndarray
     send_meta: np.ndarray
     recv_meta: np.ndarray
+    expert_base: np.ndarray
+    src_base_by_expert: np.ndarray
     queue_stats: dict[str, Any]
+    use_exact_expert_major: bool = False
 
 
 @dataclass(frozen=True)
@@ -213,8 +225,11 @@ class DeviceInputs:
     x: jax.Array
     send_meta: jax.Array
     recv_meta: jax.Array
+    expert_base: jax.Array
+    src_base_by_expert: jax.Array
     w: jax.Array
     queue_stats: dict[str, Any]
+    use_exact_expert_major: bool
 
 
 @dataclass(frozen=True)
@@ -258,7 +273,12 @@ def _hidden_output_shape_for_kernel(config: PushInboxConfig, diagnostic_variant:
     return config.hidden_output_shape
 
 
-def _make_kernel(config: PushInboxConfig, diagnostic_variant: str = DIAGNOSTIC_VARIANT_FULL):
+def _make_kernel(
+    config: PushInboxConfig,
+    diagnostic_variant: str = DIAGNOSTIC_VARIANT_FULL,
+    *,
+    use_exact_expert_major: bool = False,
+):
     _validate_diagnostic_variant(diagnostic_variant)
     k_tiles = config.hidden_dim // config.block_k
     n_tiles = config.intermediate_dim // config.block_n
@@ -287,6 +307,8 @@ def _make_kernel(config: PushInboxConfig, diagnostic_variant: str = DIAGNOSTIC_V
         x_ref: Float[Ref, "DST Q M D"],
         send_meta_ref: Int[Ref, "DST Q F"],
         recv_meta_ref: Int[Ref, "SRC Q F"],
+        expert_base_ref: Int[Ref, "E"],
+        src_base_by_expert_ref: Int[Ref, "SRC E"],
         w_ref: Float[Ref, "E D twoI"],
         inbox_out_ref: Float[Ref, "SRC SLOTS M D"],
         hidden_ref: Float[Ref, "rows I"],
@@ -466,25 +488,52 @@ def _make_kernel(config: PushInboxConfig, diagnostic_variant: str = DIAGNOSTIC_V
                     device_id_type=pl.DeviceIdType.LOGICAL,
                 )
 
+        def _hidden_row_start(src_ordinal, entry):
+            if use_exact_expert_major:
+                src_rank = recv_meta_ref[src_ordinal, entry, 0]
+                expert = recv_meta_ref[src_ordinal, entry, 1]
+                local_row_start = recv_meta_ref[src_ordinal, entry, 2]
+                return expert_base_ref[expert] + src_base_by_expert_ref[src_rank, expert] + local_row_start
+            return recv_meta_ref[src_ordinal, entry, 2]
+
         def _store_hidden(src_ordinal, entry, n_tile, hidden) -> None:
-            dst_row_start = recv_meta_ref[src_ordinal, entry, 2]
+            dst_row_start = _hidden_row_start(src_ordinal, entry)
+            valid_rows = recv_meta_ref[src_ordinal, entry, 3]
+            row_mask = jnp.arange(config.block_m, dtype=jnp.int32) < valid_rows
             if stores_tiny_output:
-                hidden_ref[
+                output = hidden[:, :TINY_OUTPUT_COLUMNS_PER_N_TILE].astype(hidden_ref.dtype)
+                idx = (
                     pl.ds(dst_row_start, config.block_m),
                     pl.ds(n_tile * TINY_OUTPUT_COLUMNS_PER_N_TILE, TINY_OUTPUT_COLUMNS_PER_N_TILE),
-                ] = hidden[:, :TINY_OUTPUT_COLUMNS_PER_N_TILE].astype(hidden_ref.dtype)
+                )
+                if use_exact_expert_major:
+                    pallas_primitives.store(hidden_ref, idx, output, mask=row_mask[:, None])
+                else:
+                    hidden_ref[idx] = output
             else:
-                hidden_ref[
+                output = hidden.astype(hidden_ref.dtype)
+                idx = (
                     pl.ds(dst_row_start, config.block_m),
                     pl.ds(n_tile * config.block_n, config.block_n),
-                ] = hidden.astype(hidden_ref.dtype)
+                )
+                if use_exact_expert_major:
+                    pallas_primitives.store(hidden_ref, idx, output, mask=row_mask[:, None])
+                else:
+                    hidden_ref[idx] = output
 
         def _store_zero_hidden(src_ordinal, entry, n_tile) -> None:
-            dst_row_start = recv_meta_ref[src_ordinal, entry, 2]
-            hidden_ref[
+            dst_row_start = _hidden_row_start(src_ordinal, entry)
+            valid_rows = recv_meta_ref[src_ordinal, entry, 3]
+            row_mask = jnp.arange(config.block_m, dtype=jnp.int32) < valid_rows
+            idx = (
                 pl.ds(dst_row_start, config.block_m),
                 pl.ds(n_tile * config.block_n, config.block_n),
-            ] = jnp.zeros((config.block_m, config.block_n), dtype=hidden_ref.dtype)
+            )
+            zeros = jnp.zeros((config.block_m, config.block_n), dtype=hidden_ref.dtype)
+            if use_exact_expert_major:
+                pallas_primitives.store(hidden_ref, idx, zeros, mask=row_mask[:, None])
+            else:
+                hidden_ref[idx] = zeros
 
         def _store_zero_n_group(src_ordinal, entry, n_group_i) -> None:
             if config.n_group == 1:
@@ -1050,6 +1099,10 @@ def _routing_row_bases(config: PushInboxConfig, counts: np.ndarray) -> tuple[np.
     return rounded_counts, expert_base, src_base
 
 
+def _src_base_by_expert_for_dst(src_base: np.ndarray) -> np.ndarray:
+    return np.transpose(src_base, (1, 0, 2)).astype(np.int32)
+
+
 def _make_routing_inputs(config: PushInboxConfig) -> HostInputs:
     counts = _routing_counts(config)
     _, expert_base, src_base = _routing_row_bases(config, counts)
@@ -1084,7 +1137,14 @@ def _make_routing_inputs(config: PushInboxConfig) -> HostInputs:
     stats["dropped_entries_total"] = dropped_entries
     stats["dropped_rows_total"] = dropped_rows
     stats["routing_assignments_per_source"] = config.tokens_per_rank * config.topk
-    return HostInputs(x=x_host, send_meta=send_meta, recv_meta=recv_meta, queue_stats=stats)
+    return HostInputs(
+        x=x_host,
+        send_meta=send_meta,
+        recv_meta=recv_meta,
+        expert_base=expert_base,
+        src_base_by_expert=_src_base_by_expert_for_dst(src_base),
+        queue_stats=stats,
+    )
 
 
 def _selected_experts_from_counts(config: PushInboxConfig, source_counts: np.ndarray, src: int) -> np.ndarray:
@@ -1163,7 +1223,60 @@ def _make_compact_routing_inputs(config: PushInboxConfig) -> HostInputs:
     stats["dropped_entries_total"] = dropped_entries
     stats["dropped_rows_total"] = dropped_rows
     stats["routing_assignments_per_source"] = config.tokens_per_rank * config.topk
-    return HostInputs(x=x_host, send_meta=send_meta, recv_meta=recv_meta, queue_stats=stats)
+    return HostInputs(
+        x=x_host,
+        send_meta=send_meta,
+        recv_meta=recv_meta,
+        expert_base=expert_base,
+        src_base_by_expert=_src_base_by_expert_for_dst(src_base),
+        queue_stats=stats,
+    )
+
+
+def _make_source_push_plan_inputs(config: PushInboxConfig) -> HostInputs:
+    """Build exact expert-major queue inputs from the invertible source-push plan."""
+    counts = _routing_counts(config)
+    selected_experts = np.stack(
+        [_selected_experts_from_counts(config, counts[src], src) for src in range(config.ep_size)],
+        axis=0,
+    )
+    combine_weights = np.ones((config.ep_size, config.tokens_per_rank, config.topk), dtype=np.float32)
+    plan = build_source_push_plan(
+        jnp.asarray(selected_experts, dtype=jnp.int32),
+        jnp.asarray(combine_weights, dtype=jnp.float32),
+        ep_size=config.ep_size,
+        experts_per_rank=config.experts_per_rank,
+        block_m=config.block_m,
+        capacity_factor=config.capacity_factor,
+        entries_per_dst=config.entries_per_rank,
+    )
+    source_tokens = np.stack([_make_source_tokens(config, src) for src in range(config.ep_size)], axis=0)
+    x_host = np.asarray(pack_source_push_tokens(jnp.asarray(source_tokens, dtype=jnp.float32), plan), dtype=np.float32)
+    send_meta = np.asarray(plan.send_meta, dtype=np.int32)
+    recv_meta = np.asarray(plan.recv_meta, dtype=np.int32)
+    stats = _queue_stats(config, send_meta)
+    plan_stats = source_push_plan_row_stats(plan)
+    stats["input_mode"] = "source_push_plan"
+    stats["row_start_mode"] = "local_row_start"
+    stats["dropped_routes"] = plan_stats.dropped_routes
+    stats["dropped_entries_total"] = 0
+    stats["dropped_rows_total"] = plan_stats.dropped_routes
+    stats["routing_assignments_per_source"] = config.tokens_per_rank * config.topk
+    stats["compact_pack_rows_total"] = int(plan_stats.useful_rows)
+    stats["plan_useful_rows_total"] = plan_stats.useful_rows
+    stats["plan_rounded_rows_total"] = plan_stats.rounded_rows
+    stats["plan_live_entries_total"] = plan_stats.live_entries
+    stats["plan_row_efficiency"] = plan_stats.row_efficiency
+    stats["plan_masked_row_fraction"] = plan_stats.masked_row_fraction
+    return HostInputs(
+        x=x_host,
+        send_meta=send_meta,
+        recv_meta=recv_meta,
+        expert_base=np.asarray(plan.expert_base, dtype=np.int32),
+        src_base_by_expert=np.asarray(plan.src_base_by_expert, dtype=np.int32),
+        queue_stats=stats,
+        use_exact_expert_major=True,
+    )
 
 
 def _make_host_inputs(config: PushInboxConfig) -> HostInputs:
@@ -1178,8 +1291,11 @@ def _device_inputs_from_host(config: PushInboxConfig, host_inputs: HostInputs) -
         x=jnp.asarray(host_inputs.x, dtype=jnp.bfloat16),
         send_meta=jnp.asarray(host_inputs.send_meta, dtype=jnp.int32),
         recv_meta=jnp.asarray(host_inputs.recv_meta, dtype=jnp.int32),
+        expert_base=jnp.asarray(host_inputs.expert_base, dtype=jnp.int32),
+        src_base_by_expert=jnp.asarray(host_inputs.src_base_by_expert, dtype=jnp.int32),
         w=w_host,
         queue_stats=host_inputs.queue_stats,
+        use_exact_expert_major=host_inputs.use_exact_expert_major,
     )
 
 
@@ -1191,20 +1307,33 @@ def _sharded_kernel(
     mesh: Mesh,
     config: PushInboxConfig,
     diagnostic_variant: str = DIAGNOSTIC_VARIANT_FULL,
+    *,
+    use_exact_expert_major: bool = False,
 ):
-    kernel = _make_kernel(config, diagnostic_variant)
+    kernel = _make_kernel(config, diagnostic_variant, use_exact_expert_major=use_exact_expert_major)
 
     def local_fn(
         x_local: Float[Array, "1 DST Q M D"],
         send_meta_local: Int[Array, "1 DST Q F"],
         recv_meta_local: Int[Array, "1 SRC Q F"],
+        expert_base_local: Int[Array, "1 E"],
+        src_base_by_expert_local: Int[Array, "1 SRC E"],
         w_local: Float[Array, "1 E D twoI"],
     ):
         x_local = x_local[0]
         send_meta_local = send_meta_local[0]
         recv_meta_local = recv_meta_local[0]
+        expert_base_local = expert_base_local[0]
+        src_base_by_expert_local = src_base_by_expert_local[0]
         w_local = w_local[0]
-        inbox, hidden = kernel(x_local, send_meta_local, recv_meta_local, w_local)
+        inbox, hidden = kernel(
+            x_local,
+            send_meta_local,
+            recv_meta_local,
+            expert_base_local,
+            src_base_by_expert_local,
+            w_local,
+        )
         return inbox[None, ...], hidden[None, ...]
 
     return shard_map(
@@ -1214,6 +1343,8 @@ def _sharded_kernel(
             P(AXIS, None, None, None, None),
             P(AXIS, None, None, None),
             P(AXIS, None, None, None),
+            P(AXIS, None),
+            P(AXIS, None, None),
             P(AXIS, None, None, None),
         ),
         out_specs=(
@@ -1314,7 +1445,34 @@ def _time_jitted(
     )
 
 
-def _reference_hidden(config: PushInboxConfig, x_host, send_meta_host, w_host) -> np.ndarray:
+def _metadata_hidden_row_start(
+    send_meta: np.ndarray,
+    expert_base: np.ndarray,
+    src_base_by_expert: np.ndarray,
+    *,
+    src: int,
+    dst: int,
+    dst_ordinal: int,
+    entry: int,
+    use_exact_expert_major: bool,
+) -> int:
+    if use_exact_expert_major:
+        expert = int(send_meta[src, dst_ordinal, entry, 1])
+        local_row_start = int(send_meta[src, dst_ordinal, entry, 2])
+        return int(expert_base[dst, expert] + src_base_by_expert[dst, src, expert] + local_row_start)
+    return int(send_meta[src, dst_ordinal, entry, 2])
+
+
+def _reference_hidden(
+    config: PushInboxConfig,
+    x_host,
+    send_meta_host,
+    w_host,
+    expert_base_host=None,
+    src_base_by_expert_host=None,
+    *,
+    use_exact_expert_major: bool = False,
+) -> np.ndarray:
     hidden = np.zeros(
         (config.ep_size, config.hidden_rows_per_rank, config.intermediate_dim),
         dtype=np.float32,
@@ -1322,6 +1480,12 @@ def _reference_hidden(config: PushInboxConfig, x_host, send_meta_host, w_host) -
     x_float = np.asarray(x_host, dtype=np.float32)
     send_meta = np.asarray(send_meta_host, dtype=np.int32)
     w_float = np.asarray(w_host, dtype=np.float32)
+    expert_base = np.zeros((config.ep_size, config.experts_per_rank), dtype=np.int32)
+    src_base_by_expert = np.zeros((config.ep_size, config.ep_size, config.experts_per_rank), dtype=np.int32)
+    if expert_base_host is not None:
+        expert_base = np.asarray(expert_base_host, dtype=np.int32)
+    if src_base_by_expert_host is not None:
+        src_base_by_expert = np.asarray(src_base_by_expert_host, dtype=np.int32)
     for src in range(config.ep_size):
         for dst in range(config.ep_size):
             dst_ordinal = _dst_ordinal(config, src, dst)
@@ -1330,16 +1494,40 @@ def _reference_hidden(config: PushInboxConfig, x_host, send_meta_host, w_host) -
                 if valid_rows <= 0:
                     continue
                 expert = send_meta[src, dst_ordinal, entry, 1]
-                row = send_meta[src, dst_ordinal, entry, 2]
+                row = _metadata_hidden_row_start(
+                    send_meta,
+                    expert_base,
+                    src_base_by_expert,
+                    src=src,
+                    dst=dst,
+                    dst_ordinal=dst_ordinal,
+                    entry=entry,
+                    use_exact_expert_major=use_exact_expert_major,
+                )
                 gate = x_float[src, dst_ordinal, entry] @ w_float[dst, expert, :, : config.intermediate_dim]
                 up = x_float[src, dst_ordinal, entry] @ w_float[dst, expert, :, config.intermediate_dim :]
-                hidden[dst, row : row + config.block_m, :] = gate * (1.0 / (1.0 + np.exp(-gate))) * up
+                block_hidden = gate * (1.0 / (1.0 + np.exp(-gate))) * up
+                rows_to_store = valid_rows if use_exact_expert_major else config.block_m
+                hidden[dst, row : row + rows_to_store, :] = block_hidden[:rows_to_store]
     return hidden
 
 
-def _hidden_live_row_mask(config: PushInboxConfig, send_meta_host) -> np.ndarray:
+def _hidden_live_row_mask(
+    config: PushInboxConfig,
+    send_meta_host,
+    expert_base_host=None,
+    src_base_by_expert_host=None,
+    *,
+    use_exact_expert_major: bool = False,
+) -> np.ndarray:
     mask = np.zeros((config.ep_size, config.hidden_rows_per_rank), dtype=np.bool_)
     send_meta = np.asarray(send_meta_host, dtype=np.int32)
+    expert_base = np.zeros((config.ep_size, config.experts_per_rank), dtype=np.int32)
+    src_base_by_expert = np.zeros((config.ep_size, config.ep_size, config.experts_per_rank), dtype=np.int32)
+    if expert_base_host is not None:
+        expert_base = np.asarray(expert_base_host, dtype=np.int32)
+    if src_base_by_expert_host is not None:
+        src_base_by_expert = np.asarray(src_base_by_expert_host, dtype=np.int32)
     for src in range(config.ep_size):
         for dst in range(config.ep_size):
             dst_ordinal = _dst_ordinal(config, src, dst)
@@ -1347,8 +1535,18 @@ def _hidden_live_row_mask(config: PushInboxConfig, send_meta_host) -> np.ndarray
                 valid_rows = send_meta[src, dst_ordinal, entry, 3]
                 if valid_rows <= 0:
                     continue
-                row = send_meta[src, dst_ordinal, entry, 2]
-                mask[dst, row : row + config.block_m] = True
+                row = _metadata_hidden_row_start(
+                    send_meta,
+                    expert_base,
+                    src_base_by_expert,
+                    src=src,
+                    dst=dst,
+                    dst_ordinal=dst_ordinal,
+                    entry=entry,
+                    use_exact_expert_major=use_exact_expert_major,
+                )
+                rows_to_store = valid_rows if use_exact_expert_major else config.block_m
+                mask[dst, row : row + rows_to_store] = True
     return mask
 
 
@@ -1356,9 +1554,13 @@ def _validate(
     config: PushInboxConfig,
     x_host,
     send_meta_host,
+    expert_base_host,
+    src_base_by_expert_host,
     w_host,
     inbox,
     hidden,
+    *,
+    use_exact_expert_major: bool = False,
 ) -> ValidationMetrics:
     inbox_host = np.asarray(inbox, dtype=np.float32)
     x_expected = np.asarray(x_host, dtype=np.float32)
@@ -1378,10 +1580,24 @@ def _validate(
     hidden_mean_abs_diff = None
     hidden_all_max_abs_diff = None
     hidden_unwritten_max_abs = None
-    hidden_expected = _reference_hidden(config, x_host, send_meta_host, w_host)
+    hidden_expected = _reference_hidden(
+        config,
+        x_host,
+        send_meta_host,
+        w_host,
+        expert_base_host,
+        src_base_by_expert_host,
+        use_exact_expert_major=use_exact_expert_major,
+    )
     hidden_diff = np.abs(np.asarray(hidden, dtype=np.float32) - hidden_expected)
     hidden_all_max_abs_diff = float(np.max(hidden_diff))
-    live_row_mask = _hidden_live_row_mask(config, send_meta_host)
+    live_row_mask = _hidden_live_row_mask(
+        config,
+        send_meta_host,
+        expert_base_host,
+        src_base_by_expert_host,
+        use_exact_expert_major=use_exact_expert_major,
+    )
     if np.any(live_row_mask):
         hidden_live_diff = hidden_diff[live_row_mask, :]
         hidden_max_abs_diff = float(np.max(hidden_live_diff))
@@ -1430,15 +1646,26 @@ def _run_one(
         x = jax.device_put(inputs.x, NamedSharding(mesh, P(AXIS, None, None, None, None)))
         send_meta = jax.device_put(inputs.send_meta, NamedSharding(mesh, P(AXIS, None, None, None)))
         recv_meta = jax.device_put(inputs.recv_meta, NamedSharding(mesh, P(AXIS, None, None, None)))
+        expert_base = jax.device_put(inputs.expert_base, NamedSharding(mesh, P(AXIS, None)))
+        src_base_by_expert = jax.device_put(inputs.src_base_by_expert, NamedSharding(mesh, P(AXIS, None, None)))
         w = jax.device_put(inputs.w, NamedSharding(mesh, P(AXIS, None, None, None)))
         _emit_progress(config, settings.progress_events, "jit_start")
-        fn = jax.jit(_sharded_kernel(mesh, config, diagnostic_variant))
+        fn = jax.jit(
+            _sharded_kernel(
+                mesh,
+                config,
+                diagnostic_variant,
+                use_exact_expert_major=inputs.use_exact_expert_major,
+            )
+        )
 
         timing = _time_jitted(
             fn,
             x,
             send_meta,
             recv_meta,
+            expert_base,
+            src_base_by_expert,
             w,
             warmup=settings.warmup,
             steps=settings.steps,
@@ -1458,9 +1685,12 @@ def _run_one(
                 config,
                 inputs.x,
                 inputs.send_meta,
+                inputs.expert_base,
+                inputs.src_base_by_expert,
                 inputs.w,
                 inbox,
                 hidden,
+                use_exact_expert_major=inputs.use_exact_expert_major,
             )
             max_abs_diff = validation.max_abs_diff
             metadata_mismatches = validation.metadata_mismatches
@@ -1580,6 +1810,30 @@ def run_source_push_inbox_compact_routing(
         progress_events=progress_events,
     )
     return _run_one(config, settings, input_builder=_make_compact_routing_inputs)
+
+
+def run_source_push_inbox_source_plan(
+    config: PushInboxConfig,
+    *,
+    warmup: int,
+    steps: int,
+    repeat_runs: int,
+    check: bool,
+    debug_exceptions: bool = False,
+    separate_compile: bool = False,
+    progress_events: bool = False,
+) -> list[dict[str, Any]]:
+    """Run the source-push inbox kernel fed by exact invertible SourcePushPlan metadata."""
+    settings = SourcePushInboxRunSettings(
+        warmup=warmup,
+        steps=steps,
+        repeat_runs=repeat_runs,
+        check=check,
+        debug_exceptions=debug_exceptions,
+        separate_compile=separate_compile,
+        progress_events=progress_events,
+    )
+    return _run_one(config, settings, input_builder=_make_source_push_plan_inputs)
 
 
 def run_source_push_inbox_diagnostic(
