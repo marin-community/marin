@@ -301,6 +301,63 @@ def test_source_push_plan_offsets_match_accepted_count_prefixes():
         )
 
 
+def test_source_push_plan_uses_stable_expert_order_and_masks_padding():
+    selected_experts = np.asarray(
+        [
+            [[3, 0], [2, 0], [3, 1], [0, 2], [2, 1], [0, 3]],
+            [[3, 0], [2, 0], [3, 1], [0, 2], [2, 1], [0, 3]],
+        ],
+        dtype=np.int32,
+    )
+    combine_weights = np.ones_like(selected_experts, dtype=np.float32)
+
+    plan = source_push_plan.build_source_push_plan(
+        jnp.asarray(selected_experts),
+        jnp.asarray(combine_weights),
+        ep_size=2,
+        experts_per_rank=2,
+        block_m=3,
+        capacity_factor=2.0,
+        entries_per_dst=3,
+    )
+
+    assignment_ids = np.asarray(plan.assignment_ids)
+    valid_mask = np.asarray(plan.valid_mask)
+    local_experts = np.asarray(plan.local_experts)
+    local_row_starts = np.asarray(plan.local_row_starts)
+    send_meta = np.asarray(plan.send_meta)
+
+    src = 0
+    dst0_ordinal = source_push_plan.dst_ordinal(src, 0, ep_size=2)
+    dst1_ordinal = source_push_plan.dst_ordinal(src, 1, ep_size=2)
+
+    np.testing.assert_array_equal(assignment_ids[src, dst0_ordinal, 0], [1, 3, 6])
+    np.testing.assert_array_equal(assignment_ids[src, dst0_ordinal, 1], [10, -1, -1])
+    np.testing.assert_array_equal(assignment_ids[src, dst0_ordinal, 2], [5, 9, -1])
+    np.testing.assert_array_equal(valid_mask[src, dst0_ordinal, 0], [True, True, True])
+    np.testing.assert_array_equal(valid_mask[src, dst0_ordinal, 1], [True, False, False])
+    np.testing.assert_array_equal(valid_mask[src, dst0_ordinal, 2], [True, True, False])
+    np.testing.assert_array_equal(local_experts[src, dst0_ordinal], [0, 0, 1])
+    np.testing.assert_array_equal(local_row_starts[src, dst0_ordinal], [0, 3, 0])
+    np.testing.assert_array_equal(
+        send_meta[src, dst0_ordinal, :, source_push_plan.SOURCE_PUSH_META_VALID_ROWS],
+        [3, 1, 2],
+    )
+
+    np.testing.assert_array_equal(assignment_ids[src, dst1_ordinal, 0], [2, 7, 8])
+    np.testing.assert_array_equal(assignment_ids[src, dst1_ordinal, 1], [0, 4, 11])
+    np.testing.assert_array_equal(assignment_ids[src, dst1_ordinal, 2], [-1, -1, -1])
+    np.testing.assert_array_equal(valid_mask[src, dst1_ordinal, 0], [True, True, True])
+    np.testing.assert_array_equal(valid_mask[src, dst1_ordinal, 1], [True, True, True])
+    np.testing.assert_array_equal(valid_mask[src, dst1_ordinal, 2], [False, False, False])
+    np.testing.assert_array_equal(local_experts[src, dst1_ordinal], [0, 1, -1])
+    np.testing.assert_array_equal(local_row_starts[src, dst1_ordinal], [0, 0, 0])
+    np.testing.assert_array_equal(
+        send_meta[src, dst1_ordinal, :, source_push_plan.SOURCE_PUSH_META_VALID_ROWS],
+        [3, 3, 0],
+    )
+
+
 def test_source_push_plan_capacity_clipping_matches_ep_reference_and_keeps_prefix_assignments():
     selected_experts = np.asarray(
         [

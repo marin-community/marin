@@ -1711,3 +1711,22 @@ not present in the branch.
     - Result: `7 passed, 11 warnings in 36.03s`.
   - `./infra/pre-commit.py --changed-files --fix`
     - Result: all checks passed.
+
+## 2026-07-03 15:35 - Cover source-push stable queue order and padding mask
+
+Added a concrete SourcePushPlan planner regression for the spec's transport order contract. The new case checks that a
+source queue is ordered by destination-local expert then stable assignment id, that multi-block local row starts advance
+within one `(src, dst, expert)` run, and that tail/unused queue rows stay invalid.
+
+- Code:
+  - `lib/levanter/tests/grug/test_source_push_inbox.py`
+- Change:
+  - Added `test_source_push_plan_uses_stable_expert_order_and_masks_padding`.
+  - The test covers full, tail, and empty queue entries in one hand-built routing pattern.
+- Local verification:
+  - `uv run --package marin-levanter --group test pytest lib/levanter/tests/grug/test_source_push_inbox.py -q -k 'source_push_plan_uses_stable_expert_order or source_push_plan_offsets or source_push_plan_capacity or source_push_plan_rejects_queue'`
+    - Result: `4 passed, 11 warnings in 12.08s`.
+  - `uv run --package marin-levanter --group test pytest lib/levanter/tests/grug/test_source_push_inbox.py -q -k 'source_push_plan'`
+    - Result: `8 passed, 11 warnings in 12.11s`.
+  - `./infra/pre-commit.py --changed-files --fix`
+    - Result: all checks passed.
