@@ -29,6 +29,10 @@ _TEMPLATE_VAR_RE = re.compile(r"\{\{ (\w+) \}\}")
 # Distinct from iris's own task-env Secret so finelog manages its own lifecycle.
 _S3_SECRET_SUFFIX = "-env"
 
+# S3-compatible endpoints that accept only virtual-hosted-style requests
+# (bucket as a host subdomain).
+_VIRTUAL_HOST_ONLY_S3_DOMAINS = ("cwobject.com", "cwlota.com")
+
 # Manifests live at `lib/finelog/deploy/k8s/*.yaml` in the repo. We resolve
 # this once at import time; the directory is part of the source tree, not
 # the wheel, but k8s deployments are operator-driven and run from a checkout.
@@ -130,7 +134,7 @@ def _build_s3_secret_manifest(cfg: FinelogConfig) -> str | None:
     # baked into the endpoint host (http://<bucket>.cwlota.com).
     parsed = urlparse(endpoint)
     hostname = parsed.hostname or ""
-    if any(hostname == d or hostname.endswith("." + d) for d in ("cwobject.com", "cwlota.com")):
+    if any(hostname == d or hostname.endswith("." + d) for d in _VIRTUAL_HOST_ONLY_S3_DOMAINS):
         env["AWS_VIRTUAL_HOSTED_STYLE_REQUEST"] = "true"
         bucket = cfg.remote_log_dir.removeprefix("s3://").split("/", 1)[0]
         if not hostname.startswith(f"{bucket}."):
