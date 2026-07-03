@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import importlib.util
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -26,6 +27,19 @@ from levanter.grug.grug_moe import (
     moe_mlp,
 )
 from levanter.utils.activation import ActivationFunctionEnum
+
+
+SOURCE_PUSH_PUBLIC_COMPARE_SCRIPT_PATH = (
+    Path(__file__).resolve().parents[2] / "scripts" / "bench" / "bench_source_push_forward_public_compare.py"
+)
+SOURCE_PUSH_PUBLIC_COMPARE_SCRIPT_SPEC = importlib.util.spec_from_file_location(
+    "bench_source_push_forward_public_compare",
+    SOURCE_PUSH_PUBLIC_COMPARE_SCRIPT_PATH,
+)
+assert SOURCE_PUSH_PUBLIC_COMPARE_SCRIPT_SPEC is not None
+source_push_forward_public_compare_cli = importlib.util.module_from_spec(SOURCE_PUSH_PUBLIC_COMPARE_SCRIPT_SPEC)
+assert SOURCE_PUSH_PUBLIC_COMPARE_SCRIPT_SPEC.loader is not None
+SOURCE_PUSH_PUBLIC_COMPARE_SCRIPT_SPEC.loader.exec_module(source_push_forward_public_compare_cli)
 
 
 def _make_dense_mesh() -> Mesh:
@@ -115,6 +129,16 @@ def _skip_without_sonic_gpu_runtime() -> None:
         pytest.skip("raw Sonic optional dependencies are not installed")
     if not any(device.platform == "gpu" for device in jax.devices()):
         pytest.skip("raw Sonic triton_call tests require a GPU")
+
+
+def _skip_without_h100x8() -> None:
+    devices = jax.devices()
+    if len(devices) < 8:
+        pytest.skip("source-push MGPU smoke requires at least 8 visible devices")
+    if not all(device.platform == "gpu" for device in devices[:8]):
+        pytest.skip("source-push MGPU smoke requires GPUs")
+    if not all("H100" in getattr(device, "device_kind", "").upper() for device in devices[:8]):
+        pytest.skip("source-push MGPU smoke is restricted to H100")
 
 
 def test_moe_mlp_runs_without_ep_axis():
@@ -564,6 +588,48 @@ def test_moe_mlp_ragged_matches_ring_with_ep_axis_when_available():
 
     np.testing.assert_allclose(np.asarray(ragged_out), np.asarray(ring_out), rtol=1e-5, atol=1e-5)
     assert int(ragged_dropped) == int(ring_dropped)
+
+
+def test_source_push_forward_matches_public_ep_backends_on_h100():
+    _skip_without_h100x8()
+
+    config = source_push_forward_public_compare_cli.PushInboxConfig(
+        ep_size=8,
+        entries_per_rank=2,
+        inbox_slots=1,
+        hidden_dim=128,
+        intermediate_dim=128,
+        block_m=64,
+        block_n=128,
+        block_k=64,
+        n_group=1,
+        n_groups_per_job=1,
+        experts_per_rank=2,
+        send_worker_programs_per_peer=1,
+        worker_programs_per_peer=8,
+        send_pipeline_depth=1,
+        routing="balanced",
+        tokens_per_rank=64,
+        topk=2,
+        capacity_factor=1.25,
+    )
+
+    rows = source_push_forward_public_compare_cli.run_source_push_forward_public_compare(
+        config,
+        source_push_implementation="pallas_mgpu",
+        source_push_execution_mode="staged_host_sync",
+        public_implementations=("ragged_all_to_all", "ring"),
+    )
+
+    assert {row["public_implementation"] for row in rows} == {"ragged_all_to_all", "ring"}
+    for row in rows:
+        assert row["error_type"] is None
+        assert row["source_push_dropped_routes"] == 0
+        assert row["public_dropped_routes"] == 0
+        assert row["dropped_route_delta"] == 0
+        assert row["output_shape"] == [8, 64, 128]
+        assert row["max_abs_diff"] <= 0.03125
+        assert row["mean_abs_diff"] <= 0.002
 
 
 def test_moe_mlp_runs_with_ep_axis_when_available():
