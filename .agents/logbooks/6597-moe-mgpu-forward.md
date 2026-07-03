@@ -1568,3 +1568,68 @@ shared by the W13 and full-forward benchmark rows. The production/source-padded 
   - This does not switch the target rough-balanced path away from source-padded expert-major rows.
   - It proves the exact count-derived row-start path is valid for block-aligned cases, including balanced target-style
     counts, while keeping the source-padded layout as the only safe current path for tail blocks.
+
+## 2026-07-03 14:16 - Add exact expert-major W2 return layout proof
+
+Extended the W2 return path so it can consume exact expert-major hidden rows addressed by compact block metadata plus
+destination-local `expert_base` and `src_base_by_expert`. The production/source-padded path remains the default; this
+patch proves the count-derived exact W2 addressing contract for block-aligned plans.
+
+- Commit Hash: `44b0ce16d`
+- Code:
+  - `lib/levanter/src/levanter/grug/_moe/source_push_w2_return.py`
+  - `lib/levanter/src/levanter/grug/_moe/source_push_forward.py`
+  - `lib/levanter/tests/grug/test_source_push_inbox.py`
+  - `lib/levanter/tests/grug/test_grugformer_moe.py`
+- Change:
+  - W2 reference and Pallas direct-return kernels now accept destination-local `expert_base` and
+    `src_base_by_expert`.
+  - Added `make_w2_return_exact_source_plan_inputs`, which builds W2 inputs from the private exact source-push plan and
+    tags rows with `w2_input_mode=exact_source_push_plan`.
+  - Exact W2 row starts are computed as
+    `expert_base[local_expert] + src_base_by_expert[src_rank, local_expert] + local_row_start_within_src_expert`.
+  - Existing full-forward/source-padded call sites now pass the bases through to the W2 return kernels while keeping
+    `use_exact_expert_major=False`.
+- Local verification:
+  - `python -m py_compile lib/levanter/src/levanter/grug/_moe/source_push_w2_return.py lib/levanter/src/levanter/grug/_moe/source_push_forward.py lib/levanter/tests/grug/test_source_push_inbox.py lib/levanter/tests/grug/test_grugformer_moe.py`
+    - Result: passed.
+  - `uv run --package marin-levanter --group test pytest lib/levanter/tests/grug/test_source_push_inbox.py -q -k 'w2_exact or exact_source_push_plan_inputs or w2_source_plan_inputs or w2_reference'`
+    - Result: `6 passed, 11 warnings in 21.95s`.
+  - `uv run --package marin-levanter --group test pytest lib/levanter/tests/grug/test_grugformer_moe.py -q -n 0 -k 'source_push_exact_expert_major_w2_return_matches_reference_on_h100'`
+    - Result: `1 skipped, 26 deselected, 1 warning in 0.08s` on non-H100 local hardware.
+  - `./infra/pre-commit.py --changed-files --fix`
+    - Result: all checks passed.
+- H100 verification:
+  - Narrow exact-W2 job: `/dlwh/source-push-exact-w2-h100-pytest-44b0ce16d-20260703-210956`
+    - Cluster: `cw-us-east-02a`
+    - Command:
+      ```bash
+      uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job run --no-wait \
+        --job-name source-push-exact-w2-h100-pytest-44b0ce16d-20260703-210956 \
+        --cpu 16 --memory 128GB --disk 16GB --gpu H100x8 --reserve H100x8 \
+        --enable-extra-resources --extra gpu -- \
+        timeout 3600s uv run --package marin-levanter --group test pytest \
+        lib/levanter/tests/grug/test_grugformer_moe.py -q -n 0 \
+        -k source_push_exact_expert_major_w2_return_matches_reference_on_h100
+      ```
+    - Iris summary: `JOB_STATE_SUCCEEDED`, exit code `0`, failure count `0`, preemption count `0`.
+    - Pytest result: `1 passed, 26 deselected, 1 warning in 8.25s`.
+  - Broader source-push job: `/dlwh/source-push-exact-w2-h100-source-push-44b0ce16d-20260703-211305`
+    - Cluster: `cw-us-east-02a`
+    - Command:
+      ```bash
+      uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job run --no-wait \
+        --job-name source-push-exact-w2-h100-source-push-44b0ce16d-20260703-211305 \
+        --cpu 16 --memory 128GB --disk 16GB --gpu H100x8 --reserve H100x8 \
+        --enable-extra-resources --extra gpu -- \
+        timeout 3600s uv run --package marin-levanter --group test pytest \
+        lib/levanter/tests/grug/test_grugformer_moe.py -q -n 0 -k source_push
+      ```
+    - Iris summary: `JOB_STATE_SUCCEEDED`, exit code `0`, duration `135263 ms`, failure count `0`, preemption count
+      `0`.
+    - Pytest result: `8 passed, 19 deselected, 1 warning in 112.82s`.
+- Interpretation:
+  - W2 direct return now has the same count-derived exact row-start proof as W13 for block-aligned plans.
+  - The source-padded production path still passes the existing H100 source-push smoke after the W2 signature change.
+  - Exact full forward remains a separate integration step because the full-forward host input builder still fixes
+    `use_exact_expert_major=False` for the current production/source-padded path.
