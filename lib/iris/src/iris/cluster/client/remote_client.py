@@ -33,7 +33,7 @@ from iris.cluster.types import (
     is_job_finished,
 )
 from iris.cluster.worker.stats import TASK_STATUS_NAMESPACE, TASK_STATUS_STORAGE_POLICY, TaskStatusRow
-from iris.rpc import controller_pb2, job_pb2
+from iris.rpc import controller_pb2, job_pb2, query_pb2
 from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
 from iris.rpc.controller_connect import ControllerServiceClientSync, EndpointServiceClientSync
 from iris.rpc.errors import call_with_retry, format_connect_error, poll_with_retries
@@ -529,6 +529,15 @@ class RemoteClusterClient:
             return list(response.tasks)
 
         return call_with_retry(f"list_tasks({job_id})", _call)
+
+    def execute_raw_query(self, sql: str) -> query_pb2.RawQueryResponse:
+        """Execute a read-only controller SQL query."""
+
+        def _call():
+            request = query_pb2.RawQueryRequest(sql=sql)
+            return self._client.execute_raw_query(request)
+
+        return call_with_retry("execute_raw_query", _call)
 
     def kick_tasks(
         self,

@@ -9,7 +9,7 @@ from finelog.rpc import logging_pb2
 from rigging.timing import Duration
 
 from iris.cluster.types import EndpointAccess, Entrypoint, JobName, TaskAttempt
-from iris.rpc import controller_pb2, job_pb2
+from iris.rpc import controller_pb2, job_pb2, query_pb2
 
 
 class ClusterClient(Protocol):
@@ -99,6 +99,8 @@ class ClusterClient(Protocol):
     def get_task_status(self, task_name: JobName) -> job_pb2.TaskStatus: ...
 
     def list_tasks(self, job_id: JobName) -> list[job_pb2.TaskStatus]: ...
+
+    def execute_raw_query(self, sql: str) -> query_pb2.RawQueryResponse: ...
 
     def kick_tasks(
         self,

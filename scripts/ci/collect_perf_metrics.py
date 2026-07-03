@@ -22,16 +22,15 @@ import json
 import logging
 import os
 import re
-import subprocess
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Protocol
 
 import click
 from connectrpc.errors import ConnectError
 from google.protobuf import json_format
 from iris.cli.job import build_job_summary
+from iris.client import IrisClient
 from iris.cluster.types import JobName
 from iris.rpc import job_pb2
 from rigging.filesystem import url_to_fs
@@ -133,14 +132,6 @@ GROUP BY child_job_id
 ORDER BY child_job_id"""
 
 
-class IrisJobReader(Protocol):
-    def list_jobs(self, *, prefix: str) -> list[job_pb2.JobStatus]: ...
-
-    def status(self, job_id: JobName) -> job_pb2.JobStatus: ...
-
-    def list_tasks(self, job_id: JobName) -> list[job_pb2.TaskStatus]: ...
-
-
 @dataclass
 class PerfReport:
     """In-memory model of the report. Serialised verbatim to JSON."""
@@ -179,31 +170,13 @@ class PerfReport:
 # --------------------------------------------------------------------------- #
 
 
-def _iris_command() -> list[str]:
-    venv_iris = _REPO_ROOT / ".venv" / "bin" / "iris"
-    if venv_iris.exists():
-        return [str(venv_iris)]
-    return ["uv", "run", "--package", "iris", "iris"]
-
-
-def _run_iris(args: list[str], iris_config: Path) -> subprocess.CompletedProcess:
-    cmd = [*_iris_command(), f"--config={iris_config}", *args]
-    result = subprocess.run(cmd, capture_output=True, text=True, check=False)
-    if result.returncode != 0 and "No such file or directory: 'gcloud'" in result.stderr:
-        raise click.ClickException(
-            "iris CLI requires `gcloud` on PATH (controller tunnel uses gcloud SSH). "
-            "Install Google Cloud SDK and retry."
-        )
-    return result
-
-
 def _job_status_to_dict(job: job_pb2.JobStatus) -> dict:
     data = json_format.MessageToDict(job, preserving_proto_field_name=True)
     data["has_children"] = bool(job.has_children)
     return data
 
 
-def fetch_job_summary(client: IrisJobReader, job_id: str) -> dict | None:
+def fetch_job_summary(client: IrisClient, job_id: str) -> dict | None:
     """Return a job summary built from Iris client status and task RPCs."""
     try:
         job_name = JobName.from_wire(job_id)
@@ -213,7 +186,7 @@ def fetch_job_summary(client: IrisJobReader, job_id: str) -> dict | None:
         return None
 
 
-def fetch_job_tree(client: IrisJobReader, job_id: str) -> list[dict] | None:
+def fetch_job_tree(client: IrisClient, job_id: str) -> list[dict] | None:
     """Return the parent + all descendants from the Iris client.
 
     Each entry includes job-level ``preemption_count`` / ``failure_count`` /
@@ -230,7 +203,7 @@ def fetch_job_tree(client: IrisJobReader, job_id: str) -> list[dict] | None:
         return None
 
 
-def fetch_leaf_summaries(client: IrisJobReader, job_tree: list[dict]) -> list[dict]:
+def fetch_leaf_summaries(client: IrisClient, job_tree: list[dict]) -> list[dict]:
     """Fetch job summaries for every leaf job in the tree.
 
     Per-task data (``memory_peak_mb``, ``error``, ``exit_code``) lives on each
@@ -253,40 +226,32 @@ def fetch_leaf_summaries(client: IrisJobReader, job_tree: list[dict]) -> list[di
     return summaries
 
 
-def fetch_raw_query_task_wall_ms(job_id: str, iris_config: Path, *, include_failed: bool = False) -> int | None:
+def fetch_raw_query_task_wall_ms(client: IrisClient, job_id: str, *, include_failed: bool = False) -> int | None:
     """Sum per-attempt wall-clock durations across the subtree via ExecuteRawQuery."""
     state_filter = "" if include_failed else f"AND t.state = {_TASK_STATE_SUCCEEDED}"
     sql = _TASK_WALL_TIME_SQL.format(job_id=job_id.replace("'", "''"), state_filter=state_filter)
-    result = _run_iris(["query", "--format=json", sql], iris_config)
-    if result.returncode != 0:
-        logger.warning("iris query task_wall_ms failed (exit %s): %s", result.returncode, result.stderr.strip())
-        return None
     try:
-        rows = json.loads(result.stdout)
+        rows = client.query(sql)
         if not rows:
             return None
         val = rows[0]["task_wall_ms"]
         return int(val) if val is not None else 0
-    except (json.JSONDecodeError, KeyError, ValueError) as exc:
-        logger.warning("iris query returned unexpected output: %s", exc)
+    except (ConnectError, KeyError, ValueError) as exc:
+        logger.warning("iris query task_wall_ms failed: %s", exc)
         return None
 
 
 def fetch_raw_query_task_wall_ms_by_child(
-    job_id: str, iris_config: Path, *, include_failed: bool = False
+    client: IrisClient, job_id: str, *, include_failed: bool = False
 ) -> dict[str, int] | None:
     """Return per-direct-child task wall ms via ExecuteRawQuery, keyed by child job_id."""
     state_filter = "" if include_failed else f"AND t.state = {_TASK_STATE_SUCCEEDED}"
     sql = _TASK_WALL_TIME_BY_CHILD_SQL.format(job_id=job_id.replace("'", "''"), state_filter=state_filter)
-    result = _run_iris(["query", "--format=json", sql], iris_config)
-    if result.returncode != 0:
-        logger.warning("iris query by_child failed (exit %s): %s", result.returncode, result.stderr.strip())
-        return None
     try:
-        rows = json.loads(result.stdout)
+        rows = client.query(sql)
         return {row["child_job_id"]: int(row["task_wall_ms"]) for row in rows}
-    except (json.JSONDecodeError, KeyError, ValueError) as exc:
-        logger.warning("iris query by_child returned unexpected output: %s", exc)
+    except (ConnectError, KeyError, ValueError) as exc:
+        logger.warning("iris query by_child failed: %s", exc)
         return None
 
 
@@ -672,30 +637,31 @@ def main(
         summary = fetch_job_summary(client, job_id)
         job_tree = fetch_job_tree(client, job_id)
         leaf_summaries = fetch_leaf_summaries(client, job_tree) if job_tree else []
-    status = load_ferry_status(status_path)
+        status = load_ferry_status(status_path)
 
-    report = build_report(
-        job_id=job_id,
-        summary=summary,
-        job_tree=job_tree,
-        leaf_summaries=leaf_summaries,
-        status=status,
-        workflow_env=workflow_env,
-    )
+        report = build_report(
+            job_id=job_id,
+            summary=summary,
+            job_tree=job_tree,
+            leaf_summaries=leaf_summaries,
+            status=status,
+            workflow_env=workflow_env,
+        )
 
-    if fetch_raw_query_cpu_time:
-        task_wall_ms = fetch_raw_query_task_wall_ms(job_id, iris_config)
-        if task_wall_ms is None:
-            report.warnings.append("iris query task_wall_ms: failed; sum_task_wall_seconds_total unset")
-        else:
-            report.sum_task_wall_seconds_total = task_wall_ms / 1000.0
-        by_child = fetch_raw_query_task_wall_ms_by_child(job_id, iris_config)
-        if by_child is None:
-            report.warnings.append("iris query by_child: failed; stage_sum_task_wall_seconds empty")
-        else:
-            report.stage_sum_task_wall_seconds = {
-                step: ms / 1000.0 if ms is not None else None for step, ms in bucket_by_step(by_child, job_id).items()
-            }
+        if fetch_raw_query_cpu_time:
+            task_wall_ms = fetch_raw_query_task_wall_ms(client, job_id)
+            if task_wall_ms is None:
+                report.warnings.append("iris query task_wall_ms: failed; sum_task_wall_seconds_total unset")
+            else:
+                report.sum_task_wall_seconds_total = task_wall_ms / 1000.0
+            by_child = fetch_raw_query_task_wall_ms_by_child(client, job_id)
+            if by_child is None:
+                report.warnings.append("iris query by_child: failed; stage_sum_task_wall_seconds empty")
+            else:
+                report.stage_sum_task_wall_seconds = {
+                    step: ms / 1000.0 if ms is not None else None
+                    for step, ms in bucket_by_step(by_child, job_id).items()
+                }
 
     if out is not None:
         write_report_local(report, out)

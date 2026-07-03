@@ -17,6 +17,7 @@ Example:
     sub_job_id = ctx.client.submit(entrypoint, "sub-job", resources)
 """
 
+import json
 import logging
 from collections.abc import Generator, Sequence
 from contextlib import contextmanager
@@ -951,6 +952,20 @@ class IrisClient:
             List of TaskStatus protos, one per task
         """
         return self._cluster_client.list_tasks(job_id)
+
+    def query(self, sql: str) -> list[dict[str, object]]:
+        """Execute a read-only controller SQL query and return row dicts.
+
+        Args:
+            sql: SELECT statement accepted by the controller.
+
+        Returns:
+            One dict per row, keyed by column name.
+        """
+        response = self._cluster_client.execute_raw_query(sql)
+        columns = [column.name for column in response.columns]
+        rows = [json.loads(row) for row in response.rows]
+        return [dict(zip(columns, row, strict=True)) for row in rows]
 
     def kick_tasks(
         self,

@@ -95,8 +95,7 @@ iris job summary /user/job-name         # per-task state, exit, duration, peak m
 iris job bug-report /user/job-name      # structured diagnostic dump
 ```
 
-For machine-readable job data, use the Iris Python client (`IrisClient`) or
-`iris query --format=json` for SQL reads against controller state.
+For machine-readable job data, use the Iris Python client (`IrisClient`) directly.
 
 ### `job run` gotchas
 
