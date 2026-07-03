@@ -29,7 +29,7 @@ from pathlib import Path
 import click
 from connectrpc.errors import ConnectError
 from google.protobuf import json_format
-from iris.cli.connect import open_iris_connection
+from iris.cli.connect import open_controller_endpoint, rpc_client
 from iris.cli.job import build_job_summary
 from iris.client import IrisClient
 from iris.cluster.types import JobName
@@ -608,10 +608,10 @@ def upload_report_to_gcs(report: PerfReport, gcs_prefix: str, report_name: str, 
     help="If set, write the resulting GCS URL to this $GITHUB_OUTPUT key.",
 )
 @click.option(
-    "--raw-query-cpu-time/--no-raw-query-cpu-time",
-    "fetch_raw_query_cpu_time",
+    "--task-wall-time/--no-task-wall-time",
+    "fetch_task_wall_time",
     default=True,
-    help="Fetch CPU wall time via ExecuteRawQuery and include in the report.",
+    help="Fetch summed task wall time via ExecuteRawQuery and include it in the report.",
 )
 def main(
     job_id: str,
@@ -621,7 +621,7 @@ def main(
     out: Path | None,
     gcs_prefix: str | None,
     gcs_output_env: str | None,
-    fetch_raw_query_cpu_time: bool,
+    fetch_task_wall_time: bool,
 ) -> None:
     """Collect a perf report for a finished datakit ferry run.
 
@@ -642,35 +642,39 @@ def main(
         "commit_sha": os.environ.get("GITHUB_SHA"),
     }
 
-    with open_iris_connection(config_file=iris_config, workspace=_REPO_ROOT) as (client, controller):
-        summary = fetch_job_summary(client, job_id)
-        job_tree = fetch_job_tree(client, job_id)
-        leaf_summaries = fetch_leaf_summaries(client, job_tree) if job_tree else []
-        status = load_ferry_status(status_path)
+    with open_controller_endpoint(config_file=iris_config) as endpoint:
+        with (
+            IrisClient.remote(endpoint.url, workspace=_REPO_ROOT, credentials=endpoint.credentials) as client,
+            rpc_client(endpoint.url, endpoint.credentials) as controller,
+        ):
+            summary = fetch_job_summary(client, job_id)
+            job_tree = fetch_job_tree(client, job_id)
+            leaf_summaries = fetch_leaf_summaries(client, job_tree) if job_tree else []
+            status = load_ferry_status(status_path)
 
-        report = build_report(
-            job_id=job_id,
-            summary=summary,
-            job_tree=job_tree,
-            leaf_summaries=leaf_summaries,
-            status=status,
-            workflow_env=workflow_env,
-        )
+            report = build_report(
+                job_id=job_id,
+                summary=summary,
+                job_tree=job_tree,
+                leaf_summaries=leaf_summaries,
+                status=status,
+                workflow_env=workflow_env,
+            )
 
-        if fetch_raw_query_cpu_time:
-            task_wall_ms = fetch_raw_query_task_wall_ms(controller, job_id)
-            if task_wall_ms is None:
-                report.warnings.append("iris query task_wall_ms: failed; sum_task_wall_seconds_total unset")
-            else:
-                report.sum_task_wall_seconds_total = task_wall_ms / 1000.0
-            by_child = fetch_raw_query_task_wall_ms_by_child(controller, job_id)
-            if by_child is None:
-                report.warnings.append("iris query by_child: failed; stage_sum_task_wall_seconds empty")
-            else:
-                report.stage_sum_task_wall_seconds = {
-                    step: ms / 1000.0 if ms is not None else None
-                    for step, ms in bucket_by_step(by_child, job_id).items()
-                }
+            if fetch_task_wall_time:
+                task_wall_ms = fetch_raw_query_task_wall_ms(controller, job_id)
+                if task_wall_ms is None:
+                    report.warnings.append("iris query task_wall_ms: failed; sum_task_wall_seconds_total unset")
+                else:
+                    report.sum_task_wall_seconds_total = task_wall_ms / 1000.0
+                by_child = fetch_raw_query_task_wall_ms_by_child(controller, job_id)
+                if by_child is None:
+                    report.warnings.append("iris query by_child: failed; stage_sum_task_wall_seconds empty")
+                else:
+                    report.stage_sum_task_wall_seconds = {
+                        step: ms / 1000.0 if ms is not None else None
+                        for step, ms in bucket_by_step(by_child, job_id).items()
+                    }
 
     if out is not None:
         write_report_local(report, out)

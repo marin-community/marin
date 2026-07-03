@@ -79,7 +79,6 @@ class ControllerEndpoint:
 
     url: str
     credentials: ClientCredentials
-    cluster_name: str
     config: IrisClusterConfig | None
 
 
@@ -174,7 +173,6 @@ def open_controller_endpoint(
         yield ControllerEndpoint(
             url=require_controller_url(ctx),
             credentials=credentials,
-            cluster_name=resolved_cluster_name,
             config=config,
         )
 
@@ -221,25 +219,6 @@ def open_iris_client(
             extra_bundle_includes=extra_bundle_includes,
         ) as client:
             yield client
-
-
-@contextmanager
-def open_iris_connection(
-    *,
-    config_file: Path | None = None,
-    controller_url: str | None = None,
-    cluster_name: str | None = None,
-    workspace: Path | None,
-) -> Iterator[tuple[IrisClient, ControllerServiceClientSync]]:
-    """Open both high-level and raw controller clients over one resolved endpoint."""
-    with open_controller_endpoint(
-        config_file=config_file,
-        controller_url=controller_url,
-        cluster_name=cluster_name,
-    ) as endpoint:
-        with IrisClient.remote(endpoint.url, workspace=workspace, credentials=endpoint.credentials) as client:
-            with rpc_client(endpoint.url, endpoint.credentials) as controller:
-                yield client, controller
 
 
 def rpc_client(
