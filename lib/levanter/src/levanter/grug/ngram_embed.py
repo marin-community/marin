@@ -126,8 +126,12 @@ def _shift_back(token_ids: Int[Array, "B S"], offset: int) -> Int[Array, "B S"]:
     """
     if offset == 0:
         return token_ids
-    batch, seq_len = token_ids.shape
-    pad = jnp.zeros((batch, offset), dtype=token_ids.dtype)
+    seq_len = token_ids.shape[1]
+    # Build the zero pad from a token_ids slice (× 0) rather than jnp.zeros so it inherits
+    # token_ids' batch sharding. Under the model's explicit mesh axes a freshly created array is
+    # committed to a replicated sharding, and concatenating it with the batch-sharded token slice
+    # raises ShardingTypeError; two slices of token_ids share one sharding and concatenate cleanly.
+    pad = token_ids[:, :offset] * 0
     return jnp.concatenate([pad, token_ids[:, : seq_len - offset]], axis=1)
 
 
