@@ -64,6 +64,14 @@ DIAGNOSTIC_VARIANTS = (
     DIAGNOSTIC_VARIANT_STORE_ZERO,
     DIAGNOSTIC_VARIANT_WGMMA_TINY_OUTPUT,
 )
+DIAGNOSTIC_INPUT_MODE_SYNTHETIC_BLOCKS = "synthetic_blocks"
+DIAGNOSTIC_INPUT_MODE_COMPACT_ROUTING = "compact_routing"
+DIAGNOSTIC_INPUT_MODE_SOURCE_PUSH_PLAN = "source_push_plan"
+DIAGNOSTIC_INPUT_MODES = (
+    DIAGNOSTIC_INPUT_MODE_SYNTHETIC_BLOCKS,
+    DIAGNOSTIC_INPUT_MODE_COMPACT_ROUTING,
+    DIAGNOSTIC_INPUT_MODE_SOURCE_PUSH_PLAN,
+)
 ROUTING_MODES = (
     "balanced",
     "roughly_balanced",
@@ -106,6 +114,11 @@ def _wgmma_smem(shape: tuple[int, int], dtype: Any):
 def _validate_diagnostic_variant(diagnostic_variant: str) -> None:
     if diagnostic_variant not in DIAGNOSTIC_VARIANTS:
         raise ValueError(f"unknown diagnostic_variant={diagnostic_variant!r}; expected one of {DIAGNOSTIC_VARIANTS}")
+
+
+def _validate_diagnostic_input_mode(input_mode: str) -> None:
+    if input_mode not in DIAGNOSTIC_INPUT_MODES:
+        raise ValueError(f"unknown diagnostic input_mode={input_mode!r}; expected one of {DIAGNOSTIC_INPUT_MODES}")
 
 
 @dataclass(frozen=True)
@@ -1874,9 +1887,15 @@ def run_source_push_inbox_diagnostic(
     separate_compile: bool = False,
     progress_events: bool = False,
     compact_routing: bool = False,
+    input_mode: str | None = None,
 ) -> list[dict[str, Any]]:
     """Run a non-production diagnostic variant of the source-push inbox kernel."""
     _validate_diagnostic_variant(diagnostic_variant)
+    if input_mode is None:
+        input_mode = (
+            DIAGNOSTIC_INPUT_MODE_COMPACT_ROUTING if compact_routing else DIAGNOSTIC_INPUT_MODE_SYNTHETIC_BLOCKS
+        )
+    _validate_diagnostic_input_mode(input_mode)
     settings = SourcePushInboxRunSettings(
         warmup=warmup,
         steps=steps,
@@ -1886,7 +1905,12 @@ def run_source_push_inbox_diagnostic(
         separate_compile=separate_compile,
         progress_events=progress_events,
     )
-    input_builder = _make_compact_routing_inputs if compact_routing else _make_host_inputs
+    input_builder_by_mode = {
+        DIAGNOSTIC_INPUT_MODE_SYNTHETIC_BLOCKS: _make_host_inputs,
+        DIAGNOSTIC_INPUT_MODE_COMPACT_ROUTING: _make_compact_routing_inputs,
+        DIAGNOSTIC_INPUT_MODE_SOURCE_PUSH_PLAN: _make_source_push_plan_inputs,
+    }
+    input_builder = input_builder_by_mode[input_mode]
     return _run_one(
         config,
         settings,
@@ -1897,5 +1921,6 @@ def run_source_push_inbox_diagnostic(
             "implementation": f"{DIAGNOSTIC_KERNEL_NAME}:{diagnostic_variant}",
             "diagnostic_variant": diagnostic_variant,
             "diagnostic_compact_routing": compact_routing,
+            "diagnostic_input_mode": input_mode,
         },
     )

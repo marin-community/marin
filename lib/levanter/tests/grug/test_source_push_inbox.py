@@ -1000,29 +1000,52 @@ def test_source_push_cli_selects_source_push_plan_input_mode(monkeypatch, capsys
 
 def test_source_push_diagnostic_cli_runs_requested_variants(monkeypatch, capsys):
     calls = []
+    repeat_rows = [
+        {
+            "config": {"entries_per_rank": 2},
+            "queue_stats": {},
+            "repeat_run": 0,
+            "repeat_runs": 3,
+            "steady_state_time": 1.0,
+            "w13_tflops_per_rank": 2.0,
+            "rounded_w13_tflops_per_rank": 2.0,
+            "useful_w13_tflops_per_rank": 1.5,
+            "send_gbps_per_rank": 3.0,
+            "compile_time": 4.0,
+            "lower_compile_time": 5.0,
+            "first_run_time": 6.0,
+            "error_type": None,
+            "error": None,
+        },
+        {
+            "config": {"entries_per_rank": 2},
+            "queue_stats": {},
+            "repeat_run": 1,
+            "repeat_runs": 3,
+            "steady_state_time": 2.0,
+            "w13_tflops_per_rank": 1.0,
+            "rounded_w13_tflops_per_rank": 1.0,
+            "useful_w13_tflops_per_rank": 0.75,
+            "send_gbps_per_rank": 1.5,
+            "compile_time": 4.0,
+            "lower_compile_time": 5.0,
+            "first_run_time": 6.0,
+            "error_type": None,
+            "error": None,
+        },
+    ]
 
     def fake_run_source_push_inbox_diagnostic(config, **kwargs):
-        calls.append((kwargs["diagnostic_variant"], kwargs["repeat_runs"], kwargs["compact_routing"]))
+        calls.append((kwargs["diagnostic_variant"], kwargs["repeat_runs"], kwargs["input_mode"]))
         return [
             {
+                **row,
                 "kernel": "source_push_inbox_diagnostic",
                 "implementation": f"source_push_inbox_diagnostic:{kwargs['diagnostic_variant']}",
                 "diagnostic_variant": kwargs["diagnostic_variant"],
-                "config": {"entries_per_rank": config.entries_per_rank},
-                "queue_stats": {},
-                "repeat_run": 0,
-                "repeat_runs": kwargs["repeat_runs"],
-                "steady_state_time": 1.0,
-                "w13_tflops_per_rank": 2.0,
-                "rounded_w13_tflops_per_rank": 2.0,
-                "useful_w13_tflops_per_rank": 1.5,
-                "send_gbps_per_rank": 3.0,
-                "compile_time": 4.0,
-                "lower_compile_time": 5.0,
-                "first_run_time": 6.0,
-                "error_type": None,
-                "error": None,
+                "diagnostic_input_mode": kwargs["input_mode"],
             }
+            for row in repeat_rows
         ]
 
     monkeypatch.setattr(
@@ -1037,27 +1060,44 @@ def test_source_push_diagnostic_cli_runs_requested_variants(monkeypatch, capsys)
             "semaphore_only,copy_release_only",
             "--repeat-runs",
             "3",
-            "--compact-routing",
+            "--input-mode",
+            "source_push_plan",
         ]
     )
 
     rows = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
-    assert calls == [("semaphore_only", 3, True), ("copy_release_only", 3, True)]
-    assert [row["row_type"] for row in rows] == ["repeat", "summary", "repeat", "summary"]
+    assert calls == [("semaphore_only", 3, "source_push_plan"), ("copy_release_only", 3, "source_push_plan")]
+    assert [row["row_type"] for row in rows] == ["repeat", "repeat", "summary", "repeat", "repeat", "summary"]
     assert [row["diagnostic_variant"] for row in rows] == [
         "semaphore_only",
         "semaphore_only",
+        "semaphore_only",
+        "copy_release_only",
         "copy_release_only",
         "copy_release_only",
     ]
     assert [row.get("median_rounded_w13_tflops_per_rank") for row in rows if row["row_type"] == "summary"] == [
-        2.0,
-        2.0,
+        1.5,
+        1.5,
     ]
     assert [row.get("median_useful_w13_tflops_per_rank") for row in rows if row["row_type"] == "summary"] == [
-        1.5,
-        1.5,
+        1.125,
+        1.125,
     ]
+    assert [row.get("diagnostic_input_mode") for row in rows if row["row_type"] == "summary"] == [
+        "source_push_plan",
+        "source_push_plan",
+    ]
+    assert [row.get("p90_steady_state_time") for row in rows if row["row_type"] == "summary"] == [
+        1.9,
+        1.9,
+    ]
+    assert [row.get("p95_steady_state_time") for row in rows if row["row_type"] == "summary"] == [
+        1.95,
+        1.95,
+    ]
+    assert [row.get("slow_useful_w13_repeats") for row in rows if row["row_type"] == "summary"] == [2, 2]
+    assert [row.get("slow_useful_w13_fraction") for row in rows if row["row_type"] == "summary"] == [1.0, 1.0]
 
 
 def test_source_push_combine_cli_passes_profile_defaults(monkeypatch, capsys):
