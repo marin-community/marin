@@ -616,3 +616,57 @@ through benchmark row runners.
   - Public `grug_moe` integration is still not complete: the current callable expects explicit source-major arrays and
     builds `SourcePushPlan` on the host, while `moe_mlp` dispatch currently enters an EP shard-local function through
     `shard_map`.
+
+## 2026-07-03 04:56 - Public EP forward comparison smoke
+
+Added a small integration comparison harness that feeds the same production-like source-plan raw arrays into both the
+package-private source-push forward callable and public `moe_mlp` EP backends.
+
+- Commit Hashes:
+  - `814624a71`: add raw source-plan arrays plus
+    `lib/levanter/scripts/bench/bench_source_push_forward_public_compare.py`.
+  - `13be43c8d`: use an explicit-axis mesh for the public `moe_mlp` baseline.
+- Code:
+  - `lib/levanter/src/levanter/grug/_moe/source_push_forward.py`
+  - `lib/levanter/scripts/bench/bench_source_push_forward_public_compare.py`
+  - `lib/levanter/tests/grug/test_source_push_inbox.py`
+- Change:
+  - Added `SourcePushForwardRawInputs` and `make_source_push_forward_source_plan_raw_inputs(config)`.
+  - The existing source-plan forward input builder now goes through the same real-array adapter used by the package-private
+    callable API.
+  - Added a bench script that compares `source_push_forward(..., implementation="pallas_mgpu")` against public
+    `moe_mlp(..., implementation="ragged_all_to_all"|"ring")` on the same flattened source-major tokens, routing,
+    combine weights, and expert weights.
+  - Public `moe_mlp` comparison uses an `AxisType.Explicit` mesh plus `jax.set_mesh(mesh)` because named
+    `PartitionSpec` resharding rejects Auto-axis meshes.
+- Local verification:
+  - `uv run --package marin-levanter --group test pytest lib/levanter/tests/grug/test_source_push_inbox.py -q`
+    - Result: `37 passed, 11 warnings`.
+  - Focused after explicit-mesh fix:
+    `uv run --package marin-levanter --group test pytest lib/levanter/tests/grug/test_source_push_inbox.py -q -k 'public_compare or source_push_forward_public_compare or bench_cli_imports'`
+    - Result: `5 passed, 11 warnings`.
+  - `./infra/pre-commit.py --changed-files --fix`
+    - Result: all checks passed.
+- H100 smoke attempt 1:
+  - Job: `/dlwh/source-push-forward-public-compare-814624a71-20260703-114751`
+  - Result: Iris succeeded, but the script emitted a structured `ValueError` row before numeric comparison:
+    `PartitionSpec passed to reshard cannot contain axis names that are of type Auto or Manual`.
+  - Cause: the compare script reused source-push `_make_mesh`, whose default JAX axis type is Auto. Public `moe_mlp`
+    now requires an explicit-axis mesh for named `PartitionSpec` resharding.
+- H100 smoke rerun:
+  - Job: `/dlwh/source-push-forward-public-compare-13be43c8d-20260703-115228`
+  - Command:
+    `uv run --package marin-levanter --group test python lib/levanter/scripts/bench/bench_source_push_forward_public_compare.py --ep-size 8 --tokens-per-rank 64 --hidden-dim 128 --intermediate-dim 128 --experts-per-rank 2 --topk 2 --capacity-factor 1.25 --entries-per-rank 2 --inbox-slots 1 --block-m 64 --block-k 64 --block-n 128 --n-group 1 --n-groups-per-job 1 --send-worker-programs-per-peer 1 --worker-programs-per-peer 8 --send-pipeline-depth 1 --routing balanced --source-push-implementation pallas_mgpu --source-push-execution-mode staged_host_sync --public-implementations ragged_all_to_all,ring --git-sha 13be43c8d5753b6e3f5cfb3269218d310ad58f69 --jsonl scratch/source-push-forward-public-compare-13be43c8d-20260703-115228.jsonl`
+  - Iris summary: succeeded, one task, `duration_ms=73514`, `exit_code=0`.
+
+| public baseline | max abs diff | mean abs diff | source-push dropped | public dropped | dropped delta |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `ragged_all_to_all` | `0.0078125` | `0.0006504738703370094` | `0` | `0` | `0` |
+| `ring` | `0.0078125` | `0.0005966257303953171` | `0` | `0` | `0` |
+
+- Interpretation:
+  - The package-private source-push forward callable now matches both public EP baselines on a real H100x8 sharded
+    forward smoke using real packed/source-plan inputs.
+  - This is a correctness/integration smoke only; it is not a target performance row.
+  - Remaining production gap: wiring behind public `MoeImplementation` still needs a decision about host-side
+    `SourcePushPlan` construction versus a device/JAX-compatible planner inside the existing public EP dispatch path.
