@@ -3,7 +3,7 @@
 
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 import fsspec
 import jax
@@ -11,7 +11,12 @@ from haliax.jax_utils import is_jax_array_like
 from levanter.tracker import current_tracker
 
 
-def grug_state_sharding_dict(state: Any) -> dict[str, dict[str, str]]:
+class GrugStateWithSharding(Protocol):
+    params: object
+    opt_state: object
+
+
+def grug_state_sharding_dict(state: GrugStateWithSharding) -> dict[str, dict[str, str]]:
     """Return sharding specs for Grug parameters and optimizer state."""
     return {
         "params": tree_sharding_dict(state.params),
@@ -19,7 +24,7 @@ def grug_state_sharding_dict(state: Any) -> dict[str, dict[str, str]]:
     }
 
 
-def dump_grug_state_sharding(state: Any, path: str | Path) -> None:
+def dump_grug_state_sharding(state: GrugStateWithSharding, path: str | Path) -> None:
     """Write Grug parameter and optimizer-state sharding specs as JSON."""
     output = grug_state_sharding_dict(state)
     serialized = json.dumps(output, indent=2, sort_keys=True)
@@ -28,7 +33,7 @@ def dump_grug_state_sharding(state: Any, path: str | Path) -> None:
         out.write("\n")
 
 
-def dump_grug_state_sharding_artifact(state: Any, path: str | Path) -> None:
+def dump_grug_state_sharding_artifact(state: GrugStateWithSharding, path: str | Path) -> None:
     """Write Grug sharding specs and log them to the active tracker."""
     dump_grug_state_sharding(state, path)
     current_tracker().log_artifact(path, name="grug_sharding_spec", type="sharding")
