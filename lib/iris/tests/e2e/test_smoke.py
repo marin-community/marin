@@ -20,7 +20,6 @@ from connectrpc.errors import ConnectError
 from finelog.rpc import logging_pb2
 from finelog.rpc.logging_connect import LogServiceClientSync
 from iris.client.client import IrisClient, iris_ctx
-from iris.cluster.backends.local.cluster import LocalCluster
 from iris.cluster.config import (
     AuthConfig,
     IrisClusterConfig,
@@ -35,6 +34,7 @@ from iris.cluster.config import (
 from iris.cluster.constraints import Constraint, ConstraintOp, WellKnownAttribute, region_constraint
 from iris.cluster.endpoints import LOG_SERVER_ENDPOINT_NAME
 from iris.cluster.lifecycle import connect_cluster
+from iris.cluster.local_cluster import LocalCluster
 from iris.cluster.types import AcceleratorType, CapacityType, Entrypoint, EnvironmentSpec, ResourceSpec
 from iris.rpc import controller_pb2, job_pb2
 from iris.rpc.controller_connect import ControllerServiceClientSync
@@ -421,8 +421,11 @@ def test_dashboard_task_logs(smoke_cluster, verbose_job, smoke_page, smoke_scree
         "Should have structural elements like a status card and resource info.",
     )
 
-    # "validation failed" only appears in ERROR lines
-    smoke_page.fill("input[placeholder='Filter logs...']", "validation failed")
+    # "validation failed" only appears in ERROR lines. The text filter applies
+    # on Enter, not on every keystroke.
+    filter_input = "input[placeholder^='Filter text']"
+    smoke_page.fill(filter_input, "validation failed")
+    smoke_page.press(filter_input, "Enter")
     smoke_page.wait_for_function(
         "() => document.body.textContent.includes('validation failed') && "
         "!document.body.textContent.includes('processing data batch')",

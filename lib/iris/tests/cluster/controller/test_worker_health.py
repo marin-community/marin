@@ -26,7 +26,6 @@ from iris.cluster.controller.worker_health import (
 from iris.cluster.types import WorkerId, WorkerUsability
 from rigging.timing import Duration, Timestamp
 from sqlalchemy import insert, select
-
 from tests.cluster.controller._test_support import set_worker_consecutive_failures_for_test
 
 from .conftest import make_worker_metadata, register_worker
@@ -178,7 +177,7 @@ def test_seeds_liveness_from_persisted_workers(tmp_path: Path) -> None:
             cur.execute(insert(workers_table).values(worker_id="w-seed-2", address="10.0.0.2:8080"))
 
         health = WorkerHealthTracker()
-        worker_attrs = WorkerAttrsProjection(db)
+        worker_attrs = WorkerAttrsProjection(db, owns_scale_group=lambda _scale_group: True)
 
         # Replicate _seed_liveness_from_workers
         now_ms = Timestamp.now().epoch_ms()

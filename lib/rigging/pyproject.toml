@@ -15,6 +15,7 @@ dependencies = [
     "pyyaml>=6.0",
     "requests>=2.0.0",
     "s3fs>=2024.0.0",
+    "starlette>=0.40",
 ]
 
 [project.optional-dependencies]
@@ -23,11 +24,12 @@ dependencies = [
 iap = ["google-auth-oauthlib>=1.0.0"]
 
 [dependency-groups]
-dev = [
+test = [
     "pytest>=8.3.2",
     "pytest-asyncio",
     "pytest-timeout",
 ]
+dev = [{ include-group = "test" }]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/rigging"]

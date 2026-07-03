@@ -17,15 +17,15 @@ from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
-from iris.cluster.backends.gcp.fake import InMemoryGcpService
-from iris.cluster.backends.gcp.handles import GcpVmSliceHandle
-from iris.cluster.backends.gcp.service import (
+from iris.cluster.platforms.gcp.fake import InMemoryGcpService
+from iris.cluster.platforms.gcp.handles import GcpVmSliceHandle
+from iris.cluster.platforms.gcp.service import (
     CloudGcpService,
     TpuCreateRequest,
     VmCreateRequest,
     VmInfo,
 )
-from iris.cluster.backends.types import (
+from iris.cluster.platforms.types import (
     CloudSliceState,
     InfraError,
     InfraUnavailableError,

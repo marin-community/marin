@@ -28,18 +28,16 @@ from haliax import Axis
 from haliax.partitioning import round_axis_for_partitioning
 from jax.experimental import multihost_utils
 from levanter.data import DataLoader
-from levanter.data.text import DatasetComponent, LmDataConfig, LMMixtureDatasetConfig
+from levanter.data.text import LmDataConfig
 from levanter.model_loading import load_hf_checkpoint, load_levanter_checkpoint
 from levanter.models.llama import LlamaConfig
 from levanter.models.lm_model import LmConfig, LmExample, LmHeadModel
 from levanter.models.loss import next_token_loss
-from levanter.tracker import NoopConfig
 from levanter.trainer import TrainerConfig
 from levanter.utils.tree_utils import inference_mode
 from rigging.filesystem import open_url
 
-from marin.execution.types import ExecutorStep, InputName, this_output_path
-from marin.utilities.executor_utils import ckpt_path_to_step_name
+from marin.processing.tokenize.data_configs import with_pack
 
 logger = logging.getLogger(__name__)
 
@@ -67,12 +65,7 @@ class SaveLogprobsOnPodConfig:
 
 
 def _force_pack_data(data: LmDataConfig) -> LmDataConfig:
-    packed_components = {
-        name: replace(component, pack=True) if isinstance(component, DatasetComponent) else component
-        for name, component in data.components.items()
-    }
-    packed_data = replace(data, components=packed_components, block_cross_document_attention=True)
-    return packed_data
+    return replace(with_pack(data, True), block_cross_document_attention=True)
 
 
 def save_logprobs(config: SaveLogprobsConfig) -> None:
@@ -166,9 +159,10 @@ def save_logprobs(config: SaveLogprobsConfig) -> None:
                                 (b_topk_vals, b_topk_ids), tiled=True
                             )
 
-                        b_tokens, b_seg_ids = batch.tokens.rearrange((EvalBatch, Pos)), batch.attn_mask.segment_ids[
-                            0
-                        ].rearrange((EvalBatch, Pos))
+                        b_tokens, b_seg_ids = (
+                            batch.tokens.rearrange((EvalBatch, Pos)),
+                            batch.attn_mask.segment_ids[0].rearrange((EvalBatch, Pos)),
+                        )
                         b_loss, b_tokens, b_seg_ids = multihost_utils.process_allgather(
                             (b_loss, b_tokens, b_seg_ids), tiled=True
                         )
@@ -222,39 +216,3 @@ def run_save_logprobs_on_pod(config: SaveLogprobsOnPodConfig) -> None:
     )
     job = client.submit(job_request)
     job.wait(raise_on_failure=True)
-
-
-def default_save_logprobs(
-    checkpoint: str | InputName,
-    model: LmConfig,
-    data: LMMixtureDatasetConfig,
-    resource_config: ResourceConfig,
-    checkpoint_is_hf: bool,
-    per_device_batch_size: int = 4,
-    top_k: int | None = None,
-    name: str | None = None,
-) -> ExecutorStep:
-    """Creates an ExecutorStep that saves per-token logprobs to disk."""
-    if not name:
-        name = ckpt_path_to_step_name(checkpoint)
-
-    return ExecutorStep(
-        name=f"analysis/logprobs/{name}",
-        fn=run_save_logprobs_on_pod,
-        config=SaveLogprobsOnPodConfig(
-            save_logprobs_config=SaveLogprobsConfig(
-                checkpoint_path=checkpoint,  # type: ignore
-                checkpoint_is_hf=checkpoint_is_hf,
-                model=model,
-                data=data,
-                trainer=TrainerConfig(
-                    tracker=NoopConfig(),
-                    per_device_eval_parallelism=per_device_batch_size,
-                    mp=jmp.get_policy("c=bf16"),
-                ),
-                output_path=this_output_path(),
-                top_k=top_k,
-            ),
-            resources=resource_config,
-        ),
-    )

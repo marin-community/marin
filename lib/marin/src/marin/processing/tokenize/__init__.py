@@ -16,6 +16,7 @@ from .data_configs import (
     mixture_for_evaluation,
     step_to_lm_dataset_source_config,
     step_to_lm_mixture_component,
+    with_pack,
 )
 from .merge_tokenized_caches import MergeTokenizedCachesConfig, merge_tokenized_caches
 from .tokenize import (

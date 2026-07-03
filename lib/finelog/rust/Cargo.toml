@@ -46,6 +46,13 @@ buffa = { version = "0.6", features = ["json"] }
 buffa-types = { version = "0.6", features = ["json"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# HS256 JWT verification for the authenticated ingress front. We
+# use the RustCrypto primitives directly (constant-time `verify_slice`) rather
+# than a full JWT crate to avoid a `ring` build dependency; the only non-crypto
+# work is base64url-splitting the token envelope.
+hmac = "0.12"
+sha2 = "0.10"
+base64 = "0.22"
 axum = "0.7"
 # Phase 5d: ServeDir static-file service for the Vue SPA `/static` mount. The
 # `fs` feature is the only one needed; tower-http 0.6 is compatible with the

@@ -279,7 +279,7 @@ def load_jsonl(source: str | InputFileSpec) -> Iterator[dict]:
                     continue
                 if columns is not None:
                     record = {k: record[k] for k in columns if k in record}
-                counters.increment("zephyr/records_in")
+                counters.pipeline.update_counter("zephyr/records_in", 1)
                 yield record
     except RuntimeError:
         raise  # Re-raise wrapped error

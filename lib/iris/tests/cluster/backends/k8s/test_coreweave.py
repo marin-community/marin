@@ -15,19 +15,6 @@ import threading
 import time
 
 import pytest
-from iris.cluster.backends.k8s.controller import (
-    _CONTROLLER_CPU_REQUEST,
-    _CONTROLLER_MEMORY_REQUEST,
-    _CONTROLLER_STATE_PVC_NAME,
-    _CONTROLLER_STATE_PVC_SIZE,
-    K8sControllerProvider,
-)
-from iris.cluster.backends.k8s.fake import InMemoryK8sService
-from iris.cluster.backends.k8s.types import K8sResource
-from iris.cluster.backends.types import (
-    InfraError,
-    Labels,
-)
 from iris.cluster.config import (
     ControllerVmConfig,
     CoreweaveControllerConfig,
@@ -39,6 +26,20 @@ from iris.cluster.config import (
     ScaleGroupConfig,
     SliceConfig,
     StorageConfig,
+)
+from iris.cluster.platforms.k8s.controller import (
+    _CONTROLLER_CPU_REQUEST,
+    _CONTROLLER_MEMORY_REQUEST,
+    _CONTROLLER_PROXY_INGRESS_NAME,
+    _CONTROLLER_STATE_PVC_NAME,
+    _CONTROLLER_STATE_PVC_SIZE,
+    K8sControllerProvider,
+)
+from iris.cluster.platforms.k8s.fake import InMemoryK8sService
+from iris.cluster.platforms.k8s.types import K8sResource
+from iris.cluster.platforms.types import (
+    InfraError,
+    Labels,
 )
 
 
@@ -200,6 +201,9 @@ def test_start_controller_creates_all_resources():
     assert pvc["spec"]["accessModes"] == ["ReadWriteOnce"]
     assert pvc["spec"]["resources"]["requests"]["storage"] == _CONTROLLER_STATE_PVC_SIZE
 
+    # No public_proxy_host configured → no Ingress (ClusterIP only).
+    assert k8s.get_json(K8sResource.INGRESSES, _CONTROLLER_PROXY_INGRESS_NAME) is None
+
     t.join(timeout=5)
     provider.shutdown()
 
@@ -264,6 +268,62 @@ def test_start_controller_reconciles_when_already_available():
     assert k8s.get_json(K8sResource.CONFIGMAPS, "iris-cluster-config") is not None
     assert k8s.get_json(K8sResource.SERVICES, "iris-controller-svc") is not None
 
+    t.join(timeout=5)
+    provider.shutdown()
+
+
+def _keep_deployment_ready(k8s: InMemoryK8sService, name: str, stop: threading.Event):
+    """Continuously mark the deployment available until stopped.
+
+    Unlike _auto_ready_deployment (one-shot), this keeps re-marking the
+    deployment available across re-applies, since apply_json replaces the
+    manifest and drops its status.
+    """
+    while not stop.is_set():
+        dep = k8s.get_json(K8sResource.DEPLOYMENTS, name)
+        if dep is not None:
+            dep.setdefault("status", {})["availableReplicas"] = dep.get("spec", {}).get("replicas", 1)
+        time.sleep(0.02)
+
+
+def _controller_command(k8s: InMemoryK8sService) -> list[str]:
+    dep = k8s.get_json(K8sResource.DEPLOYMENTS, "iris-controller")
+    return dep["spec"]["template"]["spec"]["containers"][0]["command"]
+
+
+def test_fresh_start_strips_fresh_from_persisted_deployment():
+    """A --fresh start must not leave --fresh baked into the persisted pod command.
+
+    Otherwise an involuntary pod respawn comes back --fresh and wipes live job
+    state (issue #6808).
+    """
+    provider, k8s = _make_provider()
+    cluster_config = _make_cluster_config()
+
+    stop = threading.Event()
+    t = threading.Thread(target=_keep_deployment_ready, args=(k8s, "iris-controller", stop), daemon=True)
+    t.start()
+    try:
+        provider.start_controller(cluster_config, fresh=True)
+    finally:
+        stop.set()
+        t.join(timeout=5)
+
+    assert "--fresh" not in _controller_command(k8s)
+    provider.shutdown()
+
+
+def test_non_fresh_start_never_includes_fresh():
+    """A normal (non-fresh) start deploys a pod command without --fresh."""
+    provider, k8s = _make_provider()
+    cluster_config = _make_cluster_config()
+
+    t = threading.Thread(target=_auto_ready_deployment, args=(k8s, "iris-controller"), daemon=True)
+    t.start()
+
+    provider.start_controller(cluster_config)
+
+    assert "--fresh" not in _controller_command(k8s)
     t.join(timeout=5)
     provider.shutdown()
 

@@ -21,6 +21,7 @@ from haliax.nn.scan import BlockFoldable, BlockSeq, Stacked
 from haliax.state_dict import ModuleWithStateDictSerialization, StateDict
 
 from levanter.compat.hf_checkpoints import HFCheckpointConverter
+from levanter.compat.hf_config import hf_config_from_kwargs, hf_rope_config
 from levanter.layers.attention import Attention, AttentionBackend, AttentionMask
 from levanter.layers.rotary import DefaultRotaryEmbeddingsConfig, RotaryEmbeddingsConfig
 from levanter.models.llama import LlamaConfig, LlamaEmbedding
@@ -127,10 +128,8 @@ class Qwen3MoeConfig(LlamaConfig):
 
     @classmethod
     def from_hf_config(cls, hf_config: HfConfig):
-        rope_config = RotaryEmbeddingsConfig.from_hf_config(
-            hf_config.rope_theta,
-            getattr(hf_config, "rope_scaling", None),
-        )
+        rope_theta, rope_scaling = hf_rope_config(hf_config)
+        rope_config = RotaryEmbeddingsConfig.from_hf_config(rope_theta, rope_scaling)
         return Qwen3MoeConfig(
             max_seq_len=hf_config.max_position_embeddings,
             hidden_dim=hf_config.hidden_size,
@@ -166,7 +165,8 @@ class Qwen3MoeConfig(LlamaConfig):
 
         rope_theta, rope_scaling = self.rope.to_hf_config()
 
-        return HfQwen3MoeConfig(
+        return hf_config_from_kwargs(
+            HfQwen3MoeConfig,
             vocab_size=vocab_size,
             max_position_embeddings=self.max_seq_len,
             hidden_size=self.hidden_dim,

@@ -24,6 +24,7 @@ import requests
 from iris.client import iris_ctx
 from iris.cluster.client.job_info import get_job_info
 from iris.cluster.tpu_topology import get_tpu_topology
+from iris.cluster.types import EndpointAccess
 from levanter.model_cache import resolve_cached_model_path
 from rigging.connect import proxy_path
 from rigging.filesystem import open_url
@@ -63,6 +64,9 @@ class QuickServeConfig:
     """Single-host TPU slice type, e.g. ``v6e-8`` or ``v5litepod-8``."""
     endpoint_name: str
     """Iris endpoint name registered for the dashboard (a leading ``/`` is verbatim)."""
+    access: int = EndpointAccess.ENDPOINT_ACCESS_PRIVATE
+    """Proxy access mode. PRIVATE (cluster identity only), PUBLIC (open), or BEARER
+    (a scoped endpoint token, minted CLI-side for off-cluster callers)."""
     port_name: str = "http"
     dtype: str = "bfloat16"
     max_model_len: int | None = None
@@ -284,7 +288,7 @@ def serve_in_job(config: QuickServeConfig) -> None:
                 "tpu": config.tpu_type,
                 "tensor_parallel_size": str(tensor_parallel_size),
             }
-            endpoint_id = ctx.registry.register(config.endpoint_name, address, metadata)
+            endpoint_id = ctx.registry.register(config.endpoint_name, address, metadata, access=config.access)
             logger.info(
                 "Registered quick-serve endpoint name=%s address=%s id=%s proxy_path=%s",
                 config.endpoint_name,

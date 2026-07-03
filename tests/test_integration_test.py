@@ -44,7 +44,7 @@ def _iris_controller_url(tmp_path) -> Iterator[str]:
     log_file = tmp_path / "iris-cluster.log"
     with log_file.open("w") as log:
         cluster = subprocess.Popen(
-            ["uv", "run", "iris", "--config", "lib/iris/config/test.yaml", "cluster", "start", "--local"],
+            ["uv", "run", "iris", "--config", "lib/iris/config/ci-test.yaml", "cluster", "start", "--local"],
             cwd=MARIN_ROOT,
             stdout=log,
             stderr=subprocess.STDOUT,

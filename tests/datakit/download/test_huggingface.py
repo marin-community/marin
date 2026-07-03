@@ -88,7 +88,9 @@ def test_relative_path_in_source_supports_revision_qualified_bucket_paths():
     assert _relative_path_in_source(file_path, source_path) == "train/file1.txt"
 
 
-def test_download_hf_bucket_requires_newer_huggingface_hub(tmp_path):
+def test_download_hf_bucket_requires_newer_huggingface_hub(tmp_path, monkeypatch):
+    monkeypatch.setattr(hf_download.huggingface_hub, "__version__", "1.5.0")
+
     cfg = DownloadConfig(
         hf_dataset_id="buckets/demo-user/demo-bucket/data",
         revision="main",

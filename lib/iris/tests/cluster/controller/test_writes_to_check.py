@@ -38,7 +38,7 @@ def fresh_db() -> Iterator[ControllerDB]:
 def projections_built(fresh_db: ControllerDB) -> Iterator[None]:
     """Construct one of each Projection so PROJECTIONS exposes their owned tables."""
     endpoints = EndpointsProjection(fresh_db)
-    worker_attrs = WorkerAttrsProjection(fresh_db)
+    worker_attrs = WorkerAttrsProjection(fresh_db, owns_scale_group=lambda _scale_group: True)
     try:
         yield
     finally:

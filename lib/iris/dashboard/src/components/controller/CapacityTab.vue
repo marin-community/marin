@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
-import { RouterLink } from 'vue-router'
+import { RouterLink, useRoute, useRouter } from 'vue-router'
 import { controllerRpcCall, useControllerRpc } from '@/composables/useRpc'
 import { useAutoRefresh, DEFAULT_REFRESH_MS } from '@/composables/useAutoRefresh'
+import { useBackends } from '@/composables/useBackends'
 import { SLICE_STATUS_STYLES, SLICE_STATUS_SUMMARY_ORDER, DIVERGING_COLORS, type SliceStatusStyle } from '@/types/status'
 import type {
   GetAutoscalerStatusResponse,
@@ -39,8 +40,29 @@ import MetricCard from '@/components/shared/MetricCard.vue'
 // paginated/searchable ListJobs query, so it's fetched imperatively.
 // ===========================================================================
 
+const route = useRoute()
+const router = useRouter()
+const { multiBackend, currentBackend, listBackends } = useBackends()
+
+const backendId = computed(() => currentBackend(route))
+
+// Unroutable job count from ListBackends (distinct from "no capacity").
+const unroutableJobCount = ref(0)
+
+async function fetchBackendSummaries() {
+  if (!multiBackend.value) return
+  try {
+    const resp = await listBackends()
+    unroutableJobCount.value = resp.unroutableJobCount ?? 0
+  } catch {
+    // Non-fatal — the unroutable card simply stays at 0
+  }
+}
+
 const { data: autoscalerData, loading: autoscalerLoading, error: autoscalerError, refresh: refreshAutoscaler } =
-  useControllerRpc<GetAutoscalerStatusResponse>('GetAutoscalerStatus')
+  useControllerRpc<GetAutoscalerStatusResponse>('GetAutoscalerStatus', () =>
+    backendId.value ? { backendId: backendId.value } : {}
+  )
 const { data: schedulerData, error: schedulerError, refresh: refreshScheduler } =
   useControllerRpc<GetSchedulerStateResponse>('GetSchedulerState')
 const { data: usersData, error: usersError, refresh: refreshUsers } =
@@ -50,11 +72,14 @@ const { data: usersData, error: usersError, refresh: refreshUsers } =
 const nowMs = ref(Date.now())
 
 async function refreshAll() {
-  await Promise.all([refreshAutoscaler(), refreshScheduler(), refreshUsers(), fetchPendingJobs()])
+  await Promise.all([refreshAutoscaler(), refreshScheduler(), refreshUsers(), fetchPendingJobs(), fetchBackendSummaries()])
   nowMs.value = Date.now()
 }
 useAutoRefresh(refreshAll, DEFAULT_REFRESH_MS)
 onMounted(refreshAll)
+
+// Re-fetch when the backend scope changes.
+watch(backendId, refreshAll)
 
 // ===========================================================================
 // Pending jobs query (searchable / paginated)
@@ -80,6 +105,7 @@ async function fetchPendingJobs() {
       limit: PENDING_PAGE_SIZE,
       sortField: 'JOB_SORT_FIELD_DATE',
       sortDirection: 'SORT_DIRECTION_DESC',
+      backendId: backendId.value || undefined,
     }
     if (pendingSearch.value.trim()) {
       query.nameFilter = pendingSearch.value.trim()
@@ -121,6 +147,24 @@ const error = computed(() => autoscalerError.value || schedulerError.value || us
 const autoscaler = computed<AutoscalerStatus | null>(() => autoscalerData.value?.status ?? null)
 const groups = computed(() => autoscaler.value?.groups ?? [])
 const routing = computed(() => autoscaler.value?.lastRoutingDecision ?? null)
+
+// When multiBackend and unscoped, group scale groups by their backend_id so
+// FleetOverview can render once per backend.
+const groupsByBackend = computed<Map<string, ScaleGroupStatus[]>>(() => {
+  const map = new Map<string, ScaleGroupStatus[]>()
+  for (const g of groups.value) {
+    const bid = g.backendId ?? ''
+    if (!map.has(bid)) map.set(bid, [])
+    map.get(bid)!.push(g)
+  }
+  return map
+})
+
+// True when we should render per-backend FleetOverview sections.
+const showPerBackendFleet = computed(() => multiBackend.value && !backendId.value && groupsByBackend.value.size > 1)
+
+// Show the Backend column on Pending/Unmet tables in All mode only.
+const showBackendColumn = computed(() => multiBackend.value && !backendId.value)
 const unmetEntries = computed(() => routing.value?.unmetEntries ?? [])
 const actions = computed(() => (autoscaler.value?.recentActions ?? []).slice().reverse())
 
@@ -766,12 +810,34 @@ function sliceIdShort(sliceId?: string): string {
           label="Unmet jobs"
           :variant="aggregatedUnmet.length > 0 ? 'danger' : 'default'"
         />
+        <MetricCard
+          v-if="multiBackend"
+          size="sm"
+          :value="unroutableJobCount"
+          label="Unroutable"
+          :variant="unroutableJobCount > 0 ? 'danger' : 'default'"
+          detail="no backend matches"
+        />
         <MetricCard size="sm" :value="formatRelativeTime(lastEvalMs)" label="Last evaluation" />
       </div>
     </section>
 
     <!-- ===== Fleet overview — what we have, where ===== -->
-    <FleetOverview :groups="groups" :running-buckets="schedulerData?.runningBuckets ?? []" />
+    <!-- In multi-backend All mode: one section per backend. Otherwise: one combined view. -->
+    <template v-if="showPerBackendFleet">
+      <FleetOverview
+        v-for="[bid, bGroups] in groupsByBackend"
+        :key="bid"
+        :groups="bGroups"
+        :running-buckets="schedulerData?.runningBuckets ?? []"
+        :backend-label="bid"
+      />
+    </template>
+    <FleetOverview
+      v-else
+      :groups="groups"
+      :running-buckets="schedulerData?.runningBuckets ?? []"
+    />
 
     <!-- ===== Pools — capacity & routing ===== -->
     <section>
@@ -1104,6 +1170,13 @@ function sliceIdShort(sliceId?: string): string {
               <th scope="col" class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary">User</th>
               <th scope="col" class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary">State</th>
               <th scope="col" class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary">Band</th>
+              <th
+                v-if="showBackendColumn"
+                scope="col"
+                class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary"
+              >
+                Backend
+              </th>
               <th scope="col" class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary">Pending Reason</th>
               <th scope="col" class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary">Submitted</th>
             </tr>
@@ -1128,6 +1201,16 @@ function sliceIdShort(sliceId?: string): string {
                   {{ bandDisplayName(pendingJobBand.get(job.jobId)) }}
                 </span>
                 <span v-else class="text-text-muted">-</span>
+              </td>
+              <td v-if="showBackendColumn" class="px-3 py-2 text-[13px]">
+                <button
+                  v-if="job.backendId"
+                  class="text-accent hover:underline font-mono text-xs"
+                  @click="router.replace({ query: { ...route.query, backend: job.backendId } })"
+                >
+                  {{ job.backendId }}
+                </button>
+                <span v-else class="text-text-muted">—</span>
               </td>
               <td class="px-3 py-2 text-[13px] text-status-warning max-w-md truncate" :title="job.pendingReason ?? ''">
                 {{ job.pendingReason || '-' }}

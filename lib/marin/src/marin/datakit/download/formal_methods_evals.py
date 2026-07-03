@@ -46,7 +46,6 @@ from marin.datakit.ingestion_manifest import (
     write_ingestion_metadata_json,
 )
 from marin.execution.step_spec import StepSpec
-from marin.execution.types import THIS_OUTPUT_PATH
 from marin.utils import fsspec_mkdirs
 
 logger = logging.getLogger(__name__)
@@ -133,7 +132,7 @@ class DownloadArchiveSliceConfig:
     """Runtime config for :func:`download_archive_slice`."""
 
     source: ArchiveSourceConfig
-    output_path: str = THIS_OUTPUT_PATH
+    output_path: str = ""
     output_filename: str = DEFAULT_OUTPUT_FILENAME
     http_timeout_seconds: int = DEFAULT_HTTP_TIMEOUT_SECONDS
 

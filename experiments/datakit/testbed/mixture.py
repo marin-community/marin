@@ -4,8 +4,7 @@ import json
 import logging
 from dataclasses import dataclass
 
-from marin.execution.types import ExecutorStep, InputName, output_path_of, this_output_path
-from marin.processing.tokenize.data_configs import TokenizerStep
+from marin.execution.step_spec import StepSpec
 from rigging.filesystem import open_url
 
 logger = logging.getLogger(__name__)
@@ -17,13 +16,11 @@ _WEIGHTS_FILENAME = "weights.json"
 class TokenizedBucketWeightsConfig:
     """Inputs to ``compute_tokenized_bucket_weights``.
 
-    ``tokenized_paths`` is keyed by bucket name and points at the resolved
-    output path of each ``testbed_tokenize`` step. The values are
-    ``InputName`` references at construction time and concrete strings at
-    runtime, after the executor resolves dependencies.
+    ``tokenized_paths`` is keyed by bucket name and points at the resolved output
+    path of each ``testbed_tokenize`` step.
     """
 
-    tokenized_paths: dict[str, str | InputName]
+    tokenized_paths: dict[str, str]
     output_path: str
 
 
@@ -48,17 +45,24 @@ def read_bucket_weights(weights_dir: str) -> dict[str, float]:
         return json.load(f)
 
 
-def tokenized_bucket_weights_step(name: str, tokenized_buckets: dict[str, TokenizerStep]) -> ExecutorStep:
-    """ExecutorStep that reads each bucket's tokenize stats and emits weights.json.
+def tokenized_bucket_weights_step(name: str, tokenized_buckets: dict[str, StepSpec]) -> StepSpec:
+    """A step that reads each bucket's tokenize stats and emits weights.json.
 
-    Pass the resulting step to ``run_testbed_config`` as ``weights_step``; the
-    executor resolves the dependency on each tokenize bucket automatically.
+    Pass the resulting step to ``run_testbed_config`` as ``weights_step``; depending on
+    every tokenize bucket lets the runner resolve each bucket's output path at run time.
     """
-    return ExecutorStep(
+    buckets = dict(tokenized_buckets)
+
+    def fn(output_path: str) -> None:
+        compute_tokenized_bucket_weights(
+            TokenizedBucketWeightsConfig(
+                tokenized_paths={bucket: step.output_path for bucket, step in buckets.items()},
+                output_path=output_path,
+            )
+        )
+
+    return StepSpec(
         name=f"data/datakit/weights/{name}",
-        fn=compute_tokenized_bucket_weights,
-        config=TokenizedBucketWeightsConfig(
-            tokenized_paths={b: output_path_of(t) for b, t in tokenized_buckets.items()},
-            output_path=this_output_path(),
-        ),
+        deps=list(buckets.values()),
+        fn=fn,
     )

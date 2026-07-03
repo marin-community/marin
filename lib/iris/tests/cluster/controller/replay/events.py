@@ -19,14 +19,18 @@ from iris.cluster.controller import ops
 from iris.cluster.controller.ops.task import Assignment, apply_dispatch_updates, finalize
 from iris.cluster.controller.projections.endpoints import EndpointRow
 from iris.cluster.controller.reconcile import dispatch
+from iris.cluster.controller.reconcile.commit import commit_effects
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.reconcile.task import TerminalDecision, TerminalKind
 from iris.cluster.types import JobName, WorkerId
 from iris.rpc import controller_pb2, job_pb2
 from rigging.timing import Timestamp
-
 from tests.cluster.controller._test_support import ControllerTestState
-from tests.cluster.controller.transition_driver import WorkerTaskUpdates, apply_task_observations
+from tests.cluster.controller.transition_driver import (
+    CursorTransitionReader,
+    WorkerTaskUpdates,
+    apply_task_observations,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -174,12 +178,11 @@ def apply_event(transitions: ControllerTestState, event: IrisEvent) -> Any:
                     cur, cache=transitions._run_template_cache, max_promotions=max_promotions
                 )
             case ApplyDirectProviderUpdates(updates):
-                return apply_dispatch_updates(
-                    cur,
-                    updates,
-                    endpoints=transitions._endpoints,
-                    now=Timestamp.now(),
-                )
+                # Relocated glue: author the effects from this write transaction,
+                # then commit them — the two steps the controller now does apart.
+                effects = apply_dispatch_updates(CursorTransitionReader(cur), updates, now=Timestamp.now())
+                commit_effects(cur, effects, endpoints=transitions._endpoints)
+                return effects
             case AddEndpoint(endpoint):
                 return transitions._endpoints.add(cur, endpoint)
             case RemoveEndpoint(endpoint_id):

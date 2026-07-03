@@ -8,7 +8,7 @@ from typing import Protocol
 from finelog.rpc import logging_pb2
 from rigging.timing import Duration
 
-from iris.cluster.types import Entrypoint, JobName, TaskAttempt
+from iris.cluster.types import EndpointAccess, Entrypoint, JobName, TaskAttempt
 from iris.rpc import controller_pb2, job_pb2
 
 
@@ -73,9 +73,14 @@ class ClusterClient(Protocol):
         address: str,
         task_attempt: TaskAttempt,
         metadata: dict[str, str] | None = None,
+        access: int = EndpointAccess.ENDPOINT_ACCESS_PRIVATE,
     ) -> str: ...
 
     def unregister_endpoint(self, endpoint_id: str) -> None: ...
+
+    def mint_endpoint_token(
+        self, endpoint_name: str, ttl: Duration | None = None
+    ) -> controller_pb2.Controller.MintEndpointTokenResponse: ...
 
     def list_endpoints(self, prefix: str, *, exact: bool = False) -> list[controller_pb2.Controller.Endpoint]: ...
 

@@ -12,7 +12,7 @@ Each row carries a ``source`` (the task path ``/user/job/.../<index>``), a
 
 This script:
 
-1. Resolves the cluster's finelog deployment (``log_server_config`` in
+1. Resolves the cluster's finelog deployment (``finelog.config`` in
    ``config/<cluster>.yaml``; defaults to the cluster name) and opens a tunnel
    to it, exactly as ``finelog query`` does.
 2. Queries every CPU profile whose ``source`` is the given job or a descendant
@@ -67,7 +67,7 @@ SUBJOB_DETAIL_MIN_SHARE = 0.01
 def finelog_config_for_cluster(cluster: str) -> str:
     """Return the finelog deployment name for an Iris cluster.
 
-    Reads ``log_server_config`` from ``config/<cluster>.yaml`` (the field that
+    Reads ``finelog.config`` from ``config/<cluster>.yaml`` (the field that
     names the cluster's finelog deployment); falls back to the cluster name.
     """
     config_path = CONFIG_DIR / f"{cluster}.yaml"
@@ -75,7 +75,7 @@ def finelog_config_for_cluster(cluster: str) -> str:
         raise FileNotFoundError(f"No cluster config at {config_path}")
     with open(config_path) as f:
         cfg = yaml.safe_load(f)
-    return cfg.get("log_server_config") or cluster
+    return cfg.get("finelog", {}).get("config") or cluster
 
 
 def tunnel_target(cfg: FinelogConfig) -> TunnelTarget:

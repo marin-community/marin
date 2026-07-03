@@ -17,6 +17,7 @@ from haliax.nn.scan import BlockFoldable, BlockSeq, Stacked
 from haliax.state_dict import ModuleWithStateDictSerialization
 
 from levanter.compat.hf_checkpoints import HFCheckpointConverter
+from levanter.compat.hf_config import hf_config_from_kwargs
 from levanter.inference.page_table import PageBatchInfo, PageTableSpec
 from levanter.layers.attention import Attention, AttentionMask
 from levanter.layers.kv_cache import KvPageCache, ListCache
@@ -161,7 +162,8 @@ class ApertusConfig(LlamaConfig):
         else:
             rope_parameters = {"rope_type": "default", "rope_theta": rope_theta}
 
-        hf_config = HfApertusConfig(
+        hf_config = hf_config_from_kwargs(
+            HfApertusConfig,
             vocab_size=vocab_size,
             hidden_size=self.hidden_dim,
             intermediate_size=self.intermediate_dim,

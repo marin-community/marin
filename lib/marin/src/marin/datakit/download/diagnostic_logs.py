@@ -180,7 +180,7 @@ class MaterializedDiagnosticLogParquet(DiagnosticLogsArtifact):
     output_dir: str
     data_glob: str
     record_count: int
-    counters: dict[str, int]
+    counters: dict[str, int | float]
     content_fingerprint: str
 
 
@@ -616,13 +616,13 @@ def _process_ghalogs_member_batch(batch: list[str], archive_path: str) -> Iterat
             for name in batch:
                 with zf.open(name, "r") as member_file:
                     content = member_file.read()
-                counters.increment("zephyr/records_in")
+                counters.pipeline.update_counter("zephyr/records_in", 1)
                 record = ghalogs_member_to_record(name, content)
                 if record is None:
-                    counters.increment("ghalogs_materialize/dropped_empty")
+                    counters.pipeline.update_counter("ghalogs_materialize/dropped_empty", 1)
                     continue
-                counters.increment("ghalogs_materialize/kept")
-                counters.increment(f"ghalogs_materialize/partition_{record['partition']}")
+                counters.pipeline.update_counter("ghalogs_materialize/kept", 1)
+                counters.pipeline.update_counter(f"ghalogs_materialize/partition_{record['partition']}", 1)
                 yield record
 
 
@@ -687,7 +687,7 @@ def materialize_ghalogs_to_parquet(
 
 
 def _count_partition_record(record: dict[str, str], partition: DiagnosticPartition) -> dict[str, str]:
-    counters.increment(f"ghalogs_partition/{partition.value}_kept")
+    counters.pipeline.update_counter(f"ghalogs_partition/{partition.value}_kept", 1)
     return record
 
 

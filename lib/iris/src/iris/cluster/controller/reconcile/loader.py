@@ -4,6 +4,7 @@
 """Snapshot loader: produces TransitionSnapshot instances for the kernel."""
 
 from collections.abc import Iterable
+from typing import Protocol
 
 from rigging.timing import Timestamp
 from sqlalchemy import bindparam, select
@@ -22,7 +23,7 @@ from iris.cluster.controller.reconcile.snapshot import (
 from iris.cluster.controller.schema import (
     job_config_table,
     jobs_table,
-    tasks_table,
+    local_tasks,
 )
 from iris.cluster.controller.task_state import ACTIVE_TASK_STATES
 from iris.cluster.types import (
@@ -31,6 +32,29 @@ from iris.cluster.types import (
     JobName,
     WorkerId,
 )
+
+
+class TransitionReader(Protocol):
+    """A read surface that yields a closed :class:`TransitionSnapshot` for the kernel.
+
+    Lets a backend author its task-state projection from a point-in-time snapshot
+    without reading the controller database directly. Implementations seed by
+    whichever entities their reconcile path starts from (workers + observation
+    uids for the worker path, tasks + attempt keys for the direct path); the
+    snapshot closes over everything the kernel may touch.
+    """
+
+    def transition_snapshot(
+        self,
+        *,
+        now: Timestamp,
+        seed_worker_ids: Iterable[WorkerId] = (),
+        observation_uids: Iterable[AttemptUid] = (),
+        seed_task_ids: Iterable[JobName] = (),
+        extra_attempt_keys: Iterable[tuple[JobName, int]] = (),
+    ) -> TransitionSnapshot:
+        """Load a closed snapshot stamped with ``now``, seeded by the given entities."""
+        ...
 
 
 def _build_multi_root_descendants_stmt():
@@ -150,13 +174,13 @@ def _load_all_tasks_for_jobs(cur: Tx, job_ids: Iterable[JobName]) -> dict[JobNam
         return {}
     rows = cur.execute(
         select(
-            tasks_table.c.task_id,
-            tasks_table.c.job_id,
-            tasks_table.c.task_index,
-            tasks_table.c.state,
-            tasks_table.c.failure_count,
-            tasks_table.c.error,
-        ).where(tasks_table.c.job_id.in_(bindparam("job_ids", expanding=True))),
+            local_tasks.c.task_id,
+            local_tasks.c.job_id,
+            local_tasks.c.task_index,
+            local_tasks.c.state,
+            local_tasks.c.failure_count,
+            local_tasks.c.error,
+        ).where(local_tasks.c.job_id.in_(bindparam("job_ids", expanding=True))),
         {"job_ids": ids},
     ).all()
     grouped: dict[JobName, list[TaskHistogramRow]] = {jid: [] for jid in ids}

@@ -39,7 +39,7 @@ import pyarrow as pa
 from fray import ResourceConfig
 from huggingface_hub import hf_hub_download
 from marin.datakit.normalize import NormalizedData
-from marin.execution.artifact import Artifact
+from marin.execution.artifact import write_artifact
 from marin.utils import fsspec_glob
 from pydantic import BaseModel
 from rigging.filesystem import marin_temp_bucket, url_to_fs
@@ -82,7 +82,7 @@ class EmbeddingAttrData(BaseModel):
     Mirrors :class:`~marin.processing.tokenize.attributes.TokenizedAttrData`.
     One output parquet shard per source shard, sharing basename and row order
     (sort-by-id invariant carries through). Persisted as the step's ``.artifact``.
-    Load via ``Artifact.from_path(step, EmbeddingAttrData)``.
+    Load via ``read_artifact(step.output_path, EmbeddingAttrData)``.
 
     Attributes:
         output_dir: Directory containing the per-shard parquet outputs.
@@ -106,7 +106,7 @@ class EmbeddingAttrData(BaseModel):
     quantization_scale: float
     quantization_range: float
     batch_size: int
-    counters: dict[str, int] = {}
+    counters: dict[str, int | float] = {}
 
     def shard_paths(self) -> list[str]:
         return sorted(fsspec_glob(f"{self.output_dir.rstrip('/')}/*.parquet"))
@@ -199,9 +199,9 @@ def _embed_shard(
         q = quantize_to_int8(raw)
         for i, did in enumerate(ids):
             yield {"id": did, "embedding": q[i].tolist()}
-    counters.increment("embed/docs_in", n_docs)
-    counters.increment("embed/bytes_in", n_bytes)
-    counters.increment("embed/shards_in", 1)
+    counters.pipeline.update_counter("embed/docs_in", n_docs)
+    counters.pipeline.update_counter("embed/bytes_in", n_bytes)
+    counters.pipeline.update_counter("embed/shards_in", 1)
     logger.info(
         "shard %d/%d: %d docs (%.1f MB) encoded",
         shard.shard_idx,
@@ -291,5 +291,5 @@ def embed_source(
         batch_size=batch_size,
         counters=dict(outcome.counters),
     )
-    Artifact.save(artifact, output_path)
+    write_artifact(artifact, output_path)
     return artifact

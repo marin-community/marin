@@ -46,7 +46,7 @@ def fold_parallel_text(record: dict) -> Iterator[dict]:
     original = record.get("og_full_text") or ""
     english = record.get("translated_text") or ""
     if not original and not english:
-        counters.increment("finetranslations/empty")
+        counters.pipeline.update_counter("finetranslations/empty", 1)
         return
 
     # Coin flip from the row id (falls back to the original text) so the chosen
@@ -54,13 +54,13 @@ def fold_parallel_text(record: dict) -> Iterator[dict]:
     # sides are dropped from the join, so single-sided rows pass through as-is.
     coin = record.get("id") or original
     if dupekit.hash_xxh3_128(coin.encode("utf-8")) & 1:
-        counters.increment("finetranslations/english_first")
+        counters.pipeline.update_counter("finetranslations/english_first", 1)
         parts = (english, original)
     else:
-        counters.increment("finetranslations/original_first")
+        counters.pipeline.update_counter("finetranslations/original_first", 1)
         parts = (original, english)
 
-    counters.increment("finetranslations/kept")
+    counters.pipeline.update_counter("finetranslations/kept", 1)
     yield {"text": SEPARATOR.join(p for p in parts if p)}
 
 

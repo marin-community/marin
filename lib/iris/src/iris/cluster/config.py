@@ -18,19 +18,27 @@ these are normalized at the parse boundary.
 from __future__ import annotations
 
 import copy
+import ipaddress
 import logging
 import os
 from collections.abc import Mapping
 from pathlib import Path
-from typing import Annotated, Any, ClassVar
+from typing import Annotated, Any, ClassVar, Literal
 
 import fsspec
 import yaml
-from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, PlainSerializer, model_validator
+from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, PlainSerializer, field_validator, model_validator
 from rigging.timing import Duration
 
 from iris.cluster.tpu_topology import TPU_FAMILY_VARIANT_PREFIX, get_tpu_topology, tpu_variant_name
-from iris.cluster.types import AcceleratorType, CapacityType, GcpSliceMode, WellKnownAttribute, parse_memory_string
+from iris.cluster.types import (
+    DEFAULT_BACKEND_ID,
+    AcceleratorType,
+    CapacityType,
+    GcpSliceMode,
+    WellKnownAttribute,
+    parse_memory_string,
+)
 from iris.rpc import job_pb2
 
 logger = logging.getLogger(__name__)
@@ -432,6 +440,16 @@ class CoreweaveControllerConfig(_Config):
     port: int = 0  # default: 10000
     service_name: str = ""  # K8s Service name for discovery
     scale_group: str = ""  # scale group whose NodePool runs the controller
+    # When set, start_controller creates an Ingress publishing ONLY /proxy
+    # off-cluster; the controller's per-endpoint auth is the sole gate, so keep
+    # auth.provider set. See docs/coreweave.md.
+    public_proxy_host: str = ""
+    ingress_class: str = "traefik"  # ingressClassName for the /proxy ingress
+    tls_secret: str = ""  # secret holding the TLS cert for public_proxy_host
+    # cert-manager ClusterIssuer. When set, the Ingress is annotated
+    # cert-manager.io/cluster-issuer=<name> so cert-manager auto-issues the cert
+    # into tls_secret. Empty = bring your own cert in tls_secret (or no TLS).
+    cluster_issuer: str = ""
 
 
 class ControllerVmConfig(_OneofConfig):
@@ -491,6 +509,10 @@ class IapAuthConfig(_Config):
     oauth_client_secret: str = ""
     audiences: list[str] = Field(default_factory=list)
     signed_header_audience: str = ""
+    # Role granted to an IAP-verified email with no row in the user store; a
+    # provisioned user always resolves to their stored role. "admin" makes
+    # IAP's own allowlist the sole gate.
+    unprovisioned_role: Literal["admin", "user", "dashboard"] = "dashboard"
 
 
 class AuthConfig(_OneofConfig):
@@ -498,10 +520,24 @@ class AuthConfig(_OneofConfig):
     gcp: GcpAuthConfig | None = None
     static: StaticAuthConfig | None = None
     iap: IapAuthConfig | None = None
+    # Network-location trust, orthogonal to the login-provider arm: a tokenless
+    # request whose *direct transport peer* is inside one of these CIDRs
+    # authenticates as the anonymous admin identity (like loopback). Requests
+    # forwarded through a proxy hop (X-Forwarded-For present) never match, so
+    # an in-network ingress cannot lend its address to external traffic. With
+    # no arm selected, a non-empty list alone enables auth (provider "cidr").
+    trusted_cidrs: list[str] = Field(default_factory=list)
     admin_users: list[str] = Field(default_factory=list)
     # Authenticate-but-not-require: valid tokens get their identity; tokenless
     # requests fall through as anonymous admin; invalid tokens still rejected.
     optional: bool = False
+
+    @field_validator("trusted_cidrs")
+    @classmethod
+    def _parse_cidrs(cls, cidrs: list[str]) -> list[str]:
+        for cidr in cidrs:
+            ipaddress.ip_network(cidr)  # ValueError on a malformed CIDR — fail at load
+        return cidrs
 
     def provider_kind(self) -> str | None:
         return self._selected_arm()
@@ -557,6 +593,96 @@ class EndpointSpec(_Config):
 
 
 # ---------------------------------------------------------------------------
+# Backends
+# ---------------------------------------------------------------------------
+
+
+class AllowPolicy(_Config):
+    """Which users may route tasks to a backend. ``"*"`` matches all users."""
+
+    users: list[str] = Field(default_factory=lambda: ["*"])
+
+
+class BackendConfig(_Config):
+    """One task backend in a multi-backend cluster.
+
+    ``kind`` selects the provider arm: ``worker_daemon`` drives the worker-daemon
+    provider (``worker_provider``), ``k8s`` drives the Kubernetes provider
+    (``kubernetes_provider``). ``transport`` must be ``in_process``; ``remote`` is
+    rejected by :func:`validate_config`.
+
+    ``attributes`` values are comma-split into sets by
+    :func:`backend_attribute_sets` for the task→backend meta-scheduler (for
+    example ``device-variant: "v5e-4,v5p-8"``).
+    """
+
+    kind: Literal["worker_daemon", "k8s"]
+    transport: Literal["in_process", "remote"] = "in_process"
+    attributes: dict[str, str] = Field(default_factory=dict)
+    allow_policy: AllowPolicy = Field(default_factory=AllowPolicy)
+    worker_provider: WorkerProviderConfig | None = None
+    kubernetes_provider: KubernetesProviderConfig | None = None
+    scale_groups: dict[str, ScaleGroupConfig] = Field(default_factory=dict)
+    platform: PlatformConfig | None = None
+
+
+# ---------------------------------------------------------------------------
+# Federation peers
+# ---------------------------------------------------------------------------
+
+
+class PeerConfig(_Config):
+    """One federation peer: a remote Iris controller this cluster may delegate to.
+
+    A peer is *not* a backend. A backend is a local execution substrate this
+    controller drives and folds into its own job DAG; a peer owns its own DAG and
+    is handed whole jobs. A peer declares identity, reachability, and trust — never
+    capabilities, which the peer advertises live at runtime (the capability
+    heartbeat), so a peer that loses a pool stops advertising it without a config
+    edit here.
+
+    ``cluster`` names the peer's cluster manifest, from which the client
+    credentials this controller presents to the peer are resolved (the same
+    ``credentials_for`` path every cross-cluster client uses). Empty ``cluster``
+    means loopback / no-auth — a local or same-VPC peer that trusts the connection.
+    """
+
+    controller_address: str  # peer controller RPC address (reachability)
+    dashboard_url: str = ""  # peer public dashboard origin, for deep links
+    cluster: str = ""  # peer cluster manifest name; resolves the presented credentials
+    static_token: str = ""  # client token for a peer whose manifest uses static auth
+
+
+class ClusterFinelogConfig(_Config):
+    """This cluster's finelog: the local log store, and optionally a relay to a shared one.
+
+    ``config`` names the finelog deployment that serves this cluster (iris derives
+    ``/system/log-server`` from it). Set ``relay_address`` to also run a durable relay
+    that forwards this cluster's logs to a shared global finelog; leave it empty and the
+    log plane stays single-cluster (no relay, local reads, byte-identical behavior).
+
+    The relay authenticates its pushes with a delegation credential the global finelog
+    verifies on ingress:
+
+    - ``delegation_key`` — a shared HS256 secret. When set, the relay mints a short-lived
+      JWT signed with it, and the global finelog carries a matching ``jwt`` layer keyed on
+      ``{cluster: <this cluster's name>, secret: <delegation_key>}``. Dedicated (not the
+      control-plane signing key), so the shared store can *verify* this cluster's tokens
+      without gaining the power to *mint* control-plane tokens. HS256-only: an IAP/GCP
+      token would not verify.
+    - ``static_token`` — a pre-minted bearer used verbatim, for a simple/local deployment.
+      Lower-preference than ``delegation_key``.
+    - Neither — no bearer; the global finelog must admit this controller by a ``cidr``
+      layer (a same-VPC/loopback dev store).
+    """
+
+    config: str = ""  # finelog deploy-config name; iris derives /system/log-server from it
+    relay_address: str = ""  # shared global finelog to forward logs to (empty = single-cluster)
+    delegation_key: str = ""  # shared HS256 secret; the relay mints short-lived JWTs with it
+    static_token: str = ""  # pre-minted static bearer (alternative to delegation_key)
+
+
+# ---------------------------------------------------------------------------
 # Root
 # ---------------------------------------------------------------------------
 
@@ -576,10 +702,20 @@ class IrisClusterConfig(_OneofConfig):
     auth: AuthConfig | None = None
     kubernetes_provider: KubernetesProviderConfig | None = None
     worker_provider: WorkerProviderConfig | None = None
+    # Explicit multi-backend map. Absent (None) = the implicit single-backend form,
+    # synthesized from the top-level platform/scale_groups/provider fields by
+    # resolve_backends. Mixing the two is rejected by validate_config.
+    backends: dict[str, BackendConfig] | None = None
     user_budgets: list[UserBudgetTier] = Field(default_factory=list)
     endpoints: dict[str, EndpointSpec] = Field(default_factory=dict)
-    # When set, iris auto-derives /system/log-server from this finelog config name.
-    log_server_config: str = ""
+    # Federation peers (peer id -> declaration): remote Iris controllers this
+    # cluster may delegate whole jobs to. Absent/empty leaves federation inert —
+    # a single-cluster deployment is unchanged.
+    peers: dict[str, PeerConfig] = Field(default_factory=dict)
+    # This cluster's finelog: the local log store (`finelog.config` names the deploy
+    # config iris derives /system/log-server from) and an optional `finelog.relay_address`
+    # for a shared global finelog. Setting `finelog.relay_address` turns on the forwarder.
+    finelog: ClusterFinelogConfig = Field(default_factory=ClusterFinelogConfig)
     # Public dashboard origin (e.g. "https://iris.oa.dev"); enables clickable job URLs.
     dashboard_url: str = ""
 
@@ -790,8 +926,79 @@ def validate_autoscaler_config(config: AutoscalerConfig, context: str = "autosca
         )
 
 
+def _validate_backends(config: IrisClusterConfig) -> None:
+    """Validate an explicit ``backends:`` map.
+
+    The implicit single-backend form (no ``backends:``) is covered by the
+    top-level validators and synthesized by :func:`resolve_backends`.
+    """
+    if config.backends is None:
+        return
+
+    conflicting = []
+    if config.scale_groups:
+        conflicting.append("scale_groups")
+    if config.worker_provider is not None:
+        conflicting.append("worker_provider")
+    if config.kubernetes_provider is not None:
+        conflicting.append("kubernetes_provider")
+    if config.platform.platform_kind() is not None:
+        conflicting.append("platform")
+    if conflicting:
+        raise ValueError(
+            f"backends: cannot be combined with top-level {', '.join(conflicting)}. "
+            "The top-level platform/scale_groups/provider fields are the implicit single-backend "
+            "form; move them under a backends: entry instead."
+        )
+
+    for backend_id, backend in config.backends.items():
+        if backend.transport == "remote":
+            raise ValueError(
+                f"backend '{backend_id}': transport 'remote' is not supported yet — "
+                "remote transport lands in a later PR."
+            )
+        if backend.kind == "worker_daemon":
+            if backend.worker_provider is None:
+                raise ValueError(f"backend '{backend_id}': kind 'worker_daemon' requires worker_provider.")
+            if backend.kubernetes_provider is not None:
+                raise ValueError(f"backend '{backend_id}': kind 'worker_daemon' must not set kubernetes_provider.")
+        elif backend.kind == "k8s":
+            if backend.kubernetes_provider is None:
+                raise ValueError(f"backend '{backend_id}': kind 'k8s' requires kubernetes_provider.")
+            if backend.worker_provider is not None:
+                raise ValueError(f"backend '{backend_id}': kind 'k8s' must not set worker_provider.")
+
+
+def _validate_peers(config: IrisClusterConfig) -> None:
+    """Validate the ``peers:`` federation registry."""
+    for peer_id, peer in config.peers.items():
+        if not peer_id.strip():
+            raise ValueError("peers: peer id must be a non-empty string.")
+        if not peer.controller_address.strip():
+            raise ValueError(f"peer '{peer_id}': controller_address is required.")
+        if peer.static_token and not peer.cluster:
+            raise ValueError(
+                f"peer '{peer_id}': static_token requires cluster to be set (the manifest "
+                "whose static auth the token authenticates against)."
+            )
+
+
+def _validate_finelog_relay(config: IrisClusterConfig) -> None:
+    """Validate the finelog relay credential (only when ``finelog.relay_address`` is set)."""
+    finelog = config.finelog
+    if not finelog.relay_address.strip():
+        return
+    # The finelog HS256 verifier rejects a delegation secret shorter than 16 bytes
+    # (MIN_SECRET_BYTES); fail fast here rather than at the store on first push.
+    if finelog.delegation_key and len(finelog.delegation_key.encode()) < 16:
+        raise ValueError("finelog.delegation_key must be at least 16 bytes.")
+
+
 def validate_config(config: IrisClusterConfig) -> None:
     """Validate cluster config; raises ValueError on the first violation."""
+    _validate_backends(config)
+    _validate_peers(config)
+    _validate_finelog_relay(config)
     _validate_provider_platform_compat(config)
     _validate_accelerator_types(config)
     validate_scale_group_resources(config.scale_groups)
@@ -800,6 +1007,42 @@ def validate_config(config: IrisClusterConfig) -> None:
     _validate_worker_defaults(config)
     _validate_gcp_service_accounts(config)
     validate_autoscaler_config(config.defaults.autoscaler, context="config.defaults.autoscaler")
+
+
+# ===========================================================================
+# Backend resolution
+# ===========================================================================
+
+
+def backend_attribute_sets(backend: BackendConfig) -> dict[str, set[str]]:
+    """Comma-split each ``attributes`` value into a normalized set.
+
+    ``device-variant: "v5e-4, v5p-8"`` becomes ``{"device-variant": {"v5e-4", "v5p-8"}}``.
+    Empty and whitespace-only entries are dropped. The task→backend meta-scheduler
+    uses this to expand set-valued attributes into posting lists.
+    """
+    return {key: {part.strip() for part in raw.split(",") if part.strip()} for key, raw in backend.attributes.items()}
+
+
+def resolve_backends(config: IrisClusterConfig) -> dict[str, BackendConfig]:
+    """Resolve the cluster's backends as a ``{backend_id: BackendConfig}`` map.
+
+    An explicit ``backends:`` map is returned as-is. A single-cluster config (no
+    ``backends:``) synthesizes exactly one entry keyed :data:`DEFAULT_BACKEND_ID`
+    from the top-level platform/scale_groups/provider fields.
+    """
+    if config.backends is not None:
+        return dict(config.backends)
+
+    kind = "k8s" if config.provider_kind() == "kubernetes_provider" else "worker_daemon"
+    backend = BackendConfig(
+        kind=kind,
+        worker_provider=config.worker_provider,
+        kubernetes_provider=config.kubernetes_provider,
+        scale_groups=dict(config.scale_groups),
+        platform=config.platform,
+    )
+    return {DEFAULT_BACKEND_ID: backend}
 
 
 # ===========================================================================
@@ -983,15 +1226,29 @@ def _expand_multi_zone_groups(data: dict) -> None:
     _merge_zones_into_platform_gcp(data, all_expanded_zones)
 
 
-def _inject_scale_group_names(data: dict) -> None:
-    scale_groups = data.get("scale_groups")
+def _inject_scale_group_names_into(scale_groups: object) -> None:
     if not isinstance(scale_groups, dict):
         return
     for name, sg in scale_groups.items():
         if sg is None:
-            data["scale_groups"][name] = {"name": name}
+            scale_groups[name] = {"name": name}
         elif isinstance(sg, dict) and "name" not in sg:
             sg["name"] = name
+
+
+def _inject_scale_group_names(data: dict) -> None:
+    """Stamp each scale group's map key onto its ``name`` field.
+
+    Applies to the top-level ``scale_groups`` and to every backend's
+    ``scale_groups`` so a backend's workers register under the same scale-group
+    name the backend's routing is keyed by.
+    """
+    _inject_scale_group_names_into(data.get("scale_groups"))
+    backends = data.get("backends")
+    if isinstance(backends, dict):
+        for backend in backends.values():
+            if isinstance(backend, dict):
+                _inject_scale_group_names_into(backend.get("scale_groups"))
 
 
 def parse_config(data: dict) -> IrisClusterConfig:

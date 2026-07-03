@@ -7,7 +7,6 @@ import logging
 import os
 import tempfile
 from dataclasses import dataclass
-from urllib.parse import urlparse
 
 import fsspec
 import humanfriendly
@@ -19,7 +18,6 @@ from rigging.filesystem import open_url
 from rigging.timing import ExponentialBackoff, retry_with_backoff
 from tqdm_loggable.auto import tqdm
 
-from marin.execution import ExecutorStep, InputName
 from marin.utils import fsspec_glob
 
 logger = logging.getLogger(__name__)
@@ -27,7 +25,7 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class UploadToHfConfig:
-    input_path: str | InputName
+    input_path: str
     repo_id: str
     repo_type: str = "dataset"
     token: str | None = None
@@ -41,58 +39,6 @@ class UploadToHfConfig:
     """
     The size limit for small files. Files larger than this will be uploaded using lfs.
     """
-
-
-def upload_dir_to_hf(
-    input_path: str | InputName | ExecutorStep,
-    repo_id: str,
-    repo_type: str = "dataset",
-    token: str | None = None,
-    certificate_path: str | None = None,
-    private: bool = False,
-    revision: str | None = None,
-    commit_batch_size: str = "1GiB",
-    **upload_kwargs: str,
-) -> ExecutorStep:
-    """
-    Uploads a path (possibly a GCS path) to a Hugging Face repo.
-    For local paths, it will use the huggingface_hub.upload_folder function. For GCS (or other fsspec paths),
-    it will stream the files using preupload_lfs_files and/or upload_folder
-
-    Args:
-        input_path: path to upload (can be a GCS path)
-        repo_id: the repo id to upload to (e.g. "username/repo_name")
-        repo_type: the type of repo to upload to (e.g. "dataset", "model", etc.)
-        token: the token to use for authentication (if not provided, it will use the default token)
-        revision: the branch to upload to (if not provided, it will use the default branch)
-        certificate_path: where to store the certificate that we uploaded to HF (needed for executor idempotency).
-             If not provided, a reasonable default will be used. Should be a path relative to the executor prefix.
-    Returns:
-        ExecutorStep
-    """
-    if not certificate_path:
-        if isinstance(input_path, InputName) or isinstance(input_path, ExecutorStep):
-            certificate_path = f"metadata/hf_uploads/{input_path.name}"
-        else:
-            # This will drop the scheme (e.g., 'gs') and keep the path
-            parsed = urlparse(input_path)
-            path = parsed.path.lstrip("/")
-            certificate_path = f"metadata/hf_uploads/{path}"
-
-    return ExecutorStep(
-        name=certificate_path,
-        fn=_actually_upload_to_hf,
-        config=UploadToHfConfig(
-            input_path=input_path,
-            repo_id=repo_id,
-            repo_type=repo_type,
-            token=token,
-            revision=revision,
-            private=private,
-            commit_batch_size=commit_batch_size,
-            upload_kwargs=upload_kwargs,
-        ),
-    )
 
 
 def _actually_upload_to_hf(config: UploadToHfConfig):

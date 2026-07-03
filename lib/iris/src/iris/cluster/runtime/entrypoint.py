@@ -9,7 +9,7 @@ ProcessRuntime skips it). Setup is the user's client-resolved
 ``EnvironmentConfig.setup_scripts`` followed by iris's own runtime-deps script.
 """
 
-from iris.cluster.setup import iris_runtime_setup_script, setup_is_quiet
+from iris.cluster.setup_scripts import iris_runtime_setup_script, setup_is_quiet
 from iris.cluster.types import Entrypoint
 from iris.rpc import job_pb2
 

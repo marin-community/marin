@@ -49,7 +49,6 @@ from iris.cluster.runtime.types import (
     ContainerStatus,
     DiscoveredContainer,
     ExecutionStage,
-    ImageInfo,
     MountKind,
     MountSpec,
 )
@@ -973,10 +972,6 @@ class DockerRuntime:
         """Untrack a container ID."""
         self._created_containers.discard(container_id)
 
-    def list_containers(self) -> list[DockerContainerHandle]:
-        """List all managed container handles."""
-        return list(self._handles)
-
     def list_iris_containers(self, all_states: bool = True) -> list[str]:
         """List all containers with iris.managed=true label."""
         cmd = ["docker", "ps", "-q", "--filter", "label=iris.managed=true"]
@@ -1146,26 +1141,3 @@ class DockerImageBuilder:
             capture_output=True,
             check=False,
         )
-
-    def list_images(self, pattern: str) -> list[ImageInfo]:
-        result = subprocess.run(
-            [
-                "docker",
-                "images",
-                "--format",
-                "{{.Repository}}:{{.Tag}}\t{{.CreatedAt}}",
-                "--filter",
-                f"reference={pattern}",
-            ],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-
-        images = []
-        for line in result.stdout.strip().split("\n"):
-            if line and "\t" in line:
-                tag, created = line.split("\t", 1)
-                images.append(ImageInfo(tag=tag, created_at=created))
-
-        return images

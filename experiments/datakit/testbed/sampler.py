@@ -37,7 +37,7 @@ import pyarrow.parquet as pq
 from fray import ResourceConfig
 from marin.datakit.normalize import NormalizedData
 from marin.datakit.sources import DatakitSource, all_sources
-from marin.execution.artifact import Artifact
+from marin.execution.artifact import read_artifact
 from marin.execution.remote import remote
 from marin.execution.step_spec import StepSpec
 from marin.utils import fsspec_glob, fsspec_mkdirs
@@ -313,7 +313,7 @@ def sample_normalized_shards_step(
 
     def sample(output_path: str) -> NormalizedData:
         return sample_normalized_shards(
-            source=Artifact.from_path(normalized_path, NormalizedData),
+            source=read_artifact(normalized_path, NormalizedData),
             output_path=output_path,
             sample_fraction=sample_fraction,
         )

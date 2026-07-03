@@ -89,7 +89,7 @@ jobs:
 
       - name: Test dupekit
         run: |
-          cd lib/dupekit && uv run --frozen --group test pytest tests/ -v
+          uv run --directory lib/dupekit --frozen --group test pytest -v tests/
 
   rust-checks:
     needs: changes

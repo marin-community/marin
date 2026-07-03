@@ -58,6 +58,8 @@ from starlette.background import BackgroundTask
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response, StreamingResponse
 
+from iris.cluster.controller.endpoint_service import proxy_name_to_endpoint_names
+
 logger = logging.getLogger(__name__)
 
 # Resolves an endpoint wire name (e.g. ``/system/log-server``) to an
@@ -240,6 +242,7 @@ class EndpointProxy:
         encoded_name: str,
         sub_path: str,
         proxy_prefix: str,
+        address: str | None = None,
     ) -> Response:
         """Forward ``request`` to ``encoded_name`` and stream the response back.
 
@@ -249,12 +252,15 @@ class EndpointProxy:
         ``Location`` / ``Content-Location`` values and forwarded as
         ``X-Forwarded-Prefix``; pass ``""`` when the public URL already
         roots the upstream (subdomain style).
+
+        ``address`` is the upstream for a caller that already resolved (and
+        authorized) the endpoint — authorization and forwarding must use the
+        same resolution. When omitted, the endpoint is resolved via the
+        injected ``resolve`` callable, using the same decode.
         """
-        # Iris wire-format names start with '/'. Try the slash-prefixed form
-        # first (the common case for task-registered endpoints), then the bare
-        # form for endpoints registered without a leading slash.
-        slashed = encoded_name.replace(".", "/")
-        address = self._resolve(f"/{slashed}") or self._resolve(slashed)
+        if address is None:
+            slashed, bare = proxy_name_to_endpoint_names(encoded_name)
+            address = self._resolve(slashed) or self._resolve(bare)
         if address is None:
             logger.warning("Proxy %s %s -> no endpoint %r", request.method, request.url.path, encoded_name)
             return JSONResponse(

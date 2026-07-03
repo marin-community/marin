@@ -8,6 +8,7 @@ structured Markdown report suitable for GitHub issues or agent consumption.
 """
 
 import logging
+import signal
 import subprocess
 from dataclasses import dataclass, field
 
@@ -22,7 +23,7 @@ from iris.cluster.types import JobName
 from iris.rpc import controller_pb2, job_pb2
 from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
 from iris.rpc.controller_connect import ControllerServiceClientSync
-from iris.rpc.proto_display import format_resources, job_state_friendly, task_state_friendly
+from iris.rpc.proto_display import format_resources, job_state_friendly, signal_name, task_state_friendly
 from iris.time_proto import timestamp_from_proto
 
 logger = logging.getLogger(__name__)
@@ -366,9 +367,10 @@ def _format_exit_code(code: int) -> str:
         return "0 (success)"
     if code > 128:
         signal_num = code - 128
-        signals = {9: "SIGKILL (likely OOM)", 15: "SIGTERM", 6: "SIGABRT"}
-        sig_name = signals.get(signal_num, f"signal {signal_num}")
-        return f"{code} ({sig_name})"
+        name = signal_name(signal_num)
+        if signal_num == signal.SIGKILL:
+            name = f"{name} (likely OOM)"
+        return f"{code} ({name})"
     return str(code)
 
 

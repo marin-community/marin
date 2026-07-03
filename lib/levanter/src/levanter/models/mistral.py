@@ -14,6 +14,7 @@ from haliax.jax_utils import maybe_rng_split
 from haliax.state_dict import ModuleWithStateDictSerialization
 
 from levanter.compat.hf_checkpoints import HFCheckpointConverter
+from levanter.compat.hf_config import hf_config_from_kwargs, hf_rope_config
 from levanter.layers.attention import AttentionBackend, AttentionConfig, AttentionMask
 from levanter.layers.rotary import DefaultRotaryEmbeddingsConfig, RotaryEmbeddingsConfig
 from levanter.models.llama import LlamaConfig, LlamaEmbedding, LlamaTransformer
@@ -95,7 +96,7 @@ class MistralConfig(LlamaConfig):
 
     @classmethod
     def from_hf_config(cls, hf_config: HfConfig):
-        rope_theta = hf_config.rope_theta
+        rope_theta, _ = hf_rope_config(hf_config)
         rope_config = RotaryEmbeddingsConfig.from_hf_config(rope_theta, None)
         return MistralConfig(
             max_seq_len=hf_config.max_position_embeddings,  # this might be too big...
@@ -128,7 +129,8 @@ class MistralConfig(LlamaConfig):
 
         rope_theta, rope_scaling = self.rope.to_hf_config()
 
-        return HfMistralConfig(
+        return hf_config_from_kwargs(
+            HfMistralConfig,
             max_position_embeddings=self.max_seq_len,
             hidden_size=self.hidden_dim,
             intermediate_size=self.intermediate_dim,

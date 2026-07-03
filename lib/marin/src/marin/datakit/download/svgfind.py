@@ -39,7 +39,7 @@ def svgfind_row_to_doc(row: dict) -> list[dict]:
     title = row.get("title") or ""
     svg = row.get("svg_content") or ""
     if not title or not svg:
-        counters.increment("svgfind/cc/dropped")
+        counters.pipeline.update_counter("svgfind/cc/dropped", 1)
         return []
 
     tags = ", ".join(row.get("tags") or [])
@@ -52,7 +52,7 @@ def svgfind_row_to_doc(row: dict) -> list[dict]:
         f"{svg}"
     )
 
-    counters.increment("svgfind/cc/kept")
+    counters.pipeline.update_counter("svgfind/cc/kept", 1)
     return [
         {
             "id": row["id"],

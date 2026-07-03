@@ -26,7 +26,8 @@ from pathlib import Path
 import click
 from fray.types import ResourceConfig
 from iris.client import IrisClient
-from iris.cluster.config import IrisConfig
+from iris.cluster.composer import provider_bundle
+from iris.cluster.config import load_config
 from iris.cluster.constraints import preemptible_constraint, region_constraint
 from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec
 from iris.rpc import job_pb2
@@ -173,9 +174,9 @@ def submit_iris_humaneval(
         configure_logging()
         run_iris_humaneval(inference_config, eval_config)
 
-    iris_config = IrisConfig.load(iris_config_path)
-    controller = iris_config.provider_bundle().controller
-    controller_address = iris_config.controller_address() or controller.discover_controller(iris_config.proto.controller)
+    iris_config = load_config(iris_config_path)
+    controller = provider_bundle(iris_config).controller
+    controller_address = iris_config.controller_address() or controller.discover_controller(iris_config.controller)
     constraints = [preemptible_constraint(False)]
     if region is not None:
         constraints.append(region_constraint([region]))

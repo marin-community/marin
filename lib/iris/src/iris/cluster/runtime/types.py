@@ -140,12 +140,6 @@ class ContainerStatus:
     oom_killed: bool = False
 
 
-@dataclass
-class ImageInfo:
-    tag: str
-    created_at: str
-
-
 class RuntimeLogReader(Protocol):
     """Opaque incremental log reader created by a ContainerHandle.
 
@@ -329,10 +323,6 @@ class ContainerRuntime(Protocol):
         """
         ...
 
-    def list_containers(self) -> list[ContainerHandle]:
-        """List all managed containers."""
-        ...
-
     def list_iris_containers(self, all_states: bool = True) -> list[str]:
         """List IDs of all iris-managed containers/sandboxes."""
         ...
@@ -381,5 +371,3 @@ class ImageBuilder(Protocol):
     def exists(self, tag: str) -> bool: ...
 
     def remove(self, tag: str) -> None: ...
-
-    def list_images(self, pattern: str) -> list[ImageInfo]: ...

@@ -6,6 +6,7 @@ import logging
 import os
 from dataclasses import dataclass
 from functools import lru_cache
+from typing import Literal
 
 import numpy as np
 from levanter.data.text import (
@@ -121,12 +122,27 @@ def step_to_lm_mixture_component(
         )
 
     source = step_to_lm_dataset_source_config(step, include_raw_paths=include_raw_paths)
+    return dataset_component(source)
 
+
+def dataset_component(source: LmDatasetSourceConfigBase) -> DatasetComponent:
+    """Wrap a resolved dataset source as a Levanter cache-backed mixture component."""
     return DatasetComponent(
         source=source,
         cache_dir=source.cache_dir,
         format=source.format,
         tags=source.tags,
+    )
+
+
+def with_pack(data: LmDataConfig, pack: bool | int | Literal["pad"]) -> LmDataConfig:
+    """Override the packing strategy on every cache-backed component of a mixture."""
+    return dataclasses.replace(
+        data,
+        components={
+            name: dataclasses.replace(component, pack=pack) if isinstance(component, DatasetComponent) else component
+            for name, component in data.components.items()
+        },
     )
 
 

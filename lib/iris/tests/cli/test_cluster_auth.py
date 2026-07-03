@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-from iris.cli.main import _cluster_auth_from_config
+from iris.cli.connect import _cluster_auth_from_config
 from iris.cluster.config import AuthConfig, IapAuthConfig
 from rigging.cluster_manifest import AuthProvider
 

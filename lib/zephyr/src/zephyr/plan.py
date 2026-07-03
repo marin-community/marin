@@ -673,14 +673,17 @@ def _merge_sorted_chunks(
 
     # Check if external sort is needed BEFORE materializing all iterators.
     # ScatterReader can decide using manifest stats (no file opens needed).
-    use_external = (
-        external_sort_dir is not None
-        and isinstance(shard, ScatterReader)
-        and shard.needs_external_sort(_TaskResources.from_environment().memory_bytes)
-    )
+    # Resolve the memory limit at most once: from_environment() re-reads cgroup
+    # files and logs a line each call, so the decision and the fan-in sizing
+    # below share a single lookup.
+    memory_limit: int | None = None
+    use_external = False
+    if external_sort_dir is not None and isinstance(shard, ScatterReader):
+        memory_limit = _TaskResources.from_environment().memory_bytes
+        use_external = shard.needs_external_sort(memory_limit)
 
     if use_external:
-        memory_limit = _TaskResources.from_environment().memory_bytes
+        assert memory_limit is not None
         # Per-iterator memory ~= compressed bytes for one chunk held by
         # cat_file. Use the actual max compressed chunk size from the sidecar.
         per_iter_bytes = shard.max_compressed_chunk_bytes
@@ -832,7 +835,7 @@ def run_stage(
                 fs = url_to_fs(output_path)[0]
                 if fs.exists(output_path):
                     logger.info(f"Skipping write, output exists: {output_path}")
-                    counters.increment("zephyr/partitions_skipped")
+                    counters.pipeline.update_counter("zephyr/partitions_skipped", 1)
                     yield output_path
                     return
 

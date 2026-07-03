@@ -20,7 +20,6 @@ from iris.cluster.controller.task_state import ACTIVE_TASK_STATES
 from iris.cluster.types import TERMINAL_TASK_STATES
 from rigging.timing import Timestamp
 from sqlalchemy import Integer, case, func, literal, select
-
 from tests.cluster.controller._test_support import ControllerTestState
 from tests.cluster.controller.replay.db_dump import deterministic_dump
 from tests.cluster.controller.replay.scenarios import SCENARIO_NAMES, SCENARIOS, frozen_clock

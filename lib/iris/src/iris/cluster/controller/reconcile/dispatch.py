@@ -28,7 +28,7 @@ from iris.cluster.controller.reads import (
     pending_dispatch_row,
 )
 from iris.cluster.controller.run_template import RunTemplateCache
-from iris.cluster.controller.schema import job_config_table, jobs_table, tasks_table
+from iris.cluster.controller.schema import job_config_table, jobs_table, local_tasks
 from iris.cluster.controller.task_state import ACTIVE_TASK_STATES, RunningTaskEntry
 from iris.cluster.types import JobName
 from iris.rpc import job_pb2
@@ -185,12 +185,12 @@ def _dispatch_query(
     tasks⋈jobs⋈job_config join; callers supply the distinct state /
     coscheduling predicates plus optional ordering and limit.
     """
-    dispatch_join = tasks_table.join(jobs_table, jobs_table.c.job_id == tasks_table.c.job_id).join(
+    dispatch_join = local_tasks.join(jobs_table, jobs_table.c.job_id == local_tasks.c.job_id).join(
         job_config_table, job_config_table.c.job_id == jobs_table.c.job_id
     )
     stmt = select(*PENDING_DISPATCH_COLS).select_from(dispatch_join).where(*predicates)
     if order_by_job_id:
-        stmt = stmt.order_by(tasks_table.c.job_id)
+        stmt = stmt.order_by(local_tasks.c.job_id)
     if limit is not None:
         stmt = stmt.limit(limit)
     return [pending_dispatch_row(r) for r in cur.execute(stmt).all()]
@@ -201,6 +201,7 @@ def drain_for_dispatch(
     *,
     cache: RunTemplateCache,
     max_promotions: int = DISPATCH_PROMOTION_RATE,
+    backend_id: str | None = None,
 ) -> DispatchBatch:
     """Drain pending tasks and snapshot running tasks for a direct provider sync cycle.
 
@@ -226,13 +227,18 @@ def drain_for_dispatch(
     now_ms = Timestamp.now().epoch_ms()
     tasks_to_run: list[job_pb2.RunTaskRequest] = []
 
+    # In a multi-backend cluster, scope the drain to this backend's tasks; a
+    # single backend (``backend_id is None``) drains every pending task.
+    backend_pred = () if backend_id is None else (local_tasks.c.backend_id == backend_id,)
+
     # Snapshot redrive set BEFORE the PENDING promotion loop so newly-
     # promoted rows (which become ASSIGNED+null_worker mid-transaction)
     # don't get dispatched twice.
     redrive_rows = _dispatch_query(
         cur,
-        tasks_table.c.state == int(job_pb2.TASK_STATE_ASSIGNED),
-        tasks_table.c.current_worker_id.is_(None),
+        local_tasks.c.state == int(job_pb2.TASK_STATE_ASSIGNED),
+        local_tasks.c.current_worker_id.is_(None),
+        *backend_pred,
     )
 
     def _promote(row: PendingDispatchRow) -> None:
@@ -254,8 +260,9 @@ def drain_for_dispatch(
         # budget-bounded first-fit behavior.
         cosched_pending = _dispatch_query(
             cur,
-            tasks_table.c.state == int(job_pb2.TASK_STATE_PENDING),
+            local_tasks.c.state == int(job_pb2.TASK_STATE_PENDING),
             job_config_table.c.has_coscheduling == True,  # noqa: E712
+            *backend_pred,
             order_by_job_id=True,
         )
         gangs: dict[JobName, list[PendingDispatchRow]] = {}
@@ -284,8 +291,9 @@ def drain_for_dispatch(
         if remaining > 0:
             noncosched_pending = _dispatch_query(
                 cur,
-                tasks_table.c.state == int(job_pb2.TASK_STATE_PENDING),
+                local_tasks.c.state == int(job_pb2.TASK_STATE_PENDING),
                 job_config_table.c.has_coscheduling == False,  # noqa: E712
+                *backend_pred,
                 limit=remaining,
             )
             for row in noncosched_pending:
@@ -307,6 +315,7 @@ def drain_for_dispatch(
         TaskScope(null_worker=True),
         states=ACTIVE_TASK_STATES,
         order_by_task_id=True,
+        backend_id=backend_id,
     )
     running_tasks = [
         RunningTaskEntry(

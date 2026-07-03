@@ -918,14 +918,13 @@ def main(
     logging.info(f"Output directory: {out_path}")
 
     cfg = load_config(config)
-    if not cfg.log_server_config:
+    if not cfg.finelog.config:
         raise click.ClickException(
-            f"Iris config {config!r} has no log_server_config; cross-region analysis "
-            "requires logs shipped via finelog."
+            f"Iris config {config!r} has no finelog.config; cross-region analysis " "requires logs shipped via finelog."
         )
-    finelog_cfg = load_finelog_config(cfg.log_server_config)
+    finelog_cfg = load_finelog_config(cfg.finelog.config)
     if not finelog_cfg.remote_log_dir:
-        raise click.ClickException(f"finelog config {cfg.log_server_config!r} has no remote_log_dir.")
+        raise click.ClickException(f"finelog config {cfg.finelog.config!r} has no remote_log_dir.")
     remote_logs_dir = f"{finelog_cfg.remote_log_dir.rstrip('/')}/log"
 
     log_entries = choose_log_objects(remote_logs_dir, window, download_lookback_hours)

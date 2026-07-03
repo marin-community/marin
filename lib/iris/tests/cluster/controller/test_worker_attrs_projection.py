@@ -16,10 +16,14 @@ from iris.cluster.types import WorkerId
 from sqlalchemy import insert, select
 
 
-def _insert_worker(state, worker_id: str) -> WorkerId:
+def _insert_worker(state, worker_id: str, *, scale_group: str = "") -> WorkerId:
     """SA Core worker insertion used to drive the FK-cascade scenario."""
     with state._db.transaction() as cur:
-        cur.execute(insert(workers_table).values(worker_id=WorkerId(worker_id), address=f"{worker_id}.example:8080"))
+        cur.execute(
+            insert(workers_table).values(
+                worker_id=WorkerId(worker_id), address=f"{worker_id}.example:8080", scale_group=scale_group
+            )
+        )
     return WorkerId(worker_id)
 
 
@@ -85,8 +89,27 @@ def test_rehydrate_reflects_disk_state(state):
             )
         )
 
-    fresh = WorkerAttrsProjection(state._db)
+    fresh = WorkerAttrsProjection(state._db, owns_scale_group=lambda _scale_group: True)
     assert fresh.get(worker_id) == {"zone": AttributeValue("us-east1-b")}
+
+
+def test_rehydrate_scopes_to_owned_scale_group(state):
+    """Two backends sharing one DB each rehydrate only their own scale group's workers."""
+    worker_a = _insert_worker(state, "w-a", scale_group="sg-a")
+    worker_b = _insert_worker(state, "w-b", scale_group="sg-b")
+    for worker_id, zone in ((worker_a, "us-east1-a"), (worker_b, "us-east1-b")):
+        with state._db.transaction() as cur:
+            cur.execute(
+                insert(worker_attributes_table).values(
+                    worker_id=worker_id, key="zone", value_type="str", str_value=zone, int_value=None, float_value=None
+                )
+            )
+
+    backend_a = WorkerAttrsProjection(state._db, owns_scale_group=lambda sg: sg == "sg-a")
+    backend_b = WorkerAttrsProjection(state._db, owns_scale_group=lambda sg: sg == "sg-b")
+
+    assert backend_a.all() == {worker_a: {"zone": AttributeValue("us-east1-a")}}
+    assert backend_b.all() == {worker_b: {"zone": AttributeValue("us-east1-b")}}
 
 
 def test_atomic_write_through_no_visibility_before_commit(state):

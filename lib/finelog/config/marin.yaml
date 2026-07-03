@@ -10,3 +10,10 @@ deployment:
     machine_type: n2-highmem-4
     boot_disk_size_gb: 200
     service_account: iris-controller@hai-gcp-models.iam.gserviceaccount.com
+# Authenticated-ingress policy. This LOCAL finelog is default-deny;
+# it admits its own cluster's private network (VPC + pod ranges) and loopback (SSH
+# tunnel / controller proxy), never the public internet. No jwt layer — that is
+# the GLOBAL finelog's job, for cross-cluster relay pushes.
+auth:
+  - type: cidr
+    cidrs: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 127.0.0.0/8, "::1/128"]

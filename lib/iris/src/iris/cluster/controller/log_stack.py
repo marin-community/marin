@@ -22,8 +22,8 @@ from finelog.client.log_client import Table
 from finelog.embedded import require_embedded_server
 from rigging.auth import BearerTokenInjector, StaticTokenProvider
 
-from iris.cluster.backends.types import resolve_external_host
 from iris.cluster.controller.autoscaler.provisioning import PROVISIONING_NAMESPACE, IrisProvisioning
+from iris.cluster.platforms.types import resolve_external_host
 from iris.cluster.runtime.profile import PROFILE_NAMESPACE, IrisProfile
 from iris.cluster.worker.stats import TASK_STATS_NAMESPACE, IrisTaskStat
 

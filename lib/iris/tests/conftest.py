@@ -35,7 +35,7 @@ from iris.test_util import SentinelFile
 from rigging.timing import Duration, ExponentialBackoff
 
 IRIS_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_CONFIG = IRIS_ROOT / "config" / "test.yaml"
+DEFAULT_CONFIG = IRIS_ROOT / "config" / "ci-test.yaml"
 
 
 @pytest.fixture

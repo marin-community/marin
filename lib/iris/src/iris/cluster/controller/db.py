@@ -150,6 +150,11 @@ class Tx:
     def __init__(self, conn: Connection):
         self.conn = conn
         self._hooks: list[Callable[[], None]] = []
+        # Per-transaction extension slot: a write helper may attach one typed cache
+        # object here to memoize a lookup across calls within one transaction (e.g.
+        # the federation changelog gate resolving a job's requester once per root).
+        # Never persists past the transaction, so a cached value can never go stale.
+        self.memo: dict[str, object] = {}
 
     def execute(self, stmt, params=None) -> CursorResult:
         """Execute a SA Core construct. Returns a ``CursorResult``.
@@ -179,7 +184,10 @@ class Tx:
 
 
 @contextmanager
-def write_transaction(write_engine: Engine, write_lock: threading.RLock) -> Iterator[Tx]:
+def write_transaction(
+    write_engine: Engine,
+    write_lock: threading.RLock,
+) -> Iterator[Tx]:
     """Open a write transaction backed by ``write_engine``.
 
     Acquires ``write_lock``, checks out a connection, emits

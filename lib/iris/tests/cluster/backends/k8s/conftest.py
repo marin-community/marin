@@ -3,7 +3,6 @@
 
 import pytest
 from finelog.rpc.logging_connect import LogServiceClientSync
-from iris.cluster.backends.k8s.fake import InMemoryK8sService
 from iris.cluster.backends.k8s.tasks import (
     _LABEL_MANAGED,
     _LABEL_RUNTIME,
@@ -11,8 +10,9 @@ from iris.cluster.backends.k8s.tasks import (
     K8sTaskProvider,
     PodConfig,
 )
-from iris.cluster.backends.k8s.types import K8sResource
 from iris.cluster.controller.reads import ControlSnapshot
+from iris.cluster.platforms.k8s.fake import InMemoryK8sService
+from iris.cluster.platforms.k8s.types import K8sResource
 from iris.cluster.runtime.env import build_common_iris_env
 from iris.rpc import job_pb2
 

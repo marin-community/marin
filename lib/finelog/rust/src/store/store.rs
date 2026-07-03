@@ -42,9 +42,16 @@ pub const LOG_NAMESPACE_DIR: &str = "log";
 /// process-shutdown drain budget passed to [`Store::shutdown`] at SIGTERM.
 const NAMESPACE_LIFECYCLE_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// Registered schema for the privileged `log` namespace. All non-nullable;
-/// `key_column = "key"`.
-fn log_registered_schema() -> Schema {
+/// Registered schema for the privileged `log` namespace; `key_column = "key"`.
+///
+/// The original five columns (key/source/data/epoch_ms/level) are non-nullable.
+/// `cluster` is a later **additive, nullable** column: the writer-supplied origin
+/// cluster of each push (trusted — writers are authenticated), which namespaces
+/// logs a global finelog collects from many federated clusters. It is nullable so
+/// it evolves an already-registered `log` namespace additively — `merge_schemas`
+/// requires new columns to be nullable, and segments written before the column
+/// existed null-fill it on read.
+pub(crate) fn log_registered_schema() -> Schema {
     Schema::new(
         vec![
             Column::new("key", ColumnType::COLUMN_TYPE_STRING, false),
@@ -54,6 +61,7 @@ fn log_registered_schema() -> Schema {
             Column::new("data", ColumnType::COLUMN_TYPE_STRING, false).with_trigram_index(),
             Column::new("epoch_ms", ColumnType::COLUMN_TYPE_INT64, false),
             Column::new("level", ColumnType::COLUMN_TYPE_INT32, false),
+            Column::new("cluster", ColumnType::COLUMN_TYPE_STRING, true),
         ],
         "key",
     )
@@ -120,8 +128,15 @@ impl Store {
             engines: Mutex::new(HashMap::new()),
             query_visibility: Arc::new(tokio::sync::RwLock::new(())),
         };
+        // Register/evolve the privileged `log` schema in the catalog BEFORE
+        // rehydrate builds the engines, so the log engine is opened exactly once
+        // with the current schema. This is what adopts a newly-added additive
+        // column (e.g. `cluster`) on an already-registered `log` namespace:
+        // evolving after rehydrate would instead require rebuilding a live engine,
+        // whose stop-and-join uses a runtime `block_on` that is illegal here (this
+        // runs directly on the async `main` task, not a `spawn_blocking` worker).
+        store.ensure_log_namespace_schema()?;
         store.rehydrate_from_catalog()?;
-        store.ensure_log_namespace_registered()?;
         Ok(store)
     }
 
@@ -248,23 +263,28 @@ impl Store {
             })
     }
 
-    fn ensure_log_namespace_registered(&self) -> Result<(), StatsError> {
-        if self.catalog.contains(LOG_NAMESPACE_NAME) {
-            // Engine already built by rehydrate.
-            return Ok(());
-        }
+    /// Register the privileged `log` namespace's schema in the catalog, or
+    /// additively evolve an already-registered one to the current
+    /// [`log_registered_schema`] (the union: existing columns plus any new
+    /// nullable ones, e.g. `cluster`). Catalog-only — no engine is built here;
+    /// `rehydrate_from_catalog` (which runs immediately after) opens the engine
+    /// from the resulting catalog schema.
+    ///
+    /// This runs before rehydrate, so the catalog's live map is still empty and
+    /// `register_or_evolve` takes its fresh-registration path. We therefore pass
+    /// the *persisted* policy (not [`StoragePolicy::default`]) so a store that
+    /// already has a custom `log` retention/offload policy keeps it across boots
+    /// rather than having the row reset.
+    fn ensure_log_namespace_schema(&self) -> Result<(), StatsError> {
         let schema = log_registered_schema();
         resolve_key_column(&schema)?;
         let stored = with_implicit_seq(schema);
-        self.catalog.register_or_evolve(
-            LOG_NAMESPACE_NAME,
-            stored.clone(),
-            StoragePolicy::default(),
-            |existing| Ok(existing.clone()),
-        )?;
-        // No maintenance spawn here — `bootstrap_maintenance` spawns the task for
-        // the log namespace alongside the rehydrated set (background reconcile).
-        self.build_engine(LOG_NAMESPACE_NAME, stored, StoragePolicy::default(), false)?;
+        let policy = self.catalog.get_policy(LOG_NAMESPACE_NAME)?;
+        let stored_for_merge = stored.clone();
+        self.catalog
+            .register_or_evolve(LOG_NAMESPACE_NAME, stored, policy, move |existing| {
+                merge_schemas(existing, &stored_for_merge)
+            })?;
         Ok(())
     }
 
@@ -365,8 +385,9 @@ impl Store {
     }
 
     /// Append log columns to the reserved `log` namespace, returning the last
-    /// seq (or `-1`). `columns` are the five non-seq log columns in registered
-    /// order, prepared by the caller outside the lock.
+    /// seq (or `-1`). `columns` are the six non-seq log columns in registered
+    /// order (key/source/data/epoch_ms/level/cluster), prepared by the caller
+    /// outside the lock.
     pub fn append_log_columns(
         &self,
         columns: Vec<arrow::array::ArrayRef>,
@@ -871,5 +892,68 @@ mod tests {
             Err(StatsError::InvalidNamespace(_))
         ));
         assert!(store.get_table_schema("log").is_ok());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn boot_evolves_preexisting_log_schema_and_preserves_policy() {
+        // A store booting over a deployment whose persisted `log` schema predates
+        // the `cluster` column must additively evolve it (`ensure_log_namespace_schema`
+        // merges the column into the catalog BEFORE rehydrate opens the engine, so
+        // no live-engine rebuild happens at boot) WITHOUT resetting the namespace's
+        // persisted storage policy.
+        let dir = std::env::temp_dir().join(format!(
+            "finelog_evolve_log_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        // Seed the catalog with the frozen pre-cluster (five-column) `log` schema
+        // and a non-default policy. The schema is spelled out because it is the
+        // historical layout — deliberately different from today's
+        // `log_registered_schema`.
+        let seeded_policy = StoragePolicy {
+            max_segments: Some(7),
+            ..Default::default()
+        };
+        {
+            let catalog = Catalog::open(Some(dir.as_path())).unwrap();
+            let old = with_implicit_seq(Schema::new(
+                vec![
+                    Column::new("key", ColumnType::COLUMN_TYPE_STRING, false),
+                    Column::new("source", ColumnType::COLUMN_TYPE_STRING, false),
+                    Column::new("data", ColumnType::COLUMN_TYPE_STRING, false).with_trigram_index(),
+                    Column::new("epoch_ms", ColumnType::COLUMN_TYPE_INT64, false),
+                    Column::new("level", ColumnType::COLUMN_TYPE_INT32, false),
+                ],
+                "key",
+            ));
+            catalog
+                .register_or_evolve(LOG_NAMESPACE_NAME, old, seeded_policy.clone(), |existing| {
+                    Ok(existing.clone())
+                })
+                .unwrap();
+        }
+
+        // Boot over that catalog: the schema gains the nullable `cluster` column,
+        // appended after the original five, and the policy is preserved.
+        let store = Store::new(Some(dir.clone()), String::new()).unwrap();
+        let schema = store.get_table_schema(LOG_NAMESPACE_NAME).unwrap();
+        assert_eq!(
+            schema.column_names(),
+            vec!["seq", "key", "source", "data", "epoch_ms", "level", "cluster"]
+        );
+        assert!(
+            schema.column("cluster").unwrap().nullable,
+            "the evolved cluster column is nullable"
+        );
+        assert_eq!(
+            store.get_policy(LOG_NAMESPACE_NAME).unwrap(),
+            seeded_policy,
+            "boot evolution must not reset the persisted log policy"
+        );
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

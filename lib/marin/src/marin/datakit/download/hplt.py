@@ -191,9 +191,9 @@ def _download_and_filter_shard(shard: HpltShard) -> Iterator[dict]:
                     },
                 }
     finally:
-        counters.increment("hplt/input", num_input)
-        counters.increment("hplt/non_cc", num_non_cc)
-        counters.increment("hplt/kept", num_kept)
+        counters.pipeline.update_counter("hplt/input", num_input)
+        counters.pipeline.update_counter("hplt/non_cc", num_non_cc)
+        counters.pipeline.update_counter("hplt/kept", num_kept)
 
 
 def download_hplt_v3(output_path: str) -> None:

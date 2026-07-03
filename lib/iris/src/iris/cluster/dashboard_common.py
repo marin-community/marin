@@ -14,6 +14,7 @@ from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from pathlib import Path
 from typing import Any
 
+from rigging.server_auth import public
 from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import PlainTextResponse, Response
@@ -22,24 +23,6 @@ from starlette.staticfiles import StaticFiles
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 logger = logging.getLogger(__name__)
-
-# ---------------------------------------------------------------------------
-# Route auth policy annotations
-# ---------------------------------------------------------------------------
-
-_AUTH_POLICY_ATTR = "_auth_policy"
-
-
-def public(fn: Callable) -> Callable:
-    """Mark a route handler as publicly accessible (no auth required)."""
-    setattr(fn, _AUTH_POLICY_ATTR, "public")
-    return fn
-
-
-def requires_auth(fn: Callable) -> Callable:
-    """Mark a route handler as requiring authentication via session cookie or Bearer token."""
-    setattr(fn, _AUTH_POLICY_ATTR, "requires_auth")
-    return fn
 
 
 def on_shutdown(

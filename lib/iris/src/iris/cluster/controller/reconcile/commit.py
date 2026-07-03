@@ -30,6 +30,7 @@ from iris.cluster.controller.reconcile.effects import (
 )
 from iris.cluster.controller.schema import jobs_table, task_attempts_table, tasks_table
 from iris.cluster.controller.task_state import ACTIVE_TASK_STATES
+from iris.cluster.controller.writes import record_federation_change
 from iris.rpc import job_pb2
 
 
@@ -98,6 +99,11 @@ def _flush_tasks(cur: Tx, deltas: list[TaskRowDelta]) -> None:
             container_params,
         )
 
+    # Record each task transition for a parent federating with this peer (a no-op
+    # unless the task's root was received via handoff).
+    for d in deltas:
+        record_federation_change(cur, d.task_id.parent, task_index=d.task_id.task_index)
+
 
 def _flush_attempts(cur: Tx, deltas: list[AttemptRowDelta]) -> None:
     """Bulk-flush attempt deltas. Rows where nothing is set are skipped.
@@ -145,6 +151,11 @@ def _flush_attempts(cur: Tx, deltas: list[AttemptRowDelta]) -> None:
 
 def _flush_jobs(cur: Tx, deltas: list[JobRowDelta]) -> None:
     """Bulk-flush job deltas: recompute writes, then cascade kills."""
+    # Record each job transition for a parent federating with this peer (a no-op
+    # unless this job's root was received via handoff).
+    for d in deltas:
+        record_federation_change(cur, d.job_id)
+
     recompute = [d for d in deltas if not d.is_cascade_kill]
     if recompute:
         params = [

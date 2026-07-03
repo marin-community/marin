@@ -35,7 +35,7 @@ from fsspec.asyn import get_loop
 from fsspec.asyn import sync as fsspec_sync
 from haliax import Axis
 from haliax._src.state_dict import flatten_modules_for_export, to_state_dict
-from haliax.jax_utils import is_jax_array_like
+from haliax.jax_utils import is_jax_array_like, sync_global_devices
 from haliax.partitioning import ResourceMapping
 from haliax.state_dict import StateDict, from_torch_compatible_state_dict, save_state_dict
 from huggingface_hub import HfApi, ModelInfo, hf_hub_download, repo_exists, snapshot_download
@@ -57,7 +57,7 @@ from levanter.models.lm_model import LmConfig, LmHeadModel
 from levanter.tokenizers import MarinTokenizer
 from levanter.utils.cloud_utils import temp_dir_before_upload
 from levanter.utils.hf_utils import HfTokenizer
-from levanter.utils.jax_utils import best_effort_sharding, sync_global_devices, use_cpu_device
+from levanter.utils.jax_utils import best_effort_sharding, use_cpu_device
 from levanter.utils.logging import silence_transformer_nag
 from levanter.utils.py_utils import dataclass_with_default_init
 
@@ -447,8 +447,9 @@ def _to_state_dict_with_dtype(
             else:
                 logger.debug(f"Skipping dtype conversion for non-floating point array {k} with dtype {v.dtype}")
 
-    # deshard. We could be smarter here and use a process mesh or host offloading, but this is simpler for now
-    state_dict = jax.lax.with_sharding_constraint(state_dict, PartitionSpec())
+    # This is the shared Levanter HF export path, not a GrugMoE-specific hook.
+    # Deshard before writing; reshard handles explicit meshes moving partitioned arrays to replicated leaves.
+    state_dict = jax.tree.map(lambda value: jax.sharding.reshard(value, PartitionSpec()), state_dict)
 
     return state_dict
 
@@ -611,6 +612,15 @@ class HFCheckpointConverter(Generic[LevConfig]):
 
         return dataclasses.replace(self, tokenizer=tokenizer)  # type: ignore
 
+    def warn_if_tokenizer_mismatch(self, tokenizer) -> None:
+        """Log a warning if ``tokenizer`` appears to differ from this converter's tokenizer.
+
+        Used before initializing from an HF checkpoint so that a mismatched vocab is surfaced
+        rather than silently producing garbage. Tokenizers without a ``vocab`` attribute are skipped.
+        """
+        if hasattr(tokenizer, "vocab") and tokenizer.vocab != self.tokenizer.vocab:
+            logger.warning("The tokenizers appear to be different. You may want to check this.")
+
     def with_config_overrides(self, config_overrides: dict, merge: bool = True) -> "HFCheckpointConverter":
         if self.config_overrides is not None and merge:
             config_overrides = cast(dict, mergedeep.merge({}, self.config_overrides, config_overrides))
@@ -644,7 +654,7 @@ class HFCheckpointConverter(Generic[LevConfig]):
     def _infer_tokenizer(tokenizer, ref, trust_remote_code: bool = False) -> Any:
         if tokenizer is None:
             if ref is None:
-                raise ValueError("Must provide either tokenizer or reference_checkpoint")
+                return None
             tokenizer = ref
 
         if isinstance(tokenizer, (str, RepoRef)):
@@ -692,6 +702,8 @@ class HFCheckpointConverter(Generic[LevConfig]):
 
     @cached_property
     def Vocab(self) -> Axis:
+        if self.tokenizer is None:
+            raise ValueError("Cannot infer vocabulary size without a tokenizer")
         return Axis("vocab", len(self.tokenizer))
 
     def config_from_hf_config(self, hf_config, overrides: Optional[dict] = None) -> LevConfig:
@@ -950,6 +962,8 @@ class HFCheckpointConverter(Generic[LevConfig]):
         """Determine whether reference code should be bundled with the checkpoint."""
         #  the way we determine this is if the config class is in the HF package or not
         if save_reference_code is None:
+            if self.reference_checkpoint is None:
+                return False
             return not self.HfConfigClass.__module__.startswith("transformers.")
 
         return save_reference_code
@@ -1422,11 +1436,17 @@ def _looks_like_wrapped_gcs_transient(exc: BaseException) -> bool:
 def load_tokenizer(model_name_or_path, revision=None, local_cache_dir=None, trust_remote_code=True) -> HfTokenizer:
     """Like AutoTokenizer.from_pretrained, but works with gs:// paths or anything on fsspec"""
     with _patch_hf_hub_download():
-        return _hf_hub_retry(
-            lambda: AutoTokenizer.from_pretrained(
-                model_name_or_path, revision=revision, cache_dir=local_cache_dir, trust_remote_code=trust_remote_code
+        return cast(
+            HfTokenizer,
+            _hf_hub_retry(
+                lambda: AutoTokenizer.from_pretrained(
+                    model_name_or_path,
+                    revision=revision,
+                    cache_dir=local_cache_dir,
+                    trust_remote_code=trust_remote_code,
+                ),
+                action=f"load tokenizer {model_name_or_path!r}",
             ),
-            action=f"load tokenizer {model_name_or_path!r}",
         )
 
 

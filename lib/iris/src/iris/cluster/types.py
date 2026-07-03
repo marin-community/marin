@@ -19,7 +19,7 @@ import sys
 import urllib.parse
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from enum import StrEnum
+from enum import IntEnum, StrEnum
 from pathlib import Path
 from typing import Any, NewType
 
@@ -27,9 +27,9 @@ import cloudpickle
 import humanfriendly
 from rigging.timing import Timestamp
 
-from iris.cluster.setup import cuda_toolchain_setup_script, default_setup_script, setup_is_quiet, wants_gpu_extra
+from iris.cluster.setup_scripts import cuda_toolchain_setup_script, default_setup_script, setup_is_quiet, wants_gpu_extra
 from iris.cluster.tpu_topology import get_tpu_topology
-from iris.rpc import job_pb2
+from iris.rpc import controller_pb2, job_pb2
 
 
 class AcceleratorType(StrEnum):
@@ -55,6 +55,23 @@ class GcpSliceMode(StrEnum):
     VM = "vm"
 
 
+DEFAULT_BACKEND_ID = "default"
+"""Backend id of the implicit single backend synthesized from top-level config.
+
+Shared by the runtime config synthesis (``iris.cluster.config.resolve_backends``)
+and the ``0032_backend_id`` migration backfill — the migration has only a raw DB
+connection (no config object), so both must agree on this exact literal.
+"""
+
+
+class BackendStatus(IntEnum):
+    """Lifecycle state of a task backend, stored as an INTEGER in ``backends``."""
+
+    ACTIVE = 0
+    DRAINING = 1
+    REMOVED = 2
+
+
 class WellKnownAttribute(StrEnum):
     """Canonical attribute keys for constraint-based scheduling."""
 
@@ -69,6 +86,13 @@ class WellKnownAttribute(StrEnum):
     TPU_VM_COUNT = "tpu-vm-count"
     GPU_VARIANT = "gpu-variant"
     GPU_COUNT = "gpu-count"
+
+
+# Joins a federation cluster id to a root job name in the globally-unique id a
+# handed-off job runs under on its peer (``/<user>/<cluster>~<name>``, see
+# ``JobName.federated_remote_root``). Reserved: a user-submitted job name may not
+# contain it, so ``cluster~name`` is unambiguous and losslessly reversible.
+FEDERATION_DELIMITER = "~"
 
 
 @dataclass(frozen=True, slots=True)
@@ -130,6 +154,64 @@ class JobName:
             JobName.from_string("/alice/my-job").task(0) -> JobName(("alice", "my-job", "0"))
         """
         return JobName((*self._parts, str(index)))
+
+    def with_root_job(self, root: "JobName") -> "JobName":
+        """Return this name with its root job replaced by ``root``.
+
+        Keeps every component below the root — the child path and any task index —
+        so a task or child name resolves to the same node under a differently-named
+        root. ``root`` must itself be a root job (``/<user>/<name>``).
+
+        Example:
+            JobName.from_string("/alice/job/child/0").with_root_job(
+                JobName.from_string("/alice/peer~job")
+            ) -> JobName(("alice", "peer~job", "child", "0"))
+        """
+        if not root.is_root:
+            raise ValueError(f"with_root_job requires a root job, got {root}")
+        return JobName((*root._parts, *self._parts[2:]))
+
+    @classmethod
+    def federated_remote_root(cls, cluster_id: str, root: "JobName") -> "JobName":
+        """The remote root a peer runs ``root`` under: ``/<user>/<cluster_id>~<name>``.
+
+        Joins ``cluster_id`` into ``root``'s name with the reserved
+        ``FEDERATION_DELIMITER``, keeping a legal two-component root. ``cluster_id``
+        must be non-empty and delimiter-free and ``root`` must be a root job.
+
+        Example:
+            JobName.federated_remote_root("cw", JobName.from_string("/alice/train"))
+                -> JobName(("alice", "cw~train"))
+        """
+        if not cluster_id:
+            raise ValueError("cluster_id is required to build a federated remote root")
+        if FEDERATION_DELIMITER in cluster_id:
+            raise ValueError(f"cluster_id must not contain {FEDERATION_DELIMITER!r} (got {cluster_id!r})")
+        if not root.is_root:
+            raise ValueError(f"federated_remote_root requires a root job, got {root}")
+        return cls.root(root.user, f"{cluster_id}{FEDERATION_DELIMITER}{root.name}")
+
+    @property
+    def is_federated_remote(self) -> bool:
+        """Whether this name's root was assigned by federation dispatch.
+
+        True iff the root name carries the reserved delimiter — a reliable signal
+        because a user-submitted job name may not contain it.
+        """
+        return FEDERATION_DELIMITER in self.root_job.name
+
+    def split_federated_root(self) -> "tuple[str, JobName]":
+        """The owning cluster id and original pre-handoff root of a federated remote
+        root. Raises ``ValueError`` if this name is not a federated remote root.
+
+        The split is on the first delimiter — ``cluster_id`` is delimiter-free, so a
+        ``~`` in the original name (were one ever allowed) stays with the name.
+        """
+        root = self.root_job
+        cluster_id, sep, name = root.name.partition(FEDERATION_DELIMITER)
+        if not sep:
+            raise ValueError(f"{self} is not a federated remote root")
+        return cluster_id, JobName.root(root.user, name)
 
     @property
     def parent(self) -> "JobName | None":
@@ -377,6 +459,7 @@ class PendingTask:
 
     task_id: JobName
     job_id: JobName
+    backend_id: str
     state: int
     current_attempt_id: int
     failure_count: int
@@ -664,7 +747,7 @@ class EnvironmentSpec:
     - ``setup_scripts`` set to a list runs those scripts verbatim before the
       command, with the task's ``IRIS_*`` env available; ``[]`` means no setup (the
       image is used as-is). Build the default and tweak it via
-      ``iris.cluster.setup.default_setup_script``.
+      ``iris.cluster.setup_scripts.default_setup_script``.
 
     Whenever any setup runs (default or custom), iris appends its own
     ``iris_runtime_setup_script`` so cloudpickle/profiler support is always
@@ -789,6 +872,7 @@ def is_task_finished(state: int) -> bool:
 
 JobState = job_pb2.JobState
 TaskState = job_pb2.TaskState
+EndpointAccess = controller_pb2.Controller.EndpointAccess
 
 
 # TPU topology table and lookup helpers live in iris.cluster.tpu_topology so

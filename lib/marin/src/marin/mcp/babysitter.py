@@ -564,7 +564,7 @@ class IrisBabysitter:
                     "cpu_millicores": int(info.cpu_millicores),
                     "thread_count": int(info.thread_count),
                     "open_fd_count": int(info.open_fd_count),
-                    "git_hash": info.git_hash,
+                    "git_hash": info.provenance.tree_hash,
                 },
                 "logs": [log_entry_to_json(entry) for entry in response.log_entries],
             }

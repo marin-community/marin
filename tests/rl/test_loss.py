@@ -231,7 +231,7 @@ def test_rloo_loss_needs_reference_model_only_when_kl_enabled():
 @pytest.mark.parametrize("mode", [KLMode.K1_LOSS, KLMode.K2_LOSS, KLMode.K3_LOSS])
 def test_rloo_loss_rejects_missing_reference_model_when_kl_enabled(mode: KLMode):
     with pytest.raises(ValueError, match="reference_model is required"):
-        RLOOLoss(kl=KLConfig(mode=mode, beta=0.01)).create_loss_fn(reference_model=None, train_model=None)
+        RLOOLoss(kl=KLConfig(mode=mode, beta=0.01)).create_loss_fn(reference_model=None)
 
 
 @pytest.mark.parametrize(
@@ -412,11 +412,11 @@ def test_rloo_loss_rejects_missing_policy_entropy_when_metric_enabled():
 def test_rloo_loss_module_rejects_policy_entropy_with_vocab_tiling():
     with pytest.raises(ValueError, match="not supported with vocab_tile_size"):
         RLOOLoss(kl=KLConfig(mode=KLMode.NONE, beta=0.0), log_policy_entropy=True, vocab_tile_size=1024).create_loss_fn(
-            reference_model=None, train_model=None
+            reference_model=None
         )
 
 
 def test_rloo_loss_module_allows_vocab_tiling_when_policy_entropy_disabled():
     RLOOLoss(kl=KLConfig(mode=KLMode.NONE, beta=0.0), log_policy_entropy=False, vocab_tile_size=1024).create_loss_fn(
-        reference_model=None, train_model=None
+        reference_model=None
     )
