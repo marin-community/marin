@@ -146,14 +146,32 @@ def main():
     ap.add_argument("--iters", type=int, default=20)
     ap.add_argument("--profile", default=None, help="capture a jax profiler trace to this dir")
     ap.add_argument("--check-drops", action="store_true")
+    ap.add_argument("--distributed", action="store_true", help="join a multi-node iris job via iris jax_init")
+    ap.add_argument("--coordinator", default=None, help="manual jax.distributed coordinator host:port")
+    ap.add_argument("--num-processes", type=int, default=2)
+    ap.add_argument("--process-id", type=int, default=0)
     args = ap.parse_args()
+
+    if args.distributed:
+        # Local import: iris is only needed for multi-node runs.
+        from iris.runtime.jax_init import initialize_jax  # noqa: PLC0415
+
+        initialize_jax()
+    elif args.coordinator:
+        jax.distributed.initialize(
+            coordinator_address=args.coordinator, num_processes=args.num_processes, process_id=args.process_id
+        )
+
+    def pr(*a):
+        if jax.process_index() == 0:
+            print(*a, flush=True)
 
     n_dev = len(jax.devices())
     mesh = compact_grug_mesh(expert_axis_size=args.expert_axis)
     t_global = args.t_local * n_dev
-    print(f"jax {jax.__version__}  {n_dev}x {jax.devices()[0].device_kind}")
-    print(f"mesh {dict(mesh.shape)}  impl={args.impl}")
-    print(
+    pr(f"jax {jax.__version__}  {n_dev}x {jax.devices()[0].device_kind}")
+    pr(f"mesh {dict(mesh.shape)}  impl={args.impl}")
+    pr(
         f"D={D} I={I} E={E} K={K}  T_local={args.t_local} T_global={t_global} "
         f"(E_local={E // args.expert_axis}, "
         f"~{args.t_local * n_dev // (mesh.shape['data'] * mesh.shape['replica_dcn']) * K // E} avg tok/expert/device)"
@@ -167,7 +185,7 @@ def main():
                 x, sel, wts, w13, w2, implementation=args.impl, mesh=mesh, report_capacity_overflow=True
             )
             total = t_global * K
-            print(f"dropped assignments: {int(dropped)} / {total} ({100 * int(dropped) / total:.3f}%)")
+            pr(f"dropped assignments: {int(dropped)} / {total} ({100 * int(dropped) / total:.3f}%)")
 
     results = {}
     for mode in args.modes.split(","):
@@ -183,7 +201,7 @@ def main():
                 loss_val, grads = step(x, w13, w2, ops)
         results[mode] = (ms, loss_val, grads)
         tok_s = t_global / (ms * 1e-3)
-        print(f"{mode:8s} {ms:8.2f} ms/step   {tok_s / 1e6:6.1f} Mtok/s")
+        pr(f"{mode:8s} {ms:8.2f} ms/step   {tok_s / 1e6:6.1f} Mtok/s")
 
     if "bf16" in results:
         base_ms = results["bf16"][0]
@@ -192,7 +210,7 @@ def main():
                 continue
             gx = grads[0]
             gx_ref = results["bf16"][2][0]
-            print(
+            pr(
                 f"{mode}: speedup vs bf16 = {base_ms / ms:.3f}x   "
                 f"relfrob(loss)={abs(float(loss_val) - float(results['bf16'][1])) / abs(float(results['bf16'][1])):.2e} "
                 f"relfrob(dx)={relfrob(gx, gx_ref):.2e}"
@@ -209,7 +227,7 @@ def main():
                 for _ in range(3):
                     out = step(*call_args)
                 jax.block_until_ready(out)
-        print(f"profile written to {args.profile}")
+        pr(f"profile written to {args.profile}")
 
 
 if __name__ == "__main__":

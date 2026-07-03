@@ -155,7 +155,7 @@ def moe_mlp(
 
     ``fp8_wire=True`` switches the EP dispatch/combine collectives to carry FP8
     over the wire (E4M3 activations forward, E5M2 gradients backward; see
-    ``levanter.grug._moe.fp8_wire``). Currently ring-only.
+    ``levanter.grug._moe.fp8_wire``). Ring and ragged_all_to_all backends.
     """
     resolved_implementation = resolve_moe_implementation(implementation)
 
@@ -199,8 +199,10 @@ def moe_mlp(
                 f"got implementation={resolved_implementation!r} with expert axis "
                 f"size={_mesh_axis_size(mesh, 'expert')}"
             )
-    if fp8_wire and resolved_implementation != "ring":
-        raise NotImplementedError(f"fp8_wire is only wired into the EP ring backend, got {resolved_implementation!r}")
+    if fp8_wire and resolved_implementation not in ("ring", "ragged_all_to_all"):
+        raise NotImplementedError(
+            f"fp8_wire is only wired into the EP ring / ragged_all_to_all backends, got {resolved_implementation!r}"
+        )
 
     if mesh is None or mesh.empty:
         out, dropped = _moe_mlp_local(
@@ -247,7 +249,7 @@ def moe_mlp(
         w_up_gate = _reshard_for_shard_map(w_up_gate, mesh, w_up_gate_spec)
         w_down = _reshard_for_shard_map(w_down, mesh, w_down_spec)
 
-        backend_kwargs = {"fp8_wire": fp8_wire} if resolved_implementation == "ring" else {}
+        backend_kwargs = {"fp8_wire": fp8_wire} if resolved_implementation in ("ring", "ragged_all_to_all") else {}
         shard_fn = shard_map(
             partial(
                 shard_local_fn,
