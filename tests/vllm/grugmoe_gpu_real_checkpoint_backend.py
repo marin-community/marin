@@ -1143,8 +1143,9 @@ def _vllm_backend(args: argparse.Namespace) -> None:
         "single_prompt_routed_experts": single_routed_experts,
         "completions": completions,
         "expected_continuation": EXPECTED_CONTINUATION,
-        "passed": single_completion == EXPECTED_CONTINUATION
-        and all(item == EXPECTED_CONTINUATION for item in completions),
+        "passed": (
+            single_completion == EXPECTED_CONTINUATION and all(item == EXPECTED_CONTINUATION for item in completions)
+        ),
         "served_model_name": SERVED_MODEL_NAME,
         "vllm_model_id": model_id,
         "vllm_model_path": staged_artifact.vllm_model_path,
