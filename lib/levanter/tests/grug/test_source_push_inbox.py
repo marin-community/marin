@@ -204,6 +204,53 @@ def test_compact_routing_inputs_match_synthetic_queue_metadata():
     assert not np.all(compact_inputs.x[0, 0, 0, 0, :] == compact_inputs.x[0, 0, 0, 0, 0])
 
 
+def test_source_push_reference_hidden_uses_metadata_row_start():
+    config = source_push_inbox.PushInboxConfig(
+        ep_size=2,
+        entries_per_rank=3,
+        inbox_slots=1,
+        hidden_dim=2,
+        intermediate_dim=2,
+        block_m=2,
+        block_k=1,
+        block_n=1,
+        experts_per_rank=1,
+        send_worker_programs_per_peer=1,
+        worker_programs_per_peer=2,
+        tokens_per_rank=2,
+        topk=1,
+    )
+    x_host = np.zeros((config.ep_size, config.traffic_fanout, config.entries_per_rank, config.block_m, 2))
+    send_meta = np.zeros(
+        (config.ep_size, config.traffic_fanout, config.entries_per_rank, source_push_inbox.META_FIELDS),
+        dtype=np.int32,
+    )
+    w_host = np.ones((config.ep_size, config.experts_per_rank, config.hidden_dim, 2 * config.intermediate_dim))
+
+    src = 0
+    dst = 1
+    dst_ordinal = source_push_inbox._dst_ordinal(config, src, dst)
+    entry = 1
+    metadata_row_start = 4
+    queue_order_row_start = (
+        source_push_inbox._recv_src_ordinal(config, dst, src) * config.entries_per_rank + entry
+    ) * (config.block_m)
+    assert metadata_row_start != queue_order_row_start
+
+    x_host[src, dst_ordinal, entry, :, :] = 1.0
+    send_meta[src, dst_ordinal, entry, :] = (src, 0, metadata_row_start, config.block_m)
+
+    hidden = source_push_inbox._reference_hidden(config, x_host, send_meta, w_host)
+    live_mask = source_push_inbox._hidden_live_row_mask(config, send_meta)
+
+    assert np.any(hidden[dst, metadata_row_start : metadata_row_start + config.block_m, :] != 0)
+    assert np.all(hidden[dst, queue_order_row_start : queue_order_row_start + config.block_m, :] == 0)
+    np.testing.assert_array_equal(live_mask[dst, metadata_row_start : metadata_row_start + config.block_m], True)
+    np.testing.assert_array_equal(
+        live_mask[dst, queue_order_row_start : queue_order_row_start + config.block_m], False
+    )
+
+
 def test_source_push_package_private_runner_returns_structured_validation_errors():
     config = source_push_inbox.PushInboxConfig(ep_size=1)
 

@@ -467,7 +467,7 @@ def _make_kernel(config: PushInboxConfig, diagnostic_variant: str = DIAGNOSTIC_V
                 )
 
         def _store_hidden(src_ordinal, entry, n_tile, hidden) -> None:
-            dst_row_start = (src_ordinal * config.entries_per_rank + entry) * config.block_m
+            dst_row_start = recv_meta_ref[src_ordinal, entry, 2]
             if stores_tiny_output:
                 hidden_ref[
                     pl.ds(dst_row_start, config.block_m),
@@ -480,7 +480,7 @@ def _make_kernel(config: PushInboxConfig, diagnostic_variant: str = DIAGNOSTIC_V
                 ] = hidden.astype(hidden_ref.dtype)
 
         def _store_zero_hidden(src_ordinal, entry, n_tile) -> None:
-            dst_row_start = (src_ordinal * config.entries_per_rank + entry) * config.block_m
+            dst_row_start = recv_meta_ref[src_ordinal, entry, 2]
             hidden_ref[
                 pl.ds(dst_row_start, config.block_m),
                 pl.ds(n_tile * config.block_n, config.block_n),
@@ -1325,13 +1325,12 @@ def _reference_hidden(config: PushInboxConfig, x_host, send_meta_host, w_host) -
     for src in range(config.ep_size):
         for dst in range(config.ep_size):
             dst_ordinal = _dst_ordinal(config, src, dst)
-            recv_src_ordinal = _recv_src_ordinal(config, dst, src)
             for entry in range(config.entries_per_rank):
                 valid_rows = send_meta[src, dst_ordinal, entry, 3]
                 if valid_rows <= 0:
                     continue
                 expert = send_meta[src, dst_ordinal, entry, 1]
-                row = (recv_src_ordinal * config.entries_per_rank + entry) * config.block_m
+                row = send_meta[src, dst_ordinal, entry, 2]
                 gate = x_float[src, dst_ordinal, entry] @ w_float[dst, expert, :, : config.intermediate_dim]
                 up = x_float[src, dst_ordinal, entry] @ w_float[dst, expert, :, config.intermediate_dim :]
                 hidden[dst, row : row + config.block_m, :] = gate * (1.0 / (1.0 + np.exp(-gate))) * up
@@ -1344,12 +1343,11 @@ def _hidden_live_row_mask(config: PushInboxConfig, send_meta_host) -> np.ndarray
     for src in range(config.ep_size):
         for dst in range(config.ep_size):
             dst_ordinal = _dst_ordinal(config, src, dst)
-            recv_src_ordinal = _recv_src_ordinal(config, dst, src)
             for entry in range(config.entries_per_rank):
                 valid_rows = send_meta[src, dst_ordinal, entry, 3]
                 if valid_rows <= 0:
                     continue
-                row = (recv_src_ordinal * config.entries_per_rank + entry) * config.block_m
+                row = send_meta[src, dst_ordinal, entry, 2]
                 mask[dst, row : row + config.block_m] = True
     return mask
 
