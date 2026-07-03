@@ -386,8 +386,9 @@ message JobStatus {
 
   // For a federated job (child_cluster set), the peer's own job id for this
   // handoff: the deterministic rebased wire id the peer runs it under
-  // ("/<user>/<parent_cluster>~<name>"). Empty for a local job. Lets the
-  // dashboard deep-link to the peer's job page.
+  // ("/<user>/<parent_cluster>~<name>"). Empty for a local job. This is the key
+  // under which the peer's logs land in the global store, so it is the basis for
+  // serving a federated job's logs in-parent.
   string remote_job_id = 36;
 }
 

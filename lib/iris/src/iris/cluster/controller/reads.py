@@ -970,15 +970,10 @@ def bulk_get_attempts(
     return result
 
 
-# Resolution joins ``local_tasks`` so it only ever resolves attempts of locally
-# owned tasks. A federated task's mirrored attempts (task ``child_cluster`` set)
-# are excluded here, keeping this worker-routing / reconcile reader off the fold.
 def all_attempts_for_tasks(tx: Tx, task_ids: Sequence[JobName]) -> dict[JobName, tuple[object, ...]]:
     """Return ``{task_id: (attempt_row, ...)}`` with every attempt per task, ascending by attempt id.
 
-    Unlike the list view's bounded per-task attach, this loads the full history —
-    the federation sync delta ships it so the parent mirrors complete attempt
-    history for a handed-off job rather than the reduced list-view set.
+    Loads the full attempt history per task, not the list view's bounded set.
     """
     if not task_ids:
         return {}
@@ -994,6 +989,9 @@ def all_attempts_for_tasks(tx: Tx, task_ids: Sequence[JobName]) -> dict[JobName,
     return {task_id: tuple(attempts) for task_id, attempts in grouped.items()}
 
 
+# Resolution joins ``local_tasks`` so it only ever resolves attempts of locally
+# owned tasks. A federated task's mirrored attempts (task ``child_cluster`` set)
+# are excluded, keeping this worker-routing / reconcile reader off the fold.
 _RESOLVE_ATTEMPT_UIDS_STMT = (
     select(
         task_attempts_table.c.attempt_uid,
@@ -1079,8 +1077,6 @@ def task_detail_query():
 
     The outer join yields ``peer_worker_label`` for a federated task (its display
     worker identity, since it has no local worker row) and NULL for a local task.
-    Shared by task detail, bulk detail, and the list view so every task read
-    carries the label.
     """
     return select(*TASK_DETAIL_COLS, federated_tasks_table.c.peer_worker_label).select_from(
         tasks_table.outerjoin(federated_tasks_table, federated_tasks_table.c.task_id == tasks_table.c.task_id)

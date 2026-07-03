@@ -1535,7 +1535,7 @@ class ControllerServiceImpl:
             summaries = reads.task_summaries_for_jobs(q, {job.job_id})
             has_children = bool(reads.parent_ids_with_children(q, [job.job_id]))
             # A federated job's subtree lives on the peer; expose the peer-side
-            # job id so the dashboard can deep-link to the peer's job page.
+            # remote job id (the key its logs land under in the global store).
             handle = reads.federated_handle(q, job.job_id) if job.child_cluster else None
         summary = summaries.get(job.job_id)
 

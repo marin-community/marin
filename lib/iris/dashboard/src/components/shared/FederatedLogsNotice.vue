@@ -1,8 +1,8 @@
 <script setup lang="ts">
 // Shown in place of the log viewer for a federated job or task: its logs are
 // written on the peer cluster, not the local log store, so the local proxy has
-// nothing for it. Native federated log serving is a separate follow-up; until
-// then this is an honest empty state with no outbound link.
+// nothing to serve. Renders an empty state with no outbound link — users can't
+// reach a peer's dashboard.
 defineProps<{
   cluster: string
   subject: string

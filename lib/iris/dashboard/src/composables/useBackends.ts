@@ -137,11 +137,6 @@ export function useBackends() {
     return resolveScopeId(route.query.cluster, peers.value.map(p => p.peerId))
   }
 
-  /** The peer with this id, or undefined. Used to resolve a peer's dashboard URL. */
-  function peerById(peerId: string): PeerSummary | undefined {
-    return peers.value.find(p => p.peerId === peerId)
-  }
-
   return {
     backends,
     capabilities,
@@ -153,6 +148,5 @@ export function useBackends() {
     listBackends,
     listPeers,
     ensurePeers,
-    peerById,
   }
 }

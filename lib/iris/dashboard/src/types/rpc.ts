@@ -135,7 +135,8 @@ export interface JobStatus {
   // Federation discriminator: "" (or absent) == local, "<peer>" == handed off.
   childCluster?: string
   // Peer-side job id for a federated job (deterministic rebased wire id). Empty
-  // for a local job; lets the dashboard deep-link to the peer's job page.
+  // for a local job; the key under which the peer's logs land in the global
+  // store, so the basis for serving federated logs in-parent.
   remoteJobId?: string
 }
 

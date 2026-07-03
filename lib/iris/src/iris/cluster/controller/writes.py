@@ -48,7 +48,7 @@ from iris.cluster.controller.schema import (
 )
 from iris.cluster.controller.worker_health import WorkerHealthTracker
 from iris.cluster.federation.store import FederationDirection
-from iris.cluster.types import AttemptUid, JobName, WorkerId
+from iris.cluster.types import FEDERATION_DELIMITER, AttemptUid, JobName, WorkerId
 from iris.rpc import job_pb2
 from iris.time_proto import timestamp_from_proto
 
@@ -941,17 +941,16 @@ def mirror_federated_attempts(
 ) -> None:
     """Upsert a federated task's attempt rows from a sync delta.
 
-    A federated task has no local ``workers`` row, so ``worker_id`` is NULL. The
-    peer-side ``attempt_uid`` is namespaced under ``peer_id`` so it stays unique
-    against the ``idx_task_attempts_uid`` index and is never matched by
-    ``resolve_attempt_uids`` (which resolves only ``local_tasks``). Upserts on the
-    ``(task_id, attempt_id)`` PK so a re-sent delta is idempotent.
+    A federated task has no local ``workers`` row, so ``worker_id`` is NULL.
+    Upserts on the ``(task_id, attempt_id)`` PK so a re-sent delta is idempotent.
     """
     for attempt in attempts:
         started = timestamp_from_proto(attempt.started_at).epoch_ms() if attempt.HasField("started_at") else None
         finished = timestamp_from_proto(attempt.finished_at).epoch_ms() if attempt.HasField("finished_at") else None
         child_uid = attempt.attempt_uid or f"{task_id.to_wire()}:{attempt.attempt_id}"
-        attempt_uid = f"{peer_id}~{child_uid}"
+        # Namespace under the peer so the mirrored uid stays unique against the
+        # global attempt_uid index and never collides with (or resolves as) a local one.
+        attempt_uid = f"{peer_id}{FEDERATION_DELIMITER}{child_uid}"
         tx.execute(
             sqlite_insert(task_attempts_table)
             .values(
