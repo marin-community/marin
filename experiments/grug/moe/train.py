@@ -740,6 +740,12 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         if profiler_enabled:
             profile_dir = trainer.log_dir / run_id / "profiler"
             remote_profile_dir = join_path(config.output_path, "profiler") if config.output_path is not None else None
+            levanter.tracker.log_summary(
+                {
+                    "profiler/profile_dir": str(profile_dir),
+                    "profiler/remote_profile_dir": remote_profile_dir,
+                }
+            )
             state_callbacks.add_hook(
                 callbacks.profile(
                     str(profile_dir),

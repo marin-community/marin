@@ -18,6 +18,8 @@ PROFILER_DIR_NAME = "profiler"
 WANDB_RUNS_SEGMENT = "runs"
 TRAINER_CONFIG_KEY = "trainer"
 OUTPUT_PATH_CONFIG_KEY = "output_path"
+REMOTE_PROFILE_DIR_SUMMARY_KEY = "profiler/remote_profile_dir"
+PROFILE_DIR_SUMMARY_KEY = "profiler/profile_dir"
 
 
 @dataclass(frozen=True)
@@ -80,6 +82,12 @@ def resolve_profile_run_id(run: WandbRunLike) -> str:
 
 
 def resolve_profile_dir(run: WandbRunLike) -> str:
+    summary = dict(run.summary)
+    for key in (REMOTE_PROFILE_DIR_SUMMARY_KEY, PROFILE_DIR_SUMMARY_KEY):
+        explicit_profile_dir = summary.get(key)
+        if isinstance(explicit_profile_dir, str) and explicit_profile_dir:
+            return explicit_profile_dir
+
     config = dict(run.config)
     output_path = config.get(OUTPUT_PATH_CONFIG_KEY)
     if isinstance(output_path, str) and output_path:

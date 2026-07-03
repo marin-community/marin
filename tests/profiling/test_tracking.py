@@ -4,8 +4,9 @@
 import gzip
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
-from levanter.utils.profile_dirs import RunTarget, normalize_run_target
+from levanter.utils.profile_dirs import RunTarget, normalize_run_target, resolve_profile_dir
 from marin.profiling.ingest import summarize_trace
 from marin.profiling.tracking import (
     RegressionThresholds,
@@ -33,6 +34,34 @@ def test_normalize_run_target_variants() -> None:
         project="marin",
         run_id="abc123",
     )
+
+
+def test_resolve_profile_dir_prefers_explicit_wandb_summary_metadata() -> None:
+    run = SimpleNamespace(
+        path=["entity", "project", "run-123"],
+        id="run-123",
+        config={
+            "output_path": "memory://wandb/config-output",
+            "trainer": {"id": "trainer-456", "log_dir": "memory://wandb/logs"},
+        },
+        summary={
+            "profiler/profile_dir": "logs/trainer-456/profiler",
+            "profiler/remote_profile_dir": "memory://wandb/summary-output/profiler",
+        },
+    )
+
+    assert resolve_profile_dir(run) == "memory://wandb/summary-output/profiler"
+
+
+def test_resolve_profile_dir_uses_local_summary_profile_dir_without_remote() -> None:
+    run = SimpleNamespace(
+        path=["entity", "project", "run-123"],
+        id="run-123",
+        config={},
+        summary={"profiler/profile_dir": "logs/trainer-456/profiler"},
+    )
+
+    assert resolve_profile_dir(run) == "logs/trainer-456/profiler"
 
 
 def test_assess_profile_regression_and_history_tracking(tmp_path: Path) -> None:
