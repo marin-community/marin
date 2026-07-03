@@ -1633,3 +1633,58 @@ patch proves the count-derived exact W2 addressing contract for block-aligned pl
   - The source-padded production path still passes the existing H100 source-push smoke after the W2 signature change.
   - Exact full forward remains a separate integration step because the full-forward host input builder still fixes
     `use_exact_expert_major=False` for the current production/source-padded path.
+
+## 2026-07-03 14:45 - Add exact expert-major full-forward proof
+
+Added a package-private exact full-forward path for block-aligned plans. The default public/source-padded path remains
+unchanged; the new exact path lets the full staged forward use the same count-derived row-start contract already proven
+for W13 and W2.
+
+- Commit Hash: `183a6ee2d`
+- Code:
+  - `lib/levanter/src/levanter/grug/_moe/source_push_forward.py`
+  - `lib/levanter/tests/grug/test_source_push_inbox.py`
+  - `lib/levanter/tests/grug/test_grugformer_moe.py`
+- Change:
+  - Added `make_source_push_forward_exact_source_plan_inputs` and
+    `run_source_push_forward_exact_source_plan`.
+  - Added a full-forward `use_exact_expert_major` bit through host inputs, device inputs, sharding, staged timing, and
+    single-JIT kernel creation.
+  - Exact full forward uses `plan.send_meta`, `plan.recv_meta`, `plan.expert_base`, and `plan.src_base_by_expert`
+    directly, and rejects tail-block plans because current W13 stores full `block_m` tiles.
+  - Source-padded full forward still uses `source_push_source_padded_row_bases` and remains the default path.
+- Local verification:
+  - `python -m py_compile lib/levanter/src/levanter/grug/_moe/source_push_forward.py lib/levanter/tests/grug/test_source_push_inbox.py lib/levanter/tests/grug/test_grugformer_moe.py`
+    - Result: passed.
+  - `uv run --package marin-levanter --group test pytest lib/levanter/tests/grug/test_source_push_inbox.py -q -k 'forward_exact or forward_inputs_share_one_plan or forward_real_inputs'`
+    - Result: `4 passed, 11 warnings in 37.35s`.
+  - `uv run --package marin-levanter --group test pytest lib/levanter/tests/grug/test_grugformer_moe.py -q -n 0 -k 'source_push_exact_expert_major_forward_matches_reference_on_h100'`
+    - Result: `1 skipped, 27 deselected, 1 warning in 0.10s` on non-H100 local hardware.
+  - `./infra/pre-commit.py --changed-files --fix`
+    - Result: all checks passed.
+- H100 verification:
+  - Job: `/dlwh/source-push-exact-forward-h100-source-push-183a6ee2d-20260703-214141`
+  - Cluster: `cw-us-east-02a`
+  - Command:
+    ```bash
+    uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job run --no-wait \
+      --job-name source-push-exact-forward-h100-source-push-183a6ee2d-20260703-214141 \
+      --cpu 16 --memory 128GB --disk 16GB --gpu H100x8 --reserve H100x8 \
+      --enable-extra-resources --extra gpu -- \
+      timeout 3600s uv run --package marin-levanter --group test pytest \
+      lib/levanter/tests/grug/test_grugformer_moe.py -q -n 0 -k source_push
+    ```
+  - Iris summary:
+    - State: `JOB_STATE_SUCCEEDED`
+    - Task count: `1`
+    - Exit code: `0`
+    - Duration: about `134451 ms`
+    - Failure count: `0`
+    - Preemption count: `0`
+  - Pytest result:
+    - `9 passed, 19 deselected, 1 warning in 113.08s`.
+- Interpretation:
+  - W13, W2 return, and source combine now round-trip successfully in one staged exact-layout full-forward path for
+    block-aligned plans.
+  - This still does not make exact layout the production default because tail-block plans require the source-padded
+    layout until the W13 store path masks or splits partial tiles.
