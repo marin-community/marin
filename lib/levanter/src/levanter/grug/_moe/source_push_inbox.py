@@ -40,8 +40,23 @@ from levanter.grug._moe.source_push_inbox_profiles import source_push_profile_de
 
 AXIS = "expert"
 KERNEL_NAME = "source_push_inbox"
+DIAGNOSTIC_KERNEL_NAME = "source_push_inbox_diagnostic"
 META_FIELDS = 4
 BYTES_PER_BF16 = 2
+DIAGNOSTIC_VARIANT_FULL = "full"
+DIAGNOSTIC_VARIANT_SEMAPHORE_ONLY = "semaphore_only"
+DIAGNOSTIC_VARIANT_COPY_RELEASE_ONLY = "copy_release_only"
+DIAGNOSTIC_VARIANT_COMPUTE_ONLY_LOCAL = "compute_only_local"
+DIAGNOSTIC_VARIANT_STORE_ZERO = "store_zero"
+DIAGNOSTIC_VARIANT_WGMMA_TINY_OUTPUT = "wgmma_tiny_output"
+DIAGNOSTIC_VARIANTS = (
+    DIAGNOSTIC_VARIANT_FULL,
+    DIAGNOSTIC_VARIANT_SEMAPHORE_ONLY,
+    DIAGNOSTIC_VARIANT_COPY_RELEASE_ONLY,
+    DIAGNOSTIC_VARIANT_COMPUTE_ONLY_LOCAL,
+    DIAGNOSTIC_VARIANT_STORE_ZERO,
+    DIAGNOSTIC_VARIANT_WGMMA_TINY_OUTPUT,
+)
 ROUTING_MODES = (
     "balanced",
     "roughly_balanced",
@@ -53,6 +68,7 @@ ROUTING_MODES = (
 )
 WGMMA_SWIZZLE_BYTES = 128
 WGMMA_TILE_M = 8
+TINY_OUTPUT_COLUMNS_PER_N_TILE = 8
 
 
 def _silu(x: jax.Array) -> jax.Array:
@@ -78,6 +94,11 @@ def _wgmma_smem(shape: tuple[int, int], dtype: Any):
         dtype=dtype,
         transforms=_wgmma_transforms(shape, dtype),
     )
+
+
+def _validate_diagnostic_variant(diagnostic_variant: str) -> None:
+    if diagnostic_variant not in DIAGNOSTIC_VARIANTS:
+        raise ValueError(f"unknown diagnostic_variant={diagnostic_variant!r}; expected one of {DIAGNOSTIC_VARIANTS}")
 
 
 @dataclass(frozen=True)
@@ -228,7 +249,17 @@ def source_push_inbox_profile(profile: str) -> tuple[PushInboxConfig, SourcePush
     return PushInboxConfig(**config_kwargs), SourcePushInboxRunSettings(**settings_kwargs)
 
 
-def _make_kernel(config: PushInboxConfig):
+def _hidden_output_shape_for_kernel(config: PushInboxConfig, diagnostic_variant: str) -> tuple[int, int]:
+    if diagnostic_variant in (DIAGNOSTIC_VARIANT_SEMAPHORE_ONLY, DIAGNOSTIC_VARIANT_COPY_RELEASE_ONLY):
+        return (1, 1)
+    if diagnostic_variant == DIAGNOSTIC_VARIANT_WGMMA_TINY_OUTPUT:
+        n_tiles = config.intermediate_dim // config.block_n
+        return (config.hidden_rows_per_rank, n_tiles * TINY_OUTPUT_COLUMNS_PER_N_TILE)
+    return config.hidden_output_shape
+
+
+def _make_kernel(config: PushInboxConfig, diagnostic_variant: str = DIAGNOSTIC_VARIANT_FULL):
+    _validate_diagnostic_variant(diagnostic_variant)
     k_tiles = config.hidden_dim // config.block_k
     n_tiles = config.intermediate_dim // config.block_n
     n_work_groups = n_tiles // config.n_group
@@ -237,6 +268,20 @@ def _make_kernel(config: PushInboxConfig):
     rounds_per_slot = (config.entries_per_rank + config.inbox_slots - 1) // config.inbox_slots
     send_dst_offsets = tuple(range(config.ep_size))
     recv_src_offsets = tuple(range(config.ep_size))
+    uses_remote_copy = diagnostic_variant in (
+        DIAGNOSTIC_VARIANT_FULL,
+        DIAGNOSTIC_VARIANT_COPY_RELEASE_ONLY,
+        DIAGNOSTIC_VARIANT_STORE_ZERO,
+        DIAGNOSTIC_VARIANT_WGMMA_TINY_OUTPUT,
+    )
+    uses_semaphores = diagnostic_variant != DIAGNOSTIC_VARIANT_COMPUTE_ONLY_LOCAL
+    computes_wgmma = diagnostic_variant in (
+        DIAGNOSTIC_VARIANT_FULL,
+        DIAGNOSTIC_VARIANT_COMPUTE_ONLY_LOCAL,
+        DIAGNOSTIC_VARIANT_WGMMA_TINY_OUTPUT,
+    )
+    stores_zero = diagnostic_variant == DIAGNOSTIC_VARIANT_STORE_ZERO
+    stores_tiny_output = diagnostic_variant == DIAGNOSTIC_VARIANT_WGMMA_TINY_OUTPUT
 
     def body(
         x_ref: Float[Ref, "DST Q M D"],
@@ -254,128 +299,135 @@ def _make_kernel(config: PushInboxConfig):
         peer_ordinal = pl.program_id(0)
         worker_program = pl.program_id(1)
 
-        @pl.when(worker_program < config.send_worker_programs_per_peer)
-        def _send_worker() -> None:
+        if uses_semaphores:
 
-            def _send_to_dst(dst_ordinal: int, dst_offset: int) -> None:
-                dst = (rank + dst_offset) % config.ep_size
-                remote_inbox_ref = None
-                if dst_offset != 0:
-                    remote_inbox_ref = mgpu.remote_ref(inbox_ref, dst, device_id_type=pl.DeviceIdType.LOGICAL)
+            @pl.when(worker_program < config.send_worker_programs_per_peer)
+            def _send_worker() -> None:
 
-                @pl.loop(0, rounds_per_slot)
-                def _round_loop(round_i) -> None:
-                    @pl.loop(0, config.inbox_slots)
-                    def _slot_loop(slot_pos) -> None:
-                        slot = slot_pos
-                        send_task = dst_ordinal * config.inbox_slots + slot
-                        should_send_slot = (send_task % config.send_worker_programs_per_peer) == worker_program
+                def _send_to_dst(dst_ordinal: int, dst_offset: int) -> None:
+                    dst = (rank + dst_offset) % config.ep_size
+                    remote_inbox_ref = None
+                    if dst_offset != 0:
+                        remote_inbox_ref = mgpu.remote_ref(inbox_ref, dst, device_id_type=pl.DeviceIdType.LOGICAL)
 
-                        @pl.when(should_send_slot)
-                        def _send_slot_entry() -> None:
-                            entry = slot + round_i * config.inbox_slots
+                    @pl.loop(0, rounds_per_slot)
+                    def _round_loop(round_i) -> None:
+                        @pl.loop(0, config.inbox_slots)
+                        def _slot_loop(slot_pos) -> None:
+                            slot = slot_pos
+                            send_task = dst_ordinal * config.inbox_slots + slot
+                            should_send_slot = (send_task % config.send_worker_programs_per_peer) == worker_program
 
-                            @pl.when(entry < config.entries_per_rank)
-                            def _maybe_send_entry() -> None:
-                                valid_rows = send_meta_ref[dst_ordinal, entry, 3]
+                            @pl.when(should_send_slot)
+                            def _send_slot_entry() -> None:
+                                entry = slot + round_i * config.inbox_slots
 
-                                @pl.when(valid_rows > 0)
-                                def _send_entry() -> None:
-                                    pl.semaphore_wait(empty_sem_ref.at[dst, slot])
+                                @pl.when(entry < config.entries_per_rank)
+                                def _maybe_send_entry() -> None:
+                                    valid_rows = send_meta_ref[dst_ordinal, entry, 3]
 
-                                    def _copy_buffer(buffer_smem, k_start) -> None:
-                                        buffer_smem[:, :] = x_ref[
-                                            dst_ordinal,
-                                            entry,
-                                            pl.ds(0, config.block_m),
-                                            pl.ds(k_start, config.block_k),
-                                        ]
-                                        mgpu.commit_smem()
+                                    @pl.when(valid_rows > 0)
+                                    def _send_entry() -> None:
+                                        pl.semaphore_wait(empty_sem_ref.at[dst, slot])
+
+                                        def _copy_buffer(buffer_smem, k_start) -> None:
+                                            buffer_smem[:, :] = x_ref[
+                                                dst_ordinal,
+                                                entry,
+                                                pl.ds(0, config.block_m),
+                                                pl.ds(k_start, config.block_k),
+                                            ]
+                                            mgpu.commit_smem()
+                                            if dst_offset == 0:
+                                                mgpu.copy_smem_to_gmem(
+                                                    buffer_smem,
+                                                    inbox_ref.at[
+                                                        rank,
+                                                        slot,
+                                                        pl.ds(0, config.block_m),
+                                                        pl.ds(k_start, config.block_k),
+                                                    ],
+                                                )
+                                            else:
+                                                mgpu.copy_smem_to_gmem(
+                                                    buffer_smem,
+                                                    remote_inbox_ref.at[
+                                                        rank,
+                                                        slot,
+                                                        pl.ds(0, config.block_m),
+                                                        pl.ds(k_start, config.block_k),
+                                                    ],
+                                                )
+
+                                        if uses_remote_copy:
+                                            if config.send_pipeline_depth == 1:
+
+                                                def _copy_scope(tile_smem) -> None:
+                                                    @pl.loop(0, k_tiles)
+                                                    def _k_loop(kk) -> None:
+                                                        k_start = kk * config.block_k
+                                                        _copy_buffer(tile_smem, k_start)
+                                                        mgpu.wait_smem_to_gmem(0, wait_read_only=False)
+
+                                                pl.run_scoped(
+                                                    _copy_scope,
+                                                    tile_smem=mgpu.SMEM(
+                                                        (config.block_m, config.block_k), dtype=x_ref.dtype
+                                                    ),
+                                                )
+                                            elif config.send_pipeline_depth == 2:
+
+                                                def _copy_scope(tile_smem, tile_smem_next) -> None:
+                                                    @pl.loop(0, k_tiles)
+                                                    def _k_loop(kk) -> None:
+                                                        k_start = kk * config.block_k
+
+                                                        @pl.when(kk >= 2)
+                                                        def _wait_for_reusable_buffer() -> None:
+                                                            mgpu.wait_smem_to_gmem(1, wait_read_only=False)
+
+                                                        @pl.when((kk % 2) == 0)
+                                                        def _copy_even_buffer() -> None:
+                                                            _copy_buffer(tile_smem, k_start)
+
+                                                        @pl.when((kk % 2) == 1)
+                                                        def _copy_odd_buffer() -> None:
+                                                            _copy_buffer(tile_smem_next, k_start)
+
+                                                    mgpu.wait_smem_to_gmem(0, wait_read_only=False)
+
+                                                pl.run_scoped(
+                                                    _copy_scope,
+                                                    tile_smem=mgpu.SMEM(
+                                                        (config.block_m, config.block_k), dtype=x_ref.dtype
+                                                    ),
+                                                    tile_smem_next=mgpu.SMEM(
+                                                        (config.block_m, config.block_k), dtype=x_ref.dtype
+                                                    ),
+                                                )
                                         if dst_offset == 0:
-                                            mgpu.copy_smem_to_gmem(
-                                                buffer_smem,
-                                                inbox_ref.at[
-                                                    rank,
-                                                    slot,
-                                                    pl.ds(0, config.block_m),
-                                                    pl.ds(k_start, config.block_k),
-                                                ],
-                                            )
+                                            pl.semaphore_signal(full_sem_ref.at[rank, slot])
                                         else:
-                                            mgpu.copy_smem_to_gmem(
-                                                buffer_smem,
-                                                remote_inbox_ref.at[
-                                                    rank,
-                                                    slot,
-                                                    pl.ds(0, config.block_m),
-                                                    pl.ds(k_start, config.block_k),
-                                                ],
+                                            pl.semaphore_signal(
+                                                full_sem_ref.at[rank, slot],
+                                                device_id=dst,
+                                                device_id_type=pl.DeviceIdType.LOGICAL,
                                             )
 
-                                    if config.send_pipeline_depth == 1:
+                def _switch_send_to_dst(dst_ordinal) -> None:
+                    def _branch(static_dst_ordinal: int, static_dst_offset: int):
+                        def _send_branch(_) -> None:
+                            _send_to_dst(static_dst_ordinal, static_dst_offset)
 
-                                        def _copy_scope(tile_smem) -> None:
-                                            @pl.loop(0, k_tiles)
-                                            def _k_loop(kk) -> None:
-                                                k_start = kk * config.block_k
-                                                _copy_buffer(tile_smem, k_start)
-                                                mgpu.wait_smem_to_gmem(0, wait_read_only=False)
+                        return _send_branch
 
-                                        pl.run_scoped(
-                                            _copy_scope,
-                                            tile_smem=mgpu.SMEM((config.block_m, config.block_k), dtype=x_ref.dtype),
-                                        )
-                                    elif config.send_pipeline_depth == 2:
+                    branches = tuple(
+                        _branch(static_dst_ordinal, static_dst_offset)
+                        for static_dst_ordinal, static_dst_offset in enumerate(send_dst_offsets)
+                    )
+                    lax.switch(dst_ordinal, branches, None)
 
-                                        def _copy_scope(tile_smem, tile_smem_next) -> None:
-                                            @pl.loop(0, k_tiles)
-                                            def _k_loop(kk) -> None:
-                                                k_start = kk * config.block_k
-
-                                                @pl.when(kk >= 2)
-                                                def _wait_for_reusable_buffer() -> None:
-                                                    mgpu.wait_smem_to_gmem(1, wait_read_only=False)
-
-                                                @pl.when((kk % 2) == 0)
-                                                def _copy_even_buffer() -> None:
-                                                    _copy_buffer(tile_smem, k_start)
-
-                                                @pl.when((kk % 2) == 1)
-                                                def _copy_odd_buffer() -> None:
-                                                    _copy_buffer(tile_smem_next, k_start)
-
-                                            mgpu.wait_smem_to_gmem(0, wait_read_only=False)
-
-                                        pl.run_scoped(
-                                            _copy_scope,
-                                            tile_smem=mgpu.SMEM((config.block_m, config.block_k), dtype=x_ref.dtype),
-                                            tile_smem_next=mgpu.SMEM(
-                                                (config.block_m, config.block_k), dtype=x_ref.dtype
-                                            ),
-                                        )
-                                    if dst_offset == 0:
-                                        pl.semaphore_signal(full_sem_ref.at[rank, slot])
-                                    else:
-                                        pl.semaphore_signal(
-                                            full_sem_ref.at[rank, slot],
-                                            device_id=dst,
-                                            device_id_type=pl.DeviceIdType.LOGICAL,
-                                        )
-
-            def _switch_send_to_dst(dst_ordinal) -> None:
-                def _branch(static_dst_ordinal: int, static_dst_offset: int):
-                    def _send_branch(_) -> None:
-                        _send_to_dst(static_dst_ordinal, static_dst_offset)
-
-                    return _send_branch
-
-                branches = tuple(
-                    _branch(static_dst_ordinal, static_dst_offset)
-                    for static_dst_ordinal, static_dst_offset in enumerate(send_dst_offsets)
-                )
-                lax.switch(dst_ordinal, branches, None)
-
-            _switch_send_to_dst(peer_ordinal)
+                _switch_send_to_dst(peer_ordinal)
 
         def _init_empty_slots() -> None:
             def _init_empty_for_src(src_offset: int) -> None:
@@ -416,10 +468,55 @@ def _make_kernel(config: PushInboxConfig):
 
         def _store_hidden(src_ordinal, entry, n_tile, hidden) -> None:
             dst_row_start = (src_ordinal * config.entries_per_rank + entry) * config.block_m
+            if stores_tiny_output:
+                hidden_ref[
+                    pl.ds(dst_row_start, config.block_m),
+                    pl.ds(n_tile * TINY_OUTPUT_COLUMNS_PER_N_TILE, TINY_OUTPUT_COLUMNS_PER_N_TILE),
+                ] = hidden[:, :TINY_OUTPUT_COLUMNS_PER_N_TILE].astype(hidden_ref.dtype)
+            else:
+                hidden_ref[
+                    pl.ds(dst_row_start, config.block_m),
+                    pl.ds(n_tile * config.block_n, config.block_n),
+                ] = hidden.astype(hidden_ref.dtype)
+
+        def _store_zero_hidden(src_ordinal, entry, n_tile) -> None:
+            dst_row_start = (src_ordinal * config.entries_per_rank + entry) * config.block_m
             hidden_ref[
                 pl.ds(dst_row_start, config.block_m),
                 pl.ds(n_tile * config.block_n, config.block_n),
-            ] = hidden.astype(hidden_ref.dtype)
+            ] = jnp.zeros((config.block_m, config.block_n), dtype=hidden_ref.dtype)
+
+        def _store_zero_n_group(src_ordinal, entry, n_group_i) -> None:
+            if config.n_group == 1:
+                _store_zero_hidden(src_ordinal, entry, n_group_i)
+            else:
+                n_tile = n_group_i * 2
+                _store_zero_hidden(src_ordinal, entry, n_tile)
+                _store_zero_hidden(src_ordinal, entry, n_tile + 1)
+
+        def _copy_lhs_to_smem(lhs_smem, ready_barrier, src, src_ordinal, entry, slot, k_start) -> None:
+            if diagnostic_variant == DIAGNOSTIC_VARIANT_COMPUTE_ONLY_LOCAL:
+                mgpu.copy_gmem_to_smem(
+                    x_ref.at[
+                        src_ordinal,
+                        entry,
+                        pl.ds(0, config.block_m),
+                        pl.ds(k_start, config.block_k),
+                    ],
+                    lhs_smem,
+                    ready_barrier,
+                )
+            else:
+                mgpu.copy_gmem_to_smem(
+                    inbox_ref.at[
+                        src,
+                        slot,
+                        pl.ds(0, config.block_m),
+                        pl.ds(k_start, config.block_k),
+                    ],
+                    lhs_smem,
+                    ready_barrier,
+                )
 
         def _compute_hidden_n_tile(src, src_ordinal, entry, slot, expert, n_tile) -> None:
             def acc_scope(gate_acc_ref, up_acc_ref) -> jax.Array:
@@ -427,16 +524,7 @@ def _make_kernel(config: PushInboxConfig):
                     @pl.loop(0, k_tiles)
                     def _k_loop(kk) -> None:
                         k_start = kk * config.block_k
-                        mgpu.copy_gmem_to_smem(
-                            inbox_ref.at[
-                                src,
-                                slot,
-                                pl.ds(0, config.block_m),
-                                pl.ds(k_start, config.block_k),
-                            ],
-                            lhs_smem,
-                            ready_barrier,
-                        )
+                        _copy_lhs_to_smem(lhs_smem, ready_barrier, src, src_ordinal, entry, slot, k_start)
                         mgpu.copy_gmem_to_smem(
                             w_ref.at[
                                 expert,
@@ -495,16 +583,7 @@ def _make_kernel(config: PushInboxConfig):
                         @pl.loop(0, k_tiles)
                         def _k_loop(kk) -> None:
                             k_start = kk * config.block_k
-                            mgpu.copy_gmem_to_smem(
-                                inbox_ref.at[
-                                    src,
-                                    slot,
-                                    pl.ds(0, config.block_m),
-                                    pl.ds(k_start, config.block_k),
-                                ],
-                                lhs_smem,
-                                ready_barrier,
-                            )
+                            _copy_lhs_to_smem(lhs_smem, ready_barrier, src, src_ordinal, entry, slot, k_start)
                             mgpu.copy_gmem_to_smem(
                                 w_ref.at[
                                     expert,
@@ -571,9 +650,11 @@ def _make_kernel(config: PushInboxConfig):
                     up_n1_acc=mgpu.ACC((config.block_m, config.block_n)),
                 )
 
-        @pl.when(worker_program == config.send_worker_programs_per_peer)
-        def _init_worker() -> None:
-            _init_empty_slots()
+        if uses_semaphores:
+
+            @pl.when(worker_program == config.send_worker_programs_per_peer)
+            def _init_worker() -> None:
+                _init_empty_slots()
 
         @pl.when(worker_program >= config.send_worker_programs_per_peer)
         def _n_tile_recv_worker() -> None:
@@ -606,43 +687,57 @@ def _make_kernel(config: PushInboxConfig):
 
                                         @pl.when(should_compute)
                                         def _recv_job() -> None:
+                                            if uses_semaphores:
+                                                pl.semaphore_wait(
+                                                    full_sem_ref.at[src, slot],
+                                                    value=round_i + 1,
+                                                    decrement=False,
+                                                )
+                                            if computes_wgmma:
+                                                expert = recv_meta_ref[src_ordinal, entry, 1]
+
+                                                @pl.loop(0, config.n_groups_per_job)
+                                                def _job_n_group_loop(group_offset) -> None:
+                                                    n_group_i = job_i * config.n_groups_per_job + group_offset
+
+                                                    @pl.when(n_group_i < n_work_groups)
+                                                    def _job_n_group() -> None:
+                                                        _compute_hidden_n_group(
+                                                            src,
+                                                            src_ordinal,
+                                                            entry,
+                                                            slot,
+                                                            expert,
+                                                            n_group_i,
+                                                        )
+
+                                            elif stores_zero:
+
+                                                @pl.loop(0, config.n_groups_per_job)
+                                                def _job_n_group_loop(group_offset) -> None:
+                                                    n_group_i = job_i * config.n_groups_per_job + group_offset
+
+                                                    @pl.when(n_group_i < n_work_groups)
+                                                    def _job_n_group() -> None:
+                                                        _store_zero_n_group(src_ordinal, entry, n_group_i)
+
+                                            if uses_semaphores:
+                                                pl.semaphore_signal(done_sem_ref.at[src, slot])
+
+                                    if uses_semaphores:
+                                        release_group = src_ordinal * config.inbox_slots + slot
+                                        should_release = (
+                                            release_group % compute_worker_programs_per_peer
+                                        ) == compute_worker
+
+                                        @pl.when(should_release)
+                                        def _release_slot() -> None:
                                             pl.semaphore_wait(
-                                                full_sem_ref.at[src, slot],
-                                                value=round_i + 1,
+                                                done_sem_ref.at[src, slot],
+                                                value=(round_i + 1) * n_compute_jobs,
                                                 decrement=False,
                                             )
-                                            expert = recv_meta_ref[src_ordinal, entry, 1]
-
-                                            @pl.loop(0, config.n_groups_per_job)
-                                            def _job_n_group_loop(group_offset) -> None:
-                                                n_group_i = job_i * config.n_groups_per_job + group_offset
-
-                                                @pl.when(n_group_i < n_work_groups)
-                                                def _job_n_group() -> None:
-                                                    _compute_hidden_n_group(
-                                                        src,
-                                                        src_ordinal,
-                                                        entry,
-                                                        slot,
-                                                        expert,
-                                                        n_group_i,
-                                                    )
-
-                                            pl.semaphore_signal(done_sem_ref.at[src, slot])
-
-                                    release_group = src_ordinal * config.inbox_slots + slot
-                                    should_release = (
-                                        release_group % compute_worker_programs_per_peer
-                                    ) == compute_worker
-
-                                    @pl.when(should_release)
-                                    def _release_slot() -> None:
-                                        pl.semaphore_wait(
-                                            done_sem_ref.at[src, slot],
-                                            value=(round_i + 1) * n_compute_jobs,
-                                            decrement=False,
-                                        )
-                                        _signal_empty_to_src(src, src_offset, slot)
+                                            _signal_empty_to_src(src, src_offset, slot)
 
                 _recv_fixed_wait()
 
@@ -666,7 +761,7 @@ def _make_kernel(config: PushInboxConfig):
     compiler_params = mgpu.CompilerParams(lowering_semantics=mgpu.LoweringSemantics.Lane)
     out_shape = [
         jax.ShapeDtypeStruct(inbox_shape, jnp.bfloat16),
-        jax.ShapeDtypeStruct(config.hidden_output_shape, jnp.bfloat16),
+        jax.ShapeDtypeStruct(_hidden_output_shape_for_kernel(config, diagnostic_variant), jnp.bfloat16),
     ]
 
     return mgpu.kernel(
@@ -1092,8 +1187,12 @@ def _make_inputs(config: PushInboxConfig) -> DeviceInputs:
     return _device_inputs_from_host(config, _make_host_inputs(config))
 
 
-def _sharded_kernel(mesh: Mesh, config: PushInboxConfig):
-    kernel = _make_kernel(config)
+def _sharded_kernel(
+    mesh: Mesh,
+    config: PushInboxConfig,
+    diagnostic_variant: str = DIAGNOSTIC_VARIANT_FULL,
+):
+    kernel = _make_kernel(config, diagnostic_variant)
 
     def local_fn(
         x_local: Float[Array, "1 DST Q M D"],
@@ -1311,11 +1410,18 @@ def _run_one(
     config: PushInboxConfig,
     settings: SourcePushInboxRunSettings,
     input_builder: Callable[[PushInboxConfig], HostInputs] = _make_host_inputs,
+    *,
+    diagnostic_variant: str = DIAGNOSTIC_VARIANT_FULL,
+    row_metadata: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
+    row_metadata = row_metadata or {}
     try:
         _emit_progress(config, settings.progress_events, "validate_start")
         if settings.repeat_runs <= 0:
             raise ValueError(f"repeat_runs must be positive, got {settings.repeat_runs}")
+        _validate_diagnostic_variant(diagnostic_variant)
+        if settings.check and diagnostic_variant != DIAGNOSTIC_VARIANT_FULL:
+            raise ValueError("diagnostic variants other than full do not produce validation-equivalent outputs")
         config.validate()
         _emit_progress(config, settings.progress_events, "mesh_start")
         mesh = _make_mesh(config.ep_size)
@@ -1328,7 +1434,7 @@ def _run_one(
         recv_meta = jax.device_put(inputs.recv_meta, NamedSharding(mesh, P(AXIS, None, None, None)))
         w = jax.device_put(inputs.w, NamedSharding(mesh, P(AXIS, None, None, None)))
         _emit_progress(config, settings.progress_events, "jit_start")
-        fn = jax.jit(_sharded_kernel(mesh, config))
+        fn = jax.jit(_sharded_kernel(mesh, config, diagnostic_variant))
 
         timing = _time_jitted(
             fn,
@@ -1369,63 +1475,63 @@ def _run_one(
         flops_per_rank = queue_stats["rounded_rows_per_rank_mean"] * config.hidden_dim * config.intermediate_dim * 4
         rows = []
         for repeat_run, steady_state_time in enumerate(timing.steady_state_times):
-            rows.append(
-                {
-                    "kernel": KERNEL_NAME,
-                    "implementation": KERNEL_NAME,
-                    "config": asdict(config),
-                    "queue_stats": queue_stats,
-                    **queue_stats,
-                    "compile_time": timing.compile_time,
-                    "lower_compile_time": timing.lower_compile_time,
-                    "first_run_time": timing.first_run_time,
-                    "repeat_run": repeat_run,
-                    "repeat_runs": settings.repeat_runs,
-                    "steady_state_time": steady_state_time,
-                    "bytes_per_rank": bytes_per_rank,
-                    "send_gbps_per_rank": bytes_per_rank / steady_state_time / 1e9,
-                    "w13_tflops_per_rank": flops_per_rank / steady_state_time / 1e12,
-                    "max_abs_diff": max_abs_diff,
-                    "metadata_mismatches": metadata_mismatches,
-                    "hidden_max_abs_diff": hidden_max_abs_diff,
-                    "hidden_mean_abs_diff": hidden_mean_abs_diff,
-                    "hidden_all_max_abs_diff": hidden_all_max_abs_diff,
-                    "hidden_unwritten_max_abs": hidden_unwritten_max_abs,
-                    "error": None,
-                    "error_type": None,
-                    "error_message": None,
-                }
-            )
+            row = {
+                "kernel": KERNEL_NAME,
+                "implementation": KERNEL_NAME,
+                "config": asdict(config),
+                "queue_stats": queue_stats,
+                **queue_stats,
+                "compile_time": timing.compile_time,
+                "lower_compile_time": timing.lower_compile_time,
+                "first_run_time": timing.first_run_time,
+                "repeat_run": repeat_run,
+                "repeat_runs": settings.repeat_runs,
+                "steady_state_time": steady_state_time,
+                "bytes_per_rank": bytes_per_rank,
+                "send_gbps_per_rank": bytes_per_rank / steady_state_time / 1e9,
+                "w13_tflops_per_rank": flops_per_rank / steady_state_time / 1e12,
+                "max_abs_diff": max_abs_diff,
+                "metadata_mismatches": metadata_mismatches,
+                "hidden_max_abs_diff": hidden_max_abs_diff,
+                "hidden_mean_abs_diff": hidden_mean_abs_diff,
+                "hidden_all_max_abs_diff": hidden_all_max_abs_diff,
+                "hidden_unwritten_max_abs": hidden_unwritten_max_abs,
+                "error": None,
+                "error_type": None,
+                "error_message": None,
+            }
+            row.update(row_metadata)
+            rows.append(row)
         return rows
     except Exception as exc:  # noqa: BLE001 - repro rows should capture unsupported candidates.
         if settings.debug_exceptions:
             raise
-        return [
-            {
-                "kernel": KERNEL_NAME,
-                "implementation": KERNEL_NAME,
-                "config": asdict(config),
-                "compile_time": None,
-                "lower_compile_time": None,
-                "first_run_time": None,
-                "repeat_run": None,
-                "repeat_runs": settings.repeat_runs,
-                "steady_state_time": None,
-                "bytes_per_rank": None,
-                "send_gbps_per_rank": None,
-                "w13_tflops_per_rank": None,
-                "max_abs_diff": None,
-                "metadata_mismatches": None,
-                "hidden_max_abs_diff": None,
-                "hidden_mean_abs_diff": None,
-                "hidden_all_max_abs_diff": None,
-                "hidden_unwritten_max_abs": None,
-                "error": f"{type(exc).__name__}: {exc}",
-                "error_type": type(exc).__name__,
-                "error_message": str(exc),
-                "traceback": traceback.format_exc(),
-            }
-        ]
+        row = {
+            "kernel": KERNEL_NAME,
+            "implementation": KERNEL_NAME,
+            "config": asdict(config),
+            "compile_time": None,
+            "lower_compile_time": None,
+            "first_run_time": None,
+            "repeat_run": None,
+            "repeat_runs": settings.repeat_runs,
+            "steady_state_time": None,
+            "bytes_per_rank": None,
+            "send_gbps_per_rank": None,
+            "w13_tflops_per_rank": None,
+            "max_abs_diff": None,
+            "metadata_mismatches": None,
+            "hidden_max_abs_diff": None,
+            "hidden_mean_abs_diff": None,
+            "hidden_all_max_abs_diff": None,
+            "hidden_unwritten_max_abs": None,
+            "error": f"{type(exc).__name__}: {exc}",
+            "error_type": type(exc).__name__,
+            "error_message": str(exc),
+            "traceback": traceback.format_exc(),
+        }
+        row.update(row_metadata)
+        return [row]
     finally:
         jax.clear_caches()
 
@@ -1476,3 +1582,41 @@ def run_source_push_inbox_compact_routing(
         progress_events=progress_events,
     )
     return _run_one(config, settings, input_builder=_make_compact_routing_inputs)
+
+
+def run_source_push_inbox_diagnostic(
+    config: PushInboxConfig,
+    *,
+    diagnostic_variant: str,
+    warmup: int,
+    steps: int,
+    repeat_runs: int,
+    debug_exceptions: bool = False,
+    separate_compile: bool = False,
+    progress_events: bool = False,
+    compact_routing: bool = False,
+) -> list[dict[str, Any]]:
+    """Run a non-production diagnostic variant of the source-push inbox kernel."""
+    _validate_diagnostic_variant(diagnostic_variant)
+    settings = SourcePushInboxRunSettings(
+        warmup=warmup,
+        steps=steps,
+        repeat_runs=repeat_runs,
+        check=False,
+        debug_exceptions=debug_exceptions,
+        separate_compile=separate_compile,
+        progress_events=progress_events,
+    )
+    input_builder = _make_compact_routing_inputs if compact_routing else _make_host_inputs
+    return _run_one(
+        config,
+        settings,
+        input_builder=input_builder,
+        diagnostic_variant=diagnostic_variant,
+        row_metadata={
+            "kernel": DIAGNOSTIC_KERNEL_NAME,
+            "implementation": f"{DIAGNOSTIC_KERNEL_NAME}:{diagnostic_variant}",
+            "diagnostic_variant": diagnostic_variant,
+            "diagnostic_compact_routing": compact_routing,
+        },
+    )
