@@ -483,3 +483,59 @@ wrong.
   - Compare single-JIT full forward against the staged diagnostic and stage-sum timings on target to quantify graph
     composition overhead, then decide whether to keep full forward as three explicit stages or introduce a real
     producer/consumer return path.
+
+## 2026-07-03 04:10 - Full-forward staged decomposition and return-barrier check
+
+Added per-stage timing rows to the package-private full-forward `staged_host_sync` diagnostic and used it to split the
+target rough-balanced cf1.25 path into W13, W2-return, and source-combine costs.
+
+- Commit Hashes:
+  - `8b988579d`: `staged_host_sync` now emits `stage_repeat` rows for `w13`, `w2_return`, and `combine`.
+  - `1346a3f90`: removed the single-JIT return barrier as a diagnostic experiment.
+  - `582406ee8`: reverted the no-barrier experiment after it failed at the target shape.
+- Code:
+  - `lib/levanter/src/levanter/grug/_moe/source_push_forward.py`
+- Local verification:
+  - `uv run --package marin-levanter --group test pytest lib/levanter/tests/grug/test_source_push_inbox.py -q -k 'source_push_forward or bench_cli_imports or repro_wrapper'`
+  - Result: `7 passed, 11 warnings`.
+  - `uv run --package marin-levanter --group test pytest lib/levanter/tests/grug/test_source_push_inbox.py -q -k 'source_push_forward'`
+  - Result: `4 passed, 11 warnings`.
+  - `./infra/pre-commit.py --changed-files --fix`
+  - Result: all checks passed.
+- H100 staged decomposition:
+  - Job: `/dlwh/source-push-forward-staged-breakdown-8b988579d-20260703-105631`
+  - Command:
+    `uv run --package marin-levanter --group test python lib/levanter/scripts/bench/bench_source_push_forward.py --source-push-profile hopper_source_push_inbox_rough_balanced_216 --routing roughly_balanced --capacity-factor 1.25 --execution-mode staged_host_sync --warmup 1 --steps 3 --repeat-runs 5 --no-check --progress-events --git-sha 8b988579d --jsonl scratch/source_push_forward_staged_breakdown_8b988579d_target.jsonl`
+  - Result: succeeded, no drops.
+
+| row | repeat times (ms) | median (ms) | median throughput |
+| --- | ---: | ---: | ---: |
+| total staged forward | `[16.137, 16.012, 16.152, 16.462, 16.086]` | `16.137` | `169.42` rounded / `159.69` useful TFLOP/s/rank |
+| W13 source-push | `[8.615, 8.567, 8.660, 8.505, 8.549]` | `8.567` | `212.75` W13 TFLOP/s/rank |
+| W2 return | `[6.083, 6.014, 6.062, 6.526, 6.097]` | `6.083` | `149.81` W2 TFLOP/s/rank |
+| source combine | `[1.340, 1.334, 1.338, 1.342, 1.343]` | `1.340` | `1627.88` GB/s/rank |
+
+- Same-SHA single-JIT comparison:
+  - Job: `/dlwh/source-push-forward-singlejit-8b988579d-20260703-105955`
+  - Result: succeeded, no drops.
+  - Repeat times: `[18.126, 24.283, 26.983, 17.833, 17.902] ms`.
+  - Median: `18.126 ms`, `150.83` rounded / `142.17` useful TFLOP/s/rank.
+- No-barrier diagnostic:
+  - Small checked smoke: `/dlwh/source-push-forward-nobarrier-smoke-1346a3f90-20260703-110343`
+    - Result: succeeded, `max_abs_diff=0.0078125`, `mean_abs_diff=0.000339662`, `dropped_routes=0`.
+  - Target no-barrier: `/dlwh/source-push-forward-nobarrier-target-1346a3f90-20260703-110642`
+    - Result: structured `JaxRuntimeError` row during steady-state:
+      `CUDA_ERROR_ILLEGAL_ADDRESS: an illegal memory access was encountered [executable_name='jit_fn']`.
+  - Decision: keep the single-JIT return barrier or an equivalent synchronization boundary for target-shape safety.
+- Interpretation:
+  - The source-push W13 stage is still close to the stable source-push inbox path (`8.57 ms` vs prior `~8.3-8.4 ms`).
+  - W2-return costs about `6.08 ms`; source combine costs about `1.34 ms`.
+  - The staged three-kernel path (`16.14 ms`) is about `2.0 ms` faster than the same-SHA single-JIT path median and
+    avoids the single-JIT slow-tail repeats in this run.
+  - Same-JIT no-barrier is unsafe at target shape even though a small smoke passes, so the one-graph path needs the
+    explicit return barrier. The currently better production-relevant structure is staged/multi-kernel, not one giant
+    JIT graph.
+- Next action:
+  - Treat `staged_host_sync` as the current full-forward performance baseline for the source-push chain.
+  - If integrating behind an opt-in backend, prefer explicit W13 -> W2-return -> combine stage boundaries first, then
+    optimize W2-return or replace the barrier with a real producer/consumer return synchronization only after profiling.
