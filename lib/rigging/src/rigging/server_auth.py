@@ -686,15 +686,24 @@ class PolicyAuthInterceptor:
 _ROUTE_AUTH_ATTR = "_rigging_route_auth"
 
 
+class _RouteAuth(StrEnum):
+    """A request's auth disposition: the matched route's annotation, or a default."""
+
+    PUBLIC = "public"
+    REQUIRES_AUTH = "requires_auth"
+    SKIP = "skip"  # mounts and unmatched paths — the inner app enforces its own auth / 404s
+    DENY = "deny"  # unannotated route: fail closed
+
+
 def public(fn: Callable) -> Callable:
     """Mark a route handler as publicly accessible (no auth required)."""
-    setattr(fn, _ROUTE_AUTH_ATTR, "public")
+    setattr(fn, _ROUTE_AUTH_ATTR, _RouteAuth.PUBLIC)
     return fn
 
 
 def requires_auth(fn: Callable) -> Callable:
     """Mark a route handler as requiring an authenticated identity."""
-    setattr(fn, _ROUTE_AUTH_ATTR, "requires_auth")
+    setattr(fn, _ROUTE_AUTH_ATTR, _RouteAuth.REQUIRES_AUTH)
     return fn
 
 
@@ -739,10 +748,10 @@ class RouteAuthMiddleware:
             return await self._app(scope, receive, send)
 
         annotation = self._route_annotation(scope)
-        if annotation in ("public", "skip"):
+        if annotation in (_RouteAuth.PUBLIC, _RouteAuth.SKIP):
             return await self._app(scope, receive, send)
 
-        if annotation == "requires_auth":
+        if annotation is _RouteAuth.REQUIRES_AUTH:
             deny = self._authenticate(scope)
             if deny is not None:
                 return await deny(scope, receive, send)
@@ -751,18 +760,18 @@ class RouteAuthMiddleware:
         response = JSONResponse({"error": "authentication required"}, status_code=401)
         return await response(scope, receive, send)
 
-    def _route_annotation(self, scope: Scope) -> str:
+    def _route_annotation(self, scope: Scope) -> _RouteAuth:
         for route in self._router.routes:
             if isinstance(route, Mount):
                 if route.matches(scope)[0] != Match.NONE:
-                    return "skip"
+                    return _RouteAuth.SKIP
                 continue
             if isinstance(route, Route):
                 match_result, _ = route.matches(scope)
                 if match_result == Match.FULL:
-                    return getattr(route.endpoint, _ROUTE_AUTH_ATTR, "deny")
+                    return getattr(route.endpoint, _ROUTE_AUTH_ATTR, _RouteAuth.DENY)
         # No route matched — let the app 404.
-        return "skip"
+        return _RouteAuth.SKIP
 
     def _authenticate(self, scope: Scope) -> JSONResponse | None:
         headers = scope_headers(scope)

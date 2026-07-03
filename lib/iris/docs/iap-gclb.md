@@ -168,7 +168,7 @@ allow rule exists); the deny only makes that guarantee explicit.
 
 By default the whole controller sits behind IAP, so an off-cluster caller (e.g. a
 Daytona/Modal sandbox running an agent harness) cannot reach a registered
-endpoint through the controller proxy. The `public-proxy` stage opens **only** the
+endpoint through the controller proxy. The `public-proxy` stage opens only the
 `/proxy/*` path past IAP, leaving the dashboard, `/auth/*`, and the RPC mounts
 IAP-gated:
 
@@ -178,16 +178,16 @@ client → GCLB (:443) → URL map                                              
                        └─ default        → iris-<cluster>-be        (IAP ON) ──┘
 ```
 
-The stage adds a **second backend service** (`iris-<cluster>-proxy-be`, IAP
-disabled) on the *same* NEG and health check the `backend` stage already created —
-no new NEG, no new controller — and a **URL-map path rule** routing `/proxy` and
+The stage adds a second backend service (`iris-<cluster>-proxy-be`, IAP
+disabled) on the same NEG and health check the `backend` stage already created —
+no new NEG, no new controller — and a URL-map path rule routing `/proxy` and
 `/proxy/*` to it. Everything else on the host keeps flowing to the IAP-gated
 backend. The controller's own per-endpoint auth is then the gate for that path:
 `PRIVATE` (a cluster identity), `PUBLIC` (open), or `BEARER` (a scoped endpoint
-token — see the endpoint access modes). The controller needs **no** firewall or
+token — see the endpoint access modes). The controller needs no firewall or
 IAP-admin authority; this admin-run stage is the only thing that touches the LB.
 
-`deploy` runs `public-proxy` **by default** (it reuses the cluster's existing NEG
+`deploy` runs `public-proxy` by default (it reuses the cluster's existing NEG
 + health check), so a plain deploy or re-deploy stands up the `/proxy` opening
 idempotently:
 

@@ -475,22 +475,8 @@ def test_route_auth_middleware_matches_rpc_policy(service, verifier, token, opti
     We build a dashboard with a @requires_auth route injected and verify it
     agrees with the chain for every (token, optional) combination.
     """
-
-    @requires_auth
-    def _protected(_request):
-        return JSONResponse({"ok": True})
-
-    dashboard = ControllerDashboard(
-        service,
-        auth_provider="static",
-        auth_policy=RequestAuthPolicy.enforcing(verifier=verifier, optional=optional),
-    )
-    # Inject a @requires_auth route. Walk down to the Starlette router so the
-    # new route participates in route matching.
-    app = dashboard.app
-    while isinstance(app, _SubdomainProxyMiddleware | RouteAuthMiddleware):
-        app = app._app
-    app.router.routes.insert(0, Route("/test-protected", _protected))
+    policy = RequestAuthPolicy.enforcing(verifier=verifier, optional=optional)
+    dashboard = _dashboard_with_protected_route(service, policy)
 
     client = TestClient(dashboard.app)
     headers = {}
@@ -502,6 +488,37 @@ def test_route_auth_middleware_matches_rpc_policy(service, verifier, token, opti
         assert resp.status_code == 200, f"Expected 200 but got {resp.status_code}"
     else:
         assert resp.status_code == 401, f"Expected 401 but got {resp.status_code}"
+
+
+def test_route_auth_middleware_rejects_endpoint_scoped_token(service):
+    """A valid endpoint-scoped token gets 403 from @requires_auth routes.
+
+    Such a token authorizes only its endpoint's /proxy path; the middleware must
+    refuse it everywhere else even though the token itself verifies.
+    """
+    mgr = JwtTokenManager("route-auth-test-signing-key")
+    token = mgr.create_endpoint_token("/u/job/ep", "iris_ket_route", ttl_seconds=60)
+    dashboard = _dashboard_with_protected_route(service, RequestAuthPolicy.enforcing(verifier=mgr))
+
+    resp = TestClient(dashboard.app).get("/test-protected", headers={"Authorization": f"Bearer {token}"})
+    assert resp.status_code == 403
+
+
+def _dashboard_with_protected_route(service, policy: RequestAuthPolicy) -> ControllerDashboard:
+    """A dashboard with a @requires_auth route injected for middleware tests."""
+
+    @requires_auth
+    def _protected(_request):
+        return JSONResponse({"ok": True})
+
+    dashboard = ControllerDashboard(service, auth_provider="static", auth_policy=policy)
+    # Walk down to the Starlette router so the new route participates in route
+    # matching.
+    app = dashboard.app
+    while isinstance(app, _SubdomainProxyMiddleware | RouteAuthMiddleware):
+        app = app._app
+    app.router.routes.insert(0, Route("/test-protected", _protected))
+    return dashboard
 
 
 # -- IAP implicit dashboard role through the live auth interceptor ------------

@@ -37,9 +37,9 @@ then verifies nothing remains. Both subcommands only print the plan without
 ``--apply``.
 
 Usage:
-    uv run lib/iris/scripts/install_traefik_proxy.py install --cluster cw-us-east-02a \\
-        --acme-email you@oa.dev [--apply]
-    uv run lib/iris/scripts/install_traefik_proxy.py uninstall --cluster cw-us-east-02a [--apply]
+    uv run lib/iris/scripts/install_traefik_proxy.py --cluster cw-us-east-02a \\
+        install --acme-email you@oa.dev [--apply]
+    uv run lib/iris/scripts/install_traefik_proxy.py --cluster cw-us-east-02a uninstall [--apply]
 """
 
 import subprocess
@@ -48,10 +48,11 @@ from typing import NamedTuple
 
 import click
 import yaml
-from click.core import ParameterSource
 from iris.cli.connect import IRIS_CLUSTER_CONFIG_DIRS
 from iris.cluster.config import load_config
 from rigging.config_discovery import resolve_cluster_config
+
+DEFAULT_INGRESS_CLASS = "traefik"
 
 CW_REPO_NAME = "coreweave"
 CW_REPO_URL = "https://charts.core-services.ingress.coreweave.com"
@@ -186,29 +187,68 @@ def _http01_issuer(env: str, email: str, ingress_class: str) -> dict:
 
 
 # --------------------------------------------------------------------------
+# Shared settings, resolved once at the command group
+# --------------------------------------------------------------------------
+class StackSettings(NamedTuple):
+    """Target cluster and chart placement shared by every subcommand."""
+
+    cluster: str
+    host: str
+    ingress_class: str
+    traefik_namespace: str
+    traefik_release: str
+    cert_manager_namespace: str
+    cert_manager_release: str
+    kubeconfig: str | None
+    context: str | None
+
+
+class ClusterIngressSettings(NamedTuple):
+    """CoreWeave ingress settings derived from a named Iris cluster config."""
+
+    host: str
+    ingress_class: str
+    kubeconfig: str
+
+
+def _derive_from_cluster(name: str) -> ClusterIngressSettings:
+    """Read a named Iris cluster config and return its CoreWeave ingress settings.
+
+    Resolves ``name`` the same way ``iris --cluster`` does, so the host, ingress
+    class, and kubeconfig come from the one config the controller also reads.
+    """
+    try:
+        path = resolve_cluster_config(name, dirs=IRIS_CLUSTER_CONFIG_DIRS)
+    except FileNotFoundError as exc:
+        raise click.ClickException(f"Unknown cluster {name!r}; run `iris cluster list`.") from exc
+    config = load_config(str(path))
+    cw = config.controller.coreweave
+    if cw is None:
+        raise click.ClickException(f"Cluster {name!r} has no controller.coreweave block — not a CoreWeave cluster.")
+    platform = config.platform.coreweave
+    return ClusterIngressSettings(
+        host=cw.public_proxy_host,
+        ingress_class=cw.ingress_class,
+        kubeconfig=platform.kubeconfig_path if platform else "",
+    )
+
+
+# --------------------------------------------------------------------------
 # Install
 # --------------------------------------------------------------------------
 def install(
+    settings: StackSettings,
     *,
     acme_email: str | None,
-    host: str,
-    from_cluster: str = "",
-    ingress_class: str,
-    traefik_namespace: str,
-    traefik_release: str,
-    cert_manager_namespace: str,
-    cert_manager_release: str,
     traefik_version: str | None,
     cert_manager_version: str | None,
     skip_traefik: bool,
     skip_cert_manager: bool,
     skip_issuers: bool,
-    kubeconfig: str | None,
-    context: str | None,
     apply: bool,
 ) -> None:
-    hflags = helm_flags(kubeconfig, context)
-    kflags = kubectl_flags(kubeconfig, context)
+    hflags = helm_flags(settings.kubeconfig, settings.context)
+    kflags = kubectl_flags(settings.kubeconfig, settings.context)
 
     if not skip_issuers and not acme_email:
         raise click.ClickException(
@@ -216,7 +256,7 @@ def install(
         )
 
     issuer_docs = (
-        [_http01_issuer(env, acme_email, ingress_class) for env in ("staging", "prod")]
+        [_http01_issuer(env, acme_email, settings.ingress_class) for env in ("staging", "prod")]
         if not skip_issuers and acme_email
         else []
     )
@@ -224,12 +264,13 @@ def install(
     click.secho("==> Plan (CoreWeave /proxy ingress prerequisites):", fg="blue", bold=True)
     if not skip_traefik:
         click.echo(
-            f"  helm upgrade --install {traefik_release} {TRAEFIK_CHART} -n {traefik_namespace} --create-namespace"
+            f"  helm upgrade --install {settings.traefik_release} {TRAEFIK_CHART} "
+            f"-n {settings.traefik_namespace} --create-namespace"
         )
     if not skip_cert_manager:
         click.echo(
-            f"  helm upgrade --install {cert_manager_release} {CERT_MANAGER_CHART} "
-            f"-n {cert_manager_namespace} --create-namespace"
+            f"  helm upgrade --install {settings.cert_manager_release} {CERT_MANAGER_CHART} "
+            f"-n {settings.cert_manager_namespace} --create-namespace"
         )
     if issuer_docs:
         click.secho("==> ClusterIssuers (HTTP-01 via Traefik):", fg="blue", bold=True)
@@ -244,32 +285,31 @@ def install(
     run(["helm", "repo", "update", CW_REPO_NAME], check=True, stdout=subprocess.DEVNULL)
 
     if not skip_traefik:
-        click.secho(f"==> Installing Traefik ({TRAEFIK_CHART}) in namespace {traefik_namespace}", fg="blue", bold=True)
-        _helm_install(TRAEFIK_CHART, traefik_release, traefik_namespace, traefik_version, hflags)
+        click.secho(
+            f"==> Installing Traefik ({TRAEFIK_CHART}) in namespace {settings.traefik_namespace}", fg="blue", bold=True
+        )
+        _helm_install(TRAEFIK_CHART, settings.traefik_release, settings.traefik_namespace, traefik_version, hflags)
 
     if not skip_cert_manager:
         click.secho(
-            f"==> Installing cert-manager ({CERT_MANAGER_CHART}) in namespace {cert_manager_namespace}",
+            f"==> Installing cert-manager ({CERT_MANAGER_CHART}) in namespace {settings.cert_manager_namespace}",
             fg="blue",
             bold=True,
         )
-        _helm_install(CERT_MANAGER_CHART, cert_manager_release, cert_manager_namespace, cert_manager_version, hflags)
+        _helm_install(
+            CERT_MANAGER_CHART,
+            settings.cert_manager_release,
+            settings.cert_manager_namespace,
+            cert_manager_version,
+            hflags,
+        )
 
     if issuer_docs:
         click.secho("==> Waiting for the cert-manager ClusterIssuer CRD, then applying issuers", fg="blue", bold=True)
         wait_for_crd(CLUSTERISSUER_CRD, kflags)
         kubectl_apply_docs(issuer_docs, kflags)
 
-    _print_next_steps(
-        host=host,
-        from_cluster=from_cluster,
-        ingress_class=ingress_class,
-        traefik_namespace=traefik_namespace,
-        traefik_release=traefik_release,
-        skip_traefik=skip_traefik,
-        skip_issuers=skip_issuers,
-        kflags=kflags,
-    )
+    _print_next_steps(settings, skip_traefik=skip_traefik, skip_issuers=skip_issuers, kflags=kflags)
 
 
 def _helm_install(chart: str, release: str, namespace: str, version: str | None, hflags: list[str]) -> None:
@@ -281,52 +321,42 @@ def _helm_install(chart: str, release: str, namespace: str, version: str | None,
         raise click.ClickException(f"helm install of {chart} failed")
 
 
-def _print_next_steps(
-    *,
-    host: str,
-    from_cluster: str,
-    ingress_class: str,
-    traefik_namespace: str,
-    traefik_release: str,
-    skip_traefik: bool,
-    skip_issuers: bool,
-    kflags: list[str],
-) -> None:
+def _print_next_steps(settings: StackSettings, *, skip_traefik: bool, skip_issuers: bool, kflags: list[str]) -> None:
     """Print exactly what the operator must do next — the DNS record and config."""
-    host_label = host or "<your-host>.oa.dev"
+    host_label = settings.host or "<your-host>.oa.dev"
     click.secho("==> Done. Two steps to finish wiring the public /proxy route:", fg="green", bold=True)
 
     # 1. The concrete DNS record. Read the real Traefik FQDN so we can print it.
     click.secho("  1) Create this DNS record at your DNS provider (e.g. Namecheap):", fg="green", bold=True)
-    fqdn = "" if skip_traefik else read_traefik_fqdn(traefik_release, traefik_namespace, kflags)
+    fqdn = "" if skip_traefik else read_traefik_fqdn(settings.traefik_release, settings.traefik_namespace, kflags)
     if fqdn:
         click.echo(f"        {host_label}   CNAME   {fqdn}")
     else:
         click.secho("       (Traefik's FQDN isn't allocated yet — read it in a minute, then CNAME to it:)", fg="yellow")
         click.echo(
-            f"       kubectl get svc {traefik_release} -n {traefik_namespace} "
+            f"       kubectl get svc {settings.traefik_release} -n {settings.traefik_namespace} "
             "-o=jsonpath='{.status.conditions[?(@.type==\"ExternalRecords\")].message}'"
         )
         click.echo(f"        {host_label}   CNAME   <that>{_COREWEAVE_APP}")
 
     # 2. The controller config. With --cluster and a host already set, the block
     # is already in the config — just restart. Otherwise print the block to add.
-    if from_cluster and host:
+    if settings.cluster and settings.host:
         click.secho(
-            f"  2) {from_cluster} already sets controller.coreweave (public_proxy_host={host}) — "
+            f"  2) {settings.cluster} already sets controller.coreweave (public_proxy_host={settings.host}) — "
             "restart the controller so it creates the /proxy Ingress:",
             fg="green",
             bold=True,
         )
-        click.echo(f"       iris --cluster {from_cluster} cluster restart")
+        click.echo(f"       iris --cluster {settings.cluster} cluster restart")
     else:
         click.secho(
             "  2) Set the cluster config's controller.coreweave block, then (re)start the controller:",
             fg="green",
             bold=True,
         )
-        click.echo(f"       public_proxy_host: {host or 'your-host.oa.dev'}")
-        click.echo(f"       ingress_class: {ingress_class}")
+        click.echo(f"       public_proxy_host: {settings.host or 'your-host.oa.dev'}")
+        click.echo(f"       ingress_class: {settings.ingress_class}")
         click.echo("       tls_secret: iris-controller-proxy-tls")
         if not skip_issuers:
             click.echo(
@@ -400,23 +430,17 @@ def _helm_release_installed(release: str, namespace: str, hflags: list[str]) -> 
     return result.returncode == 0
 
 
-def uninstall(
-    *,
-    ingress_class: str,
-    traefik_namespace: str,
-    traefik_release: str,
-    cert_manager_namespace: str,
-    cert_manager_release: str,
-    kubeconfig: str | None,
-    context: str | None,
-    apply: bool,
-) -> None:
-    hflags = helm_flags(kubeconfig, context)
-    kflags = kubectl_flags(kubeconfig, context)
-    release_pairs = ((traefik_release, traefik_namespace), (cert_manager_release, cert_manager_namespace))
-    releases = (traefik_release, cert_manager_release)
+def uninstall(settings: StackSettings, *, apply: bool) -> None:
+    hflags = helm_flags(settings.kubeconfig, settings.context)
+    kflags = kubectl_flags(settings.kubeconfig, settings.context)
+    ingress_class = settings.ingress_class
+    release_pairs = (
+        (settings.traefik_release, settings.traefik_namespace),
+        (settings.cert_manager_release, settings.cert_manager_namespace),
+    )
+    releases = (settings.traefik_release, settings.cert_manager_release)
     issuers = [ISSUER_NAMES[env] for env in ("staging", "prod")]
-    namespaces = list(dict.fromkeys([traefik_namespace, cert_manager_namespace]))
+    namespaces = list(dict.fromkeys([settings.traefik_namespace, settings.cert_manager_namespace]))
 
     click.secho("==> Plan (teardown of the CoreWeave /proxy ingress prerequisites):", fg="blue", bold=True)
     click.echo(f"  kubectl delete clusterissuer {' '.join(issuers)}   # first, while the CRD still exists")
@@ -511,172 +535,101 @@ def uninstall(
     )
 
 
-class ClusterIngressSettings(NamedTuple):
-    """CoreWeave ingress settings derived from a named Iris cluster config."""
-
-    host: str
-    ingress_class: str
-    kubeconfig: str
-
-
-def _derive_from_cluster(name: str) -> ClusterIngressSettings:
-    """Read a named Iris cluster config and return its CoreWeave ingress settings.
-
-    Resolves ``name`` the same way ``iris --cluster`` does, so the host, ingress
-    class, and kubeconfig come from the one config the controller also reads.
-    """
-    try:
-        path = resolve_cluster_config(name, dirs=IRIS_CLUSTER_CONFIG_DIRS)
-    except FileNotFoundError as exc:
-        raise click.ClickException(f"Unknown cluster {name!r}; run `iris cluster list`.") from exc
-    config = load_config(str(path))
-    cw = config.controller.coreweave
-    if cw is None:
-        raise click.ClickException(f"Cluster {name!r} has no controller.coreweave block — not a CoreWeave cluster.")
-    platform = config.platform.coreweave
-    return ClusterIngressSettings(
-        host=cw.public_proxy_host,
-        ingress_class=cw.ingress_class,
-        kubeconfig=platform.kubeconfig_path if platform else "",
-    )
-
-
-def _shared_options(fn):
-    options = [
-        click.option(
-            "--cluster",
-            default="",
-            help="Iris cluster name; derives --host, --ingress-class, and --kubeconfig "
-            "from its controller.coreweave block.",
-        ),
-        click.option(
-            "--ingress-class",
-            default="traefik",
-            show_default=True,
-            help="IngressClass the HTTP-01 solver routes through.",
-        ),
-        click.option("--traefik-namespace", default="traefik", show_default=True),
-        click.option("--traefik-release", default="traefik", show_default=True, help="helm release name for Traefik."),
-        click.option("--cert-manager-namespace", default="cert-manager", show_default=True),
-        click.option(
-            "--cert-manager-release",
-            default="cert-manager",
-            show_default=True,
-            help="helm release name for cert-manager.",
-        ),
-        click.option("--kubeconfig", default=None, help="kubeconfig to use (else $KUBECONFIG / ~/.kube/config)."),
-        click.option("--context", default=None, help="kube context to target."),
-        click.option("--apply/--no-apply", default=False, help="Actually mutate the cluster (default: dry-run only)."),
-    ]
-    for option in reversed(options):
-        fn = option(fn)
-    return fn
-
-
-def _cluster_default(ctx: click.Context, derived_value: str | None, name: str, cli_value):
-    """Fill a flag from the cluster config unless it was passed explicitly."""
-    explicit = ctx.get_parameter_source(name) == ParameterSource.COMMANDLINE
-    return cli_value if explicit else (derived_value or cli_value)
-
-
+# --------------------------------------------------------------------------
+# CLI
+# --------------------------------------------------------------------------
 @click.group()
-def main() -> None:
-    """Traefik + cert-manager + HTTP-01 issuers for the CoreWeave /proxy ingress."""
-
-
-@main.command("install")
-@_shared_options
 @click.option(
-    "--acme-email",
-    default=None,
-    help="Email for the Let's Encrypt HTTP-01 ClusterIssuers (required unless --skip-issuers).",
+    "--cluster",
+    default="",
+    help="Iris cluster name; supplies --host, --ingress-class, and --kubeconfig from its controller.coreweave block.",
+)
+@click.option("--host", default="", help="Public endpoint host (e.g. iris-cw.oa.dev) [default: the cluster's].")
+@click.option(
+    "--ingress-class",
+    default="",
+    help=f"IngressClass the HTTP-01 solver routes through [default: the cluster's, else {DEFAULT_INGRESS_CLASS}].",
+)
+@click.option("--traefik-namespace", default="traefik", show_default=True)
+@click.option("--traefik-release", default="traefik", show_default=True, help="helm release name for Traefik.")
+@click.option("--cert-manager-namespace", default="cert-manager", show_default=True)
+@click.option(
+    "--cert-manager-release", default="cert-manager", show_default=True, help="helm release name for cert-manager."
 )
 @click.option(
-    "--host", default="", help="Public endpoint host (e.g. iris-cw.oa.dev); used to print the exact DNS + config."
+    "--kubeconfig", default="", help="kubeconfig to use [default: the cluster's, else $KUBECONFIG / ~/.kube/config]."
 )
-@click.option("--traefik-version", default=None, help="Pin the Traefik chart version (default: latest).")
-@click.option("--cert-manager-version", default=None, help="Pin the cert-manager chart version (default: latest).")
-@click.option("--skip-traefik", is_flag=True, help="Do not install Traefik (already present).")
-@click.option("--skip-cert-manager", is_flag=True, help="Do not install cert-manager (already present).")
-@click.option("--skip-issuers", is_flag=True, help="Do not create the HTTP-01 ClusterIssuers.")
+@click.option("--context", default=None, help="kube context to target.")
 @click.pass_context
-def install_cmd(
+def main(
     ctx: click.Context,
     cluster: str,
-    acme_email: str | None,
     host: str,
     ingress_class: str,
     traefik_namespace: str,
     traefik_release: str,
     cert_manager_namespace: str,
     cert_manager_release: str,
+    kubeconfig: str,
+    context: str | None,
+) -> None:
+    """Traefik + cert-manager + HTTP-01 issuers for the CoreWeave /proxy ingress."""
+    derived = _derive_from_cluster(cluster) if cluster else ClusterIngressSettings("", "", "")
+    ctx.obj = StackSettings(
+        cluster=cluster,
+        host=host or derived.host,
+        ingress_class=ingress_class or derived.ingress_class or DEFAULT_INGRESS_CLASS,
+        traefik_namespace=traefik_namespace,
+        traefik_release=traefik_release,
+        cert_manager_namespace=cert_manager_namespace,
+        cert_manager_release=cert_manager_release,
+        kubeconfig=kubeconfig or derived.kubeconfig or None,
+        context=context,
+    )
+
+
+@main.command("install")
+@click.option(
+    "--acme-email",
+    default=None,
+    help="Email for the Let's Encrypt HTTP-01 ClusterIssuers (required unless --skip-issuers).",
+)
+@click.option("--traefik-version", default=None, help="Pin the Traefik chart version (default: latest).")
+@click.option("--cert-manager-version", default=None, help="Pin the cert-manager chart version (default: latest).")
+@click.option("--skip-traefik", is_flag=True, help="Do not install Traefik (already present).")
+@click.option("--skip-cert-manager", is_flag=True, help="Do not install cert-manager (already present).")
+@click.option("--skip-issuers", is_flag=True, help="Do not create the HTTP-01 ClusterIssuers.")
+@click.option("--apply/--no-apply", default=False, help="Actually mutate the cluster (default: dry-run only).")
+@click.pass_obj
+def install_cmd(
+    settings: StackSettings,
+    acme_email: str | None,
     traefik_version: str | None,
     cert_manager_version: str | None,
     skip_traefik: bool,
     skip_cert_manager: bool,
     skip_issuers: bool,
-    kubeconfig: str | None,
-    context: str | None,
     apply: bool,
 ) -> None:
     """Install the cluster-wide ingress prerequisites."""
-    if cluster:
-        derived = _derive_from_cluster(cluster)
-        host = _cluster_default(ctx, derived.host, "host", host)
-        ingress_class = _cluster_default(ctx, derived.ingress_class, "ingress_class", ingress_class)
-        kubeconfig = _cluster_default(ctx, derived.kubeconfig, "kubeconfig", kubeconfig)
-
     install(
+        settings,
         acme_email=acme_email,
-        host=host,
-        from_cluster=cluster,
-        ingress_class=ingress_class,
-        traefik_namespace=traefik_namespace,
-        traefik_release=traefik_release,
-        cert_manager_namespace=cert_manager_namespace,
-        cert_manager_release=cert_manager_release,
         traefik_version=traefik_version,
         cert_manager_version=cert_manager_version,
         skip_traefik=skip_traefik,
         skip_cert_manager=skip_cert_manager,
         skip_issuers=skip_issuers,
-        kubeconfig=kubeconfig,
-        context=context,
         apply=apply,
     )
 
 
 @main.command("uninstall")
-@_shared_options
-@click.pass_context
-def uninstall_cmd(
-    ctx: click.Context,
-    cluster: str,
-    ingress_class: str,
-    traefik_namespace: str,
-    traefik_release: str,
-    cert_manager_namespace: str,
-    cert_manager_release: str,
-    kubeconfig: str | None,
-    context: str | None,
-    apply: bool,
-) -> None:
+@click.option("--apply/--no-apply", default=False, help="Actually mutate the cluster (default: dry-run only).")
+@click.pass_obj
+def uninstall_cmd(settings: StackSettings, apply: bool) -> None:
     """Tear the whole stack back down and verify nothing remains."""
-    if cluster:
-        derived = _derive_from_cluster(cluster)
-        ingress_class = _cluster_default(ctx, derived.ingress_class, "ingress_class", ingress_class)
-        kubeconfig = _cluster_default(ctx, derived.kubeconfig, "kubeconfig", kubeconfig)
-
-    uninstall(
-        ingress_class=ingress_class,
-        traefik_namespace=traefik_namespace,
-        traefik_release=traefik_release,
-        cert_manager_namespace=cert_manager_namespace,
-        cert_manager_release=cert_manager_release,
-        kubeconfig=kubeconfig,
-        context=context,
-        apply=apply,
-    )
+    uninstall(settings, apply=apply)
 
 
 if __name__ == "__main__":
