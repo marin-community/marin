@@ -6,7 +6,6 @@ import functools
 import logging
 import time
 from dataclasses import dataclass, field
-from pathlib import Path
 
 import equinox as eqx
 import jax
@@ -51,7 +50,7 @@ from levanter.utils.logging import LoadingTimeTrackerIterator
 from experiments.grug.base.model import GrugModelConfig, Transformer
 from experiments.grug.checkpointing import restore_grug_state_from_checkpoint
 from experiments.grug.dispatch import dispatch_grug_training_run
-from experiments.grug.sharding_dump import default_grug_sharding_dump_path, dump_grug_state_sharding_artifact
+from experiments.grug.sharding_dump import dump_grug_state_sharding_run_artifact
 
 logger = logging.getLogger(__name__)
 _BACKWARD_FLOW_METRICS_KEY = "_backward_flow"
@@ -323,17 +322,6 @@ def initial_state(
     )
 
 
-def _dump_state_sharding(
-    state: GrugTrainState,
-    *,
-    trainer: TrainerConfig,
-    run_id: str,
-    path_override: str | None,
-) -> None:
-    path = Path(path_override) if path_override is not None else default_grug_sharding_dump_path(trainer.log_dir, run_id)
-    dump_grug_state_sharding_artifact(state, path)
-
-
 def _make_train_step(
     optimizer: optax.GradientTransformation,
     mp: jmp.Policy,
@@ -493,9 +481,9 @@ def _run_grug_local(config: GrugRunConfig) -> None:
             mesh=mesh,
             allow_partial=trainer.allow_partial_checkpoint,
         )
-        _dump_state_sharding(
+        dump_grug_state_sharding_run_artifact(
             state,
-            trainer=trainer,
+            log_dir=trainer.log_dir,
             run_id=run_id,
             path_override=config.trainer.sharding_dump_path,
         )

@@ -44,6 +44,17 @@ def dump_grug_state_sharding_artifact(state: GrugStateWithSharding, path: Path) 
     current_tracker().log_artifact(path, name=GRUG_SHARDING_ARTIFACT_NAME, type="sharding")
 
 
+def dump_grug_state_sharding_run_artifact(
+    state: GrugStateWithSharding,
+    *,
+    log_dir: Path,
+    run_id: str,
+    path_override: str | None,
+) -> None:
+    path = Path(path_override) if path_override is not None else default_grug_sharding_dump_path(log_dir, run_id)
+    dump_grug_state_sharding_artifact(state, path)
+
+
 def default_grug_sharding_dump_path(log_dir: Path, run_id: str) -> Path:
     return Path(log_dir) / run_id / "artifacts" / GRUG_SHARDING_DUMP_FILENAME
 
