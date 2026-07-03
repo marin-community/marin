@@ -653,7 +653,7 @@ def _selected_logprob(logits: Any, token_id: int) -> float:
     return float(logits_f64[token_id] - log_z)
 
 
-def _executable_model_from_legacy_split(model: Any) -> Any:
+def _executable_model_from_legacy_split(model: Any, *, capacity_factor: float = 1.0) -> Any:
     import equinox as eqx  # noqa: PLC0415
     import jax.numpy as jnp  # noqa: PLC0415
     from levanter.grug.grug_moe import MoEExpertMlp  # noqa: PLC0415
@@ -668,7 +668,7 @@ def _executable_model_from_legacy_split(model: Any) -> Any:
             w_down=split_mlp.w_down,
             implementation=split_mlp.cfg.moe_implementation,
             activation=ActivationFunctionEnum.silu,
-            capacity_factor=1.0,
+            capacity_factor=capacity_factor,
         )
         return MoEMLP(
             router=split_mlp.router,
@@ -694,6 +694,7 @@ def _greedy_decode(
     batch_size: int,
     decode_seq_len: int,
     pad_token_id: int,
+    use_active_prefix: bool = False,
 ) -> dict[str, Any]:
     import jax  # noqa: PLC0415
     import jax.numpy as jnp  # noqa: PLC0415
@@ -713,16 +714,20 @@ def _greedy_decode(
     generated_token_texts: list[str] = []
     selected_token_logprobs: list[float] = []
     steps: list[dict[str, Any]] = []
+    active_seq_lengths: list[int] = []
     position_logits = jax.jit(position_logits_batch)
     started = time.time()
 
     for step_index in range(max_new_tokens):
-        position = jnp.asarray(len(prompt_ids) + step_index - 1, dtype=jnp.int32)
-        step_logits_batch = position_logits(model, jnp.asarray(token_ids_array, dtype=jnp.int32), position)
+        active_seq_len = len(prompt_ids) + step_index
+        position = jnp.asarray(active_seq_len - 1, dtype=jnp.int32)
+        step_token_ids_array = token_ids_array[:, :active_seq_len] if use_active_prefix else token_ids_array
+        step_logits_batch = position_logits(model, jnp.asarray(step_token_ids_array, dtype=jnp.int32), position)
         step_logits = np.asarray(jax.device_get(step_logits_batch))[0]
         selected_token_id = int(np.argmax(step_logits, axis=-1))
         selected_text = _decode_one(tokenizer, selected_token_id)
         selected_logprob = _selected_logprob(step_logits, selected_token_id)
+        active_seq_lengths.append(active_seq_len)
         generated_ids.append(selected_token_id)
         generated_token_texts.append(selected_text)
         selected_token_logprobs.append(selected_logprob)
@@ -741,6 +746,8 @@ def _greedy_decode(
         "prompt_token_count": len(prompt_ids),
         "decode_batch_size": batch_size,
         "decode_seq_len": decode_seq_len,
+        "use_active_prefix": use_active_prefix,
+        "active_seq_lengths": active_seq_lengths,
         "pad_token_id": pad_token_id,
         "generated_token_ids": generated_ids,
         "generated_token_texts": generated_token_texts,

@@ -81,6 +81,16 @@ def _batch_reshard(x: jax.Array) -> jax.Array:
     return reshard(x, _batch_spec())
 
 
+def _partition_spec_of(x: jax.Array) -> Any | None:
+    sharding = getattr(x, "sharding", None)
+    spec = getattr(sharding, "spec", None)
+    if spec is not None:
+        return spec
+    aval = getattr(x, "aval", None)
+    sharding = getattr(aval, "sharding", None) if aval is not None else None
+    return getattr(sharding, "spec", None)
+
+
 def _layer_attention_masks(mask: AttentionMask, *, sliding_window: int) -> tuple[AttentionMask, AttentionMask]:
     return mask.with_sliding_window(sliding_window // 2), mask.with_sliding_window(sliding_window)
 
@@ -291,7 +301,7 @@ class CausalSelfAttention(eqx.Module):
         q = q * self.cfg.qk_mult
         attn_out = attention(q, k, v, mask, implementation=self.cfg.attention_implementation)
         aligned_v = align_kv_heads(v, num_q_heads=attn_out.shape[2])
-        aligned_v = reshard(aligned_v, P(_BATCH_AXES, None, "model", None))
+        aligned_v = reshard(aligned_v, _partition_spec_of(attn_out) or P(_BATCH_AXES, None, None, "model"))
         # Exclusive Self Attention: subtract the component of yᵢ parallel to vᵢ.
         # zᵢ = yᵢ - (yᵢᵀvᵢ / ‖vᵢ‖²) vᵢ, per head.
         dot = jnp.sum(attn_out * aligned_v, axis=-1, keepdims=True)
@@ -300,7 +310,11 @@ class CausalSelfAttention(eqx.Module):
         # Headwise gating: sigmoid(x @ attn_gate) produces one scalar per head.
         gate = 2 * jax.nn.sigmoid(jnp.einsum("bsd,dn->bsn", x, self.attn_gate))[..., None]
         attn_out = gate * attn_out
-        attn_out = rearrange(attn_out, "... n d -> ... (n d)")
+        attn_out = jnp.reshape(
+            attn_out,
+            (*attn_out.shape[:-2], attn_out.shape[-2] * attn_out.shape[-1]),
+            out_sharding=P(_BATCH_AXES, None, "model"),
+        )
         return jnp.einsum("bsh,hd->bsd", attn_out, self.w_o, out_sharding=batch_spec)
 
 
