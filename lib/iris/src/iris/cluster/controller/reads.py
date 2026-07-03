@@ -37,6 +37,7 @@ from iris.cluster.controller.reconcile.worker import ReconcileRow
 from iris.cluster.controller.schema import (
     USER_ROLE_DEFAULT,
     federated_jobs_table,
+    federated_tasks_table,
     federation_changelog_table,
     federation_sync_state_table,
     hint_rare_state,
@@ -969,22 +970,52 @@ def bulk_get_attempts(
     return result
 
 
-_RESOLVE_ATTEMPT_UIDS_STMT = select(
-    task_attempts_table.c.attempt_uid,
-    task_attempts_table.c.task_id,
-    task_attempts_table.c.attempt_id,
-).where(task_attempts_table.c.attempt_uid.in_(bindparam("uids", expanding=True)))
+# Resolution joins ``local_tasks`` so it only ever resolves attempts of locally
+# owned tasks. A federated task's mirrored attempts (task ``child_cluster`` set)
+# are excluded here, keeping this worker-routing / reconcile reader off the fold.
+def all_attempts_for_tasks(tx: Tx, task_ids: Sequence[JobName]) -> dict[JobName, tuple[object, ...]]:
+    """Return ``{task_id: (attempt_row, ...)}`` with every attempt per task, ascending by attempt id.
+
+    Unlike the list view's bounded per-task attach, this loads the full history —
+    the federation sync delta ships it so the parent mirrors complete attempt
+    history for a handed-off job rather than the reduced list-view set.
+    """
+    if not task_ids:
+        return {}
+    rows = tx.execute(
+        select(*ATTEMPT_COLS)
+        .where(task_attempts_table.c.task_id.in_(bindparam("task_ids", expanding=True)))
+        .order_by(task_attempts_table.c.task_id.asc(), task_attempts_table.c.attempt_id.asc()),
+        {"task_ids": list(task_ids)},
+    ).all()
+    grouped: dict[JobName, list[object]] = {}
+    for row in rows:
+        grouped.setdefault(row.task_id, []).append(row)
+    return {task_id: tuple(attempts) for task_id, attempts in grouped.items()}
+
+
+_RESOLVE_ATTEMPT_UIDS_STMT = (
+    select(
+        task_attempts_table.c.attempt_uid,
+        task_attempts_table.c.task_id,
+        task_attempts_table.c.attempt_id,
+    )
+    .select_from(task_attempts_table.join(local_tasks, local_tasks.c.task_id == task_attempts_table.c.task_id))
+    .where(task_attempts_table.c.attempt_uid.in_(bindparam("uids", expanding=True)))
+)
 
 
 def resolve_attempt_uids(
     tx: Tx,
     uids: Sequence[AttemptUid],
 ) -> dict[AttemptUid, tuple[JobName, int]]:
-    """Return ``{attempt_uid: (task_id, attempt_id)}`` for the requested UIDs.
+    """Return ``{attempt_uid: (task_id, attempt_id)}`` for locally owned tasks' UIDs.
 
     Drives the worker-routing path: an ``AttemptObservation`` carrying an
     ``attempt_uid`` is resolved to its composite key through the
-    ``idx_task_attempts_uid`` unique index. Missing UIDs are silently absent.
+    ``idx_task_attempts_uid`` unique index. Restricted to ``local_tasks`` so a
+    federated task's mirrored attempt never resolves. Missing UIDs are silently
+    absent.
     """
     if not uids:
         return {}
@@ -1043,10 +1074,23 @@ TASK_DETAIL_COLS = (
 )
 
 
+def task_detail_query():
+    """Select ``TASK_DETAIL_COLS`` plus the ``federated_tasks.peer_worker_label`` sidecar.
+
+    The outer join yields ``peer_worker_label`` for a federated task (its display
+    worker identity, since it has no local worker row) and NULL for a local task.
+    Shared by task detail, bulk detail, and the list view so every task read
+    carries the label.
+    """
+    return select(*TASK_DETAIL_COLS, federated_tasks_table.c.peer_worker_label).select_from(
+        tasks_table.outerjoin(federated_tasks_table, federated_tasks_table.c.task_id == tasks_table.c.task_id)
+    )
+
+
 def get_task_detail(tx: Tx, task_id: JobName) -> TaskDetailRow | None:
     """Return SA Row for ``task_id`` or None."""
     return tx.execute(  # type: ignore[return-value]
-        select(*TASK_DETAIL_COLS).where(tasks_table.c.task_id == bindparam("task_id")),
+        task_detail_query().where(tasks_table.c.task_id == bindparam("task_id")),
         {"task_id": task_id},
     ).first()
 
@@ -1057,7 +1101,7 @@ def bulk_get_task_detail(tx: Tx, task_ids: Iterable[JobName]) -> dict[JobName, T
     if not ids:
         return {}
     rows = tx.execute(
-        select(*TASK_DETAIL_COLS).where(tasks_table.c.task_id.in_(bindparam("task_ids", expanding=True))),
+        task_detail_query().where(tasks_table.c.task_id.in_(bindparam("task_ids", expanding=True))),
         {"task_ids": ids},
     ).all()
     return {row.task_id: row for row in rows}  # type: ignore[return-value]

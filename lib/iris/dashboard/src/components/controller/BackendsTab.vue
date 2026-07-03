@@ -5,7 +5,6 @@ import { useBackends } from '@/composables/useBackends'
 import { useAutoRefresh, DEFAULT_REFRESH_MS } from '@/composables/useAutoRefresh'
 import type { BackendSummary, PeerSummary, UnroutableJob, ListPeersResponse } from '@/types/rpc'
 import { formatRelativeTime } from '@/utils/formatting'
-import { peerHomeUrl } from '@/utils/federation'
 import InfoRow from '@/components/shared/InfoRow.vue'
 import MetricCard from '@/components/shared/MetricCard.vue'
 import ConstraintChip from '@/components/shared/ConstraintChip.vue'
@@ -181,10 +180,6 @@ function peerLastSync(p: PeerSummary): string {
   const ms = Number(p.lastSyncMs ?? '0')
   return ms > 0 ? formatRelativeTime(ms) : 'never'
 }
-
-function peerHome(p: PeerSummary): string | undefined {
-  return peerHomeUrl(p.dashboardUrl)
-}
 </script>
 
 <template>
@@ -307,8 +302,8 @@ function peerHome(p: PeerSummary): string | undefined {
             </tr>
           </template>
 
-          <!-- Peer rows: not expandable; the ID links out to the peer's own
-               dashboard, the one place the parent's mirror of the peer stops. -->
+          <!-- Peer rows: not expandable; the ID links inward to the parent's jobs
+               list filtered to that cluster (?cluster=). -->
           <tr
             v-for="p in peerSummaries"
             :key="'peer:' + p.peerId"
@@ -318,14 +313,10 @@ function peerHome(p: PeerSummary): string | undefined {
               <span class="flex items-center gap-1.5">
                 <span class="inline-block w-3" />
                 <span class="w-2 h-2 rounded-full shrink-0" :class="peerHealthDotClass(p)" />
-                <a
-                  v-if="peerHome(p)"
-                  :href="peerHome(p)"
-                  target="_blank"
-                  rel="noopener noreferrer"
+                <RouterLink
+                  :to="{ path: '/', query: { cluster: p.peerId } }"
                   class="text-accent hover:underline"
-                >{{ p.peerId }}</a>
-                <span v-else>{{ p.peerId }}</span>
+                >{{ p.peerId }}</RouterLink>
                 <span class="inline-block rounded bg-accent/10 text-accent px-1 text-[10px] font-semibold uppercase tracking-wide">peer</span>
               </span>
             </td>
@@ -508,16 +499,7 @@ function peerHome(p: PeerSummary): string | undefined {
           <InfoRow label="active jobs">{{ p.activeFederatedJobs ?? 0 }}</InfoRow>
 
           <div class="flex items-center gap-3 pt-1 text-xs">
-            <a
-              v-if="peerHome(p)"
-              :href="peerHome(p)"
-              target="_blank"
-              rel="noopener noreferrer"
-              class="text-accent hover:underline"
-            >
-              Open dashboard ↗
-            </a>
-            <RouterLink :to="`/?cluster=${encodeURIComponent(p.peerId)}`" class="ml-auto text-accent hover:underline">
+            <RouterLink :to="{ path: '/', query: { cluster: p.peerId } }" class="ml-auto text-accent hover:underline">
               Jobs →
             </RouterLink>
           </div>

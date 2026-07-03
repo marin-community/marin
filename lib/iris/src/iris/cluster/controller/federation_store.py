@@ -184,9 +184,10 @@ class ControllerFederationStore:
             index = peer_task_id.task_index
             if index is None:
                 continue
+            local_task_id = local_job_id.task(index)
             writes.mirror_federated_task(
                 cur,
-                task_id=local_job_id.task(index),
+                task_id=local_task_id,
                 job_id=local_job_id,
                 task_index=index,
                 peer_id=peer_id,
@@ -200,6 +201,7 @@ class ControllerFederationStore:
                 worker_address=task.worker_address,
                 peer_worker_label=task.worker_id or task.worker_address,
             )
+            writes.mirror_federated_attempts(cur, task_id=local_task_id, peer_id=peer_id, attempts=task.attempts)
 
     def _set_replace(self, cur, peer_id: str, deltas) -> None:
         """Full-resync set-replacement: drop any local handle for ``peer_id``

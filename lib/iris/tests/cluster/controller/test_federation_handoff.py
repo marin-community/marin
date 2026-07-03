@@ -27,7 +27,7 @@ from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.federation.manager import FederationManager, encode_remote_job_id
 from iris.cluster.federation.peer import FederationPeer
 from iris.cluster.federation.store import HandoffAdmission, HandoffSpec, HandoffState
-from iris.cluster.types import JobName
+from iris.cluster.types import AttemptUid, JobName
 from iris.managed_thread import get_thread_container
 from iris.rpc import controller_pb2, job_pb2
 from rigging.server_auth import VerifiedIdentity, identity_scope
@@ -195,6 +195,45 @@ def test_handoff_materializes_on_peer_and_syncs_back(tmp_path, log_client):
         (mirrored,) = query_tasks_for_job(parent_state, parent_job_id)
         assert mirrored.state == job_pb2.TASK_STATE_SUCCEEDED
         assert mirrored.child_cluster == "cw"
+
+
+def test_sync_mirrors_attempts_and_worker_identity_natively(tmp_path, log_client):
+    """After sync-back the parent renders a federated task natively: the peer's
+    attempt history is mirrored and the peer-side worker identity is surfaced (as
+    display text — there is no local worker row), and the mirrored attempt stays
+    off the worker-routing fold (its namespaced uid never resolves)."""
+    with ExitStack() as stack:
+        parent_service, parent_state = _make_service(stack, "parent", tmp_path, log_client)
+        peer_service, peer_state = _make_service(stack, "peer", tmp_path, log_client)
+        manager = _attach_federation(parent_service, _InProcessPeerConnection(peer_service))
+
+        response = parent_service.launch_job(_cluster_pinned_request("fed-job"), None)
+        parent_job_id = JobName.from_wire(response.job_id)
+        remote_job_id = JobName.from_wire(encode_remote_job_id("parent", parent_job_id))
+
+        _run_peer_task_to_success(peer_state, remote_job_id)
+        manager.sync_once()
+
+        (mirrored,) = query_tasks_for_job(parent_state, parent_job_id)
+        task = parent_service.get_task_status(
+            controller_pb2.Controller.GetTaskStatusRequest(task_id=mirrored.task_id.to_wire()), None
+        ).task
+
+        # The peer's attempt renders natively, and the worker identity is surfaced
+        # from the peer (the task has no local worker row, so it is display-only).
+        assert task.child_cluster == "cw"
+        assert task.worker_id == "w1"
+        assert len(task.attempts) == 1
+        assert task.attempts[0].state == job_pb2.TASK_STATE_SUCCEEDED
+        assert task.attempts[0].worker_id == ""  # no local worker FK for a mirrored attempt
+
+        # Safety: the mirrored uid is namespaced under the peer and, because uid
+        # resolution is scoped to local_tasks, never resolves — so reconcile's
+        # worker-routing can never act on a federated attempt.
+        with parent_state._db.read_snapshot() as tx:
+            (attempt_row,) = reads.all_attempts_for_tasks(tx, [mirrored.task_id])[mirrored.task_id]
+            assert attempt_row.attempt_uid.startswith("cw~")
+            assert reads.resolve_attempt_uids(tx, [AttemptUid(attempt_row.attempt_uid)]) == {}
 
 
 def test_dashboard_reads_expose_child_cluster_and_filter_by_it(tmp_path, log_client):

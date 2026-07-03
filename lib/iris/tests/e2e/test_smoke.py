@@ -614,7 +614,8 @@ def test_dashboard_backends_tab_with_peer(smoke_cluster, smoke_page, smoke_scree
 
     The smoke cluster has no real peers, so ListPeers is stubbed at the browser to
     prove the peer card renders: health dot, "peer" tag, aggregated device caps,
-    worker/task counts, and the deep-link to the peer's own dashboard.
+    worker/task counts, and an inward link to the parent's cluster-filtered jobs
+    (never an outbound link to the peer's own dashboard).
     """
     if isinstance(smoke_page, _NoOpPage):
         pytest.skip("Playwright unavailable")
@@ -672,10 +673,14 @@ def test_dashboard_backends_tab_with_peer(smoke_cluster, smoke_page, smoke_scree
         # Target the peer card heading, not the peer's (hidden) <option> in the
         # scope <select>, which also carries the peer id.
         assert_visible(smoke_page, "h3:has-text('cw-smoke-peer')")
+        # The peer links inward to the parent's cluster-filtered jobs, not out to
+        # the peer's own dashboard (which users can't reach).
+        assert_visible(smoke_page, "a[href*='cluster=cw-smoke-peer']")
         smoke_screenshot(
             "backends-tab-peer",
             "Execution-targets tab with a federation peer card: health dot, peer tag, "
-            "aggregated caps, worker/task counts, and a link to the peer dashboard",
+            "aggregated caps, worker/task counts, and an inward link to the parent's "
+            "cluster-filtered jobs",
         )
     finally:
         smoke_page.unroute("**/ListPeers", _fulfill_peers)

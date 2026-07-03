@@ -19,7 +19,7 @@ Areas covered:
 """
 
 import secrets
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
 
 from rigging.timing import Timestamp
@@ -50,6 +50,7 @@ from iris.cluster.controller.worker_health import WorkerHealthTracker
 from iris.cluster.federation.store import FederationDirection
 from iris.cluster.types import AttemptUid, JobName, WorkerId
 from iris.rpc import job_pb2
+from iris.time_proto import timestamp_from_proto
 
 REGISTERED_WRITE_FUNCTIONS: list[Callable] = []
 
@@ -928,6 +929,55 @@ def mirror_federated_task(
         .values(task_id=task_id, peer_worker_label=peer_worker_label)
         .on_conflict_do_update(index_elements=["task_id"], set_={"peer_worker_label": peer_worker_label})
     )
+
+
+@writes_to(task_attempts_table)
+def mirror_federated_attempts(
+    tx: Tx,
+    *,
+    task_id: JobName,
+    peer_id: str,
+    attempts: Sequence[job_pb2.TaskAttempt],
+) -> None:
+    """Upsert a federated task's attempt rows from a sync delta.
+
+    A federated task has no local ``workers`` row, so ``worker_id`` is NULL. The
+    peer-side ``attempt_uid`` is namespaced under ``peer_id`` so it stays unique
+    against the ``idx_task_attempts_uid`` index and is never matched by
+    ``resolve_attempt_uids`` (which resolves only ``local_tasks``). Upserts on the
+    ``(task_id, attempt_id)`` PK so a re-sent delta is idempotent.
+    """
+    for attempt in attempts:
+        started = timestamp_from_proto(attempt.started_at).epoch_ms() if attempt.HasField("started_at") else None
+        finished = timestamp_from_proto(attempt.finished_at).epoch_ms() if attempt.HasField("finished_at") else None
+        child_uid = attempt.attempt_uid or f"{task_id.to_wire()}:{attempt.attempt_id}"
+        attempt_uid = f"{peer_id}~{child_uid}"
+        tx.execute(
+            sqlite_insert(task_attempts_table)
+            .values(
+                task_id=task_id,
+                attempt_id=attempt.attempt_id,
+                worker_id=None,
+                state=attempt.state,
+                created_at_ms=started or 0,
+                started_at_ms=started,
+                finished_at_ms=finished,
+                exit_code=attempt.exit_code or None,
+                error=attempt.error or None,
+                attempt_uid=attempt_uid,
+                backend_id="",
+            )
+            .on_conflict_do_update(
+                index_elements=["task_id", "attempt_id"],
+                set_={
+                    "state": attempt.state,
+                    "started_at_ms": started,
+                    "finished_at_ms": finished,
+                    "exit_code": attempt.exit_code or None,
+                    "error": attempt.error or None,
+                },
+            )
+        )
 
 
 @writes_to(federation_sync_state_table)

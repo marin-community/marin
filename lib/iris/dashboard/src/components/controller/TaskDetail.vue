@@ -31,14 +31,13 @@ import CopyButton from '@/components/shared/CopyButton.vue'
 import EndpointLink from '@/components/shared/EndpointLink.vue'
 import ClusterLink from '@/components/shared/ClusterLink.vue'
 import FederatedLogsNotice from '@/components/shared/FederatedLogsNotice.vue'
-import { peerHomeUrl } from '@/utils/federation'
 
 const props = defineProps<{
   jobId: string
   taskId: string
 }>()
 
-const { multiBackend, peerById, ensurePeers } = useBackends()
+const { multiBackend } = useBackends()
 
 const {
   data: taskResponse,
@@ -49,12 +48,6 @@ const {
 
 const task = computed(() => taskResponse.value?.task ?? null)
 
-// A federated task has no local worker row; link to the peer's dashboard home
-// (TaskStatus carries no remote job id, so we can't target the exact job page —
-// the parent's JobDetail owns that richer deep-link). Undefined when local.
-const peerHomeLink = computed(() =>
-  task.value?.childCluster ? peerHomeUrl(peerById(task.value.childCluster)?.dashboardUrl) : undefined,
-)
 const jobResources = computed(() => taskResponse.value?.jobResources ?? null)
 
 // Endpoints this task registered with the controller. Each is reachable
@@ -237,7 +230,6 @@ watch(isActive, (active) => {
   }
 })
 
-onMounted(ensurePeers)
 onMounted(async () => {
   await fetchTask()
   fetchTaskStats()
@@ -358,13 +350,10 @@ watch(() => props.taskId, async () => {
             <span class="font-mono">{{ task.backendId }}</span>
           </InfoRow>
           <!-- Cluster: shown for a federated task regardless of the Backend row's
-               multiBackend gate; links to the peer's dashboard home when known. -->
+               multiBackend gate; links inward to the parent's jobs list filtered
+               to this cluster. -->
           <InfoRow v-if="task.childCluster" label="Cluster">
-            <ClusterLink
-              :cluster="task.childCluster"
-              :href="peerHomeLink"
-              :title="'Open the ' + task.childCluster + ' dashboard'"
-            />
+            <ClusterLink :cluster="task.childCluster" />
           </InfoRow>
           <div v-if="isActive" class="mt-3 pt-3 border-t border-surface-border">
             <ProfileButtons :profiling="profiling" @profile="handleProfile" />
@@ -554,7 +543,6 @@ watch(() => props.taskId, async () => {
           v-if="task.childCluster"
           :cluster="task.childCluster"
           subject="task"
-          :href="peerHomeLink"
         />
         <LogViewer v-else ref="logViewerRef" :task-id="taskId" :attempts="task.attempts" :current-attempt-id="task.currentAttemptId" />
       </div>

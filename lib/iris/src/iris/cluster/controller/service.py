@@ -261,11 +261,14 @@ class TaskWithAttempts:
     container_id: str | None
     backend_id: str
     child_cluster: str
+    # Display worker identity for a federated task (the peer-side worker name from
+    # the federated_tasks sidecar); "" for a local task, which uses its worker FK.
+    peer_worker_label: str
     attempts: tuple[Any, ...]
 
     @classmethod
     def from_row(cls, row, attempts: tuple[Any, ...]) -> "TaskWithAttempts":
-        """Build from an SA Row (matching TASK_DETAIL_COLS) plus attempt rows."""
+        """Build from an SA Row (matching TASK_DETAIL_COLS + peer_worker_label) plus attempt rows."""
         return cls(
             task_id=row.task_id,
             job_id=row.job_id,
@@ -286,6 +289,7 @@ class TaskWithAttempts:
             container_id=row.container_id,
             backend_id=str(row.backend_id or ""),
             child_cluster=str(row.child_cluster or ""),
+            peer_worker_label=str(row.peer_worker_label or ""),
             attempts=attempts,
         )
 
@@ -340,10 +344,15 @@ def task_to_proto(task: TaskWithAttempts, worker_address: str = "") -> job_pb2.T
         attempts.append(proto_attempt)
 
     active_wid = _active_worker_id(task)
+    # A federated task has no local worker FK; its worker identity is the peer-side
+    # label mirrored into the federated_tasks sidecar. Surface it as worker_id so
+    # the task views render the worker natively (as non-link text, since there is
+    # no local worker detail page for a remote worker).
+    worker_id = str(active_wid) if active_wid else (task.peer_worker_label if task.child_cluster else "")
     proto = job_pb2.TaskStatus(
         task_id=task.task_id.to_wire(),
         state=task.state,
-        worker_id=str(active_wid) if active_wid else "",
+        worker_id=worker_id,
         worker_address=worker_address or task.current_worker_address or "",
         exit_code=task.exit_code or 0,
         error=task.error or "",
@@ -523,7 +532,7 @@ def _tasks_for_listing(tx: Tx, *, job_id: JobName) -> list[TaskWithAttempts]:
     """
     job_task_ids = select(tasks_table.c.task_id).where(tasks_table.c.job_id == job_id)
     task_rows = tx.execute(
-        select(*reads.TASK_DETAIL_COLS)
+        reads.task_detail_query()
         .where(tasks_table.c.job_id == job_id)
         .order_by(tasks_table.c.job_id.asc(), tasks_table.c.task_index.asc())
     ).all()
@@ -3077,8 +3086,17 @@ class ControllerServiceImpl:
         job = reads.get_job_detail(q, job_id)
         if job is None:
             return None
-        tasks = _tasks_for_listing(q, job_id=job_id)
-        changed_tasks = [task_to_proto(task) for task in tasks if all_tasks or task.task_id.task_index in task_indexes]
+        # Full attempt history per changed task (not the list view's reduced set),
+        # so the parent mirrors the complete attempt list for the handed-off job.
+        task_rows = [
+            row
+            for row in q.execute(reads.task_detail_query().where(tasks_table.c.job_id == job_id)).all()
+            if all_tasks or row.task_id.task_index in task_indexes
+        ]
+        attempts_by_task = reads.all_attempts_for_tasks(q, [row.task_id for row in task_rows])
+        changed_tasks = [
+            task_to_proto(TaskWithAttempts.from_row(row, attempts_by_task.get(row.task_id, ()))) for row in task_rows
+        ]
         return controller_pb2.Controller.FederationJobDelta(
             remote_job_id=job_id.to_wire(),
             summary=self._federated_job_summary(q, job),
