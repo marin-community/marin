@@ -31,6 +31,18 @@ improvement over the stock Llama-3 tokenizer** for target grug-moe models.
 - **Conclusion**: superbpe-128k is the serving-cost frontrunner for an English/math target;
   carried to the trained ladder.
 
+## Milestones (running)
+
+1. ✅ Fertility pre-filter (EXP-001) and off-the-shelf isoFLOP ladder (EXP-002): 5 arms × 3 points.
+2. ✅ **Two co-leading tokenizers at ≈−5% feBPB**: superbpe-128k (−4.7%) and gpt-neox-50k (−5.1%),
+   which trade the lead by scenario (gpt-neox wins quality-efficiency / natural mix; superbpe wins
+   serving-heavy). Neither hits the 10% goal alone.
+3. ✅ TokenMonster + #5837 plans investigated (Track B) → strictly weaker than SuperBPE, skip.
+4. 🔄 n-gram embedding **rebuilt to the real Over-Encoding/LongCat method** (EXP-004: 65k→4M
+   buckets, mean-combine, norm-matched init, low-rank); OOM fixed (512g); bucket screen + b4M
+   ladders on marin & superbpe running.
+5. ⏳ **Track C — train our own tokenizers** (below): the main remaining lever to reach 10% feBPB.
+
 ## EXP-002 — isoFLOP tokenizer ladder (5 arms × 3 points)
 
 - **Hypothesis**: at equal training FLOPs, a superword tokenizer reaches lower BPB (ingests more
@@ -133,3 +145,28 @@ adding marker tokens → likely a net feBPB regression; TokenMonster already bak
 still loses to SuperBPE. (4) No other new tokenizer families in #6796/#5837 or linked #4971/#5821/
 #5842/#5079/#4915 (byt5 = our byte axis; gemma-2 = gemma family). **Verdict: not worth a trained
 run; SuperBPE-128k remains the tokenizer lever.** The uplift path to 10% feBPB is superbpe + n-gram.
+
+---
+
+## Track C — train our own tokenizers (IN SCOPE) _(queued after n-gram validation)_
+
+Off-the-shelf arms only sample what other teams optimized for other data. The point of this work is
+to explore the full space, so we train our own tokenizers on the grug-moe data mix using current
+research and score them on the same feBPB rubric. Delegated to sub-agents; each trained tokenizer
+exports an HF `tokenizer.json`, registers as a `TokenizerArm`, and runs fertility → ladder → feBPB.
+
+Motivation from EXP-002: gpt-neox-50k (small vocab) and superbpe-128k (superword) each win a
+different regime. A tokenizer that is *both* superword *and* right-sized for our mix could dominate.
+
+- **C1 — SuperBPE, trained on our mix, (vocab × transition-point) sweep.** SuperBPE (allenai,
+  arXiv 2503.13423) trains a subword BPE then continues with whitespace-spanning merges past a
+  transition point `t`. Off-the-shelf superbpe-128k fixes one `(vocab, t)`; we sweep both on our
+  English/math/code mix. Vocab ∈ {64k, 96k, 128k, 160k}; `t` ∈ a few fractions. Highest-value cell.
+- **C2 — plain BPE vocab-size sweep on our mix** (control: does training on our own data beat the
+  off-the-shelf BPE arms at matched vocab?).
+- **C3 — newer methods**: survey + train the promising of BoundlessBPE, Picky-BPE, SaGe,
+  scaffold-BPE, digit-grouping/pretokenization variants; keep whatever clears the fertility filter.
+- **Compose with n-gram**: the best trained tokenizer × the best n-gram config is the final
+  candidate for the 10% feBPB target.
+- **Reproduce/replay**: training harness + per-tokenizer configs will live under
+  `experiments/tokenize/` with their own EXP entries and launch/collect commands as they run.
