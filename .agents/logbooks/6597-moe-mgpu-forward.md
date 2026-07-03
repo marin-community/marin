@@ -1361,3 +1361,49 @@ expert-major placement, W2 return identity, and source combine.
   - The source-push H100 pytest selection now directly exercises the W13, direct W2-return, and source-combine stages in
     addition to the public full-forward backend smokes.
   - This closes the objective's stage-specific H100 correctness coverage gap for the current staged forward path.
+
+## 2026-07-03 12:20 - Add small-EP H100 source-push stage coverage
+
+Extended the stage-specific H100 source-push pytest to cover the spec-literal small EP case in addition to the existing
+full H100 mesh case.
+
+- Commit Hash: `5b9ce15e` plus local diff in `lib/levanter/tests/grug/test_grugformer_moe.py`.
+- Code:
+  - `lib/levanter/tests/grug/test_grugformer_moe.py`
+- Change:
+  - Parameterized `test_source_push_stage_kernels_match_references_on_h100` over `EP=2` and `EP=8`.
+  - Both cases run the W13 source-plan kernel, direct W2-return kernel, and route-buffer source-combine kernel with
+    reference checks enabled.
+  - This directly covers the small-EP H100 stage requirement while preserving the previous full-mesh stage coverage.
+- Local verification:
+  - `uv run --package marin-levanter --group test pytest lib/levanter/tests/grug/test_grugformer_moe.py -q -n 0 -k 'source_push_stage_kernels_match_references_on_h100'`
+    - Result: `2 skipped, 22 deselected, 1 warning` on non-H100 local hardware.
+  - `uv run --package marin-levanter --group test pytest lib/levanter/tests/grug/test_grugformer_moe.py -q -n 0 -k source_push`
+    - Result: `1 passed, 4 skipped, 19 deselected, 1 warning` on non-H100 local hardware.
+  - `./infra/pre-commit.py --changed-files --fix`
+    - Result: all checks passed.
+- H100 verification:
+  - Job: `/dlwh/source-push-stage-ep2-h100-pytest-5b9ce15e-local-20260703-191712`
+  - Cluster: `cw-us-east-02a`
+  - Command:
+    ```bash
+    uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job run --no-wait \
+      --job-name source-push-stage-ep2-h100-pytest-5b9ce15e-local-20260703-191712 \
+      --cpu 16 --memory 128GB --disk 16GB --gpu H100x8 --reserve H100x8 \
+      --enable-extra-resources --extra gpu -- \
+      timeout 3600s uv run --package marin-levanter --group test pytest \
+      lib/levanter/tests/grug/test_grugformer_moe.py -q -n 0 -k source_push
+    ```
+  - Iris summary:
+    - State: `succeeded`
+    - Task count: `1`
+    - Exit code: `0`
+    - Duration: `125920 ms`
+    - Failure count: `0`
+    - Preemption count: `0`
+  - Pytest result:
+    - `5 passed, 19 deselected, 1 warning in 105.24s`.
+- Interpretation:
+  - The H100 source-push pytest now includes both the small EP=2 stage case requested by the spec and the full EP=8
+    stage case used by the target mesh.
+  - This is a coverage/proof-strength patch only; it does not change kernel behavior or performance.
