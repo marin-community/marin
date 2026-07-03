@@ -268,3 +268,48 @@ Added the Phase 3/4 CPU/JAX reference contract for source-push W2 return and det
 - Next action:
   - Implement Kernel B against this reference: destination-side W2 over source-padded expert-major hidden and return
     writes into source queue slots, then validate on a small H100 shape.
+
+## 2026-07-03 Destination-local W2 return kernel harness
+
+Added a package-private Phase 3 W2-return harness that consumes source-padded expert-major hidden rows and compact
+`recv_meta`, computes W2 with a Lane-lowered Mosaic WGMMA kernel, and writes destination-local return blocks indexed by
+`(dst_rank, recv_src_ordinal, entry, row, d)`.
+
+- Commit Hashes:
+  - `8c7f40290`: W2 return kernel harness and bench wrapper.
+  - `f3a9dc5e7`: synthetic expert-major hidden mode for target W2-only timing.
+- Code:
+  - `lib/levanter/src/levanter/grug/_moe/source_push_w2_return.py`
+  - `lib/levanter/scripts/bench/bench_source_push_w2_return.py`
+  - `lib/levanter/tests/grug/test_source_push_inbox.py`
+- Local verification:
+  - `uv run --package marin-levanter --group test pytest lib/levanter/tests/grug/test_source_push_inbox.py lib/levanter/tests/grug/test_source_push_plan.py -q`
+  - `32 passed, 11 warnings`
+  - `./infra/pre-commit.py --changed-files --fix`
+  - all checks passed
+- H100 smoke:
+  - Job: `/dlwh/source-push-w2-return-smoke-8c7f40290-20260703-0900`
+  - Config: `EP=8`, `T/rank=16`, `K=2`, `D=128`, `I=128`, `E_local=2`, `block_m=64`,
+    `block_k=64`, `block_n=64`, `entries_per_rank=2`, `hidden_input_mode=w13_reference`, `check=true`.
+  - Result: succeeded, `steady_state_time=0.000379963s`, `w2_tflops_per_rank=0.0883`,
+    `max_abs_diff=0.00746334`, `source_queue_max_abs_diff=0.00746334`, no drops/errors.
+- Target W2-only timing:
+  - Job: `/dlwh/source-push-w2-return-target-f3a9dc5e7-20260703-0908`
+  - Command: `uv run --package marin-levanter --group test python lib/levanter/scripts/bench/bench_source_push_w2_return.py --source-push-profile hopper_source_push_inbox_rough_balanced_216 --hidden-input-mode synthetic --no-check --warmup 1 --steps 3 --repeat-runs 5 --separate-compile --no-progress-events --git-sha f3a9dc5e7 --jsonl scratch/source_push_w2_return_target_f3a9dc5e7.jsonl`
+  - Config: target rough-balanced profile, `capacity_factor=1.25`, source-padded row starts, synthetic
+    expert-major hidden to isolate W2 kernel timing.
+  - Rows: `rounded_rows_per_rank=139056`, `useful_rows_per_rank=131072`, `row_efficiency=0.942584`,
+    `masked_row_fraction=0.057416`, `dropped_routes=0`.
+  - Repeat times: `[2.898, 2.899, 4.681, 2.917, 2.899] ms`.
+  - Median: `steady_state_time=2.899 ms`, `w2_tflops_per_rank=314.35`, `return_gbps_per_rank=368.38`.
+- Interpretation:
+  - The W2 math path itself is fast enough at the target layout: ~`314 TFLOP/s/rank` rounded-row W2 throughput is close
+    to the prior isolated Pallas W13 scale and much faster than the current source-push+W13 stage time.
+  - This is not yet full Kernel B from the spec: the kernel writes destination-local return blocks, and the
+    source-visible reorder is currently a host-side validation adapter. The missing structural step is remote
+    destination-to-source return writes, then full source-side deterministic combine in the actual forward path.
+  - The target timing used synthetic hidden and `--no-check`; correctness was validated on the small H100 smoke with
+    W13-reference hidden and on CPU/JAX reference tests.
+- Next action:
+  - Add the remote/source-visible return stage for W2 output, either as a separate return-copy kernel or by extending
+    the W2 kernel if Mosaic supports remote stores from this Lane/WGMMA path.
