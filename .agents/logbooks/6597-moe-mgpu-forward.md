@@ -574,3 +574,45 @@ real source-local MoE arrays instead of only synthetic benchmark inputs.
     be constructed inside the existing `shard_map` EP local function.
   - The next integration step is to decide where host-side plan construction lives for an opt-in backend, or to replace
     it with a device/JAX-compatible planner before wiring `MoeImplementation`.
+
+## 2026-07-03 04:33 - Package-private callable forward API
+
+Added a package-private callable full-forward API so callers can invoke the source-push path directly instead of going
+through benchmark row runners.
+
+- Commit Hash: `ee790d1de`
+- Code:
+  - `lib/levanter/src/levanter/grug/_moe/source_push_forward.py`
+  - `lib/levanter/tests/grug/test_source_push_inbox.py`
+- Change:
+  - Added `source_push_forward(config, x, selected_experts, combine_weights, w_gate_up, w_down, implementation=...)`.
+  - Supported implementations:
+    - `reference`: host/JAX reference using the same real-input adapter and `SourcePushPlan`.
+    - `pallas_mgpu`: staged or single-JIT package-private Pallas path.
+  - Shared the benchmark runner's sharded `device_put` path with the callable implementation to avoid drift.
+  - Extended the real-input CPU/JAX test to call `implementation="reference"` and compare against the independent naive
+    MoE oracle.
+- Local verification:
+  - Focused:
+    `uv run --package marin-levanter --group test pytest lib/levanter/tests/grug/test_source_push_inbox.py -q -k 'real_inputs or source_push_forward'`
+    - Result: `5 passed, 11 warnings`.
+  - Full source-push subset:
+    `uv run --package marin-levanter --group test pytest lib/levanter/tests/grug/test_source_push_inbox.py lib/levanter/tests/grug/test_source_push_plan.py -q`
+    - Result: `43 passed, 11 warnings`.
+  - `./infra/pre-commit.py --changed-files --fix`
+    - Result: all checks passed.
+- H100 callable smoke:
+  - First attempt: `/dlwh/source-push-forward-callable-smoke-ee790d1de-20260703-1133`
+    - Result: Iris success but no JSON row because `python -` stdin was not part of the remote command.
+  - Rerun: `/dlwh/source-push-forward-callable-smoke-ee790d1de-20260703-1139`
+    - Result: succeeded.
+    - Config: `EP=8`, `T/rank=64`, `K=2`, `D=128`, `I=128`, `E_local=2`, `block_m=64`,
+      `block_k=64`, `block_n=128`, `entries_per_rank=2`, `execution_mode=staged_host_sync`.
+    - Metrics: `max_abs_diff=0.0078125`, `mean_abs_diff=0.000339662`, `expected_dropped=0`,
+      `observed_dropped=0`, output shape `[8, 64, 128]`.
+- Interpretation:
+  - The source-push full-forward path now has a real package-private API boundary that returns outputs and dropped-route
+    count from real arrays. This is the callable primitive needed before a public opt-in MoE backend can be wired.
+  - Public `grug_moe` integration is still not complete: the current callable expects explicit source-major arrays and
+    builds `SourcePushPlan` on the host, while `moe_mlp` dispatch currently enters an EP shard-local function through
+    `shard_map`.
