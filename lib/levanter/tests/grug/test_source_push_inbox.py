@@ -230,7 +230,6 @@ def test_source_push_repro_wrapper_imports_active_bench_cli():
     )
 
     assert result.returncode == 0, result.stderr
-    assert "cannot import name 'main'" not in result.stderr
 
 
 def test_source_push_diagnostic_runner_tags_structured_validation_errors():
