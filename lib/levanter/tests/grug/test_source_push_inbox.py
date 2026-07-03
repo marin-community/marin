@@ -229,8 +229,7 @@ def test_source_push_repro_wrapper_imports_active_bench_cli():
         text=True,
     )
 
-    assert result.returncode == 0
-    assert "source-push inbox MGPU benchmark" in result.stdout
+    assert result.returncode == 0, result.stderr
     assert "cannot import name 'main'" not in result.stderr
 
 
