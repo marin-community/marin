@@ -6,27 +6,32 @@
 # the endpoint `k8s://finelog-cw-rno2a.iris` ->
 # finelog-cw-rno2a.iris.svc.cluster.local:10001.
 #
-# Archive: segments offload to Cloudflare R2 (s3://), the same object store the
-# cluster uses for controller state. `finelog deploy up` mints the
-# `finelog-cw-rno2a-env` Secret from the operator's R2 creds + object_storage_endpoint
-# and projects it into the pod via envFrom (see deploy/k8s/02-deployment).
+# Archive: segments offload to CoreWeave AI Object Storage (s3://), the same
+# object store the cluster uses for controller state. `finelog deploy up` mints
+# the `finelog-cw-rno2a-env` Secret from the operator's creds (R2_ACCESS_KEY_ID/
+# R2_SECRET_ACCESS_KEY env vars, historical names) + object_storage_endpoint and
+# projects it into the pod via envFrom (see deploy/k8s/02-deployment).
 #
-# Deploy: export KUBECONFIG=~/.kube/coreweave-iris-rno2a and the R2 creds, then
+# Deploy: export KUBECONFIG=~/.kube/coreweave-iris-rno2a and the CoreWeave
+# object-storage access key, then
 #   export R2_ACCESS_KEY_ID=... R2_SECRET_ACCESS_KEY=...
-#   uv run finelog deploy up cw-rno2a
+#   uv run finelog deploy up cw-rno2a --no-build
 name: finelog-cw-rno2a
 port: 10001
 image: ghcr.io/marin-community/finelog:latest
-remote_log_dir: s3://marin-na/finelog/cw-rno2a
+remote_log_dir: s3://marin-us-east-02a/finelog/cw-rno2a
 deployment:
   k8s:
     namespace: iris
     # storage_class omitted -> the cluster's default StorageClass (shared-vast,
-    # VAST CSI) backs the PVC. Segments offload to R2, but size the local cache
-    # generously to absorb ingest bursts + L0->L1 compaction before offload.
+    # VAST CSI) backs the PVC. Segments offload to object storage, but size the
+    # local cache generously to absorb ingest bursts + L0->L1 compaction before
+    # offload.
     storage_gb: 250
-    # R2 endpoint for the s3:// archive; folded into the minted creds Secret.
-    object_storage_endpoint: https://74981a43be0de7712369306c7b19133d.r2.cloudflarestorage.com
+    # CoreWeave AI Object Storage via LOTA (in-cluster cache endpoint); folded
+    # into the minted creds Secret. Virtual-hosted addressing is derived from
+    # the domain.
+    object_storage_endpoint: http://cwlota.com
 # Authenticated-ingress policy. This LOCAL finelog is default-deny;
 # it admits its own cluster's private network (CoreWeave pods are 10.x) and
 # loopback (port-forward), never the public internet. No jwt layer — that is the

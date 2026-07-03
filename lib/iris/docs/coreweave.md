@@ -186,15 +186,17 @@ operator reference (any `--cluster=NAME`) and the lifecycle details behind it.
 - Images pushed to `ghcr.io/marin-community/`
 - Controller extras: `uv pip install 'marin-iris[controller]'`
 
-For S3 storage, export `R2_ACCESS_KEY_ID` / `R2_SECRET_ACCESS_KEY`;
-`iris cluster start` folds them — plus the derived endpoint/region/`FSSPEC_S3`
-config — into the `iris-task-env` Secret, projected into the controller and task
-pods via `envFrom`.
+For S3 storage, export `R2_ACCESS_KEY_ID` / `R2_SECRET_ACCESS_KEY` (historical
+names — they feed any S3-compatible backend, including CoreWeave Object Storage
+access keys); `iris cluster start` folds them — plus the derived
+endpoint/region/`FSSPEC_S3` config — into the `iris-task-env` Secret, projected
+into the controller and task pods via `envFrom`.
 
 > **Note**: CoreWeave AI Object Storage (`cwobject.com`, `cwlota.com`) uses
-> virtual-hosted-style S3 addressing, which is auto-detected and configured but
-> is incompatible with JAX's GCS/S3 backend. Use Cloudflare R2 or another
-> path-style-compatible endpoint for JAX workloads.
+> virtual-hosted-style S3 addressing, which is auto-detected and configured
+> (including JAX/tensorstore checkpointing). In-cluster consumers should use
+> `http://cwlota.com` — LOTA, the node-local cache endpoint; use
+> `https://cwobject.com` from outside CoreWeave.
 
 ### CoreWeave AI Object Storage access
 
