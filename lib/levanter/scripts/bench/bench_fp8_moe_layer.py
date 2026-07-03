@@ -87,10 +87,15 @@ def time_throughput_ms(fn, *args, iters=20, warmup=3):
     return (time.perf_counter() - t0) / iters * 1e3
 
 
+def scalar(x):
+    """float() of a (fully replicated) global array, multihost-safe."""
+    return float(jax.device_get(x.addressable_data(0)))
+
+
 def relfrob(a, b):
     a = jnp.asarray(a, jnp.float32)
     b = jnp.asarray(b, jnp.float32)
-    return float(jnp.linalg.norm(a - b) / jnp.linalg.norm(b))
+    return scalar(jnp.linalg.norm(a - b) / jnp.linalg.norm(b))
 
 
 def make_ops(mode):
@@ -104,33 +109,34 @@ def make_ops(mode):
     raise ValueError(f"unknown mode {mode!r}")
 
 
-def build_step(mesh, impl, sel, wts, cot, mode):
+def build_step(mesh, impl, mode):
     """jitted fwd+bwd step: loss = <moe_mlp(x), cot>; grads wrt (x, w13, w2[, ops]).
 
     Modes: bf16 (baseline), fp8gemm (FP8 expert GEMMs), fp8wire (fp8gemm + FP8
     over-the-wire collectives), wireonly (bf16 GEMMs + FP8 wire, for attribution).
+    All arrays are explicit jit args (multihost forbids closing over global arrays).
     """
     wire = mode in ("fp8wire", "wireonly")
 
     if mode in ("bf16", "wireonly"):
 
-        def loss(x, w13, w2):
+        def loss(x, w13, w2, sel, wts, cot):
             out = moe_mlp(x, sel, wts, w13, w2, implementation=impl, mesh=mesh, fp8_wire=wire)
             return (out.astype(jnp.float32) * cot.astype(jnp.float32)).sum()
 
         return jax.jit(jax.value_and_grad(loss, argnums=(0, 1, 2)))
 
-    def loss_fp8(x, w13, w2, ops):
+    def loss_fp8(x, w13, w2, sel, wts, cot, ops):
         out = moe_mlp(x, sel, wts, w13, w2, implementation=impl, mesh=mesh, ragged_dot_ops=ops, fp8_wire=wire)
         return (out.astype(jnp.float32) * cot.astype(jnp.float32)).sum()
 
-    return jax.jit(jax.value_and_grad(loss_fp8, argnums=(0, 1, 2, 3)))
+    return jax.jit(jax.value_and_grad(loss_fp8, argnums=(0, 1, 2, 6)))
 
 
-def warmup_op_state(step, x, w13, w2, ops, steps=4):
+def warmup_op_state(step, x, w13, w2, sel, wts, cot, ops, steps=4):
     """Run fwd/bwd steps applying delayed-scaling overwrites so scales adapt."""
     for _ in range(steps):
-        _, grads = step(x, w13, w2, ops)
+        _, grads = step(x, w13, w2, sel, wts, cot, ops)
         overwrites, op_grads = partition_for_grad_overwrite(grads[3])
         zero = jax.tree.map(lambda g: g * 0.0 if g is not None else None, op_grads)
         ops = apply_updates(ops, zero, overwrites)
@@ -167,7 +173,9 @@ def main():
             print(*a, flush=True)
 
     n_dev = len(jax.devices())
-    mesh = compact_grug_mesh(expert_axis_size=args.expert_axis)
+    # replica_dcn pinned to 1: this bench studies EP/data layouts, and the
+    # default (process_count) would claim replicas the device set doesn't have.
+    mesh = compact_grug_mesh(expert_axis_size=args.expert_axis, replica_axis_size=1)
     t_global = args.t_local * n_dev
     pr(f"jax {jax.__version__}  {n_dev}x {jax.devices()[0].device_kind}")
     pr(f"mesh {dict(mesh.shape)}  impl={args.impl}")
@@ -185,20 +193,20 @@ def main():
                 x, sel, wts, w13, w2, implementation=args.impl, mesh=mesh, report_capacity_overflow=True
             )
             total = t_global * K
-            pr(f"dropped assignments: {int(dropped)} / {total} ({100 * int(dropped) / total:.3f}%)")
+            pr(f"dropped assignments: {int(scalar(dropped))} / {total} ({100 * scalar(dropped) / total:.3f}%)")
 
     results = {}
     for mode in args.modes.split(","):
         with jax.set_mesh(mesh):
-            step = build_step(mesh, args.impl, sel, wts, cot, mode)
+            step = build_step(mesh, args.impl, mode)
             ops = make_ops(mode)
             if ops is None:
-                ms = time_throughput_ms(step, x, w13, w2, iters=args.iters)
-                loss_val, grads = step(x, w13, w2)
+                ms = time_throughput_ms(step, x, w13, w2, sel, wts, cot, iters=args.iters)
+                loss_val, grads = step(x, w13, w2, sel, wts, cot)
             else:
-                ops = warmup_op_state(step, x, w13, w2, ops)
-                ms = time_throughput_ms(step, x, w13, w2, ops, iters=args.iters)
-                loss_val, grads = step(x, w13, w2, ops)
+                ops = warmup_op_state(step, x, w13, w2, sel, wts, cot, ops)
+                ms = time_throughput_ms(step, x, w13, w2, sel, wts, cot, ops, iters=args.iters)
+                loss_val, grads = step(x, w13, w2, sel, wts, cot, ops)
         results[mode] = (ms, loss_val, grads)
         tok_s = t_global / (ms * 1e-3)
         pr(f"{mode:8s} {ms:8.2f} ms/step   {tok_s / 1e6:6.1f} Mtok/s")
@@ -210,18 +218,19 @@ def main():
                 continue
             gx = grads[0]
             gx_ref = results["bf16"][2][0]
+            loss_ref = scalar(results["bf16"][1])
             pr(
                 f"{mode}: speedup vs bf16 = {base_ms / ms:.3f}x   "
-                f"relfrob(loss)={abs(float(loss_val) - float(results['bf16'][1])) / abs(float(results['bf16'][1])):.2e} "
+                f"relfrob(loss)={abs(scalar(loss_val) - loss_ref) / abs(loss_ref):.2e} "
                 f"relfrob(dx)={relfrob(gx, gx_ref):.2e}"
             )
 
     if args.profile:
         mode = args.modes.split(",")[0]
         with jax.set_mesh(mesh):
-            step = build_step(mesh, args.impl, sel, wts, cot, mode)
+            step = build_step(mesh, args.impl, mode)
             ops = make_ops(mode)
-            call_args = (x, w13, w2) if ops is None else (x, w13, w2, ops)
+            call_args = (x, w13, w2, sel, wts, cot) if ops is None else (x, w13, w2, sel, wts, cot, ops)
             jax.block_until_ready(step(*call_args))
             with jax.profiler.trace(args.profile):
                 for _ in range(3):
