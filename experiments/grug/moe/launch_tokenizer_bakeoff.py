@@ -127,8 +127,10 @@ def build_bakeoff_checkpoint(*, version: str = "dev") -> ArtifactStep[LevanterCh
 
     # BAKEOFF_NGRAM toggles the hashed multi-gram input embedding (axis D). It adds input-side
     # embedding capacity at the same vocab, output head, and serving FLOPs, so a BPB drop vs the
-    # same arm without it is a compute-free uplift. combine="sum" keeps the no-n-gram model a
-    # clean ablation baseline; init_std_scale > 0 lets the tables contribute from the start.
+    # same arm without it is a compute-free uplift. combine="sum" with init_std_scale=0 starts the
+    # model bit-identical to the no-n-gram baseline (the zero-initialized tables still receive
+    # gradients and grow), so the n-gram can only help; a large init instead injects input noise
+    # several times the base embedding and needs many steps just to recover.
     ngram_enabled = bool(os.environ.get("BAKEOFF_NGRAM"))
     if ngram_enabled:
         model = dataclasses.replace(
@@ -138,7 +140,7 @@ def build_bakeoff_checkpoint(*, version: str = "dev") -> ArtifactStep[LevanterCh
                 num_hashes=2,
                 hash_buckets=env_int("BAKEOFF_NGRAM_BUCKETS", 65_537),
                 combine="sum",
-                init_std_scale=1.0,
+                init_std_scale=float(os.environ.get("BAKEOFF_NGRAM_INIT", "0.0")),
             ),
         )
     if model.num_experts % expert_axis != 0:
