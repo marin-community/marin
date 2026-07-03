@@ -316,8 +316,8 @@ def source_push_w2_return(
     current W13 kernel.
     """
 
-    hidden_host = np.asarray(jax.device_get(hidden_expert_major))
-    w_down_host = np.asarray(jax.device_get(w_down))
+    hidden_host = np.asarray(jax.device_get(hidden_expert_major), dtype=np.float32)
+    w_down_host = np.asarray(jax.device_get(w_down), dtype=np.float32)
     assignment_ids = np.asarray(jax.device_get(plan.assignment_ids), dtype=np.int32)
     valid_mask = np.asarray(jax.device_get(plan.valid_mask), dtype=np.bool_)
     local_experts = np.asarray(jax.device_get(plan.local_experts), dtype=np.int32)
@@ -340,7 +340,7 @@ def source_push_w2_return(
     )
     for src in range(ep_size):
         for dst_ord in range(dst_ord_count):
-            dst = dst_ordinal(src, dst_ord, ep_size)
+            dst = (src + dst_ord) % ep_size
             for entry in range(entries_per_dst):
                 rows = valid_mask[src, dst_ord, entry]
                 valid_rows = int(np.sum(rows))

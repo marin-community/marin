@@ -15,6 +15,7 @@ import levanter.grug._moe.source_push_inbox as source_push_inbox
 import levanter.grug._moe.source_push_combine as source_push_combine
 import levanter.grug._moe.source_push_forward as source_push_forward
 import levanter.grug._moe.source_push_w2_return as source_push_w2_return
+import levanter.grug._moe.source_push_plan as source_push_plan
 from levanter.grug._moe.source_push_inbox_profiles import (
     SOURCE_PUSH_PROFILE_STABLE_216,
     SOURCE_PUSH_PROFILES,
@@ -514,6 +515,58 @@ def test_source_push_w2_source_plan_inputs_can_use_w13_reference_hidden():
     assert inputs.queue_stats["w2_hidden_input_mode"] == "w13_reference"
     assert inputs.hidden.shape == (config.ep_size, config.hidden_rows_per_rank, config.intermediate_dim)
     assert np.count_nonzero(inputs.hidden) > 0
+
+
+def test_source_push_w2_plan_reference_matches_destination_reference_for_non_symmetric_ep():
+    config = source_push_inbox.PushInboxConfig(
+        ep_size=3,
+        entries_per_rank=4,
+        inbox_slots=2,
+        hidden_dim=4,
+        intermediate_dim=4,
+        block_m=2,
+        block_k=2,
+        block_n=2,
+        experts_per_rank=2,
+        send_worker_programs_per_peer=1,
+        worker_programs_per_peer=4,
+        routing="balanced",
+        tokens_per_rank=6,
+        topk=2,
+        capacity_factor=1.25,
+    )
+    inputs = source_push_forward.make_source_push_forward_source_plan_inputs(config)
+    hidden = source_push_inbox._reference_hidden(
+        config,
+        inputs.x,
+        inputs.send_meta,
+        inputs.w_gate_up,
+        inputs.expert_base,
+        inputs.src_base_by_expert,
+        use_exact_expert_major=False,
+    )
+
+    plan_return = source_push_plan.source_push_w2_return(
+        jnp.asarray(hidden, dtype=jnp.bfloat16),
+        jnp.asarray(inputs.w_down, dtype=jnp.bfloat16),
+        inputs.plan,
+        expert_base=inputs.expert_base,
+        src_base_by_expert=inputs.src_base_by_expert,
+    )
+    destination_return = source_push_w2_return.reference_w2_return_by_destination(
+        config,
+        jnp.asarray(hidden, dtype=jnp.bfloat16),
+        inputs.recv_meta,
+        jnp.asarray(inputs.w_down, dtype=jnp.bfloat16),
+    )
+    destination_source_queue = source_push_w2_return.source_queue_from_destination_return(config, destination_return)
+
+    np.testing.assert_allclose(
+        np.asarray(plan_return, dtype=np.float32),
+        np.asarray(destination_source_queue, dtype=np.float32),
+        atol=0,
+        rtol=0,
+    )
 
 
 def test_source_push_combine_inputs_invert_queue_rows_to_route_slots():
