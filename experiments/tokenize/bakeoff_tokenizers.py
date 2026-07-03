@@ -86,7 +86,7 @@ SUPERBPE_ARMS: tuple[TokenizerArm, ...] = (
     ),
 )
 
-# Track C (issue #6796): tokenizers trained from scratch on the grug-moe data mix (English web
+# Track C: tokenizers trained from scratch on the grug-moe data mix (English web
 # + code + math; see corpus.py/train_tokenizers.py), rather than borrowed off-the-shelf. Refs
 # resolve through the `mirror://tokenizers/trained/<name>/...` cache that
 # push_trained_tokenizers.py populates (see that module for why a bare ref, not a raw s3:// path).

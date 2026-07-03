@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Push trained tokenizer artifacts so cluster workers can load them (issue #6796 Track C).
+"""Push trained tokenizer artifacts so cluster workers can load them (Track C).
 
 ``levanter.load_tokenizer(name_or_path)`` resolves a bare ``"org/name"``-shaped string by
 staging a ``mirror://tokenizers/<name_or_path>/hf-hub-<hf_hub_version>/`` cache (rigging's

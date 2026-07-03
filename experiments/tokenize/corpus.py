@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Raw text corpus for training our own tokenizers (issue #6796 Track C).
+"""Raw text corpus for training our own tokenizers (Track C).
 
 ``train_tokenizers.py`` needs raw, untokenized text to learn merges from — unlike the rest of
 ``experiments/datasets/``, which builds already-tokenized ``TokenizedCache`` handles via

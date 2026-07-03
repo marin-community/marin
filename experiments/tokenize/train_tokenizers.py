@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Train our own tokenizers on the grug-moe data mix (issue #6796 Track C).
+"""Train our own tokenizers on the grug-moe data mix (Track C).
 
 Off-the-shelf arms (``bakeoff_tokenizers.BASELINE_ARMS``/``SUPERBPE_ARMS``) sample whatever
 vocabulary and segmentation other teams optimized for other data. This harness instead trains
