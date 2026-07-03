@@ -244,3 +244,56 @@ def test_cache_entry_expires_after_ttl():
     manager._cache["SELECT 2"] = (result, time.monotonic())  # fresh
     assert manager._cached_result("SELECT 1") is None
     assert manager._cached_result("SELECT 2") is result
+
+
+class _RecordingQueryLog:
+    """Captures the rows a QueryManager would persist to finelog (duck-types QueryLog.record)."""
+
+    def __init__(self):
+        self.rows = []
+
+    def record(self, row):
+        self.rows.append(row)
+
+
+class _ScriptedRunner:
+    """Returns a result or raises, chosen by the SQL text; counts real executions."""
+
+    def __init__(self, results: dict, errors: dict):
+        self._results = results
+        self._errors = errors
+        self.created_view_names: frozenset[str] = frozenset()
+        self.calls = 0
+
+    def run_query(self, sql: str, query_id: str) -> QueryResult:
+        self.calls += 1
+        if sql in self._errors:
+            raise self._errors[sql]
+        return self._results[sql]
+
+
+def test_every_submission_is_recorded():
+    """One row per submission — a run (with cost), a cache hit, and an error — is logged."""
+    log = _RecordingQueryLog()
+    runner = _ScriptedRunner(
+        results={"SELECT 1": QueryResult(["x"], [[1]], 7, False, "gs://b/ducky/q.parquet", 50, 99)},
+        errors={"SELECT * FROM nope": QueryError("Catalog Error: table not found")},
+    )
+    manager = QueryManager(runner, executor=_InlineExecutor(), query_log=log)
+
+    manager.submit("SELECT 1")  # executed → done, cached=False, with cost
+    manager.submit("SELECT 1")  # cache hit → done, cached=True
+    manager.submit("SELECT * FROM nope")  # error
+
+    assert runner.calls == 2  # SELECT 1 + the error query; the repeated SELECT 1 was cached, not re-run
+
+    done, cached, error = log.rows
+    assert (done.sql, done.status, done.cached, done.error) == ("SELECT 1", "done", False, None)
+    assert (done.total_rows, done.result_bytes, done.elapsed_ms) == (7, 99, 50)
+    assert done.result_path == "gs://b/ducky/q.parquet"
+
+    assert (cached.status, cached.cached) == ("done", True)
+    assert cached.result_path == "gs://b/ducky/q.parquet"  # reuses the spilled result
+
+    assert (error.status, error.cached, error.error) == ("error", False, "Catalog Error: table not found")
+    assert error.total_rows is None and error.result_bytes is None and error.result_path is None

@@ -19,8 +19,6 @@ from enum import Enum, StrEnum
 from rigging.timing import Duration, Timestamp, TokenBucket
 
 from iris.chaos import chaos_raise
-from iris.cluster.backends.protocols import WorkerInfraProvider
-from iris.cluster.backends.types import Labels, QuotaExhaustedError, SliceHandle
 from iris.cluster.config import ScaleGroupConfig, ScaleGroupResources, SliceConfig, WorkerConfig
 from iris.cluster.constraints import (
     CONSTRAINT_REGISTRY,
@@ -41,6 +39,8 @@ from iris.cluster.controller.autoscaler.backoff_detector import (
     SliceFate,
 )
 from iris.cluster.controller.autoscaler.state import GroupPersist, SlicePersist
+from iris.cluster.platforms.protocols import WorkerInfraProvider
+from iris.cluster.platforms.types import Labels, QuotaExhaustedError, SliceHandle
 from iris.cluster.types import AcceleratorType, CapacityType, WorkerStatusMap, get_gpu_count, get_tpu_count
 from iris.rpc import job_pb2, time_pb2, vm_pb2
 from iris.time_proto import timestamp_to_proto

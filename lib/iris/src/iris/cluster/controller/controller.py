@@ -22,7 +22,6 @@ from rigging.server_auth import RequestAuthPolicy, TokenVerifier
 from rigging.timing import Duration, ExponentialBackoff, RateLimiter, Timestamp, TokenBucket
 from sqlalchemy import Row
 
-from iris.cluster.backends.types import resolve_external_host
 from iris.cluster.bundle import BundleStore
 from iris.cluster.config import BackendConfig, ClusterFinelogConfig, PeerConfig
 from iris.cluster.controller import ops, reads, writes
@@ -85,6 +84,7 @@ from iris.cluster.controller.worker_health import WorkerLiveness
 from iris.cluster.federation.manager import DEFAULT_HEARTBEAT_INTERVAL, FederationManager
 from iris.cluster.federation.peer import build_peers
 from iris.cluster.log_keys import CONTROLLER_LOG_KEY
+from iris.cluster.platforms.types import resolve_external_host
 from iris.cluster.types import (
     DEFAULT_BACKEND_ID,
     JobName,

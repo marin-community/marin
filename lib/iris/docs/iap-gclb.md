@@ -122,7 +122,7 @@ auth:
   optional: false   # tokenless calls that did NOT pass IAP are still rejected
 ```
 
-A full template is in `lib/iris/config/iap-example.yaml`. The audience is
+A full template is in `lib/iris/config/examples/iap.yaml`. The audience is
 per-cluster — it names that cluster's backend service, not the shared frontend.
 The controller verifies IAP's signed `X-Goog-IAP-JWT-Assertion` (its `aud` is
 `signed_header_audience`) to map a request to an identity; leave that field empty

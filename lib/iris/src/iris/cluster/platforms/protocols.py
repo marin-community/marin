@@ -8,14 +8,14 @@ Two protocols define the boundary between Iris orchestration and infrastructure:
 - ControllerProvider: controller lifecycle + connectivity (tunnel, image resolution).
 - WorkerInfraProvider: worker/slice CRUD used by the Autoscaler and ScalingGroup.
 
-Concrete implementations live under providers/gcp/, providers/k8s/, etc.
+Concrete implementations live in the sibling subpackages (gcp/, k8s/, manual/).
 """
 
 from contextlib import AbstractContextManager
 from typing import Protocol
 
-from iris.cluster.backends.types import ListedSlice, SliceHandle, StandaloneWorkerHandle
 from iris.cluster.config import ControllerVmConfig, IrisClusterConfig, SliceConfig, VmConfig, WorkerConfig
+from iris.cluster.platforms.types import ListedSlice, SliceHandle, StandaloneWorkerHandle
 
 
 class ControllerProvider(Protocol):

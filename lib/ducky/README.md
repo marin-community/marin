@@ -63,6 +63,19 @@ print(result["columns"], result["rows"])
 `gcloud auth print-identity-token --audiences=$AUD` mints the same token for a service-account
 credential. `Proxy-Authorization: Bearer …` works interchangeably with `Authorization`.
 
+## Query log
+
+Every submitted query is recorded to finelog under ducky's own namespace, `ducky.query` —
+one row per query with its SQL text and terminal outcome (`status`, `cached`, `elapsed_ms`,
+`total_rows`, `result_bytes`, `result_path`, `error`). It's a durable, queryable record of
+what runs through ducky, so the query mix can be reviewed later for hot paths and
+optimization opportunities. Writes are fire-and-forget (finelog buffers on a background
+thread and swallows transport failures), so logging never blocks or fails a user's query;
+if there's no in-cluster finelog endpoint it's disabled with a warning. The namespace is
+itself queryable via the pre-baked `finelog."ducky.query"` view (see the **ducky query
+history** example) — note the view only materializes once at least one segment exists and
+ducky has (re)started to bind it.
+
 ## Pre-baked views & queries
 
 ducky ships a small catalog of named views over common Marin data sources, plus
@@ -72,7 +85,7 @@ are ordinary DuckDB views, so you can `SELECT` from them without spelling out a
 
 - **finelog** (`finelog.log`, `finelog."iris.task"`, `finelog."iris.worker"`,
   `finelog."iris.task_status"`, `finelog."iris.profile"`, `finelog."iris.provisioning"`,
-  `finelog."zephyr.stage"`, `finelog."zephyr.worker"`) over
+  `finelog."zephyr.stage"`, `finelog."zephyr.worker"`, `finelog."ducky.query"`) over
   `DUCKY_FINELOG_ROOT/<namespace>/seg_L*.parquet`. The namespace directory names contain
   dots, so quote them: `SELECT * FROM finelog."iris.task"`.
 - **datakit** normalized parquet — a curated subset (`datakit.finetranslations`,

@@ -15,6 +15,7 @@ import re
 import subprocess
 from dataclasses import replace
 from pathlib import Path
+from urllib.parse import urlparse
 
 import click
 
@@ -27,6 +28,10 @@ _TEMPLATE_VAR_RE = re.compile(r"\{\{ (\w+) \}\}")
 # Suffix for the finelog-owned Secret that carries S3 credentials into the pod.
 # Distinct from iris's own task-env Secret so finelog manages its own lifecycle.
 _S3_SECRET_SUFFIX = "-env"
+
+# S3-compatible endpoints that accept only virtual-hosted-style requests
+# (bucket as a host subdomain).
+_VIRTUAL_HOST_ONLY_S3_DOMAINS = ("cwobject.com", "cwlota.com")
 
 # Manifests live at `lib/finelog/deploy/k8s/*.yaml` in the repo. We resolve
 # this once at import time; the directory is part of the source tree, not
@@ -112,15 +117,31 @@ def _build_s3_secret_manifest(cfg: FinelogConfig) -> str | None:
             "R2_ACCESS_KEY_ID and R2_SECRET_ACCESS_KEY must be set in the deploy "
             f"environment to deploy {cfg.name!r} with an s3:// archive"
         )
+    endpoint = k8s.object_storage_endpoint
     env = {
         "AWS_ACCESS_KEY_ID": key_id,
         "AWS_SECRET_ACCESS_KEY": key_secret,
-        "AWS_ENDPOINT_URL": k8s.object_storage_endpoint,
         # Non-AWS S3 endpoints (R2, CoreWeave) reject a real region in the v4
         # signature; "auto" skips region validation.
         "AWS_REGION": "auto",
         "AWS_DEFAULT_REGION": "auto",
     }
+    # The server's Rust object_store S3 client takes the addressing style and
+    # the plain-http opt-in from env. CoreWeave Object Storage endpoints
+    # (cwobject.com; cwlota.com, the in-cluster LOTA cache, plain http) accept
+    # only virtual-hosted-style requests, and object_store uses the endpoint
+    # verbatim as the base URL in that mode — so the archive bucket must be
+    # baked into the endpoint host (http://<bucket>.cwlota.com).
+    parsed = urlparse(endpoint)
+    hostname = parsed.hostname or ""
+    if any(hostname == d or hostname.endswith("." + d) for d in _VIRTUAL_HOST_ONLY_S3_DOMAINS):
+        env["AWS_VIRTUAL_HOSTED_STYLE_REQUEST"] = "true"
+        bucket = cfg.remote_log_dir.removeprefix("s3://").split("/", 1)[0]
+        if not hostname.startswith(f"{bucket}."):
+            endpoint = f"{parsed.scheme}://{bucket}.{parsed.netloc}"
+    env["AWS_ENDPOINT_URL"] = endpoint
+    if endpoint.startswith("http://"):
+        env["AWS_ALLOW_HTTP"] = "true"
     manifest = {
         "apiVersion": "v1",
         "kind": "Secret",

@@ -15,10 +15,6 @@ import threading
 import time
 
 import pytest
-from iris.cluster.backends.types import (
-    InfraError,
-    Labels,
-)
 from iris.cluster.config import (
     ControllerVmConfig,
     CoreweaveControllerConfig,
@@ -40,6 +36,10 @@ from iris.cluster.platforms.k8s.controller import (
 )
 from iris.cluster.platforms.k8s.fake import InMemoryK8sService
 from iris.cluster.platforms.k8s.types import K8sResource
+from iris.cluster.platforms.types import (
+    InfraError,
+    Labels,
+)
 
 
 def _make_provider(

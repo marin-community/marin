@@ -18,14 +18,14 @@ import httpx
 from google.cloud import tpu_v2alpha1
 from rigging.timing import ExponentialBackoff, Timestamp, retry_with_backoff
 
-from iris.cluster.backends.types import (
+from iris.cluster.config import SliceConfig, WorkerConfig
+from iris.cluster.platforms.gcp.local import LocalSliceHandle
+from iris.cluster.platforms.types import (
     InfraError,
     InfraUnavailableError,
     QuotaExhaustedError,
     ResourceNotFoundError,
 )
-from iris.cluster.config import SliceConfig, WorkerConfig
-from iris.cluster.platforms.gcp.local import LocalSliceHandle
 from iris.cluster.service_mode import ServiceMode
 from iris.cluster.tpu_topology import TPU_TOPOLOGIES
 from iris.cluster.types import CapacityType
