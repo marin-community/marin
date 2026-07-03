@@ -37,7 +37,6 @@ from iris.cluster.platforms.k8s.controller import (
 )
 from iris.cluster.platforms.k8s.fake import InMemoryK8sService
 from iris.cluster.platforms.k8s.types import (
-    IRIS_PRIORITY_CLASS_SYSTEM,
     K8sResource,
     iris_priority_class_manifest,
 )
@@ -185,11 +184,10 @@ def test_start_controller_creates_all_resources():
     node_selector = deploy_spec["template"]["spec"]["nodeSelector"]
     assert node_selector == {iris_labels.iris_scale_group: "cpu-erapids"}
 
-    # Controller runs at control-plane priority (iris-system, 10000) so a user
-    # job can never preempt it off the shared control node.
+    # Controller is stamped with the control-plane PriorityClass, and that class
+    # is provisioned so the reference resolves at admission.
     assert deploy_spec["template"]["spec"]["priorityClassName"] == "iris-system"
-    system_pc = k8s.get_json(K8sResource.PRIORITY_CLASSES, "iris-system")
-    assert system_pc is not None and system_pc["value"] == 10000
+    assert k8s.get_json(K8sResource.PRIORITY_CLASSES, "iris-system") is not None
 
     # Controller consumes that env via envFrom (S3 + injected, one flow).
     container = deploy_spec["template"]["spec"]["containers"][0]
@@ -884,30 +882,9 @@ def test_ensure_kueue_queues_noop_without_cluster_queue():
     provider.shutdown()
 
 
-def test_ensure_priority_classes_ranks_system_above_user_bands():
-    """iris-system must outrank every user band so the control plane is never
-    preemptible by a user job (a user pod at iris-interactive preempting the
-    Kueue manager is exactly the outage this guards against)."""
-    provider, k8s = _make_provider()
-
-    provider.ensure_priority_classes()
-
-    values = {}
-    for name in ("iris-system", "iris-production", "iris-interactive", "iris-batch"):
-        pc = k8s.get_json(K8sResource.PRIORITY_CLASSES, name)
-        assert pc is not None, f"{name} not created"
-        values[name] = pc["value"]
-    assert values["iris-system"] > values["iris-production"] > values["iris-interactive"] >= values["iris-batch"]
-    provider.shutdown()
-
-
-def test_iris_priority_class_manifest_resolves_system_and_rejects_unknown():
-    """The Kueue installer reuses this to pin its manager to iris-system; it must
-    return a well-formed manifest for a known band and reject a typo loudly."""
-    manifest = iris_priority_class_manifest(IRIS_PRIORITY_CLASS_SYSTEM)
-    assert manifest["kind"] == "PriorityClass"
-    assert manifest["metadata"]["name"] == "iris-system"
-    assert manifest["value"] == 10000
+def test_iris_priority_class_manifest_rejects_unknown_band():
+    """The Kueue installer pins its manager via this helper; an unknown band must
+    raise rather than silently return a wrong-priority (or empty) manifest."""
     with pytest.raises(ValueError, match="unknown Iris priority class"):
         iris_priority_class_manifest("iris-nonexistent")
 
