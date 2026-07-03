@@ -112,9 +112,24 @@ improvement over the stock Llama-3 tokenizer** for target grug-moe models.
 
 ---
 
-## Track B — TokenMonster & other tokenizer options (#5837) _(under investigation)_
+## Track B — TokenMonster & other tokenizer options (#5837) — investigated, SKIP
 
-Investigating whether TokenMonster (ungreedy subword vocab) or its `<cap>`/`<token_join>` plans
-pack more bytes/token than SuperBPE. Note: the LM head is only ~1.7% of serving FLOPs, so
-vocab-shrinking tricks have little feBPB leverage; only bytes/token (fertility) gains matter.
-Feasibility + fertility measurement in progress; will add EXP entries for anything worth training.
+Measured TokenMonster prebuilt vocabs (`pip install tokenmonster`, `englishcode-{32k,50k,65k,100k}`)
+on the same English/math sample as the other arms:
+
+| tokenizer | vocab | bytes/tok | vs marin |
+|---|---|---|---|
+| superbpe-128k (adopted) | 128k | 5.20 | +23% |
+| tokenmonster englishcode-100k | 100k | 4.93 | +16% |
+| tokenmonster englishcode-65k | 65k | 4.70 | +11% |
+| marin-128k (baseline) | 128k | 4.24 | ref |
+
+Findings: (1) TokenMonster's ungreedy segmentation beats greedy BPE at matched vocab (~13% over
+gpt-neox at 50k), but its largest prebuilt (100k) still packs fewer bytes/token than SuperBPE at
+128k — a weaker lever than whitespace-spanning superwords. (2) Integration is ~1-2 days (Go/cgo
+binary, no HF `tokenizer.json`, needs a custom `TokenizerBackend` adapter) — not drop-in. (3) The
+`<cap>`/`<token_join>` plans only shrink vocab (≤0.2% of total FLOPs given the 1.7% head) while
+adding marker tokens → likely a net feBPB regression; TokenMonster already bakes in `capcode` and
+still loses to SuperBPE. (4) No other new tokenizer families in #6796/#5837 or linked #4971/#5821/
+#5842/#5079/#4915 (byt5 = our byte axis; gemma-2 = gemma family). **Verdict: not worth a trained
+run; SuperBPE-128k remains the tokenizer lever.** The uplift path to 10% feBPB is superbpe + n-gram.
