@@ -702,3 +702,55 @@ Promoted the package-private source-push vs public EP full-forward comparison in
 - Interpretation:
   - The integration acceptance smoke is now a durable pytest gate for H100x8, not only an ad hoc benchmark script.
   - This still validates the package-private callable path; public `MoeImplementation` wiring remains future work.
+
+## 2026-07-03 05:27 - Public `pallas_mgpu_source_push` opt-in backend
+
+Wired the source-push full-forward callable behind an explicit public `moe_mlp` implementation name.
+
+- Commit Hashes:
+  - `cbcd29ab1`: add `implementation="pallas_mgpu_source_push"` dispatch.
+  - `32847fc23`: pass the validated explicit public mesh through to the package-private source-push path.
+- Code:
+  - `lib/levanter/src/levanter/grug/_moe/common.py`
+  - `lib/levanter/src/levanter/grug/_moe/source_push_public.py`
+  - `lib/levanter/src/levanter/grug/grug_moe.py`
+  - `lib/levanter/tests/grug/test_grugformer_moe.py`
+- Change:
+  - Added an H100-only, SiLU-only public adapter for flattened public EP `moe_mlp` inputs.
+  - The adapter reshapes public `[S*T, D]`, `[S*T, K]`, and `[S*E, ...]` layouts into source-major arrays,
+    builds the host-side `SourcePushPlan`, runs the staged source-push W13/W2/return/combine path, then reshapes back
+    to the original public output layout and sharding.
+  - Added fail-fast behavior when the backend is requested without a concrete H100 expert mesh.
+  - Updated the H100 pytest to exercise `moe_mlp(..., implementation="pallas_mgpu_source_push")` directly against both
+    public `ragged_all_to_all` and `ring` baselines on the existing small H100 smoke shape.
+- Local verification:
+  - `uv run --package marin-levanter --group test pytest lib/levanter/tests/grug/test_grugformer_moe.py -q -k 'source_push' -n 0`
+    - Result after final mesh fix: `1 passed, 1 skipped, 19 deselected, 1 warning in 3.07s`.
+  - `uv run --package marin-levanter --group test pytest lib/levanter/tests/grug/test_source_push_inbox.py -q -k 'public_compare or source_push_forward_public_compare or bench_cli_imports or real_inputs'`
+    - Result: `6 passed, 11 warnings`.
+  - `uv run --package marin-levanter --group test pytest lib/levanter/tests/grug/test_grugformer_moe.py -q -n 0`
+    - Result before final mesh-only fix: `14 passed, 7 skipped, 1 warning in 11.01s`.
+  - `./infra/pre-commit.py --changed-files --fix`
+    - Result: all checks passed.
+  - `./infra/pre-commit.py --review --agent-command='codex exec'`
+    - Result: aborted after several minutes with no stdout; no review findings were produced.
+- H100 attempt 1:
+  - Job: `/dlwh/source-push-public-backend-h100-pytest-cbcd29ab1-20260703-122117`
+  - Command:
+    `uv run --package marin-levanter --group test pytest lib/levanter/tests/grug/test_grugformer_moe.py -q -n 0 -k source_push`
+  - Result: failed, `1 failed, 1 passed, 19 deselected, 1 warning in 13.54s`.
+  - Iris summary: failed, one task, `exit_code=1`, `duration_ms=35445`.
+  - Failure:
+    `ValueError: The context mesh AbstractMesh('expert': 8, axis_types=(Explicit,), ...) should match the mesh passed to shard_map Mesh('expert': 8, axis_types=(Auto,))`.
+  - Cause:
+    the new public adapter called `source_push_forward(..., mesh=_make_mesh(ep_size))` while the public `moe_mlp`
+    comparison was inside an explicit-axis mesh context.
+- H100 rerun:
+  - Job: `/dlwh/source-push-public-backend-h100-pytest-32847fc23-20260703-122507`
+  - Command:
+    `uv run --package marin-levanter --group test pytest lib/levanter/tests/grug/test_grugformer_moe.py -q -n 0 -k source_push`
+  - Result: succeeded, `2 passed, 19 deselected, 1 warning in 53.96s`.
+  - Iris summary: succeeded, one task, `exit_code=0`, `duration_ms=76078`.
+- Interpretation:
+  - The public opt-in backend now reaches the same H100 full-forward comparison gate as the package-private callable.
+  - The path remains intentionally narrow and host-plan/staged; it is not yet a fully jittable production training backend.
