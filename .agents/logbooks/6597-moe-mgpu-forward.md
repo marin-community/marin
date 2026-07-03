@@ -890,3 +890,36 @@ fields.
     useful throughput `201.93 TFLOP/s/rank` and median time `8.508 ms`.
   - There is a slow-tail signal in rough-balanced repeats (`14.492 ms`, `10.025 ms`, one `9.152 ms`), so the
     slow-tail investigation item remains open even though the median gate passes.
+
+## 2026-07-03 07:36 - W13 slow-tail distribution check
+
+Investigated the source-push W13 slow-tail condition from the benchmark gate by extracting repeat distributions from
+the previous 48-repeat precomputed source-plan run and the current 9-repeat gate run. No new H100 job was launched for
+this check.
+
+- Current gate evidence:
+  - Job: `/dlwh/source-push-w13-gate-ddab3fc37-20260703`
+  - Rows: rough-balanced cf1.25, `repeat_runs=9`, `row_efficiency=0.942584`, drops `0`.
+  - Useful-throughput slow threshold: `<160 TFLOP/s/rank`.
+  - Distribution: median `8.508 ms`, useful median `201.93 TFLOP/s/rank`, slow repeats `1/9 = 11.1%`.
+  - Slow repeat: `[14.492] ms`.
+- Prior 48-repeat evidence:
+  - Job: `/dlwh/source-push-plan-target-precomputed-b3bdb1f76-20260703-0120`
+  - Rows: rough-balanced cf1.25, `repeat_runs=48`, `row_efficiency=0.942584`, drops `0`.
+  - Distribution: median `8.441 ms`, min `8.293 ms`, max `14.855 ms`, p90 `11.395 ms`, p95 `12.488 ms`.
+  - Rounded/useful medians: `215.94` / `203.54 TFLOP/s/rank`.
+  - Slow repeats: `6/48 = 12.5%`.
+  - Slow repeat times: `[14.855, 11.753, 13.069, 12.488, 11.395, 13.187] ms`.
+- Interpretation:
+  - The slow-tail condition is replicated: both the 9-repeat current gate and the earlier 48-repeat target run exceed
+    the spec's `>10%` slow-repeat trigger.
+  - This does not look like route drops, row accounting, or a median-performance failure: both runs have zero drops and
+    the same row efficiency, and the median gate still passes.
+  - Balanced cf1.0/cf1.25 current gate rows showed no comparable slow repeats, so the tail correlates with the
+    rough-balanced/source-padded queue shape (`tail_entries_total=2032`, `max_slot_reuse_depth=23`) rather than the
+    fixed balanced queue (`tail_entries_total=0`, `max_slot_reuse_depth=22`).
+- Next action:
+  - If we continue performance work before landing PR #6841, isolate whether rough-balanced slow repeats come from
+    queue-slot reuse/semaphore skew or WGMMA scheduling variance. The most direct follow-up is a bounded diagnostic
+    run on rough-balanced cf1.25 comparing full W13 against `copy_release_only` and `compute_only_local` with the same
+    queue metadata, reporting p90/p95 and slow-repeat count rather than only medians.
