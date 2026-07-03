@@ -13,6 +13,7 @@ import jax.numpy as jnp
 
 import levanter.grug._moe.source_push_inbox as source_push_inbox
 import levanter.grug._moe.source_push_combine as source_push_combine
+import levanter.grug._moe.source_push_forward as source_push_forward
 import levanter.grug._moe.source_push_w2_return as source_push_w2_return
 from levanter.grug._moe.source_push_inbox_profiles import (
     SOURCE_PUSH_PROFILE_STABLE_216,
@@ -25,6 +26,7 @@ SCRIPT_PATH = Path(__file__).resolve().parents[2] / "scripts" / "bench" / "bench
 REPRO_SCRIPT_PATH = Path(__file__).resolve().parents[2] / "scripts" / "bench" / "repro_source_push_inbox_queue.py"
 W2_SCRIPT_PATH = Path(__file__).resolve().parents[2] / "scripts" / "bench" / "bench_source_push_w2_return.py"
 COMBINE_SCRIPT_PATH = Path(__file__).resolve().parents[2] / "scripts" / "bench" / "bench_source_push_combine.py"
+FORWARD_SCRIPT_PATH = Path(__file__).resolve().parents[2] / "scripts" / "bench" / "bench_source_push_forward.py"
 SCRIPT_SPEC = importlib.util.spec_from_file_location("bench_source_push_inbox", SCRIPT_PATH)
 assert SCRIPT_SPEC is not None
 source_push_cli = importlib.util.module_from_spec(SCRIPT_SPEC)
@@ -35,6 +37,11 @@ assert COMBINE_SCRIPT_SPEC is not None
 source_push_combine_cli = importlib.util.module_from_spec(COMBINE_SCRIPT_SPEC)
 assert COMBINE_SCRIPT_SPEC.loader is not None
 COMBINE_SCRIPT_SPEC.loader.exec_module(source_push_combine_cli)
+FORWARD_SCRIPT_SPEC = importlib.util.spec_from_file_location("bench_source_push_forward", FORWARD_SCRIPT_PATH)
+assert FORWARD_SCRIPT_SPEC is not None
+source_push_forward_cli = importlib.util.module_from_spec(FORWARD_SCRIPT_SPEC)
+assert FORWARD_SCRIPT_SPEC.loader is not None
+FORWARD_SCRIPT_SPEC.loader.exec_module(source_push_forward_cli)
 
 DIAGNOSTIC_SCRIPT_PATH = (
     Path(__file__).resolve().parents[2] / "scripts" / "bench" / "bench_source_push_inbox_diagnostics.py"
@@ -558,6 +565,49 @@ def test_source_push_combine_inputs_invert_queue_rows_to_route_slots():
     assert np.count_nonzero(expected) > 0
 
 
+def test_source_push_forward_inputs_share_one_plan_across_all_stages():
+    config = source_push_inbox.PushInboxConfig(
+        ep_size=2,
+        entries_per_rank=4,
+        inbox_slots=2,
+        hidden_dim=8,
+        intermediate_dim=8,
+        block_m=2,
+        block_k=4,
+        block_n=4,
+        experts_per_rank=2,
+        send_worker_programs_per_peer=1,
+        worker_programs_per_peer=4,
+        routing="balanced",
+        tokens_per_rank=6,
+        topk=2,
+        capacity_factor=1.25,
+    )
+
+    inputs = source_push_forward.make_source_push_forward_source_plan_inputs(config)
+    expected = np.asarray(source_push_forward.reference_source_push_forward(config, inputs), dtype=np.float32)
+    valid_routes = np.argwhere(inputs.route_valid_mask)
+    src, token, route_slot = valid_routes[0]
+    dst_ord = inputs.queue_dst_ord[src, token, route_slot]
+    entry = inputs.queue_entry[src, token, route_slot]
+    row = inputs.queue_row[src, token, route_slot]
+
+    assert inputs.queue_stats["forward_mode"] == "w13_w2_return_copy_combine"
+    assert inputs.queue_stats["combine_mode"] == "route_buffer_gather_sum"
+    assert inputs.queue_stats["dropped_routes"] == 0
+    assert inputs.x.shape == (
+        config.ep_size,
+        config.ep_size,
+        config.entries_per_rank,
+        config.block_m,
+        config.hidden_dim,
+    )
+    assert expected.shape == (config.ep_size, config.tokens_per_rank, config.hidden_dim)
+    assert np.count_nonzero(expected) > 0
+    assert int(np.asarray(inputs.plan.token_ids[src, dst_ord, entry, row])) == int(token)
+    assert int(np.asarray(inputs.plan.route_slots[src, dst_ord, entry, row])) == int(route_slot)
+
+
 def test_source_push_package_private_runner_returns_structured_validation_errors():
     config = source_push_inbox.PushInboxConfig(ep_size=1)
 
@@ -627,6 +677,23 @@ def test_source_push_combine_runner_returns_structured_validation_errors():
     assert rows[0]["repeat_runs"] == 1
 
 
+def test_source_push_forward_runner_returns_structured_validation_errors():
+    config = source_push_inbox.PushInboxConfig(ep_size=1)
+
+    rows = source_push_forward.run_source_push_forward_source_plan(
+        config,
+        warmup=0,
+        steps=1,
+        repeat_runs=1,
+        check=False,
+    )
+
+    assert len(rows) == 1
+    assert rows[0]["error_type"] == "ValueError"
+    assert rows[0]["kernel"] == "source_push_forward"
+    assert rows[0]["repeat_runs"] == 1
+
+
 def test_source_push_repro_wrapper_imports_active_bench_cli():
     result = subprocess.run(
         [sys.executable, str(REPRO_SCRIPT_PATH), "--help"],
@@ -652,6 +719,17 @@ def test_source_push_w2_bench_cli_imports():
 def test_source_push_combine_bench_cli_imports():
     result = subprocess.run(
         [sys.executable, str(COMBINE_SCRIPT_PATH), "--help"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
+def test_source_push_forward_bench_cli_imports():
+    result = subprocess.run(
+        [sys.executable, str(FORWARD_SCRIPT_PATH), "--help"],
         check=False,
         capture_output=True,
         text=True,
@@ -808,3 +886,32 @@ def test_source_push_combine_cli_passes_profile_defaults(monkeypatch, capsys):
     rows = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
     assert calls == [("roughly_balanced", 288, 3)]
     assert rows == [{"git_sha": "abc123", "kernel": "source_push_combine", "repeat_runs": 3}]
+
+
+def test_source_push_forward_cli_passes_profile_defaults(monkeypatch, capsys):
+    calls = []
+
+    def fake_run_source_push_forward_source_plan(config, **kwargs):
+        calls.append((config.routing, config.entries_per_rank, kwargs["repeat_runs"]))
+        return [{"kernel": "source_push_forward", "repeat_runs": kwargs["repeat_runs"]}]
+
+    monkeypatch.setattr(
+        source_push_forward_cli,
+        "run_source_push_forward_source_plan",
+        fake_run_source_push_forward_source_plan,
+    )
+
+    source_push_forward_cli.main(
+        [
+            "--source-push-profile",
+            SOURCE_PUSH_PROFILE_STABLE_216,
+            "--repeat-runs",
+            "3",
+            "--git-sha",
+            "abc123",
+        ]
+    )
+
+    rows = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    assert calls == [("roughly_balanced", 288, 3)]
+    assert rows == [{"git_sha": "abc123", "kernel": "source_push_forward", "repeat_runs": 3}]
