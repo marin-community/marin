@@ -69,6 +69,24 @@ KERNEL_NAME = "source_push_forward"
 FORWARD_EXECUTION_SINGLE_JIT = "single_jit"
 FORWARD_EXECUTION_STAGED_HOST_SYNC = "staged_host_sync"
 FORWARD_EXECUTION_MODES = (FORWARD_EXECUTION_SINGLE_JIT, FORWARD_EXECUTION_STAGED_HOST_SYNC)
+FORWARD_STAGE_TOTAL = "total"
+FORWARD_STAGE_W13 = "w13"
+FORWARD_STAGE_W2_RETURN = "w2_return"
+FORWARD_STAGE_COMBINE = "combine"
+FORWARD_STAGES = (FORWARD_STAGE_W13, FORWARD_STAGE_W2_RETURN, FORWARD_STAGE_COMBINE)
+
+
+@dataclass(frozen=True)
+class SourcePushForwardTiming:
+    """Timing result for the chained forward harness, optionally with per-stage rows."""
+
+    compile_time: float
+    steady_state_times: list[float]
+    output: Any
+    lower_compile_time: float | None
+    first_run_time: float | None
+    stage_steady_state_times: dict[str, list[float]] | None = None
+    stage_compile_times: dict[str, float] | None = None
 
 
 @dataclass(frozen=True)
@@ -337,14 +355,17 @@ def _time_staged_source_push_forward(
     steps: int,
     repeat_runs: int,
     progress: Callable[[str], None] | None = None,
-) -> TimingResult:
+) -> SourcePushForwardTiming:
     """Run full forward as three host-synchronized JIT stages for ordering diagnostics."""
 
     w13_fn = jax.jit(_sharded_kernel(mesh, config))
     w2_return_fn = jax.jit(_sharded_w2_return_to_source_kernel(mesh, config))
     combine_fn = jax.jit(_sharded_source_combine_kernel(mesh, config))
 
-    def call_stages():
+    def call_stages(*, record_stage_times: bool = False):
+        stage_times: dict[str, float] = {}
+
+        stage_start = time.perf_counter()
         _, hidden = w13_fn(
             x,
             send_meta,
@@ -354,8 +375,16 @@ def _time_staged_source_push_forward(
             w_gate_up,
         )
         _block_until_ready(hidden)
+        if record_stage_times:
+            stage_times[FORWARD_STAGE_W13] = time.perf_counter() - stage_start
+
+        stage_start = time.perf_counter()
         _, source_return = w2_return_fn(hidden, recv_meta, w_down)
         _block_until_ready(source_return)
+        if record_stage_times:
+            stage_times[FORWARD_STAGE_W2_RETURN] = time.perf_counter() - stage_start
+
+        stage_start = time.perf_counter()
         out = combine_fn(
             source_return,
             queue_dst_ord,
@@ -365,12 +394,14 @@ def _time_staged_source_push_forward(
             route_valid_mask,
         )
         _block_until_ready(out)
-        return out
+        if record_stage_times:
+            stage_times[FORWARD_STAGE_COMBINE] = time.perf_counter() - stage_start
+        return out, stage_times
 
     if progress is not None:
         progress("first_call_start")
     start = time.perf_counter()
-    out = call_stages()
+    out, stage_compile_times = call_stages(record_stage_times=True)
     compile_time = time.perf_counter() - start
     if progress is not None:
         progress("first_call_done")
@@ -378,25 +409,43 @@ def _time_staged_source_push_forward(
     if progress is not None:
         progress("warmup_start")
     for _ in range(warmup):
-        out = call_stages()
+        out, _ = call_stages()
 
     steady_state_times = []
+    stage_steady_state_times: dict[str, list[float]] = {stage: [] for stage in FORWARD_STAGES}
     for _ in range(repeat_runs):
         if progress is not None:
             progress("steady_state_start")
         start = time.perf_counter()
+        stage_elapsed = {stage: 0.0 for stage in FORWARD_STAGES}
         for _ in range(steps):
-            out = call_stages()
+            out, step_stage_times = call_stages(record_stage_times=True)
+            for stage in FORWARD_STAGES:
+                stage_elapsed[stage] += step_stage_times[stage]
         steady_state_times.append((time.perf_counter() - start) / steps)
+        for stage in FORWARD_STAGES:
+            stage_steady_state_times[stage].append(stage_elapsed[stage] / steps)
         if progress is not None:
             progress("steady_state_done")
 
-    return TimingResult(
+    return SourcePushForwardTiming(
         compile_time=compile_time,
         steady_state_times=steady_state_times,
         output=out,
         lower_compile_time=None,
         first_run_time=None,
+        stage_steady_state_times=stage_steady_state_times,
+        stage_compile_times=stage_compile_times,
+    )
+
+
+def _source_push_forward_timing_from_base(timing: TimingResult) -> SourcePushForwardTiming:
+    return SourcePushForwardTiming(
+        compile_time=timing.compile_time,
+        steady_state_times=timing.steady_state_times,
+        output=timing.output,
+        lower_compile_time=timing.lower_compile_time,
+        first_run_time=timing.first_run_time,
     )
 
 
@@ -475,25 +524,27 @@ def _run_forward_one(
             )
         else:
             fn = jax.jit(_sharded_source_push_forward_kernel(mesh, config))
-            timing = _time_jitted(
-                fn,
-                x,
-                send_meta,
-                recv_meta,
-                expert_base,
-                src_base_by_expert,
-                w_gate_up,
-                w_down,
-                queue_dst_ord,
-                queue_entry,
-                queue_row,
-                route_combine_weights,
-                route_valid_mask,
-                warmup=settings.warmup,
-                steps=settings.steps,
-                repeat_runs=settings.repeat_runs,
-                separate_compile=settings.separate_compile,
-                progress=lambda event: _emit_progress(config, settings.progress_events, event),
+            timing = _source_push_forward_timing_from_base(
+                _time_jitted(
+                    fn,
+                    x,
+                    send_meta,
+                    recv_meta,
+                    expert_base,
+                    src_base_by_expert,
+                    w_gate_up,
+                    w_down,
+                    queue_dst_ord,
+                    queue_entry,
+                    queue_row,
+                    route_combine_weights,
+                    route_valid_mask,
+                    warmup=settings.warmup,
+                    steps=settings.steps,
+                    repeat_runs=settings.repeat_runs,
+                    separate_compile=settings.separate_compile,
+                    progress=lambda event: _emit_progress(config, settings.progress_events, event),
+                )
             )
         validation = _validate_source_push_forward(config, host_inputs, timing.output) if settings.check else None
         queue_stats = inputs.queue_stats
@@ -512,6 +563,8 @@ def _run_forward_one(
             row = {
                 "kernel": KERNEL_NAME,
                 "implementation": KERNEL_NAME,
+                "row_type": "repeat",
+                "stage": FORWARD_STAGE_TOTAL,
                 "execution_mode": execution_mode,
                 "config": asdict(config),
                 "queue_stats": queue_stats,
@@ -535,6 +588,50 @@ def _run_forward_one(
                 "error_message": None,
             }
             rows.append(row)
+            if timing.stage_steady_state_times is None:
+                continue
+            for stage in FORWARD_STAGES:
+                stage_steady_state_time = timing.stage_steady_state_times[stage][repeat_run]
+                stage_row = {
+                    "kernel": KERNEL_NAME,
+                    "implementation": f"{KERNEL_NAME}_{stage}",
+                    "row_type": "stage_repeat",
+                    "stage": stage,
+                    "execution_mode": execution_mode,
+                    "config": asdict(config),
+                    "queue_stats": queue_stats,
+                    **queue_stats,
+                    "compile_time": None if timing.stage_compile_times is None else timing.stage_compile_times[stage],
+                    "lower_compile_time": None,
+                    "first_run_time": None,
+                    "repeat_run": repeat_run,
+                    "repeat_runs": settings.repeat_runs,
+                    "steady_state_time": stage_steady_state_time,
+                    "bytes_per_rank": None,
+                    "forward_gbps_per_rank": None,
+                    "rounded_forward_tflops_per_rank": None,
+                    "useful_forward_tflops_per_rank": None,
+                    "w13_tflops_per_rank": None,
+                    "w2_tflops_per_rank": None,
+                    "combine_gbps_per_rank": None,
+                    "max_abs_diff": None,
+                    "mean_abs_diff": None,
+                    "error": None,
+                    "error_type": None,
+                    "error_message": None,
+                }
+                if stage == FORWARD_STAGE_W13:
+                    stage_row["bytes_per_rank"] = send_bytes_per_rank
+                    stage_row["forward_gbps_per_rank"] = send_bytes_per_rank / stage_steady_state_time / 1e9
+                    stage_row["w13_tflops_per_rank"] = w13_flops_per_rank / stage_steady_state_time / 1e12
+                elif stage == FORWARD_STAGE_W2_RETURN:
+                    stage_row["bytes_per_rank"] = w2_bytes_per_rank
+                    stage_row["forward_gbps_per_rank"] = w2_bytes_per_rank / stage_steady_state_time / 1e9
+                    stage_row["w2_tflops_per_rank"] = w2_flops_per_rank / stage_steady_state_time / 1e12
+                elif stage == FORWARD_STAGE_COMBINE:
+                    stage_row["bytes_per_rank"] = combine_bytes_per_rank
+                    stage_row["combine_gbps_per_rank"] = combine_bytes_per_rank / stage_steady_state_time / 1e9
+                rows.append(stage_row)
         return rows
     except Exception as exc:  # noqa: BLE001 - benchmark rows should capture unsupported candidates.
         if settings.debug_exceptions:
@@ -543,6 +640,8 @@ def _run_forward_one(
             {
                 "kernel": KERNEL_NAME,
                 "implementation": KERNEL_NAME,
+                "row_type": "error",
+                "stage": FORWARD_STAGE_TOTAL,
                 "execution_mode": execution_mode,
                 "config": asdict(config),
                 "compile_time": None,
