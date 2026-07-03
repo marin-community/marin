@@ -102,44 +102,54 @@ uses `C = 3 · flops_per_token(**excluding** lm_head) · tokens`. That is fine f
 same-vocab scaling but **wrong for a tokenizer bake-off**, because it makes the
 LM-head cost of a large vocab free. Our rubric adds it back.
 
-### 2.3 Two derived quantities per arm — priced at deployment scale
+### 2.3 The serving cost model — priced at deployment scale, at deployment context
 
-For a fixed non-embedding model shape, define per tokenizer arm:
-
-```
-F_full  = lm_flops_per_token(..., vocab_size)          # includes lm_head
-f       = fertility (tokens/byte), measured on a held-out corpus
-train_flops_per_byte   = 3 * F_full * f                # fwd+bwd
-infer_flops_per_byte   =     F_full * f                # fwd only  (serving cost)
-```
-
-`infer_flops_per_byte` is the honest "cost to serve one byte of text" and is the
-axis on which a byte tokenizer is correctly penalized: it pays both a high
-`f` (1.0 token/byte) and, per token, the full non-embedding stack.
-
-**Critical: `F_full` is evaluated at the target *deployment* model, not at the
-small proxy we train to measure BPB.** The grug-moe family we intend to deploy is
-a **~250B-total / ~20B-active MoE** (`TARGET_MODEL` in
-`experiments/tokenize/flop_equivalent.py`: hidden 6144, 64 layers, 256 experts,
-top-8). The LM-head FLOP fraction shrinks ~10× from the proxy to that width:
+Cost is a *model*, not a constant, and it is applied at analysis time to the raw
+measurements (§2.6). `ServingCostModel` in
+`experiments/tokenize/flop_equivalent.py` captures the deployment regime and turns
+`(vocab_size, fertility)` into a serving cost per arm:
 
 ```
-                proxy d1024     target d6144
-  llama3-128k        33.5%           1.7%
-  gemma-262k         50.1%           3.4%
-  byte-256            0.1%           0.0%
+F(vocab)  = forward FLOPs/token at the TARGET model, this context, this sparsity
+f         = fertility (tokens/byte), measured on a held-out corpus
+infer_flops_per_byte = F(vocab) * f          # the serving cost — fwd only, per byte of text
 ```
 
-Pricing the tokenizer at the proxy width would wildly over-penalize large vocab
-(the head is a third to half of proxy FLOPs) and give an answer that does not
-hold at deployment. At deployment scale the head is a few percent, so **vocab
-size is nearly free and fertility dominates serving cost** — which flips
-verdicts: gemma-3's 262k vocab is *cheaper* to serve than Llama-3's 128k at
-target scale (its lower fertility outweighs the trivial extra head), where at
-proxy scale it looked ~28% more expensive. Byte-level is penalized *harder* at
-scale (~3.8× Llama-3 serving cost) because the full non-embedding stack runs once
-per byte. The proxy model is used only to measure BPB *quality*; every cost
-multiplier uses `TARGET_MODEL`.
+`infer_flops_per_byte` is the honest "cost to serve one byte of text": a byte
+tokenizer is penalized on both terms — a high `f` (1.0 token/byte) *and* the full
+per-token stack run once per byte.
+
+`F(vocab)` depends on the deployment assumptions, all fields of `ServingCostModel`:
+
+- **Model shape** — the grug-moe we intend to deploy: a **~250B-total / ~20B-active
+  MoE** (`TARGET_MODEL_SHAPE`: hidden 6144, 64 layers, 256 experts, top-8). The
+  LM-head FLOP fraction shrinks ~10× from the proxy we train to that width
+  (llama3-128k 33.5%→1.7%, gemma-262k 50.1%→3.4%). Pricing at the proxy width
+  would wildly over-penalize large vocab; at deployment the head is a few percent,
+  so **vocab size is nearly free and fertility dominates**. This flips verdicts:
+  gemma-3's 262k vocab is *cheaper* to serve than Llama-3's 128k at target scale
+  (lower fertility outweighs the trivial extra head), where at proxy scale it
+  looked ~28% more expensive.
+- **Context window + attention sparsity** — serving is at a **16k-token context**
+  (default; `context_len`) with **5:1 local:global attention** (`global_layer_period=6`
+  → one full-context layer per six, the rest a `attention_window=4096` sliding
+  window). Attention FLOPs/token grow with the positions a token attends over, so
+  at long context attention is a large share of cost (7% of forward FLOPs at 4k,
+  **10% at 16k, 21% at 64k**), and — crucially — **attention-per-byte scales with
+  `fertility · context`**: at a fixed token window an efficient tokenizer packs
+  more bytes, so it pays less attention per byte. Long context therefore
+  *amplifies* the fertility advantage; the 5:1 sparsity dampens the absolute
+  attention cost (most layers are capped at the 4k window) without erasing the
+  effect. Byte-level, at fertility 1.0, is penalized ~3× Llama-3 serving cost at
+  16k and slightly worse as context grows.
+- **Speed factor** — a `speed_factor` multiplier (default 1.0) for
+  hardware/kernel efficiency not captured by raw FLOP counting; it cancels in
+  relative-cost ratios but is available to set an absolute cost budget.
+
+The proxy model is used only to measure BPB *quality*; every cost multiplier is
+`ServingCostModel`. Because all four are fields, the same measured BPB and
+fertility can be re-priced at 64k context, a denser attention schedule, a larger
+target model, or a different speed assumption without retraining (§2.6).
 
 ### 2.4 Compute-equivalent comparison
 
@@ -158,21 +168,30 @@ arm at **3 training-FLOP points** (a mini isoFLOP ladder) and fitting
 curve** lies lowest on the Pareto frontier wins. This is the scaling-law-grade
 answer and the one we make decisions on.
 
-**Single reportable scalar — FLOP-equivalent BPB (feBPB).** For ranking, pick a
-reference serving cost `R*` (Llama-3/marin's `infer_flops_per_byte`). Using each
-arm's fitted curve, read off the BPB each arm achieves when its *training*
-compute is set so that it matches a common `bytes·infer_flops_per_byte` service
-budget. Concretely:
+**Single reportable scalar — FLOP-equivalent BPB (feBPB).** For ranking, model a
+fixed *lifetime* FLOP budget split between training once and serving over the
+model's life. Anchor on the reference arm (Llama-3/marin): let `C_ref` be its
+training budget (the middle isoFLOP point) and let it spend `ρ·C_ref` FLOPs
+serving over its life (`ρ` = serving-to-training ratio, default 1.0 — serving and
+training weighted equally). The lifetime budget `B = C_ref·(1+ρ)` and the served
+byte-volume are held fixed across arms; an arm's serving cost scales by its
+relative serving cost `s = arm.infer_flops_per_byte / R*`, and whatever is left
+funds training:
 
 ```
-feBPB(arm) = BPB_arm at the C_total where arm's infer_flops_per_byte == R*
+train_flops(arm) = B − ρ·C_ref·s = C_ref·(1 + ρ·(1 − s))
+feBPB(arm)       = BPB_arm read off its fitted curve at train_flops(arm)
 ```
 
-Arms cheaper to serve than the reference get *extra* training compute (they can
-afford more), arms more expensive get *less*. feBPB collapses the Pareto trade
-into one number that rewards cheap-to-serve tokenizers exactly as much as their
-serving discount merits. We report feBPB alongside the raw curve — never instead
-of it.
+A cheaper-to-serve arm (`s<1`) gets *more* training than the reference and a
+lower feBPB; an expensive one gets less. An arm whose serving cost alone exceeds
+the lifetime budget (`train_flops ≤ 0`, e.g. byte-level at `s≈3`, `ρ=1`) is
+reported **infeasible** — the honest verdict. `ρ` makes the training/serving
+weighting explicit: `ρ→0` recovers the equal-training comparison, large `ρ`
+(a model served far more than trained) makes serving efficiency dominate. We
+report feBPB alongside the raw Pareto curve — never instead of it. (Earlier
+drafts had a serving-cost term that algebraically cancelled, evaluating every arm
+at the same training FLOPs; the lifetime-budget form above is the fix.)
 
 ### 2.5 Fairness controls
 
@@ -180,7 +199,7 @@ of it.
   experts, top-k, seq_len) for the BPB *measurement* runs. Only `vocab_size` (→
   embedding/LM-head) and the data tokenization change. Embedding params vary with
   vocab; we log total and non-embedding params so the reader sees the trade. Cost
-  scoring is done at `TARGET_MODEL` (deployment scale), not the proxy (§2.3).
+  scoring is done at `TARGET_MODEL_SHAPE` (deployment scale), not the proxy (§2.3).
 - **Same raw corpus bytes**, tokenized per arm — never compare across different
   underlying text.
 - **Same optimizer family and LR rule.** LR is set per arm by the grug AdamH
@@ -190,6 +209,29 @@ of it.
 - **Same eval set and same held-out bytes** for every arm; BPB is byte-anchored
   so token counts differ but byte coverage of the eval set is identical.
 - **Fixed seeds**; ≥2 seeds on the final short-list to get a noise bar.
+
+### 2.6 Replayability — measure once, re-score under any assumption
+
+Every deployment number in §2.3–§2.4 (model size, context, sparsity, speed,
+serving ratio ρ, even the eval-domain mix) is an *assumption*, and assumptions
+change. So the pipeline never bakes a cost into a training run:
+
+- **Experiments log raw, cost-free measurements.** The fertility pre-filter
+  (`fertility_report.py`) writes per-arm, per-domain **token and byte counts**
+  (`fertility_raw.json`), not ratios or FLOPs. Training runs log per-arm
+  `(training_FLOPs, BPB)` points. Neither carries any deployment-model assumption.
+- **A separate analysis step applies the cost model.**
+  `experiments/tokenize/bakeoff_analysis.py` reads those raw files and recomputes
+  fertility (with an optional domain reweighting), serving cost, the Pareto
+  frontier, and feBPB under a `ServingCostModel` supplied on the command line
+  (`--context-len`, `--attention-window`, `--global-period`, `--speed-factor`,
+  `--target-hidden`, `--target-layers`, `--serving-ratio`, `--domain-weights`).
+
+To answer "what's optimal if we serve at 64k instead of 16k?", or "for a 400B
+target?", or "if code is 5× the traffic?", re-run the analysis with new flags —
+no GPU time. The winning arm is stable across these because fertility, the
+dominant driver, is intrinsic to the tokenizer and scale-invariant; the cost
+model only sharpens or softens the margins.
 
 ## 3. Tokenizer design space (axes)
 
@@ -288,10 +330,11 @@ Grouped by mechanism and by cost signature. "Cost" = effect on
 
 ### E. Byte / tokenizer-free (reference floor, likely negative — but see caveat)
 - Byte-level (256 vocab, fertility 1.0). Under our rubric, priced at deployment
-  scale (§2.3), it must overcome **~3.8× higher inference FLOPs/byte** and ~3.8×
-  less data per training FLOP vs Llama-3 (the byte penalty is *larger* at
-  deployment scale than at the proxy, because the full non-embedding stack runs
-  once per byte and the head savings are negligible at d6144).
+  scale (§2.3), it must overcome **~3× higher inference FLOPs/byte** (at 16k
+  context; slightly worse as context grows) and a matching factor less data per
+  training FLOP vs Llama-3 (the byte penalty is *larger* at deployment scale than
+  at the proxy, because the full non-embedding stack runs once per byte and the
+  head savings are negligible at d6144).
   Full byte-latent architectures (BLT: Pagnoni et al., arXiv:2412.09871, Meta
   FAIR, ACL 2025; H-Net: Hwang, Wang, Gu, arXiv:2507.07955) that recover this
   via dynamic patching are **surveyed but out of scope** for the first
@@ -396,7 +439,7 @@ Two models with distinct roles (§2.3): a **deployment target** the tokenizer is
 priced for, and a small **proxy** we actually train to measure BPB.
 
 - **Target (pricing only, never trained here):** ~250B-total / ~20B-active MoE,
-  `TARGET_MODEL` in `experiments/tokenize/flop_equivalent.py` — hidden 6144, 64
+  `TARGET_MODEL_SHAPE` in `experiments/tokenize/flop_equivalent.py` — hidden 6144, 64
   layers, 256 experts, top-8, seq 4096. All cost multipliers use this width.
 - **Proxy (trained to measure BPB):** a fixed small Grug-MoE, non-embedding shape
   held constant across arms. Starting point (tunable after the smoke run), ~300M

@@ -3,107 +3,47 @@
 
 """FLOP-equivalent scoring for the tokenizer bake-off.
 
-Cross-tokenizer quality is scored with bits-per-byte (BPB), which is byte-anchored
-and therefore comparable across vocabularies. The remaining question is *cost*: a
-large-vocab or byte-level tokenizer is more expensive to train and serve, so its
-BPB must be read against the compute it spends. This module supplies the two cost
-quantities every arm is scored on and the compute-matched budget arithmetic.
+Two things are kept strictly separate so results can be **replayed under different
+deployment assumptions** without re-running any training:
 
-The FLOP model is Levanter's ``lm_flops_per_token``. Vocabulary size enters exactly
-once, through the output head ``lm_head = 2 * hidden_dim * vocab_size``; the input
-embedding is a gather (~0 FLOPs). A tokenizer therefore changes model compute in two
-places: the LM-head FLOPs per token (rising with vocab) and the *fertility*
-``f = tokens/byte`` (how many tokens must be processed to cover a fixed amount of
-text). See ``.agents/projects/20260703_tokenizer_flop_equivalent_bakeoff.md``.
+* **Measurement (empirical, stored raw).** Training a proxy model on an arm's
+  tokenized data yields (training FLOPs, BPB) points and the arm's fertility
+  (tokens/byte). These are logged verbatim — nothing about the deployment model is
+  baked in.
+* **Pricing (a model, applied at analysis time).** A :class:`ServingCostModel`
+  turns those raw measurements into a serving cost and a FLOP-equivalent BPB. It
+  captures the *deployment* regime — target model shape, context window (default
+  16k tokens), local/global attention sparsity, and a hardware/kernel speed factor.
+  Change it and re-score the same stored measurements to answer "what if we serve
+  at 64k context / a bigger model / denser attention?".
 
-Cost is priced at the **target deployment scale**, not at the small proxy model used
-to measure BPB. The grug-moe family we care about deploying is a ~250B-total /
-~20B-active MoE (:data:`TARGET_MODEL`); at that width the LM-head is a few percent of
-FLOPs, so a large vocab is nearly free and fertility dominates the serving cost — the
-opposite of the tiny d1024 proxies, where the head is 30-50% of FLOPs and would wildly
-over-penalize large vocab. Quality (BPB scaling curves) is measured on the small
-proxies; the cost multipliers that turn BPB into feBPB use :data:`TARGET_MODEL`.
+Vocabulary size enters model compute through the output head
+``lm_head = 2 * hidden_dim * vocab_size`` (the input embedding is a gather, ~0
+FLOPs). Attention enters through the context window: per-token attention FLOPs grow
+with the number of positions attended, so at a long serving context (64k) attention
+is a large share of cost, and because attention-per-*byte* scales with
+fertility * context, a long context amplifies the serving-cost advantage of a
+low-fertility tokenizer. Local/global sparsity (most layers attend a bounded window)
+dampens the absolute attention cost. See
+``.agents/projects/20260703_tokenizer_flop_equivalent_bakeoff.md``.
 """
 
 from __future__ import annotations
 
 import math
 from collections.abc import Callable, Iterable, Sequence
-from dataclasses import dataclass, replace
-
-from levanter.utils.flop_utils import lm_flops_per_token
+from dataclasses import dataclass
 
 from experiments.grug.moe.model import GrugModelConfig
 
-# Training FLOPs are forward + backward; the standard 3x multiplier over the forward
-# pass. Inference (serving) is the forward pass only.
+# Training FLOPs are forward + backward; the standard 3x over the forward pass.
 TRAIN_FLOP_MULTIPLIER = 3.0
 
-
-def flops_per_token(model: GrugModelConfig, *, include_lm_head: bool = True) -> float:
-    """Analytic FLOPs per token for a grug MoE config.
-
-    ``include_lm_head=False`` returns the non-embedding FLOPs (the grug heuristic's
-    budget convention); the bake-off scores on the full figure so the vocab-dependent
-    head cost is not free.
-    """
-    fpt = lm_flops_per_token(
-        hidden_dim=model.hidden_dim,
-        intermediate_dim=model.intermediate_dim,
-        num_layers=model.num_layers,
-        num_kv_heads=model.num_kv_heads,
-        num_heads=model.num_heads,
-        seq_len=model.max_seq_len,
-        vocab_size=model.vocab_size,
-        glu=True,
-        num_experts=model.num_experts,
-        num_shared_experts=1 if model.shared_expert_intermediate_dim > 0 else 0,
-        num_experts_per_tok=model.num_experts_per_token,
-        shared_intermediate_dim=model.shared_expert_intermediate_dim,
-    )
-    if not include_lm_head:
-        fpt -= 2 * model.hidden_dim * model.vocab_size
-    return fpt
-
-
-@dataclass(frozen=True)
-class ArmCost:
-    """The cost signature of one tokenizer arm at a fixed model shape.
-
-    ``fertility`` is tokens/byte measured on the held-out eval corpus. Everything
-    else is derived so a reader can reconstruct the score from logs.
-    """
-
-    name: str
-    vocab_size: int
-    fertility: float  # tokens per byte
-    flops_per_token_full: float  # includes lm_head
-    flops_per_token_nonemb: float  # excludes lm_head
-
-    @property
-    def train_flops_per_byte(self) -> float:
-        return TRAIN_FLOP_MULTIPLIER * self.flops_per_token_full * self.fertility
-
-    @property
-    def infer_flops_per_byte(self) -> float:
-        """Forward-pass FLOPs to serve one byte of text — the honest serving cost."""
-        return self.flops_per_token_full * self.fertility
-
-    @property
-    def lm_head_flop_fraction(self) -> float:
-        return 1.0 - self.flops_per_token_nonemb / self.flops_per_token_full
-
-
-# The deployment-scale grug-moe the bake-off is pricing for: ~250B total / ~20B active.
-# Cost multipliers (infer_flops_per_byte, feBPB) are computed at THIS width, not at the
-# small proxy models used to measure BPB — at 20B active the LM-head is only a few
-# percent of FLOPs, so vocab size is nearly free and fertility dominates the serving
-# cost. Pricing at the proxy width (head = 30-50% of FLOPs) would wildly over-penalize
-# large vocab. num_experts/top_k/depth are set to land near 20B active / 250B total;
-# only hidden_dim and the non-embedding flops_per_token feed the cost math, so the exact
-# expert count is not load-bearing for arm *ratios*.
-TARGET_MODEL = GrugModelConfig(
-    vocab_size=128_256,  # replaced per arm by arm_cost; only the non-head part is shared
+# The deployment-scale grug-moe the bake-off prices for: ~250B total / ~20B active. Only
+# the shape matters here; context/sparsity/speed live on ServingCostModel. vocab_size is
+# a placeholder replaced per arm.
+TARGET_MODEL_SHAPE = GrugModelConfig(
+    vocab_size=128_256,
     hidden_dim=6144,
     num_layers=64,
     num_heads=48,
@@ -113,57 +53,163 @@ TARGET_MODEL = GrugModelConfig(
     shared_expert_intermediate_dim=6144,
     num_experts=256,
     num_experts_per_token=8,
-    max_seq_len=4096,
-    sliding_window=4096,
+    max_seq_len=16_384,
+    sliding_window=4_096,
 )
 
 
-def arm_cost(name: str, vocab_size: int, fertility: float, cost_model: GrugModelConfig = TARGET_MODEL) -> ArmCost:
-    """Build the cost signature for one arm, priced at ``cost_model`` (default: deployment scale).
+def _head_dim(model: GrugModelConfig) -> int:
+    return model.head_dim or (model.hidden_dim // model.num_heads)
 
-    ``cost_model`` is the model whose FLOPs price the tokenizer — the ~250B/20B-active
-    :data:`TARGET_MODEL`, not the small proxy used to measure BPB. Only ``vocab_size``
-    (the LM-head term) and ``fertility`` distinguish arms; the non-embedding
-    flops_per_token is shared across arms at a given ``cost_model``.
+
+def _attention_flops_per_token(model: GrugModelConfig, context_len: int) -> float:
+    """Megatron-style full-attention FLOPs per token at ``context_len`` positions.
+
+    Derived from the per-sequence attention FLOPs (QK^T + softmax + AV = seq^2 *
+    (4*H*hd + 3*H)) divided by seq, i.e. ``context_len * (4*H*hd + 3*H)`` — linear in the
+    context a token attends over.
     """
-    priced = replace(cost_model, vocab_size=vocab_size)
+    heads = model.num_heads
+    hd = _head_dim(model)
+    return context_len * (4 * heads * hd + 3 * heads)
+
+
+@dataclass(frozen=True)
+class ServingCostModel:
+    """Deployment cost model that prices tokenizers (does not measure BPB).
+
+    Change any field and re-score stored measurements to replay under new assumptions.
+    """
+
+    model: GrugModelConfig = TARGET_MODEL_SHAPE
+    context_len: int = 16_384  # serving context window, in tokens (replay 4k/64k via ServingCostModel)
+    attention_window: int = 4_096  # local (sliding-window) attention span, in tokens
+    global_layer_period: int = 6  # one global (full-context) layer per N layers; 6 => 5:1 local:global
+    speed_factor: float = 1.0  # effective serving-cost multiplier for hw/kernel speedups (<1 = faster)
+
+    def _global_fraction(self) -> float:
+        return 1.0 / self.global_layer_period
+
+    def attention_flops_per_token(self) -> float:
+        """Layer-averaged attention FLOPs per token under the local/global mix."""
+        frac_global = self._global_fraction()
+        window = min(self.attention_window, self.context_len)
+        return frac_global * _attention_flops_per_token(self.model, self.context_len) + (
+            1 - frac_global
+        ) * _attention_flops_per_token(self.model, window)
+
+    def flops_per_token(self, vocab_size: int, *, include_lm_head: bool = True) -> float:
+        """Forward FLOPs per token for the target model serving one token at this vocab."""
+        m = self.model
+        d = m.hidden_dim
+        hd = _head_dim(m)
+        routed_mlp = 2 * 3 * d * m.intermediate_dim * m.num_experts_per_token  # GLU => factor 3
+        has_shared = m.shared_expert_intermediate_dim > 0
+        shared_mlp = 2 * 3 * d * m.shared_expert_intermediate_dim * (1 if has_shared else 0)
+        mlp = routed_mlp + shared_mlp
+        if m.num_experts > 1:
+            mlp += 2 * d * m.num_experts  # router
+        qkv_proj = 2 * d * (m.num_heads * hd + 2 * m.num_kv_heads * hd)
+        dense_proj = 2 * d * d
+        attn = self.attention_flops_per_token()
+        lm_head = 2 * d * vocab_size if include_lm_head else 0
+        return self.speed_factor * (m.num_layers * (mlp + qkv_proj + dense_proj + attn) + lm_head)
+
+    def attention_flop_fraction(self, vocab_size: int) -> float:
+        """Share of forward FLOPs spent in attention (diagnostic; rises with context)."""
+        m = self.model
+        total = self.flops_per_token(vocab_size)
+        if total == 0:
+            return 0.0
+        return self.speed_factor * m.num_layers * self.attention_flops_per_token() / total
+
+    def lm_head_flop_fraction(self, vocab_size: int) -> float:
+        """Share of forward FLOPs spent in the output head (rises with vocab)."""
+        total = self.flops_per_token(vocab_size)
+        if total == 0:
+            return 0.0
+        return self.speed_factor * 2 * self.model.hidden_dim * vocab_size / total
+
+
+DEFAULT_SERVING = ServingCostModel()
+
+
+@dataclass(frozen=True)
+class ArmCost:
+    """The deployment cost signature of one tokenizer arm.
+
+    ``fertility`` (tokens/byte) is measured; the rest is derived from a
+    :class:`ServingCostModel` so a reader can reconstruct the score from logs.
+    """
+
+    name: str
+    vocab_size: int
+    fertility: float  # tokens per byte
+    flops_per_token: float  # forward, at serving context
+    infer_flops_per_byte: float  # forward FLOPs to serve one byte of text (the serving cost)
+    attention_flop_fraction: float
+    lm_head_flop_fraction: float
+
+
+def arm_cost(name: str, vocab_size: int, fertility: float, serving: ServingCostModel = DEFAULT_SERVING) -> ArmCost:
+    """Price one arm under ``serving`` (default: the deployment target).
+
+    Only ``vocab_size`` (the head term) and ``fertility`` distinguish arms; the rest of
+    the per-token cost is shared across arms at a given ``serving`` model.
+    """
+    fpt = serving.flops_per_token(vocab_size)
     return ArmCost(
         name=name,
         vocab_size=vocab_size,
         fertility=fertility,
-        flops_per_token_full=flops_per_token(priced, include_lm_head=True),
-        flops_per_token_nonemb=flops_per_token(priced, include_lm_head=False),
+        flops_per_token=fpt,
+        infer_flops_per_byte=fpt * fertility,
+        attention_flop_fraction=serving.attention_flop_fraction(vocab_size),
+        lm_head_flop_fraction=serving.lm_head_flop_fraction(vocab_size),
     )
+
+
+# --- training-budget planning (proxy runs) ----------------------------------------
+# These size the small proxy runs we actually train; they use the PROXY model's own
+# forward FLOPs, not the deployment serving model.
+
+
+def proxy_training_flops_per_token(proxy: GrugModelConfig) -> float:
+    """Forward FLOPs/token for the proxy model at its own training context (full attention)."""
+    trainer = ServingCostModel(
+        model=proxy,
+        context_len=proxy.max_seq_len,
+        attention_window=proxy.max_seq_len,
+        global_layer_period=1,  # all layers full-context at train time
+        speed_factor=1.0,
+    )
+    return trainer.flops_per_token(proxy.vocab_size)
 
 
 @dataclass(frozen=True)
 class ComputePoint:
-    """A single training budget for an arm: how many tokens/bytes it buys."""
+    """A single proxy training budget: how many tokens/bytes it buys for one arm."""
 
     total_train_flops: float
     tokens: float
     bytes: float
 
 
-def compute_point_at_budget(cost: ArmCost, total_train_flops: float) -> ComputePoint:
-    """Tokens and bytes an arm trains on at a fixed *total training FLOP* budget.
+def compute_point_at_budget(proxy_flops_per_token: float, total_train_flops: float, fertility: float) -> ComputePoint:
+    """Tokens and bytes a proxy run trains on at a fixed total training FLOP budget.
 
-    ``tokens = C / (3 * F_full)``; ``bytes = tokens / fertility``. A low-fertility,
-    modest-vocab tokenizer covers more bytes for the same budget; a large-vocab or
-    byte tokenizer covers fewer. This is the equal-``C_total`` headline comparison.
+    ``tokens = C / (3 * proxy_flops_per_token)``; ``bytes = tokens / fertility``.
     """
-    tokens = total_train_flops / (TRAIN_FLOP_MULTIPLIER * cost.flops_per_token_full)
-    return ComputePoint(total_train_flops=total_train_flops, tokens=tokens, bytes=tokens / cost.fertility)
+    tokens = total_train_flops / (TRAIN_FLOP_MULTIPLIER * proxy_flops_per_token)
+    return ComputePoint(total_train_flops=total_train_flops, tokens=tokens, bytes=tokens / fertility)
 
 
-def budget_for_tokens(cost: ArmCost, tokens: float) -> float:
-    """Inverse of :func:`compute_point_at_budget`: total training FLOPs for N tokens."""
-    return TRAIN_FLOP_MULTIPLIER * cost.flops_per_token_full * tokens
+def budget_for_tokens(proxy_flops_per_token: float, tokens: float) -> float:
+    """Total training FLOPs to train a proxy run on ``tokens`` tokens."""
+    return TRAIN_FLOP_MULTIPLIER * proxy_flops_per_token * tokens
 
 
-def budget_for_bytes(cost: ArmCost, num_bytes: float) -> float:
-    """Total training FLOPs for an arm to cover ``num_bytes`` bytes of text."""
-    return budget_for_tokens(cost, num_bytes * cost.fertility)
+# --- BPB scaling curve + FLOP-equivalent BPB --------------------------------------
 
 
 @dataclass(frozen=True)
@@ -179,10 +225,9 @@ class ScalingFit:
 
 
 def fit_bpb_curve(points: Sequence[tuple[float, float]]) -> ScalingFit:
-    """Fit ``BPB(C) = a*C^{-b} + c`` from (total_train_flops, bpb) points.
+    """Fit ``BPB(C) = a*C^{-b} + c`` from (total_train_flops, bpb) points (>= 3).
 
-    Needs >= 3 points. Fits ``b`` by a 1-D search (bounded, robust for a handful of
-    points) and solves ``a, c`` by least squares at each ``b``. Returns the best fit.
+    Fits ``b`` by a bounded 1-D search and solves ``a, c`` by least squares at each ``b``.
     """
     if len(points) < 3:
         raise ValueError(f"need >= 3 compute points to fit a scaling curve, got {len(points)}")
@@ -190,7 +235,6 @@ def fit_bpb_curve(points: Sequence[tuple[float, float]]) -> ScalingFit:
     ys = [bpb for _, bpb in points]
 
     def linfit(feat: Sequence[float], target: Sequence[float]) -> tuple[float, float, float]:
-        # least-squares target ~ a*feat + c; returns (a, c, sse)
         n = len(feat)
         mf = sum(feat) / n
         mt = sum(target) / n
@@ -202,10 +246,9 @@ def fit_bpb_curve(points: Sequence[tuple[float, float]]) -> ScalingFit:
         return a, c, sse
 
     best: tuple[float, ScalingFit] | None = None
-    # b in (0, 0.5] covers observed LM scaling exponents with margin.
     steps = 500
     for i in range(1, steps + 1):
-        b = 0.5 * i / steps
+        b = 0.5 * i / steps  # exponents in (0, 0.5] cover observed LM scaling with margin
         feat = [math.exp(-b * x) for x in xs]  # C^{-b}
         a, c, sse = linfit(feat, ys)
         if best is None or sse < best[0]:
@@ -214,30 +257,36 @@ def fit_bpb_curve(points: Sequence[tuple[float, float]]) -> ScalingFit:
     return best[1]
 
 
-def febpb(cost: ArmCost, fit: ScalingFit, reference_infer_flops_per_byte: float) -> float:
-    """FLOP-equivalent BPB: the arm's BPB when trained to a common serving budget.
+# Default lifetime serving-to-training ratio: how many reference-trainings-worth of FLOPs
+# a deployed model spends serving over its life, at the reference tokenizer's serving
+# cost. 1.0 weights lifetime serving and training equally (a neutral midpoint); larger
+# makes serving efficiency dominate, smaller recovers the equal-training comparison.
+DEFAULT_SERVING_RATIO = 1.0
 
-    An arm cheaper to serve than the reference can afford proportionally more training
-    compute (and vice versa). We set each arm's training budget so that
-    ``bytes_trained * infer_flops_per_byte`` matches a reference service budget, then
-    read BPB off the fitted curve. This rewards cheap-to-serve tokenizers exactly as
-    much as their serving discount merits, collapsing the Pareto trade into one number.
 
-    Concretely we anchor the reference budget at ``REFERENCE_SERVICE_BYTES`` bytes at the
-    reference serving cost, and give each arm the training FLOPs to reach the same
-    service-normalized data volume.
+def febpb(
+    fit: ScalingFit,
+    reference_train_flops: float,
+    relative_serving_cost: float,
+    serving_ratio: float = DEFAULT_SERVING_RATIO,
+) -> float:
+    """FLOP-equivalent BPB: BPB after reinvesting serving savings into training.
+
+    Fix a lifetime FLOP budget ``B = reference_train_flops * (1 + serving_ratio)`` and a
+    served byte-volume shared across arms. An arm's serving cost scales by
+    ``relative_serving_cost = arm.infer_flops_per_byte / reference.infer_flops_per_byte``
+    and the remainder funds training:
+
+        train_flops(arm) = reference_train_flops * (1 + serving_ratio*(1 - relative_serving_cost))
+
+    A cheaper-to-serve arm gets more training and a lower BPB; an arm whose serving alone
+    exceeds the lifetime budget is **infeasible** (``inf``) — the honest verdict for e.g.
+    byte-level. Serving cost genuinely moves the score (unlike a fixed-training compare).
     """
-    # Service budget: reference bytes at the reference per-byte serving cost.
-    service_budget = REFERENCE_SERVICE_BYTES * reference_infer_flops_per_byte
-    arm_bytes = service_budget / cost.infer_flops_per_byte
-    total_flops = budget_for_bytes(cost, arm_bytes)
-    return fit.bpb_at(total_flops)
-
-
-# Anchor for feBPB: a fixed held-out corpus size (in bytes) the reference tokenizer is
-# "served over". Its absolute value only shifts every arm's training budget by the same
-# multiplicative factor, so rankings are invariant; 100 GB is a representative scale.
-REFERENCE_SERVICE_BYTES = 100e9
+    train_flops = reference_train_flops * (1.0 + serving_ratio * (1.0 - relative_serving_cost))
+    if train_flops <= 0:
+        return math.inf
+    return fit.bpb_at(train_flops)
 
 
 # --- fertility measurement --------------------------------------------------------
@@ -268,28 +317,9 @@ def fertility_of(encode: Callable[[str], Sequence[int]], corpus: Iterable[str]) 
     return FertilityMeasurement(fertility=total_tokens / total_bytes, total_tokens=total_tokens, total_bytes=total_bytes)
 
 
-def _proxy_model(vocab: int) -> GrugModelConfig:
-    """The small model the bake-off actually trains to measure BPB (d1024, ~few-B total)."""
-    return GrugModelConfig(
-        vocab_size=vocab,
-        hidden_dim=1024,
-        num_layers=16,
-        num_heads=8,
-        num_kv_heads=2,
-        head_dim=128,
-        intermediate_dim=512,
-        shared_expert_intermediate_dim=1024,
-        num_experts=32,
-        num_experts_per_token=4,
-        max_seq_len=2048,
-        sliding_window=2048,
-    )
-
-
 def _self_check() -> None:
-    """Demonstrate the scoring, contrasting proxy-scale vs deployment-scale pricing."""
-
-    # (name, vocab, fertility) — fertilities are placeholders until measured on corpus.
+    """Demonstrate pricing and show how context length reshapes the tokenizer trade-off."""
+    # (name, vocab, fertility) — placeholder fertilities until measured on corpus.
     arms = [
         ("llama3-128k", 128256, 0.260),
         ("qwen3-152k", 151669, 0.255),
@@ -298,42 +328,34 @@ def _self_check() -> None:
         ("byte-256", 256, 1.000),
     ]
 
-    # The lm-head FLOP fraction shrinks ~10x from proxy to deployment scale, which is
-    # exactly why cost must be priced at TARGET_MODEL, not the proxy.
-    print("lm-head FLOP fraction by scale (why we price at deployment scale):")
-    print(f"  {'arm':14s} {'proxy d1024':>12s} {'target d6144':>13s}")
-    for n, v, _ in arms:
-        proxy = arm_cost(n, v, 1.0, cost_model=_proxy_model(v))
-        tgt = arm_cost(n, v, 1.0, cost_model=TARGET_MODEL)
-        print(f"  {n:14s} {proxy.lm_head_flop_fraction*100:11.1f}% {tgt.lm_head_flop_fraction*100:12.1f}%")
+    # Attention share and relative serving cost at three context windows: the tokenizer
+    # trade-off shifts as attention grows with context.
+    for ctx in (4_096, 16_384, 65_536):
+        serving = ServingCostModel(context_len=ctx)
+        costs = [arm_cost(n, v, f, serving) for n, v, f in arms]
+        ref = next(c for c in costs if c.name == "llama3-128k").infer_flops_per_byte
+        attn_share = serving.attention_flop_fraction(128256) * 100
+        print(f"\ncontext={ctx} tokens  (attention = {attn_share:.1f}% of forward FLOPs, 5:1 local:global)")
+        print(f"  {'arm':14s} {'vocab':>7s} {'fert':>6s} {'head%':>6s} {'infFLOP/byte':>12s} {'rel_serve':>9s}")
+        for c in costs:
+            print(
+                f"  {c.name:14s} {c.vocab_size:7d} {c.fertility:6.3f} {c.lm_head_flop_fraction * 100:5.1f}% "
+                f"{c.infer_flops_per_byte:12.3e} {c.infer_flops_per_byte / ref:9.3f}"
+            )
 
-    costs = [arm_cost(n, v, f) for n, v, f in arms]  # priced at TARGET_MODEL
+    # feBPB with identical BPB curves => any spread is the serving-cost effect alone.
+    serving = DEFAULT_SERVING
+    costs = [arm_cost(n, v, f, serving) for n, v, f in arms]
     ref = next(c for c in costs if c.name == "llama3-128k").infer_flops_per_byte
-
-    print("\ndeployment-scale cost signature:")
-    print(f"{'arm':14s} {'vocab':>7s} {'fert':>6s} {'lmhead%':>7s} {'infFLOP/byte':>12s} {'rel_serve':>9s}")
+    reference_train_flops = 3e18
+    print(f"\nfeBPB at {serving.context_len} context, identical BPB curves (spread = serving-cost only):")
+    print(f"  {'arm':14s} {'rel_serve':>9s} {'feBPB':>8s}")
     for c in costs:
-        print(
-            f"{c.name:14s} {c.vocab_size:7d} {c.fertility:6.3f} "
-            f"{c.lm_head_flop_fraction*100:6.1f}% {c.infer_flops_per_byte:12.3e} "
-            f"{c.infer_flops_per_byte/ref:9.3f}"
-        )
-
-    # Synthetic isoFLOP curves (better tokenizers => lower asymptote) to exercise the fit.
-    print("\nfeBPB (synthetic BPB curves; lower is better):")
-    for c in costs:
-        floor = {
-            "llama3-128k": 0.90,
-            "qwen3-152k": 0.895,
-            "gemma-262k": 0.892,
-            "superbpe-200k": 0.885,
-            "byte-256": 0.95,
-        }[c.name]
-        pts = []
-        for cbudget in (1e18, 3e18, 9e18):
-            pts.append((cbudget, floor + 3.0 * cbudget ** (-0.08)))
+        pts = [(cbudget, 0.90 + 3.0 * cbudget ** (-0.08)) for cbudget in (1e18, 3e18, 9e18)]
         fit = fit_bpb_curve(pts)
-        print(f"  {c.name:14s} feBPB={febpb(c, fit, ref):.4f}  (fit floor c={fit.c:.4f}, b={fit.b:.3f})")
+        fe = febpb(fit, reference_train_flops, c.infer_flops_per_byte / ref)
+        fe_str = "inf" if fe == math.inf else f"{fe:8.4f}"
+        print(f"  {c.name:14s} {c.infer_flops_per_byte / ref:9.3f} {fe_str:>8s}")
 
 
 if __name__ == "__main__":
