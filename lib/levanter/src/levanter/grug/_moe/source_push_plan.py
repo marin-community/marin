@@ -247,6 +247,37 @@ def source_push_plan_row_stats(plan: SourcePushPlan) -> SourcePushPlanRowStats:
     )
 
 
+def source_push_source_padded_row_bases(
+    plan: SourcePushPlan,
+    block_m: int,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Return source-padded expert-major row bases for full-tile WGMMA stores.
+
+    The exact plan bases pack sources contiguously inside each local expert.
+    Current Lane/WGMMA lowering cannot store partial GMEM tiles, so the W13 v0
+    gives each source `block_m`-rounded room and leaves invalid rows as padding.
+    """
+
+    if block_m <= 0:
+        raise ValueError(f"block_m must be positive, got {block_m}")
+
+    counts = np.asarray(jax.device_get(plan.counts_by_src_dst_expert), dtype=np.int32)
+    rounded_counts = _ceil_div(counts, block_m) * block_m
+    rows_per_local_expert = np.sum(rounded_counts, axis=0, dtype=np.int32)
+    expert_base = np.zeros_like(rows_per_local_expert)
+    src_base_by_expert = np.zeros((counts.shape[1], counts.shape[0], counts.shape[2]), dtype=np.int32)
+    for dst in range(counts.shape[1]):
+        row = 0
+        for expert in range(counts.shape[2]):
+            expert_base[dst, expert] = row
+            src_running = 0
+            for src in range(counts.shape[0]):
+                src_base_by_expert[dst, src, expert] = src_running
+                src_running += int(rounded_counts[src, dst, expert])
+            row += src_running
+    return rounded_counts, expert_base, src_base_by_expert
+
+
 def pack_source_push_tokens(
     x: Float[Array, "S T D"],
     plan: SourcePushPlan,
@@ -268,6 +299,62 @@ def pack_source_push_tokens(
         packed_src[source_valid] = x_host[src, token_ids[src][source_valid], :]
         packed[src] = packed_src
     return jnp.asarray(packed)
+
+
+def source_push_w2_return(
+    hidden_expert_major: Float[Array, "Dst rows I"],
+    w_down: Float[Array, "Dst E I D"],
+    plan: SourcePushPlan,
+    *,
+    expert_base: Int[Array, "Dst E"] | np.ndarray | None = None,
+    src_base_by_expert: Int[Array, "Dst S E"] | np.ndarray | None = None,
+) -> Float[Array, "S Dst Q M D"]:
+    """Compute W2 from expert-major hidden rows and return rows to source queues.
+
+    Optional bases allow the same source-owned plan to address either exact
+    contiguous expert-major rows or the source-padded row layout used by the
+    current W13 kernel.
+    """
+
+    hidden_host = np.asarray(jax.device_get(hidden_expert_major))
+    w_down_host = np.asarray(jax.device_get(w_down))
+    assignment_ids = np.asarray(jax.device_get(plan.assignment_ids), dtype=np.int32)
+    valid_mask = np.asarray(jax.device_get(plan.valid_mask), dtype=np.bool_)
+    local_experts = np.asarray(jax.device_get(plan.local_experts), dtype=np.int32)
+    local_row_starts = np.asarray(jax.device_get(plan.local_row_starts), dtype=np.int32)
+
+    if expert_base is None:
+        expert_base_host = np.asarray(jax.device_get(plan.expert_base), dtype=np.int32)
+    else:
+        expert_base_host = np.asarray(jax.device_get(expert_base), dtype=np.int32)
+    if src_base_by_expert is None:
+        src_base_host = np.asarray(jax.device_get(plan.src_base_by_expert), dtype=np.int32)
+    else:
+        src_base_host = np.asarray(jax.device_get(src_base_by_expert), dtype=np.int32)
+
+    _validate_w2_return_shapes(hidden_host, w_down_host, assignment_ids, expert_base_host, src_base_host)
+
+    ep_size, dst_ord_count, entries_per_dst, block_m = assignment_ids.shape
+    return_y = np.zeros(
+        (ep_size, dst_ord_count, entries_per_dst, block_m, w_down_host.shape[-1]), dtype=hidden_host.dtype
+    )
+    for src in range(ep_size):
+        for dst_ord in range(dst_ord_count):
+            dst = dst_ordinal(src, dst_ord, ep_size)
+            for entry in range(entries_per_dst):
+                rows = valid_mask[src, dst_ord, entry]
+                valid_rows = int(np.sum(rows))
+                if valid_rows == 0:
+                    continue
+                expert = int(local_experts[src, dst_ord, entry])
+                row_start = (
+                    int(expert_base_host[dst, expert])
+                    + int(src_base_host[dst, src, expert])
+                    + int(local_row_starts[src, dst_ord, entry])
+                )
+                hidden_rows = hidden_host[dst, row_start : row_start + valid_rows, :]
+                return_y[src, dst_ord, entry, :valid_rows, :] = hidden_rows @ w_down_host[dst, expert]
+    return jnp.asarray(return_y)
 
 
 def source_push_route_buffer(
@@ -303,6 +390,15 @@ def source_push_route_buffer(
     return jnp.asarray(route_buffer)
 
 
+def source_push_combine(
+    return_y: Float[Array, "S Dst Q M D"],
+    plan: SourcePushPlan,
+) -> Float[Array, "S T D"]:
+    """Combine returned route rows into source-token outputs in fixed slot order."""
+
+    return jnp.sum(source_push_route_buffer(return_y, plan), axis=2)
+
+
 def _source_group_sizes(selected_experts: np.ndarray, global_experts: int) -> np.ndarray:
     source_count = selected_experts.shape[0]
     group_sizes = np.zeros((source_count, global_experts), dtype=np.int32)
@@ -318,3 +414,30 @@ def _ceil_div(values: np.ndarray, divisor: int) -> np.ndarray:
 def _exclusive_cumsum(values: np.ndarray, axis: int) -> np.ndarray:
     cumsum = np.cumsum(values, axis=axis, dtype=np.int32)
     return cumsum - values
+
+
+def _validate_w2_return_shapes(
+    hidden: np.ndarray,
+    w_down: np.ndarray,
+    assignment_ids: np.ndarray,
+    expert_base: np.ndarray,
+    src_base_by_expert: np.ndarray,
+) -> None:
+    if hidden.ndim != 3:
+        raise ValueError(f"hidden_expert_major must have shape [dst, rows, I], got {hidden.shape}")
+    if w_down.ndim != 4:
+        raise ValueError(f"w_down must have shape [dst, expert, I, D], got {w_down.shape}")
+    ep_size = assignment_ids.shape[0]
+    experts_per_rank = w_down.shape[1]
+    if hidden.shape[0] != ep_size:
+        raise ValueError(f"hidden destination dim {hidden.shape[0]} must match plan ep_size {ep_size}")
+    if w_down.shape[0] != ep_size:
+        raise ValueError(f"w_down destination dim {w_down.shape[0]} must match plan ep_size {ep_size}")
+    if hidden.shape[-1] != w_down.shape[-2]:
+        raise ValueError(f"hidden I dim {hidden.shape[-1]} must match w_down I dim {w_down.shape[-2]}")
+    if expert_base.shape != (ep_size, experts_per_rank):
+        raise ValueError(f"expert_base shape {expert_base.shape} must be {(ep_size, experts_per_rank)}")
+    if src_base_by_expert.shape != (ep_size, ep_size, experts_per_rank):
+        raise ValueError(
+            f"src_base_by_expert shape {src_base_by_expert.shape} must be {(ep_size, ep_size, experts_per_rank)}"
+        )

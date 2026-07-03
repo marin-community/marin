@@ -19,9 +19,12 @@ from levanter.grug._moe.source_push_plan import (
     build_source_push_plan,
     dst_ordinal,
     pack_source_push_tokens,
+    source_push_combine,
     recv_src_ordinal,
     source_push_plan_row_stats,
     source_push_route_buffer,
+    source_push_source_padded_row_bases,
+    source_push_w2_return,
 )
 
 
@@ -40,6 +43,10 @@ def _small_routing_inputs() -> tuple[jax.Array, jax.Array]:
     )
     combine_weights = jnp.arange(selected_experts.size, dtype=jnp.float32).reshape(selected_experts.shape) + 1.0
     return selected_experts, combine_weights
+
+
+def _expert_major_row_count(expert_base: np.ndarray, rows_per_local_expert: np.ndarray) -> int:
+    return int(np.max(expert_base + rows_per_local_expert))
 
 
 def test_source_push_plan_queues_source_assignments_in_destination_expert_order():
@@ -202,6 +209,7 @@ def test_source_push_plan_packs_tokens_and_restores_source_route_buffer():
     return_y[..., 1] = np.where(valid_mask, assignment_ids * 10 + 2, 0)
     return_y[..., 2] = np.where(valid_mask, assignment_ids * 10 + 3, 0)
     route_buffer = np.asarray(source_push_route_buffer(jnp.asarray(return_y), plan))
+    combined = np.asarray(source_push_combine(jnp.asarray(return_y), plan))
 
     assert route_buffer.shape == (EP_SIZE, selected_experts.shape[1], selected_experts.shape[2], 3)
     for src in range(EP_SIZE):
@@ -216,6 +224,139 @@ def test_source_push_plan_packs_tokens_and_restores_source_route_buffer():
                         return_y[src, dst_ord, entry, row] * np.asarray(plan.combine_weights)[src, dst_ord, entry, row]
                     )
                     np.testing.assert_array_equal(route_buffer[src, token, route_slot], expected)
+    np.testing.assert_array_equal(combined, np.sum(route_buffer, axis=2))
+
+
+def test_source_push_w2_return_preserves_queue_identity_from_exact_expert_major_hidden():
+    selected_experts, combine_weights = _small_routing_inputs()
+    plan = build_source_push_plan(
+        selected_experts,
+        combine_weights,
+        ep_size=EP_SIZE,
+        experts_per_rank=EXPERTS_PER_RANK,
+        block_m=BLOCK_M,
+        capacity_factor=2.0,
+    )
+    expert_base = np.asarray(plan.expert_base)
+    src_base_by_expert = np.asarray(plan.src_base_by_expert)
+    rows_per_local_expert = np.asarray(plan.rows_per_local_expert)
+    assignment_ids = np.asarray(plan.assignment_ids)
+    valid_mask = np.asarray(plan.valid_mask)
+    local_experts = np.asarray(plan.local_experts)
+    local_row_starts = np.asarray(plan.local_row_starts)
+
+    hidden = np.zeros((EP_SIZE, _expert_major_row_count(expert_base, rows_per_local_expert), 2), dtype=np.float32)
+    for src in range(EP_SIZE):
+        for dst_ord in range(EP_SIZE):
+            dst = (src + dst_ord) % EP_SIZE
+            for entry in range(assignment_ids.shape[2]):
+                expert = local_experts[src, dst_ord, entry]
+                if expert == INVALID_ASSIGNMENT_ID:
+                    continue
+                row_start = (
+                    expert_base[dst, expert]
+                    + src_base_by_expert[dst, src, expert]
+                    + local_row_starts[src, dst_ord, entry]
+                )
+                for row in range(BLOCK_M):
+                    if not valid_mask[src, dst_ord, entry, row]:
+                        continue
+                    assignment = assignment_ids[src, dst_ord, entry, row]
+                    hidden[dst, row_start + row] = [assignment + 1, 100 + 10 * src + dst_ord]
+
+    w_down = np.arange(EP_SIZE * EXPERTS_PER_RANK * 2 * 3, dtype=np.float32).reshape(EP_SIZE, EXPERTS_PER_RANK, 2, 3)
+    return_y = np.asarray(source_push_w2_return(jnp.asarray(hidden), jnp.asarray(w_down), plan))
+
+    for src in range(EP_SIZE):
+        for dst_ord in range(EP_SIZE):
+            dst = (src + dst_ord) % EP_SIZE
+            for entry in range(assignment_ids.shape[2]):
+                expert = local_experts[src, dst_ord, entry]
+                for row in range(BLOCK_M):
+                    if not valid_mask[src, dst_ord, entry, row]:
+                        np.testing.assert_array_equal(return_y[src, dst_ord, entry, row], np.zeros(3))
+                        continue
+                    row_start = (
+                        expert_base[dst, expert]
+                        + src_base_by_expert[dst, src, expert]
+                        + local_row_starts[src, dst_ord, entry]
+                    )
+                    expected = hidden[dst, row_start + row] @ w_down[dst, expert]
+                    np.testing.assert_allclose(return_y[src, dst_ord, entry, row], expected)
+
+
+def test_source_push_w2_return_with_source_padded_bases_combines_like_direct_reference():
+    selected_experts, combine_weights = _small_routing_inputs()
+    plan = build_source_push_plan(
+        selected_experts,
+        combine_weights,
+        ep_size=EP_SIZE,
+        experts_per_rank=EXPERTS_PER_RANK,
+        block_m=BLOCK_M,
+        capacity_factor=2.0,
+    )
+    rounded_counts, expert_base, src_base_by_expert = source_push_source_padded_row_bases(plan, BLOCK_M)
+    rows_per_local_expert = np.sum(rounded_counts, axis=0)
+    assignment_ids = np.asarray(plan.assignment_ids)
+    token_ids = np.asarray(plan.token_ids)
+    valid_mask = np.asarray(plan.valid_mask)
+    local_experts = np.asarray(plan.local_experts)
+    local_row_starts = np.asarray(plan.local_row_starts)
+    weights = np.asarray(plan.combine_weights)
+
+    hidden = np.zeros((EP_SIZE, _expert_major_row_count(expert_base, rows_per_local_expert), 2), dtype=np.float32)
+    for src in range(EP_SIZE):
+        for dst_ord in range(EP_SIZE):
+            dst = (src + dst_ord) % EP_SIZE
+            for entry in range(assignment_ids.shape[2]):
+                expert = local_experts[src, dst_ord, entry]
+                if expert == INVALID_ASSIGNMENT_ID:
+                    continue
+                row_start = (
+                    expert_base[dst, expert]
+                    + src_base_by_expert[dst, src, expert]
+                    + local_row_starts[src, dst_ord, entry]
+                )
+                for row in range(BLOCK_M):
+                    if not valid_mask[src, dst_ord, entry, row]:
+                        continue
+                    assignment = assignment_ids[src, dst_ord, entry, row]
+                    hidden[dst, row_start + row] = [assignment + 1, 1 + src + 2 * dst_ord]
+
+    w_down = (
+        np.arange(EP_SIZE * EXPERTS_PER_RANK * 2 * 4, dtype=np.float32).reshape(EP_SIZE, EXPERTS_PER_RANK, 2, 4) + 1.0
+    ) / 10.0
+    return_y = source_push_w2_return(
+        jnp.asarray(hidden),
+        jnp.asarray(w_down),
+        plan,
+        expert_base=expert_base,
+        src_base_by_expert=src_base_by_expert,
+    )
+    combined = np.asarray(source_push_combine(return_y, plan))
+
+    expected = np.zeros((EP_SIZE, selected_experts.shape[1], 4), dtype=np.float32)
+    for src in range(EP_SIZE):
+        for dst_ord in range(EP_SIZE):
+            dst = (src + dst_ord) % EP_SIZE
+            for entry in range(assignment_ids.shape[2]):
+                expert = local_experts[src, dst_ord, entry]
+                if expert == INVALID_ASSIGNMENT_ID:
+                    continue
+                row_start = (
+                    expert_base[dst, expert]
+                    + src_base_by_expert[dst, src, expert]
+                    + local_row_starts[src, dst_ord, entry]
+                )
+                for row in range(BLOCK_M):
+                    if not valid_mask[src, dst_ord, entry, row]:
+                        continue
+                    token = token_ids[src, dst_ord, entry, row]
+                    expected[src, token] += (hidden[dst, row_start + row] @ w_down[dst, expert]) * weights[
+                        src, dst_ord, entry, row
+                    ]
+
+    np.testing.assert_allclose(combined, expected, rtol=1e-6, atol=1e-6)
 
 
 def test_source_push_plan_capacity_clipping_matches_existing_ep_reference():

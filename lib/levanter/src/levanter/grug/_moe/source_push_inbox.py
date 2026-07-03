@@ -40,6 +40,7 @@ from levanter.grug._moe.source_push_plan import (
     build_source_push_plan,
     pack_source_push_tokens,
     source_push_plan_row_stats,
+    source_push_source_padded_row_bases,
 )
 from levanter.grug._moe.source_push_inbox_profiles import source_push_profile_defaults
 
@@ -1090,24 +1091,6 @@ def _src_base_by_expert_for_dst(src_base: np.ndarray) -> np.ndarray:
     return np.transpose(src_base, (1, 0, 2)).astype(np.int32)
 
 
-def _source_padded_plan_row_bases(plan: SourcePushPlan, block_m: int) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    counts = np.asarray(plan.counts_by_src_dst_expert, dtype=np.int32)
-    rounded_counts = ((counts + block_m - 1) // block_m) * block_m
-    rows_per_local_expert = np.sum(rounded_counts, axis=0, dtype=np.int32)
-    expert_base = np.zeros_like(rows_per_local_expert)
-    src_base_by_expert = np.zeros((counts.shape[1], counts.shape[0], counts.shape[2]), dtype=np.int32)
-    for dst in range(counts.shape[1]):
-        row = 0
-        for expert in range(counts.shape[2]):
-            expert_base[dst, expert] = row
-            src_running = 0
-            for src in range(counts.shape[0]):
-                src_base_by_expert[dst, src, expert] = src_running
-                src_running += int(rounded_counts[src, dst, expert])
-            row += src_running
-    return rounded_counts, expert_base, src_base_by_expert
-
-
 def _source_padded_plan_send_meta(
     plan: SourcePushPlan,
     expert_base: np.ndarray,
@@ -1285,7 +1268,7 @@ def _make_source_push_plan_inputs(config: PushInboxConfig) -> HostInputs:
     )
     source_tokens = np.stack([_make_source_tokens(config, src) for src in range(config.ep_size)], axis=0)
     x_host = np.asarray(pack_source_push_tokens(jnp.asarray(source_tokens, dtype=jnp.float32), plan), dtype=np.float32)
-    rounded_counts, expert_base, src_base_by_expert = _source_padded_plan_row_bases(plan, config.block_m)
+    rounded_counts, expert_base, src_base_by_expert = source_push_source_padded_row_bases(plan, config.block_m)
     send_meta = _source_padded_plan_send_meta(plan, expert_base, src_base_by_expert)
     recv_meta = _recv_meta_from_send_meta(config, send_meta)
     stats = _queue_stats(config, send_meta)
