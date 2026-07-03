@@ -978,3 +978,65 @@ profile and identical source-plan queue metadata across variants.
   - Keep this as the current slow-tail decomposition baseline for PR #6841. If more perf work is needed before landing,
     the next diagnostic should instrument per-slot/per-phase wait distribution or split producer/consumer scheduling,
     not blindly tune the existing full kernel.
+
+## 2026-07-03 08:37 - Current-head full-forward target gate
+
+Refreshed the full source-push forward target gate on current PR #6841 head after the public opt-in adapter and later
+W13 reporting changes. This uses the staged W13 -> W2-return -> combine path, which remains the safer and faster
+current full-forward structure than the single-JIT path.
+
+- Commit Hash: `754fe3005`
+- Job: `/dlwh/source-push-forward-gate-754fe3005-20260703`
+- Cluster: `cw-us-east-02a`
+- Iris summary: succeeded, one task, `exit_code=0`.
+- Command:
+  ```bash
+  uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job run --no-wait \
+    --job-name source-push-forward-gate-754fe3005-20260703 \
+    --cpu 16 --memory 128GB --disk 16GB --gpu H100x8 --reserve H100x8 \
+    --enable-extra-resources --extra gpu -- \
+    timeout 7200s bash -lc 'set -euo pipefail
+  JSONL=scratch/source_push_forward_gate_754fe3005_20260703.jsonl
+  rm -f "$JSONL"
+  COMMON="uv run --package marin-levanter --group test python lib/levanter/scripts/bench/bench_source_push_forward.py --source-push-profile hopper_source_push_inbox_rough_balanced_216 --execution-mode staged_host_sync --warmup 1 --steps 3 --repeat-runs 5 --separate-compile --no-check --no-progress-events --git-sha 754fe3005 --jsonl $JSONL"
+  $COMMON --routing balanced --capacity-factor 1.0
+  $COMMON --routing balanced --capacity-factor 1.25
+  $COMMON --routing roughly_balanced --capacity-factor 1.25
+  '
+  ```
+- Full-forward rows:
+
+  | routing | capacity | repeats | median total | p90 total | rounded forward TFLOP/s/rank | useful forward TFLOP/s/rank | row efficiency | drops |
+  | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+  | `balanced` | `1.0` | 5 | `15.257 ms` | `15.342 ms` | `168.90` | `168.90` | `1.000000` | 0 |
+  | `balanced` | `1.25` | 5 | `15.310 ms` | `15.415 ms` | `168.32` | `168.32` | `1.000000` | 0 |
+  | `roughly_balanced` | `1.25` | 5 | `16.443 ms` | `22.694 ms` | `166.27` | `156.72` | `0.942584` | 0 |
+
+- Stage medians:
+
+  | routing | capacity | W13 | W2 return | source combine |
+  | --- | ---: | ---: | ---: | ---: |
+  | `balanced` | `1.0` | `8.103 ms` | `5.716 ms` | `1.341 ms` |
+  | `balanced` | `1.25` | `8.073 ms` | `5.795 ms` | `1.342 ms` |
+  | `roughly_balanced` | `1.25` | `8.664 ms` | `6.190 ms` | `1.379 ms` |
+
+- Repeat times:
+  - balanced cf1.0 total: `[15.359, 15.315, 15.165, 15.257, 15.212] ms`.
+  - balanced cf1.25 total: `[15.427, 15.397, 15.175, 15.310, 15.264] ms`.
+  - rough-balanced cf1.25 total: `[15.954, 16.089, 17.615, 26.080, 16.443] ms`.
+  - rough-balanced cf1.25 stage rows:
+    - W13: `[8.456, 8.664, 8.652, 11.866, 8.781] ms`.
+    - W2 return: `[6.054, 5.989, 7.441, 11.397, 6.190] ms`.
+    - combine: `[1.345, 1.341, 1.426, 2.665, 1.379] ms`.
+- Interpretation:
+  - Current-head balanced full-forward target rows are materially faster than the older `bc0c377c1` full-forward rows
+    (`~15.3 ms` now vs `~17.4-17.6 ms` then), while preserving zero drops and exact row efficiency.
+  - Rough-balanced median remains close to the prior staged baseline (`16.443 ms` now vs `16.137 ms` at `8b988579d`),
+    but one repeat (`26.080 ms`) shows that the rough-balanced slow-tail condition also affects the full W13/W2/combine
+    chain.
+  - The slow repeat includes simultaneous W13, W2-return, and combine inflation, so full-forward tail analysis should
+    use the W13 combined-path tail decomposition above as the current baseline before adding more tuning knobs.
+- Next action:
+  - Treat `15.3 ms` balanced and `16.4 ms` rough-balanced staged full-forward medians as the current PR #6841 target
+    full-forward baseline. The next production-relevant optimization remains reducing W2-return transport cost or
+    replacing the current staged return boundary with a real producer/consumer return path.
