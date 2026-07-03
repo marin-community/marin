@@ -539,3 +539,38 @@ target rough-balanced cf1.25 path into W13, W2-return, and source-combine costs.
   - Treat `staged_host_sync` as the current full-forward performance baseline for the source-push chain.
   - If integrating behind an opt-in backend, prefer explicit W13 -> W2-return -> combine stage boundaries first, then
     optimize W2-return or replace the barrier with a real producer/consumer return synchronization only after profiling.
+
+## 2026-07-03 04:21 - Real-input full-forward adapter
+
+Moved the package-private full-forward harness one step closer to production integration by adding an adapter that accepts
+real source-local MoE arrays instead of only synthetic benchmark inputs.
+
+- Commit Hash: `dafbf3337`
+- Code:
+  - `lib/levanter/src/levanter/grug/_moe/source_push_forward.py`
+  - `lib/levanter/tests/grug/test_source_push_inbox.py`
+- Change:
+  - Added `make_source_push_forward_inputs(config, x, selected_experts, combine_weights, w_gate_up, w_down)`.
+  - The adapter validates real array shapes, builds `SourcePushPlan`, packs source tokens into queue order, derives
+    source-padded expert-major row bases, and preserves the provided expert weights.
+  - The synthetic `make_source_push_forward_source_plan_inputs` benchmark builder now calls through this real-input
+    adapter with `input_mode="source_push_plan"`.
+  - Added a small no-drop CPU/JAX test that feeds real `[S,T,D]` tokens, real routing/combine weights, and real sharded
+    W13/W2 weights, then compares the full source-push reference round trip against an independent naive MoE oracle.
+- Local verification:
+  - `uv run --package marin-levanter --group test pytest lib/levanter/tests/grug/test_source_push_inbox.py lib/levanter/tests/grug/test_source_push_plan.py -q`
+  - Result: `43 passed, 11 warnings`.
+  - `./infra/pre-commit.py --changed-files --fix`
+  - Result: all checks passed.
+- H100 smoke:
+  - Job: `/dlwh/source-push-forward-real-adapter-smoke-dafbf3337-20260703-1120`
+  - Command:
+    `uv run --package marin-levanter --group test python lib/levanter/scripts/bench/bench_source_push_forward.py --ep-size 8 --tokens-per-rank 64 --hidden-dim 128 --intermediate-dim 128 --experts-per-rank 2 --topk 2 --capacity-factor 1.25 --entries-per-rank 2 --inbox-slots 1 --block-m 64 --block-k 64 --block-n 128 --n-group 1 --n-groups-per-job 1 --send-worker-programs-per-peer 1 --worker-programs-per-peer 8 --send-pipeline-depth 1 --routing balanced --execution-mode single_jit --warmup 0 --steps 1 --repeat-runs 1 --check --progress-events --git-sha dafbf3337 --jsonl scratch/source_push_forward_real_adapter_smoke_dafbf3337.jsonl`
+  - Result: succeeded, `steady_state_time=0.00642532s`, `max_abs_diff=0.0078125`,
+    `mean_abs_diff=0.000339662`, `dropped_routes=0`.
+- Interpretation:
+  - The full-forward source-push path no longer requires synthetic token/weight generators at its package-private API
+    boundary. This is still not a public `grug_moe` backend, because `SourcePushPlan` is currently host-built and cannot
+    be constructed inside the existing `shard_map` EP local function.
+  - The next integration step is to decide where host-side plan construction lives for an opt-in backend, or to replace
+    it with a device/JAX-compatible planner before wiring `MoeImplementation`.
