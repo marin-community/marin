@@ -821,3 +821,31 @@ Added an H100 public-backend edge-case smoke for non-full queue blocks, empty lo
 - Interpretation:
   - The public opt-in backend now has H100 integration coverage for tail-block transport, empty local experts, and
     `topk=4` source combine through the public `moe_mlp` API.
+
+## 2026-07-03 06:36 - Source-push W13 useful-throughput reporting
+
+Added explicit useful-row and rounded-row W13 throughput fields to source-push benchmark rows.
+
+- Commit Hash: `23dccd061`
+- Code:
+  - `lib/levanter/src/levanter/grug/_moe/source_push_inbox.py`
+  - `lib/levanter/src/levanter/grug/_moe/source_push_forward.py`
+  - `lib/levanter/scripts/bench/bench_source_push_inbox_diagnostics.py`
+  - `lib/levanter/scripts/bench/bench_source_push_inbox_consolidation.py`
+  - `lib/levanter/tests/grug/test_source_push_inbox.py`
+  - `lib/levanter/tests/grug/test_source_push_plan.py`
+- Change:
+  - Kept `w13_tflops_per_rank` as the existing rounded-row alias.
+  - Added `rounded_w13_tflops_per_rank` and `useful_w13_tflops_per_rank` to W13 inbox rows and full-forward rows.
+  - Added the new fields to diagnostic/consolidation summary medians.
+  - Added CPU planner coverage for balanced `capacity_factor=1.0` routing with no dropped routes and no masked rows.
+- Local verification:
+  - `uv run --package marin-levanter --group test pytest lib/levanter/tests/grug/test_source_push_plan.py lib/levanter/tests/grug/test_source_push_inbox.py -q -n 0`
+    - Result: `46 passed, 1 warning in 13.66s`.
+  - `./infra/pre-commit.py --changed-files --fix`
+    - Result: all checks passed.
+- PR state:
+  - PR #6841 CI monitor fired with `conclusion=success`, `observed_checks=32`, no pending or failing checks before this new commit.
+- Interpretation:
+  - Future W13 benchmark rows can report the denominator required by the invertible source-push spec: useful routed rows
+    separately from rounded WGMMA rows.
