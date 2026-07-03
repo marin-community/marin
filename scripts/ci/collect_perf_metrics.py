@@ -177,7 +177,7 @@ def _job_status_to_dict(job: job_pb2.JobStatus) -> dict:
 
 
 def fetch_job_summary(client: IrisClient, job_id: str) -> dict | None:
-    """Return a job summary built from Iris client status and task RPCs."""
+    """Return a job summary, or None when the Iris RPC fails."""
     try:
         job_name = JobName.from_wire(job_id)
         return build_job_summary(client.status(job_name), client.list_tasks(job_name))
@@ -187,7 +187,7 @@ def fetch_job_summary(client: IrisClient, job_id: str) -> dict | None:
 
 
 def fetch_job_tree(client: IrisClient, job_id: str) -> list[dict] | None:
-    """Return the parent + all descendants from the Iris client.
+    """Return the parent + descendants, or None when the Iris RPC fails.
 
     Each entry includes job-level ``preemption_count`` / ``failure_count`` /
     ``task_state_counts``. We need the tree (not just the parent's summary)
