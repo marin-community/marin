@@ -14,7 +14,7 @@ import requests
 from iris.rpc import controller_pb2
 from iris.time_proto import timestamp_to_proto
 from marin.inference.quick_serve import resolve_model_path, select_tensor_parallel_size
-from marin.inference.quick_serve_cli import _print_bearer_access
+from marin.inference.quick_serve_cli import _mint_and_print_bearer_access
 from marin.inference.quick_serve_dashboard import (
     ServingInfo,
     bind_serving_socket,
@@ -67,12 +67,12 @@ def _mint_response(token: str, ttl_hours: float) -> controller_pb2.Controller.Mi
     return controller_pb2.Controller.MintEndpointTokenResponse(token=token, expires_at=timestamp_to_proto(expires))
 
 
-def test_print_bearer_access_mints_and_prints_off_cluster_url(capsys):
+def test_mint_and_print_bearer_access_mints_and_prints_off_cluster_url(capsys):
     """BEARER serve prints the public OpenAI base_url + the minted api_key."""
     client = MagicMock()
     client._cluster_client.mint_endpoint_token.return_value = _mint_response("ep-token-xyz", 24.0)
 
-    _print_bearer_access(client, "/serve/foo", "https://iris.oa.dev", 24.0)
+    _mint_and_print_bearer_access(client, "/serve/foo", "https://iris.oa.dev", 24.0)
 
     # The mint call is scoped to this endpoint with the serve lifetime as the TTL.
     name, kwargs = (
@@ -88,12 +88,12 @@ def test_print_bearer_access_mints_and_prints_off_cluster_url(capsys):
     assert "ep-token-xyz" in out
 
 
-def test_print_bearer_access_without_public_origin(capsys):
+def test_mint_and_print_bearer_access_without_public_origin(capsys):
     """With no dashboard origin (bare --controller) it still mints and prints the token."""
     client = MagicMock()
     client._cluster_client.mint_endpoint_token.return_value = _mint_response("ep-token-2", 1.0)
 
-    _print_bearer_access(client, "/serve/foo", None, 1.0)
+    _mint_and_print_bearer_access(client, "/serve/foo", None, 1.0)
 
     out = capsys.readouterr().out
     assert "ep-token-2" in out
