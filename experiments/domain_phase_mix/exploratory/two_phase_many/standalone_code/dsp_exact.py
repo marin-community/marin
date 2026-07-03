@@ -79,6 +79,12 @@ class PhaseMode(StrEnum):
 
     BENEFIT_GAIN = "benefit_gain"
     EFFECTIVE_EXPOSURE = "effective_exposure"
+    SATURATION_PENALTY = "saturation_penalty"
+    RETAINED_EFFECTIVE_EXPOSURE = "retained_effective_exposure"
+    SPLIT_RETAINED_EXPOSURE = "split_retained_exposure"
+    DSRE_SATIETY = "dsre_satiety"
+    RETAINED_PENALTY_ONLY = "retained_penalty_only"
+    SATIATING_LATE_BONUS = "satiating_late_bonus"
     NONE = "none"
 
 
@@ -146,7 +152,19 @@ class FittedDSPModel:
             per_domain += len(self.domain_names)  # tau
             per_domain += len(self.domain_names)  # penalty coefficient
         global_params = 1  # intercept
-        if self.variant.phase_mode != PhaseMode.NONE:
+        if self.variant.phase_mode == PhaseMode.SATURATION_PENALTY:
+            global_params += 2
+        elif self.variant.phase_mode == PhaseMode.SPLIT_RETAINED_EXPOSURE:
+            global_params += 4
+        elif self.variant.phase_mode == PhaseMode.DSRE_SATIETY:
+            global_params += 3
+        elif self.variant.phase_mode == PhaseMode.RETAINED_EFFECTIVE_EXPOSURE:
+            global_params += 2
+        elif self.variant.phase_mode == PhaseMode.RETAINED_PENALTY_ONLY:
+            global_params += 3
+        elif self.variant.phase_mode == PhaseMode.SATIATING_LATE_BONUS:
+            global_params += 3
+        elif self.variant.phase_mode != PhaseMode.NONE:
             global_params += 1
         return int(per_domain + global_params)
 
@@ -165,6 +183,48 @@ VARIANTS: dict[str, DSPVariant] = {
         penalty_mode=PenaltyMode.LOG_SOFTPLUS_SQUARED,
         linear_mode=LinearMode.NNLS,
         description="Empirical comparator: phase-1 multiplier enters benefit and penalty exposure.",
+    ),
+    "split_saturation_penalty": DSPVariant(
+        name="dsp_saturation_penalty_split_nnls",
+        phase_mode=PhaseMode.SATURATION_PENALTY,
+        penalty_mode=PenaltyMode.LOG_SOFTPLUS_SQUARED,
+        linear_mode=LinearMode.NNLS,
+        description="Unties effective exposure into separate phase-1 saturation and penalty multipliers.",
+    ),
+    "retained_effective_exposure": DSPVariant(
+        name="dsp_retained_effective_exposure_penalty_nnls",
+        phase_mode=PhaseMode.RETAINED_EFFECTIVE_EXPOSURE,
+        penalty_mode=PenaltyMode.LOG_SOFTPLUS_SQUARED,
+        linear_mode=LinearMode.NNLS,
+        description="Retention variant: phase-0 exposure is exponentially retained before adding phase-1 exposure.",
+    ),
+    "split_retained_exposure": DSPVariant(
+        name="dsp_split_retained_exposure_penalty_nnls",
+        phase_mode=PhaseMode.SPLIT_RETAINED_EXPOSURE,
+        penalty_mode=PenaltyMode.LOG_SOFTPLUS_SQUARED,
+        linear_mode=LinearMode.NNLS,
+        description="Retention variant with separate retained exposure for benefit saturation and overexposure penalty.",
+    ),
+    "dsre_satiety": DSPVariant(
+        name="dsp_dsre_satiety_penalty_nnls",
+        phase_mode=PhaseMode.DSRE_SATIETY,
+        penalty_mode=PenaltyMode.LOG_SOFTPLUS_SQUARED,
+        linear_mode=LinearMode.NNLS,
+        description="DS-RE-style satiety: phase-1 signal is incremental after a phase-0 memory term.",
+    ),
+    "retained_penalty_only": DSPVariant(
+        name="dsp_retained_penalty_only_nnls",
+        phase_mode=PhaseMode.RETAINED_PENALTY_ONLY,
+        penalty_mode=PenaltyMode.LOG_SOFTPLUS_SQUARED,
+        linear_mode=LinearMode.NNLS,
+        description="Control: effective-exposure signal with retained-exposure penalty.",
+    ),
+    "satiating_late_bonus": DSPVariant(
+        name="dsp_satiating_late_bonus_penalty_nnls",
+        phase_mode=PhaseMode.SATIATING_LATE_BONUS,
+        penalty_mode=PenaltyMode.LOG_SOFTPLUS_SQUARED,
+        linear_mode=LinearMode.NNLS,
+        description="Concave phase-1 refresh bonus: late exposure starts high-value but satiates.",
     ),
     "no_phase": DSPVariant(
         name="dsp_no_phase_penalty_nnls",
@@ -205,6 +265,44 @@ def sigmoid(x: np.ndarray | float) -> np.ndarray:
     exp_x = np.exp(arr[~positive])
     out[~positive] = exp_x / (1.0 + exp_x)
     return out
+
+
+def logit(value: float) -> float:
+    """Logit for scalar probabilities clipped away from the boundary."""
+    clipped = float(np.clip(value, 1e-6, 1.0 - 1e-6))
+    return float(np.log(clipped / (1.0 - clipped)))
+
+
+def retained_exposure(
+    e0: np.ndarray,
+    e1: np.ndarray,
+    p1: np.ndarray,
+    *,
+    retention_lambda: float,
+    eta: float,
+) -> np.ndarray:
+    """Phase-0 exposure retained through the phase-1 distribution plus phase-1 exposure."""
+    retention = np.exp(-retention_lambda * (1.0 - p1))
+    return retention * e0 + eta * e1
+
+
+def satiating_late_exposure(
+    e0: np.ndarray,
+    e1: np.ndarray,
+    *,
+    gamma_bonus: float,
+    beta_late: float,
+    late_satiation_scale: float,
+) -> np.ndarray:
+    """Aggregate exposure with a concave phase-1 refresh bonus.
+
+    The phase-1 marginal value is beta_late + gamma_bonus * exp(-e1 / s):
+    high for small late exposure, but converging to beta_late after the
+    refresh effect saturates.
+    """
+    scale = max(float(late_satiation_scale), PHASE_EPS)
+    late_bonus = scale * (1.0 - np.exp(-e1 / scale))
+    return e0 + float(beta_late) * e1 + float(gamma_bonus) * late_bonus
 
 
 def average_phase_tv_distance(left: np.ndarray, right: np.ndarray) -> np.ndarray:
@@ -349,7 +447,47 @@ def unpack_theta(theta: np.ndarray, variant: DSPVariant, num_domains: int) -> di
     if variant.penalty_mode != PenaltyMode.NONE:
         params["tau"] = np.clip(theta[cursor : cursor + num_domains], -2.0, 8.0)
         cursor += num_domains
-    if variant.phase_mode != PhaseMode.NONE:
+    if variant.phase_mode == PhaseMode.SATURATION_PENALTY:
+        params["gamma_saturation"] = float(np.exp(np.clip(theta[cursor], np.log(1e-4), np.log(100.0))))
+        cursor += 1
+        params["gamma_penalty"] = float(np.exp(np.clip(theta[cursor], np.log(1e-4), np.log(100.0))))
+        cursor += 1
+    elif variant.phase_mode == PhaseMode.RETAINED_EFFECTIVE_EXPOSURE:
+        params["lambda_retention"] = float(np.exp(np.clip(theta[cursor], np.log(1e-4), np.log(20.0))))
+        cursor += 1
+        params["eta"] = float(np.exp(np.clip(theta[cursor], np.log(1e-4), np.log(100.0))))
+        cursor += 1
+    elif variant.phase_mode == PhaseMode.SPLIT_RETAINED_EXPOSURE:
+        params["lambda_saturation"] = float(np.exp(np.clip(theta[cursor], np.log(1e-4), np.log(20.0))))
+        cursor += 1
+        params["eta_saturation"] = float(np.exp(np.clip(theta[cursor], np.log(1e-4), np.log(100.0))))
+        cursor += 1
+        params["lambda_penalty"] = float(np.exp(np.clip(theta[cursor], np.log(1e-4), np.log(20.0))))
+        cursor += 1
+        params["eta_penalty"] = float(np.exp(np.clip(theta[cursor], np.log(1e-4), np.log(100.0))))
+        cursor += 1
+    elif variant.phase_mode == PhaseMode.DSRE_SATIETY:
+        params["lambda_retention"] = float(np.exp(np.clip(theta[cursor], np.log(1e-4), np.log(20.0))))
+        cursor += 1
+        params["eta"] = float(np.exp(np.clip(theta[cursor], np.log(1e-4), np.log(100.0))))
+        cursor += 1
+        params["phi"] = float(np.clip(sigmoid(theta[cursor]), 1e-4, 1.0 - 1e-4))
+        cursor += 1
+    elif variant.phase_mode == PhaseMode.RETAINED_PENALTY_ONLY:
+        params["gamma"] = float(np.exp(np.clip(theta[cursor], np.log(1e-4), np.log(100.0))))
+        cursor += 1
+        params["lambda_penalty"] = float(np.exp(np.clip(theta[cursor], np.log(1e-4), np.log(20.0))))
+        cursor += 1
+        params["eta_penalty"] = float(np.exp(np.clip(theta[cursor], np.log(1e-4), np.log(100.0))))
+        cursor += 1
+    elif variant.phase_mode == PhaseMode.SATIATING_LATE_BONUS:
+        params["gamma_bonus"] = float(np.exp(np.clip(theta[cursor], np.log(1e-4), np.log(100.0))))
+        cursor += 1
+        params["late_satiation_scale"] = float(np.exp(np.clip(theta[cursor], np.log(1e-4), np.log(100.0))))
+        cursor += 1
+        params["beta_late"] = float(np.clip(sigmoid(theta[cursor]), 1e-4, 1.0 - 1e-4))
+        cursor += 1
+    elif variant.phase_mode != PhaseMode.NONE:
         params["gamma"] = float(np.exp(np.clip(theta[cursor], np.log(1e-4), np.log(100.0))))
         cursor += 1
     if cursor != len(theta):
@@ -362,7 +500,72 @@ def pack_params(params: dict[str, float | np.ndarray], variant: DSPVariant) -> n
     values: list[np.ndarray] = [np.log(np.asarray(params["rho"], dtype=float))]
     if variant.penalty_mode != PenaltyMode.NONE:
         values.append(np.asarray(params["tau"], dtype=float))
-    if variant.phase_mode != PhaseMode.NONE:
+    if variant.phase_mode == PhaseMode.SATURATION_PENALTY:
+        values.append(
+            np.asarray(
+                [
+                    np.log(float(params["gamma_saturation"])),
+                    np.log(float(params["gamma_penalty"])),
+                ],
+                dtype=float,
+            )
+        )
+    elif variant.phase_mode == PhaseMode.RETAINED_EFFECTIVE_EXPOSURE:
+        values.append(
+            np.asarray(
+                [
+                    np.log(float(params["lambda_retention"])),
+                    np.log(float(params["eta"])),
+                ],
+                dtype=float,
+            )
+        )
+    elif variant.phase_mode == PhaseMode.SPLIT_RETAINED_EXPOSURE:
+        values.append(
+            np.asarray(
+                [
+                    np.log(float(params["lambda_saturation"])),
+                    np.log(float(params["eta_saturation"])),
+                    np.log(float(params["lambda_penalty"])),
+                    np.log(float(params["eta_penalty"])),
+                ],
+                dtype=float,
+            )
+        )
+    elif variant.phase_mode == PhaseMode.DSRE_SATIETY:
+        values.append(
+            np.asarray(
+                [
+                    np.log(float(params["lambda_retention"])),
+                    np.log(float(params["eta"])),
+                    logit(float(params["phi"])),
+                ],
+                dtype=float,
+            )
+        )
+    elif variant.phase_mode == PhaseMode.RETAINED_PENALTY_ONLY:
+        values.append(
+            np.asarray(
+                [
+                    np.log(float(params["gamma"])),
+                    np.log(float(params["lambda_penalty"])),
+                    np.log(float(params["eta_penalty"])),
+                ],
+                dtype=float,
+            )
+        )
+    elif variant.phase_mode == PhaseMode.SATIATING_LATE_BONUS:
+        values.append(
+            np.asarray(
+                [
+                    np.log(float(params["gamma_bonus"])),
+                    np.log(float(params["late_satiation_scale"])),
+                    logit(float(params["beta_late"])),
+                ],
+                dtype=float,
+            )
+        )
+    elif variant.phase_mode != PhaseMode.NONE:
         values.append(np.asarray([np.log(float(params["gamma"]))], dtype=float))
     return np.concatenate(values)
 
@@ -372,7 +575,44 @@ def bounds(variant: DSPVariant, num_domains: int) -> list[tuple[float, float]]:
     out: list[tuple[float, float]] = [(np.log(1e-4), np.log(2.0)) for _ in range(num_domains)]
     if variant.penalty_mode != PenaltyMode.NONE:
         out.extend([(-2.0, 8.0) for _ in range(num_domains)])
-    if variant.phase_mode != PhaseMode.NONE:
+    if variant.phase_mode == PhaseMode.SATURATION_PENALTY:
+        out.extend([(np.log(1e-4), np.log(100.0)), (np.log(1e-4), np.log(100.0))])
+    elif variant.phase_mode == PhaseMode.RETAINED_EFFECTIVE_EXPOSURE:
+        out.extend([(np.log(1e-4), np.log(20.0)), (np.log(1e-4), np.log(100.0))])
+    elif variant.phase_mode == PhaseMode.SPLIT_RETAINED_EXPOSURE:
+        out.extend(
+            [
+                (np.log(1e-4), np.log(20.0)),
+                (np.log(1e-4), np.log(100.0)),
+                (np.log(1e-4), np.log(20.0)),
+                (np.log(1e-4), np.log(100.0)),
+            ]
+        )
+    elif variant.phase_mode == PhaseMode.DSRE_SATIETY:
+        out.extend(
+            [
+                (np.log(1e-4), np.log(20.0)),
+                (np.log(1e-4), np.log(100.0)),
+                (logit(1e-4), logit(1.0 - 1e-4)),
+            ]
+        )
+    elif variant.phase_mode == PhaseMode.RETAINED_PENALTY_ONLY:
+        out.extend(
+            [
+                (np.log(1e-4), np.log(100.0)),
+                (np.log(1e-4), np.log(20.0)),
+                (np.log(1e-4), np.log(100.0)),
+            ]
+        )
+    elif variant.phase_mode == PhaseMode.SATIATING_LATE_BONUS:
+        out.extend(
+            [
+                (np.log(1e-4), np.log(100.0)),
+                (np.log(1e-4), np.log(100.0)),
+                (logit(1e-4), logit(1.0 - 1e-4)),
+            ]
+        )
+    elif variant.phase_mode != PhaseMode.NONE:
         out.append((np.log(1e-4), np.log(100.0)))
     return out
 
@@ -393,6 +633,46 @@ def features(
     if variant.phase_mode == PhaseMode.EFFECTIVE_EXPOSURE:
         exposure = e0 + float(params["gamma"]) * e1
         signal = 1.0 - np.exp(-rho * exposure)
+    elif variant.phase_mode == PhaseMode.SATURATION_PENALTY:
+        exposure = e0 + float(params["gamma_saturation"]) * e1
+        signal = 1.0 - np.exp(-rho * exposure)
+    elif variant.phase_mode == PhaseMode.RETAINED_EFFECTIVE_EXPOSURE:
+        exposure = retained_exposure(
+            e0,
+            e1,
+            p1,
+            retention_lambda=float(params["lambda_retention"]),
+            eta=float(params["eta"]),
+        )
+        signal = 1.0 - np.exp(-rho * exposure)
+    elif variant.phase_mode == PhaseMode.SPLIT_RETAINED_EXPOSURE:
+        exposure = retained_exposure(
+            e0,
+            e1,
+            p1,
+            retention_lambda=float(params["lambda_saturation"]),
+            eta=float(params["eta_saturation"]),
+        )
+        signal = 1.0 - np.exp(-rho * exposure)
+    elif variant.phase_mode == PhaseMode.DSRE_SATIETY:
+        phase0_retention = np.exp(-float(params["lambda_retention"]) * (1.0 - p1))
+        z0 = np.log1p(e0)
+        phi = float(params["phi"])
+        z1 = np.log1p(phi * e0 + e1) - np.log1p(phi * e0)
+        exposure = phase0_retention * z0 + float(params["eta"]) * z1
+        signal = 1.0 - np.exp(-rho * np.maximum(exposure, 0.0))
+    elif variant.phase_mode == PhaseMode.RETAINED_PENALTY_ONLY:
+        exposure = e0 + float(params["gamma"]) * e1
+        signal = 1.0 - np.exp(-rho * exposure)
+    elif variant.phase_mode == PhaseMode.SATIATING_LATE_BONUS:
+        exposure = satiating_late_exposure(
+            e0,
+            e1,
+            gamma_bonus=float(params["gamma_bonus"]),
+            beta_late=float(params["beta_late"]),
+            late_satiation_scale=float(params["late_satiation_scale"]),
+        )
+        signal = 1.0 - np.exp(-rho * exposure)
     else:
         exposure = e0 + e1
         signal = 1.0 - np.exp(-rho * exposure)
@@ -402,6 +682,40 @@ def features(
 
     if variant.penalty_mode == PenaltyMode.NONE:
         penalty = np.zeros_like(signal)
+    elif variant.phase_mode == PhaseMode.SATURATION_PENALTY:
+        penalty_exposure = e0 + float(params["gamma_penalty"]) * e1
+        tau = np.asarray(params["tau"], dtype=float)[None, :]
+        penalty = softplus(np.log1p(penalty_exposure) - tau) ** 2
+    elif variant.phase_mode == PhaseMode.SPLIT_RETAINED_EXPOSURE:
+        penalty_exposure = retained_exposure(
+            e0,
+            e1,
+            p1,
+            retention_lambda=float(params["lambda_penalty"]),
+            eta=float(params["eta_penalty"]),
+        )
+        tau = np.asarray(params["tau"], dtype=float)[None, :]
+        penalty = softplus(np.log1p(penalty_exposure) - tau) ** 2
+    elif variant.phase_mode == PhaseMode.DSRE_SATIETY:
+        penalty_exposure = retained_exposure(
+            e0,
+            e1,
+            p1,
+            retention_lambda=float(params["lambda_retention"]),
+            eta=float(params["eta"]),
+        )
+        tau = np.asarray(params["tau"], dtype=float)[None, :]
+        penalty = softplus(np.log1p(penalty_exposure) - tau) ** 2
+    elif variant.phase_mode == PhaseMode.RETAINED_PENALTY_ONLY:
+        penalty_exposure = retained_exposure(
+            e0,
+            e1,
+            p1,
+            retention_lambda=float(params["lambda_penalty"]),
+            eta=float(params["eta_penalty"]),
+        )
+        tau = np.asarray(params["tau"], dtype=float)[None, :]
+        penalty = softplus(np.log1p(penalty_exposure) - tau) ** 2
     else:
         tau = np.asarray(params["tau"], dtype=float)[None, :]
         penalty = softplus(np.log1p(exposure) - tau) ** 2
@@ -472,10 +786,91 @@ def profile_objective(packet: PacketData, variant: DSPVariant, theta: np.ndarray
     return rmse + 0.5 * optimism
 
 
+def set_start_phase_params(
+    params: dict[str, float | np.ndarray],
+    variant: DSPVariant,
+    *,
+    gamma: float,
+    retention_lambda: float,
+    phi: float,
+    beta_late: float = 1.0,
+    late_satiation_scale: float = 1.0,
+) -> None:
+    """Populate phase parameters for a deterministic start in-place."""
+    if variant.phase_mode == PhaseMode.SATURATION_PENALTY:
+        params["gamma_saturation"] = gamma
+        params["gamma_penalty"] = gamma
+    elif variant.phase_mode == PhaseMode.RETAINED_EFFECTIVE_EXPOSURE:
+        params["lambda_retention"] = retention_lambda
+        params["eta"] = gamma
+    elif variant.phase_mode == PhaseMode.SPLIT_RETAINED_EXPOSURE:
+        params["lambda_saturation"] = retention_lambda
+        params["eta_saturation"] = gamma
+        params["lambda_penalty"] = retention_lambda
+        params["eta_penalty"] = gamma
+    elif variant.phase_mode == PhaseMode.DSRE_SATIETY:
+        params["lambda_retention"] = retention_lambda
+        params["eta"] = gamma
+        params["phi"] = phi
+    elif variant.phase_mode == PhaseMode.RETAINED_PENALTY_ONLY:
+        params["gamma"] = gamma
+        params["lambda_penalty"] = retention_lambda
+        params["eta_penalty"] = gamma
+    elif variant.phase_mode == PhaseMode.SATIATING_LATE_BONUS:
+        params["beta_late"] = float(np.clip(beta_late, 1e-4, 1.0 - 1e-4))
+        params["gamma_bonus"] = float(max(gamma - params["beta_late"], 1e-4))
+        params["late_satiation_scale"] = float(max(late_satiation_scale, 1e-4))
+    elif variant.phase_mode != PhaseMode.NONE:
+        params["gamma"] = gamma
+
+
+def set_random_phase_params(
+    params: dict[str, float | np.ndarray],
+    variant: DSPVariant,
+    rng: np.random.Generator,
+) -> None:
+    """Populate phase parameters for a random start in-place."""
+    gamma = float(np.exp(rng.normal(loc=np.log(2.0), scale=0.9)))
+    retention_lambda = float(np.exp(rng.normal(loc=np.log(0.1), scale=1.2)))
+    penalty_lambda = float(np.exp(rng.normal(loc=np.log(0.1), scale=1.2)))
+    eta_penalty = float(np.exp(rng.normal(loc=np.log(2.0), scale=0.9)))
+    if variant.phase_mode == PhaseMode.SATURATION_PENALTY:
+        params["gamma_saturation"] = gamma
+        params["gamma_penalty"] = eta_penalty
+    elif variant.phase_mode == PhaseMode.RETAINED_EFFECTIVE_EXPOSURE:
+        params["lambda_retention"] = retention_lambda
+        params["eta"] = gamma
+    elif variant.phase_mode == PhaseMode.SPLIT_RETAINED_EXPOSURE:
+        params["lambda_saturation"] = retention_lambda
+        params["eta_saturation"] = gamma
+        params["lambda_penalty"] = penalty_lambda
+        params["eta_penalty"] = eta_penalty
+    elif variant.phase_mode == PhaseMode.DSRE_SATIETY:
+        params["lambda_retention"] = retention_lambda
+        params["eta"] = gamma
+        params["phi"] = float(sigmoid(rng.normal(loc=logit(0.25), scale=1.0)))
+    elif variant.phase_mode == PhaseMode.RETAINED_PENALTY_ONLY:
+        params["gamma"] = gamma
+        params["lambda_penalty"] = penalty_lambda
+        params["eta_penalty"] = eta_penalty
+    elif variant.phase_mode == PhaseMode.SATIATING_LATE_BONUS:
+        beta_late = float(sigmoid(rng.normal(loc=logit(0.5), scale=1.0)))
+        params["beta_late"] = beta_late
+        params["gamma_bonus"] = float(max(gamma - beta_late, 1e-4))
+        params["late_satiation_scale"] = float(np.exp(rng.normal(loc=np.log(1.0), scale=1.0)))
+    elif variant.phase_mode != PhaseMode.NONE:
+        params["gamma"] = gamma
+
+
 def start_bank(packet: PacketData, variant: DSPVariant) -> tuple[np.ndarray, ...]:
     """Build deterministic nonlinear starts from observed exposure statistics."""
     z = packet.w[:, 0, :] * packet.c0[None, :] + packet.w[:, 1, :] * packet.c1[None, :]
+    e1 = packet.w[:, 1, :] * packet.c1[None, :]
     positive = np.where(z > 1e-8, z, np.nan)
+    positive_e1 = np.where(e1 > 1e-8, e1, np.nan)
+    base_late_scale = float(np.nanmedian(positive_e1))
+    if not np.isfinite(base_late_scale):
+        base_late_scale = 1.0
     median_exposure = np.nanmedian(positive, axis=0)
     median_exposure = np.where(np.isfinite(median_exposure), median_exposure, np.nanmedian(positive))
     base_rho = np.clip(1.0 / np.maximum(median_exposure, 1e-3), 1e-4, 0.5)
@@ -484,26 +879,32 @@ def start_bank(packet: PacketData, variant: DSPVariant) -> tuple[np.ndarray, ...
 
     rng = np.random.default_rng(CV_SEED)
     starts: list[np.ndarray] = []
-    for rho_scale, tau_shift, gamma in (
-        (0.25, -1.0, 0.25),
-        (0.5, -0.5, 0.5),
-        (1.0, 0.0, 1.0),
-        (2.0, 0.5, 2.0),
-        (4.0, 1.0, 8.0),
+    for rho_scale, tau_shift, gamma, retention_lambda, phi, beta_late, late_scale_mult in (
+        (0.25, -1.0, 0.25, 0.01, 0.10, 0.0, 0.25),
+        (0.5, -0.5, 0.5, 0.03, 0.20, 0.25, 0.50),
+        (1.0, 0.0, 1.0, 0.10, 0.25, 0.50, 1.00),
+        (2.0, 0.5, 2.0, 0.30, 0.40, 0.75, 2.00),
+        (4.0, 1.0, 8.0, 1.00, 0.60, 1.0 - 1e-4, 4.00),
     ):
         params: dict[str, float | np.ndarray] = {"rho": np.clip(base_rho * rho_scale, 1e-4, 2.0)}
         if variant.penalty_mode != PenaltyMode.NONE:
             params["tau"] = np.clip(base_tau + tau_shift, -2.0, 8.0)
-        if variant.phase_mode != PhaseMode.NONE:
-            params["gamma"] = gamma
+        set_start_phase_params(
+            params,
+            variant,
+            gamma=gamma,
+            retention_lambda=retention_lambda,
+            phi=phi,
+            beta_late=beta_late,
+            late_satiation_scale=base_late_scale * late_scale_mult,
+        )
         starts.append(pack_params(params, variant))
 
     for _ in range(3):
         params = {"rho": np.clip(base_rho * np.exp(rng.normal(scale=0.7, size=packet.m)), 1e-4, 2.0)}
         if variant.penalty_mode != PenaltyMode.NONE:
             params["tau"] = np.clip(base_tau + rng.normal(scale=0.8, size=packet.m), -2.0, 8.0)
-        if variant.phase_mode != PhaseMode.NONE:
-            params["gamma"] = float(np.exp(rng.normal(loc=np.log(2.0), scale=0.9)))
+        set_random_phase_params(params, variant, rng)
         starts.append(pack_params(params, variant))
     return tuple(starts)
 
@@ -634,6 +1035,47 @@ def value_grad_logits(model: FittedDSPModel, logits: np.ndarray) -> tuple[float,
         common = -benefit_coef * dsignal + penalty_coef * dpenalty
         grad_e0 = common
         grad_e1 = gamma * common
+        value = float(model.intercept - benefit_coef @ signal + penalty_coef @ penalty)
+    elif model.variant.phase_mode == PhaseMode.SATURATION_PENALTY:
+        gamma_saturation = float(model.params["gamma_saturation"])
+        gamma_penalty = float(model.params["gamma_penalty"])
+        saturation_exposure = e0 + gamma_saturation * e1
+        signal = 1.0 - np.exp(-rho * saturation_exposure)
+        dsignal = rho * np.exp(-rho * saturation_exposure)
+        if has_penalty:
+            tau = np.asarray(model.params["tau"], dtype=float)
+            penalty_exposure = e0 + gamma_penalty * e1
+            u = np.log1p(penalty_exposure) - tau
+            sp = softplus(u)
+            penalty = sp**2
+            dpenalty = 2.0 * sp * sigmoid(u) / (1.0 + penalty_exposure)
+        else:
+            penalty = np.zeros_like(signal)
+            dpenalty = np.zeros_like(signal)
+        grad_e0 = -benefit_coef * dsignal + penalty_coef * dpenalty
+        grad_e1 = -benefit_coef * gamma_saturation * dsignal + penalty_coef * gamma_penalty * dpenalty
+        value = float(model.intercept - benefit_coef @ signal + penalty_coef @ penalty)
+    elif model.variant.phase_mode == PhaseMode.SATIATING_LATE_BONUS:
+        gamma_bonus = float(model.params["gamma_bonus"])
+        beta_late = float(model.params["beta_late"])
+        late_satiation_scale = max(float(model.params["late_satiation_scale"]), PHASE_EPS)
+        late_exp = np.exp(-e1 / late_satiation_scale)
+        exposure = e0 + beta_late * e1 + gamma_bonus * late_satiation_scale * (1.0 - late_exp)
+        d_exposure_de1 = beta_late + gamma_bonus * late_exp
+        signal = 1.0 - np.exp(-rho * exposure)
+        dsignal = rho * np.exp(-rho * exposure)
+        if has_penalty:
+            tau = np.asarray(model.params["tau"], dtype=float)
+            u = np.log1p(exposure) - tau
+            sp = softplus(u)
+            penalty = sp**2
+            dpenalty = 2.0 * sp * sigmoid(u) / (1.0 + exposure)
+        else:
+            penalty = np.zeros_like(signal)
+            dpenalty = np.zeros_like(signal)
+        common = -benefit_coef * dsignal + penalty_coef * dpenalty
+        grad_e0 = common
+        grad_e1 = d_exposure_de1 * common
         value = float(model.intercept - benefit_coef @ signal + penalty_coef @ penalty)
     else:
         exposure = e0 + e1
