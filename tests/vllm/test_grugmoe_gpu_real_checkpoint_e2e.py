@@ -21,6 +21,7 @@ import time
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -219,6 +220,7 @@ def _write_summary_update(
             "vllm_data_parallel_size": backend.VLLM_DATA_PARALLEL_SIZE,
             "vllm_expert_parallel_size": backend.VLLM_EXPERT_PARALLEL_SIZE,
             "vllm_attention_backend": backend.VLLM_ATTENTION_BACKEND,
+            "vllm_default_attention_backend": backend.VLLM_DEFAULT_ATTENTION_BACKEND,
             "levanter_moe_capacity_factor": backend.LEVANTER_MOE_CAPACITY_FACTOR,
             "levanter_decode_use_active_prefix": backend.LEVANTER_DECODE_USE_ACTIVE_PREFIX,
             "prompt_batch_size": backend.PROMPT_BATCH_SIZE,
@@ -261,6 +263,7 @@ def _write_summary_update(
         summary["vllm_observed_tensor_parallel_size"] = backend_results["vllm"].get("vllm_tensor_parallel_size")
         summary["vllm_observed_data_parallel_size"] = backend_results["vllm"].get("vllm_data_parallel_size")
         summary["vllm_observed_expert_parallel_size"] = backend_results["vllm"].get("vllm_expert_parallel_size")
+        summary["vllm_worker_ep_summary"] = backend_results["vllm"].get("worker_ep_summary")
         summary["vllm_routed_expert_owner_ranks"] = backend_results["vllm"].get("routed_expert_owner_ranks")
         summary["vllm_routed_expert_owner_rank_coverage"] = backend_results["vllm"].get(
             "routed_expert_owner_rank_coverage"
@@ -282,6 +285,8 @@ def _write_summary_update(
             and summary["vllm_levanter_match"]
             and summary["vllm_levanter_batch_match"]
             and summary["vllm_routed_expert_owner_rank_coverage"] is True
+            and backend_results["vllm"].get("worker_ep_summary", {}).get("ep_rank_coverage") is True
+            and backend_results["vllm"].get("worker_ep_summary", {}).get("local_expert_coverage") is True
         )
     backend._write_json(e2e_paths.summary_result_path, summary)
     print("grugmoe_gpu_real_checkpoint_e2e_result=" + json.dumps(summary, sort_keys=True), flush=True)
@@ -299,11 +304,82 @@ def test_grugmoe_gpu_real_checkpoint_e2e_static_preconditions() -> None:
     assert backend.VLLM_DATA_PARALLEL_SIZE == 8
     assert backend.VLLM_EXPERT_PARALLEL_SIZE == 8
     assert backend.VLLM_MAX_NUM_SEQS >= backend.PROMPT_BATCH_SIZE
-    assert backend.VLLM_ATTENTION_BACKEND == "TRITON_ATTN"
+    assert backend.VLLM_DEFAULT_ATTENTION_BACKEND == "TRITON_ATTN"
+    assert backend.VLLM_ATTENTION_BACKEND in backend.VLLM_ATTENTION_BACKENDS_UNDER_TEST
+    assert backend.VLLM_ATTENTION_BACKEND_ENV == "MARIN_GRUGMOE_VLLM_ATTENTION_BACKEND"
     assert backend.LEVANTER_MOE_CAPACITY_FACTOR == float(backend.EXPECTED_GPU_COUNT)
     assert backend.LEVANTER_DECODE_USE_ACTIVE_PREFIX is True
     assert backend.CHECKPOINT_PATH.startswith(backend.COREWEAVE_S3_PREFIX)
     assert backend.TOKENIZER_PATH.startswith(backend.COREWEAVE_S3_PREFIX)
+
+
+def test_grugmoe_worker_extension_reports_structured_ep_state() -> None:
+    class FakeParallelConfig:
+        use_ep = True
+        tp_size = 1
+        tp_rank = 0
+        dp_size = 8
+        dp_rank = 3
+        ep_size = 8
+        ep_rank = 3
+        all2all_backend = "allgather_reducescatter"
+
+    class FakeMoeConfig:
+        moe_parallel_config = FakeParallelConfig()
+        num_experts = 256
+        num_logical_experts = 256
+        num_local_experts = 32
+        experts_per_token = 2
+
+    class FakeExpertMapManager:
+        def get_local_expert_ids(self) -> list[int]:
+            return list(range(96, 128))
+
+    class FakeRunner:
+        moe_config = FakeMoeConfig()
+        expert_map_manager = FakeExpertMapManager()
+        expert_placement_strategy = "linear"
+
+    class GrugMoeMLP:
+        experts = FakeRunner()
+
+    class FakeModel:
+        def named_modules(self):
+            yield "model.layers.3.mlp", GrugMoeMLP()
+
+    worker = SimpleNamespace(
+        rank=3,
+        local_rank=3,
+        model_runner=SimpleNamespace(model=FakeModel()),
+        vllm_config=SimpleNamespace(
+            model_config=SimpleNamespace(enable_return_routed_experts=True),
+        ),
+    )
+
+    state = backend.GrugMoeDiagnosticsWorkerExtension.grugmoe_ep_state(worker)
+
+    assert state == {
+        "found": True,
+        "worker_rank": 3,
+        "local_rank": 3,
+        "module_name": "model.layers.3.mlp",
+        "use_ep": True,
+        "tp_size": 1,
+        "tp_rank": 0,
+        "dp_size": 8,
+        "dp_rank": 3,
+        "ep_size": 8,
+        "ep_rank": 3,
+        "global_num_experts": 256,
+        "logical_num_experts": 256,
+        "local_num_experts": 32,
+        "local_expert_ids": list(range(96, 128)),
+        "local_expert_ownership": "[96..127]",
+        "top_k": 2,
+        "expert_placement_strategy": "linear",
+        "all2all_backend": "allgather_reducescatter",
+        "routed_experts_capture_enabled": True,
+    }
 
 
 @pytest.mark.gpu_ci
@@ -323,15 +399,24 @@ def test_grugmoe_gpu_real_checkpoint_vllm_output(
     assert vllm_result["vllm_args"][vllm_result["vllm_args"].index("--data-parallel-size") + 1] == "8"
     assert "--enable-expert-parallel" in vllm_result["vllm_args"]
     assert "--enable-return-routed-experts" in vllm_result["vllm_args"]
+    assert "--worker-extension-cls" in vllm_result["vllm_args"]
     assert vllm_result["vllm_args"][vllm_result["vllm_args"].index("--max-num-seqs") + 1] == "16"
     assert vllm_result["torch_runtime"]["device_count"] >= backend.EXPECTED_GPU_COUNT
     assert vllm_result["torch_runtime"]["cuda_visible_devices"] == backend.VISIBLE_CUDA_DEVICES
     assert vllm_result["prompt_batch_size"] == backend.PROMPT_BATCH_SIZE
+    assert vllm_result["single_prompt_completion"] == backend.EXPECTED_CONTINUATION
     assert len(vllm_result["completions"]) == backend.PROMPT_BATCH_SIZE
     assert all(completion == backend.EXPECTED_CONTINUATION for completion in vllm_result["completions"])
     assert vllm_result["requested_data_parallel_ranks"] == list(range(backend.VLLM_DATA_PARALLEL_SIZE))
     assert vllm_result["routed_expert_owner_ranks"] == list(range(backend.VLLM_EXPERT_PARALLEL_SIZE))
     assert vllm_result["routed_expert_owner_rank_coverage"] is True
+    assert vllm_result["worker_ep_summary"]["worker_count"] == backend.EXPECTED_GPU_COUNT
+    assert vllm_result["worker_ep_summary"]["ep_ranks"] == list(range(backend.VLLM_EXPERT_PARALLEL_SIZE))
+    assert vllm_result["worker_ep_summary"]["ep_rank_coverage"] is True
+    assert vllm_result["worker_ep_summary"]["local_expert_coverage"] is True
+    assert {state["ep_rank"] for state in vllm_result["worker_ep_states"]} == set(
+        range(backend.VLLM_EXPERT_PARALLEL_SIZE)
+    )
     assert vllm_result["passed"] is True
 
 

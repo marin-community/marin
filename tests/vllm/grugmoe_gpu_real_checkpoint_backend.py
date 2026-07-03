@@ -31,6 +31,8 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
+import requests
+
 try:
     from tests.vllm import grugmoe_real_checkpoint_backend as common
 except ModuleNotFoundError as exc:
@@ -57,7 +59,9 @@ VLLM_TENSOR_PARALLEL_SIZE = 1
 VLLM_DATA_PARALLEL_SIZE = 8
 VLLM_EXPERT_PARALLEL_SIZE = 8
 VLLM_MAX_NUM_SEQS = 16
-VLLM_ATTENTION_BACKEND = "TRITON_ATTN"
+VLLM_ATTENTION_BACKEND_ENV = "MARIN_GRUGMOE_VLLM_ATTENTION_BACKEND"
+VLLM_DEFAULT_ATTENTION_BACKEND = "TRITON_ATTN"
+VLLM_ATTENTION_BACKENDS_UNDER_TEST = ("TRITON_ATTN", "FLASH_ATTN")
 LEVANTER_MOE_CAPACITY_FACTOR = float(EXPECTED_GPU_COUNT)
 LEVANTER_DECODE_USE_ACTIVE_PREFIX = True
 CHECKPOINT_PATH = "s3://marin-us-east-02a/marin/grug/moe_may_compute_opt_d512_ep1-05c39b/checkpoints/step-10980"
@@ -93,6 +97,19 @@ _mesh_batch_axis_size = common._mesh_batch_axis_size
 _selected_logprob = common._selected_logprob
 _executable_model_from_legacy_split = common._executable_model_from_legacy_split
 _greedy_decode = common._greedy_decode
+
+
+def _resolve_vllm_attention_backend() -> str:
+    value = os.environ.get(VLLM_ATTENTION_BACKEND_ENV, VLLM_DEFAULT_ATTENTION_BACKEND).strip().upper()
+    if value not in VLLM_ATTENTION_BACKENDS_UNDER_TEST:
+        raise ValueError(
+            f"{VLLM_ATTENTION_BACKEND_ENV}={value!r} is not supported for this validation; "
+            f"expected one of {VLLM_ATTENTION_BACKENDS_UNDER_TEST!r}"
+        )
+    return value
+
+
+VLLM_ATTENTION_BACKEND = _resolve_vllm_attention_backend()
 
 
 def _is_coreweave_endpoint(endpoint: str) -> bool:
@@ -715,14 +732,181 @@ def _stage_artifact_for_vllm(artifact_dir: str) -> StagedArtifact:
     )
 
 
+def _format_int_ranges(values: list[int]) -> str:
+    if not values:
+        return "[]"
+    ranges: list[str] = []
+    start = prev = values[0]
+    for value in values[1:]:
+        if value == prev + 1:
+            prev = value
+            continue
+        ranges.append(str(start) if start == prev else f"{start}..{prev}")
+        start = prev = value
+    ranges.append(str(start) if start == prev else f"{start}..{prev}")
+    return "[" + ", ".join(ranges) + "]"
+
+
+def _unwrap_vllm_model(model: Any) -> Any:
+    unwrap = getattr(model, "unwrap", None)
+    if callable(unwrap):
+        return unwrap()
+    return model
+
+
+def _first_grug_moe_mlp(model: Any) -> tuple[str, Any] | None:
+    named_modules = getattr(model, "named_modules", None)
+    if not callable(named_modules):
+        return None
+    for module_name, module in named_modules():
+        if module.__class__.__name__ == "GrugMoeMLP":
+            return str(module_name), module
+    return None
+
+
+def _grug_moe_ep_state_from_worker(worker: Any) -> dict[str, Any]:
+    model_runner = getattr(worker, "model_runner", None)
+    model = _unwrap_vllm_model(getattr(model_runner, "model", None))
+    found = _first_grug_moe_mlp(model)
+    worker_rank = int(getattr(worker, "rank", -1))
+    local_rank = int(getattr(worker, "local_rank", -1))
+    if found is None:
+        return {
+            "found": False,
+            "worker_rank": worker_rank,
+            "local_rank": local_rank,
+        }
+
+    module_name, mlp = found
+    runner = mlp.experts
+    moe_config = runner.moe_config
+    moe_parallel_config = moe_config.moe_parallel_config
+    expert_map_manager = runner.expert_map_manager
+    local_expert_ids = [int(expert_id) for expert_id in expert_map_manager.get_local_expert_ids()]
+    vllm_config = getattr(worker, "vllm_config", None)
+    model_config = getattr(vllm_config, "model_config", None)
+    return {
+        "found": True,
+        "worker_rank": worker_rank,
+        "local_rank": local_rank,
+        "module_name": module_name,
+        "use_ep": bool(moe_parallel_config.use_ep),
+        "tp_size": int(moe_parallel_config.tp_size),
+        "tp_rank": int(moe_parallel_config.tp_rank),
+        "dp_size": int(moe_parallel_config.dp_size),
+        "dp_rank": int(moe_parallel_config.dp_rank),
+        "ep_size": int(moe_parallel_config.ep_size),
+        "ep_rank": int(moe_parallel_config.ep_rank),
+        "global_num_experts": int(moe_config.num_experts),
+        "logical_num_experts": int(moe_config.num_logical_experts),
+        "local_num_experts": int(moe_config.num_local_experts),
+        "local_expert_ids": local_expert_ids,
+        "local_expert_ownership": _format_int_ranges(local_expert_ids),
+        "top_k": int(moe_config.experts_per_token),
+        "expert_placement_strategy": str(runner.expert_placement_strategy),
+        "all2all_backend": str(moe_parallel_config.all2all_backend),
+        "routed_experts_capture_enabled": bool(getattr(model_config, "enable_return_routed_experts", False)),
+    }
+
+
+class GrugMoeDiagnosticsWorkerExtension:
+    """Test-only extension called through vLLM dev-mode collective_rpc."""
+
+    def grugmoe_ep_state(self) -> dict[str, Any]:
+        return _grug_moe_ep_state_from_worker(self)
+
+
+def _server_root_url(env: Any) -> str:
+    return str(env.server_url).removesuffix("/v1")
+
+
+def _collective_rpc_payload(env: Any, method: str) -> dict[str, Any]:
+    response = requests.post(
+        f"{_server_root_url(env)}/collective_rpc",
+        json={"method": method, "timeout": 300},
+        timeout=300,
+    )
+    print("vllm_gpu_collective_rpc_status_code=" + str(response.status_code), flush=True)
+    if not response.ok:
+        print("vllm_gpu_collective_rpc_response_text=" + response.text[:4000], flush=True)
+        print("vllm_gpu_server_logs_tail_begin", flush=True)
+        print(env.logs_tail(max_lines=400), flush=True)
+        print("vllm_gpu_server_logs_tail_end", flush=True)
+        response.raise_for_status()
+    payload = response.json()
+    if not isinstance(payload, dict):
+        raise AssertionError(f"collective_rpc returned non-object payload: {payload!r}")
+    return payload
+
+
+def _collect_grug_moe_worker_ep_states(env: Any) -> list[dict[str, Any]]:
+    payload = _collective_rpc_payload(env, "grugmoe_ep_state")
+    results = payload.get("results")
+    if not isinstance(results, list):
+        raise AssertionError(f"collective_rpc missing results list: {payload!r}")
+    states: list[dict[str, Any]] = []
+    for result in results:
+        if not isinstance(result, dict):
+            raise AssertionError(f"collective_rpc result is not a dict: {result!r}")
+        states.append(result)
+    return states
+
+
+def _assert_grug_moe_worker_ep_states(
+    states: list[dict[str, Any]],
+    *,
+    num_experts: int,
+) -> dict[str, Any]:
+    if len(states) != EXPECTED_GPU_COUNT:
+        raise AssertionError(f"expected {EXPECTED_GPU_COUNT} worker states, got {states!r}")
+    ep_ranks = sorted(int(state.get("ep_rank", -1)) for state in states)
+    if ep_ranks != list(range(VLLM_EXPERT_PARALLEL_SIZE)):
+        raise AssertionError(f"worker EP ranks did not cover all ranks: {ep_ranks!r}")
+
+    local_expert_ids: set[int] = set()
+    for state in states:
+        if state.get("found") is not True:
+            raise AssertionError(f"worker did not report GrugMoE state: {state!r}")
+        if state.get("use_ep") is not True:
+            raise AssertionError(f"worker did not enable EP: {state!r}")
+        if state.get("tp_size") != VLLM_TENSOR_PARALLEL_SIZE:
+            raise AssertionError(f"unexpected worker TP size: {state!r}")
+        if state.get("dp_size") != VLLM_DATA_PARALLEL_SIZE:
+            raise AssertionError(f"unexpected worker DP size: {state!r}")
+        if state.get("ep_size") != VLLM_EXPERT_PARALLEL_SIZE:
+            raise AssertionError(f"unexpected worker EP size: {state!r}")
+        if state.get("global_num_experts") != num_experts:
+            raise AssertionError(f"unexpected worker expert count: {state!r}")
+        if state.get("expert_placement_strategy") != "linear":
+            raise AssertionError(f"unexpected expert placement: {state!r}")
+        if state.get("routed_experts_capture_enabled") is not True:
+            raise AssertionError(f"worker did not enable routed-expert capture: {state!r}")
+        worker_local_experts = state.get("local_expert_ids")
+        if not isinstance(worker_local_experts, list) or not worker_local_experts:
+            raise AssertionError(f"worker did not report local experts: {state!r}")
+        local_expert_ids.update(int(expert_id) for expert_id in worker_local_experts)
+
+    covered_experts = sorted(local_expert_ids)
+    expected_experts = list(range(num_experts))
+    if covered_experts != expected_experts:
+        raise AssertionError(
+            f"worker local experts did not cover global experts: got {covered_experts!r}, expected {expected_experts!r}"
+        )
+    return {
+        "worker_count": len(states),
+        "ep_ranks": ep_ranks,
+        "ep_rank_coverage": True,
+        "local_expert_coverage": True,
+        "local_expert_ownership": _format_int_ranges(covered_experts),
+    }
+
+
 def _completion_payload(
     env: Any,
     *,
     prompts: list[str],
     data_parallel_rank: int | None = None,
 ) -> dict[str, Any]:
-    import requests  # noqa: PLC0415
-
     if env.model_id is None:
         raise RuntimeError("Expected vLLM server to expose a model id.")
     headers = {}
@@ -844,6 +1028,8 @@ def _vllm_backend(args: argparse.Namespace) -> None:
         "--expert-placement-strategy",
         "linear",
         "--enable-return-routed-experts",
+        "--worker-extension-cls",
+        "tests.vllm.grugmoe_gpu_real_checkpoint_backend.GrugMoeDiagnosticsWorkerExtension",
         "--moe-backend",
         "triton",
         "--attention-backend",
@@ -857,31 +1043,51 @@ def _vllm_backend(args: argparse.Namespace) -> None:
         str(VLLM_MAX_NUM_SEQS),
     ]
     started = time.time()
-    with VllmEnvironment(model=model, timeout_seconds=SERVER_TIMEOUT_SECONDS, extra_args=extra_args) as env:
-        print("vllm_gpu_server_initialized=True", flush=True)
-        print("vllm_gpu_server_url=" + env.server_url, flush=True)
-        print("vllm_gpu_model_path=" + staged_artifact.vllm_model_path, flush=True)
-        print("vllm_gpu_artifact_staging=" + json.dumps(staged_artifact.staging, sort_keys=True), flush=True)
-        print("vllm_gpu_server_log_dir=" + (env.vllm_server.log_dir if env.vllm_server else ""), flush=True)
-        payloads: list[dict[str, Any]] = []
-        rank_request_batches: list[dict[str, Any]] = []
-        for data_parallel_rank in range(VLLM_DATA_PARALLEL_SIZE):
-            prompts = list(PROMPTS[data_parallel_rank * 2 : data_parallel_rank * 2 + 2])
-            payload = _completion_payload(
+    previous_dev_mode = os.environ.get("VLLM_SERVER_DEV_MODE")
+    os.environ["VLLM_SERVER_DEV_MODE"] = "1"
+    try:
+        with VllmEnvironment(model=model, timeout_seconds=SERVER_TIMEOUT_SECONDS, extra_args=extra_args) as env:
+            print("vllm_gpu_server_initialized=True", flush=True)
+            print("vllm_gpu_server_url=" + env.server_url, flush=True)
+            print("vllm_gpu_model_path=" + staged_artifact.vllm_model_path, flush=True)
+            print("vllm_gpu_artifact_staging=" + json.dumps(staged_artifact.staging, sort_keys=True), flush=True)
+            print("vllm_gpu_server_log_dir=" + (env.vllm_server.log_dir if env.vllm_server else ""), flush=True)
+            worker_ep_states = _collect_grug_moe_worker_ep_states(env)
+            worker_ep_summary = _assert_grug_moe_worker_ep_states(worker_ep_states, num_experts=num_experts)
+            single_payload = _completion_payload(
                 env,
-                prompts=prompts,
-                data_parallel_rank=data_parallel_rank,
+                prompts=[PROMPT],
+                data_parallel_rank=0,
             )
-            payloads.append(payload)
-            rank_request_batches.append(
-                {
-                    "data_parallel_rank": data_parallel_rank,
-                    "prompt_indices": [data_parallel_rank * 2, data_parallel_rank * 2 + 1],
-                    "batch_size": len(prompts),
-                }
-            )
-        logs_tail = env.logs_tail(max_lines=120)
-        model_id = env.model_id
+            payloads: list[dict[str, Any]] = []
+            rank_request_batches: list[dict[str, Any]] = []
+            for data_parallel_rank in range(VLLM_DATA_PARALLEL_SIZE):
+                prompts = list(PROMPTS[data_parallel_rank * 2 : data_parallel_rank * 2 + 2])
+                payload = _completion_payload(
+                    env,
+                    prompts=prompts,
+                    data_parallel_rank=data_parallel_rank,
+                )
+                payloads.append(payload)
+                rank_request_batches.append(
+                    {
+                        "data_parallel_rank": data_parallel_rank,
+                        "prompt_indices": [data_parallel_rank * 2, data_parallel_rank * 2 + 1],
+                        "batch_size": len(prompts),
+                    }
+                )
+            logs_tail = env.logs_tail(max_lines=160)
+            model_id = env.model_id
+    finally:
+        if previous_dev_mode is None:
+            os.environ.pop("VLLM_SERVER_DEV_MODE", None)
+        else:
+            os.environ["VLLM_SERVER_DEV_MODE"] = previous_dev_mode
+    single_choices = single_payload.get("choices")
+    if not isinstance(single_choices, list) or len(single_choices) != 1:
+        raise AssertionError(f"expected exactly one single-prompt completion choice, got {single_payload!r}")
+    single_completion = str(single_choices[0].get("text", ""))
+    single_routed_experts = _decode_routed_experts(single_choices[0].get("routed_experts"))
     completions: list[str] = []
     routed_experts_by_completion: list[list[Any] | None] = []
     routed_owner_ranks: set[int] = set()
@@ -917,20 +1123,27 @@ def _vllm_backend(args: argparse.Namespace) -> None:
         "prompt": PROMPT,
         "prompt_batch_size": PROMPT_BATCH_SIZE,
         "completion": completion,
+        "single_prompt_completion": single_completion,
+        "single_prompt_routed_experts": single_routed_experts,
         "completions": completions,
         "expected_continuation": EXPECTED_CONTINUATION,
-        "passed": all(item == EXPECTED_CONTINUATION for item in completions),
+        "passed": single_completion == EXPECTED_CONTINUATION
+        and all(item == EXPECTED_CONTINUATION for item in completions),
         "served_model_name": SERVED_MODEL_NAME,
         "vllm_model_id": model_id,
         "vllm_model_path": staged_artifact.vllm_model_path,
         "artifact_staging": staged_artifact.staging,
         "vllm_engine_kwargs": model.engine_kwargs,
         "vllm_args": extra_args,
+        "vllm_attention_backend_env_var": VLLM_ATTENTION_BACKEND_ENV,
         "vllm_tensor_parallel_size": VLLM_TENSOR_PARALLEL_SIZE,
         "vllm_data_parallel_size": VLLM_DATA_PARALLEL_SIZE,
         "vllm_expert_parallel_size": VLLM_EXPERT_PARALLEL_SIZE,
         "vllm_attention_backend": VLLM_ATTENTION_BACKEND,
         "vllm_max_num_seqs": VLLM_MAX_NUM_SEQS,
+        "vllm_server_dev_mode_enabled": True,
+        "worker_ep_states": worker_ep_states,
+        "worker_ep_summary": worker_ep_summary,
         "rank_request_batches": rank_request_batches,
         "requested_data_parallel_ranks": [batch["data_parallel_rank"] for batch in rank_request_batches],
         "routed_experts_by_completion": routed_experts_by_completion,
@@ -949,7 +1162,9 @@ def _vllm_backend(args: argparse.Namespace) -> None:
     _write_json(args.result_path, result)
     print("grugmoe_gpu_real_checkpoint_vllm_result=" + json.dumps(result, sort_keys=True), flush=True)
     if result["passed"] is not True:
-        raise AssertionError(f"GPU vLLM completions {completions!r} != expected {EXPECTED_CONTINUATION!r}")
+        raise AssertionError(
+            f"GPU vLLM single={single_completion!r}, batched={completions!r} != expected {EXPECTED_CONTINUATION!r}"
+        )
 
 
 def _levanter_backend(args: argparse.Namespace) -> None:
