@@ -382,6 +382,70 @@ def test_grugmoe_worker_extension_reports_structured_ep_state() -> None:
     }
 
 
+def test_grugmoe_collective_rpc_collects_each_data_parallel_rank(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[dict[str, Any]] = []
+
+    class FakeResponse:
+        ok = True
+        status_code = 200
+        text = "{}"
+
+        def __init__(self, ep_rank: int):
+            self.ep_rank = ep_rank
+
+        def json(self) -> dict[str, Any]:
+            first_expert = self.ep_rank * 32
+            return {
+                "results": [
+                    {
+                        "found": True,
+                        "worker_rank": self.ep_rank,
+                        "local_rank": self.ep_rank,
+                        "module_name": "model.layers.0.mlp",
+                        "use_ep": True,
+                        "tp_size": 1,
+                        "tp_rank": 0,
+                        "dp_size": 8,
+                        "dp_rank": self.ep_rank,
+                        "ep_size": 8,
+                        "ep_rank": self.ep_rank,
+                        "global_num_experts": 256,
+                        "logical_num_experts": 256,
+                        "local_num_experts": 32,
+                        "local_expert_ids": list(range(first_expert, first_expert + 32)),
+                        "local_expert_ownership": f"[{first_expert}..{first_expert + 31}]",
+                        "top_k": 4,
+                        "expert_placement_strategy": "linear",
+                        "all2all_backend": "allgather_reducescatter",
+                        "routed_experts_capture_enabled": True,
+                    }
+                ]
+            }
+
+        def raise_for_status(self) -> None:
+            raise AssertionError("raise_for_status should not be called for successful fake response")
+
+    def fake_post(url: str, **kwargs: Any) -> FakeResponse:
+        calls.append({"url": url, **kwargs})
+        rank = int(kwargs["headers"]["X-data-parallel-rank"])
+        return FakeResponse(rank)
+
+    monkeypatch.setattr(backend.requests, "post", fake_post)
+    env = SimpleNamespace(server_url="http://127.0.0.1:8000/v1")
+
+    states = backend._collect_grug_moe_worker_ep_states(env)
+    summary = backend._assert_grug_moe_worker_ep_states(states, num_experts=256)
+
+    assert [call["headers"]["X-data-parallel-rank"] for call in calls] == [
+        str(rank) for rank in range(backend.VLLM_DATA_PARALLEL_SIZE)
+    ]
+    assert {call["url"] for call in calls} == {"http://127.0.0.1:8000/collective_rpc"}
+    assert [state["ep_rank"] for state in states] == list(range(backend.VLLM_EXPERT_PARALLEL_SIZE))
+    assert summary["worker_count"] == backend.EXPECTED_GPU_COUNT
+    assert summary["ep_rank_coverage"] is True
+    assert summary["local_expert_coverage"] is True
+
+
 @pytest.mark.gpu_ci
 @pytest.mark.slow
 @pytest.mark.data_integration

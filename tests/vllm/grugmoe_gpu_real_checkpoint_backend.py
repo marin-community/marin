@@ -820,13 +820,33 @@ def _server_root_url(env: Any) -> str:
     return str(env.server_url).removesuffix("/v1")
 
 
-def _collective_rpc_payload(env: Any, method: str) -> dict[str, Any]:
+def _collective_rpc_payload(
+    env: Any,
+    method: str,
+    *,
+    data_parallel_rank: int | None = None,
+) -> dict[str, Any]:
+    headers = {}
+    if data_parallel_rank is not None:
+        headers["X-data-parallel-rank"] = str(data_parallel_rank)
     response = requests.post(
         f"{_server_root_url(env)}/collective_rpc",
+        headers=headers,
         json={"method": method, "timeout": 300},
         timeout=300,
     )
-    print("vllm_gpu_collective_rpc_status_code=" + str(response.status_code), flush=True)
+    print(
+        "vllm_gpu_collective_rpc_status="
+        + json.dumps(
+            {
+                "data_parallel_rank": data_parallel_rank,
+                "method": method,
+                "status_code": response.status_code,
+            },
+            sort_keys=True,
+        ),
+        flush=True,
+    )
     if not response.ok:
         print("vllm_gpu_collective_rpc_response_text=" + response.text[:4000], flush=True)
         print("vllm_gpu_server_logs_tail_begin", flush=True)
@@ -840,15 +860,20 @@ def _collective_rpc_payload(env: Any, method: str) -> dict[str, Any]:
 
 
 def _collect_grug_moe_worker_ep_states(env: Any) -> list[dict[str, Any]]:
-    payload = _collective_rpc_payload(env, "grugmoe_ep_state")
-    results = payload.get("results")
-    if not isinstance(results, list):
-        raise AssertionError(f"collective_rpc missing results list: {payload!r}")
     states: list[dict[str, Any]] = []
-    for result in results:
-        if not isinstance(result, dict):
-            raise AssertionError(f"collective_rpc result is not a dict: {result!r}")
-        states.append(result)
+    for data_parallel_rank in range(VLLM_DATA_PARALLEL_SIZE):
+        payload = _collective_rpc_payload(
+            env,
+            "grugmoe_ep_state",
+            data_parallel_rank=data_parallel_rank,
+        )
+        results = payload.get("results")
+        if not isinstance(results, list):
+            raise AssertionError(f"collective_rpc missing results list: {payload!r}")
+        for result in results:
+            if not isinstance(result, dict):
+                raise AssertionError(f"collective_rpc result is not a dict: {result!r}")
+            states.append(result)
     return states
 
 
