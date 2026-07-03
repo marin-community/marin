@@ -170,20 +170,31 @@ def _kubectl_apply(manifest: str) -> None:
     _kubectl("apply", "-f", "-", stdin=manifest)
 
 
-def _assert_priority_class_exists(name: str | None) -> None:
-    """Fail fast if the configured PriorityClass is missing.
+def _ensure_priority_class(cfg: FinelogConfig) -> None:
+    """Create the configured PriorityClass (idempotently) before the Deployment.
 
-    A pod referencing a non-existent PriorityClass is rejected at admission, so
-    catch it here with an actionable message instead of a cryptic apply error.
-    Iris owns the iris-* classes and creates them at `iris cluster start`.
+    A pod referencing a missing PriorityClass is rejected at admission, and on a
+    fresh cluster finelog is brought up before Iris creates the iris-* bands. So
+    finelog provisions its own scheduling dependency rather than depending on
+    ordering. `kubectl apply` is a no-op when the class already exists with the
+    same immutable value/preemptionPolicy (e.g. Iris created it first), and fails
+    loudly on a real mismatch. PreemptLowerPriority matches the iris-system band:
+    the control plane may evict a lower-priority pod to stay scheduled.
     """
-    if not name:
+    assert cfg.deployment.k8s is not None
+    k8s = cfg.deployment.k8s
+    if k8s.priority_class_name is None:
         return
-    if _kubectl("get", "priorityclass", name, check=False).returncode != 0:
-        raise click.ClickException(
-            f"PriorityClass {name!r} not found. Iris provisions the iris-* PriorityClasses at "
-            "`iris cluster start`; run that (or create the class) before deploying finelog."
-        )
+    manifest = {
+        "apiVersion": "scheduling.k8s.io/v1",
+        "kind": "PriorityClass",
+        "metadata": {"name": k8s.priority_class_name},
+        "value": k8s.priority_class_value,
+        "preemptionPolicy": "PreemptLowerPriority",
+        "globalDefault": False,
+    }
+    click.echo(f"Ensuring PriorityClass {k8s.priority_class_name} (value {k8s.priority_class_value})...")
+    _kubectl_apply(json.dumps(manifest))
 
 
 def k8s_up(cfg: FinelogConfig) -> None:
@@ -196,7 +207,7 @@ def k8s_up(cfg: FinelogConfig) -> None:
     assert cfg.deployment.k8s is not None
     cfg = replace(cfg, image=resolve_image_digest(cfg.image))
     k8s = cfg.deployment.k8s
-    _assert_priority_class_exists(k8s.priority_class_name)
+    _ensure_priority_class(cfg)
     secret_manifest = _build_s3_secret_manifest(cfg)
     if secret_manifest is not None:
         click.echo(f"Applying Secret {_s3_secret_name(cfg)} (S3 credentials)...")
