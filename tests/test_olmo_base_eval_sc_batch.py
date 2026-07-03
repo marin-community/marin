@@ -508,6 +508,21 @@ def test_resolve_checkpoint_local_only_uses_staged_files(tmp_path):
     assert resolve_checkpoint(row, tmp_path, checkpoint_mode="local-only") == model_dir
 
 
+def test_resolve_checkpoint_local_only_accepts_sharded_safetensors(tmp_path):
+    row = rows_from_upload_manifest(
+        upload_manifest_text([sample_upload_row()]),
+        hf_repo_id="Calvin-Xu/checkpoints",
+        start_index=0,
+    )[0]
+    model_dir = model_dir_for_row(row, tmp_path)
+    model_dir.mkdir(parents=True)
+    for name in ("config.json", "tokenizer_config.json", "model.safetensors.index.json"):
+        (model_dir / name).write_text("ok")
+    (model_dir / "model-00001-of-00002.safetensors").write_text("shard")
+
+    assert resolve_checkpoint(row, tmp_path, checkpoint_mode="local-only") == model_dir
+
+
 def test_resolve_checkpoint_local_only_rejects_missing_staged_files(tmp_path):
     row = rows_from_upload_manifest(
         upload_manifest_text([sample_upload_row()]),
@@ -517,6 +532,30 @@ def test_resolve_checkpoint_local_only_rejects_missing_staged_files(tmp_path):
 
     with pytest.raises(FileNotFoundError, match="Run stage-checkpoints before local-only evaluation"):
         resolve_checkpoint(row, tmp_path, checkpoint_mode="local-only")
+
+
+def test_audit_hf_paths_accepts_sharded_safetensors(monkeypatch):
+    row = rows_from_upload_manifest(
+        upload_manifest_text([sample_upload_row()]),
+        hf_repo_id="Calvin-Xu/checkpoints",
+        start_index=0,
+    )[0]
+    prefix = row.hf_checkpoint_path
+
+    class FakeHfApi:
+        def list_repo_files(self, *, repo_id: str, repo_type: str) -> list[str]:
+            assert repo_id == row.hf_repo_id
+            assert repo_type == "dataset"
+            return [
+                f"{prefix}/config.json",
+                f"{prefix}/tokenizer_config.json",
+                f"{prefix}/model.safetensors.index.json",
+                f"{prefix}/model-00001-of-00002.safetensors",
+            ]
+
+    monkeypatch.setattr(olmo_sc, "HfApi", FakeHfApi)
+
+    assert olmo_sc.audit_hf_paths([row]) == {"row_count": 1, "missing_count": 0, "missing": []}
 
 
 def test_model_dir_for_row_rejects_unsafe_output_name(tmp_path):
@@ -1031,7 +1070,8 @@ def test_olmo_eval_fanout_patcher_is_idempotent(tmp_path):
         + "\n"
         + olmo_patch.BASIC_DATASOURCE_OLD
     )
-    olmobase.write_text("""
+    olmobase.write_text(
+        """
 make_suite(
     name="arc:bpb:olmo3base",
     tasks=("arc_challenge:bpb:olmo3base", "arc_easy:bpb:olmo3base"),
@@ -1046,7 +1086,8 @@ make_suite(
     ),
     aggregation=AggregationStrategy.AVERAGE_OF_AVERAGES,
 )
-""")
+"""
+    )
 
     dry_run = olmo_patch.apply_patches(olmo_eval_dir, dry_run=True)
     assert dry_run == {str(runner): True, str(basic): True, str(olmobase): True}

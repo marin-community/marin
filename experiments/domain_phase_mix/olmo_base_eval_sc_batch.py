@@ -38,7 +38,10 @@ DEFAULT_EXPERIMENT_GROUP = "olmo_base_eval_sc_716"
 DEFAULT_TASK_PREP_WORKERS = 1
 OLMO_EVAL_TASK_PREP_WORKERS = "OLMO_EVAL_TASK_PREP_WORKERS"
 OLMO_EVAL_BASIC_SKILLS_LOCAL_ROOT = "OLMO_EVAL_BASIC_SKILLS_LOCAL_ROOT"
-CHECKPOINT_REQUIRED_FILES = ("config.json", "model.safetensors", "tokenizer_config.json")
+CHECKPOINT_METADATA_REQUIRED_FILES = ("config.json", "tokenizer_config.json")
+CHECKPOINT_SINGLE_WEIGHT_FILE = "model.safetensors"
+CHECKPOINT_SHARD_INDEX_FILE = "model.safetensors.index.json"
+CHECKPOINT_SHARD_RE = re.compile(r"model-\d{5}-of-\d{5}\.safetensors$")
 BASIC_SKILLS_SUBTASKS = (
     "arithmetic",
     "coding",
@@ -228,9 +231,7 @@ def audit_hf_paths(rows: list[EvalManifestRow]) -> dict[str, object]:
         repo_files[repo_id] = set(api.list_repo_files(repo_id=repo_id, repo_type="dataset"))
     missing: list[str] = []
     for row in rows:
-        required = f"{row.hf_checkpoint_path}/model.safetensors"
-        if required not in repo_files[row.hf_repo_id]:
-            missing.append(required)
+        missing.extend(missing_remote_checkpoint_files(repo_files[row.hf_repo_id], row.hf_checkpoint_path))
     return {
         "row_count": len(rows),
         "missing_count": len(missing),
@@ -275,9 +276,34 @@ def model_dir_for_row(row: EvalManifestRow, work_dir: Path) -> Path:
     return downloaded_model_root_for_row(row, work_dir) / row.hf_checkpoint_path
 
 
+def has_sharded_safetensors(files: set[str]) -> bool:
+    """Return whether a checkpoint file set has a valid sharded safetensors layout."""
+    return CHECKPOINT_SHARD_INDEX_FILE in files and any(CHECKPOINT_SHARD_RE.fullmatch(name) for name in files)
+
+
+def missing_remote_checkpoint_files(repo_files: set[str], checkpoint_path: str) -> list[str]:
+    """Return missing HF files for a monolithic or sharded safetensors checkpoint."""
+    prefix = checkpoint_path.rstrip("/")
+    local_names = {
+        file[len(prefix) + 1 :]
+        for file in repo_files
+        if file.startswith(f"{prefix}/") and "/" not in file[len(prefix) + 1 :]
+    }
+    missing = [f"{prefix}/{name}" for name in CHECKPOINT_METADATA_REQUIRED_FILES if name not in local_names]
+    has_single = CHECKPOINT_SINGLE_WEIGHT_FILE in local_names
+    if not has_single and not has_sharded_safetensors(local_names):
+        missing.append(f"{prefix}/{CHECKPOINT_SINGLE_WEIGHT_FILE} or sharded safetensors")
+    return missing
+
+
 def missing_checkpoint_files(model_dir: Path) -> list[str]:
     """Return required checkpoint files that are absent from a local model dir."""
-    return [name for name in CHECKPOINT_REQUIRED_FILES if not (model_dir / name).is_file()]
+    missing = [name for name in CHECKPOINT_METADATA_REQUIRED_FILES if not (model_dir / name).is_file()]
+    has_single = (model_dir / CHECKPOINT_SINGLE_WEIGHT_FILE).is_file()
+    local_names = {path.name for path in model_dir.glob("*") if path.is_file()}
+    if not has_single and not has_sharded_safetensors(local_names):
+        missing.append(f"{CHECKPOINT_SINGLE_WEIGHT_FILE} or sharded safetensors")
+    return missing
 
 
 def assert_checkpoint_complete(row: EvalManifestRow, work_dir: Path) -> Path:

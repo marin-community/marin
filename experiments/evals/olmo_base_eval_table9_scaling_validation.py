@@ -88,24 +88,21 @@ COMPLETED_20260627_TARGETS: tuple[ScalingEvalTarget, ...] = (
     ),
     _target(
         "t9_3e18_unimax8",
-        "pinlin_calvin_xu/data_mixture/delphi_baseline_mixtures_issue6607_20260623/"
-        "unimax8_3e18-cb3b49/hf/step-3006",
+        "pinlin_calvin_xu/data_mixture/delphi_baseline_mixtures_issue6607_20260623/" "unimax8_3e18-cb3b49/hf/step-3006",
         panel="delphi_baseline",
         scale="3e18",
         run_name="unimax8_3e18",
     ),
     _target(
         "t9_2e19_unimax8",
-        "pinlin_calvin_xu/data_mixture/delphi_baseline_mixtures_issue6607_20260623/"
-        "unimax8_2e19-b4704b/hf/step-9901",
+        "pinlin_calvin_xu/data_mixture/delphi_baseline_mixtures_issue6607_20260623/" "unimax8_2e19-b4704b/hf/step-9901",
         panel="delphi_baseline",
         scale="2e19",
         run_name="unimax8_2e19",
     ),
     _target(
         "t9_3e20_unimax8",
-        "pinlin_calvin_xu/data_mixture/delphi_baseline_mixtures_issue6607_20260623/"
-        "unimax8_3e20-c21bce/hf/step-23531",
+        "pinlin_calvin_xu/data_mixture/delphi_baseline_mixtures_issue6607_20260623/" "unimax8_3e20-c21bce/hf/step-23531",
         panel="delphi_baseline",
         scale="3e20",
         run_name="unimax8_3e20",
@@ -192,6 +189,97 @@ COMPLETED_20260627_TARGETS: tuple[ScalingEvalTarget, ...] = (
     ),
 )
 
+DSP_VALIDATION_3E18_20260628_TARGETS: tuple[ScalingEvalTarget, ...] = (
+    _target(
+        "t9_3e18_dsp_percomp_kl0p025",
+        "pinlin_calvin_xu/data_mixture/delphi_table9_dsp_validation_mixtures_3e18_20260628/"
+        "dsp_percomp_table9_kl0p025_3e18-31ff01/hf/step-3006",
+        panel="delphi_table9_dsp_validation",
+        scale="3e18",
+        run_name="dsp_percomp_table9_kl0p025_3e18",
+    ),
+    _target(
+        "t9_3e18_dsp_percomp_kl0p05",
+        "pinlin_calvin_xu/data_mixture/delphi_table9_dsp_validation_mixtures_3e18_20260628/"
+        "dsp_percomp_table9_kl0p05_3e18-56d627/hf/step-3006",
+        panel="delphi_table9_dsp_validation",
+        scale="3e18",
+        run_name="dsp_percomp_table9_kl0p05_3e18",
+    ),
+    _target(
+        "t9_3e18_dsp_percomp_kl0p1",
+        "pinlin_calvin_xu/data_mixture/delphi_table9_dsp_validation_mixtures_3e18_20260628/"
+        "dsp_percomp_table9_kl0p1_3e18-4ba78a/hf/step-3006",
+        panel="delphi_table9_dsp_validation",
+        scale="3e18",
+        run_name="dsp_percomp_table9_kl0p1_3e18",
+    ),
+    _target(
+        "t9_3e18_dsp_percomp_kl0p2",
+        "pinlin_calvin_xu/data_mixture/delphi_table9_dsp_validation_mixtures_3e18_20260628/"
+        "dsp_percomp_table9_kl0p2_3e18-e6cbe5/hf/step-3006",
+        panel="delphi_table9_dsp_validation",
+        scale="3e18",
+        run_name="dsp_percomp_table9_kl0p2_3e18",
+    ),
+    _target(
+        "t9_3e18_dsp_percomp_kl0p25",
+        "pinlin_calvin_xu/data_mixture/delphi_table9_dsp_validation_mixtures_3e18_20260628/"
+        "dsp_percomp_table9_kl0p25_3e18-261035/hf/step-3006",
+        panel="delphi_table9_dsp_validation",
+        scale="3e18",
+        run_name="dsp_percomp_table9_kl0p25_3e18",
+    ),
+    _target(
+        "t9_3e18_dsp_percomp_kl0p3",
+        "pinlin_calvin_xu/data_mixture/delphi_table9_dsp_validation_mixtures_3e18_20260628/"
+        "dsp_percomp_table9_kl0p3_3e18-55a568/hf/step-3006",
+        panel="delphi_table9_dsp_validation",
+        scale="3e18",
+        run_name="dsp_percomp_table9_kl0p3_3e18",
+    ),
+    _target(
+        "t9_3e18_dsp_percomp_kl0p4",
+        "pinlin_calvin_xu/data_mixture/delphi_table9_dsp_validation_mixtures_3e18_20260628/"
+        "dsp_percomp_table9_kl0p4_3e18-28d3ad/hf/step-3006",
+        panel="delphi_table9_dsp_validation",
+        scale="3e18",
+        run_name="dsp_percomp_table9_kl0p4_3e18",
+    ),
+    _target(
+        "t9_3e18_dsp_percomp_kl0p5",
+        "pinlin_calvin_xu/data_mixture/delphi_table9_dsp_validation_mixtures_3e18_20260628/"
+        "dsp_percomp_table9_kl0p5_3e18-5f47dc/hf/step-3006",
+        panel="delphi_table9_dsp_validation",
+        scale="3e18",
+        run_name="dsp_percomp_table9_kl0p5_3e18",
+    ),
+    _target(
+        "t9_3e18_dsp_effexp_kl0p25",
+        "pinlin_calvin_xu/data_mixture/delphi_table9_dsp_validation_mixtures_3e18_20260628/"
+        "dsp_effexp_table9_kl0p25_3e18-795d65/hf/step-3006",
+        panel="delphi_table9_dsp_validation",
+        scale="3e18",
+        run_name="dsp_effexp_table9_kl0p25_3e18",
+    ),
+    _target(
+        "t9_3e18_dsp_effexp_kl0p3",
+        "pinlin_calvin_xu/data_mixture/delphi_table9_dsp_validation_mixtures_3e18_20260628/"
+        "dsp_effexp_table9_kl0p3_3e18-a14a82/hf/step-3006",
+        panel="delphi_table9_dsp_validation",
+        scale="3e18",
+        run_name="dsp_effexp_table9_kl0p3_3e18",
+    ),
+    _target(
+        "t9_3e18_dsp_effexp_kl0p4",
+        "pinlin_calvin_xu/data_mixture/delphi_table9_dsp_validation_mixtures_3e18_20260628/"
+        "dsp_effexp_table9_kl0p4_3e18-434fb2/hf/step-3006",
+        panel="delphi_table9_dsp_validation",
+        scale="3e18",
+        run_name="dsp_effexp_table9_kl0p4_3e18",
+    ),
+)
+
 SANITY_TARGETS = (
     target
     for target in COMPLETED_20260627_TARGETS
@@ -200,6 +288,7 @@ SANITY_TARGETS = (
 
 TARGETS_BY_MODE = {
     "completed_20260627": COMPLETED_20260627_TARGETS,
+    "dsp_validation_3e18_20260628": DSP_VALIDATION_3E18_20260628_TARGETS,
     "sanity_pair": tuple(SANITY_TARGETS),
 }
 

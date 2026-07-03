@@ -168,7 +168,11 @@ def validate_regional_iris_command(
     if child_tpu_zone is not None and child_tpu_zone != expected_zone:
         errors.append(f"Child --tpu-zone must be {expected_zone}: got {child_tpu_zone!r}.")
 
-    bad_gcs_paths = [path for path in gcs_paths if not path.startswith(f"{expected_bucket_prefix}/")]
+    bad_gcs_paths = [
+        path
+        for path in gcs_paths
+        if path != expected_bucket_prefix and not path.startswith(f"{expected_bucket_prefix}/")
+    ]
     if bad_gcs_paths:
         errors.append(
             "All Marin GCS paths in region-local launch commands must use "

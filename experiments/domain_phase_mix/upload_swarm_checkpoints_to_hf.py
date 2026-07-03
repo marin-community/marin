@@ -63,7 +63,11 @@ PCTRL_300M_CANDIDATE_CSV = (
 )
 PCTRL_60M_SOURCE_EXPERIMENT = "pinlin_calvin_xu/data_mixture/ngd3dm2_pctrl60"
 PCTRL_60M_GCS_ROOT = f"gs://marin-us-east5/checkpoints/{PCTRL_60M_SOURCE_EXPERIMENT}"
-HF_REQUIRED_FILES = ("config.json", "model.safetensors", "tokenizer_config.json")
+HF_REQUIRED_CONFIG_FILES = ("config.json", "tokenizer_config.json")
+HF_SINGLE_MODEL_FILE = "model.safetensors"
+HF_MODEL_INDEX_FILE = "model.safetensors.index.json"
+HF_MODEL_SHARD_PREFIX = "model-"
+HF_MODEL_SHARD_SUFFIX = ".safetensors"
 DEFAULT_UPLOAD_ATTEMPTS = 6
 DEFAULT_UPLOAD_INITIAL_BACKOFF_SECONDS = 30.0
 MAX_UPLOAD_BACKOFF_SECONDS = 300.0
@@ -401,6 +405,14 @@ def _write_manifest(rows: list[CheckpointUploadRow], path: Path) -> None:
             writer.writerow(asdict(row))
 
 
+def _has_required_model_files(rels: set[str]) -> bool:
+    if HF_SINGLE_MODEL_FILE in rels:
+        return True
+    return HF_MODEL_INDEX_FILE in rels and any(
+        rel.startswith(HF_MODEL_SHARD_PREFIX) and rel.endswith(HF_MODEL_SHARD_SUFFIX) for rel in rels
+    )
+
+
 def _gcs_file_sizes(checkpoint_uri: str) -> dict[str, int]:
     fs, _, _ = fsspec.get_fs_token_paths(checkpoint_uri)
     prefix = checkpoint_uri.removeprefix("gs://").rstrip("/")
@@ -411,7 +423,11 @@ def _gcs_file_sizes(checkpoint_uri: str) -> dict[str, int]:
     if not files:
         raise FileNotFoundError(f"No files found under {checkpoint_uri}")
     rels = {Path(file.removeprefix(f"{checkpoint_uri.rstrip('/')}/")).as_posix() for file in files}
-    missing_required = [name for name in HF_REQUIRED_FILES if name not in rels]
+    missing_required = [name for name in HF_REQUIRED_CONFIG_FILES if name not in rels]
+    if not _has_required_model_files(rels):
+        missing_required.append(
+            f"{HF_SINGLE_MODEL_FILE} or {HF_MODEL_INDEX_FILE} with {HF_MODEL_SHARD_PREFIX}*.safetensors"
+        )
     if missing_required:
         raise FileNotFoundError(f"{checkpoint_uri} is missing required files: {missing_required}")
     return files
