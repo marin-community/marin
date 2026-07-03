@@ -16,7 +16,7 @@ from typing import Any
 import jax
 import jax.numpy as jnp
 import numpy as np
-from jax.sharding import NamedSharding, PartitionSpec as P
+from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P
 
 from levanter.grug._moe.source_push_forward import (
     FORWARD_EXECUTION_MODES,
@@ -153,7 +153,8 @@ def run_source_push_forward_public_compare(
 
     try:
         config.validate()
-        mesh = _make_mesh(config.ep_size)
+        source_push_mesh = _make_mesh(config.ep_size)
+        public_mesh = _make_public_ep_mesh(config.ep_size)
         raw_inputs = make_source_push_forward_source_plan_raw_inputs(config)
         source_push_out, source_push_dropped = source_push_forward(
             config,
@@ -164,13 +165,13 @@ def run_source_push_forward_public_compare(
             raw_inputs.w_down,
             implementation=source_push_implementation,
             execution_mode=source_push_execution_mode,
-            mesh=mesh,
+            mesh=source_push_mesh,
         )
         source_push_host = np.asarray(jax.device_get(source_push_out), dtype=np.float32)
         source_push_dropped_host = int(jax.device_get(source_push_dropped))
         rows = []
         for public_implementation in public_implementations:
-            public_out, public_dropped = _run_public_moe(config, raw_inputs, mesh, public_implementation)
+            public_out, public_dropped = _run_public_moe(config, raw_inputs, public_mesh, public_implementation)
             public_host = np.asarray(jax.device_get(public_out), dtype=np.float32).reshape(source_push_host.shape)
             public_dropped_host = int(jax.device_get(public_dropped))
             diff = np.abs(source_push_host - public_host)
@@ -219,6 +220,13 @@ def run_source_push_forward_public_compare(
         jax.clear_caches()
 
 
+def _make_public_ep_mesh(ep_size: int) -> Mesh:
+    devices = np.asarray(jax.devices()[:ep_size])
+    if devices.size < ep_size:
+        raise RuntimeError(f"Need {ep_size} visible JAX devices, got {devices.size}")
+    return Mesh(devices, (AXIS,), axis_types=(AxisType.Explicit,))
+
+
 def _run_public_moe(config: PushInboxConfig, raw_inputs, mesh, implementation: str):
     x = jnp.asarray(
         raw_inputs.x.reshape(config.ep_size * config.tokens_per_rank, config.hidden_dim), dtype=jnp.bfloat16
@@ -252,17 +260,18 @@ def _run_public_moe(config: PushInboxConfig, raw_inputs, mesh, implementation: s
     combine_weights = jax.device_put(combine_weights, NamedSharding(mesh, P(AXIS, None)))
     w_gate_up = jax.device_put(w_gate_up, NamedSharding(mesh, P(AXIS, None, None)))
     w_down = jax.device_put(w_down, NamedSharding(mesh, P(AXIS, None, None)))
-    return moe_mlp(
-        x,
-        selected_experts,
-        combine_weights,
-        w_gate_up,
-        w_down,
-        implementation=implementation,
-        mesh=mesh,
-        capacity_factor=config.capacity_factor,
-        report_capacity_overflow=True,
-    )
+    with jax.set_mesh(mesh):
+        return moe_mlp(
+            x,
+            selected_experts,
+            combine_weights,
+            w_gate_up,
+            w_down,
+            implementation=implementation,
+            mesh=mesh,
+            capacity_factor=config.capacity_factor,
+            report_capacity_overflow=True,
+        )
 
 
 def _parse_public_implementations(value: str) -> tuple[str, ...]:
