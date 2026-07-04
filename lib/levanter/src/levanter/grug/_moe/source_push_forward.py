@@ -246,6 +246,78 @@ def make_source_push_forward_inputs(
     )
 
 
+def make_source_push_forward_plan_inputs(
+    config: PushInboxConfig,
+    selected_experts: Int[Array, "S T K"],
+    *,
+    input_mode: str = "source_push_plan",
+    use_exact_expert_major: bool = False,
+) -> SourcePushForwardHostInputs:
+    """Build source-push host metadata from nondifferentiable routing only.
+
+    This is the public differentiable path's plan builder. The returned object
+    intentionally carries placeholder token/weight arrays; callers that need
+    gradients should pass real ``x``, ``route_weights``, ``w_gate_up``, and
+    ``w_down`` to ``source_push_forward_with_h_from_plan`` or
+    ``source_push_moe_mlp_from_plan``.
+    """
+
+    validate_source_push_forward_config(config)
+    selected_host = np.asarray(jax.device_get(selected_experts), dtype=np.int32)
+    expected_routes = (config.ep_size, config.tokens_per_rank, config.topk)
+    if selected_host.shape != expected_routes:
+        raise ValueError(f"selected_experts shape {selected_host.shape} must match {expected_routes}")
+
+    placeholder_route_weights = np.zeros(expected_routes, dtype=np.float32)
+    plan = build_source_push_plan(
+        jnp.asarray(selected_host, dtype=jnp.int32),
+        jnp.asarray(placeholder_route_weights, dtype=jnp.float32),
+        ep_size=config.ep_size,
+        experts_per_rank=config.experts_per_rank,
+        block_m=config.block_m,
+        capacity_factor=config.capacity_factor,
+        entries_per_dst=config.entries_per_rank,
+    )
+    packed_x = np.zeros(
+        (
+            config.ep_size,
+            config.ep_size,
+            config.entries_per_rank,
+            config.block_m,
+            config.hidden_dim,
+        ),
+        dtype=np.float32,
+    )
+    w_gate_up = np.zeros(
+        (
+            config.ep_size,
+            config.experts_per_rank,
+            config.hidden_dim,
+            2 * config.intermediate_dim,
+        ),
+        dtype=np.float32,
+    )
+    w_down = np.zeros(
+        (
+            config.ep_size,
+            config.experts_per_rank,
+            config.intermediate_dim,
+            config.hidden_dim,
+        ),
+        dtype=np.float32,
+    )
+    return _make_source_push_forward_inputs_from_plan(
+        config,
+        plan,
+        packed_x,
+        placeholder_route_weights,
+        w_gate_up,
+        w_down,
+        input_mode=input_mode,
+        use_exact_expert_major=use_exact_expert_major,
+    )
+
+
 def make_source_push_forward_source_plan_inputs(config: PushInboxConfig) -> SourcePushForwardHostInputs:
     """Build shared source-push plan inputs for full forward timing."""
 

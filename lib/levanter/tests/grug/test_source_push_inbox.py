@@ -1097,6 +1097,73 @@ def test_source_push_forward_device_inputs_from_plan_use_dynamic_jax_arrays():
     np.testing.assert_array_equal(np.asarray(device_inputs.w_down), np.asarray(dynamic_w2.astype(jnp.bfloat16)))
 
 
+def test_source_push_forward_plan_inputs_do_not_capture_differentiable_arrays():
+    config = source_push_inbox.PushInboxConfig(
+        ep_size=2,
+        entries_per_rank=4,
+        inbox_slots=2,
+        hidden_dim=8,
+        intermediate_dim=8,
+        block_m=2,
+        block_k=4,
+        block_n=4,
+        experts_per_rank=2,
+        send_worker_programs_per_peer=1,
+        worker_programs_per_peer=4,
+        routing="balanced",
+        tokens_per_rank=6,
+        topk=2,
+        capacity_factor=1.25,
+    )
+    raw_inputs = source_push_forward.make_source_push_forward_source_plan_raw_inputs(config)
+    full_inputs = source_push_forward.make_source_push_forward_inputs(
+        config,
+        raw_inputs.x,
+        raw_inputs.selected_experts,
+        raw_inputs.combine_weights,
+        raw_inputs.w_gate_up,
+        raw_inputs.w_down,
+        input_mode="source_push_plan",
+    )
+    plan_inputs = source_push_forward.make_source_push_forward_plan_inputs(
+        config,
+        raw_inputs.selected_experts,
+    )
+    dynamic_x = jnp.asarray(raw_inputs.x + 0.25, dtype=jnp.float32)
+    dynamic_weights = jnp.asarray(0.125 + raw_inputs.combine_weights * 0.25, dtype=jnp.float32)
+    dynamic_w13 = jnp.asarray(raw_inputs.w_gate_up + 0.5, dtype=jnp.float32)
+    dynamic_w2 = jnp.asarray(raw_inputs.w_down - 0.25, dtype=jnp.float32)
+
+    np.testing.assert_array_equal(plan_inputs.send_meta, full_inputs.send_meta)
+    np.testing.assert_array_equal(plan_inputs.recv_meta, full_inputs.recv_meta)
+    np.testing.assert_array_equal(plan_inputs.expert_base, full_inputs.expert_base)
+    np.testing.assert_array_equal(plan_inputs.src_base_by_expert, full_inputs.src_base_by_expert)
+    np.testing.assert_array_equal(plan_inputs.queue_dst_ord, full_inputs.queue_dst_ord)
+    np.testing.assert_array_equal(plan_inputs.queue_entry, full_inputs.queue_entry)
+    np.testing.assert_array_equal(plan_inputs.queue_row, full_inputs.queue_row)
+    np.testing.assert_array_equal(plan_inputs.route_valid_mask, full_inputs.route_valid_mask)
+    np.testing.assert_array_equal(plan_inputs.x, np.zeros_like(plan_inputs.x))
+    np.testing.assert_array_equal(plan_inputs.w_gate_up, np.zeros_like(plan_inputs.w_gate_up))
+    np.testing.assert_array_equal(plan_inputs.w_down, np.zeros_like(plan_inputs.w_down))
+
+    device_inputs = source_push_forward.device_source_push_forward_inputs_from_plan(
+        config,
+        plan_inputs,
+        dynamic_x,
+        dynamic_weights,
+        dynamic_w13,
+        dynamic_w2,
+    )
+    expected_packed_x = source_push_plan.pack_source_push_tokens_jax(dynamic_x, plan_inputs.plan).astype(jnp.bfloat16)
+    expected_recv_weights = source_push_plan.source_push_recv_route_weights_jax(dynamic_weights, plan_inputs.plan)
+    expected_recv_weights = jnp.repeat(expected_recv_weights[..., None].astype(jnp.bfloat16), config.block_k, axis=-1)
+
+    np.testing.assert_array_equal(np.asarray(device_inputs.x), np.asarray(expected_packed_x))
+    np.testing.assert_array_equal(np.asarray(device_inputs.recv_route_weights), np.asarray(expected_recv_weights))
+    np.testing.assert_array_equal(np.asarray(device_inputs.w_gate_up), np.asarray(dynamic_w13.astype(jnp.bfloat16)))
+    np.testing.assert_array_equal(np.asarray(device_inputs.w_down), np.asarray(dynamic_w2.astype(jnp.bfloat16)))
+
+
 def test_source_push_forward_h_reference_matches_mlp_boundary():
     config = source_push_inbox.PushInboxConfig(
         ep_size=2,

@@ -6,13 +6,14 @@
 from __future__ import annotations
 
 import jax
+import jax.numpy as jnp
 import numpy as np
 from jax.sharding import AbstractMesh, AxisType, Mesh, NamedSharding, PartitionSpec as P
 from jaxtyping import Array, Float, Int
 
 from levanter.grug._moe.source_push_forward import (
     FORWARD_EXECUTION_STAGED_HOST_SYNC,
-    make_source_push_forward_inputs,
+    make_source_push_forward_plan_inputs,
 )
 from levanter.grug._moe.source_push_inbox import AXIS, PushInboxConfig
 from levanter.grug._moe.source_push_mlp import (
@@ -82,7 +83,6 @@ def moe_mlp_ep_source_push_mgpu(
 
     config = _source_push_config_from_public_inputs(
         selected_source,
-        combine_source,
         ep_size=ep_size,
         tokens_per_rank=tokens_per_rank,
         topk=topk,
@@ -93,13 +93,9 @@ def moe_mlp_ep_source_push_mgpu(
     )
     if not isinstance(mesh, Mesh):
         raise ValueError(f"{SOURCE_PUSH_PUBLIC_IMPLEMENTATION!r} requires a concrete Mesh")
-    host_inputs = make_source_push_forward_inputs(
+    host_inputs = make_source_push_forward_plan_inputs(
         config,
-        x_source,
         selected_source,
-        combine_source,
-        w_gate_up_source,
-        w_down_source,
     )
     route_table = source_push_mlp_route_table_from_plan(
         host_inputs.plan,
@@ -179,7 +175,6 @@ def _validate_source_push_public_request(
 
 def _source_push_config_from_public_inputs(
     selected_experts: Int[Array, "S T K"],
-    combine_weights: Float[Array, "S T K"],
     *,
     ep_size: int,
     tokens_per_rank: int,
@@ -196,9 +191,10 @@ def _source_push_config_from_public_inputs(
             f"got {intermediate_dim}"
         )
 
+    probe_weights = jnp.zeros(selected_experts.shape, dtype=jnp.float32)
     probe_plan = build_source_push_plan(
         selected_experts,
-        combine_weights,
+        probe_weights,
         ep_size=ep_size,
         experts_per_rank=experts_per_rank,
         block_m=_BLOCK_M,
