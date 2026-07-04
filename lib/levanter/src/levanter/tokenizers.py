@@ -795,9 +795,9 @@ def _stage_from_hf(name_or_path: str, local_dir: str) -> None:
 # key, so without this lock N threads (e.g. one per dataset component in
 # ``build_caches``) race to write the same staging directory. That race
 # corrupts the tokenizer.json a sibling is mid-read of and forces a fatal HF
-# fall-through for mirror-only refs (#6954). A single process-wide lock is
-# sufficient: staging is I/O-bound and an app rarely fetches more than one
-# tokenizer, so serializing all staging costs nothing in practice.
+# fall-through for mirror-only refs. A single process-wide lock is sufficient:
+# staging is I/O-bound and an app rarely fetches more than one tokenizer, so
+# serializing all staging costs nothing in practice.
 _STAGE_LOCK = threading.Lock()
 
 
@@ -819,9 +819,8 @@ def _stage_tokenizer(name_or_path: str) -> str:
     Once staged, downstream loaders operate purely on local files — no
     HF Hub network calls (HEAD revalidation, etc.) are made.
 
-    Staging into ``local_dir`` is serialized by ``_STAGE_LOCK`` so concurrent
-    callers cannot race in the staging directory; the local-cache gate (step 1)
-    doubles as the double-checked-locking fast path for whichever thread wins.
+    Safe to call concurrently for the same ref: staging is serialized so only
+    one thread downloads while the others reuse the staged files.
 
     Returns the local directory path. ``lru_cache`` makes subsequent calls free.
     """
