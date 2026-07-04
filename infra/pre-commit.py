@@ -68,6 +68,8 @@ EXCLUDE_PATTERNS = [
     "**/*.mp4",
     "**/*.data-*",
     "**/package-lock.json",
+    # vendored patch files: diff context lines end in whitespace by format
+    "**/*.patch",
     "**/__pycache__/**",
     "**/*.pyc",
     "**/*-template.yaml",
