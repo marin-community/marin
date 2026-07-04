@@ -2275,3 +2275,39 @@ route H rows with `expert_base[dst, expert] + expert_row`.
     the entire H buffer to compact expert-major form first.
   - The test uses deliberately nonzero `expert_base` offsets and checks the full gradient tuple against compact-H
     backward, so it would catch missing base-offset handling.
+
+## 2026-07-04 00:19 - Add preplanned source-push MLP custom VJP
+
+Added the MLP-level custom VJP surface that consumes a prebuilt `SourcePushForwardHostInputs`/`SourcePushPlan`, runs the
+forward through the staged H-returning source-push path, and saves the flat production H buffer for backward. The public
+`pallas_mgpu_source_push` adapter now builds one plan, derives the MLP route table from that plan, and enters through
+this MLP boundary instead of calling the older forward-only adapter directly.
+
+- Commit Hash: `e121f1d9e`
+- Code:
+  - `lib/levanter/src/levanter/grug/_moe/source_push_mlp.py`
+  - `lib/levanter/src/levanter/grug/_moe/source_push_public.py`
+  - `lib/levanter/tests/grug/test_source_push_mlp.py`
+- New API:
+  - `source_push_moe_mlp_from_plan(...)`
+  - `source_push_moe_mlp_reference_with_h_flat(...)`
+- Verification:
+  - `uv run --package marin-levanter --group test pytest lib/levanter/tests/grug/test_source_push_mlp.py -q -k 'from_plan or flat_h or custom_vjp or saves_w13'`
+    - Result: `4 passed, 11 warnings in 22.52s`.
+  - `uv run --package marin-levanter --group test pytest lib/levanter/tests/grug/test_source_push_mlp.py -q`
+    - Result: `6 passed, 11 warnings in 12.17s`.
+  - `uv run --package marin-levanter --group test pytest lib/levanter/tests/grug/test_grugformer_moe.py -q -k 'source_push_backend_requires_concrete_expert_mesh'`
+    - Result: `1 passed, 11 warnings in 14.16s`.
+  - `./infra/pre-commit.py --fix lib/levanter/src/levanter/grug/_moe/source_push_mlp.py lib/levanter/src/levanter/grug/_moe/source_push_public.py lib/levanter/tests/grug/test_source_push_mlp.py`
+    - Result: all checks passed, including Pyrefly.
+- H100:
+  - No new H100 job launched for this patch. This is a structural VJP/API wiring checkpoint; the staged H-returning
+    kernels were already smoked in `/dlwh/source-push-forward-with-h-smoke-20260703-1815`, and the last from-plan H100
+    attempts failed before running kernels due environment mismatches documented in the 2026-07-03 18:37 entry.
+- Interpretation:
+  - The source-push production path now has the intended MLP-level differentiable boundary. The forward residual is flat
+    H `[Dst, rows, 2I]`; backward gathers route rows with `expert_base[dst, expert] + expert_row`.
+  - The checked-in gradient test runs the new from-plan custom VJP in reference mode and compares `dx`, `d_route_weights`,
+    `dw13`, and `dw2` against the independent compact-H MLP reference.
+  - Remaining production work is H100 verification of the Pallas from-plan forward under an environment with matching
+    JAX/Mosaic/CuDNN bits, then target backward/perf measurement through this MLP boundary.
