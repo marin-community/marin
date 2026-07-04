@@ -583,19 +583,28 @@ def _source_push_moe_mlp_backward_from_h_flat(
     Float[Array, "S E I D"],
 ]:
     expert_base = jnp.asarray(expert_base, dtype=jnp.int32)
-    dst_index = jnp.arange(route_table.ep_size, dtype=jnp.int32)[:, None]
-    row_offsets = jnp.arange(route_table.expert_capacity, dtype=jnp.int32)[None, :]
 
     def h_for_expert(expert: int) -> Float[Array, "Dst C twoI"]:
-        base_row = expert_base[:, expert][:, None]
-        flat_row = base_row + row_offsets
-        return h_flat.at[dst_index, flat_row].get(
-            mode="fill",
-            fill_value=0,
-            out_sharding=_source_push_out_sharding(SOURCE_PUSH_MESH_AXIS, None, None),
-        )
+        return _source_push_mlp_h_flat_for_expert(route_table, expert_base, h_flat, expert)
 
     return _source_push_moe_mlp_backward_by_expert(route_table, x, route_weights, w13, w2, dy, h_for_expert)
+
+
+def _source_push_mlp_h_flat_for_expert(
+    route_table: SourcePushMlpRouteTable,
+    expert_base: Int[Array, "Dst E"],
+    h_flat: Float[Array, "Dst rows twoI"],
+    expert: int,
+) -> Float[Array, "Dst C twoI"]:
+    dst_index = jnp.arange(route_table.ep_size, dtype=jnp.int32)[:, None]
+    row_offsets = jnp.arange(route_table.expert_capacity, dtype=jnp.int32)[None, :]
+    base_row = expert_base[:, expert][:, None]
+    flat_row = base_row + row_offsets
+    return h_flat.at[dst_index, flat_row].get(
+        mode="fill",
+        fill_value=0,
+        out_sharding=_source_push_out_sharding(SOURCE_PUSH_MESH_AXIS, None, None),
+    )
 
 
 def _source_push_mlp_expert_route_indices(
@@ -655,10 +664,17 @@ def _source_push_mlp_dy_to_expert_major(
     return dy_block.astype(jnp.float32) * valid_f[..., None]
 
 
+def _source_push_mlp_weight_activation(
+    activation: Float[Array, "Dst C I"],
+    weights: Float[Array, "Dst C"],
+) -> Float[Array, "Dst C I"]:
+    return activation * weights[..., None]
+
+
 def _source_push_mlp_w2_backward_for_expert(
     dy_block: Float[Array, "Dst C D"],
     activation: Float[Array, "Dst C I"],
-    weights: Float[Array, "Dst C"],
+    weighted_activation: Float[Array, "Dst C I"],
     w2_block: Float[Array, "Dst I D"],
     valid_f: Float[Array, "Dst C"],
 ) -> tuple[
@@ -666,7 +682,6 @@ def _source_push_mlp_w2_backward_for_expert(
     Float[Array, "Dst C"],
     Float[Array, "Dst I D"],
 ]:
-    weighted_activation = activation * weights[..., None]
     d_weighted_activation = jnp.einsum("scd,sid->sci", dy_block, w2_block)
     d_route_block = jnp.sum(d_weighted_activation * activation, axis=-1) * valid_f
     dw2_block = jnp.einsum("sci,scd->sid", weighted_activation, dy_block)
@@ -711,6 +726,38 @@ def _source_push_mlp_w13_backward_for_expert(
     return dx_block, dw13_block
 
 
+def _source_push_mlp_accumulate_expert_backward_outputs(
+    dx: Float[Array, "S T D"],
+    d_route_weights: Float[Array, "S T K"],
+    dw13: Float[Array, "S E D twoI"],
+    dw2: Float[Array, "S E I D"],
+    expert: int,
+    safe_src: Int[Array, "Dst C"],
+    safe_token: Int[Array, "Dst C"],
+    safe_slot: Int[Array, "Dst C"],
+    dx_block: Float[Array, "Dst C D"],
+    d_route_block: Float[Array, "Dst C"],
+    dw13_block: Float[Array, "Dst D twoI"],
+    dw2_block: Float[Array, "Dst I D"],
+) -> tuple[
+    Float[Array, "S T D"],
+    Float[Array, "S T K"],
+    Float[Array, "S E D twoI"],
+    Float[Array, "S E I D"],
+]:
+    dx = dx.at[safe_src, safe_token].add(
+        dx_block,
+        out_sharding=_source_push_out_sharding(SOURCE_PUSH_MESH_AXIS, None, None),
+    )
+    d_route_weights = d_route_weights.at[safe_src, safe_token, safe_slot].add(
+        d_route_block,
+        out_sharding=_source_push_out_sharding(SOURCE_PUSH_MESH_AXIS, None, None),
+    )
+    dw13 = dw13.at[:, expert].set(dw13_block)
+    dw2 = dw2.at[:, expert].set(dw2_block)
+    return dx, d_route_weights, dw13, dw2
+
+
 def _source_push_moe_mlp_backward_by_expert(
     route_table: SourcePushMlpRouteTable,
     x: Float[Array, "S T D"],
@@ -744,10 +791,11 @@ def _source_push_moe_mlp_backward_by_expert(
         )
         dy_block = _source_push_mlp_dy_to_expert_major(dy, safe_src, safe_token, valid_f)
         w2_block = w2[:, expert].astype(jnp.float32)
+        weighted_activation = _source_push_mlp_weight_activation(activation, weights)
         d_weighted_activation, d_route_block, dw2_block = _source_push_mlp_w2_backward_for_expert(
             dy_block,
             activation,
-            weights,
+            weighted_activation,
             w2_block,
             valid_f,
         )
@@ -762,16 +810,20 @@ def _source_push_moe_mlp_backward_by_expert(
         x_block = _source_push_mlp_x_to_expert_major(x, safe_src, safe_token, valid_f)
         w13_block = w13[:, expert].astype(jnp.float32)
         dx_block, dw13_block = _source_push_mlp_w13_backward_for_expert(x_block, d_h_block, w13_block)
-        dx = dx.at[safe_src, safe_token].add(
+        dx, d_route_weights, dw13, dw2 = _source_push_mlp_accumulate_expert_backward_outputs(
+            dx,
+            d_route_weights,
+            dw13,
+            dw2,
+            expert,
+            safe_src,
+            safe_token,
+            safe_slot,
             dx_block,
-            out_sharding=_source_push_out_sharding(SOURCE_PUSH_MESH_AXIS, None, None),
-        )
-        d_route_weights = d_route_weights.at[safe_src, safe_token, safe_slot].add(
             d_route_block,
-            out_sharding=_source_push_out_sharding(SOURCE_PUSH_MESH_AXIS, None, None),
+            dw13_block,
+            dw2_block,
         )
-        dw13 = dw13.at[:, expert].set(dw13_block)
-        dw2 = dw2.at[:, expert].set(dw2_block)
 
     return (
         dx.astype(x.dtype),

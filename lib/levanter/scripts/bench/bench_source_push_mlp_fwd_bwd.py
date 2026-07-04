@@ -23,6 +23,7 @@ import jax.numpy as jnp
 import numpy as np
 from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P
 
+import levanter.grug._moe.source_push_mlp as source_push_mlp
 from levanter.grug._moe.source_push_forward import (
     FORWARD_EXECUTION_STAGED_HOST_SYNC,
     FORWARD_STAGE_COMBINE,
@@ -54,8 +55,6 @@ from levanter.grug._moe.source_push_mlp import (
     source_push_moe_mlp_from_plan,
 )
 from levanter.grug._moe.source_push_plan import (
-    SOURCE_PUSH_MESH_AXIS,
-    _source_push_out_sharding,
     source_push_recv_route_weights_jax,
 )
 from levanter.grug._moe.source_push_w2_return import _sharded_w2_from_h_return_direct_to_source_kernel
@@ -634,96 +633,96 @@ def _time_source_push_backward_decomposed(
         dw13 = jnp.zeros_like(w13, dtype=jnp.float32)
         dw2 = jnp.zeros_like(w2, dtype=jnp.float32)
 
-        dst_index = jnp.arange(route_table.ep_size, dtype=jnp.int32)[:, None]
-        row_offsets = jnp.arange(route_table.expert_capacity, dtype=jnp.int32)[None, :]
-
         for expert in range(route_table.experts_per_rank):
-            valid = route_table.valid_by_expert[:, expert]
-            safe_src = jnp.maximum(route_table.source_rank_by_expert[:, expert], 0)
-            safe_token = jnp.maximum(route_table.token_id_by_expert[:, expert], 0)
-            safe_slot = jnp.maximum(route_table.route_slot_by_expert[:, expert], 0)
-            valid_f = valid.astype(jnp.float32)
+            _, safe_src, safe_token, safe_slot, valid_f = source_push_mlp._source_push_mlp_expert_route_indices(
+                route_table,
+                expert,
+            )
 
             stage_start = time.perf_counter()
-            base_row = expert_base[:, expert][:, None]
-            flat_row = base_row + row_offsets
-            h_block = h_flat.at[dst_index, flat_row].get(
-                mode="fill",
-                fill_value=0,
-                out_sharding=_source_push_out_sharding(SOURCE_PUSH_MESH_AXIS, None, None),
-            )
+            h_block = source_push_mlp._source_push_mlp_h_flat_for_expert(route_table, expert_base, h_flat, expert)
             h_block = h_block.astype(jnp.float32) * valid_f[..., None]
-            dy_block = dy.at[safe_src, safe_token].get(
-                out_sharding=_source_push_out_sharding(SOURCE_PUSH_MESH_AXIS, None, None)
+            dy_block = source_push_mlp._source_push_mlp_dy_to_expert_major(
+                dy,
+                safe_src,
+                safe_token,
+                valid_f,
             )
-            dy_block = dy_block.astype(jnp.float32) * valid_f[..., None]
-            weights = route_weights.at[safe_src, safe_token, safe_slot].get(
-                out_sharding=_source_push_out_sharding(SOURCE_PUSH_MESH_AXIS, None)
+            weights = source_push_mlp._source_push_mlp_route_weights_to_expert_major(
+                route_weights,
+                safe_src,
+                safe_token,
+                safe_slot,
+                valid_f,
             )
-            weights = weights.astype(jnp.float32) * valid_f
             _block_until_ready((h_block, dy_block, weights))
             if record_stage_times:
                 stage_times[BACKWARD_STAGE_DY_ROUTE] += time.perf_counter() - stage_start
 
             stage_start = time.perf_counter()
-            intermediate_dim = h_block.shape[-1] // 2
-            gate = h_block[..., :intermediate_dim]
-            up = h_block[..., intermediate_dim:]
-            silu_gate = jax.nn.silu(gate)
-            activation = silu_gate * up
-            weighted_activation = activation * weights[..., None]
+            gate, up, silu_gate, activation = source_push_mlp._source_push_mlp_activation_from_h(h_block)
+            weighted_activation = source_push_mlp._source_push_mlp_weight_activation(activation, weights)
             _block_until_ready((gate, up, silu_gate, activation, weighted_activation))
             if record_stage_times:
                 stage_times[BACKWARD_STAGE_ACTIVATION] += time.perf_counter() - stage_start
 
             stage_start = time.perf_counter()
             w2_block = w2[:, expert].astype(jnp.float32)
-            d_weighted_activation = jnp.einsum("scd,sid->sci", dy_block, w2_block)
-            dw2_block = jnp.einsum("sci,scd->sid", weighted_activation, dy_block)
-            _block_until_ready((d_weighted_activation, dw2_block))
+            d_weighted_activation, d_route_block, dw2_block = source_push_mlp._source_push_mlp_w2_backward_for_expert(
+                dy_block,
+                activation,
+                weighted_activation,
+                w2_block,
+                valid_f,
+            )
+            _block_until_ready((d_weighted_activation, d_route_block, dw2_block))
             if record_stage_times:
                 stage_times[BACKWARD_STAGE_W2] += time.perf_counter() - stage_start
 
             stage_start = time.perf_counter()
-            d_route_block = jnp.sum(d_weighted_activation * activation, axis=-1) * valid_f
-            d_activation = d_weighted_activation * weights[..., None]
-            sigmoid_gate = jax.nn.sigmoid(gate)
-            d_silu = sigmoid_gate * (1.0 + gate * (1.0 - sigmoid_gate))
-            d_gate = d_activation * up * d_silu
-            d_up = d_activation * silu_gate
-            d_h_block = jnp.concatenate([d_gate, d_up], axis=-1)
+            d_h_block = source_push_mlp._source_push_mlp_swiglu_backward_from_h(
+                d_weighted_activation,
+                weights,
+                gate,
+                up,
+                silu_gate,
+            )
             _block_until_ready((d_route_block, d_h_block))
             if record_stage_times:
                 stage_times[BACKWARD_STAGE_SWIGLU] += time.perf_counter() - stage_start
 
             stage_start = time.perf_counter()
-            x_block = x.at[safe_src, safe_token].get(
-                out_sharding=_source_push_out_sharding(SOURCE_PUSH_MESH_AXIS, None, None)
-            )
-            x_block = x_block.astype(jnp.float32) * valid_f[..., None]
+            x_block = source_push_mlp._source_push_mlp_x_to_expert_major(x, safe_src, safe_token, valid_f)
             _block_until_ready(x_block)
             if record_stage_times:
                 stage_times[BACKWARD_STAGE_X_REMAT] += time.perf_counter() - stage_start
 
             stage_start = time.perf_counter()
             w13_block = w13[:, expert].astype(jnp.float32)
-            dx_block = jnp.einsum("sco,sdo->scd", d_h_block, w13_block)
-            dw13_block = jnp.einsum("scd,sco->sdo", x_block, d_h_block)
+            dx_block, dw13_block = source_push_mlp._source_push_mlp_w13_backward_for_expert(
+                x_block,
+                d_h_block,
+                w13_block,
+            )
             _block_until_ready((dx_block, dw13_block))
             if record_stage_times:
                 stage_times[BACKWARD_STAGE_W13] += time.perf_counter() - stage_start
 
             stage_start = time.perf_counter()
-            dx = dx.at[safe_src, safe_token].add(
+            dx, d_route_weights, dw13, dw2 = source_push_mlp._source_push_mlp_accumulate_expert_backward_outputs(
+                dx,
+                d_route_weights,
+                dw13,
+                dw2,
+                expert,
+                safe_src,
+                safe_token,
+                safe_slot,
                 dx_block,
-                out_sharding=_source_push_out_sharding(SOURCE_PUSH_MESH_AXIS, None, None),
-            )
-            d_route_weights = d_route_weights.at[safe_src, safe_token, safe_slot].add(
                 d_route_block,
-                out_sharding=_source_push_out_sharding(SOURCE_PUSH_MESH_AXIS, None, None),
+                dw13_block,
+                dw2_block,
             )
-            dw13 = dw13.at[:, expert].set(dw13_block)
-            dw2 = dw2.at[:, expert].set(dw2_block)
             _block_until_ready((dx, d_route_weights, dw13, dw2))
             if record_stage_times:
                 stage_times[BACKWARD_STAGE_DX_COMBINE] += time.perf_counter() - stage_start
