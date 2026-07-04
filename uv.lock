@@ -2537,6 +2537,23 @@ wheels = [
 ]
 
 [[package]]
+name = "google-cloud-secret-manager"
+version = "2.29.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "google-api-core", extra = ["grpc"] },
+    { name = "google-auth" },
+    { name = "grpc-google-iam-v1" },
+    { name = "grpcio" },
+    { name = "proto-plus" },
+    { name = "protobuf" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/d2/7c/5c88cdde9664f6c75fb68aa11e0af4309a92bef38dd38df0456ffb0f469b/google_cloud_secret_manager-2.29.0.tar.gz", hash = "sha256:ee64133af8fdb3780affb65ec6ccf10ab15a0113d8edeba388665f4be87ce1be", size = 278437, upload-time = "2026-06-03T16:13:43.149Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/b6/c2/fc3275bc42a522757cb5141d7dae51f048b93d2f5fe4574fcee5392cef03/google_cloud_secret_manager-2.29.0-py3-none-any.whl", hash = "sha256:21bac2d0adb0bb3c13c346d7223832f197c2266534528a1bf1402774e06395a3", size = 225042, upload-time = "2026-06-03T16:12:20.162Z" },
+]
+
+[[package]]
 name = "google-cloud-storage"
 version = "3.8.0"
 source = { registry = "https://pypi.org/simple" }
@@ -4785,14 +4802,14 @@ test = [
 
 [[package]]
 name = "marin-dupekit"
-version = "0.1.2.dev202606081019"
+version = "0.1.2.dev202607010930"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/dc/9d/3c2bea3f8a557649e8da8371f43b8a7e14d1a42a156c54d153d439ffacab/marin_dupekit-0.1.2.dev202606081019.tar.gz", hash = "sha256:449f3bb30f6b353d2541011de483b71dd40b796ed6f032b71568d3f3494a202d", size = 29869, upload-time = "2026-06-08T10:25:06.543Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/b0/f6/dcdffb0a599f3741e88d6fd0ce556cc2ce030f90807f31c29a59bbb47cf4/marin_dupekit-0.1.2.dev202607010930.tar.gz", hash = "sha256:8830ae170f01b6fc9fddfc39fe29d77bacab0aaebbaf6f1848a7cc5b77680290", size = 29902, upload-time = "2026-07-01T09:36:46.448Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/e9/ea/175c8dc37b21616b10658e62de9aa3873832e2c9b86c8353b043d6d11daa/marin_dupekit-0.1.2.dev202606081019-cp311-abi3-macosx_10_12_x86_64.whl", hash = "sha256:6fe8ee488f722e0193f247f6b8cf7c7b969ab7a4a8a7e04e519eb73e6ff77663", size = 4579143, upload-time = "2026-06-08T10:24:59.62Z" },
-    { url = "https://files.pythonhosted.org/packages/81/17/3eba4e92be4af8ae826fdda5f048df01c9a8082a58cf79f6df73ce665df3/marin_dupekit-0.1.2.dev202606081019-cp311-abi3-macosx_11_0_arm64.whl", hash = "sha256:1d8b7cf825739bbe26d6f561073ca0291114d0e80790de172272c4704892c707", size = 4197445, upload-time = "2026-06-08T10:25:01.44Z" },
-    { url = "https://files.pythonhosted.org/packages/01/66/a6b4807f96b6b0d12afbe9996273c598651bfe30423810605289fcd7a4e5/marin_dupekit-0.1.2.dev202606081019-cp311-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:0a05b48f495a509fdda39f6d7e5384e34c5972950981c4197e81c2bf3b41c8a3", size = 4416473, upload-time = "2026-06-08T10:25:03.457Z" },
-    { url = "https://files.pythonhosted.org/packages/ab/5a/99b44b1d6abc07af2ad3df953cfb4161d934e56643a5a812ba253e5d175d/marin_dupekit-0.1.2.dev202606081019-cp311-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:397cf89721d4b22274f8ab309fbc557d304aa0ecb965f413662f62c8d7d14ec3", size = 4758217, upload-time = "2026-06-08T10:25:04.956Z" },
+    { url = "https://files.pythonhosted.org/packages/cb/a7/646f30562d207aa027f03c95605ed4c0ede413b993d1f0579683676c4666/marin_dupekit-0.1.2.dev202607010930-cp312-abi3-macosx_10_12_x86_64.whl", hash = "sha256:5ca40b90728127268bc6bd38985a795319b91db553ba6f67d8f24d845e8bf9cc", size = 4580721, upload-time = "2026-07-01T09:36:38.895Z" },
+    { url = "https://files.pythonhosted.org/packages/ff/75/23642d2f71f37a5486375e87e3ce140097ffe3aa37fb25db05b5bb3b5f83/marin_dupekit-0.1.2.dev202607010930-cp312-abi3-macosx_11_0_arm64.whl", hash = "sha256:0dc850f498c6056f5bafaac3ad81872f067324ab45893c8d8509c18eae59b1ab", size = 4192370, upload-time = "2026-07-01T09:36:41.144Z" },
+    { url = "https://files.pythonhosted.org/packages/d3/d6/5d1f46582dcf867ef770cb093062107edb95d9d9c0268f8a324423f6cb20/marin_dupekit-0.1.2.dev202607010930-cp312-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:2473d4b67939a57b3cbdb393c3b7772c50b6b24efb040682dd1c1130293e9f9f", size = 4413413, upload-time = "2026-07-01T09:36:43.029Z" },
+    { url = "https://files.pythonhosted.org/packages/11/8c/c2c333fde146c77bc4a4a74b059c4c2e2f9d2234ba3c44b1e66011fa6028/marin_dupekit-0.1.2.dev202607010930-cp312-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:6bdaf183bfbfdd7e7e8577891db763357ff6d43aaf81b6b3daa957c8b71f5392", size = 4755070, upload-time = "2026-07-01T09:36:44.78Z" },
 ]
 
 [[package]]
@@ -4856,14 +4873,14 @@ test = [
 
 [[package]]
 name = "marin-finelog-server"
-version = "0.2.10"
+version = "0.2.12.dev202607040833"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/78/5e/63cbc183a739832d8e735dedd5aed21d6d8276a4f03421bdf846fed5a39b/marin_finelog_server-0.2.10.tar.gz", hash = "sha256:814c164d5a10f2890308a6b824c2862a795d458fcbe36b891fb916c641a9f286", size = 198004, upload-time = "2026-06-16T15:21:08.611Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/62/d1/f14370ea0b88d2cf0232723f90509619439b4e7e2ada6786175370f13d32/marin_finelog_server-0.2.12.dev202607040833.tar.gz", hash = "sha256:211a004163f41ab0b602066a278b521540ffef94022246b4c56c27858077484d", size = 218973, upload-time = "2026-07-04T09:03:26.257Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/3b/18/73aa6b0128d454f6af126bf9062f702814cfe1c2deac540508dfba143e70/marin_finelog_server-0.2.10-cp311-abi3-macosx_10_12_x86_64.whl", hash = "sha256:1ab299a0054393422a5a25ba72ee684fc9fc287b45d18dd690b8f2ca083ed2a0", size = 41535735, upload-time = "2026-06-16T15:20:55.171Z" },
-    { url = "https://files.pythonhosted.org/packages/25/5c/a8a2c54c358599ce69708a87a7bc6b0fd6404287d54bde65c36efb08b78d/marin_finelog_server-0.2.10-cp311-abi3-macosx_11_0_arm64.whl", hash = "sha256:ada401ea4ff64020f0c0b823eb35196af4e4b9c933d87178d53dba4596fa0b28", size = 39118100, upload-time = "2026-06-16T15:20:58.761Z" },
-    { url = "https://files.pythonhosted.org/packages/5b/4a/d76239d03a1ab7c078907578ebf4eaf1b21f686b0dff6c618dfdabc4becc/marin_finelog_server-0.2.10-cp311-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:440b40c3d9ba785f14c441c4b60d17ffdc1a76e06fcffa0aa0c6acd3c408bc09", size = 40490992, upload-time = "2026-06-16T15:21:02.299Z" },
-    { url = "https://files.pythonhosted.org/packages/d3/0f/9a8abea06fbd7fdfb5ba88e827a36c143534474e6cb93798ba7daf327d07/marin_finelog_server-0.2.10-cp311-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:0dc8dd1e584578f83cc94de1a679ab6c2962d6f59fad2f9c965d9dafca94c512", size = 43070955, upload-time = "2026-06-16T15:21:05.094Z" },
+    { url = "https://files.pythonhosted.org/packages/6a/1f/7beaf16931b0b08747679bc23e5fbfb230c0a32481b748cb2a15cf454877/marin_finelog_server-0.2.12.dev202607040833-cp312-abi3-macosx_10_12_x86_64.whl", hash = "sha256:004f35272ba8cecb97f1eb73070d70235143181c3a1ff81230246037d09b9697", size = 41783290, upload-time = "2026-07-04T09:03:13.992Z" },
+    { url = "https://files.pythonhosted.org/packages/e0/ef/e648579b0b51f390cc353b7e9eb3db23ab26176f10aa3db88d90a3241c13/marin_finelog_server-0.2.12.dev202607040833-cp312-abi3-macosx_11_0_arm64.whl", hash = "sha256:c8937afc6fa72070de90d81150716860d84d53a9312df4bc0952a89968393c6e", size = 39342790, upload-time = "2026-07-04T09:03:17.243Z" },
+    { url = "https://files.pythonhosted.org/packages/29/79/e390376d005b06f2257001262b433b58ce743e0dc744f0ade6ec032f94e6/marin_finelog_server-0.2.12.dev202607040833-cp312-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:81aca89bb825a6165ea0fc3f952e5a5c5e02d219c68388c852dab654a0d6c853", size = 40789253, upload-time = "2026-07-04T09:03:20.027Z" },
+    { url = "https://files.pythonhosted.org/packages/11/b5/5385247529c60369d4d7706c5e64fb35a4c9cca2c06e589254999c5fae24/marin_finelog_server-0.2.12.dev202607040833-cp312-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:77f6f4e881e0de27d145636b46466517f75a3ff4ad8f85d70284e672ede774f7", size = 43343003, upload-time = "2026-07-04T09:03:23.052Z" },
 ]
 
 [[package]]
@@ -5356,6 +5373,7 @@ dependencies = [
     { name = "fsspec" },
     { name = "gcsfs" },
     { name = "google-auth" },
+    { name = "pyjwt", extra = ["crypto"] },
     { name = "pyyaml" },
     { name = "requests" },
     { name = "s3fs" },
@@ -5365,6 +5383,9 @@ dependencies = [
 [package.optional-dependencies]
 iap = [
     { name = "google-auth-oauthlib" },
+]
+secrets = [
+    { name = "google-cloud-secret-manager" },
 ]
 
 [package.dev-dependencies]
@@ -5387,12 +5408,14 @@ requires-dist = [
     { name = "gcsfs", specifier = ">=2024.0.0" },
     { name = "google-auth", specifier = ">=2.0.0" },
     { name = "google-auth-oauthlib", marker = "extra == 'iap'", specifier = ">=1.0.0" },
+    { name = "google-cloud-secret-manager", marker = "extra == 'secrets'", specifier = ">=2.16.0" },
+    { name = "pyjwt", extras = ["crypto"], specifier = ">=2.12.0" },
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "requests", specifier = ">=2.0.0" },
     { name = "s3fs", specifier = ">=2024.0.0" },
     { name = "starlette", specifier = ">=0.40" },
 ]
-provides-extras = ["iap"]
+provides-extras = ["iap", "secrets"]
 
 [package.metadata.requires-dev]
 dev = [
