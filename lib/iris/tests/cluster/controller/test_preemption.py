@@ -1517,62 +1517,57 @@ def test_preemption_terminal_task_is_noop():
 
 def test_resolve_failure_assigned_always_retries():
     """ASSIGNED tasks always retry regardless of preemption budget."""
-    new_state, count = _resolve_task_failure_state(
+    new_state = _resolve_task_failure_state(
         job_pb2.TASK_STATE_ASSIGNED,
         preemption_count=0,
         max_preemptions=0,
         terminal_state=job_pb2.TASK_STATE_PREEMPTED,
     )
     assert new_state == job_pb2.TASK_STATE_PENDING
-    assert count == 0  # preemption_count not incremented for ASSIGNED
 
 
 def test_resolve_failure_running_retries_within_budget():
     """RUNNING task retries when preemption budget remains."""
-    new_state, count = _resolve_task_failure_state(
+    new_state = _resolve_task_failure_state(
         job_pb2.TASK_STATE_RUNNING,
         preemption_count=0,
         max_preemptions=3,
         terminal_state=job_pb2.TASK_STATE_PREEMPTED,
     )
     assert new_state == job_pb2.TASK_STATE_PENDING
-    assert count == 1
 
 
 def test_resolve_failure_running_terminal_when_budget_exhausted():
     """RUNNING task goes terminal when preemption budget is exhausted."""
-    new_state, count = _resolve_task_failure_state(
+    new_state = _resolve_task_failure_state(
         job_pb2.TASK_STATE_RUNNING,
         preemption_count=3,
         max_preemptions=3,
         terminal_state=job_pb2.TASK_STATE_PREEMPTED,
     )
     assert new_state == job_pb2.TASK_STATE_PREEMPTED
-    assert count == 4
 
 
 def test_resolve_failure_building_retries_within_budget():
     """BUILDING task (executing state) retries when budget remains."""
-    new_state, count = _resolve_task_failure_state(
+    new_state = _resolve_task_failure_state(
         job_pb2.TASK_STATE_BUILDING,
         preemption_count=0,
         max_preemptions=1,
         terminal_state=job_pb2.TASK_STATE_WORKER_FAILED,
     )
     assert new_state == job_pb2.TASK_STATE_PENDING
-    assert count == 1
 
 
 def test_resolve_failure_building_terminal_when_exhausted():
     """BUILDING task goes terminal when preemption budget is exhausted."""
-    new_state, count = _resolve_task_failure_state(
+    new_state = _resolve_task_failure_state(
         job_pb2.TASK_STATE_BUILDING,
         preemption_count=1,
         max_preemptions=1,
         terminal_state=job_pb2.TASK_STATE_WORKER_FAILED,
     )
     assert new_state == job_pb2.TASK_STATE_WORKER_FAILED
-    assert count == 2
 
 
 # ---------------------------------------------------------------------------
