@@ -5,6 +5,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
+import levanter.grug._moe.source_push_mlp as source_push_mlp
 from levanter.grug._moe.source_push_mlp import (
     build_source_push_mlp_route_table,
     source_push_moe_mlp,
@@ -131,6 +132,49 @@ def test_source_push_moe_mlp_custom_vjp_matches_reference_gradients():
     for observed, expected in zip(custom_vjp_grads, reference_grads, strict=True):
         np.testing.assert_allclose(np.asarray(observed), np.asarray(expected), atol=1e-5, rtol=1e-5)
     assert float(jnp.max(jnp.abs(custom_vjp_grads[1]))) > 0.0
+
+
+def test_source_push_moe_mlp_flat_h_backward_matches_compact_h_backward():
+    x, route_assignments, route_weights, w13, w2 = _small_mlp_inputs()
+    route_table = _route_table(route_assignments, route_weights)
+    cotangent = jnp.linspace(-0.5, 0.7, x.size, dtype=jnp.float32).reshape(x.shape)
+    _, compact_h = source_push_moe_mlp_reference_with_h(route_table, x, route_weights, w13, w2)
+    expert_base = jnp.array(
+        [
+            [0, route_table.expert_capacity + 1],
+            [2, route_table.expert_capacity + 4],
+        ],
+        dtype=jnp.int32,
+    )
+    flat_rows = int(np.max(np.asarray(expert_base))) + route_table.expert_capacity
+    flat_h = jnp.zeros((EP_SIZE, flat_rows, 2 * INTERMEDIATE_DIM), dtype=compact_h.dtype)
+    for dst in range(EP_SIZE):
+        for expert in range(EXPERTS_PER_RANK):
+            start = int(expert_base[dst, expert])
+            flat_h = flat_h.at[dst, start : start + route_table.expert_capacity].set(compact_h[dst, expert])
+
+    compact_grads = source_push_mlp._source_push_moe_mlp_backward_from_h(
+        route_table,
+        x,
+        route_weights,
+        w13,
+        w2,
+        compact_h,
+        cotangent,
+    )
+    flat_grads = source_push_mlp._source_push_moe_mlp_backward_from_h_flat(
+        route_table,
+        expert_base,
+        x,
+        route_weights,
+        w13,
+        w2,
+        flat_h,
+        cotangent,
+    )
+
+    for observed, expected in zip(flat_grads, compact_grads, strict=True):
+        np.testing.assert_allclose(np.asarray(observed), np.asarray(expected), atol=0, rtol=0)
 
 
 def _naive_source_push_moe_mlp(x, route_assignments, route_weights, w13, w2):

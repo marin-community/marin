@@ -276,14 +276,55 @@ def _source_push_moe_mlp_backward_from_h(
     Float[Array, "S E D twoI"],
     Float[Array, "S E I D"],
 ]:
+    dst = route_table.destination_rank
+    expert = route_table.local_expert
+    row = route_table.expert_row
+    h_rows = h[dst, expert, row].astype(jnp.float32)
+    return _source_push_moe_mlp_backward_from_h_rows(route_table, x, route_weights, w13, w2, h_rows, dy)
+
+
+def _source_push_moe_mlp_backward_from_h_flat(
+    route_table: SourcePushMlpRouteTable,
+    expert_base: Int[Array, "Dst E"],
+    x: Float[Array, "S T D"],
+    route_weights: Float[Array, "S T K"],
+    w13: Float[Array, "S E D twoI"],
+    w2: Float[Array, "S E I D"],
+    h_flat: Float[Array, "Dst rows twoI"],
+    dy: Float[Array, "S T D"],
+) -> tuple[
+    Float[Array, "S T D"],
+    Float[Array, "S T K"],
+    Float[Array, "S E D twoI"],
+    Float[Array, "S E I D"],
+]:
+    dst = route_table.destination_rank
+    expert = route_table.local_expert
+    flat_row = expert_base[dst, expert] + route_table.expert_row
+    h_rows = h_flat[dst, flat_row].astype(jnp.float32)
+    return _source_push_moe_mlp_backward_from_h_rows(route_table, x, route_weights, w13, w2, h_rows, dy)
+
+
+def _source_push_moe_mlp_backward_from_h_rows(
+    route_table: SourcePushMlpRouteTable,
+    x: Float[Array, "S T D"],
+    route_weights: Float[Array, "S T K"],
+    w13: Float[Array, "S E D twoI"],
+    w2: Float[Array, "S E I D"],
+    h_rows: Float[Array, "R twoI"],
+    dy: Float[Array, "S T D"],
+) -> tuple[
+    Float[Array, "S T D"],
+    Float[Array, "S T K"],
+    Float[Array, "S E D twoI"],
+    Float[Array, "S E I D"],
+]:
     src = route_table.source_rank
     token = route_table.token_id
     slot = route_table.route_slot
     dst = route_table.destination_rank
     expert = route_table.local_expert
-    row = route_table.expert_row
 
-    h_rows = h[dst, expert, row].astype(jnp.float32)
     intermediate_dim = h_rows.shape[-1] // 2
     gate = h_rows[:, :intermediate_dim]
     up = h_rows[:, intermediate_dim:]
