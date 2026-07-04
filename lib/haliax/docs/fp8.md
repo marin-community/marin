@@ -159,6 +159,84 @@ because it can be a bit more finicky. We use AQT directly, and we recommend you 
 [AQT documentation](https://github.com/google/aqt?tab=readme-ov-file#how-aqt-works-internally) for more
 information on how it works.
 
+## FP8 for MoE grouped matmuls (``ragged_dot``)
+
+!!! warning "Experimental — scientific validation required before training use"
+
+    `ragged_dot` FP8 is opt-in.  The default backward quantizes the output
+    gradient to the numerically correct E5M2, which requires jax >= 0.11.0
+    (see [Mixed backward](#mixed-backward)).  bf16 remains the training
+    default.  Validate loss curves and gradient norms before using FP8 in a
+    production training run.
+
+Haliax supports FP8 for the expert-grouped matmul in Mixture-of-Experts layers via
+[haliax.nn.ragged_dot][].  This is distinct from the dense `Fp8DotGeneralOp` (above):
+it runs on a genuine ragged Mosaic `wgmma` kernel over dynamic non-uniform
+`group_sizes` (each expert may receive a different number of tokens) rather than a
+batched-dense reshape.
+
+### Opt-in
+
+Pass an `Fp8RaggedDotOp` to the `op=` argument:
+
+```python
+import haliax.nn as hnn
+from haliax.quantization import Fp8RaggedDotOp, apply_updates, partition_for_grad_overwrite
+
+op = Fp8RaggedDotOp.init(amax_history_length=1024)
+
+# Forward (inside your model or loss function):
+out = hnn.ragged_dot(lhs, rhs, group_sizes, op=op)
+
+# Train step — same pattern as dense FP8:
+grads = eqx.filter_grad(loss_fn)(op, lhs, rhs, ...)
+overwrites, non_overwrites = partition_for_grad_overwrite(grads)
+updates, opt_state = optimizer.update(non_overwrites, opt_state)
+op = apply_updates(op, updates, overwrites)
+```
+
+bf16 is the default and unchanged — `ragged_dot(lhs, rhs, gs)` without `op=` is
+byte-for-byte identical on all backends (GPU Triton / TPU Megablox / XLA).
+
+### Delayed per-tensor scaling
+
+`Fp8RaggedDotOp` uses TE-style delayed per-tensor scaling for the activation (lhs),
+expert weight (rhs), and output gradient.  Each carries a `scale` and
+`amax_history` that update automatically through the custom VJP as
+`OverwriteWithGradient` cotangents — they thread through
+`partition_for_grad_overwrite` / `apply_updates` and stay out of the
+optimizer/EMA state.  No explicit scale management is required.
+
+### Mixed backward
+
+`rev_dtype` defaults to E5M2 -- the numerically correct output-gradient dtype --
+so both backward GEMMs are genuine mixed `e5m2 x e4m3` contractions on the FP8
+tensor cores.  Mixed-dtype Mosaic `wgmma` ships in jax/jaxlib >= 0.11.0
+([jax-ml/jax#38859](https://github.com/jax-ml/jax/pull/38859)); on older jax
+`Fp8RaggedDotOp.init` fails fast with an actionable error.
+
+Passing `rev_dtype=jnp.float8_e4m3fn` recovers a uniform `e4m3 x e4m3` backward
+that also lowers on jax 0.10.x (an approximation: E4M3 trades dynamic range for
+mantissa, which can distort large-magnitude output gradients).  Gradient
+relative-Frobenius error at the operating point is < 6e-2 for both recipes
+(within the accepted FP8 tolerance).
+
+### Performance (H100, d2560 grug-MoE operating point)
+
+Operating point: w13 shape, E_local=64, 1024 tokens/expert (non-uniform groups).
+Measured fwd+bwd speedup vs the bf16 Triton baseline, with a throughput timer
+(enqueue N calls, block once — representative of a pipelined training step):
+**1.35×** at the operating point, **1.20×** at the w2 (down-projection) point
+(**1.38×** / **1.23×** at the EP4 per-device batch of 1280 tokens/expert;
+measured with the uniform `e4m3` backward -- the genuine mixed `e5m2 x e4m3`
+backward has repeatedly measured within run-to-run variance of it, so the
+correct E5M2 gradient costs nothing).
+Per-call latency timing (sync after every call) reports lower speedups because
+the added sync penalizes FP8's extra kernel launches; training runs see the
+throughput number.  See `lib/haliax/bench/bench_fp8_ragged_dot.py` for the full
+sweep (E_local ∈ {16,32,64}, tokens/expert ∈ {512,1024,2048,4096}, w13 and w2
+shapes).
+
 # API Reference
 
 ## Functions
@@ -170,6 +248,7 @@ information on how it works.
 
 ## Interfaces
 ::: haliax.quantization.DotGeneralOp
+::: haliax.quantization.RaggedDotOp
 ::: haliax.quantization.OverwriteWithGradient
 
 ## Modules
@@ -177,6 +256,7 @@ information on how it works.
 
 ::: haliax.quantization.DefaultDotGeneralOp
 ::: haliax.quantization.Fp8DotGeneralOp
+::: haliax.quantization.Fp8RaggedDotOp
 ::: haliax.quantization.Int8DotGeneralOp
 
 ## Configuration
