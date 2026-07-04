@@ -30,12 +30,12 @@ from enum import StrEnum
 
 from rigging.filesystem import open_url
 
-from experiments.tokenize.superbpe_trainer import extend_with_superwords, train_plain_bpe
+from experiments.tokenize.superbpe_trainer import Pretok, extend_with_superwords, pretok_config, train_plain_bpe
 
 logger = logging.getLogger(__name__)
 
 EOS_TOKEN = "<|endoftext|>"
-CORPUS_DOMAINS: tuple[str, ...] = ("english_web", "code", "math")
+CORPUS_DOMAINS: tuple[str, ...] = ("english_web", "code", "multilingual", "math")
 
 # Stage 1 (plain BPE, stock Rust trainer) uses the full corpus — it is cheap regardless of
 # corpus size. Stage 2's from-scratch merge learner (superbpe_trainer._learn_merges) costs
@@ -67,12 +67,17 @@ class TokenizerKind(StrEnum):
 
 @dataclass(frozen=True)
 class TrainSpec:
-    """One tokenizer to train. ``transition_vocab_size`` is SuperBPE's stage-1 cutoff ``t``."""
+    """One tokenizer to train. ``transition_vocab_size`` is SuperBPE's stage-1 cutoff ``t``.
+
+    ``pretok`` selects the pretokenizer variant (word-split regex + digit handling); see
+    :class:`~experiments.tokenize.superbpe_trainer.Pretok`.
+    """
 
     name: str
     kind: TokenizerKind
     vocab_size: int
     transition_vocab_size: int | None = None
+    pretok: Pretok = Pretok.SUPERBPE
 
 
 # The sweep: a plain-BPE vocab control (does our own data beat the off-the-shelf BPE arms at
@@ -96,6 +101,15 @@ TRAIN_SPECS: tuple[TrainSpec, ...] = (
     TrainSpec("trained-superbpe-40k-t20k", TokenizerKind.SUPERBPE, 40_000, 20_000),
     TrainSpec("trained-superbpe-32k-t16k", TokenizerKind.SUPERBPE, 32_000, 16_000),
     TrainSpec("trained-superbpe-80k-t40k", TokenizerKind.SUPERBPE, 80_000, 40_000),
+    # Soak-run arms: 64k & 128k SuperBPE (t/T = 0.5) trained on the representative grug mixture,
+    # with the two pretokenizer variants under test — individual-digit encoding (math) and the
+    # Llama-3 production word regex. Scored at 10B/500M active over a 24h run (see EXPERIMENT_LOG).
+    TrainSpec("soak-superbpe-64k", TokenizerKind.SUPERBPE, 64_000, 32_000, Pretok.SUPERBPE),
+    TrainSpec("soak-superbpe-128k", TokenizerKind.SUPERBPE, 128_000, 64_000, Pretok.SUPERBPE),
+    TrainSpec("soak-superbpe-64k-digits", TokenizerKind.SUPERBPE, 64_000, 32_000, Pretok.DIGITS),
+    TrainSpec("soak-superbpe-128k-digits", TokenizerKind.SUPERBPE, 128_000, 64_000, Pretok.DIGITS),
+    TrainSpec("soak-superbpe-64k-llama", TokenizerKind.SUPERBPE, 64_000, 32_000, Pretok.LLAMA3),
+    TrainSpec("soak-superbpe-128k-llama", TokenizerKind.SUPERBPE, 128_000, 64_000, Pretok.LLAMA3),
 )
 
 
@@ -153,15 +167,20 @@ def _save_tokenizer(tokenizer, out_dir: str) -> int:
 def train_one(spec: TrainSpec, texts: list[str], out_dir: str) -> dict:
     """Train ``spec``, save it under ``out_dir``, and return its manifest row."""
     start = time.time()
+    cfg = pretok_config(spec.pretok)
     if spec.kind == TokenizerKind.PLAIN_BPE:
-        tokenizer = train_plain_bpe(texts, spec.vocab_size)
+        tokenizer = train_plain_bpe(texts, spec.vocab_size, regex_string=cfg.stage1_regex, split_digits=cfg.split_digits)
         achieved_vocab = tokenizer.get_vocab_size()
     else:
         if spec.transition_vocab_size is None:
             raise ValueError(f"{spec.name}: SuperBPE requires transition_vocab_size")
-        stage1 = train_plain_bpe(texts, spec.transition_vocab_size)
+        stage1 = train_plain_bpe(
+            texts, spec.transition_vocab_size, regex_string=cfg.stage1_regex, split_digits=cfg.split_digits
+        )
         stage2_texts = _bounded_byte_prefix(texts, STAGE2_SAMPLE_BYTES)
-        result = extend_with_superwords(stage1, stage2_texts, spec.vocab_size)
+        result = extend_with_superwords(
+            stage1, stage2_texts, spec.vocab_size, stage2_regex=cfg.stage2_regex, split_digits=cfg.split_digits
+        )
         tokenizer = result.tokenizer
         achieved_vocab = result.final_vocab_size
 
@@ -179,6 +198,7 @@ def train_one(spec: TrainSpec, texts: list[str], out_dir: str) -> dict:
     return {
         "name": spec.name,
         "kind": str(spec.kind),
+        "pretok": str(spec.pretok),
         "requested_vocab": spec.vocab_size,
         "transition_vocab": spec.transition_vocab_size,
         "vocab_size": final_vocab,

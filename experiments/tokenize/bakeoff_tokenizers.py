@@ -188,9 +188,47 @@ TRAINED_SUPERBPE_ARMS: tuple[TokenizerArm, ...] = (
     ),
 )
 
+# Soak arms: 64k & 128k SuperBPE (t/T=0.5) retrained on the representative grug mixture, with
+# the two pretokenizer variants under test — individual-digit encoding (math) and the Llama-3
+# production word regex — scored at 10B-total/500M-active over a 24h run (see EXPERIMENT_LOG
+# EXP-011). The base 64k arm doubles as the n-gram carrier (BAKEOFF_NGRAM toggles the model-side
+# hashed n-gram embedding at launch, no separate tokenizer).
+SOAK_ARMS: tuple[TokenizerArm, ...] = (
+    TokenizerArm("soak-superbpe-64k", "trained/soak-superbpe-64k", 64_001, Axis.SUPERBPE, "soak base, t/T=0.5"),
+    TokenizerArm("soak-superbpe-128k", "trained/soak-superbpe-128k", 128_001, Axis.SUPERBPE, "soak base, t/T=0.5"),
+    TokenizerArm(
+        "soak-superbpe-64k-digits",
+        "trained/soak-superbpe-64k-digits",
+        64_001,
+        Axis.PRETOK,
+        "soak, individual-digit encoding",
+    ),
+    TokenizerArm(
+        "soak-superbpe-128k-digits",
+        "trained/soak-superbpe-128k-digits",
+        128_001,
+        Axis.PRETOK,
+        "soak, individual-digit encoding",
+    ),
+    TokenizerArm(
+        "soak-superbpe-64k-llama",
+        "trained/soak-superbpe-64k-llama",
+        64_001,
+        Axis.PRETOK,
+        "soak, Llama-3 word regex",
+    ),
+    TokenizerArm(
+        "soak-superbpe-128k-llama",
+        "trained/soak-superbpe-128k-llama",
+        128_001,
+        Axis.PRETOK,
+        "soak, Llama-3 word regex",
+    ),
+)
+
 # Registered arms. Extended in later phases as built tokenizers land (their refs will be
 # HF ids under marin-community/ or S3 paths under the cw-rno2a prefix).
-ALL_ARMS: tuple[TokenizerArm, ...] = BASELINE_ARMS + SUPERBPE_ARMS + TRAINED_BPE_ARMS + TRAINED_SUPERBPE_ARMS
+ALL_ARMS: tuple[TokenizerArm, ...] = BASELINE_ARMS + SUPERBPE_ARMS + TRAINED_BPE_ARMS + TRAINED_SUPERBPE_ARMS + SOAK_ARMS
 
 # Vocab sizes to add to marin.processing.tokenize.data_configs._KNOWN_VOCAB_SIZES so
 # dry-runs/fingerprints don't hit the Hub. Kept here next to the arm definitions.

@@ -41,6 +41,7 @@ import logging
 from collections import Counter
 from collections.abc import Sequence
 from dataclasses import dataclass
+from enum import StrEnum
 
 import numpy as np
 from tokenizers import Regex, Tokenizer, decoders, pre_tokenizers
@@ -65,6 +66,53 @@ STAGE1_REGEX = (
 )
 STAGE2_REGEX = r"\p{N}{1,3}| ?[^\s\p{L}\p{N}]{2,}[\r\n/]*| +(?!\S)"
 
+# The Llama-3 / GPT-4 word-split regex (used by marin-128k and most production BPE tokenizers):
+# contraction-aware, groups letters with a single leading non-letter, digit runs of 1-3. Unlike
+# STAGE1_REGEX it does NOT split on internal case transitions ("camelCase" stays one word), which
+# is the production behavior. Used as the stage-1 pretokenizer for the LLAMA3 variant.
+LLAMA3_STAGE1_REGEX = (
+    r"(?i:'s|'t|'re|'ve|'m|'ll|'d)"
+    r"|[^\r\n\p{L}\p{N}]?\p{L}+"
+    r"|\p{N}{1,3}"
+    r"| ?[^\s\p{L}\p{N}]+[\r\n]*"
+    r"|\s*[\r\n]+"
+    r"|\s+(?!\S)"
+    r"|\s+"
+)
+
+
+class Pretok(StrEnum):
+    """Pretokenizer variant governing how raw text is split into training "words"."""
+
+    SUPERBPE = "superbpe"  # SuperBPE reference regexes: case-aware words, digit runs of 1-3
+    DIGITS = "digits"  # SuperBPE regexes + every digit isolated (never merged) — arithmetic-friendly
+    LLAMA3 = "llama3"  # Llama-3 / GPT-4 word regex for stage 1 (contraction-aware, no case split)
+
+
+@dataclass(frozen=True)
+class PretokConfig:
+    """Resolved stage-1/stage-2 regexes and digit handling for a :class:`Pretok` variant."""
+
+    stage1_regex: str
+    stage2_regex: str
+    split_digits: bool
+
+
+def pretok_config(pretok: Pretok) -> PretokConfig:
+    """The (stage-1 regex, stage-2 regex, individual-digit) settings for a pretokenizer variant."""
+    if pretok == Pretok.SUPERBPE:
+        return PretokConfig(STAGE1_REGEX, STAGE2_REGEX, split_digits=False)
+    if pretok == Pretok.DIGITS:
+        # Keep the SuperBPE regexes but add an individual-digit split step in both stages, so no
+        # token ever spans two digits (stage-1 vocab and stage-2 superwords alike).
+        return PretokConfig(STAGE1_REGEX, STAGE2_REGEX, split_digits=True)
+    if pretok == Pretok.LLAMA3:
+        # Llama-3 word regex for stage 1; stage 2 keeps the permissive superword regex so the
+        # superword-merge effect is preserved on top of Llama-3-style base segmentation.
+        return PretokConfig(LLAMA3_STAGE1_REGEX, STAGE2_REGEX, split_digits=False)
+    raise ValueError(f"unknown pretok variant {pretok}")
+
+
 # A pair must recur at least this many times (corpus-wide, after dedup-by-segment weighting)
 # to be worth a merge; matches common BPE-trainer practice of stopping once no pair repeats.
 _MIN_MERGE_COUNT = 2
@@ -80,13 +128,17 @@ _MIN_MERGE_COUNT = 2
 _MERGE_BATCH_SIZE = 2000
 
 
-def _byte_level_pretokenizer(regex_string: str) -> pre_tokenizers.PreTokenizer:
-    return pre_tokenizers.Sequence(
-        [
-            pre_tokenizers.Split(pattern=Regex(regex_string), behavior="isolated", invert=False),
-            pre_tokenizers.ByteLevel(add_prefix_space=False, trim_offsets=True, use_regex=False),
-        ]
-    )
+def _byte_level_pretokenizer(regex_string: str, *, split_digits: bool = False) -> pre_tokenizers.PreTokenizer:
+    steps: list[pre_tokenizers.PreTokenizer] = [
+        pre_tokenizers.Split(pattern=Regex(regex_string), behavior="isolated", invert=False)
+    ]
+    if split_digits:
+        # Applied after Split (subdivides each digit run into single digits) and before ByteLevel
+        # (byte-mapping only, use_regex=False, so it never re-splits). Prevents any cross-digit
+        # merge so numbers tokenize digit-by-digit — the Llama-3-style arithmetic-friendly encoding.
+        steps.append(pre_tokenizers.Digits(individual_digits=True))
+    steps.append(pre_tokenizers.ByteLevel(add_prefix_space=False, trim_offsets=True, use_regex=False))
+    return pre_tokenizers.Sequence(steps)
 
 
 def _byte_level_decoder() -> decoders.Decoder:
@@ -100,15 +152,17 @@ def train_plain_bpe(
     vocab_size: int,
     *,
     regex_string: str = STAGE1_REGEX,
+    split_digits: bool = False,
 ) -> Tokenizer:
     """Train a standard byte-level BPE tokenizer with the stock Rust trainer.
 
     ``regex_string`` isolates pretokenization "words" (default: the SuperBPE stage-1 regex,
     a superset of the usual GPT-2/Llama word/number/punctuation split); merges never cross a
-    word boundary. This is also stage 1 of :func:`extend_with_superwords`.
+    word boundary. ``split_digits`` isolates each digit so numbers never merge. This is also
+    stage 1 of :func:`extend_with_superwords`.
     """
     tokenizer = Tokenizer(BPE(unk_token=None))
-    tokenizer.pre_tokenizer = _byte_level_pretokenizer(regex_string)
+    tokenizer.pre_tokenizer = _byte_level_pretokenizer(regex_string, split_digits=split_digits)
     trainer = BpeTrainer(vocab_size=vocab_size, show_progress=False, special_tokens=[])
     tokenizer.train_from_iterator(texts, trainer)
     tokenizer.decoder = _byte_level_decoder()
@@ -122,6 +176,7 @@ def _stage2_flat_segments(
     stage1_tokenizer: Tokenizer,
     texts: Sequence[str],
     stage2_regex: str,
+    split_digits: bool,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Flatten stage-2 segments into one token-id array plus a parallel corpus-frequency weight.
 
@@ -135,7 +190,7 @@ def _stage2_flat_segments(
     rescanning the raw corpus. Segments are separated by :data:`_SEGMENT_BOUNDARY` so
     :func:`_learn_merges` never merges across a segment.
     """
-    stage2_pretok = _byte_level_pretokenizer(stage2_regex)
+    stage2_pretok = _byte_level_pretokenizer(stage2_regex, split_digits=split_digits)
     model_only = Tokenizer(stage1_tokenizer.model)
     model_only.pre_tokenizer = None
 
@@ -271,6 +326,7 @@ def extend_with_superwords(
     final_vocab_size: int,
     *,
     stage2_regex: str = STAGE2_REGEX,
+    split_digits: bool = False,
 ) -> SuperBpeResult:
     """Continue a stage-1 BPE tokenizer past its transition point with superword merges.
 
@@ -278,10 +334,11 @@ def extend_with_superwords(
     have a dense ``0..vocab_size-1`` id space with no added/special tokens yet). Returns a new
     :class:`~tokenizers.Tokenizer` whose pretokenizer is ``stage2_regex`` (so the learned
     superword merges fire at encode time) and whose model vocab is the stage-1 vocab plus the
-    newly learned superword tokens.
+    newly learned superword tokens. ``split_digits`` must match the stage-1 setting so digit
+    handling is consistent across both stages.
     """
     transition_vocab_size = stage1_tokenizer.get_vocab_size()
-    flat_ids, flat_weights = _stage2_flat_segments(stage1_tokenizer, texts, stage2_regex)
+    flat_ids, flat_weights = _stage2_flat_segments(stage1_tokenizer, texts, stage2_regex, split_digits)
     merges = _learn_merges(flat_ids, flat_weights, start_id=transition_vocab_size, target_vocab=final_vocab_size)
 
     vocab = stage1_tokenizer.get_vocab()
@@ -301,7 +358,7 @@ def extend_with_superwords(
 
     model = BPE(vocab=vocab, merges=[*stage1_merges, *new_merges], unk_token=None)
     tokenizer = Tokenizer(model)
-    tokenizer.pre_tokenizer = _byte_level_pretokenizer(stage2_regex)
+    tokenizer.pre_tokenizer = _byte_level_pretokenizer(stage2_regex, split_digits=split_digits)
     tokenizer.decoder = _byte_level_decoder()
     return SuperBpeResult(
         tokenizer=tokenizer,
