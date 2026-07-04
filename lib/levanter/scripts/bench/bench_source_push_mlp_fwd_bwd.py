@@ -425,18 +425,19 @@ def _preplanned_source_push_forward(
     w13,
     w2,
 ):
-    return source_push_moe_mlp_from_plan(
-        config,
-        host_inputs,
-        route_table,
-        x,
-        combine,
-        w13,
-        w2,
-        implementation=implementation,
-        execution_mode=FORWARD_EXECUTION_STAGED_HOST_SYNC,
-        mesh=mesh,
-    )
+    with jax.set_mesh(mesh):
+        return source_push_moe_mlp_from_plan(
+            config,
+            host_inputs,
+            route_table,
+            x,
+            combine,
+            w13,
+            w2,
+            implementation=implementation,
+            execution_mode=FORWARD_EXECUTION_STAGED_HOST_SYNC,
+            mesh=mesh,
+        )
 
 
 def _preplanned_source_push_loss_aux(
