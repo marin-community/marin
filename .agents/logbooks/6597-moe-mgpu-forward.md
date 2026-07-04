@@ -2014,3 +2014,41 @@ adds the reference target and tests needed before changing those kernels.
     SourcePushPlan/staged-forward reference layer.
   - The remaining forward migration is specifically in Mosaic kernels: W13 must store H instead of post-SwiGLU A, W2
     must load H and queue route weights, and source combine must run unweighted for that path.
+
+## 2026-07-03 17:32 - Add and smoke-test Mosaic W13-H entrypoint
+
+Added a dedicated W13-H Mosaic entrypoint that reuses the source-push inbox transport but stores raw W13 preactivation
+instead of post-SwiGLU hidden. The legacy W13 activation-output path is unchanged. The new entrypoint emits flat
+expert-major H rows with shape `[dst, hidden_rows_per_rank, 2 * intermediate_dim]`; the existing row metadata maps those
+flat rows back to local expert/source offsets.
+
+- Commit Hash: `e0f7fb52d`
+- Code:
+  - `lib/levanter/src/levanter/grug/_moe/source_push_inbox.py`
+  - `lib/levanter/tests/grug/test_source_push_inbox.py`
+- New package-private kernel entrypoints:
+  - `_make_w13_h_kernel(...)`
+  - `_sharded_w13_h_kernel(...)`
+- Local verification:
+  - `uv run --package marin-levanter --group test python -m py_compile lib/levanter/src/levanter/grug/_moe/source_push_inbox.py lib/levanter/tests/grug/test_source_push_inbox.py`
+    - Result: passed.
+  - `uv run --package marin-levanter --group test pytest lib/levanter/tests/grug/test_source_push_inbox.py -q -k 'w13_h_reference or forward_h_reference'`
+    - Result: `2 passed, 11 warnings in 9.67s`.
+  - `./infra/pre-commit.py --fix lib/levanter/src/levanter/grug/_moe/source_push_inbox.py lib/levanter/tests/grug/test_source_push_inbox.py`
+    - Result: all checks passed, including Pyrefly.
+- H100 compile/correctness smoke:
+  - Job: `/dlwh/source-push-w13-h-smoke-e0f7fb52d-20260703-1732`
+  - Cluster: `cw-us-east-02a`
+  - Config: `ep_size=2`, `tokens_per_rank=128`, `hidden_dim=128`, `intermediate_dim=128`, `experts_per_rank=2`,
+    `topk=1`, `block_m=64`, `block_k=64`, `block_n=64`, `n_group=1`.
+  - Result row:
+
+    ```json
+    {"expected_shape": [2, 512, 256], "kernel": "source_push_w13_h", "live_rows": 512, "max_abs_diff": 0.0, "mean_abs_diff": 0.0, "shape": [2, 512, 256]}
+    ```
+
+- Interpretation:
+  - The source-push W13 Mosaic kernel can now produce the H checkpoint directly and exactly matches the bf16 reference
+    on a small H100 smoke.
+  - This is still not the full production MLP path: W2 must next consume flat H, compute SwiGLU, apply queue route
+    weights before W2, and combine without applying weights a second time.
