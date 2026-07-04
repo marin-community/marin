@@ -2,16 +2,22 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 #
-# Vendored and lightly modified from JAX (Apache-2.0):
-#   jax/experimental/pallas/ops/gpu/ragged_dot_mgpu.py
-# (jax 0.10.0).  These Pallas-Mosaic-GPU grouped matmuls drive the Hopper FP8
-# tensor cores (wgmma.fp8) and handle non-uniform, dynamic group_sizes.
-# Modifications vs upstream:
+# Vendored and lightly modified from JAX (Apache-2.0), jax 0.10.0:
+#   jax/experimental/pallas/ops/gpu/ragged_dot_mgpu.py            -> mgpu_ragged_dot
+#   jax/experimental/pallas/ops/gpu/transposed_ragged_dot_mgpu.py -> mgpu_dwgrad
+# These Pallas-Mosaic-GPU grouped matmuls drive the Hopper FP8 tensor cores
+# (wgmma.fp8) and handle non-uniform, dynamic group_sizes.
+# Modifications vs upstream (both kernels):
 #   * `out_dtype` parameter so an FP8 contraction can emit a BF16/FP32 result
 #     (upstream hardcodes the output dtype to ``lhs.dtype``);
 #   * `out_scale` parameter: per-tensor dequant scale folded into the store;
 #   * `num_sms` read from the device instead of hardcoded;
 #   * the ``main``/``ref_``/profiling helpers are dropped.
+# ``mgpu_dwgrad`` additionally adapts ``transposed_ragged_dot`` for FP8: the
+# operands are token-contiguous ([K,T] x [N,T]) with the wgmma transpose on the
+# B operand -- FP8 wgmma cannot transpose A at runtime, so the caller
+# pre-transposes both operands via the fused cast-transpose (upstream contracts
+# token-major [K,M] x [K,N] tiles and transposes the lhs descriptor instead).
 
 import dataclasses
 import functools
@@ -228,3 +234,187 @@ def mgpu_ragged_dot(
         ),
     )
     return kernel(group_sizes, lhs, rhs, _scale)
+
+
+def mgpu_dwgrad(
+    lhs_t,  # (K, T) fp8 -- weight-grad lhs, token dim T contiguous (dim 1)
+    grad_t,  # (N, T) fp8 -- output gradient, token dim T contiguous (dim 1)
+    *,
+    group_sizes,  # (G,)
+    block_m: int,
+    block_n: int,
+    block_k: int,
+    max_concurrent_steps: int,
+    grid_block_n: int,
+    out_dtype=None,
+    out_scale=None,
+) -> jax.Array:
+    """Ragged FP8 weight gradient: ``dr[G,K,N] = sum_{t in g} lhs[t,K] grad[t,N]``.
+
+    Contracts the *ragged* token dimension.  FP8 ``wgmma`` cannot transpose an
+    operand at runtime, so the token (contracting) dimension must be contiguous
+    for both operands: the caller cast-transposes ``lhs -> [K, T]`` and
+    ``grad -> [N, T]`` out of kernel.  Inside, ``A = lhs_t`` is used natively
+    (token-contiguous) and ``B = transpose_ref(grad_t) = [T, N]`` uses the
+    B-operand transpose that FP8 ``wgmma`` does support.
+    """
+    _fp8 = (jnp.float8_e4m3fn, jnp.float8_e5m2)
+    if lhs_t.dtype != grad_t.dtype or lhs_t.dtype not in _fp8:
+        raise NotImplementedError(f"mgpu_dwgrad expects same-dtype FP8 operands, got {lhs_t.dtype}, {grad_t.dtype}")
+    k_dim, t = lhs_t.shape
+    n_dim, t2 = grad_t.shape
+    if t != t2:
+        raise ValueError(f"token dim mismatch: {t} vs {t2}")
+    if k_dim % block_m != 0:
+        raise ValueError(f"K={k_dim} must be a multiple of block_m={block_m}")
+    if n_dim % block_n != 0:
+        raise ValueError(f"N={n_dim} must be a multiple of block_n={block_n}")
+    g = group_sizes.shape[0]
+    _od = jnp.bfloat16 if out_dtype is None else out_dtype
+    _scale = jnp.ones((1,), jnp.float32) if out_scale is None else jnp.asarray(out_scale, jnp.float32).reshape(1)
+
+    group_sizes = group_sizes.astype(int)
+    group_starts = jnp.concatenate([jnp.zeros(1, dtype=int), jnp.cumsum(group_sizes)[:-1]]).astype(int)
+    group_ends = jnp.cumsum(group_sizes)
+    group_block_starts = group_starts // block_k * block_k
+    group_block_ends = -(group_ends // -block_k) * block_k
+    group_num_blocks = (group_block_ends - group_block_starts) // block_k
+
+    # Operand SMEM tiles are token-contiguous (trailing dim = block_k tokens).
+    swizzle = plgpu.find_swizzle(block_k * jnp.dtype(lhs_t.dtype).itemsize * 8)
+    swizzle_elems = swizzle // jnp.dtype(lhs_t.dtype).itemsize
+    transforms = (
+        plgpu.TilingTransform((8, swizzle_elems)),
+        plgpu.SwizzleTransform(swizzle),
+    )
+    # Output tile [block_m(K), block_n(N)] is N-contiguous; swizzle from block_n.
+    o_swizzle = plgpu.find_swizzle(block_n * jnp.dtype(_od).itemsize * 8)
+    o_swizzle_elems = o_swizzle // jnp.dtype(_od).itemsize
+    o_transforms = (
+        plgpu.TilingTransform((8, o_swizzle_elems)),
+        plgpu.SwizzleTransform(o_swizzle),
+    )
+
+    def body(
+        group_sizes_gmem,
+        group_starts_gmem,
+        group_ends_gmem,
+        group_num_blocks_gmem,
+        group_block_starts_gmem,
+        lhs_gmem,
+        grad_gmem,
+        scale_gmem,
+        o_gmem,
+    ):
+        grid_m = pl.cdiv(k_dim, block_m)
+        grid_n = pl.cdiv(n_dim, block_n)
+
+        @plgpu.nd_loop((g, grid_m * grid_n), collective_axes="sm")
+        def mn_loop(loop_info: plgpu.NDLoopInfo):
+            g_i = loop_info.index[0]
+            m_i, n_i = plgpu.planar_snake(loop_info.index[1], (grid_m, grid_n), 1, grid_block_n)
+            # Slice the ragged token dimension (dim 1).  Potentially out of bounds,
+            # but the out-of-bounds tail is never accessed in emit_pipeline.
+            tok_slice = pl.ds(group_block_starts_gmem[g_i], t)
+
+            def acc_scope(acc_ref):
+                def block_matmul(block_idx, lhs_smem, grad_smem):
+                    block_idx = block_idx[0]
+
+                    @pl.when(block_idx == 0)
+                    def _():
+                        reg = lhs_smem[...]
+                        start_index = lax.rem(group_starts_gmem[g_i], block_k)
+                        indices = plgpu.layout_cast(
+                            jax.lax.broadcasted_iota(jnp.int32, (block_m, block_k), 1),
+                            plgpu.Layout.WGMMA,
+                        )
+                        reg = jnp.where(
+                            indices >= start_index,
+                            reg.astype(jnp.float16),
+                            jnp.float16(0),
+                        ).astype(lhs_smem.dtype)
+                        lhs_smem[...] = reg
+                        plgpu.commit_smem()
+
+                    @pl.when(block_idx == group_num_blocks_gmem[g_i] - 1)
+                    def _():
+                        reg = lhs_smem[...]
+                        last_index = lax.rem(group_ends_gmem[g_i] - 1, block_k)
+                        indices = plgpu.layout_cast(
+                            jax.lax.broadcasted_iota(jnp.int32, (block_m, block_k), 1),
+                            plgpu.Layout.WGMMA,
+                        )
+                        reg = jnp.where(
+                            indices <= last_index,
+                            reg.astype(jnp.float16),
+                            jnp.float16(0),
+                        ).astype(lhs_smem.dtype)
+                        lhs_smem[...] = reg
+                        plgpu.commit_smem()
+
+                    # A = lhs[K, T] native (token-contiguous); B = grad[N, T] -> [T, N].
+                    plgpu.wgmma(acc_ref, lhs_smem, plgpu.transpose_ref(grad_smem, (1, 0)))
+                    if max_concurrent_steps == 1:
+                        plgpu.wgmma_wait(0)
+
+                @pl.when(group_sizes_gmem[g_i] > 0)
+                def _():
+                    plgpu.emit_pipeline(
+                        block_matmul,
+                        grid=(group_num_blocks_gmem[g_i],),
+                        in_specs=[
+                            plgpu.BlockSpec(
+                                (block_m, block_k),
+                                lambda k_i: (m_i, k_i),
+                                delay_release=1 if max_concurrent_steps > 1 else 0,
+                                transforms=transforms,
+                            ),
+                            plgpu.BlockSpec(
+                                (block_n, block_k),
+                                lambda k_i: (n_i, k_i),
+                                delay_release=1 if max_concurrent_steps > 1 else 0,
+                                transforms=transforms,
+                            ),
+                        ],
+                        max_concurrent_steps=max_concurrent_steps,
+                    )(lhs_gmem.at[:, tok_slice], grad_gmem.at[:, tok_slice])
+
+                return acc_ref[...]
+
+            acc = pl.run_scoped(acc_scope, plgpu.ACC((block_m, block_n)))
+
+            @functools.partial(
+                pl.run_scoped,
+                o_smem=plgpu.SMEM((block_m, block_n), dtype=o_gmem.dtype, transforms=o_transforms),
+            )
+            def store_scope(o_smem):
+                o_smem[...] = (acc * scale_gmem[0]).astype(o_smem.dtype)
+                plgpu.commit_smem()
+                plgpu.copy_smem_to_gmem(
+                    o_smem,
+                    o_gmem.at[
+                        g_i,
+                        pl.ds(m_i * block_m, block_m),
+                        pl.ds(n_i * block_n, block_n),
+                    ],
+                )
+                plgpu.wait_smem_to_gmem(0, wait_read_only=True)
+
+    num_sms = jax.devices()[0].core_count
+    kernel = plgpu.kernel(
+        body,
+        out_shape=jax.ShapeDtypeStruct((g, k_dim, n_dim), _od),
+        grid=(num_sms,),
+        grid_names=("sm",),
+    )
+    return kernel(
+        group_sizes,
+        group_starts,
+        group_ends,
+        group_num_blocks,
+        group_block_starts,
+        lhs_t,
+        grad_t,
+        _scale,
+    )
