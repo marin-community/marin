@@ -55,10 +55,17 @@ improvement over the stock Llama-3 tokenizer** for target grug-moe models.
 | arm | feBPB | vs marin | lever |
 |---|---|---|---|
 | **trained-superbpe-80k-t40k** | **1.1621** | **−6.1%** | small-vocab superword (our mix) |
+| gpt-neox-50k + n-gram | 1.1651 | −5.9% | small-vocab + n-gram (composed) |
 | superbpe-128k + n-gram | 1.1733 | −5.2% | superword + n-gram (composed) |
 | gpt-neox-50k | 1.1745 | −5.1% | small-vocab tokenizer |
 | superbpe-128k | 1.1794 | −4.7% | superword tokenizer |
 | marin-128k (Llama-3) | 1.2376 | ref | incumbent |
+
+**n-gram composition matrix** (feBPB improvement the n-gram adds on each base tokenizer, ratio 0.25):
+marin +0.0% (washes out by s8000) · superbpe-128k **−0.5%** · gpt-neox-50k **−0.8%** · 80k-t40k
+**~−0.7%** (s3500 point pending). The n-gram helps *more* on the smaller/superword tokenizers and,
+unlike on Llama-3, the gain persists at the highest training budget — so the best composition is a
+small-vocab tokenizer + n-gram. Best projected composed arm: 80k-t40k + n-gram (~−6.7%).
 
 ## EXP-002 — isoFLOP tokenizer ladder (5 arms × 3 points)
 
