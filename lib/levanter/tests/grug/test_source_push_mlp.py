@@ -239,6 +239,35 @@ def test_source_push_moe_mlp_from_plan_reference_custom_vjp_matches_reference_gr
     assert float(jnp.max(jnp.abs(from_plan_grads[1]))) > 0.0
 
 
+def test_source_push_moe_mlp_from_plan_reference_custom_vjp_matches_reference_gradients_under_jit():
+    config, host_inputs, route_table, x, route_weights, w13, w2 = _small_forward_plan_inputs()
+    cotangent = jnp.linspace(-0.5, 0.7, x.size, dtype=jnp.float32).reshape(x.shape)
+
+    def reference_loss(x_arg, route_weights_arg, w13_arg, w2_arg):
+        y = source_push_moe_mlp_reference(route_table, x_arg, route_weights_arg, w13_arg, w2_arg)
+        return jnp.sum(y * cotangent)
+
+    def from_plan_loss(x_arg, route_weights_arg, w13_arg, w2_arg):
+        y, _ = source_push_moe_mlp_from_plan(
+            config,
+            host_inputs,
+            route_table,
+            x_arg,
+            route_weights_arg,
+            w13_arg,
+            w2_arg,
+            implementation=SOURCE_PUSH_MLP_IMPLEMENTATION_REFERENCE,
+        )
+        return jnp.sum(y * cotangent)
+
+    reference_grads = jax.jit(jax.grad(reference_loss, argnums=(0, 1, 2, 3)))(x, route_weights, w13, w2)
+    from_plan_grads = jax.jit(jax.grad(from_plan_loss, argnums=(0, 1, 2, 3)))(x, route_weights, w13, w2)
+
+    for observed, expected in zip(from_plan_grads, reference_grads, strict=True):
+        np.testing.assert_allclose(np.asarray(observed), np.asarray(expected), atol=1e-5, rtol=1e-5)
+    assert float(jnp.max(jnp.abs(from_plan_grads[1]))) > 0.0
+
+
 def test_source_push_moe_mlp_flat_h_backward_matches_compact_h_backward():
     x, route_assignments, route_weights, w13, w2 = _small_mlp_inputs()
     route_table = _route_table(route_assignments, route_weights)
