@@ -1662,6 +1662,49 @@ def test_source_push_moe_mlp_from_plan_reference_gradients_match_flat_h_referenc
     assert np.any(np.abs(np.asarray(custom_grads[1])) > 1e-8)
 
 
+def test_source_push_mlp_backward_decomposed_matches_flat_h_backward():
+    config, inputs, route_table, x, route_weights, w13, w2 = _small_source_push_mlp_gradient_case()
+    expert_base = jnp.asarray(inputs.expert_base, dtype=jnp.int32)
+    _, h_flat = source_push_mlp.source_push_moe_mlp_reference_with_h_flat(
+        route_table,
+        expert_base,
+        config.hidden_rows_per_rank,
+        x,
+        route_weights,
+        w13,
+        w2,
+    )
+    dy = jnp.linspace(-0.5, 0.7, x.size, dtype=jnp.float32).reshape(x.shape)
+
+    expected = source_push_mlp._source_push_moe_mlp_backward_from_h_flat(
+        route_table,
+        expert_base,
+        x,
+        route_weights,
+        w13,
+        w2,
+        h_flat,
+        dy,
+    )
+    timing = source_push_mlp_fwd_bwd_cli._time_source_push_backward_decomposed(
+        route_table,
+        expert_base,
+        x,
+        route_weights,
+        w13,
+        w2,
+        h_flat,
+        dy,
+        warmup=0,
+        steps=1,
+        repeat_runs=1,
+    )
+
+    for observed, expected_grad in zip(timing.output, expected, strict=True):
+        np.testing.assert_allclose(np.asarray(observed), np.asarray(expected_grad), atol=0, rtol=0)
+    assert set(timing.stage_steady_state_times) == set(source_push_mlp_fwd_bwd_cli.BACKWARD_STAGES)
+
+
 def _naive_source_push_forward(
     config: source_push_inbox.PushInboxConfig,
     x: np.ndarray,
