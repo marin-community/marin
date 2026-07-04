@@ -89,12 +89,21 @@ DASHBOARD_READABLE_RPCS: frozenset[str] = frozenset(
 def authorize_method(identity: VerifiedIdentity, method_name: str) -> None:
     """Enforce per-method access for restricted roles before dispatch.
 
+    An endpoint-scoped token (``identity.audience`` set) has zero RPC authority:
+    it may reach only its endpoint's /proxy path (enforced there), never the
+    control RPC surface.
+
     The ``dashboard`` role is read-only: it may call only the methods in
     ``DASHBOARD_READABLE_RPCS``. Other roles are unrestricted here — their
     mutating actions remain gated inside the handlers by ``authorize`` /
     ``authorize_resource_owner``. Raises ``PERMISSION_DENIED`` for a dashboard
     caller invoking a non-readable method.
     """
+    if identity.audience is not None:
+        raise ConnectError(
+            Code.PERMISSION_DENIED,
+            "endpoint-scoped token cannot call control RPCs",
+        )
     if identity.role == DASHBOARD_ROLE and method_name not in DASHBOARD_READABLE_RPCS:
         raise ConnectError(
             Code.PERMISSION_DENIED,

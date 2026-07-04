@@ -35,7 +35,9 @@ from iris.cluster.constraints import (
 )
 from iris.cluster.controller import ops, reads, writes
 from iris.cluster.controller.auth import (
+    DEFAULT_ENDPOINT_TOKEN_TTL_SECONDS,
     DEFAULT_JWT_TTL_SECONDS,
+    MAX_ENDPOINT_TOKEN_TTL_SECONDS,
     ControllerAuth,
     create_api_key,
     list_api_keys,
@@ -104,7 +106,7 @@ from iris.rpc.proto_display import (
     resolve_container_profile,
     task_state_friendly,
 )
-from iris.time_proto import timestamp_to_proto
+from iris.time_proto import duration_from_proto, timestamp_to_proto
 
 logger = logging.getLogger(__name__)
 
@@ -2569,6 +2571,54 @@ class ControllerServiceImpl:
             "Login: user=%s, role=%s, new_key=%s, revoked=%d old login keys", username, role, key_id, len(revoked_ids)
         )
         return job_pb2.LoginResponse(token=jwt_token, key_id=key_id, user_id=username)
+
+    def mint_endpoint_token(
+        self,
+        request: controller_pb2.Controller.MintEndpointTokenRequest,
+        ctx: Any,
+    ) -> controller_pb2.Controller.MintEndpointTokenResponse:
+        """Mint a scoped bearer token for one endpoint's /proxy path.
+
+        Authorized to the endpoint's owning user (the registering task's owner)
+        or an admin. The token carries no RPC authority (see
+        ``authorize_method``); it is bound to the endpoint's canonical wire name
+        with an ``exp`` deadline, and is revocable via its ``jti`` like any key.
+        """
+        if not self._auth.jwt_manager:
+            raise ConnectError(Code.INTERNAL, "JWT manager not configured")
+
+        row = self._endpoint_service.resolve_task_endpoint(request.endpoint_name)
+        if row is None:
+            raise ConnectError(Code.NOT_FOUND, f"No endpoint '{request.endpoint_name}'")
+        # Owner (or admin) only; skipped in null-auth mode like _authorize_job_owner.
+        if self._auth.provider:
+            authorize_resource_owner(row.task_id.user)
+
+        if request.HasField("ttl"):
+            ttl = int(duration_from_proto(request.ttl).to_seconds())
+            ttl = max(1, min(ttl, MAX_ENDPOINT_TOKEN_TTL_SECONDS))
+        else:
+            ttl = DEFAULT_ENDPOINT_TOKEN_TTL_SECONDS
+
+        now = Timestamp.now()
+        expires_at = Timestamp.from_ms(now.epoch_ms() + ttl * 1000)
+        key_id = f"iris_ket_{secrets.token_urlsafe(8)}"
+        # Audit row under the owning user so the token surfaces in `iris key list`
+        # and revoking its jti kills it.
+        create_api_key(
+            self._db,
+            key_id=key_id,
+            key_prefix="ep",
+            user_id=row.task_id.user,
+            name=f"endpoint-token-{row.name}",
+            now=now,
+            expires_at=expires_at,
+        )
+        token = self._auth.jwt_manager.create_endpoint_token(row.name, key_id, ttl_seconds=ttl)
+        return controller_pb2.Controller.MintEndpointTokenResponse(
+            token=token,
+            expires_at=timestamp_to_proto(expires_at),
+        )
 
     def create_api_key(
         self,

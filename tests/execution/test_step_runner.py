@@ -218,6 +218,21 @@ def test_step_spec_hash_id_via_marin_prefix_env(monkeypatch):
     assert all(p.startswith("gs://marin-us-east5/") for p in east_paths)
 
 
+def test_step_spec_output_path_trailing_slash_prefix():
+    """Regression for marin-community/marin#6904: object-store keys are not normalized,
+    so a doubled separator from a trailing-slash prefix is a *different* key than the
+    one slash-collapsing readers resolve."""
+    override = StepSpec(
+        name="slimpajama-6b",
+        output_path_prefix="s3://marin-na/marin/",
+        override_output_path="slimpajama-6b/2026.06.28",
+    )
+    assert override.output_path == "s3://marin-na/marin/slimpajama-6b/2026.06.28"
+
+    hashed = StepSpec(name="tokenize", output_path_prefix="s3://marin-na/marin/")
+    assert hashed.output_path == f"s3://marin-na/marin/{hashed.name_with_hash}"
+
+
 # ---------------------------------------------------------------------------
 # StepRunner tests: three-step pipeline
 # ---------------------------------------------------------------------------

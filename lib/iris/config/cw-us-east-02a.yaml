@@ -28,6 +28,11 @@
 finelog:
   config: cw-us-east-02a
 
+# Public origin for off-cluster proxy links. Only /proxy is served here (see
+# controller.coreweave.public_proxy_host); marin-serve uses this to print the
+# off-cluster OpenAI base_url + BEARER api_key.
+dashboard_url: https://iris-cw-us-east-02a.oa.dev
+
 platform:
   label_prefix: cw-use02a
   coreweave:
@@ -38,6 +43,14 @@ platform:
 
 storage:
   remote_state_dir: s3://marin-na/iris/cw-us-east-02a/state
+
+# Request auth. No login arm — identity is by network location: direct
+# in-cluster peers (CKS pods/nodes are RFC1918; loopback covers kubectl
+# port-forward) are trusted as admin. External traffic reaches only /proxy via
+# Traefik, which appends X-Forwarded-For — a forwarded request never matches a
+# CIDR, so it must present a bearer token (per-endpoint access mode).
+auth:
+  trusted_cidrs: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 127.0.0.0/8, "::1/128"]
 
 kubernetes_provider:
   namespace: iris
@@ -63,6 +76,13 @@ controller:
     port: 10000
     service_name: iris-controller-svc
     scale_group: cpu-genoa
+    # Publishes ONLY /proxy off-cluster; per-endpoint auth is the gate.
+    # Prerequisites + DNS: docs/coreweave.md (scripts/install_traefik_proxy.py).
+    public_proxy_host: iris-cw-us-east-02a.oa.dev
+    tls_secret: iris-controller-proxy-tls
+    # Staging first (avoids Let's Encrypt rate limits); flip to
+    # letsencrypt-http01-prod once the staging cert validates.
+    cluster_issuer: letsencrypt-http01-staging
 
 defaults:
   autoscaler:

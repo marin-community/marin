@@ -15,13 +15,18 @@ import uuid
 import pytest
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
+from iris.cluster.bundle import BundleStore
 from iris.cluster.client.endpoint_client import EndpointClient, EndpointLeaseRenewer, renew_interval
+from iris.cluster.config import AuthConfig
+from iris.cluster.controller.auth import MAX_ENDPOINT_TOKEN_TTL_SECONDS, create_controller_auth
 from iris.cluster.controller.endpoint_service import ENDPOINT_LEASE, MIN_ENDPOINT_LEASE, EndpointServiceImpl
 from iris.cluster.controller.projections.endpoints import EndpointRow, EndpointsProjection
 from iris.cluster.controller.schema import tasks_table
-from iris.cluster.types import JobName, TaskAttempt
+from iris.cluster.controller.service import ControllerServiceImpl
+from iris.cluster.types import EndpointAccess, JobName, TaskAttempt
 from iris.rpc import controller_pb2, job_pb2
 from iris.time_proto import duration_to_proto
+from rigging.server_auth import VerifiedIdentity, identity_scope
 from rigging.timing import Duration, ExponentialBackoff, Timestamp
 from sqlalchemy import update as sa_update
 
@@ -211,6 +216,160 @@ def test_system_endpoints_resolve_and_list(state):
         controller_pb2.Controller.ListEndpointsRequest(prefix="/system/log-server", exact=True), None
     )
     assert [(e.name, e.address) for e in listed.endpoints] == [("/system/log-server", "logs:9000")]
+
+
+# --- Per-endpoint access mode --------------------------------------------------
+
+
+def _register_with_access(name, task, attempt, access):
+    return controller_pb2.Controller.RegisterEndpointRequest(
+        name=name, address="h:1", task_id=task.to_wire(), attempt_id=attempt, access=access
+    )
+
+
+def test_register_defaults_to_private_and_persists_access(state):
+    """UNSPECIFIED registers as PRIVATE; an explicit mode is stored and resolved."""
+    task, attempt = _live_task(state)
+    svc = _service(state)
+
+    svc.register_endpoint(_register_with_access("/j/private", task, attempt, 0), None)  # UNSPECIFIED
+    svc.register_endpoint(
+        _register_with_access("/j/public", task, attempt, controller_pb2.Controller.ENDPOINT_ACCESS_PUBLIC), None
+    )
+    svc.register_endpoint(
+        _register_with_access("/j/bearer", task, attempt, controller_pb2.Controller.ENDPOINT_ACCESS_BEARER), None
+    )
+
+    assert svc.resolve_proxy_target("j.private").access == EndpointAccess.ENDPOINT_ACCESS_PRIVATE
+    assert svc.resolve_proxy_target("j.public").access == EndpointAccess.ENDPOINT_ACCESS_PUBLIC
+    assert svc.resolve_proxy_target("j.bearer").access == EndpointAccess.ENDPOINT_ACCESS_BEARER
+
+
+def test_resolve_proxy_target_decodes_slash_names(state):
+    """A slash-containing wire name is reachable via its dotted encoded form.
+
+    Regression for the encode/decode namespace bug: quick-serve's default
+    ``/serve/<job>`` arrives at the proxy as ``serve.foo`` and must still
+    resolve (access + address + canonical wire name).
+    """
+    task, attempt = _live_task(state)
+    svc = _service(state)
+    svc.register_endpoint(
+        controller_pb2.Controller.RegisterEndpointRequest(
+            name="/serve/foo",
+            address="up:8000",
+            task_id=task.to_wire(),
+            attempt_id=attempt,
+            access=controller_pb2.Controller.ENDPOINT_ACCESS_BEARER,
+        ),
+        None,
+    )
+
+    resolved = svc.resolve_proxy_target("serve.foo")
+    assert resolved is not None
+    assert (resolved.name, resolved.address, resolved.access) == (
+        "/serve/foo",
+        "up:8000",
+        EndpointAccess.ENDPOINT_ACCESS_BEARER,
+    )
+    assert svc.resolve_proxy_target("nope.missing") is None
+
+
+def test_resolve_proxy_target_system_endpoint_is_private(state):
+    svc = _service(state)
+    svc.register_system_endpoint("/system/log-server", "logs:9000")
+    resolved = svc.resolve_proxy_target("system.log-server")
+    assert resolved is not None
+    assert resolved.access == EndpointAccess.ENDPOINT_ACCESS_PRIVATE
+    assert resolved.address == "logs:9000"
+
+
+def test_resolve_task_endpoint_returns_owner_row(state):
+    task, attempt = _live_task(state)
+    svc = _service(state)
+    svc.register_endpoint(_register_with_access("/serve/foo", task, attempt, 0), None)
+
+    row = svc.resolve_task_endpoint("/serve/foo")
+    assert row is not None and row.task_id == task
+    assert svc.resolve_task_endpoint("serve.foo") is not None  # dotted form too
+    # /system/ endpoints have no owning task and are not returned.
+    svc.register_system_endpoint("/system/log-server", "logs:9000")
+    assert svc.resolve_task_endpoint("/system/log-server") is None
+
+
+# --- MintEndpointToken RPC -----------------------------------------------------
+
+
+def _mint_service(state, mock_controller, log_client, tmp_path):
+    """A ControllerServiceImpl with static auth (a provider ⇒ owner authz on)."""
+    auth = create_controller_auth(AuthConfig(static={"tokens": {"tok": "owner"}}), db=state._db)
+    endpoint_service = EndpointServiceImpl(db=state._db, endpoints=state._endpoints)
+    service = ControllerServiceImpl(
+        controller=mock_controller,
+        bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
+        log_client=log_client,
+        db=state._db,
+        endpoints=state._endpoints,
+        auth=auth,
+        endpoint_service=endpoint_service,
+    )
+    return service, endpoint_service, auth
+
+
+def _mint_request(name, ttl=None):
+    return controller_pb2.Controller.MintEndpointTokenRequest(
+        endpoint_name=name, ttl=duration_to_proto(ttl) if ttl is not None else None
+    )
+
+
+def test_mint_endpoint_token_by_owner(state, mock_controller, log_client, tmp_path):
+    """The endpoint's owning user mints a scoped token bound to its wire name."""
+    task, attempt = _live_task(state)  # owner segment is the job's user
+    service, endpoint_service, auth = _mint_service(state, mock_controller, log_client, tmp_path)
+    endpoint_service.register_endpoint(
+        _register_with_access("/serve/foo", task, attempt, controller_pb2.Controller.ENDPOINT_ACCESS_BEARER), None
+    )
+
+    with identity_scope(VerifiedIdentity(user_id=task.user, role="user")):
+        resp = service.mint_endpoint_token(_mint_request("/serve/foo"), None)
+
+    identity = auth.jwt_manager.verify(resp.token)
+    assert identity.audience == "/serve/foo"
+    assert resp.HasField("expires_at")
+
+
+def test_mint_endpoint_token_denies_non_owner(state, mock_controller, log_client, tmp_path):
+    task, attempt = _live_task(state)
+    service, endpoint_service, _ = _mint_service(state, mock_controller, log_client, tmp_path)
+    endpoint_service.register_endpoint(
+        _register_with_access("/serve/foo", task, attempt, controller_pb2.Controller.ENDPOINT_ACCESS_BEARER), None
+    )
+
+    with identity_scope(VerifiedIdentity(user_id="intruder", role="user")), pytest.raises(ConnectError) as exc:
+        service.mint_endpoint_token(_mint_request("/serve/foo"), None)
+    assert exc.value.code is Code.PERMISSION_DENIED
+
+
+def test_mint_endpoint_token_unknown_endpoint(state, mock_controller, log_client, tmp_path):
+    service, _, _ = _mint_service(state, mock_controller, log_client, tmp_path)
+    with identity_scope(VerifiedIdentity(user_id="owner", role="admin")), pytest.raises(ConnectError) as exc:
+        service.mint_endpoint_token(_mint_request("/serve/missing"), None)
+    assert exc.value.code is Code.NOT_FOUND
+
+
+def test_mint_endpoint_token_clamps_ttl(state, mock_controller, log_client, tmp_path):
+    """A requested TTL above the ceiling is clamped, not honored verbatim."""
+    task, attempt = _live_task(state)
+    service, endpoint_service, _ = _mint_service(state, mock_controller, log_client, tmp_path)
+    endpoint_service.register_endpoint(
+        _register_with_access("/serve/foo", task, attempt, controller_pb2.Controller.ENDPOINT_ACCESS_BEARER), None
+    )
+
+    with identity_scope(VerifiedIdentity(user_id=task.user, role="user")):
+        resp = service.mint_endpoint_token(_mint_request("/serve/foo", ttl=Duration.from_hours(72)), None)
+
+    ttl_ms = resp.expires_at.epoch_ms - Timestamp.now().epoch_ms()
+    assert ttl_ms <= (MAX_ENDPOINT_TOKEN_TTL_SECONDS + 5) * 1000
 
 
 # --- EndpointClient: registers and keeps leases against the real service ------

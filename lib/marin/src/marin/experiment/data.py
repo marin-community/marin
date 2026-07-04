@@ -37,6 +37,7 @@ from levanter.data.text import (
     TextLmDatasetFormat,
     UrlDatasetSourceConfig,
 )
+from rigging.filesystem import prefix_join
 
 from marin.datakit.download.huggingface import DownloadConfig, download_hf
 from marin.execution.artifact import Artifact
@@ -69,7 +70,7 @@ def _looks_like_hf_id(source: str) -> bool:
 
 def _resolve(prefix: str, path: str) -> str:
     """Make a prefix-relative raw path absolute; leave absolute/URL paths alone."""
-    return f"{prefix}/{path}" if _is_relative_path(path) else path
+    return prefix_join(prefix, path) if _is_relative_path(path) else path
 
 
 def hf_download(

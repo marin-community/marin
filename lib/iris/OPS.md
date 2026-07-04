@@ -92,9 +92,10 @@ iris job list --state running           # filter by state
 iris job logs /user/job-name -f         # follow job + child logs
 iris job stop /user/job-name            # kill job + children
 iris job summary /user/job-name         # per-task state, exit, duration, peak memory
-iris job summary /user/job-name --json  # same, machine-readable
 iris job bug-report /user/job-name      # structured diagnostic dump
 ```
+
+For machine-readable job data, use the Iris Python client (`IrisClient`) directly.
 
 ### `job run` gotchas
 
@@ -176,7 +177,7 @@ The controller exposes its SQLite DB via RPC:
 
 ```bash
 iris query "SELECT state, count(*) FROM jobs GROUP BY state"
-iris query "SELECT state, count(*) FROM tasks GROUP BY state" -f json
+iris query "SELECT state, count(*) FROM tasks GROUP BY state" -f csv
 ```
 
 **Never modify the controller database** without explicit user approval — read-only queries only, even on offline checkpoints.

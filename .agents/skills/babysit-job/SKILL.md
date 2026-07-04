@@ -125,11 +125,7 @@ part of the setup. The state file allows resume after context reset.
    `iris job logs <JOB_ID>` includes child-job task logs by default.
 
 3. CHECK STATUS
-   uv run iris --config <CONFIG> job list --json --prefix <JOB_ID>
-
-   Terminal success: JOB_STATE_SUCCEEDED
-   Terminal non-success: JOB_STATE_FAILED, JOB_STATE_KILLED, JOB_STATE_WORKER_FAILED, JOB_STATE_UNSCHEDULABLE
-   Non-terminal: JOB_STATE_PENDING, JOB_STATE_BUILDING, JOB_STATE_RUNNING
+   uv run iris --config <CONFIG> job list --prefix <JOB_ID>
 
    If `pending_reason` indicates worker scale-up/capacity wait, treat as scheduler
    capacity wait — do not run cluster update/recreate/restart actions. Continue
@@ -141,7 +137,7 @@ part of the setup. The state file allows resume after context reset.
 3a. ON TERMINAL STATE / OOM-LIKE SIGNAL — get a structured per-task summary
    (final state, exit, duration, peak memory) instead of grepping logs:
 
-   uv run iris --config <CONFIG> job summary --json <JOB_ID>
+   uv run iris --config <CONFIG> job summary <JOB_ID>
 
    Fast postmortem: e.g. "13/14 shards peaked near the container memory limit
    and failed with exit 137" → cgroup OOM, raise `--memory` on resubmit.

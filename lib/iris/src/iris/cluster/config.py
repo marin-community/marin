@@ -18,6 +18,7 @@ these are normalized at the parse boundary.
 from __future__ import annotations
 
 import copy
+import ipaddress
 import logging
 import os
 from collections.abc import Mapping
@@ -26,7 +27,7 @@ from typing import Annotated, Any, ClassVar, Literal
 
 import fsspec
 import yaml
-from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, PlainSerializer, model_validator
+from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, PlainSerializer, field_validator, model_validator
 from rigging.timing import Duration
 
 from iris.cluster.tpu_topology import TPU_FAMILY_VARIANT_PREFIX, get_tpu_topology, tpu_variant_name
@@ -440,6 +441,16 @@ class CoreweaveControllerConfig(_Config):
     port: int = 0  # default: 10000
     service_name: str = ""  # K8s Service name for discovery
     scale_group: str = ""  # scale group whose NodePool runs the controller
+    # When set, start_controller creates an Ingress publishing ONLY /proxy
+    # off-cluster; the controller's per-endpoint auth is the sole gate, so keep
+    # auth.provider set. See docs/coreweave.md.
+    public_proxy_host: str = ""
+    ingress_class: str = "traefik"  # ingressClassName for the /proxy ingress
+    tls_secret: str = ""  # secret holding the TLS cert for public_proxy_host
+    # cert-manager ClusterIssuer. When set, the Ingress is annotated
+    # cert-manager.io/cluster-issuer=<name> so cert-manager auto-issues the cert
+    # into tls_secret. Empty = bring your own cert in tls_secret (or no TLS).
+    cluster_issuer: str = ""
 
 
 class ControllerVmConfig(_OneofConfig):
@@ -499,6 +510,10 @@ class IapAuthConfig(_Config):
     oauth_client_secret: str = ""
     audiences: list[str] = Field(default_factory=list)
     signed_header_audience: str = ""
+    # Role granted to an IAP-verified email with no row in the user store; a
+    # provisioned user always resolves to their stored role. "admin" makes
+    # IAP's own allowlist the sole gate.
+    unprovisioned_role: Literal["admin", "user", "dashboard"] = "dashboard"
 
 
 class AuthConfig(_OneofConfig):
@@ -506,10 +521,24 @@ class AuthConfig(_OneofConfig):
     gcp: GcpAuthConfig | None = None
     static: StaticAuthConfig | None = None
     iap: IapAuthConfig | None = None
+    # Network-location trust, orthogonal to the login-provider arm: a tokenless
+    # request whose *direct transport peer* is inside one of these CIDRs
+    # authenticates as the anonymous admin identity (like loopback). Requests
+    # forwarded through a proxy hop (X-Forwarded-For present) never match, so
+    # an in-network ingress cannot lend its address to external traffic. With
+    # no arm selected, a non-empty list alone enables auth (provider "cidr").
+    trusted_cidrs: list[str] = Field(default_factory=list)
     admin_users: list[str] = Field(default_factory=list)
     # Authenticate-but-not-require: valid tokens get their identity; tokenless
     # requests fall through as anonymous admin; invalid tokens still rejected.
     optional: bool = False
+
+    @field_validator("trusted_cidrs")
+    @classmethod
+    def _parse_cidrs(cls, cidrs: list[str]) -> list[str]:
+        for cidr in cidrs:
+            ipaddress.ip_network(cidr)  # ValueError on a malformed CIDR — fail at load
+        return cidrs
 
     def provider_kind(self) -> str | None:
         return self._selected_arm()

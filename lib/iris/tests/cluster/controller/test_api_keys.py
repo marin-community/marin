@@ -114,9 +114,9 @@ def test_iap_provider_uses_id_token_login_verifier(db):
     assert auth.verifier.verify(auth.worker_token).user_id == WORKER_USER
 
 
-def test_iap_provider_requires_audiences(db):
+def test_iap_provider_requires_audiences_or_assertion(db):
     config = AuthConfig(iap={"url": "https://iris-marin.example.com"})
-    with pytest.raises(ValueError, match="at least one audience"):
+    with pytest.raises(ValueError, match=r"audiences .* signed_header_audience"):
         create_controller_auth(config, db=db)
 
 

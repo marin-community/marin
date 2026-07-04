@@ -21,7 +21,13 @@ import fsspec.config
 import s3fs
 from rigging.timing import Deadline
 
-from iris.cluster.config import ControllerVmConfig, CoreweavePlatformConfig, IrisClusterConfig, config_to_dict
+from iris.cluster.config import (
+    ControllerVmConfig,
+    CoreweaveControllerConfig,
+    CoreweavePlatformConfig,
+    IrisClusterConfig,
+    config_to_dict,
+)
 from iris.cluster.inject_env import TASK_ENV_SECRET_NAME, collect_inject_env, projects_task_env_secret
 from iris.cluster.platforms.k8s.constants import COREWEAVE_INTERRUPTABLE_TOLERATION, NVIDIA_GPU_TOLERATION
 from iris.cluster.platforms.k8s.service import CloudK8sService, K8sService
@@ -229,6 +235,57 @@ def _build_controller_state_pvc(*, namespace: str) -> dict:
     }
 
 
+# Name of the Ingress that publishes only the controller's /proxy path.
+_CONTROLLER_PROXY_INGRESS_NAME = "iris-controller-proxy"
+
+
+def _build_controller_proxy_ingress(
+    *,
+    namespace: str,
+    service_name: str,
+    port: int,
+    host: str,
+    ingress_class: str,
+    tls_secret: str,
+    cluster_issuer: str,
+) -> dict:
+    """Build the Ingress that publishes ONLY the controller's ``/proxy`` path.
+
+    The dashboard and RPC surface stay ClusterIP-internal — only ``/proxy`` is
+    routed in. CoreWeave has no IAP layer, so the controller's own per-endpoint
+    auth (PRIVATE/PUBLIC/BEARER) is the sole gate for that path.
+
+    Ingress-controller-agnostic: no controller-specific annotations. Traefik (the
+    default class) streams responses without buffering, so vLLM SSE works out of
+    the box; raise long-request timeouts at the Traefik entrypoint if needed.
+    When ``cluster_issuer`` is set, cert-manager auto-issues the TLS cert into
+    ``tls_secret``.
+    """
+    metadata: dict = {"name": _CONTROLLER_PROXY_INGRESS_NAME, "namespace": namespace}
+    if cluster_issuer:
+        metadata["annotations"] = {"cert-manager.io/cluster-issuer": cluster_issuer}
+    spec: dict = {
+        "ingressClassName": ingress_class,
+        "rules": [
+            {
+                "host": host,
+                "http": {
+                    "paths": [
+                        {
+                            "path": "/proxy",
+                            "pathType": "Prefix",
+                            "backend": {"service": {"name": service_name, "port": {"number": port}}},
+                        }
+                    ]
+                },
+            }
+        ],
+    }
+    if tls_secret:
+        spec["tls"] = [{"hosts": [host], "secretName": tls_secret}]
+    return {"apiVersion": "networking.k8s.io/v1", "kind": "Ingress", "metadata": metadata, "spec": spec}
+
+
 # ============================================================================
 # K8sControllerProvider
 # ============================================================================
@@ -371,6 +428,12 @@ class K8sControllerProvider:
         self._kubectl.apply_json(svc_manifest)
         logger.info("Controller Service %s applied", service_name)
 
+        # Publish only /proxy off-cluster when a host is configured. The rest of
+        # the controller stays ClusterIP-internal; the controller's per-endpoint
+        # auth gates /proxy (CoreWeave has no IAP layer). Idempotent apply.
+        if cw.public_proxy_host:
+            self._apply_proxy_ingress(cw, service_name=service_name, port=port)
+
         pdb_manifest = {
             "apiVersion": "policy/v1",
             "kind": "PodDisruptionBudget",
@@ -390,6 +453,45 @@ class K8sControllerProvider:
             self._persist_deployment_without_fresh(deploy_kwargs)
 
         return self.discover_controller(config.controller)
+
+    def _apply_proxy_ingress(self, cw: CoreweaveControllerConfig, *, service_name: str, port: int) -> None:
+        """Apply the /proxy Ingress and validate its prerequisites.
+
+        The external address is served by the ingress controller's own
+        LoadBalancer, not the controller Pod, so this warns (rather than fails)
+        when the configured ``IngressClass`` is absent: the Ingress is still
+        applied and starts serving once a controller providing that class exists.
+        A missing ingress controller must not block the controller itself, which
+        is fine on its ClusterIP Service.
+        """
+        if self._kubectl.get_json(K8sResource.INGRESS_CLASSES, cw.ingress_class) is None:
+            logger.warning(
+                "IngressClass %r not found — the /proxy Ingress %s will stay pending (no external "
+                "address) until an ingress controller providing that class is installed (e.g. "
+                "ingress-nginx exposed as a LoadBalancer Service).",
+                cw.ingress_class,
+                _CONTROLLER_PROXY_INGRESS_NAME,
+            )
+        ingress_manifest = _build_controller_proxy_ingress(
+            namespace=self._namespace,
+            service_name=service_name,
+            port=port,
+            host=cw.public_proxy_host,
+            ingress_class=cw.ingress_class,
+            tls_secret=cw.tls_secret,
+            cluster_issuer=cw.cluster_issuer,
+        )
+        self._kubectl.apply_json(ingress_manifest)
+        logger.info(
+            "Controller /proxy Ingress %s applied (host=%s). Point DNS for %s at the ingress "
+            "controller's LoadBalancer external IP/hostname (kubectl get ingress %s -n %s -o wide); "
+            "TLS terminates in-cluster via cert-manager.",
+            _CONTROLLER_PROXY_INGRESS_NAME,
+            cw.public_proxy_host,
+            cw.public_proxy_host,
+            _CONTROLLER_PROXY_INGRESS_NAME,
+            self._namespace,
+        )
 
     def _persist_deployment_without_fresh(self, deploy_kwargs: dict) -> None:
         """Re-apply the controller Deployment with ``--fresh`` stripped from the pod command.
@@ -437,6 +539,7 @@ class K8sControllerProvider:
         self._kubectl.delete(K8sResource.PDBS, "iris-controller-pdb")
         self._kubectl.delete(K8sResource.CONFIGMAPS, "iris-cluster-config")
         self._kubectl.delete(K8sResource.PERSISTENT_VOLUME_CLAIMS, _CONTROLLER_STATE_PVC_NAME)
+        self._kubectl.delete(K8sResource.INGRESSES, _CONTROLLER_PROXY_INGRESS_NAME)
         if self.uses_s3_storage(config) or config.defaults.inject_env:
             self._kubectl.delete(K8sResource.SECRETS, TASK_ENV_SECRET_NAME)
 

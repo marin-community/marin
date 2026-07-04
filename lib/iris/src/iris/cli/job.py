@@ -9,7 +9,6 @@ Usage:
 """
 
 import difflib
-import json
 import logging
 import os
 import sys
@@ -19,13 +18,12 @@ from pathlib import Path
 import click
 import humanfriendly
 import yaml
-from google.protobuf import json_format
 from rigging.credentials import ClientCredentials
 from rigging.timing import Duration, Timestamp
 from tabulate import tabulate
 
 from iris.cli.bug_report import file_github_issue, format_bug_report, gather_bug_report
-from iris.cli.connect import require_controller_url
+from iris.cli.connect import iris_client_for_ctx, require_controller_url
 from iris.client import IrisClient
 from iris.client.client import Job, JobFailedError
 from iris.cluster.constraints import (
@@ -76,13 +74,7 @@ _STATE_MAP: dict[str, job_pb2.JobState] = {
 
 
 def _remote_client(ctx: click.Context) -> IrisClient:
-    """Build an IrisClient for the current cluster, threading the auth credentials
-    (the Iris JWT and, for IAP-fronted clusters, the IAP ID token) from context."""
-    return IrisClient.remote(
-        require_controller_url(ctx),
-        workspace=Path.cwd(),
-        credentials=ctx.obj.get("credentials"),
-    )
+    return iris_client_for_ctx(ctx, workspace=Path.cwd())
 
 
 def _terminate_jobs(
@@ -1100,9 +1092,8 @@ def kick(ctx, target: tuple[str, ...], state: str, reason: str) -> None:
     default=None,
     help="Anchored prefix match against the wire-form job_id (e.g. '/alice/exp-').",
 )
-@click.option("--json", "json_output", is_flag=True, help="Output as JSON")
 @click.pass_context
-def list_jobs(ctx, state: str | None, prefix: str | None, json_output: bool) -> None:
+def list_jobs(ctx, state: str | None, prefix: str | None) -> None:
     """List jobs with optional filtering."""
     client = _remote_client(ctx)
 
@@ -1118,11 +1109,6 @@ def list_jobs(ctx, state: str | None, prefix: str | None, json_output: bool) -> 
 
     # Sort by submitted_at descending (most recent first)
     jobs.sort(key=lambda j: j.submitted_at.epoch_ms, reverse=True)
-
-    if json_output:
-        serialized = [json_format.MessageToDict(j, preserving_proto_field_name=True) for j in jobs]
-        click.echo(json.dumps(serialized, indent=2))
-        return
 
     if not jobs:
         click.echo("No jobs found.")
@@ -1263,9 +1249,8 @@ def _render_job_summary_text(summary: dict) -> str:
 
 @job.command("summary")
 @click.argument("job_id")
-@click.option("--json", "json_output", is_flag=True, help="Emit structured JSON instead of a text table.")
 @click.pass_context
-def summary(ctx, job_id: str, json_output: bool) -> None:
+def summary(ctx, job_id: str) -> None:
     """Print a per-task summary (peak memory, state, exit, duration) for a job.
 
     Works for both running and completed jobs. Data is read from the controller's
@@ -1276,9 +1261,6 @@ def summary(ctx, job_id: str, json_output: bool) -> None:
     job_status = client.status(job_name)
     tasks = client.list_tasks(job_name)
     result = build_job_summary(job_status, tasks)
-    if json_output:
-        click.echo(json.dumps(result, indent=2, default=str))
-        return
     click.echo(_render_job_summary_text(result))
 
 

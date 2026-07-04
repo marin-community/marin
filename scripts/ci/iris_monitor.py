@@ -10,25 +10,16 @@ import sys
 import time
 import urllib.error
 import urllib.request
-from collections.abc import Iterator
-from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
 import click
 from google.protobuf import json_format
-from iris.cli.main import client_credentials, resolve_cluster_name
-from iris.client import IrisClient
+from iris.cli.connect import open_iris_client
 from iris.cluster.backends.k8s.tasks import _sanitize_label_value
-from iris.cluster.composer import provider_bundle
-from iris.cluster.config import load_config
-from iris.cluster.local_cluster import LocalCluster
 from iris.cluster.types import JobName, is_job_finished
 from iris.rpc import job_pb2
-from rigging.cluster_manifest import AuthProvider, ClusterAuth
-from rigging.credential_store import cluster_name_from_url
-from rigging.credentials import credentials_for
 from rigging.redaction import redact_value
 from rigging.timing import ExponentialBackoff
 
@@ -84,42 +75,6 @@ def _run(cmd: list[str]) -> subprocess.CompletedProcess:
     return subprocess.run(cmd, capture_output=True, text=True, check=False)
 
 
-@contextmanager
-def _open_iris_client(
-    *,
-    iris_config: Path | None,
-    repo_root: Path,
-    controller_url: str | None = None,
-) -> Iterator[IrisClient]:
-    if controller_url is not None:
-        credentials = credentials_for(cluster_name_from_url(controller_url), ClusterAuth(AuthProvider.NONE))
-        with IrisClient.remote(controller_url, workspace=repo_root, credentials=credentials) as client:
-            yield client
-        return
-
-    if iris_config is None:
-        raise click.ClickException("No controller specified. Pass --iris-config or --controller-url.")
-
-    config = load_config(iris_config)
-    cluster_name = resolve_cluster_name(config, None, None)
-    credentials = client_credentials(config, cluster_name)
-
-    if config.controller.controller_kind() == "local":
-        cluster = LocalCluster(config)
-        try:
-            with IrisClient.remote(cluster.start(), workspace=repo_root, credentials=credentials) as client:
-                yield client
-        finally:
-            cluster.close()
-        return
-
-    bundle = provider_bundle(config)
-    controller_address = config.controller_address() or bundle.controller.discover_controller(config.controller)
-    with bundle.controller.tunnel(address=controller_address) as tunnel_url:
-        with IrisClient.remote(tunnel_url, workspace=repo_root, credentials=credentials) as client:
-            yield client
-
-
 def _row(job: job_pb2.JobStatus | None) -> str:
     if job is None:
         return "null"
@@ -150,7 +105,7 @@ def job_status(
     controller_url: str | None = None,
 ) -> job_pb2.JobStatus:
     prefix = _job_id_prefix(job_id)
-    with _open_iris_client(iris_config=iris_config, repo_root=repo_root, controller_url=controller_url) as client:
+    with open_iris_client(config_file=iris_config, workspace=repo_root, controller_url=controller_url) as client:
         for job in client.list_jobs(prefix=prefix):
             if job.job_id == job_id:
                 return job
@@ -170,7 +125,7 @@ def wait_for_job(
     """Poll until the job reaches a terminal state. Raises TimeoutError if `timeout` elapses."""
     prefix = _job_id_prefix(job_id)
     start = time.monotonic()
-    with _open_iris_client(iris_config=iris_config, repo_root=repo_root, controller_url=controller_url) as client:
+    with open_iris_client(config_file=iris_config, workspace=repo_root, controller_url=controller_url) as client:
         while True:
             job = next((j for j in client.list_jobs(prefix=prefix) if j.job_id == job_id), None)
             if job is None:
@@ -206,7 +161,7 @@ def wait_for_child_job(
         jitter=0.0,
     )
     child_running = False
-    with _open_iris_client(iris_config=iris_config, repo_root=repo_root, controller_url=controller_url) as client:
+    with open_iris_client(config_file=iris_config, workspace=repo_root, controller_url=controller_url) as client:
         while True:
             jobs = client.list_jobs(prefix=prefix)
             parent = next((j for j in jobs if j.job_id == job_id), None)
@@ -579,12 +534,12 @@ def collect_diagnostics(
     if process_log.returncode != 0:
         errors.append(f"iris process logs failed (exit {process_log.returncode}): {process_log.stderr.strip()}")
 
-    job_tree = _run([*iris_cmd, "job", "list", "--json", "--prefix", job_id])
-    (output_dir / "job-tree.json").write_text(job_tree.stdout or job_tree.stderr or "")
+    job_tree = _run([*iris_cmd, "job", "list", "--prefix", job_id])
+    (output_dir / "job-tree.txt").write_text(job_tree.stdout or job_tree.stderr or "")
     if job_tree.returncode != 0:
         errors.append(f"iris job list failed (exit {job_tree.returncode}): {job_tree.stderr.strip()}")
     else:
-        files.append("job-tree.json")
+        files.append("job-tree.txt")
 
     if provider == "gcp":
         if not project or not controller_label:

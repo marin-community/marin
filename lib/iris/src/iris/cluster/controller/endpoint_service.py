@@ -12,6 +12,7 @@ endpoints are served from an in-memory map and never expire.
 
 import logging
 import uuid
+from dataclasses import dataclass
 from typing import Any
 
 from connectrpc.code import Code
@@ -25,7 +26,7 @@ from iris.cluster.controller.projections.endpoints import (
     EndpointRow,
     EndpointsProjection,
 )
-from iris.cluster.types import JobName
+from iris.cluster.types import EndpointAccess, JobName
 from iris.rpc import controller_pb2, job_pb2
 from iris.time_proto import duration_from_proto, duration_to_proto
 
@@ -40,6 +41,28 @@ ENDPOINT_LEASE = Duration.from_hours(120)
 # Floor on a granted lease: bounds how often a client may force the controller to
 # re-register by capping the renewal rate a short requested lease can ask for.
 MIN_ENDPOINT_LEASE = Duration.from_minutes(3)
+
+
+def proxy_name_to_endpoint_names(proxy_name: str) -> tuple[str, str]:
+    """Decode a proxy ``.``-encoded name into endpoint-name lookup candidates.
+
+    Proxy URLs and subdomains encode ``/`` as ``.`` (``user.jobX.dash`` ->
+    ``/user/jobX/dash``). Endpoint names start with ``/``, so the
+    slash-prefixed form is tried first; the bare form covers endpoints
+    registered without a leading slash.
+    """
+    slashed = proxy_name.replace(".", "/")
+    return f"/{slashed}", slashed
+
+
+@dataclass(frozen=True, slots=True)
+class ResolvedEndpoint:
+    """A proxy request's resolved target: canonical endpoint name, address, and access mode."""
+
+    name: str
+    address: str
+    # A Controller.EndpointAccess value.
+    access: int
 
 
 class EndpointServiceImpl:
@@ -106,6 +129,7 @@ class EndpointServiceImpl:
             metadata=dict(request.metadata),
             registered_at=Timestamp.now(),
             lease_deadline=Timestamp.now().add(granted),
+            access=request.access,
         )
 
         # Validation runs inside the writer transaction in
@@ -170,6 +194,7 @@ class EndpointServiceImpl:
                     address=e.address,
                     task_id=e.task_id.to_wire(),
                     metadata=e.metadata,
+                    access=e.access,
                 )
                 for e in endpoints
             ]
@@ -186,6 +211,33 @@ class EndpointServiceImpl:
         if row is not None:
             return row.address
         return self._system_endpoints.get(name)
+
+    def resolve_task_endpoint(self, name: str) -> EndpointRow | None:
+        """Resolve a task-registered endpoint row by wire name, or None.
+
+        Used for owner authorization on token minting; ``/system/`` endpoints
+        (no owning task) are intentionally not returned. Accepts either the
+        ``/``-prefixed name or the bare form.
+        """
+        for candidate in proxy_name_to_endpoint_names(name):
+            row = self._endpoints.resolve(candidate)
+            if row is not None:
+                return row
+        return None
+
+    def resolve_proxy_target(self, encoded_name: str) -> ResolvedEndpoint | None:
+        """Resolve a proxy request's ``encoded_name`` to its target, or None.
+
+        ``/system/`` endpoints always resolve as ``PRIVATE``.
+        """
+        for name in proxy_name_to_endpoint_names(encoded_name):
+            row = self._endpoints.resolve(name)
+            if row is not None:
+                return ResolvedEndpoint(name=row.name, address=row.address, access=row.access)
+            address = self._system_endpoints.get(name)
+            if address is not None:
+                return ResolvedEndpoint(name=name, address=address, access=EndpointAccess.ENDPOINT_ACCESS_PRIVATE)
+        return None
 
     def _list_system_endpoints(self, prefix: str, *, exact: bool) -> controller_pb2.Controller.ListEndpointsResponse:
         """Resolve system endpoints from the in-memory map."""

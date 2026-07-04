@@ -38,14 +38,21 @@ The same pair of clients can protect every cluster's backend service.
 Every resource is a single ``gcloud`` create guarded by an existence probe, so
 the whole rollout — or any single stage — is safe to re-run. ``deploy`` runs the
 stages in dependency order; the per-stage subcommands (``address``, ``cert``,
-``backend``, ``iap``, ``frontend``, ``route``, ``grant``, ``firewall``) expose
-each on its own. ``status`` reports what exists and ``teardown`` removes a
-cluster's backend.
+``backend``, ``iap``, ``frontend``, ``route``, ``grant``, ``firewall``,
+``public-proxy``) expose each on its own. ``status`` reports what exists and
+``teardown`` removes a cluster's backend.
 
 The ``firewall`` stage is kept separate and is *not* run by ``deploy`` unless
 ``--with-firewall`` is passed: its allow-rule is a prerequisite for the LB health
 check, but its deny-public rule can cut internal task->controller traffic, so it
 stays an explicit, deliberate step.
+
+The ``public-proxy`` stage opens the ``/proxy/*`` path past IAP (an IAP-free
+backend on the same controller NEG plus a URL-map path rule) so off-cluster
+callers can reach a registered endpoint through the controller proxy, gated by the
+controller's own per-endpoint auth. It runs by default as part of ``deploy``
+(idempotent); pass ``--no-public-proxy`` to keep the controller fully IAP-gated,
+or run the ``public-proxy`` subcommand standalone.
 
 Usage:
     uv run lib/iris/scripts/iap_gclb.py deploy marin \\
@@ -69,14 +76,21 @@ import subprocess
 import sys
 import tempfile
 from collections.abc import Sequence
+from pathlib import Path
 
 import click
+import yaml
 
 logger = logging.getLogger("iap-gclb")
 
 DEFAULT_PROJECT = "hai-gcp-models"
 DEFAULT_ZONE = "us-central1-a"
 CONTROLLER_PORT = 10000
+
+# Path prefix opened past IAP by the public-proxy stage. Only these paths route
+# to the IAP-free backend; everything else on the host stays IAP-gated. Matches
+# the controller's own PROXY_ROUTE, whose per-endpoint auth is then the gate.
+PUBLIC_PROXY_PATHS = ["/proxy", "/proxy/*"]
 
 # The cluster that owns the shared LB frontend (static IP, URL map, HTTPS proxy,
 # forwarding rule). Its backend service is the URL map's default route.
@@ -157,6 +171,15 @@ class Backend:
     def service(self) -> str:
         """The backend service name."""
         return f"{self.prefix}-be"
+
+    @property
+    def proxy_service(self) -> str:
+        """IAP-free backend service (public-proxy stage) on the same NEG.
+
+        Fronts only the ``/proxy/*`` path, routed here by a URL-map path rule; the
+        controller's per-endpoint ``_authorize_proxy`` is then the gate.
+        """
+        return f"{self.prefix}-proxy-be"
 
     @property
     def path_matcher(self) -> str:
@@ -431,13 +454,13 @@ def _neg_has_endpoint(backend: Backend, ip: str) -> bool:
     return ip in (result.stdout or "").split()
 
 
-def _backend_has_neg(backend: Backend) -> bool:
+def _backend_has_neg(backend: Backend, service: str | None = None) -> bool:
     result = _run(
         _compute(
             backend.project,
             "backend-services",
             "describe",
-            backend.service,
+            service or backend.service,
             "--global",
             "--format=value(backends[].group)",
         ),
@@ -756,6 +779,159 @@ def ensure_frontend(frontend: Frontend, backend: Backend, *, dry_run: bool) -> s
     return reserved_ip
 
 
+# --------------------------------------------------------------------------- #
+# public-proxy stage: open an unauthenticated /proxy route to the controller.
+# This allows users to expose proxy endpoints to anonymous callers; proxy
+# endpoint access control is handled by the Iris controller.
+# --------------------------------------------------------------------------- #
+
+
+def _backend_self_link(backend: Backend, service: str) -> str:
+    """Return a backend service's full selfLink (the form a URL map references)."""
+    result = _run(
+        _compute(backend.project, "backend-services", "describe", service, "--global", "--format=value(selfLink)"),
+        capture=True,
+    )
+    link = (result.stdout or "").strip()
+    if not link:
+        raise click.ClickException(f"backend service {service} not found; run the backend/public-proxy stage first")
+    return link
+
+
+def ensure_public_proxy_backend(backend: Backend, *, dry_run: bool) -> None:
+    """Create the IAP-free backend service on the existing NEG + health check.
+
+    Reuses the NEG and health check the ``backend`` stage created, so this must
+    run after ``deploy``/``backend``. IAP is never enabled on it — the controller
+    authorizes ``/proxy`` requests itself.
+    """
+    _ensure(
+        f"IAP-free backend service {backend.proxy_service}",
+        _exists(_compute(backend.project, "backend-services", "describe", backend.proxy_service, "--global")),
+        _compute(
+            backend.project,
+            "backend-services",
+            "create",
+            backend.proxy_service,
+            "--global",
+            "--protocol=HTTP",
+            "--port-name=http",
+            f"--health-checks={backend.health_check}",
+            "--timeout=120s",
+            "--load-balancing-scheme=EXTERNAL_MANAGED",
+        ),
+        dry_run=dry_run,
+    )
+
+    if dry_run or not _backend_has_neg(backend, backend.proxy_service):
+        logger.info("→ adding NEG %s to IAP-free backend %s", backend.neg, backend.proxy_service)
+        _run(
+            _compute(
+                backend.project,
+                "backend-services",
+                "add-backend",
+                backend.proxy_service,
+                "--global",
+                f"--network-endpoint-group={backend.neg}",
+                f"--network-endpoint-group-zone={backend.zone}",
+                "--balancing-mode=RATE",
+                "--max-rate-per-endpoint=1000",
+            ),
+            dry_run=dry_run,
+        )
+    else:
+        logger.info("✓ NEG %s already attached to IAP-free backend %s", backend.neg, backend.proxy_service)
+
+
+def _export_url_map(frontend: Frontend) -> dict:
+    """Export the shared URL map as a dict (the import-round-trippable form)."""
+    with tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False) as fh:
+        path = fh.name
+    try:
+        _run(_compute(frontend.project, "url-maps", "export", frontend.url_map, "--global", f"--destination={path}"))
+        return yaml.safe_load(Path(path).read_text())
+    finally:
+        os.unlink(path)
+
+
+def _import_url_map(frontend: Frontend, doc: dict, *, dry_run: bool) -> None:
+    """Write *doc* back to the shared URL map (atomic, fingerprint-guarded)."""
+    with tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False) as fh:
+        yaml.safe_dump(doc, fh, sort_keys=False)
+        path = fh.name
+    try:
+        _run(
+            _compute(
+                frontend.project, "url-maps", "import", frontend.url_map, "--global", f"--source={path}", "--quiet"
+            ),
+            dry_run=dry_run,
+        )
+    finally:
+        os.unlink(path)
+
+
+def ensure_public_proxy_route(frontend: Frontend, backend: Backend, *, dry_run: bool) -> None:
+    """Route ``<domain>/proxy/*`` to the IAP-free backend, leaving the rest IAP-gated.
+
+    Idempotent; touches only this cluster's host rule and ``/proxy/*`` path
+    rule, so every other host keeps flowing to the IAP backend.
+    """
+    if not backend.domain:
+        raise click.ClickException(f"--domain is required to open the public proxy route for {backend.cluster}")
+    iap_link = _backend_self_link(backend, backend.service)
+    proxy_link = _backend_self_link(backend, backend.proxy_service)
+
+    doc = _export_url_map(frontend)
+    doc.setdefault("hostRules", [])
+    doc.setdefault("pathMatchers", [])
+
+    host_rule = next((h for h in doc["hostRules"] if backend.domain in h.get("hosts", [])), None)
+    matcher: dict
+    if host_rule is None:
+        # Frontend-owning cluster serves off the map default; give it a host
+        # rule whose default stays the IAP backend.
+        matcher = {"name": backend.path_matcher, "defaultService": iap_link, "pathRules": []}
+        doc["hostRules"].append({"hosts": [backend.domain], "pathMatcher": backend.path_matcher})
+        doc["pathMatchers"].append(matcher)
+    else:
+        matcher = next(m for m in doc["pathMatchers"] if m["name"] == host_rule["pathMatcher"])
+        matcher.setdefault("pathRules", [])
+
+    rules = matcher["pathRules"]
+    existing = next((r for r in rules if set(r.get("paths", [])) == set(PUBLIC_PROXY_PATHS)), None)
+    if existing is not None and existing.get("service") == proxy_link:
+        logger.info("✓ /proxy/* already routes to %s for %s", backend.proxy_service, backend.domain)
+        return
+    if existing is not None:
+        existing["service"] = proxy_link
+    else:
+        rules.append({"paths": list(PUBLIC_PROXY_PATHS), "service": proxy_link})
+    logger.info(
+        "→ routing %s/proxy/* -> %s (IAP-free); everything else stays IAP-gated", backend.domain, backend.proxy_service
+    )
+    _import_url_map(frontend, doc, dry_run=dry_run)
+
+
+def remove_public_proxy_route(frontend: Frontend, backend: Backend, *, dry_run: bool) -> None:
+    """Remove this cluster's ``/proxy/*`` path rule from the shared URL map (best-effort)."""
+    if not backend.domain:
+        return
+    doc = _export_url_map(frontend)
+    host_rule = next((h for h in doc.get("hostRules", []) if backend.domain in h.get("hosts", [])), None)
+    if host_rule is None:
+        return
+    matcher = next((m for m in doc.get("pathMatchers", []) if m["name"] == host_rule["pathMatcher"]), None)
+    if matcher is None:
+        return
+    before = matcher.get("pathRules", [])
+    kept = [r for r in before if set(r.get("paths", [])) != set(PUBLIC_PROXY_PATHS)]
+    if len(kept) == len(before):
+        return
+    matcher["pathRules"] = kept
+    logger.info("→ removing /proxy/* route for %s from %s", backend.domain, frontend.url_map)
+    _import_url_map(frontend, doc, dry_run=dry_run)
+
+
 def grant_access(backend: Backend, member: str, *, dry_run: bool) -> None:
     """Grant *member* IAP access (roles/iap.httpsResourceAccessor) on the backend."""
     logger.info("→ granting %s %s on %s", member, IAP_ACCESSOR_ROLE, backend.service)
@@ -862,6 +1038,11 @@ def cli(verbose: bool) -> None:
 @click.option("--controller-ip", help="Controller VM internal IP (default: discover from the GCE label)")
 @click.option("--member", help="Principal to grant IAP access, e.g. user:you@example.com")
 @click.option("--with-firewall", is_flag=True, help="Also run the allow-LB firewall stage (tag VM + allow rule)")
+@click.option(
+    "--no-public-proxy",
+    is_flag=True,
+    help="Skip the public-proxy stage (leave the controller fully IAP-gated; no off-cluster /proxy route)",
+)
 def deploy(
     cluster: str,
     project: str,
@@ -874,6 +1055,7 @@ def deploy(
     controller_ip: str | None,
     member: str | None,
     with_firewall: bool,
+    no_public_proxy: bool,
 ) -> None:
     """Stand up a cluster's IAP backend and route it through the shared frontend.
 
@@ -902,6 +1084,10 @@ def deploy(
     # Shared frontend + this cluster's route.
     reserved_ip = ensure_frontend(frontend, backend, dry_run=dry_run)
 
+    if not no_public_proxy:
+        ensure_public_proxy_backend(backend, dry_run=dry_run)
+        ensure_public_proxy_route(frontend, backend, dry_run=dry_run)
+
     click.echo()
     click.echo(f"Backend for cluster={cluster} reconciled behind frontend={frontend_name}.")
     click.echo(f"  Shared IP      : {reserved_ip}")
@@ -913,6 +1099,12 @@ def deploy(
         click.echo()
         click.echo("Firewall NOT applied. The backend health check needs the allow-LB rule:")
         click.echo(f"  uv run {sys.argv[0]} firewall {cluster}")
+    click.echo()
+    if no_public_proxy:
+        click.echo("Public proxy NOT opened (--no-public-proxy). To open /proxy/* off-cluster later:")
+        click.echo(f"  uv run {sys.argv[0]} public-proxy {cluster} --domain {domain}")
+    else:
+        click.echo(f"Opened https://{domain}/proxy/* (IAP-free) -> {backend.proxy_service}; controller auth gates it.")
     signed_header_audience = discover_signed_header_audience(backend, dry_run=dry_run)
     print_auth_block(backend, desktop_id, desktop_secret, member, signed_header_audience)
 
@@ -1014,6 +1206,29 @@ def grant(cluster: str, project: str, zone: str, dry_run: bool, member: str) -> 
     grant_access(Backend(cluster=cluster, project=project, zone=zone), member, dry_run=dry_run)
 
 
+@cli.command("public-proxy")
+@_common_options
+@_frontend_option
+@click.option("--domain", required=True, help="Cluster domain whose /proxy/* path should be opened past IAP")
+def public_proxy(cluster: str, project: str, zone: str, dry_run: bool, frontend_name: str, domain: str) -> None:
+    """Open ONLY ``<domain>/proxy/*`` off-cluster via an IAP-free backend.
+
+    Adds a second backend service (IAP disabled) on the same controller NEG and a
+    URL-map path rule routing ``/proxy/*`` to it, leaving the dashboard and RPC
+    surface IAP-gated. The controller's per-endpoint auth (PRIVATE/PUBLIC/BEARER)
+    is the gate for that path. Run after ``deploy``/``backend`` (it reuses the
+    NEG + health check). This widens the public surface — run it deliberately.
+    """
+    fe = Frontend(name=frontend_name, project=project)
+    backend = Backend(cluster=cluster, project=project, zone=zone, domain=domain)
+    ensure_public_proxy_backend(backend, dry_run=dry_run)
+    ensure_public_proxy_route(fe, backend, dry_run=dry_run)
+    click.echo()
+    click.echo(f"Opened https://{domain}/proxy/* (IAP-free) -> {backend.proxy_service} on the same controller.")
+    click.echo("  The controller's per-endpoint auth gates it: PRIVATE (cluster identity),")
+    click.echo("  PUBLIC (open), or BEARER (scoped endpoint token). Everything else stays IAP-gated.")
+
+
 @cli.command()
 @_common_options
 @_frontend_option
@@ -1053,6 +1268,8 @@ def status(cluster: str, project: str, zone: str, dry_run: bool, frontend_name: 
         click.echo(f"  [{'OK ' if _exists(describe) else 'MISSING'}] {label}")
     has_route = backend.cluster == frontend_name or _url_map_has_matcher(fe, backend.path_matcher)
     click.echo(f"  [{'OK ' if has_route else 'MISSING'}] host route in {fe.url_map}")
+    has_proxy = _exists(_compute(project, "backend-services", "describe", backend.proxy_service, "--global"))
+    click.echo(f"  [{'OK ' if has_proxy else 'off '}] public /proxy (IAP-free) backend {backend.proxy_service}")
     audience = discover_signed_header_audience(backend)
     if audience:
         click.echo(f"  iap jwt aud : {audience}  (auth.iap.signed_header_audience)")
@@ -1106,6 +1323,14 @@ def teardown(
                 "--global",
                 f"--path-matcher-name={backend.path_matcher}",
             ),
+        )
+
+    # The IAP-free public-proxy backend + its /proxy route, if the stage was run.
+    # Its route must be dropped and the service deleted before the shared NEG.
+    if _exists(_compute(project, "backend-services", "describe", backend.proxy_service, "--global")):
+        remove_public_proxy_route(fe, backend, dry_run=dry_run)
+        _delete(
+            backend.proxy_service, _compute(project, "backend-services", "delete", backend.proxy_service, "--global")
         )
 
     _delete(backend.service, _compute(project, "backend-services", "delete", backend.service, "--global"))

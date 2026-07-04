@@ -152,12 +152,16 @@ class DataConfig:
         Precedence: ``MARIN_PREFIX`` env > ``self.root`` > region-local bucket
         from ``region_buckets[<gcs metadata region>]`` > ``{scheme}://marin-{region}``
         for a detected-but-unmapped region > :data:`_DEFAULT_LOCAL_PREFIX`.
+
+        The env/explicit value is canonicalized through :class:`StoragePath` (trailing
+        ``/`` stripped, interior ``//`` collapsed) so downstream joins never double the
+        separator (#6904).
         """
         env_prefix = os.environ.get(_MARIN_PREFIX_ENV)
         if env_prefix:
-            return env_prefix
+            return StoragePath.normalize(env_prefix)
         if self.root is not None:
-            return self.root
+            return StoragePath.normalize(self.root)
         region = region_from_metadata()
         if region is not None:
             spec = self.region_buckets.get(region)
@@ -328,6 +332,93 @@ def marin_region() -> str | None:
 def marin_prefix() -> str:
     """Return the active cluster's storage prefix (``data_config().resolved_root()``)."""
     return data_config().resolved_root()
+
+
+def _key_segments(key: str) -> tuple[str, ...]:
+    return tuple(part for part in key.split("/") if part)
+
+
+@dataclasses.dataclass(frozen=True)
+class StoragePath:
+    """A parsed storage location: URL scheme, authority, and key segments.
+
+    Object-store keys are not normalized — a doubled ``/`` addresses a *different* key —
+    so joins here are structural: a segment never contains a separator, which makes a
+    doubled or trailing separator unrepresentable (#6904). ``parse`` -> ``str`` is
+    therefore canonicalizing (interior ``//`` collapsed, trailing ``/`` stripped), not
+    byte-preserving.
+
+    Paths at rest (configs, artifact records, CLI args) stay ``str``: parse at a
+    boundary, manipulate, and ``str()`` back out. See :func:`prefix_join` for the
+    single-join convenience.
+    """
+
+    scheme: str | None
+    """URL scheme (``gs``, ``s3``, ``mirror``), or ``None`` for a local path."""
+    netloc: str
+    """Bucket/authority; empty for an empty-authority scheme like ``mirror://``."""
+    segments: tuple[str, ...]
+    """Key segments; never empty strings."""
+    rooted: bool = True
+    """Whether a ``/`` precedes the key: a local path's absoluteness (``/tmp/x`` vs
+    ``rel/x``), or the empty-authority join convention (``file:///x`` vs ``mirror://x``).
+    Irrelevant when ``netloc`` is non-empty."""
+
+    @staticmethod
+    def parse(value: str) -> "StoragePath":
+        if "://" in value:
+            scheme, rest = value.split("://", 1)
+            netloc, sep, key = rest.partition("/")
+            # With an authority the key is always /-separated, so rooted is pinned True
+            # to keep value equality and relative_to independent of a trailing slash.
+            return StoragePath(
+                scheme=scheme, netloc=netloc, segments=_key_segments(key), rooted=bool(netloc) or bool(sep)
+            )
+        return StoragePath(scheme=None, netloc="", segments=_key_segments(value), rooted=value.startswith("/"))
+
+    @staticmethod
+    def normalize(value: str) -> str:
+        """``value`` in canonical single-separator form (``str(StoragePath.parse(value))``)."""
+        return str(StoragePath.parse(value))
+
+    def __truediv__(self, relative: str) -> "StoragePath":
+        if "://" in relative or relative.startswith("/"):
+            raise ValueError(f"cannot join non-relative path {relative!r} onto {self}")
+        return dataclasses.replace(self, segments=self.segments + _key_segments(relative))
+
+    def relative_to(self, base: "StoragePath") -> str:
+        """The ``/``-joined segments of this path under ``base``.
+
+        Structural containment — compares parsed segments, not string prefixes, so a
+        doubled separator on either side cannot fork the answer (#6838).
+        """
+        same_root = (self.scheme, self.netloc, self.rooted) == (base.scheme, base.netloc, base.rooted)
+        if not same_root or self.segments[: len(base.segments)] != base.segments:
+            raise ValueError(f"{self} is not under {base}")
+        return "/".join(self.segments[len(base.segments) :])
+
+    def __str__(self) -> str:
+        key = "/".join(self.segments)
+        if self.scheme is None:
+            return f"/{key}" if self.rooted else key
+        root = f"{self.scheme}://{self.netloc}"
+        if not key:
+            return root
+        if self.netloc or self.rooted:
+            return f"{root}/{key}"
+        return f"{root}{key}"
+
+
+def prefix_join(prefix: str, relative: str) -> str:
+    """Join a relative path onto a storage prefix with exactly one ``/`` separator.
+
+    Object-store keys are not normalized: a naive ``f"{prefix}/{relative}"`` join of a
+    trailing-slash prefix produces a doubled separator — a *different* key — silently
+    splitting writers from slash-collapsing readers (#6904). ``str``-in/``str``-out
+    convenience over :class:`StoragePath` for a single join; parse once and use ``/``
+    for repeated manipulation.
+    """
+    return str(StoragePath.parse(prefix) / relative)
 
 
 @functools.cache

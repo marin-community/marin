@@ -55,6 +55,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 180
     env:
+      # No trailing slash: object-store keys are not normalized, so a doubled
+      # separator after a path join addresses a different key (#6904).
+      MARIN_PREFIX: s3://marin-na/marin
       RUN_ID: canary-gpu-${{ github.run_id }}-${{ github.run_attempt }}
       CANARY_ACCELERATOR: gpu
       CANARY_ATTENTION_IMPLEMENTATION: ${{ github.event_name == 'workflow_dispatch' && inputs.attention_implementation || 'gpu_fa4_cute' }}
@@ -130,7 +133,7 @@ jobs:
           JOB_ID=$(.venv/bin/iris --config="$IRIS_CONFIG" \
             job run --no-wait \
             --memory=2G --disk=4G --cpu=1 --extra=cpu \
-            -e MARIN_PREFIX s3://marin-na/marin/ \
+            -e MARIN_PREFIX "$MARIN_PREFIX" \
             -e RUN_ID "$RUN_ID" \
             -e CANARY_ACCELERATOR "$CANARY_ACCELERATOR" \
             -e CANARY_ATTENTION_IMPLEMENTATION "$CANARY_ATTENTION_IMPLEMENTATION" \
@@ -177,7 +180,6 @@ jobs:
         shell: bash -l {0}
         run: .venv/bin/python scripts/ci/validate_canary_metrics.py
         env:
-          MARIN_PREFIX: s3://marin-na/marin/
           AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           AWS_ENDPOINT_URL: https://74981a43be0de7712369306c7b19133d.r2.cloudflarestorage.com

@@ -18,7 +18,7 @@ from pathlib import Path
 
 import uvicorn
 from finelog.client import RemoteLogHandler
-from rigging.server_auth import RequestAuthPolicy, TokenVerifier
+from rigging.server_auth import TokenVerifier
 from rigging.timing import Duration, ExponentialBackoff, RateLimiter, Timestamp, TokenBucket
 from sqlalchemy import Row
 
@@ -26,7 +26,7 @@ from iris.cluster.bundle import BundleStore
 from iris.cluster.config import BackendConfig, ClusterFinelogConfig, PeerConfig
 from iris.cluster.controller import ops, reads, writes
 from iris.cluster.controller.audit_logging import log_event
-from iris.cluster.controller.auth import ControllerAuth
+from iris.cluster.controller.auth import ControllerAuth, request_auth_policy
 from iris.cluster.controller.autoscaler.persistence import persist_autoscaler_state
 from iris.cluster.controller.backend import (
     AutoscaleRequest,
@@ -465,11 +465,7 @@ class Controller:
             host=config.host,
             port=config.port,
             auth_provider=config.auth_provider,
-            auth_policy=RequestAuthPolicy.from_verifiers(
-                verifier=config.auth_verifier,
-                optional=config.auth.optional if config.auth else False,
-                iap_assertion_verifier=config.auth.iap_assertion_verifier if config.auth else None,
-            ),
+            auth_policy=request_auth_policy(config.auth),
         )
 
         # Wakes the control-tick driver. A submit triggers a schedule-only

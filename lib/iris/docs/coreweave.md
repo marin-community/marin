@@ -142,6 +142,75 @@ Key architectural properties:
 - **Public images**: All images on `ghcr.io/marin-community/` are public. No
   `imagePullSecrets` required.
 
+### Off-cluster endpoint access (exposing only `/proxy`)
+
+The controller Service is `ClusterIP:10000` — reachable only in-cluster or via a
+`kubectl port-forward`. To let an off-cluster caller (e.g. a Daytona/Modal sandbox
+running an agent harness) reach a registered endpoint through the controller
+proxy, `start_controller` publishes only the `/proxy` path with an Ingress — it
+is part of controller setup, not a manual step. Unlike the GCP arm there is no
+IAP layer, so the controller's own per-endpoint auth is the sole gate: register
+the endpoint `PRIVATE` (a cluster identity / JWT), `PUBLIC` (open), or `BEARER`
+(a scoped endpoint token) — the same access modes as the GCP path. Keep
+`auth.provider` set (never null-auth) so `PRIVATE`/`BEARER` are actually enforced.
+
+CKS ships no ingress controller and no TLS issuer, so two cluster-wide,
+install-once prerequisites must be in place first — install them with
+`scripts/install_traefik_proxy.py` (operator-run; dry-run without `--apply`):
+
+```bash
+# Traefik (CoreWeave's blessed ingress controller) + cert-manager + HTTP-01 issuers.
+uv run lib/iris/scripts/install_traefik_proxy.py --cluster <name> install --acme-email you@oa.dev --apply
+# Tear it back down (releases, namespaces, CRDs/webhooks/RBAC/IngressClass), verified:
+uv run lib/iris/scripts/install_traefik_proxy.py --cluster <name> uninstall --apply
+```
+
+Then configure the controller's `coreweave` block. `start_controller` reconciles
+(idempotently, on every start) a path-restricted `iris-controller-proxy` Ingress
+that keeps the dashboard and RPC surface cluster-internal and publishes just
+`/proxy`; cert-manager auto-issues the TLS cert into `tls_secret`:
+
+```yaml
+controller:
+  coreweave:
+    scale_group: cpu
+    # Publish only /proxy off-cluster. Empty host = ClusterIP only (no ingress).
+    public_proxy_host: iris-cw.oa.dev
+    ingress_class: traefik                    # CoreWeave's blessed controller
+    tls_secret: iris-controller-proxy-tls
+    cluster_issuer: letsencrypt-http01-prod   # cert-manager auto-issues into tls_secret
+```
+
+`start_controller` warns (never fails) if the `IngressClass` is absent — the
+Ingress is applied anyway and starts serving once Traefik is present. A plain
+`type: LoadBalancer` Service on the controller port would be simpler but exposes
+the whole origin (RPC surface included, JWT-gated only); the path-restricted
+Ingress keeps only `/proxy` public.
+
+#### External address and DNS (`oa.dev` → `coreweave.app`)
+
+The external address is served by Traefik's LoadBalancer, not the controller
+Pod, and CoreWeave gives it a stable FQDN under `*.coreweave.app` — you never
+chase a churning IP. `install_traefik_proxy.py install --apply` prints the exact
+CNAME record to create (`<public_proxy_host>  CNAME  <that FQDN>`); `oa.dev` DNS
+is at Namecheap, Advanced DNS panel.
+
+Three values must agree: this CNAME, `public_proxy_host` (the Ingress `host` /
+Host header clients send), and the cluster's `dashboard_url` (so `marin-serve`'s
+printed off-cluster URLs + the `BEARER` token are usable as-is). The
+`coreweave.app` name is only a stable CNAME target — all routing, Host matching,
+and TLS are on the `oa.dev` name.
+
+TLS terminates in-cluster (no IAP/edge layer; Namecheap doesn't proxy TLS).
+`install_traefik_proxy.py` creates HTTP-01 Let's Encrypt ClusterIssuers
+(`letsencrypt-http01-staging`, `letsencrypt-http01-prod`) validated through
+Traefik — CoreWeave's bundled issuers only cover `*.coreweave.app` (DNS-01 via
+`acme.coreweave.com`), so a custom `oa.dev` host needs these. Note: HTTP-01 needs
+the CNAME live first (Let's Encrypt fetches `http://<host>/.well-known/...`);
+issue with `letsencrypt-http01-staging` first to avoid LE rate limits, then flip
+`cluster_issuer` to prod. Leave `tls_secret`/`cluster_issuer` empty for plain
+HTTP (dev only).
+
 ## 3. Tools
 
 ### CoreWeave Intelligent CLI (`cwic`)

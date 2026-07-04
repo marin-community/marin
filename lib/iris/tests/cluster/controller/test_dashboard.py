@@ -1436,7 +1436,7 @@ def test_auth_config_returns_enabled_when_verifier_set(service):
     dashboard = ControllerDashboard(
         service,
         auth_provider="gcp",
-        auth_policy=RequestAuthPolicy.from_verifiers(verifier=verifier),
+        auth_policy=RequestAuthPolicy.enforcing(verifier=verifier),
     )
     authed_client = TestClient(dashboard.app)
 

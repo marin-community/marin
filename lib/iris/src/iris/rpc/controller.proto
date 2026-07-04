@@ -367,12 +367,22 @@ message Controller {
 
   // --- Endpoint Registry ---
   // Endpoints are registered with prefixed names: "{root_job_id}/{actor_name}"
+
+  // Who may reach an endpoint through the controller's /proxy route.
+  // PRIVATE is the zero value, so an unset field means PRIVATE.
+  enum EndpointAccess {
+    ENDPOINT_ACCESS_PRIVATE = 0;  // a full cluster identity is required (the default)
+    ENDPOINT_ACCESS_PUBLIC = 1;   // no auth on /proxy/<name>/*
+    ENDPOINT_ACCESS_BEARER = 2;   // a scoped endpoint token (or a full cluster identity)
+  }
+
   message Endpoint {
     string endpoint_id = 1;
     string name = 2;                 // Full prefixed name: "abc123/my-actor"
     string address = 3;              // host:port
     string task_id = 4;              // Wire-format task ID (e.g. "/user/job/0")
     map<string, string> metadata = 5;
+    EndpointAccess access = 6;       // Proxy access mode.
   }
 
   message RegisterEndpointRequest {
@@ -386,6 +396,21 @@ message Controller {
     // the server default. The server clamps it to its own [min, max] bounds and
     // returns the granted value in RegisterEndpointResponse.lease_duration.
     iris.time.Duration lease_duration = 7;
+    EndpointAccess access = 8;       // Proxy access mode.
+  }
+
+  // Mint a scoped bearer token authorizing only this endpoint's /proxy path.
+  // Signed by the controller's JWT key with a deadline; carries no RPC authority
+  // (see rpc/auth.py::authorize_method). Only the endpoint's owning user or an
+  // admin may mint.
+  message MintEndpointTokenRequest {
+    string endpoint_name = 1;        // Wire name, e.g. "/serve/foo"
+    iris.time.Duration ttl = 2;      // Token lifetime; unset selects the server default, clamped to a max.
+  }
+
+  message MintEndpointTokenResponse {
+    string token = 1;
+    iris.time.Timestamp expires_at = 2;
   }
 
   message RegisterEndpointResponse {
@@ -730,6 +755,8 @@ service ControllerService {
   rpc RegisterEndpoint(Controller.RegisterEndpointRequest) returns (Controller.RegisterEndpointResponse);
   rpc UnregisterEndpoint(Controller.UnregisterEndpointRequest) returns (iris.job.Empty);
   rpc ListEndpoints(Controller.ListEndpointsRequest) returns (Controller.ListEndpointsResponse);
+  // Mint a scoped bearer token for one endpoint's /proxy path (owner/admin only).
+  rpc MintEndpointToken(Controller.MintEndpointTokenRequest) returns (Controller.MintEndpointTokenResponse);
 
   // Autoscaler
   rpc GetAutoscalerStatus(Controller.GetAutoscalerStatusRequest) returns (Controller.GetAutoscalerStatusResponse);

@@ -14,7 +14,7 @@ from dataclasses import dataclass
 import pytest
 from fray.types import ResourceConfig
 from marin.execution.artifact import Artifact, ArtifactTypeMismatchError
-from marin.execution.lazy import OUT, ArtifactStep, StepContext, apply, materialized_config, resolve, run
+from marin.execution.lazy import OUT, ArtifactStep, StepContext, apply, lower, materialized_config, resolve, run
 from marin.execution.remote import remote
 
 # --- Toy configs/fns standing in for tokenize + train --------------------------
@@ -96,6 +96,25 @@ def test_explicit_version_paths_and_cross_step_resolution():
     assert train_cfg.out == "gs://marin-spike/checkpoints/dclm_1b/2026.06.28"
     # The hard part: the consumer's config resolves to the producer's output path.
     assert train_cfg.data == tokens_cfg.out
+
+
+def test_trailing_slash_prefix_writer_and_reader_agree(monkeypatch):
+    """Regression for marin-community/marin#6904: with a trailing-slash ``MARIN_PREFIX``
+    the lowered step wrote to ``…marin//name/version`` while consumers resolved
+    ``…marin/name/version`` — a different object-store key, so the reader found no record."""
+    monkeypatch.setenv("MARIN_PREFIX", "s3://marin-na/marin/")
+    handle = dclm_tokens()
+    spec = lower(handle)
+    assert spec.output_path == handle.path()
+    assert spec.output_path == "s3://marin-na/marin/datasets/dclm_tokens/2026.06.25"
+
+
+def test_trailing_slash_prefix_resolves_relative_pin(monkeypatch):
+    """Same invariant for a relatively pinned handle (the ``override_path`` branch)."""
+    monkeypatch.setenv("MARIN_PREFIX", "s3://marin-na/marin/")
+    pinned = apply("data/pinned", _stage, version="2026.06.28", pin="pinned/loc", output_path=OUT)
+    assert lower(pinned).output_path == pinned.path()
+    assert pinned.path() == "s3://marin-na/marin/pinned/loc"
 
 
 def test_fingerprint_is_prefix_independent_but_drift_sensitive():

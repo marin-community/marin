@@ -15,6 +15,7 @@ dependencies = [
     "pyyaml>=6.0",
     "requests>=2.0.0",
     "s3fs>=2024.0.0",
+    "starlette>=0.40",
 ]
 
 [project.optional-dependencies]
