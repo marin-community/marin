@@ -6,13 +6,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Literal, TypeAlias
+from typing import Callable, Literal, TypeAlias
 
 import jax
 import jax.numpy as jnp
 import numpy as np
 from jax.sharding import Mesh
-from jaxtyping import Array, Float, Int
+from jaxtyping import Array, Bool, Float, Int
 
 from levanter.grug._moe.source_push_forward import (
     FORWARD_EXECUTION_STAGED_HOST_SYNC,
@@ -49,6 +49,10 @@ class SourcePushMlpRouteTable:
     destination_rank: Int[Array, "R"]
     local_expert: Int[Array, "R"]
     expert_row: Int[Array, "R"]
+    source_rank_by_expert: Int[Array, "Dst E C"]
+    token_id_by_expert: Int[Array, "Dst E C"]
+    route_slot_by_expert: Int[Array, "Dst E C"]
+    valid_by_expert: Bool[Array, "Dst E C"]
     ep_size: int = field(metadata={"static": True})
     experts_per_rank: int = field(metadata={"static": True})
     tokens_per_source: int = field(metadata={"static": True})
@@ -124,6 +128,19 @@ def source_push_mlp_route_table_from_plan(
                     row_list.append(base_row + row)
 
     expert_capacity = max(row_list) + 1 if row_list else 0
+    source_rank_by_expert = np.full((ep_size, experts_per_rank, expert_capacity), -1, dtype=np.int32)
+    token_id_by_expert = np.full_like(source_rank_by_expert, -1)
+    route_slot_by_expert = np.full_like(source_rank_by_expert, -1)
+    valid_by_expert = np.zeros_like(source_rank_by_expert, dtype=np.bool_)
+    for route in range(len(source_ranks)):
+        dst = destination_ranks[route]
+        expert = expert_list[route]
+        row = row_list[route]
+        source_rank_by_expert[dst, expert, row] = source_ranks[route]
+        token_id_by_expert[dst, expert, row] = token_list[route]
+        route_slot_by_expert[dst, expert, row] = slot_list[route]
+        valid_by_expert[dst, expert, row] = True
+
     return SourcePushMlpRouteTable(
         source_rank=jnp.asarray(source_ranks, dtype=jnp.int32),
         token_id=jnp.asarray(token_list, dtype=jnp.int32),
@@ -131,6 +148,10 @@ def source_push_mlp_route_table_from_plan(
         destination_rank=jnp.asarray(destination_ranks, dtype=jnp.int32),
         local_expert=jnp.asarray(expert_list, dtype=jnp.int32),
         expert_row=jnp.asarray(row_list, dtype=jnp.int32),
+        source_rank_by_expert=jnp.asarray(source_rank_by_expert, dtype=jnp.int32),
+        token_id_by_expert=jnp.asarray(token_id_by_expert, dtype=jnp.int32),
+        route_slot_by_expert=jnp.asarray(route_slot_by_expert, dtype=jnp.int32),
+        valid_by_expert=jnp.asarray(valid_by_expert, dtype=jnp.bool_),
         ep_size=ep_size,
         experts_per_rank=experts_per_rank,
         tokens_per_source=plan.tokens_per_source,
@@ -525,12 +546,15 @@ def _source_push_moe_mlp_backward_from_h(
     Float[Array, "S E D twoI"],
     Float[Array, "S E I D"],
 ]:
-    dst = route_table.destination_rank
-    expert = route_table.local_expert
-    row = route_table.expert_row
-    h_rows = h.at[dst, expert, row].get(out_sharding=_source_push_out_sharding(None, None))
-    h_rows = h_rows.astype(jnp.float32)
-    return _source_push_moe_mlp_backward_from_h_rows(route_table, x, route_weights, w13, w2, h_rows, dy)
+    return _source_push_moe_mlp_backward_by_expert(
+        route_table,
+        x,
+        route_weights,
+        w13,
+        w2,
+        dy,
+        lambda expert: h[:, expert],
+    )
 
 
 def _source_push_moe_mlp_backward_from_h_flat(
@@ -548,105 +572,93 @@ def _source_push_moe_mlp_backward_from_h_flat(
     Float[Array, "S E D twoI"],
     Float[Array, "S E I D"],
 ]:
-    dst = route_table.destination_rank
-    expert = route_table.local_expert
-    base_row = expert_base.at[dst, expert].get(out_sharding=_source_push_out_sharding(None))
-    flat_row = base_row + route_table.expert_row
-    h_rows = h_flat.at[dst, flat_row].get(out_sharding=_source_push_out_sharding(None, None))
-    h_rows = h_rows.astype(jnp.float32)
-    return _source_push_moe_mlp_backward_from_h_rows(route_table, x, route_weights, w13, w2, h_rows, dy)
+    expert_base = jnp.asarray(expert_base, dtype=jnp.int32)
+    dst_index = jnp.arange(route_table.ep_size, dtype=jnp.int32)[:, None]
+    row_offsets = jnp.arange(route_table.expert_capacity, dtype=jnp.int32)[None, :]
+
+    def h_for_expert(expert: int) -> Float[Array, "Dst C twoI"]:
+        base_row = expert_base[:, expert][:, None]
+        flat_row = base_row + row_offsets
+        return h_flat.at[dst_index, flat_row].get(
+            mode="fill",
+            fill_value=0,
+            out_sharding=_source_push_out_sharding(SOURCE_PUSH_MESH_AXIS, None, None),
+        )
+
+    return _source_push_moe_mlp_backward_by_expert(route_table, x, route_weights, w13, w2, dy, h_for_expert)
 
 
-def _source_push_moe_mlp_backward_from_h_rows(
+def _source_push_moe_mlp_backward_by_expert(
     route_table: SourcePushMlpRouteTable,
     x: Float[Array, "S T D"],
     route_weights: Float[Array, "S T K"],
     w13: Float[Array, "S E D twoI"],
     w2: Float[Array, "S E I D"],
-    h_rows: Float[Array, "R twoI"],
     dy: Float[Array, "S T D"],
+    h_for_expert: Callable[[int], Float[Array, "Dst C twoI"]],
 ) -> tuple[
     Float[Array, "S T D"],
     Float[Array, "S T K"],
     Float[Array, "S E D twoI"],
     Float[Array, "S E I D"],
 ]:
-    src = route_table.source_rank
-    token = route_table.token_id
-    slot = route_table.route_slot
-    dst = route_table.destination_rank
-    expert = route_table.local_expert
-    row = route_table.expert_row
+    dx = jnp.zeros_like(x, dtype=jnp.float32)
+    d_route_weights = jnp.zeros_like(route_weights, dtype=jnp.float32)
+    dw13 = jnp.zeros_like(w13, dtype=jnp.float32)
+    dw2 = jnp.zeros_like(w2, dtype=jnp.float32)
 
-    intermediate_dim = h_rows.shape[-1] // 2
-    block_shape = (route_table.ep_size, route_table.experts_per_rank, route_table.expert_capacity)
-    block_sharding = _source_push_out_sharding(SOURCE_PUSH_MESH_AXIS, None, None, None)
-    scalar_block_sharding = _source_push_out_sharding(SOURCE_PUSH_MESH_AXIS, None, None)
+    for expert in range(route_table.experts_per_rank):
+        valid = route_table.valid_by_expert[:, expert]
+        safe_src = jnp.maximum(route_table.source_rank_by_expert[:, expert], 0)
+        safe_token = jnp.maximum(route_table.token_id_by_expert[:, expert], 0)
+        safe_slot = jnp.maximum(route_table.route_slot_by_expert[:, expert], 0)
+        valid_f = valid.astype(jnp.float32)
 
-    h_blocks = (
-        jnp.zeros((*block_shape, h_rows.shape[-1]), dtype=jnp.float32)
-        .at[dst, expert, row]
-        .set(h_rows.astype(jnp.float32), out_sharding=block_sharding)
-    )
-    gate = h_blocks[..., :intermediate_dim]
-    up = h_blocks[..., intermediate_dim:]
-    silu_gate = jax.nn.silu(gate)
-    activation = silu_gate * up
-    weights = route_weights.at[src, token, slot].get(out_sharding=_source_push_out_sharding(None))
-    weights = weights.astype(jnp.float32)
-    weight_blocks = (
-        jnp.zeros(block_shape, dtype=jnp.float32).at[dst, expert, row].set(weights, out_sharding=scalar_block_sharding)
-    )
-    weighted_activation = activation * weight_blocks[..., None]
+        h_block = h_for_expert(expert).astype(jnp.float32) * valid_f[..., None]
+        intermediate_dim = h_block.shape[-1] // 2
+        gate = h_block[..., :intermediate_dim]
+        up = h_block[..., intermediate_dim:]
+        silu_gate = jax.nn.silu(gate)
+        activation = silu_gate * up
 
-    dy_rows = dy.at[src, token].get(out_sharding=_source_push_out_sharding(None, None))
-    dy_rows = dy_rows.astype(jnp.float32)
-    dy_blocks = (
-        jnp.zeros((*block_shape, dy.shape[-1]), dtype=jnp.float32)
-        .at[dst, expert, row]
-        .set(dy_rows, out_sharding=block_sharding)
-    )
-    w2_blocks = w2.astype(jnp.float32)
-    d_weighted_activation = jnp.einsum("secd,seid->seci", dy_blocks, w2_blocks)
-    d_route_blocks = jnp.sum(d_weighted_activation * activation, axis=-1)
-    d_route_rows = d_route_blocks.at[dst, expert, row].get(out_sharding=_source_push_out_sharding(None))
-    d_activation = d_weighted_activation * weight_blocks[..., None]
+        weights = route_weights.at[safe_src, safe_token, safe_slot].get(
+            out_sharding=_source_push_out_sharding(SOURCE_PUSH_MESH_AXIS, None)
+        )
+        weights = weights.astype(jnp.float32) * valid_f
+        weighted_activation = activation * weights[..., None]
 
-    sigmoid_gate = jax.nn.sigmoid(gate)
-    d_silu = sigmoid_gate * (1.0 + gate * (1.0 - sigmoid_gate))
-    d_gate = d_activation * up * d_silu
-    d_up = d_activation * silu_gate
-    d_h_blocks = jnp.concatenate([d_gate, d_up], axis=-1)
+        dy_block = dy.at[safe_src, safe_token].get(
+            out_sharding=_source_push_out_sharding(SOURCE_PUSH_MESH_AXIS, None, None)
+        )
+        dy_block = dy_block.astype(jnp.float32) * valid_f[..., None]
+        w2_block = w2[:, expert].astype(jnp.float32)
+        d_weighted_activation = jnp.einsum("scd,sid->sci", dy_block, w2_block)
+        d_route_block = jnp.sum(d_weighted_activation * activation, axis=-1) * valid_f
+        d_activation = d_weighted_activation * weights[..., None]
 
-    x_rows = x.at[src, token].get(out_sharding=_source_push_out_sharding(None, None))
-    x_rows = x_rows.astype(jnp.float32)
-    x_blocks = (
-        jnp.zeros((*block_shape, x.shape[-1]), dtype=jnp.float32)
-        .at[dst, expert, row]
-        .set(x_rows, out_sharding=block_sharding)
-    )
-    w13_blocks = w13.astype(jnp.float32)
-    dx_blocks = jnp.einsum("seco,sedo->secd", d_h_blocks, w13_blocks)
-    dx_rows = dx_blocks.at[dst, expert, row].get(out_sharding=_source_push_out_sharding(None, None))
-    dw13 = jnp.einsum("secd,seco->sedo", x_blocks, d_h_blocks)
-    dw2 = jnp.einsum("seci,secd->seid", weighted_activation, dy_blocks)
+        sigmoid_gate = jax.nn.sigmoid(gate)
+        d_silu = sigmoid_gate * (1.0 + gate * (1.0 - sigmoid_gate))
+        d_gate = d_activation * up * d_silu
+        d_up = d_activation * silu_gate
+        d_h_block = jnp.concatenate([d_gate, d_up], axis=-1)
 
-    dx = (
-        jnp.zeros_like(x, dtype=jnp.float32)
-        .at[src, token]
-        .add(
-            dx_rows,
+        x_block = x.at[safe_src, safe_token].get(
+            out_sharding=_source_push_out_sharding(SOURCE_PUSH_MESH_AXIS, None, None)
+        )
+        x_block = x_block.astype(jnp.float32) * valid_f[..., None]
+        w13_block = w13[:, expert].astype(jnp.float32)
+        dx_block = jnp.einsum("sco,sdo->scd", d_h_block, w13_block)
+        dx = dx.at[safe_src, safe_token].add(
+            dx_block,
             out_sharding=_source_push_out_sharding(SOURCE_PUSH_MESH_AXIS, None, None),
         )
-    )
-    d_route_weights = (
-        jnp.zeros_like(route_weights, dtype=jnp.float32)
-        .at[src, token, slot]
-        .add(
-            d_route_rows,
+        d_route_weights = d_route_weights.at[safe_src, safe_token, safe_slot].add(
+            d_route_block,
             out_sharding=_source_push_out_sharding(SOURCE_PUSH_MESH_AXIS, None, None),
         )
-    )
+        dw13 = dw13.at[:, expert].set(jnp.einsum("scd,sco->sdo", x_block, d_h_block))
+        dw2 = dw2.at[:, expert].set(jnp.einsum("sci,scd->sid", weighted_activation, dy_block))
+
     return (
         dx.astype(x.dtype),
         d_route_weights.astype(route_weights.dtype),
