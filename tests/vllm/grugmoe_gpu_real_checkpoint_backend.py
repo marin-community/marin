@@ -83,6 +83,8 @@ LEVANTER_EXPERT_AXIS_SIZE_ENV = "MARIN_GRUGMOE_LEVANTER_EXPERT_AXIS_SIZE"
 LEVANTER_DEFAULT_EXPERT_AXIS_SIZE = EXPECTED_GPU_COUNT
 LEVANTER_PROMPT_SWEEP_ENV = "MARIN_GRUGMOE_LEVANTER_PROMPT_SWEEP"
 LEVANTER_DEFAULT_PROMPT_SWEEP = False
+LEVANTER_ROUTE_DIAGNOSTICS_ENV = "MARIN_GRUGMOE_LEVANTER_ROUTE_DIAGNOSTICS"
+LEVANTER_DEFAULT_ROUTE_DIAGNOSTICS = True
 RUN_ID_ENV = "MARIN_GRUGMOE_GPU_E2E_RUN_ID"
 OUTPUT_DIR_ENV = "MARIN_GRUGMOE_GPU_E2E_OUTPUT_DIR"
 INSTALL_REPORT_PATH_ENV = "MARIN_GRUGMOE_GPU_E2E_INSTALL_REPORT_PATH"
@@ -214,6 +216,10 @@ LEVANTER_EXPERT_AXIS_SIZE = _resolve_levanter_expert_axis_size()
 LEVANTER_PROMPT_SWEEP = _resolve_bool_env(
     LEVANTER_PROMPT_SWEEP_ENV,
     default=LEVANTER_DEFAULT_PROMPT_SWEEP,
+)
+LEVANTER_ROUTE_DIAGNOSTICS = _resolve_bool_env(
+    LEVANTER_ROUTE_DIAGNOSTICS_ENV,
+    default=LEVANTER_DEFAULT_ROUTE_DIAGNOSTICS,
 )
 
 
@@ -1696,6 +1702,7 @@ def _greedy_decode_with_diagnostics(
     decode_seq_len: int,
     pad_token_id: int,
     use_active_prefix: bool = False,
+    collect_route_diagnostics: bool = True,
 ) -> dict[str, Any]:
     import jax  # noqa: PLC0415
     import jax.numpy as jnp  # noqa: PLC0415
@@ -1726,7 +1733,7 @@ def _greedy_decode_with_diagnostics(
         active_seq_len = len(prompt_ids) + step_index
         position = jnp.asarray(active_seq_len - 1, dtype=jnp.int32)
         step_token_ids_array = token_ids_array[:, :active_seq_len] if use_active_prefix else token_ids_array
-        if step_index < DIAGNOSTIC_ROUTE_STEPS:
+        if collect_route_diagnostics and step_index < DIAGNOSTIC_ROUTE_STEPS:
             route_diagnostics.append(
                 {
                     "generated_token_index": step_index,
@@ -1776,6 +1783,7 @@ def _greedy_decode_with_diagnostics(
         "decode_batch_size": batch_size,
         "decode_seq_len": decode_seq_len,
         "use_active_prefix": use_active_prefix,
+        "route_diagnostics_enabled": collect_route_diagnostics,
         "active_seq_lengths": active_seq_lengths,
         "pad_token_id": pad_token_id,
         "generated_token_ids": generated_ids,
@@ -1802,6 +1810,7 @@ def _run_levanter_prompt_sweep(
     decode_seq_len: int,
     pad_token_id: int,
     use_active_prefix: bool,
+    collect_route_diagnostics: bool,
 ) -> list[dict[str, Any]]:
     results: list[dict[str, Any]] = []
     for prompt_index, prompt in enumerate(prompts):
@@ -1815,6 +1824,7 @@ def _run_levanter_prompt_sweep(
             decode_seq_len=decode_seq_len,
             pad_token_id=pad_token_id,
             use_active_prefix=use_active_prefix,
+            collect_route_diagnostics=collect_route_diagnostics,
         )
         first_step_rows = decode_result["steps"][0]["rows"] if decode_result["steps"] else []
         top2_margins = [float(row["top2_margin"]) for row in first_step_rows if row.get("top2_margin") is not None]
@@ -2174,6 +2184,7 @@ def _levanter_backend(args: argparse.Namespace) -> None:
                 decode_seq_len=DECODE_SEQ_LEN,
                 pad_token_id=pad_token_id,
                 use_active_prefix=LEVANTER_DECODE_USE_ACTIVE_PREFIX,
+                collect_route_diagnostics=LEVANTER_ROUTE_DIAGNOSTICS,
             )
             decode_results.append(decode_result)
             batch_items = min(decode_batch_size, remaining)
@@ -2189,6 +2200,7 @@ def _levanter_backend(args: argparse.Namespace) -> None:
                 decode_seq_len=DECODE_SEQ_LEN,
                 pad_token_id=pad_token_id,
                 use_active_prefix=LEVANTER_DECODE_USE_ACTIVE_PREFIX,
+                collect_route_diagnostics=LEVANTER_ROUTE_DIAGNOSTICS,
             )
             if LEVANTER_PROMPT_SWEEP
             else []
@@ -2216,6 +2228,8 @@ def _levanter_backend(args: argparse.Namespace) -> None:
         "levanter_prompt_sweep": LEVANTER_PROMPT_SWEEP,
         "levanter_prompt_sweep_prompts": list(DIAGNOSTIC_PROMPT_SWEEP_PROMPTS),
         "levanter_prompt_sweep_results": prompt_sweep_results,
+        "levanter_route_diagnostics_env_var": LEVANTER_ROUTE_DIAGNOSTICS_ENV,
+        "levanter_route_diagnostics": LEVANTER_ROUTE_DIAGNOSTICS,
         "levanter_reference_mode_env_var": LEVANTER_REFERENCE_MODE_ENV,
         "levanter_reference_mode": LEVANTER_REFERENCE_MODE,
         "levanter_reference_policy": reference_policy,
