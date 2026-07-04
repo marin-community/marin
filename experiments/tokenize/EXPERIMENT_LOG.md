@@ -446,3 +446,56 @@ different regime. A tokenizer that is *both* superword *and* right-sized for our
   the deployment mix **does** extend the lever past off-the-shelf, but only at small vocab. Bracket
   ladders at 64k/96k are training now to locate the exact optimum. (t51k, 80k-t40k had a transient
   S3 PreconditionFailed eval flake on their 3rd points; relaunched clean.)
+
+## EXP-011 — 24h SOAK: lock down the tokenizer ranking at 10B/500M on a representative mixture _(running)_
+
+- **Goal**: confirm the proxy-scale ranking (SuperBPE ≫ Llama-3; vocab is the lever; digit/regex
+  pretokenizer variants; n-gram winner) at a *representative* model size on a *representative*
+  multi-domain mixture — the lock-down the user asked for. 8 arms, each a single 10B-total /
+  ~500M-active grug-moe run on **8 nodes / 64 H100 for 24h**.
+- **Model** (faithful downscale of the target 67B run `moe_67b_a2b_d2560…10T`, branch
+  `origin/june_tpu_67b_a2b`): hidden **2560**, **8** layers, **128** experts, top-**4**, i=i_s=1280,
+  GQA 20/5, **sw2k**, seq 4096. ≈524M active non-embed (≈688–852M w/ lm_head), ≈10.6–10.9B total.
+  Same width/expert/GQA/window as the target; depth cut to hit 500M active. Adam (constant across
+  arms; the target used MuonH — relative tokenizer ordering is robust to the optimizer).
+- **Data** — the target's actual data (datakit two-phase bucket mix) is **only available
+  pre-tokenized under one tokenizer and in us-central2**, so it cannot be re-tokenized per arm on
+  CoreWeave. Stand-in: a representative raw-text mixture, tokenized per arm, region-local:
+  SlimPajama-6B (web, 0.50) + codeparrot-clean-valid (Python, 0.20) + Wikipedia de/ru/zh
+  (multilingual, 0.20) + finemath-3plus (math, 0.10). Held-out BPB = uncheatable-eval subsets
+  (tokenizer-agnostic). Bounded sources → the mix repeats over 24h with an identical schedule
+  across arms, so relative BPB is unaffected (epoch count reported with results).
+- **The 8 arms** (tokenizer is the only variable; arm 8 also flips the model-side n-gram):
+
+  | # | arm | vocab | pretokenizer | ngram |
+  |---|-----|-------|--------------|-------|
+  | 1 | marin-128k (Llama-3) | 128k | Llama-3 BPE (incumbent) | — |
+  | 2 | soak-superbpe-64k | 64k | SuperBPE | — |
+  | 3 | soak-superbpe-128k | 128k | SuperBPE | — |
+  | 4 | soak-superbpe-64k-digits | 64k | SuperBPE + individual digits | — |
+  | 5 | soak-superbpe-128k-digits | 128k | SuperBPE + individual digits | — |
+  | 6 | soak-superbpe-64k-llama | 64k | Llama-3 word regex (superword st2) | — |
+  | 7 | soak-superbpe-128k-llama | 128k | Llama-3 word regex | — |
+  | 8 | soak-superbpe-64k + ngram | 64k | SuperBPE | 4M buckets, rank-128, 2-4, r0.25 |
+
+- **Reproduce**:
+  1. tokenizers (corpus→train→push, one cluster CPU job):
+     `iris --cluster=cw-rno2a job run --cpu 32 --memory 400GB --extra cpu --enable-extra-resources
+      -e MARIN_PREFIX s3://marin-us-east-02a/marin -- python -m experiments.tokenize.build_soak_tokenizers`
+  2. arm 1 (baseline, no trained tokenizer): `BAKEOFF_ARM=marin-128k … python -m
+     experiments.grug.moe.launch_tokenizer_soak` (SCALE_HIDDEN_DIM=2560 NUM_LAYERS=8 NUM_EXPERTS=128
+     TOP_K=4 GPU_REPLICAS=8 EXPERT_AXIS=8 BATCH=128 SEQ_LEN=4096 STEPS=100000 TRACKER=wandb).
+  3. arms 2–7: `scratchpad/launch_arms.sh 128`; arm 8 (ngram): `scratchpad/launch_arm8.sh 128`,
+     run after arm 2's tokenization exists (they share the soak-superbpe-64k tokenizer/caches).
+- **cw-rno2a NCCL gotcha**: the cluster's `defaults.task_env` pins `NCCL_SOCKET_IFNAME==enp90s0np0`,
+  whose `=` exact-match prefix this NCCL/XLA build ignores → multi-node bootstrap fails
+  ("no socket interface found" → clique-init "invalid usage" → JAX shutdown barrier). Workaround
+  baked into every launch: `-e NCCL_SOCKET_IFNAME "^ibs,ibp,lo,docker,veth,cilium,lxc"` (exclude
+  form, as in ci-coreweave-gpu-smoke). Tracked in issue #6940. BATCH=256 OOMs (a ~27.5 GiB
+  activation op on top of the ~22 GiB/device expert weights+Adam state); BATCH=128 fits.
+- **Replay / score**: pull each run's `eval/bpb` history from wandb (project `marin_moe`, group
+  `tokenizer-soak`) → per-arm (train_flops, BPB) curve → `bakeoff_analysis` feBPB with the same
+  serving-cost model as the proxy. Report raw BPB @ 24h, per-domain BPB (digit arms on math),
+  fertility, feBPB @ ρ=1 and serving-weighted.
+- **Status**: 6 soak tokenizers trained + pushed; 8 arms launched at 10B/500M on 8×8×H100 (arm 1
+  baseline, arms 2–7 trained-tokenizer variants, arm 8 = arm 2 + n-gram). Results pending (24h).
