@@ -54,7 +54,8 @@ improvement over the stock Llama-3 tokenizer** for target grug-moe models.
 
 | arm | feBPB | vs marin | lever |
 |---|---|---|---|
-| **trained-superbpe-40k-t20k** | **1.1560** | **−6.6%** | small-vocab superword (plateau) |
+| **trained-superbpe-64k-t32k + n-gram** | **1.1532** | **−6.8%** | small-vocab superword + n-gram |
+| trained-superbpe-40k-t20k | 1.1560 | −6.6% | small-vocab superword (plateau) |
 | trained-superbpe-64k-t32k | 1.1564 | −6.6% | small-vocab superword (plateau) |
 | trained-superbpe-48k-t24k | 1.1567 | −6.6% | small-vocab superword (plateau) |
 | trained-superbpe-80k-t40k + n-gram | 1.1584 | −6.4% | small-vocab superword + n-gram |
@@ -74,12 +75,13 @@ exactly offset by rising fertility (fewer bytes/token → costlier serving), so 
 plateau: plain gpt-neox BPE at a comparable 50k vocab is only −5.1%.
 
 **n-gram composition matrix** (feBPB the n-gram adds on each base tokenizer, ratio 0.25):
-marin +0.0% (washes out by s8000) · superbpe-128k **−0.5%** · gpt-neox-50k **−0.8%** · 80k-t40k
-**−0.3%**. The n-gram's incremental *shrinks* as the base tokenizer improves — it helps a plain BPE
-(gpt-neox −0.8%) more than a superword (80k-t40k −0.3%), because the superword pretokenizer already
-captures multi-token context the n-gram would otherwise supply (**the two levers are partially
-redundant**). Unlike on Llama-3, on every non-marin tokenizer the gain persists to the highest
-budget. Best composed arm: **80k-t40k + n-gram = −6.4%** — the best measured to date.
+marin +0.0% · superbpe-128k **−0.5%** · gpt-neox-50k **−0.8%** · 80k-t40k **−0.3%** · 64k-t32k
+**−0.2%**. The n-gram's contribution **concentrates at high training budget**: on the best tokenizer
+(64k) it is a *penalty* early from init noise (s1500/s3500 = 1.3417/1.1981 vs plain 1.3239/1.1955)
+but a clear win by s8000 (1.1045 vs 1.1141, **−0.86% BPB**) — and because feBPB reads a high-budget
+point on the fitted curve, that s8000 gain lands as **−0.2% feBPB**. So the n-gram is a *late-budget*
+lever that survives even on the strongest tokenizer, not something the superword makes redundant.
+Best composed arm: **64k-t32k + n-gram = −6.8%** — the best measured.
 
 ## EXP-002 — isoFLOP tokenizer ladder (5 arms × 3 points)
 

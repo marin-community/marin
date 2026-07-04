@@ -524,6 +524,32 @@
      "fertility": 0.7482412847377448
     }
    }
+  },
+  {
+   "name": "trained-superbpe-64k-t32k-ngram",
+   "ref": "trained/trained-superbpe-64k-t32k",
+   "axis": "superbpe",
+   "vocab_size": 64001,
+   "fertility_overall": 0.3946419568817455,
+   "total_tokens": 4749203,
+   "total_bytes": 12034207,
+   "by_domain": {
+    "english_web": {
+     "tokens": 750049,
+     "bytes": 4001234,
+     "fertility": 0.18745442031133394
+    },
+    "math": {
+     "tokens": 1398610,
+     "bytes": 4004322,
+     "fertility": 0.3492751082455407
+    },
+    "multilingual_zh": {
+     "tokens": 2600544,
+     "bytes": 4028651,
+     "fertility": 0.645512356369415
+    }
+   }
   }
  ]
 }

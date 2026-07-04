@@ -15,12 +15,12 @@ more training budget. Best arms, vs stock Llama-3 (marin-128k, feBPB 1.2376):
 
 | rank | arm | feBPB | vs Llama-3 |
 |---|---|---|---|
-| 1 | **trained-superbpe-64k-t32k** | **1.1564** | **−6.6%** |
-| 2 | trained-superbpe-80k-t40k + n-gram | 1.1584 | −6.4% |
-| 3 | trained-superbpe-80k-t40k | 1.1621 | −6.1% |
-| 4 | gpt-neox-50k + n-gram | 1.1651 | −5.9% |
-| 5 | superbpe-128k + n-gram | 1.1733 | −5.2% |
-| 6 | gpt-neox-50k | 1.1745 | −5.1% |
+| 1 | **trained-superbpe-64k-t32k + n-gram** | **1.1532** | **−6.8%** |
+| 2 | trained-superbpe-40k-t20k | 1.1560 | −6.6% |
+| 3 | trained-superbpe-64k-t32k | 1.1564 | −6.6% |
+| 4 | trained-superbpe-48k-t24k | 1.1567 | −6.6% |
+| 5 | trained-superbpe-80k-t40k + n-gram | 1.1584 | −6.4% |
+| 6 | trained-superbpe-80k-t40k | 1.1621 | −6.1% |
 | 7 | superbpe-128k (off-the-shelf) | 1.1794 | −4.7% |
 
 **The winning lever is a small-vocab superword tokenizer trained on our own mix.** A ~40–64k
@@ -30,18 +30,19 @@ lower BPB), and the SuperBPE superword pretokenizer keeps fertility high enough 
 serving-cost penalty is outweighed. feBPB falls as the trained vocab shrinks (128k → 80k → 64k) then
 **flattens into a plateau at ~40–64k, saturating at −6.6%** (40k / 48k / 64k tied within 0.0007) —
 below ~64k the smaller-model gain is exactly offset by rising fertility, so the tokenizer lever
-bottoms out here. Adding a hashed n-gram embedding on top buys ~0.3% (partially redundant with
-superword). **Best measured: −6.6% feBPB.**
+bottoms out here. Adding a hashed n-gram embedding on top buys a further ~0.2% — its value
+concentrates at high training budget (a penalty early, −0.86% BPB by the top of the ladder), which
+is exactly the budget feBPB scores at. **Best measured: −6.8% feBPB (64k + n-gram).**
 
 **On the 10% target.** The measured levers do not reach a 10% feBPB improvement at the flash-scale
 proxy, and we can now say *why* with a clear decomposition: off-the-shelf superword buys −4.7%;
 training our own and shrinking the vocab into the 40–64k plateau adds ~1.9% more (to −6.6%) and then
-**saturates** (below 64k the smaller-model gain is exactly cancelled by rising serving cost); the
-n-gram adds a further ~0.3% and its magnitude does **not** grow with model scale (§Axis D). The sum
-of the levers is a hard plateau near −6.6%, not 10%. Reaching 10% would need a lever we did not find
-at this scale — a genuinely scale-*growing* n-gram contribution (which the hidden-2048 ladder does
-not show), or an axis outside the tokenizer/embedding (architecture, data). Our honest
-recommendation is the ~40–64k trained SuperBPE as a safe, drop-in **−6.6%** win.
+**saturates** (below 64k the smaller-model gain is exactly cancelled by rising serving cost); a
+hashed n-gram embedding adds a further ~0.2% (a late-budget lever, not a scale-growing one — §Axis
+D). The levers sum to **−6.8%**, a hard plateau, not 10%. Reaching 10% would need a lever we did not
+find at this scale — a genuinely scale-*growing* n-gram contribution (which the hidden-2048 ladder
+does not show), or an axis outside the tokenizer/embedding (architecture, data). Our honest
+recommendation is the ~40–64k trained SuperBPE (+ optional n-gram) as a safe, drop-in **−6.8%** win.
 
 ## The rubric: FLOP-equivalent BPB (feBPB)
 
@@ -187,12 +188,13 @@ and strictly causal, and gated behind `BAKEOFF_NGRAM`.
    optimum). The training harness (`experiments/tokenize/{corpus,train_tokenizers,
    push_trained_tokenizers}.py`) is reproducible; the tokenizer loads by name through the existing
    `levanter.load_tokenizer` path.
-2. **Optionally add the hashed n-gram input embedding at ratio ~0.25** for a further ~0.3% at ~0
-   serving cost. Its magnitude does not grow with model scale in our ladder (its *sweet-spot budget*
-   shifts later), so treat it as a small bonus, not a scale-up bet — the plain tokenizer captures
-   almost all of the win.
+2. **Add the hashed n-gram input embedding at ratio ~0.25** for a further ~0.2% (−6.8% composed) at
+   ~0 serving cost. Its value is a *late-budget* effect — a penalty early, a −0.86% BPB win by the
+   top of the ladder — so it pays off precisely at the long training runs the target implies. It
+   does not, however, grow in magnitude with model *width*, so treat it as a modest bonus rather
+   than a scale-up bet.
 3. **10% is not reachable at proxy scale by tokenizer + n-gram.** The levers sum to a hard plateau
-   near −6.6%; closing to 10% needs an axis outside this study (architecture, data, or a
+   near −6.8%; closing to 10% needs an axis outside this study (architecture, data, or a
    scale-growing embedding the hidden-2048 ladder does not evidence).
 
 ## Reproduce
