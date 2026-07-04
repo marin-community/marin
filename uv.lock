@@ -4681,7 +4681,7 @@ requires-dist = [
     { name = "transformers", specifier = ">=5.5.3,<6.0" },
     { name = "triton", marker = "sys_platform == 'linux' and extra == 'gpu'", specifier = ">=3.6.0,<3.7" },
     { name = "verifiers", marker = "extra == 'rl'", specifier = "==0.1.5" },
-    { name = "vllm", marker = "extra == 'vllm'", git = "https://github.com/marin-community/vllm.git?rev=a4550dd098b0b6602022ce3a9c63d3e3b527f27c" },
+    { name = "vllm", marker = "extra == 'vllm'", git = "https://github.com/marin-community/vllm.git?rev=1fbcd84171388dd84838d7d445aca8486927df8a" },
     { name = "wandb", specifier = ">0.24.0" },
 ]
 provides-extras = ["gpu", "tpu", "cpu", "rl", "eval", "evalchemy", "vizier", "vllm", "harbor", "dedup", "datakit", "math"]
@@ -11257,8 +11257,8 @@ wheels = [
 
 [[package]]
 name = "vllm"
-version = "0.20.1rc1.dev1462+ga4550dd09.tpu"
-source = { git = "https://github.com/marin-community/vllm.git?rev=a4550dd098b0b6602022ce3a9c63d3e3b527f27c#a4550dd098b0b6602022ce3a9c63d3e3b527f27c" }
+version = "0.20.1rc1.dev1463+g1fbcd8417.tpu"
+source = { git = "https://github.com/marin-community/vllm.git?rev=1fbcd84171388dd84838d7d445aca8486927df8a#1fbcd84171388dd84838d7d445aca8486927df8a" }
 dependencies = [
     { name = "aiohttp" },
     { name = "anthropic" },

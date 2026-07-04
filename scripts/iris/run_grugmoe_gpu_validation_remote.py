@@ -19,7 +19,9 @@ import shlex
 import subprocess
 import sys
 import time
+import tomllib
 import uuid
+from collections import deque
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -105,10 +107,12 @@ def _run(
     log_path: Path,
     env: dict[str, str] | None = None,
     check: bool = True,
+    failure_tail_lines: int = 80,
 ) -> dict[str, Any]:
     started = time.time()
     log_path.parent.mkdir(parents=True, exist_ok=True)
-    print(f"+ {shlex.join(command)}", flush=True)
+    print(f"+ {shlex.join(command)}  # log: {log_path}", flush=True)
+    output_tail: deque[str] = deque(maxlen=failure_tail_lines)
     with log_path.open("w") as log_file:
         log_file.write(f"$ {shlex.join(command)}\n")
         process = subprocess.Popen(
@@ -122,7 +126,7 @@ def _run(
         )
         assert process.stdout is not None
         for line in process.stdout:
-            print(line, end="", flush=True)
+            output_tail.append(line)
             log_file.write(line)
         returncode = process.wait()
     elapsed = time.time() - started
@@ -134,7 +138,13 @@ def _run(
         "returncode": returncode,
         "elapsed_seconds": elapsed,
     }
+    status = "ok" if returncode == 0 else f"failed exit={returncode}"
+    print(f"{status}: {shlex.join(command)} ({elapsed:.1f}s, log: {log_path})", flush=True)
     if check and returncode != 0:
+        if output_tail:
+            print(f"last {len(output_tail)} lines from {log_path}:", file=sys.stderr, flush=True)
+            for line in output_tail:
+                print(line, end="", file=sys.stderr, flush=True)
         raise subprocess.CalledProcessError(returncode, command)
     return report
 
@@ -210,6 +220,39 @@ def _clone_or_update_vllm(vllm_dir: Path, ref: str) -> None:
         cwd=vllm_dir,
         log_path=vllm_dir.parent / "logs" / "git-checkout-vllm.log",
     )
+
+
+def _pinned_vllm_rev(repo_root: Path) -> str | None:
+    with (repo_root / "pyproject.toml").open("rb") as f:
+        data = tomllib.load(f)
+    source = data.get("tool", {}).get("uv", {}).get("sources", {}).get("vllm")
+    if not isinstance(source, dict):
+        return None
+    rev = source.get("rev")
+    return str(rev) if rev else None
+
+
+def _vllm_ref_alignment(
+    *,
+    repo_root: Path,
+    vllm_dir: Path,
+    requested_ref: str,
+) -> dict[str, Any]:
+    pinned_rev = _pinned_vllm_rev(repo_root)
+    checked_out_sha = _check_output(["git", "rev-parse", "HEAD"], cwd=vllm_dir)
+    pinned_sha = None
+    if pinned_rev:
+        try:
+            pinned_sha = _check_output(["git", "rev-parse", f"{pinned_rev}^{{commit}}"], cwd=vllm_dir)
+        except subprocess.CalledProcessError as exc:
+            pinned_sha = f"unresolved:{exc.returncode}"
+    return {
+        "requested_ref": requested_ref,
+        "checked_out_sha": checked_out_sha,
+        "pyproject_pinned_rev": pinned_rev,
+        "pyproject_pinned_sha": pinned_sha,
+        "matches_pyproject_pin": pinned_rev is not None and checked_out_sha == pinned_sha,
+    }
 
 
 def _changed_vllm_files(vllm_dir: Path) -> list[str]:
@@ -359,6 +402,7 @@ def _build_install_report(
     vllm_dir: Path,
     changed_files: list[str],
     python_only_check: dict[str, Any],
+    vllm_ref_alignment: dict[str, Any],
     command_reports: list[dict[str, Any]],
     runtime_env: dict[str, str],
     cuda_library_dirs: list[str],
@@ -376,6 +420,7 @@ def _build_install_report(
         "vllm_sha": _check_output(["git", "rev-parse", "HEAD"], cwd=vllm_dir),
         "vllm_source_dir": str(vllm_dir),
         "vllm_changed_files": changed_files,
+        "vllm_ref_alignment": vllm_ref_alignment,
         "python_only_check": python_only_check,
         "commands": command_reports,
         "python_executable": str(venv_python),
@@ -496,6 +541,10 @@ def main(argv: list[str] | None = None) -> int:
 
     command_reports: list[dict[str, Any]] = []
     _clone_or_update_vllm(vllm_dir, args.vllm_ref)
+    ref_alignment = _vllm_ref_alignment(repo_root=repo_root, vllm_dir=vllm_dir, requested_ref=args.vllm_ref)
+    if not ref_alignment["matches_pyproject_pin"]:
+        print(json.dumps({"vllm_ref_alignment": ref_alignment}, indent=2, sort_keys=True), file=sys.stderr)
+        return 4
     changed_files = _changed_vllm_files(vllm_dir)
     sensitive_files = _native_sensitive_files(changed_files)
     python_only_check = {
@@ -532,6 +581,8 @@ def main(argv: list[str] | None = None) -> int:
                 "dev",
                 "--extra",
                 "gpu",
+                "--no-install-package",
+                "vllm",
             ],
             cwd=repo_root,
             env=active_venv_env,
@@ -632,6 +683,7 @@ def main(argv: list[str] | None = None) -> int:
         vllm_dir=vllm_dir,
         changed_files=changed_files,
         python_only_check=python_only_check,
+        vllm_ref_alignment=ref_alignment,
         command_reports=command_reports,
         runtime_env=import_check_env,
         cuda_library_dirs=cuda_library_dirs,

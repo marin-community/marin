@@ -67,6 +67,8 @@ VLLM_ATTENTION_BACKEND_ENV = "MARIN_GRUGMOE_VLLM_ATTENTION_BACKEND"
 RUN_ID_ENV = "MARIN_GRUGMOE_GPU_E2E_RUN_ID"
 OUTPUT_DIR_ENV = "MARIN_GRUGMOE_GPU_E2E_OUTPUT_DIR"
 INSTALL_REPORT_PATH_ENV = "MARIN_GRUGMOE_GPU_E2E_INSTALL_REPORT_PATH"
+# TRITON_ATTN is the default pass gate. FLASH_ATTN is retained as an explicit
+# debug mode and is not run unless selected through the environment or runner.
 VLLM_DEFAULT_ATTENTION_BACKEND = "TRITON_ATTN"
 VLLM_ATTENTION_BACKENDS_UNDER_TEST = ("TRITON_ATTN", "FLASH_ATTN")
 LEVANTER_MOE_CAPACITY_FACTOR = float(EXPECTED_GPU_COUNT)
@@ -846,34 +848,16 @@ def _grug_moe_ep_state_from_worker(worker: Any) -> dict[str, Any]:
         }
 
     module_name, mlp = found
-    runner = mlp.experts
-    moe_config = runner.moe_config
-    moe_parallel_config = moe_config.moe_parallel_config
-    expert_map_manager = runner.expert_map_manager
-    local_expert_ids = [int(expert_id) for expert_id in expert_map_manager.get_local_expert_ids()]
-    vllm_config = getattr(worker, "vllm_config", None)
-    model_config = getattr(vllm_config, "model_config", None)
+    del mlp
+    from vllm.model_executor.models.grugmoe import get_grug_moe_runtime_info  # noqa: PLC0415
+
+    runtime_info = get_grug_moe_runtime_info(getattr(worker, "vllm_config", None), model)
     return {
+        **runtime_info,
         "found": True,
         "worker_rank": worker_rank,
         "local_rank": local_rank,
         "module_name": module_name,
-        "use_ep": bool(moe_parallel_config.use_ep),
-        "tp_size": int(moe_parallel_config.tp_size),
-        "tp_rank": int(moe_parallel_config.tp_rank),
-        "dp_size": int(moe_parallel_config.dp_size),
-        "dp_rank": int(moe_parallel_config.dp_rank),
-        "ep_size": int(moe_parallel_config.ep_size),
-        "ep_rank": int(moe_parallel_config.ep_rank),
-        "global_num_experts": int(moe_config.num_experts),
-        "logical_num_experts": int(moe_config.num_logical_experts),
-        "local_num_experts": int(moe_config.num_local_experts),
-        "local_expert_ids": local_expert_ids,
-        "local_expert_ownership": _format_int_ranges(local_expert_ids),
-        "top_k": int(moe_config.experts_per_token),
-        "expert_placement_strategy": str(runner.expert_placement_strategy),
-        "all2all_backend": str(moe_parallel_config.all2all_backend),
-        "routed_experts_capture_enabled": bool(getattr(model_config, "enable_return_routed_experts", False)),
     }
 
 
@@ -957,7 +941,7 @@ def _assert_grug_moe_worker_ep_states(
             raise AssertionError(f"unexpected worker DP size: {state!r}")
         if state.get("ep_size") != VLLM_EXPERT_PARALLEL_SIZE:
             raise AssertionError(f"unexpected worker EP size: {state!r}")
-        if state.get("global_num_experts") != num_experts:
+        if state.get("num_experts") != num_experts:
             raise AssertionError(f"unexpected worker expert count: {state!r}")
         if state.get("expert_placement_strategy") != "linear":
             raise AssertionError(f"unexpected expert placement: {state!r}")
@@ -1027,25 +1011,19 @@ def _decode_routed_experts(value: str | None) -> list[Any] | None:
     return routed.astype("int64").tolist()
 
 
-def _linear_owner_rank(global_expert_id: int, *, num_experts: int, ep_size: int) -> int:
-    base_experts = num_experts // ep_size
-    remainder = num_experts % ep_size
-    larger_ranks_end = (base_experts + 1) * remainder
-    if global_expert_id < larger_ranks_end:
-        return global_expert_id // (base_experts + 1)
-    if base_experts == 0:
-        raise ValueError(f"num_experts={num_experts} must be >= ep_size={ep_size}")
-    return remainder + ((global_expert_id - larger_ranks_end) // base_experts)
-
-
-def _owners_for_linear_expert_placement(
+def _owners_for_worker_expert_placement(
     routed_experts: list[Any] | None,
     *,
-    num_experts: int,
-    ep_size: int,
+    worker_ep_states: list[dict[str, Any]],
 ) -> list[int]:
     if routed_experts is None:
         return []
+    owner_by_expert: dict[int, int] = {}
+    for state in worker_ep_states:
+        ep_rank = int(state["ep_rank"])
+        for expert_id in state.get("local_expert_ids", []):
+            owner_by_expert[int(expert_id)] = ep_rank
+
     owners: set[int] = set()
 
     def visit(value: Any) -> None:
@@ -1054,8 +1032,9 @@ def _owners_for_linear_expert_placement(
                 visit(item)
             return
         expert_id = int(value)
-        if 0 <= expert_id < num_experts:
-            owners.add(_linear_owner_rank(expert_id, num_experts=num_experts, ep_size=ep_size))
+        owner = owner_by_expert.get(expert_id)
+        if owner is not None:
+            owners.add(owner)
 
     visit(routed_experts)
     return sorted(owners)
@@ -1190,6 +1169,8 @@ def _vllm_backend(args: argparse.Namespace) -> None:
                 print("vllm_gpu_server_log_dir=" + (env.vllm_server.log_dir if env.vllm_server else ""), flush=True)
                 worker_ep_states = _collect_grug_moe_worker_ep_states(env)
                 worker_ep_summary = _assert_grug_moe_worker_ep_states(worker_ep_states, num_experts=num_experts)
+                # Separately covers the batch-size-1 serving path before the
+                # per-rank batch-size-2 requests below.
                 single_payload = _completion_payload(
                     env,
                     prompts=[PROMPT],
@@ -1275,10 +1256,9 @@ def _vllm_backend(args: argparse.Namespace) -> None:
             routed_experts = _decode_routed_experts(choice.get("routed_experts"))
             routed_experts_by_completion.append(routed_experts)
             routed_owner_ranks.update(
-                _owners_for_linear_expert_placement(
+                _owners_for_worker_expert_placement(
                     routed_experts,
-                    num_experts=num_experts,
-                    ep_size=VLLM_EXPERT_PARALLEL_SIZE,
+                    worker_ep_states=worker_ep_states,
                 )
             )
     completion = completions[0] if completions else ""

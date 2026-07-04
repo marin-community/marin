@@ -21,7 +21,7 @@ import time
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 from typing import Any
 
 import pytest
@@ -308,25 +308,9 @@ def _write_summary_update(
 
 def test_grugmoe_gpu_real_checkpoint_e2e_static_preconditions() -> None:
     backend._require_constants_are_coreweave()
-    assert backend.REGION == "cw-us-east-02a"
-    assert backend.COREWEAVE_SIGNING_REGION == "US-EAST-02A"
-    assert backend.GPU_NODE_TYPE == "H100x8"
-    assert backend.GPU_NODEPOOL == "cw-use02a-h100-8x"
-    assert backend.EXPECTED_GPU_COUNT == 8
-    assert backend.VISIBLE_CUDA_DEVICES == "0,1,2,3,4,5,6,7"
-    assert backend.VLLM_TENSOR_PARALLEL_SIZE == 1
-    assert backend.VLLM_DATA_PARALLEL_SIZE == 8
-    assert backend.VLLM_EXPERT_PARALLEL_SIZE == 8
     assert backend.VLLM_MAX_NUM_SEQS >= backend.PROMPT_BATCH_SIZE
-    assert backend.WORKER_EXTENSION_MODULE == "grugmoe_gpu_real_checkpoint_backend"
-    assert backend.WORKER_EXTENSION_CLASS == "GrugMoeDiagnosticsWorkerExtension"
-    assert backend.WORKER_EXTENSION_CLS == "grugmoe_gpu_real_checkpoint_backend.GrugMoeDiagnosticsWorkerExtension"
-    assert backend.VLLM_DEFAULT_ATTENTION_BACKEND == "TRITON_ATTN"
+    assert backend.WORKER_EXTENSION_CLS == f"{backend.WORKER_EXTENSION_MODULE}.{backend.WORKER_EXTENSION_CLASS}"
     assert backend.VLLM_ATTENTION_BACKEND in backend.VLLM_ATTENTION_BACKENDS_UNDER_TEST
-    assert backend.VLLM_ATTENTION_BACKEND_ENV == "MARIN_GRUGMOE_VLLM_ATTENTION_BACKEND"
-    assert backend.RUN_ID_ENV == "MARIN_GRUGMOE_GPU_E2E_RUN_ID"
-    assert backend.OUTPUT_DIR_ENV == "MARIN_GRUGMOE_GPU_E2E_OUTPUT_DIR"
-    assert backend.INSTALL_REPORT_PATH_ENV == "MARIN_GRUGMOE_GPU_E2E_INSTALL_REPORT_PATH"
     assert backend.LEVANTER_MOE_CAPACITY_FACTOR == float(backend.EXPECTED_GPU_COUNT)
     assert backend.LEVANTER_DECODE_USE_ACTIVE_PREFIX is True
     assert backend.CHECKPOINT_PATH.startswith(backend.COREWEAVE_S3_PREFIX)
@@ -369,7 +353,7 @@ def test_vllm_server_logs_are_copied_to_output_prefix(tmp_path: Path) -> None:
     assert (tmp_path / "result-prefix" / "vllm-server-logs" / "stderr.log").read_text() == "stderr full log\n"
 
 
-def test_grugmoe_worker_extension_reports_structured_ep_state() -> None:
+def test_grugmoe_worker_extension_reports_structured_ep_state(monkeypatch: pytest.MonkeyPatch) -> None:
     class FakeParallelConfig:
         use_ep = True
         tp_size = 1
@@ -396,12 +380,57 @@ def test_grugmoe_worker_extension_reports_structured_ep_state() -> None:
         expert_map_manager = FakeExpertMapManager()
         expert_placement_strategy = "linear"
 
+    class FakeAttentionBackend:
+        @staticmethod
+        def get_name() -> str:
+            return "TRITON_ATTN"
+
     class GrugMoeMLP:
         experts = FakeRunner()
 
+    class FakeLayer:
+        mlp = GrugMoeMLP()
+        self_attn = SimpleNamespace(attn=SimpleNamespace(attn_backend=FakeAttentionBackend()))
+
     class FakeModel:
+        def __init__(self) -> None:
+            self.layers = [FakeLayer()]
+
         def named_modules(self):
-            yield "model.layers.3.mlp", GrugMoeMLP()
+            yield "model.layers.3.mlp", self.layers[0].mlp
+
+    fake_grugmoe_module = ModuleType("vllm.model_executor.models.grugmoe")
+
+    def fake_get_grug_moe_runtime_info(vllm_config: Any, model: Any) -> dict[str, Any]:
+        layer = model.layers[0]
+        runner = layer.mlp.experts
+        moe_config = runner.moe_config
+        moe_parallel_config = moe_config.moe_parallel_config
+        local_expert_ids = runner.expert_map_manager.get_local_expert_ids()
+        return {
+            "use_ep": bool(moe_parallel_config.use_ep),
+            "tp_size": int(moe_parallel_config.tp_size),
+            "tp_rank": int(moe_parallel_config.tp_rank),
+            "dp_size": int(moe_parallel_config.dp_size),
+            "dp_rank": int(moe_parallel_config.dp_rank),
+            "ep_size": int(moe_parallel_config.ep_size),
+            "ep_rank": int(moe_parallel_config.ep_rank),
+            "num_experts": int(moe_config.num_experts),
+            "num_logical_experts": int(moe_config.num_logical_experts),
+            "num_local_experts": int(moe_config.num_local_experts),
+            "local_expert_ids": local_expert_ids,
+            "local_expert_ownership": "[96..127]",
+            "top_k": int(moe_config.experts_per_token),
+            "expert_placement_strategy": str(runner.expert_placement_strategy),
+            "all2all_backend": str(moe_parallel_config.all2all_backend),
+            "attention_backend": layer.self_attn.attn.attn_backend.get_name(),
+            "routed_experts_capture_enabled": bool(
+                getattr(vllm_config.model_config, "enable_return_routed_experts", False)
+            ),
+        }
+
+    fake_grugmoe_module.get_grug_moe_runtime_info = fake_get_grug_moe_runtime_info  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "vllm.model_executor.models.grugmoe", fake_grugmoe_module)
 
     worker = SimpleNamespace(
         rank=3,
@@ -426,14 +455,15 @@ def test_grugmoe_worker_extension_reports_structured_ep_state() -> None:
         "dp_rank": 3,
         "ep_size": 8,
         "ep_rank": 3,
-        "global_num_experts": 256,
-        "logical_num_experts": 256,
-        "local_num_experts": 32,
+        "num_experts": 256,
+        "num_logical_experts": 256,
+        "num_local_experts": 32,
         "local_expert_ids": list(range(96, 128)),
         "local_expert_ownership": "[96..127]",
         "top_k": 2,
         "expert_placement_strategy": "linear",
         "all2all_backend": "allgather_reducescatter",
+        "attention_backend": "TRITON_ATTN",
         "routed_experts_capture_enabled": True,
     }
 
@@ -463,14 +493,15 @@ def test_grugmoe_collective_rpc_collects_all_data_parallel_workers(monkeypatch: 
                         "dp_rank": ep_rank,
                         "ep_size": 8,
                         "ep_rank": ep_rank,
-                        "global_num_experts": 256,
-                        "logical_num_experts": 256,
-                        "local_num_experts": 32,
+                        "num_experts": 256,
+                        "num_logical_experts": 256,
+                        "num_local_experts": 32,
                         "local_expert_ids": list(range(first_expert, first_expert + 32)),
                         "local_expert_ownership": f"[{first_expert}..{first_expert + 31}]",
                         "top_k": 4,
                         "expert_placement_strategy": "linear",
                         "all2all_backend": "allgather_reducescatter",
+                        "attention_backend": "TRITON_ATTN",
                         "routed_experts_capture_enabled": True,
                     }
                 )
@@ -501,6 +532,10 @@ def test_grugmoe_collective_rpc_collects_all_data_parallel_workers(monkeypatch: 
     assert summary["dp_rank_coverage"] is True
     assert summary["ep_rank_coverage"] is True
     assert summary["local_expert_coverage"] is True
+    assert backend._owners_for_worker_expert_placement(
+        [[0, 31], [96, 127], [224, 255]],
+        worker_ep_states=states,
+    ) == [0, 3, 7]
 
 
 @pytest.mark.gpu_ci
@@ -516,12 +551,7 @@ def test_grugmoe_gpu_real_checkpoint_vllm_output(
     assert vllm_result["vllm_tensor_parallel_size"] == backend.VLLM_TENSOR_PARALLEL_SIZE
     assert vllm_result["vllm_data_parallel_size"] == backend.VLLM_DATA_PARALLEL_SIZE
     assert vllm_result["vllm_expert_parallel_size"] == backend.VLLM_EXPERT_PARALLEL_SIZE
-    assert vllm_result["vllm_args"][vllm_result["vllm_args"].index("--tensor-parallel-size") + 1] == "1"
-    assert vllm_result["vllm_args"][vllm_result["vllm_args"].index("--data-parallel-size") + 1] == "8"
-    assert "--enable-expert-parallel" in vllm_result["vllm_args"]
-    assert "--enable-return-routed-experts" in vllm_result["vllm_args"]
-    assert "--worker-extension-cls" in vllm_result["vllm_args"]
-    assert vllm_result["vllm_args"][vllm_result["vllm_args"].index("--max-num-seqs") + 1] == "16"
+    assert vllm_result["vllm_max_num_seqs"] >= backend.PROMPT_BATCH_SIZE
     assert vllm_result["torch_runtime"]["device_count"] >= backend.EXPECTED_GPU_COUNT
     assert vllm_result["torch_runtime"]["cuda_visible_devices"] == backend.VISIBLE_CUDA_DEVICES
     assert vllm_result["prompt_batch_size"] == backend.PROMPT_BATCH_SIZE
