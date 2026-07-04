@@ -2052,3 +2052,54 @@ flat rows back to local expert/source offsets.
     on a small H100 smoke.
   - This is still not the full production MLP path: W2 must next consume flat H, compute SwiGLU, apply queue route
     weights before W2, and combine without applying weights a second time.
+
+## 2026-07-03 18:00 - Unblock staged H forward W2-from-H lowering
+
+Fixed the staged source-push H forward path so W2 consumes the W13 preactivation checkpoint on H100 for the
+target-compatible tile shape. The core issue was Mosaic Lane lowering rejecting a standalone `block_m=64` route-weight
+vector in the W2-from-H prologue. The working patch expands receive-order route weights to a `[block_m, block_k]` tile
+for the device path and stages gate, up, route-weight tile, and W2 through WGMMA-compatible SMEM before forming
+`silu(gate) * up * route_weight`.
+
+- Commit Hash: `e8fbfa85e`
+- Code:
+  - `lib/levanter/src/levanter/grug/_moe/source_push_forward.py`
+  - `lib/levanter/src/levanter/grug/_moe/source_push_w2_return.py`
+  - `lib/levanter/tests/grug/test_source_push_inbox.py`
+- Local verification:
+  - `uv run --package marin-levanter --group test pytest lib/levanter/tests/grug/test_source_push_plan.py lib/levanter/tests/grug/test_source_push_inbox.py lib/levanter/tests/grug/test_source_push_mlp.py -q -k 'recv_route_weights or forward_inputs_share_one_plan or forward_h_reference or w13_h_reference or source_push_moe_mlp'`
+    - Result: `6 passed, 11 warnings in 10.42s`.
+  - `./infra/pre-commit.py --fix lib/levanter/src/levanter/grug/_moe/source_push_forward.py lib/levanter/src/levanter/grug/_moe/source_push_w2_return.py lib/levanter/tests/grug/test_source_push_inbox.py`
+    - Result: all checks passed, including Pyrefly.
+- Failed H100 lowering attempts:
+
+  | job | outcome |
+  | --- | --- |
+  | `/dlwh/source-push-forward-h-smoke-ae1c9aed1-20260703-1738` | W2-from-H failed on route-weight vector load: `memref<64xbf16>` must have a multiple of 128 elements. |
+  | `/dlwh/source-push-forward-h-smoke-route-weight-tiles-20260703-1802` | Duplicating weights to `[M,2]` loaded, but slicing `[:, 0:1]` failed: `Only arrays with tiled layouts can be sliced`. |
+  | `/dlwh/source-push-forward-h-smoke-route-weight-reduce-20260703-1810` | Reducing the duplicated lanes failed: `No support for axes yet`. |
+  | `/dlwh/source-push-forward-h-smoke-route-weight-k-tile-20260703-1816` | Expanding weights to `[M,K]` in GMEM failed when directly assigning a strided fragment into WGMMA SMEM: `WGStridedFragLayout(shape=(64, 64), vec_size=4)`. |
+  | `/dlwh/source-push-forward-h-smoke-w2h-smem-20260703-1824` | SMEM-staged W2-from-H passed far enough to reach combine; combine then failed for non-target `block_n=64` on the same 64-vector load constraint. |
+
+- Successful H100 smoke:
+  - Job: `/dlwh/source-push-forward-h-smoke-w2h-smem-bn128-20260703-1830`
+  - Cluster: `cw-us-east-02a`
+  - Config: `ep_size=2`, `tokens_per_rank=128`, `hidden_dim=128`, `intermediate_dim=128`, `experts_per_rank=2`,
+    `topk=1`, `block_m=64`, `block_k=64`, `block_n=128`, `n_group=1`, staged host-sync execution, `--check`.
+  - Result: succeeded, `dropped_routes=0`, `max_abs_diff=0.00048828125`, `mean_abs_diff=0.0000321401749`.
+
+  | stage | steady_state_time | metric |
+  | --- | ---: | ---: |
+  | total | `1.889415 ms` | `0.138743 GB/s/rank`, `0.013319 rounded TFLOP/s/rank` |
+  | W13/H | `0.845100 ms` | `0.019852 W13 TFLOP/s/rank` |
+  | W2-from-H return | `0.406873 ms` | `0.020617 W2 TFLOP/s/rank` |
+  | combine | `0.605616 ms` | `0.108214 GB/s/rank` |
+
+- Interpretation:
+  - The staged H forward now has a working Mosaic path at the MLP boundary: W13 stores H, W2 consumes H and applies
+    route weights inside the W2 stage, return writes source-owned rows, and combine runs unweighted.
+  - `block_n=64` remains unsupported for direct combine in this path because Mosaic rejects 64-element vector loads.
+    The stable/target source-push profile already uses `block_n=128`, so this is not a target-shape blocker.
+  - The current route-weight `[M,K]` expansion is a correctness/lowering unblock, not a performance-optimal metadata
+    representation. Target-shape forward timing is still needed to quantify the extra route-weight tile traffic and
+    SMEM staging cost.
