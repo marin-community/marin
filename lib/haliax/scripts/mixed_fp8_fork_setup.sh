@@ -57,9 +57,11 @@ if ! grep -qE "^_release_version: str = '0\.10\.0'" "$SP/jaxlib/version.py"; the
 fi
 
 # 3. Forked jax python package: the wgmma PTX emitter + the relaxed pallas wgmma gate.
-cp "$SRC/jax/experimental/mosaic/gpu/wgmma.py"               "$SP/jax/experimental/mosaic/gpu/wgmma.py"
-cp "$SRC/jax/_src/pallas/mosaic_gpu/primitives.py"           "$SP/jax/_src/pallas/mosaic_gpu/primitives.py"
-cp "$SRC/jax/experimental/pallas/ops/gpu/ragged_dot_mgpu.py" "$SP/jax/experimental/pallas/ops/gpu/ragged_dot_mgpu.py"
+#    --remove-destination breaks uv's hardlinks into the node-shared wheel cache; a plain
+#    cp writes THROUGH the link and poisons cached jax for every later job on the node.
+cp --remove-destination "$SRC/jax/experimental/mosaic/gpu/wgmma.py"               "$SP/jax/experimental/mosaic/gpu/wgmma.py"
+cp --remove-destination "$SRC/jax/_src/pallas/mosaic_gpu/primitives.py"           "$SP/jax/_src/pallas/mosaic_gpu/primitives.py"
+cp --remove-destination "$SRC/jax/experimental/pallas/ops/gpu/ragged_dot_mgpu.py" "$SP/jax/experimental/pallas/ops/gpu/ragged_dot_mgpu.py"
 
 # 3b. Relax the ragged_dot_mgpu dlhs same-dtype guard (the mixed e5m2-grad x e4m3-rhs dgrad).
 #     The fork branch now carries this relaxation itself (mcwitt/jax "[Mosaic GPU] Allow mixed
