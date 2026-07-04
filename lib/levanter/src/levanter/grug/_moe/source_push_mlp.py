@@ -22,6 +22,7 @@ from levanter.grug._moe.source_push_forward import (
 from levanter.grug._moe.source_push_inbox import PushInboxConfig
 from levanter.grug._moe.source_push_plan import (
     SourcePushPlan,
+    _source_push_out_sharding,
     build_source_push_plan,
 )
 
@@ -399,8 +400,12 @@ def _source_push_w13_h(
     x: Float[Array, "S T D"],
     w13: Float[Array, "S E D twoI"],
 ) -> Float[Array, "Dst E C twoI"]:
-    x_rows = x[route_table.source_rank, route_table.token_id]
-    w13_rows = w13[route_table.destination_rank, route_table.local_expert]
+    x_rows = x.at[route_table.source_rank, route_table.token_id].get(
+        out_sharding=_source_push_out_sharding(None, None)
+    )
+    w13_rows = w13.at[route_table.destination_rank, route_table.local_expert].get(
+        out_sharding=_source_push_out_sharding(None, None, None)
+    )
     h_rows = jnp.einsum("rd,rdo->ro", x_rows.astype(jnp.float32), w13_rows.astype(jnp.float32))
     out_shape = (route_table.ep_size, route_table.experts_per_rank, route_table.expert_capacity, w13.shape[-1])
     h = jnp.zeros(out_shape, dtype=h_rows.dtype)
@@ -418,11 +423,18 @@ def _source_push_w13_h_flat(
     x: Float[Array, "S T D"],
     w13: Float[Array, "S E D twoI"],
 ) -> Float[Array, "Dst rows twoI"]:
-    x_rows = x[route_table.source_rank, route_table.token_id]
-    w13_rows = w13[route_table.destination_rank, route_table.local_expert]
+    x_rows = x.at[route_table.source_rank, route_table.token_id].get(
+        out_sharding=_source_push_out_sharding(None, None)
+    )
+    w13_rows = w13.at[route_table.destination_rank, route_table.local_expert].get(
+        out_sharding=_source_push_out_sharding(None, None, None)
+    )
     h_rows = jnp.einsum("rd,rdo->ro", x_rows.astype(jnp.float32), w13_rows.astype(jnp.float32))
     expert_base = jnp.asarray(expert_base, dtype=jnp.int32)
-    flat_row = expert_base[route_table.destination_rank, route_table.local_expert] + route_table.expert_row
+    base_row = expert_base.at[route_table.destination_rank, route_table.local_expert].get(
+        out_sharding=_source_push_out_sharding(None)
+    )
+    flat_row = base_row + route_table.expert_row
     out_shape = (route_table.ep_size, h_rows_per_rank, w13.shape[-1])
     h = jnp.zeros(out_shape, dtype=h_rows.dtype)
     return h.at[route_table.destination_rank, flat_row].set(h_rows).astype(w13.dtype)
@@ -434,13 +446,22 @@ def _source_push_w2_from_h_return_combine(
     route_weights: Float[Array, "S T K"],
     w2: Float[Array, "S E I D"],
 ) -> Float[Array, "S T D"]:
-    h_rows = h[route_table.destination_rank, route_table.local_expert, route_table.expert_row].astype(jnp.float32)
+    h_rows = h.at[route_table.destination_rank, route_table.local_expert, route_table.expert_row].get(
+        out_sharding=_source_push_out_sharding(None, None)
+    )
+    h_rows = h_rows.astype(jnp.float32)
     intermediate_dim = h_rows.shape[-1] // 2
     gate = h_rows[:, :intermediate_dim]
     up = h_rows[:, intermediate_dim:]
     activation = jax.nn.silu(gate) * up
-    weights = route_weights[route_table.source_rank, route_table.token_id, route_table.route_slot].astype(jnp.float32)
-    w2_rows = w2[route_table.destination_rank, route_table.local_expert].astype(jnp.float32)
+    weights = route_weights.at[route_table.source_rank, route_table.token_id, route_table.route_slot].get(
+        out_sharding=_source_push_out_sharding(None)
+    )
+    weights = weights.astype(jnp.float32)
+    w2_rows = w2.at[route_table.destination_rank, route_table.local_expert].get(
+        out_sharding=_source_push_out_sharding(None, None, None)
+    )
+    w2_rows = w2_rows.astype(jnp.float32)
     route_y = jnp.einsum("ri,rid->rd", activation * weights[:, None], w2_rows)
     out_shape = (route_table.ep_size, route_table.tokens_per_source, w2.shape[-1])
     y = jnp.zeros(out_shape, dtype=route_y.dtype)
@@ -457,14 +478,20 @@ def _source_push_w2_from_h_flat_return_combine(
     expert_base = jnp.asarray(expert_base, dtype=jnp.int32)
     dst = route_table.destination_rank
     expert = route_table.local_expert
-    flat_row = expert_base[dst, expert] + route_table.expert_row
-    h_rows = h_flat[dst, flat_row].astype(jnp.float32)
+    base_row = expert_base.at[dst, expert].get(out_sharding=_source_push_out_sharding(None))
+    flat_row = base_row + route_table.expert_row
+    h_rows = h_flat.at[dst, flat_row].get(out_sharding=_source_push_out_sharding(None, None))
+    h_rows = h_rows.astype(jnp.float32)
     intermediate_dim = h_rows.shape[-1] // 2
     gate = h_rows[:, :intermediate_dim]
     up = h_rows[:, intermediate_dim:]
     activation = jax.nn.silu(gate) * up
-    weights = route_weights[route_table.source_rank, route_table.token_id, route_table.route_slot].astype(jnp.float32)
-    w2_rows = w2[dst, expert].astype(jnp.float32)
+    weights = route_weights.at[route_table.source_rank, route_table.token_id, route_table.route_slot].get(
+        out_sharding=_source_push_out_sharding(None)
+    )
+    weights = weights.astype(jnp.float32)
+    w2_rows = w2.at[dst, expert].get(out_sharding=_source_push_out_sharding(None, None, None))
+    w2_rows = w2_rows.astype(jnp.float32)
     route_y = jnp.einsum("ri,rid->rd", activation * weights[:, None], w2_rows)
     out_shape = (route_table.ep_size, route_table.tokens_per_source, w2.shape[-1])
     y = jnp.zeros(out_shape, dtype=route_y.dtype)
@@ -488,7 +515,8 @@ def _source_push_moe_mlp_backward_from_h(
     dst = route_table.destination_rank
     expert = route_table.local_expert
     row = route_table.expert_row
-    h_rows = h[dst, expert, row].astype(jnp.float32)
+    h_rows = h.at[dst, expert, row].get(out_sharding=_source_push_out_sharding(None, None))
+    h_rows = h_rows.astype(jnp.float32)
     return _source_push_moe_mlp_backward_from_h_rows(route_table, x, route_weights, w13, w2, h_rows, dy)
 
 
@@ -509,8 +537,10 @@ def _source_push_moe_mlp_backward_from_h_flat(
 ]:
     dst = route_table.destination_rank
     expert = route_table.local_expert
-    flat_row = expert_base[dst, expert] + route_table.expert_row
-    h_rows = h_flat[dst, flat_row].astype(jnp.float32)
+    base_row = expert_base.at[dst, expert].get(out_sharding=_source_push_out_sharding(None))
+    flat_row = base_row + route_table.expert_row
+    h_rows = h_flat.at[dst, flat_row].get(out_sharding=_source_push_out_sharding(None, None))
+    h_rows = h_rows.astype(jnp.float32)
     return _source_push_moe_mlp_backward_from_h_rows(route_table, x, route_weights, w13, w2, h_rows, dy)
 
 
@@ -539,11 +569,14 @@ def _source_push_moe_mlp_backward_from_h_rows(
     up = h_rows[:, intermediate_dim:]
     silu_gate = jax.nn.silu(gate)
     activation = silu_gate * up
-    weights = route_weights[src, token, slot].astype(jnp.float32)
+    weights = route_weights.at[src, token, slot].get(out_sharding=_source_push_out_sharding(None))
+    weights = weights.astype(jnp.float32)
     weighted_activation = activation * weights[:, None]
 
-    dy_rows = dy[src, token].astype(jnp.float32)
-    w2_rows = w2[dst, expert].astype(jnp.float32)
+    dy_rows = dy.at[src, token].get(out_sharding=_source_push_out_sharding(None, None))
+    dy_rows = dy_rows.astype(jnp.float32)
+    w2_rows = w2.at[dst, expert].get(out_sharding=_source_push_out_sharding(None, None, None))
+    w2_rows = w2_rows.astype(jnp.float32)
     d_weighted_activation = jnp.einsum("rd,rid->ri", dy_rows, w2_rows)
     d_route_rows = jnp.sum(d_weighted_activation * activation, axis=-1)
     d_activation = d_weighted_activation * weights[:, None]
@@ -554,8 +587,10 @@ def _source_push_moe_mlp_backward_from_h_rows(
     d_up = d_activation * silu_gate
     d_h_rows = jnp.concatenate([d_gate, d_up], axis=-1)
 
-    x_rows = x[src, token].astype(jnp.float32)
-    w13_rows = w13[dst, expert].astype(jnp.float32)
+    x_rows = x.at[src, token].get(out_sharding=_source_push_out_sharding(None, None))
+    x_rows = x_rows.astype(jnp.float32)
+    w13_rows = w13.at[dst, expert].get(out_sharding=_source_push_out_sharding(None, None, None))
+    w13_rows = w13_rows.astype(jnp.float32)
     dw13_rows = jnp.einsum("rd,ro->rdo", x_rows, d_h_rows)
     dx_rows = jnp.einsum("ro,rdo->rd", d_h_rows, w13_rows)
     dw2_rows = jnp.einsum("ri,rd->rid", weighted_activation, dy_rows)
