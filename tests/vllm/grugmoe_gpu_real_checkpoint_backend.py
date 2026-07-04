@@ -63,10 +63,21 @@ VLLM_MAX_NUM_SEQS = 16
 VLLM_DTYPE_ENV = "MARIN_GRUGMOE_VLLM_DTYPE"
 VLLM_DEFAULT_DTYPE = "bfloat16"
 VLLM_DTYPE_CHOICES = ("bfloat16", "float32")
+VLLM_MOE_COMPUTE_ENV = "MARIN_GRUGMOE_VLLM_MOE_COMPUTE"
+VLLM_DEFAULT_MOE_COMPUTE = "fp32_accumulation"
+VLLM_MOE_COMPUTE_CHOICES = ("model_dtype", "fp32_accumulation")
+VLLM_GRUGMOE_MOE_COMPUTE_ENV = "VLLM_GRUGMOE_MOE_COMPUTE"
+VLLM_GRUGMOE_ROUTE_DIAGNOSTICS_ENV = "VLLM_GRUGMOE_ROUTE_DIAGNOSTICS"
+VLLM_ROUTE_DIAGNOSTICS_ENV = "MARIN_GRUGMOE_VLLM_ROUTE_DIAGNOSTICS"
+VLLM_DEFAULT_ROUTE_DIAGNOSTICS = True
 WORKER_EXTENSION_MODULE = "grugmoe_gpu_real_checkpoint_backend"
 WORKER_EXTENSION_CLASS = "GrugMoeDiagnosticsWorkerExtension"
 WORKER_EXTENSION_CLS = f"{WORKER_EXTENSION_MODULE}.{WORKER_EXTENSION_CLASS}"
 VLLM_ATTENTION_BACKEND_ENV = "MARIN_GRUGMOE_VLLM_ATTENTION_BACKEND"
+LEVANTER_REFERENCE_MODE_ENV = "MARIN_GRUGMOE_LEVANTER_REFERENCE_MODE"
+LEVANTER_DEFAULT_REFERENCE_MODE = "current"
+LEVANTER_REFERENCE_MODE_CHOICES = ("current", "bf16_compute")
+LEVANTER_BF16_POLICY = "params=float32,compute=bfloat16,output=bfloat16"
 RUN_ID_ENV = "MARIN_GRUGMOE_GPU_E2E_RUN_ID"
 OUTPUT_DIR_ENV = "MARIN_GRUGMOE_GPU_E2E_OUTPUT_DIR"
 INSTALL_REPORT_PATH_ENV = "MARIN_GRUGMOE_GPU_E2E_INSTALL_REPORT_PATH"
@@ -86,6 +97,8 @@ PROMPTS = tuple(PROMPT for _ in range(PROMPT_BATCH_SIZE))
 EXPECTED_CONTINUATION = common.EXPECTED_CONTINUATION
 DIAGNOSTIC_COMPARE_RANKS = (4, 0)
 DIAGNOSTIC_REPEATED_ATTEMPTS = 3
+DIAGNOSTIC_LOGPROBS = 8
+DIAGNOSTIC_ROUTE_STEPS = 1
 DIAGNOSTIC_NON_REPEATED_PROMPTS = (
     "Answer with digits only. No words. No punctuation. What is two plus two?",
     "Answer with digits only. No words. No punctuation. What is three plus three?",
@@ -136,8 +149,46 @@ def _resolve_vllm_dtype() -> str:
     return value
 
 
+def _resolve_vllm_moe_compute() -> str:
+    value = os.environ.get(VLLM_MOE_COMPUTE_ENV, VLLM_DEFAULT_MOE_COMPUTE).strip().lower()
+    if value not in VLLM_MOE_COMPUTE_CHOICES:
+        raise ValueError(
+            f"{VLLM_MOE_COMPUTE_ENV}={value!r} is not supported for this validation; "
+            f"expected one of {VLLM_MOE_COMPUTE_CHOICES!r}"
+        )
+    return value
+
+
+def _resolve_bool_env(name: str, *, default: bool) -> bool:
+    raw_value = os.environ.get(name)
+    if raw_value is None:
+        return default
+    value = raw_value.strip().lower()
+    if value in {"1", "true", "yes", "on"}:
+        return True
+    if value in {"0", "false", "no", "off"}:
+        return False
+    raise ValueError(f"{name}={raw_value!r} must be a boolean value")
+
+
+def _resolve_levanter_reference_mode() -> str:
+    value = os.environ.get(LEVANTER_REFERENCE_MODE_ENV, LEVANTER_DEFAULT_REFERENCE_MODE).strip().lower()
+    if value not in LEVANTER_REFERENCE_MODE_CHOICES:
+        raise ValueError(
+            f"{LEVANTER_REFERENCE_MODE_ENV}={value!r} is not supported for this validation; "
+            f"expected one of {LEVANTER_REFERENCE_MODE_CHOICES!r}"
+        )
+    return value
+
+
 VLLM_ATTENTION_BACKEND = _resolve_vllm_attention_backend()
 VLLM_DTYPE = _resolve_vllm_dtype()
+VLLM_MOE_COMPUTE = _resolve_vllm_moe_compute()
+VLLM_ROUTE_DIAGNOSTICS = _resolve_bool_env(
+    VLLM_ROUTE_DIAGNOSTICS_ENV,
+    default=VLLM_DEFAULT_ROUTE_DIAGNOSTICS,
+)
+LEVANTER_REFERENCE_MODE = _resolve_levanter_reference_mode()
 
 
 def _is_coreweave_endpoint(endpoint: str) -> bool:
@@ -514,6 +565,10 @@ def _runtime_snapshot(
         "vllm_tensor_parallel_size": VLLM_TENSOR_PARALLEL_SIZE,
         "vllm_data_parallel_size": VLLM_DATA_PARALLEL_SIZE,
         "vllm_expert_parallel_size": VLLM_EXPERT_PARALLEL_SIZE,
+        "vllm_dtype": VLLM_DTYPE,
+        "vllm_moe_compute": VLLM_MOE_COMPUTE,
+        "vllm_route_diagnostics": VLLM_ROUTE_DIAGNOSTICS,
+        "levanter_reference_mode": LEVANTER_REFERENCE_MODE,
         "packages": {
             package: {"version": _version(package), "direct_url": _direct_url(package)}
             for package in ("marin-core", "vllm", "tpu-inference", "jax", "torch")
@@ -670,11 +725,19 @@ def _configure_vllm_gpu_env() -> dict[str, Any]:
     os.environ.setdefault("VLLM_LOGGING_LEVEL", "DEBUG")
     os.environ.setdefault("MODEL_IMPL_TYPE", "vllm")
     os.environ.setdefault("PYTHONUNBUFFERED", "1")
+    os.environ[VLLM_GRUGMOE_MOE_COMPUTE_ENV] = VLLM_MOE_COMPUTE
+    os.environ[VLLM_GRUGMOE_ROUTE_DIAGNOSTICS_ENV] = "1" if VLLM_ROUTE_DIAGNOSTICS else "0"
     worker_extension_path = _ensure_worker_extension_import_path()
     cuda_library_path = _configure_cuda_library_path()
     return {
         **cuda_library_path,
         "vllm_logging_level": os.environ.get("VLLM_LOGGING_LEVEL"),
+        "vllm_moe_compute_env_var": VLLM_MOE_COMPUTE_ENV,
+        "vllm_moe_compute": VLLM_MOE_COMPUTE,
+        "vllm_grugmoe_moe_compute_env_var": VLLM_GRUGMOE_MOE_COMPUTE_ENV,
+        "vllm_grugmoe_moe_compute": os.environ.get(VLLM_GRUGMOE_MOE_COMPUTE_ENV),
+        "vllm_route_diagnostics_env_var": VLLM_ROUTE_DIAGNOSTICS_ENV,
+        "vllm_route_diagnostics": VLLM_ROUTE_DIAGNOSTICS,
         "worker_extension_module": WORKER_EXTENSION_MODULE,
         "worker_extension_cls": WORKER_EXTENSION_CLS,
         "worker_extension_path": worker_extension_path,
@@ -886,6 +949,17 @@ class GrugMoeDiagnosticsWorkerExtension:
     def grugmoe_ep_state(self) -> dict[str, Any]:
         return _grug_moe_ep_state_from_worker(self)
 
+    def grugmoe_route_diagnostics(self) -> dict[str, Any]:
+        model_runner = getattr(self, "model_runner", None)
+        model = _unwrap_vllm_model(getattr(model_runner, "model", None))
+        from vllm.model_executor.models.grugmoe import get_grug_moe_route_diagnostics  # noqa: PLC0415
+
+        return {
+            **get_grug_moe_route_diagnostics(model),
+            "worker_rank": int(getattr(self, "rank", -1)),
+            "local_rank": int(getattr(self, "local_rank", -1)),
+        }
+
 
 def _server_root_url(env: Any) -> str:
     return str(env.server_url).removesuffix("/v1")
@@ -932,6 +1006,19 @@ def _collect_grug_moe_worker_ep_states(env: Any) -> list[dict[str, Any]]:
             raise AssertionError(f"collective_rpc result is not a dict: {result!r}")
         states.append(result)
     return states
+
+
+def _collect_grug_moe_route_diagnostics(env: Any) -> list[dict[str, Any]]:
+    payload = _collective_rpc_payload(env, "grugmoe_route_diagnostics")
+    results = payload.get("results")
+    if not isinstance(results, list):
+        raise AssertionError(f"collective_rpc missing results list: {payload!r}")
+    diagnostics: list[dict[str, Any]] = []
+    for result in results:
+        if not isinstance(result, dict):
+            raise AssertionError(f"collective_rpc result is not a dict: {result!r}")
+        diagnostics.append(result)
+    return diagnostics
 
 
 def _assert_grug_moe_worker_ep_states(
@@ -994,6 +1081,8 @@ def _completion_payload(
     prompts: list[str],
     data_parallel_rank: int | None = None,
     request_id: str | None = None,
+    max_tokens: int = MAX_NEW_TOKENS,
+    logprobs: int | None = None,
 ) -> dict[str, Any]:
     if env.model_id is None:
         raise RuntimeError("Expected vLLM server to expose a model id.")
@@ -1002,15 +1091,18 @@ def _completion_payload(
         headers["X-data-parallel-rank"] = str(data_parallel_rank)
     if request_id is not None:
         headers["X-Request-Id"] = request_id
+    payload: dict[str, Any] = {
+        "model": env.model_id,
+        "prompt": prompts,
+        "temperature": 0.0,
+        "max_tokens": max_tokens,
+    }
+    if logprobs is not None:
+        payload["logprobs"] = logprobs
     response = requests.post(
         f"{env.server_url}/completions",
         headers=headers,
-        json={
-            "model": env.model_id,
-            "prompt": prompts,
-            "temperature": 0.0,
-            "max_tokens": MAX_NEW_TOKENS,
-        },
+        json=payload,
         timeout=300,
     )
     print("vllm_gpu_completions_status_code=" + str(response.status_code), flush=True)
@@ -1051,6 +1143,17 @@ def _routed_experts_digest(routed_experts: list[Any] | None) -> str | None:
     return hashlib.sha256(payload).hexdigest()
 
 
+def _completion_logprobs_summary(choice: dict[str, Any]) -> dict[str, Any] | None:
+    logprobs = choice.get("logprobs")
+    if not isinstance(logprobs, dict):
+        return None
+    return {
+        "tokens": logprobs.get("tokens"),
+        "token_logprobs": logprobs.get("token_logprobs"),
+        "top_logprobs": logprobs.get("top_logprobs"),
+    }
+
+
 def _completion_choice_summary(
     choice: dict[str, Any],
     *,
@@ -1060,6 +1163,8 @@ def _completion_choice_summary(
     return {
         "text": str(choice.get("text", "")),
         "finish_reason": choice.get("finish_reason"),
+        "token_ids": choice.get("token_ids"),
+        "logprobs": _completion_logprobs_summary(choice),
         "routed_experts_shape": _nested_list_shape(routed_experts),
         "routed_experts_digest": _routed_experts_digest(routed_experts),
         "routed_experts_tail": routed_experts[-4:] if routed_experts else None,
@@ -1117,12 +1222,28 @@ def _vllm_completion_diagnostic_specs() -> list[dict[str, Any]]:
     for rank in DIAGNOSTIC_COMPARE_RANKS:
         specs.append(
             {
+                "name": f"rank{rank}-first-token-repeated-bs2",
+                "data_parallel_rank": rank,
+                "prompts": [PROMPT, PROMPT],
+                "prompt_kind": "repeated",
+                "attempt": 0,
+                "expected_continuation": None,
+                "max_tokens": 1,
+                "logprobs": DIAGNOSTIC_LOGPROBS,
+                "collect_route_diagnostics": True,
+            }
+        )
+        specs.append(
+            {
                 "name": f"rank{rank}-repeated-bs1",
                 "data_parallel_rank": rank,
                 "prompts": [PROMPT],
                 "prompt_kind": "repeated",
                 "attempt": 0,
                 "expected_continuation": EXPECTED_CONTINUATION,
+                "max_tokens": MAX_NEW_TOKENS,
+                "logprobs": DIAGNOSTIC_LOGPROBS,
+                "collect_route_diagnostics": False,
             }
         )
         for attempt in range(DIAGNOSTIC_REPEATED_ATTEMPTS):
@@ -1134,6 +1255,9 @@ def _vllm_completion_diagnostic_specs() -> list[dict[str, Any]]:
                     "prompt_kind": "repeated",
                     "attempt": attempt,
                     "expected_continuation": EXPECTED_CONTINUATION,
+                    "max_tokens": MAX_NEW_TOKENS,
+                    "logprobs": DIAGNOSTIC_LOGPROBS,
+                    "collect_route_diagnostics": False,
                 }
             )
         specs.append(
@@ -1144,6 +1268,9 @@ def _vllm_completion_diagnostic_specs() -> list[dict[str, Any]]:
                 "prompt_kind": "non_repeated",
                 "attempt": 0,
                 "expected_continuation": None,
+                "max_tokens": MAX_NEW_TOKENS,
+                "logprobs": DIAGNOSTIC_LOGPROBS,
+                "collect_route_diagnostics": False,
             }
         )
     return specs
@@ -1159,12 +1286,16 @@ def _run_vllm_completion_diagnostics(
         name = str(spec["name"])
         data_parallel_rank = int(spec["data_parallel_rank"])
         prompts = list(spec["prompts"])
+        max_tokens = int(spec["max_tokens"])
+        logprobs = int(spec["logprobs"]) if spec["logprobs"] is not None else None
         request_summary: dict[str, Any] = {
             "name": name,
             "data_parallel_rank": data_parallel_rank,
             "batch_size": len(prompts),
             "prompt_kind": spec["prompt_kind"],
             "attempt": spec["attempt"],
+            "max_tokens": max_tokens,
+            "logprobs": logprobs,
             "prompt_summary": _diagnostic_prompt_summary(prompts),
         }
         try:
@@ -1173,6 +1304,8 @@ def _run_vllm_completion_diagnostics(
                 prompts=prompts,
                 data_parallel_rank=data_parallel_rank,
                 request_id=f"grugmoe-diagnostic-{name}",
+                max_tokens=max_tokens,
+                logprobs=logprobs,
             )
             request_summary.update(
                 _summarize_completion_payload(
@@ -1181,6 +1314,8 @@ def _run_vllm_completion_diagnostics(
                     expected_continuation=spec["expected_continuation"],
                 )
             )
+            if spec["collect_route_diagnostics"]:
+                request_summary["route_diagnostics"] = _collect_grug_moe_route_diagnostics(env)
         except Exception as exc:  # Keep the primary vLLM correctness result visible.
             request_summary["failure"] = _exception_summary(exc)
         requests_summary.append(request_summary)
@@ -1267,6 +1402,279 @@ def _exception_summary(exc: BaseException) -> dict[str, Any]:
         "type": type(exc).__name__,
         "message": message[:max_message_length],
         "message_truncated": len(message) > max_message_length,
+    }
+
+
+def _jax_dtype_name(value: Any) -> str:
+    dtype = getattr(value, "dtype", None)
+    return str(dtype) if dtype is not None else "unavailable"
+
+
+def _jax_int_rows(value: Any, *, max_rows: int = 4, max_cols: int = 8) -> list[list[int]]:
+    import jax  # noqa: PLC0415
+    import numpy as np  # noqa: PLC0415
+
+    array = np.asarray(jax.device_get(value))[:max_rows, :max_cols]
+    return [[int(item) for item in row] for row in array.tolist()]
+
+
+def _jax_float_rows(value: Any, *, max_rows: int = 4, max_cols: int = 8) -> list[list[float]]:
+    import jax  # noqa: PLC0415
+    import numpy as np  # noqa: PLC0415
+
+    array = np.asarray(jax.device_get(value))[:max_rows, :max_cols].astype(np.float32)
+    return [[float(item) for item in row] for row in array.tolist()]
+
+
+def _jax_float_vector(value: Any, *, max_items: int = 8) -> list[float]:
+    import jax  # noqa: PLC0415
+    import numpy as np  # noqa: PLC0415
+
+    array = np.asarray(jax.device_get(value))[:max_items].astype(np.float32)
+    return [float(item) for item in array.tolist()]
+
+
+def _jax_int_vector(value: Any, *, max_items: int = 8) -> list[int]:
+    import jax  # noqa: PLC0415
+    import numpy as np  # noqa: PLC0415
+
+    array = np.asarray(jax.device_get(value))[:max_items]
+    return [int(item) for item in array.tolist()]
+
+
+def _apply_levanter_reference_mode(model: Any, mode: str) -> tuple[Any, dict[str, Any]]:
+    if mode == "current":
+        return model, {
+            "mode": mode,
+            "applies_mixed_precision_policy": False,
+            "policy": None,
+        }
+    if mode == "bf16_compute":
+        import jmp  # noqa: PLC0415
+
+        policy = jmp.get_policy(LEVANTER_BF16_POLICY)
+        return policy.cast_to_compute(model), {
+            "mode": mode,
+            "applies_mixed_precision_policy": True,
+            "policy": LEVANTER_BF16_POLICY,
+            "param_dtype": str(policy.param_dtype),
+            "compute_dtype": str(policy.compute_dtype),
+            "output_dtype": str(policy.output_dtype),
+        }
+    raise ValueError(f"unknown Levanter reference mode: {mode!r}")
+
+
+def _jax_model_dtype_summary(model: Any) -> dict[str, Any]:
+    first_block = model.blocks[0]
+    return {
+        "token_embed": _jax_dtype_name(model.token_embed),
+        "output_proj": _jax_dtype_name(model.output_proj),
+        "router_weight": _jax_dtype_name(first_block.mlp.router),
+        "router_bias": _jax_dtype_name(first_block.mlp.router_bias),
+        "expert_w_gate_up": _jax_dtype_name(first_block.mlp.expert_mlp.w_gate_up),
+        "expert_w_down": _jax_dtype_name(first_block.mlp.expert_mlp.w_down),
+        "shared_w_gate": _jax_dtype_name(first_block.shared.w_gate) if first_block.shared is not None else None,
+    }
+
+
+def _jax_mlp_route_summary(mlp: Any, x: Any, *, layer_index: int) -> dict[str, Any]:
+    import jax  # noqa: PLC0415
+    import jax.numpy as jnp  # noqa: PLC0415
+    from jax.sharding import PartitionSpec as P  # noqa: PLC0415
+    from jax.sharding import reshard  # noqa: PLC0415
+
+    token_count = int(x.shape[0] * x.shape[1])
+    x_flat = x.reshape((token_count, x.shape[-1]))
+    router_logits = jnp.einsum("td,de->te", x_flat, reshard(mlp.router, P(None, None))).astype(jnp.float32)
+    biased_logits = router_logits + jax.lax.stop_gradient(mlp.router_bias)
+    top_count = min(DIAGNOSTIC_LOGPROBS, int(router_logits.shape[-1]))
+    unbiased_top_logits, unbiased_top_ids = jax.lax.top_k(router_logits, top_count)
+    biased_top_logits, biased_top_ids = jax.lax.top_k(biased_logits, top_count)
+    selected = biased_top_ids[:, : mlp.cfg.num_experts_per_token]
+    unbiased_topk = jnp.take_along_axis(router_logits, selected, axis=-1)
+    combine_weights = jax.nn.sigmoid(unbiased_topk).astype(x.dtype)
+    return {
+        "layer_index": layer_index,
+        "token_count": token_count,
+        "hidden_dtype": _jax_dtype_name(x_flat),
+        "expert_hidden_dtype": _jax_dtype_name(x_flat),
+        "router_weight_dtype": _jax_dtype_name(mlp.router),
+        "router_bias_dtype": _jax_dtype_name(mlp.router_bias),
+        "router_logits_dtype": _jax_dtype_name(router_logits),
+        "combine_weights_dtype": _jax_dtype_name(combine_weights),
+        "w_gate_up_dtype": _jax_dtype_name(mlp.expert_mlp.w_gate_up),
+        "w_down_dtype": _jax_dtype_name(mlp.expert_mlp.w_down),
+        "selected_experts": _jax_int_rows(
+            selected,
+            max_cols=mlp.cfg.num_experts_per_token,
+        ),
+        "combine_weights": _jax_float_rows(
+            combine_weights,
+            max_cols=mlp.cfg.num_experts_per_token,
+        ),
+        "unbiased_top_expert_ids": _jax_int_rows(unbiased_top_ids, max_cols=top_count),
+        "unbiased_top_logits": _jax_float_rows(unbiased_top_logits, max_cols=top_count),
+        "biased_top_expert_ids": _jax_int_rows(biased_top_ids, max_cols=top_count),
+        "biased_top_logits": _jax_float_rows(biased_top_logits, max_cols=top_count),
+        "unbiased_top2_margin": _jax_float_vector(
+            unbiased_top_logits[:, 0] - unbiased_top_logits[:, 1],
+            max_items=4,
+        ),
+        "biased_top2_margin": _jax_float_vector(
+            biased_top_logits[:, 0] - biased_top_logits[:, 1],
+            max_items=4,
+        ),
+    }
+
+
+def _jax_forward_route_diagnostics(
+    model: Any,
+    token_ids_array: Any,
+    *,
+    position: int,
+) -> dict[str, Any]:
+    import jax  # noqa: PLC0415
+    import jax.numpy as jnp  # noqa: PLC0415
+    from levanter.grug.attention import AttentionMask  # noqa: PLC0415
+    from levanter.utils.activation import ActivationFunctionEnum  # noqa: PLC0415
+
+    from experiments.grug.moe import model as grug_model  # noqa: PLC0415
+
+    token_ids = jnp.asarray(token_ids_array, dtype=jnp.int32)
+    batch_spec = grug_model._batch_spec()
+    hidden = model.token_embed.at[token_ids].get(out_sharding=batch_spec)
+    hidden = model.embed_gated_norm(model.embed_norm(hidden))
+    short_mask, long_mask = grug_model._layer_attention_masks(
+        AttentionMask.causal(),
+        sliding_window=model.config.sliding_window,
+    )
+    layer_summaries = []
+    for layer_index, block in enumerate(model.blocks):
+        layer_mask = long_mask if layer_index % 4 == 3 else short_mask
+        attn_in = block.attn_gated_norm(block.rms_attn(hidden))
+        hidden = grug_model._batch_reshard(hidden + block.attn(attn_in, layer_mask))
+        mlp_in = grug_model._batch_reshard(block.mlp_gated_norm(block.rms_mlp(hidden)))
+        layer_summaries.append(_jax_mlp_route_summary(block.mlp, mlp_in, layer_index=layer_index))
+        mlp_out, _ = block.mlp(mlp_in)
+        if block.shared is not None:
+            mlp_out = mlp_out + block.shared(mlp_in, activation=ActivationFunctionEnum.silu)
+        hidden = hidden + mlp_out
+
+    hidden = model.final_gated_norm(model.final_norm(hidden))
+    logits = jnp.einsum("bsh,hd->bsd", hidden, model.output_proj, out_sharding=batch_spec)
+    position_logits = logits[:, position, :].astype(jnp.float32)
+    top_count = min(DIAGNOSTIC_LOGPROBS, int(position_logits.shape[-1]))
+    top_logits, top_token_ids = jax.lax.top_k(position_logits[0], top_count)
+    return {
+        "position": position,
+        "logits_dtype": _jax_dtype_name(logits),
+        "position_logits_dtype": _jax_dtype_name(position_logits),
+        "top_token_ids": _jax_int_vector(top_token_ids, max_items=top_count),
+        "top_logits": _jax_float_vector(top_logits, max_items=top_count),
+        "top2_margin": float(_jax_float_vector(top_logits[0:1] - top_logits[1:2], max_items=1)[0]),
+        "layers": layer_summaries,
+    }
+
+
+def _token_top_logits_summary(tokenizer: Any, logits: Any) -> dict[str, Any]:
+    import numpy as np  # noqa: PLC0415
+
+    top_count = min(DIAGNOSTIC_LOGPROBS, int(logits.shape[-1]))
+    top_ids = np.argsort(-logits)[:top_count]
+    top_logits = logits[top_ids].astype(np.float32)
+    return {
+        "top_token_ids": [int(token_id) for token_id in top_ids.tolist()],
+        "top_token_texts": [_decode_one(tokenizer, int(token_id)) for token_id in top_ids.tolist()],
+        "top_logits": [float(value) for value in top_logits.tolist()],
+        "top2_margin": float(top_logits[0] - top_logits[1]) if top_count >= 2 else None,
+    }
+
+
+def _greedy_decode_with_diagnostics(
+    model: Any,
+    tokenizer: Any,
+    prompt_ids: list[int],
+    *,
+    max_new_tokens: int,
+    batch_size: int,
+    decode_seq_len: int,
+    pad_token_id: int,
+    use_active_prefix: bool = False,
+) -> dict[str, Any]:
+    import jax  # noqa: PLC0415
+    import jax.numpy as jnp  # noqa: PLC0415
+    import numpy as np  # noqa: PLC0415
+
+    if len(prompt_ids) + max_new_tokens > decode_seq_len:
+        raise ValueError(
+            f"prompt length {len(prompt_ids)} + max_new_tokens {max_new_tokens} exceeds decode_seq_len {decode_seq_len}"
+        )
+
+    def position_logits_batch(the_model: Any, token_ids: Any, position: Any) -> Any:
+        return the_model.logits(token_ids)[:, position, :].astype(jnp.float32)
+
+    token_ids_array = np.full((batch_size, decode_seq_len), pad_token_id, dtype=np.int32)
+    token_ids_array[:, : len(prompt_ids)] = np.asarray(prompt_ids, dtype=np.int32)
+    generated_ids: list[int] = []
+    generated_token_texts: list[str] = []
+    selected_token_logprobs: list[float] = []
+    steps: list[dict[str, Any]] = []
+    route_diagnostics: list[dict[str, Any]] = []
+    active_seq_lengths: list[int] = []
+    position_logits = jax.jit(position_logits_batch)
+    started = time.time()
+
+    for step_index in range(max_new_tokens):
+        active_seq_len = len(prompt_ids) + step_index
+        position = jnp.asarray(active_seq_len - 1, dtype=jnp.int32)
+        step_token_ids_array = token_ids_array[:, :active_seq_len] if use_active_prefix else token_ids_array
+        if step_index < DIAGNOSTIC_ROUTE_STEPS:
+            route_diagnostics.append(
+                {
+                    "generated_token_index": step_index,
+                    **_jax_forward_route_diagnostics(
+                        model,
+                        step_token_ids_array,
+                        position=int(active_seq_len - 1),
+                    ),
+                }
+            )
+        step_logits_batch = position_logits(model, jnp.asarray(step_token_ids_array, dtype=jnp.int32), position)
+        step_logits = np.asarray(jax.device_get(step_logits_batch))[0]
+        selected_token_id = int(np.argmax(step_logits, axis=-1))
+        selected_text = _decode_one(tokenizer, selected_token_id)
+        selected_logprob = _selected_logprob(step_logits, selected_token_id)
+        top_logits = _token_top_logits_summary(tokenizer, step_logits)
+        active_seq_lengths.append(active_seq_len)
+        generated_ids.append(selected_token_id)
+        generated_token_texts.append(selected_text)
+        selected_token_logprobs.append(selected_logprob)
+        steps.append(
+            {
+                "generated_token_index": step_index,
+                "token_id": selected_token_id,
+                "token_text": selected_text,
+                "selected_token_logprob": selected_logprob,
+                **top_logits,
+            }
+        )
+        token_ids_array[:, len(prompt_ids) + step_index] = selected_token_id
+
+    return {
+        "prompt_token_ids": [int(token_id) for token_id in prompt_ids],
+        "prompt_token_count": len(prompt_ids),
+        "decode_batch_size": batch_size,
+        "decode_seq_len": decode_seq_len,
+        "use_active_prefix": use_active_prefix,
+        "active_seq_lengths": active_seq_lengths,
+        "pad_token_id": pad_token_id,
+        "generated_token_ids": generated_ids,
+        "generated_token_texts": generated_token_texts,
+        "completion": tokenizer.decode(generated_ids, skip_special_tokens=False),
+        "selected_token_logprobs": selected_token_logprobs,
+        "steps": steps,
+        "route_diagnostics": route_diagnostics,
+        "elapsed_seconds": time.time() - started,
     }
 
 
@@ -1357,6 +1765,7 @@ def _vllm_backend(args: argparse.Namespace) -> None:
                     prompts=[PROMPT],
                     data_parallel_rank=0,
                     request_id="grugmoe-single-rank0",
+                    logprobs=DIAGNOSTIC_LOGPROBS,
                 )
                 payloads: list[dict[str, Any]] = []
                 rank_request_batches: list[dict[str, Any]] = []
@@ -1367,6 +1776,7 @@ def _vllm_backend(args: argparse.Namespace) -> None:
                         prompts=prompts,
                         data_parallel_rank=data_parallel_rank,
                         request_id=f"grugmoe-main-rank{data_parallel_rank}",
+                        logprobs=DIAGNOSTIC_LOGPROBS,
                     )
                     payloads.append(payload)
                     rank_request_batches.append(
@@ -1404,6 +1814,10 @@ def _vllm_backend(args: argparse.Namespace) -> None:
                 "vllm_attention_backend_env_var": VLLM_ATTENTION_BACKEND_ENV,
                 "vllm_dtype_env_var": VLLM_DTYPE_ENV,
                 "vllm_dtype": VLLM_DTYPE,
+                "vllm_moe_compute_env_var": VLLM_MOE_COMPUTE_ENV,
+                "vllm_moe_compute": VLLM_MOE_COMPUTE,
+                "vllm_route_diagnostics_env_var": VLLM_ROUTE_DIAGNOSTICS_ENV,
+                "vllm_route_diagnostics": VLLM_ROUTE_DIAGNOSTICS,
                 "vllm_tensor_parallel_size": VLLM_TENSOR_PARALLEL_SIZE,
                 "vllm_data_parallel_size": VLLM_DATA_PARALLEL_SIZE,
                 "vllm_expert_parallel_size": VLLM_EXPERT_PARALLEL_SIZE,
@@ -1501,6 +1915,10 @@ def _vllm_backend(args: argparse.Namespace) -> None:
         "vllm_attention_backend_env_var": VLLM_ATTENTION_BACKEND_ENV,
         "vllm_dtype_env_var": VLLM_DTYPE_ENV,
         "vllm_dtype": VLLM_DTYPE,
+        "vllm_moe_compute_env_var": VLLM_MOE_COMPUTE_ENV,
+        "vllm_moe_compute": VLLM_MOE_COMPUTE,
+        "vllm_route_diagnostics_env_var": VLLM_ROUTE_DIAGNOSTICS_ENV,
+        "vllm_route_diagnostics": VLLM_ROUTE_DIAGNOSTICS,
         "vllm_tensor_parallel_size": VLLM_TENSOR_PARALLEL_SIZE,
         "vllm_data_parallel_size": VLLM_DATA_PARALLEL_SIZE,
         "vllm_expert_parallel_size": VLLM_EXPERT_PARALLEL_SIZE,
@@ -1573,15 +1991,21 @@ def _levanter_backend(args: argparse.Namespace) -> None:
         stack.enter_context(set_mesh(mesh))
         stack.enter_context(haliax.axis_mapping({}))
         loaded_model = _load_legacy_split_expert_checkpoint(args.checkpoint_path, model_cfg)
-        model = _executable_model_from_legacy_split(
+        executable_model = _executable_model_from_legacy_split(
             loaded_model,
             capacity_factor=LEVANTER_MOE_CAPACITY_FACTOR,
         )
+        pre_policy_dtype_summary = _jax_model_dtype_summary(executable_model)
+        model, reference_policy = _apply_levanter_reference_mode(
+            executable_model,
+            LEVANTER_REFERENCE_MODE,
+        )
+        post_policy_dtype_summary = _jax_model_dtype_summary(model)
         decode_results: list[dict[str, Any]] = []
         completions: list[str] = []
         remaining = PROMPT_BATCH_SIZE
         while remaining > 0:
-            decode_result = _greedy_decode(
+            decode_result = _greedy_decode_with_diagnostics(
                 model,
                 tokenizer,
                 prompt_ids,
@@ -1612,6 +2036,11 @@ def _levanter_backend(args: argparse.Namespace) -> None:
         "levanter_moe_capacity_factor": LEVANTER_MOE_CAPACITY_FACTOR,
         "levanter_decode_use_active_prefix": LEVANTER_DECODE_USE_ACTIVE_PREFIX,
         "decode_results": decode_results,
+        "levanter_reference_mode_env_var": LEVANTER_REFERENCE_MODE_ENV,
+        "levanter_reference_mode": LEVANTER_REFERENCE_MODE,
+        "levanter_reference_policy": reference_policy,
+        "levanter_pre_policy_dtype_summary": pre_policy_dtype_summary,
+        "levanter_post_policy_dtype_summary": post_policy_dtype_summary,
         "coreweave_s3": s3_env,
         "jax_env": jax_env,
         "jax_runtime": jax_runtime,

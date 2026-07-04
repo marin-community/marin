@@ -233,6 +233,10 @@ def _write_summary_update(
             "vllm_expert_parallel_size": backend.VLLM_EXPERT_PARALLEL_SIZE,
             "vllm_attention_backend": backend.VLLM_ATTENTION_BACKEND,
             "vllm_default_attention_backend": backend.VLLM_DEFAULT_ATTENTION_BACKEND,
+            "vllm_dtype": backend.VLLM_DTYPE,
+            "vllm_moe_compute": backend.VLLM_MOE_COMPUTE,
+            "vllm_route_diagnostics": backend.VLLM_ROUTE_DIAGNOSTICS,
+            "levanter_reference_mode": backend.LEVANTER_REFERENCE_MODE,
             "levanter_moe_capacity_factor": backend.LEVANTER_MOE_CAPACITY_FACTOR,
             "levanter_decode_use_active_prefix": backend.LEVANTER_DECODE_USE_ACTIVE_PREFIX,
             "prompt_batch_size": backend.PROMPT_BATCH_SIZE,
@@ -276,6 +280,9 @@ def _write_summary_update(
         summary["vllm_observed_tensor_parallel_size"] = backend_results["vllm"].get("vllm_tensor_parallel_size")
         summary["vllm_observed_data_parallel_size"] = backend_results["vllm"].get("vllm_data_parallel_size")
         summary["vllm_observed_expert_parallel_size"] = backend_results["vllm"].get("vllm_expert_parallel_size")
+        summary["vllm_observed_dtype"] = backend_results["vllm"].get("vllm_dtype")
+        summary["vllm_observed_moe_compute"] = backend_results["vllm"].get("vllm_moe_compute")
+        summary["vllm_observed_route_diagnostics"] = backend_results["vllm"].get("vllm_route_diagnostics")
         summary["vllm_worker_ep_summary"] = backend_results["vllm"].get("worker_ep_summary")
         summary["vllm_routed_expert_owner_ranks"] = backend_results["vllm"].get("routed_expert_owner_ranks")
         summary["vllm_routed_expert_owner_rank_coverage"] = backend_results["vllm"].get(
@@ -287,6 +294,8 @@ def _write_summary_update(
         summary["vllm_requested_data_parallel_ranks"] = backend_results["vllm"].get("requested_data_parallel_ranks")
         levanter_jax_runtime = backend_results["levanter"].get("jax_runtime", {})
         levanter_jax_mesh = backend_results["levanter"].get("jax_mesh", {})
+        summary["levanter_observed_reference_mode"] = backend_results["levanter"].get("levanter_reference_mode")
+        summary["levanter_reference_policy"] = backend_results["levanter"].get("levanter_reference_policy")
         summary["levanter_jax_gpu_device_count"] = levanter_jax_runtime.get("gpu_device_count")
         summary["levanter_jax_mesh_device_count"] = levanter_jax_mesh.get("device_count")
         summary["levanter_jax_mesh_shape"] = levanter_jax_mesh.get("shape")
@@ -315,6 +324,8 @@ def test_grugmoe_gpu_real_checkpoint_e2e_static_preconditions() -> None:
     assert backend.WORKER_EXTENSION_CLS == f"{backend.WORKER_EXTENSION_MODULE}.{backend.WORKER_EXTENSION_CLASS}"
     assert backend.VLLM_ATTENTION_BACKEND in backend.VLLM_ATTENTION_BACKENDS_UNDER_TEST
     assert backend.VLLM_DTYPE in backend.VLLM_DTYPE_CHOICES
+    assert backend.VLLM_MOE_COMPUTE in backend.VLLM_MOE_COMPUTE_CHOICES
+    assert backend.LEVANTER_REFERENCE_MODE in backend.LEVANTER_REFERENCE_MODE_CHOICES
     assert backend.LEVANTER_MOE_CAPACITY_FACTOR == float(backend.EXPECTED_GPU_COUNT)
     assert backend.LEVANTER_DECODE_USE_ACTIVE_PREFIX is True
     assert backend.CHECKPOINT_PATH.startswith(backend.COREWEAVE_S3_PREFIX)
@@ -336,6 +347,9 @@ def test_vllm_gpu_env_enables_debug_logging(monkeypatch: pytest.MonkeyPatch) -> 
     snapshot = backend._configure_vllm_gpu_env()
     assert os.environ["VLLM_LOGGING_LEVEL"] == "DEBUG"
     assert snapshot["vllm_logging_level"] == "DEBUG"
+    assert snapshot["vllm_moe_compute"] == backend.VLLM_MOE_COMPUTE
+    assert os.environ[backend.VLLM_GRUGMOE_MOE_COMPUTE_ENV] == backend.VLLM_MOE_COMPUTE
+    assert snapshot["vllm_route_diagnostics"] == backend.VLLM_ROUTE_DIAGNOSTICS
     assert snapshot["worker_extension_module"] == backend.WORKER_EXTENSION_MODULE
     assert snapshot["worker_extension_cls"] == backend.WORKER_EXTENSION_CLS
     assert snapshot["worker_extension_path"] == str(BACKEND_PATH.parent)
@@ -371,30 +385,50 @@ def test_vllm_completion_diagnostics_compare_rank4_and_rank0(monkeypatch: pytest
         status_code = 200
         text = "{}"
 
-        def __init__(self, choices: list[dict[str, Any]]) -> None:
-            self._choices = choices
+        def __init__(self, payload: dict[str, Any]) -> None:
+            self._payload = payload
 
         def json(self) -> dict[str, Any]:
-            return {
-                "choices": self._choices,
-                "usage": {"completion_tokens": len(self._choices)},
-            }
+            return self._payload
 
         def raise_for_status(self) -> None:
             raise AssertionError("raise_for_status should not be called for successful fake response")
 
     def fake_post(url: str, **kwargs: Any) -> FakeResponse:
         calls.append({"url": url, **kwargs})
+        if url.endswith("/collective_rpc"):
+            return FakeResponse(
+                {
+                    "results": [
+                        {
+                            "worker_rank": rank,
+                            "route_diagnostics_enabled": True,
+                            "layers": [],
+                        }
+                        for rank in range(backend.EXPECTED_GPU_COUNT)
+                    ]
+                }
+            )
         rank = int(kwargs["headers"]["X-data-parallel-rank"])
         choices = [
             {
                 "text": f"rank-{rank}-choice-{index}",
                 "finish_reason": "length",
                 "routed_experts": _encoded_routed_experts([rank * 32, 255]),
+                "logprobs": {
+                    "tokens": [f"rank-{rank}"],
+                    "token_logprobs": [-0.1],
+                    "top_logprobs": [{f"rank-{rank}": -0.1}],
+                },
             }
             for index, _ in enumerate(kwargs["json"]["prompt"])
         ]
-        return FakeResponse(choices)
+        return FakeResponse(
+            {
+                "choices": choices,
+                "usage": {"completion_tokens": len(choices)},
+            }
+        )
 
     worker_ep_states = [
         {
@@ -410,10 +444,13 @@ def test_vllm_completion_diagnostics_compare_rank4_and_rank0(monkeypatch: pytest
 
     assert diagnostics["compare_ranks"] == [4, 0]
     assert diagnostics["repeated_attempts"] == 3
-    assert len(calls) == 10
+    completion_calls = [call for call in calls if call["url"].endswith("/completions")]
+    rpc_calls = [call for call in calls if call["url"].endswith("/collective_rpc")]
+    assert len(completion_calls) == 12
+    assert len(rpc_calls) == 2
     assert calls[0]["headers"] == {
         "X-data-parallel-rank": "4",
-        "X-Request-Id": "grugmoe-diagnostic-rank4-repeated-bs1",
+        "X-Request-Id": "grugmoe-diagnostic-rank4-first-token-repeated-bs2",
     }
     assert {request["data_parallel_rank"] for request in diagnostics["requests"]} == {0, 4}
     assert [
@@ -426,6 +463,12 @@ def test_vllm_completion_diagnostics_compare_rank4_and_rank0(monkeypatch: pytest
     assert rank4_non_repeated["choice_count"] == 2
     assert rank4_non_repeated["choices"][0]["routed_experts_shape"] == [1, 1, 2]
     assert rank4_non_repeated["choices"][0]["routed_owner_ranks"] == [4, 7]
+    rank4_first_token = next(
+        request for request in diagnostics["requests"] if request["name"] == "rank4-first-token-repeated-bs2"
+    )
+    assert rank4_first_token["max_tokens"] == 1
+    assert rank4_first_token["logprobs"] == backend.DIAGNOSTIC_LOGPROBS
+    assert len(rank4_first_token["route_diagnostics"]) == backend.EXPECTED_GPU_COUNT
 
 
 def test_grugmoe_worker_extension_reports_structured_ep_state(monkeypatch: pytest.MonkeyPatch) -> None:
