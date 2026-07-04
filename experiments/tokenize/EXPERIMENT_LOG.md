@@ -231,6 +231,33 @@ Best composed arm: **64k-t32k + n-gram = −6.8%** — the best measured.
   whose magnitude does not grow with scale. (Infra: the 1-replica base hung on a controller
   disconnect after ~5 h; killed and rerun at 2 replicas.)
 
+## EXP-009 — is the tokenizer win scale-robust? (64k-t32k @ hidden-2048) ✅
+
+- **Hypothesis / why it matters**: the whole feBPB scorecard reads BPB from **hidden-1024** proxy
+  curves but prices serving at the 20B-active target. If the small-vocab tokenizer's BPB advantage
+  is partly a proxy-scale artifact (at a small model the vocab is a large fraction of params, so a
+  smaller vocab is disproportionately cheaper), the headline −6.8% would be **optimistic** for the
+  real target. Test: rerun the best tokenizer (64k-t32k) and the reference (marin-128k) at
+  hidden-2048 (4× params) and compare the BPB gap to the hidden-1024 gap.
+- **Reproduce**: `scratchpad/launch_64k_w2048.py` (64k-t32k at SCALE_HIDDEN_DIM=2048, 2 replicas,
+  s3500/s8000); marin-128k @ hidden-2048 already run in EXP-007 (`grug-w2048-marin-128k-s{3500,8000}`).
+  **Replay**: `collect_ladder --point w2048-t64k-s3500=… --point w2048-t64k-s8000=…`, then the gap
+  vs the stored marin-2048 points.
+- **Result — the advantage shrinks with scale** (raw BPB gap 64k vs marin at matched steps):
+
+  | | hidden-1024 | hidden-2048 (4× params) |
+  |---|---|---|
+  | s3500 | −3.40% | **−2.46%** |
+  | s8000 | −2.87% | _[s8000 pending]_ |
+
+  The 64k tokenizer still beats Llama-3 at hidden-2048, but by less (−2.46% vs −3.40% at s3500) — the
+  expected direction, since the vocab is a smaller share of a wider model. **Implication for the
+  headline**: the −6.8% feBPB (from hidden-1024 curves) is an **upper bound** on the target-scale
+  win; extrapolating the ~28%-per-4×-params shrink, the true 20B-active feBPB win is plausibly
+  **−4 to −5.5%**. The serving-cost discount (fertility ratio) is scale-invariant and remains; it is
+  the *training-efficiency* half of the win that erodes. This does not change the qualitative
+  conclusion (train a small-vocab SuperBPE; 10% unreachable) but it is the key caveat on the number.
+
 ## EXP-005 — n-gram stacked on superbpe-128k (the composed lever) ✅
 
 - **Hypothesis**: the n-gram lever is orthogonal to the tokenizer, so superbpe-128k (−4.7% feBPB) +

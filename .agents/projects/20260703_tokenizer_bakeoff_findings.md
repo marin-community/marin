@@ -34,6 +34,14 @@ bottoms out here. Adding a hashed n-gram embedding on top buys a further ~0.2% �
 concentrates at high training budget (a penalty early, −0.86% BPB by the top of the ladder), which
 is exactly the budget feBPB scores at. **Best measured: −6.8% feBPB (64k + n-gram).**
 
+**Caveat — this is an upper bound; the win shrinks with model scale.** The scorecard reads BPB from
+hidden-1024 proxy curves. A hidden-2048 (4× params) check shows the 64k tokenizer's raw BPB
+advantage over Llama-3 shrinks from −3.40% to −2.46% (s3500) — the vocab is a smaller share of a
+wider model, so the training-efficiency half of the win erodes with scale (the serving-cost half is
+scale-invariant). Extrapolated to the 20B-active target, the realistic feBPB win is plausibly
+**−4 to −5.5%**, not −6.8%. The direction of the conclusion is unchanged (train a small-vocab
+SuperBPE; 10% is out of reach), but the honest number for the target is below the proxy headline.
+
 **On the 10% target.** The measured levers do not reach a 10% feBPB improvement at the flash-scale
 proxy, and we can now say *why* with a clear decomposition: off-the-shelf superword buys −4.7%;
 training our own and shrinking the vocab into the 40–64k plateau adds ~1.9% more (to −6.6%) and then
