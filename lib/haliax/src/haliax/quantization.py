@@ -255,17 +255,14 @@ class Fp8RaggedDotOp(OverwriteWithGradient):
     non-uniform ``group_sizes`` (each expert may receive a different number of
     tokens), then dequantizes the result.
 
-    The input gradient (grad_lhs) runs on the FP8 tensor cores: the output gradient
-    is quantized to ``rev_dtype`` with delayed scaling and contracted against the
-    pre-cast natural weight layout. On stock jaxlib Mosaic ``wgmma`` rejects mixed
-    operand dtypes, so ``rev_dtype`` defaults to E4M3 (same as the weight) -- a
-    uniform ``e4m3 x e4m3`` dgrad. The weight gradient (grad_rhs) stays **bf16**
-    (numerically exact) via the bf16 ``ragged_dot`` Triton kernel; FP8 weight
-    gradient is a follow-up. All state (per-tensor scale + amax history for the
-    input, kernel, and output gradient) is carried as [OverwriteWithGradient][] so
-    it threads through ``partition_for_grad_overwrite`` / ``apply_updates`` and
-    stays out of the optimizer/EMA state; the output-gradient scale + amax history
-    now update from the gradient magnitudes each step.
+    Both gradients run on the FP8 tensor cores: the output gradient is quantized to
+    ``rev_dtype`` with delayed scaling and contracted against the pre-cast natural
+    weight layout (grad_lhs), and the pre-cast transposed activation and transposed
+    output gradient are contracted for grad_rhs via ``mgpu_dwgrad``.  All state
+    (per-tensor scale + amax history for the input, kernel, and output gradient) is
+    carried as [OverwriteWithGradient][] so it threads through
+    ``partition_for_grad_overwrite`` / ``apply_updates`` and stays out of the
+    optimizer/EMA state.
 
     The FP8 fast path is a Mosaic-GPU ``wgmma`` kernel and therefore requires
     Hopper (SM90). Ports of this recipe to other architectures should plug in
@@ -278,8 +275,10 @@ class Fp8RaggedDotOp(OverwriteWithGradient):
     ``rev_dtype`` here defaults to E4M3, matching ``fwd_dtype``: stock-jaxlib
     Mosaic ``wgmma`` requires both operands of a contraction to share one
     dtype, and re-quantizing *weights* down to E5M2 to match an E5M2 gradient
-    costs too much mantissa. ``init`` rejects mixed dtype pairs until
-    mixed-dtype ``wgmma`` is available upstream (jax-ml/jax#38859).
+    costs too much mantissa.  **The uniform ``e4m3 x e4m3`` backward is therefore
+    an approximation** -- the numerically correct output-gradient dtype is E5M2 --
+    and ``init`` rejects mixed dtype pairs until mixed-dtype ``wgmma`` is
+    available upstream (jax-ml/jax#38859).
     """
 
     input_scale: jnp.ndarray
