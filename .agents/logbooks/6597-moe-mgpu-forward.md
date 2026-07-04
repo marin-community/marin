@@ -2311,3 +2311,72 @@ this MLP boundary instead of calling the older forward-only adapter directly.
     `dw13`, and `dw2` against the independent compact-H MLP reference.
   - Remaining production work is H100 verification of the Pallas from-plan forward under an environment with matching
     JAX/Mosaic/CuDNN bits, then target backward/perf measurement through this MLP boundary.
+
+## 2026-07-04 00:39 - Public MLP VJP H100 smoke
+
+Added a public-boundary compare mode and fixed the sharding annotations needed for dynamic JAX plan gathers under an
+explicit expert mesh. The public `pallas_mgpu_source_push` adapter now runs through the preplanned MLP custom VJP on H100
+for the reduced smoke shape and matches the package-private staged source-push forward exactly.
+
+- Commit Hashes:
+  - `3e27b8d52` - allow `pallas_mgpu_source_push` in the public compare benchmark.
+  - `0449c1af9` - add explicit output sharding to source-major dynamic plan gathers.
+  - `cd5d2ddba` - add explicit output sharding for receive-order per-source queue slices.
+  - `0e7e1ba75` - use `jax.sharding.reshard(...)` for the final receive-order route-weight layout under explicit mesh axes.
+- Code:
+  - `lib/levanter/scripts/bench/bench_source_push_forward_public_compare.py`
+  - `lib/levanter/src/levanter/grug/_moe/source_push_plan.py`
+  - `lib/levanter/tests/grug/test_source_push_inbox.py`
+- Local verification:
+  - `uv run --package marin-levanter --group test pytest lib/levanter/tests/grug/test_source_push_inbox.py -q -k 'public_compare_cli_passes_profile_defaults or public_compare_bench_cli_imports'`
+    - Result: `2 passed, 11 warnings in 13.98s`.
+  - `uv run --package marin-levanter --group test pytest lib/levanter/tests/grug/test_source_push_plan.py lib/levanter/tests/grug/test_source_push_inbox.py lib/levanter/tests/grug/test_source_push_mlp.py -q -k 'jax_pack_and_route_weight_gathers or device_inputs_from_plan_use_dynamic_jax_arrays or from_plan'`
+    - Result: `3 passed, 11 warnings in 17.56s`.
+  - `uv run --package marin-levanter --group test pytest lib/levanter/tests/grug/test_source_push_plan.py lib/levanter/tests/grug/test_source_push_inbox.py -q -k 'jax_pack_and_route_weight_gathers or device_inputs_from_plan_use_dynamic_jax_arrays'`
+    - Result after final patch: `2 passed, 11 warnings in 14.41s`.
+  - Touched-file `./infra/pre-commit.py --fix ...`
+    - Result: all checks passed, including Pyrefly on Python files.
+- H100 failed smoke attempts:
+
+  | job | commit | outcome |
+  | --- | --- | --- |
+  | `/dlwh/source-push-public-mlp-vjp-smoke-3e27b8d525-20260704-0021` | `3e27b8d52` | Structured failure row: `ShardingTypeError` in `source_push_queue_route_weights_jax` for the first dynamic gather from `route_weights[source, token, slot]` under source-sharded public inputs. |
+  | `/dlwh/source-push-public-mlp-vjp-smoke-0449c1af9c-20260704-0031` | `0449c1af9` | Structured failure row: first gather fixed, then `ShardingTypeError` on `queue_weights[src, send_dst_ord]` while reordering to receive order. |
+  | `/dlwh/source-push-public-mlp-vjp-smoke-cd5d2ddbaa-20260704-0037` | `cd5d2ddba` | Structured failure row: receive-order tensor built, then explicit mesh `with_sharding_constraint` asserted because the value was replicated `P(None, None, None, None)` rather than destination-sharded `P('expert', None, None, None)`. |
+
+- Successful H100 smoke:
+  - Job: `/dlwh/source-push-public-mlp-vjp-smoke-0e7e1ba759-20260704-0041`
+  - Cluster: `cw-us-east-02a`
+  - Command:
+
+    ```bash
+    uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job run --no-wait \
+      --job-name source-push-public-mlp-vjp-smoke-0e7e1ba759-20260704-0041 \
+      --cpu 16 --memory 128GB --disk 16GB --gpu H100x2 --reserve H100x2 \
+      --enable-extra-resources --extra gpu -- \
+      timeout 1800s uv run --package marin-levanter --group test python \
+      lib/levanter/scripts/bench/bench_source_push_forward_public_compare.py \
+      --ep-size 2 --entries-per-rank 4 --inbox-slots 2 \
+      --hidden-dim 128 --intermediate-dim 128 \
+      --block-m 64 --block-k 64 --block-n 128 \
+      --experts-per-rank 2 --send-worker-programs-per-peer 1 --worker-programs-per-peer 4 \
+      --routing balanced --tokens-per-rank 128 --topk 1 --capacity-factor 1.25 \
+      --source-push-implementation pallas_mgpu --source-push-execution-mode staged_host_sync \
+      --public-implementations pallas_mgpu_source_push \
+      --git-sha 0e7e1ba759 --jsonl scratch/source_push_public_mlp_vjp_smoke_0e7e1ba759.jsonl
+    ```
+
+  - Result row:
+
+    ```json
+    {"dropped_route_delta": 0, "error": null, "git_sha": "0e7e1ba759", "max_abs_diff": 0.0, "mean_abs_diff": 0.0, "output_shape": [2, 128, 128], "public_dropped_routes": 0, "public_implementation": "pallas_mgpu_source_push", "source_push_dropped_routes": 0, "source_push_execution_mode": "staged_host_sync", "source_push_implementation": "pallas_mgpu"}
+    ```
+
+- Interpretation:
+  - The public adapter now exercises the intended MLP custom VJP forward path on H100, not just the package-private
+    staged forward harness.
+  - The dynamic plan gathers need explicit sharding because public inputs are source-sharded under an explicit `expert`
+    mesh. The receive-order route-weight gather necessarily repartitions metadata from source-major to destination-major
+    layout before W2-from-H consumes it.
+  - This is a reduced forward-only smoke. Target-shape forward/backward timing through the public MLP VJP remains to be
+    measured by the fwd/bwd measurement workstream.
