@@ -24,6 +24,7 @@ from iris.cluster.controller.reconcile.snapshot import (
     JobConfigRow,
     JobStateBasis,
     TransitionSnapshot,
+    pick_earliest_task_error,
 )
 from iris.cluster.controller.task_state import ActiveTaskRow
 from iris.cluster.types import TERMINAL_JOB_STATES, JobName, WorkerId
@@ -105,13 +106,12 @@ class Overlay:
                 total_failures=0,
                 first_task_error=None,
             )
-        # Single pass: build the accumulator-aware state histogram, the cumulative
-        # failure count, and the first non-null error. ``all_tasks_by_job`` is
-        # pre-sorted by ``task_index``, so the first error encountered is the
-        # canonical "first task error".
+        # Single pass: build the accumulator-aware state histogram, the
+        # cumulative failure count, and each task's effective (error,
+        # finished_at) for pick_earliest_task_error to rank afterward.
         counts: dict[int, int] = {}
         total_failures = 0
-        first_error: str | None = None
+        error_candidates: list[tuple[int, Timestamp | None, str | None]] = []
         for row in self._snapshot.all_tasks_by_job.get(job_id, ()):
             delta = self._effects.tasks.get(row.task_id)
             state = delta.state if delta is not None else row.state
@@ -120,12 +120,11 @@ class Overlay:
             # leaves it None did not touch the count, so fall back to the row.
             fc = delta.failure_count if (delta is not None and delta.failure_count is not None) else row.failure_count
             total_failures += fc
-            if first_error is None:
-                # The accumulator only carries an error when a delta set a
-                # non-null error; otherwise fall back to the snapshot row.
-                err = delta.error if (delta is not None and delta.error is not None) else row.error
-                if err is not None:
-                    first_error = err
+            # The accumulator only carries a value when a delta set a non-null
+            # one; otherwise fall back to the snapshot row.
+            error = delta.error if (delta is not None and delta.error is not None) else row.error
+            finished_at = delta.finished_at if (delta is not None and delta.finished_at is not None) else row.finished_at
+            error_candidates.append((row.task_index, finished_at, error))
         return JobStateBasis(
             job_id=basis.job_id,
             state=current_state,
@@ -133,7 +132,7 @@ class Overlay:
             max_task_failures=basis.max_task_failures,
             task_state_counts=counts,
             total_failures=total_failures,
-            first_task_error=first_error,
+            first_task_error=pick_earliest_task_error(error_candidates),
         )
 
     def task_state(self, task_id: JobName) -> int | None:

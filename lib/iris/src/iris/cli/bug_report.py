@@ -18,6 +18,7 @@ from rigging.connect import proxy_path
 from rigging.credentials import ClientCredentials
 
 from iris.cluster.endpoints import LOG_SERVER_ENDPOINT_NAME
+from iris.cluster.log_highlights import extract_failure_highlights
 from iris.cluster.log_keys import build_log_source
 from iris.cluster.types import JobName
 from iris.rpc import controller_pb2, job_pb2
@@ -28,6 +29,10 @@ from iris.time_proto import timestamp_from_proto
 
 logger = logging.getLogger(__name__)
 _FAILED_JOB_STATES = {"failed", "worker_failed", "unschedulable"}
+
+# Cap on the "Likely Root Cause" excerpt so it stays scannable above the full
+# recent-logs dump.
+_ROOT_CAUSE_MAX_LINES = 10
 
 
 # ---------------------------------------------------------------------------
@@ -61,6 +66,9 @@ class TaskReport:
     pending_reason: str
     attempts: list[AttemptReport]
     recent_logs: list[str]
+    # Likely root-cause lines filtered out of recent_logs; empty when no line
+    # looked more useful than the raw tail.
+    root_cause_lines: list[str]
 
 
 @dataclass
@@ -269,6 +277,7 @@ def _build_task_report(task: job_pb2.TaskStatus, logs: list[str]) -> TaskReport:
         pending_reason=task.pending_reason,
         attempts=attempts,
         recent_logs=logs,
+        root_cause_lines=extract_failure_highlights(logs, max_lines=_ROOT_CAUSE_MAX_LINES),
     )
 
 
@@ -454,8 +463,21 @@ def format_bug_report(report: BugReport) -> str:
                 )
             lines.append("")
 
-    # Recent Logs (for non-succeeded tasks)
+    # Likely Root Cause (for non-succeeded tasks): the log-highlight excerpt,
+    # shown ahead of the full raw dump so the real failure isn't buried under
+    # tqdm/HTTP-access noise or a wall of repeated barrier-timeout lines.
     failed_tasks = [t for t in report.tasks if t.state not in ("succeeded", "pending") and t.recent_logs]
+    root_cause_tasks = [t for t in failed_tasks if t.root_cause_lines]
+    if root_cause_tasks:
+        lines.append("## Likely Root Cause\n")
+        for t in root_cause_tasks:
+            lines.append(f"### `{t.task_id}`\n")
+            lines.append("```")
+            for log_line in t.root_cause_lines:
+                lines.append(log_line)
+            lines.append("```\n")
+
+    # Recent Logs (for non-succeeded tasks)
     if failed_tasks:
         lines.append("## Recent Logs\n")
         for t in failed_tasks:

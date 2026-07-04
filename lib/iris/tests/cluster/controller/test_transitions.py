@@ -4443,3 +4443,70 @@ def test_recompute_keeps_job_running_within_budget(task_states, failure_counts, 
     new_state = recompute_state(ws, jid)
 
     assert new_state == job_pb2.JOB_STATE_RUNNING
+
+
+def test_recompute_job_error_prefers_earliest_failing_task_over_task_index():
+    """job.error names the task that failed first, not the lowest-indexed one.
+
+    Models a coscheduled gang's shutdown-barrier failure: task 1 crashes first
+    with its own error, and tasks 0/2 are followers that only fail later after
+    timing out waiting on task 1 at a JAX-style barrier. Picking by task_index
+    (the old rule) would report task 0's timeout as the job error even though
+    task 1 died first and is the actual root cause.
+    """
+    jid = JobName.from_wire("/u/gang-barrier")
+    root_cause = "CUDA error: an illegal memory access was encountered"
+    follower_timeout = "Barrier result: DEADLINE_EXCEEDED; timed out waiting for task 1"
+    rows = (
+        TaskHistogramRow(
+            task_id=JobName.from_wire(f"{jid.to_wire()}/0"),
+            task_index=0,
+            state=job_pb2.TASK_STATE_FAILED,
+            failure_count=1,
+            error=follower_timeout,
+            finished_at=Timestamp.from_ms(2000),
+        ),
+        TaskHistogramRow(
+            task_id=JobName.from_wire(f"{jid.to_wire()}/1"),
+            task_index=1,
+            state=job_pb2.TASK_STATE_FAILED,
+            failure_count=1,
+            error=root_cause,
+            finished_at=Timestamp.from_ms(500),
+        ),
+        TaskHistogramRow(
+            task_id=JobName.from_wire(f"{jid.to_wire()}/2"),
+            task_index=2,
+            state=job_pb2.TASK_STATE_FAILED,
+            failure_count=1,
+            error=follower_timeout,
+            finished_at=Timestamp.from_ms(2100),
+        ),
+    )
+    basis = JobStateBasis(
+        job_id=jid,
+        state=job_pb2.JOB_STATE_RUNNING,
+        started_at=Timestamp.from_ms(100),
+        max_task_failures=0,
+        task_state_counts={},
+        total_failures=3,
+        first_task_error=None,  # recomputed by job_basis() for a non-terminal job
+    )
+    snap = TransitionSnapshot(
+        now=Timestamp.from_ms(3000),
+        tasks={},
+        attempts={},
+        attempt_uid_index={},
+        job_configs={},
+        job_state_basis={jid: basis},
+        job_descendants={},
+        all_tasks_by_job={jid: rows},
+        active_tasks_by_job={},
+        active_workers=frozenset(),
+    )
+    ws = Overlay(snap)
+
+    new_state = recompute_state(ws, jid)
+
+    assert new_state == job_pb2.JOB_STATE_FAILED
+    assert ws.effects.jobs[jid].error == root_cause
