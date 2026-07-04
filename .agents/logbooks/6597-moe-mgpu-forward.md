@@ -2220,3 +2220,37 @@ staged source-push kernels.
     tracers. The old host helpers therefore cannot sit inside the production MLP VJP forward rule.
   - These helpers match the existing host plan exactly and are covered under `jax.jit`, so the next patch can build a
     preplanned source-push MLP VJP path whose differentiable inputs are packed/gathered on device.
+
+## 2026-07-03 18:37 - Add preplanned staged forward inputs
+
+Added `device_source_push_forward_inputs_from_plan(...)` and `source_push_forward_with_h_from_plan(...)`. These take
+fixed `SourcePushForwardHostInputs` metadata plus dynamic `x`, `route_weights`, `w13`, and `w2`; the dynamic arrays are
+packed/gathered with the JAX helpers from `dbe8dbffd` before entering the staged Pallas W13-H/W2/combine path. This is
+the callable surface needed by the future MLP-level custom VJP forward rule, because it avoids rebuilding `packed_x` or
+receive-order route weights on the host from differentiable arrays.
+
+- Commit Hash: `f6a5d026e`
+- Code:
+  - `lib/levanter/src/levanter/grug/_moe/source_push_forward.py`
+  - `lib/levanter/tests/grug/test_source_push_inbox.py`
+- Local verification:
+  - `uv run --package marin-levanter --group test pytest lib/levanter/tests/grug/test_source_push_inbox.py lib/levanter/tests/grug/test_source_push_plan.py -q -k 'device_inputs_from_plan_use_dynamic_jax_arrays or jax_pack_and_route_weight_gathers or forward_with_h'`
+    - Result: `3 passed, 11 warnings in 8.09s`.
+  - `./infra/pre-commit.py --fix lib/levanter/src/levanter/grug/_moe/source_push_forward.py lib/levanter/tests/grug/test_source_push_inbox.py`
+    - Result: all checks passed, including Pyrefly.
+- H100 verification attempts:
+
+  | job | outcome |
+  | --- | --- |
+  | `/dlwh/source-push-forward-with-h-from-plan-f6a5d026e-20260703-1828` | Failed before running the smoke: `ImportError: cannot import name 'barrier_test'` from `jax._src.pallas.mosaic_gpu.primitives`. |
+  | `/dlwh/source-push-forward-with-h-from-plan-f6a5d026e-20260703-1831` | Same pre-smoke Mosaic import mismatch as the first attempt. |
+  | `/dlwh/source-push-forward-with-h-from-plan-f6a5d026e-gpuextra-20260703-1834` | Adding inner `uv run --extra gpu` fixed the Mosaic import mismatch, but failed before the smoke with CuDNN runtime mismatch: runtime `9.10.2`, JAX source compiled with `9.12.0`, followed by `dnn_support != nullptr`. |
+
+- Interpretation:
+  - The preplanned path is locally covered for the key contract: dynamic arrays flow into kernel inputs from JAX values,
+    not from host buffers captured when the plan was built.
+  - H100 verification of this new entrypoint is not complete because all three H100 attempts failed in environment setup
+    or first JAX device operation before executing the Pallas source-push smoke. The earlier `source_push_forward_with_h`
+    smoke remains valid for the staged H-returning kernel path itself.
+  - Next code step is still to wire the MLP-level custom VJP forward through `source_push_forward_with_h_from_plan(...)`
+    and use a flat-H-aware backward residual.
