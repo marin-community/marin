@@ -1975,3 +1975,42 @@ production layout `[local_expert, capacity, 2I]` with an outer destination-rank 
   - Existing W2 return consumes post-SwiGLU hidden and source combine applies route weights after W2.
   - Next implementation step is to move production W13/W2 to the H boundary: W13 stores `[E, capacity, 2I]`, W2 loads H,
     computes `silu(gate) * up`, applies route weight before W2, and returns/combines source-owned `y`.
+
+## 2026-07-03 17:23 - Add shared H-forward reference target
+
+Added SourcePushPlan-level reference helpers for the staged forward shape the production kernels need to implement:
+
+```text
+packed source queue x + W13 -> H_expert_major
+H_expert_major + route_weight + W2 -> source return rows
+preweighted source return rows -> y
+```
+
+This makes the H-boundary target available in the same plan/layout vocabulary as the existing staged W13/W2/combiner
+harness. The existing Pallas path is still unchanged and still uses the legacy post-SwiGLU hidden contract; this patch
+adds the reference target and tests needed before changing those kernels.
+
+- Commit Hash: `eb896c674`
+- Code:
+  - `lib/levanter/src/levanter/grug/_moe/source_push_plan.py`
+  - `lib/levanter/src/levanter/grug/_moe/source_push_forward.py`
+  - `lib/levanter/tests/grug/test_source_push_plan.py`
+  - `lib/levanter/tests/grug/test_source_push_inbox.py`
+- New helpers:
+  - `source_push_w13_h(...)`: writes raw W13 `[gate, up]` preactivation to `[dst, local_expert, expert_capacity, 2I]`.
+  - `source_push_w2_from_h_return(...)`: recomputes `A = silu(gate) * up`, applies `route_weight * A` before W2, and
+    emits source-queue return rows.
+  - `source_push_combine_preweighted(...)`: sums return rows that already include route weights.
+  - `reference_source_push_forward_h(...)`: source-push forward reference using the new H boundary.
+- Verification:
+  - `uv run --package marin-levanter --group test pytest lib/levanter/tests/grug/test_source_push_plan.py lib/levanter/tests/grug/test_source_push_mlp.py -q`
+    - Result: `13 passed, 11 warnings in 11.38s`.
+  - `uv run --package marin-levanter --group test pytest lib/levanter/tests/grug/test_source_push_plan.py lib/levanter/tests/grug/test_source_push_inbox.py -q -k 'h_forward or forward_h_reference or forward_inputs_share_one_plan'`
+    - Result: `12 passed, 11 warnings in 10.23s`.
+  - `./infra/pre-commit.py --fix lib/levanter/src/levanter/grug/_moe/source_push_plan.py lib/levanter/src/levanter/grug/_moe/source_push_forward.py lib/levanter/tests/grug/test_source_push_plan.py lib/levanter/tests/grug/test_source_push_inbox.py`
+    - Result: all checks passed, including Pyrefly.
+- Interpretation:
+  - The revised MLP boundary is now represented at both the MLP-vectorized reference layer and the shared
+    SourcePushPlan/staged-forward reference layer.
+  - The remaining forward migration is specifically in Mosaic kernels: W13 must store H instead of post-SwiGLU A, W2
+    must load H and queue route weights, and source combine must run unweighted for that path.
