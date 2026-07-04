@@ -69,11 +69,20 @@ def build_source_push_mlp_route_table(
     capacity_factor: float = 1.25,
     entries_per_dst: int | None = None,
 ) -> tuple[SourcePushMlpRouteTable, Int[Array, ""]]:
-    """Build the source-push MLP route table and dropped-route count."""
+    """Build the source-push MLP route table and dropped-route count.
+
+    Route weights are differentiable MLP inputs and must not be captured while
+    building static placement metadata. The plan only needs their shape.
+    """
+
+    if route_assignments.shape != route_weights.shape:
+        raise ValueError(
+            f"route_assignments shape {route_assignments.shape} must match route_weights {route_weights.shape}"
+        )
 
     plan = build_source_push_plan(
         route_assignments,
-        route_weights,
+        jnp.zeros(route_assignments.shape, dtype=jnp.float32),
         ep_size=ep_size,
         experts_per_rank=experts_per_rank,
         block_m=block_m,

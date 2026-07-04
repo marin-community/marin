@@ -188,6 +188,48 @@ def test_source_push_moe_mlp_matches_independent_loop_reference():
     np.testing.assert_allclose(np.asarray(observed_from_api), np.asarray(expected), atol=1e-6)
 
 
+def test_source_push_moe_mlp_api_gradients_do_not_capture_route_weights_in_plan():
+    x, route_assignments, route_weights, w13, w2 = _small_mlp_inputs()
+    route_table = _route_table(route_assignments, route_weights)
+
+    def reference_loss(x_arg, route_weights_arg, w13_arg, w2_arg):
+        y = source_push_moe_mlp_reference(route_table, x_arg, route_weights_arg, w13_arg, w2_arg)
+        return jnp.sum(y.astype(jnp.float32))
+
+    def api_loss(x_arg, route_weights_arg, w13_arg, w2_arg):
+        y, dropped_routes = source_push_moe_mlp(
+            x_arg,
+            route_assignments,
+            route_weights_arg,
+            w13_arg,
+            w2_arg,
+            ep_size=EP_SIZE,
+            experts_per_rank=EXPERTS_PER_RANK,
+            block_m=BLOCK_M,
+            capacity_factor=2.0,
+        )
+        assert int(dropped_routes) == 0
+        return jnp.sum(y.astype(jnp.float32))
+
+    reference_value, reference_grads = jax.value_and_grad(reference_loss, argnums=(0, 1, 2, 3))(
+        x,
+        route_weights,
+        w13,
+        w2,
+    )
+    api_value, api_grads = jax.value_and_grad(api_loss, argnums=(0, 1, 2, 3))(
+        x,
+        route_weights,
+        w13,
+        w2,
+    )
+
+    np.testing.assert_allclose(np.asarray(api_value), np.asarray(reference_value), atol=1e-6, rtol=1e-6)
+    for observed, expected in zip(api_grads, reference_grads, strict=True):
+        np.testing.assert_allclose(np.asarray(observed), np.asarray(expected), atol=1e-5, rtol=1e-5)
+    assert float(jnp.max(jnp.abs(api_grads[1]))) > 0.0
+
+
 def test_source_push_moe_mlp_custom_vjp_matches_reference_gradients():
     x, route_assignments, route_weights, w13, w2 = _small_mlp_inputs()
     route_table = _route_table(route_assignments, route_weights)
