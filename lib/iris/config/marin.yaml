@@ -44,6 +44,9 @@ auth:
     # tokens minted for that client:
     audiences:
       - 748532799086-qf8m6mvovtdmd71npm07gk1ohijsr3q5.apps.googleusercontent.com
+    # Service-account (CI / in-cluster) callers need no `programmatic_audiences`
+    # entry: with none set, the client mints its IAP edge token for the desktop
+    # client id above, which IAP registers as a programmatic client and admits.
     # Audience of IAP's signed assertion: the iris-marin-be backend service in
     # hai-gcp-models (project number 748532799086).
     signed_header_audience: /projects/748532799086/global/backendServices/2663834686758326555

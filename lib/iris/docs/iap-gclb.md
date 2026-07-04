@@ -116,6 +116,10 @@ auth:
     oauth_client_secret: <DESKTOP_CLIENT_SECRET>      # non-confidential, RFC 8252 §8.5
     audiences:
       - <DESKTOP_CLIENT_ID>.apps.googleusercontent.com
+    # Optional: a dedicated aud for service-account (CI) callers. Omit to fall
+    # back to the desktop client id, which IAP admits as a programmatic client.
+    # programmatic_audiences:
+    #   - <IAP_SECURED_CLIENT_ID>.apps.googleusercontent.com
     signed_header_audience: /projects/<PROJECT_NUMBER>/global/backendServices/<BACKEND_ID>
   admin_users:
     - you@example.com
@@ -205,12 +209,13 @@ sequenceDiagram
     K-->>C: response
 ```
 
-**Config takeaway.** Listing only the desktop client id in `auth.iap.audiences`
-is sufficient: the service-account path falls back to it (IAP registers it as a
-programmatic client). Add a distinct Web/programmatic audience to `audiences`
-only when you want machine callers to present an `aud` separate from the
-interactive-login client — the adapter then prefers it for the SA path and keeps
-the desktop id for login.
+**Config takeaway.** `auth.iap.audiences` and `auth.iap.programmatic_audiences`
+are independent: `audiences` lists the interactive-login `aud`s the controller
+verifies, while `programmatic_audiences` lists the `aud`s a service account mints
+its edge token for. Leave `programmatic_audiences` empty and the service-account
+path falls back to the desktop client id (IAP registers it as a programmatic
+client) — sufficient for the common single-client setup. Set it only to give
+machine callers an `aud` distinct from the interactive-login client.
 
 ## Firewall
 

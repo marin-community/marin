@@ -508,7 +508,15 @@ class IapAuthConfig(_Config):
     url: str = ""
     oauth_client_id: str = ""
     oauth_client_secret: str = ""
+    # OIDC ID-token audiences the controller accepts on interactive-login tokens
+    # (the `iris login` user flow); typically just the desktop client id.
     audiences: list[str] = Field(default_factory=list)
+    # Audiences a service-account (CI / in-cluster) caller mints its IAP *edge*
+    # token for -- kept separate from the login `audiences` above. Empty falls
+    # back to the desktop client id, which IAP registers as a programmatic client
+    # (sufficient for the common single-client setup); set this only to give
+    # machine callers an `aud` distinct from the interactive-login client.
+    programmatic_audiences: list[str] = Field(default_factory=list)
     signed_header_audience: str = ""
     # Role granted to an IAP-verified email with no row in the user store; a
     # provisioned user always resolves to their stored role. "admin" makes
