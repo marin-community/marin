@@ -1,15 +1,14 @@
-// Fixed-capacity circular buffer for worker-count history.
+// Fixed-capacity circular buffers for the in-process sample histories.
 //
-// Capacity is sized so the buffer holds 24h of samples at a 30s cadence
-// (2880 slots). Each append overwrites the oldest slot once full, so
-// memory stays bounded regardless of how long the server runs. History
-// is in-process and lost on restart — see infra/status-page/README.md
-// "Known limitations" for the follow-up plan (persist to GCS or grow a
-// worker_count_history table in the controller).
+// Capacity is sized so a buffer holds 24h of samples at its sampler's cadence.
+// Each append overwrites the oldest slot once full, so memory stays bounded
+// regardless of how long the server runs. These histories are in-process and
+// lost on restart; worker-count history moved out to finelog (see
+// server/sources/clusterHistory.ts), but the iris-ping and control-plane
+// latency series are still sampled in-process here.
 
 import type { IrisPingSample } from "./sources/iris.js";
 import type { ServiceHealthHistorySample } from "./sources/serviceHealth.js";
-import type { WorkerSample } from "./sources/workers.js";
 
 export class RingBuffer<T> {
   private readonly capacity: number;
@@ -43,8 +42,6 @@ export class RingBuffer<T> {
     return out;
   }
 }
-
-export class WorkerHistory extends RingBuffer<WorkerSample> {}
 
 export class IrisPingHistory extends RingBuffer<IrisPingSample> {}
 

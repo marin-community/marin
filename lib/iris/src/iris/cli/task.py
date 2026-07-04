@@ -12,9 +12,8 @@ import sys
 
 import click
 
-from iris.cli.connect import require_controller_url, rpc_client
+from iris.cli.connect import rpc_client_for_ctx
 from iris.rpc import controller_pb2
-from iris.rpc.auth import TokenProvider
 
 logger = logging.getLogger(__name__)
 
@@ -47,10 +46,7 @@ def task_exec(ctx, task_id: str, command: tuple[str, ...], timeout_seconds: int)
 
       iris task exec /user/job/0 --timeout 300 -- cat /proc/1/status
     """
-    controller_url = require_controller_url(ctx)
-    token_provider: TokenProvider | None = ctx.obj.get("token_provider")
-
-    with rpc_client(controller_url, token_provider) as client:
+    with rpc_client_for_ctx(ctx) as client:
         request = controller_pb2.Controller.ExecInContainerRequest(
             task_id=task_id,
             command=list(command),

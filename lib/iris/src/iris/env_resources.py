@@ -14,8 +14,6 @@ factory that discovers limits using an escalation strategy:
 GPU/TPU counts are only available via the ``IRIS_TASK_RESOURCES`` env var.
 """
 
-from __future__ import annotations
-
 import dataclasses
 import functools
 import logging
@@ -53,7 +51,7 @@ class TaskResources:
     tpu_count: int
 
     @staticmethod
-    def from_environment() -> TaskResources:
+    def from_environment() -> "TaskResources":
         """Discover resource limits from env var, cgroups, and /proc.
 
         CPU/memory fall back to host values when no Iris env var or cgroup

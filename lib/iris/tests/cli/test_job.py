@@ -17,6 +17,7 @@ from iris.cli.job import (
     validate_extra_resources,
     validate_region_zone,
 )
+from iris.cluster.config import IrisClusterConfig, ScaleGroupConfig, WorkerSettings
 from iris.cluster.constraints import (
     Constraint,
     WellKnownAttribute,
@@ -24,19 +25,16 @@ from iris.cluster.constraints import (
     preemptible_constraint,
     region_constraint,
 )
-from iris.rpc import config_pb2
 from iris.rpc import job_pb2 as _job_pb2
 
 
-def _make_config_with_zones(zones: list[str]) -> config_pb2.IrisClusterConfig:
+def _make_config_with_zones(zones: list[str]) -> IrisClusterConfig:
     """Build a minimal IrisClusterConfig with scale groups for the given zones."""
-    config = config_pb2.IrisClusterConfig()
+    scale_groups: dict[str, ScaleGroupConfig] = {}
     for zone in zones:
         region = zone.rsplit("-", 1)[0]
-        sg = config.scale_groups[f"sg-{zone}"]
-        sg.worker.attributes["zone"] = zone
-        sg.worker.attributes["region"] = region
-    return config
+        scale_groups[f"sg-{zone}"] = ScaleGroupConfig(worker=WorkerSettings(attributes={"zone": zone, "region": region}))
+    return IrisClusterConfig(scale_groups=scale_groups)
 
 
 def test_validate_region_zone_valid_region():
@@ -197,10 +195,10 @@ def test_job_run_cli_accepts_task_image_override(monkeypatch):
             captured.update(kwargs)
             return FakeJob()
 
-    def fake_remote(controller_url, workspace, token_provider):
+    def fake_remote(controller_url, *, workspace, credentials=None):
         captured["controller_url"] = controller_url
         captured["workspace"] = workspace
-        captured["token_provider"] = token_provider
+        captured["credentials"] = credentials
         return FakeClient()
 
     monkeypatch.setattr("iris.cli.job.IrisClient.remote", fake_remote)
@@ -215,7 +213,7 @@ def test_job_run_cli_accepts_task_image_override(monkeypatch):
             "python",
             "train.py",
         ],
-        obj={"controller_url": "http://controller.test", "config": None, "token_provider": None},
+        obj={"controller_url": "http://controller.test", "config": None, "credentials": None},
     )
 
     assert result.exit_code == 0, result.output

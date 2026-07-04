@@ -29,8 +29,6 @@ Run from anywhere that can read ``gs://marin-eu-west4/datakit/...``:
         --total-size 7000 --floor-per-source 20 --seed 42
 """
 
-from __future__ import annotations
-
 import argparse
 import logging
 import math
@@ -44,7 +42,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 from marin.datakit.normalize import NormalizedData
 from marin.datakit.sources import all_sources
-from marin.execution.artifact import Artifact
+from marin.execution.artifact import read_artifact
 from rigging.filesystem import url_to_fs
 from rigging.log_setup import configure_logging
 
@@ -183,7 +181,7 @@ def _read_quota_from_shard(shard_url: str, quota: int) -> Iterator[dict[str, obj
 
 def _sample_one_source(quota: SourceQuota, seed: int) -> list[dict[str, object]]:
     src = all_sources()[quota.name]
-    nd = Artifact.from_path(src.normalized, NormalizedData)
+    nd = read_artifact(src.normalized.output_path, NormalizedData)
     shards = _list_shards(nd.main_output_dir)
     if not shards:
         logger.warning("source %s: no shards under %s -- skipping", quota.name, nd.main_output_dir)

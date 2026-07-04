@@ -6,14 +6,13 @@
 from pathlib import Path
 
 import pytest
-from iris.cluster.config import load_config
+from iris.cluster.config import IrisClusterConfig, load_config
 from iris.cluster.inject_env import (
     collect_inject_env,
     merge_injected_into_task_env,
     projects_task_env_secret,
     with_injected_task_env,
 )
-from iris.rpc import config_pb2
 
 
 def test_collect_inject_env_reads_named_vars(monkeypatch):
@@ -38,7 +37,7 @@ def test_collect_inject_env_empty_is_noop():
 
 
 def test_merge_injected_is_default_literal_wins():
-    config = config_pb2.IrisClusterConfig()
+    config = IrisClusterConfig()
     config.defaults.task_env["MARIN_PREFIX"] = "s3://pinned/prefix"
     merge_injected_into_task_env(config, {"MARIN_PREFIX": "s3://shell/prefix", "WANDB_API_KEY": "k"})
     # An explicit literal is not overridden by the operator's shell.
@@ -49,14 +48,14 @@ def test_merge_injected_is_default_literal_wins():
 
 
 def test_with_injected_task_env_no_inject_returns_input():
-    config = config_pb2.IrisClusterConfig()
+    config = IrisClusterConfig()
     config.defaults.task_env["MARIN_PREFIX"] = "s3://x"
     assert with_injected_task_env(config) is config
 
 
 def test_with_injected_task_env_copies_and_folds(monkeypatch):
     monkeypatch.setenv("WANDB_API_KEY", "from-shell")
-    config = config_pb2.IrisClusterConfig()
+    config = IrisClusterConfig()
     config.defaults.inject_env.append("WANDB_API_KEY")
     merged = with_injected_task_env(config)
     assert merged is not config  # original is left untouched
@@ -65,16 +64,16 @@ def test_with_injected_task_env_copies_and_folds(monkeypatch):
 
 
 def test_projects_task_env_secret_predicate():
-    s3 = config_pb2.IrisClusterConfig()
+    s3 = IrisClusterConfig()
     s3.storage.remote_state_dir = "s3://bucket/state"
     assert projects_task_env_secret(s3)
 
-    injected = config_pb2.IrisClusterConfig()
+    injected = IrisClusterConfig()
     injected.storage.remote_state_dir = "gs://bucket/state"
     injected.defaults.inject_env.append("WANDB_API_KEY")
     assert projects_task_env_secret(injected)
 
-    neither = config_pb2.IrisClusterConfig()
+    neither = IrisClusterConfig()
     neither.storage.remote_state_dir = "gs://bucket/state"
     assert not projects_task_env_secret(neither)
 

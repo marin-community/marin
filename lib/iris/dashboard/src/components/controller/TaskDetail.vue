@@ -4,9 +4,14 @@ import { RouterLink, useRouter } from 'vue-router'
 import { useControllerRpc, useLogServerStatsRpc } from '@/composables/useRpc'
 import { useAutoRefresh } from '@/composables/useAutoRefresh'
 import { stateToName } from '@/types/status'
-import type {
-  TaskStatus,
-  GetTaskStatusResponse,
+import { useBackends } from '@/composables/useBackends'
+import {
+  isLocal,
+  LOCAL_CLUSTER,
+  type TaskStatus,
+  type GetTaskStatusResponse,
+  type EndpointInfo,
+  type ListEndpointsResponse,
 } from '@/types/rpc'
 import { timestampMs, formatBytes, formatCpuMillicores, formatDuration, formatRelativeTime } from '@/utils/formatting'
 import { decodeArrowIpc } from '@/utils/arrow'
@@ -24,11 +29,16 @@ import ProfileButtons from '@/components/shared/ProfileButtons.vue'
 import ProfileLink from '@/components/shared/ProfileLink.vue'
 import LogViewer from '@/components/shared/LogViewer.vue'
 import MarkdownRenderer from '@/components/shared/MarkdownRenderer.vue'
+import CopyButton from '@/components/shared/CopyButton.vue'
+import EndpointLink from '@/components/shared/EndpointLink.vue'
+import ClusterLink from '@/components/shared/ClusterLink.vue'
 
 const props = defineProps<{
   jobId: string
   taskId: string
 }>()
+
+const { multiBackend } = useBackends()
 
 const {
   data: taskResponse,
@@ -38,7 +48,18 @@ const {
 } = useControllerRpc<GetTaskStatusResponse>('GetTaskStatus', () => ({ taskId: props.taskId }))
 
 const task = computed(() => taskResponse.value?.task ?? null)
+
 const jobResources = computed(() => taskResponse.value?.jobResources ?? null)
+
+// Endpoints this task registered with the controller. Each is reachable
+// through the controller's reverse proxy, so we render a link to jump to an
+// attached dashboard/server without looking up its address.
+const {
+  data: endpointsResponse,
+  refresh: fetchEndpoints,
+} = useControllerRpc<ListEndpointsResponse>('ListEndpoints', () => ({ taskIds: [props.taskId] }))
+
+const endpoints = computed<EndpointInfo[]>(() => endpointsResponse.value?.endpoints ?? [])
 
 const normalizedState = computed(() => (task.value ? stateToName(task.value.state) : ''))
 
@@ -190,16 +211,23 @@ const { start: startStatusTextRefresh, stop: stopStatusTextRefresh } = useAutoRe
   5_000,
   false,
 )
+const { start: startEndpointsRefresh, stop: stopEndpointsRefresh } = useAutoRefresh(
+  fetchEndpoints,
+  5_000,
+  false,
+)
 
 watch(isActive, (active) => {
   if (active) {
     startRefresh()
     startStatsRefresh()
     startStatusTextRefresh()
+    startEndpointsRefresh()
   } else {
     stopRefresh()
     stopStatsRefresh()
     stopStatusTextRefresh()
+    stopEndpointsRefresh()
   }
 })
 
@@ -207,10 +235,12 @@ onMounted(async () => {
   await fetchTask()
   fetchTaskStats()
   fetchStatusText()
+  fetchEndpoints()
   if (isActive.value) {
     startRefresh()
     startStatsRefresh()
     startStatusTextRefresh()
+    startEndpointsRefresh()
   }
 })
 
@@ -240,13 +270,17 @@ function selectAttempt(attemptId: number) {
 watch(() => props.taskId, async () => {
   taskResponse.value = null
   taskStatsData.value = null
+  endpointsResponse.value = null
   stopRefresh()
   stopStatsRefresh()
+  stopEndpointsRefresh()
   await fetchTask()
   fetchTaskStats()
+  fetchEndpoints()
   if (isActive.value) {
     startRefresh()
     startStatsRefresh()
+    startEndpointsRefresh()
   }
 })
 </script>
@@ -282,12 +316,16 @@ watch(() => props.taskId, async () => {
             <StatusBadge :status="task.state" size="sm" />
           </InfoRow>
           <InfoRow v-if="task.workerId" label="Worker">
+            <!-- A federated task's worker is an opaque peer-side id with no local
+                 worker row, so /worker/<id> would 404 — render it as plain text. -->
             <RouterLink
+              v-if="isLocal(task.cluster)"
               :to="`/worker/${task.workerId}`"
               class="font-mono text-accent hover:underline"
             >
               {{ task.workerId }}
             </RouterLink>
+            <span v-else class="font-mono text-text-secondary">{{ task.workerId }}</span>
           </InfoRow>
           <InfoRow label="Started">
             <span class="font-mono">{{ startedDisplay }}</span>
@@ -308,6 +346,14 @@ watch(() => props.taskId, async () => {
           </InfoRow>
           <InfoRow v-if="task.pendingReason" label="Pending Reason">
             <span class="text-status-warning">{{ task.pendingReason }}</span>
+          </InfoRow>
+          <InfoRow v-if="multiBackend && task.backendId" label="Backend">
+            <span class="font-mono">{{ task.backendId }}</span>
+          </InfoRow>
+          <!-- Cluster: every task carries a cluster coordinate (`'local'` by
+               default); links inward to the parent's jobs list filtered to it. -->
+          <InfoRow label="Cluster">
+            <ClusterLink :cluster="task.cluster ?? LOCAL_CLUSTER" />
           </InfoRow>
           <div v-if="isActive" class="mt-3 pt-3 border-t border-surface-border">
             <ProfileButtons :profiling="profiling" @profile="handleProfile" />
@@ -365,6 +411,23 @@ watch(() => props.taskId, async () => {
           <div v-else class="text-sm text-text-muted py-2">No build data</div>
         </InfoCard>
       </div>
+
+      <!-- Endpoints registered by this task, linked through the controller proxy -->
+      <InfoCard v-if="endpoints.length > 0" title="Endpoints" class="mb-6">
+        <ul class="divide-y divide-surface-border-subtle">
+          <li
+            v-for="ep in endpoints"
+            :key="ep.endpointId ?? ep.name"
+            class="flex flex-wrap items-center gap-x-3 gap-y-1 py-1.5 first:pt-0 last:pb-0"
+          >
+            <EndpointLink :name="ep.name" class="font-mono text-[13px]" />
+            <span v-if="ep.address" class="group/addr inline-flex items-center gap-1 text-xs font-mono text-text-muted">
+              {{ ep.address }}
+              <CopyButton :value="ep.address" />
+            </span>
+          </li>
+        </ul>
+      </InfoCard>
 
       <!-- Resource sparklines -->
       <div v-if="cpuHistory.length > 1" class="grid grid-cols-2 gap-4 mb-6">
@@ -476,7 +539,7 @@ watch(() => props.taskId, async () => {
       <!-- Task logs -->
       <div id="task-logs-section" class="mb-6">
         <h3 class="text-sm font-semibold text-text mb-3">Logs</h3>
-        <LogViewer ref="logViewerRef" :task-id="taskId" :attempts="task.attempts" :current-attempt-id="task.currentAttemptId" />
+        <LogViewer ref="logViewerRef" :task-id="taskId" :cluster="task.cluster" :attempts="task.attempts" :current-attempt-id="task.currentAttemptId" />
       </div>
 
       <!-- Latest captured profile for this task; self-hides when none exist -->

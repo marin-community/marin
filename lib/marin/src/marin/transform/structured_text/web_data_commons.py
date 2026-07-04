@@ -13,8 +13,6 @@ staging path therefore preserves the CSV bytes after UTF-8 decoding and only
 splits documents at source line boundaries.
 """
 
-from __future__ import annotations
-
 import gzip
 import hashlib
 import io

@@ -3,8 +3,6 @@
 
 """Writers for common output formats."""
 
-from __future__ import annotations
-
 import itertools
 import logging
 import os
@@ -87,7 +85,7 @@ def write_jsonl_file(records: Iterable, output_path: str) -> dict:
             for record in records:
                 f.write(encoder.encode(record) + b"\n")
                 count += 1
-                counters.increment("zephyr/records_out")
+                counters.pipeline.update_counter("zephyr/records_out", 1)
 
     return {"path": output_path, "count": count}
 
@@ -234,7 +232,7 @@ def write_parquet_file(
                     writer = pq.ParquetWriter(temp_path, table.schema)
                 writer.write_table(table)
                 count += len(table)
-                counters.increment("zephyr/records_out", len(table))
+                counters.pipeline.update_counter("zephyr/records_out", len(table))
         finally:
             if writer is not None:
                 writer.close()
@@ -284,11 +282,11 @@ def write_vortex_file(
     def _array_batches():
         nonlocal count
         count += len(first_table)
-        counters.increment("zephyr/records_out", len(first_table))
+        counters.pipeline.update_counter("zephyr/records_out", len(first_table))
         yield vortex.Array.from_arrow(first_table)
         for table in table_iter:
             count += len(table)
-            counters.increment("zephyr/records_out", len(table))
+            counters.pipeline.update_counter("zephyr/records_out", len(table))
             yield vortex.Array.from_arrow(table)
 
     array_iter = vortex.ArrayIterator.from_iter(dtype, _array_batches())
@@ -362,7 +360,7 @@ class ThreadedBatchWriter:
         if self._error is not None:
             raise self._error
 
-    def __enter__(self) -> ThreadedBatchWriter:
+    def __enter__(self) -> "ThreadedBatchWriter":
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb) -> bool:
@@ -389,6 +387,6 @@ def write_binary_file(records: Iterable[bytes], output_path: str) -> dict:
             for record in records:
                 f.write(record)
                 count += 1
-                counters.increment("zephyr/records_out")
+                counters.pipeline.update_counter("zephyr/records_out", 1)
 
     return {"path": output_path, "count": count}

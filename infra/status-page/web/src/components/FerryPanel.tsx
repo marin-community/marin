@@ -1,6 +1,7 @@
 import type { CSSProperties } from "react";
 import { useFerry } from "../hooks/useFerry";
 import type { FerryGroupStatus, FerryRun, FerryTierStatus } from "../api";
+import { formatRelative } from "./chartUtils";
 
 // Diagonal gray/red stripe marks cancelled runs — they count as failures
 // for success-rate math but carry a distinct cause worth surfacing.
@@ -78,20 +79,7 @@ function formatDuration(seconds: number | null): string {
   return `${hours}h ${minutes % 60}m`;
 }
 
-function formatRelative(iso: string): string {
-  const delta = Date.now() - Date.parse(iso);
-  if (!Number.isFinite(delta)) return iso;
-  const seconds = Math.round(delta / 1000);
-  if (seconds < 60) return `${seconds}s ago`;
-  const minutes = Math.round(seconds / 60);
-  if (minutes < 60) return `${minutes}m ago`;
-  const hours = Math.round(minutes / 60);
-  if (hours < 48) return `${hours}h ago`;
-  const days = Math.round(hours / 24);
-  return `${days}d ago`;
-}
-
-// One tier's run strip: latest-run line, success rate, and the 10-day
+// One tier's run strip: latest-run line, success rate, and the last-N-runs
 // history dots. A single-workflow ferry renders exactly one of these; the
 // datakit ferry stacks three (tier1/2/3) under one card.
 function TierStrip({ tier, showLabel }: { tier: FerryTierStatus; showLabel: boolean }) {
@@ -218,7 +206,7 @@ export function FerryPanel() {
       <div className="mb-3 flex items-baseline justify-between">
         <h2 className="text-xl font-semibold text-slate-200">Ferries</h2>
         <div className="text-right text-xs text-slate-500">
-          {data && <span>last {data.windowDays}d</span>}
+          {data && <span>last {data.runLimit} runs</span>}
           {dataUpdatedAt && (
             <span>
               {data ? " · " : ""}

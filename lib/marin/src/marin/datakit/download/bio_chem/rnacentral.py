@@ -8,8 +8,6 @@ Streams ``rnacentral_active.fasta.gz`` from the EBI mirror. The full release is
 need to estimate perplexity on RNA notation.
 """
 
-from __future__ import annotations
-
 from marin.datakit.download.bio_chem._runtime import (
     NotationFormat,
     NotationSliceSpec,

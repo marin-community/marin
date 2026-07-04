@@ -3,7 +3,7 @@
 
 """Internal worker types for task tracking."""
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Protocol
 
 from finelog.rpc import logging_pb2
@@ -21,13 +21,13 @@ class LogLine(BaseModel):
 
     @classmethod
     def now(cls, source: str, data: str) -> "LogLine":
-        return cls(timestamp=datetime.now(timezone.utc), source=source, data=data)
+        return cls(timestamp=datetime.now(UTC), source=source, data=data)
 
     @classmethod
     def at(cls, timestamp: Timestamp, source: str, data: str) -> "LogLine":
         """Create a log line with an explicit timestamp."""
         return cls(
-            timestamp=datetime.fromtimestamp(timestamp.epoch_seconds(), tz=timezone.utc),
+            timestamp=datetime.fromtimestamp(timestamp.epoch_seconds(), tz=UTC),
             source=source,
             data=data,
         )

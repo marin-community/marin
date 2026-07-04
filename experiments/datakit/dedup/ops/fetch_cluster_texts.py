@@ -27,8 +27,6 @@ Submit on iris (us-central2 pinned by the worker's MARIN_PREFIX):
         -- python experiments/datakit/dedup/ops/fetch_cluster_texts.py
 """
 
-from __future__ import annotations
-
 import concurrent.futures
 import json
 import logging

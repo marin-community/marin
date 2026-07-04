@@ -236,6 +236,7 @@ scr/*
 .claude/*
 !.claude/skills
 !.claude/agents
+!.claude/settings.json
 .agents/tmp/
 .codex
 .entire
@@ -244,3 +245,4 @@ scr/*
 .worktrees
 .obsidian
 .cw_env
+.localbin/

@@ -38,11 +38,11 @@ class JobInfo:
     advertise_host: str = "127.0.0.1"
     """The externally visible host name to use when advertising services."""
 
-    extras: list[str] = field(default_factory=list)
-    """Extras from parent job, for child job inheritance."""
+    setup_scripts: list[str] | None = None
+    """Resolved setup scripts from the parent job, for child job inheritance.
 
-    pip_packages: list[str] = field(default_factory=list)
-    """Pip packages from parent job, for child job inheritance."""
+    ``None`` means no parent (top-level submission); ``[]`` means a parent that
+    ran no setup (bring-your-own image)."""
 
     ports: dict[str, int] = field(default_factory=dict)
     """Name to port number mapping for this task."""
@@ -117,8 +117,9 @@ def get_job_info() -> JobInfo | None:
             worker_id=os.environ.get("IRIS_WORKER_ID"),
             controller_address=os.environ.get("IRIS_CONTROLLER_ADDRESS"),
             advertise_host=os.environ.get("IRIS_ADVERTISE_HOST", "127.0.0.1"),
-            extras=json.loads(os.environ.get("IRIS_JOB_EXTRAS", "[]")),
-            pip_packages=json.loads(os.environ.get("IRIS_JOB_PIP_PACKAGES", "[]")),
+            setup_scripts=(
+                json.loads(os.environ["IRIS_JOB_SETUP_SCRIPTS"]) if "IRIS_JOB_SETUP_SCRIPTS" in os.environ else None
+            ),
             bundle_id=os.environ.get("IRIS_BUNDLE_ID"),
             ports=_parse_ports_from_env(),
             env=job_env,

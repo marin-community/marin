@@ -157,7 +157,7 @@ class SimpleEvaluator(Evaluator):
 
             # Print the outputs for debugging
             for output in outputs:
-                prompt: str = output.prompt
+                prompt = output.prompt or ""
                 print(f"Prompt: {prompt!r}")
                 for i, generation in enumerate(output.outputs):
                     print(f"Generation (#{i + 1} of {test_plan.num_outputs}): {generation.text!r}")

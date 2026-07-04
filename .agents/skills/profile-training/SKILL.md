@@ -6,8 +6,8 @@ description: Profile JAX training and analyze hotspots. Use when profiling or op
 # Skill: Agent-Driven Profiling (XPlane/xprof/TensorBoard/Perfetto)
 
 ## Overview
-Turn a `jax_profile` artifact into a deterministic, agent-consumable summary and
-a concrete optimization workflow:
+Turn a Levanter profile directory into a deterministic, agent-consumable
+summary and a concrete optimization workflow:
 1. capture a representative profile,
 2. ingest to `profile_summary.v1`,
 3. query hotspots and bottlenecks,
@@ -16,13 +16,13 @@ a concrete optimization workflow:
 
 ## Scope
 Ingestion sources:
-- XPlane protobufs inside Levanter `jax_profile` artifacts (source of truth):
+- XPlane protobufs inside Levanter profile directories (source of truth):
   - `plugins/profile/<timestamp>/*.xplane.pb`
   - explicit local `*.xplane.pb` files via `--xplane-file`
 - xprof aggregate tables exported from the same XPlane protobuf when the
   optional `xprof` package is available: step overview timing, kernel stats,
   collective breakdowns, xprof bottleneck statements.
-- Perfetto trace JSON as an explicit/fallback source for old artifacts:
+- Perfetto trace JSON as an explicit/fallback source for older profiles:
   - `plugins/profile/<timestamp>/perfetto_trace.json.gz`
   - `plugins/profile/<timestamp>/*.trace.json.gz`
 
@@ -30,11 +30,11 @@ Prefer XPlane protobuf for new work. Perfetto trace JSON commonly hits the trace
 event cap; XPlane contains the uncapped timeline events needed for named-scope
 regions, pre-op gaps, gap context, process/thread metadata, and xprof aggregate
 tables. Use `--trace-file` only for a specific Perfetto JSON trace or an older
-artifact with no XPlane protobuf.
+profile with no XPlane protobuf.
 
 ## Capture Profiles
-Use Levanter profiler flags so profiles upload consistently as `jax_profile`
-artifacts:
+Use Levanter profiler flags so profiles land under
+`<trainer.log_dir>/<run_id>/profiler`:
 
 ```bash
 uv run ... \
@@ -61,6 +61,35 @@ uv run ... \
 Keep the profiler window short when enabling HLO protobuf collection — it
 enlarges artifacts and can increase profile upload/finalization time.
 
+Known-good TensorBoard scope recipe from CoreWeave Grug MoE profiling:
+`trainer.profiler.enabled=true`, `trainer.profiler.start_step=3`,
+`trainer.profiler.num_steps=2`, `trainer.profiler.perfetto_link=false`,
+`trainer.profiler.profile_options.host_tracer_level=1`,
+`trainer.profiler.profile_options.python_tracer_level=0`, and
+`trainer.profiler.profile_options.enable_hlo_proto=true` preserved useful
+`jax.named_scope` / `named_call` regions in TensorBoard for
+`GM2560-MAY-120S4096-W2048-B8-R1-E8M1-FA4PROFILE-S3B-N1-cw-20260617-2353`.
+Leave `device_tracer_level` unset unless device timelines are specifically
+needed; this profile still had useful hierarchical host/XLA metadata.
+
+On GPU, command buffers can collapse or suppress the visible name stack in
+TensorBoard/Perfetto. For profile-readability runs, disable command buffers:
+
+```bash
+export XLA_FLAGS="${XLA_FLAGS:-} --xla_gpu_enable_command_buffer=''"
+```
+
+This hurts performance, so use it only when the goal is semantic trace
+attribution; leave it out of throughput comparisons unless command-buffer
+behavior is the axis being tested.
+
+For GPU throughput runs, keep profile-readability flags separate from XLA code
+generation and scheduling flags. Start from JAX's GPU performance guide,
+especially the code generation flags section:
+<https://docs.jax.dev/en/latest/gpu_performance_tips.html#code-generation-flags>.
+The exact set of useful XLA flags is `jaxlib`-version dependent, so record the
+full `XLA_FLAGS` value with each profile or W&B run.
+
 For better profile readability, use `haliax.jax_utils.named_call` and
 `jax.named_scope` liberally in model code; these names flow into trace
 annotations and make region-level summaries far more actionable.
@@ -68,6 +97,8 @@ annotations and make region-level summaries far more actionable.
 Reference:
 - `lib/levanter/docs/Performance-Guide.md`
 - `.agents/skills/add-pallas-kernel/`
+- JAX GPU performance tips:
+  <https://docs.jax.dev/en/latest/gpu_performance_tips.html>
 
 ## Ingest to Structured Summary
 Pick a download location for pulled profile artifacts: `/tmp` for
@@ -99,24 +130,24 @@ uv run python lib/marin/tools/profile_summary.py summarize \
   --output /tmp/profile_summary.json
 ```
 
-### Option B: From a W&B run target (auto-pick latest profile artifact)
+### Option B: From a W&B run target
 
 ```bash
 uv run python lib/marin/tools/profile_summary.py summarize \
   --run-target marin-community/marin/grug-125m-profile-apples-pallas_tpu-20260217-225239-055ab2 \
-  --alias latest \
   --download-root /tmp/marin-profiles \
   --output /tmp/profile_summary.json
 ```
 
 `--run-target` accepts: a bare run id (requires `--entity` and `--project`),
-`entity/project/run_id`, or a full W&B run URL.
+`entity/project/run_id`, or a full W&B run URL. The profiler directory is
+resolved from `trainer.log_dir` in the run config.
 
 ### Option C: From a local artifact directory
 
 ```bash
 uv run python lib/marin/tools/profile_summary.py summarize \
-  --profile-dir /path/to/jax_profile_artifact_dir \
+  --profile-dir /path/to/profiler_dir \
   --output /tmp/profile_summary.json
 ```
 

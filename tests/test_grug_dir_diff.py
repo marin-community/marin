@@ -3,7 +3,7 @@
 
 from pathlib import Path
 
-from scripts.grug_dir_diff import build_directory_diff_report, collect_files
+from scripts.ci.grug_dir_diff import build_directory_diff_report, collect_files
 
 
 def _write(path: Path, content: str) -> None:

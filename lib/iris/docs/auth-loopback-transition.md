@@ -161,11 +161,11 @@ auth {
 
 ## Implementation map
 
-- `lib/iris/src/iris/rpc/auth.py` — `is_trusted_loopback()`, `LOOPBACK_IDENTITY`,
-  and `resolve_auth()` (tokenless loopback → admin).
-- `lib/iris/src/iris/cluster/controller/dashboard.py` — `_DashboardAuthInterceptor`
-  and `_enforce_http_auth()` pass the transport peer + headers into the shared
-  resolver.
+- `lib/rigging/src/rigging/server_auth.py` — `is_trusted_loopback()`,
+  `ANONYMOUS_ADMIN`, and `resolve_auth()` (tokenless loopback → admin).
+- `lib/iris/src/iris/cluster/controller/dashboard.py` — the RPC interceptor and
+  route middleware (`PolicyAuthInterceptor` / `RouteAuthMiddleware` from
+  rigging) pass the transport peer + headers into the shared resolver.
 - `lib/iris/src/iris/cluster/controller/service.py` — `LaunchJob` reconciles the
   principal against the requested owner segment (admins act-as; non-admins pinned).
 - `lib/iris/src/iris/cluster/client/job_info.py` — `resolve_job_user()` stamps

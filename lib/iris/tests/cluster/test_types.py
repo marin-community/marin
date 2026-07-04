@@ -17,7 +17,16 @@ from iris.cluster.constraints import (
     preemptible_constraint,
     region_constraint,
 )
-from iris.cluster.types import Entrypoint, JobName, TaskAttempt, adjust_tpu_replicas, gpu_device, tpu_device
+from iris.cluster.types import (
+    LOCAL_CLUSTER,
+    Entrypoint,
+    JobName,
+    TaskAttempt,
+    adjust_tpu_replicas,
+    gpu_device,
+    is_federated,
+    tpu_device,
+)
 from iris.rpc import job_pb2
 
 
@@ -91,6 +100,14 @@ def test_job_name_roundtrip_and_hierarchy():
     assert parsed.task_index == 0
     assert JobName.root("test-user", "root").is_ancestor_of(parsed)
     assert not parsed.is_ancestor_of(JobName.root("test-user", "root"), include_self=False)
+
+
+def test_cluster_coordinate_helpers():
+    # Job ids are cluster-invariant; a job/task's cluster is either the reserved
+    # local sentinel (owned here) or a peer id (handed off), never both.
+    assert LOCAL_CLUSTER == "local"
+    assert not is_federated(LOCAL_CLUSTER)
+    assert is_federated("cw-us-east")
 
 
 @pytest.mark.parametrize("base", ["https://iris.oa.dev", "https://iris.oa.dev/"])
@@ -589,6 +606,15 @@ def test_adjust_tpu_replicas_single_host_and_edge_cases():
     assert adjust_tpu_replicas(tpu_device("v6e-4"), replicas=1) == 1
     assert adjust_tpu_replicas(None, replicas=1) == 1
     assert adjust_tpu_replicas(tpu_device("v99-unknown", count=4), replicas=1) == 1
+
+
+@pytest.mark.parametrize("bad_count", [0, -1])
+def test_gpu_device_rejects_non_positive_count(bad_count):
+    # Regression: zero is coerced to 1 by get_gpu_count (`count or 1`) and a
+    # negative count flows through as a negative req_gpu_count that inflates
+    # advertised scheduler capacity. Reject both at the construction boundary.
+    with pytest.raises(ValueError, match="positive integer"):
+        gpu_device("H100", count=bad_count)
 
 
 def test_merge_auto_constraints_with_user_variant_override():

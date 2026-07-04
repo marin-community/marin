@@ -31,8 +31,6 @@ OOM on skewed or large-item workloads where a row-count limit provides no
 reliable bound.
 """
 
-from __future__ import annotations
-
 import concurrent.futures
 import functools
 import io
@@ -48,7 +46,7 @@ import cloudpickle
 import msgspec
 import zstandard as zstd
 from iris.env_resources import TaskResources
-from rigging.filesystem import open_url, url_to_fs
+from rigging.filesystem import is_remote_path, open_url, url_to_fs
 from rigging.timing import RateLimiter, log_time
 
 from zephyr.shard_keys import composite_sort_key, deterministic_hash
@@ -127,18 +125,21 @@ _PROGRESS_LOG_INTERVAL_SECONDS = 60.0
 
 
 def _default_scatter_write_buffer_bytes() -> int:
-    """Return the scatter write buffer budget based on the cgroup memory limit.
+    """Return the scatter write buffer budget for this task.
 
-    Uses 25% of the container memory limit so the budget scales with the
-    worker size, divided by the number of concurrent workers sharing this
-    actor's RAM. Falls back to 256 MB (divided by the same factor) when the
-    cgroup limit cannot be read.
+    Prefers the per-task memory budget from the worker context (set from
+    ``ShardTask.cost.memory``, which already accounts for concurrent tasks
+    sharing the actor's RAM). Falls back to reading the full cgroup limit when
+    no per-task budget is set (e.g. in tests or when cost is zero), and to
+    256 MB when the cgroup limit cannot be read.
     """
-    num_workers = zephyr_worker_ctx().num_workers
+    task_memory = zephyr_worker_ctx().task_memory_bytes
+    if task_memory > 0:
+        return int(task_memory * _SCATTER_WRITE_BUFFER_FRACTION)
     memory = TaskResources.from_environment().memory_bytes
     if memory > 0:
-        return int(memory * _SCATTER_WRITE_BUFFER_FRACTION / num_workers)
-    return _SCATTER_WRITE_BUFFER_BYTES_FALLBACK // max(1, num_workers)
+        return int(memory * _SCATTER_WRITE_BUFFER_FRACTION)
+    return _SCATTER_WRITE_BUFFER_BYTES_FALLBACK
 
 
 # ---------------------------------------------------------------------------
@@ -326,7 +327,7 @@ class ScatterReader:
         self.avg_item_bytes = avg_item_bytes
 
     @classmethod
-    def from_sidecars(cls, scatter_paths: list[str], target_shard: int) -> ScatterReader:
+    def from_sidecars(cls, scatter_paths: list[str], target_shard: int) -> "ScatterReader":
         """Build a ScatterReader by reading per-mapper sidecars directly.
 
         Each reducer reads every mapper's ``.scatter_meta`` sidecar in parallel
@@ -484,12 +485,12 @@ class ScatterWriter:
     """Writes items to a scatter data file with zstd-compressed chunks.
 
     Items are routed to target shards by ``key_fn``, buffered, optionally
-    combined and sorted, then flushed as zstd frames. A JSON sidecar is
-    written on close.
+    combined and sorted, then flushed as zstd frames. A msgpack sidecar
+    (``.scatter_meta``) is written on close.
 
     Flushing is byte-budget-based: when the estimated total bytes across all
-    shard buffers exceeds ``buffer_limit_bytes``, the largest buffer is flushed.
-    This bounds peak RSS regardless of item count or output shard count.
+    shard buffers exceeds a configurable byte budget, the largest buffer is
+    flushed. This bounds peak RSS regardless of item count or output shard count.
     """
 
     def __init__(
@@ -500,16 +501,13 @@ class ScatterWriter:
         source_shard: int = 0,
         sort_fn: Callable | None = None,
         combiner_fn: Callable | None = None,
-        buffer_limit_bytes: int | None = None,
     ) -> None:
         self._data_path = data_path
         self._key_fn = key_fn
         self._num_output_shards = num_output_shards
         self._source_shard = source_shard
         self._combiner_fn = combiner_fn
-        self._buffer_limit_bytes = (
-            buffer_limit_bytes if buffer_limit_bytes is not None else _default_scatter_write_buffer_bytes()
-        )
+        self._buffer_limit_bytes = _default_scatter_write_buffer_bytes()
 
         self._sort_key = composite_sort_key(key_fn, sort_fn)
 
@@ -534,8 +532,11 @@ class ScatterWriter:
         self._first_item_bytes: float = 0.0  # logged at close for comparison
 
         ensure_parent_dir(data_path)
-        fs, fs_path = url_to_fs(data_path)
-        self._out = fs.open(fs_path, "wb")
+        self._fs, self._fs_path = url_to_fs(data_path)
+        self._out = self._fs.open(self._fs_path, "wb")
+        # Cached committed result; makes close() idempotent so the
+        # context-manager exit after an explicit close() is a no-op.
+        self._result: ListShard | None = None
 
     def _flush(self, target: int, buf: list) -> None:
         if self._combiner_fn is not None:
@@ -608,7 +609,13 @@ class ScatterWriter:
             self._mid_write_flushes += 1
 
     def close(self) -> ListShard:
-        """Flush remaining buffers, write sidecar, return ListShard."""
+        """Flush remaining buffers, write sidecar, return ListShard.
+
+        Idempotent: the committed result is cached, so a second call (e.g. the
+        context-manager exit after an explicit ``close()``) is a no-op.
+        """
+        if self._result is not None:
+            return self._result
         close_flushes = 0
         with log_time(f"Flushing remaining buffers for {self._data_path}"):
             for target, buf in sorted(self._buffers.items()):
@@ -643,13 +650,42 @@ class ScatterWriter:
         with log_time(f"Writing scatter meta for {self._data_path}"):
             _write_scatter_meta(self._data_path, sidecar)
 
-        return ListShard(refs=[MemChunk(items=[self._data_path])])
+        self._result = ListShard(refs=[MemChunk(items=[self._data_path])])
+        return self._result
 
-    def __enter__(self) -> ScatterWriter:
+    def cleanup(self) -> None:
+        """Discard the output instead of committing it.
+
+        A clean ``close()`` is the only thing that finalises an object-store
+        upload; on a failed or reassigned shard the upload is otherwise left
+        open and keeps billing for uploaded parts (see #6488).
+        """
+        if is_remote_path(self._data_path):
+            # discard() aborts the multipart upload. Run it even after close()
+            # failed mid-commit: fsspec flips the file to closed in its finally
+            # block, but the upload stays open until aborted (a no-op if nothing
+            # was uploaded).
+            self._out.discard()
+            return
+        if not self._out.closed:
+            self._out.close()
+        if self._fs.exists(self._fs_path):
+            self._fs.rm(self._fs_path)
+
+    def __enter__(self) -> "ScatterWriter":
         return self
 
-    def __exit__(self, *exc: Any) -> None:
-        self.close()
+    def __exit__(self, exc_type: type[BaseException] | None, *exc: Any) -> None:
+        if exc_type is not None:
+            self.cleanup()
+            return
+        try:
+            self.close()
+        except BaseException:
+            # A failure while committing (e.g. a dead R2 connection) would
+            # otherwise leave the multipart upload open. Discard, then re-raise.
+            self.cleanup()
+            raise
 
 
 def _write_scatter(
@@ -660,7 +696,6 @@ def _write_scatter(
     num_output_shards: int,
     sort_fn: Callable | None = None,
     combiner_fn: Callable | None = None,
-    buffer_limit_bytes: int | None = None,
 ) -> ListShard:
     """Route items to target shards, buffer, sort, and append zstd chunks.
 
@@ -670,15 +705,15 @@ def _write_scatter(
         A ListShard wrapping the data file path (as the existing scatter
         plumbing expects a list of paths).
     """
-    writer = ScatterWriter(
+    with ScatterWriter(
         data_path=data_path,
         key_fn=key_fn,
         num_output_shards=num_output_shards,
         source_shard=source_shard,
         sort_fn=sort_fn,
         combiner_fn=combiner_fn,
-        buffer_limit_bytes=buffer_limit_bytes,
-    )
-    for item in items:
-        writer.write(item)
-    return writer.close()
+    ) as writer:
+        for item in items:
+            writer.write(item)
+        # __exit__ discards the in-flight upload if anything above raises.
+        return writer.close()

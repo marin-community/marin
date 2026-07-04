@@ -9,8 +9,6 @@ already holds only that language's shards). One chain per language, returned
 by :func:`finepdfs_normalize_steps`.
 """
 
-from __future__ import annotations
-
 from marin.datakit.download.hf_simple_util import hf_normalize_steps
 from marin.execution.step_spec import StepSpec
 

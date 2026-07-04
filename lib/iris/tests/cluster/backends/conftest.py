@@ -13,17 +13,18 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from unittest.mock import MagicMock
 
-from iris.cluster.backends.types import (
+from iris.cluster.config import SliceConfig
+from iris.cluster.platforms.types import (
     CloudSliceState,
     CloudWorkerState,
     CommandResult,
     Labels,
     SliceStatus,
 )
-from iris.cluster.backends.types import (
+from iris.cluster.platforms.types import (
     WorkerStatus as CloudWorkerStatus,
 )
-from iris.rpc import config_pb2, vm_pb2
+from iris.rpc import vm_pb2
 from rigging.timing import Duration, Timestamp
 
 
@@ -206,7 +207,7 @@ def make_mock_platform(
 
     create_count = [0]
 
-    def create_slice_side_effect(config: config_pb2.SliceConfig, worker_config=None) -> FakeSliceHandle:
+    def create_slice_side_effect(config: SliceConfig, worker_config=None) -> FakeSliceHandle:
         create_count[0] += 1
         slice_id = f"new-slice-{create_count[0]}"
         return make_fake_slice_handle(slice_id)

@@ -10,11 +10,13 @@ use std::sync::Arc;
 use arrow::array::{new_null_array, ArrayRef, RecordBatch};
 use arrow::compute::cast;
 use arrow::datatypes::{DataType, Field, Schema as ArrowSchema, SchemaRef, TimeUnit};
+use buffa::MessageField;
 use serde::{Deserialize, Serialize};
 
 use crate::errors::StatsError;
 use crate::proto::finelog::stats::{
-    Column as ProtoColumn, ColumnType, Schema as ProtoSchema, SchemaView,
+    Column as ProtoColumn, ColumnIndex as ProtoColumnIndex, ColumnType, Schema as ProtoSchema,
+    SchemaView,
 };
 
 /// Default implicit ordering-key column name when `Schema.key_column` is empty.
@@ -31,12 +33,22 @@ pub const MAX_WRITE_ROWS_BYTES: usize = 16 * 1024 * 1024;
 /// Max rows per RecordBatch. Exactly `1_000_000` (NOT `1 << 20`).
 pub const MAX_WRITE_ROWS_ROWS: usize = 1_000_000;
 
+/// Secondary indexes a column carries. Each index type is its own field so
+/// adding one is additive; `ColumnIndex::default()` (all-false) is unindexed.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ColumnIndex {
+    /// Per-row-group trigram substring index in each segment's `.tgm` sidecar.
+    /// Only meaningful for STRING columns.
+    pub trigram: bool,
+}
+
 /// One column in a registered schema.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Column {
     pub name: String,
     pub r#type: ColumnType,
     pub nullable: bool,
+    pub index: ColumnIndex,
 }
 
 impl Column {
@@ -45,7 +57,14 @@ impl Column {
             name: name.into(),
             r#type,
             nullable,
+            index: ColumnIndex::default(),
         }
+    }
+
+    /// Builder: maintain a trigram substring index for this column.
+    pub fn with_trigram_index(mut self) -> Self {
+        self.index.trigram = true;
+        self
     }
 }
 
@@ -147,7 +166,13 @@ pub fn schema_from_proto_view(view: &SchemaView) -> Result<Schema, StatsError> {
                 "column {IMPLICIT_SEQ_COLUMN:?} is reserved (server-assigned implicit column)"
             )));
         }
-        cols.push(Column::new(name, ctype, c.nullable.unwrap_or(false)));
+        let mut column = Column::new(name, ctype, c.nullable.unwrap_or(false));
+        column.index.trigram = c
+            .index
+            .as_option()
+            .and_then(|ix| ix.trigram)
+            .unwrap_or(false);
+        cols.push(column);
     }
     Ok(Schema::new(cols, view.key_column.unwrap_or("")))
 }
@@ -159,10 +184,15 @@ pub fn schema_to_proto_owned(schema: &Schema) -> ProtoSchema {
         .iter()
         .filter(|c| c.name != IMPLICIT_SEQ_COLUMN)
         .map(|c| {
-            ProtoColumn::default()
-                .with_name(&c.name)
-                .with_type(c.r#type)
-                .with_nullable(c.nullable)
+            ProtoColumn {
+                index: MessageField::some(
+                    ProtoColumnIndex::default().with_trigram(c.index.trigram),
+                ),
+                ..Default::default()
+            }
+            .with_name(&c.name)
+            .with_type(c.r#type)
+            .with_nullable(c.nullable)
         })
         .collect();
     ProtoSchema {
@@ -176,12 +206,22 @@ pub fn schema_to_proto_owned(schema: &Schema) -> ProtoSchema {
 // JSON conversions (catalog sidecar form).
 // ---------------------------------------------------------------------------
 
+#[derive(Serialize, Deserialize, Default)]
+struct JsonColumnIndex {
+    #[serde(default)]
+    trigram: bool,
+}
+
 #[derive(Serialize, Deserialize)]
 struct JsonColumn {
     name: String,
     /// Proto enum *name* (e.g. "COLUMN_TYPE_STRING"); stable across edits.
     r#type: String,
     nullable: bool,
+    /// Absent in catalog rows written before column indexes existed;
+    /// `serde(default)` decodes those as an empty (unindexed) `ColumnIndex`.
+    #[serde(default)]
+    index: JsonColumnIndex,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -240,6 +280,9 @@ pub fn schema_to_json(schema: &Schema) -> String {
                 name: c.name.clone(),
                 r#type: column_type_name(c.r#type).to_string(),
                 nullable: c.nullable,
+                index: JsonColumnIndex {
+                    trigram: c.index.trigram,
+                },
             })
             .collect(),
     };
@@ -252,11 +295,9 @@ pub fn schema_from_json(text: &str) -> Result<Schema, StatsError> {
         .map_err(|e| StatsError::Internal(format!("catalog schema JSON parse: {e}")))?;
     let mut cols = Vec::with_capacity(payload.columns.len());
     for c in payload.columns {
-        cols.push(Column::new(
-            c.name,
-            column_type_from_json(&c.r#type)?,
-            c.nullable,
-        ));
+        let mut column = Column::new(c.name, column_type_from_json(&c.r#type)?, c.nullable);
+        column.index.trigram = c.index.trigram;
+        cols.push(column);
     }
     Ok(Schema::new(cols, payload.key_column))
 }

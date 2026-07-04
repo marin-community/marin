@@ -5,8 +5,7 @@
 
 from marin.profiling.compare_bundle import ComparisonBundleResult, run_profile_comparison_bundle
 from marin.profiling.ingest import (
-    DEFAULT_ARTIFACT_ALIAS,
-    download_latest_profile_artifact_for_run,
+    download_profile_dir_for_run,
     download_wandb_profile_artifact,
     summarize_profile_artifact,
     summarize_trace,
@@ -24,25 +23,3 @@ from marin.profiling.tracking import (
     summarize_regression_history,
 )
 from marin.profiling.xplane import summarize_xplane, summarize_xplane_tables
-
-__all__ = [
-    "DEFAULT_ARTIFACT_ALIAS",
-    "PROFILE_SUMMARY_ARTIFACT_TYPE",
-    "ComparisonBundleResult",
-    "ProfileSummary",
-    "RegressionThresholds",
-    "assess_profile_regression",
-    "build_markdown_report",
-    "compare_profile_summaries",
-    "download_latest_profile_artifact_for_run",
-    "download_wandb_profile_artifact",
-    "profile_summary_from_dict",
-    "publish_profile_summary_artifact",
-    "query_profile_summary",
-    "run_profile_comparison_bundle",
-    "summarize_profile_artifact",
-    "summarize_regression_history",
-    "summarize_trace",
-    "summarize_xplane",
-    "summarize_xplane_tables",
-]

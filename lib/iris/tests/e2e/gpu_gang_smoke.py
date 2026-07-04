@@ -34,13 +34,11 @@ public ``iris-task:latest``; only the controller image is built from this branch
 Usage:
     cd lib/iris
     uv run --group dev python tests/e2e/gpu_gang_smoke.py \
-        --config config/kind-controller-gpu-smoke.yaml --target kind
+        --config config/ci-kind-gpu-smoke.yaml --target kind
     uv run --group dev python tests/e2e/gpu_gang_smoke.py \
-        --config config/coreweave-controller-gpu-smoke.yaml --target coreweave \
+        --config config/ci-coreweave-gpu-smoke.yaml --target coreweave \
         --i-understand-the-cost
 """
-
-from __future__ import annotations
 
 import json
 import logging
@@ -53,8 +51,9 @@ from pathlib import Path
 
 import click
 from iris.client import IrisClient
-from iris.cluster.backends.k8s.controller import K8sControllerProvider, _build_controller_deployment
-from iris.cluster.backends.k8s.coreweave_topology import (
+from iris.cluster.config import CoreweavePlatformConfig, IrisClusterConfig, load_config
+from iris.cluster.platforms.k8s.controller import K8sControllerProvider, _build_controller_deployment
+from iris.cluster.platforms.k8s.coreweave_topology import (
     CW_FLAVOR_INFINIBAND,
     CW_LABEL_FABRIC,
     CW_LABEL_FLAVOR,
@@ -62,11 +61,10 @@ from iris.cluster.backends.k8s.coreweave_topology import (
     CW_LABEL_NVLINK_DOMAIN,
     CW_LABEL_SUPERPOD,
 )
-from iris.cluster.backends.k8s.service import CloudK8sService
-from iris.cluster.backends.types import Labels, find_free_port
-from iris.cluster.config import load_config
-from iris.cluster.types import CoschedulingConfig, Entrypoint, EnvironmentSpec, ResourceSpec, gpu_device
-from iris.rpc import config_pb2, job_pb2
+from iris.cluster.platforms.k8s.service import CloudK8sService
+from iris.cluster.platforms.types import Labels, find_free_port
+from iris.cluster.types import AcceleratorType, CoschedulingConfig, Entrypoint, EnvironmentSpec, ResourceSpec, gpu_device
+from iris.rpc import job_pb2
 
 # install_kueue is a sibling ops script under lib/iris/scripts/ (not part of the
 # iris package), so add that dir to the path before importing it.
@@ -149,7 +147,7 @@ def _wait_port(host: str, port: int, *, timeout: float) -> None:
 class ControllerTarget:
     """Shared controller bring-up/teardown over the K8s direct provider."""
 
-    def __init__(self, cfg: config_pb2.IrisClusterConfig, args: SmokeArgs) -> None:
+    def __init__(self, cfg: IrisClusterConfig, args: SmokeArgs) -> None:
         self.cfg = cfg
         self.args = args
         self.namespace = cfg.kubernetes_provider.namespace
@@ -166,7 +164,7 @@ class ControllerTarget:
         """(Re)build the k8s clients against the current kubeconfig."""
         self.kubectl = CloudK8sService(namespace=self.namespace, kubeconfig_path=self.kubeconfig)
         self.controller = K8sControllerProvider(
-            config=config_pb2.CoreweavePlatformConfig(
+            config=CoreweavePlatformConfig(
                 region=self.cfg.platform.coreweave.region, namespace=self.namespace, kubeconfig_path=self.kubeconfig
             ),
             label_prefix=self.label_prefix,
@@ -395,7 +393,7 @@ class CoreweaveTarget(ControllerTarget):
         # GPU pools — the controller's CPU pool keeps its own buffer size.
         patch = json.dumps({"spec": {"targetNodes": n}})
         for name, sg in self.cfg.scale_groups.items():
-            if sg.resources.device_type != config_pb2.ACCELERATOR_TYPE_GPU:
+            if sg.resources.device_type != AcceleratorType.GPU:
                 continue
             pool = self.controller._nodepool_name(name)
             logger.info("setting NodePool %s targetNodes=%d", pool, n)
@@ -491,7 +489,7 @@ def submit_gang(controller_url: str, target: ControllerTarget, args: SmokeArgs, 
     return status.state == job_pb2.JOB_STATE_SUCCEEDED
 
 
-def run_smoke(cfg: config_pb2.IrisClusterConfig, args: SmokeArgs) -> bool:
+def run_smoke(cfg: IrisClusterConfig, args: SmokeArgs) -> bool:
     target = KindTarget(cfg, args) if args.target == "kind" else CoreweaveTarget(cfg, args)
     try:
         target.setup()

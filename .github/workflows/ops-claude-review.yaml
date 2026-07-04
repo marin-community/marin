@@ -10,7 +10,10 @@ concurrency:
 
 jobs:
   review:
-    # Runs on non-draft PRs opened/reopened/marked-ready by a writer.
+    # Runs on non-draft PRs opened/reopened/marked-ready by a writer. The
+    # correctness review (/review-pr) also scans the PR *description* against the
+    # commit skill's PR-body rules and flags template slop (Testing/Validation
+    # sections, empty boilerplate headings) as a single top-level comment.
     if: >-
       github.event.pull_request.draft == false &&
       (
@@ -87,10 +90,9 @@ jobs:
       # pre-commit.py is a `uv run --script` entry point; uv must be on PATH for
       # the agent's Bash to invoke it (and for the nested per-lane claude agents).
       - name: Install uv and Python
-        uses: astral-sh/setup-uv@v6
+        uses: astral-sh/setup-uv@v7
         with:
-          version: "0.7.20"
-          python-version: "3.11"
+          python-version: "3.12"
           enable-cache: true
 
       - name: Run Lint Review

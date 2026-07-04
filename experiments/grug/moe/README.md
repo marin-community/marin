@@ -186,11 +186,9 @@ inference latency / KV-cache size, serving compatibility, or interaction effects
   `run_grug` (dispatches a Fray job).
 - [`heuristic.py`](./heuristic.py) — `MoeHeuristic` (MuonH, May Recipe
   refit) and `build_from_heuristic` entry point. Current default.
-- [`launch.py`](./launch.py) — `GrugMoeLaunchConfig`, baseline `ExecutorStep`,
-  and `executor_main` wiring.
+- [`launch.py`](./launch.py) — `GrugMoeLaunchConfig`, the `grug_moe_baseline()`
+  lazy `Checkpoint`, and `StepRunner` wiring.
 - [`launch_cw_scale.py`](./launch_cw_scale.py) — CoreWeave scale-test launcher.
-- [`launch_datakit_moe_mix.py`](./launch_datakit_moe_mix.py) — launcher using
-  the datakit MoE pretraining mixture.
 - [`adamh.py`](./adamh.py) — shared AdamH utilities.
 - [`test_optimizer.py`](./test_optimizer.py) — unit tests for the AdamH
   parameter-group mask.

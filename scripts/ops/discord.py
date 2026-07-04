@@ -21,8 +21,6 @@ Library:
     post("code-review", "PR #123 ready for review")
 """
 
-from __future__ import annotations
-
 import argparse
 import json
 import logging

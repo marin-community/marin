@@ -1,10 +1,18 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Template: grug-moe trial run.
+"""grug-moe trial run, authored as a lazy artifact.
 
-This keeps model, train loop, and launch wiring in `experiments/grug/moe` so
-the MoE variant can be iterated independently from the dense base template.
+The run is a function that returns a typed :class:`Checkpoint` handle addressed by an
+explicit ``name@version``. The model, optimizer, data mixture, token budget, z-loss,
+and evals are all stated inline; the output path is ``ctx.output_path`` and the TPU is a
+run-arg, so neither bears on the artifact's identity.
+
+The grug-moe training mechanism (``GrugMoeLaunchConfig`` + ``run_grug_moe_trial`` ->
+``run_grug``) is grug-specific compute and is kept as-is: the recipe's ``fn`` is
+``run_grug_moe_trial``, which builds the Levanter trainer and dispatches the training
+job to Fray. Only the data/validation wiring around it is assembled lazily from
+dataset handles.
 """
 
 import dataclasses
@@ -15,25 +23,50 @@ from datetime import timedelta
 import jmp
 from fray.cluster import ResourceConfig
 from levanter.callbacks.profiler import ProfilerConfig
-from levanter.checkpoint import CheckpointerConfig
-from levanter.data.text import BlockShuffleConfig, LmDataConfig, TextLmDatasetFormat
+from levanter.checkpoint import CheckpointerConfig, latest_checkpoint_path
+from levanter.data.text import LmDataConfig
 from levanter.optim import OptimizerConfig
 from levanter.tracker import TrackerConfig
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
-from marin.execution.executor import executor_main
-from marin.execution.types import ExecutorStep, this_output_path, versioned
-from marin.processing.tokenize import add_validation_sets_to_mixture
-from marin.processing.tokenize.data_configs import lm_data_config
-from marin.training.training import temporary_checkpoint_base_path
+from marin.execution.lazy import ArtifactStep, StepContext
+from marin.execution.step_runner import StepRunner
+from marin.experiment.data import mixture, tokenized
+from marin.experiment.namespacing import user_namespaced_name
+from marin.processing.tokenize.tokenize import TokenizedCache
+from marin.training.training import LevanterCheckpoint, resolve_checkpointer_output_path
 
-from experiments.defaults import default_validation_sets
-from experiments.grug.moe.heuristic import MoeHeuristic
+from experiments.datasets.nemotron import nemotron_datasets
+from experiments.datasets.paloma import paloma_datasets
+from experiments.datasets.proofpile import proofpile_dataset
+from experiments.datasets.starcoder import starcoder_dataset
+from experiments.datasets.uncheatable import uncheatable_datasets
+from experiments.grug.moe.heuristic import build_from_heuristic
 from experiments.grug.moe.model import GrugModelConfig
 from experiments.grug.moe.train import GrugEvalConfig, GrugRunConfig, GrugTrainerConfig, run_grug
 from experiments.llama import llama3_tokenizer
-from experiments.pretraining_datasets import nemotron_mix
-from experiments.tokenization import default_tokenize
+
+# SlimPajama-6B tokenization OOMs at the default 10g worker resources.
+_SLIMPAJAMA_TOKENIZE_RESOURCES = ResourceConfig(ram="64g", disk="64g")
+
+# The TPU the training job is dispatched onto. A run-arg, not part of the config's
+# identity: re-running on a different TPU is the same checkpoint. The launcher step
+# runs inline (run_grug dispatches its own Fray job).
+_TRAIN_RESOURCES = ResourceConfig.with_tpu("v5p-8")
+
+# Nemotron CC mixture weights: the corpus's TiB proportions, plus starcoder and
+# proof-pile at their published weights. Policy lives here, in the experiment.
+_NEMOTRON_WEIGHTS = {
+    "hq_actual": 0.91351,
+    "hq_synth": 2.72,
+    "medium_high": 0.82471,
+    "medium": 3.38,
+    "medium_low": 1.54,
+    "low_actual": 0.70123,
+    "low_synth": 0.62771,
+}
+_STARCODER_WEIGHT = 0.25
+_PROOFPILE_WEIGHT = 0.055
 
 
 @dataclass(frozen=True)
@@ -57,18 +90,18 @@ class GrugMoeLaunchConfig:
     profiler: ProfilerConfig = field(default_factory=ProfilerConfig)
     grug_trainer: GrugTrainerConfig = field(default_factory=GrugTrainerConfig)
     eval: GrugEvalConfig | None = field(default_factory=GrugEvalConfig)
-    # Mesh size along the "expert" axis (expert-parallelism). 1 = no EP.
-    expert_parallel: int = 1
+    processes_per_task: int = 1
+    """GPU processes per task. > 1 fans each node into one JAX process per GPU
+    (multi-controller) via the iris.runtime.multigpu supervisor; 1 keeps the
+    single-process-per-node model."""
     checkpointer: CheckpointerConfig | None = None
     """Override the checkpointer. None builds the default (periodic + final saves
     under output_path). Throughput experiments point this at node-local disk so a
     slow object-store commit can't wedge the end-of-run barrier."""
-
-
-NEMOTRON_MIX_WITH_DEFAULT_VALIDATION = add_validation_sets_to_mixture(
-    nemotron_mix,
-    default_validation_sets(tokenizer=nemotron_mix.tokenizer),
-)
+    init_from: str | None = None
+    """Checkpoint base directory to initialize weights from (the latest checkpoint
+    under it is loaded). None trains from scratch. Used to chain training phases —
+    a midtrain/SFT/RL run points this at the prior phase's ``checkpoints`` directory."""
 
 
 def env_int(key: str, default: int) -> int:
@@ -77,30 +110,20 @@ def env_int(key: str, default: int) -> int:
     return int(raw) if raw else default
 
 
-def slimpajama_6b_data() -> LmDataConfig:
-    """SlimPajama-6B, llama3-tokenized with block-shuffle, re-tokenized on first run.
+def slimpajama_6b_dataset() -> ArtifactStep[TokenizedCache]:
+    """SlimPajama-6B, llama3-tokenized — a small corpus for GPU smoke/scale runs.
 
-    A small, R2-local corpus for GPU smoke/scale runs; returns a ready-to-train
-    ``LmDataConfig``. A production pretraining mixture would instead need its
-    tokenized cache already materialized to avoid a cross-region tokenize.
+    Returns the tokenized :class:`TokenizedCache` handle; the launcher assembles it into an
+    ``LmDataConfig`` with :func:`~marin.experiment.data.mixture`. Tokenization runs as
+    its own Fray job (a production pretraining mixture would instead pin an already
+    materialized cache to avoid a cross-region tokenize).
     """
-    tokenize_step = default_tokenize(
-        name="slimpajama-6b-cw",
-        dataset="DKYoon/SlimPajama-6B",
+    return tokenized(
+        "slimpajama-6b",
+        source="DKYoon/SlimPajama-6B",
         tokenizer=llama3_tokenizer,
-        format=TextLmDatasetFormat(),
-    )
-    tokenize_step = dataclasses.replace(
-        tokenize_step,
-        config=dataclasses.replace(
-            tokenize_step.config,
-            # SlimPajama-6B tokenization OOMs at the default 10g worker_resources.
-            worker_resources=ResourceConfig(ram="64g", disk="64g"),
-        ),
-    )
-    return lm_data_config(
-        training_set=tokenize_step,
-        shuffle=BlockShuffleConfig(io_block_size=256, window_blocks=256, perm_type="feistel"),
+        resources=_SLIMPAJAMA_TOKENIZE_RESOURCES,
+        version="2026.06.28",
     )
 
 
@@ -120,7 +143,12 @@ def _resolve_tracker(tracker: TrackerConfig, run_id: str) -> TrackerConfig:
 
 
 def run_grug_moe_trial(config: GrugMoeLaunchConfig) -> None:
-    # Map template launch knobs onto full Levanter TrainerConfig.
+    """Map template launch knobs onto a full Levanter trainer and dispatch the run.
+
+    Runs inline on the launcher; ``run_grug`` submits the training job to Fray and
+    blocks until it completes.
+    """
+    initialize_from = latest_checkpoint_path(config.init_from) if config.init_from is not None else None
     trainer = TrainerConfig(
         id=config.run_id,
         seed=config.seed,
@@ -132,17 +160,15 @@ def run_grug_moe_trial(config: GrugMoeLaunchConfig) -> None:
         use_explicit_mesh_axes=True,
         require_accelerator=True,
         allow_nondivisible_batch_size=False,
+        initialize_from=initialize_from,
         checkpointer=config.checkpointer
-        or CheckpointerConfig(
-            base_path=os.path.join(config.output_path, "checkpoints"),
-            temporary_base_path=temporary_checkpoint_base_path(config.output_path),
-            append_run_id_to_base_path=False,
-            save_interval=timedelta(minutes=10),
-            keep=None,
+        or resolve_checkpointer_output_path(
+            CheckpointerConfig(save_interval=timedelta(minutes=10), keep=None),
+            config.output_path,
         ),
     )
 
-    grug_trainer = dataclasses.replace(config.grug_trainer, trainer=trainer, expert_axis_size=config.expert_parallel)
+    grug_trainer = dataclasses.replace(config.grug_trainer, trainer=trainer)
 
     run_config = GrugRunConfig(
         model=config.model,
@@ -151,87 +177,81 @@ def run_grug_moe_trial(config: GrugMoeLaunchConfig) -> None:
         optimizer=config.optimizer,
         trainer=grug_trainer,
         eval=config.eval,
+        processes_per_task=config.processes_per_task,
     )
     run_grug(run_config)
 
 
-# May Recipe compute-optimal cells from the drop-1e18 isoflop fit
-# (issue #6074). ``MoeHeuristic`` (heuristic.py) supplies LR / beta2 /
-# epsilon; (bs, steps) hardcoded so callers don't depend on
-# ``compute_tokens_and_batch`` heuristics for cell selection. Batch sizes
-# are halved relative to the original seq=4096 cells to keep
-# ``tokens_per_batch = bs * seq`` (and therefore tokens, steps, and
-# muonh_lr) unchanged at the new seq=8192 default.
-#
-#   dim   budget     bs    steps   tokens     muonh_lr   tpu
-#   512   3.82e17    16    10_980  1.44e9     0.00980    v4-32 (EP=1)
-#   768   2.81e18    32    16_875  4.42e9     0.00837    v4-32 (EP=1)
-#   1024  1.16e19    64    16_080  8.43e9     0.00879    v4-32 (EP=1)
-#   1280  3.46e19    128   14_325  1.50e10    0.00957    v4-32 (EP=1)
-_SEQ_LEN: int = 8192
-_COMPUTE_OPT_CELLS: tuple[tuple[int, int, int], ...] = (
-    (512, 16, 10_980),
-    # (768, 32, 16_875),
-    # (1024, 64, 16_080),
-    # (1280, 128, 14_325),
+RESOLVED_RUN_ID = _resolve_run_id("4_10_test_moe")
+
+
+# Baseline: 1e18 compute budget, d1024. Model + optimizer + batch + steps are
+# all derived from `MoeAdamHHeuristic`. To override any of these, swap in
+# an explicit `GrugModelConfig` / `GrugMoeAdamHConfig` below.
+_BASELINE_BUDGET: float = 1e18
+_BASELINE_HIDDEN_DIM: int = 1024
+_BASELINE_TARGET_STEPS: int = 2**14
+_baseline_model, _baseline_optimizer, _baseline_batch, _baseline_steps = build_from_heuristic(
+    budget=_BASELINE_BUDGET,
+    hidden_dim=_BASELINE_HIDDEN_DIM,
+    target_steps=_BASELINE_TARGET_STEPS,
 )
 
-_heuristic = MoeHeuristic()
+# Public alias for the heuristic-derived baseline GrugModelConfig. Kept
+# because consumers (e.g. experiments/ferries/canary_ferry.py) import it by
+# name.
+GRUG_MOE_TRIAL_MODEL: GrugModelConfig = _baseline_model
 
-# Public alias for the d=512 baseline GrugModelConfig. Kept because
-# consumers (e.g. experiments/ferries/canary_ferry.py) import it by name.
-GRUG_MOE_TRIAL_MODEL: GrugModelConfig = _heuristic.build_model_config(512, seq_len=_SEQ_LEN)
 
-compute_opt_steps: list[ExecutorStep] = []
-for _dim, _bs, _steps in _COMPUTE_OPT_CELLS:
-    _model = _heuristic.build_model_config(_dim, seq_len=_SEQ_LEN)
-    _tokens = float(_steps * _bs * _SEQ_LEN)
-    _optimizer = _heuristic.build_optimizer_config(_bs, _tokens, _dim, seq_len=_SEQ_LEN)
-    _run_id = f"moe_may_compute_opt_d{_dim}_demo"
-    compute_opt_steps.append(
-        ExecutorStep(
-            name=f"grug/{_run_id}",
-            fn=run_grug_moe_trial,
-            config=GrugMoeLaunchConfig(
-                model=versioned(_model),
-                data=NEMOTRON_MIX_WITH_DEFAULT_VALIDATION,
-                output_path=this_output_path(),
-                run_id=_run_id,
-                resources=versioned(ResourceConfig.with_tpu("v4-32")),
-                steps=versioned(_steps),
-                batch_size=versioned(_bs),
-                seed=versioned(0),
-                mp=versioned("params=float32,compute=bfloat16,output=bfloat16"),
-                tracker=WandbConfig(
-                    project="marin_moe",
-                    tags=["moe", "moe_may_compute_opt", f"d{_dim}"],
-                    group="moe-may-compute-opt",
-                    name=None,
-                ),
-                optimizer=versioned(_optimizer),
-                grug_trainer=versioned(
-                    GrugTrainerConfig(
-                        z_loss_weight=0.0,
-                        ema_beta=None,
-                        log_every=1,
-                    )
-                ),
-                eval=versioned(
-                    GrugEvalConfig(
-                        eval_batch_size=256,
-                        steps_per_eval=1000,
-                        max_eval_batches=8,
-                        eval_current=True,
-                        eval_ema=False,
-                    )
-                ),
+def grug_moe_baseline(*, version: str = "dev") -> ArtifactStep[LevanterCheckpoint]:
+    """The baseline grug MoE (QB+GN+XSA+zloss) on the Nemotron mix as a lazy checkpoint.
+
+    Every component is a :class:`Dataset` handle, so the whole graph lowers via
+    :func:`~marin.execution.lazy.lower`. Pinned components never re-tokenize; the
+    paloma/uncheatable suites are validation (weight 0).
+    """
+    nem = nemotron_datasets(tokenizer=llama3_tokenizer)
+    train = {nem[split]: weight for split, weight in _NEMOTRON_WEIGHTS.items()}
+    train[starcoder_dataset(tokenizer=llama3_tokenizer)] = _STARCODER_WEIGHT
+    train[proofpile_dataset(tokenizer=llama3_tokenizer)] = _PROOFPILE_WEIGHT
+    validation = [
+        *paloma_datasets(tokenizer=llama3_tokenizer).values(),
+        *uncheatable_datasets(tokenizer=llama3_tokenizer).values(),
+    ]
+
+    def build_config(ctx: StepContext) -> GrugMoeLaunchConfig:
+        return GrugMoeLaunchConfig(
+            model=_baseline_model,
+            data=mixture(ctx, train, validation=validation),
+            output_path=ctx.output_path,
+            run_id=RESOLVED_RUN_ID,
+            resources=ctx.runtime_arg("train_resources"),
+            steps=_baseline_steps,
+            batch_size=_baseline_batch,
+            seed=0,
+            mp="params=float32,compute=bfloat16,output=bfloat16",
+            tracker=WandbConfig(project="marin_moe", tags=["moe"], group="moe-iter04", name=None),
+            optimizer=_baseline_optimizer,
+            grug_trainer=GrugTrainerConfig(z_loss_weight=1e-4, ema_beta=None, log_every=1),
+            eval=GrugEvalConfig(
+                eval_batch_size=512,
+                steps_per_eval=1000,
+                max_eval_batches=8,
+                eval_current=True,
+                eval_ema=False,
             ),
         )
+
+    return ArtifactStep(
+        name=user_namespaced_name("grug/4_10_baseline_moe", version),
+        version=version,
+        artifact_type=LevanterCheckpoint,
+        run=run_grug_moe_trial,
+        build_config=build_config,
+        deps=(*train, *validation),
+        runtime_args={"train_resources": _TRAIN_RESOURCES},
     )
 
 
 if __name__ == "__main__":
-    executor_main(
-        steps=compute_opt_steps,
-        description="May Recipe compute-optimal cells at d ∈ {512, 768, 1024, 1280} on v4-32 (EP=1).",
-    )
+    StepRunner().run([grug_moe_baseline().lower()])

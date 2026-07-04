@@ -4,7 +4,7 @@
 
 
 # /// script
-# requires-python = ">=3.11"
+# requires-python = ">=3.12"
 # dependencies = [
 #     "google-genai>=1.0",
 #     "pydantic>=2.0",

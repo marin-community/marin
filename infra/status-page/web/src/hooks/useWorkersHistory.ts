@@ -3,9 +3,9 @@ import { useAtomValue } from "jotai";
 import { fetchWorkersHistory } from "../api";
 import { autoRefreshAtom } from "../state";
 
-// Refetches on the same cadence as the server sampler — any faster is
-// wasted traffic since the ring buffer only gains a new point every 30s.
-const REFETCH_INTERVAL_MS = 30_000;
+// The canary writes a new worker_healthy point every 60s and the server
+// shields finelog behind a 60s TTL, so anything faster is wasted traffic.
+const REFETCH_INTERVAL_MS = 60_000;
 
 export function useWorkersHistory() {
   const autoRefresh = useAtomValue(autoRefreshAtom);

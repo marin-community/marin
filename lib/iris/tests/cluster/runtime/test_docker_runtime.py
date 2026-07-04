@@ -3,15 +3,14 @@
 
 """Tests for DockerRuntime mount resolution, staging, and container creation."""
 
-from __future__ import annotations
-
 import subprocess
 from unittest.mock import Mock
 
 import pytest
 from iris.cluster.bundle import BundleStore
-from iris.cluster.runtime.docker import DockerRuntime
+from iris.cluster.runtime.docker import DockerRuntime, _security_flags
 from iris.cluster.runtime.types import MountKind, MountSpec
+from iris.rpc import job_pb2
 
 
 @pytest.fixture
@@ -103,3 +102,43 @@ def test_stage_bundle(monkeypatch, tmp_path, runtime, mock_bundle_store):
     )
     assert len(calls) == 0
     mock_bundle_store.extract_bundle_to.assert_called_once_with("abc", workdir)
+
+
+# ---------------------------------------------------------------------------
+# Container security profiles -> docker flags
+# ---------------------------------------------------------------------------
+
+
+def test_security_flags_default_cpu():
+    """UNSPECIFIED resolves to DEFAULT: hardened CPU defaults with SYS_PTRACE."""
+    flags = _security_flags(job_pb2.CONTAINER_PROFILE_UNSPECIFIED, is_tpu_run=False)
+    assert flags == ["--security-opt", "no-new-privileges", "--cap-drop", "ALL", "--cap-add", "SYS_PTRACE"]
+
+
+def test_security_flags_default_tpu_is_privileged():
+    """A TPU run is privileged for device access even under DEFAULT."""
+    flags = _security_flags(job_pb2.CONTAINER_PROFILE_DEFAULT, is_tpu_run=True)
+    assert "--privileged" in flags
+    assert "no-new-privileges" not in flags
+    assert "SYS_PTRACE" in flags
+
+
+def test_security_flags_restricted_omits_ptrace():
+    flags = _security_flags(job_pb2.CONTAINER_PROFILE_RESTRICTED, is_tpu_run=False)
+    assert flags == ["--security-opt", "no-new-privileges", "--cap-drop", "ALL"]
+    assert "SYS_PTRACE" not in flags
+
+
+def test_security_flags_privileged_cpu():
+    flags = _security_flags(job_pb2.CONTAINER_PROFILE_PRIVILEGED, is_tpu_run=False)
+    assert "--privileged" in flags
+    assert "--cap-drop" not in flags
+    assert "SYS_PTRACE" in flags
+
+
+def test_security_flags_docker_access_mounts_socket():
+    flags = _security_flags(job_pb2.CONTAINER_PROFILE_DOCKER_ACCESS, is_tpu_run=False)
+    assert "-v" in flags
+    assert "/var/run/docker.sock:/var/run/docker.sock" in flags
+    # Still hardened like DEFAULT otherwise.
+    assert "--cap-drop" in flags

@@ -1,17 +1,25 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Marin filesystem helpers: prefix resolution, region-local temp storage,
-and cross-region read guards.
+"""Marin filesystem: the cluster data config, storage-prefix/region resolution,
+region-local temp storage, and cross-region read guards.
 
-Provides a unified API for resolving the marin storage prefix and building
-GCS paths with lifecycle-managed TTL prefixes. Lifecycle rules on the
+A :class:`DataConfig` describes where a cluster's data lives: the
+region-to-bucket mirror set, the URL scheme, and the temp TTL policy.
+:func:`data_config` returns the active config — the one
+bound by :func:`use_data_config`, else the cluster named by ``MARIN_CLUSTER``
+(default ``marin``), loaded from ``config/<cluster>.yaml``. Every "where does
+data live" answer flows through it: :func:`marin_prefix` is
+``data_config().resolved_root()``, and :func:`marin_temp_bucket`, the mirror
+filesystem, and the region helpers all read its fields. Lifecycle rules on the
 ``marin-{region}`` buckets are managed by ``infra/configure_buckets.py``.
 
-Resolution chain for the storage prefix:
+Prefix resolution chain (:meth:`DataConfig.resolved_root`):
   1. ``MARIN_PREFIX`` environment variable
-  2. GCS instance metadata → ``gs://marin-{region}``
-  3. ``/tmp/marin`` (local fallback)
+  2. an explicit ``root`` (single-prefix clusters, e.g. R2)
+  3. the region-local bucket ``region_buckets[<gcs metadata region>]``
+  4. ``gs://marin-{region}`` for a detected-but-unmapped region
+  5. ``/tmp/marin`` (local fallback)
 
 Cross-region transfer budget:
   ``TransferBudget`` tracks cumulative cross-region GCS bytes across all
@@ -36,80 +44,258 @@ import time
 import urllib.error
 import urllib.request
 import uuid
-from collections.abc import Callable, Generator, Sequence
+from collections.abc import Callable, Generator, Mapping, Sequence
+from enum import StrEnum
 from pathlib import PurePath
+from types import MappingProxyType
 from typing import Any, cast
 
 import fsspec
+import yaml
 from fsspec.callbacks import DEFAULT_CALLBACK, Callback
 from fsspec.implementations.local import LocalFileSystem
 from google.api_core.exceptions import Forbidden as GcpForbiddenException
 from google.cloud import storage
 
+from rigging.config_discovery import list_cluster_configs, resolve_cluster_config
 from rigging.distributed_lock import create_lock, default_worker_id
 from rigging.timing import ExponentialBackoff, retry_with_backoff
 
 logger = logging.getLogger(__name__)
 
-_GCP_METADATA_ZONE_URL = "http://metadata.google.internal/computeMetadata/v1/instance/zone"
 
+def _bundled_cluster_config_dir() -> str | None:
+    """Bundled cluster-config dir for an installed (wheel) rigging.
+
+    Populated by the ``force-include`` in ``lib/rigging/pyproject.toml`` at
+    ``rigging/clusters``. Returns ``None`` for a source/editable checkout, where
+    the repo-root ``config/`` entry resolves against the marin workspace root.
+    Mirrors ``iris.cli.connect._bundled_iris_config_dir``.
+    """
+    bundled = pathlib.Path(__file__).resolve().parent / "clusters"
+    return str(bundled) if bundled.is_dir() else None
+
+
+# Cluster config search dirs, highest priority first: a per-user override, the
+# repo-root ``config/`` directory (in-tree checkout), then the bundled copy for
+# installed wheels. Relative paths resolve against the marin workspace root via
+# :func:`rigging.config_discovery.resolve_cluster_config`.
+MARIN_CLUSTER_CONFIG_DIRS: tuple[str, ...] = tuple(
+    p
+    for p in (
+        "~/.config/marin/clusters",
+        "config",
+        _bundled_cluster_config_dir(),
+    )
+    if p is not None
+)
+
+_MARIN_PREFIX_ENV = "MARIN_PREFIX"
+_MARIN_CLUSTER_ENV = "MARIN_CLUSTER"
+_GCP_METADATA_ZONE_URL = "http://metadata.google.internal/computeMetadata/v1/instance/zone"
 _DEFAULT_LOCAL_PREFIX = "/tmp/marin"
 
-# Special-case overrides for primary Marin buckets that do not follow the
-# default `marin-{region}` naming convention.
-_REGION_TO_MARIN_BUCKET_OVERRIDES: dict[str, str] = {
-    "europe-west4": "marin-eu-west4",
-}
 
-# All known primary marin data buckets, keyed by region.
-# Used by the mirror filesystem to scan for files across regions, and by
-# `marin_temp_bucket` to address the region-local TTL-managed scratch area.
-REGION_TO_DATA_BUCKET: dict[str, str] = {
-    "us-central1": "marin-us-central1",
-    "us-central2": "marin-us-central2",
-    "us-east1": "marin-us-east1",
-    "us-east5": "marin-us-east5",
-    "us-west4": "marin-us-west4",
-    "europe-west4": "marin-eu-west4",
-}
+class StoreType(StrEnum):
+    """Object-storage backend serving a bucket.
 
-# Region aliases that resolve to the same physical region (e.g. the "eu-west4"
-# label that some legacy paths and metadata tools surface).
-_REGION_ALIASES: dict[str, str] = {
-    "eu-west4": "europe-west4",
-}
+    Distinguishes the two S3-compatible backends — which share the ``s3://``
+    scheme but differ in endpoint, addressing, and credentials — from GCS.
+    """
 
-# Cloudflare R2 data buckets (S3-compatible, ``s3://`` scheme).
-R2_DATA_BUCKETS: frozenset[str] = frozenset({"marin-na"})
+    GCS = "gcs"
+    R2 = "r2"
+    COREWEAVE = "coreweave"
 
-# Allowed TTL-day values. Each value N corresponds to a lifecycle rule on every
-# ``marin-{region}`` bucket that deletes objects under ``tmp/ttl=Nd/`` after N
-# days. Keep in sync with ``infra/configure_buckets.py``.
-ALLOWED_TTL_DAYS: tuple[int, ...] = (1, 2, 3, 4, 5, 6, 7, 14, 30)
 
-# Path prefix under each ``marin-{region}`` bucket where TTL-managed scratch
-# data lives. Lifecycle rules live under ``{TEMP_PATH_PREFIX}/ttl=Nd/``.
-TEMP_PATH_PREFIX: str = "tmp"
+@dataclasses.dataclass(frozen=True)
+class BucketSpec:
+    """A single data bucket: its name and which backend serves it.
 
-# Reverse lookup: bucket name → canonical GCP region.
-# Derived from REGION_TO_DATA_BUCKET so that region_from_prefix can return
-# canonical region names even when the bucket uses abbreviated naming
-# (e.g. "marin-eu-west4" → "europe-west4" instead of "eu-west4").
-_BUCKET_TO_REGION: dict[str, str] = {bucket: region for region, bucket in REGION_TO_DATA_BUCKET.items()}
+    Attributes:
+        name: Bucket name without scheme, e.g. ``marin-us-east1`` or ``marin-na``.
+        store: Backend serving the bucket.
+        signing_region: S3 signing region for backends that require one
+            (CoreWeave, e.g. ``US-EAST-02A``). Distinct from the *placement*
+            region (the ``region_buckets`` key). ``None`` for GCS (not S3) and R2
+            (which signs with ``"auto"``).
+    """
+
+    name: str
+    store: StoreType
+    signing_region: str | None = None
+
+
+@dataclasses.dataclass(frozen=True)
+class DataConfig:
+    """Where a cluster's data lives — the single source for storage layout.
+
+    Attributes:
+        region_buckets: Region name -> :class:`BucketSpec` for the cross-region
+            mirror set.
+        scheme: URL scheme for the cluster's storage (e.g. ``"gs"`` or ``"s3"``).
+        temp_path: Path segment for TTL-managed scratch data.
+        ttl_days: Allowed TTL-day values for temp lifecycle rules.
+        root: Explicit single-prefix root (e.g. ``"s3://marin-na/marin"``). Set
+            only for clusters that do not use region-local bucket selection.
+    """
+
+    region_buckets: Mapping[str, BucketSpec]
+    scheme: str = "gs"
+    temp_path: str = "tmp"
+    ttl_days: tuple[int, ...] = (1, 2, 3, 4, 5, 6, 7, 14, 30)
+    root: str | None = None
+
+    def resolved_root(self) -> str:
+        """Resolve the storage root for this config. Never returns ``None``.
+
+        Precedence: ``MARIN_PREFIX`` env > ``self.root`` > region-local bucket
+        from ``region_buckets[<gcs metadata region>]`` > ``{scheme}://marin-{region}``
+        for a detected-but-unmapped region > :data:`_DEFAULT_LOCAL_PREFIX`.
+
+        The env/explicit value is canonicalized through :class:`StoragePath` (trailing
+        ``/`` stripped, interior ``//`` collapsed) so downstream joins never double the
+        separator (#6904).
+        """
+        env_prefix = os.environ.get(_MARIN_PREFIX_ENV)
+        if env_prefix:
+            return StoragePath.normalize(env_prefix)
+        if self.root is not None:
+            return StoragePath.normalize(self.root)
+        region = region_from_metadata()
+        if region is not None:
+            spec = self.region_buckets.get(region)
+            if spec is not None:
+                return f"{self.scheme}://{spec.name}"
+            return f"{self.scheme}://marin-{region}"
+        return _DEFAULT_LOCAL_PREFIX
+
+
+# The marin cluster's storage layout lives in ``config/marin.yaml`` (loaded as
+# the default below). This in-code config is only a degraded fallback for when
+# no config file is discoverable — e.g. an installed package running outside a
+# marin checkout. Such contexts set ``MARIN_PREFIX`` (which wins in
+# ``resolved_root``) or detect a region (constructing ``gs://marin-{region}``),
+# so an empty ``region_buckets`` is sufficient.
+_DEFAULT_CLUSTER = "marin"
+_FALLBACK_DATA_CONFIG: DataConfig = DataConfig(region_buckets={})
+
+_active_data_config: contextvars.ContextVar[DataConfig | None] = contextvars.ContextVar(
+    "marin_data_config", default=None
+)
+
+
+def data_config() -> DataConfig:
+    """Return the active :class:`DataConfig`.
+
+    Resolution: the config bound by :func:`use_data_config` (a context-local
+    override), else the cluster named by ``MARIN_CLUSTER`` (default ``marin``)
+    loaded from its ``config/<cluster>.yaml``.
+    """
+    override = _active_data_config.get()
+    if override is not None:
+        return override
+    return load_cluster_config()
+
+
+@contextlib.contextmanager
+def use_data_config(config: DataConfig) -> Generator[DataConfig, None, None]:
+    """Bind *config* as the active :class:`DataConfig` for the duration of the block."""
+    token = _active_data_config.set(config)
+    try:
+        yield config
+    finally:
+        _active_data_config.reset(token)
+
+
+def load_cluster_config(cluster: str | None = None) -> DataConfig:
+    """Load a cluster's :class:`DataConfig` from its ``config/<cluster>.yaml``.
+
+    The cluster name is ``cluster`` arg > ``MARIN_CLUSTER`` env > ``marin``. A
+    parsed ``data:`` block becomes the config; other keys (e.g. ``iris:``) are
+    ignored. When the default ``marin`` config cannot be found (e.g. an installed
+    package outside a checkout), returns :data:`_FALLBACK_DATA_CONFIG`; a missing
+    *named* cluster raises ``FileNotFoundError``. Cached; call
+    :func:`reset_data_config_cache` in tests after changing env or config files.
+    """
+    name = cluster or os.environ.get(_MARIN_CLUSTER_ENV) or _DEFAULT_CLUSTER
+    return _load_cluster_config_cached(name)
+
+
+@functools.cache
+def _load_cluster_config_cached(cluster: str) -> DataConfig:
+    try:
+        config_path = resolve_cluster_config(cluster, MARIN_CLUSTER_CONFIG_DIRS)
+    except FileNotFoundError:
+        if cluster == _DEFAULT_CLUSTER:
+            return _FALLBACK_DATA_CONFIG
+        raise
+    with config_path.open("rb") as f:
+        document = yaml.safe_load(f) or {}
+    data = document.get("data")
+    if not data:
+        return _FALLBACK_DATA_CONFIG
+    return _parse_data_config(data)
+
+
+def _parse_bucket_spec(value: object) -> BucketSpec:
+    """Normalize one ``region_buckets`` YAML entry into a :class:`BucketSpec`.
+
+    Each entry is an explicit mapping ``{bucket, store[, signing_region]}``. The
+    ``store`` (``gcs``/``r2``/``coreweave``) is required because it cannot be
+    inferred — R2 and CoreWeave share the ``s3`` scheme but need different
+    endpoints and credentials. CoreWeave entries must carry a ``signing_region``.
+    """
+    if not isinstance(value, Mapping):
+        raise ValueError(
+            f"region_buckets entry must be a mapping {{bucket, store[, signing_region]}}, "
+            f"got {type(value).__name__}: {value!r}"
+        )
+    if "bucket" not in value or "store" not in value:
+        raise ValueError(f"region_buckets entry must set 'bucket' and 'store': {value!r}")
+    store = StoreType(str(value["store"]))
+    signing_region = str(value["signing_region"]) if value.get("signing_region") is not None else None
+    if store is StoreType.COREWEAVE and signing_region is None:
+        raise ValueError(f"CoreWeave bucket {value['bucket']!r} must specify a 'signing_region'.")
+    return BucketSpec(name=str(value["bucket"]), store=store, signing_region=signing_region)
+
+
+def _parse_data_config(data: Mapping[str, object]) -> DataConfig:
+    """Build a :class:`DataConfig` from a parsed ``data:`` config block.
+
+    Keys absent from the block fall back to the :class:`DataConfig` field
+    defaults, so per-field defaults are defined once on the dataclass.
+    """
+    temp = data.get("temp") or {}
+    raw_ttl = temp.get("ttl_days")
+    root = data.get("root")
+    scheme = str(data.get("scheme") or DataConfig.scheme)
+    raw_buckets = data.get("region_buckets") or {}
+    region_buckets = {region: _parse_bucket_spec(value) for region, value in raw_buckets.items()}
+    return DataConfig(
+        region_buckets=region_buckets,
+        scheme=scheme,
+        temp_path=str(temp.get("path") or DataConfig.temp_path),
+        ttl_days=tuple(raw_ttl) if raw_ttl is not None else DataConfig.ttl_days,
+        root=str(root) if root is not None else None,
+    )
+
+
+def reset_data_config_cache() -> None:
+    """Clear the cluster-config and S3-bucket-registry caches. For tests."""
+    _load_cluster_config_cached.cache_clear()
+    s3_data_buckets.cache_clear()
 
 
 # ---------------------------------------------------------------------------
-# Low-level region helpers
+# Region + prefix resolution
 # ---------------------------------------------------------------------------
 
 
 def region_from_metadata() -> str | None:
-    """Derive GCP region from the instance metadata server, or ``None``."""
+    """Derive the GCP region from the instance metadata server, or ``None``."""
     try:
-        req = urllib.request.Request(
-            _GCP_METADATA_ZONE_URL,
-            headers={"Metadata-Flavor": "Google"},
-        )
+        req = urllib.request.Request(_GCP_METADATA_ZONE_URL, headers={"Metadata-Flavor": "Google"})
         with urllib.request.urlopen(req, timeout=2) as resp:
             zone = resp.read().decode().strip().split("/")[-1]
     except (urllib.error.URLError, OSError, TimeoutError, ValueError):
@@ -119,69 +305,177 @@ def region_from_metadata() -> str | None:
     return zone.rsplit("-", 1)[0]
 
 
-def _s3_bucket_from_prefix(prefix: str | None) -> str | None:
-    """Return the bucket from an ``s3://bucket/…`` prefix, or ``None``.
-
-    Only recognizes buckets in :data:`R2_DATA_BUCKETS`, so unknown S3 buckets
-    (which have no lifecycle rules configured) fall through to the flat
-    non-TTL fallback instead of getting a ``tmp/ttl=Nd/`` path that would
-    never be cleaned up.
-    """
-    if not prefix or not prefix.startswith("s3://"):
-        return None
-    bucket = prefix[len("s3://") :].split("/", 1)[0]
-    return bucket if bucket in R2_DATA_BUCKETS else None
-
-
 def region_from_prefix(prefix: str) -> str | None:
     """Extract the canonical GCP region from a ``gs://marin-{region}/…`` prefix.
 
-    Uses ``_BUCKET_TO_REGION`` to normalize abbreviated bucket names
-    (e.g. ``gs://marin-eu-west4`` → ``europe-west4``).
+    Bucket names are normalized through the active config's ``region_buckets``
+    (e.g. ``gs://marin-eu-west4`` -> ``europe-west4``); unknown ``marin-``
+    buckets fall back to stripping the ``marin-`` prefix.
     """
     m = re.match(r"gs://([^/]+)", prefix)
     if not m:
         return None
     bucket = m.group(1)
-    if bucket in _BUCKET_TO_REGION:
-        return _BUCKET_TO_REGION[bucket]
-    # Fall back to stripping the "marin-" prefix.
+    for region, spec in data_config().region_buckets.items():
+        if spec.name == bucket:
+            return region
     if bucket.startswith("marin-"):
         return bucket[len("marin-") :]
     return None
 
 
-# ---------------------------------------------------------------------------
-# High-level API
-# ---------------------------------------------------------------------------
+def marin_region() -> str | None:
+    """Return the current GCP region, from instance metadata or ``MARIN_PREFIX``."""
+    return region_from_metadata() or region_from_prefix(os.environ.get(_MARIN_PREFIX_ENV, ""))
 
 
 def marin_prefix() -> str:
-    """Return the marin storage prefix. Never returns ``None``.
+    """Return the active cluster's storage prefix (``data_config().resolved_root()``)."""
+    return data_config().resolved_root()
 
-    Resolution order:
-      1. ``MARIN_PREFIX`` environment variable
-      2. GCS instance metadata → ``gs://marin-{region}``
-      3. ``/tmp/marin``
+
+def _key_segments(key: str) -> tuple[str, ...]:
+    return tuple(part for part in key.split("/") if part)
+
+
+@dataclasses.dataclass(frozen=True)
+class StoragePath:
+    """A parsed storage location: URL scheme, authority, and key segments.
+
+    Object-store keys are not normalized — a doubled ``/`` addresses a *different* key —
+    so joins here are structural: a segment never contains a separator, which makes a
+    doubled or trailing separator unrepresentable (#6904). ``parse`` -> ``str`` is
+    therefore canonicalizing (interior ``//`` collapsed, trailing ``/`` stripped), not
+    byte-preserving.
+
+    Paths at rest (configs, artifact records, CLI args) stay ``str``: parse at a
+    boundary, manipulate, and ``str()`` back out. See :func:`prefix_join` for the
+    single-join convenience.
     """
-    prefix = os.environ.get("MARIN_PREFIX")
-    if prefix:
-        return prefix
-    region = region_from_metadata()
-    if region:
-        bucket = _REGION_TO_MARIN_BUCKET_OVERRIDES.get(region, f"marin-{region}")
-        return f"gs://{bucket}"
-    return _DEFAULT_LOCAL_PREFIX
+
+    scheme: str | None
+    """URL scheme (``gs``, ``s3``, ``mirror``), or ``None`` for a local path."""
+    netloc: str
+    """Bucket/authority; empty for an empty-authority scheme like ``mirror://``."""
+    segments: tuple[str, ...]
+    """Key segments; never empty strings."""
+    rooted: bool = True
+    """Whether a ``/`` precedes the key: a local path's absoluteness (``/tmp/x`` vs
+    ``rel/x``), or the empty-authority join convention (``file:///x`` vs ``mirror://x``).
+    Irrelevant when ``netloc`` is non-empty."""
+
+    @staticmethod
+    def parse(value: str) -> "StoragePath":
+        if "://" in value:
+            scheme, rest = value.split("://", 1)
+            netloc, sep, key = rest.partition("/")
+            # With an authority the key is always /-separated, so rooted is pinned True
+            # to keep value equality and relative_to independent of a trailing slash.
+            return StoragePath(
+                scheme=scheme, netloc=netloc, segments=_key_segments(key), rooted=bool(netloc) or bool(sep)
+            )
+        return StoragePath(scheme=None, netloc="", segments=_key_segments(value), rooted=value.startswith("/"))
+
+    @staticmethod
+    def normalize(value: str) -> str:
+        """``value`` in canonical single-separator form (``str(StoragePath.parse(value))``)."""
+        return str(StoragePath.parse(value))
+
+    def __truediv__(self, relative: str) -> "StoragePath":
+        if "://" in relative or relative.startswith("/"):
+            raise ValueError(f"cannot join non-relative path {relative!r} onto {self}")
+        return dataclasses.replace(self, segments=self.segments + _key_segments(relative))
+
+    def relative_to(self, base: "StoragePath") -> str:
+        """The ``/``-joined segments of this path under ``base``.
+
+        Structural containment — compares parsed segments, not string prefixes, so a
+        doubled separator on either side cannot fork the answer (#6838).
+        """
+        same_root = (self.scheme, self.netloc, self.rooted) == (base.scheme, base.netloc, base.rooted)
+        if not same_root or self.segments[: len(base.segments)] != base.segments:
+            raise ValueError(f"{self} is not under {base}")
+        return "/".join(self.segments[len(base.segments) :])
+
+    def __str__(self) -> str:
+        key = "/".join(self.segments)
+        if self.scheme is None:
+            return f"/{key}" if self.rooted else key
+        root = f"{self.scheme}://{self.netloc}"
+        if not key:
+            return root
+        if self.netloc or self.rooted:
+            return f"{root}/{key}"
+        return f"{root}{key}"
 
 
-def marin_region() -> str | None:
-    """Return the current GCP region, if detectable.
+def prefix_join(prefix: str, relative: str) -> str:
+    """Join a relative path onto a storage prefix with exactly one ``/`` separator.
 
-    Resolution order:
-      1. GCS instance metadata server
-      2. Infer from ``MARIN_PREFIX`` environment variable
+    Object-store keys are not normalized: a naive ``f"{prefix}/{relative}"`` join of a
+    trailing-slash prefix produces a doubled separator — a *different* key — silently
+    splitting writers from slash-collapsing readers (#6904). ``str``-in/``str``-out
+    convenience over :class:`StoragePath` for a single join; parse once and use ``/``
+    for repeated manipulation.
     """
-    return region_from_metadata() or region_from_prefix(os.environ.get("MARIN_PREFIX", ""))
+    return str(StoragePath.parse(prefix) / relative)
+
+
+@functools.cache
+def s3_data_buckets() -> Mapping[str, BucketSpec]:
+    """R2/CoreWeave data buckets (name -> :class:`BucketSpec`) across all configs.
+
+    These S3-compatible buckets carry ``tmp/ttl=Nd/`` lifecycle rules; used to
+    route temp paths (:func:`marin_temp_bucket`) and to drive
+    ``infra/configure_buckets.py``. The set is defined in ``config/*.yaml`` via
+    each bucket's ``store`` type (``r2``/``coreweave``).
+
+    Recognition must be cross-cluster — a launcher on a GCS cluster may target an
+    R2/CoreWeave output prefix (see :func:`marin_temp_bucket`'s ``source_prefix``)
+    — so this aggregates across all cluster configs rather than only the active
+    one. Cached; :func:`reset_data_config_cache` clears it.
+    """
+    registry: dict[str, BucketSpec] = {}
+    for cluster in list_cluster_configs(MARIN_CLUSTER_CONFIG_DIRS):
+        for spec in load_cluster_config(cluster).region_buckets.values():
+            if spec.store in (StoreType.R2, StoreType.COREWEAVE):
+                registry.setdefault(spec.name, spec)
+    return MappingProxyType(registry)
+
+
+# Finite botocore timeouts/retries for every S3/R2 filesystem we build.
+# s3fs/aiobotocore default to *no* read or connect timeout, so a silently dead
+# R2 connection wedges ``upload_part`` forever (#6487): the blocked socket never
+# raises, the shard never completes, and the sequential stage barrier stalls the
+# whole job. With finite timeouts the wedge becomes a retryable error that fails
+# the shard, which the coordinator then re-queues.
+_S3_CONNECT_TIMEOUT = 30
+_S3_READ_TIMEOUT = 120
+_S3_RETRY_MAX_ATTEMPTS = 5
+
+
+# ---------------------------------------------------------------------------
+# Temp storage
+# ---------------------------------------------------------------------------
+
+
+def _s3_bucket_from_prefix(prefix: str | None) -> str | None:
+    """Return the bucket from an ``s3://bucket/…`` prefix, or ``None``.
+
+    Only recognizes buckets in :func:`s3_data_buckets` (the R2/CoreWeave buckets
+    with lifecycle rules configured by ``infra/configure_buckets.py``), so unknown
+    S3 buckets fall through to the flat non-TTL fallback instead of getting a
+    ``tmp/ttl=Nd/`` path that would never be cleaned up.
+    """
+    if not prefix or not prefix.startswith("s3://"):
+        return None
+    bucket = prefix[len("s3://") :].split("/", 1)[0]
+    return bucket if bucket in s3_data_buckets() else None
+
+
+# ---------------------------------------------------------------------------
+# High-level API
+# ---------------------------------------------------------------------------
 
 
 def _append_path_prefix(path: str, prefix: str) -> str:
@@ -190,23 +484,23 @@ def _append_path_prefix(path: str, prefix: str) -> str:
     return path
 
 
-def _resolve_ttl_days(ttl_days: int) -> int:
-    """Map *ttl_days* to the smallest configured value that is ``>= ttl_days``.
+def _resolve_ttl_days(ttl_days: int, allowed: tuple[int, ...]) -> int:
+    """Map *ttl_days* to the smallest *allowed* value that is ``>= ttl_days``.
 
-    Requests above the largest configured value clamp to that maximum (with
+    Requests above the largest allowed value clamp to that maximum (with
     a warning) — temp data is by definition disposable, so capping the TTL
     is preferable to forcing the caller to handle an exception. Logs a
     warning whenever the requested value is rounded.
     """
     if ttl_days <= 0:
-        raise ValueError(f"ttl_days={ttl_days} must be positive. Allowed values: {ALLOWED_TTL_DAYS}.")
-    if ttl_days in ALLOWED_TTL_DAYS:
+        raise ValueError(f"ttl_days={ttl_days} must be positive. Allowed values: {allowed}.")
+    if ttl_days in allowed:
         return ttl_days
-    for n in ALLOWED_TTL_DAYS:
+    for n in allowed:
         if n > ttl_days:
             logger.warning("ttl_days=%d not configured; rounding up to %d", ttl_days, n)
             return n
-    capped = max(ALLOWED_TTL_DAYS)
+    capped = max(allowed)
     logger.warning("ttl_days=%d exceeds the configured maximum; clamping to %d", ttl_days, capped)
     return capped
 
@@ -220,30 +514,32 @@ def marin_temp_bucket(ttl_days: int, prefix: str = "", *, source_prefix: str | N
 
         gs://marin-{region}/tmp/ttl={N}d/{prefix}
 
-    For a Cloudflare R2 prefix on a known bucket (:data:`R2_DATA_BUCKETS`),
-    returns a path at the bucket root::
+    For a known S3-compatible prefix — an R2 or CoreWeave bucket in
+    :func:`s3_data_buckets` — returns a path at the bucket root::
 
         s3://marin-na/tmp/ttl={N}d/{prefix}
+        s3://marin-us-east-02a/tmp/ttl={N}d/{prefix}
 
     Otherwise falls back to a flat path under the marin prefix::
 
         {marin_prefix}/tmp/{prefix}
 
-    Lifecycle rules on each ``marin-{region}`` GCS bucket and each R2 data
-    bucket — managed by ``infra/configure_buckets.py`` — auto-delete objects
+    Lifecycle rules on each ``marin-{region}`` GCS bucket and each R2/CoreWeave
+    data bucket — managed by ``infra/configure_buckets.py`` — auto-delete objects
     under ``tmp/ttl=Nd/`` after *N* days.
 
     Args:
-        ttl_days: Lifecycle TTL in days.  Values not in
-            :data:`ALLOWED_TTL_DAYS` are rounded up to the nearest configured
-            value (with a warning); values above the maximum clamp to it.
-            Non-positive values raise :class:`ValueError`.
+        ttl_days: Lifecycle TTL in days.  Values not in the active config's
+            ``ttl_days`` are rounded up to the nearest configured value (with a
+            warning); values above the maximum clamp to it.  Non-positive values
+            raise :class:`ValueError`.
         prefix: Optional sub-path appended after the TTL directory.
         source_prefix: Optional path used to choose the temp bucket region.
             Useful when configuring a remote job from a launcher that may be in
             a different region than the job output path.
     """
-    ttl_days = _resolve_ttl_days(ttl_days)
+    cfg = data_config()
+    ttl_days = _resolve_ttl_days(ttl_days, cfg.ttl_days)
 
     mp = marin_prefix()
 
@@ -260,23 +556,23 @@ def marin_temp_bucket(ttl_days: int, prefix: str = "", *, source_prefix: str | N
         s3_bucket = _s3_bucket_from_prefix(mp)
 
     if region:
-        canonical = _REGION_ALIASES.get(region, region)
-        bucket = REGION_TO_DATA_BUCKET.get(canonical)
-        if bucket:
-            path = f"gs://{bucket}/{TEMP_PATH_PREFIX}/ttl={ttl_days}d"
+        spec = cfg.region_buckets.get(region)
+        if spec:
+            path = f"gs://{spec.name}/{cfg.temp_path}/ttl={ttl_days}d"
             return _append_path_prefix(path, prefix)
 
-    # R2 is single-bucket and non-regional. Place temp at the bucket root so the
-    # `tmp/ttl=Nd/` lifecycle prefix configured by infra/configure_buckets.py
-    # applies — note the runtime marin prefix on R2 is `s3://marin-na/marin`,
-    # so we deliberately strip the `marin/` data subdir here.
+    # R2 and CoreWeave temp lives at the bucket root so the `tmp/ttl=Nd/`
+    # lifecycle prefix configured by infra/configure_buckets.py applies. The
+    # bucket already pins the region (R2 is non-regional; CoreWeave encodes it in
+    # the name, e.g. marin-us-east-02a), and the runtime marin prefix carries a
+    # `marin/` data subdir (e.g. `s3://marin-na/marin`) that we deliberately strip.
     if s3_bucket:
-        path = f"s3://{s3_bucket}/{TEMP_PATH_PREFIX}/ttl={ttl_days}d"
+        path = f"s3://{s3_bucket}/{cfg.temp_path}/ttl={ttl_days}d"
         return _append_path_prefix(path, prefix)
 
     if "://" not in mp:
         mp = f"file://{mp}"
-    path = f"{mp}/{TEMP_PATH_PREFIX}"
+    path = f"{mp}/{cfg.temp_path}"
     return _append_path_prefix(path, prefix)
 
 
@@ -653,6 +949,16 @@ def _is_cross_region_url(url: str) -> bool:
     return not _regions_match(vm_region, bucket_location)
 
 
+def is_cross_region_url(url: str) -> bool:
+    """Return True if reading *url* would cross regions and be charged to the budget.
+
+    Cheap: only cached region lookups, no listing or stat.  Callers can use this
+    to skip an expensive size computation when a read would not be charged
+    anyway (local paths, same-region buckets, unknown VM region, override set).
+    """
+    return _is_cross_region_url(url)
+
+
 def record_transfer(size: int, url: str, *, budget: TransferBudget | None = None) -> None:
     """Charge *size* bytes against the cross-region transfer budget.
 
@@ -793,12 +1099,36 @@ class CrossRegionGuardedFS:
 # ---------------------------------------------------------------------------
 
 
+def _with_s3_timeout_defaults(kwargs: dict[str, Any]) -> dict[str, Any]:
+    """Inject finite botocore timeouts/retries into S3 filesystem kwargs.
+
+    Caller-supplied ``config_kwargs`` values win; we only fill in keys the
+    caller did not set. See :data:`_S3_READ_TIMEOUT` and #6487.
+
+    We seed ``config_kwargs`` from the ``FSSPEC_S3`` config block first. fsspec
+    builds the filesystem by shallow-merging ``{**conf, **kwargs}``, so a bare
+    ``config_kwargs`` here would *replace* (not merge with) any ``config_kwargs``
+    in ``FSSPEC_S3`` -- silently dropping settings like
+    ``{"s3": {"addressing_style": "virtual"}}`` that S3-compatible endpoints
+    (CoreWeave object storage) require, which then hangs/path-style-rejects.
+    """
+    conf_config_kwargs = (fsspec.config.conf.get("s3") or {}).get("config_kwargs") or {}
+    config_kwargs = {**conf_config_kwargs, **dict(kwargs.get("config_kwargs") or {})}
+    config_kwargs.setdefault("connect_timeout", _S3_CONNECT_TIMEOUT)
+    config_kwargs.setdefault("read_timeout", _S3_READ_TIMEOUT)
+    config_kwargs.setdefault("retries", {"max_attempts": _S3_RETRY_MAX_ATTEMPTS, "mode": "standard"})
+    return {**kwargs, "config_kwargs": config_kwargs}
+
+
 def url_to_fs(url: str, **kwargs: Any) -> tuple[Any, str]:
     """Like ``fsspec.core.url_to_fs`` but wraps GCS filesystems in a cross-region guard.
 
     Returns ``(fs, path)``.  For non-GCS URLs the filesystem is returned
     unwrapped.  ``mirror://`` URLs are handled by :class:`MirrorFileSystem`.
+    S3/R2 URLs get finite timeouts injected (#6487).
     """
+    if url.startswith("s3://"):
+        kwargs = _with_s3_timeout_defaults(kwargs)
     fs, path = fsspec.core.url_to_fs(url, **kwargs)
     if _fs_is_gcs(fs):
         fs = CrossRegionGuardedFS(fs)
@@ -822,11 +1152,17 @@ def open_url(url: str, mode: str = "rb", **kwargs: Any) -> fsspec.core.OpenFile:
         fs, path = fsspec.core.url_to_fs(url)
         guarded = CrossRegionGuardedFS(fs)
         guarded._guard_read(path)
+    if url.startswith("s3://"):
+        kwargs = _with_s3_timeout_defaults(kwargs)
     return cast(fsspec.core.OpenFile, fsspec.open(url, mode, **kwargs))
 
 
 def filesystem(protocol: str, **kwargs: Any) -> Any:
-    """Like ``fsspec.filesystem`` but wraps GCS filesystems in a cross-region guard."""
+    """Like ``fsspec.filesystem`` but wraps GCS filesystems in a cross-region guard.
+
+    S3/R2 filesystems get finite timeouts injected (#6487)."""
+    if protocol in ("s3", "s3a"):
+        kwargs = _with_s3_timeout_defaults(kwargs)
     fs = fsspec.filesystem(protocol, **kwargs)
     if _is_gcs_protocol(protocol):
         fs = CrossRegionGuardedFS(fs)
@@ -933,8 +1269,8 @@ def atomic_rename(output_path: str, fs: Any = None) -> Generator[str, None, None
 
 
 def _all_data_bucket_prefixes() -> list[str]:
-    """Return gs:// prefixes for all known marin data buckets."""
-    return [f"gs://{bucket}" for bucket in REGION_TO_DATA_BUCKET.values()]
+    """Return gs:// prefixes for all of the active cluster's GCS data buckets."""
+    return [f"gs://{spec.name}" for spec in data_config().region_buckets.values() if spec.store == StoreType.GCS]
 
 
 def _mirror_remote_prefixes(local_prefix: str) -> list[str]:

@@ -151,7 +151,7 @@ jobs:
             --version "${{ needs.resolve.outputs.version }}" \
             --build "${{ matrix.target }}"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: wheels-${{ matrix.os }}
           path: dist/*
@@ -174,7 +174,7 @@ jobs:
       - uses: astral-sh/setup-uv@v7
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: dist
           merge-multiple: true

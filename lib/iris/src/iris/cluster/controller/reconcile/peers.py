@@ -68,16 +68,10 @@ def requeue_coscheduled_siblings(
     failed_task_id: JobName,
     now_ms: int,
 ) -> None:
-    """Bounce coscheduled siblings to PENDING so the job re-coschedules atomically.
-
-    Reservation-holder siblings are skipped; they never hold worker resources
-    and don't participate in the slice.
-    """
+    """Bounce coscheduled siblings to PENDING so the job re-coschedules atomically."""
     error = f"Coscheduled sibling {failed_task_id.to_wire()} bounced for atomic re-scheduling"
 
     for sib in siblings:
-        if sib.is_reservation_holder:
-            continue
         merge_task_termination(
             state,
             sib.task_id.to_wire(),

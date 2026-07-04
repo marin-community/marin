@@ -22,7 +22,7 @@ a single lock.
 import logging
 import threading
 import time
-from collections import deque
+from collections import defaultdict, deque
 from collections.abc import Mapping
 from dataclasses import dataclass
 
@@ -30,9 +30,9 @@ from connectrpc.request import RequestContext
 from google.protobuf.json_format import MessageToJson
 from google.protobuf.message import Message
 from rigging.redaction import redact_json_text
+from rigging.server_auth import get_verified_identity
 
 from iris.rpc import stats_pb2, time_pb2
-from iris.rpc.auth import get_verified_identity
 
 logger = logging.getLogger(__name__)
 
@@ -109,8 +109,12 @@ class RpcStatsCollector:
         self._lock = threading.Lock()
         self._methods: dict[str, stats_pb2.RpcMethodStats] = {}
         self._last_discovery_ms: dict[str, int] = {}
-        self._slow: dict[str, deque[stats_pb2.RpcCallSample]] = {}
-        self._discovery: dict[str, deque[stats_pb2.RpcCallSample]] = {}
+        self._slow: defaultdict[str, deque[stats_pb2.RpcCallSample]] = defaultdict(
+            lambda: deque(maxlen=self._slow_samples_per_method)
+        )
+        self._discovery: defaultdict[str, deque[stats_pb2.RpcCallSample]] = defaultdict(
+            lambda: deque(maxlen=self._discovery_samples_per_method)
+        )
         self._started_at_ms = int(time.time() * 1000)
 
     # -- Hot path ------------------------------------------------------
@@ -157,17 +161,9 @@ class RpcStatsCollector:
                 error_message=error_message,
             )
             if is_slow:
-                slow_ring = self._slow.get(method)
-                if slow_ring is None:
-                    slow_ring = deque(maxlen=self._slow_samples_per_method)
-                    self._slow[method] = slow_ring
-                slow_ring.append(sample)
+                self._slow[method].append(sample)
             if is_discovery:
-                discovery_ring = self._discovery.get(method)
-                if discovery_ring is None:
-                    discovery_ring = deque(maxlen=self._discovery_samples_per_method)
-                    self._discovery[method] = discovery_ring
-                discovery_ring.append(sample)
+                self._discovery[method].append(sample)
                 self._last_discovery_ms[method] = now_ms
 
     def _build_sample(

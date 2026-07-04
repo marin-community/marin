@@ -1,11 +1,11 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-from marin.execution.executor import unwrap_versioned_value
+from marin.execution.lazy import materialized_config
 from marin.transform.conversation.adapters import InputDatasetFormat
 from marin.transform.conversation.transform_conversation import transform_row
 
-from experiments.posttrain.instruction_datasets import (
+from experiments.datasets.instruction import (
     FINEPROOFS_SFT_METADATA_COLUMNS,
     FINEPROOFS_SFT_REVISION,
     INSTRUCTION_DATASET_NAME_TO_CONFIG,
@@ -14,6 +14,8 @@ from experiments.posttrain.instruction_datasets import (
     SYNTHETIC2_SFT_VERIFIED_REVISION,
     get_instruction_dataset,
 )
+
+_TEST_PREFIX = "gs://test"
 
 SYNTHETIC2_SFT_VERIFIED_SAMPLE = {
     "problem_id": "prime_rl_code_21747",
@@ -49,43 +51,43 @@ def test_fineproofs_sft_datasets_are_registered():
 
 def test_get_instruction_dataset_preserves_fineproofs_config():
     raw_step = get_instruction_dataset("lm-provers/FineProofs-SFT")
-    raw_cfg = raw_step.config
+    raw_cfg = materialized_config(raw_step, _TEST_PREFIX)
 
-    assert unwrap_versioned_value(raw_cfg.source) == "lm-provers/FineProofs-SFT"
-    assert unwrap_versioned_value(raw_cfg.revision) == FINEPROOFS_SFT_REVISION
-    assert unwrap_versioned_value(raw_cfg.subsets) == ["default"]
-    assert unwrap_versioned_value(raw_cfg.splits) == ["train"]
-    assert unwrap_versioned_value(raw_cfg.metadata_columns) == FINEPROOFS_SFT_METADATA_COLUMNS
-    assert unwrap_versioned_value(raw_cfg.adapter).dataset_format == InputDatasetFormat.SINGLE_COLUMN_MULTI_TURN
+    assert raw_cfg.source == "lm-provers/FineProofs-SFT"
+    assert raw_cfg.revision == FINEPROOFS_SFT_REVISION
+    assert raw_cfg.subsets == ["default"]
+    assert raw_cfg.splits == ["train"]
+    assert raw_cfg.metadata_columns == FINEPROOFS_SFT_METADATA_COLUMNS
+    assert raw_cfg.adapter.dataset_format == InputDatasetFormat.SINGLE_COLUMN_MULTI_TURN
     assert raw_step.name == "documents/lm-provers/FineProofs-SFT"
 
     proof_only_step = get_instruction_dataset("lm-provers/FineProofs-SFT/proof-only")
-    proof_only_cfg = proof_only_step.config
+    proof_only_cfg = materialized_config(proof_only_step, _TEST_PREFIX)
 
-    assert unwrap_versioned_value(proof_only_cfg.source) == "lm-provers/FineProofs-SFT"
-    assert unwrap_versioned_value(proof_only_cfg.revision) == FINEPROOFS_SFT_REVISION
-    assert unwrap_versioned_value(proof_only_cfg.subsets) == ["default"]
-    assert unwrap_versioned_value(proof_only_cfg.splits) == ["train"]
-    assert unwrap_versioned_value(proof_only_cfg.metadata_columns) == FINEPROOFS_SFT_METADATA_COLUMNS
-    assert unwrap_versioned_value(proof_only_cfg.adapter).dataset_format == InputDatasetFormat.INSTRUCTION_RESPONSE
+    assert proof_only_cfg.source == "lm-provers/FineProofs-SFT"
+    assert proof_only_cfg.revision == FINEPROOFS_SFT_REVISION
+    assert proof_only_cfg.subsets == ["default"]
+    assert proof_only_cfg.splits == ["train"]
+    assert proof_only_cfg.metadata_columns == FINEPROOFS_SFT_METADATA_COLUMNS
+    assert proof_only_cfg.adapter.dataset_format == InputDatasetFormat.INSTRUCTION_RESPONSE
     assert proof_only_step.name == "documents/lm-provers/FineProofs-SFT/proof-only"
 
 
 def test_synthetic2_sft_verified_step_transforms_chat_rows():
     step = get_instruction_dataset(SYNTHETIC2_SFT_VERIFIED_HF_ID)
-    cfg = step.config
-    adapter = unwrap_versioned_value(cfg.adapter)
+    cfg = materialized_config(step, _TEST_PREFIX)
+    adapter = cfg.adapter
 
     assert step.name == "documents/PrimeIntellect/SYNTHETIC-2-SFT-verified"
-    assert step.override_output_path is not None
-    assert step.override_output_path.startswith(
+    assert step.override_path is not None
+    assert step.override_path.startswith(
         f"documents/PrimeIntellect--SYNTHETIC-2-SFT-verified-{SYNTHETIC2_SFT_VERIFIED_REVISION}-"
     )
-    assert unwrap_versioned_value(cfg.source) == SYNTHETIC2_SFT_VERIFIED_HF_ID
-    assert unwrap_versioned_value(cfg.revision) == SYNTHETIC2_SFT_VERIFIED_REVISION
-    assert unwrap_versioned_value(cfg.subsets) == ["default"]
-    assert unwrap_versioned_value(cfg.splits) == ["train"]
-    assert unwrap_versioned_value(cfg.metadata_columns) == SYNTHETIC2_SFT_VERIFIED_METADATA_COLUMNS
+    assert cfg.source == SYNTHETIC2_SFT_VERIFIED_HF_ID
+    assert cfg.revision == SYNTHETIC2_SFT_VERIFIED_REVISION
+    assert cfg.subsets == ["default"]
+    assert cfg.splits == ["train"]
+    assert cfg.metadata_columns == SYNTHETIC2_SFT_VERIFIED_METADATA_COLUMNS
     assert adapter.dataset_format == InputDatasetFormat.SINGLE_COLUMN_MULTI_TURN
 
     result = transform_row(SYNTHETIC2_SFT_VERIFIED_SAMPLE, cfg, adapter)

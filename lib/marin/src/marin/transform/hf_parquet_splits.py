@@ -9,8 +9,6 @@ on an fsspec filesystem. These helpers locate the shards for a requested
 ``split`` (optionally scoped to a ``subset``) and stream their rows.
 """
 
-from __future__ import annotations
-
 import os
 import posixpath
 from collections.abc import Iterable

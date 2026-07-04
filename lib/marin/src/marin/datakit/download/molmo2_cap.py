@@ -26,7 +26,7 @@ def row_to_doc(row: dict) -> list[dict]:
     frame_captions = row.get("frame_captions") or []
 
     if not merged.strip():
-        counters.increment("molmo2_cap/dropped")
+        counters.pipeline.update_counter("molmo2_cap/dropped", 1)
         return []
 
     parts = [merged.strip()]
@@ -38,7 +38,7 @@ def row_to_doc(row: dict) -> list[dict]:
 
     text = "\n\n".join(parts)
 
-    counters.increment("molmo2_cap/kept")
+    counters.pipeline.update_counter("molmo2_cap/kept", 1)
     return [text_document(text, HF_DATASET_ID)]
 
 

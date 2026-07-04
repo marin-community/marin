@@ -3,8 +3,6 @@
 
 """Tests for ``iris.cluster.endpoints.resolve_endpoint_uri``."""
 
-from __future__ import annotations
-
 import json
 import subprocess
 from unittest.mock import mock_open, patch

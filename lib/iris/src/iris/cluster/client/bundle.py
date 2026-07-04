@@ -9,6 +9,7 @@ import re
 import subprocess
 import tempfile
 import zipfile
+from collections.abc import Sequence
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -68,16 +69,19 @@ def collect_workspace_files(
     workspace: str | Path,
     *,
     exclude: re.Pattern[str] | None = None,
+    extra_includes: Sequence[str] = (),
 ) -> list[Path]:
     """Collect the list of files to include in a workspace bundle.
 
-    Uses git ls-files when available (respecting .gitignore), then adds back
-    generated protobuf artifacts that are gitignored but needed at runtime.
-    Falls back to pattern-based exclusion when git is unavailable.
+    Uses git ls-files when available (respecting .gitignore), then adds back gitignored
+    files needed at runtime: Iris's generated protobuf artifacts plus any caller-supplied
+    ``extra_includes`` globs (relative to ``workspace``, e.g. a package's built frontend
+    ``dist``). Falls back to pattern-based exclusion when git is unavailable.
 
     Args:
         workspace: Root directory to bundle.
         exclude: Extra regex to exclude (merged with DEFAULT_EXCLUDE).
+        extra_includes: Glob patterns for gitignored files the caller needs bundled.
 
     Returns:
         Sorted list of absolute paths.
@@ -87,7 +91,7 @@ def collect_workspace_files(
 
     git_files = _get_git_non_ignored_files(workspace, merged)
     if git_files is not None:
-        _include_generated_build_artifacts(workspace, git_files, merged)
+        _include_generated_build_artifacts(workspace, git_files, merged, extra_includes)
         return sorted(f for f in git_files if f.is_file())
 
     return sorted(
@@ -99,14 +103,17 @@ def create_workspace_zip(
     workspace: str | Path,
     *,
     exclude: re.Pattern[str] | None = None,
+    extra_includes: Sequence[str] = (),
     max_size_bytes: int | None = MAX_BUNDLE_SIZE_BYTES,
 ) -> bytes:
     """Create a zip of the workspace and return the raw bytes.
 
     Suitable for Iris bundle uploads where the caller sends bytes directly.
+    ``extra_includes`` re-includes caller-specified gitignored files (see
+    :func:`collect_workspace_files`).
     """
     workspace = Path(workspace)
-    files = collect_workspace_files(workspace, exclude=exclude)
+    files = collect_workspace_files(workspace, exclude=exclude, extra_includes=extra_includes)
 
     fd, tmp_path = tempfile.mkstemp(suffix=".zip", prefix="workspace_")
     os.close(fd)
@@ -156,10 +163,11 @@ def _include_generated_build_artifacts(
     workspace: Path,
     files: set[Path],
     exclude: re.Pattern[str],
+    extra_includes: Sequence[str] = (),
 ) -> None:
-    """Add generated build artifacts that exist on disk but are gitignored."""
+    """Add gitignored files needed at runtime: Iris's generated artifacts + caller globs."""
     added = 0
-    for pattern in GENERATED_ARTIFACT_GLOBS:
+    for pattern in [*GENERATED_ARTIFACT_GLOBS, *extra_includes]:
         for path in workspace.glob(pattern):
             if path.is_file() and path not in files and not _should_exclude(str(path.relative_to(workspace)), exclude):
                 files.add(path)

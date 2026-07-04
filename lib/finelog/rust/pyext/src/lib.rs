@@ -15,7 +15,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use finelog::server::build_app;
+use finelog::server::{build_app_with_config, AuthPolicy, ServerConfig};
 use finelog::store::Store;
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
@@ -46,13 +46,14 @@ struct EmbeddedServer {
 #[pymethods]
 impl EmbeddedServer {
     #[new]
-    #[pyo3(signature = (log_dir=None, remote_log_dir=String::new(), host=String::from("127.0.0.1"), port=0, debug_admin=false))]
+    #[pyo3(signature = (log_dir=None, remote_log_dir=String::new(), host=String::from("127.0.0.1"), port=0, debug_admin=false, auth_policy=None))]
     fn new(
         log_dir: Option<String>,
         remote_log_dir: String,
         host: String,
         port: u16,
         debug_admin: bool,
+        auth_policy: Option<String>,
     ) -> PyResult<Self> {
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .enable_all()
@@ -75,7 +76,15 @@ impl EmbeddedServer {
                     .map_err(|e| PyRuntimeError::new_err(format!("failed to open store: {e}")))?,
             );
             store.bootstrap_maintenance();
-            let app = build_app(Arc::clone(&store), debug_admin);
+            // No policy → the private allow-localhost default (loopback only); a
+            // JSON layer list configures a global finelog's cidr+jwt stack.
+            let auth = match auth_policy.as_deref() {
+                Some(json) if !json.trim().is_empty() => AuthPolicy::parse(json)
+                    .map_err(|e| PyRuntimeError::new_err(format!("invalid auth_policy: {e}")))?,
+                _ => AuthPolicy::allow_localhost(),
+            };
+            let config = ServerConfig::with_debug_admin(debug_admin).with_auth(auth);
+            let app = build_app_with_config(Arc::clone(&store), config);
             let listener = tokio::net::TcpListener::bind(bind)
                 .await
                 .map_err(|e| PyRuntimeError::new_err(format!("failed to bind {bind}: {e}")))?;
@@ -90,9 +99,14 @@ impl EmbeddedServer {
             let shutdown = async move {
                 let _ = shutdown_rx.await;
             };
-            let _ = axum::serve(listener, app)
-                .with_graceful_shutdown(shutdown)
-                .await;
+            // `into_make_service_with_connect_info` records each connection's peer
+            // address so the auth CIDR rule can read it.
+            let _ = axum::serve(
+                listener,
+                app.into_make_service_with_connect_info::<SocketAddr>(),
+            )
+            .with_graceful_shutdown(shutdown)
+            .await;
             store.shutdown(Duration::from_secs(5)).await;
         });
 

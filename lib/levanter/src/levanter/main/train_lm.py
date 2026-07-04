@@ -140,8 +140,7 @@ def main(config: TrainLmConfig):
 
         assert isinstance(config.model, HFCompatConfig)
         converter = config.model.hf_checkpoint_converter()
-        if hasattr(tokenizer, "vocab") and tokenizer.vocab != converter.tokenizer.vocab:
-            logger.warning("The tokenizers appear to be different. You may want to check this.")
+        converter.warn_if_tokenizer_mismatch(tokenizer)
 
         if isinstance(config.initialize_from_hf, str):
             converter = converter.replaced(reference_checkpoint=config.initialize_from_hf, tokenizer=tokenizer)
@@ -337,6 +336,12 @@ def main(config: TrainLmConfig):
         flops_per_example = 3 * flops_per_token * Pos.size if flops_per_token is not None else None
         trainer.add_hook(
             callbacks.log_performance_stats(Pos.size, trainer.config.batch_schedule, flops_per_example), every=1
+        )
+        trainer.add_hook(
+            callbacks.iris_status_reporter(
+                Pos.size, trainer.config.batch_schedule, trainer.config.num_train_steps, flops_per_example
+            ),
+            every=10,
         )
 
         if isinstance(train_dataset, MixtureDataset):

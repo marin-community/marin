@@ -4,8 +4,10 @@ const props = withDefaults(defineProps<{
   label: string
   detail?: string
   variant?: string
+  size?: 'sm' | 'md'
 }>(), {
   variant: 'default',
+  size: 'md',
 })
 
 const VARIANT_CLASSES: Record<string, string> = {
@@ -24,14 +26,14 @@ function valueClass(): string {
 </script>
 
 <template>
-  <div class="rounded-lg border border-surface-border bg-surface px-4 py-3">
-    <div :class="['text-2xl font-semibold font-mono tabular-nums', valueClass()]">
+  <div :class="['rounded-lg border border-surface-border bg-surface', size === 'sm' ? 'px-3 py-1.5' : 'px-4 py-3']">
+    <div :class="[size === 'sm' ? 'text-lg' : 'text-2xl', 'font-semibold font-mono tabular-nums leading-tight', valueClass()]">
       {{ value }}
     </div>
-    <div class="text-xs font-medium text-text-secondary mt-1 uppercase tracking-wider">
+    <div :class="['font-medium text-text-secondary uppercase tracking-wider', size === 'sm' ? 'text-[10px] mt-0.5' : 'text-xs mt-1']">
       {{ label }}
     </div>
-    <div v-if="detail" class="text-xs text-text-muted mt-0.5">
+    <div v-if="detail" :class="['text-text-muted', size === 'sm' ? 'text-[10px] mt-0' : 'text-xs mt-0.5']">
       {{ detail }}
     </div>
   </div>

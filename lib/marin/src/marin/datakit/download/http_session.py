@@ -3,8 +3,6 @@
 
 """Shared retry-aware ``requests.Session`` factory for HTTP-based download modules."""
 
-from __future__ import annotations
-
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util import Retry

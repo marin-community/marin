@@ -19,8 +19,6 @@ Requires the native extension (the marin-finelog-server wheel, or a
 rust_mode.py dev build).
 """
 
-from __future__ import annotations
-
 import argparse
 import base64
 import dataclasses

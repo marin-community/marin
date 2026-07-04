@@ -31,7 +31,7 @@ Start here for any non-trivial Marin-authored text. This file is the common laye
 - Keep an open door, not a megaphone.
 - Stay practical and hands-on.
 - Aim to be helpful and respectful.
-- Assume a baseline familiarity with ML systems,
+- Assume a baseline familiarity with ML systems.
 - Don’t dilute discussions to accommodate every level of experience. (Different media will be intended for different levels of experience.)
 - Don’t be overly formal; write like a technical peer, not an academic paper or a product blog.
 - Use technical language where it helps, but keep the tone natural and direct.

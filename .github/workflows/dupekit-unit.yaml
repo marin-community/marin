@@ -71,7 +71,7 @@ jobs:
     timeout-minutes: 10
     strategy:
       matrix:
-        python-version: ["3.11", "3.12", "3.13"]
+        python-version: ["3.12", "3.13"]
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
@@ -89,7 +89,7 @@ jobs:
 
       - name: Test dupekit
         run: |
-          cd lib/dupekit && uv run --frozen --group test pytest tests/ -v
+          uv run --directory lib/dupekit --frozen --group test pytest -v tests/
 
   rust-checks:
     needs: changes

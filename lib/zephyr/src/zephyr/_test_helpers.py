@@ -3,8 +3,6 @@
 
 """Helpers shared by tests to avoid pickling import issues on distributed workers."""
 
-from __future__ import annotations
-
 from dataclasses import dataclass
 
 

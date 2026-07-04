@@ -17,7 +17,7 @@ def test_task_status_shows_attempts(harness: ServiceTestHarness):
     if harness.provider_type == "gcp":
         harness.register_gcp_worker("w1")
 
-    job_id = harness.submit("retry-status", max_retries_failure=1)
+    job_id = harness.submit("retry-status", max_retries_failure=1, max_task_failures=1)
     tasks = harness._query_tasks(job_id)
     assert len(tasks) == 1
     task_id = tasks[0].task_id
