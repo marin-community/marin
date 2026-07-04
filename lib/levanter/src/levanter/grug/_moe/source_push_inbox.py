@@ -398,20 +398,32 @@ def _make_kernel(
 
                                         def _copy_buffer(buffer_smem, k_start) -> None:
                                             if source_input_mode == SOURCE_INPUT_RAW_TOKENS:
+                                                tile_layout = mgpu.Layout.WG_STRIDED(
+                                                    (config.block_m, config.block_k),
+                                                    vec_size=1,
+                                                )
                                                 row_offsets = mgpu.layout_cast(
-                                                    jnp.arange(config.block_m, dtype=jnp.int32),
-                                                    mgpu.Layout.WG_STRIDED((config.block_m,), vec_size=1),
+                                                    lax.broadcasted_iota(
+                                                        jnp.int32,
+                                                        (config.block_m, config.block_k),
+                                                        0,
+                                                    ),
+                                                    tile_layout,
                                                 )
                                                 col_offsets = k_start + mgpu.layout_cast(
-                                                    jnp.arange(config.block_k, dtype=jnp.int32),
-                                                    mgpu.Layout.WG_STRIDED((config.block_k,), vec_size=1),
+                                                    lax.broadcasted_iota(
+                                                        jnp.int32,
+                                                        (config.block_m, config.block_k),
+                                                        1,
+                                                    ),
+                                                    tile_layout,
                                                 )
                                                 valid_row_mask = row_offsets < valid_rows
-                                                token_ids = token_ids_ref[dst_ordinal, entry, pl.ds(0, config.block_m)]
+                                                token_ids = token_ids_ref[dst_ordinal, entry, row_offsets]
                                                 safe_token_ids = jnp.where(valid_row_mask, token_ids, 0)
-                                                x_tile = x_ref[safe_token_ids[:, None], col_offsets[None, :]]
+                                                x_tile = x_ref[safe_token_ids, col_offsets]
                                                 buffer_smem[:, :] = jnp.where(
-                                                    valid_row_mask[:, None],
+                                                    valid_row_mask,
                                                     x_tile,
                                                     jnp.zeros((config.block_m, config.block_k), dtype=x_ref.dtype),
                                                 )
