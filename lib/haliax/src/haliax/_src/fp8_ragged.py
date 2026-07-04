@@ -36,25 +36,38 @@ from .ragged_dot_mgpu import mgpu_ragged_dot
 
 _E4M3 = jnp.float8_e4m3fn
 
+# H100 per-block SMEM ceiling (bytes) for the Mosaic operand pipeline; see the
+# forward config note.
+_H100_SMEM_LIMIT = 232448
 
-def _fixed_config(m: int, n: int, k: int) -> dict:
-    """Conservative (untuned) Mosaic block config for the ragged FP8 wgmma kernel.
+# Candidate wgmma block sizes, largest first; a dim picks the largest that
+# divides it (falling back to 16 when none does).
+_GEMM_BLOCKS = (128, 64, 32, 16)
 
-    Block sizes divide the operand shapes: ``block_k`` must divide ``k``; ``block_n``
-    must divide ``n`` (and ``n`` must be swizzle-aligned -- a multiple of 128 for the
-    bf16 output store's TMA descriptor); ``block_m`` divides ``m`` here, though the
-    ragged kernel also masks a non-dividing final m-tile. Tuning the block sizes
-    and pipeline depth is a follow-up change.
+
+def _autotuned_config(m: int, n: int, k: int) -> dict:
+    """Static Mosaic block config for the ragged FP8 wgmma forward kernel.
+
+    Tuned on H100 at the d2560 grug-MoE shapes (per-leg sweeps):
+    ``(block_m, block_n, block_k) = (128, 128, 128)`` with a six-step pipeline
+    beats a ``192 x 5`` block/pipeline by ~10-14% -- the shorter accumulator
+    halves register pressure, buying a deeper pipeline. Operand tiles are FP8
+    (1 byte), so the pipeline SMEM footprint is
+    ``(block_m + block_n) * block_k * max_concurrent_steps``
+    bytes; the loop drops steps until it fits the H100 per-block limit.
     """
-    block_m = next((b for b in (128, 64, 32, 16) if m % b == 0), 16)
-    block_n = next((b for b in (128, 64, 32, 16) if n % b == 0), 16)
-    block_k = next((b for b in (64, 32, 16) if k % b == 0), 16)
+    block_m = 128 if m >= 128 else next((b for b in _GEMM_BLOCKS if m % b == 0), 16)
+    block_n = next((b for b in _GEMM_BLOCKS if n % b == 0), 16)
+    block_k = next((b for b in _GEMM_BLOCKS if k % b == 0), 16)
     grid_block_n = next((gb for gb in (4, 2, 1) if n % (gb * block_n) == 0), 1)
+    max_concurrent_steps = 6
+    while max_concurrent_steps > 1 and (block_m + block_n) * block_k * max_concurrent_steps > _H100_SMEM_LIMIT:
+        max_concurrent_steps -= 1
     return dict(
         block_m=block_m,
         block_n=block_n,
         block_k=block_k,
-        max_concurrent_steps=6,
+        max_concurrent_steps=max_concurrent_steps,
         grid_block_n=grid_block_n,
     )
 
@@ -72,7 +85,7 @@ def _ragged_fp8(lhs, rhs_nk, group_sizes, out_dtype, out_scale):
         raise ValueError(
             f"n={n} must be a multiple of 128 for bf16 TMA swizzle alignment in the Mosaic ragged wgmma kernel"
         )
-    cfg = _fixed_config(m, n, k)
+    cfg = _autotuned_config(m, n, k)
     return mgpu_ragged_dot(
         lhs,
         rhs_nk,
