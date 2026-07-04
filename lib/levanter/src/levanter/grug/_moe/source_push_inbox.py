@@ -400,11 +400,11 @@ def _make_kernel(
                                             if source_input_mode == SOURCE_INPUT_RAW_TOKENS:
                                                 row_offsets = mgpu.layout_cast(
                                                     jnp.arange(config.block_m, dtype=jnp.int32),
-                                                    mgpu.Layout.WG_STRIDED,
+                                                    mgpu.Layout.WG_STRIDED((config.block_m,), vec_size=1),
                                                 )
                                                 col_offsets = k_start + mgpu.layout_cast(
                                                     jnp.arange(config.block_k, dtype=jnp.int32),
-                                                    mgpu.Layout.WG_STRIDED,
+                                                    mgpu.Layout.WG_STRIDED((config.block_k,), vec_size=1),
                                                 )
                                                 valid_row_mask = row_offsets < valid_rows
                                                 token_ids = token_ids_ref[dst_ordinal, entry, pl.ds(0, config.block_m)]
