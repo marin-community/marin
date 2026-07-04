@@ -1486,7 +1486,8 @@ def _jax_mlp_route_summary(mlp: Any, x: Any, *, layer_index: int) -> dict[str, A
     token_count = int(x.shape[0] * x.shape[1])
     x_flat = x.reshape((token_count, x.shape[-1]))
     router_logits = jnp.einsum("td,de->te", x_flat, reshard(mlp.router, P(None, None))).astype(jnp.float32)
-    biased_logits = router_logits + jax.lax.stop_gradient(mlp.router_bias)
+    router_logits = reshard(router_logits, P(None, None))
+    biased_logits = router_logits + jax.lax.stop_gradient(reshard(mlp.router_bias, P(None)))
     top_count = min(DIAGNOSTIC_LOGPROBS, int(router_logits.shape[-1]))
     unbiased_top_logits, unbiased_top_ids = jax.lax.top_k(router_logits, top_count)
     biased_top_logits, biased_top_ids = jax.lax.top_k(biased_logits, top_count)
@@ -1535,6 +1536,8 @@ def _jax_forward_route_diagnostics(
 ) -> dict[str, Any]:
     import jax  # noqa: PLC0415
     import jax.numpy as jnp  # noqa: PLC0415
+    from jax.sharding import PartitionSpec as P  # noqa: PLC0415
+    from jax.sharding import reshard  # noqa: PLC0415
     from levanter.grug.attention import AttentionMask  # noqa: PLC0415
     from levanter.utils.activation import ActivationFunctionEnum  # noqa: PLC0415
 
@@ -1562,16 +1565,17 @@ def _jax_forward_route_diagnostics(
 
     hidden = model.final_gated_norm(model.final_norm(hidden))
     logits = jnp.einsum("bsh,hd->bsd", hidden, model.output_proj, out_sharding=batch_spec)
-    position_logits = logits[:, position, :].astype(jnp.float32)
+    position_logits = reshard(logits[:, position, :].astype(jnp.float32), P(None, None))
     top_count = min(DIAGNOSTIC_LOGPROBS, int(position_logits.shape[-1]))
-    top_logits, top_token_ids = jax.lax.top_k(position_logits[0], top_count)
+    top_logits, top_token_ids = jax.lax.top_k(position_logits.at[0].get(out_sharding=P(None)), top_count)
+    top_logits_values = _jax_float_vector(top_logits, max_items=top_count)
     return {
         "position": position,
         "logits_dtype": _jax_dtype_name(logits),
         "position_logits_dtype": _jax_dtype_name(position_logits),
         "top_token_ids": _jax_int_vector(top_token_ids, max_items=top_count),
-        "top_logits": _jax_float_vector(top_logits, max_items=top_count),
-        "top2_margin": float(_jax_float_vector(top_logits[0:1] - top_logits[1:2], max_items=1)[0]),
+        "top_logits": top_logits_values,
+        "top2_margin": float(top_logits_values[0] - top_logits_values[1]) if len(top_logits_values) >= 2 else None,
         "layers": layer_summaries,
     }
 
