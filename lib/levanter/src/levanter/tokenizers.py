@@ -23,6 +23,7 @@ import os
 import re
 import shutil
 import tempfile
+import threading
 import time
 from enum import StrEnum
 from typing import Any, Protocol, runtime_checkable
@@ -675,21 +676,29 @@ _TOKENIZER_ALLOW_PATTERNS = [
 
 
 def _fetch_file_atomic(src_url: str, dest_path: str) -> bool:
-    """Atomically fetch src_url to dest_path via a .tmp sibling.
+    """Atomically fetch src_url to dest_path via a unique .tmp sibling.
 
     Returns False if the source does not exist; re-raises all other errors.
-    Prevents partial writes from poisoning the local cache on any failure.
+    A per-writer temp name (not a shared ``dest_path + ".tmp"``) lets concurrent
+    stagers of the same file — sibling dataset-component threads, or separate
+    tasks sharing the cache dir — each write and ``os.replace`` independently.
+    With a shared temp, one writer's ``os.replace`` moves the temp out from
+    under another mid-write, corrupting the staging and leaving ``dest_path``
+    momentarily absent for a concurrent reader.
     """
-    tmp = dest_path + ".tmp"
     try:
         with open_url(src_url, "rb") as src:
             data = src.read()
-        with open(tmp, "wb") as dst:
+    except FileNotFoundError:
+        return False
+    fd, tmp = tempfile.mkstemp(
+        dir=os.path.dirname(dest_path) or ".", prefix=os.path.basename(dest_path) + ".", suffix=".tmp"
+    )
+    try:
+        with os.fdopen(fd, "wb") as dst:
             dst.write(data)
         os.replace(tmp, dest_path)
         return True
-    except FileNotFoundError:
-        return False
     except Exception:
         with contextlib.suppress(FileNotFoundError):
             os.unlink(tmp)
@@ -697,8 +706,11 @@ def _fetch_file_atomic(src_url: str, dest_path: str) -> bool:
 
 
 def _copy_file_atomic(src_path: str, dest_path: str) -> None:
-    """Atomically copy a local file via a .tmp sibling."""
-    tmp = dest_path + ".tmp"
+    """Atomically copy a local file via a unique .tmp sibling."""
+    fd, tmp = tempfile.mkstemp(
+        dir=os.path.dirname(dest_path) or ".", prefix=os.path.basename(dest_path) + ".", suffix=".tmp"
+    )
+    os.close(fd)
     try:
         shutil.copy2(src_path, tmp)
         os.replace(tmp, dest_path)
@@ -789,6 +801,16 @@ def _stage_from_hf(name_or_path: str, local_dir: str) -> None:
         _populate_mirror_file(dest, f"{mirror_base}/{filename}")
 
 
+_stage_locks: dict[str, threading.Lock] = {}
+_stage_locks_guard = threading.Lock()
+
+
+def _stage_lock_for(name_or_path: str) -> threading.Lock:
+    """Return the process-wide staging lock for one tokenizer ref."""
+    with _stage_locks_guard:
+        return _stage_locks.setdefault(name_or_path, threading.Lock())
+
+
 @functools.lru_cache(maxsize=32)
 def _stage_tokenizer(name_or_path: str) -> str:
     """Download the full set of tokenizer files to a stable local directory.
@@ -817,17 +839,22 @@ def _stage_tokenizer(name_or_path: str) -> str:
     )
     os.makedirs(local_dir, exist_ok=True)
 
-    # 1. Local cache hit.
-    if _try_load_tokenizer_from_dir(local_dir):
-        return local_dir
+    # build_caches stages every dataset component concurrently, and each thread
+    # stages the shared tokenizer. Serialize per ref so one thread populates
+    # local_dir while the rest wait and then take the local-cache hit below,
+    # rather than racing writes into the same directory.
+    with _stage_lock_for(name_or_path):
+        # 1. Local cache hit.
+        if _try_load_tokenizer_from_dir(local_dir):
+            return local_dir
 
-    # 2. Mirror: copy whatever files are present, then try loading.
-    if _stage_from_mirror(name_or_path, local_dir) and _try_load_tokenizer_from_dir(local_dir):
-        return local_dir
+        # 2. Mirror: copy whatever files are present, then try loading.
+        if _stage_from_mirror(name_or_path, local_dir) and _try_load_tokenizer_from_dir(local_dir):
+            return local_dir
 
-    # 3. HF Hub: full download, populate mirror as side-effect.
-    _stage_from_hf(name_or_path, local_dir)
-    return local_dir
+        # 3. HF Hub: full download, populate mirror as side-effect.
+        _stage_from_hf(name_or_path, local_dir)
+        return local_dir
 
 
 def _load_hf_base_tokenizer(local_dir: str) -> HfBaseTokenizer:
