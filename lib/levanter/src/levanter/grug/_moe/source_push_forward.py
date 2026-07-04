@@ -51,6 +51,7 @@ from levanter.grug._moe.source_push_inbox import (
     _queue_stats,
     _recv_meta_from_send_meta,
     _reference_hidden,
+    _reference_h_flat,
     _routing_counts,
     _selected_experts_from_counts,
     _sharded_kernel,
@@ -498,6 +499,25 @@ def reference_source_push_forward_h(
     return source_push_combine_preweighted(jnp.asarray(source_return, dtype=jnp.bfloat16), host_inputs.plan)
 
 
+def reference_source_push_forward_with_h(
+    config: PushInboxConfig,
+    host_inputs: SourcePushForwardHostInputs,
+) -> tuple[Float[Array, "S T D"], Float[Array, "Dst rows twoI"]]:
+    """Reference forward plus the flat source-padded W13 preactivation checkpoint."""
+
+    h = _reference_h_flat(
+        config,
+        host_inputs.x,
+        host_inputs.send_meta,
+        host_inputs.w_gate_up,
+        host_inputs.expert_base,
+        host_inputs.src_base_by_expert,
+        use_exact_expert_major=host_inputs.use_exact_expert_major,
+    )
+    out = reference_source_push_forward_h(config, host_inputs)
+    return out, jnp.asarray(h, dtype=jnp.bfloat16)
+
+
 def source_push_forward(
     config: PushInboxConfig,
     x: Float[Array, "S T D"],
@@ -545,6 +565,56 @@ def source_push_forward(
         execution_mode=execution_mode,
     )
     return out, host_inputs.plan.dropped_routes
+
+
+def source_push_forward_with_h(
+    config: PushInboxConfig,
+    x: Float[Array, "S T D"],
+    selected_experts: Int[Array, "S T K"],
+    combine_weights: Float[Array, "S T K"],
+    w_gate_up: Float[Array, "S E D twoI"],
+    w_down: Float[Array, "S E I D"],
+    *,
+    implementation: SourcePushForwardImplementation = SOURCE_PUSH_FORWARD_IMPLEMENTATION_PALLAS_MGPU,
+    execution_mode: str = FORWARD_EXECUTION_STAGED_HOST_SYNC,
+    mesh: Mesh | None = None,
+) -> tuple[Float[Array, "S T D"], Float[Array, "Dst rows twoI"], Int[Array, ""]]:
+    """Run source-push forward and return the W13 preactivation checkpoint.
+
+    The returned H uses the production W13 output layout:
+    ``[destination_rank, source_padded_expert_major_row, 2 * intermediate_dim]``.
+    It is before SwiGLU and before route-weight scaling, so it is the intended
+    MLP-level custom-VJP residual rather than post-activation ``A``.
+    """
+
+    if implementation not in (
+        SOURCE_PUSH_FORWARD_IMPLEMENTATION_REFERENCE,
+        SOURCE_PUSH_FORWARD_IMPLEMENTATION_PALLAS_MGPU,
+    ):
+        raise ValueError(
+            "source-push forward implementation must be one of "
+            f"{(SOURCE_PUSH_FORWARD_IMPLEMENTATION_REFERENCE, SOURCE_PUSH_FORWARD_IMPLEMENTATION_PALLAS_MGPU)}, "
+            f"got {implementation!r}"
+        )
+    host_inputs = make_source_push_forward_inputs(
+        config,
+        x,
+        selected_experts,
+        combine_weights,
+        w_gate_up,
+        w_down,
+    )
+    if implementation == SOURCE_PUSH_FORWARD_IMPLEMENTATION_REFERENCE:
+        out, h = reference_source_push_forward_with_h(config, host_inputs)
+        return out, h, host_inputs.plan.dropped_routes
+
+    out, h = _execute_source_push_forward_host_inputs_with_h(
+        config,
+        host_inputs,
+        mesh=mesh,
+        execution_mode=execution_mode,
+    )
+    return out, h, host_inputs.plan.dropped_routes
 
 
 def _sharded_source_push_forward_kernel(mesh: Mesh, config: PushInboxConfig, *, use_exact_expert_major: bool = False):
@@ -689,6 +759,26 @@ def _execute_source_push_forward_host_inputs(
     return out
 
 
+def _execute_source_push_forward_host_inputs_with_h(
+    config: PushInboxConfig,
+    host_inputs: SourcePushForwardHostInputs,
+    *,
+    mesh: Mesh | None,
+    execution_mode: str,
+) -> tuple[Float[Array, "S T D"], Float[Array, "Dst rows twoI"]]:
+    if execution_mode not in FORWARD_EXECUTION_MODES:
+        raise ValueError(f"unknown execution_mode={execution_mode!r}; expected one of {FORWARD_EXECUTION_MODES}")
+    if mesh is None:
+        mesh = _make_mesh(config.ep_size)
+    inputs = _shard_source_push_forward_inputs(
+        mesh,
+        device_source_push_forward_inputs_from_host(config, host_inputs),
+    )
+    out, h = _call_source_push_forward_device_inputs_with_h(mesh, config, inputs, execution_mode=execution_mode)
+    _block_until_ready((out, h))
+    return out, h
+
+
 def _shard_source_push_forward_inputs(
     mesh: Mesh,
     inputs: SourcePushForwardDeviceInputs,
@@ -726,41 +816,8 @@ def _call_source_push_forward_device_inputs(
     execution_mode: str,
 ) -> Float[Array, "S T D"]:
     if execution_mode == FORWARD_EXECUTION_STAGED_HOST_SYNC:
-        w13_h_fn = jax.jit(_sharded_w13_h_kernel(mesh, config, use_exact_expert_major=inputs.use_exact_expert_major))
-        w2_from_h_return_fn = jax.jit(
-            _sharded_w2_from_h_return_direct_to_source_kernel(
-                mesh,
-                config,
-                use_exact_expert_major=inputs.use_exact_expert_major,
-            )
-        )
-        combine_fn = jax.jit(_sharded_source_combine_kernel(mesh, config))
-        _, h = w13_h_fn(
-            inputs.x,
-            inputs.send_meta,
-            inputs.recv_meta,
-            inputs.expert_base,
-            inputs.src_base_by_expert,
-            inputs.w_gate_up,
-        )
-        _block_until_ready(h)
-        source_return = w2_from_h_return_fn(
-            h,
-            inputs.recv_route_weights,
-            inputs.recv_meta,
-            inputs.expert_base,
-            inputs.src_base_by_expert,
-            inputs.w_down,
-        )
-        _block_until_ready(source_return)
-        return combine_fn(
-            source_return,
-            inputs.queue_dst_ord,
-            inputs.queue_entry,
-            inputs.queue_row,
-            jnp.ones_like(inputs.route_combine_weights),
-            inputs.route_valid_mask,
-        )
+        out, _ = _call_staged_source_push_forward_device_inputs(mesh, config, inputs)
+        return out
 
     fn = jax.jit(
         _sharded_source_push_forward_h_kernel(mesh, config, use_exact_expert_major=inputs.use_exact_expert_major)
@@ -780,6 +837,64 @@ def _call_source_push_forward_device_inputs(
         inputs.route_combine_weights,
         inputs.route_valid_mask,
     )
+
+
+def _call_source_push_forward_device_inputs_with_h(
+    mesh: Mesh,
+    config: PushInboxConfig,
+    inputs: SourcePushForwardDeviceInputs,
+    *,
+    execution_mode: str,
+) -> tuple[Float[Array, "S T D"], Float[Array, "Dst rows twoI"]]:
+    if execution_mode != FORWARD_EXECUTION_STAGED_HOST_SYNC:
+        raise ValueError(
+            "source_push_forward_with_h currently requires "
+            f"execution_mode={FORWARD_EXECUTION_STAGED_HOST_SYNC!r}; got {execution_mode!r}"
+        )
+    return _call_staged_source_push_forward_device_inputs(mesh, config, inputs)
+
+
+def _call_staged_source_push_forward_device_inputs(
+    mesh: Mesh,
+    config: PushInboxConfig,
+    inputs: SourcePushForwardDeviceInputs,
+) -> tuple[Float[Array, "S T D"], Float[Array, "Dst rows twoI"]]:
+    w13_h_fn = jax.jit(_sharded_w13_h_kernel(mesh, config, use_exact_expert_major=inputs.use_exact_expert_major))
+    w2_from_h_return_fn = jax.jit(
+        _sharded_w2_from_h_return_direct_to_source_kernel(
+            mesh,
+            config,
+            use_exact_expert_major=inputs.use_exact_expert_major,
+        )
+    )
+    combine_fn = jax.jit(_sharded_source_combine_kernel(mesh, config))
+    _, h = w13_h_fn(
+        inputs.x,
+        inputs.send_meta,
+        inputs.recv_meta,
+        inputs.expert_base,
+        inputs.src_base_by_expert,
+        inputs.w_gate_up,
+    )
+    _block_until_ready(h)
+    source_return = w2_from_h_return_fn(
+        h,
+        inputs.recv_route_weights,
+        inputs.recv_meta,
+        inputs.expert_base,
+        inputs.src_base_by_expert,
+        inputs.w_down,
+    )
+    _block_until_ready(source_return)
+    out = combine_fn(
+        source_return,
+        inputs.queue_dst_ord,
+        inputs.queue_entry,
+        inputs.queue_row,
+        jnp.ones_like(inputs.route_combine_weights),
+        inputs.route_valid_mask,
+    )
+    return out, h
 
 
 def _time_staged_source_push_forward(

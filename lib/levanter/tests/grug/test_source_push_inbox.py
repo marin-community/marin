@@ -1085,6 +1085,71 @@ def test_source_push_forward_h_reference_matches_mlp_boundary():
     )
 
 
+def test_source_push_forward_with_h_returns_route_weight_independent_preactivation():
+    config = source_push_inbox.PushInboxConfig(
+        ep_size=2,
+        entries_per_rank=4,
+        inbox_slots=2,
+        hidden_dim=8,
+        intermediate_dim=8,
+        block_m=2,
+        block_k=4,
+        block_n=4,
+        experts_per_rank=2,
+        send_worker_programs_per_peer=1,
+        worker_programs_per_peer=4,
+        routing="balanced",
+        tokens_per_rank=6,
+        topk=2,
+        capacity_factor=1.25,
+    )
+    raw_inputs = source_push_forward.make_source_push_forward_source_plan_raw_inputs(config)
+    inputs = source_push_forward.make_source_push_forward_inputs(
+        config,
+        raw_inputs.x,
+        raw_inputs.selected_experts,
+        raw_inputs.combine_weights,
+        raw_inputs.w_gate_up,
+        raw_inputs.w_down,
+        input_mode="source_push_plan",
+    )
+
+    observed_y, observed_h, dropped_routes = source_push_forward.source_push_forward_with_h(
+        config,
+        raw_inputs.x,
+        raw_inputs.selected_experts,
+        raw_inputs.combine_weights,
+        raw_inputs.w_gate_up,
+        raw_inputs.w_down,
+        implementation="reference",
+    )
+    expected_y, expected_h = source_push_forward.reference_source_push_forward_with_h(config, inputs)
+
+    rescaled_weights = 0.125 + raw_inputs.combine_weights * 0.25
+    rescaled_y, rescaled_h, rescaled_dropped_routes = source_push_forward.source_push_forward_with_h(
+        config,
+        raw_inputs.x,
+        raw_inputs.selected_experts,
+        rescaled_weights,
+        raw_inputs.w_gate_up,
+        raw_inputs.w_down,
+        implementation="reference",
+    )
+
+    assert int(dropped_routes) == 0
+    assert int(rescaled_dropped_routes) == 0
+    assert observed_h.shape == (config.ep_size, config.hidden_rows_per_rank, 2 * config.intermediate_dim)
+    np.testing.assert_allclose(
+        np.asarray(observed_y, dtype=np.float32),
+        np.asarray(expected_y, dtype=np.float32),
+        rtol=1e-2,
+        atol=3e-4,
+    )
+    np.testing.assert_allclose(np.asarray(observed_h), np.asarray(expected_h), atol=0, rtol=0)
+    np.testing.assert_allclose(np.asarray(rescaled_h), np.asarray(observed_h), atol=0, rtol=0)
+    assert not np.allclose(np.asarray(rescaled_y, dtype=np.float32), np.asarray(observed_y, dtype=np.float32))
+
+
 def test_source_push_w13_h_reference_stores_preactivation_before_swiglu():
     config = source_push_inbox.PushInboxConfig(
         ep_size=2,
