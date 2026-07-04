@@ -78,22 +78,22 @@ def _needs_virtual_host_addressing(endpoint_url: str) -> bool:
 
 
 def configure_client_s3(config: IrisClusterConfig) -> None:
-    """Configure S3 env vars for fsspec access on CoreWeave (R2 → AWS mapping).
+    """Configure S3 env vars for fsspec access on CoreWeave (CW_KEY_* → AWS mapping).
 
-    Maps R2_ACCESS_KEY_ID/R2_SECRET_ACCESS_KEY to their AWS equivalents and
-    sets FSSPEC_S3 with the correct endpoint and addressing style. No-op if the
-    config has no CoreWeave object storage endpoint.
+    Maps CW_KEY_ID/CW_KEY_SECRET to their AWS equivalents and sets FSSPEC_S3
+    with the correct endpoint and addressing style. No-op if the config has no
+    CoreWeave object storage endpoint.
     """
     coreweave = config.platform.coreweave
     if coreweave is None or not coreweave.object_storage_endpoint:
         return
     endpoint = coreweave.object_storage_endpoint
 
-    r2_key = os.environ.get("R2_ACCESS_KEY_ID", "")
-    r2_secret = os.environ.get("R2_SECRET_ACCESS_KEY", "")
-    if r2_key and r2_secret:
-        os.environ.setdefault("AWS_ACCESS_KEY_ID", r2_key)
-        os.environ.setdefault("AWS_SECRET_ACCESS_KEY", r2_secret)
+    cw_key = os.environ.get("CW_KEY_ID", "")
+    cw_secret = os.environ.get("CW_KEY_SECRET", "")
+    if cw_key and cw_secret:
+        os.environ.setdefault("AWS_ACCESS_KEY_ID", cw_key)
+        os.environ.setdefault("AWS_SECRET_ACCESS_KEY", cw_secret)
 
     os.environ.setdefault("AWS_ENDPOINT_URL", endpoint)
     os.environ.setdefault("AWS_REGION", "auto")
@@ -921,17 +921,17 @@ class K8sControllerProvider:
     def _s3_task_env(self) -> dict[str, str]:
         """Compute S3 storage env (creds + endpoint + FSSPEC) from the operator's shell.
 
-        Maps the operator's R2 credentials to the AWS names boto3/s3fs expect and
-        derives endpoint/region/FSSPEC_S3 from the configured object-storage
-        endpoint. Folded into the iris-task-env Secret so the controller and every
-        task authenticate to s3:// without per-call-site configuration.
+        Maps the operator's CoreWeave object-storage credentials to the AWS
+        names boto3/s3fs expect and derives endpoint/region/FSSPEC_S3 from the
+        configured object-storage endpoint. Folded into the iris-task-env
+        Secret so the controller and every task authenticate to s3:// without
+        per-call-site configuration.
         """
-        key_id = os.environ.get("R2_ACCESS_KEY_ID")
-        key_secret = os.environ.get("R2_SECRET_ACCESS_KEY")
+        key_id = os.environ.get("CW_KEY_ID")
+        key_secret = os.environ.get("CW_KEY_SECRET")
         if not key_id or not key_secret:
             raise InfraError(
-                "R2_ACCESS_KEY_ID and R2_SECRET_ACCESS_KEY environment variables are required "
-                "for S3-compatible object storage"
+                "CW_KEY_ID and CW_KEY_SECRET environment variables are required for S3-compatible object storage"
             )
         env = {"AWS_ACCESS_KEY_ID": key_id, "AWS_SECRET_ACCESS_KEY": key_secret}
         endpoint = self._config.object_storage_endpoint
