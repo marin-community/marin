@@ -2380,3 +2380,24 @@ for the reduced smoke shape and matches the package-private staged source-push f
     layout before W2-from-H consumes it.
   - This is a reduced forward-only smoke. Target-shape forward/backward timing through the public MLP VJP remains to be
     measured by the fwd/bwd measurement workstream.
+
+## 2026-07-04 00:45 - JIT custom VJP gradient check
+
+Promoted the from-plan source-push MLP custom VJP gradient check from eager-only coverage to `jax.jit(jax.grad(...))`
+coverage in reference mode. This is a small but important training-path check: the MLP custom VJP closes over the fixed
+plan metadata and differentiates only `x`, `route_weights`, `w13`, and `w2`, so the VJP needs to remain valid once the
+loss/gradient is compiled rather than only when run eagerly.
+
+- Commit Hash: `dba20156d`
+- Code:
+  - `lib/levanter/tests/grug/test_source_push_mlp.py`
+- Verification:
+  - `uv run --package marin-levanter --group test pytest lib/levanter/tests/grug/test_source_push_mlp.py -q -k 'from_plan or flat_h or custom_vjp or saves_w13'`
+    - Result: `5 passed, 11 warnings in 14.37s`.
+  - `./infra/pre-commit.py --fix lib/levanter/tests/grug/test_source_push_mlp.py`
+    - Result: all checks passed.
+- Interpretation:
+  - Local CPU/reference evidence now covers both eager and JIT-transformed custom VJP gradients for the preplanned MLP
+    boundary.
+  - This does not replace H100 fwd/bwd measurement through `pallas_mgpu_source_push`; that remains assigned to the
+    measurement workstream.
