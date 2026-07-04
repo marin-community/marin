@@ -93,6 +93,7 @@ FORWARD_STAGES = (FORWARD_STAGE_W13, FORWARD_STAGE_W2_RETURN, FORWARD_STAGE_COMB
 SOURCE_PUSH_FORWARD_IMPLEMENTATION_REFERENCE = "reference"
 SOURCE_PUSH_FORWARD_IMPLEMENTATION_PALLAS_MGPU = "pallas_mgpu"
 SourcePushForwardImplementation: TypeAlias = Literal["reference", "pallas_mgpu"]
+_STAGED_FORWARD_CALL_CACHE: dict[tuple[Any, ...], Callable[..., tuple[jax.Array, jax.Array]]] = {}
 FORWARD_SUMMARY_METRICS = (
     "steady_state_time",
     "bytes_per_rank",
@@ -934,42 +935,79 @@ def _call_staged_source_push_forward_device_inputs(
     config: PushInboxConfig,
     inputs: SourcePushForwardDeviceInputs,
 ) -> tuple[Float[Array, "S T D"], Float[Array, "Dst rows twoI"]]:
-    w13_h_fn = jax.jit(_sharded_w13_h_kernel(mesh, config, use_exact_expert_major=inputs.use_exact_expert_major))
+    call_stages = _cached_staged_source_push_forward_call(
+        mesh,
+        config,
+        use_exact_expert_major=inputs.use_exact_expert_major,
+    )
+    return call_stages(inputs)
+
+
+def _cached_staged_source_push_forward_call(
+    mesh: Mesh,
+    config: PushInboxConfig,
+    *,
+    use_exact_expert_major: bool,
+) -> Callable[[SourcePushForwardDeviceInputs], tuple[jax.Array, jax.Array]]:
+    key = _staged_forward_call_cache_key(mesh, config, use_exact_expert_major=use_exact_expert_major)
+    cached_call = _STAGED_FORWARD_CALL_CACHE.get(key)
+    if cached_call is not None:
+        return cached_call
+
+    w13_h_fn = jax.jit(_sharded_w13_h_kernel(mesh, config, use_exact_expert_major=use_exact_expert_major))
     w2_from_h_return_fn = jax.jit(
         _sharded_w2_from_h_return_direct_to_source_kernel(
             mesh,
             config,
-            use_exact_expert_major=inputs.use_exact_expert_major,
+            use_exact_expert_major=use_exact_expert_major,
         )
     )
     combine_fn = jax.jit(_sharded_source_combine_kernel(mesh, config))
-    _, h = w13_h_fn(
-        inputs.x,
-        inputs.send_meta,
-        inputs.recv_meta,
-        inputs.expert_base,
-        inputs.src_base_by_expert,
-        inputs.w_gate_up,
-    )
-    _block_until_ready(h)
-    source_return = w2_from_h_return_fn(
-        h,
-        inputs.recv_route_weights,
-        inputs.recv_meta,
-        inputs.expert_base,
-        inputs.src_base_by_expert,
-        inputs.w_down,
-    )
-    _block_until_ready(source_return)
-    out = combine_fn(
-        source_return,
-        inputs.queue_dst_ord,
-        inputs.queue_entry,
-        inputs.queue_row,
-        jnp.ones_like(inputs.route_combine_weights),
-        inputs.route_valid_mask,
-    )
-    return out, h
+
+    def call_stages(inputs: SourcePushForwardDeviceInputs) -> tuple[jax.Array, jax.Array]:
+        _, h = w13_h_fn(
+            inputs.x,
+            inputs.send_meta,
+            inputs.recv_meta,
+            inputs.expert_base,
+            inputs.src_base_by_expert,
+            inputs.w_gate_up,
+        )
+        _block_until_ready(h)
+        source_return = w2_from_h_return_fn(
+            h,
+            inputs.recv_route_weights,
+            inputs.recv_meta,
+            inputs.expert_base,
+            inputs.src_base_by_expert,
+            inputs.w_down,
+        )
+        _block_until_ready(source_return)
+        out = combine_fn(
+            source_return,
+            inputs.queue_dst_ord,
+            inputs.queue_entry,
+            inputs.queue_row,
+            jnp.ones_like(inputs.route_combine_weights),
+            inputs.route_valid_mask,
+        )
+        return out, h
+
+    _STAGED_FORWARD_CALL_CACHE[key] = call_stages
+    return call_stages
+
+
+def _staged_forward_call_cache_key(
+    mesh: Mesh,
+    config: PushInboxConfig,
+    *,
+    use_exact_expert_major: bool,
+) -> tuple[Any, ...]:
+    devices = np.asarray(mesh.devices, dtype=object).reshape(-1)
+    device_key = tuple(str(device) for device in devices)
+    axis_key = tuple(zip(mesh.axis_names, mesh.axis_types, strict=True))
+    shape_key = tuple((axis_name, int(mesh.shape[axis_name])) for axis_name in mesh.axis_names)
+    return (config, use_exact_expert_major, device_key, axis_key, shape_key)
 
 
 def _time_staged_source_push_forward(
