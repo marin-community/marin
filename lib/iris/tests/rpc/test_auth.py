@@ -1,15 +1,43 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import time
+
+import jwt
 import pytest
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from iris.cluster.controller import writes
-from iris.cluster.controller.auth import JwtTokenManager, create_api_key, revoke_api_key
+from iris.cluster.controller.auth import (
+    CONTROL_PLANE_AUDIENCE,
+    CONTROL_PLANE_AUDIENCES,
+    JwtTokenManager,
+    create_api_key,
+    revoke_api_key,
+)
 from iris.cluster.controller.db import ControllerDB
 from iris.rpc.auth import DASHBOARD_ROLE, AuthzAction, authorize, authorize_method, authorize_resource_owner
 from rigging.server_auth import VerifiedIdentity, _verified_identity
 from rigging.timing import Timestamp
+from rigging.token_authority import (
+    Ed25519Keypair,
+    JwksVerifier,
+    JwtSigner,
+    generate_ed25519_keypair,
+    signing_key_from_private_pem,
+)
+
+_ISSUER = "test-cluster"
+
+
+def _manager(*, keypair: Ed25519Keypair | None = None, db: ControllerDB | None = None) -> JwtTokenManager:
+    """Build a JwtTokenManager over a real EdDSA keypair (no mocking the signer)."""
+    keypair = keypair or generate_ed25519_keypair()
+    key = signing_key_from_private_pem(keypair.private_pem)
+    signer = JwtSigner(key, issuer=_ISSUER)
+    verifier = JwksVerifier(issuers={_ISSUER: [key.public_pem]}, expected_audiences=CONTROL_PLANE_AUDIENCES)
+    return JwtTokenManager(signer, verifier, db=db)
+
 
 # --- read-only dashboard role: per-method authorization ----------------------
 
@@ -44,7 +72,7 @@ def test_authorize_method_unrestricted_for_other_roles(role):
 
 @pytest.fixture
 def jwt_manager():
-    return JwtTokenManager(signing_key="test-signing-key-abcdef1234567890")
+    return _manager()
 
 
 def test_jwt_token_manager_roundtrip(jwt_manager):
@@ -55,10 +83,12 @@ def test_jwt_token_manager_roundtrip(jwt_manager):
 
 
 def test_jwt_token_manager_rejects_wrong_key():
-    manager_a = JwtTokenManager(signing_key="key-a-abcdef1234567890abcdef")
-    manager_b = JwtTokenManager(signing_key="key-b-abcdef1234567890abcdef")
+    # Same issuer, different keypairs: manager_b resolves a's iss to its own key
+    # and the EdDSA signature fails to verify.
+    manager_a = _manager()
+    manager_b = _manager()
     token = manager_a.create_token(user_id="alice", role="user", key_id="k1")
-    with pytest.raises(ValueError, match="Invalid token"):
+    with pytest.raises(ValueError, match="signature"):
         manager_b.verify(token)
 
 
@@ -69,10 +99,28 @@ def test_jwt_token_manager_revocation(jwt_manager):
         jwt_manager.verify(token)
 
 
-def test_jwt_token_manager_expired(jwt_manager):
-    token = jwt_manager.create_token(user_id="alice", role="user", key_id="k-exp", ttl_seconds=-1)
+def test_jwt_token_manager_expired():
+    # mint() forbids a non-positive ttl, so hand-sign an already-expired token
+    # with the same key to exercise the verifier's exp check.
+    keypair = generate_ed25519_keypair()
+    manager = _manager(keypair=keypair)
+    now = int(time.time())
+    expired = jwt.encode(
+        {
+            "sub": "alice",
+            "role": "user",
+            "jti": "k-exp",
+            "iss": _ISSUER,
+            "aud": CONTROL_PLANE_AUDIENCE,
+            "iat": now - 3600,
+            "exp": now - 1800,
+        },
+        keypair.private_pem,
+        algorithm="EdDSA",
+        headers={"kid": keypair.kid},
+    )
     with pytest.raises(ValueError, match="expired"):
-        jwt_manager.verify(token)
+        manager.verify(expired)
 
 
 def test_jwt_token_manager_load_revocations(tmp_path):
@@ -81,7 +129,7 @@ def test_jwt_token_manager_load_revocations(tmp_path):
     with db.transaction() as _tx:
         writes.ensure_user(_tx, "alice", now)
 
-    manager = JwtTokenManager(signing_key="test-key-load-revocations-abc123")
+    manager = _manager(db=db)
 
     # Insert a key and revoke it in the DB
     create_api_key(

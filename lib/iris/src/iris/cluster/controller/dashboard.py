@@ -48,6 +48,7 @@ from starlette.routing import Mount, Route
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from iris.cluster.controller import endpoint_proxy
+from iris.cluster.controller.auth import JwtTokenManager
 from iris.cluster.controller.backend import backend_descriptor
 from iris.cluster.controller.endpoint_proxy import EndpointProxy
 from iris.cluster.controller.endpoint_service import EndpointServiceImpl, ResolvedEndpoint
@@ -316,6 +317,7 @@ class ControllerDashboard:
         port: int = 8080,
         auth_provider: str | None = None,
         auth_policy: RequestAuthPolicy = RequestAuthPolicy(),
+        jwt_manager: JwtTokenManager | None = None,
     ):
         self._service = service
         # Defaults to the service's own backend; the two must share one instance
@@ -325,6 +327,9 @@ class ControllerDashboard:
         self._port = port
         self._auth_provider = auth_provider
         self._auth_policy = auth_policy
+        # The signing authority, for serving public keys at /.well-known/jwks.json
+        # (None in null-auth-no-DB mode, where no signer exists).
+        self._jwt_manager = jwt_manager
         # In-process RPC statistics. Fed by RequestTimingInterceptor on the
         # ControllerService chain only; LogService's chatty FetchLogs traffic
         # would dominate the numbers if included.
@@ -458,6 +463,7 @@ class ControllerDashboard:
             Route("/bundles/{bundle_id:str}.zip", self._bundle_download),
             Route("/blobs/{blob_id:str}", self._blob_download),
             Route("/health", self._health),
+            Route("/.well-known/jwks.json", self._jwks),
             Route(
                 "/proxy/{endpoint_name:str}",
                 _proxy_endpoint_redirect,
@@ -516,6 +522,19 @@ class ControllerDashboard:
     def _dashboard(self, _request: Request) -> HTMLResponse:
         # Vue Router handles client-side routing, so every SPA path serves the same shell.
         return HTMLResponse(html_shell("controller"))
+
+    @public
+    def _jwks(self, _request: Request) -> JSONResponse:
+        """Public JWKS (this controller's current + retained-previous public keys).
+
+        Public keys only — safe to serve unauthenticated. A federated finelog or
+        peer resolves this controller's verification key by ``kid`` from here (or
+        from an inline copy in its trust config). Empty when no signer exists
+        (null-auth, no DB).
+        """
+        if self._jwt_manager is None:
+            return JSONResponse({"keys": []})
+        return JSONResponse(self._jwt_manager.public_jwks())
 
     @public
     def _session_bootstrap(self, request: Request) -> Response:

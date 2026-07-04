@@ -22,8 +22,8 @@ from rigging.log_setup import configure_logging
 from rigging.timing import Duration, Timestamp
 
 from iris.cluster.composer import make_backends
-from iris.cluster.config import IrisClusterConfig, load_config, resolve_backends
-from iris.cluster.controller.auth import create_controller_auth
+from iris.cluster.config import IrisClusterConfig, load_config, resolve_backends, resolve_config_secrets
+from iris.cluster.controller.auth import create_controller_auth, require_persistent_signing_key
 from iris.cluster.controller.budget import reconcile_user_budget_tiers
 from iris.cluster.controller.checkpoint import download_checkpoint_to_local, latest_checkpoint_epoch_ms
 from iris.cluster.controller.controller import Controller, ControllerConfig
@@ -177,7 +177,26 @@ def run_controller_serve(
 
     db = ControllerDB(db_dir=db_dir)
 
-    auth = create_controller_auth(cluster_config.auth, db=db)
+    # Resolve reference-based secrets (SecretRefSpec fields) at the controller
+    # runtime — the deploy/render path renders references verbatim and never
+    # resolves. A configured-but-erroring source fails fast here.
+    cluster_config = resolve_config_secrets(cluster_config)
+    signing_key_pem = (
+        cluster_config.auth.signing_key if (cluster_config.auth and cluster_config.auth.signing_key) else None
+    )
+
+    # A deployed controller with a login provider (gcp/iap) must anchor a persistent
+    # signing key; the ephemeral fallback in create_controller_auth is only for
+    # in-process dev (LocalCluster), cidr, and null-auth. Enforce it at this
+    # real-deployment boundary.
+    require_persistent_signing_key(cluster_config.auth, signing_key_pem)
+
+    auth = create_controller_auth(
+        cluster_config.auth,
+        db=db,
+        cluster_name=cluster_config.name,
+        signing_key_pem=signing_key_pem,
+    )
     log_stack = build_log_stack(
         log_service_address=log_service_address,
         local_log_dir=local_state_dir / "log-server",

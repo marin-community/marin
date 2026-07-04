@@ -26,6 +26,7 @@ from iris.cluster.config import (
     CoreweaveControllerConfig,
     CoreweavePlatformConfig,
     IrisClusterConfig,
+    assert_no_inlined_secrets,
     config_to_dict,
 )
 from iris.cluster.inject_env import TASK_ENV_SECRET_NAME, collect_inject_env, projects_task_env_secret
@@ -1130,6 +1131,10 @@ class K8sControllerProvider:
 
     def _config_json_for_configmap(self, config: IrisClusterConfig) -> str:
         """Serialize cluster config to JSON for the in-cluster ConfigMap."""
+        # #6873 render guard: a raw inlined secret must never reach the
+        # broadly-readable ConfigMap. References render verbatim (resolved at the
+        # controller runtime); a literal fails the deploy here.
+        assert_no_inlined_secrets(config)
         config_dict = config_to_dict(config)
         cw_dict = config_dict.get("platform", {}).get("coreweave", {})
         cw_dict.pop("kubeconfig_path", None)

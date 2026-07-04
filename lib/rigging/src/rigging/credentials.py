@@ -15,9 +15,9 @@ App-token resolution order (the ``Authorization`` bearer):
 1. ``$MARIN_CLUSTER_TOKEN`` — an explicit override for CI / headless runs.
 2. The per-cluster credential file written by the cluster login command.
 3. An ambient provider implied by the cluster's auth provider — a GCP access
-   token for a ``gcp`` cluster, a configured static token for a ``static`` one.
-   An ``iap`` cluster has no ambient app token (its Iris JWT comes only from
-   login, i.e. step 2), and a ``none`` cluster sends nothing (loopback trust).
+   token for a ``gcp`` cluster. An ``iap`` cluster has no ambient app token (its
+   Iris JWT comes only from login, i.e. step 2), and a ``none`` cluster sends
+   nothing (loopback trust).
 
 IAP edge-token resolution (the ``Proxy-Authorization`` bearer, IAP clusters only):
 the cached desktop-OAuth refresh token (the human path) is preferred; failing
@@ -113,7 +113,7 @@ def _desktop_client(auth: ClusterAuth) -> OAuthClient:
     return MARIN_DESKTOP_OAUTH_CLIENT
 
 
-def _app_provider(cluster: str, auth: ClusterAuth, static_token: str | None, token_env: str) -> TokenProvider | None:
+def _app_provider(cluster: str, auth: ClusterAuth, token_env: str) -> TokenProvider | None:
     """Resolve the app-auth provider: env override, then the login file, then ambient."""
     override = os.environ.get(token_env)
     if override:
@@ -125,8 +125,6 @@ def _app_provider(cluster: str, auth: ClusterAuth, static_token: str | None, tok
 
     if auth.provider is AuthProvider.GCP:
         return GcpAccessTokenProvider()
-    if auth.provider is AuthProvider.STATIC and static_token:
-        return StaticTokenProvider(static_token)
     # IAP clusters get their Iris JWT only from login (the file path above);
     # `none` clusters authenticate by transport (loopback / tunnel trust).
     return None
@@ -155,16 +153,14 @@ def credentials_for(
     cluster: str,
     auth: ClusterAuth,
     *,
-    static_token: str | None = None,
     token_env: str = MARIN_CLUSTER_TOKEN_ENV,
 ) -> ClientCredentials:
     """Assemble the :class:`ClientCredentials` for ``cluster`` from the standard sources.
 
-    ``auth`` is the cluster's resolved auth shape (provider + IAP params). A
-    ``static`` cluster passes its configured client token as ``static_token``.
-    See the module docstring for the full resolution order.
+    ``auth`` is the cluster's resolved auth shape (provider + IAP params). See the
+    module docstring for the full resolution order.
     """
     return ClientCredentials(
-        token_provider=_app_provider(cluster, auth, static_token, token_env),
+        token_provider=_app_provider(cluster, auth, token_env),
         iap_provider=_edge_provider(cluster, auth),
     )

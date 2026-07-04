@@ -202,7 +202,13 @@ class LocalCluster:
         db = ControllerDB(db_dir=db_dir)
 
         # Derive auth from config proto so callers never need to wire it manually.
-        auth = create_controller_auth(self._config.auth, db=db)
+        # No signing_key_pem: a local cluster mints with an ephemeral in-process
+        # keypair (tokens live only for this process).
+        auth = create_controller_auth(
+            self._config.auth,
+            db=db,
+            cluster_name=self._config.name or "iris-local",
+        )
         if auth.worker_token:
             self._config.defaults.worker.auth_token = auth.worker_token
 

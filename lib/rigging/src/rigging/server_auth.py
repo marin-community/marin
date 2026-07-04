@@ -145,25 +145,6 @@ class TokenVerifier(Protocol):
         ...
 
 
-class StaticTokenVerifier:
-    """Maps fixed tokens to identities. Useful for testing and login exchange."""
-
-    def __init__(self, tokens: dict[str, str], roles: dict[str, str] | None = None):
-        """Args:
-        tokens: Mapping of token string to username.
-        roles: Optional mapping of username to role (defaults to "user").
-        """
-        self._tokens = tokens
-        self._roles = roles or {}
-
-    def verify(self, token: str) -> VerifiedIdentity:
-        user = self._tokens.get(token)
-        if user is None:
-            raise ValueError("Invalid token")
-        role = self._roles.get(user, "user")
-        return VerifiedIdentity(user_id=user, role=role)
-
-
 class GcpAccessTokenVerifier:
     """Verifies GCP OAuth2 access tokens via Google's tokeninfo endpoint.
 

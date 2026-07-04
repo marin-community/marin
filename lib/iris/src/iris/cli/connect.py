@@ -119,8 +119,6 @@ def _cluster_auth_from_config(auth: AuthConfig) -> ClusterAuth:
         )
     if provider == "gcp":
         return ClusterAuth(AuthProvider.GCP)
-    if provider == "static":
-        return ClusterAuth(AuthProvider.STATIC)
     return ClusterAuth(AuthProvider.NONE)
 
 
@@ -128,9 +126,7 @@ def client_credentials(config: IrisClusterConfig | None, cluster_name: str) -> C
     """Resolve the cluster's client credentials via the shared rigging resolver."""
     if config is None or config.auth is None:
         return credentials_for(cluster_name, ClusterAuth(AuthProvider.NONE))
-    auth = config.auth
-    static_token = next(iter(auth.static.tokens), None) if auth.provider_kind() == "static" else None
-    return credentials_for(cluster_name, _cluster_auth_from_config(auth), static_token=static_token)
+    return credentials_for(cluster_name, _cluster_auth_from_config(config.auth))
 
 
 @contextmanager

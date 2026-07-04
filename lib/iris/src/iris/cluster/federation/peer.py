@@ -103,7 +103,7 @@ def _peer_credentials(peer: PeerConfig) -> ClientCredentials:
     if not peer.cluster:
         return ClientCredentials()
     manifest = load_manifest(peer.cluster)
-    return credentials_for(peer.cluster, manifest.auth, static_token=peer.static_token or None)
+    return credentials_for(peer.cluster, manifest.auth)
 
 
 class _PeerRpcConnection:

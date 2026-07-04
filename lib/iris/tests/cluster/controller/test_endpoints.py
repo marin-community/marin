@@ -28,6 +28,7 @@ from iris.rpc import controller_pb2, job_pb2
 from iris.time_proto import duration_to_proto
 from rigging.server_auth import VerifiedIdentity, identity_scope
 from rigging.timing import Duration, ExponentialBackoff, Timestamp
+from rigging.token_authority import generate_ed25519_keypair
 from sqlalchemy import update as sa_update
 
 from .conftest import make_job_request, query_task, submit_job
@@ -301,8 +302,13 @@ def test_resolve_task_endpoint_returns_owner_row(state):
 
 
 def _mint_service(state, mock_controller, log_client, tmp_path):
-    """A ControllerServiceImpl with static auth (a provider ⇒ owner authz on)."""
-    auth = create_controller_auth(AuthConfig(static={"tokens": {"tok": "owner"}}), db=state._db)
+    """A ControllerServiceImpl with auth enabled (a provider ⇒ owner authz on)."""
+    auth = create_controller_auth(
+        AuthConfig(gcp={"project_id": "test-project"}),
+        db=state._db,
+        cluster_name="test-cluster",
+        signing_key_pem=generate_ed25519_keypair().private_pem,
+    )
     endpoint_service = EndpointServiceImpl(db=state._db, endpoints=state._endpoints)
     service = ControllerServiceImpl(
         controller=mock_controller,

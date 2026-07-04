@@ -24,6 +24,7 @@ from finelog.deploy.cli import down_cmd, logs_cmd, restart_cmd, status_cmd, up_c
 from rigging.config_discovery import list_cluster_configs
 from rigging.filesystem import marin_temp_bucket
 from rigging.timing import Duration, ExponentialBackoff, Timestamp
+from rigging.token_authority import generate_ed25519_keypair
 
 from iris.cli.build import (
     build_image,
@@ -258,6 +259,55 @@ def cluster_list():
     click.echo("Available clusters:")
     for name, path in sorted(configs.items()):
         click.echo(f"  {name:30s} {path}")
+
+
+@cluster.command("init-keys")
+@click.option(
+    "--out-file",
+    type=click.Path(path_type=Path, dir_okay=False),
+    default=None,
+    help="Write the PRIVATE key PEM to this file (mode 0600). Reference it from auth.signing_key as file:<abs-path>.",
+)
+@click.option(
+    "--gcp-secret",
+    "gcp_secret",
+    default=None,
+    metavar="projects/<p>/secrets/<name>",
+    help="Print gcloud commands to store the PRIVATE key in this Secret Manager secret.",
+)
+def cluster_init_keys(out_file: Path | None, gcp_secret: str | None):
+    """Generate a per-cluster Ed25519 signing keypair for controller auth.
+
+    Writes the PRIVATE key to a SecretSpec destination (a file, and/or prints the
+    gcloud commands to store it in Secret Manager) and prints the PUBLIC key + kid
+    for the trust config. The private half is a crown-jewel secret: never commit
+    it, never inline it into a cluster config — reference it from auth.signing_key
+    via file: / gcp-secret://. The public key is inline-safe (JWKS, peer/finelog
+    allowlists, previous_public_keys during a rotation overlap).
+    """
+    keypair = generate_ed25519_keypair()
+
+    if out_file is not None:
+        out_file.write_text(keypair.private_pem)
+        out_file.chmod(0o600)
+        click.echo(f"Wrote PRIVATE key to {out_file} (mode 0600).")
+        click.echo(f"  Reference it as: auth.signing_key: file:{out_file.resolve()}")
+
+    if gcp_secret is not None:
+        click.echo("Store the PRIVATE key in Secret Manager, then pin the version you create:")
+        click.echo(f"  gcloud secrets create {gcp_secret.rsplit('/', 1)[-1]} --replication-policy=automatic")
+        click.echo(
+            f"  printf '%s' '<private-pem>' | gcloud secrets versions add {gcp_secret.rsplit('/', 1)[-1]} --data-file=-"
+        )
+        click.echo(f"  Reference the pinned version as: auth.signing_key: gcp-secret://{gcp_secret}/versions/<n>")
+
+    if out_file is None and gcp_secret is None:
+        click.echo("# PRIVATE KEY (store securely; do NOT commit or inline into a cluster config):")
+        click.echo(keypair.private_pem.rstrip("\n"))
+
+    click.echo(f"\nkid: {keypair.kid}")
+    click.echo("# PUBLIC KEY (inline-safe — trust config / peer & finelog allowlists / previous_public_keys):")
+    click.echo(keypair.public_pem.rstrip("\n"))
 
 
 @cluster.command("start")

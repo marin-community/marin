@@ -46,7 +46,6 @@ class AuthProvider(StrEnum):
 
     IAP = "iap"
     GCP = "gcp"
-    STATIC = "static"
     NONE = "none"
 
 
@@ -113,8 +112,6 @@ def _parse_auth(raw: Mapping[str, Any]) -> ClusterAuth:
         return ClusterAuth(AuthProvider.IAP, iap=_parse_iap(raw["iap"]), admin_users=admin_users)
     if raw.get("gcp"):
         return ClusterAuth(AuthProvider.GCP, admin_users=admin_users)
-    if "static" in raw:
-        return ClusterAuth(AuthProvider.STATIC, admin_users=admin_users)
     return ClusterAuth(AuthProvider.NONE, admin_users=admin_users)
 
 

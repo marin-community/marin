@@ -2711,7 +2711,8 @@ class ControllerServiceImpl:
         )
 
         jwt_token = self._auth.jwt_manager.create_token(target_user, role, key_id, ttl_seconds=ttl)
-        # Use key_id prefix (not JWT prefix — all HS256 JWTs share the same header)
+        # Use the key_id prefix (not a JWT prefix — the JWT header is not a stable
+        # per-key discriminator).
         return job_pb2.CreateApiKeyResponse(key_id=key_id, token=jwt_token, key_prefix=key_id[:8])
 
     def revoke_api_key(

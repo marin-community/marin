@@ -54,7 +54,6 @@ def test_peers_config_round_trips_through_serialization():
                     "controller_address": "http://cw:10000",
                     "dashboard_url": "https://cw.dev",
                     "cluster": "cw-east",
-                    "static_token": "shhh",
                 }
             }
         )
@@ -64,7 +63,6 @@ def test_peers_config_round_trips_through_serialization():
     assert peer.controller_address == "http://cw:10000"
     assert peer.dashboard_url == "https://cw.dev"
     assert peer.cluster == "cw-east"
-    assert peer.static_token == "shhh"
 
 
 def test_no_peers_configured_is_valid_and_empty():
@@ -81,21 +79,6 @@ def test_peers_config_rejects_unknown_field():
     # a typo we reject rather than silently ignore (extra="forbid").
     with pytest.raises(pydantic.ValidationError):
         parse_config(_config(peers={"cw": {"controller_address": "http://cw", "capabilities": ["H100"]}}))
-
-
-def test_peers_config_rejects_static_token_without_cluster():
-    with pytest.raises(ValueError, match="static_token requires cluster"):
-        parse_config(_config(peers={"cw": {"controller_address": "http://cw", "static_token": "shhh"}}))
-
-
-# ---------------------------------------------------------------------------
-# finelog relay: validation
-# ---------------------------------------------------------------------------
-
-
-def test_finelog_relay_rejects_short_delegation_key():
-    with pytest.raises(ValueError, match="delegation_key must be at least 16 bytes"):
-        parse_config(_config(finelog={"relay_address": "dns:///g:1", "delegation_key": "short"}))
 
 
 # ---------------------------------------------------------------------------

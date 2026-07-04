@@ -13,7 +13,7 @@ from collections.abc import Callable
 
 import yaml
 
-from iris.cluster.config import IrisClusterConfig, config_to_dict
+from iris.cluster.config import IrisClusterConfig, assert_no_inlined_secrets, config_to_dict
 from iris.cluster.platforms.gcp.worker_bootstrap import render_template
 
 CONTROLLER_CONTAINER_NAME = "iris-controller"
@@ -261,6 +261,10 @@ def build_controller_bootstrap_script_from_config(
         fresh: When True, pass ``--fresh`` to the controller serve command so
             it starts with an empty local database and skips checkpoint restore.
     """
+    # #6873 render guard: a raw inlined secret must never reach GCE startup
+    # metadata. References render verbatim (resolved at the controller runtime);
+    # a literal fails the deploy here.
+    assert_no_inlined_secrets(config)
     config_yaml = yaml.dump(config_to_dict(config), default_flow_style=False)
     ctrl = config.controller
     gcp_port = ctrl.gcp.port if ctrl.gcp is not None else 0

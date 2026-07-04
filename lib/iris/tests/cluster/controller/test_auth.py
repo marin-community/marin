@@ -5,6 +5,7 @@
 
 from unittest.mock import Mock
 
+import jwt
 import pytest
 import sqlalchemy.exc
 from connectrpc.code import Code
@@ -13,9 +14,10 @@ from iris.cluster.bundle import BundleStore
 from iris.cluster.config import AuthConfig
 from iris.cluster.controller import reads, writes
 from iris.cluster.controller.auth import (
+    CONTROL_PLANE_AUDIENCES,
+    FINELOG_AUDIENCE,
     WORKER_USER,
     JwtTokenManager,
-    _get_or_create_signing_key,
     _make_iap_role_resolver,
     create_api_key,
     create_controller_auth,
@@ -40,21 +42,35 @@ from rigging.server_auth import (
     PolicyAuthInterceptor,
     RequestAuthPolicy,
     RouteAuthMiddleware,
-    StaticTokenVerifier,
     VerifiedIdentity,
     get_verified_identity,
     requires_auth,
 )
 from rigging.timing import Timestamp
+from rigging.token_authority import JwksVerifier, JwtSigner, generate_ed25519_keypair, signing_key_from_private_pem
 from sqlalchemy import text
 from starlette.responses import JSONResponse
 from starlette.routing import Route
 from starlette.testclient import TestClient
 from tests.cluster.controller._test_support import ControllerTestState
+from tests.mock_verifier import MockVerifier
 
 _TEST_TOKEN = "valid-test-token"
 _TEST_USER = "test-user"
+_CLUSTER = "test-cluster"
 CSRF_HEADERS = {"Origin": "http://testserver"}
+
+# A persistent signing key for authed create_controller_auth calls: an authed
+# cluster requires one (the ephemeral fallback is null-auth only).
+_SIGNING_KEY = generate_ed25519_keypair().private_pem
+
+
+def _jwt_manager(db: ControllerDB | None = None) -> JwtTokenManager:
+    """A JwtTokenManager over a real EdDSA keypair (issuer ``_CLUSTER``)."""
+    key = signing_key_from_private_pem(generate_ed25519_keypair().private_pem)
+    signer = JwtSigner(key, issuer=_CLUSTER)
+    verifier = JwksVerifier(issuers={_CLUSTER: [key.public_pem]}, expected_audiences=CONTROL_PLANE_AUDIENCES)
+    return JwtTokenManager(signer, verifier, db=db)
 
 
 # -- Fixtures -----------------------------------------------------------------
@@ -95,7 +111,7 @@ def service(state, tmp_path, log_client):
 
 @pytest.fixture
 def verifier():
-    return StaticTokenVerifier({_TEST_TOKEN: _TEST_USER})
+    return MockVerifier({_TEST_TOKEN: _TEST_USER})
 
 
 @pytest.fixture
@@ -271,7 +287,6 @@ def test_read_snapshot_cannot_access_auth_tables(db: ControllerDB):
     now = Timestamp.now()
     with db.transaction() as _tx:
         writes.ensure_user(_tx, "test-user", now)
-    _get_or_create_signing_key(db)
     create_api_key(db, key_id="k1", key_prefix="pfx", user_id="test-user", name="test", now=now)
 
     with db.read_snapshot() as q:
@@ -284,7 +299,6 @@ def test_write_connection_can_access_auth_tables(db: ControllerDB):
     now = Timestamp.now()
     with db.transaction() as _tx:
         writes.ensure_user(_tx, "test-user", now)
-    _get_or_create_signing_key(db)
     create_api_key(db, key_id="k1", key_prefix="pfx", user_id="test-user", name="test", now=now)
 
     with db.transaction() as q:
@@ -322,8 +336,7 @@ def test_jwt_create_and_verify(db: ControllerDB):
     with db.transaction() as _tx:
         writes.ensure_user(_tx, "bob", now, role="user")
 
-    signing_key = _get_or_create_signing_key(db)
-    mgr = JwtTokenManager(signing_key, db=db)
+    mgr = _jwt_manager(db=db)
 
     create_api_key(db, key_id="k-bob", key_prefix="jwt", user_id="bob", name="test", now=now)
 
@@ -331,6 +344,37 @@ def test_jwt_create_and_verify(db: ControllerDB):
     identity = mgr.verify(token)
     assert identity.user_id == "bob"
     assert identity.role == "user"
+
+
+def test_control_plane_verify_rejects_delegation_token(db: ControllerDB):
+    """The cross-plane guard: an ``aud="finelog"`` delegation token is rejected at
+    this controller's control-plane verify — it can never be replayed at the RPC
+    surface even though it is signed by the same key."""
+    mgr = _jwt_manager(db=db)
+    delegation = mgr.create_delegation_token("test-cluster", "k-deleg", ttl_seconds=60)
+    with pytest.raises(ValueError):
+        mgr.verify(delegation)
+    # Sanity: the token's audience really is the finelog plane.
+    assert jwt.decode(delegation, options={"verify_signature": False})["aud"] == FINELOG_AUDIENCE
+
+
+def test_endpoint_token_surfaces_endpoint_as_audience(db: ControllerDB):
+    """An endpoint token verifies (aud is the fixed proxy plane) and surfaces its
+    bound endpoint name as ``identity.audience`` (what the /proxy gate matches)."""
+    mgr = _jwt_manager(db=db)
+    token = mgr.create_endpoint_token("/serve/foo", "k-ep", ttl_seconds=60)
+    identity = mgr.verify(token)
+    assert identity.audience == "/serve/foo"
+
+
+def test_jwt_revocation_after_verify(db: ControllerDB):
+    """Revocation is iris policy applied after the verifier returns."""
+    mgr = _jwt_manager(db=db)
+    token = mgr.create_token("bob", "user", "k-revoke")
+    assert mgr.verify(token).user_id == "bob"
+    mgr.revoke("k-revoke")
+    with pytest.raises(ValueError, match="revoked"):
+        mgr.verify(token)
 
 
 def test_revoke_login_keys(db: ControllerDB):
@@ -362,7 +406,9 @@ def test_cidr_only_auth_config_enables_request_auth(db: ControllerDB):
     forwarded peers are rejected; the cluster's worker JWT still verifies
     through the same policy.
     """
-    auth = create_controller_auth(AuthConfig(trusted_cidrs=["10.0.0.0/8"]), db=db)
+    auth = create_controller_auth(
+        AuthConfig(trusted_cidrs=["10.0.0.0/8"]), db=db, cluster_name=_CLUSTER, signing_key_pem=_SIGNING_KEY
+    )
     policy = request_auth_policy(auth)
     assert not policy.allows_anonymous
 
@@ -391,7 +437,7 @@ def optional_auth_client(service, verifier):
     """Dashboard with auth configured but optional — tokens verified if present, anonymous fallback."""
     dashboard = ControllerDashboard(
         service,
-        auth_provider="static",
+        auth_provider="gcp",
         auth_policy=RequestAuthPolicy.enforcing(verifier=verifier, optional=True),
     )
     return TestClient(dashboard.app)
@@ -438,7 +484,7 @@ def test_optional_auth_config_reports_optional(optional_auth_client):
     data = optional_auth_client.get("/auth/config").json()
     assert data["auth_enabled"] is True
     assert data["optional"] is True
-    assert data["provider"] == "static"
+    assert data["provider"] == "gcp"
 
 
 def test_auth_config_reports_not_optional(authed_client):
@@ -496,7 +542,7 @@ def test_route_auth_middleware_rejects_endpoint_scoped_token(service):
     Such a token authorizes only its endpoint's /proxy path; the middleware must
     refuse it everywhere else even though the token itself verifies.
     """
-    mgr = JwtTokenManager("route-auth-test-signing-key")
+    mgr = _jwt_manager()
     token = mgr.create_endpoint_token("/u/job/ep", "iris_ket_route", ttl_seconds=60)
     dashboard = _dashboard_with_protected_route(service, RequestAuthPolicy.enforcing(verifier=mgr))
 
@@ -511,7 +557,7 @@ def _dashboard_with_protected_route(service, policy: RequestAuthPolicy) -> Contr
     def _protected(_request):
         return JSONResponse({"ok": True})
 
-    dashboard = ControllerDashboard(service, auth_provider="static", auth_policy=policy)
+    dashboard = ControllerDashboard(service, auth_provider="gcp", auth_policy=policy)
     # Walk down to the Starlette router so the new route participates in route
     # matching.
     app = dashboard.app
@@ -526,7 +572,7 @@ def _dashboard_with_protected_route(service, policy: RequestAuthPolicy) -> Contr
 
 def _dashboard_interceptor(**verifiers):
     """The interceptor exactly as the dashboard wires it (RPC exemptions + RBAC)."""
-    policy = RequestAuthPolicy.enforcing(verifier=StaticTokenVerifier({}), **verifiers)
+    policy = RequestAuthPolicy.enforcing(verifier=MockVerifier({}), **verifiers)
     return PolicyAuthInterceptor(
         policy,
         cookie_name=SESSION_COOKIE,

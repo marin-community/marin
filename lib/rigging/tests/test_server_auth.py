@@ -8,6 +8,7 @@ import pytest
 from connectrpc._headers import Headers
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
+from mock_verifier import MockVerifier
 from rigging.server_auth import (
     ANONYMOUS_ADMIN,
     AuthRequest,
@@ -17,7 +18,6 @@ from rigging.server_auth import (
     IapIdTokenVerifier,
     PolicyAuthInterceptor,
     RequestAuthPolicy,
-    StaticTokenVerifier,
     VerifiedIdentity,
     _extract_cookie,
     _verified_identity,
@@ -54,7 +54,7 @@ def _make_ctx(headers: dict | None = None, client_address: str | None = None):
 
 @pytest.fixture
 def verifier():
-    return StaticTokenVerifier({"valid-token-alice": "alice", "valid-token-bob": "bob"})
+    return MockVerifier({"valid-token-alice": "alice", "valid-token-bob": "bob"})
 
 
 @pytest.fixture
@@ -140,26 +140,6 @@ def test_policy_interceptor_cleans_up_context_on_handler_error(interceptor):
 
     # Verified user should be cleaned up after handler exits
     assert get_verified_user() is None
-
-
-def test_static_token_verifier_valid():
-    v = StaticTokenVerifier({"tok": "user1"})
-    result = v.verify("tok")
-    assert result.user_id == "user1"
-    assert result.role == "user"
-
-
-def test_static_token_verifier_with_custom_role():
-    v = StaticTokenVerifier({"tok": "admin1"}, roles={"admin1": "admin"})
-    result = v.verify("tok")
-    assert result.user_id == "admin1"
-    assert result.role == "admin"
-
-
-def test_static_token_verifier_invalid():
-    v = StaticTokenVerifier({"tok": "user1"})
-    with pytest.raises(ValueError, match="Invalid token"):
-        v.verify("bad")
 
 
 def _verify_oauth2_token_returning(payload):
@@ -286,7 +266,7 @@ def test_resolve_auth_iap_assertion_grants_dashboard_when_tokenless():
     identity = resolve_auth(
         AuthRequest(token=None, headers={"x-goog-iap-jwt-assertion": "valid"}),
         RequestAuthPolicy.enforcing(
-            verifier=StaticTokenVerifier({}), iap_assertion_verifier=_FakeAssertionVerifier()
+            verifier=MockVerifier({}), iap_assertion_verifier=_FakeAssertionVerifier()
         ).authenticators,
     )
     assert identity == VerifiedIdentity(user_id="alice@example.com", role="dashboard")
@@ -298,7 +278,7 @@ def test_resolve_auth_iris_jwt_wins_over_iap_assertion():
     identity = resolve_auth(
         AuthRequest(token="valid-token-alice", headers={"x-goog-iap-jwt-assertion": "valid"}),
         RequestAuthPolicy.enforcing(
-            verifier=StaticTokenVerifier({"valid-token-alice": "alice"}), iap_assertion_verifier=_FakeAssertionVerifier()
+            verifier=MockVerifier({"valid-token-alice": "alice"}), iap_assertion_verifier=_FakeAssertionVerifier()
         ).authenticators,
     )
     assert identity == VerifiedIdentity(user_id="alice", role="user")
@@ -311,7 +291,7 @@ def test_resolve_auth_rejects_tokenless_without_assertion():
         resolve_auth(
             AuthRequest(token=None, headers={}),
             RequestAuthPolicy.enforcing(
-                verifier=StaticTokenVerifier({}), iap_assertion_verifier=_FakeAssertionVerifier()
+                verifier=MockVerifier({}), iap_assertion_verifier=_FakeAssertionVerifier()
             ).authenticators,
         )
 
@@ -321,7 +301,7 @@ def test_resolve_auth_rejects_forged_assertion():
         resolve_auth(
             AuthRequest(token=None, headers={"x-goog-iap-jwt-assertion": "forged"}),
             RequestAuthPolicy.enforcing(
-                verifier=StaticTokenVerifier({}), iap_assertion_verifier=_FakeAssertionVerifier()
+                verifier=MockVerifier({}), iap_assertion_verifier=_FakeAssertionVerifier()
             ).authenticators,
         )
 
@@ -332,7 +312,7 @@ def test_resolve_auth_loopback_admin_when_no_assertion():
     identity = resolve_auth(
         AuthRequest(token=None, headers={}, client_address="127.0.0.1:54321"),
         RequestAuthPolicy.enforcing(
-            verifier=StaticTokenVerifier({}), iap_assertion_verifier=_FakeAssertionVerifier()
+            verifier=MockVerifier({}), iap_assertion_verifier=_FakeAssertionVerifier()
         ).authenticators,
     )
     assert identity == ANONYMOUS_ADMIN
@@ -342,9 +322,7 @@ def test_resolve_auth_loopback_admin_when_no_assertion():
 
 
 def _cidr_stack(trusted_cidrs, tokens=None):
-    return RequestAuthPolicy.enforcing(
-        verifier=StaticTokenVerifier(tokens or {}), trusted_cidrs=trusted_cidrs
-    ).authenticators
+    return RequestAuthPolicy.enforcing(verifier=MockVerifier(tokens or {}), trusted_cidrs=trusted_cidrs).authenticators
 
 
 def test_cidr_admits_direct_peer_inside_cidr():
@@ -541,7 +519,7 @@ def test_permissive_policy_attributes_valid_token_and_ignores_invalid():
     # Null-auth with a verifier (worker tokens): a valid token attributes the
     # caller; an invalid/stale one falls through to anonymous admin instead of
     # failing the request.
-    policy = RequestAuthPolicy.permissive(verifier=StaticTokenVerifier({"worker-tok": "system:worker"}))
+    policy = RequestAuthPolicy.permissive(verifier=MockVerifier({"worker-tok": "system:worker"}))
     assert policy.allows_anonymous
     assert policy.resolve("worker-tok", headers={}).user_id == "system:worker"
     assert policy.resolve("stale-token", headers={}) == ANONYMOUS_ADMIN
@@ -549,7 +527,7 @@ def test_permissive_policy_attributes_valid_token_and_ignores_invalid():
 
 
 def test_optional_enforcing_policy_admits_anonymous_but_rejects_bad_token():
-    policy = RequestAuthPolicy.enforcing(verifier=StaticTokenVerifier({"tok": "alice"}), optional=True)
+    policy = RequestAuthPolicy.enforcing(verifier=MockVerifier({"tok": "alice"}), optional=True)
     assert policy.allows_anonymous
     assert policy.resolve(None, headers={}) == ANONYMOUS_ADMIN
     with pytest.raises(ValueError):

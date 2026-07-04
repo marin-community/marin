@@ -185,13 +185,6 @@ def login(ctx):
             identity_token = gcp_provider.get_token()
         except Exception as e:
             raise click.ClickException(f"Failed to get GCP access token: {e}") from e
-    elif provider == "static":
-        if not config:
-            raise click.ClickException("Static auth requires --config (tokens are in the config file)")
-        tokens = dict(config.auth.static.tokens)
-        if not tokens:
-            raise click.ClickException("No static tokens configured")
-        identity_token = next(iter(tokens))
     else:
         raise click.ClickException(f"Unsupported auth provider: {provider}")
 

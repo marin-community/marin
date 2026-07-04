@@ -55,11 +55,6 @@ def test_gcp_cluster_falls_back_to_ambient_access_token():
     assert c.iap_provider is None
 
 
-def test_static_cluster_uses_supplied_token():
-    c = credentials_for("local", ClusterAuth(AuthProvider.STATIC), static_token="shared")
-    assert c.token_provider.get_token() == "shared"
-
-
 def test_iap_cluster_has_no_ambient_app_token():
     # The Iris JWT comes only from login; without a file there is no app provider.
     c = credentials_for("marin", _iap_auth())

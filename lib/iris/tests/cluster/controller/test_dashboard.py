@@ -46,13 +46,14 @@ from iris.cluster.platforms.k8s.types import K8sResource
 from iris.cluster.types import DEFAULT_BACKEND_ID, JobName, UserBudgetDefaults, WorkerId, WorkerUsability
 from iris.rpc import controller_pb2, job_pb2, vm_pb2
 from iris.time_proto import timestamp_to_proto
-from rigging.server_auth import RequestAuthPolicy, StaticTokenVerifier
+from rigging.server_auth import RequestAuthPolicy
 from rigging.timing import Timestamp
 from sqlalchemy import func, select
 from sqlalchemy import update as sa_update
 from starlette.testclient import TestClient
 from tests.cluster.controller._test_support import ControllerTestState
 from tests.cluster.controller.transition_driver import WorkerTaskUpdates, apply_task_observations
+from tests.mock_verifier import MockVerifier
 
 from .conftest import (
     check_task_can_be_scheduled,
@@ -1432,7 +1433,7 @@ def test_auth_config_returns_disabled_by_default(client):
 
 def test_auth_config_returns_enabled_when_verifier_set(service):
     """Auth config endpoint reports auth enabled with provider name."""
-    verifier = StaticTokenVerifier({"test-token": "test-user"})
+    verifier = MockVerifier({"test-token": "test-user"})
     dashboard = ControllerDashboard(
         service,
         auth_provider="gcp",
