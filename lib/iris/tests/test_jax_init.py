@@ -375,32 +375,8 @@ def test_configure_compilation_cache_keeps_explicit_dir(source: str) -> None:
 
 
 @pytest.mark.parametrize("scheme", ["gs://", "s3://"])
-def test_configure_compilation_cache_disables_xla_autotune_for_remote_dir(scheme: str) -> None:
-    """A remote cache dir disables XLA's autotune sub-cache derivation.
-
-    XLA's C++ per-fusion autotune cache has no gs://s3:// support (it writes
-    through tsl::Env, a plain filesystem abstraction) and crashes the first
-    compile if JAX derives its path from a remote compilation_cache_dir.
-    """
-    with _isolated_jax_cache_config():
-        with patch("iris.runtime.jax_init.marin_prefix", return_value=f"{scheme}marin-eu/marin/"):
-            configure_jax_compilation_cache()
-
-        assert jax.config.jax_persistent_cache_enable_xla_caches == "none"
-
-
-def test_configure_compilation_cache_keeps_xla_autotune_for_local_dir() -> None:
-    """A local cache dir leaves XLA's autotune sub-cache derivation untouched."""
-    with _isolated_jax_cache_config():
-        original = jax.config.jax_persistent_cache_enable_xla_caches
-        with patch("iris.runtime.jax_init.marin_prefix", return_value="/mnt/local/marin/"):
-            configure_jax_compilation_cache()
-
-        assert jax.config.jax_persistent_cache_enable_xla_caches == original
-
-
-def test_configure_compilation_cache_clears_xla_autotune_compile_option() -> None:
-    """The remote-dir guard actually clears the compile option XLA would crash on.
+def test_configure_compilation_cache_clears_xla_autotune_compile_option(scheme: str) -> None:
+    """A remote cache dir clears the XLA compile option that would otherwise crash.
 
     Without the guard, JAX hands XLA's C++ debug_options a raw
     ``xla_gpu_per_fusion_autotune_cache_dir`` built from the remote URL, which
@@ -411,11 +387,23 @@ def test_configure_compilation_cache_clears_xla_autotune_compile_option() -> Non
     from jax._src import compiler as jax_compiler  # noqa: PLC0415
 
     with _isolated_jax_cache_config():
-        with patch("iris.runtime.jax_init.marin_prefix", return_value="s3://marin-eu/marin/"):
+        with patch("iris.runtime.jax_init.marin_prefix", return_value=f"{scheme}marin-eu/marin/"):
             configure_jax_compilation_cache()
 
         options = jax_compiler.get_compile_options(num_replicas=1, num_partitions=1)
         assert options.executable_build_options.debug_options.xla_gpu_per_fusion_autotune_cache_dir == ""
+
+
+def test_configure_compilation_cache_keeps_xla_autotune_for_local_dir() -> None:
+    """A local cache dir leaves XLA's autotune sub-cache derivation untouched."""
+    from jax._src import compiler as jax_compiler  # noqa: PLC0415
+
+    with _isolated_jax_cache_config():
+        with patch("iris.runtime.jax_init.marin_prefix", return_value="/mnt/local/marin/"):
+            configure_jax_compilation_cache()
+
+        options = jax_compiler.get_compile_options(num_replicas=1, num_partitions=1)
+        assert options.executable_build_options.debug_options.xla_gpu_per_fusion_autotune_cache_dir != ""
 
 
 def test_configure_compilation_cache_keeps_explicit_xla_autotune_setting() -> None:
