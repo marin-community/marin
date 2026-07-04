@@ -456,6 +456,8 @@ class CoreweaveControllerConfig(_Config):
 class ControllerVmConfig(_OneofConfig):
     _ONEOF_ARMS = ("gcp", "manual", "local", "coreweave")
     image: str = ""  # controller docker image (shared by all controller types)
+    # Periodic checkpoint interval (seconds); 0 = controller default (hourly).
+    checkpoint_interval_seconds: float = 0
     gcp: GcpControllerConfig | None = None
     manual: ManualControllerConfig | None = None
     local: LocalControllerConfig | None = None

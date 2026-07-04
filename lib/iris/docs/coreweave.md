@@ -23,7 +23,7 @@ Console links:
 create a token for the cluster and download its kubeconfig.
 
 **2. Install the kubeconfig** at the path from the table above, plus controller
-extras and R2 credentials:
+extras and CoreWeave Object Storage credentials:
 
 ```bash
 mkdir -p ~/.kube
@@ -32,8 +32,8 @@ export KUBECONFIG=~/.kube/coreweave-iris-gpu
 kubectl cluster-info   # sanity check
 
 uv pip install 'marin-iris[controller]'
-export R2_ACCESS_KEY_ID=<your-r2-access-key-id>
-export R2_SECRET_ACCESS_KEY=<your-r2-secret-access-key>
+export CW_KEY_ID=<coreweave-access-key-id>
+export CW_KEY_SECRET=<coreweave-access-key-secret>
 ```
 
 **3. Check cluster status.** `--cluster=cw-us-east-02a` resolves the in-tree
@@ -255,8 +255,7 @@ operator reference (any `--cluster=NAME`) and the lifecycle details behind it.
 - Images pushed to `ghcr.io/marin-community/`
 - Controller extras: `uv pip install 'marin-iris[controller]'`
 
-For S3 storage, export `R2_ACCESS_KEY_ID` / `R2_SECRET_ACCESS_KEY` (historical
-names — they feed any S3-compatible backend, including CoreWeave Object Storage
+For S3 storage, export `CW_KEY_ID` / `CW_KEY_SECRET` (CoreWeave Object Storage
 access keys); `iris cluster start` folds them — plus the derived
 endpoint/region/`FSSPEC_S3` config — into the `iris-task-env` Secret, projected
 into the controller and task pods via `envFrom`.
@@ -364,7 +363,7 @@ re-run the install after it is Ready.
 ### Bringing up a new cluster
 
 1. Download the kubeconfig (§0) to `~/.kube/coreweave-iris-<region>` and export
-   `KUBECONFIG`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`.
+   `KUBECONFIG`, `CW_KEY_ID`, `CW_KEY_SECRET`.
 2. Copy an existing cluster config pair — `lib/iris/config/cw-*.yaml` and
    `lib/finelog/config/cw-*.yaml` — and adjust region, instance types, and
    fleet sizes. The console capacity view's display label is NOT the k8s
@@ -712,8 +711,8 @@ The platform detects fatal errors before the full timeout expires:
 | Variable | Purpose |
 |----------|---------|
 | `KUBECONFIG` | Path to kubeconfig (alternative to `kubeconfig_path` in config) |
-| `R2_ACCESS_KEY_ID` | S3/R2 access key (required if storage uses `s3://`) |
-| `R2_SECRET_ACCESS_KEY` | S3/R2 secret key |
+| `CW_KEY_ID` | S3/CoreWeave Object Storage access key (required if storage uses `s3://`) |
+| `CW_KEY_SECRET` | S3/CoreWeave Object Storage secret key |
 | `CW_ACCESS_KEY_ID` | CoreWeave Object Storage key ID |
 | `CW_SECRET_ACCESS_KEY` | CoreWeave Object Storage secret key |
 
@@ -729,7 +728,7 @@ The platform detects fatal errors before the full timeout expires:
 | `AWS_ACCESS_KEY_ID` | `envFrom` | From the `iris-task-env` Secret |
 | `AWS_SECRET_ACCESS_KEY` | `envFrom` | From the `iris-task-env` Secret |
 | `AWS_ENDPOINT_URL` | `envFrom` | From `iris-task-env`; derived from `object_storage_endpoint` |
-| `AWS_REGION` / `AWS_DEFAULT_REGION` | `envFrom` | From `iris-task-env`; `auto` for R2 / CoreWeave endpoints |
+| `AWS_REGION` / `AWS_DEFAULT_REGION` | `envFrom` | From `iris-task-env`; `auto` for CoreWeave Object Storage endpoints |
 | `FSSPEC_S3` | `envFrom` | From `iris-task-env`; JSON-encoded fsspec S3 config (endpoint + addressing style) |
 
 ## 11. Timeouts
@@ -880,7 +879,7 @@ by polling.
 | Resource | Purpose | Created By |
 |----------|---------|------------|
 | `iris` Namespace + RBAC | K8s API auth and permissions | `start_controller()` via `ensure_rbac()` |
-| `iris-task-env` Secret | S3 object storage auth + operator-injected env (`defaults.inject_env`) | `start_controller()` via `ensure_task_env_secret()`, from `R2_ACCESS_KEY_ID` / `R2_SECRET_ACCESS_KEY` + the configured `object_storage_endpoint` |
+| `iris-task-env` Secret | S3 object storage auth + operator-injected env (`defaults.inject_env`) | `start_controller()` via `ensure_task_env_secret()`, from `CW_KEY_ID` / `CW_KEY_SECRET` + the configured `object_storage_endpoint` |
 | `iris-cluster-config` ConfigMap | Cluster config for controller and workers | `start_controller()` |
 | In-cluster ServiceAccount token | kubectl calls from controller Pod | Auto-mounted by Kubernetes |
 
