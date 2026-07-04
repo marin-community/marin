@@ -24,7 +24,7 @@ from iris.cluster.controller import reads, writes
 from iris.cluster.controller.endpoint_service import EndpointServiceImpl
 from iris.cluster.controller.federation_store import ControllerFederationStore
 from iris.cluster.controller.run_template import RunTemplateCache
-from iris.cluster.controller.service import ControllerServiceImpl
+from iris.cluster.controller.service import ControllerServiceImpl, _peer_status
 from iris.cluster.federation.manager import FederationManager
 from iris.cluster.federation.peer import FederationPeer
 from iris.cluster.federation.store import HandoffAdmission, HandoffSpec, HandoffState
@@ -137,8 +137,10 @@ def _attach_federation(
     return manager
 
 
-def _cluster_pinned_request(name: str, peer: str = "cw") -> controller_pb2.Controller.LaunchJobRequest:
-    request = make_direct_job_request(name, replicas=1)
+def _cluster_pinned_request(
+    name: str, peer: str = "cw", replicas: int = 1
+) -> controller_pb2.Controller.LaunchJobRequest:
+    request = make_direct_job_request(name, replicas=replicas)
     request.constraints.append(Constraint.create(key=CLUSTER_CONSTRAINT_KEY, op=ConstraintOp.EQ, value=peer).to_proto())
     return request
 
@@ -157,6 +159,13 @@ def _handle(state: ControllerTestState, job_id: JobName):
     """The federated handle for ``job_id`` (or ``None``), via a scoped snapshot."""
     with state._db.read_snapshot() as tx:
         return reads.federated_handle(tx, job_id)
+
+
+def _peer_status_of(service: ControllerServiceImpl, job_id: JobName) -> int:
+    """The ``peer_status`` GetJobStatus reports for ``job_id``."""
+    return service.get_job_status(
+        controller_pb2.Controller.GetJobStatusRequest(job_id=job_id.to_wire()), None
+    ).job.peer_status
 
 
 def _run_peer_task_to_success(peer_state: ControllerTestState, job_id: JobName) -> None:
@@ -196,15 +205,20 @@ def test_handoff_materializes_on_peer_and_syncs_back(tmp_path, log_client):
         assert len(query_tasks_for_job(peer_state, job_id)) == 1
         assert query_job(peer_state, job_id) is not None
 
+        # Before the first sync the parent knows the peer accepted the handoff but
+        # has no mirrored tasks yet: PEER_STATUS_ASSIGNED.
+        assert _peer_status_of(parent_service, job_id) == job_pb2.PEER_STATUS_ASSIGNED
+
         _run_peer_task_to_success(peer_state, job_id)
         manager.sync_once()
 
         # Parent's handle now mirrors the peer's terminal state and its task,
-        # tagged with the owning peer.
+        # tagged with the owning peer; the posture advances to PEER_STATUS_SYNCED.
         assert query_job(parent_state, job_id).state == job_pb2.JOB_STATE_SUCCEEDED
         (mirrored,) = query_tasks_for_job(parent_state, job_id)
         assert mirrored.state == job_pb2.TASK_STATE_SUCCEEDED
         assert mirrored.cluster == "cw"
+        assert _peer_status_of(parent_service, job_id) == job_pb2.PEER_STATUS_SYNCED
 
 
 def test_sync_mirrors_attempts_and_worker_identity_natively(tmp_path, log_client):
@@ -249,6 +263,46 @@ def test_sync_mirrors_attempts_and_worker_identity_natively(tmp_path, log_client
             assert reads.resolve_attempt_uids(tx, [AttemptUid(attempt_row.attempt_uid)]) == {}
 
 
+def test_sync_mirrors_submit_time_and_preemptions_faithfully(tmp_path, log_client):
+    """The mirror carries the peer's real submit time and preemption counter: a
+    not-yet-started federated task keeps the peer's submitted_at (not epoch 0 or
+    the started_at fallback), and a preemption on the peer shows up in the
+    mirrored row's counter."""
+    with ExitStack() as stack:
+        parent_service, parent_state = _make_service(stack, "parent", tmp_path, log_client)
+        peer_service, peer_state = _make_service(stack, "peer", tmp_path, log_client)
+        manager = _attach_federation(parent_service, _InProcessPeerConnection(peer_service))
+
+        request = _cluster_pinned_request("fed-timing")
+        request.max_retries_preemption = 1
+        response = parent_service.launch_job(request, None)
+        job_id = JobName.from_wire(response.job_id)
+
+        # Sync while the peer's task is still pending: no attempt has started,
+        # yet the peer's submit time survives the mirror (not epoch 0).
+        manager.sync_once()
+        (peer_task,) = query_tasks_for_job(peer_state, job_id)
+        (mirrored,) = query_tasks_for_job(parent_state, job_id)
+        assert peer_task.submitted_at_ms.epoch_ms() > 0
+        assert mirrored.submitted_at_ms == peer_task.submitted_at_ms
+        assert mirrored.started_at_ms is None
+
+        # One preemption (worker failure with budget to retry), then success, on
+        # the peer; the mirrored row carries the peer's real counter, not 0.
+        worker = register_worker(peer_state, "w1", "w1:8080", job_pb2.WorkerMetadata(hostname="w1"))
+        dispatch_task(peer_state, peer_task, worker)
+        transition_task(peer_state, peer_task.task_id, job_pb2.TASK_STATE_WORKER_FAILED)
+        (peer_task,) = query_tasks_for_job(peer_state, job_id)
+        assert peer_task.preemption_count == 1
+        dispatch_task(peer_state, peer_task, worker)
+        transition_task(peer_state, peer_task.task_id, job_pb2.TASK_STATE_SUCCEEDED)
+        manager.sync_once()
+
+        (mirrored,) = query_tasks_for_job(parent_state, job_id)
+        assert mirrored.state == job_pb2.TASK_STATE_SUCCEEDED
+        assert mirrored.preemption_count == 1
+
+
 def test_dashboard_reads_expose_cluster_and_filter_by_it(tmp_path, log_client):
     """The dashboard reads see a federated job: GetJobStatus stamps ``cluster``, and
     the ListJobs ``cluster`` filter isolates federated jobs from local ones."""
@@ -265,16 +319,19 @@ def test_dashboard_reads_expose_cluster_and_filter_by_it(tmp_path, log_client):
             controller_pb2.Controller.GetJobStatusRequest(job_id=fed.job_id), None
         ).job
         assert fed_status.cluster == "cw"
-        # Handed off but not yet reported on: the pending reason names the peer,
-        # not the local scheduler diagnostic (which never sees a federated job).
+        # Handed off but not yet reported on: the peer accepted the handoff but has
+        # mirrored no tasks, so the posture is ASSIGNED and the pending reason names
+        # the peer, not the local scheduler diagnostic (never sees a federated job).
+        assert fed_status.peer_status == job_pb2.PEER_STATUS_ASSIGNED
         assert fed_status.pending_reason == "Handed off to peer cw; awaiting first status report"
 
-        # A local job carries the reserved 'local' sentinel and keeps the local
-        # scheduler diagnostic.
+        # A local job carries the reserved 'local' sentinel, no peer posture, and
+        # keeps the local scheduler diagnostic.
         local_status = parent_service.get_job_status(
             controller_pb2.Controller.GetJobStatusRequest(job_id=local.job_id), None
         ).job
         assert local_status.cluster == LOCAL_CLUSTER
+        assert local_status.peer_status == job_pb2.PEER_STATUS_NONE
         assert "peer" not in local_status.pending_reason.lower()
 
         def _list(cluster: str) -> set[str]:
@@ -291,22 +348,65 @@ def test_dashboard_reads_expose_cluster_and_filter_by_it(tmp_path, log_client):
 
 
 def test_federated_pending_reason_reflects_awaiting_acceptance(tmp_path, log_client):
-    """While a handoff is undelivered (PENDING_HANDOFF), the pending reason says the
-    job is awaiting the peer's acceptance — distinguishing it from a handed-off job."""
+    """While a handoff is undelivered (PENDING_HANDOFF), the status RPCs expose the
+    pre-registration state: the posture says the peer has not accepted, the task
+    count is the requested replica count (there are no task rows yet), and the
+    pending reason says the job is awaiting the peer's acceptance — on both the
+    detail path and the batch-loading list path."""
     with ExitStack() as stack:
         parent_service, parent_state = _make_service(stack, "parent", tmp_path, log_client)
         peer_service, _ = _make_service(stack, "peer", tmp_path, log_client)
         _attach_federation(parent_service, _UnreachablePeerConnection(peer_service))
 
-        response = parent_service.launch_job(_cluster_pinned_request("awaiting-ack"), None)
-        assert _handle(parent_state, JobName.from_wire(response.job_id)).handoff_state == int(
-            HandoffState.PENDING_HANDOFF
-        )
+        response = parent_service.launch_job(_cluster_pinned_request("awaiting-ack", replicas=3), None)
+        job_id = JobName.from_wire(response.job_id)
+        assert _handle(parent_state, job_id).handoff_state == int(HandoffState.PENDING_HANDOFF)
+        assert query_tasks_for_job(parent_state, job_id) == []
 
         status = parent_service.get_job_status(
             controller_pb2.Controller.GetJobStatusRequest(job_id=response.job_id), None
         ).job
+        assert status.peer_status == job_pb2.PEER_STATUS_PENDING_SCHEDULING
+        assert status.task_count == 3
         assert status.pending_reason == "Awaiting acceptance by peer cw"
+
+        # The list path loads the handles in bulk and reports the same posture,
+        # count, and reason.
+        (listed,) = parent_service.list_jobs(
+            controller_pb2.Controller.ListJobsRequest(query=controller_pb2.Controller.JobQuery(cluster="cw")),
+            None,
+        ).jobs
+        assert listed.peer_status == job_pb2.PEER_STATUS_PENDING_SCHEDULING
+        assert listed.task_count == 3
+        assert listed.pending_reason == "Awaiting acceptance by peer cw"
+
+
+@pytest.mark.parametrize(
+    ("cluster", "handoff_state", "has_reported_tasks", "expected"),
+    [
+        # A local job is never a peer job, whatever the other inputs.
+        (LOCAL_CLUSTER, None, False, job_pb2.PEER_STATUS_NONE),
+        (LOCAL_CLUSTER, None, True, job_pb2.PEER_STATUS_NONE),
+        # Handed off, peer has not acked yet, nothing mirrored.
+        ("cw", int(HandoffState.PENDING_HANDOFF), False, job_pb2.PEER_STATUS_PENDING_SCHEDULING),
+        # Peer acked, but no task set mirrored back yet.
+        ("cw", int(HandoffState.HANDED_OFF), False, job_pb2.PEER_STATUS_ASSIGNED),
+        # Peer acked and its task set is mirrored.
+        ("cw", int(HandoffState.HANDED_OFF), True, job_pb2.PEER_STATUS_SYNCED),
+        # Mirrored tasks win over a stale PENDING_HANDOFF handle: the sync loop can
+        # mirror a job's state before a transient RPC failure lets mark_handed_off
+        # run, so tasks-present is the more current signal (never "awaiting peer").
+        ("cw", int(HandoffState.PENDING_HANDOFF), True, job_pb2.PEER_STATUS_SYNCED),
+        # Peer rejected the handoff (id collision); terminal.
+        ("cw", int(HandoffState.HANDOFF_REJECTED), False, job_pb2.PEER_STATUS_REJECTED),
+        # A missing handle (can't-happen for a live federated job) reads as handed off.
+        ("cw", None, False, job_pb2.PEER_STATUS_ASSIGNED),
+    ],
+)
+def test_peer_status_derivation(cluster, handoff_state, has_reported_tasks, expected):
+    """The full truth table of the PeerStatus derivation, including REJECTED and
+    the mirrored-tasks-beat-a-stale-PENDING_HANDOFF ordering."""
+    assert _peer_status(cluster, handoff_state, has_reported_tasks) == expected
 
 
 def test_cancel_routes_to_peer_and_tombstone_drops_the_handle(tmp_path, log_client):
