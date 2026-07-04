@@ -36,7 +36,7 @@ def _with_source_push_sharding(value, *parts):
     sharding = _source_push_out_sharding(*parts)
     if sharding is None:
         return value
-    return jax.lax.with_sharding_constraint(value, sharding)
+    return jax.sharding.reshard(value, sharding)
 
 
 @jax.tree_util.register_dataclass
