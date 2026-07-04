@@ -52,6 +52,14 @@ jobs:
         with:
           project_id: ${{ secrets.GCP_PROJECT_ID }}
 
+      # Print the (non-secret) service-account identity the runner authenticates
+      # as, so an Iris "Unauthorized" at the IAP edge can be triaged against the
+      # backend-service allowlist without guessing which SA the key belongs to.
+      - name: Print authenticated CI identity
+        shell: bash -l {0}
+        run: |
+          echo "Active gcloud account: $(gcloud auth list --filter=status:ACTIVE --format='value(account)')"
+
       - name: Install SSH key
         env:
           SSH_KEY: ${{ secrets.IRIS_CI_GCP_SSH_KEY }}
