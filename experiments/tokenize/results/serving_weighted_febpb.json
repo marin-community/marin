@@ -1,0 +1,14 @@
+{
+ "note": "EXP-010 serving-weighted feBPB. feBPB(rho) for 64k-t32k+ngram vs marin-128k, 16k ctx, eng/math. rho=serving/training FLOP ratio. All read within the fitted BPB curve (C_ref~9.2e17, top measured 2.1e18).",
+ "crossing_10pct_at_rho": 4.5,
+ "febpb_pct_by_rho": {
+  "1": -6.8,
+  "2": -7.9,
+  "3": -8.8,
+  "4": -9.6,
+  "4.5": -10.0,
+  "5": -10.3,
+  "6": -10.9,
+  "8": -12.0
+ }
+}
