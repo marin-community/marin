@@ -54,13 +54,21 @@ improvement over the stock Llama-3 tokenizer** for target grug-moe models.
 
 | arm | feBPB | vs marin | lever |
 |---|---|---|---|
-| **trained-superbpe-80k-t40k + n-gram** | **1.1584** | **−6.4%** | small-vocab superword + n-gram |
+| **trained-superbpe-64k-t32k** | **1.1564** | **−6.6%** | smaller-vocab superword (our mix) |
+| trained-superbpe-80k-t40k + n-gram | 1.1584 | −6.4% | small-vocab superword + n-gram |
 | trained-superbpe-80k-t40k | 1.1621 | −6.1% | small-vocab superword (our mix) |
 | gpt-neox-50k + n-gram | 1.1651 | −5.9% | small-vocab + n-gram (composed) |
 | superbpe-128k + n-gram | 1.1733 | −5.2% | superword + n-gram (composed) |
 | gpt-neox-50k | 1.1745 | −5.1% | small-vocab tokenizer |
 | superbpe-128k | 1.1794 | −4.7% | superword tokenizer |
 | marin-128k (Llama-3) | 1.2376 | ref | incumbent |
+
+**Vocab-size sweep (trained SuperBPE, the dominant lever)** — feBPB falls monotonically as vocab
+shrinks, and a plain small-vocab tokenizer now beats the best composition:
+160k **−2.8%** · 128k-t51k **−4.4%** · 80k-t40k **−6.1%** · **64k-t32k −6.6%**. The marginal gain
+tapers (128k→80k −1.7%, 80k→64k −0.5%), so the optimum is near here; a 48k/40k/32k sweep is
+running to locate the floor. Below the floor, coverage collapses and BPB rises (gpt-neox plain BPE
+at 50k is only −5.1% — the superword mechanism is what lets 64k stay ahead).
 
 **n-gram composition matrix** (feBPB the n-gram adds on each base tokenizer, ratio 0.25):
 marin +0.0% (washes out by s8000) · superbpe-128k **−0.5%** · gpt-neox-50k **−0.8%** · 80k-t40k

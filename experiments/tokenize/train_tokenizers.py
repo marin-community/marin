@@ -92,6 +92,9 @@ TRAIN_SPECS: tuple[TrainSpec, ...] = (
     TrainSpec("trained-superbpe-160k-t64k", TokenizerKind.SUPERBPE, 160_000, 64_000),
     TrainSpec("trained-superbpe-160k-t128k", TokenizerKind.SUPERBPE, 160_000, 128_000),
     TrainSpec("trained-superbpe-64k-t32k", TokenizerKind.SUPERBPE, 64_000, 32_000),
+    TrainSpec("trained-superbpe-48k-t24k", TokenizerKind.SUPERBPE, 48_000, 24_000),
+    TrainSpec("trained-superbpe-40k-t20k", TokenizerKind.SUPERBPE, 40_000, 20_000),
+    TrainSpec("trained-superbpe-32k-t16k", TokenizerKind.SUPERBPE, 32_000, 16_000),
     TrainSpec("trained-superbpe-80k-t40k", TokenizerKind.SUPERBPE, 80_000, 40_000),
 )
 

@@ -117,6 +117,27 @@ TRAINED_SUPERBPE_ARMS: tuple[TokenizerArm, ...] = (
         "trained SuperBPE, t/vocab=32k/64k",
     ),
     TokenizerArm(
+        "trained-superbpe-48k-t24k",
+        "trained/trained-superbpe-48k-t24k",
+        48_001,
+        Axis.SUPERBPE,
+        "trained SuperBPE, t/vocab=24k/48k",
+    ),
+    TokenizerArm(
+        "trained-superbpe-40k-t20k",
+        "trained/trained-superbpe-40k-t20k",
+        40_001,
+        Axis.SUPERBPE,
+        "trained SuperBPE, t/vocab=20k/40k",
+    ),
+    TokenizerArm(
+        "trained-superbpe-32k-t16k",
+        "trained/trained-superbpe-32k-t16k",
+        32_001,
+        Axis.SUPERBPE,
+        "trained SuperBPE, t/vocab=16k/32k",
+    ),
+    TokenizerArm(
         "trained-superbpe-80k-t40k",
         "trained/trained-superbpe-80k-t40k",
         80_001,
