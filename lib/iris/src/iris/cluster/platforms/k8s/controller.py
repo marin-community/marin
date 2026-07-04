@@ -125,6 +125,9 @@ def _build_controller_deployment(
     node_selector: dict[str, str],
     task_env_secret: bool = False,
     fresh: bool = False,
+    state_mount_path: str = "/var/cache/iris/controller",
+    local_state_hostpath: bool = False,
+    checkpoint_interval_seconds: float = 0,
 ) -> dict:
     """Build the controller Deployment manifest as a dict."""
     # Reserve controller CPU/memory so Kubernetes doesn't classify this Pod
@@ -133,11 +136,12 @@ def _build_controller_deployment(
         "requests": {"cpu": _CONTROLLER_CPU_REQUEST, "memory": _CONTROLLER_MEMORY_REQUEST},
         "limits": {"cpu": _CONTROLLER_CPU_REQUEST, "memory": _CONTROLLER_MEMORY_REQUEST},
     }
-    # The controller SQLite DB lives on a PersistentVolumeClaim, so two
-    # controller pods must never mount the same local state dir at once. We
-    # guarantee that by tearing the old Deployment down and waiting for it to
-    # fully disappear before applying the new one (see start_controller); the
-    # Recreate strategy is belt-and-suspenders for any in-place apply path.
+    # The controller SQLite DB lives on a PersistentVolumeClaim (or, with
+    # local_state_hostpath, a node-local directory), so two controller pods
+    # must never mount the same local state dir at once. We guarantee that by
+    # tearing the old Deployment down and waiting for it to fully disappear
+    # before applying the new one (see start_controller); the Recreate
+    # strategy is belt-and-suspenders for any in-place apply path.
     deploy_spec: dict = {
         "replicas": 1,
         "selector": {"matchLabels": {"app": "iris-controller"}},
@@ -171,6 +175,11 @@ def _build_controller_deployment(
                             f"--port={port}",
                             "--config=/etc/iris/config.json",
                             *(["--fresh"] if fresh else []),
+                            *(
+                                [f"--checkpoint-interval={checkpoint_interval_seconds}"]
+                                if checkpoint_interval_seconds
+                                else []
+                            ),
                         ],
                         "ports": [{"containerPort": port}],
                         # The cluster default env (S3 storage auth + operator-injected
@@ -185,7 +194,7 @@ def _build_controller_deployment(
                         "resources": controller_resources,
                         "volumeMounts": [
                             {"name": "config", "mountPath": "/etc/iris", "readOnly": True},
-                            {"name": "local-state", "mountPath": "/var/cache/iris/controller"},
+                            {"name": "local-state", "mountPath": state_mount_path},
                         ],
                         "readinessProbe": {
                             "httpGet": {"path": "/health", "port": port},
@@ -196,15 +205,25 @@ def _build_controller_deployment(
                             "httpGet": {"path": "/health", "port": port},
                             "initialDelaySeconds": 30,
                             "periodSeconds": 30,
+                            # Default 1s is tight for a Python/GIL process under a burst
+                            # of concurrent RPC handlers; give it headroom so a transient
+                            # scheduling hiccup doesn't trip a hard kubelet SIGKILL. A
+                            # genuinely wedged controller is still caught within
+                            # periodSeconds * failureThreshold.
+                            "timeoutSeconds": 5,
                         },
                     },
                 ],
                 "volumes": [
                     {"name": "config", "configMap": {"name": "iris-cluster-config"}},
-                    {
-                        "name": "local-state",
-                        "persistentVolumeClaim": {"claimName": _CONTROLLER_STATE_PVC_NAME},
-                    },
+                    (
+                        {"name": "local-state", "hostPath": {"path": state_mount_path, "type": "DirectoryOrCreate"}}
+                        if local_state_hostpath
+                        else {
+                            "name": "local-state",
+                            "persistentVolumeClaim": {"claimName": _CONTROLLER_STATE_PVC_NAME},
+                        }
+                    ),
                 ],
             },
         },
@@ -368,6 +387,23 @@ class K8sControllerProvider:
                 f"{list(config.scale_groups.keys())}"
             )
 
+        state_mount_path = config.storage.local_state_dir or "/var/cache/iris/controller"
+        if cw.local_state_hostpath:
+            if not config.storage.local_state_dir:
+                raise InfraError(
+                    "controller.coreweave.local_state_hostpath requires storage.local_state_dir "
+                    "to be set explicitly (the node-local path to mount, e.g. /mnt/local/iris-controller-state)"
+                )
+            max_slices = config.scale_groups[cw.scale_group].max_slices
+            if max_slices != 1:
+                raise InfraError(
+                    f"controller.coreweave.local_state_hostpath requires scale_group {cw.scale_group!r} "
+                    f"to have max_slices == 1 (got {max_slices}): a controller pod rescheduled onto a "
+                    "different node in a multi-node pool would find that node's hostPath dir empty (fine, "
+                    "restores from checkpoint) but a pod rescheduled BACK onto a node it previously ran on "
+                    "would find its own stale local DB and skip the restore, resurrecting out-of-date state."
+                )
+
         self.ensure_rbac()
 
         # Build the cluster default env and project it into the controller and
@@ -395,8 +431,11 @@ class K8sControllerProvider:
         self.ensure_nodepools(config)
         self.ensure_kueue_queues(config)
         self.ensure_priority_classes()
-        self._kubectl.apply_json(_build_controller_state_pvc(namespace=self._namespace))
-        logger.info("PersistentVolumeClaim %s applied", _CONTROLLER_STATE_PVC_NAME)
+        if cw.local_state_hostpath:
+            logger.info("controller local state uses node-local hostPath %s (no PVC)", state_mount_path)
+        else:
+            self._kubectl.apply_json(_build_controller_state_pvc(namespace=self._namespace))
+            logger.info("PersistentVolumeClaim %s applied", _CONTROLLER_STATE_PVC_NAME)
 
         deploy_kwargs = dict(
             namespace=self._namespace,
@@ -404,6 +443,9 @@ class K8sControllerProvider:
             port=port,
             node_selector={self._iris_labels.iris_scale_group: cw.scale_group},
             task_env_secret=projects_task_env_secret(config),
+            state_mount_path=state_mount_path,
+            local_state_hostpath=cw.local_state_hostpath,
+            checkpoint_interval_seconds=config.controller.checkpoint_interval_seconds,
         )
         deploy_manifest = _build_controller_deployment(**deploy_kwargs, fresh=fresh)
         # Always stop the old controller before starting the new one. The

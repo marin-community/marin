@@ -216,6 +216,58 @@ def test_start_controller_creates_all_resources():
     provider.shutdown()
 
 
+def test_start_controller_local_state_hostpath_skips_pvc():
+    """local_state_hostpath mounts a hostPath volume at storage.local_state_dir and creates no PVC."""
+    provider, k8s = _make_provider()
+    cluster_config = _make_cluster_config(remote_state_dir="s3://test-bucket/bundles")
+    cluster_config.storage.local_state_dir = "/mnt/local/iris-controller-state"
+    cluster_config.controller.coreweave.local_state_hostpath = True
+    cluster_config.scale_groups[cluster_config.controller.coreweave.scale_group].max_slices = 1
+
+    t = threading.Thread(target=_auto_ready_deployment, args=(k8s, "iris-controller"), daemon=True)
+    t.start()
+
+    provider.start_controller(cluster_config)
+
+    assert k8s.get_json(K8sResource.PERSISTENT_VOLUME_CLAIMS, _CONTROLLER_STATE_PVC_NAME) is None
+    dep = k8s.get_json(K8sResource.DEPLOYMENTS, "iris-controller")
+    spec = dep["spec"]["template"]["spec"]
+    container = spec["containers"][0]
+    assert {"name": "local-state", "mountPath": "/mnt/local/iris-controller-state"} in container["volumeMounts"]
+    assert {
+        "name": "local-state",
+        "hostPath": {"path": "/mnt/local/iris-controller-state", "type": "DirectoryOrCreate"},
+    } in spec["volumes"]
+
+    t.join(timeout=5)
+    provider.shutdown()
+
+
+def test_start_controller_local_state_hostpath_requires_local_state_dir():
+    """local_state_hostpath without storage.local_state_dir set fails fast — there's no path to mount."""
+    provider, _ = _make_provider()
+    cluster_config = _make_cluster_config()
+    cluster_config.controller.coreweave.local_state_hostpath = True
+    cluster_config.scale_groups[cluster_config.controller.coreweave.scale_group].max_slices = 1
+
+    with pytest.raises(InfraError, match="storage\\.local_state_dir"):
+        provider.start_controller(cluster_config)
+    provider.shutdown()
+
+
+def test_start_controller_local_state_hostpath_requires_single_slice():
+    """local_state_hostpath on a multi-node scale group risks reviving stale state on reschedule."""
+    provider, _ = _make_provider()
+    cluster_config = _make_cluster_config()
+    cluster_config.storage.local_state_dir = "/mnt/local/iris-controller-state"
+    cluster_config.controller.coreweave.local_state_hostpath = True
+    cluster_config.scale_groups[cluster_config.controller.coreweave.scale_group].max_slices = 10
+
+    with pytest.raises(InfraError, match="max_slices == 1"):
+        provider.start_controller(cluster_config)
+    provider.shutdown()
+
+
 def test_start_controller_injects_operator_env(monkeypatch):
     """inject_env writes the iris-task-env Secret and wires the controller envFrom."""
     monkeypatch.setenv("WANDB_API_KEY", "wb-secret")
