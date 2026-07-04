@@ -264,16 +264,14 @@ class Fp8RaggedDotOp(OverwriteWithGradient):
     non-uniform ``group_sizes`` (each expert may receive a different number of
     tokens), then dequantizes the result.
 
-    The input gradient (grad_lhs) runs on the FP8 tensor cores: the output gradient
-    is quantized to ``rev_dtype`` with delayed scaling and contracted against the
-    pre-cast natural weight layout as a mixed ``e5m2 x e4m3`` ``wgmma``
-    contraction. The weight gradient (grad_rhs) stays **bf16**
-    (numerically exact) via the bf16 ``ragged_dot`` Triton kernel; FP8 weight
-    gradient is a follow-up. All state (per-tensor scale + amax history for the
-    input, kernel, and output gradient) is carried as [OverwriteWithGradient][] so
-    it threads through ``partition_for_grad_overwrite`` / ``apply_updates`` and
-    stays out of the optimizer/EMA state; the output-gradient scale + amax history
-    now update from the gradient magnitudes each step.
+    Both gradients run on the FP8 tensor cores: the output gradient is quantized to
+    ``rev_dtype`` with delayed scaling and contracted against the pre-cast natural
+    weight layout (grad_lhs), and the pre-cast transposed activation and transposed
+    output gradient are contracted for grad_rhs via ``mgpu_dwgrad``.  All state
+    (per-tensor scale + amax history for the input, kernel, and output gradient) is
+    carried as [OverwriteWithGradient][] so it threads through
+    ``partition_for_grad_overwrite`` / ``apply_updates`` and stays out of the
+    optimizer/EMA state.
 
     The FP8 fast path is a Mosaic-GPU ``wgmma`` kernel and therefore requires
     Hopper (SM90). Ports of this recipe to other architectures should plug in
@@ -283,12 +281,12 @@ class Fp8RaggedDotOp(OverwriteWithGradient):
     state) is a new op class.
 
     Like [Fp8DotGeneralOp][], ``rev_dtype`` defaults to E5M2 -- the numerically
-    correct output-gradient dtype -- so the backward GEMMs run as mixed
-    ``e5m2 x e4m3`` contractions once they move to FP8.  Mixed-dtype ``wgmma``
-    requires jax/jaxlib >= 0.11.0 (jax-ml/jax#38859); ``init`` fails fast on
-    older jax.  Passing ``rev_dtype=jnp.float8_e4m3fn`` recovers a uniform
-    backward that lowers on jax 0.10.x (an approximation: E4M3 trades dynamic
-    range for mantissa on the output gradient).
+    correct output-gradient dtype -- so both backward GEMMs are genuine mixed
+    ``e5m2 x e4m3`` contractions on the FP8 tensor cores.  Mixed-dtype
+    ``wgmma`` requires jax/jaxlib >= 0.11.0 (jax-ml/jax#38859); ``init``
+    fails fast on older jax.  Passing ``rev_dtype=jnp.float8_e4m3fn`` recovers
+    a uniform backward that lowers on jax 0.10.x (an approximation: E4M3
+    trades dynamic range for mantissa on the output gradient).
     """
 
     input_scale: jnp.ndarray
