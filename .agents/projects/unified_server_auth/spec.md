@@ -20,12 +20,20 @@ One signing key removes the incidental plane isolation a *dedicated* symmetric
 minted token carries an `aud` naming exactly one plane, and every verifier
 **requires** its expected `aud`:
 
-| Token | `iss` | `aud` | `scope` | TTL | Verified by |
+| Token | `iss` | `aud` | other claims | TTL | Verified by |
 |---|---|---|---|---|---|
-| control-plane (user/worker) | `<cluster>` | `iris` | — | ≤30d | **only** the issuing controller |
-| delegation (relay→global finelog) | `<cluster>` | `finelog` | — | ≤1h | any federated finelog |
-| endpoint / `/proxy` | `<cluster>` | `<endpoint>` | `proxy` | ≤24h | the `/proxy` gate |
+| control-plane (user/worker) | `<cluster>` | `iris` | `role`, `jti` | ≤30d | **only** the issuing controller |
+| delegation (relay→global finelog) | `<cluster>` | `finelog` | `role="finelog-relay"` | ≤1h | any federated finelog |
+| endpoint / `/proxy` | `<cluster>` | `iris-proxy` | `scope="proxy"`, `endpoint=<name>` | ≤24h | the `/proxy` gate |
 | peer (controller A→B) | `<cluster-a>` | `iris-peer` | — | short | peer controller B |
+
+The `aud` names the recipient **plane** — a bounded, static set — not a per-resource
+value (RFC 8725). So an endpoint token's `aud` is the fixed `iris-proxy`, and the
+specific endpoint goes in an `endpoint` claim the `/proxy` gate matches against the
+resolved route (`dashboard.py:117`). This lets the iris control-plane verifier carry
+a *fixed* `expected_audiences = {"iris", "iris-proxy"}` — enumerating the dynamic set
+of endpoint names would be impossible — while still rejecting a `finelog` /
+`iris-peer` token replayed at the RPC surface (the load-bearing cross-service guard).
 
 - **Revocation is local, so remote verifiers only ever see short-TTL, plane-scoped
   tokens.** The jti revocation set lives in the issuing controller's DB and can't
