@@ -191,9 +191,24 @@ budget. Best composed arm: **80k-t40k + n-gram = −6.4%** — the best measured
   activations exceed 8×H100. Fixed by running the n-gram arm on **2 GPU replicas** (16 GPUs,
   `scratchpad/relaunch_w2048_ngram_2rep.py`, `-r3`); levanter's `train_batch_size` is global, so
   2 replicas only add sharding headroom and stay a fair comparison to the 1-replica hidden-2048 base.
-- **Result / Conclusion**: _pending_ — compare the hidden-2048 Δ(ngram−base) to the hidden-1024 Δ
-  (−0.4% at this same config). A larger negative Δ = the lever scales with model size (the paper's
-  claim, and the basis for extrapolating value to the 20B-activated target).
+- **Result (fixed rank-128 n-gram)** — the benefit **shrinks**, not grows, with model scale:
+
+  | | hidden-1024 s3500 | hidden-2048 s3500 |
+  |---|---|---|
+  | base BPB | 1.2376 | 1.1833 |
+  | +n-gram (rank 128, ratio 0.25) | 1.2328 | 1.1837 |
+  | **Δ** | **−0.0048 (−0.39%)** | **+0.0004 (+0.03%, neutral)** |
+
+- **Confound + follow-up (EXP-007b)**: this held the n-gram sub-dim (`rank=128`) fixed across scales,
+  while the paper *scales* sub-dim with hidden size — a rank-128 bottleneck may be too narrow to
+  inject signal into a 4×-wider model. Running the paper-faithful test now: **rank 256** at
+  hidden-2048 (scaling 128→256 with hidden 1024→2048), `grug-w2048-ngram256-marin-128k-s{3500,8000}`,
+  2 replicas. If rank-256 recovers the −0.4% that rank-128 gave at hidden-1024, the n-gram scales;
+  if it stays neutral, it genuinely does not help these flash-scale models regardless of sizing.
+  Note the n-gram tables are already ~3 B params (4M buckets × rank × 6) — several× the proxy
+  model — so the lever is *not* param-starved; the open question is purely the injection width.
+  (Infra: the 1-replica base hung on a controller disconnect after ~5 h; killed and rerun at 2
+  replicas.)
 
 ## EXP-005 — n-gram stacked on superbpe-128k (the composed lever) ✅
 
