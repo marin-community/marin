@@ -60,6 +60,9 @@ _KUBECTL_TIMEOUT = 1800.0
 _CONTROLLER_CPU_REQUEST = "4"
 _CONTROLLER_MEMORY_REQUEST = "16Gi"
 _CONTROLLER_STATE_PVC_NAME = "iris-controller-state"
+# Must match main.py's LOCAL_STATE_DIR_DEFAULT — the path the controller
+# process falls back to when storage.local_state_dir is unset.
+_DEFAULT_STATE_MOUNT_PATH = "/var/cache/iris/controller"
 _CONTROLLER_STATE_PVC_SIZE = "50Gi"
 
 
@@ -125,7 +128,7 @@ def _build_controller_deployment(
     node_selector: dict[str, str],
     task_env_secret: bool = False,
     fresh: bool = False,
-    state_mount_path: str = "/var/cache/iris/controller",
+    state_mount_path: str = _DEFAULT_STATE_MOUNT_PATH,
     local_state_hostpath: bool = False,
     checkpoint_interval_seconds: float = 0,
 ) -> dict:
@@ -387,7 +390,7 @@ class K8sControllerProvider:
                 f"{list(config.scale_groups.keys())}"
             )
 
-        state_mount_path = config.storage.local_state_dir or "/var/cache/iris/controller"
+        state_mount_path = config.storage.local_state_dir or _DEFAULT_STATE_MOUNT_PATH
         if cw.local_state_hostpath:
             if not config.storage.local_state_dir:
                 raise InfraError(
