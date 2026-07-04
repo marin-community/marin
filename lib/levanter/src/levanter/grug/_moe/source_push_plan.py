@@ -560,6 +560,37 @@ def source_push_combine_preweighted(
     return jnp.asarray(np.sum(route_buffer, axis=2))
 
 
+def source_push_recv_route_weights(
+    route_weights: Float[Array, "S T K"],
+    plan: SourcePushPlan,
+) -> Float[Array, "Dst Src Q M"]:
+    """Gather live route weights into destination receive order."""
+
+    route_weights_host = np.asarray(jax.device_get(route_weights))
+    token_ids = np.asarray(jax.device_get(plan.token_ids), dtype=np.int32)
+    route_slots = np.asarray(jax.device_get(plan.route_slots), dtype=np.int32)
+    valid_mask = np.asarray(jax.device_get(plan.valid_mask), dtype=np.bool_)
+    if route_weights_host.ndim != 3:
+        raise ValueError(f"route_weights must have shape [src, token, topk], got {route_weights_host.shape}")
+    if route_weights_host.shape[0] != valid_mask.shape[0]:
+        raise ValueError(
+            f"route_weights source dim {route_weights_host.shape[0]} must match plan ep_size {valid_mask.shape[0]}"
+        )
+
+    recv_weights = np.zeros(
+        (valid_mask.shape[1], valid_mask.shape[0], *valid_mask.shape[2:]), dtype=route_weights_host.dtype
+    )
+    for src in range(valid_mask.shape[0]):
+        for dst_ord in range(valid_mask.shape[1]):
+            dst = (src + dst_ord) % valid_mask.shape[1]
+            recv_ord = recv_src_ordinal(dst, src, valid_mask.shape[1])
+            rows = valid_mask[src, dst_ord]
+            tokens = token_ids[src, dst_ord]
+            slots = route_slots[src, dst_ord]
+            recv_weights[dst, recv_ord][rows] = route_weights_host[src, tokens[rows], slots[rows]]
+    return jnp.asarray(recv_weights)
+
+
 def _expert_capacity_for_source_bases(plan: SourcePushPlan, src_base_by_expert: np.ndarray) -> int:
     valid_mask = np.asarray(jax.device_get(plan.valid_mask), dtype=np.bool_)
     local_experts = np.asarray(jax.device_get(plan.local_experts), dtype=np.int32)

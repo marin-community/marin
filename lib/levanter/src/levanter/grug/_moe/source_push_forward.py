@@ -54,6 +54,7 @@ from levanter.grug._moe.source_push_inbox import (
     _routing_counts,
     _selected_experts_from_counts,
     _sharded_kernel,
+    _sharded_w13_h_kernel,
     _source_padded_plan_send_meta,
     _time_jitted,
 )
@@ -63,12 +64,14 @@ from levanter.grug._moe.source_push_plan import (
     pack_source_push_tokens,
     source_push_combine,
     source_push_combine_preweighted,
+    source_push_recv_route_weights,
     source_push_w13_h,
     source_push_w2_from_h_return,
     source_push_source_padded_row_bases,
     source_push_w2_return,
 )
 from levanter.grug._moe.source_push_w2_return import (
+    _sharded_w2_from_h_return_direct_to_source_kernel,
     _sharded_w2_return_direct_to_source_kernel,
     make_w_down,
     validate_w2_return_config,
@@ -133,6 +136,7 @@ class SourcePushForwardHostInputs:
     queue_dst_ord: np.ndarray
     queue_entry: np.ndarray
     queue_row: np.ndarray
+    recv_route_weights: np.ndarray
     route_combine_weights: np.ndarray
     route_valid_mask: np.ndarray
     plan: SourcePushPlan
@@ -165,6 +169,7 @@ class SourcePushForwardDeviceInputs:
     queue_dst_ord: jax.Array
     queue_entry: jax.Array
     queue_row: jax.Array
+    recv_route_weights: jax.Array
     route_combine_weights: jax.Array
     route_valid_mask: jax.Array
     queue_stats: dict[str, Any]
@@ -229,6 +234,7 @@ def make_source_push_forward_inputs(
         config,
         plan,
         packed_x,
+        combine_host,
         w_gate_up_host,
         w_down_host,
         input_mode=input_mode,
@@ -291,6 +297,7 @@ def _make_source_push_forward_inputs_from_plan(
     config: PushInboxConfig,
     plan: SourcePushPlan,
     packed_x: np.ndarray,
+    route_weights: np.ndarray,
     w_gate_up: np.ndarray,
     w_down: np.ndarray,
     *,
@@ -320,6 +327,10 @@ def _make_source_push_forward_inputs_from_plan(
         row_layout = ROW_LAYOUT_SOURCE_PADDED_EXPERT_MAJOR
         layout_rows_total = int(np.sum(rounded_counts))
     route_inverse = _make_route_inverse(config, plan)
+    recv_route_weights = np.asarray(
+        source_push_recv_route_weights(jnp.asarray(route_weights, dtype=jnp.float32), plan),
+        dtype=np.float32,
+    )
     valid_mask = np.asarray(jax.device_get(plan.valid_mask), dtype=np.bool_)
     queue_stats = _queue_stats(config, send_meta)
     combine_stats = _combine_queue_stats(config, valid_mask, int(jax.device_get(plan.dropped_routes)))
@@ -353,6 +364,7 @@ def _make_source_push_forward_inputs_from_plan(
         queue_dst_ord=route_inverse["queue_dst_ord"],
         queue_entry=route_inverse["queue_entry"],
         queue_row=route_inverse["queue_row"],
+        recv_route_weights=recv_route_weights,
         route_combine_weights=route_inverse["route_combine_weights"],
         route_valid_mask=route_inverse["route_valid_mask"],
         plan=plan,
@@ -424,6 +436,7 @@ def device_source_push_forward_inputs_from_host(
         queue_dst_ord=jnp.asarray(host_inputs.queue_dst_ord, dtype=jnp.int32),
         queue_entry=jnp.asarray(host_inputs.queue_entry, dtype=jnp.int32),
         queue_row=jnp.asarray(host_inputs.queue_row, dtype=jnp.int32),
+        recv_route_weights=jnp.asarray(host_inputs.recv_route_weights, dtype=jnp.bfloat16),
         route_combine_weights=jnp.asarray(host_inputs.route_combine_weights, dtype=jnp.bfloat16),
         route_valid_mask=jnp.asarray(host_inputs.route_valid_mask, dtype=jnp.bool_),
         queue_stats=host_inputs.queue_stats,
@@ -573,6 +586,62 @@ def _sharded_source_push_forward_kernel(mesh: Mesh, config: PushInboxConfig, *, 
     return fn
 
 
+def _sharded_source_push_forward_h_kernel(
+    mesh: Mesh, config: PushInboxConfig, *, use_exact_expert_major: bool = False
+):
+    w13_h_kernel = _sharded_w13_h_kernel(mesh, config, use_exact_expert_major=use_exact_expert_major)
+    w2_from_h_kernel = _sharded_w2_from_h_return_direct_to_source_kernel(
+        mesh,
+        config,
+        use_exact_expert_major=use_exact_expert_major,
+    )
+    remote_write_barrier = _sharded_remote_write_completion_barrier(mesh)
+    combine_kernel = _sharded_source_combine_kernel(mesh, config)
+
+    def fn(
+        x: Float[Array, "S DST Q M D"],
+        send_meta: Int[Array, "S DST Q F"],
+        recv_meta: Int[Array, "Dst SRC Q F"],
+        expert_base: Int[Array, "Dst E"],
+        src_base_by_expert: Int[Array, "Dst S E"],
+        w_gate_up: Float[Array, "Dst E D twoI"],
+        recv_route_weights: Float[Array, "Dst SRC Q M"],
+        w_down: Float[Array, "Dst E I D"],
+        queue_dst_ord: Int[Array, "S T K"],
+        queue_entry: Int[Array, "S T K"],
+        queue_row: Int[Array, "S T K"],
+        route_combine_weights: Float[Array, "S T K"],
+        route_valid_mask: Bool[Array, "S T K"],
+    ):
+        _, h = w13_h_kernel(
+            x,
+            send_meta,
+            recv_meta,
+            expert_base,
+            src_base_by_expert,
+            w_gate_up,
+        )
+        source_return = w2_from_h_kernel(
+            h,
+            recv_route_weights,
+            recv_meta,
+            expert_base,
+            src_base_by_expert,
+            w_down,
+        )
+        source_return = remote_write_barrier(source_return)
+        return combine_kernel(
+            source_return,
+            queue_dst_ord,
+            queue_entry,
+            queue_row,
+            jnp.ones_like(route_combine_weights),
+            route_valid_mask,
+        )
+
+    return fn
+
+
 def _sharded_remote_write_completion_barrier(mesh: Mesh):
     """Synchronize ranks after return-copy remote writes before source-local reads."""
 
@@ -628,6 +697,7 @@ def _shard_source_push_forward_inputs(
         queue_dst_ord=jax.device_put(inputs.queue_dst_ord, NamedSharding(mesh, P(AXIS, None, None))),
         queue_entry=jax.device_put(inputs.queue_entry, NamedSharding(mesh, P(AXIS, None, None))),
         queue_row=jax.device_put(inputs.queue_row, NamedSharding(mesh, P(AXIS, None, None))),
+        recv_route_weights=jax.device_put(inputs.recv_route_weights, NamedSharding(mesh, P(AXIS, None, None, None))),
         route_combine_weights=jax.device_put(
             inputs.route_combine_weights,
             NamedSharding(mesh, P(AXIS, None, None)),
@@ -646,16 +716,16 @@ def _call_source_push_forward_device_inputs(
     execution_mode: str,
 ) -> Float[Array, "S T D"]:
     if execution_mode == FORWARD_EXECUTION_STAGED_HOST_SYNC:
-        w13_fn = jax.jit(_sharded_kernel(mesh, config, use_exact_expert_major=inputs.use_exact_expert_major))
-        w2_return_fn = jax.jit(
-            _sharded_w2_return_direct_to_source_kernel(
+        w13_h_fn = jax.jit(_sharded_w13_h_kernel(mesh, config, use_exact_expert_major=inputs.use_exact_expert_major))
+        w2_from_h_return_fn = jax.jit(
+            _sharded_w2_from_h_return_direct_to_source_kernel(
                 mesh,
                 config,
                 use_exact_expert_major=inputs.use_exact_expert_major,
             )
         )
         combine_fn = jax.jit(_sharded_source_combine_kernel(mesh, config))
-        _, hidden = w13_fn(
+        _, h = w13_h_fn(
             inputs.x,
             inputs.send_meta,
             inputs.recv_meta,
@@ -663,9 +733,10 @@ def _call_source_push_forward_device_inputs(
             inputs.src_base_by_expert,
             inputs.w_gate_up,
         )
-        _block_until_ready(hidden)
-        source_return = w2_return_fn(
-            hidden,
+        _block_until_ready(h)
+        source_return = w2_from_h_return_fn(
+            h,
+            inputs.recv_route_weights,
             inputs.recv_meta,
             inputs.expert_base,
             inputs.src_base_by_expert,
@@ -677,12 +748,12 @@ def _call_source_push_forward_device_inputs(
             inputs.queue_dst_ord,
             inputs.queue_entry,
             inputs.queue_row,
-            inputs.route_combine_weights,
+            jnp.ones_like(inputs.route_combine_weights),
             inputs.route_valid_mask,
         )
 
     fn = jax.jit(
-        _sharded_source_push_forward_kernel(mesh, config, use_exact_expert_major=inputs.use_exact_expert_major)
+        _sharded_source_push_forward_h_kernel(mesh, config, use_exact_expert_major=inputs.use_exact_expert_major)
     )
     return fn(
         inputs.x,
@@ -691,6 +762,7 @@ def _call_source_push_forward_device_inputs(
         inputs.expert_base,
         inputs.src_base_by_expert,
         inputs.w_gate_up,
+        inputs.recv_route_weights,
         inputs.w_down,
         inputs.queue_dst_ord,
         inputs.queue_entry,
@@ -709,6 +781,7 @@ def _time_staged_source_push_forward(
     expert_base: jax.Array,
     src_base_by_expert: jax.Array,
     w_gate_up: jax.Array,
+    recv_route_weights: jax.Array,
     w_down: jax.Array,
     queue_dst_ord: jax.Array,
     queue_entry: jax.Array,
@@ -724,9 +797,9 @@ def _time_staged_source_push_forward(
 ) -> SourcePushForwardTiming:
     """Run full forward as three host-synchronized JIT stages for ordering diagnostics."""
 
-    w13_fn = jax.jit(_sharded_kernel(mesh, config, use_exact_expert_major=use_exact_expert_major))
-    w2_return_fn = jax.jit(
-        _sharded_w2_return_direct_to_source_kernel(
+    w13_h_fn = jax.jit(_sharded_w13_h_kernel(mesh, config, use_exact_expert_major=use_exact_expert_major))
+    w2_from_h_return_fn = jax.jit(
+        _sharded_w2_from_h_return_direct_to_source_kernel(
             mesh,
             config,
             use_exact_expert_major=use_exact_expert_major,
@@ -738,7 +811,7 @@ def _time_staged_source_push_forward(
         stage_times: dict[str, float] = {}
 
         stage_start = time.perf_counter()
-        _, hidden = w13_fn(
+        _, h = w13_h_fn(
             x,
             send_meta,
             recv_meta,
@@ -746,12 +819,12 @@ def _time_staged_source_push_forward(
             src_base_by_expert,
             w_gate_up,
         )
-        _block_until_ready(hidden)
+        _block_until_ready(h)
         if record_stage_times:
             stage_times[FORWARD_STAGE_W13] = time.perf_counter() - stage_start
 
         stage_start = time.perf_counter()
-        source_return = w2_return_fn(hidden, recv_meta, expert_base, src_base_by_expert, w_down)
+        source_return = w2_from_h_return_fn(h, recv_route_weights, recv_meta, expert_base, src_base_by_expert, w_down)
         _block_until_ready(source_return)
         if record_stage_times:
             stage_times[FORWARD_STAGE_W2_RETURN] = time.perf_counter() - stage_start
@@ -762,7 +835,7 @@ def _time_staged_source_push_forward(
             queue_dst_ord,
             queue_entry,
             queue_row,
-            route_combine_weights,
+            jnp.ones_like(route_combine_weights),
             route_valid_mask,
         )
         _block_until_ready(out)
@@ -826,7 +899,7 @@ def _validate_source_push_forward(
     host_inputs: SourcePushForwardHostInputs,
     observed: jax.Array,
 ) -> SourcePushForwardValidationMetrics:
-    expected = reference_source_push_forward(config, host_inputs)
+    expected = reference_source_push_forward_h(config, host_inputs)
     expected_host = np.asarray(jax.device_get(expected), dtype=np.float32)
     observed_host = np.asarray(jax.device_get(observed), dtype=np.float32)
     diff = np.abs(observed_host - expected_host)
@@ -864,6 +937,7 @@ def _run_forward_one(
         expert_base = inputs.expert_base
         src_base_by_expert = inputs.src_base_by_expert
         w_gate_up = inputs.w_gate_up
+        recv_route_weights = inputs.recv_route_weights
         w_down = inputs.w_down
         queue_dst_ord = inputs.queue_dst_ord
         queue_entry = inputs.queue_entry
@@ -881,6 +955,7 @@ def _run_forward_one(
                 expert_base,
                 src_base_by_expert,
                 w_gate_up,
+                recv_route_weights,
                 w_down,
                 queue_dst_ord,
                 queue_entry,
@@ -895,7 +970,7 @@ def _run_forward_one(
             )
         else:
             fn = jax.jit(
-                _sharded_source_push_forward_kernel(
+                _sharded_source_push_forward_h_kernel(
                     mesh,
                     config,
                     use_exact_expert_major=inputs.use_exact_expert_major,
@@ -910,6 +985,7 @@ def _run_forward_one(
                     expert_base,
                     src_base_by_expert,
                     w_gate_up,
+                    recv_route_weights,
                     w_down,
                     queue_dst_ord,
                     queue_entry,

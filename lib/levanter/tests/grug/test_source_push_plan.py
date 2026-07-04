@@ -21,6 +21,7 @@ from levanter.grug._moe.source_push_plan import (
     pack_source_push_tokens,
     source_push_combine,
     source_push_combine_preweighted,
+    source_push_recv_route_weights,
     source_push_w13_h,
     source_push_w2_from_h_return,
     recv_src_ordinal,
@@ -386,6 +387,7 @@ def test_source_push_h_forward_applies_route_weights_before_w2():
     h = source_push_w13_h(packed_x, w_gate_up, plan)
     return_y = source_push_w2_from_h_return(h, route_weights, w_down, plan)
     observed = np.asarray(source_push_combine_preweighted(return_y, plan), dtype=np.float32)
+    recv_route_weights = np.asarray(source_push_recv_route_weights(route_weights, plan), dtype=np.float32)
 
     expected = np.zeros((EP_SIZE, selected_experts.shape[1], x.shape[-1]), dtype=np.float32)
     selected_host = np.asarray(selected_experts)
@@ -414,10 +416,13 @@ def test_source_push_h_forward_applies_route_weights_before_w2():
     h_host = np.asarray(h, dtype=np.float32)
     for src, dst_ord, entry, row in np.argwhere(valid_mask):
         dst = (src + dst_ord) % EP_SIZE
+        recv_ord = recv_src_ordinal(dst, src, EP_SIZE)
         expert = local_experts[src, dst_ord, entry]
         expert_row = src_base_by_expert[dst, src, expert] + local_row_starts[src, dst_ord, entry] + row
         assignment = assignment_ids[src, dst_ord, entry, row]
         token = assignment // selected_experts.shape[2]
+        route_slot = assignment % selected_experts.shape[2]
+        assert recv_route_weights[dst, recv_ord, entry, row] == route_weights_host[src, token, route_slot]
         np.testing.assert_allclose(
             h_host[dst, expert, expert_row],
             x_host[src, token] @ w_gate_up_host[dst, expert],
