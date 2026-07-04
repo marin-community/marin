@@ -516,6 +516,14 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
     )
     parser.add_argument("--run-id", help=f"Stable result run id. Defaults to {RUN_ID_ENV} or a timestamp.")
     parser.add_argument("--output-dir", help=f"Full result prefix. Defaults to {OUTPUT_ROOT}/<run-id>.")
+    parser.add_argument(
+        "--pytest-target",
+        action="append",
+        help=(
+            "Pytest target to execute after installing the runtime. May be repeated. "
+            "Defaults to the full GrugMoE GPU e2e test file."
+        ),
+    )
     return parser.parse_args(argv)
 
 
@@ -717,12 +725,13 @@ def main(argv: list[str] | None = None) -> int:
             "MARIN_GIT_SHA": install_report["marin_sha"],
         }
     )
+    pytest_targets = args.pytest_target or ["tests/vllm/test_grugmoe_gpu_real_checkpoint_e2e.py"]
     pytest_report = _run(
         [
             str(venv_python),
             "-m",
             "pytest",
-            "tests/vllm/test_grugmoe_gpu_real_checkpoint_e2e.py",
+            *pytest_targets,
             "-q",
             "-s",
             "-o",

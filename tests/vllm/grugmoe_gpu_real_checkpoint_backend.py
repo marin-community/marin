@@ -27,6 +27,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from collections import Counter
 from contextlib import ExitStack
 from pathlib import Path
 from typing import Any
@@ -78,6 +79,10 @@ LEVANTER_REFERENCE_MODE_ENV = "MARIN_GRUGMOE_LEVANTER_REFERENCE_MODE"
 LEVANTER_DEFAULT_REFERENCE_MODE = "current"
 LEVANTER_REFERENCE_MODE_CHOICES = ("current", "bf16_compute")
 LEVANTER_BF16_POLICY = "params=float32,compute=bfloat16,output=bfloat16"
+LEVANTER_EXPERT_AXIS_SIZE_ENV = "MARIN_GRUGMOE_LEVANTER_EXPERT_AXIS_SIZE"
+LEVANTER_DEFAULT_EXPERT_AXIS_SIZE = EXPECTED_GPU_COUNT
+LEVANTER_PROMPT_SWEEP_ENV = "MARIN_GRUGMOE_LEVANTER_PROMPT_SWEEP"
+LEVANTER_DEFAULT_PROMPT_SWEEP = False
 RUN_ID_ENV = "MARIN_GRUGMOE_GPU_E2E_RUN_ID"
 OUTPUT_DIR_ENV = "MARIN_GRUGMOE_GPU_E2E_OUTPUT_DIR"
 INSTALL_REPORT_PATH_ENV = "MARIN_GRUGMOE_GPU_E2E_INSTALL_REPORT_PATH"
@@ -99,10 +104,13 @@ DIAGNOSTIC_COMPARE_RANKS = (4, 0)
 DIAGNOSTIC_REPEATED_ATTEMPTS = 3
 DIAGNOSTIC_LOGPROBS = 8
 DIAGNOSTIC_ROUTE_STEPS = 1
-DIAGNOSTIC_NON_REPEATED_PROMPTS = (
+DIAGNOSTIC_PROMPT_SWEEP_MAX_NEW_TOKENS = 1
+DIAGNOSTIC_PROMPT_SWEEP_PROMPTS = (
     "Answer with digits only. No words. No punctuation. What is two plus two?",
     "Answer with digits only. No words. No punctuation. What is three plus three?",
+    "Answer with one word only. What color is the sky on a clear day?",
 )
+DIAGNOSTIC_NON_REPEATED_PROMPTS = DIAGNOSTIC_PROMPT_SWEEP_PROMPTS[:2]
 MAX_MODEL_LEN = common.MAX_MODEL_LEN
 MAX_NUM_BATCHED_TOKENS = 1024
 MAX_NEW_TOKENS = common.MAX_NEW_TOKENS
@@ -181,6 +189,19 @@ def _resolve_levanter_reference_mode() -> str:
     return value
 
 
+def _resolve_levanter_expert_axis_size() -> int:
+    raw_value = os.environ.get(LEVANTER_EXPERT_AXIS_SIZE_ENV, str(LEVANTER_DEFAULT_EXPERT_AXIS_SIZE)).strip()
+    try:
+        value = int(raw_value)
+    except ValueError as exc:
+        raise ValueError(f"{LEVANTER_EXPERT_AXIS_SIZE_ENV}={raw_value!r} must be an integer") from exc
+    if value <= 0 or value > EXPECTED_GPU_COUNT or EXPECTED_GPU_COUNT % value != 0:
+        raise ValueError(
+            f"{LEVANTER_EXPERT_AXIS_SIZE_ENV}={raw_value!r} must be a positive divisor of {EXPECTED_GPU_COUNT}"
+        )
+    return value
+
+
 VLLM_ATTENTION_BACKEND = _resolve_vllm_attention_backend()
 VLLM_DTYPE = _resolve_vllm_dtype()
 VLLM_MOE_COMPUTE = _resolve_vllm_moe_compute()
@@ -189,6 +210,11 @@ VLLM_ROUTE_DIAGNOSTICS = _resolve_bool_env(
     default=VLLM_DEFAULT_ROUTE_DIAGNOSTICS,
 )
 LEVANTER_REFERENCE_MODE = _resolve_levanter_reference_mode()
+LEVANTER_EXPERT_AXIS_SIZE = _resolve_levanter_expert_axis_size()
+LEVANTER_PROMPT_SWEEP = _resolve_bool_env(
+    LEVANTER_PROMPT_SWEEP_ENV,
+    default=LEVANTER_DEFAULT_PROMPT_SWEEP,
+)
 
 
 def _is_coreweave_endpoint(endpoint: str) -> bool:
@@ -1405,6 +1431,23 @@ def _exception_summary(exc: BaseException) -> dict[str, Any]:
     }
 
 
+def _value_counts(values: list[Any]) -> dict[str, int]:
+    return {str(value): count for value, count in sorted(Counter(values).items(), key=lambda item: str(item[0]))}
+
+
+def _prompt_token_ids(tokenizer: Any, prompt: str) -> tuple[list[int], dict[str, Any]]:
+    token_ids = _tokenizer_encode(
+        tokenizer,
+        prompt,
+        add_special_tokens=LEVANTER_PROMPT_ADD_SPECIAL_TOKENS,
+    )
+    return token_ids, {
+        "add_special_tokens": LEVANTER_PROMPT_ADD_SPECIAL_TOKENS,
+        "prompt_token_count": len(token_ids),
+        "prompt_token_ids": token_ids,
+    }
+
+
 def _jax_dtype_name(value: Any) -> str:
     dtype = getattr(value, "dtype", None)
     return str(dtype) if dtype is not None else "unavailable"
@@ -1534,7 +1577,6 @@ def _jax_forward_route_diagnostics(
     *,
     position: int,
 ) -> dict[str, Any]:
-    import jax  # noqa: PLC0415
     import jax.numpy as jnp  # noqa: PLC0415
     from jax.sharding import PartitionSpec as P  # noqa: PLC0415
     from jax.sharding import reshard  # noqa: PLC0415
@@ -1566,16 +1608,16 @@ def _jax_forward_route_diagnostics(
     hidden = model.final_gated_norm(model.final_norm(hidden))
     logits = jnp.einsum("bsh,hd->bsd", hidden, model.output_proj, out_sharding=batch_spec)
     position_logits = reshard(logits[:, position, :].astype(jnp.float32), P(None, None))
-    top_count = min(DIAGNOSTIC_LOGPROBS, int(position_logits.shape[-1]))
-    top_logits, top_token_ids = jax.lax.top_k(position_logits.at[0].get(out_sharding=P(None)), top_count)
-    top_logits_values = _jax_float_vector(top_logits, max_items=top_count)
+    rows = _jax_top_logits_rows(position_logits, max_rows=int(position_logits.shape[0]))
+    first_row = rows[0] if rows else {}
     return {
         "position": position,
         "logits_dtype": _jax_dtype_name(logits),
         "position_logits_dtype": _jax_dtype_name(position_logits),
-        "top_token_ids": _jax_int_vector(top_token_ids, max_items=top_count),
-        "top_logits": top_logits_values,
-        "top2_margin": float(top_logits_values[0] - top_logits_values[1]) if len(top_logits_values) >= 2 else None,
+        "top_token_ids": first_row.get("top_token_ids", []),
+        "top_logits": first_row.get("top_logits", []),
+        "top2_margin": first_row.get("top2_margin"),
+        "rows": rows,
         "layers": layer_summaries,
     }
 
@@ -1583,15 +1625,65 @@ def _jax_forward_route_diagnostics(
 def _token_top_logits_summary(tokenizer: Any, logits: Any) -> dict[str, Any]:
     import numpy as np  # noqa: PLC0415
 
-    top_count = min(DIAGNOSTIC_LOGPROBS, int(logits.shape[-1]))
-    top_ids = np.argsort(-logits)[:top_count]
-    top_logits = logits[top_ids].astype(np.float32)
-    return {
-        "top_token_ids": [int(token_id) for token_id in top_ids.tolist()],
-        "top_token_texts": [_decode_one(tokenizer, int(token_id)) for token_id in top_ids.tolist()],
-        "top_logits": [float(value) for value in top_logits.tolist()],
-        "top2_margin": float(top_logits[0] - top_logits[1]) if top_count >= 2 else None,
-    }
+    rows = _token_top_logits_rows_summary(tokenizer, np.asarray(logits)[None, :], max_rows=1)
+    return {key: value for key, value in rows[0].items() if key != "row_index"}
+
+
+def _token_top_logits_rows_summary(
+    tokenizer: Any, logits_batch: Any, *, max_rows: int | None = None
+) -> list[dict[str, Any]]:
+    import numpy as np  # noqa: PLC0415
+
+    logits_array = np.asarray(logits_batch)
+    if logits_array.ndim != 2:
+        raise ValueError(f"expected 2D logits batch, got shape {logits_array.shape!r}")
+    row_count = logits_array.shape[0] if max_rows is None else min(int(max_rows), logits_array.shape[0])
+    top_count = min(DIAGNOSTIC_LOGPROBS, int(logits_array.shape[-1]))
+    rows: list[dict[str, Any]] = []
+    for row_index in range(row_count):
+        logits = logits_array[row_index]
+        top_ids = np.argsort(-logits)[:top_count]
+        top_logits = logits[top_ids].astype(np.float32)
+        selected_token_id = int(top_ids[0])
+        rows.append(
+            {
+                "row_index": row_index,
+                "selected_token_id": selected_token_id,
+                "selected_token_text": _decode_one(tokenizer, selected_token_id),
+                "selected_token_logprob": _selected_logprob(logits, selected_token_id),
+                "top_token_ids": [int(token_id) for token_id in top_ids.tolist()],
+                "top_token_texts": [_decode_one(tokenizer, int(token_id)) for token_id in top_ids.tolist()],
+                "top_logits": [float(value) for value in top_logits.tolist()],
+                "top2_margin": float(top_logits[0] - top_logits[1]) if top_count >= 2 else None,
+            }
+        )
+    return rows
+
+
+def _jax_top_logits_rows(value: Any, *, max_rows: int | None = None) -> list[dict[str, Any]]:
+    import jax  # noqa: PLC0415
+    import numpy as np  # noqa: PLC0415
+
+    logits_array = np.asarray(jax.device_get(value))
+    if logits_array.ndim != 2:
+        raise ValueError(f"expected 2D logits batch, got shape {logits_array.shape!r}")
+    row_count = logits_array.shape[0] if max_rows is None else min(int(max_rows), logits_array.shape[0])
+    top_count = min(DIAGNOSTIC_LOGPROBS, int(logits_array.shape[-1]))
+    rows: list[dict[str, Any]] = []
+    for row_index in range(row_count):
+        logits = logits_array[row_index]
+        top_ids = np.argsort(-logits)[:top_count]
+        top_logits = logits[top_ids].astype(np.float32)
+        rows.append(
+            {
+                "row_index": row_index,
+                "selected_token_id": int(top_ids[0]),
+                "top_token_ids": [int(token_id) for token_id in top_ids.tolist()],
+                "top_logits": [float(value) for value in top_logits.tolist()],
+                "top2_margin": float(top_logits[0] - top_logits[1]) if top_count >= 2 else None,
+            }
+        )
+    return rows
 
 
 def _greedy_decode_with_diagnostics(
@@ -1625,6 +1717,8 @@ def _greedy_decode_with_diagnostics(
     steps: list[dict[str, Any]] = []
     route_diagnostics: list[dict[str, Any]] = []
     active_seq_lengths: list[int] = []
+    row_generated_ids: list[list[int]] = [[] for _ in range(batch_size)]
+    row_generated_token_texts: list[list[str]] = [[] for _ in range(batch_size)]
     position_logits = jax.jit(position_logits_batch)
     started = time.time()
 
@@ -1644,11 +1738,17 @@ def _greedy_decode_with_diagnostics(
                 }
             )
         step_logits_batch = position_logits(model, jnp.asarray(step_token_ids_array, dtype=jnp.int32), position)
-        step_logits = np.asarray(jax.device_get(step_logits_batch))[0]
-        selected_token_id = int(np.argmax(step_logits, axis=-1))
-        selected_text = _decode_one(tokenizer, selected_token_id)
-        selected_logprob = _selected_logprob(step_logits, selected_token_id)
-        top_logits = _token_top_logits_summary(tokenizer, step_logits)
+        rows = _token_top_logits_rows_summary(tokenizer, np.asarray(jax.device_get(step_logits_batch)))
+        selected_token_ids = [int(row["selected_token_id"]) for row in rows]
+        selected_token_texts = [str(row["selected_token_text"]) for row in rows]
+        selected_token_logprobs_for_rows = [float(row["selected_token_logprob"]) for row in rows]
+        for row_index, (token_id, token_text) in enumerate(zip(selected_token_ids, selected_token_texts, strict=True)):
+            row_generated_ids[row_index].append(token_id)
+            row_generated_token_texts[row_index].append(token_text)
+        selected_token_id = selected_token_ids[0]
+        selected_text = selected_token_texts[0]
+        selected_logprob = selected_token_logprobs_for_rows[0]
+        top_logits = {key: value for key, value in rows[0].items() if key not in {"row_index", "selected_token_id"}}
         active_seq_lengths.append(active_seq_len)
         generated_ids.append(selected_token_id)
         generated_token_texts.append(selected_text)
@@ -1660,10 +1760,16 @@ def _greedy_decode_with_diagnostics(
                 "token_text": selected_text,
                 "selected_token_logprob": selected_logprob,
                 **top_logits,
+                "row_token_ids": selected_token_ids,
+                "row_token_texts": selected_token_texts,
+                "row_token_counts": _value_counts(selected_token_ids),
+                "row_identical": len(set(selected_token_ids)) == 1,
+                "rows": rows,
             }
         )
-        token_ids_array[:, len(prompt_ids) + step_index] = selected_token_id
+        token_ids_array[:, len(prompt_ids) + step_index] = np.asarray(selected_token_ids, dtype=np.int32)
 
+    row_completions = [tokenizer.decode(row_ids, skip_special_tokens=False) for row_ids in row_generated_ids]
     return {
         "prompt_token_ids": [int(token_id) for token_id in prompt_ids],
         "prompt_token_count": len(prompt_ids),
@@ -1676,10 +1782,60 @@ def _greedy_decode_with_diagnostics(
         "generated_token_texts": generated_token_texts,
         "completion": tokenizer.decode(generated_ids, skip_special_tokens=False),
         "selected_token_logprobs": selected_token_logprobs,
+        "row_generated_token_ids": row_generated_ids,
+        "row_generated_token_texts": row_generated_token_texts,
+        "row_completions": row_completions,
+        "row_completion_counts": _value_counts(row_completions),
+        "row_completions_identical": len(set(row_completions)) == 1,
         "steps": steps,
         "route_diagnostics": route_diagnostics,
         "elapsed_seconds": time.time() - started,
     }
+
+
+def _run_levanter_prompt_sweep(
+    model: Any,
+    tokenizer: Any,
+    *,
+    prompts: tuple[str, ...],
+    batch_size: int,
+    decode_seq_len: int,
+    pad_token_id: int,
+    use_active_prefix: bool,
+) -> list[dict[str, Any]]:
+    results: list[dict[str, Any]] = []
+    for prompt_index, prompt in enumerate(prompts):
+        prompt_ids, tokenization = _prompt_token_ids(tokenizer, prompt)
+        decode_result = _greedy_decode_with_diagnostics(
+            model,
+            tokenizer,
+            prompt_ids,
+            max_new_tokens=DIAGNOSTIC_PROMPT_SWEEP_MAX_NEW_TOKENS,
+            batch_size=batch_size,
+            decode_seq_len=decode_seq_len,
+            pad_token_id=pad_token_id,
+            use_active_prefix=use_active_prefix,
+        )
+        first_step_rows = decode_result["steps"][0]["rows"] if decode_result["steps"] else []
+        top2_margins = [float(row["top2_margin"]) for row in first_step_rows if row.get("top2_margin") is not None]
+        results.append(
+            {
+                "prompt_index": prompt_index,
+                "prompt": prompt,
+                "tokenization": tokenization,
+                "max_new_tokens": DIAGNOSTIC_PROMPT_SWEEP_MAX_NEW_TOKENS,
+                "completion": decode_result["completion"],
+                "row_completions": decode_result["row_completions"],
+                "row_completion_counts": decode_result["row_completion_counts"],
+                "row_completions_identical": decode_result["row_completions_identical"],
+                "first_step_row_token_counts": (
+                    decode_result["steps"][0]["row_token_counts"] if decode_result["steps"] else {}
+                ),
+                "first_step_min_top2_margin": min(top2_margins) if top2_margins else None,
+                "decode_result": decode_result,
+            }
+        )
+    return results
 
 
 def _vllm_backend(args: argparse.Namespace) -> None:
@@ -1986,7 +2142,7 @@ def _levanter_backend(args: argparse.Namespace) -> None:
     tokenizer = load_tokenizer(args.tokenizer_path)
     prompt_ids, tokenization = _levanter_prompt_token_ids(tokenizer)
     model_cfg = _real_checkpoint_model_config()
-    mesh = compact_grug_mesh(expert_axis_size=EXPECTED_GPU_COUNT, model_axis_size=1)
+    mesh = compact_grug_mesh(expert_axis_size=LEVANTER_EXPERT_AXIS_SIZE, model_axis_size=1)
     mesh_runtime = _mesh_snapshot(mesh)
     decode_batch_size = _mesh_batch_axis_size(mesh)
     pad_token_id = int(getattr(tokenizer, "pad_token_id", None) or getattr(tokenizer, "eos_token_id", None) or 0)
@@ -2021,8 +2177,22 @@ def _levanter_backend(args: argparse.Namespace) -> None:
             )
             decode_results.append(decode_result)
             batch_items = min(decode_batch_size, remaining)
-            completions.extend([str(decode_result["completion"])] * batch_items)
+            row_completions = [str(item) for item in decode_result["row_completions"]]
+            completions.extend(row_completions[:batch_items])
             remaining -= batch_items
+        prompt_sweep_results = (
+            _run_levanter_prompt_sweep(
+                model,
+                tokenizer,
+                prompts=DIAGNOSTIC_PROMPT_SWEEP_PROMPTS,
+                batch_size=decode_batch_size,
+                decode_seq_len=DECODE_SEQ_LEN,
+                pad_token_id=pad_token_id,
+                use_active_prefix=LEVANTER_DECODE_USE_ACTIVE_PREFIX,
+            )
+            if LEVANTER_PROMPT_SWEEP
+            else []
+        )
     completion = completions[0] if completions else ""
     result = {
         "phase": "levanter",
@@ -2037,9 +2207,15 @@ def _levanter_backend(args: argparse.Namespace) -> None:
         "passed": all(item == EXPECTED_CONTINUATION for item in completions),
         "tokenization": tokenization,
         "decode_batch_size": decode_batch_size,
+        "levanter_expert_axis_size_env_var": LEVANTER_EXPERT_AXIS_SIZE_ENV,
+        "levanter_expert_axis_size": LEVANTER_EXPERT_AXIS_SIZE,
         "levanter_moe_capacity_factor": LEVANTER_MOE_CAPACITY_FACTOR,
         "levanter_decode_use_active_prefix": LEVANTER_DECODE_USE_ACTIVE_PREFIX,
         "decode_results": decode_results,
+        "levanter_prompt_sweep_env_var": LEVANTER_PROMPT_SWEEP_ENV,
+        "levanter_prompt_sweep": LEVANTER_PROMPT_SWEEP,
+        "levanter_prompt_sweep_prompts": list(DIAGNOSTIC_PROMPT_SWEEP_PROMPTS),
+        "levanter_prompt_sweep_results": prompt_sweep_results,
         "levanter_reference_mode_env_var": LEVANTER_REFERENCE_MODE_ENV,
         "levanter_reference_mode": LEVANTER_REFERENCE_MODE,
         "levanter_reference_policy": reference_policy,

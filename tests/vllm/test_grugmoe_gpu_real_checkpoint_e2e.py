@@ -237,6 +237,8 @@ def _write_summary_update(
             "vllm_moe_compute": backend.VLLM_MOE_COMPUTE,
             "vllm_route_diagnostics": backend.VLLM_ROUTE_DIAGNOSTICS,
             "levanter_reference_mode": backend.LEVANTER_REFERENCE_MODE,
+            "levanter_expert_axis_size": backend.LEVANTER_EXPERT_AXIS_SIZE,
+            "levanter_prompt_sweep": backend.LEVANTER_PROMPT_SWEEP,
             "levanter_moe_capacity_factor": backend.LEVANTER_MOE_CAPACITY_FACTOR,
             "levanter_decode_use_active_prefix": backend.LEVANTER_DECODE_USE_ACTIVE_PREFIX,
             "prompt_batch_size": backend.PROMPT_BATCH_SIZE,
@@ -295,6 +297,8 @@ def _write_summary_update(
         levanter_jax_runtime = backend_results["levanter"].get("jax_runtime", {})
         levanter_jax_mesh = backend_results["levanter"].get("jax_mesh", {})
         summary["levanter_observed_reference_mode"] = backend_results["levanter"].get("levanter_reference_mode")
+        summary["levanter_observed_expert_axis_size"] = backend_results["levanter"].get("levanter_expert_axis_size")
+        summary["levanter_observed_prompt_sweep"] = backend_results["levanter"].get("levanter_prompt_sweep")
         summary["levanter_reference_policy"] = backend_results["levanter"].get("levanter_reference_policy")
         summary["levanter_jax_gpu_device_count"] = levanter_jax_runtime.get("gpu_device_count")
         summary["levanter_jax_mesh_device_count"] = levanter_jax_mesh.get("device_count")
@@ -326,6 +330,7 @@ def test_grugmoe_gpu_real_checkpoint_e2e_static_preconditions() -> None:
     assert backend.VLLM_DTYPE in backend.VLLM_DTYPE_CHOICES
     assert backend.VLLM_MOE_COMPUTE in backend.VLLM_MOE_COMPUTE_CHOICES
     assert backend.LEVANTER_REFERENCE_MODE in backend.LEVANTER_REFERENCE_MODE_CHOICES
+    assert backend.EXPECTED_GPU_COUNT % backend.LEVANTER_EXPERT_AXIS_SIZE == 0
     assert backend.LEVANTER_MOE_CAPACITY_FACTOR == float(backend.EXPECTED_GPU_COUNT)
     assert backend.LEVANTER_DECODE_USE_ACTIVE_PREFIX is True
     assert backend.CHECKPOINT_PATH.startswith(backend.COREWEAVE_S3_PREFIX)
@@ -712,9 +717,40 @@ def test_grugmoe_gpu_real_checkpoint_levanter_output(
     assert levanter_result["jax_runtime"]["cuda_visible_devices"] == backend.VISIBLE_CUDA_DEVICES
     assert levanter_result["jax_mesh"]["device_count"] >= backend.EXPECTED_GPU_COUNT
     assert levanter_result["jax_mesh"]["uses_expected_gpu_count"] is True
-    assert levanter_result["jax_mesh"]["shape"]["expert"] == backend.EXPECTED_GPU_COUNT
+    assert levanter_result["jax_mesh"]["shape"]["expert"] == backend.LEVANTER_EXPERT_AXIS_SIZE
     assert levanter_result["jax_mesh"]["shape"]["model"] == 1
-    assert levanter_result["jax_mesh"]["shape"]["data"] == 1
+    mesh_shape = levanter_result["jax_mesh"]["shape"]
+    assert (
+        int(mesh_shape.get("replica_dcn", 1)) * int(mesh_shape.get("data", 1)) * int(mesh_shape.get("expert", 1))
+    ) == backend.EXPECTED_GPU_COUNT
+    assert levanter_result["levanter_expert_axis_size"] == backend.LEVANTER_EXPERT_AXIS_SIZE
     assert len(levanter_result["completions"]) == backend.PROMPT_BATCH_SIZE
     assert all(completion == backend.EXPECTED_CONTINUATION for completion in levanter_result["completions"])
+    assert all(result["row_completions"] for result in levanter_result["decode_results"])
     assert levanter_result["passed"] is True
+
+
+@pytest.mark.gpu_ci
+@pytest.mark.slow
+@pytest.mark.data_integration
+def test_grugmoe_gpu_real_checkpoint_levanter_diagnostic_output(
+    e2e_paths: backend.E2EPaths,
+    levanter_result: dict[str, Any],
+) -> None:
+    _write_summary_update(e2e_paths, backend_result=levanter_result)
+    assert levanter_result["phase"] == "levanter"
+    assert levanter_result["levanter_reference_mode"] == backend.LEVANTER_REFERENCE_MODE
+    assert levanter_result["levanter_expert_axis_size"] == backend.LEVANTER_EXPERT_AXIS_SIZE
+    assert levanter_result["decode_batch_size"] == backend.EXPECTED_GPU_COUNT
+    assert len(levanter_result["completions"]) == backend.PROMPT_BATCH_SIZE
+    for decode_result in levanter_result["decode_results"]:
+        assert len(decode_result["row_completions"]) == backend.EXPECTED_GPU_COUNT
+        assert decode_result["steps"]
+        assert len(decode_result["steps"][0]["rows"]) == backend.EXPECTED_GPU_COUNT
+    if backend.LEVANTER_PROMPT_SWEEP:
+        sweep_results = levanter_result["levanter_prompt_sweep_results"]
+        assert len(sweep_results) == len(backend.DIAGNOSTIC_PROMPT_SWEEP_PROMPTS)
+        assert all(result["decode_result"]["steps"] for result in sweep_results)
+        assert all(
+            len(result["decode_result"]["steps"][0]["rows"]) == backend.EXPECTED_GPU_COUNT for result in sweep_results
+        )
