@@ -314,6 +314,7 @@ def test_grugmoe_gpu_real_checkpoint_e2e_static_preconditions() -> None:
     assert backend.VLLM_MAX_NUM_SEQS >= backend.PROMPT_BATCH_SIZE
     assert backend.WORKER_EXTENSION_CLS == f"{backend.WORKER_EXTENSION_MODULE}.{backend.WORKER_EXTENSION_CLASS}"
     assert backend.VLLM_ATTENTION_BACKEND in backend.VLLM_ATTENTION_BACKENDS_UNDER_TEST
+    assert backend.VLLM_DTYPE in backend.VLLM_DTYPE_CHOICES
     assert backend.LEVANTER_MOE_CAPACITY_FACTOR == float(backend.EXPECTED_GPU_COUNT)
     assert backend.LEVANTER_DECODE_USE_ACTIVE_PREFIX is True
     assert backend.CHECKPOINT_PATH.startswith(backend.COREWEAVE_S3_PREFIX)

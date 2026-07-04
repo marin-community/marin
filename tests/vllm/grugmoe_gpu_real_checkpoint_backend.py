@@ -60,7 +60,9 @@ VLLM_TENSOR_PARALLEL_SIZE = 1
 VLLM_DATA_PARALLEL_SIZE = 8
 VLLM_EXPERT_PARALLEL_SIZE = 8
 VLLM_MAX_NUM_SEQS = 16
-VLLM_DTYPE = "float32"
+VLLM_DTYPE_ENV = "MARIN_GRUGMOE_VLLM_DTYPE"
+VLLM_DEFAULT_DTYPE = "bfloat16"
+VLLM_DTYPE_CHOICES = ("bfloat16", "float32")
 WORKER_EXTENSION_MODULE = "grugmoe_gpu_real_checkpoint_backend"
 WORKER_EXTENSION_CLASS = "GrugMoeDiagnosticsWorkerExtension"
 WORKER_EXTENSION_CLS = f"{WORKER_EXTENSION_MODULE}.{WORKER_EXTENSION_CLASS}"
@@ -124,7 +126,18 @@ def _resolve_vllm_attention_backend() -> str:
     return value
 
 
+def _resolve_vllm_dtype() -> str:
+    value = os.environ.get(VLLM_DTYPE_ENV, VLLM_DEFAULT_DTYPE).strip().lower()
+    if value not in VLLM_DTYPE_CHOICES:
+        raise ValueError(
+            f"{VLLM_DTYPE_ENV}={value!r} is not supported for this validation; "
+            f"expected one of {VLLM_DTYPE_CHOICES!r}"
+        )
+    return value
+
+
 VLLM_ATTENTION_BACKEND = _resolve_vllm_attention_backend()
+VLLM_DTYPE = _resolve_vllm_dtype()
 
 
 def _is_coreweave_endpoint(endpoint: str) -> bool:
@@ -1389,6 +1402,7 @@ def _vllm_backend(args: argparse.Namespace) -> None:
                 "vllm_engine_kwargs": model.engine_kwargs,
                 "vllm_args": extra_args,
                 "vllm_attention_backend_env_var": VLLM_ATTENTION_BACKEND_ENV,
+                "vllm_dtype_env_var": VLLM_DTYPE_ENV,
                 "vllm_dtype": VLLM_DTYPE,
                 "vllm_tensor_parallel_size": VLLM_TENSOR_PARALLEL_SIZE,
                 "vllm_data_parallel_size": VLLM_DATA_PARALLEL_SIZE,
@@ -1485,6 +1499,7 @@ def _vllm_backend(args: argparse.Namespace) -> None:
         "vllm_engine_kwargs": model.engine_kwargs,
         "vllm_args": extra_args,
         "vllm_attention_backend_env_var": VLLM_ATTENTION_BACKEND_ENV,
+        "vllm_dtype_env_var": VLLM_DTYPE_ENV,
         "vllm_dtype": VLLM_DTYPE,
         "vllm_tensor_parallel_size": VLLM_TENSOR_PARALLEL_SIZE,
         "vllm_data_parallel_size": VLLM_DATA_PARALLEL_SIZE,
