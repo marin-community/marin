@@ -6,7 +6,7 @@ import { useAutoRefresh } from '@/composables/useAutoRefresh'
 import { stateToName, stateDisplayName } from '@/types/status'
 import { useBackends } from '@/composables/useBackends'
 import {
-  LOCAL_CLUSTER,
+  LOCAL_CLUSTER, isFederated,
   type JobStatus, type TaskStatus, type LaunchJobRequest, type JobQuery,
   type GetJobStatusResponse, type ListTasksResponse, type ListJobsResponse,
   type EndpointInfo, type ListEndpointsResponse,
@@ -35,7 +35,7 @@ const props = defineProps<{
   jobId: string
 }>()
 
-const { multiBackend } = useBackends()
+const { multiBackend, peers, ensurePeers } = useBackends()
 
 const TERMINAL_STATES = new Set(['succeeded', 'failed', 'killed', 'worker_failed', 'cosched_failed', 'preempted', 'unschedulable'])
 const FAILED_TERMINAL_STATES = new Set(['failed', 'worker_failed', 'cosched_failed', 'preempted', 'unschedulable'])
@@ -325,11 +325,46 @@ async function fetchData() {
 
 
 onMounted(fetchData)
+// Federation roster (for a handed-off job's peer reachability); lazy, shared.
+onMounted(() => void ensurePeers())
 
 // Auto-refresh while job is not terminal
 const isTerminal = computed(() => {
   if (!job.value) return false
   return TERMINAL_STATES.has(stateToName(job.value.state))
+})
+
+interface HandoffBadge { label: string; classes: string }
+
+// Badge next to the Cluster InfoRow surfacing where a federated job sits in the
+// handoff lifecycle. Absent for a local job, a terminal job, or once the peer
+// has both acked the handoff and reported at least one task (PEER_STATUS_SYNCED).
+const handoffBadge = computed<HandoffBadge | null>(() => {
+  const j = job.value
+  if (!j || !isFederated(j.cluster) || isTerminal.value) return null
+  if (j.peerStatus === 'PEER_STATUS_PENDING_SCHEDULING') {
+    return { label: 'awaiting peer acceptance', classes: 'bg-status-warning-bg text-status-warning border-status-warning-border' }
+  }
+  if (j.peerStatus === 'PEER_STATUS_ASSIGNED') {
+    return { label: 'awaiting first status report', classes: 'bg-surface-sunken text-text-muted border-surface-border' }
+  }
+  return null
+})
+
+// The peer this job was handed off to, from the shared federation roster
+// (populated lazily via ensurePeers). Undefined for a local job or before the
+// roster has loaded.
+const jobPeer = computed(() => {
+  const j = job.value
+  if (!j || !isFederated(j.cluster)) return undefined
+  return peers.value.find(p => p.peerId === j.cluster)
+})
+
+// A handed-off, non-terminal job whose peer failed its last capability
+// heartbeat: the one signal that explains a stuck PENDING_SCHEDULING.
+const peerUnreachable = computed(() => {
+  if (isTerminal.value || !job.value || !isFederated(job.value.cluster)) return false
+  return jobPeer.value?.reachable === false
 })
 
 const { stop: stopRefresh, start: startRefresh } = useAutoRefresh(fetchData, 10_000)
@@ -849,6 +884,20 @@ async function handleProfile(taskId: string, profilerType: string, format: strin
         <span class="font-semibold">Error:</span> {{ job.error }}
       </div>
 
+      <!-- Peer unreachable banner: this job's handoff target failed its last
+           capability heartbeat, so its status updates may be stale — the one
+           signal that explains a stuck "awaiting peer acceptance". -->
+      <div
+        v-if="peerUnreachable"
+        class="mb-4 px-4 py-3 bg-status-warning-bg border border-status-warning-border rounded-lg text-sm text-status-warning"
+      >
+        <span class="font-semibold">Peer {{ job.cluster }} is unreachable.</span>
+        <span v-if="jobPeer?.lastContactMs && jobPeer.lastContactMs !== '0'">
+          Last contact {{ formatRelativeTime(Number(jobPeer.lastContactMs)) }}.
+        </span>
+        <RouterLink to="/backends" class="ml-1 text-accent hover:underline">View execution targets</RouterLink>
+      </div>
+
       <!-- Pending reason banner -->
       <div
         v-if="job.pendingReason"
@@ -963,9 +1012,19 @@ async function handleProfile(taskId: string, profilerType: string, format: strin
             <span class="font-mono">{{ job!.backendId }}</span>
           </InfoRow>
           <!-- Cluster: every job carries a cluster coordinate (`'local'` by
-               default); links inward to the parent's jobs list filtered to it. -->
+               default); links inward to the parent's jobs list filtered to it.
+               For a federated job, a badge surfaces its handoff posture. -->
           <InfoRow label="Cluster">
-            <ClusterLink :cluster="job?.cluster ?? LOCAL_CLUSTER" />
+            <span class="flex items-center gap-2">
+              <ClusterLink :cluster="job?.cluster ?? LOCAL_CLUSTER" />
+              <span
+                v-if="handoffBadge"
+                class="inline-flex items-center px-1.5 py-0.5 rounded text-xs border"
+                :class="handoffBadge.classes"
+              >
+                {{ handoffBadge.label }}
+              </span>
+            </span>
           </InfoRow>
         </InfoCard>
 
@@ -996,7 +1055,9 @@ async function handleProfile(taskId: string, profilerType: string, format: strin
           </InfoRow>
           <InfoRow label="Disk">{{ diskDisplay }}</InfoRow>
           <InfoRow label="Accelerator">{{ acceleratorDisplay }}</InfoRow>
-          <InfoRow label="Replicas">{{ tasks.length || '-' }}</InfoRow>
+          <!-- Falls back to the requested replica count (job.taskCount) for a
+               federated job whose peer has not yet reported its task set. -->
+          <InfoRow label="Replicas">{{ tasks.length || job.taskCount || '-' }}</InfoRow>
         </InfoCard>
       </div>
 
@@ -1246,7 +1307,17 @@ async function handleProfile(taskId: string, profilerType: string, format: strin
         </div>
       </div>
 
-      <EmptyState v-if="tasks.length === 0" message="No tasks" />
+      <!-- A federated job's tasks live on the peer until the first FederationSync
+           mirrors them back; name the peer and the requested count instead of a
+           bare "No tasks" over an unexplained empty table. -->
+      <p
+        v-if="tasks.length === 0 && job.cluster && isFederated(job.cluster) && !isTerminal"
+        class="py-16 text-center text-sm text-text-muted"
+      >
+        {{ job.taskCount ?? 0 }} task{{ (job.taskCount ?? 0) !== 1 ? 's' : '' }} on peer
+        <ClusterLink :cluster="job.cluster" /> — awaiting first status report
+      </p>
+      <EmptyState v-else-if="tasks.length === 0" message="No tasks" />
       <EmptyState v-else-if="filteredTasks.length === 0" message="No matching tasks" />
 
       <template v-else>

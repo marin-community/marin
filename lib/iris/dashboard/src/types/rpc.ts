@@ -121,10 +121,16 @@ export interface TaskStatus {
   // Genuine application-failure count for this task. The list view attaches only
   // the latest failed attempt, so this carries the true count for the badge.
   failureCount?: number
+  // Attempts lost to worker preemption for this task. For a mirrored federated
+  // task this is the peer's real counter, not a fabricated 0.
+  preemptionCount?: number
   backendId?: string
   // Cluster coordinate: always set — `'local'` for a locally-owned task, a peer
   // id when handed off to that peer cluster (backendId then empty).
   cluster?: string
+  // Task submission time on the owning cluster. Absent (not epoch 0) for a
+  // mirrored federated task the peer has not yet reported a real submit time for.
+  submittedAt?: ProtoTimestamp
 }
 
 // -- Jobs --
@@ -155,6 +161,11 @@ export interface JobStatus {
   // Cluster coordinate: always set — `'local'` for a locally-owned job, a peer
   // id when handed off to that peer cluster.
   cluster?: string
+  // Handoff lifecycle for a federated job (gate on `cluster` first — a local job
+  // and an old message both read as PEER_STATUS_NONE). One of PEER_STATUS_NONE |
+  // PEER_STATUS_PENDING_SCHEDULING | PEER_STATUS_ASSIGNED | PEER_STATUS_SYNCED |
+  // PEER_STATUS_REJECTED. This is the job's handoff state, not peer health.
+  peerStatus?: string
 }
 
 export interface JobQuery {

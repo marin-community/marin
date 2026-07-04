@@ -275,6 +275,7 @@ _JOB_ROW_COLUMNS = (
     jobs_table.c.finished_at_ms,
     jobs_table.c.error,
     jobs_table.c.exit_code,
+    jobs_table.c.num_tasks,
     jobs_table.c.name,
     jobs_table.c.depth,
     job_config_table.c.res_cpu_millicores,
@@ -1809,6 +1810,26 @@ def federated_sent_job(tx: Tx, peer_id: str, job_id: JobName) -> JobName | None:
         )
     ).first()
     return row.job_id if row is not None else None
+
+
+def handoff_states(tx: Tx, job_ids: Sequence[JobName]) -> dict[JobName, int]:
+    """``{job_id: handoff_state}`` for the SENT handles among ``job_ids``.
+
+    The list path's batched counterpart to :func:`federated_handle`: one
+    ``IN (...)`` read for a whole page instead of a per-job handle load. Job ids
+    without a SENT handle (local jobs, peer-side RECEIVED rows) are simply absent
+    from the result.
+    """
+    if not job_ids:
+        return {}
+    rows = tx.execute(
+        select(federated_jobs_table.c.job_id, federated_jobs_table.c.handoff_state).where(
+            federated_jobs_table.c.direction == int(FederationDirection.SENT),
+            federated_jobs_table.c.job_id.in_(bindparam("job_ids", expanding=True)),
+        ),
+        {"job_ids": list(job_ids)},
+    ).all()
+    return {r.job_id: int(r.handoff_state) for r in rows}
 
 
 def received_requester(tx: Tx, job_id: JobName) -> str | None:

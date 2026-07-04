@@ -279,6 +279,16 @@ message TaskStatus {
   string cluster = 25;
 
   reserved 26;  // retired federated remote-id field (job ids are cluster-invariant; no rebasing)
+
+  // Task submission time on the owning cluster. For a mirrored federated task
+  // this is the peer's real submit time, so a not-yet-started task does not
+  // render as epoch 0.
+  iris.time.Timestamp submitted_at = 27;
+
+  // Attempts lost to worker preemption for this task. Carried alongside
+  // failure_count so a mirrored federated task preserves the peer's true counter
+  // instead of a fabricated 0.
+  int32 preemption_count = 28;
 }
 
 // Record of a single task execution attempt
@@ -330,6 +340,29 @@ message BuildMetrics {
   iris.time.Timestamp build_finished = 2;
   bool from_cache = 3;
   string image_tag = 4;
+}
+
+// Lifecycle of a job's handoff to a peer cluster, tracked separately from
+// JobState so the pre-registration window — before the peer has accepted or
+// reported anything — is a first-class, honest signal rather than a blank,
+// partly-fabricated JobStatus. Derived on read from federated_jobs.handoff_state
+// and whether the peer's task set has been mirrored back yet; NOT persisted.
+//
+// This describes the *handoff* of this job, not the peer's *health*: a stuck
+// PENDING_SCHEDULING plus an unreachable peer (PeerSummary.reachable) is the
+// signal that a handoff cannot be delivered.
+//
+// A local job is PEER_STATUS_NONE (== 0), which is also how an old message
+// missing this field decodes — so consumers must gate on `cluster` (is it
+// federated at all?) before trusting a NONE. For a terminal job this is the
+// last posture observed (e.g. a handoff cancelled before delivery stays
+// PENDING_SCHEDULING).
+enum PeerStatus {
+  PEER_STATUS_NONE = 0;                // local job (cluster == "local")
+  PEER_STATUS_PENDING_SCHEDULING = 1;  // handed off; peer has not yet acked LaunchJob
+  PEER_STATUS_ASSIGNED = 2;            // peer acked; awaiting the first FederationSync
+  PEER_STATUS_SYNCED = 3;              // peer's task set mirrored back at least once
+  PEER_STATUS_REJECTED = 4;            // peer rejected the handoff (id collision); job terminal
 }
 
 message JobStatus {
@@ -388,6 +421,9 @@ message JobStatus {
   string cluster = 35;
 
   reserved 36;  // retired federated remote-id field (job ids are cluster-invariant; no rebasing)
+
+  // Handoff lifecycle for a federated job; PEER_STATUS_NONE for a local one. See PeerStatus.
+  PeerStatus peer_status = 37;
 }
 
 // ============================================================================

@@ -88,7 +88,7 @@ platform:
 defaults:
   inject_env:
     - MARIN_PREFIX
-    - R2_ACCESS_KEY_ID
+    - CW_KEY_ID
   worker:
     docker_image: gcr.io/project/iris-worker:latest
     port: 10001
@@ -111,4 +111,4 @@ scale_groups:
 """
     )
     config = load_config(config_path)
-    assert list(config.defaults.inject_env) == ["MARIN_PREFIX", "R2_ACCESS_KEY_ID"]
+    assert list(config.defaults.inject_env) == ["MARIN_PREFIX", "CW_KEY_ID"]

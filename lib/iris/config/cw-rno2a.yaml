@@ -11,12 +11,10 @@
 #
 # Workflow:
 #   1. Set CoreWeave AI Object Storage credentials (console -> Object Storage ->
-#      Access Keys). The env var names are historical — they feed any
-#      S3-compatible backend, and `iris cluster start` turns them into the
-#      iris-task-env Secret (addressing style is derived from the endpoint
-#      domain):
-#        export R2_ACCESS_KEY_ID=<coreweave-access-key-id>
-#        export R2_SECRET_ACCESS_KEY=<coreweave-access-key-secret>
+#      Access Keys). `iris cluster start` turns them into the iris-task-env
+#      Secret (addressing style is derived from the endpoint domain):
+#        export CW_KEY_ID=<coreweave-access-key-id>
+#        export CW_KEY_SECRET=<coreweave-access-key-secret>
 #   2. Point kubectl/iris at the region kubeconfig:
 #        export KUBECONFIG=~/.kube/coreweave-iris-rno2a   # context marin-rn02a_RNO2A
 #   3. Start / inspect the cluster:
@@ -44,6 +42,9 @@ platform:
 
 storage:
   remote_state_dir: s3://marin-us-east-02a/iris/cw-rno2a/state
+  # Node-local NVMe for the controller's SQLite state, not the default
+  # network-attached PVC.
+  local_state_dir: /mnt/local/iris-controller-state
 
 kubernetes_provider:
   namespace: iris
@@ -65,6 +66,7 @@ kubernetes_provider:
 
 controller:
   image: ghcr.io/marin-community/iris-controller:latest
+  checkpoint_interval_seconds: 600
   coreweave:
     port: 10000
     service_name: iris-controller-svc

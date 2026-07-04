@@ -4,6 +4,7 @@
 """Tests for endpoint resolution in the controller daemon entrypoint."""
 
 import json
+import os
 import subprocess
 from pathlib import Path
 from unittest.mock import patch
@@ -11,7 +12,8 @@ from unittest.mock import patch
 import pytest
 import yaml
 from iris.cluster.config import ClusterFinelogConfig, EndpointSpec, IrisClusterConfig
-from iris.cluster.controller.main import LOG_SERVER_ENDPOINT_NAME, _resolve_cluster_endpoints
+from iris.cluster.controller.db import ControllerDB
+from iris.cluster.controller.main import LOG_SERVER_ENDPOINT_NAME, _local_db_epoch_ms, _resolve_cluster_endpoints
 
 
 def test_resolve_returns_empty_for_empty_config():
@@ -125,3 +127,39 @@ def test_finelog_config_missing_file_raises():
 
     with pytest.raises(FileNotFoundError):
         _resolve_cluster_endpoints(cfg)
+
+
+def test_local_db_epoch_ms_none_when_absent(tmp_path: Path):
+    assert _local_db_epoch_ms(tmp_path / "db") is None
+
+
+def test_local_db_epoch_ms_none_when_auth_db_missing(tmp_path: Path):
+    """A partial local dir (main DB only) must not be trusted as a freshness signal."""
+    db_dir = tmp_path / "db"
+    db = ControllerDB(db_dir=db_dir)
+    db.close()
+    (db_dir / ControllerDB.AUTH_DB_FILENAME).unlink()
+
+    assert _local_db_epoch_ms(db_dir) is None
+
+
+def test_local_db_epoch_ms_reflects_wal_mtime(tmp_path: Path):
+    """A WAL-mode write lands in the -wal sibling first; its mtime must count."""
+    db_dir = tmp_path / "db"
+    db = ControllerDB(db_dir=db_dir)
+    with db.transaction():
+        pass  # commit an IMMEDIATE transaction so the WAL file is populated
+
+    db_path = db_dir / ControllerDB.DB_FILENAME
+    wal_path = db_dir / f"{ControllerDB.DB_FILENAME}-wal"
+    assert wal_path.exists(), "WAL file must exist while the connection is open"
+
+    older = db_path.stat().st_mtime - 100
+    newer = older + 50
+    # Backdate every file except the main WAL, so the newest mtime is unambiguous.
+    for path in db_dir.iterdir():
+        os.utime(path, (older, older))
+    os.utime(wal_path, (newer, newer))
+
+    assert _local_db_epoch_ms(db_dir) == int(newer * 1000)
+    db.close()

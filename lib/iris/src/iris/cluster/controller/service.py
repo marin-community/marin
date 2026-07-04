@@ -362,9 +362,15 @@ def task_to_proto(task: TaskWithAttempts, worker_address: str = "") -> job_pb2.T
         current_attempt_id=task.current_attempt_id,
         attempts=attempts,
         failure_count=task.failure_count,
+        preemption_count=task.preemption_count,
         backend_id=task.backend_id,
         cluster=task.cluster,
     )
+    # ``submitted_at_ms`` is a non-optional Timestamp (never None), so guard on the
+    # value: a mirrored federated task not yet started carries the peer's real
+    # submit time (> 0), while a 0 would render as epoch 1970.
+    if task.submitted_at_ms.epoch_ms() > 0:
+        proto.submitted_at.CopyFrom(timestamp_to_proto(task.submitted_at_ms))
     if current_attempt and current_attempt.started_at_ms:
         proto.started_at.CopyFrom(timestamp_to_proto(current_attempt.started_at_ms))
     if current_attempt and current_attempt.finished_at_ms:
@@ -618,19 +624,28 @@ def _clamp_int32(value: int, *, job_id: JobName, field: str) -> int:
     return value
 
 
-def _job_status_counts(summary: TaskJobSummary | None, job_id: JobName) -> dict[str, Any]:
+def _job_status_counts(
+    summary: TaskJobSummary | None, job_id: JobName, *, pre_sync_task_count: int = 0
+) -> dict[str, Any]:
     """Return the clamped int32 counter fields for a ``JobStatus``.
 
     Spread into ``JobStatus(...)`` as ``**_job_status_counts(summary, job_id)``.
     A ``None`` summary collapses to all-zero counters (no log noise); a real
     summary runs each field through ``_clamp_int32`` so 64-bit aggregates
     never trip the proto encoder.
+
+    ``pre_sync_task_count`` is the requested replica count of a federated job
+    (``jobs.num_tasks``). A handed-off job has no local task rows until the first
+    FederationSync mirrors the peer's set, so with a ``None`` summary it is
+    surfaced as ``task_count`` — the job reads "N tasks, awaiting the peer"
+    instead of an unexplained empty table.
     """
     s = summary or _EMPTY_TASK_SUMMARY
+    task_count = s.task_count if summary is not None else pre_sync_task_count
     return {
         "failure_count": _clamp_int32(s.failure_count, job_id=job_id, field="failure_count"),
         "preemption_count": _clamp_int32(s.preemption_count, job_id=job_id, field="preemption_count"),
-        "task_count": _clamp_int32(s.task_count, job_id=job_id, field="task_count"),
+        "task_count": _clamp_int32(task_count, job_id=job_id, field="task_count"),
         "completed_count": _clamp_int32(s.completed_count, job_id=job_id, field="completed_count"),
         "task_state_counts": {
             task_state_friendly(state): _clamp_int32(count, job_id=job_id, field=f"task_state_counts[{state}]")
@@ -639,20 +654,48 @@ def _job_status_counts(summary: TaskJobSummary | None, job_id: JobName) -> dict[
     }
 
 
-def _federated_pending_reason(cluster: str, handoff_state: int | None, has_reported_tasks: bool) -> str:
+def _peer_status(cluster: str, handoff_state: int | None, has_reported_tasks: bool) -> int:
+    """The ``PeerStatus`` for a job, derived from its cluster coordinate, its
+    ``federated_jobs.handoff_state``, and whether the peer has mirrored any task
+    rows back yet.
+
+    Branch order matters: a peer that has reported tasks is ``SYNCED`` even if
+    the local handle still reads ``PENDING_HANDOFF``. The sync loop can mirror a
+    job's state before a transient RPC failure lets ``mark_handed_off`` run, so
+    the presence of mirrored task rows is the more current signal — checking it
+    before the handle avoids labelling a running, populated job "awaiting the
+    peer's acceptance". A rejected handoff never reports tasks, so ``REJECTED``
+    is checked first.
+
+    For a terminal job this is the last posture observed (e.g. a handoff
+    cancelled before delivery stays ``PENDING_SCHEDULING``). ``handoff_state`` is
+    ``None`` only if the SENT handle is gone; the handle and jobs row are created
+    and CASCADE-deleted together, so for a live federated job that is a
+    can't-happen fallback, treated as handed off.
+    """
+    if not is_federated(cluster):
+        return job_pb2.PEER_STATUS_NONE
+    if handoff_state == int(HandoffState.HANDOFF_REJECTED):
+        return job_pb2.PEER_STATUS_REJECTED
+    if has_reported_tasks:
+        return job_pb2.PEER_STATUS_SYNCED
+    if handoff_state == int(HandoffState.PENDING_HANDOFF):
+        return job_pb2.PEER_STATUS_PENDING_SCHEDULING
+    return job_pb2.PEER_STATUS_ASSIGNED
+
+
+def _federated_pending_reason(cluster: str, peer_status: int) -> str:
     """Pending reason for a federated job, which the local scheduler never sees.
 
     A handed-off job's tasks live on the peer and are excluded from the local
-    fold, so the local scheduling diagnostic is meaningless for it. Surface the
-    handoff posture instead: awaiting the peer's acceptance, awaiting its first
-    status report, or pending on the peer once it has reported tasks.
-
-    ``handoff_state`` is ``None`` on the list path, which does not load the
-    handle; there the reported-tasks signal alone drives the message.
+    fold, so the local scheduling diagnostic is meaningless for it. Derive the
+    message from the handoff posture (single source of truth): awaiting the
+    peer's acceptance, awaiting its first status report, or pending on the peer
+    once it has reported tasks.
     """
-    if handoff_state == int(HandoffState.PENDING_HANDOFF):
+    if peer_status == job_pb2.PEER_STATUS_PENDING_SCHEDULING:
         return f"Awaiting acceptance by peer {cluster}"
-    if not has_reported_tasks:
+    if peer_status == job_pb2.PEER_STATUS_ASSIGNED:
         return f"Handed off to peer {cluster}; awaiting first status report"
     return f"Pending on peer {cluster}"
 
@@ -1581,13 +1624,10 @@ class ControllerServiceImpl:
         # hint dict is cached per evaluate() cycle (#4848), so the lookup here
         # is a single dict get — we only attach this job's hint, never the
         # full routing decision.
+        peer_status = _peer_status(job.cluster, handle.handoff_state if handle else None, summary is not None)
         pending_reason = ""
         if job.state == job_pb2.JOB_STATE_PENDING and is_federated(job.cluster):
-            pending_reason = _federated_pending_reason(
-                job.cluster,
-                handle.handoff_state if handle else None,
-                summary is not None,
-            )
+            pending_reason = _federated_pending_reason(job.cluster, peer_status)
         elif job.state == job_pb2.JOB_STATE_PENDING:
             sched_reason = self._controller.get_job_scheduling_diagnostics(job.job_id.to_wire())
             pending_reason = sched_reason or "Pending scheduler feedback"
@@ -1610,7 +1650,10 @@ class ControllerServiceImpl:
             parent_job_id=job.parent_job_id.to_wire() if job.parent_job_id else "",
             backend_id=job.backend_id or "",
             cluster=job.cluster,
-            **_job_status_counts(summary, job.job_id),
+            peer_status=peer_status,
+            **_job_status_counts(
+                summary, job.job_id, pre_sync_task_count=job.num_tasks if is_federated(job.cluster) else 0
+            ),
         )
         if job.started_at_ms:
             proto_job_status.started_at.CopyFrom(timestamp_to_proto(job.started_at_ms))
@@ -1698,11 +1741,13 @@ class ControllerServiceImpl:
         autoscaler_pending_hints: dict[str, PendingHint],
         *,
         has_children: bool = False,
+        handoff_state: int | None = None,
     ) -> job_pb2.JobStatus:
         """Convert a job row and its task summary into a JobStatus proto."""
+        peer_status = _peer_status(j.cluster, handoff_state, task_summary is not None)
         pending_reason = j.error or ""
         if j.state == job_pb2.JOB_STATE_PENDING and is_federated(j.cluster):
-            pending_reason = _federated_pending_reason(j.cluster, None, task_summary is not None)
+            pending_reason = _federated_pending_reason(j.cluster, peer_status)
         elif j.state == job_pb2.JOB_STATE_PENDING:
             sched_reason = self._controller.get_job_scheduling_diagnostics(j.job_id.to_wire())
             pending_reason = sched_reason or "Pending scheduler feedback"
@@ -1721,7 +1766,10 @@ class ControllerServiceImpl:
             has_children=has_children,
             backend_id=j.backend_id or "",
             cluster=j.cluster,
-            **_job_status_counts(task_summary, j.job_id),
+            peer_status=peer_status,
+            **_job_status_counts(
+                task_summary, j.job_id, pre_sync_task_count=j.num_tasks if is_federated(j.cluster) else 0
+            ),
         )
         if j.started_at_ms:
             proto_job.started_at.CopyFrom(timestamp_to_proto(j.started_at_ms))
@@ -1737,14 +1785,17 @@ class ControllerServiceImpl:
         task_summaries: dict[JobName, TaskJobSummary],
         autoscaler_pending_hints: dict[str, PendingHint],
         has_children: set[JobName] | None = None,
+        handoff_states: dict[JobName, int] | None = None,
     ) -> list[job_pb2.JobStatus]:
         child_parent_ids = has_children or set()
+        handoffs = handoff_states or {}
         return [
             self._job_to_proto(
                 j,
                 task_summaries.get(j.job_id),
                 autoscaler_pending_hints,
                 has_children=j.job_id in child_parent_ids,
+                handoff_state=handoffs.get(j.job_id),
             )
             for j in jobs
         ]
@@ -1772,10 +1823,16 @@ class ControllerServiceImpl:
             page_ids = [j.job_id for j in page]
             summaries = reads.task_summaries_for_jobs(q, set(page_ids)) if page_ids else {}
             children = reads.parent_ids_with_children(q, page_ids) if page_ids else set()
+            # Batch-load the SENT handoff state for the federated jobs on this page
+            # so each JobStatus carries its handoff posture without a per-job read.
+            federated_ids = [j.job_id for j in page if is_federated(j.cluster)]
+            handoffs = reads.handoff_states(q, federated_ids)
 
         has_pending = any(j.state == job_pb2.JOB_STATE_PENDING for j in page)
         autoscaler_pending_hints = self._get_autoscaler_pending_hints() if has_pending else {}
-        all_jobs = self._jobs_to_protos(page, summaries, autoscaler_pending_hints, has_children=children)
+        all_jobs = self._jobs_to_protos(
+            page, summaries, autoscaler_pending_hints, has_children=children, handoff_states=handoffs
+        )
         limit = query.limit
         offset = query.offset
         has_more = limit > 0 and offset + limit < total_count

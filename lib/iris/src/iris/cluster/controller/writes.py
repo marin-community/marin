@@ -863,9 +863,11 @@ def mirror_federated_task(
     state: int,
     error: str | None,
     exit_code: int | None,
+    submitted_at_ms: int | None,
     started_at_ms: int | None,
     finished_at_ms: int | None,
     failure_count: int,
+    preemption_count: int,
     current_attempt_id: int,
     worker_address: str,
     peer_worker_label: str,
@@ -874,7 +876,9 @@ def mirror_federated_task(
 
     Priority/retry columns are placeholders — a federated task is fold-excluded
     and never scheduled locally — so only the display fields the task views read
-    are meaningful.
+    are meaningful. ``submitted_at_ms`` and ``preemption_count`` carry the peer's
+    real values so a not-yet-started task keeps its true submit time (not epoch 0)
+    and preemptions on the peer survive the mirror.
     """
     tx.execute(
         sqlite_insert(tasks_table)
@@ -885,13 +889,13 @@ def mirror_federated_task(
             state=state,
             error=error,
             exit_code=exit_code,
-            submitted_at_ms=started_at_ms or 0,
+            submitted_at_ms=submitted_at_ms or 0,
             started_at_ms=started_at_ms,
             finished_at_ms=finished_at_ms,
             max_retries_failure=0,
             max_retries_preemption=0,
             failure_count=failure_count,
-            preemption_count=0,
+            preemption_count=preemption_count,
             current_attempt_id=current_attempt_id,
             current_worker_id=None,
             current_worker_address=worker_address,
@@ -907,9 +911,11 @@ def mirror_federated_task(
                 "state": state,
                 "error": error,
                 "exit_code": exit_code,
+                "submitted_at_ms": submitted_at_ms or 0,
                 "started_at_ms": started_at_ms,
                 "finished_at_ms": finished_at_ms,
                 "failure_count": failure_count,
+                "preemption_count": preemption_count,
                 "current_attempt_id": current_attempt_id,
                 "current_worker_address": worker_address,
                 "cluster": peer_id,

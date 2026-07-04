@@ -57,7 +57,7 @@ class GrugTrainerConfig:
     data_seed: int | None = None
     log_every: int = 1
     ema_beta: float | None = None  # EMA coefficient for eval/checkpoint model; None disables EMA.
-    z_loss_weight: float = 0.0  # Weight on logsumexp (z-loss) stabilization term.
+    z_loss_weight: float = 1e-4  # Weight on final-logit logsumexp z-loss stabilization term.
 
     # Grug builds its own compact (replica_dcn, data, expert, model) mesh instead of using
     # the Trainer's logical axis mapping; `data` absorbs whatever these two leave free.

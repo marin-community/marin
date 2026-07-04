@@ -8,8 +8,8 @@ Supports both an interactive curses TUI and non-interactive CLI commands
 for listing, viewing, and copying files.
 
 Usage:
-    export R2_ACCESS_KEY_ID=<your-key-id>
-    export R2_SECRET_ACCESS_KEY=<your-key-secret>
+    export CW_KEY_ID=<your-key-id>
+    export CW_KEY_SECRET=<your-key-secret>
 
     # Interactive TUI (default)
     uv run lib/iris/scripts/fs-browser.py [prefix]
@@ -72,10 +72,10 @@ def normalize_path(arg: str, bucket: str) -> str:
 
 
 def connect(s3_config: S3Config) -> s3fs.S3FileSystem:
-    key_id = os.environ.get("R2_ACCESS_KEY_ID")
-    key_secret = os.environ.get("R2_SECRET_ACCESS_KEY")
+    key_id = os.environ.get("CW_KEY_ID")
+    key_secret = os.environ.get("CW_KEY_SECRET")
     if not key_id or not key_secret:
-        print("ERROR: R2_ACCESS_KEY_ID and R2_SECRET_ACCESS_KEY must be set", file=sys.stderr)
+        print("ERROR: CW_KEY_ID and CW_KEY_SECRET must be set", file=sys.stderr)
         sys.exit(1)
 
     return s3fs.S3FileSystem(
