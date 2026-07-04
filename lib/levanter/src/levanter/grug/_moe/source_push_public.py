@@ -12,10 +12,14 @@ from jaxtyping import Array, Float, Int
 
 from levanter.grug._moe.source_push_forward import (
     FORWARD_EXECUTION_STAGED_HOST_SYNC,
-    SOURCE_PUSH_FORWARD_IMPLEMENTATION_PALLAS_MGPU,
-    source_push_forward,
+    make_source_push_forward_inputs,
 )
 from levanter.grug._moe.source_push_inbox import AXIS, PushInboxConfig
+from levanter.grug._moe.source_push_mlp import (
+    SOURCE_PUSH_MLP_IMPLEMENTATION_PALLAS_MGPU,
+    source_push_mlp_route_table_from_plan,
+    source_push_moe_mlp_from_plan,
+)
 from levanter.grug._moe.source_push_plan import build_source_push_plan
 from levanter.utils.activation import ActivationFunctionEnum
 
@@ -87,14 +91,29 @@ def moe_mlp_ep_source_push_mgpu(
         experts_per_rank=experts_per_rank,
         capacity_factor=capacity_factor,
     )
-    out_source, dropped = source_push_forward(
+    if not isinstance(mesh, Mesh):
+        raise ValueError(f"{SOURCE_PUSH_PUBLIC_IMPLEMENTATION!r} requires a concrete Mesh")
+    host_inputs = make_source_push_forward_inputs(
         config,
         x_source,
         selected_source,
         combine_source,
         w_gate_up_source,
         w_down_source,
-        implementation=SOURCE_PUSH_FORWARD_IMPLEMENTATION_PALLAS_MGPU,
+    )
+    route_table = source_push_mlp_route_table_from_plan(
+        host_inputs.plan,
+        src_base_by_expert=host_inputs.src_base_by_expert,
+    )
+    out_source, dropped = source_push_moe_mlp_from_plan(
+        config,
+        host_inputs,
+        route_table,
+        x_source,
+        combine_source,
+        w_gate_up_source,
+        w_down_source,
+        implementation=SOURCE_PUSH_MLP_IMPLEMENTATION_PALLAS_MGPU,
         execution_mode=FORWARD_EXECUTION_STAGED_HOST_SYNC,
         mesh=mesh,
     )
