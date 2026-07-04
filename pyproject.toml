@@ -168,8 +168,8 @@ harbor = { git = "https://github.com/marin-community/harbor.git", rev = "354692d
 # if this is a fixed-base overlay PR, then follow
 # .agents/skills/refresh-tpu-vllm-forks/docs/overlay-only-pr.md. PR-head SHAs are
 # temporary and must be replaced by the landed fork main SHA.
-# https://github.com/marin-community/vllm/compare/a30addc7548a9a8b9b3323a7bc3eb7d7c4895d1c...41f8ff4628fdd411fd0d1fba6545a27ccb8d146c
-vllm = { git = "https://github.com/marin-community/vllm.git", rev = "41f8ff4628fdd411fd0d1fba6545a27ccb8d146c" }
+# https://github.com/marin-community/vllm/compare/a30addc7548a9a8b9b3323a7bc3eb7d7c4895d1c...69ea39d7093a0d03eaa6eb09b72c0c1edd664c56
+vllm = { git = "https://github.com/marin-community/vllm.git", rev = "69ea39d7093a0d03eaa6eb09b72c0c1edd664c56" }
 # https://github.com/marin-community/tpu-inference/compare/23d17a8120d9cc34890135599f42e1db4f947c10...808415f45bbfcb512e9c593c4a3330aed115917e
 tpu-inference = { git = "https://github.com/marin-community/tpu-inference.git", rev = "808415f45bbfcb512e9c593c4a3330aed115917e" }
 # ### BEGIN RUST-DEV SOURCES ###
