@@ -1942,3 +1942,36 @@ combine as the correctness oracle.
     noise in the compute stages.
   - Compare combine times, not combine GB/s, across the route-buffer and direct kernels: the direct path intentionally
     reports fewer bytes because it no longer writes and rereads `[T, K, D]`.
+
+## 2026-07-03 17:13 - Define MLP-level H checkpoint contract
+
+Added a package-private reference boundary for the revised source-push MoE MLP direction. The new boundary treats the
+whole expert MLP as the differentiable unit:
+
+```text
+x, route_assignments, route_weights, w13, w2 -> source_push_moe_mlp(...) -> y
+```
+
+The stable forward residual is now modeled as W13 preactivation `H_expert_major`, not post-SwiGLU `A`. In the reference
+contract this is shaped `[dst, local_expert, expert_capacity, 2 * intermediate_dim]`, matching the intended per-rank
+production layout `[local_expert, capacity, 2I]` with an outer destination-rank axis for the host/JAX oracle.
+
+- Commit Hash: `e8ace802f`
+- Code:
+  - `lib/levanter/src/levanter/grug/_moe/source_push_mlp.py`
+  - `lib/levanter/tests/grug/test_source_push_mlp.py`
+- Verification:
+  - `uv run --package marin-levanter --group test pytest lib/levanter/tests/grug/test_source_push_mlp.py -q`
+    - Result: `3 passed, 11 warnings in 10.71s`.
+  - `./infra/pre-commit.py --fix lib/levanter/src/levanter/grug/_moe/source_push_mlp.py lib/levanter/tests/grug/test_source_push_mlp.py`
+    - Result: all checks passed, including Pyrefly.
+- Contract covered by tests:
+  - `H_expert_major` stores raw W13 `[gate, up]` rows before `silu(gate) * up`.
+  - Forward output matches an independent loop reference.
+  - The MLP-level custom VJP matches JAX autodiff of the reference for `x`, `route_weights`, `w13`, and `w2`; the
+    `d_route_weights` path is explicitly nonzero and checked.
+- Current divergence from production kernels:
+  - Existing source-push W13 still stores post-SwiGLU hidden with shape `[rows, I]`.
+  - Existing W2 return consumes post-SwiGLU hidden and source combine applies route weights after W2.
+  - Next implementation step is to move production W13/W2 to the H boundary: W13 stores `[E, capacity, 2I]`, W2 loads H,
+    computes `silu(gate) * up`, applies route weight before W2, and returns/combines source-owned `y`.
