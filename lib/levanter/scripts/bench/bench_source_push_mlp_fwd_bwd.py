@@ -32,12 +32,19 @@ from levanter.grug._moe.source_push_forward import (
     FORWARD_STAGES,
     SourcePushForwardDeviceInputs,
     _shard_source_push_forward_inputs,
+    _sharded_source_combine_kernel,
     _time_staged_source_push_forward,
     device_source_push_forward_inputs_from_plan,
     make_source_push_forward_inputs,
     make_source_push_forward_source_plan_raw_inputs,
 )
-from levanter.grug._moe.source_push_inbox import AXIS, BYTES_PER_BF16, PushInboxConfig, _block_until_ready
+from levanter.grug._moe.source_push_inbox import (
+    AXIS,
+    BYTES_PER_BF16,
+    PushInboxConfig,
+    _block_until_ready,
+    _sharded_raw_token_w13_h_kernel,
+)
 from levanter.grug._moe.source_push_inbox_profiles import SOURCE_PUSH_PROFILES, source_push_profile_defaults
 from levanter.grug._moe.source_push_mlp import (
     SOURCE_PUSH_MLP_IMPLEMENTATION_PALLAS_MGPU,
@@ -45,6 +52,8 @@ from levanter.grug._moe.source_push_mlp import (
     source_push_mlp_route_table_from_plan,
     source_push_moe_mlp_from_plan,
 )
+from levanter.grug._moe.source_push_plan import source_push_recv_route_weights_jax
+from levanter.grug._moe.source_push_w2_return import _sharded_w2_from_h_return_direct_to_source_kernel
 from levanter.grug.grug_moe import moe_mlp
 from levanter.utils.activation import ActivationFunctionEnum
 
@@ -53,8 +62,10 @@ KERNEL_NAME = "source_push_mlp_fwd_bwd"
 MODE_FORWARD = "forward"
 MODE_FORWARD_BACKWARD = "forward_backward"
 MODE_FORWARD_DECOMPOSED = "forward_decomposed"
+MODE_FORWARD_DECOMPOSED_RAW_TOKENS = "forward_decomposed_raw_tokens"
 FORWARD_DECOMPOSED_STAGE_PACK_INPUTS = "pack_inputs"
-MODES = (MODE_FORWARD, MODE_FORWARD_BACKWARD, MODE_FORWARD_DECOMPOSED)
+FORWARD_DECOMPOSED_STAGE_PREPARE_INPUTS = "prepare_inputs"
+MODES = (MODE_FORWARD, MODE_FORWARD_BACKWARD, MODE_FORWARD_DECOMPOSED, MODE_FORWARD_DECOMPOSED_RAW_TOKENS)
 BACKEND_RING = "ring"
 BACKEND_RAGGED_A2A = "ragged_all_to_all"
 BACKEND_PUBLIC_SOURCE_PUSH = "public_source_push"
@@ -109,7 +120,37 @@ class InputPackTiming(NamedTuple):
 
     first_call_time: float
     steady_state_times: list[float]
-    output: SourcePushForwardDeviceInputs
+    output: Any
+
+
+class RawTokenForwardInputs(NamedTuple):
+    """Device inputs for the raw-token W13-H source-push decomposition."""
+
+    x: jax.Array
+    token_ids: jax.Array
+    send_meta: jax.Array
+    recv_meta: jax.Array
+    expert_base: jax.Array
+    src_base_by_expert: jax.Array
+    w_gate_up: jax.Array
+    recv_route_weights: jax.Array
+    w_down: jax.Array
+    queue_dst_ord: jax.Array
+    queue_entry: jax.Array
+    queue_row: jax.Array
+    route_combine_weights: jax.Array
+    route_valid_mask: jax.Array
+    use_exact_expert_major: bool
+
+
+class RawTokenForwardTiming(NamedTuple):
+    """Timing result for raw-token staged source-push forward."""
+
+    compile_time: float
+    steady_state_times: list[float]
+    output: Any
+    stage_steady_state_times: dict[str, list[float]]
+    stage_compile_times: dict[str, float]
 
 
 def _profile_defaults(argv: Sequence[str] | None = None) -> dict[str, Any]:
@@ -290,9 +331,19 @@ def _run_one(
         )
         inputs = _device_benchmark_inputs(config, raw_inputs, mesh)
         use_outer_jit = _resolve_outer_jit(backend, outer_jit)
-        if mode == MODE_FORWARD_DECOMPOSED:
+        if mode in (MODE_FORWARD_DECOMPOSED, MODE_FORWARD_DECOMPOSED_RAW_TOKENS):
             if backend != BACKEND_SOURCE_PUSH_PALLAS:
-                raise ValueError(f"{MODE_FORWARD_DECOMPOSED!r} only supports backend={BACKEND_SOURCE_PUSH_PALLAS!r}")
+                raise ValueError(f"{mode!r} only supports backend={BACKEND_SOURCE_PUSH_PALLAS!r}")
+            if mode == MODE_FORWARD_DECOMPOSED_RAW_TOKENS:
+                return _run_source_push_forward_raw_token_decomposed(
+                    config,
+                    mesh=mesh,
+                    host_inputs=host_inputs,
+                    inputs=inputs,
+                    warmup=warmup,
+                    steps=steps,
+                    repeat_runs=repeat_runs,
+                )
             return _run_source_push_forward_decomposed(
                 config,
                 mesh=mesh,
@@ -410,6 +461,50 @@ def _run_source_push_forward_decomposed(
         staged_timing=staged_timing,
         queue_stats=host_inputs.queue_stats,
         repeat_runs=repeat_runs,
+        mode=MODE_FORWARD_DECOMPOSED,
+        input_stage=FORWARD_DECOMPOSED_STAGE_PACK_INPUTS,
+    )
+
+
+def _run_source_push_forward_raw_token_decomposed(
+    config: PushInboxConfig,
+    *,
+    mesh: Mesh,
+    host_inputs,
+    inputs: dict[str, jax.Array],
+    warmup: int,
+    steps: int,
+    repeat_runs: int,
+) -> list[dict[str, Any]]:
+    prepare_timing = _time_source_push_raw_token_input_prepare(
+        config,
+        mesh=mesh,
+        host_inputs=host_inputs,
+        x=inputs["x_source"],
+        route_weights=inputs["combine_source"],
+        w13=inputs["w13_source"],
+        w2=inputs["w2_source"],
+        warmup=warmup,
+        steps=steps,
+        repeat_runs=repeat_runs,
+    )
+    raw_inputs = prepare_timing.output
+    staged_timing = _time_staged_source_push_forward_raw_tokens(
+        mesh,
+        config,
+        raw_inputs,
+        warmup=warmup,
+        steps=steps,
+        repeat_runs=repeat_runs,
+    )
+    return _decomposed_forward_rows(
+        config,
+        pack_timing=prepare_timing,
+        staged_timing=staged_timing,
+        queue_stats=host_inputs.queue_stats,
+        repeat_runs=repeat_runs,
+        mode=MODE_FORWARD_DECOMPOSED_RAW_TOKENS,
+        input_stage=FORWARD_DECOMPOSED_STAGE_PREPARE_INPUTS,
     )
 
 
@@ -453,6 +548,192 @@ def _time_source_push_input_pack(
     )
 
 
+def _time_source_push_raw_token_input_prepare(
+    config: PushInboxConfig,
+    *,
+    mesh: Mesh,
+    host_inputs,
+    x: jax.Array,
+    route_weights: jax.Array,
+    w13: jax.Array,
+    w2: jax.Array,
+    warmup: int,
+    steps: int,
+    repeat_runs: int,
+) -> InputPackTiming:
+    def prepare_inputs() -> RawTokenForwardInputs:
+        with jax.set_mesh(mesh):
+            recv_route_weights = source_push_recv_route_weights_jax(route_weights, host_inputs.plan)
+            prepared = RawTokenForwardInputs(
+                x=x.astype(jnp.bfloat16),
+                token_ids=jnp.asarray(host_inputs.plan.token_ids, dtype=jnp.int32),
+                send_meta=jnp.asarray(host_inputs.send_meta, dtype=jnp.int32),
+                recv_meta=jnp.asarray(host_inputs.recv_meta, dtype=jnp.int32),
+                expert_base=jnp.asarray(host_inputs.expert_base, dtype=jnp.int32),
+                src_base_by_expert=jnp.asarray(host_inputs.src_base_by_expert, dtype=jnp.int32),
+                w_gate_up=jnp.asarray(w13, dtype=jnp.bfloat16),
+                recv_route_weights=jnp.repeat(
+                    recv_route_weights[..., None].astype(jnp.bfloat16),
+                    config.block_k,
+                    axis=-1,
+                ),
+                w_down=jnp.asarray(w2, dtype=jnp.bfloat16),
+                queue_dst_ord=jnp.asarray(host_inputs.queue_dst_ord, dtype=jnp.int32),
+                queue_entry=jnp.asarray(host_inputs.queue_entry, dtype=jnp.int32),
+                queue_row=jnp.asarray(host_inputs.queue_row, dtype=jnp.int32),
+                route_combine_weights=jnp.asarray(host_inputs.route_combine_weights, dtype=jnp.bfloat16),
+                route_valid_mask=jnp.asarray(host_inputs.route_valid_mask, dtype=jnp.bool_),
+                use_exact_expert_major=host_inputs.use_exact_expert_major,
+            )
+            prepared = _shard_raw_token_forward_inputs(mesh, prepared)
+        return _block_raw_token_forward_inputs(prepared)
+
+    start = time.perf_counter()
+    output = prepare_inputs()
+    first_call_time = time.perf_counter() - start
+
+    for _ in range(warmup):
+        output = prepare_inputs()
+
+    steady_state_times = []
+    for _ in range(repeat_runs):
+        start = time.perf_counter()
+        for _ in range(steps):
+            output = prepare_inputs()
+        steady_state_times.append((time.perf_counter() - start) / steps)
+
+    return InputPackTiming(
+        first_call_time=first_call_time,
+        steady_state_times=steady_state_times,
+        output=output,
+    )
+
+
+def _shard_raw_token_forward_inputs(mesh: Mesh, inputs: RawTokenForwardInputs) -> RawTokenForwardInputs:
+    return RawTokenForwardInputs(
+        x=jax.device_put(inputs.x, NamedSharding(mesh, P(AXIS, None, None))),
+        token_ids=jax.device_put(inputs.token_ids, NamedSharding(mesh, P(AXIS, None, None, None))),
+        send_meta=jax.device_put(inputs.send_meta, NamedSharding(mesh, P(AXIS, None, None, None))),
+        recv_meta=jax.device_put(inputs.recv_meta, NamedSharding(mesh, P(AXIS, None, None, None))),
+        expert_base=jax.device_put(inputs.expert_base, NamedSharding(mesh, P(AXIS, None))),
+        src_base_by_expert=jax.device_put(inputs.src_base_by_expert, NamedSharding(mesh, P(AXIS, None, None))),
+        w_gate_up=jax.device_put(inputs.w_gate_up, NamedSharding(mesh, P(AXIS, None, None, None))),
+        recv_route_weights=jax.device_put(
+            inputs.recv_route_weights, NamedSharding(mesh, P(AXIS, None, None, None, None))
+        ),
+        w_down=jax.device_put(inputs.w_down, NamedSharding(mesh, P(AXIS, None, None, None))),
+        queue_dst_ord=jax.device_put(inputs.queue_dst_ord, NamedSharding(mesh, P(AXIS, None, None))),
+        queue_entry=jax.device_put(inputs.queue_entry, NamedSharding(mesh, P(AXIS, None, None))),
+        queue_row=jax.device_put(inputs.queue_row, NamedSharding(mesh, P(AXIS, None, None))),
+        route_combine_weights=jax.device_put(inputs.route_combine_weights, NamedSharding(mesh, P(AXIS, None, None))),
+        route_valid_mask=jax.device_put(inputs.route_valid_mask, NamedSharding(mesh, P(AXIS, None, None))),
+        use_exact_expert_major=inputs.use_exact_expert_major,
+    )
+
+
+def _block_raw_token_forward_inputs(inputs: RawTokenForwardInputs) -> RawTokenForwardInputs:
+    _block_until_ready(tuple(value for value in inputs[:-1]))
+    return inputs
+
+
+def _time_staged_source_push_forward_raw_tokens(
+    mesh: Mesh,
+    config: PushInboxConfig,
+    inputs: RawTokenForwardInputs,
+    *,
+    warmup: int,
+    steps: int,
+    repeat_runs: int,
+) -> RawTokenForwardTiming:
+    w13_h_fn = jax.jit(
+        _sharded_raw_token_w13_h_kernel(
+            mesh,
+            config,
+            use_exact_expert_major=inputs.use_exact_expert_major,
+        )
+    )
+    w2_from_h_return_fn = jax.jit(
+        _sharded_w2_from_h_return_direct_to_source_kernel(
+            mesh,
+            config,
+            use_exact_expert_major=inputs.use_exact_expert_major,
+        )
+    )
+    combine_fn = jax.jit(_sharded_source_combine_kernel(mesh, config))
+
+    def call_stages(*, record_stage_times: bool = False):
+        stage_times: dict[str, float] = {}
+
+        stage_start = time.perf_counter()
+        _, h = w13_h_fn(
+            inputs.x,
+            inputs.token_ids,
+            inputs.send_meta,
+            inputs.recv_meta,
+            inputs.expert_base,
+            inputs.src_base_by_expert,
+            inputs.w_gate_up,
+        )
+        _block_until_ready(h)
+        if record_stage_times:
+            stage_times[FORWARD_STAGE_W13] = time.perf_counter() - stage_start
+
+        stage_start = time.perf_counter()
+        source_return = w2_from_h_return_fn(
+            h,
+            inputs.recv_route_weights,
+            inputs.recv_meta,
+            inputs.expert_base,
+            inputs.src_base_by_expert,
+            inputs.w_down,
+        )
+        _block_until_ready(source_return)
+        if record_stage_times:
+            stage_times[FORWARD_STAGE_W2_RETURN] = time.perf_counter() - stage_start
+
+        stage_start = time.perf_counter()
+        out = combine_fn(
+            source_return,
+            inputs.queue_dst_ord,
+            inputs.queue_entry,
+            inputs.queue_row,
+            jnp.ones_like(inputs.route_combine_weights),
+            inputs.route_valid_mask,
+        )
+        _block_until_ready(out)
+        if record_stage_times:
+            stage_times[FORWARD_STAGE_COMBINE] = time.perf_counter() - stage_start
+        return out, stage_times
+
+    start = time.perf_counter()
+    out, stage_compile_times = call_stages(record_stage_times=True)
+    compile_time = time.perf_counter() - start
+
+    for _ in range(warmup):
+        out, _ = call_stages()
+
+    steady_state_times = []
+    stage_steady_state_times: dict[str, list[float]] = {stage: [] for stage in FORWARD_STAGES}
+    for _ in range(repeat_runs):
+        start = time.perf_counter()
+        stage_elapsed = {stage: 0.0 for stage in FORWARD_STAGES}
+        for _ in range(steps):
+            out, step_stage_times = call_stages(record_stage_times=True)
+            for stage in FORWARD_STAGES:
+                stage_elapsed[stage] += step_stage_times[stage]
+        steady_state_times.append((time.perf_counter() - start) / steps)
+        for stage in FORWARD_STAGES:
+            stage_steady_state_times[stage].append(stage_elapsed[stage] / steps)
+
+    return RawTokenForwardTiming(
+        compile_time=compile_time,
+        steady_state_times=steady_state_times,
+        output=out,
+        stage_steady_state_times=stage_steady_state_times,
+        stage_compile_times=stage_compile_times,
+    )
+
+
 def _block_source_push_forward_device_inputs(inputs: SourcePushForwardDeviceInputs) -> SourcePushForwardDeviceInputs:
     _block_until_ready(
         (
@@ -481,6 +762,8 @@ def _decomposed_forward_rows(
     staged_timing,
     queue_stats: dict[str, Any],
     repeat_runs: int,
+    mode: str,
+    input_stage: str,
 ) -> list[dict[str, Any]]:
     if staged_timing.stage_steady_state_times is None:
         raise ValueError("decomposed forward requires staged source-push timing")
@@ -507,6 +790,7 @@ def _decomposed_forward_rows(
                 useful_forward_flops=useful_forward_flops,
                 rounded_forward_flops=rounded_forward_flops,
                 dropped_routes=dropped_routes,
+                mode=mode,
             )
         )
         rows.append(
@@ -515,7 +799,7 @@ def _decomposed_forward_rows(
                 queue_stats=queue_stats,
                 repeat_run=repeat_run,
                 repeat_runs=repeat_runs,
-                stage=FORWARD_DECOMPOSED_STAGE_PACK_INPUTS,
+                stage=input_stage,
                 steady_state_time=pack_time,
                 first_call_time=pack_timing.first_call_time,
                 compile_time=None,
@@ -523,6 +807,7 @@ def _decomposed_forward_rows(
                 useful_forward_flops=None,
                 rounded_forward_flops=None,
                 dropped_routes=dropped_routes,
+                mode=mode,
             )
         )
         for stage in FORWARD_STAGES:
@@ -543,13 +828,14 @@ def _decomposed_forward_rows(
                     useful_forward_flops=_stage_useful_flops_per_rank(config, queue_stats, stage),
                     rounded_forward_flops=_stage_rounded_flops_per_rank(config, queue_stats, stage),
                     dropped_routes=dropped_routes,
+                    mode=mode,
                 )
             )
 
     grouped_rows = []
     for stage in (
         FORWARD_STAGE_TOTAL,
-        FORWARD_DECOMPOSED_STAGE_PACK_INPUTS,
+        input_stage,
         FORWARD_STAGE_W13,
         FORWARD_STAGE_W2_RETURN,
         FORWARD_STAGE_COMBINE,
@@ -574,6 +860,7 @@ def _decomposed_forward_row(
     useful_forward_flops: float | None,
     rounded_forward_flops: float | None,
     dropped_routes: int,
+    mode: str,
 ) -> dict[str, Any]:
     useful_tflops = None if useful_forward_flops is None else useful_forward_flops / steady_state_time / 1e12
     rounded_tflops = None if rounded_forward_flops is None else rounded_forward_flops / steady_state_time / 1e12
@@ -583,7 +870,7 @@ def _decomposed_forward_row(
             BACKEND_SOURCE_PUSH_PALLAS if stage == FORWARD_STAGE_TOTAL else f"{BACKEND_SOURCE_PUSH_PALLAS}_{stage}"
         ),
         "backend": BACKEND_SOURCE_PUSH_PALLAS,
-        "mode": MODE_FORWARD_DECOMPOSED,
+        "mode": mode,
         "stage": stage,
         "row_type": "repeat",
         "config": asdict(config),

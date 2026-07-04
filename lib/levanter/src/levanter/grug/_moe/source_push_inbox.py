@@ -77,6 +77,8 @@ ROW_START_MODE_SOURCE_PADDED = "source_padded_row_start"
 ROW_START_MODE_EXACT_EXPERT_MAJOR = "exact_expert_major_row_start"
 ROW_LAYOUT_SOURCE_PADDED_EXPERT_MAJOR = "source_padded_expert_major"
 ROW_LAYOUT_EXACT_EXPERT_MAJOR = "exact_expert_major"
+SOURCE_INPUT_PACKED_QUEUE = "packed_queue"
+SOURCE_INPUT_RAW_TOKENS = "raw_tokens"
 ROUTING_MODES = (
     "balanced",
     "roughly_balanced",
@@ -309,8 +311,14 @@ def _make_kernel(
     *,
     use_exact_expert_major: bool = False,
     output_preactivation_h: bool = False,
+    source_input_mode: str = SOURCE_INPUT_PACKED_QUEUE,
 ):
     _validate_diagnostic_variant(diagnostic_variant)
+    if source_input_mode not in (SOURCE_INPUT_PACKED_QUEUE, SOURCE_INPUT_RAW_TOKENS):
+        raise ValueError(
+            "source_input_mode must be one of "
+            f"{(SOURCE_INPUT_PACKED_QUEUE, SOURCE_INPUT_RAW_TOKENS)}, got {source_input_mode!r}"
+        )
     k_tiles = config.hidden_dim // config.block_k
     n_tiles = config.intermediate_dim // config.block_n
     n_work_groups = n_tiles // config.n_group
@@ -338,8 +346,9 @@ def _make_kernel(
         DIAGNOSTIC_VARIANT_COMPUTE_ONLY_LOCAL,
     )
 
-    def body(
-        x_ref: Float[Ref, "DST Q M D"],
+    def _body_impl(
+        x_ref: Float[Ref, "... D"],
+        token_ids_ref: Int[Ref, "DST Q M"],
         send_meta_ref: Int[Ref, "DST Q F"],
         recv_meta_ref: Int[Ref, "SRC Q F"],
         expert_base_ref: Int[Ref, "E"],
@@ -388,12 +397,32 @@ def _make_kernel(
                                         pl.semaphore_wait(empty_sem_ref.at[dst, slot])
 
                                         def _copy_buffer(buffer_smem, k_start) -> None:
-                                            buffer_smem[:, :] = x_ref[
-                                                dst_ordinal,
-                                                entry,
-                                                pl.ds(0, config.block_m),
-                                                pl.ds(k_start, config.block_k),
-                                            ]
+                                            if source_input_mode == SOURCE_INPUT_RAW_TOKENS:
+
+                                                @pl.loop(0, config.block_m)
+                                                def _row_loop(row) -> None:
+                                                    @pl.when(row < valid_rows)
+                                                    def _copy_valid_row() -> None:
+                                                        token = token_ids_ref[dst_ordinal, entry, row]
+                                                        buffer_smem[row, :] = x_ref[
+                                                            token,
+                                                            pl.ds(k_start, config.block_k),
+                                                        ]
+
+                                                    @pl.when(row >= valid_rows)
+                                                    def _zero_invalid_row() -> None:
+                                                        buffer_smem[row, :] = jnp.zeros(
+                                                            (config.block_k,),
+                                                            dtype=x_ref.dtype,
+                                                        )
+
+                                            else:
+                                                buffer_smem[:, :] = x_ref[
+                                                    dst_ordinal,
+                                                    entry,
+                                                    pl.ds(0, config.block_m),
+                                                    pl.ds(k_start, config.block_k),
+                                                ]
                                             mgpu.commit_smem()
                                             if dst_offset == 0:
                                                 mgpu.copy_smem_to_gmem(
@@ -847,6 +876,55 @@ def _make_kernel(
                 lax.switch(src_ordinal, branches, None)
 
             _switch_recv_n_tile_src(peer_ordinal)
+
+    if source_input_mode == SOURCE_INPUT_PACKED_QUEUE:
+
+        def body(
+            x_ref: Float[Ref, "DST Q M D"],
+            send_meta_ref: Int[Ref, "DST Q F"],
+            recv_meta_ref: Int[Ref, "SRC Q F"],
+            expert_base_ref: Int[Ref, "E"],
+            src_base_by_expert_ref: Int[Ref, "SRC E"],
+            w_ref: Float[Ref, "E D twoI"],
+            inbox_out_ref: Float[Ref, "SRC SLOTS M D"],
+            hidden_ref: Float[Ref, "rows I"],
+        ) -> None:
+            _body_impl(
+                x_ref,
+                send_meta_ref,
+                send_meta_ref,
+                recv_meta_ref,
+                expert_base_ref,
+                src_base_by_expert_ref,
+                w_ref,
+                inbox_out_ref,
+                hidden_ref,
+            )
+
+    else:
+
+        def body(
+            x_ref: Float[Ref, "T D"],
+            token_ids_ref: Int[Ref, "DST Q M"],
+            send_meta_ref: Int[Ref, "DST Q F"],
+            recv_meta_ref: Int[Ref, "SRC Q F"],
+            expert_base_ref: Int[Ref, "E"],
+            src_base_by_expert_ref: Int[Ref, "SRC E"],
+            w_ref: Float[Ref, "E D twoI"],
+            inbox_out_ref: Float[Ref, "SRC SLOTS M D"],
+            hidden_ref: Float[Ref, "rows I"],
+        ) -> None:
+            _body_impl(
+                x_ref,
+                token_ids_ref,
+                send_meta_ref,
+                recv_meta_ref,
+                expert_base_ref,
+                src_base_by_expert_ref,
+                w_ref,
+                inbox_out_ref,
+                hidden_ref,
+            )
 
     inbox_shape = (config.ep_size, config.inbox_slots, config.block_m, config.hidden_dim)
     grid = (len(send_dst_offsets), config.worker_programs_per_peer)
@@ -1534,6 +1612,20 @@ def _make_w13_h_kernel(
     )
 
 
+def _make_raw_token_w13_h_kernel(
+    config: PushInboxConfig,
+    *,
+    use_exact_expert_major: bool = False,
+):
+    return _make_kernel(
+        config,
+        DIAGNOSTIC_VARIANT_FULL,
+        use_exact_expert_major=use_exact_expert_major,
+        output_preactivation_h=True,
+        source_input_mode=SOURCE_INPUT_RAW_TOKENS,
+    )
+
+
 def _sharded_w13_h_kernel(
     mesh: Mesh,
     config: PushInboxConfig,
@@ -1571,6 +1663,61 @@ def _sharded_w13_h_kernel(
         mesh=mesh,
         in_specs=(
             P(AXIS, None, None, None, None),
+            P(AXIS, None, None, None),
+            P(AXIS, None, None, None),
+            P(AXIS, None),
+            P(AXIS, None, None),
+            P(AXIS, None, None, None),
+        ),
+        out_specs=(
+            P(AXIS, None, None, None, None),
+            P(AXIS, None, None),
+        ),
+        check_vma=False,
+    )
+
+
+def _sharded_raw_token_w13_h_kernel(
+    mesh: Mesh,
+    config: PushInboxConfig,
+    *,
+    use_exact_expert_major: bool = False,
+):
+    kernel = _make_raw_token_w13_h_kernel(config, use_exact_expert_major=use_exact_expert_major)
+
+    def local_fn(
+        x_local: Float[Array, "1 T D"],
+        token_ids_local: Int[Array, "1 DST Q M"],
+        send_meta_local: Int[Array, "1 DST Q F"],
+        recv_meta_local: Int[Array, "1 SRC Q F"],
+        expert_base_local: Int[Array, "1 E"],
+        src_base_by_expert_local: Int[Array, "1 SRC E"],
+        w_local: Float[Array, "1 E D twoI"],
+    ):
+        x_local = x_local[0]
+        token_ids_local = token_ids_local[0]
+        send_meta_local = send_meta_local[0]
+        recv_meta_local = recv_meta_local[0]
+        expert_base_local = expert_base_local[0]
+        src_base_by_expert_local = src_base_by_expert_local[0]
+        w_local = w_local[0]
+        inbox, h = kernel(
+            x_local,
+            token_ids_local,
+            send_meta_local,
+            recv_meta_local,
+            expert_base_local,
+            src_base_by_expert_local,
+            w_local,
+        )
+        return inbox[None, ...], h[None, ...]
+
+    return shard_map(
+        local_fn,
+        mesh=mesh,
+        in_specs=(
+            P(AXIS, None, None),
+            P(AXIS, None, None, None),
             P(AXIS, None, None, None),
             P(AXIS, None, None, None),
             P(AXIS, None),
