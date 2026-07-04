@@ -112,7 +112,6 @@ def _run(
     started = time.time()
     log_path.parent.mkdir(parents=True, exist_ok=True)
     print(f"+ {shlex.join(command)}  # log: {log_path}", flush=True)
-    output_tail: deque[str] = deque(maxlen=failure_tail_lines)
     with log_path.open("w") as log_file:
         log_file.write(f"$ {shlex.join(command)}\n")
         process = subprocess.Popen(
@@ -126,7 +125,6 @@ def _run(
         )
         assert process.stdout is not None
         for line in process.stdout:
-            output_tail.append(line)
             log_file.write(line)
         returncode = process.wait()
     elapsed = time.time() - started
@@ -141,10 +139,13 @@ def _run(
     status = "ok" if returncode == 0 else f"failed exit={returncode}"
     print(f"{status}: {shlex.join(command)} ({elapsed:.1f}s, log: {log_path})", flush=True)
     if check and returncode != 0:
+        output_tail: deque[str] = deque(maxlen=failure_tail_lines)
+        with log_path.open() as log_file:
+            output_tail.extend(log_file)
         if output_tail:
-            print(f"last {len(output_tail)} lines from {log_path}:", file=sys.stderr, flush=True)
+            print(f"last {len(output_tail)} lines from {log_path}:", flush=True)
             for line in output_tail:
-                print(line, end="", file=sys.stderr, flush=True)
+                print(line, end="", flush=True)
         raise subprocess.CalledProcessError(returncode, command)
     return report
 

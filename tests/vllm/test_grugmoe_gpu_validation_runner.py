@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import importlib.util
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any
@@ -89,3 +90,27 @@ def test_grugmoe_gpu_validation_runner_writes_command_output_to_log(
     assert "42" in log_path.read_text()
     assert report["returncode"] == 0
     assert report["log_path"] == str(log_path)
+
+
+def test_grugmoe_gpu_validation_runner_prints_failure_log_tail(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    log_path = tmp_path / "command.log"
+
+    with pytest.raises(subprocess.CalledProcessError):
+        runner._run(
+            [
+                sys.executable,
+                "-c",
+                "print('tail-' + str(40 + 2)); raise SystemExit(7)",
+            ],
+            cwd=tmp_path,
+            log_path=log_path,
+            failure_tail_lines=1,
+        )
+
+    captured = capsys.readouterr()
+    assert "tail-42" in captured.out
+    assert f"last 1 lines from {log_path}" in captured.out
+    assert "tail-42" in log_path.read_text()
