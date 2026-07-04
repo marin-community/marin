@@ -147,7 +147,6 @@ def tokenized(
     validation: bool = False,
     pin: str | None = None,
     text_key: str = "text",
-    hf_name: str | None = None,
     sample_count: int | None = None,
     tags: Sequence[str] = (),
     resources: ResourceConfig | None = None,
@@ -156,19 +155,15 @@ def tokenized(
 
     Provide exactly one raw input: ``source`` (a HuggingFace id ``org/name`` or a single
     raw path), ``paths`` (raw globs resolved against the run prefix), or ``raw`` + ``glob``
-    (a download handle and a subpath glob within it). ``hf_name`` selects a HuggingFace dataset
-    config/subset (e.g. ``finemath-3plus`` or ``20231101.de``) and applies only to an HF
-    ``source``. ``validation=True`` routes the data to the cache's validation split.
-    ``sample_count`` caps the documents tokenized per shard (it bears identity — a sampled cache
-    differs from the full one). ``pin`` references already-tokenized data at an existing location
-    instead of recomputing it.
+    (a download handle and a subpath glob within it). ``validation=True`` routes the data to the
+    cache's validation split. ``sample_count`` caps the documents tokenized per shard (it bears
+    identity — a sampled cache differs from the full one). ``pin`` references already-tokenized
+    data at an existing location instead of recomputing it.
     """
     if sum(x is not None for x in (source, paths, raw)) != 1:
         raise ValueError(f"{name}: provide exactly one of source, paths, or raw")
     if (raw is None) != (glob is None):
         raise ValueError(f"{name}: raw and glob must be given together")
-    if hf_name is not None and source is None:
-        raise ValueError(f"{name}: hf_name applies only to an HF source")
 
     fmt = TextLmDatasetFormat(text_key=text_key)
 
@@ -176,7 +171,6 @@ def tokenized(
         if source is not None and _looks_like_hf_id(source):
             return HfTokenizeConfig(
                 id=source,
-                name=hf_name,
                 cache_path=ctx.output_path,
                 tokenizer=tokenizer,
                 format=fmt,

@@ -46,9 +46,10 @@ from levanter.checkpoint import CheckpointerConfig
 from levanter.grug.ngram_embed import NgramEmbedConfig
 from levanter.tracker.json_logger import JsonLoggerConfig
 from levanter.tracker.wandb import WandbConfig
+from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.execution.step_runner import StepRunner
-from marin.experiment.data import mixture, tokenized
+from marin.experiment.data import hf_download, mixture, tokenized
 from marin.experiment.namespacing import user_namespaced_name
 from marin.training.training import LevanterCheckpoint
 
@@ -76,49 +77,83 @@ _STEPS_PER_EVAL = 1000
 # Tokenization workers need headroom (SlimPajama shards OOM at the default) but not a GPU.
 _TOKENIZE_RESOURCES = ResourceConfig(ram="64g", disk="128g")
 
+# Cache-once version for the shared HF downloads (bump to re-fetch from the Hub).
+_HF_DL_VERSION = "2026.07.04"
+
+# Each HF source is mirrored to S3 ONCE as a shared, revision-pinned raw-download artifact; every
+# arm then tokenizes from that S3 copy (``raw=``/``glob=`` in soak_train_datasets) instead of each
+# arm re-streaming the dataset from the Hub. Streaming per arm rate-limits the Hub (HTTP 429) under
+# 8 concurrent arms; a single shared download does not. ``urls_glob`` fetches only the parquet/json
+# we actually tokenize (e.g. just three Wikipedia languages of the ~300 in the repo).
+_SLIMPAJAMA_RAW = hf_download(
+    "raw/hf/slimpajama-6b",
+    hf_id="DKYoon/SlimPajama-6B",
+    revision="b5f90f419b7489cdba26fdbc8c022fcb5562f968",
+    urls_glob=["data/train-*.parquet"],
+    version=_HF_DL_VERSION,
+)
+_CODEPARROT_RAW = hf_download(
+    "raw/hf/codeparrot-clean-valid",
+    hf_id="codeparrot/codeparrot-clean-valid",
+    revision="4db92d2ec0c1b4c41eeb439cfae16854511d9dcd",
+    urls_glob=["*.json.gz"],
+    version=_HF_DL_VERSION,
+)
+_WIKIPEDIA_RAW = hf_download(
+    "raw/hf/wikipedia-20231101-deruzh",
+    hf_id="wikimedia/wikipedia",
+    revision="b04c8d1ceb2f5cd4588862100d08de323dccfbaa",
+    urls_glob=["20231101.de/*.parquet", "20231101.ru/*.parquet", "20231101.zh/*.parquet"],
+    version=_HF_DL_VERSION,
+)
+_FINEMATH_RAW = hf_download(
+    "raw/hf/finemath-3plus",
+    hf_id="HuggingFaceTB/finemath",
+    revision="e92b25a616738fe95dc186b64dfb19f9c8525594",
+    urls_glob=["finemath-3plus/*.parquet"],
+    version=_HF_DL_VERSION,
+)
+
 
 @dataclasses.dataclass(frozen=True)
 class SoakSource:
-    """One raw HF component of the soak mixture: what to tokenize, its config, and its weight."""
+    """One component of the soak mixture: a shared S3 raw download, a glob into it, and its weight."""
 
-    key: str  # short stable id -> cache/component name
-    source: str  # HF dataset id
+    key: str  # short stable id -> per-arm cache/component name
+    raw: ArtifactStep[Artifact]  # shared HF->S3 download (built once, adopted by every arm)
+    glob: str  # parquet/json glob within the download dir
     weight: float  # mixture weight (all sources' weights are normalized by the sampler)
     text_key: str = "text"
-    hf_name: str | None = None  # HF dataset config/subset (finemath-3plus, 20231101.de, ...)
-    sample_count: int | None = None  # cap docs so per-arm tokenization stays fast
 
 
 # Representative multi-domain mixture (weights sum to 1.0): web-heavy, with Python code, three
-# Wikipedia languages spanning Latin/Cyrillic/CJK scripts, and math. The larger sources are
-# doc-capped so all 8 arms' tokenizations finish promptly; the mix repeats over a 24h run with an
-# identical schedule across arms, so relative BPB ordering is unaffected by the repetition.
+# Wikipedia languages spanning Latin/Cyrillic/CJK scripts, and math. The three Wikipedia components
+# share one download (three globs into it). The mix repeats over a 24h run with an identical
+# schedule across arms, so relative BPB ordering is unaffected by the repetition.
 SOAK_SOURCES: tuple[SoakSource, ...] = (
-    SoakSource("web", "DKYoon/SlimPajama-6B", 0.50, text_key="text"),
-    SoakSource("code", "codeparrot/codeparrot-clean-valid", 0.20, text_key="content"),
-    SoakSource("ml-de", "wikimedia/wikipedia", 0.0667, hf_name="20231101.de", sample_count=1_500_000),
-    SoakSource("ml-ru", "wikimedia/wikipedia", 0.0667, hf_name="20231101.ru", sample_count=1_500_000),
-    SoakSource("ml-zh", "wikimedia/wikipedia", 0.0666, hf_name="20231101.zh", sample_count=1_500_000),
-    SoakSource(
-        "math", "HuggingFaceTB/finemath", 0.10, text_key="text", hf_name="finemath-3plus", sample_count=3_000_000
-    ),
+    SoakSource("web", _SLIMPAJAMA_RAW, "data/train-*.parquet", 0.50),
+    SoakSource("code", _CODEPARROT_RAW, "*.json.gz", 0.20, text_key="content"),
+    SoakSource("ml-de", _WIKIPEDIA_RAW, "20231101.de/*.parquet", 0.0667),
+    SoakSource("ml-ru", _WIKIPEDIA_RAW, "20231101.ru/*.parquet", 0.0667),
+    SoakSource("ml-zh", _WIKIPEDIA_RAW, "20231101.zh/*.parquet", 0.0666),
+    SoakSource("math", _FINEMATH_RAW, "finemath-3plus/*.parquet", 0.10),
 )
 
 
 def soak_train_datasets(arm_name: str, tokenizer: str) -> dict[ArtifactStep, float]:
-    """Each :data:`SOAK_SOURCES` component tokenized with ``tokenizer``, mapped to its weight.
+    """Each :data:`SOAK_SOURCES` component tokenized with ``tokenizer`` from its shared S3 raw copy.
 
     Cache names are suffixed with the arm so each arm builds its own tokenization rather than
-    adopting another tokenizer's cache (the artifact store adopts by name@version).
+    adopting another tokenizer's cache (the artifact store adopts by name@version); the raw
+    downloads, keyed only by source, are shared across all arms.
     """
     return {
         tokenized(
             f"soak-train/{src.key}-{arm_name}",
-            source=src.source,
             tokenizer=tokenizer,
-            hf_name=src.hf_name,
+            raw=src.raw,
+            glob=src.glob,
             text_key=src.text_key,
-            sample_count=src.sample_count,
             resources=_TOKENIZE_RESOURCES,
             version="2026.07.04",
         ): src.weight
