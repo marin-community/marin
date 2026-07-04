@@ -37,6 +37,7 @@ from levanter.grug._moe.source_push_forward import (
     device_source_push_forward_inputs_from_plan,
     make_source_push_forward_inputs,
     make_source_push_forward_source_plan_raw_inputs,
+    source_push_forward_with_h_from_plan,
 )
 from levanter.grug._moe.source_push_inbox import (
     AXIS,
@@ -52,7 +53,11 @@ from levanter.grug._moe.source_push_mlp import (
     source_push_mlp_route_table_from_plan,
     source_push_moe_mlp_from_plan,
 )
-from levanter.grug._moe.source_push_plan import source_push_recv_route_weights_jax
+from levanter.grug._moe.source_push_plan import (
+    SOURCE_PUSH_MESH_AXIS,
+    _source_push_out_sharding,
+    source_push_recv_route_weights_jax,
+)
 from levanter.grug._moe.source_push_w2_return import _sharded_w2_from_h_return_direct_to_source_kernel
 from levanter.grug.grug_moe import moe_mlp
 from levanter.utils.activation import ActivationFunctionEnum
@@ -63,9 +68,34 @@ MODE_FORWARD = "forward"
 MODE_FORWARD_BACKWARD = "forward_backward"
 MODE_FORWARD_DECOMPOSED = "forward_decomposed"
 MODE_FORWARD_DECOMPOSED_RAW_TOKENS = "forward_decomposed_raw_tokens"
+MODE_BACKWARD_DECOMPOSED = "backward_decomposed"
 FORWARD_DECOMPOSED_STAGE_PACK_INPUTS = "pack_inputs"
 FORWARD_DECOMPOSED_STAGE_PREPARE_INPUTS = "prepare_inputs"
-MODES = (MODE_FORWARD, MODE_FORWARD_BACKWARD, MODE_FORWARD_DECOMPOSED, MODE_FORWARD_DECOMPOSED_RAW_TOKENS)
+BACKWARD_STAGE_TOTAL = "backward_total"
+BACKWARD_STAGE_FORWARD_H = "forward_h"
+BACKWARD_STAGE_DY_ROUTE = "dy_route"
+BACKWARD_STAGE_ACTIVATION = "activation"
+BACKWARD_STAGE_W2 = "w2_backward"
+BACKWARD_STAGE_SWIGLU = "swiglu_backward"
+BACKWARD_STAGE_X_REMAT = "x_rematerialization"
+BACKWARD_STAGE_W13 = "w13_backward"
+BACKWARD_STAGE_DX_COMBINE = "dx_return_combine"
+BACKWARD_STAGES = (
+    BACKWARD_STAGE_DY_ROUTE,
+    BACKWARD_STAGE_ACTIVATION,
+    BACKWARD_STAGE_W2,
+    BACKWARD_STAGE_SWIGLU,
+    BACKWARD_STAGE_X_REMAT,
+    BACKWARD_STAGE_W13,
+    BACKWARD_STAGE_DX_COMBINE,
+)
+MODES = (
+    MODE_FORWARD,
+    MODE_FORWARD_BACKWARD,
+    MODE_FORWARD_DECOMPOSED,
+    MODE_FORWARD_DECOMPOSED_RAW_TOKENS,
+    MODE_BACKWARD_DECOMPOSED,
+)
 BACKEND_RING = "ring"
 BACKEND_RAGGED_A2A = "ragged_all_to_all"
 BACKEND_PUBLIC_SOURCE_PUSH = "public_source_push"
@@ -98,6 +128,8 @@ SUMMARY_METRICS = (
     "rounded_forward_tflops_per_rank",
     "useful_fwd_bwd_tflops_per_rank",
     "rounded_fwd_bwd_tflops_per_rank",
+    "useful_backward_tflops_per_rank",
+    "rounded_backward_tflops_per_rank",
     "useful_tflops_per_rank",
     "rounded_tflops_per_rank",
     "dropped_routes",
@@ -151,6 +183,15 @@ class RawTokenForwardTiming(NamedTuple):
     output: Any
     stage_steady_state_times: dict[str, list[float]]
     stage_compile_times: dict[str, float]
+
+
+class BackwardDecomposedTiming(NamedTuple):
+    """Timing result for staged source-push MLP backward diagnostics."""
+
+    first_call_time: float
+    steady_state_times: list[float]
+    output: Any
+    stage_steady_state_times: dict[str, list[float]]
 
 
 def _profile_defaults(argv: Sequence[str] | None = None) -> dict[str, Any]:
@@ -331,6 +372,19 @@ def _run_one(
         )
         inputs = _device_benchmark_inputs(config, raw_inputs, mesh)
         use_outer_jit = _resolve_outer_jit(backend, outer_jit)
+        if mode == MODE_BACKWARD_DECOMPOSED:
+            if backend != BACKEND_SOURCE_PUSH_PALLAS:
+                raise ValueError(f"{mode!r} only supports backend={BACKEND_SOURCE_PUSH_PALLAS!r}")
+            return _run_source_push_backward_decomposed(
+                config,
+                mesh=mesh,
+                host_inputs=host_inputs,
+                route_table=route_table,
+                inputs=inputs,
+                warmup=warmup,
+                steps=steps,
+                repeat_runs=repeat_runs,
+            )
         if mode in (MODE_FORWARD_DECOMPOSED, MODE_FORWARD_DECOMPOSED_RAW_TOKENS):
             if backend != BACKEND_SOURCE_PUSH_PALLAS:
                 raise ValueError(f"{mode!r} only supports backend={BACKEND_SOURCE_PUSH_PALLAS!r}")
@@ -505,6 +559,211 @@ def _run_source_push_forward_raw_token_decomposed(
         repeat_runs=repeat_runs,
         mode=MODE_FORWARD_DECOMPOSED_RAW_TOKENS,
         input_stage=FORWARD_DECOMPOSED_STAGE_PREPARE_INPUTS,
+    )
+
+
+def _run_source_push_backward_decomposed(
+    config: PushInboxConfig,
+    *,
+    mesh: Mesh,
+    host_inputs,
+    route_table,
+    inputs: dict[str, jax.Array],
+    warmup: int,
+    steps: int,
+    repeat_runs: int,
+) -> list[dict[str, Any]]:
+    with jax.set_mesh(mesh):
+        forward_start = time.perf_counter()
+        out, h_flat, dropped_routes = source_push_forward_with_h_from_plan(
+            config,
+            host_inputs,
+            inputs["x_source"],
+            inputs["combine_source"],
+            inputs["w13_source"],
+            inputs["w2_source"],
+            execution_mode=FORWARD_EXECUTION_STAGED_HOST_SYNC,
+            mesh=mesh,
+        )
+        _block_until_ready((out, h_flat, dropped_routes))
+        forward_h_time = time.perf_counter() - forward_start
+
+    dy = jnp.ones_like(out, dtype=jnp.float32)
+    with jax.set_mesh(mesh):
+        timing = _time_source_push_backward_decomposed(
+            route_table,
+            jnp.asarray(host_inputs.expert_base, dtype=jnp.int32),
+            inputs["x_source"],
+            inputs["combine_source"],
+            inputs["w13_source"],
+            inputs["w2_source"],
+            h_flat,
+            dy,
+            warmup=warmup,
+            steps=steps,
+            repeat_runs=repeat_runs,
+        )
+    return _decomposed_backward_rows(
+        config,
+        timing=timing,
+        queue_stats=host_inputs.queue_stats,
+        repeat_runs=repeat_runs,
+        dropped_routes=int(jax.device_get(dropped_routes)),
+        forward_h_time=forward_h_time,
+    )
+
+
+def _time_source_push_backward_decomposed(
+    route_table,
+    expert_base: jax.Array,
+    x: jax.Array,
+    route_weights: jax.Array,
+    w13: jax.Array,
+    w2: jax.Array,
+    h_flat: jax.Array,
+    dy: jax.Array,
+    *,
+    warmup: int,
+    steps: int,
+    repeat_runs: int,
+) -> BackwardDecomposedTiming:
+    def call_backward(*, record_stage_times: bool = False):
+        stage_times = {stage: 0.0 for stage in BACKWARD_STAGES}
+        dx = jnp.zeros_like(x, dtype=jnp.float32)
+        d_route_weights = jnp.zeros_like(route_weights, dtype=jnp.float32)
+        dw13 = jnp.zeros_like(w13, dtype=jnp.float32)
+        dw2 = jnp.zeros_like(w2, dtype=jnp.float32)
+
+        dst_index = jnp.arange(route_table.ep_size, dtype=jnp.int32)[:, None]
+        row_offsets = jnp.arange(route_table.expert_capacity, dtype=jnp.int32)[None, :]
+
+        for expert in range(route_table.experts_per_rank):
+            valid = route_table.valid_by_expert[:, expert]
+            safe_src = jnp.maximum(route_table.source_rank_by_expert[:, expert], 0)
+            safe_token = jnp.maximum(route_table.token_id_by_expert[:, expert], 0)
+            safe_slot = jnp.maximum(route_table.route_slot_by_expert[:, expert], 0)
+            valid_f = valid.astype(jnp.float32)
+
+            stage_start = time.perf_counter()
+            base_row = expert_base[:, expert][:, None]
+            flat_row = base_row + row_offsets
+            h_block = h_flat.at[dst_index, flat_row].get(
+                mode="fill",
+                fill_value=0,
+                out_sharding=_source_push_out_sharding(SOURCE_PUSH_MESH_AXIS, None, None),
+            )
+            h_block = h_block.astype(jnp.float32) * valid_f[..., None]
+            dy_block = dy.at[safe_src, safe_token].get(
+                out_sharding=_source_push_out_sharding(SOURCE_PUSH_MESH_AXIS, None, None)
+            )
+            dy_block = dy_block.astype(jnp.float32) * valid_f[..., None]
+            weights = route_weights.at[safe_src, safe_token, safe_slot].get(
+                out_sharding=_source_push_out_sharding(SOURCE_PUSH_MESH_AXIS, None)
+            )
+            weights = weights.astype(jnp.float32) * valid_f
+            _block_until_ready((h_block, dy_block, weights))
+            if record_stage_times:
+                stage_times[BACKWARD_STAGE_DY_ROUTE] += time.perf_counter() - stage_start
+
+            stage_start = time.perf_counter()
+            intermediate_dim = h_block.shape[-1] // 2
+            gate = h_block[..., :intermediate_dim]
+            up = h_block[..., intermediate_dim:]
+            silu_gate = jax.nn.silu(gate)
+            activation = silu_gate * up
+            weighted_activation = activation * weights[..., None]
+            _block_until_ready((gate, up, silu_gate, activation, weighted_activation))
+            if record_stage_times:
+                stage_times[BACKWARD_STAGE_ACTIVATION] += time.perf_counter() - stage_start
+
+            stage_start = time.perf_counter()
+            w2_block = w2[:, expert].astype(jnp.float32)
+            d_weighted_activation = jnp.einsum("scd,sid->sci", dy_block, w2_block)
+            dw2_block = jnp.einsum("sci,scd->sid", weighted_activation, dy_block)
+            _block_until_ready((d_weighted_activation, dw2_block))
+            if record_stage_times:
+                stage_times[BACKWARD_STAGE_W2] += time.perf_counter() - stage_start
+
+            stage_start = time.perf_counter()
+            d_route_block = jnp.sum(d_weighted_activation * activation, axis=-1) * valid_f
+            d_activation = d_weighted_activation * weights[..., None]
+            sigmoid_gate = jax.nn.sigmoid(gate)
+            d_silu = sigmoid_gate * (1.0 + gate * (1.0 - sigmoid_gate))
+            d_gate = d_activation * up * d_silu
+            d_up = d_activation * silu_gate
+            d_h_block = jnp.concatenate([d_gate, d_up], axis=-1)
+            _block_until_ready((d_route_block, d_h_block))
+            if record_stage_times:
+                stage_times[BACKWARD_STAGE_SWIGLU] += time.perf_counter() - stage_start
+
+            stage_start = time.perf_counter()
+            x_block = x.at[safe_src, safe_token].get(
+                out_sharding=_source_push_out_sharding(SOURCE_PUSH_MESH_AXIS, None, None)
+            )
+            x_block = x_block.astype(jnp.float32) * valid_f[..., None]
+            _block_until_ready(x_block)
+            if record_stage_times:
+                stage_times[BACKWARD_STAGE_X_REMAT] += time.perf_counter() - stage_start
+
+            stage_start = time.perf_counter()
+            w13_block = w13[:, expert].astype(jnp.float32)
+            dx_block = jnp.einsum("sco,sdo->scd", d_h_block, w13_block)
+            dw13_block = jnp.einsum("scd,sco->sdo", x_block, d_h_block)
+            _block_until_ready((dx_block, dw13_block))
+            if record_stage_times:
+                stage_times[BACKWARD_STAGE_W13] += time.perf_counter() - stage_start
+
+            stage_start = time.perf_counter()
+            dx = dx.at[safe_src, safe_token].add(
+                dx_block,
+                out_sharding=_source_push_out_sharding(SOURCE_PUSH_MESH_AXIS, None, None),
+            )
+            d_route_weights = d_route_weights.at[safe_src, safe_token, safe_slot].add(
+                d_route_block,
+                out_sharding=_source_push_out_sharding(SOURCE_PUSH_MESH_AXIS, None, None),
+            )
+            dw13 = dw13.at[:, expert].set(dw13_block)
+            dw2 = dw2.at[:, expert].set(dw2_block)
+            _block_until_ready((dx, d_route_weights, dw13, dw2))
+            if record_stage_times:
+                stage_times[BACKWARD_STAGE_DX_COMBINE] += time.perf_counter() - stage_start
+
+        output = (
+            dx.astype(x.dtype),
+            d_route_weights.astype(route_weights.dtype),
+            dw13.astype(w13.dtype),
+            dw2.astype(w2.dtype),
+        )
+        _block_until_ready(output)
+        return output, stage_times
+
+    start = time.perf_counter()
+    output, _ = call_backward(record_stage_times=False)
+    first_call_time = time.perf_counter() - start
+
+    for _ in range(warmup):
+        output, _ = call_backward(record_stage_times=False)
+
+    steady_state_times = []
+    stage_steady_state_times: dict[str, list[float]] = {stage: [] for stage in BACKWARD_STAGES}
+    for _ in range(repeat_runs):
+        total_elapsed = 0.0
+        stage_elapsed = {stage: 0.0 for stage in BACKWARD_STAGES}
+        for _ in range(steps):
+            start = time.perf_counter()
+            output, step_stage_times = call_backward(record_stage_times=True)
+            total_elapsed += time.perf_counter() - start
+            for stage in BACKWARD_STAGES:
+                stage_elapsed[stage] += step_stage_times[stage]
+        steady_state_times.append(total_elapsed / steps)
+        for stage in BACKWARD_STAGES:
+            stage_steady_state_times[stage].append(stage_elapsed[stage] / steps)
+
+    return BackwardDecomposedTiming(
+        first_call_time=first_call_time,
+        steady_state_times=steady_state_times,
+        output=output,
+        stage_steady_state_times=stage_steady_state_times,
     )
 
 
@@ -890,6 +1149,130 @@ def _decomposed_forward_row(
         "rounded_forward_tflops_per_rank": rounded_tflops,
         "useful_fwd_bwd_tflops_per_rank": None,
         "rounded_fwd_bwd_tflops_per_rank": None,
+        "useful_backward_tflops_per_rank": None,
+        "rounded_backward_tflops_per_rank": None,
+        "useful_tflops_per_rank": useful_tflops,
+        "rounded_tflops_per_rank": rounded_tflops,
+        "dropped_routes": dropped_routes,
+        "error": None,
+        "error_type": None,
+        "error_message": None,
+    }
+
+
+def _decomposed_backward_rows(
+    config: PushInboxConfig,
+    *,
+    timing: BackwardDecomposedTiming,
+    queue_stats: dict[str, Any],
+    repeat_runs: int,
+    dropped_routes: int,
+    forward_h_time: float,
+) -> list[dict[str, Any]]:
+    useful_backward_flops, rounded_backward_flops = _backward_flops_per_rank(config, queue_stats)
+    rows = []
+    for repeat_run, backward_time in enumerate(timing.steady_state_times):
+        rows.append(
+            _decomposed_backward_row(
+                config,
+                queue_stats=queue_stats,
+                repeat_run=repeat_run,
+                repeat_runs=repeat_runs,
+                stage=BACKWARD_STAGE_TOTAL,
+                steady_state_time=backward_time,
+                first_call_time=timing.first_call_time,
+                useful_backward_flops=useful_backward_flops,
+                rounded_backward_flops=rounded_backward_flops,
+                dropped_routes=dropped_routes,
+            )
+        )
+        rows.append(
+            _decomposed_backward_row(
+                config,
+                queue_stats=queue_stats,
+                repeat_run=repeat_run,
+                repeat_runs=repeat_runs,
+                stage=BACKWARD_STAGE_FORWARD_H,
+                steady_state_time=forward_h_time,
+                first_call_time=forward_h_time,
+                useful_backward_flops=None,
+                rounded_backward_flops=None,
+                dropped_routes=dropped_routes,
+            )
+        )
+        for stage in BACKWARD_STAGES:
+            stage_time = timing.stage_steady_state_times[stage][repeat_run]
+            stage_useful_flops, stage_rounded_flops = _backward_stage_flops_per_rank(config, queue_stats, stage)
+            rows.append(
+                _decomposed_backward_row(
+                    config,
+                    queue_stats=queue_stats,
+                    repeat_run=repeat_run,
+                    repeat_runs=repeat_runs,
+                    stage=stage,
+                    steady_state_time=stage_time,
+                    first_call_time=None,
+                    useful_backward_flops=stage_useful_flops,
+                    rounded_backward_flops=stage_rounded_flops,
+                    dropped_routes=dropped_routes,
+                )
+            )
+
+    grouped_rows = []
+    for stage in (
+        BACKWARD_STAGE_FORWARD_H,
+        BACKWARD_STAGE_TOTAL,
+        *BACKWARD_STAGES,
+    ):
+        stage_rows = [row for row in rows if row["stage"] == stage]
+        grouped_rows.extend(stage_rows)
+        grouped_rows.append(_summary_row(stage_rows))
+    return grouped_rows
+
+
+def _decomposed_backward_row(
+    config: PushInboxConfig,
+    *,
+    queue_stats: dict[str, Any],
+    repeat_run: int,
+    repeat_runs: int,
+    stage: str,
+    steady_state_time: float,
+    first_call_time: float | None,
+    useful_backward_flops: float | None,
+    rounded_backward_flops: float | None,
+    dropped_routes: int,
+) -> dict[str, Any]:
+    useful_tflops = None if useful_backward_flops is None else useful_backward_flops / steady_state_time / 1e12
+    rounded_tflops = None if rounded_backward_flops is None else rounded_backward_flops / steady_state_time / 1e12
+    return {
+        "kernel": KERNEL_NAME,
+        "implementation": (
+            BACKEND_SOURCE_PUSH_PALLAS if stage == BACKWARD_STAGE_TOTAL else f"{BACKEND_SOURCE_PUSH_PALLAS}_{stage}"
+        ),
+        "backend": BACKEND_SOURCE_PUSH_PALLAS,
+        "mode": MODE_BACKWARD_DECOMPOSED,
+        "stage": stage,
+        "row_type": "repeat",
+        "config": asdict(config),
+        "queue_stats": queue_stats,
+        **queue_stats,
+        "outer_jit": False,
+        "compile_time": None,
+        "lower_compile_time": None,
+        "first_run_time": None,
+        "first_call_time": first_call_time,
+        "repeat_run": repeat_run,
+        "repeat_runs": repeat_runs,
+        "steady_state_time": steady_state_time,
+        "bytes_per_rank": None,
+        "forward_gbps_per_rank": None,
+        "useful_forward_tflops_per_rank": None,
+        "rounded_forward_tflops_per_rank": None,
+        "useful_fwd_bwd_tflops_per_rank": None,
+        "rounded_fwd_bwd_tflops_per_rank": None,
+        "useful_backward_tflops_per_rank": useful_tflops,
+        "rounded_backward_tflops_per_rank": rounded_tflops,
         "useful_tflops_per_rank": useful_tflops,
         "rounded_tflops_per_rank": rounded_tflops,
         "dropped_routes": dropped_routes,
@@ -1138,6 +1521,8 @@ def _timing_rows(
             "rounded_forward_tflops_per_rank": rounded_forward_flops / steady_state_time / 1e12,
             "useful_fwd_bwd_tflops_per_rank": useful_fwd_bwd_flops / steady_state_time / 1e12,
             "rounded_fwd_bwd_tflops_per_rank": rounded_fwd_bwd_flops / steady_state_time / 1e12,
+            "useful_backward_tflops_per_rank": None,
+            "rounded_backward_tflops_per_rank": None,
             "useful_tflops_per_rank": useful_mode_flops / steady_state_time / 1e12,
             "rounded_tflops_per_rank": rounded_mode_flops / steady_state_time / 1e12,
             "dropped_routes": dropped_routes,
@@ -1250,6 +1635,30 @@ def _forward_flops_per_rank(config: PushInboxConfig, queue_stats: dict[str, Any]
     useful = useful_rows * config.hidden_dim * config.intermediate_dim * 6
     rounded = rounded_rows * config.hidden_dim * config.intermediate_dim * 6
     return float(useful), float(rounded)
+
+
+def _backward_flops_per_rank(config: PushInboxConfig, queue_stats: dict[str, Any]) -> tuple[float, float]:
+    useful_rows = queue_stats["valid_rows_per_rank_mean"]
+    rounded_rows = queue_stats["rounded_rows_per_rank_mean"]
+    useful = useful_rows * config.hidden_dim * config.intermediate_dim * 12
+    rounded = rounded_rows * config.hidden_dim * config.intermediate_dim * 12
+    return float(useful), float(rounded)
+
+
+def _backward_stage_flops_per_rank(
+    config: PushInboxConfig, queue_stats: dict[str, Any], stage: str
+) -> tuple[float | None, float | None]:
+    useful_rows = queue_stats["valid_rows_per_rank_mean"]
+    rounded_rows = queue_stats["rounded_rows_per_rank_mean"]
+    if stage == BACKWARD_STAGE_W2:
+        useful = useful_rows * config.hidden_dim * config.intermediate_dim * 4
+        rounded = rounded_rows * config.hidden_dim * config.intermediate_dim * 4
+        return float(useful), float(rounded)
+    if stage == BACKWARD_STAGE_W13:
+        useful = useful_rows * config.hidden_dim * config.intermediate_dim * 8
+        rounded = rounded_rows * config.hidden_dim * config.intermediate_dim * 8
+        return float(useful), float(rounded)
+    return None, None
 
 
 def _forward_bytes_per_rank(config: PushInboxConfig, queue_stats: dict[str, Any]) -> float:

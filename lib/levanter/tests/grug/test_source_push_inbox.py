@@ -2408,3 +2408,58 @@ def test_source_push_mlp_fwd_bwd_cli_accepts_raw_token_forward_decomposed_mode(m
             "stage": "prepare_inputs",
         }
     ]
+
+
+def test_source_push_mlp_fwd_bwd_cli_accepts_backward_decomposed_mode(monkeypatch, capsys):
+    calls = []
+
+    def fake_run_source_push_mlp_fwd_bwd(
+        config,
+        *,
+        backends,
+        modes,
+        warmup,
+        steps,
+        repeat_runs,
+        outer_jit,
+        separate_compile,
+        debug_exceptions,
+    ):
+        calls.append((backends, modes))
+        return [
+            {
+                "kernel": "source_push_mlp_fwd_bwd",
+                "backend": backends[0],
+                "mode": modes[0],
+                "stage": "dy_route",
+            }
+        ]
+
+    monkeypatch.setattr(
+        source_push_mlp_fwd_bwd_cli,
+        "run_source_push_mlp_fwd_bwd",
+        fake_run_source_push_mlp_fwd_bwd,
+    )
+
+    source_push_mlp_fwd_bwd_cli.main(
+        [
+            "--backends",
+            "source_push_pallas_mgpu",
+            "--modes",
+            "backward_decomposed",
+            "--git-sha",
+            "abc123",
+        ]
+    )
+
+    rows = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    assert calls == [(("source_push_pallas_mgpu",), ("backward_decomposed",))]
+    assert rows == [
+        {
+            "backend": "source_push_pallas_mgpu",
+            "git_sha": "abc123",
+            "kernel": "source_push_mlp_fwd_bwd",
+            "mode": "backward_decomposed",
+            "stage": "dy_route",
+        }
+    ]
