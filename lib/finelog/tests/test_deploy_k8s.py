@@ -123,19 +123,29 @@ def test_render_deployment_inlines_cidr_auth_policy() -> None:
     assert '"type":"cidr"' in rendered
 
 
-def test_render_deployment_rejects_inline_jwt_secret() -> None:
-    # jwt keys are secret material; the manifest is plaintext, so the deploy path must
-    # refuse to inline them (they belong in the finelog-env Secret).
+# An Ed25519 public key in PEM (SubjectPublicKeyInfo). Public, so inline-safe.
+_PUB_PEM = (
+    "-----BEGIN PUBLIC KEY-----\n"
+    "MCowBQYDK2VwAyEAqwwvfFvyRQ+8Dhh0li8h2HtCT4yP40s0pzBwwSAkK5s=\n"
+    "-----END PUBLIC KEY-----\n"
+)
+
+
+def test_render_deployment_inlines_jwt_public_key() -> None:
+    # jwt keys are now Ed25519 PUBLIC keys, not symmetric secrets, so the deploy path
+    # inlines them into the plaintext manifest like a cidr layer.
     cfg = FinelogConfig(
         name="finelog",
         port=10001,
         image="img",
         remote_log_dir="gs://bucket/logs",
         deployment=Deployment(k8s=K8sDeployment(namespace="iris")),
-        auth=(JwtAuthLayer(keys=(JwtKeyEntry(cluster="marin", secret="0123456789abcdef0123456789abcdef"),)),),
+        auth=(JwtAuthLayer(keys=(JwtKeyEntry(cluster="marin", public_keys=(_PUB_PEM,)),)),),
     )
-    with pytest.raises(ValueError, match="jwt auth layers carry secret"):
-        _render_manifest(_K8S_MANIFEST_DIR / "02-deployment.yaml.tmpl", cfg)
+    rendered = _render_manifest(_K8S_MANIFEST_DIR / "02-deployment.yaml.tmpl", cfg)
+    assert "name: FINELOG_AUTH_POLICY" in rendered
+    assert '"type":"jwt"' in rendered
+    assert '"public_keys"' in rendered
 
 
 def test_render_service_uses_configured_port(cfg: FinelogConfig) -> None:

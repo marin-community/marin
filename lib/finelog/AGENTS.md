@@ -26,9 +26,14 @@ Start with the shared instructions in `/AGENTS.md`. Finelog-specific notes:
   `task_log_key`, `build_log_source`, anything that takes `JobName`/`TaskAttempt`)
   live under `iris/cluster/log_store_helpers.py` and call into finelog with opaque
   string keys.
-- Finelog ships **no auth** in its server. Deployments secure the network
-  layer (k8s NetworkPolicy, GCP firewall, VPC). If iris needs auth on top,
-  it composes interceptors itself when launching the server.
+- Finelog's server gates every RPC with an authenticated-ingress stack
+  (`rust/src/server/auth.rs`): an ordered, **default-deny** list of `cidr` and
+  `jwt` layers (`FINELOG_AUTH_POLICY`), defaulting to loopback-only. The `jwt`
+  layer verifies **EdDSA (Ed25519)** delegation tokens with `aud="finelog"`
+  against each cluster's inline **public** key(s) — a relaying controller signs
+  with its private key, finelog holds only the public half. Deployments still
+  secure the network layer (k8s NetworkPolicy, GCP firewall, VPC) as defense in
+  depth. The policy schema lives in `deploy/config.py`.
 - Keys are opaque strings. Any structure (`/system/...`, `/user/<job>/<task>:<attempt>`)
   is iris-side convention; finelog does not parse keys.
 

@@ -44,9 +44,10 @@ _MANIFESTS = ("01-pvc.yaml.tmpl", "02-deployment.yaml.tmpl", "03-service.yaml.tm
 def _auth_env_block(cfg: FinelogConfig) -> str:
     """Render the `FINELOG_AUTH_POLICY` container-env entry, or "" for no policy.
 
-    A cidr-only policy carries no secrets and is injected inline. A policy with a
-    jwt layer carries key material, so it is rejected here — it must be supplied
-    through the `{name}-env` Secret rather than baked into a plaintext manifest.
+    Every current layer kind is inline-safe: a cidr layer carries no secrets, and a
+    jwt layer now carries only Ed25519 public keys (the switch from HS256 symmetric
+    secrets). `assert_inlineable_auth` guards against re-introducing a secret-bearing
+    layer before the policy is baked into the plaintext manifest.
     """
     if not cfg.auth:
         return ""

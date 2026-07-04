@@ -95,26 +95,33 @@ class CidrAuthLayer:
 
 @dataclass(frozen=True)
 class JwtKeyEntry:
-    """A trusted cluster and its HS256 delegation secret."""
+    """A trusted cluster and its Ed25519 delegation **public** keys (PEM).
+
+    ``public_keys`` is a list so a key rotation can carry the old and new keys
+    together during the overlap window; a token signed by either verifies.
+    """
 
     cluster: str
-    secret: str
+    public_keys: tuple[str, ...]
 
 
 @dataclass(frozen=True)
 class JwtAuthLayer:
-    """Admit a bearer JWT whose HS256 signature verifies against one of ``keys``.
+    """Admit a bearer JWT whose EdDSA signature verifies against one of ``keys`` and
+    whose audience is ``finelog``.
 
-    Each key is a trusted cluster's HS256 delegation secret; every configured key
-    admits equally. The keys are secret material, so a jwt layer may not be inlined
-    into a plaintext deploy artifact — the deploy path rejects it and requires a
-    secret source instead.
+    Each key is a trusted cluster's Ed25519 **public** key(s); every configured key
+    admits equally. Public keys are not secret material, so a jwt layer is inline-safe
+    (see ``assert_inlineable_auth``).
     """
 
     keys: tuple[JwtKeyEntry, ...]
 
     def to_policy_dict(self) -> dict:
-        return {"type": "jwt", "keys": [{"cluster": k.cluster, "secret": k.secret} for k in self.keys]}
+        return {
+            "type": "jwt",
+            "keys": [{"cluster": k.cluster, "public_keys": list(k.public_keys)} for k in self.keys],
+        }
 
 
 # One entry in the ordered auth stack. Evaluation order == list order (first
@@ -129,18 +136,16 @@ def auth_policy_json(layers: tuple[AuthLayer, ...]) -> str:
 
 
 def assert_inlineable_auth(cfg: "FinelogConfig") -> None:
-    """Raise if the auth stack carries secret material that must not be inlined.
+    """Assert the auth stack carries no secret material that must not be inlined.
 
-    A `jwt` layer holds HS256 delegation keys; both deploy paths bake the policy into a
-    plaintext artifact (GCE startup-script metadata, a k8s manifest), so jwt keys must
-    instead come through a secret source (the finelog-env Secret, or an operator-managed
-    metadata secret). A cidr-only policy carries no secrets and inlines safely.
+    Both deploy paths bake the policy into a plaintext artifact (GCE startup-script
+    metadata, a k8s manifest). A `jwt` layer now holds only Ed25519 **public** keys
+    (the switch from HS256 symmetric secrets), which are not secret and inline safely,
+    and a cidr layer carries no secrets either — so every current layer kind is
+    inline-safe and this is a no-op guard. It stays as an explicit assertion so that
+    re-introducing a symmetric/secret-bearing layer must consciously restore the check.
     """
-    if any(isinstance(layer, JwtAuthLayer) for layer in cfg.auth):
-        raise ValueError(
-            f"{cfg.name}: jwt auth layers carry secret keys and cannot be inlined into a plaintext "
-            "deploy artifact; supply FINELOG_AUTH_POLICY through a secret source instead"
-        )
+    del cfg  # no secret-bearing layer kind exists; kept as a guard seam
 
 
 @dataclass(frozen=True)
@@ -209,7 +214,9 @@ def _build_auth_layers(raw: list, path: Path) -> tuple[AuthLayer, ...]:
         if layer_type == "cidr":
             layers.append(CidrAuthLayer(cidrs=tuple(item.get("cidrs") or ())))
         elif layer_type == "jwt":
-            keys = tuple(JwtKeyEntry(cluster=k["cluster"], secret=k["secret"]) for k in item.get("keys") or ())
+            keys = tuple(
+                JwtKeyEntry(cluster=k["cluster"], public_keys=tuple(k["public_keys"])) for k in item.get("keys") or ()
+            )
             layers.append(JwtAuthLayer(keys=keys))
         else:
             raise ValueError(f"{path}: auth[{i}] has unknown type {layer_type!r} (expected cidr|jwt)")

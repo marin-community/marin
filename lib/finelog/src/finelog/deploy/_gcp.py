@@ -101,8 +101,9 @@ def _render_bootstrap(cfg: FinelogConfig) -> str:
     """Pin the image and render the VM bootstrap script for ``cfg``.
 
     The script becomes startup-script metadata (readable to anyone with instance-
-    metadata access), so an auth stack carrying jwt secrets is rejected — those must
-    come through an operator-managed metadata secret, never inline.
+    metadata access). Every current auth layer is inline-safe — a jwt layer now
+    carries only Ed25519 public keys, not a symmetric secret — so the policy inlines
+    directly; `assert_inlineable_auth` guards against a future secret-bearing layer.
     """
     pinned = resolve_image_digest(cfg.image)
     if pinned != cfg.image:
