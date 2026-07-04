@@ -105,8 +105,13 @@ def _cluster_auth_from_config(auth: AuthConfig) -> ClusterAuth:
     if provider == "iap":
         desktop_oauth_client_id = auth.iap.oauth_client_id or None
         effective_desktop_id = desktop_oauth_client_id or MARIN_DESKTOP_OAUTH_CLIENT.client_id
-        # Service-account edge tokens must use IAP-secured audiences, not the
-        # desktop OAuth client accepted by the interactive login flow.
+        # ``audiences`` lists every ``aud`` the controller accepts at login, which
+        # includes the desktop client id. Expose only *dedicated* programmatic
+        # audiences here so the service-account edge path prefers one when a
+        # cluster configures it. Dropping the desktop id is not a rejection of it:
+        # when no dedicated audience is configured (marin lists only the desktop
+        # id), rigging's edge resolver falls back to the desktop client id, which
+        # IAP also admits as a programmatic client.
         programmatic_audiences = tuple(a for a in auth.iap.audiences if a != effective_desktop_id)
         return ClusterAuth(
             AuthProvider.IAP,
