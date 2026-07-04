@@ -21,6 +21,7 @@ from levanter.grug._moe.source_push_forward import (
 )
 from levanter.grug._moe.source_push_inbox import PushInboxConfig
 from levanter.grug._moe.source_push_plan import (
+    SOURCE_PUSH_MESH_AXIS,
     SourcePushPlan,
     _source_push_out_sharding,
     build_source_push_plan,
@@ -411,7 +412,7 @@ def _source_push_w13_h(
     h = jnp.zeros(out_shape, dtype=h_rows.dtype)
     return (
         h.at[route_table.destination_rank, route_table.local_expert, route_table.expert_row]
-        .set(h_rows)
+        .set(h_rows, out_sharding=_source_push_out_sharding(SOURCE_PUSH_MESH_AXIS, None, None, None))
         .astype(w13.dtype)
     )
 
@@ -437,7 +438,11 @@ def _source_push_w13_h_flat(
     flat_row = base_row + route_table.expert_row
     out_shape = (route_table.ep_size, h_rows_per_rank, w13.shape[-1])
     h = jnp.zeros(out_shape, dtype=h_rows.dtype)
-    return h.at[route_table.destination_rank, flat_row].set(h_rows).astype(w13.dtype)
+    return (
+        h.at[route_table.destination_rank, flat_row]
+        .set(h_rows, out_sharding=_source_push_out_sharding(SOURCE_PUSH_MESH_AXIS, None, None))
+        .astype(w13.dtype)
+    )
 
 
 def _source_push_w2_from_h_return_combine(
@@ -465,7 +470,11 @@ def _source_push_w2_from_h_return_combine(
     route_y = jnp.einsum("ri,rid->rd", activation * weights[:, None], w2_rows)
     out_shape = (route_table.ep_size, route_table.tokens_per_source, w2.shape[-1])
     y = jnp.zeros(out_shape, dtype=route_y.dtype)
-    return y.at[route_table.source_rank, route_table.token_id].add(route_y).astype(w2.dtype)
+    return (
+        y.at[route_table.source_rank, route_table.token_id]
+        .add(route_y, out_sharding=_source_push_out_sharding(SOURCE_PUSH_MESH_AXIS, None, None))
+        .astype(w2.dtype)
+    )
 
 
 def _source_push_w2_from_h_flat_return_combine(
@@ -495,7 +504,11 @@ def _source_push_w2_from_h_flat_return_combine(
     route_y = jnp.einsum("ri,rid->rd", activation * weights[:, None], w2_rows)
     out_shape = (route_table.ep_size, route_table.tokens_per_source, w2.shape[-1])
     y = jnp.zeros(out_shape, dtype=route_y.dtype)
-    return y.at[route_table.source_rank, route_table.token_id].add(route_y).astype(w2.dtype)
+    return (
+        y.at[route_table.source_rank, route_table.token_id]
+        .add(route_y, out_sharding=_source_push_out_sharding(SOURCE_PUSH_MESH_AXIS, None, None))
+        .astype(w2.dtype)
+    )
 
 
 def _source_push_moe_mlp_backward_from_h(
@@ -595,10 +608,38 @@ def _source_push_moe_mlp_backward_from_h_rows(
     dx_rows = jnp.einsum("ro,rdo->rd", d_h_rows, w13_rows)
     dw2_rows = jnp.einsum("ri,rd->rid", weighted_activation, dy_rows)
 
-    dx = jnp.zeros_like(x, dtype=jnp.float32).at[src, token].add(dx_rows)
-    d_route_weights = jnp.zeros_like(route_weights, dtype=jnp.float32).at[src, token, slot].add(d_route_rows)
-    dw13 = jnp.zeros_like(w13, dtype=jnp.float32).at[dst, expert].add(dw13_rows)
-    dw2 = jnp.zeros_like(w2, dtype=jnp.float32).at[dst, expert].add(dw2_rows)
+    dx = (
+        jnp.zeros_like(x, dtype=jnp.float32)
+        .at[src, token]
+        .add(
+            dx_rows,
+            out_sharding=_source_push_out_sharding(SOURCE_PUSH_MESH_AXIS, None, None),
+        )
+    )
+    d_route_weights = (
+        jnp.zeros_like(route_weights, dtype=jnp.float32)
+        .at[src, token, slot]
+        .add(
+            d_route_rows,
+            out_sharding=_source_push_out_sharding(SOURCE_PUSH_MESH_AXIS, None, None),
+        )
+    )
+    dw13 = (
+        jnp.zeros_like(w13, dtype=jnp.float32)
+        .at[dst, expert]
+        .add(
+            dw13_rows,
+            out_sharding=_source_push_out_sharding(SOURCE_PUSH_MESH_AXIS, None, None, None),
+        )
+    )
+    dw2 = (
+        jnp.zeros_like(w2, dtype=jnp.float32)
+        .at[dst, expert]
+        .add(
+            dw2_rows,
+            out_sharding=_source_push_out_sharding(SOURCE_PUSH_MESH_AXIS, None, None, None),
+        )
+    )
     return (
         dx.astype(x.dtype),
         d_route_weights.astype(route_weights.dtype),
