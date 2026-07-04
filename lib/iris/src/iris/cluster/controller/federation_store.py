@@ -62,13 +62,12 @@ class ControllerFederationStore:
                 request=spec.request,
                 ts=now,
                 run_template_cache=self._run_template_cache,
-                child_cluster=spec.peer_id,
+                cluster=spec.peer_id,
             )
             writes.insert_federated_handle(
                 cur,
                 job_id=spec.local_job_id,
                 peer_id=spec.peer_id,
-                remote_job_id=spec.remote_job_id,
                 owner_principal=spec.owner_principal,
                 handoff_state=int(HandoffState.PENDING_HANDOFF),
             )
@@ -77,6 +76,11 @@ class ControllerFederationStore:
     def mark_handed_off(self, local_job_id: JobName) -> None:
         with self._db.transaction() as cur:
             writes.set_handoff_state(cur, local_job_id, int(HandoffState.HANDED_OFF))
+
+    def mark_handoff_rejected(self, local_job_id: JobName, *, reason: str) -> None:
+        with self._db.transaction() as cur:
+            writes.set_handoff_state(cur, local_job_id, int(HandoffState.HANDOFF_REJECTED))
+            writes.mark_federated_job_killed(cur, local_job_id, now_ms=Timestamp.now().epoch_ms(), error=reason)
 
     def pending_handoffs(self) -> list[HandoffSpec]:
         with self._db.read_snapshot() as tx:
@@ -89,7 +93,6 @@ class ControllerFederationStore:
                 pending.append(
                     HandoffSpec(
                         local_job_id=handle.job_id,
-                        remote_job_id=handle.remote_job_id,
                         peer_id=handle.peer_id,
                         owner_principal=handle.owner_principal,
                         request=reconstruct_launch_job_request(job),
@@ -100,7 +103,7 @@ class ControllerFederationStore:
     # -- cancel --------------------------------------------------------------
 
     def bump_cancel_intent(self, local_job_id: JobName) -> CancelTarget | None:
-        """Bump a SENT handle's cancel intent and return the peer/remote-id to cancel.
+        """Bump a SENT handle's cancel intent and return the peer to cancel.
 
         Returns ``None`` when ``local_job_id`` is not a SENT handle. A handle the
         peer never received (still ``PENDING_HANDOFF``) is terminated locally here —
@@ -117,14 +120,11 @@ class ControllerFederationStore:
                 writes.mark_federated_job_killed(
                     cur, local_job_id, now_ms=Timestamp.now().epoch_ms(), error="Cancelled before handoff"
                 )
-            return CancelTarget(local_job_id=local_job_id, peer_id=handle.peer_id, remote_job_id=handle.remote_job_id)
+            return CancelTarget(local_job_id=local_job_id, peer_id=handle.peer_id)
 
     def pending_cancels(self) -> list[CancelTarget]:
         with self._db.read_snapshot() as tx:
-            return [
-                CancelTarget(local_job_id=h.job_id, peer_id=h.peer_id, remote_job_id=h.remote_job_id)
-                for h in reads.pending_cancel_handles(tx)
-            ]
+            return [CancelTarget(local_job_id=h.job_id, peer_id=h.peer_id) for h in reads.pending_cancel_handles(tx)]
 
     def mark_cancel_satisfied(self, local_job_id: JobName, *, now_ms: int) -> None:
         with self._db.transaction() as cur:
@@ -152,8 +152,13 @@ class ControllerFederationStore:
     ) -> None:
         with self._db.transaction() as cur:
             for delta in deltas:
-                local_job_id = reads.federated_job_for_remote_id(cur, peer_id, delta.remote_job_id)
-                if local_job_id is None:
+                # Job ids are cluster-invariant: the peer reports the same id the
+                # parent handed it. Guard on a SENT handle for (peer, id) — a peer
+                # reporting an id it was never handed is a disagreement, not normal
+                # traffic, so log and ignore it.
+                local_job_id = JobName.from_wire(delta.job_id)
+                if reads.federated_sent_job(cur, peer_id, local_job_id) is None:
+                    logger.warning("peer %s reported job %s it was not handed; ignoring", peer_id, local_job_id)
                     continue
                 if delta.tombstone:
                     writes.delete_job(cur, local_job_id)
@@ -199,13 +204,13 @@ class ControllerFederationStore:
                 worker_address=task.worker_address,
                 peer_worker_label=task.worker_id or task.worker_address,
             )
-            writes.mirror_federated_attempts(cur, task_id=local_task_id, peer_id=peer_id, attempts=task.attempts)
+            writes.mirror_federated_attempts(cur, task_id=local_task_id, attempts=task.attempts)
 
     def _set_replace(self, cur, peer_id: str, deltas) -> None:
         """Full-resync set-replacement: drop any local handle for ``peer_id``
         absent from the peer's active set, reclaiming a job the parent never saw
         tombstoned."""
-        active = {delta.remote_job_id for delta in deltas if not delta.tombstone}
-        for remote_id, local_job_id in reads.federated_handles_for_peer(cur, peer_id).items():
-            if remote_id not in active:
+        active = {delta.job_id for delta in deltas if not delta.tombstone}
+        for local_job_id in reads.federated_handles_for_peer(cur, peer_id):
+            if local_job_id.to_wire() not in active:
                 writes.delete_job(cur, local_job_id)

@@ -211,9 +211,10 @@ message Controller {
     string job_id_prefix = 9;
     // Filter to one backend. Empty = all backends.
     string backend_id = 10;
-    // Filter to jobs handed off to one peer cluster (matched against
-    // jobs.child_cluster). Empty = all clusters, local and federated.
-    string child_cluster = 11;
+    // Filter to jobs owned by one cluster (matched against jobs.cluster:
+    // "local" for this controller's own jobs, a peer id for handed-off jobs).
+    // Unset = all clusters, local and federated.
+    string cluster = 11;
   }
 
   message ListJobsRequest {
@@ -682,9 +683,11 @@ message Controller {
   }
 
   // One handed-off job's state as the peer currently holds it. The parent mirrors
-  // this into its own jobs/tasks rows (stamped child_cluster) for that handle.
+  // this into its own jobs/tasks rows (stamped with the peer's cluster) for that handle.
   message FederationJobDelta {
-    string remote_job_id = 1;                     // the peer's local job id for the handoff
+    // The peer's own job id for this handoff, which now EQUALS the parent's job
+    // id: job ids are cluster-invariant, so there is no rebasing.
+    string job_id = 1;
     iris.job.JobStatus summary = 2;               // job state + counts (+ spend once reported)
     repeated iris.job.TaskStatus changed_tasks = 3;  // full row for each task changed since the cursor
     bool tombstone = 4;                           // peer has pruned the job; parent drops its projection

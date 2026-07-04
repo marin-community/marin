@@ -64,6 +64,26 @@ export interface Constraint {
   values?: AttributeValue[]
 }
 
+// -- Cluster coordinate --
+//
+// Mirrors iris.cluster.types: every job/task carries a `cluster` coordinate that
+// is always set — `'local'` for a locally-owned row, a peer id when handed off.
+// `'local'` is a reserved sentinel, not a real cluster id. The helpers tolerate
+// an absent value (contexts without a cluster, e.g. worker/controller logs) as
+// local, so a naive truthiness check never misclassifies a local row.
+
+export const LOCAL_CLUSTER = 'local'
+
+/** True when the row is locally owned (`'local'`, or no cluster in context). */
+export function isLocal(cluster: string | undefined): boolean {
+  return !cluster || cluster === LOCAL_CLUSTER
+}
+
+/** True when the row was handed off to a peer cluster. */
+export function isFederated(cluster: string | undefined): boolean {
+  return !!cluster && cluster !== LOCAL_CLUSTER
+}
+
 // -- Tasks --
 
 export interface TaskAttempt {
@@ -102,9 +122,9 @@ export interface TaskStatus {
   // the latest failed attempt, so this carries the true count for the badge.
   failureCount?: number
   backendId?: string
-  // Federation discriminator: "" (or absent) == owned locally, "<peer>" == handed
-  // off to that peer cluster (backendId then empty).
-  childCluster?: string
+  // Cluster coordinate: always set — `'local'` for a locally-owned task, a peer
+  // id when handed off to that peer cluster (backendId then empty).
+  cluster?: string
 }
 
 // -- Jobs --
@@ -132,12 +152,9 @@ export interface JobStatus {
   hasChildren?: boolean
   parentJobId?: string
   backendId?: string
-  // Federation discriminator: "" (or absent) == local, "<peer>" == handed off.
-  childCluster?: string
-  // Peer-side job id for a federated job (deterministic rebased wire id). Empty
-  // for a local job; the key under which the peer's logs land in the global
-  // store, so the basis for serving federated logs in-parent.
-  remoteJobId?: string
+  // Cluster coordinate: always set — `'local'` for a locally-owned job, a peer
+  // id when handed off to that peer cluster.
+  cluster?: string
 }
 
 export interface JobQuery {
@@ -152,8 +169,8 @@ export interface JobQuery {
   // Anchored prefix match against the full wire job_id (e.g. "/alice/").
   jobIdPrefix?: string
   backendId?: string
-  // Filter to jobs handed off to one peer cluster. Empty = all clusters.
-  childCluster?: string
+  // Filter to jobs in one cluster (`'local'` or a peer id). Unset = all clusters.
+  cluster?: string
 }
 
 // -- Controller RPC Responses --

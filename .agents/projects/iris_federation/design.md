@@ -16,6 +16,14 @@
 > exclusion, namespaced logs), and §12.3 for the final codex precision pass (full `local_tasks` reader
 > inventory, changelog mechanism, task-detail branch, finelog auth decided).
 
+> **⚠️ Naming / identity / logging superseded (2026-07-03) by
+> [`cluster_native_model.md`](./cluster_native_model.md).** The `~`-folded `remote_job_id` (§5.1), the
+> rebased remote root (§6.1), the `child_cluster` discriminator, and the "honest empty state" log
+> deferral (§6.2, §8) are **replaced** by a first-class `cluster` coordinate (always set, default
+> `local`; job ids are cluster-invariant, so a peer runs/logs/reports the *same* id the parent
+> submitted) and native log serving via finelog's server-stamped `cluster` column. Read that doc for the
+> current identity/logging model; the data-model and rollout shape (§4, §11) still stand.
+
 ## 1. The mental model: two downstreams, distinguished by ownership
 
 An Iris controller has exactly two kinds of downstream. They are **not** unified — Model D's whole
@@ -498,8 +506,10 @@ peers or ten — a single-cluster deployment just sees one execution target and 
   Attempt-level drill-down renders natively too, from the mirrored `task_attempts` (§4.2); the worker is
   shown as the peer-side label (no local worker page). **No affordance links to a peer's own dashboard —
   users can't reach it** — so a `cluster:` annotation links *inward* to the parent's `?cluster=` jobs
-  filter. The one thing not yet served in-parent is **logs** (they live in the peer's finelog); the log
-  panel shows an honest empty state pending native serving (follow-up, §6.2).
+  filter. Logs render **natively**: the dashboard queries the shared global finelog by the job's
+  cluster-invariant id, filtered by the peer's `cluster` for a federated job (finelog's server-stamped
+  `cluster` column) — see [`cluster_native_model.md`](./cluster_native_model.md) §4. (Supersedes the
+  earlier empty-state / #6883 deferral.)
 - **Scope selector**: extend `useBackends.ts`/`BackendScope.vue` to an `All ▾` selector over *backends +
   peers* (one combined list, below), writing `?cluster=`/`?backend=`; server-side filter via
   `JobQuery.child_cluster`.

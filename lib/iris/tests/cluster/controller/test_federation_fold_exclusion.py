@@ -3,10 +3,10 @@
 
 """Federated tasks are structurally invisible to the control-plane fold.
 
-A federated task (``child_cluster != ''``) is owned by a peer cluster: it lives
+A federated task (``cluster != 'local'``) is owned by a peer cluster: it lives
 in the local ``jobs``/``tasks`` rows only so listings render, but the local
 scheduler must never act on it. Every control-plane reader sources the
-``local_tasks`` selectable (``child_cluster = ''``), so these tests assert that
+``local_tasks`` selectable (``cluster = 'local'``), so these tests assert that
 synthetic federated rows are never routed, dispatched, finalized, timed out,
 counted as local budget/admission spend, or pruned — while the parallel *local*
 rows still flow through those same readers (the positive control).
@@ -22,7 +22,7 @@ from iris.cluster.controller.reconcile import dispatch, loader
 from iris.cluster.controller.reconcile.policy import NON_TERMINAL_TASK_STATES
 from iris.cluster.controller.schema import job_config_table, jobs_table, task_attempts_table, tasks_table
 from iris.cluster.controller.task_state import ACTIVE_TASK_STATES
-from iris.cluster.types import TERMINAL_JOB_STATES, JobName
+from iris.cluster.types import LOCAL_CLUSTER, TERMINAL_JOB_STATES, JobName
 from iris.rpc import job_pb2
 from rigging.timing import Timestamp
 from sqlalchemy import insert as sa_insert
@@ -36,17 +36,17 @@ PEER = "peer-west"
 def _mark_federated(state, job_id: JobName, *, task_states: dict[int, int]) -> None:
     """Turn an already-submitted local job into a peer-owned federated job.
 
-    Sets ``child_cluster`` on the job and all its tasks, clears ``backend_id``
+    Sets ``cluster`` on the job and all its tasks, clears ``backend_id``
     and any local worker binding, and stamps each task_index with the state in
     ``task_states``. This is the shape the future federation sync mirrors from
     the peer: rows present locally, but owned elsewhere.
     """
     with state._db.transaction() as cur:
-        cur.execute(sa_update(jobs_table).where(jobs_table.c.job_id == job_id).values(child_cluster=PEER))
+        cur.execute(sa_update(jobs_table).where(jobs_table.c.job_id == job_id).values(cluster=PEER))
         cur.execute(
             sa_update(tasks_table)
             .where(tasks_table.c.job_id == job_id)
-            .values(child_cluster=PEER, backend_id="", current_worker_id=None)
+            .values(cluster=PEER, backend_id="", current_worker_id=None)
         )
         for task_index, task_state in task_states.items():
             cur.execute(
@@ -224,13 +224,13 @@ def test_federated_terminal_job_is_not_pruned_locally(state):
         assert reads.find_prunable_job(tx, TERMINAL_JOB_STATES, cutoff) is None
         # The federated job and its task are still present.
         assert reads.get_job_state(tx, fed_done) == job_pb2.JOB_STATE_SUCCEEDED
-        assert query_tasks_for_job(state, fed_done)[0].child_cluster == PEER
+        assert query_tasks_for_job(state, fed_done)[0].cluster == PEER
 
 
-def test_status_projections_surface_child_cluster(state):
-    """The job/task detail reads carry ``child_cluster``, so a peer-owned row is
+def test_status_projections_surface_cluster(state):
+    """The job/task detail reads carry ``cluster``, so a peer-owned row is
     distinguishable from a locally unrouted one on the status API — a local job
-    reports "", a federated one reports its peer."""
+    reports ``'local'``, a federated one reports its peer."""
     submit_direct_job(state, "local-status")
     local_job = JobName.root("test-user", "local-status")
 
@@ -239,9 +239,9 @@ def test_status_projections_surface_child_cluster(state):
     _mark_federated(state, fed_job, task_states={0: job_pb2.TASK_STATE_RUNNING})
 
     with state._db.read_snapshot() as tx:
-        assert reads.get_job_detail(tx, local_job).child_cluster == ""
-        assert reads.get_job_detail(tx, fed_job).child_cluster == PEER
-        assert reads.get_task_detail(tx, fed_task).child_cluster == PEER
+        assert reads.get_job_detail(tx, local_job).cluster == LOCAL_CLUSTER
+        assert reads.get_job_detail(tx, fed_job).cluster == PEER
+        assert reads.get_task_detail(tx, fed_task).cluster == PEER
 
 
 def test_reconcile_snapshot_loader_excludes_federated_tasks(state):

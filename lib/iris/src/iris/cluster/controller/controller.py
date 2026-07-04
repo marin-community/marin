@@ -258,11 +258,12 @@ class ControllerConfig:
     endpoints on the EndpointService during start()."""
 
     cluster_id: str = ""
-    """This cluster's federation identity (from the cluster config ``name``).
+    """This cluster's real federation identity (from the cluster config ``name``).
 
-    Folded into the deterministic ``remote_job_id`` of every handed-off job and
-    sent as the ``requester_id`` on each ``FederationSync``. Required (and must
-    not contain ``~``) once this cluster hands jobs off; unused otherwise."""
+    Sent as the ``requester_id`` on each ``FederationSync`` and stamped on relayed
+    finelog batches so a shared hub namespaces this cluster's logs. Distinct from the
+    ``'local'`` sentinel the ``cluster`` column uses for this controller's own rows.
+    Required once this cluster hands jobs off; unused otherwise."""
 
     peers: dict[str, PeerConfig] = field(default_factory=dict)
     """Federation peers (peer id -> declaration). Empty leaves federation inert:

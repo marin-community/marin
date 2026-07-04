@@ -32,6 +32,7 @@ from rigging.timing import Duration
 from iris.cluster.tpu_topology import TPU_FAMILY_VARIANT_PREFIX, get_tpu_topology, tpu_variant_name
 from iris.cluster.types import (
     DEFAULT_BACKEND_ID,
+    LOCAL_CLUSTER,
     AcceleratorType,
     CapacityType,
     GcpSliceMode,
@@ -941,10 +942,25 @@ def _validate_backends(config: IrisClusterConfig) -> None:
 
 
 def _validate_peers(config: IrisClusterConfig) -> None:
-    """Validate the ``peers:`` federation registry."""
+    """Validate the ``peers:`` federation registry.
+
+    ``'local'`` is reserved as the federation sentinel for "this controller"; the
+    cluster's own ``name`` and every peer id must stay disjoint from it so the
+    sentinel and the real cluster-id namespace never collide.
+    """
+    if config.name == LOCAL_CLUSTER:
+        raise ValueError(
+            f"cluster name may not be {LOCAL_CLUSTER!r}: it is reserved as the federation "
+            "sentinel for this controller. Choose a distinct cluster name."
+        )
     for peer_id, peer in config.peers.items():
         if not peer_id.strip():
             raise ValueError("peers: peer id must be a non-empty string.")
+        if peer_id == LOCAL_CLUSTER:
+            raise ValueError(
+                f"peer id may not be {LOCAL_CLUSTER!r}: it is reserved as the federation "
+                "sentinel. A peer must have a distinct cluster id."
+            )
         if not peer.controller_address.strip():
             raise ValueError(f"peer '{peer_id}': controller_address is required.")
         if peer.static_token and not peer.cluster:

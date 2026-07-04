@@ -5,11 +5,13 @@ import { useControllerRpc, useLogServerStatsRpc } from '@/composables/useRpc'
 import { useAutoRefresh } from '@/composables/useAutoRefresh'
 import { stateToName } from '@/types/status'
 import { useBackends } from '@/composables/useBackends'
-import type {
-  TaskStatus,
-  GetTaskStatusResponse,
-  EndpointInfo,
-  ListEndpointsResponse,
+import {
+  isLocal,
+  LOCAL_CLUSTER,
+  type TaskStatus,
+  type GetTaskStatusResponse,
+  type EndpointInfo,
+  type ListEndpointsResponse,
 } from '@/types/rpc'
 import { timestampMs, formatBytes, formatCpuMillicores, formatDuration, formatRelativeTime } from '@/utils/formatting'
 import { decodeArrowIpc } from '@/utils/arrow'
@@ -30,7 +32,6 @@ import MarkdownRenderer from '@/components/shared/MarkdownRenderer.vue'
 import CopyButton from '@/components/shared/CopyButton.vue'
 import EndpointLink from '@/components/shared/EndpointLink.vue'
 import ClusterLink from '@/components/shared/ClusterLink.vue'
-import FederatedLogsNotice from '@/components/shared/FederatedLogsNotice.vue'
 
 const props = defineProps<{
   jobId: string
@@ -318,7 +319,7 @@ watch(() => props.taskId, async () => {
             <!-- A federated task's worker is an opaque peer-side id with no local
                  worker row, so /worker/<id> would 404 — render it as plain text. -->
             <RouterLink
-              v-if="!task.childCluster"
+              v-if="isLocal(task.cluster)"
               :to="`/worker/${task.workerId}`"
               class="font-mono text-accent hover:underline"
             >
@@ -349,11 +350,10 @@ watch(() => props.taskId, async () => {
           <InfoRow v-if="multiBackend && task.backendId" label="Backend">
             <span class="font-mono">{{ task.backendId }}</span>
           </InfoRow>
-          <!-- Cluster: shown for a federated task regardless of the Backend row's
-               multiBackend gate; links inward to the parent's jobs list filtered
-               to this cluster. -->
-          <InfoRow v-if="task.childCluster" label="Cluster">
-            <ClusterLink :cluster="task.childCluster" />
+          <!-- Cluster: every task carries a cluster coordinate (`'local'` by
+               default); links inward to the parent's jobs list filtered to it. -->
+          <InfoRow label="Cluster">
+            <ClusterLink :cluster="task.cluster ?? LOCAL_CLUSTER" />
           </InfoRow>
           <div v-if="isActive" class="mt-3 pt-3 border-t border-surface-border">
             <ProfileButtons :profiling="profiling" @profile="handleProfile" />
@@ -539,12 +539,7 @@ watch(() => props.taskId, async () => {
       <!-- Task logs -->
       <div id="task-logs-section" class="mb-6">
         <h3 class="text-sm font-semibold text-text mb-3">Logs</h3>
-        <FederatedLogsNotice
-          v-if="task.childCluster"
-          :cluster="task.childCluster"
-          subject="task"
-        />
-        <LogViewer v-else ref="logViewerRef" :task-id="taskId" :attempts="task.attempts" :current-attempt-id="task.currentAttemptId" />
+        <LogViewer ref="logViewerRef" :task-id="taskId" :cluster="task.cluster" :attempts="task.attempts" :current-attempt-id="task.currentAttemptId" />
       </div>
 
       <!-- Latest captured profile for this task; self-hides when none exist -->

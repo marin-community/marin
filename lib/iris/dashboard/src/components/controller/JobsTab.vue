@@ -6,7 +6,7 @@ import { controllerRpcCall, useControllerRpc } from '@/composables/useRpc'
 import { useAutoRefresh, DEFAULT_REFRESH_MS } from '@/composables/useAutoRefresh'
 import { SEGMENT_COLORS, stateDisplayName } from '@/types/status'
 import type { JobState } from '@/types/status'
-import type { JobStatus, JobQuery, ListJobsResponse } from '@/types/rpc'
+import { LOCAL_CLUSTER, type JobStatus, type JobQuery, type ListJobsResponse } from '@/types/rpc'
 import { timestampMs, formatDuration, formatRelativeTime } from '@/utils/formatting'
 import { flattenLoadedJobTree, getLeafJobName } from '@/utils/jobTree'
 import StatusBadge from '@/components/shared/StatusBadge.vue'
@@ -127,7 +127,7 @@ const {
     stateFilter: stateFilter.value || undefined,
     jobIdPrefix: jobIdPrefix.value,
     backendId: backendId.value || undefined,
-    childCluster: clusterId.value || undefined,
+    cluster: clusterId.value || undefined,
   } satisfies JobQuery,
 }))
 
@@ -479,11 +479,10 @@ function sortIndicator(field: SortField): string {
       <div class="mt-1.5 pl-5 flex items-center gap-2 flex-wrap">
         <StatusBadge :status="node.job.state" size="sm" />
         <span
-          v-if="node.job.childCluster"
           class="inline-flex items-center rounded bg-surface-sunken px-1.5 py-0.5 font-mono text-[11px] text-text-secondary"
-          :title="'Handed off to ' + node.job.childCluster"
+          :title="'Cluster: ' + (node.job.cluster ?? LOCAL_CLUSTER)"
         >
-          {{ node.job.childCluster }}
+          {{ node.job.cluster ?? LOCAL_CLUSTER }}
         </span>
         <span class="text-xs text-text-muted font-mono">
           {{ jobDuration(node.job) }}
@@ -552,8 +551,8 @@ function sortIndicator(field: SortField): string {
           >
             Backend
           </th>
-          <!-- Cluster (federation): always rendered; cells are blank for local
-               jobs so a single-cluster deployment just sees an empty column. -->
+          <!-- Cluster: every job carries a coordinate (`'local'` by default), so
+               each row is tagged; a single-cluster deployment reads all `local`. -->
           <th
             scope="col"
             class="hidden md:table-cell px-2 sm:px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary"
@@ -658,17 +657,15 @@ function sortIndicator(field: SortField): string {
             <span v-else class="text-text-muted">—</span>
           </td>
 
-          <!-- Cluster (federation): the peer a federated job was handed to;
-               clicking filters the list to that peer. Blank for local jobs. -->
+          <!-- Cluster: the row's coordinate (`'local'` or a peer id); clicking
+               filters the list to that cluster. -->
           <td class="hidden md:table-cell px-2 sm:px-3 py-2 text-[13px]">
             <button
-              v-if="node.job.childCluster"
               class="text-accent hover:underline font-mono text-xs"
-              @click="router.replace({ query: { ...route.query, cluster: node.job.childCluster, backend: undefined } })"
+              @click="router.replace({ query: { ...route.query, cluster: node.job.cluster ?? LOCAL_CLUSTER, backend: undefined } })"
             >
-              {{ node.job.childCluster }}
+              {{ node.job.cluster ?? LOCAL_CLUSTER }}
             </button>
-            <span v-else class="text-text-muted">—</span>
           </td>
 
           <!-- Tasks progress bar -->

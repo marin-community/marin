@@ -153,7 +153,7 @@ class Controller(_message.Message):
         job_id: str
         def __init__(self, job_id: _Optional[str] = ...) -> None: ...
     class JobQuery(_message.Message):
-        __slots__ = ("scope", "parent_job_id", "name_filter", "state_filter", "sort_field", "sort_direction", "offset", "limit", "job_id_prefix", "backend_id", "child_cluster")
+        __slots__ = ("scope", "parent_job_id", "name_filter", "state_filter", "sort_field", "sort_direction", "offset", "limit", "job_id_prefix", "backend_id", "cluster")
         SCOPE_FIELD_NUMBER: _ClassVar[int]
         PARENT_JOB_ID_FIELD_NUMBER: _ClassVar[int]
         NAME_FILTER_FIELD_NUMBER: _ClassVar[int]
@@ -164,7 +164,7 @@ class Controller(_message.Message):
         LIMIT_FIELD_NUMBER: _ClassVar[int]
         JOB_ID_PREFIX_FIELD_NUMBER: _ClassVar[int]
         BACKEND_ID_FIELD_NUMBER: _ClassVar[int]
-        CHILD_CLUSTER_FIELD_NUMBER: _ClassVar[int]
+        CLUSTER_FIELD_NUMBER: _ClassVar[int]
         scope: Controller.JobQueryScope
         parent_job_id: str
         name_filter: str
@@ -175,8 +175,8 @@ class Controller(_message.Message):
         limit: int
         job_id_prefix: str
         backend_id: str
-        child_cluster: str
-        def __init__(self, scope: _Optional[_Union[Controller.JobQueryScope, str]] = ..., parent_job_id: _Optional[str] = ..., name_filter: _Optional[str] = ..., state_filter: _Optional[str] = ..., sort_field: _Optional[_Union[Controller.JobSortField, str]] = ..., sort_direction: _Optional[_Union[Controller.SortDirection, str]] = ..., offset: _Optional[int] = ..., limit: _Optional[int] = ..., job_id_prefix: _Optional[str] = ..., backend_id: _Optional[str] = ..., child_cluster: _Optional[str] = ...) -> None: ...
+        cluster: str
+        def __init__(self, scope: _Optional[_Union[Controller.JobQueryScope, str]] = ..., parent_job_id: _Optional[str] = ..., name_filter: _Optional[str] = ..., state_filter: _Optional[str] = ..., sort_field: _Optional[_Union[Controller.JobSortField, str]] = ..., sort_direction: _Optional[_Union[Controller.SortDirection, str]] = ..., offset: _Optional[int] = ..., limit: _Optional[int] = ..., job_id_prefix: _Optional[str] = ..., backend_id: _Optional[str] = ..., cluster: _Optional[str] = ...) -> None: ...
     class ListJobsRequest(_message.Message):
         __slots__ = ("query",)
         QUERY_FIELD_NUMBER: _ClassVar[int]
@@ -773,16 +773,16 @@ class Controller(_message.Message):
         cursor: str
         def __init__(self, requester_id: _Optional[str] = ..., cursor: _Optional[str] = ...) -> None: ...
     class FederationJobDelta(_message.Message):
-        __slots__ = ("remote_job_id", "summary", "changed_tasks", "tombstone")
-        REMOTE_JOB_ID_FIELD_NUMBER: _ClassVar[int]
+        __slots__ = ("job_id", "summary", "changed_tasks", "tombstone")
+        JOB_ID_FIELD_NUMBER: _ClassVar[int]
         SUMMARY_FIELD_NUMBER: _ClassVar[int]
         CHANGED_TASKS_FIELD_NUMBER: _ClassVar[int]
         TOMBSTONE_FIELD_NUMBER: _ClassVar[int]
-        remote_job_id: str
+        job_id: str
         summary: _job_pb2.JobStatus
         changed_tasks: _containers.RepeatedCompositeFieldContainer[_job_pb2.TaskStatus]
         tombstone: bool
-        def __init__(self, remote_job_id: _Optional[str] = ..., summary: _Optional[_Union[_job_pb2.JobStatus, _Mapping]] = ..., changed_tasks: _Optional[_Iterable[_Union[_job_pb2.TaskStatus, _Mapping]]] = ..., tombstone: _Optional[bool] = ...) -> None: ...
+        def __init__(self, job_id: _Optional[str] = ..., summary: _Optional[_Union[_job_pb2.JobStatus, _Mapping]] = ..., changed_tasks: _Optional[_Iterable[_Union[_job_pb2.TaskStatus, _Mapping]]] = ..., tombstone: _Optional[bool] = ...) -> None: ...
     class FederationSyncResponse(_message.Message):
         __slots__ = ("deltas", "next_cursor", "cursor_stale")
         DELTAS_FIELD_NUMBER: _ClassVar[int]

@@ -104,4 +104,5 @@ def build_log_forwarder(
         target=target,
         target_label=config.relay_address,
         state_path=state_dir / _STATE_FILENAME,
+        cluster=cluster_id,
     )

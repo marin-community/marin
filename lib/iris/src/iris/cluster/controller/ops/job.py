@@ -30,7 +30,7 @@ from iris.cluster.controller.schema import (
     jobs_table,
     users_table,
 )
-from iris.cluster.types import TERMINAL_JOB_STATES, JobName
+from iris.cluster.types import LOCAL_CLUSTER, TERMINAL_JOB_STATES, JobName
 from iris.rpc import controller_pb2, job_pb2
 from iris.time_proto import duration_from_proto
 
@@ -135,13 +135,13 @@ def insert_job_and_config(
     request: controller_pb2.Controller.LaunchJobRequest,
     ts: Timestamp,
     run_template_cache: RunTemplateCache,
-    child_cluster: str = "",
+    cluster: str = LOCAL_CLUSTER,
 ) -> JobInsertResult:
     """Insert the ``jobs`` + ``job_config`` (+ workdir file) rows for one job.
 
     Does NOT materialize tasks — :func:`submit` adds them for a local job; a
-    federated handoff (``child_cluster`` set) has no local tasks (the peer creates
-    them; the sync mirrors them back). Caller owns the transaction.
+    federated handoff (``cluster`` set to a peer) has no local tasks (the peer
+    creates them; the sync mirrors them back). Caller owns the transaction.
     """
     # Same-name replacement reuses ``job_id``; drop any stale cached
     # template before the new row's fields land in the DB.
@@ -238,7 +238,7 @@ def insert_job_and_config(
         exit_code=None,
         num_tasks=replicas,
         name=job_name_lower,
-        child_cluster=child_cluster,
+        cluster=cluster,
     )
     writes.insert_job_config(
         cur,

@@ -6,10 +6,11 @@
 Wires two in-process controllers — a parent and a peer — through a delegating
 ``PeerConnection`` and drives the on-demand RPC path: a job is handed off, its
 task runs on the peer and mirrors back onto the parent, and a profile / exec
-issued against the parent's mirrored task is forwarded to the peer under the
-peer's own root job id (not run locally). Also covers the race outcomes: the
-peer's live ``NOT_FOUND`` for a task it has since dropped is surfaced verbatim,
-and a tombstoned handle resolves to ``NOT_FOUND`` with no peer round-trip.
+issued against the parent's mirrored task is forwarded verbatim to the peer under
+the same, cluster-invariant job id (not run locally). Also covers the race
+outcomes: the peer's live ``NOT_FOUND`` for a task it has since dropped is
+surfaced verbatim, and a tombstoned handle resolves to ``NOT_FOUND`` with no peer
+round-trip.
 """
 
 from contextlib import ExitStack
@@ -25,7 +26,7 @@ from iris.cluster.controller.endpoint_service import EndpointServiceImpl
 from iris.cluster.controller.federation_store import ControllerFederationStore
 from iris.cluster.controller.run_template import RunTemplateCache
 from iris.cluster.controller.service import ControllerServiceImpl
-from iris.cluster.federation.manager import FederationManager, encode_remote_job_id
+from iris.cluster.federation.manager import FederationManager
 from iris.cluster.federation.peer import FederationPeer
 from iris.cluster.types import JobName
 from iris.managed_thread import get_thread_container
@@ -141,22 +142,22 @@ def _handoff_and_mirror_running_task(
     peer_state: ControllerTestState,
     manager: FederationManager,
     name: str = "fed-job",
-) -> tuple[JobName, JobName]:
+) -> JobName:
     """Hand off a job, drive its peer task to RUNNING, and mirror it back.
 
-    Returns the parent job id and the peer's remote job id. The parent's mirror
-    then holds a live federated task (``child_cluster`` set, no local worker), the
-    exact row an on-demand RPC must proxy rather than resolve locally.
+    Returns the job id — cluster-invariant, so the parent and the peer name the
+    job identically. The parent's mirror then holds a live federated task
+    (``cluster`` set, no local worker), the exact row an on-demand RPC must proxy
+    rather than resolve locally.
     """
     response = parent_service.launch_job(_cluster_pinned_request(name), None)
-    parent_job_id = JobName.from_wire(response.job_id)
-    remote_job_id = JobName.from_wire(encode_remote_job_id("parent", parent_job_id))
+    job_id = JobName.from_wire(response.job_id)
 
     worker = register_worker(peer_state, "w1", "w1:8080", job_pb2.WorkerMetadata(hostname="w1"))
-    (task,) = query_tasks_for_job(peer_state, remote_job_id)
+    (task,) = query_tasks_for_job(peer_state, job_id)
     dispatch_task(peer_state, task, worker)
     manager.sync_once()
-    return parent_job_id, remote_job_id
+    return job_id
 
 
 def test_profile_against_a_federated_task_runs_on_the_peer(tmp_path, log_client):
@@ -164,14 +165,14 @@ def test_profile_against_a_federated_task_runs_on_the_peer(tmp_path, log_client)
         parent_service, _parent_state = _make_service(stack, "parent", tmp_path, log_client)
         peer_service, peer_state = _make_service(stack, "peer", tmp_path, log_client)
         manager = _attach_federation(parent_service, _ProxyPeerConnection(peer_service))
-        parent_job_id, remote_job_id = _handoff_and_mirror_running_task(parent_service, peer_state, manager)
+        job_id = _handoff_and_mirror_running_task(parent_service, peer_state, manager)
 
         peer_service._controller.provider.profile_task.return_value = job_pb2.ProfileTaskResponse(
             profile_data=b"peer-profile"
         )
         resp = parent_service.profile_task(
             job_pb2.ProfileTaskRequest(
-                target=parent_job_id.task(0).to_wire(),
+                target=job_id.task(0).to_wire(),
                 duration_seconds=1,
                 profile_type=_CPU_PROFILE,
             ),
@@ -182,24 +183,24 @@ def test_profile_against_a_federated_task_runs_on_the_peer(tmp_path, log_client)
         assert resp.profile_data == b"peer-profile"
         # The federated task was never dispatched to the parent's local fallback backend.
         parent_service._controller.provider.profile_task.assert_not_called()
-        # The peer resolved the task under its own root job id, not the parent's.
+        # The peer resolved the task under the same, cluster-invariant job id.
         (call,) = peer_service._controller.provider.profile_task.call_args_list
-        assert call.args[0].task_id == remote_job_id.task(0).to_wire()
+        assert call.args[0].task_id == job_id.task(0).to_wire()
 
 
 def test_profile_preserves_the_attempt_qualifier_when_proxying(tmp_path, log_client):
-    """A ``:attempt`` target rewrites the root but keeps the task index + attempt,
+    """A ``:attempt`` target is forwarded verbatim (task index + attempt intact),
     so the peer profiles the exact attempt the user named."""
     with ExitStack() as stack:
         parent_service, _parent_state = _make_service(stack, "parent", tmp_path, log_client)
         peer_service, peer_state = _make_service(stack, "peer", tmp_path, log_client)
         manager = _attach_federation(parent_service, _ProxyPeerConnection(peer_service))
-        parent_job_id, remote_job_id = _handoff_and_mirror_running_task(parent_service, peer_state, manager)
+        job_id = _handoff_and_mirror_running_task(parent_service, peer_state, manager)
 
         peer_service._controller.provider.profile_task.return_value = job_pb2.ProfileTaskResponse(profile_data=b"ok")
         parent_service.profile_task(
             job_pb2.ProfileTaskRequest(
-                target=f"{parent_job_id.task(0).to_wire()}:0",
+                target=f"{job_id.task(0).to_wire()}:0",
                 duration_seconds=1,
                 profile_type=_CPU_PROFILE,
             ),
@@ -207,8 +208,8 @@ def test_profile_preserves_the_attempt_qualifier_when_proxying(tmp_path, log_cli
         )
 
         (call,) = peer_service._controller.provider.profile_task.call_args_list
-        # The forwarded request carries the rewritten target with the attempt kept.
-        assert call.args[1].target == f"{remote_job_id.task(0).to_wire()}:0"
+        # The forwarded request carries the target verbatim, with the attempt kept.
+        assert call.args[1].target == f"{job_id.task(0).to_wire()}:0"
 
 
 def test_exec_against_a_federated_task_runs_on_the_peer(tmp_path, log_client):
@@ -216,14 +217,14 @@ def test_exec_against_a_federated_task_runs_on_the_peer(tmp_path, log_client):
         parent_service, _parent_state = _make_service(stack, "parent", tmp_path, log_client)
         peer_service, peer_state = _make_service(stack, "peer", tmp_path, log_client)
         manager = _attach_federation(parent_service, _ProxyPeerConnection(peer_service))
-        parent_job_id, remote_job_id = _handoff_and_mirror_running_task(parent_service, peer_state, manager)
+        job_id = _handoff_and_mirror_running_task(parent_service, peer_state, manager)
 
         peer_service._controller.provider.exec_in_container.return_value = worker_pb2.Worker.ExecInContainerResponse(
             exit_code=0, stdout="hello"
         )
         resp = parent_service.exec_in_container(
             controller_pb2.Controller.ExecInContainerRequest(
-                task_id=parent_job_id.task(0).to_wire(),
+                task_id=job_id.task(0).to_wire(),
                 command=["echo", "hi"],
                 timeout_seconds=5,
             ),
@@ -235,34 +236,33 @@ def test_exec_against_a_federated_task_runs_on_the_peer(tmp_path, log_client):
         # Never dispatched to the parent's local fallback backend.
         parent_service._controller.provider.exec_in_container.assert_not_called()
         # The peer resolved the task, and its forwarded worker request both carry the
-        # rewritten remote task id.
+        # same, cluster-invariant task id.
         (call,) = peer_service._controller.provider.exec_in_container.call_args_list
-        assert call.args[0].task_id == remote_job_id.task(0).to_wire()
-        assert call.args[1].task_id == remote_job_id.task(0).to_wire()
+        assert call.args[0].task_id == job_id.task(0).to_wire()
+        assert call.args[1].task_id == job_id.task(0).to_wire()
 
 
-def test_exec_rebases_a_task_id_whose_job_name_contains_a_colon(tmp_path, log_client):
+def test_exec_forwards_a_task_id_whose_job_name_contains_a_colon(tmp_path, log_client):
     """A ':' in a job-name component is a legal name char, not an attempt separator
-    for an exec task id — the rebase must parse it as a JobName, not a TaskAttempt."""
+    for an exec task id — the parent must parse it as a JobName (not a TaskAttempt)
+    to find the federated handle before forwarding the id verbatim to the peer."""
     with ExitStack() as stack:
         parent_service, _parent_state = _make_service(stack, "parent", tmp_path, log_client)
         peer_service, peer_state = _make_service(stack, "peer", tmp_path, log_client)
         manager = _attach_federation(parent_service, _ProxyPeerConnection(peer_service))
-        parent_job_id, remote_job_id = _handoff_and_mirror_running_task(
-            parent_service, peer_state, manager, name="train:debug"
-        )
+        job_id = _handoff_and_mirror_running_task(parent_service, peer_state, manager, name="train:debug")
 
         peer_service._controller.provider.exec_in_container.return_value = worker_pb2.Worker.ExecInContainerResponse(
             exit_code=0
         )
         resp = parent_service.exec_in_container(
-            controller_pb2.Controller.ExecInContainerRequest(task_id=parent_job_id.task(0).to_wire(), command=["true"]),
+            controller_pb2.Controller.ExecInContainerRequest(task_id=job_id.task(0).to_wire(), command=["true"]),
             None,
         )
 
         assert resp.exit_code == 0
         (call,) = peer_service._controller.provider.exec_in_container.call_args_list
-        assert call.args[0].task_id == remote_job_id.task(0).to_wire()
+        assert call.args[0].task_id == job_id.task(0).to_wire()
 
 
 def test_exec_surfaces_the_peers_not_found_for_a_stale_mirror(tmp_path, log_client):
@@ -273,18 +273,16 @@ def test_exec_surfaces_the_peers_not_found_for_a_stale_mirror(tmp_path, log_clie
         parent_service, _parent_state = _make_service(stack, "parent", tmp_path, log_client)
         peer_service, peer_state = _make_service(stack, "peer", tmp_path, log_client)
         manager = _attach_federation(parent_service, _ProxyPeerConnection(peer_service))
-        parent_job_id, remote_job_id = _handoff_and_mirror_running_task(parent_service, peer_state, manager)
+        job_id = _handoff_and_mirror_running_task(parent_service, peer_state, manager)
 
         # The peer drops the job; the parent does NOT sync, so its mirror still shows
         # the task running.
         with peer_state._db.transaction() as cur:
-            writes.delete_job(cur, remote_job_id)
+            writes.delete_job(cur, job_id)
 
         with pytest.raises(ConnectError) as exc:
             parent_service.exec_in_container(
-                controller_pb2.Controller.ExecInContainerRequest(
-                    task_id=parent_job_id.task(0).to_wire(), command=["true"]
-                ),
+                controller_pb2.Controller.ExecInContainerRequest(task_id=job_id.task(0).to_wire(), command=["true"]),
                 None,
             )
         assert exc.value.code == Code.NOT_FOUND
@@ -298,19 +296,19 @@ def test_tombstoned_handle_resolves_not_found_without_a_peer_round_trip(tmp_path
         peer_service, peer_state = _make_service(stack, "peer", tmp_path, log_client)
         connection = _ProxyPeerConnection(peer_service)
         manager = _attach_federation(parent_service, connection)
-        parent_job_id, remote_job_id = _handoff_and_mirror_running_task(parent_service, peer_state, manager)
+        job_id = _handoff_and_mirror_running_task(parent_service, peer_state, manager)
 
         # The peer prunes the job and the parent syncs the tombstone: its handle and
         # the mirrored task rows are dropped.
         with peer_state._db.transaction() as cur:
-            writes.delete_job(cur, remote_job_id)
+            writes.delete_job(cur, job_id)
         manager.sync_once()
-        assert _handle(parent_state, parent_job_id) is None
+        assert _handle(parent_state, job_id) is None
 
         with pytest.raises(ConnectError) as exc:
             parent_service.profile_task(
                 job_pb2.ProfileTaskRequest(
-                    target=parent_job_id.task(0).to_wire(),
+                    target=job_id.task(0).to_wire(),
                     duration_seconds=1,
                     profile_type=_CPU_PROFILE,
                 ),

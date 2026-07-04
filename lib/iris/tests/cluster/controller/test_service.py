@@ -161,16 +161,6 @@ def test_launch_job_returns_job_id(service):
     assert status_response.job.state == job_pb2.JOB_STATE_PENDING
 
 
-def test_launch_job_rejects_a_tilde_in_the_job_name(service):
-    """'~' is reserved as the federation cluster-dispatch delimiter, so a user may
-    not name a job with it — it would be ambiguous with a handed-off remote root.
-    (A received handoff, whose name IS the encoded cluster~name, is exempt; that
-    path is covered by the federation handoff tests.)"""
-    with pytest.raises(ConnectError) as exc_info:
-        service.launch_job(make_job_request("cw~forged"), None)
-    assert exc_info.value.code == Code.INVALID_ARGUMENT
-
-
 class _FeasibilityAutoscaler:
     """Autoscaler stub whose job_feasibility returns a fixed verdict."""
 

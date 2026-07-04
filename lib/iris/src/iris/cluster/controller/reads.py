@@ -61,7 +61,15 @@ from iris.cluster.controller.task_state import (
 )
 from iris.cluster.controller.worker_health import WorkerHealthTracker
 from iris.cluster.federation.store import FederationDirection, HandoffState
-from iris.cluster.types import TERMINAL_JOB_STATES, AttemptUid, JobName, PendingTask, WorkerId, WorkerUsability
+from iris.cluster.types import (
+    LOCAL_CLUSTER,
+    TERMINAL_JOB_STATES,
+    AttemptUid,
+    JobName,
+    PendingTask,
+    WorkerId,
+    WorkerUsability,
+)
 from iris.rpc import controller_pb2, job_pb2
 
 # ---------------------------------------------------------------------------
@@ -274,7 +282,7 @@ _JOB_ROW_COLUMNS = (
     job_config_table.c.res_disk_bytes,
     job_config_table.c.res_device_json,
     jobs_table.c.backend_id,
-    jobs_table.c.child_cluster,
+    jobs_table.c.cluster,
 )
 
 # Task states considered "completed" for dashboard task-summary counts.
@@ -290,7 +298,7 @@ def _apply_job_filters(
     name_filter: str,
     job_id_prefix: str,
     backend_id_filter: str = "",
-    child_cluster_filter: str = "",
+    cluster_filter: str = "",
 ):
     """Apply the standard set of job WHERE predicates to ``stmt``.
 
@@ -309,8 +317,8 @@ def _apply_job_filters(
         stmt = stmt.where(jobs_table.c.job_id.like(f"{escaped}%", escape="\\"))
     if backend_id_filter:
         stmt = stmt.where(jobs_table.c.backend_id == backend_id_filter)
-    if child_cluster_filter:
-        stmt = stmt.where(jobs_table.c.child_cluster == child_cluster_filter)
+    if cluster_filter:
+        stmt = stmt.where(jobs_table.c.cluster == cluster_filter)
     return stmt
 
 
@@ -369,7 +377,7 @@ def list_jobs(
         name_filter=query.name_filter,
         job_id_prefix=query.job_id_prefix,
         backend_id_filter=query.backend_id,
-        child_cluster_filter=query.child_cluster,
+        cluster_filter=query.cluster,
     )
 
     if needs_task_agg:
@@ -385,7 +393,7 @@ def list_jobs(
         name_filter=query.name_filter,
         job_id_prefix=query.job_id_prefix,
         backend_id_filter=query.backend_id,
-        child_cluster_filter=query.child_cluster,
+        cluster_filter=query.cluster,
     )
 
     offset = max(query.offset, 0)
@@ -467,7 +475,7 @@ def get_job_state(tx: Tx, job_id: JobName) -> int | None:
 def find_prunable_job(tx: Tx, terminal_states: Iterable[int], before_ts: Timestamp) -> JobName | None:
     """Return one terminal *local* job finished before ``before_ts``, or None.
 
-    Federated jobs (``child_cluster != ''``) are excluded: the parent mirrors the
+    Federated jobs (``cluster != 'local'``) are excluded: the parent mirrors the
     peer, so a peer-issued tombstone is the only path that deletes their rows.
     """
     row = tx.execute(
@@ -476,7 +484,7 @@ def find_prunable_job(tx: Tx, terminal_states: Iterable[int], before_ts: Timesta
             jobs_table.c.state.in_(bindparam("terminal_states", expanding=True)),
             jobs_table.c.finished_at_ms.is_not(None),
             jobs_table.c.finished_at_ms < bindparam("before_ts"),
-            jobs_table.c.child_cluster == "",
+            jobs_table.c.cluster == LOCAL_CLUSTER,
         )
         .limit(1),
         {"terminal_states": list(terminal_states), "before_ts": before_ts},
@@ -527,7 +535,7 @@ def get_job_detail(tx: Tx, job_id: JobName):
             jobs_table.c.depth,
             jobs_table.c.parent_job_id,
             jobs_table.c.backend_id,
-            jobs_table.c.child_cluster,
+            jobs_table.c.cluster,
             job_config_table.c.res_cpu_millicores,
             job_config_table.c.res_memory_bytes,
             job_config_table.c.res_disk_bytes,
@@ -990,7 +998,7 @@ def all_attempts_for_tasks(tx: Tx, task_ids: Sequence[JobName]) -> dict[JobName,
 
 
 # Resolution joins ``local_tasks`` so it only ever resolves attempts of locally
-# owned tasks. A federated task's mirrored attempts (task ``child_cluster`` set)
+# owned tasks. A federated task's mirrored attempts (task ``cluster`` set to a peer)
 # are excluded, keeping this worker-routing / reconcile reader off the fold.
 _RESOLVE_ATTEMPT_UIDS_STMT = (
     select(
@@ -1068,7 +1076,7 @@ TASK_DETAIL_COLS = (
     tasks_table.c.current_worker_address,
     tasks_table.c.container_id,
     tasks_table.c.backend_id,
-    tasks_table.c.child_cluster,
+    tasks_table.c.cluster,
 )
 
 
@@ -1708,9 +1716,8 @@ def load_control_snapshot(
 class FederatedHandle:
     """A parent-side SENT federated job handle (``federated_jobs`` ⋈ ``jobs``)."""
 
-    job_id: JobName  # this cluster's local (root) job id
+    job_id: JobName  # this cluster's local (root) job id; the peer runs the same id
     peer_id: str
-    remote_job_id: str
     owner_principal: str
     handoff_state: int
     cancel_intent_version: int
@@ -1719,7 +1726,6 @@ class FederatedHandle:
 _SENT_HANDLE_COLUMNS = (
     federated_jobs_table.c.job_id,
     federated_jobs_table.c.peer_id,
-    federated_jobs_table.c.remote_job_id,
     federated_jobs_table.c.owner_principal,
     federated_jobs_table.c.handoff_state,
     federated_jobs_table.c.cancel_intent_version,
@@ -1730,7 +1736,6 @@ def _sent_handle(row) -> FederatedHandle:
     return FederatedHandle(
         job_id=row.job_id,
         peer_id=row.peer_id,
-        remote_job_id=row.remote_job_id,
         owner_principal=row.owner_principal,
         handoff_state=int(row.handoff_state),
         cancel_intent_version=int(row.cancel_intent_version),
@@ -1788,34 +1793,55 @@ def pending_cancel_handles(tx: Tx) -> list[FederatedHandle]:
     return [_sent_handle(r) for r in rows]
 
 
-def federated_job_for_remote_id(tx: Tx, peer_id: str, remote_job_id: str) -> JobName | None:
-    """The local SENT job id for a peer's ``remote_job_id`` handle, or ``None``."""
+def federated_sent_job(tx: Tx, peer_id: str, job_id: JobName) -> JobName | None:
+    """``job_id`` iff a SENT ``federated_jobs`` handle for ``(peer_id, job_id)`` exists.
+
+    Job ids are cluster-invariant — the peer runs and reports the same id the parent
+    handed it — so the peer's reported id IS the local id. Confirms the parent
+    actually handed ``job_id`` to ``peer_id`` before mirroring the peer's report; a
+    peer reporting an id it was never handed is ignored.
+    """
     row = tx.execute(
         select(federated_jobs_table.c.job_id).where(
             federated_jobs_table.c.direction == int(FederationDirection.SENT),
             federated_jobs_table.c.peer_id == peer_id,
-            federated_jobs_table.c.remote_job_id == remote_job_id,
+            federated_jobs_table.c.job_id == job_id,
         )
     ).first()
     return row.job_id if row is not None else None
 
 
-def federated_handles_for_peer(tx: Tx, peer_id: str) -> dict[str, JobName]:
-    """``{remote_job_id: local_job_id}`` for every *handed-off* SENT handle to ``peer_id``.
+def received_requester(tx: Tx, job_id: JobName) -> str | None:
+    """The requester ``peer_id`` of a RECEIVED ``federated_jobs`` row for ``job_id``, else ``None``.
+
+    Drives peer-side handoff admission: a re-drive from the same requester is an
+    idempotent replay; any other existing row is a genuine collision.
+    """
+    row = tx.execute(
+        select(federated_jobs_table.c.peer_id).where(
+            federated_jobs_table.c.job_id == job_id,
+            federated_jobs_table.c.direction == int(FederationDirection.RECEIVED),
+        )
+    ).first()
+    return row.peer_id if row is not None else None
+
+
+def federated_handles_for_peer(tx: Tx, peer_id: str) -> set[JobName]:
+    """The set of *handed-off* SENT job ids delegated to ``peer_id``.
 
     Restricted to ``HANDED_OFF`` handles: a still-``PENDING_HANDOFF`` handle is not
     on the peer yet (the re-drive owns it), so its absence from the peer's active
     set is expected — a full resync must not reap it.
     """
     rows = tx.execute(
-        select(federated_jobs_table.c.remote_job_id, federated_jobs_table.c.job_id).where(
+        select(federated_jobs_table.c.job_id).where(
             federated_jobs_table.c.direction == int(FederationDirection.SENT),
             federated_jobs_table.c.peer_id == peer_id,
             federated_jobs_table.c.handoff_state == bindparam("handed_off"),
         ),
         {"handed_off": int(HandoffState.HANDED_OFF)},
     ).all()
-    return {r.remote_job_id: r.job_id for r in rows}
+    return {r.job_id for r in rows}
 
 
 def active_federated_job_count(tx: Tx, peer_id: str) -> int:
@@ -1849,7 +1875,7 @@ def read_sync_cursor(tx: Tx, peer_id: str) -> str:
 class ChangelogRow:
     """One raw ``federation_changelog`` row for a requester."""
 
-    job_id: JobName  # the peer's local job id (== the requester's remote_job_id)
+    job_id: JobName  # the cluster-invariant job id (same on peer and requester)
     task_index: int | None  # None = a job-level change ("all tasks")
     tombstone: bool
     seq: int

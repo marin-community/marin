@@ -5,10 +5,11 @@ import { controllerRpcCall, useLogServerStatsRpc } from '@/composables/useRpc'
 import { useAutoRefresh } from '@/composables/useAutoRefresh'
 import { stateToName, stateDisplayName } from '@/types/status'
 import { useBackends } from '@/composables/useBackends'
-import type {
-  JobStatus, TaskStatus, LaunchJobRequest, JobQuery,
-  GetJobStatusResponse, ListTasksResponse, ListJobsResponse,
-  EndpointInfo, ListEndpointsResponse,
+import {
+  LOCAL_CLUSTER,
+  type JobStatus, type TaskStatus, type LaunchJobRequest, type JobQuery,
+  type GetJobStatusResponse, type ListTasksResponse, type ListJobsResponse,
+  type EndpointInfo, type ListEndpointsResponse,
 } from '@/types/rpc'
 import { timestampMs, formatTimestamp, formatDuration, formatRelativeTime, formatBytes, formatCpuMillicores, formatDeviceConfig, bandDisplayName, bandColor } from '@/utils/formatting'
 import { decodeArrowIpc } from '@/utils/arrow'
@@ -24,7 +25,6 @@ import LogViewer from '@/components/shared/LogViewer.vue'
 import MarkdownRenderer from '@/components/shared/MarkdownRenderer.vue'
 import EndpointLink from '@/components/shared/EndpointLink.vue'
 import ClusterLink from '@/components/shared/ClusterLink.vue'
-import FederatedLogsNotice from '@/components/shared/FederatedLogsNotice.vue'
 import { useMediaQuery } from '@/composables/useMediaQuery'
 
 // Tailwind's `sm` breakpoint is 640px. Cards on mobile, table on desktop.
@@ -962,11 +962,10 @@ async function handleProfile(taskId: string, profilerType: string, format: strin
           <InfoRow v-if="multiBackend && job?.backendId" label="Backend">
             <span class="font-mono">{{ job!.backendId }}</span>
           </InfoRow>
-          <!-- Cluster: shown for a federated job regardless of the Backend row's
-               multiBackend gate; links inward to the parent's jobs list filtered
-               to this cluster. -->
-          <InfoRow v-if="job?.childCluster" label="Cluster">
-            <ClusterLink :cluster="job.childCluster" />
+          <!-- Cluster: every job carries a cluster coordinate (`'local'` by
+               default); links inward to the parent's jobs list filtered to it. -->
+          <InfoRow label="Cluster">
+            <ClusterLink :cluster="job?.cluster ?? LOCAL_CLUSTER" />
           </InfoRow>
         </InfoCard>
 
@@ -1511,12 +1510,9 @@ async function handleProfile(taskId: string, profilerType: string, format: strin
         <h3 class="text-sm font-semibold uppercase tracking-wider text-text-secondary mb-3">
           Job Logs
         </h3>
-        <FederatedLogsNotice
-          v-if="job?.childCluster"
-          :cluster="job.childCluster"
-          subject="job"
-        />
-        <LogViewer v-else :task-id="jobId" />
+        <!-- Logs are served under the job id in the shared finelog; a federated
+             job passes its cluster so LogViewer filters to the peer's rows. -->
+        <LogViewer :task-id="jobId" :cluster="job?.cluster" />
       </div>
     </template>
 

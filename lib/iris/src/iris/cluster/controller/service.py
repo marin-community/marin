@@ -87,13 +87,13 @@ from iris.cluster.runtime.profile import (
     profile_local_process,
 )
 from iris.cluster.types import (
-    FEDERATION_DELIMITER,
     TERMINAL_JOB_STATES,
     TERMINAL_TASK_STATES,
     JobName,
     TaskAttempt,
     UserBudgetDefaults,
     WorkerId,
+    is_federated,
     is_job_finished,
 )
 from iris.rpc import controller_pb2, job_pb2, query_pb2, vm_pb2, worker_pb2
@@ -261,7 +261,7 @@ class TaskWithAttempts:
     current_worker_address: str | None
     container_id: str | None
     backend_id: str
-    child_cluster: str
+    cluster: str
     # Display worker identity for a federated task (the peer-side worker name from
     # the federated_tasks sidecar); "" for a local task, which uses its worker FK.
     peer_worker_label: str
@@ -289,7 +289,7 @@ class TaskWithAttempts:
             current_worker_address=row.current_worker_address,
             container_id=row.container_id,
             backend_id=str(row.backend_id or ""),
-            child_cluster=str(row.child_cluster or ""),
+            cluster=str(row.cluster),
             peer_worker_label=str(row.peer_worker_label or ""),
             attempts=attempts,
         )
@@ -349,7 +349,7 @@ def task_to_proto(task: TaskWithAttempts, worker_address: str = "") -> job_pb2.T
     # label mirrored into the federated_tasks sidecar. Surface it as worker_id so
     # the task views render the worker natively (as non-link text, since there is
     # no local worker detail page for a remote worker).
-    worker_id = str(active_wid) if active_wid else (task.peer_worker_label if task.child_cluster else "")
+    worker_id = str(active_wid) if active_wid else (task.peer_worker_label if is_federated(task.cluster) else "")
     proto = job_pb2.TaskStatus(
         task_id=task.task_id.to_wire(),
         state=task.state,
@@ -361,7 +361,7 @@ def task_to_proto(task: TaskWithAttempts, worker_address: str = "") -> job_pb2.T
         attempts=attempts,
         failure_count=task.failure_count,
         backend_id=task.backend_id,
-        child_cluster=task.child_cluster,
+        cluster=task.cluster,
     )
     if current_attempt and current_attempt.started_at_ms:
         proto.started_at.CopyFrom(timestamp_to_proto(current_attempt.started_at_ms))
@@ -637,7 +637,7 @@ def _job_status_counts(summary: TaskJobSummary | None, job_id: JobName) -> dict[
     }
 
 
-def _federated_pending_reason(child_cluster: str, handoff_state: int | None, has_reported_tasks: bool) -> str:
+def _federated_pending_reason(cluster: str, handoff_state: int | None, has_reported_tasks: bool) -> str:
     """Pending reason for a federated job, which the local scheduler never sees.
 
     A handed-off job's tasks live on the peer and are excluded from the local
@@ -649,10 +649,10 @@ def _federated_pending_reason(child_cluster: str, handoff_state: int | None, has
     handle; there the reported-tasks signal alone drives the message.
     """
     if handoff_state == int(HandoffState.PENDING_HANDOFF):
-        return f"Awaiting acceptance by peer {child_cluster}"
+        return f"Awaiting acceptance by peer {cluster}"
     if not has_reported_tasks:
-        return f"Handed off to peer {child_cluster}; awaiting first status report"
-    return f"Pending on peer {child_cluster}"
+        return f"Handed off to peer {cluster}; awaiting first status report"
+    return f"Pending on peer {cluster}"
 
 
 def _filter_and_sort_workers(
@@ -1090,6 +1090,28 @@ class ControllerServiceImpl:
         ops.job.remove_finished(cur, job_id)
         return False
 
+    def _admit_federated_resubmit(
+        self,
+        cur: Tx,
+        job_id: JobName,
+        request: controller_pb2.Controller.LaunchJobRequest,
+    ) -> controller_pb2.Controller.LaunchJobResponse:
+        """Federation-aware admission for a handoff whose job id already exists.
+
+        Runs before the generic ``existing_job_policy`` switch, so it governs a
+        handoff regardless of that policy. A re-drive from the *same* requester
+        (recorded as a RECEIVED handle) is an idempotent replay — return the existing
+        job. Any other existing row — a local job, a job received from a different
+        requester, or a SENT handle — is a genuine collision the parent must see, so
+        reject with ``ALREADY_EXISTS``.
+        """
+        if reads.received_requester(cur, job_id) == request.federation.requester_id:
+            return controller_pb2.Controller.LaunchJobResponse(job_id=job_id.to_wire())
+        raise ConnectError(
+            Code.ALREADY_EXISTS,
+            f"Job {job_id} already exists and was not handed off by {request.federation.requester_id!r}",
+        )
+
     def _hand_off_job(
         self,
         job_id: JobName,
@@ -1098,12 +1120,12 @@ class ControllerServiceImpl:
     ) -> controller_pb2.Controller.LaunchJobResponse:
         """Hand a job off to a federation peer and return the parent's job id.
 
-        Only a root job is ever handed off — the remote job id folds this cluster
-        into the root name, so a non-root job would collide with its siblings on the
-        peer. The manager persists the federated handle in one local transaction,
-        then synchronously delivers it to the peer. A failed delivery is not fatal —
-        the sync loop re-drives the handle — so an admitted or already-present handle
-        still returns its id.
+        Only a root job is ever handed off — the peer runs it under the same,
+        cluster-invariant job id, so handing off a non-root job would clash with the
+        job's own tree on the peer. The manager persists the federated handle in one
+        local transaction, then synchronously delivers it to the peer. A failed
+        delivery is not fatal — the sync loop re-drives the handle — so an admitted or
+        already-present handle still returns its id.
         """
         if not job_id.is_root:
             raise ConnectError(
@@ -1144,18 +1166,6 @@ class ControllerServiceImpl:
 
         job_id = JobName.from_wire(request.name)
 
-        # '~' is reserved as the federation cluster-dispatch delimiter (it joins a
-        # cluster id to a root name in a handed-off job's remote id), so a user may
-        # not name a job with it — that would be ambiguous with a handed-off root.
-        # Only the job's own leaf name is checked, so a child spawned on a peer under
-        # a '~'-bearing federated root is fine; a received handoff, whose root name IS
-        # the encoded cluster~name, is exempt.
-        if FEDERATION_DELIMITER in job_id.name and not request.HasField("federation"):
-            raise ConnectError(
-                Code.INVALID_ARGUMENT,
-                f"Job name {job_id.name!r} may not contain {FEDERATION_DELIMITER!r} (reserved for federation).",
-            )
-
         # Reject root RPC submissions from stale clients. Direct in-process
         # calls have no wire client; tests and harnesses use ctx=None.
         # Nested submissions are exempt because they come from an already
@@ -1179,7 +1189,7 @@ class ControllerServiceImpl:
         # A received federation handoff is exempt from re-pinning: the acting owner
         # it asserts rides in ``federation.owner_principal`` (already encoded in the
         # handoff name's user segment), so re-pinning to the peer's own principal
-        # would corrupt both the attribution and the deterministic remote job id.
+        # would corrupt the attribution.
         identity = get_verified_identity()
 
         # ``federation`` is a field on the public LaunchJobRequest, so guard who may
@@ -1311,6 +1321,11 @@ class ControllerServiceImpl:
         with self._db.transaction() as cur:
             existing_state = reads.get_job_state(cur, job_id)
             if existing_state is not None:
+                # A received handoff whose id already exists takes the federation
+                # admission path (idempotent re-drive vs. genuine collision) before
+                # any generic replace/keep policy applies.
+                if request.HasField("federation"):
+                    return self._admit_federated_resubmit(cur, job_id, request)
                 policy = request.existing_job_policy
                 if policy == job_pb2.EXISTING_JOB_POLICY_ERROR:
                     raise ConnectError(
@@ -1513,6 +1528,8 @@ class ControllerServiceImpl:
             # belongs to the racing submitter and is too late for us to
             # replace without re-running the whole flow.
             if reads.get_job_state(cur, job_id) is not None:
+                if request.HasField("federation"):
+                    return self._admit_federated_resubmit(cur, job_id, request)
                 if request.existing_job_policy == job_pb2.EXISTING_JOB_POLICY_KEEP:
                     return controller_pb2.Controller.LaunchJobResponse(job_id=job_id.to_wire())
                 raise ConnectError(
@@ -1552,9 +1569,9 @@ class ControllerServiceImpl:
             # Aggregate task counts via a single GROUP BY query.
             summaries = reads.task_summaries_for_jobs(q, {job.job_id})
             has_children = bool(reads.parent_ids_with_children(q, [job.job_id]))
-            # A federated job's subtree lives on the peer; expose the peer-side
-            # remote job id (the key its logs land under in the global store).
-            handle = reads.federated_handle(q, job.job_id) if job.child_cluster else None
+            # A federated job's subtree lives on the peer; load the handle to surface
+            # its handoff posture in the pending reason.
+            handle = reads.federated_handle(q, job.job_id) if is_federated(job.cluster) else None
         summary = summaries.get(job.job_id)
 
         # Get scheduling diagnostics for pending jobs from cache
@@ -1563,9 +1580,9 @@ class ControllerServiceImpl:
         # is a single dict get — we only attach this job's hint, never the
         # full routing decision.
         pending_reason = ""
-        if job.state == job_pb2.JOB_STATE_PENDING and job.child_cluster:
+        if job.state == job_pb2.JOB_STATE_PENDING and is_federated(job.cluster):
             pending_reason = _federated_pending_reason(
-                job.child_cluster,
+                job.cluster,
                 handle.handoff_state if handle else None,
                 summary is not None,
             )
@@ -1590,8 +1607,7 @@ class ControllerServiceImpl:
             has_children=has_children,
             parent_job_id=job.parent_job_id.to_wire() if job.parent_job_id else "",
             backend_id=job.backend_id or "",
-            child_cluster=job.child_cluster or "",
-            remote_job_id=handle.remote_job_id if handle else "",
+            cluster=job.cluster,
             **_job_status_counts(summary, job.job_id),
         )
         if job.started_at_ms:
@@ -1653,8 +1669,8 @@ class ControllerServiceImpl:
         # Route a versioned, idempotent cancel there; the next sync mirrors the
         # peer's terminal state (and eventually its tombstone) back.
         with self._db.read_snapshot() as snap:
-            is_federated = reads.federated_handle(snap, job_id) is not None
-        if is_federated:
+            has_federated_handle = reads.federated_handle(snap, job_id) is not None
+        if has_federated_handle:
             self._controller.federation.cancel_federated(job_id)
             return job_pb2.Empty()
 
@@ -1683,8 +1699,8 @@ class ControllerServiceImpl:
     ) -> job_pb2.JobStatus:
         """Convert a job row and its task summary into a JobStatus proto."""
         pending_reason = j.error or ""
-        if j.state == job_pb2.JOB_STATE_PENDING and j.child_cluster:
-            pending_reason = _federated_pending_reason(j.child_cluster, None, task_summary is not None)
+        if j.state == job_pb2.JOB_STATE_PENDING and is_federated(j.cluster):
+            pending_reason = _federated_pending_reason(j.cluster, None, task_summary is not None)
         elif j.state == job_pb2.JOB_STATE_PENDING:
             sched_reason = self._controller.get_job_scheduling_diagnostics(j.job_id.to_wire())
             pending_reason = sched_reason or "Pending scheduler feedback"
@@ -1702,7 +1718,7 @@ class ControllerServiceImpl:
             pending_reason=pending_reason,
             has_children=has_children,
             backend_id=j.backend_id or "",
-            child_cluster=j.child_cluster or "",
+            cluster=j.cluster,
             **_job_status_counts(task_summary, j.job_id),
         )
         if j.started_at_ms:
@@ -2329,7 +2345,6 @@ class ControllerServiceImpl:
         if handle is not None:
             return self._controller.federation.proxy_profile(
                 peer_id=handle.peer_id,
-                remote_job_id=handle.remote_job_id,
                 request=request,
             )
 
@@ -2675,7 +2690,6 @@ class ControllerServiceImpl:
         if handle is not None:
             return self._controller.federation.proxy_exec(
                 peer_id=handle.peer_id,
-                remote_job_id=handle.remote_job_id,
                 request=request,
             )
 
@@ -3089,7 +3103,7 @@ class ControllerServiceImpl:
             exit_code=job.exit_code or 0,
             name=job.name,
             backend_id=job.backend_id or "",
-            child_cluster=job.child_cluster or "",
+            cluster=job.cluster,
             **_job_status_counts(summaries.get(job.job_id), job.job_id),
         )
         if job.started_at_ms:
@@ -3124,7 +3138,7 @@ class ControllerServiceImpl:
             task_to_proto(TaskWithAttempts.from_row(row, attempts_by_task.get(row.task_id, ()))) for row in task_rows
         ]
         return controller_pb2.Controller.FederationJobDelta(
-            remote_job_id=job_id.to_wire(),
+            job_id=job_id.to_wire(),
             summary=self._federated_job_summary(q, job),
             changed_tasks=changed_tasks,
         )
@@ -3183,9 +3197,7 @@ class ControllerServiceImpl:
 
             for job_id in order:
                 if tombstoned[job_id]:
-                    deltas.append(
-                        controller_pb2.Controller.FederationJobDelta(remote_job_id=job_id.to_wire(), tombstone=True)
-                    )
+                    deltas.append(controller_pb2.Controller.FederationJobDelta(job_id=job_id.to_wire(), tombstone=True))
                     continue
                 delta = self._federated_job_delta(q, job_id, all_tasks=all_tasks[job_id], task_indexes=indexes[job_id])
                 if delta is not None:

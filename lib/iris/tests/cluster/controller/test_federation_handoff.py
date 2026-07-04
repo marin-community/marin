@@ -14,6 +14,7 @@ full-resync set-replacement path.
 
 from contextlib import ExitStack
 
+import pytest
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from iris.cluster.bundle import BundleStore
@@ -24,10 +25,10 @@ from iris.cluster.controller.endpoint_service import EndpointServiceImpl
 from iris.cluster.controller.federation_store import ControllerFederationStore
 from iris.cluster.controller.run_template import RunTemplateCache
 from iris.cluster.controller.service import ControllerServiceImpl
-from iris.cluster.federation.manager import FederationManager, encode_remote_job_id
+from iris.cluster.federation.manager import FederationManager
 from iris.cluster.federation.peer import FederationPeer
 from iris.cluster.federation.store import HandoffAdmission, HandoffSpec, HandoffState
-from iris.cluster.types import AttemptUid, JobName
+from iris.cluster.types import LOCAL_CLUSTER, AttemptUid, JobName
 from iris.managed_thread import get_thread_container
 from iris.rpc import controller_pb2, job_pb2
 from rigging.server_auth import VerifiedIdentity, identity_scope
@@ -142,16 +143,26 @@ def _cluster_pinned_request(name: str, peer: str = "cw") -> controller_pb2.Contr
     return request
 
 
+def _received_handoff_request(name: str, requester_id: str) -> controller_pb2.Controller.LaunchJobRequest:
+    """A handoff request as a peer receives it: the federation field carries the
+    requester (parent) cluster id and the asserted owner principal. The job id is
+    cluster-invariant, so it is the plain ``/test-user/<name>`` the parent submitted."""
+    request = make_direct_job_request(name, replicas=1)
+    request.federation.requester_id = requester_id
+    request.federation.owner_principal = _USER
+    return request
+
+
 def _handle(state: ControllerTestState, job_id: JobName):
     """The federated handle for ``job_id`` (or ``None``), via a scoped snapshot."""
     with state._db.read_snapshot() as tx:
         return reads.federated_handle(tx, job_id)
 
 
-def _run_peer_task_to_success(peer_state: ControllerTestState, remote_job_id: JobName) -> None:
+def _run_peer_task_to_success(peer_state: ControllerTestState, job_id: JobName) -> None:
     """Register a worker on the peer and drive the handed-off job's task to SUCCEEDED."""
     worker = register_worker(peer_state, "w1", "w1:8080", job_pb2.WorkerMetadata(hostname="w1"))
-    (task,) = query_tasks_for_job(peer_state, remote_job_id)
+    (task,) = query_tasks_for_job(peer_state, job_id)
     dispatch_task(peer_state, task, worker)
     transition_task(peer_state, task.task_id, job_pb2.TASK_STATE_SUCCEEDED)
 
@@ -168,33 +179,32 @@ def test_handoff_materializes_on_peer_and_syncs_back(tmp_path, log_client):
         manager = _attach_federation(parent_service, _InProcessPeerConnection(peer_service))
 
         response = parent_service.launch_job(_cluster_pinned_request("fed-job"), None)
-        parent_job_id = JobName.from_wire(response.job_id)
-        remote_job_id = JobName.from_wire(encode_remote_job_id("parent", parent_job_id))
+        job_id = JobName.from_wire(response.job_id)
 
         # Parent side: a HANDED_OFF handle, and no local tasks (a federated root
-        # owns none).
-        handle = _handle(parent_state, parent_job_id)
+        # owns none). Job ids are cluster-invariant, so the peer runs the same id.
+        handle = _handle(parent_state, job_id)
         assert handle is not None
         assert handle.peer_id == "cw"
         assert handle.handoff_state == int(HandoffState.HANDED_OFF)
-        assert handle.remote_job_id == remote_job_id.to_wire()
-        assert query_tasks_for_job(parent_state, parent_job_id) == []
+        assert handle.job_id == job_id
+        assert query_tasks_for_job(parent_state, job_id) == []
 
         # Peer side: it materialized and OWNS the job (a RECEIVED federated_jobs
-        # row, not a SENT handle) and expanded it into a task.
-        assert _handle(peer_state, remote_job_id) is None
-        assert len(query_tasks_for_job(peer_state, remote_job_id)) == 1
-        assert query_job(peer_state, remote_job_id) is not None
+        # row, not a SENT handle) and expanded it into a task — under the same id.
+        assert _handle(peer_state, job_id) is None
+        assert len(query_tasks_for_job(peer_state, job_id)) == 1
+        assert query_job(peer_state, job_id) is not None
 
-        _run_peer_task_to_success(peer_state, remote_job_id)
+        _run_peer_task_to_success(peer_state, job_id)
         manager.sync_once()
 
         # Parent's handle now mirrors the peer's terminal state and its task,
         # tagged with the owning peer.
-        assert query_job(parent_state, parent_job_id).state == job_pb2.JOB_STATE_SUCCEEDED
-        (mirrored,) = query_tasks_for_job(parent_state, parent_job_id)
+        assert query_job(parent_state, job_id).state == job_pb2.JOB_STATE_SUCCEEDED
+        (mirrored,) = query_tasks_for_job(parent_state, job_id)
         assert mirrored.state == job_pb2.TASK_STATE_SUCCEEDED
-        assert mirrored.child_cluster == "cw"
+        assert mirrored.cluster == "cw"
 
 
 def test_sync_mirrors_attempts_and_worker_identity_natively(tmp_path, log_client):
@@ -208,71 +218,68 @@ def test_sync_mirrors_attempts_and_worker_identity_natively(tmp_path, log_client
         manager = _attach_federation(parent_service, _InProcessPeerConnection(peer_service))
 
         response = parent_service.launch_job(_cluster_pinned_request("fed-job"), None)
-        parent_job_id = JobName.from_wire(response.job_id)
-        remote_job_id = JobName.from_wire(encode_remote_job_id("parent", parent_job_id))
+        job_id = JobName.from_wire(response.job_id)
 
-        _run_peer_task_to_success(peer_state, remote_job_id)
+        _run_peer_task_to_success(peer_state, job_id)
         manager.sync_once()
 
-        (mirrored,) = query_tasks_for_job(parent_state, parent_job_id)
+        (mirrored,) = query_tasks_for_job(parent_state, job_id)
         task = parent_service.get_task_status(
             controller_pb2.Controller.GetTaskStatusRequest(task_id=mirrored.task_id.to_wire()), None
         ).task
 
         # The peer's attempt renders natively, and the worker identity is surfaced
         # from the peer (the task has no local worker row, so it is display-only).
-        assert task.child_cluster == "cw"
+        assert task.cluster == "cw"
         assert task.worker_id == "w1"
         assert len(task.attempts) == 1
         assert task.attempts[0].state == job_pb2.TASK_STATE_SUCCEEDED
         assert task.attempts[0].worker_id == ""  # no local worker FK for a mirrored attempt
 
-        # Safety: the mirrored uid is namespaced under the peer and, because uid
-        # resolution is scoped to local_tasks, never resolves — so reconcile's
-        # worker-routing can never act on a federated attempt.
+        # The mirrored uid is the peer's raw uid, written verbatim (no peer-prefix
+        # rebasing — job ids are cluster-invariant). Because uid resolution is scoped
+        # to local_tasks, it never resolves — so reconcile's worker-routing can never
+        # act on a federated attempt.
+        with peer_state._db.read_snapshot() as tx:
+            (peer_attempt,) = reads.all_attempts_for_tasks(tx, [job_id.task(0)])[job_id.task(0)]
         with parent_state._db.read_snapshot() as tx:
             (attempt_row,) = reads.all_attempts_for_tasks(tx, [mirrored.task_id])[mirrored.task_id]
-            assert attempt_row.attempt_uid.startswith("cw~")
+            assert attempt_row.attempt_uid == peer_attempt.attempt_uid
+            assert "~" not in attempt_row.attempt_uid
             assert reads.resolve_attempt_uids(tx, [AttemptUid(attempt_row.attempt_uid)]) == {}
 
 
-def test_dashboard_reads_expose_child_cluster_and_filter_by_it(tmp_path, log_client):
-    """The dashboard reads see a federated job: GetJobStatus stamps child_cluster
-    and the peer-side remote_job_id, and the ListJobs child_cluster filter
-    isolates federated jobs from local ones."""
+def test_dashboard_reads_expose_cluster_and_filter_by_it(tmp_path, log_client):
+    """The dashboard reads see a federated job: GetJobStatus stamps ``cluster``, and
+    the ListJobs ``cluster`` filter isolates federated jobs from local ones."""
     with ExitStack() as stack:
         parent_service, _ = _make_service(stack, "parent", tmp_path, log_client)
         peer_service, _ = _make_service(stack, "peer", tmp_path, log_client)
         _attach_federation(parent_service, _InProcessPeerConnection(peer_service))
 
         fed = parent_service.launch_job(_cluster_pinned_request("fed-job"), None)
-        fed_job_id = JobName.from_wire(fed.job_id)
-        remote_job_id = encode_remote_job_id("parent", fed_job_id)
         local = parent_service.launch_job(make_direct_job_request("local-job", replicas=1), None)
 
-        # GetJobStatus exposes the discriminator + the peer-side remote job id.
+        # GetJobStatus exposes the cluster coordinate: the owning peer for a federated job.
         fed_status = parent_service.get_job_status(
             controller_pb2.Controller.GetJobStatusRequest(job_id=fed.job_id), None
         ).job
-        assert fed_status.child_cluster == "cw"
-        assert fed_status.remote_job_id == remote_job_id
+        assert fed_status.cluster == "cw"
         # Handed off but not yet reported on: the pending reason names the peer,
         # not the local scheduler diagnostic (which never sees a federated job).
         assert fed_status.pending_reason == "Handed off to peer cw; awaiting first status report"
 
-        # A local job carries neither and keeps the local scheduler diagnostic.
+        # A local job carries the reserved 'local' sentinel and keeps the local
+        # scheduler diagnostic.
         local_status = parent_service.get_job_status(
             controller_pb2.Controller.GetJobStatusRequest(job_id=local.job_id), None
         ).job
-        assert local_status.child_cluster == ""
-        assert local_status.remote_job_id == ""
+        assert local_status.cluster == LOCAL_CLUSTER
         assert "peer" not in local_status.pending_reason.lower()
 
-        def _list(child_cluster: str) -> set[str]:
+        def _list(cluster: str) -> set[str]:
             resp = parent_service.list_jobs(
-                controller_pb2.Controller.ListJobsRequest(
-                    query=controller_pb2.Controller.JobQuery(child_cluster=child_cluster)
-                ),
+                controller_pb2.Controller.ListJobsRequest(query=controller_pb2.Controller.JobQuery(cluster=cluster)),
                 None,
             )
             return {j.job_id for j in resp.jobs}
@@ -310,17 +317,16 @@ def test_cancel_routes_to_peer_and_tombstone_drops_the_handle(tmp_path, log_clie
 
         response = parent_service.launch_job(_cluster_pinned_request("fed-job"), None)
         parent_job_id = JobName.from_wire(response.job_id)
-        remote_job_id = JobName.from_wire(encode_remote_job_id("parent", parent_job_id))
 
         # Cancel the parent handle: it routes TerminateJob to the peer, which kills
-        # the job there.
+        # the job there (the same, cluster-invariant id).
         parent_service.terminate_job(controller_pb2.Controller.TerminateJobRequest(job_id=parent_job_id.to_wire()), None)
-        assert query_job(peer_state, remote_job_id).state == job_pb2.JOB_STATE_KILLED
+        assert query_job(peer_state, parent_job_id).state == job_pb2.JOB_STATE_KILLED
 
         # The peer prunes the terminal job (writing a tombstone); the next sync
         # applies it and the parent drops the handle and its jobs row.
         with peer_state._db.transaction() as cur:
-            writes.delete_job(cur, remote_job_id)
+            writes.delete_job(cur, parent_job_id)
         manager.sync_once()
 
         assert _handle(parent_state, parent_job_id) is None
@@ -335,7 +341,6 @@ def test_full_resync_drops_a_handle_absent_from_the_peers_active_set(tmp_path, l
 
         response = parent_service.launch_job(_cluster_pinned_request("fed-job"), None)
         parent_job_id = JobName.from_wire(response.job_id)
-        remote_job_id = JobName.from_wire(encode_remote_job_id("parent", parent_job_id))
         manager.sync_once()  # parent's cursor advances past the peer's current max seq
         assert query_job(parent_state, parent_job_id) is not None
 
@@ -344,7 +349,7 @@ def test_full_resync_drops_a_handle_absent_from_the_peers_active_set(tmp_path, l
         # resync, whose active set no longer contains the job — so the parent drops
         # it by set-replacement, not by a tombstone delta.
         with peer_state._db.transaction() as cur:
-            writes.delete_job(cur, remote_job_id)
+            writes.delete_job(cur, parent_job_id)
         with parent_state._db.transaction() as cur:
             writes.upsert_sync_cursor(cur, "cw", "")
         manager.sync_once()
@@ -385,20 +390,19 @@ def test_redrive_of_a_handle_the_peer_already_has_is_idempotent(tmp_path, log_cl
 
         response = parent_service.launch_job(_cluster_pinned_request("fed-job"), None)
         parent_job_id = JobName.from_wire(response.job_id)
-        remote_job_id = JobName.from_wire(encode_remote_job_id("parent", parent_job_id))
         assert connection.launch_calls == 1
 
         # Force the handle back to PENDING_HANDOFF (as if the parent crashed after
         # delivery but before recording it). The re-drive must re-send under the
-        # same id and the peer's KEEP policy dedups — no second job, no error, and
-        # the handle settles in HANDED_OFF.
+        # same id and the peer's federation-aware admission dedups — no second job,
+        # no error, and the handle settles in HANDED_OFF.
         with parent_state._db.transaction() as cur:
             writes.set_handoff_state(cur, parent_job_id, int(HandoffState.PENDING_HANDOFF))
         manager.sync_once()
 
         assert connection.launch_calls == 2  # re-sent once
         assert _handle(parent_state, parent_job_id).handoff_state == int(HandoffState.HANDED_OFF)
-        assert len(query_tasks_for_job(peer_state, remote_job_id)) == 1  # KEEP dedups — no duplicate
+        assert len(query_tasks_for_job(peer_state, parent_job_id)) == 1  # idempotent re-drive — no duplicate
 
 
 # ---------------------------------------------------------------------------
@@ -413,7 +417,6 @@ def test_admit_persists_a_pending_handle_and_is_idempotent(tmp_path, log_client)
         parent_job_id = JobName.root(_USER, "fed-job")
         spec = HandoffSpec(
             local_job_id=parent_job_id,
-            remote_job_id=encode_remote_job_id("parent", parent_job_id),
             peer_id="cw",
             owner_principal=_USER,
             request=make_direct_job_request("fed-job", replicas=1),
@@ -428,6 +431,44 @@ def test_admit_persists_a_pending_handle_and_is_idempotent(tmp_path, log_client)
         assert store.admit_and_persist_handoff(spec) is HandoffAdmission.ALREADY_EXISTS
 
 
+def test_peer_admission_dedups_a_redrive_and_rejects_a_collision(tmp_path, log_client):
+    """Peer-side handoff admission for a job id that already exists: a received handoff
+    is idempotent when re-driven from the SAME requester (returns the job, no duplicate
+    tasks), but is rejected with ``ALREADY_EXISTS`` when the existing job is local or
+    was received from a different requester."""
+    with ExitStack() as stack:
+        peer_service, peer_state = _make_service(stack, "peer", tmp_path, log_client)
+
+        # First receipt from requester "parent": the peer materializes it locally as
+        # an ordinary job with a RECEIVED handle recording the requester.
+        with identity_scope(_PEER_IDENTITY):
+            first = peer_service.launch_job(_received_handoff_request("fed-job", "parent"), None)
+        job_id = JobName.from_wire(first.job_id)
+        assert len(query_tasks_for_job(peer_state, job_id)) == 1
+
+        # (a) A re-drive from the SAME requester is idempotent: same job, no dup tasks
+        # (the boot-recovery / retry path).
+        with identity_scope(_PEER_IDENTITY):
+            again = peer_service.launch_job(_received_handoff_request("fed-job", "parent"), None)
+        assert again.job_id == first.job_id
+        assert len(query_tasks_for_job(peer_state, job_id)) == 1
+
+        # (b) A handoff for the same id from a DIFFERENT requester is a genuine
+        # collision the parent must see — rejected, not silently bound to the wrong job.
+        with identity_scope(_PEER_IDENTITY):
+            with pytest.raises(ConnectError) as exc:
+                peer_service.launch_job(_received_handoff_request("fed-job", "other-parent"), None)
+        assert exc.value.code == Code.ALREADY_EXISTS
+
+        # (c) A handoff colliding with a purely LOCAL job (no RECEIVED handle) is
+        # rejected too.
+        peer_service.launch_job(make_direct_job_request("local-job", replicas=1), None)
+        with identity_scope(_PEER_IDENTITY):
+            with pytest.raises(ConnectError) as exc:
+                peer_service.launch_job(_received_handoff_request("local-job", "parent"), None)
+        assert exc.value.code == Code.ALREADY_EXISTS
+
+
 def test_incremental_sync_delivers_a_tombstone_and_drops_the_handle(tmp_path, log_client):
     """A prune's tombstone reaches the parent on the INCREMENTAL path (cursor already
     advanced), not only via a full resync: each changelog row carries its requester,
@@ -440,14 +481,13 @@ def test_incremental_sync_delivers_a_tombstone_and_drops_the_handle(tmp_path, lo
 
         response = parent_service.launch_job(_cluster_pinned_request("fed-job"), None)
         parent_job_id = JobName.from_wire(response.job_id)
-        remote_job_id = JobName.from_wire(encode_remote_job_id("parent", parent_job_id))
         manager.sync_once()  # advance the parent's cursor past the peer's current max seq
         assert query_job(parent_state, parent_job_id) is not None
 
         # Prune on the peer AFTER the parent is caught up, so only the incremental
         # tombstone (not a first-contact full resync) can reclaim the handle.
         with peer_state._db.transaction() as cur:
-            writes.delete_job(cur, remote_job_id)
+            writes.delete_job(cur, parent_job_id)
         manager.sync_once()
 
         assert _handle(parent_state, parent_job_id) is None

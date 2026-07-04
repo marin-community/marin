@@ -8,7 +8,7 @@
 import { ref, computed } from 'vue'
 import type { LocationQueryValue, RouteLocationNormalizedLoaded } from 'vue-router'
 import { controllerRpcCall } from '@/composables/useRpc'
-import type { BackendInfo, ListBackendsResponse, ListPeersResponse, PeerSummary } from '@/types/rpc'
+import { LOCAL_CLUSTER, type BackendInfo, type ListBackendsResponse, type ListPeersResponse, type PeerSummary } from '@/types/rpc'
 
 /** First string value of a route query param (``?k=a&k=b`` → ``a``), or ``''``. */
 export function firstQueryValue(raw: LocationQueryValue | LocationQueryValue[]): string {
@@ -136,9 +136,11 @@ export function useBackends() {
   /**
    * Return the `?cluster=` query param value, or undefined when absent or not in
    * the (populated) peer roster — an invalid id never reaches the server as a
-   * child_cluster filter.
+   * cluster filter. `'local'` is the reserved own-cluster coordinate and is
+   * always valid (it is never a peer roster entry).
    */
   function currentCluster(route: RouteLocationNormalizedLoaded): string | undefined {
+    if (firstQueryValue(route.query.cluster) === LOCAL_CLUSTER) return LOCAL_CLUSTER
     return resolveScopeId(route.query.cluster, peers.value.map(p => p.peerId))
   }
 

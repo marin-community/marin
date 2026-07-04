@@ -3,11 +3,11 @@
 
 """Tests for migration ``0034_federation``.
 
-Builds a pre-migration DB (jobs/tasks without ``child_cluster`` and no federation
-sidecar tables), seeds rows, and asserts the migration: adds the ``child_cluster``
-column to jobs/tasks (defaulting existing rows to ``''`` — local), creates the
+Builds a pre-migration DB (jobs/tasks without ``cluster`` and no federation
+sidecar tables), seeds rows, and asserts the migration: adds the ``cluster``
+column to jobs/tasks (defaulting existing rows to ``'local'``), creates the
 three sidecar tables and the two partial indexes, and is idempotent on re-run
-while leaving an already-set ``child_cluster`` untouched.
+while leaving an already-set ``cluster`` untouched.
 """
 
 import importlib.util
@@ -62,21 +62,21 @@ def test_migration_0034_adds_column_tables_indexes_and_is_idempotent():
     migration = _load_migration()
     migration.migrate(conn)
 
-    # Existing rows are local — the added column defaults to ''.
+    # Existing rows are local — the added column defaults to 'local'.
     for table in ("jobs", "tasks"):
-        values = {row[0] for row in conn.execute(f"SELECT DISTINCT child_cluster FROM {table}")}
-        assert values == {""}, table
+        values = {row[0] for row in conn.execute(f"SELECT DISTINCT cluster FROM {table}")}
+        assert values == {"local"}, table
 
     assert {"federated_jobs", "federation_sync_state", "federated_tasks"} <= _tables(conn)
     assert {"idx_tasks_pending_local", "idx_tasks_state_local"} <= _indexes(conn)
 
     # A row federated after the migration must survive a re-run: the column add
     # is guarded and no backfill rewrites it.
-    conn.execute("UPDATE tasks SET child_cluster = 'peer-west' WHERE task_id = '/u1/b/0'")
+    conn.execute("UPDATE tasks SET cluster = 'peer-west' WHERE task_id = '/u1/b/0'")
     conn.commit()
 
     migration.migrate(conn)  # idempotent re-run
 
-    assert conn.execute("SELECT child_cluster FROM tasks WHERE task_id='/u1/b/0'").fetchone()[0] == "peer-west"
-    assert conn.execute("SELECT child_cluster FROM tasks WHERE task_id='/u1/a/0'").fetchone()[0] == ""
+    assert conn.execute("SELECT cluster FROM tasks WHERE task_id='/u1/b/0'").fetchone()[0] == "peer-west"
+    assert conn.execute("SELECT cluster FROM tasks WHERE task_id='/u1/a/0'").fetchone()[0] == "local"
     conn.close()

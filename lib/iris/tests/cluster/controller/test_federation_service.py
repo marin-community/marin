@@ -20,7 +20,7 @@ from iris.cluster.controller.schema import tasks_table
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.federation.manager import FederationManager
 from iris.cluster.federation.peer import FederationPeer
-from iris.cluster.types import JobName
+from iris.cluster.types import LOCAL_CLUSTER, JobName
 from iris.managed_thread import get_thread_container
 from iris.rpc import controller_pb2
 from rigging.server_auth import VerifiedIdentity, identity_scope
@@ -112,8 +112,8 @@ def test_launch_job_stays_local_when_a_peer_is_configured(controller_service, mo
     job_id = JobName.from_wire(response.job_id)
 
     with state._db.read_snapshot() as tx:
-        child_clusters = tx.execute(select(tasks_table.c.child_cluster).where(tasks_table.c.job_id == job_id)).all()
-    # The job materialized its tasks locally (child_cluster empty); the reachable
+        clusters = tx.execute(select(tasks_table.c.cluster).where(tasks_table.c.job_id == job_id)).all()
+    # The job materialized its tasks locally (cluster == 'local'); the reachable
     # peer attracted nothing.
-    assert len(child_clusters) == 2
-    assert all((row.child_cluster or "") == "" for row in child_clusters)
+    assert len(clusters) == 2
+    assert all(row.cluster == LOCAL_CLUSTER for row in clusters)

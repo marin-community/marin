@@ -47,7 +47,7 @@
   "jobs": [
     {
       "backend_id": "",
-      "child_cluster": "",
+      "cluster": "local",
       "depth": 1,
       "error": null,
       "exit_code": null,
@@ -91,7 +91,7 @@
   "tasks": [
     {
       "backend_id": "",
-      "child_cluster": "",
+      "cluster": "local",
       "container_id": null,
       "current_attempt_id": 0,
       "current_worker_address": null,
