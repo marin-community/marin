@@ -1034,6 +1034,57 @@ def test_source_push_forward_inputs_share_one_plan_across_all_stages():
     assert int(np.asarray(inputs.plan.route_slots[src, dst_ord, entry, row])) == int(route_slot)
 
 
+def test_source_push_forward_device_inputs_from_plan_use_dynamic_jax_arrays():
+    config = source_push_inbox.PushInboxConfig(
+        ep_size=2,
+        entries_per_rank=4,
+        inbox_slots=2,
+        hidden_dim=8,
+        intermediate_dim=8,
+        block_m=2,
+        block_k=4,
+        block_n=4,
+        experts_per_rank=2,
+        send_worker_programs_per_peer=1,
+        worker_programs_per_peer=4,
+        routing="balanced",
+        tokens_per_rank=6,
+        topk=2,
+        capacity_factor=1.25,
+    )
+    raw_inputs = source_push_forward.make_source_push_forward_source_plan_raw_inputs(config)
+    host_inputs = source_push_forward.make_source_push_forward_inputs(
+        config,
+        raw_inputs.x,
+        raw_inputs.selected_experts,
+        raw_inputs.combine_weights,
+        raw_inputs.w_gate_up,
+        raw_inputs.w_down,
+        input_mode="source_push_plan",
+    )
+    dynamic_x = jnp.asarray(raw_inputs.x + 0.25, dtype=jnp.float32)
+    dynamic_weights = jnp.asarray(0.125 + raw_inputs.combine_weights * 0.25, dtype=jnp.float32)
+    dynamic_w13 = jnp.asarray(raw_inputs.w_gate_up + 0.5, dtype=jnp.float32)
+    dynamic_w2 = jnp.asarray(raw_inputs.w_down - 0.25, dtype=jnp.float32)
+
+    device_inputs = source_push_forward.device_source_push_forward_inputs_from_plan(
+        config,
+        host_inputs,
+        dynamic_x,
+        dynamic_weights,
+        dynamic_w13,
+        dynamic_w2,
+    )
+    expected_packed_x = source_push_plan.pack_source_push_tokens_jax(dynamic_x, host_inputs.plan).astype(jnp.bfloat16)
+    expected_recv_weights = source_push_plan.source_push_recv_route_weights_jax(dynamic_weights, host_inputs.plan)
+    expected_recv_weights = jnp.repeat(expected_recv_weights[..., None].astype(jnp.bfloat16), config.block_k, axis=-1)
+
+    np.testing.assert_array_equal(np.asarray(device_inputs.x), np.asarray(expected_packed_x))
+    np.testing.assert_array_equal(np.asarray(device_inputs.recv_route_weights), np.asarray(expected_recv_weights))
+    np.testing.assert_array_equal(np.asarray(device_inputs.w_gate_up), np.asarray(dynamic_w13.astype(jnp.bfloat16)))
+    np.testing.assert_array_equal(np.asarray(device_inputs.w_down), np.asarray(dynamic_w2.astype(jnp.bfloat16)))
+
+
 def test_source_push_forward_h_reference_matches_mlp_boundary():
     config = source_push_inbox.PushInboxConfig(
         ep_size=2,

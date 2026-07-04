@@ -63,9 +63,11 @@ from levanter.grug._moe.source_push_plan import (
     SourcePushPlan,
     build_source_push_plan,
     pack_source_push_tokens,
+    pack_source_push_tokens_jax,
     source_push_combine,
     source_push_combine_preweighted,
     source_push_recv_route_weights,
+    source_push_recv_route_weights_jax,
     source_push_w13_h,
     source_push_w2_from_h_return,
     source_push_source_padded_row_bases,
@@ -452,6 +454,40 @@ def device_source_push_forward_inputs_from_host(
     )
 
 
+def device_source_push_forward_inputs_from_plan(
+    config: PushInboxConfig,
+    host_inputs: SourcePushForwardHostInputs,
+    x: Float[Array, "S T D"],
+    route_weights: Float[Array, "S T K"],
+    w_gate_up: Float[Array, "S E D twoI"],
+    w_down: Float[Array, "S E I D"],
+) -> SourcePushForwardDeviceInputs:
+    """Build device inputs from static plan metadata and dynamic differentiable arrays."""
+
+    recv_route_weights = source_push_recv_route_weights_jax(route_weights, host_inputs.plan)
+    return SourcePushForwardDeviceInputs(
+        x=pack_source_push_tokens_jax(x, host_inputs.plan).astype(jnp.bfloat16),
+        send_meta=jnp.asarray(host_inputs.send_meta, dtype=jnp.int32),
+        recv_meta=jnp.asarray(host_inputs.recv_meta, dtype=jnp.int32),
+        expert_base=jnp.asarray(host_inputs.expert_base, dtype=jnp.int32),
+        src_base_by_expert=jnp.asarray(host_inputs.src_base_by_expert, dtype=jnp.int32),
+        w_gate_up=jnp.asarray(w_gate_up, dtype=jnp.bfloat16),
+        w_down=jnp.asarray(w_down, dtype=jnp.bfloat16),
+        queue_dst_ord=jnp.asarray(host_inputs.queue_dst_ord, dtype=jnp.int32),
+        queue_entry=jnp.asarray(host_inputs.queue_entry, dtype=jnp.int32),
+        queue_row=jnp.asarray(host_inputs.queue_row, dtype=jnp.int32),
+        recv_route_weights=jnp.repeat(
+            recv_route_weights[..., None].astype(jnp.bfloat16),
+            config.block_k,
+            axis=-1,
+        ),
+        route_combine_weights=jnp.asarray(host_inputs.route_combine_weights, dtype=jnp.bfloat16),
+        route_valid_mask=jnp.asarray(host_inputs.route_valid_mask, dtype=jnp.bool_),
+        queue_stats=host_inputs.queue_stats,
+        use_exact_expert_major=host_inputs.use_exact_expert_major,
+    )
+
+
 def reference_source_push_forward(
     config: PushInboxConfig,
     host_inputs: SourcePushForwardHostInputs,
@@ -614,6 +650,45 @@ def source_push_forward_with_h(
         mesh=mesh,
         execution_mode=execution_mode,
     )
+    return out, h, host_inputs.plan.dropped_routes
+
+
+def source_push_forward_with_h_from_plan(
+    config: PushInboxConfig,
+    host_inputs: SourcePushForwardHostInputs,
+    x: Float[Array, "S T D"],
+    route_weights: Float[Array, "S T K"],
+    w_gate_up: Float[Array, "S E D twoI"],
+    w_down: Float[Array, "S E I D"],
+    *,
+    execution_mode: str = FORWARD_EXECUTION_STAGED_HOST_SYNC,
+    mesh: Mesh | None = None,
+) -> tuple[Float[Array, "S T D"], Float[Array, "Dst rows twoI"], Int[Array, ""]]:
+    """Run staged source-push forward from fixed plan metadata and dynamic arrays.
+
+    ``host_inputs`` supplies the nondifferentiable routing metadata. The
+    differentiable arrays are packed/gathered with JAX before entering the
+    Pallas stages, so callers do not have to rebuild ``packed_x`` or receive
+    route weights on the host.
+    """
+
+    if execution_mode not in FORWARD_EXECUTION_MODES:
+        raise ValueError(f"unknown execution_mode={execution_mode!r}; expected one of {FORWARD_EXECUTION_MODES}")
+    if mesh is None:
+        mesh = _make_mesh(config.ep_size)
+    inputs = _shard_source_push_forward_inputs(
+        mesh,
+        device_source_push_forward_inputs_from_plan(
+            config,
+            host_inputs,
+            x,
+            route_weights,
+            w_gate_up,
+            w_down,
+        ),
+    )
+    out, h = _call_source_push_forward_device_inputs_with_h(mesh, config, inputs, execution_mode=execution_mode)
+    _block_until_ready((out, h))
     return out, h, host_inputs.plan.dropped_routes
 
 
