@@ -1032,14 +1032,12 @@ def test_source_push_forward_inputs_share_one_plan_across_all_stages():
         config.ep_size,
         config.entries_per_rank,
         config.block_m,
-        config.block_k,
     )
     expected_recv_weights = np.asarray(
         source_push_plan.source_push_recv_route_weights(jnp.asarray(inputs.route_combine_weights), inputs.plan),
         dtype=np.float32,
     )
-    np.testing.assert_allclose(inputs.recv_route_weights[..., 0], expected_recv_weights, atol=0, rtol=0)
-    np.testing.assert_allclose(inputs.recv_route_weights[..., -1], expected_recv_weights, atol=0, rtol=0)
+    np.testing.assert_allclose(inputs.recv_route_weights, expected_recv_weights, atol=0, rtol=0)
     assert expected.shape == (config.ep_size, config.tokens_per_rank, config.hidden_dim)
     assert np.count_nonzero(expected) > 0
     assert int(np.asarray(inputs.plan.token_ids[src, dst_ord, entry, row])) == int(token)
@@ -1089,7 +1087,7 @@ def test_source_push_forward_device_inputs_from_plan_use_dynamic_jax_arrays():
     )
     expected_packed_x = source_push_plan.pack_source_push_tokens_jax(dynamic_x, host_inputs.plan).astype(jnp.bfloat16)
     expected_recv_weights = source_push_plan.source_push_recv_route_weights_jax(dynamic_weights, host_inputs.plan)
-    expected_recv_weights = jnp.repeat(expected_recv_weights[..., None].astype(jnp.bfloat16), config.block_k, axis=-1)
+    expected_recv_weights = expected_recv_weights.astype(jnp.bfloat16)
 
     np.testing.assert_array_equal(np.asarray(device_inputs.x), np.asarray(expected_packed_x))
     np.testing.assert_array_equal(np.asarray(device_inputs.recv_route_weights), np.asarray(expected_recv_weights))
@@ -1156,7 +1154,7 @@ def test_source_push_forward_plan_inputs_do_not_capture_differentiable_arrays():
     )
     expected_packed_x = source_push_plan.pack_source_push_tokens_jax(dynamic_x, plan_inputs.plan).astype(jnp.bfloat16)
     expected_recv_weights = source_push_plan.source_push_recv_route_weights_jax(dynamic_weights, plan_inputs.plan)
-    expected_recv_weights = jnp.repeat(expected_recv_weights[..., None].astype(jnp.bfloat16), config.block_k, axis=-1)
+    expected_recv_weights = expected_recv_weights.astype(jnp.bfloat16)
 
     np.testing.assert_array_equal(np.asarray(device_inputs.x), np.asarray(expected_packed_x))
     np.testing.assert_array_equal(np.asarray(device_inputs.recv_route_weights), np.asarray(expected_recv_weights))

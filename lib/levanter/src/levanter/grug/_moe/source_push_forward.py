@@ -407,7 +407,6 @@ def _make_source_push_forward_inputs_from_plan(
         source_push_recv_route_weights(jnp.asarray(route_weights, dtype=jnp.float32), plan),
         dtype=np.float32,
     )
-    recv_route_weights = _mosaic_route_weight_tiles(recv_route_weights, config.block_k)
     valid_mask = np.asarray(jax.device_get(plan.valid_mask), dtype=np.bool_)
     queue_stats = _queue_stats(config, send_meta)
     combine_stats = _combine_queue_stats(config, valid_mask, int(jax.device_get(plan.dropped_routes)))
@@ -484,12 +483,6 @@ def _validate_source_push_forward_array_shapes(
         raise ValueError(f"w_down shape {w_down.shape} must match {expected_w_down}")
 
 
-def _mosaic_route_weight_tiles(recv_route_weights: np.ndarray, columns: int) -> np.ndarray:
-    """Expand receive-order route weights so Lane lowering sees a full WGMMA prologue tile."""
-
-    return np.repeat(recv_route_weights[..., None], columns, axis=-1)
-
-
 def device_source_push_forward_inputs_from_host(
     config: PushInboxConfig,
     host_inputs: SourcePushForwardHostInputs,
@@ -549,11 +542,7 @@ def device_source_push_forward_inputs_from_plan(
         queue_dst_ord=jnp.asarray(host_inputs.queue_dst_ord, dtype=jnp.int32),
         queue_entry=jnp.asarray(host_inputs.queue_entry, dtype=jnp.int32),
         queue_row=jnp.asarray(host_inputs.queue_row, dtype=jnp.int32),
-        recv_route_weights=jnp.repeat(
-            recv_route_weights[..., None].astype(jnp.bfloat16),
-            config.block_k,
-            axis=-1,
-        ),
+        recv_route_weights=recv_route_weights.astype(jnp.bfloat16),
         route_combine_weights=jnp.asarray(host_inputs.route_combine_weights, dtype=jnp.bfloat16),
         route_valid_mask=jnp.asarray(host_inputs.route_valid_mask, dtype=jnp.bool_),
         queue_stats=host_inputs.queue_stats,
@@ -830,7 +819,7 @@ def _sharded_source_push_forward_h_kernel(
         expert_base: Int[Array, "Dst E"],
         src_base_by_expert: Int[Array, "Dst S E"],
         w_gate_up: Float[Array, "Dst E D twoI"],
-        recv_route_weights: Float[Array, "Dst SRC Q M W"],
+        recv_route_weights: Float[Array, "Dst SRC Q M"],
         w_down: Float[Array, "Dst E I D"],
         queue_dst_ord: Int[Array, "S T K"],
         queue_entry: Int[Array, "S T K"],
@@ -944,7 +933,7 @@ def _shard_source_push_forward_inputs(
         queue_row=jax.device_put(inputs.queue_row, NamedSharding(mesh, P(AXIS, None, None))),
         recv_route_weights=jax.device_put(
             inputs.recv_route_weights,
-            NamedSharding(mesh, P(AXIS, None, None, None, None)),
+            NamedSharding(mesh, P(AXIS, None, None, None)),
         ),
         route_combine_weights=jax.device_put(
             inputs.route_combine_weights,

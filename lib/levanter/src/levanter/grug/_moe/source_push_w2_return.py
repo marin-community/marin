@@ -807,7 +807,7 @@ def _sharded_w2_from_h_return_direct_to_source_kernel(
 
     def local_fn(
         h_local: Float[Array, "1 rows twoI"],
-        recv_route_weights_local: Float[Array, "1 SRC Q M W"],
+        recv_route_weights_local: Float[Array, "1 SRC Q M"],
         recv_meta_local: Int[Array, "1 SRC Q F"],
         expert_base_local: Int[Array, "1 E"],
         src_base_by_expert_local: Int[Array, "1 SRC E"],
@@ -819,9 +819,15 @@ def _sharded_w2_from_h_return_direct_to_source_kernel(
         expert_base_local = expert_base_local[0]
         src_base_by_expert_local = src_base_by_expert_local[0]
         w_down_local = w_down_local[0]
+        # Lane/Mosaic cannot load the block_m=64 row-weight vector directly into this WGMMA prologue.
+        recv_route_weight_tiles = jnp.repeat(
+            recv_route_weights_local[..., None],
+            config.block_k,
+            axis=-1,
+        )
         source_return = kernel(
             h_local,
-            recv_route_weights_local,
+            recv_route_weight_tiles,
             recv_meta_local,
             expert_base_local,
             src_base_by_expert_local,
@@ -834,7 +840,7 @@ def _sharded_w2_from_h_return_direct_to_source_kernel(
         mesh=mesh,
         in_specs=(
             P(AXIS, None, None),
-            P(AXIS, None, None, None, None),
+            P(AXIS, None, None, None),
             P(AXIS, None, None, None),
             P(AXIS, None),
             P(AXIS, None, None),

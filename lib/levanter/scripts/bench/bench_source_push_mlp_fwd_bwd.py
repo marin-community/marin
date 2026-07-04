@@ -830,11 +830,7 @@ def _time_source_push_raw_token_input_prepare(
                 expert_base=jnp.asarray(host_inputs.expert_base, dtype=jnp.int32),
                 src_base_by_expert=jnp.asarray(host_inputs.src_base_by_expert, dtype=jnp.int32),
                 w_gate_up=jnp.asarray(w13, dtype=jnp.bfloat16),
-                recv_route_weights=jnp.repeat(
-                    recv_route_weights[..., None].astype(jnp.bfloat16),
-                    config.block_k,
-                    axis=-1,
-                ),
+                recv_route_weights=recv_route_weights.astype(jnp.bfloat16),
                 w_down=jnp.asarray(w2, dtype=jnp.bfloat16),
                 queue_dst_ord=jnp.asarray(host_inputs.queue_dst_ord, dtype=jnp.int32),
                 queue_entry=jnp.asarray(host_inputs.queue_entry, dtype=jnp.int32),
@@ -876,9 +872,7 @@ def _shard_raw_token_forward_inputs(mesh: Mesh, inputs: RawTokenForwardInputs) -
         expert_base=jax.device_put(inputs.expert_base, NamedSharding(mesh, P(AXIS, None))),
         src_base_by_expert=jax.device_put(inputs.src_base_by_expert, NamedSharding(mesh, P(AXIS, None, None))),
         w_gate_up=jax.device_put(inputs.w_gate_up, NamedSharding(mesh, P(AXIS, None, None, None))),
-        recv_route_weights=jax.device_put(
-            inputs.recv_route_weights, NamedSharding(mesh, P(AXIS, None, None, None, None))
-        ),
+        recv_route_weights=jax.device_put(inputs.recv_route_weights, NamedSharding(mesh, P(AXIS, None, None, None))),
         w_down=jax.device_put(inputs.w_down, NamedSharding(mesh, P(AXIS, None, None, None))),
         queue_dst_ord=jax.device_put(inputs.queue_dst_ord, NamedSharding(mesh, P(AXIS, None, None))),
         queue_entry=jax.device_put(inputs.queue_entry, NamedSharding(mesh, P(AXIS, None, None))),
