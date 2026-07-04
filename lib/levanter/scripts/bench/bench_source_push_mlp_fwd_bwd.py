@@ -283,6 +283,7 @@ def _run_one(
         timing = _time_callable(
             fn,
             *call_args,
+            mesh=mesh,
             warmup=warmup,
             steps=steps,
             repeat_runs=repeat_runs,
@@ -394,19 +395,18 @@ def _make_benchmark_callable(
 
 
 def _public_moe_forward(config: PushInboxConfig, mesh: Mesh, implementation: str, x, selected, combine, w13, w2):
-    with jax.set_mesh(mesh):
-        return moe_mlp(
-            x,
-            selected,
-            combine,
-            w13,
-            w2,
-            activation=ActivationFunctionEnum.silu,
-            implementation=implementation,
-            mesh=mesh,
-            capacity_factor=config.capacity_factor,
-            report_capacity_overflow=True,
-        )
+    return moe_mlp(
+        x,
+        selected,
+        combine,
+        w13,
+        w2,
+        activation=ActivationFunctionEnum.silu,
+        implementation=implementation,
+        mesh=mesh,
+        capacity_factor=config.capacity_factor,
+        report_capacity_overflow=True,
+    )
 
 
 def _public_moe_loss_aux(config: PushInboxConfig, mesh: Mesh, implementation: str, x, selected, combine, w13, w2):
@@ -425,19 +425,18 @@ def _preplanned_source_push_forward(
     w13,
     w2,
 ):
-    with jax.set_mesh(mesh):
-        return source_push_moe_mlp_from_plan(
-            config,
-            host_inputs,
-            route_table,
-            x,
-            combine,
-            w13,
-            w2,
-            implementation=implementation,
-            execution_mode=FORWARD_EXECUTION_STAGED_HOST_SYNC,
-            mesh=mesh,
-        )
+    return source_push_moe_mlp_from_plan(
+        config,
+        host_inputs,
+        route_table,
+        x,
+        combine,
+        w13,
+        w2,
+        implementation=implementation,
+        execution_mode=FORWARD_EXECUTION_STAGED_HOST_SYNC,
+        mesh=mesh,
+    )
 
 
 def _preplanned_source_push_loss_aux(
@@ -468,6 +467,7 @@ def _preplanned_source_push_loss_aux(
 def _time_callable(
     fn: Callable[..., Any],
     *args,
+    mesh: Mesh,
     warmup: int,
     steps: int,
     repeat_runs: int,
@@ -479,12 +479,13 @@ def _time_callable(
     first_run_time = None
 
     if use_outer_jit and separate_compile:
-        lowered = call.lower(*args)
-        start = time.perf_counter()
-        compiled = lowered.compile()
-        lower_compile_time = time.perf_counter() - start
-        start = time.perf_counter()
-        output = compiled(*args)
+        with jax.set_mesh(mesh):
+            lowered = call.lower(*args)
+            start = time.perf_counter()
+            compiled = lowered.compile()
+            lower_compile_time = time.perf_counter() - start
+            start = time.perf_counter()
+            output = compiled(*args)
         _block_until_ready(output)
         first_run_time = time.perf_counter() - start
         first_call_time = lower_compile_time + first_run_time
@@ -492,7 +493,8 @@ def _time_callable(
         compile_time = first_call_time
     else:
         start = time.perf_counter()
-        output = call(*args)
+        with jax.set_mesh(mesh):
+            output = call(*args)
         _block_until_ready(output)
         first_call_time = time.perf_counter() - start
         timed_call = call
@@ -500,14 +502,16 @@ def _time_callable(
         first_run_time = first_call_time
 
     for _ in range(warmup):
-        output = timed_call(*args)
+        with jax.set_mesh(mesh):
+            output = timed_call(*args)
         _block_until_ready(output)
 
     steady_state_times = []
     for _ in range(repeat_runs):
         start = time.perf_counter()
         for _ in range(steps):
-            output = timed_call(*args)
+            with jax.set_mesh(mesh):
+                output = timed_call(*args)
             _block_until_ready(output)
         steady_state_times.append((time.perf_counter() - start) / steps)
 
