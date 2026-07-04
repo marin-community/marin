@@ -22,16 +22,24 @@ from finelog.forwarder import CorruptForwarderStateError, LogForwarder
 from finelog.rpc import logging_pb2
 from rigging.auth import BearerTokenInjector, StaticTokenProvider
 
-# A pinned HS256 delegation key + token (exp = 2100-01-01), matching the Rust verifier's
-# interop test. A static token keeps this test free of a JWT-minting dependency; token
-# refresh/minting is covered separately (iris `_DelegationTokenProvider`, Rust interop).
-_KEY = "delegation-key-0123456789abcdefX"
-_TOKEN = (
-    "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9"
-    ".eyJzdWIiOiJtYXJpbiIsInJvbGUiOiJmaW5lbG9nLXJlbGF5IiwianRpIjoiZml4ZWRqdGkwMDAxIiwiaWF0IjoxMDAwMDAwMDAwLCJleHAiOjQxMDI0NDQ4MDB9"
-    ".kTVu3jf6JUbqdHe8WYswdHWzw7WBNT1NfyCxtMoiaPE"
+# A pinned EdDSA (Ed25519) delegation token (aud="finelog", exp = 2100-01-01) and the
+# Ed25519 PUBLIC key that verifies it, matching the Rust verifier's contract. The token
+# was minted once with PyJWT (`jwt.encode(..., algorithm="EdDSA")`) from the private half
+# of this keypair — a genuine Python-mint → Rust-verify vector; Ed25519 signatures are
+# deterministic, so the string is stable. A static token keeps this test free of a
+# JWT-minting dependency; token refresh/minting is covered separately (iris
+# `_DelegationTokenProvider`, Rust interop).
+_PUBLIC_KEY_PEM = (
+    "-----BEGIN PUBLIC KEY-----\n"
+    "MCowBQYDK2VwAyEAqwwvfFvyRQ+8Dhh0li8h2HtCT4yP40s0pzBwwSAkK5s=\n"
+    "-----END PUBLIC KEY-----\n"
 )
-_JWT_POLICY = json.dumps([{"type": "jwt", "keys": [{"cluster": "marin", "secret": _KEY}]}])
+_TOKEN = (
+    "eyJhbGciOiJFZERTQSIsImtpZCI6Im1hcmluLXJlbGF5LTEiLCJ0eXAiOiJKV1QifQ"
+    ".eyJpc3MiOiJtYXJpbiIsImF1ZCI6ImZpbmVsb2ciLCJzdWIiOiJtYXJpbiIsImV4cCI6NDEwMjQ0NDgwMH0"
+    ".dNmz3BJuFuJH9sjWlhXRorzBqlqY55dI0C6cKyi52_RrN1R69ZcTneLQzNFH4n8FJRd73fUk-hkvAFpcXZhWCg"
+)
+_JWT_POLICY = json.dumps([{"type": "jwt", "keys": [{"cluster": "marin", "public_keys": [_PUBLIC_KEY_PEM]}]}])
 
 
 def _entries(n: int, base_ms: int = 1_000) -> list[logging_pb2.LogEntry]:
