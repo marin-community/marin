@@ -76,6 +76,14 @@ controller:
     port: 10000
     service_name: iris-controller-svc
     scale_group: cpu-genoa
+    # Heavy pre-tokenization fan-out (~1500 tokenize pods at peak) OOMs the
+    # controller at the 16Gi default and its /health probe misses the 1s
+    # deadline while saturated, triggering a liveness-kill cascade (issue #6944).
+    resources:
+      cpu: "16"
+      memory: 128Gi
+      probe_timeout_seconds: 10
+      probe_failure_threshold: 6
     # Publishes ONLY /proxy off-cluster; per-endpoint auth is the gate.
     # Prerequisites + DNS: docs/coreweave.md (scripts/install_traefik_proxy.py).
     public_proxy_host: iris-cw-us-east-02a.oa.dev

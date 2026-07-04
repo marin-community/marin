@@ -22,6 +22,7 @@ import s3fs
 from rigging.timing import Deadline
 
 from iris.cluster.config import (
+    ControllerResourcesConfig,
     ControllerVmConfig,
     CoreweaveControllerConfig,
     CoreweavePlatformConfig,
@@ -57,8 +58,6 @@ _DEPLOYMENT_DELETE_TIMEOUT = 120.0
 # CoreWeave bare-metal provisioning/deprovisioning is slow; 60s is not enough.
 _KUBECTL_TIMEOUT = 1800.0
 
-_CONTROLLER_CPU_REQUEST = "4"
-_CONTROLLER_MEMORY_REQUEST = "16Gi"
 _CONTROLLER_STATE_PVC_NAME = "iris-controller-state"
 _CONTROLLER_STATE_PVC_SIZE = "50Gi"
 
@@ -123,6 +122,7 @@ def _build_controller_deployment(
     image: str,
     port: int,
     node_selector: dict[str, str],
+    resources: ControllerResourcesConfig,
     task_env_secret: bool = False,
     fresh: bool = False,
 ) -> dict:
@@ -130,8 +130,8 @@ def _build_controller_deployment(
     # Reserve controller CPU/memory so Kubernetes doesn't classify this Pod
     # as BestEffort. Matching limits keep the controller in Guaranteed QoS.
     controller_resources = {
-        "requests": {"cpu": _CONTROLLER_CPU_REQUEST, "memory": _CONTROLLER_MEMORY_REQUEST},
-        "limits": {"cpu": _CONTROLLER_CPU_REQUEST, "memory": _CONTROLLER_MEMORY_REQUEST},
+        "requests": {"cpu": resources.cpu, "memory": resources.memory},
+        "limits": {"cpu": resources.cpu, "memory": resources.memory},
     }
     # The controller SQLite DB lives on a PersistentVolumeClaim, so two
     # controller pods must never mount the same local state dir at once. We
@@ -191,11 +191,15 @@ def _build_controller_deployment(
                             "httpGet": {"path": "/health", "port": port},
                             "initialDelaySeconds": 10,
                             "periodSeconds": 10,
+                            "timeoutSeconds": resources.probe_timeout_seconds,
+                            "failureThreshold": resources.probe_failure_threshold,
                         },
                         "livenessProbe": {
                             "httpGet": {"path": "/health", "port": port},
                             "initialDelaySeconds": 30,
                             "periodSeconds": 30,
+                            "timeoutSeconds": resources.probe_timeout_seconds,
+                            "failureThreshold": resources.probe_failure_threshold,
                         },
                     },
                 ],
@@ -403,6 +407,7 @@ class K8sControllerProvider:
             image=config.controller.image,
             port=port,
             node_selector={self._iris_labels.iris_scale_group: cw.scale_group},
+            resources=cw.resources,
             task_env_secret=projects_task_env_secret(config),
         )
         deploy_manifest = _build_controller_deployment(**deploy_kwargs, fresh=fresh)
