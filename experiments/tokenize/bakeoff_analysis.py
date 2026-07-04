@@ -104,6 +104,13 @@ def main() -> None:
     ap.add_argument("--serving-ratio", type=float, default=1.0, help="lifetime serving/training weight for feBPB")
     ap.add_argument("--domain-weights", type=str, default=None, help="k=v,k=v domain mix (default: natural bytes)")
     ap.add_argument("--reference", type=str, default="marin-128k", help="reference arm for relative cost / feBPB")
+    ap.add_argument(
+        "--ref-budget",
+        type=float,
+        default=None,
+        help="override C_ref (train FLOPs) for feBPB; default = reference arm's middle BPB point. "
+        "Set to the arms' common budget (min of per-arm max FLOPs) to score without extrapolation.",
+    )
     args = ap.parse_args()
 
     with open(args.fertility) as f:
@@ -129,6 +136,8 @@ def main() -> None:
         # C_ref = the middle compute point of the reference arm.
         pts = sorted(bpb_points[args.reference])
         ref_train_flops = pts[len(pts) // 2][0]
+    if args.ref_budget is not None:
+        ref_train_flops = args.ref_budget
 
     attn = serving.attention_flop_fraction(ref.vocab) * 100
     print(
