@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Callable, Literal, TypeAlias
+from typing import Callable, Literal, NamedTuple, TypeAlias
 
 import jax
 import jax.numpy as jnp
@@ -31,6 +31,33 @@ from levanter.grug._moe.source_push_plan import (
 SOURCE_PUSH_MLP_IMPLEMENTATION_REFERENCE = "reference"
 SOURCE_PUSH_MLP_IMPLEMENTATION_PALLAS_MGPU = "pallas_mgpu"
 SourcePushMlpImplementation: TypeAlias = Literal["reference", "pallas_mgpu"]
+
+
+class SourcePushMlpReferenceResidual(NamedTuple):
+    """Custom-VJP residual for the compact expert-major H reference path.
+
+    The stable checkpoint is ``h``. The source-major primals are carried only
+    because JAX custom VJP backward rules do not receive differentiable primals
+    separately; this residual intentionally excludes packed/recv x, post-SwiGLU
+    activation, per-route W2 outputs, and kernel scratch buffers.
+    """
+
+    route_table: "SourcePushMlpRouteTable"
+    x: Float[Array, "S T D"]
+    route_weights: Float[Array, "S T K"]
+    w13: Float[Array, "S E D twoI"]
+    w2: Float[Array, "S E I D"]
+    h: Float[Array, "Dst E C twoI"]
+
+
+class SourcePushMlpFlatResidual(NamedTuple):
+    """Custom-VJP residual for the production flat-H source-push path."""
+
+    x: Float[Array, "S T D"]
+    route_weights: Float[Array, "S T K"]
+    w13: Float[Array, "S E D twoI"]
+    w2: Float[Array, "S E I D"]
+    h_flat: Float[Array, "Dst rows twoI"]
 
 
 @jax.tree_util.register_dataclass
@@ -301,25 +328,24 @@ def source_push_moe_mlp_from_plan(
             execution_mode=execution_mode,
             mesh=mesh,
         )
-        return y, (x_arg, route_weights_arg, w13_arg, w2_arg, h_flat)
+        return y, SourcePushMlpFlatResidual(x_arg, route_weights_arg, w13_arg, w2_arg, h_flat)
 
-    def _bwd(residuals, dy):
-        x_arg, route_weights_arg, w13_arg, w2_arg, h_flat = residuals
+    def _bwd(residuals: SourcePushMlpFlatResidual, dy):
         if isinstance(dy, jax.custom_derivatives.SymbolicZero):
             return (
-                jnp.zeros_like(x_arg),
-                jnp.zeros_like(route_weights_arg),
-                jnp.zeros_like(w13_arg),
-                jnp.zeros_like(w2_arg),
+                jnp.zeros_like(residuals.x),
+                jnp.zeros_like(residuals.route_weights),
+                jnp.zeros_like(residuals.w13),
+                jnp.zeros_like(residuals.w2),
             )
         dx, d_route_weights, dw13, dw2 = _source_push_moe_mlp_backward_from_h_flat(
             route_table,
             expert_base,
-            x_arg,
-            route_weights_arg,
-            w13_arg,
-            w2_arg,
-            h_flat,
+            residuals.x,
+            residuals.route_weights,
+            residuals.w13,
+            residuals.w2,
+            residuals.h_flat,
             dy,
         )
         return dx, d_route_weights, dw13, dw2
@@ -349,26 +375,25 @@ def _source_push_moe_mlp_fwd(
     w2: Float[Array, "S E I D"],
 ):
     y, h = source_push_moe_mlp_reference_with_h(route_table, x, route_weights, w13, w2)
-    return y, (route_table, x, route_weights, w13, w2, h)
+    return y, SourcePushMlpReferenceResidual(route_table, x, route_weights, w13, w2, h)
 
 
-def _source_push_moe_mlp_bwd(residuals, dy):
-    route_table, x, route_weights, w13, w2, h = residuals
+def _source_push_moe_mlp_bwd(residuals: SourcePushMlpReferenceResidual, dy):
     if isinstance(dy, jax.custom_derivatives.SymbolicZero):
         return (
             None,
-            jnp.zeros_like(x),
-            jnp.zeros_like(route_weights),
-            jnp.zeros_like(w13),
-            jnp.zeros_like(w2),
+            jnp.zeros_like(residuals.x),
+            jnp.zeros_like(residuals.route_weights),
+            jnp.zeros_like(residuals.w13),
+            jnp.zeros_like(residuals.w2),
         )
     dx, d_route_weights, dw13, dw2 = _source_push_moe_mlp_backward_from_h(
-        route_table,
-        x,
-        route_weights,
-        w13,
-        w2,
-        h,
+        residuals.route_table,
+        residuals.x,
+        residuals.route_weights,
+        residuals.w13,
+        residuals.w2,
+        residuals.h,
         dy,
     )
     return None, dx, d_route_weights, dw13, dw2

@@ -137,6 +137,21 @@ def test_source_push_moe_mlp_reference_saves_w13_preactivation_h():
         np.testing.assert_allclose(np.asarray(h[dst, expert, expert_row]), np.asarray(expected_h), atol=1e-6)
 
 
+def test_source_push_moe_mlp_custom_vjp_residual_names_h_checkpoint():
+    x, route_assignments, route_weights, w13, w2 = _small_mlp_inputs()
+    route_table = _route_table(route_assignments, route_weights)
+
+    y, residual = source_push_mlp._source_push_moe_mlp_fwd(route_table, x, route_weights, w13, w2)
+    expected_y, expected_h = source_push_moe_mlp_reference_with_h(route_table, x, route_weights, w13, w2)
+
+    assert isinstance(residual, source_push_mlp.SourcePushMlpReferenceResidual)
+    assert residual._fields == ("route_table", "x", "route_weights", "w13", "w2", "h")
+    assert source_push_mlp.SourcePushMlpFlatResidual._fields == ("x", "route_weights", "w13", "w2", "h_flat")
+    assert not {"recv_x", "packed_x", "activation", "route_y", "scratch"}.intersection(residual._fields)
+    np.testing.assert_allclose(np.asarray(y), np.asarray(expected_y), atol=0, rtol=0)
+    np.testing.assert_allclose(np.asarray(residual.h), np.asarray(expected_h), atol=0, rtol=0)
+
+
 def test_source_push_moe_mlp_reference_with_h_flat_matches_compact_h_reference():
     config, host_inputs, route_table, x, route_weights, w13, w2 = _small_forward_plan_inputs()
 
