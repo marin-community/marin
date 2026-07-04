@@ -159,6 +159,76 @@ because it can be a bit more finicky. We use AQT directly, and we recommend you 
 [AQT documentation](https://github.com/google/aqt?tab=readme-ov-file#how-aqt-works-internally) for more
 information on how it works.
 
+## FP8 for MoE grouped matmuls (``ragged_dot``)
+
+!!! warning "Experimental — scientific validation required before training use"
+
+    `ragged_dot` FP8 is opt-in and uses an **approximate backward**.  bf16 remains
+    the training default.  Validate loss curves and gradient norms before using FP8
+    in a production training run.
+
+Haliax supports FP8 for the expert-grouped matmul in Mixture-of-Experts layers via
+[haliax.nn.ragged_dot][].  This is distinct from the dense `Fp8DotGeneralOp` (above):
+it runs on a genuine ragged Mosaic `wgmma` kernel over dynamic non-uniform
+`group_sizes` (each expert may receive a different number of tokens) rather than a
+batched-dense reshape.
+
+### Opt-in
+
+Pass an `Fp8RaggedDotOp` to the `op=` argument:
+
+```python
+import haliax.nn as hnn
+from haliax.quantization import Fp8RaggedDotOp, apply_updates, partition_for_grad_overwrite
+
+op = Fp8RaggedDotOp.init(amax_history_length=1024)
+
+# Forward (inside your model or loss function):
+out = hnn.ragged_dot(lhs, rhs, group_sizes, op=op)
+
+# Train step — same pattern as dense FP8:
+grads = eqx.filter_grad(loss_fn)(op, lhs, rhs, ...)
+overwrites, non_overwrites = partition_for_grad_overwrite(grads)
+updates, opt_state = optimizer.update(non_overwrites, opt_state)
+op = apply_updates(op, updates, overwrites)
+```
+
+bf16 is the default and unchanged — `ragged_dot(lhs, rhs, gs)` without `op=` is
+byte-for-byte identical on all backends (GPU Triton / TPU Megablox / XLA).
+
+### Delayed per-tensor scaling
+
+`Fp8RaggedDotOp` uses TE-style delayed per-tensor scaling for the activation (lhs),
+expert weight (rhs), and output gradient.  Each carries a `scale` and
+`amax_history` that update automatically through the custom VJP as
+`OverwriteWithGradient` cotangents — they thread through
+`partition_for_grad_overwrite` / `apply_updates` and stay out of the
+optimizer/EMA state.  No explicit scale management is required.
+
+### Approximate same-dtype backward (caveat)
+
+The numerically correct output-gradient dtype is E5M2, but stock jaxlib's Mosaic
+`wgmma` rejects mixed operand dtypes (E5M2 x E4M3).  Until mixed-dtype `wgmma`
+lands upstream ([jax-ml/jax#38859](https://github.com/jax-ml/jax/pull/38859)),
+`rev_dtype` defaults to E4M3 so both gradients are uniform `e4m3 x e4m3`
+contractions.  This is an approximation: E4M3 has a lower dynamic range than E5M2
+and can distort large-magnitude output gradients.  The genuine mixed
+`e5m2 x e4m3` backward is a deferred follow-up.  Gradient relative-Frobenius error
+at the operating point is < 6e-2 (within the accepted FP8 tolerance).
+
+### Performance (H100, d2560 grug-MoE operating point)
+
+Operating point: w13 shape, E_local=64, 1024 tokens/expert (non-uniform groups).
+Measured fwd+bwd speedup vs the bf16 Triton baseline, with a throughput timer
+(enqueue N calls, block once — representative of a pipelined training step):
+**1.35×** at the operating point, **1.20×** at the w2 (down-projection) point
+(**1.38×** / **1.23×** at the EP4 per-device batch of 1280 tokens/expert).
+Per-call latency timing (sync after every call) reports lower speedups because
+the added sync penalizes FP8's extra kernel launches; training runs see the
+throughput number.  See `lib/haliax/bench/bench_fp8_ragged_dot.py` for the full
+sweep (E_local ∈ {16,32,64}, tokens/expert ∈ {512,1024,2048,4096}, w13 and w2
+shapes).
+
 # API Reference
 
 ## Functions
@@ -170,6 +240,7 @@ information on how it works.
 
 ## Interfaces
 ::: haliax.quantization.DotGeneralOp
+::: haliax.quantization.RaggedDotOp
 ::: haliax.quantization.OverwriteWithGradient
 
 ## Modules
@@ -177,6 +248,7 @@ information on how it works.
 
 ::: haliax.quantization.DefaultDotGeneralOp
 ::: haliax.quantization.Fp8DotGeneralOp
+::: haliax.quantization.Fp8RaggedDotOp
 ::: haliax.quantization.Int8DotGeneralOp
 
 ## Configuration
