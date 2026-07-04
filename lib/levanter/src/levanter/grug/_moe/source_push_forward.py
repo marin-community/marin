@@ -62,6 +62,9 @@ from levanter.grug._moe.source_push_plan import (
     build_source_push_plan,
     pack_source_push_tokens,
     source_push_combine,
+    source_push_combine_preweighted,
+    source_push_w13_h,
+    source_push_w2_from_h_return,
     source_push_source_padded_row_bases,
     source_push_w2_return,
 )
@@ -451,6 +454,28 @@ def reference_source_push_forward(
         src_base_by_expert=host_inputs.src_base_by_expert,
     )
     return source_push_combine(jnp.asarray(source_return, dtype=jnp.bfloat16), host_inputs.plan)
+
+
+def reference_source_push_forward_h(
+    config: PushInboxConfig,
+    host_inputs: SourcePushForwardHostInputs,
+) -> Float[Array, "S T D"]:
+    """Reference forward using H as the W13/W2 checkpoint boundary."""
+
+    h = source_push_w13_h(
+        jnp.asarray(host_inputs.x, dtype=jnp.bfloat16),
+        jnp.asarray(host_inputs.w_gate_up, dtype=jnp.bfloat16),
+        host_inputs.plan,
+        src_base_by_expert=host_inputs.src_base_by_expert,
+    )
+    source_return = source_push_w2_from_h_return(
+        jnp.asarray(h, dtype=jnp.bfloat16),
+        jnp.asarray(host_inputs.route_combine_weights, dtype=jnp.float32),
+        jnp.asarray(host_inputs.w_down, dtype=jnp.bfloat16),
+        host_inputs.plan,
+        src_base_by_expert=host_inputs.src_base_by_expert,
+    )
+    return source_push_combine_preweighted(jnp.asarray(source_return, dtype=jnp.bfloat16), host_inputs.plan)
 
 
 def source_push_forward(

@@ -441,3 +441,189 @@ def _validate_w2_return_shapes(
         raise ValueError(
             f"src_base_by_expert shape {src_base_by_expert.shape} must be {(ep_size, ep_size, experts_per_rank)}"
         )
+
+
+def source_push_w13_h(
+    x: Float[Array, "S Dst Q M D"],
+    w_gate_up: Float[Array, "Dst E D twoI"],
+    plan: SourcePushPlan,
+    *,
+    src_base_by_expert: Int[Array, "Dst S E"] | np.ndarray | None = None,
+    expert_capacity: int | None = None,
+) -> Float[Array, "Dst E C twoI"]:
+    """Compute W13 preactivation rows in source-push expert-major layout."""
+
+    x_host = np.asarray(jax.device_get(x), dtype=np.float32)
+    w_host = np.asarray(jax.device_get(w_gate_up), dtype=np.float32)
+    valid_mask = np.asarray(jax.device_get(plan.valid_mask), dtype=np.bool_)
+    local_experts = np.asarray(jax.device_get(plan.local_experts), dtype=np.int32)
+    local_row_starts = np.asarray(jax.device_get(plan.local_row_starts), dtype=np.int32)
+    if src_base_by_expert is None:
+        src_base_host = np.asarray(jax.device_get(plan.src_base_by_expert), dtype=np.int32)
+    else:
+        src_base_host = np.asarray(jax.device_get(src_base_by_expert), dtype=np.int32)
+
+    _validate_w13_h_shapes(x_host, w_host, valid_mask, src_base_host)
+    if expert_capacity is None:
+        expert_capacity = _expert_capacity_for_source_bases(plan, src_base_host)
+
+    h = np.zeros((valid_mask.shape[1], src_base_host.shape[-1], expert_capacity, w_host.shape[-1]), dtype=np.float32)
+    for src in range(valid_mask.shape[0]):
+        for dst_ord in range(valid_mask.shape[1]):
+            dst = (src + dst_ord) % valid_mask.shape[1]
+            for entry in range(valid_mask.shape[2]):
+                rows = valid_mask[src, dst_ord, entry]
+                valid_rows = int(np.sum(rows))
+                if valid_rows == 0:
+                    continue
+                expert = int(local_experts[src, dst_ord, entry])
+                row_start = int(src_base_host[dst, src, expert]) + int(local_row_starts[src, dst_ord, entry])
+                x_rows = x_host[src, dst_ord, entry, :valid_rows, :]
+                h[dst, expert, row_start : row_start + valid_rows, :] = x_rows @ w_host[dst, expert]
+    return jnp.asarray(h)
+
+
+def source_push_w2_from_h_return(
+    h_expert_major: Float[Array, "Dst E C twoI"],
+    route_weights: Float[Array, "S T K"],
+    w_down: Float[Array, "Dst E I D"],
+    plan: SourcePushPlan,
+    *,
+    src_base_by_expert: Int[Array, "Dst S E"] | np.ndarray | None = None,
+) -> Float[Array, "S Dst Q M D"]:
+    """Compute W2 returns from W13 preactivation H with route weights before W2."""
+
+    h_host = np.asarray(jax.device_get(h_expert_major), dtype=np.float32)
+    route_weights_host = np.asarray(jax.device_get(route_weights), dtype=np.float32)
+    w_down_host = np.asarray(jax.device_get(w_down), dtype=np.float32)
+    valid_mask = np.asarray(jax.device_get(plan.valid_mask), dtype=np.bool_)
+    token_ids = np.asarray(jax.device_get(plan.token_ids), dtype=np.int32)
+    route_slots = np.asarray(jax.device_get(plan.route_slots), dtype=np.int32)
+    local_experts = np.asarray(jax.device_get(plan.local_experts), dtype=np.int32)
+    local_row_starts = np.asarray(jax.device_get(plan.local_row_starts), dtype=np.int32)
+    if src_base_by_expert is None:
+        src_base_host = np.asarray(jax.device_get(plan.src_base_by_expert), dtype=np.int32)
+    else:
+        src_base_host = np.asarray(jax.device_get(src_base_by_expert), dtype=np.int32)
+
+    _validate_w2_from_h_shapes(h_host, route_weights_host, w_down_host, valid_mask, src_base_host)
+    return_y = np.zeros((*valid_mask.shape, w_down_host.shape[-1]), dtype=np.float32)
+    for src in range(valid_mask.shape[0]):
+        for dst_ord in range(valid_mask.shape[1]):
+            dst = (src + dst_ord) % valid_mask.shape[1]
+            for entry in range(valid_mask.shape[2]):
+                rows = valid_mask[src, dst_ord, entry]
+                valid_rows = int(np.sum(rows))
+                if valid_rows == 0:
+                    continue
+                expert = int(local_experts[src, dst_ord, entry])
+                row_start = int(src_base_host[dst, src, expert]) + int(local_row_starts[src, dst_ord, entry])
+                h_rows = h_host[dst, expert, row_start : row_start + valid_rows, :]
+                intermediate_dim = h_rows.shape[-1] // 2
+                gate = h_rows[:, :intermediate_dim]
+                up = h_rows[:, intermediate_dim:]
+                activation = gate * (1.0 / (1.0 + np.exp(-gate))) * up
+                tokens = token_ids[src, dst_ord, entry, :valid_rows]
+                slots = route_slots[src, dst_ord, entry, :valid_rows]
+                weights = route_weights_host[src, tokens, slots]
+                weighted_activation = activation * weights[:, None]
+                return_y[src, dst_ord, entry, :valid_rows, :] = weighted_activation @ w_down_host[dst, expert]
+    return jnp.asarray(return_y)
+
+
+def source_push_combine_preweighted(
+    return_y: Float[Array, "S Dst Q M D"],
+    plan: SourcePushPlan,
+) -> Float[Array, "S T D"]:
+    """Combine W2 rows that already include route weights."""
+
+    return_host = np.asarray(jax.device_get(return_y))
+    token_ids = np.asarray(jax.device_get(plan.token_ids), dtype=np.int32)
+    route_slots = np.asarray(jax.device_get(plan.route_slots), dtype=np.int32)
+    valid_mask = np.asarray(jax.device_get(plan.valid_mask), dtype=np.bool_)
+    if return_host.shape[:4] != valid_mask.shape:
+        raise ValueError(f"return_y queue shape {return_host.shape[:4]} must match plan {valid_mask.shape}")
+
+    route_buffer = np.zeros(
+        (valid_mask.shape[0], plan.tokens_per_source, plan.topk, return_host.shape[-1]),
+        dtype=return_host.dtype,
+    )
+    for src in range(valid_mask.shape[0]):
+        for dst_ord in range(valid_mask.shape[1]):
+            for entry in range(valid_mask.shape[2]):
+                for row in range(valid_mask.shape[3]):
+                    if not valid_mask[src, dst_ord, entry, row]:
+                        continue
+                    token = token_ids[src, dst_ord, entry, row]
+                    route_slot = route_slots[src, dst_ord, entry, row]
+                    route_buffer[src, token, route_slot, :] = return_host[src, dst_ord, entry, row, :]
+    return jnp.asarray(np.sum(route_buffer, axis=2))
+
+
+def _expert_capacity_for_source_bases(plan: SourcePushPlan, src_base_by_expert: np.ndarray) -> int:
+    valid_mask = np.asarray(jax.device_get(plan.valid_mask), dtype=np.bool_)
+    local_experts = np.asarray(jax.device_get(plan.local_experts), dtype=np.int32)
+    local_row_starts = np.asarray(jax.device_get(plan.local_row_starts), dtype=np.int32)
+    max_row = 0
+    for src in range(valid_mask.shape[0]):
+        for dst_ord in range(valid_mask.shape[1]):
+            dst = (src + dst_ord) % valid_mask.shape[1]
+            for entry in range(valid_mask.shape[2]):
+                valid_rows = int(np.sum(valid_mask[src, dst_ord, entry]))
+                if valid_rows == 0:
+                    continue
+                expert = int(local_experts[src, dst_ord, entry])
+                row_start = int(src_base_by_expert[dst, src, expert]) + int(local_row_starts[src, dst_ord, entry])
+                max_row = max(max_row, row_start + valid_rows)
+    return max_row
+
+
+def _validate_w13_h_shapes(
+    x: np.ndarray,
+    w_gate_up: np.ndarray,
+    valid_mask: np.ndarray,
+    src_base_by_expert: np.ndarray,
+) -> None:
+    if x.ndim != 5:
+        raise ValueError(f"x must have shape [src, dst, entry, row, D], got {x.shape}")
+    if w_gate_up.ndim != 4:
+        raise ValueError(f"w_gate_up must have shape [dst, expert, D, 2I], got {w_gate_up.shape}")
+    ep_size = valid_mask.shape[0]
+    experts_per_rank = w_gate_up.shape[1]
+    if x.shape[:4] != valid_mask.shape:
+        raise ValueError(f"x queue shape {x.shape[:4]} must match plan {valid_mask.shape}")
+    if w_gate_up.shape[0] != ep_size or w_gate_up.shape[2] != x.shape[-1]:
+        raise ValueError(f"w_gate_up shape {w_gate_up.shape} is incompatible with x shape {x.shape}")
+    if src_base_by_expert.shape != (ep_size, ep_size, experts_per_rank):
+        raise ValueError(
+            f"src_base_by_expert shape {src_base_by_expert.shape} must be {(ep_size, ep_size, experts_per_rank)}"
+        )
+
+
+def _validate_w2_from_h_shapes(
+    h: np.ndarray,
+    route_weights: np.ndarray,
+    w_down: np.ndarray,
+    valid_mask: np.ndarray,
+    src_base_by_expert: np.ndarray,
+) -> None:
+    if h.ndim != 4:
+        raise ValueError(f"h_expert_major must have shape [dst, expert, capacity, 2I], got {h.shape}")
+    if route_weights.ndim != 3:
+        raise ValueError(f"route_weights must have shape [src, token, topk], got {route_weights.shape}")
+    if w_down.ndim != 4:
+        raise ValueError(f"w_down must have shape [dst, expert, I, D], got {w_down.shape}")
+    ep_size = valid_mask.shape[0]
+    experts_per_rank = w_down.shape[1]
+    if route_weights.shape[0] != ep_size:
+        raise ValueError(f"route_weights source dim {route_weights.shape[0]} must match plan ep_size {ep_size}")
+    if h.shape[0] != ep_size or h.shape[1] != experts_per_rank:
+        raise ValueError(f"h shape {h.shape} must start with {(ep_size, experts_per_rank)}")
+    if w_down.shape[0] != ep_size:
+        raise ValueError(f"w_down destination dim {w_down.shape[0]} must match plan ep_size {ep_size}")
+    if h.shape[-1] != 2 * w_down.shape[-2]:
+        raise ValueError(f"h trailing dim {h.shape[-1]} must equal 2 * w_down I dim {w_down.shape[-2]}")
+    if src_base_by_expert.shape != (ep_size, ep_size, experts_per_rank):
+        raise ValueError(
+            f"src_base_by_expert shape {src_base_by_expert.shape} must be {(ep_size, ep_size, experts_per_rank)}"
+        )

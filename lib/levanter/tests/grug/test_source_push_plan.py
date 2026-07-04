@@ -20,6 +20,9 @@ from levanter.grug._moe.source_push_plan import (
     dst_ordinal,
     pack_source_push_tokens,
     source_push_combine,
+    source_push_combine_preweighted,
+    source_push_w13_h,
+    source_push_w2_from_h_return,
     recv_src_ordinal,
     source_push_plan_row_stats,
     source_push_route_buffer,
@@ -357,6 +360,71 @@ def test_source_push_w2_return_with_source_padded_bases_combines_like_direct_ref
                     ]
 
     np.testing.assert_allclose(combined, expected, rtol=1e-6, atol=1e-6)
+
+
+def test_source_push_h_forward_applies_route_weights_before_w2():
+    selected_experts, route_weights = _small_routing_inputs()
+    plan = build_source_push_plan(
+        selected_experts,
+        route_weights,
+        ep_size=EP_SIZE,
+        experts_per_rank=EXPERTS_PER_RANK,
+        block_m=BLOCK_M,
+        capacity_factor=2.0,
+    )
+    x = (jnp.arange(EP_SIZE * selected_experts.shape[1] * 3, dtype=jnp.float32).reshape(EP_SIZE, -1, 3) + 1.0) / 10.0
+    packed_x = pack_source_push_tokens(x, plan)
+    w_gate_up = (
+        jnp.arange(EP_SIZE * EXPERTS_PER_RANK * 3 * 4, dtype=jnp.float32).reshape(EP_SIZE, EXPERTS_PER_RANK, 3, 4)
+        + 1.0
+    ) / 20.0
+    w_down = (
+        jnp.arange(EP_SIZE * EXPERTS_PER_RANK * 2 * 3, dtype=jnp.float32).reshape(EP_SIZE, EXPERTS_PER_RANK, 2, 3)
+        + 1.0
+    ) / 30.0
+
+    h = source_push_w13_h(packed_x, w_gate_up, plan)
+    return_y = source_push_w2_from_h_return(h, route_weights, w_down, plan)
+    observed = np.asarray(source_push_combine_preweighted(return_y, plan), dtype=np.float32)
+
+    expected = np.zeros((EP_SIZE, selected_experts.shape[1], x.shape[-1]), dtype=np.float32)
+    selected_host = np.asarray(selected_experts)
+    x_host = np.asarray(x, dtype=np.float32)
+    route_weights_host = np.asarray(route_weights, dtype=np.float32)
+    w_gate_up_host = np.asarray(w_gate_up, dtype=np.float32)
+    w_down_host = np.asarray(w_down, dtype=np.float32)
+    for src in range(EP_SIZE):
+        for token in range(selected_experts.shape[1]):
+            for route_slot in range(selected_experts.shape[2]):
+                global_expert = int(selected_host[src, token, route_slot])
+                dst = global_expert // EXPERTS_PER_RANK
+                expert = global_expert % EXPERTS_PER_RANK
+                preactivation = x_host[src, token] @ w_gate_up_host[dst, expert]
+                gate, up = np.split(preactivation, 2)
+                activation = gate * (1.0 / (1.0 + np.exp(-gate))) * up
+                expected[src, token] += (route_weights_host[src, token, route_slot] * activation) @ w_down_host[
+                    dst, expert
+                ]
+
+    assignment_ids = np.asarray(plan.assignment_ids)
+    valid_mask = np.asarray(plan.valid_mask)
+    local_experts = np.asarray(plan.local_experts)
+    local_row_starts = np.asarray(plan.local_row_starts)
+    src_base_by_expert = np.asarray(plan.src_base_by_expert)
+    h_host = np.asarray(h, dtype=np.float32)
+    for src, dst_ord, entry, row in np.argwhere(valid_mask):
+        dst = (src + dst_ord) % EP_SIZE
+        expert = local_experts[src, dst_ord, entry]
+        expert_row = src_base_by_expert[dst, src, expert] + local_row_starts[src, dst_ord, entry] + row
+        assignment = assignment_ids[src, dst_ord, entry, row]
+        token = assignment // selected_experts.shape[2]
+        np.testing.assert_allclose(
+            h_host[dst, expert, expert_row],
+            x_host[src, token] @ w_gate_up_host[dst, expert],
+            rtol=1e-6,
+            atol=1e-6,
+        )
+    np.testing.assert_allclose(observed, expected, rtol=1e-6, atol=1e-6)
 
 
 def test_source_push_plan_capacity_clipping_matches_existing_ep_reference():

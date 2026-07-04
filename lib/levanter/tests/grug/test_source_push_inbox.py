@@ -14,6 +14,7 @@ import jax.numpy as jnp
 import levanter.grug._moe.source_push_inbox as source_push_inbox
 import levanter.grug._moe.source_push_combine as source_push_combine
 import levanter.grug._moe.source_push_forward as source_push_forward
+import levanter.grug._moe.source_push_mlp as source_push_mlp
 import levanter.grug._moe.source_push_w2_return as source_push_w2_return
 import levanter.grug._moe.source_push_plan as source_push_plan
 from levanter.grug._moe.ep_common import _clip_receiver_group_sizes
@@ -1018,6 +1019,57 @@ def test_source_push_forward_inputs_share_one_plan_across_all_stages():
     assert np.count_nonzero(expected) > 0
     assert int(np.asarray(inputs.plan.token_ids[src, dst_ord, entry, row])) == int(token)
     assert int(np.asarray(inputs.plan.route_slots[src, dst_ord, entry, row])) == int(route_slot)
+
+
+def test_source_push_forward_h_reference_matches_mlp_boundary():
+    config = source_push_inbox.PushInboxConfig(
+        ep_size=2,
+        entries_per_rank=4,
+        inbox_slots=2,
+        hidden_dim=8,
+        intermediate_dim=8,
+        block_m=2,
+        block_k=4,
+        block_n=4,
+        experts_per_rank=2,
+        send_worker_programs_per_peer=1,
+        worker_programs_per_peer=4,
+        routing="balanced",
+        tokens_per_rank=6,
+        topk=2,
+        capacity_factor=1.25,
+    )
+    raw_inputs = source_push_forward.make_source_push_forward_source_plan_raw_inputs(config)
+    inputs = source_push_forward.make_source_push_forward_inputs(
+        config,
+        raw_inputs.x,
+        raw_inputs.selected_experts,
+        raw_inputs.combine_weights,
+        raw_inputs.w_gate_up,
+        raw_inputs.w_down,
+        input_mode="source_push_plan",
+    )
+
+    route_table = source_push_mlp.source_push_mlp_route_table_from_plan(
+        inputs.plan,
+        src_base_by_expert=inputs.src_base_by_expert,
+    )
+    expected = source_push_mlp.source_push_moe_mlp_reference(
+        route_table,
+        jnp.asarray(raw_inputs.x, dtype=jnp.bfloat16),
+        jnp.asarray(raw_inputs.combine_weights, dtype=jnp.float32),
+        jnp.asarray(raw_inputs.w_gate_up, dtype=jnp.bfloat16),
+        jnp.asarray(raw_inputs.w_down, dtype=jnp.bfloat16),
+    )
+    observed = source_push_forward.reference_source_push_forward_h(config, inputs)
+
+    assert route_table.expert_capacity <= inputs.queue_stats["hidden_capacity_rows_per_rank"]
+    np.testing.assert_allclose(
+        np.asarray(observed, dtype=np.float32),
+        np.asarray(expected, dtype=np.float32),
+        rtol=1e-2,
+        atol=3e-4,
+    )
 
 
 def test_source_push_forward_exact_inputs_match_source_padded_reference_for_block_aligned_plan():
