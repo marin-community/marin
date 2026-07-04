@@ -54,7 +54,9 @@ improvement over the stock Llama-3 tokenizer** for target grug-moe models.
 
 | arm | feBPB | vs marin | lever |
 |---|---|---|---|
-| **trained-superbpe-64k-t32k** | **1.1564** | **−6.6%** | smaller-vocab superword (our mix) |
+| **trained-superbpe-40k-t20k** | **1.1560** | **−6.6%** | small-vocab superword (plateau) |
+| trained-superbpe-64k-t32k | 1.1564 | −6.6% | small-vocab superword (plateau) |
+| trained-superbpe-48k-t24k | 1.1567 | −6.6% | small-vocab superword (plateau) |
 | trained-superbpe-80k-t40k + n-gram | 1.1584 | −6.4% | small-vocab superword + n-gram |
 | trained-superbpe-80k-t40k | 1.1621 | −6.1% | small-vocab superword (our mix) |
 | gpt-neox-50k + n-gram | 1.1651 | −5.9% | small-vocab + n-gram (composed) |
@@ -63,12 +65,13 @@ improvement over the stock Llama-3 tokenizer** for target grug-moe models.
 | superbpe-128k | 1.1794 | −4.7% | superword tokenizer |
 | marin-128k (Llama-3) | 1.2376 | ref | incumbent |
 
-**Vocab-size sweep (trained SuperBPE, the dominant lever)** — feBPB falls monotonically as vocab
-shrinks, and a plain small-vocab tokenizer now beats the best composition:
-160k **−2.8%** · 128k-t51k **−4.4%** · 80k-t40k **−6.1%** · **64k-t32k −6.6%**. The marginal gain
-tapers (128k→80k −1.7%, 80k→64k −0.5%), so the optimum is near here; a 48k/40k/32k sweep is
-running to locate the floor. Below the floor, coverage collapses and BPB rises (gpt-neox plain BPE
-at 50k is only −5.1% — the superword mechanism is what lets 64k stay ahead).
+**Vocab-size sweep (trained SuperBPE, the dominant lever) — the feBPB optimum is a broad plateau
+at ~40–64k, saturating at −6.6%.** feBPB falls as vocab shrinks (160k **−2.8%** · 128k-t51k
+**−4.4%** · 80k **−6.1%** · 64k **−6.6%**) then **flattens**: 40k / 48k / 64k are tied within
+0.0007 (1.1560 / 1.1567 / 1.1564). Below ~64k the training-efficiency gain of a smaller model is
+exactly offset by rising fertility (fewer bytes/token → costlier serving), so the lever
+**saturates at −6.6%** — it does not continue toward 10%. The superword mechanism is what holds the
+plateau: plain gpt-neox BPE at a comparable 50k vocab is only −5.1%.
 
 **n-gram composition matrix** (feBPB the n-gram adds on each base tokenizer, ratio 0.25):
 marin +0.0% (washes out by s8000) · superbpe-128k **−0.5%** · gpt-neox-50k **−0.8%** · 80k-t40k
@@ -199,13 +202,19 @@ budget. Best composed arm: **80k-t40k + n-gram = −6.4%** — the best measured
   activations exceed 8×H100. Fixed by running the n-gram arm on **2 GPU replicas** (16 GPUs,
   `scratchpad/relaunch_w2048_ngram_2rep.py`, `-r3`); levanter's `train_batch_size` is global, so
   2 replicas only add sharding headroom and stay a fair comparison to the 1-replica hidden-2048 base.
-- **Result (fixed rank-128 n-gram)** — the benefit **shrinks**, not grows, with model scale:
+- **Result (fixed rank-128 n-gram)** — the n-gram's payoff **shifts to higher training budgets** as
+  the model grows; its peak benefit stays ~0.4%, it does not blow up with scale:
 
-  | | hidden-1024 s3500 | hidden-2048 s3500 |
-  |---|---|---|
-  | base BPB | 1.2376 | 1.1833 |
-  | +n-gram (rank 128, ratio 0.25) | 1.2328 | 1.1837 |
-  | **Δ** | **−0.0048 (−0.39%)** | **+0.0004 (+0.03%, neutral)** |
+  | budget | hidden-1024 base | +n-gram | Δ | hidden-2048 base | +n-gram | Δ |
+  |---|---|---|---|---|---|---|
+  | s3500 | 1.2376 | 1.2328 | **−0.39%** | 1.1833 | 1.1837 | **+0.03%** |
+  | s8000 | 1.147 | ~1.147 | **~0%** (washed out) | 1.0944 | 1.0903 | **−0.37%** |
+
+  At hidden-1024 the n-gram helps early then washes out by s8000; at hidden-2048 it is neutral early
+  then helps by s8000 (−0.37%). The sweet-spot budget moves *later* as the model widens, but the
+  peak Δ is ~0.4% at both scales — consistent with "n-gram helps at scale" (LongCat) yet nowhere
+  near the multi-percent lever a 10% target would need. My initial s3500-only read ("benefit
+  shrinks") was incomplete; the s8000 points show it re-emerges at higher budget.
 
 - **Confound + follow-up (EXP-007b)**: this held the n-gram sub-dim (`rank=128`) fixed across scales,
   while the paper *scales* sub-dim with hidden size — a rank-128 bottleneck may be too narrow to
