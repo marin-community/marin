@@ -2,31 +2,45 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""FP8 grouped matmul (``ragged_dot``) for Hopper H100 -- FP8 forward, bf16 backward.
+"""FP8 grouped matmul (``ragged_dot``) for Hopper H100 -- FP8 forward + FP8 dgrad.
 
 The MoE-grouped analog of the dense ``fp8_scaled_dot_general`` in ``_src/fp8.py``.
 The forward contracts activations and expert weights as same-dtype ``e4m3 x e4m3``
 on the Hopper FP8 tensor cores via the genuine ragged Mosaic ``wgmma`` kernel
 (``_src/ragged_dot_mgpu``), which handles genuinely **non-uniform, dynamic**
-``group_sizes`` (no equal-size / batched-dense reshape). The backward is computed
-in **bf16** (numerically exact) by directly invoking the Triton kernels from the
-bf16 ``ragged_dot`` backward (``_DLHS_DIM_NUMS`` / ``_DRHS_DIM_NUMS`` via
-``_triton_pallas_call``), so the operand gradients match the bf16 training default
-bit-for-bit with no forward recompute.
+``group_sizes`` (no equal-size / batched-dense reshape).
 
-Delayed per-tensor scaling (TE-style scale + amax history) is reused verbatim
-from the dense helpers in ``_src/fp8.py``: the input and kernel scale + amax_history
+The backward runs the input gradient (dgrad) on the FP8 tensor cores as well:
+
+  * grad_lhs  ``dl[T,K] = g[T,N] . rhs[E,K,N]`` (contract N) -- FP8 ``wgmma``.
+
+The output gradient ``g`` is quantized to ``rev_dtype`` with delayed per-tensor
+scaling; ``rev_dtype`` defaults to E5M2 (the numerically correct output-gradient
+dtype), so the dgrad is a genuine mixed ``e5m2 x e4m3`` contraction (mixed
+``wgmma`` needs jax >= 0.11.0, jax-ml/jax#38859). It consumes the
+**pre-produced natural weight layout** ``q_rhs [E,K,N]`` cast once by the
+forward (no re-cast).
+
+  * grad_rhs  ``dr[E,K,N] = lhs[T,K] . g[T,N]`` (contract the ragged token dim)
+
+still runs in **bf16** (numerically exact) via the Triton kernel from the bf16
+``ragged_dot`` backward (``_DRHS_DIM_NUMS`` through ``_triton_pallas_call``); the
+FP8 weight gradient is the next step.
+
+Delayed per-tensor scaling (TE-style scale + amax history) is reused verbatim from
+the dense helpers in ``_src/fp8.py``: the input and kernel scale + amax_history
 update through ``in_q_ct``'s custom VJP as ``OverwriteWithGradient`` overwrites.
-The output-gradient scaling state is unused here (the backward is bf16) and threads
-through unchanged.
+The output-gradient scale + amax history now update too -- the backward quantizes
+``g`` with delayed scaling and returns the rolled ``grad_scale`` / ``grad_amax_history``
+as the ``OverwriteWithGradient`` cotangents.
 
 Both the activation (lhs) and expert weight (rhs) quantize go through ``in_q_ct``
 (``_src/fp8_cast_transpose``), a fused Pallas-Triton kernel that reads the bf16 tile
 once, folds the amax reduction via ``atomic_max``, and stores **both** the natural
-and the transposed FP8 tile in one pass.  The transposed-weight layout (``[E,N,K]``)
-is consumed by the forward; the natural-weight layout (``[E,K,N]``) and the
-transposed-activation layout (``[K,T]``) are produced but deferred to the FP8
-backward follow-up.
+and the transposed FP8 tile in one pass.  The forward consumes the transposed-weight
+layout (``[E,N,K]``); the dgrad consumes the natural-weight layout (``[E,K,N]``). The
+transposed-activation layout (``[K,T]``) is produced but deferred to the FP8 weight
+gradient follow-up.
 """
 
 import functools
@@ -35,7 +49,8 @@ import jax
 import jax.numpy as jnp
 from jax import custom_vjp
 
-from .fp8_cast_transpose import in_q_ct
+from .fp8 import roll_amax_history
+from .fp8_cast_transpose import _next_scale_and_inv, cast_transpose_amax_2d, in_q_ct
 from .ragged_dot_mgpu import mgpu_ragged_dot
 
 _E4M3 = jnp.float8_e4m3fn
@@ -51,11 +66,12 @@ _GEMM_BLOCKS = (128, 64, 32, 16)
 
 
 def _autotuned_config(m: int, n: int, k: int) -> dict:
-    """Static Mosaic block config for the ragged FP8 wgmma forward kernel.
+    """Static Mosaic block config for the ragged FP8 wgmma forward/dgrad kernel.
 
-    Tuned on H100 at the d2560 grug-MoE shapes (per-leg sweeps):
-    ``(block_m, block_n, block_k) = (128, 128, 128)`` with a six-step pipeline
-    beats a ``192 x 5`` block/pipeline by ~10-14% -- the shorter accumulator
+    Tuned on H100 at the d2560 grug-MoE shapes (per-leg sweeps, both the
+    forward and the dgrad orientation): ``(block_m, block_n, block_k) =
+    (128, 128, 128)`` with a six-step pipeline beats a ``192 x 5``
+    block/pipeline by ~10-14% -- the shorter accumulator
     halves register pressure, buying a deeper pipeline. Operand tiles are FP8
     (1 byte), so the pipeline SMEM footprint is
     ``(block_m + block_n) * block_k * max_concurrent_steps``
@@ -86,6 +102,10 @@ def _ragged_fp8(lhs, rhs_nk, group_sizes, out_dtype, out_scale):
     """
     g, n, k = rhs_nk.shape
     m = lhs.shape[0]
+    if m % 64 != 0:
+        raise ValueError(
+            f"m={m} (token count) must be a multiple of 64 for the FP8 wgmma accumulator tiling in the Mosaic ragged kernel"
+        )
     if n % 128 != 0:
         raise ValueError(
             f"n={n} must be a multiple of 128 for bf16 TMA swizzle alignment in the Mosaic ragged wgmma kernel"
@@ -102,47 +122,90 @@ def _ragged_fp8(lhs, rhs_nk, group_sizes, out_dtype, out_scale):
     )
 
 
-@custom_vjp
-def quantized_ragged_dot(q_lhs, q_rhs_t, out_scale, lhs, rhs, grad_scale, grad_amax_history, group_sizes):
-    """FP8 ragged forward of pre-quantized E4M3 operands; bf16 (exact) backward.
+@functools.partial(custom_vjp, nondiff_argnums=(11,))
+def quantized_ragged_dot(
+    q_lhs,  # [T, K] e4m3      -- forward A
+    q_lhs_t,  # [K, T] e4m3    -- grad_rhs A (FP8 weight-grad follow-up; unused here)
+    q_rhs,  # [E, K, N] e4m3   -- grad_lhs B (natural layout)
+    q_rhs_t,  # [E, N, K] e4m3 -- forward B (transpose_rhs layout)
+    lhs_scale,  # [1] delayed-scaling scale for the activation quantize
+    rhs_scale,  # [1] delayed-scaling scale for the weight quantize
+    grad_scale,  # [1] output-grad scale from the previous step
+    grad_amax_history,  # output-grad amax history from the previous step
+    lhs,  # [T, K] original operand: differentiable, receives grad_lhs
+    rhs,  # [E, K, N] original operand: differentiable, receives grad_rhs
+    group_sizes,  # [E]
+    rev_dtype,  # static: output-gradient FP8 dtype (E4M3 here)
+):
+    """FP8 ragged forward of pre-quantized E4M3 operands; FP8 dgrad, bf16 wgrad.
 
-    ``q_lhs`` is ``[T,K]`` E4M3, ``q_rhs_t`` is ``[E,N,K]`` E4M3 (the transpose_rhs
-    layout). ``out_scale`` is the folded per-tensor dequant ``lhs_scale*rhs_scale``.
-    ``lhs``/``rhs`` are the original compute-dtype (bf16) operands, carried so the
-    backward can compute gradients directly with the bf16 Triton kernels.
-    ``grad_scale``/``grad_amax_history`` are the output-gradient delayed-scaling state;
-    threaded as differentiable args so the backward can return identity cotangents
-    (preserving the current values) until the FP8-backward step updates them.
-    ``group_sizes`` is a regular operand with a ``None`` cotangent rather than a
-    ``nondiff_argnums`` entry: nondiff positions reject traced arrays under ``jit``.
+    Every FP8 operand layout is precomputed once by the fused cast-transpose+amax
+    kernel, so no transpose happens here. The forward contracts ``q_lhs`` against the
+    transpose_rhs layout ``q_rhs_t`` (E4M3 x E4M3) and dequantizes by the folded
+    ``lhs_scale*rhs_scale``. The backward quantizes the output gradient to
+    ``rev_dtype`` (static arg 11; E4M3 here) with delayed scaling and contracts it
+    against the pre-produced natural weight layout ``q_rhs`` for grad_lhs; grad_rhs
+    stays bf16. ``grad_scale``/``grad_amax_history`` are differentiable so the backward
+    can return the rolled delayed-scaling state as ``OverwriteWithGradient`` cotangents.
     """
-    return _ragged_fp8(q_lhs, q_rhs_t, group_sizes, lhs.dtype, out_scale)
+    combined = (lhs_scale * rhs_scale).astype(jnp.float32)
+    return _ragged_fp8(q_lhs, q_rhs_t, group_sizes, lhs.dtype, combined)
 
 
-def _qrd_fwd(q_lhs, q_rhs_t, out_scale, lhs, rhs, grad_scale, grad_amax_history, group_sizes):
-    out = _ragged_fp8(q_lhs, q_rhs_t, group_sizes, lhs.dtype, out_scale)
-    return out, (lhs, rhs, grad_scale, grad_amax_history, group_sizes)
+def _qrd_fwd(
+    q_lhs,
+    q_lhs_t,
+    q_rhs,
+    q_rhs_t,
+    lhs_scale,
+    rhs_scale,
+    grad_scale,
+    grad_amax_history,
+    lhs,
+    rhs,
+    group_sizes,
+    rev_dtype,
+):
+    combined = (lhs_scale * rhs_scale).astype(jnp.float32)
+    out = _ragged_fp8(q_lhs, q_rhs_t, group_sizes, lhs.dtype, combined)
+    res = (q_rhs, rhs_scale, grad_scale, grad_amax_history, lhs, rhs, group_sizes)
+    return out, res
 
 
-def _qrd_bwd(res, g):
-    lhs, rhs, grad_scale, grad_amax_history, group_sizes = res
-    # Direct bf16 operand gradients: call the same Triton kernels used by the bf16
-    # ragged_dot backward. lhs/rhs are already in the residuals, so there is no
-    # forward recompute.
+def _qrd_bwd(rev_dtype, res, g):
+    q_rhs, rhs_scale, grad_scale, grad_amax_history, lhs, rhs, group_sizes = res
+    out_dtype = lhs.dtype
+
+    # Delayed scaling for the output gradient: one fused cast-transpose+amax read
+    # produces the natural [T,N] layout q_g (for the dgrad) plus the current-step
+    # amax to roll into the history -- a single bf16 read of ``g``. The transposed
+    # [N,T] layout q_g_t comes out of the same read; it is consumed by the FP8
+    # weight gradient in the next commit (grad_rhs is still bf16 here).
+    new_g_scale, inv_g = _next_scale_and_inv(rev_dtype, grad_scale, grad_amax_history)
+    q_g, _q_g_t, cur_amax = cast_transpose_amax_2d(g, inv_g, rev_dtype)  # [T,N], [N,T]
+    new_g_hist = roll_amax_history(cur_amax[0], grad_amax_history)
+
+    # grad_lhs[T,K] = g[T,N] . rhs[E,K,N] (contract N), on the pre-cast natural
+    # weight layout q_rhs. The dgrad has the same shape structure as the forward,
+    # so _autotuned_config applies unchanged.
+    dlhs_scale = (rhs_scale * new_g_scale).astype(jnp.float32)
+    grad_lhs = _ragged_fp8(q_g, q_rhs, group_sizes, out_dtype, dlhs_scale)
+
+    # grad_rhs[E,K,N] = lhs[T,K] . g[T,N]  (contracts the ragged token dim) -- still
+    # bf16 via the Triton kernel from the bf16 ragged_dot backward. lhs/g are the
+    # compute-dtype operands, so there is no forward recompute.
     # Local import breaks the quantization <-> nn.ragged_dot import cycle.
-    from haliax.nn.ragged_dot import _DLHS_DIM_NUMS, _DRHS_DIM_NUMS, _triton_pallas_call  # noqa: PLC0415
+    from haliax.nn.ragged_dot import _DRHS_DIM_NUMS, _triton_pallas_call  # noqa: PLC0415
 
-    # dlhs[M,K] = dout[M,N] @ rhs[G,K,N]^T  (contracts N)
-    grad_lhs = _triton_pallas_call(g, rhs, group_sizes, _DLHS_DIM_NUMS)
-    # drhs[G,K,N] = lhs[M,K]^T @ dout[M,N]  (contracts M, ragged)
     grad_rhs = _triton_pallas_call(lhs, g, group_sizes, _DRHS_DIM_NUMS)
-    # Cotangents for (q_lhs, q_rhs_t, out_scale, lhs, rhs, grad_scale,
-    # grad_amax_history, group_sizes):
-    # - quantized operands and the folded scale are intermediate (overwrites handled by in_q)
-    # - operand grads flow to lhs/rhs
-    # - grad_scale/grad_amax_history are preserved unchanged (bf16 backward; the
-    #   FP8-backward follow-up will update them to new_scale/new_history instead)
-    return (None, None, None, grad_lhs, grad_rhs, grad_scale, grad_amax_history, None)
+    grad_rhs = grad_rhs.astype(rhs.dtype)
+
+    # Cotangents for the 11 differentiable args (q_lhs, q_lhs_t, q_rhs, q_rhs_t,
+    # lhs_scale, rhs_scale, grad_scale, grad_amax_history, lhs, rhs, group_sizes):
+    # the q's are intermediate (overwrites handled by in_q_ct); lhs_scale/rhs_scale
+    # overwrite via in_q_ct; operand grads flow to lhs/rhs; the output-grad scale and
+    # amax history are overwritten here with the rolled delayed-scaling state.
+    return (None, None, None, None, None, None, new_g_scale, new_g_hist, grad_lhs, grad_rhs, None)
 
 
 quantized_ragged_dot.defvjp(_qrd_fwd, _qrd_bwd)
@@ -162,7 +225,7 @@ def fp8_scaled_ragged_dot(
     fwd_dtype=_E4M3,
     rev_dtype=_E5M2,
 ):
-    """FP8 ``ragged_dot`` with an E4M3 forward and a bf16 (exact) backward.
+    """FP8 ``ragged_dot`` with an E4M3 forward and an FP8 dgrad / bf16 wgrad backward.
 
     Args:
         lhs: ``[T, K]`` activations (rows sorted by expert / contiguous groups).
@@ -172,14 +235,17 @@ def fp8_scaled_ragged_dot(
         lhs_scale, rhs_scale, grad_scale: ``[1]`` delayed-scaling scales.
         lhs_amax_history, rhs_amax_history, grad_amax_history: amax histories.
         fwd_dtype: forward-operand FP8 dtype (E4M3).
-        rev_dtype: output-gradient FP8 dtype; unused here (backward is bf16), kept
-            for interface parity with the dense op and the FP8-backward follow-up.
+        rev_dtype: output-gradient FP8 dtype. Defaults to E5M2, making the dgrad
+            a mixed ``e5m2 x e4m3`` contraction (needs jax >= 0.11.0,
+            jax-ml/jax#38859); E4M3 gives a uniform GEMM that lowers on jax 0.10.x.
 
     Quantizes activations and expert weights to ``fwd_dtype`` with delayed
     per-tensor scaling and contracts them on the FP8 tensor cores via the genuine
-    ragged ``wgmma`` kernel, then dequantizes. The input and kernel scale /
-    amax-history update through ``in_q_ct``'s custom VJP as ``OverwriteWithGradient``
-    overwrites; the output-gradient state passes through unchanged.
+    ragged ``wgmma`` kernel, then dequantizes. The input gradient runs on the FP8
+    tensor cores against the pre-cast natural weight layout (gradient quantized to
+    ``rev_dtype`` with delayed scaling); the weight gradient stays bf16. The input,
+    kernel, and output-gradient scale / amax-history all update through the custom
+    VJPs as ``OverwriteWithGradient`` overwrites.
     """
     device = jax.devices()[0]
     if device.platform != "gpu" or not device.compute_capability.startswith("9."):
@@ -187,12 +253,24 @@ def fp8_scaled_ragged_dot(
             f"fp8_scaled_ragged_dot requires Hopper (SM90): the Mosaic wgmma kernels are "
             f"sm_90a-specific. Got {device.device_kind}."
         )
-    del rev_dtype  # FP8 output-grad dtype is reserved for the FP8-backward path; unused while backward is bf16.
     # Fused cast-transpose+amax: reads each bf16 tile once, folds the amax reduction, and
     # stores both the natural and the transposed FP8 tile in one pass.  VJP threading matches in_q.
-    # _q_lhs_t [K,T] and _q_rhs [E,K,N] are produced in the same fused read as the used layouts;
-    # they will be wired into the FP8 backward in the follow-up commit.
-    q_lhs, _q_lhs_t, new_lhs_scale = in_q_ct(fwd_dtype, "2d", lhs, lhs_scale, lhs_amax_history)
-    _q_rhs, q_rhs_t, new_rhs_scale = in_q_ct(fwd_dtype, "3d", rhs, rhs_scale, rhs_amax_history)
-    out_scale = (new_lhs_scale * new_rhs_scale).astype(jnp.float32)
-    return quantized_ragged_dot(q_lhs, q_rhs_t, out_scale, lhs, rhs, grad_scale, grad_amax_history, group_sizes)
+    # The forward uses q_lhs [T,K] and q_rhs_t [E,N,K]; the dgrad uses q_rhs [E,K,N] (natural
+    # weight layout).  q_lhs_t [K,T] is produced in the same fused read but consumed only by the
+    # FP8 weight-gradient follow-up.
+    q_lhs, q_lhs_t, new_lhs_scale = in_q_ct(fwd_dtype, "2d", lhs, lhs_scale, lhs_amax_history)
+    q_rhs, q_rhs_t, new_rhs_scale = in_q_ct(fwd_dtype, "3d", rhs, rhs_scale, rhs_amax_history)
+    return quantized_ragged_dot(
+        q_lhs,
+        q_lhs_t,
+        q_rhs,
+        q_rhs_t,
+        new_lhs_scale,
+        new_rhs_scale,
+        grad_scale,
+        grad_amax_history,
+        lhs,
+        rhs,
+        group_sizes,
+        rev_dtype,
+    )
