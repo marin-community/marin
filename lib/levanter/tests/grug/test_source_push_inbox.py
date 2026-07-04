@@ -1015,6 +1015,19 @@ def test_source_push_forward_inputs_share_one_plan_across_all_stages():
         config.block_m,
         config.hidden_dim,
     )
+    assert inputs.recv_route_weights.shape == (
+        config.ep_size,
+        config.ep_size,
+        config.entries_per_rank,
+        config.block_m,
+        config.block_k,
+    )
+    expected_recv_weights = np.asarray(
+        source_push_plan.source_push_recv_route_weights(jnp.asarray(inputs.route_combine_weights), inputs.plan),
+        dtype=np.float32,
+    )
+    np.testing.assert_allclose(inputs.recv_route_weights[..., 0], expected_recv_weights, atol=0, rtol=0)
+    np.testing.assert_allclose(inputs.recv_route_weights[..., -1], expected_recv_weights, atol=0, rtol=0)
     assert expected.shape == (config.ep_size, config.tokens_per_rank, config.hidden_dim)
     assert np.count_nonzero(expected) > 0
     assert int(np.asarray(inputs.plan.token_ids[src, dst_ord, entry, row])) == int(token)

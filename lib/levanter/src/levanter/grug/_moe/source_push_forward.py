@@ -331,6 +331,7 @@ def _make_source_push_forward_inputs_from_plan(
         source_push_recv_route_weights(jnp.asarray(route_weights, dtype=jnp.float32), plan),
         dtype=np.float32,
     )
+    recv_route_weights = _mosaic_route_weight_tiles(recv_route_weights, config.block_k)
     valid_mask = np.asarray(jax.device_get(plan.valid_mask), dtype=np.bool_)
     queue_stats = _queue_stats(config, send_meta)
     combine_stats = _combine_queue_stats(config, valid_mask, int(jax.device_get(plan.dropped_routes)))
@@ -405,6 +406,12 @@ def _validate_source_push_forward_array_shapes(
         raise ValueError(f"w_gate_up shape {w_gate_up.shape} must match {expected_w_gate_up}")
     if w_down.shape != expected_w_down:
         raise ValueError(f"w_down shape {w_down.shape} must match {expected_w_down}")
+
+
+def _mosaic_route_weight_tiles(recv_route_weights: np.ndarray, columns: int) -> np.ndarray:
+    """Expand receive-order route weights so Lane lowering sees a full WGMMA prologue tile."""
+
+    return np.repeat(recv_route_weights[..., None], columns, axis=-1)
 
 
 def device_source_push_forward_inputs_from_host(
@@ -605,7 +612,7 @@ def _sharded_source_push_forward_h_kernel(
         expert_base: Int[Array, "Dst E"],
         src_base_by_expert: Int[Array, "Dst S E"],
         w_gate_up: Float[Array, "Dst E D twoI"],
-        recv_route_weights: Float[Array, "Dst SRC Q M"],
+        recv_route_weights: Float[Array, "Dst SRC Q M W"],
         w_down: Float[Array, "Dst E I D"],
         queue_dst_ord: Int[Array, "S T K"],
         queue_entry: Int[Array, "S T K"],
@@ -697,7 +704,10 @@ def _shard_source_push_forward_inputs(
         queue_dst_ord=jax.device_put(inputs.queue_dst_ord, NamedSharding(mesh, P(AXIS, None, None))),
         queue_entry=jax.device_put(inputs.queue_entry, NamedSharding(mesh, P(AXIS, None, None))),
         queue_row=jax.device_put(inputs.queue_row, NamedSharding(mesh, P(AXIS, None, None))),
-        recv_route_weights=jax.device_put(inputs.recv_route_weights, NamedSharding(mesh, P(AXIS, None, None, None))),
+        recv_route_weights=jax.device_put(
+            inputs.recv_route_weights,
+            NamedSharding(mesh, P(AXIS, None, None, None, None)),
+        ),
         route_combine_weights=jax.device_put(
             inputs.route_combine_weights,
             NamedSharding(mesh, P(AXIS, None, None)),

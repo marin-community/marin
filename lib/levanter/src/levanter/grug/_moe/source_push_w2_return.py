@@ -636,7 +636,7 @@ def _make_w2_from_h_return_direct_to_source_kernel(config: PushInboxConfig, *, u
 
     def body(
         h_ref: Float[Ref, "rows twoI"],
-        recv_route_weights_ref: Float[Ref, "SRC Q M"],
+        recv_route_weights_ref: Float[Ref, "SRC Q M W"],
         recv_meta_ref: Int[Ref, "SRC Q F"],
         expert_base_ref: Int[Ref, "E"],
         src_base_by_expert_ref: Int[Ref, "SRC E"],
@@ -674,24 +674,38 @@ def _make_w2_from_h_return_direct_to_source_kernel(config: PushInboxConfig, *, u
                 row_start = _h_row_start()
 
                 def acc_scope(acc_ref) -> jax.Array:
-                    def smem_scope(activation_smem, w_down_smem, ready_barrier) -> None:
+                    def smem_scope(
+                        gate_smem, up_smem, weight_smem, activation_smem, w_down_smem, ready_barrier
+                    ) -> None:
                         @pl.loop(0, k_tiles)
                         def _k_loop(kk) -> None:
                             k_start = kk * config.block_k
-                            gate = h_ref[
-                                pl.ds(row_start, config.block_m),
-                                pl.ds(k_start, config.block_k),
-                            ].astype(jnp.float32)
-                            up = h_ref[
-                                pl.ds(row_start, config.block_m),
-                                pl.ds(config.intermediate_dim + k_start, config.block_k),
-                            ].astype(jnp.float32)
-                            weights = recv_route_weights_ref[
-                                static_src_ordinal,
-                                entry,
-                                pl.ds(0, config.block_m),
-                            ].astype(jnp.float32)
-                            activation_smem[:, :] = (_silu(gate) * up * weights[:, None]).astype(activation_smem.dtype)
+                            mgpu.copy_gmem_to_smem(
+                                h_ref.at[
+                                    pl.ds(row_start, config.block_m),
+                                    pl.ds(k_start, config.block_k),
+                                ],
+                                gate_smem,
+                                ready_barrier,
+                            )
+                            mgpu.copy_gmem_to_smem(
+                                h_ref.at[
+                                    pl.ds(row_start, config.block_m),
+                                    pl.ds(config.intermediate_dim + k_start, config.block_k),
+                                ],
+                                up_smem,
+                                ready_barrier,
+                            )
+                            mgpu.copy_gmem_to_smem(
+                                recv_route_weights_ref.at[
+                                    static_src_ordinal,
+                                    entry,
+                                    pl.ds(0, config.block_m),
+                                    pl.ds(0, config.block_k),
+                                ],
+                                weight_smem,
+                                ready_barrier,
+                            )
                             mgpu.copy_gmem_to_smem(
                                 w_down_ref.at[
                                     expert,
@@ -702,15 +716,23 @@ def _make_w2_from_h_return_direct_to_source_kernel(config: PushInboxConfig, *, u
                                 ready_barrier,
                             )
                             mgpu.barrier_wait(ready_barrier)
+                            activation_smem[:, :] = (
+                                _silu(gate_smem[:, :].astype(jnp.float32))
+                                * up_smem[:, :].astype(jnp.float32)
+                                * weight_smem[:, :].astype(jnp.float32)
+                            ).astype(activation_smem.dtype)
                             mgpu.commit_smem()
                             mgpu.wgmma(acc_ref, activation_smem, w_down_smem)
                             mgpu.wgmma_wait(0)
 
                     pl.run_scoped(
                         smem_scope,
+                        gate_smem=_wgmma_smem((config.block_m, config.block_k), h_ref.dtype),
+                        up_smem=_wgmma_smem((config.block_m, config.block_k), h_ref.dtype),
+                        weight_smem=_wgmma_smem((config.block_m, config.block_k), recv_route_weights_ref.dtype),
                         activation_smem=_wgmma_smem((config.block_m, config.block_k), h_ref.dtype),
                         w_down_smem=_wgmma_smem((config.block_k, config.block_n), w_down_ref.dtype),
-                        ready_barrier=mgpu.Barrier(num_arrivals=1),
+                        ready_barrier=mgpu.Barrier(num_arrivals=4),
                     )
                     return acc_ref[...].astype(source_return_ref.dtype)
 
@@ -785,7 +807,7 @@ def _sharded_w2_from_h_return_direct_to_source_kernel(
 
     def local_fn(
         h_local: Float[Array, "1 rows twoI"],
-        recv_route_weights_local: Float[Array, "1 SRC Q M"],
+        recv_route_weights_local: Float[Array, "1 SRC Q M W"],
         recv_meta_local: Int[Array, "1 SRC Q F"],
         expert_base_local: Int[Array, "1 E"],
         src_base_by_expert_local: Int[Array, "1 SRC E"],
@@ -812,7 +834,7 @@ def _sharded_w2_from_h_return_direct_to_source_kernel(
         mesh=mesh,
         in_specs=(
             P(AXIS, None, None),
-            P(AXIS, None, None, None),
+            P(AXIS, None, None, None, None),
             P(AXIS, None, None, None),
             P(AXIS, None),
             P(AXIS, None, None),
