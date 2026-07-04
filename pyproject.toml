@@ -315,6 +315,9 @@ tensor-shapes = true
 # and compute deps a local venv commonly skips (torch, sympy). List both `pkg` and
 # `pkg.*`.
 ignore-missing-imports = [
+    # Optional extra marin-rigging[secrets]; only rigging.secrets imports it, lazily.
+    "google.cloud.secretmanager",
+    "google.cloud.secretmanager.*",
     "harbor",
     "harbor.*",
     "jax_triton",
