@@ -53,7 +53,18 @@ def iter_parquet_row_groups(
         row_start: First row to include (inclusive, before filtering).
         row_end: Last row to include (exclusive, before filtering).
     """
-    pf = pq.ParquetFile(source) if isinstance(source, str) else source
+    # Open string paths through open_file (rigging fsspec) rather than letting
+    # pyarrow build a native S3FileSystem from the URI: pyarrow's default S3
+    # client uses path-style addressing, which CoreWeave object storage rejects
+    # with HTTP 400. open_file routes through the correctly-addressed fsspec fs
+    # (same path the JSONL reader uses). The `with` stays open for the lifetime
+    # of the delegated generator.
+    if isinstance(source, str):
+        with open_file(source, "rb") as f:
+            yield from iter_parquet_row_groups(pq.ParquetFile(f), columns=columns, row_start=row_start, row_end=row_end)
+        return
+
+    pf = source
     has_row_range = row_start is not None and row_end is not None
 
     cumulative_rows = 0
@@ -196,7 +207,11 @@ def compute_parquet_splits(path: str, approx_shard_bytes: int) -> list[tuple[int
     Returns:
         List of (row_start, row_end) tuples where row_end is exclusive.
     """
-    metadata = pq.ParquetFile(path).metadata
+    # Read the footer through open_file (fsspec) so CoreWeave object storage's
+    # virtual-host addressing is honored; a raw path makes pyarrow use its native
+    # path-style S3 client, which CW rejects with HTTP 400.
+    with open_file(path, "rb") as f:
+        metadata = pq.ParquetFile(f).metadata
     splits: list[tuple[int, int]] = []
     split_start = 0
     split_bytes = 0
