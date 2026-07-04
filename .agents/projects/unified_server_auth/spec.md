@@ -18,9 +18,15 @@ always the service JWT manager, so the schema never carries a login verifier.
 
 `AuthStackConfig` serializes to an **ordered JSON list of internally-tagged
 layer objects** (`{"type": <layer>, ...}`), matching finelog's existing
-`FINELOG_AUTH_POLICY` shape (`lib/finelog/src/finelog/deploy/config.py:125-128`).
-Order is evaluation order: first `AUTHENTICATED`/`Allow` admits, first
-`REJECTED`/`Reject` denies, all-absent falls to the deny terminal.
+`FINELOG_AUTH_POLICY` shape (`lib/finelog/src/finelog/deploy/config.py:125-128`)
+and following Istio's `RequestAuthentication`/`AuthorizationPolicy` field vocabulary
+(research §7.1). Order is evaluation order: first `AUTHENTICATED`/`Allow` admits,
+first `REJECTED`/`Reject` denies, all-absent falls to the deny terminal — a
+deliberate **first-match** model (unlike Istio's union-with-DENY-precedence), which
+the `authed-service.md` runbook states explicitly so nobody assumes Cedar/Istio
+semantics. Cross-impl consistency is enforced by a **shared conformance
+test-vector suite** (§1.4), not by a second hand-maintained parser (the Casbin
+lesson, research §7.1).
 
 ```json
 [
@@ -100,70 +106,112 @@ The migration is mechanical: `request_auth_policy` builds the matching
 current semantics via the `jwt(optional=true)` layer. No cluster's admit/deny
 outcome changes; the round-trip test (design §Testing) is the gate.
 
+### 1.4 Cross-impl conformance vectors
+
+A shared, language-neutral test-vector file (e.g.
+`lib/rigging/src/rigging/auth_vectors.json`) is the single source of truth for
+evaluator behavior, run by both the Python (`rigging`) and Rust (`finelog`)
+evaluators in CI. Each vector pins an input and the expected outcome:
+
+```json
+{
+  "stack": [{"type": "cidr", "cidrs": ["10.0.0.0/8"]}, {"type": "jwt"}, {"type": "loopback"}],
+  "request": {"peer": "10.1.2.3:44100", "headers": {}, "token": null},
+  "expect": {"verdict": "allow", "matched": "cidr"}
+}
+```
+
+Vectors cover the divergences #6861 names (default posture, cidr-vs-jwt ordering,
+`X-Forwarded-For` refusal, empty-list lockout, allow-localhost fallback). This is
+the drift gate; it replaces "two parsers that happen to agree" with "one contract
+both must pass" (the Casbin lesson, research §7.1). The `jwt` layer's verifier is
+mocked per-language (Python injects a `TokenVerifier`; the Rust engine, if built
+in Phase 2, verifies natively), so vectors assert the *walk + cidr + posture*,
+which is exactly the shared surface.
+
 ## 2. Secret supply — `lib/rigging/src/rigging/secrets.py` (new)
+
+A secret field is a `SecretSpec`: an **ordered list of references**, resolved
+first-present-wins. A bare string is sugar for a one-element list.
 
 ```python
 class SecretSource(Protocol):
-    scheme: str
-    def fetch(self, locator: str) -> str: ...
+    scheme: str                         # "env" | "file" | "gcp-secret"
+    def fetch(self, locator: str) -> str | None: ...   # None ⇒ ABSENT here; raise ⇒ FAILED here
+
+SecretSpec = tuple[str, ...]            # ordered references; a bare str normalizes to a 1-tuple
+
+@dataclass(frozen=True)
+class ResolvedSecret:
+    value: str
+    source: str                         # the reference that produced it (logged)
 
 def is_secret_reference(value: str) -> bool:
-    """True if `value` starts with a known secret scheme (env: / gcp-secret:// / file:)."""
+    """True if `value` starts with a known scheme (env: / file: / gcp-secret://)."""
 
-def resolve_secret(ref: str) -> str:
-    """Resolve a secret reference to its value.
+def resolve_secret_spec(spec: SecretSpec) -> ResolvedSecret:
+    """Resolve an ordered secret path, first PRESENT source wins.
 
-    Grammar (dispatched on scheme prefix):
-      - `env:NAME`                                             → os.environ[NAME]
-      - `gcp-secret://projects/<p>/secrets/<n>/versions/<v>`   (v defaults to `latest`)
-      - `file:/abs/path`                                       → contents of a mounted file (trimmed)
-      - a value with NO scheme prefix                          → returned verbatim (raw literal; dev only)
+    Per source, dispatched on scheme prefix:
+      - `env:NAME`                                           → os.environ.get(NAME)
+      - `file:/abs/path`                                     → file contents (trimmed)
+      - `gcp-secret://projects/<p>/secrets/<n>/versions/<v>` → Secret Manager (version REQUIRED)
 
-    A value that matches a scheme shape (^[a-z0-9+-]+:) but names an UNKNOWN
-    scheme raises SecretResolutionError — never a silent literal fallback, so a
-    typo'd `gcp-secret:/...` fails at resolution, not at token-verification time.
-    A known-scheme ref that cannot be fetched (missing env var / Secret Manager
-    version / denied IAM) also raises. The GCP path imports
-    google-cloud-secret-manager lazily; it is an optional extra
-    (`marin-rigging[secrets]`).
+    ABSENT here (env unset / file missing / secret|version NOT_FOUND) ⇒ try the
+    next source. FAILED here (denied IAM / unreachable / unreadable / malformed)
+    ⇒ raise SecretResolutionError immediately — NEVER fall through to a
+    staler/weaker source (mirrors the auth chain's REJECTED-halts rule). A
+    scheme-shaped ref (^[a-z0-9+-]+:) with an unknown scheme raises. A bare
+    literal is dev-only and rejected by the render guard. Exhausting the path
+    with all-ABSENT raises. Logs the resolving source (and, for gcp-secret, the
+    resolved version). The GCP path imports google-cloud-secret-manager lazily
+    (optional extra `marin-rigging[secrets]`).
     """
+
+def default_secret_spec(field_name: str) -> SecretSpec:
+    """The conventional path for a field with no explicit spec:
+    (env:IRIS_<FIELD>, file:/etc/iris/secrets/<field>, gcp-secret://…/iris-<field>/versions/<v>).
+    Lets a service inherit a secret home without per-field config."""
 ```
 
-No `k8s-secret://` scheme: the k8s-native path is a Secret + `envFrom` →
-`env:NAME` (or a mounted volume → `file:`). A runtime `k8s-secret://` read would
-require `secrets: get` on the controller ClusterRole, which grants none today
+No `k8s-secret://` scheme: the k8s-native path is a Secret + `envFrom` → `env:`
+(or a CSI-mounted volume → `file:`). A runtime `k8s-secret://` read would require
+`secrets: get` on the controller ClusterRole, which grants none today
 (`iris/cluster/platforms/k8s/controller.py:678-728`) and would invert the
 documented posture that the controller "never has these secrets"
-(`platforms/k8s/controller.py:397-399`).
+(`platforms/k8s/controller.py:397-399`). `gcp-secret://` mirrors GCP's resource
+name, so the version segment is **mandatory** (pin `versions/<n>` in prod, not
+`latest`; research §7.2).
 
 ### 2.1 Config-side contract (iris)
 
-- The secret-bearing fields are marked with an explicit annotation, **not** a
-  name heuristic (`rigging.redaction.is_sensitive_key_name` misses
-  `delegation_key` and matches the whole non-secret `auth` block):
+- The secret-bearing fields are typed `SecretRefSpec` (accepts a bare ref or an
+  ordered list) and marked with an explicit annotation, **not** a name heuristic
+  (`rigging.redaction.is_sensitive_key_name` misses `delegation_key` and matches
+  the whole non-secret `auth` block):
 
 ```python
-SecretRefStr = Annotated[str, "secret-ref"]   # a str field that must be a SecretRef in a deployed config
+SecretRefSpec = Annotated[str | tuple[str, ...], "secret-ref"]   # bare ref or ordered path
 ```
 
   Marked fields: `ClusterFinelogConfig.delegation_key`, `.static_token`
   (`config.py:690-693`); `PeerConfig.static_token` (`config.py:661-664`);
   `StaticAuthConfig.tokens` values (`config.py:506`);
   `IapAuthConfig.oauth_client_secret` (`config.py:512`). **Not** marked:
-  `WorkerConfig.auth_token` (`config.py:402`) — it is minted on the controller
-  at runtime (`local_cluster.py:207`) and is always empty in an authored config,
-  so it is never a reference and never guarded.
+  `WorkerConfig.auth_token` (`config.py:402`) — minted on the controller at
+  runtime (`local_cluster.py:207`), always empty in an authored config, so never a
+  reference and never guarded.
 - **Resolve boundary is the controller runtime, not the loader.** `load_config`
   (`config.py:1287-1315`) parses only. The controller `serve` entrypoint
   (`main.py:337`) calls `resolve_config_secrets(config)` after `load_config`,
-  replacing each marked field with its resolved value in the in-memory model,
-  before consumers read it (`finelog_relay.py:80-84`, `federation/peer.py:106`).
-  The deploy CLI (`iris cluster start`) never resolves — it renders references
-  into the artifact verbatim.
+  replacing each marked field with `resolve_secret_spec(spec_or_default).value`
+  (falling back to `default_secret_spec(field)` when the field is unset), before
+  consumers read it (`finelog_relay.py:80-84`, `federation/peer.py:106`). The
+  deploy CLI (`iris cluster start`) never resolves — it renders references verbatim.
 
 ```python
 def resolve_config_secrets(config: IrisClusterConfig) -> IrisClusterConfig:
-    """Return a copy with every SecretRefStr field resolved via resolve_secret.
+    """Return a copy with every SecretRefSpec field resolved via resolve_secret_spec.
     Called once on the controller serve path; never on the deploy/render path."""
 ```
 
@@ -175,11 +223,11 @@ def resolve_config_secrets(config: IrisClusterConfig) -> IrisClusterConfig:
 
 ```python
 def assert_no_inlined_secrets(config: IrisClusterConfig) -> None:
-    """Raise ValueError if any SecretRefStr-marked field holds a non-empty value
-    that is not a secret reference (is_secret_reference is False) — i.e. a raw
-    secret about to be serialized into a broadly-readable ConfigMap / GCE
-    metadata. Empty strings pass (unset). Mirrors finelog's assert_inlineable_auth
-    (lib/finelog/src/finelog/deploy/config.py:131-142)."""
+    """Raise ValueError if any SecretRefSpec-marked field holds a non-empty value
+    where ANY entry in the path is not a secret reference (is_secret_reference is
+    False) — i.e. a raw secret about to be serialized into a broadly-readable
+    ConfigMap / GCE metadata. Empty ⇒ pass (unset; resolves via default path).
+    Mirrors finelog's assert_inlineable_auth (finelog/deploy/config.py:131-142)."""
 ```
 
 Per-service JWT **signing** keys are out of config entirely — minted on the
@@ -208,18 +256,26 @@ iris user grant \
     --cluster <name> \
     --user <email|sa-email> \
     --role {dashboard|user|admin}      # default: dashboard (read-only)
+    [--headless]                        # a service account: also wire keyless WIF (no SA key)
 
 # Orchestrates three distinct planes (only 1 and 3 are applied live):
 #  1. [IAM]      gcloud iap web add-iam-policy-binding … roles/iap.httpsResourceAccessor  (idempotent)
+#                with --headless, also: roles/iam.workloadIdentityUser +
+#                roles/iam.serviceAccountTokenCreator on the iap-caller SA (keyless WIF)
 #  3. [RPC]      SetUserRole(user, role) against the live controller               (idempotent)
 #  2. [CONFIG]   if the IAP client id is absent from auth.iap.audiences, PRINT the
 #                required config edit + `iris cluster start` redeploy step         (NOT applied live)
 #  →  prints:    iap+https://<host>/proxy/<name>?audience=<iap-client-id>
 ```
 
-The command is idempotent for planes 1 and 3; plane 2 is a config edit it cannot
-apply to a running controller, so it prints the diff and the redeploy command
-rather than pretending to mutate live state.
+Recommended headless auth is **Workload Identity Federation — no downloaded SA
+key** (research §7.2): CI mints an OIDC token → WIF → impersonates the `iap-caller`
+SA → ID token with `id_token_audience = <IAP client id>`; GCE/GKE cron uses its
+attached SA → `generateIdToken(audience=<IAP client id>)`. The custom-audience ID
+token needs the impersonation path, so one keyless `iap-caller` SA stays the
+impersonation target. The command is idempotent for planes 1 and 3; plane 2 is a
+config edit it cannot apply to a running controller, so it prints the diff and the
+redeploy command rather than pretending to mutate live state.
 
 ### 3.3 `login` provisioning change (#6592)
 
@@ -237,11 +293,12 @@ user re-runs `iris login`.
 | Path | Change |
 |---|---|
 | `lib/rigging/src/rigging/auth_config.py` | **new** — `AuthStackConfig`, layer specs, wire (de)serialization |
+| `lib/rigging/src/rigging/auth_vectors.json` | **new** — shared cross-impl conformance vectors (§1.4) |
 | `lib/rigging/src/rigging/server_auth.py` | `RequestAuthPolicy.from_config`; `enforcing`/`permissive` reimplemented on it |
-| `lib/rigging/src/rigging/secrets.py` | **new** — `resolve_secret`, `SecretSource`, `is_secret_reference`, `SecretRefStr` |
+| `lib/rigging/src/rigging/secrets.py` | **new** — `resolve_secret_spec`, `default_secret_spec`, `SecretSource`, `is_secret_reference` |
 | `lib/rigging/pyproject.toml` | add `[secrets]` optional extra (`google-cloud-secret-manager`) |
-| `lib/rigging/docs/authed-service.md` | **new** — the rollout runbook (server + client recipe; cidr-grants-admin caveat) |
-| `lib/iris/src/iris/cluster/config.py` | mark `SecretRefStr` fields; `resolve_config_secrets`; `assert_no_inlined_secrets` |
+| `lib/rigging/docs/authed-service.md` | **new** — the rollout runbook (server + client recipe; cidr-grants-admin caveat; first-match note) |
+| `lib/iris/src/iris/cluster/config.py` | mark `SecretRefSpec` fields; `resolve_config_secrets`; `assert_no_inlined_secrets` |
 | `lib/iris/src/iris/cluster/controller/main.py` | resolve secrets on the `serve` path after `load_config` |
 | `lib/iris/src/iris/cluster/platforms/k8s/controller.py` | guard at `_config_json_for_configmap` |
 | `lib/iris/src/iris/cluster/platforms/gcp/controller_bootstrap.py` | guard at the render site |
@@ -254,11 +311,17 @@ user re-runs `iris login`.
 | `lib/finelog/AGENTS.md` | fix stale "ships no auth" note (`:29-31`) |
 | `mkdocs.yml` | nav entry for `authed-service.md` |
 
-## 5. Out of scope
+## 5. Out of scope (this spec = Phase 1)
 
-- **The pyo3 shared engine** (Open Question 1) — this spec pins the *schema* +
-  the shared `cidr`/walk convention only; a shared Rust crate is a separate
-  design if pursued.
+- **The Phase-2 Rust *verify* engine** (design §Phasing, Open Question 1) — this
+  spec pins the schema + conformance vectors + secrets + onboarding. If Phase 2 is
+  built (gated on the vectors showing semantic drift), it generalizes finelog's
+  `lib/finelog/rust/src/server/auth.rs` (cidr + HS256) with **ES256 IAP-assertion**
+  and **RS256 Google-ID-token** verify (`jsonwebtoken` + a JWKS fetch/cache),
+  exposed to rigging via the existing pyo3/abi3 wheel pattern
+  (`lib/finelog/rust/pyext/`); the engine returns `VerifiedIdentity{email,
+  matched_layer}` and Python assigns the role. It is **verify-only** — client-side
+  token *minting* stays Python `google-auth` (research §7.3). A separate design.
 - **A first-class runtime k8s Secret fetch** (`k8s-secret://`) — deliberately
   excluded (RBAC escalation, §2).
 - Token refresh / rotation for the 30-day iris JWT (deferred in

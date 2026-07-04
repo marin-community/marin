@@ -203,3 +203,117 @@ default-deny for unannotated routes / unconfigured stacks; (4) network trust
 only for genuine direct socket peers (never `X-Forwarded-For`); (5) edge auth
 (IAP, `Proxy-Authorization`) composed as a unit with app auth (JWT,
 `Authorization`); (6) scoped tokens are proxy-only, denied at every RPC.
+
+## 7. External prior art (best-practices research pass)
+
+### 7.1 Declarative authz engines — what to adopt, what to avoid
+
+- **Istio `RequestAuthentication` / `AuthorizationPolicy`** is the schema shape to
+  copy. Its `jwtRules[]` fields (`issuer`, `audiences`, `jwksUri`|inline `jwks`,
+  `fromHeaders`+prefix, `algorithms`) map directly onto our `jwt` layer, and its
+  CIDR-trust model is explicit and worth mirroring: `ipBlocks` = direct peer IP
+  vs `remoteIpBlocks` = `X-Forwarded-For`-derived client IP, with
+  `numTrustedProxies` for how many hops to strip. (Istio is *not* first-match —
+  it unions ALLOW with DENY-precedence; our first-match stack is simpler and
+  intentional, so document that divergence.)
+- **Tailscale ACLs** (HuJSON, deny-by-default, CIDR-as-string, ordered list,
+  dropped the redundant `action` field): precedent for human-authored
+  declarative config ergonomics.
+- **Casbin** is the **anti-goal**: N independent per-language reimplementations
+  (`casbin-rs`, `pycasbin`, …) whose maintainers concede "complete uniformity is
+  not yet achieved" — i.e. exactly our finelog/rigging drift at ecosystem scale.
+  Its lesson: prevent drift with a **single source of truth + shared conformance
+  test-vectors**, not parallel hand-maintained ports.
+- **AWS Cedar** (`cedar-policy` Rust core; third-party `cedarpy` pyo3 binding via
+  maturin) and **Biscuit** (`biscuit-auth` Rust + `biscuit-python` pyo3) prove
+  the Rust-core+pyo3 pattern works — but Cedar is semantically overkill
+  (schema/entities/ABAC, forbid-overrides not first-match) and its Python binding
+  is third-party and lags the engine (a binding-upkeep signal); Biscuit is a
+  *token format* (relevant only to our scoped `/proxy` tokens), not a stack
+  orchestrator. **OPA/Rego and OpenFGA/Zanzibar** are external policy
+  services with a data plane — wrong shape/weight for an in-process, stateless,
+  sub-ms layer stack over ~5 fixed layer types.
+- **Verdict:** adopt Istio's schema shape + deny-by-default/first-match; fix drift
+  with a shared conformance-vector suite (the Casbin lesson); do **not** adopt a
+  full external engine for a stack this small.
+
+### 7.2 Secret-reference & workload-identity patterns
+
+- **Reference conventions** cluster tightly: 1Password `op://vault/item/field`,
+  Vault/Bank-Vaults `vault:path#key`, systemd `LoadCredential=ID:PATH` /
+  `ImportCredential` (multi-source), Docker's `<VAR>_FILE`, Spring `configtree:`
+  (a mounted dir of files → keys), GCP resource name
+  `projects/<p>/secrets/<s>/versions/<v>`. Our `env:` / `file:` /
+  `gcp-secret://` sits squarely in this space; mirroring GCP's resource name
+  makes the **version segment a required, first-class part** of the reference.
+- **Prefer platform-injection to a runtime SM client.** On GKE the canonical path
+  is **External Secrets Operator** (`ExternalSecret` CRD syncs GCP Secret Manager
+  → a native k8s Secret) consumed via `envFrom` ⇒ the app only ever sees
+  `env:NAME` and links no SM SDK; or the **Secrets Store CSI driver** mounts SM
+  secrets as tmpfs files ⇒ `file:/mnt/secrets/<name>` (smaller blast radius than
+  a k8s Secret in etcd). On GCE the controller reads `gcp-secret://` directly via
+  the **attached SA + metadata server** (no key). This is why our default source
+  order is `env: → file: → gcp-secret://`: each environment populates whichever
+  link it uses, and `gcp-secret://` (the only scheme needing cloud creds) is
+  confined to the GCE path.
+- **GCP Secret Manager best practices:** pin explicit `versions/<n>` in prod (not
+  `latest`, which removes rollback and is an availability risk) and log the
+  resolved version; grant `roles/secretmanager.secretAccessor` at the *secret*
+  level, never project; rotation is Pub/Sub-notification-based, not automatic.
+- **Workload Identity Federation answers #6580.** Keyless SA auth retires both the
+  downloaded SA key *and* the SSH-tunnel fallback. GitHub CI: WIF → impersonate a
+  dedicated minimal `iap-caller` SA → `token_format: id_token`,
+  `id_token_audience = <IAP client id>`. GCE/GKE cron: attached SA →
+  `generateIdToken(audience=<IAP client id>)`. Caveat: a *custom-audience* IAP ID
+  token requires the impersonation path (direct WIF issues only ≤10-min access
+  tokens with no arbitrary audience), so keep one keyless `iap-caller` SA as the
+  impersonation target — but never export its key.
+- **Pitfalls to bake in:** no silent fallback to a literal on an unknown scheme
+  (raise); the resolver's own credential must come from the platform (ADC / WIF /
+  attached SA), never a config secret it is meant to load (bootstrap
+  chicken-and-egg); syncing SM → a k8s Secret widens the trust surface (base64,
+  not encrypted) — prefer CSI where the extra footprint isn't justified.
+
+### 7.3 Rust auth-engine feasibility (server verify vs client mint)
+
+The claim "the IAP/Google verifiers can't move to Rust" is **false as stated** —
+`google-auth` is an implementation choice, not a capability floor.
+
+- **Server VERIFY — no blocker.** IAP's `x-goog-iap-jwt-assertion` is an **ES256**
+  JWT (`iss = https://cloud.google.com/iap`, `aud` = the backend resource path,
+  keys at `https://www.gstatic.com/iap/verify/public_key` [kid→PEM map] or
+  `…/public_key-jwk` [JWK set]); a Google OIDC ID token is **RS256** (JWKS at
+  `https://www.googleapis.com/oauth2/v3/certs`). Both verify natively in Rust with
+  `jsonwebtoken` 10.x + a JWKS fetch/cache (`jwtk::RemoteJwksVerifier` or ~30 lines
+  of `reqwest` mirroring the existing 1h TTL). finelog **already** verifies HS256 +
+  CIDR in Rust (`finelog/rust/src/server/auth.rs`). `GcpAccessTokenVerifier`
+  checks an *opaque* access token via a tokeninfo HTTP round-trip (I/O, not
+  crypto) — also a plain `reqwest` GET.
+- **A pyo3/abi3 wheel already ships from this repo:** `lib/finelog/rust/pyext/`
+  (`pyo3 0.29`, `abi3-py312`, `crate-type=["cdylib"]`, the `marin-finelog-server`
+  wheel). So the "shared Rust engine" is not greenfield — it is generalizing
+  finelog's `auth.rs` and porting `server_auth.py` behind an *already-shipping*
+  packaging pattern. abi3 collapses the per-Python-version axis; the residual cost
+  is the per-platform wheel matrix (manylinux/musllinux/macOS), which finelog
+  already pays.
+- **Client MINT — feasible, the long pole.** `google-cloud-auth` (official,
+  `googleapis/google-cloud-rust`, 1.x, young) has an `idtoken` feature +
+  impersonation builder; `gcloud-auth` exposes `create_id_token_source(audience)`.
+  Metadata-server and SA-key ID tokens are easy; impersonation is available; the
+  **desktop refresh-token → ID-token re-mint** (`IapRefreshTokenProvider`) is a
+  gap — a small bespoke `reqwest` POST (`grant_type=refresh_token`, `openid email`
+  scope). WIF / ADC-discovery-order / impersonation-chains are where the Rust
+  crates are thinner than Python `google-auth`. (`gcp_auth` mints access tokens
+  only — not for the ID-token path.)
+- **pyo3 callback boundary:** don't inject the Python `role_resolver` (email→role
+  via iris's DB) into Rust — GIL re-contention around a DB call. Have the engine
+  return `VerifiedIdentity{email, matched_layer}` (the shape `server_auth.py`
+  already has, minus role) and let Python assign the role. This matches the
+  existing layering (`server_auth.py` "carries no role semantics").
+- **Honest sequencing:** VERIFY carries the security value (the default-deny
+  ingress gate) and is already half-built in Rust; MINT is client-convenience,
+  bets on young 1.x crates + hand-written glue, and can keep calling Python
+  `google-auth` at the boundary while a Rust mint path matures. So a Rust engine,
+  if built, is **verify-first**, and the reason to sequence it last is
+  schedule/maturity + "reproduce only what we actually exercise" — *not*
+  capability.
