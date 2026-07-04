@@ -122,7 +122,7 @@ def apply_event(transitions: ControllerTestState, event: IrisEvent) -> Any:
     granularity as the main-flavor dispatcher that opens its own tx
     inside each method.
     """
-    with transitions._db.transaction() as cur:
+    with transitions._scope.transaction() as cur:
         match event:
             case SubmitJob(job_id, request, ts):
                 return ops.job.submit(

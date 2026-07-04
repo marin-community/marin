@@ -262,11 +262,7 @@ message TaskStatus {
   string container_id = 19;           // Platform container identifier (Docker container ID, K8s pod name)
   reserved 20;                        // was: repeated ResourceUsage resource_history (now in iris.task stats)
   reserved 21, 22;                    // was: status_text_detail_md, status_text_summary_md (now in iris.task_status stats)
-
-  // Genuine application failures (non-zero exit / setup error) for this task.
-  // The list view attaches only the latest failed attempt, so this carries the
-  // true count for the dashboard's failure badge.
-  int32 failure_count = 23;
+  reserved 23;                        // was: failure_count — derived from attempts (see iris.cluster.controller.attempt_counts)
 
   // Literal owning backend id: DEFAULT_BACKEND_ID ("default") on single-backend
   // clusters, the routed id once pinned, empty ONLY while a job is genuinely
@@ -285,10 +281,7 @@ message TaskStatus {
   // render as epoch 0.
   iris.time.Timestamp submitted_at = 27;
 
-  // Attempts lost to worker preemption for this task. Carried alongside
-  // failure_count so a mirrored federated task preserves the peer's true counter
-  // instead of a fabricated 0.
-  int32 preemption_count = 28;
+  reserved 28;  // was: preemption_count — derived from attempts (see iris.cluster.controller.attempt_counts)
 }
 
 // Record of a single task execution attempt

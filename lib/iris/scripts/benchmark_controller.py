@@ -1710,7 +1710,7 @@ def benchmark_endpoints(db: ControllerDB) -> None:
             bench(
                 f"Endpoints: fail_workers x{fail_n} (slice-reap, WRITE)",
                 lambda wids=[str(w) for w in target_wids]: ops.worker.fail(
-                    write_db,
+                    write_txns._scope,
                     worker_ids=wids,
                     reason="benchmark: simulated provider-sync failure",
                     health=write_txns._health,
@@ -1795,7 +1795,7 @@ def _run_apply_under_contention(
         try:
             while not stop.is_set():
                 t0 = time.perf_counter()
-                with write_db.transaction() as cur:
+                with write_txns._scope.transaction() as cur:
                     now = Timestamp.now()
                     effects = apply_reconcile(CursorTransitionReader(cur), plan_results, now=now)
                     commit_effects(cur, effects, endpoints=write_txns._endpoints)
@@ -1811,7 +1811,7 @@ def _run_apply_under_contention(
                     # fail_chunk is ignored: chunking is now a fixed module
                     # constant (FAIL_WORKERS_CHUNK_SIZE) in ops.worker.fail.
                     ops.worker.fail(
-                        write_db,
+                        write_txns._scope,
                         worker_ids=[str(wid) for wid, _addr, _reason in failures],
                         reason="benchmark: simulated provider-sync failure",
                         health=write_txns._health,
@@ -2776,7 +2776,7 @@ def _one_reconcile_tick(state: SyntheticReconcileState, provider: RpcTaskBackend
     worker_results = provider._observe_fleet().worker_results
     t3 = time.perf_counter()
     now = Timestamp.now()
-    with state.db.transaction() as cur:
+    with state.txns._scope.transaction() as cur:
         effects = apply_reconcile(CursorTransitionReader(cur), worker_results, now=now)
         commit_effects(cur, effects, endpoints=state.txns._endpoints)
     t4 = time.perf_counter()

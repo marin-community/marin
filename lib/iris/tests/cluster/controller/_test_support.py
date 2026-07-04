@@ -26,6 +26,7 @@ from iris.cluster.controller.schema import (
     worker_attributes_table,
     workers_table,
 )
+from iris.cluster.controller.scope import ControllerScope
 from iris.cluster.controller.task_state import ACTIVE_TASK_STATES
 from iris.cluster.controller.worker_health import WorkerHealthTracker
 from iris.cluster.types import JobName, WorkerId
@@ -48,6 +49,7 @@ class ControllerTestState:
     """
 
     _db: ControllerDB
+    _scope: ControllerScope
     _health: WorkerHealthTracker
     _endpoints: EndpointsProjection
     _worker_attrs: WorkerAttrsProjection
@@ -63,6 +65,10 @@ class ControllerTestState:
         run_template_cache: RunTemplateCache | None = None,
     ) -> None:
         self._db = db
+        # The cursor waist, mirroring a real Controller. Owns the per-controller
+        # attempt-counts memo and hands out ``ScopedTx`` cursors, so helpers that
+        # commit effects or read derived counts go through ``self._scope``.
+        self._scope = ControllerScope(db)
         self._health = health or WorkerHealthTracker()
         self._endpoints = endpoints or EndpointsProjection(db)
         self._worker_attrs = worker_attrs or WorkerAttrsProjection(db, owns_scale_group=lambda _scale_group: True)

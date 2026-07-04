@@ -118,12 +118,8 @@ export interface TaskStatus {
   pendingReason?: string
   canBeScheduled?: boolean
   containerId?: string
-  // Genuine application-failure count for this task. The list view attaches only
-  // the latest failed attempt, so this carries the true count for the badge.
-  failureCount?: number
-  // Attempts lost to worker preemption for this task. For a mirrored federated
-  // task this is the peer's real counter, not a fabricated 0.
-  preemptionCount?: number
+  // Per-task failure/preemption counts are no longer on the wire: they are
+  // derived from the task's attempt rows (job-level totals live on JobStatus).
   backendId?: string
   // Cluster coordinate: always set — `'local'` for a locally-owned task, a peer
   // id when handed off to that peer cluster (backendId then empty).

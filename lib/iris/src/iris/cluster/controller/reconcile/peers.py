@@ -68,7 +68,15 @@ def requeue_coscheduled_siblings(
     failed_task_id: JobName,
     now_ms: int,
 ) -> None:
-    """Bounce coscheduled siblings to PENDING so the job re-coschedules atomically."""
+    """Bounce coscheduled siblings to PENDING so the job re-coschedules atomically.
+
+    The bounced attempt is stamped ``COSCHED_FAILED``, not ``PREEMPTED``: an
+    atomic gang restart is not the sibling's own preemption, so its budget must
+    stay honest. Since the retry counters are derived from attempt state, a
+    ``PREEMPTED`` stamp here would spuriously charge the sibling; ``COSCHED_FAILED``
+    (terminal, excluded from the preemption states) both records the true cause
+    and keeps the derived ``preemption_count`` at zero.
+    """
     error = f"Coscheduled sibling {failed_task_id.to_wire()} bounced for atomic re-scheduling"
 
     for sib in siblings:
@@ -80,5 +88,5 @@ def requeue_coscheduled_siblings(
             error,
             now_ms,
             stamp_attempt_finished=False,
-            attempt_state=job_pb2.TASK_STATE_PREEMPTED,
+            attempt_state=job_pb2.TASK_STATE_COSCHED_FAILED,
         )

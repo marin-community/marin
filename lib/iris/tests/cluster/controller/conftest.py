@@ -388,7 +388,7 @@ def controller_service(state, log_client, mock_controller, tmp_path) -> Controll
         controller=mock_controller,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
         log_client=log_client,
-        db=state._db,
+        scope=state._scope,
         endpoints=state._endpoints,
         endpoint_service=EndpointServiceImpl(db=state._db, endpoints=state._endpoints),
     )
@@ -588,7 +588,7 @@ def submit_direct_job(
         coscheduling_group_by=coscheduling_group_by,
         priority_band=priority_band,
     )
-    with state._db.transaction() as cur:
+    with state._scope.transaction() as cur:
         ops.job.submit(cur, job_id=jid, request=req, ts=Timestamp.now(), run_template_cache=state._run_template_cache)
     with state._db.read_snapshot() as tx:
         rows = tx.execute(select(tasks_table.c.task_id).where(tasks_table.c.job_id == jid)).all()
@@ -728,7 +728,7 @@ def register_worker(
     scale_group: str = "",
 ) -> WorkerId:
     wid = WorkerId(worker_id)
-    with state._db.transaction() as cur:
+    with state._scope.transaction() as cur:
         ops.worker.register(
             cur,
             worker_id=wid,
@@ -766,7 +766,7 @@ def register_worker_into_backend(
     assert backend.health is not None, f"backend for scale group {scale_group!r} has no liveness tracker"
     assert backend.worker_attrs is not None, f"backend for scale group {scale_group!r} has no attrs projection"
     wid = WorkerId(worker_id)
-    with controller._db.transaction() as cur:
+    with controller._scope.transaction() as cur:
         ops.worker.register(
             cur,
             worker_id=wid,
@@ -814,7 +814,7 @@ def submit_job(
     inject_device_constraints(request)
     jid = JobName.from_string(job_id) if job_id.startswith("/") else JobName.root("test-user", job_id)
     request.name = jid.to_wire()
-    with state._db.transaction() as cur:
+    with state._scope.transaction() as cur:
         ops.job.submit(
             cur,
             job_id=jid,
@@ -998,9 +998,9 @@ def healthy_active_workers(state: ControllerTestState) -> list[SchedulableWorker
 
 
 def dispatch_task(state: ControllerTestState, task, worker_id: WorkerId) -> None:
-    with state._db.transaction() as cur:
+    with state._scope.transaction() as cur:
         ops.task.assign(cur, [Assignment(task_id=task.task_id, worker_id=worker_id)], health=state._health)
-    with state._db.transaction() as cur:
+    with state._scope.transaction() as cur:
         apply_task_observations(
             cur,
             [
@@ -1032,7 +1032,7 @@ def transition_task(
     task = query_task_with_attempts(state, task_id)
     assert task is not None
     if new_state == job_pb2.TASK_STATE_KILLED:
-        with state._db.transaction() as cur:
+        with state._scope.transaction() as cur:
             ops.job.cancel(
                 cur, job_id=task.job_id, reason=error or "killed", endpoints=state._endpoints, health=state._health
             )
@@ -1049,7 +1049,7 @@ def transition_task(
             exit_code=exit_code,
         )
         return state
-    with state._db.transaction() as cur:
+    with state._scope.transaction() as cur:
         return apply_task_observations(
             cur,
             [
@@ -1075,7 +1075,7 @@ def transition_task(
 def fail_worker(state: ControllerTestState, worker_id: WorkerId, error: str) -> None:
     """Force-remove a worker via the explicit kill path used by the reaper thread."""
     ops.worker.fail(
-        state._db,
+        state._scope,
         worker_ids=[str(worker_id)],
         reason=error,
         health=state._health,

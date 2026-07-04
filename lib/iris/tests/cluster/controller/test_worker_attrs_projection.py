@@ -18,7 +18,7 @@ from sqlalchemy import insert, select
 
 def _insert_worker(state, worker_id: str, *, scale_group: str = "") -> WorkerId:
     """SA Core worker insertion used to drive the FK-cascade scenario."""
-    with state._db.transaction() as cur:
+    with state._scope.transaction() as cur:
         cur.execute(
             insert(workers_table).values(
                 worker_id=WorkerId(worker_id), address=f"{worker_id}.example:8080", scale_group=scale_group
@@ -30,7 +30,7 @@ def _insert_worker(state, worker_id: str, *, scale_group: str = "") -> WorkerId:
 def _insert_worker_attribute(state, worker_id: WorkerId, key: str, value: str) -> None:
     """SA Core string-typed attribute insertion. The projection update is
     registered via ``set`` so the in-memory cache matches the on-disk row."""
-    with state._db.transaction() as cur:
+    with state._scope.transaction() as cur:
         cur.execute(
             insert(worker_attributes_table).values(
                 worker_id=worker_id, key=key, value_type="str", str_value=value, int_value=None, float_value=None
@@ -66,7 +66,7 @@ def test_invalidate_drops_cache_entry_after_commit(state):
     _insert_worker_attribute(state, worker_id, "region", "us-east1")
     assert state._worker_attrs.get(worker_id) != {}
 
-    with state._db.transaction() as cur:
+    with state._scope.transaction() as cur:
         state._worker_attrs.invalidate_for_worker(cur, worker_id)
         # Hook fires post-commit; mid-tx the dict still has the entry.
         assert state._worker_attrs.get(worker_id) != {}
@@ -77,7 +77,7 @@ def test_invalidate_drops_cache_entry_after_commit(state):
 def test_rehydrate_reflects_disk_state(state):
     worker_id = _insert_worker(state, "w-rehydrate")
     # Insert SQL row only, no projection update — the cache is intentionally stale.
-    with state._db.transaction() as cur:
+    with state._scope.transaction() as cur:
         cur.execute(
             insert(worker_attributes_table).values(
                 worker_id=worker_id,
@@ -98,7 +98,7 @@ def test_rehydrate_scopes_to_owned_scale_group(state):
     worker_a = _insert_worker(state, "w-a", scale_group="sg-a")
     worker_b = _insert_worker(state, "w-b", scale_group="sg-b")
     for worker_id, zone in ((worker_a, "us-east1-a"), (worker_b, "us-east1-b")):
-        with state._db.transaction() as cur:
+        with state._scope.transaction() as cur:
             cur.execute(
                 insert(worker_attributes_table).values(
                     worker_id=worker_id, key="zone", value_type="str", str_value=zone, int_value=None, float_value=None
@@ -115,13 +115,13 @@ def test_rehydrate_scopes_to_owned_scale_group(state):
 def test_atomic_write_through_no_visibility_before_commit(state):
     """A reader inside the writer's transaction must not see the new attrs.
 
-    Tightens the contract: until the surrounding ``with state._db.transaction()``
+    Tightens the contract: until the surrounding ``with state._scope.transaction()``
     block exits and the SQL is committed, no observer can see the new dict
     entry. After exit, the entry is unconditionally visible.
     """
     worker_id = _insert_worker(state, "w-atomic")
 
-    with state._db.transaction() as cur:
+    with state._scope.transaction() as cur:
         cur.execute(
             insert(worker_attributes_table).values(
                 worker_id=worker_id,
@@ -146,7 +146,7 @@ def test_rollback_leaves_cache_untouched(state):
         pass
 
     with pytest.raises(BoomError):
-        with state._db.transaction() as cur:
+        with state._scope.transaction() as cur:
             cur.execute(
                 insert(worker_attributes_table).values(
                     worker_id=worker_id,

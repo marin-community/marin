@@ -151,7 +151,7 @@ def test_depth_boost_within_band():
             environment=parent_req.environment,
             replicas=1,
         )
-        with state._db.transaction() as cur:
+        with state._scope.transaction() as cur:
             ops.job.submit(
                 cur, job_id=child_id, request=child_req, ts=Timestamp.now(), run_template_cache=state._run_template_cache
             )
@@ -194,7 +194,7 @@ def test_child_resolves_parent_band_from_job_config():
             environment=parent_req.environment,
             replicas=1,
         )
-        with state._db.transaction() as cur:
+        with state._scope.transaction() as cur:
             ops.job.submit(
                 cur, job_id=child_id, request=child_req, ts=Timestamp.now(), run_template_cache=state._run_template_cache
             )
@@ -332,7 +332,7 @@ def test_get_priority_bands_resolves_via_parent_chain():
             environment=prod_req.environment,
             replicas=1,
         )
-        with state._db.transaction() as cur:
+        with state._scope.transaction() as cur:
             ops.job.submit(
                 cur, job_id=sub_id, request=sub_req, ts=Timestamp.now(), run_template_cache=state._run_template_cache
             )
@@ -347,7 +347,7 @@ def test_get_priority_bands_resolves_via_parent_chain():
             replicas=1,
             priority_band=job_pb2.PRIORITY_BAND_BATCH,
         )
-        with state._db.transaction() as cur:
+        with state._scope.transaction() as cur:
             ops.job.submit(
                 cur,
                 job_id=batch_sub_id,

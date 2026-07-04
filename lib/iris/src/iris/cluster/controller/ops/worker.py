@@ -12,7 +12,7 @@ from iris.cluster.constraints import AttributeValue
 from iris.cluster.controller import reads, writes
 from iris.cluster.controller.audit_logging import log_event
 from iris.cluster.controller.codec import proto_to_json
-from iris.cluster.controller.db import ControllerDB, Tx
+from iris.cluster.controller.db import Tx
 from iris.cluster.controller.projections.endpoints import EndpointsProjection
 from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
 from iris.cluster.controller.reconcile import ControllerEffects, ReconcileState
@@ -20,6 +20,7 @@ from iris.cluster.controller.reconcile.commit import commit_effects
 from iris.cluster.controller.reconcile.loader import TransitionReader, load_closed_snapshot
 from iris.cluster.controller.reconcile.worker import WorkerReconcilePlan, WorkerReconcileResult
 from iris.cluster.controller.schema import worker_attributes_table, workers_table
+from iris.cluster.controller.scope import ControllerScope, ScopedTx
 from iris.cluster.controller.worker_health import WorkerHealthTracker
 from iris.cluster.types import AttemptUid, JobName, WorkerId, get_gpu_count, get_tpu_count
 from iris.rpc import job_pb2
@@ -130,7 +131,7 @@ def register(
 
 
 def fail(
-    db: ControllerDB,
+    scope: ControllerScope,
     *,
     worker_ids: list[str],
     reason: str,
@@ -150,7 +151,7 @@ def fail(
     """
     if not worker_ids:
         return WorkerFailureBatchResult(removed_workers=[])
-    with db.read_snapshot() as snap:
+    with scope.read_snapshot() as snap:
         liveness = health.all()
         active_ids = sorted(
             {
@@ -177,7 +178,7 @@ def fail(
 
     for chunk_start in range(0, len(failures), FAIL_WORKERS_CHUNK_SIZE):
         chunk = failures[chunk_start : chunk_start + FAIL_WORKERS_CHUNK_SIZE]
-        with db.transaction() as cur:
+        with scope.transaction() as cur:
             now = Timestamp.now()
             # Re-check liveness inside the write tx: a concurrent reaper
             # may have already failed some workers since we snapshotted.
@@ -204,7 +205,7 @@ def fail(
 
 
 def _apply_worker_failures_chunk(
-    cur: Tx,
+    cur: ScopedTx,
     failures: list[tuple[WorkerId, str | None, str]],
     *,
     health: WorkerHealthTracker,

@@ -91,7 +91,7 @@ def test_client_set_federation_field_is_rejected_from_a_non_admin(state, log_cli
         controller=mock_controller,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
         log_client=log_client,
-        db=state._db,
+        scope=state._scope,
         endpoints=state._endpoints,
         endpoint_service=EndpointServiceImpl(db=state._db, endpoints=state._endpoints),
         auth=ControllerAuth(provider="test-provider"),

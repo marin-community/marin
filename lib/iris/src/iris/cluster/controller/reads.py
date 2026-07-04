@@ -20,13 +20,18 @@ Areas covered:
 """
 
 from collections.abc import Callable, Iterable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Protocol
 
 from rigging.timing import Timestamp
-from sqlalchemy import Integer, Row, bindparam, case, cast, exists, func, literal_column, select, tuple_
+from sqlalchemy import Row, bindparam, case, exists, func, literal_column, select, tuple_
 
 from iris.cluster.constraints import AttributeValue
+from iris.cluster.controller.attempt_counts import (
+    AttemptCounts,
+    failure_count_expr,
+    preemption_count_expr,
+)
 from iris.cluster.controller.codec import (
     device_counts_from_json,
     resource_spec_from_scalars,
@@ -239,8 +244,11 @@ _STATE_SORT_ORDER: dict[int, int] = {
     job_pb2.JOB_STATE_UNSCHEDULABLE: 7,
 }
 
-_AGG_FAILURES = func.coalesce(func.sum(tasks_table.c.failure_count), 0).label("agg_failures")
-_AGG_PREEMPTIONS = func.coalesce(func.sum(tasks_table.c.preemption_count), 0).label("agg_preemptions")
+# Job-level failure/preemption totals for the sort, derived from task_attempts
+# (the FROM in ``list_jobs`` outer-joins tasks → task_attempts when a count sort
+# is requested, so these aggregate a job's attempts across all its tasks).
+_AGG_FAILURES = failure_count_expr().label("agg_failures")
+_AGG_PREEMPTIONS = preemption_count_expr().label("agg_preemptions")
 
 _STATE_SORT_CASE = case(
     {state: order for state, order in _STATE_SORT_ORDER.items()},
@@ -368,7 +376,9 @@ def list_jobs(
         jobs_table.join(job_config_table, job_config_table.c.job_id == jobs_table.c.job_id)
     )
     if needs_task_agg:
-        stmt = stmt.outerjoin(tasks_table, tasks_table.c.job_id == jobs_table.c.job_id)
+        stmt = stmt.outerjoin(tasks_table, tasks_table.c.job_id == jobs_table.c.job_id).outerjoin(
+            task_attempts_table, task_attempts_table.c.task_id == tasks_table.c.task_id
+        )
 
     stmt = _apply_job_filters(
         stmt,
@@ -408,24 +418,36 @@ def list_jobs(
     return rows, total
 
 
+# Task-count / completed / state-histogram come from the ``tasks`` table; the
+# failure/preemption totals are supplied separately, derived from attempts (via
+# the AttemptCountsProjection cache) and merged in ``task_summaries_for_jobs``.
 _TASK_SUMMARIES_FOR_JOBS_STMT = (
     select(
         tasks_table.c.job_id,
         tasks_table.c.state,
         func.count().label("cnt"),
-        cast(func.coalesce(func.sum(tasks_table.c.failure_count), 0), Integer).label("total_failures"),
-        cast(func.coalesce(func.sum(tasks_table.c.preemption_count), 0), Integer).label("total_preemptions"),
     )
     .where(tasks_table.c.job_id.in_(bindparam("job_ids", expanding=True)))
     .group_by(tasks_table.c.job_id, tasks_table.c.state)
 )
 
 
-def task_summaries_for_jobs(tx: Tx, job_ids: Iterable[JobName]) -> dict[JobName, TaskJobSummary]:
-    """Return ``{job_id: TaskJobSummary}`` aggregating each job's tasks."""
+def task_summaries_for_jobs(
+    tx: Tx,
+    job_ids: Iterable[JobName],
+    *,
+    attempt_counts: Mapping[JobName, AttemptCounts] | None = None,
+) -> dict[JobName, TaskJobSummary]:
+    """Return ``{job_id: TaskJobSummary}`` aggregating each job's tasks.
+
+    ``attempt_counts`` carries the per-job failure/preemption totals derived from
+    ``task_attempts`` (typically from the cache); a job absent from it (or a
+    ``None`` map) contributes zero for those two counters.
+    """
     ids = list(job_ids)
     if not ids:
         return {}
+    counts = attempt_counts or {}
 
     rows = tx.execute(_TASK_SUMMARIES_FOR_JOBS_STMT, {"job_ids": ids}).all()
     summaries: dict[JobName, TaskJobSummary] = {}
@@ -438,11 +460,16 @@ def task_summaries_for_jobs(tx: Tx, job_ids: Iterable[JobName]) -> dict[JobName,
             job_id=jid,
             task_count=prev.task_count + cnt,
             completed_count=prev.completed_count + (cnt if state in _COMPLETED_TASK_STATES else 0),
-            failure_count=prev.failure_count + int(row.total_failures),
-            preemption_count=prev.preemption_count + int(row.total_preemptions),
             task_state_counts={**prev.task_state_counts, state: cnt},
         )
-    return summaries
+    return {
+        jid: replace(
+            summary,
+            failure_count=counts.get(jid, AttemptCounts()).failure_count,
+            preemption_count=counts.get(jid, AttemptCounts()).preemption_count,
+        )
+        for jid, summary in summaries.items()
+    }
 
 
 def parent_ids_with_children(tx: Tx, job_ids: Iterable[JobName]) -> set[JobName]:
@@ -796,8 +823,6 @@ PENDING_TASK_COLS = (
     local_tasks.c.backend_id,
     local_tasks.c.state,
     local_tasks.c.current_attempt_id,
-    local_tasks.c.failure_count,
-    local_tasks.c.preemption_count,
     local_tasks.c.max_retries_failure,
     local_tasks.c.max_retries_preemption,
     local_tasks.c.submitted_at_ms,
@@ -815,8 +840,6 @@ def _row_to_pending_task(row: Row) -> PendingTask:
         backend_id=str(row.backend_id),
         state=int(row.state),
         current_attempt_id=int(row.current_attempt_id),
-        failure_count=int(row.failure_count),
-        preemption_count=int(row.preemption_count),
         max_retries_failure=int(row.max_retries_failure),
         max_retries_preemption=int(row.max_retries_preemption),
         submitted_at_ms=row.submitted_at_ms,
@@ -979,6 +1002,55 @@ def bulk_get_attempts(
     return result
 
 
+def attempt_counts_for_tasks(tx: Tx, task_ids: Sequence[JobName]) -> dict[JobName, AttemptCounts]:
+    """Return ``{task_id: AttemptCounts}`` derived from each task's attempt rows.
+
+    Tasks with no attempts are absent from the map (callers default to zero).
+    """
+    ids = list(task_ids)
+    if not ids:
+        return {}
+    rows = tx.execute(
+        select(
+            task_attempts_table.c.task_id,
+            failure_count_expr().label("failure_count"),
+            preemption_count_expr().label("preemption_count"),
+        )
+        .where(task_attempts_table.c.task_id.in_(bindparam("task_ids", expanding=True)))
+        .group_by(task_attempts_table.c.task_id),
+        {"task_ids": ids},
+    ).all()
+    return {
+        row.task_id: AttemptCounts(failure_count=int(row.failure_count), preemption_count=int(row.preemption_count))
+        for row in rows
+    }
+
+
+def attempt_counts_for_jobs(tx: Tx, job_ids: Sequence[JobName]) -> dict[JobName, AttemptCounts]:
+    """Return ``{job_id: AttemptCounts}`` summing every task's derived counts per job.
+
+    Jobs with no attempt rows are absent from the map (callers default to zero).
+    """
+    ids = list(job_ids)
+    if not ids:
+        return {}
+    rows = tx.execute(
+        select(
+            tasks_table.c.job_id,
+            failure_count_expr().label("failure_count"),
+            preemption_count_expr().label("preemption_count"),
+        )
+        .select_from(tasks_table.join(task_attempts_table, task_attempts_table.c.task_id == tasks_table.c.task_id))
+        .where(tasks_table.c.job_id.in_(bindparam("job_ids", expanding=True)))
+        .group_by(tasks_table.c.job_id),
+        {"job_ids": ids},
+    ).all()
+    return {
+        row.job_id: AttemptCounts(failure_count=int(row.failure_count), preemption_count=int(row.preemption_count))
+        for row in rows
+    }
+
+
 def all_attempts_for_tasks(tx: Tx, task_ids: Sequence[JobName]) -> dict[JobName, tuple[object, ...]]:
     """Return ``{task_id: (attempt_row, ...)}`` with every attempt per task, ascending by attempt id.
 
@@ -1063,8 +1135,6 @@ TASK_DETAIL_COLS = (
     tasks_table.c.job_id,
     tasks_table.c.state,
     tasks_table.c.current_attempt_id,
-    tasks_table.c.failure_count,
-    tasks_table.c.preemption_count,
     tasks_table.c.max_retries_failure,
     tasks_table.c.max_retries_preemption,
     tasks_table.c.submitted_at_ms,
@@ -1092,16 +1162,54 @@ def task_detail_query():
     )
 
 
+def _task_detail_from_row(row, counts: AttemptCounts) -> TaskDetailRow:
+    """Assemble a :class:`TaskDetailRow` from a ``task_detail_query`` row plus its
+    derived attempt counts."""
+    return TaskDetailRow(
+        task_id=row.task_id,
+        job_id=row.job_id,
+        state=int(row.state),
+        current_attempt_id=int(row.current_attempt_id),
+        failure_count=counts.failure_count,
+        preemption_count=counts.preemption_count,
+        max_retries_failure=int(row.max_retries_failure),
+        max_retries_preemption=int(row.max_retries_preemption),
+        submitted_at_ms=row.submitted_at_ms,
+        priority_band=int(row.priority_band),
+        error=row.error,
+        exit_code=row.exit_code,
+        started_at_ms=row.started_at_ms,
+        finished_at_ms=row.finished_at_ms,
+        current_worker_id=row.current_worker_id,
+        current_worker_address=row.current_worker_address,
+        container_id=row.container_id,
+        backend_id=str(row.backend_id or ""),
+        cluster=str(row.cluster),
+        peer_worker_label=row.peer_worker_label,
+    )
+
+
 def get_task_detail(tx: Tx, task_id: JobName) -> TaskDetailRow | None:
-    """Return SA Row for ``task_id`` or None."""
-    return tx.execute(  # type: ignore[return-value]
+    """Return the :class:`TaskDetailRow` for ``task_id`` or None.
+
+    Failure/preemption counts are derived from the task's attempt rows.
+    """
+    row = tx.execute(
         task_detail_query().where(tasks_table.c.task_id == bindparam("task_id")),
         {"task_id": task_id},
     ).first()
+    if row is None:
+        return None
+    counts = attempt_counts_for_tasks(tx, [task_id]).get(task_id, AttemptCounts())
+    return _task_detail_from_row(row, counts)
 
 
 def bulk_get_task_detail(tx: Tx, task_ids: Iterable[JobName]) -> dict[JobName, TaskDetailRow]:
-    """Return ``{task_id: TaskDetailRow}`` for all ``task_ids`` that exist. Missing keys are silently absent."""
+    """Return ``{task_id: TaskDetailRow}`` for all ``task_ids`` that exist. Missing keys are silently absent.
+
+    Failure/preemption counts are derived from the tasks' attempt rows in one
+    aggregate query.
+    """
     ids = list(task_ids)
     if not ids:
         return {}
@@ -1109,7 +1217,8 @@ def bulk_get_task_detail(tx: Tx, task_ids: Iterable[JobName]) -> dict[JobName, T
         task_detail_query().where(tasks_table.c.task_id.in_(bindparam("task_ids", expanding=True))),
         {"task_ids": ids},
     ).all()
-    return {row.task_id: row for row in rows}  # type: ignore[return-value]
+    counts = attempt_counts_for_tasks(tx, [row.task_id for row in rows])
+    return {row.task_id: _task_detail_from_row(row, counts.get(row.task_id, AttemptCounts())) for row in rows}
 
 
 _ACTIVE_TASK_COLS = (
@@ -1118,8 +1227,6 @@ _ACTIVE_TASK_COLS = (
     local_tasks.c.state,
     local_tasks.c.current_attempt_id,
     local_tasks.c.current_worker_id,
-    local_tasks.c.failure_count,
-    local_tasks.c.preemption_count,
     local_tasks.c.max_retries_failure,
     local_tasks.c.max_retries_preemption,
     job_config_table.c.has_coscheduling,
@@ -1128,15 +1235,15 @@ _ACTIVE_TASK_COLS = (
 _ACTIVE_TASK_FROM = local_tasks.join(job_config_table, job_config_table.c.job_id == local_tasks.c.job_id)
 
 
-def _row_to_active_task(row) -> ActiveTaskRow:
+def _row_to_active_task(row, counts: AttemptCounts) -> ActiveTaskRow:
     return ActiveTaskRow(
         task_id=row.task_id,
         job_id=row.job_id,
         state=int(row.state),
         current_attempt_id=int(row.current_attempt_id),
         current_worker_id=row.current_worker_id,
-        failure_count=int(row.failure_count),
-        preemption_count=int(row.preemption_count),
+        failure_count=counts.failure_count,
+        preemption_count=counts.preemption_count,
         max_retries_failure=int(row.max_retries_failure),
         max_retries_preemption=int(row.max_retries_preemption),
         has_coscheduling=bool(row.has_coscheduling),
@@ -1209,7 +1316,8 @@ def list_active_tasks(
         stmt = stmt.limit(limit)
 
     rows = tx.execute(stmt, params).all()
-    return [_row_to_active_task(row) for row in rows]
+    counts = attempt_counts_for_tasks(tx, [row.task_id for row in rows])
+    return [_row_to_active_task(row, counts.get(row.task_id, AttemptCounts())) for row in rows]
 
 
 def list_active_tasks_for_jobs(
@@ -1239,9 +1347,10 @@ def list_active_tasks_for_jobs(
         )
     )
     rows = tx.execute(stmt, {"bulk_job_ids": ids, "active_states": list(states_tuple)}).all()
+    counts = attempt_counts_for_tasks(tx, [row.task_id for row in rows])
     lists: dict[JobName, list[ActiveTaskRow]] = {}
     for row in rows:
-        lists.setdefault(row.job_id, []).append(_row_to_active_task(row))
+        lists.setdefault(row.job_id, []).append(_row_to_active_task(row, counts.get(row.task_id, AttemptCounts())))
     for jid, task_rows in lists.items():
         result[jid] = tuple(task_rows)
     return result

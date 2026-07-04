@@ -343,8 +343,10 @@ tasks_table = Table(
     Column("finished_at_ms", TimestampMsType),
     Column("max_retries_failure", Integer, nullable=False),
     Column("max_retries_preemption", Integer, nullable=False),
-    Column("failure_count", Integer, nullable=False),
-    Column("preemption_count", Integer, nullable=False),
+    # failure_count / preemption_count are NOT stored: they are derived from the
+    # task's attempt rows (iris.cluster.controller.attempt_counts) and served from
+    # an in-memory cache. current_attempt_id stays denormalized — it is the live
+    # in-flight-attempt pointer, written atomically with each attempt insert.
     Column("current_attempt_id", Integer, nullable=False, server_default="-1"),
     Column("priority_neg_depth", Integer, nullable=False),
     Column("priority_root_submitted_ms", Integer, nullable=False),
@@ -386,13 +388,11 @@ tasks_table = Table(
     Index("idx_tasks_state", "state"),
     Index("idx_tasks_state_local", "state", sqlite_where=text(f"cluster = '{LOCAL_CLUSTER}'")),
     Index("idx_tasks_state_attempt", "state", "task_id", "current_attempt_id", "job_id"),
-    Index("idx_tasks_job_failures", "job_id", "failure_count", "preemption_count"),
     Index(
         "idx_tasks_current_worker",
         "current_worker_id",
         sqlite_where=text("current_worker_id IS NOT NULL"),
     ),
-    Index("idx_tasks_job_state_counts", "job_id", "state", "failure_count", "preemption_count"),
 )
 
 
@@ -443,6 +443,9 @@ task_attempts_table = Table(
     ),
     Index("idx_task_attempts_uid", "attempt_uid", unique=True),
     Index("idx_task_attempts_backend", "backend_id"),
+    # Covers the failure/preemption derivation (COUNT by state, filtered on
+    # started_at_ms), grouped per task — see iris.cluster.controller.attempt_counts.
+    Index("idx_task_attempts_task_state", "task_id", "state", "started_at_ms"),
 )
 
 

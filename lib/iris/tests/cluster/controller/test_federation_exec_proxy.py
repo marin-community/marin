@@ -108,7 +108,7 @@ def _make_service(
         controller=mock,
         bundle_store=BundleStore(storage_dir=str(tmp_path / subdir / "bundles")),
         log_client=log_client,
-        db=state._db,
+        scope=state._scope,
         endpoints=state._endpoints,
         endpoint_service=EndpointServiceImpl(db=state._db, endpoints=state._endpoints),
     )
@@ -120,7 +120,7 @@ def _attach_federation(parent_service: ControllerServiceImpl, connection: _Proxy
         "cw", PeerConfig(controller_address="http://peer:10000", dashboard_url="https://cw.dev"), connection
     )
     peer.probe()
-    store = ControllerFederationStore(parent_service._db, run_template_cache=RunTemplateCache(256))
+    store = ControllerFederationStore(parent_service._scope, run_template_cache=RunTemplateCache(256))
     manager = FederationManager([peer], threads=get_thread_container(), store=store, cluster_id="parent")
     parent_service._controller.federation = manager
     return manager
@@ -277,7 +277,7 @@ def test_exec_surfaces_the_peers_not_found_for_a_stale_mirror(tmp_path, log_clie
 
         # The peer drops the job; the parent does NOT sync, so its mirror still shows
         # the task running.
-        with peer_state._db.transaction() as cur:
+        with peer_state._scope.transaction() as cur:
             writes.delete_job(cur, job_id)
 
         with pytest.raises(ConnectError) as exc:
@@ -300,7 +300,7 @@ def test_tombstoned_handle_resolves_not_found_without_a_peer_round_trip(tmp_path
 
         # The peer prunes the job and the parent syncs the tombstone: its handle and
         # the mirrored task rows are dropped.
-        with peer_state._db.transaction() as cur:
+        with peer_state._scope.transaction() as cur:
             writes.delete_job(cur, job_id)
         manager.sync_once()
         assert _handle(parent_state, job_id) is None

@@ -41,7 +41,7 @@ def _mark_federated(state, job_id: JobName, *, task_states: dict[int, int]) -> N
     ``task_states``. This is the shape the future federation sync mirrors from
     the peer: rows present locally, but owned elsewhere.
     """
-    with state._db.transaction() as cur:
+    with state._scope.transaction() as cur:
         cur.execute(sa_update(jobs_table).where(jobs_table.c.job_id == job_id).values(cluster=PEER))
         cur.execute(
             sa_update(tasks_table)
@@ -78,7 +78,7 @@ def test_federated_pending_task_is_not_routed_or_dispatched(state):
 
     # Dispatch: the direct-provider drain is the canonical silent break — a
     # federated PENDING row would be promoted to ASSIGNED and run locally.
-    with state._db.transaction() as cur:
+    with state._scope.transaction() as cur:
         batch = dispatch.drain_for_dispatch(cur, cache=state._run_template_cache)
     dispatched = {r.task_id for r in batch.tasks_to_run}
     assert local_task.to_wire() in dispatched
@@ -99,7 +99,7 @@ def test_federated_tasks_excluded_from_budget_and_admission(state):
     local_job = JobName.root("test-user", "local-job")
     # A local RUNNING task is real budget spend (spend counts ACTIVE states);
     # its federated twin below must not add to the same total.
-    with state._db.transaction() as cur:
+    with state._scope.transaction() as cur:
         cur.execute(
             sa_update(tasks_table)
             .where((tasks_table.c.job_id == local_job) & (tasks_table.c.task_index == 1))
@@ -128,7 +128,7 @@ def test_federated_tasks_excluded_from_budget_and_admission(state):
 def test_federated_running_row_excluded_from_dispatch_poll_set(state):
     [local_task] = submit_direct_job(state, "local-run")
     # Promote the local task to ASSIGNED so it populates the null-worker poll set.
-    with state._db.transaction() as cur:
+    with state._scope.transaction() as cur:
         dispatch.drain_for_dispatch(cur, cache=state._run_template_cache)
 
     fed_job = JobName.root("test-user", "fed-run")
@@ -161,7 +161,7 @@ def test_federated_row_excluded_even_with_local_worker_attempt(state):
 
     now_ms = Timestamp.now().epoch_ms()
     long_ago = now_ms - 3_600_000
-    with state._db.transaction() as cur:
+    with state._scope.transaction() as cur:
         # Give it a local worker binding + a running attempt started an hour ago,
         # and a 1s job timeout, so a raw-`tasks` reader WOULD flag it.
         cur.execute(
@@ -202,7 +202,7 @@ def test_federated_terminal_job_is_not_pruned_locally(state):
     fed_done = JobName.root("test-user", "fed-done")
     _mark_federated(state, fed_done, task_states={0: job_pb2.TASK_STATE_SUCCEEDED})
 
-    with state._db.transaction() as cur:
+    with state._scope.transaction() as cur:
         for job_id in (local_done, fed_done):
             cur.execute(
                 sa_update(jobs_table)
@@ -216,7 +216,7 @@ def test_federated_terminal_job_is_not_pruned_locally(state):
         first = reads.find_prunable_job(tx, TERMINAL_JOB_STATES, cutoff)
     assert first == local_done
 
-    with state._db.transaction() as cur:
+    with state._scope.transaction() as cur:
         cur.execute(tasks_table.delete().where(tasks_table.c.job_id == local_done))
         cur.execute(jobs_table.delete().where(jobs_table.c.job_id == local_done))
 

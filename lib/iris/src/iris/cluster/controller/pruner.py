@@ -21,11 +21,12 @@ from dataclasses import dataclass
 
 from rigging.timing import Duration, Timestamp
 
-from iris.cluster.controller import reads, writes
+from iris.cluster.controller import ops, reads, writes
 from iris.cluster.controller.audit_logging import log_event
 from iris.cluster.controller.backend import TaskBackend
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.projections.endpoints import EndpointsProjection
+from iris.cluster.controller.scope import ControllerScope
 from iris.cluster.types import TERMINAL_JOB_STATES
 
 logger = logging.getLogger(__name__)
@@ -50,20 +51,24 @@ def _stopped(stop_event: threading.Event | None) -> bool:
 
 
 def _prune_terminal_jobs(
-    db: ControllerDB, endpoints: EndpointsProjection, cutoff_ms: int, stop_event: threading.Event | None, pause: float
+    scope: ControllerScope,
+    endpoints: EndpointsProjection,
+    cutoff_ms: int,
+    stop_event: threading.Event | None,
+    pause: float,
 ) -> int:
     """Delete terminal jobs finished before ``cutoff_ms``, one CASCADE (tasks → attempts) at a time."""
     deleted = 0
     while not _stopped(stop_event):
-        with db.read_snapshot() as snap:
+        with scope.read_snapshot() as snap:
             job_name = reads.find_prunable_job(snap, TERMINAL_JOB_STATES, Timestamp.from_ms(cutoff_ms))
         if job_name is None:
             break
-        with db.transaction() as cur:
+        with scope.transaction() as cur:
             # Invalidate endpoint cache BEFORE the CASCADE so the cache
             # drops rows SQLite is about to delete for us.
             endpoints.remove_by_job_ids(cur, [job_name])
-            writes.delete_job(cur, job_name)
+            ops.job.purge_job(cur, job_name)
         log_event("job_pruned", job_name.to_wire())
         deleted += 1
         time.sleep(pause)
@@ -123,7 +128,7 @@ def _sweep_expired_endpoints(db: ControllerDB, endpoints: EndpointsProjection, n
 
 
 def prune_old_data(
-    db: ControllerDB,
+    scope: ControllerScope,
     backends: Iterable[TaskBackend],
     endpoints: EndpointsProjection,
     *,
@@ -140,7 +145,8 @@ def prune_old_data(
     scheduling and heartbeats proceed.
 
     Args:
-        db: Controller database handle.
+        scope: Controller scope — job pruning routes through it so each CASCADE also
+            drops the job's derived-count memo; slice/endpoint prunes use ``scope.db``.
         backends: The backends, each of which garbage-collects its own dead workers.
         endpoints: Endpoints projection invalidated before each job CASCADE.
         job_retention: Delete terminal jobs whose finished_at is older than this.
@@ -149,10 +155,11 @@ def prune_old_data(
         stop_event: If set, abort early (e.g. during shutdown).
         pause_between_s: Sleep between individual deletes to reduce lock contention.
     """
+    db = scope.db
     now = Timestamp.now()
     now_ms = now.epoch_ms()
     result = PruneResult(
-        jobs_deleted=_prune_terminal_jobs(db, endpoints, now_ms - job_retention.to_ms(), stop_event, pause_between_s),
+        jobs_deleted=_prune_terminal_jobs(scope, endpoints, now_ms - job_retention.to_ms(), stop_event, pause_between_s),
         workers_deleted=_prune_dead_workers(backends, now_ms - worker_retention.to_ms(), stop_event, pause_between_s),
         slices_deleted=_prune_orphan_slices(db, now_ms - slice_retention.to_ms(), stop_event, pause_between_s),
         endpoints_deleted=_sweep_expired_endpoints(db, endpoints, now),

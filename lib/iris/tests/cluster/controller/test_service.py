@@ -79,7 +79,7 @@ def _register_worker(state: ControllerTestState, worker_id: WorkerId) -> None:
         memory_bytes=16 * 1024**3,
         disk_bytes=100 * 1024**3,
     )
-    with state._db.transaction() as cur:
+    with state._scope.transaction() as cur:
         ops.worker.register(
             cur,
             worker_id=worker_id,
@@ -92,7 +92,7 @@ def _register_worker(state: ControllerTestState, worker_id: WorkerId) -> None:
 
 
 def _set_job_state(state: ControllerTestState, job_id: JobName, state_value: int) -> None:
-    with state._db.transaction() as cur:
+    with state._scope.transaction() as cur:
         cur.execute(sa_update(jobs_table).where(jobs_table.c.job_id == job_id).values(state=state_value))
 
 
@@ -104,9 +104,9 @@ def _assign_and_transition(
     *,
     error: str | None = None,
 ) -> None:
-    with state._db.transaction() as cur:
+    with state._scope.transaction() as cur:
         ops.task.assign(cur, [Assignment(task_id=task_id, worker_id=worker_id)], health=state._health)
-    with state._db.transaction() as cur:
+    with state._scope.transaction() as cur:
         apply_task_observations(
             cur,
             [
@@ -120,7 +120,7 @@ def _assign_and_transition(
             now=Timestamp.now(),
         )
     if target_state != job_pb2.TASK_STATE_RUNNING:
-        with state._db.transaction() as cur:
+        with state._scope.transaction() as cur:
             apply_task_observations(
                 cur,
                 [
@@ -218,7 +218,7 @@ def test_launch_job_pinned_backend_checks_only_that_backend(service):
 def test_profile_worker_routes_to_worker_backend(service, state):
     """ProfileTask on /system/worker/<id> dispatches to the worker's backend
     (resolved from its scale group), not the representative backend."""
-    with state._db.transaction() as cur:
+    with state._scope.transaction() as cur:
         ops.worker.register(
             cur,
             worker_id=WorkerId("w-cw"),
@@ -420,7 +420,7 @@ def test_launch_job_rejects_exceeding_per_user_task_cap(service, state, monkeypa
     assert _query_job(state, JobName.root("test-user", "job-b")) is None
 
     # Finishing job-a's tasks frees the budget; the resubmission now succeeds.
-    with state._db.transaction() as cur:
+    with state._scope.transaction() as cur:
         cur.execute(
             sa_update(tasks_table)
             .where(tasks_table.c.job_id == JobName.root("test-user", "job-a"))
@@ -544,7 +544,7 @@ def test_existing_job_policy_keep_drains_unfinalized_child_attempt(service, stat
     _register_worker(state, worker)
     child_task = _query_tasks_with_attempts(state, child_job)[0]
     _assign_and_transition(state, child_task.task_id, worker, job_pb2.TASK_STATE_RUNNING)
-    with state._db.transaction() as cur:
+    with state._scope.transaction() as cur:
         finalize(
             cur,
             [TerminalDecision(TerminalKind.PREEMPT, child_task.task_id, "evicted by prod tenant")],
@@ -571,7 +571,7 @@ def test_existing_job_policy_keep_drains_unfinalized_child_attempt(service, stat
         # have eventually sent. Stamping finished_at_ms releases the predicate
         # ``_wait_until_job_drained`` polls.
         child_task_after_preempt = _query_tasks_with_attempts(state, child_job)[0]
-        with state._db.transaction() as cur:
+        with state._scope.transaction() as cur:
             # Heartbeat-equivalent stamp: set finished_at_ms (COALESCE preserves
             # any earlier stamp) and final state so the drain predicate fires.
             cur.execute(
@@ -614,7 +614,7 @@ def test_existing_job_policy_keep_force_reaps_after_drain_wait(service, state, m
     _register_worker(state, worker)
     child_task = _query_tasks_with_attempts(state, child_job)[0]
     _assign_and_transition(state, child_task.task_id, worker, job_pb2.TASK_STATE_RUNNING)
-    with state._db.transaction() as cur:
+    with state._scope.transaction() as cur:
         finalize(
             cur,
             [TerminalDecision(TerminalKind.PREEMPT, child_task.task_id, "evicted, worker stuck")],
@@ -680,7 +680,7 @@ def test_get_job_status_reports_has_children(service, state):
         environment=job_pb2.EnvironmentConfig(),
     )
     child_req.entrypoint.run_command.argv[:] = ["python", "-c", "pass"]
-    with state._db.transaction() as cur:
+    with state._scope.transaction() as cur:
         ops.job.submit(
             cur, job_id=child_id, request=child_req, ts=Timestamp.now(), run_template_cache=state._run_template_cache
         )
@@ -969,7 +969,7 @@ def test_terminate_job_rejected_for_non_owner(state, mock_controller, tmp_path, 
         controller=mock_controller,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles_owner")),
         log_client=log_client,
-        db=state._db,
+        scope=state._scope,
         endpoints=state._endpoints,
         auth=ControllerAuth(provider="static"),
         endpoint_service=EndpointServiceImpl(db=state._db, endpoints=state._endpoints),
@@ -997,7 +997,7 @@ def test_launch_child_job_rejected_for_non_owner(state, mock_controller, tmp_pat
         controller=mock_controller,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles_child")),
         log_client=log_client,
-        db=state._db,
+        scope=state._scope,
         endpoints=state._endpoints,
         auth=ControllerAuth(provider="static"),
         endpoint_service=EndpointServiceImpl(db=state._db, endpoints=state._endpoints),
@@ -1296,7 +1296,7 @@ def test_list_jobs_all_scope_includes_descendants(service, state):
         environment=job_pb2.EnvironmentConfig(),
     )
     child_req.entrypoint.run_command.argv[:] = ["python", "-c", "pass"]
-    with state._db.transaction() as cur:
+    with state._scope.transaction() as cur:
         ops.job.submit(
             cur, job_id=child_id, request=child_req, ts=Timestamp.now(), run_template_cache=state._run_template_cache
         )
@@ -1323,7 +1323,7 @@ def test_list_jobs_job_query_roots_and_children(service, state):
         environment=job_pb2.EnvironmentConfig(),
     )
     child_req.entrypoint.run_command.argv[:] = ["python", "-c", "pass"]
-    with state._db.transaction() as cur:
+    with state._scope.transaction() as cur:
         ops.job.submit(
             cur, job_id=child_id, request=child_req, ts=Timestamp.now(), run_template_cache=state._run_template_cache
         )
@@ -1429,7 +1429,7 @@ def test_list_workers_returns_all(service, state):
 
 
 def _register_workers_for_query(service, state, *, count_cpu: int, count_gpu: int) -> None:
-    with state._db.transaction() as _tx:
+    with state._scope.transaction() as _tx:
         writes.ensure_user(_tx, "system:worker", Timestamp.now(), role="worker")
     token = _verified_identity.set(VerifiedIdentity(user_id="system:worker", role="worker"))
     try:
@@ -1611,7 +1611,7 @@ def test_register_requires_worker_role(state, mock_controller, tmp_path, log_cli
         controller=mock_controller,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
         log_client=log_client,
-        db=state._db,
+        scope=state._scope,
         endpoints=state._endpoints,
         auth=auth,
         endpoint_service=EndpointServiceImpl(db=state._db, endpoints=state._endpoints),
@@ -1645,7 +1645,7 @@ def test_register_allows_worker_role(state, mock_controller, tmp_path, log_clien
         controller=mock_controller,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
         log_client=log_client,
-        db=state._db,
+        scope=state._scope,
         endpoints=state._endpoints,
         auth=auth,
         endpoint_service=EndpointServiceImpl(db=state._db, endpoints=state._endpoints),
@@ -1723,13 +1723,13 @@ def test_get_scheduler_state_with_running_task(controller_service, state):
         environment=job_pb2.EnvironmentConfig(),
         replicas=1,
     )
-    with state._db.transaction() as cur:
+    with state._scope.transaction() as cur:
         ops.job.submit(
             cur, job_id=job_id, request=request, ts=Timestamp.now(), run_template_cache=state._run_template_cache
         )
 
     w1 = WorkerId("w1")
-    with state._db.transaction() as cur:
+    with state._scope.transaction() as cur:
         ops.worker.register(
             cur,
             worker_id=w1,
@@ -1904,8 +1904,10 @@ def test_list_tasks_surfaces_latest_failed_attempt_after_retry(service, state):
     the listing attached only the current attempt, so a task that failed and was
     then retried (current attempt running) showed no failure at all. The listing
     now also attaches the *most recent* failed attempt — only the latest, so a
-    task stuck in a long retry loop doesn't ship thousands of rows — and carries
-    the authoritative ``failure_count`` for the count badge.
+    task stuck in a long retry loop doesn't ship thousands of rows. The per-task
+    failure count is no longer a proto scalar (it is derived from ``task_attempts``
+    and the wire no longer carries it); the client counts the attached failed
+    attempts instead.
     """
     request = make_job_request("list-tasks-failed-history")
     service.launch_job(request, None)
@@ -1918,7 +1920,7 @@ def test_list_tasks_surfaces_latest_failed_attempt_after_retry(service, state):
     _assign_and_transition(state, task_id, worker_id, job_pb2.TASK_STATE_FAILED, error="boom: first")
 
     now = Timestamp.now()
-    with state._db.transaction() as cur:
+    with state._scope.transaction() as cur:
         cur.execute(
             task_attempts_table.insert().values(
                 task_id=task_id,
@@ -1949,7 +1951,6 @@ def test_list_tasks_surfaces_latest_failed_attempt_after_retry(service, state):
             .values(
                 state=job_pb2.TASK_STATE_RUNNING,
                 current_attempt_id=2,
-                failure_count=2,
                 error=None,
                 exit_code=None,
             )
@@ -1964,7 +1965,6 @@ def test_list_tasks_surfaces_latest_failed_attempt_after_retry(service, state):
     # The task reads as running, but its latest failure is still surfaced.
     assert proto.state == job_pb2.TASK_STATE_RUNNING
     assert proto.current_attempt_id == 2
-    assert proto.failure_count == 2
     by_id = {a.attempt_id: a for a in proto.attempts}
     # Only the latest failed attempt (1) plus the current attempt (2): the older
     # failure (0) is dropped so a long retry loop stays bounded.

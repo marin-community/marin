@@ -187,6 +187,7 @@ class Tx:
 def write_transaction(
     write_engine: Engine,
     write_lock: threading.RLock,
+    tx_factory: Callable[[Connection], Tx] = Tx,
 ) -> Iterator[Tx]:
     """Open a write transaction backed by ``write_engine``.
 
@@ -194,13 +195,18 @@ def write_transaction(
     ``BEGIN IMMEDIATE``, yields a ``Tx``, and commits on clean exit.
     Post-commit hooks registered via ``Tx.register`` fire **while the
     lock is still held** so in-memory caches stay consistent with the DB.
+
+    ``tx_factory`` builds the cursor from the raw connection; it defaults to the
+    raw :class:`Tx` so this module stays free of any higher-layer imports. A
+    caller that threads a richer cursor (e.g. ``ScopedTx`` carrying projection
+    caches) injects its own factory — see :mod:`iris.cluster.controller.scope`.
     """
     write_lock.acquire()
     conn: Connection | None = None
     try:
         conn = write_engine.connect()
         conn.execute(text("BEGIN IMMEDIATE"))
-        tx = Tx(conn)
+        tx = tx_factory(conn)
         try:
             yield tx
         except Exception:
@@ -215,19 +221,23 @@ def write_transaction(
 
 
 @contextmanager
-def read_snapshot(read_engine: Engine) -> Iterator[Tx]:
+def read_snapshot(read_engine: Engine, tx_factory: Callable[[Connection], Tx] = Tx) -> Iterator[Tx]:
     """Open a read-only snapshot against ``read_engine``.
 
     ``query_only`` is pinned at connect time on the read engine, so this
     path only pays for the BEGIN/ROLLBACK round-trips per call. Yields a
     ``Tx`` over a pooled connection and rolls back on exit so the
     snapshot does not leak into the next checkout from the pool.
+
+    ``tx_factory`` builds the cursor (see :func:`write_transaction`); it defaults
+    to the raw :class:`Tx`. Read handlers that consult projection caches inject a
+    richer cursor factory; the standalone rehydrate callers use the default.
     """
     conn = read_engine.connect()
     try:
         conn.execute(text("BEGIN"))
         try:
-            yield Tx(conn)
+            yield tx_factory(conn)
         finally:
             conn.execute(text("ROLLBACK"))
     finally:
@@ -356,30 +366,31 @@ class ControllerDB:
         self._sa_auth_read_engine.dispose()
 
     @contextmanager
-    def transaction(self) -> Iterator[Tx]:
-        """Open an IMMEDIATE write transaction and yield a ``Tx``.
+    def transaction(self, tx_factory: Callable[[Connection], Tx] = Tx) -> Iterator[Tx]:
+        """Open an IMMEDIATE write transaction and yield a cursor.
 
         On successful commit, any hooks registered via ``Tx.register``
         fire while the write lock is still held — keeping in-memory caches
         in sync with the DB without exposing a torn snapshot to concurrent
-        readers.
+        readers. ``tx_factory`` (default raw :class:`Tx`) lets a higher layer
+        thread a richer cursor without this module depending on it.
         """
-        with write_transaction(self._sa_write_engine, self._lock) as tx:
+        with write_transaction(self._sa_write_engine, self._lock, tx_factory) as tx:
             yield tx
 
     @contextmanager
-    def read_snapshot(self) -> Iterator[Tx]:
+    def read_snapshot(self, tx_factory: Callable[[Connection], Tx] = Tx) -> Iterator[Tx]:
         """Read-only snapshot that does NOT acquire the write lock.
 
         Uses a pooled read-only connection with WAL isolation. Safe for
         concurrent use from dashboard/RPC threads while the scheduling
         loop holds the write lock.
         """
-        with read_snapshot(self._sa_read_engine) as tx:
+        with read_snapshot(self._sa_read_engine, tx_factory) as tx:
             yield tx
 
     @contextmanager
-    def control_read_snapshot(self) -> Iterator[Tx]:
+    def control_read_snapshot(self, tx_factory: Callable[[Connection], Tx] = Tx) -> Iterator[Tx]:
         """Read-only snapshot for the control loop, backed by a dedicated engine.
 
         Identical to :meth:`read_snapshot` but checks out from the control-only
@@ -388,11 +399,11 @@ class ControllerDB:
         (the single control-loop thread, or the scheduling/autoscaler loops on
         the legacy path).
         """
-        with read_snapshot(self._sa_control_read_engine) as tx:
+        with read_snapshot(self._sa_control_read_engine, tx_factory) as tx:
             yield tx
 
     @contextmanager
-    def auth_read_snapshot(self) -> Iterator[Tx]:
+    def auth_read_snapshot(self, tx_factory: Callable[[Connection], Tx] = Tx) -> Iterator[Tx]:
         """Read-only snapshot backed by the auth DB (auth.sqlite3) directly.
 
         Auth tables live in a separate SQLite file. Read connections from
@@ -400,7 +411,7 @@ class ControllerDB:
         must not see auth tables). Use this context manager for auth-only
         read queries so they remain non-blocking while the write lock is free.
         """
-        with read_snapshot(self._sa_auth_read_engine) as tx:
+        with read_snapshot(self._sa_auth_read_engine, tx_factory) as tx:
             yield tx
 
     def apply_migrations(self) -> None:

@@ -584,8 +584,6 @@ def task_row(
         "finished_at_ms": None,
         "max_retries_failure": max_retries_failure,
         "max_retries_preemption": max_retries_preemption,
-        "failure_count": 0,
-        "preemption_count": 0,
         "current_attempt_id": -1,
         "priority_neg_depth": priority_neg_depth,
         "priority_root_submitted_ms": priority_root_submitted_ms,
@@ -866,8 +864,6 @@ def mirror_federated_task(
     submitted_at_ms: int | None,
     started_at_ms: int | None,
     finished_at_ms: int | None,
-    failure_count: int,
-    preemption_count: int,
     current_attempt_id: int,
     worker_address: str,
     peer_worker_label: str,
@@ -876,9 +872,11 @@ def mirror_federated_task(
 
     Priority/retry columns are placeholders — a federated task is fold-excluded
     and never scheduled locally — so only the display fields the task views read
-    are meaningful. ``submitted_at_ms`` and ``preemption_count`` carry the peer's
-    real values so a not-yet-started task keeps its true submit time (not epoch 0)
-    and preemptions on the peer survive the mirror.
+    are meaningful. ``submitted_at_ms`` carries the peer's real value so a
+    not-yet-started task keeps its true submit time (not epoch 0). Failure and
+    preemption counts are NOT mirrored as scalars: the parent derives them from
+    the mirrored attempt rows (:func:`mirror_federated_attempts`), so they stay
+    consistent with the peer without a second source of truth on the wire.
     """
     tx.execute(
         sqlite_insert(tasks_table)
@@ -894,8 +892,6 @@ def mirror_federated_task(
             finished_at_ms=finished_at_ms,
             max_retries_failure=0,
             max_retries_preemption=0,
-            failure_count=failure_count,
-            preemption_count=preemption_count,
             current_attempt_id=current_attempt_id,
             current_worker_id=None,
             current_worker_address=worker_address,
@@ -914,8 +910,6 @@ def mirror_federated_task(
                 "submitted_at_ms": submitted_at_ms or 0,
                 "started_at_ms": started_at_ms,
                 "finished_at_ms": finished_at_ms,
-                "failure_count": failure_count,
-                "preemption_count": preemption_count,
                 "current_attempt_id": current_attempt_id,
                 "current_worker_address": worker_address,
                 "cluster": peer_id,

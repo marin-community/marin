@@ -167,7 +167,7 @@ def _submit_pending_task(state: ControllerTestState, job: str = "mint-job") -> J
 
 
 def _insert_attempt(state: ControllerTestState, task_id: JobName, attempt_id: int) -> str:
-    with state._db.transaction() as cur:
+    with state._scope.transaction() as cur:
         return writes.insert_attempt(
             cur,
             task_id=task_id,
@@ -724,7 +724,7 @@ def _setup_assigned_task(state: ControllerTestState, worker_id: str = _W1) -> tu
     register_worker(state, worker_id, f"{worker_id}:8080", make_worker_metadata())
     tasks = submit_job(state, "test-job", make_job_request(name="test-job"))
     task_row = tasks[0]
-    with state._db.transaction() as cur:
+    with state._scope.transaction() as cur:
         ops.task.assign(cur, [Assignment(task_id=task_row.task_id, worker_id=wid)], health=state._health)
     refreshed = query_task(state, task_row.task_id)
     assert refreshed is not None
@@ -758,7 +758,7 @@ def _apply_observations(
         ]
         plan = _make_plan(worker_id, desired=desired)
     result = WorkerReconcileResult(worker_id=WorkerId(worker_id), observations=observations, error=None)
-    with state._db.transaction() as cur:
+    with state._scope.transaction() as cur:
         return commit_reconcile(
             cur,
             [(plan, result)],
@@ -774,7 +774,7 @@ def _apply_failure(
     error: str,
 ):
     result = WorkerReconcileResult(worker_id=WorkerId(worker_id), observations=[], error=error)
-    with state._db.transaction() as cur:
+    with state._scope.transaction() as cur:
         return commit_reconcile(
             cur,
             [(plan, result)],
@@ -914,7 +914,7 @@ def test_stale_running_observation_does_not_revive_cancelled_task():
     """RUNNING after cancellation must not roll the task forward."""
     with make_controller_state() as state:
         task_id, _attempt_id, uid = _setup_running_task(state)
-        with state._db.transaction() as cur:
+        with state._scope.transaction() as cur:
             task_row = query_task(state, task_id)
             assert task_row is not None
             ops.job.cancel(cur, job_id=task_row.job_id, reason="user_cancel", endpoints=state._endpoints)
@@ -1012,7 +1012,7 @@ def test_coscheduled_sibling_cascade_fires_on_terminal_observation():
         assert len(tasks) == 2
         task_id_1, task_id_2 = tasks[0].task_id, tasks[1].task_id
 
-        with state._db.transaction() as cur:
+        with state._scope.transaction() as cur:
             ops.task.assign(
                 cur,
                 [
@@ -1030,7 +1030,7 @@ def test_coscheduled_sibling_cascade_fires_on_terminal_observation():
             (wid1, task_id_1, attempt_id_1),
             (wid2, task_id_2, attempt_id_2),
         ]:
-            with state._db.transaction() as cur:
+            with state._scope.transaction() as cur:
                 apply_task_observations(
                     cur,
                     [
@@ -1066,7 +1066,7 @@ def _observations_to_updates(
     observations: list[worker_pb2.Worker.AttemptObservation],
 ) -> list[TaskUpdate]:
     uids = [AttemptUid(obs.attempt_uid) for obs in observations if obs.attempt_uid]
-    with state._db.transaction() as cur:
+    with state._scope.transaction() as cur:
         snapshot = load_closed_snapshot(cur, now=Timestamp.now(), observation_uids=uids)
         return worker_observations_to_updates(snapshot, observations)
 
@@ -1270,7 +1270,7 @@ def test_e2e_converges_to_succeeded(make_controller):
     tasks = submit_job(state, "e2e-job", make_job_request(name="e2e-job"))
     task_id = tasks[0].task_id
 
-    with state._db.transaction() as cur:
+    with state._scope.transaction() as cur:
         ops.task.assign(cur, [Assignment(task_id=task_id, worker_id=wid)], health=state._health)
 
     # Tick 1: ASSIGNED — controller dispatches the inline spec.
@@ -1322,7 +1322,7 @@ def test_e2e_missing_observation_on_assigned_task_retries_to_pending(make_contro
     tasks = submit_job(state, "missing-job", make_job_request(name="missing-job"))
     task_id = tasks[0].task_id
 
-    with state._db.transaction() as cur:
+    with state._scope.transaction() as cur:
         ops.task.assign(cur, [Assignment(task_id=task_id, worker_id=wid)], health=state._health)
 
     reconcile_once(ctrl)
@@ -1627,7 +1627,7 @@ def test_reconcile_reaps_worker_at_build_failure_threshold(make_controller):
             max_retries_failure=BUILD_FAILURE_THRESHOLD,
         ),
     )
-    with state._db.transaction() as cur:
+    with state._scope.transaction() as cur:
         ops.task.assign(
             cur,
             [Assignment(task_id=task.task_id, worker_id=wid) for task in tasks],
@@ -1704,7 +1704,7 @@ def _setup_coscheduled_running_pair(
     assert len(tasks) == 2
     t0, t1 = tasks[0].task_id, tasks[1].task_id
 
-    with state._db.transaction() as cur:
+    with state._scope.transaction() as cur:
         ops.task.assign(
             cur,
             [Assignment(task_id=t0, worker_id=wid1), Assignment(task_id=t1, worker_id=wid2)],
@@ -1716,7 +1716,7 @@ def _setup_coscheduled_running_pair(
     running = [WorkerTaskUpdates(wid1, [TaskUpdate(t0, a0, job_pb2.TASK_STATE_RUNNING)])]
     if not sibling_assigned:
         running.append(WorkerTaskUpdates(wid2, [TaskUpdate(t1, a1, job_pb2.TASK_STATE_RUNNING)]))
-    with state._db.transaction() as cur:
+    with state._scope.transaction() as cur:
         apply_task_observations(
             cur,
             running,
@@ -1760,7 +1760,7 @@ def _apply_batch(
     iterates it in order), so it controls which worker is seen first.
     """
     plan_results = [(plans[r.worker_id], r) for r in results]
-    with state._db.transaction() as cur:
+    with state._scope.transaction() as cur:
         return commit_reconcile(
             cur,
             plan_results,
@@ -1799,9 +1799,10 @@ def test_coscheduled_running_repoll_does_not_revive_after_sibling_requeue():
         # stays PENDING (its RUNNING re-poll is dropped, not applied to revive it).
         assert query_task(state, pair.t0).state == job_pb2.TASK_STATE_PENDING
         assert query_task(state, pair.t1).state == job_pb2.TASK_STATE_PENDING
-        # The sibling's old attempt is terminal (PREEMPTED) in the overlay; the
-        # re-poll must not revive it back to RUNNING.
-        assert query_attempt(state, pair.t1, pair.a1).state == job_pb2.TASK_STATE_PREEMPTED
+        # The sibling's old attempt is terminal (COSCHED_FAILED — it was bounced
+        # by its gang peer's failure, not preempted) in the overlay; the re-poll
+        # must not revive it back to RUNNING.
+        assert query_attempt(state, pair.t1, pair.a1).state == job_pb2.TASK_STATE_COSCHED_FAILED
 
 
 def test_coscheduled_rpc_failure_does_not_split_slice():
@@ -1885,4 +1886,8 @@ def test_reconcile_batch_order_independent_coscheduled_failure(trigger_first):
     assert observed == reference
     assert observed["t0_state"] == job_pb2.TASK_STATE_PENDING
     assert observed["t1_state"] == job_pb2.TASK_STATE_PENDING
-    assert observed["t1_attempt_state"] == job_pb2.TASK_STATE_PREEMPTED
+    # The bounced sibling is stamped COSCHED_FAILED, not PREEMPTED: it was
+    # requeued because its gang peer failed, so deriving preemption_count from
+    # attempts must not charge it (see reconcile/peers.requeue_coscheduled_siblings).
+    assert observed["t1_attempt_state"] == job_pb2.TASK_STATE_COSCHED_FAILED
+    assert observed["t1_preemption_count"] == 0

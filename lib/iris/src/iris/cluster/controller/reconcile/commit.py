@@ -29,6 +29,7 @@ from iris.cluster.controller.reconcile.effects import (
     TaskRowDelta,
 )
 from iris.cluster.controller.schema import jobs_table, task_attempts_table, tasks_table
+from iris.cluster.controller.scope import ScopedTx
 from iris.cluster.controller.task_state import ACTIVE_TASK_STATES
 from iris.cluster.controller.writes import record_federation_change
 from iris.rpc import job_pb2
@@ -57,10 +58,6 @@ def _flush_tasks(cur: Tx, deltas: list[TaskRowDelta]) -> None:
             "b_exit_code": d.exit_code,
             "b_started_at": d.started_at.epoch_ms() if d.started_at is not None else None,
             "b_finished_at": d.finished_at.epoch_ms() if d.finished_at is not None else None,
-            # failure/preemption counts are set unconditionally; None means
-            # "leave column unchanged" via coalesce(new, col).
-            "b_failure_count": d.failure_count,
-            "b_preemption_count": d.preemption_count,
         }
         if d.state in ACTIVE_TASK_STATES:
             active_params.append(params)
@@ -75,8 +72,6 @@ def _flush_tasks(cur: Tx, deltas: list[TaskRowDelta]) -> None:
         "exit_code": func.coalesce(bindparam("b_exit_code"), tasks_table.c.exit_code),
         "started_at_ms": func.coalesce(tasks_table.c.started_at_ms, bindparam("b_started_at")),
         "finished_at_ms": bindparam("b_finished_at"),
-        "failure_count": func.coalesce(bindparam("b_failure_count"), tasks_table.c.failure_count),
-        "preemption_count": func.coalesce(bindparam("b_preemption_count"), tasks_table.c.preemption_count),
     }
 
     if active_params:
@@ -105,7 +100,7 @@ def _flush_tasks(cur: Tx, deltas: list[TaskRowDelta]) -> None:
         record_federation_change(cur, d.task_id.parent, task_index=d.task_id.task_index)
 
 
-def _flush_attempts(cur: Tx, deltas: list[AttemptRowDelta]) -> None:
+def _flush_attempts(cur: ScopedTx, deltas: list[AttemptRowDelta]) -> None:
     """Bulk-flush attempt deltas. Rows where nothing is set are skipped.
 
     All set columns use the same statement shape (uniform bound params); a None
@@ -147,6 +142,9 @@ def _flush_attempts(cur: Tx, deltas: list[AttemptRowDelta]) -> None:
         ),
         params,
     )
+    # An attempt's state / started_at drives the derived failure & preemption
+    # counts, so invalidate the owning jobs' cached totals via the cursor's memo.
+    cur.attempt_counts.invalidate_for_tasks(cur, [d.task_id for d in deltas])
 
 
 def _flush_jobs(cur: Tx, deltas: list[JobRowDelta]) -> None:
@@ -213,7 +211,7 @@ def _flush_jobs(cur: Tx, deltas: list[JobRowDelta]) -> None:
 
 
 def commit_effects(
-    cur: Tx,
+    cur: ScopedTx,
     effects: ControllerEffects,
     *,
     endpoints: EndpointsProjection,
@@ -226,6 +224,9 @@ def commit_effects(
     trace. Health is NOT mutated here: ``effects.health.build_failed`` rides back
     to the controller, which folds it (with the backend's transport-observed
     events) through the single ``WorkerHealthTracker.apply`` site.
+
+    Attempt writes invalidate the derived-count cache through the cursor
+    (``cur.attempt_counts``), so no cache reference is threaded here.
     """
     _flush_tasks(cur, list(effects.tasks.values()))
     _flush_attempts(cur, list(effects.attempts.values()))

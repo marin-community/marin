@@ -103,10 +103,9 @@ def _seed_workers_and_attempts(db: ControllerDB) -> None:
                         "INSERT INTO tasks ("
                         "  task_id, job_id, task_index, state, submitted_at_ms,"
                         "  max_retries_failure, max_retries_preemption,"
-                        "  failure_count, preemption_count,"
                         "  priority_neg_depth, priority_root_submitted_ms, priority_insertion,"
                         "  current_attempt_id, current_worker_id, current_worker_address"
-                        ") VALUES (:tid, :jid, 0, :state, 2000, 0, 0, 0, 0, 0, 2000, 0, 0, :wid, :waddr)"
+                        ") VALUES (:tid, :jid, 0, :state, 2000, 0, 0, 0, 2000, 0, 0, :wid, :waddr)"
                     ),
                     {
                         "tid": task_id,
@@ -254,7 +253,7 @@ def test_submit_job_with_n_replicas_perf(submit_perf_db: ControllerTestState) ->
             replicas=_REPLICA_COUNT,
         )
         jid = JobName.from_wire(name)
-        with state._db.transaction() as cur:
+        with state._scope.transaction() as cur:
             ops.job.submit(
                 cur, job_id=jid, request=req, ts=Timestamp.now(), run_template_cache=state._run_template_cache
             )
@@ -285,7 +284,7 @@ def test_register_worker_with_n_attributes_perf(register_perf_db: ControllerTest
             device=job_pb2.DeviceConfig(cpu=job_pb2.CpuDevice(variant="cpu")),
             attributes=attrs,
         )
-        with state._db.transaction() as cur:
+        with state._scope.transaction() as cur:
             ops.worker.register(
                 cur,
                 worker_id=wid,
