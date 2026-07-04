@@ -497,5 +497,44 @@ different regime. A tokenizer that is *both* superword *and* right-sized for our
   `tokenizer-soak`) → per-arm (train_flops, BPB) curve → `bakeoff_analysis` feBPB with the same
   serving-cost model as the proxy. Report raw BPB @ 24h, per-domain BPB (digit arms on math),
   fertility, feBPB @ ρ=1 and serving-weighted.
-- **Status**: 6 soak tokenizers trained + pushed; 8 arms launched at 10B/500M on 8×8×H100 (arm 1
-  baseline, arms 2–7 trained-tokenizer variants, arm 8 = arm 2 + n-gram). Results pending (24h).
+- **Status**: 6 soak tokenizers trained + pushed; 8 arms training at 10B/500M on 8×8×H100. Results
+  pending. See the rollout tracker below for live per-arm state (kept current so it survives a
+  context-compaction event).
+
+### EXP-011 rollout tracker (durable — 8 arms, reboot lineage, cache status)
+
+Reboot one arm: `scratchpad/reboot_arm.sh <JOBNAME> <BAKEOFF_ARM> <RUN_ID> [ngram]` (SCALE_HIDDEN_DIM
+2560 / 8 layers / 128 experts / top-4 / expert-axis 8 / batch 128 / seq 4096 / steps 100000 / eval
+1000 / SCALE_RAM 512g / MARIN_PREFIX s3://marin-us-east-02a/marin / the NCCL exclude-IFNAME
+workaround). Job names bump a letter suffix per reboot (01 → 01b → 01c …). Cache-HIT arms (tokenized
+data already on S3) reach training in ~3 min with ~8 pods; PARTIAL arms re-tokenize remaining shards
+(resuming from cached shards) and fan out ~50–150 pods.
+
+| # | BAKEOFF_ARM (env) | vocab | pretok/ngram | tokenizer cache | latest job | state |
+|---|-------------------|-------|--------------|-----------------|------------|-------|
+| 1 | marin-128k | 128k | Llama-3 BPE | HIT | soak-01d-marin-128k | **training** |
+| 2 | soak-superbpe-64k | 64k | SuperBPE | HIT | soak-02d-superbpe-64k | **training** |
+| 3 | soak-superbpe-128k | 128k | SuperBPE | HIT (03d/03e done) | soak-03e→**03f** | reboot |
+| 4 | soak-superbpe-64k-digits | 64k | SuperBPE+digits | HIT (04c/04d done) | soak-04d→**04e** | reboot |
+| 5 | soak-superbpe-128k-digits | 128k | SuperBPE+digits | PARTIAL | soak-05d→**05e** | reboot |
+| 6 | soak-superbpe-64k-llama | 64k | Llama-3 word regex | PARTIAL | soak-06c→**06d** | reboot |
+| 7 | soak-superbpe-128k-llama | 128k | Llama-3 word regex | PARTIAL | soak-07b→**07c** | reboot |
+| 8 | soak-superbpe-64k `+ngram` | 64k | SuperBPE + n-gram (4M/rank128/2-4/r0.25) | HIT (shares arm 2) | soak-08-superbpe-64k-ngram | **training** |
+
+- **Infra hardening applied this campaign** (why the reboots happened): (1) **zephyr CW-S3 parquet
+  fix** (commit 88cdc91512) — the reader handed a raw `s3://` path to pyarrow's native S3 client,
+  which uses path-style addressing that CoreWeave rejects with HTTP 400; every multilingual/math
+  shard tokenized from the S3 cache 400'd. Fixed to read through the fsspec `open_file` helper
+  (virtual-host addressing). (2) **controller under-provisioning** — the 4-CPU/64Gi controller's
+  reconcile loop got so slow above ~450–500 pods that it deleted healthy running task pods
+  (tasks failed `exit=0 / error="Error" / preemptions=0`, the k8s pod-race signature), cascading
+  job failures. Live-patched to **cpu request 32 / limit 128 (burstable), memory 96Gi/256Gi, probes
+  10s/6**; durable per-cluster + burst config in **PR #6945** (Fixes #6944). Terminal-pod GC backlog
+  (all mine, soak tokenize workers) inflates reconcile lists — delete via
+  `kubectl get pods -n iris --field-selector=status.phase=Succeeded -o name | grep soak | xargs kubectl delete -n iris`.
+- **Scoring pipeline (built + validated, push-button)**: `scratchpad/finalize_report.sh` runs
+  `soak_wandb_ladder.py` (W&B group `tokenizer-soak` → per-arm BPB-vs-FLOPs ladder + per-domain
+  finals) → `bakeoff_analysis.py --fertility scratchpad/soak_fertility.json --bpb …`. Soak-arm
+  **fertility already measured** (`scratchpad/soak_fertility.json`, ngram entry added). Phase-1
+  serving cost (final): superbpe-128k(-llama) rel_serve **0.864** (−13.5% vs marin), 64k **0.942**,
+  digits **1.06–1.14** (digit-split = more tokens). Interim feBPB posted to #6796.
