@@ -67,48 +67,85 @@ design, split along those seams.
 deployed, adopt **public-key JWTs (EdDSA/Ed25519) now** instead of HS256. A
 service acts as a **signing authority**: it mints tokens with a private key and
 publishes public keys at `/.well-known/jwks.json`; every verifier holds only the
-**public** key. Two placement decisions the maintainer raised, both adopted:
+**public** key. Four placement decisions the maintainer raised, all adopted:
 
-- **The signing-authority *mechanism* lives in `rigging`, not iris.** A generic
-  `rigging` module (`JwtSigner` mint / `JwksVerifier` verify / `public_jwks()`)
-  owns keypairs, EdDSA sign/verify, and JWKS — so *any* service can be an
-  authority or a verifier without reimplementing. iris keeps only its **policy**:
+- **All auth mechanism lives in `rigging` — server, client, *and* login.** rigging
+  is the single home for the primitives: `token_authority` (`JwtSigner` mint /
+  `JwksVerifier` verify / `public_jwks`), the request-chain `server_auth`, the
+  client token providers (`auth.py`) + credential resolution (`credentials.py`,
+  `credential_store.py`), and the login orchestration (`run_iap_desktop_login` is
+  *already* in rigging; the token-exchange client helper joins it). iris and
+  finelog become thin **policy + wiring** layers that reuse these — iris keeps only
   role/claim semantics, the RBAC map, the user store, endpoint-token minting, and
-  the revocation *source* (`api_keys`). `JwtTokenManager` becomes a thin iris wrapper
-  over `rigging.JwtSigner`. (This deliberately refines the earlier
-  `2026-06-20_rigging_connection_auth.md` "minting stays in iris" split: the
-  *generic* signing mechanism moves down to the shared leaf now that it's a
-  standard, multi-service, asymmetric primitive; *roles/policy* still stay in iris.)
-- **The private key is sourced through the `SecretSpec` path (§Part 2), not the
-  SQLite `controller_secrets` table.** One secret-supply mechanism for everything,
-  rotation via Secret-Manager versions, and — importantly — it **survives node
-  replacement**: the controller's SQLite is now node-local NVMe (commit
-  `f691c03f2`), so a key generated into it would be *lost on node loss*,
-  invalidating every issued token. A one-time provisioning step (`iris cluster
-  init-keys`) generates the Ed25519 keypair and writes the private half to Secret
-  Manager; the controller reads it via a `SecretSpec` at startup. `controller_secrets`
-  no longer stores signing keys.
+  the revocation *source* (`api_keys`); its `JwtTokenManager` becomes a thin wrapper
+  over `rigging.JwtSigner`, and its `Login` RPC calls a rigging exchange helper.
+  (This deliberately refines `2026-06-20_rigging_connection_auth.md`'s "minting/
+  login stays in iris": the *generic* mechanism moves down to the shared leaf now
+  that it's a standard, multi-service, asymmetric primitive; only *policy* stays up.)
+- **The private key is per-cluster, sourced through the `SecretSpec` path (§Part 2),
+  not the SQLite `controller_secrets` table.** It is a **cluster-level** key (one
+  per controller), *not* a single marin-wide private key — a shared org-wide private
+  key would recreate exactly the blast-radius we are killing (compromise one node →
+  mint for the whole org). What *is* marin-level is the **trust config** (the
+  issuer→jwksUri/public-key allowlist), shared as ordinary config. Sourcing via
+  `SecretSpec` gives one secret-supply mechanism, rotation via Secret-Manager
+  versions, and — importantly — survival of **node replacement**: the controller's
+  SQLite is now node-local NVMe (commit `f691c03f2`), so a key generated into it
+  would be *lost on node loss*, invalidating every issued token. A one-time
+  `iris cluster init-keys` generates the Ed25519 keypair and writes the private half
+  to a `SecretSpec` destination (Secret Manager / k8s Secret / file); the controller
+  reads it at startup. `controller_secrets` no longer stores signing keys.
+- **Federation: how controller A talks to controller B.** Each controller is its
+  own **issuer** (`iss=<cluster>`) with its own keypair and JWKS. When A calls B, A
+  presents a token it minted with `iss=A` and `aud="iris-peer"` (a dedicated peer
+  audience, distinct from A's own control-plane `aud="iris"`); B verifies it against
+  **A's public key**, resolved by `iss` from B's configured issuer allowlist (never
+  a URL derived from the token — SSRF), and checks `aud="iris-peer"`. This
+  **retires `peers.static_token`** entirely — the pre-shared symmetric bearer is
+  replaced by "hold the peer's public key + an allowlist entry." Blast radius stays
+  per-cluster; there is no shared secret across clusters. (For many clusters, a
+  marin **root** that signs cluster keys — a CA / SPIFFE-style trust domain — is the
+  natural scaling step; the flat per-issuer allowlist is right for today's handful.)
 
 This is standard (RFC 8037; PyJWT `algorithm="EdDSA"`, Rust `jsonwebtoken` EdDSA)
 and reshapes the rest:
 
+- **MANDATORY corollary — per-plane audience binding (RFC 8725).** Collapsing all
+  tokens onto *one* signing key removes the incidental isolation that a
+  *dedicated* symmetric `delegation_key` gave today (a finelog-verifiable token
+  physically cannot mint control-plane tokens, because the keys differ). Under one
+  key, sig+exp-only verification would let **any** iris token (a 30-day user JWT, a
+  worker token) verify at **any** federated finelog, and let a compromised global
+  finelog **replay** a relay's delegation token back at the minting controller's
+  RPC surface. That is a regression, so the audience discipline is not optional:
+  every token carries an `aud` binding it to exactly one plane — control-plane
+  (`aud="iris"`), delegation (`aud="finelog"`, short TTL), endpoint
+  (`scope=proxy`, `aud=<endpoint>`) — and **every verifier requires its expected
+  `aud`** (finelog's Rust adds `aud` to its claims and checks it; iris's verify
+  rejects, never fails open on, an unexpected `aud`/`scope`). One key is safe; one
+  key *without* audience separation is not.
+- **Revocation stays local; remote verifiers only see short-lived tokens.** The jti
+  revocation set lives in the issuing controller's DB and can't reach finelog /
+  peers / cross-cluster `/proxy` gates. So the invariant is: **remote verifiers
+  accept only short-TTL, plane-scoped tokens** (like today's 1h delegation token,
+  exposure TTL-bounded); long-lived control-plane JWTs (30-day) are verified
+  **only by the issuing controller**, where revocation lives. Federation never
+  ships a long-lived token to a remote verifier.
 - **The shared-secret class that #6873 is about dissolves.** `delegation_key` today
   is a *shared symmetric HMAC secret* that finelog verifies with
   (`auth.rs`, `hmac`, `MIN_SECRET_BYTES`) and "anyone who reads it can mint." As
   an asymmetric setup it becomes the controller's **public** key — safe to inline
-  and distribute, not a secret — so finelog verifies delegation JWTs with no
-  secret at all. The `SecretRef` machinery (Part 2) shrinks to the small residue
-  of genuinely-symmetric material (dev static tokens, the IAP OAuth client
-  secret).
+  and distribute, not a secret — so finelog verifies delegation JWTs (bound to
+  `aud="finelog"`) with no secret at all.
 - **Mint and verify decouple** — exactly the "controller could mint keys for iris
   etc." idea: the controller signs; iris/finelog/services/peers only verify. None
-  of them need mint capability, so a compromised verifier can't forge tokens.
-- **Federation and `/proxy` paths get simpler, not harder.** Each cluster's
-  controller is its own JWKS *issuer*; a verifier (including a `/proxy` gate
-  checking a scoped token that was minted by another cluster) resolves the right
-  public key by the token's `iss` claim — the standard cross-issuer JWKS pattern,
-  with no shared secret to distribute. The one thing to get right is `iss`-keyed
-  key resolution + rotation (JWKS overlap), which is well-trodden.
+  of them need mint capability, so a compromised verifier can't forge tokens (and,
+  per the audience discipline, can't replay across planes either).
+- **Federation and `/proxy` paths.** Each cluster's controller is its own JWKS
+  *issuer*; a verifier resolves the right public key by the token's `iss` — but
+  only from a **configured issuer→jwksUri allowlist** (never a URL derived from the
+  untrusted token's `iss`, which would be SSRF), and only for short-lived
+  plane-scoped tokens per the invariant above.
 - **One verification mechanism everywhere.** JWKS-based JWT verify already serves
   the IAP assertion (ES256) and Google ID token (RS256); service tokens (EdDSA)
   now use the *same* machinery, and finelog verifies them with the same
@@ -150,9 +187,8 @@ self-admittedly non-uniform, i.e. our finelog/rigging split at ecosystem scale:
 a **shared conformance test-vector suite** (input request → expected verdict/trace)
 that *both* the Python and Rust evaluators must pass in CI, seeded from finelog's
 existing pin (`test_config.py:136-163`). The `jwt` layer stays per-implementation
-in Phase 1 (rigging injects a Python verifier; finelog embeds HS256 keys in the
-policy JSON, `JwtAuthLayer`,
-[`config.py:104-117`](https://github.com/marin-community/marin/blob/5a6f64cbeef5e1962ed367deb3aaf72956ddb4d1/lib/finelog/src/finelog/deploy/config.py#L104)),
+in Phase 1 (rigging injects a Python verifier; finelog's `JwtAuthLayer` now carries
+an **inline public key** per issuer — see Part 0 — not the old HS256 secret),
 because unifying the *evaluator* is the optional Rust-engine phase below, not the
 schema. The Phase-1 win is that the two stacks stop drifting in *composition*
 (default posture, ordering, CIDR vocabulary) — exactly the drift #6861 names —
@@ -207,13 +243,13 @@ question): with Part 0, *everything* secret goes through the one `SecretSpec` pa
 resolved at startup; no SQLite storage). **Public** keys go out via JWKS (not
 secrets), and `delegation_key` — #6873's headline symmetric secret — is **retired**,
 replaced by the controller's public key that finelog verifies with. So the marked
-`SecretSpec` fields are just the signing key plus the residual genuinely-symmetric
-material: dev/CI static tokens (`StaticAuthConfig.tokens`) and the IAP OAuth client
-secret. Whether `peers.static_token` survives at all is an open question (Part 0
-lets a peer verify via JWKS instead of a pre-shared bearer). finelog's Rust server
-parses
-`FINELOG_AUTH_POLICY` itself, and `assert_inlineable_auth` already forces its whole
-jwt-bearing policy through a secret source — so finelog needs no new Rust resolver.
+`SecretSpec` fields are just the private signing key plus a small residue of
+genuinely-symmetric material — dev/CI static tokens (`StaticAuthConfig.tokens`) and
+the IAP OAuth client secret. `peers.static_token` and `finelog.static_token` are
+**retired**: a peer / finelog now verifies via the issuer's inline public key
+(Part 0), not a pre-shared bearer. finelog's `JwtAuthLayer` carries that public key
+directly, so `assert_inlineable_auth` inverts — a jwt layer is now inline-*safe* by
+construction, and finelog needs no new Rust resolver.
 
 **3. Consistent posture for iris + finelog.** Both express their request stack in
 the schema from Part 1: default-deny, allow-localhost fallback, a `cidr` layer
@@ -309,9 +345,11 @@ research (§7.3) changes what that phase is:
   concern "do we need something bespoke?" resolves by adopting standard flows and
   keeping them in Python's mature libraries: **WIF (keyless)** for headless
   (research §7.2 — removes the SA-key handling *and* the SSH-tunnel fallback), the
-  standard **installed-app OAuth** flow for humans, and **`iris login` as an
-  OAuth2 token exchange (RFC 8693)** — an IAP-verified Google identity in, a
-  controller-signed EdDSA service JWT out. None of that is a bespoke *format*; it's
+  standard **installed-app OAuth** flow for humans, and **`iris login` as a
+  token-exchange (the RFC 8693 *pattern*, over the Connect `Login` RPC)** — an
+  IAP-verified Google identity in, a controller-signed EdDSA `aud="iris"` JWT out;
+  the exchange helper lives in rigging so any service reuses it. None of that is a
+  bespoke *format*; it's
   `google-auth`/`google-auth-oauthlib` library calls. The only slightly-custom code
   is the console-paste variant of the desktop flow for SSH sessions, kept purely as
   a convenience. Crucially, minting is *not* ported to Rust — so there is no bespoke
@@ -332,10 +370,10 @@ research (§7.3) changes what that phase is:
   small, fast, modern, one curve; supported by PyJWT (`cryptography`) and Rust
   `jsonwebtoken`. ES256 is the more conservative choice if some future non-Rust/
   non-Python verifier matters. Either is standard; pick one.
-- **Does any symmetric bearer survive?** With Part 0, `delegation_key` retires and
-  a peer could verify via JWKS instead of `peers.static_token`. Do we keep a
-  symmetric static-token path at all (dev/CI convenience, guarded by `SecretSpec`),
-  or make *every* production path asymmetric and treat static tokens as test-only?
+- **Does any symmetric bearer survive?** Part 0 retires `delegation_key`,
+  `finelog.static_token`, *and* `peers.static_token` (all now asymmetric). The only
+  residue is `StaticAuthConfig.tokens` — keep it as a dev/CI convenience (guarded by
+  `SecretSpec`), or drop it and make static tokens test-only?
 - **Biscuit — optional attenuation on top, decided separately.** With asymmetric
   JWTs as the standard core, Biscuit's marginal value narrows to *offline
   attenuation* for the scoped `/proxy` capability tokens (#6857): a holder narrows
@@ -348,9 +386,11 @@ research (§7.3) changes what that phase is:
   Recommendation: gate it on the conformance vectors showing real semantic drift;
   verify-only; mint stays Python. Schedule unconditionally instead?
 - **Ordered `SecretSpec` default path** (adopted per your suggestion:
-  `env: → file: → gcp-secret://`, first-present-wins, fail-hard on a
-  configured-but-erroring source). Keep the default field-name→source mapping, or
-  require every secret to be an explicit list?
+  `env: → file:`, first-present-wins, fail-hard on a configured-but-erroring
+  source). Note `gcp-secret://` can't be in the *default* path because its version
+  segment is mandatory and unknowable by convention — so the default covers
+  `env:`/`file:` and `gcp-secret://` is always explicit config. Keep the default
+  field-name→source mapping, or require every secret to be an explicit list?
 - **#6592 rollout.** The flip to provision IAP identities at read-only
   `unprovisioned_role` is a behavior change for every IAP cluster. Land it in this
   umbrella behind an ops announcement, or as a follow-up once `SetUserRole` lets
