@@ -94,8 +94,12 @@ defaults:
       milliseconds: 300000
   task_env:
     MARIN_PREFIX: s3://marin-na/marin
-    # H100 hostNetwork pods also see IB and SR-IOV link-local interfaces.
-    NCCL_SOCKET_IFNAME: =enp157s0np0
+    # H100 hostNetwork pods also see IB and SR-IOV link-local interfaces. Exclude
+    # IB/IPoIB (ibs*, ibp*) and virtual interfaces so NCCL's bootstrap socket falls
+    # back to the host ethernet PF that carries the node IP. The exact PF name
+    # differs per node/region, so an exact-match pin (=enpXsYnpZ) is fragile and was
+    # silently unmatched by the current task image's NCCL build, breaking bootstrap.
+    NCCL_SOCKET_IFNAME: "^ibs,ibp,lo,docker,veth,cilium,lxc"
   worker:
     docker_image: ghcr.io/marin-community/iris-worker:latest
     port: 10001

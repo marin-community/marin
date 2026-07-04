@@ -84,9 +84,12 @@ defaults:
     # data under s3://marin-na/ is not reachable from jobs unless they override
     # AWS_ENDPOINT_URL and credentials themselves.
     MARIN_PREFIX: s3://marin-us-east-02a/marin
-    # H100 hostNetwork pods also see IB and SR-IOV link-local interfaces; pin the
-    # NCCL bootstrap socket to the host ethernet PF (carries the node IP).
-    NCCL_SOCKET_IFNAME: =enp90s0np0
+    # H100 hostNetwork pods also see IB and SR-IOV link-local interfaces. Exclude
+    # IB/IPoIB (ibs*, ibp*) and virtual interfaces so NCCL's bootstrap socket falls
+    # back to the host ethernet PF that carries the node IP. The exact PF name
+    # differs per node/region, so an exact-match pin (=enpXsYnpZ) is fragile and was
+    # silently unmatched by the current task image's NCCL build, breaking bootstrap.
+    NCCL_SOCKET_IFNAME: "^ibs,ibp,lo,docker,veth,cilium,lxc"
   worker:
     docker_image: ghcr.io/marin-community/iris-worker:latest
     port: 10001
