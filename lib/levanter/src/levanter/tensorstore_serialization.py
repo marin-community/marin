@@ -4,6 +4,8 @@
 # References:
 # * Orbax: https://github.com/google/orbax/blob/11d2934ecfff77e86b5e07d0fef02b67eff4511b/orbax/checkpoint/pytree_checkpoint_handler.py#L312
 import asyncio
+import contextlib
+import functools
 import logging
 import os
 import urllib.parse
@@ -19,6 +21,7 @@ import jax.numpy as jnp
 import jax.tree_util as jtu
 import numpy as np
 import tensorstore as ts
+from jax.experimental.array_serialization import tensorstore_impl as ts_impl
 from haliax.jax_utils import is_jax_array_like
 from haliax.partitioning import ResourceMapping
 from haliax.util import is_named_array
@@ -79,6 +82,59 @@ def build_kvstore_spec(path: str) -> dict:
         return {"driver": "file", "path": os.path.abspath(path)}
     else:
         raise ValueError(f"Unsupported URI scheme for tensorstore: {parsed.scheme!r} in {path!r}")
+
+
+async def _transfer_shard_to_pageable_host(shard) -> np.ndarray:
+    """Stage a shard in pageable host memory instead of JAX's pinned-host path.
+
+    On TPU, JAX's ``_transfer_shard_to_host`` stages every shard via ``device_put`` to
+    ``pinned_host`` memory. Pinned buffers come from the runtime's registered-host arena,
+    which is never returned to the OS, so host RAM ratchets up by one save's state on
+    every checkpoint. Pageable staging (JAX's own path for devices without pinned host
+    memory) is returned to the OS once the commit drops the buffers.
+    """
+    data = shard.data
+    data.copy_to_host_async()
+    # Yield so the remaining shards' copies can be enqueued before this one blocks.
+    await asyncio.sleep(0)
+    # Zero-copy view of the now host-resident literal.
+    return np.array(data, copy=False)
+
+
+@contextlib.contextmanager
+def _serialize_with_bounded_host_memory():
+    """Patch two per-save host-RAM leaks around ``GlobalAsyncCheckpointManager.serialize``.
+
+    JAX serializes every checkpoint through one process-lifetime ``Context`` singleton
+    (``tensorstore_impl._TS_CONTEXT``). Each save writes a distinct OCDBT database (fresh
+    ``step-{N}`` dir → new cache keys), so cache entries — and the staged source buffers they
+    reference — accumulate for the life of the process. A fresh ``Context`` per save (cloned
+    from the JAX spec, so pool sizes and concurrency limits are unchanged) releases the prior
+    save's pool once its commit drains, bounding live host RAM to one save.
+
+    JAX also stages each shard in pinned host memory, which the TPU runtime never returns to
+    the OS (see :func:`_transfer_shard_to_pageable_host`).
+
+    Both patches only need to cover the synchronous part of ``serialize`` — it awaits every
+    copy before returning — so restoring them on exit is safe while the commit continues in
+    the background.
+    """
+    fresh_context = ts.Context(ts_impl._TS_CONTEXT.spec)
+    original_async_serialize = ts_impl.async_serialize
+    original_transfer = ts_impl._transfer_shard_to_host
+
+    @functools.wraps(original_async_serialize)
+    def async_serialize_with_fresh_context(*args, **kwargs):
+        kwargs.setdefault("context", fresh_context)
+        return original_async_serialize(*args, **kwargs)
+
+    ts_impl.async_serialize = async_serialize_with_fresh_context
+    ts_impl._transfer_shard_to_host = _transfer_shard_to_pageable_host
+    try:
+        yield
+    finally:
+        ts_impl.async_serialize = original_async_serialize
+        ts_impl._transfer_shard_to_host = original_transfer
 
 
 def _create_ocdbt_spec(checkpoint_root: str, array_path: str | None) -> dict:
@@ -202,7 +258,8 @@ def tree_serialize_leaves_tensorstore(
     if debug_checkpointer:
         logger.info("Checkpoint tensorstore serialize entering manager.serialize for %s", checkpoint_dir)
         flush_debug_output(logger)
-    manager.serialize(arrays, tspecs, on_commit_callback=commit_callback)
+    with _serialize_with_bounded_host_memory():
+        manager.serialize(arrays, tspecs, on_commit_callback=commit_callback)
     if debug_checkpointer:
         logger.info("Checkpoint tensorstore serialize returned from manager.serialize for %s", checkpoint_dir)
         flush_debug_output(logger)
