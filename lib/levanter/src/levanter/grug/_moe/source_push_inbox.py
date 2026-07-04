@@ -398,24 +398,17 @@ def _make_kernel(
 
                                         def _copy_buffer(buffer_smem, k_start) -> None:
                                             if source_input_mode == SOURCE_INPUT_RAW_TOKENS:
-
-                                                @pl.loop(0, config.block_m)
-                                                def _row_loop(row) -> None:
-                                                    @pl.when(row < valid_rows)
-                                                    def _copy_valid_row() -> None:
-                                                        token = token_ids_ref[dst_ordinal, entry, row]
-                                                        buffer_smem[row, :] = x_ref[
-                                                            token,
-                                                            pl.ds(k_start, config.block_k),
-                                                        ]
-
-                                                    @pl.when(row >= valid_rows)
-                                                    def _zero_invalid_row() -> None:
-                                                        buffer_smem[row, :] = jnp.zeros(
-                                                            (config.block_k,),
-                                                            dtype=x_ref.dtype,
-                                                        )
-
+                                                row_offsets = jnp.arange(config.block_m, dtype=jnp.int32)
+                                                col_offsets = k_start + jnp.arange(config.block_k, dtype=jnp.int32)
+                                                valid_row_mask = row_offsets < valid_rows
+                                                token_ids = token_ids_ref[dst_ordinal, entry, pl.ds(0, config.block_m)]
+                                                safe_token_ids = jnp.where(valid_row_mask, token_ids, 0)
+                                                x_tile = x_ref[safe_token_ids[:, None], col_offsets[None, :]]
+                                                buffer_smem[:, :] = jnp.where(
+                                                    valid_row_mask[:, None],
+                                                    x_tile,
+                                                    jnp.zeros((config.block_m, config.block_k), dtype=x_ref.dtype),
+                                                )
                                             else:
                                                 buffer_smem[:, :] = x_ref[
                                                     dst_ordinal,
