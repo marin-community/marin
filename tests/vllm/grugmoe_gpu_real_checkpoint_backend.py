@@ -64,6 +64,7 @@ WORKER_EXTENSION_MODULE = "grugmoe_gpu_real_checkpoint_backend"
 WORKER_EXTENSION_CLASS = "GrugMoeDiagnosticsWorkerExtension"
 WORKER_EXTENSION_CLS = f"{WORKER_EXTENSION_MODULE}.{WORKER_EXTENSION_CLASS}"
 VLLM_ATTENTION_BACKEND_ENV = "MARIN_GRUGMOE_VLLM_ATTENTION_BACKEND"
+VLLM_EXTRA_ARGS_ENV = "MARIN_GRUGMOE_VLLM_EXTRA_ARGS"
 RUN_ID_ENV = "MARIN_GRUGMOE_GPU_E2E_RUN_ID"
 OUTPUT_DIR_ENV = "MARIN_GRUGMOE_GPU_E2E_OUTPUT_DIR"
 INSTALL_REPORT_PATH_ENV = "MARIN_GRUGMOE_GPU_E2E_INSTALL_REPORT_PATH"
@@ -1323,6 +1324,8 @@ def _vllm_backend(args: argparse.Namespace) -> None:
         "--max-num-seqs",
         str(VLLM_MAX_NUM_SEQS),
     ]
+    extra_debug_args = shlex.split(os.environ.get(VLLM_EXTRA_ARGS_ENV, ""))
+    extra_args.extend(extra_debug_args)
     started = time.time()
     previous_dev_mode = os.environ.get("VLLM_SERVER_DEV_MODE")
     os.environ["VLLM_SERVER_DEV_MODE"] = "1"
@@ -1388,6 +1391,8 @@ def _vllm_backend(args: argparse.Namespace) -> None:
                 "artifact_staging": staged_artifact.staging,
                 "vllm_engine_kwargs": model.engine_kwargs,
                 "vllm_args": extra_args,
+                "vllm_extra_args_env_var": VLLM_EXTRA_ARGS_ENV,
+                "vllm_extra_args": extra_debug_args,
                 "vllm_attention_backend_env_var": VLLM_ATTENTION_BACKEND_ENV,
                 "vllm_tensor_parallel_size": VLLM_TENSOR_PARALLEL_SIZE,
                 "vllm_data_parallel_size": VLLM_DATA_PARALLEL_SIZE,
@@ -1483,6 +1488,8 @@ def _vllm_backend(args: argparse.Namespace) -> None:
         "artifact_staging": staged_artifact.staging,
         "vllm_engine_kwargs": model.engine_kwargs,
         "vllm_args": extra_args,
+        "vllm_extra_args_env_var": VLLM_EXTRA_ARGS_ENV,
+        "vllm_extra_args": extra_debug_args,
         "vllm_attention_backend_env_var": VLLM_ATTENTION_BACKEND_ENV,
         "vllm_tensor_parallel_size": VLLM_TENSOR_PARALLEL_SIZE,
         "vllm_data_parallel_size": VLLM_DATA_PARALLEL_SIZE,
