@@ -388,25 +388,23 @@ iris user grant \
     --cluster <name> \
     --user <email|sa-email> \
     --role {dashboard|user|admin}      # default: dashboard (read-only)
-    [--headless]                        # a service account: also wire keyless WIF (no SA key)
 
 # Orchestrates three distinct planes (only 1 and 3 are applied live):
 #  1. [IAM]      gcloud iap web add-iam-policy-binding … roles/iap.httpsResourceAccessor  (idempotent)
-#                with --headless, also: roles/iam.workloadIdentityUser +
-#                roles/iam.serviceAccountTokenCreator on the iap-caller SA (keyless WIF)
 #  3. [RPC]      SetUserRole(user, role) against the live controller               (idempotent)
 #  2. [CONFIG]   if the IAP client id is absent from auth.iap.audiences, PRINT the
 #                required config edit + `iris cluster start` redeploy step         (NOT applied live)
 #  →  prints:    iap+https://<host>/proxy/<name>?audience=<iap-client-id>
 ```
 
-Recommended headless auth is **Workload Identity Federation — no downloaded SA
-key** (research §7.2): CI mints an OIDC token → WIF → impersonates the `iap-caller`
-SA → ID token with `id_token_audience = <IAP client id>`; GCE/GKE cron uses its
-attached SA → `generateIdToken(audience=<IAP client id>)`. The custom-audience ID
-token needs the impersonation path, so one keyless `iap-caller` SA stays the
-impersonation target. The command is idempotent for planes 1 and 3; plane 2 is a
-config edit it cannot apply to a running controller, so it prints the diff and the
+A headless SA is granted exactly like a human (one IAM binding + `SetUserRole`) —
+no `--headless`-specific WIF orchestration in phase 1. **Phase-1 headless auth**
+(onboarding.md §#6580): attached-identity `generateIdToken` where a workload
+identity exists (no key), else a time-gated `iap-caller` SA key sourced via
+`SecretSpec` (org-policy key expiry as the gate). WIF (keyless, the
+`workloadIdentityUser`/`serviceAccountTokenCreator` bindings) is the documented
+fast-follow, not this PR. The command is idempotent for planes 1 and 3; plane 2 is
+a config edit it cannot apply to a running controller, so it prints the diff and the
 redeploy command rather than pretending to mutate live state.
 
 ### 3.3 `login` provisioning change (#6592)

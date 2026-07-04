@@ -215,9 +215,11 @@ source secrets via `SecretSpec`. It calls out that a `cidr` layer grants
 
 ### 4. Headless onboarding + user tightening → [`onboarding.md`](./onboarding.md)
 
-The #6580/#6592 slice — Workload Identity Federation for keyless headless access,
-the `SetUserRole` RPC + `iris user grant` CLI, and the IAP `login`-provisioning
-flip — is a nearly-independent workstream, split into its own doc.
+The #6580/#6592 slice — headless SA onboarding (phase 1: attached-identity
+`generateIdToken` / a time-gated SA key, with keyless WIF as the documented
+fast-follow), the `SetUserRole` RPC + `iris user grant` CLI, and the IAP
+`login`-provisioning flip — is a nearly-independent workstream, split into its own
+doc.
 
 ## Phasing & the Rust engine
 
