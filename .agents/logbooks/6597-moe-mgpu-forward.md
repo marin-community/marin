@@ -2103,3 +2103,58 @@ for the device path and stages gate, up, route-weight tile, and W2 through WGMMA
   - The current route-weight `[M,K]` expansion is a correctness/lowering unblock, not a performance-optimal metadata
     representation. Target-shape forward timing is still needed to quantify the extra route-weight tile traffic and
     SMEM staging cost.
+
+## 2026-07-03 18:04 - Target timing for staged H forward
+
+Ran the staged H-forward path at the stable source-push target profile after the W2-from-H lowering fix.
+
+- Code Hash: `afed92f44`
+- Job: `/dlwh/source-push-forward-h-target-afed92f44-20260703-1902`
+- Cluster: `cw-us-east-02a`
+- Command:
+
+  ```bash
+  uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job run --no-wait \
+    --job-name source-push-forward-h-target-afed92f44-20260703-1902 \
+    --cpu 16 --memory 128GB --disk 16GB --gpu H100x8 --reserve H100x8 \
+    --enable-extra-resources --extra gpu -- \
+    timeout 3600s uv run --package marin-levanter --group test python \
+    lib/levanter/scripts/bench/bench_source_push_forward.py \
+    --source-push-profile hopper_source_push_inbox_rough_balanced_216 \
+    --execution-mode staged_host_sync --warmup 1 --steps 3 --repeat-runs 3 \
+    --no-check --git-sha afed92f44 --jsonl scratch/source_push_forward_h_target_afed92f44.jsonl
+  ```
+
+- Config: `ep_size=8`, `tokens_per_rank=32768`, `hidden_dim=2560`, `intermediate_dim=1280`,
+  `experts_per_rank=32`, `topk=4`, `capacity_factor=1.25`, `routing=roughly_balanced`, `block_m=64`,
+  `block_k=128`, `block_n=128`, `entries_per_rank=288`, `n_groups_per_job=2`.
+- Queue stats: `dropped_routes=0`, `plan_row_efficiency=0.942584283`, `valid_rows_per_rank_mean=131072`,
+  `rounded_rows_per_rank_mean=139056`.
+- Median over 3 repeats:
+
+  | stage | median steady_state_time | throughput |
+  | --- | ---: | ---: |
+  | total | `16.581843 ms` | `155.409765 useful TFLOP/s/rank`, `164.876253 rounded TFLOP/s/rank` |
+  | W13/H | `8.561189 ms` | `212.895046 W13 TFLOP/s/rank` |
+  | W2-from-H return | `7.047878 ms` | `129.303800 W2 TFLOP/s/rank` |
+  | combine | `0.895950 ms` | `936.281131 GB/s/rank` |
+
+- Comparison to previous post-SwiGLU source-push forward (`roughly_balanced`, `cf=1.25`, direct combine):
+
+  | stage | H-forward | previous post-SwiGLU path | delta |
+  | --- | ---: | ---: | ---: |
+  | total | `16.582 ms` | `13.282 ms` | `+3.300 ms` |
+  | W13/H | `8.561 ms` | `8.509 ms` | `+0.052 ms` |
+  | W2 return | `7.048 ms` | `4.079 ms` | `+2.969 ms` |
+  | combine | `0.896 ms` | `0.583 ms` | `+0.313 ms` |
+
+- Interpretation:
+  - The H checkpoint forward is production-relevant and still much faster than the older public `pallas_mgpu` target
+    forward baseline (`~38.5 ms`), but it gives back about `3.3 ms` versus the post-SwiGLU source-push path.
+  - The slowdown is almost entirely in W2-from-H: extra route-weight tile traffic plus gate/up/weight SMEM staging and
+    SwiGLU in the W2 prologue add about `3.0 ms`.
+  - W13/H remains essentially unchanged from the previous source-push W13 timing, so the W13 H checkpoint itself is not
+    the bottleneck.
+  - Next optimization target is the W2-from-H prologue: avoid full `[M,K]` route-weight expansion if Mosaic exposes a
+    legal row-broadcast load, or move route scaling to an output-tile equivalent if we accept that forward-only
+    algebraic rewrite for performance while preserving the MLP-level custom VJP math.
