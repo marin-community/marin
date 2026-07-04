@@ -140,10 +140,12 @@ CUDNN_CU13_PACKAGE = "nvidia-cudnn-cu13"
 def cuda_toolchain_setup_script() -> str:
     """Return a setup script that exposes the venv's CUDA toolchain to JAX/Pallas.
 
-    Appended to a GPU job's setup so Mosaic GPU kernels compile: it puts the
-    ``jax[cuda13]`` toolchain (``ptxas``/``nvlink``) on ``PATH`` by symlinking it
-    into the venv's ``bin``, and stages ``libdevice.10.bc`` where XLA looks, with no
-    run-phase changes. A no-op when the venv carries no CUDA toolchain.
+    Appended to a GPU job's setup so Mosaic GPU kernels compile and JAX sees the
+    CUDA 13 cuDNN wheel after mixed CUDA package installs. It puts the
+    ``jax[cuda13]`` toolchain (``ptxas``/``nvlink``) on ``PATH``, stages
+    ``libdevice.10.bc`` where XLA looks, and restores CUDA 13 cuDNN library
+    precedence when that package is installed. A no-op when the venv carries no
+    CUDA toolchain.
     """
     return rf"""set -e
 cuda_bin=""
