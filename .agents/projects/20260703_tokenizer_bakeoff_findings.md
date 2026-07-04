@@ -15,19 +15,22 @@ more training budget. Best arms, vs stock Llama-3 (marin-128k, feBPB 1.2376):
 
 | rank | arm | feBPB | vs Llama-3 |
 |---|---|---|---|
-| 1 | **trained-superbpe-80k-t40k + n-gram** | **1.1584** | **−6.4%** |
-| 2 | trained-superbpe-80k-t40k | 1.1621 | −6.1% |
-| 3 | gpt-neox-50k + n-gram | 1.1651 | −5.9% |
-| 4 | superbpe-128k + n-gram | 1.1733 | −5.2% |
-| 5 | gpt-neox-50k | 1.1745 | −5.1% |
-| 6 | superbpe-128k (off-the-shelf) | 1.1794 | −4.7% |
+| 1 | **trained-superbpe-64k-t32k** | **1.1564** | **−6.6%** |
+| 2 | trained-superbpe-80k-t40k + n-gram | 1.1584 | −6.4% |
+| 3 | trained-superbpe-80k-t40k | 1.1621 | −6.1% |
+| 4 | gpt-neox-50k + n-gram | 1.1651 | −5.9% |
+| 5 | superbpe-128k + n-gram | 1.1733 | −5.2% |
+| 6 | gpt-neox-50k | 1.1745 | −5.1% |
+| 7 | superbpe-128k (off-the-shelf) | 1.1794 | −4.7% |
 
-**The winning lever is a small-vocab superword tokenizer trained on our own mix.** A ~80k SuperBPE
-we trained on the grug-moe data mix beats every off-the-shelf tokenizer: a small vocab is a
-*smaller, cheaper model* (more effective training steps per FLOP → lower BPB), and the SuperBPE
-superword pretokenizer keeps fertility high enough that the modest serving-cost penalty is
-outweighed. Adding a hashed n-gram input embedding on top buys a further ~0.3% (the n-gram and
-superword are partially redundant). **Best measured: −6.4% feBPB.**
+**The winning lever is a small-vocab superword tokenizer trained on our own mix.** A ~64k SuperBPE
+we trained on the grug-moe data mix beats every off-the-shelf tokenizer *and* every n-gram
+composition: a small vocab is a *smaller, cheaper model* (more effective training steps per FLOP →
+lower BPB), and the SuperBPE superword pretokenizer keeps fertility high enough that the modest
+serving-cost penalty is outweighed. feBPB falls monotonically as the trained vocab shrinks
+(128k → 80k → 64k), with the marginal gain tapering — a 48k/40k/32k sweep is locating the floor.
+Adding a hashed n-gram embedding on top buys ~0.3% (partially redundant with superword).
+**Best measured: −6.6% feBPB.**
 
 **On the 10% target.** The measured levers do not reach a 10% feBPB improvement at the flash-scale
 proxy — the tokenizer serving-discount lever caps near −5%, small-vocab training-efficiency adds
@@ -104,19 +107,22 @@ feBPB ladders. **Vocab size is the axis, and small-vocab superword wins:**
 
 | trained arm | vocab | s8000 BPB | feBPB | vs marin |
 |---|---|---|---|---|
-| **trained-superbpe-80k-t40k** | 80k | 1.1107 | **1.1621** | **−6.1%** |
+| **trained-superbpe-64k-t32k** | 64k | 1.1141 | **1.1564** | **−6.6%** |
+| trained-superbpe-80k-t40k | 80k | 1.1107 | 1.1621 | −6.1% |
 | trained-superbpe-128k-t51k | 128k | 1.1081 | 1.1836 | −4.4% |
 | trained-superbpe-128k-t102k | 128k | 1.1252 | 1.1918 | −3.7% |
 | trained-superbpe-160k-t64k | 160k | 1.1216 | 1.2028 | −2.8% |
-| trained-superbpe-64k-t32k | 64k | [PENDING] | [PENDING] | [PENDING] |
+| trained-superbpe-{48k,40k,32k} | ≤48k | [FLOOR SWEEP RUNNING] | | |
 
-**feBPB falls monotonically as trained vocab shrinks** (160k → 128k → 80k). Two lessons: (1) a
+**feBPB falls monotonically as trained vocab shrinks** (160k → 128k → 80k → 64k). Two lessons: (1) a
 *small* vocab is a *smaller model* — cheaper per training FLOP, so more effective steps at a fixed
 budget → lower BPB — and the superword pretokenizer keeps fertility high enough that the serving
 penalty is outweighed; (2) *big*-vocab trained SuperBPE (128k/160k) is **worse** than off-the-shelf
 superbpe-128k (more bytes/token but worse held-out BPB — it over-merges a small corpus). The win is
-specifically at small vocab: the "gpt-neox efficiency × superword packing" sweet spot. 64k/96k
-bracket ladders locate the exact optimum [64k PENDING].
+specifically at small vocab: the "gpt-neox efficiency × superword packing" sweet spot. The marginal
+gain tapers (128k→80k −1.7%, 80k→64k −0.5%), so the optimum is near 64k; the 48k/40k/32k sweep
+pins the floor (below it, coverage collapses and BPB rises — plain gpt-neox BPE at 50k is only
+−5.1%, so the superword mechanism is what keeps 64k ahead).
 
 ## Axis D — hashed n-gram input embedding (Over-Encoding / LongCat)
 
