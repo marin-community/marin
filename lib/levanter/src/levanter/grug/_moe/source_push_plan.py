@@ -301,6 +301,50 @@ def pack_source_push_tokens(
     return jnp.asarray(packed)
 
 
+def pack_source_push_tokens_jax(
+    x: Float[Array, "S T D"],
+    plan: SourcePushPlan,
+) -> Float[Array, "S Dst Q M D"]:
+    """Pack source tokens in queue order using JAX gathers from a fixed plan."""
+
+    source_indices = jnp.arange(plan.assignment_ids.shape[0], dtype=jnp.int32)[:, None, None, None]
+    token_ids = jnp.maximum(plan.token_ids, 0)
+    packed = x[source_indices, token_ids]
+    return jnp.where(plan.valid_mask[..., None], packed, jnp.zeros((), dtype=x.dtype))
+
+
+def source_push_queue_route_weights_jax(
+    route_weights: Float[Array, "S T K"],
+    plan: SourcePushPlan,
+) -> Float[Array, "S Dst Q M"]:
+    """Gather route weights in source-owned queue order using JAX from a fixed plan."""
+
+    source_indices = jnp.arange(plan.assignment_ids.shape[0], dtype=jnp.int32)[:, None, None, None]
+    token_ids = jnp.maximum(plan.token_ids, 0)
+    route_slots = jnp.maximum(plan.route_slots, 0)
+    queue_weights = route_weights[source_indices, token_ids, route_slots]
+    return jnp.where(plan.valid_mask, queue_weights, jnp.zeros((), dtype=route_weights.dtype))
+
+
+def source_push_recv_route_weights_jax(
+    route_weights: Float[Array, "S T K"],
+    plan: SourcePushPlan,
+) -> Float[Array, "Dst Src Q M"]:
+    """Gather route weights in destination receive order using JAX from a fixed plan."""
+
+    queue_weights = source_push_queue_route_weights_jax(route_weights, plan)
+    ep_size = plan.assignment_ids.shape[0]
+    recv_by_dst = []
+    for dst in range(ep_size):
+        recv_sources = []
+        for recv_ord in range(ep_size):
+            src = (dst + recv_ord) % ep_size
+            send_dst_ord = dst_ordinal(src, dst, ep_size)
+            recv_sources.append(queue_weights[src, send_dst_ord])
+        recv_by_dst.append(jnp.stack(recv_sources, axis=0))
+    return jnp.stack(recv_by_dst, axis=0)
+
+
 def source_push_w2_return(
     hidden_expert_major: Float[Array, "Dst rows I"],
     w_down: Float[Array, "Dst E I D"],

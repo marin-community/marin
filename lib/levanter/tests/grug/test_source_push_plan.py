@@ -19,9 +19,12 @@ from levanter.grug._moe.source_push_plan import (
     build_source_push_plan,
     dst_ordinal,
     pack_source_push_tokens,
+    pack_source_push_tokens_jax,
     source_push_combine,
     source_push_combine_preweighted,
+    source_push_queue_route_weights_jax,
     source_push_recv_route_weights,
+    source_push_recv_route_weights_jax,
     source_push_w13_h,
     source_push_w2_from_h_return,
     recv_src_ordinal,
@@ -229,6 +232,34 @@ def test_source_push_plan_packs_tokens_and_restores_source_route_buffer():
                     )
                     np.testing.assert_array_equal(route_buffer[src, token, route_slot], expected)
     np.testing.assert_array_equal(combined, np.sum(route_buffer, axis=2))
+
+
+def test_source_push_plan_jax_pack_and_route_weight_gathers_match_host_plan():
+    selected_experts, combine_weights = _small_routing_inputs()
+    plan = build_source_push_plan(
+        selected_experts,
+        combine_weights,
+        ep_size=EP_SIZE,
+        experts_per_rank=EXPERTS_PER_RANK,
+        block_m=BLOCK_M,
+        capacity_factor=2.0,
+    )
+    x = jnp.arange(EP_SIZE * selected_experts.shape[1] * 3, dtype=jnp.float32).reshape(EP_SIZE, -1, 3)
+
+    observed_packed = jax.jit(lambda x_arg: pack_source_push_tokens_jax(x_arg, plan))(x)
+    observed_queue_weights = jax.jit(lambda weights_arg: source_push_queue_route_weights_jax(weights_arg, plan))(
+        combine_weights
+    )
+    observed_recv_weights = jax.jit(lambda weights_arg: source_push_recv_route_weights_jax(weights_arg, plan))(
+        combine_weights
+    )
+
+    np.testing.assert_array_equal(np.asarray(observed_packed), np.asarray(pack_source_push_tokens(x, plan)))
+    np.testing.assert_array_equal(np.asarray(observed_queue_weights), np.asarray(plan.combine_weights))
+    np.testing.assert_array_equal(
+        np.asarray(observed_recv_weights),
+        np.asarray(source_push_recv_route_weights(combine_weights, plan)),
+    )
 
 
 def test_source_push_w2_return_preserves_queue_identity_from_exact_expert_major_hidden():
