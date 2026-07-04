@@ -33,6 +33,9 @@ FORWARD_SCRIPT_PATH = Path(__file__).resolve().parents[2] / "scripts" / "bench" 
 FORWARD_PUBLIC_COMPARE_SCRIPT_PATH = (
     Path(__file__).resolve().parents[2] / "scripts" / "bench" / "bench_source_push_forward_public_compare.py"
 )
+MLP_FWD_BWD_SCRIPT_PATH = (
+    Path(__file__).resolve().parents[2] / "scripts" / "bench" / "bench_source_push_mlp_fwd_bwd.py"
+)
 SCRIPT_SPEC = importlib.util.spec_from_file_location("bench_source_push_inbox", SCRIPT_PATH)
 assert SCRIPT_SPEC is not None
 source_push_cli = importlib.util.module_from_spec(SCRIPT_SPEC)
@@ -56,6 +59,14 @@ assert FORWARD_PUBLIC_COMPARE_SCRIPT_SPEC is not None
 source_push_forward_public_compare_cli = importlib.util.module_from_spec(FORWARD_PUBLIC_COMPARE_SCRIPT_SPEC)
 assert FORWARD_PUBLIC_COMPARE_SCRIPT_SPEC.loader is not None
 FORWARD_PUBLIC_COMPARE_SCRIPT_SPEC.loader.exec_module(source_push_forward_public_compare_cli)
+MLP_FWD_BWD_SCRIPT_SPEC = importlib.util.spec_from_file_location(
+    "bench_source_push_mlp_fwd_bwd",
+    MLP_FWD_BWD_SCRIPT_PATH,
+)
+assert MLP_FWD_BWD_SCRIPT_SPEC is not None
+source_push_mlp_fwd_bwd_cli = importlib.util.module_from_spec(MLP_FWD_BWD_SCRIPT_SPEC)
+assert MLP_FWD_BWD_SCRIPT_SPEC.loader is not None
+MLP_FWD_BWD_SCRIPT_SPEC.loader.exec_module(source_push_mlp_fwd_bwd_cli)
 
 DIAGNOSTIC_SCRIPT_PATH = (
     Path(__file__).resolve().parents[2] / "scripts" / "bench" / "bench_source_push_inbox_diagnostics.py"
@@ -1680,6 +1691,17 @@ def test_source_push_forward_public_compare_bench_cli_imports():
     assert result.returncode == 0, result.stderr
 
 
+def test_source_push_mlp_fwd_bwd_bench_cli_imports():
+    result = subprocess.run(
+        [sys.executable, str(MLP_FWD_BWD_SCRIPT_PATH), "--help"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
 def test_source_push_diagnostic_runner_tags_structured_validation_errors():
     config = source_push_inbox.PushInboxConfig(ep_size=1)
 
@@ -1976,5 +1998,91 @@ def test_source_push_forward_public_compare_cli_passes_profile_defaults(monkeypa
             "git_sha": "abc123",
             "kernel": "source_push_forward_public_compare",
             "public_implementation": "pallas_mgpu_source_push",
+        }
+    ]
+
+
+def test_source_push_mlp_fwd_bwd_cli_passes_profile_defaults(monkeypatch, capsys):
+    calls = []
+
+    def fake_run_source_push_mlp_fwd_bwd(
+        config,
+        *,
+        backends,
+        modes,
+        warmup,
+        steps,
+        repeat_runs,
+        outer_jit,
+        separate_compile,
+        debug_exceptions,
+    ):
+        calls.append(
+            (
+                config.routing,
+                config.entries_per_rank,
+                backends,
+                modes,
+                warmup,
+                steps,
+                repeat_runs,
+                outer_jit,
+                separate_compile,
+                debug_exceptions,
+            )
+        )
+        return [
+            {
+                "kernel": "source_push_mlp_fwd_bwd",
+                "backend": backends[0],
+                "mode": modes[0],
+            }
+        ]
+
+    monkeypatch.setattr(
+        source_push_mlp_fwd_bwd_cli,
+        "run_source_push_mlp_fwd_bwd",
+        fake_run_source_push_mlp_fwd_bwd,
+    )
+
+    source_push_mlp_fwd_bwd_cli.main(
+        [
+            "--source-push-profile",
+            SOURCE_PUSH_PROFILE_STABLE_216,
+            "--backends",
+            "source_push_pallas_mgpu,ring",
+            "--modes",
+            "forward_backward",
+            "--repeat-runs",
+            "3",
+            "--outer-jit",
+            "false",
+            "--separate-compile",
+            "--git-sha",
+            "abc123",
+        ]
+    )
+
+    rows = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    assert calls == [
+        (
+            "roughly_balanced",
+            288,
+            ("source_push_pallas_mgpu", "ring"),
+            ("forward_backward",),
+            2,
+            7,
+            3,
+            "false",
+            True,
+            False,
+        )
+    ]
+    assert rows == [
+        {
+            "backend": "source_push_pallas_mgpu",
+            "git_sha": "abc123",
+            "kernel": "source_push_mlp_fwd_bwd",
+            "mode": "forward_backward",
         }
     ]
