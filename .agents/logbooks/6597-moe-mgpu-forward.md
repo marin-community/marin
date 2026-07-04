@@ -2194,3 +2194,29 @@ forward API gap where the Pallas staged path computed H internally and discarded
   - Next integration step is to route the production source-push MLP custom VJP forward rule through this staged
     with-H entrypoint and adapt the backward residual to consume the flat production H layout or convert it to the
     compact `[Dst, E, C, 2I]` route-table layout.
+
+## 2026-07-03 18:24 - Add JAX plan gathers for VJP integration
+
+Added pure-JAX helpers that pack source tokens and gather route weights from a fixed `SourcePushPlan` without
+host-side `device_get` of differentiable arrays. This is a dependency for making the MLP-level custom VJP traceable:
+the plan can remain nondifferentiable/static, while `x` and `route_weights` can flow through JAX gathers into the
+staged source-push kernels.
+
+- Commit Hash: `dbe8dbffd`
+- Code:
+  - `lib/levanter/src/levanter/grug/_moe/source_push_plan.py`
+  - `lib/levanter/tests/grug/test_source_push_plan.py`
+- New helpers:
+  - `pack_source_push_tokens_jax(x, plan)`
+  - `source_push_queue_route_weights_jax(route_weights, plan)`
+  - `source_push_recv_route_weights_jax(route_weights, plan)`
+- Verification:
+  - `uv run --package marin-levanter --group test pytest lib/levanter/tests/grug/test_source_push_plan.py -q -k 'jax_pack_and_route_weight_gathers or packs_tokens'`
+    - Result: `2 passed, 11 warnings in 7.84s`.
+  - `./infra/pre-commit.py --fix lib/levanter/src/levanter/grug/_moe/source_push_plan.py lib/levanter/tests/grug/test_source_push_plan.py`
+    - Result: all checks passed, including Pyrefly.
+- Interpretation:
+  - Under eager `jax.grad`, a custom VJP forward rule sees concrete arrays; under `jax.jit(jax.grad(...))`, it sees
+    tracers. The old host helpers therefore cannot sit inside the production MLP VJP forward rule.
+  - These helpers match the existing host plan exactly and are covered under `jax.jit`, so the next patch can build a
+    preplanned source-push MLP VJP path whose differentiable inputs are packed/gathered on device.
