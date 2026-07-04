@@ -105,11 +105,11 @@ class ActiveTaskRow:
 
 @dataclass(frozen=True, slots=True)
 class TaskDetailRow:
-    """Task-detail projection: ``TASK_DETAIL_COLS`` + the federated worker label,
-    with ``failure_count`` / ``preemption_count`` derived from the task's attempt
-    rows (there are no such columns). Built by ``reads.get_task_detail`` /
-    ``bulk_get_task_detail``; the reconcile kernel keys the snapshot task map on
-    it, and ``service.TaskWithAttempts`` reads its display columns."""
+    """Task-detail projection: ``TASK_DETAIL_COLS`` plus the federated worker label.
+
+    ``failure_count`` / ``preemption_count`` are derived from the task's attempt
+    rows — there are no such columns on ``tasks``.
+    """
 
     task_id: JobName
     job_id: JobName
