@@ -440,6 +440,12 @@ class LocalControllerConfig(_Config):
 class ControllerResourcesConfig(_Config):
     """Controller Pod resource requests/limits and health-probe tolerances.
 
+    ``cpu``/``memory`` are the guaranteed request; ``cpu_limit``/``memory_limit``
+    default to the request when unset, reproducing the historical Guaranteed-QoS
+    behavior. Setting a limit above the request makes the Pod Burstable, letting
+    it use spare node CPU/memory during reconcile-loop spikes (e.g. large task
+    fan-outs) rather than being throttled at its guaranteed share.
+
     Defaults reproduce the historical hardcoded values (and the k8s default
     probe behavior of a 1s timeout / 3 failures), so small and TPU clusters are
     unaffected. Large CoreWeave clusters running heavy pre-tokenization fan-out
@@ -449,7 +455,9 @@ class ControllerResourcesConfig(_Config):
     """
 
     cpu: str = "4"
+    cpu_limit: str = ""  # default: equal to cpu (Guaranteed QoS)
     memory: str = "16Gi"
+    memory_limit: str = ""  # default: equal to memory (Guaranteed QoS)
     probe_timeout_seconds: int = 1
     probe_failure_threshold: int = 3
 

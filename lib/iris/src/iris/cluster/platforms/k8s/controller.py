@@ -127,11 +127,16 @@ def _build_controller_deployment(
     fresh: bool = False,
 ) -> dict:
     """Build the controller Deployment manifest as a dict."""
-    # Reserve controller CPU/memory so Kubernetes doesn't classify this Pod
-    # as BestEffort. Matching limits keep the controller in Guaranteed QoS.
+    # Reserve controller CPU/memory so Kubernetes doesn't classify this Pod as
+    # BestEffort. Limits default to the request (Guaranteed QoS); a cluster
+    # that sets a higher limit gets a Burstable Pod that can use spare node
+    # capacity during reconcile-loop spikes without raising its guaranteed share.
     controller_resources = {
         "requests": {"cpu": resources.cpu, "memory": resources.memory},
-        "limits": {"cpu": resources.cpu, "memory": resources.memory},
+        "limits": {
+            "cpu": resources.cpu_limit or resources.cpu,
+            "memory": resources.memory_limit or resources.memory,
+        },
     }
     # The controller SQLite DB lives on a PersistentVolumeClaim, so two
     # controller pods must never mount the same local state dir at once. We

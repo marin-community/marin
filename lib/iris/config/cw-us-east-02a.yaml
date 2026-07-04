@@ -79,9 +79,13 @@ controller:
     # Heavy pre-tokenization fan-out (~1500 tokenize pods at peak) OOMs the
     # controller at the 16Gi default and its /health probe misses the 1s
     # deadline while saturated, triggering a liveness-kill cascade (issue #6944).
+    # The controller node has 192 cores / 1.5 TiB RAM, so the CPU limit is set
+    # well above the request (Burstable QoS) to absorb reconcile-loop spikes.
     resources:
-      cpu: "16"
-      memory: 128Gi
+      cpu: "32"
+      cpu_limit: "128"
+      memory: 96Gi
+      memory_limit: 256Gi
       probe_timeout_seconds: 10
       probe_failure_threshold: 6
     # Publishes ONLY /proxy off-cluster; per-endpoint auth is the gate.

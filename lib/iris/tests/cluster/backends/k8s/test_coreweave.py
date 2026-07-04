@@ -221,15 +221,19 @@ def test_start_controller_creates_all_resources():
 def test_start_controller_applies_configured_resources_and_probes():
     """Controller resources config overrides Pod requests/limits and probe tolerances.
 
-    Large CoreWeave clusters raise memory/CPU and relax the liveness/readiness
-    probe deadline so a busy controller is not OOM- or liveness-killed under
-    heavy tokenize fan-out (issue #6944).
+    Large CoreWeave clusters raise the request and set a higher limit (Burstable
+    QoS, not Guaranteed) so the controller can use spare node CPU/memory during
+    a reconcile-loop spike, and relax the liveness/readiness probe deadline so a
+    busy controller is not OOM- or liveness-killed under heavy tokenize fan-out
+    (issue #6944).
     """
     provider, k8s = _make_provider()
     cluster_config = _make_cluster_config(
         controller_resources=ControllerResourcesConfig(
-            cpu="16",
-            memory="128Gi",
+            cpu="32",
+            cpu_limit="128",
+            memory="96Gi",
+            memory_limit="256Gi",
             probe_timeout_seconds=10,
             probe_failure_threshold=6,
         ),
@@ -240,8 +244,9 @@ def test_start_controller_applies_configured_resources_and_probes():
     provider.start_controller(cluster_config)
 
     container = k8s.get_json(K8sResource.DEPLOYMENTS, "iris-controller")["spec"]["template"]["spec"]["containers"][0]
-    assert container["resources"]["requests"] == {"cpu": "16", "memory": "128Gi"}
-    assert container["resources"]["limits"] == {"cpu": "16", "memory": "128Gi"}
+    assert container["resources"]["requests"] == {"cpu": "32", "memory": "96Gi"}
+    assert container["resources"]["limits"] == {"cpu": "128", "memory": "256Gi"}
+    assert container["resources"]["requests"] != container["resources"]["limits"]
     for probe in ("readinessProbe", "livenessProbe"):
         assert container[probe]["timeoutSeconds"] == 10
         assert container[probe]["failureThreshold"] == 6
