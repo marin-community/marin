@@ -554,3 +554,13 @@ data already on S3) reach training in ~3 min with ~8 pods; PARTIAL arms re-token
   **fertility already measured** (`scratchpad/soak_fertility.json`, ngram entry added). Phase-1
   serving cost (final): superbpe-128k(-llama) rel_serve **0.864** (−13.5% vs marin), 64k **0.942**,
   digits **1.06–1.14** (digit-split = more tokens). Interim feBPB posted to #6796.
+- **Soak result (6 scored arms, posted to #6796)**: scored at the **common budget**
+  `C_ref=2.07e19` FLOPs (`bakeoff_analysis --ref-budget`, no extrapolation — the rebooted arms
+  reach different max budgets). **All 5 trained SuperBPE arms beat the marin-128k Llama-3 baseline
+  (feBPB 0.9848)**: 64k-llama **0.9478** (−3.8%), 64k-digits 0.9667 (−1.8%), 64k 0.9692 (−1.6%),
+  128k-llama 0.9724 (−1.3%), ngram 0.9799 (−0.5%). Margins are conservative because the common
+  budget is early (~7k steps, steep BPB curves); they widen toward the proxy-scale −4.7%…−6.8% as
+  arms converge — refresh at a higher common budget once the rebooted laggards (06e, 08b) climb.
+  Arms 3 & 5 (128k-plain/digits) unscored — blocked by the leaf-group IB collective hang (#6950);
+  coverage preserved by 64k-plain + 64k-digits + 128k-llama. Ladder+domains:
+  `scratchpad/{ladder_final,domains_final}.json`.
