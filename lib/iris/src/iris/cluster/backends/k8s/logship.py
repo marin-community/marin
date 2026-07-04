@@ -146,8 +146,7 @@ def log_key_and_attempt(task_id: str) -> tuple[str, int]:
     so it matches the per-task log query, which is EXACT ``…:<attempt>`` for one
     attempt or PREFIX ``…:`` for all attempts. A bare attempt-0 key only matches
     the job-level ``/user/job/`` prefix scan, so its logs appear under the job
-    but never under the task. Building the key via ``task_log_key`` keeps it
-    byte-for-byte identical to the worker backend's own task-log writes.
+    but never under the task.
     """
     parsed = TaskAttempt.from_wire(task_id)
     task_attempt = parsed.with_attempt(parsed.attempt_id or 0)
