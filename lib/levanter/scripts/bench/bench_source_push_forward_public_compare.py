@@ -31,7 +31,7 @@ from levanter.grug._moe.source_push_inbox_profiles import SOURCE_PUSH_PROFILES, 
 from levanter.grug.grug_moe import moe_mlp
 
 
-PUBLIC_EP_BACKENDS = ("ring", "ragged_all_to_all")
+PUBLIC_EP_BACKENDS = ("ring", "ragged_all_to_all", "pallas_mgpu_source_push")
 KERNEL_NAME = "source_push_forward_public_compare"
 
 

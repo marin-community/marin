@@ -1955,7 +1955,7 @@ def test_source_push_forward_public_compare_cli_passes_profile_defaults(monkeypa
             "--source-push-execution-mode",
             "staged_host_sync",
             "--public-implementations",
-            "ring,ragged_all_to_all",
+            "pallas_mgpu_source_push,ring",
             "--git-sha",
             "abc123",
         ]
@@ -1968,13 +1968,13 @@ def test_source_push_forward_public_compare_cli_passes_profile_defaults(monkeypa
             288,
             "reference",
             "staged_host_sync",
-            ("ring", "ragged_all_to_all"),
+            ("pallas_mgpu_source_push", "ring"),
         )
     ]
     assert rows == [
         {
             "git_sha": "abc123",
             "kernel": "source_push_forward_public_compare",
-            "public_implementation": "ring",
+            "public_implementation": "pallas_mgpu_source_push",
         }
     ]
