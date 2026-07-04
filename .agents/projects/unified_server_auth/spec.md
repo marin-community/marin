@@ -1,0 +1,273 @@
+# Spec — unified server auth & secret configuration
+
+Contracts pinned by `design.md`. New code lives in `lib/rigging` (the shared
+leaf); iris and finelog consume it. Signatures are the public surface reviewers
+agree to; bodies are illustrative. Paths are under `main` at
+`5a6f64cbeef5e1962ed367deb3aaf72956ddb4d1`.
+
+## 1. Declarative auth-stack schema — `lib/rigging/src/rigging/auth_config.py` (new)
+
+### 1.1 Scope and wire format
+
+This schema models the **request chain** only — the authenticators that decide
+an already-authenticated request. It does **not** model login-exchange verifiers
+(`static`/`gcp`/`iap_id_token`): those run inside the `Login` RPC (which the
+policy skips via `unauthenticated_methods`) and are constructed in code
+(`iris/cluster/controller/auth.py:447-470`). The request chain's verifier is
+always the service JWT manager, so the schema never carries a login verifier.
+
+`AuthStackConfig` serializes to an **ordered JSON list of internally-tagged
+layer objects** (`{"type": <layer>, ...}`), matching finelog's existing
+`FINELOG_AUTH_POLICY` shape (`lib/finelog/src/finelog/deploy/config.py:125-128`).
+Order is evaluation order: first `AUTHENTICATED`/`Allow` admits, first
+`REJECTED`/`Reject` denies, all-absent falls to the deny terminal.
+
+```json
+[
+  {"type": "jwt"},
+  {"type": "iap_assertion"},
+  {"type": "cidr", "cidrs": ["10.0.0.0/8", "127.0.0.0/8", "::1/128"]},
+  {"type": "loopback"}
+]
+```
+
+### 1.2 Layer catalog (request chain)
+
+| `type` | Fields | Verifier the service injects | Semantics |
+|---|---|---|---|
+| `jwt` | `optional: bool = false` | the service JWT `TokenVerifier` (via `jwt_verifier=`) | present+valid ⇒ AUTHENTICATED; absent ⇒ ABSENT. present+invalid ⇒ REJECTED when `optional=false`, else ABSENT (the `BestEffortJwtAuthenticator` case that makes a null-auth chain attribute a valid worker JWT but never reject) |
+| `iap_assertion` | — | `IapAssertionVerifier` (via `iap_assertion_verifier=`) | verifies `X-Goog-IAP-JWT-Assertion`; forged ⇒ REJECTED; absent ⇒ ABSENT |
+| `cidr` | `cidrs: list[str]` | — | direct socket peer in a CIDR ⇒ `ANONYMOUS_ADMIN`; `X-Forwarded-For`/port-0 ⇒ ABSENT |
+| `loopback` | — | — | genuine loopback socket peer ⇒ `ANONYMOUS_ADMIN` |
+| `anonymous` | — | — | terminal: admit as `ANONYMOUS_ADMIN` (the permissive / `optional` tail) |
+
+Rules: an **empty list raises** at parse time (total lockout — a service passes
+an explicit default stack rather than relying on omission). A stack whose last
+layer is not `anonymous` is default-deny (all-absent ⇒ raise ⇒ `UNAUTHENTICATED`).
+`static`, `gcp`, and `iap_id_token` are **not** request-chain layers (they are
+login-exchange verifiers — see §1.1). A `jwt`/`iap_assertion` layer whose
+verifier was not supplied is a build-time `ValueError`.
+
+### 1.3 Python API and the no-behavior-change contract
+
+```python
+@dataclass(frozen=True)
+class AuthStackConfig:
+    """An ordered, declarative request-auth-layer stack (see §1.1 wire format)."""
+    layers: tuple[AuthLayerSpec, ...]
+
+    @classmethod
+    def from_json(cls, data: str | list[dict]) -> "AuthStackConfig":
+        """Parse the wire list; raise ValueError on an empty list or unknown type."""
+    def to_json(self) -> list[dict]: ...
+
+# AuthLayerSpec is a StrEnum-tagged frozen dataclass union:
+#   JwtLayer(optional: bool = False) | IapAssertionLayer() |
+#   CidrLayer(cidrs: tuple[str, ...]) | LoopbackLayer() | AnonymousLayer()
+
+# On RequestAuthPolicy (rigging/server_auth.py), replacing bespoke enforcing():
+@classmethod
+def from_config(
+    cls,
+    stack: AuthStackConfig,
+    *,
+    jwt_verifier: "TokenVerifier | None" = None,
+    iap_assertion_verifier: "IapAssertionVerifier | None" = None,
+) -> "RequestAuthPolicy":
+    """Compile a declarative stack into the authenticator chain.
+
+    A `jwt` layer binds `jwt_verifier` (as JwtAuthenticator, or
+    BestEffortJwtAuthenticator when `optional=True`); an `iap_assertion` layer
+    binds `iap_assertion_verifier`. Raises ValueError if a layer names a verifier
+    that was not supplied, or if `stack` is empty. `enforcing()`/`permissive()`
+    are reimplemented as thin wrappers that build a stack and call this.
+    """
+```
+
+**No-behavior-change contract.** Every current `ControllerAuth` state
+(`request_auth_policy`, `iris/cluster/controller/auth.py:340-353`) compiles to a
+stack that produces the *identical* authenticator chain it builds today:
+
+| Current state | Compiled stack | Notes |
+|---|---|---|
+| null-auth (no provider) | `[jwt(optional=true), anonymous]` | best-effort JWT attributes workers; anonymous terminal = today's `permissive()`. **Stays open** — a null-auth dev cluster is unchanged. |
+| `gcp` / `static` | `[jwt, cidr(trusted_cidrs)?, loopback] (+ anonymous if optional)` | request verifier is the JWT manager; the gcp/static login verifier stays in the `Login` RPC |
+| `iap` | `[jwt, iap_assertion, cidr(trusted_cidrs)?, loopback] (+ anonymous if optional)` | same chain `enforcing()` builds today |
+| `cidr`-only (`trusted_cidrs`, no provider) | `[cidr(trusted_cidrs), loopback] (+ anonymous if optional)` | |
+
+The migration is mechanical: `request_auth_policy` builds the matching
+`AuthStackConfig` and calls `from_config`. `permissive()` keeps its exact
+current semantics via the `jwt(optional=true)` layer. No cluster's admit/deny
+outcome changes; the round-trip test (design §Testing) is the gate.
+
+## 2. Secret supply — `lib/rigging/src/rigging/secrets.py` (new)
+
+```python
+class SecretSource(Protocol):
+    scheme: str
+    def fetch(self, locator: str) -> str: ...
+
+def is_secret_reference(value: str) -> bool:
+    """True if `value` starts with a known secret scheme (env: / gcp-secret:// / file:)."""
+
+def resolve_secret(ref: str) -> str:
+    """Resolve a secret reference to its value.
+
+    Grammar (dispatched on scheme prefix):
+      - `env:NAME`                                             → os.environ[NAME]
+      - `gcp-secret://projects/<p>/secrets/<n>/versions/<v>`   (v defaults to `latest`)
+      - `file:/abs/path`                                       → contents of a mounted file (trimmed)
+      - a value with NO scheme prefix                          → returned verbatim (raw literal; dev only)
+
+    A value that matches a scheme shape (^[a-z0-9+-]+:) but names an UNKNOWN
+    scheme raises SecretResolutionError — never a silent literal fallback, so a
+    typo'd `gcp-secret:/...` fails at resolution, not at token-verification time.
+    A known-scheme ref that cannot be fetched (missing env var / Secret Manager
+    version / denied IAM) also raises. The GCP path imports
+    google-cloud-secret-manager lazily; it is an optional extra
+    (`marin-rigging[secrets]`).
+    """
+```
+
+No `k8s-secret://` scheme: the k8s-native path is a Secret + `envFrom` →
+`env:NAME` (or a mounted volume → `file:`). A runtime `k8s-secret://` read would
+require `secrets: get` on the controller ClusterRole, which grants none today
+(`iris/cluster/platforms/k8s/controller.py:678-728`) and would invert the
+documented posture that the controller "never has these secrets"
+(`platforms/k8s/controller.py:397-399`).
+
+### 2.1 Config-side contract (iris)
+
+- The secret-bearing fields are marked with an explicit annotation, **not** a
+  name heuristic (`rigging.redaction.is_sensitive_key_name` misses
+  `delegation_key` and matches the whole non-secret `auth` block):
+
+```python
+SecretRefStr = Annotated[str, "secret-ref"]   # a str field that must be a SecretRef in a deployed config
+```
+
+  Marked fields: `ClusterFinelogConfig.delegation_key`, `.static_token`
+  (`config.py:690-693`); `PeerConfig.static_token` (`config.py:661-664`);
+  `StaticAuthConfig.tokens` values (`config.py:506`);
+  `IapAuthConfig.oauth_client_secret` (`config.py:512`). **Not** marked:
+  `WorkerConfig.auth_token` (`config.py:402`) — it is minted on the controller
+  at runtime (`local_cluster.py:207`) and is always empty in an authored config,
+  so it is never a reference and never guarded.
+- **Resolve boundary is the controller runtime, not the loader.** `load_config`
+  (`config.py:1287-1315`) parses only. The controller `serve` entrypoint
+  (`main.py:337`) calls `resolve_config_secrets(config)` after `load_config`,
+  replacing each marked field with its resolved value in the in-memory model,
+  before consumers read it (`finelog_relay.py:80-84`, `federation/peer.py:106`).
+  The deploy CLI (`iris cluster start`) never resolves — it renders references
+  into the artifact verbatim.
+
+```python
+def resolve_config_secrets(config: IrisClusterConfig) -> IrisClusterConfig:
+    """Return a copy with every SecretRefStr field resolved via resolve_secret.
+    Called once on the controller serve path; never on the deploy/render path."""
+```
+
+- **Producer guard at the render sites** (not inside generic `config_to_dict`,
+  which tests and round-trips also call): `_config_json_for_configmap`
+  (`iris/cluster/platforms/k8s/controller.py:1131`) and
+  `build_controller_bootstrap_script_from_config`
+  (`iris/cluster/platforms/gcp/controller_bootstrap.py:264`) call:
+
+```python
+def assert_no_inlined_secrets(config: IrisClusterConfig) -> None:
+    """Raise ValueError if any SecretRefStr-marked field holds a non-empty value
+    that is not a secret reference (is_secret_reference is False) — i.e. a raw
+    secret about to be serialized into a broadly-readable ConfigMap / GCE
+    metadata. Empty strings pass (unset). Mirrors finelog's assert_inlineable_auth
+    (lib/finelog/src/finelog/deploy/config.py:131-142)."""
+```
+
+Per-service JWT **signing** keys are out of config entirely — minted on the
+controller into `controller_secrets` (unchanged, `auth.py:157-181`).
+
+## 3. Role-grant RPC + onboarding CLI (#6580, #6592)
+
+### 3.1 `SetUserRole` RPC (new, on `ControllerService`)
+
+Today there is no role-change RPC (`set_user_role` runs only at startup). Add:
+
+```proto
+message SetUserRoleRequest { string user_id = 1; string role = 2; }  // role ∈ {dashboard, user, admin}
+message SetUserRoleResponse { string user_id = 1; string role = 2; }
+```
+
+Handler (`iris/cluster/controller/service.py`) is admin-only via a new
+`AuthzAction.MANAGE_USER_ROLES` (`iris/rpc/auth.py`, empty allowed-set = admin
+only, like `MANAGE_OTHER_KEYS`); it `ensure_user` + `set_user_role`
+(`writes.py:742-745`). Rejects reserved `system:` user ids.
+
+### 3.2 `iris user grant` CLI
+
+```
+iris user grant \
+    --cluster <name> \
+    --user <email|sa-email> \
+    --role {dashboard|user|admin}      # default: dashboard (read-only)
+
+# Orchestrates three distinct planes (only 1 and 3 are applied live):
+#  1. [IAM]      gcloud iap web add-iam-policy-binding … roles/iap.httpsResourceAccessor  (idempotent)
+#  3. [RPC]      SetUserRole(user, role) against the live controller               (idempotent)
+#  2. [CONFIG]   if the IAP client id is absent from auth.iap.audiences, PRINT the
+#                required config edit + `iris cluster start` redeploy step         (NOT applied live)
+#  →  prints:    iap+https://<host>/proxy/<name>?audience=<iap-client-id>
+```
+
+The command is idempotent for planes 1 and 3; plane 2 is a config edit it cannot
+apply to a running controller, so it prints the diff and the redeploy command
+rather than pretending to mutate live state.
+
+### 3.3 `login` provisioning change (#6592)
+
+Scoped to **IAP clusters only**: the `login` RPC (`service.py:2584-2620`)
+provisions a new IAP identity at `IapAuthConfig.unprovisioned_role` (default
+read-only `dashboard`) instead of the write-capable default `"user"`.
+`gcp`/`static` login provisioning is unchanged — there the login verifier is
+already the allowlist (`GcpAccessTokenVerifier`'s project check,
+`server_auth.py:189-196`). Claims trap (runbook): role is baked into the 30-day
+JWT and `verify()` never reads the user store, so a grant applies only after the
+user re-runs `iris login`.
+
+## 4. Files
+
+| Path | Change |
+|---|---|
+| `lib/rigging/src/rigging/auth_config.py` | **new** — `AuthStackConfig`, layer specs, wire (de)serialization |
+| `lib/rigging/src/rigging/server_auth.py` | `RequestAuthPolicy.from_config`; `enforcing`/`permissive` reimplemented on it |
+| `lib/rigging/src/rigging/secrets.py` | **new** — `resolve_secret`, `SecretSource`, `is_secret_reference`, `SecretRefStr` |
+| `lib/rigging/pyproject.toml` | add `[secrets]` optional extra (`google-cloud-secret-manager`) |
+| `lib/rigging/docs/authed-service.md` | **new** — the rollout runbook (server + client recipe; cidr-grants-admin caveat) |
+| `lib/iris/src/iris/cluster/config.py` | mark `SecretRefStr` fields; `resolve_config_secrets`; `assert_no_inlined_secrets` |
+| `lib/iris/src/iris/cluster/controller/main.py` | resolve secrets on the `serve` path after `load_config` |
+| `lib/iris/src/iris/cluster/platforms/k8s/controller.py` | guard at `_config_json_for_configmap` |
+| `lib/iris/src/iris/cluster/platforms/gcp/controller_bootstrap.py` | guard at the render site |
+| `lib/iris/src/iris/cluster/controller/auth.py` | `request_auth_policy` builds `AuthStackConfig`; IAP `login` provisions at `unprovisioned_role` |
+| `lib/iris/src/iris/cluster/controller/service.py` | `SetUserRole` handler |
+| `lib/iris/src/iris/rpc/auth.py` | `AuthzAction.MANAGE_USER_ROLES` |
+| `lib/iris/proto/…` | `SetUserRoleRequest` / `SetUserRoleResponse` |
+| `lib/iris/src/iris/cli/…` | `iris user grant` |
+| `lib/finelog/src/finelog/deploy/config.py` | share the `cidr`/walk wire convention + contract test; keep `assert_inlineable_auth` |
+| `lib/finelog/AGENTS.md` | fix stale "ships no auth" note (`:29-31`) |
+| `mkdocs.yml` | nav entry for `authed-service.md` |
+
+## 5. Out of scope
+
+- **The pyo3 shared engine** (Open Question 1) — this spec pins the *schema* +
+  the shared `cidr`/walk convention only; a shared Rust crate is a separate
+  design if pursued.
+- **A first-class runtime k8s Secret fetch** (`k8s-secret://`) — deliberately
+  excluded (RBAC escalation, §2).
+- Token refresh / rotation for the 30-day iris JWT (deferred in
+  `20260312_iris_auth_design.md`).
+- Generalizing scoped tokens from a single `audience` to a `scopes` set
+  (deferred in `2026-07-02_iris_per_endpoint_ingress_auth.md`).
+- Unauthenticated bundle downloads (flagged in research §6; not committed here).
+- The GCLB `public-proxy` / controller-redeploy ops steps of #6937 (operator
+  actions, not code) — this doc only records the answered
+  `MAX_ENDPOINT_TOKEN_TTL = 86400s` and the native `/proxy` BEARER pattern.
+- Any change to the wire `EndpointAccess` proto or `MintEndpointToken` (shipped,
+  PR #6857).
