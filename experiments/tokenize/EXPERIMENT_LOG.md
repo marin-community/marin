@@ -512,14 +512,30 @@ data already on S3) reach training in ~3 min with ~8 pods; PARTIAL arms re-token
 
 | # | BAKEOFF_ARM (env) | vocab | pretok/ngram | tokenizer cache | latest job | state |
 |---|-------------------|-------|--------------|-----------------|------------|-------|
-| 1 | marin-128k | 128k | Llama-3 BPE | HIT | soak-01d-marin-128k | **training** |
-| 2 | soak-superbpe-64k | 64k | SuperBPE | HIT | soak-02d-superbpe-64k | **training** |
-| 3 | soak-superbpe-128k | 128k | SuperBPE | HIT (03d/03e done) | soak-03e→**03f** | reboot |
-| 4 | soak-superbpe-64k-digits | 64k | SuperBPE+digits | HIT (04c/04d done) | soak-04d→**04e** | reboot |
-| 5 | soak-superbpe-128k-digits | 128k | SuperBPE+digits | PARTIAL | soak-05d→**05e** | reboot |
-| 6 | soak-superbpe-64k-llama | 64k | Llama-3 word regex | PARTIAL | soak-06c→**06d** | reboot |
-| 7 | soak-superbpe-128k-llama | 128k | Llama-3 word regex | PARTIAL | soak-07b→**07c** | reboot |
-| 8 | soak-superbpe-64k `+ngram` | 64k | SuperBPE + n-gram (4M/rank128/2-4/r0.25) | HIT (shares arm 2) | soak-08-superbpe-64k-ngram | **training** |
+| 1 | marin-128k | 128k | Llama-3 BPE | HIT | soak-01d-marin-128k | **training** (~13kit) |
+| 2 | soak-superbpe-64k | 64k | SuperBPE | HIT | soak-02d-superbpe-64k | **training** (~13kit) |
+| 3 | soak-superbpe-128k | 128k | SuperBPE | HIT | soak-03i→**03j** | 128k collective-hang (see below) |
+| 4 | soak-superbpe-64k-digits | 64k | SuperBPE+digits | HIT | soak-04e-superbpe-64k-digits | **training** (~7kit) |
+| 5 | soak-superbpe-128k-digits | 128k | SuperBPE+digits | HIT | soak-05f | 128k collective-hang (see below) |
+| 6 | soak-superbpe-64k-llama | 64k | Llama-3 word regex | HIT | soak-06e-superbpe-64k-llama | **training** |
+| 7 | soak-superbpe-128k-llama | 128k | Llama-3 word regex | HIT | soak-07c-superbpe-128k-llama | **training** (~5kit) |
+| 8 | soak-superbpe-64k `+ngram` | 64k | SuperBPE + n-gram (4M/rank128/2-4/r0.25) | HIT (shares arm 2) | soak-08→**08b** | **training** (rebooted; 08 hung on controller patch) |
+
+- **128k collective-hang (arms 3 & 5, root-caused)**: `soak-superbpe-128k` (03) and
+  `soak-superbpe-128k-digits` (05) reproducibly die ~7 min in with a **first-step distributed
+  collective hang** — every task's main thread parks in `jax/_src/interpreters/pxla.py:388
+  __call__` (`ExecuteReplicated`) inside the first `_run_grug_local` pjit step, the JAX
+  coordination service times out after 5 min, and the gang aborts (`Fatal Python error: Aborted`,
+  barrier `1/8`). This is **not** tokenizer/cache/data: the tokenizer resolves from the mirror
+  fine, the caches are structurally identical to the working arms (same per-source doc counts,
+  `fin=True`), and the `Metadata mismatch` + HF-Hub `404 trained/soak-superbpe-128k` messages are a
+  **non-fatal red herring present in the working 07c logs 112× too**. It is an **NCCL/IB collective
+  hang** hit under the larger 128k gradient all-reduce: all six 64k-and-baseline arms train, and
+  128k-llama (07c) trains only on its **3rd** attempt (07→07b→07c) — i.e. success is probabilistic
+  per host-set, and the 128k arms hang more often. Retries use
+  `scratchpad/reboot_arm_nccl.sh` (adds `NCCL_IB_TIMEOUT=22 NCCL_IB_RETRY_CNT=13`). If retries keep
+  hanging, the 128k-plain/digits points are droppable: the vocab×pretokenizer space stays covered by
+  64k-plain (02) + 64k-digits (04) + 128k-llama (07).
 
 - **Infra hardening applied this campaign** (why the reboots happened): (1) **zephyr CW-S3 parquet
   fix** (commit 88cdc91512) — the reader handed a raw `s3://` path to pyarrow's native S3 client,
