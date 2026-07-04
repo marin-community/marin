@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 import jax
 import jax.numpy as jnp
 import numpy as np
+from jax.sharding import PartitionSpec as P
 from jaxtyping import Array, Bool, Float, Int
 
 from levanter.grug._moe.ep_common import _clip_receiver_group_sizes
@@ -22,6 +23,20 @@ SOURCE_PUSH_META_LOCAL_ROW_START = 2
 SOURCE_PUSH_META_VALID_ROWS = 3
 SOURCE_PUSH_META_FIELDS = 4
 INVALID_ASSIGNMENT_ID = -1
+SOURCE_PUSH_MESH_AXIS = "expert"
+
+
+def _source_push_out_sharding(*parts):
+    if jax.sharding.get_abstract_mesh().empty:
+        return None
+    return P(*parts)
+
+
+def _with_source_push_sharding(value, *parts):
+    sharding = _source_push_out_sharding(*parts)
+    if sharding is None:
+        return value
+    return jax.lax.with_sharding_constraint(value, sharding)
 
 
 @jax.tree_util.register_dataclass
@@ -309,8 +324,11 @@ def pack_source_push_tokens_jax(
 
     source_indices = jnp.arange(plan.assignment_ids.shape[0], dtype=jnp.int32)[:, None, None, None]
     token_ids = jnp.maximum(plan.token_ids, 0)
-    packed = x[source_indices, token_ids]
-    return jnp.where(plan.valid_mask[..., None], packed, jnp.zeros((), dtype=x.dtype))
+    packed = x.at[source_indices, token_ids].get(
+        out_sharding=_source_push_out_sharding(SOURCE_PUSH_MESH_AXIS, None, None, None, None)
+    )
+    packed = jnp.where(plan.valid_mask[..., None], packed, jnp.zeros((), dtype=x.dtype))
+    return _with_source_push_sharding(packed, SOURCE_PUSH_MESH_AXIS, None, None, None, None)
 
 
 def source_push_queue_route_weights_jax(
@@ -322,8 +340,11 @@ def source_push_queue_route_weights_jax(
     source_indices = jnp.arange(plan.assignment_ids.shape[0], dtype=jnp.int32)[:, None, None, None]
     token_ids = jnp.maximum(plan.token_ids, 0)
     route_slots = jnp.maximum(plan.route_slots, 0)
-    queue_weights = route_weights[source_indices, token_ids, route_slots]
-    return jnp.where(plan.valid_mask, queue_weights, jnp.zeros((), dtype=route_weights.dtype))
+    queue_weights = route_weights.at[source_indices, token_ids, route_slots].get(
+        out_sharding=_source_push_out_sharding(SOURCE_PUSH_MESH_AXIS, None, None, None)
+    )
+    queue_weights = jnp.where(plan.valid_mask, queue_weights, jnp.zeros((), dtype=route_weights.dtype))
+    return _with_source_push_sharding(queue_weights, SOURCE_PUSH_MESH_AXIS, None, None, None)
 
 
 def source_push_recv_route_weights_jax(
@@ -342,7 +363,8 @@ def source_push_recv_route_weights_jax(
             send_dst_ord = dst_ordinal(src, dst, ep_size)
             recv_sources.append(queue_weights[src, send_dst_ord])
         recv_by_dst.append(jnp.stack(recv_sources, axis=0))
-    return jnp.stack(recv_by_dst, axis=0)
+    recv_weights = jnp.stack(recv_by_dst, axis=0)
+    return _with_source_push_sharding(recv_weights, SOURCE_PUSH_MESH_AXIS, None, None, None)
 
 
 def source_push_w2_return(
