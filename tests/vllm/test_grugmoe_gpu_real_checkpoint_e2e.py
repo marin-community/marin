@@ -10,8 +10,10 @@ reference on GPUs.
 
 from __future__ import annotations
 
+import base64
 import fcntl
 import importlib.util
+import io
 import json
 import os
 import shutil
@@ -24,6 +26,7 @@ from pathlib import Path
 from types import ModuleType, SimpleNamespace
 from typing import Any
 
+import numpy as np
 import pytest
 
 GPU_LOCK_PATH = "/tmp/marin-grugmoe-gpu-e2e.lock"
@@ -351,6 +354,77 @@ def test_vllm_server_logs_are_copied_to_output_prefix(tmp_path: Path) -> None:
     assert {item["name"] for item in artifacts["files"]} == {"stdout.log", "stderr.log"}
     assert (tmp_path / "result-prefix" / "vllm-server-logs" / "stdout.log").read_text() == "stdout full log\n"
     assert (tmp_path / "result-prefix" / "vllm-server-logs" / "stderr.log").read_text() == "stderr full log\n"
+
+
+def _encoded_routed_experts(expert_ids: list[int]) -> str:
+    payload = io.BytesIO()
+    np.save(payload, np.array([[expert_ids]], dtype=np.int64))
+    return base64.b64encode(payload.getvalue()).decode()
+
+
+def test_vllm_completion_diagnostics_compare_rank4_and_rank0(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[dict[str, Any]] = []
+
+    class FakeResponse:
+        ok = True
+        status_code = 200
+        text = "{}"
+
+        def __init__(self, choices: list[dict[str, Any]]) -> None:
+            self._choices = choices
+
+        def json(self) -> dict[str, Any]:
+            return {
+                "choices": self._choices,
+                "usage": {"completion_tokens": len(self._choices)},
+            }
+
+        def raise_for_status(self) -> None:
+            raise AssertionError("raise_for_status should not be called for successful fake response")
+
+    def fake_post(url: str, **kwargs: Any) -> FakeResponse:
+        calls.append({"url": url, **kwargs})
+        rank = int(kwargs["headers"]["X-data-parallel-rank"])
+        choices = [
+            {
+                "text": f"rank-{rank}-choice-{index}",
+                "finish_reason": "length",
+                "routed_experts": _encoded_routed_experts([rank * 32, 255]),
+            }
+            for index, _ in enumerate(kwargs["json"]["prompt"])
+        ]
+        return FakeResponse(choices)
+
+    worker_ep_states = [
+        {
+            "ep_rank": ep_rank,
+            "local_expert_ids": list(range(ep_rank * 32, ep_rank * 32 + 32)),
+        }
+        for ep_rank in range(backend.VLLM_EXPERT_PARALLEL_SIZE)
+    ]
+    monkeypatch.setattr(backend.requests, "post", fake_post)
+    env = SimpleNamespace(server_url="http://127.0.0.1:8000/v1", model_id="grugmoe")
+
+    diagnostics = backend._run_vllm_completion_diagnostics(env, worker_ep_states=worker_ep_states)
+
+    assert diagnostics["compare_ranks"] == [4, 0]
+    assert diagnostics["repeated_attempts"] == 3
+    assert len(calls) == 10
+    assert calls[0]["headers"] == {
+        "X-data-parallel-rank": "4",
+        "X-Request-Id": "grugmoe-diagnostic-rank4-repeated-bs1",
+    }
+    assert {request["data_parallel_rank"] for request in diagnostics["requests"]} == {0, 4}
+    assert [
+        request["attempt"] for request in diagnostics["requests"] if request["name"].startswith("rank4-repeated-bs2")
+    ] == [0, 1, 2]
+    rank4_non_repeated = next(
+        request for request in diagnostics["requests"] if request["name"] == "rank4-non-repeated-bs2"
+    )
+    assert rank4_non_repeated["prompt_kind"] == "non_repeated"
+    assert rank4_non_repeated["choice_count"] == 2
+    assert rank4_non_repeated["choices"][0]["routed_experts_shape"] == [1, 1, 2]
+    assert rank4_non_repeated["choices"][0]["routed_owner_ranks"] == [4, 7]
 
 
 def test_grugmoe_worker_extension_reports_structured_ep_state(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -81,6 +81,12 @@ PROMPT = common.PROMPT
 PROMPT_BATCH_SIZE = 16
 PROMPTS = tuple(PROMPT for _ in range(PROMPT_BATCH_SIZE))
 EXPECTED_CONTINUATION = common.EXPECTED_CONTINUATION
+DIAGNOSTIC_COMPARE_RANKS = (4, 0)
+DIAGNOSTIC_REPEATED_ATTEMPTS = 3
+DIAGNOSTIC_NON_REPEATED_PROMPTS = (
+    "Answer with digits only. No words. No punctuation. What is two plus two?",
+    "Answer with digits only. No words. No punctuation. What is three plus three?",
+)
 MAX_MODEL_LEN = common.MAX_MODEL_LEN
 MAX_NUM_BATCHED_TOKENS = 1024
 MAX_NEW_TOKENS = common.MAX_NEW_TOKENS
@@ -974,12 +980,15 @@ def _completion_payload(
     *,
     prompts: list[str],
     data_parallel_rank: int | None = None,
+    request_id: str | None = None,
 ) -> dict[str, Any]:
     if env.model_id is None:
         raise RuntimeError("Expected vLLM server to expose a model id.")
     headers = {}
     if data_parallel_rank is not None:
         headers["X-data-parallel-rank"] = str(data_parallel_rank)
+    if request_id is not None:
+        headers["X-Request-Id"] = request_id
     response = requests.post(
         f"{env.server_url}/completions",
         headers=headers,
@@ -1009,6 +1018,165 @@ def _decode_routed_experts(value: str | None) -> list[Any] | None:
 
     routed = np.load(io.BytesIO(base64.b64decode(value)))
     return routed.astype("int64").tolist()
+
+
+def _nested_list_shape(value: Any) -> list[int]:
+    shape: list[int] = []
+    current = value
+    while isinstance(current, list):
+        shape.append(len(current))
+        if not current:
+            break
+        current = current[0]
+    return shape
+
+
+def _routed_experts_digest(routed_experts: list[Any] | None) -> str | None:
+    if routed_experts is None:
+        return None
+    payload = json.dumps(routed_experts, separators=(",", ":")).encode()
+    return hashlib.sha256(payload).hexdigest()
+
+
+def _completion_choice_summary(
+    choice: dict[str, Any],
+    *,
+    worker_ep_states: list[dict[str, Any]],
+) -> dict[str, Any]:
+    routed_experts = _decode_routed_experts(choice.get("routed_experts"))
+    return {
+        "text": str(choice.get("text", "")),
+        "finish_reason": choice.get("finish_reason"),
+        "routed_experts_shape": _nested_list_shape(routed_experts),
+        "routed_experts_digest": _routed_experts_digest(routed_experts),
+        "routed_experts_tail": routed_experts[-4:] if routed_experts else None,
+        "routed_owner_ranks": _owners_for_worker_expert_placement(
+            routed_experts,
+            worker_ep_states=worker_ep_states,
+        ),
+    }
+
+
+def _summarize_completion_payload(
+    payload: dict[str, Any],
+    *,
+    worker_ep_states: list[dict[str, Any]],
+    expected_continuation: str | None,
+) -> dict[str, Any]:
+    choices = payload.get("choices")
+    if not isinstance(choices, list):
+        raise AssertionError(f"completion payload missing choices list: {payload!r}")
+    choice_summaries = [
+        _completion_choice_summary(choice, worker_ep_states=worker_ep_states)
+        for choice in choices
+        if isinstance(choice, dict)
+    ]
+    texts = [choice["text"] for choice in choice_summaries]
+    completion_counts = {item: texts.count(item) for item in sorted(set(texts))}
+    return {
+        "choice_count": len(choice_summaries),
+        "texts": texts,
+        "completion_counts": completion_counts,
+        "all_expected": (
+            expected_continuation is not None
+            and len(texts) == len(choices)
+            and all(text == expected_continuation for text in texts)
+        ),
+        "choices": choice_summaries,
+        "usage": payload.get("usage"),
+    }
+
+
+def _diagnostic_prompt_summary(prompts: list[str]) -> list[dict[str, Any]]:
+    return [
+        {
+            "index": index,
+            "sha256": hashlib.sha256(prompt.encode()).hexdigest(),
+            "length": len(prompt),
+            "is_main_prompt": prompt == PROMPT,
+        }
+        for index, prompt in enumerate(prompts)
+    ]
+
+
+def _vllm_completion_diagnostic_specs() -> list[dict[str, Any]]:
+    specs: list[dict[str, Any]] = []
+    for rank in DIAGNOSTIC_COMPARE_RANKS:
+        specs.append(
+            {
+                "name": f"rank{rank}-repeated-bs1",
+                "data_parallel_rank": rank,
+                "prompts": [PROMPT],
+                "prompt_kind": "repeated",
+                "attempt": 0,
+                "expected_continuation": EXPECTED_CONTINUATION,
+            }
+        )
+        for attempt in range(DIAGNOSTIC_REPEATED_ATTEMPTS):
+            specs.append(
+                {
+                    "name": f"rank{rank}-repeated-bs2-attempt{attempt}",
+                    "data_parallel_rank": rank,
+                    "prompts": [PROMPT, PROMPT],
+                    "prompt_kind": "repeated",
+                    "attempt": attempt,
+                    "expected_continuation": EXPECTED_CONTINUATION,
+                }
+            )
+        specs.append(
+            {
+                "name": f"rank{rank}-non-repeated-bs2",
+                "data_parallel_rank": rank,
+                "prompts": list(DIAGNOSTIC_NON_REPEATED_PROMPTS),
+                "prompt_kind": "non_repeated",
+                "attempt": 0,
+                "expected_continuation": None,
+            }
+        )
+    return specs
+
+
+def _run_vllm_completion_diagnostics(
+    env: Any,
+    *,
+    worker_ep_states: list[dict[str, Any]],
+) -> dict[str, Any]:
+    requests_summary: list[dict[str, Any]] = []
+    for spec in _vllm_completion_diagnostic_specs():
+        name = str(spec["name"])
+        data_parallel_rank = int(spec["data_parallel_rank"])
+        prompts = list(spec["prompts"])
+        request_summary: dict[str, Any] = {
+            "name": name,
+            "data_parallel_rank": data_parallel_rank,
+            "batch_size": len(prompts),
+            "prompt_kind": spec["prompt_kind"],
+            "attempt": spec["attempt"],
+            "prompt_summary": _diagnostic_prompt_summary(prompts),
+        }
+        try:
+            payload = _completion_payload(
+                env,
+                prompts=prompts,
+                data_parallel_rank=data_parallel_rank,
+                request_id=f"grugmoe-diagnostic-{name}",
+            )
+            request_summary.update(
+                _summarize_completion_payload(
+                    payload,
+                    worker_ep_states=worker_ep_states,
+                    expected_continuation=spec["expected_continuation"],
+                )
+            )
+        except Exception as exc:  # Keep the primary vLLM correctness result visible.
+            request_summary["failure"] = _exception_summary(exc)
+        requests_summary.append(request_summary)
+
+    return {
+        "compare_ranks": list(DIAGNOSTIC_COMPARE_RANKS),
+        "repeated_attempts": DIAGNOSTIC_REPEATED_ATTEMPTS,
+        "requests": requests_summary,
+    }
 
 
 def _owners_for_worker_expert_placement(
@@ -1175,6 +1343,7 @@ def _vllm_backend(args: argparse.Namespace) -> None:
                     env,
                     prompts=[PROMPT],
                     data_parallel_rank=0,
+                    request_id="grugmoe-single-rank0",
                 )
                 payloads: list[dict[str, Any]] = []
                 rank_request_batches: list[dict[str, Any]] = []
@@ -1184,6 +1353,7 @@ def _vllm_backend(args: argparse.Namespace) -> None:
                         env,
                         prompts=prompts,
                         data_parallel_rank=data_parallel_rank,
+                        request_id=f"grugmoe-main-rank{data_parallel_rank}",
                     )
                     payloads.append(payload)
                     rank_request_batches.append(
@@ -1193,6 +1363,10 @@ def _vllm_backend(args: argparse.Namespace) -> None:
                             "batch_size": len(prompts),
                         }
                     )
+                completion_diagnostics = _run_vllm_completion_diagnostics(
+                    env,
+                    worker_ep_states=worker_ep_states,
+                )
                 logs_tail = env.logs_tail(max_lines=160)
                 log_artifacts = _copy_vllm_server_logs(
                     env.vllm_server.log_dir if env.vllm_server else None,
@@ -1267,6 +1441,20 @@ def _vllm_backend(args: argparse.Namespace) -> None:
     completion_counts = {item: completions.count(item) for item in sorted(set(completions))}
     repeated_prompt_identical = len(completion_counts) == 1
     routed_owner_rank_coverage = sorted(routed_owner_ranks) == list(range(VLLM_EXPERT_PARALLEL_SIZE))
+    single_prompt_choice_summary = _summarize_completion_payload(
+        single_payload,
+        worker_ep_states=worker_ep_states,
+        expected_continuation=EXPECTED_CONTINUATION,
+    )["choices"][0]
+    main_choice_summaries = [
+        choice_summary
+        for payload in payloads
+        for choice_summary in _summarize_completion_payload(
+            payload,
+            worker_ep_states=worker_ep_states,
+            expected_continuation=EXPECTED_CONTINUATION,
+        )["choices"]
+    ]
     result = {
         "phase": "vllm",
         "checkpoint_path": args.checkpoint_path,
@@ -1278,6 +1466,7 @@ def _vllm_backend(args: argparse.Namespace) -> None:
         "completion": completion,
         "single_prompt_completion": single_completion,
         "single_prompt_routed_experts": single_routed_experts,
+        "single_prompt_choice_summary": single_prompt_choice_summary,
         "completions": completions,
         "completion_counts": completion_counts,
         "repeated_prompt_identical": repeated_prompt_identical,
@@ -1306,6 +1495,8 @@ def _vllm_backend(args: argparse.Namespace) -> None:
         "rank_request_batches": rank_request_batches,
         "observed_worker_data_parallel_ranks": worker_ep_summary["dp_ranks"],
         "requested_data_parallel_ranks": [batch["data_parallel_rank"] for batch in rank_request_batches],
+        "main_choice_summaries": main_choice_summaries,
+        "completion_diagnostics": completion_diagnostics,
         "routed_experts_by_completion": routed_experts_by_completion,
         "routed_expert_num_experts": num_experts,
         "routed_expert_owner_ranks": sorted(routed_owner_ranks),
