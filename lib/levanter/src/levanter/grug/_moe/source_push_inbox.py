@@ -398,8 +398,14 @@ def _make_kernel(
 
                                         def _copy_buffer(buffer_smem, k_start) -> None:
                                             if source_input_mode == SOURCE_INPUT_RAW_TOKENS:
-                                                row_offsets = jnp.arange(config.block_m, dtype=jnp.int32)
-                                                col_offsets = k_start + jnp.arange(config.block_k, dtype=jnp.int32)
+                                                row_offsets = mgpu.layout_cast(
+                                                    jnp.arange(config.block_m, dtype=jnp.int32),
+                                                    mgpu.Layout.WG_STRIDED,
+                                                )
+                                                col_offsets = k_start + mgpu.layout_cast(
+                                                    jnp.arange(config.block_k, dtype=jnp.int32),
+                                                    mgpu.Layout.WG_STRIDED,
+                                                )
                                                 valid_row_mask = row_offsets < valid_rows
                                                 token_ids = token_ids_ref[dst_ordinal, entry, pl.ds(0, config.block_m)]
                                                 safe_token_ids = jnp.where(valid_row_mask, token_ids, 0)
