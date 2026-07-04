@@ -85,6 +85,13 @@ LEVANTER_PROMPT_SWEEP_ENV = "MARIN_GRUGMOE_LEVANTER_PROMPT_SWEEP"
 LEVANTER_DEFAULT_PROMPT_SWEEP = False
 LEVANTER_ROUTE_DIAGNOSTICS_ENV = "MARIN_GRUGMOE_LEVANTER_ROUTE_DIAGNOSTICS"
 LEVANTER_DEFAULT_ROUTE_DIAGNOSTICS = True
+FORCED_PREFIX_DIAGNOSTICS_ENV = "MARIN_GRUGMOE_FORCED_PREFIX_DIAGNOSTICS"
+FORCED_PREFIX_DIAGNOSTICS_DEFAULT = False
+TRAINING_LOSS_DIAGNOSTICS_ENV = "MARIN_GRUGMOE_TRAINING_LOSS_DIAGNOSTICS"
+TRAINING_LOSS_DIAGNOSTICS_DEFAULT = False
+PRIMARY_GATE_ENV = "MARIN_GRUGMOE_PRIMARY_GATE"
+PRIMARY_GATE_DEFAULT = "stress"
+PRIMARY_GATE_CHOICES = ("stress", "stable_prompt")
 RUN_ID_ENV = "MARIN_GRUGMOE_GPU_E2E_RUN_ID"
 OUTPUT_DIR_ENV = "MARIN_GRUGMOE_GPU_E2E_OUTPUT_DIR"
 INSTALL_REPORT_PATH_ENV = "MARIN_GRUGMOE_GPU_E2E_INSTALL_REPORT_PATH"
@@ -106,13 +113,23 @@ DIAGNOSTIC_COMPARE_RANKS = (4, 0)
 DIAGNOSTIC_REPEATED_ATTEMPTS = 3
 DIAGNOSTIC_LOGPROBS = 8
 DIAGNOSTIC_ROUTE_STEPS = 1
-DIAGNOSTIC_PROMPT_SWEEP_MAX_NEW_TOKENS = 1
+DIAGNOSTIC_PROMPT_SWEEP_MAX_NEW_TOKENS = 4
+DIAGNOSTIC_STABLE_PROMPT_MIN_TOP2_MARGIN = 0.25
 DIAGNOSTIC_PROMPT_SWEEP_PROMPTS = (
     "Answer with digits only. No words. No punctuation. What is two plus two?",
     "Answer with digits only. No words. No punctuation. What is three plus three?",
     "Answer with one word only. What color is the sky on a clear day?",
 )
 DIAGNOSTIC_NON_REPEATED_PROMPTS = DIAGNOSTIC_PROMPT_SWEEP_PROMPTS[:2]
+FORCED_PREFIX_DIAGNOSTIC_PROMPTS = (
+    {"name": "original", "prompt": PROMPT},
+    {"name": "prefix_the", "prompt": PROMPT + " The"},
+    {"name": "prefix_the_ultimate", "prompt": PROMPT + " The Ultimate"},
+    {"name": "prefix_the_universe", "prompt": PROMPT + " The Universe"},
+)
+TRAINING_LOSS_DIAGNOSTIC_EXPERT_AXIS_SIZES = (1, EXPECTED_GPU_COUNT)
+TRAINING_LOSS_DIAGNOSTIC_REFERENCE_MODES = ("current", "bf16_compute")
+TRAINING_LOSS_DIAGNOSTIC_PROMPTS = (PROMPT + " The Ultimate",)
 MAX_MODEL_LEN = common.MAX_MODEL_LEN
 MAX_NUM_BATCHED_TOKENS = 1024
 MAX_NEW_TOKENS = common.MAX_NEW_TOKENS
@@ -204,6 +221,16 @@ def _resolve_levanter_expert_axis_size() -> int:
     return value
 
 
+def _resolve_primary_gate() -> str:
+    value = os.environ.get(PRIMARY_GATE_ENV, PRIMARY_GATE_DEFAULT).strip().lower()
+    if value not in PRIMARY_GATE_CHOICES:
+        raise ValueError(
+            f"{PRIMARY_GATE_ENV}={value!r} is not supported for this validation; "
+            f"expected one of {PRIMARY_GATE_CHOICES!r}"
+        )
+    return value
+
+
 VLLM_ATTENTION_BACKEND = _resolve_vllm_attention_backend()
 VLLM_DTYPE = _resolve_vllm_dtype()
 VLLM_MOE_COMPUTE = _resolve_vllm_moe_compute()
@@ -221,6 +248,15 @@ LEVANTER_ROUTE_DIAGNOSTICS = _resolve_bool_env(
     LEVANTER_ROUTE_DIAGNOSTICS_ENV,
     default=LEVANTER_DEFAULT_ROUTE_DIAGNOSTICS,
 )
+FORCED_PREFIX_DIAGNOSTICS = _resolve_bool_env(
+    FORCED_PREFIX_DIAGNOSTICS_ENV,
+    default=FORCED_PREFIX_DIAGNOSTICS_DEFAULT,
+)
+TRAINING_LOSS_DIAGNOSTICS = _resolve_bool_env(
+    TRAINING_LOSS_DIAGNOSTICS_ENV,
+    default=TRAINING_LOSS_DIAGNOSTICS_DEFAULT,
+)
+PRIMARY_GATE = _resolve_primary_gate()
 
 
 def _is_coreweave_endpoint(endpoint: str) -> bool:
@@ -601,6 +637,12 @@ def _runtime_snapshot(
         "vllm_moe_compute": VLLM_MOE_COMPUTE,
         "vllm_route_diagnostics": VLLM_ROUTE_DIAGNOSTICS,
         "levanter_reference_mode": LEVANTER_REFERENCE_MODE,
+        "levanter_expert_axis_size": LEVANTER_EXPERT_AXIS_SIZE,
+        "levanter_prompt_sweep": LEVANTER_PROMPT_SWEEP,
+        "levanter_route_diagnostics": LEVANTER_ROUTE_DIAGNOSTICS,
+        "forced_prefix_diagnostics": FORCED_PREFIX_DIAGNOSTICS,
+        "training_loss_diagnostics": TRAINING_LOSS_DIAGNOSTICS,
+        "primary_gate": PRIMARY_GATE,
         "packages": {
             package: {"version": _version(package), "direct_url": _direct_url(package)}
             for package in ("marin-core", "vllm", "tpu-inference", "jax", "torch")
@@ -1179,10 +1221,20 @@ def _completion_logprobs_summary(choice: dict[str, Any]) -> dict[str, Any] | Non
     logprobs = choice.get("logprobs")
     if not isinstance(logprobs, dict):
         return None
+    top2_margins: list[float | None] = []
+    for top_logprob in logprobs.get("top_logprobs") or []:
+        if not isinstance(top_logprob, dict) or len(top_logprob) < 2:
+            top2_margins.append(None)
+            continue
+        values = sorted((float(value) for value in top_logprob.values()), reverse=True)
+        top2_margins.append(values[0] - values[1])
+    finite_margins = [margin for margin in top2_margins if margin is not None]
     return {
         "tokens": logprobs.get("tokens"),
         "token_logprobs": logprobs.get("token_logprobs"),
         "top_logprobs": logprobs.get("top_logprobs"),
+        "top2_logprob_margins": top2_margins,
+        "min_top2_logprob_margin": min(finite_margins) if finite_margins else None,
     }
 
 
@@ -1359,6 +1411,122 @@ def _run_vllm_completion_diagnostics(
     }
 
 
+def _vllm_choice_min_top2_margin(choice: dict[str, Any]) -> float | None:
+    logprobs = choice.get("logprobs")
+    if not isinstance(logprobs, dict):
+        return None
+    margin = logprobs.get("min_top2_logprob_margin")
+    return float(margin) if margin is not None else None
+
+
+def _run_vllm_prompt_sweep(
+    env: Any,
+    *,
+    worker_ep_states: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    results: list[dict[str, Any]] = []
+    for prompt_index, prompt in enumerate(DIAGNOSTIC_PROMPT_SWEEP_PROMPTS):
+        rank_results: list[dict[str, Any]] = []
+        completions: list[str] = []
+        for data_parallel_rank in range(VLLM_DATA_PARALLEL_SIZE):
+            prompts = [prompt, prompt]
+            request_summary: dict[str, Any] = {
+                "data_parallel_rank": data_parallel_rank,
+                "batch_size": len(prompts),
+                "max_tokens": DIAGNOSTIC_PROMPT_SWEEP_MAX_NEW_TOKENS,
+                "logprobs": DIAGNOSTIC_LOGPROBS,
+                "prompt_summary": _diagnostic_prompt_summary(prompts),
+            }
+            try:
+                payload = _completion_payload(
+                    env,
+                    prompts=prompts,
+                    data_parallel_rank=data_parallel_rank,
+                    request_id=f"grugmoe-prompt-sweep-{prompt_index}-rank{data_parallel_rank}",
+                    max_tokens=DIAGNOSTIC_PROMPT_SWEEP_MAX_NEW_TOKENS,
+                    logprobs=DIAGNOSTIC_LOGPROBS,
+                )
+                request_summary.update(
+                    _summarize_completion_payload(
+                        payload,
+                        worker_ep_states=worker_ep_states,
+                        expected_continuation=None,
+                    )
+                )
+                completions.extend(str(text) for text in request_summary.get("texts", []))
+            except Exception as exc:  # Keep the primary vLLM correctness result visible.
+                request_summary["failure"] = _exception_summary(exc)
+            rank_results.append(request_summary)
+        margins = [
+            margin
+            for rank_result in rank_results
+            for choice in rank_result.get("choices", [])
+            if (margin := _vllm_choice_min_top2_margin(choice)) is not None
+        ]
+        results.append(
+            {
+                "prompt_index": prompt_index,
+                "prompt": prompt,
+                "max_new_tokens": DIAGNOSTIC_PROMPT_SWEEP_MAX_NEW_TOKENS,
+                "completion_counts": _value_counts(completions),
+                "all_completions_identical": len(set(completions)) == 1 if completions else False,
+                "min_top2_logprob_margin": min(margins) if margins else None,
+                "rank_results": rank_results,
+            }
+        )
+    return results
+
+
+def _run_vllm_forced_prefix_diagnostics(
+    env: Any,
+    *,
+    worker_ep_states: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    results: list[dict[str, Any]] = []
+    for prompt_spec in FORCED_PREFIX_DIAGNOSTIC_PROMPTS:
+        name = str(prompt_spec["name"])
+        prompt = str(prompt_spec["prompt"])
+        rank_results: list[dict[str, Any]] = []
+        for data_parallel_rank in DIAGNOSTIC_COMPARE_RANKS:
+            request_summary: dict[str, Any] = {
+                "data_parallel_rank": data_parallel_rank,
+                "batch_size": 1,
+                "max_tokens": 1,
+                "logprobs": DIAGNOSTIC_LOGPROBS,
+                "prompt_summary": _diagnostic_prompt_summary([prompt]),
+            }
+            try:
+                payload = _completion_payload(
+                    env,
+                    prompts=[prompt],
+                    data_parallel_rank=data_parallel_rank,
+                    request_id=f"grugmoe-forced-prefix-{name}-rank{data_parallel_rank}",
+                    max_tokens=1,
+                    logprobs=DIAGNOSTIC_LOGPROBS,
+                )
+                request_summary.update(
+                    _summarize_completion_payload(
+                        payload,
+                        worker_ep_states=worker_ep_states,
+                        expected_continuation=None,
+                    )
+                )
+                if VLLM_ROUTE_DIAGNOSTICS:
+                    request_summary["route_diagnostics"] = _collect_grug_moe_route_diagnostics(env)
+            except Exception as exc:  # Keep the primary vLLM correctness result visible.
+                request_summary["failure"] = _exception_summary(exc)
+            rank_results.append(request_summary)
+        results.append(
+            {
+                "name": name,
+                "prompt": prompt,
+                "max_new_tokens": 1,
+                "rank_results": rank_results,
+            }
+        )
+    return results
+
+
 def _owners_for_worker_expert_placement(
     routed_experts: list[Any] | None,
     *,
@@ -1526,7 +1694,13 @@ def _jax_model_dtype_summary(model: Any) -> dict[str, Any]:
     }
 
 
-def _jax_mlp_route_summary(mlp: Any, x: Any, *, layer_index: int) -> dict[str, Any]:
+def _jax_mlp_route_summary(
+    mlp: Any,
+    x: Any,
+    *,
+    layer_index: int,
+    focus_token_indices: Any | None = None,
+) -> dict[str, Any]:
     import jax  # noqa: PLC0415
     import jax.numpy as jnp  # noqa: PLC0415
     from jax.sharding import PartitionSpec as P  # noqa: PLC0415
@@ -1543,7 +1717,7 @@ def _jax_mlp_route_summary(mlp: Any, x: Any, *, layer_index: int) -> dict[str, A
     selected = biased_top_ids[:, : mlp.cfg.num_experts_per_token]
     unbiased_topk = jnp.take_along_axis(router_logits, selected, axis=-1)
     combine_weights = jax.nn.sigmoid(unbiased_topk).astype(x.dtype)
-    return {
+    summary = {
         "layer_index": layer_index,
         "token_count": token_count,
         "hidden_dtype": _jax_dtype_name(x_flat),
@@ -1575,6 +1749,61 @@ def _jax_mlp_route_summary(mlp: Any, x: Any, *, layer_index: int) -> dict[str, A
             max_items=4,
         ),
     }
+    if focus_token_indices is not None:
+        focus_token_indices = jnp.asarray(focus_token_indices, dtype=jnp.int32)
+        focus_selected = jnp.take(selected, focus_token_indices, axis=0)
+        focus_combine_weights = jnp.take(combine_weights, focus_token_indices, axis=0)
+        focus_unbiased_top_ids = jnp.take(unbiased_top_ids, focus_token_indices, axis=0)
+        focus_unbiased_top_logits = jnp.take(unbiased_top_logits, focus_token_indices, axis=0)
+        focus_biased_top_ids = jnp.take(biased_top_ids, focus_token_indices, axis=0)
+        focus_biased_top_logits = jnp.take(biased_top_logits, focus_token_indices, axis=0)
+        summary.update(
+            {
+                "focus_token_flat_indices": _jax_int_vector(
+                    focus_token_indices,
+                    max_items=int(focus_token_indices.shape[0]),
+                ),
+                "focus_selected_experts": _jax_int_rows(
+                    focus_selected,
+                    max_rows=int(focus_selected.shape[0]),
+                    max_cols=mlp.cfg.num_experts_per_token,
+                ),
+                "focus_combine_weights": _jax_float_rows(
+                    focus_combine_weights,
+                    max_rows=int(focus_combine_weights.shape[0]),
+                    max_cols=mlp.cfg.num_experts_per_token,
+                ),
+                "focus_unbiased_top_expert_ids": _jax_int_rows(
+                    focus_unbiased_top_ids,
+                    max_rows=int(focus_unbiased_top_ids.shape[0]),
+                    max_cols=top_count,
+                ),
+                "focus_unbiased_top_logits": _jax_float_rows(
+                    focus_unbiased_top_logits,
+                    max_rows=int(focus_unbiased_top_logits.shape[0]),
+                    max_cols=top_count,
+                ),
+                "focus_biased_top_expert_ids": _jax_int_rows(
+                    focus_biased_top_ids,
+                    max_rows=int(focus_biased_top_ids.shape[0]),
+                    max_cols=top_count,
+                ),
+                "focus_biased_top_logits": _jax_float_rows(
+                    focus_biased_top_logits,
+                    max_rows=int(focus_biased_top_logits.shape[0]),
+                    max_cols=top_count,
+                ),
+                "focus_unbiased_top2_margin": _jax_float_vector(
+                    focus_unbiased_top_logits[:, 0] - focus_unbiased_top_logits[:, 1],
+                    max_items=int(focus_unbiased_top_logits.shape[0]),
+                ),
+                "focus_biased_top2_margin": _jax_float_vector(
+                    focus_biased_top_logits[:, 0] - focus_biased_top_logits[:, 1],
+                    max_items=int(focus_biased_top_logits.shape[0]),
+                ),
+            }
+        )
+    return summary
 
 
 def _jax_forward_route_diagnostics(
@@ -1592,6 +1821,9 @@ def _jax_forward_route_diagnostics(
     from experiments.grug.moe import model as grug_model  # noqa: PLC0415
 
     token_ids = jnp.asarray(token_ids_array, dtype=jnp.int32)
+    batch_size = int(token_ids.shape[0])
+    seq_len = int(token_ids.shape[1])
+    focus_token_indices = jnp.arange(batch_size, dtype=jnp.int32) * seq_len + jnp.asarray(position, dtype=jnp.int32)
     batch_spec = grug_model._batch_spec()
     hidden = model.token_embed.at[token_ids].get(out_sharding=batch_spec)
     hidden = model.embed_gated_norm(model.embed_norm(hidden))
@@ -1605,7 +1837,14 @@ def _jax_forward_route_diagnostics(
         attn_in = block.attn_gated_norm(block.rms_attn(hidden))
         hidden = grug_model._batch_reshard(hidden + block.attn(attn_in, layer_mask))
         mlp_in = grug_model._batch_reshard(block.mlp_gated_norm(block.rms_mlp(hidden)))
-        layer_summaries.append(_jax_mlp_route_summary(block.mlp, mlp_in, layer_index=layer_index))
+        layer_summaries.append(
+            _jax_mlp_route_summary(
+                block.mlp,
+                mlp_in,
+                layer_index=layer_index,
+                focus_token_indices=focus_token_indices,
+            )
+        )
         mlp_out, _ = block.mlp(mlp_in)
         if block.shared is not None:
             mlp_out = mlp_out + block.shared(mlp_in, activation=ActivationFunctionEnum.silu)
@@ -1618,6 +1857,7 @@ def _jax_forward_route_diagnostics(
     first_row = rows[0] if rows else {}
     return {
         "position": position,
+        "focus_token_flat_indices": _jax_int_vector(focus_token_indices, max_items=batch_size),
         "logits_dtype": _jax_dtype_name(logits),
         "position_logits_dtype": _jax_dtype_name(position_logits),
         "top_token_ids": first_row.get("top_token_ids", []),
@@ -1650,7 +1890,7 @@ def _token_top_logits_rows_summary(
         logits = logits_array[row_index]
         top_ids = np.argsort(-logits)[:top_count]
         top_logits = logits[top_ids].astype(np.float32)
-        selected_token_id = int(top_ids[0])
+        selected_token_id = int(np.argmax(logits, axis=-1))
         rows.append(
             {
                 "row_index": row_index,
@@ -1680,10 +1920,11 @@ def _jax_top_logits_rows(value: Any, *, max_rows: int | None = None) -> list[dic
         logits = logits_array[row_index]
         top_ids = np.argsort(-logits)[:top_count]
         top_logits = logits[top_ids].astype(np.float32)
+        selected_token_id = int(np.argmax(logits, axis=-1))
         rows.append(
             {
                 "row_index": row_index,
-                "selected_token_id": int(top_ids[0]),
+                "selected_token_id": selected_token_id,
                 "top_token_ids": [int(token_id) for token_id in top_ids.tolist()],
                 "top_logits": [float(value) for value in top_logits.tolist()],
                 "top2_margin": float(top_logits[0] - top_logits[1]) if top_count >= 2 else None,
@@ -1704,6 +1945,13 @@ def _greedy_decode_with_diagnostics(
     use_active_prefix: bool = False,
     collect_route_diagnostics: bool = True,
 ) -> dict[str, Any]:
+    """Run a Marin validation-only greedy decode and expose per-row evidence.
+
+    The row-aware feedback below is a diagnostic harness choice: each repeated
+    row feeds back its own selected token so batch sensitivity stays visible.
+    It is not a change to Levanter model semantics or a reusable generation API.
+    """
+
     import jax  # noqa: PLC0415
     import jax.numpy as jnp  # noqa: PLC0415
     import numpy as np  # noqa: PLC0415
@@ -1801,6 +2049,23 @@ def _greedy_decode_with_diagnostics(
     }
 
 
+def _decode_step_margin_summary(decode_result: dict[str, Any]) -> dict[str, Any]:
+    step_min_top2_margins: list[float | None] = []
+    step_row_identical: list[bool] = []
+    for step in decode_result.get("steps", []):
+        rows = step.get("rows", [])
+        margins = [float(row["top2_margin"]) for row in rows if row.get("top2_margin") is not None]
+        step_min_top2_margins.append(min(margins) if margins else None)
+        step_row_identical.append(bool(step.get("row_identical")))
+    finite_margins = [margin for margin in step_min_top2_margins if margin is not None]
+    return {
+        "step_min_top2_margins": step_min_top2_margins,
+        "min_step_top2_margin": min(finite_margins) if finite_margins else None,
+        "step_row_identical": step_row_identical,
+        "all_steps_row_identical": all(step_row_identical) if step_row_identical else False,
+    }
+
+
 def _run_levanter_prompt_sweep(
     model: Any,
     tokenizer: Any,
@@ -1828,6 +2093,7 @@ def _run_levanter_prompt_sweep(
         )
         first_step_rows = decode_result["steps"][0]["rows"] if decode_result["steps"] else []
         top2_margins = [float(row["top2_margin"]) for row in first_step_rows if row.get("top2_margin") is not None]
+        step_margin_summary = _decode_step_margin_summary(decode_result)
         results.append(
             {
                 "prompt_index": prompt_index,
@@ -1842,10 +2108,322 @@ def _run_levanter_prompt_sweep(
                     decode_result["steps"][0]["row_token_counts"] if decode_result["steps"] else {}
                 ),
                 "first_step_min_top2_margin": min(top2_margins) if top2_margins else None,
+                **step_margin_summary,
                 "decode_result": decode_result,
             }
         )
     return results
+
+
+def _run_levanter_forced_prefix_diagnostics(
+    model: Any,
+    tokenizer: Any,
+    *,
+    batch_size: int,
+    decode_seq_len: int,
+    pad_token_id: int,
+    use_active_prefix: bool,
+    collect_route_diagnostics: bool,
+) -> list[dict[str, Any]]:
+    results: list[dict[str, Any]] = []
+    for prompt_spec in FORCED_PREFIX_DIAGNOSTIC_PROMPTS:
+        name = str(prompt_spec["name"])
+        prompt = str(prompt_spec["prompt"])
+        prompt_ids, tokenization = _prompt_token_ids(tokenizer, prompt)
+        decode_result = _greedy_decode_with_diagnostics(
+            model,
+            tokenizer,
+            prompt_ids,
+            max_new_tokens=1,
+            batch_size=batch_size,
+            decode_seq_len=decode_seq_len,
+            pad_token_id=pad_token_id,
+            use_active_prefix=use_active_prefix,
+            collect_route_diagnostics=collect_route_diagnostics,
+        )
+        results.append(
+            {
+                "name": name,
+                "prompt": prompt,
+                "tokenization": tokenization,
+                "max_new_tokens": 1,
+                "completion": decode_result["completion"],
+                "row_completions": decode_result["row_completions"],
+                "row_completion_counts": decode_result["row_completion_counts"],
+                "row_completions_identical": decode_result["row_completions_identical"],
+                **_decode_step_margin_summary(decode_result),
+                "decode_result": decode_result,
+            }
+        )
+    return results
+
+
+def _fixed_training_loss_batch(tokenizer: Any, *, batch_size: int) -> tuple[Any, Any, dict[str, Any]]:
+    import numpy as np  # noqa: PLC0415
+
+    prompt = TRAINING_LOSS_DIAGNOSTIC_PROMPTS[0]
+    token_ids, tokenization = _prompt_token_ids(tokenizer, prompt)
+    if len(token_ids) < 2:
+        raise ValueError(f"training diagnostic prompt produced too few tokens: {tokenization!r}")
+    token_ids_array = np.asarray([token_ids for _ in range(batch_size)], dtype=np.int32)
+    loss_weight = np.ones_like(token_ids_array, dtype=np.float32)
+    loss_weight[:, -1] = 0.0
+    return (
+        token_ids_array,
+        loss_weight,
+        {
+            "prompt": prompt,
+            "tokenization": tokenization,
+            "batch_size": batch_size,
+            "seq_len": len(token_ids),
+            "loss_weight_sum": float(loss_weight.sum()),
+        },
+    )
+
+
+def _jax_scalar(value: Any) -> float:
+    import jax  # noqa: PLC0415
+    import numpy as np  # noqa: PLC0415
+
+    return float(np.asarray(jax.device_get(value), dtype=np.float32).reshape(()))
+
+
+def _jax_int_scalar(value: Any) -> int:
+    import jax  # noqa: PLC0415
+    import numpy as np  # noqa: PLC0415
+
+    return int(np.asarray(jax.device_get(value), dtype=np.int64).reshape(()))
+
+
+def _jax_array_finiteness(value: Any) -> dict[str, Any]:
+    import jax  # noqa: PLC0415
+    import jax.numpy as jnp  # noqa: PLC0415
+
+    array = jnp.asarray(value)
+    finite = jnp.isfinite(array)
+    finite_count = jnp.sum(finite.astype(jnp.int32))
+    total = array.size
+    return {
+        "shape": [int(dim) for dim in array.shape],
+        "finite": bool(jax.device_get(jnp.all(finite))),
+        "finite_count": _jax_int_scalar(finite_count),
+        "nonfinite_count": int(total) - _jax_int_scalar(finite_count),
+    }
+
+
+def _summarize_grad_tree(grads: Any) -> dict[str, Any]:
+    import jax  # noqa: PLC0415
+    import jax.numpy as jnp  # noqa: PLC0415
+
+    leaves = [
+        leaf
+        for leaf in jax.tree_util.tree_leaves(grads)
+        if leaf is not None and hasattr(leaf, "dtype") and hasattr(leaf, "shape")
+    ]
+    if not leaves:
+        return {
+            "array_leaf_count": 0,
+            "parameter_count": 0,
+            "global_l2_norm": 0.0,
+            "max_abs": 0.0,
+            "all_finite": True,
+            "nonfinite_leaf_count": 0,
+        }
+
+    squared_norms = [jnp.sum(jnp.square(jnp.asarray(leaf, dtype=jnp.float32))) for leaf in leaves]
+    max_abs_values = [jnp.max(jnp.abs(jnp.asarray(leaf, dtype=jnp.float32))) for leaf in leaves]
+    finite_values = [jnp.all(jnp.isfinite(jnp.asarray(leaf))) for leaf in leaves]
+    global_l2_norm = jnp.sqrt(sum(squared_norms, jnp.asarray(0.0, dtype=jnp.float32)))
+    max_abs = jnp.max(jnp.stack(max_abs_values))
+    finite_flags = jnp.stack(finite_values)
+    return {
+        "array_leaf_count": len(leaves),
+        "parameter_count": int(sum(int(leaf.size) for leaf in leaves)),
+        "global_l2_norm": _jax_scalar(global_l2_norm),
+        "max_abs": _jax_scalar(max_abs),
+        "all_finite": bool(jax.device_get(jnp.all(finite_flags))),
+        "nonfinite_leaf_count": _jax_int_scalar(jnp.sum((~finite_flags).astype(jnp.int32))),
+    }
+
+
+def _summarize_routing_counts(value: Any) -> dict[str, Any]:
+    import jax  # noqa: PLC0415
+    import numpy as np  # noqa: PLC0415
+
+    counts = np.asarray(jax.device_get(value), dtype=np.float32)
+    per_layer: list[dict[str, Any]] = []
+    for layer_index, layer_counts in enumerate(counts):
+        top_count = min(DIAGNOSTIC_LOGPROBS, int(layer_counts.shape[0]))
+        top_ids = np.argsort(-layer_counts)[:top_count]
+        nonzero_counts = layer_counts[layer_counts > 0]
+        per_layer.append(
+            {
+                "layer_index": layer_index,
+                "total_assignments": float(layer_counts.sum()),
+                "nonzero_experts": int(np.count_nonzero(layer_counts)),
+                "min_nonzero_load": float(nonzero_counts.min()) if nonzero_counts.size else 0.0,
+                "max_load": float(layer_counts.max()) if layer_counts.size else 0.0,
+                "top_expert_ids": [int(item) for item in top_ids.tolist()],
+                "top_expert_loads": [float(layer_counts[item]) for item in top_ids.tolist()],
+                "expert_load_histogram": [float(item) for item in layer_counts.tolist()],
+            }
+        )
+    return {
+        "shape": [int(dim) for dim in counts.shape],
+        "total_assignments": float(counts.sum()),
+        "per_layer": per_layer,
+    }
+
+
+def _summarize_training_metrics(metrics: dict[str, Any]) -> dict[str, Any]:
+    scalar_names = (
+        "train/cross_entropy_loss",
+        "train/router/aux_loss_weighted",
+        "train/router/routing_entropy_mean",
+        "train/router/load_balancing_loss",
+        "train/router/router_z_loss",
+    )
+    summary: dict[str, Any] = {}
+    for name in scalar_names:
+        if name in metrics:
+            summary[name] = _jax_scalar(metrics[name])
+            summary[f"{name}:finiteness"] = _jax_array_finiteness(metrics[name])
+    if "train/router/dropped_assignments" in metrics:
+        summary["train/router/dropped_assignments"] = _jax_int_scalar(metrics["train/router/dropped_assignments"])
+    if "train/router/dropped_assignments_per_layer" in metrics:
+        summary["train/router/dropped_assignments_per_layer"] = _jax_int_vector(
+            metrics["train/router/dropped_assignments_per_layer"],
+            max_items=int(metrics["train/router/dropped_assignments_per_layer"].shape[0]),
+        )
+    if "train/router/routing_counts_per_layer" in metrics:
+        summary["expert_load_histograms"] = _summarize_routing_counts(metrics["train/router/routing_counts_per_layer"])
+    return summary
+
+
+def _run_jax_training_loss_case(
+    model: Any,
+    *,
+    token_ids_array: Any,
+    loss_weight_array: Any,
+) -> dict[str, Any]:
+    import equinox as eqx  # noqa: PLC0415
+    import jax  # noqa: PLC0415
+    import jax.numpy as jnp  # noqa: PLC0415
+
+    token_ids = jnp.asarray(token_ids_array, dtype=jnp.int32)
+    loss_weight = jnp.asarray(loss_weight_array, dtype=jnp.float32)
+
+    def loss_fn(the_model: Any) -> tuple[Any, dict[str, Any]]:
+        loss, metrics = the_model.next_token_loss(
+            token_ids,
+            loss_weight,
+            reduction="mean",
+            return_router_metrics=True,
+        )
+        return loss, metrics
+
+    grad_fn = eqx.filter_jit(eqx.filter_value_and_grad(loss_fn, has_aux=True))
+    started = time.time()
+    (loss, metrics), grads = grad_fn(model)
+    jax.block_until_ready(loss)
+    grad_summary = _summarize_grad_tree(grads)
+    metrics_summary = _summarize_training_metrics(metrics)
+    try:
+        route_diagnostics = _jax_forward_route_diagnostics(
+            model,
+            token_ids,
+            position=int(token_ids.shape[1] - 2),
+        )
+    except Exception as exc:  # Keep the actual loss/grad path authoritative.
+        route_diagnostics = {
+            "available": False,
+            "failure": _exception_summary(exc),
+        }
+    focus_biased_margins = [
+        margin for layer in route_diagnostics.get("layers", []) for margin in layer.get("focus_biased_top2_margin", [])
+    ]
+    return {
+        "loss": _jax_scalar(loss),
+        "loss_finiteness": _jax_array_finiteness(loss),
+        "metrics": metrics_summary,
+        "grad_norm_summary": grad_summary,
+        "router_focus_min_biased_top2_margin": min(focus_biased_margins) if focus_biased_margins else None,
+        "router_focus_diagnostics": route_diagnostics,
+        "nan_inf_checks": {
+            "loss_finite": _jax_array_finiteness(loss)["finite"],
+            "grads_all_finite": grad_summary["all_finite"],
+        },
+        "elapsed_seconds": time.time() - started,
+    }
+
+
+def _run_levanter_training_loss_diagnostics(
+    *,
+    checkpoint_path: str,
+    tokenizer: Any,
+    model_cfg: Any,
+) -> dict[str, Any]:
+    import haliax  # noqa: PLC0415
+    from haliax.partitioning import set_mesh  # noqa: PLC0415
+    from levanter.grug.sharding import compact_grug_mesh  # noqa: PLC0415
+
+    cases: list[dict[str, Any]] = []
+    started = time.time()
+    for expert_axis_size in TRAINING_LOSS_DIAGNOSTIC_EXPERT_AXIS_SIZES:
+        mesh = compact_grug_mesh(expert_axis_size=expert_axis_size, model_axis_size=1)
+        mesh_runtime = _mesh_snapshot(mesh)
+        batch_size = _mesh_batch_axis_size(mesh)
+        token_ids_array, loss_weight_array, batch_summary = _fixed_training_loss_batch(tokenizer, batch_size=batch_size)
+        with ExitStack() as stack:
+            stack.enter_context(set_mesh(mesh))
+            stack.enter_context(haliax.axis_mapping({}))
+            loaded_model = _load_legacy_split_expert_checkpoint(checkpoint_path, model_cfg)
+            executable_model = _executable_model_from_legacy_split(
+                loaded_model,
+                capacity_factor=LEVANTER_MOE_CAPACITY_FACTOR,
+            )
+            for reference_mode in TRAINING_LOSS_DIAGNOSTIC_REFERENCE_MODES:
+                model, reference_policy = _apply_levanter_reference_mode(
+                    executable_model,
+                    reference_mode,
+                )
+                cases.append(
+                    {
+                        "expert_axis_size": expert_axis_size,
+                        "reference_mode": reference_mode,
+                        "mesh": mesh_runtime,
+                        "batch": batch_summary,
+                        "reference_policy": reference_policy,
+                        "dtype_summary": _jax_model_dtype_summary(model),
+                        **_run_jax_training_loss_case(
+                            model,
+                            token_ids_array=token_ids_array,
+                            loss_weight_array=loss_weight_array,
+                        ),
+                    }
+                )
+
+    by_key = {(int(case["expert_axis_size"]), str(case["reference_mode"])): case for case in cases if "loss" in case}
+    loss_deltas: dict[str, float] = {}
+    for expert_axis_size in TRAINING_LOSS_DIAGNOSTIC_EXPERT_AXIS_SIZES:
+        fp32_case = by_key.get((expert_axis_size, "current"))
+        bf16_case = by_key.get((expert_axis_size, "bf16_compute"))
+        if fp32_case is not None and bf16_case is not None:
+            loss_deltas[f"ep{expert_axis_size}:bf16_minus_current"] = float(bf16_case["loss"] - fp32_case["loss"])
+    for reference_mode in TRAINING_LOSS_DIAGNOSTIC_REFERENCE_MODES:
+        ep1_case = by_key.get((1, reference_mode))
+        ep8_case = by_key.get((EXPECTED_GPU_COUNT, reference_mode))
+        if ep1_case is not None and ep8_case is not None:
+            loss_deltas[f"{reference_mode}:ep8_minus_ep1"] = float(ep8_case["loss"] - ep1_case["loss"])
+
+    return {
+        "enabled": True,
+        "expert_axis_sizes": list(TRAINING_LOSS_DIAGNOSTIC_EXPERT_AXIS_SIZES),
+        "reference_modes": list(TRAINING_LOSS_DIAGNOSTIC_REFERENCE_MODES),
+        "cases": cases,
+        "loss_deltas": loss_deltas,
+        "elapsed_seconds": time.time() - started,
+    }
 
 
 def _vllm_backend(args: argparse.Namespace) -> None:
@@ -1959,6 +2537,18 @@ def _vllm_backend(args: argparse.Namespace) -> None:
                 completion_diagnostics = _run_vllm_completion_diagnostics(
                     env,
                     worker_ep_states=worker_ep_states,
+                )
+                prompt_sweep_results = _run_vllm_prompt_sweep(
+                    env,
+                    worker_ep_states=worker_ep_states,
+                )
+                forced_prefix_results = (
+                    _run_vllm_forced_prefix_diagnostics(
+                        env,
+                        worker_ep_states=worker_ep_states,
+                    )
+                    if FORCED_PREFIX_DIAGNOSTICS
+                    else []
                 )
                 logs_tail = env.logs_tail(max_lines=160)
                 log_artifacts = _copy_vllm_server_logs(
@@ -2102,6 +2692,10 @@ def _vllm_backend(args: argparse.Namespace) -> None:
         "requested_data_parallel_ranks": [batch["data_parallel_rank"] for batch in rank_request_batches],
         "main_choice_summaries": main_choice_summaries,
         "completion_diagnostics": completion_diagnostics,
+        "vllm_prompt_sweep_results": prompt_sweep_results,
+        "forced_prefix_diagnostics_env_var": FORCED_PREFIX_DIAGNOSTICS_ENV,
+        "forced_prefix_diagnostics": FORCED_PREFIX_DIAGNOSTICS,
+        "vllm_forced_prefix_results": forced_prefix_results,
         "routed_experts_by_completion": routed_experts_by_completion,
         "routed_expert_num_experts": num_experts,
         "routed_expert_owner_ranks": sorted(routed_owner_ranks),
@@ -2205,6 +2799,28 @@ def _levanter_backend(args: argparse.Namespace) -> None:
             if LEVANTER_PROMPT_SWEEP
             else []
         )
+        forced_prefix_results = (
+            _run_levanter_forced_prefix_diagnostics(
+                model,
+                tokenizer,
+                batch_size=decode_batch_size,
+                decode_seq_len=DECODE_SEQ_LEN,
+                pad_token_id=pad_token_id,
+                use_active_prefix=LEVANTER_DECODE_USE_ACTIVE_PREFIX,
+                collect_route_diagnostics=LEVANTER_ROUTE_DIAGNOSTICS,
+            )
+            if FORCED_PREFIX_DIAGNOSTICS
+            else []
+        )
+    training_loss_results = (
+        _run_levanter_training_loss_diagnostics(
+            checkpoint_path=args.checkpoint_path,
+            tokenizer=tokenizer,
+            model_cfg=model_cfg,
+        )
+        if TRAINING_LOSS_DIAGNOSTICS
+        else {"enabled": False}
+    )
     completion = completions[0] if completions else ""
     result = {
         "phase": "levanter",
@@ -2230,6 +2846,12 @@ def _levanter_backend(args: argparse.Namespace) -> None:
         "levanter_prompt_sweep_results": prompt_sweep_results,
         "levanter_route_diagnostics_env_var": LEVANTER_ROUTE_DIAGNOSTICS_ENV,
         "levanter_route_diagnostics": LEVANTER_ROUTE_DIAGNOSTICS,
+        "forced_prefix_diagnostics_env_var": FORCED_PREFIX_DIAGNOSTICS_ENV,
+        "forced_prefix_diagnostics": FORCED_PREFIX_DIAGNOSTICS,
+        "levanter_forced_prefix_results": forced_prefix_results,
+        "training_loss_diagnostics_env_var": TRAINING_LOSS_DIAGNOSTICS_ENV,
+        "training_loss_diagnostics": TRAINING_LOSS_DIAGNOSTICS,
+        "levanter_training_loss_results": training_loss_results,
         "levanter_reference_mode_env_var": LEVANTER_REFERENCE_MODE_ENV,
         "levanter_reference_mode": LEVANTER_REFERENCE_MODE,
         "levanter_reference_policy": reference_policy,
