@@ -214,6 +214,10 @@ class PushInboxConfig:
     def hidden_output_shape(self) -> tuple[int, int]:
         return (self.hidden_rows_per_rank, self.intermediate_dim)
 
+    @property
+    def h_output_shape(self) -> tuple[int, int]:
+        return (self.hidden_rows_per_rank, 2 * self.intermediate_dim)
+
 
 @dataclass(frozen=True)
 class SourcePushInboxRunSettings:
@@ -283,12 +287,19 @@ def source_push_inbox_profile(profile: str) -> tuple[PushInboxConfig, SourcePush
     return PushInboxConfig(**config_kwargs), SourcePushInboxRunSettings(**settings_kwargs)
 
 
-def _hidden_output_shape_for_kernel(config: PushInboxConfig, diagnostic_variant: str) -> tuple[int, int]:
+def _hidden_output_shape_for_kernel(
+    config: PushInboxConfig,
+    diagnostic_variant: str,
+    *,
+    output_preactivation_h: bool = False,
+) -> tuple[int, int]:
     if diagnostic_variant in (DIAGNOSTIC_VARIANT_SEMAPHORE_ONLY, DIAGNOSTIC_VARIANT_COPY_RELEASE_ONLY):
         return (1, 1)
     if diagnostic_variant == DIAGNOSTIC_VARIANT_WGMMA_TINY_OUTPUT:
         n_tiles = config.intermediate_dim // config.block_n
         return (config.hidden_rows_per_rank, n_tiles * TINY_OUTPUT_COLUMNS_PER_N_TILE)
+    if output_preactivation_h:
+        return config.h_output_shape
     return config.hidden_output_shape
 
 
@@ -297,6 +308,7 @@ def _make_kernel(
     diagnostic_variant: str = DIAGNOSTIC_VARIANT_FULL,
     *,
     use_exact_expert_major: bool = False,
+    output_preactivation_h: bool = False,
 ):
     _validate_diagnostic_variant(diagnostic_variant)
     k_tiles = config.hidden_dim // config.block_k
@@ -321,6 +333,10 @@ def _make_kernel(
     )
     stores_zero = diagnostic_variant == DIAGNOSTIC_VARIANT_STORE_ZERO
     stores_tiny_output = diagnostic_variant == DIAGNOSTIC_VARIANT_WGMMA_TINY_OUTPUT
+    stores_preactivation_h = output_preactivation_h and diagnostic_variant in (
+        DIAGNOSTIC_VARIANT_FULL,
+        DIAGNOSTIC_VARIANT_COMPUTE_ONLY_LOCAL,
+    )
 
     def body(
         x_ref: Float[Ref, "DST Q M D"],
@@ -532,6 +548,19 @@ def _make_kernel(
                 )
                 hidden_ref[idx] = output
 
+        def _store_h_tile(src_ordinal, entry, n_tile, gate, up) -> None:
+            dst_row_start = _hidden_row_start(src_ordinal, entry)
+            gate_idx = (
+                pl.ds(dst_row_start, config.block_m),
+                pl.ds(n_tile * config.block_n, config.block_n),
+            )
+            up_idx = (
+                pl.ds(dst_row_start, config.block_m),
+                pl.ds((n_tile + n_tiles) * config.block_n, config.block_n),
+            )
+            hidden_ref[gate_idx] = gate.astype(hidden_ref.dtype)
+            hidden_ref[up_idx] = up.astype(hidden_ref.dtype)
+
         def _store_zero_hidden(src_ordinal, entry, n_tile) -> None:
             dst_row_start = _hidden_row_start(src_ordinal, entry)
             idx = (
@@ -611,6 +640,9 @@ def _make_kernel(
                     up_smem=_wgmma_smem((config.block_k, config.block_n), w_ref.dtype),
                     ready_barrier=mgpu.Barrier(num_arrivals=3),
                 )
+                if stores_preactivation_h:
+                    _store_h_tile(src_ordinal, entry, n_tile, gate_acc_ref[...], up_acc_ref[...])
+                    return jnp.zeros((1,), dtype=hidden_ref.dtype)
                 return _silu(gate_acc_ref[...]) * up_acc_ref[...]
 
             hidden = pl.run_scoped(
@@ -618,7 +650,8 @@ def _make_kernel(
                 gate_acc_ref=mgpu.ACC((config.block_m, config.block_n)),
                 up_acc_ref=mgpu.ACC((config.block_m, config.block_n)),
             )
-            _store_hidden(src_ordinal, entry, n_tile, hidden)
+            if not stores_preactivation_h:
+                _store_hidden(src_ordinal, entry, n_tile, hidden)
 
         def _compute_hidden_n_group(src, src_ordinal, entry, slot, expert, n_group_i) -> None:
             if config.n_group == 1:
@@ -692,10 +725,14 @@ def _make_kernel(
                         up_n1_smem=_wgmma_smem((config.block_k, config.block_n), w_ref.dtype),
                         ready_barrier=mgpu.Barrier(num_arrivals=5),
                     )
-                    hidden_n0 = _silu(gate_n0_acc[...]) * up_n0_acc[...]
-                    hidden_n1 = _silu(gate_n1_acc[...]) * up_n1_acc[...]
-                    _store_hidden(src_ordinal, entry, n_tile, hidden_n0)
-                    _store_hidden(src_ordinal, entry, n_tile + 1, hidden_n1)
+                    if stores_preactivation_h:
+                        _store_h_tile(src_ordinal, entry, n_tile, gate_n0_acc[...], up_n0_acc[...])
+                        _store_h_tile(src_ordinal, entry, n_tile + 1, gate_n1_acc[...], up_n1_acc[...])
+                    else:
+                        hidden_n0 = _silu(gate_n0_acc[...]) * up_n0_acc[...]
+                        hidden_n1 = _silu(gate_n1_acc[...]) * up_n1_acc[...]
+                        _store_hidden(src_ordinal, entry, n_tile, hidden_n0)
+                        _store_hidden(src_ordinal, entry, n_tile + 1, hidden_n1)
 
                 pl.run_scoped(
                     acc_scope,
@@ -816,7 +853,14 @@ def _make_kernel(
     compiler_params = mgpu.CompilerParams(lowering_semantics=mgpu.LoweringSemantics.Lane)
     out_shape = [
         jax.ShapeDtypeStruct(inbox_shape, jnp.bfloat16),
-        jax.ShapeDtypeStruct(_hidden_output_shape_for_kernel(config, diagnostic_variant), jnp.bfloat16),
+        jax.ShapeDtypeStruct(
+            _hidden_output_shape_for_kernel(
+                config,
+                diagnostic_variant,
+                output_preactivation_h=output_preactivation_h,
+            ),
+            jnp.bfloat16,
+        ),
     ]
 
     return mgpu.kernel(
@@ -1477,6 +1521,70 @@ def _sharded_kernel(
     )
 
 
+def _make_w13_h_kernel(
+    config: PushInboxConfig,
+    *,
+    use_exact_expert_major: bool = False,
+):
+    return _make_kernel(
+        config,
+        DIAGNOSTIC_VARIANT_FULL,
+        use_exact_expert_major=use_exact_expert_major,
+        output_preactivation_h=True,
+    )
+
+
+def _sharded_w13_h_kernel(
+    mesh: Mesh,
+    config: PushInboxConfig,
+    *,
+    use_exact_expert_major: bool = False,
+):
+    kernel = _make_w13_h_kernel(config, use_exact_expert_major=use_exact_expert_major)
+
+    def local_fn(
+        x_local: Float[Array, "1 DST Q M D"],
+        send_meta_local: Int[Array, "1 DST Q F"],
+        recv_meta_local: Int[Array, "1 SRC Q F"],
+        expert_base_local: Int[Array, "1 E"],
+        src_base_by_expert_local: Int[Array, "1 SRC E"],
+        w_local: Float[Array, "1 E D twoI"],
+    ):
+        x_local = x_local[0]
+        send_meta_local = send_meta_local[0]
+        recv_meta_local = recv_meta_local[0]
+        expert_base_local = expert_base_local[0]
+        src_base_by_expert_local = src_base_by_expert_local[0]
+        w_local = w_local[0]
+        inbox, h = kernel(
+            x_local,
+            send_meta_local,
+            recv_meta_local,
+            expert_base_local,
+            src_base_by_expert_local,
+            w_local,
+        )
+        return inbox[None, ...], h[None, ...]
+
+    return shard_map(
+        local_fn,
+        mesh=mesh,
+        in_specs=(
+            P(AXIS, None, None, None, None),
+            P(AXIS, None, None, None),
+            P(AXIS, None, None, None),
+            P(AXIS, None),
+            P(AXIS, None, None),
+            P(AXIS, None, None, None),
+        ),
+        out_specs=(
+            P(AXIS, None, None, None, None),
+            P(AXIS, None, None),
+        ),
+        check_vma=False,
+    )
+
+
 def _block_until_ready(value: Any) -> Any:
     return jax.tree.map(lambda leaf: leaf.block_until_ready() if hasattr(leaf, "block_until_ready") else leaf, value)
 
@@ -1632,6 +1740,53 @@ def _reference_hidden(
                 rows_to_store = valid_rows if use_exact_expert_major else config.block_m
                 hidden[dst, row : row + rows_to_store, :] = block_hidden[:rows_to_store]
     return hidden
+
+
+def _reference_h_flat(
+    config: PushInboxConfig,
+    x_host,
+    send_meta_host,
+    w_host,
+    expert_base_host=None,
+    src_base_by_expert_host=None,
+    *,
+    use_exact_expert_major: bool = False,
+) -> np.ndarray:
+    h = np.zeros(
+        (config.ep_size, config.hidden_rows_per_rank, 2 * config.intermediate_dim),
+        dtype=np.float32,
+    )
+    x_float = np.asarray(x_host, dtype=np.float32)
+    send_meta = np.asarray(send_meta_host, dtype=np.int32)
+    w_float = np.asarray(w_host, dtype=np.float32)
+    expert_base = np.zeros((config.ep_size, config.experts_per_rank), dtype=np.int32)
+    src_base_by_expert = np.zeros((config.ep_size, config.ep_size, config.experts_per_rank), dtype=np.int32)
+    if expert_base_host is not None:
+        expert_base = np.asarray(expert_base_host, dtype=np.int32)
+    if src_base_by_expert_host is not None:
+        src_base_by_expert = np.asarray(src_base_by_expert_host, dtype=np.int32)
+    for src in range(config.ep_size):
+        for dst in range(config.ep_size):
+            dst_ordinal = _dst_ordinal(config, src, dst)
+            for entry in range(config.entries_per_rank):
+                valid_rows = send_meta[src, dst_ordinal, entry, 3]
+                if valid_rows <= 0:
+                    continue
+                expert = send_meta[src, dst_ordinal, entry, 1]
+                row = _metadata_hidden_row_start(
+                    send_meta,
+                    expert_base,
+                    src_base_by_expert,
+                    src=src,
+                    dst=dst,
+                    dst_ordinal=dst_ordinal,
+                    entry=entry,
+                    use_exact_expert_major=use_exact_expert_major,
+                )
+                h_block = x_float[src, dst_ordinal, entry] @ w_float[dst, expert]
+                rows_to_store = valid_rows if use_exact_expert_major else config.block_m
+                h[dst, row : row + rows_to_store, :] = h_block[:rows_to_store]
+    return h
 
 
 def _hidden_live_row_mask(

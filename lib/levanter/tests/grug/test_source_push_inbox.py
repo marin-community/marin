@@ -1072,6 +1072,69 @@ def test_source_push_forward_h_reference_matches_mlp_boundary():
     )
 
 
+def test_source_push_w13_h_reference_stores_preactivation_before_swiglu():
+    config = source_push_inbox.PushInboxConfig(
+        ep_size=2,
+        entries_per_rank=4,
+        inbox_slots=2,
+        hidden_dim=8,
+        intermediate_dim=8,
+        block_m=2,
+        block_k=4,
+        block_n=4,
+        experts_per_rank=2,
+        send_worker_programs_per_peer=1,
+        worker_programs_per_peer=4,
+        routing="balanced",
+        tokens_per_rank=6,
+        topk=2,
+        capacity_factor=1.25,
+    )
+    inputs = source_push_forward.make_source_push_forward_source_plan_inputs(config)
+
+    h = source_push_inbox._reference_h_flat(
+        config,
+        inputs.x,
+        inputs.send_meta,
+        inputs.w_gate_up,
+        inputs.expert_base,
+        inputs.src_base_by_expert,
+        use_exact_expert_major=inputs.use_exact_expert_major,
+    )
+    hidden = source_push_inbox._reference_hidden(
+        config,
+        inputs.x,
+        inputs.send_meta,
+        inputs.w_gate_up,
+        inputs.expert_base,
+        inputs.src_base_by_expert,
+        use_exact_expert_major=inputs.use_exact_expert_major,
+    )
+
+    src, dst_ord, entry = np.argwhere(inputs.send_meta[..., source_push_plan.SOURCE_PUSH_META_VALID_ROWS] > 0)[0]
+    dst = (src + dst_ord) % config.ep_size
+    expert = inputs.send_meta[src, dst_ord, entry, source_push_plan.SOURCE_PUSH_META_LOCAL_EXPERT]
+    row = inputs.send_meta[src, dst_ord, entry, source_push_plan.SOURCE_PUSH_META_LOCAL_ROW_START]
+    if inputs.use_exact_expert_major:
+        row += inputs.expert_base[dst, expert] + inputs.src_base_by_expert[dst, src, expert]
+
+    gate = h[dst, row, : config.intermediate_dim]
+    up = h[dst, row, config.intermediate_dim :]
+    expected_activation = gate * (1.0 / (1.0 + np.exp(-gate))) * up
+
+    assert (
+        source_push_inbox._hidden_output_shape_for_kernel(
+            config,
+            source_push_inbox.DIAGNOSTIC_VARIANT_FULL,
+            output_preactivation_h=True,
+        )
+        == config.h_output_shape
+    )
+    assert h.shape == (config.ep_size, config.hidden_rows_per_rank, 2 * config.intermediate_dim)
+    np.testing.assert_allclose(hidden[dst, row], expected_activation, rtol=1e-6, atol=1e-6)
+    assert not np.allclose(h[dst, row, : config.intermediate_dim], hidden[dst, row])
+
+
 def test_source_push_forward_exact_inputs_match_source_padded_reference_for_block_aligned_plan():
     config = source_push_inbox.PushInboxConfig(
         ep_size=2,
