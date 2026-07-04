@@ -216,15 +216,16 @@ so both backward GEMMs are genuine mixed `e5m2 x e4m3` contractions on the FP8
 tensor cores.  Stock jaxlib's Mosaic `wgmma` rejects mixed operand dtypes; this
 op needs a jaxlib carrying
 [jax-ml/jax#38859](https://github.com/jax-ml/jax/pull/38859).  Until that lands
-upstream, use the prebuilt fork `mcwitt/jax@mixed-fp8-wgmma-0.10.0` (jaxlib C++
-verifier relaxation + jax Python PTX emitter): install with
-`lib/haliax/scripts/mixed_fp8_fork_setup.sh`, optionally passing
-`JAXLIB_WHEEL=` to skip the ~11 min jaxlib build (a cp312 H100 wheel is cached
-at `s3://marin-na/marin/grug-fp8/wheels/jaxlib-mixfp8-0.10.0-cp312-cw.whl`;
-inside an Iris task container the injected `AWS_*` creds can fetch it).  Rename
-the fetched file to
-`jaxlib-0.10.0.dev0+selfbuilt-cp312-cp312-manylinux_2_27_x86_64.whl` before
-installing -- uv requires the filename to match the wheel's dist-info.
+upstream, install the patched jaxlib with
+`lib/haliax/scripts/mixed_fp8_fork_setup.sh`: it clones upstream `jax-v0.10.1`
+and applies the two mixed-wgmma patches vendored at
+`lib/haliax/scripts/mixed_fp8_0101/` (the jaxlib C++ verifier relaxation + the
+jax Python PTX emitter, originally `mcwitt/jax@mixed-fp8-wgmma-0.10.0`).  Pass
+`JAXLIB_WHEEL=` to skip the ~11 min jaxlib build: a prebuilt cp312 H100 wheel is
+cached at `s3://marin-na/marin/grug-fp8/wheels/jaxlib-mixfp8-0.10.1-cp312-cw.whl`
+(fetch with `fp8_wheel_cache.py get`, which restores the PEP440-valid filename
+from the `.name` sidecar; inside an Iris task container the injected `AWS_*`
+creds can fetch it).
 
 Passing `rev_dtype=jnp.float8_e4m3fn` recovers a uniform `e4m3 x e4m3` backward
 that lowers on stock jaxlib (an approximation: E4M3 trades dynamic range for

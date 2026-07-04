@@ -1,0 +1,39 @@
+From c8e238ac9575ea6bf9c7d1aee34eb4f750469a17 Mon Sep 17 00:00:00 2001
+From: Matt Wittmann <mcwitt@gmail.com>
+Date: Sat, 27 Jun 2026 23:19:18 -0700
+Subject: [PATCH 2/2] [Mosaic GPU] Allow mixed E4M3/E5M2 FP8 operands in
+ ragged_dot_mgpu dlhs
+
+The grouped GEMM guard rejected any dtype mismatch, blocking the mixed
+E4M3/E5M2 dgrad (e5m2-grad x e4m3-rhs) of the TE-style hybrid recipe. Relax it
+to allow the FP8 e4m3/e5m2 pair, matching the wgmma primitive gate and the
+Mosaic-GPU dialect verifier relaxed in the parent commit.
+
+Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01Qv4yYshZEcADTq2CPud6fy
+---
+ jax/experimental/pallas/ops/gpu/ragged_dot_mgpu.py | 8 +++++++-
+ 1 file changed, 7 insertions(+), 1 deletion(-)
+
+diff --git a/jax/experimental/pallas/ops/gpu/ragged_dot_mgpu.py b/jax/experimental/pallas/ops/gpu/ragged_dot_mgpu.py
+index 53e378517..288e6f5a2 100644
+--- a/jax/experimental/pallas/ops/gpu/ragged_dot_mgpu.py
++++ b/jax/experimental/pallas/ops/gpu/ragged_dot_mgpu.py
+@@ -103,7 +103,13 @@ def ragged_dot(
+     transpose_rhs: bool = False,
+     load_group_sizes_to_register: bool = True,
+ ) -> jax.Array:
+-  if lhs.dtype != rhs.dtype:
++  # lhs and rhs share a dtype, except that the e4m3/e5m2 FP8 pair may be mixed:
++  # Hopper `wgmma` takes independent `.atype`/`.btype` FP8 operands (the dgrad of
++  # the TE-style hybrid is e5m2-grad x e4m3-rhs). Mirrors the relaxation in
++  # `jax/_src/pallas/mosaic_gpu/primitives.py:wgmma` and the Mosaic dialect verifier.
++  _fp8_dtypes = (jnp.float8_e4m3fn, jnp.float8_e5m2)
++  _is_mixed_fp8 = lhs.dtype in _fp8_dtypes and rhs.dtype in _fp8_dtypes
++  if lhs.dtype != rhs.dtype and not _is_mixed_fp8:
+     raise NotImplementedError(
+         f"lhs and rhs must have the same dtype, got {lhs.dtype} and {rhs.dtype}"
+     )
+-- 
+2.54.0
+
