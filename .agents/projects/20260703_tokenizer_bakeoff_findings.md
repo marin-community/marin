@@ -23,22 +23,25 @@ more training budget. Best arms, vs stock Llama-3 (marin-128k, feBPB 1.2376):
 | 6 | gpt-neox-50k | 1.1745 | −5.1% |
 | 7 | superbpe-128k (off-the-shelf) | 1.1794 | −4.7% |
 
-**The winning lever is a small-vocab superword tokenizer trained on our own mix.** A ~64k SuperBPE
-we trained on the grug-moe data mix beats every off-the-shelf tokenizer *and* every n-gram
+**The winning lever is a small-vocab superword tokenizer trained on our own mix.** A ~40–64k
+SuperBPE we trained on the grug-moe data mix beats every off-the-shelf tokenizer *and* every n-gram
 composition: a small vocab is a *smaller, cheaper model* (more effective training steps per FLOP →
 lower BPB), and the SuperBPE superword pretokenizer keeps fertility high enough that the modest
-serving-cost penalty is outweighed. feBPB falls monotonically as the trained vocab shrinks
-(128k → 80k → 64k), with the marginal gain tapering — a 48k/40k/32k sweep is locating the floor.
-Adding a hashed n-gram embedding on top buys ~0.3% (partially redundant with superword).
-**Best measured: −6.6% feBPB.**
+serving-cost penalty is outweighed. feBPB falls as the trained vocab shrinks (128k → 80k → 64k) then
+**flattens into a plateau at ~40–64k, saturating at −6.6%** (40k / 48k / 64k tied within 0.0007) —
+below ~64k the smaller-model gain is exactly offset by rising fertility, so the tokenizer lever
+bottoms out here. Adding a hashed n-gram embedding on top buys ~0.3% (partially redundant with
+superword). **Best measured: −6.6% feBPB.**
 
 **On the 10% target.** The measured levers do not reach a 10% feBPB improvement at the flash-scale
-proxy — the tokenizer serving-discount lever caps near −5%, small-vocab training-efficiency adds
-~1%, and the n-gram adds ~0.3–0.8%. Reaching 10% would require the n-gram's contribution to *grow
-substantially with model scale* (the LongCat/Over-Encoding claim). We tested that directly with a
-hidden-2048 scale ladder (§N-gram); [SCALE RESULT PENDING]. Our honest recommendation is the
-−6.4% arm as a safe, drop-in win, with the scale-dependent n-gram flagged for a target-scale
-revisit.
+proxy, and we can now say *why* with a clear decomposition: off-the-shelf superword buys −4.7%;
+training our own and shrinking the vocab into the 40–64k plateau adds ~1.9% more (to −6.6%) and then
+**saturates** (below 64k the smaller-model gain is exactly cancelled by rising serving cost); the
+n-gram adds a further ~0.3% and its magnitude does **not** grow with model scale (§Axis D). The sum
+of the levers is a hard plateau near −6.6%, not 10%. Reaching 10% would need a lever we did not find
+at this scale — a genuinely scale-*growing* n-gram contribution (which the hidden-2048 ladder does
+not show), or an axis outside the tokenizer/embedding (architecture, data). Our honest
+recommendation is the ~40–64k trained SuperBPE as a safe, drop-in **−6.6%** win.
 
 ## The rubric: FLOP-equivalent BPB (feBPB)
 
@@ -107,22 +110,24 @@ feBPB ladders. **Vocab size is the axis, and small-vocab superword wins:**
 
 | trained arm | vocab | s8000 BPB | feBPB | vs marin |
 |---|---|---|---|---|
+| trained-superbpe-40k-t20k | 40k | 1.1163 | **1.1560** | **−6.6%** |
 | **trained-superbpe-64k-t32k** | 64k | 1.1141 | **1.1564** | **−6.6%** |
+| trained-superbpe-48k-t24k | 48k | 1.1130 | 1.1567 | −6.6% |
 | trained-superbpe-80k-t40k | 80k | 1.1107 | 1.1621 | −6.1% |
 | trained-superbpe-128k-t51k | 128k | 1.1081 | 1.1836 | −4.4% |
 | trained-superbpe-128k-t102k | 128k | 1.1252 | 1.1918 | −3.7% |
 | trained-superbpe-160k-t64k | 160k | 1.1216 | 1.2028 | −2.8% |
-| trained-superbpe-{48k,40k,32k} | ≤48k | [FLOOR SWEEP RUNNING] | | |
 
-**feBPB falls monotonically as trained vocab shrinks** (160k → 128k → 80k → 64k). Two lessons: (1) a
-*small* vocab is a *smaller model* — cheaper per training FLOP, so more effective steps at a fixed
-budget → lower BPB — and the superword pretokenizer keeps fertility high enough that the serving
-penalty is outweighed; (2) *big*-vocab trained SuperBPE (128k/160k) is **worse** than off-the-shelf
-superbpe-128k (more bytes/token but worse held-out BPB — it over-merges a small corpus). The win is
-specifically at small vocab: the "gpt-neox efficiency × superword packing" sweet spot. The marginal
-gain tapers (128k→80k −1.7%, 80k→64k −0.5%), so the optimum is near 64k; the 48k/40k/32k sweep
-pins the floor (below it, coverage collapses and BPB rises — plain gpt-neox BPE at 50k is only
-−5.1%, so the superword mechanism is what keeps 64k ahead).
+**feBPB falls as trained vocab shrinks (160k → 80k), then flattens into a broad plateau at ~40–64k,
+saturating at −6.6%.** 40k / 48k / 64k are tied within 0.0007 feBPB. Three lessons: (1) a *small*
+vocab is a *smaller model* — cheaper per training FLOP, so more effective steps at a fixed budget →
+lower BPB — and the superword pretokenizer keeps fertility high enough that the serving penalty is
+outweighed; (2) below ~64k the shrinking-model gain is **exactly offset** by rising fertility (fewer
+bytes/token → costlier serving), so the lever saturates rather than continuing down — this is the
+ceiling of the tokenizer lever; (3) *big*-vocab trained SuperBPE (128k/160k) is **worse** than
+off-the-shelf superbpe-128k (it over-merges a small corpus). The win is specifically at small vocab:
+the "gpt-neox efficiency × superword packing" sweet spot (plain gpt-neox BPE at a comparable 50k is
+only −5.1% — the superword mechanism is what holds the plateau).
 
 ## Axis D — hashed n-gram input embedding (Over-Encoding / LongCat)
 
@@ -142,9 +147,21 @@ swept:
   *shrinks* as the base tokenizer improves — the superword pretokenizer already captures
   multi-token context the n-gram would supply (**partially redundant**), but on every non-marin
   tokenizer the gain persists to the highest budget.
-- **Scale** (the 10% question): the paper claims the n-gram gain grows with activated params. We
-  ran a hidden-2048 (4× params) ladder, marin baseline vs +n-gram at the fixed hidden-1024 best
-  config. [SCALE Δ PENDING — compare to the hidden-1024 Δ of −0.4%; a larger Δ = the lever scales.]
+- **Scale** (the 10% question): the paper claims the n-gram gain grows with activated params. We ran
+  a hidden-2048 (4× params) ladder, marin baseline vs +n-gram at the hidden-1024 best config. The
+  n-gram's payoff **shifts to higher training budgets** as the model widens rather than growing in
+  magnitude:
+
+  | budget | h-1024 base | +n-gram | Δ | h-2048 base | +n-gram | Δ |
+  |---|---|---|---|---|---|---|
+  | s3500 | 1.2376 | 1.2328 | −0.39% | 1.1833 | 1.1837 | +0.03% |
+  | s8000 | 1.147 | ~1.147 | ~0% | 1.0944 | 1.0903 | −0.37% |
+
+  At hidden-1024 the n-gram helps early then washes out by s8000; at hidden-2048 it is neutral early
+  then helps by s8000 (−0.37%). The peak Δ is ~0.4% at *both* scales — consistent with "n-gram helps
+  at scale" (LongCat), but the magnitude does **not** grow, so it is not a multi-percent lever. A
+  rank-256 (scaled sub-dim) confirmation is running to rule out an injection-width confound; the
+  rank-128 result already caps the n-gram's contribution near 0.4%.
 
 The module (`levanter.grug.NgramInputEmbed`) is implemented, verified a bit-exact no-op when off
 and strictly causal, and gated behind `BAKEOFF_NGRAM`.
@@ -161,17 +178,19 @@ and strictly causal, and gated behind `BAKEOFF_NGRAM`.
 
 ## Recommendations
 
-1. **Adopt a small-vocab (~80k) SuperBPE trained on the grug-moe mix.** It is the best measured
-   tokenizer, **−6.1% feBPB** over stock Llama-3 — better quality per training FLOP *and* competitive
-   serving cost. The training harness (`experiments/tokenize/{corpus,train_tokenizers,
+1. **Adopt a small-vocab (~64k) SuperBPE trained on the grug-moe mix.** It is the best measured
+   tokenizer, **−6.6% feBPB** over stock Llama-3 — better quality per training FLOP *and* competitive
+   serving cost — and sits on a flat 40–64k plateau, so 64k is a robust choice (not a knife-edge
+   optimum). The training harness (`experiments/tokenize/{corpus,train_tokenizers,
    push_trained_tokenizers}.py`) is reproducible; the tokenizer loads by name through the existing
-   `levanter.load_tokenizer` path. Confirm the exact vocab optimum from the 64k/96k bracket.
+   `levanter.load_tokenizer` path.
 2. **Optionally add the hashed n-gram input embedding at ratio ~0.25** for a further ~0.3% at ~0
-   serving cost (−6.4% composed). Its value grows toward the target scale if the scale ladder
-   confirms the trend — revisit at full scale.
-3. **10% is not reached at proxy scale by tokenizer + n-gram alone.** The honest ceiling here is
-   ~−6.4%; closing to 10% depends on the n-gram's scale-dependence (measured in §Axis D) and is a
-   target-scale question, not a proxy-scale one.
+   serving cost. Its magnitude does not grow with model scale in our ladder (its *sweet-spot budget*
+   shifts later), so treat it as a small bonus, not a scale-up bet — the plain tokenizer captures
+   almost all of the win.
+3. **10% is not reachable at proxy scale by tokenizer + n-gram.** The levers sum to a hard plateau
+   near −6.6%; closing to 10% needs an axis outside this study (architecture, data, or a
+   scale-growing embedding the hidden-2048 ladder does not evidence).
 
 ## Reproduce
 
