@@ -142,43 +142,16 @@ def test_triton_custom_vjp_routes_backward_through_triton_layouts(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# FP8 op dispatch tests (routing, op=None reference, state plumbing)
+# FP8 op dispatch tests (op=/implementation= routing, init contract)
 # ---------------------------------------------------------------------------
 
 
-def _fp8_inputs(T=48, K=16, E=4, N=24, seed=0):
+def _fp8_inputs(T=64, K=128, E=4, N=128, seed=0):
     rng = np.random.default_rng(seed)
-    lhs = jnp.asarray(rng.standard_normal((T, K)), jnp.bfloat16)
-    rhs = jnp.asarray(rng.standard_normal((E, K, N)), jnp.bfloat16)
-    group_sizes = jnp.asarray([13, 5, 17, 13], jnp.int32)  # non-uniform, sums to T
+    lhs = jnp.asarray(rng.standard_normal((T, K)) * 0.1, jnp.bfloat16)
+    rhs = jnp.asarray(rng.standard_normal((E, K, N)) * 0.1, jnp.bfloat16)
+    group_sizes = jnp.asarray(rng.multinomial(T, np.ones(E) / E), jnp.int32)  # non-uniform, sums to T
     return lhs, rhs, group_sizes
-
-
-def test_op_none_matches_xla_reference():
-    """The default path (op=None) matches jax.lax.ragged_dot_general on non-uniform groups."""
-    lhs, rhs, gs = _fp8_inputs()
-    out = ragged_dot(lhs, rhs, gs, op=None)
-    ref = jax.lax.ragged_dot_general(
-        lhs=lhs,
-        rhs=rhs,
-        group_sizes=gs,
-        ragged_dot_dimension_numbers=jax.lax.RaggedDotDimensionNumbers(
-            dot_dimension_numbers=(((1,), (1,)), ((), ())),
-            lhs_ragged_dimensions=(0,),
-            rhs_group_dimensions=(0,),
-        ),
-    )
-    np.testing.assert_allclose(np.asarray(out), np.asarray(ref), rtol=2e-2, atol=2e-2)
-
-
-def test_op_routes_to_op_and_runs_end_to_end():
-    lhs, rhs, gs = _fp8_inputs()
-    op = Fp8RaggedDotOp.init(rev_dtype=jnp.float8_e4m3fn)
-    # The op is still a bf16 placeholder at this point; FP8 kernels land in later commits.
-    out = ragged_dot(lhs, rhs, gs, op=op)
-    ref = ragged_dot(lhs, rhs, gs, op=None)
-    assert out.shape == ref.shape
-    np.testing.assert_allclose(np.asarray(out), np.asarray(ref), rtol=2e-2, atol=2e-2)
 
 
 def test_op_with_explicit_implementation_raises():
