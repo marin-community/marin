@@ -16,7 +16,6 @@ import time
 
 import pytest
 from iris.cluster.config import (
-    ControllerResourcesConfig,
     ControllerVmConfig,
     CoreweaveControllerConfig,
     CoreweavePlatformConfig,
@@ -29,6 +28,8 @@ from iris.cluster.config import (
     StorageConfig,
 )
 from iris.cluster.platforms.k8s.controller import (
+    _CONTROLLER_CPU_REQUEST,
+    _CONTROLLER_MEMORY_REQUEST,
     _CONTROLLER_PROXY_INGRESS_NAME,
     _CONTROLLER_STATE_PVC_NAME,
     _CONTROLLER_STATE_PVC_SIZE,
@@ -117,7 +118,6 @@ def _make_cluster_config(
     image: str = "ghcr.io/marin-community/iris-controller:latest",
     remote_state_dir: str = "gs://test-bucket/bundles",
     controller_scale_group: str = "cpu-erapids",
-    controller_resources: ControllerResourcesConfig | None = None,
 ) -> IrisClusterConfig:
     config = IrisClusterConfig(
         platform=PlatformConfig(
@@ -133,7 +133,6 @@ def _make_cluster_config(
                 port=port,
                 service_name=service_name,
                 scale_group=controller_scale_group,
-                resources=controller_resources or ControllerResourcesConfig(),
             ),
         ),
         storage=StorageConfig(
@@ -193,9 +192,11 @@ def test_start_controller_creates_all_resources():
     # Controller consumes that env via envFrom (S3 + injected, one flow).
     container = deploy_spec["template"]["spec"]["containers"][0]
     assert container["envFrom"] == [{"secretRef": {"name": "iris-task-env", "optional": True}}]
-    defaults = ControllerResourcesConfig()
-    assert container["resources"]["requests"] == {"cpu": defaults.cpu, "memory": defaults.memory}
-    assert container["resources"]["limits"] == {"cpu": defaults.cpu, "memory": defaults.memory}
+    # CPU is requested but unlimited (Burstable QoS, not Guaranteed) so the
+    # controller can burst onto spare node cores during reconcile spikes; memory
+    # is capped to protect the node (issue #6944).
+    assert container["resources"]["requests"] == {"cpu": _CONTROLLER_CPU_REQUEST, "memory": _CONTROLLER_MEMORY_REQUEST}
+    assert container["resources"]["limits"] == {"memory": _CONTROLLER_MEMORY_REQUEST}
     # Recreate (not RollingUpdate): the old controller pod must be gone before
     # the new one mounts the ReadWriteOnce SQLite state PVC.
     assert deploy_spec["strategy"] == {"type": "Recreate"}
@@ -213,43 +214,6 @@ def test_start_controller_creates_all_resources():
 
     # No public_proxy_host configured → no Ingress (ClusterIP only).
     assert k8s.get_json(K8sResource.INGRESSES, _CONTROLLER_PROXY_INGRESS_NAME) is None
-
-    t.join(timeout=5)
-    provider.shutdown()
-
-
-def test_start_controller_applies_configured_resources_and_probes():
-    """Controller resources config overrides Pod requests/limits and probe tolerances.
-
-    Large CoreWeave clusters raise the request and set a higher limit (Burstable
-    QoS, not Guaranteed) so the controller can use spare node CPU/memory during
-    a reconcile-loop spike, and relax the liveness/readiness probe deadline so a
-    busy controller is not OOM- or liveness-killed under heavy tokenize fan-out
-    (issue #6944).
-    """
-    provider, k8s = _make_provider()
-    cluster_config = _make_cluster_config(
-        controller_resources=ControllerResourcesConfig(
-            cpu="32",
-            cpu_limit="128",
-            memory="96Gi",
-            memory_limit="256Gi",
-            probe_timeout_seconds=10,
-            probe_failure_threshold=6,
-        ),
-    )
-
-    t = threading.Thread(target=_auto_ready_deployment, args=(k8s, "iris-controller"), daemon=True)
-    t.start()
-    provider.start_controller(cluster_config)
-
-    container = k8s.get_json(K8sResource.DEPLOYMENTS, "iris-controller")["spec"]["template"]["spec"]["containers"][0]
-    assert container["resources"]["requests"] == {"cpu": "32", "memory": "96Gi"}
-    assert container["resources"]["limits"] == {"cpu": "128", "memory": "256Gi"}
-    assert container["resources"]["requests"] != container["resources"]["limits"]
-    for probe in ("readinessProbe", "livenessProbe"):
-        assert container[probe]["timeoutSeconds"] == 10
-        assert container[probe]["failureThreshold"] == 6
 
     t.join(timeout=5)
     provider.shutdown()

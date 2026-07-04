@@ -437,36 +437,10 @@ class LocalControllerConfig(_Config):
     port: int = 0  # 0 = auto-assign
 
 
-class ControllerResourcesConfig(_Config):
-    """Controller Pod resource requests/limits and health-probe tolerances.
-
-    ``cpu``/``memory`` are the guaranteed request; ``cpu_limit``/``memory_limit``
-    default to the request when unset, reproducing the historical Guaranteed-QoS
-    behavior. Setting a limit above the request makes the Pod Burstable, letting
-    it use spare node CPU/memory during reconcile-loop spikes (e.g. large task
-    fan-outs) rather than being throttled at its guaranteed share.
-
-    Defaults reproduce the historical hardcoded values (and the k8s default
-    probe behavior of a 1s timeout / 3 failures), so small and TPU clusters are
-    unaffected. Large CoreWeave clusters running heavy pre-tokenization fan-out
-    raise these: the ~1500-pod tracking state OOMs at 16Gi, and a
-    busy-but-alive controller cannot answer ``GET /health`` within 1s while
-    saturated, so kubelet SIGKILLs it after 3 missed probes (issue #6944).
-    """
-
-    cpu: str = "4"
-    cpu_limit: str = ""  # default: equal to cpu (Guaranteed QoS)
-    memory: str = "16Gi"
-    memory_limit: str = ""  # default: equal to memory (Guaranteed QoS)
-    probe_timeout_seconds: int = 1
-    probe_failure_threshold: int = 3
-
-
 class CoreweaveControllerConfig(_Config):
     port: int = 0  # default: 10000
     service_name: str = ""  # K8s Service name for discovery
     scale_group: str = ""  # scale group whose NodePool runs the controller
-    resources: ControllerResourcesConfig = Field(default_factory=ControllerResourcesConfig)
     # When set, start_controller creates an Ingress publishing ONLY /proxy
     # off-cluster; the controller's per-endpoint auth is the sole gate, so keep
     # auth.provider set. See docs/coreweave.md.

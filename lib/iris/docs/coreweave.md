@@ -653,15 +653,13 @@ runaway autoscaling from system pods.
 
 The controller runs as a single-replica Deployment scheduled onto the configured
 `scale_group` NodePool. Workers discover it via K8s Service DNS. The controller
-Pod uses in-cluster ServiceAccount auth for all kubectl operations and requests
-dedicated CPU/memory (`controller.coreweave.resources`, default `cpu: "4"` /
-`memory: "16Gi"`) so it runs with Guaranteed QoS instead of BestEffort. A
-cluster can set `cpu_limit`/`memory_limit` above the request to make the Pod
-Burstable instead, letting it use spare node capacity during reconcile-loop
-spikes (e.g. cw-rno2a and cw-us-east-02a raise the request to 32 CPU / 96Gi and
-the limit to 128 CPU / 256Gi for large tokenize fan-outs). The same config also
-sets `probe_timeout_seconds`/`probe_failure_threshold` for the liveness and
-readiness probes.
+Pod uses in-cluster ServiceAccount auth for all kubectl operations. It requests
+16 CPU and 64Gi memory with a memory limit but no CPU limit, so it runs Burstable
+(not BestEffort, not Guaranteed): it is never CFS-throttled and can burst onto
+spare node cores during reconcile-loop spikes, while memory stays capped to
+protect the node. The liveness/readiness probes use a 10s timeout and tolerate 6
+failures so a busy-but-alive controller is not liveness-killed mid-reconcile
+under a large tokenize fan-out (issue #6944).
 
 Cost note: the smallest CoreWeave CPU instance (`cd-gp-i64-erapids`, 64 vCPU,
 512 GB RAM) is overprovisioned for the controller. CoreWeave does not offer
