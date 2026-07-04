@@ -36,8 +36,7 @@ from finelog.rpc import logging_pb2
 from rigging.timing import Timestamp
 
 from iris.cluster.endpoints import LOG_SERVER_ENDPOINT_NAME
-from iris.cluster.log_keys import classify_log_level, task_log_key
-from iris.cluster.types import TaskAttempt
+from iris.cluster.log_keys import classify_log_level
 from iris.rpc import controller_pb2
 from iris.rpc.controller_connect import ControllerServiceClientSync
 
@@ -140,17 +139,20 @@ def _make_log_entry(line: CriLogLine, attempt_id: int) -> logging_pb2.LogEntry:
 def log_key_and_attempt(task_id: str) -> tuple[str, int]:
     """Resolve ``IRIS_TASK_ID`` to the finelog log key and the attempt id.
 
-    ``IRIS_TASK_ID`` is the bare task wire id for attempt 0 (``/user/job/0``) and
-    carries a ``:N`` suffix for retries (``/user/job/0:3``). The finelog key must
-    always include the attempt suffix — ``/user/job/0:0`` for the first attempt —
-    so it matches the per-task log query, which is EXACT ``…:<attempt>`` for one
-    attempt or PREFIX ``…:`` for all attempts. A bare attempt-0 key only matches
-    the job-level ``/user/job/`` prefix scan, so its logs appear under the job
-    but never under the task.
+    The finelog key must carry the attempt suffix — ``/user/job/0:0`` for the
+    first attempt — so it matches the per-task log query, which is EXACT
+    ``…:<attempt>`` for one attempt or PREFIX ``…:`` for all attempts. A bare key
+    without the suffix only matches the job-level ``/user/job/`` prefix scan, so
+    its logs would show under the job but never under the task.
+
+    Only a trailing ``:<digits>`` is the attempt; a colon elsewhere is part of the
+    job name (a legal name char) and stays in the key. A wire id that arrives
+    without an attempt suffix is normalized to attempt 0.
     """
-    parsed = TaskAttempt.from_wire(task_id)
-    task_attempt = parsed.with_attempt(parsed.attempt_id or 0)
-    return task_log_key(task_attempt), task_attempt.require_attempt()
+    _base, sep, suffix = task_id.rpartition(":")
+    if sep and suffix.isdigit():
+        return task_id, int(suffix)
+    return f"{task_id}:0", 0
 
 
 def _log_dir_glob(namespace: str, pod_name: str) -> str:
