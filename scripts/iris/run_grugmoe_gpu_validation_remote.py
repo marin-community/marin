@@ -138,7 +138,7 @@ def _run(
     }
     status = "ok" if returncode == 0 else f"failed exit={returncode}"
     print(f"{status}: {shlex.join(command)} ({elapsed:.1f}s, log: {log_path})", flush=True)
-    if check and returncode != 0:
+    if returncode != 0:
         output_tail: deque[str] = deque(maxlen=failure_tail_lines)
         with log_path.open() as log_file:
             output_tail.extend(log_file)
@@ -146,6 +146,7 @@ def _run(
             print(f"last {len(output_tail)} lines from {log_path}:", flush=True)
             for line in output_tail:
                 print(line, end="", flush=True)
+    if check and returncode != 0:
         raise subprocess.CalledProcessError(returncode, command)
     return report
 

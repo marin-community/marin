@@ -114,3 +114,28 @@ def test_grugmoe_gpu_validation_runner_prints_failure_log_tail(
     assert "tail-42" in captured.out
     assert f"last 1 lines from {log_path}" in captured.out
     assert "tail-42" in log_path.read_text()
+
+
+def test_grugmoe_gpu_validation_runner_prints_failure_tail_without_checking(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    log_path = tmp_path / "command.log"
+
+    report = runner._run(
+        [
+            sys.executable,
+            "-c",
+            "print('tail-' + str(100 + 23)); raise SystemExit(7)",
+        ],
+        cwd=tmp_path,
+        log_path=log_path,
+        check=False,
+        failure_tail_lines=1,
+    )
+
+    captured = capsys.readouterr()
+    assert report["returncode"] == 7
+    assert "tail-123" in captured.out
+    assert f"last 1 lines from {log_path}" in captured.out
+    assert "tail-123" in log_path.read_text()
