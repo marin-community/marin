@@ -40,22 +40,24 @@ improvement over the stock Llama-3 tokenizer** for target grug-moe models.
 3. ✅ TokenMonster + #5837 plans investigated (Track B) → strictly weaker than SuperBPE, skip.
 4. ✅ n-gram embedding **rebuilt to the real Over-Encoding/LongCat method** and fully swept
    (EXP-004 buckets: collision confirmed; EXP-006 ratio: 0.25 best, −0.4% BPB at proxy).
-5. ✅ **Track C — train our own tokenizers** (EXP-008): 11 configs, 4 SuperBPE beat off-the-shelf
-   on bytes/token — but the GPU ladder (EXP-008b) shows the fertility win **does NOT carry to
-   feBPB** (worse held-out BPB); off-the-shelf superbpe-128k stays the best tokenizer.
-6. ✅ **Composed lever (EXP-005): superbpe-128k + n-gram = −5.2% feBPB — the best measured arm**,
-   beating plain superbpe (−4.7%) and gpt-neox (−5.1%). Still short of 10%.
-7. 🔄 **Open question for 10%**: does the n-gram gain grow with model scale (EXP-007, hidden-2048,
-   now at 2 GPU replicas after a hidden-2048 OOM)? + gpt-neox+n-gram composed ladder running.
+5. ✅ **Track C — train our own tokenizers** (EXP-008/008b): 11 configs. The GPU feBPB ladder found
+   **`trained-superbpe-80k-t40k` = −6.1% feBPB, the best tokenizer measured** — a *small-vocab*
+   superword (gpt-neox efficiency × superword packing). Big-vocab trained arms (128k/160k) lose;
+   feBPB falls monotonically as trained vocab shrinks → optimum at/below 80k.
+6. ✅ **Composed lever (EXP-005): superbpe-128k + n-gram = −5.2% feBPB**; the n-gram stacks
+   (+~0.5% over plain superbpe) and, unlike on marin, persists at s8000.
+7. 🔄 **Toward 10%**: (a) compose the new best tokenizer 80k-t40k + n-gram; (b) bracket the vocab
+   optimum (64k/96k ladders); (c) does the n-gram grow with model scale (EXP-007 hidden-2048,
+   2 replicas after an OOM)? + gpt-neox+n-gram ladder finishing.
 
 ### feBPB scorecard so far (target scale: hidden 6144, 64 layers, 16k ctx, English/math)
 
 | arm | feBPB | vs marin | lever |
 |---|---|---|---|
-| **superbpe-128k + n-gram** | **1.1733** | **−5.2%** | tokenizer + n-gram (composed) |
+| **trained-superbpe-80k-t40k** | **1.1621** | **−6.1%** | small-vocab superword (our mix) |
+| superbpe-128k + n-gram | 1.1733 | −5.2% | superword + n-gram (composed) |
 | gpt-neox-50k | 1.1745 | −5.1% | small-vocab tokenizer |
 | superbpe-128k | 1.1794 | −4.7% | superword tokenizer |
-| trained-superbpe-128k-t102k | 1.1918 | −3.7% | our-mix superword (worse BPB) |
 | marin-128k (Llama-3) | 1.2376 | ref | incumbent |
 
 ## EXP-002 — isoFLOP tokenizer ladder (5 arms × 3 points)
@@ -308,20 +310,23 @@ different regime. A tokenizer that is *both* superword *and* right-sized for our
   `trained-` prefix, then `bakeoff_analysis` (see `scratchpad/build_febpb_inputs.py`).
 - **Result** (BPB @ s8000, off-the-shelf superbpe-128k = 1.114; feBPB @ target scale, marin ref 1.2376):
 
-  | arm | B/tok | s8000 BPB | feBPB | vs marin |
-  |---|---|---|---|---|
-  | trained-superbpe-128k-t102k | 4.86 | 1.1252 | 1.1918 | −3.7% |
-  | trained-superbpe-160k-t64k | 5.00 | 1.1216 | 1.2028 | −2.8% |
-  | trained-superbpe-160k-t128k | 4.95 | 1.1248 | 1.2059 | −2.6% |
-  | (off-the-shelf superbpe-128k) | 4.80 | 1.114 | **1.1794** | **−4.7%** |
+  | arm | vocab | B/tok | rel_serve | s8000 BPB | feBPB | vs marin |
+  |---|---|---|---|---|---|---|
+  | **trained-superbpe-80k-t40k** | 80k | 4.66 | 0.835 | **1.1107** | **1.1621** | **−6.1%** |
+  | trained-superbpe-128k-t51k | 128k | 4.90 | 0.799 | 1.1081 | 1.1836 | −4.4% |
+  | trained-superbpe-128k-t102k | 128k | 4.86 | 0.807 | 1.1252 | 1.1918 | −3.7% |
+  | trained-superbpe-160k-t64k | 160k | 5.00 | 0.787 | 1.1216 | 1.2028 | −2.8% |
+  | trained-superbpe-160k-t128k | 160k | 4.95 | 0.794 | 1.1248 | 1.2059 | −2.6% |
+  | (off-the-shelf superbpe-128k) | 128k | 4.80 | 0.816 | 1.114 | 1.1794 | −4.7% |
 
-- **Conclusion — honest Track C negative**: despite *more* bytes/token (cheaper serving), every
-  trained SuperBPE has **worse held-out BPB** than off-the-shelf superbpe-128k (e.g. t102k 1.1252
-  vs 1.114 at s8000), so its feBPB is **worse** (−3.7% vs −4.7%). Training our own superword
-  tokenizer on a 1.5 GB mix did not beat the reference tokenizer trained on far more data — the
-  extra merges pack more bytes but generalize worse (bytes-per-token ↑ yet bits-per-byte ↑ too).
-  Bigger vocab is monotonically worse here (160k < 128k on feBPB), matching off-the-shelf
-  superbpe-180k's negligible +0.6% bytes/token (EXP-002 follow-up) — 128k is the superword sweet
-  spot. **The tokenizer lever is maxed by off-the-shelf superbpe-128k / gpt-neox-50k (~−5%); our
-  own training does not extend it.** (t51k, 80k-t40k relaunched after a transient S3
-  PreconditionFailed eval flake to complete their 3rd points.)
+- **Conclusion — vocab is the axis, and small-vocab superword WINS**: **`trained-superbpe-80k-t40k`
+  is the single best tokenizer measured, −6.1% feBPB** — beating off-the-shelf superbpe-128k
+  (−4.7%) and gpt-neox-50k (−5.1%). The mechanism: a small vocab is a *smaller model* (cheaper per
+  training FLOP → more effective steps at a fixed budget → lower BPB) and the superword pretokenizer
+  keeps fertility high enough that the modest serving-cost penalty (rel_serve 0.835 vs 0.816) is
+  outweighed. **feBPB falls monotonically as trained vocab shrinks** 160k→128k→80k, so the optimum
+  is at or below 80k — the "gpt-neox efficiency × superword packing" sweet spot. This *reverses*
+  the earlier partial read (based only on the worse 128k/160k arms): training our own tokenizer on
+  the deployment mix **does** extend the lever past off-the-shelf, but only at small vocab. Bracket
+  ladders at 64k/96k are training now to locate the exact optimum. (t51k, 80k-t40k had a transient
+  S3 PreconditionFailed eval flake on their 3rd points; relaunched clean.)
