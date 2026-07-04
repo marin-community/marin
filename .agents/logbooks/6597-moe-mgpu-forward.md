@@ -2158,3 +2158,39 @@ Ran the staged H-forward path at the stable source-push target profile after the
   - Next optimization target is the W2-from-H prologue: avoid full `[M,K]` route-weight expansion if Mosaic exposes a
     legal row-broadcast load, or move route scaling to an output-tile equivalent if we accept that forward-only
     algebraic rewrite for performance while preserving the MLP-level custom VJP math.
+
+## 2026-07-03 18:18 - Expose staged forward H residual
+
+Added a package-private `source_push_forward_with_h(...)` entrypoint that returns the staged source-push forward output
+plus the W13 preactivation checkpoint from the production W13-H buffer. The returned H is the flat source-padded
+expert-major layout `[destination_rank, source_padded_expert_major_row, 2 * intermediate_dim]`; it is before SwiGLU and
+before route-weight scaling. This does not complete the MLP-level custom VJP integration, but it removes the immediate
+forward API gap where the Pallas staged path computed H internally and discarded it.
+
+- Commit Hash: `26d382e06`
+- Code:
+  - `lib/levanter/src/levanter/grug/_moe/source_push_forward.py`
+  - `lib/levanter/tests/grug/test_source_push_inbox.py`
+- Local verification:
+  - `uv run --package marin-levanter --group test pytest lib/levanter/tests/grug/test_source_push_inbox.py lib/levanter/tests/grug/test_source_push_mlp.py -q -k 'forward_with_h or forward_h_reference or w13_h_reference or source_push_moe_mlp'`
+    - Result: `6 passed, 11 warnings in 9.75s`.
+  - `./infra/pre-commit.py --fix lib/levanter/src/levanter/grug/_moe/source_push_forward.py lib/levanter/tests/grug/test_source_push_inbox.py`
+    - Result: all checks passed, including Pyrefly.
+- H100 smoke:
+  - Job: `/dlwh/source-push-forward-with-h-smoke-20260703-1815`
+  - Cluster: `cw-us-east-02a`
+  - Config: `ep_size=2`, `tokens_per_rank=128`, `hidden_dim=128`, `intermediate_dim=128`,
+    `experts_per_rank=2`, `topk=1`, `block_m=64`, `block_k=64`, `block_n=128`, staged host-sync execution.
+  - Result row:
+
+    ```json
+    {"dropped_routes": 0, "h_max_abs_diff": 0.00390625, "h_mean_abs_diff": 1.049041748046875e-05, "kernel": "source_push_forward_with_h_smoke", "max_abs_diff": 0.00048828125, "mean_abs_diff": 3.214017488062382e-05, "observed_h_shape": [2, 256, 256], "observed_y_shape": [2, 128, 128]}
+    ```
+
+- Interpretation:
+  - The staged Pallas path can now expose the same H checkpoint it uses for W2-from-H, with no extra W13 invocation.
+  - The reference test also verifies that changing route weights changes `y` but not returned H, so this API is aligned
+    with the intended residual boundary rather than saving post-SwiGLU `A`.
+  - Next integration step is to route the production source-push MLP custom VJP forward rule through this staged
+    with-H entrypoint and adapt the backward residual to consume the flat production H layout or convert it to the
+    compact `[Dst, E, C, 2I]` route-table layout.
