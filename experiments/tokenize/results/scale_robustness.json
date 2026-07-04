@@ -1,0 +1,33 @@
+{
+ "note": "EXP-009 scale-robustness: 64k-t32k vs marin-128k at hidden-2048 (4x params). BPB at matched steps.",
+ "hidden_1024": {
+  "marin-128k": {
+   "s3500": 1.2376,
+   "s8000": 1.147
+  },
+  "trained-superbpe-64k-t32k": {
+   "s3500": 1.1955,
+   "s8000": 1.1141
+  }
+ },
+ "hidden_2048": {
+  "marin-128k": {
+   "s3500": 1.1833,
+   "s8000": 1.0944
+  },
+  "trained-superbpe-64k-t32k": {
+   "s3500": 1.1542,
+   "s8000": 1.0643
+  }
+ },
+ "advantage_pct": {
+  "h1024": {
+   "s3500": -3.4,
+   "s8000": -2.87
+  },
+  "h2048": {
+   "s3500": -2.46,
+   "s8000": -2.75
+  }
+ }
+}

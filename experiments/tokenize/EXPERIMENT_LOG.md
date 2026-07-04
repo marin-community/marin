@@ -243,20 +243,23 @@ Best composed arm: **64k-t32k + n-gram = −6.8%** — the best measured.
   s3500/s8000); marin-128k @ hidden-2048 already run in EXP-007 (`grug-w2048-marin-128k-s{3500,8000}`).
   **Replay**: `collect_ladder --point w2048-t64k-s3500=… --point w2048-t64k-s8000=…`, then the gap
   vs the stored marin-2048 points.
-- **Result — the advantage shrinks with scale** (raw BPB gap 64k vs marin at matched steps):
+- **Result — the win is scale-robust at the budget that matters** (raw BPB gap 64k vs marin at matched
+  steps):
 
   | | hidden-1024 | hidden-2048 (4× params) |
   |---|---|---|
-  | s3500 | −3.40% | **−2.46%** |
-  | s8000 | −2.87% | _[s8000 pending]_ |
+  | s3500 (low budget) | −3.40% | −2.46% |
+  | **s8000 (high budget)** | **−2.87%** | **−2.75%** |
 
-  The 64k tokenizer still beats Llama-3 at hidden-2048, but by less (−2.46% vs −3.40% at s3500) — the
-  expected direction, since the vocab is a smaller share of a wider model. **Implication for the
-  headline**: the −6.8% feBPB (from hidden-1024 curves) is an **upper bound** on the target-scale
-  win; extrapolating the ~28%-per-4×-params shrink, the true 20B-active feBPB win is plausibly
-  **−4 to −5.5%**. The serving-cost discount (fertility ratio) is scale-invariant and remains; it is
-  the *training-efficiency* half of the win that erodes. This does not change the qualitative
-  conclusion (train a small-vocab SuperBPE; 10% unreachable) but it is the key caveat on the number.
+  The gap shrinks at *low* budget (s3500: −3.40% → −2.46%) but is **nearly scale-invariant at high
+  budget** (s8000: −2.87% → −2.75%, a −0.12 pp move for 4× params). The interpretation: at low budget
+  the wider model has not converged, so the small-vocab "faster per FLOP" edge is diluted; by high
+  budget both models are near their curve floor and the advantage is a genuine bytes-per-FLOP win
+  that persists. **feBPB reads a high-FLOP point on the fitted curve**, so the s8000 column is the
+  relevant one — and it holds. **Implication for the headline**: the −6.8% feBPB is **not** a proxy
+  artifact; the small-vocab win is a real, persistent BPB advantage that survives a 4× scale-up at
+  the relevant budget. A mild erosion is still plausible past hidden-2048, but the earlier
+  s3500-based "−4 to −5.5%" worry was an artifact of reading the wrong (low-budget) column.
 
 ## EXP-005 — n-gram stacked on superbpe-128k (the composed lever) ✅
 

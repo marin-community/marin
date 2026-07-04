@@ -34,13 +34,15 @@ bottoms out here. Adding a hashed n-gram embedding on top buys a further ~0.2% �
 concentrates at high training budget (a penalty early, −0.86% BPB by the top of the ladder), which
 is exactly the budget feBPB scores at. **Best measured: −6.8% feBPB (64k + n-gram).**
 
-**Caveat — this is an upper bound; the win shrinks with model scale.** The scorecard reads BPB from
-hidden-1024 proxy curves. A hidden-2048 (4× params) check shows the 64k tokenizer's raw BPB
-advantage over Llama-3 shrinks from −3.40% to −2.46% (s3500) — the vocab is a smaller share of a
-wider model, so the training-efficiency half of the win erodes with scale (the serving-cost half is
-scale-invariant). Extrapolated to the 20B-active target, the realistic feBPB win is plausibly
-**−4 to −5.5%**, not −6.8%. The direction of the conclusion is unchanged (train a small-vocab
-SuperBPE; 10% is out of reach), but the honest number for the target is below the proxy headline.
+**Scale-robustness — the win holds at the budget that matters.** The scorecard reads BPB from
+hidden-1024 proxy curves, so we checked the best tokenizer at hidden-2048 (4× params). The 64k
+advantage over Llama-3 shrinks at *low* budget (s3500: −3.40% → −2.46%) but is **nearly
+scale-invariant at high budget** (s8000: −2.87% → −2.75%). Because feBPB reads a high-FLOP point on
+the fitted curve, the high-budget column is the relevant one — so the −6.8% is a real,
+scale-persistent win, not a proxy artifact. (At low budget the wider model has not converged and the
+small-vocab "faster per FLOP" edge is diluted; by high budget it is a genuine bytes-per-FLOP win.) A
+mild further erosion past hidden-2048 is possible, so treat −6.8% as a firm proxy result and ~−6%
+as a conservative target-scale expectation.
 
 **On the 10% target.** The measured levers do not reach a 10% feBPB improvement at the flash-scale
 proxy, and we can now say *why* with a clear decomposition: off-the-shelf superword buys −4.7%;
