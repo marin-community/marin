@@ -361,7 +361,9 @@ def source_push_recv_route_weights_jax(
         for recv_ord in range(ep_size):
             src = (dst + recv_ord) % ep_size
             send_dst_ord = dst_ordinal(src, dst, ep_size)
-            recv_sources.append(queue_weights[src, send_dst_ord])
+            recv_sources.append(
+                queue_weights.at[src, send_dst_ord].get(out_sharding=_source_push_out_sharding(None, None))
+            )
         recv_by_dst.append(jnp.stack(recv_sources, axis=0))
     recv_weights = jnp.stack(recv_by_dst, axis=0)
     return _with_source_push_sharding(recv_weights, SOURCE_PUSH_MESH_AXIS, None, None, None)
