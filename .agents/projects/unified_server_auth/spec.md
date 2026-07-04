@@ -11,35 +11,50 @@ Service tokens switch from HS256 to **asymmetric EdDSA (Ed25519)**. Nothing is
 deployed, so this is a contained edit (mint sites `auth.py:224,248`; verify
 `auth.py:262`; finelog `auth.rs`), not a migration.
 
-- **`JwtTokenManager` holds an Ed25519 keypair.** `controller_secrets` stores the
-  **private** key (still generated on the controller, INSERT-OR-IGNORE, unchanged
-  storage path). Minting: `jwt.encode(payload, private_key, algorithm="EdDSA")`.
-  Claims add a stable **`kid`** (in the JWT header) and **`iss`** (= cluster name)
-  so verifiers can resolve the right key across issuers.
-- **Public keys are published as JWKS.** New route
-  `GET /.well-known/jwks.json` (`@public`) serves the controller's current +
-  previous public keys (an overlap window for rotation). Signature:
+- **The signing-authority mechanism is generic and lives in `rigging`** — new
+  `lib/rigging/src/rigging/token_authority.py`, so any service can mint/verify:
 
 ```python
-# iris/cluster/controller/auth.py
-class JwtTokenManager:
-    def public_jwks(self) -> dict: ...          # {"keys": [{"kty":"OKP","crv":"Ed25519","kid":...,"x":...}, ...]}
-    def create_token(self, user_id, role, ttl_seconds) -> str: ...   # EdDSA, header kid+iss
-    def verify(self, token: str) -> VerifiedIdentity: ...            # EdDSA against local public key(s)
+# rigging/token_authority.py — generic, no service policy
+@dataclass(frozen=True)
+class SigningKey:                 # sourced from a SecretSpec (§2), never generated into a DB
+    kid: str
+    ed25519_private_pem: str      # the private half; public derived from it
+
+class JwtSigner:
+    def __init__(self, key: SigningKey, *, issuer: str): ...
+    def mint(self, claims: dict, *, ttl_seconds: int) -> str: ...   # EdDSA; header {kid}; adds iss/iat/exp
+    def public_jwks(self) -> dict: ...    # {"keys":[{"kty":"OKP","crv":"Ed25519","kid":...,"x":...}, ...]}
+
+class JwksVerifier:               # the TokenVerifier used for service + IAP + Google tokens
+    def __init__(self, *, issuers: "Mapping[str, str]", static_jwks: dict | None = None,
+                 algorithms: tuple[str, ...] = ("EdDSA", "ES256", "RS256")): ...
+    def verify(self, token: str) -> VerifiedIdentity: ...   # resolve key by iss+kid; verify sig/exp
 ```
 
-- **Verifiers hold only public keys.** rigging gains a `JwksVerifier`
-  (`TokenVerifier`) that verifies EdDSA/ES256/RS256 against a fetched+cached JWKS,
-  keyed by `iss`→`jwksUri` and `kid` — the **same** machinery the IAP (ES256) and
-  Google-ID-token (RS256) verifiers use. finelog's Rust `JwtVerifier` switches
-  from `hmac` to `jsonwebtoken` EdDSA against the controller's published key
-  (`iss`-resolved), so its `JwtKey.secret` (a shared HMAC secret) becomes a
-  **public key** — no secret. `MIN_SECRET_BYTES` and the raw-ASCII-HMAC path go
-  away.
-- **Consequence for #6873:** `ClusterFinelogConfig.delegation_key` is **removed**;
-  finelog's auth layer references the controller's JWKS/public key (inline-safe).
-  Federation: a `/proxy` gate or a peer resolves the minting cluster's public key
-  by `iss`. No shared symmetric secret anywhere on the verify path.
+- **iris keeps only policy.** `JwtTokenManager` becomes a thin wrapper over
+  `JwtSigner`/`JwksVerifier`: it owns claim/role semantics, endpoint-token minting,
+  and the **revocation source** (`api_keys` jti set — checked *after* `JwksVerifier`
+  returns, exactly as today). The signing-mechanism, keypair handling, and JWKS
+  move to rigging.
+- **The private signing key comes from a `SecretSpec`, not the DB.** New config
+  field `AuthConfig.signing_key: SecretRefSpec` (default path
+  `gcp-secret://…/iris-signing-key/versions/<v>`), resolved at controller startup
+  via `resolve_secret_spec` (§2). `controller_secrets` **no longer stores a signing
+  key**. A one-time `iris cluster init-keys` generates the Ed25519 keypair and
+  writes the private half to Secret Manager; rotation = a new SM version + a JWKS
+  overlap window (serve current + previous public keys).
+- **Public keys are published as JWKS.** New `@public` route
+  `GET /.well-known/jwks.json` (`dashboard.py`) serving `signer.public_jwks()`.
+- **finelog verifies against a public key, not a secret.** Its Rust `JwtVerifier`
+  switches from `hmac` to `jsonwebtoken` EdDSA. The controller's public key is
+  **inline-safe** (not a secret), so finelog's config carries the public key
+  directly (no JWKS *fetch* dependency, no controller-availability coupling for the
+  static case); JWKS fetch is reserved for multi-issuer federation, resolved by
+  `iss`. `MIN_SECRET_BYTES` and the raw-ASCII-HMAC path go away.
+- **Consequence for #6873:** `ClusterFinelogConfig.delegation_key` is **removed**,
+  replaced by an inline public key. No shared symmetric secret anywhere on the
+  verify path.
 
 ## 1. Declarative auth-stack schema — `lib/rigging/src/rigging/auth_config.py` (new)
 
@@ -268,8 +283,10 @@ def assert_no_inlined_secrets(config: IrisClusterConfig) -> None:
     Mirrors finelog's assert_inlineable_auth (finelog/deploy/config.py:131-142)."""
 ```
 
-Per-service JWT **signing** keys are out of config entirely — minted on the
-controller into `controller_secrets` (unchanged, `auth.py:157-181`).
+Per-service JWT **signing** keys are `SecretRefSpec` fields too (§0): the private
+key resolves from Secret Manager at startup, never generated into the SQLite
+`controller_secrets` table (which is node-local NVMe, commit `f691c03f2`, and
+would lose the key on node loss).
 
 ## 3. Role-grant RPC + onboarding CLI (#6580, #6592)
 
@@ -336,15 +353,15 @@ user re-runs `iris login`.
 | `lib/rigging/src/rigging/secrets.py` | **new** — `resolve_secret_spec`, `default_secret_spec`, `SecretSource`, `is_secret_reference` |
 | `lib/rigging/pyproject.toml` | add `[secrets]` optional extra (`google-cloud-secret-manager`) |
 | `lib/rigging/docs/authed-service.md` | **new** — the rollout runbook (server + client recipe; cidr-grants-admin caveat; first-match note) |
-| `lib/iris/src/iris/cluster/config.py` | mark `SecretRefSpec` fields; `resolve_config_secrets`; `assert_no_inlined_secrets` |
 | `lib/iris/src/iris/cluster/controller/main.py` | resolve secrets on the `serve` path after `load_config` |
 | `lib/iris/src/iris/cluster/platforms/k8s/controller.py` | guard at `_config_json_for_configmap` |
 | `lib/iris/src/iris/cluster/platforms/gcp/controller_bootstrap.py` | guard at the render site |
-| `lib/iris/src/iris/cluster/controller/auth.py` | **§0** EdDSA keypair in `JwtTokenManager` (`kid`/`iss`, `public_jwks()`); `request_auth_policy` builds `AuthStackConfig`; IAP `login` provisions at `unprovisioned_role` |
+| `lib/rigging/src/rigging/token_authority.py` | **new, §0** — generic `SigningKey`, `JwtSigner` (EdDSA mint + `public_jwks`), `JwksVerifier` (EdDSA/ES256/RS256, `iss`/`kid`-resolved, cached); shared by service + IAP/Google verify |
+| `lib/iris/src/iris/cluster/controller/auth.py` | **§0** `JwtTokenManager` = thin policy wrapper over `rigging.JwtSigner`/`JwksVerifier` (claims/roles, endpoint tokens, jti-revocation source); `request_auth_policy` builds `AuthStackConfig`; IAP `login` provisions at `unprovisioned_role`; **drop** DB signing-key storage |
+| `lib/iris/src/iris/cluster/config.py` | **§0** `AuthConfig.signing_key: SecretRefSpec`; **remove** `ClusterFinelogConfig.delegation_key` (→ inline public key); mark `SecretRefSpec` fields; `resolve_config_secrets`; `assert_no_inlined_secrets` |
 | `lib/iris/src/iris/cluster/controller/dashboard.py` | **§0** `@public GET /.well-known/jwks.json` route |
-| `lib/rigging/src/rigging/server_auth.py` (verifier) | **§0** `JwksVerifier` (EdDSA/ES256/RS256, `iss`/`kid`-resolved, cached) shared by service + IAP/Google verify |
-| `lib/finelog/rust/src/server/auth.rs` | **§0** jwt layer verifies EdDSA via `jsonwebtoken` against the issuer's public key (drop `hmac`/`MIN_SECRET_BYTES`); `delegation_key`→public key |
-| `lib/iris/src/iris/cluster/config.py` (finelog) | **§0** remove `ClusterFinelogConfig.delegation_key`; finelog auth references controller JWKS/public key |
+| `lib/iris/src/iris/cli/…` | **§0** `iris cluster init-keys` (generate Ed25519 keypair → private half to Secret Manager); `iris user grant` |
+| `lib/finelog/rust/src/server/auth.rs` | **§0** jwt layer verifies EdDSA via `jsonwebtoken` against an inline/`iss`-resolved public key (drop `hmac`/`MIN_SECRET_BYTES`) |
 | `lib/iris/src/iris/cluster/controller/service.py` | `SetUserRole` handler |
 | `lib/iris/src/iris/rpc/auth.py` | `AuthzAction.MANAGE_USER_ROLES` |
 | `lib/iris/proto/…` | `SetUserRoleRequest` / `SetUserRoleResponse` |

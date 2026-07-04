@@ -64,12 +64,33 @@ landable (the #6592 flip ships as its own PR with an ops announcement) — one
 design, split along those seams.
 
 **0. Foundational: asymmetric, JWKS-verified service tokens.** Because nothing is
-deployed, adopt **public-key JWTs (EdDSA/Ed25519) now** instead of HS256. The
-controller is the **signing authority**: the private key is minted on the
-controller (`controller_secrets`, unchanged storage), and public keys are
-published at a `/.well-known/jwks.json` endpoint. Every verifier — finelog, peers,
-the request chain — holds only the **public** key. This is standard (RFC 8037;
-PyJWT `algorithm="EdDSA"`, Rust `jsonwebtoken` EdDSA) and reshapes the rest:
+deployed, adopt **public-key JWTs (EdDSA/Ed25519) now** instead of HS256. A
+service acts as a **signing authority**: it mints tokens with a private key and
+publishes public keys at `/.well-known/jwks.json`; every verifier holds only the
+**public** key. Two placement decisions the maintainer raised, both adopted:
+
+- **The signing-authority *mechanism* lives in `rigging`, not iris.** A generic
+  `rigging` module (`JwtSigner` mint / `JwksVerifier` verify / `public_jwks()`)
+  owns keypairs, EdDSA sign/verify, and JWKS — so *any* service can be an
+  authority or a verifier without reimplementing. iris keeps only its **policy**:
+  role/claim semantics, the RBAC map, the user store, endpoint-token minting, and
+  the revocation *source* (`api_keys`). `JwtTokenManager` becomes a thin iris wrapper
+  over `rigging.JwtSigner`. (This deliberately refines the earlier
+  `2026-06-20_rigging_connection_auth.md` "minting stays in iris" split: the
+  *generic* signing mechanism moves down to the shared leaf now that it's a
+  standard, multi-service, asymmetric primitive; *roles/policy* still stay in iris.)
+- **The private key is sourced through the `SecretSpec` path (§Part 2), not the
+  SQLite `controller_secrets` table.** One secret-supply mechanism for everything,
+  rotation via Secret-Manager versions, and — importantly — it **survives node
+  replacement**: the controller's SQLite is now node-local NVMe (commit
+  `f691c03f2`), so a key generated into it would be *lost on node loss*,
+  invalidating every issued token. A one-time provisioning step (`iris cluster
+  init-keys`) generates the Ed25519 keypair and writes the private half to Secret
+  Manager; the controller reads it via a `SecretSpec` at startup. `controller_secrets`
+  no longer stores signing keys.
+
+This is standard (RFC 8037; PyJWT `algorithm="EdDSA"`, Rust `jsonwebtoken` EdDSA)
+and reshapes the rest:
 
 - **The shared-secret class that #6873 is about dissolves.** `delegation_key` today
   is a *shared symmetric HMAC secret* that finelog verifies with
@@ -181,15 +202,16 @@ name heuristic — `is_sensitive_key_name` misses `delegation_key` and false-mat
 the whole `auth` block), and the two render sites call `assert_no_inlined_secrets`,
 which raises if **any entry in a path** is a raw value (mirroring finelog's
 `assert_inlineable_auth`). **Where JWT secrets live** (the umbrella's explicit
-question): with Part 0, the answer is cleaner than "reference the shared secret" —
-the controller's **private signing key** stays minted on the controller
-(`controller_secrets`, `auth.py:157-181`), never in config; **public** keys go out
-via JWKS (not secrets); and `delegation_key` — #6873's headline symmetric secret —
-is **retired**, replaced by the controller's public key that finelog verifies with.
-So `SecretSpec` covers only the residual genuinely-symmetric material: dev/CI static
-tokens (`StaticAuthConfig.tokens`) and the IAP OAuth client secret. Whether
-`peers.static_token` survives at all is an open question (Part 0 lets a peer verify
-via JWKS instead of a pre-shared bearer). finelog's Rust server parses
+question): with Part 0, *everything* secret goes through the one `SecretSpec` path
+— including the **private signing key** (`gcp-secret://…/iris-signing-key/versions/<v>`,
+resolved at startup; no SQLite storage). **Public** keys go out via JWKS (not
+secrets), and `delegation_key` — #6873's headline symmetric secret — is **retired**,
+replaced by the controller's public key that finelog verifies with. So the marked
+`SecretSpec` fields are just the signing key plus the residual genuinely-symmetric
+material: dev/CI static tokens (`StaticAuthConfig.tokens`) and the IAP OAuth client
+secret. Whether `peers.static_token` survives at all is an open question (Part 0
+lets a peer verify via JWKS instead of a pre-shared bearer). finelog's Rust server
+parses
 `FINELOG_AUTH_POLICY` itself, and `assert_inlineable_auth` already forces its whole
 jwt-bearing policy through a secret source — so finelog needs no new Rust resolver.
 
