@@ -76,8 +76,13 @@ def _ct_body_cost(q_dtype, dtype_max, x_struct):
 
 
 @functools.lru_cache(maxsize=16)
-def _make_ct_call_2d(m: int, k: int, q_dtype, x_dtype):
-    """Build and cache the cast-transpose+amax pallas_call for 2-D inputs."""
+def _make_ct_call_2d(m: int, k: int, q_dtype, x_dtype, t_extra: int = 0):
+    """Build and cache the cast-transpose+amax pallas_call for 2-D inputs.
+
+    ``t_extra`` widens the transposed output to ``[k, m + t_extra]``; the extra
+    columns are left unwritten (the wgrad boundary appendix fills them, see
+    ``write_boundary_appendix``).
+    """
     # A 64-row tile on the (token) M axis measures ~7% more bandwidth than 128
     # at the d2560 shapes; K keeps the widest tile.
     bm = 64 if m % 64 == 0 else _block_size(m)
@@ -99,7 +104,7 @@ def _make_ct_call_2d(m: int, k: int, q_dtype, x_dtype):
         functools.partial(_ct_kernel, q_dtype=q_dtype, dtype_max=dtype_max),
         out_shape=[
             jax.ShapeDtypeStruct((m, k), q_dtype),
-            jax.ShapeDtypeStruct((k, m), q_dtype),
+            jax.ShapeDtypeStruct((k, m + t_extra), q_dtype),
             jax.ShapeDtypeStruct((grid_m, grid_k), jnp.float32),
         ],
         in_specs=[
@@ -117,8 +122,8 @@ def _make_ct_call_2d(m: int, k: int, q_dtype, x_dtype):
     )
 
 
-def cast_transpose_amax_2d(x, inv_scale, q_dtype):
-    """``x[M,K]`` bf16 → (fp8 ``[M,K]``, fp8 ``[K,M]``, amax ``[1]``) in one read.
+def cast_transpose_amax_2d(x, inv_scale, q_dtype, t_extra=0):
+    """``x[M,K]`` bf16 → (fp8 ``[M,K]``, fp8 ``[K,M+t_extra]``, amax ``[1]``) in one read.
 
     Loads the bf16 tile once, emits per-tile amax partials (reduced by XLA),
     quantizes, and stores both the natural and the transposed FP8 tiles.
@@ -127,13 +132,15 @@ def cast_transpose_amax_2d(x, inv_scale, q_dtype):
         x: ``[M, K]`` bfloat16 input.
         inv_scale: ``[1]`` float32 inverse scale (``1 / new_scale``).
         q_dtype: target FP8 dtype (``jnp.float8_e4m3fn`` or ``jnp.float8_e5m2``).
+        t_extra: extra (unwritten) columns appended to the transposed output for
+            the wgrad boundary appendix (``write_boundary_appendix``).
 
     Returns:
-        ``(q_natural, q_transposed, amax)``: natural ``[M, K]``, transposed ``[K, M]``,
-        and per-tensor amax ``[1]``.
+        ``(q_natural, q_transposed, amax)``: natural ``[M, K]``, transposed
+        ``[K, M + t_extra]``, and per-tensor amax ``[1]``.
     """
     m, k = x.shape
-    q_nat, q_t, amax_parts = _make_ct_call_2d(m, k, q_dtype, x.dtype)(x, inv_scale)
+    q_nat, q_t, amax_parts = _make_ct_call_2d(m, k, q_dtype, x.dtype, t_extra)(x, inv_scale)
     return q_nat, q_t, jnp.max(amax_parts).reshape(1)
 
 
@@ -219,7 +226,7 @@ def _next_scale_and_inv(q_dtype, scale, amax_history):
 # ---------------------------------------------------------------------------
 
 
-def cast_transpose_delayed(q_dtype, mode, inp, scale, amax_history):
+def cast_transpose_delayed(q_dtype, mode, t_extra, inp, scale, amax_history):
     """Cast-transpose ``inp`` with delayed scaling.
 
     Returns ``(q_natural, q_transposed, new_scale, new_history)``.  The amax is
@@ -230,19 +237,25 @@ def cast_transpose_delayed(q_dtype, mode, inp, scale, amax_history):
     Args:
         q_dtype: target FP8 dtype.
         mode: ``"2d"`` for activations ``[M, K]`` or ``"3d"`` for weights ``[E, K, N]``.
+        t_extra: extra transposed-output columns for the wgrad boundary appendix
+            (2-D mode only; pass 0 when unused).
         inp: bf16 tensor to quantize.
         scale: current delayed-scaling scale ``[1]``.
         amax_history: rolling amax history.
     """
     new_scale, inv_scale = _next_scale_and_inv(q_dtype, scale, amax_history)
-    ct = cast_transpose_amax_3d if mode == "3d" else cast_transpose_amax_2d
-    q_nat, q_t, cur_amax = ct(inp, inv_scale, q_dtype)
+    if mode == "3d":
+        if t_extra:
+            raise ValueError("t_extra is only supported for 2-D cast-transpose (wgrad appendix)")
+        q_nat, q_t, cur_amax = cast_transpose_amax_3d(inp, inv_scale, q_dtype)
+    else:
+        q_nat, q_t, cur_amax = cast_transpose_amax_2d(inp, inv_scale, q_dtype, t_extra)
     new_history = roll_amax_history(cur_amax[0], amax_history)
     return q_nat, q_t, new_scale, new_history
 
 
-@functools.partial(custom_vjp, nondiff_argnums=(0, 1))
-def in_q_ct(q_dtype, mode, inp, scale, amax_history):
+@functools.partial(custom_vjp, nondiff_argnums=(0, 1, 2))
+def in_q_ct(q_dtype, mode, t_extra, inp, scale, amax_history):
     """Cast-transpose analog of ``in_q``: returns ``(q_natural, q_transposed, new_scale)``.
 
     Produces both FP8 layouts (natural and transposed) in a single bf16 read
@@ -253,6 +266,8 @@ def in_q_ct(q_dtype, mode, inp, scale, amax_history):
     Args:
         q_dtype: target FP8 dtype (non-differentiable static arg).
         mode: ``"2d"`` or ``"3d"`` (non-differentiable static arg).
+        t_extra: extra transposed-output columns for the wgrad boundary appendix
+            (non-differentiable static arg; 2-D mode only).
         inp: bf16 tensor to quantize.
         scale: current delayed-scaling scale ``[1]``.
         amax_history: rolling amax history.
@@ -260,16 +275,16 @@ def in_q_ct(q_dtype, mode, inp, scale, amax_history):
     Returns:
         ``(q_natural, q_transposed, new_scale)``.
     """
-    q_nat, q_t, new_scale, _ = cast_transpose_delayed(q_dtype, mode, inp, scale, amax_history)
+    q_nat, q_t, new_scale, _ = cast_transpose_delayed(q_dtype, mode, t_extra, inp, scale, amax_history)
     return q_nat, q_t, new_scale
 
 
-def _in_q_ct_fwd(q_dtype, mode, inp, scale, amax_history):
-    q_nat, q_t, new_scale, new_history = cast_transpose_delayed(q_dtype, mode, inp, scale, amax_history)
+def _in_q_ct_fwd(q_dtype, mode, t_extra, inp, scale, amax_history):
+    q_nat, q_t, new_scale, new_history = cast_transpose_delayed(q_dtype, mode, t_extra, inp, scale, amax_history)
     return (q_nat, q_t, new_scale), (new_scale, new_history)
 
 
-def _in_q_ct_bwd(q_dtype, mode, res, _cts):
+def _in_q_ct_bwd(q_dtype, mode, t_extra, res, _cts):
     new_scale, new_history = res
     # No grad to inp; pass updated scale/history through as cotangents so
     # OverwriteWithGradient overwrites the persisted delayed-scaling state.
@@ -277,3 +292,82 @@ def _in_q_ct_bwd(q_dtype, mode, res, _cts):
 
 
 in_q_ct.defvjp(_in_q_ct_fwd, _in_q_ct_bwd)
+
+
+# ---------------------------------------------------------------------------
+# Wgrad boundary appendix: pre-masked group-boundary token blocks.
+# ---------------------------------------------------------------------------
+
+# Token-block width of the wgrad pipeline (== the wgrad kernel's block_k) and of
+# the appendix slots: each group owns two 128-token slots (first / last block).
+WGRAD_TOKEN_BLOCK = 128
+
+
+def _boundary_appendix_kernel(start_ref, end_ref, q_ref, out_ref, *, block_rows, t_real):
+    """Write group ``g``'s pre-masked first/last token blocks into its appendix slots.
+
+    Grid ``(G, K // block_rows)``.  Reads the boundary blocks from the main
+    region ``[:, :t_real]`` and stores masked copies at columns
+    ``t_real + g*2*B + {0, B}`` (``B = WGRAD_TOKEN_BLOCK``).  The universal keep
+    predicate ``start <= token < end`` makes single-block groups (first == last)
+    correct in either slot, and empty groups write all-zero blocks that the
+    wgrad never reads.
+    """
+    b = WGRAD_TOKEN_BLOCK
+    g = pl.program_id(0)
+    i = pl.program_id(1)
+    start = start_ref[()]
+    end = end_ref[()]
+    rows = pl.ds(i * block_rows, block_rows)
+    first_blk = start // b * b
+    last_blk = jnp.maximum(end - 1, 0) // b * b
+    cols = jnp.arange(b)
+    for slot, blk in ((0, first_blk), (1, last_blk)):
+        src = plgpu.load(q_ref.at[rows, pl.ds(blk, b)])
+        keep = (blk + cols >= start) & (blk + cols < end)
+        val = jnp.where(keep[None, :], src.astype(jnp.float16), jnp.float16(0)).astype(src.dtype)
+        plgpu.store(out_ref.at[rows, pl.ds(t_real + g * 2 * b + slot * b, b)], val)
+
+
+def write_boundary_appendix(q_t, group_sizes):
+    """Fill the wgrad boundary appendix of a widened transposed operand, in place.
+
+    ``q_t`` is ``[K, T + G*256]`` (from ``cast_transpose_amax_2d(..., t_extra=G*256)``):
+    the main region ``[:, :T]`` holds the token-contiguous FP8 operand and the
+    appendix holds, per group, its first and last ``WGRAD_TOKEN_BLOCK``-token
+    blocks with out-of-group tokens zeroed.  The wgrad kernel reads boundary
+    pipeline steps from the appendix instead of masking in SMEM
+    (``mgpu_dwgrad``), which keeps its pipeline body branch-free.
+
+    The buffer is aliased through the kernel (no copy of the main region).
+
+    Args:
+        q_t: ``[K, T + G*2*WGRAD_TOKEN_BLOCK]`` FP8, token dim contiguous.
+        group_sizes: ``[G]`` int32 token count per group (``sum == T``).
+
+    Returns:
+        The same-shape array with the appendix written.
+    """
+    g = group_sizes.shape[0]
+    k_dim, t_wide = q_t.shape
+    b = WGRAD_TOKEN_BLOCK
+    t_real = t_wide - g * 2 * b
+    if t_real <= 0 or t_real % b != 0:
+        raise ValueError(f"q_t width {t_wide} does not contain a {b}-aligned main region for {g} groups")
+    if k_dim % b != 0:
+        raise ValueError(f"K={k_dim} must be a multiple of {b} for the boundary-appendix writer")
+    ends = jnp.cumsum(group_sizes.astype(jnp.int32))
+    starts = ends - group_sizes.astype(jnp.int32)
+    return pl.pallas_call(
+        functools.partial(_boundary_appendix_kernel, block_rows=b, t_real=t_real),
+        out_shape=jax.ShapeDtypeStruct(q_t.shape, q_t.dtype),
+        grid=(g, k_dim // b),
+        in_specs=[
+            pl.BlockSpec((None,), lambda gi, i: (gi,)),
+            pl.BlockSpec((None,), lambda gi, i: (gi,)),
+            pl.BlockSpec(memory_space=pl.ANY),
+        ],
+        out_specs=pl.BlockSpec(memory_space=pl.ANY),
+        input_output_aliases={2: 0},
+        compiler_params=plgpu.CompilerParams(num_warps=4, num_stages=2),
+    )(starts, ends, q_t)
