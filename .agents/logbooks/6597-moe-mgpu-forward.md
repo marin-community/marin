@@ -2254,3 +2254,24 @@ receive-order route weights on the host from differentiable arrays.
     smoke remains valid for the staged H-returning kernel path itself.
   - Next code step is still to wire the MLP-level custom VJP forward through `source_push_forward_with_h_from_plan(...)`
     and use a flat-H-aware backward residual.
+
+## 2026-07-03 18:40 - Add flat-H MLP backward helper
+
+Added a flat production-H backward helper for the source-push MLP reference/custom-VJP path. The compact
+`[Dst, E, C, 2I]` backward and flat `[Dst, rows, 2I]` backward now share the same gradient body; the flat path gathers
+route H rows with `expert_base[dst, expert] + expert_row`.
+
+- Commit Hash: `97fa31e42`
+- Code:
+  - `lib/levanter/src/levanter/grug/_moe/source_push_mlp.py`
+  - `lib/levanter/tests/grug/test_source_push_mlp.py`
+- Verification:
+  - `uv run --package marin-levanter --group test pytest lib/levanter/tests/grug/test_source_push_mlp.py -q -k 'flat_h_backward or custom_vjp or saves_w13'`
+    - Result: `3 passed, 11 warnings in 9.46s`.
+  - `./infra/pre-commit.py --fix lib/levanter/src/levanter/grug/_moe/source_push_mlp.py lib/levanter/tests/grug/test_source_push_mlp.py`
+    - Result: all checks passed, including Pyrefly.
+- Interpretation:
+  - The MLP backward can now consume the same flat H layout returned by the staged Pallas forward, without converting
+    the entire H buffer to compact expert-major form first.
+  - The test uses deliberately nonzero `expert_base` offsets and checks the full gradient tuple against compact-H
+    backward, so it would catch missing base-offset handling.
