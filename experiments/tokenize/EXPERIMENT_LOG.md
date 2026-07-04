@@ -216,16 +216,18 @@ budget. Best composed arm: **80k-t40k + n-gram = −6.4%** — the best measured
   near the multi-percent lever a 10% target would need. My initial s3500-only read ("benefit
   shrinks") was incomplete; the s8000 points show it re-emerges at higher budget.
 
-- **Confound + follow-up (EXP-007b)**: this held the n-gram sub-dim (`rank=128`) fixed across scales,
-  while the paper *scales* sub-dim with hidden size — a rank-128 bottleneck may be too narrow to
-  inject signal into a 4×-wider model. Running the paper-faithful test now: **rank 256** at
-  hidden-2048 (scaling 128→256 with hidden 1024→2048), `grug-w2048-ngram256-marin-128k-s{3500,8000}`,
-  2 replicas. If rank-256 recovers the −0.4% that rank-128 gave at hidden-1024, the n-gram scales;
-  if it stays neutral, it genuinely does not help these flash-scale models regardless of sizing.
-  Note the n-gram tables are already ~3 B params (4M buckets × rank × 6) — several× the proxy
-  model — so the lever is *not* param-starved; the open question is purely the injection width.
-  (Infra: the 1-replica base hung on a controller disconnect after ~5 h; killed and rerun at 2
-  replicas.)
+- **Confound + follow-up (EXP-007b, rank-256, abandoned as impractical)**: the rank-128 test held the
+  n-gram sub-dim fixed across scales, while the paper *scales* sub-dim with hidden size — so a
+  rank-128 bottleneck might be too narrow to inject signal into a 4×-wider model. Launched the
+  paper-faithful **rank 256** at hidden-2048 (scaling 128→256 with hidden 1024→2048). It ran at
+  **~65 s/step** (30× the rank-128 run) — the rank-256 tables are 4M×256×6 ≈ **6.1 B params**, which
+  shard poorly here (evidently replicated, spilling), reaching only step 130/3500 in 2.3 h (~60 h to
+  finish). **Killed as impractical.** This leaves a small residual uncertainty on injection width,
+  but the param-count evidence bounds it: the rank-128 n-gram is *already* ~3 B params — **3.7× the
+  hidden-2048 model** — so the lever is not param-starved, and even that heavily over-provisioned
+  embedding caps at ~0.4%. Conclusion stands on the rank-128 result: the n-gram is a ~0.4% lever
+  whose magnitude does not grow with scale. (Infra: the 1-replica base hung on a controller
+  disconnect after ~5 h; killed and rerun at 2 replicas.)
 
 ## EXP-005 — n-gram stacked on superbpe-128k (the composed lever) ✅
 

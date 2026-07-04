@@ -160,8 +160,11 @@ swept:
   At hidden-1024 the n-gram helps early then washes out by s8000; at hidden-2048 it is neutral early
   then helps by s8000 (−0.37%). The peak Δ is ~0.4% at *both* scales — consistent with "n-gram helps
   at scale" (LongCat), but the magnitude does **not** grow, so it is not a multi-percent lever. A
-  rank-256 (scaled sub-dim) confirmation is running to rule out an injection-width confound; the
-  rank-128 result already caps the n-gram's contribution near 0.4%.
+  rank-256 (paper-scaled sub-dim) confirmation to rule out an injection-width confound proved
+  impractical — the rank-256 hash tables are ~6.1 B params and shard poorly here (~65 s/step, ~60 h
+  to finish), so it was killed. The residual uncertainty is small: the rank-128 n-gram is already
+  ~3 B params (3.7× the hidden-2048 model), so the lever is not param-starved, and even that
+  over-provisioned embedding caps at ~0.4%.
 
 The module (`levanter.grug.NgramInputEmbed`) is implemented, verified a bit-exact no-op when off
 and strictly causal, and gated behind `BAKEOFF_NGRAM`.
