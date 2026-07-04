@@ -24,38 +24,76 @@ They differ in default posture (finelog is strictly default-deny with an
 allow-localhost fallback; rigging only installs authenticators when a verifier
 is present), layer ordering (finelog cidr-first, rigging jwt-first), and layer
 vocabulary (finelog has a general `cidr` layer; rigging had only `Loopback`
-until `CidrAuthenticator` was added). The IAP/Google verifiers are inherently
-Python (`google-auth`), so they can never move into finelog's Rust — only the
-*pure* layers (cidr, HS256-jwt, the walk) overlap. Any unification must respect
-that split.
+until `CidrAuthenticator` was added). The *server-side* verify overlap (cidr,
+jwt, and — contrary to the first draft — IAP/Google token verification, which is
+just JWKS-based JWT crypto, feasible in Rust) is what a shared engine could own;
+the split that genuinely stays Python is client-side token *minting* (see
+Phasing).
 
-The second hard part is secret handling: the finelog **server** already refuses
-to inline HS256 keys into a plaintext deploy artifact
-(`assert_inlineable_auth`), but the iris **controller config** inlines the same
-class of secret (`delegation_key`, `static_token`, `StaticAuthConfig.tokens`)
+The second hard part is secret handling: the iris **controller config** inlines
+shared secrets (`delegation_key`, `static_token`, `StaticAuthConfig.tokens`)
 straight into a world-readable ConfigMap / GCE startup-metadata via
-`config_to_dict` (#6873). We need one secret-supply abstraction both sides use.
+`config_to_dict` (#6873), even though the finelog **server** already refuses to
+inline the same class (`assert_inlineable_auth`). The greenfield token switch
+(Part 0) removes the *largest* offender at the root — `delegation_key` becomes a
+public key — leaving a smaller residue that a secret-supply abstraction handles.
 
 ## Costs / Risks
 
 - Churn in a load-bearing, security-sensitive path with no user-visible feature.
   Every regression here is a potential auth bypass, so changes must be
-  test-gated and rolled out behind the existing default-deny invariants.
-- A shared declarative schema adds a config surface (and a cross-language
-  contract test) that must stay in lockstep with two parsers.
+  test-gated and rolled out behind the default-deny invariants.
+- The token-format switch (Part 0) is cheap *now* — greenfield, ~3 sites — but it
+  is a breaking change; do it before any token is issued, not after.
+- Asymmetric tokens add **key rotation** as an operational concern (JWKS overlap
+  windows) that a single symmetric secret didn't have. Standard, but real.
+- A shared declarative schema adds a config surface + a cross-language conformance
+  suite that must stay in lockstep.
 - The `secrets.py` GCP path adds an optional `google-cloud-secret-manager`
-  dependency; it must stay an extra so the rigging leaf stays light.
-- The pyo3 "shared engine" option (see Open Questions) would turn rigging from a
-  pure-Python leaf into a compiled wheel that every service builds — a real
-  packaging cost we should not pay unless the schema-only unification proves
-  insufficient.
+  dependency; it stays an extra so the rigging leaf stays light.
+- The Phase-2 Rust engine would give rigging a compiled wheel (native artifacts
+  for a broadly-installed client lib) — deferred and gated, not free.
 
 ## Design
 
-Five parts. Parts 1–2 are the new mechanism; 3–5 apply it consistently. The
-parts are independently landable (Part 2 does not depend on Part 1; Part 5 adds
-a new RPC; the #6592 flip ships as its own PR with an ops announcement) — this
-is one design, but the implementation splits along those seams.
+**No service tokens are deployed yet** — the token surface is HS256, fully
+contained in `JwtTokenManager` (two mint sites + one verify, `auth.py:224,248,262`)
+plus finelog's Rust HMAC verify. That greenfield window makes one foundational
+choice nearly free, and five parts follow from it. The parts are independently
+landable (the #6592 flip ships as its own PR with an ops announcement) — one
+design, split along those seams.
+
+**0. Foundational: asymmetric, JWKS-verified service tokens.** Because nothing is
+deployed, adopt **public-key JWTs (EdDSA/Ed25519) now** instead of HS256. The
+controller is the **signing authority**: the private key is minted on the
+controller (`controller_secrets`, unchanged storage), and public keys are
+published at a `/.well-known/jwks.json` endpoint. Every verifier — finelog, peers,
+the request chain — holds only the **public** key. This is standard (RFC 8037;
+PyJWT `algorithm="EdDSA"`, Rust `jsonwebtoken` EdDSA) and reshapes the rest:
+
+- **The shared-secret class that #6873 is about dissolves.** `delegation_key` today
+  is a *shared symmetric HMAC secret* that finelog verifies with
+  (`auth.rs`, `hmac`, `MIN_SECRET_BYTES`) and "anyone who reads it can mint." As
+  an asymmetric setup it becomes the controller's **public** key — safe to inline
+  and distribute, not a secret — so finelog verifies delegation JWTs with no
+  secret at all. The `SecretRef` machinery (Part 2) shrinks to the small residue
+  of genuinely-symmetric material (dev static tokens, the IAP OAuth client
+  secret).
+- **Mint and verify decouple** — exactly the "controller could mint keys for iris
+  etc." idea: the controller signs; iris/finelog/services/peers only verify. None
+  of them need mint capability, so a compromised verifier can't forge tokens.
+- **Federation and `/proxy` paths get simpler, not harder.** Each cluster's
+  controller is its own JWKS *issuer*; a verifier (including a `/proxy` gate
+  checking a scoped token that was minted by another cluster) resolves the right
+  public key by the token's `iss` claim — the standard cross-issuer JWKS pattern,
+  with no shared secret to distribute. The one thing to get right is `iss`-keyed
+  key resolution + rotation (JWKS overlap), which is well-trodden.
+- **One verification mechanism everywhere.** JWKS-based JWT verify already serves
+  the IAP assertion (ES256) and Google ID token (RS256); service tokens (EdDSA)
+  now use the *same* machinery, and finelog verifies them with the same
+  `jsonwebtoken` crate the Rust engine (Phase 2) would use.
+
+Five parts follow.
 
 **1. Declarative auth-stack schema (#6861).** Introduce
 `rigging.auth_config.AuthStackConfig` — an ordered list of typed layers parsed
@@ -143,11 +181,15 @@ name heuristic — `is_sensitive_key_name` misses `delegation_key` and false-mat
 the whole `auth` block), and the two render sites call `assert_no_inlined_secrets`,
 which raises if **any entry in a path** is a raw value (mirroring finelog's
 `assert_inlineable_auth`). **Where JWT secrets live** (the umbrella's explicit
-question): per-service *signing* keys stay **minted on the controller** in
-`controller_secrets` (`auth.py:157-181`) — never in config. Only *cross-process
-shared* secrets (finelog `delegation_key`, peer `static_token`) use a `SecretSpec`.
-Mint-on-server is the default; Secret Manager is reserved for what must be
-identical across processes. finelog's Rust server already parses
+question): with Part 0, the answer is cleaner than "reference the shared secret" —
+the controller's **private signing key** stays minted on the controller
+(`controller_secrets`, `auth.py:157-181`), never in config; **public** keys go out
+via JWKS (not secrets); and `delegation_key` — #6873's headline symmetric secret —
+is **retired**, replaced by the controller's public key that finelog verifies with.
+So `SecretSpec` covers only the residual genuinely-symmetric material: dev/CI static
+tokens (`StaticAuthConfig.tokens`) and the IAP OAuth client secret. Whether
+`peers.static_token` survives at all is an open question (Part 0 lets a peer verify
+via JWKS instead of a pre-shared bearer). finelog's Rust server parses
 `FINELOG_AUTH_POLICY` itself, and `assert_inlineable_auth` already forces its whole
 jwt-bearing policy through a secret source — so finelog needs no new Rust resolver.
 
@@ -241,65 +283,56 @@ research (§7.3) changes what that phase is:
   `VerifiedIdentity{email, matched_layer}` and Python assigns the role (the
   email→role resolver hits iris's DB — keeping it a Python callback avoids GIL
   contention and matches today's layering).
-- **What stays Python (the real long pole): client-side token *minting*.**
-  `google-auth`'s ADC discovery, impersonation chains, and the desktop
-  refresh-token→ID-token re-mint are only partly covered by young Rust crates
-  (`google-cloud-auth` 1.x; the refresh-token re-mint is bespoke). Minting is
-  *client-convenience*, not the default-deny ingress gate, so it keeps calling
-  Python `google-auth` at the boundary even after the verify engine lands.
+- **Client-side minting stays Python — and stays *standard*, not bespoke.** The
+  concern "do we need something bespoke?" resolves by adopting standard flows and
+  keeping them in Python's mature libraries: **WIF (keyless)** for headless
+  (research §7.2 — removes the SA-key handling *and* the SSH-tunnel fallback), the
+  standard **installed-app OAuth** flow for humans, and **`iris login` as an
+  OAuth2 token exchange (RFC 8693)** — an IAP-verified Google identity in, a
+  controller-signed EdDSA service JWT out. None of that is a bespoke *format*; it's
+  `google-auth`/`google-auth-oauthlib` library calls. The only slightly-custom code
+  is the console-paste variant of the desktop flow for SSH sessions, kept purely as
+  a convenience. Crucially, minting is *not* ported to Rust — so there is no bespoke
+  refresh-token re-mint to reimplement; the "long pole" was an artifact of
+  considering a Rust port, and it disappears by keeping mint in Python.
 - **Why the engine is last, honestly:** not capability — verification is easy and
   half-built. It is (a) marginal value: Phase 1 already removes the drift we
   actually see; the engine removes *latent* semantic drift the conformance vectors
   already largely cover; (b) turning the broadly-installed rigging leaf into a
   native-wheel package is a real distribution change (musllinux/older-manylinux
-  reach) worth deferring until verify-first proves the pipeline; (c) the mint
-  long-pole bets on young crates. **Recommendation: build Phase 2 only if the
-  conformance vectors surface semantic drift the schema can't prevent** — and if
-  built, make it **verify-only**, keeping mint in Python.
+  reach) worth deferring until verify-first proves the pipeline. **Recommendation:
+  build Phase 2 only if the conformance vectors surface semantic drift the schema
+  can't prevent** — and if built, make it **verify-only**, keeping mint in Python.
 
 ## Open Questions
 
-- **Commit to the Phase-2 Rust verify-engine now, or gate it on drift?** The
-  engine is smaller and more feasible than the first draft implied (verify-only;
-  packaging already solved in-tree by finelog). Recommendation: gate it on the
-  conformance vectors showing real semantic drift, and keep mint in Python
-  regardless. Do you want to schedule it unconditionally instead?
-- **Ordered `SecretSpec` default path.** Adopted per your suggestion:
+- **Signature algorithm: EdDSA vs ES256.** Recommendation **EdDSA (Ed25519)** —
+  small, fast, modern, one curve; supported by PyJWT (`cryptography`) and Rust
+  `jsonwebtoken`. ES256 is the more conservative choice if some future non-Rust/
+  non-Python verifier matters. Either is standard; pick one.
+- **Does any symmetric bearer survive?** With Part 0, `delegation_key` retires and
+  a peer could verify via JWKS instead of `peers.static_token`. Do we keep a
+  symmetric static-token path at all (dev/CI convenience, guarded by `SecretSpec`),
+  or make *every* production path asymmetric and treat static tokens as test-only?
+- **Biscuit — optional attenuation on top, decided separately.** With asymmetric
+  JWTs as the standard core, Biscuit's marginal value narrows to *offline
+  attenuation* for the scoped `/proxy` capability tokens (#6857): a holder narrows
+  a token locally (self-mint), dissolving the "in-job processes can't self-mint"
+  limitation. It is a *token format* replacing the `jwt` **layer**, not the stack
+  (CIDR/loopback + Google/IAP verifiers stay), and the asymmetric win it also
+  offered is now already ours via Part 0. Recommendation: skip Biscuit for the
+  core; evaluate it separately *only if* offline capability-attenuation is wanted.
+- **Commit to the Phase-2 Rust verify-engine now, or gate it on drift?**
+  Recommendation: gate it on the conformance vectors showing real semantic drift;
+  verify-only; mint stays Python. Schedule unconditionally instead?
+- **Ordered `SecretSpec` default path** (adopted per your suggestion:
   `env: → file: → gcp-secret://`, first-present-wins, fail-hard on a
-  configured-but-erroring source. Is the default field-name→source mapping the
-  right convention, or should every secret be an explicit list (no implicit
-  default path)?
+  configured-but-erroring source). Keep the default field-name→source mapping, or
+  require every secret to be an explicit list?
 - **#6592 rollout.** The flip to provision IAP identities at read-only
-  `unprovisioned_role` is a behavior change for every IAP cluster (today first
-  login grants write). Land it in this umbrella behind an ops announcement, or as
-  a follow-up once `SetUserRole` exists so operators can pre-grant current users?
+  `unprovisioned_role` is a behavior change for every IAP cluster. Land it in this
+  umbrella behind an ops announcement, or as a follow-up once `SetUserRole` lets
+  operators pre-grant current users?
 - **Out of scope (confirming, not asking):** unauthenticated bundle downloads
-  (deferred in `20260312_iris_auth_design.md`), 30-day-JWT refresh, and
-  generalizing scoped tokens to a `scopes` set stay out — flag if you disagree.
-
-## Open Questions
-
-- **Schema-only vs a pyo3 shared engine.** The maintainer OK'd a Rust layer in
-  rigging via pyo3. Recommendation: **do the schema unification first** (Part 1,
-  no packaging change) and treat a shared Rust *engine* (extracting the pure
-  cidr/hs256/walk primitives into a crate both link) as a deferred, separately-
-  designed Phase 2. The honest reasoning: (a) the observed drift is *composition*
-  drift — default posture, ordering, CIDR vocabulary — which a shared schema
-  fixes and an engine would not; (b) rigging's chain must *interleave*
-  Python-only IAP layers with the pure ones, so a Rust engine could only own the
-  cidr/hs256 primitives (a few hundred lines already pinned by the contract
-  test), not the chain; (c) the real cost of pyo3 is the build matrix and losing
-  the pure-Python leaf, not "shipping a wheel" (finelog already ships prebuilt
-  wheels). Do reviewers want to commit to the pyo3 engine now regardless?
-- **Secret backend on k8s.** This design uses `gcp-secret://` for GCE and the
-  shipped Secret-`envFrom`→`env:NAME` pattern for k8s, and adds an RBAC-free
-  `file:/path` scheme for mounted Secret volumes. Is that the posture reviewers
-  want, or is a first-class runtime Secret-Manager fetch (accepting the added
-  controller IAM) preferred on k8s too?
-- **#6592 rollout.** The flip to provision IAP identities at read-only
-  `unprovisioned_role` is a behavior change for every IAP cluster (today first
-  login grants write). Land it in this umbrella behind an ops announcement, or as
-  a follow-up once `SetUserRole` exists so operators can pre-grant current users?
-- **Out of scope (confirming, not asking):** unauthenticated bundle downloads
-  (deferred in `20260312_iris_auth_design.md`), 30-day-JWT refresh, and
-  generalizing scoped tokens to a `scopes` set stay out — flag if you disagree.
+  (deferred in `20260312_iris_auth_design.md`) and 30-day-JWT refresh stay out —
+  flag if you disagree.
