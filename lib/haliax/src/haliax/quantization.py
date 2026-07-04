@@ -251,13 +251,18 @@ class Fp8RaggedDotOp(OverwriteWithGradient):
 
     The expert-grouped analog of [Fp8DotGeneralOp][]. Casts activations (``lhs``)
     and expert weights (``rhs``) to FP8 with delayed per-tensor scaling and
-    contracts them over dynamic non-uniform ``group_sizes`` (each expert may
-    receive a different number of tokens), then dequantizes the result. Output
-    gradients are quantized to FP8 in the custom VJP. All state (per-tensor
-    scale + amax history for the input, kernel, and output gradient) is carried
-    as [OverwriteWithGradient][] so it threads through
-    ``partition_for_grad_overwrite`` / ``apply_updates`` and stays out of the
-    optimizer/EMA state.
+    contracts them via a genuine ragged Mosaic ``wgmma`` over dynamic
+    non-uniform ``group_sizes`` (each expert may receive a different number of
+    tokens), then dequantizes the result.
+
+    The backward is computed in **bf16** (numerically exact) by differentiating
+    the reference bf16 ``ragged_dot``. Output-gradient FP8 quantization is
+    reserved for a follow-up change; for now the output-gradient scaling state
+    (``output_grad_scale`` / ``output_grad_amax_history``) is preserved unchanged
+    across steps. All state (per-tensor scale + amax history for the input, kernel,
+    and output gradient) is carried as [OverwriteWithGradient][] so it threads
+    through ``partition_for_grad_overwrite`` / ``apply_updates`` and stays out of
+    the optimizer/EMA state.
 
     The FP8 fast path is a Mosaic-GPU ``wgmma`` kernel and therefore requires
     Hopper (SM90). Ports of this recipe to other architectures should plug in
@@ -267,12 +272,11 @@ class Fp8RaggedDotOp(OverwriteWithGradient):
     state) is a new op class.
 
     Unlike [Fp8DotGeneralOp][], whose output-gradient dtype defaults to E5M2,
-    ``rev_dtype`` here defaults to E4M3, matching ``fwd_dtype``: stock-jaxlib
-    Mosaic ``wgmma`` requires both operands of a contraction to share one
-    dtype, and re-quantizing *weights* down to E5M2 to match an E5M2 gradient
-    costs too much mantissa. The uniform ``e4m3 × e4m3`` backward is therefore
-    an approximation; ``init`` rejects mixed dtype pairs until mixed-dtype
-    ``wgmma`` is available upstream (jax-ml/jax#38859).
+    the reserved ``rev_dtype`` here defaults to E4M3, matching ``fwd_dtype``:
+    stock-jaxlib Mosaic ``wgmma`` requires both operands of a contraction to
+    share one dtype, and re-quantizing *weights* down to E5M2 to match an E5M2
+    gradient costs too much mantissa. ``init`` rejects mixed dtype pairs until
+    mixed-dtype ``wgmma`` is available upstream (jax-ml/jax#38859).
     """
 
     input_scale: jnp.ndarray
@@ -316,12 +320,24 @@ class Fp8RaggedDotOp(OverwriteWithGradient):
         comp_dtype = rhs.dtype if self.compute_dtype is None else self.compute_dtype
         lhs = jnp.asarray(lhs, comp_dtype)
         rhs = jnp.asarray(rhs, comp_dtype)
-        # Local import to break the quantization ↔ nn.ragged_dot import cycle;
-        # this is the sanctioned exception to the all-imports-at-top rule.
-        from .nn.ragged_dot import ragged_dot as _ragged_dot  # noqa: PLC0415
+        # Local import to keep the Mosaic-GPU FP8 kernel (imported by fp8_ragged)
+        # off the CPU/TPU import path; sanctioned exception to imports-at-top.
+        from ._src.fp8_ragged import fp8_scaled_ragged_dot  # noqa: PLC0415
 
-        # TODO: swap this bf16 matmul for fp8_scaled_ragged_dot (delayed-scaling FP8) in a follow-up.
-        return _ragged_dot(lhs, rhs, group_sizes, op=None)
+        return fp8_scaled_ragged_dot(
+            lhs,
+            rhs,
+            group_sizes,
+            lhs_scale=self.input_scale,
+            rhs_scale=self.kernel_scale,
+            grad_scale=self.output_grad_scale,
+            lhs_amax_history=self.input_amax_history,
+            rhs_amax_history=self.kernel_amax_history,
+            grad_amax_history=self.output_grad_amax_history,
+            quantize_compute_type=comp_dtype,
+            fwd_dtype=self.fwd_dtype,
+            rev_dtype=self.rev_dtype,
+        )
 
 
 class Int8DotGeneralOp(OverwriteWithGradient):
