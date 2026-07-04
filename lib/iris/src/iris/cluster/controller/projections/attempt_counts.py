@@ -94,10 +94,7 @@ class AttemptCountsProjection:
         """Drop the memo for ``job_ids`` after ``tx`` commits.
 
         Used both when a job's attempts change and when a job is deleted (so a
-        later job of the same id cannot serve the dead job's counts). The pop is
-        deferred to a post-commit hook (fires under the write lock): an eager pop
-        would let a concurrent reader refill the entry from the pre-commit snapshot
-        and go stale the moment the write lands.
+        later job of the same id cannot serve the dead job's counts).
         """
         jobs = {jid for jid in job_ids if jid is not None}
         if not jobs:
@@ -108,6 +105,9 @@ class AttemptCountsProjection:
                 for jid in jobs:
                     self._by_job.pop(jid, None)
 
+        # Defer the pop to a post-commit hook (fires under the write lock): an
+        # eager pop would let a concurrent reader refill the entry from the
+        # pre-commit snapshot and go stale the moment the write lands.
         tx.register(apply)
 
 

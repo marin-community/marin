@@ -341,11 +341,9 @@ def cancel(
 def purge_job(cur: ScopedTx, job_id: JobName) -> None:
     """Delete a job and drop its derived-count memo — the single deletion chokepoint.
 
-    Pairs :func:`writes.delete_job` (whose CASCADE removes the job's tasks,
-    attempts, and endpoints) with the attempt-counts invalidation, so a later job
-    minted with the same id cannot serve the dead job's counts. Every job deletion
-    (federation tombstone / set-replace, terminal-job pruning, ``remove_finished``)
-    routes through here rather than calling ``writes.delete_job`` directly.
+    All job deletions route through here rather than calling
+    :func:`writes.delete_job` directly, so a later job minted with the same id
+    cannot serve the dead job's cached counts.
     """
     writes.delete_job(cur, job_id)
     cur.attempt_counts.invalidate_for_jobs(cur, [job_id])

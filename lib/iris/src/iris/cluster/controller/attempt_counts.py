@@ -6,14 +6,16 @@
 The attempt rows (``task_attempts``) are the authoritative record of what
 happened to a task, so the two retry counters are a pure function of them —
 there is no denormalized ``tasks.failure_count`` / ``tasks.preemption_count`` to
-keep in sync. This module is the single definition of that function, exposed two
-ways so every path computes identical numbers:
+keep in sync. This module is the single definition of that function, expressed
+two equivalent ways:
 
-- :func:`counts_from_attempts` for callers that already hold the attempt rows
-  (per-task RPC, tests).
+- :func:`counts_from_attempts` — the readable Python reference over in-memory
+  attempt rows; the tests pin it to the expected numbers and prove the SQL
+  matches it.
 - :func:`failure_count_expr` / :func:`preemption_count_expr` — SQLAlchemy
-  aggregate expressions over ``task_attempts`` for GROUP-BY derivation (the
-  reconcile snapshot loader, the projection rehydrate, the job-list sort).
+  aggregate expressions over ``task_attempts`` for GROUP-BY derivation. This is
+  the production read path (reconcile snapshot loader, projection rehydrate,
+  per-task RPC, job-list sort).
 
 Semantics (see ``reconcile/task.py`` for the increment logic they reproduce):
 

@@ -30,6 +30,5 @@ def migrate(raw_conn) -> None:
     if _has_column(raw_conn, "tasks", "preemption_count"):
         raw_conn.execute("ALTER TABLE tasks DROP COLUMN preemption_count")
     raw_conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_task_attempts_task_state "
-        "ON task_attempts (task_id, state, started_at_ms)"
+        "CREATE INDEX IF NOT EXISTS idx_task_attempts_task_state " "ON task_attempts (task_id, state, started_at_ms)"
     )

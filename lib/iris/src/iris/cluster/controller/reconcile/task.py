@@ -204,21 +204,18 @@ def resolve_task_failure_state(
     preemption_count: int,
     max_preemptions: int,
     terminal_state: int,
-) -> tuple[int, int]:
-    """Determine new task state after a worker failure or preemption.
+) -> int:
+    """Determine the new task state after a worker failure or preemption.
 
-    Assigned tasks always retry. Executing tasks retry if preemption budget remains,
+    Assigned tasks always retry. Executing tasks retry while the preemption
+    budget remains (this attempt would be the ``preemption_count + 1``-th),
     otherwise go to the given terminal state.
-
-    Returns (new_task_state, updated_preemption_count).
     """
     if prior_state == job_pb2.TASK_STATE_ASSIGNED:
-        return job_pb2.TASK_STATE_PENDING, preemption_count
-    if prior_state in EXECUTING_TASK_STATES:
-        preemption_count += 1
-        if preemption_count <= max_preemptions:
-            return job_pb2.TASK_STATE_PENDING, preemption_count
-    return terminal_state, preemption_count
+        return job_pb2.TASK_STATE_PENDING
+    if prior_state in EXECUTING_TASK_STATES and preemption_count + 1 <= max_preemptions:
+        return job_pb2.TASK_STATE_PENDING
+    return terminal_state
 
 
 # ─── Per-task terminal entry points ───
@@ -266,7 +263,7 @@ def preempt_one(
         return None
 
     now_ms = snapshot.now.epoch_ms()
-    new_state, _preemption_count = resolve_task_failure_state(
+    new_state = resolve_task_failure_state(
         prior_state,
         row.preemption_count,
         row.max_retries_preemption,
@@ -472,7 +469,7 @@ def apply_one_transition(
             # EXECUTING (BUILDING/RUNNING) charges and gates on max_retries_preemption.
             # A truly-dead worker also misses its next ping/heartbeat (bumped
             # observer-side), so we don't double-count here.
-            task_state, _preemption_count = resolve_task_failure_state(
+            task_state = resolve_task_failure_state(
                 prior_state,
                 preemption_count,
                 task.max_retries_preemption,

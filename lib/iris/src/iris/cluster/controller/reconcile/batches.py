@@ -463,7 +463,7 @@ class ReconcileState:
         if effective_state is None or effective_state not in ACTIVE_TASK_STATES:
             return None
         prior_state = effective_state
-        new_task_state, _preemption_count = task.resolve_task_failure_state(
+        new_task_state = task.resolve_task_failure_state(
             prior_state,
             task_row.preemption_count,
             task_row.max_retries_preemption,

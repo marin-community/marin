@@ -10,8 +10,6 @@ expressions produce identical numbers over the same attempt rows.
 from dataclasses import dataclass
 
 import pytest
-from sqlalchemy import MetaData, Table, create_engine, insert, select
-
 from iris.cluster.controller.attempt_counts import (
     AttemptCounts,
     counts_from_attempts,
@@ -20,6 +18,7 @@ from iris.cluster.controller.attempt_counts import (
 )
 from iris.cluster.controller.schema import task_attempts_table
 from iris.rpc import job_pb2
+from sqlalchemy import MetaData, Table, create_engine, insert, select
 
 FAILED = job_pb2.TASK_STATE_FAILED
 WORKER_FAILED = job_pb2.TASK_STATE_WORKER_FAILED
@@ -103,5 +102,11 @@ def test_sql_exprs_match_pure(label, attempts, failures, preemptions):
             )
         ).one()
 
-    assert int(row.failure_count) == failures
-    assert int(row.preemption_count) == preemptions
+    # Differential: the production SQL must reproduce the pure reference exactly
+    # (which the case table independently pins to the expected numbers).
+    sql_counts = AttemptCounts(failure_count=int(row.failure_count), preemption_count=int(row.preemption_count))
+    assert (
+        sql_counts
+        == counts_from_attempts(attempts)
+        == AttemptCounts(failure_count=failures, preemption_count=preemptions)
+    )
