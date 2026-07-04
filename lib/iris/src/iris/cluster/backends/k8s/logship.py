@@ -12,7 +12,8 @@ apiserver.
 Run as ``python -m iris.cluster.backends.k8s.logship``. Configuration comes from
 the environment the pod manifest sets:
 
-- ``IRIS_TASK_ID`` — the wire ``task:attempt`` id; it is the finelog key.
+- ``IRIS_TASK_ID`` — the wire ``task:attempt`` id; the finelog key is derived
+  from it with the attempt suffix always present (``/user/job/0:0``).
 - ``IRIS_CONTROLLER_ADDRESS`` — resolves the log server endpoint.
 - ``IRIS_POD_NAMESPACE`` / ``IRIS_POD_NAME`` — locate the CRI log directory.
 
@@ -35,7 +36,8 @@ from finelog.rpc import logging_pb2
 from rigging.timing import Timestamp
 
 from iris.cluster.endpoints import LOG_SERVER_ENDPOINT_NAME
-from iris.cluster.log_keys import classify_log_level
+from iris.cluster.log_keys import classify_log_level, task_log_key
+from iris.cluster.types import TaskAttempt
 from iris.rpc import controller_pb2
 from iris.rpc.controller_connect import ControllerServiceClientSync
 
@@ -135,17 +137,21 @@ def _make_log_entry(line: CriLogLine, attempt_id: int) -> logging_pb2.LogEntry:
     return entry
 
 
-def split_key_attempt(task_id: str) -> tuple[str, int]:
-    """Split ``IRIS_TASK_ID`` into the finelog key and attempt id.
+def log_key_and_attempt(task_id: str) -> tuple[str, int]:
+    """Resolve ``IRIS_TASK_ID`` to the finelog log key and the attempt id.
 
-    The wire id is ``task:attempt`` for retries and bare ``task`` for the first
-    attempt (attempt 0). The key written to finelog is the full wire id; the
-    attempt is parsed off the ``:`` suffix for the LogEntry's ``attempt_id``.
+    ``IRIS_TASK_ID`` is the bare task wire id for attempt 0 (``/user/job/0``) and
+    carries a ``:N`` suffix for retries (``/user/job/0:3``). The finelog key must
+    always include the attempt suffix — ``/user/job/0:0`` for the first attempt —
+    so it matches the per-task log query, which is EXACT ``…:<attempt>`` for one
+    attempt or PREFIX ``…:`` for all attempts. A bare attempt-0 key only matches
+    the job-level ``/user/job/`` prefix scan, so its logs appear under the job
+    but never under the task. Building the key via ``task_log_key`` keeps it
+    byte-for-byte identical to the worker backend's own task-log writes.
     """
-    _base, sep, attempt = task_id.rpartition(":")
-    if sep and attempt.isdigit():
-        return task_id, int(attempt)
-    return task_id, 0
+    parsed = TaskAttempt.from_wire(task_id)
+    task_attempt = parsed.with_attempt(parsed.attempt_id or 0)
+    return task_log_key(task_attempt), task_attempt.require_attempt()
 
 
 def _log_dir_glob(namespace: str, pod_name: str) -> str:
@@ -344,7 +350,7 @@ def _ship(stop: threading.Event) -> None:
     namespace = os.environ["IRIS_POD_NAMESPACE"]
     pod_name = os.environ["IRIS_POD_NAME"]
 
-    key, attempt_id = split_key_attempt(task_id)
+    key, attempt_id = log_key_and_attempt(task_id)
     client = _connect_log_client(controller_address)
     shipper = LogShipper(client, _log_dir_glob(namespace, pod_name), key, attempt_id, stop)
 
