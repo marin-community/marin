@@ -125,7 +125,7 @@ sequenceDiagram
     participant A as Controller A (iss=A)
     participant B as Controller B
     Note over A: mint iss=A, aud=iris-peer, short TTL
-    A->>B: RPC + Bearer <token>
+    A->>B: RPC + Bearer token
     Note over B: resolve A's public key by iss<br/>from the configured allowlist
     B->>B: verify EdDSA sig + exp + aud=iris-peer
     B-->>A: response (or 401 on sig/iss/aud mismatch)

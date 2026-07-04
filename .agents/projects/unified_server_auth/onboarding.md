@@ -38,7 +38,7 @@ sequenceDiagram
     STS-->>CI: federated access token
     CI->>SA: impersonate → generateIdToken(aud = IAP client id)
     SA-->>CI: OIDC ID token (aud = IAP client id)
-    CI->>IAP: request + Authorization: Bearer <id token>
+    CI->>IAP: request + Authorization: Bearer id-token
     IAP->>CTL: admits (roles/iap.httpsResourceAccessor) + signed assertion
     CTL-->>CI: response
 ```
