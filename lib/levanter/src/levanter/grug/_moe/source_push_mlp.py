@@ -576,37 +576,60 @@ def _source_push_moe_mlp_backward_from_h_rows(
     slot = route_table.route_slot
     dst = route_table.destination_rank
     expert = route_table.local_expert
+    row = route_table.expert_row
 
     intermediate_dim = h_rows.shape[-1] // 2
-    gate = h_rows[:, :intermediate_dim]
-    up = h_rows[:, intermediate_dim:]
+    block_shape = (route_table.ep_size, route_table.experts_per_rank, route_table.expert_capacity)
+    block_sharding = _source_push_out_sharding(SOURCE_PUSH_MESH_AXIS, None, None, None)
+    scalar_block_sharding = _source_push_out_sharding(SOURCE_PUSH_MESH_AXIS, None, None)
+
+    h_blocks = (
+        jnp.zeros((*block_shape, h_rows.shape[-1]), dtype=jnp.float32)
+        .at[dst, expert, row]
+        .set(h_rows.astype(jnp.float32), out_sharding=block_sharding)
+    )
+    gate = h_blocks[..., :intermediate_dim]
+    up = h_blocks[..., intermediate_dim:]
     silu_gate = jax.nn.silu(gate)
     activation = silu_gate * up
     weights = route_weights.at[src, token, slot].get(out_sharding=_source_push_out_sharding(None))
     weights = weights.astype(jnp.float32)
-    weighted_activation = activation * weights[:, None]
+    weight_blocks = (
+        jnp.zeros(block_shape, dtype=jnp.float32).at[dst, expert, row].set(weights, out_sharding=scalar_block_sharding)
+    )
+    weighted_activation = activation * weight_blocks[..., None]
 
     dy_rows = dy.at[src, token].get(out_sharding=_source_push_out_sharding(None, None))
     dy_rows = dy_rows.astype(jnp.float32)
-    w2_rows = w2.at[dst, expert].get(out_sharding=_source_push_out_sharding(None, None, None))
-    w2_rows = w2_rows.astype(jnp.float32)
-    d_weighted_activation = jnp.einsum("rd,rid->ri", dy_rows, w2_rows)
-    d_route_rows = jnp.sum(d_weighted_activation * activation, axis=-1)
-    d_activation = d_weighted_activation * weights[:, None]
+    dy_blocks = (
+        jnp.zeros((*block_shape, dy.shape[-1]), dtype=jnp.float32)
+        .at[dst, expert, row]
+        .set(dy_rows, out_sharding=block_sharding)
+    )
+    w2_blocks = w2.astype(jnp.float32)
+    d_weighted_activation = jnp.einsum("secd,seid->seci", dy_blocks, w2_blocks)
+    d_route_blocks = jnp.sum(d_weighted_activation * activation, axis=-1)
+    d_route_rows = d_route_blocks.at[dst, expert, row].get(out_sharding=_source_push_out_sharding(None))
+    d_activation = d_weighted_activation * weight_blocks[..., None]
 
     sigmoid_gate = jax.nn.sigmoid(gate)
     d_silu = sigmoid_gate * (1.0 + gate * (1.0 - sigmoid_gate))
     d_gate = d_activation * up * d_silu
     d_up = d_activation * silu_gate
-    d_h_rows = jnp.concatenate([d_gate, d_up], axis=-1)
+    d_h_blocks = jnp.concatenate([d_gate, d_up], axis=-1)
 
     x_rows = x.at[src, token].get(out_sharding=_source_push_out_sharding(None, None))
     x_rows = x_rows.astype(jnp.float32)
-    w13_rows = w13.at[dst, expert].get(out_sharding=_source_push_out_sharding(None, None, None))
-    w13_rows = w13_rows.astype(jnp.float32)
-    dw13_rows = jnp.einsum("rd,ro->rdo", x_rows, d_h_rows)
-    dx_rows = jnp.einsum("ro,rdo->rd", d_h_rows, w13_rows)
-    dw2_rows = jnp.einsum("ri,rd->rid", weighted_activation, dy_rows)
+    x_blocks = (
+        jnp.zeros((*block_shape, x.shape[-1]), dtype=jnp.float32)
+        .at[dst, expert, row]
+        .set(x_rows, out_sharding=block_sharding)
+    )
+    w13_blocks = w13.astype(jnp.float32)
+    dx_blocks = jnp.einsum("seco,sedo->secd", d_h_blocks, w13_blocks)
+    dx_rows = dx_blocks.at[dst, expert, row].get(out_sharding=_source_push_out_sharding(None, None))
+    dw13 = jnp.einsum("secd,seco->sedo", x_blocks, d_h_blocks)
+    dw2 = jnp.einsum("seci,secd->seid", weighted_activation, dy_blocks)
 
     dx = (
         jnp.zeros_like(x, dtype=jnp.float32)
@@ -622,22 +645,6 @@ def _source_push_moe_mlp_backward_from_h_rows(
         .add(
             d_route_rows,
             out_sharding=_source_push_out_sharding(SOURCE_PUSH_MESH_AXIS, None, None),
-        )
-    )
-    dw13 = (
-        jnp.zeros_like(w13, dtype=jnp.float32)
-        .at[dst, expert]
-        .add(
-            dw13_rows,
-            out_sharding=_source_push_out_sharding(SOURCE_PUSH_MESH_AXIS, None, None, None),
-        )
-    )
-    dw2 = (
-        jnp.zeros_like(w2, dtype=jnp.float32)
-        .at[dst, expert]
-        .add(
-            dw2_rows,
-            out_sharding=_source_push_out_sharding(SOURCE_PUSH_MESH_AXIS, None, None, None),
         )
     )
     return (
