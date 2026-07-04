@@ -43,6 +43,9 @@ platform:
 
 storage:
   remote_state_dir: s3://marin-na/iris/cw-us-east-02a/state
+  # Node-local NVMe for the controller's SQLite state, not the default
+  # network-attached PVC.
+  local_state_dir: /mnt/local/iris-controller-state
 
 # Request auth. No login arm — identity is by network location: direct
 # in-cluster peers (CKS pods/nodes are RFC1918; loopback covers kubectl
@@ -72,6 +75,7 @@ kubernetes_provider:
 
 controller:
   image: ghcr.io/marin-community/iris-controller:latest
+  checkpoint_interval_seconds: 600
   coreweave:
     port: 10000
     service_name: iris-controller-svc

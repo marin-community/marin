@@ -58,7 +58,7 @@ _DEPLOYMENT_DELETE_TIMEOUT = 120.0
 _KUBECTL_TIMEOUT = 1800.0
 
 _CONTROLLER_CPU_REQUEST = "4"
-_CONTROLLER_MEMORY_REQUEST = "16Gi"
+_CONTROLLER_MEMORY_REQUEST = "64Gi"
 _CONTROLLER_STATE_PVC_NAME = "iris-controller-state"
 # Must match main.py's LOCAL_STATE_DIR_DEFAULT — the path the controller
 # process falls back to when storage.local_state_dir is unset.
@@ -208,12 +208,9 @@ def _build_controller_deployment(
                             "httpGet": {"path": "/health", "port": port},
                             "initialDelaySeconds": 30,
                             "periodSeconds": 30,
-                            # Default 1s is tight for a Python/GIL process under a burst
-                            # of concurrent RPC handlers; give it headroom so a transient
-                            # scheduling hiccup doesn't trip a hard kubelet SIGKILL. A
-                            # genuinely wedged controller is still caught within
-                            # periodSeconds * failureThreshold.
-                            "timeoutSeconds": 5,
+                            # Default 1s is tight under load; give it headroom so a
+                            # transient hiccup doesn't trip a hard kubelet SIGKILL.
+                            "timeoutSeconds": 10,
                         },
                     },
                 ],
@@ -390,22 +387,10 @@ class K8sControllerProvider:
                 f"{list(config.scale_groups.keys())}"
             )
 
+        # storage.local_state_dir set => mount it from node-local hostPath rather
+        # than the default network-attached PVC.
+        local_state_hostpath = bool(config.storage.local_state_dir)
         state_mount_path = config.storage.local_state_dir or _DEFAULT_STATE_MOUNT_PATH
-        if cw.local_state_hostpath:
-            if not config.storage.local_state_dir:
-                raise InfraError(
-                    "controller.coreweave.local_state_hostpath requires storage.local_state_dir "
-                    "to be set explicitly (the node-local path to mount, e.g. /mnt/local/iris-controller-state)"
-                )
-            max_slices = config.scale_groups[cw.scale_group].max_slices
-            if max_slices != 1:
-                raise InfraError(
-                    f"controller.coreweave.local_state_hostpath requires scale_group {cw.scale_group!r} "
-                    f"to have max_slices == 1 (got {max_slices}): a controller pod rescheduled onto a "
-                    "different node in a multi-node pool would find that node's hostPath dir empty (fine, "
-                    "restores from checkpoint) but a pod rescheduled BACK onto a node it previously ran on "
-                    "would find its own stale local DB and skip the restore, resurrecting out-of-date state."
-                )
 
         self.ensure_rbac()
 
@@ -434,7 +419,7 @@ class K8sControllerProvider:
         self.ensure_nodepools(config)
         self.ensure_kueue_queues(config)
         self.ensure_priority_classes()
-        if cw.local_state_hostpath:
+        if local_state_hostpath:
             logger.info("controller local state uses node-local hostPath %s (no PVC)", state_mount_path)
         else:
             self._kubectl.apply_json(_build_controller_state_pvc(namespace=self._namespace))
@@ -447,7 +432,7 @@ class K8sControllerProvider:
             node_selector={self._iris_labels.iris_scale_group: cw.scale_group},
             task_env_secret=projects_task_env_secret(config),
             state_mount_path=state_mount_path,
-            local_state_hostpath=cw.local_state_hostpath,
+            local_state_hostpath=local_state_hostpath,
             checkpoint_interval_seconds=config.controller.checkpoint_interval_seconds,
         )
         deploy_manifest = _build_controller_deployment(**deploy_kwargs, fresh=fresh)

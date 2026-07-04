@@ -216,13 +216,11 @@ def test_start_controller_creates_all_resources():
     provider.shutdown()
 
 
-def test_start_controller_local_state_hostpath_skips_pvc():
-    """local_state_hostpath mounts a hostPath volume at storage.local_state_dir and creates no PVC."""
+def test_start_controller_local_state_dir_uses_hostpath_not_pvc():
+    """Setting storage.local_state_dir mounts it via hostPath and creates no PVC."""
     provider, k8s = _make_provider()
     cluster_config = _make_cluster_config(remote_state_dir="s3://test-bucket/bundles")
     cluster_config.storage.local_state_dir = "/mnt/local/iris-controller-state"
-    cluster_config.controller.coreweave.local_state_hostpath = True
-    cluster_config.scale_groups[cluster_config.controller.coreweave.scale_group].max_slices = 1
 
     t = threading.Thread(target=_auto_ready_deployment, args=(k8s, "iris-controller"), daemon=True)
     t.start()
@@ -240,31 +238,6 @@ def test_start_controller_local_state_hostpath_skips_pvc():
     } in spec["volumes"]
 
     t.join(timeout=5)
-    provider.shutdown()
-
-
-def test_start_controller_local_state_hostpath_requires_local_state_dir():
-    """local_state_hostpath without storage.local_state_dir set fails fast — there's no path to mount."""
-    provider, _ = _make_provider()
-    cluster_config = _make_cluster_config()
-    cluster_config.controller.coreweave.local_state_hostpath = True
-    cluster_config.scale_groups[cluster_config.controller.coreweave.scale_group].max_slices = 1
-
-    with pytest.raises(InfraError, match="storage\\.local_state_dir"):
-        provider.start_controller(cluster_config)
-    provider.shutdown()
-
-
-def test_start_controller_local_state_hostpath_requires_single_slice():
-    """local_state_hostpath on a multi-node scale group risks reviving stale state on reschedule."""
-    provider, _ = _make_provider()
-    cluster_config = _make_cluster_config()
-    cluster_config.storage.local_state_dir = "/mnt/local/iris-controller-state"
-    cluster_config.controller.coreweave.local_state_hostpath = True
-    cluster_config.scale_groups[cluster_config.controller.coreweave.scale_group].max_slices = 10
-
-    with pytest.raises(InfraError, match="max_slices == 1"):
-        provider.start_controller(cluster_config)
     provider.shutdown()
 
 

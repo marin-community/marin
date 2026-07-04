@@ -451,24 +451,12 @@ class CoreweaveControllerConfig(_Config):
     # cert-manager.io/cluster-issuer=<name> so cert-manager auto-issues the cert
     # into tls_secret. Empty = bring your own cert in tls_secret (or no TLS).
     cluster_issuer: str = ""
-    # Mount storage.local_state_dir from node-local disk (hostPath) instead of
-    # the default network-attached PersistentVolumeClaim. Requires
-    # storage.local_state_dir to be set explicitly (the hostPath target), and
-    # only safe when the controller's scale_group has max_slices == 1 — a
-    # rescheduled pod that lands back on a node with a stale local directory
-    # from an earlier run would resurrect out-of-date state instead of
-    # restoring from the latest remote checkpoint. start_controller enforces
-    # this. See lib/iris/docs/coreweave.md.
-    local_state_hostpath: bool = False
 
 
 class ControllerVmConfig(_OneofConfig):
     _ONEOF_ARMS = ("gcp", "manual", "local", "coreweave")
     image: str = ""  # controller docker image (shared by all controller types)
     # Periodic checkpoint interval (seconds); 0 = controller default (hourly).
-    # Tighten this when the controller's local state has no independent
-    # redundancy of its own (e.g. local_state_hostpath) to bound how much
-    # state a node replacement can lose.
     checkpoint_interval_seconds: float = 0
     gcp: GcpControllerConfig | None = None
     manual: ManualControllerConfig | None = None

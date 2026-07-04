@@ -44,14 +44,8 @@ platform:
 
 storage:
   remote_state_dir: s3://marin-us-east-02a/iris/cw-rno2a/state
-  # Node-local NVMe, not the default network-attached PVC (CoreWeave's default
-  # StorageClass here is an NFSv3 mount, `shared-vast`; SQLite WAL commits and
-  # lock round-trips over that network filesystem were the dominant cause of
-  # both the controller's RPC-handler thread pileups under load and a
-  # liveness-probe SIGKILL — see controller.coreweave.local_state_hostpath
-  # below). Safe because the cpu-turin scale group is pinned to exactly one
-  # node (buffer_slices == max_slices == 1); a node replacement finds this
-  # path empty and restores from the last remote checkpoint.
+  # Node-local NVMe for the controller's SQLite state, not the default
+  # network-attached PVC.
   local_state_dir: /mnt/local/iris-controller-state
 
 kubernetes_provider:
@@ -74,17 +68,11 @@ kubernetes_provider:
 
 controller:
   image: ghcr.io/marin-community/iris-controller:latest
-  # Node loses local state on replacement (no PVC redundancy under
-  # local_state_hostpath below); check in more often than the default hourly
-  # so a lost node costs at most this much recent state.
   checkpoint_interval_seconds: 600
   coreweave:
     port: 10000
     service_name: iris-controller-svc
     scale_group: cpu-turin
-    # See storage.local_state_dir above: mounts it from node-local NVMe via
-    # hostPath instead of the network-attached PVC.
-    local_state_hostpath: true
 
 defaults:
   autoscaler:
