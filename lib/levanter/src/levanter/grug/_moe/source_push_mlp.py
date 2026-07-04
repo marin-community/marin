@@ -82,7 +82,7 @@ def build_source_push_mlp_route_table(
 
     plan = build_source_push_plan(
         route_assignments,
-        jnp.zeros(route_assignments.shape, dtype=jnp.float32),
+        np.zeros(route_assignments.shape, dtype=np.float32),
         ep_size=ep_size,
         experts_per_rank=experts_per_rank,
         block_m=block_m,
@@ -183,15 +183,16 @@ def source_push_moe_mlp(
 ) -> tuple[Float[Array, "S T D"], Int[Array, ""]]:
     """Run the MLP-level source-push boundary with a custom VJP."""
 
-    route_table, dropped_routes = build_source_push_mlp_route_table(
-        route_assignments,
-        route_weights,
-        ep_size=ep_size,
-        experts_per_rank=experts_per_rank,
-        block_m=block_m,
-        capacity_factor=capacity_factor,
-        entries_per_dst=entries_per_dst,
-    )
+    with jax.ensure_compile_time_eval():
+        route_table, dropped_routes = build_source_push_mlp_route_table(
+            route_assignments,
+            route_weights,
+            ep_size=ep_size,
+            experts_per_rank=experts_per_rank,
+            block_m=block_m,
+            capacity_factor=capacity_factor,
+            entries_per_dst=entries_per_dst,
+        )
     return source_push_moe_mlp_custom_vjp(route_table, x, route_weights, w13, w2), dropped_routes
 
 
