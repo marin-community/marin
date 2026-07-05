@@ -54,7 +54,6 @@ class ControllerTestState:
         db: ControllerDB,
         *,
         health: WorkerHealthTracker | None = None,
-        worker_attrs: WorkerAttrsProjection | None = None,
     ) -> None:
         self._db = db
         # Mirror a real Controller: each Projection self-registers into
@@ -65,7 +64,7 @@ class ControllerTestState:
         self._health = health or WorkerHealthTracker()
         EndpointsProjection(db)
         RunTemplatesProjection(db)
-        self._worker_attrs = worker_attrs or WorkerAttrsProjection(db)
+        self._worker_attrs = WorkerAttrsProjection(db)
 
     @property
     def _endpoints(self) -> EndpointsProjection:

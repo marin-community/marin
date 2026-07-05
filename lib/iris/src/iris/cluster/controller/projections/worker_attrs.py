@@ -85,12 +85,7 @@ class WorkerAttrsProjection(Projection):
             return {wid: dict(attrs) for wid, attrs in self._cache.items()}
 
     def set(self, cur: Tx, worker_id: WorkerId, attrs: dict[str, AttributeValue]) -> None:
-        """Replace ``worker_id``'s attributes in SQL and schedule a cache update.
-
-        Issues a DELETE for the worker then an INSERT for each attribute key,
-        then registers a post-commit hook that atomically replaces the cached
-        dict.
-        """
+        """Replace ``worker_id``'s attributes in SQL and update the cache at commit."""
         cur.execute(delete(worker_attributes_table).where(worker_attributes_table.c.worker_id == worker_id))
         if attrs:
             rows = [{"worker_id": worker_id, "key": key, **_attribute_value_cols(av.value)} for key, av in attrs.items()]
