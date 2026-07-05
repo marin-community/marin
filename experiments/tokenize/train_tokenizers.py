@@ -23,6 +23,7 @@ import argparse
 import json
 import logging
 import os
+import random
 import time
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass
@@ -58,6 +59,23 @@ def _bounded_byte_prefix(texts: list[str], max_bytes: int) -> list[str]:
         out.append(text)
         total += size
     return out
+
+
+# Fixed seed so the stage-2 sample is reproducible across tokenizer builds.
+_STAGE2_SAMPLE_SEED = 0
+
+
+def _sample_stage2_corpus(texts: list[str], max_bytes: int) -> list[str]:
+    """A representative ~``max_bytes`` sample of the corpus for stage-2 superword learning.
+
+    ``read_corpus`` concatenates domains in a fixed order (english_web first, ~half the
+    corpus), so a leading byte prefix would draw the sample from that one domain and the
+    superword layer would never see code, multilingual, or math. Shuffling first makes the
+    sample track the corpus's domain proportions — i.e. the target training mixture.
+    """
+    shuffled = list(texts)
+    random.Random(_STAGE2_SAMPLE_SEED).shuffle(shuffled)
+    return _bounded_byte_prefix(shuffled, max_bytes)
 
 
 class TokenizerKind(StrEnum):
@@ -177,7 +195,7 @@ def train_one(spec: TrainSpec, texts: list[str], out_dir: str) -> dict:
         stage1 = train_plain_bpe(
             texts, spec.transition_vocab_size, regex_string=cfg.stage1_regex, split_digits=cfg.split_digits
         )
-        stage2_texts = _bounded_byte_prefix(texts, STAGE2_SAMPLE_BYTES)
+        stage2_texts = _sample_stage2_corpus(texts, STAGE2_SAMPLE_BYTES)
         result = extend_with_superwords(
             stage1, stage2_texts, spec.vocab_size, stage2_regex=cfg.stage2_regex, split_digits=cfg.split_digits
         )
