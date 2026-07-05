@@ -37,8 +37,10 @@
 //!   reachability explicitly: a global finelog that also serves its own cluster
 //!   lists that cluster's loopback/VPC ranges (e.g. `127.0.0.0/8`, `10.0.0.0/8`)
 //!   so local clients keep working without a JWT, while remote pushes must sign.
-//!   CIDR matches the transport peer only (never a forwarded header), the same
-//!   distrust of spoofable `X-Forwarded-For` that rigging's loopback check applies.
+//!   CIDR matches the DIRECT transport peer only: if the request carries an
+//!   `X-Forwarded-For` header (a proxy hop) the cidr layer does NOT match, because
+//!   a proxied request cannot borrow a trusted proxy's IP — the same distrust of
+//!   spoofable `X-Forwarded-For` that rigging's cidr layer applies.
 //!
 //! The layers are walked in order: the first `Allow` admits, the first `Reject`
 //! denies, and a request no layer claims is denied. Order matters — the CIDR
@@ -316,11 +318,18 @@ impl AuthLayer {
     }
 
     /// Evaluate this layer against extracted request facts: the bearer token
-    /// (already stripped of `Bearer `) and the transport peer IP.
-    fn check(&self, bearer: Option<&str>, peer_ip: Option<IpAddr>) -> Verdict {
+    /// (already stripped of `Bearer `), the transport peer IP, and `forwarded`
+    /// (true iff the request carried an `X-Forwarded-For` header).
+    fn check(&self, bearer: Option<&str>, peer_ip: Option<IpAddr>, forwarded: bool) -> Verdict {
         match self {
+            // A request carrying `X-Forwarded-For` (`forwarded`) is a proxy hop and
+            // cannot borrow the trusted proxy's IP, so the cidr layer refuses to
+            // match it regardless of the transport peer. This is a no-op for
+            // finelog's current direct-push deployment (no proxy ⇒ no XFF header ⇒
+            // `forwarded` is always false); it only hardens a future proxy-fronted
+            // finelog.
             AuthLayer::Cidr(nets) => match peer_ip {
-                Some(ip) if nets.iter().any(|n| n.contains(ip)) => Verdict::Allow,
+                Some(ip) if !forwarded && nets.iter().any(|n| n.contains(ip)) => Verdict::Allow,
                 _ => Verdict::Fallthrough,
             },
             // rigging JwtAuthenticator parity: no bearer → fall through (a later
@@ -415,13 +424,14 @@ impl AuthPolicy {
     }
 
     /// The core decision over already-extracted request facts: the bearer token
-    /// (no `Bearer ` prefix) and the transport peer IP. `true` = admit. Walks the
+    /// (no `Bearer ` prefix), the transport peer IP, and `forwarded` (true iff the
+    /// request carried an `X-Forwarded-For` header). `true` = admit. Walks the
     /// stack: first `Allow` admits, first `Reject` denies, an unclaimed request is
     /// denied (default-deny). Shared by the Connect interceptor and the axum
     /// [`auth_gate`] middleware so both surfaces enforce the identical policy.
-    fn admits(&self, bearer: Option<&str>, peer_ip: Option<IpAddr>) -> bool {
+    fn admits(&self, bearer: Option<&str>, peer_ip: Option<IpAddr>, forwarded: bool) -> bool {
         for layer in &self.layers {
-            match layer.check(bearer, peer_ip) {
+            match layer.check(bearer, peer_ip, forwarded) {
                 Verdict::Allow => return true,
                 Verdict::Reject => return false,
                 Verdict::Fallthrough => {}
@@ -433,7 +443,8 @@ impl AuthPolicy {
     /// Connect-interceptor entry point: extract the bearer + peer IP from the RPC
     /// context and apply the policy.
     fn authorize(&self, ctx: &RequestContext) -> Result<(), ConnectError> {
-        if self.admits(bearer_token(ctx), peer_ip(ctx)) {
+        let forwarded = ctx.header("x-forwarded-for").is_some();
+        if self.admits(bearer_token(ctx), peer_ip(ctx), forwarded) {
             Ok(())
         } else {
             Err(unauthenticated())
@@ -517,7 +528,8 @@ pub async fn auth_gate(
         .extensions()
         .get::<ConnectInfo<SocketAddr>>()
         .map(|c| c.0.ip());
-    if policy.admits(bearer, peer_ip) {
+    let forwarded = request.headers().get("x-forwarded-for").is_some();
+    if policy.admits(bearer, peer_ip, forwarded) {
         next.run(request).await
     } else {
         (StatusCode::UNAUTHORIZED, "finelog: unauthorized").into_response()
@@ -919,5 +931,92 @@ mod tests {
             connectrpc::ErrorCode::Unauthenticated
         );
         assert!(!ran, "handler never ran for an unauthenticated request");
+    }
+
+    /// Translate one shared-vector layer into finelog's policy-JSON form. A `cidr`
+    /// layer already matches finelog's shape (`{"type":"cidr","cidrs":[..]}`) and
+    /// passes through unchanged; a `jwt` layer gains the fixed test public key
+    /// [`PUB_A`] under a single "vector" cluster (the vector file's jwt verifier is
+    /// mocked, so any trusted key works). An unknown type also passes through
+    /// unchanged so finelog's own parser is the one that rejects it.
+    fn translate_vector_layer(layer: &serde_json::Value) -> serde_json::Value {
+        match layer.get("type").and_then(|v| v.as_str()) {
+            Some("jwt") => serde_json::json!({
+                "type": "jwt",
+                "keys": [{"cluster": "vector", "public_keys": [PUB_A]}],
+            }),
+            _ => layer.clone(),
+        }
+    }
+
+    /// Translate a whole shared-vector `stack` into finelog's `AuthPolicy::parse`
+    /// JSON string.
+    fn translate_vector_stack(stack: &[serde_json::Value]) -> String {
+        let layers: Vec<serde_json::Value> = stack.iter().map(translate_vector_layer).collect();
+        serde_json::Value::Array(layers).to_string()
+    }
+
+    /// Run the SHARED cross-language auth conformance vectors through finelog's
+    /// engine and assert every allow/deny verdict matches.
+    ///
+    /// The vector file (`lib/rigging/src/rigging/auth_vectors.json`) is the single
+    /// source of truth consumed by BOTH engines; the Python counterpart is
+    /// `lib/rigging/tests/test_auth_vectors.py`. We load the file in place from its
+    /// shared location (never copy it) so the two engines cannot drift.
+    ///
+    /// The jwt verifier is mocked per the file's `note`: `token == "valid"` maps to
+    /// a real bearer signed by the trusted [`PRIV_A`] (verifies against [`PUB_A`],
+    /// `aud="finelog"`); `"invalid"` maps to a bearer signed by [`PRIV_UNTRUSTED`]
+    /// (present but unverifiable ⇒ Reject); `null` maps to no bearer. The `forwarded`
+    /// flag is set from whether the request headers carry `x-forwarded-for`. Only the
+    /// verdict is checked — the Python-only `expect.matched` field does not apply here
+    /// (finelog's `admits` returns a bare bool).
+    #[test]
+    fn conformance_vectors_match_rigging() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../rigging/src/rigging/auth_vectors.json");
+        let raw = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("read shared auth vectors at {}: {e}", path.display()));
+        let doc: serde_json::Value = serde_json::from_str(&raw).unwrap();
+
+        for vector in doc["vectors"].as_array().unwrap() {
+            let name = vector["name"].as_str().unwrap();
+            let stack = vector["stack"].as_array().unwrap();
+            let policy = AuthPolicy::parse(&translate_vector_stack(stack))
+                .unwrap_or_else(|e| panic!("vector {name}: policy parse failed: {e}"));
+
+            let request = &vector["request"];
+            // Map the mocked token to a real finelog bearer (raw token, no `Bearer `
+            // prefix, since `admits` takes the already-stripped credential).
+            let bearer: Option<String> = match request["token"].as_str() {
+                Some("valid") => Some(mint_finelog(PRIV_A, FUTURE)),
+                Some("invalid") => Some(mint_finelog(PRIV_UNTRUSTED, FUTURE)),
+                Some(other) => panic!("vector {name}: unexpected token {other:?}"),
+                None => None,
+            };
+            let peer: SocketAddr = request["peer"].as_str().unwrap().parse().unwrap();
+            let forwarded = request["headers"]
+                .as_object()
+                .is_some_and(|h| h.contains_key("x-forwarded-for"));
+
+            let admitted = policy.admits(bearer.as_deref(), Some(peer.ip()), forwarded);
+            let expected = vector["expect"]["verdict"].as_str().unwrap() == "allow";
+            assert_eq!(
+                admitted,
+                expected,
+                "vector {name}: {}",
+                vector["description"].as_str().unwrap_or("")
+            );
+        }
+
+        for case in doc["parse_error_stacks"].as_array().unwrap() {
+            let name = case["name"].as_str().unwrap();
+            let stack = case["stack"].as_array().unwrap();
+            let policy_json = translate_vector_stack(stack);
+            assert!(
+                AuthPolicy::parse(&policy_json).is_err(),
+                "parse_error case {name}: expected AuthPolicy::parse to reject {policy_json}"
+            );
+        }
     }
 }

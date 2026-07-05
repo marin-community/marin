@@ -89,15 +89,6 @@ def _references_users(raw_conn, table: str) -> bool:
     return any(str(row[2]) == "users" for row in raw_conn.execute(f"PRAGMA foreign_key_list({table})").fetchall())
 
 
-def _table_exists(raw_conn, table: str) -> bool:
-    return (
-        raw_conn.execute(
-            "SELECT 1 FROM sqlite_master WHERE type='table' AND name=? LIMIT 1", (table,)
-        ).fetchone()
-        is not None
-    )
-
-
 def migrate(raw_conn) -> None:
     needs_rebuild = _references_users(raw_conn, "jobs") or _references_users(raw_conn, "user_budgets")
     if not needs_rebuild:

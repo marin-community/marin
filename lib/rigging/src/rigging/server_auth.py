@@ -45,6 +45,16 @@ from starlette.responses import JSONResponse
 from starlette.routing import Match, Mount, Route
 from starlette.types import Receive, Scope, Send
 
+from rigging.auth_config import (
+    AnonymousLayer,
+    AuthLayerSpec,
+    AuthStackConfig,
+    CidrLayer,
+    IapAssertionLayer,
+    JwtLayer,
+    LoopbackLayer,
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -531,6 +541,37 @@ def resolve_auth(
     raise ValueError("Missing authentication")
 
 
+def _authenticator_for_layer(
+    layer: AuthLayerSpec,
+    jwt_verifier: "TokenVerifier | None",
+    iap_assertion_verifier: "IapAssertionVerifier | None",
+) -> RequestAuthenticator:
+    """Compile one declarative :class:`~rigging.auth_config.AuthLayerSpec` into an authenticator.
+
+    Binds the injected verifiers: a ``jwt`` layer binds ``jwt_verifier`` (as
+    :class:`JwtAuthenticator`, or :class:`BestEffortJwtAuthenticator` when
+    ``optional``); an ``iap_assertion`` layer binds ``iap_assertion_verifier``.
+    Raises ``ValueError`` if a layer names a verifier that was not supplied.
+    """
+    match layer:
+        case JwtLayer(optional=optional):
+            if jwt_verifier is None:
+                raise ValueError("a 'jwt' auth layer requires a jwt_verifier")
+            return BestEffortJwtAuthenticator(jwt_verifier) if optional else JwtAuthenticator(jwt_verifier)
+        case IapAssertionLayer():
+            if iap_assertion_verifier is None:
+                raise ValueError("an 'iap_assertion' auth layer requires an iap_assertion_verifier")
+            return IapAssertionAuthenticator(iap_assertion_verifier)
+        case CidrLayer(cidrs=cidrs):
+            return CidrAuthenticator(cidrs)
+        case LoopbackLayer():
+            return LoopbackAuthenticator()
+        case AnonymousLayer():
+            return AnonymousAuthenticator()
+        case _:
+            raise ValueError(f"unknown auth layer: {layer!r}")
+
+
 @dataclass(frozen=True)
 class RequestAuthPolicy:
     """Server-side auth policy: an ordered authenticator chain plus a fallback verifier.
@@ -538,8 +579,10 @@ class RequestAuthPolicy:
     The chain fully determines the outcome for every request, so a service
     mounts its enforcement points (:class:`PolicyAuthInterceptor`,
     :class:`RouteAuthMiddleware`) unconditionally and never branches on an
-    "is auth on" flag. Build with :meth:`enforcing` or :meth:`permissive`;
-    the zero-arg default is the permissive (allow-everyone) chain.
+    "is auth on" flag. Build with :meth:`from_config` (a declarative
+    :class:`~rigging.auth_config.AuthStackConfig`) or the :meth:`enforcing` /
+    :meth:`permissive` shortcuts; the zero-arg default is the permissive
+    (allow-everyone) chain.
 
     ``verifier`` backs the token authenticator at the head of the chain and is
     also exposed for out-of-band token checks (e.g. a session-cookie exchange).
@@ -547,6 +590,30 @@ class RequestAuthPolicy:
 
     authenticators: tuple[RequestAuthenticator, ...] = (AnonymousAuthenticator(),)
     verifier: "TokenVerifier | None" = None
+
+    @classmethod
+    def from_config(
+        cls,
+        stack: AuthStackConfig,
+        *,
+        jwt_verifier: "TokenVerifier | None" = None,
+        iap_assertion_verifier: "IapAssertionVerifier | None" = None,
+    ) -> "RequestAuthPolicy":
+        """Compile a declarative stack into the authenticator chain.
+
+        A ``jwt`` layer binds ``jwt_verifier`` (as :class:`JwtAuthenticator`, or
+        :class:`BestEffortJwtAuthenticator` when ``optional=True``); an
+        ``iap_assertion`` layer binds ``iap_assertion_verifier``. Raises
+        ``ValueError`` if a layer names a verifier that was not supplied, or if
+        ``stack`` is empty. :meth:`enforcing` / :meth:`permissive` are thin
+        wrappers that build a stack and call this.
+        """
+        if not stack.layers:
+            raise ValueError("cannot compile an empty auth stack (a total lockout)")
+        authenticators = tuple(
+            _authenticator_for_layer(layer, jwt_verifier, iap_assertion_verifier) for layer in stack.layers
+        )
+        return cls(authenticators=authenticators, verifier=jwt_verifier)
 
     @classmethod
     def enforcing(
@@ -563,18 +630,26 @@ class RequestAuthPolicy:
         otherwise network-location trust (trusted CIDR, then loopback).
         ``optional`` appends the anonymous-admin terminal: a credentialless
         request is admitted, but a presented-and-invalid credential still rejects.
+
+        A thin wrapper over :meth:`from_config`: it builds the matching
+        :class:`~rigging.auth_config.AuthStackConfig` (a layer included exactly
+        when its verifier / CIDR list is supplied) and compiles it.
         """
-        chain: list[RequestAuthenticator] = []
+        layers: list[AuthLayerSpec] = []
         if verifier is not None:
-            chain.append(JwtAuthenticator(verifier))
+            layers.append(JwtLayer())
         if iap_assertion_verifier is not None:
-            chain.append(IapAssertionAuthenticator(iap_assertion_verifier))
+            layers.append(IapAssertionLayer())
         if trusted_cidrs:
-            chain.append(CidrAuthenticator(trusted_cidrs))
-        chain.append(LoopbackAuthenticator())
+            layers.append(CidrLayer(tuple(trusted_cidrs)))
+        layers.append(LoopbackLayer())
         if optional:
-            chain.append(AnonymousAuthenticator())
-        return cls(authenticators=tuple(chain), verifier=verifier)
+            layers.append(AnonymousLayer())
+        return cls.from_config(
+            AuthStackConfig(layers=tuple(layers)),
+            jwt_verifier=verifier,
+            iap_assertion_verifier=iap_assertion_verifier,
+        )
 
     @classmethod
     def permissive(cls, *, verifier: "TokenVerifier | None" = None) -> "RequestAuthPolicy":
@@ -582,12 +657,15 @@ class RequestAuthPolicy:
 
         A valid bearer token still attributes the caller (e.g. worker tokens);
         an invalid one is ignored rather than rejected.
+
+        A thin wrapper over :meth:`from_config`: it builds the ``[jwt(optional=true)?,
+        anonymous]`` stack and compiles it.
         """
-        chain: list[RequestAuthenticator] = []
+        layers: list[AuthLayerSpec] = []
         if verifier is not None:
-            chain.append(BestEffortJwtAuthenticator(verifier))
-        chain.append(AnonymousAuthenticator())
-        return cls(authenticators=tuple(chain), verifier=verifier)
+            layers.append(JwtLayer(optional=True))
+        layers.append(AnonymousLayer())
+        return cls.from_config(AuthStackConfig(layers=tuple(layers)), jwt_verifier=verifier)
 
     @property
     def allows_anonymous(self) -> bool:
