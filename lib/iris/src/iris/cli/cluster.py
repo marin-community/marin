@@ -261,6 +261,45 @@ def cluster_list():
         click.echo(f"  {name:30s} {path}")
 
 
+def _upload_private_key_to_secret_manager(resource: str, private_pem: str) -> str:
+    """Add `private_pem` as a new version of the Secret Manager secret `resource`.
+
+    `resource` is `projects/<project>/secrets/<name>`. Creates the secret container
+    first when the caller has permission; otherwise adds a version to a container an
+    admin pre-created. Returns the pinned `gcp-secret://…/versions/<n>` reference to
+    put in auth.signing_key.
+    """
+    try:
+        from google.cloud import secretmanager  # noqa: PLC0415  # optional dep
+    except ImportError as exc:
+        raise click.ClickException(
+            "storing a key in Secret Manager needs the optional dependency; install marin-rigging[secrets]"
+        ) from exc
+    from google.api_core.exceptions import AlreadyExists, PermissionDenied  # noqa: PLC0415  # optional dep
+
+    project, _, name = resource.removeprefix("projects/").partition("/secrets/")
+    if not project or not name:
+        raise click.ClickException(f"--gcp-secret must be projects/<p>/secrets/<name>, got {resource!r}")
+
+    client = secretmanager.SecretManagerServiceClient()
+    try:
+        client.create_secret(
+            request={
+                "parent": f"projects/{project}",
+                "secret_id": name,
+                "secret": {"replication": {"automatic": {}}},
+            }
+        )
+        click.echo(f"Created Secret Manager secret {name}.")
+    except AlreadyExists:
+        pass
+    except PermissionDenied:
+        click.echo(f"No permission to create {name}; adding a version to the existing secret.")
+
+    version = client.add_secret_version(request={"parent": resource, "payload": {"data": private_pem.encode("utf-8")}})
+    return f"gcp-secret://{version.name}"
+
+
 @cluster.command("init-keys")
 @click.option(
     "--out-file",
@@ -273,17 +312,18 @@ def cluster_list():
     "gcp_secret",
     default=None,
     metavar="projects/<p>/secrets/<name>",
-    help="Print gcloud commands to store the PRIVATE key in this Secret Manager secret.",
+    help="Store the PRIVATE key as a new version of this Secret Manager secret "
+    "(creating the secret when you have permission). Reference the pinned version from auth.signing_key.",
 )
 def cluster_init_keys(out_file: Path | None, gcp_secret: str | None):
     """Generate a per-cluster Ed25519 signing keypair for controller auth.
 
-    Writes the PRIVATE key to a SecretSpec destination (a file, and/or prints the
-    gcloud commands to store it in Secret Manager) and prints the PUBLIC key + kid
-    for the trust config. The private half is a crown-jewel secret: never commit
-    it, never inline it into a cluster config — reference it from auth.signing_key
-    via file: / gcp-secret://. The public key is inline-safe (JWKS, peer/finelog
-    allowlists, previous_public_keys during a rotation overlap).
+    Writes the PRIVATE key to a SecretSpec destination (a file, and/or a new
+    Secret Manager version) and prints the PUBLIC key + kid for the trust config.
+    The private half is a crown-jewel secret: never commit it, never inline it into
+    a cluster config — reference it from auth.signing_key via file: / gcp-secret://.
+    The public key is inline-safe (JWKS, peer/finelog allowlists, previous_public_keys
+    during a rotation overlap).
     """
     keypair = generate_ed25519_keypair()
 
@@ -294,12 +334,9 @@ def cluster_init_keys(out_file: Path | None, gcp_secret: str | None):
         click.echo(f"  Reference it as: auth.signing_key: file:{out_file.resolve()}")
 
     if gcp_secret is not None:
-        click.echo("Store the PRIVATE key in Secret Manager, then pin the version you create:")
-        click.echo(f"  gcloud secrets create {gcp_secret.rsplit('/', 1)[-1]} --replication-policy=automatic")
-        click.echo(
-            f"  printf '%s' '<private-pem>' | gcloud secrets versions add {gcp_secret.rsplit('/', 1)[-1]} --data-file=-"
-        )
-        click.echo(f"  Reference the pinned version as: auth.signing_key: gcp-secret://{gcp_secret}/versions/<n>")
+        reference = _upload_private_key_to_secret_manager(gcp_secret, keypair.private_pem)
+        click.echo(f"Stored PRIVATE key in Secret Manager ({gcp_secret}).")
+        click.echo(f"  Reference it as: auth.signing_key: {reference}")
 
     if out_file is None and gcp_secret is None:
         click.echo("# PRIVATE KEY (store securely; do NOT commit or inline into a cluster config):")

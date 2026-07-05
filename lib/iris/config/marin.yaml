@@ -50,10 +50,13 @@ auth:
     # Audience of IAP's signed assertion: the iris-marin-be backend service in
     # hai-gcp-models (project number 748532799086).
     signed_header_audience: /projects/748532799086/global/backendServices/2663834686758326555
-    # IAP's allowlist already restricts who reaches the controller; anyone
-    # Google admits acts as admin (a provisioned user still gets their DB role).
+    # IAP's allowlist already restricts who reaches the controller, so anyone
+    # Google admits acts as admin.
     unprovisioned_role: admin
   trusted_cidrs: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 127.0.0.0/8, "::1/128"]
+  # Controller server-identity signing key (Ed25519), resolved from Secret Manager
+  # at startup — provision with `iris cluster init-keys --gcp-secret …`.
+  signing_key: gcp-secret://projects/hai-gcp-models/secrets/iris-marin-signing-key/versions/1
 
 worker_provider: {}
 

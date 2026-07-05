@@ -381,17 +381,17 @@ def _build_jwt_token_manager(
 def require_persistent_signing_key(auth_config: AuthConfig | None, signing_key_pem: str | None) -> None:
     """Fail fast if a deployed cluster with a login provider has no persistent key.
 
-    A gcp/iap provider issues user JWTs and typically feeds finelog delegation, so
-    its signing key must be stable: with an ephemeral one, every user is logged out
-    on restart and an external verifier (finelog / peer) pinned to the published
-    public key can no longer trust this controller — a silent trust-anchor break.
-    Called at the serve entrypoint; the ephemeral fallback in
-    :func:`create_controller_auth` remains fine for in-process dev (``LocalCluster``).
+    The Ed25519 signing key is the controller's server identity. Persistence matters
+    for the tokens an external verifier pins to the controller's published public
+    key — finelog-relay delegation and federation peers — which an ephemeral key
+    would silently invalidate on every restart. A gcp/iap deployment carries the
+    requirement for a uniform profile across clusters (so enabling relay or
+    federation later needs no re-provisioning); the ephemeral fallback in
+    :func:`create_controller_auth` stays for in-process dev (``LocalCluster``). User
+    auth needs no key: IAP authenticates each request and roles come from config.
 
-    CIDR-only trust is deliberately exempt: it is network-location trust (a dev /
-    in-network posture, like null-auth) with no login provider, minting only
-    internal worker tokens, so an ephemeral key is fine. (Federation / finelog-relay,
-    if configured, also rely on a stable key — a separate concern from the provider.)
+    CIDR-only / null-auth is exempt: an in-network / dev posture with no login
+    provider, where an ephemeral key is fine.
     """
     if auth_config is None or signing_key_pem is not None:
         return
