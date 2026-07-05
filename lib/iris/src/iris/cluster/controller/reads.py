@@ -1242,7 +1242,6 @@ def _row_to_active_task(row, counts: AttemptCounts) -> ActiveTaskRow:
         state=int(row.state),
         current_attempt_id=int(row.current_attempt_id),
         current_worker_id=row.current_worker_id,
-        failure_count=counts.failure_count,
         preemption_count=counts.preemption_count,
         max_retries_failure=int(row.max_retries_failure),
         max_retries_preemption=int(row.max_retries_preemption),

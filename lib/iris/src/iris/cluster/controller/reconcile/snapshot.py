@@ -50,7 +50,7 @@ class JobStateBasis:
     started_at: Timestamp | None
     max_task_failures: int
     task_state_counts: dict[int, int]  # task state → count
-    total_failures: int  # cumulative failed attempts across the job (sum of task failure_count)
+    total_failures: int  # committed-derived cumulative FAILED attempts across the job (loader-summed)
     first_task_error: str | None
 
 

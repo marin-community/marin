@@ -905,6 +905,94 @@ def test_preemption_does_not_count_toward_max_task_failures(state):
     assert _query_job(state, job.job_id).state == job_pb2.JOB_STATE_RUNNING
 
 
+def _job_failure_count(state, tasks) -> int:
+    """Derived job-wide cumulative failure count (sum of per-task derived counts)."""
+    return sum(_query_task(state, t.task_id).failure_count for t in tasks)
+
+
+def test_coscheduled_crash_loop_fails_on_cumulative_budget(state):
+    """A coscheduled gang crash-looping across rounds fails on the cumulative budget.
+
+    One task crashes per round and its siblings bounce COSCHED_FAILED (which charges
+    neither budget), so exactly one FAILED attempt accrues per crashed round. A
+    different task crashes each round, so no single task ever exhausts its per-task
+    retry budget — only the derived job-wide count crosses ``max_task_failures``. This
+    is the case an off-by-one between "charge per round" and "count FAILED attempts"
+    would break.
+    """
+    for i in range(4):
+        meta = make_worker_metadata()
+        meta.attributes[WellKnownAttribute.TPU_NAME].string_value = "tpu-a"
+        meta.attributes[WellKnownAttribute.TPU_WORKER_ID].int_value = i
+        register_worker(state, f"w{i}", f"addr{i}:8080", meta)
+
+    req = controller_pb2.Controller.LaunchJobRequest(
+        name="crash-loop",
+        entrypoint=_make_test_entrypoint(),
+        resources=job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
+        replicas=4,
+        environment=job_pb2.EnvironmentConfig(),
+        max_retries_failure=5,  # generous per-task budget; no single task exhausts it
+        max_task_failures=2,  # job-wide budget trips on the 3rd cumulative failure
+    )
+    req.coscheduling.group_by = WellKnownAttribute.TPU_NAME
+    tasks = submit_job(state, "j1", req)
+    job_id = JobName.root("test-user", "j1")
+
+    # Rounds 1 and 2 stay within the cumulative budget (1, then 2, both <= 2).
+    for round_idx in range(2):
+        for i, task in enumerate(tasks):
+            dispatch_task(state, task, WorkerId(f"w{i}"))
+        transition_task(state, tasks[round_idx].task_id, job_pb2.TASK_STATE_FAILED, error=f"crash {round_idx}")
+        assert _query_job(state, job_id).state == job_pb2.JOB_STATE_RUNNING
+        # Exactly one FAILED attempt accrued this round; the bounced siblings did not.
+        assert _job_failure_count(state, tasks) == round_idx + 1
+
+    # Round 3: a third distinct task crashes -> cumulative 3 > max_task_failures=2 ->
+    # the job fails on the derived budget, even though every task failed at most once.
+    for i, task in enumerate(tasks):
+        dispatch_task(state, task, WorkerId(f"w{i}"))
+    transition_task(state, tasks[2].task_id, job_pb2.TASK_STATE_FAILED, error="crash 2")
+    assert _query_job(state, job_id).state == job_pb2.JOB_STATE_FAILED
+    for task in tasks:
+        assert _query_task(state, task.task_id).failure_count <= 1
+
+
+def test_timeout_charges_cumulative_failure_budget(state):
+    """An execution timeout fails the job via the budget, charging through its FAILED attempt.
+
+    After dropping the in-flight ``failure_count`` scratch, ``timeout_one`` carries no
+    counter: its charge is entirely the FAILED attempt it records. A single timeout in
+    a two-task job crosses ``max_task_failures=0`` while the sibling is still RUNNING,
+    so the budget branch (not the all-terminal branch) fails the job.
+    """
+    for i in range(2):
+        register_worker(state, f"w{i}", f"host{i}:8080", make_worker_metadata())
+
+    req = controller_pb2.Controller.LaunchJobRequest(
+        name="timeout-job",
+        entrypoint=_make_test_entrypoint(),
+        resources=job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
+        replicas=2,
+        environment=job_pb2.EnvironmentConfig(),
+        max_task_failures=0,
+    )
+    tasks = submit_job(state, "j1", req)
+    job_id = JobName.root("test-user", "j1")
+
+    for i, task in enumerate(tasks):
+        dispatch_task(state, task, WorkerId(f"w{i}"))
+
+    with state._db.transaction() as cur:
+        finalize(
+            cur, [TerminalDecision(TerminalKind.TIMEOUT, tasks[0].task_id, "execution timeout")], now=Timestamp.now()
+        )
+
+    assert _query_task(state, tasks[0].task_id).state == job_pb2.TASK_STATE_FAILED
+    assert _query_task(state, tasks[0].task_id).failure_count == 1
+    assert _query_job(state, job_id).state == job_pb2.JOB_STATE_FAILED
+
+
 # =============================================================================
 # Endpoint Cleanup Tests
 # =============================================================================
