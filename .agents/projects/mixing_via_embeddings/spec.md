@@ -29,11 +29,16 @@ class MixtureBasis:
     view_sha256: Mapping[int, str]
     quality_scorer: str | None     # e.g. "datakit-quality-v0-fasttext"; None = no quality axis
     quality_scorer_sha256: str | None
+    rff_dim: int                   # cluster-free RFF map identity — part of basis equality so
+    rff_seed: int                  # histograms built with different RFF maps can never be
+    rff_bandwidth: float           # concatenated (median-heuristic value frozen at basis creation)
 ```
 
 v0 binds to the existing datakit artifacts: Luxical-One embedder, `train_centroids_22d1e89d`
-centroids, K=5000 with 1000/40 agglomerative views, the qsplit240 run tokenizer, and (behind the
-audit gate, see H4) the datakit v0 fasttext quality scorer with the store cutoffs `[0.2,0.4,0.6,0.8]`.
+centroids, K=5000 with 1000/40 agglomerative views, the qsplit240 run tokenizer, RFF map (dim 2048,
+seed 0, bandwidth = median heuristic on the codebook training sample, frozen at basis creation), and
+(behind the audit gate, see H4) the datakit v0 fasttext quality scorer with the store cutoffs
+`[0.2,0.4,0.6,0.8]`.
 Sampling metadata (sample size, seed) identifies an *estimate*, and lives on `DomainHistogram`, not on
 the basis.
 
@@ -123,9 +128,10 @@ class FeatureFamily(StrEnum):
     HIST_K5000 = "hist_k5000"              # ablation/stress only
     KME_MEAN = "kme_mean"                  # mass-weighted mean of dequantized centroid vectors (192 dims)
     RFF_MEAN = "rff_mean"                  # cluster-free arm: token-weighted mean of random Fourier
-                                           # features of raw document embeddings (dim 2048, median-heuristic
-                                           # bandwidth on the codebook training sample, seed 0; all three
-                                           # recorded in _meta.json). Bypasses the k-means codebook.
+                                           # features of raw document embeddings. Map identity
+                                           # (rff_dim/rff_seed/rff_bandwidth) lives on MixtureBasis, so
+                                           # mismatched maps raise BasisMismatchError. Bypasses the
+                                           # k-means codebook.
     QUALITY_MASS = "quality_mass"          # mass per quality bucket; locked until the scorer audit passes
     BUCKET_STATS = "bucket_stats"          # mixture-weighted BucketStats scalars
     EXPOSURE_GLOBAL = "exposure_global"    # transferable: model_size, phase_tokens, per-cell exposure
@@ -164,7 +170,12 @@ def shuffled_columns_v(v: np.ndarray, seed: int) -> np.ndarray
     marginal geometry."""
 
 def matched_random_v(v: np.ndarray, seed: int) -> np.ndarray
-    """Random V with matched rank and singular spectrum. Destroys content, preserves conditioning."""
+    """Independent random permutation of cell indices within each column. Every column keeps its
+    exact mass profile (non-negative, sums to 1, same entropy/sparsity — valid input for the
+    Hellinger/JS predictors), but the shared cell coordinate system, and hence all cross-column
+    content similarity, is destroyed. (An earlier draft matched rank/singular spectrum with a
+    generic random matrix; that control leaves the simplex and would feed invalid histograms to
+    distance-based predictors.)"""
 ```
 
 ## H2a — domain response from content (`domain_response.py`)

@@ -35,8 +35,8 @@ _What's hard?_
 parity is therefore expected and uninformative (the #6326 failure mode); extrapolation to a new column
 of `V` is carried entirely by the model's *smoothness prior over content space*. The success criterion
 is therefore not "histograms beat weights" but "**the true semantic `V` beats matched non-semantic
-reparameterizations**" — random projections with matched rank/spectrum and shuffled domain↔column
-mappings are mandatory controls in every experiment.
+reparameterizations**" — per-column cell-permutation controls (mass-profile-matched, simplex-valid)
+and shuffled domain↔column mappings are mandatory in every experiment.
 
 **Honest estimand.** With ~242 Dirichlet runs, nearly every run touches every domain, so no
 retrodiction on this sweep is truly zero-shot. The primary estimand is **held-out-dose retrodiction**:
