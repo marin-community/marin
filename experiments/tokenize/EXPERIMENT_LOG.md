@@ -57,11 +57,13 @@ improvement over the stock Llama-3 tokenizer** for target grug-moe models.
    tokens — a few weeks of production traffic; realistic lifetime ρ (100s–1000s) gives ≥−12%. **The
    ~64k trained SuperBPE + n-gram delivers ≥10% feBPB for grug-moe's actual serving economics.**
 
-> ⚠️ **Lockdown update (EXP-011):** the 24h soak at representative scale (10B-total/500M-active
-> MoE, multi-domain mix) does **not** reproduce these proxy-scale numbers. The same 64k trained
-> SuperBPE construction gives only ~−0.9% feBPB there (not −6.6%), and both the n-gram and 128k
-> levers **reverse to losses**. Treat the proxy scorecard below as the preliminary result the
-> lockdown was built to test; the representative-scale conclusion is in EXP-011.
+> ⚠️ **Lockdown update (EXP-011):** the 24h soak at representative scale appeared to collapse these
+> gains to ~−0.9%, but investigating *why* revealed the soak measurement was **confounded** — the
+> trained SuperBPE arms' superword layer was accidentally trained on English-only text (a corpus
+> sampling bug, fixed in `11bd2f4e9c`), and the eval covers only English+code, not the
+> multilingual/math the tokenizers target. So **neither the proxy scorecard below nor the ~−0.9%
+> soak number is a settled verdict**; the real answer needs a re-run with correctly-trained
+> tokenizers. See EXP-011 for the full analysis and the fix.
 
 ### feBPB scorecard (target scale: hidden 6144, 64 layers, 16k ctx, English/math)
 
@@ -572,13 +574,24 @@ data already on S3) reach training in ~3 min with ~8 pods; PARTIAL arms re-token
   marin-128k=0.9518: **64k-digits 0.9433 (−0.9%)**, 64k-llama 0.9493 (−0.3%), 64k 0.9515 (−0.0%),
   then baseline, then **128k-digits 0.9588 (+0.7%), 128k-llama 0.9605 (+0.9%), 128k-plain 0.9613
   (+1.0%), ngram 0.9644 (+1.3%)**. Ladder+domains: `scratchpad/{ladder_8arm,domains_8arm}.json`.
-- **KEY FINDING — the proxy-scale gains do NOT survive the lockdown.** The earlier prediction that
-  margins would widen toward the proxy −4.7…−6.8% as arms converge was **refuted**: they held at
-  ~−0.9%. The same construction (`soak-superbpe-64k` = trained SuperBPE 64k-t32k, the proxy's
-  champion) gives **−6.6% at proxy scale (small, English/math) but only −0.0…−0.9% at
-  representative scale (10B-total/500M-active MoE, multi-domain mix)**. n-gram augmentation and
-  128k SuperBPE — both wins at proxy scale — **reverse to losses** here (+1.3%, +1.0%). Robust
-  across budget and serving weight. Net: the representative-scale uplift from an alternative
-  tokenizer is real but **modest (~1%)**, best from 64k trained SuperBPE with digit-splitting. The
-  washout driver (scale/MoE vs the multi-domain mixture vs English/math) is not yet isolated — a
-  matched English/math-at-scale or multi-domain-at-proxy-scale arm would separate them.
+- **KEY FINDING — the lockdown result is CONFOUNDED; the ~−0.9% number is not a valid verdict.**
+  At face value the soak showed the proxy's −4.7…−6.8% collapsing to ~−0.9% (best `soak-superbpe-64k-digits`),
+  with n-gram and 128k reversing to losses. Investigating *why* (esp. why our 128k SuperBPE would
+  lose to Llama-3's own 128k) surfaced three independent measurement/training bugs:
+  1. **Stage-2 superword sample was 100% English web** — `read_corpus` concatenates domains in
+     fixed order (english_web first, ~2GB of 4GB) and stage-2 took the leading 300MB, so *every*
+     trained SuperBPE arm's superword layer never saw code/multilingual/math. 128k arms hit 2× as
+     hard (twice the superword merges from the same English-only pool). Fixed in `11bd2f4e9c`
+     (shuffle before sampling). UW's off-the-shelf SuperBPE-128k trained on ~33× more, multi-domain
+     data and *won* (−4.7%) at proxy scale — a properly-trained superword layer behaves differently.
+  2. **Eval is English+code only** — `macro_bpb`/feBPB averages the 7 Uncheatable-Eval subsets;
+     the multilingual (de/ru/zh) + math that make up 30% of training are never scored.
+  3. **Serving-cost fertility computed on 3 domains, not 4** — `code` silently failed to stream.
+  Per-domain BPB at matched budget (6e19) shows the near-zero headline is a **domain-averaging
+  cancellation**: SuperBPE is a big win on C++ (−9.4%) and a big loss on Python (+5.8%, superwords
+  vs significant indentation), which cancel in the unweighted mean. Legitimate signal: SuperBPE
+  hurts Python; **digit pretok mitigates it** (+5.8%→+3.4%), why `64k-digits` leads. Net: the
+  "SuperBPE modest/negative at representative scale" reading is **provisional** — it measured
+  broken tokenizers on a partial eval. Real answer needs a re-run with the fixed multi-domain
+  stage-2 sample + extended eval + an off-the-shelf SuperBPE-128k control (scoped, pending go-ahead).
+  Full metric stack (fertility / raw BPB / feBPB / per-domain) + causes posted to #6796.
