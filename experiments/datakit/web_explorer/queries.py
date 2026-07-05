@@ -22,7 +22,7 @@ import logging
 
 from ducky.client import DuckyClient, QueryResult
 
-from experiments.datakit.dataviz.lineage import StoreLineage
+from experiments.datakit.web_explorer.lineage import StoreLineage
 
 logger = logging.getLogger(__name__)
 
@@ -41,7 +41,7 @@ def _sql_str(value: str) -> str:
     return value.replace("'", "''")
 
 
-class Dataviz:
+class WebExplorer:
     """Query facade bound to one resolved store lineage + a ducky client."""
 
     def __init__(

@@ -7,7 +7,7 @@ The clustered store persists each ``cluster=<C>/quality=<Q>`` bucket as a Levant
 cache of ``input_ids`` (the caches drop ``id``/text). This reads those caches
 directly and detokenizes -- the ground truth of what the store actually holds,
 independent of ducky or the upstream stage parquet that
-:meth:`~experiments.datakit.dataviz.queries.Dataviz.store_bucket_samples`
+:meth:`~experiments.datakit.web_explorer.queries.WebExplorer.store_bucket_samples`
 reconstructs a bucket from. The tokenizer and each bucket cache are loaded lazily
 (only when first sampled), so this adds nothing to the dashboard's startup cost.
 """

@@ -4,7 +4,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>datakit dataviz</title>
+<title>datakit web explorer</title>
 <style>
 :root{--bg:#f6f7f9;--panel:#fff;--border:#dcdfe4;--text:#1c2024;--muted:#687078;--accent:#2563eb;--heat0:#eef2f7;--heat:#2563eb}
 *{box-sizing:border-box}
@@ -42,7 +42,7 @@ pre{white-space:pre-wrap;word-wrap:break-word;margin:0;font:12px/1.45 ui-monospa
 </style>
 </head>
 <body>
-<header><h1>datakit dataviz</h1><span class="path" id="path">loading…</span><span class="pill" id="verified"></span></header>
+<header><h1>datakit web explorer</h1><span class="path" id="path">loading…</span><span class="pill" id="verified"></span></header>
 <div id="ducky-banner" class="hidden" style="background:#fff4e5;color:#7a4a00;padding:7px 20px;font-size:13px;border-bottom:1px solid #f0d9b5">
   ⚠ query backend (ducky) is currently unavailable — it's preemptible and may be rescheduling. Queries retry automatically for a while; results may be delayed or fail until it's back.</div>
 <div class="tabs" id="tabs"></div>
@@ -134,7 +134,7 @@ function renderOverview(m){
      <tr><td>normalize</td><td>${cov('normalize')}</td></tr>
      <tr><td>decontam</td><td>${cov('decontam')}</td></tr>
      <tr><td>cluster_assign</td><td>${cov('cluster_assign')}</td></tr>
-     <tr><td>quality</td><td>${cov('quality')} ${OV.resolved.quality.length?'':'<span class="muted">(ambiguous — set DATAVIZ_QUALITY_MODEL + DATAVIZ_DOMAIN_CENTROIDS)</span>'}</td></tr>
+     <tr><td>quality</td><td>${cov('quality')} ${OV.resolved.quality.length?'':'<span class="muted">(ambiguous — set WEB_EXPLORER_QUALITY_MODEL + WEB_EXPLORER_DOMAIN_CENTROIDS)</span>'}</td></tr>
      <tr><td>dedup</td><td>${OV.dedup?esc(OV.dedup):'<span class="muted">unresolved</span>'}</td></tr>
     </tbody></table></div>`;
 }
@@ -142,7 +142,7 @@ function renderOverview(m){
 let SORT={key:'drop_rate',dir:-1};
 function renderSources(m){
   const rows=OV.source_summary||[];
-  if(!rows.length){m.innerHTML='<div class="card"><p class="muted">no source summary baked in (set DATAVIZ_SOURCE_SUMMARY)</p></div>';return;}
+  if(!rows.length){m.innerHTML='<div class="card"><p class="muted">no source summary baked in (set WEB_EXPLORER_SOURCE_SUMMARY)</p></div>';return;}
   const cols=[['source','source'],['docs_est','docs'],['q_avg','quality avg'],['q_sd','q sd'],['q_zero','frac score≈0'],['drop_rate','dedup drop'],['dup_largest','largest dup'],['decon_pct','contam %']];
   rows.sort((a,b)=>{const k=SORT.key,x=a[k],y=b[k];if(x==null)return 1;if(y==null)return -1;return (x>y?1:x<y?-1:0)*SORT.dir;});
   const warn=(k,v)=>{if(v==null)return '';

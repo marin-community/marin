@@ -1,16 +1,16 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Datakit dataviz dashboard: explore a clustered-store's pipeline stages via ducky.
+"""Datakit web explorer dashboard: explore a clustered-store's pipeline stages via ducky.
 
-Point it at one datakit store (``DATAVIZ_STORE``); it resolves the store's
-upstream stage datasets (:mod:`experiments.datakit.dataviz.lineage`) and serves a
+Point it at one datakit store (``WEB_EXPLORER_STORE``); it resolves the store's
+upstream stage datasets (:mod:`experiments.datakit.web_explorer.lineage`) and serves a
 single-page dashboard with a tab per stage — normalized data, decontamination,
 deduplication, quality classifier, and the final cluster x quality store. Most
 data is fetched by issuing SQL to the ducky service
 (:class:`ducky.client.DuckyClient`); the store's tokenized bucket caches are read
 directly and detokenized for the "from store cache" view
-(:mod:`experiments.datakit.dataviz.store_cache`).
+(:mod:`experiments.datakit.web_explorer.store_cache`).
 
 Queries run **asynchronously** (``POST /api/query`` -> ``query_id``, poll
 ``GET /api/result/{id}``) so a slow aggregate never trips the controller proxy's
@@ -18,10 +18,10 @@ Queries run **asynchronously** (``POST /api/query`` -> ``query_id``, poll
 
 Runs two ways:
 
-* **In-cluster** (deployed by :mod:`experiments.datakit.dataviz.deploy`): binds the
-  named Iris port and registers the ``dataviz`` endpoint so the controller proxy
-  routes ``/proxy/dataviz/`` to it.
-* **Local** (``python -m experiments.datakit.dataviz.server --store gs://...``):
+* **In-cluster** (deployed by :mod:`experiments.datakit.web_explorer.deploy`): binds the
+  named Iris port and registers the ``web_explorer`` endpoint so the controller proxy
+  routes ``/proxy/web_explorer/`` to it.
+* **Local** (``python -m experiments.datakit.web_explorer.server --store gs://...``):
   plain uvicorn on ``--port`` for development.
 """
 
@@ -50,16 +50,16 @@ from starlette.requests import Request
 from starlette.responses import FileResponse, JSONResponse
 from starlette.routing import Route
 
-from experiments.datakit.dataviz.lineage import (
+from experiments.datakit.store.datakit_store import ClusteredStoreData
+from experiments.datakit.web_explorer.lineage import (
     StoreLineage,
     load_lineage,
     read_store_payload,
     resolve_lineage,
     save_lineage,
 )
-from experiments.datakit.dataviz.queries import DEFAULT_SEED, Dataviz
-from experiments.datakit.dataviz.store_cache import StoreCacheSampler
-from experiments.datakit.store.datakit_store import ClusteredStoreData
+from experiments.datakit.web_explorer.queries import DEFAULT_SEED, WebExplorer
+from experiments.datakit.web_explorer.store_cache import StoreCacheSampler
 
 logger = logging.getLogger(__name__)
 
@@ -67,9 +67,9 @@ _INDEX_HTML = Path(__file__).with_name("index.html")
 _MAX_WORKERS = 8
 
 # Iris named port + endpoint the deployed service binds/registers; the controller
-# proxy routes ``/proxy/dataviz/`` to the namespaced endpoint. Must match deploy.py.
-PORT_NAME = "dataviz"
-ENDPOINT_NAME = "/dataviz"
+# proxy routes ``/proxy/web_explorer/`` to the namespaced endpoint. Must match deploy.py.
+PORT_NAME = "web_explorer"
+ENDPOINT_NAME = "/web_explorer"
 
 # Local-dev fallback: reach ducky through the public IAP-gated proxy (needs an
 # IAP token). In-cluster we use the controller's internal proxy (no token).
@@ -130,7 +130,7 @@ def _dedup_attr_map(lineage: StoreLineage) -> dict[str, str]:
     }
 
 
-def _build_views(dv: Dataviz, cache_sampler: StoreCacheSampler) -> dict[str, Callable[[dict], object]]:
+def _build_views(dv: WebExplorer, cache_sampler: StoreCacheSampler) -> dict[str, Callable[[dict], object]]:
     """Map dashboard view name -> handler(params) -> JSON-serializable result."""
 
     def _seed(p: dict) -> int:
@@ -203,7 +203,7 @@ def build_app(
     ducky: DuckyClient,
     source_summary: list[dict] | None = None,
 ) -> Starlette:
-    dv = Dataviz(lineage, ducky, _source_docs(source_summary), _dedup_attr_map(lineage))
+    dv = WebExplorer(lineage, ducky, _source_docs(source_summary), _dedup_attr_map(lineage))
     cache_sampler = StoreCacheSampler(
         lineage.store_path, lineage.tokenizer, {(b.cluster_id, b.quality_bucket) for b in payload.buckets}
     )
@@ -289,7 +289,7 @@ def build_app(
 def _build_ducky(explicit_url: str | None) -> DuckyClient:
     """Pick the ducky endpoint + auth for the current environment.
 
-    * explicit ``--ducky-url`` / ``DATAVIZ_DUCKY_URL`` — used as-is; IAP token only
+    * explicit ``--ducky-url`` / ``WEB_EXPLORER_DUCKY_URL`` — used as-is; IAP token only
       when it targets the public ``iris.oa.dev`` ingress.
     * in-cluster (``IRIS_CONTROLLER_URL`` set) — the controller's internal proxy
       (``<controller>/proxy/ducky``), no token: the internal port trusts the
@@ -303,7 +303,7 @@ def _build_ducky(explicit_url: str | None) -> DuckyClient:
         url, needs_iap = f"{os.environ['IRIS_CONTROLLER_URL'].rstrip('/')}/proxy/ducky", False
     else:
         url, needs_iap = _LOCAL_IAP_DUCKY_URL, True
-    timeout = float(os.environ.get("DATAVIZ_QUERY_TIMEOUT", "900"))
+    timeout = float(os.environ.get("WEB_EXPLORER_QUERY_TIMEOUT", "900"))
     logger.info("ducky endpoint %s (iap=%s, timeout=%.0fs)", url, needs_iap, timeout)
     return DuckyClient(url, token_provider=iap_token_provider() if needs_iap else None, timeout=timeout)
 
@@ -320,8 +320,8 @@ def _load(store_path: str, ducky: DuckyClient, cache_path: str | None) -> tuple[
         lineage = resolve_lineage(
             store_path,
             ducky,
-            domain_centroids=os.environ.get("DATAVIZ_DOMAIN_CENTROIDS"),
-            quality_model=os.environ.get("DATAVIZ_QUALITY_MODEL"),
+            domain_centroids=os.environ.get("WEB_EXPLORER_DOMAIN_CENTROIDS"),
+            quality_model=os.environ.get("WEB_EXPLORER_QUALITY_MODEL"),
         )
         if cache_path:
             save_lineage(lineage, cache_path)
@@ -331,21 +331,23 @@ def _load(store_path: str, ducky: DuckyClient, cache_path: str | None) -> tuple[
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--store", default=os.environ.get("DATAVIZ_STORE"), help="Datakit store artifact path (gs://).")
-    parser.add_argument("--ducky-url", default=os.environ.get("DATAVIZ_DUCKY_URL"))
-    parser.add_argument("--lineage-cache", default=os.environ.get("DATAVIZ_LINEAGE_CACHE"))
+    parser.add_argument(
+        "--store", default=os.environ.get("WEB_EXPLORER_STORE"), help="Datakit store artifact path (gs://)."
+    )
+    parser.add_argument("--ducky-url", default=os.environ.get("WEB_EXPLORER_DUCKY_URL"))
+    parser.add_argument("--lineage-cache", default=os.environ.get("WEB_EXPLORER_LINEAGE_CACHE"))
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8001)
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO)
     if not args.store:
-        raise SystemExit("--store (or DATAVIZ_STORE) is required")
+        raise SystemExit("--store (or WEB_EXPLORER_STORE) is required")
 
     ducky = _build_ducky(args.ducky_url)
     lineage, payload = _load(args.store, ducky, args.lineage_cache)
     source_summary = None
-    summary_path = os.environ.get("DATAVIZ_SOURCE_SUMMARY")
+    summary_path = os.environ.get("WEB_EXPLORER_SOURCE_SUMMARY")
     if summary_path:
         import json  # noqa: PLC0415 — only needed on this optional path
 
@@ -356,14 +358,14 @@ def main() -> None:
         logger.info("loaded source summary (%d rows) from %s", len(source_summary), summary_path)
     app = build_app(lineage, payload, ducky, source_summary)
     logger.info(
-        "dataviz for %s: %d sources, %d buckets",
+        "web_explorer for %s: %d sources, %d buckets",
         lineage.store_path,
         len(lineage.source_names),
         len(payload.buckets),
     )
 
     # In-cluster: bind the named Iris port and register the endpoint so the
-    # controller proxy routes /proxy/dataviz/ here. Local dev: plain uvicorn.
+    # controller proxy routes /proxy/web_explorer/ here. Local dev: plain uvicorn.
     job_info = get_job_info()
     if job_info is None:
         logger.info("serving locally on http://%s:%d", args.host, args.port)
@@ -374,11 +376,11 @@ def main() -> None:
     port = ctx.get_port(PORT_NAME)
     address = f"http://{job_info.advertise_host}:{port}"
     endpoint_id = ctx.registry.register(ENDPOINT_NAME, address, {"job_id": ctx.job_id.to_wire()})
-    logger.info("dataviz registered as %s at %s", ENDPOINT_NAME, address)
+    logger.info("web_explorer registered as %s at %s", ENDPOINT_NAME, address)
 
     async def _on_shutdown() -> None:
         ctx.registry.unregister(endpoint_id)
-        logger.info("dataviz endpoint unregistered")
+        logger.info("web_explorer endpoint unregistered")
 
     app.router.lifespan_context = on_shutdown(_on_shutdown)
     uvicorn.run(app, host="0.0.0.0", port=port)
