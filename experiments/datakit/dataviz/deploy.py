@@ -6,8 +6,9 @@
 Like ducky, a routable service needs a *named* Iris port, which ``iris job run``
 can't declare, so we go through the Python submit path
 (``client.submit(..., ports=["dataviz"])``). The dashboard is CPU-only — it holds
-no data, just resolves lineage once and forwards SQL to the ducky service — so it
-asks for a small CPU/RAM slice, not a TPU host.
+no bulk data: it resolves lineage once, forwards SQL to the ducky service, and
+lazily reads the store's tokenized bucket caches only when the store-cache view is
+sampled — so it asks for a small CPU/RAM slice, not a TPU host.
 
 All ``DATAVIZ_*`` env vars are forwarded to the task; at minimum
 ``DATAVIZ_STORE`` (the store to explore). Point it at ducky with

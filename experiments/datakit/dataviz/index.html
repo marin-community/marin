@@ -306,6 +306,7 @@ function renderStore(m){
      <label>quality <select id="sq"><option value="">any</option>${[...Array(nq).keys()].map(q=>`<option value="${q}">q${q} ${esc(qr(q))}</option>`).join('')}</select></label>
      <input type="number" id="sn" value="12" min="1" max="50" style="width:64px" title="sample size">
      <label>seed <input type="number" id="sseed" value="${DEFAULT_SEED}" style="width:74px"></label>
+     <label title="read the store's tokenized Levanter cache directly and detokenize (ground truth; needs a specific quality bucket)"><input type="checkbox" id="scache"> from store cache</label>
      <button class="primary" id="sgo">sample</button>
      <button id="sdice" title="new random seed & resample">🎲</button></div>
      <div id="ss"><p class="muted">pick a cluster + quality (or click a cell in the table above) to sample its documents</p></div></div>`;
@@ -321,6 +322,13 @@ async function sampleBucket(cluster,q,n){
   try{
     let rows,cols,label;
     const seed=+seedVal('sseed');
+    const fromCache=document.getElementById('scache')?.checked;
+    if(fromCache){
+      if(q===''||q==null){fail(ss,new Error('store-cache sampling needs a specific quality bucket'));return;}
+      rows=await runQuery('store_cache_samples',{cluster,quality_bucket:+q,n:n||12,seed,runs:4});cols=['index','n_tokens','text'];
+      ss.innerHTML=`<h4>cluster ${cluster} · q${q} · store cache (detokenized) — ${rows.length} samples</h4>${rows.length?sampleTable(rows,cols):'<p class="muted">empty bucket cache</p>'}`;
+      return;
+    }
     if(q===''||q==null){rows=await runQuery('store_samples',{cluster,n:n||12,seed});cols=['source','text'];label=`cluster ${cluster} · any quality`;}
     else{rows=await runQuery('store_bucket_samples',{cluster,quality_bucket:+q,n:n||12,seed});cols=['source','score','text'];label=`cluster ${cluster} · q${q}`;}
     ss.innerHTML=`<h4>${label} — ${rows.length} sample documents (exact text)</h4>${rows.length?sampleTable(rows,cols):'<p class="muted">no documents matched in the sampled sources</p>'}`;

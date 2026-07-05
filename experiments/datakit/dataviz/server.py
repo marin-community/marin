@@ -6,9 +6,11 @@
 Point it at one datakit store (``DATAVIZ_STORE``); it resolves the store's
 upstream stage datasets (:mod:`experiments.datakit.dataviz.lineage`) and serves a
 single-page dashboard with a tab per stage — normalized data, decontamination,
-deduplication, quality classifier, and the final cluster x quality store. All
+deduplication, quality classifier, and the final cluster x quality store. Most
 data is fetched by issuing SQL to the ducky service
-(:class:`ducky.client.DuckyClient`); the dashboard never reads parquet directly.
+(:class:`ducky.client.DuckyClient`); the store's tokenized bucket caches are read
+directly and detokenized for the "from store cache" view
+(:mod:`experiments.datakit.dataviz.store_cache`).
 
 Queries run **asynchronously** (``POST /api/query`` -> ``query_id``, poll
 ``GET /api/result/{id}``) so a slow aggregate never trips the controller proxy's
@@ -56,6 +58,7 @@ from experiments.datakit.dataviz.lineage import (
     save_lineage,
 )
 from experiments.datakit.dataviz.queries import DEFAULT_SEED, Dataviz
+from experiments.datakit.dataviz.store_cache import StoreCacheSampler
 from experiments.datakit.store.datakit_store import ClusteredStoreData
 
 logger = logging.getLogger(__name__)
@@ -127,13 +130,16 @@ def _dedup_attr_map(lineage: StoreLineage) -> dict[str, str]:
     }
 
 
-def _build_views(dv: Dataviz) -> dict[str, Callable[[dict], object]]:
+def _build_views(dv: Dataviz, cache_sampler: StoreCacheSampler) -> dict[str, Callable[[dict], object]]:
     """Map dashboard view name -> handler(params) -> JSON-serializable result."""
 
     def _seed(p: dict) -> int:
         return int(p.get("seed", DEFAULT_SEED))
 
     return {
+        "store_cache_samples": lambda p: cache_sampler.samples(
+            int(p["cluster"]), int(p["quality_bucket"]), int(p.get("n", 12)), _seed(p), int(p.get("runs", 4))
+        ),
         "normalized_stats": lambda p: dv.normalized_stats(p["source"]),
         "normalized_hist": lambda p: dv.normalized_length_hist(p["source"]).dicts(),
         "normalized_samples": (
@@ -198,7 +204,10 @@ def build_app(
     source_summary: list[dict] | None = None,
 ) -> Starlette:
     dv = Dataviz(lineage, ducky, _source_docs(source_summary), _dedup_attr_map(lineage))
-    manager = QueryManager(_build_views(dv))
+    cache_sampler = StoreCacheSampler(
+        lineage.store_path, lineage.tokenizer, {(b.cluster_id, b.quality_bucket) for b in payload.buckets}
+    )
+    manager = QueryManager(_build_views(dv, cache_sampler))
 
     def overview() -> dict:
         buckets = [
