@@ -602,9 +602,9 @@ interface TaskFailureSummary {
 // single task that fails repeatedly doesn't crowd out other failing tasks.
 // ListTasks attaches only the latest failed attempt per state (not the full
 // history), so the failure stays visible after the task is retried back into a
-// running/pending state without shipping every attempt. The per-task counters
-// are no longer on the wire (derived from attempts server-side); the badge count
-// is derived from the attached attempts, so it reflects the attempts shown here.
+// running/pending state. The badge counts the attached attempts, so it reflects
+// the failures shown here, not the task's authoritative lifetime total (those
+// job-level totals live on JobStatus).
 function collectFailuresByState(stateName: string, count: (t: TaskStatus) => number): TaskFailureSummary[] {
   const out: TaskFailureSummary[] = []
   for (const task of tasks.value) {

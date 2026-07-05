@@ -39,11 +39,11 @@ class TaskRowDelta:
     ``failure_count`` is overlay scratch, not a persisted column: the kernel
     carries the prospective per-task failure count so ``Overlay.job_basis`` can
     sum it into the job's cumulative ``total_failures`` (the ``max_task_failures``
-    budget) mid-batch, before the terminal attempt row is committed. It is never
-    flushed — both retry counters are derived from ``task_attempts`` at read time
-    (see ``iris.cluster.controller.attempt_counts``). There is no
-    ``preemption_count`` field: it was only ever consumed by the (now removed)
-    column write, and no mid-batch reader needs the prospective value."""
+    budget) mid-batch, before the terminal attempt row commits. It is never
+    flushed; the persisted retry counts derive from ``task_attempts`` at read
+    time (see ``iris.cluster.controller.attempt_counts``). There is no companion
+    ``preemption_count``: only the failure budget is evaluated mid-batch, so no
+    reader needs a prospective preemption count."""
 
     task_id: JobName
     state: int

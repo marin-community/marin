@@ -273,7 +273,7 @@ class TaskWithAttempts:
         """Build from an SA Row (matching TASK_DETAIL_COLS + peer_worker_label) plus attempt rows.
 
         Per-task failure/preemption counts are not carried: clients derive them
-        from ``attempts``; the wire proto no longer sends the scalars.
+        from ``attempts``.
         """
         return cls(
             task_id=row.task_id,
