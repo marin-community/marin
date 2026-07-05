@@ -305,7 +305,6 @@ def _mint_service(state, mock_controller, log_client, tmp_path):
     """A ControllerServiceImpl with auth enabled (a provider ⇒ owner authz on)."""
     auth = create_controller_auth(
         AuthConfig(gcp={"project_id": "test-project"}),
-        db=state._db,
         cluster_name="test-cluster",
         signing_key_pem=generate_ed25519_keypair().private_pem,
     )

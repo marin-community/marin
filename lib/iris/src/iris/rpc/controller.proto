@@ -459,6 +459,9 @@ message Controller {
     string user = 1;
     map<string, int32> task_state_counts = 2;
     map<string, int32> job_state_counts = 3;
+    // Config-derived role (from the controller's in-memory RolePolicy): "admin"
+    // for a config-listed admin, otherwise the provider default.
+    string role = 4;
   }
 
   message ListUsersRequest {}

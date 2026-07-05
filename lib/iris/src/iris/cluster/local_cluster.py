@@ -22,7 +22,7 @@ from pathlib import Path
 
 from finelog.client.log_client import Table
 from rigging.credential_store import CredentialRecord, save_credentials
-from rigging.timing import Duration, Timestamp
+from rigging.timing import Duration
 
 from iris.cluster.backends.rpc.backend import RpcTaskBackend, RpcWorkerStubFactory
 from iris.cluster.config import (
@@ -34,7 +34,6 @@ from iris.cluster.config import (
     make_local_config,
 )
 from iris.cluster.constraints import worker_attributes_from_resources
-from iris.cluster.controller import writes
 from iris.cluster.controller.auth import SESSION_TOKEN_TTL_SECONDS, create_controller_auth
 from iris.cluster.controller.autoscaler import Autoscaler
 from iris.cluster.controller.autoscaler.scaling_group import (
@@ -206,7 +205,6 @@ class LocalCluster:
         # keypair (tokens live only for this process).
         auth = create_controller_auth(
             self._config.auth,
-            db=db,
             cluster_name=self._config.name or "iris-local",
         )
         if auth.worker_token:
@@ -268,14 +266,10 @@ class LocalCluster:
         # Auto-login: mint a JWT via the controller's auth system.
         # Raw tokens won't work since the verifier only accepts JWTs.
         url = self._controller.url
-        now = Timestamp.now()
         # jti is for log correlation only — the local session token is stateless
-        # (nothing persisted, never revocable), like every other iris token.
+        # (nothing persisted, never revocable), like every other iris token. The
+        # admin role is config-derived (RolePolicy), so no user row is created.
         key_id = f"iris_s_local_{secrets.token_hex(8)}"
-        with db.transaction() as _tx:
-            writes.ensure_user(_tx, "local-admin", now, role="admin")
-            writes.set_user_role(_tx, "local-admin", "admin")
-
         if auth.jwt_manager:
             jwt_token = auth.jwt_manager.create_token(
                 "local-admin", "admin", key_id, ttl_seconds=SESSION_TOKEN_TTL_SECONDS

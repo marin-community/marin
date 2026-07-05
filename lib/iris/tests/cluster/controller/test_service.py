@@ -24,7 +24,7 @@ from iris.cluster.constraints import (
     WellKnownAttribute,
     device_variant_constraint,
 )
-from iris.cluster.controller import ops, reads, writes
+from iris.cluster.controller import ops, reads
 from iris.cluster.controller import service as service_module
 from iris.cluster.controller.auth import ControllerAuth
 from iris.cluster.controller.codec import constraints_from_json
@@ -1401,9 +1401,6 @@ def test_live_user_stats_sql_aggregation(state, service):
 
 def test_list_workers_returns_all(service, state):
     """Verify list_workers returns all registered workers."""
-    db = state._db
-    with db.transaction() as _tx:
-        writes.ensure_user(_tx, "system:worker", Timestamp.now(), role="worker")
     token = _verified_identity.set(VerifiedIdentity(user_id="system:worker", role="worker"))
     try:
         for i in range(3):
@@ -1429,8 +1426,6 @@ def test_list_workers_returns_all(service, state):
 
 
 def _register_workers_for_query(service, state, *, count_cpu: int, count_gpu: int) -> None:
-    with state._db.transaction() as _tx:
-        writes.ensure_user(_tx, "system:worker", Timestamp.now(), role="worker")
     token = _verified_identity.set(VerifiedIdentity(user_id="system:worker", role="worker"))
     try:
         for i in range(count_cpu):
@@ -1601,11 +1596,6 @@ def test_launch_job_cpu_resource_no_constraints_injected(service, state):
 
 def test_register_requires_worker_role(state, mock_controller, tmp_path, log_client):
     """Non-worker user gets PERMISSION_DENIED on register()."""
-    db = state._db
-    now = Timestamp.now()
-    with db.transaction() as _tx:
-        writes.ensure_user(_tx, "alice", now, role="user")
-
     auth = ControllerAuth(provider="static")
     service = ControllerServiceImpl(
         controller=mock_controller,
@@ -1635,11 +1625,6 @@ def test_register_requires_worker_role(state, mock_controller, tmp_path, log_cli
 
 def test_register_allows_worker_role(state, mock_controller, tmp_path, log_client):
     """Worker-role user can call register()."""
-    db = state._db
-    now = Timestamp.now()
-    with db.transaction() as _tx:
-        writes.ensure_user(_tx, "system:worker", now, role="worker")
-
     auth = ControllerAuth(provider="static")
     service = ControllerServiceImpl(
         controller=mock_controller,

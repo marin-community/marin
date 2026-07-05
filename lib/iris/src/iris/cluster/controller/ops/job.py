@@ -7,7 +7,6 @@ from dataclasses import dataclass
 
 from rigging.timing import Timestamp
 from sqlalchemy import Integer, bindparam, cast, func, insert, select
-from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
 from iris.cluster.controller import reads, writes
 from iris.cluster.controller.audit_logging import log_event
@@ -28,7 +27,6 @@ from iris.cluster.controller.run_template import RunTemplateCache
 from iris.cluster.controller.schema import (
     job_workdir_files_table,
     jobs_table,
-    users_table,
 )
 from iris.cluster.types import LOCAL_CLUSTER, TERMINAL_JOB_STATES, JobName
 from iris.rpc import controller_pb2, job_pb2
@@ -174,17 +172,6 @@ def insert_job_and_config(
         deadline_epoch_ms = (
             Timestamp.from_ms(effective_submission_ms).add(duration_from_proto(request.scheduling_timeout)).epoch_ms()
         )
-
-    # Idempotently create a ``users`` row at submission time.
-    cur.execute(
-        sqlite_insert(users_table)
-        .values(
-            user_id=job_id.user,
-            created_at_ms=Timestamp.from_ms(effective_submission_ms),
-            role="user",
-        )
-        .on_conflict_do_nothing(index_elements=["user_id"])
-    )
 
     requested_band = int(request.priority_band)
     if requested_band != job_pb2.PRIORITY_BAND_UNSPECIFIED:

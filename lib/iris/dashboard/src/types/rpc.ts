@@ -497,6 +497,8 @@ export interface UserSummary {
   user: string
   taskStateCounts?: Record<string, number>
   jobStateCounts?: Record<string, number>
+  // Config-derived role from the controller's in-memory RolePolicy.
+  role?: string
 }
 
 export interface ListUsersResponse {

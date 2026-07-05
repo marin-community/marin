@@ -116,14 +116,6 @@
     }
   ],
   "user_budgets": [],
-  "users": [
-    {
-      "created_at_ms": 1704067200000,
-      "display_name": null,
-      "role": "user",
-      "user_id": "test-user"
-    }
-  ],
   "worker_attributes": [],
   "workers": []
 }

@@ -15,7 +15,7 @@ Areas covered:
   task_attempts  — task_attempts
   tasks          — tasks (insert, assign, state update)
   workers        — workers, worker_attributes
-  budgets        — users, user_budgets
+  budgets        — user_budgets
 """
 
 import secrets
@@ -31,7 +31,6 @@ from iris.cluster.controller.db import Tx
 from iris.cluster.controller.projections import PROJECTIONS
 from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
 from iris.cluster.controller.schema import (
-    USER_ROLE_DEFAULT,
     federated_jobs_table,
     federated_tasks_table,
     federation_changelog_table,
@@ -43,7 +42,6 @@ from iris.cluster.controller.schema import (
     task_attempts_table,
     tasks_table,
     user_budgets_table,
-    users_table,
     workers_table,
 )
 from iris.cluster.controller.worker_health import WorkerHealthTracker
@@ -723,31 +721,17 @@ def remove_worker(
 
 
 # ---------------------------------------------------------------------------
-# User / budget writes (previously ControllerDB methods)
+# Budget writes (previously ControllerDB methods)
 # ---------------------------------------------------------------------------
-
-
-@writes_to(users_table)
-def ensure_user(tx: Tx, user_id: str, now: Timestamp, role: str = USER_ROLE_DEFAULT) -> None:
-    """Create user if not exists. Does not update role for existing users."""
-    stmt = sqlite_insert(users_table).values(
-        user_id=user_id,
-        created_at_ms=now,
-        role=role,
-    )
-    stmt = stmt.on_conflict_do_nothing(index_elements=["user_id"])
-    tx.execute(stmt)
-
-
-@writes_to(users_table)
-def set_user_role(tx: Tx, user_id: str, role: str) -> None:
-    """Update the role for an existing user."""
-    tx.execute(update(users_table).where(users_table.c.user_id == user_id).values(role=role))
 
 
 @writes_to(user_budgets_table)
 def set_user_budget(tx: Tx, user_id: str, budget_limit: int, max_band: int, now: Timestamp) -> None:
-    """Insert or update a user's budget configuration."""
+    """Insert or update a user's budget configuration.
+
+    ``user_id`` is a plain owner string with no ``users`` row required: a budget
+    can be set for any id.
+    """
     stmt = sqlite_insert(user_budgets_table).values(
         user_id=user_id,
         budget_limit=budget_limit,

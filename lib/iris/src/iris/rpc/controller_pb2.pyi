@@ -464,7 +464,7 @@ class Controller(_message.Message):
         worker_count: int
         def __init__(self, checkpoint_path: _Optional[str] = ..., created_at: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., job_count: _Optional[int] = ..., task_count: _Optional[int] = ..., worker_count: _Optional[int] = ...) -> None: ...
     class UserSummary(_message.Message):
-        __slots__ = ("user", "task_state_counts", "job_state_counts")
+        __slots__ = ("user", "task_state_counts", "job_state_counts", "role")
         class TaskStateCountsEntry(_message.Message):
             __slots__ = ("key", "value")
             KEY_FIELD_NUMBER: _ClassVar[int]
@@ -482,10 +482,12 @@ class Controller(_message.Message):
         USER_FIELD_NUMBER: _ClassVar[int]
         TASK_STATE_COUNTS_FIELD_NUMBER: _ClassVar[int]
         JOB_STATE_COUNTS_FIELD_NUMBER: _ClassVar[int]
+        ROLE_FIELD_NUMBER: _ClassVar[int]
         user: str
         task_state_counts: _containers.ScalarMap[str, int]
         job_state_counts: _containers.ScalarMap[str, int]
-        def __init__(self, user: _Optional[str] = ..., task_state_counts: _Optional[_Mapping[str, int]] = ..., job_state_counts: _Optional[_Mapping[str, int]] = ...) -> None: ...
+        role: str
+        def __init__(self, user: _Optional[str] = ..., task_state_counts: _Optional[_Mapping[str, int]] = ..., job_state_counts: _Optional[_Mapping[str, int]] = ..., role: _Optional[str] = ...) -> None: ...
     class ListUsersRequest(_message.Message):
         __slots__ = ()
         def __init__(self) -> None: ...

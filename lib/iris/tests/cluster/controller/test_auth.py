@@ -13,7 +13,6 @@ from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from iris.cluster.bundle import BundleStore
 from iris.cluster.config import AuthConfig, GcpAuthConfig, IapAuthConfig
-from iris.cluster.controller import reads, writes
 from iris.cluster.controller.auth import (
     CONTROL_PLANE_AUDIENCES,
     FINELOG_AUDIENCE,
@@ -21,7 +20,7 @@ from iris.cluster.controller.auth import (
     WORKER_USER,
     ControllerAuth,
     JwtTokenManager,
-    _make_iap_role_resolver,
+    RolePolicy,
     create_controller_auth,
     request_auth_policy,
     require_persistent_signing_key,
@@ -49,7 +48,6 @@ from rigging.server_auth import (
     get_verified_identity,
     requires_auth,
 )
-from rigging.timing import Timestamp
 from rigging.token_authority import JwksVerifier, JwtSigner, generate_ed25519_keypair, signing_key_from_private_pem
 from sqlalchemy import text
 from starlette.responses import JSONResponse
@@ -379,7 +377,7 @@ def test_endpoint_token_surfaces_endpoint_as_audience():
 # -- CIDR network-location auth -------------------------------------------------
 
 
-def test_cidr_only_auth_config_enables_request_auth(db: ControllerDB):
+def test_cidr_only_auth_config_enables_request_auth():
     """An auth block with only trusted_cidrs turns auth on.
 
     Direct in-network peers resolve to an admin identity; external and
@@ -387,7 +385,7 @@ def test_cidr_only_auth_config_enables_request_auth(db: ControllerDB):
     through the same policy.
     """
     auth = create_controller_auth(
-        AuthConfig(trusted_cidrs=["10.0.0.0/8"]), db=db, cluster_name=_CLUSTER, signing_key_pem=_SIGNING_KEY
+        AuthConfig(trusted_cidrs=["10.0.0.0/8"]), cluster_name=_CLUSTER, signing_key_pem=_SIGNING_KEY
     )
     policy = request_auth_policy(auth)
     assert not policy.allows_anonymous
@@ -657,26 +655,58 @@ def test_dashboard_interceptor_login_reachable_for_unprovisioned_iap_browser():
     assert result == "ok"
 
 
-def test_iap_role_resolver_maps_provisioned_and_unknown_emails(db: ControllerDB):
-    # The resolver the controller injects into IapAssertionVerifier: a provisioned
-    # email gets its stored role; an unprovisioned email gets the configured
-    # fallback role.
-    now = Timestamp.now()
-    with db.transaction() as tx:
-        writes.ensure_user(tx, "admin@example.com", now, role="admin")
-        writes.set_user_role(tx, "admin@example.com", "admin")
-        writes.ensure_user(tx, "user@example.com", now, role="user")
+def test_role_policy_resolves_admin_worker_and_default():
+    # The in-memory, config-derived role map: config-listed admins -> admin, the
+    # internal worker identity -> worker, everyone else -> the default role.
+    policy = RolePolicy(admins=frozenset({"alice@example.com"}), default_role="user")
+    assert policy.role_for("alice@example.com") == "admin"
+    assert policy.role_for(WORKER_USER) == "worker"
+    assert policy.role_for("stranger@example.com") == "user"
 
-    resolve = _make_iap_role_resolver(db, DASHBOARD_ROLE)
-    assert resolve("admin@example.com") == "admin"
-    assert resolve("user@example.com") == "user"
-    assert resolve("stranger@example.com") == DASHBOARD_ROLE
+    # unprovisioned_role=admin (IAP's own allowlist as the sole gate): a non-listed
+    # email acts as admin via the default; the worker identity is still worker.
+    open_policy = RolePolicy(admins=frozenset(), default_role="admin")
+    assert open_policy.role_for("stranger@example.com") == "admin"
+    assert open_policy.role_for(WORKER_USER) == "worker"
 
-    # unprovisioned_role=admin (IAP's own allowlist as the sole gate): strangers
-    # act as admin, a provisioned user still gets their stored role.
-    resolve_admin = _make_iap_role_resolver(db, "admin")
-    assert resolve_admin("user@example.com") == "user"
-    assert resolve_admin("stranger@example.com") == "admin"
+
+def test_role_policy_default_role_from_provider():
+    # default_role is wired from the provider: IAP uses its unprovisioned_role, gcp
+    # uses "user". These are the roles an authenticated non-admin resolves to.
+    iap = create_controller_auth(
+        AuthConfig(iap=IapAuthConfig(audiences=["desktop-client-id"], unprovisioned_role="dashboard")),
+        cluster_name=_CLUSTER,
+        signing_key_pem=_SIGNING_KEY,
+    )
+    assert iap.role_policy is not None
+    assert iap.role_policy.default_role == DASHBOARD_ROLE
+
+    gcp = create_controller_auth(
+        AuthConfig(gcp=GcpAuthConfig(project_id="p")),
+        cluster_name=_CLUSTER,
+        signing_key_pem=_SIGNING_KEY,
+    )
+    assert gcp.role_policy is not None
+    assert gcp.role_policy.default_role == "user"
+
+
+def test_iap_assertion_resolver_is_the_role_policy():
+    # The controller injects role_policy.role_for as the IAP assertion resolver, so a
+    # config-listed admin email resolves to admin and everyone else to the default —
+    # all in memory, no DB.
+    auth = create_controller_auth(
+        AuthConfig(
+            iap=IapAuthConfig(
+                signed_header_audience="/projects/1/global/backendServices/2", unprovisioned_role="dashboard"
+            ),
+            admin_users=["admin@example.com"],
+        ),
+        cluster_name=_CLUSTER,
+        signing_key_pem=_SIGNING_KEY,
+    )
+    assert auth.role_policy is not None
+    assert auth.role_policy.role_for("admin@example.com") == "admin"
+    assert auth.role_policy.role_for("stranger@example.com") == DASHBOARD_ROLE
 
 
 # -- require_persistent_signing_key --------------------------------------------
@@ -700,18 +730,17 @@ def test_require_persistent_signing_key():
 # -- Controller auth setup -----------------------------------------------------
 
 
-def test_worker_token_verifies(db):
+def test_worker_token_verifies():
     auth = create_controller_auth(
-        AuthConfig(gcp={"project_id": "test-project"}), db=db, cluster_name=_CLUSTER, signing_key_pem=_SIGNING_KEY
+        AuthConfig(gcp={"project_id": "test-project"}), cluster_name=_CLUSTER, signing_key_pem=_SIGNING_KEY
     )
     assert auth.worker_token is not None
     assert auth.verifier.verify(auth.worker_token).user_id == WORKER_USER
 
 
-def test_iap_provider_uses_id_token_login_verifier(db):
+def test_iap_provider_uses_id_token_login_verifier():
     auth = create_controller_auth(
         AuthConfig(iap={"audiences": ["desktop-client-id"]}),
-        db=db,
         cluster_name=_CLUSTER,
         signing_key_pem=_SIGNING_KEY,
     )
@@ -719,66 +748,65 @@ def test_iap_provider_uses_id_token_login_verifier(db):
     assert auth.verifier.verify(auth.worker_token).user_id == WORKER_USER
 
 
-def test_iap_provider_requires_audiences_or_assertion(db):
+def test_iap_provider_requires_audiences_or_assertion():
     with pytest.raises(ValueError, match=r"audiences .* signed_header_audience"):
         create_controller_auth(
             AuthConfig(iap={"url": "https://iris-marin.example.com"}),
-            db=db,
             cluster_name=_CLUSTER,
             signing_key_pem=_SIGNING_KEY,
         )
 
 
-def test_worker_token_differs_after_restart(db):
+def test_worker_token_differs_after_restart():
     # A persistent signing key is shared across restarts, so a token minted before
     # the restart still verifies after it — but each start mints a fresh worker jti,
     # so the tokens differ. Old worker tokens simply age out at their TTL.
     signing_key_pem = generate_ed25519_keypair().private_pem
     config = AuthConfig(gcp={"project_id": "test-project"})
-    auth1 = create_controller_auth(config, db=db, cluster_name=_CLUSTER, signing_key_pem=signing_key_pem)
-    auth2 = create_controller_auth(config, db=db, cluster_name=_CLUSTER, signing_key_pem=signing_key_pem)
+    auth1 = create_controller_auth(config, cluster_name=_CLUSTER, signing_key_pem=signing_key_pem)
+    auth2 = create_controller_auth(config, cluster_name=_CLUSTER, signing_key_pem=signing_key_pem)
     assert auth1.worker_token != auth2.worker_token
     # Both still verify (old not revoked) under auth2's verifier (same signing key).
     assert auth2.verifier.verify(auth1.worker_token).user_id == WORKER_USER
     assert auth2.verifier.verify(auth2.worker_token).user_id == WORKER_USER
 
 
-def test_admin_users_bootstrapped(db):
-    create_controller_auth(
+def test_admin_users_resolve_to_admin_in_role_policy():
+    # Config's admin_users are the authoritative admin set, carried on the in-memory
+    # RolePolicy — no DB projection, no reconciliation.
+    auth = create_controller_auth(
         AuthConfig(gcp={"project_id": "test-project"}, admin_users=["alice"]),
-        db=db,
         cluster_name=_CLUSTER,
         signing_key_pem=_SIGNING_KEY,
     )
-    with db.read_snapshot() as snap:
-        assert reads.get_user_role(snap, "alice") == "admin"
+    assert auth.role_policy is not None
+    assert auth.role_policy.role_for("alice") == "admin"
+    assert auth.role_policy.role_for("bob") == "user"
 
 
-def test_admin_grants_reconciled_on_restart(db):
-    # Config is the authoritative admin set: a restart with a user removed from
-    # admin_users downgrades them (the deprovision path), not just grants.
+def test_admin_deprovisioned_by_rebuilding_policy_from_new_config():
+    # Deprovisioning is purely in-memory: rebuild the auth (as a controller restart
+    # does) from config with a user removed from admin_users, and the new RolePolicy
+    # resolves them to the non-admin default — no DB, no reconciliation step.
     def _boot(admin_users):
-        create_controller_auth(
+        return create_controller_auth(
             AuthConfig(gcp={"project_id": "test-project"}, admin_users=admin_users),
-            db=db,
             cluster_name=_CLUSTER,
             signing_key_pem=_SIGNING_KEY,
         )
 
-    _boot(["alice", "bob"])
-    with db.read_snapshot() as snap:
-        assert reads.get_user_role(snap, "alice") == "admin"
-        assert reads.get_user_role(snap, "bob") == "admin"
+    both = _boot(["alice", "bob"])
+    assert both.role_policy.role_for("alice") == "admin"
+    assert both.role_policy.role_for("bob") == "admin"
 
-    _boot(["alice"])  # bob deprovisioned in config, then controller reloaded
-    with db.read_snapshot() as snap:
-        assert reads.get_user_role(snap, "alice") == "admin"
-        assert reads.get_user_role(snap, "bob") == "user"
+    after = _boot(["alice"])  # bob de-listed, then controller reloaded (policy rebuilt)
+    assert after.role_policy.role_for("alice") == "admin"
+    assert after.role_policy.role_for("bob") == "user"
 
 
-def test_login_verifier_set_for_gcp(db):
+def test_login_verifier_set_for_gcp():
     auth = create_controller_auth(
-        AuthConfig(gcp={"project_id": "test-project"}), db=db, cluster_name=_CLUSTER, signing_key_pem=_SIGNING_KEY
+        AuthConfig(gcp={"project_id": "test-project"}), cluster_name=_CLUSTER, signing_key_pem=_SIGNING_KEY
     )
     assert auth.login_verifier is not None
     assert auth.provider == "gcp"
@@ -803,14 +831,20 @@ class _RejectingLoginVerifier:
         raise ValueError("bad identity token")
 
 
-def _login_auth(login_verifier) -> ControllerAuth:
+def _login_auth(login_verifier, role_policy: RolePolicy | None = None) -> ControllerAuth:
     jwt_mgr = _jwt_manager()
-    return ControllerAuth(verifier=jwt_mgr, provider="gcp", login_verifier=login_verifier, jwt_manager=jwt_mgr)
+    return ControllerAuth(
+        verifier=jwt_mgr,
+        provider="gcp",
+        login_verifier=login_verifier,
+        jwt_manager=jwt_mgr,
+        role_policy=role_policy if role_policy is not None else RolePolicy(admins=frozenset(), default_role="user"),
+    )
 
 
-def test_login_mints_verifiable_session_token_with_store_role(db, log_client):
-    """A valid provider token yields a short session JWT carrying the store role,
-    with NO api-key side effect (nothing persisted, nothing revocable)."""
+def test_login_mints_verifiable_session_token_with_policy_role(db, log_client):
+    """A valid provider token yields a short session JWT carrying the config-derived
+    role (no DB), with nothing persisted and nothing revocable."""
     auth = _login_auth(_FakeLoginVerifier("alice@example.com"))
     service = _make_service(db, log_client, auth=auth)
 
@@ -822,11 +856,24 @@ def test_login_mints_verifiable_session_token_with_store_role(db, log_client):
 
     identity = auth.verifier.verify(response.token)
     assert identity.user_id == "alice@example.com"
+    # Non-admin resolves to the policy default.
     assert identity.role == "user"
 
     # The session token's lifetime is the short session TTL, not 30 days.
     claims = jwt.decode(response.token, options={"verify_signature": False})
     assert claims["exp"] - claims["iat"] == SESSION_TOKEN_TTL_SECONDS
+
+
+def test_login_mints_admin_token_for_config_listed_admin(db, log_client):
+    """A config-listed admin's login carries the admin role, resolved from the
+    in-memory RolePolicy — no DB."""
+    auth = _login_auth(
+        _FakeLoginVerifier("carol@example.com"),
+        role_policy=RolePolicy(admins=frozenset({"carol@example.com"}), default_role="user"),
+    )
+    service = _make_service(db, log_client, auth=auth)
+    response = service.login(job_pb2.LoginRequest(identity_token="gcp-id-token"), None)
+    assert auth.verifier.verify(response.token).role == "admin"
 
 
 def test_login_rejects_invalid_provider_token(db, log_client):
@@ -855,25 +902,25 @@ def test_login_not_available_without_login_verifier(db, log_client):
 
 
 def test_login_reflects_downgraded_role_on_fresh_login(db, log_client):
-    """Deprovisioning rides the user store, bounded by the session TTL: after an
-    admin is downgraded in the store, the NEXT login mints a token with the
-    downgraded role (no revocation needed — the old token just expires)."""
-    auth = _login_auth(_FakeLoginVerifier("carol@example.com"))
-    service = _make_service(db, log_client, auth=auth)
+    """Deprovisioning rides the in-memory RolePolicy, bounded by the session TTL:
+    after an admin is de-listed in config and the policy is rebuilt (a restart), the
+    NEXT login mints a token with the downgraded role (no revocation needed — the old
+    token just expires)."""
+    # Grant admin via the policy, then log in — the token carries admin.
+    admin_auth = _login_auth(
+        _FakeLoginVerifier("carol@example.com"),
+        role_policy=RolePolicy(admins=frozenset({"carol@example.com"}), default_role="user"),
+    )
+    first = _make_service(db, log_client, auth=admin_auth).login(job_pb2.LoginRequest(identity_token="t1"), None)
+    assert admin_auth.verifier.verify(first.token).role == "admin"
 
-    # Grant admin in the store, then log in — the token carries admin.
-    now = Timestamp.now()
-    with db.transaction() as tx:
-        writes.ensure_user(tx, "carol@example.com", now, role="admin")
-        writes.set_user_role(tx, "carol@example.com", "admin")
-    first = service.login(job_pb2.LoginRequest(identity_token="t1"), None)
-    assert auth.verifier.verify(first.token).role == "admin"
-
-    # Downgrade in the store; a fresh login now carries the downgraded role.
-    with db.transaction() as tx:
-        writes.set_user_role(tx, "carol@example.com", "user")
-    second = service.login(job_pb2.LoginRequest(identity_token="t2"), None)
-    assert auth.verifier.verify(second.token).role == "user"
+    # Rebuild the auth from config with carol de-listed; a fresh login carries the default.
+    downgraded_auth = _login_auth(
+        _FakeLoginVerifier("carol@example.com"),
+        role_policy=RolePolicy(admins=frozenset(), default_role="user"),
+    )
+    second = _make_service(db, log_client, auth=downgraded_auth).login(job_pb2.LoginRequest(identity_token="t2"), None)
+    assert downgraded_auth.verifier.verify(second.token).role == "user"
 
 
 # -- GetAuthInfo ---------------------------------------------------------------
@@ -881,7 +928,7 @@ def test_login_reflects_downgraded_role_on_fresh_login(db, log_client):
 
 def test_get_auth_info_returns_gcp_provider(db, log_client):
     auth = create_controller_auth(
-        AuthConfig(gcp={"project_id": "test-project"}), db=db, cluster_name=_CLUSTER, signing_key_pem=_SIGNING_KEY
+        AuthConfig(gcp={"project_id": "test-project"}), cluster_name=_CLUSTER, signing_key_pem=_SIGNING_KEY
     )
     service = _make_service(db, log_client, auth=auth)
     response = service.get_auth_info(job_pb2.GetAuthInfoRequest(), None)
@@ -890,7 +937,7 @@ def test_get_auth_info_returns_gcp_provider(db, log_client):
 
 
 def test_get_auth_info_returns_empty_when_no_auth(db, log_client):
-    auth = create_controller_auth(AuthConfig(), db=db, cluster_name=_CLUSTER)
+    auth = create_controller_auth(AuthConfig(), cluster_name=_CLUSTER)
     service = _make_service(db, log_client, auth=auth)
     response = service.get_auth_info(job_pb2.GetAuthInfoRequest(), None)
     assert response.provider == ""
@@ -900,18 +947,22 @@ def test_get_auth_info_returns_empty_when_no_auth(db, log_client):
 # -- Null-auth mode ------------------------------------------------------------
 
 
-def test_null_auth_creates_anonymous_admin_and_worker_token(db):
-    auth = create_controller_auth(AuthConfig(), db=db, cluster_name=_CLUSTER)
-    with db.read_snapshot() as snap:
-        assert reads.get_user_role(snap, "anonymous") == "admin"
+def test_null_auth_yields_worker_token_and_default_policy():
+    # Null-auth mints a worker token and a verifier but no login provider. The
+    # anonymous/loopback admin identity is assigned by the permissive auth chain,
+    # not resolved through the RolePolicy (whose default is irrelevant here) — there
+    # is no users table to consult.
+    auth = create_controller_auth(AuthConfig(), cluster_name=_CLUSTER)
     assert auth.verifier is not None
     assert auth.worker_token is not None
     assert auth.provider is None
     assert auth.login_verifier is None
+    assert auth.role_policy is not None
+    assert auth.role_policy.role_for(WORKER_USER) == "worker"
 
 
 def test_null_auth_get_current_user(db, log_client):
-    auth = create_controller_auth(AuthConfig(), db=db, cluster_name=_CLUSTER)
+    auth = create_controller_auth(AuthConfig(), cluster_name=_CLUSTER)
     service = _make_service(db, log_client, auth=auth)
     jwt_token = auth.jwt_manager.create_token("anonymous", "admin", "iris_s_test", ttl_seconds=SESSION_TOKEN_TTL_SECONDS)
     reset = _verified_identity.set(auth.verifier.verify(jwt_token))

@@ -44,8 +44,6 @@ from sqlalchemy.types import TypeDecorator
 
 from iris.cluster.types import LOCAL_CLUSTER, JobName, WorkerId
 
-USER_ROLE_DEFAULT = "user"
-USER_ROLE_CHECK = "role IN ('admin', 'user', 'worker')"
 WORKER_ATTR_VALUE_TYPE_CHECK = "value_type IN ('str', 'int', 'float')"
 
 
@@ -242,22 +240,13 @@ meta_table = Table(
 )
 
 
-users_table = Table(
-    "users",
-    metadata,
-    Column("user_id", String, primary_key=True),
-    Column("created_at_ms", TimestampMsType, nullable=False),
-    Column("display_name", String),
-    Column("role", String, nullable=False, server_default=USER_ROLE_DEFAULT),
-    CheckConstraint(USER_ROLE_CHECK, name="users_role_check"),
-)
-
-
 jobs_table = Table(
     "jobs",
     metadata,
     Column("job_id", JobNameType, primary_key=True),
-    Column("user_id", String, ForeignKey("users.user_id"), nullable=False),
+    # Plain owner string: roles are resolved from the config-derived RolePolicy
+    # (see controller/auth.py), so there is no ``users`` table to anchor an FK to.
+    Column("user_id", String, nullable=False),
     Column("parent_job_id", JobNameType, ForeignKey("jobs.job_id", ondelete="CASCADE")),
     Column("root_job_id", String, nullable=False),
     Column("depth", Integer, nullable=False),
@@ -560,7 +549,9 @@ slices_table = Table(
 user_budgets_table = Table(
     "user_budgets",
     metadata,
-    Column("user_id", String, ForeignKey("users.user_id"), primary_key=True),
+    # Standalone runtime state (set via ``iris user budget set``); ``user_id`` is a
+    # plain-string PK with no FK — a budget can be set for any owner id.
+    Column("user_id", String, primary_key=True),
     Column("budget_limit", Integer, nullable=False, server_default="0"),
     Column("max_band", Integer, nullable=False, server_default="2"),
     Column("updated_at_ms", TimestampMsType, nullable=False),

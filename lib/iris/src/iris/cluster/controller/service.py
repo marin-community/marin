@@ -67,6 +67,7 @@ from iris.cluster.controller.schema import (
     local_tasks,
     task_attempts_table,
     tasks_table,
+    user_budgets_table,
     worker_attributes_table,
     workers_table,
 )
@@ -832,15 +833,17 @@ _ACTIVE_JOB_STATES = (
 def _live_user_stats(db: ControllerDB) -> list[UserStats]:
     """Aggregate job/task counts per user.
 
-    The user set is every owner who has ever submitted a job (any state), so the
-    landing page lists people even when none of their jobs are currently active.
-    The per-state counts only cover active (non-terminal) jobs/tasks, so the
-    Running/Pending/Active columns reflect current load and an idle user shows
-    all zeros rather than disappearing.
+    The user set is every observed owner — everyone who has ever submitted a job
+    (any state) plus anyone with a budget row — derived directly from those tables,
+    never a ``users`` table (there is none). So the landing page lists people even
+    when none of their jobs are currently active. The per-state counts only cover
+    active (non-terminal) jobs/tasks, so the Running/Pending/Active columns reflect
+    current load and an idle user shows all zeros rather than disappearing.
     """
     active_states = list(_ACTIVE_JOB_STATES)
     with db.read_snapshot() as tx:
         user_rows = tx.execute(select(jobs_table.c.user_id).distinct()).all()
+        budget_rows = tx.execute(select(user_budgets_table.c.user_id)).all()
         job_rows = tx.execute(
             select(
                 jobs_table.c.user_id,
@@ -863,6 +866,8 @@ def _live_user_stats(db: ControllerDB) -> list[UserStats]:
             {"active_states": active_states},
         ).all()
     by_user: dict[str, UserStats] = {str(row.user_id): UserStats(user=str(row.user_id)) for row in user_rows}
+    for row in budget_rows:
+        by_user.setdefault(str(row.user_id), UserStats(user=str(row.user_id)))
     for row in job_rows:
         stats = by_user.setdefault(str(row.user_id), UserStats(user=str(row.user_id)))
         stats.job_state_counts[int(row.state)] = int(row.cnt)
@@ -2437,8 +2442,14 @@ class ControllerServiceImpl:
         request: controller_pb2.Controller.ListUsersRequest,
         ctx: Any,
     ) -> controller_pb2.Controller.ListUsersResponse:
-        """Return live per-user aggregate counts for the dashboard."""
+        """Return live per-user aggregate counts for the dashboard.
+
+        The user set is derived from observed owners (jobs + budgets), never a
+        ``users`` table; each user's role is resolved from the in-memory,
+        config-derived :class:`RolePolicy` (no DB projection).
+        """
         del request, ctx
+        role_policy = self._auth.role_policy
         users = sorted(
             _live_user_stats(self._db),
             key=lambda entry: (
@@ -2453,6 +2464,7 @@ class ControllerServiceImpl:
                     user=entry.user,
                     task_state_counts=_task_state_counts_for_summary(entry.task_state_counts),
                     job_state_counts=_job_state_counts_for_summary(entry.job_state_counts),
+                    role=role_policy.role_for(entry.user) if role_policy else "",
                 )
                 for entry in users
             ]
@@ -2585,6 +2597,8 @@ class ControllerServiceImpl:
             raise ConnectError(Code.UNIMPLEMENTED, "Login not available (no identity provider configured)")
         if not self._auth.jwt_manager:
             raise ConnectError(Code.INTERNAL, "JWT manager not configured")
+        if not self._auth.role_policy:
+            raise ConnectError(Code.INTERNAL, "Role policy not configured")
 
         try:
             login_identity = self._auth.login_verifier.verify(request.identity_token)
@@ -2596,17 +2610,15 @@ class ControllerServiceImpl:
         if username.startswith("system:"):
             raise ConnectError(Code.PERMISSION_DENIED, "Reserved username prefix")
 
-        now = Timestamp.now()
-        with self._db.transaction() as _tx:
-            writes.ensure_user(_tx, username, now)
-            role = reads.get_user_role(_tx, username)
+        role = self._auth.role_policy.role_for(username)
 
         # Short-lived, fully stateless session token: nothing is persisted and
         # nothing is revoked. The jti is a fresh random id used ONLY for log
-        # correlation — never stored, never revocable. Role comes from the user
-        # store, which is reconciled from cluster config on controller start, so a
-        # user deprovisioned in config (then reloaded) is downgraded there; a token
-        # already minted keeps its old role only until it ages out at this TTL.
+        # correlation — never stored, never revocable. Role comes from the in-memory,
+        # config-derived RolePolicy (no DB); a user deprovisioned in config (then
+        # reloaded, rebuilding the policy) resolves to the non-admin default on their
+        # next login, while a token already minted keeps its old role only until it
+        # ages out at this TTL.
         jti = f"iris_s_{secrets.token_hex(8)}"
         jwt_token = self._auth.jwt_manager.create_token(username, role, jti, ttl_seconds=SESSION_TOKEN_TTL_SECONDS)
         logger.info("Login: user=%s, role=%s, jti=%s (session ttl=%ds)", username, role, jti, SESSION_TOKEN_TTL_SECONDS)
@@ -2776,7 +2788,6 @@ class ControllerServiceImpl:
             raise ConnectError(Code.INVALID_ARGUMENT, f"Invalid max_band: {request.max_band}")
         now = Timestamp.now()
         with self._db.transaction() as _tx:
-            writes.ensure_user(_tx, request.user_id, now)
             writes.set_user_budget(_tx, request.user_id, request.budget_limit, max_band, now)
         return controller_pb2.Controller.SetUserBudgetResponse()
 

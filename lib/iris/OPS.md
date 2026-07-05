@@ -278,15 +278,16 @@ iris user budget list                 # per-user budget limits
 ```
 
 Tokens are stateless and short-lived (1h sessions): there is no API-key store and
-no revocation list. Authorization is **config-driven** — admin grants live in the
-cluster config (`auth.admin_users`) and are reconciled into the user store on every
-controller start (grants applied, and de-listed admins downgraded). To deprovision
-a user, remove them from `auth.admin_users` and reload/restart the controller; the
-reconcile revokes their stored admin role. A session token already minted keeps its
-old role only until it expires (≤ the 1h session TTL). There is no way to revoke an
-individual live token; the only fleet-wide kill switch is rotating the cluster
-signing key (`iris cluster init-keys` + redeploy), which re-auths every client and
-worker. Re-run `iris login` to refresh an expired session.
+no revocation list. Authorization is **config-driven** — roles are resolved from an
+in-memory `RolePolicy` built from the cluster config at controller start (admins from
+`auth.admin_users`, a provider default for everyone else). There is no `users` table
+and no reconciliation: config is the sole source of truth. To deprovision a user,
+remove them from `auth.admin_users` and reload/restart the controller; the rebuilt
+policy resolves them to the non-admin default on their next login. A session token
+already minted keeps its old role only until it expires (≤ the 1h session TTL). There
+is no way to revoke an individual live token; the only fleet-wide kill switch is
+rotating the cluster signing key (`iris cluster init-keys` + redeploy), which
+re-auths every client and worker. Re-run `iris login` to refresh an expired session.
 
 ### Calling the IAP endpoint with `curl`
 

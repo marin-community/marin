@@ -193,7 +193,6 @@ def run_controller_serve(
 
     auth = create_controller_auth(
         cluster_config.auth,
-        db=db,
         cluster_name=cluster_config.name,
         signing_key_pem=signing_key_pem,
     )
