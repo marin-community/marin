@@ -382,10 +382,14 @@ def require_persistent_signing_key(relay_address: str | None, signing_key_pem: s
     anchor, so a controller with ``finelog.relay_address`` set must anchor a persistent
     ``auth.signing_key``.
 
-    Nothing else needs it: IAP authenticates each user request and the controller mints no
-    user tokens; workers are trusted by cidr; federation peers authenticate as clients. So
-    the ephemeral fallback in :func:`create_controller_auth` is fine for every non-relay
-    cluster, including dev (``LocalCluster``).
+    The key also signs worker tokens and endpoint-scoped ``/proxy`` tokens, but the issuing
+    controller verifies those itself, so an ephemeral key is fine for them — a restart just
+    expires any outstanding proxy share-links early. Only a relay token is pinned by an
+    external verifier, so only relay makes persistence a correctness requirement. IAP
+    authenticates each user request and the controller mints no user tokens; federation
+    peers authenticate as clients. So the ephemeral fallback in
+    :func:`create_controller_auth` is fine for every non-relay cluster, including dev
+    (``LocalCluster``).
     """
     if not relay_address or signing_key_pem is not None:
         return
