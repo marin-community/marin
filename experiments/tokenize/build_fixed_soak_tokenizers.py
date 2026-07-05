@@ -26,6 +26,7 @@ Run on a cluster CPU box (needs ``$MARIN_PREFIX``, region-local S3 write, and HF
 
 from __future__ import annotations
 
+import argparse
 import logging
 import os
 from concurrent.futures import ProcessPoolExecutor, as_completed
@@ -44,6 +45,21 @@ _OUT_BASE = "/tmp/fixed_soak_tokenizers"
 
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument(
+        "--arms",
+        help="comma-separated fixed-spec names to (re)build; default all of FIXED_SOAK_SPECS",
+    )
+    args = ap.parse_args()
+
+    specs = FIXED_SOAK_SPECS
+    if args.arms:
+        wanted = {name.strip() for name in args.arms.split(",")}
+        unknown = wanted - {s.name for s in FIXED_SOAK_SPECS}
+        if unknown:
+            raise SystemExit(f"unknown --arms {sorted(unknown)}; known: {[s.name for s in FIXED_SOAK_SPECS]}")
+        specs = tuple(s for s in FIXED_SOAK_SPECS if s.name in wanted)
+
     prefix = os.environ["MARIN_PREFIX"].rstrip("/")
     corpus_dir = f"{prefix}/raw/soak_tokenizer_corpus/{_CORPUS_VERSION}"
 
@@ -52,7 +68,6 @@ def main() -> None:
     total_mb = sum(len(t.encode("utf-8")) for t in texts) / 1e6
     logger.info("loaded corpus: %d docs, %.1f MB", len(texts), total_mb)
 
-    specs = FIXED_SOAK_SPECS
     logger.info("training %d fixed soak tokenizers: %s", len(specs), [s.name for s in specs])
 
     # Fork workers share the parent's already-loaded corpus copy-on-write, so parallelism does not

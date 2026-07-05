@@ -226,16 +226,20 @@ SOAK_ARMS: tuple[TokenizerArm, ...] = (
     ),
 )
 
-# Fixed soak arms: the base 64k/128k SuperBPE and individual-digit-pretok SOAK_ARMS above,
-# retrained after commit 11bd2f4e9c fixed the stage-2 corpus sampling bug (the soak-* arms
-# above were trained on an English-only stage-2 sample; see build_fixed_soak_tokenizers.py).
-# Must match train_tokenizers.py's `_FIXED_SOAK_BASE_NAMES`. Refs follow the same
-# `trained/<name>` convention push_trained_tokenizers.arm_ref produces.
+# Fixed soak arms: the base 64k/128k SuperBPE, the individual-digit-pretok, and the Llama-3-word-
+# regex-pretok SOAK_ARMS above, retrained after commit 11bd2f4e9c fixed the stage-2 corpus
+# sampling bug (the soak-* arms above were trained on an English-only stage-2 sample; see
+# build_fixed_soak_tokenizers.py). The -llama variants hold the stage-1 pretokenizer equal to the
+# marin-128k baseline, so a SuperBPE win over the baseline can be attributed to superwords rather
+# than the pretokenizer regex. Must match train_tokenizers.py's `_FIXED_SOAK_BASE_NAMES`. Refs
+# follow the same `trained/<name>` convention push_trained_tokenizers.arm_ref produces.
 _FIXED_SOAK_BASE_NAMES: tuple[str, ...] = (
     "soak-superbpe-64k",
     "soak-superbpe-128k",
     "soak-superbpe-64k-digits",
     "soak-superbpe-128k-digits",
+    "soak-superbpe-64k-llama",
+    "soak-superbpe-128k-llama",
 )
 
 SOAK_FIXED_ARMS: tuple[TokenizerArm, ...] = tuple(

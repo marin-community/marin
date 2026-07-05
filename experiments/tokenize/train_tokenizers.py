@@ -140,6 +140,8 @@ _FIXED_SOAK_BASE_NAMES: tuple[str, ...] = (
     "soak-superbpe-128k",
     "soak-superbpe-64k-digits",
     "soak-superbpe-128k-digits",
+    "soak-superbpe-64k-llama",
+    "soak-superbpe-128k-llama",
 )
 
 FIXED_SOAK_SPECS: tuple[TrainSpec, ...] = tuple(

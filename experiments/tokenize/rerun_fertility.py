@@ -4,9 +4,10 @@
 """Measure per-arm per-domain fertility for the corrected soak tokenizer re-run.
 
 Commit 11bd2f4e9c fixed a stage-2 sampling bug in ``train_tokenizers.py`` (see
-``validate_stage2_fix.py`` for the full story); the corrected soak re-run trains six arms —
-the four stage-2-fixed SuperBPE soak variants plus the off-the-shelf ``superbpe-128k`` and the
-incumbent ``marin-128k`` baseline — and this script measures each arm's fertility (tokens/byte)
+``validate_stage2_fix.py`` for the full story); the corrected soak re-run trains eight arms —
+the six stage-2-fixed SuperBPE soak variants (base, digit-pretok, and Llama-3-word-regex-pretok
+at 64k and 128k) plus the off-the-shelf ``superbpe-128k`` and the incumbent ``marin-128k``
+baseline — and this script measures each arm's fertility (tokens/byte)
 per domain over the same soak corpus, so the training run can be scored for feBPB once it
 finishes.
 
@@ -52,6 +53,8 @@ RERUN_ARM_NAMES: tuple[str, ...] = (
     "soak-superbpe-128k-fixed",
     "soak-superbpe-64k-digits-fixed",
     "soak-superbpe-128k-digits-fixed",
+    "soak-superbpe-64k-llama-fixed",
+    "soak-superbpe-128k-llama-fixed",
     "superbpe-128k",
     "marin-128k",
 )
