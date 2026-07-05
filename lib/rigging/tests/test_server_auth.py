@@ -8,7 +8,6 @@ import pytest
 from connectrpc._headers import Headers
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
-from mock_verifier import MockVerifier
 from rigging.server_auth import (
     ANONYMOUS_ADMIN,
     AuthRequest,
@@ -24,6 +23,7 @@ from rigging.server_auth import (
     require_identity,
     resolve_auth,
 )
+from rigging.testing import MockVerifier
 
 
 @dataclass(frozen=True)

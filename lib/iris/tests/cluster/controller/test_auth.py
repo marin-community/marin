@@ -47,13 +47,13 @@ from rigging.server_auth import (
     get_verified_identity,
     requires_auth,
 )
+from rigging.testing import MockVerifier
 from rigging.token_authority import JwksVerifier, JwtSigner, generate_ed25519_keypair, signing_key_from_private_pem
 from sqlalchemy import text
 from starlette.responses import JSONResponse
 from starlette.routing import Route
 from starlette.testclient import TestClient
 from tests.cluster.controller._test_support import ControllerTestState
-from tests.mock_verifier import MockVerifier
 
 _TEST_TOKEN = "valid-test-token"
 _TEST_USER = "test-user"

@@ -20,7 +20,7 @@ from rigging.server_auth import (
     is_trusted_loopback,
     resolve_auth,
 )
-from tests.mock_verifier import MockVerifier
+from rigging.testing import MockVerifier
 
 from tests.conftest import _make_controller_only_config
 

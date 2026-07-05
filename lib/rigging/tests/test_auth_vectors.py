@@ -13,7 +13,6 @@ import json
 from importlib.resources import files
 
 import pytest
-from mock_verifier import MockVerifier
 from rigging.auth_config import AuthStackConfig
 from rigging.server_auth import (
     AnonymousAuthenticator,
@@ -26,6 +25,7 @@ from rigging.server_auth import (
     LoopbackAuthenticator,
     RequestAuthPolicy,
 )
+from rigging.testing import MockVerifier
 
 # The mock jwt verifier accepts exactly the token "valid".
 _MOCK_JWT_VERIFIER = MockVerifier({"valid": "vector-user"})

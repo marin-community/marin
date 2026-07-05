@@ -5,7 +5,6 @@
 compilation into an authenticator chain (RequestAuthPolicy.from_config)."""
 
 import pytest
-from mock_verifier import MockVerifier
 from rigging.auth_config import (
     AnonymousLayer,
     AuthStackConfig,
@@ -25,6 +24,7 @@ from rigging.server_auth import (
     RequestAuthPolicy,
     VerifiedIdentity,
 )
+from rigging.testing import MockVerifier
 
 
 class _FakeAssertionVerifier:

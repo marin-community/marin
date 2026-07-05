@@ -47,13 +47,13 @@ from iris.cluster.types import DEFAULT_BACKEND_ID, JobName, UserBudgetDefaults, 
 from iris.rpc import controller_pb2, job_pb2, vm_pb2
 from iris.time_proto import timestamp_to_proto
 from rigging.server_auth import RequestAuthPolicy
+from rigging.testing import MockVerifier
 from rigging.timing import Timestamp
 from sqlalchemy import func, select
 from sqlalchemy import update as sa_update
 from starlette.testclient import TestClient
 from tests.cluster.controller._test_support import ControllerTestState
 from tests.cluster.controller.transition_driver import WorkerTaskUpdates, apply_task_observations
-from tests.mock_verifier import MockVerifier
 
 from .conftest import (
     check_task_can_be_scheduled,
