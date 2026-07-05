@@ -57,6 +57,12 @@ improvement over the stock Llama-3 tokenizer** for target grug-moe models.
    tokens — a few weeks of production traffic; realistic lifetime ρ (100s–1000s) gives ≥−12%. **The
    ~64k trained SuperBPE + n-gram delivers ≥10% feBPB for grug-moe's actual serving economics.**
 
+> ⚠️ **Lockdown update (EXP-011):** the 24h soak at representative scale (10B-total/500M-active
+> MoE, multi-domain mix) does **not** reproduce these proxy-scale numbers. The same 64k trained
+> SuperBPE construction gives only ~−0.9% feBPB there (not −6.6%), and both the n-gram and 128k
+> levers **reverse to losses**. Treat the proxy scorecard below as the preliminary result the
+> lockdown was built to test; the representative-scale conclusion is in EXP-011.
+
 ### feBPB scorecard (target scale: hidden 6144, 64 layers, 16k ctx, English/math)
 
 Headline table is at **ρ=1** (the conservative, training-balanced weight); the **serving-weighted**
@@ -554,13 +560,25 @@ data already on S3) reach training in ~3 min with ~8 pods; PARTIAL arms re-token
   **fertility already measured** (`scratchpad/soak_fertility.json`, ngram entry added). Phase-1
   serving cost (final): superbpe-128k(-llama) rel_serve **0.864** (−13.5% vs marin), 64k **0.942**,
   digits **1.06–1.14** (digit-split = more tokens). Interim feBPB posted to #6796.
-- **Soak result (6 scored arms, posted to #6796)**: scored at the **common budget**
-  `C_ref=2.07e19` FLOPs (`bakeoff_analysis --ref-budget`, no extrapolation — the rebooted arms
-  reach different max budgets). **All 5 trained SuperBPE arms beat the marin-128k Llama-3 baseline
-  (feBPB 0.9848)**: 64k-llama **0.9478** (−3.8%), 64k-digits 0.9667 (−1.8%), 64k 0.9692 (−1.6%),
-  128k-llama 0.9724 (−1.3%), ngram 0.9799 (−0.5%). Margins are conservative because the common
-  budget is early (~7k steps, steep BPB curves); they widen toward the proxy-scale −4.7%…−6.8% as
-  arms converge — refresh at a higher common budget once the rebooted laggards (06e, 08b) climb.
-  Arms 3 & 5 (128k-plain/digits) unscored — blocked by the leaf-group IB collective hang (#6950);
-  coverage preserved by 64k-plain + 64k-digits + 128k-llama. Ladder+domains:
-  `scratchpad/{ladder_final,domains_final}.json`.
+- **Soak result — FINAL, all 8 arms (posted to #6796)**: the two 128k arms (plain, digits) first
+  looked blocked by a leaf-group IB collective hang, but the root cause was a **levanter
+  tokenizer-staging thread race** — concurrent `build_caches` threads staged the shared tokenizer
+  through one `.tmp` name, so a racy post-copy load fell through to a mirror-only HF ref → 404 →
+  the task died and hung its coscheduled gang at the first collective until JAX's coordination
+  barrier timed out (#6950; fixed in `levanter/tokenizers.py` with unique temp names + a per-ref
+  stage lock). A larger 128k `tokenizer.json` widens the race window, which is why only the 128k
+  arms hit it. With the fix, both arms trained. Converged full-8 feBPB at **C_ref=6e19** (no
+  extrapolation; ranking stable across C_ref 4–6e19 and serving-ratio 1–10), baseline
+  marin-128k=0.9518: **64k-digits 0.9433 (−0.9%)**, 64k-llama 0.9493 (−0.3%), 64k 0.9515 (−0.0%),
+  then baseline, then **128k-digits 0.9588 (+0.7%), 128k-llama 0.9605 (+0.9%), 128k-plain 0.9613
+  (+1.0%), ngram 0.9644 (+1.3%)**. Ladder+domains: `scratchpad/{ladder_8arm,domains_8arm}.json`.
+- **KEY FINDING — the proxy-scale gains do NOT survive the lockdown.** The earlier prediction that
+  margins would widen toward the proxy −4.7…−6.8% as arms converge was **refuted**: they held at
+  ~−0.9%. The same construction (`soak-superbpe-64k` = trained SuperBPE 64k-t32k, the proxy's
+  champion) gives **−6.6% at proxy scale (small, English/math) but only −0.0…−0.9% at
+  representative scale (10B-total/500M-active MoE, multi-domain mix)**. n-gram augmentation and
+  128k SuperBPE — both wins at proxy scale — **reverse to losses** here (+1.3%, +1.0%). Robust
+  across budget and serving weight. Net: the representative-scale uplift from an alternative
+  tokenizer is real but **modest (~1%)**, best from 64k trained SuperBPE with digit-splitting. The
+  washout driver (scale/MoE vs the multi-domain mixture vs English/math) is not yet isolated — a
+  matched English/math-at-scale or multi-domain-at-proxy-scale arm would separate them.
