@@ -20,7 +20,7 @@ Runs two ways:
 
 * **In-cluster** (deployed by :mod:`experiments.datakit.web_explorer.deploy`): binds the
   named Iris port and registers the ``web_explorer`` endpoint so the controller proxy
-  routes ``/proxy/web_explorer/`` to it.
+  routes ``/proxy/datakit_explorer/`` to it.
 * **Local** (``python -m experiments.datakit.web_explorer.server --store gs://...``):
   plain uvicorn on ``--port`` for development.
 """
@@ -67,9 +67,9 @@ _INDEX_HTML = Path(__file__).with_name("index.html")
 _MAX_WORKERS = 8
 
 # Iris named port + endpoint the deployed service binds/registers; the controller
-# proxy routes ``/proxy/web_explorer/`` to the namespaced endpoint. Must match deploy.py.
-PORT_NAME = "web_explorer"
-ENDPOINT_NAME = "/web_explorer"
+# proxy routes ``/proxy/datakit_explorer/`` to the namespaced endpoint. Must match deploy.py.
+PORT_NAME = "datakit_explorer"
+ENDPOINT_NAME = "/datakit_explorer"
 
 # Local-dev fallback: reach ducky through the public IAP-gated proxy (needs an
 # IAP token). In-cluster we use the controller's internal proxy (no token).
@@ -365,7 +365,7 @@ def main() -> None:
     )
 
     # In-cluster: bind the named Iris port and register the endpoint so the
-    # controller proxy routes /proxy/web_explorer/ here. Local dev: plain uvicorn.
+    # controller proxy routes /proxy/datakit_explorer/ here. Local dev: plain uvicorn.
     job_info = get_job_info()
     if job_info is None:
         logger.info("serving locally on http://%s:%d", args.host, args.port)

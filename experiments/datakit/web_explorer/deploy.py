@@ -5,7 +5,7 @@
 
 Like ducky, a routable service needs a *named* Iris port, which ``iris job run``
 can't declare, so we go through the Python submit path
-(``client.submit(..., ports=["web_explorer"])``). The dashboard is CPU-only — it holds
+(``client.submit(..., ports=["datakit_explorer"])``). The dashboard is CPU-only — it holds
 no bulk data: it resolves lineage once, forwards SQL to the ducky service, and
 lazily reads the store's tokenized bucket caches only when the store-cache view is
 sampled — so it asks for a small CPU/RAM slice, not a TPU host.
@@ -84,7 +84,7 @@ def cli(controller_url: str, region: str, name: str, cpu: float, memory: str) ->
     client = IrisClient.remote(controller_url, workspace=Path.cwd())
     job = submit_web_explorer(client, name=name, region=region, cpu=cpu, memory=memory, env_vars=env_vars)
     logger.info(
-        "submitted web_explorer job %s (endpoint %r) — reachable at /proxy/web_explorer/ once running",
+        "submitted web_explorer job %s (endpoint %r) — reachable at /proxy/datakit_explorer/ once running",
         job.job_id,
         PORT_NAME,
     )
