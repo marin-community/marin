@@ -19,6 +19,7 @@ from typing import Any
 
 from finelog.client import LogClient
 from finelog.client.log_client import Table
+from finelog.deploy.config import INTRA_CLUSTER_CIDRS, CidrAuthLayer, auth_policy_json
 from finelog.embedded import require_embedded_server
 from rigging.auth import BearerTokenInjector, StaticTokenProvider
 
@@ -69,7 +70,14 @@ def build_log_stack(
     server = None
     address = log_service_address
     if not address:
-        server = require_embedded_server()(log_dir=str(local_log_dir), host=host)
+        # The embedded fallback is a real network endpoint: this controller and its
+        # workers reach it over the pod network (a non-loopback in-cluster address),
+        # and a port-forward reaches it over loopback. finelog is default-deny and an
+        # unset policy trusts loopback only, so without a cidr layer it would reject
+        # every non-loopback in-cluster client. Trust the private network + loopback,
+        # the same posture a real finelog deploy uses.
+        auth_policy = auth_policy_json((CidrAuthLayer(cidrs=INTRA_CLUSTER_CIDRS),))
+        server = require_embedded_server()(log_dir=str(local_log_dir), host=host, auth_policy=auth_policy)
         address = f"http://{resolve_external_host(host)}:{server.port}"
         logger.info("Local log server ready at %s (log_dir=%s)", address, local_log_dir)
 

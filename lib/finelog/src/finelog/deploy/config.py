@@ -93,6 +93,21 @@ class CidrAuthLayer:
         return {"type": "cidr", "cidrs": list(self.cidrs)}
 
 
+# The private-network + loopback ranges an in-cluster finelog trusts by cidr: its
+# own cluster's pods (CoreWeave is 10.x; the rest of RFC 1918 covers other
+# platforms) plus loopback (a port-forward), never the public internet. The
+# bundled deploy configs (`lib/finelog/config/*.yaml`) spell the same set into
+# their `cidr` layer; the controller's embedded fallback server uses it directly
+# (see iris `build_log_stack`).
+INTRA_CLUSTER_CIDRS: tuple[str, ...] = (
+    "10.0.0.0/8",
+    "172.16.0.0/12",
+    "192.168.0.0/16",
+    "127.0.0.0/8",
+    "::1/128",
+)
+
+
 @dataclass(frozen=True)
 class JwtKeyEntry:
     """A trusted cluster and its Ed25519 delegation **public** keys (PEM).
