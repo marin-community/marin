@@ -3,18 +3,18 @@
 
 """Ordered, reference-based secret resolution shared across Marin services.
 
-A secret-bearing config field is a *reference* (or an ordered list of them)
+A secret-bearing config field is a reference (or an ordered list of them)
 rather than an inlined value, so plaintext never reaches a rendered ConfigMap or
-GCE startup-metadata (#6873). Each reference names *where* a secret lives:
+GCE startup-metadata (#6873). Each reference names where a secret lives:
 
     env:NAME
     file:/abs/path
     gcp-secret://projects/<p>/secrets/<n>/versions/<v>
 
-`resolve_secret_spec` walks the ordered list first-*present*-wins with an
-absent-vs-failed discipline that mirrors the request-auth chain: an *absent*
+`resolve_secret_spec` walks the ordered list first-present-wins with an
+absent-vs-failed discipline that mirrors the request-auth chain: an absent
 source (unset env / missing file / secret NOT_FOUND) skips to the next; a
-*configured-but-erroring* one (denied IAM, unreachable, unreadable, malformed)
+configured-but-erroring one (denied IAM, unreachable, unreadable, malformed)
 raises immediately and never silently shadows to a staler/weaker source.
 
 There is deliberately no ``k8s-secret://`` scheme: the k8s-native path is a
@@ -138,7 +138,7 @@ def _fetch(ref: str) -> str | None:
 def _scheme_of(ref: str) -> str:
     """The source-scheme category of a reference (``env`` / ``file`` / ``gcp-secret``).
 
-    Returns one of the fixed scheme constants — a locator *category*, derived from
+    Returns one of the fixed scheme constants — a locator category, derived from
     ``_FETCHERS`` and never from the secret value or the reference body — so it is
     safe to log while the reference itself (which may name a sensitive path) is not.
     """
@@ -160,8 +160,6 @@ def resolve_secret_spec(spec: str | Sequence[str]) -> ResolvedSecret:
     for ref in refs:
         value = _fetch(ref)  # None ⇒ ABSENT (next); raise ⇒ FAILED (propagate)
         if value is not None:
-            # Log only the source-scheme category (a constant), never the reference
-            # body or the value — the reference can name a sensitive path.
             logger.info("resolved a secret from a %s source", _scheme_of(ref))
             return ResolvedSecret(value=value, source=ref)
     raise SecretResolutionError(f"no secret source produced a value (tried: {', '.join(refs)})")

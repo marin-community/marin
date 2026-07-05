@@ -2612,13 +2612,9 @@ class ControllerServiceImpl:
 
         role = self._auth.role_policy.role_for(username)
 
-        # Short-lived, fully stateless session token: nothing is persisted and
-        # nothing is revoked. The jti is a fresh random id used ONLY for log
-        # correlation — never stored, never revocable. Role comes from the in-memory,
-        # config-derived RolePolicy (no DB); a user deprovisioned in config (then
-        # reloaded, rebuilding the policy) resolves to the non-admin default on their
-        # next login, while a token already minted keeps its old role only until it
-        # ages out at this TTL.
+        # Stateless session token: role comes from the in-memory RolePolicy and the
+        # jti is a log-correlation id (nothing persisted, never revocable). See
+        # controller/auth.py for the deprovisioning/TTL semantics.
         jti = f"iris_s_{secrets.token_hex(8)}"
         jwt_token = self._auth.jwt_manager.create_token(username, role, jti, ttl_seconds=SESSION_TOKEN_TTL_SECONDS)
         logger.info("Login: user=%s, role=%s, jti=%s (session ttl=%ds)", username, role, jti, SESSION_TOKEN_TTL_SECONDS)

@@ -112,8 +112,8 @@ PriorityBandField = Annotated[int, BeforeValidator(_coerce_priority_band)]
 class SecretRef:
     """Marker carried in a field's ``Annotated`` metadata tagging it a secret reference.
 
-    An explicit marker, deliberately *not* the ``is_sensitive_key_name`` name
-    heuristic (which misses ``delegation_key`` and matches the whole non-secret
+    An explicit marker, deliberately not the ``is_sensitive_key_name`` name
+    heuristic (which misses ``signing_key`` and matches the whole non-secret
     ``auth`` block). Only fields typed :data:`SecretRefSpec` are resolved at the
     controller runtime (:func:`resolve_config_secrets`) and guarded against being
     inlined into a rendered deploy artifact (:func:`assert_no_inlined_secrets`).
@@ -561,7 +561,7 @@ class AuthConfig(_OneofConfig):
     # mints an ephemeral in-process keypair (dev / null-auth; tokens do not
     # survive a restart). Never inlined; never stored in the DB.
     signing_key: SecretRefSpec = ""
-    # Retained *previous* public signing keys (SubjectPublicKeyInfo PEMs), inline
+    # Retained previous public signing keys (SubjectPublicKeyInfo PEMs), inline
     # and NOT secret. Served on JWKS alongside the current key during a rotation
     # overlap so verifiers accept tokens minted by the prior key.
     previous_public_keys: tuple[str, ...] = ()
@@ -668,7 +668,7 @@ class BackendConfig(_Config):
 class PeerConfig(_Config):
     """One federation peer: a remote Iris controller this cluster may delegate to.
 
-    A peer is *not* a backend. A backend is a local execution substrate this
+    A peer is not a backend. A backend is a local execution substrate this
     controller drives and folds into its own job DAG; a peer owns its own DAG and
     is handed whole jobs. A peer declares identity, reachability, and trust — never
     capabilities, which the peer advertises live at runtime (the capability
@@ -677,11 +677,9 @@ class PeerConfig(_Config):
 
     ``cluster`` names the peer's cluster manifest, from which the client
     credentials this controller presents to the peer are resolved (the same
-    ``credentials_for`` path every cross-cluster client uses). Empty ``cluster``
-    means loopback / no-auth — a local or same-VPC peer that trusts the connection.
-    An authed peer manifest resolves the client credentials this controller presents
-    through the generic ``credentials_for`` path (the same one every cross-cluster
-    client uses); no shared symmetric secret is held here.
+    ``credentials_for`` path every cross-cluster client uses); no shared symmetric
+    secret is held here. Empty ``cluster`` means loopback / no-auth — a local or
+    same-VPC peer that trusts the connection.
     """
 
     controller_address: str  # peer controller RPC address (reachability)
@@ -699,7 +697,7 @@ class ClusterFinelogConfig(_Config):
 
     The relay authenticates its pushes with a short-lived ``aud="finelog"`` delegation
     JWT minted by THIS controller's signer (its per-cluster EdDSA key), under this
-    cluster's name. The shared finelog verifies it against this controller's *public*
+    cluster's name. The shared finelog verifies it against this controller's public
     key — no shared symmetric secret. The ``aud="finelog"`` binding means the same token
     is rejected by this controller's own control-plane verifier, so it can never be
     replayed at the RPC surface. With no signer (null-auth), no bearer is sent and the
@@ -1074,7 +1072,7 @@ def iter_secret_ref_fields(config: BaseModel) -> Iterator[tuple[BaseModel, str]]
 def resolve_config_secrets(config: IrisClusterConfig) -> IrisClusterConfig:
     """Return a copy with each set-to-a-reference ``SecretRefSpec`` field resolved.
 
-    Called once on the controller *serve* path (never on the deploy/render path,
+    Called once on the controller serve path (never on the deploy/render path,
     which renders references verbatim). Per marked field: an empty value is left
     empty (unset → dev/ephemeral); a value that is a secret reference (or an
     ordered list of them) is replaced by ``resolve_secret_spec(...).value``; a
@@ -1095,7 +1093,7 @@ def resolve_config_secrets(config: IrisClusterConfig) -> IrisClusterConfig:
 def assert_no_inlined_secrets(config: IrisClusterConfig) -> None:
     """Raise if any ``SecretRefSpec`` field holds an inlined (non-reference) literal.
 
-    The #6873 render guard: called at each deploy/render site before serializing
+    Render guard (#6873): called at each deploy/render site before serializing
     config into a broadly-readable ConfigMap / GCE metadata. Empty ⇒ pass (unset;
     resolves via a reference at the controller runtime). A reference ⇒ pass.
     """

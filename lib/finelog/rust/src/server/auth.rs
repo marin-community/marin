@@ -4,42 +4,36 @@
 //! Authenticated ingress front for the finelog server.
 //!
 //! A globally shared finelog receives pushes from many controllers across the
-//! internet, so it can no longer rely on being private behind one controller's
-//! proxy. This module gates every RPC with an ordered stack of auth *layers*,
-//! mirroring rigging's `server_auth` (each layer *allows*, *falls through*, or
-//! *rejects*).
+//! internet, so it cannot rely on being private behind one controller's proxy. This
+//! module gates every RPC with an ordered stack of auth layers, each of which allows,
+//! falls through, or rejects a request (the same shape as rigging's `server_auth`).
 //!
-//! The policy is **default-deny**: a request no layer *allows* is rejected
-//! `Unauthenticated`. Auth is a stack of allow-layers on top of that deny —
-//! there is no "empty means open" path. The interceptor is *always* installed
-//! (see `ServerConfig`); the only variable is the layer list. When nothing is
-//! configured the default is [`AuthPolicy::allow_localhost`] (loopback only), so
-//! a bare finelog is reachable for local debugging but never open to its network.
-//! Two layer kinds compose:
-//! - [`AuthLayer::Jwt`] — a bearer whose **EdDSA (Ed25519)** signature verifies
-//!   against one of a set of trusted per-cluster **public** keys, whose audience is
-//!   exactly `finelog`, and which has not expired, admits the request. This mirrors
-//!   marin's own token model (`JwtSigner` mints `EdDSA` JWTs signed with a
-//!   per-cluster *private* key); each relaying controller mints a short-lived
-//!   finelog-delegation JWT (`aud="finelog"`) and the store verifies it against that
-//!   cluster's public key — the same JWT mechanism the control plane uses, so the
-//!   log plane adds no second credential *system*. The store holds only **public**
-//!   keys (which grant no minting power), verified via `jsonwebtoken` (no hand-rolled
-//!   JWS parsing), and checks signature + `aud="finelog"` + `exp` only (it cannot
+//! The policy is default-deny: a request no layer allows is rejected
+//! `Unauthenticated`. Auth is a stack of allow-layers on top of that deny — there is
+//! no "empty means open" path. The interceptor is always installed (see
+//! `ServerConfig`); the only variable is the layer list. With nothing configured the
+//! default is [`AuthPolicy::allow_localhost`] (loopback only), so a bare finelog is
+//! reachable for local debugging but never open to its network. Two layer kinds
+//! compose:
+//! - [`AuthLayer::Jwt`] — a bearer whose EdDSA (Ed25519) signature verifies against
+//!   one of a set of trusted per-cluster public keys, whose audience is exactly
+//!   `finelog`, and which has not expired, admits the request. Each relaying controller
+//!   mints a short-lived finelog-delegation JWT (`aud="finelog"`) with its per-cluster
+//!   private key and the store verifies it against that cluster's public key — the same
+//!   JWT mechanism the control plane uses, so the log plane adds no second credential
+//!   system. The store holds only public keys (which grant no minting power), verified
+//!   via `jsonwebtoken`, and checks signature + `aud="finelog"` + `exp` only (it cannot
 //!   reach a controller's revocation table, so exposure is TTL-bounded). Requiring
 //!   `aud="finelog"` is the load-bearing cross-plane guard (RFC 8725): a control-plane
-//!   `aud="iris"` token, though signed by the same key, is rejected here — its plane
-//!   is not the log plane. Each cluster may carry MULTIPLE public keys so a key
-//!   rotation overlaps (old + new both verify). Every configured cluster admits
-//!   equally — federation members are mutually trusted for the log plane.
-//! - [`AuthLayer::Cidr`] — a request whose transport peer is in a trusted network
-//!   is admitted without a token. This reproduces today's intra-cluster
-//!   reachability explicitly: a global finelog that also serves its own cluster
-//!   lists that cluster's loopback/VPC ranges (e.g. `127.0.0.0/8`, `10.0.0.0/8`)
-//!   so local clients keep working without a JWT, while remote pushes must sign.
-//!   CIDR matches the transport peer only (never an `X-Forwarded-For` value), the
-//!   same distrust of spoofable `X-Forwarded-For` that rigging's loopback check
-//!   applies.
+//!   `aud="iris"` token, though signed by the same key, is rejected here. Each cluster
+//!   may carry multiple public keys so a key rotation overlaps (old + new both verify).
+//!   Every configured cluster admits equally — federation members are mutually trusted
+//!   for the log plane.
+//! - [`AuthLayer::Cidr`] — a request whose transport peer is in a trusted network is
+//!   admitted without a token, so a finelog that also serves its own cluster lists that
+//!   cluster's loopback/VPC ranges (e.g. `127.0.0.0/8`, `10.0.0.0/8`) and local clients
+//!   reach it without a JWT while remote pushes must sign. CIDR matches the transport
+//!   peer only, never a spoofable `X-Forwarded-For` value.
 //!
 //! The layers are walked in order: the first `Allow` admits, the first `Reject`
 //! denies, and a request no layer claims is denied. Order matters — the CIDR
@@ -162,7 +156,7 @@ fn prefix_matches(net: &[u8], addr: &[u8], prefix_len: u8) -> bool {
 }
 
 /// A trusted per-cluster delegation issuer: the cluster it authenticates and the
-/// set of Ed25519 **public** keys that verify its tokens. A cluster carries more
+/// set of Ed25519 public keys that verify its tokens. A cluster carries more
 /// than one key only across a rotation overlap (old + new both accepted). `Debug`
 /// renders the cluster and key count but never key material (public keys are not
 /// secret, but there is no reason to spill PEM into logs).
@@ -358,7 +352,7 @@ struct JwtClaims {
     exp: i64,
 }
 
-/// An ordered stack of auth layers with a **default-deny** terminal. Always
+/// An ordered stack of auth layers with a default-deny terminal. Always
 /// installed (see `ServerConfig`); the private default is [`allow_localhost`].
 ///
 /// [`allow_localhost`]: AuthPolicy::allow_localhost

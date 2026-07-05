@@ -3,11 +3,11 @@
 
 """Server-side authentication: verify a bearer token, bind identity, enforce a policy.
 
-The companion to ``rigging.auth`` (which *attaches* a token on the client). This
-module *verifies* one on the server and binds the resulting identity for the
+The companion to ``rigging.auth`` (which attaches a token on the client). This
+module verifies one on the server and binds the resulting identity for the
 request: the Google-credential verifiers (GCP access token, IAP OIDC ID token,
-IAP signed-header assertion), a static-token verifier, the authenticator chain
-that resolves a request to an identity, and the enforcement points a service
+IAP signed-header assertion), the authenticator chain that resolves a request to
+an identity, and the enforcement points a service
 mounts unconditionally — ``PolicyAuthInterceptor`` for Connect RPCs and
 ``RouteAuthMiddleware`` for HTTP routes annotated ``@public`` / ``@requires_auth``.
 
@@ -17,7 +17,7 @@ a null-auth chain ends in an anonymous-admin terminal
 (``RequestAuthPolicy.permissive``), and the enforcement points behave correctly
 under either.
 
-It carries no service-specific policy — no token *minting*, no role semantics, no
+It carries no service-specific policy — no token minting, no role semantics, no
 RBAC. A service supplies those: it injects its own ``TokenVerifier`` (e.g. one
 that checks JWTs it signed) and a role resolver, reads the bound identity via
 ``get_verified_identity``, and authorizes against its own policy.
@@ -261,7 +261,7 @@ class IapAssertionVerifier:
 
     IAP signs a JWT asserting the authenticated identity and attaches it to every
     request it forwards. Verifying its signature and ``aud`` proves the request
-    genuinely passed through IAP for *this* backend, so the asserted email can be
+    genuinely passed through IAP for this backend, so the asserted email can be
     trusted without a service JWT — an internal caller that bypasses the load
     balancer cannot forge it.
 
@@ -305,10 +305,10 @@ def _direct_peer_ip(client_address: str | None, headers: dict) -> ipaddress.IPv4
     """Return the transport-peer IP of a genuine direct connection, else None.
 
     A connection counts as direct iff its transport peer parses as ``ip:port``
-    with a nonzero port *and* the request carries no ``X-Forwarded-For``
+    with a nonzero port and the request carries no ``X-Forwarded-For``
     header. This is the shared trust gate for every network-location
     authenticator (loopback, trusted CIDR): identity may only ever be granted
-    to the *socket peer*, never to a client-supplied header.
+    to the socket peer, never to a client-supplied header.
 
     The two conditions are individually sufficient and kept together as
     defence in depth. A uvicorn-fronted service configured with
@@ -489,16 +489,13 @@ class CidrAuthenticator:
     inside one of ``cidrs`` authenticates as :data:`ANONYMOUS_ADMIN` — the same
     convention as :class:`LoopbackAuthenticator`.
 
-    Trust model: the CIDR check runs against the *transport peer address*
-    (``AuthRequest.client_address``) and never against ``X-Forwarded-For`` or
-    any other client-supplied header. Any request that carries
-    ``X-Forwarded-For`` is refused CIDR trust outright (see
-    :func:`_direct_peer_ip`): a forwarded request's peer is the proxy hop, so
-    an in-network ingress (Traefik, a load balancer) would otherwise lend its
-    own address to every anonymous internet request it forwards — and under
-    uvicorn's ``forwarded_allow_ips="*"`` the scope client is itself rewritten
-    from the spoofable header. Configure only ranges where holding an address
-    implies operator-level trust; never an ingress hop's source ranges.
+    The check runs against the transport peer address
+    (``AuthRequest.client_address``), never ``X-Forwarded-For`` or any other
+    client-supplied header; a forwarded request is refused CIDR trust outright
+    (see :func:`_direct_peer_ip` for the forwarded-header trust model).
+    Configure only ranges where holding an address implies operator-level trust;
+    never an ingress hop's source ranges, or that hop would lend its address to
+    every anonymous internet request it forwards.
     """
 
     def __init__(self, cidrs: Sequence[str]):

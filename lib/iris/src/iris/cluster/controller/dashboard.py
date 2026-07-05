@@ -328,7 +328,7 @@ class ControllerDashboard:
         self._auth_provider = auth_provider
         self._auth_policy = auth_policy
         # The signing authority, for serving public keys at /.well-known/jwks.json
-        # (None in null-auth-no-DB mode, where no signer exists).
+        # (None when the controller has no auth configured, so no signer exists).
         self._jwt_manager = jwt_manager
         # In-process RPC statistics. Fed by RequestTimingInterceptor on the
         # ControllerService chain only; LogService's chatty FetchLogs traffic
@@ -529,8 +529,8 @@ class ControllerDashboard:
 
         Public keys only — safe to serve unauthenticated. A federated finelog or
         peer resolves this controller's verification key by ``kid`` from here (or
-        from an inline copy in its trust config). Empty when no signer exists
-        (null-auth, no DB).
+        from an inline copy in its trust config). Empty when no signer exists (the
+        controller has no auth configured).
         """
         if self._jwt_manager is None:
             return JSONResponse({"keys": []})

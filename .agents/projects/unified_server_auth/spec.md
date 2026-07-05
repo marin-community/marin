@@ -128,9 +128,9 @@ New `@public` route `GET /.well-known/jwks.json` (`dashboard.py`) serving
 
 - `JwtKeyEntry{cluster, secret}` → **`{cluster, public_keys: list}`** in
   `finelog/deploy/config.py` (inline public keys per issuer; a list for rotation
-  overlap). `assert_inlineable_auth` **inverts** — a jwt layer is now inline-*safe*
-  by construction, so it no longer raises (keep a guard only if a symmetric static
-  path survives). `_validate_finelog_relay`'s 16-byte HS256 minimum
+  overlap). `assert_inlineable_auth` is removed — a jwt layer is inline-safe by
+  construction (public keys), so there is nothing to guard against inlining.
+  `_validate_finelog_relay`'s 16-byte HS256 minimum
   (`config.py:1012-1020`) is removed.
 - The Rust `JwtVerifier` switches `hmac` → `jsonwebtoken` EdDSA, **adds `aud` to
   `JwtClaims` and requires `aud="finelog"`** (`auth.rs:376-379,226-239`);
@@ -380,8 +380,7 @@ def assert_no_inlined_secrets(config: IrisClusterConfig) -> None:
     """Raise ValueError if any SecretRefSpec-marked field holds a non-empty value
     where ANY entry in the path is not a secret reference (is_secret_reference is
     False) — i.e. a raw secret about to be serialized into a broadly-readable
-    ConfigMap / GCE metadata. Empty ⇒ pass (unset; resolves via default path).
-    Mirrors finelog's assert_inlineable_auth (finelog/deploy/config.py:131-142)."""
+    ConfigMap / GCE metadata. Empty ⇒ pass (unset; resolves via default path)."""
 ```
 
 Per-service JWT **signing** keys are `SecretRefSpec` fields too (§0): the private
@@ -452,7 +451,7 @@ any store, so a config change applies only after the user re-runs `iris login`
 | `lib/iris/src/iris/cluster/controller/dashboard.py` | **§0** `@public GET /.well-known/jwks.json` route |
 | `lib/iris/src/iris/cli/cluster.py` | **§0** `iris cluster init-keys` (Ed25519 keypair → private to a `--out-file` / `--gcp-secret` dest). `iris user grant` NOT built (§3, superseded) |
 | `lib/finelog/rust/src/server/auth.rs` | **§0** jwt layer verifies EdDSA via `jsonwebtoken`, **requires `aud="finelog"`** (add `aud` to `JwtClaims`), inline/`iss`-resolved public key, `Vec` for rotation; drop `hmac`/`MIN_SECRET_BYTES` |
-| `lib/finelog/src/finelog/deploy/config.py` | **§0** `JwtKeyEntry{cluster, public_keys}`; `assert_inlineable_auth` now a **no-op guard** (jwt inline-safe by construction); share the `cidr`/walk convention + conformance vectors |
+| `lib/finelog/src/finelog/deploy/config.py` | **§0** `JwtKeyEntry{cluster, public_keys}`; `assert_inlineable_auth` removed (jwt inline-safe by construction — public keys carry no secret); share the `cidr`/walk convention + conformance vectors |
 | `lib/iris/src/iris/cluster/controller/service.py` | `login` mints a session token with the `RolePolicy` role (rejects `system:`). `SetUserRole` handler NOT built (§3) |
 | `lib/iris/src/iris/cluster/controller/migrations/0038_drop_api_keys.py`, `0039_drop_users.py` | **new** — drop the `api_keys` and `users` tables (stateless verify; config roles) |
 | `lib/iris/proto/…` | `SetUserRoleRequest` / `SetUserRoleResponse` NOT built (§3) |

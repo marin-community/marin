@@ -1,13 +1,12 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""NO-BEHAVIOR-CHANGE gate for the declarative auth stack (spec §1.3).
+"""Behavior gate for the declarative auth stack (spec §1.3).
 
-Every current ControllerAuth state must compile — via ``request_auth_policy`` →
-``AuthStackConfig`` → ``RequestAuthPolicy.from_config`` — to a chain that admits/
-denies identically to the prior ``enforcing()``/``permissive()`` construction. This
-asserts both the compiled chain SHAPE (the authenticator sequence) and the admit/
-deny OUTCOME over a representative request matrix, per state.
+Every ControllerAuth state must compile — via ``request_auth_policy`` →
+``AuthStackConfig`` → ``RequestAuthPolicy.from_config`` — to a specific
+authenticator chain. This asserts both the compiled chain SHAPE (the authenticator
+sequence) and the admit/deny OUTCOME over a representative request matrix, per state.
 """
 
 import pytest
@@ -38,7 +37,7 @@ def _chain_types(policy):
 
 # ---------------------------------------------------------------------------
 # Chain SHAPE: each ControllerAuth state compiles to the exact authenticator
-# sequence enforcing()/permissive() built before the refactor.
+# sequence in the expected list.
 # ---------------------------------------------------------------------------
 
 
@@ -129,7 +128,7 @@ def test_gcp_optional_outcomes():
     )
     policy = request_auth_policy(auth)
     assert policy.allows_anonymous
-    # Tokenless external now admitted (anonymous tail); an invalid token still rejects.
+    # The anonymous tail admits tokenless external; an invalid token still rejects.
     assert policy.resolve(None, client_address=_EXTERNAL, headers={}) == ANONYMOUS_ADMIN
     with pytest.raises(ValueError):
         policy.resolve("bogus", client_address=_EXTERNAL, headers={})

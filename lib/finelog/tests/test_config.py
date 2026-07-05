@@ -9,14 +9,10 @@ from pathlib import Path
 
 import pytest
 from finelog.deploy.config import (
-    CidrAuthLayer,
     Deployment,
     FinelogConfig,
     GcpDeployment,
-    JwtAuthLayer,
-    JwtKeyEntry,
     K8sDeployment,
-    assert_inlineable_auth,
     auth_policy_json,
     derive_endpoint_uri,
     load_finelog_config,
@@ -170,24 +166,6 @@ def test_auth_layers_serialize_to_finelog_policy_json(tmp_path: Path) -> None:
             "keys": [{"cluster": "marin", "public_keys": ["ed25519-pub-marin-current", "ed25519-pub-marin-previous"]}],
         },
     ]
-
-
-def test_assert_inlineable_auth_accepts_jwt_public_keys() -> None:
-    """A jwt layer now carries only Ed25519 public keys (not a symmetric secret), so
-    it is inline-safe and `assert_inlineable_auth` no longer raises."""
-    cfg = FinelogConfig(
-        name="finelog-authed",
-        port=10001,
-        image="img",
-        remote_log_dir="gs://bucket/x",
-        deployment=Deployment(gcp=GcpDeployment(project="p", zone="us-central1-a")),
-        auth=(
-            CidrAuthLayer(cidrs=("10.0.0.0/8",)),
-            JwtAuthLayer(keys=(JwtKeyEntry(cluster="marin", public_keys=("ed25519-pub-marin",)),)),
-        ),
-    )
-    # Must not raise.
-    assert_inlineable_auth(cfg)
 
 
 def test_auth_unknown_layer_type_rejected(tmp_path: Path) -> None:

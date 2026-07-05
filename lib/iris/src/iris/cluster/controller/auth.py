@@ -6,7 +6,7 @@
 All service tokens are asymmetric EdDSA (Ed25519) JWTs. The controller is its
 own signing authority: it mints with a per-cluster private key (sourced from a
 ``SecretSpec``, never stored in the DB) and verifies against the matching public
-key. :class:`JwtTokenManager` is a thin *policy* wrapper over
+key. :class:`JwtTokenManager` is a thin policy wrapper over
 :mod:`rigging.token_authority` — it owns role/claim semantics and the per-plane
 audience discipline. Verification is fully stateless: a pure crypto check plus
 the audience/scope binding, with no database access at all. Tokens are never
@@ -21,7 +21,7 @@ that window.
 
 Per-plane audience discipline (RFC 8725) is the load-bearing security invariant:
 every minted token names exactly one ``aud`` (plane), and the control-plane
-verifier *requires* its ``aud`` to be one of :data:`CONTROL_PLANE_AUDIENCES`. A
+verifier requires its ``aud`` to be one of :data:`CONTROL_PLANE_AUDIENCES`. A
 delegation (``aud="finelog"``) token — or any other foreign-plane audience —
 replayed at this controller's RPC surface is therefore rejected by the verifier
 before any policy runs.
@@ -62,10 +62,9 @@ WORKER_ROLE = "worker"
 # Role granted to a config-listed admin.
 ADMIN_ROLE = "admin"
 
-# User/admin login sessions (aud="iris"). Short-lived: deprovisioning is bounded
-# by this TTL — a downgraded/removed user keeps access only until it expires, and
-# there is no refresh flow, so the client re-runs `iris login` to obtain a fresh
-# token (picking up the current store role).
+# User/admin login sessions (aud="iris"). Short-lived and non-refreshable: the
+# client re-runs `iris login` for a fresh token, picking up its current
+# config-derived role. This TTL also bounds deprovisioning (see module docstring).
 SESSION_TOKEN_TTL_SECONDS = 3600  # 1 hour
 # Worker machine identity (aud="iris", role="worker"). This is a SHARED,
 # cluster-lived credential: one token is minted per controller start and injected
@@ -84,7 +83,7 @@ CIDR_PROVIDER = "cidr"
 
 # ---------------------------------------------------------------------------
 # Per-plane audience discipline (RFC 8725). Each ``aud`` names exactly one
-# recipient *plane* — a bounded, static set — never a per-resource value.
+# recipient plane — a bounded, static set — never a per-resource value.
 # ---------------------------------------------------------------------------
 # Control-plane user/worker tokens.
 CONTROL_PLANE_AUDIENCE = "iris"
@@ -123,16 +122,14 @@ MAX_ENDPOINT_TOKEN_TTL_SECONDS = 86400  # 24 hours
 
 
 class JwtTokenManager:
-    """Mints and verifies EdDSA service tokens — the iris *policy* over rigging.
+    """Mints and verifies EdDSA service tokens — the iris policy over rigging.
 
     Wraps a :class:`rigging.token_authority.JwtSigner` (minting) and a
     control-plane :class:`rigging.token_authority.JwksVerifier` (verification,
     ``expected_audiences={"iris", "iris-proxy"}``). Every mint names exactly one
-    plane's ``aud``; ``verify`` propagates the verifier's ``ValueError`` on a bad
-    signature / expiry / unexpected audience, then applies the sole remaining iris
-    policy — the aud↔scope binding and the endpoint-scope → identity-audience
-    surfacing. Verification is fully stateless: it never touches a database and
-    there is no revocation list; deprovisioning is bounded by the session TTL.
+    plane's ``aud``. It owns the sole iris-specific verification policy: the
+    aud↔scope binding and the endpoint-scope → identity-audience surfacing (see
+    :meth:`verify`).
     """
 
     def __init__(
@@ -144,7 +141,7 @@ class JwtTokenManager:
     ):
         self._signer = signer
         self._verifier = verifier
-        # Retained *previous* public-key PEMs, served on JWKS during a rotation
+        # Retained previous public-key PEMs, served on JWKS during a rotation
         # overlap so verifiers accept tokens minted by the prior key.
         self._previous_public_keys: tuple[str, ...] = tuple(previous_public_keys)
 
@@ -229,7 +226,7 @@ class JwtTokenManager:
         claims = self._verifier.verify(token)
 
         # Bind the proxy plane to its scope so the per-plane discipline is enforced
-        # by *audience*, not left to the scope claim alone: aud="iris-proxy" is ONLY
+        # by audience, not left to the scope claim alone: aud="iris-proxy" is ONLY
         # ever a well-formed endpoint token (scope="proxy" + endpoint claim), and a
         # control aud="iris" token must NOT carry a proxy scope. Reject either
         # mismatch — otherwise an aud="iris-proxy" token lacking scope would surface
@@ -260,9 +257,8 @@ class RolePolicy:
 
     Built from :class:`AuthConfig` at controller start and carried on
     :class:`ControllerAuth`. Cluster config is the sole source of truth: there is
-    no ``users`` table and no reconciliation. Deprovisioning is edit-config-and-
-    reload — a restart rebuilds this map, and an already-minted session token keeps
-    its old role only until it ages out at :data:`SESSION_TOKEN_TTL_SECONDS`.
+    no ``users`` table and no reconciliation, so deprovisioning is
+    edit-config-and-reload (see module docstring).
 
     ``admins`` are the ``auth.admin_users`` entries; ``default_role`` is the role of
     an authenticated non-admin (the IAP ``unprovisioned_role`` for an iap provider,
@@ -383,7 +379,7 @@ def _build_jwt_token_manager(
 
 
 def require_persistent_signing_key(auth_config: AuthConfig | None, signing_key_pem: str | None) -> None:
-    """Fail fast if a *deployed* cluster with a login provider has no persistent key.
+    """Fail fast if a deployed cluster with a login provider has no persistent key.
 
     A gcp/iap provider issues user JWTs and typically feeds finelog delegation, so
     its signing key must be stable: with an ephemeral one, every user is logged out
@@ -418,20 +414,17 @@ def create_controller_auth(
 
     Mints EdDSA JWTs with this controller's per-cluster Ed25519 key (``iss`` =
     ``cluster_name``), loaded from ``signing_key_pem`` — resolved from a
-    ``SecretSpec`` on the serve path, never stored in the DB. Verification is
-    fully stateless (pure crypto + audience), so it never hits the DB. When
+    ``SecretSpec`` on the serve path, never stored in the DB. When
     ``signing_key_pem`` is ``None`` an ephemeral keypair is used — for in-process
     dev (``LocalCluster``) and null-auth; tokens do not survive a restart. A
-    *deployed* authed cluster must supply a persistent key; that requirement is
+    deployed authed cluster must supply a persistent key; that requirement is
     enforced at the serve entrypoint (``controller.main``), not here, so the
     in-process dev path can still run authed against an ephemeral key.
 
-    Roles are resolved from an in-memory :class:`RolePolicy` built here from
-    ``auth_config`` — cluster config is the sole source of truth, so there is no DB
-    access at all (no user store, no reconciliation). A ``None`` config (or one with
-    no provider selected and no trusted CIDRs) runs in null-auth mode.
-    ``trusted_cidrs`` alone enables auth: identity by network location for direct
-    in-network peers, tokens for everything else.
+    Roles come from an in-memory :class:`RolePolicy` built here from ``auth_config``.
+    A ``None`` config (or one with no provider selected and no trusted CIDRs) runs in
+    null-auth mode. ``trusted_cidrs`` alone enables auth: identity by network location
+    for direct in-network peers, tokens for everything else.
     """
     previous_public_keys = tuple(auth_config.previous_public_keys) if auth_config is not None else ()
     jwt_mgr = _build_jwt_token_manager(
@@ -485,7 +478,7 @@ def create_controller_auth(
             iap_assertion_verifier = IapAssertionVerifier(signed_header_audience, role_resolver=role_policy.role_for)
 
     optional = auth_config.optional
-    # Only the CIDR *count* is logged: CodeQL's sensitive-data heuristics treat
+    # Only the CIDR count is logged: CodeQL's sensitive-data heuristics treat
     # any value read off auth_config as a potential secret, and the cluster
     # config file is the authoritative place to read the ranges anyway.
     logger.info(

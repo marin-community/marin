@@ -3,21 +3,21 @@
 
 """Asymmetric (EdDSA/Ed25519) service-token signing and verification.
 
-The generic *mechanism* a Marin service uses to be its own signing authority:
+The generic mechanism a Marin service uses to be its own signing authority:
 mint short-lived JWTs with a per-cluster Ed25519 private key, publish the public
-half as a JWKS / PEM, and verify a presented token against a **configured**
+half as a JWKS / PEM, and verify a presented token against a configured
 allowlist of trusted issuers. It carries no service policy — no role/RBAC
 semantics, no revocation, no login exchange — so it never imports iris. Higher
 layers (``rigging.server_auth``, iris's ``JwtTokenManager``) build policy on top.
 
 Two invariants make this security-critical:
 
-- **Per-plane audience discipline (RFC 8725).** A single signing key removes the
-  incidental isolation a dedicated symmetric secret gave, so every minted token
-  names exactly one ``aud`` (plane) and every verifier *requires* its expected
+- Per-plane audience discipline (RFC 8725). A single signing key serves every
+  plane, so the key itself provides no cross-plane isolation; every minted token
+  names exactly one ``aud`` (plane) and every verifier requires its expected
   ``aud`` set — a token minted for one plane is rejected at another
   (:class:`JwksVerifier` is fail-closed: ``expected_audiences`` is mandatory).
-- **No SSRF key discovery.** ``issuers`` is a configured ``iss -> [public PEM]``
+- No SSRF key discovery. ``issuers`` is a configured ``iss -> [public PEM]``
   allowlist; the verifier resolves the key by the token's ``iss`` (then ``kid``)
   and never fetches a JWKS URL derived from the token.
 
@@ -212,7 +212,7 @@ class JwtSigner:
     def public_jwks(self, *, also: Sequence[str] = ()) -> dict:
         """Public JWKS for ``/.well-known/jwks.json``: this key plus ``also``.
 
-        ``also`` are extra public-key PEMs (retained *previous* keys) served
+        ``also`` are extra public-key PEMs (retained previous keys) served
         during a rotation overlap so verifiers accept both old and new tokens.
         """
         keys = [_public_jwk(_load_ed25519_public_key(self._key.public_pem))]
@@ -240,7 +240,7 @@ class JwksVerifier:
 
     ``issuers`` maps each trusted ``iss`` to a list of its trusted public-key
     PEMs (a list to span a rotation overlap). ``expected_audiences`` is the
-    surface's allowed ``aud`` set and is **required** and fail-closed: a token
+    surface's allowed ``aud`` set and is required and fail-closed: a token
     whose ``aud`` is outside it is rejected — the per-plane replay guard.
 
     Key resolution is by the token's ``iss`` then, among that issuer's keys, by

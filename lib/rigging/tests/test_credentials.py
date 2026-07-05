@@ -74,18 +74,16 @@ def test_iap_edge_falls_back_to_service_account_for_ci():
 
 
 def test_iap_edge_service_account_falls_back_to_desktop_client_when_no_programmatic_audience():
-    # marin lists only the desktop client id in `audiences`, so the adapter leaves
-    # `programmatic_audiences` empty. The edge path must still mint a token -- using
-    # the desktop client id, which IAP admits as a programmatic client -- rather
-    # than attaching no edge token (which IAP rejects with 401). Regression guard
-    # for the cross-lane CI auth outage (#6936 and siblings).
+    # With no programmatic audience configured, the edge path still mints a token
+    # using the desktop client id rather than attaching none (which IAP rejects with
+    # 401). Regression guard for the cross-lane CI auth outage (#6936 and siblings).
     c = credentials_for("marin", _iap_auth())
     assert isinstance(c.iap_provider, IapServiceAccountTokenProvider)
     assert c.iap_provider._audience == MARIN_DESKTOP_OAUTH_CLIENT.client_id
 
 
 def test_iap_edge_desktop_fallback_honors_configured_desktop_client():
-    # A cluster overriding the desktop OAuth client falls back to *its* id, not the
+    # A cluster overriding the desktop OAuth client falls back to its id, not the
     # Marin default.
     c = credentials_for(
         "marin",

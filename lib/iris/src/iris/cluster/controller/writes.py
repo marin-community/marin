@@ -727,11 +727,7 @@ def remove_worker(
 
 @writes_to(user_budgets_table)
 def set_user_budget(tx: Tx, user_id: str, budget_limit: int, max_band: int, now: Timestamp) -> None:
-    """Insert or update a user's budget configuration.
-
-    ``user_id`` is a plain owner string with no ``users`` row required: a budget
-    can be set for any id.
-    """
+    """Insert or update a user's budget configuration."""
     stmt = sqlite_insert(user_budgets_table).values(
         user_id=user_id,
         budget_limit=budget_limit,

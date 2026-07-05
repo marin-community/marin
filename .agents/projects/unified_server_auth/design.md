@@ -63,8 +63,8 @@ with a different default posture (finelog default-deny; rigging installs
 authenticators only when a verifier is present) and ordering (finelog cidr-first).
 Second, iris **controller config** inlines shared secrets (`delegation_key`,
 static tokens) into a world-readable ConfigMap / GCE metadata via `config_to_dict`
-(#6873) — the very class finelog's server refuses to inline
-(`assert_inlineable_auth`).
+(#6873) — exactly the inlined-secret hazard this design's render guard
+(`assert_no_inlined_secrets`) rejects.
 
 ## Costs / Risks
 
@@ -94,8 +94,8 @@ The generic mechanism lives in `rigging.token_authority`; iris keeps only policy
 **This retires #6873's headline secret:** `delegation_key` (a *shared symmetric
 HMAC secret* finelog verifies with, that "anyone who reads can mint") becomes the
 controller's **public** key — inline-safe, not a secret. `peers.static_token` and
-`finelog.static_token` retire the same way. So `assert_inlineable_auth` is now a
-no-op guard (a jwt layer is inline-safe by construction), and the `SecretSpec`
+`finelog.static_token` retire the same way. So finelog needs no inline-secret
+guard at all (a jwt layer is inline-safe by construction), and the `SecretSpec`
 residue shrinks to exactly two fields — the private signing key and the IAP OAuth
 client secret (the static-token provider is gone entirely).
 
@@ -275,10 +275,8 @@ A cluster forwards its logs to a shared/global finelog by presenting a delegatio
 JWT: the controller mints `aud="finelog"`, `role="finelog-relay"`, ≤1h TTL
 (`finelog_relay.py`), and the shared finelog verifies it against a **static inline
 allowlist of controller public keys** in its `jwt` auth layer (Rust `auth.rs`:
-`jsonwebtoken` EdDSA, `aud="finelog"` required). The public keys are inline-safe —
-`assert_inlineable_auth` is now a no-op guard kept only so re-introducing a
-secret-bearing layer must consciously restore the check — so no secret crosses the
-deploy boundary.
+`jsonwebtoken` EdDSA, `aud="finelog"` required). The public keys are inline-safe,
+so no secret crosses the deploy boundary.
 
 Populating that allowlist — deriving each controller's public key and writing it
 into the shared finelog's config — is **cross-service orchestration that does not

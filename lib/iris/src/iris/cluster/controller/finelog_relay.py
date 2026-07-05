@@ -26,8 +26,8 @@ from iris.cluster.controller.auth import JwtTokenManager
 logger = logging.getLogger(__name__)
 
 # Delegation-JWT lifetime and how early to re-mint before expiry. Short-lived so a
-# leaked token's blast radius is TTL-bounded (the global store checks only signature +
-# exp; it cannot reach a controller's revocation table).
+# leaked token's blast radius is TTL-bounded: the global store checks only
+# signature + exp, and iris tokens are never revocable.
 _DELEGATION_TTL_SECONDS = 3600
 _DELEGATION_REFRESH_MARGIN_SECONDS = 300
 
@@ -37,12 +37,9 @@ _STATE_FILENAME = "finelog_forwarder_state.json"
 class _DelegationTokenProvider:
     """Mints short-lived EdDSA delegation JWTs, re-minting each before it expires.
 
-    Delegates minting to the CONTROLLER's :class:`JwtTokenManager`, which signs an
-    ``aud="finelog"`` token with this cluster's control-plane private key. The
-    federated finelog verifies it against this controller's *public* key; the
-    ``aud="finelog"`` binding means the same token is rejected by this
-    controller's own control-plane verifier (it can never be replayed at the RPC
-    surface).
+    Delegates minting to the controller's :class:`JwtTokenManager`
+    (:meth:`~JwtTokenManager.create_delegation_token`): an ``aud="finelog"`` token
+    the federated finelog verifies against this controller's public key.
     """
 
     def __init__(

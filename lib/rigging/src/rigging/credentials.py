@@ -3,7 +3,7 @@
 
 """Resolve the client credentials for talking to a Marin cluster.
 
-This is the *consumer* convention behind "one login": given a cluster's auth
+This is the consumer convention behind "one login": given a cluster's auth
 shape, assemble the bearer material a client must attach, drawn from the standard
 sources in a fixed order. It never runs an interactive flow — acquiring a token
 (the browser OAuth + JWT exchange) is the job of the login orchestration
@@ -23,10 +23,9 @@ IAP edge-token resolution (the ``Proxy-Authorization`` bearer, IAP clusters only
 the cached desktop-OAuth refresh token (the human path) is preferred; failing
 that, an ambient service-account ID token (the in-cluster / CI path) minted for a
 dedicated programmatic audience if one is configured, else for the desktop client
-id -- which IAP registers as a programmatic client and admits for service-account
-tokens as well. The desktop client that re-mints from a refresh token is the app's
-public identity (:data:`~rigging.auth.MARIN_DESKTOP_OAUTH_CLIENT`), overridable per
-cluster.
+id (see :func:`_edge_provider`). The desktop client that re-mints from a refresh
+token is the app's public identity (:data:`~rigging.auth.MARIN_DESKTOP_OAUTH_CLIENT`),
+overridable per cluster.
 """
 
 import os

@@ -81,10 +81,8 @@ class K8sDeployment:
 class CidrAuthLayer:
     """Admit a request whose transport peer is in one of ``cidrs``.
 
-    Reproduces intra-cluster reachability: a finelog serving its own cluster lists
-    that cluster's loopback/VPC ranges (e.g. ``10.0.0.0/8``, ``127.0.0.0/8``) so
-    local clients keep working without a token. Matches the transport peer only,
-    never a spoofable forwarded header.
+    Matches the transport peer only, never a spoofable forwarded header. See
+    ``INTRA_CLUSTER_CIDRS`` for the ranges an in-cluster finelog trusts.
     """
 
     cidrs: tuple[str, ...]
@@ -110,7 +108,7 @@ INTRA_CLUSTER_CIDRS: tuple[str, ...] = (
 
 @dataclass(frozen=True)
 class JwtKeyEntry:
-    """A trusted cluster and its Ed25519 delegation **public** keys (PEM).
+    """A trusted cluster and its Ed25519 delegation public keys (PEM).
 
     ``public_keys`` is a list so a key rotation can carry the old and new keys
     together during the overlap window; a token signed by either verifies.
@@ -125,9 +123,9 @@ class JwtAuthLayer:
     """Admit a bearer JWT whose EdDSA signature verifies against one of ``keys`` and
     whose audience is ``finelog``.
 
-    Each key is a trusted cluster's Ed25519 **public** key(s); every configured key
-    admits equally. Public keys are not secret material, so a jwt layer is inline-safe
-    (see ``assert_inlineable_auth``).
+    Each key is a trusted cluster's Ed25519 public key(s); every configured key
+    admits equally. Public keys are not secret material, so a jwt layer inlines
+    safely into a plaintext deploy artifact.
     """
 
     keys: tuple[JwtKeyEntry, ...]
@@ -148,19 +146,6 @@ def auth_policy_json(layers: tuple[AuthLayer, ...]) -> str:
     """Serialize an ordered auth-layer stack to the `FINELOG_AUTH_POLICY` JSON the
     finelog server parses."""
     return json.dumps([layer.to_policy_dict() for layer in layers], separators=(",", ":"))
-
-
-def assert_inlineable_auth(cfg: "FinelogConfig") -> None:
-    """Assert the auth stack carries no secret material that must not be inlined.
-
-    Both deploy paths bake the policy into a plaintext artifact (GCE startup-script
-    metadata, a k8s manifest). A `jwt` layer now holds only Ed25519 **public** keys
-    (the switch from HS256 symmetric secrets), which are not secret and inline safely,
-    and a cidr layer carries no secrets either — so every current layer kind is
-    inline-safe and this is a no-op guard. It stays as an explicit assertion so that
-    re-introducing a symmetric/secret-bearing layer must consciously restore the check.
-    """
-    del cfg  # no secret-bearing layer kind exists; kept as a guard seam
 
 
 @dataclass(frozen=True)

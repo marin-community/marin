@@ -270,13 +270,8 @@ class LocalCluster:
         # (nothing persisted, never revocable), like every other iris token. The
         # admin role is config-derived (RolePolicy), so no user row is created.
         key_id = f"iris_s_local_{secrets.token_hex(8)}"
-        if auth.jwt_manager:
-            jwt_token = auth.jwt_manager.create_token(
-                "local-admin", "admin", key_id, ttl_seconds=SESSION_TOKEN_TTL_SECONDS
-            )
-        else:
-            # Fallback for no-DB / no-JWT mode (shouldn't happen in practice)
-            jwt_token = secrets.token_urlsafe(32)
+        assert auth.jwt_manager is not None  # create_controller_auth always builds one
+        jwt_token = auth.jwt_manager.create_token("local-admin", "admin", key_id, ttl_seconds=SESSION_TOKEN_TTL_SECONDS)
 
         cluster_name = self._config.name or "local"
         save_credentials(CredentialRecord(cluster=cluster_name, endpoint=url, app_token=jwt_token))

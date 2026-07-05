@@ -4,7 +4,7 @@
 """Behavior tests for the EdDSA token-signing/verification primitive.
 
 These use real Ed25519 crypto end to end — no mocking of the signing or
-verifying path — because the security contract *is* the crypto behavior: the
+verifying path — because the security contract is the crypto behavior: the
 cross-plane audience guard, alg-confusion rejection, and the stable RFC 7638
 kid are exactly what finelog's Rust verifier must agree with byte for byte.
 """

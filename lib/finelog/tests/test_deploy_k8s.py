@@ -132,7 +132,7 @@ _PUB_PEM = (
 
 
 def test_render_deployment_inlines_jwt_public_key() -> None:
-    # jwt keys are now Ed25519 PUBLIC keys, not symmetric secrets, so the deploy path
+    # jwt keys are Ed25519 public keys, not symmetric secrets, so the deploy path
     # inlines them into the plaintext manifest like a cidr layer.
     cfg = FinelogConfig(
         name="finelog",

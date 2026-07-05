@@ -4,20 +4,20 @@
 """Declarative request-auth-stack schema (spec §1).
 
 An :class:`AuthStackConfig` is an ordered list of internally-tagged layer objects
-(``{"type": <layer>, ...}``) describing the **request chain** — the authenticators
-that decide an already-authenticated request. It does *not* model login-exchange
+(``{"type": <layer>, ...}``) describing the request chain — the authenticators
+that decide an already-authenticated request. It does not model login-exchange
 verifiers (``static``/``gcp``/``iap_id_token``): those run inside the ``Login`` RPC
 and are constructed in code, so the request chain's verifier is always the service
 JWT manager (spec §1.1).
 
 The wire shape matches finelog's ``FINELOG_AUTH_POLICY`` list, and the evaluation
-order is **first-match**: the first layer to authenticate admits, the first to
+order is first-match: the first layer to authenticate admits, the first to
 reject denies, and an all-absent walk falls to a deny terminal (a stack whose last
 layer is not ``anonymous`` is default-deny). A shared, language-neutral conformance
 suite (:mod:`rigging.auth_vectors`) pins the evaluator behaviour across the Python
 and Rust implementations rather than a second hand-maintained parser.
 
-This module carries only the *schema*; :meth:`rigging.server_auth.RequestAuthPolicy.from_config`
+This module carries only the schema; :meth:`rigging.server_auth.RequestAuthPolicy.from_config`
 compiles a stack into the concrete authenticator chain (binding the injected
 verifiers).
 """
