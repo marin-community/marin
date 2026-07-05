@@ -8,7 +8,7 @@ import { useBackends } from '@/composables/useBackends'
 import {
   LOCAL_CLUSTER, isFederated,
   type JobStatus, type TaskStatus, type LaunchJobRequest, type JobQuery,
-  type GetJobStatusResponse, type ListTasksResponse, type ListJobsResponse,
+  type GetJobStatusResponse, type GetTaskStatusResponse, type ListTasksResponse, type ListJobsResponse,
   type EndpointInfo, type ListEndpointsResponse,
 } from '@/types/rpc'
 import { timestampMs, formatTimestamp, formatDuration, formatRelativeTime, formatBytes, formatCpuMillicores, formatDeviceConfig, bandDisplayName, bandColor } from '@/utils/formatting'
@@ -45,6 +45,8 @@ const FAILED_TERMINAL_STATES = new Set(['failed', 'worker_failed', 'cosched_fail
 const job = ref<JobStatus | null>(null)
 const jobRequest = ref<LaunchJobRequest | null>(null)
 const tasks = ref<TaskStatus[]>([])
+// Distilled log highlights for the failed job's root-cause task (see below).
+const rootCauseHighlights = ref<string[]>([])
 // Endpoints registered by this job's tasks, grouped by wire-format task id.
 const endpointsByTask = ref<Map<string, EndpointInfo[]>>(new Map())
 const childJobsByParent = ref<Map<string, JobStatus[]>>(new Map())
@@ -295,6 +297,14 @@ async function fetchData() {
     job.value = jobResp.job
     jobRequest.value = jobResp.request ?? null
     tasks.value = tasksResp.tasks ?? []
+
+    // Surface the crash for a failed job: one on-demand fetch for the single
+    // root-cause task, gated so a healthy or still-running job pays nothing.
+    if (jobResp.job.error && TERMINAL_STATES.has(stateToName(jobResp.job.state))) {
+      void fetchRootCauseHighlights(gen)
+    } else {
+      rootCauseHighlights.value = []
+    }
 
     // Refresh stats only once tasks are known so the SQL filter targets the
     // current job's tasks. Failures here surface as zero values — never block
@@ -639,6 +649,32 @@ const recentWorkerFailures = computed<TaskFailureSummary[]>(() =>
   collectFailuresByState('worker_failed', () => 0),
 )
 
+// The job's root cause is the earliest-finished failed attempt among the
+// failures surfaced above (matching the controller's job.error pick). Its logs
+// are the ones worth distilling into a stack trace.
+const rootCauseFailure = computed<TaskFailureSummary | null>(() => {
+  const candidates = [...recentTaskFailures.value, ...recentWorkerFailures.value]
+  return candidates.length
+    ? candidates.reduce((earliest, f) => (f.finishedAtMs < earliest.finishedAtMs ? f : earliest))
+    : null
+})
+
+// Fetch the root-cause task's distilled log highlights on demand — one task per
+// failed job, never a per-task fetch across the whole list. Best-effort: a
+// failure here never blocks the page.
+async function fetchRootCauseHighlights(gen: number): Promise<void> {
+  rootCauseHighlights.value = []
+  const taskId = rootCauseFailure.value?.taskId
+  if (!taskId) return
+  try {
+    const resp = await controllerRpcCall<GetTaskStatusResponse>('GetTaskStatus', { taskId })
+    if (gen !== fetchGeneration) return
+    rootCauseHighlights.value = resp.rootCauseHighlights ?? []
+  } catch {
+    // Highlights are advisory; leave them empty on any fetch error.
+  }
+}
+
 // Failure / preemption budgets from the launch request. The reconstructed
 // request always carries these int32 fields, but proto3 omits zero defaults
 // from the JSON, so coalesce to 0. maxTaskFailures is the job-level abort
@@ -883,6 +919,15 @@ async function handleProfile(taskId: string, profilerType: string, format: strin
         class="mb-4 px-4 py-3 text-sm text-status-danger bg-status-danger-bg rounded-lg border border-status-danger-border"
       >
         <span class="font-semibold">Error:</span> {{ job.error }}
+      </div>
+
+      <!-- Likely root cause: highlights distilled from the root-cause task's own logs -->
+      <div
+        v-if="rootCauseHighlights.length"
+        class="mb-4 px-4 py-3 rounded-lg border border-status-danger-border bg-status-danger-bg"
+      >
+        <div class="text-sm font-semibold text-status-danger mb-2">Likely Root Cause</div>
+        <pre class="text-xs font-mono text-status-danger whitespace-pre-wrap break-all">{{ rootCauseHighlights.join('\n') }}</pre>
       </div>
 
       <!-- Peer unreachable banner: this job's handoff target failed its last
