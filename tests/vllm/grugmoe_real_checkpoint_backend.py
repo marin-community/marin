@@ -21,6 +21,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from collections.abc import Callable
 from contextlib import ExitStack
 from dataclasses import dataclass
 from typing import Any
@@ -51,6 +52,15 @@ SERVED_MODEL_NAME = "grugmoe-real-checkpoint-e2e"
 VLLM_DTYPE = "bfloat16"
 MAX_SHARD_SIZE = 256 * 1024 * 1024
 _REAL_CHECKPOINT_HIDDEN_DIM = 512
+
+
+def _expert_gate_up_tensors(expert: Any, intermediate_dim: int) -> tuple[Any, Any]:
+    try:
+        return expert.w_gate, expert.w_up
+    except AttributeError:
+        import jax.numpy as jnp  # noqa: PLC0415
+
+        return jnp.split(expert.w_gate_up, [intermediate_dim], axis=-1)
 
 
 @dataclass(frozen=True)
@@ -324,7 +334,6 @@ def _legacy_split_expert_inference_state_dict(model: Any, cfg: Any, prefix: str 
 def _load_legacy_split_expert_checkpoint(checkpoint_path: str, model_cfg: Any):
     import equinox as eqx  # noqa: PLC0415
     import jax  # noqa: PLC0415
-    import jax.numpy as jnp  # noqa: PLC0415
     from haliax import Axis  # noqa: PLC0415
     from levanter.checkpoint import latest_checkpoint_path, load_checkpoint  # noqa: PLC0415
     from levanter.utils.jax_utils import is_inexact_arrayish  # noqa: PLC0415
@@ -341,7 +350,7 @@ def _load_legacy_split_expert_checkpoint(checkpoint_path: str, model_cfg: Any):
         model = cfg.build(vocab, key=key)
         for layer_index in range(cfg.num_layers):
             expert = model.blocks[layer_index].mlp.expert_mlp
-            gate, up = jnp.split(expert.w_gate_up, [cfg.intermediate_dim], axis=-1)
+            gate, up = _expert_gate_up_tensors(expert, cfg.intermediate_dim)
             original_mlp = model.blocks[layer_index].mlp
             split_mlp = LegacySplitMoEMLP(
                 router=original_mlp.router,
@@ -443,8 +452,13 @@ def _local_filesystem_path(path: str) -> str:
     raise ValueError(f"{path!r} is not a local filesystem path")
 
 
-def _copy_tree_to_local(source_dir: str, local_dir: str) -> int:
-    _require_europe_west4_path("artifact_dir", source_dir)
+def _copy_tree_to_local(
+    source_dir: str,
+    local_dir: str,
+    *,
+    path_validator: Callable[[str, str], None] = _require_europe_west4_path,
+) -> int:
+    path_validator("artifact_dir", source_dir)
     fs, source_path = _fs_path(source_dir)
     if not fs.exists(source_path):
         raise FileNotFoundError(f"artifact_dir not found at {source_dir}")
@@ -465,8 +479,13 @@ def _copy_tree_to_local(source_dir: str, local_dir: str) -> int:
     return copied
 
 
-def _stage_artifact_for_vllm(artifact_dir: str) -> StagedArtifact:
-    _require_europe_west4_path("artifact_dir", artifact_dir)
+def _stage_artifact_for_vllm(
+    artifact_dir: str,
+    *,
+    path_validator: Callable[[str, str], None] = _require_europe_west4_path,
+    temp_prefix: str = "grugmoe-real-checkpoint-vllm-artifact-",
+) -> StagedArtifact:
+    path_validator("artifact_dir", artifact_dir)
     parsed = urlparse(artifact_dir)
     if parsed.scheme in {"", "file"}:
         local_path = _local_filesystem_path(artifact_dir)
@@ -480,9 +499,9 @@ def _stage_artifact_for_vllm(artifact_dir: str) -> StagedArtifact:
             },
         )
 
-    local_root = tempfile.mkdtemp(prefix="grugmoe-real-checkpoint-vllm-artifact-")
+    local_root = tempfile.mkdtemp(prefix=temp_prefix)
     local_path = os.path.join(local_root, "artifact")
-    copied_files = _copy_tree_to_local(artifact_dir, local_path)
+    copied_files = _copy_tree_to_local(artifact_dir, local_path, path_validator=path_validator)
     _require_file("staged artifact config.json", _join_path(local_path, "config.json"))
     _require_file("staged artifact tokenizer.json", _join_path(local_path, "tokenizer.json"))
     return StagedArtifact(
@@ -653,22 +672,21 @@ def _selected_logprob(logits: Any, token_id: int) -> float:
     return float(logits_f64[token_id] - log_z)
 
 
-def _executable_model_from_legacy_split(model: Any) -> Any:
+def _executable_model_from_legacy_split(model: Any, *, capacity_factor: float = 1.0) -> Any:
     import equinox as eqx  # noqa: PLC0415
-    import jax.numpy as jnp  # noqa: PLC0415
     from levanter.grug.grug_moe import MoEExpertMlp  # noqa: PLC0415
     from levanter.utils.activation import ActivationFunctionEnum  # noqa: PLC0415
 
     from experiments.grug.moe.model import MoEMLP  # noqa: PLC0415
 
     def executable_mlp_from_legacy_split(split_mlp: Any) -> MoEMLP:
-        w_gate_up = jnp.concatenate([split_mlp.w_gate, split_mlp.w_up], axis=-1)
         expert_mlp = MoEExpertMlp(
-            w_gate_up=w_gate_up,
+            w_gate=split_mlp.w_gate,
+            w_up=split_mlp.w_up,
             w_down=split_mlp.w_down,
             implementation=split_mlp.cfg.moe_implementation,
             activation=ActivationFunctionEnum.silu,
-            capacity_factor=1.0,
+            capacity_factor=capacity_factor,
         )
         return MoEMLP(
             router=split_mlp.router,
@@ -694,6 +712,7 @@ def _greedy_decode(
     batch_size: int,
     decode_seq_len: int,
     pad_token_id: int,
+    use_active_prefix: bool = False,
 ) -> dict[str, Any]:
     import jax  # noqa: PLC0415
     import jax.numpy as jnp  # noqa: PLC0415
@@ -713,16 +732,20 @@ def _greedy_decode(
     generated_token_texts: list[str] = []
     selected_token_logprobs: list[float] = []
     steps: list[dict[str, Any]] = []
+    active_seq_lengths: list[int] = []
     position_logits = jax.jit(position_logits_batch)
     started = time.time()
 
     for step_index in range(max_new_tokens):
-        position = jnp.asarray(len(prompt_ids) + step_index - 1, dtype=jnp.int32)
-        step_logits_batch = position_logits(model, jnp.asarray(token_ids_array, dtype=jnp.int32), position)
+        active_seq_len = len(prompt_ids) + step_index
+        position = jnp.asarray(active_seq_len - 1, dtype=jnp.int32)
+        step_token_ids_array = token_ids_array[:, :active_seq_len] if use_active_prefix else token_ids_array
+        step_logits_batch = position_logits(model, jnp.asarray(step_token_ids_array, dtype=jnp.int32), position)
         step_logits = np.asarray(jax.device_get(step_logits_batch))[0]
         selected_token_id = int(np.argmax(step_logits, axis=-1))
         selected_text = _decode_one(tokenizer, selected_token_id)
         selected_logprob = _selected_logprob(step_logits, selected_token_id)
+        active_seq_lengths.append(active_seq_len)
         generated_ids.append(selected_token_id)
         generated_token_texts.append(selected_text)
         selected_token_logprobs.append(selected_logprob)
@@ -741,6 +764,8 @@ def _greedy_decode(
         "prompt_token_count": len(prompt_ids),
         "decode_batch_size": batch_size,
         "decode_seq_len": decode_seq_len,
+        "use_active_prefix": use_active_prefix,
+        "active_seq_lengths": active_seq_lengths,
         "pad_token_id": pad_token_id,
         "generated_token_ids": generated_ids,
         "generated_token_texts": generated_token_texts,
