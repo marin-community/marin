@@ -64,5 +64,5 @@ class CacheRegistry:
         return cast(T, self._by_type[key])
 
     def __iter__(self) -> Iterator[object]:
-        """Iterate the registered instances (used by ``writes.validate``)."""
+        """Iterate the registered projection instances."""
         return iter(self._by_type.values())
