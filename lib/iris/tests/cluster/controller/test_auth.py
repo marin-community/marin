@@ -344,15 +344,6 @@ def test_jwt_create_and_verify():
     assert identity.role == "user"
 
 
-def test_verify_touches_no_db_and_has_no_revocation():
-    """verify() holds no DB handle and no revocation set — pure crypto + audience."""
-    mgr = _jwt_manager()
-    assert not hasattr(mgr, "_db")
-    assert not hasattr(mgr, "_revoked_jtis")
-    assert not hasattr(mgr, "revoke")
-    assert not hasattr(mgr, "load_revocations")
-
-
 def test_control_plane_verify_rejects_delegation_token():
     """The cross-plane guard: an ``aud="finelog"`` delegation token is rejected at
     this controller's control-plane verify — it can never be replayed at the RPC

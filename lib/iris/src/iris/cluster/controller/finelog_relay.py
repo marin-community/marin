@@ -72,7 +72,6 @@ class _DelegationTokenProvider:
 
 
 def finelog_relay_interceptors(
-    config: ClusterFinelogConfig,
     subject: str,
     jwt_manager: JwtTokenManager | None,
 ) -> tuple:
@@ -92,7 +91,6 @@ def finelog_relay_interceptors(
     admin-script concern (issue #6961), deliberately not built into iris: iris must
     not render finelog's deploy config.
     """
-    del config  # relay credential no longer carries a per-cluster secret
     if jwt_manager is not None:
         provider = _DelegationTokenProvider(subject=subject, jwt_manager=jwt_manager)
         return (BearerTokenInjector(provider, "authorization"),)
@@ -116,7 +114,7 @@ def build_log_forwarder(
     """
     target = LogClient.connect(
         config.relay_address,
-        interceptors=finelog_relay_interceptors(config, cluster_id, jwt_manager),
+        interceptors=finelog_relay_interceptors(cluster_id, jwt_manager),
     )
     return LogForwarder(
         source=source_client,

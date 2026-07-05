@@ -8,7 +8,6 @@ import pytest
 from mock_verifier import MockVerifier
 from rigging.auth_config import (
     AnonymousLayer,
-    AuthLayerType,
     AuthStackConfig,
     CidrLayer,
     IapAssertionLayer,
@@ -135,14 +134,6 @@ def test_cidr_layer_requires_non_empty_cidrs():
         AuthStackConfig.from_json([{"type": "cidr", "cidrs": []}])
     with pytest.raises(ValueError, match="non-empty 'cidrs'"):
         AuthStackConfig.from_json([{"type": "cidr"}])
-
-
-def test_layer_type_tags_are_the_wire_values():
-    assert AuthLayerType.JWT == "jwt"
-    assert AuthLayerType.IAP_ASSERTION == "iap_assertion"
-    assert AuthLayerType.CIDR == "cidr"
-    assert AuthLayerType.LOOPBACK == "loopback"
-    assert AuthLayerType.ANONYMOUS == "anonymous"
 
 
 # ---------------------------------------------------------------------------

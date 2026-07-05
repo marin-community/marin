@@ -32,15 +32,6 @@ import logging
 import secrets
 from collections.abc import Sequence
 
-from rigging.auth_config import (
-    AnonymousLayer,
-    AuthLayerSpec,
-    AuthStackConfig,
-    CidrLayer,
-    IapAssertionLayer,
-    JwtLayer,
-    LoopbackLayer,
-)
 from rigging.server_auth import (
     GcpAccessTokenVerifier,
     IapAssertionVerifier,
@@ -332,62 +323,25 @@ class ControllerAuth:
     role_policy: RolePolicy | None = None
 
 
-def _request_auth_stack(auth: ControllerAuth | None) -> AuthStackConfig:
-    """The declarative request-auth stack for a controller auth state (spec §1.3).
-
-    null-auth (no provider) ⇒ ``[jwt(optional=true)?, anonymous]`` — the permissive
-    chain, where a worker JWT still attributes the caller. A login provider
-    (gcp/static) ⇒ ``[jwt, cidr(trusted_cidrs)?, loopback]``; iap ⇒
-    ``[jwt, iap_assertion, cidr(trusted_cidrs)?, loopback]``; each with an
-    ``anonymous`` tail iff ``optional``.
-
-    The jwt / iap_assertion / cidr layers are included exactly when their
-    verifier / CIDR list is present on ``auth``, which reproduces the prior
-    ``enforcing()`` / ``permissive()`` construction byte-for-byte (the
-    no-behaviour-change contract).
-
-    NOTE (spec §1.3 cidr-only): the §1.3 table renders cidr-only trust as
-    ``[cidr, loopback]`` (no jwt), but the controller's request verifier is
-    always the JWT manager, and today's cidr-only chain admits the cluster's
-    worker JWT through that jwt layer (``test_cidr_only_auth_config_enables_request_auth``).
-    Dropping the jwt layer would change that admit outcome, so it is kept — the
-    layer is included whenever ``auth.verifier`` is set, exactly as before.
-    """
-    if auth is None or auth.provider is None:
-        permissive_layers: list[AuthLayerSpec] = []
-        if auth is not None and auth.verifier is not None:
-            permissive_layers.append(JwtLayer(optional=True))
-        permissive_layers.append(AnonymousLayer())
-        return AuthStackConfig(layers=tuple(permissive_layers))
-
-    layers: list[AuthLayerSpec] = []
-    if auth.verifier is not None:
-        layers.append(JwtLayer())
-    if auth.iap_assertion_verifier is not None:
-        layers.append(IapAssertionLayer())
-    if auth.trusted_cidrs:
-        layers.append(CidrLayer(tuple(auth.trusted_cidrs)))
-    layers.append(LoopbackLayer())
-    if auth.optional:
-        layers.append(AnonymousLayer())
-    return AuthStackConfig(layers=tuple(layers))
-
-
 def request_auth_policy(auth: ControllerAuth | None) -> RequestAuthPolicy:
     """Build the request-auth policy the controller's surfaces apply.
 
-    Compiles the controller's auth state into a declarative
-    :class:`~rigging.auth_config.AuthStackConfig` (spec §1.3) and calls
-    :meth:`RequestAuthPolicy.from_config`. With no provider (null-auth) the chain
-    is permissive — every request is admitted, but a worker JWT still attributes
-    the caller.
+    Delegates to rigging's canonical stack builders (both compile the shared
+    declarative :class:`~rigging.auth_config.AuthStackConfig`): null-auth (no
+    provider) is the permissive chain — every request admitted, but a worker JWT
+    still attributes the caller — while a login provider (gcp/iap) or cidr trust
+    is the enforcing chain, highest-trust first (``[jwt?, iap_assertion?, cidr?,
+    loopback]``, with an anonymous tail iff ``optional``). The controller's
+    request verifier is always the JWT manager, so a cidr-only cluster still
+    admits its worker JWTs presented from outside the trusted network.
     """
-    verifier = auth.verifier if auth is not None else None
-    iap_assertion_verifier = auth.iap_assertion_verifier if auth is not None else None
-    return RequestAuthPolicy.from_config(
-        _request_auth_stack(auth),
-        jwt_verifier=verifier,
-        iap_assertion_verifier=iap_assertion_verifier,
+    if auth is None or auth.provider is None:
+        return RequestAuthPolicy.permissive(verifier=auth.verifier if auth is not None else None)
+    return RequestAuthPolicy.enforcing(
+        verifier=auth.verifier,
+        iap_assertion_verifier=auth.iap_assertion_verifier,
+        trusted_cidrs=auth.trusted_cidrs,
+        optional=auth.optional,
     )
 
 

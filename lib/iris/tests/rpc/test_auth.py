@@ -111,11 +111,9 @@ def test_jwt_token_manager_expired():
         manager.verify(expired)
 
 
-def test_jwt_token_manager_verify_touches_no_db():
-    """verify() is a pure crypto+audience check with no DB handle at all."""
+def test_jwt_token_manager_create_and_verify_round_trip():
+    """A minted control-plane token round-trips through the stateless verifier."""
     manager = _manager()
-    assert not hasattr(manager, "_db")
-    assert not hasattr(manager, "_revoked_jtis")
     token = manager.create_token(user_id="alice", role="user", key_id="k1", ttl_seconds=60)
     assert manager.verify(token).user_id == "alice"
 

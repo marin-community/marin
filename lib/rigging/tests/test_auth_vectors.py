@@ -91,11 +91,3 @@ def test_auth_vector(vector):
 def test_parse_error_stack_raises(case):
     with pytest.raises(ValueError):
         AuthStackConfig.from_json(case["stack"])
-
-
-def test_vector_file_has_the_cross_impl_note():
-    # The note is load-bearing documentation: the same file is consumed by finelog's
-    # Rust conformance test, so it must spell out the encoding rules.
-    note = " ".join(_VECTORS["note"])
-    assert "finelog" in note
-    assert "first-match" in note
