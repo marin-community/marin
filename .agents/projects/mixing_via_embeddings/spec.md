@@ -142,14 +142,17 @@ def mixture_histogram(weights: Mapping[str, float], v: np.ndarray, domain_order:
     """h = V @ w. Missing domains get weight 0; raises ValueError on unknown domain or if weights
     do not sum to 1 (atol 1e-6)."""
 
+class PhaseHandling(StrEnum):
+    PER_PHASE = "per_phase"   # per-phase features, concatenated in phase order (default)
+    POOLED = "pooled"         # phase-token-weighted average mixture (from run.phase_tokens)
+
 def run_features(
     run: SwarmRun,
     histograms: Sequence[DomainHistogram],
     families: Sequence[FeatureFamily],
-    per_phase: bool = True,
+    phases: PhaseHandling = PhaseHandling.PER_PHASE,
 ) -> np.ndarray:
-    """Concatenate the requested families. Histogram families are per-phase and concatenated when
-    per_phase; else computed on the phase-token-weighted average mixture (from run.phase_tokens).
+    """Concatenate the requested families under the given phase handling.
     Deterministic ordering: families as given, cells in index order, phases in order."""
 ```
 
