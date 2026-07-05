@@ -599,8 +599,8 @@ mod tests {
     // with `openssl genpkey -algorithm ed25519`. Cluster `alpha` verifies against
     // PUB_A, `bravo` against PUB_B; PRIV_UNTRUSTED is a keypair no verifier trusts.
     // A `mint(PRIV, ..)`-signed token is a Rust-self-signed vector; the authoritative
-    // Python(PyJWT-EdDSA)↔Rust cross-language vector lands with the Layer C
-    // conformance suite (spec §1.4) — a self-signed vector suffices for these units.
+    // Python(PyJWT-EdDSA)↔Rust cross-language vector lives in the shared conformance
+    // suite (rigging.auth_vectors) — a self-signed vector suffices for these units.
     const PRIV_A: &str = "-----BEGIN PRIVATE KEY-----\nMC4CAQAwBQYDK2VwBCIEIMD3AX82bVpf0SoIIVssOXbemV9PNWzwtiJhuA61/AeG\n-----END PRIVATE KEY-----\n";
     const PUB_A: &str = "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAqwwvfFvyRQ+8Dhh0li8h2HtCT4yP40s0pzBwwSAkK5s=\n-----END PUBLIC KEY-----\n";
     const PRIV_B: &str = "-----BEGIN PRIVATE KEY-----\nMC4CAQAwBQYDK2VwBCIEIBmJ8qWzlhzFbTWMHs8snOv+rGewn4IUj+ZNPMKTdCtn\n-----END PRIVATE KEY-----\n";

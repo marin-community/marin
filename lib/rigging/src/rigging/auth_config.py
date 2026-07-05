@@ -1,14 +1,13 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Declarative request-auth-stack schema (spec §1).
+"""Declarative request-auth-stack schema.
 
 An :class:`AuthStackConfig` is an ordered list of internally-tagged layer objects
 (``{"type": <layer>, ...}``) describing the request chain — the authenticators
-that decide an already-authenticated request. It does not model login-exchange
-verifiers (``static``/``gcp``/``iap_id_token``): those run inside the ``Login`` RPC
-and are constructed in code, so the request chain's verifier is always the service
-JWT manager (spec §1.1).
+that decide an already-authenticated request. The request chain's verifier is
+always the service JWT manager; there is no login-exchange step, since users
+authenticate at the IAP edge and machines present a service JWT directly.
 
 The wire shape matches finelog's ``FINELOG_AUTH_POLICY`` list, and the evaluation
 order is first-match: the first layer to authenticate admits, the first to
@@ -30,7 +29,7 @@ from typing import ClassVar
 
 
 class AuthLayerType(StrEnum):
-    """The wire ``type`` tag of a request-auth layer (spec §1.2 layer catalog)."""
+    """The wire ``type`` tag of a request-auth layer."""
 
     JWT = "jwt"
     IAP_ASSERTION = "iap_assertion"
@@ -157,7 +156,7 @@ def _layer_from_dict(entry: dict) -> AuthLayerSpec:
 
 @dataclass(frozen=True)
 class AuthStackConfig:
-    """An ordered, declarative request-auth-layer stack (spec §1.1 wire format).
+    """An ordered, declarative request-auth-layer stack.
 
     ``layers`` is evaluation order: first-match admits, first-reject denies, and an
     all-absent walk falls to the deny terminal. Compile into a concrete chain with
@@ -170,7 +169,7 @@ class AuthStackConfig:
     def from_json(cls, data: str | list[dict]) -> "AuthStackConfig":
         """Parse the wire list; raise ValueError on an empty list or an unknown ``type``.
 
-        An empty list is a total lockout (spec §1.2): a service passes an explicit
+        An empty list is a total lockout: a service passes an explicit
         default stack rather than relying on omission.
         """
         raw = json.loads(data) if isinstance(data, str) else data
