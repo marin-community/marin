@@ -447,6 +447,30 @@ def test_dashboard_task_logs(smoke_cluster, verbose_job, smoke_page, smoke_scree
             print(f"DIAG task-logs-section:\n{panel[:2000]}")
             body = smoke_page.evaluate("() => document.body.innerText")
             print(f"DIAG body_len={len(body)}\nDIAG body_head:\n{body[:2500]}")
+        try:
+            st = smoke_cluster.task_status(verbose_job)
+            attempts_repr = [getattr(a, "attempt_id", a) for a in st.attempts]
+            print(
+                f"DIAG task_status: task_id={st.task_id!r} current_attempt_id={st.current_attempt_id} "
+                f"attempts={attempts_repr} state={st.state} worker={st.worker_id!r}"
+            )
+            for att in range(5):
+                req = logging_pb2.FetchLogsRequest(
+                    source=f"{st.task_id}:{att}", match_scope=logging_pb2.MATCH_SCOPE_EXACT, tail=True, max_lines=1000
+                )
+                ents = list(smoke_cluster.log_client.fetch_logs(req).entries)
+                done = any("DONE: all lines emitted" in e.data for e in ents)
+                print(f"DIAG EXACT {st.task_id}:{att} -> n={len(ents)} has_DONE={done}")
+            preq = logging_pb2.FetchLogsRequest(
+                source=f"{st.task_id}:", match_scope=logging_pb2.MATCH_SCOPE_PREFIX, tail=True, max_lines=1000
+            )
+            pents = list(smoke_cluster.log_client.fetch_logs(preq).entries)
+            pdone = any("DONE: all lines emitted" in e.data for e in pents)
+            print(
+                f"DIAG PREFIX {st.task_id}: -> n={len(pents)} has_DONE={pdone} srcs={sorted({e.source for e in pents})[:6]}"
+            )
+        except Exception as exc:
+            print(f"DIAG backend dump failed: {exc}")
         raise
     smoke_screenshot(
         "task-logs-default",
@@ -1072,3 +1096,35 @@ def test_workdir_file_offload(smoke_cluster):
     )
     status = smoke_cluster.wait(job, timeout=smoke_cluster.job_timeout)
     assert status.state == job_pb2.JOB_STATE_SUCCEEDED
+
+
+def test_zz_leveltiming(smoke_cluster):
+    """TEMP: browser-exact proxy query (minLevel=INFO) time-to-DONE, vs no filter."""
+    import time
+
+    import httpx
+
+    job = smoke_cluster.submit(TestJobs.log_verbose, "lvl-probe")
+    smoke_cluster.wait(job, timeout=smoke_cluster.job_timeout)
+    t0 = time.monotonic()
+    ts = smoke_cluster.task_status(job)
+    src = f"{ts.task_id}:{ts.current_attempt_id}"
+    base = f"{smoke_cluster.url}/proxy/system.log-server/finelog.logging.LogService/FetchLogs"
+    DONE = "DONE: all lines emitted"
+
+    def poll(body, label):
+        hit = None
+        while time.monotonic() - t0 < 25:
+            r = httpx.post(base, json=body, headers={"content-type": "application/json"}, timeout=10.0)
+            n = r.text.count('"data"')
+            if DONE in r.text:
+                hit = time.monotonic() - t0
+                break
+            time.sleep(0.2)
+        print(f"\nLVLTIME {label}: time_to_DONE={hit}s last_n_data≈{n}")
+
+    poll(
+        {"source": src, "matchScope": "MATCH_SCOPE_EXACT", "minLevel": "INFO", "maxLines": 500, "tail": True},
+        "minLevel=INFO",
+    )
+    poll({"source": src, "matchScope": "MATCH_SCOPE_EXACT", "maxLines": 500, "tail": True}, "no-minLevel")
