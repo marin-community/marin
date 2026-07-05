@@ -8,7 +8,7 @@ bake-off is a short isoFLOP proxy (hidden 1024) on SlimPajama alone, each soak r
 long run at a representative model size on a representative multi-domain mixture, so the
 tokenizer ranking is confirmed at scale on the kind of data grug-moe actually trains on.
 
-Three differences from the bake-off launcher:
+Four differences from the bake-off launcher:
 
 1. **Representative mixture** (:data:`SOAK_SOURCES`) — English web + Python code + several
    Wikipedia languages + math, each tokenized with the arm's own tokenizer and combined by
@@ -20,6 +20,11 @@ Three differences from the bake-off launcher:
    depth), and this launcher overrides ``sliding_window`` to the target's 2,048 (the scale
    builder otherwise ties it to seq_len).
 3. **wandb by default** — a 24h run needs a durable, queryable ``eval/bpb`` history.
+4. **Extended held-out eval** (:func:`soak_validation`) — the bake-off's English/code subsets
+   plus held-out multilingual (German/Russian/Chinese) and math validation
+   (:mod:`experiments.datasets.multilingual_math_eval`), so ``macro_bpb`` scores every domain
+   :data:`SOAK_SOURCES` trains on, not just the 70% that the bake-off ladder's English/code eval
+   covers.
 
 Everything else (mesh math, optimizer, BPB eval, n-gram toggle) is inherited from the bake-off /
 scale launchers. Launch one arm (see ``experiments/tokenize/EXPERIMENT_LOG.md`` EXP-011 for the
@@ -53,6 +58,7 @@ from marin.experiment.data import hf_download, mixture, tokenized
 from marin.experiment.namespacing import user_namespaced_name
 from marin.training.training import LevanterCheckpoint
 
+from experiments.datasets.multilingual_math_eval import multilingual_math_validation
 from experiments.grug.moe.launch import GrugMoeLaunchConfig, env_int, run_grug_moe_trial
 from experiments.grug.moe.launch_cw_scale import (
     GPUS_PER_NODE,
@@ -161,6 +167,18 @@ def soak_train_datasets(arm_name: str, tokenizer: str) -> dict[ArtifactStep, flo
     }
 
 
+def soak_validation(arm_name: str, tokenizer: str) -> list[ArtifactStep]:
+    """Held-out validation for the soak: the bake-off's English/code subsets plus multilingual + math.
+
+    The isoFLOP bake-off ladder (:func:`experiments.grug.moe.launch_tokenizer_bakeoff.bakeoff_validation`)
+    trains on SlimPajama alone, so its held-out set stays English/code-only for comparability with
+    prior ladder runs. The soak additionally trains on :data:`SOAK_SOURCES`' German/Russian/Chinese
+    Wikipedia and FineMath (30% of its mixture), so its ``macro_bpb`` needs matching held-out domains
+    or those components are never scored.
+    """
+    return [*bakeoff_validation(arm_name, tokenizer), *multilingual_math_validation(arm_name, tokenizer).values()]
+
+
 def build_soak_checkpoint(*, version: str = "dev") -> ArtifactStep[LevanterCheckpoint]:
     """One tokenizer arm's 24h soak run as a lazy :class:`LevanterCheckpoint` from BAKEOFF_ARM + SCALE_* env."""
     arm = arm_by_name(os.environ.get("BAKEOFF_ARM", "soak-superbpe-64k"))
@@ -219,7 +237,7 @@ def build_soak_checkpoint(*, version: str = "dev") -> ArtifactStep[LevanterCheck
     mp = os.environ.get("SCALE_MP", "params=float32,compute=bfloat16,output=bfloat16")
 
     train = soak_train_datasets(arm.name, arm.ref)
-    validation = bakeoff_validation(arm.name, arm.ref)
+    validation = soak_validation(arm.name, arm.ref)
     variant = "-ngram" if os.environ.get("BAKEOFF_NGRAM") else ""
     name = f"grug-soak-{arm.name}{variant}-d{model.hidden_dim}-L{model.num_layers}"
 
