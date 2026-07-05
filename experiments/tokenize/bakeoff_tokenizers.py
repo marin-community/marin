@@ -226,9 +226,29 @@ SOAK_ARMS: tuple[TokenizerArm, ...] = (
     ),
 )
 
+# Fixed soak arms: the base 64k/128k SuperBPE and individual-digit-pretok SOAK_ARMS above,
+# retrained after commit 11bd2f4e9c fixed the stage-2 corpus sampling bug (the soak-* arms
+# above were trained on an English-only stage-2 sample; see build_fixed_soak_tokenizers.py).
+# Must match train_tokenizers.py's `_FIXED_SOAK_BASE_NAMES`. Refs follow the same
+# `trained/<name>` convention push_trained_tokenizers.arm_ref produces.
+_FIXED_SOAK_BASE_NAMES: tuple[str, ...] = (
+    "soak-superbpe-64k",
+    "soak-superbpe-128k",
+    "soak-superbpe-64k-digits",
+    "soak-superbpe-128k-digits",
+)
+
+SOAK_FIXED_ARMS: tuple[TokenizerArm, ...] = tuple(
+    TokenizerArm(f"{arm.name}-fixed", f"trained/{arm.name}-fixed", arm.vocab_size, arm.axis, f"{arm.note}, stage-2 fix")
+    for arm in SOAK_ARMS
+    if arm.name in _FIXED_SOAK_BASE_NAMES
+)
+
 # Registered arms. Extended in later phases as built tokenizers land (their refs will be
 # HF ids under marin-community/ or S3 paths under the cw-rno2a prefix).
-ALL_ARMS: tuple[TokenizerArm, ...] = BASELINE_ARMS + SUPERBPE_ARMS + TRAINED_BPE_ARMS + TRAINED_SUPERBPE_ARMS + SOAK_ARMS
+ALL_ARMS: tuple[TokenizerArm, ...] = (
+    BASELINE_ARMS + SUPERBPE_ARMS + TRAINED_BPE_ARMS + TRAINED_SUPERBPE_ARMS + SOAK_ARMS + SOAK_FIXED_ARMS
+)
 
 # Vocab sizes to add to marin.processing.tokenize.data_configs._KNOWN_VOCAB_SIZES so
 # dry-runs/fingerprints don't hit the Hub. Kept here next to the arm definitions.

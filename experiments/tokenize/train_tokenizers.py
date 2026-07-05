@@ -26,7 +26,7 @@ import os
 import random
 import time
 from concurrent.futures import ProcessPoolExecutor, as_completed
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import StrEnum
 
 from rigging.filesystem import open_url
@@ -128,6 +128,23 @@ TRAIN_SPECS: tuple[TrainSpec, ...] = (
     TrainSpec("soak-superbpe-128k-digits", TokenizerKind.SUPERBPE, 128_000, 64_000, Pretok.DIGITS),
     TrainSpec("soak-superbpe-64k-llama", TokenizerKind.SUPERBPE, 64_000, 32_000, Pretok.LLAMA3),
     TrainSpec("soak-superbpe-128k-llama", TokenizerKind.SUPERBPE, 128_000, 64_000, Pretok.LLAMA3),
+)
+
+# Fixed soak arms: identical config to the corresponding soak-* spec above (only ``name``
+# differs), retrained after commit 11bd2f4e9c fixed `_sample_stage2_corpus` to shuffle before
+# sampling. The already-deployed soak-* tokenizers above were trained on the pre-fix (English-
+# only stage-2 sample) code, so they stay registered as-is; these get a new name so a re-run can
+# select the fixed tokenizer via BAKEOFF_ARM without touching the confounded soak results.
+_FIXED_SOAK_BASE_NAMES: tuple[str, ...] = (
+    "soak-superbpe-64k",
+    "soak-superbpe-128k",
+    "soak-superbpe-64k-digits",
+    "soak-superbpe-128k-digits",
+)
+
+FIXED_SOAK_SPECS: tuple[TrainSpec, ...] = tuple(
+    replace(next(s for s in TRAIN_SPECS if s.name == base_name), name=f"{base_name}-fixed")
+    for base_name in _FIXED_SOAK_BASE_NAMES
 )
 
 
