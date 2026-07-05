@@ -153,6 +153,38 @@ def test_grug_moe_layer_masks_preserve_thd_segment_metadata():
     assert long_mask.segment_ids is mask.segment_ids
 
 
+def test_grug_moe_xsa_forward_lowers_with_gqa_sharding():
+    model_module = importlib.import_module("experiments.grug.moe.model")
+    mesh, _ = model_module.debug_mesh_and_token_pspec(num_devices=4)
+    cfg = model_module.GrugModelConfig(
+        vocab_size=128,
+        hidden_dim=32,
+        intermediate_dim=64,
+        shared_expert_intermediate_dim=64,
+        num_layers=1,
+        num_heads=4,
+        num_kv_heads=1,
+        max_seq_len=8,
+        sliding_window=8,
+        num_experts=4,
+        num_experts_per_token=2,
+        attention_implementation="reference",
+    )
+
+    def forward():
+        attn = model_module.CausalSelfAttention.init(cfg, key=jax.random.PRNGKey(0))
+        x = jax.sharding.reshard(
+            jnp.zeros((4, 8, cfg.hidden_dim), dtype=jnp.float32),
+            jax.sharding.PartitionSpec(("replica_dcn", "data", "expert"), None, None),
+        )
+        return attn(x, GrugAttentionMask.causal())
+
+    with _reset_abstract_mesh(), use_abstract_mesh(mesh):
+        out_shape = eqx.filter_eval_shape(forward)
+
+    assert out_shape.shape == (4, 8, cfg.hidden_dim)
+
+
 def _seed_cache_records(step, prefix: str) -> None:
     """Write the minimal record a built ``TokenizedCache`` dep would leave, so the run-time
     ``mixture`` can read each dataset's tokenizer/format offline (mirrors a real run, where the

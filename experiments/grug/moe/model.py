@@ -18,9 +18,9 @@ import jax.scipy as jsp
 from einops import rearrange
 from haliax import Axis
 from haliax.jax_utils import named_call
-from jax import random
+from jax import core, random
+from jax.sharding import NamedSharding, get_abstract_mesh, reshard
 from jax.sharding import PartitionSpec as P
-from jax.sharding import get_abstract_mesh, reshard
 
 try:
     from jax.shard_map import shard_map
@@ -80,6 +80,13 @@ def _batch_spec() -> P:
 
 def _batch_reshard(x: jax.Array) -> jax.Array:
     return reshard(x, _batch_spec())
+
+
+def _partition_spec_of(x: jax.Array) -> P | None:
+    sharding = jax.typeof(x).sharding if isinstance(x, core.Tracer) else x.sharding
+    if isinstance(sharding, NamedSharding):
+        return sharding.spec
+    return None
 
 
 def _layer_attention_masks(mask: AttentionMask, *, sliding_window: int) -> tuple[AttentionMask, AttentionMask]:
@@ -343,12 +350,10 @@ class CausalSelfAttention(eqx.Module):
             k = jnp.concatenate([k_rot, k[..., half:]], axis=-1)
         q = q * self.cfg.qk_mult
         attn_out = attention(q, k, v, mask, implementation=self.cfg.attention_implementation)
-        # Half-RoPE's slice+concat on the head_dim axis can leave the explicit-mesh
-        # propagator with ``model`` annotated on ``head_dim`` rather than
-        # ``num_q_heads``; force the canonical TP layout so it matches ``aligned_v``.
-        attn_out = reshard(attn_out, P(_BATCH_AXES, None, "model", None))
         aligned_v = align_kv_heads(v, num_q_heads=attn_out.shape[2])
-        aligned_v = reshard(aligned_v, P(_BATCH_AXES, None, "model", None))
+        # GPU XSA with GQA can give attn_out a backend-specific head sharding;
+        # match v to that dynamic sharding before the per-head projection math.
+        aligned_v = reshard(aligned_v, _partition_spec_of(attn_out) or P(_BATCH_AXES, None, None, "model"))
         # Exclusive Self Attention: subtract the component of yᵢ parallel to vᵢ.
         # zᵢ = yᵢ - (yᵢᵀvᵢ / ‖vᵢ‖²) vᵢ, per head.
         dot = jnp.sum(attn_out * aligned_v, axis=-1, keepdims=True)
@@ -357,7 +362,12 @@ class CausalSelfAttention(eqx.Module):
         # Headwise gating: sigmoid(x @ attn_gate) produces one scalar per head.
         gate = 2 * jax.nn.sigmoid(jnp.einsum("bsd,dn->bsn", x, self.attn_gate))[..., None]
         attn_out = gate * attn_out
-        attn_out = rearrange(attn_out, "... n d -> ... (n d)")
+        # Merge heads into hidden dim while keeping model-axis sharding for w_o.
+        attn_out = jnp.reshape(
+            attn_out,
+            (*attn_out.shape[:-2], attn_out.shape[-2] * attn_out.shape[-1]),
+            out_sharding=P(_BATCH_AXES, None, "model"),
+        )
         return jnp.einsum("bsh,hd->bsd", attn_out, self.w_o, out_sharding=batch_spec)
 
 
