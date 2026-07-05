@@ -10,10 +10,8 @@ reference on GPUs.
 
 from __future__ import annotations
 
-import base64
 import fcntl
 import importlib.util
-import io
 import json
 import os
 import shutil
@@ -26,7 +24,6 @@ from pathlib import Path
 from types import ModuleType, SimpleNamespace
 from typing import Any
 
-import numpy as np
 import pytest
 
 GPU_LOCK_PATH = "/tmp/marin-grugmoe-gpu-e2e.lock"
@@ -188,58 +185,6 @@ def _run_backend(phase: str, paths: backend.E2EPaths, result_path: str) -> dict[
     raise AssertionError("unreachable")
 
 
-def _vllm_prompt_sweep_texts(result: dict[str, Any]) -> list[str]:
-    return [str(text) for rank_result in result.get("rank_results", []) for text in rank_result.get("texts", [])]
-
-
-def _stable_prompt_gate_summary(
-    *,
-    vllm_result: dict[str, Any],
-    levanter_result: dict[str, Any],
-) -> dict[str, Any]:
-    vllm_by_index = {
-        int(result["prompt_index"]): result
-        for result in vllm_result.get("vllm_prompt_sweep_results", [])
-        if "prompt_index" in result
-    }
-    candidates: list[dict[str, Any]] = []
-    selected: dict[str, Any] | None = None
-    for levanter_prompt in levanter_result.get("levanter_prompt_sweep_results", []):
-        prompt_index = int(levanter_prompt["prompt_index"])
-        vllm_prompt = vllm_by_index.get(prompt_index)
-        vllm_texts = _vllm_prompt_sweep_texts(vllm_prompt or {})
-        jax_completion = str(levanter_prompt.get("completion", ""))
-        margin = levanter_prompt.get("min_step_top2_margin")
-        jax_row_stable = (
-            levanter_prompt.get("row_completions_identical") is True
-            and levanter_prompt.get("all_steps_row_identical") is True
-            and margin is not None
-            and float(margin) >= backend.DIAGNOSTIC_STABLE_PROMPT_MIN_TOP2_MARGIN
-        )
-        vllm_stable = bool(vllm_texts) and len(set(vllm_texts)) == 1
-        exact_parity = jax_row_stable and vllm_stable and all(text == jax_completion for text in vllm_texts)
-        candidate = {
-            "prompt_index": prompt_index,
-            "prompt": levanter_prompt.get("prompt"),
-            "jax_completion": jax_completion,
-            "jax_row_stable": jax_row_stable,
-            "jax_min_step_top2_margin": margin,
-            "vllm_completion_counts": vllm_prompt.get("completion_counts") if vllm_prompt else {},
-            "vllm_stable": vllm_stable,
-            "exact_parity": exact_parity,
-        }
-        candidates.append(candidate)
-        if selected is None and exact_parity:
-            selected = candidate
-    return {
-        "required_min_top2_margin": backend.DIAGNOSTIC_STABLE_PROMPT_MIN_TOP2_MARGIN,
-        "max_new_tokens": backend.DIAGNOSTIC_PROMPT_SWEEP_MAX_NEW_TOKENS,
-        "candidates": candidates,
-        "selected": selected,
-        "passed": selected is not None,
-    }
-
-
 @pytest.fixture(scope="module")
 def export_result(e2e_paths: backend.E2EPaths) -> dict[str, Any]:
     diagnostic = _nvidia_smi_diagnostic()
@@ -286,15 +231,9 @@ def _write_summary_update(
             "vllm_attention_backend": backend.VLLM_ATTENTION_BACKEND,
             "vllm_default_attention_backend": backend.VLLM_DEFAULT_ATTENTION_BACKEND,
             "vllm_dtype": backend.VLLM_DTYPE,
-            "vllm_moe_compute": backend.VLLM_MOE_COMPUTE,
             "vllm_route_diagnostics": backend.VLLM_ROUTE_DIAGNOSTICS,
             "levanter_reference_mode": backend.LEVANTER_REFERENCE_MODE,
             "levanter_expert_axis_size": backend.LEVANTER_EXPERT_AXIS_SIZE,
-            "levanter_prompt_sweep": backend.LEVANTER_PROMPT_SWEEP,
-            "levanter_route_diagnostics": backend.LEVANTER_ROUTE_DIAGNOSTICS,
-            "forced_prefix_diagnostics": backend.FORCED_PREFIX_DIAGNOSTICS,
-            "training_loss_diagnostics": backend.TRAINING_LOSS_DIAGNOSTICS,
-            "primary_gate": backend.PRIMARY_GATE,
             "levanter_moe_capacity_factor": backend.LEVANTER_MOE_CAPACITY_FACTOR,
             "levanter_decode_use_active_prefix": backend.LEVANTER_DECODE_USE_ACTIVE_PREFIX,
             "prompt_batch_size": backend.PROMPT_BATCH_SIZE,
@@ -339,7 +278,6 @@ def _write_summary_update(
         summary["vllm_observed_data_parallel_size"] = backend_results["vllm"].get("vllm_data_parallel_size")
         summary["vllm_observed_expert_parallel_size"] = backend_results["vllm"].get("vllm_expert_parallel_size")
         summary["vllm_observed_dtype"] = backend_results["vllm"].get("vllm_dtype")
-        summary["vllm_observed_moe_compute"] = backend_results["vllm"].get("vllm_moe_compute")
         summary["vllm_observed_route_diagnostics"] = backend_results["vllm"].get("vllm_route_diagnostics")
         summary["vllm_worker_ep_summary"] = backend_results["vllm"].get("worker_ep_summary")
         summary["vllm_routed_expert_owner_ranks"] = backend_results["vllm"].get("routed_expert_owner_ranks")
@@ -354,17 +292,6 @@ def _write_summary_update(
         levanter_jax_mesh = backend_results["levanter"].get("jax_mesh", {})
         summary["levanter_observed_reference_mode"] = backend_results["levanter"].get("levanter_reference_mode")
         summary["levanter_observed_expert_axis_size"] = backend_results["levanter"].get("levanter_expert_axis_size")
-        summary["levanter_observed_prompt_sweep"] = backend_results["levanter"].get("levanter_prompt_sweep")
-        summary["levanter_observed_route_diagnostics"] = backend_results["levanter"].get("levanter_route_diagnostics")
-        summary["forced_prefix_diagnostics"] = (
-            backend_results["vllm"].get("forced_prefix_diagnostics") is True
-            and backend_results["levanter"].get("forced_prefix_diagnostics") is True
-        )
-        summary["training_loss_diagnostics"] = backend_results["levanter"].get("training_loss_diagnostics")
-        summary["stable_prompt_gate"] = _stable_prompt_gate_summary(
-            vllm_result=backend_results["vllm"],
-            levanter_result=backend_results["levanter"],
-        )
         summary["levanter_reference_policy"] = backend_results["levanter"].get("levanter_reference_policy")
         summary["levanter_jax_gpu_device_count"] = levanter_jax_runtime.get("gpu_device_count")
         summary["levanter_jax_mesh_device_count"] = levanter_jax_mesh.get("device_count")
@@ -384,8 +311,6 @@ def _write_summary_update(
             and backend_results["vllm"].get("worker_ep_summary", {}).get("ep_rank_coverage") is True
             and backend_results["vllm"].get("worker_ep_summary", {}).get("local_expert_coverage") is True
         )
-    if backend.PRIMARY_GATE == "stable_prompt":
-        summary["passed"] = summary.get("stable_prompt_gate", {}).get("passed") is True
     backend._write_json(e2e_paths.summary_result_path, summary)
     print("grugmoe_gpu_real_checkpoint_e2e_result=" + json.dumps(summary, sort_keys=True), flush=True)
 
@@ -395,14 +320,13 @@ def test_grugmoe_gpu_real_checkpoint_e2e_static_preconditions() -> None:
     assert backend.VLLM_MAX_NUM_SEQS >= backend.PROMPT_BATCH_SIZE
     assert backend.WORKER_EXTENSION_CLS == f"{backend.WORKER_EXTENSION_MODULE}.{backend.WORKER_EXTENSION_CLASS}"
     assert backend.VLLM_ATTENTION_BACKEND in backend.VLLM_ATTENTION_BACKENDS_UNDER_TEST
-    assert backend.VLLM_DTYPE in backend.VLLM_DTYPE_CHOICES
-    assert backend.VLLM_MOE_COMPUTE in backend.VLLM_MOE_COMPUTE_CHOICES
-    assert backend.LEVANTER_REFERENCE_MODE in backend.LEVANTER_REFERENCE_MODE_CHOICES
-    assert backend.PRIMARY_GATE in backend.PRIMARY_GATE_CHOICES
-    assert 4 <= backend.DIAGNOSTIC_PROMPT_SWEEP_MAX_NEW_TOKENS <= 8
-    assert backend.EXPECTED_GPU_COUNT % backend.LEVANTER_EXPERT_AXIS_SIZE == 0
+    assert backend.VLLM_DTYPE == "bfloat16"
+    assert backend.LEVANTER_REFERENCE_MODE == "bf16_compute"
+    assert backend.LEVANTER_EXPERT_AXIS_SIZE == backend.EXPECTED_GPU_COUNT
     assert backend.LEVANTER_MOE_CAPACITY_FACTOR == float(backend.EXPECTED_GPU_COUNT)
     assert backend.LEVANTER_DECODE_USE_ACTIVE_PREFIX is True
+    assert backend.PROMPT == "Answer with one word only. What color is the sky on a clear day?"
+    assert backend.EXPECTED_CONTINUATION == " The sky is the"
     assert backend.CHECKPOINT_PATH.startswith(backend.COREWEAVE_S3_PREFIX)
     assert backend.TOKENIZER_PATH.startswith(backend.COREWEAVE_S3_PREFIX)
 
@@ -422,9 +346,8 @@ def test_vllm_gpu_env_enables_debug_logging(monkeypatch: pytest.MonkeyPatch) -> 
     snapshot = backend._configure_vllm_gpu_env()
     assert os.environ["VLLM_LOGGING_LEVEL"] == "DEBUG"
     assert snapshot["vllm_logging_level"] == "DEBUG"
-    assert snapshot["vllm_moe_compute"] == backend.VLLM_MOE_COMPUTE
-    assert os.environ[backend.VLLM_GRUGMOE_MOE_COMPUTE_ENV] == backend.VLLM_MOE_COMPUTE
     assert snapshot["vllm_route_diagnostics"] == backend.VLLM_ROUTE_DIAGNOSTICS
+    assert os.environ[backend.VLLM_GRUGMOE_ROUTE_DIAGNOSTICS_ENV] == "0"
     assert snapshot["worker_extension_module"] == backend.WORKER_EXTENSION_MODULE
     assert snapshot["worker_extension_cls"] == backend.WORKER_EXTENSION_CLS
     assert snapshot["worker_extension_path"] == str(BACKEND_PATH.parent)
@@ -444,106 +367,6 @@ def test_vllm_server_logs_are_copied_to_output_prefix(tmp_path: Path) -> None:
     assert {item["name"] for item in artifacts["files"]} == {"stdout.log", "stderr.log"}
     assert (tmp_path / "result-prefix" / "vllm-server-logs" / "stdout.log").read_text() == "stdout full log\n"
     assert (tmp_path / "result-prefix" / "vllm-server-logs" / "stderr.log").read_text() == "stderr full log\n"
-
-
-def _encoded_routed_experts(expert_ids: list[int]) -> str:
-    payload = io.BytesIO()
-    np.save(payload, np.array([[expert_ids]], dtype=np.int64))
-    return base64.b64encode(payload.getvalue()).decode()
-
-
-def test_vllm_completion_diagnostics_compare_rank4_and_rank0(monkeypatch: pytest.MonkeyPatch) -> None:
-    calls: list[dict[str, Any]] = []
-
-    class FakeResponse:
-        ok = True
-        status_code = 200
-        text = "{}"
-
-        def __init__(self, payload: dict[str, Any]) -> None:
-            self._payload = payload
-
-        def json(self) -> dict[str, Any]:
-            return self._payload
-
-        def raise_for_status(self) -> None:
-            raise AssertionError("raise_for_status should not be called for successful fake response")
-
-    def fake_post(url: str, **kwargs: Any) -> FakeResponse:
-        calls.append({"url": url, **kwargs})
-        if url.endswith("/collective_rpc"):
-            return FakeResponse(
-                {
-                    "results": [
-                        {
-                            "worker_rank": rank,
-                            "route_diagnostics_enabled": True,
-                            "layers": [],
-                        }
-                        for rank in range(backend.EXPECTED_GPU_COUNT)
-                    ]
-                }
-            )
-        rank = int(kwargs["headers"]["X-data-parallel-rank"])
-        choices = [
-            {
-                "text": f"rank-{rank}-choice-{index}",
-                "finish_reason": "length",
-                "routed_experts": _encoded_routed_experts([rank * 32, 255]),
-                "logprobs": {
-                    "tokens": [f"rank-{rank}"],
-                    "token_logprobs": [-0.1],
-                    "top_logprobs": [{f"rank-{rank}": -0.1}],
-                },
-            }
-            for index, _ in enumerate(kwargs["json"]["prompt"])
-        ]
-        return FakeResponse(
-            {
-                "choices": choices,
-                "usage": {"completion_tokens": len(choices)},
-            }
-        )
-
-    worker_ep_states = [
-        {
-            "ep_rank": ep_rank,
-            "local_expert_ids": list(range(ep_rank * 32, ep_rank * 32 + 32)),
-        }
-        for ep_rank in range(backend.VLLM_EXPERT_PARALLEL_SIZE)
-    ]
-    monkeypatch.setattr(backend.requests, "post", fake_post)
-    env = SimpleNamespace(server_url="http://127.0.0.1:8000/v1", model_id="grugmoe")
-
-    diagnostics = backend._run_vllm_completion_diagnostics(env, worker_ep_states=worker_ep_states)
-
-    assert diagnostics["compare_ranks"] == [4, 0]
-    assert diagnostics["repeated_attempts"] == 3
-    completion_calls = [call for call in calls if call["url"].endswith("/completions")]
-    rpc_calls = [call for call in calls if call["url"].endswith("/collective_rpc")]
-    assert len(completion_calls) == 12
-    assert len(rpc_calls) == 2
-    assert calls[0]["headers"] == {
-        "X-data-parallel-rank": "4",
-        "X-Request-Id": "grugmoe-diagnostic-rank4-first-token-repeated-bs2",
-    }
-    assert {request["data_parallel_rank"] for request in diagnostics["requests"]} == {0, 4}
-    assert [
-        request["attempt"] for request in diagnostics["requests"] if request["name"].startswith("rank4-repeated-bs2")
-    ] == [0, 1, 2]
-    rank4_non_repeated = next(
-        request for request in diagnostics["requests"] if request["name"] == "rank4-non-repeated-bs2"
-    )
-    assert rank4_non_repeated["prompt_kind"] == "non_repeated"
-    assert rank4_non_repeated["choice_count"] == 2
-    assert rank4_non_repeated["choices"][0]["routed_experts_shape"] == [1, 1, 2]
-    assert rank4_non_repeated["choices"][0]["routed_owner_ranks"] == [4, 7]
-    rank4_first_token = next(
-        request for request in diagnostics["requests"] if request["name"] == "rank4-first-token-repeated-bs2"
-    )
-    assert rank4_first_token["max_tokens"] == 1
-    assert rank4_first_token["logprobs"] == backend.DIAGNOSTIC_LOGPROBS
-    assert len(rank4_first_token["route_diagnostics"]) == backend.EXPECTED_GPU_COUNT
 
 
 def test_grugmoe_worker_extension_reports_structured_ep_state(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -794,71 +617,10 @@ def test_grugmoe_gpu_real_checkpoint_levanter_output(
         int(mesh_shape.get("replica_dcn", 1)) * int(mesh_shape.get("data", 1)) * int(mesh_shape.get("expert", 1))
     ) == backend.EXPECTED_GPU_COUNT
     assert levanter_result["levanter_expert_axis_size"] == backend.LEVANTER_EXPERT_AXIS_SIZE
-    assert len(levanter_result["completions"]) == backend.PROMPT_BATCH_SIZE
-    assert all(completion == backend.EXPECTED_CONTINUATION for completion in levanter_result["completions"])
-    assert all(result["row_completions"] for result in levanter_result["decode_results"])
-    assert levanter_result["passed"] is True
-
-
-@pytest.mark.gpu_ci
-@pytest.mark.slow
-@pytest.mark.data_integration
-def test_grugmoe_gpu_real_checkpoint_levanter_diagnostic_output(
-    e2e_paths: backend.E2EPaths,
-    levanter_result: dict[str, Any],
-) -> None:
-    _write_summary_update(e2e_paths, backend_result=levanter_result)
-    assert levanter_result["phase"] == "levanter"
     assert levanter_result["levanter_reference_mode"] == backend.LEVANTER_REFERENCE_MODE
-    assert levanter_result["levanter_expert_axis_size"] == backend.LEVANTER_EXPERT_AXIS_SIZE
-    assert levanter_result["levanter_route_diagnostics"] == backend.LEVANTER_ROUTE_DIAGNOSTICS
     assert levanter_result["decode_batch_size"] == backend.EXPECTED_GPU_COUNT
     assert len(levanter_result["completions"]) == backend.PROMPT_BATCH_SIZE
-    for decode_result in levanter_result["decode_results"]:
-        assert len(decode_result["row_completions"]) == backend.EXPECTED_GPU_COUNT
-        assert decode_result["steps"]
-        assert len(decode_result["steps"][0]["rows"]) == backend.EXPECTED_GPU_COUNT
-        assert bool(decode_result["route_diagnostics"]) is backend.LEVANTER_ROUTE_DIAGNOSTICS
-    if backend.LEVANTER_PROMPT_SWEEP:
-        sweep_results = levanter_result["levanter_prompt_sweep_results"]
-        assert len(sweep_results) == len(backend.DIAGNOSTIC_PROMPT_SWEEP_PROMPTS)
-        assert all(result["decode_result"]["steps"] for result in sweep_results)
-        assert all(
-            len(result["decode_result"]["steps"][0]["rows"]) == backend.EXPECTED_GPU_COUNT for result in sweep_results
-        )
-
-
-@pytest.mark.gpu_ci
-@pytest.mark.slow
-@pytest.mark.data_integration
-def test_grugmoe_gpu_real_checkpoint_stable_prompt_gate(
-    e2e_paths: backend.E2EPaths,
-    export_result: dict[str, Any],
-    vllm_result: dict[str, Any],
-    levanter_result: dict[str, Any],
-) -> None:
-    _write_summary_update(e2e_paths, export_result=export_result, backend_result=vllm_result)
-    _write_summary_update(e2e_paths, backend_result=levanter_result)
-    summary = backend._read_json(e2e_paths.summary_result_path)
-    assert backend.PRIMARY_GATE == "stable_prompt"
-    assert backend.VLLM_MOE_COMPUTE == "model_dtype"
-    assert backend.LEVANTER_REFERENCE_MODE == "bf16_compute"
-    assert backend.LEVANTER_PROMPT_SWEEP is True
-    gate = summary["stable_prompt_gate"]
-    assert gate["max_new_tokens"] == backend.DIAGNOSTIC_PROMPT_SWEEP_MAX_NEW_TOKENS
-    assert gate["passed"] is True
-    assert gate["selected"] is not None
-    assert summary["passed"] is True
-    if backend.FORCED_PREFIX_DIAGNOSTICS:
-        assert vllm_result["vllm_forced_prefix_results"]
-        assert levanter_result["levanter_forced_prefix_results"]
-    if backend.TRAINING_LOSS_DIAGNOSTICS:
-        training = levanter_result["levanter_training_loss_results"]
-        assert training["enabled"] is True
-        assert len(training["cases"]) == (
-            len(backend.TRAINING_LOSS_DIAGNOSTIC_EXPERT_AXIS_SIZES)
-            * len(backend.TRAINING_LOSS_DIAGNOSTIC_REFERENCE_MODES)
-        )
-        assert training["loss_deltas"]
-        assert all(case["nan_inf_checks"]["loss_finite"] for case in training["cases"])
-        assert all(case["nan_inf_checks"]["grads_all_finite"] for case in training["cases"])
+    assert all(completion == backend.EXPECTED_CONTINUATION for completion in levanter_result["completions"])
+    assert all(result["completion"] == backend.EXPECTED_CONTINUATION for result in levanter_result["decode_results"])
+    assert all(result["steps"] for result in levanter_result["decode_results"])
+    assert levanter_result["passed"] is True

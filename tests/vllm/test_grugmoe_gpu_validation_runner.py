@@ -78,16 +78,17 @@ def test_grugmoe_gpu_validation_runner_writes_command_output_to_log(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     log_path = tmp_path / "command.log"
+    sentinel = "runner-output-sentinel"
 
     report = runner._run(
-        [sys.executable, "-c", "print(40 + 2)"],
+        [sys.executable, "-c", "print('runner-' + 'output-' + 'sentinel')"],
         cwd=tmp_path,
         log_path=log_path,
     )
 
     captured = capsys.readouterr()
-    assert "42" not in captured.out
-    assert "42" in log_path.read_text()
+    assert sentinel not in captured.out
+    assert sentinel in log_path.read_text()
     assert report["returncode"] == 0
     assert report["log_path"] == str(log_path)
 
