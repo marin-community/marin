@@ -84,10 +84,13 @@ def finelog_relay_interceptors(
     public key. With no signer (null-auth), no bearer is sent and the store must
     admit this controller by a ``cidr`` layer (a same-VPC/loopback store).
 
-    TODO(finelog deploy): the shared finelog must carry THIS controller's public
-    key (``jwt_manager.signer`` → ``public_pem``) in its ``JwtAuthLayer`` for the
-    delegation token to verify end-to-end. Wiring that into the finelog deploy
-    config (per-issuer inline public keys) is a follow-up on the finelog side.
+    A shared finelog must carry THIS controller's public key (served on its JWKS /
+    printed by ``iris cluster init-keys``) in its ``jwt`` auth layer to verify the
+    delegation token end-to-end; the finelog deploy configs carry a commented
+    placeholder for that layer. Generating it across services -- deriving the public
+    key and populating the shared finelog's config -- is a top-level marin
+    admin-script concern (issue #6961), deliberately not built into iris: iris must
+    not render finelog's deploy config.
     """
     del config  # relay credential no longer carries a per-cluster secret
     if jwt_manager is not None:

@@ -40,3 +40,16 @@ deployment:
 auth:
   - type: cidr
     cidrs: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 127.0.0.0/8, "::1/128"]
+  # A shared/global finelog also trusts each federated iris controller by its public
+  # key (to verify aud="finelog" relay-delegation tokens). This local finelog takes no
+  # cross-cluster pushes, so the jwt layer stays commented. The controller public key
+  # is inline-safe (its JWKS / `iris cluster init-keys`); a marin admin script will
+  # generate the layer — see issue #6961. Shape, one entry per federated cluster:
+  # - type: jwt
+  #   keys:
+  #     - cluster: <iris-cluster-name>
+  #       public_keys:
+  #         - |
+  #             -----BEGIN PUBLIC KEY-----
+  #             <iris-controller-ed25519-public-key-pem>
+  #             -----END PUBLIC KEY-----
