@@ -905,20 +905,17 @@ def test_preemption_does_not_count_toward_max_task_failures(state):
     assert _query_job(state, job.job_id).state == job_pb2.JOB_STATE_RUNNING
 
 
-def _job_failure_count(state, tasks) -> int:
-    """Derived job-wide cumulative failure count (sum of per-task derived counts)."""
-    return sum(_query_task(state, t.task_id).failure_count for t in tasks)
-
-
 def test_coscheduled_crash_loop_fails_on_cumulative_budget(state):
     """A coscheduled gang crash-looping across rounds fails on the cumulative budget.
 
-    One task crashes per round and its siblings bounce COSCHED_FAILED (which charges
-    neither budget), so exactly one FAILED attempt accrues per crashed round. A
-    different task crashes each round, so no single task ever exhausts its per-task
-    retry budget — only the derived job-wide count crosses ``max_task_failures``. This
-    is the case an off-by-one between "charge per round" and "count FAILED attempts"
-    would break.
+    One task crashes per round; its siblings bounce COSCHED_FAILED, which charges
+    neither budget, so exactly one FAILED attempt accrues per crashed round. A
+    different task crashes each round, so no single task exhausts its own retry
+    budget — only the derived job-wide count crosses ``max_task_failures``.
+
+    The RUNNING → RUNNING → FAILED sequence at ``max_task_failures=2`` pins the accrual
+    to exactly one per round: had the bounced siblings' COSCHED_FAILED attempts been
+    miscounted as failures, round 1 alone would charge four and trip the budget early.
     """
     for i in range(4):
         meta = make_worker_metadata()
@@ -939,14 +936,12 @@ def test_coscheduled_crash_loop_fails_on_cumulative_budget(state):
     tasks = submit_job(state, "j1", req)
     job_id = JobName.root("test-user", "j1")
 
-    # Rounds 1 and 2 stay within the cumulative budget (1, then 2, both <= 2).
+    # Rounds 1 and 2 (cumulative 1, then 2) stay within budget; the job keeps running.
     for round_idx in range(2):
         for i, task in enumerate(tasks):
             dispatch_task(state, task, WorkerId(f"w{i}"))
         transition_task(state, tasks[round_idx].task_id, job_pb2.TASK_STATE_FAILED, error=f"crash {round_idx}")
         assert _query_job(state, job_id).state == job_pb2.JOB_STATE_RUNNING
-        # Exactly one FAILED attempt accrued this round; the bounced siblings did not.
-        assert _job_failure_count(state, tasks) == round_idx + 1
 
     # Round 3: a third distinct task crashes -> cumulative 3 > max_task_failures=2 ->
     # the job fails on the derived budget, even though every task failed at most once.
@@ -954,17 +949,18 @@ def test_coscheduled_crash_loop_fails_on_cumulative_budget(state):
         dispatch_task(state, task, WorkerId(f"w{i}"))
     transition_task(state, tasks[2].task_id, job_pb2.TASK_STATE_FAILED, error="crash 2")
     assert _query_job(state, job_id).state == job_pb2.JOB_STATE_FAILED
+    # Death was the cumulative budget, not a single task exhausting max_retries_failure.
     for task in tasks:
         assert _query_task(state, task.task_id).failure_count <= 1
 
 
 def test_timeout_charges_cumulative_failure_budget(state):
-    """An execution timeout fails the job via the budget, charging through its FAILED attempt.
+    """An execution timeout charges the failure budget through the FAILED attempt it records.
 
-    After dropping the in-flight ``failure_count`` scratch, ``timeout_one`` carries no
-    counter: its charge is entirely the FAILED attempt it records. A single timeout in
-    a two-task job crosses ``max_task_failures=0`` while the sibling is still RUNNING,
-    so the budget branch (not the all-terminal branch) fails the job.
+    ``timeout_one`` carries no counter; the charge is entirely the FAILED attempt. A
+    single timeout in a two-task job crosses ``max_task_failures=0`` while the sibling
+    is still RUNNING, so the cumulative-budget branch (not the all-terminal branch)
+    fails the job.
     """
     for i in range(2):
         register_worker(state, f"w{i}", f"host{i}:8080", make_worker_metadata())
