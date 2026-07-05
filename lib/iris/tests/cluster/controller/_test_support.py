@@ -46,7 +46,6 @@ class ControllerTestState:
     """
 
     _db: ControllerDB
-    _attempt_counts: AttemptCountsProjection
     _health: WorkerHealthTracker
     _worker_attrs: WorkerAttrsProjection
 
