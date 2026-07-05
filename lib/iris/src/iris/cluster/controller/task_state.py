@@ -96,7 +96,6 @@ class ActiveTaskRow:
     state: int
     current_attempt_id: int
     current_worker_id: WorkerId | None
-    failure_count: int
     preemption_count: int
     max_retries_failure: int
     max_retries_preemption: int
