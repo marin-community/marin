@@ -535,9 +535,9 @@ class IapAuthConfig(_Config):
     # machine callers an `aud` distinct from the interactive-login client.
     programmatic_audiences: list[str] = Field(default_factory=list)
     signed_header_audience: str = ""
-    # Role granted to an IAP-verified email with no row in the user store; a
-    # provisioned user always resolves to their stored role. "admin" makes
-    # IAP's own allowlist the sole gate.
+    # Role granted to an IAP-verified email the role policy does not match (not in
+    # admin_users); admin_users always resolve to admin. "admin" here makes IAP's
+    # own allowlist the sole gate.
     unprovisioned_role: Literal["admin", "user", "dashboard"] = "dashboard"
 
 
