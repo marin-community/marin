@@ -400,78 +400,46 @@ def test_dashboard_job_detail(smoke_cluster, smoke_page, smoke_screenshot):
     )
 
 
+def _wait_for_task_log_marker(
+    cluster: IrisTestCluster, task_id: str, attempt_id: int, marker: str, *, timeout: float = 60.0
+) -> None:
+    """Poll the log server until the task attempt's EXACT-source logs contain ``marker``.
+
+    Log shipping is asynchronous: a worker flushes buffered lines after the task
+    exits, so a just-completed task's logs are not immediately queryable. This
+    mirrors the LogViewer's own EXACT ``{task}:{attempt}`` query so a dashboard test
+    can wait for the logs to land before asserting on a single page load.
+    """
+    source = f"{task_id}:{attempt_id}"
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        request = logging_pb2.FetchLogsRequest(
+            source=source, match_scope=logging_pb2.MATCH_SCOPE_EXACT, tail=True, max_lines=1000
+        )
+        if any(marker in entry.data for entry in cluster.log_client.fetch_logs(request).entries):
+            return
+        time.sleep(0.5)
+    raise AssertionError(f"log marker {marker!r} for {source} not queryable within {timeout:.0f}s")
+
+
 def test_dashboard_task_logs(smoke_cluster, verbose_job, smoke_page, smoke_screenshot):
     """Task logs show lines and substring filter on the task detail page."""
     task_status = smoke_cluster.task_status(verbose_job)
     task_id = task_status.task_id
     job_id = verbose_job.job_id.to_wire()
 
-    _console: list[str] = []
-    _errors: list[str] = []
-    _net: list[str] = []
-    if not isinstance(smoke_page, _NoOpPage):
-        smoke_page.on("console", lambda m: _console.append(f"{m.type}: {m.text}"))
-        smoke_page.on("pageerror", lambda e: _errors.append(str(e)))
-
-        def _on_req(r):
-            if "FetchLogs" in r.url:
-                _net.append(f"REQ {r.url}\n    post_data={r.post_data!r}")
-
-        def _on_resp(r):
-            if "FetchLogs" in r.url:
-                try:
-                    head = r.text()[:500]
-                except Exception as exc:
-                    head = f"<text() failed: {exc}>"
-                _net.append(f"RESP status={r.status} url={r.url}\n    body_head={head!r}")
-
-        smoke_page.on("request", _on_req)
-        smoke_page.on("response", _on_resp)
+    # The LogViewer issues a single EXACT {task}:{attempt} fetch on mount and only
+    # re-polls every 30s, so its first fetch must not race the worker's asynchronous
+    # post-completion log flush. Wait for the attempt's logs to be queryable first
+    # (as test_log_levels_populated does) so the page renders them on load.
+    _wait_for_task_log_marker(smoke_cluster, task_id, task_status.current_attempt_id, "DONE: all lines emitted")
 
     dashboard_goto(smoke_page, f"{smoke_cluster.url}/job/{job_id}/task/{task_id}")
     wait_for_dashboard_ready(smoke_page)
-
-    try:
-        smoke_page.wait_for_function(
-            "() => document.body.textContent.includes('DONE: all lines emitted')",
-            timeout=10000,
-        )
-    except Exception:
-        if not isinstance(smoke_page, _NoOpPage):
-            print("DIAG console:\n  " + "\n  ".join(_console))
-            print("DIAG pageerrors:\n  " + "\n  ".join(_errors))
-            print("DIAG FetchLogs network:\n" + "\n".join(_net))
-            panel = smoke_page.evaluate(
-                "() => (document.querySelector('#task-logs-section') || {}).innerText || 'NO #task-logs-section'"
-            )
-            print(f"DIAG task-logs-section:\n{panel[:2000]}")
-            body = smoke_page.evaluate("() => document.body.innerText")
-            print(f"DIAG body_len={len(body)}\nDIAG body_head:\n{body[:2500]}")
-        try:
-            st = smoke_cluster.task_status(verbose_job)
-            attempts_repr = [getattr(a, "attempt_id", a) for a in st.attempts]
-            print(
-                f"DIAG task_status: task_id={st.task_id!r} current_attempt_id={st.current_attempt_id} "
-                f"attempts={attempts_repr} state={st.state} worker={st.worker_id!r}"
-            )
-            for att in range(5):
-                req = logging_pb2.FetchLogsRequest(
-                    source=f"{st.task_id}:{att}", match_scope=logging_pb2.MATCH_SCOPE_EXACT, tail=True, max_lines=1000
-                )
-                ents = list(smoke_cluster.log_client.fetch_logs(req).entries)
-                done = any("DONE: all lines emitted" in e.data for e in ents)
-                print(f"DIAG EXACT {st.task_id}:{att} -> n={len(ents)} has_DONE={done}")
-            preq = logging_pb2.FetchLogsRequest(
-                source=f"{st.task_id}:", match_scope=logging_pb2.MATCH_SCOPE_PREFIX, tail=True, max_lines=1000
-            )
-            pents = list(smoke_cluster.log_client.fetch_logs(preq).entries)
-            pdone = any("DONE: all lines emitted" in e.data for e in pents)
-            print(
-                f"DIAG PREFIX {st.task_id}: -> n={len(pents)} has_DONE={pdone} srcs={sorted({e.source for e in pents})[:6]}"
-            )
-        except Exception as exc:
-            print(f"DIAG backend dump failed: {exc}")
-        raise
+    smoke_page.wait_for_function(
+        "() => document.body.textContent.includes('DONE: all lines emitted')",
+        timeout=10000,
+    )
     smoke_screenshot(
         "task-logs-default",
         "Task detail page with a log viewer panel displaying log output lines. "
@@ -742,6 +710,13 @@ def test_dashboard_backends_tab_with_peer(smoke_cluster, smoke_page, smoke_scree
 def test_dashboard_job_detail_with_logs(smoke_cluster, verbose_job, smoke_page, smoke_screenshot):
     """Job detail page shows combined log viewer for all tasks."""
     job_id = verbose_job.job_id.to_wire()
+    # Same asynchronous-log-shipping race as test_dashboard_task_logs: wait for the
+    # task's logs to land before the single page-load fetch (EXACT is a superset of
+    # the job view's PREFIX query).
+    task_status = smoke_cluster.task_status(verbose_job)
+    _wait_for_task_log_marker(
+        smoke_cluster, task_status.task_id, task_status.current_attempt_id, "DONE: all lines emitted"
+    )
     dashboard_goto(smoke_page, f"{smoke_cluster.url}/job/{job_id}")
     wait_for_dashboard_ready(smoke_page)
     _wait_for_job_detail_screenshot_ready(smoke_page, job_id)
@@ -1096,35 +1071,3 @@ def test_workdir_file_offload(smoke_cluster):
     )
     status = smoke_cluster.wait(job, timeout=smoke_cluster.job_timeout)
     assert status.state == job_pb2.JOB_STATE_SUCCEEDED
-
-
-def test_zz_leveltiming(smoke_cluster):
-    """TEMP: browser-exact proxy query (minLevel=INFO) time-to-DONE, vs no filter."""
-    import time
-
-    import httpx
-
-    job = smoke_cluster.submit(TestJobs.log_verbose, "lvl-probe")
-    smoke_cluster.wait(job, timeout=smoke_cluster.job_timeout)
-    t0 = time.monotonic()
-    ts = smoke_cluster.task_status(job)
-    src = f"{ts.task_id}:{ts.current_attempt_id}"
-    base = f"{smoke_cluster.url}/proxy/system.log-server/finelog.logging.LogService/FetchLogs"
-    DONE = "DONE: all lines emitted"
-
-    def poll(body, label):
-        hit = None
-        while time.monotonic() - t0 < 25:
-            r = httpx.post(base, json=body, headers={"content-type": "application/json"}, timeout=10.0)
-            n = r.text.count('"data"')
-            if DONE in r.text:
-                hit = time.monotonic() - t0
-                break
-            time.sleep(0.2)
-        print(f"\nLVLTIME {label}: time_to_DONE={hit}s last_n_data≈{n}")
-
-    poll(
-        {"source": src, "matchScope": "MATCH_SCOPE_EXACT", "minLevel": "INFO", "maxLines": 500, "tail": True},
-        "minLevel=INFO",
-    )
-    poll({"source": src, "matchScope": "MATCH_SCOPE_EXACT", "maxLines": 500, "tail": True}, "no-minLevel")
