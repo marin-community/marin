@@ -37,10 +37,9 @@
 //!   reachability explicitly: a global finelog that also serves its own cluster
 //!   lists that cluster's loopback/VPC ranges (e.g. `127.0.0.0/8`, `10.0.0.0/8`)
 //!   so local clients keep working without a JWT, while remote pushes must sign.
-//!   CIDR matches the DIRECT transport peer only: if the request carries an
-//!   `X-Forwarded-For` header (a proxy hop) the cidr layer does NOT match, because
-//!   a proxied request cannot borrow a trusted proxy's IP — the same distrust of
-//!   spoofable `X-Forwarded-For` that rigging's cidr layer applies.
+//!   CIDR matches the transport peer only (never an `X-Forwarded-For` value), the
+//!   same distrust of spoofable `X-Forwarded-For` that rigging's loopback check
+//!   applies.
 //!
 //! The layers are walked in order: the first `Allow` admits, the first `Reject`
 //! denies, and a request no layer claims is denied. Order matters — the CIDR
@@ -318,18 +317,11 @@ impl AuthLayer {
     }
 
     /// Evaluate this layer against extracted request facts: the bearer token
-    /// (already stripped of `Bearer `), the transport peer IP, and `forwarded`
-    /// (true iff the request carried an `X-Forwarded-For` header).
-    fn check(&self, bearer: Option<&str>, peer_ip: Option<IpAddr>, forwarded: bool) -> Verdict {
+    /// (already stripped of `Bearer `) and the transport peer IP.
+    fn check(&self, bearer: Option<&str>, peer_ip: Option<IpAddr>) -> Verdict {
         match self {
-            // A request carrying `X-Forwarded-For` (`forwarded`) is a proxy hop and
-            // cannot borrow the trusted proxy's IP, so the cidr layer refuses to
-            // match it regardless of the transport peer. This is a no-op for
-            // finelog's current direct-push deployment (no proxy ⇒ no XFF header ⇒
-            // `forwarded` is always false); it only hardens a future proxy-fronted
-            // finelog.
             AuthLayer::Cidr(nets) => match peer_ip {
-                Some(ip) if !forwarded && nets.iter().any(|n| n.contains(ip)) => Verdict::Allow,
+                Some(ip) if nets.iter().any(|n| n.contains(ip)) => Verdict::Allow,
                 _ => Verdict::Fallthrough,
             },
             // rigging JwtAuthenticator parity: no bearer → fall through (a later
@@ -424,14 +416,13 @@ impl AuthPolicy {
     }
 
     /// The core decision over already-extracted request facts: the bearer token
-    /// (no `Bearer ` prefix), the transport peer IP, and `forwarded` (true iff the
-    /// request carried an `X-Forwarded-For` header). `true` = admit. Walks the
+    /// (no `Bearer ` prefix) and the transport peer IP. `true` = admit. Walks the
     /// stack: first `Allow` admits, first `Reject` denies, an unclaimed request is
     /// denied (default-deny). Shared by the Connect interceptor and the axum
     /// [`auth_gate`] middleware so both surfaces enforce the identical policy.
-    fn admits(&self, bearer: Option<&str>, peer_ip: Option<IpAddr>, forwarded: bool) -> bool {
+    fn admits(&self, bearer: Option<&str>, peer_ip: Option<IpAddr>) -> bool {
         for layer in &self.layers {
-            match layer.check(bearer, peer_ip, forwarded) {
+            match layer.check(bearer, peer_ip) {
                 Verdict::Allow => return true,
                 Verdict::Reject => return false,
                 Verdict::Fallthrough => {}
@@ -443,8 +434,7 @@ impl AuthPolicy {
     /// Connect-interceptor entry point: extract the bearer + peer IP from the RPC
     /// context and apply the policy.
     fn authorize(&self, ctx: &RequestContext) -> Result<(), ConnectError> {
-        let forwarded = ctx.header("x-forwarded-for").is_some();
-        if self.admits(bearer_token(ctx), peer_ip(ctx), forwarded) {
+        if self.admits(bearer_token(ctx), peer_ip(ctx)) {
             Ok(())
         } else {
             Err(unauthenticated())
@@ -528,8 +518,7 @@ pub async fn auth_gate(
         .extensions()
         .get::<ConnectInfo<SocketAddr>>()
         .map(|c| c.0.ip());
-    let forwarded = request.headers().get("x-forwarded-for").is_some();
-    if policy.admits(bearer, peer_ip, forwarded) {
+    if policy.admits(bearer, peer_ip) {
         next.run(request).await
     } else {
         (StatusCode::UNAUTHORIZED, "finelog: unauthorized").into_response()
@@ -967,8 +956,7 @@ mod tests {
     /// The jwt verifier is mocked per the file's `note`: `token == "valid"` maps to
     /// a real bearer signed by the trusted [`PRIV_A`] (verifies against [`PUB_A`],
     /// `aud="finelog"`); `"invalid"` maps to a bearer signed by [`PRIV_UNTRUSTED`]
-    /// (present but unverifiable ⇒ Reject); `null` maps to no bearer. The `forwarded`
-    /// flag is set from whether the request headers carry `x-forwarded-for`. Only the
+    /// (present but unverifiable ⇒ Reject); `null` maps to no bearer. Only the
     /// verdict is checked — the Python-only `expect.matched` field does not apply here
     /// (finelog's `admits` returns a bare bool).
     #[test]
@@ -995,11 +983,8 @@ mod tests {
                 None => None,
             };
             let peer: SocketAddr = request["peer"].as_str().unwrap().parse().unwrap();
-            let forwarded = request["headers"]
-                .as_object()
-                .is_some_and(|h| h.contains_key("x-forwarded-for"));
 
-            let admitted = policy.admits(bearer.as_deref(), Some(peer.ip()), forwarded);
+            let admitted = policy.admits(bearer.as_deref(), Some(peer.ip()));
             let expected = vector["expect"]["verdict"].as_str().unwrap() == "allow";
             assert_eq!(
                 admitted,

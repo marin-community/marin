@@ -10,8 +10,6 @@
     "   explicit 'cidr' of 127.0.0.0/8 and ::1/128 (no separate 'loopback'/'anonymous' layer here).",
     " - Semantics are first-match: the first layer that authenticates admits, the first that rejects denies,",
     "   and an all-absent walk falls to the default-deny terminal (matched = null).",
-    " - A 'cidr' layer matches the direct transport peer only, never a forwarded request: if the request",
-    "   carries an 'x-forwarded-for' header the cidr layer does NOT match (refusal).",
     " - The 'jwt' layer's verifier is MOCKED per language (Python injects a TokenVerifier; the Rust engine",
     "   verifies natively): request.token is 'valid' (the mock accepts), 'invalid' (present but rejected), or",
     "   null (absent). A present-but-invalid token REJECTS (stops the walk with a deny); an absent token is",
@@ -39,20 +37,6 @@
       "stack": [{"type": "cidr", "cidrs": ["10.0.0.0/8"]}, {"type": "jwt"}],
       "request": {"peer": "10.1.2.3:44100", "headers": {}, "token": "invalid"},
       "expect": {"verdict": "allow", "matched": "cidr"}
-    },
-    {
-      "name": "x_forwarded_for_refuses_cidr",
-      "description": "The socket peer is inside the cidr, but x-forwarded-for is present (a proxy hop), so cidr does NOT match and the request is denied.",
-      "stack": [{"type": "cidr", "cidrs": ["10.0.0.0/8"]}],
-      "request": {"peer": "10.1.2.3:44100", "headers": {"x-forwarded-for": "203.0.113.9"}, "token": null},
-      "expect": {"verdict": "deny", "matched": null}
-    },
-    {
-      "name": "x_forwarded_for_refuses_cidr_but_valid_jwt_admits",
-      "description": "A forwarded request cannot borrow the cidr, but a valid jwt still admits it via the later jwt layer.",
-      "stack": [{"type": "cidr", "cidrs": ["10.0.0.0/8"]}, {"type": "jwt"}],
-      "request": {"peer": "10.1.2.3:44100", "headers": {"x-forwarded-for": "203.0.113.9"}, "token": "valid"},
-      "expect": {"verdict": "allow", "matched": "jwt"}
     },
     {
       "name": "valid_jwt_admits_out_of_cidr_peer",

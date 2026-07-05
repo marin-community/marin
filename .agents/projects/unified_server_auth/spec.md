@@ -268,8 +268,11 @@ evaluators in CI. Each vector pins an input and the expected outcome:
 }
 ```
 
-Vectors cover the divergences #6861 names (default posture, cidr-vs-jwt ordering,
-`X-Forwarded-For` refusal, empty-list lockout, allow-localhost fallback). This is
+Vectors cover the behavior both engines share (default posture, cidr-vs-jwt
+ordering, empty-list lockout, allow-localhost fallback); `X-Forwarded-For` refusal
+is iris-controller-specific — finelog trusts its in-VPC proxy, so it matches the
+transport peer regardless — and is covered by rigging's own `test_server_auth.py`,
+not the shared vectors. This is
 the drift gate; it replaces "two parsers that happen to agree" with "one contract
 both must pass" (the Casbin lesson, research §7.1). The `jwt` layer's verifier is
 mocked per-language (Python injects a `TokenVerifier`; the Rust engine, if built
@@ -453,7 +456,7 @@ any store, so a config change applies only after the user re-runs `iris login`
 | `lib/iris/src/iris/cluster/controller/service.py` | `login` mints a session token with the `RolePolicy` role (rejects `system:`). `SetUserRole` handler NOT built (§3) |
 | `lib/iris/src/iris/cluster/controller/migrations/0038_drop_api_keys.py`, `0039_drop_users.py` | **new** — drop the `api_keys` and `users` tables (stateless verify; config roles) |
 | `lib/iris/proto/…` | `SetUserRoleRequest` / `SetUserRoleResponse` NOT built (§3) |
-| `lib/finelog/rust/src/server/auth.rs` (test) | `conformance_vectors_match_rigging` runs the shared `auth_vectors.json`; cidr layer refuses `X-Forwarded-For` |
+| `lib/finelog/rust/src/server/auth.rs` (test) | `conformance_vectors_match_rigging` runs the shared `auth_vectors.json`; cidr matches the transport peer (finelog trusts its in-VPC proxy — no `X-Forwarded-For` refusal) |
 | `lib/finelog/AGENTS.md` | stale "ships no auth" note fixed |
 | `mkdocs.yml` | nav entry for `authed-service.md` (that runbook is not yet written) |
 
