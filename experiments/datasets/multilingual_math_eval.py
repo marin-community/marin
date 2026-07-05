@@ -53,9 +53,16 @@ _WIKISOURCE_RAW = hf_download(
     version="2026.07.05",
 )
 
-# Already-cached raw download from experiments/datasets/eval.py's extra_raw_downloads(); reused
-# at its pinned location (not re-declared as a fresh hf_download), so this adds no new bytes.
-_HENDRYCKS_MATH_RAW = "raw/hendrycks/mathhf"
+# EleutherAI/hendrycks_math (MATH), downloading only the per-config test parquets. Declared as a
+# self-contained hf_download so the eval DAG materializes it, rather than assuming another
+# experiment already pinned raw/hendrycks/mathhf in this prefix.
+_HENDRYCKS_MATH_RAW = hf_download(
+    "raw/hf/hendrycks-math-val",
+    hf_id="EleutherAI/hendrycks_math",
+    revision="21a5633",
+    urls_glob=["**/test-*.parquet"],
+    version="2026.07.05",
+)
 _HENDRYCKS_MATH_TEST_GLOB = "*/test-00000-of-00001.parquet"
 
 
@@ -82,7 +89,8 @@ def multilingual_math_validation(arm_name: str, tokenizer: str) -> dict[str, Art
         f"bakeoff-val/math-{arm_name}",
         tokenizer=tokenizer,
         version="2026.07.05",
-        paths=[f"{_HENDRYCKS_MATH_RAW}/{_HENDRYCKS_MATH_TEST_GLOB}"],
+        raw=_HENDRYCKS_MATH_RAW,
+        glob=_HENDRYCKS_MATH_TEST_GLOB,
         text_key="solution",
         validation=True,
     )
