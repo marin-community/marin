@@ -704,17 +704,16 @@ def test_iap_assertion_resolver_is_the_role_policy():
 
 
 def test_require_persistent_signing_key():
-    # A gcp/iap login provider issues user JWTs; an empty signing key is a silent
-    # trust-anchor break waiting to happen, so a deployed one must fail fast.
-    for provider in (AuthConfig(gcp=GcpAuthConfig(project_id="p")), AuthConfig(iap=IapAuthConfig())):
-        with pytest.raises(ValueError, match="requires a persistent"):
-            require_persistent_signing_key(provider, None)
-        require_persistent_signing_key(provider, _SIGNING_KEY)  # a key present: fine
+    # A relay controller signs delegation tokens the shared finelog pins to its public
+    # key, so an empty signing key is a silent trust-anchor break: fail fast.
+    relay = "iris+https://global-finelog/proxy/system.log-server"
+    with pytest.raises(ValueError, match="requires a persistent"):
+        require_persistent_signing_key(relay, None)
+    require_persistent_signing_key(relay, _SIGNING_KEY)  # a key present: fine
 
-    # CIDR-only trust and null-auth have no login provider — they mint only internal
-    # worker tokens, so an ephemeral key is acceptable and must NOT be rejected.
-    require_persistent_signing_key(AuthConfig(trusted_cidrs=["10.0.0.0/8"]), None)
-    require_persistent_signing_key(AuthConfig(), None)
+    # No relay endpoint: nothing external pins this controller's key, so an ephemeral
+    # key is fine and must NOT be rejected.
+    require_persistent_signing_key("", None)
     require_persistent_signing_key(None, None)
 
 

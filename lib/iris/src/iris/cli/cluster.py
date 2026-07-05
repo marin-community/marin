@@ -261,13 +261,15 @@ def cluster_list():
         click.echo(f"  {name:30s} {path}")
 
 
-def _upload_private_key_to_secret_manager(resource: str, private_pem: str) -> str:
+def _upload_private_key_to_secret_manager(resource: str, private_pem: str, accessor: str | None) -> str:
     """Add `private_pem` as a new version of the Secret Manager secret `resource`.
 
     `resource` is `projects/<project>/secrets/<name>`. Creates the secret container
     first when the caller has permission; otherwise adds a version to a container an
-    admin pre-created. Returns the pinned `gcp-secret://…/versions/<n>` reference to
-    put in auth.signing_key.
+    admin pre-created. When `accessor` is set, also grants it
+    roles/secretmanager.secretAccessor on the secret (e.g. the controller service
+    account, so it can read the key at startup). Returns the pinned
+    `gcp-secret://…/versions/<n>` reference to put in auth.signing_key.
     """
     try:
         from google.cloud import secretmanager  # noqa: PLC0415  # optional dep
@@ -297,6 +299,25 @@ def _upload_private_key_to_secret_manager(resource: str, private_pem: str) -> st
         click.echo(f"No permission to create {name}; adding a version to the existing secret.")
 
     version = client.add_secret_version(request={"parent": resource, "payload": {"data": private_pem.encode("utf-8")}})
+
+    if accessor is not None:
+        member = accessor if ":" in accessor else f"serviceAccount:{accessor}"
+        role = "roles/secretmanager.secretAccessor"
+        try:
+            policy = client.get_iam_policy(request={"resource": resource})
+            binding = next((b for b in policy.bindings if b.role == role), None)
+            if binding is not None and member in binding.members:
+                click.echo(f"{member} already has {role} on {name}.")
+            else:
+                if binding is None:
+                    policy.bindings.add(role=role, members=[member])
+                else:
+                    binding.members.append(member)
+                client.set_iam_policy(request={"resource": resource, "policy": policy})
+                click.echo(f"Granted {role} on {name} to {member}.")
+        except PermissionDenied:
+            click.echo(f"No permission to set IAM on {name}; grant {role} to {member} manually.")
+
     return f"gcp-secret://{version.name}"
 
 
@@ -315,7 +336,14 @@ def _upload_private_key_to_secret_manager(resource: str, private_pem: str) -> st
     help="Store the PRIVATE key as a new version of this Secret Manager secret "
     "(creating the secret when you have permission). Reference the pinned version from auth.signing_key.",
 )
-def cluster_init_keys(out_file: Path | None, gcp_secret: str | None):
+@click.option(
+    "--accessor",
+    default=None,
+    metavar="[serviceAccount:]<email>",
+    help="With --gcp-secret, also grant this principal roles/secretmanager.secretAccessor on the "
+    "secret (e.g. the controller service account, so it can read the key at startup).",
+)
+def cluster_init_keys(out_file: Path | None, gcp_secret: str | None, accessor: str | None):
     """Generate a per-cluster Ed25519 signing keypair for controller auth.
 
     Writes the PRIVATE key to a SecretSpec destination (a file, and/or a new
@@ -325,6 +353,9 @@ def cluster_init_keys(out_file: Path | None, gcp_secret: str | None):
     The public key is inline-safe (JWKS, peer/finelog allowlists, previous_public_keys
     during a rotation overlap).
     """
+    if accessor is not None and gcp_secret is None:
+        raise click.UsageError("--accessor only applies with --gcp-secret")
+
     keypair = generate_ed25519_keypair()
 
     if out_file is not None:
@@ -334,7 +365,7 @@ def cluster_init_keys(out_file: Path | None, gcp_secret: str | None):
         click.echo(f"  Reference it as: auth.signing_key: file:{out_file.resolve()}")
 
     if gcp_secret is not None:
-        reference = _upload_private_key_to_secret_manager(gcp_secret, keypair.private_pem)
+        reference = _upload_private_key_to_secret_manager(gcp_secret, keypair.private_pem, accessor)
         click.echo(f"Stored PRIVATE key in Secret Manager ({gcp_secret}).")
         click.echo(f"  Reference it as: auth.signing_key: {reference}")
 

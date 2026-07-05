@@ -378,29 +378,27 @@ def _build_jwt_token_manager(
     return JwtTokenManager(signer, verifier, previous_public_keys=previous_public_keys)
 
 
-def require_persistent_signing_key(auth_config: AuthConfig | None, signing_key_pem: str | None) -> None:
-    """Fail fast if a deployed cluster with a login provider has no persistent key.
+def require_persistent_signing_key(relay_address: str | None, signing_key_pem: str | None) -> None:
+    """Fail fast if a controller that relays logs to a shared finelog has no persistent key.
 
-    The Ed25519 signing key is the controller's server identity. Persistence matters
-    for the tokens an external verifier pins to the controller's published public
-    key — finelog-relay delegation and federation peers — which an ephemeral key
-    would silently invalidate on every restart. A gcp/iap deployment carries the
-    requirement for a uniform profile across clusters (so enabling relay or
-    federation later needs no re-provisioning); the ephemeral fallback in
-    :func:`create_controller_auth` stays for in-process dev (``LocalCluster``). User
-    auth needs no key: IAP authenticates each request and roles come from config.
+    A finelog-relay delegation token (``aud="finelog"``) is the only token an external
+    verifier pins to this controller's published public key: the shared finelog trusts the
+    controller by that key. An ephemeral key rotates on every restart and breaks that trust
+    anchor, so a controller with ``finelog.relay_address`` set must anchor a persistent
+    ``auth.signing_key``.
 
-    CIDR-only / null-auth is exempt: an in-network / dev posture with no login
-    provider, where an ephemeral key is fine.
+    Nothing else needs it: IAP authenticates each user request and the controller mints no
+    user tokens; workers are trusted by cidr; federation peers authenticate as clients. So
+    the ephemeral fallback in :func:`create_controller_auth` is fine for every non-relay
+    cluster, including dev (``LocalCluster``).
     """
-    if auth_config is None or signing_key_pem is not None:
-        return
-    if auth_config.provider_kind() is None:
+    if not relay_address or signing_key_pem is not None:
         return
     raise ValueError(
-        f"a deployed {auth_config.provider_kind()} cluster requires a persistent auth.signing_key; "
-        "run 'iris cluster init-keys' and set auth.signing_key to its reference "
-        "(the ephemeral-key fallback is only for in-process dev / cidr / null-auth clusters)"
+        "finelog.relay_address is set, so this controller forwards logs with delegation tokens the "
+        "shared finelog verifies against this controller's published public key; that requires a "
+        "persistent auth.signing_key. Run 'iris cluster init-keys --gcp-secret … --accessor <controller-sa>' "
+        "and set auth.signing_key to the printed reference."
     )
 
 

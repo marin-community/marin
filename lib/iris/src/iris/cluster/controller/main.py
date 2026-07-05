@@ -185,11 +185,10 @@ def run_controller_serve(
         cluster_config.auth.signing_key if (cluster_config.auth and cluster_config.auth.signing_key) else None
     )
 
-    # A deployed controller with a login provider (gcp/iap) must anchor a persistent
-    # signing key; the ephemeral fallback in create_controller_auth is only for
-    # in-process dev (LocalCluster), cidr, and null-auth. Enforce it at this
-    # real-deployment boundary.
-    require_persistent_signing_key(cluster_config.auth, signing_key_pem)
+    # Only a controller that forwards logs to a shared finelog (finelog.relay_address)
+    # needs a persistent signing key: the shared finelog pins this controller's public
+    # key to verify its delegation tokens. Everything else runs on the ephemeral fallback.
+    require_persistent_signing_key(cluster_config.finelog.relay_address, signing_key_pem)
 
     auth = create_controller_auth(
         cluster_config.auth,
