@@ -649,23 +649,6 @@ federation_changelog_table = Table(
 )
 
 
-auth_api_keys_table = Table(
-    "api_keys",
-    auth_metadata,
-    Column("key_id", String, primary_key=True),
-    # Human-readable key prefix surfaced in `iris key list` / CreateApiKey
-    # responses ("jwt" for JWT-backed keys, the token's first 8 chars otherwise).
-    Column("key_prefix", String, nullable=False),
-    Column("user_id", String, nullable=False),
-    Column("name", String, nullable=False),
-    Column("created_at_ms", TimestampMsType, nullable=False),
-    Column("last_used_at_ms", TimestampMsType),
-    Column("expires_at_ms", TimestampMsType),
-    Column("revoked_at_ms", TimestampMsType),
-    Index("idx_api_keys_user", "user_id"),
-)
-
-
 auth_controller_secrets_table = Table(
     "controller_secrets",
     auth_metadata,

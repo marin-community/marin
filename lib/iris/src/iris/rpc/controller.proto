@@ -778,12 +778,9 @@ service ControllerService {
   // Process status (local process info + recent logs)
   rpc GetProcessStatus(iris.job.GetProcessStatusRequest) returns (iris.job.GetProcessStatusResponse);
 
-  // Authentication & API key management
+  // Authentication
   rpc GetAuthInfo(iris.job.GetAuthInfoRequest) returns (iris.job.GetAuthInfoResponse);
   rpc Login(iris.job.LoginRequest) returns (iris.job.LoginResponse);
-  rpc CreateApiKey(iris.job.CreateApiKeyRequest) returns (iris.job.CreateApiKeyResponse);
-  rpc RevokeApiKey(iris.job.RevokeApiKeyRequest) returns (iris.job.Empty);
-  rpc ListApiKeys(iris.job.ListApiKeysRequest) returns (iris.job.ListApiKeysResponse);
   rpc GetCurrentUser(iris.job.GetCurrentUserRequest) returns (iris.job.GetCurrentUserResponse);
 
   // Kubernetes cluster status

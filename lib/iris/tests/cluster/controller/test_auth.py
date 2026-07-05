@@ -1,7 +1,8 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for auth: session cookies, CSRF, default-deny middleware, auth DB isolation, API keys, and JWT."""
+"""Tests for auth: session cookies, CSRF, default-deny middleware, auth DB isolation,
+stateless JWT, controller auth setup, login, and null-auth mode."""
 
 from unittest.mock import Mock
 
@@ -11,21 +12,19 @@ import sqlalchemy.exc
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from iris.cluster.bundle import BundleStore
-from iris.cluster.config import AuthConfig
+from iris.cluster.config import AuthConfig, GcpAuthConfig, IapAuthConfig
 from iris.cluster.controller import reads, writes
 from iris.cluster.controller.auth import (
     CONTROL_PLANE_AUDIENCES,
     FINELOG_AUDIENCE,
+    SESSION_TOKEN_TTL_SECONDS,
     WORKER_USER,
+    ControllerAuth,
     JwtTokenManager,
     _make_iap_role_resolver,
-    create_api_key,
     create_controller_auth,
-    list_api_keys,
-    lookup_api_key_by_id,
     request_auth_policy,
-    revoke_api_key,
-    revoke_login_keys_for_user,
+    require_persistent_signing_key,
 )
 from iris.cluster.controller.backend import BackendCapability
 from iris.cluster.controller.dashboard import (
@@ -35,14 +34,18 @@ from iris.cluster.controller.dashboard import (
 )
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.endpoint_service import EndpointServiceImpl
+from iris.cluster.controller.projections.endpoints import EndpointsProjection
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.types import DEFAULT_BACKEND_ID
+from iris.rpc import job_pb2
 from iris.rpc.auth import DASHBOARD_ROLE, SESSION_COOKIE, authorize_method
 from rigging.server_auth import (
+    IapIdTokenVerifier,
     PolicyAuthInterceptor,
     RequestAuthPolicy,
     RouteAuthMiddleware,
     VerifiedIdentity,
+    _verified_identity,
     get_verified_identity,
     requires_auth,
 )
@@ -65,12 +68,33 @@ CSRF_HEADERS = {"Origin": "http://testserver"}
 _SIGNING_KEY = generate_ed25519_keypair().private_pem
 
 
-def _jwt_manager(db: ControllerDB | None = None) -> JwtTokenManager:
+def _jwt_manager() -> JwtTokenManager:
     """A JwtTokenManager over a real EdDSA keypair (issuer ``_CLUSTER``)."""
     key = signing_key_from_private_pem(generate_ed25519_keypair().private_pem)
     signer = JwtSigner(key, issuer=_CLUSTER)
     verifier = JwksVerifier(issuers={_CLUSTER: [key.public_pem]}, expected_audiences=CONTROL_PLANE_AUDIENCES)
-    return JwtTokenManager(signer, verifier, db=db)
+    return JwtTokenManager(signer, verifier)
+
+
+def _make_service(db, log_client, auth=None):
+    """A ControllerServiceImpl with minimal deps for login / auth-setup tests."""
+    endpoints = EndpointsProjection(db)
+    controller_mock = Mock()
+    controller_mock.wake = Mock()
+    controller_mock.get_job_scheduling_diagnostics = Mock(return_value="")
+    controller_mock.last_scheduling_context = None
+    controller_mock.autoscaler = None
+    controller_mock.provider = Mock()
+    controller_mock.capabilities = frozenset({BackendCapability.WORKER_DAEMON, BackendCapability.IRIS_AUTOSCALER})
+    return ControllerServiceImpl(
+        controller=controller_mock,
+        bundle_store=BundleStore(storage_dir=str(db.db_path.parent / "bundles")),
+        log_client=log_client,
+        db=db,
+        endpoints=endpoints,
+        auth=auth or ControllerAuth(),
+        endpoint_service=EndpointServiceImpl(db=db, endpoints=endpoints),
+    )
 
 
 # -- Fixtures -----------------------------------------------------------------
@@ -282,75 +306,60 @@ def test_session_bootstrap_no_auth_configured(noauth_client):
 # -- Auth DB isolation ---------------------------------------------------------
 
 
+def _write_secret(db: ControllerDB, key: str, value: str) -> None:
+    """Write a row into the attached auth DB (``controller_secrets``)."""
+    with db.transaction() as tx:
+        tx.execute(
+            text("INSERT INTO auth.controller_secrets (key, value, created_at_ms) VALUES (:k, :v, 1000)"),
+            {"k": key, "v": value},
+        )
+
+
 def test_read_snapshot_cannot_access_auth_tables(db: ControllerDB):
-    """Read pool connections must not see auth tables."""
-    now = Timestamp.now()
-    with db.transaction() as _tx:
-        writes.ensure_user(_tx, "test-user", now)
-    create_api_key(db, key_id="k1", key_prefix="pfx", user_id="test-user", name="test", now=now)
+    """Read pool connections must not see the attached auth DB's tables."""
+    _write_secret(db, "signing_key", "pem")
 
     with db.read_snapshot() as q:
-        for table in ["api_keys", "controller_secrets", "auth.api_keys"]:
+        for table in ["controller_secrets", "auth.controller_secrets"]:
             with pytest.raises(sqlalchemy.exc.OperationalError, match="no such table"):
                 q.execute(text(f"SELECT * FROM {table}"))
 
 
 def test_write_connection_can_access_auth_tables(db: ControllerDB):
-    now = Timestamp.now()
-    with db.transaction() as _tx:
-        writes.ensure_user(_tx, "test-user", now)
-    create_api_key(db, key_id="k1", key_prefix="pfx", user_id="test-user", name="test", now=now)
+    _write_secret(db, "signing_key", "pem")
 
     with db.transaction() as q:
-        rows = q.execute(text("SELECT key_id FROM auth.api_keys")).all()
+        rows = q.execute(text("SELECT value FROM auth.controller_secrets WHERE key = 'signing_key'")).all()
         assert len(rows) == 1
-        assert rows[0].key_id == "k1"
+        assert rows[0].value == "pem"
 
 
-# -- API keys and JWT ----------------------------------------------------------
+# -- Stateless JWT -------------------------------------------------------------
 
 
-def test_api_key_create_lookup_revoke(db: ControllerDB):
-    now = Timestamp.now()
-    with db.transaction() as _tx:
-        writes.ensure_user(_tx, "alice", now, role="admin")
-        writes.set_user_role(_tx, "alice", "admin")
-    with db.read_snapshot() as _snap:
-        assert reads.get_user_role(_snap, "alice") == "admin"
-
-    create_api_key(db, key_id="k1", key_prefix="sec", user_id="alice", name="my-key", now=now)
-
-    found = lookup_api_key_by_id(db, "k1")
-    assert found is not None
-    assert found.key_id == "k1"
-    assert found.key_prefix == "sec"
-
-    keys = list_api_keys(db, user_id="alice")
-    assert len(keys) == 1
-
-    assert revoke_api_key(db, "k1", now)
-
-
-def test_jwt_create_and_verify(db: ControllerDB):
-    now = Timestamp.now()
-    with db.transaction() as _tx:
-        writes.ensure_user(_tx, "bob", now, role="user")
-
-    mgr = _jwt_manager(db=db)
-
-    create_api_key(db, key_id="k-bob", key_prefix="jwt", user_id="bob", name="test", now=now)
-
-    token = mgr.create_token("bob", "user", "k-bob")
+def test_jwt_create_and_verify():
+    """A minted control-plane token round-trips through the stateless verifier."""
+    mgr = _jwt_manager()
+    token = mgr.create_token("bob", "user", "k-bob", ttl_seconds=SESSION_TOKEN_TTL_SECONDS)
     identity = mgr.verify(token)
     assert identity.user_id == "bob"
     assert identity.role == "user"
 
 
-def test_control_plane_verify_rejects_delegation_token(db: ControllerDB):
+def test_verify_touches_no_db_and_has_no_revocation():
+    """verify() holds no DB handle and no revocation set — pure crypto + audience."""
+    mgr = _jwt_manager()
+    assert not hasattr(mgr, "_db")
+    assert not hasattr(mgr, "_revoked_jtis")
+    assert not hasattr(mgr, "revoke")
+    assert not hasattr(mgr, "load_revocations")
+
+
+def test_control_plane_verify_rejects_delegation_token():
     """The cross-plane guard: an ``aud="finelog"`` delegation token is rejected at
     this controller's control-plane verify — it can never be replayed at the RPC
     surface even though it is signed by the same key."""
-    mgr = _jwt_manager(db=db)
+    mgr = _jwt_manager()
     delegation = mgr.create_delegation_token("test-cluster", "k-deleg", ttl_seconds=60)
     with pytest.raises(ValueError):
         mgr.verify(delegation)
@@ -358,42 +367,13 @@ def test_control_plane_verify_rejects_delegation_token(db: ControllerDB):
     assert jwt.decode(delegation, options={"verify_signature": False})["aud"] == FINELOG_AUDIENCE
 
 
-def test_endpoint_token_surfaces_endpoint_as_audience(db: ControllerDB):
+def test_endpoint_token_surfaces_endpoint_as_audience():
     """An endpoint token verifies (aud is the fixed proxy plane) and surfaces its
     bound endpoint name as ``identity.audience`` (what the /proxy gate matches)."""
-    mgr = _jwt_manager(db=db)
+    mgr = _jwt_manager()
     token = mgr.create_endpoint_token("/serve/foo", "k-ep", ttl_seconds=60)
     identity = mgr.verify(token)
     assert identity.audience == "/serve/foo"
-
-
-def test_jwt_revocation_after_verify(db: ControllerDB):
-    """Revocation is iris policy applied after the verifier returns."""
-    mgr = _jwt_manager(db=db)
-    token = mgr.create_token("bob", "user", "k-revoke")
-    assert mgr.verify(token).user_id == "bob"
-    mgr.revoke("k-revoke")
-    with pytest.raises(ValueError, match="revoked"):
-        mgr.verify(token)
-
-
-def test_revoke_login_keys(db: ControllerDB):
-    now = Timestamp.now()
-    with db.transaction() as _tx:
-        writes.ensure_user(_tx, "carol", now)
-
-    for i in (1, 2):
-        create_api_key(
-            db,
-            key_id=f"k-login-{i}",
-            key_prefix="jwt",
-            user_id="carol",
-            name=f"login-{i}",
-            now=now,
-        )
-
-    revoked_ids = revoke_login_keys_for_user(db, "carol", now)
-    assert set(revoked_ids) == {"k-login-1", "k-login-2"}
 
 
 # -- CIDR network-location auth -------------------------------------------------
@@ -697,3 +677,247 @@ def test_iap_role_resolver_maps_provisioned_and_unknown_emails(db: ControllerDB)
     resolve_admin = _make_iap_role_resolver(db, "admin")
     assert resolve_admin("user@example.com") == "user"
     assert resolve_admin("stranger@example.com") == "admin"
+
+
+# -- require_persistent_signing_key --------------------------------------------
+
+
+def test_require_persistent_signing_key():
+    # A gcp/iap login provider issues user JWTs; an empty signing key is a silent
+    # trust-anchor break waiting to happen, so a deployed one must fail fast.
+    for provider in (AuthConfig(gcp=GcpAuthConfig(project_id="p")), AuthConfig(iap=IapAuthConfig())):
+        with pytest.raises(ValueError, match="requires a persistent"):
+            require_persistent_signing_key(provider, None)
+        require_persistent_signing_key(provider, _SIGNING_KEY)  # a key present: fine
+
+    # CIDR-only trust and null-auth have no login provider — they mint only internal
+    # worker tokens, so an ephemeral key is acceptable and must NOT be rejected.
+    require_persistent_signing_key(AuthConfig(trusted_cidrs=["10.0.0.0/8"]), None)
+    require_persistent_signing_key(AuthConfig(), None)
+    require_persistent_signing_key(None, None)
+
+
+# -- Controller auth setup -----------------------------------------------------
+
+
+def test_worker_token_verifies(db):
+    auth = create_controller_auth(
+        AuthConfig(gcp={"project_id": "test-project"}), db=db, cluster_name=_CLUSTER, signing_key_pem=_SIGNING_KEY
+    )
+    assert auth.worker_token is not None
+    assert auth.verifier.verify(auth.worker_token).user_id == WORKER_USER
+
+
+def test_iap_provider_uses_id_token_login_verifier(db):
+    auth = create_controller_auth(
+        AuthConfig(iap={"audiences": ["desktop-client-id"]}),
+        db=db,
+        cluster_name=_CLUSTER,
+        signing_key_pem=_SIGNING_KEY,
+    )
+    assert isinstance(auth.login_verifier, IapIdTokenVerifier)
+    assert auth.verifier.verify(auth.worker_token).user_id == WORKER_USER
+
+
+def test_iap_provider_requires_audiences_or_assertion(db):
+    with pytest.raises(ValueError, match=r"audiences .* signed_header_audience"):
+        create_controller_auth(
+            AuthConfig(iap={"url": "https://iris-marin.example.com"}),
+            db=db,
+            cluster_name=_CLUSTER,
+            signing_key_pem=_SIGNING_KEY,
+        )
+
+
+def test_worker_token_differs_after_restart(db):
+    # A persistent signing key is shared across restarts, so a token minted before
+    # the restart still verifies after it — but each start mints a fresh worker jti,
+    # so the tokens differ. Old worker tokens simply age out at their TTL.
+    signing_key_pem = generate_ed25519_keypair().private_pem
+    config = AuthConfig(gcp={"project_id": "test-project"})
+    auth1 = create_controller_auth(config, db=db, cluster_name=_CLUSTER, signing_key_pem=signing_key_pem)
+    auth2 = create_controller_auth(config, db=db, cluster_name=_CLUSTER, signing_key_pem=signing_key_pem)
+    assert auth1.worker_token != auth2.worker_token
+    # Both still verify (old not revoked) under auth2's verifier (same signing key).
+    assert auth2.verifier.verify(auth1.worker_token).user_id == WORKER_USER
+    assert auth2.verifier.verify(auth2.worker_token).user_id == WORKER_USER
+
+
+def test_admin_users_bootstrapped(db):
+    create_controller_auth(
+        AuthConfig(gcp={"project_id": "test-project"}, admin_users=["alice"]),
+        db=db,
+        cluster_name=_CLUSTER,
+        signing_key_pem=_SIGNING_KEY,
+    )
+    with db.read_snapshot() as snap:
+        assert reads.get_user_role(snap, "alice") == "admin"
+
+
+def test_admin_grants_reconciled_on_restart(db):
+    # Config is the authoritative admin set: a restart with a user removed from
+    # admin_users downgrades them (the deprovision path), not just grants.
+    def _boot(admin_users):
+        create_controller_auth(
+            AuthConfig(gcp={"project_id": "test-project"}, admin_users=admin_users),
+            db=db,
+            cluster_name=_CLUSTER,
+            signing_key_pem=_SIGNING_KEY,
+        )
+
+    _boot(["alice", "bob"])
+    with db.read_snapshot() as snap:
+        assert reads.get_user_role(snap, "alice") == "admin"
+        assert reads.get_user_role(snap, "bob") == "admin"
+
+    _boot(["alice"])  # bob deprovisioned in config, then controller reloaded
+    with db.read_snapshot() as snap:
+        assert reads.get_user_role(snap, "alice") == "admin"
+        assert reads.get_user_role(snap, "bob") == "user"
+
+
+def test_login_verifier_set_for_gcp(db):
+    auth = create_controller_auth(
+        AuthConfig(gcp={"project_id": "test-project"}), db=db, cluster_name=_CLUSTER, signing_key_pem=_SIGNING_KEY
+    )
+    assert auth.login_verifier is not None
+    assert auth.provider == "gcp"
+
+
+# -- Login RPC -----------------------------------------------------------------
+
+
+class _FakeLoginVerifier:
+    """A login verifier that maps any identity token to a fixed user/role."""
+
+    def __init__(self, user_id: str, role: str = "user"):
+        self._user_id = user_id
+        self._role = role
+
+    def verify(self, token: str) -> VerifiedIdentity:
+        return VerifiedIdentity(user_id=self._user_id, role=self._role)
+
+
+class _RejectingLoginVerifier:
+    def verify(self, token: str) -> VerifiedIdentity:
+        raise ValueError("bad identity token")
+
+
+def _login_auth(login_verifier) -> ControllerAuth:
+    jwt_mgr = _jwt_manager()
+    return ControllerAuth(verifier=jwt_mgr, provider="gcp", login_verifier=login_verifier, jwt_manager=jwt_mgr)
+
+
+def test_login_mints_verifiable_session_token_with_store_role(db, log_client):
+    """A valid provider token yields a short session JWT carrying the store role,
+    with NO api-key side effect (nothing persisted, nothing revocable)."""
+    auth = _login_auth(_FakeLoginVerifier("alice@example.com"))
+    service = _make_service(db, log_client, auth=auth)
+
+    response = service.login(job_pb2.LoginRequest(identity_token="gcp-id-token"), None)
+    assert response.user_id == "alice@example.com"
+    assert response.token
+    # jti is a log-correlation id only, never persisted.
+    assert response.key_id.startswith("iris_s_")
+
+    identity = auth.verifier.verify(response.token)
+    assert identity.user_id == "alice@example.com"
+    assert identity.role == "user"
+
+    # The session token's lifetime is the short session TTL, not 30 days.
+    claims = jwt.decode(response.token, options={"verify_signature": False})
+    assert claims["exp"] - claims["iat"] == SESSION_TOKEN_TTL_SECONDS
+
+
+def test_login_rejects_invalid_provider_token(db, log_client):
+    auth = _login_auth(_RejectingLoginVerifier())
+    service = _make_service(db, log_client, auth=auth)
+    with pytest.raises(ConnectError) as exc:
+        service.login(job_pb2.LoginRequest(identity_token="bad"), None)
+    assert exc.value.code == Code.UNAUTHENTICATED
+
+
+def test_login_rejects_system_prefix(db, log_client):
+    auth = _login_auth(_FakeLoginVerifier("system:hacker"))
+    service = _make_service(db, log_client, auth=auth)
+    with pytest.raises(ConnectError) as exc:
+        service.login(job_pb2.LoginRequest(identity_token="fake"), None)
+    assert exc.value.code == Code.PERMISSION_DENIED
+
+
+def test_login_not_available_without_login_verifier(db, log_client):
+    jwt_mgr = _jwt_manager()
+    auth = ControllerAuth(verifier=jwt_mgr, provider="gcp", jwt_manager=jwt_mgr)
+    service = _make_service(db, log_client, auth=auth)
+    with pytest.raises(ConnectError) as exc:
+        service.login(job_pb2.LoginRequest(identity_token="token"), None)
+    assert exc.value.code == Code.UNIMPLEMENTED
+
+
+def test_login_reflects_downgraded_role_on_fresh_login(db, log_client):
+    """Deprovisioning rides the user store, bounded by the session TTL: after an
+    admin is downgraded in the store, the NEXT login mints a token with the
+    downgraded role (no revocation needed — the old token just expires)."""
+    auth = _login_auth(_FakeLoginVerifier("carol@example.com"))
+    service = _make_service(db, log_client, auth=auth)
+
+    # Grant admin in the store, then log in — the token carries admin.
+    now = Timestamp.now()
+    with db.transaction() as tx:
+        writes.ensure_user(tx, "carol@example.com", now, role="admin")
+        writes.set_user_role(tx, "carol@example.com", "admin")
+    first = service.login(job_pb2.LoginRequest(identity_token="t1"), None)
+    assert auth.verifier.verify(first.token).role == "admin"
+
+    # Downgrade in the store; a fresh login now carries the downgraded role.
+    with db.transaction() as tx:
+        writes.set_user_role(tx, "carol@example.com", "user")
+    second = service.login(job_pb2.LoginRequest(identity_token="t2"), None)
+    assert auth.verifier.verify(second.token).role == "user"
+
+
+# -- GetAuthInfo ---------------------------------------------------------------
+
+
+def test_get_auth_info_returns_gcp_provider(db, log_client):
+    auth = create_controller_auth(
+        AuthConfig(gcp={"project_id": "test-project"}), db=db, cluster_name=_CLUSTER, signing_key_pem=_SIGNING_KEY
+    )
+    service = _make_service(db, log_client, auth=auth)
+    response = service.get_auth_info(job_pb2.GetAuthInfoRequest(), None)
+    assert response.provider == "gcp"
+    assert response.gcp_project_id == "test-project"
+
+
+def test_get_auth_info_returns_empty_when_no_auth(db, log_client):
+    auth = create_controller_auth(AuthConfig(), db=db, cluster_name=_CLUSTER)
+    service = _make_service(db, log_client, auth=auth)
+    response = service.get_auth_info(job_pb2.GetAuthInfoRequest(), None)
+    assert response.provider == ""
+    assert response.gcp_project_id == ""
+
+
+# -- Null-auth mode ------------------------------------------------------------
+
+
+def test_null_auth_creates_anonymous_admin_and_worker_token(db):
+    auth = create_controller_auth(AuthConfig(), db=db, cluster_name=_CLUSTER)
+    with db.read_snapshot() as snap:
+        assert reads.get_user_role(snap, "anonymous") == "admin"
+    assert auth.verifier is not None
+    assert auth.worker_token is not None
+    assert auth.provider is None
+    assert auth.login_verifier is None
+
+
+def test_null_auth_get_current_user(db, log_client):
+    auth = create_controller_auth(AuthConfig(), db=db, cluster_name=_CLUSTER)
+    service = _make_service(db, log_client, auth=auth)
+    jwt_token = auth.jwt_manager.create_token("anonymous", "admin", "iris_s_test", ttl_seconds=SESSION_TOKEN_TTL_SECONDS)
+    reset = _verified_identity.set(auth.verifier.verify(jwt_token))
+    try:
+        resp = service.get_current_user(job_pb2.GetCurrentUserRequest(), None)
+        assert resp.user_id == "anonymous"
+        assert resp.role == "admin"
+    finally:
+        _verified_identity.reset(reset)

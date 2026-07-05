@@ -7,9 +7,15 @@ All service tokens are asymmetric EdDSA (Ed25519) JWTs. The controller is its
 own signing authority: it mints with a per-cluster private key (sourced from a
 ``SecretSpec``, never stored in the DB) and verifies against the matching public
 key. :class:`JwtTokenManager` is a thin *policy* wrapper over
-:mod:`rigging.token_authority` — it owns role/claim semantics, the per-plane
-audience discipline, and jti revocation. Verification is a pure crypto check
-plus an in-memory revocation set — no per-RPC database hit.
+:mod:`rigging.token_authority` — it owns role/claim semantics and the per-plane
+audience discipline. Verification is fully stateless: a pure crypto check plus
+the audience/scope binding, with no database access at all. Tokens are never
+revoked. Authorization is config-driven: admin grants live in cluster config
+(``auth.admin_users``) and are reconciled into the user store on every controller
+start (see :func:`_reconcile_admin_grants`) — grants added and, crucially,
+de-listed users downgraded. Deprovisioning is therefore edit-config-and-reload;
+a session token already minted with the old role is not revocable but ages out at
+its short :data:`SESSION_TOKEN_TTL_SECONDS`, so access is lost within that window.
 
 Per-plane audience discipline (RFC 8725) is the load-bearing security invariant:
 every minted token names exactly one ``aud`` (plane), and the control-plane
@@ -40,17 +46,30 @@ from rigging.token_authority import (
     generate_ed25519_keypair,
     signing_key_from_private_pem,
 )
-from sqlalchemy import Row, insert, select, update
 
 from iris.cluster.config import AuthConfig
 from iris.cluster.controller import reads, writes
 from iris.cluster.controller.db import ControllerDB
-from iris.cluster.controller.schema import auth_api_keys_table
 
 logger = logging.getLogger(__name__)
 
 WORKER_USER = "system:worker"
-DEFAULT_JWT_TTL_SECONDS = 86400 * 30  # 30 days
+
+# User/admin login sessions (aud="iris"). Short-lived: deprovisioning is bounded
+# by this TTL — a downgraded/removed user keeps access only until it expires, and
+# there is no refresh flow, so the client re-runs `iris login` to obtain a fresh
+# token (picking up the current store role).
+SESSION_TOKEN_TTL_SECONDS = 3600  # 1 hour
+# Worker machine identity (aud="iris", role="worker"). This is a SHARED,
+# cluster-lived credential: one token is minted per controller start and injected
+# into every worker, with no refresh path, so it must outlive any single job. It
+# is not revocable. KNOWN RISK (accepted for now, hardening tracked as follow-up):
+# a leaked worker token lets an attacker register a rogue worker — and thus be
+# dispatched tasks — fleet-wide until it expires; the only kill switch is rotating
+# the cluster signing key, which re-auths every worker. Proper fixes (per-worker
+# short-lived tokens, or a worker-credential rotation lever) are in the auth design
+# doc's follow-ups.
+WORKER_TOKEN_TTL_SECONDS = 86400 * 30  # 30 days
 
 # Provider name when trusted_cidrs alone enables auth. No `iris login` flow:
 # in-network callers get identity by location, everything else needs a token.
@@ -87,113 +106,17 @@ ENDPOINT_TOKEN_ROLE = "endpoint"
 ENDPOINT_TOKEN_SCOPE = "proxy"
 # Role carried by a relay→finelog delegation token.
 FINELOG_RELAY_ROLE = "finelog-relay"
+# Role a de-listed admin is downgraded to when config reconciliation revokes their
+# grant. The users CHECK constraint allows only admin/user/worker, and worker is
+# reserved for the internal worker identity, so a revoked admin drops to "user".
+DEPROVISIONED_ROLE = "user"
 DEFAULT_ENDPOINT_TOKEN_TTL_SECONDS = 3600  # 1 hour
 MAX_ENDPOINT_TOKEN_TTL_SECONDS = 86400  # 24 hours
 
 
 # ---------------------------------------------------------------------------
-# API key CRUD — top-level functions operating on ControllerDB
-# ---------------------------------------------------------------------------
-
-
-def create_api_key(
-    db: ControllerDB,
-    key_id: str,
-    key_prefix: str,
-    user_id: str,
-    name: str,
-    now: Timestamp,
-    expires_at: Timestamp | None = None,
-) -> None:
-    """Insert a new API key row."""
-    with db.transaction() as tx:
-        tx.execute(
-            insert(auth_api_keys_table).values(
-                key_id=key_id,
-                key_prefix=key_prefix,
-                user_id=user_id,
-                name=name,
-                created_at_ms=now,
-                expires_at_ms=expires_at,
-            )
-        )
-    logger.info(
-        "event=api_key_created entity=%s trigger=- user=%s name=%s expires_at_ms=%s",
-        key_id,
-        user_id,
-        name,
-        expires_at.epoch_ms() if expires_at else "-",
-    )
-
-
-def touch_api_key(db: ControllerDB, key_id: str, now: Timestamp) -> None:
-    """Update last_used_at timestamp."""
-    with db.transaction() as tx:
-        tx.execute(update(auth_api_keys_table).where(auth_api_keys_table.c.key_id == key_id).values(last_used_at_ms=now))
-
-
-def revoke_api_key(db: ControllerDB, key_id: str, now: Timestamp) -> bool:
-    """Revoke an API key. Returns True if key existed and was revoked."""
-    with db.transaction() as tx:
-        result = tx.execute(
-            update(auth_api_keys_table)
-            .where(
-                auth_api_keys_table.c.key_id == key_id,
-                auth_api_keys_table.c.revoked_at_ms.is_(None),
-            )
-            .values(revoked_at_ms=now)
-        )
-        revoked = result.rowcount > 0
-    if revoked:
-        logger.info("event=api_key_revoked entity=%s trigger=-", key_id)
-    return revoked
-
-
-def lookup_api_key_by_id(db: ControllerDB, key_id: str):
-    """Find an API key by its key_id. Returns SA Row or None."""
-    with db.auth_read_snapshot() as tx:
-        return tx.execute(select(auth_api_keys_table).where(auth_api_keys_table.c.key_id == key_id)).first()
-
-
-def list_api_keys(db: ControllerDB, user_id: str | None = None) -> Sequence[Row]:
-    """List API keys, optionally filtered by user."""
-    with db.auth_read_snapshot() as tx:
-        stmt = select(auth_api_keys_table)
-        if user_id:
-            stmt = stmt.where(auth_api_keys_table.c.user_id == user_id)
-        return tx.execute(stmt).all()
-
-
-def revoke_login_keys_for_user(db: ControllerDB, user_id: str, now: Timestamp) -> list[str]:
-    """Revoke all active login keys for a user. Returns the revoked key_ids."""
-    with db.transaction() as tx:
-        rows = tx.execute(
-            update(auth_api_keys_table)
-            .where(
-                auth_api_keys_table.c.user_id == user_id,
-                auth_api_keys_table.c.name.like("login-%"),
-                auth_api_keys_table.c.revoked_at_ms.is_(None),
-            )
-            .values(revoked_at_ms=now)
-            .returning(auth_api_keys_table.c.key_id)
-        ).all()
-    revoked_ids = [str(row.key_id) for row in rows]
-    if revoked_ids:
-        logger.info(
-            "event=login_keys_revoked entity=%s trigger=- count=%d",
-            user_id,
-            len(revoked_ids),
-        )
-    return revoked_ids
-
-
-# ---------------------------------------------------------------------------
 # JWT token manager
 # ---------------------------------------------------------------------------
-
-
-# Minimum interval between last_used_at writes for the same key (seconds).
-_TOUCH_INTERVAL_SECONDS = 300  # 5 minutes
 
 
 class JwtTokenManager:
@@ -203,30 +126,24 @@ class JwtTokenManager:
     control-plane :class:`rigging.token_authority.JwksVerifier` (verification,
     ``expected_audiences={"iris", "iris-proxy"}``). Every mint names exactly one
     plane's ``aud``; ``verify`` propagates the verifier's ``ValueError`` on a bad
-    signature / expiry / unexpected audience, then applies iris policy: the
-    in-memory jti revocation check (no DB hit on the hot path) and the
-    endpoint-scope → identity-audience surfacing. An optional DB reference
-    enables sampled ``last_used_at`` write-back (at most once per key per
-    ``_TOUCH_INTERVAL_SECONDS``).
+    signature / expiry / unexpected audience, then applies the sole remaining iris
+    policy — the aud↔scope binding and the endpoint-scope → identity-audience
+    surfacing. Verification is fully stateless: it never touches a database and
+    there is no revocation list; deprovisioning is bounded by the session TTL.
     """
 
     def __init__(
         self,
         signer: JwtSigner,
         verifier: JwksVerifier,
-        db: ControllerDB | None = None,
         *,
         previous_public_keys: Sequence[str] = (),
     ):
         self._signer = signer
         self._verifier = verifier
-        self._revoked_jtis: set[str] = set()
-        self._db = db
         # Retained *previous* public-key PEMs, served on JWKS during a rotation
         # overlap so verifiers accept tokens minted by the prior key.
         self._previous_public_keys: tuple[str, ...] = tuple(previous_public_keys)
-        # Tracks the last wall-clock time we wrote last_used_at per jti.
-        self._last_touched: dict[str, float] = {}
 
     @property
     def signer(self) -> JwtSigner:
@@ -242,9 +159,15 @@ class JwtTokenManager:
         user_id: str,
         role: str,
         key_id: str,
-        ttl_seconds: int = DEFAULT_JWT_TTL_SECONDS,
+        ttl_seconds: int,
     ) -> str:
-        """Mint a control-plane (``aud="iris"``) user/worker token."""
+        """Mint a control-plane (``aud="iris"``) user/worker token.
+
+        ``ttl_seconds`` is required: a session token uses
+        :data:`SESSION_TOKEN_TTL_SECONDS` and a worker token
+        :data:`WORKER_TOKEN_TTL_SECONDS`; there is no default (an over-long token
+        is not revocable, so the caller must pick the right lifetime).
+        """
         return self._signer.mint(
             {"sub": user_id, "role": role, "jti": key_id},
             audience=CONTROL_PLANE_AUDIENCE,
@@ -291,14 +214,14 @@ class JwtTokenManager:
         )
 
     def verify(self, token: str) -> VerifiedIdentity:
-        """Verify a control-plane token and apply iris policy.
+        """Verify a control-plane token and apply the aud↔scope policy.
 
         The verifier raises ``ValueError`` on a bad signature / expiry / unknown
         issuer / an ``aud`` outside :data:`CONTROL_PLANE_AUDIENCES` (the
-        cross-plane replay guard) — propagated unchanged. On success, applies the
-        jti revocation check and surfaces the endpoint-scope as the identity's
-        audience, updating ``last_used_at`` at most once per key per
-        ``_TOUCH_INTERVAL_SECONDS`` to avoid hot-path DB writes.
+        cross-plane replay guard) — propagated unchanged. On success it applies
+        the aud↔scope binding and surfaces an endpoint-scoped token's bound
+        endpoint as the identity's audience. This is a pure function of the token:
+        it performs NO database access and there is no revocation check.
         """
         claims = self._verifier.verify(token)
 
@@ -316,51 +239,11 @@ class JwtTokenManager:
         if is_proxy_scope and not endpoint:
             raise ValueError("Proxy-scoped token is missing its endpoint claim")
 
-        jti = claims.claims.get("jti", "")
-        if jti in self._revoked_jtis:
-            raise ValueError("Token has been revoked")
-
-        self._maybe_touch(jti)
-
         return VerifiedIdentity(
             user_id=claims.sub,
             role=claims.claims.get("role", "user"),
             audience=endpoint,
         )
-
-    def _maybe_touch(self, jti: str) -> None:
-        """Write last_used_at to DB if enough time has elapsed since the last write."""
-        if not self._db or not jti:
-            return
-        now = time.time()
-        last = self._last_touched.get(jti, 0.0)
-        if now - last < _TOUCH_INTERVAL_SECONDS:
-            return
-        self._last_touched[jti] = now
-        try:
-            touch_api_key(self._db, jti, Timestamp.from_seconds(now))
-        except Exception:
-            logger.debug("Failed to update last_used_at for key %s", jti, exc_info=True)
-
-    def revoke(self, jti: str) -> None:
-        """Add a JTI to the in-memory revocation set."""
-        self._revoked_jtis.add(jti)
-
-    def load_revocations(self, db: ControllerDB) -> None:
-        """Load revoked key_ids from api_keys into the revocation set.
-
-        Only loads keys that haven't expired yet — expired JWTs are rejected
-        by signature verification anyway, so their JTIs don't need tracking.
-        """
-        now_ms = int(time.time() * 1000)
-        with db.auth_read_snapshot() as tx:
-            rows = tx.execute(
-                select(auth_api_keys_table.c.key_id).where(
-                    auth_api_keys_table.c.revoked_at_ms.is_not(None),
-                    (auth_api_keys_table.c.expires_at_ms.is_(None)) | (auth_api_keys_table.c.expires_at_ms > now_ms),
-                )
-            ).all()
-            self._revoked_jtis = {str(row.key_id) for row in rows}
 
 
 # ---------------------------------------------------------------------------
@@ -438,7 +321,6 @@ def _build_jwt_token_manager(
     *,
     cluster_name: str,
     signing_key_pem: str | None,
-    db: ControllerDB | None,
     previous_public_keys: Sequence[str],
 ) -> JwtTokenManager:
     """Construct the control-plane :class:`JwtTokenManager` for this controller.
@@ -469,7 +351,7 @@ def _build_jwt_token_manager(
         issuers={issuer: [key.public_pem, *previous_public_keys]},
         expected_audiences=CONTROL_PLANE_AUDIENCES,
     )
-    return JwtTokenManager(signer, verifier, db=db, previous_public_keys=previous_public_keys)
+    return JwtTokenManager(signer, verifier, previous_public_keys=previous_public_keys)
 
 
 def require_persistent_signing_key(auth_config: AuthConfig | None, signing_key_pem: str | None) -> None:
@@ -509,8 +391,8 @@ def create_controller_auth(
 
     Mints EdDSA JWTs with this controller's per-cluster Ed25519 key (``iss`` =
     ``cluster_name``), loaded from ``signing_key_pem`` — resolved from a
-    ``SecretSpec`` on the serve path, never stored in the DB. ``api_keys`` rows
-    exist for audit and revocation, but verification never hits the DB. When
+    ``SecretSpec`` on the serve path, never stored in the DB. Verification is
+    fully stateless (pure crypto + audience), so it never hits the DB. When
     ``signing_key_pem`` is ``None`` an ephemeral keypair is used — for in-process
     dev (``LocalCluster``) and null-auth; tokens do not survive a restart. A
     *deployed* authed cluster must supply a persistent key; that requirement is
@@ -533,10 +415,8 @@ def create_controller_auth(
             jwt_mgr = _build_jwt_token_manager(
                 cluster_name=cluster_name,
                 signing_key_pem=signing_key_pem,
-                db=db,
                 previous_public_keys=previous_public_keys,
             )
-            jwt_mgr.load_revocations(db)
 
             worker_token = _create_worker_jwt(db, jwt_mgr, now)
             logger.info("Authentication disabled — null-auth mode (workers use JWT)")
@@ -550,24 +430,18 @@ def create_controller_auth(
     jwt_mgr = _build_jwt_token_manager(
         cluster_name=cluster_name,
         signing_key_pem=signing_key_pem,
-        db=db,
         previous_public_keys=previous_public_keys,
     )
     worker_token: str | None = None
 
     if db:
-        jwt_mgr.load_revocations(db)
-
         worker_token = _create_worker_jwt(db, jwt_mgr, now)
-
-        for admin_user in auth_config.admin_users:
-            with db.transaction() as _tx:
-                writes.ensure_user(_tx, admin_user, now)
-                writes.set_user_role(_tx, admin_user, "admin")
-
+        _reconcile_admin_grants(db, auth_config.admin_users, now)
         verifier: TokenVerifier | None = jwt_mgr
     else:
-        worker_token = jwt_mgr.create_token(WORKER_USER, "worker", f"iris_k_worker_{secrets.token_hex(8)}")
+        worker_token = jwt_mgr.create_token(
+            WORKER_USER, "worker", f"iris_k_worker_{secrets.token_hex(8)}", ttl_seconds=WORKER_TOKEN_TTL_SECONDS
+        )
         verifier = None
 
     login_verifier: TokenVerifier | None = None
@@ -631,20 +505,36 @@ def create_controller_auth(
 def _create_worker_jwt(db: ControllerDB, jwt_mgr: JwtTokenManager, now: Timestamp) -> str:
     """Generate a JWT for the worker identity on each controller start.
 
-    Old worker tokens are not revoked so that in-flight workers can finish
-    gracefully with their existing credentials.
+    A fresh ``jti`` is minted per start for log correlation only; it is never
+    persisted or revocable. Old worker tokens simply age out at their TTL, so
+    in-flight workers finish gracefully with their existing credentials.
     """
     key_id = f"iris_k_worker_{secrets.token_hex(8)}"
     with db.transaction() as _tx:
         writes.ensure_user(_tx, WORKER_USER, now, role="worker")
-    create_api_key(
-        db,
-        key_id=key_id,
-        key_prefix="jwt",
-        user_id=WORKER_USER,
-        name="worker-token",
-        now=now,
-    )
-    jwt_token = jwt_mgr.create_token(WORKER_USER, "worker", key_id)
+    jwt_token = jwt_mgr.create_token(WORKER_USER, "worker", key_id, ttl_seconds=WORKER_TOKEN_TTL_SECONDS)
     logger.info("New worker JWT generated (key_id=%s)", key_id)
     return jwt_token
+
+
+def _reconcile_admin_grants(db: ControllerDB, admin_users: Sequence[str], now: Timestamp) -> None:
+    """Make the config's ``admin_users`` the authoritative admin set.
+
+    Cluster config is the source of truth for the admin grant, so on every
+    controller start we both grant admin to each listed user AND downgrade any user
+    still holding admin who is no longer listed. That downgrade is the deprovision
+    path: drop a user from ``admin_users``, reload/restart the controller, and their
+    stored admin role is revoked. A session token already minted with the old role
+    is not revocable but ages out at its short TTL, so access is lost within one
+    ``SESSION_TOKEN_TTL_SECONDS`` window. (``worker`` is left untouched — it is not
+    an admin and belongs to the internal worker identity, not a config grant.)
+    """
+    granted = set(admin_users)
+    with db.transaction() as tx:
+        for user_id in granted:
+            writes.ensure_user(tx, user_id, now)
+            writes.set_user_role(tx, user_id, "admin")
+        for user_id in reads.list_user_ids_with_role(tx, "admin"):
+            if user_id not in granted:
+                writes.set_user_role(tx, user_id, DEPROVISIONED_ROLE)
+                logger.info("event=admin_revoked entity=%s trigger=config-reconcile", user_id)

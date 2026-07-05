@@ -67,15 +67,8 @@ def test_full_token_has_no_audience_through_same_verify(jwt):
     surfaces no audience while an endpoint token (``aud="iris-proxy"``,
     ``scope="proxy"``) surfaces its bound endpoint.
     """
-    assert jwt.verify(jwt.create_token("alice", "admin", "k1")).audience is None
+    assert jwt.verify(jwt.create_token("alice", "admin", "k1", ttl_seconds=60)).audience is None
     assert jwt.verify(jwt.create_endpoint_token(_ENDPOINT, "k2", ttl_seconds=60)).audience == _ENDPOINT
-
-
-def test_endpoint_token_revocation(jwt):
-    token = jwt.create_endpoint_token(_ENDPOINT, "iris_ket_revoke", ttl_seconds=60)
-    jwt.revoke("iris_ket_revoke")
-    with pytest.raises(ValueError, match="revoked"):
-        jwt.verify(token)
 
 
 # --- RPC over-grant is closed --------------------------------------------------
@@ -115,7 +108,7 @@ def test_bearer_rejects_scoped_token_for_other_endpoint(jwt, policy):
 
 
 def test_bearer_accepts_full_identity(jwt, policy):
-    token = jwt.create_token("alice", "admin", "k1")
+    token = jwt.create_token("alice", "admin", "k1", ttl_seconds=60)
     assert _authorize_proxy(_request(token=token), _resolved(EndpointAccess.ENDPOINT_ACCESS_BEARER), policy) is None
 
 
@@ -131,7 +124,7 @@ def test_private_rejects_missing_token(policy):
 
 
 def test_private_accepts_full_identity(jwt, policy):
-    token = jwt.create_token("alice", "admin", "k1")
+    token = jwt.create_token("alice", "admin", "k1", ttl_seconds=60)
     assert _authorize_proxy(_request(token=token), _resolved(EndpointAccess.ENDPOINT_ACCESS_PRIVATE), policy) is None
 
 

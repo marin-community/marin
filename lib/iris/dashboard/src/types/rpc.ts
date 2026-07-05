@@ -554,23 +554,6 @@ export interface GetCurrentUserResponse {
   displayName?: string
 }
 
-// -- API Keys --
-
-export interface ApiKeyInfo {
-  keyId: string
-  keyPrefix: string
-  userId: string
-  name: string
-  createdAtMs: string
-  lastUsedAtMs: string
-  expiresAtMs: string
-  revoked: boolean
-}
-
-export interface ListApiKeysResponse {
-  keys: ApiKeyInfo[]
-}
-
 // -- Scheduler State --
 
 /** Aggregated pending-task count keyed by (band, user, job). */

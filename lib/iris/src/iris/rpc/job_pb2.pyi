@@ -176,64 +176,6 @@ class GetAuthInfoResponse(_message.Message):
     gcp_project_id: str
     def __init__(self, provider: _Optional[str] = ..., gcp_project_id: _Optional[str] = ...) -> None: ...
 
-class CreateApiKeyRequest(_message.Message):
-    __slots__ = ("user_id", "name", "ttl_ms")
-    USER_ID_FIELD_NUMBER: _ClassVar[int]
-    NAME_FIELD_NUMBER: _ClassVar[int]
-    TTL_MS_FIELD_NUMBER: _ClassVar[int]
-    user_id: str
-    name: str
-    ttl_ms: int
-    def __init__(self, user_id: _Optional[str] = ..., name: _Optional[str] = ..., ttl_ms: _Optional[int] = ...) -> None: ...
-
-class CreateApiKeyResponse(_message.Message):
-    __slots__ = ("key_id", "token", "key_prefix")
-    KEY_ID_FIELD_NUMBER: _ClassVar[int]
-    TOKEN_FIELD_NUMBER: _ClassVar[int]
-    KEY_PREFIX_FIELD_NUMBER: _ClassVar[int]
-    key_id: str
-    token: str
-    key_prefix: str
-    def __init__(self, key_id: _Optional[str] = ..., token: _Optional[str] = ..., key_prefix: _Optional[str] = ...) -> None: ...
-
-class RevokeApiKeyRequest(_message.Message):
-    __slots__ = ("key_id",)
-    KEY_ID_FIELD_NUMBER: _ClassVar[int]
-    key_id: str
-    def __init__(self, key_id: _Optional[str] = ...) -> None: ...
-
-class ListApiKeysRequest(_message.Message):
-    __slots__ = ("user_id",)
-    USER_ID_FIELD_NUMBER: _ClassVar[int]
-    user_id: str
-    def __init__(self, user_id: _Optional[str] = ...) -> None: ...
-
-class ApiKeyInfo(_message.Message):
-    __slots__ = ("key_id", "key_prefix", "user_id", "name", "created_at_ms", "last_used_at_ms", "expires_at_ms", "revoked")
-    KEY_ID_FIELD_NUMBER: _ClassVar[int]
-    KEY_PREFIX_FIELD_NUMBER: _ClassVar[int]
-    USER_ID_FIELD_NUMBER: _ClassVar[int]
-    NAME_FIELD_NUMBER: _ClassVar[int]
-    CREATED_AT_MS_FIELD_NUMBER: _ClassVar[int]
-    LAST_USED_AT_MS_FIELD_NUMBER: _ClassVar[int]
-    EXPIRES_AT_MS_FIELD_NUMBER: _ClassVar[int]
-    REVOKED_FIELD_NUMBER: _ClassVar[int]
-    key_id: str
-    key_prefix: str
-    user_id: str
-    name: str
-    created_at_ms: int
-    last_used_at_ms: int
-    expires_at_ms: int
-    revoked: bool
-    def __init__(self, key_id: _Optional[str] = ..., key_prefix: _Optional[str] = ..., user_id: _Optional[str] = ..., name: _Optional[str] = ..., created_at_ms: _Optional[int] = ..., last_used_at_ms: _Optional[int] = ..., expires_at_ms: _Optional[int] = ..., revoked: _Optional[bool] = ...) -> None: ...
-
-class ListApiKeysResponse(_message.Message):
-    __slots__ = ("keys",)
-    KEYS_FIELD_NUMBER: _ClassVar[int]
-    keys: _containers.RepeatedCompositeFieldContainer[ApiKeyInfo]
-    def __init__(self, keys: _Optional[_Iterable[_Union[ApiKeyInfo, _Mapping]]] = ...) -> None: ...
-
 class GetCurrentUserRequest(_message.Message):
     __slots__ = ()
     def __init__(self) -> None: ...

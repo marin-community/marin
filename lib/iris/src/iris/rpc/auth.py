@@ -33,7 +33,6 @@ class AuthzAction(StrEnum):
     """Actions requiring authorization. Add new actions here; policy is in POLICY."""
 
     ACT_AS_WORKER = "act_as_worker"
-    MANAGE_OTHER_KEYS = "manage_other_keys"
     MANAGE_BUDGETS = "manage_budgets"
     SET_CONTAINER_PROFILE = "set_container_profile"
 
@@ -41,7 +40,6 @@ class AuthzAction(StrEnum):
 # Action → frozenset of roles allowed. Admin is implicitly always allowed.
 POLICY: dict[AuthzAction, frozenset[str]] = {
     AuthzAction.ACT_AS_WORKER: frozenset({"worker"}),
-    AuthzAction.MANAGE_OTHER_KEYS: frozenset(),  # admin only
     AuthzAction.MANAGE_BUDGETS: frozenset(),  # admin only
     AuthzAction.SET_CONTAINER_PROFILE: frozenset(),  # admin only (elevated container profiles)
 }
@@ -76,7 +74,6 @@ DASHBOARD_READABLE_RPCS: frozenset[str] = frozenset(
         # Identity, users, budgets (read)
         "GetAuthInfo",
         "GetCurrentUser",
-        "ListApiKeys",
         "ListUsers",
         "GetUserBudget",
         "ListUserBudgets",

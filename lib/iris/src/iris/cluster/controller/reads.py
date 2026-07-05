@@ -220,6 +220,15 @@ def get_user_role(tx: Tx, user_id: str) -> str:
     return role if role is not None else USER_ROLE_DEFAULT
 
 
+def list_user_ids_with_role(tx: Tx, role: str) -> list[str]:
+    """User ids currently holding ``role`` — used to reconcile the store to config."""
+    rows = tx.execute(
+        select(users_table.c.user_id).where(users_table.c.role == bindparam("role")),
+        {"role": role},
+    ).fetchall()
+    return [str(row.user_id) for row in rows]
+
+
 # ---------------------------------------------------------------------------
 # Dashboard composite reads (previously reads/dashboard.py)
 # ---------------------------------------------------------------------------

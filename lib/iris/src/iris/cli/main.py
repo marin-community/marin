@@ -210,57 +210,6 @@ def login(ctx):
     click.echo(f"Token stored for cluster '{cluster_name}'")
 
 
-@iris.group()
-@click.pass_context
-def key(ctx):
-    """Manage API keys."""
-    pass
-
-
-@key.command("create")
-@click.option("--name", required=True, help="Human-readable key name")
-@click.option("--user", "user_id", default="", help="Target user (admin only for other users)")
-@click.option("--ttl", "ttl_ms", default=0, type=int, help="Time-to-live in milliseconds (0 = no expiry)")
-@click.pass_context
-def key_create(ctx, name: str, user_id: str, ttl_ms: int):
-    """Create a new API key."""
-    with rpc_client_for_ctx(ctx) as client:
-        response = client.create_api_key(job_pb2.CreateApiKeyRequest(user_id=user_id, name=name, ttl_ms=ttl_ms))
-
-    click.echo(f"Key ID:  {response.key_id}")
-    click.echo(f"Token:   {response.token}")
-    click.echo(f"Prefix:  {response.key_prefix}")
-    click.echo("Store this token securely — it cannot be retrieved again.")
-
-
-@key.command("list")
-@click.option("--user", "user_id", default="", help="Filter by user (admin only for other users)")
-@click.pass_context
-def key_list(ctx, user_id: str):
-    """List API keys."""
-    with rpc_client_for_ctx(ctx) as client:
-        response = client.list_api_keys(job_pb2.ListApiKeysRequest(user_id=user_id))
-
-    if not response.keys:
-        click.echo("No API keys found.")
-        return
-
-    for k in response.keys:
-        status = "REVOKED" if k.revoked else "active"
-        click.echo(f"  {k.key_id}  {k.key_prefix}...  {k.name:<20s}  {k.user_id:<20s}  {status}")
-
-
-@key.command("revoke")
-@click.argument("key_id")
-@click.pass_context
-def key_revoke(ctx, key_id: str):
-    """Revoke an API key."""
-    with rpc_client_for_ctx(ctx) as client:
-        client.revoke_api_key(job_pb2.RevokeApiKeyRequest(key_id=key_id))
-
-    click.echo(f"Revoked key: {key_id}")
-
-
 # ---------------------------------------------------------------------------
 # User budget management
 # ---------------------------------------------------------------------------

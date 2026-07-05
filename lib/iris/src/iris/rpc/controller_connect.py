@@ -88,15 +88,6 @@ class ControllerService(Protocol):
     async def login(self, request: job__pb2.LoginRequest, ctx: RequestContext) -> job__pb2.LoginResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
-    async def create_api_key(self, request: job__pb2.CreateApiKeyRequest, ctx: RequestContext) -> job__pb2.CreateApiKeyResponse:
-        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
-
-    async def revoke_api_key(self, request: job__pb2.RevokeApiKeyRequest, ctx: RequestContext) -> job__pb2.Empty:
-        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
-
-    async def list_api_keys(self, request: job__pb2.ListApiKeysRequest, ctx: RequestContext) -> job__pb2.ListApiKeysResponse:
-        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
-
     async def get_current_user(self, request: job__pb2.GetCurrentUserRequest, ctx: RequestContext) -> job__pb2.GetCurrentUserResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
@@ -362,36 +353,6 @@ class ControllerServiceASGIApplication(ConnectASGIApplication[ControllerService]
                         idempotency_level=IdempotencyLevel.UNKNOWN,
                     ),
                     function=svc.login,
-                ),
-                "/iris.cluster.ControllerService/CreateApiKey": Endpoint.unary(
-                    method=MethodInfo(
-                        name="CreateApiKey",
-                        service_name="iris.cluster.ControllerService",
-                        input=job__pb2.CreateApiKeyRequest,
-                        output=job__pb2.CreateApiKeyResponse,
-                        idempotency_level=IdempotencyLevel.UNKNOWN,
-                    ),
-                    function=svc.create_api_key,
-                ),
-                "/iris.cluster.ControllerService/RevokeApiKey": Endpoint.unary(
-                    method=MethodInfo(
-                        name="RevokeApiKey",
-                        service_name="iris.cluster.ControllerService",
-                        input=job__pb2.RevokeApiKeyRequest,
-                        output=job__pb2.Empty,
-                        idempotency_level=IdempotencyLevel.UNKNOWN,
-                    ),
-                    function=svc.revoke_api_key,
-                ),
-                "/iris.cluster.ControllerService/ListApiKeys": Endpoint.unary(
-                    method=MethodInfo(
-                        name="ListApiKeys",
-                        service_name="iris.cluster.ControllerService",
-                        input=job__pb2.ListApiKeysRequest,
-                        output=job__pb2.ListApiKeysResponse,
-                        idempotency_level=IdempotencyLevel.UNKNOWN,
-                    ),
-                    function=svc.list_api_keys,
                 ),
                 "/iris.cluster.ControllerService/GetCurrentUser": Endpoint.unary(
                     method=MethodInfo(
@@ -966,66 +927,6 @@ class ControllerServiceClient(ConnectClient):
             timeout_ms=timeout_ms,
         )
 
-    async def create_api_key(
-        self,
-        request: job__pb2.CreateApiKeyRequest,
-        *,
-        headers: Headers | Mapping[str, str] | None = None,
-        timeout_ms: int | None = None,
-    ) -> job__pb2.CreateApiKeyResponse:
-        return await self.execute_unary(
-            request=request,
-            method=MethodInfo(
-                name="CreateApiKey",
-                service_name="iris.cluster.ControllerService",
-                input=job__pb2.CreateApiKeyRequest,
-                output=job__pb2.CreateApiKeyResponse,
-                idempotency_level=IdempotencyLevel.UNKNOWN,
-            ),
-            headers=headers,
-            timeout_ms=timeout_ms,
-        )
-
-    async def revoke_api_key(
-        self,
-        request: job__pb2.RevokeApiKeyRequest,
-        *,
-        headers: Headers | Mapping[str, str] | None = None,
-        timeout_ms: int | None = None,
-    ) -> job__pb2.Empty:
-        return await self.execute_unary(
-            request=request,
-            method=MethodInfo(
-                name="RevokeApiKey",
-                service_name="iris.cluster.ControllerService",
-                input=job__pb2.RevokeApiKeyRequest,
-                output=job__pb2.Empty,
-                idempotency_level=IdempotencyLevel.UNKNOWN,
-            ),
-            headers=headers,
-            timeout_ms=timeout_ms,
-        )
-
-    async def list_api_keys(
-        self,
-        request: job__pb2.ListApiKeysRequest,
-        *,
-        headers: Headers | Mapping[str, str] | None = None,
-        timeout_ms: int | None = None,
-    ) -> job__pb2.ListApiKeysResponse:
-        return await self.execute_unary(
-            request=request,
-            method=MethodInfo(
-                name="ListApiKeys",
-                service_name="iris.cluster.ControllerService",
-                input=job__pb2.ListApiKeysRequest,
-                output=job__pb2.ListApiKeysResponse,
-                idempotency_level=IdempotencyLevel.UNKNOWN,
-            ),
-            headers=headers,
-            timeout_ms=timeout_ms,
-        )
-
     async def get_current_user(
         self,
         request: job__pb2.GetCurrentUserRequest,
@@ -1395,12 +1296,6 @@ class ControllerServiceSync(Protocol):
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
     def login(self, request: job__pb2.LoginRequest, ctx: RequestContext) -> job__pb2.LoginResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
-    def create_api_key(self, request: job__pb2.CreateApiKeyRequest, ctx: RequestContext) -> job__pb2.CreateApiKeyResponse:
-        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
-    def revoke_api_key(self, request: job__pb2.RevokeApiKeyRequest, ctx: RequestContext) -> job__pb2.Empty:
-        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
-    def list_api_keys(self, request: job__pb2.ListApiKeysRequest, ctx: RequestContext) -> job__pb2.ListApiKeysResponse:
-        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
     def get_current_user(self, request: job__pb2.GetCurrentUserRequest, ctx: RequestContext) -> job__pb2.GetCurrentUserResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
     def get_kubernetes_cluster_status(self, request: controller__pb2.Controller.GetKubernetesClusterStatusRequest, ctx: RequestContext) -> controller__pb2.Controller.GetKubernetesClusterStatusResponse:
@@ -1656,36 +1551,6 @@ class ControllerServiceWSGIApplication(ConnectWSGIApplication):
                         idempotency_level=IdempotencyLevel.UNKNOWN,
                     ),
                     function=service.login,
-                ),
-                "/iris.cluster.ControllerService/CreateApiKey": EndpointSync.unary(
-                    method=MethodInfo(
-                        name="CreateApiKey",
-                        service_name="iris.cluster.ControllerService",
-                        input=job__pb2.CreateApiKeyRequest,
-                        output=job__pb2.CreateApiKeyResponse,
-                        idempotency_level=IdempotencyLevel.UNKNOWN,
-                    ),
-                    function=service.create_api_key,
-                ),
-                "/iris.cluster.ControllerService/RevokeApiKey": EndpointSync.unary(
-                    method=MethodInfo(
-                        name="RevokeApiKey",
-                        service_name="iris.cluster.ControllerService",
-                        input=job__pb2.RevokeApiKeyRequest,
-                        output=job__pb2.Empty,
-                        idempotency_level=IdempotencyLevel.UNKNOWN,
-                    ),
-                    function=service.revoke_api_key,
-                ),
-                "/iris.cluster.ControllerService/ListApiKeys": EndpointSync.unary(
-                    method=MethodInfo(
-                        name="ListApiKeys",
-                        service_name="iris.cluster.ControllerService",
-                        input=job__pb2.ListApiKeysRequest,
-                        output=job__pb2.ListApiKeysResponse,
-                        idempotency_level=IdempotencyLevel.UNKNOWN,
-                    ),
-                    function=service.list_api_keys,
                 ),
                 "/iris.cluster.ControllerService/GetCurrentUser": EndpointSync.unary(
                     method=MethodInfo(
@@ -2254,66 +2119,6 @@ class ControllerServiceClientSync(ConnectClientSync):
                 service_name="iris.cluster.ControllerService",
                 input=job__pb2.LoginRequest,
                 output=job__pb2.LoginResponse,
-                idempotency_level=IdempotencyLevel.UNKNOWN,
-            ),
-            headers=headers,
-            timeout_ms=timeout_ms,
-        )
-
-    def create_api_key(
-        self,
-        request: job__pb2.CreateApiKeyRequest,
-        *,
-        headers: Headers | Mapping[str, str] | None = None,
-        timeout_ms: int | None = None,
-    ) -> job__pb2.CreateApiKeyResponse:
-        return self.execute_unary(
-            request=request,
-            method=MethodInfo(
-                name="CreateApiKey",
-                service_name="iris.cluster.ControllerService",
-                input=job__pb2.CreateApiKeyRequest,
-                output=job__pb2.CreateApiKeyResponse,
-                idempotency_level=IdempotencyLevel.UNKNOWN,
-            ),
-            headers=headers,
-            timeout_ms=timeout_ms,
-        )
-
-    def revoke_api_key(
-        self,
-        request: job__pb2.RevokeApiKeyRequest,
-        *,
-        headers: Headers | Mapping[str, str] | None = None,
-        timeout_ms: int | None = None,
-    ) -> job__pb2.Empty:
-        return self.execute_unary(
-            request=request,
-            method=MethodInfo(
-                name="RevokeApiKey",
-                service_name="iris.cluster.ControllerService",
-                input=job__pb2.RevokeApiKeyRequest,
-                output=job__pb2.Empty,
-                idempotency_level=IdempotencyLevel.UNKNOWN,
-            ),
-            headers=headers,
-            timeout_ms=timeout_ms,
-        )
-
-    def list_api_keys(
-        self,
-        request: job__pb2.ListApiKeysRequest,
-        *,
-        headers: Headers | Mapping[str, str] | None = None,
-        timeout_ms: int | None = None,
-    ) -> job__pb2.ListApiKeysResponse:
-        return self.execute_unary(
-            request=request,
-            method=MethodInfo(
-                name="ListApiKeys",
-                service_name="iris.cluster.ControllerService",
-                input=job__pb2.ListApiKeysRequest,
-                output=job__pb2.ListApiKeysResponse,
                 idempotency_level=IdempotencyLevel.UNKNOWN,
             ),
             headers=headers,

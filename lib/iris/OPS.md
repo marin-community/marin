@@ -272,12 +272,21 @@ uv run python scripts/job_profile_summary.py /user/job/id -o merged.folded --svg
 ## Users & Auth
 
 ```bash
-iris login                            # authenticate, store JWT locally
+iris login                            # authenticate, store a short-lived session JWT locally
 iris rpc controller list-users        # active users with task/job counts
 iris user budget list                 # per-user budget limits
-iris key create --name ci-bot         # create API key
-iris key list / iris key revoke       # manage API keys
 ```
+
+Tokens are stateless and short-lived (1h sessions): there is no API-key store and
+no revocation list. Authorization is **config-driven** — admin grants live in the
+cluster config (`auth.admin_users`) and are reconciled into the user store on every
+controller start (grants applied, and de-listed admins downgraded). To deprovision
+a user, remove them from `auth.admin_users` and reload/restart the controller; the
+reconcile revokes their stored admin role. A session token already minted keeps its
+old role only until it expires (≤ the 1h session TTL). There is no way to revoke an
+individual live token; the only fleet-wide kill switch is rotating the cluster
+signing key (`iris cluster init-keys` + redeploy), which re-auths every client and
+worker. Re-run `iris login` to refresh an expired session.
 
 ### Calling the IAP endpoint with `curl`
 

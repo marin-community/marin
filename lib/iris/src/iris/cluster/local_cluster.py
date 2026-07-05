@@ -35,7 +35,7 @@ from iris.cluster.config import (
 )
 from iris.cluster.constraints import worker_attributes_from_resources
 from iris.cluster.controller import writes
-from iris.cluster.controller.auth import create_api_key, create_controller_auth
+from iris.cluster.controller.auth import SESSION_TOKEN_TTL_SECONDS, create_controller_auth
 from iris.cluster.controller.autoscaler import Autoscaler
 from iris.cluster.controller.autoscaler.scaling_group import (
     DEFAULT_SCALE_DOWN_RATE_LIMIT,
@@ -269,32 +269,20 @@ class LocalCluster:
         # Raw tokens won't work since the verifier only accepts JWTs.
         url = self._controller.url
         now = Timestamp.now()
-        key_id = f"iris_k_local_{secrets.token_hex(8)}"
+        # jti is for log correlation only — the local session token is stateless
+        # (nothing persisted, never revocable), like every other iris token.
+        key_id = f"iris_s_local_{secrets.token_hex(8)}"
         with db.transaction() as _tx:
             writes.ensure_user(_tx, "local-admin", now, role="admin")
             writes.set_user_role(_tx, "local-admin", "admin")
 
         if auth.jwt_manager:
-            create_api_key(
-                db,
-                key_id=key_id,
-                key_prefix="jwt",
-                user_id="local-admin",
-                name="local-auto-login",
-                now=now,
+            jwt_token = auth.jwt_manager.create_token(
+                "local-admin", "admin", key_id, ttl_seconds=SESSION_TOKEN_TTL_SECONDS
             )
-            jwt_token = auth.jwt_manager.create_token("local-admin", "admin", key_id)
         else:
             # Fallback for no-DB / no-JWT mode (shouldn't happen in practice)
             jwt_token = secrets.token_urlsafe(32)
-            create_api_key(
-                db,
-                key_id=key_id,
-                key_prefix=jwt_token[:8],
-                user_id="local-admin",
-                name="local-auto-login",
-                now=now,
-            )
 
         cluster_name = self._config.name or "local"
         save_credentials(CredentialRecord(cluster=cluster_name, endpoint=url, app_token=jwt_token))
