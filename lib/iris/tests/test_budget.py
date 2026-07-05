@@ -237,7 +237,6 @@ def _start_running_job(
                     )
                 ],
                 health=state._health,
-                endpoints=state._endpoints,
                 now=Timestamp.now(),
             )
 
@@ -287,9 +286,8 @@ def service(state, tmp_path, log_client) -> ControllerServiceImpl:
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
         log_client=log_client,
         db=state._db,
-        endpoints=state._endpoints,
         auth=ControllerAuth(provider="static"),
-        endpoint_service=EndpointServiceImpl(db=state._db, endpoints=state._endpoints),
+        endpoint_service=EndpointServiceImpl(db=state._db),
     )
 
 

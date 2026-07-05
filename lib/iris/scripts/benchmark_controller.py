@@ -215,7 +215,6 @@ class _FakeProvider:
             db=runtime.db,
             owns_scale_group=runtime.owns_scale_group,
             health=self.health,
-            endpoints=runtime.endpoints,
             run_template_cache=runtime.run_template_cache,
             defaults=runtime.budget_defaults,
             autoscale=self.autoscale,
@@ -1600,8 +1599,7 @@ def benchmark_endpoints(db: ControllerDB) -> None:
     )
 
     write_db = clone_db(db)
-    write_endpoints = EndpointsProjection(write_db)
-    write_txns = ControllerTestState(write_db, endpoints=write_endpoints)
+    write_txns = ControllerTestState(write_db)
     # ops.worker.fail only acts on workers the tracker considers active.
     _seed_health(write_db, write_txns._health)
 
@@ -1614,7 +1612,7 @@ def benchmark_endpoints(db: ControllerDB) -> None:
         def _reset_endpoints():
             with write_db.transaction() as _tx:
                 _tx.execute(text("DELETE FROM endpoints WHERE name LIKE '/bench/endpoint/%'"))
-            write_endpoints.rehydrate()
+            write_txns._endpoints.rehydrate()
 
         for burst_n in (50, 200):
             if len(sample) < burst_n:
@@ -1624,7 +1622,7 @@ def benchmark_endpoints(db: ControllerDB) -> None:
             def _per_txn(tasks=tasks_for_burst):
                 for t, aid in tasks:
                     with write_db.transaction() as cur:
-                        write_endpoints.add(cur, _make_endpoint(t, aid))
+                        write_txns._endpoints.add(cur, _make_endpoint(t, aid))
 
             bench(
                 f"Endpoints: add_endpoint burst x{burst_n} (per-txn, WRITE)",
@@ -1637,7 +1635,7 @@ def benchmark_endpoints(db: ControllerDB) -> None:
             def _one_txn(tasks=tasks_for_burst):
                 with write_db.transaction() as cur:
                     for t, aid in tasks:
-                        write_endpoints.add(cur, _make_endpoint(t, aid))
+                        write_txns._endpoints.add(cur, _make_endpoint(t, aid))
 
             bench(
                 f"Endpoints: add_endpoint burst x{burst_n} (1 txn, WRITE)",
@@ -1709,7 +1707,6 @@ def benchmark_endpoints(db: ControllerDB) -> None:
                     worker_ids=wids,
                     reason="benchmark: simulated provider-sync failure",
                     health=write_txns._health,
-                    endpoints=write_txns._endpoints,
                 ),
                 reset=_reset_fail,
                 min_runs=3,
@@ -1792,7 +1789,7 @@ def _run_apply_under_contention(
                 with write_txns._db.transaction() as cur:
                     now = Timestamp.now()
                     effects = apply_reconcile(CursorTransitionReader(cur), plan_results, now=now)
-                    commit_effects(cur, effects, endpoints=write_txns._endpoints)
+                    commit_effects(cur, effects)
                 victim_latencies.append((time.perf_counter() - t0) * 1000)
         except BaseException as e:
             errors.append(e)
@@ -1809,7 +1806,6 @@ def _run_apply_under_contention(
                         worker_ids=[str(wid) for wid, _addr, _reason in failures],
                         reason="benchmark: simulated provider-sync failure",
                         health=write_txns._health,
-                        endpoints=write_txns._endpoints,
                     )
                 stop.wait(fail_interval_s)
         except BaseException as e:
@@ -2769,7 +2765,7 @@ def _one_reconcile_tick(state: SyntheticReconcileState, provider: RpcTaskBackend
     now = Timestamp.now()
     with state.txns._db.transaction() as cur:
         effects = apply_reconcile(CursorTransitionReader(cur), worker_results, now=now)
-        commit_effects(cur, effects, endpoints=state.txns._endpoints)
+        commit_effects(cur, effects)
     t4 = time.perf_counter()
     return (t1 - t0) * 1000, (t2 - t1) * 1000, (t3 - t2) * 1000, (t4 - t3) * 1000
 

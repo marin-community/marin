@@ -13,7 +13,6 @@ from iris.cluster.controller import reads, writes
 from iris.cluster.controller.audit_logging import log_event
 from iris.cluster.controller.codec import proto_to_json
 from iris.cluster.controller.db import ControllerDB, Tx
-from iris.cluster.controller.projections.endpoints import EndpointsProjection
 from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
 from iris.cluster.controller.reconcile import ControllerEffects, ReconcileState
 from iris.cluster.controller.reconcile.commit import commit_effects
@@ -115,7 +114,6 @@ def fail(
     worker_ids: list[str],
     reason: str,
     health: WorkerHealthTracker,
-    endpoints: EndpointsProjection,
 ) -> WorkerFailureBatchResult:
     """Fail active workers in chunked write transactions.
 
@@ -171,7 +169,6 @@ def fail(
                 cur,
                 live_chunk,
                 health=health,
-                endpoints=endpoints,
                 now=now,
             )
             for worker_id, worker_address, _ in live_chunk:
@@ -186,7 +183,6 @@ def _apply_worker_failures_chunk(
     failures: list[tuple[WorkerId, str | None, str]],
     *,
     health: WorkerHealthTracker,
-    endpoints: EndpointsProjection,
     now: Timestamp,
 ) -> None:
     """Glue: load the worker slice for ``failures``, run the worker-failure
@@ -204,7 +200,7 @@ def _apply_worker_failures_chunk(
 
     # commit_effects before remove_worker: task mutations reference attempt rows
     # that would be CASCADE-deleted by remove_worker; order must be preserved.
-    commit_effects(cur, effects, endpoints=endpoints)
+    commit_effects(cur, effects)
     for worker_id, _, _ in failures:
         writes.remove_worker(cur, worker_id, health=health)
 

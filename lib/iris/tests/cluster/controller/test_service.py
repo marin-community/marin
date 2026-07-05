@@ -115,7 +115,6 @@ def _assign_and_transition(
                 )
             ],
             health=state._health,
-            endpoints=state._endpoints,
             now=Timestamp.now(),
         )
     if target_state != job_pb2.TASK_STATE_RUNNING:
@@ -129,7 +128,6 @@ def _assign_and_transition(
                     )
                 ],
                 health=state._health,
-                endpoints=state._endpoints,
                 now=Timestamp.now(),
             )
 
@@ -546,7 +544,6 @@ def test_existing_job_policy_keep_drains_unfinalized_child_attempt(service, stat
         finalize(
             cur,
             [TerminalDecision(TerminalKind.PREEMPT, child_task.task_id, "evicted by prod tenant")],
-            endpoints=state._endpoints,
             now=Timestamp.now(),
         )
 
@@ -616,7 +613,6 @@ def test_existing_job_policy_keep_force_reaps_after_drain_wait(service, state, m
         finalize(
             cur,
             [TerminalDecision(TerminalKind.PREEMPT, child_task.task_id, "evicted, worker stuck")],
-            endpoints=state._endpoints,
             now=Timestamp.now(),
         )
 
@@ -968,9 +964,8 @@ def test_terminate_job_rejected_for_non_owner(state, mock_controller, tmp_path, 
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles_owner")),
         log_client=log_client,
         db=state._db,
-        endpoints=state._endpoints,
         auth=ControllerAuth(provider="static"),
-        endpoint_service=EndpointServiceImpl(db=state._db, endpoints=state._endpoints),
+        endpoint_service=EndpointServiceImpl(db=state._db),
     )
 
     auth_service.launch_job(make_job_request("/alice/my-job"), None)
@@ -996,9 +991,8 @@ def test_launch_child_job_rejected_for_non_owner(state, mock_controller, tmp_pat
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles_child")),
         log_client=log_client,
         db=state._db,
-        endpoints=state._endpoints,
         auth=ControllerAuth(provider="static"),
-        endpoint_service=EndpointServiceImpl(db=state._db, endpoints=state._endpoints),
+        endpoint_service=EndpointServiceImpl(db=state._db),
     )
 
     auth_service.launch_job(make_job_request("/alice/parent-job"), None)
@@ -1610,9 +1604,8 @@ def test_register_requires_worker_role(state, mock_controller, tmp_path, log_cli
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
         log_client=log_client,
         db=state._db,
-        endpoints=state._endpoints,
         auth=auth,
-        endpoint_service=EndpointServiceImpl(db=state._db, endpoints=state._endpoints),
+        endpoint_service=EndpointServiceImpl(db=state._db),
     )
 
     token = _verified_identity.set(VerifiedIdentity(user_id="alice", role="user"))
@@ -1644,9 +1637,8 @@ def test_register_allows_worker_role(state, mock_controller, tmp_path, log_clien
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
         log_client=log_client,
         db=state._db,
-        endpoints=state._endpoints,
         auth=auth,
-        endpoint_service=EndpointServiceImpl(db=state._db, endpoints=state._endpoints),
+        endpoint_service=EndpointServiceImpl(db=state._db),
     )
 
     token = _verified_identity.set(VerifiedIdentity(user_id="system:worker", role="worker"))

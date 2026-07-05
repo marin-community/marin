@@ -40,14 +40,14 @@ class ControllerTestState:
     without booting a full ``Controller``.
 
     Field names match the underscored ones a single-backend :class:`Controller`
-    exposes through its default backend (``_db``, ``_health``, ``_endpoints``,
+    exposes through its default backend (``_db``, ``_health``,
     ``_run_template_cache``) so the same helpers work against either.
+    ``_endpoints`` is a convenience property backed by the DB cache registry.
     """
 
     _db: ControllerDB
     _attempt_counts: AttemptCountsProjection
     _health: WorkerHealthTracker
-    _endpoints: EndpointsProjection
     _worker_attrs: WorkerAttrsProjection
     _run_template_cache: RunTemplateCache
 
@@ -56,20 +56,24 @@ class ControllerTestState:
         db: ControllerDB,
         *,
         health: WorkerHealthTracker | None = None,
-        endpoints: EndpointsProjection | None = None,
         worker_attrs: WorkerAttrsProjection | None = None,
         run_template_cache: RunTemplateCache | None = None,
     ) -> None:
         self._db = db
-        # Mirror a real Controller: constructing the derived-count memo self-registers
-        # it into ``db.caches``, so cursors this DB mints reach it as
-        # ``tx.caches[AttemptCountsProjection]`` when helpers commit effects / purge
-        # jobs / read derived counts.
+        # Mirror a real Controller: each Projection self-registers into
+        # ``db.caches`` on construction; cursors the DB mints reach them as
+        # ``tx.caches[Projection]`` when helpers commit effects / purge jobs /
+        # read derived counts.
         self._attempt_counts = AttemptCountsProjection(db)
         self._health = health or WorkerHealthTracker()
-        self._endpoints = endpoints or EndpointsProjection(db)
+        EndpointsProjection(db)
         self._worker_attrs = worker_attrs or WorkerAttrsProjection(db)
         self._run_template_cache = run_template_cache or new_run_template_cache()
+
+    @property
+    def _endpoints(self) -> EndpointsProjection:
+        """The endpoints projection, looked up from the DB cache registry."""
+        return self._db.caches[EndpointsProjection]
 
 
 def set_worker_health_for_test(ctrl: ControllerTestState, worker_id: WorkerId, healthy: bool) -> None:

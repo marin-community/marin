@@ -213,8 +213,6 @@ def _flush_jobs(cur: Tx, deltas: list[JobRowDelta]) -> None:
 def commit_effects(
     cur: Tx,
     effects: ControllerEffects,
-    *,
-    endpoints: EndpointsProjection,
 ) -> None:
     """Record a batch's ``effects`` within the caller's write transaction.
 
@@ -226,14 +224,15 @@ def commit_effects(
     events) through the single ``WorkerHealthTracker.apply`` site.
 
     Attempt writes invalidate the derived-count cache through the cursor
-    (``cur.caches[AttemptCountsProjection]``), so no cache reference is threaded here.
+    (``cur.caches[AttemptCountsProjection]``); endpoint deletions reach the
+    projection the same way — no cache reference is threaded here.
     """
     _flush_tasks(cur, list(effects.tasks.values()))
     _flush_attempts(cur, list(effects.attempts.values()))
     _flush_jobs(cur, list(effects.jobs.values()))
 
     for d in effects.endpoint_deletions:
-        endpoints.remove_by_task(cur, d.task_id)
+        cur.caches[EndpointsProjection].remove_by_task(cur, d.task_id)
 
     log_events = effects.log_events
     if log_events:

@@ -61,7 +61,6 @@ from iris.cluster.controller.codec import (
 from iris.cluster.controller.db import ControllerDB, Tx
 from iris.cluster.controller.endpoint_service import EndpointServiceImpl
 from iris.cluster.controller.projections.attempt_counts import AttemptCountsProjection
-from iris.cluster.controller.projections.endpoints import EndpointsProjection
 from iris.cluster.controller.reads import TaskJobSummary
 from iris.cluster.controller.reconcile.policy import MAX_ACTIVE_TASKS_PER_USER
 from iris.cluster.controller.reconcile.task import TerminalKind
@@ -1043,7 +1042,6 @@ class ControllerServiceImpl:
         bundle_store: Bundle store for zip storage.
         log_client: LogClient for reading task logs through LogService.FetchLogs.
         db: Underlying database connection.
-        endpoints: Endpoint projection (in-memory cache over the endpoints table).
     """
 
     def __init__(
@@ -1053,16 +1051,14 @@ class ControllerServiceImpl:
         log_client: LogClient,
         *,
         db: ControllerDB,
-        endpoints: EndpointsProjection,
         endpoint_service: EndpointServiceImpl,
         auth: ControllerAuth | None = None,
         user_budget_defaults: UserBudgetDefaults | None = None,
     ):
         # Every cursor this DB mints carries the per-controller cache registry as
         # ``tx.caches``, so cache-touching reads/writes reach the derived-count memo
-        # through the cursor — no cache reference held on the service.
+        # and the endpoint projection through the cursor — no cache reference held.
         self._db = db
-        self._endpoints = endpoints
         # The leased registry owns endpoint logic; the legacy
         # ControllerService.{Register,Unregister,List}Endpoint RPCs delegate here.
         self._endpoint_service = endpoint_service
@@ -1393,7 +1389,6 @@ class ControllerServiceImpl:
                             cur,
                             job_id=job_id,
                             reason="Replaced by new submission",
-                            endpoints=self._endpoints,
                         )
                         # Cancel is a producer transition: attempts stay
                         # unfinished until the worker confirms termination.
@@ -1731,7 +1726,6 @@ class ControllerServiceImpl:
                 cur,
                 job_id=job_id,
                 reason="Terminated by user",
-                endpoints=self._endpoints,
             )
         # The next polling tick reconciles each affected worker; the
         # cancellation appears in the desired-set diff so the worker stops

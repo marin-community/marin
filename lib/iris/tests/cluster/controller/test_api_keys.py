@@ -40,8 +40,8 @@ def db(tmp_path):
 
 def _make_service(db, log_client, auth=None):
     """Create a ControllerServiceImpl with minimal dependencies for API key tests."""
-    endpoints = EndpointsProjection(db)
-    # Self-registers into db.caches so service read paths can reach the derived-count memo.
+    # Self-registers into db.caches so service read paths reach them via tx.caches.
+    EndpointsProjection(db)
     AttemptCountsProjection(db)
 
     controller_mock = Mock()
@@ -57,9 +57,8 @@ def _make_service(db, log_client, auth=None):
         bundle_store=BundleStore(storage_dir=str(db.db_path.parent / "bundles")),
         log_client=log_client,
         db=db,
-        endpoints=endpoints,
         auth=auth or ControllerAuth(),
-        endpoint_service=EndpointServiceImpl(db=db, endpoints=endpoints),
+        endpoint_service=EndpointServiceImpl(db=db),
     )
 
 

@@ -38,7 +38,6 @@ from iris.cluster.controller.autoscaler.models import DemandEntry
 from iris.cluster.controller.autoscaler.state import AutoscalerState
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.ops.task import Assignment
-from iris.cluster.controller.projections.endpoints import EndpointsProjection
 from iris.cluster.controller.reads import ControlSnapshot
 from iris.cluster.controller.reconcile import ControllerEffects
 from iris.cluster.controller.reconcile.task import TerminalDecision, TerminalKind
@@ -443,8 +442,6 @@ class BackendRuntime:
     autoscaler groups it authors, so the controller never has to tag them afterward."""
     db: ControllerDB
     """The controller database."""
-    endpoints: EndpointsProjection
-    """The worker-endpoint projection."""
     run_template_cache: RunTemplateCache
     """Per-job ``RunTaskRequest`` template cache."""
     owns_scale_group: Callable[[str], bool]

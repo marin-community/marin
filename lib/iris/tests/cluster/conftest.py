@@ -15,7 +15,6 @@ from iris.cluster.controller.backend import BackendCapability
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.endpoint_service import EndpointServiceImpl
 from iris.cluster.controller.ops.task import Assignment
-from iris.cluster.controller.projections.endpoints import EndpointsProjection
 from iris.cluster.controller.reads import ControlSnapshot
 from iris.cluster.controller.reconcile import dispatch
 from iris.cluster.controller.reconcile.commit import commit_effects
@@ -254,7 +253,7 @@ class ServiceTestHarness:
         # harness) just commits them.
         result = self.k8s_provider.reconcile(snapshot)
         with self.state._db.transaction() as cur:
-            commit_effects(cur, result.effects, endpoints=self.state._endpoints)
+            commit_effects(cur, result.effects)
 
     # ── GCP-specific ────────────────────────────────────────────
 
@@ -411,7 +410,6 @@ class ServiceTestHarness:
                         )
                     ],
                     health=self.state._health,
-                    endpoints=self.state._endpoints,
                     now=Timestamp.now(),
                 )
 
@@ -431,7 +429,6 @@ class ServiceTestHarness:
                     )
                 ],
                 health=self.state._health,
-                endpoints=self.state._endpoints,
                 now=Timestamp.now(),
             )
 
@@ -444,8 +441,7 @@ class ServiceTestHarness:
 def _make_k8s_harness(tmp_path, log_address: str) -> ServiceTestHarness:
     db = ControllerDB(db_dir=tmp_path / "k8s_db")
     health = WorkerHealthTracker()
-    endpoints = EndpointsProjection(db)
-    state = ControllerTestState(db, health=health, endpoints=endpoints)
+    state = ControllerTestState(db, health=health)
 
     k8s = InMemoryK8sService()
     k8s.add_node_pool(
@@ -472,8 +468,7 @@ def _make_k8s_harness(tmp_path, log_address: str) -> ServiceTestHarness:
         bundle_store=BundleStore(storage_dir=str(tmp_path / "k8s_bundles")),
         log_client=LogClient.connect(log_address),
         db=state._db,
-        endpoints=endpoints,
-        endpoint_service=EndpointServiceImpl(db=db, endpoints=endpoints),
+        endpoint_service=EndpointServiceImpl(db=db),
     )
 
     return ServiceTestHarness(
@@ -489,8 +484,7 @@ def _make_k8s_harness(tmp_path, log_address: str) -> ServiceTestHarness:
 def _make_gcp_harness(tmp_path, log_address: str) -> ServiceTestHarness:
     db = ControllerDB(db_dir=tmp_path / "gcp_db")
     health = WorkerHealthTracker()
-    endpoints = EndpointsProjection(db)
-    state = ControllerTestState(db, health=health, endpoints=endpoints)
+    state = ControllerTestState(db, health=health)
 
     ctrl = _HarnessController()
     ctrl.capabilities = frozenset({BackendCapability.WORKER_DAEMON, BackendCapability.IRIS_AUTOSCALER})
@@ -503,8 +497,7 @@ def _make_gcp_harness(tmp_path, log_address: str) -> ServiceTestHarness:
         bundle_store=BundleStore(storage_dir=str(tmp_path / "gcp_bundles")),
         log_client=LogClient.connect(log_address),
         db=state._db,
-        endpoints=endpoints,
-        endpoint_service=EndpointServiceImpl(db=db, endpoints=endpoints),
+        endpoint_service=EndpointServiceImpl(db=db),
     )
 
     return ServiceTestHarness(

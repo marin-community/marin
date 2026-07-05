@@ -10,7 +10,6 @@ from pathlib import Path
 
 import pytest
 from iris.cluster.controller.db import ControllerDB
-from iris.cluster.controller.projections import PROJECTIONS
 from iris.cluster.controller.projections.endpoints import EndpointsProjection
 from iris.cluster.controller.schema import endpoints_table, meta_table
 from iris.cluster.controller.writes import (
@@ -34,14 +33,10 @@ def fresh_db() -> Iterator[ControllerDB]:
 
 
 @pytest.fixture
-def projections_built(fresh_db: ControllerDB) -> Iterator[None]:
-    """Construct one of each Projection so PROJECTIONS exposes their owned tables."""
-    endpoints = EndpointsProjection(fresh_db)
-    try:
-        yield
-    finally:
-        if endpoints in PROJECTIONS:
-            PROJECTIONS.remove(endpoints)
+def projections_built(fresh_db: ControllerDB) -> Iterator[ControllerDB]:
+    """Construct one of each Projection so the cache registry exposes their owned tables."""
+    EndpointsProjection(fresh_db)
+    yield fresh_db
 
 
 @pytest.fixture
@@ -60,7 +55,7 @@ def test_violation_detected(projections_built, registry_isolated):
         pass
 
     with pytest.raises(ConfigurationError) as exc_info:
-        validate()
+        validate(projections_built.caches)
 
     msg = str(exc_info.value)
     assert "rogue_write" in msg
@@ -76,7 +71,7 @@ def test_cascade_violation_detected(projections_built, registry_isolated):
         pass
 
     with pytest.raises(ConfigurationError) as exc_info:
-        validate()
+        validate(projections_built.caches)
 
     msg = str(exc_info.value)
     assert "rogue_cascade" in msg
@@ -95,7 +90,7 @@ def test_projection_method_allowed(projections_built, registry_isolated):
     fake_method.__qualname__ = "EndpointsProjection.some_write"
 
     # Must not raise.
-    validate()
+    validate(projections_built.caches)
 
 
 def test_clean_codebase_passes(fresh_db):
@@ -105,5 +100,5 @@ def test_clean_codebase_passes(fresh_db):
     on construction if a violation existed); re-running it here surfaces
     regressions as a normal assertion rather than as fixture-setup failure.
     """
-    del fresh_db  # only needed to materialize writes/projections modules
-    validate()
+    EndpointsProjection(fresh_db)
+    validate(fresh_db.caches)

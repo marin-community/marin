@@ -51,7 +51,6 @@ def _observe(state, worker_id, task_id, attempt_id, new_state, error=None):
                 )
             ],
             health=state._health,
-            endpoints=state._endpoints,
             now=Timestamp.now(),
         )
 
@@ -73,7 +72,6 @@ def _running_task_on_controller(ctrl, request=None):
     state = ControllerTestState(
         ctrl._db,
         health=ctrl.provider.health,
-        endpoints=ctrl._endpoints,
         run_template_cache=ctrl._run_template_cache,
     )
     register_worker(state, "w0", "10.0.0.1", make_worker_metadata())

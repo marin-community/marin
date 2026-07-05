@@ -22,7 +22,6 @@ from iris.cluster.controller.autoscaler.persistence import persist_autoscaler_st
 from iris.cluster.controller.backend import AutoscaleRequest, AutoscaleResult, BackendSchedulingInputs
 from iris.cluster.controller.db import ControllerDB, Tx
 from iris.cluster.controller.ops.worker import fail as fail_workers
-from iris.cluster.controller.projections.endpoints import EndpointsProjection
 from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
 from iris.cluster.controller.reads import ControlSnapshot, ReconcileRow
 from iris.cluster.controller.reconcile import dispatch
@@ -113,7 +112,6 @@ class DbBackendWorkerStore:
     db: ControllerDB
     owns_scale_group: Callable[[str], bool]
     health: WorkerHealthTracker
-    endpoints: EndpointsProjection
     run_template_cache: RunTemplateCache
     defaults: UserBudgetDefaults
     autoscale: Callable[[AutoscaleRequest], AutoscaleResult]
@@ -210,7 +208,6 @@ class DbBackendWorkerStore:
             worker_ids=[str(wid) for wid in worker_ids],
             reason=reason,
             health=self.health,
-            endpoints=self.endpoints,
         )
         removed_ids = [wid for wid, _ in failure_result.removed_workers]
         if not removed_ids:
@@ -234,7 +231,6 @@ class DbBackendWorkerStore:
                 worker_ids=[str(wid) for wid in siblings],
                 reason=_SLICE_SIBLING_TEARDOWN_REASON,
                 health=self.health,
-                endpoints=self.endpoints,
             )
         self.health.forget_many(removed_set | set(siblings))
         return removed_ids + siblings

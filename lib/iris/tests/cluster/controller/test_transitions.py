@@ -288,7 +288,7 @@ def test_job_cancellation_kills_all_tasks(harness):
     harness.dispatch(tasks[1], worker_id)
 
     with harness.state._db.transaction() as cur:
-        ops.job.cancel(cur, job_id=job_id, reason="User cancelled", endpoints=harness.state._endpoints)
+        ops.job.cancel(cur, job_id=job_id, reason="User cancelled")
 
     assert harness.query_job(job_id).state == job_pb2.JOB_STATE_KILLED
     for task in tasks:
@@ -317,7 +317,6 @@ def test_cancel_job_holds_resources_until_heartbeat_finalization(harness):
             cur,
             job_id=JobName.root("test-user", "j1"),
             reason="User cancelled",
-            endpoints=harness.state._endpoints,
         )
 
     # Producer-side cancel: usage stays held — finished_at_ms is still NULL.
@@ -355,7 +354,6 @@ def test_cancel_job_rolls_attempt_state_without_finalizing(harness):
             cur,
             job_id=JobName.root("test-user", "j1"),
             reason="User cancelled",
-            endpoints=harness.state._endpoints,
         )
 
     for t in tasks:
@@ -387,7 +385,6 @@ def test_heartbeat_finalizes_stranded_attempt_after_producer_terminal(harness):
             cur,
             job_id=JobName.root("test-user", "j1"),
             reason="User cancelled",
-            endpoints=harness.state._endpoints,
         )
 
     pre = _query_attempt(harness.state, task.task_id, attempt_id)
@@ -414,7 +411,6 @@ def test_heartbeat_finalizes_stranded_attempt_after_producer_terminal(harness):
                 )
             ],
             health=harness.state._health,
-            endpoints=harness.state._endpoints,
             now=Timestamp.now(),
         )
 
@@ -440,7 +436,6 @@ def test_cancel_job_preserves_kill_worker_mapping_after_clearing_tasks(harness):
             cur,
             job_id=JobName.root("test-user", "j1"),
             reason="User cancelled",
-            endpoints=harness.state._endpoints,
         )
 
     assert harness.query_task(tasks[0].task_id).state == job_pb2.TASK_STATE_KILLED
@@ -494,7 +489,6 @@ def test_cancel_job_removes_endpoints_for_job_tree(state):
             cur,
             job_id=JobName.root("test-user", "parent"),
             reason="User cancelled",
-            endpoints=state._endpoints,
         )
 
     assert _endpoints(state, EndpointQuery()) == []
@@ -508,7 +502,7 @@ def test_cancelled_job_tasks_excluded_from_demand(harness):
 
     harness.dispatch(tasks[0], worker_id)
     with harness.state._db.transaction() as cur:
-        ops.job.cancel(cur, job_id=job_id, reason="User cancelled", endpoints=harness.state._endpoints)
+        ops.job.cancel(cur, job_id=job_id, reason="User cancelled")
 
     assert harness.query_job(job_id).state == job_pb2.JOB_STATE_KILLED
     for task in tasks:
@@ -716,7 +710,6 @@ def test_batch_success_and_failure_is_order_independent(state, success_first):
             cur,
             [WorkerTaskUpdates(worker_id=worker_id, updates=updates)],
             health=state._health,
-            endpoints=state._endpoints,
             now=Timestamp.now(),
         )
 
@@ -744,7 +737,6 @@ def _report_worker_state(state, worker_id, task, new_state):
                 )
             ],
             health=state._health,
-            endpoints=state._endpoints,
             now=Timestamp.now(),
         )
 
@@ -1078,7 +1070,6 @@ def test_endpoint_survives_building_state(state):
                 )
             ],
             health=state._health,
-            endpoints=state._endpoints,
             now=Timestamp.now(),
         )
 
@@ -1112,7 +1103,6 @@ def test_endpoint_survives_building_state(state):
                 )
             ],
             health=state._health,
-            endpoints=state._endpoints,
             now=Timestamp.now(),
         )
     assert len(_endpoints(state, EndpointQuery(exact_name="ns-1/actor"))) == 1
@@ -1523,7 +1513,6 @@ def test_coscheduled_cascade_survives_same_batch_sibling_update(state):
                 ),
             ],
             health=state._health,
-            endpoints=state._endpoints,
             now=Timestamp.now(),
         )
 
@@ -1567,7 +1556,6 @@ def test_worker_failures_batch_does_not_double_process_cascaded_sibling(state):
         worker_ids=["w0", "w1"],
         reason="slice reaped",
         health=state._health,
-        endpoints=state._endpoints,
     )
 
     task0 = _query_task(state, tasks[0].task_id)
@@ -1619,7 +1607,6 @@ def test_worker_failure_drives_coscheduled_job_terminal(state, fail_both):
         worker_ids=failed,
         reason="slice reaped",
         health=state._health,
-        endpoints=state._endpoints,
     )
 
     task0 = _query_task(state, tasks[0].task_id)
@@ -1966,7 +1953,6 @@ def test_coscheduled_terminal_preempt_cascades_siblings(state):
         finalize(
             cur,
             [TerminalDecision(TerminalKind.PREEMPT, tasks[0].task_id, "reclaim")],
-            endpoints=state._endpoints,
             now=Timestamp.now(),
         )
 
@@ -2077,7 +2063,6 @@ def test_stale_attempt_ignored(state):
                 )
             ],
             health=state._health,
-            endpoints=state._endpoints,
             now=Timestamp.now(),
         )
 
@@ -2132,7 +2117,6 @@ def test_stale_attempt_for_non_terminal_is_dropped(state):
                 )
             ],
             health=state._health,
-            endpoints=state._endpoints,
             now=Timestamp.now(),
         )
 
@@ -2831,7 +2815,6 @@ def test_fail_workers_by_ids_cascades_tasks(state):
         worker_ids=["w2"],
         reason="slice terminated",
         health=state._health,
-        endpoints=state._endpoints,
     )
 
     assert len(result.removed_workers) == 1
@@ -2856,7 +2839,6 @@ def test_fail_workers_batch_skips_unknown(state):
         worker_ids=["w-unknown"],
         reason="unknown",
         health=state._health,
-        endpoints=state._endpoints,
     )
     assert result.removed_workers == []
 
@@ -2875,7 +2857,6 @@ def test_fail_workers_batch_force_removes_without_threshold(state):
         worker_ids=["w1"],
         reason="slice terminated",
         health=state._health,
-        endpoints=state._endpoints,
     )
 
     assert len(result.removed_workers) == 1
@@ -2920,7 +2901,6 @@ def test_fail_workers_batch_does_not_block_readers(state):
         worker_ids=["w-nonexistent"],
         reason="test",
         health=state._health,
-        endpoints=state._endpoints,
     )
     assert result.removed_workers == []
 
@@ -3570,7 +3550,6 @@ def test_prune_old_terminal_jobs(state):
     result = prune_old_data(
         state._db,
         worker_daemon_backends_for_prune(state),
-        state._endpoints,
         job_retention=Duration.from_seconds(86400),
         worker_retention=Duration.from_seconds(86400),
         slice_retention=Duration.from_seconds(86400),
@@ -3605,7 +3584,6 @@ def test_prune_old_inactive_workers(state):
     result = prune_old_data(
         state._db,
         worker_daemon_backends_for_prune(state),
-        state._endpoints,
         job_retention=Duration.from_seconds(86400),
         worker_retention=Duration.from_seconds(86400),
         slice_retention=Duration.from_seconds(86400),
@@ -3622,7 +3600,6 @@ def test_prune_noop_when_nothing_old(state):
     result = prune_old_data(
         state._db,
         worker_daemon_backends_for_prune(state),
-        state._endpoints,
         job_retention=Duration.from_seconds(86400),
         worker_retention=Duration.from_seconds(86400),
         slice_retention=Duration.from_seconds(86400),
@@ -3677,7 +3654,6 @@ def test_prune_orphaned_slices(state):
     result = prune_old_data(
         state._db,
         worker_daemon_backends_for_prune(state),
-        state._endpoints,
         job_retention=Duration.from_seconds(86400),
         worker_retention=Duration.from_seconds(86400),
         slice_retention=Duration.from_seconds(3600),
@@ -3706,7 +3682,6 @@ def test_prune_keeps_slice_with_live_worker_despite_empty_worker_ids(state):
     result = prune_old_data(
         state._db,
         worker_daemon_backends_for_prune(state),
-        state._endpoints,
         job_retention=Duration.from_seconds(86400),
         worker_retention=Duration.from_seconds(86400),
         slice_retention=Duration.from_seconds(3600),
@@ -3771,7 +3746,6 @@ def test_prune_old_data_short_circuits_when_nothing_prunable(state):
     result = prune_old_data(
         state._db,
         worker_daemon_backends_for_prune(state),
-        state._endpoints,
         job_retention=Duration.from_seconds(86400),
         worker_retention=Duration.from_seconds(86400),
         slice_retention=Duration.from_seconds(86400),
@@ -3832,7 +3806,6 @@ def _run_direct_tasks(state: ControllerTestState, task_ids: list[JobName]) -> No
         commit_dispatch_updates(
             cur,
             [TaskUpdate(task_id=t, attempt_id=0, new_state=job_pb2.TASK_STATE_RUNNING) for t in task_ids],
-            endpoints=state._endpoints,
             now=Timestamp.now(),
         )
 
@@ -3901,7 +3874,6 @@ def test_drain_redrives_assigned_until_executing(state):
         commit_dispatch_updates(
             cur,
             [TaskUpdate(task_id=task_id, attempt_id=0, new_state=job_pb2.TASK_STATE_RUNNING)],
-            endpoints=state._endpoints,
             now=Timestamp.now(),
         )
     with state._db.transaction() as cur:
@@ -3960,7 +3932,6 @@ def test_apply_running(state):
             [
                 TaskUpdate(task_id=task_id, attempt_id=0, new_state=job_pb2.TASK_STATE_RUNNING),
             ],
-            endpoints=state._endpoints,
             now=Timestamp.now(),
         )
 
@@ -3980,7 +3951,6 @@ def test_apply_succeeded(state):
             [
                 TaskUpdate(task_id=task_id, attempt_id=0, new_state=job_pb2.TASK_STATE_RUNNING),
             ],
-            endpoints=state._endpoints,
             now=Timestamp.now(),
         )
     with state._db.transaction() as cur:
@@ -3989,7 +3959,6 @@ def test_apply_succeeded(state):
             [
                 TaskUpdate(task_id=task_id, attempt_id=0, new_state=job_pb2.TASK_STATE_SUCCEEDED),
             ],
-            endpoints=state._endpoints,
             now=Timestamp.now(),
         )
 
@@ -4012,7 +3981,6 @@ def test_apply_failed_with_retry(state):
             [
                 TaskUpdate(task_id=task_id, attempt_id=0, new_state=job_pb2.TASK_STATE_RUNNING),
             ],
-            endpoints=state._endpoints,
             now=Timestamp.now(),
         )
     with state._db.transaction() as cur:
@@ -4021,7 +3989,6 @@ def test_apply_failed_with_retry(state):
             [
                 TaskUpdate(task_id=task_id, attempt_id=0, new_state=job_pb2.TASK_STATE_FAILED, error="boom"),
             ],
-            endpoints=state._endpoints,
             now=Timestamp.now(),
         )
 
@@ -4071,7 +4038,6 @@ def test_apply_failed_no_retry(state):
             [
                 TaskUpdate(task_id=task_id, attempt_id=0, new_state=job_pb2.TASK_STATE_RUNNING),
             ],
-            endpoints=state._endpoints,
             now=Timestamp.now(),
         )
     with state._db.transaction() as cur:
@@ -4080,7 +4046,6 @@ def test_apply_failed_no_retry(state):
             [
                 TaskUpdate(task_id=task_id, attempt_id=0, new_state=job_pb2.TASK_STATE_FAILED, error="boom"),
             ],
-            endpoints=state._endpoints,
             now=Timestamp.now(),
         )
 
@@ -4103,7 +4068,6 @@ def test_apply_worker_failed(state):
             [
                 TaskUpdate(task_id=task_id, attempt_id=0, new_state=job_pb2.TASK_STATE_RUNNING),
             ],
-            endpoints=state._endpoints,
             now=Timestamp.now(),
         )
     with state._db.transaction() as cur:
@@ -4112,7 +4076,6 @@ def test_apply_worker_failed(state):
             [
                 TaskUpdate(task_id=task_id, attempt_id=0, new_state=job_pb2.TASK_STATE_WORKER_FAILED, error="node died"),
             ],
-            endpoints=state._endpoints,
             now=Timestamp.now(),
         )
 
@@ -4132,7 +4095,6 @@ def test_cancel_job_kills_dispatch_tasks(state):
             cur,
             job_id=JobName.from_wire("/user/job1"),
             reason="test cancel",
-            endpoints=state._endpoints,
         )
 
     for tid in task_ids:
@@ -4151,7 +4113,6 @@ def test_kill_non_terminal_dispatch_tasks(state):
             cur,
             job_id=JobName.from_wire("/user/job1"),
             reason="test kill",
-            endpoints=state._endpoints,
         )
 
     assert _task_state_direct(state, task_ids[0]) == job_pb2.TASK_STATE_KILLED
@@ -4168,7 +4129,6 @@ def test_max_failures_kills_dispatch_tasks(state):
         result = commit_dispatch_updates(
             cur,
             [TaskUpdate(task_id=task_ids[0], attempt_id=0, new_state=job_pb2.TASK_STATE_FAILED, error="boom")],
-            endpoints=state._endpoints,
             now=Timestamp.now(),
         )
 
@@ -4221,7 +4181,6 @@ def test_job_becomes_unschedulable_when_task_unschedulable(harness) -> None:
         finalize(
             cur,
             [TerminalDecision(TerminalKind.UNSCHEDULABLE, tasks[0].task_id, "no capacity")],
-            endpoints=harness.state._endpoints,
             now=Timestamp.now(),
         )
     assert harness.query_job(JobName.root("test-user", "unsched")).state == job_pb2.JOB_STATE_UNSCHEDULABLE
@@ -4231,7 +4190,7 @@ def test_job_cancel_marks_job_killed(harness) -> None:
     harness.submit("killed", replicas=2)
     jid = JobName.root("test-user", "killed")
     with harness.state._db.transaction() as cur:
-        ops.job.cancel(cur, job_id=jid, reason="manual", endpoints=harness.state._endpoints)
+        ops.job.cancel(cur, job_id=jid, reason="manual")
     assert harness.query_job(jid).state == job_pb2.JOB_STATE_KILLED
 
 

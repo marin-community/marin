@@ -761,7 +761,6 @@ def _apply_observations(
         return commit_reconcile(
             cur,
             [(plan, result)],
-            endpoints=state._endpoints,
             now=_NOW,
         )
 
@@ -777,7 +776,6 @@ def _apply_failure(
         return commit_reconcile(
             cur,
             [(plan, result)],
-            endpoints=state._endpoints,
             now=_NOW,
         )
 
@@ -916,7 +914,7 @@ def test_stale_running_observation_does_not_revive_cancelled_task():
         with state._db.transaction() as cur:
             task_row = query_task(state, task_id)
             assert task_row is not None
-            ops.job.cancel(cur, job_id=task_row.job_id, reason="user_cancel", endpoints=state._endpoints)
+            ops.job.cancel(cur, job_id=task_row.job_id, reason="user_cancel")
         assert query_task(state, task_id).state == job_pb2.TASK_STATE_KILLED
 
         _apply_observations(state, _W1, [_obs(uid, job_pb2.TASK_STATE_RUNNING)])
@@ -1041,7 +1039,6 @@ def test_coscheduled_sibling_cascade_fires_on_terminal_observation():
                         )
                     ],
                     health=state._health,
-                    endpoints=state._endpoints,
                     now=Timestamp.now(),
                 )
 
@@ -1258,7 +1255,6 @@ def test_e2e_converges_to_succeeded(make_controller):
     state = ControllerTestState(
         ctrl._db,
         health=ctrl.provider.health,
-        endpoints=ctrl._endpoints,
         run_template_cache=ctrl._run_template_cache,
     )
 
@@ -1309,7 +1305,6 @@ def test_e2e_missing_observation_on_assigned_task_retries_to_pending(make_contro
     state = ControllerTestState(
         ctrl._db,
         health=ctrl.provider.health,
-        endpoints=ctrl._endpoints,
         run_template_cache=ctrl._run_template_cache,
     )
 
@@ -1479,7 +1474,6 @@ def test_reconcile_failure_tears_down_worker_without_ping_loop(make_controller, 
     state = ControllerTestState(
         ctrl._db,
         health=ctrl.provider.health,
-        endpoints=ctrl._endpoints,
         run_template_cache=ctrl._run_template_cache,
     )
 
@@ -1513,7 +1507,6 @@ def test_reconcile_failure_reaps_slice_siblings(make_controller):
     state = ControllerTestState(
         ctrl._db,
         health=ctrl.provider.health,
-        endpoints=ctrl._endpoints,
         run_template_cache=ctrl._run_template_cache,
     )
 
@@ -1546,7 +1539,6 @@ def test_request_worker_eviction_tears_down_on_next_tick(make_controller):
     state = ControllerTestState(
         ctrl._db,
         health=ctrl.provider.health,
-        endpoints=ctrl._endpoints,
         run_template_cache=ctrl._run_template_cache,
     )
 
@@ -1598,7 +1590,6 @@ def test_reconcile_reaps_worker_at_build_failure_threshold(make_controller):
     state = ControllerTestState(
         ctrl._db,
         health=ctrl.provider.health,
-        endpoints=ctrl._endpoints,
         run_template_cache=ctrl._run_template_cache,
     )
 
@@ -1710,7 +1701,6 @@ def _setup_coscheduled_running_pair(
             cur,
             running,
             health=state._health,
-            endpoints=state._endpoints,
             now=_NOW,
         )
     return _CoschedPair(
@@ -1753,7 +1743,6 @@ def _apply_batch(
         return commit_reconcile(
             cur,
             plan_results,
-            endpoints=state._endpoints,
             now=_NOW,
         )
 

@@ -182,7 +182,6 @@ def store_from_runtime(
         db=runtime.db,
         owns_scale_group=runtime.owns_scale_group,
         health=health,
-        endpoints=runtime.endpoints,
         run_template_cache=runtime.run_template_cache,
         defaults=runtime.budget_defaults,
         autoscale=autoscale,
@@ -294,7 +293,6 @@ def worker_daemon_backends_for_prune(state: ControllerTestState) -> list[FakePro
         BackendRuntime(
             backend_id=DEFAULT_BACKEND_ID,
             db=state._db,
-            endpoints=state._endpoints,
             run_template_cache=state._run_template_cache,
             owns_scale_group=lambda _scale_group: True,
             budget_defaults=UserBudgetDefaults(),
@@ -380,8 +378,7 @@ def controller_service(state, log_client, mock_controller, tmp_path) -> Controll
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
         log_client=log_client,
         db=state._db,
-        endpoints=state._endpoints,
-        endpoint_service=EndpointServiceImpl(db=state._db, endpoints=state._endpoints),
+        endpoint_service=EndpointServiceImpl(db=state._db),
     )
 
 
@@ -1004,7 +1001,6 @@ def dispatch_task(state: ControllerTestState, task, worker_id: WorkerId) -> None
                 )
             ],
             health=state._health,
-            endpoints=state._endpoints,
             now=Timestamp.now(),
         )
 
@@ -1021,9 +1017,7 @@ def transition_task(
     assert task is not None
     if new_state == job_pb2.TASK_STATE_KILLED:
         with state._db.transaction() as cur:
-            ops.job.cancel(
-                cur, job_id=task.job_id, reason=error or "killed", endpoints=state._endpoints, health=state._health
-            )
+            ops.job.cancel(cur, job_id=task.job_id, reason=error or "killed", health=state._health)
         return state
     # Compute worker_id: prefer current attempt's worker, fall back to current_worker_id.
     current_attempt = task.attempts[-1] if task.attempts else None
@@ -1055,7 +1049,6 @@ def transition_task(
                 )
             ],
             health=state._health,
-            endpoints=state._endpoints,
             now=Timestamp.now(),
         )
 
@@ -1067,7 +1060,6 @@ def fail_worker(state: ControllerTestState, worker_id: WorkerId, error: str) -> 
         worker_ids=[str(worker_id)],
         reason=error,
         health=state._health,
-        endpoints=state._endpoints,
     )
 
 

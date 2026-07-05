@@ -374,14 +374,14 @@ class Controller:
             self._db = db
         else:
             self._db = ControllerDB(db_dir=config.local_state_dir / "db")
-        self._endpoints = EndpointsProjection(self._db)
-        # Derived failure/preemption-count memo. Constructing it self-registers it
-        # into ``self._db.caches``, so every cursor the DB mints reaches it as
-        # ``tx.caches[AttemptCountsProjection]`` — the service, federation store,
-        # pruner, and reconcile commit path all invalidate/read through the cursor
-        # rather than holding a threaded cache reference.
+        # Projections self-register into ``self._db.caches`` on construction; every
+        # cursor the DB mints reaches them as ``tx.caches[Projection]`` without any
+        # threaded references.
+        EndpointsProjection(self._db)
         self._attempt_counts = AttemptCountsProjection(self._db)
         self._worker_attrs = WorkerAttrsProjection(self._db)
+
+        writes.validate(self._db.caches)
 
         self._threads = threads if threads is not None else get_thread_container()
 
@@ -441,8 +441,6 @@ class Controller:
             if BackendCapability.WORKER_DAEMON in backend.capabilities:
                 backend.bind_runtime(self._build_runtime(backend_id))
 
-        writes.validate()
-
         # Seed each backend's liveness from its persisted workers so the scheduler
         # sees them at startup, and reseed after a DB reopen (checkpoint restore).
         # ``find_prunable`` relies on this to keep every ``workers`` row tracked.
@@ -453,7 +451,6 @@ class Controller:
 
         self._endpoint_service = EndpointServiceImpl(
             db=self._db,
-            endpoints=self._endpoints,
             system_endpoints={},
         )
         self._service = ControllerServiceImpl(
@@ -461,7 +458,6 @@ class Controller:
             bundle_store=self._bundle_store,
             log_client=self._log_client,
             db=self._db,
-            endpoints=self._endpoints,
             endpoint_service=self._endpoint_service,
             auth=config.auth,
             user_budget_defaults=config.user_budget_defaults,
@@ -777,7 +773,6 @@ class Controller:
                     prune_old_data(
                         self._db,
                         self._backends.values(),
-                        self._endpoints,
                         job_retention=self._config.job_retention,
                         worker_retention=self._config.worker_retention,
                         slice_retention=self._config.slice_retention,
@@ -991,7 +986,6 @@ class Controller:
         return BackendRuntime(
             backend_id=backend_id,
             db=self._db,
-            endpoints=self._endpoints,
             run_template_cache=self._run_template_cache,
             owns_scale_group=owns_scale_group,
             budget_defaults=self._config.user_budget_defaults,
@@ -1208,15 +1202,15 @@ class Controller:
             for backend_id in self._backend_ids:
                 result = recon_results.get(backend_id)
                 if result is not None and not result.effects.is_empty:
-                    commit_effects(cur, result.effects, endpoints=self._endpoints)
+                    commit_effects(cur, result.effects)
             if timeout_decisions:
-                finalize(cur, timeout_decisions, endpoints=self._endpoints, now=now)
+                finalize(cur, timeout_decisions, now=now)
             if pending_kicks:
                 # Resolve after the schedule/reconcile writes so the attempt
                 # re-check sees this tick's reassignments.
                 kick_decisions = self._resolve_pending_kicks(cur, pending_kicks)
                 if kick_decisions:
-                    finalize(cur, kick_decisions, endpoints=self._endpoints, now=now)
+                    finalize(cur, kick_decisions, now=now)
                     logger.info("Admin kick: finalized %d task attempt(s)", len(kick_decisions))
             for state in states:
                 persist_autoscaler_state(cur, state)
@@ -1248,11 +1242,10 @@ class Controller:
                     TerminalDecision(kind=TerminalKind.UNSCHEDULABLE, task_id=task.task_id, reason=reason)
                     for task, reason in routing_unschedulable
                 ],
-                endpoints=self._endpoints,
                 now=now,
             )
         if result.unschedulable:
-            finalize(cur, self._unschedulable_decisions(result.unschedulable), endpoints=self._endpoints, now=now)
+            finalize(cur, self._unschedulable_decisions(result.unschedulable), now=now)
         # Each backend's assignments are re-checked against the liveness tracker that
         # backend owns. Walking backends in order reproduces the merged ordering.
         for backend_id in self._backend_ids:
@@ -1263,7 +1256,7 @@ class Controller:
             assert health is not None, f"backend {backend_id!r} produced assignments without a liveness tracker"
             ops.task.assign(cur, backend_result.assignments, health=health)
         if result.preemptions:
-            finalize(cur, result.preemptions, endpoints=self._endpoints, now=now)
+            finalize(cur, result.preemptions, now=now)
             logger.info("Preemption pass: %d tasks preempted", len(result.preemptions))
 
     def _run_scheduling(self) -> SchedulingOutcome:
@@ -1372,7 +1365,6 @@ class Controller:
             finalize(
                 cur,
                 preemptions,
-                endpoints=self._endpoints,
                 now=Timestamp.now(),
             )
         logger.info("Preemption pass: %d tasks preempted", len(preemptions))
@@ -1417,7 +1409,6 @@ class Controller:
             finalize(
                 cur,
                 self._unschedulable_decisions(tasks),
-                endpoints=self._endpoints,
                 now=Timestamp.now(),
             )
 

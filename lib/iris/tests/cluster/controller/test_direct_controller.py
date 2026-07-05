@@ -250,7 +250,6 @@ def test_drain_executing_goes_to_running_tasks(state):
         commit_dispatch_updates(
             cur,
             [TaskUpdate(task_id=task_id, attempt_id=attempt_id, new_state=job_pb2.TASK_STATE_RUNNING)],
-            endpoints=state._endpoints,
             now=Timestamp.now(),
         )
 
@@ -281,7 +280,6 @@ def test_apply_running(state):
             [
                 TaskUpdate(task_id=task_id, attempt_id=attempt_id, new_state=job_pb2.TASK_STATE_RUNNING),
             ],
-            endpoints=state._endpoints,
             now=Timestamp.now(),
         )
 
@@ -303,7 +301,6 @@ def test_apply_succeeded(state):
             [
                 TaskUpdate(task_id=task_id, attempt_id=attempt_id, new_state=job_pb2.TASK_STATE_RUNNING),
             ],
-            endpoints=state._endpoints,
             now=Timestamp.now(),
         )
 
@@ -314,7 +311,6 @@ def test_apply_succeeded(state):
             [
                 TaskUpdate(task_id=task_id, attempt_id=attempt_id, new_state=job_pb2.TASK_STATE_SUCCEEDED),
             ],
-            endpoints=state._endpoints,
             now=Timestamp.now(),
         )
 
@@ -343,7 +339,6 @@ def test_apply_failed_with_retry(state):
             [
                 TaskUpdate(task_id=task_id, attempt_id=attempt_id, new_state=job_pb2.TASK_STATE_RUNNING),
             ],
-            endpoints=state._endpoints,
             now=Timestamp.now(),
         )
     with state._db.transaction() as cur:
@@ -352,7 +347,6 @@ def test_apply_failed_with_retry(state):
             [
                 TaskUpdate(task_id=task_id, attempt_id=attempt_id, new_state=job_pb2.TASK_STATE_FAILED, error="boom"),
             ],
-            endpoints=state._endpoints,
             now=Timestamp.now(),
         )
 
@@ -381,7 +375,6 @@ def test_apply_failed_no_retry(state):
             [
                 TaskUpdate(task_id=task_id, attempt_id=attempt_id, new_state=job_pb2.TASK_STATE_RUNNING),
             ],
-            endpoints=state._endpoints,
             now=Timestamp.now(),
         )
     with state._db.transaction() as cur:
@@ -390,7 +383,6 @@ def test_apply_failed_no_retry(state):
             [
                 TaskUpdate(task_id=task_id, attempt_id=attempt_id, new_state=job_pb2.TASK_STATE_FAILED, error="fatal"),
             ],
-            endpoints=state._endpoints,
             now=Timestamp.now(),
         )
 
@@ -417,7 +409,6 @@ def test_apply_failed_directly_from_assigned(state):
                     error="kubectl apply failed: RequestEntityTooLarge",
                 ),
             ],
-            endpoints=state._endpoints,
             now=Timestamp.now(),
         )
 
@@ -445,7 +436,6 @@ def test_apply_worker_failed_from_running_retries(state):
             [
                 TaskUpdate(task_id=task_id, attempt_id=attempt_id, new_state=job_pb2.TASK_STATE_RUNNING),
             ],
-            endpoints=state._endpoints,
             now=Timestamp.now(),
         )
     with state._db.transaction() as cur:
@@ -454,7 +444,6 @@ def test_apply_worker_failed_from_running_retries(state):
             [
                 TaskUpdate(task_id=task_id, attempt_id=attempt_id, new_state=job_pb2.TASK_STATE_WORKER_FAILED),
             ],
-            endpoints=state._endpoints,
             now=Timestamp.now(),
         )
 
@@ -477,7 +466,6 @@ def test_apply_worker_failed_from_assigned(state):
             [
                 TaskUpdate(task_id=task_id, attempt_id=attempt_id, new_state=job_pb2.TASK_STATE_WORKER_FAILED),
             ],
-            endpoints=state._endpoints,
             now=Timestamp.now(),
         )
 
@@ -519,7 +507,6 @@ def test_apply_ignores_stale_attempt(state):
             [
                 TaskUpdate(task_id=task_id, attempt_id=attempt_id + 99, new_state=job_pb2.TASK_STATE_RUNNING),
             ],
-            endpoints=state._endpoints,
             now=Timestamp.now(),
         )
 
@@ -653,7 +640,6 @@ def test_coscheduled_gang_requeue_keeps_siblings_in_lockstep(state):
         commit_dispatch_updates(
             cur,
             [TaskUpdate(task_id=t, attempt_id=0, new_state=job_pb2.TASK_STATE_RUNNING) for t in task_ids],
-            endpoints=state._endpoints,
             now=Timestamp.now(),
         )
 
@@ -662,7 +648,6 @@ def test_coscheduled_gang_requeue_keeps_siblings_in_lockstep(state):
         commit_dispatch_updates(
             cur,
             [TaskUpdate(task_id=task_ids[0], attempt_id=0, new_state=job_pb2.TASK_STATE_WORKER_FAILED)],
-            endpoints=state._endpoints,
             now=Timestamp.now(),
         )
     assert all(s == job_pb2.TASK_STATE_PENDING for s in _states(state, task_ids))
@@ -697,7 +682,6 @@ def test_gang_requeue_bounces_assigned_sibling_off_old_generation(state):
         commit_dispatch_updates(
             cur,
             [TaskUpdate(task_id=t, attempt_id=0, new_state=job_pb2.TASK_STATE_RUNNING) for t in task_ids[1:]],
-            endpoints=state._endpoints,
             now=Timestamp.now(),
         )
     assert query_task(state, task_ids[0]).state == job_pb2.TASK_STATE_ASSIGNED
@@ -708,7 +692,6 @@ def test_gang_requeue_bounces_assigned_sibling_off_old_generation(state):
         commit_dispatch_updates(
             cur,
             [TaskUpdate(task_id=task_ids[1], attempt_id=0, new_state=job_pb2.TASK_STATE_WORKER_FAILED)],
-            endpoints=state._endpoints,
             now=Timestamp.now(),
         )
     assert all(
@@ -750,7 +733,6 @@ def test_apply_ignores_finished_task(state):
             [
                 TaskUpdate(task_id=task_id, attempt_id=attempt_id, new_state=job_pb2.TASK_STATE_RUNNING),
             ],
-            endpoints=state._endpoints,
             now=Timestamp.now(),
         )
     with state._db.transaction() as cur:
@@ -759,7 +741,6 @@ def test_apply_ignores_finished_task(state):
             [
                 TaskUpdate(task_id=task_id, attempt_id=attempt_id, new_state=job_pb2.TASK_STATE_SUCCEEDED),
             ],
-            endpoints=state._endpoints,
             now=Timestamp.now(),
         )
 
@@ -770,7 +751,6 @@ def test_apply_ignores_finished_task(state):
             [
                 TaskUpdate(task_id=task_id, attempt_id=attempt_id, new_state=job_pb2.TASK_STATE_FAILED),
             ],
-            endpoints=state._endpoints,
             now=Timestamp.now(),
         )
 

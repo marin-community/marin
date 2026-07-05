@@ -185,7 +185,6 @@ def _transition_to_running(state, task):
                 )
             ],
             health=state._health,
-            endpoints=state._endpoints,
             now=Timestamp.now(),
         )
 
@@ -208,7 +207,6 @@ def _heartbeat_killed(state, task):
                 )
             ],
             health=state._health,
-            endpoints=state._endpoints,
             now=Timestamp.now(),
         )
 
@@ -233,7 +231,6 @@ def _worker_fail_one_task(state, task):
                 )
             ],
             health=state._health,
-            endpoints=state._endpoints,
             now=Timestamp.now(),
         )
     return result
@@ -429,7 +426,6 @@ class TestPreemptionReassignment:
         state = ControllerTestState(
             ctrl._db,
             health=ctrl.provider.health,
-            endpoints=ctrl._endpoints,
             run_template_cache=ctrl._run_template_cache,
         )
 
@@ -477,7 +473,6 @@ class TestPreemptionReassignment:
                 cur,
                 [fail_request],
                 health=ctrl.provider.health,
-                endpoints=ctrl._endpoints,
                 now=Timestamp.now(),
             )
         ctrl._run_scheduling()

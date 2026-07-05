@@ -6,9 +6,9 @@
 The :func:`writes_to` decorator records the table set on the function as
 ``fn.writes_to`` / ``fn.cascades_into`` and appends the function to
 :data:`REGISTERED_WRITE_FUNCTIONS`. :func:`validate` cross-checks that
-registry against the ``PROJECTIONS`` list to verify no Projection-owned
+registry against the ``db.caches`` registry to verify no Projection-owned
 table is written outside its owning Projection. Controller startup calls
-:func:`validate`; tests call it after registering their fixtures.
+:func:`validate`; tests call it after constructing projections.
 
 Areas covered:
   jobs           — jobs, job_config, meta sequence
@@ -27,8 +27,8 @@ from sqlalchemy import Table, bindparam, case, delete, func, insert, select, tex
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.exc import IntegrityError
 
+from iris.cluster.controller.caches import CacheRegistry
 from iris.cluster.controller.db import Tx
-from iris.cluster.controller.projections import PROJECTIONS
 from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
 from iris.cluster.controller.schema import (
     USER_ROLE_DEFAULT,
@@ -66,7 +66,7 @@ class ConfigurationError(RuntimeError):
     """
 
 
-def validate() -> None:
+def validate(caches: CacheRegistry) -> None:
     """Check that no Projection-owned table is mutated outside its owning Projection.
 
     For projection-owned tables, all SQL mutations must flow through the
@@ -82,14 +82,17 @@ def validate() -> None:
     ``cascades_into`` declaration so the linkage is documented at the
     call site rather than buried in the decorator metadata.
 
-    Called from controller startup once both registries are populated.
+    Called from controller startup after all projections are constructed.
+
+    Args:
+        caches: The DB's cache registry, populated by projection constructors.
 
     Raises:
         ConfigurationError: when a violation is detected.
     """
     owned: dict[Table, type] = {}
-    for projection in PROJECTIONS:
-        for table in projection.sources:
+    for projection in caches:
+        for table in projection.owns:
             owned[table] = type(projection)
 
     violations: list[str] = []

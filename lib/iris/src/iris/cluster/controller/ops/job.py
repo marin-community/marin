@@ -307,7 +307,6 @@ def cancel(
     *,
     job_id: JobName,
     reason: str,
-    endpoints: EndpointsProjection,
 ) -> None:
     """Cancel ``job_id`` and its descendant subtree through the kernel.
 
@@ -329,13 +328,13 @@ def cancel(
     # No per-job state preload: the cascade-kill merge guard skips already-
     # terminal rows (excluding WORKER_FAILED, which cancel overwrites).
     effects = ReconcileState.open(snapshot).cancel_job(job_id, reason, now)
-    commit_effects(cur, effects, endpoints=endpoints)
+    commit_effects(cur, effects)
     # Sweep endpoints that survived because their owning task was already
     # terminal before cancel ran (kernel only emits EndpointDeletion for
     # tasks we actively killed). Derive the same subtree the kernel cancelled
     # from the snapshot's transitive descendants.
     subtree = [job_id, *snapshot.job_descendants[job_id].descendants]
-    endpoints.remove_by_job_ids(cur, subtree)
+    cur.caches[EndpointsProjection].remove_by_job_ids(cur, subtree)
 
 
 def purge_job(cur: Tx, job_id: JobName) -> None:
