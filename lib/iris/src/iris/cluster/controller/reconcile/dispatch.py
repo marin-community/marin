@@ -6,11 +6,10 @@
 The counterpart to :mod:`reconcile.worker` (which builds per-worker plans for a
 worker-daemon backend): this reads and writes the DB inside a controller
 transaction to produce the :class:`DispatchBatch` a cluster backend (Kueue
-today) reconciles against. It promotes PENDING tasks, builds per-job
-``RunTaskRequest`` templates (LRU-cached) and per-attempt requests, and
-snapshots the running set. Because it owns DB I/O it lives controller-side, not
-in the DB-less backend; the controller rides its output on the reconcile
-``ControlSnapshot``.
+today) reconciles against. It promotes PENDING tasks, builds per-attempt
+``RunTaskRequest``s, and snapshots the running set. Because it owns DB I/O it
+lives controller-side, not in the DB-less backend; the controller rides its
+output on the reconcile ``ControlSnapshot``.
 """
 
 from dataclasses import dataclass, field
@@ -19,15 +18,14 @@ from rigging.timing import Timestamp
 from sqlalchemy import select
 
 from iris.cluster.controller import reads, writes
-from iris.cluster.controller.codec import constraints_from_json, proto_from_json, resource_spec_from_scalars
 from iris.cluster.controller.db import Tx
+from iris.cluster.controller.projections.run_templates import build_run_request_fields
 from iris.cluster.controller.reads import (
     PENDING_DISPATCH_COLS,
     PendingDispatchRow,
     TaskScope,
     pending_dispatch_row,
 )
-from iris.cluster.controller.run_template import RunTemplateCache
 from iris.cluster.controller.schema import job_config_table, jobs_table, local_tasks
 from iris.cluster.controller.task_state import ACTIVE_TASK_STATES, RunningTaskEntry
 from iris.cluster.types import JobName
@@ -56,97 +54,13 @@ scheduled immediately stay Pending — that signal drives node provisioning.
 This rate limit exists only to bound API server pressure."""
 
 
-def _build_run_request_fields(
-    *,
-    num_tasks: int,
-    entrypoint_json: str,
-    environment_json: str,
-    bundle_id: str,
-    resources: job_pb2.ResourceSpecProto,
-    ports_json: list,
-    constraints_json: str | None,
-    task_image: str,
-    task_id: str = "",
-    attempt_id: int = 0,
-    priority: int = 0,
-    container_profile: int = 0,
-) -> job_pb2.RunTaskRequest:
-    """Build a RunTaskRequest carrying the per-job fields shared by the template
-    and per-attempt construction paths.
-
-    The template path leaves ``task_id``/``attempt_id``/``priority`` at their
-    proto defaults; the per-attempt path stamps them. proto_from_json returns
-    shared cached instances — set via constructor kwarg so RunTaskRequest
-    copies them; callers then mutate the copy's workdir_files (never the cached
-    source).
-    """
-    return job_pb2.RunTaskRequest(
-        num_tasks=num_tasks,
-        entrypoint=proto_from_json(entrypoint_json, job_pb2.RuntimeEntrypoint),
-        environment=proto_from_json(environment_json, job_pb2.EnvironmentConfig),
-        bundle_id=bundle_id,
-        resources=resources,
-        ports=ports_json,
-        constraints=[c.to_proto() for c in constraints_from_json(constraints_json)],
-        task_image=task_image,
-        task_id=task_id,
-        attempt_id=attempt_id,
-        priority=priority,
-        container_profile=container_profile,
-    )
-
-
-def run_request_template(
-    cache: RunTemplateCache,
-    snap: Tx,
-    job_id: JobName,
-) -> job_pb2.RunTaskRequest | None:
-    """Return a cached per-job ``RunTaskRequest`` template.
-
-    Per-attempt fields (``task_id``, ``attempt_id``) are stamped onto a
-    copy at fan-out time. Returns ``None`` for jobs with no row.
-    """
-    wire = job_id.to_wire()
-    cached = cache.get(wire)
-    if cached is not None:
-        return cached
-
-    job = reads.get_job_detail(snap, job_id)
-    if job is None:
-        return None
-
-    resources = resource_spec_from_scalars(
-        job.res_cpu_millicores,
-        job.res_memory_bytes,
-        job.res_disk_bytes,
-        job.res_device_json,
-    )
-    template = _build_run_request_fields(
-        num_tasks=job.num_tasks,
-        entrypoint_json=job.entrypoint_json,
-        environment_json=job.environment_json,
-        bundle_id=job.bundle_id,
-        resources=resources,
-        ports_json=job.ports_json,
-        constraints_json=job.constraints_json,
-        task_image=job.task_image,
-        container_profile=job.container_profile,
-    )
-    for filename, data in reads.get_workdir_files(snap, job_id).items():
-        template.entrypoint.workdir_files[filename] = data
-    # cache.put interns: it returns the already-cached instance for this key if
-    # one exists, otherwise the template we just built. Callers must use the
-    # returned value, not ``template``, to share a single canonical instance.
-    return cache.put(wire, template)
-
-
 def build_run_request(
     cur: Tx,
     row: PendingDispatchRow,
     attempt_id: int,
 ) -> job_pb2.RunTaskRequest:
     """Assemble a RunTaskRequest for a direct-provider dispatch row."""
-    run_req = _build_run_request_fields(
+    run_req = build_run_request_fields(
         num_tasks=row.num_tasks,
         entrypoint_json=row.entrypoint_json,
         environment_json=row.environment_json,
@@ -199,7 +113,6 @@ def _dispatch_query(
 def drain_for_dispatch(
     cur: Tx,
     *,
-    cache: RunTemplateCache,
     max_promotions: int = DISPATCH_PROMOTION_RATE,
     backend_id: str | None = None,
 ) -> DispatchBatch:

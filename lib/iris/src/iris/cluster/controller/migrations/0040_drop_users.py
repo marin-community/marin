@@ -126,7 +126,7 @@ def migrate(raw_conn) -> None:
         # Verify the rebuild left no dangling references (e.g. the jobs self-FK).
         violations = raw_conn.execute("PRAGMA foreign_key_check").fetchall()
         if violations:
-            raise RuntimeError(f"0039_drop_users left foreign-key violations: {violations}")
+            raise RuntimeError(f"0040_drop_users left foreign-key violations: {violations}")
         raw_conn.commit()
     except Exception:
         raw_conn.execute("ROLLBACK")

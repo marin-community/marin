@@ -51,6 +51,7 @@ from transformers import PretrainedConfig as HfConfig
 
 _DEFAULT_EP_CAPACITY_FACTOR = 1.0
 _GATED_NORM_RANK = 128
+_ROUTING_RENORM_SUM = 2.5
 GRUG_MOE_MODEL_TYPE = "grug_moe"
 GRUG_MOE_ARCHITECTURE = "GrugMoeForCausalLM"
 GRUG_MOE_ARTIFACT_SCHEMA_VERSION_KEY = "grugmoe_artifact_schema_version"
@@ -105,21 +106,29 @@ class GrugModelConfig:
     """
 
     vocab_size: int
-    hidden_dim: int = 2048
-    intermediate_dim: int = 5632
-    shared_expert_intermediate_dim: int = 5632
-    num_experts: int = 8
-    num_experts_per_token: int = 2
-    num_layers: int = 24
-    num_heads: int = 16
-    num_kv_heads: int = 16
+    hidden_dim: int = 512
+    intermediate_dim: int = 256
+    shared_expert_intermediate_dim: int = 512
+    num_experts: int = 256
+    num_experts_per_token: int = 4
+    num_layers: int = 6
+    num_heads: int = 4
+    num_kv_heads: int = 1
     head_dim: int | None = None
-    max_seq_len: int = 4096
-    sliding_window: int = 4096
+    max_seq_len: int = 8192
+    sliding_window: int = 2048
     layer_norm_eps: float = 1e-5
     initializer_std: float = 0.02
-    qk_mult: float = 1.0
-    router_z_loss_coef: float = 0.001
+    qk_mult: float = 1.3
+    router_z_loss_coef: float = 0.0
+    disable_pko: bool = True
+    """When True (default), the every-4th + last 'long' layers skip Partial
+    Key Offset (no shift of the second half of K, no doc-start zeroing). Short
+    layers never had PKO. Set to False to re-enable PKO on long layers."""
+    disable_long_rope: bool = True
+    """When True (default), the every-4th + last 'long' layers skip rotary
+    embedding entirely (Q and K go into attention un-rotated). Short layers
+    still apply half-RoPE. Set to False to keep RoPE on long layers."""
     attention_implementation: GrugAttentionImplementation | None = None
     moe_implementation: MoeImplementation | None = None
     remat_mode: RematMode = "recompute_all"
@@ -277,7 +286,13 @@ class CausalSelfAttention(eqx.Module):
         )
 
     @named_call
-    def __call__(self, x: Float[Array, "B S D"], mask: AttentionMask | jax.Array) -> Float[Array, "B S D"]:
+    def __call__(
+        self,
+        x: Float[Array, "B S D"],
+        mask: AttentionMask | jax.Array,
+        use_pko: bool = False,
+        disable_rope: bool = False,
+    ) -> Float[Array, "B S D"]:
         head_dim = self.cfg.inferred_head_dim
         seq_len = x.shape[1]
         batch_spec = _batch_spec()
@@ -285,11 +300,53 @@ class CausalSelfAttention(eqx.Module):
         q = rearrange(jnp.einsum("bsh,hd->bsd", x, self.w_q), "... (n d) -> ... n d", d=head_dim)
         k = rearrange(jnp.einsum("bsh,hd->bsd", x, self.w_k), "... (m d) -> ... m d", d=head_dim)
         v = rearrange(jnp.einsum("bsh,hd->bsd", x, self.w_v), "... (m d) -> ... m d", d=head_dim)
+
+        # Shift the second half of K's head_dim back by one position so the
+        # query at position i sees K[i] on head_dim[:half] but K[i-1] on
+        # head_dim[half:]. Zero the shifted half at document starts so the
+        # cross-half look-back does not leak across docs. Runs before the
+        # rms_norm on Q/K below.
+        if use_pko:
+            half = head_dim // 2
+            k_stationary = k[..., half:]
+            k_shifted = jnp.concatenate([k_stationary[:, :1, :, :], k_stationary[:, :-1, :, :]], axis=1)
+            segment_ids = mask.segment_ids if isinstance(mask, AttentionMask) else None
+            if segment_ids is None:
+                # No segment info (raw-mask or unsegmented eval path): only position 0 is a doc start.
+                is_doc_start_seq = jnp.zeros((seq_len,), dtype=bool).at[0].set(True)
+                is_doc_start = jnp.broadcast_to(is_doc_start_seq, k_shifted.shape[:2])
+            else:
+                q_seg = segment_ids[0]
+                if q_seg.ndim == 1:
+                    is_doc_start_seq = jnp.concatenate([jnp.ones((1,), dtype=bool), q_seg[1:] != q_seg[:-1]])
+                    is_doc_start = jnp.broadcast_to(is_doc_start_seq, k_shifted.shape[:2])
+                else:
+                    is_doc_start = jnp.concatenate(
+                        [jnp.ones_like(q_seg[:, :1], dtype=bool), q_seg[:, 1:] != q_seg[:, :-1]],
+                        axis=1,
+                    )
+            k_shifted = jnp.where(is_doc_start[..., None, None], jnp.zeros_like(k_shifted), k_shifted)
+            k = jnp.concatenate([k[..., :half], k_shifted], axis=-1)
+
         q = rms_norm(q)
         k = rms_norm(k)
-        q, k = apply_rotary_embedding(q, k, seq_len=seq_len, head_dim=head_dim, rope=self.cfg.rope)
+        # Half-RoPE: apply rotary embedding only to first half of Q/K head_dim
+        # (second half is rope-free on every layer). ``disable_rope`` skips
+        # the RoPE step entirely on this layer — used to opt long layers out
+        # of rotary embedding when ``cfg.disable_long_rope`` is set.
+        if not disable_rope:
+            half = head_dim // 2
+            q_rot, k_rot = apply_rotary_embedding(
+                q[..., :half], k[..., :half], seq_len=seq_len, head_dim=half, rope=self.cfg.rope
+            )
+            q = jnp.concatenate([q_rot, q[..., half:]], axis=-1)
+            k = jnp.concatenate([k_rot, k[..., half:]], axis=-1)
         q = q * self.cfg.qk_mult
         attn_out = attention(q, k, v, mask, implementation=self.cfg.attention_implementation)
+        # Half-RoPE's slice+concat on the head_dim axis can leave the explicit-mesh
+        # propagator with ``model`` annotated on ``head_dim`` rather than
+        # ``num_q_heads``; force the canonical TP layout so it matches ``aligned_v``.
+        attn_out = reshard(attn_out, P(_BATCH_AXES, None, "model", None))
         aligned_v = align_kv_heads(v, num_q_heads=attn_out.shape[2])
         aligned_v = reshard(aligned_v, P(_BATCH_AXES, None, "model", None))
         # Exclusive Self Attention: subtract the component of yᵢ parallel to vᵢ.
@@ -420,13 +477,19 @@ def _summarize_router_metrics(router_metrics: dict[str, jax.Array]) -> dict[str,
     routing_counts = router_metrics["routing_counts_per_layer"]
     load_balancing_loss = router_metrics["load_balancing_loss_per_layer"]
     router_z_loss = router_metrics["router_z_loss_per_layer"]
+    capacity_overflow = router_metrics["capacity_overflow_per_layer"]
     num_layers = int(routing_entropy.shape[0])
+
+    # Per-layer total assignments = sum of routing_counts over experts (= tokens * k).
+    assignments_per_layer = jnp.sum(routing_counts.astype(jnp.float32), axis=-1)
+    capacity_overflow_rate = capacity_overflow.astype(jnp.float32) / jnp.maximum(assignments_per_layer, 1.0)
 
     out: dict[str, jax.Array | SummaryStats] = {
         "train/router/routing_entropy_mean": jnp.mean(routing_entropy),
         "train/router/load_balancing_loss": jnp.mean(load_balancing_loss),
         "train/router/router_z_loss": jnp.mean(router_z_loss),
         "train/router/routing_counts_per_layer": routing_counts,
+        "train/router/capacity_overflow_rate_mean": jnp.mean(capacity_overflow_rate),
         "qb_beta_per_layer": router_metrics.get("qb_beta_per_layer"),
     }
     for i in range(num_layers):
@@ -434,6 +497,7 @@ def _summarize_router_metrics(router_metrics: dict[str, jax.Array]) -> dict[str,
         out[f"train/router/layer_{i}/load_balancing_loss"] = load_balancing_loss[i]
         out[f"train/router/layer_{i}/router_z_loss"] = router_z_loss[i]
         out[f"train/router/layer_{i}/routing_hist"] = _histogram_from_expert_counts(routing_counts[i])
+        out[f"train/router/layer_{i}/capacity_overflow_rate"] = capacity_overflow_rate[i]
     return out
 
 
@@ -472,24 +536,23 @@ class MoEMLP(eqx.Module):
 
     @staticmethod
     def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> "MoEMLP":
-        k_router, k_expert_mlp = random.split(key, 2)
+        k_router, k_expert = random.split(key, 2)
         mesh = get_abstract_mesh()
 
         expert_axis_size = _mesh_axis_size(mesh, "expert")
         if cfg.num_experts % expert_axis_size != 0:
             raise ValueError(f"num_experts={cfg.num_experts} must be divisible by expert axis size={expert_axis_size}")
 
-        d, e, i = cfg.hidden_dim, cfg.num_experts, cfg.intermediate_dim
-
+        d, e = cfg.hidden_dim, cfg.num_experts
         return MoEMLP(
             router=reshard(_init_weight(k_router, (d, e), cfg.initializer_std), P(None, None)),
             router_bias=jnp.zeros((e,)),
             expert_mlp=MoEExpertMlp.init(
-                num_experts=e,
-                hidden_dim=d,
-                intermediate_dim=i,
+                num_experts=cfg.num_experts,
+                hidden_dim=cfg.hidden_dim,
+                intermediate_dim=cfg.intermediate_dim,
                 initializer_std=cfg.initializer_std,
-                key=k_expert_mlp,
+                key=k_expert,
                 implementation=cfg.moe_implementation,
                 activation=ActivationFunctionEnum.silu,
                 capacity_factor=_DEFAULT_EP_CAPACITY_FACTOR,
@@ -514,7 +577,11 @@ class MoEMLP(eqx.Module):
         selected_experts = selected_experts[:, :-1]
         # Sigmoid combine weights on unbiased logits for selected experts.
         unbiased_topk = jnp.take_along_axis(router_logits, selected_experts, axis=-1)
-        combine_weights = jax.nn.sigmoid(unbiased_topk).astype(x.dtype)
+        combine_weights_f = jax.nn.sigmoid(unbiased_topk)
+        # Renormalize K combine weights to sum to ``_ROUTING_RENORM_SUM`` (baked in).
+        denom = jnp.sum(combine_weights_f, axis=-1, keepdims=True)
+        combine_weights_f = combine_weights_f * (_ROUTING_RENORM_SUM / (denom + 1e-9))
+        combine_weights = combine_weights_f.astype(x.dtype)
         router_stats = _routing_stats(
             selected_experts,
             router_probs,
@@ -543,12 +610,14 @@ class MoEMLP(eqx.Module):
             out_specs=P(),
         )(s_minus_alpha)
 
-        routed_flat = self.expert_mlp(
+        routed_flat, dropped_assignments = self.expert_mlp(
             x_flat,
             selected_experts.astype(jnp.int32),
             combine_weights,
             mesh=get_abstract_mesh(),
+            report_capacity_overflow=True,
         )
+        router_stats["capacity_overflow"] = dropped_assignments.astype(jnp.float32)
 
         routed = rearrange(routed_flat, "(b s) d -> b s d", b=b, s=s)
         routed = reshard(routed, _batch_spec())
@@ -587,10 +656,12 @@ class Block(eqx.Module):
         self,
         x: Float[Array, "B S D"],
         mask: AttentionMask | jax.Array,
+        use_pko: bool = False,
+        disable_rope: bool = False,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
         attn_in = self.attn_gated_norm(self.rms_attn(x))
-        x = _batch_reshard(x + self.attn(attn_in, mask))
-        mlp_in = _batch_reshard(self.mlp_gated_norm(self.rms_mlp(x)))
+        x = x + self.attn(attn_in, mask, use_pko=use_pko, disable_rope=disable_rope)
+        mlp_in = self.mlp_gated_norm(self.rms_mlp(x))
         mlp_out, router_stats = self.mlp(mlp_in)
         if self.shared is not None:
             mlp_out = mlp_out + self.shared(mlp_in, activation=ActivationFunctionEnum.silu)
@@ -663,19 +734,27 @@ class Transformer(eqx.Module):
         hidden = self.token_embed.at[token_ids].get(out_sharding=batch_spec)
         hidden = self.embed_gated_norm(self.embed_norm(hidden))
 
-        if not isinstance(mask, AttentionMask):
-            mask = AttentionMask.causal()
-        short_mask, long_mask = _layer_attention_masks(mask, sliding_window=cfg.sliding_window)
+        # Short layers: sliding window. Long layers (every 4th + last): full causal.
+        segment_ids = mask.segment_ids if isinstance(mask, AttentionMask) else None
+        short_mask = AttentionMask(is_causal=True, sliding_window=cfg.sliding_window, segment_ids=segment_ids)
+        long_mask = AttentionMask(is_causal=True, sliding_window=None, segment_ids=segment_ids)
 
         if cfg.remat_mode == "save_moe":
             remat_policy = jax.checkpoint_policies.save_only_these_names(*MOE_REMAT_SAVE_NAMES)
         else:
             remat_policy = None
 
+        num_blocks = len(self.blocks)
         moe_router_stats: list[dict[str, jax.Array]] = []
         for i, block in enumerate(self.blocks):
-            layer_mask = long_mask if i % 4 == 3 else short_mask
-            hidden, router_stats = eqx.filter_checkpoint(block, policy=remat_policy)(hidden, layer_mask)
+            is_last = i == num_blocks - 1
+            is_long = i % 4 == 3 or is_last
+            layer_mask = long_mask if is_long else short_mask
+            use_pko = is_long and not cfg.disable_pko
+            disable_rope = is_long and cfg.disable_long_rope
+            hidden, router_stats = eqx.filter_checkpoint(block, policy=remat_policy)(
+                hidden, layer_mask, use_pko, disable_rope
+            )
             moe_router_stats.append(router_stats)
 
         router_metrics = {
@@ -684,6 +763,7 @@ class Transformer(eqx.Module):
             "load_balancing_loss_per_layer": jnp.stack([s["load_balancing_loss"] for s in moe_router_stats], axis=0),
             "router_z_loss_per_layer": jnp.stack([s["router_z_loss"] for s in moe_router_stats], axis=0),
             "qb_beta_per_layer": jnp.stack([s["qb_beta"] for s in moe_router_stats], axis=0),
+            "capacity_overflow_per_layer": jnp.stack([s["capacity_overflow"] for s in moe_router_stats], axis=0),
         }
         hidden = self.final_gated_norm(self.final_norm(hidden))
         return hidden, router_metrics

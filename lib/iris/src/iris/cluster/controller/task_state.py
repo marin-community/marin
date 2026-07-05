@@ -103,11 +103,12 @@ class ActiveTaskRow:
     has_coscheduling: bool
 
 
-class TaskDetailRow(Protocol):
-    """Shape of the SA Row returned by ``get_task_detail`` and values in ``bulk_get_task_detail``.
+@dataclass(frozen=True, slots=True)
+class TaskDetailRow:
+    """Task-detail projection: ``TASK_DETAIL_COLS`` plus the federated worker label.
 
-    Columns match ``TASK_DETAIL_COLS``.  Consumers in ``reconcile.py`` use
-    this Protocol as the value type of the task map.
+    ``failure_count`` / ``preemption_count`` are derived from the task's attempt
+    rows — there are no such columns on ``tasks``.
     """
 
     task_id: JobName
@@ -118,12 +119,17 @@ class TaskDetailRow(Protocol):
     preemption_count: int
     max_retries_failure: int
     max_retries_preemption: int
-    submitted_at_ms: object  # Timestamp from TimestampMsType; typed as object to avoid a circular dep
+    submitted_at_ms: Timestamp
     priority_band: int
     error: str | None
     exit_code: int | None
-    started_at_ms: object | None
-    finished_at_ms: object | None
-    current_worker_id: str | None
+    started_at_ms: Timestamp | None
+    finished_at_ms: Timestamp | None
+    current_worker_id: WorkerId | None
     current_worker_address: str | None
     container_id: str | None
+    backend_id: str
+    cluster: str
+    # Federated task's peer-side worker label ("" for a local task); NULL from the
+    # outer join when absent.
+    peer_worker_label: str | None

@@ -1,9 +1,9 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for migration ``0039_drop_users``.
+"""Tests for migration ``0040_drop_users``.
 
-Builds a DB in the pre-0039 shape — ``users`` table plus ``jobs`` / ``user_budgets``
+Builds a DB in the pre-0040 shape — ``users`` table plus ``jobs`` / ``user_budgets``
 carrying ``FOREIGN KEY(user_id) REFERENCES users`` — with FK enforcement ON (as in
 production), and asserts the migration rebuilds ``jobs`` / ``user_budgets`` without
 the ``users`` FK, drops ``users``, preserves all rows and the ``jobs`` self-FK / its
@@ -18,9 +18,9 @@ from pathlib import Path
 
 import pytest
 
-_MIGRATION = Path(__file__).parents[3] / "src/iris/cluster/controller/migrations/0039_drop_users.py"
+_MIGRATION = Path(__file__).parents[3] / "src/iris/cluster/controller/migrations/0040_drop_users.py"
 
-# Pre-0039 shape: users table + the two FKs to it. jobs carries the full column set
+# Pre-0040 shape: users table + the two FKs to it. jobs carries the full column set
 # (the migration's INSERT names every column) plus its parent_job_id self-FK; tasks
 # is a child of jobs, present to prove the rebuild does not cascade-delete children.
 _OLD_SCHEMA = """
@@ -90,7 +90,7 @@ CREATE TABLE user_budgets (
 
 
 def _load_migration():
-    spec = importlib.util.spec_from_file_location("m0039", _MIGRATION)
+    spec = importlib.util.spec_from_file_location("m0040", _MIGRATION)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
@@ -128,7 +128,7 @@ def _connect() -> sqlite3.Connection:
     return conn
 
 
-def test_migration_0039_drops_users_and_its_fks_preserving_rows():
+def test_migration_0040_drops_users_and_its_fks_preserving_rows():
     conn = _connect()
     _seed(conn)
 
@@ -162,7 +162,7 @@ def test_migration_0039_drops_users_and_its_fks_preserving_rows():
     conn.close()
 
 
-def test_migration_0039_is_idempotent():
+def test_migration_0040_is_idempotent():
     conn = _connect()
     _seed(conn)
     migration = _load_migration()
@@ -173,7 +173,7 @@ def test_migration_0039_is_idempotent():
     conn.close()
 
 
-def test_migration_0039_is_noop_on_current_schema():
+def test_migration_0040_is_noop_on_current_schema():
     conn = _connect()
     conn.executescript(_CURRENT_SCHEMA)
     conn.commit()

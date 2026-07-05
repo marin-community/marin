@@ -223,9 +223,9 @@ class Overlay:
         """Merge a task delta into the accumulator.
 
         Per-field fold (earlier accumulated ``old`` then newer ``delta``):
-        state last-wins; error/exit_code/failure_count/preemption_count/
-        container_id last-non-null; started_at first-non-null; finished_at
-        last-wins (may clear to None).
+        state last-wins; error/exit_code/failure_count/container_id
+        last-non-null; started_at first-non-null; finished_at last-wins (may
+        clear to None).
         """
         old = self._effects.tasks.get(delta.task_id)
         if old is None:
@@ -239,7 +239,6 @@ class Overlay:
             started_at=_first(old.started_at, delta.started_at),
             finished_at=delta.finished_at,
             failure_count=_last_non_null(old.failure_count, delta.failure_count),
-            preemption_count=_last_non_null(old.preemption_count, delta.preemption_count),
             container_id=_last_non_null(old.container_id, delta.container_id),
         )
 

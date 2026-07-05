@@ -86,14 +86,12 @@ def test_client_set_federation_field_is_rejected_from_a_non_admin(state, log_cli
     as another user, so ``LaunchJob`` denies it before any owner re-pinning.
     """
     mock_controller.provider.health = state._health
-    mock_controller.provider.worker_attrs = state._worker_attrs
     service = ControllerServiceImpl(
         controller=mock_controller,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
         log_client=log_client,
         db=state._db,
-        endpoints=state._endpoints,
-        endpoint_service=EndpointServiceImpl(db=state._db, endpoints=state._endpoints),
+        endpoint_service=EndpointServiceImpl(db=state._db),
         auth=ControllerAuth(provider="test-provider"),
     )
     request = make_job_request("forged", replicas=1)

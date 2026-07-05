@@ -79,7 +79,7 @@ def test_federated_pending_task_is_not_routed_or_dispatched(state):
     # Dispatch: the direct-provider drain is the canonical silent break — a
     # federated PENDING row would be promoted to ASSIGNED and run locally.
     with state._db.transaction() as cur:
-        batch = dispatch.drain_for_dispatch(cur, cache=state._run_template_cache)
+        batch = dispatch.drain_for_dispatch(cur)
     dispatched = {r.task_id for r in batch.tasks_to_run}
     assert local_task.to_wire() in dispatched
     assert dispatched.isdisjoint({t.to_wire() for t in fed_tasks})
@@ -129,7 +129,7 @@ def test_federated_running_row_excluded_from_dispatch_poll_set(state):
     [local_task] = submit_direct_job(state, "local-run")
     # Promote the local task to ASSIGNED so it populates the null-worker poll set.
     with state._db.transaction() as cur:
-        dispatch.drain_for_dispatch(cur, cache=state._run_template_cache)
+        dispatch.drain_for_dispatch(cur)
 
     fed_job = JobName.root("test-user", "fed-run")
     [fed_task] = submit_direct_job(state, "fed-run")

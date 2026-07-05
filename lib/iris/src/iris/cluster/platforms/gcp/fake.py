@@ -103,7 +103,6 @@ class InMemoryGcpService:
         self._injected_failures: dict[str, InfraError] = {}
         self._zone_quotas: dict[str, int] = {}
         self._vm_zone_quotas: dict[str, int] = {}
-        self._available_types_by_zone: dict[str, set[str]] | None = None
 
         # LOCAL mode: worker spawning params
         self._controller_address = controller_address
@@ -148,17 +147,9 @@ class InMemoryGcpService:
         """Remove an accelerator type from the valid set."""
         self._valid_accelerator_types.discard(accelerator_type)
 
-    def add_tpu_type(self, accelerator_type: str) -> None:
-        """Add an accelerator type to the valid set."""
-        self._valid_accelerator_types.add(accelerator_type)
-
     def set_vm_zone_quota(self, zone: str, max_vms: int) -> None:
         """Set VM quota for a zone. Enforced in DRY_RUN/LOCAL modes."""
         self._vm_zone_quotas[zone] = max_vms
-
-    def set_available_types_by_zone(self, mapping: dict[str, set[str]]) -> None:
-        """Restrict which accelerator types are available per zone."""
-        self._available_types_by_zone = mapping
 
     def advance_tpu_state(self, name: str, zone: str, state: str = "READY") -> None:
         """Transition a TPU to a new state (DRY_RUN/LOCAL only)."""
@@ -210,14 +201,6 @@ class InMemoryGcpService:
         max_quota = self._zone_quotas.get(request.zone, self.DEFAULT_QUOTA)
         if zone_count >= max_quota:
             raise QuotaExhaustedError(f"Quota exhausted in {request.zone}")
-
-        # Per-type-per-zone availability
-        if self._available_types_by_zone is not None:
-            zone_types = self._available_types_by_zone.get(request.zone, set())
-            if request.accelerator_type not in zone_types:
-                raise QuotaExhaustedError(
-                    f"Accelerator type {request.accelerator_type!r} not available in {request.zone}"
-                )
 
         # Synthetic network endpoints based on TPU topology
         try:

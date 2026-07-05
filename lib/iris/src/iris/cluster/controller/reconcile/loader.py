@@ -10,6 +10,7 @@ from rigging.timing import Timestamp
 from sqlalchemy import bindparam, select
 
 from iris.cluster.controller import reads
+from iris.cluster.controller.attempt_counts import AttemptCounts
 from iris.cluster.controller.db import Tx
 from iris.cluster.controller.reads import TaskScope
 from iris.cluster.controller.reconcile.policy import NON_TERMINAL_TASK_STATES
@@ -168,7 +169,11 @@ def _bulk_load_job_state_basis(
 
 
 def _load_all_tasks_for_jobs(cur: Tx, job_ids: Iterable[JobName]) -> dict[JobName, tuple[TaskHistogramRow, ...]]:
-    """Load every task row for ``job_ids``, grouped by job and sorted by task index."""
+    """Load every task row for ``job_ids``, grouped by job and sorted by task index.
+
+    ``failure_count`` is derived from each task's attempt rows (it feeds the
+    job-level cumulative ``total_failures`` budget).
+    """
     ids = list(job_ids)
     if not ids:
         return {}
@@ -178,11 +183,11 @@ def _load_all_tasks_for_jobs(cur: Tx, job_ids: Iterable[JobName]) -> dict[JobNam
             local_tasks.c.job_id,
             local_tasks.c.task_index,
             local_tasks.c.state,
-            local_tasks.c.failure_count,
             local_tasks.c.error,
         ).where(local_tasks.c.job_id.in_(bindparam("job_ids", expanding=True))),
         {"job_ids": ids},
     ).all()
+    counts = reads.attempt_counts_for_tasks(cur, [r.task_id for r in rows])
     grouped: dict[JobName, list[TaskHistogramRow]] = {jid: [] for jid in ids}
     for r in rows:
         grouped.setdefault(r.job_id, []).append(
@@ -190,7 +195,7 @@ def _load_all_tasks_for_jobs(cur: Tx, job_ids: Iterable[JobName]) -> dict[JobNam
                 task_id=r.task_id,
                 task_index=int(r.task_index),
                 state=int(r.state),
-                failure_count=int(r.failure_count),
+                failure_count=counts.get(r.task_id, AttemptCounts()).failure_count,
                 error=str(r.error) if r.error is not None else None,
             )
         )

@@ -23,7 +23,6 @@ from iris.cluster.constraints import CLUSTER_CONSTRAINT_KEY, Constraint, Constra
 from iris.cluster.controller import reads, writes
 from iris.cluster.controller.endpoint_service import EndpointServiceImpl
 from iris.cluster.controller.federation_store import ControllerFederationStore
-from iris.cluster.controller.run_template import RunTemplateCache
 from iris.cluster.controller.service import ControllerServiceImpl, _peer_status
 from iris.cluster.federation.manager import FederationManager
 from iris.cluster.federation.peer import FederationPeer
@@ -40,6 +39,7 @@ from .conftest import (
     make_controller_state,
     make_direct_job_request,
     query_job,
+    query_task,
     query_tasks_for_job,
     register_worker,
     transition_task,
@@ -107,14 +107,12 @@ def _make_service(
     state = stack.enter_context(make_controller_state())
     mock = MockController()
     mock.provider.health = state._health
-    mock.provider.worker_attrs = state._worker_attrs
     service = ControllerServiceImpl(
         controller=mock,
         bundle_store=BundleStore(storage_dir=str(tmp_path / subdir / "bundles")),
         log_client=log_client,
         db=state._db,
-        endpoints=state._endpoints,
-        endpoint_service=EndpointServiceImpl(db=state._db, endpoints=state._endpoints),
+        endpoint_service=EndpointServiceImpl(db=state._db),
     )
     return service, state
 
@@ -130,7 +128,6 @@ def _attach_federation(
     peer.probe()
     store = ControllerFederationStore(
         parent_service._db,
-        run_template_cache=RunTemplateCache(256),
     )
     manager = FederationManager([peer], threads=get_thread_container(), store=store, cluster_id="parent")
     parent_service._controller.federation = manager
@@ -293,14 +290,17 @@ def test_sync_mirrors_submit_time_and_preemptions_faithfully(tmp_path, log_clien
         dispatch_task(peer_state, peer_task, worker)
         transition_task(peer_state, peer_task.task_id, job_pb2.TASK_STATE_WORKER_FAILED)
         (peer_task,) = query_tasks_for_job(peer_state, job_id)
-        assert peer_task.preemption_count == 1
+        # preemption_count is derived from the peer's attempt rows, not a stored column.
+        assert query_task(peer_state, peer_task.task_id).preemption_count == 1
         dispatch_task(peer_state, peer_task, worker)
         transition_task(peer_state, peer_task.task_id, job_pb2.TASK_STATE_SUCCEEDED)
         manager.sync_once()
 
         (mirrored,) = query_tasks_for_job(parent_state, job_id)
         assert mirrored.state == job_pb2.TASK_STATE_SUCCEEDED
-        assert mirrored.preemption_count == 1
+        # The parent derives the mirrored count from the mirrored attempt rows —
+        # it matches the peer without any scalar on the sync wire.
+        assert query_task(parent_state, mirrored.task_id).preemption_count == 1
 
 
 def test_dashboard_reads_expose_cluster_and_filter_by_it(tmp_path, log_client):
@@ -513,7 +513,7 @@ def test_redrive_of_a_handle_the_peer_already_has_is_idempotent(tmp_path, log_cl
 def test_admit_persists_a_pending_handle_and_is_idempotent(tmp_path, log_client):
     with ExitStack() as stack:
         _parent_service, parent_state = _make_service(stack, "parent", tmp_path, log_client)
-        store = ControllerFederationStore(parent_state._db, run_template_cache=RunTemplateCache(256))
+        store = ControllerFederationStore(parent_state._db)
         parent_job_id = JobName.root(_USER, "fed-job")
         spec = HandoffSpec(
             local_job_id=parent_job_id,

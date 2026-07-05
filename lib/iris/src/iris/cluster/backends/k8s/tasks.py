@@ -40,7 +40,6 @@ from iris.cluster.controller.backend import (
     user_admitted,
 )
 from iris.cluster.controller.ops.task import apply_dispatch_updates
-from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
 from iris.cluster.controller.reconcile.loader import TransitionReader
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.task_state import RunningTaskEntry
@@ -1450,9 +1449,6 @@ class K8sTaskProvider:
     # A cluster backend tracks no Iris worker liveness; the controller's union read
     # skips a None tracker, and no worker registers into a k8s scale group.
     health: WorkerHealthTracker | None = field(default=None, init=False, repr=False)
-    # A cluster backend tracks no Iris worker attributes; no worker registers
-    # into a k8s scale group.
-    worker_attrs: WorkerAttrsProjection | None = field(default=None, init=False, repr=False)
     # The controller-DB read surface this backend authors its dispatch effects
     # from, passed by the composer at construction (a cluster backend has no
     # worker store, so it reads its dispatch drain through this).

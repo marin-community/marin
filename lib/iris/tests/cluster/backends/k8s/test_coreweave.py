@@ -192,8 +192,11 @@ def test_start_controller_creates_all_resources():
     # Controller consumes that env via envFrom (S3 + injected, one flow).
     container = deploy_spec["template"]["spec"]["containers"][0]
     assert container["envFrom"] == [{"secretRef": {"name": "iris-task-env", "optional": True}}]
+    # CPU is requested but unlimited (Burstable QoS, not Guaranteed) so the
+    # controller can burst onto spare node cores during reconcile spikes; memory
+    # is capped to protect the node (issue #6944).
     assert container["resources"]["requests"] == {"cpu": _CONTROLLER_CPU_REQUEST, "memory": _CONTROLLER_MEMORY_REQUEST}
-    assert container["resources"]["limits"] == {"cpu": _CONTROLLER_CPU_REQUEST, "memory": _CONTROLLER_MEMORY_REQUEST}
+    assert container["resources"]["limits"] == {"memory": _CONTROLLER_MEMORY_REQUEST}
     # Recreate (not RollingUpdate): the old controller pod must be gone before
     # the new one mounts the ReadWriteOnce SQLite state PVC.
     assert deploy_spec["strategy"] == {"type": "Recreate"}

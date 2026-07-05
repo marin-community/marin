@@ -46,6 +46,18 @@ from zephyr.worker_context import Aggregation, _worker_ctx_var
 logger = logging.getLogger(__name__)
 
 
+# Built-in pipeline counters emitted by zephyr's readers, writers, and planner.
+# Defined here (rather than inline at each call site) so the name stays consistent
+# across the modules that emit them — a typo at one site would otherwise create a
+# silently-separate counter.
+RECORDS_IN = "zephyr/records_in"
+"""Records read by the loaders (jsonl/parquet/vortex/zip)."""
+RECORDS_OUT = "zephyr/records_out"
+"""Records written by the output writers (jsonl/parquet/vortex/binary)."""
+PARTITIONS_SKIPPED = "zephyr/partitions_skipped"
+"""Output partitions skipped because the target already existed (``skip_existing``)."""
+
+
 class ScopedCounters:
     """Counter namespace scoped to a stage (or pipeline-level when stage is None).
 

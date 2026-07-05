@@ -598,12 +598,13 @@ interface TaskFailureSummary {
   failureCount: number  // failed attempts of this state for the task
 }
 
-// One entry per task — its most recent failed attempt plus the authoritative
-// retry count — so a single task that fails repeatedly doesn't crowd out other
-// failing tasks. ListTasks attaches only the latest failed attempt per state
-// (not the full history), so the failure stays visible after the task is
-// retried back into a running/pending state without shipping every attempt; the
-// ``count`` for the badge comes from the per-task counter on the TaskStatus.
+// One entry per task — its most recent failed attempt plus a retry count — so a
+// single task that fails repeatedly doesn't crowd out other failing tasks.
+// ListTasks attaches only the latest failed attempt per state (not the full
+// history), so the failure stays visible after the task is retried back into a
+// running/pending state. The badge counts the attached attempts, so it reflects
+// the failures shown here, not the task's authoritative lifetime total (those
+// job-level totals live on JobStatus).
 function collectFailuresByState(stateName: string, count: (t: TaskStatus) => number): TaskFailureSummary[] {
   const out: TaskFailureSummary[] = []
   for (const task of tasks.value) {
@@ -629,7 +630,7 @@ function collectFailuresByState(stateName: string, count: (t: TaskStatus) => num
 }
 
 const recentTaskFailures = computed<TaskFailureSummary[]>(() =>
-  collectFailuresByState('failed', t => t.failureCount ?? 0),
+  collectFailuresByState('failed', t => (t.attempts ?? []).filter(a => stateToName(a.state) === 'failed').length),
 )
 // Worker failures share the preemption budget with kills/preemptions, so there
 // is no clean per-task "worker failure" counter; surface the latest one without

@@ -75,8 +75,16 @@ def configure_jax_compilation_cache() -> None:
     Without a cache dir, every process re-runs XLA compilation and kernel
     autotune sweeps at startup. An explicit setting (``JAX_COMPILATION_CACHE_DIR``
     or ``jax.config``) wins; otherwise the cache lands under the cluster's
-    region-local storage prefix, which may be a ``gs://``/``s3://`` URL that JAX
-    writes directly.
+    region-local storage prefix, which may be a ``gs://``/``s3://`` URL.
+
+    JAX's own compilation cache handles a remote URL fine (it reads/writes via
+    fsspec), but it also derives XLA's C++ per-fusion autotune cache path from
+    the same directory and hands it to XLA's `tsl::Env`, which has no
+    ``gs://``/``s3://`` support and crashes the first compile with
+    "UNIMPLEMENTED: File system scheme ... not implemented". Disable that
+    derivation when the cache dir is remote; the autotune cache is ephemeral
+    (skipped entirely on a compilation-cache hit), so losing it costs at most
+    a few minutes on a cold compile.
     """
     import jax  # noqa: PLC0415  # optional dep: jax (iris does not depend on jax)
 
@@ -87,6 +95,10 @@ def configure_jax_compilation_cache() -> None:
     os.environ["JAX_COMPILATION_CACHE_DIR"] = cache_dir
     jax.config.update("jax_compilation_cache_dir", cache_dir)
     logger.info("JAX compilation cache: %s", cache_dir)
+
+    if "://" in cache_dir and "JAX_PERSISTENT_CACHE_ENABLE_XLA_CACHES" not in os.environ:
+        jax.config.update("jax_persistent_cache_enable_xla_caches", "none")
+        logger.info("XLA autotune sub-cache disabled (compilation cache is remote: %s)", cache_dir)
 
 
 # An endpoint name that has not been registered yet surfaces differently across

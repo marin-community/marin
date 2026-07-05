@@ -30,8 +30,8 @@ from iris.cluster.controller.auth import ControllerAuth
 from iris.cluster.controller.codec import constraints_from_json
 from iris.cluster.controller.endpoint_service import EndpointServiceImpl
 from iris.cluster.controller.ops.task import Assignment, finalize
+from iris.cluster.controller.projections.run_templates import RunTemplatesProjection
 from iris.cluster.controller.reads import TaskJobSummary
-from iris.cluster.controller.reconcile import dispatch
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.reconcile.task import TerminalDecision, TerminalKind
 from iris.cluster.controller.schema import jobs_table, task_attempts_table, tasks_table
@@ -87,7 +87,6 @@ def _register_worker(state: ControllerTestState, worker_id: WorkerId) -> None:
             metadata=metadata,
             ts=Timestamp.now(),
             health=state._health,
-            worker_attrs=state._worker_attrs,
         )
 
 
@@ -116,7 +115,6 @@ def _assign_and_transition(
                 )
             ],
             health=state._health,
-            endpoints=state._endpoints,
             now=Timestamp.now(),
         )
     if target_state != job_pb2.TASK_STATE_RUNNING:
@@ -130,7 +128,6 @@ def _assign_and_transition(
                     )
                 ],
                 health=state._health,
-                endpoints=state._endpoints,
                 now=Timestamp.now(),
             )
 
@@ -226,7 +223,6 @@ def test_profile_worker_routes_to_worker_backend(service, state):
             metadata=make_worker_metadata(),
             ts=Timestamp.now(),
             health=state._health,
-            worker_attrs=state._worker_attrs,
             scale_group="cw-h100",
         )
     cw = Mock()
@@ -366,7 +362,7 @@ def test_launch_job_externalizes_large_workdir_files(service, state):
 
     job_id = JobName.root("test-user", "big-pickle-job")
     with state._db.read_snapshot() as snap:
-        template = dispatch.run_request_template(state._run_template_cache, snap, job_id)
+        template = snap.caches[RunTemplatesProjection].get(snap, job_id)
     assert template is not None
     # Small file stays inline
     assert dict(template.entrypoint.workdir_files) == {"small.txt": small_file}
@@ -382,7 +378,7 @@ def test_launch_job_keeps_small_workdir_files_inline(service, state):
 
     job_id = JobName.root("test-user", "small-pickle-job")
     with state._db.read_snapshot() as snap:
-        template = dispatch.run_request_template(state._run_template_cache, snap, job_id)
+        template = snap.caches[RunTemplatesProjection].get(snap, job_id)
     assert template is not None
     assert dict(template.entrypoint.workdir_files) == {"_callable.pkl": small_file}
     assert "_callable.pkl" not in template.entrypoint.workdir_file_refs
@@ -548,7 +544,6 @@ def test_existing_job_policy_keep_drains_unfinalized_child_attempt(service, stat
         finalize(
             cur,
             [TerminalDecision(TerminalKind.PREEMPT, child_task.task_id, "evicted by prod tenant")],
-            endpoints=state._endpoints,
             now=Timestamp.now(),
         )
 
@@ -618,7 +613,6 @@ def test_existing_job_policy_keep_force_reaps_after_drain_wait(service, state, m
         finalize(
             cur,
             [TerminalDecision(TerminalKind.PREEMPT, child_task.task_id, "evicted, worker stuck")],
-            endpoints=state._endpoints,
             now=Timestamp.now(),
         )
 
@@ -681,9 +675,7 @@ def test_get_job_status_reports_has_children(service, state):
     )
     child_req.entrypoint.run_command.argv[:] = ["python", "-c", "pass"]
     with state._db.transaction() as cur:
-        ops.job.submit(
-            cur, job_id=child_id, request=child_req, ts=Timestamp.now(), run_template_cache=state._run_template_cache
-        )
+        ops.job.submit(cur, job_id=child_id, request=child_req, ts=Timestamp.now())
 
     parent = service.get_job_status(controller_pb2.Controller.GetJobStatusRequest(job_id=parent_id.to_wire()), None)
     assert parent.job.has_children is True
@@ -970,9 +962,8 @@ def test_terminate_job_rejected_for_non_owner(state, mock_controller, tmp_path, 
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles_owner")),
         log_client=log_client,
         db=state._db,
-        endpoints=state._endpoints,
         auth=ControllerAuth(provider="static"),
-        endpoint_service=EndpointServiceImpl(db=state._db, endpoints=state._endpoints),
+        endpoint_service=EndpointServiceImpl(db=state._db),
     )
 
     auth_service.launch_job(make_job_request("/alice/my-job"), None)
@@ -998,9 +989,8 @@ def test_launch_child_job_rejected_for_non_owner(state, mock_controller, tmp_pat
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles_child")),
         log_client=log_client,
         db=state._db,
-        endpoints=state._endpoints,
         auth=ControllerAuth(provider="static"),
-        endpoint_service=EndpointServiceImpl(db=state._db, endpoints=state._endpoints),
+        endpoint_service=EndpointServiceImpl(db=state._db),
     )
 
     auth_service.launch_job(make_job_request("/alice/parent-job"), None)
@@ -1297,9 +1287,7 @@ def test_list_jobs_all_scope_includes_descendants(service, state):
     )
     child_req.entrypoint.run_command.argv[:] = ["python", "-c", "pass"]
     with state._db.transaction() as cur:
-        ops.job.submit(
-            cur, job_id=child_id, request=child_req, ts=Timestamp.now(), run_template_cache=state._run_template_cache
-        )
+        ops.job.submit(cur, job_id=child_id, request=child_req, ts=Timestamp.now())
 
     request = controller_pb2.Controller.ListJobsRequest()
     response = service.list_jobs(request, None)
@@ -1324,9 +1312,7 @@ def test_list_jobs_job_query_roots_and_children(service, state):
     )
     child_req.entrypoint.run_command.argv[:] = ["python", "-c", "pass"]
     with state._db.transaction() as cur:
-        ops.job.submit(
-            cur, job_id=child_id, request=child_req, ts=Timestamp.now(), run_template_cache=state._run_template_cache
-        )
+        ops.job.submit(cur, job_id=child_id, request=child_req, ts=Timestamp.now())
 
     roots_response = service.list_jobs(
         controller_pb2.Controller.ListJobsRequest(
@@ -1602,9 +1588,8 @@ def test_register_requires_worker_role(state, mock_controller, tmp_path, log_cli
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
         log_client=log_client,
         db=state._db,
-        endpoints=state._endpoints,
         auth=auth,
-        endpoint_service=EndpointServiceImpl(db=state._db, endpoints=state._endpoints),
+        endpoint_service=EndpointServiceImpl(db=state._db),
     )
 
     token = _verified_identity.set(VerifiedIdentity(user_id="alice", role="user"))
@@ -1631,9 +1616,8 @@ def test_register_allows_worker_role(state, mock_controller, tmp_path, log_clien
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
         log_client=log_client,
         db=state._db,
-        endpoints=state._endpoints,
         auth=auth,
-        endpoint_service=EndpointServiceImpl(db=state._db, endpoints=state._endpoints),
+        endpoint_service=EndpointServiceImpl(db=state._db),
     )
 
     token = _verified_identity.set(VerifiedIdentity(user_id="system:worker", role="worker"))
@@ -1709,9 +1693,7 @@ def test_get_scheduler_state_with_running_task(controller_service, state):
         replicas=1,
     )
     with state._db.transaction() as cur:
-        ops.job.submit(
-            cur, job_id=job_id, request=request, ts=Timestamp.now(), run_template_cache=state._run_template_cache
-        )
+        ops.job.submit(cur, job_id=job_id, request=request, ts=Timestamp.now())
 
     w1 = WorkerId("w1")
     with state._db.transaction() as cur:
@@ -1728,7 +1710,6 @@ def test_get_scheduler_state_with_running_task(controller_service, state):
             ),
             ts=Timestamp.now(),
             health=state._health,
-            worker_attrs=state._worker_attrs,
         )
     task_id = job_id.task(0)
     _assign_and_transition(state, task_id, w1, job_pb2.TASK_STATE_RUNNING)
@@ -1889,8 +1870,10 @@ def test_list_tasks_surfaces_latest_failed_attempt_after_retry(service, state):
     the listing attached only the current attempt, so a task that failed and was
     then retried (current attempt running) showed no failure at all. The listing
     now also attaches the *most recent* failed attempt — only the latest, so a
-    task stuck in a long retry loop doesn't ship thousands of rows — and carries
-    the authoritative ``failure_count`` for the count badge.
+    task stuck in a long retry loop doesn't ship thousands of rows. The per-task
+    failure count is no longer a proto scalar (it is derived from ``task_attempts``
+    and the wire no longer carries it); the client counts the attached failed
+    attempts instead.
     """
     request = make_job_request("list-tasks-failed-history")
     service.launch_job(request, None)
@@ -1934,7 +1917,6 @@ def test_list_tasks_surfaces_latest_failed_attempt_after_retry(service, state):
             .values(
                 state=job_pb2.TASK_STATE_RUNNING,
                 current_attempt_id=2,
-                failure_count=2,
                 error=None,
                 exit_code=None,
             )
@@ -1949,7 +1931,6 @@ def test_list_tasks_surfaces_latest_failed_attempt_after_retry(service, state):
     # The task reads as running, but its latest failure is still surfaced.
     assert proto.state == job_pb2.TASK_STATE_RUNNING
     assert proto.current_attempt_id == 2
-    assert proto.failure_count == 2
     by_id = {a.attempt_id: a for a in proto.attempts}
     # Only the latest failed attempt (1) plus the current attempt (2): the older
     # failure (0) is dropped so a long retry loop stays bounded.

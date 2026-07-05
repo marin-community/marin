@@ -136,7 +136,6 @@ def transition_task_to_state(state: ControllerTestState, task, new_state: int) -
                 )
             ],
             health=state._health,
-            endpoints=state._endpoints,
             now=Timestamp.now(),
         )
 

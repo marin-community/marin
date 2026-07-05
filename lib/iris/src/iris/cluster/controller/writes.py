@@ -6,9 +6,9 @@
 The :func:`writes_to` decorator records the table set on the function as
 ``fn.writes_to`` / ``fn.cascades_into`` and appends the function to
 :data:`REGISTERED_WRITE_FUNCTIONS`. :func:`validate` cross-checks that
-registry against the ``PROJECTIONS`` list to verify no Projection-owned
+registry against the ``db.caches`` registry to verify no Projection-owned
 table is written outside its owning Projection. Controller startup calls
-:func:`validate`; tests call it after registering their fixtures.
+:func:`validate`; tests call it after constructing projections.
 
 Areas covered:
   jobs           — jobs, job_config, meta sequence
@@ -27,8 +27,8 @@ from sqlalchemy import Table, bindparam, case, delete, func, insert, select, tex
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.exc import IntegrityError
 
+from iris.cluster.controller.caches import CacheRegistry
 from iris.cluster.controller.db import Tx
-from iris.cluster.controller.projections import PROJECTIONS
 from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
 from iris.cluster.controller.schema import (
     federated_jobs_table,
@@ -64,7 +64,7 @@ class ConfigurationError(RuntimeError):
     """
 
 
-def validate() -> None:
+def validate(caches: CacheRegistry) -> None:
     """Check that no Projection-owned table is mutated outside its owning Projection.
 
     For projection-owned tables, all SQL mutations must flow through the
@@ -80,14 +80,17 @@ def validate() -> None:
     ``cascades_into`` declaration so the linkage is documented at the
     call site rather than buried in the decorator metadata.
 
-    Called from controller startup once both registries are populated.
+    Called from controller startup after all projections are constructed.
+
+    Args:
+        caches: The DB's cache registry, populated by projection constructors.
 
     Raises:
         ConfigurationError: when a violation is detected.
     """
     owned: dict[Table, type] = {}
-    for projection in PROJECTIONS:
-        for table in projection.sources:
+    for projection in caches:
+        for table in projection.owns:
             owned[table] = type(projection)
 
     violations: list[str] = []
@@ -582,8 +585,6 @@ def task_row(
         "finished_at_ms": None,
         "max_retries_failure": max_retries_failure,
         "max_retries_preemption": max_retries_preemption,
-        "failure_count": 0,
-        "preemption_count": 0,
         "current_attempt_id": -1,
         "priority_neg_depth": priority_neg_depth,
         "priority_root_submitted_ms": priority_root_submitted_ms,
@@ -699,16 +700,10 @@ def remove_worker(
     tx: Tx,
     worker_id: WorkerId,
     health: WorkerHealthTracker,
-    worker_attrs: WorkerAttrsProjection,
 ) -> None:
     """Delete a worker row and clear back-references on attempts / tasks.
 
     ``cascades_into`` records the FK fanout to ``task_attempts``.
-    The cascade into ``worker_attributes`` is Projection-owned and therefore
-    not declared on the decorator; instead this function calls
-    :meth:`WorkerAttrsProjection.invalidate_for_worker` inline so the
-    cache update commits under the same write lock as the SQL.
-
     The pre-emptive ``UPDATE`` on ``task_attempts`` / ``tasks`` sets
     ``current_worker_*`` to NULL before the delete so the row history
     is observable to readers in the same write transaction.
@@ -716,7 +711,7 @@ def remove_worker(
     tx.execute(update(task_attempts_table).where(task_attempts_table.c.worker_id == worker_id).values(worker_id=None))
     tx.execute(update(tasks_table).where(tasks_table.c.current_worker_id == worker_id).values(current_worker_id=None))
     tx.execute(delete(workers_table).where(workers_table.c.worker_id == worker_id))
-    worker_attrs.invalidate_for_worker(tx, worker_id)
+    tx.caches[WorkerAttrsProjection].invalidate_for_worker(tx, worker_id)
     tx.register(lambda: health.forget(worker_id))
 
 
@@ -846,8 +841,6 @@ def mirror_federated_task(
     submitted_at_ms: int | None,
     started_at_ms: int | None,
     finished_at_ms: int | None,
-    failure_count: int,
-    preemption_count: int,
     current_attempt_id: int,
     worker_address: str,
     peer_worker_label: str,
@@ -856,9 +849,11 @@ def mirror_federated_task(
 
     Priority/retry columns are placeholders — a federated task is fold-excluded
     and never scheduled locally — so only the display fields the task views read
-    are meaningful. ``submitted_at_ms`` and ``preemption_count`` carry the peer's
-    real values so a not-yet-started task keeps its true submit time (not epoch 0)
-    and preemptions on the peer survive the mirror.
+    are meaningful. ``submitted_at_ms`` carries the peer's real value so a
+    not-yet-started task keeps its true submit time (not epoch 0). Failure and
+    preemption counts are NOT mirrored as scalars: the parent derives them from
+    the mirrored attempt rows (:func:`mirror_federated_attempts`), so they stay
+    consistent with the peer without a second source of truth on the wire.
     """
     tx.execute(
         sqlite_insert(tasks_table)
@@ -874,8 +869,6 @@ def mirror_federated_task(
             finished_at_ms=finished_at_ms,
             max_retries_failure=0,
             max_retries_preemption=0,
-            failure_count=failure_count,
-            preemption_count=preemption_count,
             current_attempt_id=current_attempt_id,
             current_worker_id=None,
             current_worker_address=worker_address,
@@ -894,8 +887,6 @@ def mirror_federated_task(
                 "submitted_at_ms": submitted_at_ms or 0,
                 "started_at_ms": started_at_ms,
                 "finished_at_ms": finished_at_ms,
-                "failure_count": failure_count,
-                "preemption_count": preemption_count,
                 "current_attempt_id": current_attempt_id,
                 "current_worker_address": worker_address,
                 "cluster": peer_id,

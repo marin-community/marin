@@ -7,7 +7,7 @@ import functools
 import logging
 import os
 from collections.abc import Callable, Mapping, Sequence
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from functools import cached_property
 from typing import Literal, NotRequired, TypeAlias, TypeVar, TypedDict
@@ -607,6 +607,13 @@ DEFAULT_LM_DATA_SHUFFLE = BlockShuffleConfig(
 """Default hierarchical block-shuffle policy for LM training data."""
 
 
+# A classified dataset component from `build_caches`: (name, loaded cache, deferred
+# build args). Exactly one of the two trailing fields is non-None.
+_ClassifiedComponent: TypeAlias = tuple[
+    str, "TreeCache[dict] | None", "tuple[str, ShardedDataSource, LmDatasetFormatBase] | None"
+]
+
+
 @dataclass(frozen=True)
 class LmDataConfig:
     """Unified LM data config built from components."""
@@ -917,9 +924,7 @@ class LmDataConfig:
         # multiple of those concurrently can cross-wire status broadcasts or
         # hang. Classify each component in the pool, then build any misses
         # serially in the original component order.
-        def _load_or_defer(
-            item: tuple[str, "DatasetComponent"],
-        ) -> tuple[str, TreeCache[dict] | None, tuple[str, ShardedDataSource, LmDatasetFormatBase] | None]:
+        def _load_or_defer(item: tuple[str, "DatasetComponent"]) -> _ClassifiedComponent:
             name, component = item
             cache_root = _component_cache_dir(name, component, self.cache_dir)
             if component.flat_cache:
@@ -968,15 +973,28 @@ class LmDataConfig:
         caches: dict[str, TreeCache[dict]] = {}
         to_build: list[tuple[str, tuple[str, ShardedDataSource, LmDatasetFormatBase]]] = []
         max_workers = min(32, len(items))
+        classified: dict[int, _ClassifiedComponent] = {}
         with (
             log_time(f"build_caches[{split}] over {len(items)} components"),
             ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="build_caches") as pool,
         ):
-            for name, cache, build_args in pool.map(_load_or_defer, items):
-                if cache is not None:
-                    caches[name] = cache
-                elif build_args is not None:
-                    to_build.append((name, build_args))
+            # Consume results as each future completes rather than in submission
+            # order (`pool.map`), so a worker that raises — e.g. a tokenizer
+            # staging failure — surfaces immediately and aborts the process
+            # instead of being stranded behind a slower sibling's still-pending
+            # load. Key by submission index so the serial build below runs in the
+            # original component order, which must be identical across hosts for
+            # `_distributed_build_cache`'s dispatch-order-paired collectives.
+            index_of = {pool.submit(_load_or_defer, item): index for index, item in enumerate(items)}
+            for future in as_completed(index_of):
+                classified[index_of[future]] = future.result()
+
+        for index in range(len(items)):
+            name, cache, build_args = classified[index]
+            if cache is not None:
+                caches[name] = cache
+            elif build_args is not None:
+                to_build.append((name, build_args))
 
         for name, (cache_path, shard_source, fmt) in to_build:
             caches[name] = build_lm_dataset_cache(

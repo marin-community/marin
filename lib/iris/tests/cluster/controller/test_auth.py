@@ -33,7 +33,6 @@ from iris.cluster.controller.dashboard import (
 )
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.endpoint_service import EndpointServiceImpl
-from iris.cluster.controller.projections.endpoints import EndpointsProjection
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.types import DEFAULT_BACKEND_ID
 from iris.rpc import job_pb2
@@ -75,7 +74,6 @@ def _jwt_manager() -> JwtTokenManager:
 
 def _make_service(db, log_client, auth=None):
     """A ControllerServiceImpl with minimal deps for login / auth-setup tests."""
-    endpoints = EndpointsProjection(db)
     controller_mock = Mock()
     controller_mock.wake = Mock()
     controller_mock.get_job_scheduling_diagnostics = Mock(return_value="")
@@ -88,9 +86,8 @@ def _make_service(db, log_client, auth=None):
         bundle_store=BundleStore(storage_dir=str(db.db_path.parent / "bundles")),
         log_client=log_client,
         db=db,
-        endpoints=endpoints,
         auth=auth or ControllerAuth(),
-        endpoint_service=EndpointServiceImpl(db=db, endpoints=endpoints),
+        endpoint_service=EndpointServiceImpl(db=db),
     )
 
 
@@ -125,8 +122,7 @@ def service(state, tmp_path, log_client):
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
         log_client=log_client,
         db=state._db,
-        endpoints=state._endpoints,
-        endpoint_service=EndpointServiceImpl(db=state._db, endpoints=state._endpoints),
+        endpoint_service=EndpointServiceImpl(db=state._db),
     )
 
 

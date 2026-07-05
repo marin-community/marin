@@ -664,7 +664,7 @@ def test_iris_env_vars_injected():
     manifest = _build_pod_manifest(req, pod_config(controller_address="http://ctrl:8080"))
 
     env_by_name = {e["name"]: e for e in manifest["spec"]["containers"][0]["env"]}
-    assert env_by_name["IRIS_TASK_ID"]["value"] == "/test-job/0"
+    assert env_by_name["IRIS_TASK_ID"]["value"] == "/test-job/0:0"
     assert env_by_name["IRIS_NUM_TASKS"]["value"] == "4"
     assert env_by_name["IRIS_BUNDLE_ID"]["value"] == "bundle-abc"
     assert env_by_name["IRIS_CONTROLLER_ADDRESS"]["value"] == "http://ctrl:8080"
@@ -706,7 +706,7 @@ def test_iris_env_overrides_user_env():
     manifest = _build_pod_manifest(req, pod_config())
 
     env_by_name = {e["name"]: e.get("value") for e in manifest["spec"]["containers"][0]["env"]}
-    assert env_by_name["IRIS_TASK_ID"] == "/test-job/0"
+    assert env_by_name["IRIS_TASK_ID"] == "/test-job/0:0"
 
 
 def test_task_script_runs_each_setup_command_before_exec():
@@ -754,11 +754,11 @@ def test_build_common_iris_env_includes_attempt_suffix_on_retry():
     assert env["IRIS_TASK_ID"] == "/test-job/0:3"
 
 
-def test_build_common_iris_env_no_attempt_suffix_for_first_attempt():
-    """IRIS_TASK_ID has no suffix when attempt_id is 0."""
+def test_build_common_iris_env_includes_attempt_suffix_for_first_attempt():
+    """IRIS_TASK_ID carries the :0 suffix on the first attempt, matching retries."""
     req = make_run_req("/test-job/0", attempt_id=0)
     env = common_env_from_req(req, controller_address=None)
-    assert env["IRIS_TASK_ID"] == "/test-job/0"
+    assert env["IRIS_TASK_ID"] == "/test-job/0:0"
 
 
 # ---------------------------------------------------------------------------

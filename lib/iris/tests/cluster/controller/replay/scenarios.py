@@ -301,8 +301,6 @@ def scenario_worker_failure_cascade(transitions: ControllerTestState, clock: Fro
         worker_ids=[str(worker_id)],
         reason="node lost",
         health=transitions._health,
-        endpoints=transitions._endpoints,
-        worker_attrs=transitions._worker_attrs,
     )
 
 
@@ -517,7 +515,6 @@ def scenario_prune_old_data(transitions: ControllerTestState, clock: FrozenClock
     prune_old_data(
         transitions._db,
         worker_daemon_backends_for_prune(transitions),
-        transitions._endpoints,
         job_retention=Duration.from_seconds(0),
         worker_retention=Duration.from_seconds(3600),
         slice_retention=Duration.from_seconds(3600),

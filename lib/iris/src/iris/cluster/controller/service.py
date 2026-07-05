@@ -54,11 +54,10 @@ from iris.cluster.controller.codec import (
 )
 from iris.cluster.controller.db import ControllerDB, Tx
 from iris.cluster.controller.endpoint_service import EndpointServiceImpl
-from iris.cluster.controller.projections.endpoints import EndpointsProjection
+from iris.cluster.controller.projections.attempt_counts import AttemptCountsProjection
 from iris.cluster.controller.reads import TaskJobSummary
 from iris.cluster.controller.reconcile.policy import MAX_ACTIVE_TASKS_PER_USER
 from iris.cluster.controller.reconcile.task import TerminalKind
-from iris.cluster.controller.run_template import RunTemplateCache
 from iris.cluster.controller.scheduling.scheduler import SchedulingContext
 from iris.cluster.controller.schema import (
     job_config_table,
@@ -244,8 +243,6 @@ class TaskWithAttempts:
     job_id: JobName
     state: int
     current_attempt_id: int
-    failure_count: int
-    preemption_count: int
     max_retries_failure: int
     max_retries_preemption: int
     submitted_at_ms: Timestamp
@@ -266,14 +263,16 @@ class TaskWithAttempts:
 
     @classmethod
     def from_row(cls, row, attempts: tuple[Any, ...]) -> "TaskWithAttempts":
-        """Build from an SA Row (matching TASK_DETAIL_COLS + peer_worker_label) plus attempt rows."""
+        """Build from an SA Row (matching TASK_DETAIL_COLS + peer_worker_label) plus attempt rows.
+
+        Per-task failure/preemption counts are not carried: clients derive them
+        from ``attempts``.
+        """
         return cls(
             task_id=row.task_id,
             job_id=row.job_id,
             state=row.state,
             current_attempt_id=row.current_attempt_id,
-            failure_count=row.failure_count,
-            preemption_count=row.preemption_count,
             max_retries_failure=row.max_retries_failure,
             max_retries_preemption=row.max_retries_preemption,
             submitted_at_ms=row.submitted_at_ms,
@@ -356,8 +355,6 @@ def task_to_proto(task: TaskWithAttempts, worker_address: str = "") -> job_pb2.T
         error=task.error or "",
         current_attempt_id=task.current_attempt_id,
         attempts=attempts,
-        failure_count=task.failure_count,
-        preemption_count=task.preemption_count,
         backend_id=task.backend_id,
         cluster=task.cluster,
     )
@@ -985,9 +982,6 @@ class ControllerProtocol(Protocol):
     @property
     def capabilities(self) -> frozenset[BackendCapability]: ...
 
-    @property
-    def run_template_cache(self) -> RunTemplateCache: ...
-
     def backend_id_for_scale_group(self, scale_group: str) -> str: ...
 
     def all_liveness(self) -> dict[WorkerId, WorkerLiveness]: ...
@@ -1043,7 +1037,6 @@ class ControllerServiceImpl:
         bundle_store: Bundle store for zip storage.
         log_client: LogClient for reading task logs through LogService.FetchLogs.
         db: Underlying database connection.
-        endpoints: Endpoint projection (in-memory cache over the endpoints table).
     """
 
     def __init__(
@@ -1053,13 +1046,14 @@ class ControllerServiceImpl:
         log_client: LogClient,
         *,
         db: ControllerDB,
-        endpoints: EndpointsProjection,
         endpoint_service: EndpointServiceImpl,
         auth: ControllerAuth | None = None,
         user_budget_defaults: UserBudgetDefaults | None = None,
     ):
+        # Every cursor this DB mints carries the per-controller cache registry as
+        # ``tx.caches``, so cache-touching reads/writes reach the derived-count memo
+        # and the endpoint projection through the cursor — no cache reference held.
         self._db = db
-        self._endpoints = endpoints
         # The leased registry owns endpoint logic; the legacy
         # ControllerService.{Register,Unregister,List}Endpoint RPCs delegate here.
         self._endpoint_service = endpoint_service
@@ -1390,7 +1384,6 @@ class ControllerServiceImpl:
                             cur,
                             job_id=job_id,
                             reason="Replaced by new submission",
-                            endpoints=self._endpoints,
                         )
                         # Cancel is a producer transition: attempts stay
                         # unfinished until the worker confirms termination.
@@ -1585,7 +1578,6 @@ class ControllerServiceImpl:
                 job_id=job_id,
                 request=request,
                 ts=Timestamp.now(),
-                run_template_cache=self._controller.run_template_cache,
             )
         self._controller.wake()
 
@@ -1610,8 +1602,11 @@ class ControllerServiceImpl:
             job = reads.get_job_detail(q, JobName.from_wire(request.job_id))
             if not job:
                 raise ConnectError(Code.NOT_FOUND, f"Job {request.job_id} not found")
-            # Aggregate task counts via a single GROUP BY query.
-            summaries = reads.task_summaries_for_jobs(q, {job.job_id})
+            # Aggregate task counts via a single GROUP BY query; failure/preemption
+            # totals come from the attempt-derived cache.
+            summaries = reads.task_summaries_for_jobs(
+                q, {job.job_id}, attempt_counts=q.caches[AttemptCountsProjection].get_jobs(q, [job.job_id])
+            )
             has_children = bool(reads.parent_ids_with_children(q, [job.job_id]))
             # A federated job's subtree lives on the peer; load the handle to surface
             # its handoff posture in the pending reason.
@@ -1725,7 +1720,6 @@ class ControllerServiceImpl:
                 cur,
                 job_id=job_id,
                 reason="Terminated by user",
-                endpoints=self._endpoints,
             )
         # The next polling tick reconciles each affected worker; the
         # cancellation appears in the desired-set diff so the worker stops
@@ -1820,7 +1814,13 @@ class ControllerServiceImpl:
         with self._db.read_snapshot() as q:
             page, total_count = _query_jobs(q, query, state_ids)
             page_ids = [j.job_id for j in page]
-            summaries = reads.task_summaries_for_jobs(q, set(page_ids)) if page_ids else {}
+            summaries = (
+                reads.task_summaries_for_jobs(
+                    q, set(page_ids), attempt_counts=q.caches[AttemptCountsProjection].get_jobs(q, page_ids)
+                )
+                if page_ids
+                else {}
+            )
             children = reads.parent_ids_with_children(q, page_ids) if page_ids else set()
             # Batch-load the SENT handoff state for the federated jobs on this page
             # so each JobStatus carries its handoff posture without a per-job read.
@@ -2030,14 +2030,9 @@ class ControllerServiceImpl:
             )
         worker_id = WorkerId(request.worker_id)
 
-        # Route the worker into the liveness tracker and attributes projection owned
-        # by the backend that owns its scale group; a worker never registers into a
-        # k8s scale group.
         backend = self._backend_for_id(self._controller.backend_id_for_scale_group(request.scale_group))
         health = backend.health
-        worker_attrs = backend.worker_attrs
         assert health is not None, f"worker {worker_id} registered into a scale group with no liveness tracker"
-        assert worker_attrs is not None, f"worker {worker_id} registered into a scale group with no attrs projection"
         with self._db.transaction() as cur:
             ops.worker.register(
                 cur,
@@ -2046,7 +2041,6 @@ class ControllerServiceImpl:
                 metadata=request.metadata,
                 ts=Timestamp.now(),
                 health=health,
-                worker_attrs=worker_attrs,
                 slice_id=request.slice_id,
                 scale_group=request.scale_group,
             )
@@ -3058,9 +3052,11 @@ class ControllerServiceImpl:
         require_identity()
         return controller_pb2.Controller.ListPeersResponse(peers=self._controller.federation.peer_summaries())
 
-    def _federated_job_summary(self, q, job) -> job_pb2.JobStatus:
+    def _federated_job_summary(self, q: Tx, job) -> job_pb2.JobStatus:
         """A ``JobStatus`` for a handed-off job as this peer holds it (sync summary)."""
-        summaries = reads.task_summaries_for_jobs(q, {job.job_id})
+        summaries = reads.task_summaries_for_jobs(
+            q, {job.job_id}, attempt_counts=q.caches[AttemptCountsProjection].get_jobs(q, [job.job_id])
+        )
         status = job_pb2.JobStatus(
             job_id=job.job_id.to_wire(),
             state=job.state,

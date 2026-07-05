@@ -54,7 +54,6 @@ from iris.cluster.backends.rpc.backend import (
     RpcTaskBackend,
     RpcWorkerStubFactory,
 )
-from iris.cluster.controller import db as db_mod
 from iris.cluster.controller import ops, reads
 from iris.cluster.controller.backend import (
     AutoscaleRequest,
@@ -82,13 +81,12 @@ from iris.cluster.controller.log_stack import build_log_stack
 from iris.cluster.controller.ops.task import Assignment
 from iris.cluster.controller.ops.worker import apply_reconcile
 from iris.cluster.controller.projections.endpoints import EndpointQuery, EndpointRow, EndpointsProjection
-from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
+from iris.cluster.controller.projections.run_templates import RunTemplatesProjection
 from iris.cluster.controller.reads import (  # noqa: F401
     ControlSnapshot,
     SchedulableWorker,
     healthy_active_workers_with_attributes,
 )
-from iris.cluster.controller.reconcile import dispatch
 from iris.cluster.controller.reconcile.commit import commit_effects
 from iris.cluster.controller.reconcile.worker import (
     ReconcileInputs,
@@ -97,7 +95,6 @@ from iris.cluster.controller.reconcile.worker import (
     WorkerReconcileResult,
     build_reconcile_plans,
 )
-from iris.cluster.controller.run_template import new_run_template_cache
 from iris.cluster.controller.scheduling.policy import build_scheduling_context, compute_demand_entries
 from iris.cluster.controller.scheduling.scheduler import Scheduler
 from iris.cluster.controller.schema import (
@@ -183,7 +180,6 @@ class _FakeProvider:
         self._scheduler = Scheduler()
         self._store: BackendWorkerStore | None = None
         self.health: WorkerHealthTracker = WorkerHealthTracker()
-        self.worker_attrs: WorkerAttrsProjection | None = None
         self.advertised: dict[str, set[str]] = {}
         self.allowed_users: frozenset[str] = frozenset({"*"})
         self._pending_dead: list[WorkerId] = []
@@ -214,14 +210,10 @@ class _FakeProvider:
         raise RuntimeError("fake provider")
 
     def bind_runtime(self, runtime: BackendRuntime) -> None:
-        self.worker_attrs = WorkerAttrsProjection(runtime.db, owns_scale_group=runtime.owns_scale_group)
         self._store = DbBackendWorkerStore(
             db=runtime.db,
             owns_scale_group=runtime.owns_scale_group,
             health=self.health,
-            worker_attrs=self.worker_attrs,
-            endpoints=runtime.endpoints,
-            run_template_cache=runtime.run_template_cache,
             defaults=runtime.budget_defaults,
             autoscale=self.autoscale,
         )
@@ -1225,7 +1217,7 @@ def benchmark_scheduling(db: ControllerDB) -> None:
     # ---- resource_usage_by_worker (NEW): full join over unfinished
     #      worker-bound attempts. Runs every scheduling tick. ----
     def _usage_new():
-        with db_mod.read_snapshot(db.sa_read_engine) as snap:
+        with db.read_snapshot() as snap:
             reads.resource_usage_by_worker(snap)
 
     bench("Scheduling: resource_usage_by_worker (NEW derived query)", _usage_new)
@@ -1253,7 +1245,7 @@ def benchmark_scheduling(db: ControllerDB) -> None:
             reads.pending_tasks_with_jobs(_ptx)
         with db.read_snapshot() as _rtx:
             ws = reads.healthy_active_workers_with_attributes(_rtx, health, _NoAttrs())
-        with db_mod.read_snapshot(db.sa_read_engine) as snap:
+        with db.read_snapshot() as snap:
             usage = reads.resource_usage_by_worker(snap)
         return ws, usage
 
@@ -1363,7 +1355,7 @@ def benchmark_polling(db: ControllerDB) -> None:
     """
     health = WorkerHealthTracker()
     _seed_health(db, health)
-    txns = ControllerTestState(db, health=health)
+    _ = ControllerTestState(db, health=health)
 
     with db.read_snapshot() as snap:
         addresses = reads.list_active_healthy_workers(snap, health)
@@ -1386,7 +1378,7 @@ def benchmark_polling(db: ControllerDB) -> None:
 
         def _reconcile(_ids=ids):
             target_ids = set(_ids)
-            with db_mod.read_snapshot(db.sa_read_engine) as snap:
+            with db.read_snapshot() as snap:
                 # Worker filter applied in Python to keep the partial index
                 # ``idx_task_attempts_live_workerbound`` in play (a long IN
                 # list on worker_id degrades to a scan).
@@ -1444,7 +1436,7 @@ def benchmark_polling(db: ControllerDB) -> None:
 
     bench("Polling: poll_all_workers (pre-Jumbo single-shot read)", _poll_all_pre_jumbo)
 
-    # ---- run_request_template (cached): dominates ASSIGNED rows in the tick. ----
+    # ---- RunTemplatesProjection.get (cached): dominates ASSIGNED rows in the tick. ----
     _active_states = [job_pb2.TASK_STATE_ASSIGNED, job_pb2.TASK_STATE_BUILDING, job_pb2.TASK_STATE_RUNNING]
     with db.read_snapshot() as _rtx:
         rows = _rtx.execute(
@@ -1460,22 +1452,23 @@ def benchmark_polling(db: ControllerDB) -> None:
         first_job = sample_job_ids[0]
 
         def _template_first():
-            # Fresh cache to defeat the LRU cache on every call.
-            cold_cache = new_run_template_cache()
+            # Invalidate to defeat the cache on every call.
+            with db.transaction() as cur:
+                db.caches[RunTemplatesProjection].invalidate_for_job(cur, first_job)
             with db.read_snapshot() as snap:
-                dispatch.run_request_template(cold_cache, snap, first_job)
+                snap.caches[RunTemplatesProjection].get(snap, first_job)
 
-        bench("Polling: run_request_template (cold, per-job build)", _template_first)
+        bench("Polling: run_templates_projection.get (cold, per-job build)", _template_first)
 
         # Warm cache: same job repeatedly.
         with db.read_snapshot() as snap:
-            dispatch.run_request_template(txns._run_template_cache, snap, first_job)
+            snap.caches[RunTemplatesProjection].get(snap, first_job)
 
         def _template_warm():
             with db.read_snapshot() as snap:
-                dispatch.run_request_template(txns._run_template_cache, snap, first_job)
+                snap.caches[RunTemplatesProjection].get(snap, first_job)
 
-        bench("Polling: run_request_template (cached hit)", _template_warm)
+        bench("Polling: run_templates_projection.get (cached hit)", _template_warm)
 
     # ---- has_unfinished_worker_attempts: drain gate for job replacement. ----
     # Walks the parent_job_id subtree. Pick a depth=1 job with active subtree
@@ -1496,7 +1489,7 @@ def benchmark_polling(db: ControllerDB) -> None:
         drain_jid = drain_row.job_id
 
         def _has_unfinished():
-            with db_mod.read_snapshot(db.sa_read_engine) as snap:
+            with db.read_snapshot() as snap:
                 reads.has_unfinished_worker_attempts(snap, drain_jid)
 
         bench("Polling: has_unfinished_worker_attempts (drain gate)", _has_unfinished)
@@ -1605,8 +1598,7 @@ def benchmark_endpoints(db: ControllerDB) -> None:
     )
 
     write_db = clone_db(db)
-    write_endpoints = EndpointsProjection(write_db)
-    write_txns = ControllerTestState(write_db, endpoints=write_endpoints)
+    write_txns = ControllerTestState(write_db)
     # ops.worker.fail only acts on workers the tracker considers active.
     _seed_health(write_db, write_txns._health)
 
@@ -1619,7 +1611,7 @@ def benchmark_endpoints(db: ControllerDB) -> None:
         def _reset_endpoints():
             with write_db.transaction() as _tx:
                 _tx.execute(text("DELETE FROM endpoints WHERE name LIKE '/bench/endpoint/%'"))
-            write_endpoints.rehydrate()
+            write_txns._endpoints.rehydrate()
 
         for burst_n in (50, 200):
             if len(sample) < burst_n:
@@ -1629,7 +1621,7 @@ def benchmark_endpoints(db: ControllerDB) -> None:
             def _per_txn(tasks=tasks_for_burst):
                 for t, aid in tasks:
                     with write_db.transaction() as cur:
-                        write_endpoints.add(cur, _make_endpoint(t, aid))
+                        write_txns._endpoints.add(cur, _make_endpoint(t, aid))
 
             bench(
                 f"Endpoints: add_endpoint burst x{burst_n} (per-txn, WRITE)",
@@ -1642,7 +1634,7 @@ def benchmark_endpoints(db: ControllerDB) -> None:
             def _one_txn(tasks=tasks_for_burst):
                 with write_db.transaction() as cur:
                     for t, aid in tasks:
-                        write_endpoints.add(cur, _make_endpoint(t, aid))
+                        write_txns._endpoints.add(cur, _make_endpoint(t, aid))
 
             bench(
                 f"Endpoints: add_endpoint burst x{burst_n} (1 txn, WRITE)",
@@ -1710,12 +1702,10 @@ def benchmark_endpoints(db: ControllerDB) -> None:
             bench(
                 f"Endpoints: fail_workers x{fail_n} (slice-reap, WRITE)",
                 lambda wids=[str(w) for w in target_wids]: ops.worker.fail(
-                    write_db,
+                    write_txns._db,
                     worker_ids=wids,
                     reason="benchmark: simulated provider-sync failure",
                     health=write_txns._health,
-                    endpoints=write_txns._endpoints,
-                    worker_attrs=write_txns._worker_attrs,
                 ),
                 reset=_reset_fail,
                 min_runs=3,
@@ -1795,10 +1785,10 @@ def _run_apply_under_contention(
         try:
             while not stop.is_set():
                 t0 = time.perf_counter()
-                with write_db.transaction() as cur:
+                with write_txns._db.transaction() as cur:
                     now = Timestamp.now()
                     effects = apply_reconcile(CursorTransitionReader(cur), plan_results, now=now)
-                    commit_effects(cur, effects, endpoints=write_txns._endpoints)
+                    commit_effects(cur, effects)
                 victim_latencies.append((time.perf_counter() - t0) * 1000)
         except BaseException as e:
             errors.append(e)
@@ -1811,12 +1801,10 @@ def _run_apply_under_contention(
                     # fail_chunk is ignored: chunking is now a fixed module
                     # constant (FAIL_WORKERS_CHUNK_SIZE) in ops.worker.fail.
                     ops.worker.fail(
-                        write_db,
+                        write_txns._db,
                         worker_ids=[str(wid) for wid, _addr, _reason in failures],
                         reason="benchmark: simulated provider-sync failure",
                         health=write_txns._health,
-                        endpoints=write_txns._endpoints,
-                        worker_attrs=write_txns._worker_attrs,
                     )
                 stop.wait(fail_interval_s)
         except BaseException as e:
@@ -1836,7 +1824,6 @@ def _run_apply_under_contention(
                             metadata=meta,
                             ts=Timestamp.now(),
                             health=write_txns._health,
-                            worker_attrs=write_txns._worker_attrs,
                             slice_id="",
                             scale_group="bench",
                         )
@@ -1951,14 +1938,14 @@ def _measure_connection_checkout(engine) -> float:
     return checkout_ms
 
 
-def _dashboard_storm_read(engine, slow: bool, sample_job_id: str | None) -> None:
+def _dashboard_storm_read(db, slow: bool, sample_job_id: str | None) -> None:
     """One RPC-shaped read against the shared pool.
 
     ``slow`` runs the ``GetSchedulerState`` pending+running aggregation (seconds
     on the prod DB — these are what occupy every shared connection and head-of-
     line block the dashboard); otherwise a single-job ``GetJobState``-shape read.
     """
-    with db_mod.read_snapshot(engine) as snap:
+    with db.read_snapshot() as snap:
         if slow:
             snap.execute(
                 select(tasks_table.c.task_id, tasks_table.c.priority_band, tasks_table.c.submitted_at_ms).where(
@@ -2005,7 +1992,7 @@ def _run_control_read_under_storm(
         i = 0
         try:
             while not stop.is_set():
-                _dashboard_storm_read(db.sa_read_engine, slow=(i % slow_every == 0), sample_job_id=sample_job_id)
+                _dashboard_storm_read(db, slow=(i % slow_every == 0), sample_job_id=sample_job_id)
                 i += 1
         except BaseException as e:
             errors.append(e)
@@ -2508,14 +2495,13 @@ def _build_synthetic_reconcile_state(
                     metadata=meta,
                     ts=now,
                     health=txns._health,
-                    worker_attrs=txns._worker_attrs,
                     slice_id="",
                     scale_group="bench",
                 )
     health.heartbeat(worker_ids, now.epoch_ms())
 
     with db.transaction() as cur:
-        ops.job.submit(cur, job_id=job_id, request=request, ts=now, run_template_cache=txns._run_template_cache)
+        ops.job.submit(cur, job_id=job_id, request=request, ts=now)
 
     with db.read_snapshot() as tx:
         task_rows = tx.execute(
@@ -2674,7 +2660,6 @@ def _snapshot_reconcile_inputs(state: SyntheticReconcileState) -> tuple[Reconcil
     """Replicate ``controller._snapshot_reconcile_inputs`` against the synthetic DB."""
     db = state.db
     health = state.health
-    txns = state.txns
     with db.read_snapshot() as snap:
         addresses = reads.list_active_healthy_workers(snap, health)
         if not addresses:
@@ -2709,7 +2694,7 @@ def _snapshot_reconcile_inputs(state: SyntheticReconcileState) -> tuple[Reconcil
             if row.task_state != job_pb2.TASK_STATE_ASSIGNED:
                 continue
             if row.job_id not in templates_by_job:
-                templates_by_job[row.job_id] = dispatch.run_request_template(txns._run_template_cache, snap, row.job_id)
+                templates_by_job[row.job_id] = snap.caches[RunTemplatesProjection].get(snap, row.job_id)
 
     rows_by_worker: dict[WorkerId, list[ReconcileRow]] = {wid: [] for wid in worker_ids}
     for row in rows:
@@ -2776,9 +2761,9 @@ def _one_reconcile_tick(state: SyntheticReconcileState, provider: RpcTaskBackend
     worker_results = provider._observe_fleet().worker_results
     t3 = time.perf_counter()
     now = Timestamp.now()
-    with state.db.transaction() as cur:
+    with state.txns._db.transaction() as cur:
         effects = apply_reconcile(CursorTransitionReader(cur), worker_results, now=now)
-        commit_effects(cur, effects, endpoints=state.txns._endpoints)
+        commit_effects(cur, effects)
     t4 = time.perf_counter()
     return (t1 - t0) * 1000, (t2 - t1) * 1000, (t3 - t2) * 1000, (t4 - t3) * 1000
 

@@ -49,7 +49,7 @@ from iris.time_proto import timestamp_to_proto
 from rigging.server_auth import RequestAuthPolicy
 from rigging.testing import MockVerifier
 from rigging.timing import Timestamp
-from sqlalchemy import func, select
+from sqlalchemy import func, insert, select
 from sqlalchemy import update as sa_update
 from starlette.testclient import TestClient
 from tests.cluster.controller._test_support import ControllerTestState
@@ -79,9 +79,7 @@ def submit_job(
     jid = JobName.from_string(job_id) if job_id.startswith("/") else JobName.root("test-user", job_id)
     request.name = jid.to_wire()
     with state._db.transaction() as cur:
-        ops.job.submit(
-            cur, job_id=jid, request=request, ts=Timestamp.now(), run_template_cache=state._run_template_cache
-        )
+        ops.job.submit(cur, job_id=jid, request=request, ts=Timestamp.now())
     return jid
 
 
@@ -103,16 +101,44 @@ def set_task_retry_counts(
     failure_count: int | None = None,
     preemption_count: int | None = None,
 ) -> None:
-    """Directly set retry counters in DB for read-model aggregate tests."""
-    values: dict = {}
-    if failure_count is not None:
-        values["failure_count"] = failure_count
-    if preemption_count is not None:
-        values["preemption_count"] = preemption_count
-    if not values:
+    """Give ``task_id`` an attempt history yielding the requested derived counts.
+
+    Retry counters are derived from ``task_attempts`` (there are no stored count
+    columns), so this appends terminal attempt rows: ``failure_count`` FAILED
+    attempts and ``preemption_count`` executing-phase WORKER_FAILED attempts
+    (``started_at`` set marks the executing phase that charges the preemption
+    budget).
+    """
+    fc = failure_count or 0
+    pc = preemption_count or 0
+    if fc == 0 and pc == 0:
         return
     with state._db.transaction() as tx:
-        tx.execute(sa_update(tasks_table).where(tasks_table.c.task_id == task_id).values(**values))
+        next_id = int(
+            tx.execute(
+                select(func.coalesce(func.max(task_attempts_table.c.attempt_id), -1)).where(
+                    task_attempts_table.c.task_id == task_id
+                )
+            ).scalar()
+            or -1
+        )
+        rows: list[dict] = []
+        for state_value, count in ((job_pb2.TASK_STATE_FAILED, fc), (job_pb2.TASK_STATE_WORKER_FAILED, pc)):
+            for _ in range(count):
+                next_id += 1
+                rows.append(
+                    {
+                        "task_id": task_id,
+                        "attempt_id": next_id,
+                        "worker_id": None,
+                        "state": state_value,
+                        "created_at_ms": 0,
+                        "started_at_ms": 1,
+                        "finished_at_ms": 2,
+                        "attempt_uid": f"{task_id.to_wire()}:{next_id}",
+                    }
+                )
+        tx.execute(insert(task_attempts_table), rows)
 
 
 def set_task_state(state: ControllerTestState, task_id: JobName, new_state: int) -> None:
@@ -141,8 +167,6 @@ def _worker_backend(state, autoscaler, backend_id=DEFAULT_BACKEND_ID):
         BackendRuntime(
             backend_id=backend_id,
             db=state._db,
-            endpoints=state._endpoints,
-            run_template_cache=state._run_template_cache,
             owns_scale_group=lambda _scale_group: True,
             budget_defaults=UserBudgetDefaults(),
         )
@@ -224,10 +248,9 @@ def _make_controller_mock(state, scheduler, autoscaler=None):
     controller_mock.provider = Mock(capabilities=worker_caps)
     controller_mock.provider.name = "worker"
     controller_mock.provider.autoscaler = autoscaler
-    # The single backend owns the liveness tracker and attrs projection; the service
-    # reads liveness through the controller's union over the backends' trackers.
+    # The single backend owns the liveness tracker; the service reads liveness through
+    # the controller's union over the backends' trackers.
     controller_mock.provider.health = state._health
-    controller_mock.provider.worker_attrs = state._worker_attrs
     # status()/autoscaler_status() are delegated to a real backend bound to the same
     # DB + tracker, so the provider authors them exactly as production — the service
     # overlays nothing on top.
@@ -252,10 +275,8 @@ def service(state, scheduler, tmp_path, embedded_log_server, log_client):
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
         log_client=log_client,
         db=state._db,
-        endpoints=state._endpoints,
         endpoint_service=EndpointServiceImpl(
             db=state._db,
-            endpoints=state._endpoints,
             system_endpoints={"/system/log-server": embedded_log_server.address},
         ),
     )
@@ -275,8 +296,7 @@ def service_with_autoscaler(state, scheduler, mock_autoscaler, tmp_path, log_cli
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
         log_client=log_client,
         db=state._db,
-        endpoints=state._endpoints,
-        endpoint_service=EndpointServiceImpl(db=state._db, endpoints=state._endpoints),
+        endpoint_service=EndpointServiceImpl(db=state._db),
     )
 
 
@@ -965,7 +985,6 @@ def test_get_worker_status_recent_attempts_have_timestamps(client, state, job_re
                 )
             ],
             health=state._health,
-            endpoints=state._endpoints,
             now=Timestamp.now(),
         )
     with state._db.transaction() as cur:
@@ -978,7 +997,6 @@ def test_get_worker_status_recent_attempts_have_timestamps(client, state, job_re
                 )
             ],
             health=state._health,
-            endpoints=state._endpoints,
             now=Timestamp.now(),
         )
 
@@ -1028,7 +1046,6 @@ def test_get_worker_status_recent_attempts_separates_retries(client, state):
                 )
             ],
             health=state._health,
-            endpoints=state._endpoints,
             now=Timestamp.now(),
         )
     with state._db.transaction() as cur:
@@ -1048,7 +1065,6 @@ def test_get_worker_status_recent_attempts_separates_retries(client, state):
                 )
             ],
             health=state._health,
-            endpoints=state._endpoints,
             now=Timestamp.now(),
         )
     # Second attempt: re-dispatch to the same worker, RUNNING.
@@ -1064,7 +1080,6 @@ def test_get_worker_status_recent_attempts_separates_retries(client, state):
                 )
             ],
             health=state._health,
-            endpoints=state._endpoints,
             now=Timestamp.now(),
         )
 
@@ -1101,7 +1116,6 @@ def test_get_worker_status_recent_attempts_carry_attempt_uid(client, state, job_
                 )
             ],
             health=state._health,
-            endpoints=state._endpoints,
             now=Timestamp.now(),
         )
 
@@ -1153,7 +1167,6 @@ def test_get_task_status_attempts_carry_attempt_uid(client, state, job_request):
                 )
             ],
             health=state._health,
-            endpoints=state._endpoints,
             now=Timestamp.now(),
         )
     # Attempt 1: re-placed and RUNNING.
@@ -1169,7 +1182,6 @@ def test_get_task_status_attempts_carry_attempt_uid(client, state, job_request):
                 )
             ],
             health=state._health,
-            endpoints=state._endpoints,
             now=Timestamp.now(),
         )
 
@@ -1219,7 +1231,6 @@ def test_get_worker_status_includes_running_tasks(client, state, job_request):
             cur,
             [WorkerTaskUpdates(worker_id=wid, updates=[])],
             health=state._health,
-            endpoints=state._endpoints,
             now=Timestamp.now(),
         )
 
@@ -1474,8 +1485,7 @@ def test_auth_config_kubernetes_capabilities(state, scheduler, tmp_path, log_cli
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
         log_client=log_client,
         db=state._db,
-        endpoints=state._endpoints,
-        endpoint_service=EndpointServiceImpl(db=state._db, endpoints=state._endpoints),
+        endpoint_service=EndpointServiceImpl(db=state._db),
     )
     dashboard = ControllerDashboard(svc)
     k8s_client = TestClient(dashboard.app)
@@ -1509,8 +1519,7 @@ def _make_k8s_dashboard_client(state, scheduler, tmp_path, log_client):
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
         log_client=log_client,
         db=state._db,
-        endpoints=state._endpoints,
-        endpoint_service=EndpointServiceImpl(db=state._db, endpoints=state._endpoints),
+        endpoint_service=EndpointServiceImpl(db=state._db),
     )
     dashboard = ControllerDashboard(svc)
     return TestClient(dashboard.app), k8s, provider
@@ -1724,8 +1733,7 @@ def _multi_backend_client(state, scheduler, tmp_path, log_client, backends):
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
         log_client=log_client,
         db=state._db,
-        endpoints=state._endpoints,
-        endpoint_service=EndpointServiceImpl(db=state._db, endpoints=state._endpoints),
+        endpoint_service=EndpointServiceImpl(db=state._db),
     )
     return TestClient(ControllerDashboard(svc).app)
 
@@ -1868,8 +1876,7 @@ def test_list_workers_stamps_backend_id_and_scale_group(state, scheduler, tmp_pa
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
         log_client=log_client,
         db=state._db,
-        endpoints=state._endpoints,
-        endpoint_service=EndpointServiceImpl(db=state._db, endpoints=state._endpoints),
+        endpoint_service=EndpointServiceImpl(db=state._db),
     )
     client = TestClient(ControllerDashboard(svc).app)
 
@@ -1891,8 +1898,7 @@ def test_worker_backend_id_propagated_to_get_worker_status(state, scheduler, tmp
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
         log_client=log_client,
         db=state._db,
-        endpoints=state._endpoints,
-        endpoint_service=EndpointServiceImpl(db=state._db, endpoints=state._endpoints),
+        endpoint_service=EndpointServiceImpl(db=state._db),
     )
     client = TestClient(ControllerDashboard(svc).app)
 
@@ -1912,8 +1918,7 @@ def test_list_workers_filters_by_backend_id(state, scheduler, tmp_path, log_clie
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
         log_client=log_client,
         db=state._db,
-        endpoints=state._endpoints,
-        endpoint_service=EndpointServiceImpl(db=state._db, endpoints=state._endpoints),
+        endpoint_service=EndpointServiceImpl(db=state._db),
     )
     client = TestClient(ControllerDashboard(svc).app)
 
@@ -1947,8 +1952,7 @@ def test_list_backends_returns_per_backend_summary(state, scheduler, tmp_path, l
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
         log_client=log_client,
         db=state._db,
-        endpoints=state._endpoints,
-        endpoint_service=EndpointServiceImpl(db=state._db, endpoints=state._endpoints),
+        endpoint_service=EndpointServiceImpl(db=state._db),
     )
     client = TestClient(ControllerDashboard(svc).app)
 
@@ -2033,7 +2037,6 @@ def test_list_backends_worker_detail_overlays_running_task_counts(state, schedul
                 )
             ],
             health=state._health,
-            endpoints=state._endpoints,
             now=Timestamp.now(),
         )
 

@@ -53,8 +53,6 @@ def _pending(constraints_json: str | None) -> PendingTask:
         backend_id="default",
         state=0,
         current_attempt_id=0,
-        failure_count=0,
-        preemption_count=0,
         max_retries_failure=0,
         max_retries_preemption=0,
         submitted_at_ms=Timestamp.from_ms(0),

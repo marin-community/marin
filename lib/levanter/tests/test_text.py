@@ -364,6 +364,37 @@ def test_prebuilt_cache_with_loss_weights(tmp_path):
     np.testing.assert_array_equal(np.asarray(example.loss_weight), expected_loss_weight)
 
 
+def test_build_caches_surfaces_component_failure(tmp_path):
+    """A component that cannot be classified must raise out of build_caches, not
+    be swallowed by the classification thread pool.
+
+    #6954: a worker failure that fails to surface strands the process and, in a
+    multi-host gang, silently desyncs the survivors into a multi-minute collective
+    hang. build_caches classifies components concurrently, so this guards that a
+    worker exception still propagates to the caller.
+    """
+    data_path = tmp_path / "docs.jsonl"
+    with data_path.open("w") as f:
+        f.write(json.dumps({"input_ids": [1, 2, 3, 4]}) + "\n")
+
+    def component(cache_subdir: str) -> DatasetComponent:
+        return DatasetComponent(
+            source=UrlDatasetSourceConfig(train_urls=[str(data_path)], validation_urls=[]),
+            format=PrebuiltLmDatasetFormat(),
+            cache_dir=str(tmp_path / cache_subdir),
+        )
+
+    config = LmDataConfig(
+        components={"a": component("a"), "b": component("b"), "c": component("c")},
+        tokenizer="passthrough",
+        vocab_size=16,
+        auto_build_caches=False,  # a missing cache must raise, not build on the fly
+    )
+
+    with pytest.raises(FileNotFoundError):
+        config.build_caches("train")
+
+
 def test_prebuilt_cache_without_loss_weights(tmp_path):
     records = [{"input_ids": [1, 2, 3, 4]}]
     data_path = tmp_path / "prebuilt_no_weights.jsonl"

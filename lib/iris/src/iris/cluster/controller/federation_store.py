@@ -16,8 +16,8 @@ from rigging.timing import Timestamp
 
 from iris.cluster.controller import ops, reads, writes
 from iris.cluster.controller.codec import reconstruct_launch_job_request
-from iris.cluster.controller.db import ControllerDB
-from iris.cluster.controller.run_template import RunTemplateCache
+from iris.cluster.controller.db import ControllerDB, Tx
+from iris.cluster.controller.projections.attempt_counts import AttemptCountsProjection
 from iris.cluster.federation.store import (
     CancelTarget,
     HandoffAdmission,
@@ -41,11 +41,8 @@ class ControllerFederationStore:
     def __init__(
         self,
         db: ControllerDB,
-        *,
-        run_template_cache: RunTemplateCache,
     ):
         self._db = db
-        self._run_template_cache = run_template_cache
 
     # -- handoff -------------------------------------------------------------
 
@@ -61,7 +58,6 @@ class ControllerFederationStore:
                 job_id=spec.local_job_id,
                 request=spec.request,
                 ts=now,
-                run_template_cache=self._run_template_cache,
                 cluster=spec.peer_id,
             )
             writes.insert_federated_handle(
@@ -161,7 +157,7 @@ class ControllerFederationStore:
                     logger.warning("peer %s reported job %s it was not handed; ignoring", peer_id, local_job_id)
                     continue
                 if delta.tombstone:
-                    writes.delete_job(cur, local_job_id)
+                    ops.job.purge_job(cur, local_job_id)
                     continue
                 self._mirror_delta(cur, peer_id, local_job_id, delta)
 
@@ -170,7 +166,7 @@ class ControllerFederationStore:
 
             writes.upsert_sync_cursor(cur, peer_id, next_cursor)
 
-    def _mirror_delta(self, cur, peer_id: str, local_job_id: JobName, delta) -> None:
+    def _mirror_delta(self, cur: Tx, peer_id: str, local_job_id: JobName, delta) -> None:
         summary = delta.summary
         writes.mirror_federated_job(
             cur,
@@ -200,19 +196,20 @@ class ControllerFederationStore:
                 submitted_at_ms=_proto_ms(task.HasField("submitted_at"), task.submitted_at),
                 started_at_ms=_proto_ms(task.HasField("started_at"), task.started_at),
                 finished_at_ms=_proto_ms(task.HasField("finished_at"), task.finished_at),
-                failure_count=task.failure_count,
-                preemption_count=task.preemption_count,
                 current_attempt_id=task.current_attempt_id,
                 worker_address=task.worker_address,
                 peer_worker_label=task.worker_id or task.worker_address,
             )
             writes.mirror_federated_attempts(cur, task_id=local_task_id, attempts=task.attempts)
+            # The parent derives the federated task's counts from these mirrored
+            # attempts, so drop the job's cached totals via the cursor's memo.
+            cur.caches[AttemptCountsProjection].invalidate_for_tasks(cur, [local_task_id])
 
-    def _set_replace(self, cur, peer_id: str, deltas) -> None:
+    def _set_replace(self, cur: Tx, peer_id: str, deltas) -> None:
         """Full-resync set-replacement: drop any local handle for ``peer_id``
         absent from the peer's active set, reclaiming a job the parent never saw
         tombstoned."""
         active = {delta.job_id for delta in deltas if not delta.tombstone}
         for local_job_id in reads.federated_handles_for_peer(cur, peer_id):
             if local_job_id.to_wire() not in active:
-                writes.delete_job(cur, local_job_id)
+                ops.job.purge_job(cur, local_job_id)

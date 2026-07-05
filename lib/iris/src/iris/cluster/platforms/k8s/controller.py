@@ -58,8 +58,20 @@ _DEPLOYMENT_DELETE_TIMEOUT = 120.0
 # CoreWeave bare-metal provisioning/deprovisioning is slow; 60s is not enough.
 _KUBECTL_TIMEOUT = 1800.0
 
-_CONTROLLER_CPU_REQUEST = "4"
+# The controller tracks every task pod in memory and runs a CPU-heavy reconcile
+# loop, so it needs generous headroom: a large fan-out (~1500 tokenize pods) OOMs
+# it at less memory, and a CPU-starved event loop misses the /health probe and
+# gets liveness-killed mid-reconcile (issue #6944). CPU is requested but left
+# without a limit so the Pod is Burstable, not Guaranteed — the controller is
+# never CFS-throttled at its guaranteed share and can burst onto spare node
+# cores during reconcile spikes. Memory is capped to protect the node.
+_CONTROLLER_CPU_REQUEST = "16"
 _CONTROLLER_MEMORY_REQUEST = "64Gi"
+# Relax the liveness/readiness deadline off the k8s defaults (1s / 3): a
+# busy-but-alive controller must not be SIGKILLed just because a /health request
+# queued behind a reconcile tick under heavy load.
+_CONTROLLER_PROBE_TIMEOUT_SECONDS = 10
+_CONTROLLER_PROBE_FAILURE_THRESHOLD = 6
 _CONTROLLER_STATE_PVC_NAME = "iris-controller-state"
 # Must match main.py's LOCAL_STATE_DIR_DEFAULT — the path the controller
 # process falls back to when storage.local_state_dir is unset.
@@ -134,11 +146,13 @@ def _build_controller_deployment(
     checkpoint_interval_seconds: float = 0,
 ) -> dict:
     """Build the controller Deployment manifest as a dict."""
-    # Reserve controller CPU/memory so Kubernetes doesn't classify this Pod
-    # as BestEffort. Matching limits keep the controller in Guaranteed QoS.
+    # Reserve controller CPU/memory so Kubernetes doesn't classify this Pod as
+    # BestEffort. Only memory has a limit, so the Pod is Burstable (not
+    # Guaranteed): the controller can burst onto spare node CPU during reconcile
+    # spikes instead of being throttled at its request. See the constants above.
     controller_resources = {
         "requests": {"cpu": _CONTROLLER_CPU_REQUEST, "memory": _CONTROLLER_MEMORY_REQUEST},
-        "limits": {"cpu": _CONTROLLER_CPU_REQUEST, "memory": _CONTROLLER_MEMORY_REQUEST},
+        "limits": {"memory": _CONTROLLER_MEMORY_REQUEST},
     }
     # The controller SQLite DB lives on a PersistentVolumeClaim (or, with
     # local_state_hostpath, a node-local directory), so two controller pods
@@ -204,14 +218,15 @@ def _build_controller_deployment(
                             "httpGet": {"path": "/health", "port": port},
                             "initialDelaySeconds": 10,
                             "periodSeconds": 10,
+                            "timeoutSeconds": _CONTROLLER_PROBE_TIMEOUT_SECONDS,
+                            "failureThreshold": _CONTROLLER_PROBE_FAILURE_THRESHOLD,
                         },
                         "livenessProbe": {
                             "httpGet": {"path": "/health", "port": port},
                             "initialDelaySeconds": 30,
                             "periodSeconds": 30,
-                            # Default 1s is tight under load; give it headroom so a
-                            # transient hiccup doesn't trip a hard kubelet SIGKILL.
-                            "timeoutSeconds": 10,
+                            "timeoutSeconds": _CONTROLLER_PROBE_TIMEOUT_SECONDS,
+                            "failureThreshold": _CONTROLLER_PROBE_FAILURE_THRESHOLD,
                         },
                     },
                 ],

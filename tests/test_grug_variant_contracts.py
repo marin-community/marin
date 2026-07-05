@@ -208,8 +208,8 @@ def test_grug_variant_one_step_contract_lowers_with_default_ctor(variant: str):
     train_step = make_train_step(optimizer, mp, z_loss_weight=0.0, ema_beta=None)
     mesh, token_pspec = mesh_fn(num_devices=4)
     batch = GrugLmExample(
-        tokens=jnp.zeros((8, 4), dtype=jnp.int32),
-        loss_weight=jnp.ones((8, 4), dtype=jnp.float32),
+        tokens=jnp.zeros((32, 4), dtype=jnp.int32),
+        loss_weight=jnp.ones((32, 4), dtype=jnp.float32),
         attn_mask=GrugAttentionMask.causal(),
     )
 

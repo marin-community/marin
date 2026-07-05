@@ -35,7 +35,7 @@ from .conftest import make_job_request, query_task, submit_job
 
 
 def _service(state, *, lease: Duration = ENDPOINT_LEASE) -> EndpointServiceImpl:
-    return EndpointServiceImpl(db=state._db, endpoints=state._endpoints, lease=lease)
+    return EndpointServiceImpl(db=state._db, lease=lease)
 
 
 def _row(endpoint_id: str, name: str, task_id: JobName, *, lease_deadline: Timestamp | None) -> EndpointRow:
@@ -308,13 +308,12 @@ def _mint_service(state, mock_controller, log_client, tmp_path):
         cluster_name="test-cluster",
         signing_key_pem=generate_ed25519_keypair().private_pem,
     )
-    endpoint_service = EndpointServiceImpl(db=state._db, endpoints=state._endpoints)
+    endpoint_service = EndpointServiceImpl(db=state._db)
     service = ControllerServiceImpl(
         controller=mock_controller,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
         log_client=log_client,
         db=state._db,
-        endpoints=state._endpoints,
         auth=auth,
         endpoint_service=endpoint_service,
     )
