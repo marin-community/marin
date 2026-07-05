@@ -54,7 +54,6 @@ from iris.cluster.backends.rpc.backend import (
     RpcTaskBackend,
     RpcWorkerStubFactory,
 )
-from iris.cluster.controller import db as db_mod
 from iris.cluster.controller import ops, reads
 from iris.cluster.controller.backend import (
     AutoscaleRequest,
@@ -1225,7 +1224,7 @@ def benchmark_scheduling(db: ControllerDB) -> None:
     # ---- resource_usage_by_worker (NEW): full join over unfinished
     #      worker-bound attempts. Runs every scheduling tick. ----
     def _usage_new():
-        with db_mod.read_snapshot(db.sa_read_engine) as snap:
+        with db.read_snapshot() as snap:
             reads.resource_usage_by_worker(snap)
 
     bench("Scheduling: resource_usage_by_worker (NEW derived query)", _usage_new)
@@ -1253,7 +1252,7 @@ def benchmark_scheduling(db: ControllerDB) -> None:
             reads.pending_tasks_with_jobs(_ptx)
         with db.read_snapshot() as _rtx:
             ws = reads.healthy_active_workers_with_attributes(_rtx, health, _NoAttrs())
-        with db_mod.read_snapshot(db.sa_read_engine) as snap:
+        with db.read_snapshot() as snap:
             usage = reads.resource_usage_by_worker(snap)
         return ws, usage
 
@@ -1386,7 +1385,7 @@ def benchmark_polling(db: ControllerDB) -> None:
 
         def _reconcile(_ids=ids):
             target_ids = set(_ids)
-            with db_mod.read_snapshot(db.sa_read_engine) as snap:
+            with db.read_snapshot() as snap:
                 # Worker filter applied in Python to keep the partial index
                 # ``idx_task_attempts_live_workerbound`` in play (a long IN
                 # list on worker_id degrades to a scan).
@@ -1496,7 +1495,7 @@ def benchmark_polling(db: ControllerDB) -> None:
         drain_jid = drain_row.job_id
 
         def _has_unfinished():
-            with db_mod.read_snapshot(db.sa_read_engine) as snap:
+            with db.read_snapshot() as snap:
                 reads.has_unfinished_worker_attempts(snap, drain_jid)
 
         bench("Polling: has_unfinished_worker_attempts (drain gate)", _has_unfinished)
@@ -1710,7 +1709,7 @@ def benchmark_endpoints(db: ControllerDB) -> None:
             bench(
                 f"Endpoints: fail_workers x{fail_n} (slice-reap, WRITE)",
                 lambda wids=[str(w) for w in target_wids]: ops.worker.fail(
-                    write_txns._scope,
+                    write_txns._db,
                     worker_ids=wids,
                     reason="benchmark: simulated provider-sync failure",
                     health=write_txns._health,
@@ -1795,7 +1794,7 @@ def _run_apply_under_contention(
         try:
             while not stop.is_set():
                 t0 = time.perf_counter()
-                with write_txns._scope.transaction() as cur:
+                with write_txns._db.transaction() as cur:
                     now = Timestamp.now()
                     effects = apply_reconcile(CursorTransitionReader(cur), plan_results, now=now)
                     commit_effects(cur, effects, endpoints=write_txns._endpoints)
@@ -1811,7 +1810,7 @@ def _run_apply_under_contention(
                     # fail_chunk is ignored: chunking is now a fixed module
                     # constant (FAIL_WORKERS_CHUNK_SIZE) in ops.worker.fail.
                     ops.worker.fail(
-                        write_txns._scope,
+                        write_txns._db,
                         worker_ids=[str(wid) for wid, _addr, _reason in failures],
                         reason="benchmark: simulated provider-sync failure",
                         health=write_txns._health,
@@ -1951,14 +1950,14 @@ def _measure_connection_checkout(engine) -> float:
     return checkout_ms
 
 
-def _dashboard_storm_read(engine, slow: bool, sample_job_id: str | None) -> None:
+def _dashboard_storm_read(db, slow: bool, sample_job_id: str | None) -> None:
     """One RPC-shaped read against the shared pool.
 
     ``slow`` runs the ``GetSchedulerState`` pending+running aggregation (seconds
     on the prod DB — these are what occupy every shared connection and head-of-
     line block the dashboard); otherwise a single-job ``GetJobState``-shape read.
     """
-    with db_mod.read_snapshot(engine) as snap:
+    with db.read_snapshot() as snap:
         if slow:
             snap.execute(
                 select(tasks_table.c.task_id, tasks_table.c.priority_band, tasks_table.c.submitted_at_ms).where(
@@ -2005,7 +2004,7 @@ def _run_control_read_under_storm(
         i = 0
         try:
             while not stop.is_set():
-                _dashboard_storm_read(db.sa_read_engine, slow=(i % slow_every == 0), sample_job_id=sample_job_id)
+                _dashboard_storm_read(db, slow=(i % slow_every == 0), sample_job_id=sample_job_id)
                 i += 1
         except BaseException as e:
             errors.append(e)
@@ -2776,7 +2775,7 @@ def _one_reconcile_tick(state: SyntheticReconcileState, provider: RpcTaskBackend
     worker_results = provider._observe_fleet().worker_results
     t3 = time.perf_counter()
     now = Timestamp.now()
-    with state.txns._scope.transaction() as cur:
+    with state.txns._db.transaction() as cur:
         effects = apply_reconcile(CursorTransitionReader(cur), worker_results, now=now)
         commit_effects(cur, effects, endpoints=state.txns._endpoints)
     t4 = time.perf_counter()

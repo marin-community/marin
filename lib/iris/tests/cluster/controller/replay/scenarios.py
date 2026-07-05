@@ -297,7 +297,7 @@ def scenario_worker_failure_cascade(transitions: ControllerTestState, clock: Fro
     apply_event(transitions, QueueAssignments([Assignment(task_id=task_id, worker_id=worker_id)]))
     # Direct call: fail_workers is intentionally not an IrisEvent.
     ops.worker.fail(
-        transitions._scope,
+        transitions._db,
         worker_ids=[str(worker_id)],
         reason="node lost",
         health=transitions._health,
@@ -515,7 +515,7 @@ def scenario_prune_old_data(transitions: ControllerTestState, clock: FrozenClock
     clock.advance_ms(10_000)
     # Direct call: prune_old_data is intentionally not an IrisEvent.
     prune_old_data(
-        transitions._scope,
+        transitions._db,
         worker_daemon_backends_for_prune(transitions),
         transitions._endpoints,
         job_retention=Duration.from_seconds(0),

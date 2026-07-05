@@ -117,7 +117,7 @@ def test_drain_pending_creates_attempt_rows(state):
     task_before = query_task(state, task_id)
     assert task_before.state == job_pb2.TASK_STATE_PENDING
 
-    with state._scope.transaction() as cur:
+    with state._db.transaction() as cur:
         batch = dispatch.drain_for_dispatch(cur, cache=state._run_template_cache)
 
     assert len(batch.tasks_to_run) == 1
@@ -137,7 +137,7 @@ def test_drain_propagates_task_image(state):
     """task_image set on the LaunchJobRequest is copied into RunTaskRequest."""
     [task_id] = submit_direct_job(state, "drain-task-image", task_image="custom/swetrace:dev")
 
-    with state._scope.transaction() as cur:
+    with state._db.transaction() as cur:
         batch = dispatch.drain_for_dispatch(cur, cache=state._run_template_cache)
 
     assert len(batch.tasks_to_run) == 1
@@ -149,7 +149,7 @@ def test_drain_default_task_image_is_empty(state):
     """When the LaunchJobRequest omits task_image, the dispatched RunTaskRequest is empty."""
     submit_direct_job(state, "drain-default-image")
 
-    with state._scope.transaction() as cur:
+    with state._db.transaction() as cur:
         batch = dispatch.drain_for_dispatch(cur, cache=state._run_template_cache)
 
     assert len(batch.tasks_to_run) == 1
@@ -170,12 +170,12 @@ def test_drain_includes_workdir_files(state):
         environment=job_pb2.EnvironmentConfig(),
         replicas=1,
     )
-    with state._scope.transaction() as cur:
+    with state._db.transaction() as cur:
         ops.job.submit(
             cur, job_id=job_name, request=req, ts=Timestamp.now(), run_template_cache=state._run_template_cache
         )
 
-    with state._scope.transaction() as cur:
+    with state._db.transaction() as cur:
         batch = dispatch.drain_for_dispatch(cur, cache=state._run_template_cache)
 
     assert len(batch.tasks_to_run) == 1
@@ -195,7 +195,7 @@ def test_drain_redrives_assigned_null_worker(state):
     # First drain promotes PENDING -> ASSIGNED, builds a RunTaskRequest, and
     # also includes the row in running_tasks so the post-apply poll picks up
     # the new pod's phase on the same cycle.
-    with state._scope.transaction() as cur:
+    with state._db.transaction() as cur:
         batch1 = dispatch.drain_for_dispatch(cur, cache=state._run_template_cache)
     assert len(batch1.tasks_to_run) == 1
     assert batch1.tasks_to_run[0].task_id == task_id.to_wire()
@@ -206,7 +206,7 @@ def test_drain_redrives_assigned_null_worker(state):
     # or a transient apply failure): task is still ASSIGNED+null-worker, so it
     # is redriven in tasks_to_run with the same attempt_id and stays in
     # running_tasks.
-    with state._scope.transaction() as cur:
+    with state._db.transaction() as cur:
         batch2 = dispatch.drain_for_dispatch(cur, cache=state._run_template_cache)
     assert len(batch2.tasks_to_run) == 1
     assert batch2.tasks_to_run[0].task_id == task_id.to_wire()
@@ -220,7 +220,7 @@ def test_drain_scopes_running_tasks_to_backend(state):
     running pods and, after the pod-not-found grace, mark them FAILED."""
     [task_a] = submit_direct_job(state, "backend-a")
     submit_direct_job(state, "backend-b")  # the other backend's task must not leak into a's poll set
-    with state._scope.transaction() as cur:
+    with state._db.transaction() as cur:
         stamp_backend(
             cur,
             [
@@ -229,7 +229,7 @@ def test_drain_scopes_running_tasks_to_backend(state):
             ],
         )
 
-    with state._scope.transaction() as cur:
+    with state._db.transaction() as cur:
         batch = dispatch.drain_for_dispatch(cur, cache=state._run_template_cache, backend_id="a")
 
     assert [r.task_id for r in batch.tasks_to_run] == [task_a.to_wire()]
@@ -241,12 +241,12 @@ def test_drain_executing_goes_to_running_tasks(state):
     not tasks_to_run."""
     [task_id] = submit_direct_job(state, "drain-running")
 
-    with state._scope.transaction() as cur:
+    with state._db.transaction() as cur:
         batch1 = dispatch.drain_for_dispatch(cur, cache=state._run_template_cache)
     attempt_id = batch1.tasks_to_run[0].attempt_id
 
     # Provider reports the pod has reached RUNNING.
-    with state._scope.transaction() as cur:
+    with state._db.transaction() as cur:
         commit_dispatch_updates(
             cur,
             [TaskUpdate(task_id=task_id, attempt_id=attempt_id, new_state=job_pb2.TASK_STATE_RUNNING)],
@@ -254,7 +254,7 @@ def test_drain_executing_goes_to_running_tasks(state):
             now=Timestamp.now(),
         )
 
-    with state._scope.transaction() as cur:
+    with state._db.transaction() as cur:
         batch2 = dispatch.drain_for_dispatch(cur, cache=state._run_template_cache)
 
     assert len(batch2.tasks_to_run) == 0
@@ -271,11 +271,11 @@ def test_drain_executing_goes_to_running_tasks(state):
 def test_apply_running(state):
     """ASSIGNED -> RUNNING via direct provider update."""
     [task_id] = submit_direct_job(state, "apply-running")
-    with state._scope.transaction() as cur:
+    with state._db.transaction() as cur:
         batch = dispatch.drain_for_dispatch(cur, cache=state._run_template_cache)
     attempt_id = batch.tasks_to_run[0].attempt_id
 
-    with state._scope.transaction() as cur:
+    with state._db.transaction() as cur:
         commit_dispatch_updates(
             cur,
             [
@@ -292,12 +292,12 @@ def test_apply_running(state):
 def test_apply_succeeded(state):
     """RUNNING -> SUCCEEDED via direct provider update."""
     [task_id] = submit_direct_job(state, "apply-succeeded")
-    with state._scope.transaction() as cur:
+    with state._db.transaction() as cur:
         batch = dispatch.drain_for_dispatch(cur, cache=state._run_template_cache)
     attempt_id = batch.tasks_to_run[0].attempt_id
 
     # First move to RUNNING.
-    with state._scope.transaction() as cur:
+    with state._db.transaction() as cur:
         commit_dispatch_updates(
             cur,
             [
@@ -308,7 +308,7 @@ def test_apply_succeeded(state):
         )
 
     # Then to SUCCEEDED.
-    with state._scope.transaction() as cur:
+    with state._db.transaction() as cur:
         commit_dispatch_updates(
             cur,
             [
@@ -329,15 +329,15 @@ def test_apply_failed_with_retry(state):
     req = make_direct_job_request("retry-job")
     req.max_retries_failure = 2
     req.max_task_failures = 2
-    with state._scope.transaction() as cur:
+    with state._db.transaction() as cur:
         ops.job.submit(cur, job_id=jid, request=req, ts=Timestamp.now(), run_template_cache=state._run_template_cache)
     task_id = query_tasks_for_job(state, jid)[0].task_id
 
-    with state._scope.transaction() as cur:
+    with state._db.transaction() as cur:
         batch = dispatch.drain_for_dispatch(cur, cache=state._run_template_cache)
     attempt_id = batch.tasks_to_run[0].attempt_id
 
-    with state._scope.transaction() as cur:
+    with state._db.transaction() as cur:
         commit_dispatch_updates(
             cur,
             [
@@ -346,7 +346,7 @@ def test_apply_failed_with_retry(state):
             endpoints=state._endpoints,
             now=Timestamp.now(),
         )
-    with state._scope.transaction() as cur:
+    with state._db.transaction() as cur:
         commit_dispatch_updates(
             cur,
             [
@@ -367,15 +367,15 @@ def test_apply_failed_no_retry(state):
     jid = JobName.root("test-user", "no-retry-job")
     req = make_direct_job_request("no-retry-job")
     req.max_retries_failure = 0
-    with state._scope.transaction() as cur:
+    with state._db.transaction() as cur:
         ops.job.submit(cur, job_id=jid, request=req, ts=Timestamp.now(), run_template_cache=state._run_template_cache)
     task_id = query_tasks_for_job(state, jid)[0].task_id
 
-    with state._scope.transaction() as cur:
+    with state._db.transaction() as cur:
         batch = dispatch.drain_for_dispatch(cur, cache=state._run_template_cache)
     attempt_id = batch.tasks_to_run[0].attempt_id
 
-    with state._scope.transaction() as cur:
+    with state._db.transaction() as cur:
         commit_dispatch_updates(
             cur,
             [
@@ -384,7 +384,7 @@ def test_apply_failed_no_retry(state):
             endpoints=state._endpoints,
             now=Timestamp.now(),
         )
-    with state._scope.transaction() as cur:
+    with state._db.transaction() as cur:
         commit_dispatch_updates(
             cur,
             [
@@ -402,11 +402,11 @@ def test_apply_failed_no_retry(state):
 def test_apply_failed_directly_from_assigned(state):
     """ASSIGNED -> FAILED without going through RUNNING (e.g. ConfigMap too large)."""
     [task_id] = submit_direct_job(state, "fail-on-apply")
-    with state._scope.transaction() as cur:
+    with state._db.transaction() as cur:
         batch = dispatch.drain_for_dispatch(cur, cache=state._run_template_cache)
     attempt_id = batch.tasks_to_run[0].attempt_id
 
-    with state._scope.transaction() as cur:
+    with state._db.transaction() as cur:
         commit_dispatch_updates(
             cur,
             [
@@ -431,15 +431,15 @@ def test_apply_worker_failed_from_running_retries(state):
     jid = JobName.root("test-user", "wf-retry")
     req = make_direct_job_request("wf-retry")
     req.max_retries_preemption = 5
-    with state._scope.transaction() as cur:
+    with state._db.transaction() as cur:
         ops.job.submit(cur, job_id=jid, request=req, ts=Timestamp.now(), run_template_cache=state._run_template_cache)
     task_id = query_tasks_for_job(state, jid)[0].task_id
 
-    with state._scope.transaction() as cur:
+    with state._db.transaction() as cur:
         batch = dispatch.drain_for_dispatch(cur, cache=state._run_template_cache)
     attempt_id = batch.tasks_to_run[0].attempt_id
 
-    with state._scope.transaction() as cur:
+    with state._db.transaction() as cur:
         commit_dispatch_updates(
             cur,
             [
@@ -448,7 +448,7 @@ def test_apply_worker_failed_from_running_retries(state):
             endpoints=state._endpoints,
             now=Timestamp.now(),
         )
-    with state._scope.transaction() as cur:
+    with state._db.transaction() as cur:
         commit_dispatch_updates(
             cur,
             [
@@ -466,12 +466,12 @@ def test_apply_worker_failed_from_running_retries(state):
 def test_apply_worker_failed_from_assigned(state):
     """WORKER_FAILED from ASSIGNED returns to PENDING without incrementing preemption_count."""
     [task_id] = submit_direct_job(state, "wf-assigned")
-    with state._scope.transaction() as cur:
+    with state._db.transaction() as cur:
         batch = dispatch.drain_for_dispatch(cur, cache=state._run_template_cache)
     attempt_id = batch.tasks_to_run[0].attempt_id
 
     # Task is ASSIGNED after drain (not yet RUNNING).
-    with state._scope.transaction() as cur:
+    with state._db.transaction() as cur:
         commit_dispatch_updates(
             cur,
             [
@@ -496,7 +496,7 @@ def test_drain_multiple_tasks(state):
     task_ids = submit_direct_job(state, "multi-task", replicas=3)
     assert len(task_ids) == 3
 
-    with state._scope.transaction() as cur:
+    with state._db.transaction() as cur:
         batch = dispatch.drain_for_dispatch(cur, cache=state._run_template_cache)
     assert len(batch.tasks_to_run) == 3
 
@@ -508,12 +508,12 @@ def test_drain_multiple_tasks(state):
 def test_apply_ignores_stale_attempt(state):
     """Updates with a mismatched attempt_id are silently skipped."""
     [task_id] = submit_direct_job(state, "stale-attempt")
-    with state._scope.transaction() as cur:
+    with state._db.transaction() as cur:
         batch = dispatch.drain_for_dispatch(cur, cache=state._run_template_cache)
     attempt_id = batch.tasks_to_run[0].attempt_id
 
     # Apply with wrong attempt_id.
-    with state._scope.transaction() as cur:
+    with state._db.transaction() as cur:
         commit_dispatch_updates(
             cur,
             [
@@ -540,7 +540,7 @@ def _submit_cosched(state, name, replicas, *, max_retries_preemption=0, band=0):
     jid = JobName.root("test-user", name)
     req = make_direct_job_request(name, replicas=replicas, coscheduling_group_by=_GROUP, priority_band=band)
     req.max_retries_preemption = max_retries_preemption
-    with state._scope.transaction() as cur:
+    with state._db.transaction() as cur:
         ops.job.submit(cur, job_id=jid, request=req, ts=Timestamp.now(), run_template_cache=state._run_template_cache)
     return jid, [t.task_id for t in query_tasks_for_job(state, jid)]
 
@@ -554,7 +554,7 @@ def test_drain_promotes_coscheduled_gang_atomically(state):
     the same attempt_id (the pod-group generation) and the coscheduling + priority fields."""
     _jid, task_ids = _submit_cosched(state, "gang", replicas=4, band=job_pb2.PRIORITY_BAND_BATCH)
 
-    with state._scope.transaction() as cur:
+    with state._db.transaction() as cur:
         batch = dispatch.drain_for_dispatch(cur, cache=state._run_template_cache)
 
     assert len(batch.tasks_to_run) == 4
@@ -574,7 +574,7 @@ def test_drain_unprioritized_gang_defaults_to_interactive(state):
     real WorkloadPriorityClass instead of dropping to Kueue's cluster default."""
     _submit_cosched(state, "gang-default-prio", replicas=3)  # band defaults to UNSPECIFIED
 
-    with state._scope.transaction() as cur:
+    with state._db.transaction() as cur:
         batch = dispatch.drain_for_dispatch(cur, cache=state._run_template_cache)
 
     assert len(batch.tasks_to_run) == 3
@@ -586,7 +586,7 @@ def test_drain_oversized_gang_promoted_whole_despite_cap(state):
     API-server pressure; a partial gang would deadlock Kueue)."""
     _jid, task_ids = _submit_cosched(state, "big-gang", replicas=5)
 
-    with state._scope.transaction() as cur:
+    with state._db.transaction() as cur:
         batch = dispatch.drain_for_dispatch(cur, cache=state._run_template_cache, max_promotions=2)
 
     assert len(batch.tasks_to_run) == 5
@@ -600,7 +600,7 @@ def test_drain_defers_gang_over_remaining_budget(state):
     _b, b_tasks = _submit_cosched(state, "gang-b", replicas=3)
 
     # Cap = 4: one gang of 3 fits, the second (3 > remaining 1, 3 <= 4 cap) is deferred.
-    with state._scope.transaction() as cur:
+    with state._db.transaction() as cur:
         batch1 = dispatch.drain_for_dispatch(cur, cache=state._run_template_cache, max_promotions=4)
     assert len(batch1.tasks_to_run) == 3
 
@@ -609,7 +609,7 @@ def test_drain_defers_gang_over_remaining_budget(state):
     assert all_states.count(job_pb2.TASK_STATE_PENDING) == 3
 
     # Next cycle: deferred gang promoted (the already-ASSIGNED gang is redriven, not re-promoted).
-    with state._scope.transaction() as cur:
+    with state._db.transaction() as cur:
         dispatch.drain_for_dispatch(cur, cache=state._run_template_cache, max_promotions=4)
     after = _states(state, a_tasks) + _states(state, b_tasks)
     assert all(s == job_pb2.TASK_STATE_ASSIGNED for s in after)
@@ -619,16 +619,16 @@ def test_drain_does_not_promote_partial_gang(state):
     """A gang is promoted only when every sibling is PENDING together; a lone PENDING
     sibling (siblings still in flight) is held until the gang reconverges."""
     _jid, task_ids = _submit_cosched(state, "partial", replicas=3)
-    with state._scope.transaction() as cur:
+    with state._db.transaction() as cur:
         dispatch.drain_for_dispatch(cur, cache=state._run_template_cache)  # all -> ASSIGNED @0
 
     # Force a partial state: one sibling back to PENDING, two still ASSIGNED.
-    with state._scope.transaction() as cur:
+    with state._db.transaction() as cur:
         cur.execute(
             sa_update(tasks_table).where(tasks_table.c.task_id == task_ids[0]).values(state=job_pb2.TASK_STATE_PENDING)
         )
 
-    with state._scope.transaction() as cur:
+    with state._db.transaction() as cur:
         batch = dispatch.drain_for_dispatch(cur, cache=state._run_template_cache)
 
     # The lone PENDING sibling must NOT be promoted (still attempt 0, still PENDING).
@@ -644,12 +644,12 @@ def test_coscheduled_gang_requeue_keeps_siblings_in_lockstep(state):
     keeps the per-generation pod-group-name uniform across the gang."""
     _jid, task_ids = _submit_cosched(state, "lockstep", replicas=3, max_retries_preemption=5)
 
-    with state._scope.transaction() as cur:
+    with state._db.transaction() as cur:
         batch0 = dispatch.drain_for_dispatch(cur, cache=state._run_template_cache)
     assert {r.attempt_id for r in batch0.tasks_to_run} == {0}
 
     # All siblings reach RUNNING.
-    with state._scope.transaction() as cur:
+    with state._db.transaction() as cur:
         commit_dispatch_updates(
             cur,
             [TaskUpdate(task_id=t, attempt_id=0, new_state=job_pb2.TASK_STATE_RUNNING) for t in task_ids],
@@ -658,7 +658,7 @@ def test_coscheduled_gang_requeue_keeps_siblings_in_lockstep(state):
         )
 
     # One sibling hits a transient (preemption) failure -> whole gang bounced to PENDING.
-    with state._scope.transaction() as cur:
+    with state._db.transaction() as cur:
         commit_dispatch_updates(
             cur,
             [TaskUpdate(task_id=task_ids[0], attempt_id=0, new_state=job_pb2.TASK_STATE_WORKER_FAILED)],
@@ -668,7 +668,7 @@ def test_coscheduled_gang_requeue_keeps_siblings_in_lockstep(state):
     assert all(s == job_pb2.TASK_STATE_PENDING for s in _states(state, task_ids))
 
     # Re-drain: the entire gang re-promotes to attempt 1 in lockstep.
-    with state._scope.transaction() as cur:
+    with state._db.transaction() as cur:
         batch1 = dispatch.drain_for_dispatch(cur, cache=state._run_template_cache)
     assert len(batch1.tasks_to_run) == 3
     assert {r.attempt_id for r in batch1.tasks_to_run} == {1}, "all siblings share the new generation"
@@ -687,13 +687,13 @@ def test_gang_requeue_bounces_assigned_sibling_off_old_generation(state):
     """
     _jid, task_ids = _submit_cosched(state, "assigned-bounce", replicas=3, max_retries_preemption=5)
 
-    with state._scope.transaction() as cur:
+    with state._db.transaction() as cur:
         dispatch.drain_for_dispatch(cur, cache=state._run_template_cache)  # all -> ASSIGNED @0
     assert all(s == job_pb2.TASK_STATE_ASSIGNED for s in _states(state, task_ids))
 
     # Two siblings reach RUNNING; task_ids[0] stays ASSIGNED+null-worker (its pod has
     # not landed yet — it is a redrive candidate this whole time).
-    with state._scope.transaction() as cur:
+    with state._db.transaction() as cur:
         commit_dispatch_updates(
             cur,
             [TaskUpdate(task_id=t, attempt_id=0, new_state=job_pb2.TASK_STATE_RUNNING) for t in task_ids[1:]],
@@ -704,7 +704,7 @@ def test_gang_requeue_bounces_assigned_sibling_off_old_generation(state):
 
     # A running sibling hits a transient failure -> the whole gang, including the
     # still-ASSIGNED sibling, must bounce to PENDING.
-    with state._scope.transaction() as cur:
+    with state._db.transaction() as cur:
         commit_dispatch_updates(
             cur,
             [TaskUpdate(task_id=task_ids[1], attempt_id=0, new_state=job_pb2.TASK_STATE_WORKER_FAILED)],
@@ -717,7 +717,7 @@ def test_gang_requeue_bounces_assigned_sibling_off_old_generation(state):
 
     # Re-drain: every sibling re-promotes to attempt 1 together; nothing is redriven on
     # attempt 0 (which would mean a split pod-group generation).
-    with state._scope.transaction() as cur:
+    with state._db.transaction() as cur:
         batch = dispatch.drain_for_dispatch(cur, cache=state._run_template_cache)
     assert {r.task_id for r in batch.tasks_to_run} == {t.to_wire() for t in task_ids}
     assert {r.attempt_id for r in batch.tasks_to_run} == {1}, "no sibling left on the old pod-group generation"
@@ -728,7 +728,7 @@ def test_drain_gang_and_noncoscheduled_coexist(state):
     _jid, gang_tasks = _submit_cosched(state, "mixed-gang", replicas=2)
     single = submit_direct_job(state, "mixed-single")
 
-    with state._scope.transaction() as cur:
+    with state._db.transaction() as cur:
         batch = dispatch.drain_for_dispatch(cur, cache=state._run_template_cache)
 
     promoted = {r.task_id for r in batch.tasks_to_run}
@@ -739,12 +739,12 @@ def test_drain_gang_and_noncoscheduled_coexist(state):
 def test_apply_ignores_finished_task(state):
     """Updates to already-finished tasks are silently skipped."""
     [task_id] = submit_direct_job(state, "finished-task")
-    with state._scope.transaction() as cur:
+    with state._db.transaction() as cur:
         batch = dispatch.drain_for_dispatch(cur, cache=state._run_template_cache)
     attempt_id = batch.tasks_to_run[0].attempt_id
 
     # Move to SUCCEEDED.
-    with state._scope.transaction() as cur:
+    with state._db.transaction() as cur:
         commit_dispatch_updates(
             cur,
             [
@@ -753,7 +753,7 @@ def test_apply_ignores_finished_task(state):
             endpoints=state._endpoints,
             now=Timestamp.now(),
         )
-    with state._scope.transaction() as cur:
+    with state._db.transaction() as cur:
         commit_dispatch_updates(
             cur,
             [
@@ -764,7 +764,7 @@ def test_apply_ignores_finished_task(state):
         )
 
     # Try to move to FAILED after already succeeded.
-    with state._scope.transaction() as cur:
+    with state._db.transaction() as cur:
         commit_dispatch_updates(
             cur,
             [

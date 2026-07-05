@@ -17,6 +17,7 @@ from iris.cluster.controller.codec import (
     proto_to_json,
 )
 from iris.cluster.controller.db import Tx
+from iris.cluster.controller.projections.attempt_counts import AttemptCountsProjection
 from iris.cluster.controller.projections.endpoints import EndpointsProjection
 from iris.cluster.controller.reconcile import ReconcileState
 from iris.cluster.controller.reconcile.commit import commit_effects
@@ -30,7 +31,6 @@ from iris.cluster.controller.schema import (
     jobs_table,
     users_table,
 )
-from iris.cluster.controller.scope import ScopedTx
 from iris.cluster.types import LOCAL_CLUSTER, TERMINAL_JOB_STATES, JobName
 from iris.rpc import controller_pb2, job_pb2
 from iris.time_proto import duration_from_proto
@@ -338,7 +338,7 @@ def cancel(
     endpoints.remove_by_job_ids(cur, subtree)
 
 
-def purge_job(cur: ScopedTx, job_id: JobName) -> None:
+def purge_job(cur: Tx, job_id: JobName) -> None:
     """Delete a job and drop its derived-count memo — the single deletion chokepoint.
 
     All job deletions route through here rather than calling
@@ -346,11 +346,11 @@ def purge_job(cur: ScopedTx, job_id: JobName) -> None:
     cannot serve the dead job's cached counts.
     """
     writes.delete_job(cur, job_id)
-    cur.attempt_counts.invalidate_for_jobs(cur, [job_id])
+    cur.caches[AttemptCountsProjection].invalidate_for_jobs(cur, [job_id])
 
 
 def remove_finished(
-    cur: ScopedTx,
+    cur: Tx,
     job_id: JobName,
 ) -> bool:
     """Remove a finished job and its tasks from state.

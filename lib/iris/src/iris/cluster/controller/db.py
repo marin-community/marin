@@ -55,6 +55,7 @@ from sqlalchemy import Engine, create_engine, event, text
 from sqlalchemy.engine import Connection
 from sqlalchemy.engine.cursor import CursorResult
 
+from iris.cluster.controller.caches import CacheRegistry
 from iris.cluster.controller.schema import auth_metadata, metadata, schema_migrations_table
 
 logger = logging.getLogger(__name__)
@@ -147,7 +148,7 @@ class Tx:
     while the write lock is still held (see ``write_transaction``).
     """
 
-    def __init__(self, conn: Connection):
+    def __init__(self, conn: Connection, caches: CacheRegistry):
         self.conn = conn
         self._hooks: list[Callable[[], None]] = []
         # Per-transaction extension slot: a write helper may attach one typed cache
@@ -155,6 +156,10 @@ class Tx:
         # the federation changelog gate resolving a job's requester once per root).
         # Never persists past the transaction, so a cached value can never go stale.
         self.memo: dict[str, object] = {}
+        # The owning DB's per-controller cache registry (see ``caches.py``), shared
+        # by every Tx the DB mints. Persists across transactions, so a write sink
+        # holding only this cursor reaches a memo without it being threaded in.
+        self.caches = caches
 
     def execute(self, stmt, params=None) -> CursorResult:
         """Execute a SA Core construct. Returns a ``CursorResult``.
@@ -187,7 +192,7 @@ class Tx:
 def write_transaction(
     write_engine: Engine,
     write_lock: threading.RLock,
-    tx_factory: Callable[[Connection], Tx] = Tx,
+    caches: CacheRegistry,
 ) -> Iterator[Tx]:
     """Open a write transaction backed by ``write_engine``.
 
@@ -196,17 +201,16 @@ def write_transaction(
     Post-commit hooks registered via ``Tx.register`` fire **while the
     lock is still held** so in-memory caches stay consistent with the DB.
 
-    ``tx_factory`` builds the cursor from the raw connection; it defaults to the
-    raw :class:`Tx` so this module stays free of any higher-layer imports. A
-    caller that threads a richer cursor (e.g. ``ScopedTx`` carrying projection
-    caches) injects its own factory — see :mod:`iris.cluster.controller.scope`.
+    ``caches`` is the owning DB's per-controller cache registry, mirrored onto
+    the yielded ``Tx`` as ``tx.caches`` so write sinks can reach a memo through
+    the cursor (see :mod:`iris.cluster.controller.caches`).
     """
     write_lock.acquire()
     conn: Connection | None = None
     try:
         conn = write_engine.connect()
         conn.execute(text("BEGIN IMMEDIATE"))
-        tx = tx_factory(conn)
+        tx = Tx(conn, caches)
         try:
             yield tx
         except Exception:
@@ -221,7 +225,7 @@ def write_transaction(
 
 
 @contextmanager
-def read_snapshot(read_engine: Engine, tx_factory: Callable[[Connection], Tx] = Tx) -> Iterator[Tx]:
+def read_snapshot(read_engine: Engine, caches: CacheRegistry) -> Iterator[Tx]:
     """Open a read-only snapshot against ``read_engine``.
 
     ``query_only`` is pinned at connect time on the read engine, so this
@@ -229,15 +233,16 @@ def read_snapshot(read_engine: Engine, tx_factory: Callable[[Connection], Tx] = 
     ``Tx`` over a pooled connection and rolls back on exit so the
     snapshot does not leak into the next checkout from the pool.
 
-    ``tx_factory`` builds the cursor (see :func:`write_transaction`); it defaults
-    to the raw :class:`Tx`. Read handlers that consult projection caches inject a
-    richer cursor factory; the standalone rehydrate callers use the default.
+    ``caches`` is mirrored onto the yielded ``Tx`` as ``tx.caches`` (see
+    :func:`write_transaction`); a read handler that consults a derived-count memo
+    reaches it there. Post-commit hooks never fire on a read snapshot, so the
+    invalidation path is inert here — only the memo *read* path is used.
     """
     conn = read_engine.connect()
     try:
         conn.execute(text("BEGIN"))
         try:
-            yield tx_factory(conn)
+            yield Tx(conn, caches)
         finally:
             conn.execute(text("ROLLBACK"))
     finally:
@@ -258,6 +263,11 @@ class ControllerDB:
         self._auth_db_path = self._db_dir / self.AUTH_DB_FILENAME
         self._lock = RLock()
         self._reopen_hooks: list[Callable[[], None]] = []
+        # Per-controller cache registry, mirrored onto every Tx this DB mints as
+        # ``tx.caches``. Built before the engines so no cursor is ever minted
+        # without it. Populated by higher layers (each per-controller memo
+        # registers itself on construction) — the raw layer stays cache-agnostic.
+        self._caches = CacheRegistry()
 
         # Build SA engines first so apply_migrations can use raw_connection().
         t0 = time.monotonic()
@@ -309,6 +319,11 @@ class ControllerDB:
     def sa_write_engine(self) -> Engine:
         """SA Core write engine."""
         return self._sa_write_engine
+
+    @property
+    def caches(self) -> CacheRegistry:
+        """The per-controller cache registry (also reachable via any ``Tx.caches``)."""
+        return self._caches
 
     @property
     def db_dir(self) -> Path:
@@ -366,31 +381,31 @@ class ControllerDB:
         self._sa_auth_read_engine.dispose()
 
     @contextmanager
-    def transaction(self, tx_factory: Callable[[Connection], Tx] = Tx) -> Iterator[Tx]:
+    def transaction(self) -> Iterator[Tx]:
         """Open an IMMEDIATE write transaction and yield a cursor.
 
         On successful commit, any hooks registered via ``Tx.register``
         fire while the write lock is still held — keeping in-memory caches
         in sync with the DB without exposing a torn snapshot to concurrent
-        readers. ``tx_factory`` (default raw :class:`Tx`) lets a higher layer
-        thread a richer cursor without this module depending on it.
+        readers. The yielded cursor carries this DB's cache registry as
+        ``tx.caches`` so write sinks reach per-controller memos through it.
         """
-        with write_transaction(self._sa_write_engine, self._lock, tx_factory) as tx:
+        with write_transaction(self._sa_write_engine, self._lock, self._caches) as tx:
             yield tx
 
     @contextmanager
-    def read_snapshot(self, tx_factory: Callable[[Connection], Tx] = Tx) -> Iterator[Tx]:
+    def read_snapshot(self) -> Iterator[Tx]:
         """Read-only snapshot that does NOT acquire the write lock.
 
         Uses a pooled read-only connection with WAL isolation. Safe for
         concurrent use from dashboard/RPC threads while the scheduling
         loop holds the write lock.
         """
-        with read_snapshot(self._sa_read_engine, tx_factory) as tx:
+        with read_snapshot(self._sa_read_engine, self._caches) as tx:
             yield tx
 
     @contextmanager
-    def control_read_snapshot(self, tx_factory: Callable[[Connection], Tx] = Tx) -> Iterator[Tx]:
+    def control_read_snapshot(self) -> Iterator[Tx]:
         """Read-only snapshot for the control loop, backed by a dedicated engine.
 
         Identical to :meth:`read_snapshot` but checks out from the control-only
@@ -399,11 +414,11 @@ class ControllerDB:
         (the single control-loop thread, or the scheduling/autoscaler loops on
         the legacy path).
         """
-        with read_snapshot(self._sa_control_read_engine, tx_factory) as tx:
+        with read_snapshot(self._sa_control_read_engine, self._caches) as tx:
             yield tx
 
     @contextmanager
-    def auth_read_snapshot(self, tx_factory: Callable[[Connection], Tx] = Tx) -> Iterator[Tx]:
+    def auth_read_snapshot(self) -> Iterator[Tx]:
         """Read-only snapshot backed by the auth DB (auth.sqlite3) directly.
 
         Auth tables live in a separate SQLite file. Read connections from
@@ -411,7 +426,7 @@ class ControllerDB:
         must not see auth tables). Use this context manager for auth-only
         read queries so they remain non-blocking while the write lock is free.
         """
-        with read_snapshot(self._sa_auth_read_engine, tx_factory) as tx:
+        with read_snapshot(self._sa_auth_read_engine, self._caches) as tx:
             yield tx
 
     def apply_migrations(self) -> None:

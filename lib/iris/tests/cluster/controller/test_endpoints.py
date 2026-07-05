@@ -110,7 +110,7 @@ def test_expired_lease_hidden_from_reads(state):
     task = submit_job(state, "j", make_job_request("j"))[0].task_id
     past = Timestamp.now().add(Duration.from_ms(-1000))
     future = Timestamp.now().add(Duration.from_hours(1))
-    with state._scope.transaction() as cur:
+    with state._db.transaction() as cur:
         state._endpoints.add(cur, _row("dead", "svc", task, lease_deadline=past))
         state._endpoints.add(cur, _row("live", "svc", task, lease_deadline=future))
 
@@ -124,11 +124,11 @@ def test_expired_lease_hidden_from_reads(state):
 
 def test_null_lease_never_expires(state):
     task = submit_job(state, "j", make_job_request("j"))[0].task_id
-    with state._scope.transaction() as cur:
+    with state._db.transaction() as cur:
         state._endpoints.add(cur, _row("forever", "svc", task, lease_deadline=None))
 
     assert [r.endpoint_id for r in state._endpoints.query()] == ["forever"]
-    with state._scope.transaction() as cur:
+    with state._db.transaction() as cur:
         assert state._endpoints.sweep_expired(cur, Timestamp.now()) == []
     assert state._endpoints.get("forever") is not None
 
@@ -137,11 +137,11 @@ def test_sweep_expired_deletes_only_expired(state):
     task = submit_job(state, "j", make_job_request("j"))[0].task_id
     past = Timestamp.now().add(Duration.from_ms(-1000))
     future = Timestamp.now().add(Duration.from_hours(1))
-    with state._scope.transaction() as cur:
+    with state._db.transaction() as cur:
         state._endpoints.add(cur, _row("dead", "a", task, lease_deadline=past))
         state._endpoints.add(cur, _row("live", "b", task, lease_deadline=future))
 
-    with state._scope.transaction() as cur:
+    with state._db.transaction() as cur:
         removed = state._endpoints.sweep_expired(cur, Timestamp.now())
     assert removed == ["dead"]
 
@@ -196,7 +196,7 @@ def test_reregister_renews_expired_endpoint(state):
 
 def test_register_terminal_task_raises(state):
     task = submit_job(state, "j", make_job_request("j"))[0].task_id
-    with state._scope.transaction() as tx:
+    with state._db.transaction() as tx:
         tx.execute(
             sa_update(tasks_table).where(tasks_table.c.task_id == task).values(state=job_pb2.TASK_STATE_SUCCEEDED)
         )
@@ -308,7 +308,7 @@ def _mint_service(state, mock_controller, log_client, tmp_path):
         controller=mock_controller,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
         log_client=log_client,
-        scope=state._scope,
+        db=state._db,
         endpoints=state._endpoints,
         auth=auth,
         endpoint_service=endpoint_service,

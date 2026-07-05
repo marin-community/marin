@@ -202,13 +202,13 @@ def _start_running_job(
         include_resources=include_resources,
         replicas=replicas,
     )
-    with state._scope.transaction() as cur:
+    with state._db.transaction() as cur:
         ops.job.submit(
             cur, job_id=job_id, request=request, ts=Timestamp.now(), run_template_cache=state._run_template_cache
         )
 
     worker_id = WorkerId(f"w-{user}")
-    with state._scope.transaction() as cur:
+    with state._db.transaction() as cur:
         ops.worker.register(
             cur,
             worker_id=worker_id,
@@ -226,9 +226,9 @@ def _start_running_job(
         )
     for idx in range(replicas):
         task_id = job_id.task(idx)
-        with state._scope.transaction() as cur:
+        with state._db.transaction() as cur:
             ops.task.assign(cur, [Assignment(task_id=task_id, worker_id=worker_id)], health=state._health)
-        with state._scope.transaction() as cur:
+        with state._db.transaction() as cur:
             apply_task_observations(
                 cur,
                 [
@@ -259,7 +259,7 @@ def test_compute_user_spend_excludes_pending(state):
     """Tasks that never reach RUNNING/ASSIGNED/BUILDING do not contribute."""
     job_id = JobName.root("bob", "pending")
     request = _launch_request(job_id.to_wire(), cpu_millicores=2000, memory_bytes=8 * GiB)
-    with state._scope.transaction() as cur:
+    with state._db.transaction() as cur:
         ops.job.submit(
             cur, job_id=job_id, request=request, ts=Timestamp.now(), run_template_cache=state._run_template_cache
         )
@@ -287,7 +287,7 @@ def service(state, tmp_path, log_client) -> ControllerServiceImpl:
         controller=MockController(),
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
         log_client=log_client,
-        scope=state._scope,
+        db=state._db,
         endpoints=state._endpoints,
         auth=ControllerAuth(provider="static"),
         endpoint_service=EndpointServiceImpl(db=state._db, endpoints=state._endpoints),

@@ -38,7 +38,7 @@ def _make_row(endpoint_id: str, name: str, task_id: JobName, *, address: str = "
 def test_projection_loads_existing_rows_on_startup(state):
     """On construction, the projection should contain every row in the ``endpoints`` table."""
     tasks = submit_job(state, "j", make_job_request("j"))
-    with state._scope.transaction() as cur:
+    with state._db.transaction() as cur:
         assert state._endpoints.add(cur, _make_row("e1", "svc", tasks[0].task_id))
 
     fresh = EndpointsProjection(state._db)
@@ -50,7 +50,7 @@ def test_add_updates_memory_after_commit(state):
     tasks = submit_job(state, "j", make_job_request("j"))
     t = tasks[0].task_id
 
-    with state._scope.transaction() as cur:
+    with state._db.transaction() as cur:
         assert state._endpoints.add(cur, _make_row("e1", "alpha", t))
         # Not yet committed; memory should not reflect the insert.
         assert state._endpoints.get("e1") is None
@@ -67,7 +67,7 @@ def test_rollback_leaves_memory_untouched(state):
         pass
 
     with pytest.raises(BoomError):
-        with state._scope.transaction() as cur:
+        with state._db.transaction() as cur:
             state._endpoints.add(cur, _make_row("e1", "alpha", t))
             raise BoomError
 
@@ -81,12 +81,12 @@ def test_add_rejects_terminal_task(state):
     tasks = submit_job(state, "j", make_job_request("j"))
     task_id = tasks[0].task_id
     # Drive the task to SUCCEEDED to mark it terminal.
-    with state._scope.transaction() as tx:
+    with state._db.transaction() as tx:
         tx.execute(
             sa_update(tasks_table).where(tasks_table.c.task_id == task_id).values(state=job_pb2.TASK_STATE_SUCCEEDED)
         )
 
-    with state._scope.transaction() as cur:
+    with state._db.transaction() as cur:
         outcome = state._endpoints.add(cur, _make_row("e1", "alpha", task_id))
         assert outcome is AddEndpointOutcome.TERMINAL
 
@@ -96,11 +96,11 @@ def test_add_rejects_terminal_task(state):
 def test_remove_drops_endpoint_by_id(state):
     tasks = submit_job(state, "j", make_job_request("j"))
     t = tasks[0].task_id
-    with state._scope.transaction() as cur:
+    with state._db.transaction() as cur:
         state._endpoints.add(cur, _make_row("e1", "alpha", t))
         state._endpoints.add(cur, _make_row("e2", "beta", t))
 
-    with state._scope.transaction() as cur:
+    with state._db.transaction() as cur:
         removed = state._endpoints.remove(cur, "e1")
     assert removed is not None and removed.endpoint_id == "e1"
     assert {r.endpoint_id for r in state._endpoints.query()} == {"e2"}
@@ -110,12 +110,12 @@ def test_remove_by_task_drops_all_task_endpoints(state):
     tasks = submit_job(state, "j", make_job_request("j", replicas=2))
     t1, t2 = tasks[0].task_id, tasks[1].task_id
 
-    with state._scope.transaction() as cur:
+    with state._db.transaction() as cur:
         state._endpoints.add(cur, _make_row("e1", "alpha", t1))
         state._endpoints.add(cur, _make_row("e2", "beta", t1))
         state._endpoints.add(cur, _make_row("e3", "gamma", t2))
 
-    with state._scope.transaction() as cur:
+    with state._db.transaction() as cur:
         removed = state._endpoints.remove_by_task(cur, t1)
 
     assert set(removed) == {"e1", "e2"}
@@ -129,11 +129,11 @@ def test_remove_by_job_ids_drops_subtree(state):
     t1 = tasks_a[0].task_id
     t2 = tasks_b[0].task_id
 
-    with state._scope.transaction() as cur:
+    with state._db.transaction() as cur:
         state._endpoints.add(cur, _make_row("e1", "alpha", t1))
         state._endpoints.add(cur, _make_row("e2", "beta", t2))
 
-    with state._scope.transaction() as cur:
+    with state._db.transaction() as cur:
         removed = state._endpoints.remove_by_job_ids(cur, [ja])
 
     assert removed == ["e1"]
@@ -158,7 +158,7 @@ def populated(state):
         _make_row("e3", "beta/svc", t1),
         _make_row("e4", "gamma/svc", t2),
     ]
-    with state._scope.transaction() as cur:
+    with state._db.transaction() as cur:
         for r in rows:
             state._endpoints.add(cur, r)
     return state, rows, (t0, t1, t2)
@@ -213,7 +213,7 @@ def test_replace_from_resets_dict(state, tmp_path: Path):
     t = tasks[0].task_id
 
     # Populate the projection with a known endpoint and take a backup.
-    with state._scope.transaction() as cur:
+    with state._db.transaction() as cur:
         state._endpoints.add(cur, _make_row("e-backup", "backup", t))
     assert state._endpoints.get("e-backup") is not None
 
@@ -225,7 +225,7 @@ def test_replace_from_resets_dict(state, tmp_path: Path):
 
     # Mutate after the backup: remove the original, add a new endpoint that
     # only exists in the live DB.
-    with state._scope.transaction() as cur:
+    with state._db.transaction() as cur:
         state._endpoints.remove(cur, "e-backup")
         state._endpoints.add(cur, _make_row("e-live", "live", t))
     assert state._endpoints.get("e-backup") is None

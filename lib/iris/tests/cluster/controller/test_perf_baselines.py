@@ -15,7 +15,7 @@ from pathlib import Path
 from time import perf_counter
 
 import pytest
-from iris.cluster.controller import db, ops, reads
+from iris.cluster.controller import ops, reads
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.schema import task_attempts_table, tasks_table
 from iris.cluster.types import JobName, WorkerId
@@ -148,7 +148,7 @@ def test_resource_usage_by_worker_perf(perf_db: ControllerDB) -> None:
     worker_count = _RESOURCE_WORKER_COUNT
 
     def _sa_call() -> int:
-        with db.read_snapshot(perf_db.sa_read_engine) as tx:
+        with perf_db.read_snapshot() as tx:
             return len(reads.resource_usage_by_worker(tx))
 
     assert _sa_call() == worker_count
@@ -161,7 +161,7 @@ def test_reconcile_rows_for_workers_perf(perf_db: ControllerDB) -> None:
 
     def _sa_call() -> int:
         target_ids = set(worker_ids)
-        with db.read_snapshot(perf_db.sa_read_engine) as tx:
+        with perf_db.read_snapshot() as tx:
             # Worker filter applied in Python to keep the partial index
             # ``idx_task_attempts_live_workerbound`` in play (a long IN list
             # on worker_id degrades to a scan).
@@ -253,7 +253,7 @@ def test_submit_job_with_n_replicas_perf(submit_perf_db: ControllerTestState) ->
             replicas=_REPLICA_COUNT,
         )
         jid = JobName.from_wire(name)
-        with state._scope.transaction() as cur:
+        with state._db.transaction() as cur:
             ops.job.submit(
                 cur, job_id=jid, request=req, ts=Timestamp.now(), run_template_cache=state._run_template_cache
             )
@@ -284,7 +284,7 @@ def test_register_worker_with_n_attributes_perf(register_perf_db: ControllerTest
             device=job_pb2.DeviceConfig(cpu=job_pb2.CpuDevice(variant="cpu")),
             attributes=attrs,
         )
-        with state._scope.transaction() as cur:
+        with state._db.transaction() as cur:
             ops.worker.register(
                 cur,
                 worker_id=wid,

@@ -23,8 +23,8 @@ from iris.cluster.controller.auth import (
 from iris.cluster.controller.backend import BackendCapability
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.endpoint_service import EndpointServiceImpl
+from iris.cluster.controller.projections.attempt_counts import AttemptCountsProjection
 from iris.cluster.controller.projections.endpoints import EndpointsProjection
-from iris.cluster.controller.scope import ControllerScope
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.rpc import job_pb2
 from rigging.server_auth import IapIdTokenVerifier, VerifiedIdentity, _verified_identity
@@ -41,7 +41,8 @@ def db(tmp_path):
 def _make_service(db, log_client, auth=None):
     """Create a ControllerServiceImpl with minimal dependencies for API key tests."""
     endpoints = EndpointsProjection(db)
-    scope = ControllerScope(db)
+    # Self-registers into db.caches so service read paths can reach the derived-count memo.
+    AttemptCountsProjection(db)
 
     controller_mock = Mock()
     controller_mock.wake = Mock()
@@ -55,7 +56,7 @@ def _make_service(db, log_client, auth=None):
         controller=controller_mock,
         bundle_store=BundleStore(storage_dir=str(db.db_path.parent / "bundles")),
         log_client=log_client,
-        scope=scope,
+        db=db,
         endpoints=endpoints,
         auth=auth or ControllerAuth(),
         endpoint_service=EndpointServiceImpl(db=db, endpoints=endpoints),

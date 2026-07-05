@@ -163,13 +163,13 @@ def _schedule_and_commit(scheduler, state):
     for tid, wid in result.assignments:
         task = _query_task(state, tid)
         if task:
-            with state._scope.transaction() as cur:
+            with state._db.transaction() as cur:
                 ops.task.assign(cur, [Assignment(task_id=tid, worker_id=wid)], health=state._health)
     return result
 
 
 def _transition_to_running(state, task):
-    with state._scope.transaction() as cur:
+    with state._db.transaction() as cur:
         apply_task_observations(
             cur,
             [
@@ -192,7 +192,7 @@ def _transition_to_running(state, task):
 
 def _heartbeat_killed(state, task):
     """Synthesize a terminal heartbeat for ``task``: that is what releases capacity now."""
-    with state._scope.transaction() as cur:
+    with state._db.transaction() as cur:
         apply_task_observations(
             cur,
             [
@@ -216,7 +216,7 @@ def _heartbeat_killed(state, task):
 def _worker_fail_one_task(state, task):
     """Send WORKER_FAILED for one task. For coscheduled jobs this triggers
     _requeue_coscheduled_siblings which bounces all siblings to PENDING."""
-    with state._scope.transaction() as cur:
+    with state._db.transaction() as cur:
         result = apply_task_observations(
             cur,
             [
@@ -389,7 +389,7 @@ class TestPreemptionReassignment:
                     task_attempts_table.c.finished_at_ms.is_(None),
                 )
             ).all()
-        with state._scope.transaction() as cur:
+        with state._db.transaction() as cur:
             for row in unfinished:
                 # Heartbeat-equivalent stamp: finalize the attempt row.
                 cur.execute(
@@ -473,7 +473,7 @@ class TestPreemptionReassignment:
         # Drive the production code path: heartbeat-induced cascade requeues
         # gang A's siblings without finalizing their attempts. Then run a
         # scheduling tick before any worker confirms termination.
-        with ctrl._scope.transaction() as cur:
+        with ctrl._db.transaction() as cur:
             apply_task_observations(
                 cur,
                 [fail_request],
@@ -556,7 +556,7 @@ class TestPreemptionReassignment:
                         task_attempts_table.c.finished_at_ms.is_(None),
                     )
                 ).all()
-            with state._scope.transaction() as cur:
+            with state._db.transaction() as cur:
                 for row in rows:
                     # Heartbeat-equivalent stamp: finalize the attempt row.
                     cur.execute(

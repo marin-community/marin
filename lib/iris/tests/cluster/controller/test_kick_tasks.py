@@ -41,7 +41,7 @@ JOB_USER = "test-user"
 
 
 def _observe(state, worker_id, task_id, attempt_id, new_state, error=None):
-    with state._scope.transaction() as cur:
+    with state._db.transaction() as cur:
         apply_task_observations(
             cur,
             [
@@ -58,7 +58,7 @@ def _observe(state, worker_id, task_id, attempt_id, new_state, error=None):
 
 def _assign_and_run(state, task_id, worker_id):
     """Drive a PENDING task to RUNNING on ``worker_id`` (attempt 0)."""
-    with state._scope.transaction() as cur:
+    with state._db.transaction() as cur:
         ops.task.assign(cur, [Assignment(task_id=task_id, worker_id=worker_id)], health=state._health)
     _observe(state, worker_id, task_id, 0, job_pb2.TASK_STATE_RUNNING)
 

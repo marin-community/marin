@@ -132,7 +132,7 @@ class EndpointsProjection:
             self._by_id.clear()
             self._by_name.clear()
             self._by_task.clear()
-            with db.read_snapshot(self._db.sa_read_engine) as tx:
+            with self._db.read_snapshot() as tx:
                 for row in tx.execute(select(endpoints_table)).all():
                     endpoint = EndpointRow(
                         endpoint_id=row.endpoint_id,

@@ -73,6 +73,34 @@ concurrent commit can't desync the counts from the task/attempt rows they are
 read alongside. The cache is only used where a slightly stale display value is
 harmless.
 
+### Cache reachability — the `CacheRegistry` lookaside
+
+The projection is touched at only ~6 sites (3 reads in `service.py`; 3
+invalidations: `commit_effects`, `purge_job`, `_mirror_delta`), but one sink
+(`commit_effects`) fans out to four callers. Rather than thread a cache
+reference through that call tree (or subclass the cursor), a per-controller
+**`CacheRegistry`** (`caches.py`) — a type-keyed `{type: instance}` map — is
+owned by `ControllerDB` (`db.caches`) and mirrored onto every `Tx` it mints
+(`tx.caches`). `AttemptCountsProjection.__init__` self-registers into it, so:
+
+- write sinks reach it via `cur.caches[AttemptCountsProjection]` — no param
+  threaded, no cursor subtype;
+- readers reach the same registry via `q.caches[AttemptCountsProjection]`;
+- lookup is by concrete type (`caches[type[T]] -> T`), so there are no string
+  keys and no `cast` at call sites (the one heterogeneous-container cast lives
+  inside the registry).
+
+This generalizes the existing per-transaction `Tx.memo` lookaside to a
+per-controller scope. It replaced an earlier `ScopedTx(Tx)` subclass +
+`ControllerScope` wrapper + `tx_factory` seam, which delivered the same
+reachability with far more code for a single cache.
+
+Invalidation is deferred to a `tx.register` post-commit hook that fires **under
+the write lock**, so a concurrent reader either sees the pre-commit memo or
+recomputes from the post-commit rows — never a torn value. `purge_job` is the
+single job-deletion chokepoint, so a re-minted job id can't serve a dead job's
+cached counts.
+
 ### Read/derive sites migrated
 
 - Per-task RPC (`task_to_proto`, `TaskWithAttempts`): derive from the already

@@ -108,7 +108,7 @@ def _worker_attr(state: ControllerTestState, worker_id: WorkerId, key: str):
 
 
 def assign_task_to_worker(state: ControllerTestState, task, worker_id: WorkerId) -> None:
-    with state._scope.transaction() as cur:
+    with state._db.transaction() as cur:
         ops.task.assign(cur, [Assignment(task_id=task.task_id, worker_id=worker_id)], health=state._health)
 
 
@@ -120,7 +120,7 @@ def transition_task_to_state(state: ControllerTestState, task, new_state: int) -
     # Re-read the live task: callers pass the object captured at submit time,
     # before assignment minted the current attempt/worker.
     live = _query_task(state, task.task_id)
-    with state._scope.transaction() as cur:
+    with state._db.transaction() as cur:
         apply_task_observations(
             cur,
             [
@@ -355,7 +355,7 @@ def test_scheduler_detects_timed_out_tasks(state):
     tasks = submit_job(state, "j1", request)
 
     # Manually set deadline epoch to past timestamp in DB.
-    with state._scope.transaction() as _tx:
+    with state._db.transaction() as _tx:
         _tx.execute(
             sa_update(jobs_table)
             .where(jobs_table.c.job_id == JobName.root("test-user", "j1"))

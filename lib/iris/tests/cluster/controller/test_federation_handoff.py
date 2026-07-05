@@ -113,7 +113,7 @@ def _make_service(
         controller=mock,
         bundle_store=BundleStore(storage_dir=str(tmp_path / subdir / "bundles")),
         log_client=log_client,
-        scope=state._scope,
+        db=state._db,
         endpoints=state._endpoints,
         endpoint_service=EndpointServiceImpl(db=state._db, endpoints=state._endpoints),
     )
@@ -130,7 +130,7 @@ def _attach_federation(
     )
     peer.probe()
     store = ControllerFederationStore(
-        parent_service._scope,
+        parent_service._db,
         run_template_cache=RunTemplateCache(256),
     )
     manager = FederationManager([peer], threads=get_thread_container(), store=store, cluster_id="parent")
@@ -429,7 +429,7 @@ def test_cancel_routes_to_peer_and_tombstone_drops_the_handle(tmp_path, log_clie
 
         # The peer prunes the terminal job (writing a tombstone); the next sync
         # applies it and the parent drops the handle and its jobs row.
-        with peer_state._scope.transaction() as cur:
+        with peer_state._db.transaction() as cur:
             writes.delete_job(cur, parent_job_id)
         manager.sync_once()
 
@@ -452,9 +452,9 @@ def test_full_resync_drops_a_handle_absent_from_the_peers_active_set(tmp_path, l
         # after a state reset / first contact). The next sync is therefore a full
         # resync, whose active set no longer contains the job — so the parent drops
         # it by set-replacement, not by a tombstone delta.
-        with peer_state._scope.transaction() as cur:
+        with peer_state._db.transaction() as cur:
             writes.delete_job(cur, parent_job_id)
-        with parent_state._scope.transaction() as cur:
+        with parent_state._db.transaction() as cur:
             writes.upsert_sync_cursor(cur, "cw", "")
         manager.sync_once()
 
@@ -500,7 +500,7 @@ def test_redrive_of_a_handle_the_peer_already_has_is_idempotent(tmp_path, log_cl
         # delivery but before recording it). The re-drive must re-send under the
         # same id and the peer's federation-aware admission dedups — no second job,
         # no error, and the handle settles in HANDED_OFF.
-        with parent_state._scope.transaction() as cur:
+        with parent_state._db.transaction() as cur:
             writes.set_handoff_state(cur, parent_job_id, int(HandoffState.PENDING_HANDOFF))
         manager.sync_once()
 
@@ -517,7 +517,7 @@ def test_redrive_of_a_handle_the_peer_already_has_is_idempotent(tmp_path, log_cl
 def test_admit_persists_a_pending_handle_and_is_idempotent(tmp_path, log_client):
     with ExitStack() as stack:
         _parent_service, parent_state = _make_service(stack, "parent", tmp_path, log_client)
-        store = ControllerFederationStore(parent_state._scope, run_template_cache=RunTemplateCache(256))
+        store = ControllerFederationStore(parent_state._db, run_template_cache=RunTemplateCache(256))
         parent_job_id = JobName.root(_USER, "fed-job")
         spec = HandoffSpec(
             local_job_id=parent_job_id,
@@ -590,7 +590,7 @@ def test_incremental_sync_delivers_a_tombstone_and_drops_the_handle(tmp_path, lo
 
         # Prune on the peer AFTER the parent is caught up, so only the incremental
         # tombstone (not a first-contact full resync) can reclaim the handle.
-        with peer_state._scope.transaction() as cur:
+        with peer_state._db.transaction() as cur:
             writes.delete_job(cur, parent_job_id)
         manager.sync_once()
 

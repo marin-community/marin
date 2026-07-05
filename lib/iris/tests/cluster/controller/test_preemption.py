@@ -936,7 +936,7 @@ def test_preempted_task_retries():
         assert query_task(state, task.task_id).state == job_pb2.TASK_STATE_RUNNING
 
         # Preempt
-        with state._scope.transaction() as cur:
+        with state._db.transaction() as cur:
             finalize(
                 cur,
                 [TerminalDecision(TerminalKind.PREEMPT, task.task_id, "Preempted by /bob/prod-job:0")],
@@ -968,7 +968,7 @@ def test_preempted_task_exhausted_retries():
         harness.dispatch(task, w1)
         assert query_task(state, task.task_id).state == job_pb2.TASK_STATE_RUNNING
 
-        with state._scope.transaction() as cur:
+        with state._db.transaction() as cur:
             finalize(
                 cur,
                 [TerminalDecision(TerminalKind.PREEMPT, task.task_id, "preempted")],
@@ -1220,7 +1220,7 @@ def test_pending_child_order_uses_parent_job_config_not_stamped_task_band():
             environment=job_pb2.EnvironmentConfig(),
             replicas=1,
         )
-        with state._scope.transaction() as cur:
+        with state._db.transaction() as cur:
             ops.job.submit(
                 cur, job_id=child_id, request=child_req, ts=Timestamp.now(), run_template_cache=state._run_template_cache
             )
@@ -1244,13 +1244,13 @@ def test_pending_child_order_uses_parent_job_config_not_stamped_task_band():
 
 def _dispatch_with_band(state, task, worker_id, priority_band: int) -> None:
     """Dispatch task with an explicit stamped band, advancing it to RUNNING."""
-    with state._scope.transaction() as cur:
+    with state._db.transaction() as cur:
         ops.task.assign(
             cur,
             [Assignment(task_id=task.task_id, worker_id=worker_id, priority_band=priority_band)],
             health=state._health,
         )
-    with state._scope.transaction() as cur:
+    with state._db.transaction() as cur:
         apply_task_observations(
             cur,
             [
@@ -1287,11 +1287,11 @@ def test_preempted_assigned_task_always_retries():
         task = tasks[0]
 
         # Only assign, don't advance to RUNNING
-        with state._scope.transaction() as cur:
+        with state._db.transaction() as cur:
             ops.task.assign(cur, [Assignment(task_id=task.task_id, worker_id=w1)], health=state._health)
         assert query_task(state, task.task_id).state == job_pb2.TASK_STATE_ASSIGNED
 
-        with state._scope.transaction() as cur:
+        with state._db.transaction() as cur:
             finalize(
                 cur,
                 [TerminalDecision(TerminalKind.PREEMPT, task.task_id, "preempted while assigned")],
@@ -1414,7 +1414,7 @@ def test_preemption_across_multiple_workers():
 def test_preemption_nonexistent_task_is_noop():
     """Preempting a non-existent task is a no-op."""
     with make_controller_state() as state:
-        with state._scope.transaction() as cur:
+        with state._db.transaction() as cur:
             result = finalize(
                 cur,
                 [TerminalDecision(TerminalKind.PREEMPT, JobName.from_wire("/ghost/job:0"), "does not exist")],
@@ -1446,7 +1446,7 @@ def test_preempt_then_worker_terminal_heartbeat_stamps_finished_at_ms():
         attempt_id = query_task(state, task.task_id).current_attempt_id
 
         # Producer transition: attempt PREEMPTED, finished_at_ms left NULL on purpose.
-        with state._scope.transaction() as cur:
+        with state._db.transaction() as cur:
             finalize(
                 cur,
                 [TerminalDecision(TerminalKind.PREEMPT, task.task_id, "preempted by /bob/prod-job:0")],
@@ -1458,7 +1458,7 @@ def test_preempt_then_worker_terminal_heartbeat_stamps_finished_at_ms():
         assert attempt.finished_at_ms is None, "producer transition should leave finalization for heartbeat"
 
         # Worker's heartbeat for the now-terminal attempt — the deferred finalization.
-        with state._scope.transaction() as cur:
+        with state._db.transaction() as cur:
             apply_task_observations(
                 cur,
                 [
@@ -1500,7 +1500,7 @@ def test_preemption_terminal_task_is_noop():
         assert query_task(state, task.task_id).state == job_pb2.TASK_STATE_SUCCEEDED
 
         # Preempt should be no-op
-        with state._scope.transaction() as cur:
+        with state._db.transaction() as cur:
             finalize(
                 cur,
                 [TerminalDecision(TerminalKind.PREEMPT, task.task_id, "too late")],
@@ -1592,7 +1592,7 @@ def test_preempt_task_retries_when_budget_remains():
         assert query_task(state, task.task_id).state == job_pb2.TASK_STATE_RUNNING
 
         attempt_id_before = query_task(state, task.task_id).current_attempt_id
-        with state._scope.transaction() as cur:
+        with state._db.transaction() as cur:
             result = finalize(
                 cur,
                 [TerminalDecision(TerminalKind.PREEMPT, task.task_id, "Evicted by /bob/prod:0")],
@@ -1630,7 +1630,7 @@ def test_preempt_task_terminal_when_budget_exhausted():
         task = tasks[0]
         harness.dispatch(task, w1)
 
-        with state._scope.transaction() as cur:
+        with state._db.transaction() as cur:
             result = finalize(
                 cur,
                 [TerminalDecision(TerminalKind.PREEMPT, task.task_id, "budget gone")],
@@ -1680,7 +1680,7 @@ def test_preempt_task_requeues_coscheduled_siblings_on_retry():
         for i, task in enumerate(tasks):
             dispatch_task(state, task, WorkerId(f"w{i}"))
 
-        with state._scope.transaction() as cur:
+        with state._db.transaction() as cur:
             result = finalize(
                 cur,
                 [TerminalDecision(TerminalKind.PREEMPT, tasks[0].task_id, "evicted")],
@@ -1742,7 +1742,7 @@ def test_preempt_task_cascades_coscheduled_siblings():
             dispatch_task(state, task, WorkerId(f"w{i}"))
 
         # Preempt the first task terminally (no retry budget).
-        with state._scope.transaction() as cur:
+        with state._db.transaction() as cur:
             result0 = finalize(
                 cur,
                 [TerminalDecision(TerminalKind.PREEMPT, tasks[0].task_id, "preempted by prod")],
@@ -1795,7 +1795,7 @@ def test_late_heartbeat_after_preempt_to_pending_does_not_revive_attempt():
         dead_attempt_id = query_task(state, task.task_id).current_attempt_id
         assert dead_attempt_id == 0
 
-        with state._scope.transaction() as cur:
+        with state._db.transaction() as cur:
             finalize(
                 cur,
                 [TerminalDecision(TerminalKind.PREEMPT, task.task_id, "Preempted by /bob/prod-job:0")],
@@ -1819,7 +1819,7 @@ def test_late_heartbeat_after_preempt_to_pending_does_not_revive_attempt():
 
         # Late heartbeat for the (now-dead) attempt 0 arrives: worker still thinks
         # it is RUNNING. This simulates the RPC-in-flight race.
-        with state._scope.transaction() as cur:
+        with state._db.transaction() as cur:
             apply_task_observations(
                 cur,
                 [

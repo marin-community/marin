@@ -77,7 +77,7 @@ def submit_job(
     """Submit a job through the state command API."""
     jid = JobName.from_string(job_id) if job_id.startswith("/") else JobName.root("test-user", job_id)
     request.name = jid.to_wire()
-    with state._scope.transaction() as cur:
+    with state._db.transaction() as cur:
         ops.job.submit(
             cur, job_id=jid, request=request, ts=Timestamp.now(), run_template_cache=state._run_template_cache
         )
@@ -91,7 +91,7 @@ def set_job_state(
     values: dict = {"state": new_state}
     if started_at_ms is not None:
         values["started_at_ms"] = Timestamp.from_ms(started_at_ms)
-    with state._scope.transaction() as tx:
+    with state._db.transaction() as tx:
         tx.execute(sa_update(jobs_table).where(jobs_table.c.job_id == job_id).values(**values))
 
 
@@ -114,7 +114,7 @@ def set_task_retry_counts(
     pc = preemption_count or 0
     if fc == 0 and pc == 0:
         return
-    with state._scope.transaction() as tx:
+    with state._db.transaction() as tx:
         next_id = int(
             tx.execute(
                 select(func.coalesce(func.max(task_attempts_table.c.attempt_id), -1)).where(
@@ -144,7 +144,7 @@ def set_task_retry_counts(
 
 def set_task_state(state: ControllerTestState, task_id: JobName, new_state: int) -> None:
     """Directly set task state in DB for aggregate count tests."""
-    with state._scope.transaction() as tx:
+    with state._db.transaction() as tx:
         tx.execute(sa_update(tasks_table).where(tasks_table.c.task_id == task_id).values(state=new_state))
 
 
@@ -278,7 +278,7 @@ def service(state, scheduler, tmp_path, embedded_log_server, log_client):
         controller=controller_mock,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
         log_client=log_client,
-        scope=state._scope,
+        db=state._db,
         endpoints=state._endpoints,
         endpoint_service=EndpointServiceImpl(
             db=state._db,
@@ -301,7 +301,7 @@ def service_with_autoscaler(state, scheduler, mock_autoscaler, tmp_path, log_cli
         controller=controller_mock,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
         log_client=log_client,
-        scope=state._scope,
+        db=state._db,
         endpoints=state._endpoints,
         endpoint_service=EndpointServiceImpl(db=state._db, endpoints=state._endpoints),
     )
@@ -411,7 +411,7 @@ def test_endpoints_only_returned_for_running_jobs(client, state, job_request):
     set_job_state(state, succeeded_id, job_pb2.JOB_STATE_SUCCEEDED)
 
     # Add endpoints only for non-terminal jobs
-    with state._scope.transaction() as cur:
+    with state._db.transaction() as cur:
         state._endpoints.add(
             cur,
             EndpointRow(
@@ -423,7 +423,7 @@ def test_endpoints_only_returned_for_running_jobs(client, state, job_request):
                 registered_at=Timestamp.now(),
             ),
         )
-    with state._scope.transaction() as cur:
+    with state._db.transaction() as cur:
         state._endpoints.add(
             cur,
             EndpointRow(
@@ -450,7 +450,7 @@ def test_list_endpoints_returns_task_id(client, state, job_request):
     set_job_state(state, job_id, job_pb2.JOB_STATE_RUNNING)
 
     task_id = job_id.task(0)
-    with state._scope.transaction() as cur:
+    with state._db.transaction() as cur:
         state._endpoints.add(
             cur,
             EndpointRow(
@@ -488,7 +488,7 @@ def test_list_endpoints_filters_by_task_ids(client, state):
     set_job_state(state, job_id, job_pb2.JOB_STATE_RUNNING)
 
     task0, task1 = job_id.task(0), job_id.task(1)
-    with state._scope.transaction() as cur:
+    with state._db.transaction() as cur:
         for endpoint_id, task in (("ep-0", task0), ("ep-1", task1)):
             state._endpoints.add(
                 cur,
@@ -980,9 +980,9 @@ def test_get_worker_status_recent_attempts_have_timestamps(client, state, job_re
     job_id = submit_job(state, "ts-job", job_request)
     task_id = job_id.task(0)
 
-    with state._scope.transaction() as cur:
+    with state._db.transaction() as cur:
         ops.task.assign(cur, [Assignment(task_id=task_id, worker_id=wid)], health=state._health)
-    with state._scope.transaction() as cur:
+    with state._db.transaction() as cur:
         apply_task_observations(
             cur,
             [
@@ -995,7 +995,7 @@ def test_get_worker_status_recent_attempts_have_timestamps(client, state, job_re
             endpoints=state._endpoints,
             now=Timestamp.now(),
         )
-    with state._scope.transaction() as cur:
+    with state._db.transaction() as cur:
         apply_task_observations(
             cur,
             [
@@ -1041,9 +1041,9 @@ def test_get_worker_status_recent_attempts_separates_retries(client, state):
     task_id = job_id.task(0)
 
     # First attempt: BUILDING -> WORKER_FAILED (retriable, retries to PENDING).
-    with state._scope.transaction() as cur:
+    with state._db.transaction() as cur:
         ops.task.assign(cur, [Assignment(task_id=task_id, worker_id=wid)], health=state._health)
-    with state._scope.transaction() as cur:
+    with state._db.transaction() as cur:
         apply_task_observations(
             cur,
             [
@@ -1058,7 +1058,7 @@ def test_get_worker_status_recent_attempts_separates_retries(client, state):
             endpoints=state._endpoints,
             now=Timestamp.now(),
         )
-    with state._scope.transaction() as cur:
+    with state._db.transaction() as cur:
         apply_task_observations(
             cur,
             [
@@ -1079,9 +1079,9 @@ def test_get_worker_status_recent_attempts_separates_retries(client, state):
             now=Timestamp.now(),
         )
     # Second attempt: re-dispatch to the same worker, RUNNING.
-    with state._scope.transaction() as cur:
+    with state._db.transaction() as cur:
         ops.task.assign(cur, [Assignment(task_id=task_id, worker_id=wid)], health=state._health)
-    with state._scope.transaction() as cur:
+    with state._db.transaction() as cur:
         apply_task_observations(
             cur,
             [
@@ -1116,9 +1116,9 @@ def test_get_worker_status_recent_attempts_carry_attempt_uid(client, state, job_
     wid = register_worker(state, "w1", "h1:8080", make_worker_metadata())
     job_id = submit_job(state, "uid-worker-job", job_request)
     task_id = job_id.task(0)
-    with state._scope.transaction() as cur:
+    with state._db.transaction() as cur:
         ops.task.assign(cur, [Assignment(task_id=task_id, worker_id=wid)], health=state._health)
-    with state._scope.transaction() as cur:
+    with state._db.transaction() as cur:
         apply_task_observations(
             cur,
             [
@@ -1168,9 +1168,9 @@ def test_get_task_status_attempts_carry_attempt_uid(client, state, job_request):
     task_id = job_id.task(0)
 
     # Attempt 0: placed then WORKER_FAILED so it retries to a fresh attempt.
-    with state._scope.transaction() as cur:
+    with state._db.transaction() as cur:
         ops.task.assign(cur, [Assignment(task_id=task_id, worker_id=wid)], health=state._health)
-    with state._scope.transaction() as cur:
+    with state._db.transaction() as cur:
         apply_task_observations(
             cur,
             [
@@ -1184,9 +1184,9 @@ def test_get_task_status_attempts_carry_attempt_uid(client, state, job_request):
             now=Timestamp.now(),
         )
     # Attempt 1: re-placed and RUNNING.
-    with state._scope.transaction() as cur:
+    with state._db.transaction() as cur:
         ops.task.assign(cur, [Assignment(task_id=task_id, worker_id=wid)], health=state._health)
-    with state._scope.transaction() as cur:
+    with state._db.transaction() as cur:
         apply_task_observations(
             cur,
             [
@@ -1238,10 +1238,10 @@ def test_get_worker_status_includes_running_tasks(client, state, job_request):
     wid = register_worker(state, "w1", "10.0.0.5:8080", make_worker_metadata())
     job_id = submit_job(state, "worker-detail-res", job_request)
     task_id = job_id.task(0)
-    with state._scope.transaction() as cur:
+    with state._db.transaction() as cur:
         ops.task.assign(cur, [Assignment(task_id=task_id, worker_id=wid)], health=state._health)
 
-    with state._scope.transaction() as cur:
+    with state._db.transaction() as cur:
         apply_task_observations(
             cur,
             [WorkerTaskUpdates(worker_id=wid, updates=[])],
@@ -1500,7 +1500,7 @@ def test_auth_config_kubernetes_capabilities(state, scheduler, tmp_path, log_cli
         controller=controller_mock,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
         log_client=log_client,
-        scope=state._scope,
+        db=state._db,
         endpoints=state._endpoints,
         endpoint_service=EndpointServiceImpl(db=state._db, endpoints=state._endpoints),
     )
@@ -1535,7 +1535,7 @@ def _make_k8s_dashboard_client(state, scheduler, tmp_path, log_client):
         controller=controller_mock,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
         log_client=log_client,
-        scope=state._scope,
+        db=state._db,
         endpoints=state._endpoints,
         endpoint_service=EndpointServiceImpl(db=state._db, endpoints=state._endpoints),
     )
@@ -1750,7 +1750,7 @@ def _multi_backend_client(state, scheduler, tmp_path, log_client, backends):
         controller=controller_mock,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
         log_client=log_client,
-        scope=state._scope,
+        db=state._db,
         endpoints=state._endpoints,
         endpoint_service=EndpointServiceImpl(db=state._db, endpoints=state._endpoints),
     )
@@ -1840,7 +1840,7 @@ def test_task_backend_id_propagated_to_proto(client, state, job_request):
     job_id = submit_job(state, "backend-task-job", job_request)
     tasks = _query_tasks_with_attempts(state, job_id)
     task_id = tasks[0].task_id
-    with state._scope.transaction() as tx:
+    with state._db.transaction() as tx:
         tx.execute(sa_update(tasks_table).where(tasks_table.c.task_id == task_id).values(backend_id="gcp"))
 
     resp = rpc_post(client, "GetTaskStatus", {"taskId": task_id.to_wire()})
@@ -1850,7 +1850,7 @@ def test_task_backend_id_propagated_to_proto(client, state, job_request):
 def test_job_backend_id_propagated_to_list_jobs(client, state, job_request):
     """ListJobs surfaces backend_id stamped on the jobs row."""
     job_id = submit_job(state, "backend-job", job_request)
-    with state._scope.transaction() as tx:
+    with state._db.transaction() as tx:
         tx.execute(sa_update(jobs_table).where(jobs_table.c.job_id == job_id).values(backend_id="gcp"))
 
     resp = rpc_post(client, "ListJobs")
@@ -1862,7 +1862,7 @@ def test_job_backend_id_propagated_to_list_jobs(client, state, job_request):
 def test_job_backend_id_propagated_to_get_job_status(client, state, job_request):
     """GetJobStatus surfaces backend_id stamped on the jobs row (job detail page)."""
     job_id = submit_job(state, "backend-detail-job", job_request)
-    with state._scope.transaction() as tx:
+    with state._db.transaction() as tx:
         tx.execute(sa_update(jobs_table).where(jobs_table.c.job_id == job_id).values(backend_id="gcp"))
 
     resp = rpc_post(client, "GetJobStatus", {"jobId": job_id.to_wire()})
@@ -1873,7 +1873,7 @@ def test_list_jobs_filters_by_backend_id(client, state, job_request):
     """ListJobs.query.backendId restricts results to jobs on that backend."""
     gcp_job_id = submit_job(state, "gcp-job", job_request)
     cw_job_id = submit_job(state, "cw-job", job_request)
-    with state._scope.transaction() as tx:
+    with state._db.transaction() as tx:
         tx.execute(sa_update(jobs_table).where(jobs_table.c.job_id == gcp_job_id).values(backend_id="gcp"))
         tx.execute(sa_update(jobs_table).where(jobs_table.c.job_id == cw_job_id).values(backend_id="cw"))
 
@@ -1894,7 +1894,7 @@ def test_list_workers_stamps_backend_id_and_scale_group(state, scheduler, tmp_pa
         controller=controller_mock,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
         log_client=log_client,
-        scope=state._scope,
+        db=state._db,
         endpoints=state._endpoints,
         endpoint_service=EndpointServiceImpl(db=state._db, endpoints=state._endpoints),
     )
@@ -1917,7 +1917,7 @@ def test_worker_backend_id_propagated_to_get_worker_status(state, scheduler, tmp
         controller=controller_mock,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
         log_client=log_client,
-        scope=state._scope,
+        db=state._db,
         endpoints=state._endpoints,
         endpoint_service=EndpointServiceImpl(db=state._db, endpoints=state._endpoints),
     )
@@ -1938,7 +1938,7 @@ def test_list_workers_filters_by_backend_id(state, scheduler, tmp_path, log_clie
         controller=controller_mock,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
         log_client=log_client,
-        scope=state._scope,
+        db=state._db,
         endpoints=state._endpoints,
         endpoint_service=EndpointServiceImpl(db=state._db, endpoints=state._endpoints),
     )
@@ -1973,7 +1973,7 @@ def test_list_backends_returns_per_backend_summary(state, scheduler, tmp_path, l
         controller=controller_mock,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
         log_client=log_client,
-        scope=state._scope,
+        db=state._db,
         endpoints=state._endpoints,
         endpoint_service=EndpointServiceImpl(db=state._db, endpoints=state._endpoints),
     )
@@ -2048,9 +2048,9 @@ def test_list_backends_worker_detail_overlays_running_task_counts(state, schedul
     # Place a running task on the VM's worker so the overlay's DB lookup finds it.
     wid = register_worker(state, "w-run", "10.0.0.9:8080", make_worker_metadata(), scale_group="tpu-v5e")
     task_id = submit_job(state, "run-job", job_request).task(0)
-    with state._scope.transaction() as cur:
+    with state._db.transaction() as cur:
         ops.task.assign(cur, [Assignment(task_id=task_id, worker_id=wid)], health=state._health)
-    with state._scope.transaction() as cur:
+    with state._db.transaction() as cur:
         apply_task_observations(
             cur,
             [

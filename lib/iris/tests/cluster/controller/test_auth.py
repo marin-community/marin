@@ -87,7 +87,7 @@ def service(state, tmp_path, log_client):
         controller=controller_mock,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
         log_client=log_client,
-        scope=state._scope,
+        db=state._db,
         endpoints=state._endpoints,
         endpoint_service=EndpointServiceImpl(db=state._db, endpoints=state._endpoints),
     )

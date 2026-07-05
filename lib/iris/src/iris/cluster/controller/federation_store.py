@@ -16,8 +16,9 @@ from rigging.timing import Timestamp
 
 from iris.cluster.controller import ops, reads, writes
 from iris.cluster.controller.codec import reconstruct_launch_job_request
+from iris.cluster.controller.db import ControllerDB, Tx
+from iris.cluster.controller.projections.attempt_counts import AttemptCountsProjection
 from iris.cluster.controller.run_template import RunTemplateCache
-from iris.cluster.controller.scope import ControllerScope, ScopedTx
 from iris.cluster.federation.store import (
     CancelTarget,
     HandoffAdmission,
@@ -40,18 +41,18 @@ class ControllerFederationStore:
 
     def __init__(
         self,
-        scope: ControllerScope,
+        db: ControllerDB,
         *,
         run_template_cache: RunTemplateCache,
     ):
-        self._scope = scope
+        self._db = db
         self._run_template_cache = run_template_cache
 
     # -- handoff -------------------------------------------------------------
 
     def admit_and_persist_handoff(self, spec: HandoffSpec) -> HandoffAdmission:
         now = Timestamp.now()
-        with self._scope.transaction() as cur:
+        with self._db.transaction() as cur:
             if reads.get_job_state(cur, spec.local_job_id) is not None:
                 # A handle already exists — a retried/idempotent resubmit.
                 return HandoffAdmission.ALREADY_EXISTS
@@ -74,16 +75,16 @@ class ControllerFederationStore:
         return HandoffAdmission.ADMITTED
 
     def mark_handed_off(self, local_job_id: JobName) -> None:
-        with self._scope.transaction() as cur:
+        with self._db.transaction() as cur:
             writes.set_handoff_state(cur, local_job_id, int(HandoffState.HANDED_OFF))
 
     def mark_handoff_rejected(self, local_job_id: JobName, *, reason: str) -> None:
-        with self._scope.transaction() as cur:
+        with self._db.transaction() as cur:
             writes.set_handoff_state(cur, local_job_id, int(HandoffState.HANDOFF_REJECTED))
             writes.mark_federated_job_killed(cur, local_job_id, now_ms=Timestamp.now().epoch_ms(), error=reason)
 
     def pending_handoffs(self) -> list[HandoffSpec]:
-        with self._scope.read_snapshot() as tx:
+        with self._db.read_snapshot() as tx:
             handles = reads.pending_handoff_handles(tx)
             pending = []
             for handle in handles:
@@ -111,7 +112,7 @@ class ControllerFederationStore:
         delivered handle keeps its synced state: the routed cancel drives it terminal
         on the peer and the next sync reflects it.
         """
-        with self._scope.transaction() as cur:
+        with self._db.transaction() as cur:
             handle = reads.federated_handle(cur, local_job_id)
             if handle is None:
                 return None
@@ -123,11 +124,11 @@ class ControllerFederationStore:
             return CancelTarget(local_job_id=local_job_id, peer_id=handle.peer_id)
 
     def pending_cancels(self) -> list[CancelTarget]:
-        with self._scope.read_snapshot() as tx:
+        with self._db.read_snapshot() as tx:
             return [CancelTarget(local_job_id=h.job_id, peer_id=h.peer_id) for h in reads.pending_cancel_handles(tx)]
 
     def mark_cancel_satisfied(self, local_job_id: JobName, *, now_ms: int) -> None:
-        with self._scope.transaction() as cur:
+        with self._db.transaction() as cur:
             writes.mark_federated_job_killed(
                 cur, local_job_id, now_ms=now_ms, error="Cancelled (peer reported the job gone)"
             )
@@ -135,11 +136,11 @@ class ControllerFederationStore:
     # -- sync ----------------------------------------------------------------
 
     def read_cursor(self, peer_id: str) -> str:
-        with self._scope.read_snapshot() as tx:
+        with self._db.read_snapshot() as tx:
             return reads.read_sync_cursor(tx, peer_id)
 
     def active_federated_job_count(self, peer_id: str) -> int:
-        with self._scope.read_snapshot() as tx:
+        with self._db.read_snapshot() as tx:
             return reads.active_federated_job_count(tx, peer_id)
 
     def apply_sync_batch(
@@ -150,7 +151,7 @@ class ControllerFederationStore:
         next_cursor: str,
         cursor_stale: bool,
     ) -> None:
-        with self._scope.transaction() as cur:
+        with self._db.transaction() as cur:
             for delta in deltas:
                 # Job ids are cluster-invariant: the peer reports the same id the
                 # parent handed it. Guard on a SENT handle for (peer, id) — a peer
@@ -170,7 +171,7 @@ class ControllerFederationStore:
 
             writes.upsert_sync_cursor(cur, peer_id, next_cursor)
 
-    def _mirror_delta(self, cur: ScopedTx, peer_id: str, local_job_id: JobName, delta) -> None:
+    def _mirror_delta(self, cur: Tx, peer_id: str, local_job_id: JobName, delta) -> None:
         summary = delta.summary
         writes.mirror_federated_job(
             cur,
@@ -207,9 +208,9 @@ class ControllerFederationStore:
             writes.mirror_federated_attempts(cur, task_id=local_task_id, attempts=task.attempts)
             # The parent derives the federated task's counts from these mirrored
             # attempts, so drop the job's cached totals via the cursor's memo.
-            cur.attempt_counts.invalidate_for_tasks(cur, [local_task_id])
+            cur.caches[AttemptCountsProjection].invalidate_for_tasks(cur, [local_task_id])
 
-    def _set_replace(self, cur: ScopedTx, peer_id: str, deltas) -> None:
+    def _set_replace(self, cur: Tx, peer_id: str, deltas) -> None:
         """Full-resync set-replacement: drop any local handle for ``peer_id``
         absent from the peer's active set, reclaiming a job the parent never saw
         tombstoned."""

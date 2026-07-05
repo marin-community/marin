@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from iris.cluster.constraints import AttributeValue
 from iris.cluster.controller import writes
 from iris.cluster.controller.db import ControllerDB
+from iris.cluster.controller.projections.attempt_counts import AttemptCountsProjection
 from iris.cluster.controller.projections.endpoints import EndpointsProjection
 from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
 from iris.cluster.controller.run_template import RunTemplateCache, new_run_template_cache
@@ -26,7 +27,6 @@ from iris.cluster.controller.schema import (
     worker_attributes_table,
     workers_table,
 )
-from iris.cluster.controller.scope import ControllerScope
 from iris.cluster.controller.task_state import ACTIVE_TASK_STATES
 from iris.cluster.controller.worker_health import WorkerHealthTracker
 from iris.cluster.types import JobName, WorkerId
@@ -49,7 +49,7 @@ class ControllerTestState:
     """
 
     _db: ControllerDB
-    _scope: ControllerScope
+    _attempt_counts: AttemptCountsProjection
     _health: WorkerHealthTracker
     _endpoints: EndpointsProjection
     _worker_attrs: WorkerAttrsProjection
@@ -65,10 +65,11 @@ class ControllerTestState:
         run_template_cache: RunTemplateCache | None = None,
     ) -> None:
         self._db = db
-        # The cursor waist, mirroring a real Controller. Owns the per-controller
-        # attempt-counts memo and hands out ``ScopedTx`` cursors, so helpers that
-        # commit effects or read derived counts go through ``self._scope``.
-        self._scope = ControllerScope(db)
+        # Mirror a real Controller: constructing the derived-count memo self-registers
+        # it into ``db.caches``, so cursors this DB mints reach it as
+        # ``tx.caches[AttemptCountsProjection]`` when helpers commit effects / purge
+        # jobs / read derived counts.
+        self._attempt_counts = AttemptCountsProjection(db)
         self._health = health or WorkerHealthTracker()
         self._endpoints = endpoints or EndpointsProjection(db)
         self._worker_attrs = worker_attrs or WorkerAttrsProjection(db, owns_scale_group=lambda _scale_group: True)

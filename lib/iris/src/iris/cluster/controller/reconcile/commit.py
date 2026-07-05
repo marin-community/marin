@@ -21,6 +21,7 @@ from sqlalchemy import update as sa_update
 
 from iris.cluster.controller.audit_logging import log_event
 from iris.cluster.controller.db import Tx
+from iris.cluster.controller.projections.attempt_counts import AttemptCountsProjection
 from iris.cluster.controller.projections.endpoints import EndpointsProjection
 from iris.cluster.controller.reconcile.effects import (
     AttemptRowDelta,
@@ -29,7 +30,6 @@ from iris.cluster.controller.reconcile.effects import (
     TaskRowDelta,
 )
 from iris.cluster.controller.schema import jobs_table, task_attempts_table, tasks_table
-from iris.cluster.controller.scope import ScopedTx
 from iris.cluster.controller.task_state import ACTIVE_TASK_STATES
 from iris.cluster.controller.writes import record_federation_change
 from iris.rpc import job_pb2
@@ -100,7 +100,7 @@ def _flush_tasks(cur: Tx, deltas: list[TaskRowDelta]) -> None:
         record_federation_change(cur, d.task_id.parent, task_index=d.task_id.task_index)
 
 
-def _flush_attempts(cur: ScopedTx, deltas: list[AttemptRowDelta]) -> None:
+def _flush_attempts(cur: Tx, deltas: list[AttemptRowDelta]) -> None:
     """Bulk-flush attempt deltas. Rows where nothing is set are skipped.
 
     All set columns use the same statement shape (uniform bound params); a None
@@ -144,7 +144,7 @@ def _flush_attempts(cur: ScopedTx, deltas: list[AttemptRowDelta]) -> None:
     )
     # An attempt's state / started_at drives the derived failure & preemption
     # counts, so invalidate the owning jobs' cached totals via the cursor's memo.
-    cur.attempt_counts.invalidate_for_tasks(cur, [d.task_id for d in deltas])
+    cur.caches[AttemptCountsProjection].invalidate_for_tasks(cur, [d.task_id for d in deltas])
 
 
 def _flush_jobs(cur: Tx, deltas: list[JobRowDelta]) -> None:
@@ -211,7 +211,7 @@ def _flush_jobs(cur: Tx, deltas: list[JobRowDelta]) -> None:
 
 
 def commit_effects(
-    cur: ScopedTx,
+    cur: Tx,
     effects: ControllerEffects,
     *,
     endpoints: EndpointsProjection,
@@ -226,7 +226,7 @@ def commit_effects(
     events) through the single ``WorkerHealthTracker.apply`` site.
 
     Attempt writes invalidate the derived-count cache through the cursor
-    (``cur.attempt_counts``), so no cache reference is threaded here.
+    (``cur.caches[AttemptCountsProjection]``), so no cache reference is threaded here.
     """
     _flush_tasks(cur, list(effects.tasks.values()))
     _flush_attempts(cur, list(effects.attempts.values()))

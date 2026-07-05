@@ -57,6 +57,7 @@ from iris.cluster.controller.ops.task import (
     Assignment,
     finalize,
 )
+from iris.cluster.controller.projections.attempt_counts import AttemptCountsProjection
 from iris.cluster.controller.projections.endpoints import EndpointsProjection
 from iris.cluster.controller.pruner import prune_old_data
 from iris.cluster.controller.reconcile import dispatch
@@ -79,7 +80,6 @@ from iris.cluster.controller.scheduling.policy import (
 from iris.cluster.controller.scheduling.scheduler import (
     SchedulingContext,
 )
-from iris.cluster.controller.scope import ControllerScope
 from iris.cluster.controller.service import ControllerServiceImpl, PendingKick
 from iris.cluster.controller.worker_health import WorkerLiveness
 from iris.cluster.federation.manager import DEFAULT_HEARTBEAT_INTERVAL, FederationManager
@@ -374,11 +374,12 @@ class Controller:
         else:
             self._db = ControllerDB(db_dir=config.local_state_dir / "db")
         self._endpoints = EndpointsProjection(self._db)
-        # The cursor waist: owns the per-controller projection caches (currently the
-        # derived attempt-counts memo) and hands out ``ScopedTx`` cursors. Threaded
-        # to the service, federation store, pruner, and reconcile commit path so
-        # they reach the cache through the cursor rather than a global registry.
-        self._scope = ControllerScope(self._db)
+        # Derived failure/preemption-count memo. Constructing it self-registers it
+        # into ``self._db.caches``, so every cursor the DB mints reaches it as
+        # ``tx.caches[AttemptCountsProjection]`` — the service, federation store,
+        # pruner, and reconcile commit path all invalidate/read through the cursor
+        # rather than holding a threaded cache reference.
+        self._attempt_counts = AttemptCountsProjection(self._db)
 
         self._threads = threads if threads is not None else get_thread_container()
 
@@ -392,7 +393,7 @@ class Controller:
             build_peers(config.peers),
             threads=self._threads,
             store=ControllerFederationStore(
-                self._scope,
+                self._db,
                 run_template_cache=self._run_template_cache,
             ),
             cluster_id=config.cluster_id,
@@ -459,7 +460,7 @@ class Controller:
             controller=self,
             bundle_store=self._bundle_store,
             log_client=self._log_client,
-            scope=self._scope,
+            db=self._db,
             endpoints=self._endpoints,
             endpoint_service=self._endpoint_service,
             auth=config.auth,
@@ -774,7 +775,7 @@ class Controller:
                 last_full_prune = now
                 try:
                     prune_old_data(
-                        self._scope,
+                        self._db,
                         self._backends.values(),
                         self._endpoints,
                         job_retention=self._config.job_retention,
@@ -1199,7 +1200,7 @@ class Controller:
         if not (has_sched or has_recon or timeout_decisions or pending_kicks or states):
             return
 
-        with self._scope.transaction() as cur:
+        with self._db.transaction() as cur:
             if sched_result is not None:
                 self._commit_schedule_decisions(
                     cur, sched_result, sched_results, now, backend_pins, routing_unschedulable
@@ -1355,7 +1356,7 @@ class Controller:
         # these assignments are all its workers — re-checked against its tracker.
         health = self._representative_backend.health
         assert health is not None, "scheduling assignments produced by a backend with no liveness tracker"
-        with self._scope.transaction() as cur:
+        with self._db.transaction() as cur:
             ops.task.assign(cur, assignments, health=health)
 
     def _apply_preemptions(self, preemptions: list[TerminalDecision]) -> None:
@@ -1367,7 +1368,7 @@ class Controller:
         """
         if not preemptions:
             return
-        with self._scope.transaction() as cur:
+        with self._db.transaction() as cur:
             finalize(
                 cur,
                 preemptions,
@@ -1412,7 +1413,7 @@ class Controller:
             for task in tasks:
                 logger.info("[DRY-RUN] Would mark task %s as unschedulable", task.task_id)
             return
-        with self._scope.transaction() as cur:
+        with self._db.transaction() as cur:
             finalize(
                 cur,
                 self._unschedulable_decisions(tasks),
@@ -1467,7 +1468,7 @@ class Controller:
         """
         max_promotions = self._promotion_bucket.available
         backend_filter = None if len(self._backends) == 1 else backend_id
-        with self._scope.transaction() as cur:
+        with self._db.transaction() as cur:
             batch = dispatch.drain_for_dispatch(
                 cur, cache=self._run_template_cache, max_promotions=max_promotions, backend_id=backend_filter
             )

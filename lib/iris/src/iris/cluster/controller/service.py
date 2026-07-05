@@ -60,6 +60,7 @@ from iris.cluster.controller.codec import (
 )
 from iris.cluster.controller.db import ControllerDB, Tx
 from iris.cluster.controller.endpoint_service import EndpointServiceImpl
+from iris.cluster.controller.projections.attempt_counts import AttemptCountsProjection
 from iris.cluster.controller.projections.endpoints import EndpointsProjection
 from iris.cluster.controller.reads import TaskJobSummary
 from iris.cluster.controller.reconcile.policy import MAX_ACTIVE_TASKS_PER_USER
@@ -75,7 +76,6 @@ from iris.cluster.controller.schema import (
     worker_attributes_table,
     workers_table,
 )
-from iris.cluster.controller.scope import ControllerScope, ScopedTx
 from iris.cluster.controller.task_state import ACTIVE_TASK_STATES, task_row_can_be_scheduled
 from iris.cluster.controller.worker_health import WorkerLiveness
 from iris.cluster.federation.manager import FederationManager
@@ -1052,17 +1052,16 @@ class ControllerServiceImpl:
         bundle_store: BundleStore,
         log_client: LogClient,
         *,
-        scope: ControllerScope,
+        db: ControllerDB,
         endpoints: EndpointsProjection,
         endpoint_service: EndpointServiceImpl,
         auth: ControllerAuth | None = None,
         user_budget_defaults: UserBudgetDefaults | None = None,
     ):
-        # Open cache-touching reads/writes through the scope (they get a ``ScopedTx``
-        # carrying ``attempt_counts``); ``self._db`` is the raw handle for the many
-        # read helpers that never touch derived counts.
-        self._scope = scope
-        self._db = scope.db
+        # Every cursor this DB mints carries the per-controller cache registry as
+        # ``tx.caches``, so cache-touching reads/writes reach the derived-count memo
+        # through the cursor — no cache reference held on the service.
+        self._db = db
         self._endpoints = endpoints
         # The leased registry owns endpoint logic; the legacy
         # ControllerService.{Register,Unregister,List}Endpoint RPCs delegate here.
@@ -1364,9 +1363,9 @@ class ControllerServiceImpl:
         # drain wait below) — between the two txs another submitter can
         # race, so the INSERT tx re-checks existence before INSERTing to
         # avoid tripping the jobs.job_id PK. See the inner re-check at
-        # the second ``with self._scope.transaction()`` below.
+        # the second ``with self._db.transaction()`` below.
         needs_drain = False
-        with self._scope.transaction() as cur:
+        with self._db.transaction() as cur:
             existing_state = reads.get_job_state(cur, job_id)
             if existing_state is not None:
                 # A received handoff whose id already exists takes the federation
@@ -1429,7 +1428,7 @@ class ControllerServiceImpl:
                     job_id,
                     _JOB_REPLACEMENT_DRAIN_WAIT.to_seconds(),
                 )
-            with self._scope.transaction() as cur:
+            with self._db.transaction() as cur:
                 ops.job.remove_finished(cur, job_id)
 
         # Handle bundle_blob: upload to bundle store, then replace blob
@@ -1560,7 +1559,7 @@ class ControllerServiceImpl:
         # A received handoff runs as an ordinary local job; ``ops.job.submit``
         # records it as a RECEIVED federated_jobs row so FederationSync reports it
         # back to the requester and this controller writes its changelog.
-        with self._scope.transaction() as cur:
+        with self._db.transaction() as cur:
             # Re-check inside the same tx as the INSERT. Two LaunchJob
             # handlers can race past the earlier existence check (separate
             # transaction above) — almost always the same logical request
@@ -1610,14 +1609,14 @@ class ControllerServiceImpl:
         cheap: one job row read + one GROUP BY query vs loading every task,
         attempt, and worker address.
         """
-        with self._scope.read_snapshot() as q:
+        with self._db.read_snapshot() as q:
             job = reads.get_job_detail(q, JobName.from_wire(request.job_id))
             if not job:
                 raise ConnectError(Code.NOT_FOUND, f"Job {request.job_id} not found")
             # Aggregate task counts via a single GROUP BY query; failure/preemption
             # totals come from the attempt-derived cache.
             summaries = reads.task_summaries_for_jobs(
-                q, {job.job_id}, attempt_counts=q.attempt_counts.get_jobs(q, [job.job_id])
+                q, {job.job_id}, attempt_counts=q.caches[AttemptCountsProjection].get_jobs(q, [job.job_id])
             )
             has_children = bool(reads.parent_ids_with_children(q, [job.job_id]))
             # A federated job's subtree lives on the peer; load the handle to surface
@@ -1727,7 +1726,7 @@ class ControllerServiceImpl:
 
         # cancel_job uses a recursive CTE to walk the full subtree in a single
         # transaction, so there is no need to recurse manually.
-        with self._scope.transaction() as cur:
+        with self._db.transaction() as cur:
             ops.job.cancel(
                 cur,
                 job_id=job_id,
@@ -1824,11 +1823,13 @@ class ControllerServiceImpl:
         if state_ids is None:
             return controller_pb2.Controller.ListJobsResponse(jobs=[], total_count=0, has_more=False)
 
-        with self._scope.read_snapshot() as q:
+        with self._db.read_snapshot() as q:
             page, total_count = _query_jobs(q, query, state_ids)
             page_ids = [j.job_id for j in page]
             summaries = (
-                reads.task_summaries_for_jobs(q, set(page_ids), attempt_counts=q.attempt_counts.get_jobs(q, page_ids))
+                reads.task_summaries_for_jobs(
+                    q, set(page_ids), attempt_counts=q.caches[AttemptCountsProjection].get_jobs(q, page_ids)
+                )
                 if page_ids
                 else {}
             )
@@ -2049,7 +2050,7 @@ class ControllerServiceImpl:
         worker_attrs = backend.worker_attrs
         assert health is not None, f"worker {worker_id} registered into a scale group with no liveness tracker"
         assert worker_attrs is not None, f"worker {worker_id} registered into a scale group with no attrs projection"
-        with self._scope.transaction() as cur:
+        with self._db.transaction() as cur:
             ops.worker.register(
                 cur,
                 worker_id=worker_id,
@@ -2612,7 +2613,7 @@ class ControllerServiceImpl:
             raise ConnectError(Code.PERMISSION_DENIED, "Reserved username prefix")
 
         now = Timestamp.now()
-        with self._scope.transaction() as _tx:
+        with self._db.transaction() as _tx:
             writes.ensure_user(_tx, username, now)
             role = reads.get_user_role(_tx, username)
 
@@ -2701,7 +2702,7 @@ class ControllerServiceImpl:
             authorize(AuthzAction.MANAGE_OTHER_KEYS)
 
         now = Timestamp.now()
-        with self._scope.transaction() as _tx:
+        with self._db.transaction() as _tx:
             writes.ensure_user(_tx, target_user, now)
             role = reads.get_user_role(_tx, target_user)
 
@@ -2891,7 +2892,7 @@ class ControllerServiceImpl:
         ):
             raise ConnectError(Code.INVALID_ARGUMENT, f"Invalid max_band: {request.max_band}")
         now = Timestamp.now()
-        with self._scope.transaction() as _tx:
+        with self._db.transaction() as _tx:
             writes.ensure_user(_tx, request.user_id, now)
             writes.set_user_budget(_tx, request.user_id, request.budget_limit, max_band, now)
         return controller_pb2.Controller.SetUserBudgetResponse()
@@ -3210,10 +3211,10 @@ class ControllerServiceImpl:
         require_identity()
         return controller_pb2.Controller.ListPeersResponse(peers=self._controller.federation.peer_summaries())
 
-    def _federated_job_summary(self, q: ScopedTx, job) -> job_pb2.JobStatus:
+    def _federated_job_summary(self, q: Tx, job) -> job_pb2.JobStatus:
         """A ``JobStatus`` for a handed-off job as this peer holds it (sync summary)."""
         summaries = reads.task_summaries_for_jobs(
-            q, {job.job_id}, attempt_counts=q.attempt_counts.get_jobs(q, [job.job_id])
+            q, {job.job_id}, attempt_counts=q.caches[AttemptCountsProjection].get_jobs(q, [job.job_id])
         )
         status = job_pb2.JobStatus(
             job_id=job.job_id.to_wire(),
@@ -3280,7 +3281,7 @@ class ControllerServiceImpl:
         cursor = request.cursor
         cursor_seq = int(cursor) if cursor else 0
         deltas: list[controller_pb2.Controller.FederationJobDelta] = []
-        with self._scope.read_snapshot() as q:
+        with self._db.read_snapshot() as q:
             min_seq = reads.changelog_min_seq(q)
             next_cursor = str(reads.changelog_max_seq(q))
             # Stale when the requester has no cursor, or its cursor sits below the

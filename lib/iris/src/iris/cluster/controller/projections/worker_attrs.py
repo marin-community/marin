@@ -23,7 +23,7 @@ from typing import ClassVar, Protocol
 from sqlalchemy import select
 
 from iris.cluster.constraints import AttributeValue
-from iris.cluster.controller import db, reads
+from iris.cluster.controller import reads
 from iris.cluster.controller.codec import WorkerAttributeRow, attribute_value_from_row
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.projections import PROJECTIONS
@@ -88,7 +88,7 @@ class WorkerAttrsProjection:
         is handled by :func:`_decode_value`.
         """
         decoded: dict[WorkerId, dict[str, AttributeValue]] = {}
-        with db.read_snapshot(self._db.sa_read_engine) as tx:
+        with self._db.read_snapshot() as tx:
             owned = reads.owned_worker_ids(tx, self._owns_scale_group)
             for row in tx.execute(select(worker_attributes_table)).all():
                 if row.worker_id not in owned:

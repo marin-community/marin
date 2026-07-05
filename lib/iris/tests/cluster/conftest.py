@@ -242,7 +242,7 @@ class ServiceTestHarness:
     def sync_k8s(self) -> None:
         """Run one K8s direct provider sync cycle."""
         assert self.k8s_provider is not None, "sync_k8s requires K8s harness"
-        with self.state._scope.transaction() as cur:
+        with self.state._db.transaction() as cur:
             batch = dispatch.drain_for_dispatch(cur, cache=self.state._run_template_cache)
         snapshot = ControlSnapshot(
             worker_addresses={},
@@ -254,7 +254,7 @@ class ServiceTestHarness:
         # The backend now authors its dispatch effects; the controller (here, the
         # harness) just commits them.
         result = self.k8s_provider.reconcile(snapshot)
-        with self.state._scope.transaction() as cur:
+        with self.state._db.transaction() as cur:
             commit_effects(cur, result.effects, endpoints=self.state._endpoints)
 
     # ── GCP-specific ────────────────────────────────────────────
@@ -280,7 +280,7 @@ class ServiceTestHarness:
         metadata.attributes["device-type"].string_value = device_type
         metadata.attributes["preemptible"].string_value = str(preemptible).lower()
         metadata.attributes["region"].string_value = region
-        with self.state._scope.transaction() as cur:
+        with self.state._db.transaction() as cur:
             ops.worker.register(
                 cur,
                 worker_id=wid,
@@ -378,7 +378,7 @@ class ServiceTestHarness:
                 worker_row = tx.execute(select(workers_table.c.worker_id).limit(1)).first()
             if worker_row is None:
                 raise ValueError("No GCP workers registered -- call register_gcp_worker first")
-            with self.state._scope.transaction() as cur:
+            with self.state._db.transaction() as cur:
                 ops.task.assign(
                     cur, [Assignment(task_id=task_id, worker_id=worker_row.worker_id)], health=self.state._health
                 )
@@ -397,7 +397,7 @@ class ServiceTestHarness:
             )
             and task.state != job_pb2.TASK_STATE_RUNNING
         ):
-            with self.state._scope.transaction() as cur:
+            with self.state._db.transaction() as cur:
                 apply_task_observations(
                     cur,
                     [
@@ -417,7 +417,7 @@ class ServiceTestHarness:
                     now=Timestamp.now(),
                 )
 
-        with self.state._scope.transaction() as cur:
+        with self.state._db.transaction() as cur:
             apply_task_observations(
                 cur,
                 [
@@ -474,7 +474,7 @@ def _make_k8s_harness(tmp_path, log_address: str) -> ServiceTestHarness:
         controller=ctrl,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "k8s_bundles")),
         log_client=LogClient.connect(log_address),
-        scope=state._scope,
+        db=state._db,
         endpoints=endpoints,
         endpoint_service=EndpointServiceImpl(db=db, endpoints=endpoints),
     )
@@ -507,7 +507,7 @@ def _make_gcp_harness(tmp_path, log_address: str) -> ServiceTestHarness:
         controller=ctrl,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "gcp_bundles")),
         log_client=LogClient.connect(log_address),
-        scope=state._scope,
+        db=state._db,
         endpoints=endpoints,
         endpoint_service=EndpointServiceImpl(db=db, endpoints=endpoints),
     )

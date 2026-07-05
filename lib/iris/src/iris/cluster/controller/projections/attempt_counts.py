@@ -14,14 +14,14 @@ commit that touches a job's attempts.
 Unlike :class:`WorkerAttrsProjection` / :class:`EndpointsProjection`, this
 projection owns no table and is not threaded to its writers. ``task_attempts`` is
 written from several call sites (reconcile commit, federation mirror) that do not
-hold the cache. Instead it is owned by
-:class:`~iris.cluster.controller.scope.ControllerScope` and exposed on every
-:class:`~iris.cluster.controller.scope.ScopedTx` cursor the scope hands out — so a
-write chokepoint invalidates via ``cur.attempt_counts.invalidate_for_tasks(cur,
-task_ids)`` and the service reads via ``cur.attempt_counts.get_jobs(cur,
-job_ids)``, all without threading a cache reference or a global registry. New
-attempts (ASSIGNED, no ``started_at``) do not change the counts, but they funnel
-through the same chokepoints, so over-invalidating is harmless.
+hold the cache. Instead it self-registers into the DB's
+:class:`~iris.cluster.controller.caches.CacheRegistry` on construction and is
+reached by concrete type through any cursor — a write chokepoint invalidates via
+``cur.caches[AttemptCountsProjection].invalidate_for_tasks(cur, task_ids)`` and the
+service reads via ``q.caches[AttemptCountsProjection].get_jobs(q, job_ids)``, all
+without threading a cache reference or a global registry. New attempts (ASSIGNED,
+no ``started_at``) do not change the counts, but they funnel through the same
+chokepoints, so over-invalidating is harmless.
 
 Consistency: entries are dropped by a post-commit hook that fires under the DB
 write lock (via ``tx.register``), so a reader either sees the pre-commit memo or
@@ -58,6 +58,11 @@ class AttemptCountsProjection:
         # Lazy fill: start empty and populate on demand. A checkpoint restore
         # swaps the DB file, so drop everything and refill against the new rows.
         db.register_reopen_hook(self.clear)
+        # Self-register into the DB's cache registry so every ``Tx`` the DB mints
+        # reaches this memo as ``tx.caches[AttemptCountsProjection]`` — construction
+        # is the single wiring point, and a rebuild over the same DB supersedes the
+        # prior entry so lookups always resolve to one canonical instance.
+        db.caches.register(self)
 
     def clear(self) -> None:
         with self._lock:
