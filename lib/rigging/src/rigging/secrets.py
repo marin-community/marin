@@ -135,6 +135,19 @@ def _fetch(ref: str) -> str | None:
     )
 
 
+def _scheme_of(ref: str) -> str:
+    """The source-scheme category of a reference (``env`` / ``file`` / ``gcp-secret``).
+
+    Returns one of the fixed scheme constants — a locator *category*, derived from
+    ``_FETCHERS`` and never from the secret value or the reference body — so it is
+    safe to log while the reference itself (which may name a sensitive path) is not.
+    """
+    for scheme in _FETCHERS:
+        if ref.startswith(scheme):
+            return scheme.rstrip(":/")
+    return "unknown"
+
+
 def resolve_secret_spec(spec: str | Sequence[str]) -> ResolvedSecret:
     """Resolve an ordered secret path, first PRESENT source wins.
 
@@ -147,7 +160,9 @@ def resolve_secret_spec(spec: str | Sequence[str]) -> ResolvedSecret:
     for ref in refs:
         value = _fetch(ref)  # None ⇒ ABSENT (next); raise ⇒ FAILED (propagate)
         if value is not None:
-            logger.info("resolved secret from %s", ref)  # the ref is a locator, never the value
+            # Log only the source-scheme category (a constant), never the reference
+            # body or the value — the reference can name a sensitive path.
+            logger.info("resolved a secret from a %s source", _scheme_of(ref))
             return ResolvedSecret(value=value, source=ref)
     raise SecretResolutionError(f"no secret source produced a value (tried: {', '.join(refs)})")
 
