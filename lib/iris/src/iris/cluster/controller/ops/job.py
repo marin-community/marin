@@ -339,11 +339,10 @@ def cancel(
 
 
 def purge_job(cur: Tx, job_id: JobName) -> None:
-    """Delete a job and drop its derived-count memo — the single deletion chokepoint.
+    """Delete a job and drop its derived-count memo.
 
-    All job deletions route through here rather than calling
-    :func:`writes.delete_job` directly, so a later job minted with the same id
-    cannot serve the dead job's cached counts.
+    Deletions route through here rather than :func:`writes.delete_job` so a later
+    job minted with the same id cannot serve the dead job's cached counts.
     """
     writes.delete_job(cur, job_id)
     cur.caches[AttemptCountsProjection].invalidate_for_jobs(cur, [job_id])
