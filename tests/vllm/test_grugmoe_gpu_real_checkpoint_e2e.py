@@ -139,7 +139,7 @@ def e2e_paths(gpu_lock: None) -> backend.E2EPaths:
         cache_dir=backend._join_path(backend.CACHE_ROOT, run_id),
         artifact_dir=backend._join_path(output_dir, "artifact"),
         export_result_path=backend._join_path(output_dir, "export-result.json"),
-        vllm_result_path=backend._join_path(output_dir, "vllm-result.json"),
+        vllm_result_path=backend._join_path(output_dir, "vllm-result-triton_attn.json"),
         levanter_result_path=backend._join_path(output_dir, "levanter-result.json"),
         summary_result_path=backend._join_path(output_dir, "result.json"),
     )
@@ -147,7 +147,25 @@ def e2e_paths(gpu_lock: None) -> backend.E2EPaths:
     return paths
 
 
-def _run_backend(phase: str, paths: backend.E2EPaths, result_path: str) -> dict[str, Any]:
+def _vllm_result_path(paths: backend.E2EPaths, attention_backend: str) -> str:
+    backend._validate_vllm_attention_backend(attention_backend)
+    return backend._join_path(paths.output_dir, f"vllm-result-{attention_backend.lower()}.json")
+
+
+def _vllm_result_paths(paths: backend.E2EPaths) -> dict[str, str]:
+    return {
+        attention_backend: _vllm_result_path(paths, attention_backend)
+        for attention_backend in backend.VLLM_ATTENTION_BACKENDS_UNDER_TEST
+    }
+
+
+def _run_backend(
+    phase: str,
+    paths: backend.E2EPaths,
+    result_path: str,
+    *,
+    attention_backend: str | None = None,
+) -> dict[str, Any]:
     backend._require_coreweave_path("result_path", result_path)
     command = [
         sys.executable,
@@ -167,6 +185,10 @@ def _run_backend(phase: str, paths: backend.E2EPaths, result_path: str) -> dict[
         "--result-path",
         result_path,
     ]
+    if phase == "vllm":
+        command.extend(["--attention-backend", backend._validate_vllm_attention_backend(attention_backend)])
+    elif attention_backend is not None:
+        raise ValueError(f"attention_backend is only valid for the vLLM phase, got phase={phase!r}")
     env = dict(os.environ)
     env.setdefault("PYTHONUNBUFFERED", "1")
     env["CUDA_VISIBLE_DEVICES"] = backend.VISIBLE_CUDA_DEVICES
@@ -192,11 +214,19 @@ def export_result(e2e_paths: backend.E2EPaths) -> dict[str, Any]:
 
 
 @pytest.fixture(scope="module")
-def vllm_result(e2e_paths: backend.E2EPaths, export_result: dict[str, Any]) -> dict[str, Any]:
+def vllm_results(e2e_paths: backend.E2EPaths, export_result: dict[str, Any]) -> dict[str, dict[str, Any]]:
     assert export_result["artifact_dir"] == e2e_paths.artifact_dir
     diagnostic = _nvidia_smi_diagnostic()
     print("grugmoe_gpu_real_checkpoint_vllm_gpu_preflight=" + json.dumps(diagnostic, sort_keys=True), flush=True)
-    return _run_backend("vllm", e2e_paths, e2e_paths.vllm_result_path)
+    return {
+        attention_backend: _run_backend(
+            "vllm",
+            e2e_paths,
+            _vllm_result_path(e2e_paths, attention_backend),
+            attention_backend=attention_backend,
+        )
+        for attention_backend in backend.VLLM_ATTENTION_BACKENDS_UNDER_TEST
+    }
 
 
 @pytest.fixture(scope="module")
@@ -227,8 +257,7 @@ def _write_summary_update(
             "vllm_tensor_parallel_size": backend.VLLM_TENSOR_PARALLEL_SIZE,
             "vllm_data_parallel_size": backend.VLLM_DATA_PARALLEL_SIZE,
             "vllm_expert_parallel_size": backend.VLLM_EXPERT_PARALLEL_SIZE,
-            "vllm_attention_backend": backend.VLLM_ATTENTION_BACKEND,
-            "vllm_default_attention_backend": backend.VLLM_DEFAULT_ATTENTION_BACKEND,
+            "vllm_attention_backends_under_test": list(backend.VLLM_ATTENTION_BACKENDS_UNDER_TEST),
             "vllm_dtype": backend.VLLM_DTYPE,
             "levanter_reference_mode": backend.LEVANTER_REFERENCE_MODE,
             "levanter_expert_axis_size": backend.LEVANTER_EXPERT_AXIS_SIZE,
@@ -239,19 +268,18 @@ def _write_summary_update(
             "expected_continuation": backend.EXPECTED_CONTINUATION,
             "result_paths": {
                 "export": e2e_paths.export_result_path,
-                "vllm": e2e_paths.vllm_result_path,
+                "vllm": _vllm_result_paths(e2e_paths),
                 "levanter": e2e_paths.levanter_result_path,
                 "summary": e2e_paths.summary_result_path,
-                "install_report": os.environ.get(backend.INSTALL_REPORT_PATH_ENV),
             },
             "runtime": backend._runtime_snapshot(include_grugmoe_spec=True),
             "backend_results": {},
             "caveat": (
                 "This e2e validates real trained-checkpoint serving correctness through GPU vLLM and "
-                "GPU Levanter/JAX on one 8xH100 node. vLLM is launched with tensor_parallel_size=1, "
-                "data_parallel_size=8, and expert parallelism enabled; the JAX/Levanter reference uses "
-                "an expert_axis_size=8 mesh. It does not validate broad context windows, logprob parity, "
-                "or performance."
+                "GPU Levanter/JAX on one 8xH100 node. Each required vLLM attention backend is launched "
+                "with tensor_parallel_size=1, data_parallel_size=8, and expert parallelism enabled; the "
+                "JAX/Levanter reference uses an expert_axis_size=8 mesh. It does not validate broad "
+                "context windows or performance."
             ),
         }
 
@@ -259,29 +287,31 @@ def _write_summary_update(
         summary["export_result"] = export_result
     if backend_result is not None:
         phase = str(backend_result["phase"])
-        summary.setdefault("backend_results", {})[phase] = backend_result
-        summary[f"actual_{phase}_output"] = backend_result.get("completion")
+        backend_results = summary.setdefault("backend_results", {})
+        if phase == "vllm":
+            attention_backend = backend._validate_vllm_attention_backend(backend_result.get("vllm_attention_backend"))
+            backend_results.setdefault("vllm", {})[attention_backend] = backend_result
+            summary.setdefault("actual_vllm_outputs", {})[attention_backend] = backend_result.get("completion")
+        else:
+            backend_results[phase] = backend_result
+            summary[f"actual_{phase}_output"] = backend_result.get("completion")
 
     backend_results = summary.get("backend_results", {})
-    summary["completed_backend_phases"] = sorted(backend_results)
-    if all(phase in backend_results for phase in ("vllm", "levanter")):
-        vllm_completion = backend_results["vllm"].get("completion")
-        levanter_completion = backend_results["levanter"].get("completion")
-        vllm_completions = backend_results["vllm"].get("completions")
-        levanter_completions = backend_results["levanter"].get("completions")
-        summary["vllm_levanter_match"] = vllm_completion == levanter_completion
-        summary["vllm_levanter_batch_match"] = vllm_completions == levanter_completions
-        summary["vllm_observed_gpu_count"] = backend_results["vllm"].get("torch_runtime", {}).get("device_count")
-        summary["vllm_observed_tensor_parallel_size"] = backend_results["vllm"].get("vllm_tensor_parallel_size")
-        summary["vllm_observed_data_parallel_size"] = backend_results["vllm"].get("vllm_data_parallel_size")
-        summary["vllm_observed_expert_parallel_size"] = backend_results["vllm"].get("vllm_expert_parallel_size")
-        summary["vllm_observed_dtype"] = backend_results["vllm"].get("vllm_dtype")
-        summary["vllm_requested_data_parallel_ranks"] = backend_results["vllm"].get("requested_data_parallel_ranks")
-        levanter_jax_runtime = backend_results["levanter"].get("jax_runtime", {})
-        levanter_jax_mesh = backend_results["levanter"].get("jax_mesh", {})
-        summary["levanter_observed_reference_mode"] = backend_results["levanter"].get("levanter_reference_mode")
-        summary["levanter_observed_expert_axis_size"] = backend_results["levanter"].get("levanter_expert_axis_size")
-        summary["levanter_reference_policy"] = backend_results["levanter"].get("levanter_reference_policy")
+    raw_vllm_results = backend_results.get("vllm", {})
+    vllm_results = raw_vllm_results if isinstance(raw_vllm_results, dict) else {}
+    levanter_result = backend_results.get("levanter")
+    required_backends = list(backend.VLLM_ATTENTION_BACKENDS_UNDER_TEST)
+    summary["attention_backends_tested"] = sorted(vllm_results)
+    summary["completed_backend_phases"] = [
+        *(["levanter"] if isinstance(levanter_result, dict) else []),
+        *(f"vllm:{attention_backend}" for attention_backend in sorted(vllm_results)),
+    ]
+    if isinstance(levanter_result, dict):
+        levanter_jax_runtime = levanter_result.get("jax_runtime", {})
+        levanter_jax_mesh = levanter_result.get("jax_mesh", {})
+        summary["levanter_observed_reference_mode"] = levanter_result.get("levanter_reference_mode")
+        summary["levanter_observed_expert_axis_size"] = levanter_result.get("levanter_expert_axis_size")
+        summary["levanter_reference_policy"] = levanter_result.get("levanter_reference_policy")
         summary["levanter_jax_gpu_device_count"] = levanter_jax_runtime.get("gpu_device_count")
         summary["levanter_jax_mesh_device_count"] = levanter_jax_mesh.get("device_count")
         summary["levanter_jax_mesh_shape"] = levanter_jax_mesh.get("shape")
@@ -289,14 +319,66 @@ def _write_summary_update(
             levanter_jax_runtime.get("uses_expected_gpu_count") is True
             and levanter_jax_mesh.get("uses_expected_gpu_count") is True
         )
-    summary["passed"] = all(backend_results.get(phase, {}).get("passed") is True for phase in ("vllm", "levanter"))
-    if "vllm_levanter_match" in summary:
-        summary["passed"] = (
-            summary["passed"]
-            and summary["vllm_levanter_match"]
-            and summary["vllm_levanter_batch_match"]
-            and summary["vllm_requested_data_parallel_ranks"] == list(range(backend.VLLM_DATA_PARALLEL_SIZE))
+    if isinstance(levanter_result, dict) and vllm_results:
+        levanter_completion = backend_results["levanter"].get("completion")
+        levanter_completions = backend_results["levanter"].get("completions")
+        match_by_backend = {
+            attention_backend: result.get("completion") == levanter_completion
+            for attention_backend, result in vllm_results.items()
+        }
+        batch_match_by_backend = {
+            attention_backend: result.get("completions") == levanter_completions
+            for attention_backend, result in vllm_results.items()
+        }
+        requested_ranks_by_backend = {
+            attention_backend: result.get("requested_data_parallel_ranks")
+            for attention_backend, result in vllm_results.items()
+        }
+        summary["vllm_levanter_match_by_attention_backend"] = match_by_backend
+        summary["vllm_levanter_batch_match_by_attention_backend"] = batch_match_by_backend
+        summary["vllm_levanter_match"] = set(match_by_backend) == set(required_backends) and all(
+            match_by_backend.values()
         )
+        summary["vllm_levanter_batch_match"] = set(batch_match_by_backend) == set(required_backends) and all(
+            batch_match_by_backend.values()
+        )
+        summary["vllm_observed_gpu_count_by_attention_backend"] = {
+            attention_backend: result.get("torch_runtime", {}).get("device_count")
+            for attention_backend, result in vllm_results.items()
+        }
+        summary["vllm_observed_tensor_parallel_size_by_attention_backend"] = {
+            attention_backend: result.get("vllm_tensor_parallel_size")
+            for attention_backend, result in vllm_results.items()
+        }
+        summary["vllm_observed_data_parallel_size_by_attention_backend"] = {
+            attention_backend: result.get("vllm_data_parallel_size")
+            for attention_backend, result in vllm_results.items()
+        }
+        summary["vllm_observed_expert_parallel_size_by_attention_backend"] = {
+            attention_backend: result.get("vllm_expert_parallel_size")
+            for attention_backend, result in vllm_results.items()
+        }
+        summary["vllm_observed_dtype_by_attention_backend"] = {
+            attention_backend: result.get("vllm_dtype") for attention_backend, result in vllm_results.items()
+        }
+        summary["vllm_requested_data_parallel_ranks_by_attention_backend"] = requested_ranks_by_backend
+    expected_ranks = list(range(backend.VLLM_DATA_PARALLEL_SIZE))
+    summary["passed"] = (
+        isinstance(levanter_result, dict)
+        and levanter_result.get("passed") is True
+        and set(vllm_results) == set(required_backends)
+        and all(vllm_results[attention_backend].get("passed") is True for attention_backend in required_backends)
+        and all(
+            vllm_results[attention_backend].get("vllm_dtype") == backend.VLLM_DTYPE
+            for attention_backend in required_backends
+        )
+        and all(
+            vllm_results[attention_backend].get("requested_data_parallel_ranks") == expected_ranks
+            for attention_backend in required_backends
+        )
+        and summary.get("vllm_levanter_match") is True
+        and summary.get("vllm_levanter_batch_match") is True
+    )
     backend._write_json(e2e_paths.summary_result_path, summary)
     print("grugmoe_gpu_real_checkpoint_e2e_result=" + json.dumps(summary, sort_keys=True), flush=True)
 
@@ -304,7 +386,7 @@ def _write_summary_update(
 def test_grugmoe_gpu_real_checkpoint_e2e_static_preconditions() -> None:
     backend._require_constants_are_coreweave()
     assert backend.VLLM_MAX_NUM_SEQS >= backend.PROMPT_BATCH_SIZE
-    assert backend.VLLM_ATTENTION_BACKEND in backend.VLLM_ATTENTION_BACKENDS_UNDER_TEST
+    assert backend.VLLM_ATTENTION_BACKENDS_UNDER_TEST == ("TRITON_ATTN", "FLASH_ATTN")
     assert backend.VLLM_DTYPE == "bfloat16"
     assert backend.LEVANTER_REFERENCE_MODE == "bf16_compute"
     assert backend.LEVANTER_EXPERT_AXIS_SIZE == backend.EXPECTED_GPU_COUNT
@@ -392,28 +474,93 @@ def test_grugmoe_completion_payload_sends_explicit_data_parallel_rank(
     assert payload["choices"][0]["text"] == backend.EXPECTED_CONTINUATION
 
 
+def test_summary_requires_all_attention_backends(tmp_path: Path) -> None:
+    paths = backend.E2EPaths(
+        output_dir=str(tmp_path),
+        cache_dir=str(tmp_path / "cache"),
+        artifact_dir=str(tmp_path / "artifact"),
+        export_result_path=str(tmp_path / "export-result.json"),
+        vllm_result_path=str(tmp_path / "vllm-result-triton_attn.json"),
+        levanter_result_path=str(tmp_path / "levanter-result.json"),
+        summary_result_path=str(tmp_path / "result.json"),
+    )
+    completions = [backend.EXPECTED_CONTINUATION] * backend.PROMPT_BATCH_SIZE
+    levanter_result = {
+        "phase": "levanter",
+        "completion": backend.EXPECTED_CONTINUATION,
+        "completions": completions,
+        "passed": True,
+        "jax_runtime": {"gpu_device_count": backend.EXPECTED_GPU_COUNT, "uses_expected_gpu_count": True},
+        "jax_mesh": {
+            "device_count": backend.EXPECTED_GPU_COUNT,
+            "uses_expected_gpu_count": True,
+            "shape": {"expert": backend.LEVANTER_EXPERT_AXIS_SIZE},
+        },
+        "levanter_reference_mode": backend.LEVANTER_REFERENCE_MODE,
+        "levanter_expert_axis_size": backend.LEVANTER_EXPERT_AXIS_SIZE,
+        "levanter_reference_policy": {"mode": backend.LEVANTER_REFERENCE_MODE},
+    }
+
+    def fake_vllm_result(attention_backend: str) -> dict[str, Any]:
+        return {
+            "phase": "vllm",
+            "completion": backend.EXPECTED_CONTINUATION,
+            "completions": completions,
+            "passed": True,
+            "vllm_attention_backend": attention_backend,
+            "vllm_dtype": backend.VLLM_DTYPE,
+            "vllm_tensor_parallel_size": backend.VLLM_TENSOR_PARALLEL_SIZE,
+            "vllm_data_parallel_size": backend.VLLM_DATA_PARALLEL_SIZE,
+            "vllm_expert_parallel_size": backend.VLLM_EXPERT_PARALLEL_SIZE,
+            "requested_data_parallel_ranks": list(range(backend.VLLM_DATA_PARALLEL_SIZE)),
+            "torch_runtime": {"device_count": backend.EXPECTED_GPU_COUNT},
+        }
+
+    _write_summary_update(paths, export_result={"phase": "export", "passed": True})
+    _write_summary_update(paths, backend_result=fake_vllm_result("TRITON_ATTN"))
+    _write_summary_update(paths, backend_result=levanter_result)
+    summary = backend._read_json(paths.summary_result_path)
+    assert summary["passed"] is False
+    assert summary["attention_backends_tested"] == ["TRITON_ATTN"]
+    assert "install_report" not in summary["result_paths"]
+
+    _write_summary_update(paths, backend_result=fake_vllm_result("FLASH_ATTN"))
+    summary = backend._read_json(paths.summary_result_path)
+    assert summary["passed"] is True
+    assert summary["attention_backends_tested"] == ["FLASH_ATTN", "TRITON_ATTN"]
+    assert summary["vllm_levanter_match_by_attention_backend"] == {
+        "FLASH_ATTN": True,
+        "TRITON_ATTN": True,
+    }
+
+
 @pytest.mark.gpu_ci
 @pytest.mark.slow
 @pytest.mark.data_integration
 def test_grugmoe_gpu_real_checkpoint_vllm_output(
     e2e_paths: backend.E2EPaths,
     export_result: dict[str, Any],
-    vllm_result: dict[str, Any],
+    vllm_results: dict[str, dict[str, Any]],
 ) -> None:
-    _write_summary_update(e2e_paths, export_result=export_result, backend_result=vllm_result)
-    assert vllm_result["phase"] == "vllm"
-    assert vllm_result["vllm_tensor_parallel_size"] == backend.VLLM_TENSOR_PARALLEL_SIZE
-    assert vllm_result["vllm_data_parallel_size"] == backend.VLLM_DATA_PARALLEL_SIZE
-    assert vllm_result["vllm_expert_parallel_size"] == backend.VLLM_EXPERT_PARALLEL_SIZE
-    assert vllm_result["vllm_max_num_seqs"] >= backend.PROMPT_BATCH_SIZE
-    assert vllm_result["torch_runtime"]["device_count"] >= backend.EXPECTED_GPU_COUNT
-    assert vllm_result["torch_runtime"]["cuda_visible_devices"] == backend.VISIBLE_CUDA_DEVICES
-    assert vllm_result["prompt_batch_size"] == backend.PROMPT_BATCH_SIZE
-    assert vllm_result["single_prompt_completion"] == backend.EXPECTED_CONTINUATION
-    assert len(vllm_result["completions"]) == backend.PROMPT_BATCH_SIZE
-    assert all(completion == backend.EXPECTED_CONTINUATION for completion in vllm_result["completions"])
-    assert vllm_result["requested_data_parallel_ranks"] == list(range(backend.VLLM_DATA_PARALLEL_SIZE))
-    assert vllm_result["passed"] is True
+    assert set(vllm_results) == set(backend.VLLM_ATTENTION_BACKENDS_UNDER_TEST)
+    for attention_backend, vllm_result in vllm_results.items():
+        _write_summary_update(e2e_paths, export_result=export_result, backend_result=vllm_result)
+        assert vllm_result["phase"] == "vllm"
+        assert vllm_result["result_path"] == _vllm_result_path(e2e_paths, attention_backend)
+        assert vllm_result["vllm_attention_backend"] == attention_backend
+        assert vllm_result["vllm_tensor_parallel_size"] == backend.VLLM_TENSOR_PARALLEL_SIZE
+        assert vllm_result["vllm_data_parallel_size"] == backend.VLLM_DATA_PARALLEL_SIZE
+        assert vllm_result["vllm_expert_parallel_size"] == backend.VLLM_EXPERT_PARALLEL_SIZE
+        assert vllm_result["vllm_dtype"] == backend.VLLM_DTYPE
+        assert vllm_result["vllm_max_num_seqs"] >= backend.PROMPT_BATCH_SIZE
+        assert vllm_result["torch_runtime"]["device_count"] >= backend.EXPECTED_GPU_COUNT
+        assert vllm_result["torch_runtime"]["cuda_visible_devices"] == backend.VISIBLE_CUDA_DEVICES
+        assert vllm_result["prompt_batch_size"] == backend.PROMPT_BATCH_SIZE
+        assert vllm_result["single_prompt_completion"] == backend.EXPECTED_CONTINUATION
+        assert len(vllm_result["completions"]) == backend.PROMPT_BATCH_SIZE
+        assert all(completion == backend.EXPECTED_CONTINUATION for completion in vllm_result["completions"])
+        assert vllm_result["requested_data_parallel_ranks"] == list(range(backend.VLLM_DATA_PARALLEL_SIZE))
+        assert vllm_result["passed"] is True
 
 
 @pytest.mark.gpu_ci
@@ -422,15 +569,19 @@ def test_grugmoe_gpu_real_checkpoint_vllm_output(
 def test_grugmoe_gpu_real_checkpoint_levanter_output(
     e2e_paths: backend.E2EPaths,
     export_result: dict[str, Any],
-    vllm_result: dict[str, Any],
+    vllm_results: dict[str, dict[str, Any]],
     levanter_result: dict[str, Any],
 ) -> None:
-    _write_summary_update(e2e_paths, export_result=export_result, backend_result=vllm_result)
+    _write_summary_update(e2e_paths, export_result=export_result)
+    for vllm_result in vllm_results.values():
+        _write_summary_update(e2e_paths, backend_result=vllm_result)
     _write_summary_update(e2e_paths, backend_result=levanter_result)
-    assert vllm_result["checkpoint_path"] == levanter_result["checkpoint_path"] == backend.CHECKPOINT_PATH
-    assert vllm_result["prompt"] == levanter_result["prompt"] == backend.PROMPT
-    assert vllm_result["completion"] == levanter_result["completion"]
-    assert vllm_result["completions"] == levanter_result["completions"]
+    for attention_backend, vllm_result in vllm_results.items():
+        assert vllm_result["vllm_attention_backend"] == attention_backend
+        assert vllm_result["checkpoint_path"] == levanter_result["checkpoint_path"] == backend.CHECKPOINT_PATH
+        assert vllm_result["prompt"] == levanter_result["prompt"] == backend.PROMPT
+        assert vllm_result["completion"] == levanter_result["completion"]
+        assert vllm_result["completions"] == levanter_result["completions"]
     assert levanter_result["phase"] == "levanter"
     assert levanter_result["jax_runtime"]["gpu_device_count"] >= backend.EXPECTED_GPU_COUNT
     assert levanter_result["jax_runtime"]["cuda_visible_devices"] == backend.VISIBLE_CUDA_DEVICES

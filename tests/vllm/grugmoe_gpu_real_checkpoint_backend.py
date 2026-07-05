@@ -13,7 +13,6 @@ import argparse
 import dataclasses
 import hashlib
 import importlib
-import importlib.metadata as md
 import importlib.util
 import json
 import os
@@ -21,7 +20,6 @@ import posixpath
 import shlex
 import shutil
 import site
-import subprocess
 import sys
 import tempfile
 import time
@@ -59,16 +57,11 @@ VLLM_DATA_PARALLEL_SIZE = 8
 VLLM_EXPERT_PARALLEL_SIZE = 8
 VLLM_MAX_NUM_SEQS = 16
 VLLM_DTYPE = "bfloat16"
-VLLM_ATTENTION_BACKEND_ENV = "MARIN_GRUGMOE_VLLM_ATTENTION_BACKEND"
 LEVANTER_REFERENCE_MODE = "bf16_compute"
 LEVANTER_BF16_POLICY = "params=float32,compute=bfloat16,output=bfloat16"
 LEVANTER_EXPERT_AXIS_SIZE = EXPECTED_GPU_COUNT
 RUN_ID_ENV = "MARIN_GRUGMOE_GPU_E2E_RUN_ID"
 OUTPUT_DIR_ENV = "MARIN_GRUGMOE_GPU_E2E_OUTPUT_DIR"
-INSTALL_REPORT_PATH_ENV = "MARIN_GRUGMOE_GPU_E2E_INSTALL_REPORT_PATH"
-# TRITON_ATTN is the default pass gate. FLASH_ATTN is retained as an explicit
-# debug mode and is not run unless selected through the environment or runner.
-VLLM_DEFAULT_ATTENTION_BACKEND = "TRITON_ATTN"
 VLLM_ATTENTION_BACKENDS_UNDER_TEST = ("TRITON_ATTN", "FLASH_ATTN")
 LEVANTER_MOE_CAPACITY_FACTOR = float(EXPECTED_GPU_COUNT)
 LEVANTER_DECODE_USE_ACTIVE_PREFIX = True
@@ -99,19 +92,21 @@ _local_filesystem_path = common._local_filesystem_path
 _tokenizer_encode = common._tokenizer_encode
 _mesh_batch_axis_size = common._mesh_batch_axis_size
 _executable_model_from_legacy_split = common._executable_model_from_legacy_split
+_git_sha = common._git_sha
+_direct_url = common._direct_url
+_version = common._version
 
 
-def _resolve_vllm_attention_backend() -> str:
-    value = os.environ.get(VLLM_ATTENTION_BACKEND_ENV, VLLM_DEFAULT_ATTENTION_BACKEND).strip().upper()
-    if value not in VLLM_ATTENTION_BACKENDS_UNDER_TEST:
+def _validate_vllm_attention_backend(value: str | None) -> str:
+    if value is None:
+        raise ValueError("vLLM backend runs must pass --attention-backend explicitly")
+    normalized = value.strip().upper()
+    if normalized not in VLLM_ATTENTION_BACKENDS_UNDER_TEST:
         raise ValueError(
-            f"{VLLM_ATTENTION_BACKEND_ENV}={value!r} is not supported for this validation; "
+            f"attention backend {value!r} is not supported for this validation; "
             f"expected one of {VLLM_ATTENTION_BACKENDS_UNDER_TEST!r}"
         )
-    return value
-
-
-VLLM_ATTENTION_BACKEND = _resolve_vllm_attention_backend()
+    return normalized
 
 
 def _is_coreweave_endpoint(endpoint: str) -> bool:
@@ -402,28 +397,6 @@ def _require_runtime_region() -> None:
         )
 
 
-def _git_sha() -> str:
-    try:
-        return subprocess.check_output(["git", "rev-parse", "HEAD"], stderr=subprocess.DEVNULL, text=True).strip()
-    except (subprocess.CalledProcessError, OSError) as exc:
-        return f"unavailable:{exc!r}"
-
-
-def _direct_url(package: str) -> str:
-    try:
-        direct_url = md.distribution(package).read_text("direct_url.json")
-    except md.PackageNotFoundError:
-        return "not-installed"
-    return direct_url.strip() if direct_url else ""
-
-
-def _version(package: str) -> str:
-    try:
-        return md.version(package)
-    except md.PackageNotFoundError:
-        return "not-installed"
-
-
 def _module_import_check(module_name: str) -> dict[str, Any]:
     started = time.time()
     try:
@@ -664,7 +637,7 @@ def _export_backend(args: argparse.Namespace) -> None:
             cache_dir=args.cache_dir,
             artifact_dir=args.artifact_dir,
             export_result_path=args.result_path,
-            vllm_result_path=_join_path(args.output_dir, "vllm-result.json"),
+            vllm_result_path=_join_path(args.output_dir, "vllm-result-triton_attn.json"),
             levanter_result_path=_join_path(args.output_dir, "levanter-result.json"),
             summary_result_path=_join_path(args.output_dir, "result.json"),
         )
@@ -792,7 +765,6 @@ def _completion_payload(
     data_parallel_rank: int | None = None,
     request_id: str | None = None,
     max_tokens: int = MAX_NEW_TOKENS,
-    logprobs: int | None = None,
 ) -> dict[str, Any]:
     if env.model_id is None:
         raise RuntimeError("Expected vLLM server to expose a model id.")
@@ -807,8 +779,6 @@ def _completion_payload(
         "temperature": 0.0,
         "max_tokens": max_tokens,
     }
-    if logprobs is not None:
-        payload["logprobs"] = logprobs
     response = requests.post(
         f"{env.server_url}/completions",
         headers=headers,
@@ -825,59 +795,19 @@ def _completion_payload(
     return response.json()
 
 
-def _completion_logprobs_summary(choice: dict[str, Any]) -> dict[str, Any] | None:
-    logprobs = choice.get("logprobs")
-    if not isinstance(logprobs, dict):
-        return None
-    top2_margins: list[float | None] = []
-    for top_logprob in logprobs.get("top_logprobs") or []:
-        if not isinstance(top_logprob, dict) or len(top_logprob) < 2:
-            top2_margins.append(None)
-            continue
-        values = sorted((float(value) for value in top_logprob.values()), reverse=True)
-        top2_margins.append(values[0] - values[1])
-    finite_margins = [margin for margin in top2_margins if margin is not None]
-    return {
-        "tokens": logprobs.get("tokens"),
-        "token_logprobs": logprobs.get("token_logprobs"),
-        "top_logprobs": logprobs.get("top_logprobs"),
-        "top2_logprob_margins": top2_margins,
-        "min_top2_logprob_margin": min(finite_margins) if finite_margins else None,
-    }
-
-
 def _completion_choice_summary(choice: dict[str, Any]) -> dict[str, Any]:
     return {
         "text": str(choice.get("text", "")),
         "finish_reason": choice.get("finish_reason"),
         "token_ids": choice.get("token_ids"),
-        "logprobs": _completion_logprobs_summary(choice),
     }
 
 
-def _summarize_completion_payload(
-    payload: dict[str, Any],
-    *,
-    expected_continuation: str | None,
-) -> dict[str, Any]:
+def _completion_choice_summaries(payload: dict[str, Any]) -> list[dict[str, Any]]:
     choices = payload.get("choices")
     if not isinstance(choices, list):
         raise AssertionError(f"completion payload missing choices list: {payload!r}")
-    choice_summaries = [_completion_choice_summary(choice) for choice in choices if isinstance(choice, dict)]
-    texts = [choice["text"] for choice in choice_summaries]
-    completion_counts = {item: texts.count(item) for item in sorted(set(texts))}
-    return {
-        "choice_count": len(choice_summaries),
-        "texts": texts,
-        "completion_counts": completion_counts,
-        "all_expected": (
-            expected_continuation is not None
-            and len(texts) == len(choices)
-            and all(text == expected_continuation for text in texts)
-        ),
-        "choices": choice_summaries,
-        "usage": payload.get("usage"),
-    }
+    return [_completion_choice_summary(choice) for choice in choices if isinstance(choice, dict)]
 
 
 def _copy_vllm_server_logs(log_dir: str | None, output_dir: str) -> dict[str, Any]:
@@ -957,6 +887,7 @@ def _apply_levanter_reference_mode(model: Any) -> tuple[Any, dict[str, Any]]:
 
 
 def _vllm_backend(args: argparse.Namespace) -> None:
+    attention_backend = _validate_vllm_attention_backend(args.attention_backend)
     _require_constants_are_coreweave(
         E2EPaths(
             output_dir=args.output_dir,
@@ -1006,7 +937,7 @@ def _vllm_backend(args: argparse.Namespace) -> None:
         "--moe-backend",
         "triton",
         "--attention-backend",
-        VLLM_ATTENTION_BACKEND,
+        attention_backend,
         "--dtype",
         VLLM_DTYPE,
         "--served-model-name",
@@ -1030,7 +961,7 @@ def _vllm_backend(args: argparse.Namespace) -> None:
                 env,
                 prompts=[PROMPT],
                 data_parallel_rank=0,
-                request_id="grugmoe-single-rank0",
+                request_id=f"grugmoe-{attention_backend.lower()}-single-rank0",
             )
             payloads: list[dict[str, Any]] = []
             rank_request_batches: list[dict[str, Any]] = []
@@ -1040,7 +971,7 @@ def _vllm_backend(args: argparse.Namespace) -> None:
                     env,
                     prompts=prompts,
                     data_parallel_rank=data_parallel_rank,
-                    request_id=f"grugmoe-main-rank{data_parallel_rank}",
+                    request_id=f"grugmoe-{attention_backend.lower()}-main-rank{data_parallel_rank}",
                 )
                 payloads.append(payload)
                 rank_request_batches.append(
@@ -1071,12 +1002,11 @@ def _vllm_backend(args: argparse.Namespace) -> None:
             "artifact_staging": staged_artifact.staging,
             "vllm_engine_kwargs": model.engine_kwargs,
             "vllm_args": extra_args,
-            "vllm_attention_backend_env_var": VLLM_ATTENTION_BACKEND_ENV,
             "vllm_dtype": VLLM_DTYPE,
             "vllm_tensor_parallel_size": VLLM_TENSOR_PARALLEL_SIZE,
             "vllm_data_parallel_size": VLLM_DATA_PARALLEL_SIZE,
             "vllm_expert_parallel_size": VLLM_EXPERT_PARALLEL_SIZE,
-            "vllm_attention_backend": VLLM_ATTENTION_BACKEND,
+            "vllm_attention_backend": attention_backend,
             "vllm_max_num_seqs": VLLM_MAX_NUM_SEQS,
             "expected_gpu_count": EXPECTED_GPU_COUNT,
             "coreweave_s3": s3_env,
@@ -1107,17 +1037,9 @@ def _vllm_backend(args: argparse.Namespace) -> None:
         raise AssertionError(f"expected {PROMPT_BATCH_SIZE} completions, got {len(completions)}")
     completion_counts = {item: completions.count(item) for item in sorted(set(completions))}
     repeated_prompt_identical = len(completion_counts) == 1
-    single_prompt_choice_summary = _summarize_completion_payload(
-        single_payload,
-        expected_continuation=EXPECTED_CONTINUATION,
-    )["choices"][0]
+    single_prompt_choice_summary = _completion_choice_summaries(single_payload)[0]
     main_choice_summaries = [
-        choice_summary
-        for payload in payloads
-        for choice_summary in _summarize_completion_payload(
-            payload,
-            expected_continuation=EXPECTED_CONTINUATION,
-        )["choices"]
+        choice_summary for payload in payloads for choice_summary in _completion_choice_summaries(payload)
     ]
     result = {
         "phase": "vllm",
@@ -1145,12 +1067,11 @@ def _vllm_backend(args: argparse.Namespace) -> None:
         "artifact_staging": staged_artifact.staging,
         "vllm_engine_kwargs": model.engine_kwargs,
         "vllm_args": extra_args,
-        "vllm_attention_backend_env_var": VLLM_ATTENTION_BACKEND_ENV,
         "vllm_dtype": VLLM_DTYPE,
         "vllm_tensor_parallel_size": VLLM_TENSOR_PARALLEL_SIZE,
         "vllm_data_parallel_size": VLLM_DATA_PARALLEL_SIZE,
         "vllm_expert_parallel_size": VLLM_EXPERT_PARALLEL_SIZE,
-        "vllm_attention_backend": VLLM_ATTENTION_BACKEND,
+        "vllm_attention_backend": attention_backend,
         "vllm_max_num_seqs": VLLM_MAX_NUM_SEQS,
         "rank_request_batches": rank_request_batches,
         "requested_data_parallel_ranks": [batch["data_parallel_rank"] for batch in rank_request_batches],
@@ -1181,7 +1102,7 @@ def _levanter_backend(args: argparse.Namespace) -> None:
             cache_dir=args.cache_dir,
             artifact_dir=args.artifact_dir,
             export_result_path=_join_path(args.output_dir, "export-result.json"),
-            vllm_result_path=_join_path(args.output_dir, "vllm-result.json"),
+            vllm_result_path=_join_path(args.output_dir, "vllm-result-triton_attn.json"),
             levanter_result_path=args.result_path,
             summary_result_path=_join_path(args.output_dir, "result.json"),
         )
@@ -1274,6 +1195,7 @@ def _parse_backend_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--artifact-dir", required=True)
     parser.add_argument("--cache-dir", required=True)
     parser.add_argument("--result-path", required=True)
+    parser.add_argument("--attention-backend", choices=VLLM_ATTENTION_BACKENDS_UNDER_TEST)
     return parser.parse_args(argv)
 
 

@@ -301,6 +301,8 @@ class CausalSelfAttention(eqx.Module):
         q = q * self.cfg.qk_mult
         attn_out = attention(q, k, v, mask, implementation=self.cfg.attention_implementation)
         aligned_v = align_kv_heads(v, num_q_heads=attn_out.shape[2])
+        # GPU XSA with GQA can give attn_out a backend-specific head sharding;
+        # match v to that dynamic sharding before the per-head projection math.
         aligned_v = reshard(aligned_v, _partition_spec_of(attn_out) or P(_BATCH_AXES, None, None, "model"))
         # Exclusive Self Attention: subtract the component of yᵢ parallel to vᵢ.
         # zᵢ = yᵢ - (yᵢᵀvᵢ / ‖vᵢ‖²) vᵢ, per head.
