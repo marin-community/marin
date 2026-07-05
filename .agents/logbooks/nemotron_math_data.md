@@ -152,6 +152,71 @@ gs://marin-{region}/documents/baseline_{spec}_deduped/{n}warcs/
     stats/dedup_stats.json
 ```
 
+## 2026-07-04 02:54 UTC - Nemotron math benchmark decontam launch blocked by Iris auth
+
+Goal: launch one Datakit decontamination/report pass per benchmark split for
+Nemotron-CC math against the staged math eval sources.
+
+Current code state:
+
+- Branch head after merging `origin/main`: `726619c011`.
+- New launch script:
+  `scripts/analysis/decon_nemotron_math_against_benchmarks.py`.
+- Source staging script:
+  `scripts/analysis/stage_math_decontam_sources.py`.
+- Staged eval source root:
+  `gs://marin-us-east5/scratch/ahmed/math-decontamin-dir`.
+- Corpus under test:
+  `gs://marin-us-east5/normalized/nemotron_cc_math_v1/4plus_b05688a8/outputs/main`.
+- Report output root:
+  `gs://marin-us-east5/scratch/ahmed/math-decontamin-dir/decon_nemotron_cc_math_4plus`.
+
+Preflight commands:
+
+```bash
+uv run python scripts/analysis/decon_nemotron_math_against_benchmarks.py --dry-run
+uv run --with pytest --with pytest-timeout pytest \
+  tests/analysis/test_decon_nemotron_math_against_benchmarks.py \
+  tests/analysis/test_stage_math_decontam_sources.py -q
+```
+
+Preflight result:
+
+- Dry-run selected four eval sources:
+  `aime24__train`, `gsm8k__main__test`, `gsm8k__main__train`, and
+  `math500__test`.
+- Tests passed: `6 passed`.
+
+Launch command attempted:
+
+```bash
+uv run iris --config lib/iris/config/marin.yaml job run --no-wait \
+  --cpu 8 --memory 64GB --disk 50GB --priority interactive --extra cpu \
+  --enable-extra-resources --preemptible --region us-east5 \
+  --job-name decon-nemotron-math-benchmarks \
+  -e PYTHONUNBUFFERED 1 \
+  -- python scripts/analysis/decon_nemotron_math_against_benchmarks.py --resume
+```
+
+Result: no job was launched. The merged Iris client reached the production
+controller at `https://iris.oa.dev` and bundled the workspace, but the
+submission failed before job creation with `connectrpc.errors.ConnectError:
+Unauthorized`.
+
+Auth diagnosis:
+
+- `lib/iris/config/marin.yaml` is IAP-fronted (`auth.iap.url:
+  https://iris.oa.dev`).
+- No cached cluster credentials exist under `~/.config/marin/credentials`.
+- `MARIN_CLUSTER_TOKEN` is unset.
+- The current checkout provides `uv run iris --config lib/iris/config/marin.yaml
+  login`, which runs the Google/IAP browser flow and writes the needed cached
+  Iris + IAP credentials.
+
+Next action: authenticate this machine with
+`uv run iris --config lib/iris/config/marin.yaml login`, then rerun the launch
+command above.
+
 Fixed `override_output_path` per step — no content-hashed cache dirs;
 reruns only change with `(spec, n)`, which already changes the bucket.
 Changing `--region` without copying cached state reruns from scratch.
@@ -2883,3 +2948,1698 @@ bands; (3) contiguous tiling bands ([.5,.6),[.6,.7),… ) with 50–100 docs eac
 Then the high band is uniformly case (a) and should reproduce the full-sweep
 inversion. Optionally separate case (b) (trained template) to show generalization
 vs memorization explicitly.
+
+## 2026-06-15 — 1e22 p33m67 k=0.20 seen-doc replay and Datakit follow-up
+
+The exposure replay for the Delphi 1e22 p33m67 k=0.20 math component completed
+on Iris after relaunching as a preemptible CPU job in `us-east5`:
+
+```bash
+uv run iris --config lib/iris/config/marin.yaml job run --no-wait \
+  --cpu 4 --memory 32GB --disk 50GB \
+  --priority interactive --extra cpu --enable-extra-resources \
+  --preemptible --region us-east5 \
+  --job-name delphi-seen-docs-k020-math-preemptible \
+  -e JAX_PLATFORMS cpu -e PYTHONUNBUFFERED 1 \
+  -- python scripts/analysis/materialize_delphi_training_docs.py \
+    --mix p33m67 \
+    --components nemotron_cc_math_v1/4plus \
+    --output gs://marin-us-east5/scratch/ahmed/midtrain_dedup/seen_docs/1e22_p33m67_k020_math \
+    --log-level INFO
+```
+
+Result artifact:
+
+- Manifest root:
+  `gs://marin-us-east5/scratch/ahmed/midtrain_dedup/seen_docs/1e22_p33m67_k020_math/`
+- Component docs:
+  `.../docs/component=nemotron_cc_math_v1_4plus/`
+- The job emitted 22 parquet parts plus `summary.json`.
+- `artifact_kind=seen_doc_manifest`, `dedup_performed=false`.
+- `materialized_steps=7647`, `batch_size=1024`, `seq_len=4096`,
+  `total_examples=7830528`.
+- Math windows replayed: `5261145`, matching `selected_expected_windows=5261145`.
+- Math train windows available after val split: `12556581`.
+- Sampled math epoch fraction: `0.4189950273884268`; this is a real subset, not
+  the full 4plus math cache.
+- Unique cache docs touched by sampled math windows: `21698083`.
+- Cache path pinned by the replay:
+  `gs://marin-us-east5/tokenized/nemotron_cc_math_v1/4plus-2c5519/train`.
+
+Interpretation: this tells us which normalized/cache rows the 1e22 k=0.20 run
+actually saw, at document granularity. It is intentionally conservative: if any
+sampled 4096-token window touched a doc, the full doc span is included. It is
+not the dedup result; it is the input document set for the next decontamination
+pass.
+
+Added `scripts/analysis/decon_seen_delphi_math_docs.py` to run the next step
+sequentially:
+
+1. Index the seen-doc manifest by `shard_name`.
+2. Join those `(shard_name, shard_row_index)` rows against
+   `gs://marin-us-east5/normalized/nemotron_cc_math_v1/4plus_b05688a8/outputs/main`.
+3. Materialize the actual seen Nemotron math docs under
+   `gs://marin-us-east5/scratch/ahmed/midtrain_dedup/seen_docs/1e22_p33m67_k020_math/val_decon/seen_math_docs`.
+4. Run Datakit decon on those docs using
+   `gs://marin-us-east5/scratch/ahmed/midtrain_dedup/val_docs` as the eval set,
+   writing attributes under `.../val_decon/datakit_decon_attrs`.
+
+The script is resumable for the manifest-index and extraction stages. Datakit
+decon itself is treated as a final stage; if a preemption interrupts it before
+`run_summary.json`, rerun with `--resume` or clear the decon output explicitly.
+
+Launched the full pipeline on Iris as `/ahmed/decon-seen-delphi-math-val`:
+
+```bash
+uv run iris --config lib/iris/config/marin.yaml job run --no-wait \
+  --cpu 4 --memory 32GB --disk 50GB \
+  --priority interactive --extra cpu --enable-extra-resources \
+  --preemptible --region us-east5 \
+  --job-name decon-seen-delphi-math-val \
+  -e PYTHONUNBUFFERED 1 \
+  -- python scripts/analysis/decon_seen_delphi_math_docs.py
+```
+
+Startup caught an important join bug: the seen-doc manifest's cache
+`shard_name` is `consolidated`, so extraction cannot join by cache shard name.
+The correct join is `global_doc_index -> normalized shard offsets -> source row`.
+Patched the script accordingly. The corrected v2 job is
+`/ahmed/decon-seen-delphi-math-val-v2`, launched with `--force` to clear the
+failed partial index:
+
+```bash
+uv run iris --config lib/iris/config/marin.yaml job run --no-wait \
+  --cpu 4 --memory 32GB --disk 50GB \
+  --priority interactive --extra cpu --enable-extra-resources \
+  --preemptible --region us-east5 \
+  --job-name decon-seen-delphi-math-val-v2 \
+  -e PYTHONUNBUFFERED 1 \
+  -- python scripts/analysis/decon_seen_delphi_math_docs.py --force
+```
+
+Initial v2 logs show the corrected index completed with `21698083` rows across
+`231` normalized shards (`normalized_total_rows=45096087`), then launched Zephyr
+extraction as
+`/ahmed/decon-seen-delphi-math-val-v2/zephyr-extract-seen-delphi-math-docs-93770b43-p0-a0`.
+
+## 2026-06-21 — Clarification: Datakit decon scoring is paragraph containment, not MinHash/Jaccard
+
+Question resolved: the Datakit path used by
+`/ahmed/decon-seen-delphi-math-val-v2` is **not** the earlier MinHash + LSH +
+verified Jaccard pipeline. It uses exact word-ngram membership through a Bloom
+filter.
+
+Run settings from `scripts/analysis/decon_seen_delphi_math_docs.py`:
+
+- `ngram_length=13`
+- `stride=0` (contiguous 13-word ngrams)
+- `overlap_threshold=0.5`
+- `false_positive_rate=1e-9`
+- `estimated_eval_features=200_000_000`
+- eval/decon source:
+  `gs://marin-us-east5/scratch/ahmed/midtrain_dedup/val_docs`
+- input docs: actual 1e22 p33m67 K=0.20 seen math docs extracted from the
+  replay manifest.
+
+Actual scoring semantics in `marin.datakit.decon`:
+
+1. Split each eval/val document on newlines into paragraphs.
+2. Split each paragraph by whitespace into tokens.
+3. Insert every contiguous 13-word eval ngram's 64-bit `blake2b` hash into a
+   `dupekit.Bloom`; also write `_bloom/eval_hash_index.parquet` for later
+   hash-to-eval-id attribution.
+4. For each seen training document, score each paragraph as:
+
+   ```text
+   datakit_score(paragraph)
+     = (# of this paragraph's 13-word ngram positions whose hash hits the eval Bloom)
+       / (# of this paragraph's 13-word ngram positions)
+   ```
+
+5. Emit one output row per training document with:
+
+   ```text
+   max_overlap = max(datakit_score(paragraph) for paragraph in document)
+   contaminated = max_overlap > 0 and max_overlap >= 0.5
+   ```
+
+So the output is **document-labeled but paragraph-scored**: a whole seen
+training document is marked contaminated if any one of its paragraphs has at
+least half of its 13-word ngram positions present somewhere in the validation
+ngram Bloom.
+
+Important interpretation constraints:
+
+- This is **not** a MinHash estimate.
+- There are **no LSH bands** in this Datakit pass.
+- `max_overlap <= 0.5` is **not** an upper bound on document-level or
+  paragraph-level Jaccard similarity.
+- The denominator is the training paragraph's ngram positions, not
+  `|A union B|`, so the score is directional containment-like rather than
+  symmetric Jaccard.
+- The Bloom is over the **union of all validation ngrams**, so a paragraph's
+  hits can in principle come from multiple val documents/paragraphs. The
+  sidecar can attribute matched hashes back to eval ids, but the boolean flag
+  itself does not require a single paired eval paragraph/doc to explain the
+  overlap.
+- Paragraphs shorter than 13 whitespace tokens contribute no features.
+- Matching is sensitive to the raw whitespace tokens; case and punctuation
+  differences can prevent matches.
+- With the Bloom filter, inserted eval ngrams have no false negatives, but
+  the configured false-positive rate means a tiny number of non-eval ngrams
+  may count as hits.
+
+Read the completed v2 result accordingly: `6,629,771` of `21,698,083` actually
+seen 1e22 math docs had at least one paragraph whose Datakit 13-gram
+containment score against the val-doc ngram union was `>= 0.5`; `15,068,312`
+had no paragraph crossing that threshold. This is exposure-conditioned
+paragraph-containment evidence, not a per-document Jaccard decontamination
+result.
+
+## 2026-06-21 — Clean validation set against contaminated seen Datakit docs
+
+Added `scripts/analysis/build_clean_val_against_seen_datakit.py` to build the
+reverse-use validation artifact: a math val cache with any validation document
+implicated by the `6,629,771` contaminated actually-seen 1e22 p33m67 K=0.20
+math docs removed.
+
+Important granularity decision: **drop validation documents, not paragraphs**.
+The upstream Datakit evidence is paragraph-scored on the seen training side, but
+the val artifact preserves whole normalized validation records. Paragraph
+splicing would create a new, distribution-shifted validation source and would no
+longer match the existing val-doc/cache conventions.
+
+Implementation:
+
+1. Read contaminated rows from
+   `.../val_decon/datakit_decon_attrs/part-*.parquet`.
+2. Collect their `matched_hashes`.
+3. Join those hashes through
+   `.../val_decon/datakit_decon_attrs/_bloom/eval_hash_index.parquet` to get
+   implicated validation `eval_id`s.
+4. Filter `gs://marin-us-east5/scratch/ahmed/midtrain_dedup/val_docs` by
+   dropping whole records whose `id` is in that derived drop list.
+5. Tokenize the remaining docs as a validation-only Levanter cache at
+   `gs://marin-us-east5/tokenized/nemotron_math_val_clean_seen_1e22_p33m67_k020`.
+
+This method is deliberately strict: it drops a val doc on **any attributed
+13-word ngram hit** from a contaminated seen training document, not only if a
+reverse Datakit paragraph score would cross `>=0.5`. The guarantee is therefore
+about the Datakit-indexed 13-gram evidence we already have; it is conservative
+relative to a minimal reverse-threshold drop set.
+
+Default launch:
+
+```bash
+uv run iris --config lib/iris/config/marin.yaml job run --no-wait \
+  --cpu 8 --memory 64GB --disk 50GB \
+  --priority interactive --extra cpu --enable-extra-resources \
+  --preemptible --region us-east5 \
+  --job-name clean-val-against-seen-datakit \
+  -e PYTHONUNBUFFERED 1 \
+  -- python scripts/analysis/build_clean_val_against_seen_datakit.py --resume
+```
+
+## 2026-06-21 — Clean validation build completed
+
+The clean validation build succeeded as Iris job
+`/ahmed/clean-val-against-seen-datakit`.
+
+Operational note: the first launch attempt from the `nemotron_contam` worktree
+failed before submitting because its `marin-iris` client was too old for the
+controller (`build 2026-06-04`, minimum `2026-06-07`). I mirrored the script into
+`~/code/marin/.claude/worktrees/midtrain_data`, whose Iris client met the
+minimum, and launched the successful run from there.
+
+Datakit reverse drop derivation:
+
+- Source attr shards: `231`
+- Contaminated actually-seen training records scanned: `6,629,771`
+- Unique `matched_hashes` from those records: `23,893,163`
+- Eval hash-index rows scanned: `30,461,720`
+- Eval hash-index rows matched by those hashes: `25,813,677`
+- Whole validation documents dropped: `53,876`
+
+Filtered validation docs:
+
+- Input validation documents: `57,243`
+- Kept validation documents: `3,367`
+- Dropped validation documents: `53,876`
+- Filtered doc shards:
+  `gs://marin-us-east5/scratch/ahmed/midtrain_dedup/seen_docs/1e22_p33m67_k020_math/val_decon/clean_val_against_contaminated_seen_docs/docs`
+
+Tokenized clean validation cache:
+
+- Cache:
+  `gs://marin-us-east5/tokenized/nemotron_math_val_clean_seen_1e22_p33m67_k020/validation`
+- Tokenizer: `meta-llama/Meta-Llama-3.1-8B`
+- Docs: `3,367`
+- Tokens: `2,265,243`
+- 4096-token eval sequences: `553`
+- Stats:
+  `gs://marin-us-east5/tokenized/nemotron_math_val_clean_seen_1e22_p33m67_k020/validation/.stats.json`
+
+Manifest and drop list:
+
+- Manifest:
+  `gs://marin-us-east5/scratch/ahmed/midtrain_dedup/seen_docs/1e22_p33m67_k020_math/val_decon/clean_val_against_contaminated_seen_docs/manifest.json`
+- Drop IDs:
+  `gs://marin-us-east5/scratch/ahmed/midtrain_dedup/seen_docs/1e22_p33m67_k020_math/val_decon/clean_val_against_contaminated_seen_docs/drop_val_ids.json`
+
+The output is whole-document filtered: any validation document with any
+Datakit-attributed 13-word ngram hash hit from a contaminated actually-seen
+training document was removed.
+
+Local verification passed:
+
+```bash
+uv run --with pytest --with pytest-timeout python -m pytest \
+  tests/analysis/test_build_clean_val_against_seen_datakit.py -q
+
+./infra/pre-commit.py --fix \
+  scripts/analysis/build_clean_val_against_seen_datakit.py \
+  tests/analysis/test_build_clean_val_against_seen_datakit.py
+```
+
+## 2026-06-21 — Launched clean validation build against seen-doc Datakit contamination
+
+Preflight for the clean-val builder:
+
+- Datakit source exists:
+  `gs://marin-us-east5/scratch/ahmed/midtrain_dedup/seen_docs/1e22_p33m67_k020_math/val_decon/datakit_decon_attrs/run_summary.json`
+- Datakit hash attribution sidecar exists:
+  `.../datakit_decon_attrs/_bloom/eval_hash_index.parquet`
+- Input validation docs exist:
+  `gs://marin-us-east5/scratch/ahmed/midtrain_dedup/val_docs`
+- Fresh target roots before launch:
+  `.../clean_val_against_contaminated_seen_docs` absent and
+  `gs://marin-us-east5/tokenized/nemotron_math_val_clean_seen_1e22_p33m67_k020`
+  absent.
+
+Submitted the build as an in-region us-east5 Iris CPU job:
+
+```bash
+uv run iris --config lib/iris/config/marin.yaml job run --no-wait \
+  --cpu 8 --memory 64GB --disk 50GB \
+  --priority interactive --extra cpu --enable-extra-resources \
+  --preemptible --region us-east5 \
+  --job-name clean-val-against-seen-datakit \
+  -e PYTHONUNBUFFERED 1 \
+  -- python scripts/analysis/build_clean_val_against_seen_datakit.py --resume
+```
+
+## 2026-06-21 — Canonical clean eval set w.r.t. 1e22 p33m67 K=0.20 seen training
+
+Canonical clean eval set for the current 1e22-seen contamination question:
+
+- Name/tag: `clean_seen_1e22_p33m67_k020`
+- Cache root:
+  `gs://marin-us-east5/tokenized/nemotron_math_val_clean_seen_1e22_p33m67_k020`
+- Validation split:
+  `gs://marin-us-east5/tokenized/nemotron_math_val_clean_seen_1e22_p33m67_k020/validation`
+- Stats:
+  `gs://marin-us-east5/tokenized/nemotron_math_val_clean_seen_1e22_p33m67_k020/validation/.stats.json`
+- Build manifest:
+  `gs://marin-us-east5/scratch/ahmed/midtrain_dedup/seen_docs/1e22_p33m67_k020_math/val_decon/clean_val_against_contaminated_seen_docs/manifest.json`
+
+Scope: this is canonical for evaluation **with respect to actual Datakit
+contamination observed in the 1e22 p33m67 K=0.20 training run**. It drops whole
+validation documents reached by any Datakit-attributed 13-word ngram hash from
+the `6,629,771` contaminated actually-seen training records.
+
+Artifact size:
+
+- Input validation docs: `57,243`
+- Dropped validation docs: `53,876`
+- Kept validation docs: `3,367`
+- Tokens: `2,265,243`
+- 4096-token eval sequences: `553`
+
+Interpretation guardrail: this set is not a new proof of zero overlap against
+all possible training corpora. It is a strict reverse-use artifact from the
+Datakit seen-doc run: the upstream scoring is paragraph-level containment on
+seen training docs, while this clean eval artifact removes whole validation
+documents implicated by that evidence.
+
+Planned eval use: run K=0.20 Delphi checkpoints on this cache using v6e-4 and a
+small eval microbatch (`per_device_eval_parallelism=2`, fallback `1` if any 1e22
+cell OOMs). The existing `scripts/analysis/eval_decon_val_sets.py` checkpoint
+inventory and output guards are reusable, but the script needs a small
+single-cache mode; passing this root as `--decon-cache-root` is wrong because
+the current decon path appends `j050` ... `j090`.
+
+## 2026-06-21 — Launched p33m67 K=0.20 clean-seen eval sweep
+
+Scope launched: p33m67 K=0.20, all learning rates and whole isoflop ladder:
+`9` scales × `4` LR factors = `36` eval jobs.
+
+Eval script change:
+
+- `scripts/analysis/eval_decon_val_sets.py` now supports
+  `--extra-validation-cache-root`, `--extra-validation-tag`, and
+  `--skip-decon-grid`.
+- The clean cache is added as a validation-only component with
+  `train_weights=0.0`; no `num_validation_sequences` is set for it because the
+  cache already has a materialized `validation` split.
+- Existing decon-grid behavior remains the default.
+
+Local verification:
+
+```bash
+uv run --with pytest --with pytest-timeout python -m pytest \
+  tests/analysis/test_eval_decon_val_sets.py -q
+
+./infra/pre-commit.py --fix \
+  scripts/analysis/eval_decon_val_sets.py \
+  tests/analysis/test_eval_decon_val_sets.py
+```
+
+Preflight:
+
+- Run inventory: the 36 p33m67 entries already listed in
+  `eval_decon_val_sets.py::RUNS`.
+- Final HF export steps found for all 36.
+- No existing outputs under:
+  `gs://marin-us-east5/scratch/ahmed/midtrain_dedup/decon_val_sets/evals_clean_seen_1e22_k020`.
+
+Launch settings:
+
+- TPU: `v6e-4` for every job.
+- Region: `us-east5`.
+- Priority: `interactive`.
+- Capacity: preemptible.
+- Eval microbatch: `--per-device-parallelism 2`.
+- Resources: `cpu=8`, `disk=50GB`; memory `64GB` through 3e20, `96GB` for
+  1e21, `120GB` for 1e22.
+- W&B tag: `clean_seen_1e22_p33m67_k020_eval`.
+- Output root:
+  `gs://marin-us-east5/scratch/ahmed/midtrain_dedup/decon_val_sets/evals_clean_seen_1e22_k020`.
+
+Command template used:
+
+```bash
+/Users/ahmed/code/marin/.claude/worktrees/midtrain_data/.venv/bin/iris \
+  --config lib/iris/config/marin.yaml job run --no-wait \
+  --tpu v6e-4 --enable-extra-resources --priority interactive \
+  --extra tpu --preemptible --region us-east5 \
+  --cpu 8 --memory <64GB|96GB|120GB> --disk 50GB \
+  --job-name clean1e22-p33m67-<scale>-<lr> \
+  -e WANDB_API_KEY "$WANDB_API_KEY" -e HF_TOKEN "$HF_TOKEN" \
+  -- python scripts/analysis/eval_decon_val_sets.py \
+    --run <run> \
+    --out-root gs://marin-us-east5/scratch/ahmed/midtrain_dedup/decon_val_sets/evals_clean_seen_1e22_k020 \
+    --wandb-tag clean_seen_1e22_p33m67_k020_eval \
+    --skip-decon-grid \
+    --extra-validation-cache-root gs://marin-us-east5/tokenized/nemotron_math_val_clean_seen_1e22_p33m67_k020 \
+  --extra-validation-tag clean_seen_1e22_p33m67_k020 \
+  --per-device-parallelism 2
+```
+
+## 2026-07-04 03:17 UTC - Iris IAP auth ping succeeded
+
+After patching the local Iris IAP login path, the user reran:
+
+```bash
+uv run iris --config lib/iris/config/marin.yaml login
+```
+
+The CLI cached IAP assertion-mode credentials:
+
+```text
+Authenticated to IAP; controller JWT login is unavailable
+Token stored for cluster 'default' (IAP credentials cached)
+```
+
+Read-only ping command:
+
+```bash
+uv run iris --config lib/iris/config/marin.yaml job list \
+  --prefix /ahmed/codex-auth-ping-nonexistent --json
+```
+
+Result: command exited `0` and returned `[]`. No job was submitted or modified.
+
+## 2026-07-04 03:42 UTC - Math500-only Nemotron math decon completed
+
+Job monitored: `/ahmed/decon-nemotron-math500-test`.
+
+Launch settings:
+
+- CPU-only Iris driver: `8 CPU`, `64GB`, `50GB` disk, `interactive`,
+  preemptible, `us-east5`.
+- Datakit/Zephyr marking workers: script defaults, `max_workers=256`,
+  `worker_cpu=2`, `worker_ram=6g`.
+- Eval split: `--only math500__test`.
+- Decon settings: 13-word ngrams, stride `0`, overlap threshold `0.5`,
+  false-positive rate `1e-9`.
+
+First run status:
+
+- Zephyr mark stage succeeded: `231/231` workers succeeded.
+- Coordinator counters: `zephyr/records_in=45096087`,
+  `decon/clean=45084219`, `decon/contaminated=11868`,
+  `zephyr/records_out=45096087`.
+- Parent driver then failed in report generation because
+  `scripts/analysis/decon_nemotron_math_against_benchmarks.py` expected flat
+  columns `contaminated`, `max_overlap`, and `matched_hashes`, but Datakit
+  writes them under `attributes: struct<contaminated, max_overlap,
+  matched_hashes>`.
+
+Fix:
+
+- Patched the report reader to accept the real nested Datakit attribute schema
+  while still supporting the flat unit-test fixture shape.
+- Added a regression test for nested `attributes`.
+- Focused test passed:
+
+```bash
+uv run --with pytest --with pytest-timeout pytest \
+  tests/analysis/test_decon_nemotron_math_against_benchmarks.py -q
+```
+
+Result: `3 passed`.
+
+Recovery:
+
+- Relaunched the same Iris job with `--resume`, which reused
+  `math500__test/run_summary.json` and the 231 existing attribute parquet files
+  instead of rescanning Nemotron-CC math.
+- Relaunch succeeded: parent job `JOB_STATE_SUCCEEDED`, exit `0`.
+
+Final report:
+
+- Per-split report:
+  `gs://marin-us-east5/scratch/ahmed/math-decontamin-dir/decon_nemotron_cc_math_4plus/math500__test/contamination_report.json`
+- Aggregate JSON:
+  `gs://marin-us-east5/scratch/ahmed/math-decontamin-dir/decon_nemotron_cc_math_4plus/contamination_report.all.json`
+- Aggregate CSV:
+  `gs://marin-us-east5/scratch/ahmed/math-decontamin-dir/decon_nemotron_cc_math_4plus/contamination_report.all.csv`
+
+Key result:
+
+- `total_docs = 45,096,087`
+- `contaminated_docs = 11,868`
+- `clean_docs = 45,084,219`
+- `contamination_rate = 0.00026317139223188036`
+- `eval_records = 500`
+- `eval_records_with_feature_hit = 141`
+- `eval_record_hit_rate = 0.282`
+- `max_overlap = 1.0`
+
+## 2026-07-04 03:04 UTC - Iris IAP login scope mismatch diagnosed and patched locally
+
+Follow-up to the blocked `decon-nemotron-math-benchmarks` launch: the first
+recommended `iris login` did not write credentials. The browser redirect
+succeeded, but `google-auth-oauthlib` aborted locally with:
+
+```text
+IAP authentication failed: Scope has changed from "openid email" to
+"openid https://www.googleapis.com/auth/userinfo.email".
+```
+
+The subsequent `iris key list` ping was read-only and failed with
+`connectrpc.errors.ConnectError: Unauthorized`, confirming that no credentials
+had been cached and no cluster mutation occurred.
+
+Diagnosis: Google canonicalizes the requested OIDC `email` scope to
+`https://www.googleapis.com/auth/userinfo.email` in the token response. The
+headless/manual OAuth path already set `OAUTHLIB_RELAX_TOKEN_SCOPE=1`; the
+normal browser path did not.
+
+Local patch:
+
+- `lib/rigging/src/rigging/auth.py` now sets
+  `OAUTHLIB_RELAX_TOKEN_SCOPE=1` before both desktop OAuth paths.
+- `lib/rigging/tests/test_auth.py` adds an offline fake-flow regression test
+  for the browser path.
+- Debug log:
+  `docs/debug-log-iris-iap-login.md`.
+
+Verification:
+
+```bash
+uv run --with pytest --with pytest-timeout --with pytest-asyncio pytest \
+  lib/rigging/tests/test_auth.py -q
+```
+
+Result: `13 passed`.
+
+Pre-commit on the touched files passed formatting/lint but failed the
+project-wide Pyrefly step on unrelated existing `datasets` import attribute
+errors in `lib/marin/src/marin/**`.
+
+Next action: rerun
+`uv run iris --config lib/iris/config/marin.yaml login` from this patched
+checkout, then ping with a read-only Iris command before launching anything.
+
+Second login failure observed after the scope patch:
+
+```text
+Login failed: Login not available (no identity provider configured)
+```
+
+Interpretation: the live `https://iris.oa.dev` controller is currently an
+assertion-only IAP deployment. IAP can authenticate external requests via its
+signed assertion header, but the controller does not expose the newer
+JWT-minting `Login` RPC. Patched `lib/iris/src/iris/cli/main.py` so that when
+IAP browser auth succeeds but `Login` returns `UNIMPLEMENTED`, the CLI caches
+only the IAP refresh token (`auth_mode=iap_assertion`). That should be enough
+for future CLI RPCs to reach IAP and let the controller authenticate via the
+signed assertion.
+
+Additional verification:
+
+```bash
+uv run --with pytest --with pytest-timeout --with pytest-xdist pytest \
+  lib/iris/tests/cli/test_cluster_auth.py -q
+```
+
+Result: `3 passed`.
+
+Next action remains: rerun
+`uv run iris --config lib/iris/config/marin.yaml login` from this patched
+checkout, then ping with a read-only Iris command before launching anything.
+
+## 2026-07-03 20:29 UTC - Canonical math benchmark decontamination source directory
+
+Built a single Datakit-ready eval-source directory for the small math
+benchmarks we want to decontaminate against before scanning Nemotron CC math:
+
+- Output root:
+  `gs://marin-us-east5/scratch/ahmed/math-decontamin-dir`
+- Script:
+  `scripts/analysis/stage_math_decontam_sources.py`
+- Hidden manifest:
+  `gs://marin-us-east5/scratch/ahmed/math-decontamin-dir/.manifest.json`
+
+Staged files:
+
+| source | HF dataset/revision | split | records | output |
+| --- | --- | --- | ---: | --- |
+| MATH500 | `HuggingFaceH4/MATH-500@ff5b202` | `test` | 500 | `math500/test/data.jsonl.gz` |
+| GSM8K | `openai/gsm8k@740312add88f781978c0658806c59bc2815b9866`, config `main` | `train` | 7,473 | `gsm8k/main/train/data.jsonl.gz` |
+| GSM8K | `openai/gsm8k@740312add88f781978c0658806c59bc2815b9866`, config `main` | `test` | 1,319 | `gsm8k/main/test/data.jsonl.gz` |
+| AIME24 | `HuggingFaceH4/aime_2024@2fe88a2f1091d5048c0f36abc874fb997b3dd99a` | `train` | 30 | `aime24/train/data.jsonl.gz` |
+
+Each data file is JSONL gzip with `id`, `text`, `source`, and `provenance`;
+metadata is kept in hidden `.manifest.json` so Datakit's recursive
+`eval_data_sources` reader skips it.  Use the output root directly as the
+Datakit eval source path.
+
+Commands run:
+
+```bash
+uv run python scripts/analysis/stage_math_decontam_sources.py --force
+uv run --with pytest --with pytest-timeout pytest tests/analysis/test_stage_math_decontam_sources.py -q
+./infra/pre-commit.py --files scripts/analysis/stage_math_decontam_sources.py tests/analysis/test_stage_math_decontam_sources.py
+```
+
+Validation:
+
+- Local one-record-per-split smoke stage succeeded.
+- Full GCS stage wrote the expected four data files plus hidden manifest.
+- Focused tests passed (`4 passed`).
+- Repo lint/format entrypoint passed on the two new files.
+
+## 2026-07-03 20:39 UTC - Per-split Datakit decon report driver for Nemotron CC math
+
+Added `scripts/analysis/decon_nemotron_math_against_benchmarks.py` to run one
+Datakit decontamination pass per staged math benchmark split against the
+normalized Nemotron CC Math 4plus corpus:
+
+- Normalized corpus default:
+  `gs://marin-us-east5/normalized/nemotron_cc_math_v1/4plus_b05688a8/outputs/main`
+- Eval source root default:
+  `gs://marin-us-east5/scratch/ahmed/math-decontamin-dir`
+- Output root default:
+  `gs://marin-us-east5/scratch/ahmed/math-decontamin-dir/decon_nemotron_cc_math_4plus`
+
+The script discovers the four staged source dirs from `.manifest.json`:
+
+- `aime24__train`
+- `gsm8k__main__test`
+- `gsm8k__main__train`
+- `math500__test`
+
+It runs separate Datakit passes intentionally: each eval split gets its own
+bloom filter and therefore its own independent `contaminated` decision at
+`NGramConfig(ngram_length=13, stride=0, overlap_threshold=0.5)`. A combined
+run would answer only "hit any benchmark split" and would not prove that each
+split independently crosses the threshold.
+
+Per split, outputs are:
+
+- `<output-root>/<key>/datakit_decon_attrs/` — Datakit attributes parquet plus
+  `_bloom/eval_hash_index.parquet`
+- `<output-root>/<key>/run_summary.json`
+- `<output-root>/<key>/contamination_report.json`
+
+Aggregate outputs:
+
+- `<output-root>/contamination_report.all.json`
+- `<output-root>/contamination_report.all.csv`
+
+Report fields include total corpus docs, contaminated docs, contamination rate,
+max/mean overlap, unique matched hashes, eval records with a matched feature,
+and top eval IDs by matched feature rows.
+
+Validation commands:
+
+```bash
+uv run python scripts/analysis/decon_nemotron_math_against_benchmarks.py --dry-run
+uv run --with pytest --with pytest-timeout pytest tests/analysis/test_decon_nemotron_math_against_benchmarks.py tests/analysis/test_stage_math_decontam_sources.py -q
+./infra/pre-commit.py --files scripts/analysis/decon_nemotron_math_against_benchmarks.py tests/analysis/test_decon_nemotron_math_against_benchmarks.py scripts/analysis/stage_math_decontam_sources.py tests/analysis/test_stage_math_decontam_sources.py
+```
+
+Results: dry-run found the expected four sources; tests passed (`6 passed`);
+pre-commit passed.
+
+Launch attempts:
+
+```bash
+uv run iris --config lib/iris/config/marin.yaml job run --no-wait \
+  --cpu 8 --memory 64GB --disk 50GB --priority interactive --extra cpu \
+  --enable-extra-resources --preemptible --region us-east5 \
+  --job-name decon-nemotron-math-benchmarks \
+  -e PYTHONUNBUFFERED 1 \
+  -- python scripts/analysis/decon_nemotron_math_against_benchmarks.py --resume
+```
+
+and the same command using
+`/Users/ahmed/code/marin/.claude/worktrees/midtrain_data/.venv/bin/iris`.
+Both failed before submission because the Iris clients were stale relative to
+the controller:
+
+- current worktree client build: `2026-06-04`; controller minimum: `2026-06-19`
+- `midtrain_data` client build: `2026-06-07`; controller minimum: `2026-06-19`
+
+No Iris job was launched. Rerun the launch command from a worktree/env with
+`marin-iris` build `>=2026-06-19`.
+
+## 2026-06-29 22:55 UTC - Launching missing all-mix clean-seen evals
+
+Goal: complete the clean-seen fixed validation benchmark for the full K=0.20
+LR x mix x ladder grid using the canonical p33m67 1e22 seen-clean cache.
+
+Preflight:
+
+- Source run inventory: `scripts/analysis/eval_decon_val_sets.py::RUNS`.
+- Evalable cells: `107`.
+- Existing clean-seen outputs under
+  `gs://marin-us-east5/scratch/ahmed/midtrain_dedup/decon_val_sets/evals_clean_seen_1e22_k020`:
+  `36`, all p33m67.
+- Missing clean-seen outputs to launch: `71`.
+  - `p50m50`: `35`.
+  - `p67m33`: `36`.
+- Existing outputs outside `RUNS`: `0`.
+- Checkpoint root: `gs://marin-us-east5/checkpoints`.
+- Region: `us-east5`.
+- Bucket location: `US-EAST5`.
+
+Launch settings:
+
+- TPU: `v6e-4`.
+- Region: `us-east5`.
+- Priority: `interactive`.
+- Capacity: preemptible.
+- Resources: `cpu=8`, `memory=64GB`, `disk=50GB`.
+- Eval microbatch: `--per-device-parallelism 2`.
+- W&B tag: `clean_seen_1e22_p33m67_k020_eval`.
+- Output root:
+  `gs://marin-us-east5/scratch/ahmed/midtrain_dedup/decon_val_sets/evals_clean_seen_1e22_k020`.
+
+Command template:
+
+```bash
+uv run iris --config lib/iris/config/marin.yaml job run --no-wait \
+  --tpu v6e-4 --enable-extra-resources --priority interactive \
+  --extra tpu --preemptible --region us-east5 \
+  --cpu 8 --memory 64GB --disk 50GB \
+  --job-name clean1e22-<mix>-<scale>-lr<33|50|67|83> \
+  -e WANDB_API_KEY "$WANDB_API_KEY" -e HF_TOKEN "$HF_TOKEN" \
+  -- python scripts/analysis/eval_decon_val_sets.py \
+    --run <run> \
+    --out-root gs://marin-us-east5/scratch/ahmed/midtrain_dedup/decon_val_sets/evals_clean_seen_1e22_k020 \
+    --wandb-tag clean_seen_1e22_p33m67_k020_eval \
+    --skip-decon-grid \
+    --extra-validation-cache-root gs://marin-us-east5/tokenized/nemotron_math_val_clean_seen_1e22_p33m67_k020 \
+    --extra-validation-tag clean_seen_1e22_p33m67_k020 \
+    --per-device-parallelism 2
+```
+
+Submission notes:
+
+- The first two launch attempts used stale Iris clients from `nemotron_contam`
+  and `midtrain_data`; both were rejected by the controller before submission
+  with the client freshness gate (`minimum 2026-06-15`).
+- Final launcher used `/Users/ahmed/code/marin/.venv/bin/iris`, whose
+  `iris.version.client_revision_date()` is `2026-06-21`.
+- Accepted target jobs:
+  - `35` p50m50 cells.
+  - `36` p67m33 cells.
+  - Job prefix: `/ahmed/clean1e22-`.
+- One initial p50m50 job failed:
+  `/ahmed/clean1e22-p50m50-1e22-lr33` selected `step-7646`, whose HF export is
+  incomplete and missing `config.json`.
+- The failed p50m50 1e22 lr0.33 cell was relaunched explicitly at the latest
+  complete HF config step:
+  `/ahmed/clean1e22-p50m50-1e22-lr33-s7640`
+  with `--step 7640`.
+- Status immediately after relaunch:
+  - Target cells represented by non-failed jobs: `71`.
+  - Succeeded: `37`.
+  - Running: `19`.
+  - Pending: `15`.
+  - Obsolete failed attempt: `1` (`p50m50 1e22 lr0.33 step-7646`).
+- GCS output count at that point:
+  - Completed clean-seen outputs in `RUNS`: `73` total.
+  - New non-p33m67 outputs: `37`.
+  - Still missing while jobs run/pending: `34`.
+
+## 2026-06-30 23:36 UTC - All-mix clean-seen eval sweep completed
+
+All 71 missing clean-seen jobs for p50m50 and p67m33 reached
+`JOB_STATE_SUCCEEDED`. The obsolete failed attempt
+`/ahmed/clean1e22-p50m50-1e22-lr33` is ignored; the successful replacement is
+`/ahmed/clean1e22-p50m50-1e22-lr33-s7640` with `--step 7640`.
+
+GCS result coverage:
+
+- Total clean-seen eval results in `RUNS`: `107/107`.
+- p33m67: `36/36`.
+- p50m50: `35/35`.
+- p67m33: `36/36`.
+
+All-mix clean-seen summary artifacts:
+
+- JSON:
+  `gs://marin-us-east5/scratch/ahmed/midtrain_dedup/decon_val_sets/evals_clean_seen_1e22_k020/summary_all_mixes_clean_seen_1e22_k020.json`
+- CSV:
+  `gs://marin-us-east5/scratch/ahmed/midtrain_dedup/decon_val_sets/evals_clean_seen_1e22_k020/summary_all_mixes_clean_seen_1e22_k020.csv`
+- Local copies:
+  `scratch/nemotron_math_clean_seen_eval_all_mixes.{json,csv}`
+
+Summary row counts:
+
+- Total rows: `107`.
+- By mix: p33m67 `36`, p50m50 `35`, p67m33 `36`.
+- By LR: lr33 `27`, lr50 `27`, lr67 `26`, lr83 `27`.
+
+Best clean-seen losses by mix:
+
+- p33m67: 1e22 lr0.67,
+  `eval/clean_seen_1e22_p33m67_k020/loss = 0.8233972191810608`.
+- p50m50: 1e22 lr0.83,
+  `eval/clean_seen_1e22_p33m67_k020/loss = 0.8412580490112305`.
+- p67m33: 1e22 lr0.67,
+  `eval/clean_seen_1e22_p33m67_k020/loss = 0.8632076978683472`.
+
+Joined comparison artifacts:
+
+- JSON:
+  `gs://marin-us-east5/scratch/ahmed/midtrain_dedup/decon_val_sets/evals_clean_seen_1e22_k020/summary_all_mixes_clean_seen_vs_decon_1e22_k020.json`
+- CSV:
+  `gs://marin-us-east5/scratch/ahmed/midtrain_dedup/decon_val_sets/evals_clean_seen_1e22_k020/summary_all_mixes_clean_seen_vs_decon_1e22_k020.csv`
+- Local copies:
+  `scratch/nemotron_math_clean_seen_vs_decon_all_mixes.{json,csv}`
+
+The joined table has `107` rows keyed by `(mix, lr, scale)` with old/full
+anchor loss, clean-seen loss, and canonical union decon losses `j050`, `j075`,
+and `j090`. Anchor losses from the clean-seen and decon eval sweeps agree within
+`6.4e-6` max absolute difference.
+
+Next analysis step: fit/plot the scaling residuals on three eval legs:
+old/full anchor, clean-seen fixed benchmark, and decon_j050/j075/j090. The first
+check should be whether the 1e22 K=0.20 anomaly shrinks on clean-seen and
+decon_j050 relative to the old/full anchor, by mix and LR.
+
+## 2026-06-28 17:35 UTC - Plan: dropped contaminated complement eval cache
+
+Goal: build the exact document complement of the canonical retained clean-seen
+validation cache, then use it for the missing third leg of the contamination
+decomposition:
+
+- Original old 4plus val: existing anchor, `57,243` docs.
+- Retained clean-seen val: existing cache
+  `gs://marin-us-east5/tokenized/nemotron_math_val_clean_seen_1e22_p33m67_k020`.
+- Dropped contaminated subset: build now from the same source-of-truth
+  `drop_val_ids.json` used by the clean set.
+
+Source of truth:
+
+- Drop ids:
+  `gs://marin-us-east5/scratch/ahmed/midtrain_dedup/seen_docs/1e22_p33m67_k020_math/val_decon/clean_val_against_contaminated_seen_docs/drop_val_ids.json`
+- Clean manifest:
+  `gs://marin-us-east5/scratch/ahmed/midtrain_dedup/seen_docs/1e22_p33m67_k020_math/val_decon/clean_val_against_contaminated_seen_docs/manifest.json`
+- Original validation docs:
+  `gs://marin-us-east5/scratch/ahmed/midtrain_dedup/val_docs`
+
+Build target:
+
+- Filtered dropped docs:
+  `gs://marin-us-east5/scratch/ahmed/midtrain_dedup/seen_docs/1e22_p33m67_k020_math/val_decon/dropped_val_against_contaminated_seen_docs/docs`
+- Tokenized cache:
+  `gs://marin-us-east5/tokenized/nemotron_math_val_dropped_seen_1e22_p33m67_k020`
+- Manifest:
+  `gs://marin-us-east5/scratch/ahmed/midtrain_dedup/seen_docs/1e22_p33m67_k020_math/val_decon/dropped_val_against_contaminated_seen_docs/manifest.json`
+
+Repeatability requirements:
+
+- Do **not** rederive contamination or rerun Datakit.
+- Read the existing `drop_val_ids.json` and select exactly those whole
+  validation documents from `val_docs`.
+- Assert the clean and dropped partitions reconstruct the original validation
+  document set:
+  - `clean_ids ∩ dropped_ids = ∅`
+  - `clean_ids ∪ dropped_ids = original val_doc ids`
+  - `clean_count + dropped_count = 57,243`
+  - `dropped_count = 53,876`
+  - `clean_count = 3,367`
+  - `drop_ids_xxh3` matches the clean-set manifest
+- Tokenize with the same tokenizer as the clean cache:
+  `meta-llama/Meta-Llama-3.1-8B`.
+
+Expected first eval use after the cache exists:
+
+- Start with p33m67 K=0.20 lr0.50 (`9` checkpoints).
+- Use one eval job per checkpoint with old full anchor, retained clean, and
+  dropped contaminated subset as tagged validation components.
+- Output root:
+  `gs://marin-us-east5/scratch/ahmed/midtrain_dedup/decon_val_sets/evals_seen_partition_1e22_k020_lr50`.
+
+Caveat for interpretation: separate clean/dropped caches are an exact
+document-set complement but may not be a bit-exact weighted decomposition of the
+old full anchor because tokenization/packing is redone separately. If the first
+result is ambiguous, implement a labeled eval over the original packed validation
+stream so each token/window is labeled `clean` or `dropped` inside the same old
+val packing.
+
+## 2026-06-28 17:54 UTC - Built dropped contaminated complement cache
+
+Builder:
+
+- Added `scripts/analysis/build_dropped_val_against_seen_datakit.py`.
+- Added `tests/analysis/test_build_dropped_val_against_seen_datakit.py`.
+- Reuses `scripts/analysis/build_clean_val_against_seen_datakit.py`.
+- Source of truth is the existing clean-set `drop_val_ids.json`; the script does
+  not rerun Datakit or rederive contamination.
+- Selects whole validation documents, not paragraphs.
+
+Local verification:
+
+- `uv run --with pytest --with pytest-timeout python -m pytest tests/analysis/test_build_dropped_val_against_seen_datakit.py tests/analysis/test_build_clean_val_against_seen_datakit.py -q`
+  -> `4 passed`.
+- `./infra/pre-commit.py --fix scripts/analysis/build_dropped_val_against_seen_datakit.py tests/analysis/test_build_dropped_val_against_seen_datakit.py .agents/logbooks/nemotron_math_data.md`
+  -> OK.
+
+Iris submission:
+
+- Root job `/ahmed/dropped-val-against-seen-datakit`, succeeded.
+- Launched from temp run bundle
+  `/private/tmp/marin-nemotron-contam-cache-run-20260628134209` because the Iris
+  controller required client build `>= 2026-06-14`; the main checkout client was
+  build `2026-06-21`. The bundle was `main` plus the two decontamination scripts
+  copied from this worktree.
+- Exact command:
+
+```bash
+/Users/ahmed/code/marin/.venv/bin/iris \
+  --config lib/iris/config/marin.yaml job run --no-wait \
+  --cpu 8 --memory 64GB --disk 50GB \
+  --priority interactive --extra cpu --enable-extra-resources \
+  --preemptible --region us-east5 \
+  --job-name dropped-val-against-seen-datakit \
+  -e PYTHONUNBUFFERED 1 \
+  -- python scripts/analysis/build_dropped_val_against_seen_datakit.py --resume
+```
+
+Operational note: the filter worker job ended `JOB_STATE_KILLED` with
+`Terminated by user` after the Zephyr coordinator had already succeeded. This is
+normal Zephyr worker cleanup; the parent Iris job succeeded.
+
+Outputs:
+
+- Dropped docs:
+  `gs://marin-us-east5/scratch/ahmed/midtrain_dedup/seen_docs/1e22_p33m67_k020_math/val_decon/dropped_val_against_contaminated_seen_docs/docs`
+- Tokenized cache:
+  `gs://marin-us-east5/tokenized/nemotron_math_val_dropped_seen_1e22_p33m67_k020`
+- Manifest:
+  `gs://marin-us-east5/scratch/ahmed/midtrain_dedup/seen_docs/1e22_p33m67_k020_math/val_decon/dropped_val_against_contaminated_seen_docs/manifest.json`
+- Dropped-doc parquet shards: `231`.
+
+Manifest/cache counts:
+
+- Original/input docs: `57,243`
+- Clean docs: `3,367`
+- Dropped docs: `53,876`
+- Clean ∩ dropped: `0`
+- Clean ∪ dropped: `57,243`
+- Dropped cache tokens: `123,475,898`
+- Dropped cache eval sequences: `30,145`
+- `drop_ids_xxh3`: `f4b4b2b656eb9d658e33fcbb98375512`
+- Cache stats:
+  `gs://marin-us-east5/tokenized/nemotron_math_val_dropped_seen_1e22_p33m67_k020/validation/.stats.json`
+  reports `total_elements = 53,876` and `total_tokens = 123,475,898`.
+
+## 2026-06-28 18:55 UTC - Launch plan: dropped-contaminated lr0.50 evals
+
+Highest information-gain next eval:
+
+- Run the missing dropped-contaminated subset leg for p33m67 K=0.20 lr0.50
+  across the 9-point isoflop ladder.
+- Reuse the existing clean-seen evals from
+  `gs://marin-us-east5/scratch/ahmed/midtrain_dedup/decon_val_sets/evals_clean_seen_1e22_k020`.
+- Re-evaluate the old full-val anchor in each dropped-subset job for a local
+  harness sanity check.
+- Fit the lr0.50 ladder through `3e20`, then compare the `1e22` miss on:
+  old full val, retained clean-seen val, and dropped contaminated val.
+
+Run inventory:
+
+- `delphi-3e18-p33m67-k0p20-lr50-a003`
+- `delphi-9e18-p33m67-k0p20-lr50-a002`
+- `delphi-2e19-p33m67-k0p20-lr50-a002`
+- `delphi-3e19-p33m67-k0p20-lr50-a002`
+- `delphi-9e19-p33m67-k0p20-lr50-a002`
+- `delphi-2e20-p33m67-k0p20-lr50-a001`
+- `delphi-3e20-p33m67-k0p20-lr50-a001`
+- `delphi-1e21-p33m67-9p25b-lr0.5-efbc63`
+- `delphi-1e22-p33m67-32p07b-lr0.5-0eeca70d`
+
+Launch settings:
+
+- TPU: `v6e-4`
+- Zone: `us-east5-b`
+- Priority: `interactive`
+- Capacity: preemptible
+- Eval microbatch: `--per-device-parallelism 2`
+- Memory: `64GB` through `3e20`, `96GB` for `1e21`, `120GB` for `1e22`
+- W&B tag: `dropped_seen_1e22_p33m67_k020_lr50_eval`
+- Extra validation tag: `dropped_seen_1e22_p33m67_k020`
+- Extra validation cache:
+  `gs://marin-us-east5/tokenized/nemotron_math_val_dropped_seen_1e22_p33m67_k020`
+- Output root:
+  `gs://marin-us-east5/scratch/ahmed/midtrain_dedup/decon_val_sets/evals_seen_partition_1e22_k020_lr50`
+
+Preflight:
+
+- No existing Iris jobs under `/ahmed/dropped1e22-p33m67-lr50`.
+- No existing GCS objects under the output root.
+- `v6e-4` in `us-east5-b`: `2/2` slices ready, `0` assigned tasks,
+  autoscaler status `available`, `0` failures.
+
+Command template:
+
+```bash
+/Users/ahmed/code/marin/.venv/bin/iris \
+  --config lib/iris/config/marin.yaml job run --no-wait \
+  --tpu v6e-4 --enable-extra-resources --priority interactive \
+  --extra tpu --preemptible --zone us-east5-b \
+  --cpu 8 --memory <64GB|96GB|120GB> --disk 50GB \
+  --job-name dropped1e22-p33m67-lr50-<scale> \
+  -e WANDB_API_KEY "$WANDB_API_KEY" -e HF_TOKEN "$HF_TOKEN" \
+  -- python scripts/analysis/eval_decon_val_sets.py \
+    --run <run> \
+    --out-root gs://marin-us-east5/scratch/ahmed/midtrain_dedup/decon_val_sets/evals_seen_partition_1e22_k020_lr50 \
+    --wandb-tag dropped_seen_1e22_p33m67_k020_lr50_eval \
+    --skip-decon-grid \
+    --extra-validation-cache-root gs://marin-us-east5/tokenized/nemotron_math_val_dropped_seen_1e22_p33m67_k020 \
+    --extra-validation-tag dropped_seen_1e22_p33m67_k020 \
+    --per-device-parallelism 2
+```
+
+Launched jobs:
+
+- `/ahmed/dropped1e22-p33m67-lr50-3e18`
+- `/ahmed/dropped1e22-p33m67-lr50-9e18`
+- `/ahmed/dropped1e22-p33m67-lr50-2e19`
+- `/ahmed/dropped1e22-p33m67-lr50-3e19`
+- `/ahmed/dropped1e22-p33m67-lr50-9e19`
+- `/ahmed/dropped1e22-p33m67-lr50-2e20`
+- `/ahmed/dropped1e22-p33m67-lr50-3e20`
+- `/ahmed/dropped1e22-p33m67-lr50-1e21`
+- `/ahmed/dropped1e22-p33m67-lr50-1e22`
+
+Initial Iris status after submission:
+
+- `3e18` and `9e18` were running immediately on the two preexisting idle
+  `v6e-4` slices.
+- The remaining seven jobs were pending only on capacity with:
+  `Waiting for worker scale-up in scale group 'tpu_v6e-preemptible_4-us-east5-b'`.
+- Scale group after launch: `2/9` ready, `7` booting, `0` failed, demand `7`.
+
+Outcome:
+
+- All nine Iris jobs succeeded.
+- Final state: `9/9` `JOB_STATE_SUCCEEDED`, `0` failures, `0` preemptions.
+- Monitoring state file:
+  `scratch/20260628-1916_monitoring_state.json`.
+- All nine JSON tracker files exist under:
+  `gs://marin-us-east5/scratch/ahmed/midtrain_dedup/decon_val_sets/evals_seen_partition_1e22_k020_lr50`.
+- Each tracker file includes both required metrics:
+  `eval/dropped_seen_1e22_p33m67_k020/loss` and
+  `eval/nemotron_cc_math_v1/4plus/loss`.
+
+Metrics:
+
+| scale | run | step | dropped_seen_loss | old_4plus_anchor_loss | eval_loss |
+| --- | --- | ---: | ---: | ---: | ---: |
+| 3e18 | `delphi-3e18-p33m67-k0p20-lr50-a003` | 7399 | 1.549547 | 1.435384 | 1.516085 |
+| 9e18 | `delphi-9e18-p33m67-k0p20-lr50-a002` | 8818 | 1.384532 | 1.273923 | 1.352112 |
+| 2e19 | `delphi-2e19-p33m67-k0p20-lr50-a002` | 10982 | 1.301824 | 1.193550 | 1.270089 |
+| 3e19 | `delphi-3e19-p33m67-k0p20-lr50-a002` | 7573 | 1.245968 | 1.139135 | 1.214654 |
+| 9e19 | `delphi-9e19-p33m67-k0p20-lr50-a002` | 8032 | 1.126227 | 1.021222 | 1.095448 |
+| 2e20 | `delphi-2e20-p33m67-k0p20-lr50-a001` | 11277 | 1.057935 | 0.954187 | 1.027525 |
+| 3e20 | `delphi-3e20-p33m67-k0p20-lr50-a001` | 7081 | 1.012450 | 0.909707 | 0.982335 |
+| 1e21 | `delphi-1e21-p33m67-9p25b-lr0.5-efbc63` | 4410 | 0.895596 | 0.793657 | 0.865716 |
+| 1e22 | `delphi-1e22-p33m67-32p07b-lr0.5-0eeca70d` | 7646 | 0.665261 | 0.561143 | 0.634742 |
+
+## 2026-06-21 23:51 UTC - Corrected 1e22 tok1b isotoken clean-seen eval
+
+The earlier isotoken clean-seen summary used the stale partial checkpoint
+`delphi-1e22-p33m67-tok1b-lr50-a004` at `hf/step-50` for the 1e22/1B cell.
+That was not the completed 1e22 tok1b run. The completed run is
+`delphi-1e22-p33m67-tok1b-lr50-a008`, final HF export `hf/step-237`, under
+`gs://marin-us-central1/checkpoints`.
+
+Replacement eval:
+
+- First attempt: `/ahmed/clean1e22-isotok-1e22-tok1b-a008` on idle `v6e-4`
+  in `us-east1-d`; failed immediately because Iris blocked cross-region
+  transfer of the us-central1 checkpoint weights at the 10GB budget.
+- Successful attempt: `/ahmed/clean1e22-isotok-1e22-tok1b-a008-uscentral` on
+  `v5p-8` in `us-central1-a`.
+- W&B run: `https://wandb.ai/marin-community/marin/runs/rz5c5er4`.
+- Output:
+  `gs://marin-us-east5/scratch/ahmed/midtrain_dedup/decon_val_sets/evals_clean_seen_1e22_isotoken_p33m67_lr50/delphi-1e22-p33m67-tok1b-lr50-a008/step-237/metrics.jsonl/eval_results.json`.
+
+Corrected 1e22/1B row:
+
+- `clean_seen_loss = 0.99662184715271`
+- `clean_seen_bpb = 0.44331425428390503`
+- Anchor `nemotron_cc_math_v1/4plus` loss `0.9176583886146545`
+- Anchor `nemotron_cc_math_v1/4plus` bpb `0.3865000903606415`
+- `eval_loss = 0.9210038781166077`
+- `macro_loss = 0.9571400880813599`
+
+Canonical summary artifacts were regenerated with `partial_rows: []` and the
+`1e22,1b` row now points at `a008/step-237`:
+
+- JSON:
+  `gs://marin-us-east5/scratch/ahmed/midtrain_dedup/decon_val_sets/evals_clean_seen_1e22_isotoken_p33m67_lr50/summary_p33m67_isotoken_clean_seen_1e22.json`
+- CSV:
+  `gs://marin-us-east5/scratch/ahmed/midtrain_dedup/decon_val_sets/evals_clean_seen_1e22_isotoken_p33m67_lr50/summary_p33m67_isotoken_clean_seen_1e22.csv`
+
+Backups of the stale summaries were kept with suffix
+`stale_tok1b_partial_20260621-1948`.
+
+Submitted jobs:
+
+- `/ahmed/clean1e22-isotok-{3e18,9e18,2e19,3e19,9e19,2e20,3e20,1e21,1e22}-tok1b`
+- `/ahmed/clean1e22-isotok-{3e18,9e18,2e19,3e19,9e19,2e20,3e20,1e21,1e22}-tok2b`
+- `/ahmed/clean1e22-isotok-{3e18,9e18,2e19,3e19,9e19,2e20,3e20,1e21,1e22}-tok4b`
+- `/ahmed/clean1e22-isotok-{3e18,9e18,2e19,3e19,9e19,2e20,3e20,1e21,1e22}-tok8b`
+
+Initial status after submission: `36` jobs visible; `7` succeeded, `7` running,
+`22` pending on v6e-4 capacity; `0` failed. Pending reason matched normal TPU
+capacity/quota-pool tiering:
+
+```text
+Scheduler: Insufficient TPUs (need 4, available 0)
+Autoscaler: Unsatisfied autoscaler demand: tier_blocked: 1 matching group(s) blocked by quota-pool tier monotonicity
+```
+
+## 2026-06-21 22:48 UTC - p33m67 isotoken clean-seen evals completed
+
+All 36 isotoken clean-seen eval jobs reached `JOB_STATE_SUCCEEDED`:
+
+- Prefix: `/ahmed/clean1e22-isotok-`
+- Count: 36 succeeded, 0 failed.
+- Final tail was the four 1e22 jobs:
+  `tok1b`, `tok2b`, `tok4b`, and `tok8b`.
+- The `1e22 tok1b` result remains a partial-checkpoint result because the only
+  available HF export was `step-50` while `num_train_steps=238`.
+
+Summary artifacts:
+
+- JSON:
+  `gs://marin-us-east5/scratch/ahmed/midtrain_dedup/decon_val_sets/evals_clean_seen_1e22_isotoken_p33m67_lr50/summary_p33m67_isotoken_clean_seen_1e22.json`
+- CSV:
+  `gs://marin-us-east5/scratch/ahmed/midtrain_dedup/decon_val_sets/evals_clean_seen_1e22_isotoken_p33m67_lr50/summary_p33m67_isotoken_clean_seen_1e22.csv`
+
+Best complete row by clean-seen loss:
+
+- Run: `delphi-1e22-p33m67-tok8b-lr50-a001`
+- Step: `1906` of `1907`
+- `actual_tokens = 7998537728`
+- `eval/clean_seen_1e22_p33m67_k020/loss = 0.8947558403015137`
+- `eval/clean_seen_1e22_p33m67_k020/bpb = 0.397868812084198`
+- Anchor `eval/nemotron_cc_math_v1/4plus/loss = 0.7202463150024414`
+- Anchor `eval/nemotron_cc_math_v1/4plus/bpb = 0.3031579852104187`
+
+Partial row retained in the summary:
+
+- Run: `delphi-1e22-p33m67-tok1b-lr50-a004`
+- Step: `50` of `238`
+- `actual_tokens = 998244352`
+- `eval/clean_seen_1e22_p33m67_k020/loss = 1.0930110216140747`
+- Anchor `eval/nemotron_cc_math_v1/4plus/loss = 1.043389081954956`
+
+Operational note: launching via the current worktree's `uv run iris` still fails
+against the controller (`marin-iris` build `2026-06-04`, minimum `2026-06-07`).
+The successful submissions used the newer Iris entry point from
+`~/code/marin/.claude/worktrees/midtrain_data/.venv/bin/iris` while keeping the
+current `nemotron_contam` directory as the workspace bundle.
+
+Submitted jobs:
+
+- lr0.33: `/ahmed/clean1e22-p33m67-{3e18,9e18,2e19,3e19,9e19,2e20,3e20,1e21,1e22}-lr33`
+- lr0.50: `/ahmed/clean1e22-p33m67-{3e18,9e18,2e19,3e19,9e19,2e20,3e20,1e21,1e22}-lr50`
+- lr0.67: `/ahmed/clean1e22-p33m67-{3e18,9e18,2e19,3e19,9e19,2e20,3e20,1e21,1e22}-lr67`
+- lr0.83: `/ahmed/clean1e22-p33m67-{3e18,9e18,2e19,3e19,9e19,2e20,3e20,1e21,1e22}-lr83`
+
+Initial status at submit+~1 min: `36` jobs visible; `5` succeeded, `6` running,
+`25` pending on v6e-4 capacity. Pending reason for queued jobs was capacity, not
+configuration failure:
+
+```text
+Scheduler: Insufficient TPUs (need 4, available 0)
+Autoscaler: Unsatisfied autoscaler demand: tier_blocked: 1 matching group(s) blocked by quota-pool tier monotonicity
+```
+
+Follow-up status at 2026-06-21 17:05 UTC: `7` succeeded, `5` running, `24`
+pending; `0` failed.
+
+First completed-result smoke check passed:
+
+- Result:
+  `gs://marin-us-east5/scratch/ahmed/midtrain_dedup/decon_val_sets/evals_clean_seen_1e22_k020/delphi-3e18-p33m67-k0p20-lr33-a003/step-7399/metrics.jsonl/eval_results.json`
+- `eval/clean_seen_1e22_p33m67_k020/loss = 1.5193759202957153`
+- `eval/nemotron_cc_math_v1/4plus/loss = 1.4720451831817627`
+
+Next: monitor to completion, then collect
+`eval/clean_seen_1e22_p33m67_k020/loss` plus anchor loss into
+`summary_p33m67_clean_seen_1e22_k020.{json,csv}`.
+
+## 2026-06-21 22:01 UTC - p33m67 K=0.20 clean-seen eval sweep completed
+
+All 36 launched p33m67 K=0.20 jobs reached `JOB_STATE_SUCCEEDED`:
+
+- Prefix: `/ahmed/clean1e22-p33m67-`
+- Count: 36 succeeded, 0 failed.
+- Final holdouts were `1e21-lr83` and `1e22-lr83`; both wrote
+  `eval_results.json` and then transitioned to succeeded.
+- The W&B source-artifact upload emitted transient `FileNotFoundError` traces
+  for temporary `config.yaml` files on some jobs, but eval continued and all
+  result files were written.
+
+Summary artifacts:
+
+- JSON:
+  `gs://marin-us-east5/scratch/ahmed/midtrain_dedup/decon_val_sets/evals_clean_seen_1e22_k020/summary_p33m67_clean_seen_1e22_k020.json`
+- CSV:
+  `gs://marin-us-east5/scratch/ahmed/midtrain_dedup/decon_val_sets/evals_clean_seen_1e22_k020/summary_p33m67_clean_seen_1e22_k020.csv`
+
+Best row by clean-seen loss:
+
+- Run: `delphi-1e22-p33m67-32p07b-lr0.67-54770ae7`
+- Step: `7646`
+- `eval/clean_seen_1e22_p33m67_k020/loss = 0.8233972191810608`
+- `eval/clean_seen_1e22_p33m67_k020/bpb = 0.3660922050476074`
+- Anchor `eval/nemotron_cc_math_v1/4plus/loss = 0.55966717004776`
+- Anchor `eval/nemotron_cc_math_v1/4plus/bpb = 0.23542769253253937`
+
+## 2026-06-21 22:07 UTC - Launching p33m67 isotoken clean-seen evals
+
+Next eval sweep: p33m67 isotoken runs at the 1B, 2B, 4B, and 8B token budgets,
+using the canonical clean validation cache against actually-seen 1e22
+p33m67 K=0.20 math docs.
+
+Preflight:
+
+- Selected rows: `36` (`9` scales x `4` isotoken budgets).
+- Complete final HF exports: `35`.
+- Partial HF export: `delphi-1e22-p33m67-tok1b-lr50-a004`, step `50` of
+  `238`; the run manifest remains `status=launched`, no active Iris job matched
+  it, and GCS only has `hf/step-50`. This eval is included but must be treated
+  as a partial checkpoint result, not a final 1B-token result for the 1e22 cell.
+- Missing selected HF exports: `0`.
+- Existing outputs under the target root before launch: `0`.
+
+Launch settings:
+
+- TPU: `v6e-4`.
+- Region: `us-east5`.
+- Priority: `interactive`.
+- Capacity: preemptible.
+- Eval microbatch: `--per-device-parallelism 2`.
+- Resources: `cpu=8`, `disk=50GB`; memory `64GB` through 3e20, `96GB` for
+  1e21, `120GB` for 1e22.
+- W&B tag: `clean_seen_1e22_p33m67_isotoken_eval`.
+- Output root:
+  `gs://marin-us-east5/scratch/ahmed/midtrain_dedup/decon_val_sets/evals_clean_seen_1e22_isotoken_p33m67_lr50`.
+
+Command template:
+
+```bash
+/Users/ahmed/code/marin/.claude/worktrees/midtrain_data/.venv/bin/iris \
+  --config lib/iris/config/marin.yaml job run --no-wait \
+  --tpu v6e-4 --enable-extra-resources --priority interactive \
+  --extra tpu --preemptible --region us-east5 \
+  --cpu 8 --memory <64GB|96GB|120GB> --disk 50GB \
+  --job-name clean1e22-isotok-<scale>-tok<1b|2b|4b|8b> \
+  -e WANDB_API_KEY "$WANDB_API_KEY" -e HF_TOKEN "$HF_TOKEN" \
+  -- python scripts/analysis/eval_decon_val_sets.py \
+    --run <run> \
+    --step <selected_hf_step> \
+    --out-root gs://marin-us-east5/scratch/ahmed/midtrain_dedup/decon_val_sets/evals_clean_seen_1e22_isotoken_p33m67_lr50 \
+    --wandb-tag clean_seen_1e22_p33m67_isotoken_eval \
+    --skip-decon-grid \
+    --extra-validation-cache-root gs://marin-us-east5/tokenized/nemotron_math_val_clean_seen_1e22_p33m67_k020 \
+    --extra-validation-tag clean_seen_1e22_p33m67_k020 \
+    --per-device-parallelism 2
+```
+
+## 2026-07-04 03:49 UTC - Exported Math500-contaminated Nemotron doc manifest
+
+Question: recover the exact Nemotron-CC math documents flagged as contaminated
+by the Math500-only decontamination run, including document ids and source
+parquet coordinates.
+
+Code:
+
+- `scripts/analysis/export_decon_contaminated_docs.py`
+- `tests/analysis/test_export_decon_contaminated_docs.py`
+- Base commit while running: `726619c011`
+
+Validation:
+
+```bash
+uv run --with pytest --with pytest-timeout pytest \
+  tests/analysis/test_export_decon_contaminated_docs.py -q
+```
+
+Result: `1 passed`.
+
+Iris launch:
+
+```bash
+uv run iris --config lib/iris/config/marin.yaml job run --no-wait \
+  --cpu 8 --memory 32GB --disk 20GB \
+  --priority interactive --extra cpu \
+  --enable-extra-resources --preemptible --region us-east5 \
+  --job-name export-nemotron-math500-contam-docs \
+  -e PYTHONUNBUFFERED 1 \
+  -- python scripts/analysis/export_decon_contaminated_docs.py --resume
+```
+
+Iris result:
+
+- Job: `/ahmed/export-nemotron-math500-contam-docs`
+- State: `JOB_STATE_SUCCEEDED`
+- Attribute files: `231`
+- Total docs scanned from Datakit attrs: `45,096,087`
+- Contaminated docs exported: `11,868`
+- Math500 eval records with matched features: `141`
+- Max overlap: `1.0`
+
+Artifacts:
+
+- Parquet:
+  `gs://marin-us-east5/scratch/ahmed/math-decontamin-dir/decon_nemotron_cc_math_4plus/math500__test/contaminated_docs/contaminated_docs.parquet`
+- CSV:
+  `gs://marin-us-east5/scratch/ahmed/math-decontamin-dir/decon_nemotron_cc_math_4plus/math500__test/contaminated_docs/contaminated_docs.csv`
+- Summary:
+  `gs://marin-us-east5/scratch/ahmed/math-decontamin-dir/decon_nemotron_cc_math_4plus/math500__test/contaminated_docs/summary.json`
+
+Manifest columns:
+
+- `id`
+- `partition_id`
+- `row_index_in_partition`
+- `source_parquet`
+- `attr_parquet`
+- `max_overlap`
+- `matched_hashes`
+- `matched_eval_ids`
+- `matched_eval_id_count`
+
+Interpretation: this is a deterministic coordinate manifest over the existing
+Datakit output. `source_parquet` plus `row_index_in_partition` identifies the
+exact normalized Nemotron row; `id` is the original normalized document id. The
+export intentionally does not materialize full document text.
+
+## 2026-07-04 04:05 UTC - Localized exact Math500 overlaps with Zephyr
+
+Question: given the 11,868 Math500-contaminated Nemotron docs, localize the
+exact overlapping paragraph/eval-record pairs with exact 13-word n-gram
+Jaccard/containment rather than only Datakit bloom membership.
+
+Code:
+
+- `scripts/analysis/localize_decon_contaminated_docs.py`
+- `tests/analysis/test_localize_decon_contaminated_docs.py`
+
+Validation:
+
+```bash
+uv run --with pytest --with pytest-timeout pytest \
+  tests/analysis/test_localize_decon_contaminated_docs.py \
+  tests/analysis/test_export_decon_contaminated_docs.py -q
+```
+
+Result: `2 passed`.
+
+Iris launch:
+
+```bash
+uv run iris --config lib/iris/config/marin.yaml job run --no-wait \
+  --cpu 8 --memory 64GB --disk 50GB \
+  --priority interactive --extra cpu \
+  --enable-extra-resources --preemptible --region us-east5 \
+  --job-name localize-nemotron-math500-contam \
+  -e PYTHONUNBUFFERED 1 \
+  -- python scripts/analysis/localize_decon_contaminated_docs.py \
+    --resume \
+    --max-workers 231 \
+    --worker-cpu 1 \
+    --worker-ram 4g \
+    --worker-disk 5g
+```
+
+Iris / Zephyr result:
+
+- Parent job: `/ahmed/localize-nemotron-math500-contam`
+- State: `JOB_STATE_SUCCEEDED`
+- Zephyr worker job:
+  `/ahmed/localize-nemotron-math500-contam/zephyr-localize-decon-contaminated-docs-cd05c1a7-p0-a0/zephyr-localize-decon-contaminated-docs-cd05c1a7-p0-workers-a0`
+- Zephyr workers: `231/231` succeeded.
+- Source shards: `231`
+- Manifest docs: `11,868`
+- Processed docs: `11,868`
+- Docs with exact localized overlap at source-containment `>=0.5`: `11,868`
+- Docs without localized overlap: `0`
+- Localized paragraph/eval rows: `13,797`
+- Eval records with localized hits: `137`
+- Max source containment: `1.0`
+- Max exact record-level Jaccard: `0.8974358974358975`
+
+Artifacts:
+
+- Parquet:
+  `gs://marin-us-east5/scratch/ahmed/math-decontamin-dir/decon_nemotron_cc_math_4plus/math500__test/localized_overlaps/localized_overlaps.parquet`
+- CSV:
+  `gs://marin-us-east5/scratch/ahmed/math-decontamin-dir/decon_nemotron_cc_math_4plus/math500__test/localized_overlaps/localized_overlaps.csv`
+- Misses:
+  `gs://marin-us-east5/scratch/ahmed/math-decontamin-dir/decon_nemotron_cc_math_4plus/math500__test/localized_overlaps/localization_misses.parquet`
+- Summary:
+  `gs://marin-us-east5/scratch/ahmed/math-decontamin-dir/decon_nemotron_cc_math_4plus/math500__test/localized_overlaps/summary.json`
+- Per-shard localized outputs:
+  `gs://marin-us-east5/scratch/ahmed/math-decontamin-dir/decon_nemotron_cc_math_4plus/math500__test/localized_overlaps/localized_shards/`
+
+Output columns include document id, source parquet, source row index, source
+paragraph index, source character span, matched Math500 eval id, best eval
+paragraph index/span, exact source containment, exact Jaccard, snippets, and a
+sample of shared 13-word n-grams.
+
+Top eval ids by localized rows in a quick summary read:
+
+- `math500:test:test/number_theory/239.json`: `7,951`
+- `math500:test:test/precalculus/986.json`: `2,197`
+- `math500:test:test/geometry/106.json`: `1,484`
+- `math500:test:test/precalculus/742.json`: `359`
+- `math500:test:test/intermediate_algebra/199.json`: `166`
+
+Interpretation: this confirms the Datakit-contaminated manifest is not just a
+bloom artifact. Every flagged document reproduces under exact targeted
+paragraph/eval n-gram comparison at the same `13`-word, stride-`0`, source
+paragraph containment `>=0.5` setting.
+
+## 2026-07-04 04:35 UTC - Built localized Math500 overlap viewer
+
+Question: make the localized overlap output inspectable by document/eval pair,
+including source document coordinates and visible marked text overlap.
+
+Code:
+
+- `scripts/analysis/build_localized_overlap_viewer.py`
+- `tests/analysis/test_build_localized_overlap_viewer.py`
+
+Command:
+
+```bash
+uv run python scripts/analysis/build_localized_overlap_viewer.py
+```
+
+Validation:
+
+```bash
+uv run --with pytest --with pytest-timeout pytest \
+  tests/analysis/test_build_localized_overlap_viewer.py \
+  tests/analysis/test_localize_decon_contaminated_docs.py \
+  tests/analysis/test_export_decon_contaminated_docs.py -q
+```
+
+Result: `4 passed`.
+
+Artifacts:
+
+- Local static HTML:
+  `scratch/math500_localized_overlap_viewer.html`
+- GCS static HTML:
+  `gs://marin-us-east5/scratch/ahmed/math-decontamin-dir/decon_nemotron_cc_math_4plus/math500__test/localized_overlaps/viewer.html`
+- Size:
+  `16,691,548` bytes
+
+Viewer contents:
+
+- Summary counts for localized rows, contaminated docs, eval records, and max
+  exact Jaccard.
+- Search and filter by doc id, eval id, source text, and eval text.
+- Sort by source containment, Jaccard, eval id, or doc id.
+- Exact source coordinates: source parquet, normalized row index, source
+  paragraph index, and source character span.
+- Exact eval coordinates: Math500 eval id, best eval paragraph index, and eval
+  character span.
+- Side-by-side source/eval snippets with stored shared 13-word n-grams
+  highlighted.
+
+Interpretation: the viewer is a cheap static inspection layer over
+`localized_overlaps.parquet`; it does not reread the full 45M-document corpus.
+For each row it still gives the exact normalized source document coordinates
+needed to recover the full source text later: `source_parquet` plus
+`row_index_in_partition`.
+
+## 2026-07-04 07:02 UTC - Launched remaining per-split Nemotron math benchmark decontam jobs
+
+Goal: run the three remaining independent Datakit decontamination passes for
+Nemotron-CC math 4plus against the staged math benchmark splits. Math500 test
+was already complete, so these launches exclude `math500__test`.
+
+Launch settings:
+
+- Region: `us-east5`
+- Parent Iris task resources: `8 CPU`, `64GB` RAM, `50GB` disk
+- Priority: `interactive`
+- Preemptible: yes
+- Datakit/Zephyr marking defaults from
+  `scripts/analysis/decon_nemotron_math_against_benchmarks.py`:
+  `max_workers=256`, `worker_cpu=2`, `worker_ram=6g`
+- Decon settings: 13-word ngrams, stride `0`, overlap threshold `0.5`,
+  false-positive rate `1e-9`
+- Output root:
+  `gs://marin-us-east5/scratch/ahmed/math-decontamin-dir/decon_nemotron_cc_math_4plus`
+
+Commands:
+
+```bash
+uv run iris --config lib/iris/config/marin.yaml job run --no-wait \
+  --cpu 8 --memory 64GB --disk 50GB \
+  --priority interactive --extra cpu \
+  --enable-extra-resources --preemptible --region us-east5 \
+  --job-name decon-nemotron-gsm8k-train \
+  -e PYTHONUNBUFFERED 1 \
+  -- python scripts/analysis/decon_nemotron_math_against_benchmarks.py \
+    --resume --only gsm8k__main__train
+
+uv run iris --config lib/iris/config/marin.yaml job run --no-wait \
+  --cpu 8 --memory 64GB --disk 50GB \
+  --priority interactive --extra cpu \
+  --enable-extra-resources --preemptible --region us-east5 \
+  --job-name decon-nemotron-gsm8k-test \
+  -e PYTHONUNBUFFERED 1 \
+  -- python scripts/analysis/decon_nemotron_math_against_benchmarks.py \
+    --resume --only gsm8k__main__test
+
+uv run iris --config lib/iris/config/marin.yaml job run --no-wait \
+  --cpu 8 --memory 64GB --disk 50GB \
+  --priority interactive --extra cpu \
+  --enable-extra-resources --preemptible --region us-east5 \
+  --job-name decon-nemotron-aime24-train \
+  -e PYTHONUNBUFFERED 1 \
+  -- python scripts/analysis/decon_nemotron_math_against_benchmarks.py \
+    --resume --only aime24__train
+```
+
+Submitted jobs:
+
+- `/ahmed/decon-nemotron-gsm8k-train`
+- `/ahmed/decon-nemotron-gsm8k-test`
+- `/ahmed/decon-nemotron-aime24-train`
+
+Smoke check:
+
+```bash
+uv run iris --config lib/iris/config/marin.yaml rpc controller list-tasks \
+  --job-id /ahmed/decon-nemotron-gsm8k-train
+uv run iris --config lib/iris/config/marin.yaml rpc controller list-tasks \
+  --job-id /ahmed/decon-nemotron-gsm8k-test
+uv run iris --config lib/iris/config/marin.yaml rpc controller list-tasks \
+  --job-id /ahmed/decon-nemotron-aime24-train
+```
+
+Result: all three parent tasks were visible and `TASK_STATE_RUNNING`.
+
+Follow-up log smoke check with `iris job logs <job> --max-lines 80 --tail`
+showed all three Zephyr worker pools running and reading normalized Nemotron
+shards:
+
+- `/ahmed/decon-nemotron-gsm8k-train/zephyr-decon-mark-5384daf4-p0-a0/...`
+- `/ahmed/decon-nemotron-gsm8k-test/zephyr-decon-mark-96708598-p0-a0/...`
+- `/ahmed/decon-nemotron-aime24-train/zephyr-decon-mark-fff1157f-p0-a0/...`
+
+Expected per-split report paths after completion:
+
+- `gs://marin-us-east5/scratch/ahmed/math-decontamin-dir/decon_nemotron_cc_math_4plus/gsm8k__main__train/contamination_report.json`
+- `gs://marin-us-east5/scratch/ahmed/math-decontamin-dir/decon_nemotron_cc_math_4plus/gsm8k__main__test/contamination_report.json`
+- `gs://marin-us-east5/scratch/ahmed/math-decontamin-dir/decon_nemotron_cc_math_4plus/aime24__train/contamination_report.json`
+
+Concurrent `--only` jobs can race on root aggregate files
+`contamination_report.all.json` and `contamination_report.all.csv`. Treat the
+per-split reports above as canonical until all three jobs finish, then rebuild
+the aggregate with:
+
+```bash
+uv run iris --config lib/iris/config/marin.yaml job run --no-wait \
+  --cpu 8 --memory 64GB --disk 50GB \
+  --priority interactive --extra cpu \
+  --enable-extra-resources --preemptible --region us-east5 \
+  --job-name decon-nemotron-math-benchmarks-aggregate \
+  -e PYTHONUNBUFFERED 1 \
+  -- python scripts/analysis/decon_nemotron_math_against_benchmarks.py --resume
+```
+
+Under `--resume`, the driver reuses each completed split's `run_summary.json`
+and existing Datakit attr parquets instead of rescanning Nemotron.
+
+Interpretation: these are intentionally separate passes, not a combined
+benchmark bloom, so each report answers whether that split alone marks
+Nemotron-CC math documents as contaminated at the configured paragraph overlap
+threshold.
+
+## 2026-07-04 18:27 UTC - Remaining benchmark decontam jobs completed
+
+Status check:
+
+```bash
+uv run iris --config lib/iris/config/marin.yaml rpc controller get-job-state \
+  --json '{"jobIds":["/ahmed/decon-nemotron-gsm8k-train","/ahmed/decon-nemotron-gsm8k-test","/ahmed/decon-nemotron-aime24-train"]}'
+```
+
+Result:
+
+- `/ahmed/decon-nemotron-gsm8k-train`: `JOB_STATE_SUCCEEDED`
+- `/ahmed/decon-nemotron-gsm8k-test`: `JOB_STATE_SUCCEEDED`
+- `/ahmed/decon-nemotron-aime24-train`: `JOB_STATE_SUCCEEDED`
+
+Per-split reports were present at:
+
+- `gs://marin-us-east5/scratch/ahmed/math-decontamin-dir/decon_nemotron_cc_math_4plus/gsm8k__main__train/contamination_report.json`
+- `gs://marin-us-east5/scratch/ahmed/math-decontamin-dir/decon_nemotron_cc_math_4plus/gsm8k__main__test/contamination_report.json`
+- `gs://marin-us-east5/scratch/ahmed/math-decontamin-dir/decon_nemotron_cc_math_4plus/aime24__train/contamination_report.json`
+
+Aggregate rebuild:
+
+```bash
+uv run iris --config lib/iris/config/marin.yaml job run --no-wait \
+  --cpu 8 --memory 64GB --disk 50GB \
+  --priority interactive --extra cpu \
+  --enable-extra-resources --preemptible --region us-east5 \
+  --job-name decon-nemotron-math-benchmarks-aggregate \
+  -e PYTHONUNBUFFERED 1 \
+  -- python scripts/analysis/decon_nemotron_math_against_benchmarks.py --resume
+```
+
+Aggregate job:
+
+- `/ahmed/decon-nemotron-math-benchmarks-aggregate`
+- State: `JOB_STATE_SUCCEEDED`
+- It reused completed split outputs under `--resume`; no new Datakit marking
+  pass was launched.
+
+Aggregate artifacts:
+
+- `gs://marin-us-east5/scratch/ahmed/math-decontamin-dir/decon_nemotron_cc_math_4plus/contamination_report.all.json`
+- `gs://marin-us-east5/scratch/ahmed/math-decontamin-dir/decon_nemotron_cc_math_4plus/contamination_report.all.csv`
+- Last modified: `2026-07-04T18:26:31Z`
+
+Final contamination report summary:
+
+| split | eval records | eval records hit | contaminated docs | contamination rate | mean contaminated max overlap |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `aime24__train` | 30 | 17 | 18 | 3.9914771319294287e-7 | 0.9457209585052948 |
+| `gsm8k__main__test` | 1,319 | 32 | 123 | 0.00000272750937348511 | 0.8405145245892016 |
+| `gsm8k__main__train` | 7,473 | 146 | 1,224 | 0.000027142044497120115 | 0.7504422749907789 |
+| `math500__test` | 500 | 141 | 11,868 | 0.00026317139223188036 | 0.6397847284198739 |
+
+All splits scanned the same `45,096,087` normalized Nemotron-CC math 4plus
+documents. Each split's `max_overlap` was `1.0`.
+
+## 2026-07-04 23:54 UTC - Combined localized overlap viewer for math benchmarks
+
+Built a single static HTML viewer for localized contaminated-document overlaps
+across all benchmark splits. The viewer has a dataset selector in the top-right
+and reuses the same two-pane source/eval overlap layout as the earlier Math500
+viewer.
+
+Viewer artifacts:
+
+- Local: `scratch/math_benchmark_localized_overlap_viewer.html`
+- GCS: `gs://marin-us-east5/scratch/ahmed/math-decontamin-dir/decon_nemotron_cc_math_4plus/localized_overlap_viewer.html`
+
+The viewer is generated by:
+
+```bash
+uv run python scripts/analysis/build_localized_overlap_viewer.py
+```
+
+Default inputs embedded in the script:
+
+- `math500__test`: `gs://marin-us-east5/scratch/ahmed/math-decontamin-dir/decon_nemotron_cc_math_4plus/math500__test/localized_overlaps/localized_overlaps.parquet`
+- `gsm8k__main__train`: `gs://marin-us-east5/scratch/ahmed/math-decontamin-dir/decon_nemotron_cc_math_4plus/gsm8k__main__train/localized_overlaps/localized_overlaps.parquet`
+- `gsm8k__main__test`: `gs://marin-us-east5/scratch/ahmed/math-decontamin-dir/decon_nemotron_cc_math_4plus/gsm8k__main__test/localized_overlaps/localized_overlaps.parquet`
+- `aime24__train`: `gs://marin-us-east5/scratch/ahmed/math-decontamin-dir/decon_nemotron_cc_math_4plus/aime24__train/localized_overlaps/localized_overlaps.parquet`
+
+Localization jobs used for the non-Math500 splits:
+
+- `/ahmed/localize-nemotron-gsm8k-train-contam`
+- `/ahmed/localize-nemotron-gsm8k-test-contam`
+- `/ahmed/localize-nemotron-aime24-train-contam`
+
+Localized overlap summary:
+
+| split | contaminated docs | localized docs | localized rows | localization misses | max record Jaccard |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `math500__test` | 11,868 | 11,868 | 13,797 | 0 | 0.8974358974358975 |
+| `gsm8k__main__train` | 1,224 | 1,224 | 1,437 | 0 | 1.0 |
+| `gsm8k__main__test` | 123 | 123 | 309 | 0 | 1.0 |
+| `aime24__train` | 18 | 18 | 103 | 0 | 0.4188034188034188 |
+
+Verification:
+
+```bash
+uv run --with pytest --with pytest-timeout pytest \
+  tests/analysis/test_build_localized_overlap_viewer.py -q
+```
+
+Result: `3 passed`.

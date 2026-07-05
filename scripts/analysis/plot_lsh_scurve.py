@@ -8,9 +8,9 @@ where a band is r signature slots and there are b bands (b*r = num_perms).
 Shows why 286x26 is a ~0.8 dedup banding and 284x71 is a ~0.3 high-recall scan.
 """
 
-import matplotlib
+import matplotlib as mpl
 
-matplotlib.use("Agg")
+mpl.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 

@@ -26,12 +26,12 @@ import logging
 from pathlib import Path
 
 import fsspec
-import matplotlib
+import matplotlib as mpl
 import numpy as np
 import pyarrow.parquet as pq
 from marin.utils import fsspec_glob
 
-matplotlib.use("Agg")
+mpl.use("Agg")
 import matplotlib.pyplot as plt
 
 logger = logging.getLogger(__name__)
