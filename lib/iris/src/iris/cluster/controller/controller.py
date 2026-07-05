@@ -378,10 +378,9 @@ class Controller:
         # cursor the DB mints reaches them as ``tx.caches[Projection]`` without any
         # threaded references.
         EndpointsProjection(self._db)
-        self._attempt_counts = AttemptCountsProjection(self._db)
-        self._worker_attrs = WorkerAttrsProjection(self._db)
-
-        self._run_templates = RunTemplatesProjection(self._db)
+        AttemptCountsProjection(self._db)
+        WorkerAttrsProjection(self._db)
+        RunTemplatesProjection(self._db)
 
         writes.validate(self._db.caches)
 

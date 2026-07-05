@@ -159,31 +159,32 @@ is *mirrored* onto each `Tx`, so both work. Per-use deref (not resolve-once-at-i
 self-healing: `register` supersedes on re-registration, so a stored ref could go stale
 against the canonical instance. `CacheRegistry` gains `__iter__`; `db.caches`→`db.projections`.
 
-### Validator: declaration check + runtime settle + backstop
+### Validator: owned-table check over the registry
 
-At startup (`validate(db.projections)`, run in `Controller.__init__` right after the
-projections are built, before backends bind):
-1. at most one owner per table;
-2. writer into an **owned** table ⟹ must be a method of the owner, **or** declare
-   `invalidates=(Owner,)` (the cascade case, declared *truthfully* now — deletes the
-   `remove_worker` "omit it from the declaration to pass the check" hack, `writes.py:707`);
-3. writer into a **watched** table ⟹ must declare `invalidates=(Watcher,)`;
-4. every `invalidates` entry must be justified by a declared owned/watched table.
+`validate(caches)` runs in `Controller.__init__` right after the projections are built. It
+iterates the registry (no module-global `PROJECTIONS`), builds `{table: owner}` from each
+projection's `owns`, and raises if any `@writes_to`/`cascades_into` writer of an owned table
+is not a method of the owner. That enforces the sole-writer invariant for the two `owns`
+tables (`endpoints`, `worker_attributes`) — with `WorkerAttrsProjection.set` now issuing the
+`worker_attributes` SQL, no external writer touches it.
 
-At runtime (closes the "declaration can't prove the *call* happens" gap that let #4 drift):
-5. a non-empty `invalidates` records an obligation on the write `Tx`; the projection's
-   `invalidate_*`/`set` method settles it; **commit raises** if any obligation is unsettled
-   (missed invalidation = silent corruption → hard raise, not assert).
+**Rejected: an `invalidates=` declaration + commit-time obligation-settle for watched tables.**
+It was the plan, but it does not fit this codebase and its failure mode is disproportionate:
 
-Backstop (catches raw SQL that never hits `@writes_to` at all — today `ops/worker.py:119`
-writes `worker_attributes` undecorated and invisible to `validate()`):
-6. a test asserting no `execute(insert|update|delete(...))` on a projection table outside
-   `writes.py` / `projections/` / `auth.py`.
+- Invalidation is correctly *localized to chokepoints*, not co-located with writes.
+  `task_attempts` is written from many low-level `@writes_to` helpers, but the
+  `AttemptCountsProjection` invalidation is batched at `_flush_attempts` / the federation
+  mirror / `purge_job`. A per-writer obligation would force every low-level writer to
+  invalidate (or over-invalidate), fighting the batched design.
+- A hard raise at commit on a missed invalidation would turn *display-cache staleness* (a
+  stale dashboard count until the next write — the worst case for these two lazy views) into
+  a *controller crash*. That trade is wrong for a memo whose ground truth is always one
+  re-derivation away.
 
-Over-invalidation is the accepted uniform rule: a writer that touches a watched table
-without changing view-relevant columns (e.g. `remove_worker` NULLing `task_attempts.worker_id`)
-still settles via a coarse `invalidate_all(tx)`. Recomputing a dashboard memo on
-worker-reap frequency costs nothing; column-level provenance is not worth it for one site.
+The realistic drift (a new watched-table write path that forgets to invalidate) is covered
+by the `LazyFillGuard` (no torn/stale-set value can be stored) plus the chokepoint locality
+and code review. The watched-table invalidation invariant is documented on each lazy
+projection rather than machine-enforced.
 
 ### Lazy-fill guard: sequence-stamp, not per-fill CAS
 

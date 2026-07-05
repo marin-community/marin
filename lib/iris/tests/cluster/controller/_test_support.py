@@ -62,7 +62,7 @@ class ControllerTestState:
         # ``db.caches`` on construction; cursors the DB mints reach them as
         # ``tx.caches[Projection]`` when helpers commit effects / purge jobs /
         # read derived counts.
-        self._attempt_counts = AttemptCountsProjection(db)
+        AttemptCountsProjection(db)
         self._health = health or WorkerHealthTracker()
         EndpointsProjection(db)
         RunTemplatesProjection(db)

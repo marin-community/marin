@@ -155,18 +155,13 @@ class RunTemplatesProjection(Projection):
         return template
 
     def invalidate_for_job(self, tx: Tx, job_id: JobName) -> None:
-        """Drop the cached template for ``job_id`` after ``tx`` commits.
-
-        Post-commit: the hook fires under the write lock after the commit seq is
-        ticked, so a concurrent reader cannot refill from a pre-invalidation
-        snapshot and have that value persist (the stale set). Dropping post-commit
-        rather than pre-commit ensures a concurrent reader cannot open a snapshot
-        after the write but before the drop and see the old row, then store it
-        back after the drop disappears.
-        """
+        """Drop the cached template for ``job_id`` after ``tx`` commits."""
         wire = job_id.to_wire()
 
         def apply() -> None:
+            # Fires post-commit under the write lock (commit_seq already ticked):
+            # dropping and stamping the guard here rather than eagerly pre-commit
+            # stops a concurrent reader refilling from the pre-commit snapshot.
             with self._lock:
                 self._cache.pop(wire)
                 self._guard.note_invalidated(self._db.commit_seq, [wire])
