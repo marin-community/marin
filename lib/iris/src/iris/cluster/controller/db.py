@@ -148,9 +148,16 @@ class Tx:
     while the write lock is still held (see ``write_transaction``).
     """
 
-    def __init__(self, conn: Connection, caches: CacheRegistry):
+    def __init__(self, conn: Connection, caches: CacheRegistry, seq: int):
         self.conn = conn
         self._hooks: list[Callable[[], None]] = []
+        # The DB commit sequence sampled just BEFORE this cursor's snapshot was
+        # established (``BEGIN``). It is a conservative lower bound on what the
+        # snapshot sees — any commit that ticked ``commit_seq`` after this sample
+        # either lands in the snapshot or not, but is never counted as seen when it
+        # isn't. Lazy-fill guards compare it against a per-key invalidation seq to
+        # reject a fill computed from a pre-invalidation snapshot (the stale set).
+        self.seq = seq
         # Per-transaction extension slot: a write helper may attach one typed cache
         # object here to memoize a lookup across calls within one transaction (e.g.
         # the federation changelog gate resolving a job's requester once per root).
@@ -209,14 +216,20 @@ def write_transaction(
     conn: Connection | None = None
     try:
         conn = write_engine.connect()
+        # Sample the commit sequence BEFORE opening the snapshot (conservative).
+        seq = caches.commit_seq
         conn.execute(text("BEGIN IMMEDIATE"))
-        tx = Tx(conn, caches)
+        tx = Tx(conn, caches, seq)
         try:
             yield tx
         except Exception:
             conn.execute(text("ROLLBACK"))
             raise
         conn.execute(text("COMMIT"))
+        # Tick the commit sequence under the still-held write lock, before hooks
+        # fire, so an invalidation hook stamps the post-commit seq and a concurrent
+        # reader's guard sees this commit as either fully applied or not at all.
+        caches.tick()
         tx._fire_hooks()
     finally:
         if conn is not None:
@@ -240,9 +253,11 @@ def read_snapshot(read_engine: Engine, caches: CacheRegistry) -> Iterator[Tx]:
     """
     conn = read_engine.connect()
     try:
+        # Sample the commit sequence BEFORE opening the snapshot (conservative).
+        seq = caches.commit_seq
         conn.execute(text("BEGIN"))
         try:
-            yield Tx(conn, caches)
+            yield Tx(conn, caches, seq)
         finally:
             conn.execute(text("ROLLBACK"))
     finally:
@@ -324,6 +339,11 @@ class ControllerDB:
     def caches(self) -> CacheRegistry:
         """The per-controller cache registry (also reachable via any ``Tx.caches``)."""
         return self._caches
+
+    @property
+    def commit_seq(self) -> int:
+        """Monotonic write-commit counter (ticked per commit and per DB-file swap)."""
+        return self._caches.commit_seq
 
     @property
     def db_dir(self) -> Path:
@@ -679,6 +699,10 @@ class ControllerDB:
             )
 
         self.apply_migrations()
+        # The DB file was swapped: every open snapshot's seq now predates a file
+        # that shares no history with the new one. Tick so a lazy guard's floor
+        # (set by the reopen ``clear`` hook below) rejects any pre-restore fill.
+        self._caches.tick()
         for hook in self._reopen_hooks:
             hook()
 
