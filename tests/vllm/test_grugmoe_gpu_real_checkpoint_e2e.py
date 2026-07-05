@@ -230,7 +230,6 @@ def _write_summary_update(
             "vllm_attention_backend": backend.VLLM_ATTENTION_BACKEND,
             "vllm_default_attention_backend": backend.VLLM_DEFAULT_ATTENTION_BACKEND,
             "vllm_dtype": backend.VLLM_DTYPE,
-            "vllm_route_diagnostics": backend.VLLM_ROUTE_DIAGNOSTICS,
             "levanter_reference_mode": backend.LEVANTER_REFERENCE_MODE,
             "levanter_expert_axis_size": backend.LEVANTER_EXPERT_AXIS_SIZE,
             "levanter_moe_capacity_factor": backend.LEVANTER_MOE_CAPACITY_FACTOR,
@@ -277,7 +276,6 @@ def _write_summary_update(
         summary["vllm_observed_data_parallel_size"] = backend_results["vllm"].get("vllm_data_parallel_size")
         summary["vllm_observed_expert_parallel_size"] = backend_results["vllm"].get("vllm_expert_parallel_size")
         summary["vllm_observed_dtype"] = backend_results["vllm"].get("vllm_dtype")
-        summary["vllm_observed_route_diagnostics"] = backend_results["vllm"].get("vllm_route_diagnostics")
         summary["vllm_requested_data_parallel_ranks"] = backend_results["vllm"].get("requested_data_parallel_ranks")
         levanter_jax_runtime = backend_results["levanter"].get("jax_runtime", {})
         levanter_jax_mesh = backend_results["levanter"].get("jax_mesh", {})
@@ -333,8 +331,6 @@ def test_vllm_gpu_env_enables_debug_logging(monkeypatch: pytest.MonkeyPatch) -> 
     snapshot = backend._configure_vllm_gpu_env()
     assert os.environ["VLLM_LOGGING_LEVEL"] == "DEBUG"
     assert snapshot["vllm_logging_level"] == "DEBUG"
-    assert snapshot["vllm_route_diagnostics"] == backend.VLLM_ROUTE_DIAGNOSTICS
-    assert os.environ[backend.VLLM_GRUGMOE_ROUTE_DIAGNOSTICS_ENV] == "0"
 
 
 def test_vllm_server_logs_are_copied_to_output_prefix(tmp_path: Path) -> None:

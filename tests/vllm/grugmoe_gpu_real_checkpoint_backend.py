@@ -59,9 +59,6 @@ VLLM_DATA_PARALLEL_SIZE = 8
 VLLM_EXPERT_PARALLEL_SIZE = 8
 VLLM_MAX_NUM_SEQS = 16
 VLLM_DTYPE = "bfloat16"
-VLLM_GRUGMOE_ROUTE_DIAGNOSTICS_ENV = "VLLM_GRUGMOE_ROUTE_DIAGNOSTICS"
-VLLM_ROUTE_DIAGNOSTICS_ENV = "MARIN_GRUGMOE_VLLM_ROUTE_DIAGNOSTICS"
-VLLM_DEFAULT_ROUTE_DIAGNOSTICS = False
 VLLM_ATTENTION_BACKEND_ENV = "MARIN_GRUGMOE_VLLM_ATTENTION_BACKEND"
 LEVANTER_REFERENCE_MODE = "bf16_compute"
 LEVANTER_BF16_POLICY = "params=float32,compute=bfloat16,output=bfloat16"
@@ -114,23 +111,7 @@ def _resolve_vllm_attention_backend() -> str:
     return value
 
 
-def _resolve_bool_env(name: str, *, default: bool) -> bool:
-    raw_value = os.environ.get(name)
-    if raw_value is None:
-        return default
-    value = raw_value.strip().lower()
-    if value in {"1", "true", "yes", "on"}:
-        return True
-    if value in {"0", "false", "no", "off"}:
-        return False
-    raise ValueError(f"{name}={raw_value!r} must be a boolean value")
-
-
 VLLM_ATTENTION_BACKEND = _resolve_vllm_attention_backend()
-VLLM_ROUTE_DIAGNOSTICS = _resolve_bool_env(
-    VLLM_ROUTE_DIAGNOSTICS_ENV,
-    default=VLLM_DEFAULT_ROUTE_DIAGNOSTICS,
-)
 
 
 def _is_coreweave_endpoint(endpoint: str) -> bool:
@@ -507,7 +488,6 @@ def _runtime_snapshot(
         "vllm_data_parallel_size": VLLM_DATA_PARALLEL_SIZE,
         "vllm_expert_parallel_size": VLLM_EXPERT_PARALLEL_SIZE,
         "vllm_dtype": VLLM_DTYPE,
-        "vllm_route_diagnostics": VLLM_ROUTE_DIAGNOSTICS,
         "levanter_reference_mode": LEVANTER_REFERENCE_MODE,
         "levanter_expert_axis_size": LEVANTER_EXPERT_AXIS_SIZE,
         "packages": {
@@ -658,13 +638,10 @@ def _configure_vllm_gpu_env() -> dict[str, Any]:
     os.environ.setdefault("VLLM_LOGGING_LEVEL", "DEBUG")
     os.environ.setdefault("MODEL_IMPL_TYPE", "vllm")
     os.environ.setdefault("PYTHONUNBUFFERED", "1")
-    os.environ[VLLM_GRUGMOE_ROUTE_DIAGNOSTICS_ENV] = "1" if VLLM_ROUTE_DIAGNOSTICS else "0"
     cuda_library_path = _configure_cuda_library_path()
     return {
         **cuda_library_path,
         "vllm_logging_level": os.environ.get("VLLM_LOGGING_LEVEL"),
-        "vllm_route_diagnostics_env_var": VLLM_GRUGMOE_ROUTE_DIAGNOSTICS_ENV,
-        "vllm_route_diagnostics": VLLM_ROUTE_DIAGNOSTICS,
     }
 
 
@@ -1096,8 +1073,6 @@ def _vllm_backend(args: argparse.Namespace) -> None:
             "vllm_args": extra_args,
             "vllm_attention_backend_env_var": VLLM_ATTENTION_BACKEND_ENV,
             "vllm_dtype": VLLM_DTYPE,
-            "vllm_route_diagnostics_env_var": VLLM_ROUTE_DIAGNOSTICS_ENV,
-            "vllm_route_diagnostics": VLLM_ROUTE_DIAGNOSTICS,
             "vllm_tensor_parallel_size": VLLM_TENSOR_PARALLEL_SIZE,
             "vllm_data_parallel_size": VLLM_DATA_PARALLEL_SIZE,
             "vllm_expert_parallel_size": VLLM_EXPERT_PARALLEL_SIZE,
@@ -1172,8 +1147,6 @@ def _vllm_backend(args: argparse.Namespace) -> None:
         "vllm_args": extra_args,
         "vllm_attention_backend_env_var": VLLM_ATTENTION_BACKEND_ENV,
         "vllm_dtype": VLLM_DTYPE,
-        "vllm_route_diagnostics_env_var": VLLM_ROUTE_DIAGNOSTICS_ENV,
-        "vllm_route_diagnostics": VLLM_ROUTE_DIAGNOSTICS,
         "vllm_tensor_parallel_size": VLLM_TENSOR_PARALLEL_SIZE,
         "vllm_data_parallel_size": VLLM_DATA_PARALLEL_SIZE,
         "vllm_expert_parallel_size": VLLM_EXPERT_PARALLEL_SIZE,
