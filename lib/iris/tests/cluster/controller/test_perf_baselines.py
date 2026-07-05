@@ -254,9 +254,7 @@ def test_submit_job_with_n_replicas_perf(submit_perf_db: ControllerTestState) ->
         )
         jid = JobName.from_wire(name)
         with state._db.transaction() as cur:
-            ops.job.submit(
-                cur, job_id=jid, request=req, ts=Timestamp.now(), run_template_cache=state._run_template_cache
-            )
+            ops.job.submit(cur, job_id=jid, request=req, ts=Timestamp.now())
 
     per_call_s = _measure(_submit, _TICKS)
     max_ms = _SUBMIT_32_REPLICAS_MAX_MS

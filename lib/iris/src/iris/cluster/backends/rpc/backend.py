@@ -224,7 +224,6 @@ class RpcTaskBackend:
             db=runtime.db,
             owns_scale_group=runtime.owns_scale_group,
             health=self.health,
-            run_template_cache=runtime.run_template_cache,
             defaults=runtime.budget_defaults,
             autoscale=self.autoscale,
         )

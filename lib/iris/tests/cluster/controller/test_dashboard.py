@@ -78,9 +78,7 @@ def submit_job(
     jid = JobName.from_string(job_id) if job_id.startswith("/") else JobName.root("test-user", job_id)
     request.name = jid.to_wire()
     with state._db.transaction() as cur:
-        ops.job.submit(
-            cur, job_id=jid, request=request, ts=Timestamp.now(), run_template_cache=state._run_template_cache
-        )
+        ops.job.submit(cur, job_id=jid, request=request, ts=Timestamp.now())
     return jid
 
 
@@ -168,7 +166,6 @@ def _worker_backend(state, autoscaler, backend_id=DEFAULT_BACKEND_ID):
         BackendRuntime(
             backend_id=backend_id,
             db=state._db,
-            run_template_cache=state._run_template_cache,
             owns_scale_group=lambda _scale_group: True,
             budget_defaults=UserBudgetDefaults(),
         )

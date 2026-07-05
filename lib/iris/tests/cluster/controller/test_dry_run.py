@@ -40,7 +40,6 @@ def test_dry_run_scheduling_does_not_dispatch(dry_run_controller):
         # The single backend owns the liveness tracker and attrs projection now;
         # register workers into them so the controller's schedule path sees them.
         health=controller.provider.health,
-        run_template_cache=controller._run_template_cache,
     )
 
     register_worker(state, "w1", "w1:8080", make_worker_metadata())

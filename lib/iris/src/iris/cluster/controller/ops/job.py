@@ -19,13 +19,13 @@ from iris.cluster.controller.codec import (
 from iris.cluster.controller.db import Tx
 from iris.cluster.controller.projections.attempt_counts import AttemptCountsProjection
 from iris.cluster.controller.projections.endpoints import EndpointsProjection
+from iris.cluster.controller.projections.run_templates import RunTemplatesProjection
 from iris.cluster.controller.reconcile import ReconcileState
 from iris.cluster.controller.reconcile.commit import commit_effects
 from iris.cluster.controller.reconcile.loader import load_closed_snapshot
 from iris.cluster.controller.reconcile.policy import (
     MAX_REPLICAS_PER_JOB,
 )
-from iris.cluster.controller.run_template import RunTemplateCache
 from iris.cluster.controller.schema import (
     job_workdir_files_table,
     jobs_table,
@@ -104,10 +104,9 @@ def submit(
     job_id: JobName,
     request: controller_pb2.Controller.LaunchJobRequest,
     ts: Timestamp,
-    run_template_cache: RunTemplateCache,
 ) -> None:
     """Insert the job row and expand its tasks. Caller owns the transaction."""
-    inserted = insert_job_and_config(cur, job_id=job_id, request=request, ts=ts, run_template_cache=run_template_cache)
+    inserted = insert_job_and_config(cur, job_id=job_id, request=request, ts=ts)
     if inserted.validation_error is None:
         _materialize_tasks(
             cur,
@@ -135,7 +134,6 @@ def insert_job_and_config(
     job_id: JobName,
     request: controller_pb2.Controller.LaunchJobRequest,
     ts: Timestamp,
-    run_template_cache: RunTemplateCache,
     cluster: str = LOCAL_CLUSTER,
 ) -> JobInsertResult:
     """Insert the ``jobs`` + ``job_config`` (+ workdir file) rows for one job.
@@ -144,9 +142,6 @@ def insert_job_and_config(
     federated handoff (``cluster`` set to a peer) has no local tasks (the peer
     creates them; the sync mirrors them back). Caller owns the transaction.
     """
-    # Same-name replacement reuses ``job_id``; drop any stale cached
-    # template before the new row's fields land in the DB.
-    run_template_cache.pop(job_id.to_wire())
 
     submitted_ms = ts.epoch_ms()
 
@@ -293,6 +288,11 @@ def insert_job_and_config(
     # no-op unless this job's root was received via handoff).
     writes.record_federation_change(cur, job_id)
 
+    # Invalidate post-commit so a concurrent reader cannot refill the template
+    # cache from the pre-commit snapshot and have that stale value persist past
+    # the new row's commit.
+    cur.caches[RunTemplatesProjection].invalidate_for_job(cur, job_id)
+
     return JobInsertResult(
         replicas=replicas,
         effective_submission_ms=effective_submission_ms,
@@ -338,13 +338,15 @@ def cancel(
 
 
 def purge_job(cur: Tx, job_id: JobName) -> None:
-    """Delete a job and drop its derived-count memo.
+    """Delete a job and drop its derived-count and run-template memos.
 
     Deletions route through here rather than :func:`writes.delete_job` so a later
-    job minted with the same id cannot serve the dead job's cached counts.
+    job minted with the same id cannot serve the dead job's cached counts or
+    template.
     """
     writes.delete_job(cur, job_id)
     cur.caches[AttemptCountsProjection].invalidate_for_jobs(cur, [job_id])
+    cur.caches[RunTemplatesProjection].invalidate_for_job(cur, job_id)
 
 
 def remove_finished(

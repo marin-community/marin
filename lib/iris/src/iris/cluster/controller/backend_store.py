@@ -22,12 +22,11 @@ from iris.cluster.controller.autoscaler.persistence import persist_autoscaler_st
 from iris.cluster.controller.backend import AutoscaleRequest, AutoscaleResult, BackendSchedulingInputs
 from iris.cluster.controller.db import ControllerDB, Tx
 from iris.cluster.controller.ops.worker import fail as fail_workers
+from iris.cluster.controller.projections.run_templates import RunTemplatesProjection
 from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
 from iris.cluster.controller.reads import ControlSnapshot, ReconcileRow
-from iris.cluster.controller.reconcile import dispatch
 from iris.cluster.controller.reconcile.loader import TransitionReader
 from iris.cluster.controller.reconcile.snapshot import TransitionSnapshot
-from iris.cluster.controller.run_template import RunTemplateCache
 from iris.cluster.controller.scheduling.policy import build_scheduling_context
 from iris.cluster.controller.transition_reader import load_transition_snapshot
 from iris.cluster.controller.worker_health import WorkerHealthTracker
@@ -112,7 +111,6 @@ class DbBackendWorkerStore:
     db: ControllerDB
     owns_scale_group: Callable[[str], bool]
     health: WorkerHealthTracker
-    run_template_cache: RunTemplateCache
     defaults: UserBudgetDefaults
     autoscale: Callable[[AutoscaleRequest], AutoscaleResult]
 
@@ -259,11 +257,11 @@ class DbBackendWorkerStore:
         return reads.owned_worker_ids(snap, self.owns_scale_group)
 
     def _run_templates(self, snap: Tx, reconcile_rows: Sequence[ReconcileRow]) -> dict[JobName, job_pb2.RunTaskRequest]:
-        """Per-job ``RunTaskRequest`` templates for the ASSIGNED rows, dropping uncached jobs."""
+        """Per-job ``RunTaskRequest`` templates for the ASSIGNED rows."""
         templates: dict[JobName, job_pb2.RunTaskRequest | None] = {}
         for row in reconcile_rows:
             if row.task_state != job_pb2.TASK_STATE_ASSIGNED:
                 continue
             if row.job_id not in templates:
-                templates[row.job_id] = dispatch.run_request_template(self.run_template_cache, snap, row.job_id)
+                templates[row.job_id] = snap.caches[RunTemplatesProjection].get(snap, row.job_id)
         return {job_id: spec for job_id, spec in templates.items() if spec is not None}

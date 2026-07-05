@@ -24,7 +24,6 @@ from iris.cluster.constraints import CLUSTER_CONSTRAINT_KEY, Constraint, Constra
 from iris.cluster.controller import reads, writes
 from iris.cluster.controller.endpoint_service import EndpointServiceImpl
 from iris.cluster.controller.federation_store import ControllerFederationStore
-from iris.cluster.controller.run_template import RunTemplateCache
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.federation.manager import FederationManager
 from iris.cluster.federation.peer import FederationPeer
@@ -118,7 +117,7 @@ def _attach_federation(parent_service: ControllerServiceImpl, connection: _Proxy
         "cw", PeerConfig(controller_address="http://peer:10000", dashboard_url="https://cw.dev"), connection
     )
     peer.probe()
-    store = ControllerFederationStore(parent_service._db, run_template_cache=RunTemplateCache(256))
+    store = ControllerFederationStore(parent_service._db)
     manager = FederationManager([peer], threads=get_thread_container(), store=store, cluster_id="parent")
     parent_service._controller.federation = manager
     return manager

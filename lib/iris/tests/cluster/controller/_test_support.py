@@ -20,8 +20,8 @@ from iris.cluster.controller import writes
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.projections.attempt_counts import AttemptCountsProjection
 from iris.cluster.controller.projections.endpoints import EndpointsProjection
+from iris.cluster.controller.projections.run_templates import RunTemplatesProjection
 from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
-from iris.cluster.controller.run_template import RunTemplateCache, new_run_template_cache
 from iris.cluster.controller.schema import (
     tasks_table,
     workers_table,
@@ -40,16 +40,15 @@ class ControllerTestState:
     without booting a full ``Controller``.
 
     Field names match the underscored ones a single-backend :class:`Controller`
-    exposes through its default backend (``_db``, ``_health``,
-    ``_run_template_cache``) so the same helpers work against either.
-    ``_endpoints`` is a convenience property backed by the DB cache registry.
+    exposes through its default backend (``_db``, ``_health``) so the same helpers
+    work against either. ``_endpoints`` is a convenience property backed by the DB
+    cache registry.
     """
 
     _db: ControllerDB
     _attempt_counts: AttemptCountsProjection
     _health: WorkerHealthTracker
     _worker_attrs: WorkerAttrsProjection
-    _run_template_cache: RunTemplateCache
 
     def __init__(
         self,
@@ -57,7 +56,6 @@ class ControllerTestState:
         *,
         health: WorkerHealthTracker | None = None,
         worker_attrs: WorkerAttrsProjection | None = None,
-        run_template_cache: RunTemplateCache | None = None,
     ) -> None:
         self._db = db
         # Mirror a real Controller: each Projection self-registers into
@@ -67,8 +65,8 @@ class ControllerTestState:
         self._attempt_counts = AttemptCountsProjection(db)
         self._health = health or WorkerHealthTracker()
         EndpointsProjection(db)
+        RunTemplatesProjection(db)
         self._worker_attrs = worker_attrs or WorkerAttrsProjection(db)
-        self._run_template_cache = run_template_cache or new_run_template_cache()
 
     @property
     def _endpoints(self) -> EndpointsProjection:

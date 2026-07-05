@@ -1255,7 +1255,6 @@ def test_e2e_converges_to_succeeded(make_controller):
     state = ControllerTestState(
         ctrl._db,
         health=ctrl.provider.health,
-        run_template_cache=ctrl._run_template_cache,
     )
 
     wid = register_worker(state, _W1, _W1_ADDR, make_worker_metadata())
@@ -1305,7 +1304,6 @@ def test_e2e_missing_observation_on_assigned_task_retries_to_pending(make_contro
     state = ControllerTestState(
         ctrl._db,
         health=ctrl.provider.health,
-        run_template_cache=ctrl._run_template_cache,
     )
 
     wid = register_worker(state, _W1, _W1_ADDR, make_worker_metadata())
@@ -1474,7 +1472,6 @@ def test_reconcile_failure_tears_down_worker_without_ping_loop(make_controller, 
     state = ControllerTestState(
         ctrl._db,
         health=ctrl.provider.health,
-        run_template_cache=ctrl._run_template_cache,
     )
 
     wid = register_worker(state, _W1, _W1_ADDR, make_worker_metadata())
@@ -1507,7 +1504,6 @@ def test_reconcile_failure_reaps_slice_siblings(make_controller):
     state = ControllerTestState(
         ctrl._db,
         health=ctrl.provider.health,
-        run_template_cache=ctrl._run_template_cache,
     )
 
     dead = register_worker(state, _W1, _W1_ADDR, make_worker_metadata())
@@ -1539,7 +1535,6 @@ def test_request_worker_eviction_tears_down_on_next_tick(make_controller):
     state = ControllerTestState(
         ctrl._db,
         health=ctrl.provider.health,
-        run_template_cache=ctrl._run_template_cache,
     )
 
     wid = register_worker(state, _W1, _W1_ADDR, make_worker_metadata())
@@ -1590,7 +1585,6 @@ def test_reconcile_reaps_worker_at_build_failure_threshold(make_controller):
     state = ControllerTestState(
         ctrl._db,
         health=ctrl.provider.health,
-        run_template_cache=ctrl._run_template_cache,
     )
 
     wid = register_worker(state, _W1, _W1_ADDR, make_worker_metadata())

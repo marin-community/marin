@@ -57,7 +57,6 @@ def state(two_backend_controller) -> ControllerTestState:
     controller = two_backend_controller
     return ControllerTestState(
         controller._db,
-        run_template_cache=controller._run_template_cache,
     )
 
 

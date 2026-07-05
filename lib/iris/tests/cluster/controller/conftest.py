@@ -71,7 +71,6 @@ from iris.cluster.controller.ops.worker import apply_reconcile
 from iris.cluster.controller.reads import SchedulableWorker
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.reconcile.worker import WorkerReconcilePlan, WorkerReconcileResult
-from iris.cluster.controller.run_template import RunTemplateCache
 from iris.cluster.controller.scheduling.scheduler import Scheduler
 from iris.cluster.controller.schema import (
     task_attempts_table,
@@ -182,7 +181,6 @@ def store_from_runtime(
         db=runtime.db,
         owns_scale_group=runtime.owns_scale_group,
         health=health,
-        run_template_cache=runtime.run_template_cache,
         defaults=runtime.budget_defaults,
         autoscale=autoscale,
     )
@@ -293,7 +291,6 @@ def worker_daemon_backends_for_prune(state: ControllerTestState) -> list[FakePro
         BackendRuntime(
             backend_id=DEFAULT_BACKEND_ID,
             db=state._db,
-            run_template_cache=state._run_template_cache,
             owns_scale_group=lambda _scale_group: True,
             budget_defaults=UserBudgetDefaults(),
         )
@@ -326,7 +323,6 @@ class MockController:
         # specific ``state._health`` point this at that tracker.
         self.provider.health = WorkerHealthTracker()
         self.capabilities = frozenset({BackendCapability.WORKER_DAEMON, BackendCapability.IRIS_AUTOSCALER})
-        self.run_template_cache: RunTemplateCache = RunTemplateCache(256)
         self.scale_group_to_backend: dict[str, str] = {}
         self.last_unroutable_jobs: dict[str, str] = {}
         self.backends: dict = {DEFAULT_BACKEND_ID: self.provider}
@@ -577,7 +573,7 @@ def submit_direct_job(
         priority_band=priority_band,
     )
     with state._db.transaction() as cur:
-        ops.job.submit(cur, job_id=jid, request=req, ts=Timestamp.now(), run_template_cache=state._run_template_cache)
+        ops.job.submit(cur, job_id=jid, request=req, ts=Timestamp.now())
     with state._db.read_snapshot() as tx:
         rows = tx.execute(select(tasks_table.c.task_id).where(tasks_table.c.job_id == jid)).all()
     return [row.task_id for row in rows]
@@ -805,7 +801,6 @@ def submit_job(
             job_id=jid,
             request=request,
             ts=Timestamp.from_ms(timestamp_ms) if timestamp_ms is not None else Timestamp.now(),
-            run_template_cache=state._run_template_cache,
         )
     return query_tasks_for_job(state, jid)
 

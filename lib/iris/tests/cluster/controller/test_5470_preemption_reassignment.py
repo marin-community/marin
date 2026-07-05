@@ -426,7 +426,6 @@ class TestPreemptionReassignment:
         state = ControllerTestState(
             ctrl._db,
             health=ctrl.provider.health,
-            run_template_cache=ctrl._run_template_cache,
         )
 
         job_a_id, job_b_id = self._setup_two_gangs_running(ctrl, state)

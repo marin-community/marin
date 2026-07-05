@@ -23,7 +23,6 @@ from iris.cluster.constraints import CLUSTER_CONSTRAINT_KEY, Constraint, Constra
 from iris.cluster.controller import reads, writes
 from iris.cluster.controller.endpoint_service import EndpointServiceImpl
 from iris.cluster.controller.federation_store import ControllerFederationStore
-from iris.cluster.controller.run_template import RunTemplateCache
 from iris.cluster.controller.service import ControllerServiceImpl, _peer_status
 from iris.cluster.federation.manager import FederationManager
 from iris.cluster.federation.peer import FederationPeer
@@ -129,7 +128,6 @@ def _attach_federation(
     peer.probe()
     store = ControllerFederationStore(
         parent_service._db,
-        run_template_cache=RunTemplateCache(256),
     )
     manager = FederationManager([peer], threads=get_thread_container(), store=store, cluster_id="parent")
     parent_service._controller.federation = manager
@@ -515,7 +513,7 @@ def test_redrive_of_a_handle_the_peer_already_has_is_idempotent(tmp_path, log_cl
 def test_admit_persists_a_pending_handle_and_is_idempotent(tmp_path, log_client):
     with ExitStack() as stack:
         _parent_service, parent_state = _make_service(stack, "parent", tmp_path, log_client)
-        store = ControllerFederationStore(parent_state._db, run_template_cache=RunTemplateCache(256))
+        store = ControllerFederationStore(parent_state._db)
         parent_job_id = JobName.root(_USER, "fed-job")
         spec = HandoffSpec(
             local_job_id=parent_job_id,

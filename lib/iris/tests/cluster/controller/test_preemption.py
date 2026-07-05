@@ -1219,9 +1219,7 @@ def test_pending_child_order_uses_parent_job_config_not_stamped_task_band():
             replicas=1,
         )
         with state._db.transaction() as cur:
-            ops.job.submit(
-                cur, job_id=child_id, request=child_req, ts=Timestamp.now(), run_template_cache=state._run_template_cache
-            )
+            ops.job.submit(cur, job_id=child_id, request=child_req, ts=Timestamp.now())
         interactive_tasks = harness.submit(
             "/bob/interactive",
             cpu=1,

@@ -72,7 +72,6 @@ def _running_task_on_controller(ctrl, request=None):
     state = ControllerTestState(
         ctrl._db,
         health=ctrl.provider.health,
-        run_template_cache=ctrl._run_template_cache,
     )
     register_worker(state, "w0", "10.0.0.1", make_worker_metadata())
     submit_job(state, "job-a", request or make_direct_job_request("job-a", replicas=1))

@@ -18,7 +18,6 @@ from iris.cluster.controller import ops, reads, writes
 from iris.cluster.controller.codec import reconstruct_launch_job_request
 from iris.cluster.controller.db import ControllerDB, Tx
 from iris.cluster.controller.projections.attempt_counts import AttemptCountsProjection
-from iris.cluster.controller.run_template import RunTemplateCache
 from iris.cluster.federation.store import (
     CancelTarget,
     HandoffAdmission,
@@ -42,11 +41,8 @@ class ControllerFederationStore:
     def __init__(
         self,
         db: ControllerDB,
-        *,
-        run_template_cache: RunTemplateCache,
     ):
         self._db = db
-        self._run_template_cache = run_template_cache
 
     # -- handoff -------------------------------------------------------------
 
@@ -62,7 +58,6 @@ class ControllerFederationStore:
                 job_id=spec.local_job_id,
                 request=spec.request,
                 ts=now,
-                run_template_cache=self._run_template_cache,
                 cluster=spec.peer_id,
             )
             writes.insert_federated_handle(

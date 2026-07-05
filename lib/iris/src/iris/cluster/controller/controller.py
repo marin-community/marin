@@ -59,6 +59,7 @@ from iris.cluster.controller.ops.task import (
 )
 from iris.cluster.controller.projections.attempt_counts import AttemptCountsProjection
 from iris.cluster.controller.projections.endpoints import EndpointsProjection
+from iris.cluster.controller.projections.run_templates import RunTemplatesProjection
 from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
 from iris.cluster.controller.pruner import prune_old_data
 from iris.cluster.controller.reconcile import dispatch
@@ -67,7 +68,6 @@ from iris.cluster.controller.reconcile.dispatch import (
     DISPATCH_PROMOTION_RATE,
 )
 from iris.cluster.controller.reconcile.task import TerminalDecision, TerminalKind
-from iris.cluster.controller.run_template import RunTemplateCache, new_run_template_cache
 from iris.cluster.controller.scheduling.meta_scheduler import (
     BackendRouting,
     RoutableJob,
@@ -381,11 +381,11 @@ class Controller:
         self._attempt_counts = AttemptCountsProjection(self._db)
         self._worker_attrs = WorkerAttrsProjection(self._db)
 
+        self._run_templates = RunTemplatesProjection(self._db)
+
         writes.validate(self._db.caches)
 
         self._threads = threads if threads is not None else get_thread_container()
-
-        self._run_template_cache: RunTemplateCache = new_run_template_cache()
 
         # Federation: remote clusters this controller may delegate whole jobs to.
         # Inert with no peers configured (build_peers returns nothing, the loops
@@ -396,7 +396,6 @@ class Controller:
             threads=self._threads,
             store=ControllerFederationStore(
                 self._db,
-                run_template_cache=self._run_template_cache,
             ),
             cluster_id=config.cluster_id,
             heartbeat_interval=config.federation_heartbeat_interval,
@@ -986,7 +985,6 @@ class Controller:
         return BackendRuntime(
             backend_id=backend_id,
             db=self._db,
-            run_template_cache=self._run_template_cache,
             owns_scale_group=owns_scale_group,
             budget_defaults=self._config.user_budget_defaults,
         )
@@ -1460,9 +1458,7 @@ class Controller:
         max_promotions = self._promotion_bucket.available
         backend_filter = None if len(self._backends) == 1 else backend_id
         with self._db.transaction() as cur:
-            batch = dispatch.drain_for_dispatch(
-                cur, cache=self._run_template_cache, max_promotions=max_promotions, backend_id=backend_filter
-            )
+            batch = dispatch.drain_for_dispatch(cur, max_promotions=max_promotions, backend_id=backend_filter)
         if batch.tasks_to_run:
             self._promotion_bucket.try_acquire(len(batch.tasks_to_run))
         return reads.ControlSnapshot(
@@ -1618,11 +1614,6 @@ class Controller:
     def capabilities(self) -> frozenset[BackendCapability]:
         """Union of every backend's capabilities (which dashboard tabs/RPCs apply)."""
         return frozenset(cap for backend in self._backends.values() for cap in backend.capabilities)
-
-    @property
-    def run_template_cache(self) -> RunTemplateCache:
-        """Per-job RunTaskRequest template cache, shared with the dispatch path."""
-        return self._run_template_cache
 
     @property
     def port(self) -> int:

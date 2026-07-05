@@ -19,6 +19,7 @@ from iris.cluster.controller import ops, reads, writes
 from iris.cluster.controller.codec import constraints_from_json, device_counts_from_json, device_variant_from_json
 from iris.cluster.controller.ops.task import Assignment, finalize
 from iris.cluster.controller.projections.endpoints import EndpointQuery, EndpointRow
+from iris.cluster.controller.projections.run_templates import RunTemplatesProjection
 from iris.cluster.controller.pruner import PruneResult, prune_old_data
 from iris.cluster.controller.reads import WorkerResourceUsage
 
@@ -3700,7 +3701,7 @@ def test_dispatch_propagates_task_image(state):
     tasks = submit_job(state, "img-job", req)
     job_id = tasks[0].job_id
     with state._db.read_snapshot() as snap:
-        template = dispatch.run_request_template(state._run_template_cache, snap, job_id)
+        template = snap.caches[RunTemplatesProjection].get(snap, job_id)
     assert template is not None
     assert template.task_image == "custom/swetrace:dev"
 
@@ -3727,13 +3728,51 @@ def test_run_request_template_does_not_leak_workdir_files_across_jobs(state):
     tasks_b = submit_job(state, "job-b", req_b)
 
     with state._db.read_snapshot() as snap:
-        template_a = dispatch.run_request_template(state._run_template_cache, snap, tasks_a[0].job_id)
-        template_b = dispatch.run_request_template(state._run_template_cache, snap, tasks_b[0].job_id)
+        template_a = snap.caches[RunTemplatesProjection].get(snap, tasks_a[0].job_id)
+        template_b = snap.caches[RunTemplatesProjection].get(snap, tasks_b[0].job_id)
 
     assert template_a is not None
     assert template_b is not None
     assert dict(template_a.entrypoint.workdir_files) == {"a.txt": b"A"}
     assert dict(template_b.entrypoint.workdir_files) == {"b.txt": b"B"}
+
+
+def test_resubmit_invalidates_run_template_cache(state):
+    """Resubmitting a job with the same JobName serves the NEW payload, not the old one.
+
+    The projection invalidates post-commit so a reader that opened a snapshot
+    before the resubmit cannot store a stale template back into the cache after
+    the new row commits.  Without post-commit invalidation the old template
+    would survive until the next eviction.
+    """
+    job_id = JobName.root("test-user", "my-job")
+
+    req_v1 = make_job_request("my-job", task_image="image:v1")
+    with state._db.transaction() as cur:
+        ops.job.submit(cur, job_id=job_id, request=req_v1, ts=Timestamp.now())
+
+    # Warm the cache by reading the first submission's template.
+    with state._db.read_snapshot() as snap:
+        template_v1 = snap.caches[RunTemplatesProjection].get(snap, job_id)
+    assert template_v1 is not None
+    assert template_v1.task_image == "image:v1"
+
+    # Cancel and purge the first job so the job_id slot is free for resubmission.
+    with state._db.transaction() as cur:
+        ops.job.cancel(cur, job_id=job_id, reason="resubmit test")
+    with state._db.transaction() as cur:
+        ops.job.remove_finished(cur, job_id)
+
+    # Resubmit with a different payload under the same job name.
+    req_v2 = make_job_request("my-job", task_image="image:v2")
+    with state._db.transaction() as cur:
+        ops.job.submit(cur, job_id=job_id, request=req_v2, ts=Timestamp.now())
+
+    # The cache must return the new template, not the old one.
+    with state._db.read_snapshot() as snap:
+        template_v2 = snap.caches[RunTemplatesProjection].get(snap, job_id)
+    assert template_v2 is not None
+    assert template_v2.task_image == "image:v2"
 
 
 def test_prune_old_data_short_circuits_when_nothing_prunable(state):
@@ -3778,9 +3817,7 @@ def _submit_job_direct(
         max_task_failures=max_task_failures,
     )
     with state._db.transaction() as cur:
-        ops.job.submit(
-            cur, job_id=job_id, request=request, ts=Timestamp.now(), run_template_cache=state._run_template_cache
-        )
+        ops.job.submit(cur, job_id=job_id, request=request, ts=Timestamp.now())
     return [job_id.task(idx) for idx in range(replicas)]
 
 
@@ -3801,7 +3838,7 @@ def _task_row_direct(state: ControllerTestState, task_id: JobName):
 def _run_direct_tasks(state: ControllerTestState, task_ids: list[JobName]) -> None:
     """Drain and transition tasks to RUNNING via direct provider."""
     with state._db.transaction() as cur:
-        dispatch.drain_for_dispatch(cur, cache=state._run_template_cache)
+        dispatch.drain_for_dispatch(cur)
     with state._db.transaction() as cur:
         commit_dispatch_updates(
             cur,
@@ -3816,7 +3853,7 @@ def test_drain_pending_creates_attempt_rows(state):
     task_id = task_ids[0]
 
     with state._db.transaction() as cur:
-        batch = dispatch.drain_for_dispatch(cur, cache=state._run_template_cache)
+        batch = dispatch.drain_for_dispatch(cur)
 
     assert len(batch.tasks_to_run) == 1
     assert batch.tasks_to_run[0].task_id == task_id.to_wire()
@@ -3855,14 +3892,14 @@ def test_drain_redrives_assigned_until_executing(state):
 
     # First drain: PENDING -> ASSIGNED, dispatched and polled.
     with state._db.transaction() as cur:
-        batch1 = dispatch.drain_for_dispatch(cur, cache=state._run_template_cache)
+        batch1 = dispatch.drain_for_dispatch(cur)
     assert len(batch1.tasks_to_run) == 1
     assert [(e.task_id, e.attempt_id) for e in batch1.running_tasks] == [(task_id, 0)]
 
     # Second drain (e.g. previous _apply_pod failed or controller crashed):
     # row is still ASSIGNED, redriven in tasks_to_run with same attempt_id.
     with state._db.transaction() as cur:
-        batch2 = dispatch.drain_for_dispatch(cur, cache=state._run_template_cache)
+        batch2 = dispatch.drain_for_dispatch(cur)
     assert len(batch2.tasks_to_run) == 1
     assert batch2.tasks_to_run[0].task_id == task_id.to_wire()
     assert batch2.tasks_to_run[0].attempt_id == 0
@@ -3877,7 +3914,7 @@ def test_drain_redrives_assigned_until_executing(state):
             now=Timestamp.now(),
         )
     with state._db.transaction() as cur:
-        batch3 = dispatch.drain_for_dispatch(cur, cache=state._run_template_cache)
+        batch3 = dispatch.drain_for_dispatch(cur)
     assert len(batch3.tasks_to_run) == 0
     assert len(batch3.running_tasks) == 1
     assert batch3.running_tasks[0].task_id == task_id
@@ -3890,14 +3927,14 @@ def test_drain_caps_promotions_per_cycle(state):
     assert _count_pending(state) == 200
 
     with state._db.transaction() as cur:
-        batch1 = dispatch.drain_for_dispatch(cur, cache=state._run_template_cache, max_promotions=128)
+        batch1 = dispatch.drain_for_dispatch(cur, max_promotions=128)
     # All 128 dispatched are freshly promoted (no prior ASSIGNED rows).
     assert len(batch1.tasks_to_run) == 128
     assert _count_pending(state) == 72
 
     # Second drain: 72 newly promoted, 128 redriven.
     with state._db.transaction() as cur:
-        batch2 = dispatch.drain_for_dispatch(cur, cache=state._run_template_cache, max_promotions=128)
+        batch2 = dispatch.drain_for_dispatch(cur, max_promotions=128)
     assert len(batch2.tasks_to_run) == 200
     assert _count_pending(state) == 0
 
@@ -3908,13 +3945,13 @@ def test_drain_max_promotions_limits_batch(state):
     _submit_job_direct(state, "/user/cap-job", replicas=250)
 
     with state._db.transaction() as cur:
-        batch1 = dispatch.drain_for_dispatch(cur, cache=state._run_template_cache, max_promotions=50)
+        batch1 = dispatch.drain_for_dispatch(cur, max_promotions=50)
     assert len(batch1.tasks_to_run) == 50
     assert _count_pending(state) == 200
 
     # 50 newly promoted + 50 prior ASSIGNED redriven.
     with state._db.transaction() as cur:
-        batch2 = dispatch.drain_for_dispatch(cur, cache=state._run_template_cache, max_promotions=50)
+        batch2 = dispatch.drain_for_dispatch(cur, max_promotions=50)
     assert len(batch2.tasks_to_run) == 100
     assert _count_pending(state) == 150
 
@@ -3924,7 +3961,7 @@ def test_apply_running(state):
     task_ids = _submit_job_direct(state, "/user/job1")
     task_id = task_ids[0]
     with state._db.transaction() as cur:
-        dispatch.drain_for_dispatch(cur, cache=state._run_template_cache)
+        dispatch.drain_for_dispatch(cur)
 
     with state._db.transaction() as cur:
         commit_dispatch_updates(
@@ -3943,7 +3980,7 @@ def test_apply_succeeded(state):
     task_ids = _submit_job_direct(state, "/user/job1")
     task_id = task_ids[0]
     with state._db.transaction() as cur:
-        dispatch.drain_for_dispatch(cur, cache=state._run_template_cache)
+        dispatch.drain_for_dispatch(cur)
 
     with state._db.transaction() as cur:
         commit_dispatch_updates(
@@ -3973,7 +4010,7 @@ def test_apply_failed_with_retry(state):
     task_ids = _submit_job_direct(state, "/user/job1", max_retries_failure=1, max_task_failures=1)
     task_id = task_ids[0]
     with state._db.transaction() as cur:
-        dispatch.drain_for_dispatch(cur, cache=state._run_template_cache)
+        dispatch.drain_for_dispatch(cur)
 
     with state._db.transaction() as cur:
         commit_dispatch_updates(
@@ -4020,7 +4057,7 @@ def test_apply_failed_with_retry(state):
 
     # Draining again should promote it for a second attempt.
     with state._db.transaction() as cur:
-        batch = dispatch.drain_for_dispatch(cur, cache=state._run_template_cache)
+        batch = dispatch.drain_for_dispatch(cur)
     assert len(batch.tasks_to_run) == 1
     assert batch.tasks_to_run[0].attempt_id == 1
 
@@ -4030,7 +4067,7 @@ def test_apply_failed_no_retry(state):
     task_ids = _submit_job_direct(state, "/user/job1", max_retries_failure=0)
     task_id = task_ids[0]
     with state._db.transaction() as cur:
-        dispatch.drain_for_dispatch(cur, cache=state._run_template_cache)
+        dispatch.drain_for_dispatch(cur)
 
     with state._db.transaction() as cur:
         commit_dispatch_updates(
@@ -4060,7 +4097,7 @@ def test_apply_worker_failed(state):
     task_ids = _submit_job_direct(state, "/user/job1", max_retries_preemption=1)
     task_id = task_ids[0]
     with state._db.transaction() as cur:
-        dispatch.drain_for_dispatch(cur, cache=state._run_template_cache)
+        dispatch.drain_for_dispatch(cur)
 
     with state._db.transaction() as cur:
         commit_dispatch_updates(

@@ -203,9 +203,7 @@ def _start_running_job(
         replicas=replicas,
     )
     with state._db.transaction() as cur:
-        ops.job.submit(
-            cur, job_id=job_id, request=request, ts=Timestamp.now(), run_template_cache=state._run_template_cache
-        )
+        ops.job.submit(cur, job_id=job_id, request=request, ts=Timestamp.now())
 
     worker_id = WorkerId(f"w-{user}")
     with state._db.transaction() as cur:
@@ -258,9 +256,7 @@ def test_compute_user_spend_excludes_pending(state):
     job_id = JobName.root("bob", "pending")
     request = _launch_request(job_id.to_wire(), cpu_millicores=2000, memory_bytes=8 * GiB)
     with state._db.transaction() as cur:
-        ops.job.submit(
-            cur, job_id=job_id, request=request, ts=Timestamp.now(), run_template_cache=state._run_template_cache
-        )
+        ops.job.submit(cur, job_id=job_id, request=request, ts=Timestamp.now())
     with state._db.read_snapshot() as snap:
         assert compute_user_spend(snap).get("bob", 0) == 0
 

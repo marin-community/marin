@@ -64,7 +64,6 @@ from iris.cluster.controller.projections.attempt_counts import AttemptCountsProj
 from iris.cluster.controller.reads import TaskJobSummary
 from iris.cluster.controller.reconcile.policy import MAX_ACTIVE_TASKS_PER_USER
 from iris.cluster.controller.reconcile.task import TerminalKind
-from iris.cluster.controller.run_template import RunTemplateCache
 from iris.cluster.controller.scheduling.scheduler import SchedulingContext
 from iris.cluster.controller.schema import (
     job_config_table,
@@ -984,9 +983,6 @@ class ControllerProtocol(Protocol):
     @property
     def capabilities(self) -> frozenset[BackendCapability]: ...
 
-    @property
-    def run_template_cache(self) -> RunTemplateCache: ...
-
     def backend_id_for_scale_group(self, scale_group: str) -> str: ...
 
     def all_liveness(self) -> dict[WorkerId, WorkerLiveness]: ...
@@ -1583,7 +1579,6 @@ class ControllerServiceImpl:
                 job_id=job_id,
                 request=request,
                 ts=Timestamp.now(),
-                run_template_cache=self._controller.run_template_cache,
             )
         self._controller.wake()
 

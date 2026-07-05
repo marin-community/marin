@@ -130,7 +130,6 @@ def apply_event(transitions: ControllerTestState, event: IrisEvent) -> Any:
                     job_id=job_id,
                     request=request,
                     ts=ts,
-                    run_template_cache=transitions._run_template_cache,
                 )
             case CancelJob(job_id, reason):
                 return ops.job.cancel(cur, job_id=job_id, reason=reason)
@@ -170,9 +169,7 @@ def apply_event(transitions: ControllerTestState, event: IrisEvent) -> Any:
                     now=Timestamp.now(),
                 )
             case DrainForDirectProvider(max_promotions):
-                return dispatch.drain_for_dispatch(
-                    cur, cache=transitions._run_template_cache, max_promotions=max_promotions
-                )
+                return dispatch.drain_for_dispatch(cur, max_promotions=max_promotions)
             case ApplyDirectProviderUpdates(updates):
                 # Relocated glue: author the effects from this write transaction,
                 # then commit them — the two steps the controller now does apart.

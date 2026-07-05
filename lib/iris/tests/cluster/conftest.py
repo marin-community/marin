@@ -19,7 +19,6 @@ from iris.cluster.controller.reads import ControlSnapshot
 from iris.cluster.controller.reconcile import dispatch
 from iris.cluster.controller.reconcile.commit import commit_effects
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
-from iris.cluster.controller.run_template import RunTemplateCache, new_run_template_cache
 from iris.cluster.controller.schema import task_attempts_table, tasks_table, workers_table
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.controller.transition_reader import DbTransitionReader
@@ -127,7 +126,6 @@ class _HarnessController:
         # same tracker its ControllerTestState exposes (see the harness factories).
         self.provider.health = WorkerHealthTracker()
         self.capabilities = frozenset({BackendCapability.WORKER_DAEMON, BackendCapability.IRIS_AUTOSCALER})
-        self.run_template_cache: RunTemplateCache = new_run_template_cache()
         self.scale_group_to_backend: dict[str, str] = {}
         self.backends: dict = {DEFAULT_BACKEND_ID: self.provider}
         # Zero-peer federation: route_submit returns local, ListPeers is empty.
@@ -241,7 +239,7 @@ class ServiceTestHarness:
         """Run one K8s direct provider sync cycle."""
         assert self.k8s_provider is not None, "sync_k8s requires K8s harness"
         with self.state._db.transaction() as cur:
-            batch = dispatch.drain_for_dispatch(cur, cache=self.state._run_template_cache)
+            batch = dispatch.drain_for_dispatch(cur)
         snapshot = ControlSnapshot(
             worker_addresses={},
             reconcile_rows=[],

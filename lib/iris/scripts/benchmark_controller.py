@@ -81,12 +81,12 @@ from iris.cluster.controller.log_stack import build_log_stack
 from iris.cluster.controller.ops.task import Assignment
 from iris.cluster.controller.ops.worker import apply_reconcile
 from iris.cluster.controller.projections.endpoints import EndpointQuery, EndpointRow, EndpointsProjection
+from iris.cluster.controller.projections.run_templates import RunTemplatesProjection
 from iris.cluster.controller.reads import (  # noqa: F401
     ControlSnapshot,
     SchedulableWorker,
     healthy_active_workers_with_attributes,
 )
-from iris.cluster.controller.reconcile import dispatch
 from iris.cluster.controller.reconcile.commit import commit_effects
 from iris.cluster.controller.reconcile.worker import (
     ReconcileInputs,
@@ -95,7 +95,6 @@ from iris.cluster.controller.reconcile.worker import (
     WorkerReconcileResult,
     build_reconcile_plans,
 )
-from iris.cluster.controller.run_template import new_run_template_cache
 from iris.cluster.controller.scheduling.policy import build_scheduling_context, compute_demand_entries
 from iris.cluster.controller.scheduling.scheduler import Scheduler
 from iris.cluster.controller.schema import (
@@ -215,7 +214,6 @@ class _FakeProvider:
             db=runtime.db,
             owns_scale_group=runtime.owns_scale_group,
             health=self.health,
-            run_template_cache=runtime.run_template_cache,
             defaults=runtime.budget_defaults,
             autoscale=self.autoscale,
         )
@@ -1357,7 +1355,7 @@ def benchmark_polling(db: ControllerDB) -> None:
     """
     health = WorkerHealthTracker()
     _seed_health(db, health)
-    txns = ControllerTestState(db, health=health)
+    _ = ControllerTestState(db, health=health)
 
     with db.read_snapshot() as snap:
         addresses = reads.list_active_healthy_workers(snap, health)
@@ -1438,7 +1436,7 @@ def benchmark_polling(db: ControllerDB) -> None:
 
     bench("Polling: poll_all_workers (pre-Jumbo single-shot read)", _poll_all_pre_jumbo)
 
-    # ---- run_request_template (cached): dominates ASSIGNED rows in the tick. ----
+    # ---- RunTemplatesProjection.get (cached): dominates ASSIGNED rows in the tick. ----
     _active_states = [job_pb2.TASK_STATE_ASSIGNED, job_pb2.TASK_STATE_BUILDING, job_pb2.TASK_STATE_RUNNING]
     with db.read_snapshot() as _rtx:
         rows = _rtx.execute(
@@ -1454,22 +1452,23 @@ def benchmark_polling(db: ControllerDB) -> None:
         first_job = sample_job_ids[0]
 
         def _template_first():
-            # Fresh cache to defeat the LRU cache on every call.
-            cold_cache = new_run_template_cache()
+            # Invalidate to defeat the cache on every call.
+            with db.transaction() as cur:
+                db.caches[RunTemplatesProjection].invalidate_for_job(cur, first_job)
             with db.read_snapshot() as snap:
-                dispatch.run_request_template(cold_cache, snap, first_job)
+                snap.caches[RunTemplatesProjection].get(snap, first_job)
 
-        bench("Polling: run_request_template (cold, per-job build)", _template_first)
+        bench("Polling: run_templates_projection.get (cold, per-job build)", _template_first)
 
         # Warm cache: same job repeatedly.
         with db.read_snapshot() as snap:
-            dispatch.run_request_template(txns._run_template_cache, snap, first_job)
+            snap.caches[RunTemplatesProjection].get(snap, first_job)
 
         def _template_warm():
             with db.read_snapshot() as snap:
-                dispatch.run_request_template(txns._run_template_cache, snap, first_job)
+                snap.caches[RunTemplatesProjection].get(snap, first_job)
 
-        bench("Polling: run_request_template (cached hit)", _template_warm)
+        bench("Polling: run_templates_projection.get (cached hit)", _template_warm)
 
     # ---- has_unfinished_worker_attempts: drain gate for job replacement. ----
     # Walks the parent_job_id subtree. Pick a depth=1 job with active subtree
@@ -2502,7 +2501,7 @@ def _build_synthetic_reconcile_state(
     health.heartbeat(worker_ids, now.epoch_ms())
 
     with db.transaction() as cur:
-        ops.job.submit(cur, job_id=job_id, request=request, ts=now, run_template_cache=txns._run_template_cache)
+        ops.job.submit(cur, job_id=job_id, request=request, ts=now)
 
     with db.read_snapshot() as tx:
         task_rows = tx.execute(
@@ -2661,7 +2660,6 @@ def _snapshot_reconcile_inputs(state: SyntheticReconcileState) -> tuple[Reconcil
     """Replicate ``controller._snapshot_reconcile_inputs`` against the synthetic DB."""
     db = state.db
     health = state.health
-    txns = state.txns
     with db.read_snapshot() as snap:
         addresses = reads.list_active_healthy_workers(snap, health)
         if not addresses:
@@ -2696,7 +2694,7 @@ def _snapshot_reconcile_inputs(state: SyntheticReconcileState) -> tuple[Reconcil
             if row.task_state != job_pb2.TASK_STATE_ASSIGNED:
                 continue
             if row.job_id not in templates_by_job:
-                templates_by_job[row.job_id] = dispatch.run_request_template(txns._run_template_cache, snap, row.job_id)
+                templates_by_job[row.job_id] = snap.caches[RunTemplatesProjection].get(snap, row.job_id)
 
     rows_by_worker: dict[WorkerId, list[ReconcileRow]] = {wid: [] for wid in worker_ids}
     for row in rows:

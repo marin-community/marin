@@ -47,7 +47,6 @@ from iris.cluster.controller.reconcile.worker import (
     WorkerReconcilePlan,
     build_reconcile_plans,
 )
-from iris.cluster.controller.run_template import RunTemplateCache
 from iris.cluster.controller.scheduling.decision import apply_preemptions, compute_diagnostics
 from iris.cluster.controller.scheduling.policy import (
     GatedCandidates,
@@ -442,8 +441,6 @@ class BackendRuntime:
     autoscaler groups it authors, so the controller never has to tag them afterward."""
     db: ControllerDB
     """The controller database."""
-    run_template_cache: RunTemplateCache
-    """Per-job ``RunTaskRequest`` template cache."""
     owns_scale_group: Callable[[str], bool]
     """Whether a scale group belongs to this backend (the default backend also claims
     scale groups mapped to no backend)."""

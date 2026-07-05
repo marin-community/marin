@@ -30,8 +30,8 @@ from iris.cluster.controller.auth import ControllerAuth
 from iris.cluster.controller.codec import constraints_from_json
 from iris.cluster.controller.endpoint_service import EndpointServiceImpl
 from iris.cluster.controller.ops.task import Assignment, finalize
+from iris.cluster.controller.projections.run_templates import RunTemplatesProjection
 from iris.cluster.controller.reads import TaskJobSummary
-from iris.cluster.controller.reconcile import dispatch
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.reconcile.task import TerminalDecision, TerminalKind
 from iris.cluster.controller.schema import jobs_table, task_attempts_table, tasks_table
@@ -362,7 +362,7 @@ def test_launch_job_externalizes_large_workdir_files(service, state):
 
     job_id = JobName.root("test-user", "big-pickle-job")
     with state._db.read_snapshot() as snap:
-        template = dispatch.run_request_template(state._run_template_cache, snap, job_id)
+        template = snap.caches[RunTemplatesProjection].get(snap, job_id)
     assert template is not None
     # Small file stays inline
     assert dict(template.entrypoint.workdir_files) == {"small.txt": small_file}
@@ -378,7 +378,7 @@ def test_launch_job_keeps_small_workdir_files_inline(service, state):
 
     job_id = JobName.root("test-user", "small-pickle-job")
     with state._db.read_snapshot() as snap:
-        template = dispatch.run_request_template(state._run_template_cache, snap, job_id)
+        template = snap.caches[RunTemplatesProjection].get(snap, job_id)
     assert template is not None
     assert dict(template.entrypoint.workdir_files) == {"_callable.pkl": small_file}
     assert "_callable.pkl" not in template.entrypoint.workdir_file_refs
@@ -675,9 +675,7 @@ def test_get_job_status_reports_has_children(service, state):
     )
     child_req.entrypoint.run_command.argv[:] = ["python", "-c", "pass"]
     with state._db.transaction() as cur:
-        ops.job.submit(
-            cur, job_id=child_id, request=child_req, ts=Timestamp.now(), run_template_cache=state._run_template_cache
-        )
+        ops.job.submit(cur, job_id=child_id, request=child_req, ts=Timestamp.now())
 
     parent = service.get_job_status(controller_pb2.Controller.GetJobStatusRequest(job_id=parent_id.to_wire()), None)
     assert parent.job.has_children is True
@@ -1289,9 +1287,7 @@ def test_list_jobs_all_scope_includes_descendants(service, state):
     )
     child_req.entrypoint.run_command.argv[:] = ["python", "-c", "pass"]
     with state._db.transaction() as cur:
-        ops.job.submit(
-            cur, job_id=child_id, request=child_req, ts=Timestamp.now(), run_template_cache=state._run_template_cache
-        )
+        ops.job.submit(cur, job_id=child_id, request=child_req, ts=Timestamp.now())
 
     request = controller_pb2.Controller.ListJobsRequest()
     response = service.list_jobs(request, None)
@@ -1316,9 +1312,7 @@ def test_list_jobs_job_query_roots_and_children(service, state):
     )
     child_req.entrypoint.run_command.argv[:] = ["python", "-c", "pass"]
     with state._db.transaction() as cur:
-        ops.job.submit(
-            cur, job_id=child_id, request=child_req, ts=Timestamp.now(), run_template_cache=state._run_template_cache
-        )
+        ops.job.submit(cur, job_id=child_id, request=child_req, ts=Timestamp.now())
 
     roots_response = service.list_jobs(
         controller_pb2.Controller.ListJobsRequest(
@@ -1714,9 +1708,7 @@ def test_get_scheduler_state_with_running_task(controller_service, state):
         replicas=1,
     )
     with state._db.transaction() as cur:
-        ops.job.submit(
-            cur, job_id=job_id, request=request, ts=Timestamp.now(), run_template_cache=state._run_template_cache
-        )
+        ops.job.submit(cur, job_id=job_id, request=request, ts=Timestamp.now())
 
     w1 = WorkerId("w1")
     with state._db.transaction() as cur:
