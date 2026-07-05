@@ -87,23 +87,36 @@ paths).
 In `job_basis`, keep `total_failures` but derive it from the **loaded committed base
 plus this batch's real attempt writes**, with no scratch field. `job_basis` stops
 touching `row.failure_count` entirely — it reads the pre-summed loader value and adds
-this batch's FAILED attempt deltas:
+the count of this batch's FAILED attempt deltas belonging to the job.
+
+**Aggregate the FAILED deltas once, not per call (codex-GH P2).** A naive
+`for (tid,_),d in self._effects.attempts: if tid.parent == job_id and d.state ==
+FAILED` inside `job_basis` rescans the whole batch's attempt deltas on every call,
+and `_recompute_and_finalize` calls `job_basis` once per touched job → O(touched_jobs
+× total_deltas). Instead build a per-job tally once and have `job_basis` do an O(1)
+lookup:
 
 ```python
-total_failures = basis.total_failures          # committed base, summed by the loader
+# built once (e.g. lazily-memoized on the Overlay, invalidated on merge_attempt):
+failed_delta_by_job: dict[JobName, int] = {}
 for (task_id, _), d in self._effects.attempts.items():
-    if task_id.parent == job_id and d.state == job_pb2.TASK_STATE_FAILED:
-        total_failures += 1
+    if d.state == job_pb2.TASK_STATE_FAILED:
+        failed_delta_by_job[task_id.parent] = failed_delta_by_job.get(task_id.parent, 0) + 1
+
+# in job_basis:
+total_failures = basis.total_failures + failed_delta_by_job.get(job_id, 0)
 # (the existing all_tasks_by_job loop still builds task_state_counts + first_error,
 #  but no longer reads row.failure_count)
 ```
 
-The FAILED attempt deltas are the real writes already in `overlay._effects.attempts`
-(state `TASK_STATE_FAILED`) — the same rows `commit.py` flushes to `task_attempts`.
-So the total equals *"the committed-derived count projected forward by this batch's
-own attempt writes"* — i.e. exactly what the next tick's loader would compute once
-these attempts commit. (`TaskHistogramRow.failure_count` stays, but only the loader
-reads it now, to compute `basis.total_failures`; the overlay no longer does.)
+That keeps the derivation O(total_deltas + touched_jobs), matching today's per-job
+task-row scan. The FAILED attempt deltas are the real writes already in
+`overlay._effects.attempts` (state `TASK_STATE_FAILED`) — the same rows `commit.py`
+flushes to `task_attempts`. So the total equals *"the committed-derived count
+projected forward by this batch's own attempt writes"* — exactly what the next tick's
+loader would compute once these attempts commit. (`TaskHistogramRow.failure_count`
+stays, but only the loader reads it now, to compute `basis.total_failures`; the
+overlay no longer does.)
 
 Properties:
 
@@ -355,3 +368,8 @@ Two items folded back into the doc:
 
 The full review transcript is in the session scratchpad
 (`codex_review_out.md`).
+
+The GitHub codex reviewer added one further P2 on the PR: the Option A snippet, taken
+literally, would rescan all `effects.attempts` once per `job_basis` call → O(N²) over
+touched jobs. Folded in — §4 now pre-aggregates the FAILED deltas by parent job once
+(O(total_deltas + touched_jobs)).
