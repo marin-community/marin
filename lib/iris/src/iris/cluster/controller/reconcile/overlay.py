@@ -142,7 +142,7 @@ class Overlay:
         )
 
     def _failed_attempt_deltas_for_job(self, job_id: JobName) -> int:
-        """This batch's FAILED attempt-delta count for ``job_id`` (built once, cached)."""
+        """This batch's FAILED attempt-delta count for ``job_id``."""
         if self._failed_attempt_deltas_by_job is None:
             tally: dict[JobName, int] = {}
             for (task_id, _), delta in self._effects.attempts.items():

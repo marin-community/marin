@@ -530,12 +530,7 @@ def timeout_one(
     reason: str,
     now_ms: int,
 ) -> None:
-    """Mark one task FAILED via timeout. Per-task mutation only.
-
-    The FAILED attempt this records is what charges the job's failure budget
-    (derived in ``Overlay.job_basis``); an already-terminal current attempt is
-    left untouched by ``merge_task_termination`` and so charges nothing.
-    """
+    """Mark one task FAILED via timeout by recording a FAILED attempt. Per-task mutation only."""
     merge_task_termination(
         state,
         row.task_id.to_wire(),
