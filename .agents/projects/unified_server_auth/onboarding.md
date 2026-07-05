@@ -2,9 +2,11 @@
 
 A nearly-independent slice of the [auth umbrella](./design.md): how a headless
 identity (CI, cron, ops script) reaches an IAP-fronted Marin service without a
-downloaded key, and how the controller's user store becomes a real allowlist
-instead of auto-granting write access on first login. Contracts: [`spec.md`](./spec.md)
-§3; current-state map: [`research.md`](./research.md) §2 (user store), §7.2 (WIF).
+downloaded key, and how authorization stops auto-granting write access on first
+login. **As built, roles are a config-driven, in-memory policy** — there is no
+`users` table and no role-grant RPC (the [`spec.md`](./spec.md) §3 plan is
+superseded); this doc reconciles the onboarding steps to that. Current-state map:
+[`research.md`](./research.md) §2, §7.2 (WIF).
 
 ## Problem
 
@@ -15,10 +17,10 @@ Two loose ends around IAP:
   identity is tribal, spread across GCP IAM + cluster config + the controller user
   store — so jobs (e.g. the cost-manager, PR #6555) fall back to an SSH tunnel with
   an extra SSH-key secret.
-- **#6592 — the user store isn't an allowlist.** The `login` RPC auto-provisions
-  *any* IAP-admitted identity at the write-capable default role `"user"`
-  (`service.py:2584-2620`); there is **no** role-change RPC (`set_user_role` runs
-  only at startup for `admin_users`). So "who can reach IAP" is the only real gate.
+- **#6592 — authorization wasn't an allowlist.** Historically the `login` RPC
+  auto-provisioned *any* IAP-admitted identity at the write-capable default role
+  `"user"`, so "who can reach IAP" was the only real gate. The fix (below) makes the
+  cluster config the allowlist.
 
 ## #6580 — headless access (phase 1: SA credentials, no WIF yet)
 
@@ -58,41 +60,54 @@ setup, the keyless upgrade (CI OIDC → WIF → impersonate `iap-caller` →
 `generateIdToken`) drops the downloaded key entirely and retires the rotation
 obligation. Tracked as a fast-follow; not built in this PR.
 
-## #6592 — make the user store an allowlist
+## #6592 — config is the allowlist
 
-Add an admin-only **`SetUserRole` RPC** (the missing role-change path;
-`AuthzAction.MANAGE_USER_ROLES`, admin-only) and flip `login` on **IAP clusters**
-to provision at `unprovisioned_role` (read-only `dashboard`) instead of `"user"` —
-so the user store, not "reached IAP", is the write-access allowlist. `gcp`/`static`
-login is unchanged (there `GcpAccessTokenVerifier`'s project check already *is* the
-allowlist).
+As built, authorization is an in-memory `RolePolicy` derived from `AuthConfig` at
+controller start: `auth.admin_users` → `admin`, the worker machine identity →
+`worker`, everyone else → the default role. On an **IAP cluster** that default is
+`IapAuthConfig.unprovisioned_role` (read-only `dashboard`), so a freshly-admitted
+IAP identity is read-only — the config, not "reached IAP", is the write-access
+allowlist. `login` verifies the presented identity token, rejects a reserved
+`system:` subject, and mints a session token carrying that **config-resolved** role
+(never the incoming token's). `gcp` login is unchanged (there
+`GcpAccessTokenVerifier`'s project check already *is* the allowlist). There is **no
+`SetUserRole` RPC and no `users` table** — the planned role-grant path was dropped.
 
-## `iris user grant` — one command, three planes
+## Granting a role — config edit + IAM binding
 
-The only non-startup grant path, for humans and service accounts alike. It spans
-three distinct actuation planes; only the live ones are applied automatically:
+There is no `iris user grant` command. Onboarding a human or SA is two manual
+planes:
 
 ```mermaid
 graph LR
-    G["iris user grant<br/>--user --role"] --> P1["① IAM (gcloud, live)<br/>roles/iap.httpsResourceAccessor"]
-    G --> P3["③ RPC (live)<br/>SetUserRole(user, role)"]
-    G --> P2["② CONFIG (printed, not live)<br/>add IAP client id to auth.iap.audiences<br/>→ needs iris cluster start redeploy"]
-    P1 --> URL["prints connect URL:<br/>iap+https://host/proxy/name?audience=…"]
-    P3 --> URL
+    P1["① IAM (gcloud, live)<br/>roles/iap.httpsResourceAccessor<br/>→ lets the caller through the IAP edge"]
+    P2["② CONFIG (edit + reload)<br/>admin: add to auth.admin_users<br/>non-admin tier: auth.iap.unprovisioned_role"]
+    P1 --> URL["connect URL:<br/>iap+https://host/proxy/name?audience=…"]
+    P2 --> URL
 ```
 
-Plane ② is a config edit the command cannot apply to a running controller, so it
-prints the diff + redeploy step rather than pretending to mutate live state. In
-phase 1 a headless SA is granted exactly like a human (an IAM binding +
-`SetUserRole`); the WIF binding orchestration lands with the keyless upgrade.
+1. **[IAM] reach IAP** — bind `roles/iap.httpsResourceAccessor` on the IAP backend
+   for the identity (`gcloud iap web add-iam-policy-binding …`). This is what lets a
+   caller through the IAP edge at all; unchanged from the plan. A read-only
+   (`dashboard`) grant needs only this plane, since that is the IAP default.
+2. **[CONFIG] set the role** — elevate to `admin` by adding the identity's email/SA
+   to `auth.admin_users`; the non-admin tier is the cluster-wide
+   `auth.iap.unprovisioned_role` (`dashboard`/`user`/`admin`). Either is a config
+   edit that takes effect on **reload** (a controller restart rebuilds the
+   `RolePolicy`); there is no live mutation of a running controller.
 
-**Claims trap (runbook note):** a role is baked into the (30-day) JWT and
-verification never reads the user store, so a grant takes effect only after the
-user re-runs `iris login`.
+In phase 1 a headless SA is onboarded exactly like a human (the IAM binding, plus a
+config entry only if it needs admin); the WIF binding orchestration lands with the
+keyless upgrade.
 
-## Rollout / open question
+**Claims trap (runbook note):** the role is baked into the (~1h session) JWT and
+verification never reads any store, so a config change takes effect only after the
+user re-runs `iris login` (or their current token ages out within the session TTL).
 
-The `login`-provisioning flip is a behavior change for every IAP cluster (today
-first login grants write). Land it behind an ops announcement, or as a follow-up
-once `SetUserRole` exists so operators can pre-grant current users first? (This is
-the one open question this slice owns; the rest are in [`design.md`](./design.md).)
+## Rollout note
+
+The default-role flip is a behavior change for every IAP cluster (previously first
+login granted write). Because roles are config, operators pre-grant current write
+users — list the admins in `auth.admin_users`, and set `auth.iap.unprovisioned_role`
+to the intended non-admin tier — before the flip is deployed; there is no live
+migration step. (The rest of the open questions are in [`design.md`](./design.md).)

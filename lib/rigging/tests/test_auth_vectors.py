@@ -71,9 +71,7 @@ def _walk(policy: RequestAuthPolicy, request: AuthRequest) -> tuple[str, str | N
 
 @pytest.mark.parametrize("vector", _VECTORS["vectors"], ids=[v["name"] for v in _VECTORS["vectors"]])
 def test_auth_vector(vector):
-    policy = RequestAuthPolicy.from_config(
-        AuthStackConfig.from_json(vector["stack"]), jwt_verifier=_MOCK_JWT_VERIFIER
-    )
+    policy = RequestAuthPolicy.from_config(AuthStackConfig.from_json(vector["stack"]), jwt_verifier=_MOCK_JWT_VERIFIER)
     request = _auth_request(vector["request"])
 
     verdict, matched = _walk(policy, request)
@@ -89,9 +87,7 @@ def test_auth_vector(vector):
             policy.resolve(request.token, client_address=request.client_address, headers=request.headers)
 
 
-@pytest.mark.parametrize(
-    "case", _VECTORS["parse_error_stacks"], ids=[c["name"] for c in _VECTORS["parse_error_stacks"]]
-)
+@pytest.mark.parametrize("case", _VECTORS["parse_error_stacks"], ids=[c["name"] for c in _VECTORS["parse_error_stacks"]])
 def test_parse_error_stack_raises(case):
     with pytest.raises(ValueError):
         AuthStackConfig.from_json(case["stack"])

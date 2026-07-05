@@ -22,10 +22,17 @@ minted token carries an `aud` naming exactly one plane, and every verifier
 
 | Token | `iss` | `aud` | other claims | TTL | Verified by |
 |---|---|---|---|---|---|
-| control-plane (user/worker) | `<cluster>` | `iris` | `role`, `jti` | ≤30d | **only** the issuing controller |
-| delegation (relay→global finelog) | `<cluster>` | `finelog` | `role="finelog-relay"` | ≤1h | any federated finelog |
+| control-plane session (user) | `<cluster>` | `iris` | `role`, `jti` (log-correlation only) | ~1h (`SESSION_TOKEN_TTL_SECONDS`) | **only** the issuing controller |
+| control-plane worker | `<cluster>` | `iris` | `role="worker"`, `jti` | 30d (`WORKER_TOKEN_TTL_SECONDS`, a residual) | **only** the issuing controller |
+| delegation (relay→shared finelog) | `<cluster>` | `finelog` | `role="finelog-relay"` | ≤1h | any federated finelog |
 | endpoint / `/proxy` | `<cluster>` | `iris-proxy` | `scope="proxy"`, `endpoint=<name>` | ≤24h | the `/proxy` gate |
-| peer (controller A→B) | `<cluster-a>` | `iris-peer` | — | short | peer controller B |
+| peer (**reserved, not minted**) | `<cluster-a>` | `iris-peer` | — | short | (reserved — see note below) |
+
+`jti` is now only a log-correlation id — there is no revocation set to look it up
+in (see the stateless-verify bullet below). The `iris-peer` row is a **reserved**
+plane: finelog's conformance vectors exercise it as a cross-plane rejection, but
+iris does not mint peer tokens today — controller-to-controller federation uses the
+ordinary rigging client-credential path (`credentials_for`).
 
 The `aud` names the recipient **plane** — a bounded, static set — not a per-resource
 value (RFC 8725). So an endpoint token's `aud` is the fixed `iris-proxy`, and the
@@ -35,13 +42,14 @@ a *fixed* `expected_audiences = {"iris", "iris-proxy"}` — enumerating the dyna
 of endpoint names would be impossible — while still rejecting a `finelog` /
 `iris-peer` token replayed at the RPC surface (the load-bearing cross-service guard).
 
-- **Revocation is local, so remote verifiers only ever see short-TTL, plane-scoped
-  tokens.** The jti revocation set lives in the issuing controller's DB and can't
-  reach finelog / peers / cross-cluster `/proxy` gates; long-lived control-plane
-  (`aud="iris"`) JWTs are therefore verified **only by the issuing controller**.
-  This preserves today's property (the relay's 1h delegation token is
-  TTL-bounded, `finelog_relay.py:29-31`) instead of shipping unrevocable 30-day
-  tokens to remote verifiers.
+- **Verification is stateless; there is no revocation (CHANGED FROM PLAN).** The
+  planned `api_keys` jti revocation set is gone — dropped with the `api_keys` table.
+  `JwtTokenManager.verify()` is a pure function of the token (signature, expiry, and
+  the `aud`↔scope binding) with **no DB read**; `jti` survives only as a
+  log-correlation id. Control-plane (`aud="iris"`) JWTs are still verified **only by
+  the issuing controller**, and remote verifiers (finelog) only ever see short-TTL,
+  plane-scoped tokens (the relay's 1h delegation token, `finelog_relay.py`).
+  Deprovisioning is bounded by the ~1h session TTL, not a revocation set.
 - **iris's verify rejects an unexpected `aud`/`scope` — no fail-open.** Today
   `verify()` surfaces `audience=None` for any `scope != "proxy"` (`auth.py:274`),
   which passes unknown scopes through; the replacement takes an explicit
@@ -80,12 +88,14 @@ to an identity is service policy. The `issuers` map is a **configured allowlist*
 ### 0.3 iris policy wrapper + login (thin, over the rigging primitives)
 
 `JwtTokenManager` wraps `JwtSigner`/`JwksVerifier`: it owns role/claim semantics,
-endpoint-token minting, the `expected_aud` per surface, and the **revocation
-source** (`api_keys` jti set, checked *after* the verifier returns, as today). The
-`Login` RPC calls a **rigging** token-exchange helper (`rigging.auth`, alongside the
-already-there `run_iap_desktop_login`); the exchange itself (IAP/Google identity in
-→ controller-signed `aud="iris"` JWT out) is token-exchange-shaped (the RFC 8693
-*pattern*, over the Connect `Login` RPC — not a literal RFC 8693 token endpoint).
+endpoint-token minting, and the `expected_aud` per surface plus the aud↔scope
+binding. CHANGED FROM PLAN: it holds **no revocation source** — the `api_keys` jti
+set is gone and verification never reads a DB. The `Login` RPC verifies the
+presented identity token, rejects a reserved `system:` subject, and mints a session
+token whose role comes from the config `RolePolicy` (§3 — from config, never the
+incoming token); the exchange (IAP/Google identity in → controller-signed
+`aud="iris"` JWT out) is token-exchange-shaped (the RFC 8693 *pattern*, over the
+Connect `Login` RPC — not a literal RFC 8693 token endpoint).
 
 ### 0.4 Key sourcing, provisioning, rotation
 
@@ -97,13 +107,15 @@ already-there `run_iap_desktop_login`); the exchange itself (IAP/Google identity
   of today's ephemeral `token_hex`, `auth.py:440-443`) — so a laptop / CI / a
   CoreWeave cluster with no Secret Manager still works.
 - **`iris cluster init-keys`** generates the Ed25519 keypair and writes the private
-  half to a `SecretSpec` **destination** (Secret Manager / k8s Secret / file — not
-  hard-coded to GCP), printing the public key + `kid` for the trust config.
+  half to a `SecretSpec` **destination** — `--out-file` (a `file:` reference) and/or
+  `--gcp-secret` (prints the `gcloud secrets` commands to store it, then the pinned
+  `gcp-secret://…/versions/<n>` reference) — printing the public key + `kid` for the
+  trust config.
 - **Rotation** needs the *previous* public key retained. `AuthConfig` carries
   `previous_public_keys: list[str]` (public, inline-safe); JWKS serves current +
   previous; verifiers (incl. finelog's `Vec<JwtKey>` per issuer, already supported)
-  accept both. **Overlap window ≥ the max outstanding token TTL** (30d for
-  control-plane) or rotation is a mass logout. Runbook (into `authed-service.md`):
+  accept both. **Overlap window ≥ the max outstanding token TTL** (30d, set by the
+  worker token) or rotation is a mass logout. Runbook (into `authed-service.md`):
   add new public key everywhere → switch the signer → wait ≥ max TTL → drop the old
   public key.
 
@@ -145,10 +157,11 @@ it); finelog's Rust gains `jsonwebtoken` (today it hand-rolls `hmac` JWS parsing
 
 This schema models the **request chain** only — the authenticators that decide
 an already-authenticated request. It does **not** model login-exchange verifiers
-(`static`/`gcp`/`iap_id_token`): those run inside the `Login` RPC (which the
-policy skips via `unauthenticated_methods`) and are constructed in code
-(`iris/cluster/controller/auth.py:447-470`). The request chain's verifier is
-always the service JWT manager, so the schema never carries a login verifier.
+(`gcp`/`iap_id_token` — the static-token login provider was dropped): those run
+inside the `Login` RPC (which the policy skips via `unauthenticated_methods`) and
+are constructed in code (`iris/cluster/controller/auth.py`). The request chain's
+verifier is always the service JWT manager, so the schema never carries a login
+verifier.
 
 `AuthStackConfig` serializes to an **ordered JSON list of internally-tagged
 layer objects** (`{"type": <layer>, ...}`), matching finelog's existing
@@ -175,7 +188,7 @@ lesson, research §7.1).
 
 | `type` | Fields | Verifier the service injects | Semantics |
 |---|---|---|---|
-| `jwt` | `optional: bool = false` | the service's **policy** `TokenVerifier` (iris: `JwtTokenManager` wrapping `JwksVerifier` + `expected_aud` + jti-revocation) — **never** the bare `JwksVerifier`, which skips revocation/scope | present+valid ⇒ AUTHENTICATED; absent ⇒ ABSENT. present+invalid ⇒ REJECTED when `optional=false`, else ABSENT (the `BestEffortJwtAuthenticator` case that makes a null-auth chain attribute a valid worker JWT but never reject) |
+| `jwt` | `optional: bool = false` | the service's **policy** `TokenVerifier` (iris: `JwtTokenManager` wrapping `JwksVerifier` + `expected_aud` + the aud↔scope binding) — **never** the bare `JwksVerifier`, which skips the scope policy | present+valid ⇒ AUTHENTICATED; absent ⇒ ABSENT. present+invalid ⇒ REJECTED when `optional=false`, else ABSENT (the `BestEffortJwtAuthenticator` case that makes a null-auth chain attribute a valid worker JWT but never reject) |
 | `iap_assertion` | — | `IapAssertionVerifier` (via `iap_assertion_verifier=`) | verifies `X-Goog-IAP-JWT-Assertion`; forged ⇒ REJECTED; absent ⇒ ABSENT |
 | `cidr` | `cidrs: list[str]` | — | direct socket peer in a CIDR ⇒ `ANONYMOUS_ADMIN`; `X-Forwarded-For`/port-0 ⇒ ABSENT |
 | `loopback` | — | — | genuine loopback socket peer ⇒ `ANONYMOUS_ADMIN` |
@@ -231,7 +244,7 @@ stack that produces the *identical* authenticator chain it builds today:
 | Current state | Compiled stack | Notes |
 |---|---|---|
 | null-auth (no provider) | `[jwt(optional=true), anonymous]` | best-effort JWT attributes workers; anonymous terminal = today's `permissive()`. **Stays open** — a null-auth dev cluster is unchanged. |
-| `gcp` / `static` | `[jwt, cidr(trusted_cidrs)?, loopback] (+ anonymous if optional)` | request verifier is the JWT manager; the gcp/static login verifier stays in the `Login` RPC |
+| `gcp` (login provider) | `[jwt, cidr(trusted_cidrs)?, loopback] (+ anonymous if optional)` | request verifier is the JWT manager; the gcp login verifier stays in the `Login` RPC |
 | `iap` | `[jwt, iap_assertion, cidr(trusted_cidrs)?, loopback] (+ anonymous if optional)` | same chain `enforcing()` builds today |
 | `cidr`-only (`trusted_cidrs`, no provider) | `[cidr(trusted_cidrs), loopback] (+ anonymous if optional)` | |
 
@@ -330,15 +343,15 @@ name, so the version segment is **mandatory** (pin `versions/<n>` in prod, not
 SecretRefSpec = Annotated[str | tuple[str, ...], "secret-ref"]   # bare ref or ordered path
 ```
 
-  Marked fields (the small residue after Part 0): `AuthConfig.signing_key` (the
-  private key, §0); `StaticAuthConfig.tokens` values (`config.py:506`, dev/CI static
-  bearer); `IapAuthConfig.oauth_client_secret` (`config.py:512`). **Removed** (now
+  Marked fields, as built (exactly two remain): `AuthConfig.signing_key` (the
+  private key, §0) and `IapAuthConfig.oauth_client_secret`. **Removed** (now
   asymmetric — verify via the issuer's inline public key, no secret):
-  `ClusterFinelogConfig.delegation_key`, `ClusterFinelogConfig.static_token`
-  (`config.py:693`), `PeerConfig.static_token` (`config.py:661-664`). **Not**
-  marked: `WorkerConfig.auth_token` (`config.py:402`) — minted on the controller at
-  runtime (`local_cluster.py:207`), always empty in an authored config, so never a
-  reference and never guarded. (`previous_public_keys` are public, not secrets.)
+  `ClusterFinelogConfig.delegation_key` / `.static_token` and
+  `PeerConfig.static_token`. The `StaticAuthConfig.tokens` field is gone with the
+  whole static-token login provider (`AuthConfig` arms are now `gcp`/`iap` only).
+  **Not** marked: `WorkerConfig.auth_token` — minted on the controller at runtime,
+  always empty in an authored config, so never a reference and never guarded.
+  (`previous_public_keys` are public, not secrets.)
 - **Resolve boundary is the controller runtime, not the loader.** `load_config`
   (`config.py:1287-1315`) parses only. The controller `serve` entrypoint
   (`main.py:337`) calls `resolve_config_secrets(config)` after `load_config`,
@@ -373,58 +386,47 @@ key resolves from Secret Manager at startup, never generated into the SQLite
 `controller_secrets` table (which is node-local NVMe, commit `f691c03f2`, and
 would lose the key on node loss).
 
-## 3. Role-grant RPC + onboarding CLI (#6580, #6592)
+## 3. Roles & onboarding (#6580, #6592) — SUPERSEDED
 
-### 3.1 `SetUserRole` RPC (new, on `ControllerService`)
+> **SUPERSEDED.** The plan below (a `SetUserRole` RPC, an `iris user grant` CLI,
+> and `login`-time DB provisioning against a `users` table) was **not** built.
+> Authorization is instead a **config-driven, in-memory `RolePolicy`**: at
+> controller start, `create_controller_auth` builds a frozen map from `AuthConfig`
+> (`auth.admin_users` → `admin`, the worker machine identity → `worker`, everyone
+> else → the default role — the IAP `unprovisioned_role` on an iap cluster, `user`
+> on gcp). `role_for(user_id)` answers with no DB and no reconciliation; the `users`
+> and `api_keys` tables are dropped (migrations `0039_drop_users`,
+> `0038_drop_api_keys`). Deprovisioning is a config edit + reload, bounded by the
+> ~1h session TTL. The `login` RPC (`service.py`) verifies the identity token,
+> rejects a reserved `system:` subject, and mints a session token whose role comes
+> from that policy — so the **IAP login flip is realized as the policy default**
+> (`unprovisioned_role`, read-only `dashboard`), not a `login`-time write. The IAM
+> half of onboarding — granting `roles/iap.httpsResourceAccessor` — still stands
+> (see [`onboarding.md`](./onboarding.md)); the RPC/CLI/DB half is gone. The rest of
+> this section is retained only as a record of the abandoned plan.
 
-Today there is no role-change RPC (`set_user_role` runs only at startup). Add:
+### 3.1 (superseded) `SetUserRole` RPC — not built
 
-```proto
-message SetUserRoleRequest { string user_id = 1; string role = 2; }  // role ∈ {dashboard, user, admin}
-message SetUserRoleResponse { string user_id = 1; string role = 2; }
-```
+The plan added an admin-only `SetUserRole` RPC (`AuthzAction.MANAGE_USER_ROLES`)
+writing a `users`-table row. There is no such RPC or action; roles come from config.
 
-Handler (`iris/cluster/controller/service.py`) is admin-only via a new
-`AuthzAction.MANAGE_USER_ROLES` (`iris/rpc/auth.py`, empty allowed-set = admin
-only, like `MANAGE_OTHER_KEYS`); it `ensure_user` + `set_user_role`
-(`writes.py:742-745`). Rejects reserved `system:` user ids.
+### 3.2 (superseded) `iris user grant` CLI — not built
 
-### 3.2 `iris user grant` CLI
+The plan added an `iris user grant` command orchestrating an IAM binding, a live
+`SetUserRole` RPC, and a printed config edit. It was not built; granting a role is a
+`auth.admin_users` config edit + reload, and the IAM binding is a manual/`gcloud`
+step documented in [`onboarding.md`](./onboarding.md).
 
-```
-iris user grant \
-    --cluster <name> \
-    --user <email|sa-email> \
-    --role {dashboard|user|admin}      # default: dashboard (read-only)
+### 3.3 `login` provisioning change (#6592) — realized via the config default
 
-# Orchestrates three distinct planes (only 1 and 3 are applied live):
-#  1. [IAM]      gcloud iap web add-iam-policy-binding … roles/iap.httpsResourceAccessor  (idempotent)
-#  3. [RPC]      SetUserRole(user, role) against the live controller               (idempotent)
-#  2. [CONFIG]   if the IAP client id is absent from auth.iap.audiences, PRINT the
-#                required config edit + `iris cluster start` redeploy step         (NOT applied live)
-#  →  prints:    iap+https://<host>/proxy/<name>?audience=<iap-client-id>
-```
-
-A headless SA is granted exactly like a human (one IAM binding + `SetUserRole`) —
-no `--headless`-specific WIF orchestration in phase 1. **Phase-1 headless auth**
-(onboarding.md §#6580): attached-identity `generateIdToken` where a workload
-identity exists (no key), else a time-gated `iap-caller` SA key sourced via
-`SecretSpec` (org-policy key expiry as the gate). WIF (keyless, the
-`workloadIdentityUser`/`serviceAccountTokenCreator` bindings) is the documented
-fast-follow, not this PR. The command is idempotent for planes 1 and 3; plane 2 is
-a config edit it cannot apply to a running controller, so it prints the diff and the
-redeploy command rather than pretending to mutate live state.
-
-### 3.3 `login` provisioning change (#6592)
-
-Scoped to **IAP clusters only**: the `login` RPC (`service.py:2584-2620`)
-provisions a new IAP identity at `IapAuthConfig.unprovisioned_role` (default
-read-only `dashboard`) instead of the write-capable default `"user"`.
-`gcp`/`static` login provisioning is unchanged — there the login verifier is
-already the allowlist (`GcpAccessTokenVerifier`'s project check,
-`server_auth.py:189-196`). Claims trap (runbook): role is baked into the 30-day
-JWT and `verify()` never reads the user store, so a grant applies only after the
-user re-runs `iris login`.
+The behavior the plan wanted holds, by a different mechanism: on an IAP cluster the
+`login` RPC resolves a non-admin identity to `IapAuthConfig.unprovisioned_role`
+(default read-only `dashboard`) rather than a write-capable `"user"`, because that
+is the `RolePolicy` default — not a `login`-time DB write. `gcp` login is unchanged
+(there `GcpAccessTokenVerifier`'s project check is already the allowlist). Claims
+trap (runbook): the role is baked into the session JWT and `verify()` never reads
+any store, so a config change applies only after the user re-runs `iris login`
+(and, being stateless, ages out within the ~1h session TTL regardless).
 
 ## 4. Files
 
@@ -439,27 +441,28 @@ user re-runs `iris login`.
 | `lib/iris/src/iris/cluster/controller/main.py` | resolve secrets on the `serve` path after `load_config` |
 | `lib/iris/src/iris/cluster/platforms/k8s/controller.py` | guard at `_config_json_for_configmap` |
 | `lib/iris/src/iris/cluster/platforms/gcp/controller_bootstrap.py` | guard at the render site |
-| `lib/rigging/src/rigging/token_authority.py` | **new, §0** — `SigningKey`, `JwtSigner` (EdDSA mint w/ `aud`, `public_jwks`), `JwksVerifier` (returns `VerifiedClaims`; `iss` allowlist + required `expected_audiences`); shared by service + IAP/Google verify |
+| `lib/rigging/src/rigging/token_authority.py` | **new, §0** — `SigningKey`, `JwtSigner` (EdDSA mint w/ `aud`, `public_jwks`), `JwksVerifier` (returns `VerifiedClaims`; `iss` allowlist + required `expected_audiences`); verifies the EdDSA service-token plane (IAP/Google verify separately in `server_auth.py`) |
 | `lib/rigging/src/rigging/auth.py` | **§0** token-exchange client helper (alongside `run_iap_desktop_login`), so `iris login` reuses it |
-| `lib/iris/src/iris/cluster/controller/auth.py` | **§0** `JwtTokenManager` = thin policy wrapper over `rigging.JwtSigner`/`JwksVerifier` (roles, endpoint tokens, per-surface `expected_aud`, jti-revocation); `request_auth_policy` builds `AuthStackConfig`; IAP `login` at `unprovisioned_role`; **drop** DB signing-key storage + the fail-open scope path |
+| `lib/iris/src/iris/cluster/controller/auth.py` | **§0** `JwtTokenManager` = thin policy wrapper over `rigging.JwtSigner`/`JwksVerifier` (endpoint tokens, per-surface `expected_aud`, aud↔scope binding — **no** jti-revocation); the in-memory `RolePolicy` (config roles); `request_auth_policy` builds `AuthStackConfig`; **drop** DB signing-key storage, the user store, and the fail-open scope path |
 | `lib/iris/src/iris/cluster/controller/finelog_relay.py` | **§0** `_DelegationTokenProvider` mints via the controller signer with `aud="finelog"` (drop `JwtTokenManager(delegation_key)`) |
 | `lib/iris/src/iris/cluster/config.py` | **§0** `AuthConfig.signing_key: SecretRefSpec` + `previous_public_keys`; **remove** `delegation_key` / `finelog.static_token` / `peers.static_token` (→ inline public keys); mark `SecretRefSpec` fields; `resolve_config_secrets`; `assert_no_inlined_secrets` |
 | `lib/iris/src/iris/cluster/controller/dashboard.py` | **§0** `@public GET /.well-known/jwks.json` route |
-| `lib/iris/src/iris/cli/…` | **§0** `iris cluster init-keys` (Ed25519 keypair → private to a `SecretSpec` dest); `iris user grant` (§3) |
+| `lib/iris/src/iris/cli/cluster.py` | **§0** `iris cluster init-keys` (Ed25519 keypair → private to a `--out-file` / `--gcp-secret` dest). `iris user grant` NOT built (§3, superseded) |
 | `lib/finelog/rust/src/server/auth.rs` | **§0** jwt layer verifies EdDSA via `jsonwebtoken`, **requires `aud="finelog"`** (add `aud` to `JwtClaims`), inline/`iss`-resolved public key, `Vec` for rotation; drop `hmac`/`MIN_SECRET_BYTES` |
-| `lib/finelog/src/finelog/deploy/config.py` | **§0** `JwtKeyEntry{cluster, public_keys}`; **invert** `assert_inlineable_auth` (jwt now inline-safe); drop the 16-byte min in `_validate_finelog_relay`; share the `cidr`/walk convention + contract test |
-| `lib/iris/src/iris/cluster/controller/service.py` | `SetUserRole` handler |
-| `lib/iris/src/iris/rpc/auth.py` | `AuthzAction.MANAGE_USER_ROLES` |
-| `lib/iris/proto/…` | `SetUserRoleRequest` / `SetUserRoleResponse` |
-| `lib/finelog/AGENTS.md` | fix stale "ships no auth" note (`:29-31`) |
-| `mkdocs.yml` | nav entry for `authed-service.md` |
+| `lib/finelog/src/finelog/deploy/config.py` | **§0** `JwtKeyEntry{cluster, public_keys}`; `assert_inlineable_auth` now a **no-op guard** (jwt inline-safe by construction); share the `cidr`/walk convention + conformance vectors |
+| `lib/iris/src/iris/cluster/controller/service.py` | `login` mints a session token with the `RolePolicy` role (rejects `system:`). `SetUserRole` handler NOT built (§3) |
+| `lib/iris/src/iris/cluster/controller/migrations/0038_drop_api_keys.py`, `0039_drop_users.py` | **new** — drop the `api_keys` and `users` tables (stateless verify; config roles) |
+| `lib/iris/proto/…` | `SetUserRoleRequest` / `SetUserRoleResponse` NOT built (§3) |
+| `lib/finelog/rust/src/server/auth.rs` (test) | `conformance_vectors_match_rigging` runs the shared `auth_vectors.json`; cidr layer refuses `X-Forwarded-For` |
+| `lib/finelog/AGENTS.md` | stale "ships no auth" note fixed |
+| `mkdocs.yml` | nav entry for `authed-service.md` (that runbook is not yet written) |
 
 ## 5. Out of scope (this spec = Phase 1)
 
 - **The Phase-2 Rust *verify* engine** (design §Phasing, Open Question 1) — this
   spec pins the schema + conformance vectors + secrets + onboarding. If Phase 2 is
   built (gated on the vectors showing semantic drift), it generalizes finelog's
-  `lib/finelog/rust/src/server/auth.rs` (cidr + HS256) with **ES256 IAP-assertion**
+  `lib/finelog/rust/src/server/auth.rs` (cidr + EdDSA) with **ES256 IAP-assertion**
   and **RS256 Google-ID-token** verify (`jsonwebtoken` + a JWKS fetch/cache),
   exposed to rigging via the existing pyo3/abi3 wheel pattern
   (`lib/finelog/rust/pyext/`); the engine returns `VerifiedIdentity{email,
@@ -471,8 +474,9 @@ user re-runs `iris login`.
   not the stack (design Open Questions).
 - **A first-class runtime k8s Secret fetch** (`k8s-secret://`) — deliberately
   excluded (RBAC escalation, §2).
-- Token refresh / rotation for the 30-day iris JWT (deferred in
-  `20260312_iris_auth_design.md`).
+- Token refresh for the session JWT (deferred in `20260312_iris_auth_design.md`);
+  the client re-runs `iris login`. (The 30-day worker token is a separate residual
+  — see design "Resolved decisions".)
 - Generalizing scoped tokens from a single `audience` to a `scopes` set
   (deferred in `2026-07-02_iris_per_endpoint_ingress_auth.md`).
 - Unauthenticated bundle downloads (flagged in research §6; not committed here).

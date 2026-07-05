@@ -103,6 +103,11 @@ this seam, not a missing seam.
   anonymous (`auth.py:404-405,433-436`). `IapAuthConfig.unprovisioned_role`
   (default `"dashboard"`, read-only) applies only to tokenless assertion
   callers who never ran `iris login`.
+  **As built (divergence from this baseline):** the umbrella dropped the `users`
+  table and the planned `SetUserRole` RPC entirely; roles are now a config-driven
+  in-memory `RolePolicy` (`admin_users` + `unprovisioned_role`), and
+  `unprovisioned_role` became the login default for every non-admin IAP identity
+  (design §4).
 
 ## 3. Finelog server policy (the second, drifting implementation)
 

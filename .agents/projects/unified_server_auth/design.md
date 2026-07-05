@@ -7,11 +7,20 @@ authenticator chain, and the two enforcement points a service mounts
 unconditionally ([`server_auth.py`](https://github.com/marin-community/marin/blob/5a6f64cbeef5e1962ed367deb3aaf72956ddb4d1/lib/rigging/src/rigging/server_auth.py)).
 The "sloppiness" the audit names is four gaps *around* that seam. This umbrella
 picks one standard pattern for **defining a new authed service**, **where auth
-config and keys live**, and **how services and clients authenticate** — closing
-out #6861, #6873, #6580, #6592 as one posture. Because **no service tokens are
-deployed yet**, it also makes the one breaking change worth making now: asymmetric
-keys. Full current-state map and external prior art: [`research.md`](./research.md);
-contracts: [`spec.md`](./spec.md); headless onboarding + user tightening:
+config and keys live**, and **how services and clients authenticate** as one
+posture. Because **no service tokens were deployed yet**, it also made the one
+breaking change worth making: asymmetric keys.
+
+**Issue status (as built).** #6861 (declarative schema) — done, the shared
+`AuthStackConfig` + conformance vectors (§1). #6873 (plaintext secrets) — done,
+`rigging/secrets.py` + the render guard (§2). #6580/#6592 (headless onboarding +
+user tightening) — addressed by config-driven roles and the IAP login flip (§4),
+**not** the originally-planned `SetUserRole` RPC / `iris user grant` / `users`-table
+provisioning (spec §3, superseded). #6961 (shared-finelog controller-key
+provisioning) — a documented placeholder, owned by a marin admin script (§5).
+
+Full current-state map and external prior art: [`research.md`](./research.md);
+contracts: [`spec.md`](./spec.md); headless onboarding + roles:
 [`onboarding.md`](./onboarding.md).
 
 ## Overall shape
@@ -29,7 +38,7 @@ graph TD
         SEC["secrets<br/>resolve_secret_spec"]
         CL["client<br/>providers · credentials · login exchange"]
     end
-    IRIS["iris — policy + wiring<br/>roles · user store · endpoint tokens · revocation"]
+    IRIS["iris — policy + wiring<br/>config roles · endpoint tokens · login"]
     FL["finelog — Rust<br/>auth.rs layer stack"]
     SVC["any new authed service"]
     IRIS --> TA
@@ -85,9 +94,10 @@ The generic mechanism lives in `rigging.token_authority`; iris keeps only policy
 **This retires #6873's headline secret:** `delegation_key` (a *shared symmetric
 HMAC secret* finelog verifies with, that "anyone who reads can mint") becomes the
 controller's **public** key — inline-safe, not a secret. `peers.static_token` and
-`finelog.static_token` retire the same way. So `assert_inlineable_auth` *inverts*
-(a jwt layer is now inline-safe), and the `SecretSpec` residue shrinks to the
-private key plus dev/CI static tokens and the IAP OAuth secret.
+`finelog.static_token` retire the same way. So `assert_inlineable_auth` is now a
+no-op guard (a jwt layer is inline-safe by construction), and the `SecretSpec`
+residue shrinks to exactly two fields — the private signing key and the IAP OAuth
+client secret (the static-token provider is gone entirely).
 
 **MANDATORY corollary — per-plane audience binding (RFC 8725).** One key removes
 the incidental isolation a *dedicated* symmetric key gave (a finelog-verifiable
@@ -95,46 +105,64 @@ token physically couldn't mint control-plane tokens). Without audience binding,
 sig+exp-only verification would let any iris token verify at any federated
 finelog, and let a compromised global finelog **replay** a delegation token at the
 controller's RPC surface. So every token carries an `aud` naming exactly one
-plane, every verifier **requires** its expected `aud`, and **revocation stays
-local** — remote verifiers only ever see short-TTL, plane-scoped tokens; long-lived
-control-plane JWTs are verified only by the issuing controller (where the jti
-revocation set lives).
+plane, and every verifier **requires** its expected `aud` (iris's control-plane
+verifier is fixed to `{iris, iris-proxy}`; finelog to `{finelog}`).
+
+**As built, verification is fully stateless** — pure crypto plus the `aud`↔scope
+binding, with **no database read, no jti revocation list, and no session TTL
+beyond an hour**. This is the biggest divergence from the original plan: there is
+nothing to revoke remotely because there is nothing to revoke at all. A session
+token is short (`SESSION_TOKEN_TTL_SECONDS` ~1h), so deprovisioning is bounded by
+that TTL rather than by a revocation set; the one long-lived residual is the shared
+worker machine token (`WORKER_TOKEN_TTL_SECONDS`, 30d), whose only kill switch is
+rotating the cluster signing key. Remote verifiers (finelog) still only ever see
+short-TTL, plane-scoped tokens.
 
 ```mermaid
 graph LR
     K["per-cluster Ed25519 key<br/>(from SecretSpec)"] --> S["JwtSigner (rigging)"]
-    S -->|"aud=iris"| T1["control-plane<br/>user / worker · ≤30d"]
+    S -->|"aud=iris"| T1["control-plane<br/>user session ~1h · worker 30d"]
     S -->|"aud=finelog"| T2["delegation · ≤1h"]
-    S -->|"aud=&lt;endpoint&gt;, scope=proxy"| T3["endpoint · ≤24h"]
-    S -->|"aud=iris-peer"| T4["peer · short"]
-    T1 -->|"revocation is local"| V1["ONLY the issuing controller"]
+    S -->|"aud=iris-proxy, scope=proxy, endpoint=&lt;name&gt;"| T3["endpoint · ≤24h"]
+    T1 -->|"stateless verify — no revocation"| V1["ONLY the issuing controller"]
     T2 --> V2["federated finelog<br/>requires aud=finelog"]
-    T3 --> V3["/proxy gate<br/>requires scope=proxy"]
-    T4 --> V4["peer controller<br/>requires aud=iris-peer"]
+    T3 --> V3["/proxy gate<br/>requires scope=proxy + endpoint claim"]
 ```
 
-**Federation — how controller A talks to B.** Each controller is its own issuer
-(`iss=<cluster>`, own keypair + JWKS). A mints `iss=A, aud=iris-peer`; B verifies
-against **A's public key**, resolved by `iss` from B's *configured* allowlist
-(never a URL from the token — SSRF), and checks `aud`. No shared secret; blast
-radius stays per-cluster. (A marin **root** signing cluster keys — a CA / SPIFFE
-trust domain — is the scaling step if cluster count grows.)
+**Federation — how a controller talks to a shared finelog.** Each controller is
+its own issuer (`iss=<cluster>`, own keypair + JWKS). The one *built*
+cross-service verify path is the finelog **delegation** token (§5): the controller
+mints `iss=<cluster>, aud="finelog"`; a shared/global finelog verifies it against
+**that controller's public key**, resolved by `iss` from finelog's *configured*
+inline allowlist (never a URL from the token — SSRF), and requires `aud="finelog"`.
+No shared secret; blast radius stays per-cluster.
+
+The generic mechanism — `JwksVerifier` with a multi-issuer `iss → [public PEM]`
+allowlist — lives in rigging and would equally back controller-to-controller
+**peer** federation (a reserved `aud="iris-peer"` plane, which finelog already
+rejects as a cross-plane replay in its conformance vectors). That peer plane is
+**not yet minted**: today a controller reaches a peer over the ordinary rigging
+client-credential path (`credentials_for`), so no `iris-peer` token is issued and
+iris's own control-plane verifier trusts only its own issuer. (A marin **root**
+signing cluster keys — a CA / SPIFFE trust domain — is the scaling step if cluster
+count grows.)
 
 ```mermaid
 sequenceDiagram
-    participant A as Controller A (iss=A)
-    participant B as Controller B
-    Note over A: mint iss=A, aud=iris-peer, short TTL
-    A->>B: RPC + Bearer token
-    Note over B: resolve A's public key by iss<br/>from the configured allowlist
-    B->>B: verify EdDSA sig + exp + aud=iris-peer
+    participant A as Controller (iss=A)
+    participant B as Shared finelog
+    Note over A: mint iss=A, aud=finelog, ≤1h TTL
+    A->>B: log RPC + Bearer token
+    Note over B: resolve A's public key by iss<br/>from the configured inline allowlist
+    B->>B: verify EdDSA sig + exp + aud=finelog
     B-->>A: response (or 401 on sig/iss/aud mismatch)
 ```
 
-One verification mechanism serves everything: the IAP assertion (ES256), Google
-ID tokens (RS256), and service tokens (EdDSA) all verify through the same JWKS
-machinery, and finelog verifies with the same `jsonwebtoken` crate the Phase-2
-engine would use.
+The EdDSA service-token path is **one contract across languages**:
+`rigging.token_authority` mints and verifies it in Python, and finelog verifies the
+identical frozen token with `jsonwebtoken` in Rust (both bound by the shared
+conformance vectors, §1). The IAP assertion (ES256) and Google ID tokens (RS256)
+verify separately through `google-auth`'s verifiers.
 
 ### 1. One declarative auth-stack schema (#6861)
 
@@ -201,10 +229,10 @@ this one path.**
 ### 3. Consistent posture + the rollout runbook
 
 Both iris and finelog express their request stack in the §1 schema (default-deny,
-allow-localhost, `cidr` for direct-peer trust, `jwt`, IAP in front); finelog also
-gets a docs fix (`finelog/AGENTS.md:29-31` still claims it "ships no auth"). The
-**missing artifact** is a single page, `lib/rigging/docs/authed-service.md`, that
-walks a service author through: mount `PolicyAuthInterceptor` + `RouteAuthMiddleware`
+allow-localhost, `cidr` for direct-peer trust, `jwt`, IAP in front); finelog's
+stale "ships no auth" note (`finelog/AGENTS.md`) is fixed. The one **still-pending
+artifact** is a single page, `lib/rigging/docs/authed-service.md` (not yet written),
+that would walk a service author through: mount `PolicyAuthInterceptor` + `RouteAuthMiddleware`
 unconditionally; declare the stack; inject a verifier + role resolver; annotate
 routes `@public`/`@requires_auth`; read `get_verified_identity()`; front with IAP
 (`iap_gclb.py`) / Traefik (`install_traefik_proxy.py`) or expose at `/proxy/<name>`;
@@ -213,26 +241,72 @@ source secrets via `SecretSpec`. It calls out that a `cidr` layer grants
 **client** recipe sits alongside: `credentials_for(cluster, auth)` →
 `ClientCredentials.interceptors()` → `connect(transport, factory, auth=...)`.
 
-### 4. Headless onboarding + user tightening → [`onboarding.md`](./onboarding.md)
+### 4. Roles & headless onboarding (#6580, #6592) → [`onboarding.md`](./onboarding.md)
 
-The #6580/#6592 slice — headless SA onboarding (phase 1: attached-identity
-`generateIdToken` / a time-gated SA key, with keyless WIF as the documented
-fast-follow), the `SetUserRole` RPC + `iris user grant` CLI, and the IAP
-`login`-provisioning flip — is a nearly-independent workstream, split into its own
-doc.
+**Roles are config, not a table.** As built there is **no `users` table, no
+`SetUserRole` RPC, and no `iris user grant` CLI** (the original plan, spec §3, was
+superseded). Authorization is an in-memory `RolePolicy`
+(`iris/cluster/controller/auth.py`) built from `AuthConfig` on controller start:
+`role_for(user_id)` maps the worker machine identity (`system:worker`) to `worker`,
+an `auth.admin_users` entry to `admin`, and everyone else to the default role — the
+IAP `unprovisioned_role` on an iap cluster, `user` on gcp. Cluster config is the
+sole source of truth and is reconciled on start; deprovisioning is a config edit +
+reload, bounded by the session TTL (a token already minted keeps its old role only
+until it ages out ~1h). `login` verifies the presented identity token, rejects a
+reserved `system:` subject, and mints a session token whose role comes from the
+policy — **never from the incoming token**.
+
+**Two IAP verification paths.** `IapIdTokenVerifier` verifies a Google OIDC
+ID-token bearer (the `iris login` proof); it only needs reachability to Google's
+certs, so it works on CoreWeave/k8s as well as GCP. `IapAssertionVerifier` verifies
+the `X-Goog-IAP-JWT-Assertion` signed header IAP's edge attaches, so it is
+GCP-edge-only; a tokenless browser request behind IAP is authenticated by it and
+resolved to a role through the same `RolePolicy`.
+
+**Headless SA onboarding** (phase 1: attached-identity `generateIdToken` / a
+time-gated SA key, keyless WIF as the documented fast-follow) lands as planned and
+is detailed in [`onboarding.md`](./onboarding.md). Its IAM half — granting
+`roles/iap.httpsResourceAccessor` — still stands; the RPC/DB-provisioning half is
+replaced by the config edit above.
+
+### 5. finelog federation (delegation tokens, #6961)
+
+A cluster forwards its logs to a shared/global finelog by presenting a delegation
+JWT: the controller mints `aud="finelog"`, `role="finelog-relay"`, ≤1h TTL
+(`finelog_relay.py`), and the shared finelog verifies it against a **static inline
+allowlist of controller public keys** in its `jwt` auth layer (Rust `auth.rs`:
+`jsonwebtoken` EdDSA, `aud="finelog"` required). The public keys are inline-safe —
+`assert_inlineable_auth` is now a no-op guard kept only so re-introducing a
+secret-bearing layer must consciously restore the check — so no secret crosses the
+deploy boundary.
+
+Populating that allowlist — deriving each controller's public key and writing it
+into the shared finelog's config — is **cross-service orchestration that does not
+belong in iris**: iris imports finelog and must not render finelog's deploy config.
+It is a top-level marin admin-script concern, tracked in **#6961**. The finelog
+deploy configs carry a commented placeholder for that `jwt` layer until the script
+lands; a null-auth cluster instead reaches a same-VPC/loopback finelog through a
+`cidr` layer with no token.
 
 ## Phasing & the Rust engine
 
-- **Phase 1 (this design's core):** the token switch (§0) + declarative schema +
-  conformance vectors + `secrets.py`, plus the onboarding work. No packaging change.
-- **Phase 2 (final, optional): a shared Rust *verify* engine.** Server-side
+- **Phase 1 (built):** the token switch (§0) + declarative schema + conformance
+  vectors + `secrets.py`, plus config-driven roles (§4) and the IAP login flip. All
+  landed; no packaging change. Where the build diverged from the plan is recorded
+  inline above: verification is stateless (no jti store, no `api_keys` table, no
+  `users` table, no `SetUserRole` RPC / `iris user grant` CLI); control-plane
+  sessions are ~1h (the shared worker token is the one 30-day residual); the
+  static-token provider and `StaticAuthConfig` arm are gone (providers are gcp/iap,
+  plus cidr/null-auth); and populating a shared finelog's public-key allowlist is
+  deferred to a marin admin script (#6961).
+- **Phase 2 (not built, still gated): a shared Rust *verify* engine.** Server-side
   verification is standard JWT crypto — IAP (ES256), Google ID token (RS256), and
   EdDSA service tokens all verify with `jsonwebtoken` + a JWKS cache, and finelog
   **already** verifies in Rust and **already ships a pyo3/abi3 wheel**
   (`lib/finelog/rust/pyext/`). So the engine generalizes `auth.rs` + ports the pure
   layers of `server_auth.py` behind an existing packaging pattern; it returns
-  verified claims and Python assigns the role (the email→role resolver hits iris's
-  DB — a Python callback). **Client-side minting stays Python and *standard*** (WIF
+  verified claims and Python assigns the role (the in-memory config `RolePolicy`
+  resolves email→role — a Python callback, no DB). **Client-side minting stays Python and *standard*** (WIF
   for headless, installed-app OAuth for humans, `iris login` as a token-exchange in
   the RFC 8693 *pattern*) — there is no bespoke Rust re-mint to write. **Recommend
   building Phase 2 only if the conformance vectors surface real semantic drift**;
@@ -252,24 +326,38 @@ worker-JWT attribution, scoped-token RPC denial). The load-bearing #6873 test is
 (a control-plane token must be rejected by finelog; a delegation token by the RPC
 surface). Rollout: exercised against the Iris dev controller before marin.
 
-## Open Questions
+## Resolved decisions & remaining options
 
-- **Signature algorithm: EdDSA vs ES256.** Recommend **EdDSA (Ed25519)** — small,
-  modern, PyJWT (`cryptography`) + Rust `jsonwebtoken`. ES256 is the conservative
-  choice if a future non-Rust/non-Python verifier matters.
-- **Does any symmetric bearer survive?** Part 0 retires `delegation_key`,
-  `finelog.static_token`, *and* `peers.static_token`. Only `StaticAuthConfig.tokens`
-  remains — keep it as dev/CI convenience (guarded by `SecretSpec`), or make static
-  tokens test-only?
+Decisions the build settled:
+
+- **Signature algorithm: EdDSA (Ed25519), chosen and shipped.** PyJWT
+  (`cryptography`) mints/verifies; finelog's Rust `jsonwebtoken` verifies the same
+  frozen contract. ES256 was the alternative if a future non-Rust/non-Python
+  verifier mattered — not needed.
+- **No symmetric bearer survives on the verify path.** `delegation_key`,
+  `finelog.static_token`, and `peers.static_token` are removed; the static-token
+  login provider and the `StaticAuthConfig` arm are gone entirely (iris providers
+  are `gcp`/`iap`, plus cidr/null-auth). The only client-side static primitive left
+  is rigging's `StaticTokenProvider`, no longer wired into an iris login arm.
+- **No token revocation, no `users` table, no role-grant RPC.** Verification is
+  stateless; roles come from the in-memory config `RolePolicy` (§4). Deprovisioning
+  is a config edit + reload, bounded by the ~1h session TTL.
+- **`SecretSpec` default path kept** (`env:` → `file:`; `gcp-secret://` always
+  explicit since its version can't be conventional): a field with no explicit
+  reference resolves via `default_secret_spec`.
+
+Still genuinely open / deferred:
+
 - **Biscuit — optional, attenuation-only, separate.** With asymmetric native, its
   only residual win is offline *attenuation* of scoped `/proxy` tokens (self-mint).
-  It replaces the `jwt` layer, not the stack. Recommend: skip for the core;
-  evaluate separately only if offline capability-attenuation is wanted.
-- **Commit to the Phase-2 Rust engine now, or gate on drift?** Recommend gate;
-  verify-only; mint stays Python.
-- **`SecretSpec` default path** (`env:` → `file:`; `gcp-secret://` always explicit
-  since its version can't be conventional). Keep the field-name→source default, or
-  require every secret to be explicit?
+  It replaces the `jwt` layer, not the stack. Skipped for the core; evaluate
+  separately only if offline capability-attenuation is wanted.
+- **Phase-2 Rust *verify* engine — gated on drift.** Not built; verify-only if
+  built, mint stays Python.
+- **Worker-token hardening.** The 30-day shared worker token
+  (`WORKER_TOKEN_TTL_SECONDS`) is a known residual: its only kill switch is signing-
+  key rotation. Per-worker short-lived tokens (or a worker-credential rotation lever)
+  are a tracked follow-up.
 - **Out of scope (confirming):** unauthenticated bundle downloads (deferred in
-  `20260312_iris_auth_design.md`) and 30-day-JWT refresh stay out — flag if you
+  `20260312_iris_auth_design.md`) and session-JWT refresh stay out — flag if you
   disagree.
