@@ -406,13 +406,31 @@ def test_dashboard_task_logs(smoke_cluster, verbose_job, smoke_page, smoke_scree
     task_id = task_status.task_id
     job_id = verbose_job.job_id.to_wire()
 
+    _console: list[str] = []
+    _errors: list[str] = []
+    if not isinstance(smoke_page, _NoOpPage):
+        smoke_page.on("console", lambda m: _console.append(f"{m.type}: {m.text}"))
+        smoke_page.on("pageerror", lambda e: _errors.append(str(e)))
+
     dashboard_goto(smoke_page, f"{smoke_cluster.url}/job/{job_id}/task/{task_id}")
     wait_for_dashboard_ready(smoke_page)
 
-    smoke_page.wait_for_function(
-        "() => document.body.textContent.includes('DONE: all lines emitted')",
-        timeout=10000,
-    )
+    try:
+        smoke_page.wait_for_function(
+            "() => document.body.textContent.includes('DONE: all lines emitted')",
+            timeout=10000,
+        )
+    except Exception:
+        if not isinstance(smoke_page, _NoOpPage):
+            print("DIAG console:\n  " + "\n  ".join(_console))
+            print("DIAG pageerrors:\n  " + "\n  ".join(_errors))
+            panel = smoke_page.evaluate(
+                "() => (document.querySelector('#task-logs-section') || {}).innerText || 'NO #task-logs-section'"
+            )
+            print(f"DIAG task-logs-section:\n{panel[:2000]}")
+            body = smoke_page.evaluate("() => document.body.innerText")
+            print(f"DIAG body_len={len(body)}\nDIAG body_head:\n{body[:2500]}")
+        raise
     smoke_screenshot(
         "task-logs-default",
         "Task detail page with a log viewer panel displaying log output lines. "
