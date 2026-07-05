@@ -146,7 +146,6 @@ def merge_task_termination(
     *,
     stamp_attempt_finished: bool,
     attempt_state: int | None = None,
-    failure_count: int | None = None,
 ) -> None:
     """Move a task to ``task_state`` and record its attempt + endpoint deletion.
 
@@ -155,10 +154,9 @@ def merge_task_termination(
     producer-style terminations leave it NULL so the worker's next terminal
     status update lands the timestamp.
 
-    ``failure_count`` is optional overlay scratch for the job-level
-    ``total_failures`` budget (see :class:`TaskRowDelta`); it is not persisted.
-    The preemption count is not carried: it is derived from the attempt rows,
-    and the executing-phase attempt this records already encodes it.
+    No retry counter is carried: both the failure and preemption counts derive
+    from the attempt rows this records (see
+    ``iris.cluster.controller.attempt_counts``).
 
     An already-terminal attempt is left untouched: killing a PENDING task (a
     cancel or a job-failure cascade) must not overwrite the historical outcome of
@@ -190,7 +188,6 @@ def merge_task_termination(
             state=task_state,
             error=error,
             finished_at=task_finished_at,
-            failure_count=failure_count,
         )
     )
     state.emit_endpoint_deletion(task_name)
@@ -401,10 +398,11 @@ def apply_one_transition(
     task_state = prior_state
     task_error = update.error
     task_exit = update.exit_code
-    # Budget counters read from the raw snapshot row (not the overlay): safe because
-    # current_attempt_id is immutable within a batch (it is not a TaskRowDelta field)
-    # and the terminal-attempt revival guard above drops any second non-terminal update
-    # for the same current attempt, so each counter is charged at most once per batch.
+    # Committed-derived per-task retry counters read from the snapshot row, used only
+    # for this attempt's local retry decision (failure gates on max_retries_failure,
+    # preemption on max_retries_preemption). Nothing prospective is carried across the
+    # batch: the job-wide failure budget derives from the FAILED attempt this records
+    # (see Overlay.job_basis), symmetric with preemption.
     failure_count = task.failure_count
     preemption_count = task.preemption_count
     charge_worker_build_failures = source is TransitionSource.WORKER_RECONCILE
@@ -504,7 +502,6 @@ def apply_one_transition(
             exit_code=task_exit,
             started_at=started_at,
             finished_at=task_finished_at,
-            failure_count=failure_count,
             container_id=update.container_id,
         )
     )
@@ -533,7 +530,7 @@ def timeout_one(
     reason: str,
     now_ms: int,
 ) -> None:
-    """Mark one task FAILED via timeout. Per-task mutation only."""
+    """Mark one task FAILED via timeout by recording a FAILED attempt. Per-task mutation only."""
     merge_task_termination(
         state,
         row.task_id.to_wire(),
@@ -542,5 +539,4 @@ def timeout_one(
         reason,
         now_ms,
         stamp_attempt_finished=False,
-        failure_count=row.failure_count + 1,
     )

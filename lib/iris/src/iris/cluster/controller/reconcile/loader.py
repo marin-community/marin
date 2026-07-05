@@ -20,6 +20,7 @@ from iris.cluster.controller.reconcile.snapshot import (
     JobStateBasis,
     TaskHistogramRow,
     TransitionSnapshot,
+    pick_earliest_task_error,
 )
 from iris.cluster.controller.schema import (
     job_config_table,
@@ -149,12 +150,9 @@ def _bulk_load_job_state_basis(
         rows = all_tasks_by_job.get(job_id, ())
         histogram: dict[int, int] = {}
         total_failures = 0
-        first_error: str | None = None
         for row in rows:
             histogram[row.state] = histogram.get(row.state, 0) + 1
             total_failures += row.failure_count
-            if first_error is None and row.error is not None:
-                first_error = row.error
 
         result[job_id] = JobStateBasis(
             job_id=job_id,
@@ -163,7 +161,9 @@ def _bulk_load_job_state_basis(
             max_task_failures=max_task_failures,
             task_state_counts=histogram,
             total_failures=total_failures,
-            first_task_error=first_error,
+            first_task_error=pick_earliest_task_error(
+                (row.task_index, row.state, row.finished_at, row.error) for row in rows
+            ),
         )
     return result
 
@@ -184,6 +184,7 @@ def _load_all_tasks_for_jobs(cur: Tx, job_ids: Iterable[JobName]) -> dict[JobNam
             local_tasks.c.task_index,
             local_tasks.c.state,
             local_tasks.c.error,
+            local_tasks.c.finished_at_ms,
         ).where(local_tasks.c.job_id.in_(bindparam("job_ids", expanding=True))),
         {"job_ids": ids},
     ).all()
@@ -197,6 +198,7 @@ def _load_all_tasks_for_jobs(cur: Tx, job_ids: Iterable[JobName]) -> dict[JobNam
                 state=int(r.state),
                 failure_count=counts.get(r.task_id, AttemptCounts()).failure_count,
                 error=str(r.error) if r.error is not None else None,
+                finished_at=r.finished_at_ms,
             )
         )
     return {jid: tuple(sorted(rows, key=lambda row: row.task_index)) for jid, rows in grouped.items()}

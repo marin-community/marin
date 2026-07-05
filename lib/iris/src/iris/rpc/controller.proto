@@ -240,6 +240,9 @@ message Controller {
     iris.job.TaskStatus task = 1;
     // Job-level resource limits for this task's parent job.
     iris.job.ResourceSpecProto job_resources = 2;
+    // Likely root-cause log lines distilled from the task's own logs, populated
+    // only for a failed task. Empty for healthy tasks or when no logs matched.
+    repeated string root_cause_highlights = 3;
   }
 
   message ListTasksRequest {

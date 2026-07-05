@@ -675,6 +675,12 @@ def _build_pod_manifest(
         "workingDir": "/app",
         "volumeMounts": vol_mounts,
         "command": ["bash", "-lc", _build_task_script(run_req)],
+        # Without this, a non-zero exit leaves containerStatuses[].state.terminated
+        # with an empty message and a bare "Error" reason, burying the actual
+        # crash (JAX traceback, fatal-error banner, OOM abort, ...) in logs the
+        # operator has to pull separately. This has the kubelet populate the
+        # message with the container's own tail log output instead.
+        "terminationMessagePolicy": "FallbackToLogsOnError",
     }
     # Operator-injected env (defaults.inject_env). envFrom is the lowest
     # precedence in K8s, so explicit env entries above (user -e, iris vars) win.

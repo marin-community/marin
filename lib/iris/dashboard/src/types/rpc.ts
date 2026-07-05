@@ -233,6 +233,8 @@ export interface LaunchJobRequest {
 export interface GetTaskStatusResponse {
   task: TaskStatus
   jobResources?: ResourceSpecProto
+  /** Likely root-cause log lines distilled from a failed task's logs. */
+  rootCauseHighlights?: string[]
 }
 
 export interface ListTasksResponse {

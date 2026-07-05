@@ -36,6 +36,7 @@ from iris.cluster.controller.reconcile.snapshot import (
     TaskHistogramRow,
     TaskUpdate,
     TransitionSnapshot,
+    pick_earliest_task_error,
 )
 from iris.cluster.controller.reconcile.task import TerminalDecision, TerminalKind
 from iris.cluster.controller.scheduling.policy import build_scheduling_context, compute_demand_entries
@@ -903,6 +904,90 @@ def test_preemption_does_not_count_toward_max_task_failures(state):
     assert tasks[0].state == job_pb2.TASK_STATE_PENDING
     assert check_task_can_be_scheduled(tasks[0])
     assert _query_job(state, job.job_id).state == job_pb2.JOB_STATE_RUNNING
+
+
+def test_coscheduled_crash_loop_fails_on_cumulative_budget(state):
+    """A coscheduled gang crash-looping across rounds fails on the cumulative budget.
+
+    One task crashes per round; its siblings bounce COSCHED_FAILED, which charges
+    neither budget, so exactly one FAILED attempt accrues per crashed round. A
+    different task crashes each round, so no single task exhausts its own retry
+    budget — only the derived job-wide count crosses ``max_task_failures``.
+
+    The RUNNING → RUNNING → FAILED sequence at ``max_task_failures=2`` pins the accrual
+    to exactly one per round: had the bounced siblings' COSCHED_FAILED attempts been
+    miscounted as failures, round 1 alone would charge four and trip the budget early.
+    """
+    for i in range(4):
+        meta = make_worker_metadata()
+        meta.attributes[WellKnownAttribute.TPU_NAME].string_value = "tpu-a"
+        meta.attributes[WellKnownAttribute.TPU_WORKER_ID].int_value = i
+        register_worker(state, f"w{i}", f"addr{i}:8080", meta)
+
+    req = controller_pb2.Controller.LaunchJobRequest(
+        name="crash-loop",
+        entrypoint=_make_test_entrypoint(),
+        resources=job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
+        replicas=4,
+        environment=job_pb2.EnvironmentConfig(),
+        max_retries_failure=5,  # generous per-task budget; no single task exhausts it
+        max_task_failures=2,  # job-wide budget trips on the 3rd cumulative failure
+    )
+    req.coscheduling.group_by = WellKnownAttribute.TPU_NAME
+    tasks = submit_job(state, "j1", req)
+    job_id = JobName.root("test-user", "j1")
+
+    # Rounds 1 and 2 (cumulative 1, then 2) stay within budget; the job keeps running.
+    for round_idx in range(2):
+        for i, task in enumerate(tasks):
+            dispatch_task(state, task, WorkerId(f"w{i}"))
+        transition_task(state, tasks[round_idx].task_id, job_pb2.TASK_STATE_FAILED, error=f"crash {round_idx}")
+        assert _query_job(state, job_id).state == job_pb2.JOB_STATE_RUNNING
+
+    # Round 3: a third distinct task crashes -> cumulative 3 > max_task_failures=2 ->
+    # the job fails on the derived budget, even though every task failed at most once.
+    for i, task in enumerate(tasks):
+        dispatch_task(state, task, WorkerId(f"w{i}"))
+    transition_task(state, tasks[2].task_id, job_pb2.TASK_STATE_FAILED, error="crash 2")
+    assert _query_job(state, job_id).state == job_pb2.JOB_STATE_FAILED
+    # Death was the cumulative budget, not a single task exhausting max_retries_failure.
+    for task in tasks:
+        assert _query_task(state, task.task_id).failure_count <= 1
+
+
+def test_timeout_charges_cumulative_failure_budget(state):
+    """An execution timeout charges the failure budget through the FAILED attempt it records.
+
+    ``timeout_one`` carries no counter; the charge is entirely the FAILED attempt. A
+    single timeout in a two-task job crosses ``max_task_failures=0`` while the sibling
+    is still RUNNING, so the cumulative-budget branch (not the all-terminal branch)
+    fails the job.
+    """
+    for i in range(2):
+        register_worker(state, f"w{i}", f"host{i}:8080", make_worker_metadata())
+
+    req = controller_pb2.Controller.LaunchJobRequest(
+        name="timeout-job",
+        entrypoint=_make_test_entrypoint(),
+        resources=job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
+        replicas=2,
+        environment=job_pb2.EnvironmentConfig(),
+        max_task_failures=0,
+    )
+    tasks = submit_job(state, "j1", req)
+    job_id = JobName.root("test-user", "j1")
+
+    for i, task in enumerate(tasks):
+        dispatch_task(state, task, WorkerId(f"w{i}"))
+
+    with state._db.transaction() as cur:
+        finalize(
+            cur, [TerminalDecision(TerminalKind.TIMEOUT, tasks[0].task_id, "execution timeout")], now=Timestamp.now()
+        )
+
+    assert _query_task(state, tasks[0].task_id).state == job_pb2.TASK_STATE_FAILED
+    assert _query_task(state, tasks[0].task_id).failure_count == 1
+    assert _query_job(state, job_id).state == job_pb2.JOB_STATE_FAILED
 
 
 # =============================================================================
@@ -4443,3 +4528,26 @@ def test_recompute_keeps_job_running_within_budget(task_states, failure_counts, 
     new_state = recompute_state(ws, jid)
 
     assert new_state == job_pb2.JOB_STATE_RUNNING
+
+
+def test_pick_earliest_task_error_reports_first_failed_task():
+    """job.error names the sibling that crashed first, skipping followers that
+    only timed out later, tasks still retrying, and tasks that later succeeded.
+    """
+    root_cause = "CUDA error: an illegal memory access was encountered"
+    follower = "Barrier result: DEADLINE_EXCEEDED; timed out waiting for task 1"
+    candidates = [
+        (0, job_pb2.TASK_STATE_FAILED, Timestamp.from_ms(2000), follower),
+        (1, job_pb2.TASK_STATE_FAILED, Timestamp.from_ms(500), root_cause),
+        (2, job_pb2.TASK_STATE_PENDING, None, "requeued after preemption"),
+        (3, job_pb2.TASK_STATE_SUCCEEDED, Timestamp.from_ms(100), "earlier flake, since retried"),
+    ]
+    assert pick_earliest_task_error(candidates) == root_cause
+
+
+def test_pick_earliest_task_error_none_without_a_failed_task():
+    candidates = [
+        (0, job_pb2.TASK_STATE_SUCCEEDED, Timestamp.from_ms(100), "stale error"),
+        (1, job_pb2.TASK_STATE_PENDING, None, "requeued"),
+    ]
+    assert pick_earliest_task_error(candidates) is None

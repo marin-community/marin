@@ -51,6 +51,9 @@ const task = computed(() => taskResponse.value?.task ?? null)
 
 const jobResources = computed(() => taskResponse.value?.jobResources ?? null)
 
+// Root-cause log lines the controller distilled from a failed task's logs.
+const rootCauseHighlights = computed(() => taskResponse.value?.rootCauseHighlights ?? [])
+
 // Endpoints this task registered with the controller. Each is reachable
 // through the controller's reverse proxy, so we render a link to jump to an
 // attached dashboard/server without looking up its address.
@@ -449,6 +452,15 @@ watch(() => props.taskId, async () => {
           <MarkdownRenderer :content="statusTextDetail" />
         </div>
       </InfoCard>
+
+      <!-- Likely root cause: log highlights distilled from the failed task's own logs -->
+      <div
+        v-if="rootCauseHighlights.length"
+        class="mb-6 rounded-lg border border-status-danger-border bg-status-danger-bg p-4"
+      >
+        <h3 class="text-sm font-semibold text-status-danger mb-2">Likely Root Cause</h3>
+        <pre class="text-xs font-mono text-status-danger whitespace-pre-wrap break-all">{{ rootCauseHighlights.join('\n') }}</pre>
+      </div>
 
       <!-- Error display -->
       <div

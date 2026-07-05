@@ -34,16 +34,7 @@ from iris.cluster.types import JobName, WorkerId
 class TaskRowDelta:
     """Merged write to one ``tasks`` row. ``Overlay.merge_task`` accumulates
     these fields; the per-field merge directions (first-wins vs last-wins) are
-    realized by the coalesce expressions in ``commit._flush_tasks``.
-
-    ``failure_count`` is overlay scratch, not a persisted column: the kernel
-    carries the prospective per-task failure count so ``Overlay.job_basis`` can
-    sum it into the job's cumulative ``total_failures`` (the ``max_task_failures``
-    budget) mid-batch, before the terminal attempt row commits. It is never
-    flushed; the persisted retry counts derive from ``task_attempts`` at read
-    time (see ``iris.cluster.controller.attempt_counts``). There is no companion
-    ``preemption_count``: only the failure budget is evaluated mid-batch, so no
-    reader needs a prospective preemption count."""
+    realized by the coalesce expressions in ``commit._flush_tasks``."""
 
     task_id: JobName
     state: int
@@ -51,7 +42,6 @@ class TaskRowDelta:
     exit_code: int | None = None
     started_at: Timestamp | None = None
     finished_at: Timestamp | None = None
-    failure_count: int | None = None
     container_id: str | None = None
 
 
