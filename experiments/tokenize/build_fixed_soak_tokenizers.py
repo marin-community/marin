@@ -18,7 +18,7 @@ stage-2 sampling, not corpus composition, so the same corpus applies unchanged.
 
 Run on a cluster CPU box (needs ``$MARIN_PREFIX``, region-local S3 write, and HF access):
 
-    uv run iris --cluster=cw-rno2a job run --no-wait --cpu 8 --memory 64GB --extra cpu \\
+    uv run iris --cluster=cw-rno2a job run --no-wait --cpu 32 --memory 200GB --extra cpu \\
       --enable-extra-resources --job-name build-fixed-soak-tokenizers \\
       -e MARIN_PREFIX s3://marin-us-east-02a/marin \\
       -- python -m experiments.tokenize.build_fixed_soak_tokenizers
