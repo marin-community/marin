@@ -37,9 +37,9 @@ storage:
 auth:
   iap:
     url: https://iris-dev.oa.dev
-    # Same Marin desktop OAuth client as prod (rigging.auth.MARIN_DESKTOP_OAUTH_CLIENT).
-    audiences:
-      - 748532799086-qf8m6mvovtdmd71npm07gk1ohijsr3q5.apps.googleusercontent.com
+    # Same Marin desktop OAuth client as prod (rigging.auth.MARIN_DESKTOP_OAUTH_CLIENT)
+    # drives `iris login` and the service-account edge token (no programmatic_audiences
+    # entry needed — the edge falls back to the desktop client id).
     # Audience of IAP's signed assertion: the iris-marin-dev-be backend service.
     signed_header_audience: /projects/748532799086/global/backendServices/1538373592429329340
     # IAP's allowlist is the gate; anyone Google admits acts as admin.

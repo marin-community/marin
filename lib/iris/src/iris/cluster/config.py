@@ -516,23 +516,16 @@ class DefaultsConfig(_Config):
 # ---------------------------------------------------------------------------
 
 
-class GcpAuthConfig(_Config):
-    project_id: str = ""
-
-
 class IapAuthConfig(_Config):
     url: str = ""
+    # Desktop OAuth client the CLI drives for the browser edge-login flow.
     oauth_client_id: str = ""
     # A secret reference (env: / file: / gcp-secret://), never an inlined value.
     oauth_client_secret: SecretRefSpec = ""
-    # OIDC ID-token audiences the controller accepts on interactive-login tokens
-    # (the `iris login` user flow); typically just the desktop client id.
-    audiences: list[str] = Field(default_factory=list)
     # Audiences a service-account (CI / in-cluster) caller mints its IAP *edge*
-    # token for -- kept separate from the login `audiences` above. Empty falls
-    # back to the desktop client id, which IAP registers as a programmatic client
-    # (sufficient for the common single-client setup); set this only to give
-    # machine callers an `aud` distinct from the interactive-login client.
+    # token for. Empty falls back to the desktop client id, which IAP registers as
+    # a programmatic client (sufficient for the common single-client setup); set
+    # this only to give machine callers an `aud` distinct from the desktop client.
     programmatic_audiences: list[str] = Field(default_factory=list)
     signed_header_audience: str = ""
     # Role granted to an IAP-verified email the role policy does not match (not in
@@ -542,8 +535,7 @@ class IapAuthConfig(_Config):
 
 
 class AuthConfig(_OneofConfig):
-    _ONEOF_ARMS = ("gcp", "iap")
-    gcp: GcpAuthConfig | None = None
+    _ONEOF_ARMS = ("iap",)
     iap: IapAuthConfig | None = None
     # Network-location trust, orthogonal to the login-provider arm: a tokenless
     # request whose *direct transport peer* is inside one of these CIDRs

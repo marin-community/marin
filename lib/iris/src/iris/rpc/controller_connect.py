@@ -82,12 +82,6 @@ class ControllerService(Protocol):
     async def get_process_status(self, request: job__pb2.GetProcessStatusRequest, ctx: RequestContext) -> job__pb2.GetProcessStatusResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
-    async def get_auth_info(self, request: job__pb2.GetAuthInfoRequest, ctx: RequestContext) -> job__pb2.GetAuthInfoResponse:
-        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
-
-    async def login(self, request: job__pb2.LoginRequest, ctx: RequestContext) -> job__pb2.LoginResponse:
-        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
-
     async def get_current_user(self, request: job__pb2.GetCurrentUserRequest, ctx: RequestContext) -> job__pb2.GetCurrentUserResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
@@ -333,26 +327,6 @@ class ControllerServiceASGIApplication(ConnectASGIApplication[ControllerService]
                         idempotency_level=IdempotencyLevel.UNKNOWN,
                     ),
                     function=svc.get_process_status,
-                ),
-                "/iris.cluster.ControllerService/GetAuthInfo": Endpoint.unary(
-                    method=MethodInfo(
-                        name="GetAuthInfo",
-                        service_name="iris.cluster.ControllerService",
-                        input=job__pb2.GetAuthInfoRequest,
-                        output=job__pb2.GetAuthInfoResponse,
-                        idempotency_level=IdempotencyLevel.UNKNOWN,
-                    ),
-                    function=svc.get_auth_info,
-                ),
-                "/iris.cluster.ControllerService/Login": Endpoint.unary(
-                    method=MethodInfo(
-                        name="Login",
-                        service_name="iris.cluster.ControllerService",
-                        input=job__pb2.LoginRequest,
-                        output=job__pb2.LoginResponse,
-                        idempotency_level=IdempotencyLevel.UNKNOWN,
-                    ),
-                    function=svc.login,
                 ),
                 "/iris.cluster.ControllerService/GetCurrentUser": Endpoint.unary(
                     method=MethodInfo(
@@ -887,46 +861,6 @@ class ControllerServiceClient(ConnectClient):
             timeout_ms=timeout_ms,
         )
 
-    async def get_auth_info(
-        self,
-        request: job__pb2.GetAuthInfoRequest,
-        *,
-        headers: Headers | Mapping[str, str] | None = None,
-        timeout_ms: int | None = None,
-    ) -> job__pb2.GetAuthInfoResponse:
-        return await self.execute_unary(
-            request=request,
-            method=MethodInfo(
-                name="GetAuthInfo",
-                service_name="iris.cluster.ControllerService",
-                input=job__pb2.GetAuthInfoRequest,
-                output=job__pb2.GetAuthInfoResponse,
-                idempotency_level=IdempotencyLevel.UNKNOWN,
-            ),
-            headers=headers,
-            timeout_ms=timeout_ms,
-        )
-
-    async def login(
-        self,
-        request: job__pb2.LoginRequest,
-        *,
-        headers: Headers | Mapping[str, str] | None = None,
-        timeout_ms: int | None = None,
-    ) -> job__pb2.LoginResponse:
-        return await self.execute_unary(
-            request=request,
-            method=MethodInfo(
-                name="Login",
-                service_name="iris.cluster.ControllerService",
-                input=job__pb2.LoginRequest,
-                output=job__pb2.LoginResponse,
-                idempotency_level=IdempotencyLevel.UNKNOWN,
-            ),
-            headers=headers,
-            timeout_ms=timeout_ms,
-        )
-
     async def get_current_user(
         self,
         request: job__pb2.GetCurrentUserRequest,
@@ -1292,10 +1226,6 @@ class ControllerServiceSync(Protocol):
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
     def get_process_status(self, request: job__pb2.GetProcessStatusRequest, ctx: RequestContext) -> job__pb2.GetProcessStatusResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
-    def get_auth_info(self, request: job__pb2.GetAuthInfoRequest, ctx: RequestContext) -> job__pb2.GetAuthInfoResponse:
-        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
-    def login(self, request: job__pb2.LoginRequest, ctx: RequestContext) -> job__pb2.LoginResponse:
-        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
     def get_current_user(self, request: job__pb2.GetCurrentUserRequest, ctx: RequestContext) -> job__pb2.GetCurrentUserResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
     def get_kubernetes_cluster_status(self, request: controller__pb2.Controller.GetKubernetesClusterStatusRequest, ctx: RequestContext) -> controller__pb2.Controller.GetKubernetesClusterStatusResponse:
@@ -1531,26 +1461,6 @@ class ControllerServiceWSGIApplication(ConnectWSGIApplication):
                         idempotency_level=IdempotencyLevel.UNKNOWN,
                     ),
                     function=service.get_process_status,
-                ),
-                "/iris.cluster.ControllerService/GetAuthInfo": EndpointSync.unary(
-                    method=MethodInfo(
-                        name="GetAuthInfo",
-                        service_name="iris.cluster.ControllerService",
-                        input=job__pb2.GetAuthInfoRequest,
-                        output=job__pb2.GetAuthInfoResponse,
-                        idempotency_level=IdempotencyLevel.UNKNOWN,
-                    ),
-                    function=service.get_auth_info,
-                ),
-                "/iris.cluster.ControllerService/Login": EndpointSync.unary(
-                    method=MethodInfo(
-                        name="Login",
-                        service_name="iris.cluster.ControllerService",
-                        input=job__pb2.LoginRequest,
-                        output=job__pb2.LoginResponse,
-                        idempotency_level=IdempotencyLevel.UNKNOWN,
-                    ),
-                    function=service.login,
                 ),
                 "/iris.cluster.ControllerService/GetCurrentUser": EndpointSync.unary(
                     method=MethodInfo(
@@ -2079,46 +1989,6 @@ class ControllerServiceClientSync(ConnectClientSync):
                 service_name="iris.cluster.ControllerService",
                 input=job__pb2.GetProcessStatusRequest,
                 output=job__pb2.GetProcessStatusResponse,
-                idempotency_level=IdempotencyLevel.UNKNOWN,
-            ),
-            headers=headers,
-            timeout_ms=timeout_ms,
-        )
-
-    def get_auth_info(
-        self,
-        request: job__pb2.GetAuthInfoRequest,
-        *,
-        headers: Headers | Mapping[str, str] | None = None,
-        timeout_ms: int | None = None,
-    ) -> job__pb2.GetAuthInfoResponse:
-        return self.execute_unary(
-            request=request,
-            method=MethodInfo(
-                name="GetAuthInfo",
-                service_name="iris.cluster.ControllerService",
-                input=job__pb2.GetAuthInfoRequest,
-                output=job__pb2.GetAuthInfoResponse,
-                idempotency_level=IdempotencyLevel.UNKNOWN,
-            ),
-            headers=headers,
-            timeout_ms=timeout_ms,
-        )
-
-    def login(
-        self,
-        request: job__pb2.LoginRequest,
-        *,
-        headers: Headers | Mapping[str, str] | None = None,
-        timeout_ms: int | None = None,
-    ) -> job__pb2.LoginResponse:
-        return self.execute_unary(
-            request=request,
-            method=MethodInfo(
-                name="Login",
-                service_name="iris.cluster.ControllerService",
-                input=job__pb2.LoginRequest,
-                output=job__pb2.LoginResponse,
                 idempotency_level=IdempotencyLevel.UNKNOWN,
             ),
             headers=headers,

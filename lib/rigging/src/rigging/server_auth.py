@@ -5,9 +5,8 @@
 
 The companion to ``rigging.auth`` (which attaches a token on the client). This
 module verifies one on the server and binds the resulting identity for the
-request: the Google-credential verifiers (GCP access token, IAP OIDC ID token,
-IAP signed-header assertion), the authenticator chain that resolves a request to
-an identity, and the enforcement points a service
+request: the IAP signed-header assertion verifier, the authenticator chain that
+resolves a request to an identity, and the enforcement points a service
 mounts unconditionally — ``PolicyAuthInterceptor`` for Connect RPCs and
 ``RouteAuthMiddleware`` for HTTP routes annotated ``@public`` / ``@requires_auth``.
 
@@ -27,7 +26,7 @@ import contextlib
 import ipaddress
 import logging
 import time
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Callable, Sequence
 from contextvars import ContextVar
 from dataclasses import dataclass
 from enum import StrEnum
@@ -36,7 +35,6 @@ from typing import Protocol
 
 import google.auth.transport.requests
 import google.oauth2.id_token
-import requests
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from google.auth.exceptions import GoogleAuthError
@@ -153,74 +151,6 @@ class TokenVerifier(Protocol):
             ValueError: If the token is invalid or expired.
         """
         ...
-
-
-class GcpAccessTokenVerifier:
-    """Verifies GCP OAuth2 access tokens via Google's tokeninfo endpoint.
-
-    Optionally checks that the user has access to a specific GCP project
-    using the Cloud Resource Manager API with the user's own token.
-    """
-
-    _TOKENINFO_URL = "https://oauth2.googleapis.com/tokeninfo"
-    _PROJECT_URL_TEMPLATE = "https://cloudresourcemanager.googleapis.com/v3/projects/{}"
-
-    def __init__(self, project_id: str | None = None):
-        self._project_id = project_id
-
-    def verify(self, token: str) -> VerifiedIdentity:
-        resp = requests.get(self._TOKENINFO_URL, params={"access_token": token}, timeout=10)
-        if resp.status_code != 200:
-            raise ValueError(f"Token verification failed (status {resp.status_code})")
-        info = resp.json()
-        email = info.get("email")
-        if not email:
-            raise ValueError("Token does not contain an email claim")
-
-        if self._project_id:
-            proj_resp = requests.get(
-                self._PROJECT_URL_TEMPLATE.format(self._project_id),
-                headers={"Authorization": f"Bearer {token}"},
-                timeout=10,
-            )
-            if proj_resp.status_code != 200:
-                raise ValueError(f"User {email} does not have access to project {self._project_id}")
-
-        return VerifiedIdentity(user_id=email, role="user")
-
-
-class IapIdTokenVerifier:
-    """Verifies a Google OIDC ID token and returns the caller's identity.
-
-    Raises ValueError unless the token's signature and issuer are valid and its
-    ``aud`` claim is one of ``audiences`` (the email is taken from the verified
-    claims). Used as the login identity proof for an IAP-fronted service;
-    IAP's own IAM is the access gate, so no further project check is done here.
-    """
-
-    def __init__(self, audiences: Iterable[str]):
-        self._audiences = frozenset(audiences)
-        if not self._audiences:
-            raise ValueError("IapIdTokenVerifier requires at least one audience")
-        self._request = google.auth.transport.requests.Request()
-
-    def verify(self, token: str) -> VerifiedIdentity:
-        try:
-            # audience=None: verify signature/issuer/expiry here, then check the
-            # aud claim against our allow-set so multiple audiences are supported.
-            payload = google.oauth2.id_token.verify_oauth2_token(token, self._request)
-        except (ValueError, GoogleAuthError) as exc:
-            raise ValueError(f"IAP ID token verification failed: {exc}") from exc
-
-        aud = payload.get("aud")
-        if aud not in self._audiences:
-            raise ValueError(f"ID token audience {aud!r} is not an accepted IAP audience")
-        email = payload.get("email")
-        if not email:
-            raise ValueError("ID token has no email claim (request the 'email' scope)")
-        if payload.get("email_verified") is False:
-            raise ValueError(f"ID token email {email} is not verified")
-        return VerifiedIdentity(user_id=email, role="user")
 
 
 # IAP injects this signed JWT on every request it admits; its `aud` is the

@@ -14,10 +14,9 @@ revoked. Authorization is config-driven and resolved entirely in memory: cluster
 config is the sole source of truth for roles. A :class:`RolePolicy` — a frozen map
 built from :class:`AuthConfig` at controller start (admins from ``auth.admin_users``,
 a provider-derived default for everyone else) — answers ``role_for`` with no DB
-projection and no reconciliation. Deprovisioning is therefore edit-config-and-reload
-(rebuild the map); a session token already minted with the old role is not revocable
-but ages out at its short :data:`SESSION_TOKEN_TTL_SECONDS`, so access is lost within
-that window.
+projection and no reconciliation. IAP users hold no minted token: their role is
+resolved per request from the verified assertion, so deprovisioning is
+edit-config-and-reload (rebuild the map) and takes effect on the next request.
 
 Per-plane audience discipline (RFC 8725) is the load-bearing security invariant:
 every minted token names exactly one ``aud`` (plane), and the control-plane
@@ -33,9 +32,7 @@ import secrets
 from collections.abc import Sequence
 
 from rigging.server_auth import (
-    GcpAccessTokenVerifier,
     IapAssertionVerifier,
-    IapIdTokenVerifier,
     RequestAuthPolicy,
     TokenVerifier,
     VerifiedIdentity,
@@ -62,9 +59,9 @@ WORKER_ROLE = "worker"
 # Role granted to a config-listed admin.
 ADMIN_ROLE = "admin"
 
-# User/admin login sessions (aud="iris"). Short-lived and non-refreshable: the
-# client re-runs `iris login` for a fresh token, picking up its current
-# config-derived role. This TTL also bounds deprovisioning (see module docstring).
+# TTL for the control-plane admin token LocalCluster mints in-process for its
+# auto-login (aud="iris"). Short-lived and non-refreshable. Deployed clusters
+# authenticate users via IAP and mint no user tokens, so this is dev-only.
 SESSION_TOKEN_TTL_SECONDS = 3600  # 1 hour
 # Worker machine identity (aud="iris", role="worker"). This is a SHARED,
 # cluster-lived credential: one token is minted per controller start and injected
@@ -77,8 +74,8 @@ SESSION_TOKEN_TTL_SECONDS = 3600  # 1 hour
 # doc's follow-ups.
 WORKER_TOKEN_TTL_SECONDS = 86400 * 30  # 30 days
 
-# Provider name when trusted_cidrs alone enables auth. No `iris login` flow:
-# in-network callers get identity by location, everything else needs a token.
+# Provider name when trusted_cidrs alone enables auth: in-network callers get
+# identity by location, everything else needs a token.
 CIDR_PROVIDER = "cidr"
 
 # ---------------------------------------------------------------------------
@@ -262,7 +259,7 @@ class RolePolicy:
 
     ``admins`` are the ``auth.admin_users`` entries; ``default_role`` is the role of
     an authenticated non-admin (the IAP ``unprovisioned_role`` for an iap provider,
-    ``"user"`` for gcp). null-auth/cidr identities are assigned by the auth chain
+    ``"user"`` otherwise). null-auth/cidr identities are assigned by the auth chain
     (anonymous/loopback admin) and never go through :meth:`role_for`.
     """
 
@@ -281,7 +278,7 @@ def _build_role_policy(auth_config: AuthConfig | None, provider: str | None) -> 
     """Build the in-memory :class:`RolePolicy` from ``auth_config``.
 
     ``default_role`` is the IAP ``unprovisioned_role`` for an iap provider and
-    ``"user"`` otherwise (gcp, cidr, null-auth); the cidr/null-auth default is never
+    ``"user"`` otherwise (cidr, null-auth); the cidr/null-auth default is never
     consulted since those identities are assigned by the auth chain.
     """
     admins = frozenset(auth_config.admin_users) if auth_config is not None else frozenset()
@@ -304,8 +301,6 @@ class ControllerAuth:
     verifier: TokenVerifier | None = None
     provider: str | None = None
     worker_token: str | None = None
-    login_verifier: TokenVerifier | None = None
-    gcp_project_id: str | None = None
     jwt_manager: JwtTokenManager | None = None
     optional: bool = False
     # Verifies IAP's signed-header assertion to authenticate tokenless callers
@@ -325,8 +320,8 @@ def request_auth_policy(auth: ControllerAuth | None) -> RequestAuthPolicy:
     Delegates to rigging's canonical stack builders (both compile the shared
     declarative :class:`~rigging.auth_config.AuthStackConfig`): null-auth (no
     provider) is the permissive chain — every request admitted, but a worker JWT
-    still attributes the caller — while a login provider (gcp/iap) or cidr trust
-    is the enforcing chain, highest-trust first (``[jwt?, iap_assertion?, cidr?,
+    still attributes the caller — while an IAP provider or cidr trust is the
+    enforcing chain, highest-trust first (``[jwt?, iap_assertion?, cidr?,
     loopback]``, with an anonymous tail iff ``optional``). The controller's
     request verifier is always the JWT manager, so a cidr-only cluster still
     admits its worker JWTs presented from outside the trusted network.
@@ -446,34 +441,18 @@ def create_controller_auth(
     provider = auth_config.provider_kind() or CIDR_PROVIDER
     role_policy = _build_role_policy(auth_config, provider)
 
-    login_verifier: TokenVerifier | None = None
-    gcp_project_id: str | None = None
-    if provider == "gcp":
-        gcp_project_id = auth_config.gcp.project_id
-        if not gcp_project_id:
-            raise ValueError("GCP auth config requires a project_id")
-        login_verifier = GcpAccessTokenVerifier(project_id=gcp_project_id)
-
-    # For IAP, `iris login` presents the OIDC ID token it obtained for the IAP
-    # ingress; the controller verifies it (audience + signature) and mints a JWT.
+    # IAP is the sole login provider and never mints a controller token: the IAP
+    # GCLB authenticates every user request at the edge and forwards a signed
+    # assertion the controller verifies. A tokenless request carrying a valid IAP
+    # assertion is authenticated as the asserted email, resolved to its role by the
+    # in-memory RolePolicy (admins -> admin, everyone else -> the configured
+    # unprovisioned_role). No DB, no cache.
     iap_assertion_verifier: IapAssertionVerifier | None = None
     if provider == "iap":
-        audiences = list(auth_config.iap.audiences)
-        if not audiences and not auth_config.iap.signed_header_audience:
-            raise ValueError("IAP auth config requires audiences (login) and/or signed_header_audience (assertion)")
-        # Assertion-only IAP (no desktop OAuth client registered) is valid:
-        # browser users authenticate via the signed header; `iris login` then
-        # reports UNIMPLEMENTED (no login verifier).
-        if audiences:
-            login_verifier = IapIdTokenVerifier(audiences)
-
-        # When the signed-header audience is configured, a tokenless request that
-        # carries a valid IAP assertion is authenticated as the asserted email,
-        # resolved to its role by the in-memory RolePolicy (admins -> admin, everyone
-        # else -> the configured unprovisioned_role). No DB, no cache.
         signed_header_audience = auth_config.iap.signed_header_audience
-        if signed_header_audience:
-            iap_assertion_verifier = IapAssertionVerifier(signed_header_audience, role_resolver=role_policy.role_for)
+        if not signed_header_audience:
+            raise ValueError("IAP auth config requires signed_header_audience (the IAP assertion audience)")
+        iap_assertion_verifier = IapAssertionVerifier(signed_header_audience, role_resolver=role_policy.role_for)
 
     optional = auth_config.optional
     # Only the CIDR count is logged: CodeQL's sensitive-data heuristics treat
@@ -490,8 +469,6 @@ def create_controller_auth(
         verifier=jwt_mgr,
         provider=provider,
         worker_token=worker_token,
-        login_verifier=login_verifier,
-        gcp_project_id=gcp_project_id,
         jwt_manager=jwt_mgr,
         optional=optional,
         iap_assertion_verifier=iap_assertion_verifier,

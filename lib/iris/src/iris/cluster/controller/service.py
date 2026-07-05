@@ -37,7 +37,6 @@ from iris.cluster.controller import ops, reads, writes
 from iris.cluster.controller.auth import (
     DEFAULT_ENDPOINT_TOKEN_TTL_SECONDS,
     MAX_ENDPOINT_TOKEN_TTL_SECONDS,
-    SESSION_TOKEN_TTL_SECONDS,
     ControllerAuth,
 )
 from iris.cluster.controller.autoscaler.status import PendingHint
@@ -2577,48 +2576,6 @@ class ControllerServiceImpl:
             raise ConnectError(Code.UNAVAILABLE, str(exc)) from exc
 
     # ── Auth RPCs ────────────────────────────────────────────────────────
-
-    def get_auth_info(
-        self,
-        request: job_pb2.GetAuthInfoRequest,
-        ctx: Any,
-    ) -> job_pb2.GetAuthInfoResponse:
-        return job_pb2.GetAuthInfoResponse(
-            provider=self._auth.provider or "",
-            gcp_project_id=self._auth.gcp_project_id or "",
-        )
-
-    def login(
-        self,
-        request: job_pb2.LoginRequest,
-        ctx: Any,
-    ) -> job_pb2.LoginResponse:
-        if not self._auth.login_verifier:
-            raise ConnectError(Code.UNIMPLEMENTED, "Login not available (no identity provider configured)")
-        if not self._auth.jwt_manager:
-            raise ConnectError(Code.INTERNAL, "JWT manager not configured")
-        if not self._auth.role_policy:
-            raise ConnectError(Code.INTERNAL, "Role policy not configured")
-
-        try:
-            login_identity = self._auth.login_verifier.verify(request.identity_token)
-        except ValueError as exc:
-            logger.info("Login verification failed: %s", exc)
-            raise ConnectError(Code.UNAUTHENTICATED, "Identity verification failed") from exc
-
-        username = login_identity.user_id
-        if username.startswith("system:"):
-            raise ConnectError(Code.PERMISSION_DENIED, "Reserved username prefix")
-
-        role = self._auth.role_policy.role_for(username)
-
-        # Stateless session token: role comes from the in-memory RolePolicy and the
-        # jti is a log-correlation id (nothing persisted, never revocable). See
-        # controller/auth.py for the deprovisioning/TTL semantics.
-        jti = f"iris_s_{secrets.token_hex(8)}"
-        jwt_token = self._auth.jwt_manager.create_token(username, role, jti, ttl_seconds=SESSION_TOKEN_TTL_SECONDS)
-        logger.info("Login: user=%s, role=%s, jti=%s (session ttl=%ds)", username, role, jti, SESSION_TOKEN_TTL_SECONDS)
-        return job_pb2.LoginResponse(token=jwt_token, key_id=jti, user_id=username)
 
     def mint_endpoint_token(
         self,

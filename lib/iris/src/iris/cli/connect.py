@@ -102,11 +102,9 @@ def _cluster_auth_from_config(auth: AuthConfig) -> ClusterAuth:
     """Adapt iris's ``AuthConfig`` to rigging's shared credential vocabulary."""
     provider = auth.provider_kind()
     if provider == "iap":
-        # `audiences` are the interactive-login audiences the controller verifies;
         # `programmatic_audiences` are the service-account edge audiences the
-        # client mints against -- configured explicitly, not derived from
-        # `audiences`. Empty is fine: rigging's edge resolver falls back to the
-        # desktop client id, which IAP registers as a programmatic client.
+        # client mints against. Empty is fine: rigging's edge resolver falls back
+        # to the desktop client id, which IAP registers as a programmatic client.
         return ClusterAuth(
             AuthProvider.IAP,
             iap=IapAuth(
@@ -117,8 +115,6 @@ def _cluster_auth_from_config(auth: AuthConfig) -> ClusterAuth:
                 signed_header_audience=auth.iap.signed_header_audience or None,
             ),
         )
-    if provider == "gcp":
-        return ClusterAuth(AuthProvider.GCP)
     return ClusterAuth(AuthProvider.NONE)
 
 

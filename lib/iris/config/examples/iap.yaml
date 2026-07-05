@@ -9,12 +9,12 @@
 #
 # Login + use:
 #   pip install "marin-iris[iap]"          # desktop OAuth flow needs this extra
-#   iris --cluster=iap-example login        # opens a browser, caches IAP + Iris creds
+#   iris --cluster=iap-example login        # opens a browser, caches the IAP edge token
 #   iris --cluster=iap-example job run -- python train.py
 #
 # The CLI talks directly to auth.iap.url over HTTPS (no SSH tunnel); IAP gates
-# the ingress. Each RPC carries the IAP OIDC ID token in Proxy-Authorization and
-# the Iris JWT in Authorization.
+# the ingress. Each RPC carries the IAP OIDC ID token in Proxy-Authorization; the
+# controller authenticates it from IAP's signed assertion and mints no token.
 
 platform:
   local:
@@ -30,18 +30,14 @@ auth:
     # Public HTTPS URL of the IAP ingress (GCLB managed-cert domain, or the
     # Cloud Run service URL).
     url: https://iris-example.YOUR_DOMAIN
-    # Desktop OAuth client the CLI drives for the browser login flow. Installed-
-    # app client secrets are non-confidential (RFC 8252 §8.5).
+    # Desktop OAuth client the CLI drives for the browser edge-login flow.
+    # Installed-app client secrets are non-confidential (RFC 8252 §8.5).
     oauth_client_id: REPLACE_WITH_DESKTOP_CLIENT_ID.apps.googleusercontent.com
     oauth_client_secret: REPLACE_WITH_DESKTOP_CLIENT_SECRET
-    # OIDC ID-token audiences the controller accepts on interactive-login tokens
-    # (the `iris login` user flow); typically just the desktop client id.
-    audiences:
-      - REPLACE_WITH_DESKTOP_CLIENT_ID.apps.googleusercontent.com
     # Audiences a service-account (CI / in-cluster) caller mints its IAP edge
     # token for. Omit to fall back to the desktop client id (IAP registers it as
     # a programmatic client); set a dedicated IAP-secured client id to give
-    # machine callers an `aud` distinct from the interactive-login client.
+    # machine callers an `aud` distinct from the desktop client.
     # programmatic_audiences:
     #   - REPLACE_WITH_IAP_SECURED_CLIENT_ID.apps.googleusercontent.com
     # Audience of IAP's signed X-Goog-IAP-JWT-Assertion header (the backend

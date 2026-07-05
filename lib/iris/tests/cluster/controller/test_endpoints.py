@@ -304,7 +304,7 @@ def test_resolve_task_endpoint_returns_owner_row(state):
 def _mint_service(state, mock_controller, log_client, tmp_path):
     """A ControllerServiceImpl with auth enabled (a provider ⇒ owner authz on)."""
     auth = create_controller_auth(
-        AuthConfig(gcp={"project_id": "test-project"}),
+        AuthConfig(trusted_cidrs=["10.0.0.0/8"]),
         cluster_name="test-cluster",
         signing_key_pem=generate_ed25519_keypair().private_pem,
     )

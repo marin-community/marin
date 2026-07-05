@@ -148,34 +148,6 @@ class Empty(_message.Message):
     __slots__ = ()
     def __init__(self) -> None: ...
 
-class LoginRequest(_message.Message):
-    __slots__ = ("identity_token",)
-    IDENTITY_TOKEN_FIELD_NUMBER: _ClassVar[int]
-    identity_token: str
-    def __init__(self, identity_token: _Optional[str] = ...) -> None: ...
-
-class LoginResponse(_message.Message):
-    __slots__ = ("token", "key_id", "user_id")
-    TOKEN_FIELD_NUMBER: _ClassVar[int]
-    KEY_ID_FIELD_NUMBER: _ClassVar[int]
-    USER_ID_FIELD_NUMBER: _ClassVar[int]
-    token: str
-    key_id: str
-    user_id: str
-    def __init__(self, token: _Optional[str] = ..., key_id: _Optional[str] = ..., user_id: _Optional[str] = ...) -> None: ...
-
-class GetAuthInfoRequest(_message.Message):
-    __slots__ = ()
-    def __init__(self) -> None: ...
-
-class GetAuthInfoResponse(_message.Message):
-    __slots__ = ("provider", "gcp_project_id")
-    PROVIDER_FIELD_NUMBER: _ClassVar[int]
-    GCP_PROJECT_ID_FIELD_NUMBER: _ClassVar[int]
-    provider: str
-    gcp_project_id: str
-    def __init__(self, provider: _Optional[str] = ..., gcp_project_id: _Optional[str] = ...) -> None: ...
-
 class GetCurrentUserRequest(_message.Message):
     __slots__ = ()
     def __init__(self) -> None: ...

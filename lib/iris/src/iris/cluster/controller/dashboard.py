@@ -147,7 +147,9 @@ def _resolve_and_authorize_proxy(
     return resolved, deny
 
 
-_UNAUTHENTICATED_RPCS = frozenset({"Login", "GetAuthInfo"})
+# Every control RPC is authenticated: users reach the controller only through IAP,
+# which authenticates each request at the edge. No RPC is exempt from the policy.
+_UNAUTHENTICATED_RPCS: frozenset[str] = frozenset()
 
 
 def _check_csrf(request: Request) -> bool:
@@ -454,7 +456,6 @@ class ControllerDashboard:
         routes = [
             Route("/", self._dashboard),
             favicon_route(),
-            Route("/auth/session_bootstrap", self._session_bootstrap),
             Route("/auth/config", self._auth_config),
             Route("/auth/session", self._auth_session, methods=["POST"]),
             Route("/auth/logout", self._auth_logout, methods=["POST"]),
@@ -535,20 +536,6 @@ class ControllerDashboard:
         if self._jwt_manager is None:
             return JSONResponse({"keys": []})
         return JSONResponse(self._jwt_manager.public_jwks())
-
-    @public
-    def _session_bootstrap(self, request: Request) -> Response:
-        """Accept token via query param, set cookie, redirect to dashboard."""
-        token = request.query_params.get("token", "")
-        if not token or self._auth_policy.verifier is None:
-            return RedirectResponse("/", status_code=302)
-        try:
-            self._auth_policy.verifier.verify(token)
-        except ValueError:
-            return JSONResponse({"error": "invalid token"}, status_code=401)
-        response = RedirectResponse("/", status_code=302)
-        _set_session_cookie(response, token, request)
-        return response
 
     @public
     def _auth_config(self, request: Request) -> JSONResponse:

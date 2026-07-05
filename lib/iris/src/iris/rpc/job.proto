@@ -29,21 +29,6 @@ import "time.proto";
 message Empty {}
 
 // --- Authentication ---
-message LoginRequest {
-  string identity_token = 1;
-}
-message LoginResponse {
-  string token = 1;
-  string key_id = 2;
-  string user_id = 3;
-}
-
-message GetAuthInfoRequest {}
-message GetAuthInfoResponse {
-  string provider = 1;        // "gcp" or "static" or "" (no auth)
-  string gcp_project_id = 2;  // set when provider == "gcp"
-}
-
 message GetCurrentUserRequest {}
 message GetCurrentUserResponse {
   string user_id = 1;

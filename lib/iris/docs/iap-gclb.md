@@ -131,8 +131,9 @@ per-cluster — it names that cluster's backend service, not the shared frontend
 The controller verifies IAP's signed `X-Goog-IAP-JWT-Assertion` (its `aud` is
 `signed_header_audience`) to map a request to an identity; leave that field empty
 to disable the IAP path entirely. For how the controller turns an identity into a
-role (`dashboard` read-only vs `user`/`admin` after `iris login`), see
-`lib/iris/src/iris/rpc/auth.py` and `lib/iris/docs/auth-loopback-transition.md`.
+role (`dashboard` read-only for an unprovisioned email vs `user`/`admin` for a
+provisioned one, resolved per request from the assertion — the controller mints no
+token), see `lib/iris/src/iris/rpc/auth.py` and `lib/iris/docs/auth-loopback-transition.md`.
 
 ## Access control
 

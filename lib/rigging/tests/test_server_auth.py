@@ -13,9 +13,7 @@ from rigging.server_auth import (
     ANONYMOUS_ADMIN,
     AuthRequest,
     CidrAuthenticator,
-    GcpAccessTokenVerifier,
     IapAssertionVerifier,
-    IapIdTokenVerifier,
     PolicyAuthInterceptor,
     RequestAuthPolicy,
     VerifiedIdentity,
@@ -140,49 +138,6 @@ def test_policy_interceptor_cleans_up_context_on_handler_error(interceptor):
 
     # Verified user should be cleaned up after handler exits
     assert get_verified_user() is None
-
-
-def _verify_oauth2_token_returning(payload):
-    """Patch target factory: a stand-in for google's verify_oauth2_token."""
-    return Mock(return_value=payload)
-
-
-def test_iap_id_token_verifier_accepts_matching_audience():
-    verifier = IapIdTokenVerifier(["desktop-client-id", "iap-client-id"])
-    payload = {"aud": "desktop-client-id", "email": "alice@example.com", "email_verified": True}
-    with patch("google.oauth2.id_token.verify_oauth2_token", _verify_oauth2_token_returning(payload)):
-        identity = verifier.verify("id-token")
-    assert identity == VerifiedIdentity(user_id="alice@example.com", role="user")
-
-
-def test_iap_id_token_verifier_rejects_wrong_audience():
-    verifier = IapIdTokenVerifier(["expected-aud"])
-    payload = {"aud": "some-other-client", "email": "alice@example.com"}
-    with patch("google.oauth2.id_token.verify_oauth2_token", _verify_oauth2_token_returning(payload)):
-        with pytest.raises(ValueError, match="audience"):
-            verifier.verify("id-token")
-
-
-def test_iap_id_token_verifier_rejects_missing_email():
-    verifier = IapIdTokenVerifier(["aud"])
-    with patch("google.oauth2.id_token.verify_oauth2_token", _verify_oauth2_token_returning({"aud": "aud"})):
-        with pytest.raises(ValueError, match="email"):
-            verifier.verify("id-token")
-
-
-def test_iap_id_token_verifier_rejects_unverified_email():
-    verifier = IapIdTokenVerifier(["aud"])
-    payload = {"aud": "aud", "email": "alice@example.com", "email_verified": False}
-    with patch("google.oauth2.id_token.verify_oauth2_token", _verify_oauth2_token_returning(payload)):
-        with pytest.raises(ValueError, match="not verified"):
-            verifier.verify("id-token")
-
-
-def test_iap_id_token_verifier_wraps_google_failure():
-    verifier = IapIdTokenVerifier(["aud"])
-    with patch("google.oauth2.id_token.verify_oauth2_token", side_effect=ValueError("bad signature")):
-        with pytest.raises(ValueError, match="IAP ID token verification failed"):
-            verifier.verify("id-token")
 
 
 # --- IAP signed-header assertion -> implicit read-only dashboard identity -----
@@ -416,83 +371,6 @@ def test_different_users_get_different_identities(interceptor):
     interceptor.intercept_unary_sync(capture_handler, "request", ctx_bob)
 
     assert users == ["alice", "bob"]
-
-
-def test_gcp_access_token_verifier_valid():
-    """GcpAccessTokenVerifier extracts email from tokeninfo."""
-    verifier = GcpAccessTokenVerifier()
-    mock_resp = Mock()
-    mock_resp.status_code = 200
-    mock_resp.json.return_value = {"email": "alice@example.com"}
-
-    with patch("requests.get", return_value=mock_resp) as mock_get:
-        result = verifier.verify("fake-access-token")
-
-    assert result.user_id == "alice@example.com"
-    assert result.role == "user"
-    mock_get.assert_called_once_with(
-        "https://oauth2.googleapis.com/tokeninfo",
-        params={"access_token": "fake-access-token"},
-        timeout=10,
-    )
-
-
-def test_gcp_access_token_verifier_invalid_token():
-    verifier = GcpAccessTokenVerifier()
-    mock_resp = Mock()
-    mock_resp.status_code = 401
-
-    with patch("requests.get", return_value=mock_resp):
-        with pytest.raises(ValueError, match="Token verification failed"):
-            verifier.verify("bad-token")
-
-
-def test_gcp_access_token_verifier_no_email():
-    verifier = GcpAccessTokenVerifier()
-    mock_resp = Mock()
-    mock_resp.status_code = 200
-    mock_resp.json.return_value = {"scope": "openid"}
-
-    with patch("requests.get", return_value=mock_resp):
-        with pytest.raises(ValueError, match="email"):
-            verifier.verify("token-without-email")
-
-
-def test_gcp_access_token_verifier_checks_project_access():
-    verifier = GcpAccessTokenVerifier(project_id="my-project")
-
-    tokeninfo_resp = Mock()
-    tokeninfo_resp.status_code = 200
-    tokeninfo_resp.json.return_value = {"email": "alice@example.com"}
-
-    project_resp = Mock()
-    project_resp.status_code = 200
-
-    with patch("requests.get", side_effect=[tokeninfo_resp, project_resp]) as mock_get:
-        result = verifier.verify("valid-token")
-
-    assert result.user_id == "alice@example.com"
-    assert mock_get.call_count == 2
-    mock_get.assert_any_call(
-        "https://cloudresourcemanager.googleapis.com/v3/projects/my-project",
-        headers={"Authorization": "Bearer valid-token"},
-        timeout=10,
-    )
-
-
-def test_gcp_access_token_verifier_rejects_no_project_access():
-    verifier = GcpAccessTokenVerifier(project_id="restricted-project")
-
-    tokeninfo_resp = Mock()
-    tokeninfo_resp.status_code = 200
-    tokeninfo_resp.json.return_value = {"email": "alice@example.com"}
-
-    project_resp = Mock()
-    project_resp.status_code = 403
-
-    with patch("requests.get", side_effect=[tokeninfo_resp, project_resp]):
-        with pytest.raises(ValueError, match="does not have access"):
-            verifier.verify("valid-token")
 
 
 # ---------------------------------------------------------------------------

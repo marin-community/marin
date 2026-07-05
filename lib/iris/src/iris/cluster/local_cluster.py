@@ -263,8 +263,10 @@ class LocalCluster:
         )
         self._controller.start()
 
-        # Auto-login: mint a JWT via the controller's auth system.
-        # Raw tokens won't work since the verifier only accepts JWTs.
+        # Auto-login: mint an in-process admin JWT so the local dashboard can open a
+        # browser session (the `?session_token=` link). Raw tokens won't work since
+        # the verifier only accepts JWTs; the CLI itself authenticates by loopback
+        # trust (the controller binds 127.0.0.1) and needs no cached token.
         url = self._controller.url
         # jti is for log correlation only — the local session token is stateless
         # (nothing persisted, never revocable), like every other iris token. The
@@ -274,7 +276,7 @@ class LocalCluster:
         jwt_token = auth.jwt_manager.create_token("local-admin", "admin", key_id, ttl_seconds=SESSION_TOKEN_TTL_SECONDS)
 
         cluster_name = self._config.name or "local"
-        save_credentials(CredentialRecord(cluster=cluster_name, endpoint=url, app_token=jwt_token))
+        save_credentials(CredentialRecord(cluster=cluster_name, endpoint=url))
         self._auto_login_token = jwt_token
 
         return url

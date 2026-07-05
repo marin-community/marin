@@ -32,14 +32,14 @@ def test_resolve_config_secrets_resolves_signing_key_reference(monkeypatch):
 
 
 def test_resolve_config_secrets_leaves_unset_signing_key_empty():
-    config = _config(AuthConfig(gcp={"project_id": "p"}))
+    config = _config(AuthConfig())
     resolved = resolve_config_secrets(config)
     assert resolved.auth.signing_key == ""
 
 
 def test_resolve_config_secrets_resolves_nested_iap_secret(monkeypatch):
     monkeypatch.setenv("IRIS_OAUTH", "sekret")
-    config = _config(AuthConfig(iap=IapAuthConfig(audiences=["a"], oauth_client_secret="env:IRIS_OAUTH")))
+    config = _config(AuthConfig(iap=IapAuthConfig(oauth_client_secret="env:IRIS_OAUTH")))
 
     resolved = resolve_config_secrets(config)
 
@@ -65,5 +65,5 @@ def test_assert_no_inlined_secrets_passes_reference():
 
 
 def test_assert_no_inlined_secrets_passes_when_unset():
-    config = _config(AuthConfig(gcp={"project_id": "p"}))
+    config = _config(AuthConfig())
     assert_no_inlined_secrets(config)  # an unset field does not raise

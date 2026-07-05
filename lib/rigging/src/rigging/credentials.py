@@ -4,28 +4,22 @@
 """Resolve the client credentials for talking to a Marin cluster.
 
 This is the consumer convention behind "one login": given a cluster's auth
-shape, assemble the bearer material a client must attach, drawn from the standard
-sources in a fixed order. It never runs an interactive flow — acquiring a token
-(the browser OAuth + JWT exchange) is the job of the login orchestration
-layer above; this module only locates whatever that produced and
-hands back ready-to-attach interceptors.
+shape, assemble the bearer material a client must attach. It never runs an
+interactive flow — acquiring the IAP edge refresh token (the browser OAuth flow)
+is the job of the login orchestration layer above; this module only locates
+whatever that produced and hands back ready-to-attach interceptors.
 
-App-token resolution order (the ``Authorization`` bearer):
+The controller mints no user token, so the ``Authorization`` bearer carries
+nothing for ordinary user / CLI traffic. A client may set ``$MARIN_CLUSTER_TOKEN``
+to inject an explicit bearer (e.g. a worker JWT) for CI / headless runs.
 
-1. ``$MARIN_CLUSTER_TOKEN`` — an explicit override for CI / headless runs.
-2. The per-cluster credential file written by the cluster login command.
-3. An ambient provider implied by the cluster's auth provider — a GCP access
-   token for a ``gcp`` cluster. An ``iap`` cluster has no ambient app token (its
-   Iris JWT comes only from login, i.e. step 2), and a ``none`` cluster sends
-   nothing (loopback trust).
-
-IAP edge-token resolution (the ``Proxy-Authorization`` bearer, IAP clusters only):
-the cached desktop-OAuth refresh token (the human path) is preferred; failing
-that, an ambient service-account ID token (the in-cluster / CI path) minted for a
-dedicated programmatic audience if one is configured, else for the desktop client
-id (see :func:`_edge_provider`). The desktop client that re-mints from a refresh
-token is the app's public identity (:data:`~rigging.auth.MARIN_DESKTOP_OAUTH_CLIENT`),
-overridable per cluster.
+IAP edge-token resolution (the ``Proxy-Authorization`` bearer, IAP clusters only)
+is the sole per-request auth: the cached desktop-OAuth refresh token (the human
+path) is preferred; failing that, an ambient service-account ID token (the
+in-cluster / CI path) minted for a dedicated programmatic audience if one is
+configured, else for the desktop client id (see :func:`_edge_provider`). The
+desktop client that re-mints from a refresh token is the app's public identity
+(:data:`~rigging.auth.MARIN_DESKTOP_OAUTH_CLIENT`), overridable per cluster.
 """
 
 import os
@@ -34,7 +28,6 @@ from dataclasses import dataclass
 from rigging.auth import (
     MARIN_DESKTOP_OAUTH_CLIENT,
     BearerTokenInjector,
-    GcpAccessTokenProvider,
     IapRefreshTokenProvider,
     IapServiceAccountTokenProvider,
     OAuthClient,
@@ -112,23 +105,6 @@ def _desktop_client(auth: ClusterAuth) -> OAuthClient:
     return MARIN_DESKTOP_OAUTH_CLIENT
 
 
-def _app_provider(cluster: str, auth: ClusterAuth, token_env: str) -> TokenProvider | None:
-    """Resolve the app-auth provider: env override, then the login file, then ambient."""
-    override = os.environ.get(token_env)
-    if override:
-        return StaticTokenProvider(override)
-
-    record = load_credentials(cluster)
-    if record is not None and record.app_token is not None:
-        return StaticTokenProvider(record.app_token)
-
-    if auth.provider is AuthProvider.GCP:
-        return GcpAccessTokenProvider()
-    # IAP clusters get their Iris JWT only from login (the file path above);
-    # `none` clusters authenticate by transport (loopback / tunnel trust).
-    return None
-
-
 def _edge_provider(cluster: str, auth: ClusterAuth) -> TokenProvider | None:
     """Resolve the IAP edge provider: cached human login, then ambient service account."""
     if auth.provider is not AuthProvider.IAP or auth.iap is None:
@@ -156,10 +132,12 @@ def credentials_for(
 ) -> ClientCredentials:
     """Assemble the :class:`ClientCredentials` for ``cluster`` from the standard sources.
 
-    ``auth`` is the cluster's resolved auth shape (provider + IAP params). See the
-    module docstring for the full resolution order.
+    ``auth`` is the cluster's resolved auth shape (provider + IAP params). The IAP
+    edge provider is the sole per-request auth (``Proxy-Authorization``); the
+    ``Authorization`` bearer is empty unless ``$MARIN_CLUSTER_TOKEN`` injects one.
     """
+    override = os.environ.get(token_env)
     return ClientCredentials(
-        token_provider=_app_provider(cluster, auth, token_env),
+        token_provider=StaticTokenProvider(override) if override else None,
         iap_provider=_edge_provider(cluster, auth),
     )

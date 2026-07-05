@@ -1436,7 +1436,7 @@ def test_auth_config_returns_enabled_when_verifier_set(service):
     verifier = MockVerifier({"test-token": "test-user"})
     dashboard = ControllerDashboard(
         service,
-        auth_provider="gcp",
+        auth_provider="iap",
         auth_policy=RequestAuthPolicy.enforcing(verifier=verifier),
     )
     authed_client = TestClient(dashboard.app)
@@ -1445,7 +1445,7 @@ def test_auth_config_returns_enabled_when_verifier_set(service):
     assert resp.status_code == 200
     data = resp.json()
     assert data["auth_enabled"] is True
-    assert data["provider"] == "gcp"
+    assert data["provider"] == "iap"
 
 
 def test_auth_config_worker_capabilities(client):

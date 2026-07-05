@@ -272,22 +272,24 @@ uv run python scripts/job_profile_summary.py /user/job/id -o merged.folded --svg
 ## Users & Auth
 
 ```bash
-iris login                            # authenticate, store a short-lived session JWT locally
+iris login                            # IAP clusters: cache the IAP edge refresh token locally
 iris rpc controller list-users        # active users with task/job counts
 iris user budget list                 # per-user budget limits
 ```
 
-Tokens are stateless and short-lived (1h sessions): there is no API-key store and
-no revocation list. Authorization is **config-driven** — roles are resolved from an
-in-memory `RolePolicy` built from the cluster config at controller start (admins from
-`auth.admin_users`, a provider default for everyone else). There is no `users` table
-and no reconciliation: config is the sole source of truth. To deprovision a user,
-remove them from `auth.admin_users` and reload/restart the controller; the rebuilt
-policy resolves them to the non-admin default on their next login. A session token
-already minted keeps its old role only until it expires (≤ the 1h session TTL). There
-is no way to revoke an individual live token; the only fleet-wide kill switch is
-rotating the cluster signing key (`iris cluster init-keys` + redeploy), which
-re-auths every client and worker. Re-run `iris login` to refresh an expired session.
+Users authenticate **only through IAP**: the GCLB validates an OIDC token at the edge
+and forwards a signed assertion the controller verifies; the controller mints **no**
+user token. `iris login` runs the browser desktop-OAuth flow once and caches the IAP
+edge refresh token (each RPC silently re-mints the short-lived edge token from it).
+Authorization is **config-driven** — roles are resolved per request from an in-memory
+`RolePolicy` built from the cluster config at controller start (admins from
+`auth.admin_users`, the IAP `unprovisioned_role` for everyone else). There is no
+`users` table and no reconciliation: config is the sole source of truth. To deprovision
+a user, remove them from `auth.admin_users` and reload/restart the controller; the
+rebuilt policy resolves them to the non-admin default on their next request (no token to
+revoke — the role is resolved per request). The only fleet-wide credential kill switch
+is rotating the cluster signing key (`iris cluster init-keys` + redeploy), which
+re-auths every worker.
 
 ### Calling the IAP endpoint with `curl`
 

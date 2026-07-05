@@ -10,7 +10,7 @@ sequence) and the admit/deny OUTCOME over a representative request matrix, per s
 """
 
 import pytest
-from iris.cluster.config import AuthConfig, GcpAuthConfig, IapAuthConfig
+from iris.cluster.config import AuthConfig, IapAuthConfig
 from iris.cluster.controller.auth import WORKER_USER, create_controller_auth, request_auth_policy
 from rigging.server_auth import (
     ANONYMOUS_ADMIN,
@@ -25,10 +25,16 @@ from rigging.token_authority import generate_ed25519_keypair
 
 _CLUSTER = "test-cluster"
 _SIGNING_KEY = generate_ed25519_keypair().private_pem
+_ASSERTION_AUD = "/projects/1/global/backendServices/2"
 
 _LOOPBACK = "127.0.0.1:54321"
 _IN_CIDR = "10.1.2.3:5555"
 _EXTERNAL = "203.0.113.9:5555"
+
+
+def _iap(**auth_kw) -> AuthConfig:
+    """An IAP AuthConfig (signed-header assertion) with AuthConfig-level overrides."""
+    return AuthConfig(iap=IapAuthConfig(signed_header_audience=_ASSERTION_AUD), **auth_kw)
 
 
 def _chain_types(policy):
@@ -46,25 +52,19 @@ def _chain_types(policy):
     [
         # null-auth: permissive [BestEffortJwt, Anonymous].
         (AuthConfig(), None, [BestEffortJwtAuthenticator, AnonymousAuthenticator]),
-        # gcp login provider: [Jwt, Loopback].
-        (AuthConfig(gcp=GcpAuthConfig(project_id="p")), _SIGNING_KEY, [JwtAuthenticator, LoopbackAuthenticator]),
-        # gcp + optional: anonymous tail appended.
-        (
-            AuthConfig(gcp=GcpAuthConfig(project_id="p"), optional=True),
-            _SIGNING_KEY,
-            [JwtAuthenticator, LoopbackAuthenticator, AnonymousAuthenticator],
-        ),
-        # gcp + trusted_cidrs: cidr layer between jwt and loopback.
-        (
-            AuthConfig(gcp=GcpAuthConfig(project_id="p"), trusted_cidrs=["10.0.0.0/8"]),
-            _SIGNING_KEY,
-            [JwtAuthenticator, CidrAuthenticator, LoopbackAuthenticator],
-        ),
         # iap signed-header assertion: [Jwt, IapAssertion, Loopback].
+        (_iap(), _SIGNING_KEY, [JwtAuthenticator, IapAssertionAuthenticator, LoopbackAuthenticator]),
+        # iap + optional: anonymous tail appended.
         (
-            AuthConfig(iap=IapAuthConfig(signed_header_audience="/projects/1/global/backendServices/2")),
+            _iap(optional=True),
             _SIGNING_KEY,
-            [JwtAuthenticator, IapAssertionAuthenticator, LoopbackAuthenticator],
+            [JwtAuthenticator, IapAssertionAuthenticator, LoopbackAuthenticator, AnonymousAuthenticator],
+        ),
+        # iap + trusted_cidrs: cidr layer between assertion and loopback.
+        (
+            _iap(trusted_cidrs=["10.0.0.0/8"]),
+            _SIGNING_KEY,
+            [JwtAuthenticator, IapAssertionAuthenticator, CidrAuthenticator, LoopbackAuthenticator],
         ),
         # cidr-only trust: [Jwt, Cidr, Loopback]. The jwt layer is retained (the
         # request verifier is always the JWT manager) so the cluster worker token
@@ -81,7 +81,7 @@ def _chain_types(policy):
             [JwtAuthenticator, CidrAuthenticator, LoopbackAuthenticator, AnonymousAuthenticator],
         ),
     ],
-    ids=["null-auth", "gcp", "gcp-optional", "gcp-cidr", "iap-assertion", "cidr-only", "cidr-only-optional"],
+    ids=["null-auth", "iap-assertion", "iap-optional", "iap-cidr", "cidr-only", "cidr-only-optional"],
 )
 def test_compiled_chain_shape(config, signing_key, expected):
     auth = create_controller_auth(config, cluster_name=_CLUSTER, signing_key_pem=signing_key)
@@ -104,28 +104,8 @@ def test_null_auth_outcomes():
     assert policy.resolve(auth.worker_token, headers={}).user_id == WORKER_USER
 
 
-def test_gcp_outcomes():
-    auth = create_controller_auth(
-        AuthConfig(gcp=GcpAuthConfig(project_id="p")), cluster_name=_CLUSTER, signing_key_pem=_SIGNING_KEY
-    )
-    policy = request_auth_policy(auth)
-    assert not policy.allows_anonymous
-    # Worker JWT from any peer verifies; loopback resolves to admin.
-    assert policy.resolve(auth.worker_token, client_address=_EXTERNAL, headers={}).user_id == WORKER_USER
-    assert policy.resolve(None, client_address=_LOOPBACK, headers={}) == ANONYMOUS_ADMIN
-    # Tokenless external and present-but-invalid tokens are rejected.
-    with pytest.raises(ValueError, match="Missing authentication"):
-        policy.resolve(None, client_address=_EXTERNAL, headers={})
-    with pytest.raises(ValueError):
-        policy.resolve("bogus", client_address=_EXTERNAL, headers={})
-
-
-def test_gcp_optional_outcomes():
-    auth = create_controller_auth(
-        AuthConfig(gcp=GcpAuthConfig(project_id="p"), optional=True),
-        cluster_name=_CLUSTER,
-        signing_key_pem=_SIGNING_KEY,
-    )
+def test_iap_optional_outcomes():
+    auth = create_controller_auth(_iap(optional=True), cluster_name=_CLUSTER, signing_key_pem=_SIGNING_KEY)
     policy = request_auth_policy(auth)
     assert policy.allows_anonymous
     # The anonymous tail admits tokenless external; an invalid token still rejects.
@@ -151,11 +131,7 @@ def test_cidr_only_outcomes():
 
 
 def test_iap_assertion_outcomes():
-    auth = create_controller_auth(
-        AuthConfig(iap=IapAuthConfig(signed_header_audience="/projects/1/global/backendServices/2")),
-        cluster_name=_CLUSTER,
-        signing_key_pem=_SIGNING_KEY,
-    )
+    auth = create_controller_auth(_iap(), cluster_name=_CLUSTER, signing_key_pem=_SIGNING_KEY)
     policy = request_auth_policy(auth)
     assert not policy.allows_anonymous
     # No assertion header + tokenless external => rejected; loopback still admin;

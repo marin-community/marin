@@ -8,7 +8,6 @@ from rigging import credentials as creds
 from rigging.auth import (
     MARIN_DESKTOP_OAUTH_CLIENT,
     BearerTokenInjector,
-    GcpAccessTokenProvider,
     IapRefreshTokenProvider,
     IapServiceAccountTokenProvider,
     StaticTokenProvider,
@@ -35,28 +34,18 @@ def _iap_auth(**kw) -> ClusterAuth:
     return ClusterAuth(AuthProvider.IAP, iap=IapAuth(url="https://iris", **kw))
 
 
-def test_env_override_wins_over_file_and_provider(monkeypatch):
+def test_env_override_sets_token_provider(monkeypatch):
+    # $MARIN_CLUSTER_TOKEN is the sole app-token source: an explicit bearer for
+    # CI / headless runs. The controller mints no user token otherwise.
     monkeypatch.setenv(creds.MARIN_CLUSTER_TOKEN_ENV, "env-tok")
-    monkeypatch.setattr(creds, "load_credentials", lambda cluster: _record(app_token="file-tok"))
-    c = credentials_for("marin", ClusterAuth(AuthProvider.GCP))
+    c = credentials_for("marin", _iap_auth())
     assert isinstance(c.token_provider, StaticTokenProvider)
     assert c.token_provider.get_token() == "env-tok"
 
 
-def test_login_file_app_token_used_when_no_env(monkeypatch):
-    monkeypatch.setattr(creds, "load_credentials", lambda cluster: _record(app_token="file-tok"))
-    c = credentials_for("marin", _iap_auth())
-    assert c.token_provider.get_token() == "file-tok"
-
-
-def test_gcp_cluster_falls_back_to_ambient_access_token():
-    c = credentials_for("marin", ClusterAuth(AuthProvider.GCP))
-    assert isinstance(c.token_provider, GcpAccessTokenProvider)
-    assert c.iap_provider is None
-
-
-def test_iap_cluster_has_no_ambient_app_token():
-    # The Iris JWT comes only from login; without a file there is no app provider.
+def test_iap_cluster_has_no_ambient_authorization_bearer():
+    # Pure-IAP: the controller mints no user token, so with no env override there is
+    # no Authorization bearer — auth rides on the IAP edge (Proxy-Authorization).
     c = credentials_for("marin", _iap_auth())
     assert c.token_provider is None
 

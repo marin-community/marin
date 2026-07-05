@@ -72,7 +72,6 @@ DASHBOARD_READABLE_RPCS: frozenset[str] = frozenset(
         # Federation (read-only peer observation)
         "ListPeers",
         # Identity, users, budgets (read)
-        "GetAuthInfo",
         "GetCurrentUser",
         "ListUsers",
         "GetUserBudget",

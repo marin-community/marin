@@ -782,8 +782,6 @@ service ControllerService {
   rpc GetProcessStatus(iris.job.GetProcessStatusRequest) returns (iris.job.GetProcessStatusResponse);
 
   // Authentication
-  rpc GetAuthInfo(iris.job.GetAuthInfoRequest) returns (iris.job.GetAuthInfoResponse);
-  rpc Login(iris.job.LoginRequest) returns (iris.job.LoginResponse);
   rpc GetCurrentUser(iris.job.GetCurrentUserRequest) returns (iris.job.GetCurrentUserResponse);
 
   // Kubernetes cluster status
