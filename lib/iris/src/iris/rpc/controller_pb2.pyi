@@ -205,12 +205,14 @@ class Controller(_message.Message):
         task_id: str
         def __init__(self, task_id: _Optional[str] = ...) -> None: ...
     class GetTaskStatusResponse(_message.Message):
-        __slots__ = ("task", "job_resources")
+        __slots__ = ("task", "job_resources", "root_cause_highlights")
         TASK_FIELD_NUMBER: _ClassVar[int]
         JOB_RESOURCES_FIELD_NUMBER: _ClassVar[int]
+        ROOT_CAUSE_HIGHLIGHTS_FIELD_NUMBER: _ClassVar[int]
         task: _job_pb2.TaskStatus
         job_resources: _job_pb2.ResourceSpecProto
-        def __init__(self, task: _Optional[_Union[_job_pb2.TaskStatus, _Mapping]] = ..., job_resources: _Optional[_Union[_job_pb2.ResourceSpecProto, _Mapping]] = ...) -> None: ...
+        root_cause_highlights: _containers.RepeatedScalarFieldContainer[str]
+        def __init__(self, task: _Optional[_Union[_job_pb2.TaskStatus, _Mapping]] = ..., job_resources: _Optional[_Union[_job_pb2.ResourceSpecProto, _Mapping]] = ..., root_cause_highlights: _Optional[_Iterable[str]] = ...) -> None: ...
     class ListTasksRequest(_message.Message):
         __slots__ = ("job_id",)
         JOB_ID_FIELD_NUMBER: _ClassVar[int]

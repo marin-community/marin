@@ -14,7 +14,8 @@ from typing import Any
 from rigging.timing import Timestamp
 
 from iris.cluster.controller.task_state import ActiveTaskRow, TaskDetailRow
-from iris.cluster.types import AttemptUid, JobName, WorkerId
+from iris.cluster.types import TERMINAL_TASK_STATES, AttemptUid, JobName, WorkerId
+from iris.rpc import job_pb2
 
 
 @dataclass(frozen=True)
@@ -68,44 +69,34 @@ class TaskHistogramRow:
     state: int
     failure_count: int
     error: str | None
-    # None while the task has not reached a genuinely terminal state (e.g. a
-    # coscheduled sibling bounced back to PENDING for retry, whose error records
-    # the cascade without ever finishing it).
+    # Set only once the task reaches a terminal state; None while it is still
+    # active or bounced back to PENDING for a retry.
     finished_at: Timestamp | None = None
 
 
-def task_error_rank(finished_at: Timestamp | None, task_index: int) -> tuple[int, int, int]:
-    """Sort key ordering tasks by which one failed first.
+def pick_earliest_task_error(candidates: Iterable[tuple[int, int, Timestamp | None, str | None]]) -> str | None:
+    """Return the error of the failed task that finished first among ``candidates``.
 
-    Orders by ``finished_at`` so the task that actually failed first outranks
-    siblings that only fail later after timing out waiting on it (e.g. a JAX
-    shutdown barrier). A task with no ``finished_at`` sorts after every task
-    that did finish; ties break by ``task_index`` for determinism.
+    ``candidates`` is ``(task_index, state, finished_at, error)`` per task.
+    Considers only tasks that finished in a failed terminal state with a
+    recorded error, then returns the earliest-finishing one's error (ties break
+    by ``task_index``). This picks a coscheduled gang's true root cause — the
+    sibling that crashed first — over a follower that only timed out waiting on
+    it. Tasks still retrying (no ``finished_at``) and tasks that ultimately
+    succeeded (a stale error preserved from an earlier failed attempt) are
+    excluded.
     """
-    if finished_at is None:
-        return (1, 0, task_index)
-    return (0, finished_at.epoch_ms(), task_index)
-
-
-def pick_earliest_task_error(candidates: Iterable[tuple[int, Timestamp | None, str | None]]) -> str | None:
-    """Return the error of the task that failed first among ``candidates``.
-
-    ``candidates`` is ``(task_index, finished_at, error)`` per task; entries
-    with a ``None`` error are skipped. Ranks by ``finished_at`` (earliest
-    wins, a task with none sorts last, ties break by ``task_index``), so the
-    result is a job's root-cause task, not necessarily the lowest-indexed task
-    with a non-null error.
-    """
-    best_rank: tuple[int, int, int] | None = None
-    best_error: str | None = None
-    for task_index, finished_at, error in candidates:
-        if error is None:
-            continue
-        rank = task_error_rank(finished_at, task_index)
-        if best_rank is None or rank < best_rank:
-            best_rank = rank
-            best_error = error
-    return best_error
+    failed = [
+        (finished_at, task_index, error)
+        for task_index, state, finished_at, error in candidates
+        if error is not None
+        and finished_at is not None
+        and state in TERMINAL_TASK_STATES
+        and state != job_pb2.TASK_STATE_SUCCEEDED
+    ]
+    if not failed:
+        return None
+    return min(failed, key=lambda c: (c[0].epoch_ms(), c[1]))[2]
 
 
 @dataclass(frozen=True)

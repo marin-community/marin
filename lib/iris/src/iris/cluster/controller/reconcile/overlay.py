@@ -107,11 +107,11 @@ class Overlay:
                 first_task_error=None,
             )
         # Single pass: build the accumulator-aware state histogram, the
-        # cumulative failure count, and each task's effective (error,
+        # cumulative failure count, and each task's effective (state, error,
         # finished_at) for pick_earliest_task_error to rank afterward.
         counts: dict[int, int] = {}
         total_failures = 0
-        error_candidates: list[tuple[int, Timestamp | None, str | None]] = []
+        error_candidates: list[tuple[int, int, Timestamp | None, str | None]] = []
         for row in self._snapshot.all_tasks_by_job.get(job_id, ()):
             delta = self._effects.tasks.get(row.task_id)
             state = delta.state if delta is not None else row.state
@@ -124,7 +124,7 @@ class Overlay:
             # one; otherwise fall back to the snapshot row.
             error = delta.error if (delta is not None and delta.error is not None) else row.error
             finished_at = delta.finished_at if (delta is not None and delta.finished_at is not None) else row.finished_at
-            error_candidates.append((row.task_index, finished_at, error))
+            error_candidates.append((row.task_index, state, finished_at, error))
         return JobStateBasis(
             job_id=basis.job_id,
             state=current_state,

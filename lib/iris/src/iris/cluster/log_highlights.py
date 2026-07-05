@@ -1,14 +1,15 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Extracts likely root-cause lines from noisy task logs.
+"""Distills the likely root-cause lines from a batch of noisy task logs.
 
-Task logs mix real failure signal (Python tracebacks, fatal-error banners,
-JAX/NCCL/CUDA/Kueue diagnostics) with high-volume noise: tqdm progress bars,
-per-request HTTP access log lines, and CPython's post-crash ``Extension
-modules:`` dump. This module is a pure text filter over a batch of log
-lines — it has no dependency on how the lines were collected, so it applies
-uniformly to GCP/TPU worker-daemon logs and Kubernetes pod logs.
+Task logs bury the real failure signal — Python tracebacks, fatal-error
+banners, JAX/NCCL/CUDA/Kueue diagnostics — under high-volume noise: tqdm
+progress bars, per-request HTTP access-log lines, and CPython's post-crash
+``Extension modules:`` dump. The extractor is a pure text filter over the log
+lines: it drops the noise and keeps the lines that name the failure, so an
+operator (or the dashboard) sees the crash first. It reads only the text, so
+it works on Kubernetes pod logs and GCP/TPU worker-daemon logs alike.
 """
 
 import re

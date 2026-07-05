@@ -161,7 +161,9 @@ def _bulk_load_job_state_basis(
             max_task_failures=max_task_failures,
             task_state_counts=histogram,
             total_failures=total_failures,
-            first_task_error=pick_earliest_task_error((row.task_index, row.finished_at, row.error) for row in rows),
+            first_task_error=pick_earliest_task_error(
+                (row.task_index, row.state, row.finished_at, row.error) for row in rows
+            ),
         )
     return result
 

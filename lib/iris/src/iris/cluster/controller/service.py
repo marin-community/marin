@@ -20,6 +20,7 @@ from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from connectrpc.request import RequestContext
 from finelog.client import LogClient
+from finelog.rpc import logging_pb2
 from rigging.server_auth import get_verified_identity, require_identity
 from rigging.timing import Duration, ExponentialBackoff, Timer, Timestamp
 from sqlalchemy import bindparam, case, func, select, text, tuple_
@@ -79,6 +80,8 @@ from iris.cluster.controller.worker_health import WorkerLiveness
 from iris.cluster.federation.manager import FederationManager
 from iris.cluster.federation.router import RoutingRequest, SubmitRouting
 from iris.cluster.federation.store import HandoffState
+from iris.cluster.log_highlights import extract_failure_highlights
+from iris.cluster.log_keys import build_log_source
 from iris.cluster.process_status import get_process_status
 from iris.cluster.redaction import redact_request_env_vars
 from iris.cluster.runtime.profile import (
@@ -524,6 +527,9 @@ def _read_worker_detail(db: ControllerDB, worker_id: WorkerId) -> _WorkerDetail 
 # high-volume churn — capacity preemptions and gang-cancellation collateral —
 # that buries the genuine failures the dashboard wants to surface.
 _LISTING_FAILURE_STATES = (job_pb2.TASK_STATE_FAILED, job_pb2.TASK_STATE_WORKER_FAILED)
+
+# Log tail depth scanned for the task-detail "Likely Root Cause" highlights.
+_ROOT_CAUSE_LOG_TAIL = 200
 
 
 def _tasks_for_listing(tx: Tx, *, job_id: JobName) -> list[TaskWithAttempts]:
@@ -1884,7 +1890,37 @@ class ControllerServiceImpl:
                     jc_row.res_cpu_millicores, jc_row.res_memory_bytes, jc_row.res_disk_bytes, jc_row.res_device_json
                 )
 
-        return controller_pb2.Controller.GetTaskStatusResponse(task=proto, job_resources=job_resources)
+        return controller_pb2.Controller.GetTaskStatusResponse(
+            task=proto,
+            job_resources=job_resources,
+            root_cause_highlights=self._task_root_cause_highlights(task_id, proto.state),
+        )
+
+    def _task_root_cause_highlights(self, task_id: JobName, state: int) -> list[str]:
+        """Distill likely root-cause lines from a failed task's own logs.
+
+        Fetches a short tail of the task's logs and runs it through
+        ``extract_failure_highlights`` so the dashboard can show the crash ahead
+        of the raw log stream. Returns an empty list for a task that did not
+        genuinely fail, or if the log fetch fails, so it never breaks the
+        task-detail response.
+        """
+        if state not in _LISTING_FAILURE_STATES:
+            return []
+        source, match_scope = build_log_source(task_id)
+        try:
+            resp = self._log_client.fetch_logs(
+                logging_pb2.FetchLogsRequest(
+                    source=source,
+                    match_scope=match_scope,
+                    max_lines=_ROOT_CAUSE_LOG_TAIL,
+                    tail=True,
+                )
+            )
+        except Exception:
+            logger.warning("Failed to fetch logs for root-cause highlights of %s", task_id, exc_info=True)
+            return []
+        return extract_failure_highlights([entry.data for entry in resp.entries])
 
     def list_tasks(
         self,
