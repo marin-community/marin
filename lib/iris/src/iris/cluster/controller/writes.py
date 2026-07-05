@@ -699,16 +699,10 @@ def remove_worker(
     tx: Tx,
     worker_id: WorkerId,
     health: WorkerHealthTracker,
-    worker_attrs: WorkerAttrsProjection,
 ) -> None:
     """Delete a worker row and clear back-references on attempts / tasks.
 
     ``cascades_into`` records the FK fanout to ``task_attempts``.
-    The cascade into ``worker_attributes`` is Projection-owned and therefore
-    not declared on the decorator; instead this function calls
-    :meth:`WorkerAttrsProjection.invalidate_for_worker` inline so the
-    cache update commits under the same write lock as the SQL.
-
     The pre-emptive ``UPDATE`` on ``task_attempts`` / ``tasks`` sets
     ``current_worker_*`` to NULL before the delete so the row history
     is observable to readers in the same write transaction.
@@ -716,7 +710,7 @@ def remove_worker(
     tx.execute(update(task_attempts_table).where(task_attempts_table.c.worker_id == worker_id).values(worker_id=None))
     tx.execute(update(tasks_table).where(tasks_table.c.current_worker_id == worker_id).values(current_worker_id=None))
     tx.execute(delete(workers_table).where(workers_table.c.worker_id == worker_id))
-    worker_attrs.invalidate_for_worker(tx, worker_id)
+    tx.caches[WorkerAttrsProjection].invalidate_for_worker(tx, worker_id)
     tx.register(lambda: health.forget(worker_id))
 
 

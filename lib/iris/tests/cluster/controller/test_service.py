@@ -87,7 +87,6 @@ def _register_worker(state: ControllerTestState, worker_id: WorkerId) -> None:
             metadata=metadata,
             ts=Timestamp.now(),
             health=state._health,
-            worker_attrs=state._worker_attrs,
         )
 
 
@@ -226,7 +225,6 @@ def test_profile_worker_routes_to_worker_backend(service, state):
             metadata=make_worker_metadata(),
             ts=Timestamp.now(),
             health=state._health,
-            worker_attrs=state._worker_attrs,
             scale_group="cw-h100",
         )
     cw = Mock()
@@ -1743,7 +1741,6 @@ def test_get_scheduler_state_with_running_task(controller_service, state):
             ),
             ts=Timestamp.now(),
             health=state._health,
-            worker_attrs=state._worker_attrs,
         )
     task_id = job_id.task(0)
     _assign_and_transition(state, task_id, w1, job_pb2.TASK_STATE_RUNNING)

@@ -81,7 +81,6 @@ from iris.cluster.controller.log_stack import build_log_stack
 from iris.cluster.controller.ops.task import Assignment
 from iris.cluster.controller.ops.worker import apply_reconcile
 from iris.cluster.controller.projections.endpoints import EndpointQuery, EndpointRow, EndpointsProjection
-from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
 from iris.cluster.controller.reads import (  # noqa: F401
     ControlSnapshot,
     SchedulableWorker,
@@ -182,7 +181,6 @@ class _FakeProvider:
         self._scheduler = Scheduler()
         self._store: BackendWorkerStore | None = None
         self.health: WorkerHealthTracker = WorkerHealthTracker()
-        self.worker_attrs: WorkerAttrsProjection | None = None
         self.advertised: dict[str, set[str]] = {}
         self.allowed_users: frozenset[str] = frozenset({"*"})
         self._pending_dead: list[WorkerId] = []
@@ -213,12 +211,10 @@ class _FakeProvider:
         raise RuntimeError("fake provider")
 
     def bind_runtime(self, runtime: BackendRuntime) -> None:
-        self.worker_attrs = WorkerAttrsProjection(runtime.db, owns_scale_group=runtime.owns_scale_group)
         self._store = DbBackendWorkerStore(
             db=runtime.db,
             owns_scale_group=runtime.owns_scale_group,
             health=self.health,
-            worker_attrs=self.worker_attrs,
             endpoints=runtime.endpoints,
             run_template_cache=runtime.run_template_cache,
             defaults=runtime.budget_defaults,
@@ -1714,7 +1710,6 @@ def benchmark_endpoints(db: ControllerDB) -> None:
                     reason="benchmark: simulated provider-sync failure",
                     health=write_txns._health,
                     endpoints=write_txns._endpoints,
-                    worker_attrs=write_txns._worker_attrs,
                 ),
                 reset=_reset_fail,
                 min_runs=3,
@@ -1815,7 +1810,6 @@ def _run_apply_under_contention(
                         reason="benchmark: simulated provider-sync failure",
                         health=write_txns._health,
                         endpoints=write_txns._endpoints,
-                        worker_attrs=write_txns._worker_attrs,
                     )
                 stop.wait(fail_interval_s)
         except BaseException as e:
@@ -1835,7 +1829,6 @@ def _run_apply_under_contention(
                             metadata=meta,
                             ts=Timestamp.now(),
                             health=write_txns._health,
-                            worker_attrs=write_txns._worker_attrs,
                             slice_id="",
                             scale_group="bench",
                         )
@@ -2507,7 +2500,6 @@ def _build_synthetic_reconcile_state(
                     metadata=meta,
                     ts=now,
                     health=txns._health,
-                    worker_attrs=txns._worker_attrs,
                     slice_id="",
                     scale_group="bench",
                 )

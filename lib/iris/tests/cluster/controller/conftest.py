@@ -68,7 +68,6 @@ from iris.cluster.controller.endpoint_service import EndpointServiceImpl
 from iris.cluster.controller.log_stack import build_log_stack
 from iris.cluster.controller.ops.task import Assignment
 from iris.cluster.controller.ops.worker import apply_reconcile
-from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
 from iris.cluster.controller.reads import SchedulableWorker
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.reconcile.worker import WorkerReconcilePlan, WorkerReconcileResult
@@ -174,17 +173,15 @@ def run_worker_daemon_reconcile(
 def store_from_runtime(
     runtime: BackendRuntime,
     health: WorkerHealthTracker,
-    worker_attrs: WorkerAttrsProjection,
     autoscale: Callable[[AutoscaleRequest], AutoscaleResult],
 ) -> DbBackendWorkerStore:
-    """Build a fake's worker store from the controller runtime + its own tracker,
-    attrs projection, and ``autoscale`` — the worker-daemon fakes' shared mirror of
+    """Build a fake's worker store from the controller runtime + its own tracker
+    and ``autoscale`` — the worker-daemon fakes' shared mirror of
     ``RpcTaskBackend.bind_runtime``."""
     return DbBackendWorkerStore(
         db=runtime.db,
         owns_scale_group=runtime.owns_scale_group,
         health=health,
-        worker_attrs=worker_attrs,
         endpoints=runtime.endpoints,
         run_template_cache=runtime.run_template_cache,
         defaults=runtime.budget_defaults,
@@ -210,9 +207,6 @@ class FakeProvider:
         # This backend's own liveness tracker (the controller builds its worker
         # store over this same object), mirroring RpcTaskBackend.
         self.health: WorkerHealthTracker = WorkerHealthTracker()
-        # This backend's own attributes projection, built in ``bind_runtime`` once
-        # ``runtime.db``/``owns_scale_group`` are known, mirroring RpcTaskBackend.
-        self.worker_attrs: WorkerAttrsProjection | None = None
         self.advertised: dict[str, set[str]] = {}
         self.allowed_users: frozenset[str] = frozenset({"*"})
         # Workers this fake's reconcile fold reaped, awaiting run_teardown.
@@ -262,8 +256,7 @@ class FakeProvider:
         return self._store.prune_dead_workers(cutoff_ms=cutoff_ms, stop_event=stop_event, pause=pause)
 
     def bind_runtime(self, runtime: BackendRuntime) -> None:
-        self.worker_attrs = WorkerAttrsProjection(runtime.db, owns_scale_group=runtime.owns_scale_group)
-        self._store = store_from_runtime(runtime, self.health, self.worker_attrs, self.autoscale)
+        self._store = store_from_runtime(runtime, self.health, self.autoscale)
 
     def seed_liveness(self) -> None:
         assert self._store is not None, "FakeProvider.seed_liveness called before worker store attached"
@@ -292,9 +285,9 @@ class FakeProvider:
 
 def worker_daemon_backends_for_prune(state: ControllerTestState) -> list[FakeProvider]:
     """A single worker-daemon backend bound to ``state``'s db/health, for tests
-    that drive ``prune_old_data``'s per-backend dead-worker GC. The backend builds
-    its own attrs projection (claiming every worker, like ``state._worker_attrs``)
-    since pruning never reads attribute content."""
+    that drive ``prune_old_data``'s per-backend dead-worker GC. Pruning never
+    reads attribute content; the global ``WorkerAttrsProjection`` serves from
+    ``db.caches``."""
     provider = FakeProvider()
     provider.health = state._health
     provider.bind_runtime(
@@ -377,13 +370,11 @@ def log_service(embedded_log_server) -> LogServiceClientSync:
 def controller_service(state, log_client, mock_controller, tmp_path) -> ControllerServiceImpl:
     """ControllerServiceImpl with fresh DB, log service, and mock controller.
 
-    The service registers workers into and reads liveness/attrs through the
-    controller's backend, so point the mock backend's tracker and attrs projection
-    at this state's ``_health``/``_worker_attrs`` so writes and reads land on the
-    same objects the test inspects.
+    The service registers workers into and reads liveness through the controller's
+    backend, so point the mock backend's tracker at this state's ``_health`` so
+    writes and reads land on the same object the test inspects.
     """
     mock_controller.provider.health = state._health
-    mock_controller.provider.worker_attrs = state._worker_attrs
     return ControllerServiceImpl(
         controller=mock_controller,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
@@ -736,7 +727,6 @@ def register_worker(
             metadata=metadata,
             ts=Timestamp.now(),
             health=state._health,
-            worker_attrs=state._worker_attrs,
             slice_id=slice_id,
             scale_group=scale_group,
         )
@@ -755,16 +745,15 @@ def register_worker_into_backend(
     healthy: bool = True,
     slice_id: str = "",
 ) -> WorkerId:
-    """Register a worker into the liveness tracker and attrs projection owned by the
-    backend that owns its scale group.
+    """Register a worker into the liveness tracker owned by the backend that owns
+    its scale group.
 
     The multi-backend equivalent of :func:`register_worker`: each backend owns its
-    own tracker and attrs projection, so a worker must land in the backend its
-    scale group routes to (rather than one shared tracker/projection).
+    own tracker, so a worker's liveness must land in the backend its scale group
+    routes to.
     """
     backend = controller.backends[controller.backend_id_for_scale_group(scale_group)]
     assert backend.health is not None, f"backend for scale group {scale_group!r} has no liveness tracker"
-    assert backend.worker_attrs is not None, f"backend for scale group {scale_group!r} has no attrs projection"
     wid = WorkerId(worker_id)
     with controller._db.transaction() as cur:
         ops.worker.register(
@@ -774,7 +763,6 @@ def register_worker_into_backend(
             metadata=metadata,
             ts=Timestamp.now(),
             health=backend.health,
-            worker_attrs=backend.worker_attrs,
             slice_id=slice_id,
             scale_group=scale_group,
         )
@@ -1080,7 +1068,6 @@ def fail_worker(state: ControllerTestState, worker_id: WorkerId, error: str) -> 
         reason=error,
         health=state._health,
         endpoints=state._endpoints,
-        worker_attrs=state._worker_attrs,
     )
 
 

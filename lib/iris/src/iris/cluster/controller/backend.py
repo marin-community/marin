@@ -39,7 +39,6 @@ from iris.cluster.controller.autoscaler.state import AutoscalerState
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.ops.task import Assignment
 from iris.cluster.controller.projections.endpoints import EndpointsProjection
-from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
 from iris.cluster.controller.reads import ControlSnapshot
 from iris.cluster.controller.reconcile import ControllerEffects
 from iris.cluster.controller.reconcile.task import TerminalDecision, TerminalKind
@@ -487,14 +486,6 @@ class TaskBackend(Protocol):
         workers (k8s). The backend folds and reaps through it; the controller reaches
         worker liveness through it (routed by scale group) for its Fleet/exec/capacity/
         prune readers and to seed/register a worker into its owning backend."""
-        ...
-
-    @property
-    def worker_attrs(self) -> WorkerAttrsProjection | None:
-        """The worker-attributes projection this backend constructs and owns, holding
-        only the workers in its scale groups, or None for a backend that tracks no
-        Iris workers (k8s). The controller reaches it (routed by scale group) to
-        register a worker's attributes into its owning backend."""
         ...
 
     allowed_users: frozenset[str]

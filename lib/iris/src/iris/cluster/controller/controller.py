@@ -59,6 +59,7 @@ from iris.cluster.controller.ops.task import (
 )
 from iris.cluster.controller.projections.attempt_counts import AttemptCountsProjection
 from iris.cluster.controller.projections.endpoints import EndpointsProjection
+from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
 from iris.cluster.controller.pruner import prune_old_data
 from iris.cluster.controller.reconcile import dispatch
 from iris.cluster.controller.reconcile.commit import commit_effects
@@ -380,6 +381,7 @@ class Controller:
         # pruner, and reconcile commit path all invalidate/read through the cursor
         # rather than holding a threaded cache reference.
         self._attempt_counts = AttemptCountsProjection(self._db)
+        self._worker_attrs = WorkerAttrsProjection(self._db)
 
         self._threads = threads if threads is not None else get_thread_container()
 
@@ -439,8 +441,6 @@ class Controller:
             if BackendCapability.WORKER_DAEMON in backend.capabilities:
                 backend.bind_runtime(self._build_runtime(backend_id))
 
-        # Runs after binding so the per-backend WorkerAttrsProjection each backend
-        # registers in bind_runtime is present in PROJECTIONS for the owned-table check.
         writes.validate()
 
         # Seed each backend's liveness from its persisted workers so the scheduler

@@ -302,7 +302,6 @@ def scenario_worker_failure_cascade(transitions: ControllerTestState, clock: Fro
         reason="node lost",
         health=transitions._health,
         endpoints=transitions._endpoints,
-        worker_attrs=transitions._worker_attrs,
     )
 
 

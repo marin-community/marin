@@ -12,8 +12,7 @@ import pytest
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.projections import PROJECTIONS
 from iris.cluster.controller.projections.endpoints import EndpointsProjection
-from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
-from iris.cluster.controller.schema import endpoints_table, meta_table, worker_attributes_table
+from iris.cluster.controller.schema import endpoints_table, meta_table
 from iris.cluster.controller.writes import (
     REGISTERED_WRITE_FUNCTIONS,
     ConfigurationError,
@@ -38,13 +37,11 @@ def fresh_db() -> Iterator[ControllerDB]:
 def projections_built(fresh_db: ControllerDB) -> Iterator[None]:
     """Construct one of each Projection so PROJECTIONS exposes their owned tables."""
     endpoints = EndpointsProjection(fresh_db)
-    worker_attrs = WorkerAttrsProjection(fresh_db, owns_scale_group=lambda _scale_group: True)
     try:
         yield
     finally:
-        for proj in (endpoints, worker_attrs):
-            if proj in PROJECTIONS:
-                PROJECTIONS.remove(proj)
+        if endpoints in PROJECTIONS:
+            PROJECTIONS.remove(endpoints)
 
 
 @pytest.fixture
@@ -74,11 +71,7 @@ def test_violation_detected(projections_built, registry_isolated):
 def test_cascade_violation_detected(projections_built, registry_isolated):
     """``cascades_into`` over a Projection-owned table is treated as a write."""
 
-    # endpoints_table is harmless filler so this isn't *also* flagged as a
-    # direct write to a Projection-owned table; the assertion below targets
-    # the cascade leg specifically.
-
-    @writes_to(meta_table, cascades_into=(worker_attributes_table,))
+    @writes_to(meta_table, cascades_into=(endpoints_table,))
     def rogue_cascade(tx) -> None:
         pass
 
@@ -87,8 +80,8 @@ def test_cascade_violation_detected(projections_built, registry_isolated):
 
     msg = str(exc_info.value)
     assert "rogue_cascade" in msg
-    assert "worker_attributes" in msg
-    assert "WorkerAttrsProjection" in msg
+    assert "endpoints" in msg
+    assert "EndpointsProjection" in msg
 
 
 def test_projection_method_allowed(projections_built, registry_isolated):

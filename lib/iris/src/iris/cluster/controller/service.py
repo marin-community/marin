@@ -2042,14 +2042,9 @@ class ControllerServiceImpl:
             )
         worker_id = WorkerId(request.worker_id)
 
-        # Route the worker into the liveness tracker and attributes projection owned
-        # by the backend that owns its scale group; a worker never registers into a
-        # k8s scale group.
         backend = self._backend_for_id(self._controller.backend_id_for_scale_group(request.scale_group))
         health = backend.health
-        worker_attrs = backend.worker_attrs
         assert health is not None, f"worker {worker_id} registered into a scale group with no liveness tracker"
-        assert worker_attrs is not None, f"worker {worker_id} registered into a scale group with no attrs projection"
         with self._db.transaction() as cur:
             ops.worker.register(
                 cur,
@@ -2058,7 +2053,6 @@ class ControllerServiceImpl:
                 metadata=request.metadata,
                 ts=Timestamp.now(),
                 health=health,
-                worker_attrs=worker_attrs,
                 slice_id=request.slice_id,
                 scale_group=request.scale_group,
             )

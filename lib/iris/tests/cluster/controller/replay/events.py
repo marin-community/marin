@@ -142,7 +142,6 @@ def apply_event(transitions: ControllerTestState, event: IrisEvent) -> Any:
                     metadata=metadata,
                     ts=ts,
                     health=transitions._health,
-                    worker_attrs=transitions._worker_attrs,
                     slice_id=slice_id,
                     scale_group=scale_group,
                 )

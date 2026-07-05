@@ -103,7 +103,6 @@ def _make_service(
     state = stack.enter_context(make_controller_state())
     mock = MockController()
     mock.provider.health = state._health
-    mock.provider.worker_attrs = state._worker_attrs
     service = ControllerServiceImpl(
         controller=mock,
         bundle_store=BundleStore(storage_dir=str(tmp_path / subdir / "bundles")),

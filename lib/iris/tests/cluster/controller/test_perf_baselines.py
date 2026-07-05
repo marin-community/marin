@@ -292,7 +292,6 @@ def test_register_worker_with_n_attributes_perf(register_perf_db: ControllerTest
                 metadata=metadata,
                 ts=Timestamp.now(),
                 health=state._health,
-                worker_attrs=state._worker_attrs,
             )
 
     per_call_s = _measure(_register, _TICKS)

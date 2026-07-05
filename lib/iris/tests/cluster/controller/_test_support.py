@@ -24,7 +24,6 @@ from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjecti
 from iris.cluster.controller.run_template import RunTemplateCache, new_run_template_cache
 from iris.cluster.controller.schema import (
     tasks_table,
-    worker_attributes_table,
     workers_table,
 )
 from iris.cluster.controller.task_state import ACTIVE_TASK_STATES
@@ -33,7 +32,6 @@ from iris.cluster.types import JobName, WorkerId
 from rigging.timing import Timestamp
 from sqlalchemy import bindparam, select
 from sqlalchemy import update as sa_update
-from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
 
 @dataclass
@@ -43,9 +41,7 @@ class ControllerTestState:
 
     Field names match the underscored ones a single-backend :class:`Controller`
     exposes through its default backend (``_db``, ``_health``, ``_endpoints``,
-    ``_run_template_cache``) so the same helpers work against either. Unlike a
-    real backend's scale-group-scoped projections, ``_worker_attrs`` here claims
-    every worker by default, since tests built on this state simulate one backend.
+    ``_run_template_cache``) so the same helpers work against either.
     """
 
     _db: ControllerDB
@@ -72,7 +68,7 @@ class ControllerTestState:
         self._attempt_counts = AttemptCountsProjection(db)
         self._health = health or WorkerHealthTracker()
         self._endpoints = endpoints or EndpointsProjection(db)
-        self._worker_attrs = worker_attrs or WorkerAttrsProjection(db, owns_scale_group=lambda _scale_group: True)
+        self._worker_attrs = worker_attrs or WorkerAttrsProjection(db)
         self._run_template_cache = run_template_cache or new_run_template_cache()
 
 
@@ -85,38 +81,7 @@ def set_worker_attribute_for_test(
     ctrl: ControllerTestState, worker_id: WorkerId, key: str, value: AttributeValue
 ) -> None:
     """Upsert one worker attribute in DB and mirror it into the in-memory projection."""
-    str_value = int_value = float_value = None
-    value_type = "str"
-    if isinstance(value.value, int):
-        value_type = "int"
-        int_value = int(value.value)
-    elif isinstance(value.value, float):
-        value_type = "float"
-        float_value = float(value.value)
-    else:
-        str_value = str(value.value)
-
     with ctrl._db.transaction() as cur:
-        cur.execute(
-            sqlite_insert(worker_attributes_table)
-            .values(
-                worker_id=worker_id,
-                key=key,
-                value_type=value_type,
-                str_value=str_value,
-                int_value=int_value,
-                float_value=float_value,
-            )
-            .on_conflict_do_update(
-                index_elements=["worker_id", "key"],
-                set_=dict(
-                    value_type=value_type,
-                    str_value=str_value,
-                    int_value=int_value,
-                    float_value=float_value,
-                ),
-            )
-        )
         existing = ctrl._worker_attrs.get(worker_id)
         merged = {**existing, key: value}
         ctrl._worker_attrs.set(cur, worker_id, merged)

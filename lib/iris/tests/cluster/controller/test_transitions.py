@@ -627,7 +627,7 @@ def test_task_assigned_to_missing_worker_is_ignored(state):
 
     # Worker disappears between scheduling and assignment commit.
     with state._db.transaction() as cur:
-        writes.remove_worker(cur, worker_id, health=state._health, worker_attrs=state._worker_attrs)
+        writes.remove_worker(cur, worker_id, health=state._health)
     with state._db.transaction() as cur:
         ops.task.assign(cur, [Assignment(task_id=task.task_id, worker_id=worker_id)], health=state._health)
 
@@ -1568,7 +1568,6 @@ def test_worker_failures_batch_does_not_double_process_cascaded_sibling(state):
         reason="slice reaped",
         health=state._health,
         endpoints=state._endpoints,
-        worker_attrs=state._worker_attrs,
     )
 
     task0 = _query_task(state, tasks[0].task_id)
@@ -1621,7 +1620,6 @@ def test_worker_failure_drives_coscheduled_job_terminal(state, fail_both):
         reason="slice reaped",
         health=state._health,
         endpoints=state._endpoints,
-        worker_attrs=state._worker_attrs,
     )
 
     task0 = _query_task(state, tasks[0].task_id)
@@ -2834,7 +2832,6 @@ def test_fail_workers_by_ids_cascades_tasks(state):
         reason="slice terminated",
         health=state._health,
         endpoints=state._endpoints,
-        worker_attrs=state._worker_attrs,
     )
 
     assert len(result.removed_workers) == 1
@@ -2860,7 +2857,6 @@ def test_fail_workers_batch_skips_unknown(state):
         reason="unknown",
         health=state._health,
         endpoints=state._endpoints,
-        worker_attrs=state._worker_attrs,
     )
     assert result.removed_workers == []
 
@@ -2880,7 +2876,6 @@ def test_fail_workers_batch_force_removes_without_threshold(state):
         reason="slice terminated",
         health=state._health,
         endpoints=state._endpoints,
-        worker_attrs=state._worker_attrs,
     )
 
     assert len(result.removed_workers) == 1
@@ -2926,7 +2921,6 @@ def test_fail_workers_batch_does_not_block_readers(state):
         reason="test",
         health=state._health,
         endpoints=state._endpoints,
-        worker_attrs=state._worker_attrs,
     )
     assert result.removed_workers == []
 

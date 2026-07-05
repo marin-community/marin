@@ -113,7 +113,6 @@ class DbBackendWorkerStore:
     db: ControllerDB
     owns_scale_group: Callable[[str], bool]
     health: WorkerHealthTracker
-    worker_attrs: WorkerAttrsProjection
     endpoints: EndpointsProjection
     run_template_cache: RunTemplateCache
     defaults: UserBudgetDefaults
@@ -143,7 +142,7 @@ class DbBackendWorkerStore:
 
     def scheduling_inputs(self) -> BackendSchedulingInputs:
         with self.db.control_read_snapshot() as snap:
-            ctx = build_scheduling_context(snap, self.health, self.worker_attrs, self.defaults)
+            ctx = build_scheduling_context(snap, self.health, snap.caches[WorkerAttrsProjection], self.defaults)
             owned = self._owned_worker_ids(snap)
         workers = [w for w in ctx.workers if w.worker_id in owned]
         building_counts = {wid: count for wid, count in ctx.building_counts.items() if wid in owned}
@@ -212,7 +211,6 @@ class DbBackendWorkerStore:
             reason=reason,
             health=self.health,
             endpoints=self.endpoints,
-            worker_attrs=self.worker_attrs,
         )
         removed_ids = [wid for wid, _ in failure_result.removed_workers]
         if not removed_ids:
@@ -237,7 +235,6 @@ class DbBackendWorkerStore:
                 reason=_SLICE_SIBLING_TEARDOWN_REASON,
                 health=self.health,
                 endpoints=self.endpoints,
-                worker_attrs=self.worker_attrs,
             )
         self.health.forget_many(removed_set | set(siblings))
         return removed_ids + siblings
@@ -255,7 +252,7 @@ class DbBackendWorkerStore:
             if worker_id is None:
                 break
             with self.db.transaction() as cur:
-                writes.remove_worker(cur, worker_id, health=self.health, worker_attrs=self.worker_attrs)
+                writes.remove_worker(cur, worker_id, health=self.health)
             log_event("worker_pruned", str(worker_id))
             deleted += 1
             time.sleep(pause)

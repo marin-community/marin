@@ -251,10 +251,9 @@ def _make_controller_mock(state, scheduler, autoscaler=None):
     controller_mock.provider = Mock(capabilities=worker_caps)
     controller_mock.provider.name = "worker"
     controller_mock.provider.autoscaler = autoscaler
-    # The single backend owns the liveness tracker and attrs projection; the service
-    # reads liveness through the controller's union over the backends' trackers.
+    # The single backend owns the liveness tracker; the service reads liveness through
+    # the controller's union over the backends' trackers.
     controller_mock.provider.health = state._health
-    controller_mock.provider.worker_attrs = state._worker_attrs
     # status()/autoscaler_status() are delegated to a real backend bound to the same
     # DB + tracker, so the provider authors them exactly as production — the service
     # overlays nothing on top.

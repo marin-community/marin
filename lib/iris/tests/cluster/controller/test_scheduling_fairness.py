@@ -452,7 +452,6 @@ def test_unplaceable_tasks_do_not_starve_placeable_tasks(make_controller, tmp_pa
             metadata=make_worker_metadata(cpu=4, memory_bytes=8 * 1024**3),
             ts=Timestamp.now(),
             health=ctrl.provider.health,
-            worker_attrs=ctrl.provider.worker_attrs,
         )
 
     outcome = ctrl._run_scheduling()

@@ -222,7 +222,6 @@ def _start_running_job(
             ),
             ts=Timestamp.now(),
             health=state._health,
-            worker_attrs=state._worker_attrs,
         )
     for idx in range(replicas):
         task_id = job_id.task(idx)
