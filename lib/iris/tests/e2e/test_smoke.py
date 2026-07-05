@@ -408,9 +408,25 @@ def test_dashboard_task_logs(smoke_cluster, verbose_job, smoke_page, smoke_scree
 
     _console: list[str] = []
     _errors: list[str] = []
+    _net: list[str] = []
     if not isinstance(smoke_page, _NoOpPage):
         smoke_page.on("console", lambda m: _console.append(f"{m.type}: {m.text}"))
         smoke_page.on("pageerror", lambda e: _errors.append(str(e)))
+
+        def _on_req(r):
+            if "FetchLogs" in r.url:
+                _net.append(f"REQ {r.url}\n    post_data={r.post_data!r}")
+
+        def _on_resp(r):
+            if "FetchLogs" in r.url:
+                try:
+                    head = r.text()[:500]
+                except Exception as exc:
+                    head = f"<text() failed: {exc}>"
+                _net.append(f"RESP status={r.status} url={r.url}\n    body_head={head!r}")
+
+        smoke_page.on("request", _on_req)
+        smoke_page.on("response", _on_resp)
 
     dashboard_goto(smoke_page, f"{smoke_cluster.url}/job/{job_id}/task/{task_id}")
     wait_for_dashboard_ready(smoke_page)
@@ -424,6 +440,7 @@ def test_dashboard_task_logs(smoke_cluster, verbose_job, smoke_page, smoke_scree
         if not isinstance(smoke_page, _NoOpPage):
             print("DIAG console:\n  " + "\n  ".join(_console))
             print("DIAG pageerrors:\n  " + "\n  ".join(_errors))
+            print("DIAG FetchLogs network:\n" + "\n".join(_net))
             panel = smoke_page.evaluate(
                 "() => (document.querySelector('#task-logs-section') || {}).innerText || 'NO #task-logs-section'"
             )
