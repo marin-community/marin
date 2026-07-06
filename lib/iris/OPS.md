@@ -63,21 +63,27 @@ If checkpoint times out: `iris cluster controller restart --skip-checkpoint` (re
 
 **Restart builds and deploys your local working tree.** `iris cluster controller restart` builds fresh controller/worker/task images from your **current checkout — HEAD plus any staged/unstaged changes** (`get_git_sha()` is a tree-content hash), pushes them (`:<hash>` and `:latest`), pins the deploy to `:<hash>` in memory, and restarts the container in place. So the restart ships whatever code is in your tree; there is no separate image-rebuild step. To deploy a merged controller fix: update your checkout (`git pull`, or check out the fix) **then** restart — restarting from a stale checkout ships that stale code. Always confirm the controller is running the `:<git-short-hash>` you expect (`iris cluster status`), not just that it came back up; a stale-checkout deploy once cost ~5 red-canary days (`.agents/ops/2026-06-08-canary-ferry-reservation-taint-timeouts.md`).
 
-**Before a big deploy, record the rollback coordinates.** The running image tag is the controller's tree hash — read it off the VM (`gcloud compute ssh iris-controller-<prefix> … --command "sudo docker inspect --format='{{.Config.Image}}' iris-controller"`), since `iris cluster status` reports an empty `Version:` for images built without provenance env. That tag (`iris-controller:<old-hash>`) is the rollback target, and it is already in the registry mirror. Take an explicit pre-deploy checkpoint too (`iris cluster controller checkpoint`) and note its `gs://…/controller-state/<epoch_ms>` path — that is your **pre-migration** snapshot (see below).
+**Rollback is recorded automatically.** Each `controller restart` writes a deploy pointer to `gs://…/<cluster>/state/deploy-record.json` — the image it deployed, the image it replaced, and the pre-deploy checkpoint it took. So the rollback coordinates are captured as part of the deploy; you do not have to note them by hand. (One caveat: the *first* deploy after this landed has no prior record, so its rollback target must be supplied manually — see the manual form below.)
 
 ### Rolling back a controller deploy (migration-aware)
 
-**Redeploy a specific image (no schema change).** `iris cluster controller restart --image ghcr.io/marin-community/iris-controller:<old-hash>` redeploys a pre-built controller image as-is (skips the working-tree build; `resolve_image` maps it to the registry mirror). Only the controller container is replaced; workers and cluster state are preserved. Run it while the controller is still reachable so it takes the in-place path.
+**Auto-rollback the last deploy.** `iris cluster controller restart --rollback` reads `deploy-record.json`, then redeploys the previous image and restores its pre-deploy checkpoint — no coordinates to look up. Run it while the controller is still reachable so it takes the in-place path.
 
-**When the deploy applied DB migrations, `--image` alone is NOT enough.** A restart runs forward-only migrations in place on the on-VM state DB (`schema_migrations` tracks applied stems; there is no down-migration), and some are destructive — e.g. `0039_drop_api_keys`, `0040_drop_users`. The old code then loads a schema it does not understand and hits missing-table errors at runtime. A correct rollback must **also restore the pre-deploy (pre-migration) checkpoint** — the one taken while the old code was still running. Pass `--rollback` alongside `--image`:
+```bash
+iris --cluster=marin cluster controller restart --rollback
+```
+
+**Redeploy a specific image (no schema change).** `iris cluster controller restart --image ghcr.io/marin-community/iris-controller:<old-hash>` redeploys a pre-built controller image as-is (skips the working-tree build; `resolve_image` maps it to the registry mirror). Only the controller container is replaced; workers and cluster state are preserved.
+
+**Manual rollback when the deploy applied DB migrations.** A restart runs forward-only migrations in place on the on-VM state DB (`schema_migrations` tracks applied stems; there is no down-migration), and some are destructive — e.g. `0039_drop_api_keys`, `0040_drop_users`. The old code then loads a schema it does not understand and hits missing-table errors at runtime. So `--image` alone is NOT enough: a correct rollback must **also restore the pre-deploy (pre-migration) checkpoint** — the one taken while the old code was still running. `--rollback` does this for you from the record; to do it by hand (record missing, or overriding), pair `--restore-checkpoint` with `--image`:
 
 ```bash
 iris --cluster=marin cluster controller restart \
   --image ghcr.io/marin-community/iris-controller:<old-hash> \
-  --rollback gs://marin-us-central2/iris/marin/state/controller-state/<epoch_ms>
+  --restore-checkpoint gs://marin-us-central2/iris/marin/state/controller-state/<epoch_ms>
 ```
 
-`--rollback <checkpoint>` requires `--image` (roll code and state back together — an old checkpoint under the new image would just re-migrate) and implies `--skip-checkpoint`. The redeployed controller wipes its migrated local DB and restores exactly that checkpoint on start (`serve --checkpoint-path` is authoritative — it does not fall through to the local-freshness reuse). Run it while the controller is still reachable so it takes the in-place path; for a wedged/unreachable controller use the fully-manual on-VM procedure below instead, which never risks recreating the VM.
+The old image tag is the controller's tree hash; read it off the VM if unknown (`gcloud compute ssh iris-controller-<prefix> … --command "sudo docker inspect --format='{{.Config.Image}}' iris-controller"`). `--restore-checkpoint` requires `--image` (roll code and state back together — an old checkpoint under the new image would just re-migrate) and implies `--skip-checkpoint`. The redeployed controller wipes its migrated local DB and restores exactly that checkpoint on start (`serve --checkpoint-path` is authoritative — it does not fall through to the local-freshness reuse). Run it while the controller is still reachable so it takes the in-place path; for a wedged/unreachable controller use the fully-manual on-VM procedure below instead, which never risks recreating the VM.
 
 ### Controller Checkpoint Rollback (wedged / OOM recovery)
 

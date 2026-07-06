@@ -40,6 +40,12 @@ from iris.cluster.controller.autoscaler.scaling_group import (
     prepare_slice_config,
 )
 from iris.cluster.controller.dashboard import ProxyControllerDashboard
+from iris.cluster.controller.deploy_record import (
+    DEPLOY_RECORD_FILENAME,
+    DeployRecord,
+    read_deploy_record,
+    write_deploy_record,
+)
 from iris.cluster.controller.main import run_controller_serve
 from iris.cluster.dashboard_common import VUE_DIST_DIR
 from iris.cluster.inject_env import with_injected_task_env
@@ -1070,16 +1076,27 @@ def controller_checkpoint(ctx, stop: bool):
     ),
 )
 @click.option(
-    "--rollback",
-    "rollback_checkpoint",
+    "--restore-checkpoint",
+    "restore_checkpoint",
     default=None,
     metavar="CHECKPOINT_DIR",
     help=(
-        "Roll back a bad deploy: restore this pre-deploy checkpoint "
-        "(gs://…/controller-state/<epoch_ms>) over the local DB on start, discarding any "
-        "forward migrations the current controller applied. Requires --image (roll the code "
-        "back too — an old checkpoint under the new image would just re-migrate); implies "
-        "--skip-checkpoint. Take the checkpoint before the deploy (`controller checkpoint`)."
+        "Restore this pre-deploy checkpoint (gs://…/controller-state/<epoch_ms>) over the "
+        "local DB on start, discarding forward migrations the current controller applied. "
+        "Requires --image (roll the code back too, or the old checkpoint just re-migrates); "
+        "implies --skip-checkpoint. For the usual case use --rollback, which fills this in "
+        "from the recorded deploy."
+    ),
+)
+@click.option(
+    "--rollback",
+    is_flag=True,
+    default=False,
+    help=(
+        "Automatically revert the last deploy: read the recorded previous image and "
+        "pre-deploy checkpoint from remote state and restore them, no coordinates needed. "
+        "Available once a prior restart has recorded a deploy. For a manual revert use "
+        "--image + --restore-checkpoint."
     ),
 )
 @click.pass_context
@@ -1088,17 +1105,20 @@ def controller_restart(
     skip_checkpoint: bool,
     checkpoint_timeout: int,
     image_override: str | None,
-    rollback_checkpoint: str | None,
+    restore_checkpoint: str | None,
+    rollback: bool,
 ):
     """Restart controller with state preservation (remote platforms only).
 
     Takes a checkpoint, builds fresh images from the working tree, stops the
     controller, and starts a new one. The new controller auto-restores from the
-    checkpoint. Workers on separate VMs survive the restart.
+    checkpoint. Workers on separate VMs survive the restart. Each restart records
+    a deploy pointer in remote state so a later restart can roll back.
 
     Pass ``--image <tag>`` to redeploy a specific pre-built image without
-    building. Pass ``--rollback <checkpoint>`` with ``--image`` to revert a bad
-    deploy — both the image and the pre-deploy state.
+    building. Pass ``--rollback`` to auto-revert the last deploy (previous image
+    plus its pre-deploy checkpoint), or ``--image`` + ``--restore-checkpoint`` to
+    do it by hand.
     """
     config = ctx.obj.get("config")
     if not config:
@@ -1111,15 +1131,40 @@ def controller_restart(
             "Stop and restart the 'iris cluster start --local' process instead."
         )
 
-    if rollback_checkpoint and not image_override:
+    remote_state_dir = config.storage.remote_state_dir
+    prior_record = read_deploy_record(remote_state_dir) if remote_state_dir else None
+
+    # --rollback resolves to the recorded previous image + pre-deploy checkpoint,
+    # i.e. the manual --image/--restore-checkpoint pair without hand-tracking them.
+    if rollback:
+        if image_override or restore_checkpoint:
+            raise click.ClickException(
+                "--rollback is automatic; don't combine it with --image/--restore-checkpoint. "
+                "Use --image + --restore-checkpoint for a manual rollback instead."
+            )
+        if not remote_state_dir:
+            raise click.ClickException("--rollback needs config.storage.remote_state_dir to read the deploy record.")
+        if prior_record is None or not prior_record.previous_image:
+            raise click.ClickException(
+                f"No deploy to roll back to in {remote_state_dir}/{DEPLOY_RECORD_FILENAME}. "
+                "Roll back manually with --image <prev-tag> --restore-checkpoint <pre-deploy checkpoint>."
+            )
+        image_override = prior_record.previous_image
+        restore_checkpoint = prior_record.pre_deploy_checkpoint
+        detail = f", checkpoint {restore_checkpoint}" if restore_checkpoint else " (no pre-deploy checkpoint recorded)"
+        click.echo(f"Auto-rollback from deploy record: image {image_override}{detail}")
+
+    if restore_checkpoint and not image_override:
         raise click.ClickException(
-            "--rollback requires --image: roll the controller image back alongside its state. "
+            "--restore-checkpoint requires --image: roll the controller image back alongside its state. "
             "Restoring a pre-deploy checkpoint under the current (new) image would just re-apply "
             "the same migrations. Pass --image <previously-deployed tag>."
         )
-    if rollback_checkpoint:
-        # Restoring an OLDER checkpoint — snapshotting the current (bad) controller
-        # first is pointless, and its migrated DB stays on the VM if ever needed.
+
+    # A checkpoint restore is a rollback to older state: snapshotting the current
+    # (bad) controller first is pointless, and its migrated DB stays on the VM.
+    is_rollback = bool(restore_checkpoint)
+    if is_rollback:
         skip_checkpoint = True
 
     # --image pins the controller to a pre-built tag and skips the working-tree
@@ -1136,7 +1181,7 @@ def controller_restart(
     try:
         controller_url = require_controller_url(ctx)
     except (RuntimeError, click.ClickException):
-        if rollback_checkpoint:
+        if is_rollback:
             raise click.ClickException(
                 "--rollback needs a running controller to restart in place; none was found."
             ) from None
@@ -1151,9 +1196,11 @@ def controller_restart(
             click.echo(f"Failed to start controller: {e}", err=True)
             raise SystemExit(1) from e
         click.echo(f"Controller started at {address}")
+        _record_deploy(remote_state_dir, config, prior_record, pre_deploy_checkpoint=None, is_rollback=False)
         return
 
     # Checkpoint
+    pre_deploy_checkpoint: str | None = None
     if skip_checkpoint:
         click.echo("Skipping pre-restart checkpoint.")
     else:
@@ -1167,6 +1214,7 @@ def controller_restart(
             except Exception as e:
                 click.echo(f"Checkpoint failed: {e}", err=True)
                 raise SystemExit(1) from e
+        pre_deploy_checkpoint = resp.checkpoint_path
         click.echo(f"Checkpoint: {resp.checkpoint_path} ({resp.job_count} jobs, {resp.worker_count} workers)")
 
     # Build fresh images so the new controller VM gets the latest code, unless a
@@ -1176,15 +1224,48 @@ def controller_restart(
     else:
         _build_and_pin_deploy_images(ctx, config)
 
-    if rollback_checkpoint:
-        click.echo(f"Rolling back: restoring pre-deploy checkpoint {rollback_checkpoint}")
+    if is_rollback:
+        click.echo(f"Rolling back: restoring pre-deploy checkpoint {restore_checkpoint}")
 
     try:
-        address = bundle.controller.restart_controller(config, restore_checkpoint=rollback_checkpoint)
+        address = bundle.controller.restart_controller(config, restore_checkpoint=restore_checkpoint)
     except Exception as e:
         click.echo(f"Failed to restart controller: {e}", err=True)
         raise SystemExit(1) from e
     click.echo(f"Controller restarted at {address}")
+    _record_deploy(remote_state_dir, config, prior_record, pre_deploy_checkpoint, is_rollback)
+
+
+def _record_deploy(
+    remote_state_dir: str,
+    config,
+    prior_record: DeployRecord | None,
+    pre_deploy_checkpoint: str | None,
+    is_rollback: bool,
+) -> None:
+    """Record this deploy in remote state so a later --rollback can revert it.
+
+    Best-effort: the restart already succeeded, so a failed write only costs the
+    auto-rollback convenience and must not fail the command. A rollback records
+    itself as current with nothing to revert to — the next forward deploy re-arms
+    auto-rollback.
+    """
+    if not remote_state_dir:
+        return
+    previous_image = None if is_rollback else (prior_record.current_image if prior_record else None)
+    pre_deploy_checkpoint = None if is_rollback else pre_deploy_checkpoint
+    record = DeployRecord(
+        current_image=config.controller.image,
+        previous_image=previous_image,
+        pre_deploy_checkpoint=pre_deploy_checkpoint,
+        recorded_at_ms=int(time.time() * 1000),
+    )
+    try:
+        write_deploy_record(remote_state_dir, record)
+    except OSError as e:
+        click.echo(f"Warning: could not record deploy for rollback: {e}", err=True)
+        return
+    click.echo(f"Recorded deploy for rollback: {remote_state_dir}/{DEPLOY_RECORD_FILENAME}")
 
 
 @controller.command("worker-restart")
