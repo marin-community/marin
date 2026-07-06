@@ -18,6 +18,8 @@ resumes (which keep the "sw2k_v4_2048_muon" fragment in their name) show
 up on the status page without any edits.
 """
 
+import sys
+
 import wandb_workspaces.reports.v2 as wr
 
 ENTITY = "marin-community"
@@ -82,14 +84,12 @@ def report_definition() -> wr.Report:
 
 def main() -> None:
     definition = report_definition()
-    try:
-        report = wr.Report.from_url(REPORT_URL)
-    except Exception:
-        report = definition
-        report.save()
-        print(f"created: {report.url}")
+    if "--create" in sys.argv:
+        definition.save()
+        print(f"created: {definition.url}")
         print("update REPORT_URL here and REPORT_EMBED_URL in WandbPanel.tsx")
         return
+    report = wr.Report.from_url(REPORT_URL)
     report.title = definition.title
     report.description = definition.description
     report.width = definition.width
