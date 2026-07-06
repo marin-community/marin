@@ -38,7 +38,6 @@ import functools
 import logging
 import os
 import pathlib
-import re
 import threading
 import time
 import urllib.error
@@ -312,10 +311,10 @@ def region_from_prefix(prefix: str) -> str | None:
     (e.g. ``gs://marin-eu-west4`` -> ``europe-west4``); unknown ``marin-``
     buckets fall back to stripping the ``marin-`` prefix.
     """
-    m = re.match(r"gs://([^/]+)", prefix)
-    if not m:
+    parsed = StoragePath.parse(prefix)
+    if parsed.scheme != "gs" or not parsed.bucket:
         return None
-    bucket = m.group(1)
+    bucket = parsed.bucket
     for region, spec in data_config().region_buckets.items():
         if spec.name == bucket:
             return region
@@ -397,6 +396,28 @@ class StoragePath:
             raise ValueError(f"{self} is not under {base}")
         return "/".join(self.segments[len(base.segments) :])
 
+    @property
+    def bucket(self) -> str:
+        """The object-store bucket (the authority); empty for a local or empty-authority path."""
+        return self.netloc
+
+    @property
+    def key(self) -> str:
+        """The ``/``-joined key segments beneath the authority (no leading or trailing ``/``)."""
+        return "/".join(self.segments)
+
+    @property
+    def name(self) -> str:
+        """The last key segment (basename), or ``""`` at the authority/filesystem root."""
+        return self.segments[-1] if self.segments else ""
+
+    @property
+    def parent(self) -> "StoragePath":
+        """This path with its last key segment removed; unchanged once at the root."""
+        if not self.segments:
+            return self
+        return dataclasses.replace(self, segments=self.segments[:-1])
+
     def __str__(self) -> str:
         key = "/".join(self.segments)
         if self.scheme is None:
@@ -467,10 +488,12 @@ def _s3_bucket_from_prefix(prefix: str | None) -> str | None:
     S3 buckets fall through to the flat non-TTL fallback instead of getting a
     ``tmp/ttl=Nd/`` path that would never be cleaned up.
     """
-    if not prefix or not prefix.startswith("s3://"):
+    if not prefix:
         return None
-    bucket = prefix[len("s3://") :].split("/", 1)[0]
-    return bucket if bucket in s3_data_buckets() else None
+    parsed = StoragePath.parse(prefix)
+    if parsed.scheme != "s3":
+        return None
+    return parsed.bucket if parsed.bucket in s3_data_buckets() else None
 
 
 # ---------------------------------------------------------------------------
@@ -586,13 +609,12 @@ def split_gcs_path(gs_uri: str) -> tuple[str, pathlib.Path]:
 
     Returns ``(bucket, Path("."))`` when the URI has no object path component.
     """
-    if not gs_uri.startswith("gs://"):
+    parsed = StoragePath.parse(gs_uri)
+    if parsed.scheme != "gs":
         raise ValueError(f"Invalid GCS URI `{gs_uri}`; expected URI of form `gs://BUCKET/path/to/resource`")
 
-    parts = gs_uri[len("gs://") :].split("/", 1)
-    if len(parts) == 1:
-        return parts[0], pathlib.Path(".")
-    return parts[0], pathlib.Path(parts[1])
+    key = parsed.key
+    return parsed.bucket, pathlib.Path(key) if key else pathlib.Path(".")
 
 
 def get_bucket_location(bucket_name_or_path: str) -> str:
@@ -927,9 +949,9 @@ def _is_gcs_protocol(protocol: str) -> bool:
 
 def _bucket_from_gcs_url(url: str) -> str | None:
     """Return the bucket name from a ``gs://``/``gcs://`` URL, or ``None``."""
-    for scheme in ("gs://", "gcs://"):
-        if url.startswith(scheme):
-            return url[len(scheme) :].split("/", 1)[0]
+    parsed = StoragePath.parse(url)
+    if parsed.scheme in ("gs", "gcs"):
+        return parsed.bucket
     return None
 
 
@@ -1325,14 +1347,18 @@ class MirrorFileSystem(fsspec.AbstractFileSystem):
         """Return (fsspec_fs, path) for a full URL or local path."""
         return fsspec.core.url_to_fs(url)
 
+    @property
+    def _local_root(self) -> StoragePath:
+        return StoragePath.parse(self._local_prefix)
+
     def _local_url(self, path: str) -> str:
-        return f"{self._local_prefix}/{path}"
+        return str(self._local_root / path)
 
     def _remote_url(self, prefix: str, path: str) -> str:
-        return f"{prefix}/{path}"
+        return prefix_join(prefix, path)
 
     def _lock_path_for(self, path: str) -> str:
-        return f"{self._local_prefix}/.mirror_locks/{path}.lock"
+        return str(self._local_root / ".mirror_locks" / f"{path}.lock")
 
     def _fs_exists(self, url: str) -> bool:
         fs, fspath = self._get_fs_and_path(url)
@@ -1433,7 +1459,7 @@ class MirrorFileSystem(fsspec.AbstractFileSystem):
         seen: dict[str, dict[str, Any]] = {}
 
         for prefix in [self._local_prefix, *self._remote_prefixes]:
-            url = f"{prefix}/{path}"
+            url = prefix_join(prefix, path)
             fs, fspath = self._get_fs_and_path(url)
             try:
                 entries = fs.ls(fspath, detail=True, **kwargs)

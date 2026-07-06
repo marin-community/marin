@@ -9,7 +9,6 @@ import gc
 import logging as pylogging
 import operator
 import os
-import re
 import threading
 import time
 from collections.abc import Iterable, Iterator, Mapping
@@ -19,7 +18,7 @@ from typing import Any, Dict, Generic, List, Optional, Protocol, Sequence, Tuple
 import deepdiff
 import jax
 import jax.tree_util as jtu
-from rigging.filesystem import open_url, url_to_fs
+from rigging.filesystem import StoragePath, open_url, prefix_join, url_to_fs
 import numpy as np
 import pyarrow as pa
 import tensorstore as ts
@@ -130,7 +129,7 @@ class TreeCache(AsyncDataset[T_co]):
         return self.ledger.layout == CACHE_LAYOUT_SHARDED
 
     def _shard_path(self, shard_name: str) -> str:
-        return os.path.join(self.cache_dir, shard_name)
+        return prefix_join(self.cache_dir, shard_name)
 
     async def async_len(self) -> int:
         return await self._reader.async_len()
@@ -1379,37 +1378,20 @@ async def _consolidate_metadata(dest_path: str, exemplar: dict, shard_infos: lis
                 raise
 
 
-def _collapse_duplicate_slashes(path: str) -> str:
-    """Collapse duplicate ``/`` in a path while preserving a URL scheme's ``://``.
-
-    Matches the normalization ``zephyr.dataset.format_shard_path`` applies when
-    writing shards, so consolidation is insensitive to a trailing slash in
-    ``MARIN_PREFIX`` (which yields ``//`` after the ``StepSpec`` path join).
-    """
-    return re.sub(r"(?<!:)//+", "/", path)
-
-
 def _relative_shard_path(output_path: str, shard_path: str) -> str:
-    output_path = _collapse_duplicate_slashes(output_path)
-    shard_path = _collapse_duplicate_slashes(shard_path)
-    if "://" in output_path or "://" in shard_path:
-        prefix = output_path.rstrip("/") + "/"
-        if shard_path.startswith(prefix):
-            return shard_path[len(prefix) :]
-        raise ValueError(f"Sharded cache path {shard_path} is not under output path {output_path}")
+    """Return ``shard_path`` as a ledger key relative to ``output_path``.
 
-    output_abs = os.path.abspath(output_path)
-    shard_abs = os.path.abspath(shard_path)
+    Compares parsed path segments, so a trailing or doubled separator on either side
+    cannot fork the writer's shard path from the reader's (#6838). Raises ``ValueError``
+    unless ``shard_path`` lies strictly under ``output_path``.
+    """
     try:
-        common_path = os.path.commonpath([output_abs, shard_abs])
+        relative = StoragePath.parse(shard_path).relative_to(StoragePath.parse(output_path))
     except ValueError as exc:
         raise ValueError(f"Sharded cache path {shard_path} is not under output path {output_path}") from exc
-
-    if shard_abs == output_abs or common_path != output_abs:
+    if not relative:
         raise ValueError(f"Sharded cache path {shard_path} is not under output path {output_path}")
-
-    relative_path = os.path.relpath(shard_abs, output_abs)
-    return relative_path
+    return relative
 
 
 def _field_counts_from_store(store: TreeStore) -> Dict[str, int]:

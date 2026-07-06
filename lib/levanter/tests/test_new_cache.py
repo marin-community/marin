@@ -18,6 +18,7 @@ from levanter.store.cache import (
     SerialCacheWriter,
     TreeCache,
     TreeStore,
+    _relative_shard_path,
     build_or_load_cache,
     write_levanter_cache,
 )
@@ -246,6 +247,40 @@ async def test_sharded_flat_field_offsets_share_in_flight_build(monkeypatch):
     cached_offsets = await cache._ensure_flat_field_offsets_async("data")
     np.testing.assert_array_equal(cached_offsets, expected_offsets)
     assert build_count == 1
+
+
+@pytest.mark.parametrize(
+    ("output_path", "shard_path", "expected"),
+    [
+        # gs:// shard strictly under output.
+        ("gs://bucket/cache", "gs://bucket/cache/train/shard_0", "train/shard_0"),
+        # A trailing slash on output_path (a trailing-slash MARIN_PREFIX) must not fork
+        # the relative key from the no-trailing-slash writer (marin-community/marin#6838).
+        ("gs://bucket/cache/", "gs://bucket/cache/train/shard_0", "train/shard_0"),
+        # A doubled interior separator on either side collapses structurally.
+        ("gs://bucket/cache", "gs://bucket/cache//train//shard_0", "train/shard_0"),
+        # Local absolute paths.
+        ("/tmp/cache", "/tmp/cache/shard_0", "shard_0"),
+    ],
+)
+def test_relative_shard_path_structural(output_path, shard_path, expected):
+    assert _relative_shard_path(output_path, shard_path) == expected
+
+
+@pytest.mark.parametrize(
+    ("output_path", "shard_path"),
+    [
+        # Sibling, not descendant.
+        ("gs://bucket/cache", "gs://bucket/other/shard_0"),
+        # Different bucket.
+        ("gs://bucket/cache", "gs://other/cache/shard_0"),
+        # shard_path equals output_path — no relative key to emit.
+        ("gs://bucket/cache", "gs://bucket/cache"),
+    ],
+)
+def test_relative_shard_path_rejects_non_descendants(output_path, shard_path):
+    with pytest.raises(ValueError, match="not under output path"):
+        _relative_shard_path(output_path, shard_path)
 
 
 def test_sharded_cache_rejects_drifted_aggregate_field_counts():
