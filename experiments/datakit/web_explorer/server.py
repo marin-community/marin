@@ -7,10 +7,9 @@ Point it at one datakit store (``WEB_EXPLORER_STORE``); it resolves the store's
 upstream stage datasets (:mod:`experiments.datakit.web_explorer.lineage`) and serves a
 Vue SPA (built into ``dashboard/dist``) with a tab per stage — normalized data,
 decontamination, deduplication, quality classifier, and the final cluster x quality
-store. Most data is fetched by issuing SQL to the ducky service
-(:class:`ducky.client.DuckyClient`); the store's tokenized bucket caches are read
-directly and detokenized for the "from store cache" view
-(:mod:`experiments.datakit.web_explorer.store_cache`).
+store. **All** I/O goes through the ducky service (:class:`ducky.client.DuckyClient`):
+stage data via SQL, and the store artifact / lineage cache / dedup record via
+``read_text`` — so the dashboard itself needs no object-store credentials.
 
 Queries run **asynchronously** (``POST /api/query`` -> ``query_id``, poll
 ``GET /api/result/{id}``) so a slow aggregate never trips the controller proxy's
@@ -31,6 +30,7 @@ import argparse
 import concurrent.futures
 import dataclasses
 import enum
+import json
 import logging
 import os
 import threading
@@ -43,7 +43,6 @@ from ducky.client import DuckyClient, DuckyError, iap_token_provider
 from iris.client.client import iris_ctx
 from iris.cluster.client.job_info import get_job_info
 from iris.cluster.dashboard_common import on_shutdown
-from marin.utils import fsspec_exists
 from starlette.applications import Starlette
 from starlette.concurrency import run_in_threadpool
 from starlette.requests import Request
@@ -57,11 +56,10 @@ from experiments.datakit.web_explorer.lineage import (
     StoreLineage,
     load_lineage,
     read_store_payload,
+    read_text,
     resolve_lineage,
-    save_lineage,
 )
 from experiments.datakit.web_explorer.queries import DEFAULT_SEED, WebExplorer
-from experiments.datakit.web_explorer.store_cache import StoreCacheSampler
 
 logger = logging.getLogger(__name__)
 
@@ -132,28 +130,22 @@ def _source_docs(source_summary: list[dict] | None) -> dict[str, int]:
     return {r["source"]: r["docs_est"] for r in source_summary or [] if r.get("docs_est")}
 
 
-def _dedup_attr_map(lineage: StoreLineage) -> dict[str, str]:
-    """Map source -> per-source fuzzy-dup attr dir, from the dedup artifact.
+def _dedup_attr_map(ducky: DuckyClient, lineage: StoreLineage) -> dict[str, str]:
+    """Map source -> per-source fuzzy-dup attr dir, from the dedup artifact (via ducky).
 
     The dedup artifact keys its ``sources`` by each source's normalized *main*
     dir; we join that to the resolved normalize paths to get source -> attr_dir.
     """
     if not lineage.dedup:
         return {}
-    import json  # noqa: PLC0415 — startup-only
-
-    from rigging.filesystem import open_url  # noqa: PLC0415
-
-    doc = None
+    content = None
     for name in (".artifact.json", "artifact.json"):
-        try:
-            with open_url(f"{lineage.dedup}/{name}", "r") as f:
-                doc = json.load(f)
+        content = read_text(ducky, f"{lineage.dedup}/{name}")
+        if content is not None:
             break
-        except FileNotFoundError:
-            continue
-    if not doc:
+    if content is None:
         return {}
+    doc = json.loads(content)
     by_main = {main: entry["attr_dir"] for main, entry in doc.get("sources", {}).items()}
     return {
         src: by_main[f"{ndir}/outputs/main"]
@@ -162,16 +154,13 @@ def _dedup_attr_map(lineage: StoreLineage) -> dict[str, str]:
     }
 
 
-def _build_views(dv: WebExplorer, cache_sampler: StoreCacheSampler) -> dict[str, Callable[[dict], object]]:
+def _build_views(dv: WebExplorer) -> dict[str, Callable[[dict], object]]:
     """Map dashboard view name -> handler(params) -> JSON-serializable result."""
 
     def _seed(p: dict) -> int:
         return int(p.get("seed", DEFAULT_SEED))
 
     return {
-        "store_cache_samples": lambda p: cache_sampler.samples(
-            int(p["cluster"]), int(p["quality_bucket"]), int(p.get("n", 12)), _seed(p), int(p.get("runs", 4))
-        ),
         "normalized_stats": lambda p: dv.normalized_stats(p["source"]),
         "normalized_hist": lambda p: dv.normalized_length_hist(p["source"]).dicts(),
         "normalized_samples": (
@@ -236,11 +225,8 @@ def build_app(
     source_summary: list[dict] | None = None,
 ) -> Starlette:
     dist = _dashboard_dist()
-    dv = WebExplorer(lineage, ducky, _source_docs(source_summary), _dedup_attr_map(lineage))
-    cache_sampler = StoreCacheSampler(
-        lineage.store_path, lineage.tokenizer, {(b.cluster_id, b.quality_bucket) for b in payload.buckets}
-    )
-    manager = QueryManager(_build_views(dv, cache_sampler))
+    dv = WebExplorer(lineage, ducky, _source_docs(source_summary), _dedup_attr_map(ducky, lineage))
+    manager = QueryManager(_build_views(dv))
 
     def overview() -> dict:
         buckets = [
@@ -346,23 +332,20 @@ def _build_ducky(explicit_url: str | None, timeout: float) -> DuckyClient:
 def _load(
     store_path: str, ducky: DuckyClient, cache_path: str | None, config: WebExplorerConfig
 ) -> tuple[StoreLineage, ClusteredStoreData]:
-    payload = read_store_payload(store_path)
-    # fsspec_exists handles gs:// (os.path.exists would silently miss a remote
-    # cache and force a ducky-dependent re-resolve at startup).
-    if cache_path and fsspec_exists(cache_path):
-        logger.info("loading cached lineage from %s", cache_path)
-        lineage = load_lineage(cache_path)
-    else:
-        logger.info("resolving lineage for %s (this issues ducky globs; ~1-2 min)", store_path)
-        lineage = resolve_lineage(
-            store_path,
-            ducky,
-            domain_centroids=config.domain_centroids,
-            quality_model=config.quality_model,
-        )
-        if cache_path:
-            save_lineage(lineage, cache_path)
-            logger.info("cached lineage to %s", cache_path)
+    payload = read_store_payload(ducky, store_path)
+    # An optional pre-baked lineage cache, read via ducky. The explorer can't write
+    # it back (ducky is read-only), so a miss just falls through to live resolution.
+    if cache_path:
+        try:
+            lineage = load_lineage(ducky, cache_path)
+            logger.info("loaded cached lineage from %s", cache_path)
+            return lineage, payload
+        except FileNotFoundError:
+            logger.info("no lineage cache at %s; resolving", cache_path)
+    logger.info("resolving lineage for %s (ducky globs; ~1-2 min)", store_path)
+    lineage = resolve_lineage(
+        store_path, ducky, domain_centroids=config.domain_centroids, quality_model=config.quality_model
+    )
     return lineage, payload
 
 
@@ -384,13 +367,12 @@ def main() -> None:
     lineage, payload = _load(args.store, ducky, args.lineage_cache, config)
     source_summary = None
     if config.source_summary:
-        import json  # noqa: PLC0415 — only needed on this optional path
-
-        from rigging.filesystem import open_url  # noqa: PLC0415
-
-        with open_url(config.source_summary, "r") as f:
-            source_summary = json.load(f)
-        logger.info("loaded source summary (%d rows) from %s", len(source_summary), config.source_summary)
+        content = read_text(ducky, config.source_summary)
+        if content is not None:
+            source_summary = json.loads(content)
+            logger.info("loaded source summary (%d rows) from %s", len(source_summary), config.source_summary)
+        else:
+            logger.warning("source summary not found at %s", config.source_summary)
     app = build_app(lineage, payload, ducky, source_summary)
     logger.info(
         "web_explorer for %s: %d sources, %d buckets",
