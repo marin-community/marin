@@ -48,7 +48,7 @@ def test_bundle_download_intermittent(cluster):
     enable_chaos(
         "worker.bundle_download", failure_rate=0.5, max_failures=2, error=RuntimeError("chaos: download failed")
     )
-    job = cluster.submit(TestJobs.quick, "bundle-fail", max_retries_failure=3)
+    job = cluster.submit(TestJobs.quick, "bundle-fail", max_retries_failure=3, max_task_failures=3)
     status = cluster.wait(job, timeout=30)
     assert status.state == job_pb2.JOB_STATE_SUCCEEDED
 
@@ -77,7 +77,7 @@ def test_coscheduled_sibling_failure(cluster):
 def test_retry_budget_exact(cluster):
     """Task fails exactly N-1 times, succeeds on last attempt."""
     enable_chaos("worker.create_container", failure_rate=1.0, max_failures=2, error=RuntimeError("chaos: transient"))
-    job = cluster.submit(TestJobs.quick, "exact-retry", max_retries_failure=2)
+    job = cluster.submit(TestJobs.quick, "exact-retry", max_retries_failure=2, max_task_failures=2)
     status = cluster.wait(job, timeout=30)
     assert status.state == job_pb2.JOB_STATE_SUCCEEDED
 
@@ -159,7 +159,7 @@ def test_task_fails_once_then_succeeds(cluster):
         max_failures=1,
         error=RuntimeError("chaos: transient container failure"),
     )
-    job = cluster.submit(TestJobs.quick, "retry-once", max_retries_failure=2)
+    job = cluster.submit(TestJobs.quick, "retry-once", max_retries_failure=2, max_task_failures=2)
     status = cluster.wait(job, timeout=30)
     assert status.state == job_pb2.JOB_STATE_SUCCEEDED
 

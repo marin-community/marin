@@ -27,7 +27,7 @@ from levanter.models.gpt2 import Gpt2Config, Gpt2LMHeadModel
 from levanter.models.lm_model import LmExample, LmHeadModel
 from levanter.optim import AdamConfig
 from levanter.utils.tree_utils import inference_mode
-from tests.test_utils import use_test_mesh
+from test_utils import use_test_mesh
 
 TEST_GPT2_MODEL_ID = "sshleifer/tiny-gpt2"
 

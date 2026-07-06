@@ -546,4 +546,145 @@ mod tests {
 
         std::fs::remove_dir_all(&dir).ok();
     }
+
+    fn unique_dir(tag: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "finelog_{tag}_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// The real store-form `log` arrow schema (single source of truth), so these
+    /// tests track any column change instead of hand-copying the layout.
+    fn log_arrow() -> SchemaRef {
+        crate::store::schema::schema_to_arrow(&crate::store::schema::with_implicit_seq(
+            crate::store::store::log_registered_schema(),
+        ))
+    }
+
+    /// The same schema minus the `cluster` column — the layout of a segment
+    /// written before the column was added, expressed as a derivation rather than
+    /// a duplicated literal.
+    fn log_arrow_pre_cluster() -> SchemaRef {
+        let fields: Vec<Field> = log_arrow()
+            .fields()
+            .iter()
+            .filter(|f| f.name() != "cluster")
+            .map(|f| f.as_ref().clone())
+            .collect();
+        Arc::new(ArrowSchema::new(fields))
+    }
+
+    #[tokio::test]
+    async fn cluster_filter_namespaces_mixed_old_and_new_segments() {
+        // The read filter namespaces a global finelog by server-stamped origin
+        // across the realistic production mix: new segments carry the `cluster`
+        // column; a pre-evolution segment lacks it and null-fills on read. A
+        // `cluster = <peer>` filter returns exactly that peer's rows (excluding
+        // other peers and the null-filled legacy rows); an empty filter returns
+        // every origin — the local single-cluster read behavior.
+        use crate::proto::finelog::logging::MatchScope;
+        use crate::query::provider::NamespaceProvider;
+        use crate::store::log_read::{add_cluster_filter, build_log_predicates};
+        use crate::store::segment::{discover_segments, write_segment_to_dir};
+        use datafusion::arrow::array::{Int32Array, Int64Array, StringArray};
+
+        let dir = unique_dir("cluster_mixed");
+        let full = log_arrow();
+
+        // A post-evolution segment stamped for two federated peers.
+        let new_batch = RecordBatch::try_new(
+            Arc::clone(&full),
+            vec![
+                Arc::new(Int64Array::from_iter_values(1..=2)),
+                Arc::new(StringArray::from(vec!["/job/alpha", "/job/bravo"])),
+                Arc::new(StringArray::from(vec!["stdout"; 2])),
+                Arc::new(StringArray::from(vec!["line"; 2])),
+                Arc::new(Int64Array::from_iter_values(1..=2)),
+                Arc::new(Int32Array::from(vec![2; 2])),
+                Arc::new(StringArray::from(vec!["alpha", "bravo"])),
+            ],
+        )
+        .unwrap();
+        write_segment_to_dir(&dir, 1, 1, &new_batch).unwrap();
+
+        // A pre-evolution segment with no `cluster` column at all.
+        let legacy_batch = RecordBatch::try_new(
+            log_arrow_pre_cluster(),
+            vec![
+                Arc::new(Int64Array::from_iter_values(3..=3)),
+                Arc::new(StringArray::from(vec!["/job/legacy"])),
+                Arc::new(StringArray::from(vec!["stdout"; 1])),
+                Arc::new(StringArray::from(vec!["line"; 1])),
+                Arc::new(Int64Array::from_iter_values(3..=3)),
+                Arc::new(Int32Array::from(vec![2; 1])),
+            ],
+        )
+        .unwrap();
+        write_segment_to_dir(&dir, 1, 3, &legacy_batch).unwrap();
+
+        let paths: Vec<String> = discover_segments(&dir)
+            .iter()
+            .map(|p| p.to_string_lossy().into_owned())
+            .collect();
+        let ctx = make_ctx();
+
+        // Read every `/job/` key visible under the given cluster filter, sorted.
+        let read_keys = |cluster: &str| {
+            let mut preds =
+                build_log_predicates("/job/", 0, MatchScope::MATCH_SCOPE_PREFIX).unwrap();
+            add_cluster_filter(&mut preds.where_parts, cluster);
+            NamespaceProvider::build(Arc::clone(&full), &paths)
+                .map(|provider| (provider, preds))
+                .unwrap()
+        };
+        let sorted_keys = |mut rows: Vec<crate::store::log_read::LogRow>| {
+            rows.sort_by(|a, b| a.key.cmp(&b.key));
+            rows.into_iter()
+                .filter_map(|r| r.key)
+                .collect::<Vec<String>>()
+        };
+
+        // Filtered to one peer → only that peer's row.
+        let (provider, preds) = read_keys("alpha");
+        let rows = fetch_log_rows(
+            &ctx,
+            provider,
+            &preds.where_parts,
+            preds.include_key,
+            false,
+            100,
+        )
+        .await
+        .unwrap();
+        assert_eq!(sorted_keys(rows), vec!["/job/alpha".to_string()]);
+
+        // Empty filter → every origin, including the null-filled legacy row.
+        let (provider, preds) = read_keys("");
+        let rows = fetch_log_rows(
+            &ctx,
+            provider,
+            &preds.where_parts,
+            preds.include_key,
+            false,
+            100,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            sorted_keys(rows),
+            vec![
+                "/job/alpha".to_string(),
+                "/job/bravo".to_string(),
+                "/job/legacy".to_string(),
+            ]
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
 }

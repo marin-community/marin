@@ -13,9 +13,9 @@ from dataclasses import dataclass
 import fsspec
 from fray.cluster import ResourceConfig
 from levanter.compat.hf_checkpoints import load_tokenizer
-from marin.execution.executor import ExecutorStep, InputName, MirroredValue
-from marin.execution.remote import remote
-from marin.execution.types import this_output_path, versioned
+from thalas.execution.executor import ExecutorStep, InputName, MirroredValue
+from thalas.execution.remote import remote
+from thalas.execution.types import this_output_path, versioned
 from zephyr import Dataset, ZephyrContext
 
 from experiments.downstream_scaling.evals.framework.schema import (

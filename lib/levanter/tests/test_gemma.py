@@ -217,7 +217,8 @@ def test_gemma2_decoder_layer(num_kv_heads):
         cache_position=torch.zeros((batch,), dtype=torch.int32),  # HF expects a cache position
     )
 
-    chex.assert_trees_all_close(hf_out[0].detach().cpu().numpy(), lev_out.array, rtol=1e-4, atol=1e-4)
+    hf_array = hf_out if isinstance(hf_out, torch.Tensor) else hf_out[0]
+    chex.assert_trees_all_close(hf_array.detach().cpu().numpy(), lev_out.array, rtol=1e-4, atol=1e-4)
 
 
 @pytest.mark.parametrize("num_kv_heads", [1, 2])
@@ -459,6 +460,26 @@ def _get_random_inputs(config: GemmaConfig):
     return x, mask
 
 
+def _gemma3_hf_position_embeddings(rot, hf_config, x_torch, position_ids):
+    if hasattr(rot, "full_attention_inv_freq"):
+        cos, sin = rot(x_torch, position_ids, layer_type="full_attention")
+        if hasattr(rot, "sliding_attention_inv_freq"):
+            local_cos, local_sin = rot(x_torch, position_ids, layer_type="sliding_attention")
+        else:
+            local_cos, local_sin = cos, sin
+        return (cos, sin), (local_cos, local_sin)
+
+    # Older Transformers versions expose a single Gemma3 RoPE module. Rebuild it
+    # with the local RoPE theta for the sliding-attention comparison.
+    local_hf_config = copy.deepcopy(hf_config)
+    local_hf_config.rope_theta = local_hf_config.rope_local_base_freq
+    local_hf_config.rope_scaling = {"rope_type": "default"}
+    local_rot = type(rot)(config=local_hf_config)
+    cos, sin = rot(x_torch, position_ids)
+    local_cos, local_sin = local_rot(x_torch, position_ids)
+    return (cos, sin), (local_cos, local_sin)
+
+
 @parameterize_with_configs("gemma*.yaml")
 def test_gemma_configs(config_file):
     config_class = TrainLmConfig
@@ -504,26 +525,31 @@ def test_gemma3_decoder_layer(num_kv_heads):
 
     position_ids = torch.arange(gemma_config.max_Pos.size).unsqueeze(0)
     rot = HFGemmaRotaryEmbedding(config=hf_config)
-    cos, sin = rot(x_t, position_ids)
-
-    # HF does this hacky crap so we copy it
-    local_hf_config = copy.deepcopy(hf_config)
-    local_hf_config.rope_theta = local_hf_config.rope_local_base_freq
-    local_hf_config.rope_scaling = {"rope_type": "default"}
-    local_rot = HFGemmaRotaryEmbedding(config=local_hf_config)
-    local_cos, local_sin = local_rot(x_t, position_ids)
+    (cos, sin), (local_cos, local_sin) = _gemma3_hf_position_embeddings(rot, hf_config, x_t, position_ids)
 
     lev_out = decoder_layer(x, mask)
-    hf_out = hf_decoder(
-        x_t,
-        attention_mask=bias,
-        position_ids=position_ids,
-        position_embeddings_global=(cos, sin),
-        position_embeddings_local=(local_cos, local_sin),
-        cache_position=torch.zeros((batch,), dtype=torch.int32),
-    )
+    layer_type = getattr(hf_decoder.self_attn, "layer_type", None)
+    if layer_type is not None:
+        position_embeddings = (local_cos, local_sin) if layer_type == "sliding_attention" else (cos, sin)
+        hf_out = hf_decoder(
+            x_t,
+            attention_mask=bias,
+            position_ids=position_ids,
+            position_embeddings=position_embeddings,
+            cache_position=torch.zeros((batch,), dtype=torch.int32),
+        )
+    else:
+        hf_out = hf_decoder(
+            x_t,
+            attention_mask=bias,
+            position_ids=position_ids,
+            position_embeddings_global=(cos, sin),
+            position_embeddings_local=(local_cos, local_sin),
+            cache_position=torch.zeros((batch,), dtype=torch.int32),
+        )
 
-    chex.assert_trees_all_close(hf_out[0].detach().cpu().numpy(), lev_out.array, rtol=1e-4, atol=1e-4)
+    hf_array = hf_out if isinstance(hf_out, torch.Tensor) else hf_out[0]
+    chex.assert_trees_all_close(hf_array.detach().cpu().numpy(), lev_out.array, rtol=1e-4, atol=1e-4)
 
 
 def test_gemma3_config_from_hf_config_roundtrip():
@@ -552,6 +578,23 @@ def test_gemma3_config_from_hf_config_roundtrip():
     assert roundtripped.num_layers == cfg.num_layers
     assert roundtripped.num_heads == cfg.num_heads
     assert roundtripped.num_kv_heads == cfg.num_kv_heads
+
+
+def test_gemma3_rejects_unsupported_alternating_attention_export():
+    cfg = Gemma3Config(
+        max_seq_len=128,
+        hidden_dim=16,
+        num_heads=4,
+        num_kv_heads=4,
+        gradient_checkpointing=False,
+        head_dim=4,
+        query_pre_attn_scalar=4,
+        num_layers=4,
+        sliding_window_pattern=2,
+    )
+
+    with pytest.raises(ValueError, match="alternating local/global attention"):
+        cfg.to_hf_config(1000)
 
 
 @skip_if_hf_model_not_accessible("google/gemma-3-1b-pt")
@@ -653,7 +696,7 @@ def test_gemma3_attention(use_flash, num_kv_heads):
 
     out = attention(x, mask)
     position_ids = torch.arange(gemma_config.max_Pos.size).unsqueeze(0)  # [1, seq_len]
-    cos, sin = hf_rotary_emb(x_torch, position_ids)
+    (cos, sin), _ = _gemma3_hf_position_embeddings(hf_rotary_emb, hf_config, x_torch, position_ids)
     hf_out = hf_attention(
         x_torch, position_ids=position_ids, attention_mask=mask_torch, position_embeddings=(cos, sin)
     )

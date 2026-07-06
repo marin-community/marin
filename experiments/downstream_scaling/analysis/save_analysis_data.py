@@ -15,7 +15,7 @@ import fsspec
 import numpy as np
 import pandas as pd
 
-from marin.execution.executor import Executor
+from thalas.execution.executor import Executor
 
 import experiments.evals.delphi.gsm8k as standard_gsm8k
 import experiments.downstream_scaling.evals.run_delphi_gsm8k_joint_decode as joint_decode_run

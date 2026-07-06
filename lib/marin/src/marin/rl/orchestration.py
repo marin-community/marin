@@ -194,6 +194,7 @@ def _run_rl_coordinator(config: RLJobConfig) -> None:
                 environment=train_worker_env,
                 max_retries_failure=run_config.max_retries_failure,
                 max_retries_preemption=run_config.max_retries_preemption,
+                max_task_failures=run_config.max_retries_failure,
             )
         )
         rollout_jobs: list[JobHandle] = []
@@ -220,6 +221,7 @@ def _run_rl_coordinator(config: RLJobConfig) -> None:
                         environment=rollout_worker_env,
                         max_retries_failure=run_config.max_retries_failure,
                         max_retries_preemption=run_config.max_retries_preemption,
+                        max_task_failures=run_config.max_retries_failure,
                     )
                 )
             )

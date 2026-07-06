@@ -19,7 +19,6 @@ from iris.cluster.runtime.types import (
     ContainerStats,
     ContainerStatus,
     ImageBuilder,
-    ImageInfo,
 )
 
 __all__ = [
@@ -33,6 +32,5 @@ __all__ = [
     "DockerImageBuilder",
     "DockerRuntime",
     "ImageBuilder",
-    "ImageInfo",
     "build_runtime_entrypoint",
 ]

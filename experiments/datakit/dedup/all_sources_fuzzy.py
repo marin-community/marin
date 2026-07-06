@@ -22,7 +22,7 @@ import logging
 from fray import ResourceConfig
 from marin.datakit.normalize import NormalizedData
 from marin.datakit.sources import all_sources
-from marin.execution.artifact import Artifact
+from marin.execution.artifact import read_artifact
 from marin.execution.step_runner import StepRunner
 from marin.execution.step_spec import StepSpec
 from marin.processing.classification.deduplication.fuzzy_dups import compute_fuzzy_dups_attrs
@@ -45,7 +45,7 @@ def build_dedup_step() -> StepSpec:
                 name=f"datakit/minhash/{name}",
                 deps=[norm],
                 fn=lambda op, n=norm: compute_minhash_attrs(
-                    source=Artifact.from_path(n, NormalizedData),
+                    source=read_artifact(n.output_path, NormalizedData),
                     output_path=op,
                     worker_resources=ResourceConfig(cpu=5, ram="32g", disk="5g"),
                 ),
@@ -57,7 +57,7 @@ def build_dedup_step() -> StepSpec:
         output_path_prefix=marin_temp_bucket(ttl_days=2, prefix="rav"),
         deps=minhash_steps,
         fn=lambda op: compute_fuzzy_dups_attrs(
-            inputs=[Artifact.from_path(s, MinHashAttrData) for s in minhash_steps],
+            inputs=[read_artifact(s.output_path, MinHashAttrData) for s in minhash_steps],
             output_path=op,
             max_parallelism=2048,
             cc_resume=True,

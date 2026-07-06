@@ -8,8 +8,8 @@ Usage:
     iris --config cluster.yaml job run --tpu v5litepod-16 -e WANDB_API_KEY $WANDB_API_KEY -- python train.py
 """
 
+import csv
 import difflib
-import json
 import logging
 import os
 import sys
@@ -19,13 +19,11 @@ from pathlib import Path
 import click
 import humanfriendly
 import yaml
-from google.protobuf import json_format
 from rigging.credentials import ClientCredentials
 from rigging.timing import Duration, Timestamp
 from tabulate import tabulate
 
-from iris.cli.bug_report import file_github_issue, format_bug_report, gather_bug_report
-from iris.cli.connect import require_controller_url
+from iris.cli.connect import iris_client_for_ctx, require_controller_url
 from iris.client import IrisClient
 from iris.client.client import Job, JobFailedError
 from iris.cluster.constraints import (
@@ -76,13 +74,7 @@ _STATE_MAP: dict[str, job_pb2.JobState] = {
 
 
 def _remote_client(ctx: click.Context) -> IrisClient:
-    """Build an IrisClient for the current cluster, threading the auth credentials
-    (the Iris JWT and, for IAP-fronted clusters, the IAP ID token) from context."""
-    return IrisClient.remote(
-        require_controller_url(ctx),
-        workspace=Path.cwd(),
-        credentials=ctx.obj.get("credentials"),
-    )
+    return iris_client_for_ctx(ctx, workspace=Path.cwd())
 
 
 def _terminate_jobs(
@@ -108,6 +100,42 @@ def _print_terminated(terminated: list[JobName]) -> None:
             click.echo(f"  {job_name}")
     else:
         click.echo("No running jobs matched.")
+
+
+def _read_targets_from_stdin() -> list[str]:
+    """Read Iris job/task ids from stdin, one per line.
+
+    Parses each line as a CSV record (symmetric with ``iris query -f csv``, which
+    quotes fields through ``csv.writer``) and keeps the first field when it looks
+    like an Iris id (leading ``/``). This consumes ``iris query -f csv`` output
+    directly — a header row and trailing columns are dropped, and ids that
+    contain a comma (quoted by the writer) or a space survive intact, since a
+    JobName component may hold either:
+
+        iris query -f csv "SELECT task_id FROM tasks WHERE ..." | iris job kick --stdin
+    """
+    targets: list[str] = []
+    for row in csv.reader(sys.stdin):
+        if not row:
+            continue
+        field = row[0].strip()
+        if field.startswith("/"):
+            targets.append(field)
+    return targets
+
+
+def _collect_targets(targets: tuple[str, ...], use_stdin: bool) -> list[str]:
+    """Merge positional targets with stdin ids for a bulk action.
+
+    A literal ``-`` among the positionals, or ``use_stdin``, appends the ids read
+    from stdin to the positional ids, letting a query pipe straight into an
+    action. The ``-`` sentinel is consumed, not returned as a target.
+    """
+    read_stdin = use_stdin or "-" in targets
+    collected = [t for t in targets if t != "-"]
+    if read_stdin:
+        collected.extend(_read_targets_from_stdin())
+    return collected
 
 
 def load_env_vars(env_flags: tuple[tuple[str, ...], ...] | list | None) -> dict[str, str]:
@@ -551,6 +579,7 @@ def run_iris_job(
     wait: bool = True,
     job_name: str | None = None,
     replicas: int | None = None,
+    processes_per_task: int = 1,
     max_retries: int = 0,
     timeout: int = 0,
     extras: list[str] | None = None,
@@ -669,6 +698,7 @@ def run_iris_job(
         terminate_on_exit=terminate_on_exit,
         constraints=constraints or None,
         coscheduling=coscheduling,
+        processes_per_task=processes_per_task,
         user=user,
         priority_band=priority_band,
         container_profile=profile,
@@ -695,6 +725,7 @@ def _submit_and_wait_job(
     terminate_on_exit: bool = True,
     constraints: list[Constraint] | None = None,
     coscheduling: CoschedulingConfig | None = None,
+    processes_per_task: int = 1,
     user: str | None = None,
     priority_band: job_pb2.PriorityBand = job_pb2.PRIORITY_BAND_UNSPECIFIED,
     container_profile: job_pb2.ContainerProfile = job_pb2.CONTAINER_PROFILE_UNSPECIFIED,
@@ -721,7 +752,9 @@ def _submit_and_wait_job(
         constraints=constraints,
         coscheduling=coscheduling,
         replicas=replicas,
+        processes_per_task=processes_per_task,
         max_retries_failure=max_retries,
+        max_task_failures=max_retries,
         timeout=Duration.from_seconds(timeout) if timeout else None,
         user=user,
         priority_band=priority_band,
@@ -836,6 +869,12 @@ Examples:
 @click.option(
     "--replicas", type=int, default=None, help="Number of tasks for gang scheduling (auto-detected for multinode TPUs)"
 )
+@click.option(
+    "--processes-per-task",
+    type=int,
+    default=1,
+    help="GPU processes to run inside each task (default 1). >1 fans each task into N JAX processes per GPU group.",
+)
 @click.option("--max-retries", type=int, default=0, help="Max retries on failure (default: 0)")
 @click.option("--timeout", type=int, default=0, show_default=True, help="Job timeout in seconds (0 = no timeout)")
 @click.option("--region", multiple=True, help="Restrict to region(s) (e.g., --region us-central2). Can be repeated.")
@@ -919,6 +958,7 @@ def run(
     job_name: str | None,
     user: str | None,
     replicas: int | None,
+    processes_per_task: int,
     max_retries: int,
     timeout: int,
     region: tuple[str, ...],
@@ -976,6 +1016,7 @@ def run(
             job_name=job_name,
             user=user,
             replicas=replicas,
+            processes_per_task=processes_per_task,
             max_retries=max_retries,
             timeout=timeout,
             extras=list(extra),
@@ -1005,34 +1046,120 @@ def run(
     sys.exit(exit_code)
 
 
+def _stop_jobs(ctx, job_id: tuple[str, ...], include_children: bool, stdin: bool, dry_run: bool) -> None:
+    targets = _collect_targets(job_id, stdin)
+    if not targets:
+        raise click.UsageError("No jobs given. Pass job ids, or --stdin (or '-') to read them from stdin.")
+    if dry_run:
+        click.echo(f"[dry-run] would terminate {len(targets)} job(s):")
+        for t in targets:
+            click.echo(f"  {t}")
+        return
+    client = _remote_client(ctx)
+    terminated = _terminate_jobs(client, tuple(targets), include_children)
+    _print_terminated(terminated)
+
+
 @job.command("stop")
-@click.argument("job_id", nargs=-1, required=True)
+@click.argument("job_id", nargs=-1, required=False)
 @click.option(
     "--include-children/--no-include-children",
     default=True,
     help="Terminate child jobs under the given job ID prefix (default: include).",
 )
+@click.option("--stdin", is_flag=True, default=False, help="Also read job ids from stdin (one per line; CSV-tolerant).")
+@click.option("--dry-run", is_flag=True, default=False, help="Print the jobs that would be terminated without sending.")
 @click.pass_context
-def stop(ctx, job_id: tuple[str, ...], include_children: bool) -> None:
-    """Terminate one or more jobs."""
-    client = _remote_client(ctx)
-    terminated = _terminate_jobs(client, job_id, include_children)
-    _print_terminated(terminated)
+def stop(ctx, job_id: tuple[str, ...], include_children: bool, stdin: bool, dry_run: bool) -> None:
+    """Terminate one or more jobs.
+
+    Pass ``-`` or ``--stdin`` to read job ids from stdin so a query can pipe in:
+
+    \b
+      iris query -f csv "SELECT job_id FROM jobs WHERE user_id='alice' AND state=3" \\
+        | iris job stop --stdin
+    """
+    _stop_jobs(ctx, job_id, include_children, stdin, dry_run)
 
 
 @job.command("kill")
-@click.argument("job_id", nargs=-1, required=True)
+@click.argument("job_id", nargs=-1, required=False)
 @click.option(
     "--include-children/--no-include-children",
     default=True,
     help="Terminate child jobs under the given job ID prefix (default: include).",
 )
+@click.option("--stdin", is_flag=True, default=False, help="Also read job ids from stdin (one per line; CSV-tolerant).")
+@click.option("--dry-run", is_flag=True, default=False, help="Print the jobs that would be terminated without sending.")
 @click.pass_context
-def kill(ctx, job_id: tuple[str, ...], include_children: bool) -> None:
+def kill(ctx, job_id: tuple[str, ...], include_children: bool, stdin: bool, dry_run: bool) -> None:
     """Terminate one or more jobs (alias for stop)."""
+    _stop_jobs(ctx, job_id, include_children, stdin, dry_run)
+
+
+_KICK_STATE_MAP = {
+    "preempted": job_pb2.TASK_STATE_PREEMPTED,
+    "failed": job_pb2.TASK_STATE_FAILED,
+}
+
+
+@job.command("kick")
+@click.argument("target", nargs=-1, required=False)
+@click.option(
+    "--state",
+    "-s",
+    type=click.Choice(sorted(_KICK_STATE_MAP)),
+    default="preempted",
+    show_default=True,
+    help="Terminal state to force: 'preempted' retries if budget remains; 'failed' does not retry.",
+)
+@click.option("--reason", type=str, default="", help="Reason recorded on the kicked task attempts.")
+@click.option(
+    "--stdin", is_flag=True, default=False, help="Also read target ids from stdin (one per line; CSV-tolerant)."
+)
+@click.option("--dry-run", is_flag=True, default=False, help="Print the targets that would be kicked without sending.")
+@click.pass_context
+def kick(ctx, target: tuple[str, ...], state: str, reason: str, stdin: bool, dry_run: bool) -> None:
+    """Force task attempts into a terminal state (emergency override).
+
+    Each TARGET is a task id (/user/job/0), task-attempt id (/user/job/0:3), or a
+    job id (/user/job) that expands to the job's active tasks. Pass ``-`` or
+    ``--stdin`` to read ids from stdin, so a query can pipe straight in:
+
+    \b
+      iris query -f csv "SELECT t.task_id FROM tasks t JOIN workers w
+        ON t.current_worker_id=w.worker_id
+        WHERE w.slice_id='<slice>' AND t.state IN (2,3,9)
+        AND t.job_id NOT LIKE '/keep/%'" | iris job kick --stdin --reason "drain slice"
+    """
+    targets = _collect_targets(target, stdin)
+    if not targets:
+        raise click.UsageError("No targets given. Pass task/job ids, or --stdin (or '-') to read them from stdin.")
+
+    if dry_run:
+        click.echo(f"[dry-run] would kick {len(targets)} target(s) to {state}:")
+        for t in targets:
+            click.echo(f"  {t}")
+        return
+
     client = _remote_client(ctx)
-    terminated = _terminate_jobs(client, job_id, include_children)
-    _print_terminated(terminated)
+    results = client.kick_tasks(targets, desired_state=_KICK_STATE_MAP[state], reason=reason)
+
+    queued = [r for r in results if r.queued]
+    rejected = [r for r in results if not r.queued]
+    if queued:
+        click.echo(f"Queued kick to {state} for {len(queued)} task(s):")
+        for r in queued:
+            click.echo(f"  {r.task_id}")
+    if rejected:
+        click.echo("Rejected:")
+        for r in rejected:
+            label = r.task_id or r.target
+            click.echo(f"  {label}: {r.detail}")
+    if not results:
+        click.echo("No tasks matched.")
+    if rejected and not queued:
+        ctx.exit(1)
 
 
 @job.command("list")
@@ -1043,9 +1170,8 @@ def kill(ctx, job_id: tuple[str, ...], include_children: bool) -> None:
     default=None,
     help="Anchored prefix match against the wire-form job_id (e.g. '/alice/exp-').",
 )
-@click.option("--json", "json_output", is_flag=True, help="Output as JSON")
 @click.pass_context
-def list_jobs(ctx, state: str | None, prefix: str | None, json_output: bool) -> None:
+def list_jobs(ctx, state: str | None, prefix: str | None) -> None:
     """List jobs with optional filtering."""
     client = _remote_client(ctx)
 
@@ -1061,11 +1187,6 @@ def list_jobs(ctx, state: str | None, prefix: str | None, json_output: bool) -> 
 
     # Sort by submitted_at descending (most recent first)
     jobs.sort(key=lambda j: j.submitted_at.epoch_ms, reverse=True)
-
-    if json_output:
-        serialized = [json_format.MessageToDict(j, preserving_proto_field_name=True) for j in jobs]
-        click.echo(json.dumps(serialized, indent=2))
-        return
 
     if not jobs:
         click.echo("No jobs found.")
@@ -1206,9 +1327,8 @@ def _render_job_summary_text(summary: dict) -> str:
 
 @job.command("summary")
 @click.argument("job_id")
-@click.option("--json", "json_output", is_flag=True, help="Emit structured JSON instead of a text table.")
 @click.pass_context
-def summary(ctx, job_id: str, json_output: bool) -> None:
+def summary(ctx, job_id: str) -> None:
     """Print a per-task summary (peak memory, state, exit, duration) for a job.
 
     Works for both running and completed jobs. Data is read from the controller's
@@ -1219,9 +1339,6 @@ def summary(ctx, job_id: str, json_output: bool) -> None:
     job_status = client.status(job_name)
     tasks = client.list_tasks(job_name)
     result = build_job_summary(job_status, tasks)
-    if json_output:
-        click.echo(json.dumps(result, indent=2, default=str))
-        return
     click.echo(_render_job_summary_text(result))
 
 
@@ -1294,30 +1411,3 @@ def logs(
     for entry in entries:
         ts = entry.timestamp.as_short_time()
         click.echo(f"[{ts}] task={entry.task_id} | {entry.data}")
-
-
-@job.command("bug-report")
-@click.argument("job_id")
-@click.option("--file-issue", is_flag=True, help="File a GitHub issue with the report")
-@click.option("--repo", type=str, default=None, help="GitHub repo (default: auto-detect from git remote)")
-@click.option("--tail", type=int, default=50, help="Recent log lines per task to include")
-@click.option("--labels", type=str, default="bug", help="Comma-separated labels for the GitHub issue")
-@click.pass_context
-def bug_report(ctx, job_id: str, file_issue: bool, repo: str | None, tail: int, labels: str):
-    """Generate a diagnostic bug report for a job."""
-    controller_url = require_controller_url(ctx)
-    report = gather_bug_report(
-        controller_url, JobName.from_wire(job_id), tail=tail, credentials=ctx.obj.get("credentials")
-    )
-    markdown = format_bug_report(report)
-
-    if file_issue:
-        title = f"[Iris] Job {report.job_id} {report.state_name}: {report.error_summary}"
-        url = file_github_issue(title, markdown, repo=repo, labels=labels.split(","))
-        if url:
-            click.echo(f"Filed issue: {url}")
-        else:
-            click.echo("Failed to file issue. Report printed below:\n")
-            click.echo(markdown)
-    else:
-        click.echo(markdown)

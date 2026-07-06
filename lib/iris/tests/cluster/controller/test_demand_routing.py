@@ -29,7 +29,6 @@ from iris.cluster.controller.autoscaler.scaling_group import GroupAvailability, 
 from iris.cluster.types import AcceleratorType, CapacityType
 from iris.rpc import job_pb2
 from rigging.timing import Duration, Timestamp
-
 from tests.cluster.backends.conftest import (
     make_mock_platform,
     make_mock_slice_handle,

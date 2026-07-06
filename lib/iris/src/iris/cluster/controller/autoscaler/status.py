@@ -10,7 +10,8 @@ from enum import StrEnum
 
 from iris.cluster.controller.autoscaler.models import DemandEntry, RoutingDecision
 from iris.cluster.controller.autoscaler.routing import format_variants
-from iris.cluster.types import JobName, get_gpu_count, get_tpu_count
+from iris.cluster.controller.autoscaler.scaling_group import SliceLifecycleState
+from iris.cluster.types import JobName, WorkerId, WorkerUsability, get_gpu_count, get_tpu_count
 from iris.rpc import job_pb2, vm_pb2
 
 
@@ -54,6 +55,46 @@ def slice_capacity_status(
     if idle:
         return SliceCapacityStatus.IDLE
     return SliceCapacityStatus.AVAILABLE
+
+
+def overlay_worker_usability(
+    status: vm_pb2.AutoscalerStatus,
+    usability_by_id: dict[str, WorkerUsability],
+    running: dict[WorkerId, set[JobName]],
+) -> None:
+    """Overlay per-VM usability and stamp each ready slice's capacity status in place.
+
+    worker_id/running_task_count are always set; usability/worker_healthy only when
+    the worker is in the liveness roster (else left empty rather than mislabelled).
+    Per ready slice we derive a slice-granular ``capacity_status`` from host health
+    and occupancy, plus ``degraded_slot_count`` for detail.
+    """
+    for group in status.groups:
+        for slice_info in group.slices:
+            healthy_hosts = 0
+            degraded_hosts = 0
+            running_tasks = 0
+            for vm in slice_info.vms:
+                vm.worker_id = vm.vm_id
+                vm.running_task_count = len(running.get(WorkerId(vm.vm_id), set()))
+                running_tasks += vm.running_task_count
+                usability = usability_by_id.get(vm.vm_id)
+                if usability is None:
+                    continue
+                vm.usability = str(usability)
+                vm.worker_healthy = usability is not WorkerUsability.DEAD
+                if usability is WorkerUsability.HEALTHY:
+                    healthy_hosts += 1
+                elif usability is WorkerUsability.DEGRADED:
+                    degraded_hosts += 1
+            slice_info.degraded_slot_count = degraded_hosts
+            slice_info.capacity_status = slice_capacity_status(
+                is_ready=slice_info.state == SliceLifecycleState.READY,
+                host_count=len(slice_info.vms),
+                healthy_hosts=healthy_hosts,
+                running_tasks=running_tasks,
+                idle=slice_info.idle,
+            )
 
 
 def _resource_spec_proto(resources: job_pb2.ResourceSpecProto) -> vm_pb2.ResourceSpec:

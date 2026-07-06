@@ -14,14 +14,14 @@ from typing import Any
 import fsspec
 from fray.cluster import ResourceConfig
 from levanter.compat.hf_checkpoints import load_tokenizer
-from marin.execution.executor import (
+from thalas.execution.executor import (
     ExecutorStep,
     InputName,
     MirroredValue,
     output_path_of,
 )
-from marin.execution.remote import remote
-from marin.execution.types import this_output_path, versioned
+from thalas.execution.remote import remote
+from thalas.execution.types import this_output_path, versioned
 
 from experiments.downstream_scaling.evals.algorithms.iid import (
     IIDConfig,

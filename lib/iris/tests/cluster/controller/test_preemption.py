@@ -3,7 +3,7 @@
 
 """Tests for the preemption loop — higher-priority tasks evict lower-priority running tasks."""
 
-from iris.cluster.constraints import AttributeValue, Constraint, ConstraintOp, WellKnownAttribute
+from iris.cluster.constraints import AttributeValue, Constraint, ConstraintIndex, ConstraintOp, WellKnownAttribute
 from iris.cluster.controller import ops, reads
 from iris.cluster.controller.budget import compute_effective_band
 from iris.cluster.controller.ops.task import Assignment, finalize
@@ -20,7 +20,6 @@ from iris.cluster.controller.scheduling.scheduler import JobRequirements, Runnin
 from iris.cluster.types import TERMINAL_JOB_STATES, JobName, UserBudgetDefaults, WorkerId
 from iris.rpc import controller_pb2, job_pb2
 from rigging.timing import Timestamp
-
 from tests.cluster.controller.transition_driver import WorkerTaskUpdates, apply_task_observations
 
 from .conftest import (
@@ -46,10 +45,27 @@ def _make_simple_context(workers: list[WorkerCapacity]) -> "FakeSchedulingContex
 
 
 class FakeSchedulingContext:
-    """Minimal stand-in for SchedulingContext used by run_preemption_pass."""
+    """Minimal stand-in for SchedulingContext used by run_preemption_pass.
+
+    Builds the same constraint index the real context does, so the coscheduled
+    partial-host fallback (which groups candidate workers by attribute) behaves
+    faithfully: attribute-less workers form no groups, so it no-ops.
+    """
 
     def __init__(self, capacities: dict[WorkerId, WorkerCapacity]):
         self.capacities = capacities
+        self._str_to_wid = {str(wid): wid for wid in capacities}
+        entity_attrs = {str(wid): dict(cap.attributes) for wid, cap in capacities.items()}
+        self.index = ConstraintIndex.build(entity_attrs)
+        self._soft_score_cache: dict[tuple[WorkerId, tuple[Constraint, ...]], int] = {}
+
+    def matching_workers(self, constraints: list[Constraint]) -> set[WorkerId]:
+        return {self._str_to_wid[s] for s in self.index.matching_entities(constraints)}
+
+    def workers_by_group(self, group_by: str, matching_worker_ids: set[WorkerId]) -> dict[str, list[WorkerId]]:
+        matching_strs = {str(wid) for wid in matching_worker_ids}
+        str_groups = self.index.entities_by_group(group_by, matching_strs)
+        return {key: [self._str_to_wid[s] for s in ids] for key, ids in str_groups.items()}
 
 
 def _cpu_requirements(cpu_cores: int = 1) -> JobRequirements:
@@ -586,6 +602,316 @@ def test_solo_preemptor_does_not_tear_down_slice():
 
 
 # ---------------------------------------------------------------------------
+# Coscheduled partial-host fallback: a blocked gang evicts lower-band solo
+# co-tenants squatting on the few hosts it needs.
+# ---------------------------------------------------------------------------
+
+_GB = 1024**3
+_HOST_CPU = 4000  # millicores free on a host with no squatter
+_FULL_TPUS = 4  # chips on a whole TPU host
+_FREE_RAM = 200 * _GB  # RAM free on a host that fits the gang
+_BLOCKED_RAM = 10 * _GB  # RAM free on a host a squatter is hogging
+_SQUATTER_RAM = 200 * _GB  # RAM a squatter holds; freeing it unblocks its host
+_GANG_RAM = 128 * _GB  # per-host RAM the gang requests
+
+
+def _pod_capacity(
+    worker_id: WorkerId,
+    *,
+    pod: str = "pod-a",
+    cpu_millicores: int = _HOST_CPU,
+    memory_bytes: int,
+    tpus: int = _FULL_TPUS,
+) -> WorkerCapacity:
+    """A TPU host in coscheduling group ``pod`` with the given free resources."""
+    return WorkerCapacity(
+        worker_id=worker_id,
+        available_cpu_millicores=cpu_millicores,
+        available_memory=memory_bytes,
+        available_gpus=0,
+        available_tpus=tpus,
+        attributes={WellKnownAttribute.TPU_NAME: AttributeValue(pod)},
+    )
+
+
+def _gang_req(
+    *,
+    variant: str = "v4-2048",
+    tpus: int = _FULL_TPUS,
+    cpu_millicores: int = 1000,
+    memory_bytes: int = _GANG_RAM,
+) -> JobRequirements:
+    return JobRequirements(
+        req_cpu_millicores=cpu_millicores,
+        req_memory_bytes=memory_bytes,
+        req_gpu_count=0,
+        req_tpu_count=tpus,
+        device_variant=variant,
+        constraints=[],
+        is_coscheduled=True,
+        coscheduling_group_by=WellKnownAttribute.TPU_NAME,
+    )
+
+
+def _solo_victim(
+    task_id: JobName,
+    worker_id: WorkerId,
+    *,
+    band: int,
+    cpu_millicores: int = 0,
+    memory_bytes: int = 0,
+    tpus: int = 0,
+    variant: str | None = None,
+    resource_value: int = 1000,
+) -> RunningTaskInfo:
+    return RunningTaskInfo(
+        task_id=task_id,
+        worker_id=worker_id,
+        band_sort_key=band,
+        resource_value=resource_value,
+        is_coscheduled=False,
+        cpu_millicores=cpu_millicores,
+        memory_bytes=memory_bytes,
+        gpu_count=0,
+        tpu_count=tpus,
+        device_variant=variant,
+    )
+
+
+def _gang_unscheduled(job: JobName, req: JobRequirements, n: int) -> list[PreemptionCandidate]:
+    return [PreemptionCandidate(job.child(str(i)), req, job_pb2.PRIORITY_BAND_PRODUCTION) for i in range(n)]
+
+
+def test_gang_preempts_cpu_squatter_on_blocking_host():
+    """The reserved-pod repro: a PRODUCTION gang needs every host in its pod; N-1
+    fit and one is blocked only by a BATCH CPU-only squatter's RAM. The gang
+    evicts the squatter (which has no device variant), freeing the host."""
+    workers = [WorkerId(f"w{i}") for i in range(4)]
+    req = _gang_req()
+    # w0-w2 fit; w3 has TPUs free but its RAM is held by the squatter.
+    caps = [_pod_capacity(workers[i], memory_bytes=_FREE_RAM) for i in range(3)]
+    caps.append(_pod_capacity(workers[3], memory_bytes=_BLOCKED_RAM))
+    ctx = _make_simple_context(caps)
+
+    squatter = _solo_victim(
+        JobName.from_wire("/michael/ft-prep:0"),
+        workers[3],
+        band=job_pb2.PRIORITY_BAND_BATCH,
+        cpu_millicores=64000,
+        memory_bytes=_SQUATTER_RAM,  # freeing it lifts w3 past the gang's RAM ask
+    )
+
+    gang = JobName.from_wire("/larry/grug-moe")
+    preemptions = run_preemption_pass(_gang_unscheduled(gang, req, 4), [squatter], ctx)
+
+    assert len(preemptions) == 1
+    assert preemptions[0][1] == squatter.task_id
+    assert preemptions[0][0].parent == gang  # attributed to one gang sibling
+
+
+def test_gang_does_not_preempt_same_band_squatter():
+    """A squatter at or above the gang's band is never evicted by the fallback."""
+    workers = [WorkerId(f"w{i}") for i in range(2)]
+    req = _gang_req()
+    caps = [
+        _pod_capacity(workers[0], memory_bytes=_FREE_RAM),
+        _pod_capacity(workers[1], memory_bytes=_BLOCKED_RAM),
+    ]
+    ctx = _make_simple_context(caps)
+
+    # Same-band (PRODUCTION) squatter — strictly-lower-band gate rejects it.
+    squatter = _solo_victim(
+        JobName.from_wire("/peer/prod-cpu:0"),
+        workers[1],
+        band=job_pb2.PRIORITY_BAND_PRODUCTION,
+        memory_bytes=_SQUATTER_RAM,
+    )
+
+    gang = JobName.from_wire("/larry/grug-moe")
+    preemptions = run_preemption_pass(_gang_unscheduled(gang, req, 2), [squatter], ctx)
+    assert preemptions == []
+
+
+def test_gang_partial_host_skips_when_not_enough_recoverable():
+    """No eviction when fewer hosts can be freed than the gang needs — freeing a
+    strict subset would be wasted (the gang still can't place)."""
+    workers = [WorkerId(f"w{i}") for i in range(4)]
+    req = _gang_req()
+    # w0,w1 fit; w2,w3 both RAM-blocked but only w2 has an evictable victim.
+    caps = [
+        _pod_capacity(workers[0], memory_bytes=_FREE_RAM),
+        _pod_capacity(workers[1], memory_bytes=_FREE_RAM),
+        _pod_capacity(workers[2], memory_bytes=_BLOCKED_RAM),
+        _pod_capacity(workers[3], memory_bytes=_BLOCKED_RAM),
+    ]
+    ctx = _make_simple_context(caps)
+
+    only_victim = _solo_victim(
+        JobName.from_wire("/m/batch:0"),
+        workers[2],
+        band=job_pb2.PRIORITY_BAND_BATCH,
+        memory_bytes=_SQUATTER_RAM,
+    )
+
+    gang = JobName.from_wire("/larry/grug-moe")
+    preemptions = run_preemption_pass(_gang_unscheduled(gang, req, 4), [only_victim], ctx)
+    assert preemptions == []
+
+
+def test_gang_partial_host_no_preemption_when_enough_hosts_free():
+    """When the group has enough free hosts for the gang already, the squatter on
+    a spare host is left alone (the gang places without preemption)."""
+    workers = [WorkerId(f"w{i}") for i in range(5)]
+    req = _gang_req()
+    # 4 free hosts (>= n_required=4) plus one squatted spare; no preemption needed.
+    caps = [_pod_capacity(workers[i], memory_bytes=_FREE_RAM) for i in range(4)]
+    caps.append(_pod_capacity(workers[4], memory_bytes=_BLOCKED_RAM))
+    ctx = _make_simple_context(caps)
+
+    squatter = _solo_victim(
+        JobName.from_wire("/m/batch:0"),
+        workers[4],
+        band=job_pb2.PRIORITY_BAND_BATCH,
+        memory_bytes=_SQUATTER_RAM,
+    )
+
+    gang = JobName.from_wire("/larry/grug-moe")
+    preemptions = run_preemption_pass(_gang_unscheduled(gang, req, 4), [squatter], ctx)
+    assert preemptions == []
+
+
+def test_gang_partial_host_commits_minimal_evictions():
+    """With more recoverable hosts than needed, evict only the cheapest `needed`."""
+    workers = [WorkerId(f"w{i}") for i in range(5)]
+    req = _gang_req()
+    # w0,w1 fit; w2,w3,w4 each blocked with one evictable victim. Gang needs 3, so
+    # only one host (the cheapest victim) is freed.
+    caps = [
+        _pod_capacity(workers[0], memory_bytes=_FREE_RAM),
+        _pod_capacity(workers[1], memory_bytes=_FREE_RAM),
+        _pod_capacity(workers[2], memory_bytes=_BLOCKED_RAM),
+        _pod_capacity(workers[3], memory_bytes=_BLOCKED_RAM),
+        _pod_capacity(workers[4], memory_bytes=_BLOCKED_RAM),
+    ]
+    ctx = _make_simple_context(caps)
+
+    victims = [
+        _solo_victim(
+            JobName.from_wire("/m/batch-a:0"),
+            workers[2],
+            band=job_pb2.PRIORITY_BAND_BATCH,
+            memory_bytes=_SQUATTER_RAM,
+            resource_value=9000,
+        ),
+        _solo_victim(
+            JobName.from_wire("/m/batch-b:0"),
+            workers[3],
+            band=job_pb2.PRIORITY_BAND_BATCH,
+            memory_bytes=_SQUATTER_RAM,
+            resource_value=1000,  # cheapest
+        ),
+        _solo_victim(
+            JobName.from_wire("/m/batch-c:0"),
+            workers[4],
+            band=job_pb2.PRIORITY_BAND_BATCH,
+            memory_bytes=_SQUATTER_RAM,
+            resource_value=5000,
+        ),
+    ]
+
+    gang = JobName.from_wire("/larry/grug-moe")
+    preemptions = run_preemption_pass(_gang_unscheduled(gang, req, 3), victims, ctx)
+    assert len(preemptions) == 1
+    assert preemptions[0][1] == victims[1].task_id  # the cheapest victim's host
+
+
+def test_gang_partial_host_ignores_coscheduled_cotenant():
+    """The fallback never evicts a *coscheduled* co-tenant — only whole-slice
+    eviction (``_preempt_coscheduled``) may touch a gang, and only at slice size."""
+    workers = [WorkerId(f"w{i}") for i in range(2)]
+    req = _gang_req()
+    caps = [
+        _pod_capacity(workers[0], memory_bytes=_FREE_RAM),
+        _pod_capacity(workers[1], memory_bytes=_BLOCKED_RAM),
+    ]
+    ctx = _make_simple_context(caps)
+
+    # A coscheduled BATCH co-tenant (single member) holds w1's RAM. It is not a
+    # solo victim, and its slice (size 1) is smaller than the gang (size 2).
+    cosched_cotenant = RunningTaskInfo(
+        task_id=JobName.from_wire("/other/cosched-batch").child("0"),
+        worker_id=workers[1],
+        band_sort_key=job_pb2.PRIORITY_BAND_BATCH,
+        resource_value=1000,
+        is_coscheduled=True,
+        cpu_millicores=0,
+        memory_bytes=_SQUATTER_RAM,
+        gpu_count=0,
+        tpu_count=0,
+        device_variant="v4-2048",
+    )
+
+    gang = JobName.from_wire("/larry/grug-moe")
+    preemptions = run_preemption_pass(_gang_unscheduled(gang, req, 2), [cosched_cotenant], ctx)
+    assert preemptions == []
+
+
+def test_gang_preempts_solo_tpu_cotenant_on_blocking_host():
+    """Intended broader behavior: a BATCH *solo TPU* task occupying chips the gang
+    needs is preemptible too (on a host matching the gang's group, any TPU solo
+    victim is necessarily the same variant)."""
+    workers = [WorkerId(f"w{i}") for i in range(2)]
+    req = _gang_req(variant="v5p-8", memory_bytes=_GB)
+    # w0 fits; w1 has only 2 of 4 chips free (a solo BATCH task holds the other 2).
+    caps = [
+        _pod_capacity(workers[0], memory_bytes=_FREE_RAM),
+        _pod_capacity(workers[1], memory_bytes=_FREE_RAM, tpus=2),
+    ]
+    ctx = _make_simple_context(caps)
+
+    tpu_cotenant = _solo_victim(
+        JobName.from_wire("/m/batch-tpu:0"),
+        workers[1],
+        band=job_pb2.PRIORITY_BAND_BATCH,
+        tpus=2,  # freeing restores w1 to 4 chips
+        variant="v5p-8",
+    )
+
+    gang = JobName.from_wire("/larry/grug-moe")
+    preemptions = run_preemption_pass(_gang_unscheduled(gang, req, 2), [tpu_cotenant], ctx)
+    assert len(preemptions) == 1
+    assert preemptions[0][1] == tpu_cotenant.task_id
+
+
+def test_two_gangs_do_not_double_book_hosts():
+    """Two gangs contending for one pod don't double-book hosts: the first claims
+    the freed pod; the second finds every host reserved and preempts nothing."""
+    workers = [WorkerId(f"w{i}") for i in range(4)]
+    req = _gang_req()
+    # 3 hosts fit; w3 is RAM-blocked with one evictable BATCH squatter.
+    caps = [_pod_capacity(workers[i], memory_bytes=_FREE_RAM) for i in range(3)]
+    caps.append(_pod_capacity(workers[3], memory_bytes=_BLOCKED_RAM))
+    ctx = _make_simple_context(caps)
+
+    squatter = _solo_victim(
+        JobName.from_wire("/m/batch:0"),
+        workers[3],
+        band=job_pb2.PRIORITY_BAND_BATCH,
+        memory_bytes=_SQUATTER_RAM,
+    )
+
+    gang_a = JobName.from_wire("/larry/gang-a")
+    gang_b = JobName.from_wire("/larry/gang-b")
+    unscheduled = _gang_unscheduled(gang_a, req, 4) + _gang_unscheduled(gang_b, req, 4)
+
+    preemptions = run_preemption_pass(unscheduled, [squatter], ctx)
+    # Only gang A's single squatter eviction; gang B sees every host reserved.
+    assert len(preemptions) == 1
+    assert preemptions[0][1] == squatter.task_id
+    assert preemptions[0][0].parent == gang_a
+
+
+# ---------------------------------------------------------------------------
 # Integration tests using ControllerTestState
 # ---------------------------------------------------------------------------
 
@@ -614,7 +940,6 @@ def test_preempted_task_retries():
             finalize(
                 cur,
                 [TerminalDecision(TerminalKind.PREEMPT, task.task_id, "Preempted by /bob/prod-job:0")],
-                endpoints=state._endpoints,
                 now=Timestamp.now(),
             )
 
@@ -646,7 +971,6 @@ def test_preempted_task_exhausted_retries():
             finalize(
                 cur,
                 [TerminalDecision(TerminalKind.PREEMPT, task.task_id, "preempted")],
-                endpoints=state._endpoints,
                 now=Timestamp.now(),
             )
 
@@ -895,9 +1219,7 @@ def test_pending_child_order_uses_parent_job_config_not_stamped_task_band():
             replicas=1,
         )
         with state._db.transaction() as cur:
-            ops.job.submit(
-                cur, job_id=child_id, request=child_req, ts=Timestamp.now(), run_template_cache=state._run_template_cache
-            )
+            ops.job.submit(cur, job_id=child_id, request=child_req, ts=Timestamp.now())
         interactive_tasks = harness.submit(
             "/bob/interactive",
             cpu=1,
@@ -940,7 +1262,6 @@ def _dispatch_with_band(state, task, worker_id, priority_band: int) -> None:
                 )
             ],
             health=state._health,
-            endpoints=state._endpoints,
             now=Timestamp.now(),
         )
 
@@ -969,7 +1290,6 @@ def test_preempted_assigned_task_always_retries():
             finalize(
                 cur,
                 [TerminalDecision(TerminalKind.PREEMPT, task.task_id, "preempted while assigned")],
-                endpoints=state._endpoints,
                 now=Timestamp.now(),
             )
 
@@ -1092,7 +1412,6 @@ def test_preemption_nonexistent_task_is_noop():
             result = finalize(
                 cur,
                 [TerminalDecision(TerminalKind.PREEMPT, JobName.from_wire("/ghost/job:0"), "does not exist")],
-                endpoints=state._endpoints,
                 now=Timestamp.now(),
             )
         assert not result.tasks
@@ -1124,7 +1443,6 @@ def test_preempt_then_worker_terminal_heartbeat_stamps_finished_at_ms():
             finalize(
                 cur,
                 [TerminalDecision(TerminalKind.PREEMPT, task.task_id, "preempted by /bob/prod-job:0")],
-                endpoints=state._endpoints,
                 now=Timestamp.now(),
             )
         attempt = query_attempt(state, task.task_id, attempt_id)
@@ -1148,7 +1466,6 @@ def test_preempt_then_worker_terminal_heartbeat_stamps_finished_at_ms():
                     )
                 ],
                 health=state._health,
-                endpoints=state._endpoints,
                 now=Timestamp.now(),
             )
 
@@ -1178,7 +1495,6 @@ def test_preemption_terminal_task_is_noop():
             finalize(
                 cur,
                 [TerminalDecision(TerminalKind.PREEMPT, task.task_id, "too late")],
-                endpoints=state._endpoints,
                 now=Timestamp.now(),
             )
         assert query_task(state, task.task_id).state == job_pb2.TASK_STATE_SUCCEEDED
@@ -1191,62 +1507,57 @@ def test_preemption_terminal_task_is_noop():
 
 def test_resolve_failure_assigned_always_retries():
     """ASSIGNED tasks always retry regardless of preemption budget."""
-    new_state, count = _resolve_task_failure_state(
+    new_state = _resolve_task_failure_state(
         job_pb2.TASK_STATE_ASSIGNED,
         preemption_count=0,
         max_preemptions=0,
         terminal_state=job_pb2.TASK_STATE_PREEMPTED,
     )
     assert new_state == job_pb2.TASK_STATE_PENDING
-    assert count == 0  # preemption_count not incremented for ASSIGNED
 
 
 def test_resolve_failure_running_retries_within_budget():
     """RUNNING task retries when preemption budget remains."""
-    new_state, count = _resolve_task_failure_state(
+    new_state = _resolve_task_failure_state(
         job_pb2.TASK_STATE_RUNNING,
         preemption_count=0,
         max_preemptions=3,
         terminal_state=job_pb2.TASK_STATE_PREEMPTED,
     )
     assert new_state == job_pb2.TASK_STATE_PENDING
-    assert count == 1
 
 
 def test_resolve_failure_running_terminal_when_budget_exhausted():
     """RUNNING task goes terminal when preemption budget is exhausted."""
-    new_state, count = _resolve_task_failure_state(
+    new_state = _resolve_task_failure_state(
         job_pb2.TASK_STATE_RUNNING,
         preemption_count=3,
         max_preemptions=3,
         terminal_state=job_pb2.TASK_STATE_PREEMPTED,
     )
     assert new_state == job_pb2.TASK_STATE_PREEMPTED
-    assert count == 4
 
 
 def test_resolve_failure_building_retries_within_budget():
     """BUILDING task (executing state) retries when budget remains."""
-    new_state, count = _resolve_task_failure_state(
+    new_state = _resolve_task_failure_state(
         job_pb2.TASK_STATE_BUILDING,
         preemption_count=0,
         max_preemptions=1,
         terminal_state=job_pb2.TASK_STATE_WORKER_FAILED,
     )
     assert new_state == job_pb2.TASK_STATE_PENDING
-    assert count == 1
 
 
 def test_resolve_failure_building_terminal_when_exhausted():
     """BUILDING task goes terminal when preemption budget is exhausted."""
-    new_state, count = _resolve_task_failure_state(
+    new_state = _resolve_task_failure_state(
         job_pb2.TASK_STATE_BUILDING,
         preemption_count=1,
         max_preemptions=1,
         terminal_state=job_pb2.TASK_STATE_WORKER_FAILED,
     )
     assert new_state == job_pb2.TASK_STATE_WORKER_FAILED
-    assert count == 2
 
 
 # ---------------------------------------------------------------------------
@@ -1275,7 +1586,6 @@ def test_preempt_task_retries_when_budget_remains():
             result = finalize(
                 cur,
                 [TerminalDecision(TerminalKind.PREEMPT, task.task_id, "Evicted by /bob/prod:0")],
-                endpoints=state._endpoints,
                 now=Timestamp.now(),
             )
 
@@ -1313,7 +1623,6 @@ def test_preempt_task_terminal_when_budget_exhausted():
             result = finalize(
                 cur,
                 [TerminalDecision(TerminalKind.PREEMPT, task.task_id, "budget gone")],
-                endpoints=state._endpoints,
                 now=Timestamp.now(),
             )
 
@@ -1363,7 +1672,6 @@ def test_preempt_task_requeues_coscheduled_siblings_on_retry():
             result = finalize(
                 cur,
                 [TerminalDecision(TerminalKind.PREEMPT, tasks[0].task_id, "evicted")],
-                endpoints=state._endpoints,
                 now=Timestamp.now(),
             )
 
@@ -1425,7 +1733,6 @@ def test_preempt_task_cascades_coscheduled_siblings():
             result0 = finalize(
                 cur,
                 [TerminalDecision(TerminalKind.PREEMPT, tasks[0].task_id, "preempted by prod")],
-                endpoints=state._endpoints,
                 now=Timestamp.now(),
             )
 
@@ -1478,7 +1785,6 @@ def test_late_heartbeat_after_preempt_to_pending_does_not_revive_attempt():
             finalize(
                 cur,
                 [TerminalDecision(TerminalKind.PREEMPT, task.task_id, "Preempted by /bob/prod-job:0")],
-                endpoints=state._endpoints,
                 now=Timestamp.now(),
             )
 
@@ -1514,7 +1820,6 @@ def test_late_heartbeat_after_preempt_to_pending_does_not_revive_attempt():
                     )
                 ],
                 health=state._health,
-                endpoints=state._endpoints,
                 now=Timestamp.now(),
             )
 

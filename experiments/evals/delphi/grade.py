@@ -30,7 +30,7 @@ import os
 from dataclasses import dataclass
 
 import fsspec
-from marin.execution.executor import InputName
+from thalas.execution.executor import InputName
 from zephyr import Dataset, ZephyrContext
 
 logger = logging.getLogger(__name__)

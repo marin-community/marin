@@ -73,7 +73,7 @@ from fray.cluster import ResourceConfig
 from rigging.filesystem import marin_prefix
 from marin.evaluation.save_logprobs import default_save_logprobs
 from marin.evaluation.utils import discover_hf_checkpoints
-from marin.execution.executor import (
+from thalas.execution.executor import (
     ExecutorStep,
     InputName,
     executor_main,
@@ -81,7 +81,7 @@ from marin.execution.executor import (
     this_output_path,
     versioned,
 )
-from marin.execution.remote import remote
+from thalas.execution.remote import remote
 from marin.processing.tokenize.data_configs import mixture_for_evaluation
 from marin.utils import fsspec_glob
 

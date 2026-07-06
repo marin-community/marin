@@ -31,11 +31,12 @@ from fray import ResourceConfig
 from levanter.data.text import LmDatasetFormatBase, TextLmDatasetFormat
 from levanter.tokenizers import TokenizerBackend
 from pydantic import BaseModel
+from rigging.filesystem import prefix_join
 from zephyr import Dataset, ZephyrContext
 from zephyr.readers import load_file
 
 from marin.datakit.normalize import NormalizedData
-from marin.execution.artifact import Artifact
+from marin.execution.artifact import read_artifact
 from marin.execution.step_spec import StepSpec
 from marin.processing.tokenize._core import tokenize_pipeline
 from marin.utils import fsspec_glob
@@ -73,14 +74,14 @@ class TokenizedAttrData(BaseModel):
     source_main_dirs: dict[str, str]
     tokenizer: str
     tokenizer_backend: str
-    counters: dict[str, dict[str, int]]
+    counters: dict[str, dict[str, int | float]]
 
     def shard_paths(self, split: str) -> list[str]:
         """Return parquet shard paths for ``split`` in order, or ``[]`` if absent."""
         d = self.output_dirs.get(split)
         if d is None:
             return []
-        return sorted(fsspec_glob(f"{d.rstrip('/')}/*.parquet"))
+        return sorted(fsspec_glob(prefix_join(d, "*.parquet")))
 
 
 @dataclasses.dataclass(frozen=True, kw_only=True)
@@ -121,20 +122,20 @@ def _process_split(
     source: NormalizedData,
     split: str,
     config: TokenizeAttributesConfig,
-) -> tuple[str, dict[str, int]]:
+) -> tuple[str, dict[str, int | float]]:
     """Tokenize one split's NormalizedData into co-partitioned attribute parquet.
 
     Returns ``(split_output_dir, counters)``.
     """
-    source_shards = sorted(fsspec_glob(f"{source.main_output_dir.rstrip('/')}/*.parquet"))
+    source_shards = sorted(fsspec_glob(prefix_join(source.main_output_dir, "*.parquet")))
     if not source_shards:
         raise FileNotFoundError(f"No parquet shards found under {source.main_output_dir}")
 
-    split_dir = os.path.join(config.output_path, split)
+    split_dir = prefix_join(config.output_path, split)
     output_basenames = tuple(os.path.basename(p) for p in source_shards)
 
     def _output_path(shard_idx: int, total_shards: int, sd: str = split_dir, bn: tuple = output_basenames) -> str:
-        return f"{sd}/{bn[shard_idx]}"
+        return prefix_join(sd, bn[shard_idx])
 
     logger.info(
         "Tokenizing %s (split=%s): %d source shards → %s",
@@ -203,7 +204,7 @@ def tokenize_attributes(config: TokenizeAttributesConfig) -> TokenizedAttrData:
     """
     output_dirs: dict[str, str] = {}
     source_main_dirs: dict[str, str] = {}
-    counters: dict[str, dict[str, int]] = {}
+    counters: dict[str, dict[str, int | float]] = {}
 
     splits: list[tuple[str, NormalizedData]] = []
     if config.train_source is not None:
@@ -279,9 +280,9 @@ def tokenize_attributes_step(
             "max_workers": max_workers,
         }
         if train_normalize is not None:
-            kwargs["train_source"] = Artifact.from_path(train_normalize, NormalizedData)
+            kwargs["train_source"] = read_artifact(train_normalize.output_path, NormalizedData)
         if validation_normalize is not None:
-            kwargs["validation_source"] = Artifact.from_path(validation_normalize, NormalizedData)
+            kwargs["validation_source"] = read_artifact(validation_normalize.output_path, NormalizedData)
         if worker_resources is not None:
             kwargs["worker_resources"] = worker_resources
         return tokenize_attributes(TokenizeAttributesConfig(**kwargs))

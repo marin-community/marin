@@ -9,8 +9,8 @@ import os
 import re
 
 import fsspec
-from marin.execution.executor import InputName, MirroredValue
-from marin.execution.types import versioned
+from thalas.execution.executor import InputName, MirroredValue
+from thalas.execution.types import versioned
 from marin.utils import fsspec_exists, fsspec_glob
 from rigging.filesystem import REGION_TO_DATA_BUCKET, marin_region, mirror_budget
 

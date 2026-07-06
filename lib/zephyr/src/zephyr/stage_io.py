@@ -254,6 +254,23 @@ def _write_stage_output(
 
 
 @dataclass
+class ZephyrTaskResources:
+    """CPU and memory budget for a single task or worker resource pool."""
+
+    cpu: float
+    memory: int
+
+    def __add__(self, other: "ZephyrTaskResources") -> "ZephyrTaskResources":
+        return ZephyrTaskResources(cpu=self.cpu + other.cpu, memory=self.memory + other.memory)
+
+    def __sub__(self, other: "ZephyrTaskResources") -> "ZephyrTaskResources":
+        return ZephyrTaskResources(cpu=self.cpu - other.cpu, memory=self.memory - other.memory)
+
+    def can_fit(self, cost: "ZephyrTaskResources") -> bool:
+        return self.cpu >= cost.cpu and (cost.memory == 0 or self.memory >= cost.memory)
+
+
+@dataclass
 class ShardTask:
     """Describes a unit of work for a worker: one shard through one stage."""
 
@@ -261,6 +278,7 @@ class ShardTask:
     total_shards: int
     shard: Shard
     operations: list[PhysicalOp]
+    cost: ZephyrTaskResources
     stage_name: str = "output"
     aux_shards: dict[int, Shard] | None = None
 

@@ -140,9 +140,11 @@ def build_common_iris_env(
     """
     env: dict[str, str] = {}
 
-    # Task identity. Append :attempt_id for retries so tasks see the correct
-    # attempt via JobInfo (matches TaskAttemptIdentity.to_wire()).
-    wire_task_id = f"{task_id}:{attempt_id}" if attempt_id else task_id
+    # Task identity in canonical TaskAttempt wire form, always carrying the
+    # attempt suffix (/user/job/0:0 for the first attempt) so the id — and the
+    # finelog log key derived from it — is identical across attempts and every
+    # backend.
+    wire_task_id = f"{task_id}:{attempt_id}"
     env["IRIS_TASK_ID"] = wire_task_id
     env["IRIS_NUM_TASKS"] = str(num_tasks)
     env["IRIS_BUNDLE_ID"] = bundle_id

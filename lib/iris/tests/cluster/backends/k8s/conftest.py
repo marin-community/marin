@@ -3,7 +3,6 @@
 
 import pytest
 from finelog.rpc.logging_connect import LogServiceClientSync
-from iris.cluster.backends.k8s.fake import InMemoryK8sService
 from iris.cluster.backends.k8s.tasks import (
     _LABEL_MANAGED,
     _LABEL_RUNTIME,
@@ -11,8 +10,9 @@ from iris.cluster.backends.k8s.tasks import (
     K8sTaskProvider,
     PodConfig,
 )
-from iris.cluster.backends.k8s.types import K8sResource
 from iris.cluster.controller.reads import ControlSnapshot
+from iris.cluster.platforms.k8s.fake import InMemoryK8sService
+from iris.cluster.platforms.k8s.types import K8sResource
 from iris.cluster.runtime.env import build_common_iris_env
 from iris.rpc import job_pb2
 
@@ -121,22 +121,16 @@ def make_batch(
     )
 
 
-def make_pod(name: str, phase: str, exit_code: int | None = None, reason: str = "") -> dict:
+def make_pod(name: str, phase: str, exit_code: int | None = None, reason: str = "", message: str = "") -> dict:
     pod: dict = {
         "metadata": {"name": name},
         "status": {"phase": phase, "containerStatuses": []},
     }
     if exit_code is not None:
-        pod["status"]["containerStatuses"] = [
-            {
-                "state": {
-                    "terminated": {
-                        "exitCode": exit_code,
-                        "reason": reason,
-                    }
-                }
-            }
-        ]
+        terminated: dict = {"exitCode": exit_code, "reason": reason}
+        if message:
+            terminated["message"] = message
+        pod["status"]["containerStatuses"] = [{"state": {"terminated": terminated}}]
     return pod
 
 

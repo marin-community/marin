@@ -44,7 +44,7 @@ from typing import Any
 
 import fsspec
 from marin.evaluation.utils import discover_hf_checkpoints
-from marin.execution.executor import InputName
+from thalas.execution.executor import InputName
 from marin.utils import fsspec_exists, fsspec_glob
 
 logger = logging.getLogger(__name__)

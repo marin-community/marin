@@ -24,8 +24,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from marin.execution.executor import ExecutorStep, InputName, MirroredValue
-from marin.execution.types import this_output_path, versioned
+from thalas.execution.executor import ExecutorStep, InputName, MirroredValue
+from thalas.execution.types import this_output_path, versioned
 
 from experiments.downstream_scaling.evals.algorithms.iid import (
     IIDCompletionStepConfig,

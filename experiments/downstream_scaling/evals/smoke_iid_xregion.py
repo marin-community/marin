@@ -13,9 +13,9 @@ from dataclasses import dataclass, replace
 
 import fsspec
 from fray.cluster import ResourceConfig, get_tpu_topology
-from marin.execution.executor import ExecutorStep, executor_main, output_path_of
-from marin.execution.remote import remote
-from marin.execution.types import this_output_path, versioned
+from thalas.execution.executor import ExecutorStep, executor_main, output_path_of
+from thalas.execution.remote import remote
+from thalas.execution.types import this_output_path, versioned
 from rigging.filesystem import REGION_TO_DATA_BUCKET
 from rigging.log_setup import configure_logging
 

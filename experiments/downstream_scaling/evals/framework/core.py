@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from typing import Protocol
 
-from marin.execution.executor import ExecutorStep, InputName, MirroredValue, output_path_of
+from thalas.execution.executor import ExecutorStep, InputName, MirroredValue, output_path_of
 
 from experiments.downstream_scaling.evals.framework.schema import COMPLETIONS_FILENAME, PROMPTS_FILENAME
 

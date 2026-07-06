@@ -20,7 +20,6 @@ from rigging.filesystem import open_url
 from zephyr import Dataset, ZephyrContext
 
 from marin.execution.step_spec import StepSpec
-from marin.execution.types import THIS_OUTPUT_PATH
 from marin.transform.bio_chem.splitters import (
     SamplingCap,
     iter_fasta_records,
@@ -105,7 +104,7 @@ class NotationSliceSpec:
 class BioChemSliceConfig:
     """Top-level runtime config for one materialization step."""
 
-    output_path: str = THIS_OUTPUT_PATH
+    output_path: str = ""
     slices: tuple[NotationSliceSpec, ...] = ()
 
 

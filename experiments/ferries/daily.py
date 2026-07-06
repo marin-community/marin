@@ -20,12 +20,23 @@ import os
 from dataclasses import replace
 
 from fray.cluster import ResourceConfig
-from marin.execution.executor import executor_main
+from levanter.optim import AdamConfig
+from marin.execution.lazy import ArtifactStep
+from marin.execution.step_runner import StepRunner
+from marin.experiment.train import train_lm
+from marin.training.training import LevanterCheckpoint
 
-from experiments.defaults import default_train
-from experiments.llama import compute_num_parameters, llama3_tokenizer_vocab_size, llama_150m
-from experiments.pretraining_datasets import nemotron_mix
-from experiments.simple_train_config import SimpleTrainConfig
+from experiments.datasets.nemotron import nemotron_datasets
+from experiments.datasets.paloma import paloma_datasets
+from experiments.datasets.proofpile import proofpile_dataset
+from experiments.datasets.starcoder import starcoder_dataset
+from experiments.datasets.uncheatable import uncheatable_datasets
+from experiments.llama import (
+    compute_num_parameters,
+    llama3_tokenizer,
+    llama3_tokenizer_vocab_size,
+    llama_150m,
+)
 
 # ---------------------------
 # Daily ferry policy defaults
@@ -33,6 +44,20 @@ from experiments.simple_train_config import SimpleTrainConfig
 DEFAULT_MODEL_FLOPS_TARGET = int(1e19)
 TRAIN_BATCH_SIZE = 512
 TRAIN_SEQ_LEN = 4096
+
+# Nemotron CC mixture weights: the corpus's TiB proportions, plus starcoder and
+# proof-pile at their published weights. Policy lives here, in the experiment.
+_NEMOTRON_WEIGHTS = {
+    "hq_actual": 0.91351,
+    "hq_synth": 2.72,
+    "medium_high": 0.82471,
+    "medium": 3.38,
+    "medium_low": 1.54,
+    "low_actual": 0.70123,
+    "low_synth": 0.62771,
+}
+_STARCODER_WEIGHT = 0.25
+_PROOFPILE_WEIGHT = 0.055
 
 
 def _int_env(name: str, default: int) -> int:
@@ -56,35 +81,43 @@ NUM_TRAIN_STEPS = _int_env(
 FERRY_DATE = os.environ.get("FERRY_DATE", dt.date.today().isoformat())
 RUN_NAME = f"ferry_daily_125m_{FERRY_DATE}"
 
-# Agent edit surface: keep daily changes small (usually 1-2 knobs).
-train_config_kwargs = dict(
-    resources=ResourceConfig.with_tpu("v5p-8"),
-    train_batch_size=TRAIN_BATCH_SIZE,
-    train_seq_len=TRAIN_SEQ_LEN,
-    num_train_steps=NUM_TRAIN_STEPS,
-    learning_rate=3e-3,
-    lr_schedule="linear",
-    decay=0.2,
-    weight_decay=0.1,
-    min_lr_ratio=0.1,
-    warmup=1000,
-    z_loss_weight=1e-4,
-)
 
-train_config = SimpleTrainConfig(**train_config_kwargs)
+def build() -> ArtifactStep[LevanterCheckpoint]:
+    """The daily 125M-ish nemotron integration run as a lazy checkpoint."""
+    nem = nemotron_datasets(tokenizer=llama3_tokenizer)
+    train = {nem[split]: weight for split, weight in _NEMOTRON_WEIGHTS.items()}
+    train[starcoder_dataset(tokenizer=llama3_tokenizer)] = _STARCODER_WEIGHT
+    train[proofpile_dataset(tokenizer=llama3_tokenizer)] = _PROOFPILE_WEIGHT
+    validation = [
+        *paloma_datasets(tokenizer=llama3_tokenizer).values(),
+        *uncheatable_datasets(tokenizer=llama3_tokenizer).values(),
+    ]
 
-daily_ferry = default_train(
-    name=RUN_NAME,
-    tokenized=nemotron_mix,
-    model_config=replace(llama_150m, max_seq_len=TRAIN_SEQ_LEN),
-    train_config=train_config,
-    eval_harness_tasks=[],
-    tags=["ferry", "daily", "integration", "125m", "nemotron", "seq4096"],
-)
+    return train_lm(
+        name=RUN_NAME,
+        version="2026.06.28",
+        model=replace(llama_150m, max_seq_len=TRAIN_SEQ_LEN),
+        # Agent edit surface: keep daily changes small (usually 1-2 knobs).
+        optimizer=AdamConfig(
+            learning_rate=3e-3,
+            lr_schedule="linear",
+            decay=0.2,
+            weight_decay=0.1,
+            min_lr_ratio=0.1,
+            warmup=1000,
+        ),
+        datasets=train,
+        validation=validation,
+        batch_size=TRAIN_BATCH_SIZE,
+        seq_len=TRAIN_SEQ_LEN,
+        num_train_steps=NUM_TRAIN_STEPS,
+        z_loss_weight=1e-4,
+        evals=None,
+        resources=ResourceConfig.with_tpu("v5p-8"),
+        run_id=RUN_NAME,
+        tags=["ferry", "daily", "integration", "125m", "nemotron", "seq4096"],
+    )
 
 
 if __name__ == "__main__":
-    executor_main(
-        steps=[daily_ferry],
-        description="Daily ferry (125M-ish): bounded-change TPU integration run.",
-    )
+    StepRunner().run([build().lower()])

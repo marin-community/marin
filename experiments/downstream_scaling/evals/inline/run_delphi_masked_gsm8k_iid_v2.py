@@ -17,7 +17,7 @@ no TPU. Step names match the dispatched v2 script, so the two share output paths
 from __future__ import annotations
 
 from fray.cluster import ResourceConfig
-from marin.execution.executor import executor_main, output_path_of
+from thalas.execution.executor import executor_main, output_path_of
 
 from experiments.downstream_scaling.evals.algorithms.iid import (
     IIDConfig,

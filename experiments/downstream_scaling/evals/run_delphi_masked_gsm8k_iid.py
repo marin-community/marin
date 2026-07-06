@@ -9,7 +9,7 @@ import argparse
 import sys
 
 from fray.cluster import ResourceConfig
-from marin.execution.executor import InputName, executor_main
+from thalas.execution.executor import InputName, executor_main
 from rigging.filesystem import marin_region
 
 from experiments.downstream_scaling.evals.algorithms.iid import (

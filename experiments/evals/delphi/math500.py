@@ -36,7 +36,7 @@ from experiments.evals.delphi.rollout import (
     init_chunks_root,
     run_rollout_worker,
 )
-from marin.execution.executor import (
+from thalas.execution.executor import (
     ExecutorStep,
     InputName,
     executor_main,
@@ -44,7 +44,7 @@ from marin.execution.executor import (
     this_output_path,
     versioned,
 )
-from marin.execution.remote import remote
+from thalas.execution.remote import remote
 from zephyr import Dataset, ZephyrContext
 
 logger = logging.getLogger(__name__)

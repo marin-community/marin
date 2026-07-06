@@ -7,13 +7,15 @@
 row shapes.
 """
 
+from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any
 
 from rigging.timing import Timestamp
 
 from iris.cluster.controller.task_state import ActiveTaskRow, TaskDetailRow
-from iris.cluster.types import AttemptUid, JobName, WorkerId
+from iris.cluster.types import TERMINAL_TASK_STATES, AttemptUid, JobName, WorkerId
+from iris.rpc import job_pb2
 
 
 @dataclass(frozen=True)
@@ -50,7 +52,8 @@ class JobStateBasis:
     started_at: Timestamp | None
     max_task_failures: int
     task_state_counts: dict[int, int]  # task state → count
-    first_task_error: str | None
+    total_failures: int  # committed-derived cumulative FAILED attempts across the job (loader-summed)
+    first_task_error: str | None  # the error of the task that failed first (the root cause), not task index 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -64,7 +67,36 @@ class TaskHistogramRow:
     task_id: JobName
     task_index: int
     state: int
+    failure_count: int
     error: str | None
+    # Set only once the task reaches a terminal state; None while it is still
+    # active or bounced back to PENDING for a retry.
+    finished_at: Timestamp | None = None
+
+
+def pick_earliest_task_error(candidates: Iterable[tuple[int, int, Timestamp | None, str | None]]) -> str | None:
+    """Return the error of the failed task that finished first among ``candidates``.
+
+    ``candidates`` is ``(task_index, state, finished_at, error)`` per task.
+    Considers only tasks that finished in a failed terminal state with a
+    recorded error, then returns the earliest-finishing one's error (ties break
+    by ``task_index``). This picks a coscheduled gang's true root cause — the
+    sibling that crashed first — over a follower that only timed out waiting on
+    it. Tasks still retrying (no ``finished_at``) and tasks that ultimately
+    succeeded (a stale error preserved from an earlier failed attempt) are
+    excluded.
+    """
+    failed = [
+        (finished_at, task_index, error)
+        for task_index, state, finished_at, error in candidates
+        if error is not None
+        and finished_at is not None
+        and state in TERMINAL_TASK_STATES
+        and state != job_pb2.TASK_STATE_SUCCEEDED
+    ]
+    if not failed:
+        return None
+    return min(failed, key=lambda c: (c[0].epoch_ms(), c[1]))[2]
 
 
 @dataclass(frozen=True)

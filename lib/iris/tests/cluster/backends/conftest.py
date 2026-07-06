@@ -13,17 +13,17 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from unittest.mock import MagicMock
 
-from iris.cluster.backends.types import (
+from iris.cluster.config import SliceConfig
+from iris.cluster.platforms.types import (
     CloudSliceState,
     CloudWorkerState,
     CommandResult,
     Labels,
     SliceStatus,
 )
-from iris.cluster.backends.types import (
+from iris.cluster.platforms.types import (
     WorkerStatus as CloudWorkerStatus,
 )
-from iris.cluster.config import SliceConfig
 from iris.rpc import vm_pb2
 from rigging.timing import Duration, Timestamp
 

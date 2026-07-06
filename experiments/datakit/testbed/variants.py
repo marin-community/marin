@@ -10,30 +10,34 @@ parquet serves every hyperparam sweep. Each variant then MinHash→fuzzy-dups
 tokenizes the deduped output, and trains.
 
 The whole pipeline (ferry → minhash → fuzzy_dups → consolidate → tokenize
-→ weights → train) lives in one executor DAG so ``--dry_run`` validates
-structure without touching GCS.
+→ weights → train) lives in one ``StepSpec`` graph that :class:`StepRunner`
+walks, scheduling each step once its dependencies are satisfied.
 """
 
-import dataclasses
+from __future__ import annotations
+
 import logging
 import os
+from collections.abc import Sequence
 
-import draccus
 from fray import ResourceConfig
 from marin.datakit.normalize import NormalizedData
-from marin.execution.artifact import Artifact
-from marin.execution.executor import ExecutorMainConfig, executor_main
+from marin.execution.artifact import read_artifact
+from marin.execution.lazy import ArtifactStep
+from marin.execution.step_runner import StepRunner
 from marin.execution.step_spec import StepSpec
-from marin.execution.types import ExecutorStep
 from marin.processing.classification.consolidate import FilterConfig, FilterType, consolidate
 from marin.processing.classification.deduplication.fuzzy_dups import FuzzyDupsAttrData, compute_fuzzy_dups_attrs
 from marin.processing.classification.deduplication.fuzzy_minhash import MinHashAttrData, compute_minhash_attrs
+from marin.processing.tokenize.tokenize import TokenizedCache
 from rigging.log_setup import configure_logging
 
 from experiments.datakit.testbed.mixture import tokenized_bucket_weights_step
 from experiments.datakit.testbed.sampler import build_testbed_steps
 from experiments.datakit.testbed.settings import TESTBED_TOKENIZER
 from experiments.datakit.testbed.train import run_testbed_config, testbed_tokenize
+from experiments.datasets.paloma import paloma_datasets
+from experiments.datasets.uncheatable import uncheatable_datasets
 
 logger = logging.getLogger(__name__)
 
@@ -60,7 +64,7 @@ def _minhash_step(src_name: str, sampled: StepSpec, **params: int) -> StepSpec:
             "seed": params["seed"],
         },
         fn=lambda output_path, sampled=sampled: compute_minhash_attrs(
-            source=Artifact.from_path(sampled, NormalizedData),
+            source=read_artifact(sampled.output_path, NormalizedData),
             output_path=output_path,
             num_perms=params["num_perms"],
             num_bands=params["num_bands"],
@@ -78,7 +82,7 @@ def _fuzzy_dups_step(minhash_steps: list[StepSpec], cc_max_iterations: int) -> S
         deps=list(minhash_steps),
         hash_attrs={"cc_max_iterations": cc_max_iterations},
         fn=lambda output_path: compute_fuzzy_dups_attrs(
-            inputs=[Artifact.from_path(mh, MinHashAttrData) for mh in minhash_steps],
+            inputs=[read_artifact(mh.output_path, MinHashAttrData) for mh in minhash_steps],
             output_path=output_path,
             cc_max_iterations=cc_max_iterations,
             max_parallelism=_FUZZY_DUPS_MAX_PARALLELISM,
@@ -97,14 +101,14 @@ def _deduped_step(src_name: str, sampled: StepSpec, fuzzy_dups: StepSpec) -> Ste
         name=f"data/datakit/deduped/{src_name}",
         deps=[sampled, fuzzy_dups],
         fn=lambda output_path, sampled=sampled: consolidate(
-            input_path=Artifact.from_path(sampled, NormalizedData).main_output_dir,
+            input_path=read_artifact(sampled.output_path, NormalizedData).main_output_dir,
             output_path=os.path.join(output_path, "outputs/main"),
             filetype="parquet",
             filters=[
                 FilterConfig(
                     type=FilterType.KEEP_DOC,
-                    attribute_path=Artifact.from_path(fuzzy_dups, FuzzyDupsAttrData)
-                    .sources[Artifact.from_path(sampled, NormalizedData).main_output_dir]
+                    attribute_path=read_artifact(fuzzy_dups.output_path, FuzzyDupsAttrData)
+                    .sources[read_artifact(sampled.output_path, NormalizedData).main_output_dir]
                     .attr_dir,
                     name="is_cluster_canonical",
                     attribute_filetype="parquet",
@@ -121,12 +125,13 @@ def dedup(
     *,
     name: str,
     tokenizer: str,
+    validation: Sequence[ArtifactStep[TokenizedCache]],
     fuzzy_dedup_num_perms: int = 286,
     fuzzy_dedup_num_bands: int = 26,
     fuzzy_dedup_ngram_size: int = 5,
     fuzzy_dedup_seed: int = 42,
     fuzzy_dedup_cc_max_iterations: int = 10,
-) -> ExecutorStep:
+) -> StepSpec:
     """Assemble the fuzzy-dedup training step off a testbed DAG.
 
     Defaults for ``fuzzy_dedup_*`` match
@@ -169,23 +174,22 @@ def dedup(
         name=name,
         tokenized_buckets=tokenized_buckets,
         weights_step=weights_step,
+        validation=validation,
         tokenizer=tokenizer,
     )
 
 
 def main() -> None:
-    """Build the fuzzy-dedup DAG and hand it to ``executor_main``."""
-    config = draccus.parse(ExecutorMainConfig)
-    if config.prefix is None:
-        config = dataclasses.replace(config, prefix=STAGING_PREFIX)
-    os.environ.setdefault("MARIN_PREFIX", config.prefix)
+    """Build the fuzzy-dedup DAG and run it."""
+    os.environ.setdefault("MARIN_PREFIX", STAGING_PREFIX)
 
     tokenizer = TESTBED_TOKENIZER
     run_id = "fuzzy_dedup"
+    validation = [*paloma_datasets(tokenizer=tokenizer).values(), *uncheatable_datasets(tokenizer=tokenizer).values()]
 
     testbed_steps = build_testbed_steps(target_total_tokens_b=TARGET_TOTAL_TOKENS_B)
-    training_step = dedup(testbed_steps, name=run_id, tokenizer=tokenizer)
-    executor_main(config, [training_step], max_concurrent=MAX_STEP_CONCURRENCY)
+    training_step = dedup(testbed_steps, name=run_id, tokenizer=tokenizer, validation=validation)
+    StepRunner().run([training_step], max_concurrent=MAX_STEP_CONCURRENCY)
 
 
 if __name__ == "__main__":

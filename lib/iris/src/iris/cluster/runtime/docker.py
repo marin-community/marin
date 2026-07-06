@@ -49,7 +49,6 @@ from iris.cluster.runtime.types import (
     ContainerStatus,
     DiscoveredContainer,
     ExecutionStage,
-    ImageInfo,
     MountKind,
     MountSpec,
 )
@@ -145,10 +144,30 @@ def _resolve_profiler_bin(container_id: str, venv_bin: str, fallback: str) -> st
     return venv_bin if probe.returncode == 0 else fallback
 
 
+# Widened ephemeral port range for high-connection workloads: the controller and
+# workers fan out to thousands of peers and would otherwise exhaust the default
+# ~28k-port pool. The floor is deliberately above every fixed port the cluster's
+# own services bind — the TPU/JAX runtime (8081, 8431, 8470-8482) and iris'
+# controller/worker RPC (10000/10001). An earlier floor of 1024 pulled those into
+# the kernel's random ephemeral pool, so a co-tenant's outbound connection could
+# be handed e.g. 8431 and block the TPU trainer from binding it, crash-looping
+# with "[::]:8431 ... Address already in use". 11000-65535 still leaves ~54k
+# ephemeral ports.
+EPHEMERAL_PORT_RANGE = "11000 65535"
+
+# Belt-and-suspenders for the fixed TPU/JAX ports that sit just below the floor:
+# reserve them so they stay out of automatic ephemeral assignment even if the
+# floor is ever lowered again. An explicit bind() by the TPU runtime is
+# unaffected. libtpu's Runtime Metric Service is 8431; 8470-8482 is the Cloud TPU
+# runtime/SliceBuilder block (incl. the JAX coordinator 8482 and marin's default
+# 8476); 8081 is levanter megascale.
+RESERVED_HOST_PORTS = "8081,8431,8470-8482"
+
 # Network sysctl tuning for containers with their own network namespace (#3066).
 # Host-network containers inherit host settings (configured at VM bootstrap).
 _NETWORK_SYSCTLS: dict[str, str] = {
-    "net.ipv4.ip_local_port_range": "1024 65535",
+    "net.ipv4.ip_local_port_range": EPHEMERAL_PORT_RANGE,
+    "net.ipv4.ip_local_reserved_ports": RESERVED_HOST_PORTS,
     "net.ipv4.tcp_tw_reuse": "1",
 }
 
@@ -665,6 +684,11 @@ exec {quoted_cmd}
         # containers from transient build containers that should be cleaned up.
         phase = ExecutionStage.BUILD if label_suffix == "_build" else ExecutionStage.RUN
         cmd.extend(["--label", f"iris.phase={phase}"])
+        # Host-port reservations, so a restarted worker can re-mark them as
+        # taken when it adopts this container (otherwise the ports are dropped
+        # and can be double-allocated to a new task).
+        if config.ports:
+            cmd.extend(["--label", f"iris.ports={json.dumps(config.ports)}"])
 
         # Resource limits (cgroups v2) — always applied
         cpu_millicores = config.get_cpu_millicores()
@@ -968,10 +992,6 @@ class DockerRuntime:
         """Untrack a container ID."""
         self._created_containers.discard(container_id)
 
-    def list_containers(self) -> list[DockerContainerHandle]:
-        """List all managed container handles."""
-        return list(self._handles)
-
     def list_iris_containers(self, all_states: bool = True) -> list[str]:
         """List all containers with iris.managed=true label."""
         cmd = ["docker", "ps", "-q", "--filter", "label=iris.managed=true"]
@@ -1035,6 +1055,7 @@ class DockerRuntime:
                     exit_code=state.get("ExitCode") if not state.get("Running", False) else None,
                     started_at=state.get("StartedAt", ""),
                     workdir_host_path=workdir_host_path,
+                    ports=json.loads(labels.get("iris.ports", "{}")),
                 )
             )
 
@@ -1140,26 +1161,3 @@ class DockerImageBuilder:
             capture_output=True,
             check=False,
         )
-
-    def list_images(self, pattern: str) -> list[ImageInfo]:
-        result = subprocess.run(
-            [
-                "docker",
-                "images",
-                "--format",
-                "{{.Repository}}:{{.Tag}}\t{{.CreatedAt}}",
-                "--filter",
-                f"reference={pattern}",
-            ],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-
-        images = []
-        for line in result.stdout.strip().split("\n"):
-            if line and "\t" in line:
-                tag, created = line.split("\t", 1)
-                images.append(ImageInfo(tag=tag, created_at=created))
-
-        return images

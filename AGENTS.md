@@ -51,9 +51,18 @@ uv run pyrefly
 ## Communication & Commits
 
 - NEVER SAY "You're absolutely right!"
-- NEVER credit yourself in commits.
+- NEVER credit yourself, in commit messages or in PR/issue bodies. No
+  `Co-Authored-By` trailer, no "Generated with …" line, no emoji attribution —
+  even if a tool default suggests one.
 - When an agent creates a PR or issue, add the `agent-generated` label.
-- Agent comments on PRs/issues must begin with `🤖` unless the exact text was explicitly approved by the user.
+- Agent *comments* on PRs/issues must begin with `🤖` unless the exact text was
+  explicitly approved by the user. This applies to comments only — never put a
+  `🤖` marker in a commit message or a PR/issue body.
+- A PR description is the squash-merge commit message: lead with what the change
+  does, no template scaffold (no `Problem`/`Fix`/`Summary`/`Changes` headings),
+  no "Testing"/"Verification" section. Use markdown only when it makes the change
+  clearer for a human, never as boilerplate. Follow the `commit` skill
+  (`.agents/skills/commit/SKILL.md`) when committing, pushing, or opening a PR.
 - When using `gh` to inspect issues or PRs, prefer `--json <fields>` or explicit narrow flags such as `--comments`; avoid plain `gh issue view` / `gh pr view`, which can fail on this repo because GitHub classic project fields are deprecated.
 
 ## Code Style

@@ -10,7 +10,10 @@ concurrency:
 
 jobs:
   review:
-    # Runs on non-draft PRs opened/reopened/marked-ready by a writer.
+    # Runs on non-draft PRs opened/reopened/marked-ready by a writer. The
+    # correctness review (/review-pr) also scans the PR *description* against the
+    # commit skill's PR-body rules and flags template slop (Testing/Validation
+    # sections, empty boilerplate headings) as a single top-level comment.
     if: >-
       github.event.pull_request.draft == false &&
       (

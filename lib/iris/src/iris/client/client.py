@@ -18,7 +18,7 @@ Example:
 """
 
 import logging
-from collections.abc import Generator
+from collections.abc import Generator, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
@@ -48,6 +48,7 @@ from iris.cluster.constraints import (
 from iris.cluster.log_keys import build_log_source
 from iris.cluster.types import (
     CoschedulingConfig,
+    EndpointAccess,
     Entrypoint,
     EnvironmentSpec,
     JobName,
@@ -55,6 +56,7 @@ from iris.cluster.types import (
     ResourceSpec,
     TaskAttempt,
     adjust_tpu_replicas,
+    get_gpu_count,
     is_job_finished,
 )
 from iris.rpc import controller_pb2, job_pb2
@@ -317,6 +319,7 @@ class EndpointRegistry(Protocol):
         name: str,
         address: str,
         metadata: dict[str, str] | None = None,
+        access: int = EndpointAccess.ENDPOINT_ACCESS_PRIVATE,
     ) -> str:
         """Register an endpoint for actor discovery.
 
@@ -324,6 +327,7 @@ class EndpointRegistry(Protocol):
             name: Actor name for discovery
             address: Address where actor is listening (host:port)
             metadata: Optional metadata for the endpoint
+            access: Proxy access mode — PRIVATE (default), PUBLIC, or BEARER.
 
         Returns:
             Unique endpoint ID for later unregistration
@@ -357,6 +361,7 @@ class NamespacedEndpointRegistry:
         name: str,
         address: str,
         metadata: dict[str, str] | None = None,
+        access: int = EndpointAccess.ENDPOINT_ACCESS_PRIVATE,
     ) -> str:
         """Register an endpoint, auto-prefixing with namespace.
 
@@ -364,6 +369,7 @@ class NamespacedEndpointRegistry:
             name: Actor name for discovery (will be prefixed)
             address: Address where actor is listening (host:port)
             metadata: Optional metadata
+            access: Proxy access mode — PRIVATE (default), PUBLIC, or BEARER.
 
         Returns:
             Endpoint ID
@@ -378,6 +384,7 @@ class NamespacedEndpointRegistry:
             address=address,
             task_attempt=self._task_attempt,
             metadata=metadata,
+            access=access,
         )
 
     def unregister(self, endpoint_id: str) -> None:
@@ -445,6 +452,44 @@ class LocalClientConfig:
     max_workers: int = 4
 
 
+# Module path of the in-task GPU process supervisor (see iris/runtime/multigpu.py).
+_MULTIGPU_MODULE = "iris.runtime.multigpu"
+
+
+def _wrap_entrypoint_for_multiprocess(
+    entrypoint: Entrypoint, resources: ResourceSpec, processes_per_task: int
+) -> Entrypoint:
+    """Wrap an entrypoint so each task runs ``processes_per_task`` GPU processes.
+
+    Prepends ``python -m iris.runtime.multigpu --nproc N --devices-per-proc D --``
+    to the command. The supervisor spawns N children, each pinned to a contiguous
+    group of D of the task's GPUs. Requires a GPU device whose count is divisible
+    by ``processes_per_task``.
+    """
+    device = resources.device
+    gpu_count = get_gpu_count(device) if device is not None and device.HasField("gpu") else 0
+    if gpu_count <= 0:
+        raise ValueError("processes_per_task > 1 requires a GPU device")
+    if gpu_count % processes_per_task != 0:
+        raise ValueError(f"processes_per_task ({processes_per_task}) must divide the GPU count ({gpu_count})")
+    devices_per_proc = gpu_count // processes_per_task
+    wrapper = [
+        "python",
+        "-m",
+        _MULTIGPU_MODULE,
+        "--nproc",
+        str(processes_per_task),
+        "--devices-per-proc",
+        str(devices_per_proc),
+        "--",
+    ]
+    return Entrypoint(
+        command=[*wrapper, *entrypoint.command],
+        workdir_files=entrypoint.workdir_files,
+        workdir_file_refs=entrypoint.workdir_file_refs,
+    )
+
+
 class IrisClient:
     """High-level client with automatic job hierarchy and namespace-based actor discovery.
 
@@ -491,6 +536,7 @@ class IrisClient:
         bundle_id: str | None = None,
         timeout_ms: int = 30000,
         credentials: ClientCredentials | None = None,
+        extra_bundle_includes: Sequence[str] = (),
     ) -> "IrisClient":
         """Create an IrisClient for an external client (CLI, laptop, notebook).
 
@@ -509,6 +555,9 @@ class IrisClient:
             credentials: Auth material for outgoing RPCs — the Iris JWT and, for
                 an IAP-fronted cluster, the IAP OIDC ID token. None sends neither
                 (a loopback-trusted tunnel).
+            extra_bundle_includes: Glob patterns (relative to ``workspace``) for
+                gitignored files the caller needs in the task bundle — e.g. a package's
+                built frontend ``dist``. Bundled in addition to the git-tracked files.
 
         Returns:
             IrisClient wrapping RemoteClusterClient
@@ -520,6 +569,7 @@ class IrisClient:
             timeout_ms=timeout_ms,
             credentials=credentials,
             use_controller_proxy=True,
+            extra_bundle_includes=extra_bundle_includes,
         )
 
     @classmethod
@@ -559,6 +609,7 @@ class IrisClient:
         timeout_ms: int,
         use_controller_proxy: bool,
         credentials: ClientCredentials | None = None,
+        extra_bundle_includes: Sequence[str] = (),
     ) -> "IrisClient":
         interceptors = credentials.interceptors() if credentials is not None else []
 
@@ -569,6 +620,7 @@ class IrisClient:
             timeout_ms=timeout_ms,
             interceptors=interceptors,
             use_controller_proxy=use_controller_proxy,
+            extra_bundle_includes=extra_bundle_includes,
         )
         return cls(cluster)
 
@@ -605,8 +657,10 @@ class IrisClient:
         constraints: list[Constraint] | None = None,
         coscheduling: CoschedulingConfig | None = None,
         replicas: int = 1,
+        processes_per_task: int = 1,
         max_retries_failure: int = 0,
         max_retries_preemption: int = 1000,
+        max_task_failures: int = 0,
         timeout: Duration | None = None,
         user: str | None = None,
         preemption_policy: job_pb2.JobPreemptionPolicy = job_pb2.JOB_PREEMPTION_POLICY_UNSPECIFIED,
@@ -628,8 +682,16 @@ class IrisClient:
             constraints: Constraints for filtering workers by attribute
             coscheduling: Configuration for atomic multi-task scheduling
             replicas: Number of tasks to create for gang scheduling (default: 1)
+            processes_per_task: Number of JAX processes to run inside each task,
+                one per GPU group, so ``jax.process_count()`` equals
+                ``replicas * processes_per_task`` (default: 1, one process per
+                task). Must divide the task's GPU count, and requires a GPU
+                device. ``1`` is a strict no-op.
             max_retries_failure: Max retries per task on failure (default: 0)
             max_retries_preemption: Max retries per task on preemption (default: 100)
+            max_task_failures: Cumulative failed task attempts the job tolerates before
+                it fails (default: 0 = fail on the first failure). Counts across retries,
+                so set this to allow a job to ride out a few inconsistent failures.
             timeout: Per-task timeout (None = no timeout)
             user: Optional explicit user override for top-level jobs
             task_image: Optional override for the task container image. When None,
@@ -652,6 +714,11 @@ class IrisClient:
         if replicas < 1:
             raise ValueError(f"replicas must be >= 1, got {replicas}")
         replicas = adjust_tpu_replicas(resources.device, replicas)
+
+        if processes_per_task < 1:
+            raise ValueError(f"processes_per_task must be >= 1, got {processes_per_task}")
+        if processes_per_task > 1:
+            entrypoint = _wrap_entrypoint_for_multiprocess(entrypoint, resources, processes_per_task)
 
         # Get parent job ID from context
         ctx = get_iris_ctx()
@@ -741,6 +808,7 @@ class IrisClient:
                 replicas=replicas,
                 max_retries_failure=max_retries_failure,
                 max_retries_preemption=max_retries_preemption,
+                max_task_failures=max_task_failures,
                 timeout=timeout,
                 preemption_policy=preemption_policy,
                 existing_job_policy=existing_job_policy,
@@ -883,6 +951,22 @@ class IrisClient:
             List of TaskStatus protos, one per task
         """
         return self._cluster_client.list_tasks(job_id)
+
+    def kick_tasks(
+        self,
+        targets: list[str],
+        *,
+        desired_state: job_pb2.TaskState,
+        reason: str = "",
+    ) -> list[controller_pb2.Controller.KickResult]:
+        """Force task attempts into a terminal state out-of-band (emergency override).
+
+        ``targets`` are task, task-attempt, or job ids; a job id expands to its
+        active tasks. ``desired_state`` is ``TASK_STATE_PREEMPTED`` (retried if
+        budget remains) or ``TASK_STATE_FAILED`` (no retry). Returns one
+        ``KickResult`` per resolved task reporting whether it was queued.
+        """
+        return self._cluster_client.kick_tasks(targets, desired_state, reason)
 
     def fetch_task_logs(
         self,

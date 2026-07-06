@@ -24,6 +24,7 @@ from finelog.deploy.cli import down_cmd, logs_cmd, restart_cmd, status_cmd, up_c
 from rigging.config_discovery import list_cluster_configs
 from rigging.filesystem import marin_temp_bucket
 from rigging.timing import Duration, ExponentialBackoff, Timestamp
+from rigging.token_authority import generate_ed25519_keypair
 
 from iris.cli.build import (
     build_image,
@@ -31,10 +32,6 @@ from iris.cli.build import (
     get_git_sha,
 )
 from iris.cli.connect import IRIS_CLUSTER_CONFIG_DIRS, require_controller_url, rpc_client_for_ctx
-from iris.cluster.backends.gcp.bootstrap import build_worker_bootstrap_script
-from iris.cluster.backends.gcp.workers import GcpWorkerProvider
-from iris.cluster.backends.local.cluster import LocalCluster
-from iris.cluster.backends.types import Labels
 from iris.cluster.composer import provider_bundle
 from iris.cluster.config import clear_remote_state, make_local_config
 from iris.cluster.controller.autoscaler.scaling_group import (
@@ -46,6 +43,11 @@ from iris.cluster.controller.dashboard import ProxyControllerDashboard
 from iris.cluster.controller.main import run_controller_serve
 from iris.cluster.dashboard_common import VUE_DIST_DIR
 from iris.cluster.inject_env import with_injected_task_env
+from iris.cluster.local_cluster import LocalCluster
+from iris.cluster.platforms.gcp.worker_bootstrap import build_worker_bootstrap_script
+from iris.cluster.platforms.gcp.workers import GcpWorkerProvider
+from iris.cluster.platforms.types import Labels
+from iris.cluster.provenance import provenance_from_proto
 from iris.rpc import controller_pb2, job_pb2, query_pb2, vm_pb2
 from iris.rpc.proto_display import format_accelerator_display, vm_state_name
 from iris.time_proto import timestamp_from_proto
@@ -259,6 +261,123 @@ def cluster_list():
         click.echo(f"  {name:30s} {path}")
 
 
+def _upload_private_key_to_secret_manager(resource: str, private_pem: str, accessor: str | None) -> str:
+    """Add `private_pem` as a new version of the Secret Manager secret `resource`.
+
+    `resource` is `projects/<project>/secrets/<name>`. Creates the secret container
+    first when the caller has permission; otherwise adds a version to a container an
+    admin pre-created. When `accessor` is set, also grants it
+    roles/secretmanager.secretAccessor on the secret (e.g. the controller service
+    account, so it can read the key at startup). Returns the pinned
+    `gcp-secret://…/versions/<n>` reference to put in auth.signing_key.
+    """
+    try:
+        from google.cloud import secretmanager  # noqa: PLC0415  # optional dep
+    except ImportError as exc:
+        raise click.ClickException(
+            "storing a key in Secret Manager needs the optional dependency; install marin-rigging[secrets]"
+        ) from exc
+    from google.api_core.exceptions import AlreadyExists, PermissionDenied  # noqa: PLC0415  # optional dep
+
+    project, _, name = resource.removeprefix("projects/").partition("/secrets/")
+    if not project or not name:
+        raise click.ClickException(f"--gcp-secret must be projects/<p>/secrets/<name>, got {resource!r}")
+
+    client = secretmanager.SecretManagerServiceClient()
+    try:
+        client.create_secret(
+            request={
+                "parent": f"projects/{project}",
+                "secret_id": name,
+                "secret": {"replication": {"automatic": {}}},
+            }
+        )
+        click.echo(f"Created Secret Manager secret {name}.")
+    except AlreadyExists:
+        pass
+    except PermissionDenied:
+        click.echo(f"No permission to create {name}; adding a version to the existing secret.")
+
+    version = client.add_secret_version(request={"parent": resource, "payload": {"data": private_pem.encode("utf-8")}})
+
+    if accessor is not None:
+        member = accessor if ":" in accessor else f"serviceAccount:{accessor}"
+        role = "roles/secretmanager.secretAccessor"
+        try:
+            policy = client.get_iam_policy(request={"resource": resource})
+            binding = next((b for b in policy.bindings if b.role == role), None)
+            if binding is not None and member in binding.members:
+                click.echo(f"{member} already has {role} on {name}.")
+            else:
+                if binding is None:
+                    policy.bindings.add(role=role, members=[member])
+                else:
+                    binding.members.append(member)
+                client.set_iam_policy(request={"resource": resource, "policy": policy})
+                click.echo(f"Granted {role} on {name} to {member}.")
+        except PermissionDenied:
+            click.echo(f"No permission to set IAM on {name}; grant {role} to {member} manually.")
+
+    return f"gcp-secret://{version.name}"
+
+
+@cluster.command("init-keys")
+@click.option(
+    "--out-file",
+    type=click.Path(path_type=Path, dir_okay=False),
+    default=None,
+    help="Write the PRIVATE key PEM to this file (mode 0600). Reference it from auth.signing_key as file:<abs-path>.",
+)
+@click.option(
+    "--gcp-secret",
+    "gcp_secret",
+    default=None,
+    metavar="projects/<p>/secrets/<name>",
+    help="Store the PRIVATE key as a new version of this Secret Manager secret "
+    "(creating the secret when you have permission). Reference the pinned version from auth.signing_key.",
+)
+@click.option(
+    "--accessor",
+    default=None,
+    metavar="[serviceAccount:]<email>",
+    help="With --gcp-secret, also grant this principal roles/secretmanager.secretAccessor on the "
+    "secret (e.g. the controller service account, so it can read the key at startup).",
+)
+def cluster_init_keys(out_file: Path | None, gcp_secret: str | None, accessor: str | None):
+    """Generate a per-cluster Ed25519 signing keypair for controller auth.
+
+    Writes the PRIVATE key to a SecretSpec destination (a file, and/or a new
+    Secret Manager version) and prints the PUBLIC key + kid for the trust config.
+    The private half is a crown-jewel secret: never commit it, never inline it into
+    a cluster config — reference it from auth.signing_key via file: / gcp-secret://.
+    The public key is inline-safe (JWKS, peer/finelog allowlists, previous_public_keys
+    during a rotation overlap).
+    """
+    if accessor is not None and gcp_secret is None:
+        raise click.UsageError("--accessor only applies with --gcp-secret")
+
+    keypair = generate_ed25519_keypair()
+
+    if out_file is not None:
+        out_file.write_text(keypair.private_pem)
+        out_file.chmod(0o600)
+        click.echo(f"Wrote PRIVATE key to {out_file} (mode 0600).")
+        click.echo(f"  Reference it as: auth.signing_key: file:{out_file.resolve()}")
+
+    if gcp_secret is not None:
+        reference = _upload_private_key_to_secret_manager(gcp_secret, keypair.private_pem, accessor)
+        click.echo(f"Stored PRIVATE key in Secret Manager ({gcp_secret}).")
+        click.echo(f"  Reference it as: auth.signing_key: {reference}")
+
+    if out_file is None and gcp_secret is None:
+        click.echo("# PRIVATE KEY (store securely; do NOT commit or inline into a cluster config):")
+        click.echo(keypair.private_pem.rstrip("\n"))
+
+    click.echo(f"\nkid: {keypair.kid}")
+    click.echo("# PUBLIC KEY (inline-safe — trust config / peer & finelog allowlists / previous_public_keys):")
+    click.echo(keypair.public_pem.rstrip("\n"))
+
+
 @cluster.command("start")
 @click.option("--local", is_flag=True, help="Create a local cluster for testing that mimics the original config")
 @click.option(
@@ -447,19 +566,18 @@ def cluster_restart(ctx):
 
 @cluster.group("log-server")
 def log_server() -> None:
-    """Manage the log server referenced by this cluster's log_server_config."""
+    """Manage the log server referenced by this cluster's finelog.config."""
 
 
 def _require_log_server_config(ctx: click.Context) -> str:
     cfg = ctx.obj.get("config")
     if cfg is None:
         raise click.ClickException("--config is required for cluster log-server commands")
-    if not cfg.log_server_config:
+    if not cfg.finelog.config:
         raise click.ClickException(
-            "cluster does not declare log_server_config; "
-            "set it or manage the log server via `finelog deploy` directly"
+            "cluster does not declare finelog.config; " "set it or manage the log server via `finelog deploy` directly"
         )
-    return cfg.log_server_config
+    return cfg.finelog.config
 
 
 @log_server.command("up")
@@ -640,7 +758,7 @@ def cluster_status_cmd(ctx):
         click.echo("  Running: True")
         click.echo("  Healthy: True")
         click.echo(f"  Address: {controller_url}")
-        click.echo(f"  Git Hash: {proc.git_hash}")
+        click.echo(f"  Version: {provenance_from_proto(proc.provenance)}")
         click.echo(f"  Workers: {healthy}/{len(workers)} healthy")
         click.echo("\nAutoscaler Status:")
         if not as_status.groups:
@@ -1122,7 +1240,7 @@ def worker_restart(
                 click.echo(f"--skip-current-hash requires a known git_hash (got: {target_hash!r})", err=True)
                 raise SystemExit(1)
             before = len(workers)
-            workers = [w for w in workers if w.metadata.git_hash != target_hash]
+            workers = [w for w in workers if w.metadata.provenance.tree_hash != target_hash]
             skipped = before - len(workers)
             click.echo(f"Skipping {skipped}/{before} worker(s) already at local git_hash {target_hash}")
 

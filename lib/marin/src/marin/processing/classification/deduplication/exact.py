@@ -9,6 +9,7 @@ import dupekit
 import humanfriendly
 import pyarrow as pa
 from fray import ResourceConfig
+from rigging.filesystem import rebase_file_path
 from zephyr import DEFAULT_FILE_PATH_COLUMN, ZephyrContext, counters, write_parquet_file
 from zephyr.dataset import Dataset
 
@@ -23,7 +24,6 @@ from marin.processing.classification.deduplication.dedup_commons import (
     finalize_dedup,
     make_document_dedup_aggregator,
 )
-from marin.utils import rebase_file_path
 
 logger = logging.getLogger(__name__)
 
@@ -104,12 +104,12 @@ def dedup_exact_paragraph(
             for record in records:
                 is_dup: bool = record["is_dup"]
                 total += 1
-                counters.increment("dedup/exact/paragraph/total")
+                counters.pipeline.update_counter("dedup/exact/paragraph/total", 1)
                 if is_dup:
                     dups += 1
-                    counters.increment("dedup/exact/paragraph/dups")
+                    counters.pipeline.update_counter("dedup/exact/paragraph/dups", 1)
                 else:
-                    counters.increment("dedup/exact/paragraph/unique")
+                    counters.pipeline.update_counter("dedup/exact/paragraph/unique", 1)
                 yield record
 
         def group_by_doc_id(records: Iterator[dict]) -> Iterator[dict]:
@@ -155,7 +155,7 @@ def dedup_exact_paragraph(
 
     def _flat_map_paragraph_hashes(batch: pa.RecordBatch) -> Iterator[dict]:
         hashes = compute_paragraph_hashes(batch).to_pylist()
-        counters.increment("hash/paragraphs", len(hashes))
+        counters.pipeline.update_counter("hash/paragraphs", len(hashes))
         for hash_record in hashes:
             yield {
                 "file_idx": path_to_idx[hash_record.pop(DEFAULT_FILE_PATH_COLUMN)],
@@ -244,7 +244,7 @@ def dedup_exact_document(
     def _flat_map_document_hashes(path: str) -> Iterator[dict]:
         for batch in _load_batches(path):
             hashes = compute_document_hashes(batch).to_pylist()
-            counters.increment("hash/documents", len(hashes))
+            counters.pipeline.update_counter("hash/documents", len(hashes))
             for hash_record in hashes:
                 yield {"file_idx": path_to_idx[path], **hash_record}
 

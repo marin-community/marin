@@ -146,7 +146,10 @@ class Duration:
     """
 
     def __init__(self, milliseconds: int):
-        self._ms = milliseconds
+        # Coerce to int so ``to_ms()`` honours its return type and proto int64
+        # fields accept it: ``from_hours``/``from_minutes`` pass through float
+        # inputs (e.g. ``from_hours(24.0)``) that would otherwise be stored as floats.
+        self._ms = int(milliseconds)
 
     @classmethod
     def from_seconds(cls, seconds: float) -> "Duration":

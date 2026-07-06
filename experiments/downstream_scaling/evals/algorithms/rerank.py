@@ -16,9 +16,9 @@ from typing import Any
 
 import fsspec
 from fray import ActorGroup, ResourceConfig, current_client
-from marin.execution.executor import ExecutorStep, InputName, MirroredValue
-from marin.execution.remote import remote
-from marin.execution.types import this_output_path, versioned
+from thalas.execution.executor import ExecutorStep, InputName, MirroredValue
+from thalas.execution.remote import remote
+from thalas.execution.types import this_output_path, versioned
 from marin.utils import fsspec_exists
 from zephyr import Dataset, ZephyrContext
 

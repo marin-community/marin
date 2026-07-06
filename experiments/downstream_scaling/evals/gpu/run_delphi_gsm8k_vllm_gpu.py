@@ -29,8 +29,8 @@ from typing import Any
 
 import fsspec
 
-from marin.execution.executor import ExecutorStep, InputName, MirroredValue, executor_main
-from marin.execution.types import this_output_path, versioned
+from thalas.execution.executor import ExecutorStep, InputName, MirroredValue, executor_main
+from thalas.execution.types import this_output_path, versioned
 from marin.utils import fsspec_exists
 
 from experiments.downstream_scaling.evals.framework.core import make_eval_step

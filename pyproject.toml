@@ -25,6 +25,13 @@ dependencies = [
     # marin-iris, which depends on it explicitly. `scripts/rust_mode.py dev` swaps
     # marin-finelog-server to a local source build.
     "marin-finelog",
+    # marin-ducky is the ad-hoc DuckDB SQL service (dashboard + runner + deploy),
+    # a workspace member so service fixes land without a wheel republish.
+    "marin-ducky",
+    # Snapshot of the pre-ArtifactStep executor (marin.execution at its last
+    # executor revision, as thalas.execution). Executor-era experiments import
+    # it instead of marin.execution; see the pin below.
+    "thalas",
     # top level deps. try to keep these small.
     "watchdog",
     # marin-dupekit is a native (maturin) package shipped as pre-built platform
@@ -121,6 +128,7 @@ members = [
     "lib/iris",
     "lib/fray",
     "lib/finelog",
+    "lib/ducky",
     "lib/haliax",
     "lib/levanter",
     "lib/marin",
@@ -138,15 +146,16 @@ vllm = { VLLM_TARGET_DEVICE = "tpu" }
 
 [tool.uv.extra-build-dependencies]
 vllm = [
-    "torch @ https://download-r2.pytorch.org/whl/cpu/torch-2.11.0%2Bcpu-cp312-cp312-manylinux_2_28_x86_64.whl ; python_version == '3.12' and sys_platform == 'linux' and platform_machine == 'x86_64'",
-    "torch @ https://download-r2.pytorch.org/whl/cpu/torch-2.11.0%2Bcpu-cp312-cp312-manylinux_2_28_aarch64.whl ; python_version == '3.12' and sys_platform == 'linux' and platform_machine == 'aarch64'",
-    "torch @ https://download-r2.pytorch.org/whl/cpu/torch-2.11.0%2Bcpu-cp312-cp312-win_amd64.whl ; python_version == '3.12' and sys_platform == 'win32' and platform_machine == 'AMD64'",
+    "torch @ https://download.pytorch.org/whl/cpu/torch-2.11.0%2Bcpu-cp312-cp312-manylinux_2_28_x86_64.whl ; python_version == '3.12' and sys_platform == 'linux' and platform_machine == 'x86_64'",
+    "torch @ https://download.pytorch.org/whl/cpu/torch-2.11.0%2Bcpu-cp312-cp312-manylinux_2_28_aarch64.whl ; python_version == '3.12' and sys_platform == 'linux' and platform_machine == 'aarch64'",
+    "torch @ https://download.pytorch.org/whl/cpu/torch-2.11.0%2Bcpu-cp312-cp312-win_amd64.whl ; python_version == '3.12' and sys_platform == 'win32' and platform_machine == 'AMD64'",
 ]
 
 [tool.uv.sources]
 marin-iris = { workspace = true }
 marin-fray = { workspace = true }
 marin-finelog = { workspace = true }
+marin-ducky = { workspace = true }
 marin-haliax = { workspace = true }
 marin-levanter = { workspace = true }
 marin-core = { workspace = true }
@@ -158,10 +167,18 @@ nvidia-cutlass-dsl-libs-cu13 = { index = "nvidia" }
 # NOTE: harbor is a pinned git dependency (not a workspace member).
 # harbor lives in marin-community/harbor as a pinned git dependency.
 harbor = { git = "https://github.com/marin-community/harbor.git", rev = "354692d9c0eab497b05f266aa0dff30e2a238d2e" }
-# https://github.com/marin-community/vllm/compare/7b98f498cdf0bf9cf0ecc37b5c0c994cb94513c3...04321f0f01b8e60d577a85a1b1af688e4433e7e0
-vllm = { git = "https://github.com/marin-community/vllm.git", rev = "04321f0f01b8e60d577a85a1b1af688e4433e7e0" }
-# https://github.com/marin-community/tpu-inference/compare/0045517c4ba75b1d624dba3be8b77e16c18b1a1e...4c38590e29d33451f2b4375a78ad8f70cacd7b98
-tpu-inference = { git = "https://github.com/marin-community/tpu-inference.git", rev = "4c38590e29d33451f2b4375a78ad8f70cacd7b98" }
+# Frozen executor snapshot; bridge until executor-era experiments migrate to
+# ArtifactSteps. Its marin-rigging/marin-fray deps resolve to the workspace.
+thalas = { git = "https://github.com/marin-community/thalas.git", rev = "5a7b66dde13fe8b8e5fa47a2b311d8f747a96383" }
+# Changes to TPU-vLLM fork SHAs must follow one of these protocols: if this is a
+# release/LKG refresh, then follow .agents/skills/refresh-tpu-vllm-forks/SKILL.md;
+# if this is a fixed-base overlay PR, then follow
+# .agents/skills/refresh-tpu-vllm-forks/docs/overlay-only-pr.md. PR-head SHAs are
+# temporary and must be replaced by the landed fork main SHA.
+# https://github.com/marin-community/vllm/compare/a30addc7548a9a8b9b3323a7bc3eb7d7c4895d1c...04f7da7e26eacb4e8d7e7d2dce6347d2ff90af4d
+vllm = { git = "https://github.com/marin-community/vllm.git", rev = "04f7da7e26eacb4e8d7e7d2dce6347d2ff90af4d" }
+# https://github.com/marin-community/tpu-inference/compare/23d17a8120d9cc34890135599f42e1db4f947c10...808415f45bbfcb512e9c593c4a3330aed115917e
+tpu-inference = { git = "https://github.com/marin-community/tpu-inference.git", rev = "808415f45bbfcb512e9c593c4a3330aed115917e" }
 # ### BEGIN RUST-DEV SOURCES ###
 # ### END RUST-DEV SOURCES ###
 
@@ -261,6 +278,7 @@ project-includes = [
     "lib/fray/src/**/*.py",
     "lib/iris/src/**/*.py",
     "lib/iris/scripts/**/*.py",
+    "lib/ducky/src/**/*.py",
     "lib/rigging/src/**/*.py",
     "lib/zephyr/src/**/*.py",
     "scripts/ci",
@@ -278,6 +296,7 @@ search-path = [
     "lib/zephyr/src",
     "lib/fray/src",
     "lib/iris/src",
+    "lib/ducky/src",
     # benchmark_controller.py imports controller test fixtures from lib/iris/tests
     # (`from tests.cluster.controller... import`), run with lib/iris on sys.path.
     "lib/iris",
@@ -303,6 +322,9 @@ tensor-shapes = true
 # and compute deps a local venv commonly skips (torch, sympy). List both `pkg` and
 # `pkg.*`.
 ignore-missing-imports = [
+    # Optional extra marin-rigging[secrets]; only rigging.secrets imports it, lazily.
+    "google.cloud.secretmanager",
+    "google.cloud.secretmanager.*",
     "harbor",
     "harbor.*",
     "jax_triton",
@@ -434,10 +456,11 @@ markers = [
     "requires_cluster: mark tests that need a running iris cluster",
 ]
 testpaths = ["tests", "experiments"]
+pythonpath = ["."]
 
 # Don't run TPU, slow, integration, data_integration, or cluster-bound tests by default.
 # Integration tests require external infrastructure (Iris cluster, GCS,
 # gated HF repos, etc.); data_integration tests fetch fixtures from HF;
 # requires_cluster tests need a running iris cluster (local or remote).
 # All are run from dedicated CI workflows.
-addopts = "--session-timeout=600 -m 'not tpu_ci and not slow and not integration and not data_integration and not requires_cluster'"
+addopts = "--session-timeout=600 -m 'not tpu_ci and not slow and not integration and not data_integration and not requires_cluster' --import-mode=importlib"

@@ -29,7 +29,7 @@ from levanter.compat.hf_checkpoints import (
     _convert_to_jnp,
 )
 from levanter.models.gpt2 import Gpt2Config, Gpt2LMHeadModel
-from tests.test_utils import use_test_mesh
+from test_utils import use_test_mesh
 
 
 @skip_if_no_torch

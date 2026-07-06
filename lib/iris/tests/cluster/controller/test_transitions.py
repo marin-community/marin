@@ -17,8 +17,9 @@ from finelog.rpc import logging_pb2
 from iris.cluster.constraints import DeviceType, WellKnownAttribute
 from iris.cluster.controller import ops, reads, writes
 from iris.cluster.controller.codec import constraints_from_json, device_counts_from_json, device_variant_from_json
-from iris.cluster.controller.ops.task import Assignment, apply_dispatch_updates, finalize
+from iris.cluster.controller.ops.task import Assignment, finalize
 from iris.cluster.controller.projections.endpoints import EndpointQuery, EndpointRow
+from iris.cluster.controller.projections.run_templates import RunTemplatesProjection
 from iris.cluster.controller.pruner import PruneResult, prune_old_data
 from iris.cluster.controller.reads import WorkerResourceUsage
 
@@ -35,6 +36,7 @@ from iris.cluster.controller.reconcile.snapshot import (
     TaskHistogramRow,
     TaskUpdate,
     TransitionSnapshot,
+    pick_earliest_task_error,
 )
 from iris.cluster.controller.reconcile.task import TerminalDecision, TerminalKind
 from iris.cluster.controller.scheduling.policy import build_scheduling_context, compute_demand_entries
@@ -52,9 +54,12 @@ from iris.rpc import controller_pb2, job_pb2
 from rigging.timing import Duration, Timestamp
 from sqlalchemy import func, insert, select
 from sqlalchemy import update as sa_update
-
 from tests.cluster.controller._test_support import ControllerTestState, create_attempt_for_test
-from tests.cluster.controller.transition_driver import WorkerTaskUpdates, apply_task_observations
+from tests.cluster.controller.transition_driver import (
+    WorkerTaskUpdates,
+    apply_task_observations,
+    commit_dispatch_updates,
+)
 
 from .conftest import (
     building_counts as _building_counts,
@@ -70,6 +75,7 @@ from .conftest import (
     register_worker,
     submit_job,
     transition_task,
+    worker_daemon_backends_for_prune,
     worker_running_tasks,
 )
 from .conftest import (
@@ -284,7 +290,7 @@ def test_job_cancellation_kills_all_tasks(harness):
     harness.dispatch(tasks[1], worker_id)
 
     with harness.state._db.transaction() as cur:
-        ops.job.cancel(cur, job_id=job_id, reason="User cancelled", endpoints=harness.state._endpoints)
+        ops.job.cancel(cur, job_id=job_id, reason="User cancelled")
 
     assert harness.query_job(job_id).state == job_pb2.JOB_STATE_KILLED
     for task in tasks:
@@ -313,7 +319,6 @@ def test_cancel_job_holds_resources_until_heartbeat_finalization(harness):
             cur,
             job_id=JobName.root("test-user", "j1"),
             reason="User cancelled",
-            endpoints=harness.state._endpoints,
         )
 
     # Producer-side cancel: usage stays held — finished_at_ms is still NULL.
@@ -351,7 +356,6 @@ def test_cancel_job_rolls_attempt_state_without_finalizing(harness):
             cur,
             job_id=JobName.root("test-user", "j1"),
             reason="User cancelled",
-            endpoints=harness.state._endpoints,
         )
 
     for t in tasks:
@@ -383,7 +387,6 @@ def test_heartbeat_finalizes_stranded_attempt_after_producer_terminal(harness):
             cur,
             job_id=JobName.root("test-user", "j1"),
             reason="User cancelled",
-            endpoints=harness.state._endpoints,
         )
 
     pre = _query_attempt(harness.state, task.task_id, attempt_id)
@@ -410,7 +413,6 @@ def test_heartbeat_finalizes_stranded_attempt_after_producer_terminal(harness):
                 )
             ],
             health=harness.state._health,
-            endpoints=harness.state._endpoints,
             now=Timestamp.now(),
         )
 
@@ -436,7 +438,6 @@ def test_cancel_job_preserves_kill_worker_mapping_after_clearing_tasks(harness):
             cur,
             job_id=JobName.root("test-user", "j1"),
             reason="User cancelled",
-            endpoints=harness.state._endpoints,
         )
 
     assert harness.query_task(tasks[0].task_id).state == job_pb2.TASK_STATE_KILLED
@@ -490,7 +491,6 @@ def test_cancel_job_removes_endpoints_for_job_tree(state):
             cur,
             job_id=JobName.root("test-user", "parent"),
             reason="User cancelled",
-            endpoints=state._endpoints,
         )
 
     assert _endpoints(state, EndpointQuery()) == []
@@ -504,7 +504,7 @@ def test_cancelled_job_tasks_excluded_from_demand(harness):
 
     harness.dispatch(tasks[0], worker_id)
     with harness.state._db.transaction() as cur:
-        ops.job.cancel(cur, job_id=job_id, reason="User cancelled", endpoints=harness.state._endpoints)
+        ops.job.cancel(cur, job_id=job_id, reason="User cancelled")
 
     assert harness.query_job(job_id).state == job_pb2.JOB_STATE_KILLED
     for task in tasks:
@@ -623,7 +623,7 @@ def test_task_assigned_to_missing_worker_is_ignored(state):
 
     # Worker disappears between scheduling and assignment commit.
     with state._db.transaction() as cur:
-        writes.remove_worker(cur, worker_id, health=state._health, worker_attrs=state._worker_attrs)
+        writes.remove_worker(cur, worker_id, health=state._health)
     with state._db.transaction() as cur:
         ops.task.assign(cur, [Assignment(task_id=task.task_id, worker_id=worker_id)], health=state._health)
 
@@ -712,7 +712,6 @@ def test_batch_success_and_failure_is_order_independent(state, success_first):
             cur,
             [WorkerTaskUpdates(worker_id=worker_id, updates=updates)],
             health=state._health,
-            endpoints=state._endpoints,
             now=Timestamp.now(),
         )
 
@@ -740,7 +739,6 @@ def _report_worker_state(state, worker_id, task, new_state):
                 )
             ],
             health=state._health,
-            endpoints=state._endpoints,
             now=Timestamp.now(),
         )
 
@@ -908,6 +906,90 @@ def test_preemption_does_not_count_toward_max_task_failures(state):
     assert _query_job(state, job.job_id).state == job_pb2.JOB_STATE_RUNNING
 
 
+def test_coscheduled_crash_loop_fails_on_cumulative_budget(state):
+    """A coscheduled gang crash-looping across rounds fails on the cumulative budget.
+
+    One task crashes per round; its siblings bounce COSCHED_FAILED, which charges
+    neither budget, so exactly one FAILED attempt accrues per crashed round. A
+    different task crashes each round, so no single task exhausts its own retry
+    budget — only the derived job-wide count crosses ``max_task_failures``.
+
+    The RUNNING → RUNNING → FAILED sequence at ``max_task_failures=2`` pins the accrual
+    to exactly one per round: had the bounced siblings' COSCHED_FAILED attempts been
+    miscounted as failures, round 1 alone would charge four and trip the budget early.
+    """
+    for i in range(4):
+        meta = make_worker_metadata()
+        meta.attributes[WellKnownAttribute.TPU_NAME].string_value = "tpu-a"
+        meta.attributes[WellKnownAttribute.TPU_WORKER_ID].int_value = i
+        register_worker(state, f"w{i}", f"addr{i}:8080", meta)
+
+    req = controller_pb2.Controller.LaunchJobRequest(
+        name="crash-loop",
+        entrypoint=_make_test_entrypoint(),
+        resources=job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
+        replicas=4,
+        environment=job_pb2.EnvironmentConfig(),
+        max_retries_failure=5,  # generous per-task budget; no single task exhausts it
+        max_task_failures=2,  # job-wide budget trips on the 3rd cumulative failure
+    )
+    req.coscheduling.group_by = WellKnownAttribute.TPU_NAME
+    tasks = submit_job(state, "j1", req)
+    job_id = JobName.root("test-user", "j1")
+
+    # Rounds 1 and 2 (cumulative 1, then 2) stay within budget; the job keeps running.
+    for round_idx in range(2):
+        for i, task in enumerate(tasks):
+            dispatch_task(state, task, WorkerId(f"w{i}"))
+        transition_task(state, tasks[round_idx].task_id, job_pb2.TASK_STATE_FAILED, error=f"crash {round_idx}")
+        assert _query_job(state, job_id).state == job_pb2.JOB_STATE_RUNNING
+
+    # Round 3: a third distinct task crashes -> cumulative 3 > max_task_failures=2 ->
+    # the job fails on the derived budget, even though every task failed at most once.
+    for i, task in enumerate(tasks):
+        dispatch_task(state, task, WorkerId(f"w{i}"))
+    transition_task(state, tasks[2].task_id, job_pb2.TASK_STATE_FAILED, error="crash 2")
+    assert _query_job(state, job_id).state == job_pb2.JOB_STATE_FAILED
+    # Death was the cumulative budget, not a single task exhausting max_retries_failure.
+    for task in tasks:
+        assert _query_task(state, task.task_id).failure_count <= 1
+
+
+def test_timeout_charges_cumulative_failure_budget(state):
+    """An execution timeout charges the failure budget through the FAILED attempt it records.
+
+    ``timeout_one`` carries no counter; the charge is entirely the FAILED attempt. A
+    single timeout in a two-task job crosses ``max_task_failures=0`` while the sibling
+    is still RUNNING, so the cumulative-budget branch (not the all-terminal branch)
+    fails the job.
+    """
+    for i in range(2):
+        register_worker(state, f"w{i}", f"host{i}:8080", make_worker_metadata())
+
+    req = controller_pb2.Controller.LaunchJobRequest(
+        name="timeout-job",
+        entrypoint=_make_test_entrypoint(),
+        resources=job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
+        replicas=2,
+        environment=job_pb2.EnvironmentConfig(),
+        max_task_failures=0,
+    )
+    tasks = submit_job(state, "j1", req)
+    job_id = JobName.root("test-user", "j1")
+
+    for i, task in enumerate(tasks):
+        dispatch_task(state, task, WorkerId(f"w{i}"))
+
+    with state._db.transaction() as cur:
+        finalize(
+            cur, [TerminalDecision(TerminalKind.TIMEOUT, tasks[0].task_id, "execution timeout")], now=Timestamp.now()
+        )
+
+    assert _query_task(state, tasks[0].task_id).state == job_pb2.TASK_STATE_FAILED
+    assert _query_task(state, tasks[0].task_id).failure_count == 1
+    assert _query_job(state, job_id).state == job_pb2.JOB_STATE_FAILED
+
+
 # =============================================================================
 # Endpoint Cleanup Tests
 # =============================================================================
@@ -987,6 +1069,7 @@ def test_endpoint_deleted_on_task_failure_with_retry(state):
 
     req = make_job_request("test")
     req.max_retries_failure = 1
+    req.max_task_failures = 1
     tasks = submit_job(state, "ns-1", req)
     task = tasks[0]
 
@@ -1073,7 +1156,6 @@ def test_endpoint_survives_building_state(state):
                 )
             ],
             health=state._health,
-            endpoints=state._endpoints,
             now=Timestamp.now(),
         )
 
@@ -1107,7 +1189,6 @@ def test_endpoint_survives_building_state(state):
                 )
             ],
             health=state._health,
-            endpoints=state._endpoints,
             now=Timestamp.now(),
         )
     assert len(_endpoints(state, EndpointQuery(exact_name="ns-1/actor"))) == 1
@@ -1518,7 +1599,6 @@ def test_coscheduled_cascade_survives_same_batch_sibling_update(state):
                 ),
             ],
             health=state._health,
-            endpoints=state._endpoints,
             now=Timestamp.now(),
         )
 
@@ -1562,8 +1642,6 @@ def test_worker_failures_batch_does_not_double_process_cascaded_sibling(state):
         worker_ids=["w0", "w1"],
         reason="slice reaped",
         health=state._health,
-        endpoints=state._endpoints,
-        worker_attrs=state._worker_attrs,
     )
 
     task0 = _query_task(state, tasks[0].task_id)
@@ -1615,8 +1693,6 @@ def test_worker_failure_drives_coscheduled_job_terminal(state, fail_both):
         worker_ids=failed,
         reason="slice reaped",
         health=state._health,
-        endpoints=state._endpoints,
-        worker_attrs=state._worker_attrs,
     )
 
     task0 = _query_task(state, tasks[0].task_id)
@@ -1963,7 +2039,6 @@ def test_coscheduled_terminal_preempt_cascades_siblings(state):
         finalize(
             cur,
             [TerminalDecision(TerminalKind.PREEMPT, tasks[0].task_id, "reclaim")],
-            endpoints=state._endpoints,
             now=Timestamp.now(),
         )
 
@@ -2074,7 +2149,6 @@ def test_stale_attempt_ignored(state):
                 )
             ],
             health=state._health,
-            endpoints=state._endpoints,
             now=Timestamp.now(),
         )
 
@@ -2129,7 +2203,6 @@ def test_stale_attempt_for_non_terminal_is_dropped(state):
                 )
             ],
             health=state._health,
-            endpoints=state._endpoints,
             now=Timestamp.now(),
         )
 
@@ -2564,6 +2637,7 @@ def test_requeued_task_maintains_priority_position(state):
     # Dispatch and fail the deep job's task (with retries enabled)
     deep_req = make_job_request("deep")
     deep_req.max_retries_failure = 1
+    deep_req.max_task_failures = 1
     deep_tasks = submit_job(state, "/test-user/tree/deep-retry", deep_req, timestamp_ms=3000)
     submit_job(state, "shallow-2", make_job_request("shallow-2"), timestamp_ms=4000)
 
@@ -2827,8 +2901,6 @@ def test_fail_workers_by_ids_cascades_tasks(state):
         worker_ids=["w2"],
         reason="slice terminated",
         health=state._health,
-        endpoints=state._endpoints,
-        worker_attrs=state._worker_attrs,
     )
 
     assert len(result.removed_workers) == 1
@@ -2853,8 +2925,6 @@ def test_fail_workers_batch_skips_unknown(state):
         worker_ids=["w-unknown"],
         reason="unknown",
         health=state._health,
-        endpoints=state._endpoints,
-        worker_attrs=state._worker_attrs,
     )
     assert result.removed_workers == []
 
@@ -2873,8 +2943,6 @@ def test_fail_workers_batch_force_removes_without_threshold(state):
         worker_ids=["w1"],
         reason="slice terminated",
         health=state._health,
-        endpoints=state._endpoints,
-        worker_attrs=state._worker_attrs,
     )
 
     assert len(result.removed_workers) == 1
@@ -2919,8 +2987,6 @@ def test_fail_workers_batch_does_not_block_readers(state):
         worker_ids=["w-nonexistent"],
         reason="test",
         health=state._health,
-        endpoints=state._endpoints,
-        worker_attrs=state._worker_attrs,
     )
     assert result.removed_workers == []
 
@@ -3569,9 +3635,7 @@ def test_prune_old_terminal_jobs(state):
     # Prune with a 1-day retention — old-job finished at ~epoch, recent-job finished just now
     result = prune_old_data(
         state._db,
-        state._health,
-        state._endpoints,
-        state._worker_attrs,
+        worker_daemon_backends_for_prune(state),
         job_retention=Duration.from_seconds(86400),
         worker_retention=Duration.from_seconds(86400),
         slice_retention=Duration.from_seconds(86400),
@@ -3605,9 +3669,7 @@ def test_prune_old_inactive_workers(state):
 
     result = prune_old_data(
         state._db,
-        state._health,
-        state._endpoints,
-        state._worker_attrs,
+        worker_daemon_backends_for_prune(state),
         job_retention=Duration.from_seconds(86400),
         worker_retention=Duration.from_seconds(86400),
         slice_retention=Duration.from_seconds(86400),
@@ -3623,9 +3685,7 @@ def test_prune_noop_when_nothing_old(state):
 
     result = prune_old_data(
         state._db,
-        state._health,
-        state._endpoints,
-        state._worker_attrs,
+        worker_daemon_backends_for_prune(state),
         job_retention=Duration.from_seconds(86400),
         worker_retention=Duration.from_seconds(86400),
         slice_retention=Duration.from_seconds(86400),
@@ -3679,9 +3739,7 @@ def test_prune_orphaned_slices(state):
 
     result = prune_old_data(
         state._db,
-        state._health,
-        state._endpoints,
-        state._worker_attrs,
+        worker_daemon_backends_for_prune(state),
         job_retention=Duration.from_seconds(86400),
         worker_retention=Duration.from_seconds(86400),
         slice_retention=Duration.from_seconds(3600),
@@ -3709,9 +3767,7 @@ def test_prune_keeps_slice_with_live_worker_despite_empty_worker_ids(state):
 
     result = prune_old_data(
         state._db,
-        state._health,
-        state._endpoints,
-        state._worker_attrs,
+        worker_daemon_backends_for_prune(state),
         job_retention=Duration.from_seconds(86400),
         worker_retention=Duration.from_seconds(86400),
         slice_retention=Duration.from_seconds(3600),
@@ -3730,7 +3786,7 @@ def test_dispatch_propagates_task_image(state):
     tasks = submit_job(state, "img-job", req)
     job_id = tasks[0].job_id
     with state._db.read_snapshot() as snap:
-        template = dispatch.run_request_template(state._run_template_cache, snap, job_id)
+        template = snap.caches[RunTemplatesProjection].get(snap, job_id)
     assert template is not None
     assert template.task_image == "custom/swetrace:dev"
 
@@ -3757,13 +3813,51 @@ def test_run_request_template_does_not_leak_workdir_files_across_jobs(state):
     tasks_b = submit_job(state, "job-b", req_b)
 
     with state._db.read_snapshot() as snap:
-        template_a = dispatch.run_request_template(state._run_template_cache, snap, tasks_a[0].job_id)
-        template_b = dispatch.run_request_template(state._run_template_cache, snap, tasks_b[0].job_id)
+        template_a = snap.caches[RunTemplatesProjection].get(snap, tasks_a[0].job_id)
+        template_b = snap.caches[RunTemplatesProjection].get(snap, tasks_b[0].job_id)
 
     assert template_a is not None
     assert template_b is not None
     assert dict(template_a.entrypoint.workdir_files) == {"a.txt": b"A"}
     assert dict(template_b.entrypoint.workdir_files) == {"b.txt": b"B"}
+
+
+def test_resubmit_invalidates_run_template_cache(state):
+    """Resubmitting a job with the same JobName serves the NEW payload, not the old one.
+
+    The projection invalidates post-commit so a reader that opened a snapshot
+    before the resubmit cannot store a stale template back into the cache after
+    the new row commits.  Without post-commit invalidation the old template
+    would survive until the next eviction.
+    """
+    job_id = JobName.root("test-user", "my-job")
+
+    req_v1 = make_job_request("my-job", task_image="image:v1")
+    with state._db.transaction() as cur:
+        ops.job.submit(cur, job_id=job_id, request=req_v1, ts=Timestamp.now())
+
+    # Warm the cache by reading the first submission's template.
+    with state._db.read_snapshot() as snap:
+        template_v1 = snap.caches[RunTemplatesProjection].get(snap, job_id)
+    assert template_v1 is not None
+    assert template_v1.task_image == "image:v1"
+
+    # Cancel and purge the first job so the job_id slot is free for resubmission.
+    with state._db.transaction() as cur:
+        ops.job.cancel(cur, job_id=job_id, reason="resubmit test")
+    with state._db.transaction() as cur:
+        ops.job.remove_finished(cur, job_id)
+
+    # Resubmit with a different payload under the same job name.
+    req_v2 = make_job_request("my-job", task_image="image:v2")
+    with state._db.transaction() as cur:
+        ops.job.submit(cur, job_id=job_id, request=req_v2, ts=Timestamp.now())
+
+    # The cache must return the new template, not the old one.
+    with state._db.read_snapshot() as snap:
+        template_v2 = snap.caches[RunTemplatesProjection].get(snap, job_id)
+    assert template_v2 is not None
+    assert template_v2.task_image == "image:v2"
 
 
 def test_prune_old_data_short_circuits_when_nothing_prunable(state):
@@ -3775,9 +3869,7 @@ def test_prune_old_data_short_circuits_when_nothing_prunable(state):
 
     result = prune_old_data(
         state._db,
-        state._health,
-        state._endpoints,
-        state._worker_attrs,
+        worker_daemon_backends_for_prune(state),
         job_retention=Duration.from_seconds(86400),
         worker_retention=Duration.from_seconds(86400),
         slice_retention=Duration.from_seconds(86400),
@@ -3799,6 +3891,7 @@ def _submit_job_direct(
     replicas: int = 1,
     max_retries_failure: int = 0,
     max_retries_preemption: int = 0,
+    max_task_failures: int = 0,
 ) -> list[JobName]:
     job_id = JobName.from_wire(job_id_str)
     request = controller_pb2.Controller.LaunchJobRequest(
@@ -3806,11 +3899,10 @@ def _submit_job_direct(
         replicas=replicas,
         max_retries_failure=max_retries_failure,
         max_retries_preemption=max_retries_preemption,
+        max_task_failures=max_task_failures,
     )
     with state._db.transaction() as cur:
-        ops.job.submit(
-            cur, job_id=job_id, request=request, ts=Timestamp.now(), run_template_cache=state._run_template_cache
-        )
+        ops.job.submit(cur, job_id=job_id, request=request, ts=Timestamp.now())
     return [job_id.task(idx) for idx in range(replicas)]
 
 
@@ -3831,12 +3923,11 @@ def _task_row_direct(state: ControllerTestState, task_id: JobName):
 def _run_direct_tasks(state: ControllerTestState, task_ids: list[JobName]) -> None:
     """Drain and transition tasks to RUNNING via direct provider."""
     with state._db.transaction() as cur:
-        dispatch.drain_for_dispatch(cur, cache=state._run_template_cache)
+        dispatch.drain_for_dispatch(cur)
     with state._db.transaction() as cur:
-        apply_dispatch_updates(
+        commit_dispatch_updates(
             cur,
             [TaskUpdate(task_id=t, attempt_id=0, new_state=job_pb2.TASK_STATE_RUNNING) for t in task_ids],
-            endpoints=state._endpoints,
             now=Timestamp.now(),
         )
 
@@ -3847,7 +3938,7 @@ def test_drain_pending_creates_attempt_rows(state):
     task_id = task_ids[0]
 
     with state._db.transaction() as cur:
-        batch = dispatch.drain_for_dispatch(cur, cache=state._run_template_cache)
+        batch = dispatch.drain_for_dispatch(cur)
 
     assert len(batch.tasks_to_run) == 1
     assert batch.tasks_to_run[0].task_id == task_id.to_wire()
@@ -3886,14 +3977,14 @@ def test_drain_redrives_assigned_until_executing(state):
 
     # First drain: PENDING -> ASSIGNED, dispatched and polled.
     with state._db.transaction() as cur:
-        batch1 = dispatch.drain_for_dispatch(cur, cache=state._run_template_cache)
+        batch1 = dispatch.drain_for_dispatch(cur)
     assert len(batch1.tasks_to_run) == 1
     assert [(e.task_id, e.attempt_id) for e in batch1.running_tasks] == [(task_id, 0)]
 
     # Second drain (e.g. previous _apply_pod failed or controller crashed):
     # row is still ASSIGNED, redriven in tasks_to_run with same attempt_id.
     with state._db.transaction() as cur:
-        batch2 = dispatch.drain_for_dispatch(cur, cache=state._run_template_cache)
+        batch2 = dispatch.drain_for_dispatch(cur)
     assert len(batch2.tasks_to_run) == 1
     assert batch2.tasks_to_run[0].task_id == task_id.to_wire()
     assert batch2.tasks_to_run[0].attempt_id == 0
@@ -3902,14 +3993,13 @@ def test_drain_redrives_assigned_until_executing(state):
     # Once the task reaches RUNNING it leaves tasks_to_run; running_tasks still
     # contains it so the next poll observes terminal transitions.
     with state._db.transaction() as cur:
-        apply_dispatch_updates(
+        commit_dispatch_updates(
             cur,
             [TaskUpdate(task_id=task_id, attempt_id=0, new_state=job_pb2.TASK_STATE_RUNNING)],
-            endpoints=state._endpoints,
             now=Timestamp.now(),
         )
     with state._db.transaction() as cur:
-        batch3 = dispatch.drain_for_dispatch(cur, cache=state._run_template_cache)
+        batch3 = dispatch.drain_for_dispatch(cur)
     assert len(batch3.tasks_to_run) == 0
     assert len(batch3.running_tasks) == 1
     assert batch3.running_tasks[0].task_id == task_id
@@ -3922,14 +4012,14 @@ def test_drain_caps_promotions_per_cycle(state):
     assert _count_pending(state) == 200
 
     with state._db.transaction() as cur:
-        batch1 = dispatch.drain_for_dispatch(cur, cache=state._run_template_cache, max_promotions=128)
+        batch1 = dispatch.drain_for_dispatch(cur, max_promotions=128)
     # All 128 dispatched are freshly promoted (no prior ASSIGNED rows).
     assert len(batch1.tasks_to_run) == 128
     assert _count_pending(state) == 72
 
     # Second drain: 72 newly promoted, 128 redriven.
     with state._db.transaction() as cur:
-        batch2 = dispatch.drain_for_dispatch(cur, cache=state._run_template_cache, max_promotions=128)
+        batch2 = dispatch.drain_for_dispatch(cur, max_promotions=128)
     assert len(batch2.tasks_to_run) == 200
     assert _count_pending(state) == 0
 
@@ -3940,13 +4030,13 @@ def test_drain_max_promotions_limits_batch(state):
     _submit_job_direct(state, "/user/cap-job", replicas=250)
 
     with state._db.transaction() as cur:
-        batch1 = dispatch.drain_for_dispatch(cur, cache=state._run_template_cache, max_promotions=50)
+        batch1 = dispatch.drain_for_dispatch(cur, max_promotions=50)
     assert len(batch1.tasks_to_run) == 50
     assert _count_pending(state) == 200
 
     # 50 newly promoted + 50 prior ASSIGNED redriven.
     with state._db.transaction() as cur:
-        batch2 = dispatch.drain_for_dispatch(cur, cache=state._run_template_cache, max_promotions=50)
+        batch2 = dispatch.drain_for_dispatch(cur, max_promotions=50)
     assert len(batch2.tasks_to_run) == 100
     assert _count_pending(state) == 150
 
@@ -3956,15 +4046,14 @@ def test_apply_running(state):
     task_ids = _submit_job_direct(state, "/user/job1")
     task_id = task_ids[0]
     with state._db.transaction() as cur:
-        dispatch.drain_for_dispatch(cur, cache=state._run_template_cache)
+        dispatch.drain_for_dispatch(cur)
 
     with state._db.transaction() as cur:
-        apply_dispatch_updates(
+        commit_dispatch_updates(
             cur,
             [
                 TaskUpdate(task_id=task_id, attempt_id=0, new_state=job_pb2.TASK_STATE_RUNNING),
             ],
-            endpoints=state._endpoints,
             now=Timestamp.now(),
         )
 
@@ -3976,24 +4065,22 @@ def test_apply_succeeded(state):
     task_ids = _submit_job_direct(state, "/user/job1")
     task_id = task_ids[0]
     with state._db.transaction() as cur:
-        dispatch.drain_for_dispatch(cur, cache=state._run_template_cache)
+        dispatch.drain_for_dispatch(cur)
 
     with state._db.transaction() as cur:
-        apply_dispatch_updates(
+        commit_dispatch_updates(
             cur,
             [
                 TaskUpdate(task_id=task_id, attempt_id=0, new_state=job_pb2.TASK_STATE_RUNNING),
             ],
-            endpoints=state._endpoints,
             now=Timestamp.now(),
         )
     with state._db.transaction() as cur:
-        apply_dispatch_updates(
+        commit_dispatch_updates(
             cur,
             [
                 TaskUpdate(task_id=task_id, attempt_id=0, new_state=job_pb2.TASK_STATE_SUCCEEDED),
             ],
-            endpoints=state._endpoints,
             now=Timestamp.now(),
         )
 
@@ -4005,27 +4092,25 @@ def test_apply_succeeded(state):
 
 def test_apply_failed_with_retry(state):
     """FAILED with retries remaining returns task to PENDING."""
-    task_ids = _submit_job_direct(state, "/user/job1", max_retries_failure=1)
+    task_ids = _submit_job_direct(state, "/user/job1", max_retries_failure=1, max_task_failures=1)
     task_id = task_ids[0]
     with state._db.transaction() as cur:
-        dispatch.drain_for_dispatch(cur, cache=state._run_template_cache)
+        dispatch.drain_for_dispatch(cur)
 
     with state._db.transaction() as cur:
-        apply_dispatch_updates(
+        commit_dispatch_updates(
             cur,
             [
                 TaskUpdate(task_id=task_id, attempt_id=0, new_state=job_pb2.TASK_STATE_RUNNING),
             ],
-            endpoints=state._endpoints,
             now=Timestamp.now(),
         )
     with state._db.transaction() as cur:
-        apply_dispatch_updates(
+        commit_dispatch_updates(
             cur,
             [
                 TaskUpdate(task_id=task_id, attempt_id=0, new_state=job_pb2.TASK_STATE_FAILED, error="boom"),
             ],
-            endpoints=state._endpoints,
             now=Timestamp.now(),
         )
 
@@ -4057,7 +4142,7 @@ def test_apply_failed_with_retry(state):
 
     # Draining again should promote it for a second attempt.
     with state._db.transaction() as cur:
-        batch = dispatch.drain_for_dispatch(cur, cache=state._run_template_cache)
+        batch = dispatch.drain_for_dispatch(cur)
     assert len(batch.tasks_to_run) == 1
     assert batch.tasks_to_run[0].attempt_id == 1
 
@@ -4067,24 +4152,22 @@ def test_apply_failed_no_retry(state):
     task_ids = _submit_job_direct(state, "/user/job1", max_retries_failure=0)
     task_id = task_ids[0]
     with state._db.transaction() as cur:
-        dispatch.drain_for_dispatch(cur, cache=state._run_template_cache)
+        dispatch.drain_for_dispatch(cur)
 
     with state._db.transaction() as cur:
-        apply_dispatch_updates(
+        commit_dispatch_updates(
             cur,
             [
                 TaskUpdate(task_id=task_id, attempt_id=0, new_state=job_pb2.TASK_STATE_RUNNING),
             ],
-            endpoints=state._endpoints,
             now=Timestamp.now(),
         )
     with state._db.transaction() as cur:
-        apply_dispatch_updates(
+        commit_dispatch_updates(
             cur,
             [
                 TaskUpdate(task_id=task_id, attempt_id=0, new_state=job_pb2.TASK_STATE_FAILED, error="boom"),
             ],
-            endpoints=state._endpoints,
             now=Timestamp.now(),
         )
 
@@ -4099,24 +4182,22 @@ def test_apply_worker_failed(state):
     task_ids = _submit_job_direct(state, "/user/job1", max_retries_preemption=1)
     task_id = task_ids[0]
     with state._db.transaction() as cur:
-        dispatch.drain_for_dispatch(cur, cache=state._run_template_cache)
+        dispatch.drain_for_dispatch(cur)
 
     with state._db.transaction() as cur:
-        apply_dispatch_updates(
+        commit_dispatch_updates(
             cur,
             [
                 TaskUpdate(task_id=task_id, attempt_id=0, new_state=job_pb2.TASK_STATE_RUNNING),
             ],
-            endpoints=state._endpoints,
             now=Timestamp.now(),
         )
     with state._db.transaction() as cur:
-        apply_dispatch_updates(
+        commit_dispatch_updates(
             cur,
             [
                 TaskUpdate(task_id=task_id, attempt_id=0, new_state=job_pb2.TASK_STATE_WORKER_FAILED, error="node died"),
             ],
-            endpoints=state._endpoints,
             now=Timestamp.now(),
         )
 
@@ -4136,7 +4217,6 @@ def test_cancel_job_kills_dispatch_tasks(state):
             cur,
             job_id=JobName.from_wire("/user/job1"),
             reason="test cancel",
-            endpoints=state._endpoints,
         )
 
     for tid in task_ids:
@@ -4155,7 +4235,6 @@ def test_kill_non_terminal_dispatch_tasks(state):
             cur,
             job_id=JobName.from_wire("/user/job1"),
             reason="test kill",
-            endpoints=state._endpoints,
         )
 
     assert _task_state_direct(state, task_ids[0]) == job_pb2.TASK_STATE_KILLED
@@ -4169,10 +4248,9 @@ def test_max_failures_kills_dispatch_tasks(state):
     # Fail one task — with max_task_failures=0 (default) this should kill the job,
     # triggering _kill_non_terminal_tasks for the sibling.
     with state._db.transaction() as cur:
-        result = apply_dispatch_updates(
+        result = commit_dispatch_updates(
             cur,
             [TaskUpdate(task_id=task_ids[0], attempt_id=0, new_state=job_pb2.TASK_STATE_FAILED, error="boom")],
-            endpoints=state._endpoints,
             now=Timestamp.now(),
         )
 
@@ -4225,7 +4303,6 @@ def test_job_becomes_unschedulable_when_task_unschedulable(harness) -> None:
         finalize(
             cur,
             [TerminalDecision(TerminalKind.UNSCHEDULABLE, tasks[0].task_id, "no capacity")],
-            endpoints=harness.state._endpoints,
             now=Timestamp.now(),
         )
     assert harness.query_job(JobName.root("test-user", "unsched")).state == job_pb2.JOB_STATE_UNSCHEDULABLE
@@ -4235,7 +4312,7 @@ def test_job_cancel_marks_job_killed(harness) -> None:
     harness.submit("killed", replicas=2)
     jid = JobName.root("test-user", "killed")
     with harness.state._db.transaction() as cur:
-        ops.job.cancel(cur, job_id=jid, reason="manual", endpoints=harness.state._endpoints)
+        ops.job.cancel(cur, job_id=jid, reason="manual")
     assert harness.query_job(jid).state == job_pb2.JOB_STATE_KILLED
 
 
@@ -4261,6 +4338,7 @@ def _basis(job_id: JobName, state: int):
         started_at=None,
         max_task_failures=0,
         task_state_counts={},
+        total_failures=0,
         first_task_error=None,
     )
 
@@ -4319,19 +4397,30 @@ def test_cascade_kill_noops_on_already_terminal_job():
     assert jid not in ws.effects.jobs
 
 
-def _recompute_snapshot(job_id: JobName, task_states: list[int], max_task_failures: int):
+def _recompute_snapshot(
+    job_id: JobName,
+    task_states: list[int],
+    max_task_failures: int,
+    failure_counts: list[int] | None = None,
+):
     """A RUNNING job snapshot whose tasks carry ``task_states``.
 
     ``started_at`` is set on the basis so a job that does not otherwise finalize
     falls through to the RUNNING strand the #5 fix closes. ``job_basis`` rebuilds
-    the task histogram from ``all_tasks_by_job``, so the histogram lives there.
+    the task histogram and cumulative failure count from ``all_tasks_by_job``, so
+    both live there. ``failure_counts`` defaults to one charged failure per task
+    currently in FAILED; pass it explicitly to model failures that have already
+    been retried back to PENDING/RUNNING (the coscheduled crash-loop case).
     """
+    if failure_counts is None:
+        failure_counts = [1 if st == job_pb2.TASK_STATE_FAILED else 0 for st in task_states]
     basis = JobStateBasis(
         job_id=job_id,
         state=job_pb2.JOB_STATE_RUNNING,
         started_at=Timestamp.from_ms(500),
         max_task_failures=max_task_failures,
         task_state_counts={},
+        total_failures=sum(failure_counts),
         first_task_error="boom",
     )
     rows = tuple(
@@ -4339,9 +4428,10 @@ def _recompute_snapshot(job_id: JobName, task_states: list[int], max_task_failur
             task_id=JobName.from_wire(f"{job_id.to_wire()}/{i}"),
             task_index=i,
             state=st,
+            failure_count=fc,
             error="boom" if st == job_pb2.TASK_STATE_FAILED else None,
         )
-        for i, st in enumerate(task_states)
+        for i, (st, fc) in enumerate(zip(task_states, failure_counts, strict=True))
     )
     return TransitionSnapshot(
         now=Timestamp.from_ms(1000),
@@ -4357,41 +4447,57 @@ def _recompute_snapshot(job_id: JobName, task_states: list[int], max_task_failur
     )
 
 
-def test_recompute_fails_job_when_a_task_exhausts_its_retries():
-    """All tasks terminal with a FAILED task within max_task_failures fails the job.
+@pytest.mark.parametrize(
+    "task_states",
+    [
+        [job_pb2.TASK_STATE_FAILED],
+        [job_pb2.TASK_STATE_FAILED, job_pb2.TASK_STATE_SUCCEEDED, job_pb2.TASK_STATE_SUCCEEDED],
+    ],
+    ids=["lone-failed", "failed-with-succeeded-siblings"],
+)
+def test_recompute_fails_job_when_all_tasks_terminal_with_a_failure(task_states):
+    """Once every task is terminal, a lone FAILED task fails the job.
 
-    Histogram {FAILED:1, SUCCEEDED:2} with max_task_failures=1: no FAILED-over-
-    threshold (so the early-abort branch did not fire), no worker_failed/
-    preempted/cosched, not all-succeeded. The one FAILED task exhausted its
-    retries and can never succeed, so the job as a whole FAILS. Pre-fix this fell
-    through the started_at branch and hung JOB_STATE_RUNNING forever.
+    The failure is within ``max_task_failures`` (so the cumulative-budget branch
+    did not fire) and no worker/preempt/cosched terminal state is present, but a
+    terminally FAILED task can never succeed, so the job as a whole fails instead
+    of hanging RUNNING.
     """
-    jid = JobName.from_wire("/u/tolerant")
-    task_states = [
-        job_pb2.TASK_STATE_FAILED,
-        job_pb2.TASK_STATE_SUCCEEDED,
-        job_pb2.TASK_STATE_SUCCEEDED,
-    ]
+    jid = JobName.from_wire("/u/terminal-failure")
     ws = Overlay(_recompute_snapshot(jid, task_states, max_task_failures=1))
 
     new_state = recompute_state(ws, jid)
 
-    # A terminal task that exhausted its retries fails the job, not RUNNING.
     assert new_state == job_pb2.JOB_STATE_FAILED
     assert ws.effects.jobs[jid].state == job_pb2.JOB_STATE_FAILED
     assert ws.effects.jobs[jid].finished_at is not None
 
 
-def test_recompute_fails_job_on_single_terminally_failed_task():
-    """A single terminal-FAILED task with max_task_failures>=1 fails the job.
+@pytest.mark.parametrize(
+    "task_states, failure_counts, max_task_failures",
+    [
+        ([job_pb2.TASK_STATE_PENDING, job_pb2.TASK_STATE_RUNNING], [1, 0], 0),
+        (
+            [job_pb2.TASK_STATE_PENDING, job_pb2.TASK_STATE_PENDING, job_pb2.TASK_STATE_RUNNING],
+            [1, 1, 0],
+            1,
+        ),
+    ],
+    ids=["one-failure-retried", "failures-spread-across-tasks"],
+)
+def test_recompute_fails_job_on_cumulative_failures_while_active(task_states, failure_counts, max_task_failures):
+    """Cumulative hard failures fail the job even with no task currently FAILED.
 
-    The task is terminal FAILED with failure_count within budget, so it is never
-    rescheduled; it can never succeed, so the job FAILS rather than waiting. The
-    max_task_failures threshold only delays the failure to here (vs the early
-    FAILED-over-threshold abort). Pre-fix the job hung RUNNING.
+    Models a coscheduled gang mid-crash-loop: each crashed round charges a task's
+    ``failure_count`` and bounces it back to PENDING, so the instantaneous
+    histogram holds only a live RUNNING sibling and no FAILED task. The running
+    total of failures still exceeds ``max_task_failures`` and fails the job,
+    rather than letting the gang crash-loop forever because the failure keeps
+    landing on a different task that never exhausts its own per-task retries.
     """
-    jid = JobName.from_wire("/u/timed-out")
-    ws = Overlay(_recompute_snapshot(jid, [job_pb2.TASK_STATE_FAILED], max_task_failures=1))
+    jid = JobName.from_wire("/u/gang")
+    snap = _recompute_snapshot(jid, task_states, max_task_failures=max_task_failures, failure_counts=failure_counts)
+    ws = Overlay(snap)
 
     new_state = recompute_state(ws, jid)
 
@@ -4399,12 +4505,49 @@ def test_recompute_fails_job_on_single_terminally_failed_task():
     assert ws.effects.jobs[jid].state == job_pb2.JOB_STATE_FAILED
 
 
-def test_recompute_still_running_when_a_task_is_active():
-    """The terminal branch must not fire while any task is still active."""
+@pytest.mark.parametrize(
+    "task_states, failure_counts, max_task_failures",
+    [
+        ([job_pb2.TASK_STATE_FAILED, job_pb2.TASK_STATE_RUNNING], None, 1),
+        ([job_pb2.TASK_STATE_PENDING, job_pb2.TASK_STATE_RUNNING], [1, 0], 2),
+    ],
+    ids=["failed-with-active-sibling", "within-cumulative-budget"],
+)
+def test_recompute_keeps_job_running_within_budget(task_states, failure_counts, max_task_failures):
+    """An active task keeps the job RUNNING while failures stay within budget.
+
+    A task currently in FAILED does not finalize the job while a sibling is still
+    active, and failures retried back to PENDING keep the job RUNNING as long as
+    the cumulative total stays within ``max_task_failures`` so the retries can
+    proceed.
+    """
     jid = JobName.from_wire("/u/active")
-    task_states = [job_pb2.TASK_STATE_FAILED, job_pb2.TASK_STATE_RUNNING]
-    ws = Overlay(_recompute_snapshot(jid, task_states, max_task_failures=1))
+    snap = _recompute_snapshot(jid, task_states, max_task_failures=max_task_failures, failure_counts=failure_counts)
+    ws = Overlay(snap)
 
     new_state = recompute_state(ws, jid)
 
     assert new_state == job_pb2.JOB_STATE_RUNNING
+
+
+def test_pick_earliest_task_error_reports_first_failed_task():
+    """job.error names the sibling that crashed first, skipping followers that
+    only timed out later, tasks still retrying, and tasks that later succeeded.
+    """
+    root_cause = "CUDA error: an illegal memory access was encountered"
+    follower = "Barrier result: DEADLINE_EXCEEDED; timed out waiting for task 1"
+    candidates = [
+        (0, job_pb2.TASK_STATE_FAILED, Timestamp.from_ms(2000), follower),
+        (1, job_pb2.TASK_STATE_FAILED, Timestamp.from_ms(500), root_cause),
+        (2, job_pb2.TASK_STATE_PENDING, None, "requeued after preemption"),
+        (3, job_pb2.TASK_STATE_SUCCEEDED, Timestamp.from_ms(100), "earlier flake, since retried"),
+    ]
+    assert pick_earliest_task_error(candidates) == root_cause
+
+
+def test_pick_earliest_task_error_none_without_a_failed_task():
+    candidates = [
+        (0, job_pb2.TASK_STATE_SUCCEEDED, Timestamp.from_ms(100), "stale error"),
+        (1, job_pb2.TASK_STATE_PENDING, None, "requeued"),
+    ]
+    assert pick_earliest_task_error(candidates) is None

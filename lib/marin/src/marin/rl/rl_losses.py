@@ -44,7 +44,7 @@ class RLLossModule(Protocol):
         """Return whether this loss needs a separately retained reference model."""
         ...
 
-    def create_loss_fn(self, reference_model: eqx.Module | None, train_model: eqx.Module) -> Callable:
+    def create_loss_fn(self, reference_model: eqx.Module | None) -> Callable:
         """Create the loss function for training."""
         ...
 
@@ -474,7 +474,7 @@ class RLOOLoss(RLLossModule):
         """Return whether KL regularization requires a reference model."""
         return self.kl.enabled()
 
-    def create_loss_fn(self, reference_model: eqx.Module | None, train_model: eqx.Module) -> Callable:
+    def create_loss_fn(self, reference_model: eqx.Module | None) -> Callable:
         """Create the loss function for training."""
         if self.needs_reference_model() and reference_model is None:
             raise ValueError("reference_model is required when KL regularization is enabled")

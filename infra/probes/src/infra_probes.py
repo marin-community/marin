@@ -95,7 +95,7 @@ FINELOG_READBACK_POLL_INTERVAL = 0.25
 # the VM's /var/lib/probes host mount; finished daily files roll up to GCS in the
 # same region as the VM (no cross-region egress).
 PROBE_RESULTS_DIR = Path("/var/lib/probes")
-PROBE_RESULTS_GCS_PREFIX = f"gs://{_MARIN_CONFIG.region_buckets['us-central1']}/infra/probes"
+PROBE_RESULTS_GCS_PREFIX = f"gs://{_MARIN_CONFIG.region_buckets['us-central1'].name}/infra/probes"
 PROBE_RESULTS_NAMESPACE = "infra.canary.metrics"
 
 

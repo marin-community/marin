@@ -26,7 +26,8 @@ it.** Reading top to bottom answers a chain of questions:
 ┌─ EXECUTION SUBSTRATE  (cluster/) ────────────────▼────────────────────┐
 │  worker/    the agent daemon that runs on each machine                │
 │  runtime/   container execution (Docker / subprocess)                 │
-│  backends/  machine lifecycle: gcp · k8s · local · manual             │
+│  platforms/ machine lifecycle: gcp · k8s · local · manual             │
+│  backends/  TaskBackend implementations: rpc · k8s                    │
 └──────────────────────────────┬───────────────────────────────────────┘
 ┌─ CLUSTER VOCABULARY  (cluster/ top-level) ───────▼────────────────────┐
 │  types · constraints · config · config_serde · endpoints · bundle …   │
@@ -42,7 +43,7 @@ it.** Reading top to bottom answers a chain of questions:
 |---|---|---|
 | **Foundation** | `rpc/`, `actor/`, top-level utils | What vocabulary does everything speak? (protos, RPC middleware, threads, time) |
 | **Cluster vocabulary** | `cluster/types,constraints,config,bundle,endpoints` | What *is* a job / constraint / resource? |
-| **Execution substrate** | `cluster/backends,runtime,worker` | How do we get a machine, and run a task on it? |
+| **Execution substrate** | `cluster/platforms,backends,runtime,worker` | How do we get a machine, and run a task on it? |
 | **Controller** | `cluster/controller/**` | What is the desired state, and how do we drive toward it? |
 | **Entry points** | `cli/`, `client/`, `cluster/client/` | How does a human/program submit and observe? |
 
@@ -63,17 +64,19 @@ content-addressed bundles (`bundle.py`), endpoint URI resolution, and small
 shared concerns (`redaction`, `service_mode`, `log_keys`,
 `process_status`, `dashboard_common`).
 
-**Execution substrate.** `backends/` covers two distinct abstractions:
+**Execution substrate.** Two distinct abstractions, one package each:
 
-- *Machine lifecycle* behind two Protocols (`ControllerProvider`,
-  `WorkerInfraProvider`) with four backends (`gcp`, `k8s`, `local`, `manual`);
-  `vm_lifecycle.py` (controller VM start/stop/restart) lives here because it is
-  provider code.
+- *Machine lifecycle* lives in `platforms/`: two Protocols
+  (`ControllerProvider`, `WorkerInfraProvider` in `platforms/protocols.py`),
+  the shared handle/status/error types (`platforms/types.py`), and four
+  implementations (`gcp`, `k8s`, `local`, `manual`); `vm_lifecycle.py`
+  (controller VM start/stop/restart) lives here because it is provider code.
 - *The task control-plane contract* (`TaskBackend`, defined in
-  `controller/backend.py`): `backends/rpc/backend.py` (`RpcTaskBackend`) and
-  `backends/k8s/tasks.py` (`K8sTaskProvider`) each implement it. This is a
-  different axis from machine lifecycle — a `TaskBackend` drives task execution
-  and capacity for one cluster, while the lifecycle Protocols get/stop machines.
+  `controller/backend.py`) lives in `backends/`: `backends/rpc/backend.py`
+  (`RpcTaskBackend`) and `backends/k8s/tasks.py` (`K8sTaskProvider`) each
+  implement it. This is a different axis from machine lifecycle — a
+  `TaskBackend` drives task execution and capacity for one cluster, while the
+  lifecycle Protocols get/stop machines.
 
 `runtime/` abstracts *task execution* behind `ContainerRuntime` (Docker /
 subprocess). `worker/` is the agent daemon that runs on each machine.
@@ -92,7 +95,7 @@ sub-layered:
 |---|---|---|
 | Persistence spine | `schema` → `codec` → `db` → `reads`/`writes` · `projections/` | State at rest. `reads`/`writes` are the **only** sanctioned query/mutation surface; `projections/` are write-through caches. |
 | State predicates | `task_state` · `worker_health` · `audit` | What the rows *mean*. |
-| Decision kernels | `reconcile/` (lifecycle) · `scheduling/scheduler.py` (matching) · `scheduling/policy.py` (preemption/gating) · `autoscaler/` (capacity) | Compute what *should* change. Parameterized; no live I/O. |
+| Decision kernels | `reconcile/` (lifecycle) · `scheduling/scheduler.py` (matching) · `scheduling/policy.py` (preemption/gating) · `autoscaler/` (capacity) | Compute what *should* change. `reconcile/` and `scheduling/` are parameterized with no live I/O; `autoscaler/` also actuates its plan through `WorkerInfraProvider` (live cloud create/describe calls and worker health probes). |
 | Imperative shell | `ops/{job,task,worker}` · `reconcile/dispatch` · `pruner` | Load a snapshot, call a kernel, apply effects. |
 | Transport / loops | `controller.py` (loops) · `service.py` (RPC) · `dashboard.py` · `main.py` | Drive it / expose it. |
 
@@ -108,30 +111,35 @@ are the canonical data layer; **one-off queries may stay in `service.py`** —
 `controller/backend.py` defines `TaskBackend`: the single uniform Protocol that
 drives task execution and capacity for one cluster. The controller owns the
 database and the loop cadences; a backend takes a plain-data snapshot in and
-returns a plain-data, method-specific result out. **Backends never read or write
-the controller DB** — every method is snapshot-in, data-out, so the controller
-can commit results on its own terms. Every backend implements the same three
-phase methods (plus on-demand `get_process_status`/`profile_task`/
-`exec_in_container`):
+returns a plain-data, method-specific result out. A backend **authors a
+projection** — task-state `effects` plus a `status` snapshot — that the
+controller commits/stores; the controller never learns which worker ran a task.
+Every backend implements the same phase methods (plus on-demand
+`get_process_status`/`profile_task`/`exec_in_container`):
 
-- `schedule(ScheduleInput) -> ScheduleResult` — a pure placement decision (no I/O).
-- `reconcile(ControlSnapshot) -> ReconcileResult` — I/O: task observations plus
-  per-worker health events the backend *observed*.
-- `autoscale(ControlSnapshot, residual_demand, dead_workers) -> AutoscaleResult` —
-  provision capacity, or tear down dead workers' slices (and their healthy
-  siblings). Worker teardown rides this call's `dead_workers` argument.
+- `schedule(ScheduleRequest) -> ScheduleResult` — a placement decision.
+- `reconcile(ReconcileRequest) -> ReconcileResult` — converge the substrate and
+  author task-state `effects` for the controller to commit. A worker-daemon
+  backend also folds the liveness it observed into its **own**
+  `WorkerHealthTracker` and stashes the workers its fold reaped.
+- `run_teardown()` — fail the reaped workers, tear down their slices and healthy
+  siblings, and forget them from the backend's own tracker. Called once per
+  backend after the tick's effects are committed; no worker identity is passed in.
+- `autoscale(AutoscaleRequest) -> AutoscaleResult` — provision capacity.
+- `status() -> BackendStatus` — author this backend's dashboard status.
 
 Each method returns its own frozen result type (`ScheduleResult` /
-`ReconcileResult` / `AutoscaleResult`); within a method the controller's apply
-path dispatches on which result field is populated (e.g. a worker-daemon
-`reconcile` returns `worker_results` + `health_events`, a cluster `reconcile`
-returns `updates`), never on the concrete backend type — there are no
-`isinstance` branches.
+`ReconcileResult` / `AutoscaleResult`). `reconcile` returns `effects` only —
+uniform across backend kinds — so the controller commits the projection without
+branching on the concrete backend type; there are no `isinstance` branches. How
+authority is split between the controller and its backends (and how a remote
+backend becomes a controller of its own) is described in
+[`multi_backend.md`](multi_backend.md).
 
 A backend declares `capabilities: frozenset[BackendCapability]`, metadata the
-dashboard and on-demand RPC routing key on. The controller calls all three
-phases uniformly regardless, with one per-tick exception: `CLUSTER_VIEW` makes
-the controller drain the dispatch queue (a DB write it owns) into that backend's
+dashboard and on-demand RPC routing key on. The controller calls every phase
+uniformly regardless, with one per-tick exception: `CLUSTER_VIEW` makes the
+controller drain the dispatch queue (a DB write it owns) into that backend's
 reconcile snapshot.
 
 | Capability | Meaning |
@@ -140,17 +148,18 @@ reconcile snapshot.
 | `IRIS_AUTOSCALER` (`"autoscaler"`) | the Iris `Autoscaler` provisions capacity for this backend. |
 | `CLUSTER_VIEW` (`"cluster"`) | the backend places tasks on its own cluster (`K8sTaskProvider`, `backends/k8s/tasks.py` — Kueue schedules and provisions; `schedule`/`autoscale` are effectively no-ops). |
 
-Worker health is **observed only by worker-daemon backends** and **owned by the
-controller**: a `WORKER_DAEMON` backend's `reconcile` returns `health_events`
-(REACHED / UNREACHABLE), the controller folds them — together with BUILD_FAILED
-events it synthesizes from the reconcile kernel's effects — through the single
-`WorkerHealthTracker.apply` site, and a worker over the failure threshold is
-failed and reaped via `autoscale(dead_workers=...)`. There is no ping loop and
-no separate liveness channel — the reconcile RPC outcome is the only liveness
-signal. Cluster-view (e.g. Kubernetes) backends have **no Iris workers**, so they
-emit **zero** health events; pod status flows back as neutral task `updates`, not
-through the health apply path. A new backend (e.g. Slurm) slots in by
-implementing the three phases and declaring its capabilities.
+Worker health is **authored by each worker-daemon backend**, not the controller.
+A `WORKER_DAEMON` backend constructs and owns its own `WorkerHealthTracker`,
+folds the liveness it observed during `reconcile` (REACHED / UNREACHABLE, plus
+BUILD_FAILED synthesized from its effects), and reaps over-threshold workers in
+its own `run_teardown`. There is no ping loop and no separate liveness channel —
+the reconcile RPC outcome is the only liveness signal. The controller reaches
+per-worker liveness only through the backends (`liveness_for_worker`,
+`all_liveness`), and worker registration routes to the owning backend's tracker
+by scale group. Cluster-view (e.g. Kubernetes) backends have **no Iris workers**:
+they hold no tracker, and pod status flows back as task `effects`. A new backend
+(e.g. Slurm) slots in by implementing the phase methods and declaring its
+capabilities.
 
 **Entry points.** `cluster/client/` is the low-level RPC client
 (`RemoteClusterClient`); `client/` is the high-level user SDK (`IrisClient`,

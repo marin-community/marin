@@ -17,7 +17,16 @@ from iris.cluster.constraints import (
     preemptible_constraint,
     region_constraint,
 )
-from iris.cluster.types import Entrypoint, JobName, TaskAttempt, adjust_tpu_replicas, gpu_device, tpu_device
+from iris.cluster.types import (
+    LOCAL_CLUSTER,
+    Entrypoint,
+    JobName,
+    TaskAttempt,
+    adjust_tpu_replicas,
+    gpu_device,
+    is_federated,
+    tpu_device,
+)
 from iris.rpc import job_pb2
 
 
@@ -91,6 +100,14 @@ def test_job_name_roundtrip_and_hierarchy():
     assert parsed.task_index == 0
     assert JobName.root("test-user", "root").is_ancestor_of(parsed)
     assert not parsed.is_ancestor_of(JobName.root("test-user", "root"), include_self=False)
+
+
+def test_cluster_coordinate_helpers():
+    # Job ids are cluster-invariant; a job/task's cluster is either the reserved
+    # local sentinel (owned here) or a peer id (handed off), never both.
+    assert LOCAL_CLUSTER == "local"
+    assert not is_federated(LOCAL_CLUSTER)
+    assert is_federated("cw-us-east")
 
 
 @pytest.mark.parametrize("base", ["https://iris.oa.dev", "https://iris.oa.dev/"])

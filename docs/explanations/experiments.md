@@ -1,20 +1,20 @@
 # Experiments
 
-At the [infrastructure level](../explanations/executor.md), an experiment is simply a DAG of steps to be executed.
-However, conceptually, an **experiment** represents a unit of inquiry with a
-particular hypothesis or goal.
-Each such experiment is captured by a GitHub issue with the `experiments` tag
+At the [infrastructure level](../explanations/lazy-artifacts.md), an experiment is a DAG
+of typed artifact handles to be materialized. Conceptually, an **experiment** represents a
+unit of inquiry with a particular hypothesis or goal. Each such experiment is captured by a
+GitHub issue with the `experiments` tag
 (e.g., [#72](https://github.com/marin-community/marin/issues/72)).
 
-An experiment might involve testing whether one optimizer is better than another
-in a controlled setting, or trying out different tokenizers or data quality
-filtering schemes.  Regardless, an experiment consists of a sequence of steps.
+An experiment might involve testing whether one optimizer is better than another in a
+controlled setting, or trying out different tokenizers or data quality filtering schemes.
+Regardless, an experiment consists of a DAG of steps.
 
-To promote the reproducibility of experiments,
-we record all experiments in the [experiments](https://github.com/marin-community/marin/tree/main/experiments) directory.
-Each file in that directory (e.g., [tutorials/exp1077_reproduce_dclm_1b1x.py](https://github.com/marin-community/marin/blob/main/experiments/tutorials/exp1077_reproduce_dclm_1b1x.py)) corresponds to one experiment, where the naming convention contains the GitHub issue number.
+To promote the reproducibility of experiments, we record all experiments in the
+[experiments](https://github.com/marin-community/marin/tree/main/experiments) directory.
+Each file in that directory (e.g.,
+[tutorials/exp1078_reproduce_dclm_7b1x.py](https://github.com/marin-community/marin/blob/main/experiments/tutorials/exp1078_reproduce_dclm_7b1x.py))
+corresponds to one experiment, where the naming convention contains the GitHub issue number.
 
-Running each experiment produces an experiment JSON file (see the
-[executor documentation](../references/executor-api.md)), which can be visualized specially
-in the data browser.  From this experiments page in the data browser,
-you can follow links to the Iris dashboard and wandb (for training steps).
+Running each experiment produces provenance records for every artifact it builds. From
+the data browser you can follow links to the Iris dashboard and W&B (for training steps).

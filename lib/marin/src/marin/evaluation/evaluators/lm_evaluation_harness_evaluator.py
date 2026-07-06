@@ -8,7 +8,7 @@ import tempfile
 from collections.abc import Iterator
 from contextlib import contextmanager
 
-from rigging.filesystem import is_remote_path, open_url, url_to_fs
+from rigging.filesystem import is_remote_path, open_url, prefix_join, url_to_fs
 
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.evaluation.evaluators.evaluator import Evaluator, ModelConfig
@@ -43,7 +43,7 @@ class LMEvaluationHarnessEvaluator(Evaluator):
         with tempfile.TemporaryDirectory(prefix="marin-tokenizer-") as local_dir:
             copied_any = False
             for filename in cls.TOKENIZER_FILENAMES:
-                remote_path = f"{remote_dir.rstrip('/')}/{filename}"
+                remote_path = prefix_join(remote_dir, filename)
                 if not is_remote_path(remote_path):
                     continue
                 fs, fs_path = url_to_fs(remote_path)

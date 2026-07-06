@@ -17,10 +17,10 @@ pytest_plugins = ["tests.test_utils"]
 
 def _gpt2_tokenizer_dir(tmp_path_factory):
     """Create a local directory with the GPT-2 tokenizer files."""
-    config_src = Path(__file__).parent / "gpt2_tokenizer_config.json"
+    test_dir = Path(__file__).parent
     tmpdir = tmp_path_factory.mktemp("gpt2_tok")
-    shutil.copy(config_src, tmpdir / "tokenizer.json")
-    shutil.copy(config_src, tmpdir / "tokenizer_config.json")
+    shutil.copy(test_dir / "gpt2_tokenizer.json", tmpdir / "tokenizer.json")
+    shutil.copy(test_dir / "gpt2_tokenizer_config.json", tmpdir / "tokenizer_config.json")
     (tmpdir / "config.json").write_text(json.dumps({"model_type": "gpt2", "vocab_size": 5027}))
     return tmpdir
 
@@ -46,10 +46,10 @@ def local_gpt2_tokenizer_path(tmp_path_factory) -> str:
 def local_gpt2_marin_tokenizer(tmp_path_factory) -> HfMarinTokenizer:
     """Load a GPT2 MarinTokenizer from a local JSON file to avoid network downloads."""
 
-    config_src = Path(__file__).parent / "gpt2_tokenizer_config.json"
+    test_dir = Path(__file__).parent
     tmpdir = tmp_path_factory.mktemp("gpt2_marin_tok")
-    shutil.copy(config_src, tmpdir / "tokenizer.json")
-    shutil.copy(config_src, tmpdir / "tokenizer_config.json")
+    shutil.copy(test_dir / "gpt2_tokenizer.json", tmpdir / "tokenizer.json")
+    shutil.copy(test_dir / "gpt2_tokenizer_config.json", tmpdir / "tokenizer_config.json")
 
     tok = HfBaseTokenizer.from_file(str(tmpdir / "tokenizer.json"))
 
