@@ -2589,8 +2589,13 @@ non-Blackwell paths still use the packed layout.
   - Repeat rounded TFLOP/s/rank: 920.51, 914.27, 922.42
   - Median: 893.30 useful / 920.51 rounded TFLOP/s/rank, 16.62 ms, 0 dropped routes
   - Compile split: 4.89 s lower compile, 2.66 s first run, 7.54 s total first call
+- Post-commit confirmation:
+  - Artifact: `blackwell_rawx_target_64968.jsonl`
+  - Commit: `4c575fd6c`
+  - Median: 894.67 useful / 921.92 rounded TFLOP/s/rank, 16.59 ms, 0 dropped routes
+  - Compile split: 2.98 s lower compile, 2.57 s first run, 5.55 s total first call
 
 Current conclusion: the full B200 outer-JIT forward path now exceeds the 800 useful TFLOP/s/rank target. The structural
 win came from removing the compiled packed-token gather from the Blackwell dynamic path, not from another tile sweep.
-Next useful checks are a repeat target run after commit SHA stamping and a small regression test that verifies the
-raw-token Blackwell path remains numerically aligned with the packed prepared-input path.
+Next useful check is a small regression test that verifies the raw-token Blackwell path remains numerically aligned with
+the packed prepared-input path.
