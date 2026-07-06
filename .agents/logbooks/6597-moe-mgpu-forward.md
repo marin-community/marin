@@ -2495,3 +2495,31 @@ Current conclusion: B200 full forward improved from about 657 rounded to about 6
 prepared-input path is now at the 800 useful TFLOP/s/rank boundary, but the full forward path remains below 800 due
 remaining input-prep/transport overhead. The next useful experiment is to reduce the destination and return transport
 costs, not more queue-depth tuning.
+
+## 2026-07-06 00:00 - B200 transport block tuning
+
+Tuned the B200 destination and return transport copy tile dimensions after the W2 tile win. These knobs are in
+`PushInboxConfig`: destination X transport uses `block_k`, return transport uses `block_n`.
+
+- Code state:
+  - Branch: `codex/blackwell-source-push-stack`
+  - Base commit before this entry: `2d7aad079`
+- B200 transport sweep:
+  - Artifact: `blackwell_transport_sweep_b200_64951.jsonl`
+  - Best median: 674.87 useful / 695.43 rounded TFLOP/s/rank with `block_k=256`, `block_n=256`
+  - Baseline in same sweep: 664.75 useful / 684.99 rounded with `block_k=128`, `block_n=128`
+  - `block_k=512` and `block_n=512` variants failed the async-copy limit of 256 elements per dimension.
+- B200 combined sweep:
+  - Artifact: `blackwell_transport_combo_b200_64952.jsonl`
+  - Best median: 677.33 useful / 697.95 rounded TFLOP/s/rank with `block_k=256`, `block_n=256`,
+    `inbox_slots=32`, `n_groups_per_job=1`
+  - `inbox_slots=48` and `inbox_slots=32,n_groups_per_job=2` were worse.
+- Checked-in profile update:
+  - The Blackwell 65K/D3072/I3072 profile now defaults to `block_k=256`, `block_n=256`, `inbox_slots=32`,
+    `n_groups_per_job=1`.
+  - B200 named-profile verification artifact: `blackwell_profile_verify_b200_64953.jsonl`
+  - Verified median: 675.08 useful / 695.64 rounded TFLOP/s/rank, 21.99 ms, 0 dropped routes.
+
+Current conclusion: the best B200 full-forward profile is now about 696 rounded TFLOP/s/rank. The 800 full-forward goal
+is still not met. The remaining gap is likely in the Lane transport stages plus input preparation; larger transport
+tiles beyond 256 are not viable because of async-copy limits.
