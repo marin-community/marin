@@ -57,6 +57,51 @@ LOG_FORMAT = "%(asctime)s - %(levelname)s - %(message)s"
 
 
 @dataclass(frozen=True)
+class ShardedCacheLayout:
+    """Storage paths of a sharded Levanter cache: its top-level ledger and per-shard subdirectories."""
+
+    root: StoragePath
+
+    @staticmethod
+    def parse(root: str) -> "ShardedCacheLayout":
+        return ShardedCacheLayout(StoragePath.parse(root))
+
+    def __str__(self) -> str:
+        return str(self.root)
+
+    @property
+    def ledger(self) -> str:
+        """Path of the top-level ledger that aggregates the per-shard ledgers."""
+        return str(self.root / LEDGER_FILE_NAME)
+
+    def child(self, name: str) -> "ShardedCacheLayout":
+        """The sub-cache rooted at ``root/name`` (e.g. a per-split cache)."""
+        return ShardedCacheLayout(self.root / name)
+
+    def shard(self, shard_name: str) -> str:
+        """Absolute path of the shard subdirectory ``shard_name`` under this cache."""
+        return str(self.root / shard_name)
+
+    def relative_shard(self, shard_path: str) -> str:
+        """``shard_path`` as the ledger key relative to this root; raises unless strictly under it.
+
+        Segment comparison keeps a trailing or doubled separator from forking writer and
+        reader; a ``..`` that escapes a scheme-less (local) root is also rejected.
+        """
+        try:
+            relative = StoragePath.parse(shard_path).relative_to(self.root)
+        except ValueError as exc:
+            raise ValueError(f"Sharded cache path {shard_path} is not under output path {self.root}") from exc
+        # A local relative key with a `..` segment escapes the cache directory when
+        # joined back; object-store keys treat `..` as a literal segment, so this only
+        # applies to scheme-less filesystem paths.
+        escapes = self.root.scheme is None and ".." in relative.split("/")
+        if not relative or escapes:
+            raise ValueError(f"Sharded cache path {shard_path} is not under output path {self.root}")
+        return relative
+
+
+@dataclass(frozen=True)
 class CacheOptions:
     batch_size: int = 128
 
@@ -100,6 +145,7 @@ class TreeCache(AsyncDataset[T_co]):
     ):
         super().__init__()
         self.cache_dir = cache_dir
+        self._layout = ShardedCacheLayout.parse(cache_dir)
         self.ledger = ledger
         self._exemplar = exemplar
         self._shard_stores: Dict[str, TreeStore[T_co]] = {}
@@ -129,7 +175,7 @@ class TreeCache(AsyncDataset[T_co]):
         return self.ledger.layout == CACHE_LAYOUT_SHARDED
 
     def _shard_path(self, shard_name: str) -> str:
-        return prefix_join(self.cache_dir, shard_name)
+        return self._layout.shard(shard_name)
 
     async def async_len(self) -> int:
         return await self._reader.async_len()
@@ -597,7 +643,7 @@ class CacheLedger:
 
     @staticmethod
     def load(cache_dir: str, metadata: Optional["CacheMetadata"] = None) -> "CacheLedger":
-        ledger_path = prefix_join(cache_dir, LEDGER_FILE_NAME)
+        ledger_path = ShardedCacheLayout.parse(cache_dir).ledger
         try:
             logger.info(f"Attempting to load cache ledger from {ledger_path}")
             with open_url(ledger_path) as file:
@@ -611,7 +657,7 @@ class CacheLedger:
             raise FileNotFoundError(f"Cache ledger not found at {ledger_path}") from exc
 
     def _serialize_and_commit(self, cache_dir):
-        path = prefix_join(cache_dir, LEDGER_FILE_NAME)
+        path = ShardedCacheLayout.parse(cache_dir).ledger
         return _serialize_json_and_commit(path, self)  # type: ignore[arg-type]
 
 
@@ -1136,8 +1182,9 @@ def consolidate_shard_cache_ledgers(
         ledger._serialize_and_commit(output_path)
         return ledger
 
+    layout = ShardedCacheLayout.parse(output_path)
     for shard_path in shard_cache_paths:
-        _relative_shard_path(output_path, shard_path)
+        layout.relative_shard(shard_path)
 
     logger.info(f"Consolidating {len(shard_cache_paths)} shard cache ledgers into {output_path}")
 
@@ -1211,8 +1258,9 @@ def _merge_sharded_ledgers(
         layout=CACHE_LAYOUT_SHARDED,
         metadata=metadata,
     )
+    layout = ShardedCacheLayout.parse(output_path)
     for shard_path, ledger, field_counts in zip(shard_cache_paths, shard_ledgers, per_shard_field_counts, strict=True):
-        shard_name = _relative_shard_path(output_path, shard_path)
+        shard_name = layout.relative_shard(shard_path)
         if shard_name in final_ledger.shard_rows:
             raise ValueError(f"Multiple shard cache paths resolve to the same ledger shard path: {shard_name}")
 
@@ -1376,27 +1424,6 @@ async def _consolidate_metadata(dest_path: str, exemplar: dict, shard_infos: lis
             delay *= 2
             if delay > 120:
                 raise
-
-
-def _relative_shard_path(output_path: str, shard_path: str) -> str:
-    """Return ``shard_path`` as a ledger key relative to ``output_path``.
-
-    Compares parsed path segments, so a trailing or doubled separator on either side
-    cannot fork the writer's shard path from the reader's. Raises ``ValueError`` unless
-    ``shard_path`` lies strictly under ``output_path``.
-    """
-    output = StoragePath.parse(output_path)
-    try:
-        relative = StoragePath.parse(shard_path).relative_to(output)
-    except ValueError as exc:
-        raise ValueError(f"Sharded cache path {shard_path} is not under output path {output_path}") from exc
-    # A local relative key with a `..` segment escapes the cache directory when joined
-    # back, so reject it. Object-store keys treat `..` as a literal segment, so this
-    # only applies to scheme-less filesystem paths.
-    escapes = output.scheme is None and ".." in relative.split("/")
-    if not relative or escapes:
-        raise ValueError(f"Sharded cache path {shard_path} is not under output path {output_path}")
-    return relative
 
 
 def _field_counts_from_store(store: TreeStore) -> Dict[str, int]:

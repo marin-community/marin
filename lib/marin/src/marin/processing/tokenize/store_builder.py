@@ -29,7 +29,12 @@ import time
 
 import numpy as np
 from fray import ResourceConfig
-from levanter.store.cache import CacheLedger, consolidate_shard_cache_ledgers, write_levanter_cache
+from levanter.store.cache import (
+    CacheLedger,
+    ShardedCacheLayout,
+    consolidate_shard_cache_ledgers,
+    write_levanter_cache,
+)
 from pydantic import BaseModel
 from rigging.filesystem import open_url, prefix_join, url_to_fs
 from zephyr import Dataset, ZephyrContext
@@ -313,7 +318,7 @@ def build_levanter_store(config: BuildLevanterStoreConfig) -> LevanterStoreData:
 
 def _ledger_exists(cache_path: str) -> bool:
     """Return whether a Levanter cache ledger already exists at ``cache_path``."""
-    return fsspec_exists(prefix_join(cache_path, "shard_ledger.json"))
+    return fsspec_exists(ShardedCacheLayout.parse(cache_path).ledger)
 
 
 def build_levanter_store_step(

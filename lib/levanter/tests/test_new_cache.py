@@ -16,9 +16,9 @@ from levanter.store.cache import (
     CACHE_LAYOUT_SHARDED,
     CacheLedger,
     SerialCacheWriter,
+    ShardedCacheLayout,
     TreeCache,
     TreeStore,
-    _relative_shard_path,
     build_or_load_cache,
     write_levanter_cache,
 )
@@ -267,7 +267,7 @@ async def test_sharded_flat_field_offsets_share_in_flight_build(monkeypatch):
     ],
 )
 def test_relative_shard_path_structural(output_path, shard_path, expected):
-    assert _relative_shard_path(output_path, shard_path) == expected
+    assert ShardedCacheLayout.parse(output_path).relative_shard(shard_path) == expected
 
 
 @pytest.mark.parametrize(
@@ -286,7 +286,17 @@ def test_relative_shard_path_structural(output_path, shard_path, expected):
 )
 def test_relative_shard_path_rejects_non_descendants(output_path, shard_path):
     with pytest.raises(ValueError, match="not under output path"):
-        _relative_shard_path(output_path, shard_path)
+        ShardedCacheLayout.parse(output_path).relative_shard(shard_path)
+
+
+def test_sharded_cache_layout_members():
+    # A trailing slash on the root must not double the separator on any derived path.
+    layout = ShardedCacheLayout.parse("gs://bucket/cache/")
+    assert layout.ledger == "gs://bucket/cache/shard_ledger.json"
+    assert layout.shard("part-00000-of-00010") == "gs://bucket/cache/part-00000-of-00010"
+    child = layout.child("train")
+    assert str(child) == "gs://bucket/cache/train"
+    assert child.ledger == "gs://bucket/cache/train/shard_ledger.json"
 
 
 def test_sharded_cache_rejects_drifted_aggregate_field_counts():
