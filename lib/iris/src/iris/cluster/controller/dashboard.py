@@ -37,6 +37,7 @@ from rigging.server_auth import (
     PolicyAuthInterceptor,
     RequestAuthPolicy,
     RouteAuthMiddleware,
+    VerifiedIdentity,
     extract_bearer_token,
     public,
     requires_auth,
@@ -73,6 +74,25 @@ from iris.rpc.stats_service import RpcStatsService
 logger = logging.getLogger(__name__)
 
 
+def _resolve_request_identity(policy: RequestAuthPolicy, request: Request, token: str | None = None) -> VerifiedIdentity:
+    """Resolve a Starlette request to a cluster identity via the auth policy.
+
+    Lifts the bearer token from the Authorization header or session cookie when no
+    explicit ``token`` is given, and forwards the peer address and headers the
+    policy's authenticators need (the signed IAP header, CIDR, loopback). Raises
+    ``ValueError`` when the request cannot be authenticated.
+    """
+    headers = dict(request.headers)
+    if token is None:
+        token = extract_bearer_token(headers, cookie_name=SESSION_COOKIE)
+    client = request.client
+    return policy.resolve(
+        token,
+        client_address=f"{client.host}:{client.port}" if client else None,
+        headers=headers,
+    )
+
+
 def _authorize_proxy(
     request: Request,
     resolved: ResolvedEndpoint | None,
@@ -100,16 +120,8 @@ def _authorize_proxy(
     access = resolved.access if resolved is not None else EndpointAccess.ENDPOINT_ACCESS_PRIVATE
     if access == EndpointAccess.ENDPOINT_ACCESS_PUBLIC:
         return None
-    headers = dict(request.headers)
-    if token is None:
-        token = extract_bearer_token(headers, cookie_name=SESSION_COOKIE)
-    client = request.client
     try:
-        identity = policy.resolve(
-            token,
-            client_address=f"{client.host}:{client.port}" if client else None,
-            headers=headers,
-        )
+        identity = _resolve_request_identity(policy, request, token)
     except ValueError:
         return JSONResponse({"error": "authentication required"}, status_code=401)
 
@@ -548,15 +560,8 @@ class ControllerDashboard:
         round-trip. A cookie-only check would send every IAP user to the
         bearer-token login page even though IAP already admitted them.
         """
-        headers = dict(request.headers)
-        token = extract_bearer_token(headers, cookie_name=SESSION_COOKIE)
-        client = request.client
         try:
-            self._auth_policy.resolve(
-                token,
-                client_address=f"{client.host}:{client.port}" if client else None,
-                headers=headers,
-            )
+            _resolve_request_identity(self._auth_policy, request)
             authenticated = True
         except ValueError:
             authenticated = False
