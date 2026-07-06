@@ -406,12 +406,7 @@ def test_log_step_info_token_progress_uniform_batch():
 
 
 def test_log_step_info_token_progress_variable_batch():
-    """Token-based progress is batch-size independent.
-
-    With a schedule that doubles the batch at step 50, progress at step 74
-    (which completes 50*32 + 25*64 = 3200 examples out of 50*32 + 50*64 = 4800 total)
-    equals 3200/4800 = 2/3, not 74/99.
-    """
+    """Token-based progress is batch-size independent when the schedule changes mid-run."""
     # Steps 0–49: batch 32  → 50 * 32 = 1600 examples
     # Steps 50–99: batch 64 → 50 * 64 = 3200 examples
     # Total: 4800 examples
