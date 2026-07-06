@@ -56,6 +56,7 @@ from experiments.grug.moe.launch_cw_scale import (
 from experiments.grug.moe.model import GrugModelConfig, RematMode
 from experiments.grug.moe.train import GrugRunConfig, GrugTrainerConfig
 from experiments.grug.moe.train_basic import run_grug_basic
+from experiments.grug.moe.train_mid import run_grug_mid
 
 _SLIMPAJAMA_SHUFFLE = BlockShuffleConfig(io_block_size=256, window_blocks=256, perm_type="feistel")
 
@@ -127,7 +128,10 @@ def run_grug_basic_trial(config: GrugMoeLaunchConfig) -> None:
         or resolve_checkpointer_output_path(CheckpointerConfig(save_interval=None, keep=None), config.output_path),
     )
     grug_trainer = dataclasses.replace(config.grug_trainer, trainer=trainer)
-    run_grug_basic(
+    # SCALE_MODEL selects the model/training variant: "basic" (dense / leading- or
+    # interleaved-MoE model_basic) or "mid" (every layer = shared expert + routed MoE).
+    run_fn = run_grug_mid if os.environ.get("SCALE_MODEL", "basic").lower() == "mid" else run_grug_basic
+    run_fn(
         GrugRunConfig(
             model=config.model,
             data=config.data,
@@ -170,7 +174,9 @@ def build_basic_checkpoint(*, version: str = "dev") -> ArtifactStep[LevanterChec
         optimizer = dataclasses.replace(SCALE_OPTIMIZER, learning_rate=lr)
 
     checkpoint_mode = os.environ.get("SCALE_CHECKPOINTS", "s3").lower()
-    if checkpoint_mode == "local":
+    if checkpoint_mode in ("local", "none"):
+        # "none" carries the same cheap /tmp config, but train_basic skips every save
+        # (see SCALE_CHECKPOINTS handling there) so the probe writes no checkpoint.
         checkpointer = CheckpointerConfig(
             base_path=f"/tmp/grug-basic-ckpt/{run_id}",
             append_run_id_to_base_path=False,
@@ -180,7 +186,7 @@ def build_basic_checkpoint(*, version: str = "dev") -> ArtifactStep[LevanterChec
     elif checkpoint_mode == "s3":
         checkpointer = None
     else:
-        raise ValueError(f"SCALE_CHECKPOINTS={checkpoint_mode!r} must be 's3' or 'local'")
+        raise ValueError(f"SCALE_CHECKPOINTS={checkpoint_mode!r} must be 's3', 'local', or 'none'")
 
     model = build_basic_model()
 
