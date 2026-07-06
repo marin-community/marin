@@ -1088,18 +1088,15 @@ def _make_source_push_backward_dy_route_compact_kernel(
         hidden_tile = pl.program_id(3)
         row_start = row_tile * row_block
         hidden_start = hidden_tile * hidden_block
-        src = source_rank_ref[dst, expert, pl.ds(row_start, row_block)]
-        token = token_id_ref[dst, expert, pl.ds(row_start, row_block)]
-        valid = valid_i32_ref[dst, expert, pl.ds(row_start, row_block)] != 0
-        safe_src = jnp.where(valid, src, jnp.zeros((), dtype=src.dtype))
-        safe_token = jnp.where(valid, token, jnp.zeros((), dtype=token.dtype))
-        dy_tile = dy_ref[safe_src, safe_token, pl.ds(hidden_start, hidden_block)].astype(jnp.float32)
-        zeros = jnp.zeros((row_block, hidden_block), dtype=jnp.float32)
-        out_ref[0, 0, pl.ds(0, row_block), pl.ds(0, hidden_block)] = jnp.where(
-            valid[:, None],
-            dy_tile,
-            zeros,
-        )
+        zeros = jnp.zeros((hidden_block,), dtype=jnp.float32)
+        for row in range(row_block):
+            src = source_rank_ref[dst, expert, row_start + row]
+            token = token_id_ref[dst, expert, row_start + row]
+            valid = valid_i32_ref[dst, expert, row_start + row] != 0
+            safe_src = jnp.where(valid, src, jnp.zeros((), dtype=src.dtype))
+            safe_token = jnp.where(valid, token, jnp.zeros((), dtype=token.dtype))
+            dy_row = dy_ref[safe_src, safe_token, pl.ds(hidden_start, hidden_block)].astype(jnp.float32)
+            out_ref[0, 0, row, pl.ds(0, hidden_block)] = jnp.where(valid, dy_row, zeros)
 
     return kernel
 
