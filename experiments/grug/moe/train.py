@@ -738,23 +738,23 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         state_callbacks.add_hook(callbacks.pbar_logger(total=trainer.num_train_steps), every=log_every)
         state_callbacks.add_hook(callbacks.log_step_info(trainer.num_train_steps), every=log_every)
         if profiler_enabled:
-            profile_dir = trainer.log_dir / run_id / "profiler"
-            remote_profile_dir = join_path(config.output_path, "profiler") if config.output_path is not None else None
+            if config.output_path is not None:
+                profile_dir = join_path(config.output_path, "profiler")
+            else:
+                profile_dir = str(trainer.log_dir / run_id / "profiler")
             levanter.tracker.log_summary(
                 {
-                    "profiler/profile_dir": str(profile_dir),
-                    "profiler/remote_profile_dir": remote_profile_dir,
+                    "profiler/profile_dir": profile_dir,
                 }
             )
             state_callbacks.add_hook(
                 callbacks.profile(
-                    str(profile_dir),
+                    profile_dir,
                     profiler_cfg.start_step,
                     profiler_num_steps,
                     profiler_cfg.perfetto_link,
                     profiler_options=profiler_cfg.build_jax_profile_options(),
                     stop_barrier_timeout=profiler_cfg.stop_barrier_timeout,
-                    remote_profile_dir=remote_profile_dir,
                 ),
                 every=1,
             )
