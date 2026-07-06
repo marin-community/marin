@@ -45,8 +45,6 @@ from experiments.domain_phase_mix.weight_sampler import (
 )
 from experiments.evals.task_configs import MMLU_5_SHOT, MMLU_PRO_5_SHOT, MMLU_SL_VERB_5_SHOT
 from experiments.marin_tokenizer import marin_tokenizer
-from experiments.pretraining_datasets.dolma3_dolmino_pool import tokenize_dolmino_pool_subset
-from experiments.pretraining_datasets.dolma3_pool import tokenize_dolma3_pool_subset
 
 NAME = "pinlin_calvin_xu/data_mixture/two_phase_dolma3_dolmino_top_level"
 EXPERIMENT_BUDGET = 1_200_000_000
@@ -381,12 +379,16 @@ def _partition_step_fn(partition_name: str, *, worker_resources: ResourceConfig 
         "finemath_3plus",
         "wikipedia",
     }:
+        from experiments.pretraining_datasets.dolma3_pool import tokenize_dolma3_pool_subset  # noqa: PLC0415
+
         return partial(
             tokenize_dolma3_pool_subset,
             partition_name,
             tokenizer=marin_tokenizer,
             worker_resources=worker_resources,
         )
+    from experiments.pretraining_datasets.dolma3_dolmino_pool import tokenize_dolmino_pool_subset  # noqa: PLC0415
+
     return partial(
         tokenize_dolmino_pool_subset,
         partition_name,

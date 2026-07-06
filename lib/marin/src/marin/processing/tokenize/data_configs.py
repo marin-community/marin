@@ -21,13 +21,15 @@ from levanter.data.text import (
     UrlDatasetSourceConfig,
 )
 from levanter.tokenizers import load_tokenizer
+from rigging.filesystem import marin_prefix
 
 from marin.execution import unwrap_versioned_value
+from marin.execution.lazy import ArtifactStep, materialized_config
 from marin.execution.types import ExecutorStep, InputName, output_path_of
 from marin.processing.tokenize.tokenize import TokenizeConfigBase
 
 TokenizerStep = ExecutorStep[TokenizeConfigBase]
-TokenizerConfigLike = TokenizeConfigBase | TokenizerStep
+TokenizerConfigLike = TokenizeConfigBase | TokenizerStep | ArtifactStep
 
 logger = logging.getLogger(__name__)
 
@@ -95,6 +97,11 @@ def step_to_lm_dataset_source_config(
     """Convert a tokenized-cache step or config to a Levanter source config."""
     if isinstance(step, TokenizeConfigBase):
         return step.as_lm_dataset_source_config(step.cache_path, include_raw_paths=include_raw_paths)
+    if isinstance(step, ArtifactStep):
+        config = materialized_config(step, marin_prefix())
+        if not isinstance(config, TokenizeConfigBase):
+            raise TypeError(f"{step.name}@{step.version}: expected TokenizeConfigBase, got {type(config).__name__}")
+        return config.as_lm_dataset_source_config(config.cache_path, include_raw_paths=include_raw_paths)
 
     return step.config.as_lm_dataset_source_config(output_path_of(step), include_raw_paths=include_raw_paths)
 

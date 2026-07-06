@@ -38,6 +38,7 @@ from levanter.tracker.wandb import WandbConfig, truncate_wandb_run_name
 from levanter.trainer import TrainerConfig
 from levanter.utils.mesh import MeshConfig
 from marin.evaluation.evaluation_config import EvalTaskConfig, convert_to_levanter_task_config
+from marin.evaluation.perplexity_gap import raw_text_dataset
 from marin.execution.executor import compute_output_path, materialize, resolve_local_placeholders, unwrap_versioned_value
 from marin.execution.remote import _sanitize_job_name
 from marin.execution.types import ExecutorStep, InputName, this_output_path, versioned
@@ -52,17 +53,18 @@ from marin.training.run_environment import extras_for_resources
 from marin.training.training import (
     TrainDpoOnPodConfig,
     TrainLmOnPodConfig,
-    bake_output_path,
+    _resolve_run_id,
+    apply_output_path,
     check_train_config_paths,
-    impute_run_id,
     resolve_training_env,
     run_levanter_train_dpo,
     run_levanter_train_lm,
 )
 
-from experiments.evals.exp1600_uncheatable_evals import (
-    uncheatable_eval_raw_validation_sets,
-    uncheatable_eval_tokenized,
+from experiments.datasets.uncheatable import (
+    UNCHEATABLE_SUBSETS,
+    uncheatable_datasets,
+    uncheatable_raw,
 )
 from experiments.evals.task_configs import CORE_TASKS
 from experiments.paloma import paloma_raw_validation_sets, paloma_tokenized
@@ -84,6 +86,8 @@ def _truncate_wandb_tags(tags: Sequence[str]) -> list[str]:
         seen.add(truncated)
         deduped.append(truncated)
     return deduped
+
+
 def _resolve_hf_export_steps(steps_per_hf_export: int | None, steps_per_export: int | None) -> int | None:
     """Resolve the HF export step interval: None means same as checkpoint, -1 means disabled."""
     if steps_per_hf_export is None:
@@ -116,14 +120,25 @@ def _validate_train_length(train_seq_len: int | None, model_config: LmConfig) ->
 @lru_cache  # LRU to make the executor happier
 def default_validation_sets(tokenizer: str, base_path: str = "tokenized/") -> dict[str, TokenizerStep]:
     validation_sets = dict(paloma_tokenized(base_path=base_path, tokenizer=tokenizer))
-    validation_sets.update(uncheatable_eval_tokenized(base_path=base_path, tokenizer=tokenizer))
+    validation_sets.update(
+        {
+            os.path.join("uncheatable_eval", subset): step
+            for subset, step in uncheatable_datasets(tokenizer=tokenizer).items()
+        }
+    )
     return validation_sets
 
 
 @lru_cache
 def default_raw_validation_sets() -> dict[str, Any]:
     validation_sets = dict(paloma_raw_validation_sets())
-    validation_sets.update(uncheatable_eval_raw_validation_sets())
+    raw_uncheatable = uncheatable_raw()
+    validation_sets.update(
+        {
+            os.path.join("uncheatable_eval", subset): raw_text_dataset(raw_uncheatable.cd(glob))
+            for subset, glob in UNCHEATABLE_SUBSETS.items()
+        }
+    )
     return validation_sets
 
 
@@ -181,8 +196,7 @@ def simulated_epoching_train(
     )
 
     logger.info(
-        f"Simulating Epoching Behavior, Experiment Tokens {experiment_budget}, "
-        f"Simulated Target Tokens {target_budget}"
+        f"Simulating Epoching Behavior, Experiment Tokens {experiment_budget}, Simulated Target Tokens {target_budget}"
     )
 
     return default_train(
@@ -472,8 +486,8 @@ def resolve_lm_train_config(
     """
     output_path = compute_output_path(name, raw_config, override_output_path=override_output_path)
     config = resolve_local_placeholders(raw_config, output_path)
-    config = bake_output_path(config, output_path)
-    config, _ = impute_run_id(config, output_path=output_path)
+    config = apply_output_path(config, output_path)
+    config, _ = _resolve_run_id(config, output_path=output_path, env_run_id=None)
 
     # Disable accelerator requirement when running without GPU/TPU resources.
     if resources.device.kind == "cpu":
