@@ -24,6 +24,7 @@ from enum import StrEnum
 
 import fsspec.core
 from pydantic import BaseModel, ConfigDict
+from rigging.filesystem import prefix_join
 
 logger = logging.getLogger(__name__)
 
@@ -60,7 +61,7 @@ class RolloutRecord(BaseModel):
 
 
 def _record_url(remote_state_dir: str) -> str:
-    return f"{remote_state_dir.rstrip('/')}/{ROLLOUT_RECORD_FILENAME}"
+    return prefix_join(remote_state_dir, ROLLOUT_RECORD_FILENAME)
 
 
 def read_rollout_record(remote_state_dir: str) -> RolloutRecord | None:
