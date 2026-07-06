@@ -411,7 +411,6 @@ def _source_push_backward_dy_to_expert_major_pallas_call(
     kernel = _make_source_push_backward_dy_route_compact_kernel(
         row_block=row_block,
         hidden_block=hidden_block,
-        cast_iota_layout=not interpret,
     )
     in_specs, out_spec = _source_push_backward_dy_route_compact_block_specs(
         row_block=row_block,
@@ -1075,7 +1074,6 @@ def _make_source_push_backward_dy_route_compact_kernel(
     *,
     row_block: int,
     hidden_block: int,
-    cast_iota_layout: bool = True,
 ):
     def kernel(
         dy_ref: Float[pl.Ref, "S T D"],
@@ -1090,20 +1088,12 @@ def _make_source_push_backward_dy_route_compact_kernel(
         hidden_tile = pl.program_id(3)
         row_start = row_tile * row_block
         hidden_start = hidden_tile * hidden_block
-        hidden_range = jnp.arange(hidden_block, dtype=jnp.int32)
-        if cast_iota_layout:
-            hidden_range = mgpu.layout_cast(
-                hidden_range,
-                mgpu.Layout.WG_STRIDED((hidden_block,), vec_size=1),
-            )
-        hidden_offsets = hidden_start + hidden_range
-
         src = source_rank_ref[dst, expert, pl.ds(row_start, row_block)]
         token = token_id_ref[dst, expert, pl.ds(row_start, row_block)]
         valid = valid_i32_ref[dst, expert, pl.ds(row_start, row_block)] != 0
         safe_src = jnp.where(valid, src, jnp.zeros((), dtype=src.dtype))
         safe_token = jnp.where(valid, token, jnp.zeros((), dtype=token.dtype))
-        dy_tile = dy_ref[safe_src[:, None], safe_token[:, None], hidden_offsets[None, :]].astype(jnp.float32)
+        dy_tile = dy_ref[safe_src, safe_token, pl.ds(hidden_start, hidden_block)].astype(jnp.float32)
         zeros = jnp.zeros((row_block, hidden_block), dtype=jnp.float32)
         out_ref[0, 0, pl.ds(0, row_block), pl.ds(0, hidden_block)] = jnp.where(
             valid[:, None],
