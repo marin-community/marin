@@ -31,6 +31,7 @@ from fray import ResourceConfig
 from levanter.data.text import LmDatasetFormatBase, TextLmDatasetFormat
 from levanter.tokenizers import TokenizerBackend
 from pydantic import BaseModel
+from rigging.filesystem import prefix_join
 from zephyr import Dataset, ZephyrContext
 from zephyr.readers import load_file
 
@@ -80,7 +81,7 @@ class TokenizedAttrData(BaseModel):
         d = self.output_dirs.get(split)
         if d is None:
             return []
-        return sorted(fsspec_glob(f"{d.rstrip('/')}/*.parquet"))
+        return sorted(fsspec_glob(prefix_join(d, "*.parquet")))
 
 
 @dataclasses.dataclass(frozen=True, kw_only=True)
@@ -126,15 +127,15 @@ def _process_split(
 
     Returns ``(split_output_dir, counters)``.
     """
-    source_shards = sorted(fsspec_glob(f"{source.main_output_dir.rstrip('/')}/*.parquet"))
+    source_shards = sorted(fsspec_glob(prefix_join(source.main_output_dir, "*.parquet")))
     if not source_shards:
         raise FileNotFoundError(f"No parquet shards found under {source.main_output_dir}")
 
-    split_dir = os.path.join(config.output_path, split)
+    split_dir = prefix_join(config.output_path, split)
     output_basenames = tuple(os.path.basename(p) for p in source_shards)
 
     def _output_path(shard_idx: int, total_shards: int, sd: str = split_dir, bn: tuple = output_basenames) -> str:
-        return f"{sd}/{bn[shard_idx]}"
+        return prefix_join(sd, bn[shard_idx])
 
     logger.info(
         "Tokenizing %s (split=%s): %d source shards → %s",
