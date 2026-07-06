@@ -62,19 +62,21 @@ class LogBatch(_message.Message):
     def __init__(self, entries: _Optional[_Iterable[_Union[LogEntry, _Mapping]]] = ...) -> None: ...
 
 class PushLogsRequest(_message.Message):
-    __slots__ = ("key", "entries")
+    __slots__ = ("key", "entries", "cluster")
     KEY_FIELD_NUMBER: _ClassVar[int]
     ENTRIES_FIELD_NUMBER: _ClassVar[int]
+    CLUSTER_FIELD_NUMBER: _ClassVar[int]
     key: str
     entries: _containers.RepeatedCompositeFieldContainer[LogEntry]
-    def __init__(self, key: _Optional[str] = ..., entries: _Optional[_Iterable[_Union[LogEntry, _Mapping]]] = ...) -> None: ...
+    cluster: str
+    def __init__(self, key: _Optional[str] = ..., entries: _Optional[_Iterable[_Union[LogEntry, _Mapping]]] = ..., cluster: _Optional[str] = ...) -> None: ...
 
 class PushLogsResponse(_message.Message):
     __slots__ = ()
     def __init__(self) -> None: ...
 
 class FetchLogsRequest(_message.Message):
-    __slots__ = ("source", "since_ms", "cursor", "substring", "max_lines", "tail", "min_level", "match_scope")
+    __slots__ = ("source", "since_ms", "cursor", "substring", "max_lines", "tail", "min_level", "match_scope", "cluster")
     SOURCE_FIELD_NUMBER: _ClassVar[int]
     SINCE_MS_FIELD_NUMBER: _ClassVar[int]
     CURSOR_FIELD_NUMBER: _ClassVar[int]
@@ -83,6 +85,7 @@ class FetchLogsRequest(_message.Message):
     TAIL_FIELD_NUMBER: _ClassVar[int]
     MIN_LEVEL_FIELD_NUMBER: _ClassVar[int]
     MATCH_SCOPE_FIELD_NUMBER: _ClassVar[int]
+    CLUSTER_FIELD_NUMBER: _ClassVar[int]
     source: str
     since_ms: int
     cursor: int
@@ -91,7 +94,8 @@ class FetchLogsRequest(_message.Message):
     tail: bool
     min_level: str
     match_scope: MatchScope
-    def __init__(self, source: _Optional[str] = ..., since_ms: _Optional[int] = ..., cursor: _Optional[int] = ..., substring: _Optional[str] = ..., max_lines: _Optional[int] = ..., tail: _Optional[bool] = ..., min_level: _Optional[str] = ..., match_scope: _Optional[_Union[MatchScope, str]] = ...) -> None: ...
+    cluster: str
+    def __init__(self, source: _Optional[str] = ..., since_ms: _Optional[int] = ..., cursor: _Optional[int] = ..., substring: _Optional[str] = ..., max_lines: _Optional[int] = ..., tail: _Optional[bool] = ..., min_level: _Optional[str] = ..., match_scope: _Optional[_Union[MatchScope, str]] = ..., cluster: _Optional[str] = ...) -> None: ...
 
 class FetchLogsResponse(_message.Message):
     __slots__ = ("entries", "cursor")

@@ -10,9 +10,49 @@ from enum import Enum
 # Default PriorityClass names Iris creates at controller startup and uses when
 # the cluster config does not override priority_class_names. Override via
 # kubernetes_provider.priority_classes.
+#
+# iris-system is the control plane band (controller, finelog, Kueue manager). It
+# is NOT a user band and is never mapped from a PriorityBand — user jobs cannot
+# request it. It sits above every user band so a user pod can never preempt the
+# control plane off the shared control node; PreemptLowerPriority lets it evict a
+# lower-priority pod to stay scheduled when that node is full.
+IRIS_PRIORITY_CLASS_SYSTEM = "iris-system"
 IRIS_PRIORITY_CLASS_PRODUCTION = "iris-production"
 IRIS_PRIORITY_CLASS_INTERACTIVE = "iris-interactive"
 IRIS_PRIORITY_CLASS_BATCH = "iris-batch"
+
+# Canonical (name, value, preemptionPolicy) for every PriorityClass Iris owns.
+# Single source of truth: the controller applies all of them at startup and the
+# Kueue installer reuses the iris-system entry so the manager is pinned to the
+# same class. value/preemptionPolicy are immutable on a PriorityClass, so a
+# change here forces a delete+recreate (see ensure_priority_classes).
+IRIS_PRIORITY_CLASSES: tuple[tuple[str, int, str], ...] = (
+    (IRIS_PRIORITY_CLASS_SYSTEM, 10000, "PreemptLowerPriority"),
+    (IRIS_PRIORITY_CLASS_PRODUCTION, 1000, "PreemptLowerPriority"),
+    (IRIS_PRIORITY_CLASS_INTERACTIVE, 10, "PreemptLowerPriority"),
+    (IRIS_PRIORITY_CLASS_BATCH, 0, "Never"),
+)
+
+
+def build_priority_class_manifest(name: str, value: int, preemption_policy: str) -> dict:
+    """Build a cluster-scoped PriorityClass manifest dict."""
+    return {
+        "apiVersion": "scheduling.k8s.io/v1",
+        "kind": "PriorityClass",
+        "metadata": {"name": name},
+        "value": value,
+        "preemptionPolicy": preemption_policy,
+        "globalDefault": False,
+        "description": f"Iris {name.removeprefix('iris-')} priority band",
+    }
+
+
+def iris_priority_class_manifest(name: str) -> dict:
+    """PriorityClass manifest for one Iris-owned band, resolved from IRIS_PRIORITY_CLASSES."""
+    for class_name, value, preemption_policy in IRIS_PRIORITY_CLASSES:
+        if class_name == name:
+            return build_priority_class_manifest(class_name, value, preemption_policy)
+    raise ValueError(f"unknown Iris priority class {name!r}")
 
 
 class KubectlError(RuntimeError):

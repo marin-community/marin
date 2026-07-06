@@ -211,6 +211,10 @@ message Controller {
     string job_id_prefix = 9;
     // Filter to one backend. Empty = all backends.
     string backend_id = 10;
+    // Filter to jobs owned by one cluster (matched against jobs.cluster:
+    // "local" for this controller's own jobs, a peer id for handed-off jobs).
+    // Unset = all clusters, local and federated.
+    string cluster = 11;
   }
 
   message ListJobsRequest {
@@ -236,6 +240,9 @@ message Controller {
     iris.job.TaskStatus task = 1;
     // Job-level resource limits for this task's parent job.
     iris.job.ResourceSpecProto job_resources = 2;
+    // Likely root-cause log lines distilled from the task's own logs, populated
+    // only for a failed task. Empty for healthy tasks or when no logs matched.
+    repeated string root_cause_highlights = 3;
   }
 
   message ListTasksRequest {
@@ -678,7 +685,7 @@ message Controller {
     string controller_address = 2;
     string dashboard_url = 3;
     bool reachable = 4;               // last capability heartbeat succeeded
-    int64 last_sync_ms = 5;           // last successful contact, ms since epoch
+    int64 last_contact_ms = 5;        // last successful capability heartbeat, ms since epoch
     int32 active_federated_jobs = 6;
     int64 aggregate_spend_micros = 7;
     // The peer's backends, forwarded from its ListBackends: the underlying
@@ -704,9 +711,11 @@ message Controller {
   }
 
   // One handed-off job's state as the peer currently holds it. The parent mirrors
-  // this into its own jobs/tasks rows (stamped child_cluster) for that handle.
+  // this into its own jobs/tasks rows (stamped with the peer's cluster) for that handle.
   message FederationJobDelta {
-    string remote_job_id = 1;                     // the peer's local job id for the handoff
+    // The peer's own job id for this handoff, which now EQUALS the parent's job
+    // id: job ids are cluster-invariant, so there is no rebasing.
+    string job_id = 1;
     iris.job.JobStatus summary = 2;               // job state + counts (+ spend once reported)
     repeated iris.job.TaskStatus changed_tasks = 3;  // full row for each task changed since the cursor
     bool tombstone = 4;                           // peer has pruned the job; parent drops its projection

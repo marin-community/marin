@@ -72,12 +72,10 @@ class EndpointServiceImpl:
         self,
         *,
         db: ControllerDB,
-        endpoints: EndpointsProjection,
         system_endpoints: dict[str, str] | None = None,
         lease: Duration = ENDPOINT_LEASE,
     ) -> None:
         self._db = db
-        self._endpoints = endpoints
         self._system_endpoints: dict[str, str] = system_endpoints or {}
         self._lease = lease
 
@@ -136,7 +134,7 @@ class EndpointServiceImpl:
         # ``EndpointsProjection.add``: NOT_FOUND if the task row is missing,
         # FAILED_PRECONDITION if the task is terminal or the attempt is stale.
         with self._db.transaction() as cur:
-            outcome = self._endpoints.add(cur, endpoint, expected_attempt_id=request.attempt_id)
+            outcome = cur.caches[EndpointsProjection].add(cur, endpoint, expected_attempt_id=request.attempt_id)
         if outcome is AddEndpointOutcome.NOT_FOUND:
             raise ConnectError(Code.NOT_FOUND, f"Task {request.task_id} not found")
         if outcome is AddEndpointOutcome.STALE_ATTEMPT:
@@ -162,7 +160,7 @@ class EndpointServiceImpl:
     ) -> job_pb2.Empty:
         """Unregister a service endpoint. Idempotent."""
         with self._db.transaction() as cur:
-            self._endpoints.remove(cur, request.endpoint_id)
+            cur.caches[EndpointsProjection].remove(cur, request.endpoint_id)
         return job_pb2.Empty()
 
     def list_endpoints(
@@ -179,7 +177,7 @@ class EndpointServiceImpl:
         if prefix.startswith("/system/"):
             return self._list_system_endpoints(prefix, exact=request.exact)
 
-        endpoints = self._endpoints.query(
+        endpoints = self._db.caches[EndpointsProjection].query(
             EndpointQuery(
                 exact_name=prefix if request.exact else None,
                 name_prefix=None if request.exact else prefix,
@@ -207,7 +205,7 @@ class EndpointServiceImpl:
 
         Task endpoints (live leases) take priority over ``/system/`` endpoints.
         """
-        row = self._endpoints.resolve(name)
+        row = self._db.caches[EndpointsProjection].resolve(name)
         if row is not None:
             return row.address
         return self._system_endpoints.get(name)
@@ -220,7 +218,7 @@ class EndpointServiceImpl:
         ``/``-prefixed name or the bare form.
         """
         for candidate in proxy_name_to_endpoint_names(name):
-            row = self._endpoints.resolve(candidate)
+            row = self._db.caches[EndpointsProjection].resolve(candidate)
             if row is not None:
                 return row
         return None
@@ -231,7 +229,7 @@ class EndpointServiceImpl:
         ``/system/`` endpoints always resolve as ``PRIVATE``.
         """
         for name in proxy_name_to_endpoint_names(encoded_name):
-            row = self._endpoints.resolve(name)
+            row = self._db.caches[EndpointsProjection].resolve(name)
             if row is not None:
                 return ResolvedEndpoint(name=row.name, address=row.address, access=row.access)
             address = self._system_endpoints.get(name)

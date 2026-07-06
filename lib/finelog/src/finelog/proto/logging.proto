@@ -59,6 +59,11 @@ message LogBatch {
 message PushLogsRequest {
   string key = 1;
   repeated LogEntry entries = 2;
+  // Origin cluster for these entries, stored on the log row's `cluster` column so
+  // a global finelog can namespace logs it collects from many federated clusters.
+  // Writer-supplied and trusted (every writer is authenticated); a relay sets it
+  // to the cluster it forwards for. Empty for a local single-cluster push.
+  string cluster = 3;
 }
 
 message PushLogsResponse {}
@@ -87,6 +92,11 @@ message FetchLogsRequest {
   bool tail = 6;               // Return last N entries instead of first N
   string min_level = 7;        // Minimum level (DEBUG/INFO/WARNING/ERROR/CRITICAL)
   MatchScope match_scope = 8;  // How `source` is interpreted
+  // Restrict to rows whose origin `cluster` (set by the writer on PushLogs)
+  // equals this value, so a global finelog's reads can select one federated
+  // cluster's logs. Empty = unfiltered (all origins) — the local single-cluster
+  // read behavior.
+  string cluster = 9;
 }
 
 message FetchLogsResponse {

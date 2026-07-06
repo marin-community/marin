@@ -79,6 +79,7 @@ class LogForwarder:
         state_path: Path,
         batch_lines: int = _DEFAULT_BATCH_LINES,
         poll_interval_seconds: float = _DEFAULT_POLL_INTERVAL_SECONDS,
+        cluster: str = "",
     ):
         self._source = source
         self._target = target
@@ -86,6 +87,11 @@ class LogForwarder:
         self._state_path = Path(state_path)
         self._batch_lines = batch_lines
         self._poll_interval = poll_interval_seconds
+        # Origin cluster stamped onto every forwarded batch (the target's
+        # ``cluster`` column), so a global hub finelog can namespace the logs it
+        # collects from each relaying cluster. Empty forwards without a cluster
+        # (a single-cluster relay); the Iris relay sets it to its real cluster id.
+        self._cluster = cluster
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         # In-memory observability counters (the state file only needs the cursor).
@@ -169,7 +175,7 @@ class LogForwarder:
 
         try:
             for key, entries in groups.items():
-                self._target.push_batch(key, entries)
+                self._target.push_batch(key, entries, cluster=self._cluster)
         except Exception as exc:
             self._failed += 1
             logger.warning(

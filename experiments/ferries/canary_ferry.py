@@ -176,8 +176,10 @@ def build() -> ArtifactStep[LevanterCheckpoint]:
         # both pools. With the smaller representative model above this is well
         # within v4's budget.
         batch_size = env_int("CANARY_BATCH_SIZE", 128)
-        # Hold the step count steady (~476) so wall-clock stays bounded after the
-        # batch shrink: tokens = batch_size * max_seq_len * steps.
+        # Keep wall-clock bounded via a fixed token budget: tokens = batch_size *
+        # max_seq_len * steps. At 250M tokens with batch 128 and the heuristic
+        # model's max_seq_len=8192 this is ~238 steps (the regression gate's
+        # CANARY_MIN_STEPS floor is set accordingly).
         target_tokens = env_int("CANARY_TARGET_TOKENS", 250_000_000)
         name = "canary-ferry-moe"
         resources = ResourceConfig.with_tpu(_tpu_types_from_env())

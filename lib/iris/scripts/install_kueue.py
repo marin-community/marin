@@ -65,6 +65,7 @@ Why this exists / what the CoreWeave docs leave out:
   block this script injects via the chart's ``managerConfig``.
 """
 
+import json
 import os
 import subprocess
 import tempfile
@@ -81,6 +82,7 @@ from iris.cluster.platforms.k8s.coreweave_topology import (
     CW_LABEL_NVLINK_DOMAIN,
     CW_LABEL_SUPERPOD,
 )
+from iris.cluster.platforms.k8s.types import IRIS_PRIORITY_CLASS_SYSTEM, iris_priority_class_manifest
 
 # Right after a fresh install Kueue's internal cert manager has not yet populated
 # the webhook caBundle, so admission/conversion webhook calls fail transiently
@@ -525,6 +527,39 @@ def _helm_upgrade(chart: str, release: str, values_file: str, hflags: list[str],
     )
 
 
+def _pin_manager_priority(kflags: list[str]) -> None:
+    """Pin kueue-controller-manager to the iris-system PriorityClass.
+
+    The manager serves Kueue's admission webhook — a hard dependency of every pod
+    CREATE in the Iris namespace. The helm charts leave it at priority 0, below
+    every Iris user job (iris-interactive=10), so a user pod can legally preempt
+    it; when it dies the webhook loses its endpoint and all pod admission fails
+    clusterwide until it reschedules. Pinning it to iris-system (10000, above
+    iris-production) makes it non-preemptible.
+
+    Applied out of band because neither chart variant exposes a priorityClassName
+    value. Helm 3's 3-way merge preserves fields it never set, so this survives
+    later `helm upgrade`s; install_kueue also re-applies it on every run.
+    """
+    click.secho("==> Pinning kueue-controller-manager to the iris-system PriorityClass", fg="blue", bold=True)
+    kubectl_apply_docs([iris_priority_class_manifest(IRIS_PRIORITY_CLASS_SYSTEM)], kflags)
+    patch = json.dumps({"spec": {"template": {"spec": {"priorityClassName": IRIS_PRIORITY_CLASS_SYSTEM}}}})
+    run(
+        [
+            "kubectl",
+            *kflags,
+            "-n",
+            OPERATOR_NS,
+            "patch",
+            "deploy/kueue-controller-manager",
+            "--type=strategic",
+            "-p",
+            patch,
+        ],
+        check=True,
+    )
+
+
 def _wait_controller(kflags: list[str]) -> None:
     click.secho("==> Waiting for the Kueue controller to become available", fg="blue", bold=True)
     run(
@@ -560,6 +595,7 @@ def _apply(
         ["kubectl", *kflags, "wait", "--for=condition=Established", f"crd/{TOPOLOGY_CRD}", "--timeout=120s"],
         check=True,
     )
+    _pin_manager_priority(kflags)
     _wait_controller(kflags)
 
     api_version = topology_api_version(kflags)

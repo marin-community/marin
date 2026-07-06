@@ -57,6 +57,15 @@ def _auth_env_block(cfg: FinelogConfig) -> str:
     return f"            - name: FINELOG_AUTH_POLICY\n              value: '{policy}'"
 
 
+def _priority_class_block(cfg: FinelogConfig) -> str:
+    """Render the pod-spec `priorityClassName` line, or "" when none is configured."""
+    assert cfg.deployment.k8s is not None
+    name = cfg.deployment.k8s.priority_class_name
+    if not name:
+        return ""
+    return f"      priorityClassName: {name}"
+
+
 def _render_manifest(template_path: Path, cfg: FinelogConfig) -> str:
     """Render a single k8s manifest template against `cfg`.
 
@@ -80,6 +89,7 @@ def _render_manifest(template_path: Path, cfg: FinelogConfig) -> str:
         "storage_class_block": storage_class_block,
         "storage_gb": k8s.storage_gb,
         "auth_env_block": _auth_env_block(cfg),
+        "priority_class_block": _priority_class_block(cfg),
     }
     referenced = set(_TEMPLATE_VAR_RE.findall(template))
     return render_template(template, **{k: v for k, v in all_vars.items() if k in referenced})
@@ -160,6 +170,33 @@ def _kubectl_apply(manifest: str) -> None:
     _kubectl("apply", "-f", "-", stdin=manifest)
 
 
+def _ensure_priority_class(cfg: FinelogConfig) -> None:
+    """Create the configured PriorityClass (idempotently) before the Deployment.
+
+    A pod referencing a missing PriorityClass is rejected at admission, and on a
+    fresh cluster finelog is brought up before Iris creates the iris-* bands. So
+    finelog provisions its own scheduling dependency rather than depending on
+    ordering. `kubectl apply` is a no-op when the class already exists with the
+    same immutable value/preemptionPolicy (e.g. Iris created it first), and fails
+    loudly on a real mismatch. PreemptLowerPriority matches the iris-system band:
+    the control plane may evict a lower-priority pod to stay scheduled.
+    """
+    assert cfg.deployment.k8s is not None
+    k8s = cfg.deployment.k8s
+    if k8s.priority_class_name is None:
+        return
+    manifest = {
+        "apiVersion": "scheduling.k8s.io/v1",
+        "kind": "PriorityClass",
+        "metadata": {"name": k8s.priority_class_name},
+        "value": k8s.priority_class_value,
+        "preemptionPolicy": "PreemptLowerPriority",
+        "globalDefault": False,
+    }
+    click.echo(f"Ensuring PriorityClass {k8s.priority_class_name} (value {k8s.priority_class_value})...")
+    _kubectl_apply(json.dumps(manifest))
+
+
 def k8s_up(cfg: FinelogConfig) -> None:
     """Render manifests and apply them; wait for the deployment to roll out.
 
@@ -170,6 +207,7 @@ def k8s_up(cfg: FinelogConfig) -> None:
     assert cfg.deployment.k8s is not None
     cfg = replace(cfg, image=resolve_image_digest(cfg.image))
     k8s = cfg.deployment.k8s
+    _ensure_priority_class(cfg)
     secret_manifest = _build_s3_secret_manifest(cfg)
     if secret_manifest is not None:
         click.echo(f"Applying Secret {_s3_secret_name(cfg)} (S3 credentials)...")

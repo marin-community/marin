@@ -64,10 +64,31 @@ def _is_blackwell_gpu_backend() -> bool:
     return any(name in device_kind for name in ("B200", "B300", "GB200", "GB300"))
 
 
+# Megablox GMM tiling (m, k, n). The ``k`` (contraction) dim is the tightest VMEM
+# constraint: TPU v4 has less VMEM and only fits k=512; other generations use k=1024.
+_MEGABLOX_TILE_DEFAULT: tuple[int, int, int] = (512, 1024, 1024)
+_MEGABLOX_TILE_V4: tuple[int, int, int] = (512, 512, 1024)  # halved k for v4's smaller VMEM
+
+
+def _megablox_tile_size() -> tuple[int, int, int]:
+    """Device-dependent (m, k, n) tiling for the megablox GMM.
+
+    Defaults to k=1024; TPU v4 downsizes to k=512 to fit its smaller VMEM.
+    """
+    try:
+        device_kind = jax.devices()[0].device_kind.lower()
+    except (RuntimeError, IndexError):
+        return _MEGABLOX_TILE_DEFAULT
+    # device_kind is e.g. "TPU v4", "TPU v5 lite", "TPU v5p", "TPU v6e".
+    if "v4" in device_kind:
+        return _MEGABLOX_TILE_V4
+    return _MEGABLOX_TILE_DEFAULT
+
+
 def _ragged_dot_megablox_impl(lhs: jax.Array, rhs: jax.Array, group_sizes: jax.Array) -> jax.Array:
     if _gmm_megablox is None:
         raise NotImplementedError("megablox GMM is not available (TPU-only)")
-    tile_size = (512, 1024, 1024)  # (m, k, n)
+    tile_size = _megablox_tile_size()
     m, k, n = lhs.shape[0], lhs.shape[1], rhs.shape[2]
     return _gmm_megablox(
         lhs,

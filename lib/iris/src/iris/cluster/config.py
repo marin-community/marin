@@ -33,6 +33,7 @@ from rigging.timing import Duration
 from iris.cluster.tpu_topology import TPU_FAMILY_VARIANT_PREFIX, get_tpu_topology, tpu_variant_name
 from iris.cluster.types import (
     DEFAULT_BACKEND_ID,
+    LOCAL_CLUSTER,
     AcceleratorType,
     CapacityType,
     GcpSliceMode,
@@ -455,6 +456,8 @@ class CoreweaveControllerConfig(_Config):
 class ControllerVmConfig(_OneofConfig):
     _ONEOF_ARMS = ("gcp", "manual", "local", "coreweave")
     image: str = ""  # controller docker image (shared by all controller types)
+    # Periodic checkpoint interval (seconds); 0 = controller default (hourly).
+    checkpoint_interval_seconds: float = 0
     gcp: GcpControllerConfig | None = None
     manual: ManualControllerConfig | None = None
     local: LocalControllerConfig | None = None
@@ -507,7 +510,15 @@ class IapAuthConfig(_Config):
     url: str = ""
     oauth_client_id: str = ""
     oauth_client_secret: str = ""
+    # OIDC ID-token audiences the controller accepts on interactive-login tokens
+    # (the `iris login` user flow); typically just the desktop client id.
     audiences: list[str] = Field(default_factory=list)
+    # Audiences a service-account (CI / in-cluster) caller mints its IAP *edge*
+    # token for -- kept separate from the login `audiences` above. Empty falls
+    # back to the desktop client id, which IAP registers as a programmatic client
+    # (sufficient for the common single-client setup); set this only to give
+    # machine callers an `aud` distinct from the interactive-login client.
+    programmatic_audiences: list[str] = Field(default_factory=list)
     signed_header_audience: str = ""
     # Role granted to an IAP-verified email with no row in the user store; a
     # provisioned user always resolves to their stored role. "admin" makes
@@ -970,10 +981,25 @@ def _validate_backends(config: IrisClusterConfig) -> None:
 
 
 def _validate_peers(config: IrisClusterConfig) -> None:
-    """Validate the ``peers:`` federation registry."""
+    """Validate the ``peers:`` federation registry.
+
+    ``'local'`` is reserved as the federation sentinel for "this controller"; the
+    cluster's own ``name`` and every peer id must stay disjoint from it so the
+    sentinel and the real cluster-id namespace never collide.
+    """
+    if config.name == LOCAL_CLUSTER:
+        raise ValueError(
+            f"cluster name may not be {LOCAL_CLUSTER!r}: it is reserved as the federation "
+            "sentinel for this controller. Choose a distinct cluster name."
+        )
     for peer_id, peer in config.peers.items():
         if not peer_id.strip():
             raise ValueError("peers: peer id must be a non-empty string.")
+        if peer_id == LOCAL_CLUSTER:
+            raise ValueError(
+                f"peer id may not be {LOCAL_CLUSTER!r}: it is reserved as the federation "
+                "sentinel. A peer must have a distinct cluster id."
+            )
         if not peer.controller_address.strip():
             raise ValueError(f"peer '{peer_id}': controller_address is required.")
         if peer.static_token and not peer.cluster:

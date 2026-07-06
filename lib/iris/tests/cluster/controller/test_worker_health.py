@@ -177,7 +177,7 @@ def test_seeds_liveness_from_persisted_workers(tmp_path: Path) -> None:
             cur.execute(insert(workers_table).values(worker_id="w-seed-2", address="10.0.0.2:8080"))
 
         health = WorkerHealthTracker()
-        worker_attrs = WorkerAttrsProjection(db, owns_scale_group=lambda _scale_group: True)
+        worker_attrs = WorkerAttrsProjection(db)
 
         # Replicate _seed_liveness_from_workers
         now_ms = Timestamp.now().epoch_ms()

@@ -39,7 +39,6 @@ class RoutingRequest:
     """The submit-time context the router decides on."""
 
     constraints: Sequence[Constraint]
-    user: str
     # Whether at least one local backend can host the job's shape (computed by the
     # feasibility gate before routing).
     local_feasible: bool

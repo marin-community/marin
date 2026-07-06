@@ -36,7 +36,10 @@ from iris.cluster.platforms.k8s.controller import (
     K8sControllerProvider,
 )
 from iris.cluster.platforms.k8s.fake import InMemoryK8sService
-from iris.cluster.platforms.k8s.types import K8sResource
+from iris.cluster.platforms.k8s.types import (
+    K8sResource,
+    iris_priority_class_manifest,
+)
 from iris.cluster.platforms.types import (
     InfraError,
     Labels,
@@ -71,9 +74,9 @@ def _auto_ready_deployment(k8s: InMemoryK8sService, name: str, timeout: float = 
 
 @pytest.fixture(autouse=True)
 def _s3_env_vars(monkeypatch):
-    """Set R2_ACCESS_KEY_ID / R2_SECRET_ACCESS_KEY so the S3 task-env build succeeds."""
-    monkeypatch.setenv("R2_ACCESS_KEY_ID", "test-key-id")
-    monkeypatch.setenv("R2_SECRET_ACCESS_KEY", "test-key-secret")
+    """Set CW_KEY_ID / CW_KEY_SECRET so the S3 task-env build succeeds."""
+    monkeypatch.setenv("CW_KEY_ID", "test-key-id")
+    monkeypatch.setenv("CW_KEY_SECRET", "test-key-secret")
 
 
 # ============================================================================
@@ -181,11 +184,19 @@ def test_start_controller_creates_all_resources():
     node_selector = deploy_spec["template"]["spec"]["nodeSelector"]
     assert node_selector == {iris_labels.iris_scale_group: "cpu-erapids"}
 
+    # Controller is stamped with the control-plane PriorityClass, and that class
+    # is provisioned so the reference resolves at admission.
+    assert deploy_spec["template"]["spec"]["priorityClassName"] == "iris-system"
+    assert k8s.get_json(K8sResource.PRIORITY_CLASSES, "iris-system") is not None
+
     # Controller consumes that env via envFrom (S3 + injected, one flow).
     container = deploy_spec["template"]["spec"]["containers"][0]
     assert container["envFrom"] == [{"secretRef": {"name": "iris-task-env", "optional": True}}]
+    # CPU is requested but unlimited (Burstable QoS, not Guaranteed) so the
+    # controller can burst onto spare node cores during reconcile spikes; memory
+    # is capped to protect the node (issue #6944).
     assert container["resources"]["requests"] == {"cpu": _CONTROLLER_CPU_REQUEST, "memory": _CONTROLLER_MEMORY_REQUEST}
-    assert container["resources"]["limits"] == {"cpu": _CONTROLLER_CPU_REQUEST, "memory": _CONTROLLER_MEMORY_REQUEST}
+    assert container["resources"]["limits"] == {"memory": _CONTROLLER_MEMORY_REQUEST}
     # Recreate (not RollingUpdate): the old controller pod must be gone before
     # the new one mounts the ReadWriteOnce SQLite state PVC.
     assert deploy_spec["strategy"] == {"type": "Recreate"}
@@ -203,6 +214,31 @@ def test_start_controller_creates_all_resources():
 
     # No public_proxy_host configured → no Ingress (ClusterIP only).
     assert k8s.get_json(K8sResource.INGRESSES, _CONTROLLER_PROXY_INGRESS_NAME) is None
+
+    t.join(timeout=5)
+    provider.shutdown()
+
+
+def test_start_controller_local_state_dir_uses_hostpath_not_pvc():
+    """Setting storage.local_state_dir mounts it via hostPath and creates no PVC."""
+    provider, k8s = _make_provider()
+    cluster_config = _make_cluster_config(remote_state_dir="s3://test-bucket/bundles")
+    cluster_config.storage.local_state_dir = "/mnt/local/iris-controller-state"
+
+    t = threading.Thread(target=_auto_ready_deployment, args=(k8s, "iris-controller"), daemon=True)
+    t.start()
+
+    provider.start_controller(cluster_config)
+
+    assert k8s.get_json(K8sResource.PERSISTENT_VOLUME_CLAIMS, _CONTROLLER_STATE_PVC_NAME) is None
+    dep = k8s.get_json(K8sResource.DEPLOYMENTS, "iris-controller")
+    spec = dep["spec"]["template"]["spec"]
+    container = spec["containers"][0]
+    assert {"name": "local-state", "mountPath": "/mnt/local/iris-controller-state"} in container["volumeMounts"]
+    assert {
+        "name": "local-state",
+        "hostPath": {"path": "/mnt/local/iris-controller-state", "type": "DirectoryOrCreate"},
+    } in spec["volumes"]
 
     t.join(timeout=5)
     provider.shutdown()
@@ -605,12 +641,12 @@ def test_start_controller_errors_with_invalid_scale_group():
 
 def test_start_controller_errors_without_s3_credentials(monkeypatch):
     """start_controller raises when S3 storage is configured but R2 credentials are not set."""
-    monkeypatch.delenv("R2_ACCESS_KEY_ID", raising=False)
-    monkeypatch.delenv("R2_SECRET_ACCESS_KEY", raising=False)
+    monkeypatch.delenv("CW_KEY_ID", raising=False)
+    monkeypatch.delenv("CW_KEY_SECRET", raising=False)
     provider, _ = _make_provider()
     cluster_config = _make_cluster_config(remote_state_dir="s3://my-bucket/bundles")
 
-    with pytest.raises(InfraError, match="R2_ACCESS_KEY_ID and R2_SECRET_ACCESS_KEY"):
+    with pytest.raises(InfraError, match="CW_KEY_ID and CW_KEY_SECRET"):
         provider.start_controller(cluster_config)
     provider.shutdown()
 
@@ -764,8 +800,8 @@ def test_start_controller_crash_loop_includes_logs():
 
 def test_start_controller_skips_s3_for_gs_storage(monkeypatch):
     """start_controller succeeds without S3 credentials when using gs:// storage."""
-    monkeypatch.delenv("R2_ACCESS_KEY_ID", raising=False)
-    monkeypatch.delenv("R2_SECRET_ACCESS_KEY", raising=False)
+    monkeypatch.delenv("CW_KEY_ID", raising=False)
+    monkeypatch.delenv("CW_KEY_SECRET", raising=False)
     provider, k8s = _make_provider()
     cluster_config = _make_cluster_config(remote_state_dir="gs://test-bucket/bundles")
 
@@ -872,6 +908,13 @@ def test_ensure_kueue_queues_noop_without_cluster_queue():
     provider.ensure_kueue_queues(_make_cluster_config())
     assert k8s.get_json(K8sResource.LOCAL_QUEUES, "iris-lq") is None
     provider.shutdown()
+
+
+def test_iris_priority_class_manifest_rejects_unknown_band():
+    """The Kueue installer pins its manager via this helper; an unknown band must
+    raise rather than silently return a wrong-priority (or empty) manifest."""
+    with pytest.raises(ValueError, match="unknown Iris priority class"):
+        iris_priority_class_manifest("iris-nonexistent")
 
 
 # ============================================================================

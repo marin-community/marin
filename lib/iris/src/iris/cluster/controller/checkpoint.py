@@ -307,6 +307,14 @@ def _find_latest_checkpoint_dir(remote_state_dir: str) -> str | None:
     return _reconstruct_uri(remote_state_dir, latest_path)
 
 
+def latest_checkpoint_epoch_ms(remote_state_dir: str) -> int | None:
+    """Return the epoch_ms of the most recent remote checkpoint, or None if none exists."""
+    found = _find_latest_checkpoint_dir(remote_state_dir)
+    if found is None:
+        return None
+    return int(found.rstrip("/").rsplit("/", 1)[-1])
+
+
 def prune_old_checkpoints(
     remote_state_dir: str,
     max_age: Duration = DEFAULT_PRUNE_AGE,

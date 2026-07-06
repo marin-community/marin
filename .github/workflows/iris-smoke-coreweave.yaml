@@ -88,8 +88,8 @@ jobs:
       # work without needing to tunnel to an existing controller first.
       - name: Start controller
         env:
-          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          CW_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          CW_KEY_SECRET: ${{ secrets.R2_SECRET_ACCESS_KEY }}
         run: |
           cd lib/iris && uv run --group dev iris -v \
             --config=config/ci-coreweave.yaml \

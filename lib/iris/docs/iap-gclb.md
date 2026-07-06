@@ -116,6 +116,10 @@ auth:
     oauth_client_secret: <DESKTOP_CLIENT_SECRET>      # non-confidential, RFC 8252 §8.5
     audiences:
       - <DESKTOP_CLIENT_ID>.apps.googleusercontent.com
+    # Optional: a dedicated aud for service-account (CI) callers. Omit to fall
+    # back to the desktop client id, which IAP admits as a programmatic client.
+    # programmatic_audiences:
+    #   - <IAP_SECURED_CLIENT_ID>.apps.googleusercontent.com
     signed_header_audience: /projects/<PROJECT_NUMBER>/global/backendServices/<BACKEND_ID>
   admin_users:
     - you@example.com
@@ -148,6 +152,70 @@ uv run lib/iris/scripts/iap_gclb.py grant marin --member group:team@example.com
 Authentication is not authorization: any Google account can sign in, but an
 identity not on the allowlist is rejected by IAP with `403` before the request
 reaches the controller.
+
+## How a caller is admitted: audience vs. identity
+
+Every edge token an IAP caller presents carries two claims that IAP checks
+**independently**, and conflating them is the classic way to misdiagnose an auth
+failure:
+
+- **Audience (`aud`) → authentication.** "Is this a token I recognize?" IAP
+  admits a bearer OIDC token only if its `aud` is one of the OAuth clients
+  registered on the backend — the Web anchor client, or any id in the Web
+  client's `programmaticClients` (the desktop client is registered there, so
+  `aud = <desktop client id>` is accepted). A token with an unrecognized `aud`,
+  or no token at all, is rejected with **`401`**.
+- **Identity (`email`/`sub`) → authorization.** "Is this caller allowed?" The
+  authenticated identity must hold `roles/iap.httpsResourceAccessor` on the
+  cluster's backend service (the allowlist above). An identity not on the
+  allowlist is rejected with **`403`**.
+
+These are orthogonal. Granting a service account the allowlist role (identity)
+does nothing if the client never attaches an edge token (audience) — the request
+dies at the `401` step, before authorization is ever consulted. That exact
+gap — a cluster whose config listed only the desktop id, leaving the
+service-account path with no audience to mint against — caused the CI `401`
+outage this section documents.
+
+### The three caller paths
+
+The `aud` is always a client IAP registers; only the **identity** and how the
+token is minted differ. Resolution lives in `rigging/credentials.py`
+(`_edge_provider`) and `iris/cli/connect.py` (`_cluster_auth_from_config`):
+
+| Caller | Token source | `aud` | Identity |
+| ------ | ------------ | ----- | -------- |
+| **Human** (after `iris login`) | re-mint from the cached desktop-OAuth refresh token (`IapRefreshTokenProvider`) | desktop client id | the signed-in user |
+| **Service account / CI** (ambient key, no login) | `fetch_id_token` from ambient SA credentials (`IapServiceAccountTokenProvider`) | dedicated programmatic audience if the cluster configures one, else the desktop client id | the SA email |
+| **Loopback / in-cluster** | none — reaches the controller directly, trusted by `auth.trusted_cidrs` / loopback | — | transport-trusted |
+
+```mermaid
+sequenceDiagram
+    participant C as iris CLI (caller)
+    participant IAP as IAP edge (GCLB)
+    participant K as Controller
+
+    Note over C: mint the edge token (OIDC ID token)
+    alt Human, after `iris login`
+        C->>C: re-mint from cached refresh token<br/>aud = desktop client id · id = user
+    else Service account / CI
+        C->>C: fetch_id_token(aud = desktop client id)<br/>id = SA email
+    end
+    C->>IAP: RPC + Proxy-Authorization: Bearer <edge token>
+    IAP->>IAP: authn — is aud a registered client?<br/>no → 401
+    IAP->>IAP: authz — identity holds iap.httpsResourceAccessor?<br/>no → 403
+    IAP->>K: forward + X-Goog-IAP-JWT-Assertion<br/>(aud = signed_header_audience)
+    K->>K: verify assertion → map identity → role
+    K-->>C: response
+```
+
+**Config takeaway.** `auth.iap.audiences` and `auth.iap.programmatic_audiences`
+are independent: `audiences` lists the interactive-login `aud`s the controller
+verifies, while `programmatic_audiences` lists the `aud`s a service account mints
+its edge token for. Leave `programmatic_audiences` empty and the service-account
+path falls back to the desktop client id (IAP registers it as a programmatic
+client) — sufficient for the common single-client setup. Set it only to give
+machine callers an `aud` distinct from the interactive-login client.
 
 ## Firewall
 

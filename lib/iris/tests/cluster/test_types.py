@@ -17,7 +17,16 @@ from iris.cluster.constraints import (
     preemptible_constraint,
     region_constraint,
 )
-from iris.cluster.types import Entrypoint, JobName, TaskAttempt, adjust_tpu_replicas, gpu_device, tpu_device
+from iris.cluster.types import (
+    LOCAL_CLUSTER,
+    Entrypoint,
+    JobName,
+    TaskAttempt,
+    adjust_tpu_replicas,
+    gpu_device,
+    is_federated,
+    tpu_device,
+)
 from iris.rpc import job_pb2
 
 
@@ -93,48 +102,12 @@ def test_job_name_roundtrip_and_hierarchy():
     assert not parsed.is_ancestor_of(JobName.root("test-user", "root"), include_self=False)
 
 
-def test_job_name_with_root_job_rebases_below_the_root():
-    # A direct task and a nested-child task both keep everything below the root.
-    remote_root = JobName.from_string("/alice/cw~job")
-    assert JobName.from_string("/alice/job/0").with_root_job(remote_root) == JobName.from_string("/alice/cw~job/0")
-    assert JobName.from_string("/alice/job/child/0").with_root_job(remote_root) == JobName.from_string(
-        "/alice/cw~job/child/0"
-    )
-    # The root itself rebases to the new root.
-    assert JobName.from_string("/alice/job").with_root_job(remote_root) == remote_root
-
-
-def test_job_name_with_root_job_requires_a_root():
-    with pytest.raises(ValueError):
-        JobName.from_string("/alice/job/0").with_root_job(JobName.from_string("/alice/cw~job/child"))
-
-
-def test_federated_remote_root_encodes_and_reverses():
-    root = JobName.from_string("/alice/train")
-    remote = JobName.federated_remote_root("cw", root)
-    assert remote == JobName.from_string("/alice/cw~train")
-    assert remote.is_federated_remote
-    assert remote.split_federated_root() == ("cw", root)
-    # Reversible even when the original name itself contains the delimiter: the
-    # cluster id is delimiter-free, so the first '~' is the join.
-    weird = JobName.federated_remote_root("cw", JobName.from_string("/alice/a~b"))
-    assert weird.split_federated_root() == ("cw", JobName.from_string("/alice/a~b"))
-
-
-def test_federated_remote_root_rejects_bad_cluster_id_and_non_root():
-    with pytest.raises(ValueError):
-        JobName.federated_remote_root("", JobName.from_string("/alice/train"))
-    with pytest.raises(ValueError):
-        JobName.federated_remote_root("c~w", JobName.from_string("/alice/train"))
-    with pytest.raises(ValueError):
-        JobName.federated_remote_root("cw", JobName.from_string("/alice/train/child"))
-
-
-def test_split_federated_root_rejects_a_local_name():
-    local = JobName.from_string("/alice/train/0")
-    assert not local.is_federated_remote
-    with pytest.raises(ValueError):
-        local.split_federated_root()
+def test_cluster_coordinate_helpers():
+    # Job ids are cluster-invariant; a job/task's cluster is either the reserved
+    # local sentinel (owned here) or a peer id (handed off), never both.
+    assert LOCAL_CLUSTER == "local"
+    assert not is_federated(LOCAL_CLUSTER)
+    assert is_federated("cw-us-east")
 
 
 @pytest.mark.parametrize("base", ["https://iris.oa.dev", "https://iris.oa.dev/"])

@@ -130,10 +130,9 @@ def apply_event(transitions: ControllerTestState, event: IrisEvent) -> Any:
                     job_id=job_id,
                     request=request,
                     ts=ts,
-                    run_template_cache=transitions._run_template_cache,
                 )
             case CancelJob(job_id, reason):
-                return ops.job.cancel(cur, job_id=job_id, reason=reason, endpoints=transitions._endpoints)
+                return ops.job.cancel(cur, job_id=job_id, reason=reason)
             case RegisterOrRefreshWorker(worker_id, address, metadata, ts, slice_id, scale_group):
                 return ops.worker.register(
                     cur,
@@ -142,7 +141,6 @@ def apply_event(transitions: ControllerTestState, event: IrisEvent) -> Any:
                     metadata=metadata,
                     ts=ts,
                     health=transitions._health,
-                    worker_attrs=transitions._worker_attrs,
                     slice_id=slice_id,
                     scale_group=scale_group,
                 )
@@ -153,14 +151,12 @@ def apply_event(transitions: ControllerTestState, event: IrisEvent) -> Any:
                     cur,
                     [request],
                     health=transitions._health,
-                    endpoints=transitions._endpoints,
                     now=Timestamp.now(),
                 )
             case PreemptTask(task_id, reason):
                 return finalize(
                     cur,
                     [TerminalDecision(TerminalKind.PREEMPT, task_id, reason)],
-                    endpoints=transitions._endpoints,
                     now=Timestamp.now(),
                 )
             case CancelTasksForTimeout(task_ids, reason):
@@ -170,18 +166,15 @@ def apply_event(transitions: ControllerTestState, event: IrisEvent) -> Any:
                         TerminalDecision(TerminalKind.TIMEOUT, tid, reason)
                         for tid in sorted(task_ids, key=lambda t: t.to_wire())
                     ],
-                    endpoints=transitions._endpoints,
                     now=Timestamp.now(),
                 )
             case DrainForDirectProvider(max_promotions):
-                return dispatch.drain_for_dispatch(
-                    cur, cache=transitions._run_template_cache, max_promotions=max_promotions
-                )
+                return dispatch.drain_for_dispatch(cur, max_promotions=max_promotions)
             case ApplyDirectProviderUpdates(updates):
                 # Relocated glue: author the effects from this write transaction,
                 # then commit them — the two steps the controller now does apart.
                 effects = apply_dispatch_updates(CursorTransitionReader(cur), updates, now=Timestamp.now())
-                commit_effects(cur, effects, endpoints=transitions._endpoints)
+                commit_effects(cur, effects)
                 return effects
             case AddEndpoint(endpoint):
                 return transitions._endpoints.add(cur, endpoint)

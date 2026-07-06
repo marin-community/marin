@@ -32,10 +32,10 @@ from iris.cluster.inject_env import TASK_ENV_SECRET_NAME, collect_inject_env, pr
 from iris.cluster.platforms.k8s.constants import COREWEAVE_INTERRUPTABLE_TOLERATION, NVIDIA_GPU_TOLERATION
 from iris.cluster.platforms.k8s.service import CloudK8sService, K8sService
 from iris.cluster.platforms.k8s.types import (
-    IRIS_PRIORITY_CLASS_BATCH,
-    IRIS_PRIORITY_CLASS_INTERACTIVE,
-    IRIS_PRIORITY_CLASS_PRODUCTION,
+    IRIS_PRIORITY_CLASS_SYSTEM,
+    IRIS_PRIORITY_CLASSES,
     K8sResource,
+    build_priority_class_manifest,
     parse_k8s_timestamp,
 )
 from iris.cluster.platforms.types import InfraError, Labels, local_queue_name
@@ -57,9 +57,24 @@ _DEPLOYMENT_DELETE_TIMEOUT = 120.0
 # CoreWeave bare-metal provisioning/deprovisioning is slow; 60s is not enough.
 _KUBECTL_TIMEOUT = 1800.0
 
-_CONTROLLER_CPU_REQUEST = "4"
-_CONTROLLER_MEMORY_REQUEST = "16Gi"
+# The controller tracks every task pod in memory and runs a CPU-heavy reconcile
+# loop, so it needs generous headroom: a large fan-out (~1500 tokenize pods) OOMs
+# it at less memory, and a CPU-starved event loop misses the /health probe and
+# gets liveness-killed mid-reconcile (issue #6944). CPU is requested but left
+# without a limit so the Pod is Burstable, not Guaranteed — the controller is
+# never CFS-throttled at its guaranteed share and can burst onto spare node
+# cores during reconcile spikes. Memory is capped to protect the node.
+_CONTROLLER_CPU_REQUEST = "16"
+_CONTROLLER_MEMORY_REQUEST = "64Gi"
+# Relax the liveness/readiness deadline off the k8s defaults (1s / 3): a
+# busy-but-alive controller must not be SIGKILLed just because a /health request
+# queued behind a reconcile tick under heavy load.
+_CONTROLLER_PROBE_TIMEOUT_SECONDS = 10
+_CONTROLLER_PROBE_FAILURE_THRESHOLD = 6
 _CONTROLLER_STATE_PVC_NAME = "iris-controller-state"
+# Must match main.py's LOCAL_STATE_DIR_DEFAULT — the path the controller
+# process falls back to when storage.local_state_dir is unset.
+_DEFAULT_STATE_MOUNT_PATH = "/var/cache/iris/controller"
 _CONTROLLER_STATE_PVC_SIZE = "50Gi"
 
 
@@ -75,22 +90,22 @@ def _needs_virtual_host_addressing(endpoint_url: str) -> bool:
 
 
 def configure_client_s3(config: IrisClusterConfig) -> None:
-    """Configure S3 env vars for fsspec access on CoreWeave (R2 → AWS mapping).
+    """Configure S3 env vars for fsspec access on CoreWeave (CW_KEY_* → AWS mapping).
 
-    Maps R2_ACCESS_KEY_ID/R2_SECRET_ACCESS_KEY to their AWS equivalents and
-    sets FSSPEC_S3 with the correct endpoint and addressing style. No-op if the
-    config has no CoreWeave object storage endpoint.
+    Maps CW_KEY_ID/CW_KEY_SECRET to their AWS equivalents and sets FSSPEC_S3
+    with the correct endpoint and addressing style. No-op if the config has no
+    CoreWeave object storage endpoint.
     """
     coreweave = config.platform.coreweave
     if coreweave is None or not coreweave.object_storage_endpoint:
         return
     endpoint = coreweave.object_storage_endpoint
 
-    r2_key = os.environ.get("R2_ACCESS_KEY_ID", "")
-    r2_secret = os.environ.get("R2_SECRET_ACCESS_KEY", "")
-    if r2_key and r2_secret:
-        os.environ.setdefault("AWS_ACCESS_KEY_ID", r2_key)
-        os.environ.setdefault("AWS_SECRET_ACCESS_KEY", r2_secret)
+    cw_key = os.environ.get("CW_KEY_ID", "")
+    cw_secret = os.environ.get("CW_KEY_SECRET", "")
+    if cw_key and cw_secret:
+        os.environ.setdefault("AWS_ACCESS_KEY_ID", cw_key)
+        os.environ.setdefault("AWS_SECRET_ACCESS_KEY", cw_secret)
 
     os.environ.setdefault("AWS_ENDPOINT_URL", endpoint)
     os.environ.setdefault("AWS_REGION", "auto")
@@ -125,19 +140,25 @@ def _build_controller_deployment(
     node_selector: dict[str, str],
     task_env_secret: bool = False,
     fresh: bool = False,
+    state_mount_path: str = _DEFAULT_STATE_MOUNT_PATH,
+    local_state_hostpath: bool = False,
+    checkpoint_interval_seconds: float = 0,
 ) -> dict:
     """Build the controller Deployment manifest as a dict."""
-    # Reserve controller CPU/memory so Kubernetes doesn't classify this Pod
-    # as BestEffort. Matching limits keep the controller in Guaranteed QoS.
+    # Reserve controller CPU/memory so Kubernetes doesn't classify this Pod as
+    # BestEffort. Only memory has a limit, so the Pod is Burstable (not
+    # Guaranteed): the controller can burst onto spare node CPU during reconcile
+    # spikes instead of being throttled at its request. See the constants above.
     controller_resources = {
         "requests": {"cpu": _CONTROLLER_CPU_REQUEST, "memory": _CONTROLLER_MEMORY_REQUEST},
-        "limits": {"cpu": _CONTROLLER_CPU_REQUEST, "memory": _CONTROLLER_MEMORY_REQUEST},
+        "limits": {"memory": _CONTROLLER_MEMORY_REQUEST},
     }
-    # The controller SQLite DB lives on a PersistentVolumeClaim, so two
-    # controller pods must never mount the same local state dir at once. We
-    # guarantee that by tearing the old Deployment down and waiting for it to
-    # fully disappear before applying the new one (see start_controller); the
-    # Recreate strategy is belt-and-suspenders for any in-place apply path.
+    # The controller SQLite DB lives on a PersistentVolumeClaim (or, with
+    # local_state_hostpath, a node-local directory), so two controller pods
+    # must never mount the same local state dir at once. We guarantee that by
+    # tearing the old Deployment down and waiting for it to fully disappear
+    # before applying the new one (see start_controller); the Recreate
+    # strategy is belt-and-suspenders for any in-place apply path.
     deploy_spec: dict = {
         "replicas": 1,
         "selector": {"matchLabels": {"app": "iris-controller"}},
@@ -146,6 +167,9 @@ def _build_controller_deployment(
             "metadata": {"labels": {"app": "iris-controller"}},
             "spec": {
                 "serviceAccountName": "iris-controller",
+                # Pin the controller above every user band so a user pod can never
+                # preempt it off the shared control node (see IRIS_PRIORITY_CLASSES).
+                "priorityClassName": IRIS_PRIORITY_CLASS_SYSTEM,
                 "nodeSelector": node_selector,
                 # Tolerate the NVIDIA GPU taint (so the controller can run on
                 # GPU-only clusters with no CPU NodePool) and CoreWeave's
@@ -168,6 +192,11 @@ def _build_controller_deployment(
                             f"--port={port}",
                             "--config=/etc/iris/config.json",
                             *(["--fresh"] if fresh else []),
+                            *(
+                                [f"--checkpoint-interval={checkpoint_interval_seconds}"]
+                                if checkpoint_interval_seconds
+                                else []
+                            ),
                         ],
                         "ports": [{"containerPort": port}],
                         # The cluster default env (S3 storage auth + operator-injected
@@ -182,26 +211,34 @@ def _build_controller_deployment(
                         "resources": controller_resources,
                         "volumeMounts": [
                             {"name": "config", "mountPath": "/etc/iris", "readOnly": True},
-                            {"name": "local-state", "mountPath": "/var/cache/iris/controller"},
+                            {"name": "local-state", "mountPath": state_mount_path},
                         ],
                         "readinessProbe": {
                             "httpGet": {"path": "/health", "port": port},
                             "initialDelaySeconds": 10,
                             "periodSeconds": 10,
+                            "timeoutSeconds": _CONTROLLER_PROBE_TIMEOUT_SECONDS,
+                            "failureThreshold": _CONTROLLER_PROBE_FAILURE_THRESHOLD,
                         },
                         "livenessProbe": {
                             "httpGet": {"path": "/health", "port": port},
                             "initialDelaySeconds": 30,
                             "periodSeconds": 30,
+                            "timeoutSeconds": _CONTROLLER_PROBE_TIMEOUT_SECONDS,
+                            "failureThreshold": _CONTROLLER_PROBE_FAILURE_THRESHOLD,
                         },
                     },
                 ],
                 "volumes": [
                     {"name": "config", "configMap": {"name": "iris-cluster-config"}},
-                    {
-                        "name": "local-state",
-                        "persistentVolumeClaim": {"claimName": _CONTROLLER_STATE_PVC_NAME},
-                    },
+                    (
+                        {"name": "local-state", "hostPath": {"path": state_mount_path, "type": "DirectoryOrCreate"}}
+                        if local_state_hostpath
+                        else {
+                            "name": "local-state",
+                            "persistentVolumeClaim": {"claimName": _CONTROLLER_STATE_PVC_NAME},
+                        }
+                    ),
                 ],
             },
         },
@@ -365,6 +402,11 @@ class K8sControllerProvider:
                 f"{list(config.scale_groups.keys())}"
             )
 
+        # storage.local_state_dir set => mount it from node-local hostPath rather
+        # than the default network-attached PVC.
+        local_state_hostpath = bool(config.storage.local_state_dir)
+        state_mount_path = config.storage.local_state_dir or _DEFAULT_STATE_MOUNT_PATH
+
         self.ensure_rbac()
 
         # Build the cluster default env and project it into the controller and
@@ -392,8 +434,11 @@ class K8sControllerProvider:
         self.ensure_nodepools(config)
         self.ensure_kueue_queues(config)
         self.ensure_priority_classes()
-        self._kubectl.apply_json(_build_controller_state_pvc(namespace=self._namespace))
-        logger.info("PersistentVolumeClaim %s applied", _CONTROLLER_STATE_PVC_NAME)
+        if local_state_hostpath:
+            logger.info("controller local state uses node-local hostPath %s (no PVC)", state_mount_path)
+        else:
+            self._kubectl.apply_json(_build_controller_state_pvc(namespace=self._namespace))
+            logger.info("PersistentVolumeClaim %s applied", _CONTROLLER_STATE_PVC_NAME)
 
         deploy_kwargs = dict(
             namespace=self._namespace,
@@ -401,6 +446,9 @@ class K8sControllerProvider:
             port=port,
             node_selector={self._iris_labels.iris_scale_group: cw.scale_group},
             task_env_secret=projects_task_env_secret(config),
+            state_mount_path=state_mount_path,
+            local_state_hostpath=local_state_hostpath,
+            checkpoint_interval_seconds=config.controller.checkpoint_interval_seconds,
         )
         deploy_manifest = _build_controller_deployment(**deploy_kwargs, fresh=fresh)
         # Always stop the old controller before starting the new one. The
@@ -740,31 +788,19 @@ class K8sControllerProvider:
         logger.info("LocalQueue %s applied (clusterQueue=%s)", name, cluster_queue)
 
     def ensure_priority_classes(self) -> None:
-        """Create or update the iris-{production,interactive,batch} PriorityClass objects.
+        """Create or update the iris-{system,production,interactive,batch} PriorityClass objects.
 
-        PriorityClass is cluster-scoped. Iris owns these three names; any cluster
+        PriorityClass is cluster-scoped. Iris owns these names; any cluster
         running Iris gets them so pods are stamped without manual admin setup.
 
-        Priority values:
+        Priority values (see IRIS_PRIORITY_CLASSES):
+          iris-system     10000  — control plane (controller, finelog, Kueue); never preempted by user work
           iris-production  1000  — preempts interactive/batch; never preempted
           iris-interactive   10  — normal user work
           iris-batch          0  — opportunistic; below interactive, above CoreWeave NHC
         """
-        priority_classes = [
-            (IRIS_PRIORITY_CLASS_PRODUCTION, 1000, "PreemptLowerPriority"),
-            (IRIS_PRIORITY_CLASS_INTERACTIVE, 10, "PreemptLowerPriority"),
-            (IRIS_PRIORITY_CLASS_BATCH, 0, "Never"),
-        ]
-        for name, value, preemption_policy in priority_classes:
-            manifest = {
-                "apiVersion": "scheduling.k8s.io/v1",
-                "kind": "PriorityClass",
-                "metadata": {"name": name},
-                "value": value,
-                "preemptionPolicy": preemption_policy,
-                "globalDefault": False,
-                "description": f"Iris {name.removeprefix('iris-')} priority band",
-            }
+        for name, value, preemption_policy in IRIS_PRIORITY_CLASSES:
+            manifest = build_priority_class_manifest(name, value, preemption_policy)
             existing = self._kubectl.get_json(K8sResource.PRIORITY_CLASSES, name)
             if existing and (existing.get("value") != value or existing.get("preemptionPolicy") != preemption_policy):
                 # PriorityClass.value and preemptionPolicy are immutable. Existing
@@ -775,7 +811,7 @@ class K8sControllerProvider:
             self._kubectl.apply_json(manifest)
         logger.info(
             "PriorityClasses applied: %s",
-            ", ".join(n for n, _, _ in priority_classes),
+            ", ".join(n for n, _, _ in IRIS_PRIORITY_CLASSES),
         )
 
     # -- NodePool Management ---------------------------------------------------
@@ -900,17 +936,17 @@ class K8sControllerProvider:
     def _s3_task_env(self) -> dict[str, str]:
         """Compute S3 storage env (creds + endpoint + FSSPEC) from the operator's shell.
 
-        Maps the operator's R2 credentials to the AWS names boto3/s3fs expect and
-        derives endpoint/region/FSSPEC_S3 from the configured object-storage
-        endpoint. Folded into the iris-task-env Secret so the controller and every
-        task authenticate to s3:// without per-call-site configuration.
+        Maps the operator's CoreWeave object-storage credentials to the AWS
+        names boto3/s3fs expect and derives endpoint/region/FSSPEC_S3 from the
+        configured object-storage endpoint. Folded into the iris-task-env
+        Secret so the controller and every task authenticate to s3:// without
+        per-call-site configuration.
         """
-        key_id = os.environ.get("R2_ACCESS_KEY_ID")
-        key_secret = os.environ.get("R2_SECRET_ACCESS_KEY")
+        key_id = os.environ.get("CW_KEY_ID")
+        key_secret = os.environ.get("CW_KEY_SECRET")
         if not key_id or not key_secret:
             raise InfraError(
-                "R2_ACCESS_KEY_ID and R2_SECRET_ACCESS_KEY environment variables are required "
-                "for S3-compatible object storage"
+                "CW_KEY_ID and CW_KEY_SECRET environment variables are required for S3-compatible object storage"
             )
         env = {"AWS_ACCESS_KEY_ID": key_id, "AWS_SECRET_ACCESS_KEY": key_secret}
         endpoint = self._config.object_storage_endpoint

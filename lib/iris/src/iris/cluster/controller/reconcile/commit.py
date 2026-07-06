@@ -21,6 +21,7 @@ from sqlalchemy import update as sa_update
 
 from iris.cluster.controller.audit_logging import log_event
 from iris.cluster.controller.db import Tx
+from iris.cluster.controller.projections.attempt_counts import AttemptCountsProjection
 from iris.cluster.controller.projections.endpoints import EndpointsProjection
 from iris.cluster.controller.reconcile.effects import (
     AttemptRowDelta,
@@ -57,10 +58,6 @@ def _flush_tasks(cur: Tx, deltas: list[TaskRowDelta]) -> None:
             "b_exit_code": d.exit_code,
             "b_started_at": d.started_at.epoch_ms() if d.started_at is not None else None,
             "b_finished_at": d.finished_at.epoch_ms() if d.finished_at is not None else None,
-            # failure/preemption counts are set unconditionally; None means
-            # "leave column unchanged" via coalesce(new, col).
-            "b_failure_count": d.failure_count,
-            "b_preemption_count": d.preemption_count,
         }
         if d.state in ACTIVE_TASK_STATES:
             active_params.append(params)
@@ -75,8 +72,6 @@ def _flush_tasks(cur: Tx, deltas: list[TaskRowDelta]) -> None:
         "exit_code": func.coalesce(bindparam("b_exit_code"), tasks_table.c.exit_code),
         "started_at_ms": func.coalesce(tasks_table.c.started_at_ms, bindparam("b_started_at")),
         "finished_at_ms": bindparam("b_finished_at"),
-        "failure_count": func.coalesce(bindparam("b_failure_count"), tasks_table.c.failure_count),
-        "preemption_count": func.coalesce(bindparam("b_preemption_count"), tasks_table.c.preemption_count),
     }
 
     if active_params:
@@ -147,6 +142,9 @@ def _flush_attempts(cur: Tx, deltas: list[AttemptRowDelta]) -> None:
         ),
         params,
     )
+    # An attempt's state / started_at drives the derived failure & preemption
+    # counts, so invalidate the owning jobs' cached totals via the cursor's memo.
+    cur.caches[AttemptCountsProjection].invalidate_for_tasks(cur, [d.task_id for d in deltas])
 
 
 def _flush_jobs(cur: Tx, deltas: list[JobRowDelta]) -> None:
@@ -215,8 +213,6 @@ def _flush_jobs(cur: Tx, deltas: list[JobRowDelta]) -> None:
 def commit_effects(
     cur: Tx,
     effects: ControllerEffects,
-    *,
-    endpoints: EndpointsProjection,
 ) -> None:
     """Record a batch's ``effects`` within the caller's write transaction.
 
@@ -226,13 +222,17 @@ def commit_effects(
     trace. Health is NOT mutated here: ``effects.health.build_failed`` rides back
     to the controller, which folds it (with the backend's transport-observed
     events) through the single ``WorkerHealthTracker.apply`` site.
+
+    Attempt writes invalidate the derived-count cache through the cursor
+    (``cur.caches[AttemptCountsProjection]``); endpoint deletions reach the
+    projection the same way — no cache reference is threaded here.
     """
     _flush_tasks(cur, list(effects.tasks.values()))
     _flush_attempts(cur, list(effects.attempts.values()))
     _flush_jobs(cur, list(effects.jobs.values()))
 
     for d in effects.endpoint_deletions:
-        endpoints.remove_by_task(cur, d.task_id)
+        cur.caches[EndpointsProjection].remove_by_task(cur, d.task_id)
 
     log_events = effects.log_events
     if log_events:

@@ -7,13 +7,12 @@ import argparse
 import base64
 import re
 from collections.abc import Iterable
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from typing import Any
 
 from finelog.rpc import logging_pb2
 from finelog.rpc.logging_connect import LogServiceClientSync
 from google.protobuf import json_format
-from iris.cli.bug_report import gather_bug_report
 from iris.cli.job import build_job_summary
 from iris.cluster.log_keys import build_log_source
 from iris.cluster.runtime.profile import SYSTEM_PROCESS_TARGET
@@ -25,7 +24,6 @@ from iris.rpc.proto_display import job_state_friendly, task_state_friendly
 from mcp.server.fastmcp import FastMCP
 from rigging.auth import BearerTokenInjector, StaticTokenProvider, TokenProvider
 from rigging.credential_store import cluster_name_from_url, load_credentials
-from rigging.credentials import ClientCredentials
 from rigging.timing import Timestamp
 
 DEFAULT_LOG_LINES = 200
@@ -596,17 +594,6 @@ class IrisBabysitter:
             }
         return self.envelope(data)
 
-    def bug_report(self, *, job_id: str, tail: int = 50) -> dict[str, Any]:
-        report = gather_bug_report(
-            self.config.controller_url,
-            JobName.from_wire(job_id),
-            tail=tail,
-            credentials=(
-                ClientCredentials(token_provider=self.token_provider) if self.token_provider is not None else None
-            ),
-        )
-        return self.envelope(asdict(report))
-
     def zephyr_stage_progress(self, *, coord_job_id: str, max_lines: int = DEFAULT_ZEPHYR_LOG_LINES) -> dict[str, Any]:
         log_payload = self.tail_logs(target=coord_job_id, max_lines=max_lines, tail=True)["data"]
         lines = [entry["data"] for entry in log_payload["entries"]]
@@ -800,10 +787,6 @@ def build_server(service: IrisBabysitter, *, host: str = "127.0.0.1", port: int 
             duration_seconds=duration_seconds,
             include_locals=include_locals,
         )
-
-    @server.tool()
-    def iris_bug_report(job_id: str, tail: int = 50) -> dict[str, Any]:
-        return service.bug_report(job_id=job_id, tail=tail)
 
     @server.tool()
     def zephyr_stage_progress(coord_job_id: str, max_lines: int = DEFAULT_ZEPHYR_LOG_LINES) -> dict[str, Any]:

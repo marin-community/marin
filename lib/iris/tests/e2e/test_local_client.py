@@ -54,9 +54,9 @@ def test_command_entrypoint_preserves_env_vars(client):
 
     assert status.state == job_pb2.JOB_STATE_SUCCEEDED
 
-    # For attempt 0, build_common_iris_env omits the :attempt_id suffix
-    # (only appended for retries), so expect just the task_id wire format.
-    expected = job_id.task(0).to_wire()
+    # IRIS_TASK_ID is the canonical TaskAttempt wire form, so the first attempt
+    # carries the :0 suffix.
+    expected = f"{job_id.task(0).to_wire()}:0"
     response = client.fetch_logs(
         f"{job_id.task(0).to_wire()}:",
         match_scope=logging_pb2.MATCH_SCOPE_PREFIX,

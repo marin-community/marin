@@ -161,7 +161,7 @@ class Controller(_message.Message):
         job_id: str
         def __init__(self, job_id: _Optional[str] = ...) -> None: ...
     class JobQuery(_message.Message):
-        __slots__ = ("scope", "parent_job_id", "name_filter", "state_filter", "sort_field", "sort_direction", "offset", "limit", "job_id_prefix", "backend_id")
+        __slots__ = ("scope", "parent_job_id", "name_filter", "state_filter", "sort_field", "sort_direction", "offset", "limit", "job_id_prefix", "backend_id", "cluster")
         SCOPE_FIELD_NUMBER: _ClassVar[int]
         PARENT_JOB_ID_FIELD_NUMBER: _ClassVar[int]
         NAME_FILTER_FIELD_NUMBER: _ClassVar[int]
@@ -172,6 +172,7 @@ class Controller(_message.Message):
         LIMIT_FIELD_NUMBER: _ClassVar[int]
         JOB_ID_PREFIX_FIELD_NUMBER: _ClassVar[int]
         BACKEND_ID_FIELD_NUMBER: _ClassVar[int]
+        CLUSTER_FIELD_NUMBER: _ClassVar[int]
         scope: Controller.JobQueryScope
         parent_job_id: str
         name_filter: str
@@ -182,7 +183,8 @@ class Controller(_message.Message):
         limit: int
         job_id_prefix: str
         backend_id: str
-        def __init__(self, scope: _Optional[_Union[Controller.JobQueryScope, str]] = ..., parent_job_id: _Optional[str] = ..., name_filter: _Optional[str] = ..., state_filter: _Optional[str] = ..., sort_field: _Optional[_Union[Controller.JobSortField, str]] = ..., sort_direction: _Optional[_Union[Controller.SortDirection, str]] = ..., offset: _Optional[int] = ..., limit: _Optional[int] = ..., job_id_prefix: _Optional[str] = ..., backend_id: _Optional[str] = ...) -> None: ...
+        cluster: str
+        def __init__(self, scope: _Optional[_Union[Controller.JobQueryScope, str]] = ..., parent_job_id: _Optional[str] = ..., name_filter: _Optional[str] = ..., state_filter: _Optional[str] = ..., sort_field: _Optional[_Union[Controller.JobSortField, str]] = ..., sort_direction: _Optional[_Union[Controller.SortDirection, str]] = ..., offset: _Optional[int] = ..., limit: _Optional[int] = ..., job_id_prefix: _Optional[str] = ..., backend_id: _Optional[str] = ..., cluster: _Optional[str] = ...) -> None: ...
     class ListJobsRequest(_message.Message):
         __slots__ = ("query",)
         QUERY_FIELD_NUMBER: _ClassVar[int]
@@ -203,12 +205,14 @@ class Controller(_message.Message):
         task_id: str
         def __init__(self, task_id: _Optional[str] = ...) -> None: ...
     class GetTaskStatusResponse(_message.Message):
-        __slots__ = ("task", "job_resources")
+        __slots__ = ("task", "job_resources", "root_cause_highlights")
         TASK_FIELD_NUMBER: _ClassVar[int]
         JOB_RESOURCES_FIELD_NUMBER: _ClassVar[int]
+        ROOT_CAUSE_HIGHLIGHTS_FIELD_NUMBER: _ClassVar[int]
         task: _job_pb2.TaskStatus
         job_resources: _job_pb2.ResourceSpecProto
-        def __init__(self, task: _Optional[_Union[_job_pb2.TaskStatus, _Mapping]] = ..., job_resources: _Optional[_Union[_job_pb2.ResourceSpecProto, _Mapping]] = ...) -> None: ...
+        root_cause_highlights: _containers.RepeatedScalarFieldContainer[str]
+        def __init__(self, task: _Optional[_Union[_job_pb2.TaskStatus, _Mapping]] = ..., job_resources: _Optional[_Union[_job_pb2.ResourceSpecProto, _Mapping]] = ..., root_cause_highlights: _Optional[_Iterable[str]] = ...) -> None: ...
     class ListTasksRequest(_message.Message):
         __slots__ = ("job_id",)
         JOB_ID_FIELD_NUMBER: _ClassVar[int]
@@ -766,12 +770,12 @@ class Controller(_message.Message):
         __slots__ = ()
         def __init__(self) -> None: ...
     class PeerSummary(_message.Message):
-        __slots__ = ("peer_id", "controller_address", "dashboard_url", "reachable", "last_sync_ms", "active_federated_jobs", "aggregate_spend_micros", "backends")
+        __slots__ = ("peer_id", "controller_address", "dashboard_url", "reachable", "last_contact_ms", "active_federated_jobs", "aggregate_spend_micros", "backends")
         PEER_ID_FIELD_NUMBER: _ClassVar[int]
         CONTROLLER_ADDRESS_FIELD_NUMBER: _ClassVar[int]
         DASHBOARD_URL_FIELD_NUMBER: _ClassVar[int]
         REACHABLE_FIELD_NUMBER: _ClassVar[int]
-        LAST_SYNC_MS_FIELD_NUMBER: _ClassVar[int]
+        LAST_CONTACT_MS_FIELD_NUMBER: _ClassVar[int]
         ACTIVE_FEDERATED_JOBS_FIELD_NUMBER: _ClassVar[int]
         AGGREGATE_SPEND_MICROS_FIELD_NUMBER: _ClassVar[int]
         BACKENDS_FIELD_NUMBER: _ClassVar[int]
@@ -779,11 +783,11 @@ class Controller(_message.Message):
         controller_address: str
         dashboard_url: str
         reachable: bool
-        last_sync_ms: int
+        last_contact_ms: int
         active_federated_jobs: int
         aggregate_spend_micros: int
         backends: _containers.RepeatedCompositeFieldContainer[Controller.BackendSummary]
-        def __init__(self, peer_id: _Optional[str] = ..., controller_address: _Optional[str] = ..., dashboard_url: _Optional[str] = ..., reachable: _Optional[bool] = ..., last_sync_ms: _Optional[int] = ..., active_federated_jobs: _Optional[int] = ..., aggregate_spend_micros: _Optional[int] = ..., backends: _Optional[_Iterable[_Union[Controller.BackendSummary, _Mapping]]] = ...) -> None: ...
+        def __init__(self, peer_id: _Optional[str] = ..., controller_address: _Optional[str] = ..., dashboard_url: _Optional[str] = ..., reachable: _Optional[bool] = ..., last_contact_ms: _Optional[int] = ..., active_federated_jobs: _Optional[int] = ..., aggregate_spend_micros: _Optional[int] = ..., backends: _Optional[_Iterable[_Union[Controller.BackendSummary, _Mapping]]] = ...) -> None: ...
     class ListPeersResponse(_message.Message):
         __slots__ = ("peers",)
         PEERS_FIELD_NUMBER: _ClassVar[int]
@@ -797,16 +801,16 @@ class Controller(_message.Message):
         cursor: str
         def __init__(self, requester_id: _Optional[str] = ..., cursor: _Optional[str] = ...) -> None: ...
     class FederationJobDelta(_message.Message):
-        __slots__ = ("remote_job_id", "summary", "changed_tasks", "tombstone")
-        REMOTE_JOB_ID_FIELD_NUMBER: _ClassVar[int]
+        __slots__ = ("job_id", "summary", "changed_tasks", "tombstone")
+        JOB_ID_FIELD_NUMBER: _ClassVar[int]
         SUMMARY_FIELD_NUMBER: _ClassVar[int]
         CHANGED_TASKS_FIELD_NUMBER: _ClassVar[int]
         TOMBSTONE_FIELD_NUMBER: _ClassVar[int]
-        remote_job_id: str
+        job_id: str
         summary: _job_pb2.JobStatus
         changed_tasks: _containers.RepeatedCompositeFieldContainer[_job_pb2.TaskStatus]
         tombstone: bool
-        def __init__(self, remote_job_id: _Optional[str] = ..., summary: _Optional[_Union[_job_pb2.JobStatus, _Mapping]] = ..., changed_tasks: _Optional[_Iterable[_Union[_job_pb2.TaskStatus, _Mapping]]] = ..., tombstone: _Optional[bool] = ...) -> None: ...
+        def __init__(self, job_id: _Optional[str] = ..., summary: _Optional[_Union[_job_pb2.JobStatus, _Mapping]] = ..., changed_tasks: _Optional[_Iterable[_Union[_job_pb2.TaskStatus, _Mapping]]] = ..., tombstone: _Optional[bool] = ...) -> None: ...
     class FederationSyncResponse(_message.Message):
         __slots__ = ("deltas", "next_cursor", "cursor_stale")
         DELTAS_FIELD_NUMBER: _ClassVar[int]

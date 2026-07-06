@@ -16,7 +16,6 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import click
-from rigging.auth import MARIN_DESKTOP_OAUTH_CLIENT
 from rigging.cluster_manifest import AuthProvider, ClusterAuth, IapAuth
 from rigging.config_discovery import resolve_cluster_config
 from rigging.credential_store import cluster_name_from_url
@@ -103,18 +102,18 @@ def _cluster_auth_from_config(auth: AuthConfig) -> ClusterAuth:
     """Adapt iris's ``AuthConfig`` to rigging's shared credential vocabulary."""
     provider = auth.provider_kind()
     if provider == "iap":
-        desktop_oauth_client_id = auth.iap.oauth_client_id or None
-        effective_desktop_id = desktop_oauth_client_id or MARIN_DESKTOP_OAUTH_CLIENT.client_id
-        # Service-account edge tokens must use IAP-secured audiences, not the
-        # desktop OAuth client accepted by the interactive login flow.
-        programmatic_audiences = tuple(a for a in auth.iap.audiences if a != effective_desktop_id)
+        # `audiences` are the interactive-login audiences the controller verifies;
+        # `programmatic_audiences` are the service-account edge audiences the
+        # client mints against -- configured explicitly, not derived from
+        # `audiences`. Empty is fine: rigging's edge resolver falls back to the
+        # desktop client id, which IAP registers as a programmatic client.
         return ClusterAuth(
             AuthProvider.IAP,
             iap=IapAuth(
                 url=auth.iap.url,
-                desktop_oauth_client_id=desktop_oauth_client_id,
+                desktop_oauth_client_id=auth.iap.oauth_client_id or None,
                 desktop_oauth_client_secret=auth.iap.oauth_client_secret or None,
-                programmatic_audiences=programmatic_audiences,
+                programmatic_audiences=tuple(auth.iap.programmatic_audiences),
                 signed_header_audience=auth.iap.signed_header_audience or None,
             ),
         )

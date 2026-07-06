@@ -34,10 +34,16 @@ auth:
     # app client secrets are non-confidential (RFC 8252 §8.5).
     oauth_client_id: REPLACE_WITH_DESKTOP_CLIENT_ID.apps.googleusercontent.com
     oauth_client_secret: REPLACE_WITH_DESKTOP_CLIENT_SECRET
-    # Accepted OIDC ID-token audiences: the desktop client id (user flow) and/or
-    # the IAP-secured OAuth client id (service-account flow).
+    # OIDC ID-token audiences the controller accepts on interactive-login tokens
+    # (the `iris login` user flow); typically just the desktop client id.
     audiences:
       - REPLACE_WITH_DESKTOP_CLIENT_ID.apps.googleusercontent.com
+    # Audiences a service-account (CI / in-cluster) caller mints its IAP edge
+    # token for. Omit to fall back to the desktop client id (IAP registers it as
+    # a programmatic client); set a dedicated IAP-secured client id to give
+    # machine callers an `aud` distinct from the interactive-login client.
+    # programmatic_audiences:
+    #   - REPLACE_WITH_IAP_SECURED_CLIENT_ID.apps.googleusercontent.com
     # Audience of IAP's signed X-Goog-IAP-JWT-Assertion header (the backend
     # service resource path). When set, an IAP-authenticated caller is
     # authenticated as the asserted email, resolved to its provisioned role:

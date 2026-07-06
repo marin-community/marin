@@ -21,10 +21,12 @@ App-token resolution order (the ``Authorization`` bearer):
 
 IAP edge-token resolution (the ``Proxy-Authorization`` bearer, IAP clusters only):
 the cached desktop-OAuth refresh token (the human path) is preferred; failing
-that, an ambient service-account ID token for a configured programmatic audience
-(the in-cluster / CI path). The desktop client that re-mints from a refresh token
-is the app's public identity (:data:`~rigging.auth.MARIN_DESKTOP_OAUTH_CLIENT`),
-overridable per cluster.
+that, an ambient service-account ID token (the in-cluster / CI path) minted for a
+dedicated programmatic audience if one is configured, else for the desktop client
+id -- which IAP registers as a programmatic client and admits for service-account
+tokens as well. The desktop client that re-mints from a refresh token is the app's
+public identity (:data:`~rigging.auth.MARIN_DESKTOP_OAUTH_CLIENT`), overridable per
+cluster.
 """
 
 import os
@@ -137,10 +139,16 @@ def _edge_provider(cluster: str, auth: ClusterAuth) -> TokenProvider | None:
     human = iap_edge_provider(cluster, desktop_client=_desktop_client(auth))
     if human is not None:
         return human
+    # No cached login (the CI / in-cluster path): mint an ambient service-account
+    # ID token for the edge. Prefer a dedicated programmatic audience when the
+    # cluster configures one; otherwise use the desktop client id, which IAP
+    # registers as a programmatic client and admits for service-account tokens
+    # too -- the same aud the human login path presents. The audience only clears
+    # IAP's authentication step; the caller's identity is still checked against
+    # the backend allowlist for authorization.
     audiences = auth.iap.programmatic_audiences
-    if audiences:
-        return IapServiceAccountTokenProvider(audiences[0])
-    return None
+    audience = audiences[0] if audiences else _desktop_client(auth).client_id
+    return IapServiceAccountTokenProvider(audience)
 
 
 def credentials_for(

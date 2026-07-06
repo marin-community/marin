@@ -40,7 +40,6 @@ from iris.cluster.controller.backend import (
     user_admitted,
 )
 from iris.cluster.controller.ops.task import apply_dispatch_updates
-from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
 from iris.cluster.controller.reconcile.loader import TransitionReader
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.task_state import RunningTaskEntry
@@ -676,6 +675,12 @@ def _build_pod_manifest(
         "workingDir": "/app",
         "volumeMounts": vol_mounts,
         "command": ["bash", "-lc", _build_task_script(run_req)],
+        # Without this, a non-zero exit leaves containerStatuses[].state.terminated
+        # with an empty message and a bare "Error" reason, burying the actual
+        # crash (JAX traceback, fatal-error banner, OOM abort, ...) in logs the
+        # operator has to pull separately. This has the kubelet populate the
+        # message with the container's own tail log output instead.
+        "terminationMessagePolicy": "FallbackToLogsOnError",
     }
     # Operator-injected env (defaults.inject_env). envFrom is the lowest
     # precedence in K8s, so explicit env entries above (user -e, iris vars) win.
@@ -1450,9 +1455,6 @@ class K8sTaskProvider:
     # A cluster backend tracks no Iris worker liveness; the controller's union read
     # skips a None tracker, and no worker registers into a k8s scale group.
     health: WorkerHealthTracker | None = field(default=None, init=False, repr=False)
-    # A cluster backend tracks no Iris worker attributes; no worker registers
-    # into a k8s scale group.
-    worker_attrs: WorkerAttrsProjection | None = field(default=None, init=False, repr=False)
     # The controller-DB read surface this backend authors its dispatch effects
     # from, passed by the composer at construction (a cluster backend has no
     # worker store, so it reads its dispatch drain through this).

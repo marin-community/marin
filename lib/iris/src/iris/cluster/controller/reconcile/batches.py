@@ -463,7 +463,7 @@ class ReconcileState:
         if effective_state is None or effective_state not in ACTIVE_TASK_STATES:
             return None
         prior_state = effective_state
-        new_task_state, preemption_count = task.resolve_task_failure_state(
+        new_task_state = task.resolve_task_failure_state(
             prior_state,
             task_row.preemption_count,
             task_row.max_retries_preemption,
@@ -481,7 +481,6 @@ class ReconcileState:
             now_ms,
             stamp_attempt_finished=True,
             attempt_state=job_pb2.TASK_STATE_WORKER_FAILED,
-            preemption_count=preemption_count,
         )
         parent_job_id, _ = task_id.require_task()
         return task.TransitionOutcome(

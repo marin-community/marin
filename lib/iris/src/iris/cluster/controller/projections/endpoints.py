@@ -25,7 +25,7 @@ from sqlalchemy import bindparam, delete, insert, select
 
 from iris.cluster.controller import db
 from iris.cluster.controller.db import ControllerDB
-from iris.cluster.controller.projections import PROJECTIONS
+from iris.cluster.controller.projections.base import Projection
 from iris.cluster.controller.schema import endpoints_table, tasks_table
 from iris.cluster.types import TERMINAL_TASK_STATES, EndpointAccess, JobName
 
@@ -94,7 +94,7 @@ class AddEndpointOutcome(StrEnum):
     TERMINAL = "terminal"
 
 
-class EndpointsProjection:
+class EndpointsProjection(Projection):
     """Process-local write-through cache over the ``endpoints`` table.
 
     Reads serve the latest committed state from in-memory dicts guarded
@@ -103,20 +103,16 @@ class EndpointsProjection:
     manual wire-format conversion appears here.
     """
 
-    sources: ClassVar = (endpoints_table,)
+    owns: ClassVar = (endpoints_table,)
 
     def __init__(self, db: ControllerDB) -> None:
-        self._db = db
         self._lock = RLock()
         self._by_id: dict[str, EndpointRow] = {}
         # One name can map to multiple endpoint_ids — the schema does not
         # enforce uniqueness on ``name`` and the upsert keys off endpoint_id.
         self._by_name: dict[str, set[str]] = {}
         self._by_task: dict[JobName, set[str]] = {}
-        PROJECTIONS.append(self)
-        self.rehydrate()
-        # Caches reload after a checkpoint restore via db.replace_from().
-        db.register_reopen_hook(self.rehydrate)
+        super().__init__(db)
 
     # -- Loading --------------------------------------------------------------
 
@@ -132,7 +128,7 @@ class EndpointsProjection:
             self._by_id.clear()
             self._by_name.clear()
             self._by_task.clear()
-            with db.read_snapshot(self._db.sa_read_engine) as tx:
+            with self._db.read_snapshot() as tx:
                 for row in tx.execute(select(endpoints_table)).all():
                     endpoint = EndpointRow(
                         endpoint_id=row.endpoint_id,
