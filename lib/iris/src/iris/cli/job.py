@@ -101,6 +101,41 @@ def _print_terminated(terminated: list[JobName]) -> None:
         click.echo("No running jobs matched.")
 
 
+def _read_targets_from_stdin() -> list[str]:
+    """Read Iris job/task ids from stdin, one per line.
+
+    Tolerates ``iris query -f csv`` output directly: each line is reduced to its
+    first comma/whitespace-delimited field, and only fields that look like Iris
+    ids (leading ``/``) are kept — so a CSV header row and any trailing columns
+    are ignored. This is the glue for the query→act pattern:
+
+        iris query -f csv "SELECT task_id FROM tasks WHERE ..." | iris job kick --stdin
+    """
+    targets: list[str] = []
+    for raw in sys.stdin:
+        line = raw.strip()
+        if not line:
+            continue
+        field = line.split(",", 1)[0].split()[0]
+        if field.startswith("/"):
+            targets.append(field)
+    return targets
+
+
+def _collect_targets(targets: tuple[str, ...], use_stdin: bool) -> list[str]:
+    """Merge positional targets with stdin ids for a bulk action.
+
+    A literal ``-`` among the positionals, or ``--stdin``, appends ids read from
+    stdin (see :func:`_read_targets_from_stdin`), letting a query pipe straight
+    into ``kick``/``stop``. Positional ids and stdin ids compose.
+    """
+    read_stdin = use_stdin or "-" in targets
+    collected = [t for t in targets if t != "-"]
+    if read_stdin:
+        collected.extend(_read_targets_from_stdin())
+    return collected
+
+
 def load_env_vars(env_flags: tuple[tuple[str, ...], ...] | list | None) -> dict[str, str]:
     """Load environment variables from .marin.yaml and merge with flags.
 
@@ -1009,34 +1044,55 @@ def run(
     sys.exit(exit_code)
 
 
+def _stop_jobs(ctx, job_id: tuple[str, ...], include_children: bool, stdin: bool, dry_run: bool) -> None:
+    targets = _collect_targets(job_id, stdin)
+    if not targets:
+        raise click.UsageError("No jobs given. Pass job ids, or --stdin (or '-') to read them from stdin.")
+    if dry_run:
+        click.echo(f"[dry-run] would terminate {len(targets)} job(s):")
+        for t in targets:
+            click.echo(f"  {t}")
+        return
+    client = _remote_client(ctx)
+    terminated = _terminate_jobs(client, tuple(targets), include_children)
+    _print_terminated(terminated)
+
+
 @job.command("stop")
-@click.argument("job_id", nargs=-1, required=True)
+@click.argument("job_id", nargs=-1, required=False)
 @click.option(
     "--include-children/--no-include-children",
     default=True,
     help="Terminate child jobs under the given job ID prefix (default: include).",
 )
+@click.option("--stdin", is_flag=True, default=False, help="Also read job ids from stdin (one per line; CSV-tolerant).")
+@click.option("--dry-run", is_flag=True, default=False, help="Print the jobs that would be terminated without sending.")
 @click.pass_context
-def stop(ctx, job_id: tuple[str, ...], include_children: bool) -> None:
-    """Terminate one or more jobs."""
-    client = _remote_client(ctx)
-    terminated = _terminate_jobs(client, job_id, include_children)
-    _print_terminated(terminated)
+def stop(ctx, job_id: tuple[str, ...], include_children: bool, stdin: bool, dry_run: bool) -> None:
+    """Terminate one or more jobs.
+
+    Pass ``-`` or ``--stdin`` to read job ids from stdin so a query can pipe in:
+
+    \b
+      iris query -f csv "SELECT job_id FROM jobs WHERE user_id='alice' AND state=3" \\
+        | iris job stop --stdin
+    """
+    _stop_jobs(ctx, job_id, include_children, stdin, dry_run)
 
 
 @job.command("kill")
-@click.argument("job_id", nargs=-1, required=True)
+@click.argument("job_id", nargs=-1, required=False)
 @click.option(
     "--include-children/--no-include-children",
     default=True,
     help="Terminate child jobs under the given job ID prefix (default: include).",
 )
+@click.option("--stdin", is_flag=True, default=False, help="Also read job ids from stdin (one per line; CSV-tolerant).")
+@click.option("--dry-run", is_flag=True, default=False, help="Print the jobs that would be terminated without sending.")
 @click.pass_context
-def kill(ctx, job_id: tuple[str, ...], include_children: bool) -> None:
+def kill(ctx, job_id: tuple[str, ...], include_children: bool, stdin: bool, dry_run: bool) -> None:
     """Terminate one or more jobs (alias for stop)."""
-    client = _remote_client(ctx)
-    terminated = _terminate_jobs(client, job_id, include_children)
-    _print_terminated(terminated)
+    _stop_jobs(ctx, job_id, include_children, stdin, dry_run)
 
 
 _KICK_STATE_MAP = {
@@ -1046,7 +1102,7 @@ _KICK_STATE_MAP = {
 
 
 @job.command("kick")
-@click.argument("target", nargs=-1, required=True)
+@click.argument("target", nargs=-1, required=False)
 @click.option(
     "--state",
     "-s",
@@ -1056,15 +1112,36 @@ _KICK_STATE_MAP = {
     help="Terminal state to force: 'preempted' retries if budget remains; 'failed' does not retry.",
 )
 @click.option("--reason", type=str, default="", help="Reason recorded on the kicked task attempts.")
+@click.option(
+    "--stdin", is_flag=True, default=False, help="Also read target ids from stdin (one per line; CSV-tolerant)."
+)
+@click.option("--dry-run", is_flag=True, default=False, help="Print the targets that would be kicked without sending.")
 @click.pass_context
-def kick(ctx, target: tuple[str, ...], state: str, reason: str) -> None:
+def kick(ctx, target: tuple[str, ...], state: str, reason: str, stdin: bool, dry_run: bool) -> None:
     """Force task attempts into a terminal state (emergency override).
 
     Each TARGET is a task id (/user/job/0), task-attempt id (/user/job/0:3), or a
-    job id (/user/job) that expands to the job's active tasks.
+    job id (/user/job) that expands to the job's active tasks. Pass ``-`` or
+    ``--stdin`` to read ids from stdin, so a query can pipe straight in:
+
+    \b
+      iris query -f csv "SELECT t.task_id FROM tasks t JOIN workers w
+        ON t.current_worker_id=w.worker_id
+        WHERE w.slice_id='<slice>' AND t.state IN (2,3,9)
+        AND t.job_id NOT LIKE '/keep/%'" | iris job kick --stdin --reason "drain slice"
     """
+    targets = _collect_targets(target, stdin)
+    if not targets:
+        raise click.UsageError("No targets given. Pass task/job ids, or --stdin (or '-') to read them from stdin.")
+
+    if dry_run:
+        click.echo(f"[dry-run] would kick {len(targets)} target(s) to {state}:")
+        for t in targets:
+            click.echo(f"  {t}")
+        return
+
     client = _remote_client(ctx)
-    results = client.kick_tasks(list(target), desired_state=_KICK_STATE_MAP[state], reason=reason)
+    results = client.kick_tasks(targets, desired_state=_KICK_STATE_MAP[state], reason=reason)
 
     queued = [r for r in results if r.queued]
     rejected = [r for r in results if not r.queued]

@@ -144,6 +144,10 @@ running on a worker (ASSIGNED / BUILDING / RUNNING) can be kicked; pending or
 already-terminal tasks are rejected with a reason. `preempted` charges the
 preemption budget; `failed` is terminal with no retry.
 
+`kick`, `stop`, and `kill` also read ids from **stdin** (`--stdin`, or a literal
+`-` target) and take `--dry-run`. This is the query→act bridge: select the
+targets with SQL, preview, then fire. See "Bulk actions: query → act" below.
+
 ## Process Inspection & Profiling
 
 ```bash
@@ -216,6 +220,56 @@ iris process logs --since 24h | grep 'event=worker_failed'
 ```
 
 Full table list: `iris query "SELECT name FROM sqlite_master WHERE type='table'"`.
+
+### Bulk actions: query → act
+
+`iris query` is admin-only and read-only, so it is the safe surface for *finding*
+the exact set of tasks/jobs you want to act on. `iris job kick`, `iris job stop`,
+and `iris job kill` read ids from **stdin** (`--stdin`, or a literal `-`), so a
+query pipes straight into an action — no hand-copying ids. Stdin parsing is
+CSV-tolerant: it takes the first field of each line and keeps only ids (leading
+`/`), so a `-f csv` header row and trailing columns are dropped automatically.
+
+**Always `--dry-run` first** to confirm the set, then re-run without it:
+
+```bash
+# Drain everything EXCEPT one protected job off a slice, so it can bind its ports.
+SLICE=marin-tpu-v4-reserved-2048-us-central2-b-...
+SEL="SELECT t.task_id FROM tasks t JOIN workers w ON t.current_worker_id=w.worker_id
+     WHERE w.slice_id='$SLICE' AND t.state IN (2,3,9) AND t.job_id NOT LIKE '/larry/%'"
+
+iris query -f csv "$SEL" | iris job kick --stdin --dry-run          # preview
+iris query -f csv "$SEL" | iris job kick --stdin --reason "drain slice for /larry"
+```
+
+`--state preempted` (default) reschedules the kicked tasks elsewhere; `--state
+failed` does not retry. Prefer kicking **tasks** (`t.task_id`, task index kept)
+over whole jobs when you only need to clear specific workers — a job target
+kicks *all* its active tasks, including ones on other slices.
+
+Canonical joins (the schema doesn't pre-wire these, so keep them here):
+
+```sql
+-- Which scale group is the size-N slice? (find the slice_id to target)
+SELECT scale_group, device_variant, count(*) AS workers, count(DISTINCT slice_id) AS slices
+FROM workers WHERE device_type='tpu' GROUP BY scale_group, device_variant;
+
+-- Everything occupying a slice's workers, by job and task state.
+SELECT t.job_id, t.state, count(*) FROM tasks t
+JOIN workers w ON t.current_worker_id=w.worker_id
+WHERE w.slice_id='<slice_id>' AND t.state IN (2,3,9) GROUP BY t.job_id, t.state;
+
+-- Co-tenants sharing a worker VM with a given job (CPU tasks bin-packed onto
+-- TPU hosts show up here — a common source of host-global port collisions).
+SELECT t.job_id, t.task_id, w.md_tpu_worker_id FROM tasks t
+JOIN workers w ON t.current_worker_id=w.worker_id
+WHERE w.worker_id IN (
+  SELECT current_worker_id FROM tasks WHERE job_id LIKE '/larry/%' AND state IN (2,3,9)
+) AND t.job_id NOT LIKE '/larry/%' AND t.state IN (2,3,9);
+```
+
+To *dump* rather than act, feed the same selection to `iris job logs` /
+`iris job summary` per id, or read the task rows directly with a wider `SELECT`.
 
 ### Offline checkpoint analysis
 
