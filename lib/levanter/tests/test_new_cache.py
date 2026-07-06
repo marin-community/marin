@@ -261,6 +261,9 @@ async def test_sharded_flat_field_offsets_share_in_flight_build(monkeypatch):
         ("gs://bucket/cache", "gs://bucket/cache//train//shard_0", "train/shard_0"),
         # Local absolute paths.
         ("/tmp/cache", "/tmp/cache/shard_0", "shard_0"),
+        # An object-store key may contain a literal `..` segment (keys are not
+        # normalized), so it passes through rather than escaping a directory.
+        ("gs://bucket/cache", "gs://bucket/cache/../weird", "../weird"),
     ],
 )
 def test_relative_shard_path_structural(output_path, shard_path, expected):
@@ -276,6 +279,9 @@ def test_relative_shard_path_structural(output_path, shard_path, expected):
         ("gs://bucket/cache", "gs://other/cache/shard_0"),
         # shard_path equals output_path — no relative key to emit.
         ("gs://bucket/cache", "gs://bucket/cache"),
+        # A `..` segment in a local path escapes the cache directory once joined back.
+        ("/tmp/cache", "/tmp/cache/../outside/part"),
+        ("/tmp/cache", "/tmp/cache/a/../../etc"),
     ],
 )
 def test_relative_shard_path_rejects_non_descendants(output_path, shard_path):

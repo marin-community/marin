@@ -1385,11 +1385,16 @@ def _relative_shard_path(output_path: str, shard_path: str) -> str:
     cannot fork the writer's shard path from the reader's. Raises ``ValueError`` unless
     ``shard_path`` lies strictly under ``output_path``.
     """
+    output = StoragePath.parse(output_path)
     try:
-        relative = StoragePath.parse(shard_path).relative_to(StoragePath.parse(output_path))
+        relative = StoragePath.parse(shard_path).relative_to(output)
     except ValueError as exc:
         raise ValueError(f"Sharded cache path {shard_path} is not under output path {output_path}") from exc
-    if not relative:
+    # A local relative key with a `..` segment escapes the cache directory when joined
+    # back, so reject it. Object-store keys treat `..` as a literal segment, so this
+    # only applies to scheme-less filesystem paths.
+    escapes = output.scheme is None and ".." in relative.split("/")
+    if not relative or escapes:
         raise ValueError(f"Sharded cache path {shard_path} is not under output path {output_path}")
     return relative
 
