@@ -8,7 +8,7 @@ from unittest.mock import Mock
 
 import pytest
 from iris.cluster.bundle import BundleStore
-from iris.cluster.runtime.docker import _NETWORK_SYSCTLS, RESERVED_HOST_PORTS, DockerRuntime, _security_flags
+from iris.cluster.runtime.docker import DockerRuntime, _security_flags
 from iris.cluster.runtime.types import MountKind, MountSpec
 from iris.rpc import job_pb2
 
