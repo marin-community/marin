@@ -164,3 +164,27 @@ at 300M only, ≤4 runs, new bucket chosen among existing tokenized caches outsi
 starcoder — pick by content novelty), surrogate = KME_RIDGE + KERNEL_HELLINGER (300M passers),
 comparisons = Olmix-style reuse + token-proportional. Honest framing: rule-level evidence is
 one-scale; H3 is the live check.
+
+## 2026-07-06 H3 staged — launch blocked on WANDB_API_KEY
+
+- **New bucket: dolma_starcoder** (novelty 0.481 vs 39-domain LOO median 0.366; c4 rejected at
+  0.305 — heavy CC overlap). Histogram built with frozen basis (bandwidth reused).
+- **Proposal** (KME+KH rank-ensemble on all 238 300M runs; 100k-candidate search, starcoder
+  capped 0.20/phase): starcoder share ~5%/phase, upweights common_crawl_hq + stack_edu(+fim);
+  predicted bpb 0.9103 vs OLMIX_REUSE 0.9532, TOKEN_PROP 0.9706, ANCHOR realized 0.9554
+  (run_00125, reused — not relaunched). Calibration caveat pre-registered: predicted optimum is
+  below every realized bpb in the 238 → optimizer optimism is expected; the run measures it.
+- **Pre-registration** (before launch): success = PROPOSAL < both baselines on
+  eval/uncheatable_eval/bpb at step 22888; scratch/mixture_features/h3/preregistration.json.
+- **Dry-run PASSED**: worktree /home/rav/mve-swarm-launch @ a39985fea (pre-merge swarm tip;
+  bf26b666a merge is broken), launcher experiments/domain_phase_mix/launch_h3_mve.py; 3 steps,
+  v5p-8 us-east5, weights verified vs surrogate JSON to equality, per-phase sums 1, 80/20 stage
+  boundary step 18304.
+- **BLOCKER**: marin's `_check_for_wandb_key` raises for TPU jobs without WANDB_API_KEY; no key
+  in container env, host login shell, or GCP Secret Manager; Iris does not inject one. Options:
+  rav runs scratch/mixture_features/h3/launch_command.txt (minus --dry_run) from a shell with
+  his key; or provide key to session; or approve WANDB_MODE=offline (loses live monitoring;
+  readout would move to GCS eval parsing). Holding for rav — not launching offline unilaterally.
+- monitor.md + readout.py ready (public GraphQL, no key needed for reading).
+- Everything through H2b/H4 committed (1cc68ceb6 + CSV vendor commit) and pushed;
+  artifacts on GCS under user/rav/projects/mixing_via_embeddings/v0/.
