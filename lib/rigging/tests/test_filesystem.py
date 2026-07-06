@@ -328,3 +328,72 @@ def test_storage_path_glob_local(tmp_path):
     assert (sub / "absent.txt").glob() == []
     # results are reopenable local (scheme-less) StoragePaths
     assert all(m.is_local for m in StoragePath(str(tmp_path / "sub" / "*.txt")).glob())
+
+
+def test_storage_path_ls_and_isfile_local(tmp_path):
+    """ls lists immediate children as reopenable paths; isfile distinguishes files from dirs."""
+    root = StoragePath(str(tmp_path / "d"))
+    root.mkdirs()
+    (root / "a.txt").write_text("a")
+    (root / "b.txt").write_text("b")
+    (root / "sub").mkdirs()
+
+    assert sorted(str(c) for c in root.ls()) == [str(tmp_path / "d" / n) for n in ("a.txt", "b.txt", "sub")]
+    # a listed child reopens: reading through it works
+    listed = {p.name: p for p in root.ls()}
+    assert listed["a.txt"].read_text() == "a"
+
+    assert (root / "a.txt").isfile()
+    assert not (root / "sub").isfile()
+
+
+def test_storage_path_walk_local(tmp_path):
+    """walk yields (dir, subdir_names, file_names) top-down with a reopenable dir path."""
+    root = StoragePath(str(tmp_path / "tree"))
+    (root / "sub").mkdirs()
+    (root / "top.txt").write_text("t")
+    (root / "sub" / "leaf.txt").write_text("l")
+
+    seen = {str(d): (sorted(dirs), sorted(files)) for d, dirs, files in root.walk()}
+    assert seen[str(tmp_path / "tree")] == (["sub"], ["top.txt"])
+    assert seen[str(tmp_path / "tree" / "sub")] == ([], ["leaf.txt"])
+
+
+def test_storage_path_rm_rmtree_rename_local(tmp_path):
+    """rm removes a file, rmtree removes a whole tree, rename moves a path."""
+    base = StoragePath(str(tmp_path / "m"))
+    base.mkdirs()
+
+    f = base / "one.txt"
+    f.write_text("x")
+    f.rm()
+    assert not f.exists()
+
+    tree = base / "sub"
+    (tree / "deep").mkdirs()
+    (tree / "deep" / "leaf.txt").write_text("l")
+    tree.rmtree()
+    assert not tree.exists()
+
+    src = base / "src.txt"
+    src.write_text("moved")
+    dst = base / "dst.txt"
+    src.rename(dst)
+    assert not src.exists()
+    assert dst.read_text() == "moved"
+
+
+def test_storage_path_upload_download_local(tmp_path):
+    """upload_from/download_to copy between the local disk and this path."""
+    remote = StoragePath(str(tmp_path / "remote"))
+    remote.mkdirs()
+
+    local_src = tmp_path / "local_src.txt"
+    local_src.write_text("payload")
+    target = remote / "obj.txt"
+    target.upload_from(str(local_src))
+    assert target.read_text() == "payload"
+
+    local_dst = tmp_path / "local_dst.txt"
+    target.download_to(str(local_dst))
+    assert local_dst.read_text() == "payload"

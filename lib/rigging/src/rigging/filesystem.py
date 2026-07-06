@@ -376,10 +376,18 @@ class StoragePath:
     stay ``str``: parse at a boundary, manipulate, and ``str()`` back out. See
     :func:`prefix_join` for the single-join convenience.
 
-    The I/O verbs (:meth:`exists`, :meth:`isdir`, :meth:`size`, :meth:`mtime`,
-    :meth:`mkdirs`, :meth:`glob`, :meth:`open`) are stateless: each resolves through the
-    guarded :func:`url_to_fs`/:func:`open_url` factory (cross-region budget, ``mirror://``,
-    finite S3 timeouts), never memoizing a filesystem handle on the frozen instance.
+    The I/O verbs are stateless: each resolves through the guarded
+    :func:`url_to_fs`/:func:`open_url` factory (cross-region budget, ``mirror://``, finite
+    S3 timeouts), never memoizing a filesystem handle on the frozen instance. They cover
+    the common surface: stat (:meth:`exists`, :meth:`isfile`, :meth:`isdir`, :meth:`size`,
+    :meth:`mtime`), listing (:meth:`ls`, :meth:`walk`, :meth:`glob`), mutation
+    (:meth:`mkdirs`, :meth:`rm`, :meth:`rmtree`, :meth:`rename`), transfer between local
+    disk and this path (:meth:`download_to`, :meth:`upload_from`), and whole-file access
+    (:meth:`open`, :meth:`read_text`, :meth:`write_text`, :meth:`read_bytes`,
+    :meth:`write_bytes`). :meth:`ls`, :meth:`walk`, and :meth:`glob` return reopenable
+    :class:`StoragePath` values; the read/write verbs forward ``**kwargs`` (e.g.
+    ``compression=``, ``encoding=``) to :func:`open_url` and the ``write_*`` pair truncates.
+    Byte-range reads and detail listings stay on the raw ``fs`` handle.
     """
 
     scheme: str | None
@@ -495,27 +503,22 @@ class StoragePath:
     # inherits the cross-region budget, mirror:// protocol, and S3 timeouts.
 
     def exists(self) -> bool:
-        """True if this path exists."""
         fs, path = url_to_fs(str(self))
         return fs.exists(path)
 
     def isdir(self) -> bool:
-        """True if this path is a directory (or object-store prefix)."""
         fs, path = url_to_fs(str(self))
         return fs.isdir(path)
 
     def size(self) -> int:
-        """Size in bytes."""
         fs, path = url_to_fs(str(self))
         return fs.size(path)
 
     def mtime(self) -> datetime:
-        """Last-modified time."""
         fs, path = url_to_fs(str(self))
         return fs.modified(path)
 
     def mkdirs(self, *, exist_ok: bool = True) -> None:
-        """Create this directory and any missing parents."""
         fs, path = url_to_fs(str(self))
         fs.makedirs(path, exist_ok=exist_ok)
 
@@ -542,24 +545,66 @@ class StoragePath:
         return open_url(str(self), mode, **kwargs)
 
     def read_text(self, **kwargs: Any) -> str:
-        """Read the whole file as text. ``**kwargs`` forward to :func:`open_url`."""
         with self.open("r", **kwargs) as f:
             return f.read()
 
     def read_bytes(self, **kwargs: Any) -> bytes:
-        """Read the whole file as bytes. ``**kwargs`` forward to :func:`open_url`."""
         with self.open("rb", **kwargs) as f:
             return f.read()
 
     def write_text(self, data: str, **kwargs: Any) -> None:
-        """Write *data* as text, replacing any existing content. ``**kwargs`` forward to :func:`open_url`."""
         with self.open("w", **kwargs) as f:
             f.write(data)
 
     def write_bytes(self, data: bytes, **kwargs: Any) -> None:
-        """Write *data* as bytes, replacing any existing content. ``**kwargs`` forward to :func:`open_url`."""
         with self.open("wb", **kwargs) as f:
             f.write(data)
+
+    def isfile(self) -> bool:
+        fs, path = url_to_fs(str(self))
+        return fs.isfile(path)
+
+    def ls(self) -> list["StoragePath"]:
+        """List this directory's immediate children as reopenable paths.
+
+        Non-recursive; each child carries its filesystem's protocol so it round-trips
+        back through the verbs. For per-entry metadata (size/mtime) call
+        :meth:`size`/:meth:`mtime` on a child, or drop to raw ``fs.ls(detail=True)``.
+        """
+        fs, path = url_to_fs(str(self))
+        return [StoragePath(_reattach_protocol(fs, child)) for child in fs.ls(path, detail=False)]
+
+    def walk(self) -> "Generator[tuple[StoragePath, list[str], list[str]], None, None]":
+        """Walk this tree top-down, yielding ``(dir, subdir_names, file_names)`` like ``os.walk``.
+
+        ``dir`` is a reopenable :class:`StoragePath`; the name lists are plain strings, so
+        a file is reached as ``dir / name``.
+        """
+        fs, path = url_to_fs(str(self))
+        for dirpath, dirnames, filenames in fs.walk(path):
+            yield StoragePath(_reattach_protocol(fs, dirpath)), list(dirnames), list(filenames)
+
+    def rm(self) -> None:
+        fs, path = url_to_fs(str(self))
+        fs.rm(path)
+
+    def rmtree(self) -> None:
+        fs, path = url_to_fs(str(self))
+        fs.rm(path, recursive=True)
+
+    def rename(self, target: "str | StoragePath") -> None:
+        fs, path = url_to_fs(str(self))
+        fs.mv(path, str(target))
+
+    def download_to(self, local_path: str, *, recursive: bool = False) -> None:
+        """Copy this (remote) path down to ``local_path`` on the local disk."""
+        fs, path = url_to_fs(str(self))
+        fs.get(path, local_path, recursive=recursive)
+
+    def upload_from(self, local_path: str, *, recursive: bool = False) -> None:
+        """Copy ``local_path`` from the local disk up to this (remote) path."""
+        fs, path = url_to_fs(str(self))
+        fs.put(local_path, path, recursive=recursive)
 
 
 def _reattach_protocol(fs: fsspec.AbstractFileSystem, path: str) -> str:
