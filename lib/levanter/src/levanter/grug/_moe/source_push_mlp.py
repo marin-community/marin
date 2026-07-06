@@ -23,16 +23,21 @@ from levanter.grug._moe.source_push_backward_return import (
     SOURCE_PUSH_BACKWARD_RETURN_IMPLEMENTATION_JAX,
     SOURCE_PUSH_BACKWARD_RETURN_IMPLEMENTATION_PALLAS_MGPU,
     SourcePushBackwardFlatRouteIndices,
+    source_push_backward_return,
     source_push_backward_return_flat,
 )
 from levanter.grug._moe.source_push_backward_w13 import (
     SOURCE_PUSH_W13_BACKWARD_IMPLEMENTATION_REFERENCE,
+    SOURCE_PUSH_W13_BACKWARD_IMPLEMENTATION_TILED,
     source_push_w13_backward,
+    source_push_w13_backward_expert_blocks_reference,
+    source_push_w13_backward_expert_blocks_tiled_reference,
 )
 from levanter.grug._moe.source_push_backward_w2 import (
     SOURCE_PUSH_W2_BACKWARD_IMPLEMENTATION_REFERENCE,
     SOURCE_PUSH_W2_MATMUL_BACKWARD_IMPLEMENTATION_PALLAS_MGPU,
     SOURCE_PUSH_W2_SWIGLU_BACKWARD_IMPLEMENTATION_REFERENCE,
+    _source_push_w2_backward_expert_blocks,
     _source_push_w2_backward_from_flat_h,
 )
 from levanter.grug._moe.source_push_combine import _make_route_inverse
@@ -584,7 +589,9 @@ def source_push_moe_mlp_from_plan(
                 jnp.zeros_like(residuals.w13),
                 jnp.zeros_like(residuals.w2),
             )
-        gradients = _source_push_moe_mlp_backward_from_h(
+        gradients = _source_push_moe_mlp_backward_from_plan_h_compact(
+            config,
+            host_inputs,
             route_table,
             residuals.x,
             residuals.expert_route_weights,
@@ -592,6 +599,13 @@ def source_push_moe_mlp_from_plan(
             residuals.w2,
             residuals.h,
             dy,
+            return_implementation=_source_push_mlp_backward_return_implementation(implementation),
+            dy_route_implementation=_source_push_mlp_backward_dy_route_implementation(implementation),
+            w2_implementation=_source_push_mlp_backward_w2_implementation(implementation),
+            w2_matmul_implementation=_source_push_mlp_backward_w2_matmul_implementation(implementation),
+            w2_swiglu_implementation=_source_push_mlp_backward_w2_swiglu_implementation(implementation),
+            w13_implementation=_source_push_mlp_backward_w13_implementation(implementation),
+            mesh=mesh,
         )
         return gradients.dx, gradients.d_route_weights, gradients.dw13, gradients.dw2
 
@@ -1196,6 +1210,96 @@ def _source_push_moe_mlp_backward_from_h_flat(
         return _source_push_mlp_h_flat_for_expert(route_table, expert_base, h_flat, expert)
 
     return _source_push_moe_mlp_backward_by_expert(route_table, x, expert_route_weights, w13, w2, dy, h_for_expert)
+
+
+def _source_push_moe_mlp_backward_from_plan_h_compact(
+    config: PushInboxConfig,
+    host_inputs: SourcePushForwardHostInputs,
+    route_table: SourcePushMlpRouteTable,
+    x: Float[Array, "S T D"],
+    expert_route_weights: Float[Array, "Dst E C"],
+    w13: Float[Array, "S E D twoI"],
+    w2: Float[Array, "S E I D"],
+    h: Float[Array, "Dst E C twoI"],
+    dy: Float[Array, "S T D"],
+    return_implementation: str = SOURCE_PUSH_BACKWARD_RETURN_IMPLEMENTATION_JAX,
+    dy_route_implementation: str = SOURCE_PUSH_DY_ROUTE_IMPLEMENTATION_REFERENCE,
+    w2_implementation: str = SOURCE_PUSH_W2_BACKWARD_IMPLEMENTATION_REFERENCE,
+    w2_matmul_implementation: str | None = None,
+    w2_swiglu_implementation: str | None = None,
+    w13_implementation: str = SOURCE_PUSH_W13_BACKWARD_IMPLEMENTATION_REFERENCE,
+    mesh: Mesh | None = None,
+) -> _SourcePushMlpGradients:
+    """From-plan backward organized around compact expert-major H.
+
+    This is the production-shaped counterpart to the staged-block benchmark
+    path: route ``dy`` to ``[Dst, E, C, D]``, run W2/SwiGLU backward from saved
+    ``H_expert_major``, run W13 backward from compact ``dH``, then return
+    compact expert-major token gradients to source-owned ``dx`` and route
+    weights. Defaults stay on stable reference stages until individual Pallas
+    kernels clear their target-shape gates.
+    """
+
+    valid = route_table.valid_by_expert
+    dy_blocks = _source_push_backward_dy_to_expert_major(
+        dy,
+        route_table.source_rank_by_expert,
+        route_table.token_id_by_expert,
+        valid,
+        implementation=dy_route_implementation,
+        mesh=mesh,
+    )
+    w2_grads = _source_push_w2_backward_expert_blocks(
+        h,
+        expert_route_weights,
+        dy_blocks,
+        w2,
+        valid,
+        implementation=w2_implementation,
+        matmul_implementation=w2_matmul_implementation,
+        swiglu_implementation=w2_swiglu_implementation,
+        mesh=mesh,
+    )
+    if w13_implementation == SOURCE_PUSH_W13_BACKWARD_IMPLEMENTATION_TILED:
+        w13_grads = source_push_w13_backward_expert_blocks_tiled_reference(
+            x,
+            w2_grads.d_h,
+            w13,
+            route_table.source_rank_by_expert,
+            route_table.token_id_by_expert,
+            valid,
+        )
+    elif w13_implementation == SOURCE_PUSH_W13_BACKWARD_IMPLEMENTATION_REFERENCE:
+        w13_grads = source_push_w13_backward_expert_blocks_reference(
+            x,
+            w2_grads.d_h,
+            w13,
+            host_inputs.plan,
+            host_inputs.send_meta,
+            jnp.asarray(host_inputs.expert_base, dtype=jnp.int32),
+            host_inputs.src_base_by_expert,
+            use_exact_expert_major=host_inputs.use_exact_expert_major,
+        )
+    else:
+        raise ValueError(
+            "compact-H from-plan MLP backward supports W13 implementations "
+            f"{(SOURCE_PUSH_W13_BACKWARD_IMPLEMENTATION_REFERENCE, SOURCE_PUSH_W13_BACKWARD_IMPLEMENTATION_TILED)}, "
+            f"got {w13_implementation!r}"
+        )
+    returned = source_push_backward_return(
+        w13_grads.dx_expert_major,
+        w2_grads.d_route_weight,
+        host_inputs.plan,
+        src_base_by_expert=host_inputs.src_base_by_expert,
+        implementation=return_implementation,
+        mesh=mesh,
+    )
+    return _SourcePushMlpGradients(
+        dx=returned.dx.astype(x.dtype),
+        d_route_weights=returned.d_route_weights.astype(expert_route_weights.dtype),
+        dw13=w13_grads.dw13.astype(w13.dtype),
+        dw2=w2_grads.dw2.astype(w2.dtype),
+    )
 
 
 def _source_push_moe_mlp_backward_from_plan_h_flat(

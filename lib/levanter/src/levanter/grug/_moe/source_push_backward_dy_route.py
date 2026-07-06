@@ -1057,10 +1057,7 @@ def _source_push_backward_dy_route_compact_block_specs(
     row_block: int,
     hidden_block: int,
 ) -> tuple[tuple[pl.BlockSpec, pl.BlockSpec, pl.BlockSpec, pl.BlockSpec], pl.BlockSpec]:
-    route_spec = pl.BlockSpec(
-        (1, 1, row_block),
-        lambda dst, expert, row_tile, _hidden_tile: (dst, expert, row_tile),
-    )
+    route_spec = pl.BlockSpec(memory_space=mgpu.GMEM)
     out_spec = pl.BlockSpec(
         (1, 1, row_block, hidden_block),
         lambda dst, expert, row_tile, hidden_tile: (dst, expert, row_tile, hidden_tile),
@@ -1072,16 +1069,20 @@ def _source_push_backward_dy_route_compact_block_specs(
 def _make_source_push_backward_dy_route_compact_kernel(*, row_block: int, hidden_block: int):
     def kernel(
         dy_ref: Float[pl.Ref, "S T D"],
-        source_rank_ref: Int[pl.Ref, "C"],
-        token_id_ref: Int[pl.Ref, "C"],
-        valid_ref: Bool[pl.Ref, "C"],
+        source_rank_ref: Int[pl.Ref, "Dst E C"],
+        token_id_ref: Int[pl.Ref, "Dst E C"],
+        valid_ref: Bool[pl.Ref, "Dst E C"],
         out_ref: Float[pl.Ref, "C D"],
     ) -> None:
+        dst = pl.program_id(0)
+        expert = pl.program_id(1)
+        row_tile = pl.program_id(2)
         hidden_tile = pl.program_id(3)
+        row_start = row_tile * row_block
         hidden_start = hidden_tile * hidden_block
 
-        src = source_rank_ref[0, 0, pl.ds(0, row_block)]
-        token = token_id_ref[0, 0, pl.ds(0, row_block)]
+        src = source_rank_ref[dst, expert, pl.ds(row_start, row_block)]
+        token = token_id_ref[dst, expert, pl.ds(row_start, row_block)]
         safe_src = jnp.maximum(src, jnp.zeros((), dtype=src.dtype))
         safe_token = jnp.maximum(token, jnp.zeros((), dtype=token.dtype))
 

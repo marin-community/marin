@@ -3,6 +3,7 @@
 
 import jax.numpy as jnp
 import numpy as np
+from jax.experimental.pallas import mosaic_gpu as mgpu
 
 import levanter.grug._moe.source_push_mlp as source_push_mlp
 from levanter.grug._moe import source_push_forward
@@ -12,6 +13,7 @@ from levanter.grug._moe.source_push_backward_dy_route import (
     SOURCE_PUSH_DY_ROUTE_IMPLEMENTATION_REFERENCE,
     _source_push_backward_dy_to_h_rows,
     _source_push_backward_dy_to_expert_major,
+    _source_push_backward_dy_to_expert_major_pallas_call,
     _source_push_h_flat_indices,
 )
 from levanter.grug._moe.source_push_inbox import PushInboxConfig
@@ -32,6 +34,18 @@ def test_source_push_backward_dy_route_default_row_block_satisfies_mosaic_copy_f
     assert block_sizes.row_block == dy_route.MIN_SOURCE_PUSH_DY_ROUTE_GPU_ROW_BLOCK
     assert block_sizes.row_block * np.dtype(np.int32).itemsize % 128 == 0
     assert block_sizes.row_block * np.dtype(np.bool_).itemsize % 128 == 0
+
+
+def test_source_push_backward_dy_route_compact_metadata_stays_in_gmem():
+    in_specs, _out_spec = dy_route._source_push_backward_dy_route_compact_block_specs(
+        row_block=dy_route.DEFAULT_SOURCE_PUSH_DY_ROUTE_ROW_BLOCK,
+        hidden_block=dy_route.DEFAULT_SOURCE_PUSH_DY_ROUTE_HIDDEN_BLOCK,
+    )
+
+    _dy_spec, source_rank_spec, token_id_spec, valid_spec = in_specs
+    assert source_rank_spec.memory_space == mgpu.GMEM
+    assert token_id_spec.memory_space == mgpu.GMEM
+    assert valid_spec.memory_space == mgpu.GMEM
 
 
 def test_source_push_backward_dy_route_source_padded_matches_compact_reference_with_padding():
@@ -148,6 +162,41 @@ def test_source_push_backward_dy_route_compact_pallas_interpret_matches_compact_
         np.asarray(observed)[~np.asarray(route_table.valid_by_expert)],
         np.zeros_like(np.asarray(observed)[~np.asarray(route_table.valid_by_expert)]),
     )
+
+
+def test_source_push_backward_dy_route_compact_pallas_call_interpret_matches_reference():
+    route_assignments = jnp.array(
+        [
+            [[0, 2], [1, 3], [0, 2], [1, 3]],
+            [[2, 0], [3, 1], [2, 0], [3, 1]],
+        ],
+        dtype=jnp.int32,
+    )
+    _config, _host_inputs, route_table = _forward_inputs_for_routes(
+        route_assignments,
+        entries_per_rank=2,
+        use_exact_expert_major=True,
+    )
+    dy = _dy_values_for_route_table(route_table)
+
+    observed = _source_push_backward_dy_to_expert_major_pallas_call(
+        dy,
+        route_table.source_rank_by_expert,
+        route_table.token_id_by_expert,
+        route_table.valid_by_expert,
+        row_block=2,
+        hidden_block=1,
+        interpret=True,
+    )
+    expected = _source_push_backward_dy_to_expert_major(
+        dy,
+        route_table.source_rank_by_expert,
+        route_table.token_id_by_expert,
+        route_table.valid_by_expert,
+        implementation=SOURCE_PUSH_DY_ROUTE_IMPLEMENTATION_REFERENCE,
+    )
+
+    np.testing.assert_allclose(np.asarray(observed), np.asarray(expected), atol=0, rtol=0)
 
 
 def test_source_push_backward_dy_route_pallas_interpret_matches_source_padded_reference_and_zeros_invalid_rows():
