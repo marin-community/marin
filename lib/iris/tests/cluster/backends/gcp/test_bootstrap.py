@@ -13,7 +13,7 @@ from iris.cluster.platforms.gcp.worker_bootstrap import (
     zone_to_multi_region,
 )
 from iris.cluster.platforms.gcp.workers import GcpWorkerProvider
-from iris.cluster.runtime.docker import RESERVED_HOST_PORTS
+from iris.cluster.runtime.docker import EPHEMERAL_PORT_RANGE, RESERVED_HOST_PORTS
 from iris.cluster.service_mode import ServiceMode
 
 
@@ -37,15 +37,17 @@ def test_build_worker_bootstrap_script_requires_controller_address() -> None:
         build_worker_bootstrap_script(cfg)
 
 
-def test_worker_bootstrap_reserves_fixed_tpu_ports() -> None:
-    """The host that hosts --network=host TPU tasks must reserve libtpu's fixed
-    ports (8431 et al.) so the widened ephemeral range never hands them to a
-    co-tenant's outbound connection."""
+def test_worker_bootstrap_keeps_fixed_ports_out_of_ephemeral_pool() -> None:
+    """The host that hosts --network=host TPU tasks must keep libtpu's fixed
+    ports (8431 et al.) out of the ephemeral pool, so a co-tenant's outbound
+    connection is never handed one. Both the raised floor and the explicit
+    reservation come from the shared docker.py constants, so host and container
+    settings never drift."""
     script = build_worker_bootstrap_script(_worker_config())
-    assert 'sysctl -w net.ipv4.ip_local_reserved_ports="8081,8431,8470-8482"' in script
-    # Reservation must come from the shared constant docker.py uses for
-    # private-netns containers, so host and container settings never drift.
-    assert RESERVED_HOST_PORTS in script
+    lo = int(EPHEMERAL_PORT_RANGE.split()[0])
+    assert lo > 8482, "ephemeral floor must sit above the TPU/JAX service ports"
+    assert f'sysctl -w net.ipv4.ip_local_port_range="{EPHEMERAL_PORT_RANGE}"' in script
+    assert f'sysctl -w net.ipv4.ip_local_reserved_ports="{RESERVED_HOST_PORTS}"' in script
 
 
 def test_render_template_preserves_docker_templates() -> None:

@@ -72,10 +72,13 @@ with no reservation.
 ## Conclusion
 
 The observed crash-loop was not co-tenant libtpu theft. 8431 falls inside Iris' widened
-ephemeral range with nothing reserving it, so any co-tenant outbound connection can be
-assigned local port 8431 and transiently block larry's libtpu from binding it on restart.
-Fix: reserve the fixed TPU/JAX service ports via `ip_local_reserved_ports` where the
-range is widened.
+ephemeral range (`1024 65535`) with nothing reserving it, so any co-tenant outbound
+connection can be assigned local port 8431 and transiently block larry's libtpu from
+binding it on restart. The same exposure applies to every fixed port the cluster binds
+below the old floor — including iris' own worker RPC on 10001. Fix: raise the ephemeral
+floor to 11000 (above every fixed port we own: TPU ≤ 8482, iris 10000/10001) at all three
+sites that widen the range, and additionally reserve the TPU/JAX block via
+`ip_local_reserved_ports` as defense-in-depth.
 
 ## Key code references
 

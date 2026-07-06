@@ -161,19 +161,26 @@ def test_security_flags_docker_access_mounts_socket():
 # ---------------------------------------------------------------------------
 
 
-def test_network_sysctls_reserve_fixed_tpu_ports():
-    """The widened ephemeral range must not be free to hand out the fixed ports
-    the TPU/JAX runtime binds, or a co-tenant's outbound connection can steal
-    one (e.g. 8431) and crash-loop the TPU trainer with "Address already in use".
+# Fixed ports the cluster's own services bind: TPU/JAX runtime (libtpu metric
+# 8431, the TPU/SliceBuilder block incl. the JAX coordinator 8482 and marin's
+# default 8476, levanter megascale 8081) and iris controller/worker RPC.
+FIXED_SERVICE_PORTS = (8081, 8431, 8470, 8471, 8476, 8482, 10000, 10001)
+
+
+def test_ephemeral_floor_sits_above_fixed_service_ports():
+    """No fixed port the cluster binds may fall in the ephemeral auto-allocation
+    pool, or a co-tenant's outbound connection can be handed it and crash-loop
+    the service that needs it (the "[::]:8431 Address already in use" TPU case).
     """
+    lo, _hi = (int(x) for x in _NETWORK_SYSCTLS["net.ipv4.ip_local_port_range"].split())
     reserved = _expand_reserved_ports(_NETWORK_SYSCTLS["net.ipv4.ip_local_reserved_ports"])
-    # The confirmed offender (libtpu Runtime Metric Service) plus the other
-    # live TPU service ports and the JAX distributed coordinator.
-    for port in (8431, 8470, 8471, 8476, 8482):
-        assert port in reserved, f"port {port} must be reserved from the ephemeral range"
+    for port in FIXED_SERVICE_PORTS:
+        assert port < lo or port in reserved, f"fixed service port {port} is reachable by ephemeral auto-allocation"
 
 
-def test_reserved_ports_lie_inside_widened_ephemeral_range():
-    """Reservation is only meaningful for ports the ephemeral allocator can reach."""
-    lo, hi = (int(x) for x in _NETWORK_SYSCTLS["net.ipv4.ip_local_port_range"].split())
-    assert all(lo <= port <= hi for port in _expand_reserved_ports(RESERVED_HOST_PORTS))
+def test_reserved_ports_cover_the_tpu_block():
+    """Defense-in-depth: even though the floor already excludes them, the TPU/JAX
+    ports stay reserved so lowering the floor again cannot re-expose them."""
+    reserved = _expand_reserved_ports(RESERVED_HOST_PORTS)
+    for port in (8081, 8431, 8470, 8471, 8476, 8482):
+        assert port in reserved, f"port {port} must stay reserved"

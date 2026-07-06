@@ -1,4 +1,4 @@
-# Reserve libtpu's fixed ports from Iris' widened ephemeral range
+# Keep the cluster's fixed ports out of Iris' widened ephemeral range
 
 _Why are we doing this? What's the benefit?_
 
@@ -60,33 +60,41 @@ so they share this one host netns and its sysctls.
 
 ## Design
 
-Add the fixed TPU/JAX service ports to `ip_local_reserved_ports` wherever Iris widens
-the ephemeral range. A shared constant `RESERVED_HOST_PORTS = "8081,8431,8470-8482"`
-([`docker.py`](https://github.com/marin-community/marin/blob/main/lib/iris/src/iris/cluster/runtime/docker.py)),
-covering libtpu's metric service (8431), the Cloud TPU runtime/SliceBuilder block
-(8470-8482, which includes JAX's coordinator 8482 and marin's default 8476), and
-levanter megascale (8081):
+Two layers, both derived from shared constants in
+[`docker.py`](https://github.com/marin-community/marin/blob/main/lib/iris/src/iris/cluster/runtime/docker.py)
+so host and container settings never drift:
 
-- **Host (primary):** `worker_bootstrap.py` emits
-  `sysctl -w net.ipv4.ip_local_reserved_ports="{{ reserved_ports }}"`. This is the one
-  that matters, since TPU tasks use `--network=host` and inherit host sysctls.
-- **Container:** `docker.py`'s `_NETWORK_SYSCTLS` gains the same key, for the
-  private-netns tasks that get per-container sysctls.
+- **Raise the ephemeral floor (primary): `1024` → `11000`.** The lowest fixed port the
+  cluster's own services bind is iris' controller/worker RPC on 10000/10001; the
+  TPU/JAX runtime ports are all ≤ 8482. Putting the floor at 11000 moves the entire
+  ephemeral pool above *every* fixed port we own, in one stroke — not just libtpu's, but
+  iris' 10001 too, which the enumerated reservation alone would have missed. It still
+  leaves ~54k ephemeral ports (vs ~64k), preserving the high-fan-out headroom the wide
+  range was for. Applied at all three sites that widen the range: `worker_bootstrap.py`,
+  `controller_bootstrap.py`, and `docker.py`'s `_NETWORK_SYSCTLS`.
+- **Reserve the TPU/JAX block (defense-in-depth): `RESERVED_HOST_PORTS =
+  "8081,8431,8470-8482"`** in `worker_bootstrap.py` (host, for `--network=host` TPU
+  tasks) and `docker.py` (private-netns containers). Redundant given the floor, but it
+  pins the specific ports so a future floor change can't silently re-expose them.
+  `ip_local_reserved_ports` only blocks *automatic* assignment (`bind(0)`, `connect()`
+  source ports); an explicit `bind(8431)` by the TPU runtime is unaffected.
 
-The controller VM is deliberately excluded — it runs no libtpu, so it has nothing to
-protect. `ip_local_reserved_ports` only blocks *automatic* assignment (`bind(0)`,
-`connect()` source ports); an explicit `bind(8431)` by the TPU runtime is unaffected.
+The `3201/3202/9230/11755` LISTENers also seen on the TPU VMs are the GCP image's own
+monitoring agents, not iris services, so they are out of scope (and 11755 sits above the
+floor regardless).
 
 ## Testing
 
-Unit tests assert the invariant, not the literal string: `_expand_reserved_ports` parses
-the spec and checks that the confirmed offenders `{8431, 8470, 8471, 8476, 8482}` are
-reserved and that every reserved port lies inside the widened range
-(`test_docker_runtime.py`), plus that the rendered worker bootstrap script contains the
-reservation (`test_bootstrap.py`). Rollout: the code change only affects VMs created
-after it lands; the **live reserved slice needs a one-time `sysctl -w
-net.ipv4.ip_local_reserved_ports="8081,8431,8470-8482"` pushed to its 256 workers** (or a
-slice recreation) to be protected now. This is a pure sysctl and does not require
+Unit tests assert the invariant, not the literal string: for every fixed service port
+the cluster binds (`{8081, 8431, 8470, 8471, 8476, 8482, 10000, 10001}`),
+`test_ephemeral_floor_sits_above_fixed_service_ports` checks it is either below the floor
+or reserved; a second test pins the TPU block in the reservation; and a bootstrap-render
+test checks the emitted worker script sets both the raised floor and the reservation
+(`test_docker_runtime.py`, `test_bootstrap.py`). Rollout: the code change only affects
+VMs created after it lands; the **live reserved slice needs a one-time `sysctl -w
+net.ipv4.ip_local_port_range="11000 65535"` (and, belt-and-suspenders,
+`net.ipv4.ip_local_reserved_ports="8081,8431,8470-8482"`) pushed to its 256 workers** (or
+a slice recreation) to be protected now. Both are pure sysctls and do not require
 bouncing the controller or the run.
 
 ## Open Questions
@@ -95,9 +103,12 @@ bouncing the controller or the run.
   tasks in `env.py` (candidate fix A)? It closes the libtpu-on-co-tenant vector by
   construction and is correct hygiene, but does not address this incident (the co-tenants
   never loaded libtpu). Cheap and independent — worth a follow-up, not this PR.
-- **Port set completeness:** 8081/8431/8470-8482 covers every fixed port we observed
-  larry bind plus the documented TPU/JAX block. Is any generation (v5/v6e megascale,
-  MXLA) using a fixed port outside this set that should also be reserved?
-- **Rollout ownership:** who pushes the one-time sysctl to the existing reserved-2048
+- **Floor height:** 11000 clears every fixed port we own (TPU ≤ 8482, iris 10000/10001)
+  and the GCP monitoring agents seen ≤ 9230, leaving ~54k ephemeral ports. Is any
+  generation (v5/v6e megascale, MXLA) or future iris service binding a fixed port between
+  11000 and 65535 where the floor wouldn't help and an explicit reservation would be
+  needed? (Iris' own PortAllocator range 30000-40000 is inside the pool but is
+  bind-checked, a separate concern.)
+- **Rollout ownership:** who pushes the one-time sysctls to the existing reserved-2048
   slice, and do we want an `iris cluster` helper to apply node sysctls without
   recreation?
