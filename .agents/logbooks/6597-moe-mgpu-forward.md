@@ -2440,3 +2440,58 @@ D3072/I3072, topk=4, experts_per_rank=32, and the 576-entry copy profile.
 Current conclusion: full forward is still around 657-689 rounded TFLOP/s/rank depending on B200/B300, below the
 800 TFLOP/s/rank goal. More blind queue tuning is unlikely to close the gap; the next useful step is a decomposed
 Blackwell timing path that runs under the same explicit-mesh fwd/bwd benchmark harness.
+
+## 2026-07-05 23:22 - B200 W2 tile tuning and stage split
+
+Added a Blackwell-compatible decomposed forward timing path to the fwd/bwd harness and fixed the standalone Blackwell
+forward smoke stage harness to use the same explicit mesh and replicated destination-transport base arrays as the
+production path. These harness fixes produced B200 stage attribution and guided a focused W2 tile change.
+
+- Code state:
+  - Branch: `codex/blackwell-source-push-stack`
+  - Base commit before this entry: `90cdbb0aa`
+- B200 decomposed forward:
+  - Artifact: `blackwell_forward_decomp_b200_64935.jsonl`
+  - Staged compute/transport medians, excluding un-jitted pack diagnostic:
+    - destination+W13 bucket: 10.79 ms
+    - W2+return bucket: 9.05 ms
+    - combine: 1.52 ms
+  - Interpretation: the gap is split between the destination/W13 side and W2/return side; queue depth and worker count
+    are not the main limit.
+- B200 fine-stage forward:
+  - Artifact: `blackwell_forward_fine_stage_b200_64937.jsonl`
+  - Prepared-input median: 20.37 ms, 750.79 useful TFLOP/s/rank
+  - Fine-stage medians:
+    - destination transport: 6.39 ms
+    - W13: 5.66 ms
+    - W2: 4.76 ms
+    - return transport: 4.50 ms
+    - combine: 1.49 ms
+- B200 queue/worker sweep:
+  - Artifact: `blackwell_forward_tune_b200_64938.jsonl`
+  - Best median: 637.85 useful / 657.28 rounded TFLOP/s/rank with `inbox_slots=32`
+  - Baseline replicate: 637.14 useful / 656.54 rounded TFLOP/s/rank
+  - `entries_per_rank=512` overflowed queue capacity; `block_m=128` regressed to 425.89 useful / 452.87 rounded.
+  - Interpretation: queue/worker knobs are flat and do not move toward 800.
+- B200 W2 tile tuning:
+  - Artifact: `blackwell_w2n128_b200_64939.jsonl`
+  - Change: W2 `tile_n=128` instead of 64, with `tile_m=128`, `tile_k=64`, `max_concurrent_steps=6`,
+    `epilogue_tile_n=64`
+  - Full-forward median: 665.22 useful / 685.48 rounded TFLOP/s/rank, 22.31 ms, 0 dropped routes
+  - Prepared-input median: 19.19 ms, 797.15 useful TFLOP/s/rank
+  - Fine-stage W2 improved from 4.76 ms to 3.98 ms; other stages were effectively unchanged.
+  - `epilogue_tile_n=128` was neutral/slightly worse at 665.18 useful / 685.44 rounded.
+  - Larger W2 variants failed shared-memory limits:
+    - `tile_n=128,tile_k=128`: 409,780 bytes > 232,448
+    - `tile_n=256,tile_k=64`: 311,476 bytes > 232,448
+    - `tile_n=128,tile_k=64,max_concurrent_steps=8`: 278,756 bytes > 232,448
+- B300 status:
+  - The W2 `tile_n=128` config fails fresh B300 compilation with the PTX 8.7 / `sm_103a` toolchain error.
+  - The checked-in change therefore selects the W2 `tile_n=128` config only on B200 and keeps `tile_n=64` as the default
+    fallback for other Blackwell devices. A B300 selector probe confirmed the fallback returns the `tile_n=64` config,
+    but fresh B300 full-forward compilation still hit the same PTX toolchain error in this environment.
+
+Current conclusion: B200 full forward improved from about 657 rounded to about 685 rounded TFLOP/s/rank. The
+prepared-input path is now at the 800 useful TFLOP/s/rank boundary, but the full forward path remains below 800 due
+remaining input-prep/transport overhead. The next useful experiment is to reduce the destination and return transport
+costs, not more queue-depth tuning.

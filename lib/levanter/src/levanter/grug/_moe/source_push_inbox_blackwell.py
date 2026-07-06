@@ -135,6 +135,17 @@ BLACKWELL_TARGET_W2_TUNING_CONFIG = BlackwellW13TuningConfig(
     epilogue_tile_n=64,
 )
 
+BLACKWELL_TARGET_W2_B200_TUNING_CONFIG = BlackwellW13TuningConfig(
+    tile_m=128,
+    tile_n=128,
+    tile_k=64,
+    max_concurrent_steps=6,
+    collective=True,
+    grid_tile_width=1,
+    grid_minor_dim=BlackwellGridMinorDim.M,
+    epilogue_tile_n=64,
+)
+
 
 def source_push_inbox_architecture(profile: str) -> SourcePushInboxArchitecture:
     """Return the architecture family associated with a source-push profile."""
@@ -473,9 +484,11 @@ def sharded_blackwell_local_w13_h(
 def sharded_blackwell_local_w2_y(
     mesh: Mesh,
     *,
-    tuning_config: BlackwellW13TuningConfig = BLACKWELL_TARGET_W2_TUNING_CONFIG,
+    tuning_config: BlackwellW13TuningConfig | None = None,
 ):
     """Return a shard-mapped rank-local weighted SwiGLU plus Blackwell W2 kernel."""
+    if tuning_config is None:
+        tuning_config = _default_blackwell_w2_tuning_config(mesh)
 
     def local_fn(
         h_local: Float[Array, "1 rows twoI"],
@@ -504,6 +517,13 @@ def sharded_blackwell_local_w2_y(
         out_specs=P(AXIS, None, None),
         check_vma=False,
     )
+
+
+def _default_blackwell_w2_tuning_config(mesh: Mesh) -> BlackwellW13TuningConfig:
+    device_kind = getattr(mesh.devices.flat[0], "device_kind", "")
+    if "B200" in device_kind:
+        return BLACKWELL_TARGET_W2_B200_TUNING_CONFIG
+    return BLACKWELL_TARGET_W2_TUNING_CONFIG
 
 
 def _make_flat_y_return_transport_kernel(

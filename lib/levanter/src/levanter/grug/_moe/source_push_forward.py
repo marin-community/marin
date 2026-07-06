@@ -1446,6 +1446,7 @@ def _time_staged_source_push_forward(
     recv_meta: jax.Array,
     expert_base: jax.Array,
     src_base_by_expert: jax.Array,
+    h_group_sizes: jax.Array,
     w_gate_up: jax.Array,
     h_route_weights: jax.Array,
     w_down: jax.Array,
@@ -1460,43 +1461,87 @@ def _time_staged_source_push_forward(
     repeat_runs: int,
     progress: Callable[[str], None] | None = None,
     use_exact_expert_major: bool = False,
+    implementation: SourcePushForwardImplementation = SOURCE_PUSH_FORWARD_IMPLEMENTATION_PALLAS_MGPU,
+    execution_mode: str = FORWARD_EXECUTION_STAGED_HOST_SYNC,
 ) -> SourcePushForwardTiming:
-    """Run full forward as three host-synchronized JIT stages for ordering diagnostics."""
+    """Run full forward as staged JIT callables for ordering diagnostics."""
 
-    w13_h_fn = jax.jit(_sharded_w13_h_kernel(mesh, config, use_exact_expert_major=use_exact_expert_major))
-    w2_from_h_return_fn = jax.jit(
-        _sharded_w2_from_h_return_direct_to_source_kernel(
-            mesh,
-            config,
-            use_exact_expert_major=use_exact_expert_major,
-        )
+    stage_fns = _staged_source_push_forward_callables(
+        mesh,
+        config,
+        use_exact_expert_major=use_exact_expert_major,
+        implementation=implementation,
+        execution_mode=execution_mode,
     )
-    combine_fn = jax.jit(_sharded_source_combine_kernel(mesh, config))
 
     def call_stages(*, record_stage_times: bool = False):
         stage_times: dict[str, float] = {}
 
         stage_start = time.perf_counter()
-        _, h = w13_h_fn(
-            x,
-            send_meta,
-            recv_meta,
-            expert_base,
-            src_base_by_expert,
-            w_gate_up,
-        )
+        if implementation == SOURCE_PUSH_FORWARD_IMPLEMENTATION_BLACKWELL_STAGED:
+            if stage_fns.destination_local_x_fn is None:
+                raise AssertionError("Blackwell destination-local X callable was not initialized")
+            destination_transport_expert_base = jax.device_put(expert_base, NamedSharding(mesh, P(None, None)))
+            destination_transport_src_base_by_expert = jax.device_put(
+                src_base_by_expert,
+                NamedSharding(mesh, P(None, None, None)),
+            )
+            destination_x = stage_fns.destination_local_x_fn(
+                x,
+                send_meta,
+                destination_transport_expert_base,
+                destination_transport_src_base_by_expert,
+            )
+            if execution_mode == FORWARD_EXECUTION_STAGED_HOST_SYNC:
+                _block_until_ready(destination_x)
+            elif stage_fns.destination_x_barrier_fn is not None:
+                destination_x = stage_fns.destination_x_barrier_fn(destination_x)
+            h = stage_fns.w13_h_fn(destination_x, w_gate_up, h_group_sizes)
+        else:
+            _, h = stage_fns.w13_h_fn(
+                x,
+                send_meta,
+                recv_meta,
+                expert_base,
+                src_base_by_expert,
+                w_gate_up,
+            )
         _block_until_ready(h)
         if record_stage_times:
             stage_times[FORWARD_STAGE_W13] = time.perf_counter() - stage_start
 
         stage_start = time.perf_counter()
-        source_return = w2_from_h_return_fn(h, h_route_weights, recv_meta, expert_base, src_base_by_expert, w_down)
+        if implementation == SOURCE_PUSH_FORWARD_IMPLEMENTATION_BLACKWELL_STAGED:
+            if stage_fns.w2_y_fn is None or stage_fns.return_fn is None:
+                raise AssertionError("Blackwell W2/return callables were not initialized")
+            y = stage_fns.w2_y_fn(h, h_route_weights, w_down, h_group_sizes)
+            if execution_mode == FORWARD_EXECUTION_STAGED_HOST_SYNC:
+                _block_until_ready(y)
+            source_return = stage_fns.return_fn(
+                y,
+                recv_meta,
+                expert_base,
+                src_base_by_expert,
+            )
+        else:
+            if stage_fns.w2_from_h_return_fn is None:
+                raise AssertionError("Pallas W2 return callable was not initialized")
+            source_return = stage_fns.w2_from_h_return_fn(
+                h,
+                h_route_weights,
+                recv_meta,
+                expert_base,
+                src_base_by_expert,
+                w_down,
+            )
+        if execution_mode == FORWARD_EXECUTION_STAGED_DEVICE_SYNC and stage_fns.source_return_barrier_fn is not None:
+            source_return = stage_fns.source_return_barrier_fn(source_return)
         _block_until_ready(source_return)
         if record_stage_times:
             stage_times[FORWARD_STAGE_W2_RETURN] = time.perf_counter() - stage_start
 
         stage_start = time.perf_counter()
-        out = combine_fn(
+        out = stage_fns.combine_fn(
             source_return,
             queue_dst_ord,
             queue_entry,
@@ -1602,6 +1647,7 @@ def _run_forward_one(
         recv_meta = inputs.recv_meta
         expert_base = inputs.expert_base
         src_base_by_expert = inputs.src_base_by_expert
+        h_group_sizes = inputs.h_group_sizes
         w_gate_up = inputs.w_gate_up
         h_route_weights = inputs.h_route_weights
         w_down = inputs.w_down
@@ -1620,6 +1666,7 @@ def _run_forward_one(
                 recv_meta,
                 expert_base,
                 src_base_by_expert,
+                h_group_sizes,
                 w_gate_up,
                 h_route_weights,
                 w_down,

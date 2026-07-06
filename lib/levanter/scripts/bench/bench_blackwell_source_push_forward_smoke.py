@@ -14,7 +14,7 @@ from typing import Any, Sequence
 import jax
 import jax.numpy as jnp
 import numpy as np
-from jax.sharding import AxisType, Mesh
+from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P
 
 from levanter.grug._moe.source_push_forward import (
     FORWARD_EXECUTION_MODES,
@@ -190,11 +190,16 @@ def _time_blackwell_stages(
             stage_times[STAGE_INPUT_PREPARE] = time.perf_counter() - start
 
         start = time.perf_counter()
+        destination_transport_expert_base = jax.device_put(inputs.expert_base, NamedSharding(mesh, P(None, None)))
+        destination_transport_src_base_by_expert = jax.device_put(
+            inputs.src_base_by_expert,
+            NamedSharding(mesh, P(None, None, None)),
+        )
         destination_x = stage_fns.destination_local_x_fn(
             inputs.x,
             inputs.send_meta,
-            inputs.expert_base,
-            inputs.src_base_by_expert,
+            destination_transport_expert_base,
+            destination_transport_src_base_by_expert,
         )
         if stage_fns.destination_x_barrier_fn is not None:
             destination_x = stage_fns.destination_x_barrier_fn(destination_x)

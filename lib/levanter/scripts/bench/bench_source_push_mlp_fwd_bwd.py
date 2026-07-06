@@ -398,9 +398,14 @@ def _run_one(
                 repeat_runs=repeat_runs,
             )
         if mode in (MODE_FORWARD_DECOMPOSED, MODE_FORWARD_DECOMPOSED_RAW_TOKENS):
-            if backend != BACKEND_SOURCE_PUSH_PALLAS:
-                raise ValueError(f"{mode!r} only supports backend={BACKEND_SOURCE_PUSH_PALLAS!r}")
+            if backend not in (BACKEND_SOURCE_PUSH_PALLAS, BACKEND_SOURCE_PUSH_BLACKWELL):
+                raise ValueError(
+                    f"{mode!r} only supports backend="
+                    f"{(BACKEND_SOURCE_PUSH_PALLAS, BACKEND_SOURCE_PUSH_BLACKWELL)!r}"
+                )
             if mode == MODE_FORWARD_DECOMPOSED_RAW_TOKENS:
+                if backend != BACKEND_SOURCE_PUSH_PALLAS:
+                    raise ValueError(f"{mode!r} only supports backend={BACKEND_SOURCE_PUSH_PALLAS!r}")
                 return _run_source_push_forward_raw_token_decomposed(
                     config,
                     mesh=mesh,
@@ -418,6 +423,8 @@ def _run_one(
                 warmup=warmup,
                 steps=steps,
                 repeat_runs=repeat_runs,
+                implementation=SOURCE_PUSH_BACKEND_TO_IMPLEMENTATION[backend],
+                execution_mode=SOURCE_PUSH_BACKEND_TO_EXECUTION_MODE[backend],
             )
         fn, call_args = _make_benchmark_callable(
             config,
@@ -486,6 +493,8 @@ def _run_source_push_forward_decomposed(
     warmup: int,
     steps: int,
     repeat_runs: int,
+    implementation: str,
+    execution_mode: str,
 ) -> list[dict[str, Any]]:
     pack_timing = _time_source_push_input_pack(
         config,
@@ -508,8 +517,9 @@ def _run_source_push_forward_decomposed(
         packed.recv_meta,
         packed.expert_base,
         packed.src_base_by_expert,
+        packed.h_group_sizes,
         packed.w_gate_up,
-        packed.recv_route_weights,
+        packed.h_route_weights,
         packed.w_down,
         packed.queue_dst_ord,
         packed.queue_entry,
@@ -520,6 +530,8 @@ def _run_source_push_forward_decomposed(
         steps=steps,
         repeat_runs=repeat_runs,
         use_exact_expert_major=packed.use_exact_expert_major,
+        implementation=implementation,
+        execution_mode=execution_mode,
     )
     return _decomposed_forward_rows(
         config,
@@ -1012,7 +1024,7 @@ def _block_source_push_forward_device_inputs(inputs: SourcePushForwardDeviceInpu
             inputs.queue_dst_ord,
             inputs.queue_entry,
             inputs.queue_row,
-            inputs.recv_route_weights,
+            inputs.h_route_weights,
             inputs.route_combine_weights,
             inputs.route_valid_mask,
         )
