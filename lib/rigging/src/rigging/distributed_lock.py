@@ -30,6 +30,7 @@ from dataclasses import asdict, dataclass
 
 import botocore.config
 import botocore.session
+import fsspec
 from botocore.exceptions import ClientError
 from google.api_core.exceptions import NotFound
 from google.cloud import storage
@@ -372,17 +373,19 @@ class LocalFileLease(DistributedLease):
 class FsspecLease(DistributedLease):
     """Best-effort lease for arbitrary fsspec filesystems."""
 
-    def _lock_target(self):
-        # Local import: rigging.filesystem imports this module at module scope
-        # (create_lock, default_worker_id), so importing StoragePath at module
-        # scope here would be circular.
-        from rigging.filesystem import StoragePath  # noqa: PLC0415
-
-        return StoragePath(self.lock_path)
+    # Uses raw fsspec, not the rigging.filesystem StoragePath verbs: filesystem imports
+    # this module (create_lock/default_worker_id for MirrorFileSystem), so this module
+    # sits below it in rigging's DAG and cannot depend back on it. Lock files are tiny
+    # JSON, so the cross-region budget guard buys nothing here.
+    def _get_fs(self) -> tuple[fsspec.AbstractFileSystem, str]:
+        """Return ``(fs, path)`` for the lock path via fsspec."""
+        return fsspec.core.url_to_fs(self.lock_path)
 
     def _read_with_generation(self) -> tuple[int, Lease | None]:
+        fs, path = self._get_fs()
         try:
-            content = self._lock_target().read_text()
+            with fs.open(path, "r") as f:
+                content = f.read()
             if not content:
                 return (0, None)
             data = json.loads(content)
@@ -392,21 +395,26 @@ class FsspecLease(DistributedLease):
 
     def _write(self, lease: Lease, if_generation_match: int) -> None:
         """Best-effort lock: write lease, then read back to check if we won."""
-        target = self._lock_target()
-        target.parent.mkdirs()
-        target.write_text(json.dumps(asdict(lease)))
+        fs, path = self._get_fs()
+        parent = path.rsplit("/", 1)[0] if "/" in path else ""
+        if parent:
+            fs.makedirs(parent, exist_ok=True)
+        with fs.open(path, "w") as f:
+            f.write(json.dumps(asdict(lease)))
         # Read back and check if our write stuck (best-effort race detection)
         time.sleep(0.1)
         try:
-            readback = json.loads(target.read_text())
+            with fs.open(path, "r") as f:
+                readback = json.loads(f.read())
             if readback.get("worker_id") != lease.worker_id:
                 raise FileExistsError(f"Lock race lost to {readback.get('worker_id')}")
         except FileNotFoundError as err:
             raise FileExistsError("Lock file disappeared after write") from err
 
     def _delete(self) -> None:
+        fs, path = self._get_fs()
         try:
-            self._lock_target().rm()
+            fs.rm(path)
         except FileNotFoundError:
             pass
 
