@@ -23,7 +23,6 @@ from pathlib import Path
 # Ordered list of workspace member short names.
 SCOPES: tuple[str, ...] = (
     "rigging",
-    "finelog",
     "haliax",
     "iris",
     "fray",
@@ -45,7 +44,6 @@ BROAD_TRIGGERS: frozenset[str] = frozenset(
 # uv package names and pytest paths for each workspace scope.
 UV_PACKAGE: dict[str, str] = {
     "rigging": "marin-rigging",
-    "finelog": "marin-finelog",
     "haliax": "marin-haliax",
     "iris": "marin-iris",
     "fray": "marin-fray",
