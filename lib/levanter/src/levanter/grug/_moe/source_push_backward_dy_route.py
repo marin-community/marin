@@ -407,7 +407,11 @@ def _source_push_backward_dy_to_expert_major_pallas_call(
         valid_by_expert,
         output_shape,
     )
-    kernel = _make_source_push_backward_dy_route_compact_kernel(row_block=row_block, hidden_block=hidden_block)
+    kernel = _make_source_push_backward_dy_route_compact_kernel(
+        row_block=row_block,
+        hidden_block=hidden_block,
+        cast_iota_layout=not interpret,
+    )
     in_specs, out_spec = _source_push_backward_dy_route_compact_block_specs(
         row_block=row_block,
         hidden_block=hidden_block,
@@ -1066,7 +1070,12 @@ def _source_push_backward_dy_route_compact_block_specs(
     return (dy_spec, route_spec, route_spec, route_spec), out_spec
 
 
-def _make_source_push_backward_dy_route_compact_kernel(*, row_block: int, hidden_block: int):
+def _make_source_push_backward_dy_route_compact_kernel(
+    *,
+    row_block: int,
+    hidden_block: int,
+    cast_iota_layout: bool = True,
+):
     def kernel(
         dy_ref: Float[pl.Ref, "S T D"],
         source_rank_ref: Int[pl.Ref, "Dst E C"],
@@ -1080,7 +1089,13 @@ def _make_source_push_backward_dy_route_compact_kernel(*, row_block: int, hidden
         hidden_tile = pl.program_id(3)
         row_start = row_tile * row_block
         hidden_start = hidden_tile * hidden_block
-        hidden_offsets = hidden_start + jnp.arange(hidden_block, dtype=jnp.int32)
+        hidden_range = jnp.arange(hidden_block, dtype=jnp.int32)
+        if cast_iota_layout:
+            hidden_range = mgpu.layout_cast(
+                hidden_range,
+                mgpu.Layout.WG_STRIDED((hidden_block,), vec_size=1),
+            )
+        hidden_offsets = hidden_start + hidden_range
 
         src = source_rank_ref[dst, expert, pl.ds(row_start, row_block)]
         token = token_id_ref[dst, expert, pl.ds(row_start, row_block)]
