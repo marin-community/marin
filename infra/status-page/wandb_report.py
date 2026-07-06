@@ -1,4 +1,7 @@
 #!/usr/bin/env -S uv run --script
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
 # /// script
 # requires-python = ">=3.12"
 # dependencies = ["wandb-workspaces>=0.1.12"]
