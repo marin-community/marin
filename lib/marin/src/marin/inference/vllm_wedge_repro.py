@@ -134,13 +134,6 @@ def drive_load(running_model: RunningModel, *, clients: int, duration_minutes: i
         stop.set()
 
 
-def _run_parent(config: BrokeredVllmSystemConfig, clients: int, duration_minutes: int) -> None:
-    configure_logging()
-    with start_iris_brokered_vllm(config) as running_model:
-        if drive_load(running_model, clients=clients, duration_minutes=duration_minutes):
-            raise SystemExit(2)
-
-
 @click.command(help=__doc__, context_settings={"help_option_names": ["-h", "--help"], "show_default": True})
 @click.option("--clients", type=click.IntRange(min=1), default=24, help="Concurrent incremental-decoder clients.")
 @click.option("--duration-minutes", type=click.IntRange(min=1), default=360, help="Give up after this long.")
@@ -172,13 +165,19 @@ def main(clients: int, duration_minutes: int, tpu_type: str, region: str, job_na
         },
     )
 
+    def run_parent() -> None:
+        configure_logging()
+        with start_iris_brokered_vllm(config) as running_model:
+            if drive_load(running_model, clients=clients, duration_minutes=duration_minutes):
+                raise SystemExit(2)
+
     iris_config = load_config("lib/iris/config/marin.yaml")
     controller = provider_bundle(iris_config).controller
     controller_address = iris_config.controller_address() or controller.discover_controller(iris_config.controller)
     with controller.tunnel(address=controller_address) as controller_url:
         with IrisClient.remote(controller_url, workspace=Path.cwd()) as client:
             job = client.submit(
-                entrypoint=Entrypoint.from_callable(_run_parent, args=(config, clients, duration_minutes)),
+                entrypoint=Entrypoint.from_callable(run_parent),
                 name=job_name,
                 resources=ResourceSpec(cpu=1.0, memory="8g", disk="16g"),
                 environment=EnvironmentSpec(env_vars={}),
