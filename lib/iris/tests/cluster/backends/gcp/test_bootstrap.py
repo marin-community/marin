@@ -13,6 +13,7 @@ from iris.cluster.platforms.gcp.worker_bootstrap import (
     zone_to_multi_region,
 )
 from iris.cluster.platforms.gcp.workers import GcpWorkerProvider
+from iris.cluster.runtime.docker import RESERVED_HOST_PORTS
 from iris.cluster.service_mode import ServiceMode
 
 
@@ -34,6 +35,17 @@ def test_build_worker_bootstrap_script_requires_controller_address() -> None:
 
     with pytest.raises(ValueError, match="controller_address"):
         build_worker_bootstrap_script(cfg)
+
+
+def test_worker_bootstrap_reserves_fixed_tpu_ports() -> None:
+    """The host that hosts --network=host TPU tasks must reserve libtpu's fixed
+    ports (8431 et al.) so the widened ephemeral range never hands them to a
+    co-tenant's outbound connection."""
+    script = build_worker_bootstrap_script(_worker_config())
+    assert 'sysctl -w net.ipv4.ip_local_reserved_ports="8081,8431,8470-8482"' in script
+    # Reservation must come from the shared constant docker.py uses for
+    # private-netns containers, so host and container settings never drift.
+    assert RESERVED_HOST_PORTS in script
 
 
 def test_render_template_preserves_docker_templates() -> None:

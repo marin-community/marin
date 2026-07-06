@@ -144,10 +144,23 @@ def _resolve_profiler_bin(container_id: str, venv_bin: str, fallback: str) -> st
     return venv_bin if probe.returncode == 0 else fallback
 
 
+# Fixed host-global ports that TPU/JAX runtime services bind by hard-coded
+# default: libtpu's Runtime Metric Service (8431), the Cloud TPU runtime and
+# SliceBuilder block (8470-8482, which includes the JAX distributed coordinator
+# on 8482 and marin's default on 8476), and levanter megascale (8081). None of
+# these go through iris' PortAllocator, so they are invisible to it. Because the
+# ephemeral range below is widened down to 1024, the kernel is otherwise free to
+# hand one of these ports to any co-tenant's outbound connection; while that
+# socket is open the TPU trainer cannot bind the port and crash-loops with
+# "[::]:8431 ... Address already in use". Reserving the ports keeps the ephemeral
+# allocator off them; an explicit bind() by the TPU runtime still succeeds.
+RESERVED_HOST_PORTS = "8081,8431,8470-8482"
+
 # Network sysctl tuning for containers with their own network namespace (#3066).
 # Host-network containers inherit host settings (configured at VM bootstrap).
 _NETWORK_SYSCTLS: dict[str, str] = {
     "net.ipv4.ip_local_port_range": "1024 65535",
+    "net.ipv4.ip_local_reserved_ports": RESERVED_HOST_PORTS,
     "net.ipv4.tcp_tw_reuse": "1",
 }
 

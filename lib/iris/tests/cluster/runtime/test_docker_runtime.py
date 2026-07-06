@@ -8,9 +8,21 @@ from unittest.mock import Mock
 
 import pytest
 from iris.cluster.bundle import BundleStore
-from iris.cluster.runtime.docker import DockerRuntime, _security_flags
+from iris.cluster.runtime.docker import _NETWORK_SYSCTLS, RESERVED_HOST_PORTS, DockerRuntime, _security_flags
 from iris.cluster.runtime.types import MountKind, MountSpec
 from iris.rpc import job_pb2
+
+
+def _expand_reserved_ports(spec: str) -> set[int]:
+    """Expand an ip_local_reserved_ports spec ("8081,8431,8470-8482") to a port set."""
+    ports: set[int] = set()
+    for part in spec.split(","):
+        if "-" in part:
+            lo, hi = (int(x) for x in part.split("-"))
+            ports.update(range(lo, hi + 1))
+        else:
+            ports.add(int(part))
+    return ports
 
 
 @pytest.fixture
@@ -142,3 +154,26 @@ def test_security_flags_docker_access_mounts_socket():
     assert "/var/run/docker.sock:/var/run/docker.sock" in flags
     # Still hardened like DEFAULT otherwise.
     assert "--cap-drop" in flags
+
+
+# ---------------------------------------------------------------------------
+# Network sysctls: fixed TPU/JAX ports must stay out of the ephemeral pool
+# ---------------------------------------------------------------------------
+
+
+def test_network_sysctls_reserve_fixed_tpu_ports():
+    """The widened ephemeral range must not be free to hand out the fixed ports
+    the TPU/JAX runtime binds, or a co-tenant's outbound connection can steal
+    one (e.g. 8431) and crash-loop the TPU trainer with "Address already in use".
+    """
+    reserved = _expand_reserved_ports(_NETWORK_SYSCTLS["net.ipv4.ip_local_reserved_ports"])
+    # The confirmed offender (libtpu Runtime Metric Service) plus the other
+    # live TPU service ports and the JAX distributed coordinator.
+    for port in (8431, 8470, 8471, 8476, 8482):
+        assert port in reserved, f"port {port} must be reserved from the ephemeral range"
+
+
+def test_reserved_ports_lie_inside_widened_ephemeral_range():
+    """Reservation is only meaningful for ports the ephemeral allocator can reach."""
+    lo, hi = (int(x) for x in _NETWORK_SYSCTLS["net.ipv4.ip_local_port_range"].split())
+    assert all(lo <= port <= hi for port in _expand_reserved_ports(RESERVED_HOST_PORTS))
