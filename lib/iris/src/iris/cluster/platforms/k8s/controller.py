@@ -557,9 +557,7 @@ class K8sControllerProvider:
         self.wait_for_deployment_ready()
         self._kubectl.rollout_status(K8sResource.DEPLOYMENTS, "iris-controller")
 
-    def restart_controller(self, config: IrisClusterConfig, *, restore_checkpoint: str | None = None) -> str:
-        if restore_checkpoint is not None:
-            raise NotImplementedError("checkpoint-restore rollback is not supported for the k8s controller")
+    def restart_controller(self, config: IrisClusterConfig) -> str:
         return self.start_controller(config)
 
     def _delete_controller_deployment_and_wait(self) -> None:

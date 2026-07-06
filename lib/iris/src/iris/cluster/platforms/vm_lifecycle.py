@@ -411,17 +411,12 @@ def restart_controller(
     config: IrisClusterConfig,
     resolve_image: Callable[[str, str | None], str] | None = None,
     health_check_timeout: float = HEALTH_CHECK_TIMEOUT_SECONDS,
-    restore_checkpoint: str | None = None,
 ) -> tuple[str, StandaloneWorkerHandle]:
     """Restart controller container in-place on existing VM.
 
     Re-runs the bootstrap script on the existing controller VM, which stops the
     running container, pulls the latest image, and starts a new container.
     Much faster than a full stop+start cycle since it skips VM creation.
-
-    ``restore_checkpoint`` (a ``gs://…/controller-state/<epoch_ms>`` dir) makes the
-    new container replace its local DB with that checkpoint on start, discarding
-    any migrations the current controller applied — the deploy-rollback path.
     """
     _resolve_image = resolve_image or _identity_resolve_image
     label_prefix = config.platform.label_prefix or "iris"
@@ -434,7 +429,7 @@ def restart_controller(
     logger.info("Restarting controller container in-place on VM %s", vm.vm_id)
 
     bootstrap_script = build_controller_bootstrap_script_from_config(
-        with_injected_task_env(config), resolve_image=_resolve_image, restore_checkpoint=restore_checkpoint
+        with_injected_task_env(config), resolve_image=_resolve_image
     )
     vm.bootstrap(bootstrap_script)
 
