@@ -29,6 +29,7 @@ both sync and async clients.
 import json
 import os
 import time
+import webbrowser
 from dataclasses import dataclass
 from typing import Protocol, cast
 
@@ -223,7 +224,10 @@ def run_iap_desktop_login(
     redirect on a localhost port — the right choice on a workstation. With
     ``headless=True`` (no local browser, e.g. an SSH session) it instead prints
     the authorization URL and reads back the pasted redirect URL or code, so no
-    browser or port-forward on the box is required.
+    browser or port-forward on the box is required. Even with ``headless=False``
+    we fall back to that paste flow automatically when no browser is registered,
+    since ``run_local_server``'s localhost redirect is unreachable from wherever
+    the user would otherwise open the URL.
 
     Returns the freshly minted OIDC ID token and the long-lived refresh token to
     cache for silent re-minting via :class:`IapRefreshTokenProvider`.
@@ -237,6 +241,13 @@ def run_iap_desktop_login(
             "IAP desktop login requires google-auth-oauthlib; install it with `pip install marin-rigging[iap]`"
         ) from exc
 
+    # Both loopback paths trip oauthlib's strict defaults, and both are expected
+    # and safe here: the redirect is http://localhost (not real transport), and
+    # Google expands the requested "email" scope to its full userinfo URL, which
+    # otherwise raises "Scope has changed". Relax both before either flow runs.
+    os.environ.setdefault("OAUTHLIB_INSECURE_TRANSPORT", "1")
+    os.environ.setdefault("OAUTHLIB_RELAX_TOKEN_SCOPE", "1")
+
     client_config = {
         "installed": {
             "client_id": client_id,
@@ -246,7 +257,7 @@ def run_iap_desktop_login(
         }
     }
 
-    if headless:
+    if headless or not _browser_available():
         creds = _console_oauth(Flow, client_config)
     else:
         flow = InstalledAppFlow.from_client_config(client_config, scopes=IAP_LOGIN_SCOPES)
@@ -260,18 +271,30 @@ def run_iap_desktop_login(
     return cast(str, creds.id_token), cast(str, creds.refresh_token)
 
 
+def _browser_available() -> bool:
+    """True when a usable web browser is registered for ``webbrowser.open``.
+
+    ``webbrowser.get()`` raises ``webbrowser.Error`` on a box with no browser
+    (a headless server or a bare SSH session), which is exactly where the
+    localhost-redirect flow cannot work and the paste-the-code flow must run.
+    """
+    try:
+        webbrowser.get()
+        return True
+    except webbrowser.Error:
+        return False
+
+
 def _console_oauth(flow_cls, client_config: dict):
     """Manual loopback OAuth: print the URL, read back the pasted redirect/code.
 
     Works without a local browser or a reachable localhost port — the user opens
     the URL on any machine and pastes the resulting ``http://localhost/?code=...``
     URL (which the browser fails to load, but whose address bar holds the code).
+    Callers must relax OAUTHLIB_INSECURE_TRANSPORT / OAUTHLIB_RELAX_TOKEN_SCOPE
+    first (``run_iap_desktop_login`` does), since the http loopback redirect and
+    Google's scope expansion both trip oauthlib's strict defaults.
     """
-    # http://localhost loopback redirect + Google adding the 'openid' scope both
-    # trip oauthlib's defaults; both are expected and safe for this local flow.
-    os.environ.setdefault("OAUTHLIB_INSECURE_TRANSPORT", "1")
-    os.environ.setdefault("OAUTHLIB_RELAX_TOKEN_SCOPE", "1")
-
     flow = flow_cls.from_client_config(client_config, scopes=IAP_LOGIN_SCOPES, redirect_uri="http://localhost")
     auth_url, _ = flow.authorization_url(access_type="offline", prompt="consent")
     print(

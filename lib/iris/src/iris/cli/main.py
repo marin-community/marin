@@ -116,8 +116,14 @@ def iris(
 
 
 @iris.command()
+@click.option(
+    "--headless",
+    is_flag=True,
+    help="Print the authorization URL and read back the pasted code instead of opening a browser. "
+    "Use on a remote box whose localhost is unreachable from your browser; auto-detected when no browser is registered.",
+)
 @click.pass_context
-def login(ctx):
+def login(ctx, headless):
     """Authenticate to the cluster's IAP edge via the browser and cache the refresh token.
 
     Pure-IAP: the controller mints no token. This runs the desktop OAuth browser
@@ -140,9 +146,12 @@ def login(ctx):
     # rigging.credentials._desktop_client).
     client_id = iap.oauth_client_id or MARIN_DESKTOP_OAUTH_CLIENT.client_id
     client_secret = iap.oauth_client_secret or MARIN_DESKTOP_OAUTH_CLIENT.client_secret
-    click.echo("Opening browser to authenticate with Google IAP...")
+    if headless:
+        click.echo("Authenticating with Google IAP (headless: open the printed URL, then paste the result)...")
+    else:
+        click.echo("Opening browser to authenticate with Google IAP...")
     try:
-        _id_token, refresh_token = run_iap_desktop_login(client_id, client_secret)
+        _id_token, refresh_token = run_iap_desktop_login(client_id, client_secret, headless=headless)
     except Exception as e:
         raise click.ClickException(f"IAP authentication failed: {e}") from e
 
