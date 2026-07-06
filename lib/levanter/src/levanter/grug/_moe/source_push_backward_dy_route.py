@@ -399,12 +399,13 @@ def _source_push_backward_dy_to_expert_major_pallas_call(
         )
         return routed[:, :, :capacity, :]
 
+    valid_i32_by_expert = valid_by_expert.astype(jnp.int32)
     output_shape = jax.ShapeDtypeStruct(source_rank_by_expert.shape + (dy.shape[-1],), jnp.float32)
     cost_estimate = _source_push_backward_dy_compact_pallas_cost_estimate(
         dy,
         source_rank_by_expert,
         token_id_by_expert,
-        valid_by_expert,
+        valid_i32_by_expert,
         output_shape,
     )
     kernel = _make_source_push_backward_dy_route_compact_kernel(
@@ -432,7 +433,7 @@ def _source_push_backward_dy_to_expert_major_pallas_call(
         name="source_push_backward_dy_route_compact_pallas_mgpu",
         compiler_params=compiler_params,
         cost_estimate=cost_estimate,
-    )(dy, source_rank_by_expert, token_id_by_expert, valid_by_expert)
+    )(dy, source_rank_by_expert, token_id_by_expert, valid_i32_by_expert)
     return routed[:, :, :capacity, :]
 
 
@@ -1080,7 +1081,7 @@ def _make_source_push_backward_dy_route_compact_kernel(
         dy_ref: Float[pl.Ref, "S T D"],
         source_rank_ref: Int[pl.Ref, "Dst E C"],
         token_id_ref: Int[pl.Ref, "Dst E C"],
-        valid_ref: Bool[pl.Ref, "Dst E C"],
+        valid_i32_ref: Int[pl.Ref, "Dst E C"],
         out_ref: Float[pl.Ref, "C D"],
     ) -> None:
         dst = pl.program_id(0)
@@ -1099,7 +1100,7 @@ def _make_source_push_backward_dy_route_compact_kernel(
 
         src = source_rank_ref[dst, expert, pl.ds(row_start, row_block)]
         token = token_id_ref[dst, expert, pl.ds(row_start, row_block)]
-        valid = valid_ref[dst, expert, pl.ds(row_start, row_block)]
+        valid = valid_i32_ref[dst, expert, pl.ds(row_start, row_block)] != 0
         safe_src = jnp.where(valid, src, jnp.zeros((), dtype=src.dtype))
         safe_token = jnp.where(valid, token, jnp.zeros((), dtype=token.dtype))
         dy_tile = dy_ref[safe_src[:, None], safe_token[:, None], hidden_offsets[None, :]].astype(jnp.float32)

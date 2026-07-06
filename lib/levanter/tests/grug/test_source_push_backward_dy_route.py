@@ -33,7 +33,6 @@ def test_source_push_backward_dy_route_default_row_block_satisfies_mosaic_copy_f
 
     assert block_sizes.row_block == dy_route.MIN_SOURCE_PUSH_DY_ROUTE_GPU_ROW_BLOCK
     assert block_sizes.row_block * np.dtype(np.int32).itemsize % 128 == 0
-    assert block_sizes.row_block * np.dtype(np.bool_).itemsize % 128 == 0
 
 
 def test_source_push_backward_dy_route_compact_metadata_stays_in_gmem():
