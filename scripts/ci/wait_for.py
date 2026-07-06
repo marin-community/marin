@@ -262,6 +262,13 @@ class Significance(StrEnum):
     WRAPPER = "wrapper"  # an automated-review container; its findings arrive separately
 
 
+class CommentFilter(StrEnum):
+    """Which new comments a PR-activity arm fires on."""
+
+    SIGNIFICANT = "significant"  # only comments classified CONCERN
+    ALL = "all"  # every new comment
+
+
 # An in-progress placeholder the review bots post and then edit in place once done: a
 # "working" spinner/progress label, or a checklist with nothing ticked off yet. Neither
 # is something a human writes as a real comment.
@@ -294,11 +301,11 @@ _WRAPPER_RE = re.compile(
 
 
 def classify_significance(body: str) -> Significance:
-    """Classify a comment body by whether it raises a real code concern.
+    """Classify a comment body as one of the ``Significance`` levels.
 
-    Conservative by design: only high-confidence noise shapes are demoted, so anything
-    substantive falls through to ``CONCERN`` and fires. The cost of an extra wake is far
-    lower than the cost of missing a real review comment.
+    Returns ``CONCERN`` unless the body matches a known noise shape — an in-progress
+    placeholder, a short status acknowledgement, a clean "nothing to address" verdict, or
+    an automated-review wrapper — so anything substantive fires.
     """
     text = body.strip()
     if not text:
@@ -377,12 +384,12 @@ class PrActivitySource(Source):
 
     noun = "records"
 
-    def __init__(self, spec: EventSpec, repo: str, ignore_authors: set[str], filter_comments: bool):
+    def __init__(self, spec: EventSpec, repo: str, ignore_authors: set[str], comment_filter: CommentFilter):
         super().__init__(spec)
         self.repo = repo
         self.pr = _parse_pr(spec.arg)
         self.ignore_authors = ignore_authors
-        self.filter_comments = filter_comments
+        self.comment_filter = comment_filter
         self.baseline: dict[int, str] | None = None
 
     def _fetch(self) -> list[GhRecord]:
@@ -404,7 +411,7 @@ class PrActivitySource(Source):
             return None
         changed = select_new(records, self.baseline, self.ignore_authors)
         self.baseline.update(fingerprints)  # absorb current content so ignored/noise records never re-fire
-        fired = [r for r in changed if self._is_significant(r)] if self.filter_comments else changed
+        fired = changed if self.comment_filter is CommentFilter.ALL else [r for r in changed if self._is_significant(r)]
         self.last_status = f"{len(records)} {self.noun}" + (
             f"; {len(changed)} new/edited, {len(fired)} significant" if changed else ""
         )
@@ -479,14 +486,14 @@ class PollSource(Source):
 
 
 def build_source(
-    spec: EventSpec, *, repo: str, ignore_authors: set[str], poll_timeout: float, filter_comments: bool
+    spec: EventSpec, *, repo: str, ignore_authors: set[str], poll_timeout: float, comment_filter: CommentFilter
 ) -> Source:
     if spec.kind is EventKind.GITHUB_CI:
         return CiSource(spec, repo)
     if spec.kind is EventKind.GITHUB_PR_COMMENT:
-        return CommentSource(spec, repo, ignore_authors, filter_comments)
+        return CommentSource(spec, repo, ignore_authors, comment_filter)
     if spec.kind is EventKind.GITHUB_REVIEW:
-        return ReviewSource(spec, repo, ignore_authors, filter_comments)
+        return ReviewSource(spec, repo, ignore_authors, comment_filter)
     if spec.kind is EventKind.POLL:
         return PollSource(spec, poll_timeout)
     raise click.BadParameter(f"unsupported event kind {spec.kind!r}")  # pragma: no cover
@@ -605,8 +612,8 @@ def read_specs(argv_specs: tuple[str, ...], *, use_stdin: bool | None) -> list[E
 @click.option("--include-self", is_flag=True, help="Do not ignore the authenticated user's own comments.")
 @click.option(
     "--comment-filter",
-    type=click.Choice(["significant", "all"]),
-    default="significant",
+    type=click.Choice([f.value for f in CommentFilter]),
+    default=CommentFilter.SIGNIFICANT.value,
     help="Which new comments fire github.pr_comment/github.review: 'significant' skips acks, in-progress "
     "placeholders, clean verdicts, and review wrappers; 'all' fires on every new comment.",
 )
@@ -642,7 +649,7 @@ def main(
                 repo=resolved_repo,
                 ignore_authors=ignored,
                 poll_timeout=parse_duration(poll_timeout),
-                filter_comments=comment_filter == "significant",
+                comment_filter=CommentFilter(comment_filter),
             )
             for s in parsed
         ]
