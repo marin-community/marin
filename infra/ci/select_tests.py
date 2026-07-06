@@ -8,17 +8,16 @@ or TYPE_CHECKING blocks) propagate test impact, matching the codebase's "no lazy
 imports" convention.
 
 Usage:
-    python infra/ci/select_tests.py --base-ref <SHA> [--emit-github-output]
-    python infra/ci/select_tests.py --force-run-all [--emit-github-output]
+    python infra/ci/select_tests.py --base-ref <SHA>
+    python infra/ci/select_tests.py --force-run-all
 """
 
 import argparse
 import ast
 import json
-import os
 import subprocess
-import sys
 from collections import defaultdict
+from dataclasses import dataclass
 from pathlib import Path
 
 # Ordered list of workspace member short names.
@@ -39,10 +38,31 @@ BROAD_TRIGGERS: frozenset[str] = frozenset(
         "uv.lock",
         "pyproject.toml",
         "infra/ci/select_tests.py",
-        "infra/ci/prepare.py",
         ".github/workflows/unified-unit.yaml",
     }
 )
+
+# uv package names and pytest paths for each workspace scope.
+UV_PACKAGE: dict[str, str] = {
+    "rigging": "marin-rigging",
+    "finelog": "marin-finelog",
+    "haliax": "marin-haliax",
+    "iris": "marin-iris",
+    "fray": "marin-fray",
+    "levanter": "marin-levanter",
+    "zephyr": "marin-zephyr",
+    "marin": "marin-core",
+}
+
+# levanter's torch_test extra is intentionally omitted: torch/TPU legs stay in levanter-unit.yaml.
+UV_EXTRAS: dict[str, list[str]] = {
+    "marin": ["cpu", "dedup"],
+}
+
+TEST_DIR: dict[str, str] = {
+    **{scope: f"lib/{scope}/tests" for scope in UV_PACKAGE if scope != "marin"},
+    "marin": "tests",
+}
 
 
 # ---------------------------------------------------------------------------
@@ -186,18 +206,25 @@ def git_changed_files(base_ref: str, repo_root: Path) -> list[str]:
     return [line for line in result.stdout.splitlines() if line.strip()]
 
 
+@dataclass(frozen=True)
+class ClassifyResult:
+    """Classification of repo-root-relative changed file paths."""
+
+    broad: bool
+    """True if any broad trigger was found (run everything)."""
+    src_modules: set[str]
+    """Dotted module names of changed source files."""
+    direct_tests: dict[str, list[str]]
+    """{scope: [repo-root-relative test file paths]}."""
+    forced: set[str]
+    """Scopes that must run their full test suite."""
+
+
 def classify(
     changed_files: list[str],
     repo_root: Path,
-) -> tuple[bool, set[str], dict[str, list[str]], set[str]]:
-    """Classify repo-root-relative changed file paths.
-
-    Returns:
-        broad: True if any broad trigger was found (run everything)
-        src_modules: dotted module names of changed source files
-        direct_tests: {scope: [repo-root-relative test file paths]}
-        forced: scopes that must run their full test suite
-    """
+) -> ClassifyResult:
+    """Classify repo-root-relative changed file paths."""
     broad = False
     src_modules: set[str] = set()
     direct_tests: dict[str, list[str]] = defaultdict(list)
@@ -237,7 +264,12 @@ def classify(
                 forced.add(scope)
                 break
 
-    return broad, src_modules, dict(direct_tests), forced
+    return ClassifyResult(
+        broad=broad,
+        src_modules=src_modules,
+        direct_tests=dict(direct_tests),
+        forced=forced,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -245,15 +277,25 @@ def classify(
 # ---------------------------------------------------------------------------
 
 
+def matrix_leg(scope: str, tests: list[str]) -> dict[str, str]:
+    """Build one unified-unit matrix leg with uv/pytest arguments."""
+    return {
+        "package": UV_PACKAGE[scope],
+        "extras": " ".join(f"--extra {extra}" for extra in UV_EXTRAS.get(scope, [])),
+        "test_paths": " ".join(tests) if tests else TEST_DIR[scope],
+    }
+
+
 def compute_matrix(
     src_modules: set[str],
     direct_tests: dict[str, list[str]],
     forced_scopes: set[str],
     repo_root: Path,
-) -> list[dict]:
+) -> list[dict[str, str]]:
     """Compute the test matrix.
 
-    Returns a list of {package, tests} dicts. tests=[] means run the full suite.
+    Returns a list of matrix legs. Each leg has package (uv name), extras, and
+    test_paths. An empty tests list means run the full suite directory.
     """
     if not (src_modules or direct_tests or forced_scopes):
         return []
@@ -262,11 +304,11 @@ def compute_matrix(
     affected = downstream_modules(src_modules, reverse) if src_modules else set()
 
     forced_set = set(forced_scopes)
-    matrix: list[dict] = []
+    matrix: list[dict[str, str]] = []
 
     for scope in SCOPES:
         if scope in forced_set:
-            matrix.append({"package": scope, "tests": []})
+            matrix.append(matrix_leg(scope, []))
             continue
 
         selected: list[str] = []
@@ -284,28 +326,14 @@ def compute_matrix(
                     selected.append(rel)
 
         if selected:
-            matrix.append({"package": scope, "tests": sorted(selected)})
+            matrix.append(matrix_leg(scope, sorted(selected)))
 
     return matrix
 
 
-def full_matrix() -> list[dict]:
-    """Matrix for --force-run-all: every scope with tests=[] (full suite)."""
-    return [{"package": scope, "tests": []} for scope in SCOPES]
-
-
-# ---------------------------------------------------------------------------
-# Output
-# ---------------------------------------------------------------------------
-
-
-def write_github_output(matrix_json: str) -> None:
-    github_output = os.environ.get("GITHUB_OUTPUT", "")
-    if github_output:
-        with open(github_output, "a") as f:
-            f.write(f"matrix={matrix_json}\n")
-    else:
-        print(f"matrix={matrix_json}", file=sys.stderr)
+def full_matrix() -> list[dict[str, str]]:
+    """Matrix for --force-run-all: every scope with the full suite directory."""
+    return [matrix_leg(scope, []) for scope in SCOPES]
 
 
 # ---------------------------------------------------------------------------
@@ -322,11 +350,6 @@ def main() -> None:
         action="store_true",
         help="Bypass the analyzer; run every package's full suite",
     )
-    parser.add_argument(
-        "--emit-github-output",
-        action="store_true",
-        help="Write matrix=<json> to $GITHUB_OUTPUT",
-    )
     args = parser.parse_args()
 
     repo_root = Path(__file__).parent.parent.parent
@@ -335,17 +358,19 @@ def main() -> None:
         result = {"run_all": True, "reason": "force-run-all", "matrix": full_matrix()}
     else:
         changed = git_changed_files(args.base_ref, repo_root)
-        broad, src_modules, direct_tests, forced_scopes = classify(changed, repo_root)
-        if broad:
+        classification = classify(changed, repo_root)
+        if classification.broad:
             result = {"run_all": True, "reason": "broad-trigger", "matrix": full_matrix()}
         else:
-            matrix = compute_matrix(src_modules, direct_tests, forced_scopes, repo_root)
+            matrix = compute_matrix(
+                classification.src_modules,
+                classification.direct_tests,
+                classification.forced,
+                repo_root,
+            )
             result = {"run_all": False, "reason": "diff-driven", "matrix": matrix}
 
     print(json.dumps(result, indent=2))
-
-    if args.emit_github_output:
-        write_github_output(json.dumps(result["matrix"]))
 
 
 if __name__ == "__main__":
