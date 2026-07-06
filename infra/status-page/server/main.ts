@@ -10,7 +10,6 @@
 //   GET /api/provisioning/history — 24h provisioning success ratio from finelog (60s cache)
 //   GET /api/jobs            — iris job counts for last 24h by state (60s cache)
 //   GET /api/probes          — synthetic-canary checks + provisioning from finelog (60s cache)
-//   GET /api/wandb           — W&B training charts for the MoE hero run (5min cache)
 //   GET /api/health          — liveness probe, no upstream calls
 //   GET /*                   — static assets from web/dist (production only)
 //
@@ -44,7 +43,6 @@ import {
   serviceHealthSnapshot,
   type ServiceHealthSnapshot,
 } from "./sources/serviceHealth.js";
-import { wandbSnapshot, type WandbSnapshot } from "./sources/wandb.js";
 import { workerSnapshot, type WorkersSnapshot } from "./sources/workers.js";
 
 const FERRY_RUN_LIMIT = 14;
@@ -64,9 +62,6 @@ const provisioningHistoryCache = new TTLCache<ProvisioningHistoryResponse>(60_00
 // Probe metrics turn over slowly — health checks every ≤5min, provisioning
 // every 15min — so a 60s shield is plenty and keeps finelog query load low.
 const probesCache = new TTLCache<ProbesSnapshot>(60_000);
-// Training metrics move at eval cadence (hours); 5min keeps us polite to
-// the anonymous W&B GraphQL endpoint without visibly lagging the charts.
-const wandbCache = new TTLCache<WandbSnapshot>(300_000);
 
 // Iris controller ping sampler. We probe /health on a fixed cadence and
 // keep a rolling 1h window of successful samples so /api/iris can report
@@ -187,11 +182,6 @@ app.get("/api/jobs", async (c) => {
 
 app.get("/api/probes", async (c) => {
   const snapshot = await probesCache.get("probes", () => probesSnapshot());
-  return c.json(snapshot);
-});
-
-app.get("/api/wandb", async (c) => {
-  const snapshot = await wandbCache.get("wandb", () => wandbSnapshot());
   return c.json(snapshot);
 });
 
