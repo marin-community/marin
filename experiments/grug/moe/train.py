@@ -38,6 +38,7 @@ from levanter.optim import AdamConfig, OptimizerConfig
 from levanter.schedule import BatchSchedule
 from levanter.trainer import TrainerConfig
 from levanter.utils.flop_utils import lm_flops_per_token
+from levanter.utils.fsspec_utils import join_path
 from levanter.utils.jax_utils import barrier_sync, parameter_count
 from levanter.utils.logging import LoadingTimeTrackerIterator
 
@@ -114,6 +115,7 @@ class GrugRunConfig:
     model: GrugModelConfig
     data: LmDataConfig
     resources: ResourceConfig
+    output_path: str | None = None
     optimizer: OptimizerConfig = field(default_factory=AdamConfig)
     trainer: GrugTrainerConfig = field(default_factory=GrugTrainerConfig)
     eval: GrugEvalConfig | None = field(default_factory=GrugEvalConfig)
@@ -736,9 +738,18 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         state_callbacks.add_hook(callbacks.pbar_logger(total=trainer.num_train_steps), every=log_every)
         state_callbacks.add_hook(callbacks.log_step_info(trainer.num_train_steps), every=log_every)
         if profiler_enabled:
+            if config.output_path is not None:
+                profile_dir = join_path(config.output_path, "profiler")
+            else:
+                profile_dir = str(trainer.log_dir / run_id / "profiler")
+            levanter.tracker.log_summary(
+                {
+                    "profiler/profile_dir": profile_dir,
+                }
+            )
             state_callbacks.add_hook(
                 callbacks.profile(
-                    str(trainer.log_dir / run_id / "profiler"),
+                    profile_dir,
                     profiler_cfg.start_step,
                     profiler_num_steps,
                     profiler_cfg.perfetto_link,

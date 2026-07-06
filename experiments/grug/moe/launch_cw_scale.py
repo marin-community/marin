@@ -31,8 +31,8 @@ Env knobs (all optional; defaults give the full 90B run on 256 H100):
     SCALE_MP            jmp policy (default params=float32,compute=bfloat16,
                         output=bfloat16); params=bfloat16 halves FSDP gather bytes
     SCALE_TRACKER       wandb | json_logger (default json_logger)
-    SCALE_PROFILER_STEPS  >0 enables a jax_profile capture window of N steps
-                          (use SCALE_TRACKER=wandb so the artifact uploads)
+    SCALE_PROFILER_STEPS  >0 enables a profile capture window of N steps
+                          mirrored to the run output path
     SCALE_PROFILER_START  profiler start step (default 8, past compile/warmup)
     SCALE_CHECKPOINTS   s3 (default) | local. local writes checkpoints to
                         node-local disk with no periodic saves -- for throughput

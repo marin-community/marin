@@ -17,6 +17,9 @@ from rigging.filesystem import url_to_fs
 PROFILER_DIR_NAME = "profiler"
 WANDB_RUNS_SEGMENT = "runs"
 TRAINER_CONFIG_KEY = "trainer"
+OUTPUT_PATH_CONFIG_KEY = "output_path"
+REMOTE_PROFILE_DIR_SUMMARY_KEY = "profiler/remote_profile_dir"
+PROFILE_DIR_SUMMARY_KEY = "profiler/profile_dir"
 
 
 @dataclass(frozen=True)
@@ -66,8 +69,9 @@ def normalize_run_target(target: str, entity: Optional[str], project: Optional[s
 
 
 def resolve_profile_run_id(run: WandbRunLike) -> str:
-    trainer_config = run.config.get(TRAINER_CONFIG_KEY)
-    if not isinstance(trainer_config, dict):
+    config = dict(run.config)
+    trainer_config = _trainer_config(config)
+    if trainer_config is None:
         raise RuntimeError(f"Run {run.path} does not expose a trainer config.")
 
     run_id = trainer_config.get("id")
@@ -78,8 +82,19 @@ def resolve_profile_run_id(run: WandbRunLike) -> str:
 
 
 def resolve_profile_dir(run: WandbRunLike) -> str:
-    trainer_config = run.config.get(TRAINER_CONFIG_KEY)
-    if not isinstance(trainer_config, dict):
+    summary = dict(run.summary)
+    for key in (REMOTE_PROFILE_DIR_SUMMARY_KEY, PROFILE_DIR_SUMMARY_KEY):
+        explicit_profile_dir = summary.get(key)
+        if isinstance(explicit_profile_dir, str) and explicit_profile_dir:
+            return explicit_profile_dir
+
+    config = dict(run.config)
+    output_path = config.get(OUTPUT_PATH_CONFIG_KEY)
+    if isinstance(output_path, str) and output_path:
+        return join_path(output_path, PROFILER_DIR_NAME)
+
+    trainer_config = _trainer_config(config)
+    if trainer_config is None:
         raise RuntimeError(f"Run {run.path} does not expose a trainer config.")
 
     log_dir = trainer_config.get("log_dir")
@@ -87,6 +102,16 @@ def resolve_profile_dir(run: WandbRunLike) -> str:
         raise RuntimeError(f"Run {run.path} does not expose trainer.log_dir.")
 
     return join_path(join_path(log_dir, resolve_profile_run_id(run)), PROFILER_DIR_NAME)
+
+
+def _trainer_config(config: Mapping[str, Any]) -> Mapping[str, Any] | None:
+    trainer_config = config.get(TRAINER_CONFIG_KEY)
+    if not isinstance(trainer_config, Mapping):
+        return None
+    nested_trainer_config = trainer_config.get(TRAINER_CONFIG_KEY)
+    if isinstance(nested_trainer_config, Mapping):
+        return nested_trainer_config
+    return trainer_config
 
 
 def mirror_profile_dir(profile_dir: str, root: Path | None, *, run_id: str) -> Path:

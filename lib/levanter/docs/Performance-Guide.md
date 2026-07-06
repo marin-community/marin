@@ -12,9 +12,20 @@ See also the [JAX Profiling Guide](https://jax.readthedocs.io/en/latest/profilin
 ### Enabling the Profiler
 
 Levanter uses JAX's built-in profiler. You can enable it by adding the `--trainer.profiler.enabled true` flag
-to the command line. This will generate a trace file in the `./logs` directory, under `./logs/<run_id>/profiler/plugins/profile/<datetime>`.
-(Yeah, it's a mess, but it's what JAX wants to do.)
-The trace stays on disk in the run directory, so you can inspect it from whatever durable storage backs `log_dir`.
+to the command line. This writes profiler files under
+`<trainer.log_dir>/<run_id>/profiler/process_<rank>/plugins/profile/<datetime>/`.
+With the default relative `trainer.log_dir=logs`, that path is `./logs/<run_id>/profiler/...`
+inside the current process or task container.
+
+The trace is durable only if `trainer.log_dir` itself is backed by durable storage, if the run logs a W&B
+artifact of type `jax_profile`, or if the launcher explicitly copies/mirrors the profiler directory to a
+durable run output path such as S3. On Iris, a relative `trainer.log_dir` like `logs` lives inside the task
+container and disappears after task teardown; retrieve it with `iris task exec`/tar before the task exits or
+arrange an explicit copy to the Marin output path.
+
+Current Grug MoE launchers capture locally and then mirror completed profiles to
+`<ctx.output_path>/profiler/`; use that S3 run-output path as the default durable profile location for new Grug
+profile runs.
 
 Install profiling dependencies (TensorBoard) with one of:
 
@@ -68,7 +79,10 @@ Then you can navigate to http://localhost:6006/#profile in your browser and see 
 #### Fetching traces
 
 If your run directory is on durable remote storage, download or sync the profiler output directory locally and point
-TensorBoard at the directory containing `plugins/`.
+TensorBoard at the directory containing `plugins/`. If you only have a W&B run id, use W&B artifacts logged as
+`jax_profile` when present. Tools that derive a profile path from a W&B run config, such as Marin's
+`profile_summary.py summarize --run-target`, mirror from `trainer.log_dir`; they do not recover profiles from W&B
+unless the profile was actually logged as an artifact or `trainer.log_dir` is still reachable.
 
 ```bash
 # Example: launch TensorBoard from a local copy of a profiler output directory

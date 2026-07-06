@@ -3,16 +3,22 @@
 
 import logging
 import os
+import posixpath
 import sys
 import threading
 import time
+import cProfile
+import pstats
+from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Callable
 
 import jax
+from rigging.filesystem import url_to_fs
 
 from levanter.callbacks._core import StepInfo
-from levanter.utils.fsspec_utils import mkdirs
+from levanter.utils.fsspec_utils import join_path, mkdirs
 from levanter.utils.jax_utils import barrier_sync
 
 logger = logging.getLogger(__name__)
@@ -94,8 +100,145 @@ class ProfilerConfig:
         return max(0, total_prof_steps)
 
 
+@dataclass
+class _HostProfileState:
+    profiler: cProfile.Profile
+    stats_path: str
+    txt_summary_path: str
+
+
 def _process_profile_path(path: str) -> str:
     return os.path.join(path, f"process_{jax.process_index():05d}")
+
+
+def _start_host_profile(process_path: str, host_profile_basename: str) -> _HostProfileState | None:
+    try:
+        profiler = cProfile.Profile()
+        profiler.enable()
+        return _HostProfileState(
+            profiler=profiler,
+            stats_path=os.path.join(process_path, f"{host_profile_basename}.pstats"),
+            txt_summary_path=os.path.join(process_path, f"{host_profile_basename}.txt"),
+        )
+    except Exception as e:  # pragma: no cover - optional/diagnostic path
+        logger.warning("Failed to start cProfile host profiler: %s", e)
+        return None
+
+
+def _write_host_profile(state: _HostProfileState | None, host_profile_topn: int) -> None:
+    if state is None:
+        return
+    try:
+        state.profiler.disable()
+        state.profiler.dump_stats(state.stats_path)
+        if host_profile_topn:
+            stats = pstats.Stats(state.stats_path)
+            stats.strip_dirs().sort_stats("cumtime")
+            with open(state.txt_summary_path, "w") as f:
+                stats.stream = f  # type: ignore[assignment]
+                stats.print_stats(host_profile_topn)
+    except Exception:  # pragma: no cover - optional/diagnostic path
+        logger.warning("Failed to log host profile stats", exc_info=True)
+
+
+def _stop_device_profile(*, create_perfetto_link: bool, device_profile: bool, stop_barrier_timeout: float) -> None:
+    event = None
+    if create_perfetto_link and jax.process_index() == 0:
+        event = threading.Event()
+        _flush_while_waiting(event)
+
+    if create_perfetto_link:
+        logger.info("Stopping profiler. Process 0 will open a perfetto link. I am process %s", jax.process_index())
+    else:
+        logger.info("Stopping profiler.")
+
+    if device_profile:
+        jax.profiler.stop_trace()
+
+    if event is not None:
+        event.set()
+
+    barrier_sync(timeout=stop_barrier_timeout)
+
+
+def mirror_process_profile_dir(
+    profile_dir: str | Path,
+    remote_profile_dir: str | None,
+    *,
+    process_index: int | None = None,
+) -> str | None:
+    """Copy one process's local profiler output into a remote profile directory."""
+    if remote_profile_dir is None:
+        return None
+    if str(profile_dir) == remote_profile_dir:
+        return remote_profile_dir
+
+    source_profile_dir = Path(profile_dir)
+    if not source_profile_dir.exists():
+        logger.warning("Profiler directory does not exist; skipping mirror: %s", source_profile_dir)
+        return None
+
+    process_index = jax.process_index() if process_index is None else process_index
+    process_dir = source_profile_dir / f"process_{process_index:05d}"
+    if not process_dir.exists():
+        logger.warning("Profiler process directory does not exist; skipping mirror: %s", process_dir)
+        return None
+
+    fs, target_profile_path = url_to_fs(remote_profile_dir)
+    fs.makedirs(target_profile_path, exist_ok=True)
+
+    for source_path in process_dir.rglob("*"):
+        relative_path = source_path.relative_to(source_profile_dir).as_posix()
+        destination_path = posixpath.join(target_profile_path.rstrip("/"), relative_path)
+        if source_path.is_dir():
+            fs.makedirs(destination_path, exist_ok=True)
+            continue
+        fs.makedirs(posixpath.dirname(destination_path), exist_ok=True)
+        fs.put_file(str(source_path), destination_path)
+
+    logger.info("Mirrored profiler process directory to %s", join_path(remote_profile_dir, process_dir.name))
+    return remote_profile_dir
+
+
+@contextmanager
+def profile_ctx(
+    path: str,
+    create_perfetto_link: bool = False,
+    *,
+    device_profile: bool = True,
+    host_profile: bool = False,
+    host_profile_basename: str = "host_profile",
+    host_profile_topn: int = 0,
+    profiler_options: jax.profiler.ProfileOptions | None = None,
+    stop_barrier_timeout: float = 200,
+    remote_profile_dir: str | None = None,
+):
+    """Profile a block and optionally mirror this process's trace to a remote run directory."""
+    create_process_perfetto_link = create_perfetto_link and jax.process_index() == 0
+    process_path = _process_profile_path(path)
+    mkdirs(process_path)
+    logger.info("Starting profiler. Trace path: %s", process_path)
+
+    if device_profile:
+        jax.profiler.start_trace(
+            process_path,
+            create_perfetto_link=create_process_perfetto_link,
+            create_perfetto_trace=create_process_perfetto_link,
+            profiler_options=profiler_options,
+        )
+
+    host_profile_state = _start_host_profile(process_path, host_profile_basename) if host_profile else None
+
+    try:
+        yield
+    finally:
+        _write_host_profile(host_profile_state, host_profile_topn)
+        _stop_device_profile(
+            create_perfetto_link=create_perfetto_link,
+            device_profile=device_profile,
+            stop_barrier_timeout=stop_barrier_timeout,
+        )
+        mirror_process_profile_dir(path, remote_profile_dir)
 
 
 def profile(
@@ -105,13 +248,15 @@ def profile(
     create_perfetto_link: bool,
     profiler_options: jax.profiler.ProfileOptions | None = None,
     stop_barrier_timeout: float = 200,
+    remote_profile_dir: str | None = None,
+    profile_context_factory: Callable[..., AbstractContextManager[None]] = profile_ctx,
 ) -> Callable[[StepInfo], None]:
     trace_started = False
-    process_path = _process_profile_path(path)
-    mkdirs(process_path)
+    active_profile: AbstractContextManager[None] | None = None
+    mkdirs(_process_profile_path(path))
 
     def profiler_callback_fn(step: StepInfo, *, force: bool = False):
-        nonlocal trace_started
+        nonlocal active_profile, trace_started
         if force and trace_started:
             _stop_profile()
             return
@@ -120,39 +265,29 @@ def profile(
         if step.step == start_step - 1:
             if force or trace_started:
                 return
-            _create_perfetto_link = create_perfetto_link and jax.process_index() == 0
-            logger.info("Starting profiler until step %s. Trace path: %s", start_step + num_steps, process_path)
-            jax.profiler.start_trace(
-                process_path,
-                create_perfetto_link=_create_perfetto_link,
-                create_perfetto_trace=_create_perfetto_link,
+            logger.info("Starting profiler until step %s.", start_step + num_steps)
+            active_profile = profile_context_factory(
+                path,
+                create_perfetto_link,
                 profiler_options=profiler_options,
+                stop_barrier_timeout=stop_barrier_timeout,
+                remote_profile_dir=remote_profile_dir,
             )
+            active_profile.__enter__()
             trace_started = True
         elif step.step == start_step + num_steps - 1:
             _stop_profile()
 
     def _stop_profile():
-        nonlocal trace_started
+        nonlocal active_profile, trace_started
         if not trace_started:
             return
-        if create_perfetto_link:
-            logger.info(f"Stopping profiler. Process 0 will open a perfetto link. I am process {jax.process_index()}")
-        else:
-            logger.info("Stopping profiler.")
-        # so, annoyingly, gcloud ssh doesn't reliably flush stdout here, so we need to spin up
-        # a thread to flush and print periodically until we make it past stop_trace
-        # (note: stop_trace blocks if perfetto is enabled)
-        event = threading.Event()
-        if create_perfetto_link and jax.process_index() == 0:
-            _flush_while_waiting(event)
-
-        jax.profiler.stop_trace()
-        trace_started = False
-
-        if create_perfetto_link and jax.process_index() == 0:
-            event.set()
-        barrier_sync(timeout=stop_barrier_timeout)
+        try:
+            if active_profile is not None:
+                active_profile.__exit__(None, None, None)
+        finally:
+            active_profile = None
+            trace_started = False
 
     return profiler_callback_fn
 
