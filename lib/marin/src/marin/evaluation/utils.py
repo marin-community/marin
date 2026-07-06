@@ -6,9 +6,8 @@ import os
 import time
 
 from fsspec.callbacks import TqdmCallback
+from rigging.filesystem import StoragePath
 from rigging.filesystem import filesystem as marin_filesystem
-
-from marin.utils import fsspec_exists, fsspec_glob, fsspec_mtime
 
 logger = logging.getLogger(__name__)
 
@@ -54,10 +53,10 @@ def discover_hf_checkpoints(base_path: str) -> list[str]:
     A directory counts as a checkpoint when it contains both ``config.json``
     (matched by the glob) and ``tokenizer_config.json``.
     """
-    config_paths = fsspec_glob(os.path.join(base_path, "**/config.json"))
-    config_paths.sort(key=fsspec_mtime)
+    config_paths = [str(m) for m in StoragePath(os.path.join(base_path, "**/config.json")).glob()]
+    config_paths.sort(key=lambda path: StoragePath(path).mtime())
     return [
         os.path.dirname(path)
         for path in config_paths
-        if fsspec_exists(os.path.join(os.path.dirname(path), "tokenizer_config.json"))
+        if StoragePath(os.path.join(os.path.dirname(path), "tokenizer_config.json")).exists()
     ]

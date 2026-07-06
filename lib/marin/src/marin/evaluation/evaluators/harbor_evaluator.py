@@ -27,13 +27,12 @@ from typing import Any
 import pandas as pd
 import wandb
 from huggingface_hub import snapshot_download
-from rigging.filesystem import is_remote_path, open_url, prefix_join
+from rigging.filesystem import StoragePath, is_remote_path, open_url, prefix_join
 
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.evaluation.evaluators.evaluator import Evaluator, ModelConfig
 from marin.evaluation.utils import download_from_gcs, upload_to_gcs
 from marin.inference.vllm_server import VllmEnvironment
-from marin.utils import fsspec_exists, fsspec_glob
 
 logger = logging.getLogger(__name__)
 
@@ -141,11 +140,11 @@ def _restore_trials_from_gcs(gcs_output_path: str, local_job_dir: Path) -> int:
     Returns the number of trials restored.
     """
     trials_gcs_path = prefix_join(gcs_output_path, "harbor_trials")
-    if not fsspec_exists(trials_gcs_path):
+    if not StoragePath(trials_gcs_path).exists():
         return 0
 
     # Find completed trials (those with result.json)
-    result_files = fsspec_glob(prefix_join(trials_gcs_path, "*/result.json"))
+    result_files = [str(m) for m in StoragePath(prefix_join(trials_gcs_path, "*/result.json")).glob()]
 
     restored = 0
     for result_file in result_files:

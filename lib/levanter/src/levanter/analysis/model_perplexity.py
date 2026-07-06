@@ -10,7 +10,7 @@ from typing import Any, Sequence
 import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
-from rigging.filesystem import open_url, prefix_join
+from rigging.filesystem import StoragePath, open_url, prefix_join
 
 from levanter.analysis.perplexity_gap import (
     LOG2E,
@@ -22,7 +22,6 @@ from levanter.analysis.perplexity_gap import (
     write_report_files,
     _byte_span_to_char_span,
 )
-from levanter.utils.fsspec_utils import mkdirs
 
 
 SCORED_DOCUMENTS_FILENAME = "scored_documents.parquet"
@@ -202,7 +201,7 @@ def write_model_score_files(
     scored_documents_path = prefix_join(output_path, SCORED_DOCUMENTS_FILENAME)
     token_counts_path = prefix_join(output_path, TOKEN_COUNTS_FILENAME)
     token_count_summary_path = prefix_join(output_path, TOKEN_COUNT_SUMMARY_FILENAME)
-    mkdirs(output_path)
+    StoragePath(output_path).mkdirs()
 
     with open_url(summary_path, "w") as f:
         json.dump(summary, f, indent=2, sort_keys=True)

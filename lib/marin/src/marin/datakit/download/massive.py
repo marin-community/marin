@@ -24,14 +24,13 @@ import tarfile
 import tempfile
 
 from fray import ResourceConfig
-from rigging.filesystem import atomic_rename, open_url, url_to_fs
+from rigging.filesystem import StoragePath, atomic_rename, open_url, url_to_fs
 from zephyr import Dataset, ZephyrContext
 from zephyr.readers import load_jsonl
 
 from marin.datakit.download.http_session import build_retrying_session
 from marin.datakit.normalize import normalize_step
 from marin.execution.step_spec import StepSpec
-from marin.utils import fsspec_exists
 
 logger = logging.getLogger(__name__)
 
@@ -681,7 +680,7 @@ def _extract_jsonl_files(tarball_path: str, output_path: str) -> None:
                 continue
             locale = os.path.basename(member.name).removesuffix(".jsonl")
             target = f"{output_path}/{locale}.jsonl"
-            if fsspec_exists(target):
+            if StoragePath(target).exists():
                 logger.info(f"Skipping {target} (already exists)")
                 continue
             src = tar.extractfile(member)

@@ -157,7 +157,7 @@ def test_is_hf_checkpoint_recognizes_gcs_hf_exports(monkeypatch):
     hf_files = {
         "gs://marin-us-central1/models/test-model/hf/config.json",
     }
-    monkeypatch.setattr("marin.rl.model_utils.fsspec_exists", lambda path: path in hf_files)
+    monkeypatch.setattr("rigging.filesystem.StoragePath.exists", lambda self: str(self) in hf_files)
 
     assert is_hf_checkpoint("gs://marin-us-central1/models/test-model/hf")
     assert not is_hf_checkpoint("gs://marin-us-central1/checkpoints/test-run")

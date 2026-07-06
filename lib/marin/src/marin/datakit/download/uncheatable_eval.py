@@ -13,12 +13,11 @@ from dataclasses import dataclass
 from typing import Any
 
 import requests
-from rigging.filesystem import atomic_rename, open_url
+from rigging.filesystem import StoragePath, atomic_rename, open_url
 from zephyr import Dataset, ZephyrContext
 
 from marin.datakit.download.http_session import build_retrying_session
 from marin.execution.step_spec import StepSpec
-from marin.utils import fsspec_mkdirs
 
 logger = logging.getLogger(__name__)
 
@@ -246,7 +245,7 @@ def _download_and_convert_single(
     if not isinstance(payload, list):
         raise ValueError(f"Expected list in dataset {task.dataset.name}, found {type(payload).__name__}")
 
-    fsspec_mkdirs(os.path.dirname(task.output_file_path), exist_ok=True)
+    StoragePath(os.path.dirname(task.output_file_path)).mkdirs(exist_ok=True)
 
     record_count = 0
     with atomic_rename(task.output_file_path) as temp_path:
@@ -303,7 +302,7 @@ def download_latest_uncheatable_eval(cfg: UncheatableEvalDownloadConfig) -> dict
         return {"success": False, "reason": "no_datasets"}
 
     output_path = str(cfg.output_path)
-    fsspec_mkdirs(output_path, exist_ok=True)
+    StoragePath(output_path).mkdirs(exist_ok=True)
 
     tasks, filtered_datasets = _generate_tasks(latest_datasets, cfg)
 

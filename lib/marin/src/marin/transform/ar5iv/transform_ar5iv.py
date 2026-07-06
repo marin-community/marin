@@ -30,8 +30,8 @@ from marin.transform.ar5iv.transform import (
     transform_abstract,
     unwrap_eqn,
 )
-from marin.utils import fsspec_glob
 from marin.web.convert import convert_page
+from rigging.filesystem import StoragePath
 from zephyr import Dataset, ZephyrContext, load_jsonl
 
 logger = logging.getLogger(__name__)
@@ -156,7 +156,7 @@ def process_record(
 
 
 def process_ar5iv_dump(cfg: Ar5ivExtractionConfig) -> None:
-    files = fsspec_glob(f"{cfg.input_path}/*.jsonl.gz")
+    files = [str(m) for m in StoragePath(f"{cfg.input_path}/*.jsonl.gz").glob()]
 
     pipeline = (
         Dataset.from_list(files)

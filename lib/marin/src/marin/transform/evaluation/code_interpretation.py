@@ -14,8 +14,7 @@ from marin.datakit.ingestion_manifest import (
     MaterializedOutputMetadata,
     write_ingestion_metadata_json,
 )
-from marin.utils import fsspec_mkdirs
-from rigging.filesystem import open_url, url_to_fs
+from rigging.filesystem import StoragePath, open_url, url_to_fs
 from zephyr.writers import atomic_rename
 
 CODE_INTERPRETATION_NUM_FEWSHOT = 5
@@ -318,7 +317,7 @@ def stage_code_interpretation_source(cfg: CodeInterpretationStagingConfig) -> di
     if len(task.support_examples) != CODE_INTERPRETATION_NUM_FEWSHOT:
         raise ValueError(f"{cfg.task_key} must have exactly {CODE_INTERPRETATION_NUM_FEWSHOT} support examples")
 
-    fsspec_mkdirs(cfg.output_path, exist_ok=True)
+    StoragePath(cfg.output_path).mkdirs(exist_ok=True)
     out_file = posixpath.join(cfg.output_path, cfg.output_filename)
     compression = "gzip" if out_file.endswith(".gz") else None
 

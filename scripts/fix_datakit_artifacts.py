@@ -29,8 +29,7 @@ import logging
 import os
 import posixpath
 
-from marin.utils import fsspec_exists, fsspec_glob
-from rigging.filesystem import open_url, url_to_fs
+from rigging.filesystem import StoragePath, open_url, url_to_fs
 
 logger = logging.getLogger(__name__)
 
@@ -58,7 +57,7 @@ def _backup_then_write_json(path: str, data: dict) -> None:
     snapshot rather than overwritten by an already-rewritten current value.
     """
     backup_path = f"{path}{_BACKUP_SUFFIX}"
-    if not fsspec_exists(backup_path):
+    if not StoragePath(backup_path).exists():
         fs, src = url_to_fs(path)
         _, dst = url_to_fs(backup_path)
         fs.copy(src, dst)
@@ -68,7 +67,7 @@ def _backup_then_write_json(path: str, data: dict) -> None:
 
 def fix_decon(apply: bool) -> int:
     """Rewrite output_dir in every decon artifact.json. Returns the count rewritten."""
-    paths = [_gs_url(p) for p in fsspec_glob(DECON_GLOB)]
+    paths = [_gs_url(str(m)) for m in StoragePath(DECON_GLOB).glob()]
     logger.info("decon: scanning %d artifact.json files", len(paths))
     n_changed = 0
     for path in paths:

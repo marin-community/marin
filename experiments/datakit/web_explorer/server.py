@@ -43,7 +43,7 @@ from ducky.client import DuckyClient, DuckyError, iap_token_provider
 from iris.client.client import iris_ctx
 from iris.cluster.client.job_info import get_job_info
 from iris.cluster.dashboard_common import on_shutdown
-from marin.utils import fsspec_exists
+from rigging.filesystem import StoragePath
 from starlette.applications import Starlette
 from starlette.concurrency import run_in_threadpool
 from starlette.requests import Request
@@ -347,9 +347,9 @@ def _load(
     store_path: str, ducky: DuckyClient, cache_path: str | None, config: WebExplorerConfig
 ) -> tuple[StoreLineage, ClusteredStoreData]:
     payload = read_store_payload(store_path)
-    # fsspec_exists handles gs:// (os.path.exists would silently miss a remote
+    # StoragePath.exists() handles gs:// (os.path.exists would silently miss a remote
     # cache and force a ducky-dependent re-resolve at startup).
-    if cache_path and fsspec_exists(cache_path):
+    if cache_path and StoragePath(cache_path).exists():
         logger.info("loading cached lineage from %s", cache_path)
         lineage = load_lineage(cache_path)
     else:

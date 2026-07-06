@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from typing import Any
 
 import zstandard
-from rigging.filesystem import atomic_rename, open_url
+from rigging.filesystem import StoragePath, atomic_rename, open_url
 
 from marin.datakit.download.http_session import build_retrying_session
 from marin.datakit.ingestion_manifest import (
@@ -20,7 +20,6 @@ from marin.datakit.ingestion_manifest import (
     MaterializedOutputMetadata,
     write_ingestion_metadata_json,
 )
-from marin.utils import fsspec_mkdirs
 
 logger = logging.getLogger(__name__)
 
@@ -140,7 +139,7 @@ def stage_lichess_pgn_sample(config: LichessPgnStagingConfig) -> dict[str, int |
     """Stream a bounded official Lichess PGN sample into JSONL.gz."""
 
     _validate_manifest(config.source_manifest, config.manifest_fingerprint)
-    fsspec_mkdirs(config.output_path, exist_ok=True)
+    StoragePath(config.output_path).mkdirs(exist_ok=True)
 
     session = build_retrying_session()
     output_file = posixpath.join(config.output_path, config.output_filename)
@@ -214,7 +213,7 @@ def stage_hf_json_text_source(config: HfJsonTextStagingConfig) -> dict[str, int 
     source_url = config.source_file_url_override or _hf_resolve_url(
         config.dataset_id, config.revision, config.split_filename
     )
-    fsspec_mkdirs(config.output_path, exist_ok=True)
+    StoragePath(config.output_path).mkdirs(exist_ok=True)
     output_file = posixpath.join(config.output_path, config.output_filename)
 
     session = build_retrying_session()

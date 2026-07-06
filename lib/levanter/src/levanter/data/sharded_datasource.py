@@ -13,11 +13,8 @@ from typing import Any, Callable, Generic, Iterable, Iterator, List, Sequence, S
 import datasets
 import numpy as np
 import pyarrow.parquet as pq
-from rigging.filesystem import open_url
+from rigging.filesystem import StoragePath, open_url
 
-from levanter.utils import fsspec_utils
-
-from levanter.utils.fsspec_utils import expand_glob
 from ._preprocessor import (
     BatchResult,
     _BatchMapTransform,
@@ -508,7 +505,7 @@ def _mk_shard_name_mapping(urls):
     missing_urls: List[str] = []
 
     def _expand_or_placeholder(url):
-        expanded = list(expand_glob(url))
+        expanded = [str(m) for m in StoragePath(url).glob()]
         return expanded if expanded else [url]
 
     urls = [globbed for url in urls for globbed in _expand_or_placeholder(url)]
@@ -522,7 +519,7 @@ def _mk_shard_name_mapping(urls):
         common_prefix = os.path.commonprefix(urls)
 
     for url in urls:
-        exists = fsspec_utils.exists(url)
+        exists = StoragePath(url).exists()
         # escape the url for the shard name
         shard_name = url
         if common_prefix:

@@ -40,9 +40,8 @@ from fray import ResourceConfig
 from huggingface_hub import hf_hub_download
 from marin.datakit.normalize import NormalizedData
 from marin.execution.artifact import write_artifact
-from marin.utils import fsspec_glob
 from pydantic import BaseModel
-from rigging.filesystem import marin_temp_bucket, url_to_fs
+from rigging.filesystem import StoragePath, marin_temp_bucket, url_to_fs
 from zephyr import Dataset, InputFileSpec, ShardInfo, ZephyrContext, counters, load_file, zephyr_worker_ctx
 from zephyr.runners import InlineRunner
 
@@ -109,7 +108,7 @@ class EmbeddingAttrData(BaseModel):
     counters: dict[str, int | float] = {}
 
     def shard_paths(self) -> list[str]:
-        return sorted(fsspec_glob(f"{self.output_dir.rstrip('/')}/*.parquet"))
+        return sorted(str(m) for m in StoragePath(f"{self.output_dir.rstrip('/')}/*.parquet").glob())
 
 
 def quantize_to_int8(arr: np.ndarray) -> np.ndarray:
@@ -229,7 +228,7 @@ def embed_source(
     Embedder, L2-normalizes, quantizes to int8, and writes one output
     parquet shard with the same basename.
     """
-    source_shards = sorted(fsspec_glob(f"{normalized.main_output_dir.rstrip('/')}/**/*.parquet"))
+    source_shards = sorted(str(m) for m in StoragePath(f"{normalized.main_output_dir.rstrip('/')}/**/*.parquet").glob())
     if max_shards is not None:
         source_shards = source_shards[:max_shards]
     if not source_shards:

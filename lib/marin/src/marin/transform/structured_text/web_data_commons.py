@@ -31,8 +31,7 @@ from marin.datakit.ingestion_manifest import (
     MaterializedOutputMetadata,
     write_ingestion_metadata_json,
 )
-from marin.utils import fsspec_mkdirs
-from rigging.filesystem import atomic_rename, open_url, url_to_fs
+from rigging.filesystem import StoragePath, atomic_rename, open_url, url_to_fs
 
 logger = logging.getLogger(__name__)
 
@@ -281,7 +280,7 @@ def stage_web_data_commons_source(cfg: WebDataCommonsStagingConfig) -> dict[str,
                 f"content_fingerprint mismatch: config has {cfg.content_fingerprint}, source manifest has {expected}"
             )
 
-    fsspec_mkdirs(cfg.output_path, exist_ok=True)
+    StoragePath(cfg.output_path).mkdirs(exist_ok=True)
     out_file = posixpath.join(cfg.output_path, cfg.output_filename)
     compression = "gzip" if out_file.endswith(".gz") else None
 

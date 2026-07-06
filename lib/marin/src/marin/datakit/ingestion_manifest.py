@@ -10,9 +10,7 @@ from enum import StrEnum, auto
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
-from rigging.filesystem import atomic_rename, open_url
-
-from marin.utils import fsspec_mkdirs
+from rigging.filesystem import StoragePath, atomic_rename, open_url
 
 JsonScalar = str | int | float | bool | None
 type JsonValue = JsonScalar | list["JsonValue"] | dict[str, "JsonValue"]
@@ -193,7 +191,7 @@ def write_ingestion_metadata_json(
 ) -> str:
     """Write ``metadata.json`` for a materialized source and return its path."""
 
-    fsspec_mkdirs(materialized_output.output_path, exist_ok=True)
+    StoragePath(materialized_output.output_path).mkdirs(exist_ok=True)
     metadata_path = posixpath.join(materialized_output.output_path, metadata_filename)
     payload = render_ingestion_metadata(manifest, materialized_output)
 

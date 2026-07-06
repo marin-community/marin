@@ -30,11 +30,10 @@ from typing import Any
 from urllib.parse import urljoin
 
 import requests
-from rigging.filesystem import atomic_rename, open_url
+from rigging.filesystem import StoragePath, atomic_rename, open_url
 
 from marin.datakit.download.http_session import build_retrying_session
 from marin.execution.step_spec import StepSpec
-from marin.utils import fsspec_mkdirs
 
 logger = logging.getLogger(__name__)
 
@@ -160,7 +159,7 @@ def download_uwf_zeek_sample(
 
     source.validate()
     output_path = str(output_path)
-    fsspec_mkdirs(output_path, exist_ok=True)
+    StoragePath(output_path).mkdirs(exist_ok=True)
 
     session = build_retrying_session()
     output_file = posixpath.join(output_path, output_filename)

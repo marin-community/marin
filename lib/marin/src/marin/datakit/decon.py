@@ -43,14 +43,13 @@ import dupekit
 import pyarrow as pa
 from fray import ResourceConfig
 from pydantic import BaseModel
-from rigging.filesystem import url_to_fs
+from rigging.filesystem import StoragePath, url_to_fs
 from zephyr import Dataset, ShardInfo, ZephyrContext, counters, write_parquet_file
 from zephyr.readers import SUPPORTED_EXTENSIONS, load_file
 
 from marin.datakit.normalize import NormalizedData
 from marin.execution.artifact import read_artifact
 from marin.execution.step_spec import StepSpec
-from marin.utils import fsspec_glob
 
 logger = logging.getLogger(__name__)
 
@@ -447,7 +446,7 @@ def decon_to_parquet(
         raise ValueError("provide exactly one of eval_data_sources or prebuilt_bloom_dir")
 
     input_path = normalized_data.main_output_dir
-    files = sorted(fsspec_glob(f"{input_path.rstrip('/')}/**/*.parquet"))
+    files = sorted(str(m) for m in StoragePath(f"{input_path.rstrip('/')}/**/*.parquet").glob())
     if not files:
         raise FileNotFoundError(f"No .parquet files found under {input_path}")
     num_partitions = len(files)

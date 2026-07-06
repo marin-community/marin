@@ -36,7 +36,7 @@ from levanter.store.cache import (
     write_levanter_cache,
 )
 from pydantic import BaseModel
-from rigging.filesystem import open_url, prefix_join, url_to_fs
+from rigging.filesystem import StoragePath, open_url, prefix_join, url_to_fs
 from zephyr import Dataset, ZephyrContext
 from zephyr.dataset import format_shard_path
 from zephyr.readers import load_file
@@ -44,7 +44,6 @@ from zephyr.readers import load_file
 from marin.execution.artifact import read_artifact
 from marin.execution.step_spec import StepSpec
 from marin.processing.tokenize.attributes import TokenizedAttrData
-from marin.utils import fsspec_exists
 
 logger = logging.getLogger(__name__)
 
@@ -318,7 +317,7 @@ def build_levanter_store(config: BuildLevanterStoreConfig) -> LevanterStoreData:
 
 def _ledger_exists(cache_path: str) -> bool:
     """Return whether a Levanter cache ledger already exists at ``cache_path``."""
-    return fsspec_exists(ShardedCacheLayout.parse(cache_path).ledger)
+    return StoragePath(ShardedCacheLayout.parse(cache_path).ledger).exists()
 
 
 def build_levanter_store_step(
