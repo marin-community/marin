@@ -11,6 +11,7 @@ from rigging.filesystem import (
     _bucket_from_gcs_url,
     atomic_rename,
     prefix_join,
+    rebase_file_path,
     split_gcs_path,
     unique_temp_path,
 )
@@ -129,6 +130,49 @@ def test_split_gcs_path_rejects_non_gcs():
 )
 def test_bucket_from_gcs_url(url, bucket):
     assert _bucket_from_gcs_url(url) == bucket
+
+
+@pytest.mark.parametrize(
+    ("base_in", "file_path", "base_out", "new_ext", "old_ext", "expected"),
+    [
+        # Extension swap under a trailing-slash output base (a common caller pattern).
+        (
+            "gs://b/in",
+            "gs://b/in/sub/doc.jsonl.gz",
+            "gs://b/out/data/",
+            ".parquet",
+            ".jsonl.gz",
+            "gs://b/out/data/sub/doc.parquet",
+        ),
+        # Trailing slash on the input base collapses structurally.
+        ("gs://b/in/", "gs://b/in/a/b/doc.json", "gs://b/out", ".parquet", ".json", "gs://b/out/a/b/doc.parquet"),
+        # Without old_extension, everything after the last dot is replaced.
+        ("gs://b/in", "gs://b/in/doc.jsonl.zst", "gs://b/out", ".parquet", None, "gs://b/out/doc.jsonl.parquet"),
+        # Without old_extension and no dot in the name, new_extension is appended.
+        ("gs://b/in", "gs://b/in/noext", "gs://b/out", ".txt", None, "gs://b/out/noext.txt"),
+        # No extension change — pure rebase.
+        ("gs://b/in", "gs://b/in/x/doc", "gs://b/out", None, None, "gs://b/out/x/doc"),
+        # Local paths.
+        ("/tmp/in", "/tmp/in/x/doc.jsonl", "/tmp/out", ".parquet", ".jsonl", "/tmp/out/x/doc.parquet"),
+    ],
+)
+def test_rebase_file_path(base_in, file_path, base_out, new_ext, old_ext, expected):
+    assert rebase_file_path(base_in, file_path, base_out, new_ext, old_ext) == expected
+
+
+def test_rebase_file_path_rejects_file_outside_base():
+    with pytest.raises(ValueError, match="not under"):
+        rebase_file_path("gs://b/in", "gs://b/other/doc.jsonl", "gs://b/out")
+
+
+def test_rebase_file_path_wrong_old_extension():
+    with pytest.raises(ValueError, match="does not end with"):
+        rebase_file_path("gs://b/in", "gs://b/in/doc.jsonl", "gs://b/out", ".parquet", ".csv")
+
+
+def test_rebase_file_path_old_extension_requires_new():
+    with pytest.raises(ValueError, match="requires new_extension"):
+        rebase_file_path("gs://b/in", "gs://b/in/doc.jsonl", "gs://b/out", old_extension=".jsonl")
 
 
 def test_unique_temp_path_produces_distinct_paths():

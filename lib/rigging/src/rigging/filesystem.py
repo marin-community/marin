@@ -617,6 +617,52 @@ def split_gcs_path(gs_uri: str) -> tuple[str, pathlib.Path]:
     return parsed.bucket, pathlib.Path(key) if key else pathlib.Path(".")
 
 
+def rebase_file_path(
+    base_in_path: str,
+    file_path: str,
+    base_out_path: str,
+    new_extension: str | None = None,
+    old_extension: str | None = None,
+) -> str:
+    """Rebase ``file_path`` from under ``base_in_path`` to under ``base_out_path``.
+
+    The path below ``base_in_path`` is preserved beneath ``base_out_path``, optionally
+    swapping the file extension. Containment and joins are structural (via
+    :class:`StoragePath`), so a trailing or doubled separator on any argument cannot
+    double the output separator (#6904). ``file_path`` must lie under ``base_in_path``;
+    otherwise a ``ValueError`` is raised.
+
+    Args:
+        base_in_path: The base directory of the input file.
+        file_path: The path of the input file, under ``base_in_path``.
+        base_out_path: The base directory of the output file.
+        new_extension: New file extension including the dot (e.g. ``".parquet"``).
+        old_extension: When given with ``new_extension``, the suffix of ``file_path`` to
+            replace; a ``ValueError`` is raised if ``file_path`` does not end with it.
+            When omitted (but ``new_extension`` is set), everything after the last dot is
+            replaced; with no dot, ``new_extension`` is appended.
+    """
+    rel_path = StoragePath.parse(file_path).relative_to(StoragePath.parse(base_in_path))
+
+    if old_extension and not new_extension:
+        raise ValueError("old_extension requires new_extension to be set")
+
+    if new_extension:
+        if old_extension:
+            # endswith (not rfind) so a mismatch fails loudly instead of silently
+            # truncating: rfind returns -1 and rel_path[:-1] would drop a character.
+            if not rel_path.endswith(old_extension):
+                raise ValueError(
+                    f"Cannot rebase {file_path!r}: relative path {rel_path!r} does not end with "
+                    f"old_extension={old_extension!r}"
+                )
+            rel_path = rel_path[: -len(old_extension)] + new_extension
+        else:
+            dot_idx = rel_path.rfind(".")
+            rel_path = (rel_path[:dot_idx] if dot_idx != -1 else rel_path) + new_extension
+    return prefix_join(base_out_path, rel_path)
+
+
 def get_bucket_location(bucket_name_or_path: str) -> str:
     """Return the GCS bucket's location (lower-cased region string)."""
     if bucket_name_or_path.startswith("gs://"):
