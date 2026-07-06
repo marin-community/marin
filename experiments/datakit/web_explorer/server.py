@@ -5,9 +5,9 @@
 
 Point it at one datakit store (``WEB_EXPLORER_STORE``); it resolves the store's
 upstream stage datasets (:mod:`experiments.datakit.web_explorer.lineage`) and serves a
-single-page dashboard with a tab per stage — normalized data, decontamination,
-deduplication, quality classifier, and the final cluster x quality store. Most
-data is fetched by issuing SQL to the ducky service
+Vue SPA (built into ``dashboard/dist``) with a tab per stage — normalized data,
+decontamination, deduplication, quality classifier, and the final cluster x quality
+store. Most data is fetched by issuing SQL to the ducky service
 (:class:`ducky.client.DuckyClient`); the store's tokenized bucket caches are read
 directly and detokenized for the "from store cache" view
 (:mod:`experiments.datakit.web_explorer.store_cache`).
@@ -47,10 +47,12 @@ from marin.utils import fsspec_exists
 from starlette.applications import Starlette
 from starlette.concurrency import run_in_threadpool
 from starlette.requests import Request
-from starlette.responses import FileResponse, JSONResponse
-from starlette.routing import Route
+from starlette.responses import HTMLResponse, JSONResponse
+from starlette.routing import Mount, Route
+from starlette.staticfiles import StaticFiles
 
 from experiments.datakit.store.datakit_store import ClusteredStoreData
+from experiments.datakit.web_explorer.config import ENDPOINT_NAME, PORT_NAME, WebExplorerConfig
 from experiments.datakit.web_explorer.lineage import (
     StoreLineage,
     load_lineage,
@@ -63,17 +65,47 @@ from experiments.datakit.web_explorer.store_cache import StoreCacheSampler
 
 logger = logging.getLogger(__name__)
 
-_INDEX_HTML = Path(__file__).with_name("index.html")
 _MAX_WORKERS = 8
-
-# Iris named port + endpoint the deployed service binds/registers; the controller
-# proxy routes ``/proxy/datakit_explorer/`` to the namespaced endpoint. Must match deploy.py.
-PORT_NAME = "datakit_explorer"
-ENDPOINT_NAME = "/datakit_explorer"
 
 # Local-dev fallback: reach ducky through the public IAP-gated proxy (needs an
 # IAP token). In-cluster we use the controller's internal proxy (no token).
 _LOCAL_IAP_DUCKY_URL = "https://iris.oa.dev/proxy/ducky"
+
+
+# The dashboard is a bundled Vue SPA built into dashboard/dist by `npm run build`
+# (gitignored; shipped in the Iris bundle via deploy's extra include). Resolve its
+# dist dir: env override → the in-repo build output next to this module.
+def _dashboard_dist() -> Path:
+    override = os.environ.get("WEB_EXPLORER_DASHBOARD_DIST")
+    if override:
+        return Path(override)
+    return Path(__file__).resolve().parent / "dashboard" / "dist"
+
+
+_NOT_BUILT_HTML = (
+    "<!doctype html><meta charset=utf-8><title>datakit explorer</title>"
+    "<body style='font-family:system-ui;margin:3rem'><h1>datakit explorer</h1>"
+    "<p>Dashboard not built — run "
+    "<code>npm --prefix experiments/datakit/web_explorer/dashboard install "
+    "&amp;&amp; npm --prefix experiments/datakit/web_explorer/dashboard run build</code>.</p>"
+)
+
+
+def _index_html(dist: Path, forwarded_prefix: str) -> HTMLResponse:
+    """Serve dist/index.html, rewriting ``<base href="/">`` to the proxy sub-path.
+
+    The controller proxy sets ``X-Forwarded-Prefix`` (e.g. ``/proxy/datakit_explorer``)
+    in path-style mode; rewriting the base makes the SPA's relative asset and API URLs
+    resolve under it. Empty prefix (subdomain/direct) leaves the base at ``/``.
+    """
+    index_path = dist / "index.html"
+    if not index_path.is_file():
+        return HTMLResponse(_NOT_BUILT_HTML, status_code=503)
+    html = index_path.read_text(encoding="utf-8")
+    prefix = forwarded_prefix.rstrip("/")
+    if prefix:
+        html = html.replace('<base href="/"', f'<base href="{prefix}/"', 1)
+    return HTMLResponse(html)
 
 
 def _quality_range(quality_bucket: int, thresholds: list[float]) -> str:
@@ -203,6 +235,7 @@ def build_app(
     ducky: DuckyClient,
     source_summary: list[dict] | None = None,
 ) -> Starlette:
+    dist = _dashboard_dist()
     dv = WebExplorer(lineage, ducky, _source_docs(source_summary), _dedup_attr_map(lineage))
     cache_sampler = StoreCacheSampler(
         lineage.store_path, lineage.tokenizer, {(b.cluster_id, b.quality_bucket) for b in payload.buckets}
@@ -241,8 +274,8 @@ def build_app(
             "source_summary": source_summary or [],
         }
 
-    async def index(_request: Request) -> FileResponse:
-        return FileResponse(_INDEX_HTML)
+    async def index(request: Request) -> HTMLResponse:
+        return _index_html(dist, request.headers.get("x-forwarded-prefix", ""))
 
     async def api_overview(_request: Request) -> JSONResponse:
         return JSONResponse(overview())
@@ -282,11 +315,14 @@ def build_app(
             Route("/api/result/{query_id:str}", api_result),
             Route("/api/ducky-status", api_ducky_status),
             Route("/health", health),
+            # check_dir=False: the app still boots (index shows a "not built" page)
+            # when the SPA hasn't been built yet, instead of raising at startup.
+            Mount("/static", StaticFiles(directory=dist / "static", check_dir=False), name="static"),
         ]
     )
 
 
-def _build_ducky(explicit_url: str | None) -> DuckyClient:
+def _build_ducky(explicit_url: str | None, timeout: float) -> DuckyClient:
     """Pick the ducky endpoint + auth for the current environment.
 
     * explicit ``--ducky-url`` / ``WEB_EXPLORER_DUCKY_URL`` — used as-is; IAP token only
@@ -303,12 +339,13 @@ def _build_ducky(explicit_url: str | None) -> DuckyClient:
         url, needs_iap = f"{os.environ['IRIS_CONTROLLER_URL'].rstrip('/')}/proxy/ducky", False
     else:
         url, needs_iap = _LOCAL_IAP_DUCKY_URL, True
-    timeout = float(os.environ.get("WEB_EXPLORER_QUERY_TIMEOUT", "900"))
     logger.info("ducky endpoint %s (iap=%s, timeout=%.0fs)", url, needs_iap, timeout)
     return DuckyClient(url, token_provider=iap_token_provider() if needs_iap else None, timeout=timeout)
 
 
-def _load(store_path: str, ducky: DuckyClient, cache_path: str | None) -> tuple[StoreLineage, ClusteredStoreData]:
+def _load(
+    store_path: str, ducky: DuckyClient, cache_path: str | None, config: WebExplorerConfig
+) -> tuple[StoreLineage, ClusteredStoreData]:
     payload = read_store_payload(store_path)
     # fsspec_exists handles gs:// (os.path.exists would silently miss a remote
     # cache and force a ducky-dependent re-resolve at startup).
@@ -320,8 +357,8 @@ def _load(store_path: str, ducky: DuckyClient, cache_path: str | None) -> tuple[
         lineage = resolve_lineage(
             store_path,
             ducky,
-            domain_centroids=os.environ.get("WEB_EXPLORER_DOMAIN_CENTROIDS"),
-            quality_model=os.environ.get("WEB_EXPLORER_QUALITY_MODEL"),
+            domain_centroids=config.domain_centroids,
+            quality_model=config.quality_model,
         )
         if cache_path:
             save_lineage(lineage, cache_path)
@@ -330,12 +367,11 @@ def _load(store_path: str, ducky: DuckyClient, cache_path: str | None) -> tuple[
 
 
 def main() -> None:
+    config = WebExplorerConfig.from_environment()
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument(
-        "--store", default=os.environ.get("WEB_EXPLORER_STORE"), help="Datakit store artifact path (gs://)."
-    )
-    parser.add_argument("--ducky-url", default=os.environ.get("WEB_EXPLORER_DUCKY_URL"))
-    parser.add_argument("--lineage-cache", default=os.environ.get("WEB_EXPLORER_LINEAGE_CACHE"))
+    parser.add_argument("--store", default=config.store, help="Datakit store artifact path (gs://).")
+    parser.add_argument("--ducky-url", default=config.ducky_url)
+    parser.add_argument("--lineage-cache", default=config.lineage_cache)
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8001)
     args = parser.parse_args()
@@ -344,18 +380,17 @@ def main() -> None:
     if not args.store:
         raise SystemExit("--store (or WEB_EXPLORER_STORE) is required")
 
-    ducky = _build_ducky(args.ducky_url)
-    lineage, payload = _load(args.store, ducky, args.lineage_cache)
+    ducky = _build_ducky(args.ducky_url, config.query_timeout)
+    lineage, payload = _load(args.store, ducky, args.lineage_cache, config)
     source_summary = None
-    summary_path = os.environ.get("WEB_EXPLORER_SOURCE_SUMMARY")
-    if summary_path:
+    if config.source_summary:
         import json  # noqa: PLC0415 — only needed on this optional path
 
         from rigging.filesystem import open_url  # noqa: PLC0415
 
-        with open_url(summary_path, "r") as f:
+        with open_url(config.source_summary, "r") as f:
             source_summary = json.load(f)
-        logger.info("loaded source summary (%d rows) from %s", len(source_summary), summary_path)
+        logger.info("loaded source summary (%d rows) from %s", len(source_summary), config.source_summary)
     app = build_app(lineage, payload, ducky, source_summary)
     logger.info(
         "web_explorer for %s: %d sources, %d buckets",
