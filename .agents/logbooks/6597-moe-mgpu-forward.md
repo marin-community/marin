@@ -2565,3 +2565,32 @@ small exploratory win on useful TFLOP/s/rank but a rounded regression; do not pr
 remaining full-forward gap is about 14% versus the 800 useful TFLOP/s/rank target, while the prepared-input path is
 already above 800. The next worthwhile direction is structural reduction of compiled input preparation / dispatch
 overhead or further transport fusion, not simple queue/block-size sweeps.
+
+## 2026-07-06 03:45 - B200 raw-token destination transport
+
+Replaced the dynamic Blackwell staged full-forward input path with a raw-token destination transport. The previous
+outer-JIT full-forward path gathered `x` into `[src, dst, entry, row, d]` with `pack_source_push_tokens_jax` before the
+Blackwell destination copy. The new Blackwell-only path carries raw source-major `x` plus static `token_ids` into a
+Lane transport kernel and gathers each valid row directly while writing destination-local `x`. Prepared-input and
+non-Blackwell paths still use the packed layout.
+
+- Code state:
+  - Branch: `codex/blackwell-source-push-stack`
+  - Base before this entry: `8051b92e4`
+- Smoke:
+  - Artifact: `blackwell-rawx-forward-64967.out`
+  - Small B200 staged-device-sync smoke passed with 0 drops and matching output/H tolerances.
+  - The raw-token Lane transport lowered and ran on B200.
+- Target full-forward benchmark:
+  - Artifact: `blackwell_rawx_forward_64967.jsonl`
+  - Command shape: Blackwell 65K/D3072/I3072 profile, `source_push_blackwell_staged`, `forward`, `--outer-jit true`,
+    `--separate-compile`, 3 repeat rows.
+  - Repeat useful TFLOP/s/rank: 893.30, 887.25, 895.16
+  - Repeat rounded TFLOP/s/rank: 920.51, 914.27, 922.42
+  - Median: 893.30 useful / 920.51 rounded TFLOP/s/rank, 16.62 ms, 0 dropped routes
+  - Compile split: 4.89 s lower compile, 2.66 s first run, 7.54 s total first call
+
+Current conclusion: the full B200 outer-JIT forward path now exceeds the 800 useful TFLOP/s/rank target. The structural
+win came from removing the compiled packed-token gather from the Blackwell dynamic path, not from another tile sweep.
+Next useful checks are a repeat target run after commit SHA stamping and a small regression test that verifies the
+raw-token Blackwell path remains numerically aligned with the packed prepared-input path.

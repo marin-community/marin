@@ -1015,6 +1015,8 @@ def _block_source_push_forward_device_inputs(inputs: SourcePushForwardDeviceInpu
     _block_until_ready(
         (
             inputs.x,
+            inputs.source_x,
+            inputs.token_ids,
             inputs.send_meta,
             inputs.recv_meta,
             inputs.expert_base,

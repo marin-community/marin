@@ -126,6 +126,8 @@ def _block_stage_inputs(inputs: Any) -> None:
     jax.block_until_ready(
         (
             inputs.x,
+            inputs.source_x,
+            inputs.token_ids,
             inputs.send_meta,
             inputs.recv_meta,
             inputs.expert_base,
@@ -177,6 +179,7 @@ def _time_blackwell_stages(
                 route_weights,
                 w13,
                 w2,
+                pack_source_tokens=False,
             ),
         )
 
@@ -195,12 +198,25 @@ def _time_blackwell_stages(
             inputs.src_base_by_expert,
             NamedSharding(mesh, P(None, None, None)),
         )
-        destination_x = stage_fns.destination_local_x_fn(
-            inputs.x,
-            inputs.send_meta,
-            destination_transport_expert_base,
-            destination_transport_src_base_by_expert,
-        )
+        if inputs.source_x is not None and inputs.token_ids is not None:
+            if stage_fns.raw_destination_local_x_fn is None:
+                raise AssertionError("Blackwell raw-token destination callable was not initialized")
+            destination_x = stage_fns.raw_destination_local_x_fn(
+                inputs.source_x,
+                inputs.token_ids,
+                inputs.send_meta,
+                destination_transport_expert_base,
+                destination_transport_src_base_by_expert,
+            )
+        else:
+            if inputs.x is None:
+                raise ValueError("Blackwell staged transport requires either raw source tokens or packed x inputs")
+            destination_x = stage_fns.destination_local_x_fn(
+                inputs.x,
+                inputs.send_meta,
+                destination_transport_expert_base,
+                destination_transport_src_base_by_expert,
+            )
         if stage_fns.destination_x_barrier_fn is not None:
             destination_x = stage_fns.destination_x_barrier_fn(destination_x)
         jax.block_until_ready(destination_x)

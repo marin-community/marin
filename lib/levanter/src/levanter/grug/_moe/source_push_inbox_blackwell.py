@@ -448,6 +448,161 @@ def sharded_destination_local_x_transport(
     )
 
 
+def _make_raw_destination_local_x_transport_kernel(
+    config: PushInboxConfig,
+    *,
+    use_exact_expert_major: bool = False,
+):
+    """Create the staged Blackwell transport kernel that reads raw source tokens."""
+
+    config.validate()
+    k_tiles = config.hidden_dim // config.block_k
+    dst_offsets = tuple(range(config.ep_size))
+
+    def body(
+        source_x_ref: Float[Ref, "T D"],
+        token_ids_ref: Int[Ref, "Dst Q M"],
+        send_meta_ref: Int[Ref, "Dst Q F"],
+        expert_base_ref: Int[Ref, "Dst E"],
+        src_base_by_expert_ref: Int[Ref, "Dst S E"],
+        destination_x_ref: Float[Ref, "rows D"],
+    ) -> None:
+        rank = lax.axis_index(AXIS)
+        dst_ordinal = pl.program_id(0)
+        entry = pl.program_id(1)
+        k_tile = pl.program_id(2)
+        k_start = k_tile * config.block_k
+
+        def _copy_to_dst(static_dst_ordinal: int, static_dst_offset: int) -> None:
+            dst = (rank + static_dst_offset) % config.ep_size
+            remote_destination_x_ref = None
+            if static_dst_offset != 0:
+                remote_destination_x_ref = mgpu.remote_ref(
+                    destination_x_ref,
+                    dst,
+                    device_id_type=pl.DeviceIdType.LOGICAL,
+                )
+            valid_rows = send_meta_ref[static_dst_ordinal, entry, SOURCE_PUSH_META_VALID_ROWS]
+
+            @pl.when(valid_rows > 0)
+            def _copy_entry_tile() -> None:
+                local_row_start = send_meta_ref[static_dst_ordinal, entry, SOURCE_PUSH_META_LOCAL_ROW_START]
+                if use_exact_expert_major:
+                    expert = send_meta_ref[static_dst_ordinal, entry, SOURCE_PUSH_META_LOCAL_EXPERT]
+                    row_start = (
+                        expert_base_ref[dst, expert] + src_base_by_expert_ref[dst, rank, expert] + local_row_start
+                    )
+                else:
+                    row_start = local_row_start
+
+                def _copy_scope(tile_smem) -> None:
+                    @pl.loop(0, config.block_m)
+                    def _row_loop(row) -> None:
+                        @pl.when(row < valid_rows)
+                        def _copy_valid_row() -> None:
+                            token = token_ids_ref[static_dst_ordinal, entry, row]
+                            tile_smem[row, :] = source_x_ref[token, pl.ds(k_start, config.block_k)]
+
+                        @pl.when(row >= valid_rows)
+                        def _zero_invalid_row() -> None:
+                            tile_smem[row, :] = jnp.zeros((config.block_k,), dtype=source_x_ref.dtype)
+
+                    mgpu.commit_smem()
+                    if static_dst_offset == 0:
+                        mgpu.copy_smem_to_gmem(
+                            tile_smem,
+                            destination_x_ref.at[
+                                pl.ds(row_start, config.block_m),
+                                pl.ds(k_start, config.block_k),
+                            ],
+                        )
+                    else:
+                        mgpu.copy_smem_to_gmem(
+                            tile_smem,
+                            remote_destination_x_ref.at[
+                                pl.ds(row_start, config.block_m),
+                                pl.ds(k_start, config.block_k),
+                            ],
+                        )
+                    mgpu.wait_smem_to_gmem(0, wait_read_only=False)
+
+                pl.run_scoped(
+                    _copy_scope,
+                    tile_smem=mgpu.SMEM((config.block_m, config.block_k), dtype=source_x_ref.dtype),
+                )
+
+        def _switch_copy_to_dst(dynamic_dst_ordinal) -> None:
+            def _branch(static_dst_ordinal: int, static_dst_offset: int):
+                def _copy_branch(_) -> None:
+                    _copy_to_dst(static_dst_ordinal, static_dst_offset)
+
+                return _copy_branch
+
+            branches = tuple(
+                _branch(static_dst_ordinal, static_dst_offset)
+                for static_dst_ordinal, static_dst_offset in enumerate(dst_offsets)
+            )
+            lax.switch(dynamic_dst_ordinal, branches, None)
+
+        _switch_copy_to_dst(dst_ordinal)
+
+    compiler_params = mgpu.CompilerParams(lowering_semantics=mgpu.LoweringSemantics.Lane)
+    return mgpu.kernel(
+        body,
+        out_shape=jax.ShapeDtypeStruct((config.hidden_rows_per_rank, config.hidden_dim), jnp.bfloat16),
+        grid=(config.ep_size, config.entries_per_rank, k_tiles),
+        grid_names=("dst_ordinal", "entry", "k_tile"),
+        compiler_params=compiler_params,
+    )
+
+
+def sharded_raw_destination_local_x_transport(
+    mesh: Mesh,
+    config: PushInboxConfig,
+    *,
+    use_exact_expert_major: bool = False,
+):
+    """Return a shard-mapped transport from raw source-major tokens into destination rows."""
+
+    kernel = _make_raw_destination_local_x_transport_kernel(
+        config,
+        use_exact_expert_major=use_exact_expert_major,
+    )
+
+    def local_fn(
+        source_x_local: Float[Array, "1 T D"],
+        token_ids_local: Int[Array, "1 Dst Q M"],
+        send_meta_local: Int[Array, "1 Dst Q F"],
+        expert_base: Int[Array, "Dst E"],
+        src_base_by_expert: Int[Array, "Dst S E"],
+    ):
+        source_x_local = source_x_local[0]
+        token_ids_local = token_ids_local[0]
+        send_meta_local = send_meta_local[0]
+        destination_x = kernel(
+            source_x_local,
+            token_ids_local,
+            send_meta_local,
+            expert_base,
+            src_base_by_expert,
+        )
+        return destination_x[None, ...]
+
+    return shard_map(
+        local_fn,
+        mesh=mesh,
+        in_specs=(
+            P(AXIS, None, None),
+            P(AXIS, None, None, None),
+            P(AXIS, None, None, None),
+            P(None, None),
+            P(None, None, None),
+        ),
+        out_specs=P(AXIS, None, None),
+        check_vma=False,
+    )
+
+
 def sharded_blackwell_local_w13_h(
     mesh: Mesh,
     *,

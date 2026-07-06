@@ -65,6 +65,7 @@ from levanter.grug._moe.source_push_inbox_blackwell import (
     sharded_blackwell_local_w13_h,
     sharded_blackwell_local_w2_y,
     sharded_destination_local_x_transport,
+    sharded_raw_destination_local_x_transport,
 )
 from levanter.grug._moe.source_push_plan import (
     SourcePushPlan,
@@ -155,6 +156,7 @@ class _StagedSourcePushForwardCallables:
     """Jitted stage callables for a fixed mesh/config/layout."""
 
     destination_local_x_fn: Callable[..., Any] | None
+    raw_destination_local_x_fn: Callable[..., Any] | None
     destination_x_barrier_fn: Callable[..., Any] | None
     w13_h_fn: Callable[..., Any]
     w2_y_fn: Callable[..., Any] | None
@@ -208,7 +210,9 @@ class SourcePushForwardRawInputs:
 class SourcePushForwardDeviceInputs:
     """Device inputs for the chained source-push forward harness."""
 
-    x: jax.Array
+    x: jax.Array | None
+    source_x: jax.Array | None
+    token_ids: jax.Array | None
     send_meta: jax.Array
     recv_meta: jax.Array
     expert_base: jax.Array
@@ -561,6 +565,8 @@ def device_source_push_forward_inputs_from_host(
     )
     return SourcePushForwardDeviceInputs(
         x=device_w13_inputs.x,
+        source_x=None,
+        token_ids=None,
         send_meta=device_w13_inputs.send_meta,
         recv_meta=device_w13_inputs.recv_meta,
         expert_base=device_w13_inputs.expert_base,
@@ -586,6 +592,8 @@ def device_source_push_forward_inputs_from_plan(
     route_weights: Float[Array, "S T K"],
     w_gate_up: Float[Array, "S E D twoI"],
     w_down: Float[Array, "S E I D"],
+    *,
+    pack_source_tokens: bool = True,
 ) -> SourcePushForwardDeviceInputs:
     """Build device inputs from static plan metadata and dynamic differentiable arrays."""
 
@@ -598,8 +606,11 @@ def device_source_push_forward_inputs_from_plan(
         hidden_rows_per_rank=config.hidden_rows_per_rank,
         use_exact_expert_major=host_inputs.use_exact_expert_major,
     )
+    packed_x = pack_source_push_tokens_jax(x, host_inputs.plan).astype(jnp.bfloat16) if pack_source_tokens else None
     return SourcePushForwardDeviceInputs(
-        x=pack_source_push_tokens_jax(x, host_inputs.plan).astype(jnp.bfloat16),
+        x=packed_x,
+        source_x=jnp.asarray(x, dtype=jnp.bfloat16) if not pack_source_tokens else None,
+        token_ids=jnp.asarray(host_inputs.plan.token_ids, dtype=jnp.int32) if not pack_source_tokens else None,
         send_meta=jnp.asarray(host_inputs.send_meta, dtype=jnp.int32),
         recv_meta=jnp.asarray(host_inputs.recv_meta, dtype=jnp.int32),
         expert_base=jnp.asarray(host_inputs.expert_base, dtype=jnp.int32),
@@ -830,6 +841,7 @@ def source_push_forward_with_h_from_plan(
                 route_weights,
                 w_gate_up,
                 w_down,
+                pack_source_tokens=implementation != SOURCE_PUSH_FORWARD_IMPLEMENTATION_BLACKWELL_STAGED,
             ),
         )
         out, h = _call_source_push_forward_device_inputs_with_h(
@@ -1077,6 +1089,13 @@ def _staged_source_push_forward_callables(
                     use_exact_expert_major=use_exact_expert_major,
                 )
             ),
+            raw_destination_local_x_fn=jax.jit(
+                sharded_raw_destination_local_x_transport(
+                    mesh,
+                    config,
+                    use_exact_expert_major=use_exact_expert_major,
+                )
+            ),
             destination_x_barrier_fn=destination_x_barrier_fn,
             w13_h_fn=jax.jit(sharded_blackwell_local_w13_h(mesh)),
             w2_y_fn=jax.jit(sharded_blackwell_local_w2_y(mesh)),
@@ -1094,6 +1113,7 @@ def _staged_source_push_forward_callables(
     else:
         callables = _StagedSourcePushForwardCallables(
             destination_local_x_fn=None,
+            raw_destination_local_x_fn=None,
             destination_x_barrier_fn=None,
             w13_h_fn=jax.jit(_sharded_w13_h_kernel(mesh, config, use_exact_expert_major=use_exact_expert_major)),
             w2_y_fn=None,
@@ -1172,7 +1192,21 @@ def _shard_source_push_forward_inputs(
     inputs: SourcePushForwardDeviceInputs,
 ) -> SourcePushForwardDeviceInputs:
     return SourcePushForwardDeviceInputs(
-        x=jax.device_put(inputs.x, NamedSharding(mesh, P(AXIS, None, None, None, None))),
+        x=(
+            None
+            if inputs.x is None
+            else jax.device_put(inputs.x, NamedSharding(mesh, P(AXIS, None, None, None, None)))
+        ),
+        source_x=(
+            None
+            if inputs.source_x is None
+            else jax.device_put(inputs.source_x, NamedSharding(mesh, P(AXIS, None, None)))
+        ),
+        token_ids=(
+            None
+            if inputs.token_ids is None
+            else jax.device_put(inputs.token_ids, NamedSharding(mesh, P(AXIS, None, None, None)))
+        ),
         send_meta=jax.device_put(inputs.send_meta, NamedSharding(mesh, P(AXIS, None, None, None))),
         recv_meta=jax.device_put(inputs.recv_meta, NamedSharding(mesh, P(AXIS, None, None, None))),
         expert_base=jax.device_put(inputs.expert_base, NamedSharding(mesh, P(AXIS, None))),
@@ -1220,6 +1254,8 @@ def _call_source_push_forward_device_inputs(
     fn = jax.jit(
         _sharded_source_push_forward_h_kernel(mesh, config, use_exact_expert_major=inputs.use_exact_expert_major)
     )
+    if inputs.x is None:
+        raise ValueError(f"{implementation!r} requires packed source-push x inputs")
     return fn(
         inputs.x,
         inputs.send_meta,
@@ -1286,18 +1322,33 @@ def _call_staged_source_push_forward_device_inputs(
             inputs.src_base_by_expert,
             NamedSharding(mesh, P(None, None, None)),
         )
-        destination_x = stage_fns.destination_local_x_fn(
-            inputs.x,
-            inputs.send_meta,
-            destination_transport_expert_base,
-            destination_transport_src_base_by_expert,
-        )
+        if inputs.source_x is not None and inputs.token_ids is not None:
+            if stage_fns.raw_destination_local_x_fn is None:
+                raise AssertionError("Blackwell raw-token destination callable was not initialized")
+            destination_x = stage_fns.raw_destination_local_x_fn(
+                inputs.source_x,
+                inputs.token_ids,
+                inputs.send_meta,
+                destination_transport_expert_base,
+                destination_transport_src_base_by_expert,
+            )
+        else:
+            if inputs.x is None:
+                raise ValueError("Blackwell staged transport requires either raw source tokens or packed x inputs")
+            destination_x = stage_fns.destination_local_x_fn(
+                inputs.x,
+                inputs.send_meta,
+                destination_transport_expert_base,
+                destination_transport_src_base_by_expert,
+            )
         if execution_mode == FORWARD_EXECUTION_STAGED_HOST_SYNC:
             _block_until_ready(destination_x)
         elif stage_fns.destination_x_barrier_fn is not None:
             destination_x = stage_fns.destination_x_barrier_fn(destination_x)
         h = stage_fns.w13_h_fn(destination_x, inputs.w_gate_up, inputs.h_group_sizes)
     else:
+        if inputs.x is None:
+            raise ValueError(f"{implementation!r} requires packed source-push x inputs")
         _, h = stage_fns.w13_h_fn(
             inputs.x,
             inputs.send_meta,
