@@ -87,7 +87,7 @@ class BucketStats:
 ```
 
 **Persisted shape** — parquet at
-`gs://marin-eu-west4/datakit/mixture_features/v0/domain_histograms/part-<domain>.parquet` with columns
+`gs://marin-eu-west4/user/rav/projects/mixing_via_embeddings/v0/domain_histograms/part-<domain>.parquet` with columns
 `domain` (string), `cluster_id` (int32), `quality_bucket` (int8, -1 when absent), `token_count`
 (int64), `frac` (float64). Sidecar `_meta.json` per prefix: the full `MixtureBasis` (with hashes),
 per-domain `sample_size`/`seed`/`token_count`/`BucketStats`, `created_at`, git SHA of the producing
@@ -266,7 +266,7 @@ def enumerate_splits(runs: Sequence[SwarmRun], candidate_domains: Sequence[str])
 ```
 
 Driver `run_retrodiction_suite.py` executes the pre-registered grid and writes one row per
-`RetrodictionResult` to `gs://marin-eu-west4/datakit/mixture_features/v0/retrodiction/results.parquet`
+`RetrodictionResult` to `gs://marin-eu-west4/user/rav/projects/mixing_via_embeddings/v0/retrodiction/results.parquet`
 (flattened + `families`, `k`, `target_metric`, git SHA), plus the W&B report.
 
 ## Errors
@@ -289,7 +289,7 @@ Driver `run_retrodiction_suite.py` executes the pre-registered grid and writes o
 | `experiments/datakit/mixture_features/retrodiction.py` | H2b: `DoseSplit`, `PredictorKind`, `RetrodictionResult`, `enumerate_splits`, predictor fits |
 | `experiments/datakit/mixture_features/run_retrodiction_suite.py` | driver: pre-registered grid, results parquet, W&B report |
 | `tests/datakit/mixture_features/` | featurization algebra, synthetic recovery (incl. must-fail cases), control tests |
-| `gs://marin-eu-west4/datakit/mixture_features/v0/` | `domain_histograms/`, `_meta.json`, `retrodiction/results.parquet`, `retrodiction/feasibility.parquet` |
+| `gs://marin-eu-west4/user/rav/projects/mixing_via_embeddings/v0/` | `domain_histograms/`, `_meta.json`, `retrodiction/results.parquet`, `retrodiction/feasibility.parquet` |
 
 ## Out of scope
 
