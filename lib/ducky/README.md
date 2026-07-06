@@ -137,8 +137,15 @@ never appear literally in the SQL), and a literal `read_parquet` of a configured
 so the view and the literal read behave identically. An empty `DUCKY_ALLOWED_BUCKETS` disables
 enforcement entirely (allow-all), which also makes the cross-region gate inert. Because region
 is resolved from live metadata, no per-region tuning of the allowlist is needed when ducky is
-deployed to a different region; off-GCP (local smoke) the region is unknown, so nothing is
-cross-region-gated and only the outer allowlist applies.
+deployed to a different region.
+
+The gate **fails closed**: on a GCP VM, if a bucket's location can't be resolved (e.g. the
+service account lacks `storage.buckets.get`, or a transient metadata failure), the read is
+treated as cross-region and requires the opt-in — a metadata failure can't silently bypass the
+gate. Only off-GCP (local smoke), where there is no VM region to compare against, is region
+gating skipped entirely, leaving just the outer allowlist. So the deployed task's service
+account needs `storage.buckets.get` on the marin buckets, or every GCS read will demand the
+opt-in comment.
 
 Views are bound (and their parquet footers cached) at startup; a view over an
 absent/unreachable dataset is logged and skipped rather than failing the service. The

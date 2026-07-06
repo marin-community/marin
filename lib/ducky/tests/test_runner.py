@@ -7,6 +7,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import duckdb
+import ducky.runner as runner_module
 import pytest
 from ducky.config import DuckyConfig
 from ducky.runner import (
@@ -17,6 +18,7 @@ from ducky.runner import (
     _opts_in_cross_region,
     check_query_access,
     disallowed_uris,
+    needs_cross_region_optin,
 )
 from iris.env_resources import TaskResources
 
@@ -194,6 +196,61 @@ def test_run_query_refuses_cross_region_without_opt_in(make_runner, monkeypatch)
     runner = make_runner(allowed_buckets=("gs://marin-",))
     with pytest.raises(CrossRegionNotAllowedError, match="us-central2"):
         runner.run_query("SELECT * FROM read_parquet('gs://marin-us-central2/x.parquet')", uuid.uuid4().hex)
+
+
+@pytest.fixture
+def _region_probe(monkeypatch):
+    """Patch the region primitives needs_cross_region_optin depends on, and clear its cache.
+
+    Yields a setter (vm_region, bucket_location) where bucket_location can be an exception
+    instance to simulate a failed metadata lookup."""
+    monkeypatch.delenv("MARIN_I_WILL_PAY_FOR_ALL_FEES", raising=False)
+    # is_cross_region_url positively confirms *different* region; here nothing is confirmed
+    # cross-region so the fail-closed path is what's under test.
+    monkeypatch.setattr(runner_module, "is_cross_region_url", lambda _uri: False)
+    runner_module._region_confirmed_buckets.clear()
+
+    def _configure(vm_region, bucket_location):
+        monkeypatch.setattr(runner_module, "_vm_region", lambda: vm_region)
+
+        def _lookup(_bucket):
+            if isinstance(bucket_location, Exception):
+                raise bucket_location
+            return bucket_location
+
+        monkeypatch.setattr(runner_module, "get_bucket_location", _lookup)
+
+    return _configure
+
+
+def test_needs_cross_region_optin_fails_closed_when_region_unresolvable(_region_probe):
+
+    # on a GCP VM but the bucket-location lookup fails (e.g. missing storage.buckets.get)
+    _region_probe(vm_region="us-east5", bucket_location=PermissionError("denied"))
+    assert needs_cross_region_optin("gs://marin-us-central2/x.parquet") is True
+
+
+def test_needs_cross_region_optin_allows_confirmed_same_region(_region_probe):
+
+    _region_probe(vm_region="us-east5", bucket_location="us-east5")
+    assert needs_cross_region_optin("gs://marin-us-east5/x.parquet") is False
+
+
+def test_needs_cross_region_optin_off_gcp_disables_gating(_region_probe):
+
+    # no VM region (local/smoke) → gating not applicable even if metadata is unreadable
+    _region_probe(vm_region=None, bucket_location=RuntimeError("unreachable"))
+    assert needs_cross_region_optin("gs://marin-us-central2/x.parquet") is False
+
+
+def test_needs_cross_region_optin_confirmed_cross_region_short_circuits(monkeypatch):
+
+    # is_cross_region_url positively True → needs opt-in without any bucket-location probe
+    monkeypatch.setattr(runner_module, "is_cross_region_url", lambda _uri: True)
+    monkeypatch.setattr(
+        runner_module, "get_bucket_location", lambda _b: pytest.fail("should not probe when confirmed cross-region")
+    )
+    assert needs_cross_region_optin("gs://marin-eu-west4/x.parquet") is True
 
 
 def test_run_query_allowlist_does_not_block_non_object_queries(make_runner):
