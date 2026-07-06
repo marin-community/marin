@@ -12,7 +12,7 @@ import fsspec
 from thalas.execution.executor import InputName, MirroredValue
 from thalas.execution.types import versioned
 from marin.utils import fsspec_exists, fsspec_glob
-from rigging.filesystem import REGION_TO_DATA_BUCKET, marin_region, mirror_budget
+from rigging.filesystem import data_config, marin_region, mirror_budget
 
 _STEP_CHECKPOINT_RE = re.compile(r"(?:^|/)step-(\d+)/?$")
 
@@ -76,11 +76,11 @@ def localize_mirror_path(path: str, budget_gb: float = _MIRROR_LOCALIZE_BUDGET_G
     if not path.startswith("mirror://"):
         return path
     region = marin_region()
-    if region is None or region not in REGION_TO_DATA_BUCKET:
+    if region is None or region not in data_config().region_buckets:
         raise RuntimeError(f"cannot localize {path!r}: region={region!r} has no marin data bucket")
     rel = path[len("mirror://") :]
     mirror_fs = fsspec.filesystem("mirror")
     with mirror_budget(budget_gb):
         for f in mirror_fs.find(rel):
             mirror_fs.info(f)  # per-file copy-on-read into the local-region bucket
-    return f"gs://{REGION_TO_DATA_BUCKET[region]}/{rel}"
+    return f"gs://{data_config().region_buckets[region].name}/{rel}"
