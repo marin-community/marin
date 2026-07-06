@@ -15,6 +15,7 @@ from rigging.connect import capability_path
 from rigging.timing import Duration
 
 from iris.cli.connect import rpc_client_for_ctx
+from iris.cluster.types import EndpointAccess
 from iris.rpc import controller_pb2
 from iris.time_proto import duration_to_proto
 
@@ -22,6 +23,42 @@ from iris.time_proto import duration_to_proto
 @click.group()
 def endpoints():
     """Registered controller endpoints."""
+
+
+def _access_label(access: int) -> str:
+    """Human name for an EndpointAccess value ("private"/"link"), or the raw int."""
+    try:
+        return EndpointAccess.Name(access).removeprefix("ENDPOINT_ACCESS_").lower()
+    except ValueError:
+        return str(access)
+
+
+@endpoints.command("list")
+@click.argument("prefix", default="")
+@click.option("--exact", is_flag=True, help="Match PREFIX as an exact endpoint name instead of a prefix.")
+@click.option(
+    "--task-id",
+    "task_ids",
+    multiple=True,
+    help="Only endpoints registered by this wire-format task id (e.g. /user/job/0); repeatable.",
+)
+@click.pass_context
+def list_(ctx, prefix: str, exact: bool, task_ids: tuple[str, ...]):
+    """List registered endpoints, optionally filtered by PREFIX, --exact, or --task-id."""
+    with rpc_client_for_ctx(ctx) as client:
+        resp = client.list_endpoints(
+            controller_pb2.Controller.ListEndpointsRequest(
+                prefix=prefix,
+                exact=exact,
+                task_ids=list(task_ids),
+            )
+        )
+    if not resp.endpoints:
+        click.echo("No endpoints found.")
+        return
+    click.echo(f"{'NAME':<44s} {'ACCESS':<8s} {'ADDRESS':<22s} TASK")
+    for e in sorted(resp.endpoints, key=lambda e: e.name):
+        click.echo(f"{e.name:<44s} {_access_label(e.access):<8s} {e.address:<22s} {e.task_id}")
 
 
 @endpoints.command("mint")
