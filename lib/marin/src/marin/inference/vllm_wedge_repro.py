@@ -52,7 +52,7 @@ TOP_LOGPROBS = 128
 # Aggressive enough that queue spikes abandon requests, the suspected trigger.
 CLIENT_TIMEOUT_SECONDS = 60.0
 PROMPT_SEED_TOKENS = 32
-MAX_CONTEXT_TOKENS = 24_000
+MAX_CONTEXT_TOKENS = 6_000
 WEDGE_MINUTES = 5
 
 
@@ -146,15 +146,15 @@ def main(clients: int, duration_minutes: int, tpu_type: str, region: str, job_na
         model=MODEL,
         tokenizer=MODEL,
         server=VllmServerConfig(
-            timeout_seconds=3600,
-            max_model_len=32768,
+            timeout_seconds=7200,
+            max_model_len=8192,
             max_num_seqs=16,
             max_num_batched_tokens=2048,
             max_logprobs=TOP_LOGPROBS,
             enable_prefix_caching=True,
         ),
-        # First boot (download + 32k TPU compile) far exceeds the 300s default.
-        proxy=VllmProxyConfig(readiness_timeout_seconds=3600),
+        # First boot (slice provisioning + download + TPU compile) can pass an hour.
+        proxy=VllmProxyConfig(readiness_timeout_seconds=7200),
         workers=InferenceWorkerConfig(count=1, max_in_flight_per_worker=2 * clients),
         worker_resources=ResourceConfig.with_tpu(tpu_type, ram="96g"),
         worker_env_vars={
