@@ -285,6 +285,33 @@ def test_storage_path_verbs_on_local_fs(tmp_path):
         assert fh.read() == "hello"
 
 
+def test_storage_path_read_write_roundtrip(tmp_path):
+    """read/write_text and read/write_bytes round-trip through the guarded factory."""
+    d = StoragePath(str(tmp_path / "sub"))
+    d.mkdirs()
+
+    text = d / "t.txt"
+    text.write_text("héllo")
+    assert text.read_text() == "héllo"
+
+    blob = d / "b.bin"
+    blob.write_bytes(b"\x00\x01\x02")
+    assert blob.read_bytes() == b"\x00\x01\x02"
+
+    # write_text replaces existing content
+    text.write_text("new")
+    assert text.read_text() == "new"
+
+
+def test_storage_path_write_text_forwards_compression(tmp_path):
+    """**kwargs reach open_url, so compression round-trips (the boilerplate this replaces)."""
+    p = StoragePath(str(tmp_path / "c.json.gz"))
+    p.write_text('{"a": 1}', compression="gzip")
+    # gzip-compressed on disk; readable back through the same compression path
+    assert p.read_text(compression="gzip") == '{"a": 1}'
+    assert p.read_bytes()[:2] == b"\x1f\x8b"  # gzip magic — proves it was actually compressed
+
+
 def test_storage_path_glob_local(tmp_path):
     """glob brace-expands, existence-checks non-magic literals, and keeps local paths scheme-less."""
     sub = StoragePath(str(tmp_path / "sub"))

@@ -541,6 +541,26 @@ class StoragePath:
         """
         return open_url(str(self), mode, **kwargs)
 
+    def read_text(self, **kwargs: Any) -> str:
+        """Read the whole file as text. ``**kwargs`` forward to :func:`open_url`."""
+        with self.open("r", **kwargs) as f:
+            return f.read()
+
+    def read_bytes(self, **kwargs: Any) -> bytes:
+        """Read the whole file as bytes. ``**kwargs`` forward to :func:`open_url`."""
+        with self.open("rb", **kwargs) as f:
+            return f.read()
+
+    def write_text(self, data: str, **kwargs: Any) -> None:
+        """Write *data* as text, replacing any existing content. ``**kwargs`` forward to :func:`open_url`."""
+        with self.open("w", **kwargs) as f:
+            f.write(data)
+
+    def write_bytes(self, data: bytes, **kwargs: Any) -> None:
+        """Write *data* as bytes, replacing any existing content. ``**kwargs`` forward to :func:`open_url`."""
+        with self.open("wb", **kwargs) as f:
+            f.write(data)
+
 
 def _reattach_protocol(fs: fsspec.AbstractFileSystem, path: str) -> str:
     """Re-attach ``fs``'s protocol to a bare ``path`` so it round-trips through ``url_to_fs``.
