@@ -55,8 +55,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
-      # ducky's tunnel spawns the iris CLI; drive it through uv from the repo.
-      DUCKY_IRIS_CMD: "uv run iris"
       # Deploy defaults — single source of truth; dispatch inputs override.
       DEF_CLUSTER: "marin"
       DEF_NAME: "ducky"
@@ -96,6 +94,8 @@ jobs:
         with:
           enable-cache: true
 
+      # marin is IAP-fronted, so the deploy reaches the controller over its HTTPS ingress and
+      # mints the IAP OIDC token from these service-account credentials (ADC) — no SSH tunnel.
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v3
         with:
@@ -105,21 +105,6 @@ jobs:
         uses: google-github-actions/setup-gcloud@v3
         with:
           project_id: ${{ secrets.GCP_PROJECT_ID }}
-
-      # Persistent CI keypair already registered on the prod controller — the
-      # same key the canary ferry uses to tunnel to lib/iris/config/marin.yaml.
-      # A freshly-generated `os-login ssh-keys add` key is not honored by the
-      # prod controller in time, so ducky's tunnel never comes up.
-      - name: Install SSH key
-        env:
-          SSH_KEY: ${{ secrets.IRIS_CI_GCP_SSH_KEY }}
-          SSH_KEY_PUB: ${{ secrets.IRIS_CI_GCP_SSH_KEY_PUB }}
-        run: |
-          mkdir -p ~/.ssh
-          printf '%s\n' "$SSH_KEY" > ~/.ssh/google_compute_engine
-          printf '%s\n' "$SSH_KEY_PUB" > ~/.ssh/google_compute_engine.pub
-          chmod 600 ~/.ssh/google_compute_engine
-          chmod 644 ~/.ssh/google_compute_engine.pub
 
       - name: Deploy ducky
         env:
