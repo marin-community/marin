@@ -20,11 +20,11 @@ steps); :func:`main` is the CLI for ad-hoc re-scoring under new deployment assum
 
 from __future__ import annotations
 
-import argparse
 import dataclasses
 import json
 import math
 
+import click
 from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep, apply
 from pydantic import BaseModel
@@ -224,6 +224,8 @@ def build_bakeoff_report(
 ) -> BakeoffReport:
     """Load the typed ladder + fertility artifacts and score at both serving-ratios."""
     ladder = SoakLadder.raw_load(ladder_dir)
+    # score_report reads fertility as a plain dict so one function serves both this typed step and
+    # the raw-JSON CLI; flatten the loaded artifact to that shape.
     fert = FertilityReport.raw_load(fertility_dir).model_dump()
     bpb_points = {arm: r.fair_macro_ladder for arm, r in ladder.arms.items()}
     serving = ServingCostModel()
@@ -262,18 +264,25 @@ def bakeoff_report_step(
     )
 
 
-def _serving_from_args(args: argparse.Namespace) -> ServingCostModel:
+def _serving_model(
+    context_len: int,
+    attention_window: int,
+    global_period: int,
+    speed_factor: float,
+    target_hidden: int | None,
+    target_layers: int | None,
+) -> ServingCostModel:
     model = TARGET_MODEL_SHAPE
-    if args.target_hidden is not None:
-        model = dataclasses.replace(model, hidden_dim=args.target_hidden, num_heads=args.target_hidden // 128)
-    if args.target_layers is not None:
-        model = dataclasses.replace(model, num_layers=args.target_layers)
+    if target_hidden is not None:
+        model = dataclasses.replace(model, hidden_dim=target_hidden, num_heads=target_hidden // 128)
+    if target_layers is not None:
+        model = dataclasses.replace(model, num_layers=target_layers)
     return ServingCostModel(
         model=model,
-        context_len=args.context_len,
-        attention_window=args.attention_window,
-        global_layer_period=args.global_period,
-        speed_factor=args.speed_factor,
+        context_len=context_len,
+        attention_window=attention_window,
+        global_layer_period=global_period,
+        speed_factor=speed_factor,
     )
 
 
@@ -287,37 +296,60 @@ def _parse_weights(spec: str | None) -> dict[str, float] | None:
     return out
 
 
-def main() -> None:
-    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--fertility", required=True, help="raw fertility JSON from experiments.tokenization.fertility")
-    ap.add_argument("--bpb", default=None, help="ladder JSON: {arms: {name: [[flops, bpb]]}} (e.g. bpb_macro7.json)")
-    ap.add_argument("--context-len", type=int, default=16_384)
-    ap.add_argument("--attention-window", type=int, default=4_096)
-    ap.add_argument("--global-period", type=int, default=6, help="1 global layer per N (6 => 5:1 local:global)")
-    ap.add_argument("--speed-factor", type=float, default=1.0)
-    ap.add_argument("--target-hidden", type=int, default=None, help="override deployment hidden_dim")
-    ap.add_argument("--target-layers", type=int, default=None, help="override deployment num_layers")
-    ap.add_argument("--serving-ratio", type=float, default=1.0, help="lifetime serving/training weight for feBPB")
-    ap.add_argument("--domain-weights", type=str, default=None, help="k=v,k=v domain mix (default: natural bytes)")
-    ap.add_argument("--reference", type=str, default="marin-128k", help="reference arm for relative cost / feBPB")
-    ap.add_argument("--ref-budget", type=float, default=None, help="override C_ref (train FLOPs) for feBPB")
-    args = ap.parse_args()
+def _bpb_points_from_ladder(ladder: dict) -> dict[str, list]:
+    """(train_flops, BPB) points per arm, accepting either ladder JSON shape.
 
-    with open(args.fertility) as f:
+    Handles the flat ``{arms: {name: [[flops, bpb], ...]}}`` file (e.g. the recorded
+    ``rerun_bpb_macro7.json``) and a full :class:`~experiments.tokenization.collect_results.SoakLadder`
+    dump, where each arm is an ``ArmResults`` and its scoring curve is ``fair_macro_ladder``.
+    """
+    arms = ladder.get("arms", {})
+    return {name: val["fair_macro_ladder"] if isinstance(val, dict) else val for name, val in arms.items()}
+
+
+@click.command()
+@click.option("--fertility", "fertility_path", required=True, help="fertility JSON from the fertility stage")
+@click.option("--bpb", "bpb_path", default=None, help="ladder JSON: {arms: {name: [[flops, bpb]]}} (e.g. bpb_macro7)")
+@click.option("--context-len", default=16_384, type=int, help="serving context length")
+@click.option("--attention-window", default=4_096, type=int, help="sliding-window size")
+@click.option("--global-period", default=6, type=int, help="1 global layer per N (6 => 5:1 local:global)")
+@click.option("--speed-factor", default=1.0, type=float, help="hardware speed multiplier")
+@click.option("--target-hidden", default=None, type=int, help="override deployment hidden_dim")
+@click.option("--target-layers", default=None, type=int, help="override deployment num_layers")
+@click.option("--serving-ratio", default=1.0, type=float, help="lifetime serving/training weight for feBPB")
+@click.option("--domain-weights", default=None, help="k=v,k=v domain mix (default: natural bytes)")
+@click.option("--reference", default="marin-128k", help="reference arm for relative cost / feBPB")
+@click.option("--ref-budget", default=None, type=float, help="override C_ref (train FLOPs) for feBPB")
+def main(
+    fertility_path: str,
+    bpb_path: str | None,
+    context_len: int,
+    attention_window: int,
+    global_period: int,
+    speed_factor: float,
+    target_hidden: int | None,
+    target_layers: int | None,
+    serving_ratio: float,
+    domain_weights: str | None,
+    reference: str,
+    ref_budget: float | None,
+) -> None:
+    """Re-score stored fertility + ladder under a serving-cost model chosen on the command line."""
+    with open(fertility_path) as f:
         fert = json.load(f)
     bpb_points: dict[str, list] = {}
-    if args.bpb:
-        with open(args.bpb) as f:
-            bpb_points = json.load(f).get("arms", {})
+    if bpb_path:
+        with open(bpb_path) as f:
+            bpb_points = _bpb_points_from_ladder(json.load(f))
 
     report = score_report(
         fert,
         bpb_points,
-        _serving_from_args(args),
-        serving_ratio=args.serving_ratio,
-        reference=args.reference,
-        ref_budget=args.ref_budget,
-        weights=_parse_weights(args.domain_weights),
+        _serving_model(context_len, attention_window, global_period, speed_factor, target_hidden, target_layers),
+        serving_ratio=serving_ratio,
+        reference=reference,
+        ref_budget=ref_budget,
+        weights=_parse_weights(domain_weights),
     )
     print_report(report)
     if not any(a.febpb is not None for a in report.arms):

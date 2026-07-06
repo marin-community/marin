@@ -21,11 +21,11 @@ weighting or serving-cost model can be replayed offline without re-tokenizing.
 
 from __future__ import annotations
 
-import argparse
 import json
 import logging
 import os
 
+import click
 import datasets
 from levanter.tokenizers import MarinTokenizer, load_tokenizer
 from marin.execution.artifact import Artifact
@@ -268,32 +268,31 @@ def _print_cost_table(rows: list[ArmFertility], domains: list[str]) -> None:
         )
 
 
-def main() -> None:
+@click.command()
+@click.option("--corpus-dir", default=None, help="soak corpus dir; if unset, streams the HF EVAL_DOMAINS")
+@click.option("--arms", default=None, help="comma-separated arm names (default: all registered)")
+@click.option("--max-mb", type=float, default=CORPUS_SAMPLE_BYTES / 1e6, help="MB of text per domain")
+@click.option("--out", default="fertility.json", help="write the FertilityReport JSON here")
+def main(corpus_dir: str | None, arms: str | None, max_mb: float, out: str) -> None:
+    """Measure per-arm fertility over the soak corpus (or streamed HF eval domains) and write it."""
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
-    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--corpus-dir", default=None, help="soak corpus dir; if unset, streams the HF EVAL_DOMAINS")
-    ap.add_argument("--arms", default=None, help="comma-separated arm names (default: all registered)")
-    ap.add_argument("--max-mb", type=float, default=CORPUS_SAMPLE_BYTES / 1e6, help="MB of text per domain")
-    ap.add_argument("--out", default="fertility.json", help="write the raw fertility JSON here")
-    args = ap.parse_args()
-
-    arm_names = tuple(args.arms.split(",")) if args.arms else tuple(a.name for a in ALL_ARMS)
-    max_bytes = int(args.max_mb * 1e6)
-    if args.corpus_dir:
-        domain_samples = corpus_domain_samples(args.corpus_dir, max_bytes_per_domain=max_bytes)
+    arm_names = tuple(arms.split(",")) if arms else tuple(a.name for a in ALL_ARMS)
+    max_bytes = int(max_mb * 1e6)
+    if corpus_dir:
+        domain_samples = corpus_domain_samples(corpus_dir, max_bytes_per_domain=max_bytes)
         domains = list(CORPUS_DOMAINS)
     else:
         domain_samples = stream_eval_domain_samples(max_bytes)
         domains = list(domain_samples.keys())
 
     rows = measure_arms(arm_names, domain_samples)
-    out_dir = os.path.dirname(args.out)
+    out_dir = os.path.dirname(out)
     if out_dir:
         os.makedirs(out_dir, exist_ok=True)
-    with open(args.out, "w") as f:
-        json.dump({"domains": domains, "arms": rows}, f, indent=2)
+    with open(out, "w") as f:
+        json.dump(FertilityReport(domains=domains, arms=rows).model_dump(exclude={"path"}), f, indent=2)
     _print_cost_table(rows, domains)
-    print(f"\nRaw data: {args.out}")
+    print(f"\nRaw data: {out}")
 
 
 if __name__ == "__main__":

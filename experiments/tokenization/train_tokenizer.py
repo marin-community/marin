@@ -19,7 +19,6 @@ step per tokenizer. :func:`main` runs a subset directly through the step runner.
 
 from __future__ import annotations
 
-import argparse
 import json
 import logging
 import os
@@ -29,6 +28,7 @@ import time
 from dataclasses import dataclass, replace
 from enum import StrEnum
 
+import click
 from fray.cluster import ResourceConfig
 from huggingface_hub import __version__ as hf_hub_version
 from marin.execution.artifact import Artifact
@@ -148,10 +148,10 @@ TRAIN_SPECS: tuple[TrainSpec, ...] = (
 )
 
 # Fixed soak arms: identical config to the corresponding soak-* spec above (only ``name``
-# differs), retrained after commit 11bd2f4e9c fixed `_sample_stage2_corpus` to shuffle before
-# sampling. The already-deployed soak-* tokenizers above were trained on the pre-fix (English-
-# only stage-2 sample) code, so they stay registered as-is; these get a new name so a re-run can
-# select the fixed tokenizer via BAKEOFF_ARM without touching the confounded soak results.
+# differs), but their stage-2 superword sample is drawn from a domain-shuffled corpus, where the
+# un-suffixed soak-superbpe-* names above draw an English-heavy stage-2 sample. The separate
+# ``-fixed`` name lets a re-run select an arm via BAKEOFF_ARM without merging the two segmentation
+# variants under one tokenizer identity.
 _FIXED_SOAK_BASE_NAMES: tuple[str, ...] = (
     "soak-superbpe-64k",
     "soak-superbpe-128k",
@@ -337,28 +337,26 @@ def trained_tokenizer(
     )
 
 
-def main() -> None:
+@click.command()
+@click.option("--arms", default=None, help="comma-separated TrainSpec names (default: the fixed soak arms)")
+@click.option("--version", default="dev", help="artifact version for the trained-tokenizer steps")
+@click.option("--local", is_flag=True, help="train inline instead of dispatching a per-arm cluster job")
+def main(arms: str | None, version: str, local: bool) -> None:
     """Train a subset of :data:`TRAIN_SPECS` through the step runner (one remote job per arm)."""
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--arms", default=None, help="comma-separated TrainSpec names (default: the fixed soak arms)")
-    ap.add_argument("--version", default="dev", help="artifact version for the trained-tokenizer steps")
-    ap.add_argument("--local", action="store_true", help="train inline instead of dispatching a per-arm cluster job")
-    args = ap.parse_args()
-
     by_name = {s.name: s for s in (*TRAIN_SPECS, *FIXED_SOAK_SPECS)}
-    if args.arms:
-        wanted = args.arms.split(",")
+    if arms:
+        wanted = arms.split(",")
         unknown = [n for n in wanted if n not in by_name]
         if unknown:
-            raise SystemExit(f"unknown --arms {unknown}; known: {sorted(by_name)}")
+            raise click.BadParameter(f"unknown --arms {unknown}; known: {sorted(by_name)}")
         specs = [by_name[n] for n in wanted]
     else:
         specs = list(FIXED_SOAK_SPECS)
 
     corpus = tokenizer_training_corpus_raw()
-    resources = None if args.local else _TRAIN_RESOURCES
-    steps = [trained_tokenizer(spec, corpus, resources=resources, version=args.version).lower() for spec in specs]
+    resources = None if local else _TRAIN_RESOURCES
+    steps = [trained_tokenizer(spec, corpus, resources=resources, version=version).lower() for spec in specs]
     StepRunner().run([corpus.lower(), *steps])
 
 

@@ -20,17 +20,14 @@ bake-off: it reads each arm's run history and assembles the inputs the scoring s
   macro-BPB. NOTE: per-token loss/perplexity is NOT comparable across tokenizers with different
   fertility (a denser tokenizer packs more bytes per token, so its per-token loss is higher for
   the same quality); macro-BPB is the tokenizer-agnostic cross-check.
-
-The n-gram arm shares the 64k tokenizer but is a distinct model, so it is emitted under its own
-name (``soak-superbpe-64k-ngram``); reuse the 64k fertility when scoring it.
 """
 
 from __future__ import annotations
 
-import argparse
 import json
 import math
 
+import click
 import wandb
 from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep, apply
@@ -94,13 +91,8 @@ class SoakLadder(Artifact):
 
 
 def _arm_of(run) -> str | None:
-    """The scoring arm name for a run: its tokenizer tag, suffixed ``-ngram`` for the n-gram run."""
-    arm = next((t for t in getattr(run, "tags", []) if t not in _INFRA_TAGS), None)
-    if arm is None:
-        return None
-    if "ngram" in (run.name or "").lower():
-        return f"{arm}-ngram"
-    return arm
+    """The scoring arm name for a run: its first tag that is not an infra tag."""
+    return next((t for t in run.tags if t not in _INFRA_TAGS), None)
 
 
 def _curve(run) -> list[list[float]]:
@@ -262,17 +254,16 @@ def soak_results_step(*, project: str = PROJECT, group: str = GROUP, version: st
     )
 
 
-def main() -> None:
-    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--out", required=True, help="write the SoakLadder JSON here")
-    ap.add_argument("--project", default=PROJECT)
-    ap.add_argument("--group", default=GROUP)
-    args = ap.parse_args()
-
-    ladder = collect(args.project, args.group)
-    with open(args.out, "w") as f:
+@click.command()
+@click.option("--out", required=True, help="write the SoakLadder JSON here")
+@click.option("--project", default=PROJECT, help="W&B project the soak runs live in")
+@click.option("--group", default=GROUP, help="W&B group tagging the soak runs")
+def main(out: str, project: str, group: str) -> None:
+    """Pull the soak results into a SoakLadder JSON and print each arm's ladder length."""
+    ladder = collect(project, group)
+    with open(out, "w") as f:
         json.dump(ladder.model_dump(exclude={"path"}), f, indent=2)
-    print(f"wrote {args.out}")
+    print(f"wrote {out}")
     order = sorted(ladder.arms, key=lambda a: len(ladder.arms[a].macro_ladder), reverse=True)
     for arm in order:
         pts = ladder.arms[arm].macro_ladder

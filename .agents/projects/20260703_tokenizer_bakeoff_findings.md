@@ -224,7 +224,7 @@ the reusable artifact regardless of the verdict.
 ```bash
 # serving cost, any deployment assumption (no cluster)
 uv run python -m experiments.tokenization.analysis \
-  --fertility experiments/tokenization/results/fertility_trained.json \
+  --fertility experiments/tokenization/results/rerun_fertility.json \
   --domain-weights english_web=0.8,math=0.2
 # full feBPB scorecard once ladders are collected (assembler folds composed arms + re-keys trained)
 uv run python -m experiments.tokenization.analysis \

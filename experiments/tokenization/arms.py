@@ -91,8 +91,7 @@ SUPERBPE_ARMS: tuple[TokenizerArm, ...] = (
 # resolve through the `mirror://tokenizers/trained/<name>/...` cache that
 # train_tokenizer.py's push_to_mirror populates (see that module for why a bare ref, not a raw s3:// path).
 # Vocab sizes are each spec's requested size + 1 (the added `<|endoftext|>` special token);
-# every config in the sweep reached its full requested vocab (see
-# experiments/tokenization/results/trained_tokenizers_manifest.json for per-arm training time).
+# every config in the sweep reached its full requested vocab.
 TRAINED_BPE_ARMS: tuple[TokenizerArm, ...] = (
     TokenizerArm(
         "trained-bpe-64k", "trained/trained-bpe-64k", 64_001, Axis.TRAINED_BPE, "plain BPE, trained on our mix"
