@@ -597,7 +597,7 @@ class CacheLedger:
 
     @staticmethod
     def load(cache_dir: str, metadata: Optional["CacheMetadata"] = None) -> "CacheLedger":
-        ledger_path = os.path.join(cache_dir, LEDGER_FILE_NAME)
+        ledger_path = prefix_join(cache_dir, LEDGER_FILE_NAME)
         try:
             logger.info(f"Attempting to load cache ledger from {ledger_path}")
             with open_url(ledger_path) as file:
@@ -611,7 +611,7 @@ class CacheLedger:
             raise FileNotFoundError(f"Cache ledger not found at {ledger_path}") from exc
 
     def _serialize_and_commit(self, cache_dir):
-        path = os.path.join(cache_dir, LEDGER_FILE_NAME)
+        path = prefix_join(cache_dir, LEDGER_FILE_NAME)
         return _serialize_json_and_commit(path, self)  # type: ignore[arg-type]
 
 
@@ -961,7 +961,7 @@ def _build_single_shard_cache(
     options: CacheOptions,
     metadata: CacheMetadata,
 ):
-    shard_path = os.path.join(temp_root, f"{shard_index:05d}_{_sanitize_shard_name(shard_name)}")
+    shard_path = prefix_join(temp_root, f"{shard_index:05d}_{_sanitize_shard_name(shard_name)}")
     existing = _try_load(shard_path, metadata)
     if existing is not None:
         logger.info(f"Found existing shard cache for {shard_name} at {shard_path}. Skipping build.")
