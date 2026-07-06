@@ -13,6 +13,7 @@ import click
 from rigging.auth import MARIN_DESKTOP_OAUTH_CLIENT, run_iap_desktop_login
 from rigging.config_discovery import resolve_cluster_config
 from rigging.credential_store import CredentialRecord, save_credentials
+from rigging.credentials import MARIN_IMPERSONATE_ENV
 from rigging.log_setup import configure_logging
 
 from iris.cli.connect import (
@@ -55,7 +56,7 @@ def _configure_client_s3(config) -> None:
 @click.option(
     "--impersonate-service-account",
     "impersonate_service_account",
-    envvar="MARIN_IMPERSONATE_SERVICE_ACCOUNT",
+    envvar=MARIN_IMPERSONATE_ENV,
     default=None,
     help=(
         "Authenticate to an IAP cluster as this service account by impersonating it "
