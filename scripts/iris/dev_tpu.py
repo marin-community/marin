@@ -202,6 +202,7 @@ HOLDER_COMMAND = (
 )
 
 STATE_DIR = Path.home() / ".cache" / "marin" / "dev_tpu_iris"
+CONTROLLER_RPC_TIMEOUT_MS = 300_000
 WORKER_LOOKUP_LIMIT = 25
 
 
