@@ -44,11 +44,13 @@ import urllib.error
 import urllib.request
 import uuid
 from collections.abc import Callable, Generator, Mapping, Sequence
+from datetime import datetime
 from enum import StrEnum
 from pathlib import PurePath
 from types import MappingProxyType
 from typing import Any, cast
 
+import braceexpand
 import fsspec
 import yaml
 from fsspec.callbacks import DEFAULT_CALLBACK, Callback
@@ -337,19 +339,47 @@ def _key_segments(key: str) -> tuple[str, ...]:
     return tuple(part for part in key.split("/") if part)
 
 
-@dataclasses.dataclass(frozen=True)
+# Schemes whose ``scheme://`` prefix carries no authority: the entire remainder is the
+# key, not ``authority/key``. The ``mirror://`` filesystem strips its protocol and
+# treats what follows as a path relative to the local prefix, so ``mirror://a/b`` must
+# parse to an empty authority with key ``a/b`` — matching ``parse("mirror://") / "a/b"``.
+_EMPTY_AUTHORITY_SCHEMES: frozenset[str] = frozenset({"mirror"})
+
+
+def _parse_parts(value: str) -> tuple[str | None, str, tuple[str, ...], bool]:
+    """Split a storage URL / path into ``(scheme, netloc, segments, rooted)``."""
+    if "://" in value:
+        scheme, rest = value.split("://", 1)
+        if scheme in _EMPTY_AUTHORITY_SCHEMES:
+            # Empty-authority scheme: no netloc to split off; the whole remainder is the
+            # key. ``rooted=False`` keeps the join convention (``mirror://`` + ``a/b`` ->
+            # ``mirror://a/b``, no third slash).
+            return scheme, "", _key_segments(rest), False
+        netloc, sep, key = rest.partition("/")
+        # With an authority the key is always /-separated, so rooted is pinned True
+        # to keep value equality and relative_to independent of a trailing slash.
+        return scheme, netloc, _key_segments(key), bool(netloc) or bool(sep)
+    return None, "", _key_segments(value), value.startswith("/")
+
+
+@dataclasses.dataclass(frozen=True, init=False)
 class StoragePath:
-    """A parsed storage location: URL scheme, authority, and key segments.
+    """A parsed storage location with a bounded set of I/O verbs.
 
-    Object-store keys are not normalized — a doubled ``/`` addresses a *different* key —
-    so joins here are structural: a segment never contains a separator, which makes a
-    doubled or trailing separator unrepresentable. ``parse`` -> ``str`` is
-    therefore canonicalizing (interior ``//`` collapsed, trailing ``/`` stripped), not
-    byte-preserving.
+    A frozen value type: URL scheme, authority, and key segments. Object-store keys are
+    normalized on round-trip — joins are structural (a segment never contains a
+    separator), so a doubled or trailing separator is unrepresentable and ``parse`` ->
+    ``str`` collapses interior ``//`` and strips a trailing ``/``.
 
-    Paths at rest (configs, artifact records, CLI args) stay ``str``: parse at a
-    boundary, manipulate, and ``str()`` back out. See :func:`prefix_join` for the
-    single-join convenience.
+    Construct by parsing a string (``StoragePath("gs://b/k")``); the legacy
+    :meth:`parse` is a thin alias. Paths at rest (configs, artifact records, CLI args)
+    stay ``str``: parse at a boundary, manipulate, and ``str()`` back out. See
+    :func:`prefix_join` for the single-join convenience.
+
+    The I/O verbs (:meth:`exists`, :meth:`isdir`, :meth:`size`, :meth:`mtime`,
+    :meth:`mkdirs`, :meth:`glob`, :meth:`open`) are stateless: each resolves through the
+    guarded :func:`url_to_fs`/:func:`open_url` factory (cross-region budget, ``mirror://``,
+    finite S3 timeouts), never memoizing a filesystem handle on the frozen instance.
     """
 
     scheme: str | None
@@ -363,22 +393,42 @@ class StoragePath:
     ``rel/x``), or the empty-authority join convention (``file:///x`` vs ``mirror://x``).
     Irrelevant when ``netloc`` is non-empty."""
 
-    @staticmethod
-    def parse(value: str) -> "StoragePath":
-        if "://" in value:
-            scheme, rest = value.split("://", 1)
-            netloc, sep, key = rest.partition("/")
-            # With an authority the key is always /-separated, so rooted is pinned True
-            # to keep value equality and relative_to independent of a trailing slash.
-            return StoragePath(
-                scheme=scheme, netloc=netloc, segments=_key_segments(key), rooted=bool(netloc) or bool(sep)
-            )
-        return StoragePath(scheme=None, netloc="", segments=_key_segments(value), rooted=value.startswith("/"))
+    def __init__(
+        self,
+        value: "str | StoragePath | None" = None,
+        *,
+        scheme: str | None = None,
+        netloc: str = "",
+        segments: tuple[str, ...] = (),
+        rooted: bool = True,
+    ):
+        """Parse *value* (a URL/path string or another :class:`StoragePath`), or build
+        structurally from the keyword parts.
+
+        ``init=False`` on the dataclass hands construction here so ``StoragePath(x)``
+        parses. ``dataclasses.replace`` passes only the dataclass *fields* as keywords
+        (never ``value``), so it lands on the structural branch and keeps working — as do
+        :meth:`__truediv__` and :attr:`parent`, which build via ``replace``.
+        """
+        if value is not None:
+            if isinstance(value, StoragePath):
+                scheme, netloc, segments, rooted = value.scheme, value.netloc, value.segments, value.rooted
+            else:
+                scheme, netloc, segments, rooted = _parse_parts(value)
+        object.__setattr__(self, "scheme", scheme)
+        object.__setattr__(self, "netloc", netloc)
+        object.__setattr__(self, "segments", tuple(segments))
+        object.__setattr__(self, "rooted", rooted)
+
+    @classmethod
+    def parse(cls, value: str) -> "StoragePath":
+        """Alias for ``StoragePath(value)``, kept for existing call sites."""
+        return cls(value)
 
     @staticmethod
     def normalize(value: str) -> str:
-        """``value`` in canonical single-separator form (``str(StoragePath.parse(value))``)."""
-        return str(StoragePath.parse(value))
+        """``value`` in canonical single-separator form (``str(StoragePath(value))``)."""
+        return str(StoragePath(value))
 
     def __truediv__(self, relative: str) -> "StoragePath":
         if "://" in relative or relative.startswith("/"):
@@ -428,6 +478,87 @@ class StoragePath:
         if self.netloc or self.rooted:
             return f"{root}/{key}"
         return f"{root}{key}"
+
+    # -- scheme predicates ---------------------------------------------------
+
+    @property
+    def is_local(self) -> bool:
+        """True for a local-disk path (no scheme, or the ``file`` scheme)."""
+        return self.scheme in (None, "file")
+
+    @property
+    def is_remote(self) -> bool:
+        """True for a remote object store (``gs``, ``s3``, ``mirror``, …)."""
+        return not self.is_local
+
+    # -- I/O verbs -----------------------------------------------------------
+    #
+    # Stateless: each resolves through the guarded url_to_fs/open_url factory so it
+    # inherits the cross-region budget, mirror:// protocol, and S3 timeouts.
+
+    def exists(self) -> bool:
+        """True if this path exists."""
+        fs, path = url_to_fs(str(self))
+        return fs.exists(path)
+
+    def isdir(self) -> bool:
+        """True if this path is a directory (or object-store prefix)."""
+        fs, path = url_to_fs(str(self))
+        return fs.isdir(path)
+
+    def size(self) -> int:
+        """Size in bytes."""
+        fs, path = url_to_fs(str(self))
+        return fs.size(path)
+
+    def mtime(self) -> datetime:
+        """Last-modified time."""
+        fs, path = url_to_fs(str(self))
+        return fs.modified(path)
+
+    def mkdirs(self, *, exist_ok: bool = True) -> None:
+        """Create this directory and any missing parents."""
+        fs, path = url_to_fs(str(self))
+        fs.makedirs(path, exist_ok=exist_ok)
+
+    def glob(self) -> list["StoragePath"]:
+        """Expand this path as a glob pattern into the matching paths.
+
+        Brace-expands first (``{a,b}``), then globs each candidate and reattaches the
+        filesystem's protocol so every result is a reopenable :class:`StoragePath`. A
+        non-magic literal is existence-checked (matches when present, drops when absent);
+        no match yields an empty list. Local matches stay scheme-less.
+        """
+        out: list[StoragePath] = []
+        for pattern in braceexpand.braceexpand(str(self)):
+            fs, path = url_to_fs(pattern)
+            out.extend(StoragePath(_reattach_protocol(fs, match)) for match in fs.glob(path))
+        return out
+
+    def open(self, mode: str = "rb", **kwargs: Any) -> "fsspec.core.OpenFile":
+        """Open this path, returning a lazy ``fsspec`` ``OpenFile``.
+
+        Delegates to :func:`open_url`, so it charges the cross-region budget for GCS
+        reads and forwards ``compression=``/``encoding=``/``block_size=`` to ``fsspec``.
+        """
+        return open_url(str(self), mode, **kwargs)
+
+
+def _reattach_protocol(fs: Any, path: str) -> str:
+    """Re-attach ``fs``'s protocol to a bare ``path`` so it round-trips through ``url_to_fs``.
+
+    ``fsspec`` glob/find results drop the protocol prefix (e.g. ``gs://``), which makes
+    them ambiguous to reopen on a non-local filesystem. Local (``file``/protocol-less)
+    paths and already-qualified paths are returned unchanged.
+    """
+    protocol = fs.protocol
+    if isinstance(protocol, (list, tuple)):
+        protocol = protocol[0]
+    if protocol in (None, "file"):
+        return path
+    if path.startswith(f"{protocol}://"):
+        return path
+    return f"{protocol}://{path}"
 
 
 def prefix_join(prefix: str, relative: str) -> str:

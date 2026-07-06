@@ -3,6 +3,9 @@
 
 """Tests for filesystem helpers."""
 
+import dataclasses
+import pickle
+from datetime import datetime
 from pathlib import Path
 
 import pytest
@@ -209,3 +212,92 @@ def test_atomic_rename_cleans_up_on_error(tmp_path):
 
     assert not Path(temp_path).exists()
     assert not Path(output).exists()
+
+
+# ---------------------------------------------------------------------------
+# StoragePath constructor, mirror://, predicates, and I/O verbs
+# ---------------------------------------------------------------------------
+
+
+def test_storage_path_constructor_parses_and_aliases_parse():
+    """StoragePath(x) parses; .parse() is a thin alias; construction is idempotent."""
+    assert StoragePath("gs://b/k/x").key == "k/x"
+    assert StoragePath.parse("gs://b/k/x") == StoragePath("gs://b/k/x")
+    assert StoragePath(StoragePath("gs://b/k")) == StoragePath("gs://b/k")
+
+
+def test_storage_path_supports_dataclasses_replace():
+    """The dual-mode __init__ keeps dataclasses.replace working (used by / and .parent)."""
+    sp = StoragePath("gs://b/a/c")
+    assert str(dataclasses.replace(sp, segments=("a", "d"))) == "gs://b/a/d"
+
+
+def test_storage_path_is_hashable_and_picklable():
+    sp = StoragePath("gs://b/a/c")
+    assert hash(sp) == hash(StoragePath("gs://b/a/c"))
+    assert pickle.loads(pickle.dumps(sp)) == sp
+
+
+def test_storage_path_mirror_is_empty_authority():
+    """mirror:// carries no authority: parse('mirror://a/b') matches parse('mirror://')/'a/b'."""
+    parsed = StoragePath("mirror://a/b")
+    joined = StoragePath("mirror://") / "a/b"
+    assert parsed == joined
+    assert parsed.bucket == "" and parsed.key == "a/b"
+    assert str(parsed) == "mirror://a/b"
+    assert str(StoragePath("mirror://")) == "mirror://"
+
+
+@pytest.mark.parametrize(
+    ("raw", "is_local"),
+    [
+        ("/tmp/x", True),
+        ("rel/x", True),
+        ("file:///tmp/x", True),
+        ("gs://b/k", False),
+        ("s3://b/k", False),
+        ("mirror://a", False),
+    ],
+)
+def test_storage_path_scheme_predicates(raw, is_local):
+    sp = StoragePath(raw)
+    assert sp.is_local is is_local
+    assert sp.is_remote is (not is_local)
+
+
+def test_storage_path_verbs_on_local_fs(tmp_path):
+    """exists/isdir/size/mtime/mkdirs/open resolve through the guarded factory."""
+    d = StoragePath(str(tmp_path / "sub"))
+    f = d / "f.txt"
+
+    assert not f.exists()
+    d.mkdirs()
+    assert d.isdir()
+
+    with f.open("wt") as fh:
+        fh.write("hello")
+
+    assert f.exists()
+    assert not f.isdir()
+    assert f.size() == 5
+    assert isinstance(f.mtime(), datetime)
+    with f.open("rt") as fh:
+        assert fh.read() == "hello"
+
+
+def test_storage_path_glob_local(tmp_path):
+    """glob brace-expands, existence-checks non-magic literals, and keeps local paths scheme-less."""
+    sub = StoragePath(str(tmp_path / "sub"))
+    sub.mkdirs()
+    for name in ("f.txt", "g.txt"):
+        with (sub / name).open("wt") as fh:
+            fh.write("x")
+
+    both = [str(tmp_path / "sub" / "f.txt"), str(tmp_path / "sub" / "g.txt")]
+    assert sorted(str(m) for m in StoragePath(str(tmp_path / "sub" / "*.txt")).glob()) == both
+    assert sorted(str(m) for m in StoragePath(str(tmp_path / "sub" / "{f,g}.txt")).glob()) == both
+    # non-magic literal: present matches, absent drops
+    assert [str(m) for m in (sub / "f.txt").glob()] == [str(tmp_path / "sub" / "f.txt")]
+    assert (sub / "absent.txt").glob() == []
+    # results are reopenable local (scheme-less) StoragePaths
+    assert all(m.is_local for m in StoragePath(str(tmp_path / "sub" / "*.txt")).glob())
