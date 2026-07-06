@@ -14,6 +14,7 @@ import functools
 import logging
 import os
 import time
+from collections.abc import Callable
 
 import fsspec
 import jax
@@ -232,8 +233,20 @@ def _make_train_step(
     return train_step
 
 
-def _run_grug_basic_local(config: GrugRunConfig) -> None:
-    """Entry point for the minimalist dense training loop."""
+def _run_grug_local(
+    config: GrugRunConfig,
+    *,
+    init_state_fn: Callable[..., BasicTrainState],
+    compute_flops_fn: Callable[[GrugModelConfig], tuple[float, dict[str, float]]],
+) -> None:
+    """Generic minimalist training loop shared by the dense (``model_basic``) and
+    shared-expert-MoE (``model_mid``) variants.
+
+    ``init_state_fn`` builds the initial :class:`BasicTrainState` for the chosen model
+    (same signature as :func:`initial_state`); ``compute_flops_fn`` returns the analytic
+    per-example FLOPs and summary dict for that model. Everything else — mesh, data,
+    optimizer, ZeRO-1, callbacks, sync/timing knobs, checkpointing — is model-agnostic.
+    """
     trainer = config.trainer.trainer
     trainer.initialize()
     levanter.tracker.log_configuration(config)
@@ -275,7 +288,7 @@ def _run_grug_basic_local(config: GrugRunConfig) -> None:
 
         @jax.jit
         def _init_state(model_rng):
-            return initial_state(
+            return init_state_fn(
                 config.model,
                 optimizer=optimizer,
                 mp=trainer.mp,
@@ -286,7 +299,11 @@ def _run_grug_basic_local(config: GrugRunConfig) -> None:
 
         state = _init_state(model_key)
 
-        checkpointer = trainer.checkpointer.create(run_id)
+        # SCALE_CHECKPOINTS=none disables all checkpoint writes. The final save is
+        # otherwise forced regardless of save_interval, and the throughput probes have
+        # no use for a multi-billion-param checkpoint.
+        checkpoints_enabled = os.environ.get("SCALE_CHECKPOINTS", "s3").lower() != "none"
+        checkpointer = trainer.checkpointer.create(run_id) if checkpoints_enabled else None
         state = restore_grug_state_from_checkpoint(
             state,
             checkpoint_search_paths=trainer.checkpoint_search_paths(run_id),
@@ -303,7 +320,7 @@ def _run_grug_basic_local(config: GrugRunConfig) -> None:
 
         levanter.tracker.log_summary({"parameter_count": parameter_count(state.params)})
 
-        flops_per_example, flops_summary = _basic_compute_flops(config.model)
+        flops_per_example, flops_summary = compute_flops_fn(config.model)
         levanter.tracker.log_summary(flops_summary)
 
         eval_cfg = config.eval
@@ -424,6 +441,11 @@ def _run_grug_basic_local(config: GrugRunConfig) -> None:
             _upload_profiler_trace(trainer, run_id)
 
     levanter.tracker.current_tracker().finish()
+
+
+def _run_grug_basic_local(config: GrugRunConfig) -> None:
+    """Entry point for the minimalist dense (``model_basic``) training loop."""
+    _run_grug_local(config, init_state_fn=initial_state, compute_flops_fn=_basic_compute_flops)
 
 
 def _upload_profiler_trace(trainer, run_id: str) -> None:
