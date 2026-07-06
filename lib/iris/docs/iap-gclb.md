@@ -187,7 +187,8 @@ token is minted differ. Resolution lives in `rigging/credentials.py`
 | Caller | Token source | `aud` | Identity |
 | ------ | ------------ | ----- | -------- |
 | **Human** (after `iris login`) | re-mint from the cached desktop-OAuth refresh token (`IapRefreshTokenProvider`) | desktop client id | the signed-in user |
-| **Service account / CI** (ambient key, no login) | `fetch_id_token` from ambient SA credentials (`IapServiceAccountTokenProvider`) | dedicated programmatic audience if the cluster configures one, else the desktop client id | the SA email |
+| **Service account** (on a VM: GCE metadata / key) | `fetch_id_token` from ambient SA credentials (`IapServiceAccountTokenProvider`) | dedicated programmatic audience if the cluster configures one, else the desktop client id | the SA email |
+| **Impersonated SA** (headless dev-box / CI, `--impersonate-service-account`) | mint an ID token by impersonating the SA from ambient user credentials (`IapImpersonatedTokenProvider`) | same as the ambient-SA row | the impersonated SA email |
 | **Loopback / in-cluster** | none — reaches the controller directly, trusted by `auth.trusted_cidrs` / loopback | — | transport-trusted |
 
 ```mermaid
@@ -220,44 +221,46 @@ machine callers an `aud` distinct from the interactive-login client.
 
 ### Headless / CI / agent: impersonate an allowlisted service account
 
-The service-account row above says "ambient key, no login", which is automatic
-on a GCE VM whose service account is allowlisted. Off a VM — a CI runner, a dev
-box, an agent harness — there is no ambient service-account key, and the one
-credential you do have (your own `gcloud` user login) does **not** work:
-`IapServiceAccountTokenProvider` mints the edge token with
-`google.oauth2.id_token.fetch_id_token`, which accepts a service-account key, GCE
-metadata, or **impersonated** credentials, but **not** end-user `gcloud`
-credentials. `iris login` is the only path that turns a human identity into an
-edge token, and it needs a browser.
+The ambient-SA row above is automatic on a GCE VM whose service account is
+allowlisted. Off a VM — a CI runner, a dev box, an agent harness — there is no
+ambient service-account key, and the one credential you do have (your own
+`gcloud` user login) does **not** work directly: `IapServiceAccountTokenProvider`
+mints the edge token with `fetch_id_token`, which accepts a service-account key or
+GCE metadata but **not** end-user `gcloud` credentials, and `iris login` (the only
+path that turns a *human* identity into an edge token) needs a browser.
 
 So a headless caller authenticates *as an allowlisted service account* by
-impersonating one. This writes an `impersonated_service_account` ADC that
-`fetch_id_token` honors, with your user identity as the impersonation source:
+impersonating one — no browser, no service-account key. Point iris at the SA and
+`IapImpersonatedTokenProvider` mints the edge token as that SA, using your
+ordinary user login as the impersonation source:
 
 ```bash
-gcloud auth application-default login \
-  --impersonate-service-account=iris-controller@hai-gcp-models.iam.gserviceaccount.com
+gcloud auth application-default login   # once, if you have no user ADC yet
 
-# No iris login. Ambient ADC now mints the edge token as the SA. Normal
-# commands — and direct HTTPS to the dashboard/RPC — just work:
+iris --cluster=marin-dev \
+     --impersonate-service-account iris-controller@hai-gcp-models.iam.gserviceaccount.com \
+     cluster status
+
+# Or set it once for the whole shell / CI job (the flag defaults to this env):
+export MARIN_IMPERSONATE_SERVICE_ACCOUNT=iris-controller@hai-gcp-models.iam.gserviceaccount.com
 iris --cluster=marin-dev cluster status
 ```
 
 Two IAM grants make this work, matching the audience-vs-identity split above:
 
 - **Impersonation** — you need `roles/iam.serviceAccountTokenCreator` on the
-  target service account.
+  target service account (to mint tokens as it).
 - **Allowlist (identity → authorization)** — the service account must hold
   `roles/iap.httpsResourceAccessor` on the cluster's backend service, exactly as
   a human would (see [Access control](#access-control)). The edge token's `aud`
-  clears IAP authentication; the SA email is the identity IAP authorizes and the
-  controller maps to a role.
+  clears IAP authentication; the impersonated SA email is the identity IAP
+  authorizes and the controller maps to a role. There is no way to present a
+  *non*-allowlisted identity — so the SA you impersonate must be on the allowlist.
 
-Equivalently, point `GOOGLE_APPLICATION_CREDENTIALS` at an
-`impersonated_service_account` ADC file directly instead of writing the well-known
-ADC path. To reach a plain HTTP endpoint (e.g. `/auth/config`) rather than an RPC,
-build credentials with `iris.cli.connect.client_credentials(config, name)` and
-attach `Proxy-Authorization: Bearer <creds.iap_provider.get_token()>`.
+To reach a plain HTTP endpoint (e.g. `/auth/config`) rather than an RPC, build
+credentials with `iris.cli.connect.client_credentials(config, name,
+impersonate_service_account=SA)` and attach `Proxy-Authorization: Bearer
+<creds.iap_provider.get_token()>`.
 
 ## Firewall
 

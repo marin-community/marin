@@ -52,6 +52,17 @@ def _configure_client_s3(config) -> None:
     default=None,
     help="Named cluster to resolve from config search paths; preferred for known clusters",
 )
+@click.option(
+    "--impersonate-service-account",
+    "impersonate_service_account",
+    envvar="MARIN_IMPERSONATE_SERVICE_ACCOUNT",
+    default=None,
+    help=(
+        "Authenticate to an IAP cluster as this service account by impersonating it "
+        "(browserless; the headless/CI path). Needs Token Creator on the SA and the "
+        "SA on the cluster's IAP allowlist. Also reads $MARIN_IMPERSONATE_SERVICE_ACCOUNT."
+    ),
+)
 @click.pass_context
 def iris(
     ctx,
@@ -60,12 +71,14 @@ def iris(
     controller_url: str | None,
     config_file: str | None,
     cluster_name: str | None,
+    impersonate_service_account: str | None,
 ):
     """Iris cluster management."""
     ctx.ensure_object(dict)
     ctx.obj["traceback"] = show_traceback
     ctx.obj["verbose"] = verbose
     ctx.obj["cluster_name"] = cluster_name
+    ctx.obj["impersonate_service_account"] = impersonate_service_account
 
     if verbose:
         configure_logging(level=logging.DEBUG)
@@ -103,11 +116,13 @@ def iris(
 
         name = resolve_cluster_name(config, controller_url, cluster_name)
         ctx.obj["cluster_name"] = name
-        ctx.obj["credentials"] = client_credentials(config, name)
+        ctx.obj["credentials"] = client_credentials(
+            config, name, impersonate_service_account=impersonate_service_account
+        )
     else:
         name = resolve_cluster_name(None, controller_url, cluster_name)
         ctx.obj["cluster_name"] = name
-        ctx.obj["credentials"] = client_credentials(None, name)
+        ctx.obj["credentials"] = client_credentials(None, name, impersonate_service_account=impersonate_service_account)
 
     # Store direct controller URL; tunnel from config is established lazily
     # in require_controller_url() so commands like ``cluster start`` don't block.
@@ -126,10 +141,9 @@ def login(ctx):
     clusters need no login (in-network / loopback trust admits the caller).
 
     Headless (CI / agent) callers cannot use this browser flow. They skip
-    ``iris login`` entirely and authenticate as an IAP-allowlisted service account
-    instead — impersonate one via ``gcloud auth application-default login
-    --impersonate-service-account`` (see ``lib/iris/docs/iap-gclb.md``, "Headless /
-    CI / agent").
+    ``iris login`` and instead impersonate an IAP-allowlisted service account with
+    the global ``--impersonate-service-account`` flag (or
+    ``$MARIN_IMPERSONATE_SERVICE_ACCOUNT``); see ``lib/iris/docs/iap-gclb.md``.
     """
     controller_url = require_controller_url(ctx)
     config = ctx.obj.get("config")
@@ -152,9 +166,9 @@ def login(ctx):
     except Exception as e:
         raise click.ClickException(
             f"IAP authentication failed: {e}\n"
-            "If you are headless (CI / agent), skip `iris login` and authenticate as an "
-            "IAP-allowlisted service account instead — see lib/iris/docs/iap-gclb.md "
-            '("Headless / CI / agent").'
+            "If you are headless (CI / agent), skip `iris login` and pass "
+            "--impersonate-service-account <SA> (or set $MARIN_IMPERSONATE_SERVICE_ACCOUNT) "
+            "to authenticate as an IAP-allowlisted service account. See lib/iris/docs/iap-gclb.md."
         ) from e
 
     save_credentials(

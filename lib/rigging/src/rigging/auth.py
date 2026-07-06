@@ -10,14 +10,16 @@ service-specific concerns live with the service (e.g. iris).
 
 Token sources are provided against ambient Google credentials:
 ``GcpAccessTokenProvider`` mints OAuth2 *access* tokens (for Google APIs and
-loopback-trust services). Two providers mint the Google-signed OIDC *ID* token
+loopback-trust services). Three providers mint the Google-signed OIDC *ID* token
 an IAP-fronted service requires, differing only in where the credential comes
-from: ``IapServiceAccountTokenProvider`` uses ``fetch_id_token`` (service
-accounts, GCE metadata, impersonation — the in-cluster / CI path), while
-``IapRefreshTokenProvider`` re-mints from a cached desktop-OAuth refresh token
-(the human path; obtain the initial token once with ``run_iap_desktop_login``).
-All cache the token until shortly before expiry and only touch the network
-inside ``get_token``.
+from: ``IapRefreshTokenProvider`` re-mints from a cached desktop-OAuth refresh
+token (the human path; obtain the initial token once with
+``run_iap_desktop_login``); ``IapServiceAccountTokenProvider`` uses
+``fetch_id_token`` (an ambient service-account key or GCE metadata — the
+in-cluster path); and ``IapImpersonatedTokenProvider`` impersonates a service
+account from the caller's own credentials (the browserless dev-box / CI path,
+where only user credentials are available). All cache the token until shortly
+before expiry and only touch the network inside ``get_token``.
 
 A single ``BearerTokenInjector`` attaches the token to outgoing requests under a
 caller-chosen header — ``authorization`` for app auth, ``proxy-authorization``
@@ -34,12 +36,17 @@ from typing import Protocol, cast
 
 import google.auth
 import google.auth.exceptions
+import google.auth.impersonated_credentials
 import google.auth.jwt
 import google.auth.transport.requests
 import google.oauth2.credentials
 import google.oauth2.id_token
 
 _REFRESH_MARGIN_SECONDS = 300
+
+# Impersonation mints the ID token through the IAM Credentials API, which needs
+# the cloud-platform scope on the source (user) credentials.
+_IMPERSONATION_SCOPES = ["https://www.googleapis.com/auth/cloud-platform"]
 
 # OAuth scopes for the IAP desktop-login flow. "openid" makes the token endpoint
 # return an OIDC ID token (the credential IAP requires); "email" puts the user's
@@ -144,6 +151,52 @@ class IapServiceAccountTokenProvider:
         self._cached_token = token
         self._expires_at = _monotonic_expiry(claims.get("exp"))
         return self._cached_token
+
+
+class IapImpersonatedTokenProvider:
+    """Mints OIDC ID tokens for IAP by impersonating a service account.
+
+    The browserless path for a caller who holds only end-user ``gcloud``
+    credentials. ``fetch_id_token`` cannot mint an IAP token from user
+    credentials, but a user may impersonate a service account they are allowed to
+    act as: the ambient credentials are the impersonation *source*, and the minted
+    ID token's identity is ``target_principal`` (the service account) with ``aud``
+    the IAP resource's OAuth client id. The service account must hold the IAP
+    allowlist role (``roles/iap.httpsResourceAccessor`` on the backend) since that
+    is the identity IAP authorizes; the caller needs
+    ``roles/iam.serviceAccountTokenCreator`` on it to impersonate. The token is
+    cached until five minutes before its ``exp``; credential access happens only
+    inside ``get_token``.
+    """
+
+    def __init__(self, audience: str, target_principal: str):
+        self._audience = audience
+        self._target_principal = target_principal
+        self._id_creds: google.auth.impersonated_credentials.IDTokenCredentials | None = None
+        self._cached_token: str | None = None
+        self._expires_at: float = 0.0
+
+    def get_token(self) -> str | None:
+        if self._cached_token is not None and time.monotonic() < self._expires_at:
+            return self._cached_token
+
+        request = google.auth.transport.requests.Request()
+        if self._id_creds is None:
+            source, _ = google.auth.default(scopes=_IMPERSONATION_SCOPES)
+            target = google.auth.impersonated_credentials.Credentials(
+                source_credentials=source,
+                target_principal=self._target_principal,
+                target_scopes=_IMPERSONATION_SCOPES,
+            )
+            self._id_creds = google.auth.impersonated_credentials.IDTokenCredentials(
+                target, target_audience=self._audience, include_email=True
+            )
+        self._id_creds.refresh(request)
+        token = cast(str, self._id_creds.token)
+        claims = google.auth.jwt.decode(token, verify=False)
+        self._cached_token = token
+        self._expires_at = _monotonic_expiry(claims.get("exp"))
+        return token
 
 
 class IapRefreshTokenProvider:

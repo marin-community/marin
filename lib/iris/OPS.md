@@ -24,30 +24,26 @@ the controller mints no token. Two ways to get an edge token:
 
 - **Interactive** — `iris --cluster=NAME login` runs the desktop OAuth browser
   flow and caches a refresh token. Needs a browser; not usable headless.
-- **Headless / CI / agent** — do **not** run `iris login`. When there is no
-  cached login, the client mints the edge token from **ambient credentials** via
-  `fetch_id_token` (`IapServiceAccountTokenProvider`). `fetch_id_token` accepts a
-  service-account key, GCE metadata, or **impersonated** credentials — but **not**
-  end-user `gcloud` credentials. So authenticate as an IAP-allowlisted service
-  account:
+- **Headless / CI / agent** — do **not** run `iris login` (it needs a browser,
+  and `fetch_id_token` cannot mint an IAP token from end-user `gcloud`
+  credentials). Instead authenticate *as an IAP-allowlisted service account* by
+  impersonating it — no browser, no key file. Pass
+  `--impersonate-service-account` (or set `$MARIN_IMPERSONATE_SERVICE_ACCOUNT`);
+  iris mints the edge token as that SA using your ordinary user login as the
+  impersonation source:
 
   ```bash
-  # On a GCE VM whose service account is allowlisted: nothing to do — ambient
-  # metadata credentials are used automatically.
+  gcloud auth application-default login   # once, if you have no user ADC yet
 
-  # Elsewhere (dev box / agent): impersonate an allowlisted SA. This writes an
-  # impersonated-SA ADC that fetch_id_token honors.
-  gcloud auth application-default login \
-    --impersonate-service-account=iris-controller@hai-gcp-models.iam.gserviceaccount.com
-
-  # then normal commands work; the SA email is the identity IAP authorizes.
+  export MARIN_IMPERSONATE_SERVICE_ACCOUNT=iris-controller@hai-gcp-models.iam.gserviceaccount.com
   iris --cluster=marin-dev cluster status
   ```
 
-  Impersonation needs `roles/iam.serviceAccountTokenCreator` on the target SA,
-  and that SA must hold `roles/iap.httpsResourceAccessor` on the cluster's
-  backend service (the IAP allowlist). Equivalently, point
-  `GOOGLE_APPLICATION_CREDENTIALS` at an `impersonated_service_account` ADC file.
+  Needs `roles/iam.serviceAccountTokenCreator` on the SA (to impersonate) and
+  `roles/iap.httpsResourceAccessor` on the cluster backend for that SA (the IAP
+  allowlist — the impersonated SA email is the identity IAP authorizes). On a GCE
+  VM whose service account is already allowlisted none of this is needed: ambient
+  metadata credentials are used automatically.
 
 See `docs/iap-gclb.md` ("The three caller paths") for the audience-vs-identity
 model behind this.

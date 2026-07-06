@@ -118,11 +118,23 @@ def _cluster_auth_from_config(auth: AuthConfig) -> ClusterAuth:
     return ClusterAuth(AuthProvider.NONE)
 
 
-def client_credentials(config: IrisClusterConfig | None, cluster_name: str) -> ClientCredentials:
-    """Resolve the cluster's client credentials via the shared rigging resolver."""
-    if config is None or config.auth is None:
-        return credentials_for(cluster_name, ClusterAuth(AuthProvider.NONE))
-    return credentials_for(cluster_name, _cluster_auth_from_config(config.auth))
+def client_credentials(
+    config: IrisClusterConfig | None,
+    cluster_name: str,
+    *,
+    impersonate_service_account: str | None = None,
+) -> ClientCredentials:
+    """Resolve the cluster's client credentials via the shared rigging resolver.
+
+    ``impersonate_service_account`` authenticates to an IAP cluster as that SA by
+    impersonating it (the browserless path); see :func:`rigging.credentials.credentials_for`.
+    """
+    auth = (
+        _cluster_auth_from_config(config.auth)
+        if config is not None and config.auth is not None
+        else ClusterAuth(AuthProvider.NONE)
+    )
+    return credentials_for(cluster_name, auth, impersonate_service_account=impersonate_service_account)
 
 
 @contextmanager

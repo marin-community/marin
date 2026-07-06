@@ -14,11 +14,13 @@ nothing for ordinary user / CLI traffic. A client may set ``$MARIN_CLUSTER_TOKEN
 to inject an explicit bearer (e.g. a worker JWT) for CI / headless runs.
 
 IAP edge-token resolution (the ``Proxy-Authorization`` bearer, IAP clusters only)
-is the sole per-request auth: the cached desktop-OAuth refresh token (the human
-path) is preferred; failing that, an ambient service-account ID token (the
-in-cluster / CI path) minted for a dedicated programmatic audience if one is
-configured, else for the desktop client id (see :func:`_edge_provider`). The
-desktop client that re-mints from a refresh token is the app's public identity
+is the sole per-request auth. Precedence (see :func:`_edge_provider`): explicit
+service-account impersonation, when a caller sets one, mints the edge token as
+that SA from the caller's own credentials (the browserless dev-box / CI path);
+otherwise the cached desktop-OAuth refresh token (the human path); otherwise an
+ambient service-account ID token (the in-cluster path). The machine paths mint
+for a dedicated programmatic audience if one is configured, else for the desktop
+client id, which is the app's public identity
 (:data:`~rigging.auth.MARIN_DESKTOP_OAUTH_CLIENT`), overridable per cluster.
 """
 
@@ -28,6 +30,7 @@ from dataclasses import dataclass
 from rigging.auth import (
     MARIN_DESKTOP_OAUTH_CLIENT,
     BearerTokenInjector,
+    IapImpersonatedTokenProvider,
     IapRefreshTokenProvider,
     IapServiceAccountTokenProvider,
     OAuthClient,
@@ -38,6 +41,12 @@ from rigging.cluster_manifest import AuthProvider, ClusterAuth
 from rigging.credential_store import load_credentials
 
 MARIN_CLUSTER_TOKEN_ENV = "MARIN_CLUSTER_TOKEN"
+
+# Set this to a service-account email to authenticate to an IAP cluster as that
+# SA by impersonating it — the browserless path when only user credentials are
+# available (see IapImpersonatedTokenProvider). The CLI's
+# --impersonate-service-account flag sets the same value.
+MARIN_IMPERSONATE_ENV = "MARIN_IMPERSONATE_SERVICE_ACCOUNT"
 
 
 @dataclass(frozen=True)
@@ -105,22 +114,32 @@ def _desktop_client(auth: ClusterAuth) -> OAuthClient:
     return MARIN_DESKTOP_OAUTH_CLIENT
 
 
-def _edge_provider(cluster: str, auth: ClusterAuth) -> TokenProvider | None:
-    """Resolve the IAP edge provider: cached human login, then ambient service account."""
+def _edge_provider(
+    cluster: str, auth: ClusterAuth, *, impersonate_service_account: str | None = None
+) -> TokenProvider | None:
+    """Resolve the IAP edge provider.
+
+    Precedence: explicit service-account impersonation (``impersonate_service_account``),
+    then a cached human login, then ambient service-account credentials.
+    """
     if auth.provider is not AuthProvider.IAP or auth.iap is None:
         return None
+    # The audience clears IAP's authentication step for both machine paths.
+    # Prefer a dedicated programmatic audience when the cluster configures one;
+    # otherwise use the desktop client id, which IAP registers as a programmatic
+    # client and admits for service-account tokens too -- the same aud the human
+    # login path presents. The caller's identity is still checked against the
+    # backend allowlist for authorization.
+    audiences = auth.iap.programmatic_audiences
+    audience = audiences[0] if audiences else _desktop_client(auth).client_id
+    # Explicit impersonation wins: the caller asked to act as this SA, using their
+    # own (typically user) credentials as the source. The browserless dev-box path.
+    if impersonate_service_account:
+        return IapImpersonatedTokenProvider(audience, impersonate_service_account)
     human = iap_edge_provider(cluster, desktop_client=_desktop_client(auth))
     if human is not None:
         return human
-    # No cached login (the CI / in-cluster path): mint an ambient service-account
-    # ID token for the edge. Prefer a dedicated programmatic audience when the
-    # cluster configures one; otherwise use the desktop client id, which IAP
-    # registers as a programmatic client and admits for service-account tokens
-    # too -- the same aud the human login path presents. The audience only clears
-    # IAP's authentication step; the caller's identity is still checked against
-    # the backend allowlist for authorization.
-    audiences = auth.iap.programmatic_audiences
-    audience = audiences[0] if audiences else _desktop_client(auth).client_id
+    # No cached login (the in-cluster path): mint an ambient service-account ID token.
     return IapServiceAccountTokenProvider(audience)
 
 
@@ -129,15 +148,22 @@ def credentials_for(
     auth: ClusterAuth,
     *,
     token_env: str = MARIN_CLUSTER_TOKEN_ENV,
+    impersonate_service_account: str | None = None,
 ) -> ClientCredentials:
     """Assemble the :class:`ClientCredentials` for ``cluster`` from the standard sources.
 
     ``auth`` is the cluster's resolved auth shape (provider + IAP params). The IAP
     edge provider is the sole per-request auth (``Proxy-Authorization``); the
     ``Authorization`` bearer is empty unless ``$MARIN_CLUSTER_TOKEN`` injects one.
+
+    ``impersonate_service_account`` authenticates to an IAP cluster as that SA by
+    impersonating it (the browserless path); it defaults to
+    ``$MARIN_IMPERSONATE_SERVICE_ACCOUNT`` so headless callers need only set the
+    environment.
     """
     override = os.environ.get(token_env)
+    impersonate = impersonate_service_account or os.environ.get(MARIN_IMPERSONATE_ENV)
     return ClientCredentials(
         token_provider=StaticTokenProvider(override) if override else None,
-        iap_provider=_edge_provider(cluster, auth),
+        iap_provider=_edge_provider(cluster, auth, impersonate_service_account=impersonate),
     )
