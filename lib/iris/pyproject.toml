@@ -41,6 +41,11 @@ dependencies = [
 [project.optional-dependencies]
 controller = [
     "kubernetes>=31.0.0,<36",
+    # The controller resolves `gcp-secret://` config references (e.g. the auth
+    # signing key) at startup via rigging.secrets, which imports the Secret
+    # Manager client. Only the controller runs resolve_config_secrets, so this
+    # stays off the worker/CLI import path.
+    "marin-rigging[secrets]",
 ]
 worker = []
 # Interactive `iris login` against an IAP-fronted cluster (desktop OAuth flow).

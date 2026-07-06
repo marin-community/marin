@@ -5039,6 +5039,7 @@ dependencies = [
 [package.optional-dependencies]
 controller = [
     { name = "kubernetes" },
+    { name = "marin-rigging", extra = ["secrets"] },
 ]
 iap = [
     { name = "marin-rigging", extra = ["iap"] },
@@ -5093,6 +5094,7 @@ requires-dist = [
     { name = "marin-finelog-server", specifier = ">=0.2.10" },
     { name = "marin-rigging", editable = "lib/rigging" },
     { name = "marin-rigging", extras = ["iap"], marker = "extra == 'iap'", editable = "lib/rigging" },
+    { name = "marin-rigging", extras = ["secrets"], marker = "extra == 'controller'", editable = "lib/rigging" },
     { name = "pydantic", specifier = ">=2.0" },
     { name = "pyjwt", extras = ["crypto"], specifier = ">=2.12.0" },
     { name = "pyyaml", specifier = ">=6.0" },
