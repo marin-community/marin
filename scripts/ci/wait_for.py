@@ -269,12 +269,10 @@ class CommentFilter(StrEnum):
     ALL = "all"  # every new comment
 
 
-# An in-progress placeholder the review bots post and then edit in place once done: a
-# "working" spinner/progress label, or a checklist with nothing ticked off yet. Neither
-# is something a human writes as a real comment.
+# An in-progress placeholder the review bots post and then edit in place once done,
+# recognized by its "working…" spinner/progress label. (Checkbox state alone is not a
+# signal: a reviewer may enumerate required fixes as an all-unchecked task list.)
 _WORKING_RE = re.compile(r"working(?:\.\.\.|…)|<img[^>]*spin|⏳|🔄", re.IGNORECASE)
-_UNCHECKED_RE = re.compile(r"(?m)^\s*[-*]\s*\[ \]")
-_CHECKED_RE = re.compile(r"(?m)^\s*[-*]\s*\[[xX]\]")
 
 # A short status acknowledgement ("on it", "looking into this"), often just a link.
 _ACK_RE = re.compile(
@@ -310,7 +308,7 @@ def classify_significance(body: str) -> Significance:
     text = body.strip()
     if not text:
         return Significance.WRAPPER
-    if _WORKING_RE.search(text) or (_UNCHECKED_RE.search(text) and not _CHECKED_RE.search(text)):
+    if _WORKING_RE.search(text):
         return Significance.ACK
     if len(text) <= _ACK_MAX_LEN and _ACK_RE.match(text):
         return Significance.ACK
