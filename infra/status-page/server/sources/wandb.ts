@@ -40,6 +40,7 @@ interface ChartConfig {
 const CHARTS: ChartConfig[] = [
   { key: "train-loss", title: "Train cross-entropy loss", metric: "train/cross_entropy_loss" },
   { key: "paloma-macro-loss", title: "Paloma macro loss", metric: "eval/paloma/macro_loss" },
+  { key: "mfu", title: "MFU (%)", metric: "throughput/mfu" },
 ];
 
 export interface WandbPoint {

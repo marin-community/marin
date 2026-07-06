@@ -220,7 +220,7 @@ export function WandbPanel() {
                 wandb report ↗
               </a>
             </div>
-            <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+            <div className="grid grid-cols-1 gap-6 lg:grid-cols-2 xl:grid-cols-3">
               {data.charts.map((chart) => (
                 <ChartCard key={chart.key} chart={chart} />
               ))}

@@ -240,8 +240,8 @@ metrics (e.g. before first deploy, or if the namespace is missing).
 The Training panel (below Workers in the Iris section) renders the
 headline charts of the public W&B report
 ["67B-A2B MoE on 10T tokens"](https://wandb.ai/marin-community/marin_moe/reports/67B-A2B-MoE-on-10T-tokens--VmlldzoxNzM1OTMxMQ):
-train cross-entropy loss and Paloma macro loss, both against cumulative
-training tokens.
+train cross-entropy loss, Paloma macro loss, and MFU, all against
+cumulative training tokens.
 
 `server/sources/wandb.ts` first reads the **report's spec** (the
 `view(id:)` GraphQL field) and charts whatever runs the report's runset
