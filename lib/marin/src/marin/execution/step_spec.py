@@ -11,7 +11,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 from fray.types import ResourceConfig
-from rigging.filesystem import marin_prefix
+from rigging.filesystem import marin_prefix, prefix_join
 
 
 def _is_relative_path(url_or_path: str) -> bool:
@@ -115,6 +115,6 @@ class StepSpec:
         prefix = self.output_path_prefix or marin_prefix()
         if self.override_output_path is not None:
             if _is_relative_path(self.override_output_path):
-                return f"{prefix}/{self.override_output_path}"
+                return prefix_join(prefix, self.override_output_path)
             return self.override_output_path
-        return f"{prefix}/{self.name_with_hash}"
+        return prefix_join(prefix, self.name_with_hash)

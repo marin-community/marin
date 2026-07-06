@@ -801,14 +801,15 @@ def _stage_from_hf(name_or_path: str, local_dir: str) -> None:
         _populate_mirror_file(dest, f"{mirror_base}/{filename}")
 
 
-_stage_locks: dict[str, threading.Lock] = {}
-_stage_locks_guard = threading.Lock()
-
-
-def _stage_lock_for(name_or_path: str) -> threading.Lock:
-    """Return the process-wide staging lock for one tokenizer ref."""
-    with _stage_locks_guard:
-        return _stage_locks.setdefault(name_or_path, threading.Lock())
+# Serializes tokenizer staging across threads. ``lru_cache`` deduplicates
+# *repeat* calls but does not serialize concurrent *first* calls for the same
+# key, so without this lock N threads (e.g. one per dataset component in
+# ``build_caches``) race to write the same staging directory. That race
+# corrupts the tokenizer.json a sibling is mid-read of and forces a fatal HF
+# fall-through for mirror-only refs. A single process-wide lock is sufficient:
+# staging is I/O-bound and an app rarely fetches more than one tokenizer, so
+# serializing all staging costs nothing in practice.
+_STAGE_LOCK = threading.Lock()
 
 
 @functools.lru_cache(maxsize=32)
@@ -829,6 +830,9 @@ def _stage_tokenizer(name_or_path: str) -> str:
     Once staged, downstream loaders operate purely on local files — no
     HF Hub network calls (HEAD revalidation, etc.) are made.
 
+    Safe to call concurrently for the same ref: staging is serialized so only
+    one thread downloads while the others reuse the staged files.
+
     Returns the local directory path. ``lru_cache`` makes subsequent calls free.
     """
     local_dir = os.path.join(
@@ -839,12 +843,9 @@ def _stage_tokenizer(name_or_path: str) -> str:
     )
     os.makedirs(local_dir, exist_ok=True)
 
-    # build_caches stages every dataset component concurrently, and each thread
-    # stages the shared tokenizer. Serialize per ref so one thread populates
-    # local_dir while the rest wait and then take the local-cache hit below,
-    # rather than racing writes into the same directory.
-    with _stage_lock_for(name_or_path):
-        # 1. Local cache hit.
+    with _STAGE_LOCK:
+        # 1. Local cache hit (also the double-checked fast path for threads that
+        #    waited on the lock while another thread staged this same ref).
         if _try_load_tokenizer_from_dir(local_dir):
             return local_dir
 

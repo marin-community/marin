@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 
 from rigging.timing import Duration, Timestamp
 
-from iris.cluster.backends.types import (
+from iris.cluster.platforms.types import (
     CloudSliceState,
     CloudWorkerState,
     CommandResult,

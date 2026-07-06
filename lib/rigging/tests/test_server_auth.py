@@ -9,18 +9,18 @@ from connectrpc._headers import Headers
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from rigging.server_auth import (
-    LOOPBACK_IDENTITY,
-    AuthInterceptor,
+    ANONYMOUS_ADMIN,
     AuthRequest,
+    CidrAuthenticator,
     GcpAccessTokenVerifier,
     IapAssertionVerifier,
     IapIdTokenVerifier,
-    NullAuthInterceptor,
+    PolicyAuthInterceptor,
+    RequestAuthPolicy,
     StaticTokenVerifier,
     VerifiedIdentity,
     _extract_cookie,
     _verified_identity,
-    build_request_authenticators,
     get_verified_identity,
     get_verified_user,
     require_identity,
@@ -33,7 +33,7 @@ class FakeMethodInfo:
     name: str
 
 
-def _make_ctx(headers: dict | None = None):
+def _make_ctx(headers: dict | None = None, client_address: str | None = None):
     """Create a fake RequestContext with optional headers."""
 
     class FakeCtx:
@@ -46,6 +46,9 @@ def _make_ctx(headers: dict | None = None):
         def request_headers(self):
             return self._request_headers
 
+        def client_address(self):
+            return client_address
+
     return FakeCtx()
 
 
@@ -56,10 +59,10 @@ def verifier():
 
 @pytest.fixture
 def interceptor(verifier):
-    return AuthInterceptor(verifier, cookie_name="iris_session")
+    return PolicyAuthInterceptor(RequestAuthPolicy.enforcing(verifier=verifier), cookie_name="iris_session")
 
 
-def test_auth_interceptor_passes_valid_token(interceptor):
+def test_policy_interceptor_passes_valid_token(interceptor):
     ctx = _make_ctx({"authorization": "Bearer valid-token-alice"})
     captured_user = []
 
@@ -72,7 +75,7 @@ def test_auth_interceptor_passes_valid_token(interceptor):
     assert captured_user == ["alice"]
 
 
-def test_auth_interceptor_accepts_session_cookie(interceptor):
+def test_policy_interceptor_accepts_session_cookie(interceptor):
     ctx = _make_ctx({"cookie": "iris_session=valid-token-bob"})
     captured_user = []
 
@@ -85,7 +88,7 @@ def test_auth_interceptor_accepts_session_cookie(interceptor):
     assert captured_user == ["bob"]
 
 
-def test_auth_interceptor_prefers_bearer_over_cookie(interceptor):
+def test_policy_interceptor_prefers_bearer_over_cookie(interceptor):
     ctx = _make_ctx(
         {
             "authorization": "Bearer valid-token-alice",
@@ -102,14 +105,14 @@ def test_auth_interceptor_prefers_bearer_over_cookie(interceptor):
     assert captured_user == ["alice"]
 
 
-def test_auth_interceptor_rejects_missing_header(interceptor):
+def test_policy_interceptor_rejects_missing_header(interceptor):
     ctx = _make_ctx({})
     with pytest.raises(ConnectError) as exc_info:
         interceptor.intercept_unary_sync(lambda r, c: "ok", "request", ctx)
     assert exc_info.value.code == Code.UNAUTHENTICATED
 
 
-def test_auth_interceptor_rejects_invalid_token(interceptor):
+def test_policy_interceptor_rejects_invalid_token(interceptor):
     ctx = _make_ctx({"authorization": "Bearer wrong-token"})
     with pytest.raises(ConnectError) as exc_info:
         interceptor.intercept_unary_sync(lambda r, c: "ok", "request", ctx)
@@ -118,14 +121,14 @@ def test_auth_interceptor_rejects_invalid_token(interceptor):
     assert "Invalid token" not in exc_info.value.message
 
 
-def test_auth_interceptor_rejects_malformed_header(interceptor):
+def test_policy_interceptor_rejects_malformed_header(interceptor):
     ctx = _make_ctx({"authorization": "Basic user:pass"})
     with pytest.raises(ConnectError) as exc_info:
         interceptor.intercept_unary_sync(lambda r, c: "ok", "request", ctx)
     assert exc_info.value.code == Code.UNAUTHENTICATED
 
 
-def test_auth_interceptor_cleans_up_context_on_handler_error(interceptor):
+def test_policy_interceptor_cleans_up_context_on_handler_error(interceptor):
     ctx = _make_ctx({"authorization": "Bearer valid-token-alice"})
 
     def failing_handler(req, ctx):
@@ -282,8 +285,9 @@ class _FakeAssertionVerifier:
 def test_resolve_auth_iap_assertion_grants_dashboard_when_tokenless():
     identity = resolve_auth(
         AuthRequest(token=None, headers={"x-goog-iap-jwt-assertion": "valid"}),
-        build_request_authenticators(StaticTokenVerifier({}), _FakeAssertionVerifier()),
-        optional=False,
+        RequestAuthPolicy.enforcing(
+            verifier=StaticTokenVerifier({}), iap_assertion_verifier=_FakeAssertionVerifier()
+        ).authenticators,
     )
     assert identity == VerifiedIdentity(user_id="alice@example.com", role="dashboard")
 
@@ -293,8 +297,9 @@ def test_resolve_auth_iris_jwt_wins_over_iap_assertion():
     # their real role even though IAP also injected an assertion.
     identity = resolve_auth(
         AuthRequest(token="valid-token-alice", headers={"x-goog-iap-jwt-assertion": "valid"}),
-        build_request_authenticators(StaticTokenVerifier({"valid-token-alice": "alice"}), _FakeAssertionVerifier()),
-        optional=False,
+        RequestAuthPolicy.enforcing(
+            verifier=StaticTokenVerifier({"valid-token-alice": "alice"}), iap_assertion_verifier=_FakeAssertionVerifier()
+        ).authenticators,
     )
     assert identity == VerifiedIdentity(user_id="alice", role="user")
 
@@ -305,8 +310,9 @@ def test_resolve_auth_rejects_tokenless_without_assertion():
     with pytest.raises(ValueError, match="Missing authentication"):
         resolve_auth(
             AuthRequest(token=None, headers={}),
-            build_request_authenticators(StaticTokenVerifier({}), _FakeAssertionVerifier()),
-            optional=False,
+            RequestAuthPolicy.enforcing(
+                verifier=StaticTokenVerifier({}), iap_assertion_verifier=_FakeAssertionVerifier()
+            ).authenticators,
         )
 
 
@@ -314,8 +320,9 @@ def test_resolve_auth_rejects_forged_assertion():
     with pytest.raises(ValueError, match="IAP assertion verification failed"):
         resolve_auth(
             AuthRequest(token=None, headers={"x-goog-iap-jwt-assertion": "forged"}),
-            build_request_authenticators(StaticTokenVerifier({}), _FakeAssertionVerifier()),
-            optional=False,
+            RequestAuthPolicy.enforcing(
+                verifier=StaticTokenVerifier({}), iap_assertion_verifier=_FakeAssertionVerifier()
+            ).authenticators,
         )
 
 
@@ -324,10 +331,97 @@ def test_resolve_auth_loopback_admin_when_no_assertion():
     # the admin identity even when the assertion verifier is configured.
     identity = resolve_auth(
         AuthRequest(token=None, headers={}, client_address="127.0.0.1:54321"),
-        build_request_authenticators(StaticTokenVerifier({}), _FakeAssertionVerifier()),
-        optional=False,
+        RequestAuthPolicy.enforcing(
+            verifier=StaticTokenVerifier({}), iap_assertion_verifier=_FakeAssertionVerifier()
+        ).authenticators,
     )
-    assert identity == LOOPBACK_IDENTITY
+    assert identity == ANONYMOUS_ADMIN
+
+
+# --- CIDR network-location trust ---------------------------------------------
+
+
+def _cidr_stack(trusted_cidrs, tokens=None):
+    return RequestAuthPolicy.enforcing(
+        verifier=StaticTokenVerifier(tokens or {}), trusted_cidrs=trusted_cidrs
+    ).authenticators
+
+
+def test_cidr_admits_direct_peer_inside_cidr():
+    identity = resolve_auth(
+        AuthRequest(token=None, headers={}, client_address="10.4.5.6:41234"),
+        _cidr_stack(["10.0.0.0/8"]),
+    )
+    assert identity == ANONYMOUS_ADMIN
+
+
+def test_cidr_rejects_peer_outside_cidr():
+    with pytest.raises(ValueError, match="Missing authentication"):
+        resolve_auth(
+            AuthRequest(token=None, headers={}, client_address="192.0.2.7:41234"),
+            _cidr_stack(["10.0.0.0/8"]),
+        )
+
+
+def test_cidr_matches_ipv6_peer():
+    identity = resolve_auth(
+        AuthRequest(token=None, headers={}, client_address="fd12:3456::1:41234"),
+        _cidr_stack(["fd00::/8"]),
+    )
+    assert identity == ANONYMOUS_ADMIN
+
+
+def test_cidr_refuses_forwarded_request():
+    # The socket peer IS inside the CIDR, but it is a proxy hop: the request
+    # carries X-Forwarded-For, so an in-network ingress must not lend its
+    # address to the (anonymous, external) client it forwards for.
+    with pytest.raises(ValueError, match="Missing authentication"):
+        resolve_auth(
+            AuthRequest(
+                token=None,
+                headers={"x-forwarded-for": "10.9.9.9"},
+                client_address="10.4.5.6:41234",
+            ),
+            _cidr_stack(["10.0.0.0/8"]),
+        )
+
+
+def test_cidr_refuses_port_zero_peer():
+    # Port 0 marks a scope["client"] uvicorn rewrote from a forwarded header —
+    # not a genuine socket peer, so no network-location trust.
+    with pytest.raises(ValueError, match="Missing authentication"):
+        resolve_auth(
+            AuthRequest(token=None, headers={}, client_address="10.4.5.6:0"),
+            _cidr_stack(["10.0.0.0/8"]),
+        )
+
+
+@pytest.mark.parametrize("bad", ["10.0.0.0/33", "not-a-cidr", "10.0.0.1/8", ""])
+def test_cidr_authenticator_rejects_malformed_cidr_at_construction(bad):
+    # Fail-fast contract: a bad CIDR is a config error surfaced at startup,
+    # never a silently-never-matching rule at request time.
+    with pytest.raises(ValueError):
+        CidrAuthenticator([bad])
+
+
+def test_cidr_trust_never_masks_a_presented_bad_token():
+    # A present-but-invalid credential is rejected, not downgraded to ambient
+    # network trust, even when the peer is inside a trusted CIDR.
+    with pytest.raises(ValueError):
+        resolve_auth(
+            AuthRequest(token="wrong", headers={}, client_address="10.4.5.6:41234"),
+            _cidr_stack(["10.0.0.0/8"], tokens={"tok": "alice"}),
+        )
+
+
+def test_enforcing_policy_with_cidrs_alone():
+    # Trusted CIDRs alone (no verifier) still enforce: in-network peers resolve
+    # to the trusted identity, everything else is rejected.
+    policy = RequestAuthPolicy.enforcing(trusted_cidrs=["10.0.0.0/8"])
+    assert not policy.allows_anonymous
+    assert policy.resolve(None, client_address="10.1.2.3:5000", headers={}) == ANONYMOUS_ADMIN
+    with pytest.raises(ValueError, match="Missing authentication"):
+        policy.resolve(None, client_address="192.0.2.7:5000", headers={})
 
 
 def test_different_users_get_different_identities(interceptor):
@@ -424,64 +518,42 @@ def test_gcp_access_token_verifier_rejects_no_project_access():
 
 
 # ---------------------------------------------------------------------------
-# NullAuthInterceptor
+# Permissive (null-auth) chain
 # ---------------------------------------------------------------------------
 
 
-def test_null_auth_interceptor_sets_anonymous_user():
-    interceptor = NullAuthInterceptor()
-    captured = []
-
-    def handler(req, ctx):
-        captured.append((get_verified_user(), get_verified_identity()))
-        return "ok"
-
-    result = interceptor.intercept_unary_sync(handler, "request", _make_ctx())
-    assert result == "ok"
-    assert captured[0][0] == "anonymous"
-    identity = captured[0][1]
-    assert identity is not None
-    assert identity.user_id == "anonymous"
-    assert identity.role == "admin"
-
-
-def test_null_auth_interceptor_custom_user():
-    interceptor = NullAuthInterceptor(user="custom-user", role="user")
+def test_permissive_policy_admits_everyone_as_anonymous_admin():
+    interceptor = PolicyAuthInterceptor(RequestAuthPolicy.permissive())
     captured = []
 
     def handler(req, ctx):
         captured.append(get_verified_identity())
         return "ok"
 
-    interceptor.intercept_unary_sync(handler, "request", _make_ctx())
-    assert captured[0].user_id == "custom-user"
-    assert captured[0].role == "user"
-
-
-def test_null_auth_interceptor_resets_context():
-    interceptor = NullAuthInterceptor()
-
-    def handler(req, ctx):
-        assert get_verified_user() == "anonymous"
-        return "ok"
-
-    interceptor.intercept_unary_sync(handler, "request", _make_ctx())
-    assert get_verified_user() is None
+    result = interceptor.intercept_unary_sync(handler, "request", _make_ctx())
+    assert result == "ok"
+    assert captured == [ANONYMOUS_ADMIN]
+    # Context is reset after the handler exits.
     assert get_verified_identity() is None
 
 
-def test_null_auth_interceptor_resets_context_on_error():
-    interceptor = NullAuthInterceptor()
+def test_permissive_policy_attributes_valid_token_and_ignores_invalid():
+    # Null-auth with a verifier (worker tokens): a valid token attributes the
+    # caller; an invalid/stale one falls through to anonymous admin instead of
+    # failing the request.
+    policy = RequestAuthPolicy.permissive(verifier=StaticTokenVerifier({"worker-tok": "system:worker"}))
+    assert policy.allows_anonymous
+    assert policy.resolve("worker-tok", headers={}).user_id == "system:worker"
+    assert policy.resolve("stale-token", headers={}) == ANONYMOUS_ADMIN
+    assert policy.resolve(None, headers={}) == ANONYMOUS_ADMIN
 
-    def failing_handler(req, ctx):
-        assert get_verified_user() == "anonymous"
-        raise RuntimeError("boom")
 
-    with pytest.raises(RuntimeError, match="boom"):
-        interceptor.intercept_unary_sync(failing_handler, "request", _make_ctx())
-
-    assert get_verified_user() is None
-    assert get_verified_identity() is None
+def test_optional_enforcing_policy_admits_anonymous_but_rejects_bad_token():
+    policy = RequestAuthPolicy.enforcing(verifier=StaticTokenVerifier({"tok": "alice"}), optional=True)
+    assert policy.allows_anonymous
+    assert policy.resolve(None, headers={}) == ANONYMOUS_ADMIN
+    with pytest.raises(ValueError):
+        policy.resolve("wrong", headers={})
 
 
 # ---------------------------------------------------------------------------

@@ -3,7 +3,7 @@ import { ref, computed, onMounted, watch } from 'vue'
 import { RouterLink, useRoute } from 'vue-router'
 import { logServiceRpcCall } from '@/composables/useRpc'
 import { useAutoRefresh } from '@/composables/useAutoRefresh'
-import type { FetchLogsResponse, LogEntry, TaskAttempt } from '@/types/rpc'
+import { isFederated, type FetchLogsResponse, type LogEntry, type TaskAttempt } from '@/types/rpc'
 import { timestampMs, logLevelClass, formatLogTime } from '@/utils/formatting'
 import { parseLogLinks } from '@/utils/logLinks'
 
@@ -16,9 +16,18 @@ const props = withDefaults(defineProps<{
   // Cluster-wide explorer with no fixed context: default the source to a
   // match-everything prefix instead of the local process stream.
   standalone?: boolean
+  // The owning job/task's cluster coordinate. A federated row's logs live in the
+  // shared finelog under the same `taskId` key but stamped with the peer's id, so
+  // we pass `cluster` through as a FetchLogs filter (see baseRequest). A local
+  // row (or a context with no cluster) sends no filter and reads its own rows.
+  cluster?: string
 }>(), {
   maxHeight: '60vh',
 })
+
+// The finelog query key is the local task/job id — identity is cluster-invariant,
+// so a federated row is served under the same key (disambiguated by `cluster`).
+const sourceBase = computed(() => props.taskId)
 
 // Cap per-poll response size for cursor-based incremental polls. If more than
 // this many lines arrive between polls we'll catch up over subsequent polls
@@ -78,7 +87,7 @@ const errorMsg = ref<string | null>(null)
 const cursor = ref<string | number | null>(null)
 
 // Task IDs end with a numeric segment (e.g. /alice/job/0), job IDs don't.
-const isTask = computed(() => (props.taskId ? /\/\d+$/.test(props.taskId) : false))
+const isTask = computed(() => (sourceBase.value ? /\/\d+$/.test(sourceBase.value) : false))
 
 function attemptFromRoute(): number {
   const raw = route.query.attempt
@@ -90,11 +99,11 @@ function attemptFromRoute(): number {
 // (no task/worker/controller context) defaults to a cluster-wide prefix so the
 // explorer shows something before the user narrows it down.
 function defaultSource(): { source: string; scope: MatchScope } {
-  if (props.taskId) {
+  if (sourceBase.value) {
     if (selectedAttemptId.value >= 0) {
-      return { source: `${props.taskId}:${selectedAttemptId.value}`, scope: 'EXACT' }
+      return { source: `${sourceBase.value}:${selectedAttemptId.value}`, scope: 'EXACT' }
     }
-    return { source: isTask.value ? `${props.taskId}:` : `${props.taskId}/`, scope: 'PREFIX' }
+    return { source: isTask.value ? `${sourceBase.value}:` : `${sourceBase.value}/`, scope: 'PREFIX' }
   }
   if (props.workerId) return { source: `/system/worker/${props.workerId}`, scope: 'EXACT' }
   if (props.standalone) return { source: '/', scope: 'PREFIX' }
@@ -144,6 +153,9 @@ function baseRequest() {
     substring: filter.value || undefined,
     minLevel: level.value ? level.value.toUpperCase() : undefined,
     sinceMs: computeSinceMs(),
+    // Federated rows target the peer's relayed logs in the shared hub store; a
+    // local row (or no cluster context) sends no filter and reads its own rows.
+    cluster: isFederated(props.cluster) ? props.cluster : undefined,
   }
 }
 
@@ -273,6 +285,9 @@ watch(
   },
 )
 watch(() => props.workerId, applyDefaults)
+// The owning row's cluster arrives async (after GetJob/TaskStatus resolves) and
+// only changes the FetchLogs filter, not the source key — re-query in place.
+watch(() => props.cluster, resetAndFetch)
 
 // vue-router reuses this instance when only the query changes (e.g. clicking a
 // link to a different attempt of the same task), so onMounted alone won't catch
@@ -295,6 +310,8 @@ onMounted(() => {
 
 // Job-aggregate mode shows logs from many tasks; render a per-line link to the
 // originating task. Single-task mode would link every line to itself, so skip.
+// A federated job's tasks are mirrored locally under the same ids, so the links
+// resolve for federated rows too.
 const showTaskLinks = computed(() => {
   if (!props.taskId) return false
   return !/\/\d+$/.test(props.taskId)

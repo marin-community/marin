@@ -28,15 +28,11 @@ def _insert_worker(state, worker_id: str, *, scale_group: str = "") -> WorkerId:
 
 
 def _insert_worker_attribute(state, worker_id: WorkerId, key: str, value: str) -> None:
-    """SA Core string-typed attribute insertion. The projection update is
-    registered via ``set`` so the in-memory cache matches the on-disk row."""
+    """Set a single string attribute via the projection's ``set`` method."""
     with state._db.transaction() as cur:
-        cur.execute(
-            insert(worker_attributes_table).values(
-                worker_id=worker_id, key=key, value_type="str", str_value=value, int_value=None, float_value=None
-            )
-        )
-        state._worker_attrs.set(cur, worker_id, {key: AttributeValue(value)})
+        existing = state._worker_attrs.get(worker_id)
+        merged = {**existing, key: AttributeValue(value)}
+        state._worker_attrs.set(cur, worker_id, merged)
 
 
 def test_set_and_get_returns_cached_attributes(state):
@@ -76,7 +72,7 @@ def test_invalidate_drops_cache_entry_after_commit(state):
 
 def test_rehydrate_reflects_disk_state(state):
     worker_id = _insert_worker(state, "w-rehydrate")
-    # Insert SQL row only, no projection update — the cache is intentionally stale.
+    # Insert SQL row only, bypassing the projection — the cache is intentionally stale.
     with state._db.transaction() as cur:
         cur.execute(
             insert(worker_attributes_table).values(
@@ -89,27 +85,20 @@ def test_rehydrate_reflects_disk_state(state):
             )
         )
 
-    fresh = WorkerAttrsProjection(state._db, owns_scale_group=lambda _scale_group: True)
+    fresh = WorkerAttrsProjection(state._db)
     assert fresh.get(worker_id) == {"zone": AttributeValue("us-east1-b")}
 
 
-def test_rehydrate_scopes_to_owned_scale_group(state):
-    """Two backends sharing one DB each rehydrate only their own scale group's workers."""
+def test_rehydrate_loads_all_workers(state):
+    """Rehydration loads every worker's attributes unconditionally."""
     worker_a = _insert_worker(state, "w-a", scale_group="sg-a")
     worker_b = _insert_worker(state, "w-b", scale_group="sg-b")
-    for worker_id, zone in ((worker_a, "us-east1-a"), (worker_b, "us-east1-b")):
-        with state._db.transaction() as cur:
-            cur.execute(
-                insert(worker_attributes_table).values(
-                    worker_id=worker_id, key="zone", value_type="str", str_value=zone, int_value=None, float_value=None
-                )
-            )
+    _insert_worker_attribute(state, worker_a, "zone", "us-east1-a")
+    _insert_worker_attribute(state, worker_b, "zone", "us-east1-b")
 
-    backend_a = WorkerAttrsProjection(state._db, owns_scale_group=lambda sg: sg == "sg-a")
-    backend_b = WorkerAttrsProjection(state._db, owns_scale_group=lambda sg: sg == "sg-b")
-
-    assert backend_a.all() == {worker_a: {"zone": AttributeValue("us-east1-a")}}
-    assert backend_b.all() == {worker_b: {"zone": AttributeValue("us-east1-b")}}
+    fresh = WorkerAttrsProjection(state._db)
+    assert fresh.get(worker_a) == {"zone": AttributeValue("us-east1-a")}
+    assert fresh.get(worker_b) == {"zone": AttributeValue("us-east1-b")}
 
 
 def test_atomic_write_through_no_visibility_before_commit(state):
@@ -122,16 +111,6 @@ def test_atomic_write_through_no_visibility_before_commit(state):
     worker_id = _insert_worker(state, "w-atomic")
 
     with state._db.transaction() as cur:
-        cur.execute(
-            insert(worker_attributes_table).values(
-                worker_id=worker_id,
-                key="region",
-                value_type="str",
-                str_value="eu-west1",
-                int_value=None,
-                float_value=None,
-            )
-        )
         state._worker_attrs.set(cur, worker_id, {"region": AttributeValue("eu-west1")})
         # Hooks have not fired yet; cache is still empty for this worker.
         assert state._worker_attrs.get(worker_id) == {}
@@ -147,16 +126,6 @@ def test_rollback_leaves_cache_untouched(state):
 
     with pytest.raises(BoomError):
         with state._db.transaction() as cur:
-            cur.execute(
-                insert(worker_attributes_table).values(
-                    worker_id=worker_id,
-                    key="region",
-                    value_type="str",
-                    str_value="ap-south1",
-                    int_value=None,
-                    float_value=None,
-                )
-            )
             state._worker_attrs.set(cur, worker_id, {"region": AttributeValue("ap-south1")})
             raise BoomError
 
@@ -192,9 +161,9 @@ def test_replace_from_resets_cache(state, tmp_path: Path):
 def test_cascade_delete_invalidates_projection(state):
     """Deleting a worker FK-cascades into worker_attributes; the cache must follow.
 
-    Stage 12 routes the cascading delete through ``writes/workers.remove_worker``,
-    which calls ``WorkerAttrsProjection.invalidate_for_worker`` inline so the
-    in-memory dict drops the entry atomically with the SQL commit.
+    ``writes.remove_worker`` calls ``WorkerAttrsProjection.invalidate_for_worker``
+    via ``tx.caches`` so the in-memory dict drops the entry atomically with the
+    SQL commit.
     """
     worker_id = _insert_worker(state, "w-cascade")
     _insert_worker_attribute(state, worker_id, "region", "us-east1")
@@ -202,12 +171,11 @@ def test_cascade_delete_invalidates_projection(state):
 
     health = WorkerHealthTracker()
     health.register(worker_id, now_ms=1000)
-    with db.write_transaction(state._db.sa_write_engine, threading.RLock()) as tx:
+    with db.write_transaction(state._db.sa_write_engine, threading.RLock(), state._db.caches) as tx:
         writes.remove_worker(
             tx,
             worker_id,
             health=health,
-            worker_attrs=state._worker_attrs,
         )
 
     with state._db.read_snapshot() as q:

@@ -18,6 +18,7 @@ these are normalized at the parse boundary.
 from __future__ import annotations
 
 import copy
+import ipaddress
 import logging
 import os
 from collections.abc import Mapping
@@ -26,12 +27,13 @@ from typing import Annotated, Any, ClassVar, Literal
 
 import fsspec
 import yaml
-from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, PlainSerializer, model_validator
+from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, PlainSerializer, field_validator, model_validator
 from rigging.timing import Duration
 
 from iris.cluster.tpu_topology import TPU_FAMILY_VARIANT_PREFIX, get_tpu_topology, tpu_variant_name
 from iris.cluster.types import (
     DEFAULT_BACKEND_ID,
+    LOCAL_CLUSTER,
     AcceleratorType,
     CapacityType,
     GcpSliceMode,
@@ -439,11 +441,23 @@ class CoreweaveControllerConfig(_Config):
     port: int = 0  # default: 10000
     service_name: str = ""  # K8s Service name for discovery
     scale_group: str = ""  # scale group whose NodePool runs the controller
+    # When set, start_controller creates an Ingress publishing ONLY /proxy
+    # off-cluster; the controller's per-endpoint auth is the sole gate, so keep
+    # auth.provider set. See docs/coreweave.md.
+    public_proxy_host: str = ""
+    ingress_class: str = "traefik"  # ingressClassName for the /proxy ingress
+    tls_secret: str = ""  # secret holding the TLS cert for public_proxy_host
+    # cert-manager ClusterIssuer. When set, the Ingress is annotated
+    # cert-manager.io/cluster-issuer=<name> so cert-manager auto-issues the cert
+    # into tls_secret. Empty = bring your own cert in tls_secret (or no TLS).
+    cluster_issuer: str = ""
 
 
 class ControllerVmConfig(_OneofConfig):
     _ONEOF_ARMS = ("gcp", "manual", "local", "coreweave")
     image: str = ""  # controller docker image (shared by all controller types)
+    # Periodic checkpoint interval (seconds); 0 = controller default (hourly).
+    checkpoint_interval_seconds: float = 0
     gcp: GcpControllerConfig | None = None
     manual: ManualControllerConfig | None = None
     local: LocalControllerConfig | None = None
@@ -496,8 +510,20 @@ class IapAuthConfig(_Config):
     url: str = ""
     oauth_client_id: str = ""
     oauth_client_secret: str = ""
+    # OIDC ID-token audiences the controller accepts on interactive-login tokens
+    # (the `iris login` user flow); typically just the desktop client id.
     audiences: list[str] = Field(default_factory=list)
+    # Audiences a service-account (CI / in-cluster) caller mints its IAP *edge*
+    # token for -- kept separate from the login `audiences` above. Empty falls
+    # back to the desktop client id, which IAP registers as a programmatic client
+    # (sufficient for the common single-client setup); set this only to give
+    # machine callers an `aud` distinct from the interactive-login client.
+    programmatic_audiences: list[str] = Field(default_factory=list)
     signed_header_audience: str = ""
+    # Role granted to an IAP-verified email with no row in the user store; a
+    # provisioned user always resolves to their stored role. "admin" makes
+    # IAP's own allowlist the sole gate.
+    unprovisioned_role: Literal["admin", "user", "dashboard"] = "dashboard"
 
 
 class AuthConfig(_OneofConfig):
@@ -505,10 +531,24 @@ class AuthConfig(_OneofConfig):
     gcp: GcpAuthConfig | None = None
     static: StaticAuthConfig | None = None
     iap: IapAuthConfig | None = None
+    # Network-location trust, orthogonal to the login-provider arm: a tokenless
+    # request whose *direct transport peer* is inside one of these CIDRs
+    # authenticates as the anonymous admin identity (like loopback). Requests
+    # forwarded through a proxy hop (X-Forwarded-For present) never match, so
+    # an in-network ingress cannot lend its address to external traffic. With
+    # no arm selected, a non-empty list alone enables auth (provider "cidr").
+    trusted_cidrs: list[str] = Field(default_factory=list)
     admin_users: list[str] = Field(default_factory=list)
     # Authenticate-but-not-require: valid tokens get their identity; tokenless
     # requests fall through as anonymous admin; invalid tokens still rejected.
     optional: bool = False
+
+    @field_validator("trusted_cidrs")
+    @classmethod
+    def _parse_cidrs(cls, cidrs: list[str]) -> list[str]:
+        for cidr in cidrs:
+            ipaddress.ip_network(cidr)  # ValueError on a malformed CIDR — fail at load
+        return cidrs
 
     def provider_kind(self) -> str | None:
         return self._selected_arm()
@@ -941,10 +981,25 @@ def _validate_backends(config: IrisClusterConfig) -> None:
 
 
 def _validate_peers(config: IrisClusterConfig) -> None:
-    """Validate the ``peers:`` federation registry."""
+    """Validate the ``peers:`` federation registry.
+
+    ``'local'`` is reserved as the federation sentinel for "this controller"; the
+    cluster's own ``name`` and every peer id must stay disjoint from it so the
+    sentinel and the real cluster-id namespace never collide.
+    """
+    if config.name == LOCAL_CLUSTER:
+        raise ValueError(
+            f"cluster name may not be {LOCAL_CLUSTER!r}: it is reserved as the federation "
+            "sentinel for this controller. Choose a distinct cluster name."
+        )
     for peer_id, peer in config.peers.items():
         if not peer_id.strip():
             raise ValueError("peers: peer id must be a non-empty string.")
+        if peer_id == LOCAL_CLUSTER:
+            raise ValueError(
+                f"peer id may not be {LOCAL_CLUSTER!r}: it is reserved as the federation "
+                "sentinel. A peer must have a distinct cluster id."
+            )
         if not peer.controller_address.strip():
             raise ValueError(f"peer '{peer_id}': controller_address is required.")
         if peer.static_token and not peer.cluster:

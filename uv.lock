@@ -5359,6 +5359,7 @@ dependencies = [
     { name = "pyyaml" },
     { name = "requests" },
     { name = "s3fs" },
+    { name = "starlette" },
 ]
 
 [package.optional-dependencies]
@@ -5389,6 +5390,7 @@ requires-dist = [
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "requests", specifier = ">=2.0.0" },
     { name = "s3fs", specifier = ">=2024.0.0" },
+    { name = "starlette", specifier = ">=0.40" },
 ]
 provides-extras = ["iap"]
 

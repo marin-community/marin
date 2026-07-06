@@ -8,98 +8,68 @@ automatically. The ``value_type`` column has no TypeDecorator (it encodes a
 three-way dispatch among int/float/str columns) so the decode branch is handled
 explicitly by :func:`_decode_value`.
 
-Unlike :class:`EndpointsProjection`, mutating methods do not issue SQL — the
-corresponding ``worker_attributes`` writes are emitted by
-``writes.workers.replace_attributes``. This projection owns only the in-memory
-cache that ``healthy_active_workers_with_attributes`` reads on the scheduler hot
-path.
+:meth:`WorkerAttrsProjection.set` is the sole writer of ``worker_attributes``
+rows: it issues a DELETE for the worker followed by an INSERT for each attribute,
+then registers a post-commit hook that atomically installs the new dict in the
+in-memory cache. :meth:`WorkerAttrsProjection.invalidate_for_worker` handles the
+FK-cascade case: deleting a ``workers`` row cascades into ``worker_attributes``
+and the cache entry is dropped post-commit.
 """
 
 import logging
 import threading
-from collections.abc import Callable
-from typing import ClassVar, Protocol
+from typing import ClassVar
 
-from sqlalchemy import select
+from sqlalchemy import delete, insert, select
 
 from iris.cluster.constraints import AttributeValue
-from iris.cluster.controller import db, reads
 from iris.cluster.controller.codec import WorkerAttributeRow, attribute_value_from_row
-from iris.cluster.controller.db import ControllerDB
-from iris.cluster.controller.projections import PROJECTIONS
+from iris.cluster.controller.db import ControllerDB, Tx
+from iris.cluster.controller.projections.base import Projection
 from iris.cluster.controller.schema import worker_attributes_table
 from iris.cluster.types import WorkerId
-
-
-class PostCommitRegistrar(Protocol):
-    """Structural type for any transaction wrapper that schedules post-commit hooks.
-
-    :class:`db.Tx` exposes a ``register(callable)`` method that fires after
-    the surrounding write transaction commits, under the write lock. Projection
-    invalidation methods accept this Protocol so the hook works for any
-    transaction wrapper that follows the same shape.
-    """
-
-    def register(self, hook: Callable[[], None]) -> None: ...
-
 
 logger = logging.getLogger(__name__)
 
 
-def _decode_value(row: WorkerAttributeRow) -> AttributeValue:
-    """Decode a single ``worker_attributes`` SA row to an ``AttributeValue``.
+def _attribute_value_cols(value: str | int | float) -> dict:
+    if isinstance(value, int):
+        return {"value_type": "int", "str_value": None, "int_value": int(value), "float_value": None}
+    if isinstance(value, float):
+        return {"value_type": "float", "str_value": None, "int_value": None, "float_value": float(value)}
+    return {"value_type": "str", "str_value": str(value), "int_value": None, "float_value": None}
 
-    Shares the str/int/float dispatch with :func:`codec.attribute_value_from_row`.
-    """
+
+def _decode_value(row: WorkerAttributeRow) -> AttributeValue:
     return AttributeValue(attribute_value_from_row(row))
 
 
-class WorkerAttrsProjection:
+class WorkerAttrsProjection(Projection):
     """Process-local write-through cache over the ``worker_attributes`` table.
 
-    Scoped to one backend: holds attributes only for workers whose scale group
-    ``owns_scale_group`` claims. Reads serve the latest committed snapshot from
-    an in-memory dict guarded by a ``threading.Lock``. Writes register a
-    post-commit hook that updates the dict atomically with the surrounding SQL
-    commit; the hook fires under the DB write lock so concurrent readers
-    cannot observe torn state.
+    Owns the table: :meth:`set` is the sole writer and issues DELETE + INSERT
+    before registering the post-commit cache update. Reads serve the latest
+    committed snapshot from an in-memory dict guarded by a ``threading.Lock``.
+    The hook fires under the DB write lock so concurrent readers cannot observe
+    torn state.
     """
 
-    sources: ClassVar = (worker_attributes_table,)
+    owns: ClassVar = (worker_attributes_table,)
 
-    def __init__(self, db: ControllerDB, *, owns_scale_group: Callable[[str], bool]) -> None:
-        self._db = db
-        self._owns_scale_group = owns_scale_group
+    def __init__(self, db: ControllerDB) -> None:
         self._lock = threading.Lock()
         self._cache: dict[WorkerId, dict[str, AttributeValue]] = {}
-        PROJECTIONS.append(self)
-        self.rehydrate()
-        # Caches reload after a checkpoint restore via db.replace_from().
-        db.register_reopen_hook(self.rehydrate)
-
-    # -- Loading --------------------------------------------------------------
+        super().__init__(db)
 
     def rehydrate(self) -> None:
-        """Reload the cache from SQL via the SA read engine, scoped to owned workers.
-
-        Called once at construction and again after ``ControllerDB.replace_from``
-        has swapped the underlying database file. ``WorkerIdType`` on
-        ``worker_id`` decodes the string automatically; ``value_type`` dispatch
-        is handled by :func:`_decode_value`.
-        """
         decoded: dict[WorkerId, dict[str, AttributeValue]] = {}
-        with db.read_snapshot(self._db.sa_read_engine) as tx:
-            owned = reads.owned_worker_ids(tx, self._owns_scale_group)
+        with self._db.read_snapshot() as tx:
             for row in tx.execute(select(worker_attributes_table)).all():
-                if row.worker_id not in owned:
-                    continue
                 decoded.setdefault(row.worker_id, {})[row.key] = _decode_value(row)
         with self._lock:
             self._cache.clear()
             self._cache.update(decoded)
         logger.info("WorkerAttrsProjection loaded attributes for %d worker(s) from DB", len(decoded))
-
-    # -- Reads ----------------------------------------------------------------
 
     def get(self, worker_id: WorkerId) -> dict[str, AttributeValue]:
         """Return ``worker_id``'s attributes, or ``{}`` if none are recorded."""
@@ -107,7 +77,6 @@ class WorkerAttrsProjection:
             attrs = self._cache.get(worker_id)
             if attrs is None:
                 return {}
-            # Copy so callers cannot mutate the cached dict.
             return dict(attrs)
 
     def all(self) -> dict[WorkerId, dict[str, AttributeValue]]:
@@ -115,21 +84,12 @@ class WorkerAttrsProjection:
         with self._lock:
             return {wid: dict(attrs) for wid, attrs in self._cache.items()}
 
-    # -- Writes ---------------------------------------------------------------
-
-    def set(
-        self,
-        cur: PostCommitRegistrar,
-        worker_id: WorkerId,
-        attrs: dict[str, AttributeValue],
-    ) -> None:
-        """Schedule a dict update for ``worker_id``'s attributes after commit.
-
-        Does not issue SQL — the corresponding ``worker_attributes`` writes
-        are still emitted by `writes.workers.replace_attributes`. The
-        new value replaces any prior entry for ``worker_id`` so the dict
-        matches the SQL post-image.
-        """
+    def set(self, cur: Tx, worker_id: WorkerId, attrs: dict[str, AttributeValue]) -> None:
+        """Replace ``worker_id``'s attributes in SQL and update the cache at commit."""
+        cur.execute(delete(worker_attributes_table).where(worker_attributes_table.c.worker_id == worker_id))
+        if attrs:
+            rows = [{"worker_id": worker_id, "key": key, **_attribute_value_cols(av.value)} for key, av in attrs.items()]
+            cur.execute(insert(worker_attributes_table), rows)
         snapshot = dict(attrs)
 
         def apply() -> None:
@@ -138,15 +98,15 @@ class WorkerAttrsProjection:
 
         cur.register(apply)
 
-    def invalidate_for_worker(self, tx: PostCommitRegistrar, worker_id: WorkerId) -> None:
+    def invalidate_for_worker(self, cur: Tx, worker_id: WorkerId) -> None:
         """Drop ``worker_id`` from the cache after commit (FK-cascade hook).
 
-        Used by callers that delete from ``workers`` and rely on the
-        ``ON DELETE CASCADE`` to clear ``worker_attributes``.
+        Used by callers that delete from ``workers``; the ``ON DELETE CASCADE``
+        clears ``worker_attributes`` in SQL and this call keeps the cache in sync.
         """
 
         def apply() -> None:
             with self._lock:
                 self._cache.pop(worker_id, None)
 
-        tx.register(apply)
+        cur.register(apply)

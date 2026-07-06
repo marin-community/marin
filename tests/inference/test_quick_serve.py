@@ -6,16 +6,22 @@
 import dataclasses
 import json
 import socket
+import time
+from unittest.mock import MagicMock
 
 import pytest
 import requests
+from iris.rpc import controller_pb2
+from iris.time_proto import timestamp_to_proto
 from marin.inference.quick_serve import resolve_model_path, select_tensor_parallel_size
+from marin.inference.quick_serve_cli import _mint_and_print_bearer_access
 from marin.inference.quick_serve_dashboard import (
     ServingInfo,
     bind_serving_socket,
     build_dashboard_app,
     serve_app_background,
 )
+from rigging.timing import Timestamp
 from starlette.applications import Starlette
 from starlette.responses import JSONResponse, PlainTextResponse, StreamingResponse
 from starlette.routing import Route
@@ -54,6 +60,24 @@ def test_select_tensor_parallel_size(heads, chips, kv_heads, expected):
 def test_resolve_model_path_passthrough(model, ttl_days):
     # These paths must not touch the network or GCS; they return the input unchanged.
     assert resolve_model_path(model, ttl_days) == model
+
+
+def _mint_response(token: str, ttl_hours: float) -> controller_pb2.Controller.MintEndpointTokenResponse:
+    expires = Timestamp.from_ms(int(time.time() * 1000) + int(ttl_hours * 3_600_000))
+    return controller_pb2.Controller.MintEndpointTokenResponse(token=token, expires_at=timestamp_to_proto(expires))
+
+
+def test_mint_and_print_bearer_access_mints_and_prints_off_cluster_url(capsys):
+    """BEARER serve prints the public OpenAI base_url + the minted api_key."""
+    client = MagicMock()
+    client._cluster_client.mint_endpoint_token.return_value = _mint_response("ep-token-xyz", 24.0)
+
+    _mint_and_print_bearer_access(client, "/serve/foo", "https://iris.oa.dev", 24.0)
+
+    out = capsys.readouterr().out
+    # The scoped token IS the OpenAI api_key, against the public /proxy/<encoded>/v1 URL.
+    assert "https://iris.oa.dev/proxy/serve.foo/v1" in out
+    assert "ep-token-xyz" in out
 
 
 def _free_port() -> int:

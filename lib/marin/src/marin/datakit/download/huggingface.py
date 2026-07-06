@@ -298,12 +298,8 @@ def download_hf(cfg: DownloadConfig) -> None:
     # Some historical datasets were written that way, so this flag keeps backwards compatibility when needed.
 
     # Ensure the output path is writable
-    try:
-        output_path = os.path.join(cfg.gcs_output_path, cfg.revision) if cfg.append_sha_to_path else cfg.gcs_output_path
-        ensure_fsspec_path_writable(output_path)
-    except ValueError as e:
-        logger.exception(f"Output path validation failed: {e}")
-        raise e
+    output_path = os.path.join(cfg.gcs_output_path, cfg.revision) if cfg.append_sha_to_path else cfg.gcs_output_path
+    ensure_fsspec_path_writable(output_path)
 
     # Resolve source URL and filesystem. For production this is an hf:// URL backed
     # by HfFileSystem; tests can set source_url_override to a local/fsspec path.
@@ -344,28 +340,25 @@ def download_hf(cfg: DownloadConfig) -> None:
     download_tasks = []
 
     for file in files:
-        try:
-            relative_file_path = _relative_path_in_source(file, source_root)
-            if relative_file_path.startswith(".."):
-                raise ValueError(f"Computed path escapes source root: source={hf_source_path}, file={file}")
-            fsspec_file_path = os.path.join(output_path, relative_file_path)
-            expected_size = file_sizes.get(file)
-            # Fully-qualify the source URL so subprocess workers can open it via fsspec
-            # without having to reconstruct HfFileSystem / revision state.
-            worker_source_url = file if cfg.source_url_override is not None else f"hf://{file}"
-            download_tasks.append(
-                (
-                    output_path,
-                    worker_source_url,
-                    fsspec_file_path,
-                    expected_size,
-                    cfg.read_timeout_seconds,
-                    cfg.progress_log_interval_seconds,
-                    cfg.read_chunk_size_mib,
-                )
+        relative_file_path = _relative_path_in_source(file, source_root)
+        if relative_file_path.startswith(".."):
+            raise ValueError(f"Computed path escapes source root: source={hf_source_path}, file={file}")
+        fsspec_file_path = os.path.join(output_path, relative_file_path)
+        expected_size = file_sizes.get(file)
+        # Fully-qualify the source URL so subprocess workers can open it via fsspec
+        # without having to reconstruct HfFileSystem / revision state.
+        worker_source_url = file if cfg.source_url_override is not None else f"hf://{file}"
+        download_tasks.append(
+            (
+                output_path,
+                worker_source_url,
+                fsspec_file_path,
+                expected_size,
+                cfg.read_timeout_seconds,
+                cfg.progress_log_interval_seconds,
+                cfg.read_chunk_size_mib,
             )
-        except Exception as e:
-            logging.exception(f"Error preparing task for {file}: {e}")
+        )
 
     total_files = len(download_tasks)
     total_size_gb = sum(s for s in file_sizes.values() if s is not None) / (1024**3)

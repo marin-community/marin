@@ -23,7 +23,15 @@ from iris.cluster.endpoints import LOG_SERVER_ENDPOINT_NAME
 from iris.cluster.log_keys import build_log_source
 from iris.cluster.runtime.entrypoint import build_runtime_entrypoint
 from iris.cluster.runtime.env import with_slice_topology_env
-from iris.cluster.types import Entrypoint, EnvironmentSpec, JobName, TaskAttempt, adjust_tpu_replicas, is_job_finished
+from iris.cluster.types import (
+    EndpointAccess,
+    Entrypoint,
+    EnvironmentSpec,
+    JobName,
+    TaskAttempt,
+    adjust_tpu_replicas,
+    is_job_finished,
+)
 from iris.cluster.worker.stats import TASK_STATUS_NAMESPACE, TASK_STATUS_STORAGE_POLICY, TaskStatusRow
 from iris.rpc import controller_pb2, job_pb2
 from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
@@ -392,12 +400,29 @@ class RemoteClusterClient:
         address: str,
         task_attempt: TaskAttempt,
         metadata: dict[str, str] | None = None,
+        access: int = EndpointAccess.ENDPOINT_ACCESS_PRIVATE,
     ) -> str:
-        return self._endpoint_client.register(name, address, task_attempt, metadata)
+        return self._endpoint_client.register(name, address, task_attempt, metadata, access)
 
     def unregister_endpoint(self, endpoint_id: str) -> None:
         """Unregister an endpoint via RPC."""
         self._endpoint_client.unregister(endpoint_id)
+
+    def mint_endpoint_token(
+        self, endpoint_name: str, ttl: Duration | None = None
+    ) -> controller_pb2.Controller.MintEndpointTokenResponse:
+        """Mint a scoped bearer token for ``endpoint_name``'s /proxy path.
+
+        Authorized to the endpoint's owning user (or admin); the CLI holds that
+        identity. ``ttl`` is clamped server-side to the controller's maximum.
+        """
+        request = controller_pb2.Controller.MintEndpointTokenRequest(
+            endpoint_name=endpoint_name,
+            ttl=duration_to_proto(ttl) if ttl is not None else None,
+        )
+        return call_with_retry(
+            f"mint_endpoint_token({endpoint_name})", lambda: self._client.mint_endpoint_token(request)
+        )
 
     def list_endpoints(self, prefix: str, *, exact: bool = False) -> list[controller_pb2.Controller.Endpoint]:
         return self._endpoint_client.list_endpoints(prefix, exact=exact)

@@ -150,9 +150,9 @@ def test_k8s_env_values_match_common_env(parity_req_and_ctrl):
 # ---------------------------------------------------------------------------
 
 
-def test_attempt_id_zero_no_suffix():
+def test_attempt_id_zero_includes_suffix():
     env = _common_env(_make_req(attempt_id=0))
-    assert env["IRIS_TASK_ID"] == "/my-job/task-0"
+    assert env["IRIS_TASK_ID"] == "/my-job/task-0:0"
 
 
 def test_attempt_id_nonzero_gets_suffix():

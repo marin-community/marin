@@ -6,12 +6,11 @@
 ``federated_jobs`` now records both directions of a handoff: a SENT row (this
 cluster is the parent) tracks the handoff lifecycle to ``peer_id``; a RECEIVED row
 (this cluster is the peer) names the requesting cluster in ``peer_id``. A
-``direction`` discriminator distinguishes them and the SENT-only columns
-(``remote_job_id``, ``handoff_state``) become nullable. The peer-side
-``federation_changelog`` records a change event per job/task mutation, each row
-stamped with the ``requester_id`` it belongs to, so ``FederationSync`` reports a
-requester only its own handoffs without a join — and a tombstone event survives
-the job delete (no foreign key to ``jobs``).
+``direction`` discriminator distinguishes them and the SENT-only ``handoff_state``
+becomes nullable. The peer-side ``federation_changelog`` records a change event per
+job/task mutation, each row stamped with the ``requester_id`` it belongs to, so
+``FederationSync`` reports a requester only its own handoffs without a join — and a
+tombstone event survives the job delete (no foreign key to ``jobs``).
 
 These tables stay empty until this controller federates a job, so a controller
 that never does is unchanged.
@@ -50,10 +49,10 @@ def _rebuild_federated_jobs(raw_conn) -> None:
     """Rebuild the pre-unification ``federated_jobs`` (0034 shape) in place.
 
     SQLite cannot relax a ``NOT NULL`` constraint in place, so add the
-    ``direction`` discriminator and make the SENT-only columns nullable via the
-    create/copy/drop/rename dance. All pre-existing rows are outbound handoffs, so
-    they become ``direction = SENT (0)``. Skipped when ``direction`` already exists
-    (a fresh DB from the baseline schema, or an already-migrated one).
+    ``direction`` discriminator and make the SENT-only ``handoff_state`` nullable
+    via the create/copy/drop/rename dance. All pre-existing rows are outbound
+    handoffs, so they become ``direction = SENT (0)``. Skipped when ``direction``
+    already exists (a fresh DB from the baseline schema, or an already-migrated one).
     """
     if _has_column(raw_conn, "federated_jobs", "direction"):
         return
@@ -64,22 +63,19 @@ def _rebuild_federated_jobs(raw_conn) -> None:
             direction INTEGER NOT NULL,
             peer_id VARCHAR NOT NULL,
             owner_principal VARCHAR NOT NULL DEFAULT '',
-            remote_job_id VARCHAR,
             handoff_state INTEGER,
-            cancel_intent_version INTEGER NOT NULL DEFAULT 0,
-            last_sync_ms INTEGER,
-            terminal_error VARCHAR
+            cancel_intent_version INTEGER NOT NULL DEFAULT 0
         )
         """
     )
     raw_conn.execute(
         """
         INSERT INTO federated_jobs_new (
-            job_id, direction, peer_id, owner_principal, remote_job_id, handoff_state,
-            cancel_intent_version, last_sync_ms, terminal_error
+            job_id, direction, peer_id, owner_principal, handoff_state,
+            cancel_intent_version
         )
-        SELECT job_id, 0, peer_id, owner_principal, remote_job_id, handoff_state,
-               cancel_intent_version, last_sync_ms, terminal_error
+        SELECT job_id, 0, peer_id, owner_principal, handoff_state,
+               cancel_intent_version
         FROM federated_jobs
         """
     )

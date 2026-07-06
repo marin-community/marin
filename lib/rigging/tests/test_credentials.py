@@ -6,6 +6,7 @@
 import pytest
 from rigging import credentials as creds
 from rigging.auth import (
+    MARIN_DESKTOP_OAUTH_CLIENT,
     BearerTokenInjector,
     GcpAccessTokenProvider,
     IapRefreshTokenProvider,
@@ -74,6 +75,28 @@ def test_iap_edge_prefers_cached_refresh_over_service_account(monkeypatch):
 def test_iap_edge_falls_back_to_service_account_for_ci():
     c = credentials_for("marin", _iap_auth(programmatic_audiences=("aud",)))
     assert isinstance(c.iap_provider, IapServiceAccountTokenProvider)
+    assert c.iap_provider._audience == "aud"
+
+
+def test_iap_edge_service_account_falls_back_to_desktop_client_when_no_programmatic_audience():
+    # marin lists only the desktop client id in `audiences`, so the adapter leaves
+    # `programmatic_audiences` empty. The edge path must still mint a token -- using
+    # the desktop client id, which IAP admits as a programmatic client -- rather
+    # than attaching no edge token (which IAP rejects with 401). Regression guard
+    # for the cross-lane CI auth outage (#6936 and siblings).
+    c = credentials_for("marin", _iap_auth())
+    assert isinstance(c.iap_provider, IapServiceAccountTokenProvider)
+    assert c.iap_provider._audience == MARIN_DESKTOP_OAUTH_CLIENT.client_id
+
+
+def test_iap_edge_desktop_fallback_honors_configured_desktop_client():
+    # A cluster overriding the desktop OAuth client falls back to *its* id, not the
+    # Marin default.
+    c = credentials_for(
+        "marin",
+        _iap_auth(desktop_oauth_client_id="custom-desktop.apps.googleusercontent.com", desktop_oauth_client_secret="s"),
+    )
+    assert c.iap_provider._audience == "custom-desktop.apps.googleusercontent.com"
 
 
 def test_none_cluster_attaches_nothing():

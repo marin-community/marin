@@ -138,3 +138,26 @@ except AttributeError:
     if isinstance(payload, dict):   # guard belongs above the .get call
         ...
 ```
+
+## Storage paths
+
+### `ml-naive-path-join` — Ad hoc string join or slash surgery on a storage path
+
+**Why it's bad:** Object-store keys are not normalized: `gs://b/x//y` and
+`gs://b/x/y` are *different keys*, so a writer and reader that join differently
+silently split the namespace (#6904, #6838). `os.path.join` on a URL,
+`f"{prefix}/{path}"`, and `path.rstrip("/")`-before-join each re-solve the same
+problem locally and drift. Join through `rigging.filesystem.prefix_join` (one
+join) or `StoragePath` (parse once, `/` to join, `relative_to` for containment).
+
+**When allowed:** Purely local filesystem paths that can never carry a URL
+scheme (use `os.path`/`pathlib` there); appending a suffix to a known
+directory-free basename; metric/logging label composition that is not a
+storage key.
+
+**Bad example:**
+```python
+ledger = os.path.join(cache_path, "shard_ledger.json")     # cache_path may be gs://…
+record = f"{output_path}/.artifact.json"                   # doubles the slash on a trailing-/ prefix
+shard = path[len(output_path.rstrip("/")) + 1 :]           # string-prefix containment; use relative_to
+```

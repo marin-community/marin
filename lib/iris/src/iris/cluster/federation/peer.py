@@ -51,9 +51,10 @@ class PeerConnection(Protocol):
     """The peer-controller surface federation drives: capability heartbeat plus
     the handoff, delta-sync, routed-cancel, and proxied on-demand RPCs.
 
-    Handoff reuses the ordinary ``LaunchJob`` (the request carries the remote job
-    name and federation attribution); a routed cancel reuses ``TerminateJob``
-    (targeting the remote job id); ``federation_sync`` is federation's one
+    Handoff reuses the ordinary ``LaunchJob`` (the request carries the job name and
+    federation attribution); a routed cancel reuses ``TerminateJob`` (targeting the
+    job id, cluster-invariant — the same id the parent submitted); ``federation_sync``
+    is federation's one
     purpose-built endpoint; ``profile_task``/``exec_in_container`` proxy an
     on-demand RPC against a handed-off task through the peer controller, which
     does its own task->worker resolution.
@@ -208,9 +209,13 @@ class FederationPeer:
         """Deliver a handed-off job to the peer (reuses its ``LaunchJob``)."""
         return self._connection.launch_job(request)
 
-    def terminate_job(self, remote_job_id: JobName) -> None:
-        """Route a cancel to the peer (reuses its ``TerminateJob``)."""
-        self._connection.terminate_job(remote_job_id)
+    def terminate_job(self, job_id: JobName) -> None:
+        """Route a cancel to the peer (reuses its ``TerminateJob``).
+
+        The ``job_id`` is the cluster-invariant local id: the peer runs and
+        reports the same id the parent submitted, so there is nothing to rebase.
+        """
+        self._connection.terminate_job(job_id)
 
     def federation_sync(
         self, request: controller_pb2.Controller.FederationSyncRequest

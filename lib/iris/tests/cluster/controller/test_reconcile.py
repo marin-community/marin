@@ -38,7 +38,6 @@ from iris.cluster.controller.backend import (
 )
 from iris.cluster.controller.backend_store import BackendWorkerStore
 from iris.cluster.controller.ops.task import Assignment
-from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
 from iris.cluster.controller.reads import ControlSnapshot
 from iris.cluster.controller.reconcile.loader import load_closed_snapshot
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
@@ -762,7 +761,6 @@ def _apply_observations(
         return commit_reconcile(
             cur,
             [(plan, result)],
-            endpoints=state._endpoints,
             now=_NOW,
         )
 
@@ -778,7 +776,6 @@ def _apply_failure(
         return commit_reconcile(
             cur,
             [(plan, result)],
-            endpoints=state._endpoints,
             now=_NOW,
         )
 
@@ -917,7 +914,7 @@ def test_stale_running_observation_does_not_revive_cancelled_task():
         with state._db.transaction() as cur:
             task_row = query_task(state, task_id)
             assert task_row is not None
-            ops.job.cancel(cur, job_id=task_row.job_id, reason="user_cancel", endpoints=state._endpoints)
+            ops.job.cancel(cur, job_id=task_row.job_id, reason="user_cancel")
         assert query_task(state, task_id).state == job_pb2.TASK_STATE_KILLED
 
         _apply_observations(state, _W1, [_obs(uid, job_pb2.TASK_STATE_RUNNING)])
@@ -1042,7 +1039,6 @@ def test_coscheduled_sibling_cascade_fires_on_terminal_observation():
                         )
                     ],
                     health=state._health,
-                    endpoints=state._endpoints,
                     now=Timestamp.now(),
                 )
 
@@ -1163,7 +1159,6 @@ class _ScriptedProvider:
     autoscaler: Any = None
     _store: BackendWorkerStore | None = None
     health: WorkerHealthTracker = field(default_factory=WorkerHealthTracker)
-    worker_attrs: WorkerAttrsProjection | None = None
     advertised: dict[str, set[str]] = field(default_factory=dict)
     allowed_users: frozenset[str] = frozenset({"*"})
     capabilities: ClassVar[frozenset[BackendCapability]] = frozenset(
@@ -1189,8 +1184,7 @@ class _ScriptedProvider:
         raise NotImplementedError
 
     def bind_runtime(self, runtime: BackendRuntime) -> None:
-        self.worker_attrs = WorkerAttrsProjection(runtime.db, owns_scale_group=runtime.owns_scale_group)
-        self._store = store_from_runtime(runtime, self.health, self.worker_attrs, self.autoscale)
+        self._store = store_from_runtime(runtime, self.health, self.autoscale)
 
     def seed_liveness(self) -> None:
         assert self._store is not None
@@ -1261,9 +1255,6 @@ def test_e2e_converges_to_succeeded(make_controller):
     state = ControllerTestState(
         ctrl._db,
         health=ctrl.provider.health,
-        endpoints=ctrl._endpoints,
-        worker_attrs=ctrl.provider.worker_attrs,
-        run_template_cache=ctrl._run_template_cache,
     )
 
     wid = register_worker(state, _W1, _W1_ADDR, make_worker_metadata())
@@ -1313,9 +1304,6 @@ def test_e2e_missing_observation_on_assigned_task_retries_to_pending(make_contro
     state = ControllerTestState(
         ctrl._db,
         health=ctrl.provider.health,
-        endpoints=ctrl._endpoints,
-        worker_attrs=ctrl.provider.worker_attrs,
-        run_template_cache=ctrl._run_template_cache,
     )
 
     wid = register_worker(state, _W1, _W1_ADDR, make_worker_metadata())
@@ -1354,7 +1342,6 @@ class _UnreachableProvider:
     autoscaler: Any = None
     _store: BackendWorkerStore | None = None
     health: WorkerHealthTracker = field(default_factory=WorkerHealthTracker)
-    worker_attrs: WorkerAttrsProjection | None = None
     advertised: dict[str, set[str]] = field(default_factory=dict)
     allowed_users: frozenset[str] = frozenset({"*"})
     capabilities: ClassVar[frozenset[BackendCapability]] = frozenset(
@@ -1374,8 +1361,7 @@ class _UnreachableProvider:
         self.allowed_users = allowed_users
 
     def bind_runtime(self, runtime: BackendRuntime) -> None:
-        self.worker_attrs = WorkerAttrsProjection(runtime.db, owns_scale_group=runtime.owns_scale_group)
-        self._store = store_from_runtime(runtime, self.health, self.worker_attrs, self.autoscale)
+        self._store = store_from_runtime(runtime, self.health, self.autoscale)
 
     def seed_liveness(self) -> None:
         assert self._store is not None
@@ -1486,9 +1472,6 @@ def test_reconcile_failure_tears_down_worker_without_ping_loop(make_controller, 
     state = ControllerTestState(
         ctrl._db,
         health=ctrl.provider.health,
-        endpoints=ctrl._endpoints,
-        worker_attrs=ctrl.provider.worker_attrs,
-        run_template_cache=ctrl._run_template_cache,
     )
 
     wid = register_worker(state, _W1, _W1_ADDR, make_worker_metadata())
@@ -1521,9 +1504,6 @@ def test_reconcile_failure_reaps_slice_siblings(make_controller):
     state = ControllerTestState(
         ctrl._db,
         health=ctrl.provider.health,
-        endpoints=ctrl._endpoints,
-        worker_attrs=ctrl.provider.worker_attrs,
-        run_template_cache=ctrl._run_template_cache,
     )
 
     dead = register_worker(state, _W1, _W1_ADDR, make_worker_metadata())
@@ -1555,9 +1535,6 @@ def test_request_worker_eviction_tears_down_on_next_tick(make_controller):
     state = ControllerTestState(
         ctrl._db,
         health=ctrl.provider.health,
-        endpoints=ctrl._endpoints,
-        worker_attrs=ctrl.provider.worker_attrs,
-        run_template_cache=ctrl._run_template_cache,
     )
 
     wid = register_worker(state, _W1, _W1_ADDR, make_worker_metadata())
@@ -1608,9 +1585,6 @@ def test_reconcile_reaps_worker_at_build_failure_threshold(make_controller):
     state = ControllerTestState(
         ctrl._db,
         health=ctrl.provider.health,
-        endpoints=ctrl._endpoints,
-        worker_attrs=ctrl.provider.worker_attrs,
-        run_template_cache=ctrl._run_template_cache,
     )
 
     wid = register_worker(state, _W1, _W1_ADDR, make_worker_metadata())
@@ -1721,7 +1695,6 @@ def _setup_coscheduled_running_pair(
             cur,
             running,
             health=state._health,
-            endpoints=state._endpoints,
             now=_NOW,
         )
     return _CoschedPair(
@@ -1764,7 +1737,6 @@ def _apply_batch(
         return commit_reconcile(
             cur,
             plan_results,
-            endpoints=state._endpoints,
             now=_NOW,
         )
 
@@ -1799,9 +1771,10 @@ def test_coscheduled_running_repoll_does_not_revive_after_sibling_requeue():
         # stays PENDING (its RUNNING re-poll is dropped, not applied to revive it).
         assert query_task(state, pair.t0).state == job_pb2.TASK_STATE_PENDING
         assert query_task(state, pair.t1).state == job_pb2.TASK_STATE_PENDING
-        # The sibling's old attempt is terminal (PREEMPTED) in the overlay; the
-        # re-poll must not revive it back to RUNNING.
-        assert query_attempt(state, pair.t1, pair.a1).state == job_pb2.TASK_STATE_PREEMPTED
+        # The sibling's old attempt is terminal (COSCHED_FAILED — it was bounced
+        # by its gang peer's failure, not preempted) in the overlay; the re-poll
+        # must not revive it back to RUNNING.
+        assert query_attempt(state, pair.t1, pair.a1).state == job_pb2.TASK_STATE_COSCHED_FAILED
 
 
 def test_coscheduled_rpc_failure_does_not_split_slice():
@@ -1885,4 +1858,8 @@ def test_reconcile_batch_order_independent_coscheduled_failure(trigger_first):
     assert observed == reference
     assert observed["t0_state"] == job_pb2.TASK_STATE_PENDING
     assert observed["t1_state"] == job_pb2.TASK_STATE_PENDING
-    assert observed["t1_attempt_state"] == job_pb2.TASK_STATE_PREEMPTED
+    # The bounced sibling is stamped COSCHED_FAILED, not PREEMPTED: it was
+    # requeued because its gang peer failed, so deriving preemption_count from
+    # attempts must not charge it (see reconcile/peers.requeue_coscheduled_siblings).
+    assert observed["t1_attempt_state"] == job_pb2.TASK_STATE_COSCHED_FAILED
+    assert observed["t1_preemption_count"] == 0

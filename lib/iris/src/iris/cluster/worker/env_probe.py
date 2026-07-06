@@ -18,8 +18,8 @@ from typing import Protocol
 
 from rigging.timing import Timestamp
 
-from iris.cluster.backends.types import probe_outbound_ip
 from iris.cluster.constraints import WellKnownAttribute, accelerator_type_to_string
+from iris.cluster.platforms.types import probe_outbound_ip
 from iris.cluster.provenance import provenance_from_env, provenance_to_proto
 from iris.cluster.tpu_topology import get_tpu_topology
 from iris.cluster.types import AcceleratorType, CapacityType

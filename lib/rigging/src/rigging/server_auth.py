@@ -1,21 +1,26 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Server-side authentication for Connect RPC: verify a bearer token, bind identity.
+"""Server-side authentication: verify a bearer token, bind identity, enforce a policy.
 
 The companion to ``rigging.auth`` (which *attaches* a token on the client). This
 module *verifies* one on the server and binds the resulting identity for the
 request: the Google-credential verifiers (GCP access token, IAP OIDC ID token,
-IAP signed-header assertion), a static-token verifier, the authenticator stack
-that resolves a request to an identity (presented token > IAP assertion >
-trusted loopback), and the Connect interceptors that enforce it.
+IAP signed-header assertion), a static-token verifier, the authenticator chain
+that resolves a request to an identity, and the enforcement points a service
+mounts unconditionally — ``PolicyAuthInterceptor`` for Connect RPCs and
+``RouteAuthMiddleware`` for HTTP routes annotated ``@public`` / ``@requires_auth``.
+
+Every auth mode is expressed as a chain, never as a conditional at the mount
+point: an enforcing chain ends in loopback trust (``RequestAuthPolicy.enforcing``),
+a null-auth chain ends in an anonymous-admin terminal
+(``RequestAuthPolicy.permissive``), and the enforcement points behave correctly
+under either.
 
 It carries no service-specific policy — no token *minting*, no role semantics, no
 RBAC. A service supplies those: it injects its own ``TokenVerifier`` (e.g. one
 that checks JWTs it signed) and a role resolver, reads the bound identity via
-``get_verified_identity``, and authorizes against its own policy. Authentication
-is optional: with no verifier configured, requests pass through as the anonymous
-admin identity (loopback trust).
+``get_verified_identity``, and authorizes against its own policy.
 """
 
 import contextlib
@@ -35,6 +40,10 @@ import requests
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from google.auth.exceptions import GoogleAuthError
+from starlette.applications import Starlette
+from starlette.responses import JSONResponse
+from starlette.routing import Match, Mount, Route
+from starlette.types import Receive, Scope, Send
 
 logger = logging.getLogger(__name__)
 
@@ -45,13 +54,17 @@ class VerifiedIdentity:
 
     user_id: str
     role: str
+    # Set only for a token scoped to a single proxy audience (e.g. one
+    # endpoint's /proxy path). A scoped identity MUST NOT authorize any RPC —
+    # the consuming service enforces that. None ⇒ a full identity (the default
+    # for every non-scoped token and every non-JWT authenticator).
+    audience: str | None = None
 
 
-# Identity granted to any tokenless caller on a genuine loopback connection.
-# Mirrors the null-auth default: reaching the loopback interface (SSH tunnel /
-# on-host) already implies host-level trust, so the caller is the admin user.
+# Identity granted to a credentialless caller admitted by ambient trust:
+# loopback / trusted-CIDR network location, or a permissive (null-auth) chain.
 # Jobs are still attributed per-user via the job name's owner segment.
-LOOPBACK_IDENTITY = VerifiedIdentity(user_id="anonymous", role="admin")
+ANONYMOUS_ADMIN = VerifiedIdentity(user_id="anonymous", role="admin")
 
 
 def _extract_cookie(cookie_header: str, name: str) -> str | None:
@@ -81,7 +94,7 @@ def extract_bearer_token(headers: dict, *, cookie_name: str | None = None) -> st
     return _extract_cookie(cookie_header, cookie_name)
 
 
-# Per-request identity set by AuthInterceptor, read by service handlers.
+# Per-request identity set by PolicyAuthInterceptor, read by service handlers.
 _verified_identity: ContextVar[VerifiedIdentity | None] = ContextVar("verified_identity", default=None)
 
 
@@ -100,9 +113,10 @@ def get_verified_user() -> str | None:
 def identity_scope(identity: VerifiedIdentity | None):
     """Bind ``identity`` as the verified identity for the duration of the block.
 
-    Mirrors the ContextVar bookkeeping AuthInterceptor performs per RPC so code
-    outside the interceptor (e.g. a separate RPC dispatch surface) can establish
-    the same identity for service handlers reached via get_verified_identity().
+    Mirrors the ContextVar bookkeeping PolicyAuthInterceptor performs per RPC so
+    code outside the interceptor (e.g. a separate RPC dispatch surface) can
+    establish the same identity for service handlers reached via
+    get_verified_identity().
     """
     reset_token = _verified_identity.set(identity)
     try:
@@ -296,12 +310,14 @@ class IapAssertionVerifier:
         return VerifiedIdentity(user_id=email, role=self._role_resolver(email))
 
 
-def is_trusted_loopback(client_address: str | None, headers: dict) -> bool:
-    """Return True if the request arrived over a genuine loopback connection.
+def _direct_peer_ip(client_address: str | None, headers: dict) -> ipaddress.IPv4Address | ipaddress.IPv6Address | None:
+    """Return the transport-peer IP of a genuine direct connection, else None.
 
-    A connection is trusted-loopback iff its transport peer is a loopback
-    address (127.0.0.0/8 or ::1) on a nonzero port *and* it carries no
-    ``X-Forwarded-For`` header.
+    A connection counts as direct iff its transport peer parses as ``ip:port``
+    with a nonzero port *and* the request carries no ``X-Forwarded-For``
+    header. This is the shared trust gate for every network-location
+    authenticator (loopback, trusted CIDR): identity may only ever be granted
+    to the *socket peer*, never to a client-supplied header.
 
     The two conditions are individually sufficient and kept together as
     defence in depth. A uvicorn-fronted service configured with
@@ -310,22 +326,35 @@ def is_trusted_loopback(client_address: str | None, headers: dict) -> bool:
     when the client is derived from a forwarded header (it cannot recover the
     forwarded client's port). A public request spoofing
     ``X-Forwarded-For: 127.0.0.1`` therefore presents as ``("127.0.0.1", 0)``
-    with the header present — rejected on both counts. Only a direct transport
-    peer on the loopback interface (SSH tunnel / on-host) passes.
+    with the header present — rejected on both counts. And any legitimate
+    proxy hop (Traefik, GCLB) appends ``X-Forwarded-For``, so traffic it
+    forwards can never borrow the hop's own network location.
     """
     if not client_address:
-        return False
+        return None
     if headers.get("x-forwarded-for"):
-        return False
+        return None
     host, _, port = client_address.rpartition(":")
     if not host or not port:
-        return False
+        return None
     try:
         if int(port) == 0:
-            return False
-        return ipaddress.ip_address(host).is_loopback
+            return None
+        return ipaddress.ip_address(host)
     except ValueError:
-        return False
+        return None
+
+
+def is_trusted_loopback(client_address: str | None, headers: dict) -> bool:
+    """Return True if the request arrived over a genuine loopback connection.
+
+    A connection is trusted-loopback iff it is a direct connection (see
+    :func:`_direct_peer_ip` for the forwarded-header trust model) whose peer
+    is a loopback address (127.0.0.0/8 or ::1). Only a direct transport peer
+    on the loopback interface (SSH tunnel / on-host) passes.
+    """
+    peer = _direct_peer_ip(client_address, headers)
+    return peer is not None and peer.is_loopback
 
 
 @dataclass(frozen=True, slots=True)
@@ -400,6 +429,39 @@ class JwtAuthenticator:
 
 
 @dataclass(frozen=True)
+class BestEffortJwtAuthenticator:
+    """Attributes identity from a valid bearer token but never rejects.
+
+    The null-auth head of a permissive chain: a valid token (e.g. a worker JWT)
+    attributes the caller; an invalid or stale one falls through to the
+    anonymous-admin terminal instead of failing the request.
+    """
+
+    verifier: TokenVerifier
+
+    def authenticate(self, request: AuthRequest) -> AuthOutcome:
+        if request.token is None:
+            return _ABSENT
+        try:
+            return _authenticated(self.verifier.verify(request.token))
+        except ValueError:
+            return _ABSENT
+
+
+class AnonymousAuthenticator:
+    """Terminal authenticator that admits any request as the anonymous admin.
+
+    Placed last it makes the whole chain permissive (null-auth, or an
+    enforcing chain with ``optional=True``); earlier authenticators still
+    attribute identity and — outside ``BestEffortJwtAuthenticator`` — still
+    reject a presented-but-invalid credential.
+    """
+
+    def authenticate(self, request: AuthRequest) -> AuthOutcome:
+        return _authenticated(ANONYMOUS_ADMIN)
+
+
+@dataclass(frozen=True)
 class IapAssertionAuthenticator:
     """Authenticates a tokenless request via IAP's signed-header assertion.
 
@@ -424,90 +486,132 @@ class LoopbackAuthenticator:
 
     def authenticate(self, request: AuthRequest) -> AuthOutcome:
         if is_trusted_loopback(request.client_address, request.headers):
-            return _authenticated(LOOPBACK_IDENTITY)
+            return _authenticated(ANONYMOUS_ADMIN)
         return _ABSENT
 
 
-def build_request_authenticators(
-    verifier: TokenVerifier,
-    iap_assertion_verifier: "IapAssertionVerifier | None" = None,
-) -> tuple[RequestAuthenticator, ...]:
-    """Return the standard request-auth stack, highest-trust first.
+class CidrAuthenticator:
+    """Trusts a direct transport peer inside a configured CIDR as admin.
 
-    ``[Jwt, (IapAssertion?), Loopback]``: a presented service JWT wins; otherwise
-    an IAP signed-header assertion (when IAP fronts the service); otherwise a
-    trusted loopback peer. ``iap_assertion_verifier`` is omitted from the stack
-    when IAP is not configured.
+    Network-location trust for a service reachable only over a private network
+    (a VPC, a k8s pod network): a tokenless caller whose socket peer falls
+    inside one of ``cidrs`` authenticates as :data:`ANONYMOUS_ADMIN` — the same
+    convention as :class:`LoopbackAuthenticator`.
+
+    Trust model: the CIDR check runs against the *transport peer address*
+    (``AuthRequest.client_address``) and never against ``X-Forwarded-For`` or
+    any other client-supplied header. Any request that carries
+    ``X-Forwarded-For`` is refused CIDR trust outright (see
+    :func:`_direct_peer_ip`): a forwarded request's peer is the proxy hop, so
+    an in-network ingress (Traefik, a load balancer) would otherwise lend its
+    own address to every anonymous internet request it forwards — and under
+    uvicorn's ``forwarded_allow_ips="*"`` the scope client is itself rewritten
+    from the spoofable header. Configure only ranges where holding an address
+    implies operator-level trust; never an ingress hop's source ranges.
     """
-    authenticators: list[RequestAuthenticator] = [JwtAuthenticator(verifier)]
-    if iap_assertion_verifier is not None:
-        authenticators.append(IapAssertionAuthenticator(iap_assertion_verifier))
-    authenticators.append(LoopbackAuthenticator())
-    return tuple(authenticators)
+
+    def __init__(self, cidrs: Sequence[str]):
+        if not cidrs:
+            raise ValueError("CidrAuthenticator requires at least one CIDR")
+        # ip_network raises ValueError on a malformed CIDR (or one with host
+        # bits set) — fail at construction, never silently at request time.
+        self._networks = tuple(ipaddress.ip_network(cidr) for cidr in cidrs)
+
+    def authenticate(self, request: AuthRequest) -> AuthOutcome:
+        peer = _direct_peer_ip(request.client_address, request.headers)
+        if peer is None:
+            return _ABSENT
+        # __contains__ is False (not an error) on an IPv4 peer vs IPv6 network
+        # and vice versa, so mixed-family CIDR lists are fine.
+        if any(peer in network for network in self._networks):
+            return _authenticated(ANONYMOUS_ADMIN)
+        return _ABSENT
 
 
 def resolve_auth(
     request: AuthRequest,
     authenticators: Sequence[RequestAuthenticator],
-    optional: bool,
-) -> VerifiedIdentity | None:
+) -> VerifiedIdentity:
     """Walk ``authenticators`` in order and resolve the request's identity.
 
     The first authenticator to return ``AUTHENTICATED`` wins; the first to return
     ``REJECTED`` stops the walk and raises (a present-but-invalid credential is
-    never downgraded to a weaker source). When every authenticator is ``ABSENT``,
-    a tokenless request is allowed as anonymous only when ``optional`` is set.
-
-    Returns the identity, ``None`` for an allowed anonymous request, and raises
-    ``ValueError`` on a rejected credential or a missing-but-required one.
+    never downgraded to a weaker source). Raises ``ValueError`` when every
+    authenticator is ``ABSENT`` — a chain that admits anonymous callers ends in
+    :class:`AnonymousAuthenticator` instead.
     """
     for authenticator in authenticators:
         outcome = authenticator.authenticate(request)
         if outcome.decision is AuthDecision.AUTHENTICATED:
+            assert outcome.identity is not None
             return outcome.identity
         if outcome.decision is AuthDecision.REJECTED:
             raise ValueError(outcome.reason or "Authentication failed")
-    if optional:
-        return None
     raise ValueError("Missing authentication")
 
 
 @dataclass(frozen=True)
 class RequestAuthPolicy:
-    """Server-side auth policy: an ordered authenticator stack plus a fallback verifier.
+    """Server-side auth policy: an ordered authenticator chain plus a fallback verifier.
 
-    ``authenticators`` is the ordered stack walked by :func:`resolve_auth`; a
-    non-empty stack means request auth is enforced (:attr:`request_auth_enabled`).
+    The chain fully determines the outcome for every request, so a service
+    mounts its enforcement points (:class:`PolicyAuthInterceptor`,
+    :class:`RouteAuthMiddleware`) unconditionally and never branches on an
+    "is auth on" flag. Build with :meth:`enforcing` or :meth:`permissive`;
+    the zero-arg default is the permissive (allow-everyone) chain.
 
-    ``verifier`` has a narrower role: ``NullAuthInterceptor`` uses it to validate
-    worker tokens in null-auth mode. In auth-enabled mode it also backs the
-    ``JwtAuthenticator`` at the head of the stack.
+    ``verifier`` backs the token authenticator at the head of the chain and is
+    also exposed for out-of-band token checks (e.g. a session-cookie exchange).
     """
 
-    authenticators: tuple[RequestAuthenticator, ...] = ()
-    optional: bool = False
+    authenticators: tuple[RequestAuthenticator, ...] = (AnonymousAuthenticator(),)
     verifier: "TokenVerifier | None" = None
 
     @classmethod
-    def from_verifiers(
+    def enforcing(
         cls,
         *,
         verifier: "TokenVerifier | None" = None,
-        optional: bool = False,
         iap_assertion_verifier: "IapAssertionVerifier | None" = None,
+        trusted_cidrs: Sequence[str] = (),
+        optional: bool = False,
     ) -> "RequestAuthPolicy":
-        """Build the standard request-auth policy from its verifiers.
+        """Auth-enforced chain, highest-trust first: ``[Jwt?, IapAssertion?, Cidr?, Loopback]``.
 
-        With a ``verifier`` set, the stack is ``[Jwt, (IapAssertion?), Loopback]``.
-        Without one (null-auth, no DB) the stack is empty and request auth is off.
+        A presented service JWT wins; otherwise an IAP signed-header assertion;
+        otherwise network-location trust (trusted CIDR, then loopback).
+        ``optional`` appends the anonymous-admin terminal: a credentialless
+        request is admitted, but a presented-and-invalid credential still rejects.
         """
-        authenticators = build_request_authenticators(verifier, iap_assertion_verifier) if verifier is not None else ()
-        return cls(authenticators=authenticators, optional=optional, verifier=verifier)
+        chain: list[RequestAuthenticator] = []
+        if verifier is not None:
+            chain.append(JwtAuthenticator(verifier))
+        if iap_assertion_verifier is not None:
+            chain.append(IapAssertionAuthenticator(iap_assertion_verifier))
+        if trusted_cidrs:
+            chain.append(CidrAuthenticator(trusted_cidrs))
+        chain.append(LoopbackAuthenticator())
+        if optional:
+            chain.append(AnonymousAuthenticator())
+        return cls(authenticators=tuple(chain), verifier=verifier)
+
+    @classmethod
+    def permissive(cls, *, verifier: "TokenVerifier | None" = None) -> "RequestAuthPolicy":
+        """Null-auth chain: every request is admitted as the anonymous admin.
+
+        A valid bearer token still attributes the caller (e.g. worker tokens);
+        an invalid one is ignored rather than rejected.
+        """
+        chain: list[RequestAuthenticator] = []
+        if verifier is not None:
+            chain.append(BestEffortJwtAuthenticator(verifier))
+        chain.append(AnonymousAuthenticator())
+        return cls(authenticators=tuple(chain), verifier=verifier)
 
     @property
-    def request_auth_enabled(self) -> bool:
-        """Whether per-request auth is enforced (the stack is non-empty)."""
-        return bool(self.authenticators)
+    def allows_anonymous(self) -> bool:
+        """Whether a credentialless request is admitted (permissive or ``optional``)."""
+        return isinstance(self.authenticators[-1], AnonymousAuthenticator)
 
     def resolve(
         self,
@@ -515,114 +619,167 @@ class RequestAuthPolicy:
         *,
         client_address: str | None = None,
         headers: dict | None = None,
-    ) -> VerifiedIdentity | None:
-        """Resolve a request's identity under this policy (see :func:`resolve_auth`).
-
-        Only invoked on auth-enabled surfaces, where the stack is non-empty (a
-        service mounts these middlewares/interceptors only when auth is
-        configured; null-auth uses ``NullAuthInterceptor`` instead).
-        """
-        assert self.authenticators, "RequestAuthPolicy.resolve requires a non-empty authenticator stack"
+    ) -> VerifiedIdentity:
+        """Resolve a request's identity under this policy (see :func:`resolve_auth`)."""
         return resolve_auth(
             AuthRequest(token=token, headers=headers or {}, client_address=client_address),
             self.authenticators,
-            self.optional,
         )
 
 
-class AuthInterceptor:
-    """Server-side Connect RPC interceptor that enforces bearer token auth.
+class PolicyAuthInterceptor:
+    """Connect RPC interceptor that resolves every RPC through a :class:`RequestAuthPolicy`.
 
-    Reads the Authorization header (or session cookie), verifies the JWT via
-    the configured verifier, and stores the VerifiedIdentity in a ContextVar
-    for the service layer to read via get_verified_identity().
-    """
-
-    def __init__(self, verifier: TokenVerifier, *, cookie_name: str | None = None):
-        self._verifier = verifier
-        self._cookie_name = cookie_name
-
-    def _verify_or_raise(self, ctx) -> "VerifiedIdentity":
-        token = extract_bearer_token(ctx.request_headers(), cookie_name=self._cookie_name)
-        if not token:
-            raise ConnectError(Code.UNAUTHENTICATED, "Missing or malformed Authorization header")
-        try:
-            return self._verifier.verify(token)
-        except ValueError as exc:
-            logger.warning("Authentication failed: %s", exc)
-            raise ConnectError(Code.UNAUTHENTICATED, "Authentication failed") from exc
-
-    def intercept_unary_sync(self, call_next, request, ctx):
-        identity = self._verify_or_raise(ctx)
-        reset_token = _verified_identity.set(identity)
-        try:
-            return call_next(request, ctx)
-        finally:
-            _verified_identity.reset(reset_token)
-
-    async def intercept_unary(self, call_next, request, ctx):
-        # Token verification is pure crypto (HMAC-SHA256 for JWTs); safe to
-        # run inline on the loop. ContextVar bookkeeping mirrors the sync
-        # path so service handlers see the same identity regardless of
-        # which dispatch surface they came in through.
-        identity = self._verify_or_raise(ctx)
-        reset_token = _verified_identity.set(identity)
-        try:
-            return await call_next(request, ctx)
-        finally:
-            _verified_identity.reset(reset_token)
-
-    def intercept_server_stream_sync(self, call_next, request, ctx):
-        raise ConnectError(Code.UNIMPLEMENTED, "Streaming RPCs are not supported")
-
-    def intercept_client_stream_sync(self, call_next, request, ctx):
-        raise ConnectError(Code.UNIMPLEMENTED, "Streaming RPCs are not supported")
-
-    def intercept_bidi_stream_sync(self, call_next, request, ctx):
-        raise ConnectError(Code.UNIMPLEMENTED, "Streaming RPCs are not supported")
-
-
-class NullAuthInterceptor:
-    """Interceptor for null-auth mode.
-
-    When a verifier is provided, tokens are verified if present (e.g. worker
-    tokens) but unauthenticated requests fall through as the anonymous admin.
-    Without a verifier, all requests are treated as anonymous admin.
+    After authentication the optional ``authorize`` hook runs the service's
+    RBAC (e.g. deny endpoint-scoped tokens, restrict read-only roles) before
+    the identity is bound for handlers via :func:`get_verified_identity`.
+    ``unauthenticated_methods`` (e.g. a Login RPC) bypass the policy entirely.
     """
 
     def __init__(
         self,
-        user: str = "anonymous",
-        role: str = "admin",
-        verifier: TokenVerifier | None = None,
+        policy: RequestAuthPolicy,
         *,
         cookie_name: str | None = None,
+        unauthenticated_methods: frozenset[str] = frozenset(),
+        authorize: Callable[[VerifiedIdentity, str], None] | None = None,
     ):
-        self._default_identity = VerifiedIdentity(user_id=user, role=role)
-        self._verifier = verifier
+        self._policy = policy
         self._cookie_name = cookie_name
+        self._unauthenticated_methods = unauthenticated_methods
+        self._authorize = authorize
 
-    def _resolve_identity(self, ctx) -> "VerifiedIdentity":
-        identity = self._default_identity
-        if self._verifier is not None:
-            token = extract_bearer_token(ctx.request_headers(), cookie_name=self._cookie_name)
-            if token:
-                try:
-                    identity = self._verifier.verify(token)
-                except ValueError:
-                    pass
-        return identity
+    def _resolve_or_raise(self, ctx) -> VerifiedIdentity:
+        headers = ctx.request_headers()
+        token = extract_bearer_token(headers, cookie_name=self._cookie_name)
+        try:
+            return self._policy.resolve(token, client_address=ctx.client_address(), headers=headers)
+        except ValueError as exc:
+            if token is None:
+                raise ConnectError(Code.UNAUTHENTICATED, str(exc)) from exc
+            logger.warning("Authentication failed: %s", exc)
+            raise ConnectError(Code.UNAUTHENTICATED, "Authentication failed") from exc
 
     def intercept_unary_sync(self, call_next, request, ctx):
-        reset_token = _verified_identity.set(self._resolve_identity(ctx))
-        try:
+        if ctx.method().name in self._unauthenticated_methods:
             return call_next(request, ctx)
-        finally:
-            _verified_identity.reset(reset_token)
+        identity = self._resolve_or_raise(ctx)
+        if self._authorize is not None:
+            self._authorize(identity, ctx.method().name)
+        with identity_scope(identity):
+            return call_next(request, ctx)
 
     async def intercept_unary(self, call_next, request, ctx):
-        reset_token = _verified_identity.set(self._resolve_identity(ctx))
-        try:
+        if ctx.method().name in self._unauthenticated_methods:
             return await call_next(request, ctx)
-        finally:
-            _verified_identity.reset(reset_token)
+        identity = self._resolve_or_raise(ctx)
+        if self._authorize is not None:
+            self._authorize(identity, ctx.method().name)
+        with identity_scope(identity):
+            return await call_next(request, ctx)
+
+
+# ---------------------------------------------------------------------------
+# Route-scoped HTTP auth: @public / @requires_auth annotations + middleware
+# ---------------------------------------------------------------------------
+
+_ROUTE_AUTH_ATTR = "_rigging_route_auth"
+
+
+class _RouteAuth(StrEnum):
+    """A request's auth disposition: the matched route's annotation, or a default."""
+
+    PUBLIC = "public"
+    REQUIRES_AUTH = "requires_auth"
+    SKIP = "skip"  # mounts and unmatched paths — the inner app enforces its own auth / 404s
+    DENY = "deny"  # unannotated route: fail closed
+
+
+def public(fn: Callable) -> Callable:
+    """Mark a route handler as publicly accessible (no auth required)."""
+    setattr(fn, _ROUTE_AUTH_ATTR, _RouteAuth.PUBLIC)
+    return fn
+
+
+def requires_auth(fn: Callable) -> Callable:
+    """Mark a route handler as requiring an authenticated identity."""
+    setattr(fn, _ROUTE_AUTH_ATTR, _RouteAuth.REQUIRES_AUTH)
+    return fn
+
+
+def scope_headers(scope: Scope) -> dict[str, str]:
+    """Lowercase header dict from an ASGI scope."""
+    return {k.decode().lower(): v.decode() for k, v in scope.get("headers", [])}
+
+
+def scope_client_address(scope: Scope) -> str | None:
+    """Return the transport peer as ``host:port``, or None.
+
+    This is uvicorn's ``scope["client"]`` — the genuine peer for a direct
+    connection, or a forwarded value (port 0) when derived from
+    ``X-Forwarded-For``. :func:`_direct_peer_ip` relies on that distinction.
+    """
+    client = scope.get("client")
+    if not client:
+        return None
+    return f"{client[0]}:{client[1]}"
+
+
+class RouteAuthMiddleware:
+    """ASGI middleware that enforces per-route auth annotations against a policy.
+
+    Looks up the matched Starlette route's handler and applies its ``@public``
+    / ``@requires_auth`` annotation; an unannotated route is denied, so a new
+    route must declare its auth posture. Mounts pass through — a mounted app
+    (an RPC surface, static files) enforces its own auth.
+
+    A scoped identity (``audience`` set) never passes ``@requires_auth``: such
+    a token is valid only at the surface that checks its audience.
+    """
+
+    def __init__(self, app: Starlette, policy: RequestAuthPolicy, *, cookie_name: str | None = None):
+        self._app = app
+        self._policy = policy
+        self._cookie_name = cookie_name
+        self._router = app.router
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            return await self._app(scope, receive, send)
+
+        annotation = self._route_annotation(scope)
+        if annotation in (_RouteAuth.PUBLIC, _RouteAuth.SKIP):
+            return await self._app(scope, receive, send)
+
+        if annotation is _RouteAuth.REQUIRES_AUTH:
+            deny = self._authenticate(scope)
+            if deny is not None:
+                return await deny(scope, receive, send)
+            return await self._app(scope, receive, send)
+
+        response = JSONResponse({"error": "authentication required"}, status_code=401)
+        return await response(scope, receive, send)
+
+    def _route_annotation(self, scope: Scope) -> _RouteAuth:
+        for route in self._router.routes:
+            if isinstance(route, Mount):
+                if route.matches(scope)[0] != Match.NONE:
+                    return _RouteAuth.SKIP
+                continue
+            if isinstance(route, Route):
+                match_result, _ = route.matches(scope)
+                if match_result == Match.FULL:
+                    return getattr(route.endpoint, _ROUTE_AUTH_ATTR, _RouteAuth.DENY)
+        # No route matched — let the app 404.
+        return _RouteAuth.SKIP
+
+    def _authenticate(self, scope: Scope) -> JSONResponse | None:
+        headers = scope_headers(scope)
+        token = extract_bearer_token(headers, cookie_name=self._cookie_name)
+        try:
+            identity = self._policy.resolve(token, client_address=scope_client_address(scope), headers=headers)
+        except ValueError:
+            return JSONResponse({"error": "authentication required"}, status_code=401)
+        if identity.audience is not None:
+            return JSONResponse({"error": "endpoint-scoped token cannot access this route"}, status_code=403)
+        return None

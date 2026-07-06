@@ -26,7 +26,8 @@ it.** Reading top to bottom answers a chain of questions:
 ┌─ EXECUTION SUBSTRATE  (cluster/) ────────────────▼────────────────────┐
 │  worker/    the agent daemon that runs on each machine                │
 │  runtime/   container execution (Docker / subprocess)                 │
-│  backends/  machine lifecycle: gcp · k8s · local · manual             │
+│  platforms/ machine lifecycle: gcp · k8s · local · manual             │
+│  backends/  TaskBackend implementations: rpc · k8s                    │
 └──────────────────────────────┬───────────────────────────────────────┘
 ┌─ CLUSTER VOCABULARY  (cluster/ top-level) ───────▼────────────────────┐
 │  types · constraints · config · config_serde · endpoints · bundle …   │
@@ -42,7 +43,7 @@ it.** Reading top to bottom answers a chain of questions:
 |---|---|---|
 | **Foundation** | `rpc/`, `actor/`, top-level utils | What vocabulary does everything speak? (protos, RPC middleware, threads, time) |
 | **Cluster vocabulary** | `cluster/types,constraints,config,bundle,endpoints` | What *is* a job / constraint / resource? |
-| **Execution substrate** | `cluster/backends,runtime,worker` | How do we get a machine, and run a task on it? |
+| **Execution substrate** | `cluster/platforms,backends,runtime,worker` | How do we get a machine, and run a task on it? |
 | **Controller** | `cluster/controller/**` | What is the desired state, and how do we drive toward it? |
 | **Entry points** | `cli/`, `client/`, `cluster/client/` | How does a human/program submit and observe? |
 
@@ -63,17 +64,19 @@ content-addressed bundles (`bundle.py`), endpoint URI resolution, and small
 shared concerns (`redaction`, `service_mode`, `log_keys`,
 `process_status`, `dashboard_common`).
 
-**Execution substrate.** `backends/` covers two distinct abstractions:
+**Execution substrate.** Two distinct abstractions, one package each:
 
-- *Machine lifecycle* behind two Protocols (`ControllerProvider`,
-  `WorkerInfraProvider`) with four backends (`gcp`, `k8s`, `local`, `manual`);
-  `vm_lifecycle.py` (controller VM start/stop/restart) lives here because it is
-  provider code.
+- *Machine lifecycle* lives in `platforms/`: two Protocols
+  (`ControllerProvider`, `WorkerInfraProvider` in `platforms/protocols.py`),
+  the shared handle/status/error types (`platforms/types.py`), and four
+  implementations (`gcp`, `k8s`, `local`, `manual`); `vm_lifecycle.py`
+  (controller VM start/stop/restart) lives here because it is provider code.
 - *The task control-plane contract* (`TaskBackend`, defined in
-  `controller/backend.py`): `backends/rpc/backend.py` (`RpcTaskBackend`) and
-  `backends/k8s/tasks.py` (`K8sTaskProvider`) each implement it. This is a
-  different axis from machine lifecycle — a `TaskBackend` drives task execution
-  and capacity for one cluster, while the lifecycle Protocols get/stop machines.
+  `controller/backend.py`) lives in `backends/`: `backends/rpc/backend.py`
+  (`RpcTaskBackend`) and `backends/k8s/tasks.py` (`K8sTaskProvider`) each
+  implement it. This is a different axis from machine lifecycle — a
+  `TaskBackend` drives task execution and capacity for one cluster, while the
+  lifecycle Protocols get/stop machines.
 
 `runtime/` abstracts *task execution* behind `ContainerRuntime` (Docker /
 subprocess). `worker/` is the agent daemon that runs on each machine.
@@ -92,7 +95,7 @@ sub-layered:
 |---|---|---|
 | Persistence spine | `schema` → `codec` → `db` → `reads`/`writes` · `projections/` | State at rest. `reads`/`writes` are the **only** sanctioned query/mutation surface; `projections/` are write-through caches. |
 | State predicates | `task_state` · `worker_health` · `audit` | What the rows *mean*. |
-| Decision kernels | `reconcile/` (lifecycle) · `scheduling/scheduler.py` (matching) · `scheduling/policy.py` (preemption/gating) · `autoscaler/` (capacity) | Compute what *should* change. Parameterized; no live I/O. |
+| Decision kernels | `reconcile/` (lifecycle) · `scheduling/scheduler.py` (matching) · `scheduling/policy.py` (preemption/gating) · `autoscaler/` (capacity) | Compute what *should* change. `reconcile/` and `scheduling/` are parameterized with no live I/O; `autoscaler/` also actuates its plan through `WorkerInfraProvider` (live cloud create/describe calls and worker health probes). |
 | Imperative shell | `ops/{job,task,worker}` · `reconcile/dispatch` · `pruner` | Load a snapshot, call a kernel, apply effects. |
 | Transport / loops | `controller.py` (loops) · `service.py` (RPC) · `dashboard.py` · `main.py` | Drive it / expose it. |
 

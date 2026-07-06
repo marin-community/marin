@@ -35,14 +35,16 @@ def recompute_state(state: Overlay, job_id: JobName) -> int | None:
     if total > 0 and counts.get(job_pb2.TASK_STATE_SUCCEEDED, 0) == total:
         new_state = job_pb2.JOB_STATE_SUCCEEDED
     elif basis.total_failures > max_task_failures:
-        # Cumulative failure budget: every hard task failure (including those
-        # retried back to PENDING and, for coscheduled gangs, the one charged per
-        # crashed round) accrues to ``failure_count``. Failing on the running
-        # total — rather than the instantaneous count of tasks currently in
-        # FAILED — stops a gang from crash-looping forever when each round's
-        # failure lands on a different task and no single task ever exhausts its
-        # per-task retry budget. Preemptions are retried by Iris and never charge
-        # ``failure_count``, so they are excluded.
+        # Cumulative failure budget: ``total_failures`` is the derived count of the
+        # job's FAILED attempts — the committed base the loader summed plus this
+        # batch's FAILED attempt writes (see Overlay.job_basis). It counts every hard
+        # task failure, including those retried back to PENDING and, for coscheduled
+        # gangs, the one FAILED attempt per crashed round (siblings go COSCHED_FAILED,
+        # which is neither a failure nor a preemption). Failing on this cumulative
+        # count — rather than the instantaneous number of tasks currently in FAILED —
+        # stops a gang from crash-looping forever when each round's failure lands on a
+        # different task and no single task ever exhausts its per-task retry budget.
+        # Preemptions are retried by Iris and never counted here, so they are excluded.
         new_state = job_pb2.JOB_STATE_FAILED
     elif counts.get(job_pb2.TASK_STATE_UNSCHEDULABLE, 0) > 0:
         new_state = job_pb2.JOB_STATE_UNSCHEDULABLE

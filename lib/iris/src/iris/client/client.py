@@ -48,6 +48,7 @@ from iris.cluster.constraints import (
 from iris.cluster.log_keys import build_log_source
 from iris.cluster.types import (
     CoschedulingConfig,
+    EndpointAccess,
     Entrypoint,
     EnvironmentSpec,
     JobName,
@@ -318,6 +319,7 @@ class EndpointRegistry(Protocol):
         name: str,
         address: str,
         metadata: dict[str, str] | None = None,
+        access: int = EndpointAccess.ENDPOINT_ACCESS_PRIVATE,
     ) -> str:
         """Register an endpoint for actor discovery.
 
@@ -325,6 +327,7 @@ class EndpointRegistry(Protocol):
             name: Actor name for discovery
             address: Address where actor is listening (host:port)
             metadata: Optional metadata for the endpoint
+            access: Proxy access mode — PRIVATE (default), PUBLIC, or BEARER.
 
         Returns:
             Unique endpoint ID for later unregistration
@@ -358,6 +361,7 @@ class NamespacedEndpointRegistry:
         name: str,
         address: str,
         metadata: dict[str, str] | None = None,
+        access: int = EndpointAccess.ENDPOINT_ACCESS_PRIVATE,
     ) -> str:
         """Register an endpoint, auto-prefixing with namespace.
 
@@ -365,6 +369,7 @@ class NamespacedEndpointRegistry:
             name: Actor name for discovery (will be prefixed)
             address: Address where actor is listening (host:port)
             metadata: Optional metadata
+            access: Proxy access mode — PRIVATE (default), PUBLIC, or BEARER.
 
         Returns:
             Endpoint ID
@@ -379,6 +384,7 @@ class NamespacedEndpointRegistry:
             address=address,
             task_attempt=self._task_attempt,
             metadata=metadata,
+            access=access,
         )
 
     def unregister(self, endpoint_id: str) -> None:

@@ -28,18 +28,18 @@ from dataclasses import dataclass
 
 from rigging.timing import Deadline, Duration, ExponentialBackoff, Timer
 
-from iris.cluster.backends.protocols import WorkerInfraProvider
-from iris.cluster.backends.types import (
-    Labels,
-    RemoteWorkerHandle,
-    StandaloneWorkerHandle,
-)
 from iris.cluster.config import GcpVmConfig, IrisClusterConfig, ManualVmConfig, VmConfig
 from iris.cluster.inject_env import with_injected_task_env
 from iris.cluster.platforms.gcp.controller_bootstrap import (
     build_controller_bootstrap_script_from_config,
 )
 from iris.cluster.platforms.gcp.ssh import OS_LOGIN_METADATA
+from iris.cluster.platforms.protocols import WorkerInfraProvider
+from iris.cluster.platforms.types import (
+    Labels,
+    RemoteWorkerHandle,
+    StandaloneWorkerHandle,
+)
 
 logger = logging.getLogger(__name__)
 

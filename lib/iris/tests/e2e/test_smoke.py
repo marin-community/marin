@@ -325,6 +325,10 @@ def test_dashboard_jobs_tab(smoke_cluster, smoke_page, smoke_screenshot):
     wait_for_dashboard_ready(smoke_page)
     for name in ["smoke-simple", "smoke-failed", "smoke-running"]:
         assert_visible(smoke_page, f"text={name}")
+    # The Cluster column is always rendered, blank for local jobs — a
+    # single-cluster smoke deployment shows the header with only "—" cells and
+    # never a peer annotation.
+    assert_visible(smoke_page, "th:has-text('Cluster')")
     smoke_screenshot(
         "jobs-tab",
         f"Jobs for user {user}: smoke-simple (succeeded), smoke-failed (failed), and smoke-running (running)",
@@ -563,6 +567,123 @@ def test_dashboard_status_tab(smoke_cluster, smoke_page, smoke_screenshot):
         timeout=10000,
     )
     smoke_screenshot("status-tab", "Status tab showing controller process info or GetProcessStatus error")
+
+
+def _wait_for_backends_tab_ready(page) -> None:
+    # The combined execution-targets tab renders backend (and peer) cards only
+    # after ListBackends resolves. Anchor on the route hash plus the "N backend(s)"
+    # count subtitle in the tab's h2 — that subtitle renders only once the RPC
+    # resolves, unlike the persistent "Backends"/"Workers" nav links, so it marks
+    # the tab content (not just the shell) as loaded.
+    check = """
+        () => {
+            const routeReady = decodeURIComponent(window.location.hash) === "#/backends";
+            const heading = Array.from(document.querySelectorAll("h2"))
+                .find((h) => (h.textContent || "").trim().startsWith("Backends"));
+            const loaded = !!heading && /\\d+\\s+backend/.test(heading.textContent || "");
+            return routeReady && loaded;
+        }
+    """
+    _await_stable_screenshot(page, check)
+
+
+def test_dashboard_backends_tab(smoke_cluster, smoke_page, smoke_screenshot):
+    """Combined execution-targets tab renders local backends; no peers configured.
+
+    The smoke cluster has no federation peers, so this asserts graceful-empty
+    rendering: backend cards/rows show and no peer card ("peer" tag) appears.
+    """
+    dashboard_goto(smoke_page, f"{smoke_cluster.url}/backends")
+    wait_for_dashboard_ready(smoke_page)
+    # The readiness gate requires the "N backend(s)" subtitle, so reaching here
+    # already proves the backend cards rendered. With no peers configured, the
+    # roster is empty: no peer tag.
+    _wait_for_backends_tab_ready(smoke_page)
+    if not isinstance(smoke_page, _NoOpPage):
+        from playwright.sync_api import expect  # noqa: PLC0415  # optional dep: playwright
+
+        expect(smoke_page.get_by_text("peer", exact=True)).to_have_count(0)
+    smoke_screenshot(
+        "backends-tab",
+        "Execution-targets tab: local backend cards, no federation peers configured",
+    )
+
+
+def test_dashboard_backends_tab_with_peer(smoke_cluster, smoke_page, smoke_screenshot):
+    """A configured peer renders as a card alongside backends (route-mocked ListPeers).
+
+    The smoke cluster has no real peers, so ListPeers is stubbed at the browser to
+    prove the peer card renders: health dot, "peer" tag, aggregated device caps,
+    worker/task counts, and an inward link to the parent's cluster-filtered jobs
+    (never an outbound link to the peer's own dashboard).
+    """
+    if isinstance(smoke_page, _NoOpPage):
+        pytest.skip("Playwright unavailable")
+
+    import json  # noqa: PLC0415
+
+    peer_body = json.dumps(
+        {
+            "peers": [
+                {
+                    "peerId": "cw-smoke-peer",
+                    "controllerAddress": "https://cw.example:8443",
+                    "dashboardUrl": "https://cw.example",
+                    "reachable": True,
+                    "lastContactMs": "1720000000000",
+                    "activeFederatedJobs": 2,
+                    "backends": [
+                        {
+                            "backendId": "cw-h100",
+                            "name": "cw-h100",
+                            "kind": "kubernetes",
+                            "capabilities": ["gpu"],
+                            "advertisedAttributes": {"accelerator": {"values": ["H100"]}},
+                            "restricted": False,
+                            "allowedUserCount": 0,
+                            "scaleGroups": [],
+                            "workerCount": 4,
+                            "pendingTaskCount": 1,
+                            "runningTaskCount": 3,
+                            "hasAutoscaler": True,
+                            "capacityHealth": {},
+                        }
+                    ],
+                }
+            ]
+        }
+    )
+
+    def _fulfill_peers(route):
+        route.fulfill(status=200, content_type="application/json", body=peer_body)
+
+    smoke_page.route("**/ListPeers", _fulfill_peers)
+    try:
+        dashboard_goto(smoke_page, f"{smoke_cluster.url}/backends")
+        # The prior test already sits on #/backends, and a same-hash goto does not
+        # reload — the tab would keep its peerless roster and never re-issue
+        # ListPeers under the mock. Reload to force a fresh mount + refetch.
+        smoke_page.reload()
+        wait_for_dashboard_ready(smoke_page)
+        _wait_for_backends_tab_ready(smoke_page)
+        smoke_page.wait_for_function(
+            "() => document.body.textContent.includes('cw-smoke-peer')",
+            timeout=10000,
+        )
+        # Target the peer card heading, not the peer's (hidden) <option> in the
+        # scope <select>, which also carries the peer id.
+        assert_visible(smoke_page, "h3:has-text('cw-smoke-peer')")
+        # The peer links inward to the parent's cluster-filtered jobs, not out to
+        # the peer's own dashboard (which users can't reach).
+        assert_visible(smoke_page, "a[href*='cluster=cw-smoke-peer']")
+        smoke_screenshot(
+            "backends-tab-peer",
+            "Execution-targets tab with a federation peer card: health dot, peer tag, "
+            "aggregated caps, worker/task counts, and an inward link to the parent's "
+            "cluster-filtered jobs",
+        )
+    finally:
+        smoke_page.unroute("**/ListPeers", _fulfill_peers)
 
 
 def test_dashboard_job_detail_with_logs(smoke_cluster, verbose_job, smoke_page, smoke_screenshot):

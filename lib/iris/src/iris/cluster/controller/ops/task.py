@@ -24,7 +24,6 @@ from rigging.timing import Timestamp
 from iris.cluster.controller import reads, writes
 from iris.cluster.controller.audit_logging import log_event
 from iris.cluster.controller.db import Tx
-from iris.cluster.controller.projections.endpoints import EndpointsProjection
 from iris.cluster.controller.reconcile import (
     ControllerEffects,
     ReconcileState,
@@ -150,7 +149,6 @@ def finalize(
     cur: Tx,
     decisions: list[TerminalDecision],
     *,
-    endpoints: EndpointsProjection,
     now: Timestamp,
 ) -> ControllerEffects:
     """Load snapshot for a batch of terminal-state decisions, apply once.
@@ -166,5 +164,5 @@ def finalize(
     all_task_ids: list[JobName] = sorted({d.task_id for d in decisions}, key=lambda tid: tid.to_wire())
     snapshot = load_closed_snapshot(cur, now=now, seed_task_ids=all_task_ids)
     effects = ReconcileState.open(snapshot).finalize_tasks(decisions)
-    commit_effects(cur, effects, endpoints=endpoints)
+    commit_effects(cur, effects)
     return effects

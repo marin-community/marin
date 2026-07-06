@@ -64,6 +64,26 @@ export interface Constraint {
   values?: AttributeValue[]
 }
 
+// -- Cluster coordinate --
+//
+// Mirrors iris.cluster.types: every job/task carries a `cluster` coordinate that
+// is always set — `'local'` for a locally-owned row, a peer id when handed off.
+// `'local'` is a reserved sentinel, not a real cluster id. The helpers tolerate
+// an absent value (contexts without a cluster, e.g. worker/controller logs) as
+// local, so a naive truthiness check never misclassifies a local row.
+
+export const LOCAL_CLUSTER = 'local'
+
+/** True when the row is locally owned (`'local'`, or no cluster in context). */
+export function isLocal(cluster: string | undefined): boolean {
+  return !cluster || cluster === LOCAL_CLUSTER
+}
+
+/** True when the row was handed off to a peer cluster. */
+export function isFederated(cluster: string | undefined): boolean {
+  return !!cluster && cluster !== LOCAL_CLUSTER
+}
+
 // -- Tasks --
 
 export interface TaskAttempt {
@@ -98,10 +118,15 @@ export interface TaskStatus {
   pendingReason?: string
   canBeScheduled?: boolean
   containerId?: string
-  // Genuine application-failure count for this task. The list view attaches only
-  // the latest failed attempt, so this carries the true count for the badge.
-  failureCount?: number
+  // No per-task failure/preemption count fields — derive them from `attempts`;
+  // job-level totals live on JobStatus.
   backendId?: string
+  // Cluster coordinate: always set — `'local'` for a locally-owned task, a peer
+  // id when handed off to that peer cluster (backendId then empty).
+  cluster?: string
+  // Task submission time on the owning cluster. Absent (not epoch 0) for a
+  // mirrored federated task the peer has not yet reported a real submit time for.
+  submittedAt?: ProtoTimestamp
 }
 
 // -- Jobs --
@@ -129,6 +154,14 @@ export interface JobStatus {
   hasChildren?: boolean
   parentJobId?: string
   backendId?: string
+  // Cluster coordinate: always set — `'local'` for a locally-owned job, a peer
+  // id when handed off to that peer cluster.
+  cluster?: string
+  // Handoff lifecycle for a federated job (gate on `cluster` first — a local job
+  // and an old message both read as PEER_STATUS_NONE). One of PEER_STATUS_NONE |
+  // PEER_STATUS_PENDING_SCHEDULING | PEER_STATUS_ASSIGNED | PEER_STATUS_SYNCED |
+  // PEER_STATUS_REJECTED. This is the job's handoff state, not peer health.
+  peerStatus?: string
 }
 
 export interface JobQuery {
@@ -143,6 +176,8 @@ export interface JobQuery {
   // Anchored prefix match against the full wire job_id (e.g. "/alice/").
   jobIdPrefix?: string
   backendId?: string
+  // Filter to jobs in one cluster (`'local'` or a peer id). Unset = all clusters.
+  cluster?: string
 }
 
 // -- Controller RPC Responses --
@@ -198,6 +233,8 @@ export interface LaunchJobRequest {
 export interface GetTaskStatusResponse {
   task: TaskStatus
   jobResources?: ResourceSpecProto
+  /** Likely root-cause log lines distilled from a failed task's logs. */
+  rootCauseHighlights?: string[]
 }
 
 export interface ListTasksResponse {
@@ -657,4 +694,29 @@ export interface ListBackendsResponse {
   backends: BackendSummary[]
   unroutableJobCount: number
   unroutableSample: UnroutableJob[]
+}
+
+// -- Federation peers --
+
+/** A federation peer returned by the ListPeers RPC: a remote Iris controller
+ *  this cluster may hand whole jobs to, plus its forwarded backend topology. */
+export interface PeerSummary {
+  peerId: string
+  // proto3 JSON omits default-valued fields, so string/bool/repeated fields are
+  // absent on the wire when empty — hence optional here.
+  controllerAddress?: string
+  dashboardUrl?: string
+  /** Last capability heartbeat succeeded. */
+  reachable?: boolean
+  /** Last successful contact, ms since epoch (0/absent if never contacted). int64 → string. */
+  lastContactMs?: string
+  activeFederatedJobs?: number
+  /** Aggregate spend across this peer's federated jobs, micros. int64 → string. */
+  aggregateSpendMicros?: string
+  /** The peer's own backends, forwarded from its ListBackends. */
+  backends?: BackendSummary[]
+}
+
+export interface ListPeersResponse {
+  peers: PeerSummary[]
 }

@@ -11,7 +11,12 @@ import { useBackends } from '@/composables/useBackends'
 const route = useRoute()
 const router = useRouter()
 const { isDark, toggle: toggleDark } = useDarkMode()
-const { capabilities, multiBackend, fetchConfig } = useBackends()
+const { capabilities, backends, peers, fetchConfig, ensurePeers } = useBackends()
+
+// Show the scope selector once there is more than one execution target to pick
+// between — counting backends and federation peers, so a 1-backend + N-peer
+// deployment still gets the selector.
+const showScope = computed(() => backends.value.length + peers.value.length > 1)
 
 const authEnabled = ref(false)
 const legendOpen = ref(false)
@@ -84,6 +89,10 @@ onMounted(async () => {
   } catch {
     // Auth config endpoint unavailable — assume no auth
   }
+
+  // Load the peer roster so the scope selector can count peers; inert (empty)
+  // on a single-cluster deployment.
+  void ensurePeers()
 })
 
 onUnmounted(() => {
@@ -134,8 +143,8 @@ onUnmounted(() => {
       :tabs="TABS"
       :active-tab="activeTab"
     >
-      <!-- BackendScope selector: visible only when controller has >1 backend -->
-      <BackendScope v-if="multiBackend" />
+      <!-- Scope selector: visible with >1 execution target (backends + peers) -->
+      <BackendScope v-if="showScope" />
     </TabNav>
     <main class="max-w-7xl mx-auto px-6 py-6">
       <router-view />

@@ -23,7 +23,7 @@ Console links:
 create a token for the cluster and download its kubeconfig.
 
 **2. Install the kubeconfig** at the path from the table above, plus controller
-extras and R2 credentials:
+extras and CoreWeave Object Storage credentials:
 
 ```bash
 mkdir -p ~/.kube
@@ -32,8 +32,8 @@ export KUBECONFIG=~/.kube/coreweave-iris-gpu
 kubectl cluster-info   # sanity check
 
 uv pip install 'marin-iris[controller]'
-export R2_ACCESS_KEY_ID=<your-r2-access-key-id>
-export R2_SECRET_ACCESS_KEY=<your-r2-secret-access-key>
+export CW_KEY_ID=<coreweave-access-key-id>
+export CW_KEY_SECRET=<coreweave-access-key-secret>
 ```
 
 **3. Check cluster status.** `--cluster=cw-us-east-02a` resolves the in-tree
@@ -142,6 +142,75 @@ Key architectural properties:
 - **Public images**: All images on `ghcr.io/marin-community/` are public. No
   `imagePullSecrets` required.
 
+### Off-cluster endpoint access (exposing only `/proxy`)
+
+The controller Service is `ClusterIP:10000` — reachable only in-cluster or via a
+`kubectl port-forward`. To let an off-cluster caller (e.g. a Daytona/Modal sandbox
+running an agent harness) reach a registered endpoint through the controller
+proxy, `start_controller` publishes only the `/proxy` path with an Ingress — it
+is part of controller setup, not a manual step. Unlike the GCP arm there is no
+IAP layer, so the controller's own per-endpoint auth is the sole gate: register
+the endpoint `PRIVATE` (a cluster identity / JWT), `PUBLIC` (open), or `BEARER`
+(a scoped endpoint token) — the same access modes as the GCP path. Keep
+`auth.provider` set (never null-auth) so `PRIVATE`/`BEARER` are actually enforced.
+
+CKS ships no ingress controller and no TLS issuer, so two cluster-wide,
+install-once prerequisites must be in place first — install them with
+`scripts/install_traefik_proxy.py` (operator-run; dry-run without `--apply`):
+
+```bash
+# Traefik (CoreWeave's blessed ingress controller) + cert-manager + HTTP-01 issuers.
+uv run lib/iris/scripts/install_traefik_proxy.py --cluster <name> install --acme-email you@oa.dev --apply
+# Tear it back down (releases, namespaces, CRDs/webhooks/RBAC/IngressClass), verified:
+uv run lib/iris/scripts/install_traefik_proxy.py --cluster <name> uninstall --apply
+```
+
+Then configure the controller's `coreweave` block. `start_controller` reconciles
+(idempotently, on every start) a path-restricted `iris-controller-proxy` Ingress
+that keeps the dashboard and RPC surface cluster-internal and publishes just
+`/proxy`; cert-manager auto-issues the TLS cert into `tls_secret`:
+
+```yaml
+controller:
+  coreweave:
+    scale_group: cpu
+    # Publish only /proxy off-cluster. Empty host = ClusterIP only (no ingress).
+    public_proxy_host: iris-cw.oa.dev
+    ingress_class: traefik                    # CoreWeave's blessed controller
+    tls_secret: iris-controller-proxy-tls
+    cluster_issuer: letsencrypt-http01-prod   # cert-manager auto-issues into tls_secret
+```
+
+`start_controller` warns (never fails) if the `IngressClass` is absent — the
+Ingress is applied anyway and starts serving once Traefik is present. A plain
+`type: LoadBalancer` Service on the controller port would be simpler but exposes
+the whole origin (RPC surface included, JWT-gated only); the path-restricted
+Ingress keeps only `/proxy` public.
+
+#### External address and DNS (`oa.dev` → `coreweave.app`)
+
+The external address is served by Traefik's LoadBalancer, not the controller
+Pod, and CoreWeave gives it a stable FQDN under `*.coreweave.app` — you never
+chase a churning IP. `install_traefik_proxy.py install --apply` prints the exact
+CNAME record to create (`<public_proxy_host>  CNAME  <that FQDN>`); `oa.dev` DNS
+is at Namecheap, Advanced DNS panel.
+
+Three values must agree: this CNAME, `public_proxy_host` (the Ingress `host` /
+Host header clients send), and the cluster's `dashboard_url` (so `marin-serve`'s
+printed off-cluster URLs + the `BEARER` token are usable as-is). The
+`coreweave.app` name is only a stable CNAME target — all routing, Host matching,
+and TLS are on the `oa.dev` name.
+
+TLS terminates in-cluster (no IAP/edge layer; Namecheap doesn't proxy TLS).
+`install_traefik_proxy.py` creates HTTP-01 Let's Encrypt ClusterIssuers
+(`letsencrypt-http01-staging`, `letsencrypt-http01-prod`) validated through
+Traefik — CoreWeave's bundled issuers only cover `*.coreweave.app` (DNS-01 via
+`acme.coreweave.com`), so a custom `oa.dev` host needs these. Note: HTTP-01 needs
+the CNAME live first (Let's Encrypt fetches `http://<host>/.well-known/...`);
+issue with `letsencrypt-http01-staging` first to avoid LE rate limits, then flip
+`cluster_issuer` to prod. Leave `tls_secret`/`cluster_issuer` empty for plain
+HTTP (dev only).
+
 ## 3. Tools
 
 ### CoreWeave Intelligent CLI (`cwic`)
@@ -186,8 +255,7 @@ operator reference (any `--cluster=NAME`) and the lifecycle details behind it.
 - Images pushed to `ghcr.io/marin-community/`
 - Controller extras: `uv pip install 'marin-iris[controller]'`
 
-For S3 storage, export `R2_ACCESS_KEY_ID` / `R2_SECRET_ACCESS_KEY` (historical
-names — they feed any S3-compatible backend, including CoreWeave Object Storage
+For S3 storage, export `CW_KEY_ID` / `CW_KEY_SECRET` (CoreWeave Object Storage
 access keys); `iris cluster start` folds them — plus the derived
 endpoint/region/`FSSPEC_S3` config — into the `iris-task-env` Secret, projected
 into the controller and task pods via `envFrom`.
@@ -295,7 +363,7 @@ re-run the install after it is Ready.
 ### Bringing up a new cluster
 
 1. Download the kubeconfig (§0) to `~/.kube/coreweave-iris-<region>` and export
-   `KUBECONFIG`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`.
+   `KUBECONFIG`, `CW_KEY_ID`, `CW_KEY_SECRET`.
 2. Copy an existing cluster config pair — `lib/iris/config/cw-*.yaml` and
    `lib/finelog/config/cw-*.yaml` — and adjust region, instance types, and
    fleet sizes. The console capacity view's display label is NOT the k8s
@@ -584,9 +652,13 @@ runaway autoscaling from system pods.
 
 The controller runs as a single-replica Deployment scheduled onto the configured
 `scale_group` NodePool. Workers discover it via K8s Service DNS. The controller
-Pod uses in-cluster ServiceAccount auth for all kubectl operations and requests
-dedicated `cpu: 2` and `memory: 4Gi` (with matching limits) so it runs with
-Guaranteed QoS instead of BestEffort.
+Pod uses in-cluster ServiceAccount auth for all kubectl operations. It requests
+16 CPU and 64Gi memory with a memory limit but no CPU limit, so it runs Burstable
+(not BestEffort, not Guaranteed): it is never CFS-throttled and can burst onto
+spare node cores during reconcile-loop spikes, while memory stays capped to
+protect the node. The liveness/readiness probes use a 10s timeout and tolerate 6
+failures so a busy-but-alive controller is not liveness-killed mid-reconcile
+under a large tokenize fan-out (issue #6944).
 
 Cost note: the smallest CoreWeave CPU instance (`cd-gp-i64-erapids`, 64 vCPU,
 512 GB RAM) is overprovisioned for the controller. CoreWeave does not offer
@@ -643,8 +715,8 @@ The platform detects fatal errors before the full timeout expires:
 | Variable | Purpose |
 |----------|---------|
 | `KUBECONFIG` | Path to kubeconfig (alternative to `kubeconfig_path` in config) |
-| `R2_ACCESS_KEY_ID` | S3/R2 access key (required if storage uses `s3://`) |
-| `R2_SECRET_ACCESS_KEY` | S3/R2 secret key |
+| `CW_KEY_ID` | S3/CoreWeave Object Storage access key (required if storage uses `s3://`) |
+| `CW_KEY_SECRET` | S3/CoreWeave Object Storage secret key |
 | `CW_ACCESS_KEY_ID` | CoreWeave Object Storage key ID |
 | `CW_SECRET_ACCESS_KEY` | CoreWeave Object Storage secret key |
 
@@ -660,7 +732,7 @@ The platform detects fatal errors before the full timeout expires:
 | `AWS_ACCESS_KEY_ID` | `envFrom` | From the `iris-task-env` Secret |
 | `AWS_SECRET_ACCESS_KEY` | `envFrom` | From the `iris-task-env` Secret |
 | `AWS_ENDPOINT_URL` | `envFrom` | From `iris-task-env`; derived from `object_storage_endpoint` |
-| `AWS_REGION` / `AWS_DEFAULT_REGION` | `envFrom` | From `iris-task-env`; `auto` for R2 / CoreWeave endpoints |
+| `AWS_REGION` / `AWS_DEFAULT_REGION` | `envFrom` | From `iris-task-env`; `auto` for CoreWeave Object Storage endpoints |
 | `FSSPEC_S3` | `envFrom` | From `iris-task-env`; JSON-encoded fsspec S3 config (endpoint + addressing style) |
 
 ## 11. Timeouts
@@ -811,7 +883,7 @@ by polling.
 | Resource | Purpose | Created By |
 |----------|---------|------------|
 | `iris` Namespace + RBAC | K8s API auth and permissions | `start_controller()` via `ensure_rbac()` |
-| `iris-task-env` Secret | S3 object storage auth + operator-injected env (`defaults.inject_env`) | `start_controller()` via `ensure_task_env_secret()`, from `R2_ACCESS_KEY_ID` / `R2_SECRET_ACCESS_KEY` + the configured `object_storage_endpoint` |
+| `iris-task-env` Secret | S3 object storage auth + operator-injected env (`defaults.inject_env`) | `start_controller()` via `ensure_task_env_secret()`, from `CW_KEY_ID` / `CW_KEY_SECRET` + the configured `object_storage_endpoint` |
 | `iris-cluster-config` ConfigMap | Cluster config for controller and workers | `start_controller()` |
 | In-cluster ServiceAccount token | kubectl calls from controller Pod | Auto-mounted by Kubernetes |
 

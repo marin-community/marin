@@ -58,6 +58,9 @@ class ControllerService(Protocol):
     async def list_endpoints(self, request: controller__pb2.Controller.ListEndpointsRequest, ctx: RequestContext) -> controller__pb2.Controller.ListEndpointsResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
+    async def mint_endpoint_token(self, request: controller__pb2.Controller.MintEndpointTokenRequest, ctx: RequestContext) -> controller__pb2.Controller.MintEndpointTokenResponse:
+        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
+
     async def get_autoscaler_status(self, request: controller__pb2.Controller.GetAutoscalerStatusRequest, ctx: RequestContext) -> controller__pb2.Controller.GetAutoscalerStatusResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
@@ -259,6 +262,16 @@ class ControllerServiceASGIApplication(ConnectASGIApplication[ControllerService]
                         idempotency_level=IdempotencyLevel.UNKNOWN,
                     ),
                     function=svc.list_endpoints,
+                ),
+                "/iris.cluster.ControllerService/MintEndpointToken": Endpoint.unary(
+                    method=MethodInfo(
+                        name="MintEndpointToken",
+                        service_name="iris.cluster.ControllerService",
+                        input=controller__pb2.Controller.MintEndpointTokenRequest,
+                        output=controller__pb2.Controller.MintEndpointTokenResponse,
+                        idempotency_level=IdempotencyLevel.UNKNOWN,
+                    ),
+                    function=svc.mint_endpoint_token,
                 ),
                 "/iris.cluster.ControllerService/GetAutoscalerStatus": Endpoint.unary(
                     method=MethodInfo(
@@ -747,6 +760,26 @@ class ControllerServiceClient(ConnectClient):
                 service_name="iris.cluster.ControllerService",
                 input=controller__pb2.Controller.ListEndpointsRequest,
                 output=controller__pb2.Controller.ListEndpointsResponse,
+                idempotency_level=IdempotencyLevel.UNKNOWN,
+            ),
+            headers=headers,
+            timeout_ms=timeout_ms,
+        )
+
+    async def mint_endpoint_token(
+        self,
+        request: controller__pb2.Controller.MintEndpointTokenRequest,
+        *,
+        headers: Headers | Mapping[str, str] | None = None,
+        timeout_ms: int | None = None,
+    ) -> controller__pb2.Controller.MintEndpointTokenResponse:
+        return await self.execute_unary(
+            request=request,
+            method=MethodInfo(
+                name="MintEndpointToken",
+                service_name="iris.cluster.ControllerService",
+                input=controller__pb2.Controller.MintEndpointTokenRequest,
+                output=controller__pb2.Controller.MintEndpointTokenResponse,
                 idempotency_level=IdempotencyLevel.UNKNOWN,
             ),
             headers=headers,
@@ -1342,6 +1375,8 @@ class ControllerServiceSync(Protocol):
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
     def list_endpoints(self, request: controller__pb2.Controller.ListEndpointsRequest, ctx: RequestContext) -> controller__pb2.Controller.ListEndpointsResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
+    def mint_endpoint_token(self, request: controller__pb2.Controller.MintEndpointTokenRequest, ctx: RequestContext) -> controller__pb2.Controller.MintEndpointTokenResponse:
+        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
     def get_autoscaler_status(self, request: controller__pb2.Controller.GetAutoscalerStatusRequest, ctx: RequestContext) -> controller__pb2.Controller.GetAutoscalerStatusResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
     def list_users(self, request: controller__pb2.Controller.ListUsersRequest, ctx: RequestContext) -> controller__pb2.Controller.ListUsersResponse:
@@ -1521,6 +1556,16 @@ class ControllerServiceWSGIApplication(ConnectWSGIApplication):
                         idempotency_level=IdempotencyLevel.UNKNOWN,
                     ),
                     function=service.list_endpoints,
+                ),
+                "/iris.cluster.ControllerService/MintEndpointToken": EndpointSync.unary(
+                    method=MethodInfo(
+                        name="MintEndpointToken",
+                        service_name="iris.cluster.ControllerService",
+                        input=controller__pb2.Controller.MintEndpointTokenRequest,
+                        output=controller__pb2.Controller.MintEndpointTokenResponse,
+                        idempotency_level=IdempotencyLevel.UNKNOWN,
+                    ),
+                    function=service.mint_endpoint_token,
                 ),
                 "/iris.cluster.ControllerService/GetAutoscalerStatus": EndpointSync.unary(
                     method=MethodInfo(
@@ -2009,6 +2054,26 @@ class ControllerServiceClientSync(ConnectClientSync):
                 service_name="iris.cluster.ControllerService",
                 input=controller__pb2.Controller.ListEndpointsRequest,
                 output=controller__pb2.Controller.ListEndpointsResponse,
+                idempotency_level=IdempotencyLevel.UNKNOWN,
+            ),
+            headers=headers,
+            timeout_ms=timeout_ms,
+        )
+
+    def mint_endpoint_token(
+        self,
+        request: controller__pb2.Controller.MintEndpointTokenRequest,
+        *,
+        headers: Headers | Mapping[str, str] | None = None,
+        timeout_ms: int | None = None,
+    ) -> controller__pb2.Controller.MintEndpointTokenResponse:
+        return self.execute_unary(
+            request=request,
+            method=MethodInfo(
+                name="MintEndpointToken",
+                service_name="iris.cluster.ControllerService",
+                input=controller__pb2.Controller.MintEndpointTokenRequest,
+                output=controller__pb2.Controller.MintEndpointTokenResponse,
                 idempotency_level=IdempotencyLevel.UNKNOWN,
             ),
             headers=headers,

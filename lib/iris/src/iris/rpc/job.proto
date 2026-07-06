@@ -262,20 +262,26 @@ message TaskStatus {
   string container_id = 19;           // Platform container identifier (Docker container ID, K8s pod name)
   reserved 20;                        // was: repeated ResourceUsage resource_history (now in iris.task stats)
   reserved 21, 22;                    // was: status_text_detail_md, status_text_summary_md (now in iris.task_status stats)
-
-  // Genuine application failures (non-zero exit / setup error) for this task.
-  // The list view attaches only the latest failed attempt, so this carries the
-  // true count for the dashboard's failure badge.
-  int32 failure_count = 23;
+  reserved 23;                        // was: failure_count — derived from attempts (see iris.cluster.controller.attempt_counts)
 
   // Literal owning backend id: DEFAULT_BACKEND_ID ("default") on single-backend
   // clusters, the routed id once pinned, empty ONLY while a job is genuinely
   // unrouted. Never an overloaded sentinel; the UI hides the column via multiBackend.
   string backend_id = 24;
 
-  // Federation discriminator, orthogonal to backend_id: "" == owned by this
-  // cluster, "<peer>" == handed off to that peer cluster (backend_id then "").
-  string child_cluster = 25;
+  // Owning cluster, always set and orthogonal to backend_id: "local" == owned
+  // and run by this controller (backend_id then set), "<peer>" == handed off to
+  // that peer cluster (backend_id then "").
+  string cluster = 25;
+
+  reserved 26;  // retired federated remote-id field (job ids are cluster-invariant; no rebasing)
+
+  // Task submission time on the owning cluster. For a mirrored federated task
+  // this is the peer's real submit time, so a not-yet-started task does not
+  // render as epoch 0.
+  iris.time.Timestamp submitted_at = 27;
+
+  reserved 28;  // was: preemption_count — derived from attempts (see iris.cluster.controller.attempt_counts)
 }
 
 // Record of a single task execution attempt
@@ -327,6 +333,29 @@ message BuildMetrics {
   iris.time.Timestamp build_finished = 2;
   bool from_cache = 3;
   string image_tag = 4;
+}
+
+// Lifecycle of a job's handoff to a peer cluster, tracked separately from
+// JobState so the pre-registration window — before the peer has accepted or
+// reported anything — is a first-class, honest signal rather than a blank,
+// partly-fabricated JobStatus. Derived on read from federated_jobs.handoff_state
+// and whether the peer's task set has been mirrored back yet; NOT persisted.
+//
+// This describes the *handoff* of this job, not the peer's *health*: a stuck
+// PENDING_SCHEDULING plus an unreachable peer (PeerSummary.reachable) is the
+// signal that a handoff cannot be delivered.
+//
+// A local job is PEER_STATUS_NONE (== 0), which is also how an old message
+// missing this field decodes — so consumers must gate on `cluster` (is it
+// federated at all?) before trusting a NONE. For a terminal job this is the
+// last posture observed (e.g. a handoff cancelled before delivery stays
+// PENDING_SCHEDULING).
+enum PeerStatus {
+  PEER_STATUS_NONE = 0;                // local job (cluster == "local")
+  PEER_STATUS_PENDING_SCHEDULING = 1;  // handed off; peer has not yet acked LaunchJob
+  PEER_STATUS_ASSIGNED = 2;            // peer acked; awaiting the first FederationSync
+  PEER_STATUS_SYNCED = 3;              // peer's task set mirrored back at least once
+  PEER_STATUS_REJECTED = 4;            // peer rejected the handoff (id collision); job terminal
 }
 
 message JobStatus {
@@ -381,8 +410,13 @@ message JobStatus {
   // Literal owning backend id. See TaskStatus.backend_id.
   string backend_id = 34;
 
-  // Federation discriminator. See TaskStatus.child_cluster.
-  string child_cluster = 35;
+  // Owning cluster, always set. See TaskStatus.cluster.
+  string cluster = 35;
+
+  reserved 36;  // retired federated remote-id field (job ids are cluster-invariant; no rebasing)
+
+  // Handoff lifecycle for a federated job; PEER_STATUS_NONE for a local one. See PeerStatus.
+  PeerStatus peer_status = 37;
 }
 
 // ============================================================================

@@ -32,6 +32,14 @@ deployment:
     # into the minted creds Secret. Virtual-hosted addressing is derived from
     # the domain.
     object_storage_endpoint: http://cwlota.com
+    # Run at control-plane priority: finelog is this cluster's log backend and
+    # shares the single cpu-turin control node with the iris controller and the
+    # Kueue manager. iris-system (10000) sits above every user band so a user job
+    # cannot preempt it off that node. `deploy up` creates the class if absent, so
+    # finelog can come up before Iris; keep the value in sync with iris's
+    # IRIS_PRIORITY_CLASSES (Iris is the canonical owner).
+    priority_class_name: iris-system
+    priority_class_value: 10000
 # Authenticated-ingress policy. This LOCAL finelog is default-deny;
 # it admits its own cluster's private network (CoreWeave pods are 10.x) and
 # loopback (port-forward), never the public internet. No jwt layer — that is the

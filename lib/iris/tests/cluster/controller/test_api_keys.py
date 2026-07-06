@@ -23,6 +23,7 @@ from iris.cluster.controller.auth import (
 from iris.cluster.controller.backend import BackendCapability
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.endpoint_service import EndpointServiceImpl
+from iris.cluster.controller.projections.attempt_counts import AttemptCountsProjection
 from iris.cluster.controller.projections.endpoints import EndpointsProjection
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.rpc import job_pb2
@@ -39,7 +40,9 @@ def db(tmp_path):
 
 def _make_service(db, log_client, auth=None):
     """Create a ControllerServiceImpl with minimal dependencies for API key tests."""
-    endpoints = EndpointsProjection(db)
+    # Self-registers into db.caches so service read paths reach them via tx.caches.
+    EndpointsProjection(db)
+    AttemptCountsProjection(db)
 
     controller_mock = Mock()
     controller_mock.wake = Mock()
@@ -54,9 +57,8 @@ def _make_service(db, log_client, auth=None):
         bundle_store=BundleStore(storage_dir=str(db.db_path.parent / "bundles")),
         log_client=log_client,
         db=db,
-        endpoints=endpoints,
         auth=auth or ControllerAuth(),
-        endpoint_service=EndpointServiceImpl(db=db, endpoints=endpoints),
+        endpoint_service=EndpointServiceImpl(db=db),
     )
 
 
@@ -114,9 +116,9 @@ def test_iap_provider_uses_id_token_login_verifier(db):
     assert auth.verifier.verify(auth.worker_token).user_id == WORKER_USER
 
 
-def test_iap_provider_requires_audiences(db):
+def test_iap_provider_requires_audiences_or_assertion(db):
     config = AuthConfig(iap={"url": "https://iris-marin.example.com"})
-    with pytest.raises(ValueError, match="at least one audience"):
+    with pytest.raises(ValueError, match=r"audiences .* signed_header_audience"):
         create_controller_auth(config, db=db)
 
 

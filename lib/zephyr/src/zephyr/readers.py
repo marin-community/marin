@@ -280,7 +280,7 @@ def load_jsonl(source: str | InputFileSpec) -> Iterator[dict]:
                 continue
             if columns is not None:
                 record = {k: record[k] for k in columns if k in record}
-            counters.pipeline.update_counter("zephyr/records_in", 1)
+            counters.pipeline.update_counter(counters.RECORDS_IN, 1)
             yield record
 
 
@@ -325,7 +325,7 @@ def load_parquet_batch(source: str | InputFileSpec) -> Iterator[pa.RecordBatch]:
             table = table.filter(pa_filter)
         if need_project:
             table = table.select(spec.columns)
-        counters.pipeline.update_counter("zephyr/records_in", len(table))
+        counters.pipeline.update_counter(counters.RECORDS_IN, len(table))
         yield from table.to_batches()
 
 
@@ -402,7 +402,7 @@ def load_vortex(source: str | InputFileSpec) -> Iterator[dict]:
     else:
         table = dataset.to_table(columns=columns, filter=pa_filter)
 
-    counters.pipeline.update_counter("zephyr/records_in", len(table))
+    counters.pipeline.update_counter(counters.RECORDS_IN, len(table))
     yield from table.to_pylist()
 
 
@@ -550,7 +550,7 @@ def load_zip_members(source: str | InputFileSpec, pattern: str = "*") -> Iterato
             for member_name in zf.namelist():
                 if not member_name.endswith("/") and fnmatch.fnmatch(member_name, pattern):
                     with zf.open(member_name, "r") as member_file:
-                        counters.pipeline.update_counter("zephyr/records_in", 1)
+                        counters.pipeline.update_counter(counters.RECORDS_IN, 1)
                         yield {
                             "filename": member_name,
                             "content": member_file.read(),

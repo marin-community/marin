@@ -7,10 +7,10 @@
 #
 # Workflow:
 #
-#   1. Set S3 object storage credentials (required for s3:// storage URIs):
-#        export R2_ACCESS_KEY_ID=<your-r2-access-key-id>
-#        export R2_SECRET_ACCESS_KEY=<your-r2-secret-access-key>
-#      These are created in the Cloudflare dashboard under R2 > Manage R2 API Tokens.
+#   1. Set CoreWeave AI Object Storage credentials (required for s3:// storage URIs):
+#        export CW_KEY_ID=<coreweave-access-key-id>
+#        export CW_KEY_SECRET=<coreweave-access-key-secret>
+#      These are created in the CoreWeave console under Object Storage > Access Keys.
 #      `iris cluster start` creates a K8s Secret from these env vars automatically.
 #
 #   2. Start the cluster (creates RBAC, shared NodePools, ConfigMap, Deployment, Service):

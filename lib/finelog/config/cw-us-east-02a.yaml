@@ -27,6 +27,12 @@ deployment:
     storage_gb: 250
     # R2 endpoint for the s3:// archive; folded into the minted creds Secret.
     object_storage_endpoint: https://74981a43be0de7712369306c7b19133d.r2.cloudflarestorage.com
+    # Run at control-plane priority so a user job cannot preempt the log backend
+    # off the shared control node. `deploy up` creates iris-system (10000) if
+    # absent; keep the value in sync with iris's IRIS_PRIORITY_CLASSES (Iris is
+    # the canonical owner — see the iris controller's ensure_priority_classes).
+    priority_class_name: iris-system
+    priority_class_value: 10000
 # Authenticated-ingress policy. This LOCAL finelog is default-deny;
 # it admits its own cluster's private network (CoreWeave pods are 10.x) and
 # loopback (port-forward), never the public internet. No jwt layer — that is the

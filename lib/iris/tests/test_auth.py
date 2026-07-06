@@ -12,8 +12,8 @@ from iris.version import client_revision_date
 from rigging.auth import BearerTokenInjector, StaticTokenProvider
 from rigging.server_auth import (
     AuthRequest,
+    RequestAuthPolicy,
     StaticTokenVerifier,
-    build_request_authenticators,
     is_trusted_loopback,
     resolve_auth,
 )
@@ -150,8 +150,7 @@ def test_resolve_auth_token_wins_over_loopback():
     verifier = StaticTokenVerifier({"tok": "alice"})
     identity = resolve_auth(
         AuthRequest(token="tok", headers={}, client_address="127.0.0.1:54321"),
-        build_request_authenticators(verifier),
-        optional=False,
+        RequestAuthPolicy.enforcing(verifier=verifier).authenticators,
     )
     assert identity is not None
     assert identity.user_id == "alice"
@@ -161,8 +160,7 @@ def test_resolve_auth_loopback_is_admin():
     """A tokenless loopback caller is always trusted as the anonymous admin."""
     identity = resolve_auth(
         AuthRequest(token=None, headers={}, client_address="127.0.0.1:54321"),
-        build_request_authenticators(StaticTokenVerifier({})),
-        optional=False,
+        RequestAuthPolicy.enforcing(verifier=StaticTokenVerifier({})).authenticators,
     )
     assert identity is not None
     assert identity.user_id == "anonymous"
@@ -174,8 +172,7 @@ def test_resolve_auth_public_tokenless_rejected():
     with pytest.raises(ValueError, match="Missing authentication"):
         resolve_auth(
             AuthRequest(token=None, headers={}, client_address="203.0.113.7:443"),
-            build_request_authenticators(StaticTokenVerifier({})),
-            optional=False,
+            RequestAuthPolicy.enforcing(verifier=StaticTokenVerifier({})).authenticators,
         )
 
 
@@ -188,8 +185,7 @@ def test_resolve_auth_spoofed_loopback_rejected():
     with pytest.raises(ValueError, match="Missing authentication"):
         resolve_auth(
             AuthRequest(token=None, headers={"x-forwarded-for": "127.0.0.1"}, client_address="127.0.0.1:0"),
-            build_request_authenticators(StaticTokenVerifier({})),
-            optional=False,
+            RequestAuthPolicy.enforcing(verifier=StaticTokenVerifier({})).authenticators,
         )
 
 

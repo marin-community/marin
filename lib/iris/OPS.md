@@ -92,9 +92,9 @@ iris job list --state running           # filter by state
 iris job logs /user/job-name -f         # follow job + child logs
 iris job stop /user/job-name            # kill job + children
 iris job summary /user/job-name         # per-task state, exit, duration, peak memory
-iris job summary /user/job-name --json  # same, machine-readable
-iris job bug-report /user/job-name      # structured diagnostic dump
 ```
+
+For machine-readable job data, use the Iris Python client (`IrisClient`) directly.
 
 ### `job run` gotchas
 
@@ -176,7 +176,7 @@ The controller exposes its SQLite DB via RPC:
 
 ```bash
 iris query "SELECT state, count(*) FROM jobs GROUP BY state"
-iris query "SELECT state, count(*) FROM tasks GROUP BY state" -f json
+iris query "SELECT state, count(*) FROM tasks GROUP BY state" -f csv
 ```
 
 **Never modify the controller database** without explicit user approval — read-only queries only, even on offline checkpoints.
@@ -315,7 +315,7 @@ subpath and does not reach the controller's finelog server.
 | Job stuck PENDING | `iris rpc controller get-scheduler-state` for constraints. Check quota: `iris query "SELECT name, consecutive_failures, quota_reason FROM scaling_groups WHERE quota_reason != ''"` |
 | Workers not joining (GCP) | `iris cluster vm status` for slice lifecycle. SSH to VM, check bootstrap logs. |
 | Autoscaler not scaling | `iris rpc controller get-autoscaler-status` — check `backoff_until_ms`, `consecutive_failures`. |
-| Task retrying | `iris job bug-report /user/job` — full attempt history with per-attempt errors. |
+| Task retrying | `iris job summary /user/job` — per-task state and exit codes; `iris job logs /user/job` for the per-attempt errors. |
 | Task failed with exit 137 / suspected OOM | `iris job summary /user/job` — per-task peak memory + exit code. If most shards peak near the container memory limit, raise `--memory` on resubmit. |
 | Dashboard unreachable | Verify tunnel is alive. `curl -sf http://localhost:10000/health`. |
 

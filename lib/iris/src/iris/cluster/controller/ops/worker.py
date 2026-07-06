@@ -6,38 +6,24 @@
 from dataclasses import dataclass
 
 from rigging.timing import Timestamp
-from sqlalchemy import bindparam, delete, insert, select
+from sqlalchemy import bindparam, select
 
 from iris.cluster.constraints import AttributeValue
 from iris.cluster.controller import reads, writes
 from iris.cluster.controller.audit_logging import log_event
 from iris.cluster.controller.codec import proto_to_json
 from iris.cluster.controller.db import ControllerDB, Tx
-from iris.cluster.controller.projections.endpoints import EndpointsProjection
 from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
 from iris.cluster.controller.reconcile import ControllerEffects, ReconcileState
 from iris.cluster.controller.reconcile.commit import commit_effects
 from iris.cluster.controller.reconcile.loader import TransitionReader, load_closed_snapshot
 from iris.cluster.controller.reconcile.worker import WorkerReconcilePlan, WorkerReconcileResult
-from iris.cluster.controller.schema import worker_attributes_table, workers_table
+from iris.cluster.controller.schema import workers_table
 from iris.cluster.controller.worker_health import WorkerHealthTracker
 from iris.cluster.types import AttemptUid, JobName, WorkerId, get_gpu_count, get_tpu_count
 from iris.rpc import job_pb2
 
 FAIL_WORKERS_CHUNK_SIZE = 10
-
-
-def _attribute_value_cols(value: str | int | float) -> dict:
-    """Encode a Python attribute value into the ``worker_attributes`` value columns.
-
-    Inverse of :func:`codec.attribute_value_from_row`: exactly one of
-    ``str_value`` / ``int_value`` / ``float_value`` is set, the rest NULL.
-    """
-    if isinstance(value, int):
-        return {"value_type": "int", "str_value": None, "int_value": int(value), "float_value": None}
-    if isinstance(value, float):
-        return {"value_type": "float", "str_value": None, "int_value": None, "float_value": float(value)}
-    return {"value_type": "str", "str_value": str(value), "int_value": None, "float_value": None}
 
 
 @dataclass(frozen=True)
@@ -61,17 +47,13 @@ def register(
     metadata: job_pb2.WorkerMetadata,
     ts: Timestamp,
     health: WorkerHealthTracker,
-    worker_attrs: WorkerAttrsProjection,
     slice_id: str = "",
     scale_group: str = "",
 ) -> None:
     """Register a new worker or refresh an existing one. Caller owns the transaction."""
     attr_dict: dict[str, AttributeValue] = {}
-    attr_rows: list[dict] = []
     for key, proto in metadata.attributes.items():
-        av = AttributeValue.from_proto(proto)
-        attr_dict[key] = av
-        attr_rows.append({"worker_id": worker_id, "key": key, **_attribute_value_cols(av.value)})
+        attr_dict[key] = AttributeValue.from_proto(proto)
     now_ms = ts.epoch_ms()
     gpu_count = get_gpu_count(metadata.device)
     tpu_count = get_tpu_count(metadata.device)
@@ -116,10 +98,7 @@ def register(
         },
     )
     cur.register(lambda: health.register(worker_id, now_ms=now_ms))
-    cur.execute(delete(worker_attributes_table).where(worker_attributes_table.c.worker_id == worker_id))
-    if attr_rows:
-        cur.execute(insert(worker_attributes_table), attr_rows)
-    worker_attrs.set(cur, worker_id, attr_dict)
+    cur.caches[WorkerAttrsProjection].set(cur, worker_id, attr_dict)
     cur.register(
         lambda: log_event(
             "worker_registered",
@@ -135,8 +114,6 @@ def fail(
     worker_ids: list[str],
     reason: str,
     health: WorkerHealthTracker,
-    endpoints: EndpointsProjection,
-    worker_attrs: WorkerAttrsProjection,
 ) -> WorkerFailureBatchResult:
     """Fail active workers in chunked write transactions.
 
@@ -192,8 +169,6 @@ def fail(
                 cur,
                 live_chunk,
                 health=health,
-                endpoints=endpoints,
-                worker_attrs=worker_attrs,
                 now=now,
             )
             for worker_id, worker_address, _ in live_chunk:
@@ -208,8 +183,6 @@ def _apply_worker_failures_chunk(
     failures: list[tuple[WorkerId, str | None, str]],
     *,
     health: WorkerHealthTracker,
-    endpoints: EndpointsProjection,
-    worker_attrs: WorkerAttrsProjection,
     now: Timestamp,
 ) -> None:
     """Glue: load the worker slice for ``failures``, run the worker-failure
@@ -227,9 +200,9 @@ def _apply_worker_failures_chunk(
 
     # commit_effects before remove_worker: task mutations reference attempt rows
     # that would be CASCADE-deleted by remove_worker; order must be preserved.
-    commit_effects(cur, effects, endpoints=endpoints)
+    commit_effects(cur, effects)
     for worker_id, _, _ in failures:
-        writes.remove_worker(cur, worker_id, health=health, worker_attrs=worker_attrs)
+        writes.remove_worker(cur, worker_id, health=health)
 
 
 def apply_reconcile(
