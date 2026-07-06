@@ -1374,9 +1374,8 @@ def _request_rollback(remote_state_dir: str | None, rollback_image: str, rollbac
 def _record_rollout(remote_state_dir: str | None, record: RolloutRecord) -> None:
     """Best-effort write of a PENDING/COMMITTED rollout marker; never fails the command.
 
-    Losing the record only costs the later --rollback convenience.
-    ROLLBACK_REQUESTED writes go through _request_rollback, which is strict when a
-    checkpoint must be restored.
+    A failed write only costs the later --rollback convenience, so it warns and
+    continues rather than aborting the restart.
     """
     if not remote_state_dir:
         return
