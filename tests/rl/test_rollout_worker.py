@@ -4,7 +4,6 @@
 from pathlib import Path
 from types import SimpleNamespace
 
-import fsspec
 import pytest
 from marin.rl.environments.inference_ctx.staging import stage_vllm_metadata_locally
 from marin.rl.environments.inference_ctx.vllm import (
@@ -201,13 +200,11 @@ def test_stage_vllm_metadata_locally_copies_hf_metadata(tmp_path, monkeypatch):
     (remote_dir / "tokenizer.json").write_text("{}")
     (remote_dir / "tokenizer_config.json").write_text("{}")
 
-    monkeypatch.setattr(
-        "marin.rl.environments.inference_ctx.staging.url_to_fs",
-        lambda _path: (fsspec.filesystem("file"), str(remote_dir)),
-    )
     monkeypatch.setattr("marin.rl.environments.inference_ctx.staging._VLLM_METADATA_CACHE_ROOT", str(tmp_path / "cache"))
 
-    local_dir = Path(stage_vllm_metadata_locally("gs://marin-us-central1/models/llama"))
+    # StoragePath verbs work on any fsspec filesystem, including the local disk, so a real
+    # local source dir exercises the copy path with no filesystem mocking.
+    local_dir = Path(stage_vllm_metadata_locally(str(remote_dir)))
 
     assert (local_dir / "config.json").exists()
     assert (local_dir / "tokenizer.json").exists()
