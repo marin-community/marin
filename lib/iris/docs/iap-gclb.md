@@ -300,8 +300,8 @@ A **capability URL** carries a scoped endpoint token in its path —
 credential (gist-style: if you have the link, it works). No auth header or cookie
 is needed. The controller's `@public` token route lifts the token from the path
 and `_authorize_proxy` verifies it is scoped to that endpoint and unexpired before
-forwarding. Mint one CLI-side with `mint_endpoint_token`, or let `marin-serve
---access bearer` print the ready-to-use URL.
+forwarding. Mint one with `iris endpoints mint <name>` (or let `marin-serve
+--access link` print the ready-to-use URL at launch).
 
 The stage adds a second backend service (`iris-<cluster>-proxy-be`, IAP disabled)
 on the same NEG and health check the `backend` stage already created — no new NEG,

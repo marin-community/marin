@@ -14,7 +14,7 @@ import requests
 from iris.rpc import controller_pb2
 from iris.time_proto import timestamp_to_proto
 from marin.inference.quick_serve import resolve_model_path, select_tensor_parallel_size
-from marin.inference.quick_serve_cli import _mint_and_print_bearer_access
+from marin.inference.quick_serve_cli import _mint_and_print_capability_url
 from marin.inference.quick_serve_dashboard import (
     ServingInfo,
     bind_serving_socket,
@@ -67,17 +67,16 @@ def _mint_response(token: str, ttl_hours: float) -> controller_pb2.Controller.Mi
     return controller_pb2.Controller.MintEndpointTokenResponse(token=token, expires_at=timestamp_to_proto(expires))
 
 
-def test_mint_and_print_bearer_access_mints_and_prints_off_cluster_url(capsys):
-    """BEARER serve prints the public OpenAI base_url + the minted api_key."""
+def test_mint_and_print_capability_url_prints_off_cluster_url(capsys):
+    """LINK serve prints the OpenAI base_url with the scoped token in the URL path."""
     client = MagicMock()
     client._cluster_client.mint_endpoint_token.return_value = _mint_response("ep-token-xyz", 24.0)
 
-    _mint_and_print_bearer_access(client, "/serve/foo", "https://iris.oa.dev", 24.0)
+    _mint_and_print_capability_url(client, "/serve/foo", "https://iris.oa.dev", 24.0)
 
     out = capsys.readouterr().out
-    # The scoped token IS the OpenAI api_key, against the public /proxy/<encoded>/v1 URL.
-    assert "https://iris.oa.dev/proxy/serve.foo/v1" in out
-    assert "ep-token-xyz" in out
+    # The scoped token rides in the URL path (gist-style); possession is the credential.
+    assert "https://iris.oa.dev/proxy/t/ep-token-xyz/serve.foo/v1" in out
 
 
 def _free_port() -> int:
