@@ -78,6 +78,7 @@ from levanter.grug._moe.source_push_forward import (
     _shard_source_push_forward_inputs,
     _sharded_source_combine_kernel,
     _time_staged_source_push_forward,
+    device_source_push_forward_inputs_from_plan,
     make_source_push_forward_plan_inputs,
     make_source_push_forward_source_plan_raw_inputs,
     source_push_forward_with_h_from_plan,
@@ -950,10 +951,22 @@ def _make_source_push_pack_probe(
 
 
 def _pack_probe_total(config: PushInboxConfig, mesh: Mesh, host_inputs, x, route_weights, w13, w2):
+    del route_weights
+    compact_expert_capacity = _compact_h_expert_capacity_from_metadata(
+        config,
+        host_inputs.send_meta,
+        host_inputs.expert_base,
+        host_inputs.src_base_by_expert,
+        use_exact_expert_major=host_inputs.use_exact_expert_major,
+    )
     with jax.set_mesh(mesh):
-        packed = device_source_push_forward_inputs_from_plan(config, host_inputs, x, route_weights, w13, w2)
-        packed = _shard_source_push_forward_inputs(mesh, packed)
-    return _block_source_push_forward_device_inputs(packed)
+        packed_x = pack_source_push_tokens_jax(x, host_inputs.plan).astype(jnp.bfloat16)
+        h_route_weights = jnp.zeros(
+            (config.ep_size, config.experts_per_rank, compact_expert_capacity),
+            dtype=jnp.bfloat16,
+        )
+        packed = _pack_compact_h_static_inputs(mesh, host_inputs, packed_x, h_route_weights, w13, w2, config)
+    return packed
 
 
 def _pack_probe_token_pack(mesh: Mesh, host_inputs, x, *, use_pallas_token_pack: bool):
