@@ -17,7 +17,6 @@ from levanter.optim import AdamConfig
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
 from levanter.utils.mesh import MeshConfig
-from rigging.filesystem import StoragePath
 from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.execution.remote import remote
@@ -37,6 +36,7 @@ from marin.rl.rollout_storage import RolloutStorageConfig, StorageType
 from marin.rl.rollout_worker import RolloutTrackerConfig
 from marin.rl.weight_transfer import WeightTransferConfig, WeightTransferMode
 from marin.training.training import LevanterCheckpoint
+from rigging.filesystem import StoragePath
 
 logger = logging.getLogger(__name__)
 
