@@ -29,7 +29,7 @@ import logging
 import os
 import posixpath
 
-from rigging.filesystem import StoragePath, open_url, url_to_fs
+from rigging.filesystem import StoragePath, url_to_fs
 
 logger = logging.getLogger(__name__)
 
@@ -46,8 +46,7 @@ def _gs_url(p: str) -> str:
 
 
 def _read_json(path: str) -> dict:
-    with open_url(path, "r") as f:
-        return json.load(f)
+    return json.loads(StoragePath(path).read_text())
 
 
 def _backup_then_write_json(path: str, data: dict) -> None:
@@ -61,8 +60,7 @@ def _backup_then_write_json(path: str, data: dict) -> None:
         fs, src = url_to_fs(path)
         _, dst = url_to_fs(backup_path)
         fs.copy(src, dst)
-    with open_url(path, "w") as f:
-        json.dump(data, f)
+    StoragePath(path).write_text(json.dumps(data))
 
 
 def fix_decon(apply: bool) -> int:

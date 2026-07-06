@@ -50,7 +50,7 @@ from dataclasses import dataclass
 import fasttext
 import numpy as np
 import pyarrow.parquet as pq
-from rigging.filesystem import open_url, url_to_fs
+from rigging.filesystem import StoragePath, url_to_fs
 from rigging.log_setup import configure_logging
 
 logger = logging.getLogger(__name__)
@@ -233,11 +233,9 @@ def _write_report(path: str, rows: list[dict], overall: HoldoutMetrics, per_sour
         print(tsv_blob[:2000] + ("...[truncated]" if len(tsv_blob) > 2000 else ""))
         return
 
-    with open_url(path, "wb") as fh:
-        fh.write(tsv_blob.encode("utf-8"))
+    StoragePath(path).write_bytes(tsv_blob.encode("utf-8"))
     summary_path = os.path.splitext(path)[0] + ".summary.json" if not path.endswith(".json") else path
-    with open_url(summary_path, "wb") as fh:
-        fh.write(json_blob.encode("utf-8"))
+    StoragePath(summary_path).write_bytes(json_blob.encode("utf-8"))
     logger.info("wrote %d-row TSV -> %s", len(rows), path)
     logger.info("wrote summary -> %s", summary_path)
 

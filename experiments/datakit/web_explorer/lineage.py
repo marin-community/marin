@@ -35,7 +35,7 @@ from dataclasses import dataclass, field
 
 from ducky.client import DuckyClient
 from marin.execution.artifact import read_artifact, read_record
-from rigging.filesystem import marin_prefix, open_url
+from rigging.filesystem import StoragePath, marin_prefix
 
 from experiments.datakit.reference_pipeline import DEFAULT_SCALE, reference_datakit_steps, select_sources
 from experiments.datakit.store.datakit_store import ClusteredStoreData
@@ -80,14 +80,12 @@ class StoreLineage:
 
 def save_lineage(lineage: StoreLineage, path: str) -> None:
     """Cache a resolved lineage as JSON (resolution costs ~2 min of ducky globs)."""
-    with open_url(path, "w") as f:
-        json.dump(dataclasses.asdict(lineage), f, indent=2)
+    StoragePath(path).write_text(json.dumps(dataclasses.asdict(lineage), indent=2))
 
 
 def load_lineage(path: str) -> StoreLineage:
     """Load a cached lineage written by :func:`save_lineage`."""
-    with open_url(path, "r") as f:
-        return StoreLineage(**json.load(f))
+    return StoreLineage(**json.loads(StoragePath(path).read_text()))
 
 
 def _hash_suffix(path: str) -> str:
@@ -191,8 +189,7 @@ def read_store_payload(store_path: str) -> ClusteredStoreData:
     base = store_path.rstrip("/")
     for name in (".artifact.json", "artifact.json"):
         try:
-            with open_url(f"{base}/{name}", "r") as f:
-                return ClusteredStoreData.model_validate_json(f.read())
+            return ClusteredStoreData.model_validate_json(StoragePath(f"{base}/{name}").read_text())
         except FileNotFoundError:
             continue
     raise FileNotFoundError(f"no ClusteredStoreData payload at {store_path}")

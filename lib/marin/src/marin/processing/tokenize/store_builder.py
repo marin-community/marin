@@ -36,7 +36,7 @@ from levanter.store.cache import (
     write_levanter_cache,
 )
 from pydantic import BaseModel
-from rigging.filesystem import StoragePath, open_url, prefix_join, url_to_fs
+from rigging.filesystem import StoragePath, prefix_join, url_to_fs
 from zephyr import Dataset, ZephyrContext
 from zephyr.dataset import format_shard_path
 from zephyr.readers import load_file
@@ -207,8 +207,7 @@ def write_stats_json(output_path: str, ledger: CacheLedger) -> tuple[str, dict[s
     total_tokens = ledger.field_counts.get("input_ids", 0)
     stats = {"total_tokens": total_tokens, "total_elements": ledger.total_num_rows}
     stats_path = prefix_join(output_path, ".stats.json")
-    with open_url(stats_path, "w") as f:
-        json.dump(stats, f)
+    StoragePath(stats_path).write_text(json.dumps(stats))
     return stats_path, stats
 
 

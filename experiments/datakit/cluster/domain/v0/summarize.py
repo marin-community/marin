@@ -39,7 +39,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import fsspec
 import numpy as np
 import pyarrow.parquet as pq
-from rigging.filesystem import open_url
+from rigging.filesystem import StoragePath, open_url
 
 from experiments.datakit.cluster.domain.v0.assign import AssignmentAttrData
 
@@ -82,8 +82,7 @@ def _save_scan_checkpoint(output_path: str, state: dict) -> None:
     target = _checkpoint_uri(output_path)
     tmp = f"{target}.tmp"
     payload = pickle.dumps(state, protocol=pickle.HIGHEST_PROTOCOL)
-    with open_url(tmp, "wb") as f:
-        f.write(payload)
+    StoragePath(tmp).write_bytes(payload)
     fs, target_path = fsspec.url_to_fs(target)
     _, tmp_path = fsspec.url_to_fs(tmp)
     fs.mv(tmp_path, target_path)

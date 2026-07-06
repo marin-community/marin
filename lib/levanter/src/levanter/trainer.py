@@ -30,7 +30,7 @@ from typing import (
 
 import equinox as eqx
 import haliax as hax
-from rigging.filesystem import StoragePath, open_url
+from rigging.filesystem import StoragePath
 import haliax.tree_util
 import jax
 import jax.numpy as jnp
@@ -748,11 +748,9 @@ class Trainer:
         artifact_path = dir / name
 
         if isinstance(artifact, str):
-            with open_url(str(artifact_path), "w", compression="infer") as f:
-                f.write(artifact)
+            StoragePath(str(artifact_path)).write_text(artifact, compression="infer")
         else:
-            with open_url(str(artifact_path), "wb", compression="infer") as f:
-                f.write(artifact)
+            StoragePath(str(artifact_path)).write_bytes(artifact, compression="infer")
 
         self.tracker.log_artifact(artifact_path, name=name, type=type)
 

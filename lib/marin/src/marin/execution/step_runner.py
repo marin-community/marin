@@ -25,7 +25,7 @@ from fray.client import JobHandle, JobStatus
 from fray.current_client import _current_client_var, current_client, set_current_client
 from fray.local_backend import LocalJobHandle
 from fray.types import Entrypoint, JobRequest, ResourceConfig, create_environment
-from rigging.filesystem import StoragePath, open_url, url_to_fs
+from rigging.filesystem import StoragePath, url_to_fs
 from rigging.log_setup import configure_logging
 
 from marin.execution.artifact import (
@@ -88,8 +88,7 @@ def _write_executor_info(step: StepSpec) -> None:
         "output_path": step.output_path,
     }
     StoragePath(step.output_path).mkdirs()
-    with open_url(info_path, "w") as f:
-        f.write(json.dumps(info, indent=2, cls=CustomJsonEncoder))
+    StoragePath(info_path).write_text(json.dumps(info, indent=2, cls=CustomJsonEncoder))
 
 
 # ---------------------------------------------------------------------------

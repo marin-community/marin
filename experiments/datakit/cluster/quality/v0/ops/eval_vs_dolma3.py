@@ -44,7 +44,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 
 import pyarrow.parquet as pq
-from rigging.filesystem import open_url, url_to_fs
+from rigging.filesystem import StoragePath, url_to_fs
 from rigging.log_setup import configure_logging
 
 from experiments.datakit.cluster.quality.v0.ops.eval_holdout import (
@@ -162,11 +162,9 @@ def compare(
         print(tsv_blob[:2000] + ("...[truncated]" if len(tsv_blob) > 2000 else ""))
         return overall
 
-    with open_url(report_path, "wb") as fh:
-        fh.write(tsv_blob.encode("utf-8"))
+    StoragePath(report_path).write_bytes(tsv_blob.encode("utf-8"))
     summary_path = os.path.splitext(report_path)[0] + ".summary.json"
-    with open_url(summary_path, "wb") as fh:
-        fh.write(json_blob.encode("utf-8"))
+    StoragePath(summary_path).write_bytes(json_blob.encode("utf-8"))
     logger.info("wrote %d-row TSV -> %s", len(enriched), report_path)
     logger.info("wrote summary -> %s", summary_path)
     return overall

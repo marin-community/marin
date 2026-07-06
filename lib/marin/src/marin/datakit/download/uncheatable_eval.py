@@ -285,8 +285,7 @@ def _write_metadata(cfg: UncheatableEvalDownloadConfig, records: list[dict[str, 
     if not records:
         return
     metadata_path = posixpath.join(str(cfg.output_path), cfg.metadata_filename)
-    with open_url(metadata_path, "w", encoding="utf-8") as meta_file:
-        json.dump(records, meta_file, indent=2, ensure_ascii=False)
+    StoragePath(metadata_path).write_text(json.dumps(records, indent=2, ensure_ascii=False), encoding="utf-8")
     logger.info("Wrote metadata to %s", metadata_path)
 
 
@@ -321,8 +320,7 @@ def download_latest_uncheatable_eval(cfg: UncheatableEvalDownloadConfig) -> dict
     output_paths = ctx.execute(pipeline).results
 
     for dataset, metadata_file in zip(filtered_datasets, output_paths, strict=True):
-        with open_url(metadata_file, "r", encoding="utf-8") as meta_file:
-            result = json.load(meta_file)
+        result = json.loads(StoragePath(metadata_file).read_text(encoding="utf-8"))
 
         try:
             metadata_records.append(

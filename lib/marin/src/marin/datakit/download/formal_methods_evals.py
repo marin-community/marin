@@ -317,8 +317,7 @@ def _fetch_archive_bytes(url: str, timeout_seconds: int) -> bytes:
             response.raise_for_status()
             return response.content
     logger.info("reading archive via fsspec from %s", url)
-    with open_url(url, "rb") as fh:
-        return fh.read()
+    return StoragePath(url).read_bytes()
 
 
 def _write_source_metadata(

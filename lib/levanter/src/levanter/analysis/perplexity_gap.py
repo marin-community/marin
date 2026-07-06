@@ -884,11 +884,9 @@ def write_report_files(output_path: str, summary: dict[str, Any]) -> tuple[str, 
     worst_documents_path = prefix_join(output_path, "worst_documents.jsonl")
     StoragePath(output_path).mkdirs()
 
-    with open_url(summary_path, "w") as f:
-        json.dump(summary, f, indent=2, sort_keys=True)
+    StoragePath(summary_path).write_text(json.dumps(summary, indent=2, sort_keys=True))
 
-    with open_url(report_path, "w") as f:
-        f.write(render_report_markdown(summary))
+    StoragePath(report_path).write_text(render_report_markdown(summary))
 
     with open_url(worst_documents_path, "w") as f:
         for row in worst_document_rows(summary):

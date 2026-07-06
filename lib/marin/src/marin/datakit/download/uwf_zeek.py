@@ -201,8 +201,7 @@ def download_uwf_zeek_sample(
     }
     manifest_path = posixpath.join(output_path, "manifest.json")
     with atomic_rename(manifest_path) as temp_path:
-        with open_url(temp_path, "w", encoding="utf-8") as handle:
-            json.dump(manifest, handle, indent=2, sort_keys=True)
+        StoragePath(temp_path).write_text(json.dumps(manifest, indent=2, sort_keys=True), encoding="utf-8")
     return manifest
 
 

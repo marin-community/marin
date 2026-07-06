@@ -34,7 +34,7 @@ from marin.execution.artifact import read_artifact
 from marin.execution.step_runner import StepRunner
 from marin.execution.step_spec import StepSpec
 from pydantic import BaseModel
-from rigging.filesystem import open_url, url_to_fs
+from rigging.filesystem import StoragePath, open_url, url_to_fs
 from rigging.log_setup import configure_logging
 
 from experiments.datakit.cluster.domain.weborganizer.all_sources_topic import WeborgTopicOutput, build_classify_steps
@@ -117,8 +117,7 @@ def aggregate_label_counts(
     per_source_paths: dict[str, str] = {}
     for name, counts_obj in per_source.items():
         json_path = f"{per_source_dir}/{_safe_filename(name)}.json"
-        with open_url(json_path, "w") as f:
-            f.write(counts_obj.model_dump_json(indent=2))
+        StoragePath(json_path).write_text(counts_obj.model_dump_json(indent=2))
         per_source_paths[name] = json_path
 
     # Corpus rollup (sum across sources)

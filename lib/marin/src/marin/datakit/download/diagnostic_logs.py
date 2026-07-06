@@ -894,8 +894,7 @@ def _list_loghub_files(input_path: str, max_files: int) -> list[str]:
 
 def _iter_loghub_records(input_path: str, max_files: int) -> Iterable[dict[str, str]]:
     for log_path in _list_loghub_files(input_path, max_files):
-        with open_url(log_path, "rb") as handle:
-            record = loghub_file_to_record(log_path, handle.read())
+        record = loghub_file_to_record(log_path, StoragePath(log_path).read_bytes())
         if record is not None:
             yield record
 

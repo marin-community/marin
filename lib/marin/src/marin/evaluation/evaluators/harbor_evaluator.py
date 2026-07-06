@@ -607,8 +607,7 @@ class HarborEvaluator(Evaluator):
                     ext = ".json" if trajectory_content.strip().startswith("{") else ".jsonl"
                     trajectory_path = os.path.join(output_path, "trajectories", f"{trial_id}{ext}")
 
-                    with open_url(trajectory_path, "w") as dst:
-                        dst.write(trajectory_content)
+                    StoragePath(trajectory_path).write_text(trajectory_content)
 
                     results["trials"][trial_id]["trajectory_path"] = trajectory_path
                     logger.info(
@@ -644,8 +643,7 @@ class HarborEvaluator(Evaluator):
             "aggregate": results["aggregate"],
             "samples_path": samples_path,
         }
-        with open_url(results_path, "w") as f:
-            json.dump(aggregated_results, f, indent=2, ensure_ascii=False)
+        StoragePath(results_path).write_text(json.dumps(aggregated_results, indent=2, ensure_ascii=False))
 
         logger.info(f"Wrote samples to {samples_path}")
         logger.info(f"Wrote aggregated results to {results_path}")

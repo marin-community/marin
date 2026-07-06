@@ -36,7 +36,7 @@ from collections import defaultdict
 
 import pyarrow as pa
 import pyarrow.parquet as pq
-from rigging.filesystem import open_url, url_to_fs
+from rigging.filesystem import StoragePath, url_to_fs
 from rigging.log_setup import configure_logging
 
 logger = logging.getLogger(__name__)
@@ -75,8 +75,7 @@ def _build_file_idx_map() -> dict[int, dict]:
     parallel; the global ordering is reconstructed from the manifest's
     insertion order afterwards.
     """
-    with open_url(f"{DEDUP_ROOT}/.artifact.json", "rb") as fh:
-        art = json.loads(fh.read())
+    art = json.loads(StoragePath(f"{DEDUP_ROOT}/.artifact.json").read_bytes())
     sources: dict[str, dict] = art["sources"]
     norm_dirs = list(sources.keys())  # insertion order = dedup caller order
 

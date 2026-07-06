@@ -260,8 +260,9 @@ def _all_event_type_caps_reached(counts: dict[str, int], cap: int | None) -> boo
 
 def _write_metadata(path: str, payload: dict[str, Any]) -> None:
     with atomic_rename(path) as temp_path:
-        with open_url(temp_path, "w", encoding="utf-8") as handle:
-            json.dump(payload, handle, ensure_ascii=False, indent=2, sort_keys=True)
+        StoragePath(temp_path).write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8"
+        )
 
 
 def download_gh_archive_events(
@@ -300,8 +301,7 @@ def download_gh_archive_events(
         and StoragePath(metadata_path).exists()
     ):
         logger.info("Skipping GH Archive download; output already exists at %s", output_path)
-        with open_url(metadata_path, "r", encoding="utf-8") as handle:
-            metadata = json.load(handle)
+        metadata = json.loads(StoragePath(metadata_path).read_text(encoding="utf-8"))
         return {
             "success": True,
             "skipped": True,

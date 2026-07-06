@@ -69,7 +69,7 @@ from marin.execution.artifact import write_artifact
 from marin.processing.classification.deduplication.fuzzy_dups import FuzzyDupsAttrData
 from marin.processing.tokenize.attributes import TokenizedAttrData
 from pydantic import BaseModel
-from rigging.filesystem import StoragePath, open_url, url_to_fs
+from rigging.filesystem import StoragePath, url_to_fs
 from zephyr import Dataset, ZephyrContext, counters
 from zephyr.dataset import ShardInfo, format_shard_path
 from zephyr.writers import atomic_rename
@@ -290,8 +290,7 @@ def _write_shard_sidecar(path: str, records: list[_WrittenShard]) -> None:
     """
     payload = json.dumps([dataclasses.asdict(r) for r in records])
     tmp_path = f"{path}.tmp"
-    with open_url(tmp_path, "w") as fh:
-        fh.write(payload)
+    StoragePath(tmp_path).write_text(payload)
     fs, _ = url_to_fs(path)
     fs.mv(tmp_path, path)
 
@@ -306,8 +305,7 @@ def _load_shard_sidecar(path: str) -> list[_WrittenShard] | None:
     """
     if not StoragePath(path).exists():
         return None
-    with open_url(path, "r") as fh:
-        data = json.loads(fh.read())
+    data = json.loads(StoragePath(path).read_text())
     return [_WrittenShard(**d) for d in data]
 
 

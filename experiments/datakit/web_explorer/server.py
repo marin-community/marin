@@ -142,13 +142,10 @@ def _dedup_attr_map(lineage: StoreLineage) -> dict[str, str]:
         return {}
     import json  # noqa: PLC0415 — startup-only
 
-    from rigging.filesystem import open_url  # noqa: PLC0415
-
     doc = None
     for name in (".artifact.json", "artifact.json"):
         try:
-            with open_url(f"{lineage.dedup}/{name}", "r") as f:
-                doc = json.load(f)
+            doc = json.loads(StoragePath(f"{lineage.dedup}/{name}").read_text())
             break
         except FileNotFoundError:
             continue
@@ -386,10 +383,7 @@ def main() -> None:
     if config.source_summary:
         import json  # noqa: PLC0415 — only needed on this optional path
 
-        from rigging.filesystem import open_url  # noqa: PLC0415
-
-        with open_url(config.source_summary, "r") as f:
-            source_summary = json.load(f)
+        source_summary = json.loads(StoragePath(config.source_summary).read_text())
         logger.info("loaded source summary (%d rows) from %s", len(source_summary), config.source_summary)
     app = build_app(lineage, payload, ducky, source_summary)
     logger.info(

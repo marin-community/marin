@@ -34,7 +34,7 @@ from collections.abc import Iterator
 import pyarrow as pa
 import pyarrow.parquet as pq
 from fray import ResourceConfig
-from rigging.filesystem import open_url, url_to_fs
+from rigging.filesystem import StoragePath, url_to_fs
 from rigging.log_setup import configure_logging
 from zephyr import Dataset, ZephyrContext, counters
 
@@ -80,8 +80,7 @@ def _build_file_idx_map() -> dict[int, dict]:
     in caller order: ``file_idx`` is the global position. Basenames match
     between minhash, dedup attr, and normalized (all co-partitioned).
     """
-    with open_url(f"{DEDUP_ROOT}/.executor_info", "rb") as fh:
-        info = json.loads(fh.read())
+    info = json.loads(StoragePath(f"{DEDUP_ROOT}/.executor_info").read_bytes())
     minhash_deps = [d for d in info["dependencies"] if "/datakit/minhash/" in d]
     logger.info("dedup was invoked with %d minhash inputs (caller order)", len(minhash_deps))
 
