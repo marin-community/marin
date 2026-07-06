@@ -2401,3 +2401,42 @@ loss/gradient is compiled rather than only when run eagerly.
     boundary.
   - This does not replace H100 fwd/bwd measurement through `pallas_mgpu_source_push`; that remains assigned to the
     measurement workstream.
+
+## 2026-07-05 22:05 - Blackwell target-shape forward tuning
+
+Measured the stacked Blackwell source-push forward path at the target local EP=8 shape with 65K tokens/rank,
+D3072/I3072, topk=4, experts_per_rank=32, and the 576-entry copy profile.
+
+- Code state:
+  - Branch: `codex/blackwell-source-push-stack`
+  - Stack base: source-push inbox production PR branch
+  - Stack commit under test: `50d093ef3`
+- B300 full-forward baseline:
+  - Artifact: `blackwell_forward_baseline_b_64920.jsonl`
+  - Median: 666.98 useful / 687.30 rounded TFLOP/s/rank
+  - Median time: 22.25 ms
+  - Dropped routes: 0
+- B300 queue-parameter sweep:
+  - Artifact: `blackwell_forward_tune_b_64921.jsonl`
+  - Best median: 668.53 useful / 688.89 rounded TFLOP/s/rank
+  - Best median time: 22.20 ms
+  - Best config delta: `inbox_slots=48`; `entries_per_rank=576`, `send_worker_programs_per_peer=4`,
+    `worker_programs_per_peer=32`, `n_groups_per_job=2`, `block_m=64`, `block_k=128`, `block_n=128`
+  - Interpretation: the gain is under 0.3% versus the reproduced baseline, so it is not enough evidence to change the
+    checked-in profile default. Larger `entries_per_rank` values regressed due extra padded hidden capacity.
+- B200 full-forward baseline:
+  - Artifact: `blackwell_forward_b200_known_env_64929.jsonl`
+  - Median: 637.97 useful / 657.40 rounded TFLOP/s/rank
+  - Median time: 23.27 ms
+  - Dropped routes: 0
+  - Interpretation: the known-good environment runs on B200. The earlier fresh-environment B200 attempt failed with a
+    CUDA illegal-address error before producing timing rows, so that failure is an environment/toolchain datapoint rather
+    than a source-push performance result.
+- Stage timing:
+  - Patched `bench_blackwell_source_push_forward_smoke.py` to use an explicit mesh, matching the working fwd/bwd harness.
+  - After the mesh fix, standalone B300 stage timing hit a PTX/toolchain compile failure for `sm_103a` before writing
+    timing rows. No stage timing result is recorded from that harness.
+
+Current conclusion: full forward is still around 657-689 rounded TFLOP/s/rank depending on B200/B300, below the
+800 TFLOP/s/rank goal. More blind queue tuning is unlikely to close the gap; the next useful step is a decomposed
+Blackwell timing path that runs under the same explicit-mesh fwd/bwd benchmark harness.

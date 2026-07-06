@@ -14,7 +14,7 @@ from typing import Any, Sequence
 import jax
 import jax.numpy as jnp
 import numpy as np
-from jax.sharding import Mesh
+from jax.sharding import AxisType, Mesh
 
 from levanter.grug._moe.source_push_forward import (
     FORWARD_EXECUTION_MODES,
@@ -366,7 +366,7 @@ def run_smoke(args: argparse.Namespace) -> dict[str, Any]:
         input_mode="source_push_plan",
     )
     devices = np.asarray(jax.devices("gpu")[: config.ep_size])
-    mesh = Mesh(devices, (AXIS,))
+    mesh = Mesh(devices, (AXIS,), axis_types=(AxisType.Explicit,))
 
     x = jnp.asarray(raw_inputs.x, dtype=jnp.bfloat16)
     route_weights = jnp.asarray(raw_inputs.combine_weights, dtype=jnp.float32)
