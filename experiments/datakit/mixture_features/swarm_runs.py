@@ -9,7 +9,7 @@
 
 Two sources, one row per (mixture run, scale):
 
-- 60M / 1.2B: the vendored canonical run table `data/two_phase_many.csv` (see `data/README.md`
+- 60M / 1.2B: the vendored canonical run table `data/two_phase_many.csv.gz` (see `data/README.md`
   for provenance). This CSV is the label source of truth for the 60M scale.
 - 300M / 6B: the public W&B project `marin-community/marin`, queried via raw GraphQL (no API
   key). The replay reuses the 60M run names and mixtures; weights read back from run configs are
@@ -23,6 +23,7 @@ bf26b666a) and live W&B run configs; see the inline notes on each.
 
 import argparse
 import csv
+import gzip
 import json
 import logging
 import math
@@ -37,7 +38,7 @@ import pandas as pd
 logger = logging.getLogger(__name__)
 
 DATA_DIR = Path(__file__).resolve().parent / "data"
-RUN_TABLE_CSV = DATA_DIR / "two_phase_many.csv"
+RUN_TABLE_CSV = DATA_DIR / "two_phase_many.csv.gz"
 DOMAIN_TOKEN_COUNTS_JSON = DATA_DIR / "domain_token_counts.json"
 DEFAULT_OUTPUT_DIR = Path(__file__).resolve().parents[3] / "scratch" / "mixture_features"
 
@@ -111,7 +112,7 @@ class SwarmRun:
 
 def swarm_domains() -> list[str]:
     """The 39 swarm domain names, sorted, from the vendored run table header."""
-    with open(RUN_TABLE_CSV) as f:
+    with gzip.open(RUN_TABLE_CSV, "rt") as f:
         header = next(csv.reader(f))
     domains = sorted(c[len("phase_0_") :] for c in header if c.startswith("phase_0_"))
     if len(domains) != 39:

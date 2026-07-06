@@ -1,0 +1,82 @@
+{
+  "experiment": "mixing-via-embeddings H3 live validation",
+  "created_before_launch": true,
+  "scale": "300m_6b (v5p-8, us-east5)",
+  "expected_final_step": 22888,
+  "new_bucket": "dolma_starcoder",
+  "new_bucket_novelty_K1000_hellinger_cone_residual": 0.4808,
+  "c4_novelty_for_reference": 0.305,
+  "primary_metric": "eval/uncheatable_eval/bpb at final step (22888)",
+  "launched_runs": [
+    "rav_mve_h3_proposal",
+    "rav_mve_h3_olmix",
+    "rav_mve_h3_tokprop"
+  ],
+  "anchor": {
+    "source": "historical 300M run run_00125 (best realized uncheatable bpb of the 238)",
+    "realized_bpb": 0.9554399251937866,
+    "launched": false,
+    "note": "anchor run is NOT relaunched; historical realized value used (saves one run)"
+  },
+  "success_rule": "PROPOSAL realized bpb < OLMIX_REUSE realized bpb AND PROPOSAL realized bpb < TOKEN_PROPORTIONAL realized bpb",
+  "regret_readout": "regret = PROPOSAL realized bpb - ANCHOR realized bpb (0.9554); report sign and magnitude",
+  "surrogate_predicted_bpb": {
+    "PROPOSAL": {
+      "kme": 0.8909959321760131,
+      "kernel_hellinger": 0.9296950776212037,
+      "ensemble_mean": 0.9103455048986084,
+      "predicted_regret_vs_anchor": -0.048821488775720345
+    },
+    "OLMIX_REUSE": {
+      "kme": 0.9549648823926986,
+      "kernel_hellinger": 0.9513910267818165,
+      "ensemble_mean": 0.9531779545872576,
+      "predicted_regret_vs_anchor": -0.005989039087071157
+    },
+    "TOKEN_PROPORTIONAL": {
+      "kme": 0.963997814126222,
+      "kernel_hellinger": 0.977254882871518,
+      "ensemble_mean": 0.97062634849887,
+      "predicted_regret_vs_anchor": 0.01145935482454119
+    },
+    "ANCHOR": {
+      "kme": 0.9626292858760759,
+      "kernel_hellinger": 0.9557047014725816,
+      "ensemble_mean": 0.9591669936743288,
+      "predicted_regret_vs_anchor": 0.0
+    }
+  },
+  "surrogate": {
+    "predictors": [
+      "KME_RIDGE",
+      "KERNEL_HELLINGER"
+    ],
+    "ensemble": "rank-average of the two predicted bpb",
+    "trained_on": "all 238 300M runs (H2b 300M rule-passers)",
+    "feature_code": "verbatim copies of retrodiction.py _arm_features/ridge_cv_predict/_sq_hellinger",
+    "kernel_hellinger_hparams": {
+      "gamma": 3.894321302815331,
+      "alpha": 0.01,
+      "median_d2": 0.06419603842632782
+    }
+  },
+  "candidate_search": {
+    "n_candidates": 100000,
+    "dirichlet_frac": 0.7,
+    "dirichlet_temps": [
+      0.2,
+      0.5,
+      1.0
+    ],
+    "dirichlet_alpha": "token_prior * temp * 40",
+    "perturbation_frac": 0.3,
+    "perturbation_base": "top-10 historical 300M mixtures, new bucket injected at share U[0.01,0.20]",
+    "new_bucket_cap_per_phase": 0.2,
+    "proposal": "average of top-64 candidates by ensemble rank"
+  },
+  "calibration_caveat": "surrogate-optimum PROPOSAL predicted bpb (kme 0.891) is BELOW every realized bpb in the 238 (min 0.9554) -- classic optimizer optimism; the live run tests whether this holds. Report predicted-vs-realized for all runs.",
+  "caps_and_deviations": {
+    "new_bucket_share_cap": "0.20/phase (starcoder has 216B tokens, no epoching concern at these shares)",
+    "anchor_not_relaunched": true
+  }
+}

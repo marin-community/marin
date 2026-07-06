@@ -207,3 +207,34 @@ one-scale; H3 is the live check.
   env key). Failed first parent 082403 is terminal, holds nothing.
 - Babysit: wait_for.py armed with an authed poll (all 3 runs non-running → readout).
   Readout = scratch/mixture_features/h3/readout.py (pre-registered verdict + calibration).
+
+## 2026-07-06 H3 FINAL — SUCCESS on all pre-registered criteria
+
+Final uncheatable bpb at step 22887 (all three runs, same eval):
+- **PROPOSAL 0.9410** (predicted 0.9103, err −0.031)
+- OLMIX_REUSE 0.9495 (predicted 0.9532, err +0.004)
+- TOKEN_PROPORTIONAL 0.9759 (predicted 0.9706, err −0.005)
+- ANCHOR (historical best run_00125) 0.9554
+
+Verdict: PROPOSAL < OLMIX ✓ and < TOKPROP ✓ → **pre-registered SUCCESS**; beats the anchor by
+**−0.0145 bpb**. Olmix-reuse also beat the anchor (−0.006): the starcoder bucket has real value
+and the surrogate's allocation (~5%/phase + code-adjacent upweighting) captured ~2.4× more of it
+than the reuse heuristic.
+
+**Incident + correction (recorded for honesty)**: proposal crashed at step 22886 (pre-final-eval);
+its stale summary (step-22000 eval, 0.9689) was briefly compared against the baselines' FINALS,
+yielding a wrong interim "FAIL" read. Resume from checkpoint completed the final eval; verified
+via full eval histories (both runs share the same phase-1 descent curve; 22000→22887 drops ~0.03
+for ALL runs). Lesson: never compare a crashed run's summary against finished runs' summaries —
+always align eval steps.
+
+**Calibration**: near-data mixtures predicted within ±0.005; the optimized point optimistic by
+−0.031 (winner's curse present, but the margin survived it). Trust-region/LCB proposal remains
+the right next refinement; these 3 runs (incl. one far-OOD point) are new calibration data.
+
+**Campaign conclusion**: H1 ✓, H2a PASS (60M), H2b PASS (300M), H3 PASS (300M live) — the
+embedding-featurized mixture surrogate transferred to a genuinely new bucket with zero re-sweeping
+(one embed job + CPU refit + 3 validation runs) and beat both reuse heuristics and the historical
+optimum. Known limits: quality-blindness (within-topic), dispersion confound (keep matched
+controls), one-scale rule evidence at each of 60M/2b stages, optimizer optimism ~0.03 at the
+argmax.

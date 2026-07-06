@@ -4,7 +4,7 @@ Provenance for the files in this directory. Both are extracted from the swarm br
 tagged `swarm-branch` (commit `bf26b666a97690b9dfcdd702aea5a513b40fad8f`, branch
 `calvin/swarm-olmo3-regmix-test`).
 
-- `two_phase_many.csv` — byte-identical copy of
+- `two_phase_many.csv.gz` — gzipped byte-identical copy of
   `experiments/domain_phase_mix/exploratory/two_phase_many/two_phase_many.csv` at that commit
   (`git show swarm-branch:experiments/domain_phase_mix/exploratory/two_phase_many/two_phase_many.csv`).
   Canonical run table for the qsplit240 60M/1.2B swarm: 241 completed rows (238
