@@ -148,16 +148,14 @@ class GcpAccessTokenProvider:
 class IapServiceAccountTokenProvider:
     """Mints OIDC ID tokens for IAP from ambient *service-account* credentials.
 
-    Covers every non-interactive path: a service-account key file (via
-    ``GOOGLE_APPLICATION_CREDENTIALS``), GCE/Cloud Run metadata, and an
-    impersonated ADC written by ``gcloud auth application-default login
-    --impersonate-service-account``. ``fetch_id_token`` handles the first two;
-    it ignores the well-known ADC file, so an impersonated ADC is minted through
-    the standard resolver instead. Bare end-user ``gcloud`` credentials cannot
-    produce an IAP token and raise :class:`IapCredentialsUnavailable`. The
-    audience is the OAuth client id of the IAP-protected resource. The token is
-    cached until five minutes before its ``exp`` claim; credential access happens
-    only inside ``get_token``.
+    Works with any non-interactive service-account credential: a key file (via
+    ``GOOGLE_APPLICATION_CREDENTIALS``), GCE/Cloud Run metadata, or an impersonated
+    ADC written by ``gcloud auth application-default login
+    --impersonate-service-account``. Bare end-user ``gcloud`` credentials cannot
+    produce an IAP token and raise :class:`IapCredentialsUnavailable`. The audience
+    is the OAuth client id of the IAP-protected resource. The token is cached until
+    five minutes before its ``exp`` claim; credential access happens only inside
+    ``get_token``.
     """
 
     def __init__(self, audience: str):

@@ -14,13 +14,11 @@ nothing for ordinary user / CLI traffic. A client may set ``$MARIN_CLUSTER_TOKEN
 to inject an explicit bearer (e.g. a worker JWT) for CI / headless runs.
 
 IAP edge-token resolution (the ``Proxy-Authorization`` bearer, IAP clusters only)
-is the sole per-request auth. Precedence (see :func:`_edge_provider`): explicit
-service-account impersonation, when a caller sets one, mints the edge token as
-that SA from the caller's own credentials (the browserless dev-box / CI path);
-otherwise the cached desktop-OAuth refresh token (the human path); otherwise an
-ambient service-account ID token (the in-cluster path). The machine paths mint
-for a dedicated programmatic audience if one is configured, else for the desktop
-client id, which is the app's public identity
+is the sole per-request auth. Precedence (see :func:`_edge_provider`): the cached
+desktop-OAuth refresh token (the human path), otherwise an ambient service-account
+ID token — a key, GCE metadata, or an impersonated ADC (the in-cluster / CI path).
+The machine path mints for a dedicated programmatic audience if one is configured,
+else for the desktop client id, which is the app's public identity
 (:data:`~rigging.auth.MARIN_DESKTOP_OAUTH_CLIENT`), overridable per cluster.
 """
 
