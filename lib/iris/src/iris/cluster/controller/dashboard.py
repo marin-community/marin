@@ -107,8 +107,7 @@ def _authorize_proxy(
     unknown name, which is treated as ``PRIVATE`` — the forwarding layer then
     404s). This is the *only* place an endpoint-scoped token is accepted.
 
-    - ``PUBLIC``: allowed with no auth.
-    - ``BEARER``: a scoped token must match this endpoint's wire name; a full
+    - ``LINK``: a scoped token must match this endpoint's wire name; a full
       cluster identity also passes.
     - ``PRIVATE`` (and unknown): a full cluster identity is required; a scoped
       token is rejected.
@@ -118,15 +117,13 @@ def _authorize_proxy(
     cookie is used.
     """
     access = resolved.access if resolved is not None else EndpointAccess.ENDPOINT_ACCESS_PRIVATE
-    if access == EndpointAccess.ENDPOINT_ACCESS_PUBLIC:
-        return None
     try:
         identity = _resolve_request_identity(policy, request, token)
     except ValueError:
         return JSONResponse({"error": "authentication required"}, status_code=401)
 
     scoped = identity.audience is not None
-    if access == EndpointAccess.ENDPOINT_ACCESS_BEARER:
+    if access == EndpointAccess.ENDPOINT_ACCESS_LINK:
         if scoped and identity.audience != resolved.name:
             return JSONResponse({"error": "token not valid for this endpoint"}, status_code=403)
         return None

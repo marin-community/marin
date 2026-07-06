@@ -58,11 +58,9 @@ class Controller(_message.Message):
     class EndpointAccess(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
         __slots__ = ()
         ENDPOINT_ACCESS_PRIVATE: _ClassVar[Controller.EndpointAccess]
-        ENDPOINT_ACCESS_PUBLIC: _ClassVar[Controller.EndpointAccess]
-        ENDPOINT_ACCESS_BEARER: _ClassVar[Controller.EndpointAccess]
+        ENDPOINT_ACCESS_LINK: _ClassVar[Controller.EndpointAccess]
     ENDPOINT_ACCESS_PRIVATE: Controller.EndpointAccess
-    ENDPOINT_ACCESS_PUBLIC: Controller.EndpointAccess
-    ENDPOINT_ACCESS_BEARER: Controller.EndpointAccess
+    ENDPOINT_ACCESS_LINK: Controller.EndpointAccess
     class LaunchJobRequest(_message.Message):
         __slots__ = ("name", "entrypoint", "resources", "environment", "bundle_id", "bundle_blob", "scheduling_timeout", "ports", "max_task_failures", "max_retries_failure", "max_retries_preemption", "constraints", "coscheduling", "replicas", "timeout", "fail_if_exists", "preemption_policy", "existing_job_policy", "priority_band", "task_image", "submit_argv", "client_revision_date", "container_profile", "federation")
         NAME_FIELD_NUMBER: _ClassVar[int]

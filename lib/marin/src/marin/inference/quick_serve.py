@@ -65,8 +65,8 @@ class QuickServeConfig:
     endpoint_name: str
     """Iris endpoint name registered for the dashboard (a leading ``/`` is verbatim)."""
     access: int = EndpointAccess.ENDPOINT_ACCESS_PRIVATE
-    """Proxy access mode. PRIVATE (cluster identity only), PUBLIC (open), or BEARER
-    (a scoped endpoint token, minted CLI-side for off-cluster callers)."""
+    """Proxy access mode. PRIVATE (cluster identity only) or LINK (a scoped capability
+    URL, minted CLI-side, that anyone holding the link can call off-cluster)."""
     port_name: str = "http"
     dtype: str = "bfloat16"
     max_model_len: int | None = None

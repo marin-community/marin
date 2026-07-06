@@ -3,8 +3,8 @@
 
 """Add ``access`` to ``endpoints``.
 
-Per-endpoint proxy access mode (EndpointAccess int: PRIVATE=0, PUBLIC=1,
-BEARER=2). Existing rows are left NULL; the projection reads NULL as PRIVATE, so
+Per-endpoint proxy access mode (EndpointAccess int: PRIVATE=0, LINK=2). Existing
+rows are left NULL; the projection reads NULL as PRIVATE, so
 loading the new schema keeps every pre-migration endpoint on today's
 cluster-identity-required semantics. Idempotent: safe to re-run after a
 mid-migration crash.

@@ -235,15 +235,11 @@ def test_register_defaults_to_private_and_persists_access(state):
 
     svc.register_endpoint(_register_with_access("/j/private", task, attempt, 0), None)  # UNSPECIFIED
     svc.register_endpoint(
-        _register_with_access("/j/public", task, attempt, controller_pb2.Controller.ENDPOINT_ACCESS_PUBLIC), None
-    )
-    svc.register_endpoint(
-        _register_with_access("/j/bearer", task, attempt, controller_pb2.Controller.ENDPOINT_ACCESS_BEARER), None
+        _register_with_access("/j/link", task, attempt, controller_pb2.Controller.ENDPOINT_ACCESS_LINK), None
     )
 
     assert svc.resolve_proxy_target("j.private").access == EndpointAccess.ENDPOINT_ACCESS_PRIVATE
-    assert svc.resolve_proxy_target("j.public").access == EndpointAccess.ENDPOINT_ACCESS_PUBLIC
-    assert svc.resolve_proxy_target("j.bearer").access == EndpointAccess.ENDPOINT_ACCESS_BEARER
+    assert svc.resolve_proxy_target("j.link").access == EndpointAccess.ENDPOINT_ACCESS_LINK
 
 
 def test_resolve_proxy_target_decodes_slash_names(state):
@@ -261,7 +257,7 @@ def test_resolve_proxy_target_decodes_slash_names(state):
             address="up:8000",
             task_id=task.to_wire(),
             attempt_id=attempt,
-            access=controller_pb2.Controller.ENDPOINT_ACCESS_BEARER,
+            access=controller_pb2.Controller.ENDPOINT_ACCESS_LINK,
         ),
         None,
     )
@@ -271,7 +267,7 @@ def test_resolve_proxy_target_decodes_slash_names(state):
     assert (resolved.name, resolved.address, resolved.access) == (
         "/serve/foo",
         "up:8000",
-        EndpointAccess.ENDPOINT_ACCESS_BEARER,
+        EndpointAccess.ENDPOINT_ACCESS_LINK,
     )
     assert svc.resolve_proxy_target("nope.missing") is None
 
@@ -331,7 +327,7 @@ def test_mint_endpoint_token_by_owner(state, mock_controller, log_client, tmp_pa
     task, attempt = _live_task(state)  # owner segment is the job's user
     service, endpoint_service, auth = _mint_service(state, mock_controller, log_client, tmp_path)
     endpoint_service.register_endpoint(
-        _register_with_access("/serve/foo", task, attempt, controller_pb2.Controller.ENDPOINT_ACCESS_BEARER), None
+        _register_with_access("/serve/foo", task, attempt, controller_pb2.Controller.ENDPOINT_ACCESS_LINK), None
     )
 
     with identity_scope(VerifiedIdentity(user_id=task.user, role="user")):
@@ -346,7 +342,7 @@ def test_mint_endpoint_token_denies_non_owner(state, mock_controller, log_client
     task, attempt = _live_task(state)
     service, endpoint_service, _ = _mint_service(state, mock_controller, log_client, tmp_path)
     endpoint_service.register_endpoint(
-        _register_with_access("/serve/foo", task, attempt, controller_pb2.Controller.ENDPOINT_ACCESS_BEARER), None
+        _register_with_access("/serve/foo", task, attempt, controller_pb2.Controller.ENDPOINT_ACCESS_LINK), None
     )
 
     with identity_scope(VerifiedIdentity(user_id="intruder", role="user")), pytest.raises(ConnectError) as exc:
@@ -366,7 +362,7 @@ def test_mint_endpoint_token_clamps_ttl(state, mock_controller, log_client, tmp_
     task, attempt = _live_task(state)
     service, endpoint_service, _ = _mint_service(state, mock_controller, log_client, tmp_path)
     endpoint_service.register_endpoint(
-        _register_with_access("/serve/foo", task, attempt, controller_pb2.Controller.ENDPOINT_ACCESS_BEARER), None
+        _register_with_access("/serve/foo", task, attempt, controller_pb2.Controller.ENDPOINT_ACCESS_LINK), None
     )
 
     with identity_scope(VerifiedIdentity(user_id=task.user, role="user")):

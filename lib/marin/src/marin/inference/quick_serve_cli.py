@@ -132,10 +132,10 @@ def _mint_and_print_capability_url(
 @click.option("--timeout-hours", type=float, default=24.0, help="Wall-clock lifetime before the server self-stops.")
 @click.option(
     "--access",
-    type=click.Choice(["private", "public", "bearer"]),
+    type=click.Choice(["private", "link"]),
     default="private",
-    help="Proxy access. private: cluster identity only. public: open. bearer: mints a "
-    "scoped off-cluster token (printed once vLLM is ready).",
+    help="Proxy access. private: cluster identity only. link: mints a scoped capability "
+    "URL anyone with the link can call off-cluster (printed once vLLM is ready).",
 )
 @click.option("--region", default=None, help="Comma-separated region(s) to pin the slice to.")
 @click.option("--cpu", type=float, default=8.0)
@@ -258,7 +258,7 @@ def main(
 
             if not wait:
                 click.echo("Submitted. Open the dashboard from the Iris UI once vLLM has booted.")
-                if endpoint_access == EndpointAccess.ENDPOINT_ACCESS_BEARER:
+                if endpoint_access == EndpointAccess.ENDPOINT_ACCESS_LINK:
                     click.echo("Re-run with --wait once vLLM registers to mint the off-cluster capability URL.")
                 return
 
@@ -270,7 +270,7 @@ def main(
             if dashboard_url:
                 click.echo(f"        share:     {dashboard_url.rstrip('/')}{proxy_path(endpoint)}/")
             click.echo("")
-            if endpoint_access == EndpointAccess.ENDPOINT_ACCESS_BEARER:
+            if endpoint_access == EndpointAccess.ENDPOINT_ACCESS_LINK:
                 # Mint after the endpoint registers (the controller resolves the row
                 # for owner authz), so the token is bound to a live endpoint.
                 _mint_and_print_capability_url(client, endpoint, dashboard_url, timeout_hours)

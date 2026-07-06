@@ -375,8 +375,12 @@ message Controller {
   // PRIVATE is the zero value, so an unset field means PRIVATE.
   enum EndpointAccess {
     ENDPOINT_ACCESS_PRIVATE = 0;  // a full cluster identity is required (the default)
-    ENDPOINT_ACCESS_PUBLIC = 1;   // no auth on /proxy/<name>/*
-    ENDPOINT_ACCESS_BEARER = 2;   // a scoped endpoint token (or a full cluster identity)
+    // Reachable with a scoped capability token carried in the URL path
+    // (/proxy/t/<token>/<name>/...) or a full cluster identity — possession of
+    // the link is the credential.
+    ENDPOINT_ACCESS_LINK = 2;
+    reserved 1;  // was ENDPOINT_ACCESS_PUBLIC (no-auth mode); every shared endpoint now needs a token
+    reserved ENDPOINT_ACCESS_PUBLIC, ENDPOINT_ACCESS_BEARER;
   }
 
   message Endpoint {

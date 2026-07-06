@@ -150,9 +150,10 @@ running an agent harness) reach a registered endpoint through the controller
 proxy, `start_controller` publishes only the `/proxy` path with an Ingress — it
 is part of controller setup, not a manual step. Unlike the GCP arm there is no
 IAP layer, so the controller's own per-endpoint auth is the sole gate: register
-the endpoint `PRIVATE` (a cluster identity / JWT), `PUBLIC` (open), or `BEARER`
-(a scoped endpoint token) — the same access modes as the GCP path. Keep
-`auth.provider` set (never null-auth) so `PRIVATE`/`BEARER` are actually enforced.
+the endpoint `PRIVATE` (a cluster identity / JWT) or `LINK` (a scoped capability
+URL — possession of the link is the credential) — the same access modes as the
+GCP path. Keep `auth.provider` set (never null-auth) so `PRIVATE`/`LINK` are
+actually enforced.
 
 CKS ships no ingress controller and no TLS issuer, so two cluster-wide,
 install-once prerequisites must be in place first — install them with
@@ -197,7 +198,7 @@ is at Namecheap, Advanced DNS panel.
 
 Three values must agree: this CNAME, `public_proxy_host` (the Ingress `host` /
 Host header clients send), and the cluster's `dashboard_url` (so `marin-serve`'s
-printed off-cluster URLs + the `BEARER` token are usable as-is). The
+printed off-cluster capability URLs are usable as-is). The
 `coreweave.app` name is only a stable CNAME target — all routing, Host matching,
 and TLS are on the `oa.dev` name.
 
