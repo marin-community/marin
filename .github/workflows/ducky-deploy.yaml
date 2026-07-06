@@ -35,7 +35,7 @@ on:
       result_ttl_days:
         description: "DUCKY_RESULT_TTL_DAYS (default: 7)"
       allowed_buckets:
-        description: "DUCKY_ALLOWED_BUCKETS, comma-separated read allowlist prefixes (default: gs://marin-us-east,s3://marin-na,s3://marin-us-east-02a)"
+        description: "DUCKY_ALLOWED_BUCKETS, comma-separated readable prefixes (default: gs://marin-,s3://marin-). Cross-region GCS reads among these need a '-- cross-region: allow' comment; S3 is always allowed."
       r2_endpoint:
         description: "DUCKY_R2_ENDPOINT, host only (default: 74981a43be0de7712369306c7b19133d.r2.cloudflarestorage.com)"
       cw_endpoint:
@@ -66,7 +66,12 @@ jobs:
       DEF_MEMORY: "690GB"
       DEF_SCRATCH_BUCKET: "gs://marin-us-east5/tmp/ttl=7d"
       DEF_RESULT_TTL_DAYS: "7"
-      DEF_ALLOWED_BUCKETS: "gs://marin-us-east,s3://marin-na,s3://marin-us-east-02a"
+      # Outer read bound: any marin bucket on either backend (gs://marin-* and the s3://marin-*
+      # R2/CoreWeave stores). This is region-agnostic — whether an allowed *GCS* read is
+      # cross-region is decided at query time from live bucket-location metadata
+      # (rigging.filesystem.is_cross_region_url) and gated by a `-- cross-region: allow` comment;
+      # S3 reads are never cross-region-gated. So this default needs no per-region tuning.
+      DEF_ALLOWED_BUCKETS: "gs://marin-,s3://marin-"
       DEF_R2_ENDPOINT: "74981a43be0de7712369306c7b19133d.r2.cloudflarestorage.com"
       DEF_CW_ENDPOINT: "cwobject.com"
       DEF_CW_ACCESS_KEY: "CWXSLOAORRUJOJKH"

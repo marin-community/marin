@@ -102,3 +102,22 @@ def test_effective_allowlist_empty_stays_allow_all():
     # an empty allowlist means allow-all; adding roots must not turn it into a restrictive list
     config = DuckyConfig(scratch_bucket="/tmp/ducky", allowed_buckets=(), finelog_root="gs://x/finelog")
     assert config.effective_allowed_buckets == ()
+
+
+def test_allowed_buckets_parsed_from_env(monkeypatch):
+    _set(monkeypatch, {**_BASE_ENV, "DUCKY_ALLOWED_BUCKETS": "gs://marin-,s3://marin-"})
+    config = DuckyConfig.from_environment()
+    assert config.allowed_buckets == ("gs://marin-", "s3://marin-")
+
+
+def test_catalog_root_prefixes_are_exempt_roots():
+    # the configured catalog roots are surfaced for cross-region exemption
+    config = DuckyConfig(
+        scratch_bucket="/tmp/ducky",
+        allowed_buckets=("gs://marin-",),
+        finelog_root="gs://marin-us-central2/finelog/marin",
+        datakit_root="gs://marin-eu-west4/normalized",
+    )
+    assert config.catalog_root_prefixes == ("gs://marin-us-central2/finelog/marin", "gs://marin-eu-west4/normalized")
+    # None roots are dropped
+    assert DuckyConfig(scratch_bucket="/tmp/ducky").catalog_root_prefixes == ()

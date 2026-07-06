@@ -9,7 +9,15 @@ from pathlib import Path
 import duckdb
 import pytest
 from ducky.config import DuckyConfig
-from ducky.runner import BucketNotAllowedError, QueryError, QueryRunner, disallowed_uris
+from ducky.runner import (
+    BucketNotAllowedError,
+    CrossRegionNotAllowedError,
+    QueryError,
+    QueryRunner,
+    _opts_in_cross_region,
+    check_query_access,
+    disallowed_uris,
+)
 from iris.env_resources import TaskResources
 
 _SMALL_HOST = TaskResources(memory_bytes=2 * 1024**3, cpu_cores=2, gpu_count=0, tpu_count=0)
@@ -108,6 +116,83 @@ def test_disallowed_uris(sql, allowed, expected):
 def test_run_query_refuses_bucket_outside_allowlist(make_runner):
     runner = make_runner(allowed_buckets=("gs://marin-us-east5",))
     with pytest.raises(BucketNotAllowedError, match="us-central2"):
+        runner.run_query("SELECT * FROM read_parquet('gs://marin-us-central2/x.parquet')", uuid.uuid4().hex)
+
+
+@pytest.mark.parametrize(
+    "sql, opted_in",
+    [
+        ("-- cross-region: allow\nSELECT 1", True),
+        ("-- cross-region allow\nSELECT 1", True),  # colon optional
+        ("-- cross region: allowed\nSELECT 1", True),  # space + 'allowed'
+        ("\n\n  -- Cross-Region: Allow\nSELECT 1", True),  # blank lines + case
+        ("SELECT 1 -- cross-region: allow", False),  # not in the leading comment block
+        ("SELECT 'cross-region: allow'", False),  # inside a string, not a comment
+        ("-- just a normal comment\nSELECT 1", False),
+        ("SELECT 1", False),
+    ],
+)
+def test_opts_in_cross_region(sql, opted_in):
+    assert _opts_in_cross_region(sql) is opted_in
+
+
+# Stub region checker: any GCS bucket other than us-east5 counts as cross-region. Stands in for
+# rigging.filesystem.is_cross_region_url so the tests don't depend on live GCS metadata.
+def _stub_cross_region(url: str) -> bool:
+    return url.lower().startswith(("gs://", "gcs://")) and "us-east5" not in url
+
+
+_ALLOW_ALL_MARIN = ("gs://marin-", "s3://marin-")
+
+
+def test_check_query_access_cross_region_requires_opt_in():
+    sql = "SELECT * FROM read_parquet('gs://marin-us-central2/x.parquet')"
+    with pytest.raises(CrossRegionNotAllowedError, match="cross-region: allow"):
+        check_query_access(sql, _ALLOW_ALL_MARIN, (), _stub_cross_region)
+    # the same query with the opt-in comment passes the guard (no raise)
+    check_query_access(f"-- cross-region: allow\n{sql}", _ALLOW_ALL_MARIN, (), _stub_cross_region)
+
+
+def test_check_query_access_forbidden_bucket_hard_refused():
+    # a bucket outside the allowlist is refused even with the opt-in comment
+    sql = "-- cross-region: allow\nSELECT * FROM read_parquet('gs://other-corp/x.parquet')"
+    with pytest.raises(BucketNotAllowedError, match="other-corp"):
+        check_query_access(sql, _ALLOW_ALL_MARIN, (), _stub_cross_region)
+
+
+def test_check_query_access_same_region_needs_no_opt_in():
+    # us-east5 is same-region per the stub → no opt-in comment required
+    check_query_access(
+        "SELECT * FROM read_parquet('gs://marin-us-east5/x.parquet')", _ALLOW_ALL_MARIN, (), _stub_cross_region
+    )
+
+
+def test_check_query_access_s3_never_cross_region_gated():
+    # S3 (R2/CoreWeave) reads are always allowed and never cross-region-gated, even if the
+    # checker would flag everything — rigging models GCS regions only.
+    check_query_access("SELECT * FROM read_parquet('s3://marin-na/x.parquet')", _ALLOW_ALL_MARIN, (), lambda _url: True)
+
+
+def test_check_query_access_catalog_root_exempt_from_opt_in():
+    # a literal read of a configured catalog root skips the opt-in (deliberate always-on egress)
+    root = "gs://marin-us-central2/finelog"
+    check_query_access(
+        f"SELECT * FROM read_parquet('{root}/marin/x.parquet')",
+        _ALLOW_ALL_MARIN,
+        (root,),
+        lambda _url: True,
+    )
+
+
+def test_check_query_access_empty_allowlist_disables_enforcement():
+    # allow-all: neither the bucket bound nor the cross-region gate applies
+    check_query_access("SELECT * FROM read_parquet('gs://anywhere/x.parquet')", (), (), lambda _url: True)
+
+
+def test_run_query_refuses_cross_region_without_opt_in(make_runner, monkeypatch):
+    monkeypatch.setattr("ducky.runner.is_cross_region_url", lambda url: "us-central2" in url)
+    runner = make_runner(allowed_buckets=("gs://marin-",))
+    with pytest.raises(CrossRegionNotAllowedError, match="us-central2"):
         runner.run_query("SELECT * FROM read_parquet('gs://marin-us-central2/x.parquet')", uuid.uuid4().hex)
 
 

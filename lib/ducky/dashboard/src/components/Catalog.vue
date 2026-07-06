@@ -19,6 +19,8 @@ const emit = defineEmits<{ select: [string] }>()
 const views = ref<CatalogView[]>([])
 const examples = ref<CatalogExample[]>([])
 const open = ref(true)
+// Examples are collapsed by default (they're a long list); expand to browse them.
+const examplesOpen = ref(false)
 
 // Group views by their schema (finelog, datakit, …) so the panel reads as one block per
 // data source rather than a flat list.
@@ -72,8 +74,14 @@ onMounted(async () => {
       </div>
 
       <div v-if="examples.length" class="flex flex-col gap-1.5">
-        <h3 class="text-xs font-semibold uppercase tracking-wide text-text-muted">Example queries</h3>
-        <div class="flex flex-wrap gap-1.5">
+        <button
+          class="flex items-center gap-1 text-xs font-semibold uppercase tracking-wide text-text-muted hover:text-text-secondary"
+          @click="examplesOpen = !examplesOpen"
+        >
+          <span>{{ examplesOpen ? '▾' : '▸' }}</span>
+          <span>Example queries</span>
+        </button>
+        <div v-if="examplesOpen" class="flex flex-wrap gap-1.5">
           <button
             v-for="example in examples"
             :key="example.title"
