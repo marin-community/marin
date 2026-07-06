@@ -151,6 +151,15 @@ def _engine_kwargs_to_cli_args(engine_kwargs: dict) -> list[str]:
     max_num_batched_tokens = engine_kwargs.get("max_num_batched_tokens")
     if max_num_batched_tokens is not None:
         args.extend(["--max-num-batched-tokens", str(max_num_batched_tokens)])
+    max_logprobs = engine_kwargs.get("max_logprobs")
+    if max_logprobs is not None:
+        args.extend(["--max-logprobs", str(max_logprobs)])
+    max_num_seqs = engine_kwargs.get("max_num_seqs")
+    if max_num_seqs is not None:
+        args.extend(["--max-num-seqs", str(max_num_seqs)])
+    enable_prefix_caching = engine_kwargs.get("enable_prefix_caching")
+    if enable_prefix_caching is not None:
+        args.append("--enable-prefix-caching" if enable_prefix_caching else "--no-enable-prefix-caching")
     return args
 
 

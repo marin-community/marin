@@ -51,6 +51,13 @@ class VllmServerConfig:
     max_model_len: int = 4096
     # Keep prefill modest on v5p-8 while still exercising vLLM's internal batching.
     max_num_batched_tokens: int = 1024
+    # Raise above vLLM's default (20) for logprobs-heavy clients like byte_ensemble.
+    max_logprobs: int | None = None
+    # Lower vLLM's default (256) to shrink TPU warmup shapes when few requests run concurrently.
+    max_num_seqs: int | None = None
+    # vllm-tpu disables automatic prefix caching by default; incremental clients
+    # like byte_ensemble need it to avoid re-prefilling the whole context.
+    enable_prefix_caching: bool | None = None
 
 
 @dataclass(frozen=True)
@@ -194,13 +201,20 @@ def start_iris_brokered_vllm(config: BrokeredVllmSystemConfig) -> Iterator[Runni
 @contextlib.contextmanager
 def start_local_vllm_server(config: BrokeredVllmSystemConfig) -> Iterator[RunningModel]:
     server_config = config.server
+    engine_kwargs: dict[str, object] = {
+        "max_model_len": server_config.max_model_len,
+        "max_num_batched_tokens": server_config.max_num_batched_tokens,
+    }
+    if server_config.max_logprobs is not None:
+        engine_kwargs["max_logprobs"] = server_config.max_logprobs
+    if server_config.max_num_seqs is not None:
+        engine_kwargs["max_num_seqs"] = server_config.max_num_seqs
+    if server_config.enable_prefix_caching is not None:
+        engine_kwargs["enable_prefix_caching"] = server_config.enable_prefix_caching
     vllm_model = ModelConfig(
         name="brokered-vllm",
         path=config.model,
-        engine_kwargs={
-            "max_model_len": server_config.max_model_len,
-            "max_num_batched_tokens": server_config.max_num_batched_tokens,
-        },
+        engine_kwargs=engine_kwargs,
     )
     logger.info(
         "Starting local vLLM server model=%s port=%d max_model_len=%d max_num_batched_tokens=%d",
