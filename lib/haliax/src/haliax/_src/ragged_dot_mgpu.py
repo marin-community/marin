@@ -20,6 +20,9 @@
 # B operand -- FP8 wgmma cannot transpose A at runtime, so the caller
 # pre-transposes both operands via the fused cast-transpose (upstream contracts
 # token-major [K,M] x [K,N] tiles and transposes the lhs descriptor instead).
+# Upstream's in-SMEM masking of group-boundary tiles is replaced by the
+# pre-masked boundary appendix (``write_boundary_appendix`` in
+# ``_src/fp8_cast_transpose``) so the pipeline body stays branch-free.
 
 import dataclasses
 import functools
@@ -243,7 +246,7 @@ def mgpu_ragged_dot(
 
 
 def mgpu_dwgrad(
-    lhs_t,  # (K, T) fp8 -- weight-grad lhs, token dim T contiguous (dim 1)
+    lhs_t,  # (K, T + G*256) fp8 -- weight-grad lhs + boundary appendix (token dim contiguous)
     grad_t,  # (N, T) fp8 -- output gradient, token dim T contiguous (dim 1)
     *,
     group_sizes,  # (G,)
@@ -263,24 +266,39 @@ def mgpu_dwgrad(
     ``grad -> [N, T]`` out of kernel.  Inside, ``A = lhs_t`` is used natively
     (token-contiguous) and ``B = transpose_ref(grad_t) = [T, N]`` uses the
     B-operand transpose that FP8 ``wgmma`` does support.
+
+    Group boundaries falling mid-token-tile are handled with the **boundary
+    appendix**: ``lhs_t`` carries, after the ``T`` real columns, two pre-masked
+    128-token blocks per group (``write_boundary_appendix`` in
+    ``_src/fp8_cast_transpose``), and the pipeline's ``index_map`` redirects the
+    first and last step of each group there.  This keeps the pipeline body
+    branch-free -- the previous in-SMEM register masking serialized every
+    boundary step and cost ~12% of the kernel.  Only ``lhs_t`` needs
+    the appendix: zeroing one operand of the ``wgmma`` zeroes the contribution.
     """
     if lhs_t.dtype not in _FP8_DTYPES or grad_t.dtype not in _FP8_DTYPES:
         raise NotImplementedError(f"mgpu_dwgrad expects FP8 operands, got {lhs_t.dtype}, {grad_t.dtype}")
-    k_dim, t = lhs_t.shape
-    n_dim, t2 = grad_t.shape
-    if t != t2:
-        raise ValueError(f"token dim mismatch: {t} vs {t2}")
+    g = group_sizes.shape[0]
+    k_dim, t_wide = lhs_t.shape
+    n_dim, t = grad_t.shape
+    appendix_block = 128
+    if t_wide != t + g * 2 * appendix_block:
+        raise ValueError(
+            f"lhs_t width {t_wide} must be T + G*256 = {t + g * 2 * appendix_block} "
+            "(the wgrad boundary appendix; see write_boundary_appendix)"
+        )
+    if block_k != appendix_block:
+        raise ValueError(f"block_k={block_k} must equal the {appendix_block}-token appendix block")
     if k_dim % block_m != 0:
         raise ValueError(f"K={k_dim} must be a multiple of block_m={block_m}")
     if n_dim % block_n != 0:
         raise ValueError(f"N={n_dim} must be a multiple of block_n={block_n}")
-    g = group_sizes.shape[0]
     _od = jnp.bfloat16 if out_dtype is None else out_dtype
     _scale = jnp.ones((1,), jnp.float32) if out_scale is None else jnp.asarray(out_scale, jnp.float32).reshape(1)
 
     group_sizes = group_sizes.astype(int)
-    group_starts = jnp.concatenate([jnp.zeros(1, dtype=int), jnp.cumsum(group_sizes)[:-1]]).astype(int)
     group_ends = jnp.cumsum(group_sizes)
+    group_starts = group_ends - group_sizes
     group_block_starts = group_starts // block_k * block_k
     group_block_ends = -(group_ends // -block_k) * block_k
     group_num_blocks = (group_block_ends - group_block_starts) // block_k
@@ -302,8 +320,6 @@ def mgpu_dwgrad(
 
     def body(
         group_sizes_gmem,
-        group_starts_gmem,
-        group_ends_gmem,
         group_num_blocks_gmem,
         group_block_starts_gmem,
         lhs_gmem,
@@ -319,45 +335,26 @@ def mgpu_dwgrad(
             g_i = loop_info.index[0]
             m_i, n_i = plgpu.planar_snake(loop_info.index[1], (grid_m, grid_n), 1, grid_block_n)
             # Slice the ragged token dimension (dim 1).  Potentially out of bounds,
-            # but the out-of-bounds tail is never accessed in emit_pipeline.
-            tok_slice = pl.ds(group_block_starts_gmem[g_i], t)
+            # but the out-of-bounds tail is never accessed in emit_pipeline.  The
+            # lhs window is t_wide long so the appendix stays addressable.
+            block_start = group_block_starts_gmem[g_i]
+            lhs_tok_slice = pl.ds(block_start, t_wide)
+            grad_tok_slice = pl.ds(block_start, t)
+            num_blocks = group_num_blocks_gmem[g_i]
+            # Window-relative block index of this group's appendix slot 0; both
+            # t + g_i*256 and block_start are multiples of block_k.
+            appendix_idx = (t + g_i * 2 * appendix_block - block_start) // block_k
+
+            def lhs_index(k_i):
+                idx = jnp.where(
+                    k_i == 0,
+                    appendix_idx,
+                    jnp.where(k_i == num_blocks - 1, appendix_idx + 1, k_i),
+                )
+                return (m_i, idx)
 
             def acc_scope(acc_ref):
-                def block_matmul(block_idx, lhs_smem, grad_smem):
-                    block_idx = block_idx[0]
-
-                    @pl.when(block_idx == 0)
-                    def _():
-                        reg = lhs_smem[...]
-                        start_index = lax.rem(group_starts_gmem[g_i], block_k)
-                        indices = plgpu.layout_cast(
-                            jax.lax.broadcasted_iota(jnp.int32, (block_m, block_k), 1),
-                            plgpu.Layout.WGMMA,
-                        )
-                        reg = jnp.where(
-                            indices >= start_index,
-                            reg.astype(jnp.float16),
-                            jnp.float16(0),
-                        ).astype(lhs_smem.dtype)
-                        lhs_smem[...] = reg
-                        plgpu.commit_smem()
-
-                    @pl.when(block_idx == group_num_blocks_gmem[g_i] - 1)
-                    def _():
-                        reg = lhs_smem[...]
-                        last_index = lax.rem(group_ends_gmem[g_i] - 1, block_k)
-                        indices = plgpu.layout_cast(
-                            jax.lax.broadcasted_iota(jnp.int32, (block_m, block_k), 1),
-                            plgpu.Layout.WGMMA,
-                        )
-                        reg = jnp.where(
-                            indices <= last_index,
-                            reg.astype(jnp.float16),
-                            jnp.float16(0),
-                        ).astype(lhs_smem.dtype)
-                        lhs_smem[...] = reg
-                        plgpu.commit_smem()
-
+                def block_matmul(_, lhs_smem, grad_smem):
                     # A = lhs[K, T] native (token-contiguous); B = grad[N, T] -> [T, N].
                     plgpu.wgmma(acc_ref, lhs_smem, plgpu.transpose_ref(grad_smem, (1, 0)))
                     if max_concurrent_steps == 1:
@@ -367,11 +364,11 @@ def mgpu_dwgrad(
                 def _():
                     plgpu.emit_pipeline(
                         block_matmul,
-                        grid=(group_num_blocks_gmem[g_i],),
+                        grid=(num_blocks,),
                         in_specs=[
                             plgpu.BlockSpec(
                                 (block_m, block_k),
-                                lambda k_i: (m_i, k_i),
+                                lhs_index,
                                 delay_release=1 if max_concurrent_steps > 1 else 0,
                                 transforms=transforms,
                             ),
@@ -383,7 +380,7 @@ def mgpu_dwgrad(
                             ),
                         ],
                         max_concurrent_steps=max_concurrent_steps,
-                    )(lhs_gmem.at[:, tok_slice], grad_gmem.at[:, tok_slice])
+                    )(lhs_gmem.at[:, lhs_tok_slice], grad_gmem.at[:, grad_tok_slice])
 
                 return acc_ref[...]
 
@@ -415,8 +412,6 @@ def mgpu_dwgrad(
     )
     return kernel(
         group_sizes,
-        group_starts,
-        group_ends,
         group_num_blocks,
         group_block_starts,
         lhs_t,
