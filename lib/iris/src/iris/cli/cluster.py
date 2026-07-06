@@ -230,6 +230,18 @@ def _pin_latest_images(config, git_sha: str) -> dict[str, str]:
     return {k: v for k, v in pinned.items() if v}
 
 
+def _build_and_pin_deploy_images(ctx, config) -> None:
+    """Pin :latest tags to the working-tree hash, build + push the images, echo them."""
+    git_sha = get_git_sha()
+    _pin_latest_images(config, git_sha)
+    verbose = ctx.obj.get("verbose", False)
+    built = _build_cluster_images(config, git_sha, verbose=verbose)
+    if built:
+        click.echo("Built image tags:")
+        for name, tag in built.items():
+            click.echo(f"  {name}: {tag}")
+
+
 # =============================================================================
 # Top-level cluster group
 # =============================================================================
@@ -1098,14 +1110,7 @@ def controller_restart(ctx, skip_checkpoint: bool, checkpoint_timeout: int, imag
         if image_override:
             click.echo(f"Deploying pinned controller image (no build): {image_override}")
         else:
-            git_sha = get_git_sha()
-            _pin_latest_images(config, git_sha)
-            verbose = ctx.obj.get("verbose", False)
-            built = _build_cluster_images(config, git_sha, verbose=verbose)
-            if built:
-                click.echo("Built image tags:")
-                for name, tag in built.items():
-                    click.echo(f"  {name}: {tag}")
+            _build_and_pin_deploy_images(ctx, config)
         try:
             address = bundle.controller.start_controller(config)
         except Exception as e:
@@ -1135,14 +1140,7 @@ def controller_restart(ctx, skip_checkpoint: bool, checkpoint_timeout: int, imag
     if image_override:
         click.echo(f"Redeploying pinned controller image (no build): {image_override}")
     else:
-        git_sha = get_git_sha()
-        _pin_latest_images(config, git_sha)
-        verbose = ctx.obj.get("verbose", False)
-        built = _build_cluster_images(config, git_sha, verbose=verbose)
-        if built:
-            click.echo("Built image tags:")
-            for name, tag in built.items():
-                click.echo(f"  {name}: {tag}")
+        _build_and_pin_deploy_images(ctx, config)
 
     try:
         address = bundle.controller.restart_controller(config)
