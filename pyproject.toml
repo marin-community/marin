@@ -160,8 +160,12 @@ nvidia-cutlass-dsl-libs-cu13 = { index = "nvidia" }
 harbor = { git = "https://github.com/marin-community/harbor.git", rev = "354692d9c0eab497b05f266aa0dff30e2a238d2e" }
 # https://github.com/marin-community/vllm/compare/7b98f498cdf0bf9cf0ecc37b5c0c994cb94513c3...327a10590a2e72ea6de7a00e52a085856158b828
 vllm = { git = "https://github.com/marin-community/vllm.git", rev = "327a10590a2e72ea6de7a00e52a085856158b828" }
-# https://github.com/marin-community/tpu-inference/compare/0045517c4ba75b1d624dba3be8b77e16c18b1a1e...4c38590e29d33451f2b4375a78ad8f70cacd7b98
-tpu-inference = { git = "https://github.com/marin-community/tpu-inference.git", rev = "4c38590e29d33451f2b4375a78ad8f70cacd7b98" }
+# Joint-decode token-decision callback overlay: one commit on top of
+# marin-community tip 4c38590e (the previous pin).
+# https://github.com/RohithKuditipudi/tpu-inference/compare/4c38590e29d33451f2b4375a78ad8f70cacd7b98...ad8b327e25c4c055ee0fe344a18c9fa3836e635c
+tpu-inference = { git = "https://github.com/RohithKuditipudi/tpu-inference.git", rev = "ad8b327e25c4c055ee0fe344a18c9fa3836e635c" }
+# Backend-neutral joint decoding (coordinator, worker loop, gpu/tpu backends).
+joint-decode = { git = "https://github.com/RohithKuditipudi/joint-decode.git", rev = "211dae86ec3054d13ebeeaa37ee6ed6cc777bb4b" }
 # ### BEGIN RUST-DEV SOURCES ###
 # ### END RUST-DEV SOURCES ###
 

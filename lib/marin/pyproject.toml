@@ -192,6 +192,7 @@ vllm = [
     "libtpu==0.0.40",
     "vllm",
     "tpu-inference==0.22.1",
+    "joint-decode",
     # Pin torch + torchvision explicitly so the per-extra source map below
     # routes them to the pytorch-cpu index during fresh Iris resolves.
     "torch==2.11.0",
