@@ -125,9 +125,9 @@ def _read_targets_from_stdin() -> list[str]:
 def _collect_targets(targets: tuple[str, ...], use_stdin: bool) -> list[str]:
     """Merge positional targets with stdin ids for a bulk action.
 
-    A literal ``-`` among the positionals, or ``--stdin``, appends ids read from
-    stdin (see :func:`_read_targets_from_stdin`), letting a query pipe straight
-    into ``kick``/``stop``. Positional ids and stdin ids compose.
+    A literal ``-`` among the positionals, or ``use_stdin``, appends the ids read
+    from stdin to the positional ids, letting a query pipe straight into an
+    action. The ``-`` sentinel is consumed, not returned as a target.
     """
     read_stdin = use_stdin or "-" in targets
     collected = [t for t in targets if t != "-"]
