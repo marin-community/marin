@@ -18,7 +18,8 @@ transpose an operand at runtime, so each bf16 input is quantized into *both* the
 natural and the transposed FP8 layout by one fused cast-transpose+amax read
 (``in_q_ct`` in ``_src/fp8_cast_transpose``): the forward consumes ``q_lhs [T,K]``
 and ``q_rhs_t [E,N,K]``, the dgrad consumes ``q_rhs [E,K,N]``, and the wgrad
-consumes ``q_lhs_t [K,T]`` and ``q_g_t [N,T]``.
+consumes ``q_lhs_t [K, T+E*256]`` (with the boundary appendix, see
+``write_boundary_appendix``) and ``q_g_t [N,T]``.
 
 Delayed per-tensor scaling (TE-style scale + amax history) follows the dense
 helpers in ``_src/fp8.py``: activation, weight, and output-gradient scale +
@@ -37,7 +38,13 @@ import jax.numpy as jnp
 from jax import custom_vjp
 
 from .fp8 import roll_amax_history
-from .fp8_cast_transpose import _next_scale_and_inv, cast_transpose_amax_2d, in_q_ct
+from .fp8_cast_transpose import (
+    WGRAD_TOKEN_BLOCK,
+    _next_scale_and_inv,
+    cast_transpose_amax_2d,
+    in_q_ct,
+    write_boundary_appendix,
+)
 from .ragged_dot_mgpu import mgpu_dwgrad, mgpu_ragged_dot
 
 _E4M3 = jnp.float8_e4m3fn
@@ -147,7 +154,7 @@ def _ragged_fp8(lhs, rhs_nk, group_sizes, out_dtype, out_scale):
 @functools.partial(custom_vjp, nondiff_argnums=(11,))
 def quantized_ragged_dot(
     q_lhs,  # [T, K] e4m3      -- forward A
-    q_lhs_t,  # [K, T] e4m3    -- grad_rhs A (token-contiguous)
+    q_lhs_t,  # [K, T+E*256] e4m3 -- grad_rhs A (token-contiguous, + boundary appendix)
     q_rhs,  # [E, K, N] e4m3   -- grad_lhs B (natural layout)
     q_rhs_t,  # [E, N, K] e4m3 -- forward B (transpose_rhs layout)
     lhs_scale,  # [1] delayed-scaling scale for the activation quantize
@@ -207,15 +214,17 @@ def _qrd_bwd(rev_dtype, res, g):
     new_g_hist = roll_amax_history(cur_amax[0], grad_amax_history)
 
     # grad_lhs[T,K] = g[T,N] . rhs[E,K,N] (contract N), on the pre-cast natural
-    # weight layout q_rhs. The dgrad has the same shape structure as the forward,
-    # so _autotuned_config applies unchanged.
+    # weight layout q_rhs. The dgrad has the same shape structure as the forward
+    # and shares its tuned config (per-leg sweeps: the same block config wins both).
     dlhs_scale = (rhs_scale * new_g_scale).astype(jnp.float32)
     grad_lhs = _ragged_fp8(q_g, q_rhs, group_sizes, out_dtype, dlhs_scale)
 
     # grad_rhs[E,K,N] = lhs[T,K] . g[T,N] (contracts the ragged token dim) via
-    # mgpu_dwgrad on the pre-cast token-contiguous layouts q_lhs_t [K,T] and
-    # q_g_t [N,T]. The kernel's boundary mask zeros tokens outside each group,
-    # so group boundaries falling mid-block_k-tile are handled correctly.
+    # mgpu_dwgrad on the pre-cast token-contiguous layouts q_lhs_t [K, T+E*256]
+    # and q_g_t [N,T]. Group boundaries falling mid-token-tile are handled by the
+    # boundary appendix: fill q_lhs_t's appendix slots with pre-masked boundary
+    # blocks (in place) and the kernel's index_map reads them for the first/last
+    # pipeline step of each group.
     t = lhs.shape[0]
     if t % 128 != 0:
         raise ValueError(
@@ -225,6 +234,7 @@ def _qrd_bwd(rev_dtype, res, g):
     _, k, n = rhs.shape
     drhs_cfg = _dwgrad_config(k, n)
     drhs_scale = (lhs_scale * new_g_scale).astype(jnp.float32)
+    q_lhs_t = write_boundary_appendix(q_lhs_t, group_sizes)
     grad_rhs = mgpu_dwgrad(
         q_lhs_t,
         q_g_t,
@@ -313,8 +323,13 @@ def fp8_scaled_ragged_dot(
             f"sm_90a-specific. Got {device.device_kind}."
         )
     # One fused cast-transpose+amax read per operand produces both FP8 layouts.
-    q_lhs, q_lhs_t, new_lhs_scale = in_q_ct(fwd_dtype, "2d", lhs, lhs_scale, lhs_amax_history)
-    q_rhs, q_rhs_t, new_rhs_scale = in_q_ct(fwd_dtype, "3d", rhs, rhs_scale, rhs_amax_history)
+    # The activation's transposed layout carries the wgrad boundary appendix
+    # (2*WGRAD_TOKEN_BLOCK extra columns per expert), filled in the backward.
+    e = rhs.shape[0]
+    q_lhs, q_lhs_t, new_lhs_scale = in_q_ct(
+        fwd_dtype, "2d", e * 2 * WGRAD_TOKEN_BLOCK, lhs, lhs_scale, lhs_amax_history
+    )
+    q_rhs, q_rhs_t, new_rhs_scale = in_q_ct(fwd_dtype, "3d", 0, rhs, rhs_scale, rhs_amax_history)
     return quantized_ragged_dot(
         q_lhs,
         q_lhs_t,
