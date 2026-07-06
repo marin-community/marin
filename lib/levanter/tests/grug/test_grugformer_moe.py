@@ -20,6 +20,7 @@ import levanter.grug._moe.source_push_forward as source_push_forward
 from levanter.grug._moe.source_push_forward import make_source_push_forward_source_plan_raw_inputs
 import levanter.grug._moe.source_push_inbox as source_push_inbox
 from levanter.grug._moe.source_push_inbox import PushInboxConfig
+import levanter.grug._moe.source_push_public as source_push_public
 import levanter.grug._moe.source_push_w2_return as source_push_w2_return
 from levanter.grug._moe.sonic import sonic_gather_sum
 from levanter.grug.grug_moe import (
@@ -219,7 +220,7 @@ def test_moe_mlp_source_push_backend_requires_concrete_expert_mesh():
         topk=1,
     )
 
-    with pytest.raises(ValueError, match="requires a concrete expert-parallel H100 mesh"):
+    with pytest.raises(ValueError, match="requires a concrete expert-parallel source-push MGPU mesh"):
         moe_mlp(
             x,
             selected_experts,
@@ -229,6 +230,80 @@ def test_moe_mlp_source_push_backend_requires_concrete_expert_mesh():
             implementation="pallas_mgpu_source_push",
             mesh=None,
         )
+
+
+def test_moe_mlp_blackwell_source_push_backend_requires_concrete_expert_mesh():
+    x, selected_experts, combine_weights, w_up_gate, w_down = _make_inputs(
+        key=jax.random.key(102),
+        tokens=8,
+        hidden_dim=16,
+        intermediate_dim=16,
+        num_experts=2,
+        topk=1,
+    )
+
+    with pytest.raises(ValueError, match="requires a concrete expert-parallel source-push MGPU mesh"):
+        moe_mlp(
+            x,
+            selected_experts,
+            combine_weights,
+            w_up_gate,
+            w_down,
+            implementation="pallas_mgpu_source_push_blackwell",
+            mesh=None,
+        )
+
+
+def test_source_push_public_blackwell_config_uses_tuned_transport_defaults():
+    ep_size = 8
+    tokens_per_rank = 512
+    topk = 4
+    experts_per_rank = 32
+    token_ids = jnp.arange(tokens_per_rank, dtype=jnp.int32)[None, :, None]
+    source_ids = jnp.arange(ep_size, dtype=jnp.int32)[:, None, None]
+    route_slots = jnp.arange(topk, dtype=jnp.int32)[None, None, :]
+    selected = (token_ids * topk + route_slots + source_ids) % (ep_size * experts_per_rank)
+    weights = jnp.ones((ep_size, tokens_per_rank, topk), dtype=jnp.float32)
+
+    hopper_config = source_push_public._source_push_config_from_public_inputs(
+        selected,
+        weights,
+        ep_size=ep_size,
+        tokens_per_rank=tokens_per_rank,
+        topk=topk,
+        hidden_dim=3072,
+        intermediate_dim=3072,
+        experts_per_rank=experts_per_rank,
+        capacity_factor=1.25,
+        implementation=source_push_public.SOURCE_PUSH_PUBLIC_IMPLEMENTATION,
+    )
+    blackwell_config = source_push_public._source_push_config_from_public_inputs(
+        selected,
+        weights,
+        ep_size=ep_size,
+        tokens_per_rank=tokens_per_rank,
+        topk=topk,
+        hidden_dim=3072,
+        intermediate_dim=3072,
+        experts_per_rank=experts_per_rank,
+        capacity_factor=1.25,
+        implementation=source_push_public.SOURCE_PUSH_PUBLIC_IMPLEMENTATION_BLACKWELL,
+    )
+
+    assert blackwell_config.entries_per_rank > 24
+    assert hopper_config.inbox_slots == 12
+    assert hopper_config.send_worker_programs_per_peer == 2
+    assert blackwell_config.inbox_slots == 24
+    assert blackwell_config.send_worker_programs_per_peer == 4
+    assert blackwell_config.worker_programs_per_peer == 32
+    assert (
+        source_push_public._source_push_execution_mode(source_push_public.SOURCE_PUSH_PUBLIC_IMPLEMENTATION)
+        == source_push_forward.FORWARD_EXECUTION_STAGED_HOST_SYNC
+    )
+    assert (
+        source_push_public._source_push_execution_mode(source_push_public.SOURCE_PUSH_PUBLIC_IMPLEMENTATION_BLACKWELL)
+        == source_push_forward.FORWARD_EXECUTION_STAGED_DEVICE_SYNC
+    )
 
 
 def test_moe_mlp_default_matches_explicit_ring_without_ep_axis():

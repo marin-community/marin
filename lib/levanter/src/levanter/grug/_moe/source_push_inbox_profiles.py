@@ -1,7 +1,7 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Named Hopper source-push inbox benchmark profile defaults."""
+"""Named source-push inbox benchmark profile defaults."""
 
 from __future__ import annotations
 
@@ -12,10 +12,12 @@ from typing import Any
 
 SOURCE_PUSH_PROFILE_NONE = "none"
 SOURCE_PUSH_PROFILE_STABLE_216 = "hopper_source_push_inbox_rough_balanced_216"
+SOURCE_PUSH_PROFILE_BLACKWELL_65K_D3072_I3072 = "blackwell_source_push_inbox_65k_d3072_i3072"
 
 SOURCE_PUSH_PROFILES = (
     SOURCE_PUSH_PROFILE_NONE,
     SOURCE_PUSH_PROFILE_STABLE_216,
+    SOURCE_PUSH_PROFILE_BLACKWELL_65K_D3072_I3072,
 )
 
 _COMMON_HOPPER_QUEUE_DEFAULTS: Mapping[str, Any] = MappingProxyType(
@@ -53,6 +55,16 @@ _SOURCE_PUSH_PROFILE_DEFAULTS: Mapping[str, Mapping[str, Any]] = MappingProxyTyp
         SOURCE_PUSH_PROFILE_NONE: MappingProxyType({}),
         SOURCE_PUSH_PROFILE_STABLE_216: _profile_defaults(
             routing="roughly_balanced",
+            send_pipeline_depth=1,
+        ),
+        SOURCE_PUSH_PROFILE_BLACKWELL_65K_D3072_I3072: _profile_defaults(
+            tokens_per_rank=65536,
+            hidden_dim=3072,
+            intermediate_dim=3072,
+            entries_per_rank=576,
+            inbox_slots=24,
+            routing="roughly_balanced",
+            send_worker_programs_per_peer=4,
             send_pipeline_depth=1,
         ),
     }

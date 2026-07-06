@@ -25,11 +25,18 @@ MoeImplementation: TypeAlias = Literal[
     "ragged_all_to_all",  # Expert-parallel ragged all-to-all backend.
     "deepep",  # Expert-parallel DeepEP intranode dispatch/combine backend.
     "pallas_mgpu_source_push",  # H100-only source-push inbox prototype backend.
+    "pallas_mgpu_source_push_blackwell",  # Blackwell staged source-push inbox backend.
     "scatter",  # Single-process grouped GMM with scatter-add combine.
     "sonic",  # Single-process raw Sonic Triton gather/combine backend.
 ]
 _VALID_MOE_IMPLEMENTATIONS = get_args(MoeImplementation)
-_EP_MOE_IMPLEMENTATIONS = ("ring", "ragged_all_to_all", "deepep", "pallas_mgpu_source_push")
+_EP_MOE_IMPLEMENTATIONS = (
+    "ring",
+    "ragged_all_to_all",
+    "deepep",
+    "pallas_mgpu_source_push",
+    "pallas_mgpu_source_push_blackwell",
+)
 # Local means no collectives over an expert axis. These backends can still run
 # under ordinary data/model sharding through the no-EP shard_map path.
 _LOCAL_MOE_IMPLEMENTATIONS = (

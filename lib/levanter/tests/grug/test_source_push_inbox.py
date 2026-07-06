@@ -15,11 +15,13 @@ import jax.numpy as jnp
 import levanter.grug._moe.source_push_inbox as source_push_inbox
 import levanter.grug._moe.source_push_combine as source_push_combine
 import levanter.grug._moe.source_push_forward as source_push_forward
+import levanter.grug._moe.source_push_inbox_blackwell as source_push_inbox_blackwell
 import levanter.grug._moe.source_push_mlp as source_push_mlp
 import levanter.grug._moe.source_push_w2_return as source_push_w2_return
 import levanter.grug._moe.source_push_plan as source_push_plan
 from levanter.grug._moe.ep_common import _clip_receiver_group_sizes
 from levanter.grug._moe.source_push_inbox_profiles import (
+    SOURCE_PUSH_PROFILE_BLACKWELL_65K_D3072_I3072,
     SOURCE_PUSH_PROFILE_STABLE_216,
     SOURCE_PUSH_PROFILES,
     source_push_profile_defaults,
@@ -160,8 +162,93 @@ def test_source_push_profile_returns_typed_config_and_run_settings():
     assert settings.progress_events
 
 
-def test_source_push_profile_exposes_single_stable_candidate():
-    assert SOURCE_PUSH_PROFILES == ("none", SOURCE_PUSH_PROFILE_STABLE_216)
+def test_source_push_profile_exposes_named_candidates():
+    assert SOURCE_PUSH_PROFILES == (
+        "none",
+        SOURCE_PUSH_PROFILE_STABLE_216,
+        SOURCE_PUSH_PROFILE_BLACKWELL_65K_D3072_I3072,
+    )
+
+
+def test_blackwell_source_push_profile_uses_target_shape():
+    config, settings = source_push_inbox.source_push_inbox_profile(SOURCE_PUSH_PROFILE_BLACKWELL_65K_D3072_I3072)
+
+    config.validate()
+    assert config.tokens_per_rank == 65536
+    assert config.hidden_dim == 3072
+    assert config.intermediate_dim == 3072
+    assert config.experts_per_rank == 32
+    assert config.topk == 4
+    assert config.entries_per_rank == 576
+    assert config.inbox_slots == 24
+    assert config.routing == "roughly_balanced"
+    assert config.send_worker_programs_per_peer == 4
+    assert config.send_pipeline_depth == 1
+    assert settings.repeat_runs == 48
+
+
+def test_blackwell_source_push_profile_uses_staged_strategy():
+    assert (
+        source_push_inbox_blackwell.source_push_inbox_architecture(SOURCE_PUSH_PROFILE_BLACKWELL_65K_D3072_I3072)
+        == source_push_inbox_blackwell.SourcePushInboxArchitecture.BLACKWELL
+    )
+    assert (
+        source_push_inbox_blackwell.source_push_inbox_architecture(SOURCE_PUSH_PROFILE_STABLE_216)
+        == source_push_inbox_blackwell.SourcePushInboxArchitecture.HOPPER
+    )
+    assert source_push_inbox_blackwell.blackwell_uses_staged_source_push()
+    assert (
+        source_push_inbox_blackwell.BLACKWELL_PEER_REF_SUPPORT
+        == source_push_inbox_blackwell.BlackwellPeerRefSupport.UNSUPPORTED_IN_WARPGROUP_LOWERING
+    )
+
+
+def test_blackwell_source_push_records_tuned_w13_config():
+    config = source_push_inbox_blackwell.BLACKWELL_TARGET_W13_TUNING_CONFIG
+
+    assert config.tile_m == 128
+    assert config.tile_n == 128
+    assert config.tile_k == 64
+    assert config.max_concurrent_steps == 6
+    assert config.collective
+    assert config.grid_tile_width == 1
+    assert config.grid_minor_dim == source_push_inbox_blackwell.BlackwellGridMinorDim.M
+    assert config.epilogue_tile_n == 64
+
+    w2_config = source_push_inbox_blackwell.BLACKWELL_TARGET_W2_TUNING_CONFIG
+    assert w2_config.tile_n * (2 if w2_config.collective else 1) == 128
+    assert w2_config.tile_k == config.tile_k
+    assert w2_config.epilogue_tile_n == 64
+
+
+def test_blackwell_source_push_performance_gate_uses_repeat_medians():
+    w13_only_gate = source_push_inbox_blackwell.blackwell_performance_gate(
+        baseline_useful_tflops_per_rank=1824.22,
+        inbox_useful_tflops_per_rank=1596.34,
+    )
+    materialized_swiglu_gate = source_push_inbox_blackwell.blackwell_performance_gate(
+        baseline_useful_tflops_per_rank=1534.20,
+        inbox_useful_tflops_per_rank=1596.34,
+    )
+
+    assert w13_only_gate.passes
+    assert materialized_swiglu_gate.passes
+    assert w13_only_gate.required_useful_tflops_per_rank == pytest.approx(1094.532)
+    assert materialized_swiglu_gate.required_useful_tflops_per_rank == pytest.approx(920.52)
+    assert w13_only_gate.achieved_fraction == pytest.approx(1596.34 / 1824.22)
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"baseline_useful_tflops_per_rank": 0.0, "inbox_useful_tflops_per_rank": 1.0},
+        {"baseline_useful_tflops_per_rank": 1.0, "inbox_useful_tflops_per_rank": -1.0},
+        {"baseline_useful_tflops_per_rank": 1.0, "inbox_useful_tflops_per_rank": 1.0, "required_fraction": 0.0},
+    ],
+)
+def test_blackwell_source_push_performance_gate_validates_inputs(kwargs):
+    with pytest.raises(ValueError):
+        source_push_inbox_blackwell.blackwell_performance_gate(**kwargs)
 
 
 def test_disabled_modes_are_not_public_cli_choices():
@@ -1027,17 +1114,23 @@ def test_source_push_forward_inputs_share_one_plan_across_all_stages():
         config.block_m,
         config.hidden_dim,
     )
-    assert inputs.recv_route_weights.shape == (
+    assert inputs.h_route_weights.shape == (
         config.ep_size,
-        config.ep_size,
-        config.entries_per_rank,
-        config.block_m,
+        config.hidden_rows_per_rank,
     )
-    expected_recv_weights = np.asarray(
-        source_push_plan.source_push_recv_route_weights(jnp.asarray(inputs.route_combine_weights), inputs.plan),
+    expected_h_route_weights = np.asarray(
+        source_push_plan.source_push_h_row_route_weights_jax(
+            jnp.asarray(inputs.route_combine_weights),
+            inputs.plan,
+            inputs.send_meta,
+            inputs.expert_base,
+            inputs.src_base_by_expert,
+            hidden_rows_per_rank=config.hidden_rows_per_rank,
+            use_exact_expert_major=inputs.use_exact_expert_major,
+        ),
         dtype=np.float32,
     )
-    np.testing.assert_allclose(inputs.recv_route_weights, expected_recv_weights, atol=0, rtol=0)
+    np.testing.assert_allclose(inputs.h_route_weights, expected_h_route_weights, atol=0, rtol=0)
     assert expected.shape == (config.ep_size, config.tokens_per_rank, config.hidden_dim)
     assert np.count_nonzero(expected) > 0
     assert int(np.asarray(inputs.plan.token_ids[src, dst_ord, entry, row])) == int(token)
@@ -1086,11 +1179,18 @@ def test_source_push_forward_device_inputs_from_plan_use_dynamic_jax_arrays():
         dynamic_w2,
     )
     expected_packed_x = source_push_plan.pack_source_push_tokens_jax(dynamic_x, host_inputs.plan).astype(jnp.bfloat16)
-    expected_recv_weights = source_push_plan.source_push_recv_route_weights_jax(dynamic_weights, host_inputs.plan)
-    expected_recv_weights = expected_recv_weights.astype(jnp.bfloat16)
+    expected_h_route_weights = source_push_plan.source_push_h_row_route_weights_jax(
+        dynamic_weights,
+        host_inputs.plan,
+        host_inputs.send_meta,
+        host_inputs.expert_base,
+        host_inputs.src_base_by_expert,
+        hidden_rows_per_rank=config.hidden_rows_per_rank,
+        use_exact_expert_major=host_inputs.use_exact_expert_major,
+    ).astype(jnp.bfloat16)
 
     np.testing.assert_array_equal(np.asarray(device_inputs.x), np.asarray(expected_packed_x))
-    np.testing.assert_array_equal(np.asarray(device_inputs.recv_route_weights), np.asarray(expected_recv_weights))
+    np.testing.assert_array_equal(np.asarray(device_inputs.h_route_weights), np.asarray(expected_h_route_weights))
     np.testing.assert_array_equal(np.asarray(device_inputs.w_gate_up), np.asarray(dynamic_w13.astype(jnp.bfloat16)))
     np.testing.assert_array_equal(np.asarray(device_inputs.w_down), np.asarray(dynamic_w2.astype(jnp.bfloat16)))
 
@@ -1153,11 +1253,18 @@ def test_source_push_forward_plan_inputs_do_not_capture_differentiable_arrays():
         dynamic_w2,
     )
     expected_packed_x = source_push_plan.pack_source_push_tokens_jax(dynamic_x, plan_inputs.plan).astype(jnp.bfloat16)
-    expected_recv_weights = source_push_plan.source_push_recv_route_weights_jax(dynamic_weights, plan_inputs.plan)
-    expected_recv_weights = expected_recv_weights.astype(jnp.bfloat16)
+    expected_h_route_weights = source_push_plan.source_push_h_row_route_weights_jax(
+        dynamic_weights,
+        plan_inputs.plan,
+        plan_inputs.send_meta,
+        plan_inputs.expert_base,
+        plan_inputs.src_base_by_expert,
+        hidden_rows_per_rank=config.hidden_rows_per_rank,
+        use_exact_expert_major=plan_inputs.use_exact_expert_major,
+    ).astype(jnp.bfloat16)
 
     np.testing.assert_array_equal(np.asarray(device_inputs.x), np.asarray(expected_packed_x))
-    np.testing.assert_array_equal(np.asarray(device_inputs.recv_route_weights), np.asarray(expected_recv_weights))
+    np.testing.assert_array_equal(np.asarray(device_inputs.h_route_weights), np.asarray(expected_h_route_weights))
     np.testing.assert_array_equal(np.asarray(device_inputs.w_gate_up), np.asarray(dynamic_w13.astype(jnp.bfloat16)))
     np.testing.assert_array_equal(np.asarray(device_inputs.w_down), np.asarray(dynamic_w2.astype(jnp.bfloat16)))
 
@@ -2198,6 +2305,7 @@ def test_source_push_forward_public_compare_cli_passes_profile_defaults(monkeypa
         source_push_implementation,
         source_push_execution_mode,
         public_implementations,
+        public_call_mode,
     ):
         calls.append(
             (
@@ -2206,6 +2314,7 @@ def test_source_push_forward_public_compare_cli_passes_profile_defaults(monkeypa
                 source_push_implementation,
                 source_push_execution_mode,
                 public_implementations,
+                public_call_mode,
             )
         )
         return [
@@ -2244,6 +2353,7 @@ def test_source_push_forward_public_compare_cli_passes_profile_defaults(monkeypa
             "reference",
             "staged_host_sync",
             ("pallas_mgpu_source_push", "ring"),
+            "direct",
         )
     ]
     assert rows == [

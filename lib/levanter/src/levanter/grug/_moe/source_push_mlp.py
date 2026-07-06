@@ -16,6 +16,8 @@ from jaxtyping import Array, Bool, Float, Int
 
 from levanter.grug._moe.source_push_forward import (
     FORWARD_EXECUTION_STAGED_HOST_SYNC,
+    SOURCE_PUSH_FORWARD_IMPLEMENTATION_BLACKWELL_STAGED,
+    SOURCE_PUSH_FORWARD_IMPLEMENTATION_PALLAS_MGPU,
     SourcePushForwardHostInputs,
     source_push_forward_with_h_from_plan,
 )
@@ -30,7 +32,13 @@ from levanter.grug._moe.source_push_plan import (
 
 SOURCE_PUSH_MLP_IMPLEMENTATION_REFERENCE = "reference"
 SOURCE_PUSH_MLP_IMPLEMENTATION_PALLAS_MGPU = "pallas_mgpu"
-SourcePushMlpImplementation: TypeAlias = Literal["reference", "pallas_mgpu"]
+SOURCE_PUSH_MLP_IMPLEMENTATION_BLACKWELL_STAGED = "blackwell_staged"
+_SOURCE_PUSH_MLP_IMPLEMENTATIONS = (
+    SOURCE_PUSH_MLP_IMPLEMENTATION_REFERENCE,
+    SOURCE_PUSH_MLP_IMPLEMENTATION_PALLAS_MGPU,
+    SOURCE_PUSH_MLP_IMPLEMENTATION_BLACKWELL_STAGED,
+)
+SourcePushMlpImplementation: TypeAlias = Literal["reference", "pallas_mgpu", "blackwell_staged"]
 
 
 class SourcePushMlpReferenceResidual(NamedTuple):
@@ -406,10 +414,11 @@ def _validate_source_push_mlp_implementation(implementation: SourcePushMlpImplem
     if implementation not in (
         SOURCE_PUSH_MLP_IMPLEMENTATION_REFERENCE,
         SOURCE_PUSH_MLP_IMPLEMENTATION_PALLAS_MGPU,
+        SOURCE_PUSH_MLP_IMPLEMENTATION_BLACKWELL_STAGED,
     ):
         raise ValueError(
             "source-push MLP implementation must be one of "
-            f"{(SOURCE_PUSH_MLP_IMPLEMENTATION_REFERENCE, SOURCE_PUSH_MLP_IMPLEMENTATION_PALLAS_MGPU)}, "
+            f"{_SOURCE_PUSH_MLP_IMPLEMENTATIONS}, "
             f"got {implementation!r}"
         )
 
@@ -446,6 +455,11 @@ def _source_push_moe_mlp_from_plan_forward_value(
         route_weights,
         w13,
         w2,
+        implementation=(
+            SOURCE_PUSH_FORWARD_IMPLEMENTATION_BLACKWELL_STAGED
+            if implementation == SOURCE_PUSH_MLP_IMPLEMENTATION_BLACKWELL_STAGED
+            else SOURCE_PUSH_FORWARD_IMPLEMENTATION_PALLAS_MGPU
+        ),
         execution_mode=execution_mode,
         mesh=mesh,
     )

@@ -25,6 +25,7 @@ from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P
 
 import levanter.grug._moe.source_push_mlp as source_push_mlp
 from levanter.grug._moe.source_push_forward import (
+    FORWARD_EXECUTION_STAGED_DEVICE_SYNC,
     FORWARD_EXECUTION_STAGED_HOST_SYNC,
     FORWARD_STAGE_COMBINE,
     FORWARD_STAGE_TOTAL,
@@ -49,6 +50,7 @@ from levanter.grug._moe.source_push_inbox import (
 )
 from levanter.grug._moe.source_push_inbox_profiles import SOURCE_PUSH_PROFILES, source_push_profile_defaults
 from levanter.grug._moe.source_push_mlp import (
+    SOURCE_PUSH_MLP_IMPLEMENTATION_BLACKWELL_STAGED,
     SOURCE_PUSH_MLP_IMPLEMENTATION_PALLAS_MGPU,
     SOURCE_PUSH_MLP_IMPLEMENTATION_REFERENCE,
     source_push_mlp_route_table_from_plan,
@@ -98,23 +100,34 @@ MODES = (
 BACKEND_RING = "ring"
 BACKEND_RAGGED_A2A = "ragged_all_to_all"
 BACKEND_PUBLIC_SOURCE_PUSH = "public_source_push"
+BACKEND_PUBLIC_SOURCE_PUSH_BLACKWELL = "public_source_push_blackwell"
 BACKEND_SOURCE_PUSH_REFERENCE = "source_push_reference"
 BACKEND_SOURCE_PUSH_PALLAS = "source_push_pallas_mgpu"
+BACKEND_SOURCE_PUSH_BLACKWELL = "source_push_blackwell_staged"
 BACKENDS = (
     BACKEND_RING,
     BACKEND_RAGGED_A2A,
     BACKEND_PUBLIC_SOURCE_PUSH,
+    BACKEND_PUBLIC_SOURCE_PUSH_BLACKWELL,
     BACKEND_SOURCE_PUSH_REFERENCE,
     BACKEND_SOURCE_PUSH_PALLAS,
+    BACKEND_SOURCE_PUSH_BLACKWELL,
 )
 PUBLIC_BACKEND_TO_IMPLEMENTATION = {
     BACKEND_RING: "ring",
     BACKEND_RAGGED_A2A: "ragged_all_to_all",
     BACKEND_PUBLIC_SOURCE_PUSH: "pallas_mgpu_source_push",
+    BACKEND_PUBLIC_SOURCE_PUSH_BLACKWELL: "pallas_mgpu_source_push_blackwell",
 }
 SOURCE_PUSH_BACKEND_TO_IMPLEMENTATION = {
     BACKEND_SOURCE_PUSH_REFERENCE: SOURCE_PUSH_MLP_IMPLEMENTATION_REFERENCE,
     BACKEND_SOURCE_PUSH_PALLAS: SOURCE_PUSH_MLP_IMPLEMENTATION_PALLAS_MGPU,
+    BACKEND_SOURCE_PUSH_BLACKWELL: SOURCE_PUSH_MLP_IMPLEMENTATION_BLACKWELL_STAGED,
+}
+SOURCE_PUSH_BACKEND_TO_EXECUTION_MODE = {
+    BACKEND_SOURCE_PUSH_REFERENCE: FORWARD_EXECUTION_STAGED_HOST_SYNC,
+    BACKEND_SOURCE_PUSH_PALLAS: FORWARD_EXECUTION_STAGED_HOST_SYNC,
+    BACKEND_SOURCE_PUSH_BLACKWELL: FORWARD_EXECUTION_STAGED_DEVICE_SYNC,
 }
 OUTER_JIT_CHOICES = ("auto", "true", "false")
 SUMMARY_METRICS = (
@@ -1319,10 +1332,20 @@ def _make_benchmark_callable(
             )
     if backend in SOURCE_PUSH_BACKEND_TO_IMPLEMENTATION:
         implementation = SOURCE_PUSH_BACKEND_TO_IMPLEMENTATION[backend]
+        execution_mode = SOURCE_PUSH_BACKEND_TO_EXECUTION_MODE[backend]
         if mode == MODE_FORWARD:
             return (
                 lambda x, combine, w13, w2: _preplanned_source_push_forward(
-                    config, mesh, host_inputs, route_table, implementation, x, combine, w13, w2
+                    config,
+                    mesh,
+                    host_inputs,
+                    route_table,
+                    implementation,
+                    execution_mode,
+                    x,
+                    combine,
+                    w13,
+                    w2,
                 ),
                 (inputs["x_source"], inputs["combine_source"], inputs["w13_source"], inputs["w2_source"]),
             )
@@ -1330,7 +1353,16 @@ def _make_benchmark_callable(
             return (
                 jax.value_and_grad(
                     lambda x, combine, w13, w2: _preplanned_source_push_loss_aux(
-                        config, mesh, host_inputs, route_table, implementation, x, combine, w13, w2
+                        config,
+                        mesh,
+                        host_inputs,
+                        route_table,
+                        implementation,
+                        execution_mode,
+                        x,
+                        combine,
+                        w13,
+                        w2,
                     ),
                     argnums=(0, 1, 2, 3),
                     has_aux=True,
@@ -1366,6 +1398,7 @@ def _preplanned_source_push_forward(
     host_inputs,
     route_table,
     implementation: str,
+    execution_mode: str,
     x,
     combine,
     w13,
@@ -1380,7 +1413,7 @@ def _preplanned_source_push_forward(
         w13,
         w2,
         implementation=implementation,
-        execution_mode=FORWARD_EXECUTION_STAGED_HOST_SYNC,
+        execution_mode=execution_mode,
         mesh=mesh,
     )
 
@@ -1391,6 +1424,7 @@ def _preplanned_source_push_loss_aux(
     host_inputs,
     route_table,
     implementation: str,
+    execution_mode: str,
     x,
     combine,
     w13,
@@ -1402,6 +1436,7 @@ def _preplanned_source_push_loss_aux(
         host_inputs,
         route_table,
         implementation,
+        execution_mode,
         x,
         combine,
         w13,
