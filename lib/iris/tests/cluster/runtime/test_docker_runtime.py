@@ -13,18 +13,6 @@ from iris.cluster.runtime.types import MountKind, MountSpec
 from iris.rpc import job_pb2
 
 
-def _expand_reserved_ports(spec: str) -> set[int]:
-    """Expand an ip_local_reserved_ports spec ("8081,8431,8470-8482") to a port set."""
-    ports: set[int] = set()
-    for part in spec.split(","):
-        if "-" in part:
-            lo, hi = (int(x) for x in part.split("-"))
-            ports.update(range(lo, hi + 1))
-        else:
-            ports.add(int(part))
-    return ports
-
-
 @pytest.fixture
 def runtime(tmp_path):
     return DockerRuntime(cache_dir=tmp_path / "cache")
