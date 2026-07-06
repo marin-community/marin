@@ -539,8 +539,27 @@ class ControllerDashboard:
 
     @public
     def _auth_config(self, request: Request) -> JSONResponse:
-        """Unauthenticated endpoint telling the frontend whether auth is required."""
-        has_session = SESSION_COOKIE in request.cookies
+        """Unauthenticated endpoint telling the frontend whether auth is required
+        and whether this request is already authenticated.
+
+        ``authenticated`` resolves the request through the same policy the RPC
+        surface enforces, so an IAP-fronted caller — authenticated by the signed
+        edge header and holding no session cookie — is recognized without a login
+        round-trip. A cookie-only check would send every IAP user to the
+        bearer-token login page even though IAP already admitted them.
+        """
+        headers = dict(request.headers)
+        token = extract_bearer_token(headers, cookie_name=SESSION_COOKIE)
+        client = request.client
+        try:
+            self._auth_policy.resolve(
+                token,
+                client_address=f"{client.host}:{client.port}" if client else None,
+                headers=headers,
+            )
+            authenticated = True
+        except ValueError:
+            authenticated = False
         descriptors = {bid: backend_descriptor(b) for bid, b in self._service.backends.items()}
         union_capabilities = sorted({cap for d in descriptors.values() for cap in d.capabilities})
         representative = backend_descriptor(self._service.provider)
@@ -548,7 +567,7 @@ class ControllerDashboard:
             {
                 "auth_enabled": self._auth_provider is not None,
                 "provider": self._auth_provider,
-                "has_session": has_session,
+                "authenticated": authenticated,
                 # Union of every backend's capabilities gates which tabs the dashboard shows.
                 "capabilities": union_capabilities,
                 "backends": [

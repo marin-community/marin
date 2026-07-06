@@ -44,7 +44,7 @@ let _peersPromise: Promise<void> | null = null
 
 export interface AuthConfig {
   authEnabled: boolean
-  hasSession: boolean
+  authenticated: boolean
   authOptional: boolean
 }
 
@@ -58,7 +58,7 @@ export function useBackends() {
    * without a second fetch.
    */
   async function fetchConfig(): Promise<AuthConfig> {
-    const authDefaults: AuthConfig = { authEnabled: false, hasSession: false, authOptional: false }
+    const authDefaults: AuthConfig = { authEnabled: false, authenticated: false, authOptional: false }
     if (_configFetched) return authDefaults
     _configFetched = true
     try {
@@ -66,7 +66,7 @@ export function useBackends() {
       if (!resp.ok) return authDefaults
       const config = await resp.json() as {
         auth_enabled?: boolean
-        has_session?: boolean
+        authenticated?: boolean
         optional?: boolean
         capabilities?: string[]
         backends?: Array<{ id: string; name?: string; capabilities?: string[] }>
@@ -85,7 +85,7 @@ export function useBackends() {
       }
       return {
         authEnabled: config.auth_enabled ?? false,
-        hasSession: config.has_session ?? false,
+        authenticated: config.authenticated ?? false,
         authOptional: config.optional ?? false,
       }
     } catch {
