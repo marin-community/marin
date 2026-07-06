@@ -1,3 +1,4 @@
+import { useMemo } from "react";
 import {
   CartesianGrid,
   Legend,
@@ -7,7 +8,7 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
-import type { WandbChart } from "../api";
+import type { WandbChart, WandbRunSeries } from "../api";
 import { useWandb } from "../hooks/useWandb";
 import { formatRelative, useContainerSize } from "./chartUtils";
 
@@ -32,9 +33,27 @@ function seriesName(run: string, state: string): string {
   return state === "running" ? run : `${run} (${state})`;
 }
 
+// The first warmup points of a loss curve sit an order of magnitude above
+// the rest, and a naive [min, max] y-domain squashes everything
+// interesting onto the x-axis. Cap the domain at the 98th percentile of
+// all plotted values instead — the few points above it are clipped by
+// allowDataOverflow on the YAxis, which is how the eye reads a zoomed
+// W&B chart anyway.
+function clippedYDomain(series: WandbRunSeries[]): [number, number] {
+  const ys = series
+    .flatMap((s) => s.points.map((p) => p.y))
+    .sort((a, b) => a - b);
+  if (ys.length === 0) return [0, 1];
+  const min = ys[0];
+  const max = ys[Math.min(ys.length - 1, Math.floor(ys.length * 0.98))];
+  const pad = (max - min) * 0.05 || Math.abs(max) * 0.05 || 1;
+  return [min - pad, max + pad];
+}
+
 function ChartCard({ chart }: { chart: WandbChart }) {
   const { ref, size } = useContainerSize<HTMLDivElement>();
   const hasData = chart.series.some((s) => s.points.length > 0);
+  const yDomain = useMemo(() => clippedYDomain(chart.series), [chart.series]);
   return (
     <div>
       <div className="mb-2 flex items-baseline justify-between">
@@ -43,7 +62,7 @@ function ChartCard({ chart }: { chart: WandbChart }) {
         </h4>
         <span className="text-xs text-slate-600">vs training tokens</span>
       </div>
-      <div ref={ref} className="h-56 w-full">
+      <div ref={ref} className="h-72 w-full">
         {hasData && size ? (
           <LineChart
             width={size.width}
@@ -62,7 +81,8 @@ function ChartCard({ chart }: { chart: WandbChart }) {
             <YAxis
               width={58}
               type="number"
-              domain={["auto", "auto"]}
+              domain={yDomain}
+              allowDataOverflow
               tickFormatter={(v: number) => v.toFixed(2)}
               stroke="#475569"
               fontSize={11}

@@ -22,7 +22,7 @@ const REPORT_URL =
 // so it works as a shared x-axis across metrics and across the resume
 // boundary, where `_step` would restart.
 const X_KEY = "throughput/total_tokens";
-const SAMPLES_PER_SERIES = 256;
+const SAMPLES_PER_SERIES = 512;
 const FETCH_TIMEOUT_MS = 15_000;
 
 interface RunConfig {
