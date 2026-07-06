@@ -180,8 +180,12 @@ thalas = { git = "https://github.com/marin-community/thalas.git", rev = "5a7b66d
 # marin-community rev above (04f7da7e2); joint decode's hold machinery needs it.
 # https://github.com/RohithKuditipudi/vllm/compare/04f7da7e26eacb4e8d7e7d2dce6347d2ff90af4d...e0ce7b17fcce3c6426162a9763cf12f394fe1db8
 vllm = { git = "https://github.com/RohithKuditipudi/vllm.git", rev = "e0ce7b17fcce3c6426162a9763cf12f394fe1db8" }
-# https://github.com/marin-community/tpu-inference/compare/23d17a8120d9cc34890135599f42e1db4f947c10...808415f45bbfcb512e9c593c4a3330aed115917e
-tpu-inference = { git = "https://github.com/marin-community/tpu-inference.git", rev = "808415f45bbfcb512e9c593c4a3330aed115917e" }
+# Joint-decode token-decision callback overlay: one commit on top of the
+# marin-community rev main pins (808415f45).
+# https://github.com/RohithKuditipudi/tpu-inference/compare/808415f45bbfcb512e9c593c4a3330aed115917e...d00748dbe8db8460640d88fb9631dbee9b5185b5
+tpu-inference = { git = "https://github.com/RohithKuditipudi/tpu-inference.git", rev = "d00748dbe8db8460640d88fb9631dbee9b5185b5" }
+# Backend-neutral joint decoding (coordinator, worker loop, gpu/tpu backends).
+joint-decode = { git = "https://github.com/RohithKuditipudi/joint-decode.git", rev = "832f6a00e924245c4c6c9f2220f8bb36114686a8" }
 # ### BEGIN RUST-DEV SOURCES ###
 # ### END RUST-DEV SOURCES ###
 
