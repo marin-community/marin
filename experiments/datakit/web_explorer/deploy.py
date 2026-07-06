@@ -31,7 +31,7 @@ import subprocess
 from pathlib import Path
 
 import click
-from ducky.tunnel import cluster_tunnel
+from iris.cli.connect import open_iris_client
 from iris.client.client import IrisClient, Job
 from iris.cluster.constraints import region_constraint
 from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec
@@ -160,8 +160,15 @@ def cli(
 
     policy = job_pb2.EXISTING_JOB_POLICY_KEEP if keep else job_pb2.EXISTING_JOB_POLICY_RECREATE
 
-    def _submit(url: str) -> None:
-        client = IrisClient.remote(url, workspace=Path.cwd(), extra_bundle_includes=[DASHBOARD_DIST_INCLUDE])
+    # open_iris_client resolves the cluster config -> credentials (incl. the IAP OIDC
+    # token for an IAP-fronted controller like marin) -> a reachable controller URL,
+    # then builds an authenticated client — the same path the iris CLI uses.
+    with open_iris_client(
+        cluster_name=cluster,
+        controller_url=controller_url,
+        workspace=Path.cwd(),
+        extra_bundle_includes=[DASHBOARD_DIST_INCLUDE],
+    ) as client:
         job = submit_web_explorer(
             client,
             name=name,
@@ -176,13 +183,6 @@ def cli(
             job.job_id,
             PORT_NAME,
         )
-
-    if cluster:
-        with cluster_tunnel(cluster) as url:
-            _submit(url)
-    else:
-        assert controller_url is not None  # guarded above
-        _submit(controller_url)
 
 
 if __name__ == "__main__":
