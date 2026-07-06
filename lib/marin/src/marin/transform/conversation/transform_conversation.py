@@ -12,7 +12,6 @@ Usage Instructions:
 import hashlib
 import json
 import logging
-import os
 from collections import defaultdict
 from collections.abc import Sequence
 from dataclasses import dataclass, field
@@ -25,7 +24,7 @@ import draccus
 import fsspec
 from marin.core.conversation import DolmaConversationOutput, OpenAIChatMessage
 from marin.utils import fsspec_mkdirs, load_dataset_with_backoff
-from rigging.filesystem import url_to_fs
+from rigging.filesystem import StoragePath, prefix_join, url_to_fs
 from zephyr import Dataset, ZephyrContext, load_jsonl, write_jsonl_file
 
 from .adapters import TransformAdapter
@@ -219,7 +218,7 @@ def _get_available_splits(cfg: TransformSFTDatasetConfig, subset: str | None) ->
 
 
 def _shard_filename(output_path: str, shard_idx: int) -> str:
-    return os.path.join(output_path, f"shard_{shard_idx:05d}.jsonl.gz")
+    return prefix_join(output_path, f"shard_{shard_idx:05d}.jsonl.gz")
 
 
 def _streaming_dataset_kwargs(source: str, split: str, revision: str, subset: str | None) -> dict[str, object]:
@@ -239,13 +238,13 @@ def _streaming_dataset_kwargs(source: str, split: str, revision: str, subset: st
     return kwargs
 
 
-def get_shard_dir(dir_name: os.PathLike, subset_name: str | None, split: str) -> os.PathLike | str:
+def get_shard_dir(dir_name: str, subset_name: str | None, split: str) -> str:
     """Creates a new path with the subset and split names.
     e.g., create_subset_name('gs://thisserver/testfolder-a982374', 'subset', 'train') -> 'gs://thisserver/testfolder-a982374/subset/train'
     """
     if (subset_name == "default") or (subset_name is None):
-        return os.path.join(dir_name, split)
-    return os.path.join(dir_name, subset_name, split)
+        return prefix_join(dir_name, split)
+    return str(StoragePath.parse(dir_name) / subset_name / split)
 
 
 def get_dataset_tasks(cfg: TransformSFTDatasetConfig):
@@ -380,7 +379,7 @@ def transform_hf_dataset(cfg: TransformSFTDatasetConfig):
     all_tasks = list(get_dataset_tasks(cfg))
     logger.info(f"Found {len(all_tasks)} total shards across all subset/split combinations")
 
-    metrics_path = os.path.join(cfg.output_path, "metrics")
+    metrics_path = prefix_join(cfg.output_path, "metrics")
     pipeline = (
         Dataset.from_list(all_tasks)
         .map(process_shard_task)

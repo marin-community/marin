@@ -11,12 +11,11 @@ Note: The enwiki-NS0 file (English Wikipedia, namespace 0 = articles) is approxi
 """
 
 import logging
-import os
 import tarfile
 from collections.abc import Iterable
 
 import requests
-from rigging.filesystem import atomic_rename, open_url
+from rigging.filesystem import atomic_rename, open_url, prefix_join
 from tqdm_loggable.auto import tqdm
 from zephyr import Dataset, ZephyrContext, load_jsonl
 
@@ -28,7 +27,7 @@ logger = logging.getLogger(__name__)
 
 def download_tar(url: str, output_prefix: str) -> str:
     shard_filename = url.split("/")[-1]
-    output_filename = os.path.join(output_prefix, shard_filename)
+    output_filename = prefix_join(output_prefix, shard_filename)
     logger.info(f"Downloading URL: {url} to {output_filename}")
 
     try:
@@ -65,7 +64,7 @@ def process_file(input_file: str, output_path: str) -> Iterable[str]:
                         continue
                     with file:
                         file_content = file.read()
-                        file_path = os.path.join(output_path, info.name + ".gz")
+                        file_path = prefix_join(output_path, info.name + ".gz")
 
                     # Each file is a .ndjson file, which contains about 18k-21k articles
                     # per file with size ranging from 200MB to 300MB
@@ -84,13 +83,13 @@ def process_file(input_file: str, output_path: str) -> Iterable[str]:
 def download_wikipedia(input_urls: list[str], revision: str, output_path: str) -> None:
     """Download and process Wikipedia data."""
     logger.info("Starting transfer of Wikipedia dump...")
-    output_base = os.path.join(output_path, revision)
+    output_base = prefix_join(output_path, revision)
 
     ctx = ZephyrContext(name="download-wikipedia")
     download_metrics = ctx.execute(
         Dataset.from_list(input_urls)
         .map(lambda url: download_tar(url, output_base))
-        .write_jsonl(f"{output_base}/.metrics/download-{{shard:05d}}.jsonl", skip_existing=True),
+        .write_jsonl(prefix_join(output_base, ".metrics/download-{shard:05d}.jsonl"), skip_existing=True),
     ).results
 
     # load all of the output filenames to process
@@ -99,7 +98,7 @@ def download_wikipedia(input_urls: list[str], revision: str, output_path: str) -
     extracted = ctx.execute(
         Dataset.from_list(downloads)
         .flat_map(lambda file: process_file(file, output_base))
-        .write_jsonl(f"{output_base}/.metrics/process-{{shard:05d}}.jsonl", skip_existing=True),
+        .write_jsonl(prefix_join(output_base, ".metrics/process-{shard:05d}.jsonl"), skip_existing=True),
     ).results
 
     logger.info("Wikipedia dump transfer complete, wrote: %s", extracted)

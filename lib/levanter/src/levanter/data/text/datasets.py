@@ -5,7 +5,6 @@ import abc
 import dataclasses
 import functools
 import logging
-import os
 from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
@@ -19,6 +18,7 @@ import numpy as np
 from draccus import ChoiceRegistry, field
 from haliax import Axis
 from jaxtyping import PRNGKeyArray
+from rigging.filesystem import prefix_join
 from rigging.timing import log_time
 
 import levanter
@@ -258,7 +258,7 @@ class LmDatasetSourceConfigBase(ChoiceRegistry):
         base_cache = override_cache_dir if override_cache_dir is not None else self.cache_dir
         if base_cache is None:
             raise ValueError("cache_dir must be set or override_cache_dir must be provided")
-        return load_lm_dataset_cache(os.path.join(base_cache, split), self.format, tokenizer, enforce_eos=enforce_eos)
+        return load_lm_dataset_cache(prefix_join(base_cache, split), self.format, tokenizer, enforce_eos=enforce_eos)
 
     @classmethod
     def default_choice_name(cls) -> str | None:
@@ -563,7 +563,7 @@ def _component_cache_dir(name: str, component: DatasetComponent, default_root: s
     if base is None:
         raise ValueError(f"No cache_dir provided for component {name}")
     if component.cache_dir is None:
-        return os.path.join(base, name)
+        return prefix_join(base, name)
     return base
 
 
@@ -932,7 +932,7 @@ class LmDataConfig:
                     return name, None, None
                 cache_path = cache_root
             else:
-                cache_path = os.path.join(cache_root, split)
+                cache_path = prefix_join(cache_root, split)
             source = component.source
 
             if source is None:

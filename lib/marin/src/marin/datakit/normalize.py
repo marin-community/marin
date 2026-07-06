@@ -25,7 +25,7 @@ from typing import Any
 import dupekit
 from fray import ResourceConfig
 from pydantic import BaseModel
-from rigging.filesystem import url_to_fs
+from rigging.filesystem import prefix_join, url_to_fs
 from zephyr import Dataset, ShardInfo, ZephyrContext, counters, write_parquet_file
 from zephyr.readers import SUPPORTED_EXTENSIONS, load_file
 from zephyr.writers import ThreadedBatchWriter
@@ -270,8 +270,8 @@ def _make_split_writer(
     ) -> Iterator[dict[str, dict[str, Any]]]:
         # NOTE: we could add support for split_existing - but we intentionally don't
         shard_filename = partition_filename(shard.shard_idx, shard.total_shards)
-        main_path = f"{output_dir}/outputs/main/{shard_filename}"
-        dup_path = f"{output_dir}/outputs/dups/{shard_filename}"
+        main_path = prefix_join(output_dir, f"outputs/main/{shard_filename}")
+        dup_path = prefix_join(output_dir, f"outputs/dups/{shard_filename}")
 
         # Results are populated by each writer thread. Safe to read only after
         # the ThreadedBatchWriter context exits (which joins the thread).
@@ -458,8 +458,8 @@ def normalize_to_parquet(
         )
 
     return NormalizedData(
-        main_output_dir=os.path.join(output_path, "outputs/main"),
-        dup_output_dir=os.path.join(output_path, "outputs/dups"),
+        main_output_dir=prefix_join(output_path, "outputs/main"),
+        dup_output_dir=prefix_join(output_path, "outputs/dups"),
         counters=counters_dict,
     )
 
@@ -504,11 +504,10 @@ def normalize_step(
             Defaults to ``DedupMode.EXACT``; use ``DedupMode.NONE`` to skip.
     """
     if relative_input_path:
-        # ``os.path.join`` collapses redundant separators when ``download.output_path``
-        # ends with ``/`` (e.g. ``override_output_path="gs://.../nemotro-cc-eeb783/"``);
-        # naive f-string concatenation would yield ``gs://.../nemotro-cc-eeb783//<rel>``,
-        # which ``_discover_files`` then fails to resolve on GCS.
-        resolved_input = os.path.join(download.output_path, relative_input_path)
+        # ``prefix_join`` yields exactly one separator even when ``download.output_path``
+        # ends with ``/`` (e.g. ``gs://.../nemotro-cc-eeb783/``); a naive f-string join
+        # would leave the doubled ``//`` that ``_discover_files`` then fails to resolve on GCS.
+        resolved_input = prefix_join(download.output_path, relative_input_path)
     else:
         resolved_input = download.output_path
 

@@ -29,7 +29,7 @@ from jax._src.mesh import get_concrete_mesh
 from jax.sharding import Mesh, Sharding
 from jaxtyping import PyTree
 
-from rigging.filesystem import record_transfer
+from rigging.filesystem import prefix_join, record_transfer
 
 from levanter._debug_logging import flush_debug_output
 from levanter.utils import fsspec_utils, jax_utils
@@ -393,7 +393,7 @@ def _restore_old_ts(
     Returns:
         Tuple of (deserialized_leaves, indices_to_load)
     """
-    paths = [os.path.join(checkpoint_dir, p) for p in paths]
+    paths = [prefix_join(checkpoint_dir, p) for p in paths]
 
     paths_to_load = []
     indices_to_load = []
@@ -493,14 +493,14 @@ def tree_deserialize_leaves_tensorstore(
         """Find the checkpoint root by looking for metadata.json"""
         current = path
         while current and current != os.path.dirname(current):
-            metadata_path = os.path.join(current, "metadata.json")
+            metadata_path = prefix_join(current, "metadata.json")
             if fsspec_utils.exists(metadata_path):
                 return current
             current = os.path.dirname(current)
         return path  # fallback to original path
 
     checkpoint_root = find_checkpoint_root(checkpoint_dir)
-    ocdbt_manifest_path = os.path.join(checkpoint_root, "manifest.ocdbt")
+    ocdbt_manifest_path = prefix_join(checkpoint_root, "manifest.ocdbt")
     is_ocdbt_checkpoint = fsspec_utils.exists(ocdbt_manifest_path)
 
     if is_ocdbt_checkpoint:

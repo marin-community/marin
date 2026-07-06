@@ -4,14 +4,13 @@
 import heapq
 import itertools
 import json
-import os
 from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import Any, Iterator, Sequence
 
 import numpy as np
 import regex
-from rigging.filesystem import open_url
+from rigging.filesystem import open_url, prefix_join
 
 from levanter.data.sharded_datasource import ShardedDataSource
 from levanter.data.text import DatasetComponent, SupervisedLmDatasetFormat, TextLmDatasetFormat
@@ -881,9 +880,9 @@ def render_report_markdown(summary: dict[str, Any]) -> str:
 
 
 def write_report_files(output_path: str, summary: dict[str, Any]) -> tuple[str, str, str]:
-    summary_path = os.path.join(output_path, "summary.json")
-    report_path = os.path.join(output_path, "report.md")
-    worst_documents_path = os.path.join(output_path, "worst_documents.jsonl")
+    summary_path = prefix_join(output_path, "summary.json")
+    report_path = prefix_join(output_path, "report.md")
+    worst_documents_path = prefix_join(output_path, "worst_documents.jsonl")
     mkdirs(output_path)
 
     with open_url(summary_path, "w") as f:

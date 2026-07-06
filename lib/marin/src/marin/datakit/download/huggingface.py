@@ -18,7 +18,7 @@ import huggingface_hub
 from fray import ResourceConfig
 from huggingface_hub.errors import HfHubHTTPError
 from packaging.version import Version
-from rigging.filesystem import atomic_rename, open_url, url_to_fs
+from rigging.filesystem import atomic_rename, open_url, prefix_join, url_to_fs
 from rigging.log_setup import configure_logging
 from zephyr import Dataset, ZephyrContext
 
@@ -164,7 +164,7 @@ def ensure_fsspec_path_writable(output_path: str) -> None:
     fs, _ = url_to_fs(output_path)
     try:
         fs.mkdirs(output_path, exist_ok=True)
-        test_path = os.path.join(output_path, "test_write_access")
+        test_path = prefix_join(output_path, "test_write_access")
         with fs.open(test_path, "w") as f:
             f.write("test")
         fs.rm(test_path)
@@ -298,7 +298,7 @@ def download_hf(cfg: DownloadConfig) -> None:
     # Some historical datasets were written that way, so this flag keeps backwards compatibility when needed.
 
     # Ensure the output path is writable
-    output_path = os.path.join(cfg.gcs_output_path, cfg.revision) if cfg.append_sha_to_path else cfg.gcs_output_path
+    output_path = prefix_join(cfg.gcs_output_path, cfg.revision) if cfg.append_sha_to_path else cfg.gcs_output_path
     ensure_fsspec_path_writable(output_path)
 
     # Resolve source URL and filesystem. For production this is an hf:// URL backed
@@ -343,7 +343,7 @@ def download_hf(cfg: DownloadConfig) -> None:
         relative_file_path = _relative_path_in_source(file, source_root)
         if relative_file_path.startswith(".."):
             raise ValueError(f"Computed path escapes source root: source={hf_source_path}, file={file}")
-        fsspec_file_path = os.path.join(output_path, relative_file_path)
+        fsspec_file_path = prefix_join(output_path, relative_file_path)
         expected_size = file_sizes.get(file)
         # Fully-qualify the source URL so subprocess workers can open it via fsspec
         # without having to reconstruct HfFileSystem / revision state.
@@ -368,7 +368,8 @@ def download_hf(cfg: DownloadConfig) -> None:
         Dataset.from_list(download_tasks)
         .map(lambda task: stream_file_to_fsspec(*task))
         .write_jsonl(
-            f"{cfg.gcs_output_path}/.metrics/success-part-{{shard:05d}}-of-{{total:05d}}.jsonl", skip_existing=True
+            prefix_join(cfg.gcs_output_path, ".metrics/success-part-{shard:05d}-of-{total:05d}.jsonl"),
+            skip_existing=True,
         )
     )
     ctx_kwargs: dict = {"name": "download-hf", "max_workers": cfg.zephyr_max_parallelism}
