@@ -238,3 +238,13 @@ embedding-featurized mixture surrogate transferred to a genuinely new bucket wit
 optimum. Known limits: quality-blindness (within-topic), dispersion confound (keep matched
 controls), one-scale rule evidence at each of 60M/2b stages, optimizer optimism ~0.03 at the
 argmax.
+
+## 2026-07-06 H3 significance check (no replicates needed)
+
+Swarm's own 300M repeat-noise measurement (`reference_outputs/300m_snr_fixed_vs_variable_20260501`,
+n=10 repeats): σ(eval/uncheatable_eval/bpb) ≈ 0.00073 (fixed subset 0.000728, variable 0.000742).
+H3 margins: proposal−olmix 0.0085 ≈ **8.1σ_diff**; proposal−anchor 0.0145 ≈ **13.8σ_diff**
+(σ_diff = σ√2 ≈ 0.00105). Heteroskedasticity caveat checked: worst-case local std ratios (~11.5×)
+come from starcoder-DOMINATED anchors in the starcoder-stress swarm; our proposal holds ~5%
+starcoder — even a paranoid 3× inflation leaves 2.7σ/4.6σ. Replicates skipped (would cost ~24
+TPU-hours to confirm an ~8σ result).
