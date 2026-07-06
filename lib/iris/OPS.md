@@ -24,18 +24,14 @@ the controller mints no token. Two ways to get an edge token:
 
 - **Interactive** — `iris --cluster=NAME login` runs the desktop OAuth browser
   flow and caches a refresh token. Needs a browser; not usable headless.
-- **Headless / CI / agent** — do **not** run `iris login` (it needs a browser,
-  and `fetch_id_token` cannot mint an IAP token from end-user `gcloud`
-  credentials). Instead authenticate *as an IAP-allowlisted service account* by
-  impersonating it — no browser, no key file. Pass
-  `--impersonate-service-account` (or set `$MARIN_IMPERSONATE_SERVICE_ACCOUNT`);
-  iris mints the edge token as that SA using your ordinary user login as the
-  impersonation source:
+- **Headless / CI / agent** — do **not** run `iris login` (it needs a browser).
+  Instead give the process credentials for an *IAP-allowlisted service account*.
+  The keyless way is to point your ADC at one by impersonation — no browser, no
+  key file; iris reads it through the standard resolver with no flag or env:
 
   ```bash
-  gcloud auth application-default login   # once, if you have no user ADC yet
-
-  export MARIN_IMPERSONATE_SERVICE_ACCOUNT=iris-controller@hai-gcp-models.iam.gserviceaccount.com
+  gcloud auth application-default login \
+    --impersonate-service-account=iris-controller@hai-gcp-models.iam.gserviceaccount.com
   iris --cluster=marin-dev cluster status
   ```
 

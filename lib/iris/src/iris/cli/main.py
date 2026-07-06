@@ -13,7 +13,6 @@ import click
 from rigging.auth import MARIN_DESKTOP_OAUTH_CLIENT, IapCredentialsUnavailable, run_iap_desktop_login
 from rigging.config_discovery import resolve_cluster_config
 from rigging.credential_store import CredentialRecord, save_credentials
-from rigging.credentials import MARIN_IMPERSONATE_ENV
 from rigging.log_setup import configure_logging
 
 from iris.cli.connect import (
@@ -53,17 +52,6 @@ def _configure_client_s3(config) -> None:
     default=None,
     help="Named cluster to resolve from config search paths; preferred for known clusters",
 )
-@click.option(
-    "--impersonate-service-account",
-    "impersonate_service_account",
-    envvar=MARIN_IMPERSONATE_ENV,
-    default=None,
-    help=(
-        "Authenticate to an IAP cluster as this service account by impersonating it "
-        "(browserless; the headless/CI path). Needs Token Creator on the SA and the "
-        "SA on the cluster's IAP allowlist. Also reads $MARIN_IMPERSONATE_SERVICE_ACCOUNT."
-    ),
-)
 @click.pass_context
 def iris(
     ctx,
@@ -72,14 +60,12 @@ def iris(
     controller_url: str | None,
     config_file: str | None,
     cluster_name: str | None,
-    impersonate_service_account: str | None,
 ):
     """Iris cluster management."""
     ctx.ensure_object(dict)
     ctx.obj["traceback"] = show_traceback
     ctx.obj["verbose"] = verbose
     ctx.obj["cluster_name"] = cluster_name
-    ctx.obj["impersonate_service_account"] = impersonate_service_account
 
     if verbose:
         configure_logging(level=logging.DEBUG)
@@ -117,13 +103,11 @@ def iris(
 
         name = resolve_cluster_name(config, controller_url, cluster_name)
         ctx.obj["cluster_name"] = name
-        ctx.obj["credentials"] = client_credentials(
-            config, name, impersonate_service_account=impersonate_service_account
-        )
+        ctx.obj["credentials"] = client_credentials(config, name)
     else:
         name = resolve_cluster_name(None, controller_url, cluster_name)
         ctx.obj["cluster_name"] = name
-        ctx.obj["credentials"] = client_credentials(None, name, impersonate_service_account=impersonate_service_account)
+        ctx.obj["credentials"] = client_credentials(None, name)
 
     # Store direct controller URL; tunnel from config is established lazily
     # in require_controller_url() so commands like ``cluster start`` don't block.
@@ -150,9 +134,10 @@ def login(ctx, headless):
     On a box with no local browser but where you can open a URL elsewhere, pass
     ``--headless`` (auto-detected when no browser is registered) to authenticate by
     pasting the returned code. Fully unattended callers (CI / agents, no human at
-    all) instead impersonate an IAP-allowlisted service account with the global
-    ``--impersonate-service-account`` flag (or ``$MARIN_IMPERSONATE_SERVICE_ACCOUNT``);
-    see ``lib/iris/docs/iap-gclb.md``.
+    all) skip login entirely and instead give the process service-account
+    credentials on the cluster's IAP allowlist — e.g. ``gcloud auth
+    application-default login --impersonate-service-account=<sa>``; see
+    ``lib/iris/docs/iap-gclb.md``.
     """
     controller_url = require_controller_url(ctx)
     config = ctx.obj.get("config")
@@ -178,9 +163,10 @@ def login(ctx, headless):
     except Exception as e:
         raise click.ClickException(
             f"IAP authentication failed: {e}\n"
-            "If you are headless (CI / agent), skip `iris login` and pass "
-            "--impersonate-service-account <SA> (or set $MARIN_IMPERSONATE_SERVICE_ACCOUNT) "
-            "to authenticate as an IAP-allowlisted service account. See lib/iris/docs/iap-gclb.md."
+            "If you are fully unattended (CI / agent), skip `iris login` and give the "
+            "process service-account credentials on the cluster's IAP allowlist, e.g. "
+            "`gcloud auth application-default login --impersonate-service-account=<sa>`. "
+            "See lib/iris/docs/iap-gclb.md."
         ) from e
 
     save_credentials(
@@ -302,9 +288,9 @@ def main() -> None:
     except IapCredentialsUnavailable as exc:
         click.secho(f"Error: {exc}", fg="red", err=True)
         click.echo(
-            "Run `iris login` to authenticate interactively, or pass "
-            "--impersonate-service-account <SA> (or set $MARIN_IMPERSONATE_SERVICE_ACCOUNT) "
-            "for the headless path. See lib/iris/docs/iap-gclb.md.",
+            "Run `iris login` for the interactive path, or for an unattended caller "
+            "`gcloud auth application-default login --impersonate-service-account=<sa>`. "
+            "See lib/iris/docs/iap-gclb.md.",
             err=True,
         )
         sys.exit(1)

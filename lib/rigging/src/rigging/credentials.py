@@ -30,7 +30,6 @@ from dataclasses import dataclass
 from rigging.auth import (
     MARIN_DESKTOP_OAUTH_CLIENT,
     BearerTokenInjector,
-    IapImpersonatedTokenProvider,
     IapRefreshTokenProvider,
     IapServiceAccountTokenProvider,
     OAuthClient,
@@ -41,12 +40,6 @@ from rigging.cluster_manifest import AuthProvider, ClusterAuth
 from rigging.credential_store import load_credentials
 
 MARIN_CLUSTER_TOKEN_ENV = "MARIN_CLUSTER_TOKEN"
-
-# Set this to a service-account email to authenticate to an IAP cluster as that
-# SA by impersonating it — the browserless path when only user credentials are
-# available (see IapImpersonatedTokenProvider). The CLI's
-# --impersonate-service-account flag sets the same value.
-MARIN_IMPERSONATE_ENV = "MARIN_IMPERSONATE_SERVICE_ACCOUNT"
 
 
 @dataclass(frozen=True)
@@ -114,13 +107,10 @@ def _desktop_client(auth: ClusterAuth) -> OAuthClient:
     return MARIN_DESKTOP_OAUTH_CLIENT
 
 
-def _edge_provider(
-    cluster: str, auth: ClusterAuth, *, impersonate_service_account: str | None = None
-) -> TokenProvider | None:
+def _edge_provider(cluster: str, auth: ClusterAuth) -> TokenProvider | None:
     """Resolve the IAP edge provider.
 
-    Precedence: explicit service-account impersonation (``impersonate_service_account``),
-    then a cached human login, then ambient service-account credentials.
+    Precedence: a cached human login, then ambient service-account credentials.
     """
     if auth.provider is not AuthProvider.IAP or auth.iap is None:
         return None
@@ -132,14 +122,11 @@ def _edge_provider(
     # backend allowlist for authorization.
     audiences = auth.iap.programmatic_audiences
     audience = audiences[0] if audiences else _desktop_client(auth).client_id
-    # Explicit impersonation wins: the caller asked to act as this SA, using their
-    # own (typically user) credentials as the source. The browserless dev-box path.
-    if impersonate_service_account:
-        return IapImpersonatedTokenProvider(audience, impersonate_service_account)
     human = iap_edge_provider(cluster, desktop_client=_desktop_client(auth))
     if human is not None:
         return human
-    # No cached login (the in-cluster path): mint an ambient service-account ID token.
+    # No cached login: mint an ID token from ambient service-account credentials
+    # (a key, GCE metadata, or an impersonated ADC).
     return IapServiceAccountTokenProvider(audience)
 
 
@@ -148,22 +135,15 @@ def credentials_for(
     auth: ClusterAuth,
     *,
     token_env: str = MARIN_CLUSTER_TOKEN_ENV,
-    impersonate_service_account: str | None = None,
 ) -> ClientCredentials:
     """Assemble the :class:`ClientCredentials` for ``cluster`` from the standard sources.
 
     ``auth`` is the cluster's resolved auth shape (provider + IAP params). The IAP
     edge provider is the sole per-request auth (``Proxy-Authorization``); the
     ``Authorization`` bearer is empty unless ``$MARIN_CLUSTER_TOKEN`` injects one.
-
-    ``impersonate_service_account`` authenticates to an IAP cluster as that SA by
-    impersonating it (the browserless path); it defaults to
-    ``$MARIN_IMPERSONATE_SERVICE_ACCOUNT`` so headless callers need only set the
-    environment.
     """
     override = os.environ.get(token_env)
-    impersonate = impersonate_service_account or os.environ.get(MARIN_IMPERSONATE_ENV)
     return ClientCredentials(
         token_provider=StaticTokenProvider(override) if override else None,
-        iap_provider=_edge_provider(cluster, auth, impersonate_service_account=impersonate),
+        iap_provider=_edge_provider(cluster, auth),
     )

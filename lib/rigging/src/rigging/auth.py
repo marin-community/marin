@@ -10,16 +10,15 @@ service-specific concerns live with the service (e.g. iris).
 
 Token sources are provided against ambient Google credentials:
 ``GcpAccessTokenProvider`` mints OAuth2 *access* tokens (for Google APIs and
-loopback-trust services). Three providers mint the Google-signed OIDC *ID* token
+loopback-trust services). Two providers mint the Google-signed OIDC *ID* token
 an IAP-fronted service requires, differing only in where the credential comes
 from: ``IapRefreshTokenProvider`` re-mints from a cached desktop-OAuth refresh
 token (the human path; obtain the initial token once with
-``run_iap_desktop_login``); ``IapServiceAccountTokenProvider`` uses
-``fetch_id_token`` (an ambient service-account key or GCE metadata — the
-in-cluster path); and ``IapImpersonatedTokenProvider`` impersonates a service
-account from the caller's own credentials (the browserless dev-box / CI path,
-where only user credentials are available). All cache the token until shortly
-before expiry and only touch the network inside ``get_token``.
+``run_iap_desktop_login``); ``IapServiceAccountTokenProvider`` mints from the
+ambient service-account credentials the standard resolver finds — a key file,
+GCE metadata, or an impersonated ADC from ``gcloud auth application-default
+login --impersonate-service-account`` (the unattended path). Both cache the token
+until shortly before expiry and only touch the network inside ``get_token``.
 
 A single ``BearerTokenInjector`` attaches the token to outgoing requests under a
 caller-chosen header — ``authorization`` for app auth, ``proxy-authorization``
@@ -60,11 +59,20 @@ _GOOGLE_AUTH_URI = "https://accounts.google.com/o/oauth2/auth"
 class IapCredentialsUnavailable(Exception):
     """No usable source credentials to mint an IAP token for the cluster.
 
-    Raised when the ambient service-account path finds no credentials it can turn
-    into an IAP OIDC token — the caller has neither a cached interactive login nor
-    impersonation configured. Carries an actionable message; the CLI catches it to
-    render cleanly.
+    Raised when the ambient path finds no credentials it can turn into an IAP OIDC
+    token — the caller has neither a cached interactive login nor service-account
+    credentials the resolver can use. Carries an actionable message; the CLI
+    catches it to render cleanly.
     """
+
+
+_NO_IAP_CREDENTIALS_MESSAGE = (
+    "No credentials to authenticate to this IAP-protected cluster. Authenticate "
+    "interactively, or for an unattended caller configure application-default "
+    "credentials for a service account on the cluster's IAP allowlist — e.g. "
+    "`gcloud auth application-default login --impersonate-service-account=<sa>` "
+    "(needs roles/iam.serviceAccountTokenCreator on the SA)."
+)
 
 
 def _monotonic_expiry(expiry_wall: float | None) -> float:
@@ -140,11 +148,16 @@ class GcpAccessTokenProvider:
 class IapServiceAccountTokenProvider:
     """Mints OIDC ID tokens for IAP from ambient *service-account* credentials.
 
-    Uses ``fetch_id_token``, which works for service accounts, GCE metadata, and
-    impersonated credentials (the in-cluster / CI path) but **not** end-user
-    ``gcloud`` credentials. The audience is the OAuth client id of the
-    IAP-protected resource. The token is cached until five minutes before its
-    ``exp`` claim; credential access happens only inside ``get_token``.
+    Covers every non-interactive path: a service-account key file (via
+    ``GOOGLE_APPLICATION_CREDENTIALS``), GCE/Cloud Run metadata, and an
+    impersonated ADC written by ``gcloud auth application-default login
+    --impersonate-service-account``. ``fetch_id_token`` handles the first two;
+    it ignores the well-known ADC file, so an impersonated ADC is minted through
+    the standard resolver instead. Bare end-user ``gcloud`` credentials cannot
+    produce an IAP token and raise :class:`IapCredentialsUnavailable`. The
+    audience is the OAuth client id of the IAP-protected resource. The token is
+    cached until five minutes before its ``exp`` claim; credential access happens
+    only inside ``get_token``.
     """
 
     def __init__(self, audience: str):
@@ -156,66 +169,34 @@ class IapServiceAccountTokenProvider:
         if self._cached_token is not None and time.monotonic() < self._expires_at:
             return self._cached_token
 
-        try:
-            token = google.oauth2.id_token.fetch_id_token(google.auth.transport.requests.Request(), self._audience)
-        except google.auth.exceptions.DefaultCredentialsError as exc:
-            raise IapCredentialsUnavailable(
-                "No credentials available to authenticate to this IAP-protected cluster. "
-                "Authenticate interactively to cache a login token, or impersonate an "
-                "IAP-allowlisted service account by setting $MARIN_IMPERSONATE_SERVICE_ACCOUNT "
-                "(or passing --impersonate-service-account)."
-            ) from exc
+        token = self._mint_id_token()
         claims = google.auth.jwt.decode(token, verify=False)
-
         self._cached_token = token
         self._expires_at = _monotonic_expiry(claims.get("exp"))
         return self._cached_token
 
-
-class IapImpersonatedTokenProvider:
-    """Mints OIDC ID tokens for IAP by impersonating a service account.
-
-    The browserless path for a caller who holds only end-user ``gcloud``
-    credentials. ``fetch_id_token`` cannot mint an IAP token from user
-    credentials, but a user may impersonate a service account they are allowed to
-    act as: the ambient credentials are the impersonation *source*, and the minted
-    ID token's identity is ``target_principal`` (the service account) with ``aud``
-    the IAP resource's OAuth client id. The service account must hold the IAP
-    allowlist role (``roles/iap.httpsResourceAccessor`` on the backend) since that
-    is the identity IAP authorizes; the caller needs
-    ``roles/iam.serviceAccountTokenCreator`` on it to impersonate. The token is
-    cached until five minutes before its ``exp``; credential access happens only
-    inside ``get_token``.
-    """
-
-    def __init__(self, audience: str, target_principal: str):
-        self._audience = audience
-        self._target_principal = target_principal
-        self._id_creds: google.auth.impersonated_credentials.IDTokenCredentials | None = None
-        self._cached_token: str | None = None
-        self._expires_at: float = 0.0
-
-    def get_token(self) -> str | None:
-        if self._cached_token is not None and time.monotonic() < self._expires_at:
-            return self._cached_token
-
+    def _mint_id_token(self) -> str:
         request = google.auth.transport.requests.Request()
-        if self._id_creds is None:
+        # fetch_id_token covers a service-account key (GOOGLE_APPLICATION_CREDENTIALS)
+        # and the GCE/Cloud Run metadata server.
+        try:
+            return cast(str, google.oauth2.id_token.fetch_id_token(request, self._audience))
+        except google.auth.exceptions.DefaultCredentialsError:
+            pass
+        # fetch_id_token never reads the well-known ADC file, so an impersonated
+        # ADC (gcloud auth application-default login --impersonate-service-account)
+        # lands here. Mint through it; bare user creds or no ADC cannot.
+        try:
             source, _ = google.auth.default(scopes=_IMPERSONATION_SCOPES)
-            target = google.auth.impersonated_credentials.Credentials(
-                source_credentials=source,
-                target_principal=self._target_principal,
-                target_scopes=_IMPERSONATION_SCOPES,
-            )
-            self._id_creds = google.auth.impersonated_credentials.IDTokenCredentials(
-                target, target_audience=self._audience, include_email=True
-            )
-        self._id_creds.refresh(request)
-        token = cast(str, self._id_creds.token)
-        claims = google.auth.jwt.decode(token, verify=False)
-        self._cached_token = token
-        self._expires_at = _monotonic_expiry(claims.get("exp"))
-        return token
+        except google.auth.exceptions.DefaultCredentialsError as exc:
+            raise IapCredentialsUnavailable(_NO_IAP_CREDENTIALS_MESSAGE) from exc
+        if not isinstance(source, google.auth.impersonated_credentials.Credentials):
+            raise IapCredentialsUnavailable(_NO_IAP_CREDENTIALS_MESSAGE)
+        id_creds = google.auth.impersonated_credentials.IDTokenCredentials(
+            source, target_audience=self._audience, include_email=True
+        )
+        id_creds.refresh(request)
+        return cast(str, id_creds.token)
 
 
 class IapRefreshTokenProvider:
