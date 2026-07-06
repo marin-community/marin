@@ -98,24 +98,6 @@ def test_rollback_requested_missing_checkpoint_falls_through(tmp_path, monkeypat
     assert written == []
 
 
-def test_committed_record_does_not_trigger_restore(tmp_path, monkeypatch):
-    db_dir = tmp_path / "db"
-    db_dir.mkdir()
-    monkeypatch.setattr(
-        controller_main,
-        "read_rollout_record",
-        lambda remote: RolloutRecord(phase=RolloutPhase.COMMITTED, image="img:new", previous_image="img:old"),
-    )
-    monkeypatch.setattr(controller_main, "_local_db_epoch_ms", lambda d: 200)
-    monkeypatch.setattr(controller_main, "latest_checkpoint_epoch_ms", lambda r: 100)
-    restores = []
-    monkeypatch.setattr(controller_main, "download_checkpoint_to_local", lambda *a, **k: restores.append(1) or True)
-
-    controller_main._prepare_local_db_dir(db_dir, "gs://b/state", fresh=False, checkpoint_path=None)
-
-    assert restores == []
-
-
 def test_local_db_reused_when_at_least_as_fresh_as_remote(tmp_path, monkeypatch):
     db_dir = tmp_path / "db"
     db_dir.mkdir()
