@@ -19,7 +19,7 @@ import datasets
 import draccus
 from datasets import get_dataset_config_info
 from marin.utils import is_path_like
-from rigging.filesystem import StoragePath, url_to_fs
+from rigging.filesystem import StoragePath
 from zephyr import Dataset, ZephyrContext, write_jsonl_file
 
 from .preference_data_adapters import PreferenceTransformAdapter, get_preference_adapter
@@ -83,13 +83,12 @@ def _find_split_files(input_path: str, subset: str | None, split: str, filetype:
 
 def _infer_splits_from_files(input_path: str, subsets: list[str | None], filetype: str) -> list[str]:
     """Infer split names from filenames in an fsspec path."""
-    fs, base_path = url_to_fs(input_path)
-    roots = [base_path]
-    roots.extend(os.path.join(base_path, subset) for subset in subsets if subset)
+    roots = [StoragePath(input_path)]
+    roots.extend(StoragePath(input_path) / subset for subset in subsets if subset)
     candidates = []
     for root in roots:
-        candidates.extend(fs.glob(os.path.join(root, f"*.{filetype}")))
-        candidates.extend(fs.glob(os.path.join(root, "data", f"*.{filetype}")))
+        candidates.extend(str(match) for match in (root / f"*.{filetype}").glob())
+        candidates.extend(str(match) for match in (root / "data" / f"*.{filetype}").glob())
     splits = set()
     for path in candidates:
         filename = os.path.basename(path)

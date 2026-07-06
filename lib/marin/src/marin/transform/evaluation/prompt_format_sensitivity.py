@@ -18,7 +18,7 @@ from marin.datakit.ingestion_manifest import (
     MaterializedOutputMetadata,
     write_ingestion_metadata_json,
 )
-from rigging.filesystem import StoragePath, open_url, url_to_fs
+from rigging.filesystem import StoragePath, open_url
 from zephyr.writers import atomic_rename
 
 PROMPT_FORMAT_NUM_FEWSHOT = 5
@@ -542,8 +542,7 @@ def stage_prompt_format_sensitivity_source(cfg: PromptFormatSensitivityStagingCo
                 )
                 outfile.write("\n")
 
-    fs, _ = url_to_fs(out_file)
-    output_size = int(fs.info(out_file)["size"])
+    output_size = StoragePath(out_file).size()
     result: dict[str, Any] = {
         "record_count": len(task.heldout_examples),
         "bytes_written": output_size,

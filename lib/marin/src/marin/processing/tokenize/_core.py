@@ -47,8 +47,7 @@ def avg_parquet_row_group_rows(path: str) -> int | None:
 
     Returns ``None`` if the file has no row groups (empty parquet footer).
     """
-    fs, resolved = url_to_fs(path)
-    with fs.open(resolved, "rb") as f:
+    with StoragePath(path).open("rb") as f:
         meta = pq.ParquetFile(f).metadata
     if meta.num_row_groups == 0:
         return None

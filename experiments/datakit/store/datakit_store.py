@@ -69,7 +69,7 @@ from marin.execution.artifact import write_artifact
 from marin.processing.classification.deduplication.fuzzy_dups import FuzzyDupsAttrData
 from marin.processing.tokenize.attributes import TokenizedAttrData
 from pydantic import BaseModel
-from rigging.filesystem import StoragePath, url_to_fs
+from rigging.filesystem import StoragePath
 from zephyr import Dataset, ZephyrContext, counters
 from zephyr.dataset import ShardInfo, format_shard_path
 from zephyr.writers import atomic_rename
@@ -291,8 +291,7 @@ def _write_shard_sidecar(path: str, records: list[_WrittenShard]) -> None:
     payload = json.dumps([dataclasses.asdict(r) for r in records])
     tmp_path = f"{path}.tmp"
     StoragePath(tmp_path).write_text(payload)
-    fs, _ = url_to_fs(path)
-    fs.mv(tmp_path, path)
+    StoragePath(tmp_path).rename(path)
 
 
 def _load_shard_sidecar(path: str) -> list[_WrittenShard] | None:
@@ -443,8 +442,7 @@ def _join_filter_stream_shard(
             del decon_ids, cluster_ids, quality_ids
             dedup_canonical = _load_dedup_canonical(dedup_path)
 
-            fs, resolved = url_to_fs(tok_path)
-            with fs.open(resolved, "rb") as fh:
+            with StoragePath(tok_path).open("rb") as fh:
                 pf = pq.ParquetFile(fh)
                 row_idx = 0
                 for batch in pf.iter_batches(batch_size=_TOKENIZE_BATCH_SIZE, columns=["id", "input_ids"]):

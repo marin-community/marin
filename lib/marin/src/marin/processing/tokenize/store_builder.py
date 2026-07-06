@@ -36,7 +36,7 @@ from levanter.store.cache import (
     write_levanter_cache,
 )
 from pydantic import BaseModel
-from rigging.filesystem import StoragePath, prefix_join, url_to_fs
+from rigging.filesystem import StoragePath, prefix_join
 from zephyr import Dataset, ZephyrContext
 from zephyr.dataset import format_shard_path
 from zephyr.readers import load_file
@@ -159,8 +159,7 @@ def build_from_datasets(
         """
         shard_path = format_shard_path(output_pattern, shard_info.shard_idx, shard_info.total_shards)
         if skip_existing:
-            fs = url_to_fs(shard_path)[0]
-            if fs.exists(prefix_join(shard_path, ".success")):
+            if StoragePath(prefix_join(shard_path, ".success")).exists():
                 logger.info("Skipping write, output exists: %s", shard_path)
                 yield (shard_path, None)
                 return

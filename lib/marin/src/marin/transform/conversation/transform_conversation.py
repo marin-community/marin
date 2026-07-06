@@ -315,8 +315,7 @@ def process_shard_task(task: ShardTask) -> dict:
     output_filename = _shard_filename(task.output_path, task.shard_idx)
 
     # If output already exists, skip the work to let Zephyr resume cleanly without sentinels.
-    fs, _ = url_to_fs(output_filename)
-    if fs.exists(output_filename):
+    if StoragePath(output_filename).exists():
         logger.info(
             f"Skipping subset={subset_name} split={task.split} shard={task.shard_idx} "
             f"because output exists: {output_filename}"

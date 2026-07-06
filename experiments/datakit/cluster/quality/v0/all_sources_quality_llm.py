@@ -49,7 +49,7 @@ from marin.execution.artifact import read_artifact
 from marin.execution.step_runner import StepRunner
 from marin.execution.step_spec import StepSpec
 from pydantic import BaseModel
-from rigging.filesystem import StoragePath, url_to_fs
+from rigging.filesystem import StoragePath
 from rigging.log_setup import configure_logging
 from zephyr import Dataset, ZephyrContext
 from zephyr.readers import load_file
@@ -111,8 +111,7 @@ def _register_model_step(name: str, model_bin_path: str, output_path_prefix: str
     """
 
     def _fn(_output_path: str) -> FastTextModel:
-        fs, resolved = url_to_fs(model_bin_path)
-        size = int(fs.info(resolved).get("size", 0) or 0)
+        size = StoragePath(model_bin_path).size()
         return FastTextModel(
             model_dir=os.path.dirname(model_bin_path),
             model_path=model_bin_path,

@@ -25,7 +25,7 @@ from levanter.store.cache import CacheLedger
 from marin.datakit.normalize import NormalizedData
 from marin.execution.artifact import read_artifact
 from marin.processing.classification.deduplication.fuzzy_dups import FuzzyDupsAttrData
-from rigging.filesystem import StoragePath, url_to_fs
+from rigging.filesystem import StoragePath
 from rigging.log_setup import configure_logging
 
 logger = logging.getLogger(__name__)
@@ -63,18 +63,16 @@ def _list_parquet(path: str) -> list[str]:
 
 def _count_parquet_rows(files: list[str]) -> int:
     """Sum row counts from parquet file metadata (no data read)."""
-    fs, _ = url_to_fs(files[0])
     total = 0
     for path in files:
-        with fs.open(path, "rb") as f:
+        with StoragePath(path).open("rb") as f:
             total += pq.ParquetFile(f).metadata.num_rows
     return total
 
 
 def _check_schema(path: str, required: set[str]) -> list[str]:
     """Verify a parquet file contains the required columns. Returns actual column names."""
-    fs, _ = url_to_fs(path)
-    with fs.open(path, "rb") as f:
+    with StoragePath(path).open("rb") as f:
         names = pq.ParquetFile(f).schema_arrow.names
     missing = required - set(names)
     if missing:
@@ -124,10 +122,9 @@ def _validate_normalize(base: str, download_rows: int) -> int:
 
 def _count_canonicals(files: list[str]) -> int:
     """Sum is_cluster_canonical=True rows across fuzzy-dups attr files."""
-    fs, _ = url_to_fs(files[0])
     total = 0
     for path in files:
-        with fs.open(path, "rb") as f:
+        with StoragePath(path).open("rb") as f:
             tbl = pq.ParquetFile(f).read(columns=["attributes"])
         if tbl.num_rows == 0:
             continue

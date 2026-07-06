@@ -25,9 +25,9 @@ from collections.abc import Iterator, Mapping
 from pathlib import Path
 from typing import Annotated, Any, ClassVar, Literal
 
-import fsspec
 import yaml
 from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, PlainSerializer, field_validator, model_validator
+from rigging.filesystem import StoragePath
 from rigging.secrets import as_secret_spec, is_secret_reference, resolve_secret_spec
 from rigging.timing import Duration
 
@@ -1450,6 +1450,6 @@ def build_ssh_command_config(config: IrisClusterConfig, group_name: str | None =
 
 def clear_remote_state(remote_state_dir: str) -> None:
     """Remove all files under the remote state dir so the controller starts fresh."""
-    fs, path = fsspec.core.url_to_fs(remote_state_dir)
-    if fs.exists(path):
-        fs.rm(path, recursive=True)
+    path = StoragePath(remote_state_dir)
+    if path.exists():
+        path.rmtree()

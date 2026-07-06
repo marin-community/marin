@@ -36,7 +36,7 @@ from fray.local_backend import LocalClient
 from fray.types import Entrypoint, JobRequest
 from iris.client import get_iris_ctx
 from iris.cluster.client.job_info import get_job_info
-from rigging.filesystem import StoragePath, TransferBudgetExceeded, marin_temp_bucket, url_to_fs
+from rigging.filesystem import StoragePath, TransferBudgetExceeded, marin_temp_bucket
 from rigging.timing import ExponentialBackoff, RateLimiter, log_time
 
 from zephyr.dataset import Dataset
@@ -141,13 +141,12 @@ def _push_iris_task_status(
 
 def _cleanup_execution(prefix: str, execution_id: str) -> None:
     """Remove all chunk files for an execution."""
-    exec_dir = f"{prefix}/{execution_id}"
-    fs = url_to_fs(exec_dir)[0]
+    exec_dir = StoragePath(f"{prefix}/{execution_id}")
 
     with log_time(f"Cleaning up execution directory {exec_dir}"):
-        if fs.exists(exec_dir):
+        if exec_dir.exists():
             try:
-                fs.rm(exec_dir, recursive=True)
+                exec_dir.rmtree()
             except Exception as e:
                 logger.warning(f"Failed to cleanup chunks at {exec_dir}: {e}")
 

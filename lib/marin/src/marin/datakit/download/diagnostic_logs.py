@@ -520,8 +520,7 @@ def _normalize_input_path(path: str) -> str:
 
 
 def _path_exists(path: str) -> bool:
-    fs, relative_path = url_to_fs(path)
-    return fs.exists(relative_path)
+    return StoragePath(path).exists()
 
 
 def _download_to_path(url: str, destination_path: str) -> None:

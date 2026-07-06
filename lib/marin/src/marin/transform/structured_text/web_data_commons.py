@@ -31,7 +31,7 @@ from marin.datakit.ingestion_manifest import (
     MaterializedOutputMetadata,
     write_ingestion_metadata_json,
 )
-from rigging.filesystem import StoragePath, atomic_rename, open_url, url_to_fs
+from rigging.filesystem import StoragePath, atomic_rename, open_url
 
 logger = logging.getLogger(__name__)
 
@@ -340,8 +340,7 @@ def stage_web_data_commons_source(cfg: WebDataCommonsStagingConfig) -> dict[str,
                 if stop:
                     break
 
-    fs, _ = url_to_fs(out_file)
-    output_size = int(fs.info(out_file)["size"])
+    output_size = StoragePath(out_file).size()
     result: dict[str, int | str] = {
         "record_count": record_count,
         "bytes_written": output_size,

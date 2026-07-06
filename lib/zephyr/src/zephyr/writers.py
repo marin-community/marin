@@ -18,7 +18,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import vortex
 import zstandard as zstd
-from rigging.filesystem import atomic_rename, url_to_fs
+from rigging.filesystem import StoragePath, atomic_rename, url_to_fs
 
 from zephyr import counters
 
@@ -46,10 +46,9 @@ def ensure_parent_dir(path: str) -> None:
     # Use os.path.dirname for local paths, otherwise use fsspec
     if "://" in path:
         output_dir = path.rsplit("/", 1)[0]
-        fs, dir_path = url_to_fs(output_dir)
         # mkdirs(exist_ok=True) handles the already-exists case internally;
         # a separate fs.exists() check would add a redundant network round-trip.
-        fs.mkdirs(dir_path, exist_ok=True)
+        StoragePath(output_dir).mkdirs()
     else:
         output_dir = os.path.dirname(path)
         if output_dir:
@@ -382,6 +381,8 @@ def write_binary_file(records: Iterable[bytes], output_path: str) -> dict:
 
     count = 0
     with atomic_rename(output_path) as temp_path:
+        # url_to_fs + fs.open so block_size reaches the file opener (AbstractBufferedFile),
+        # not the S3 filesystem constructor (which rejects it) — see readers.open_file.
         fs, resolved_temp = url_to_fs(temp_path)
         with fs.open(resolved_temp, "wb", block_size=_WRITE_BLOCK_SIZE) as f:
             for record in records:

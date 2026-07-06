@@ -40,7 +40,7 @@ from dataclasses import dataclass
 import fasttext
 import numpy as np
 import pyarrow.parquet as pq
-from rigging.filesystem import open_url, url_to_fs
+from rigging.filesystem import StoragePath, open_url
 from rigging.log_setup import configure_logging
 
 logger = logging.getLogger(__name__)
@@ -113,8 +113,7 @@ class ScoredRecord:
 
 
 def _read_scored(input_path: str) -> list[ScoredRecord]:
-    fs, resolved = url_to_fs(input_path)
-    with fs.open(resolved, "rb") as fh:
+    with StoragePath(input_path).open("rb") as fh:
         table = pq.read_table(fh)
     out: list[ScoredRecord] = []
     cols = {name: table.column(name).to_pylist() for name in ("source", "id", "text", "score_raw", "score_normalized")}
@@ -251,8 +250,7 @@ def train(
         with open(meta_path, "w", encoding="utf-8") as fh:
             json.dump(meta.__dict__, fh, indent=2, sort_keys=True)
 
-        out_fs, out_resolved = url_to_fs(output_dir)
-        out_fs.mkdirs(out_resolved, exist_ok=True)
+        StoragePath(output_dir).mkdirs()
         for fname in ("model.bin", "metadata.json"):
             src = os.path.join(tmp, fname)
             dst = output_dir.rstrip("/") + "/" + fname

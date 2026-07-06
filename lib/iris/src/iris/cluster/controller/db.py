@@ -50,6 +50,7 @@ from pathlib import Path
 from threading import RLock
 
 import fsspec.core
+from rigging.filesystem import StoragePath
 from rigging.timing import Timestamp
 from sqlalchemy import Engine, create_engine, event, text
 from sqlalchemy.engine import Connection
@@ -679,8 +680,7 @@ class ControllerDB:
 
             # Download auth DB if present in source
             auth_source = f"{source_dir_str}/{self.AUTH_DB_FILENAME}"
-            fs, fs_path = fsspec.core.url_to_fs(auth_source)
-            if fs.exists(fs_path):
+            if StoragePath(auth_source).exists():
                 auth_tmp = self._auth_db_path.with_suffix(".tmp")
                 with fsspec.core.open(auth_source, "rb") as src, open(auth_tmp, "wb") as dst:
                     dst.write(src.read())

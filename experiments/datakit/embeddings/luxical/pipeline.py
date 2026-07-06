@@ -41,7 +41,7 @@ from huggingface_hub import hf_hub_download
 from marin.datakit.normalize import NormalizedData
 from marin.execution.artifact import write_artifact
 from pydantic import BaseModel
-from rigging.filesystem import StoragePath, marin_temp_bucket, url_to_fs
+from rigging.filesystem import StoragePath, marin_temp_bucket
 from zephyr import Dataset, InputFileSpec, ShardInfo, ZephyrContext, counters, load_file, zephyr_worker_ctx
 from zephyr.runners import InlineRunner
 
@@ -140,8 +140,7 @@ def _load_embedder_from_shared() -> Any:
     npz_url: str = zephyr_worker_ctx().get_shared(_LUXICAL_SHARED_KEY)
     fd, local = tempfile.mkstemp(prefix="luxical-", suffix=".npz")
     os.close(fd)
-    fs, resolved = url_to_fs(npz_url)
-    fs.get(resolved, local)
+    StoragePath(npz_url).download_to(local)
     logger.info("Loading native Luxical embedder from %s (staged at %s)", local, npz_url)
     return Embedder.load(local)
 
@@ -153,8 +152,8 @@ def _stage_luxical_to_gcs(repo_id: str, weights_filename: str) -> str:
     runs share the staged file."""
     sanitized_repo = repo_id.replace("/", "__")
     staged_url = f"{marin_temp_bucket(ttl_days=1, prefix='luxical-staging')}/{sanitized_repo}/{weights_filename}"
-    fs, resolved = url_to_fs(staged_url)
-    if fs.exists(resolved):
+    staged = StoragePath(staged_url)
+    if staged.exists():
         logger.info("Luxical weights already staged at %s (cache hit)", staged_url)
         return staged_url
 
@@ -162,8 +161,8 @@ def _stage_luxical_to_gcs(repo_id: str, weights_filename: str) -> str:
     npz_local = hf_hub_download(repo_id=repo_id, filename=weights_filename)
     size_mb = os.path.getsize(npz_local) / 1e6
     logger.info("Uploading %.1f MB of luxical weights to %s", size_mb, staged_url)
-    fs.mkdirs(os.path.dirname(resolved), exist_ok=True)
-    fs.put(npz_local, resolved)
+    staged.parent.mkdirs()
+    staged.upload_from(npz_local)
     return staged_url
 
 

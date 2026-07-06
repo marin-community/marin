@@ -197,8 +197,7 @@ def _compute_metrics(rows: list[dict], threshold: float) -> HoldoutMetrics:
 
 
 def _read_holdout(scored_holdout: str) -> list[dict]:
-    fs, resolved = url_to_fs(scored_holdout)
-    with fs.open(resolved, "rb") as fh:
+    with StoragePath(scored_holdout).open("rb") as fh:
         t = pq.read_table(fh)
     out = []
     cols = {n: t.column(n).to_pylist() for n in ("source", "id", "text", "score_raw", "score_normalized")}

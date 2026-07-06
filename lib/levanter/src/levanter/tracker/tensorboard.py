@@ -10,7 +10,7 @@ from typing import Any, Optional
 
 import jax
 import numpy as np
-from rigging.filesystem import url_to_fs
+from rigging.filesystem import StoragePath
 
 from levanter.tracker.histogram import SummaryStats
 from levanter.tracker.tracker import Tracker, TrackerConfig
@@ -117,8 +117,8 @@ class TensorboardTracker(Tracker):
         log_path = self.writer.logdir
         # sync the artifact to the logdir via fsspec
         try:
-            fs, fs_path = url_to_fs(log_path)
-            fs.put(artifact_path, os.path.join(fs_path, name or os.path.basename(artifact_path)), recursive=True)
+            remote_path = StoragePath(log_path) / (name or os.path.basename(artifact_path))
+            remote_path.upload_from(artifact_path, recursive=True)
         except Exception:
             pylogger.exception(f"Error logging artifact {artifact_path} to {log_path}")
             return

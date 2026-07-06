@@ -44,7 +44,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 
 import pyarrow.parquet as pq
-from rigging.filesystem import StoragePath, url_to_fs
+from rigging.filesystem import StoragePath
 from rigging.log_setup import configure_logging
 
 from experiments.datakit.cluster.quality.v0.ops.eval_holdout import (
@@ -68,8 +68,7 @@ class CorrelationRow:
 
 
 def _read_holdout(scored_holdout: str) -> list[dict]:
-    fs, resolved = url_to_fs(scored_holdout)
-    with fs.open(resolved, "rb") as fh:
+    with StoragePath(scored_holdout).open("rb") as fh:
         t = pq.read_table(fh)
     out = []
     cols = {n: t.column(n).to_pylist() for n in ("source", "id", "text", "score_raw", "score_normalized")}

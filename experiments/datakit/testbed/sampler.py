@@ -150,8 +150,7 @@ def _sample_rows_within_shard(src: str, dst: str, sample_fraction: float) -> tup
 
 def _parquet_num_rows(path: str) -> int:
     """Read the parquet footer at *path* and return its row count."""
-    fs, resolved = url_to_fs(path)
-    with fs.open(resolved, "rb") as f:
+    with StoragePath(path).open("rb") as f:
         return pq.ParquetFile(f).metadata.num_rows
 
 

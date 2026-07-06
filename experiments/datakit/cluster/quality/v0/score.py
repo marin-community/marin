@@ -45,7 +45,6 @@ Submit:
 import argparse
 import json
 import logging
-import os
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -53,7 +52,7 @@ from dataclasses import asdict, dataclass
 
 import pyarrow as pa
 import pyarrow.parquet as pq
-from rigging.filesystem import open_url, url_to_fs
+from rigging.filesystem import StoragePath, open_url
 from rigging.log_setup import configure_logging
 
 from experiments.datakit.cluster.quality.v0.rubric import (
@@ -185,11 +184,11 @@ def _score_one(
 
 def _load_partial(partial_path: str) -> dict[str, ScoredRow]:
     """Load already-scored rows keyed by ``(source, id)``-equivalent string id."""
-    fs, resolved = url_to_fs(partial_path)
-    if not fs.exists(resolved):
+    path = StoragePath(partial_path)
+    if not path.exists():
         return {}
     out: dict[str, ScoredRow] = {}
-    with fs.open(resolved, "rb") as fh:
+    with path.open("rb") as fh:
         for line in fh:
             try:
                 obj = json.loads(line)
@@ -209,8 +208,7 @@ def _append_partial(partial_path: str, row: ScoredRow, lock: threading.Lock) -> 
 
 
 def _read_sample(input_path: str) -> list[dict[str, str | int]]:
-    fs, resolved = url_to_fs(input_path)
-    with fs.open(resolved, "rb") as fh:
+    with StoragePath(input_path).open("rb") as fh:
         table = pq.read_table(fh)
     rows: list[dict[str, str | int]] = []
     sources = table.column("source").to_pylist()
@@ -224,11 +222,10 @@ def _read_sample(input_path: str) -> list[dict[str, str | int]]:
 
 def _write_final_parquet(rows: list[ScoredRow], output_path: str) -> None:
     table = pa.Table.from_pylist([asdict(r) for r in rows], schema=_OUTPUT_SCHEMA)
-    fs, resolved = url_to_fs(output_path)
-    parent = os.path.dirname(resolved)
-    if parent:
-        fs.mkdirs(parent, exist_ok=True)
-    with fs.open(resolved, "wb") as fh:
+    output = StoragePath(output_path)
+    if output.parent.segments:
+        output.parent.mkdirs()
+    with output.open("wb") as fh:
         pq.write_table(table, fh, compression="zstd")
 
 

@@ -24,7 +24,7 @@ import tarfile
 import tempfile
 
 from fray import ResourceConfig
-from rigging.filesystem import StoragePath, atomic_rename, open_url, url_to_fs
+from rigging.filesystem import StoragePath, atomic_rename, open_url
 from zephyr import Dataset, ZephyrContext
 from zephyr.readers import load_jsonl
 
@@ -713,13 +713,7 @@ def stage_massive_raw(output_path: str) -> None:
 
 def _list_staged_files(input_path: str) -> list[str]:
     """Return all ``{locale}.jsonl`` files staged under ``input_path``."""
-    fs, root = url_to_fs(input_path)
-    protocol = input_path.split("://", 1)[0] if "://" in input_path else ""
-    files: list[str] = []
-    for entry in fs.ls(root, detail=False):
-        if entry.endswith(".jsonl"):
-            files.append(f"{protocol}://{entry}" if protocol else entry)
-    return sorted(files)
+    return sorted(str(p) for p in StoragePath(input_path).ls() if str(p).endswith(".jsonl"))
 
 
 def transform_staged_massive(input_path: str, output_path: str) -> None:

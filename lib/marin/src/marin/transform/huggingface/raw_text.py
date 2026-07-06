@@ -18,7 +18,7 @@ from marin.datakit.ingestion_manifest import (
     write_ingestion_metadata_json,
 )
 from marin.transform.huggingface.dataset_to_eval import get_nested_item
-from rigging.filesystem import StoragePath, atomic_rename, open_url, url_to_fs
+from rigging.filesystem import StoragePath, atomic_rename, open_url
 from zephyr import Dataset, ZephyrContext
 
 logger = logging.getLogger(__name__)
@@ -136,8 +136,7 @@ def _write_ingestion_metadata(
     record_count: int,
     metadata: dict[str, Any],
 ) -> str:
-    fs, _ = url_to_fs(output_file)
-    bytes_written = int(fs.info(output_file)["size"])
+    bytes_written = StoragePath(output_file).size()
     return write_ingestion_metadata_json(
         manifest=manifest,
         materialized_output=MaterializedOutputMetadata(

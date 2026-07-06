@@ -14,7 +14,7 @@ import braceexpand
 import datasets
 import equinox as eqx
 import haliax as hax
-from rigging.filesystem import url_to_fs
+from rigging.filesystem import StoragePath
 import jax
 import numpy as np
 from draccus import field
@@ -204,8 +204,7 @@ class AudioDatasetSourceConfig:
 
         def fsspec_expand_glob(url):
             if "*" in url:
-                fs = url_to_fs(url)[0]
-                return fs.glob(url)
+                return [str(p) for p in StoragePath(url).glob()]
             else:
                 return [url]
 
