@@ -149,11 +149,6 @@ def source_push_inbox_architecture(profile: str) -> SourcePushInboxArchitecture:
     )
 
 
-def blackwell_uses_staged_source_push() -> bool:
-    """Return whether Blackwell should use staged copy plus local W13 compute."""
-    return BLACKWELL_SOURCE_PUSH_STRATEGY == BlackwellSourcePushStrategy.STAGED_COPY_LOCAL_W13
-
-
 def blackwell_ragged_dot_tuning_config(
     tuning_config: BlackwellW13TuningConfig = BLACKWELL_TARGET_W13_TUNING_CONFIG,
 ):

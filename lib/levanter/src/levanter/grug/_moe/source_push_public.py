@@ -426,7 +426,6 @@ def _source_push_block_k(hidden_dim: int) -> int:
 
 
 def is_source_push_public_implementation(implementation: str) -> bool:
-    """Return whether ``implementation`` selects a source-push public MoE backend."""
     return implementation in SOURCE_PUSH_PUBLIC_IMPLEMENTATIONS
 
 

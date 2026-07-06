@@ -196,7 +196,10 @@ def test_blackwell_source_push_profile_uses_staged_strategy():
         source_push_inbox_blackwell.source_push_inbox_architecture(SOURCE_PUSH_PROFILE_STABLE_216)
         == source_push_inbox_blackwell.SourcePushInboxArchitecture.HOPPER
     )
-    assert source_push_inbox_blackwell.blackwell_uses_staged_source_push()
+    assert (
+        source_push_inbox_blackwell.BLACKWELL_SOURCE_PUSH_STRATEGY
+        == source_push_inbox_blackwell.BlackwellSourcePushStrategy.STAGED_COPY_LOCAL_W13
+    )
     assert (
         source_push_inbox_blackwell.BLACKWELL_PEER_REF_SUPPORT
         == source_push_inbox_blackwell.BlackwellPeerRefSupport.UNSUPPORTED_IN_WARPGROUP_LOWERING
