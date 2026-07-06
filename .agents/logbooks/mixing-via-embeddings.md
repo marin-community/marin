@@ -188,3 +188,22 @@ one-scale; H3 is the live check.
 - monitor.md + readout.py ready (public GraphQL, no key needed for reading).
 - Everything through H2b/H4 committed (1cc68ceb6 + CSV vendor commit) and pushed;
   artifacts on GCS under user/rav/projects/mixing_via_embeddings/v0/.
+
+## 2026-07-06 H3 LAUNCHED (rav provided WANDB creds; entity = stanford-mercury, not marin-community)
+
+- Two local launch attempts failed cleanly on the region guard (driver VM us-west2 vs data
+  us-east5; `MARIN_I_WILL_PAY_FOR_ALL_FEES` guards only the transfer-budget reader, NOT
+  `check_gcs_paths_same_region` — no env override exists for it, by design).
+- Correct pattern (what the swarm did; `east5_launch_safety.py` validates it): submit the
+  executor as an **Iris parent job pinned to us-east5**. Two more real blockers fixed en route:
+  (1) prod controller's iris-client build floor — workspace staging strips .git so the wheel
+  stamped a stale BUILD_DATE; `submit_parent.py` writes the worktree's true commit date
+  (2026-06-28) into `_build_info.py`; (2) children died on `ModuleNotFoundError: lm_eval` — TPU
+  steps infer only the `tpu` uv extra; fixed by adding `pip_dependency_groups=['eval']` to the
+  training steps (mirrors `launch_starcoder_heteroskedastic_snr.py`).
+- **Live**: parent `/rav/rav-mve-h3-300m-6b-20260706-083828` RUNNING; children
+  `rav_mve_h3_{proposal-4e4dbb, olmix-8fc12d, tokprop-af4174}` all RUNNING on v5p-8 us-east5,
+  loss 10.3→6.8 by step ~110/22888. W&B: stanford-mercury/marin (private — readout auths via
+  env key). Failed first parent 082403 is terminal, holds nothing.
+- Babysit: wait_for.py armed with an authed poll (all 3 runs non-running → readout).
+  Readout = scratch/mixture_features/h3/readout.py (pre-registered verdict + calibration).
