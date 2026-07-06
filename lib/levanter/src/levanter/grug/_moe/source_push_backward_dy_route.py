@@ -1080,19 +1080,20 @@ def _make_source_push_backward_dy_route_compact_kernel(*, row_block: int, hidden
         hidden_tile = pl.program_id(3)
         row_start = row_tile * row_block
         hidden_start = hidden_tile * hidden_block
+        hidden_offsets = hidden_start + jnp.arange(hidden_block, dtype=jnp.int32)
 
         src = source_rank_ref[dst, expert, pl.ds(row_start, row_block)]
         token = token_id_ref[dst, expert, pl.ds(row_start, row_block)]
-        safe_src = jnp.maximum(src, jnp.zeros((), dtype=src.dtype))
-        safe_token = jnp.maximum(token, jnp.zeros((), dtype=token.dtype))
-
-        @pl.loop(0, row_block)
-        def _row_loop(row) -> None:
-            dy_row = dy_ref[safe_src[row], safe_token[row], pl.ds(hidden_start, hidden_block)].astype(jnp.float32)
-            # Downstream W2 stages receive the same valid mask separately and
-            # mask invalid rows before using dy, so the GPU perf path avoids a
-            # tiny per-row predicate transfer here.
-            out_ref[0, 0, row, pl.ds(0, hidden_block)] = dy_row
+        valid = valid_ref[dst, expert, pl.ds(row_start, row_block)]
+        safe_src = jnp.where(valid, src, jnp.zeros((), dtype=src.dtype))
+        safe_token = jnp.where(valid, token, jnp.zeros((), dtype=token.dtype))
+        dy_tile = dy_ref[safe_src[:, None], safe_token[:, None], hidden_offsets[None, :]].astype(jnp.float32)
+        zeros = jnp.zeros((row_block, hidden_block), dtype=jnp.float32)
+        out_ref[0, 0, pl.ds(0, row_block), pl.ds(0, hidden_block)] = jnp.where(
+            valid[:, None],
+            dy_tile,
+            zeros,
+        )
 
     return kernel
 
