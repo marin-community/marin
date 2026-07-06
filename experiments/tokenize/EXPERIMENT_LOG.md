@@ -595,3 +595,29 @@ data already on S3) reach training in ~3 min with ~8 pods; PARTIAL arms re-token
   broken tokenizers on a partial eval. Real answer needs a re-run with the fixed multi-domain
   stage-2 sample + extended eval + an off-the-shelf SuperBPE-128k control (scoped, pending go-ahead).
   Full metric stack (fertility / raw BPB / feBPB / per-domain) + causes posted to #6796.
+- **CORRECTED RE-RUN — FINAL (fixed tokenizers, 8 arms, group `tokenizer-soak`; scored 2026-07-06;
+  posted to #6796).** Re-ran the winning arms as full grug-moe soaks after the three fixes
+  (multi-domain stage-2 sample `11bd2f4e9c`, 11-domain eval `cf0cae164c`/`d4c7aeddb5`, 4-domain
+  fertility). Arms: `soak-superbpe-{64k,128k}-fixed`, `-{64k,128k}-digits-fixed`,
+  `-{64k,128k}-llama-fixed` (Llama-3 word-regex pretok held equal to baseline), off-the-shelf
+  `superbpe-128k`, and Llama-3 `marin-128k` (reused). Fertility measured 8-arm
+  (`results/rerun_fertility.json`). Scored on a **domain-fair macro over the 7 shared English+code
+  domains** (marin only eval'd those): `soak_wandb_ladder.py --domain-curves-out` →
+  `fair_domain_bpb.py` (mean over the 7 domains at each FLOP point) → `bakeoff_analysis.py
+  --bpb … --ref-budget … --serving-ratio {0,1}`.
+  **Result: the SuperBPE advantage is budget-dependent and REVERSES at scale.** At 6e19 (common
+  floor): 64k-fixed feBPB 0.9465 (−0.77% vs marin 0.9538), 128k-fixed 0.9529 (−0.09%), 5/7 arms
+  nominally beat marin. At 2.3e20 (the budgets the 128k arms actually reached): marin WINS, feBPB
+  0.9191 vs 128k-fixed 0.9341 (Llama-3 +1.6%). Raw macro-7 gap (128k-fixed − marin) grows
+  +0.4%→+1.9% over 6e19→2.6e20 — a real crossing in the raw data, not a scaling-fit artifact. So the
+  "washout at scale" is **largely real, not a bug artifact**: the fixes narrowed it and made the
+  small-vocab/low-budget corner favorable but produced no scale-robust quality-per-FLOP win. Only
+  robust win: trained 64k-fixed at low budget (~0.2–1.1% raw across 5.5–7.5e19; no data past ~8e19);
+  off-the-shelf superbpe-128k ~ties; digit pretok loses at every budget; the case-split pretok beats
+  the Llama word-regex ~0.8–1% raw (mostly C++) but both 128k variants still lose at scale. SuperBPE's
+  durable benefit is serving density (17–21% bytes/token) → an economics (ρ) call, not a quality win.
+  Caveat: marin baseline reused from the original run (not retrained alongside these arms); the
+  growing gap argues against a static confound but a fresh Llama-3 arm under the identical config
+  would close it. Infra note: a `CUDA: Failed to destroy CUDA graph` fault hung 5 arms mid-run (jobs
+  stayed "running", ~9 h undetected — detect via kit-stall, not Failed state); affected arms were
+  relaunched or scored from the ≥6e19 data they had already logged.

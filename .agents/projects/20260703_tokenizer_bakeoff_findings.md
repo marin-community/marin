@@ -6,63 +6,59 @@ That doc is the *design* (what we measure and why); this doc is the *result* (wh
 The full chronological experiment log, with a reproduce/replay command per experiment, is
 [`experiments/tokenize/EXPERIMENT_LOG.md`](../../experiments/tokenize/EXPERIMENT_LOG.md).
 
-## TL;DR
+## TL;DR — corrected result
 
-We measured every tokenizer arm under a **FLOP-equivalent BPB (feBPB)** rubric — quality
-(bits-per-byte, tokenizer-agnostic) traded against serving cost (inference FLOPs/byte at the
-250B-total / ~20B-active deployment target), with the cheaper-to-serve arm earning proportionally
-more training budget. Best arms, vs stock Llama-3 (marin-128k, feBPB 1.2376):
+**Read this first: the headline changed.** The proxy-scale isoFLOP result (a −4.7…−6.8% feBPB win
+for small-vocab trained SuperBPE, ≥10% at high serving weight) was measured on tokenizers with an
+**English-only stage-2 superword sample** and a **7-domain English+code eval**. Fixing both bugs and
+re-running the winning arms as full grug-moe soaks on 8×H100×64 (cw-rno2a, W&B group
+`tokenizer-soak`) **did not reproduce a scale-robust win.** The proxy-scale sections below are kept
+as the methodology and reasoning trail; the corrected conclusion is here. Full detail in
+[#6796](https://github.com/marin-community/marin/issues/6796) comments.
 
-| rank | arm | feBPB | vs Llama-3 |
-|---|---|---|---|
-| 1 | **trained-superbpe-64k-t32k + n-gram** | **1.1532** | **−6.8%** |
-| 2 | trained-superbpe-40k-t20k | 1.1560 | −6.6% |
-| 3 | trained-superbpe-64k-t32k | 1.1564 | −6.6% |
-| 4 | trained-superbpe-48k-t24k | 1.1567 | −6.6% |
-| 5 | trained-superbpe-80k-t40k + n-gram | 1.1584 | −6.4% |
-| 6 | trained-superbpe-80k-t40k | 1.1621 | −6.1% |
-| 7 | superbpe-128k (off-the-shelf) | 1.1794 | −4.7% |
+**The SuperBPE advantage is budget-dependent and reverses at scale.** Scored on a domain-fair macro
+over the 7 shared English+code domains (the reused Llama-3 `marin-128k` baseline only ever eval'd
+those), raw BPB of the 128k SuperBPE arms vs the baseline:
 
-**The winning lever is a small-vocab superword tokenizer trained on our own mix.** A ~40–64k
-SuperBPE we trained on the grug-moe data mix beats every off-the-shelf tokenizer *and* every n-gram
-composition: a small vocab is a *smaller, cheaper model* (more effective training steps per FLOP →
-lower BPB), and the SuperBPE superword pretokenizer keeps fertility high enough that the modest
-serving-cost penalty is outweighed. feBPB falls as the trained vocab shrinks (128k → 80k → 64k) then
-**flattens into a plateau at ~40–64k, saturating at −6.6%** (40k / 48k / 64k tied within 0.0007) —
-below ~64k the smaller-model gain is exactly offset by rising fertility, so the tokenizer lever
-bottoms out here. Adding a hashed n-gram embedding on top buys a further ~0.2% — its value
-concentrates at high training budget (a penalty early, −0.86% BPB by the top of the ladder), which
-is exactly the budget feBPB scores at. **Best measured: −6.8% feBPB (64k + n-gram) at a conservative
-serving weight — and ≥10% under grug-moe's realistic serving-dominated lifetime (see "On the 10%
-target").**
+| train FLOPs | marin (Llama-3) | 128k-fixed | 128k-llama | 128k-digits |
+|---|---|---|---|---|
+| 6e19  | 0.9615 | +0.4% | +1.5% | +0.9% |
+| 1.5e20 | 0.9370 | +1.1% | +2.0% | +1.8% |
+| 2.6e20 | 0.9062 | +1.9% | +2.7% | +2.3% |
 
-**Scale-robustness — the win holds at the budget that matters.** The scorecard reads BPB from
-hidden-1024 proxy curves, so we checked the best tokenizer at hidden-2048 (4× params). The 64k
-advantage over Llama-3 shrinks at *low* budget (s3500: −3.40% → −2.46%) but is **nearly
-scale-invariant at high budget** (s8000: −2.87% → −2.75%). Because feBPB reads a high-FLOP point on
-the fitted curve, the high-budget column is the relevant one — so the −6.8% is a real,
-scale-persistent win, not a proxy artifact. (At low budget the wider model has not converged and the
-small-vocab "faster per FLOP" edge is diluted; by high budget it is a genuine bytes-per-FLOP win.) A
-mild further erosion past hidden-2048 is possible, so treat −6.8% as a firm proxy result and ~−6%
-as a conservative target-scale expectation.
+The 128k arms start ~level with Llama-3 at low budget and fall **progressively further behind** — the
+gap roughly doubles by 2.6e20. On feBPB at 2.3e20, Llama-3 leads 128k-fixed by **+1.6%** even after
+crediting its 17% serving-cost discount.
 
-**On the 10% target — met under grug-moe's real serving economics.** feBPB is a *lifetime*-cost
-metric, weighted by ρ = serving/training FLOP ratio. Every table above uses **ρ=1** — serving equals
-training — which is the wrong weight for a *deployed* model: you train once and serve over the
-lifetime, so serving dominates (ρ ≫ 1). Re-scoring the best arm (64k + n-gram) across ρ, all read
-*within* the fitted BPB curve (no extrapolation):
+**Where SuperBPE wins: only small vocab, only at low budget.** At a common 6e19 budget the trained
+`64k-fixed` arm beats Llama-3 by ~0.8% feBPB (−0.77%), and 5 of 7 SuperBPE arms nominally edge it
+out — but that is the low-budget corner. The 64k arms have no data past ~8e19, so their edge is
+unverified at scale, and the 128k reversal argues it would not survive.
 
-| ρ (serving/training) | 1 | 2 | 4 | **4.5** | 6 | 8 |
-|---|---|---|---|---|---|---|
-| feBPB vs Llama-3 | −6.8% | −7.9% | −9.6% | **−10.0%** | −10.9% | −12.0% |
+**The durable, real benefit is serving density.** SuperBPE packs 17–21% more bytes/token (4.73 vs
+3.92 for 128k-fixed), so it is that much cheaper to serve. Whether that justifies adoption is a
+serving-economics question — if the deployment is serving-dominated (high serving/training ratio ρ)
+the density can pay for a raw-BPB deficit — not a quality-per-training-FLOP win: at ρ=1 SuperBPE does
+not beat Llama-3 at scale.
 
-**The win crosses −10.0% at ρ=4.5 and reaches −12% by ρ=8.** ρ=4.5 means serving ≈13.5× the training
-tokens — for the 20B-active target (~500 B training tokens) that is ≈6.75 *trillion* served tokens,
-a few weeks of moderate production traffic; real deployed models run ρ in the 100s–1000s. So under
-grug-moe's actual serving-dominated lifetime, the ~64k trained SuperBPE + n-gram **delivers ≥10%
-feBPB** — the target is met. The −6.8% headline is simply the conservative ρ=1 corner. (The
-decomposition still holds: −4.7% off-the-shelf superword, +1.9% small-vocab training to the −6.6%
-plateau, +0.2% n-gram — and the serving weight is what carries the compute-fair total past 10%.)
+**Secondary findings.** Digit pretokenization loses at every budget. The SuperBPE case-split
+pretokenizer beats the Llama word-regex by ~0.8–1% raw BPB at identical fertility (a pure
+segmentation effect, mostly from C++), but both 128k variants still lose to the Llama-3 baseline at
+scale. Per-domain, SuperBPE is a large C++ win (−7%) and a large Python loss (+9%) that cancel in the
+macro. Caveat: `marin-128k` is reused from the original run, not retrained alongside these arms — the
+*growing* gap argues against a static confound, but a fresh Llama-3 arm under the identical config
+would close it.
+
+**Bottom line.** The original "washout at scale" is **largely real, not just a bug artifact.** The
+three fixes narrowed it and made the small-vocab/low-budget corner favorable, but the tokenizer lever
+does **not** deliver a scale-robust quality-per-FLOP win for grug-moe. SuperBPE's value is
+serving-cost density, weighed against a raw-BPB deficit that grows with training budget.
+
+---
+
+*The sections below are the original **proxy-scale** investigation (hidden-1024 isoFLOP ladders on
+SlimPajama). Its headline feBPB numbers are superseded by the corrected re-run above; the rubric,
+method, and per-lever decomposition remain valid and are what the re-run was built on.*
 
 ## The rubric: FLOP-equivalent BPB (feBPB)
 
@@ -200,24 +196,28 @@ and strictly causal, and gated behind `BAKEOFF_NGRAM`.
 - **Plain BPE trained on our mix**: beats matched-vocab Llama-3 on bytes/token but stays well below
   any SuperBPE — the superword mechanism dominates the vocab-training effect.
 
-## Recommendations
+## Recommendations (corrected — after the fixed-tokenizer re-run)
 
-1. **Adopt a small-vocab (~64k) SuperBPE trained on the grug-moe mix.** It is the best measured
-   tokenizer, **−6.6% feBPB** over stock Llama-3 — better quality per training FLOP *and* competitive
-   serving cost — and sits on a flat 40–64k plateau, so 64k is a robust choice (not a knife-edge
-   optimum). The training harness (`experiments/tokenize/{corpus,train_tokenizers,
-   push_trained_tokenizers}.py`) is reproducible; the tokenizer loads by name through the existing
-   `levanter.load_tokenizer` path.
-2. **Add the hashed n-gram input embedding at ratio ~0.25** for a further ~0.2% (−6.8% composed) at
-   ~0 serving cost. Its value is a *late-budget* effect — a penalty early, a −0.86% BPB win by the
-   top of the ladder — so it pays off precisely at the long training runs the target implies. It
-   does not, however, grow in magnitude with model *width*, so treat it as a modest bonus rather
-   than a scale-up bet.
-3. **The 10% target is met under grug-moe's real serving economics.** At the conservative ρ=1
-   (serving = training) the win is −6.8%; under the deployment-realistic serving weight (ρ ≥ 4.5,
-   easily cleared by any served model) it exceeds −10% and reaches −12% at ρ=8, all within the
-   measured BPB curve. Report the win at the ρ that matches the intended deployment, not at ρ=1.
-   Going *further* than −12% would require an axis outside this study (architecture, data).
+1. **Do not switch grug-moe to SuperBPE for a quality-per-FLOP win.** The fixed-tokenizer re-run
+   shows the proxy-scale advantage reversing at scale: the 128k SuperBPE arms fall progressively
+   behind Llama-3 (up to +1.9% raw BPB by 2.6e20), and Llama-3 leads on feBPB at scale even after
+   its serving-cost discount. The only regime where SuperBPE wins is small-vocab + low-budget, which
+   is not the deployment regime and is unverified past ~8e19.
+2. **Treat SuperBPE as a serving-cost lever, not a quality lever.** Its durable, real benefit is
+   17–21% more bytes/token → cheaper inference. If a specific deployment is heavily serving-dominated
+   (very high ρ), the density can justify SuperBPE despite the raw-BPB deficit — decide per
+   deployment on the serving-economics numbers, not on a headline feBPB.
+3. **Avoid digit pretokenization** — it loses at every budget. If SuperBPE is pursued, the
+   case-split pretokenizer beats the Llama word-regex at equal fertility (a small segmentation gain,
+   mostly C++), so prefer it over the Llama regex.
+4. **Close the last confound before any adoption decision:** retrain a Llama-3 `marin-128k` arm under
+   the identical soak config (rather than reusing the original run) to rule out a residual
+   training-setup difference, and extend the 64k arms past ~2e20 to confirm whether their low-budget
+   edge is real or also reverses.
+
+The harness (`experiments/tokenize/{corpus,train_tokenizers,push_trained_tokenizers}.py`, the
+`ServingCostModel`/feBPB scorer, and the soak ladder `soak_wandb_ladder.py`) is reproducible and is
+the reusable artifact regardless of the verdict.
 
 ## Reproduce
 
