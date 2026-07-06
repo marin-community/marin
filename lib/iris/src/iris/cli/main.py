@@ -124,6 +124,12 @@ def login(ctx):
     flow and caches the long-lived IAP edge refresh token, from which each later
     RPC silently re-mints the short-lived edge token IAP requires. Non-IAP
     clusters need no login (in-network / loopback trust admits the caller).
+
+    Headless (CI / agent) callers cannot use this browser flow. They skip
+    ``iris login`` entirely and authenticate as an IAP-allowlisted service account
+    instead — impersonate one via ``gcloud auth application-default login
+    --impersonate-service-account`` (see ``lib/iris/docs/iap-gclb.md``, "Headless /
+    CI / agent").
     """
     controller_url = require_controller_url(ctx)
     config = ctx.obj.get("config")
@@ -144,7 +150,12 @@ def login(ctx):
     try:
         _id_token, refresh_token = run_iap_desktop_login(client_id, client_secret)
     except Exception as e:
-        raise click.ClickException(f"IAP authentication failed: {e}") from e
+        raise click.ClickException(
+            f"IAP authentication failed: {e}\n"
+            "If you are headless (CI / agent), skip `iris login` and authenticate as an "
+            "IAP-allowlisted service account instead — see lib/iris/docs/iap-gclb.md "
+            '("Headless / CI / agent").'
+        ) from e
 
     save_credentials(
         CredentialRecord(

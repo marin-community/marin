@@ -218,6 +218,47 @@ path falls back to the desktop client id (IAP registers it as a programmatic
 client) — sufficient for the common single-client setup. Set it only to give
 machine callers an `aud` distinct from the interactive-login client.
 
+### Headless / CI / agent: impersonate an allowlisted service account
+
+The service-account row above says "ambient key, no login", which is automatic
+on a GCE VM whose service account is allowlisted. Off a VM — a CI runner, a dev
+box, an agent harness — there is no ambient service-account key, and the one
+credential you do have (your own `gcloud` user login) does **not** work:
+`IapServiceAccountTokenProvider` mints the edge token with
+`google.oauth2.id_token.fetch_id_token`, which accepts a service-account key, GCE
+metadata, or **impersonated** credentials, but **not** end-user `gcloud`
+credentials. `iris login` is the only path that turns a human identity into an
+edge token, and it needs a browser.
+
+So a headless caller authenticates *as an allowlisted service account* by
+impersonating one. This writes an `impersonated_service_account` ADC that
+`fetch_id_token` honors, with your user identity as the impersonation source:
+
+```bash
+gcloud auth application-default login \
+  --impersonate-service-account=iris-controller@hai-gcp-models.iam.gserviceaccount.com
+
+# No iris login. Ambient ADC now mints the edge token as the SA. Normal
+# commands — and direct HTTPS to the dashboard/RPC — just work:
+iris --cluster=marin-dev cluster status
+```
+
+Two IAM grants make this work, matching the audience-vs-identity split above:
+
+- **Impersonation** — you need `roles/iam.serviceAccountTokenCreator` on the
+  target service account.
+- **Allowlist (identity → authorization)** — the service account must hold
+  `roles/iap.httpsResourceAccessor` on the cluster's backend service, exactly as
+  a human would (see [Access control](#access-control)). The edge token's `aud`
+  clears IAP authentication; the SA email is the identity IAP authorizes and the
+  controller maps to a role.
+
+Equivalently, point `GOOGLE_APPLICATION_CREDENTIALS` at an
+`impersonated_service_account` ADC file directly instead of writing the well-known
+ADC path. To reach a plain HTTP endpoint (e.g. `/auth/config`) rather than an RPC,
+build credentials with `iris.cli.connect.client_credentials(config, name)` and
+attach `Proxy-Authorization: Bearer <creds.iap_provider.get_token()>`.
+
 ## Firewall
 
 `firewall` tags the controller VM and adds an **allow** rule so only the Google
