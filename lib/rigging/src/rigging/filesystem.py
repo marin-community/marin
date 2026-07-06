@@ -154,7 +154,7 @@ class DataConfig:
 
         The env/explicit value is canonicalized through :class:`StoragePath` (trailing
         ``/`` stripped, interior ``//`` collapsed) so downstream joins never double the
-        separator (#6904).
+        separator.
         """
         env_prefix = os.environ.get(_MARIN_PREFIX_ENV)
         if env_prefix:
@@ -343,7 +343,7 @@ class StoragePath:
 
     Object-store keys are not normalized — a doubled ``/`` addresses a *different* key —
     so joins here are structural: a segment never contains a separator, which makes a
-    doubled or trailing separator unrepresentable (#6904). ``parse`` -> ``str`` is
+    doubled or trailing separator unrepresentable. ``parse`` -> ``str`` is
     therefore canonicalizing (interior ``//`` collapsed, trailing ``/`` stripped), not
     byte-preserving.
 
@@ -389,7 +389,7 @@ class StoragePath:
         """The ``/``-joined segments of this path under ``base``.
 
         Structural containment — compares parsed segments, not string prefixes, so a
-        doubled separator on either side cannot fork the answer (#6838).
+        doubled separator on either side cannot fork the answer.
         """
         same_root = (self.scheme, self.netloc, self.rooted) == (base.scheme, base.netloc, base.rooted)
         if not same_root or self.segments[: len(base.segments)] != base.segments:
@@ -435,7 +435,7 @@ def prefix_join(prefix: str, relative: str) -> str:
 
     Object-store keys are not normalized: a naive ``f"{prefix}/{relative}"`` join of a
     trailing-slash prefix produces a doubled separator — a *different* key — silently
-    splitting writers from slash-collapsing readers (#6904). ``str``-in/``str``-out
+    splitting writers from slash-collapsing readers. ``str``-in/``str``-out
     convenience over :class:`StoragePath` for a single join; parse once and use ``/``
     for repeated manipulation.
     """
@@ -629,7 +629,7 @@ def rebase_file_path(
     The path below ``base_in_path`` is preserved beneath ``base_out_path``, optionally
     swapping the file extension. Containment and joins are structural (via
     :class:`StoragePath`), so a trailing or doubled separator on any argument cannot
-    double the output separator (#6904). ``file_path`` must lie under ``base_in_path``;
+    double the output separator. ``file_path`` must lie under ``base_in_path``;
     otherwise a ``ValueError`` is raised.
 
     Args:

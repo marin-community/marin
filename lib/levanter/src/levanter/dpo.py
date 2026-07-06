@@ -17,7 +17,7 @@ import jmp
 import numpy as np
 from haliax.partitioning import ResourceMapping, named_jit
 
-from rigging.filesystem import prefix_join
+from rigging.filesystem import StoragePath, prefix_join
 
 from levanter.data.dataset import AsyncDataset
 from levanter.data.loader import DataLoader
@@ -235,7 +235,7 @@ def reference_eval_cache_path(
     ).hexdigest()[:8]
 
     if cache_dir is None:
-        cache_root = prefix_join(spec.source_cache_path.rsplit("/", 1)[0], "reference_logprobs")
+        cache_root = str(StoragePath.parse(spec.source_cache_path).parent / "reference_logprobs")
     else:
         cache_root = cache_dir
 
