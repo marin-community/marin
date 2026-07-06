@@ -10,7 +10,7 @@ import logging
 import sys
 
 import click
-from rigging.auth import MARIN_DESKTOP_OAUTH_CLIENT, run_iap_desktop_login
+from rigging.auth import MARIN_DESKTOP_OAUTH_CLIENT, IapCredentialsUnavailable, run_iap_desktop_login
 from rigging.config_discovery import resolve_cluster_config
 from rigging.credential_store import CredentialRecord, save_credentials
 from rigging.credentials import MARIN_IMPERSONATE_ENV
@@ -277,3 +277,23 @@ iris.add_command(task)
 iris.add_command(query_cmd)
 register_rpc_commands(iris)
 register_process_status_commands(iris)
+
+
+def main() -> None:
+    """Console-script entry point: run the ``iris`` group with clean auth errors.
+
+    IAP credential failures surface lazily from deep in an RPC call as a bare
+    ``IapCredentialsUnavailable``. Catch it here to print an actionable hint
+    instead of a stack trace; every other exception keeps its normal traceback.
+    """
+    try:
+        iris()
+    except IapCredentialsUnavailable as exc:
+        click.secho(f"Error: {exc}", fg="red", err=True)
+        click.echo(
+            "Run `iris login` to authenticate interactively, or pass "
+            "--impersonate-service-account <SA> (or set $MARIN_IMPERSONATE_SERVICE_ACCOUNT) "
+            "for the headless path. See lib/iris/docs/iap-gclb.md.",
+            err=True,
+        )
+        sys.exit(1)

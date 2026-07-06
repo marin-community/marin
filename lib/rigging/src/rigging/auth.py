@@ -56,6 +56,16 @@ _GOOGLE_TOKEN_URI = "https://oauth2.googleapis.com/token"
 _GOOGLE_AUTH_URI = "https://accounts.google.com/o/oauth2/auth"
 
 
+class IapCredentialsUnavailable(Exception):
+    """No usable source credentials to mint an IAP token for the cluster.
+
+    Raised when the ambient service-account path finds no credentials it can turn
+    into an IAP OIDC token — the caller has neither a cached interactive login nor
+    impersonation configured. Carries an actionable message; the CLI catches it to
+    render cleanly.
+    """
+
+
 def _monotonic_expiry(expiry_wall: float | None) -> float:
     """The ``time.monotonic`` deadline to cache a token until.
 
@@ -145,7 +155,15 @@ class IapServiceAccountTokenProvider:
         if self._cached_token is not None and time.monotonic() < self._expires_at:
             return self._cached_token
 
-        token = google.oauth2.id_token.fetch_id_token(google.auth.transport.requests.Request(), self._audience)
+        try:
+            token = google.oauth2.id_token.fetch_id_token(google.auth.transport.requests.Request(), self._audience)
+        except google.auth.exceptions.DefaultCredentialsError as exc:
+            raise IapCredentialsUnavailable(
+                "No credentials available to authenticate to this IAP-protected cluster. "
+                "Authenticate interactively to cache a login token, or impersonate an "
+                "IAP-allowlisted service account by setting $MARIN_IMPERSONATE_SERVICE_ACCOUNT "
+                "(or passing --impersonate-service-account)."
+            ) from exc
         claims = google.auth.jwt.decode(token, verify=False)
 
         self._cached_token = token

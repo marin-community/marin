@@ -53,7 +53,7 @@ worker = []
 iap = ["marin-rigging[iap]"]
 
 [project.scripts]
-iris = "iris.cli:iris"
+iris = "iris.cli:main"
 iris-run = "iris.cli.run:run"
 
 [dependency-groups]

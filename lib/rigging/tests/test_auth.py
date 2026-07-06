@@ -10,6 +10,7 @@ import pytest
 from rigging.auth import (
     BearerTokenInjector,
     GcpAccessTokenProvider,
+    IapCredentialsUnavailable,
     IapLoginRequired,
     IapRefreshTokenProvider,
     IapServiceAccountTokenProvider,
@@ -154,6 +155,20 @@ def test_iap_id_token_provider_refetches_after_expiry(monkeypatch):
     assert fetch_calls == 1
     assert provider.get_token() == "id-token"
     assert fetch_calls == 2
+
+
+def test_iap_id_token_provider_raises_actionable_error_without_credentials(monkeypatch):
+    """A missing ambient credential surfaces as an actionable IapCredentialsUnavailable."""
+
+    def fake_fetch(request, audience):
+        raise google.auth.exceptions.DefaultCredentialsError("no ADC")
+
+    monkeypatch.setattr("google.oauth2.id_token.fetch_id_token", fake_fetch)
+    monkeypatch.setattr("google.auth.transport.requests.Request", lambda: object())
+
+    provider = IapServiceAccountTokenProvider("aud-123")
+    with pytest.raises(IapCredentialsUnavailable, match="impersonate"):
+        provider.get_token()
 
 
 class FakeRefreshCreds:
