@@ -109,13 +109,15 @@ def test_fp8_grads_parity_vs_reference():
 @hopper_only
 def test_fp8_grad_rhs_parity_incl_boundaries():
     # The weight gradient (grad_rhs) contracts the ragged token dim in block_k=128
-    # tiles via mgpu_dwgrad. This exercises the f16-upcast group-boundary mask:
-    # the token groups are chosen so boundaries fall mid-tile and one group
-    # straddles the 128-token block boundary (start 100, end 180). T is a multiple
-    # of 128 (the wgrad's contracting-dim TMA tile), K and N multiples of 128
-    # (the dgrad/forward alignment).
-    lhs, rhs, _ = _nonuniform(256, 128, 4, 128, seed=4)
-    gs = jnp.asarray([60, 40, 80, 76], jnp.int32)  # boundaries 60, 100, 180 (mid-block_k)
+    # tiles via mgpu_dwgrad. This exercises the boundary appendix (pre-masked
+    # first/last token blocks, write_boundary_appendix): the token groups are
+    # chosen so boundaries fall mid-tile, one group straddles the 128-token block
+    # boundary (start 100, end 180), one group is empty, and one group is fully
+    # contained in a single tile (the appendix's dual-masked single-block case).
+    # T is a multiple of 128 (the wgrad's contracting-dim TMA tile), K and N
+    # multiples of 128 (the dgrad/forward alignment).
+    lhs, rhs, _ = _nonuniform(256, 128, 5, 128, seed=4)
+    gs = jnp.asarray([60, 40, 0, 80, 76], jnp.int32)  # boundaries 60, 100, 100, 180 (mid-block_k)
     assert int(gs.sum()) == 256
     op = Fp8RaggedDotOp.init()
 
