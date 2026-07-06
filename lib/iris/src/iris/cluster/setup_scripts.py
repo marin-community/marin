@@ -134,6 +134,7 @@ def wants_gpu_extra(extras: Sequence[str]) -> bool:
 _LIBDEVICE_FILE = "libdevice.10.bc"
 # XLA's built-in default --xla_gpu_cuda_data_dir, resolved relative to the workdir.
 _XLA_CUDA_DATA_DIR = "cuda_sdk_lib"
+_CUDNN_CU13_PACKAGE = "nvidia-cudnn-cu13"
 
 
 def cuda_toolchain_setup_script() -> str:
@@ -157,6 +158,22 @@ if [ -f "$_libdevice" ]; then
   mkdir -p "$IRIS_WORKDIR/{_XLA_CUDA_DATA_DIR}/nvvm/libdevice"
   cp -f "$_libdevice" "$IRIS_WORKDIR/{_XLA_CUDA_DATA_DIR}/nvvm/libdevice/{_LIBDEVICE_FILE}"
   cp -f "$_libdevice" "$IRIS_WORKDIR/{_LIBDEVICE_FILE}"
+fi
+_cudnn_cu13_package="{_CUDNN_CU13_PACKAGE}"
+_cudnn_cu13_version="$(
+  "$IRIS_VENV/bin/python" - "$_cudnn_cu13_package" <<'PY' 2>/dev/null || true
+import importlib.metadata as md
+import sys
+
+print(md.version(sys.argv[1]))
+PY
+)"
+if [ -n "$_cudnn_cu13_version" ]; then
+  echo 'restoring CUDA 13 cuDNN library precedence'
+  uv pip install --python "$IRIS_VENV/bin/python" \
+    --link-mode symlink \
+    --reinstall-package "$_cudnn_cu13_package" \
+    "$_cudnn_cu13_package==$_cudnn_cu13_version"
 fi
 """
 

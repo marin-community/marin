@@ -34,8 +34,10 @@ def _make_venv(tmp_path: Path, *, cuda_major: str, with_ptxas: bool, with_libdev
     return venv
 
 
-def _run_script(script: str, venv: Path, workdir: Path) -> None:
-    env = {"IRIS_VENV": str(venv), "IRIS_WORKDIR": str(workdir), "PATH": "/usr/bin:/bin"}
+def _run_script(script: str, venv: Path, workdir: Path, *, path: str = "/usr/bin:/bin", extra_env=None) -> None:
+    env = {"IRIS_VENV": str(venv), "IRIS_WORKDIR": str(workdir), "PATH": path}
+    if extra_env:
+        env.update(extra_env)
     subprocess.run(["bash", "-c", script], env=env, capture_output=True, text=True, check=True)
 
 
@@ -97,6 +99,43 @@ def test_stages_when_libdevice_missing(tmp_path):
 
     assert (venv / "bin" / "ptxas").is_symlink()
     assert not (workdir / "libdevice.10.bc").exists()
+
+
+def test_restores_cuda13_cudnn_package_when_present(tmp_path):
+    venv = _make_venv(tmp_path, cuda_major="cu13", with_ptxas=True, with_libdevice=True)
+    workdir = tmp_path / "work"
+    workdir.mkdir()
+
+    python = venv / "bin" / "python"
+    python.write_text("#!/bin/sh\nprintf '9.19.0.56\\n'\n")
+    python.chmod(0o755)
+
+    fake_bin = tmp_path / "fake-bin"
+    fake_bin.mkdir()
+    uv = fake_bin / "uv"
+    uv.write_text('#!/bin/sh\nprintf \'%s\\n\' "$@" > "$UV_ARGV_LOG"\n')
+    uv.chmod(0o755)
+    uv_argv_log = tmp_path / "uv-argv.log"
+
+    _run_script(
+        cuda_toolchain_setup_script(),
+        venv,
+        workdir,
+        path=f"{fake_bin}:/usr/bin:/bin",
+        extra_env={"UV_ARGV_LOG": str(uv_argv_log)},
+    )
+
+    assert uv_argv_log.read_text().splitlines() == [
+        "pip",
+        "install",
+        "--python",
+        str(venv / "bin" / "python"),
+        "--link-mode",
+        "symlink",
+        "--reinstall-package",
+        "nvidia-cudnn-cu13",
+        "nvidia-cudnn-cu13==9.19.0.56",
+    ]
 
 
 def test_wants_gpu_extra():

@@ -15,6 +15,7 @@ import time
 import traceback
 from collections.abc import Callable, Sequence
 from dataclasses import asdict
+from itertools import product
 from statistics import median
 from typing import Any, NamedTuple
 
@@ -24,6 +25,48 @@ import numpy as np
 from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P
 
 import levanter.grug._moe.source_push_mlp as source_push_mlp
+from levanter.grug._moe.source_push_backward_dy_route import (
+    SOURCE_PUSH_DY_ROUTE_IMPLEMENTATION_SOURCE_PUSH_PALLAS_MGPU,
+    _source_push_backward_dy_to_expert_major,
+    _source_push_backward_dy_to_expert_major_source_push_pallas_call,
+    _source_push_backward_dy_to_h_rows,
+)
+from levanter.grug._moe.source_push_backward_return import (
+    source_push_backward_return,
+    source_push_backward_return_flat,
+    source_push_backward_return_flat_route_indices_jax,
+    source_push_backward_return_route_indices_jax,
+)
+from levanter.grug._moe.source_push_backward_w13 import (
+    SOURCE_PUSH_W13_BACKWARD_DIAGNOSTIC_PALLAS_MGPU_COMPACT_DX_ONLY,
+    SOURCE_PUSH_W13_BACKWARD_DIAGNOSTIC_SOURCE_GATHER_DW13_ONLY,
+    SOURCE_PUSH_W13_BACKWARD_IMPLEMENTATION_PALLAS_MGPU_COMPACT,
+    SOURCE_PUSH_W13_BACKWARD_IMPLEMENTATION_TILED,
+    _source_push_w13_backward_expert_blocks_dx_only_pallas_mgpu,
+    _source_push_w13_backward_expert_blocks_pallas_mgpu,
+    source_push_w13_backward,
+    source_push_w13_backward_expert_blocks_source_gather_dw13_only,
+    source_push_w13_backward_expert_blocks_tiled_reference,
+)
+from levanter.grug._moe.source_push_backward_w2 import (
+    MIN_SOURCE_PUSH_W2_MATMUL_ROW_BLOCK,
+    _SourcePushW2BackwardOutput,
+    _SourcePushW2MatmulBackwardOutput,
+    _dst_indices,
+    _expert_flat_rows,
+    _gather_flat_rows,
+    _gather_flat_rows_by_expert_slice,
+    _pad_w2_matmul_rows_for_pallas,
+    _source_push_w2_d_weighted_activation_pallas_call,
+    _source_push_w2_activation_and_weighted_activation_reference,
+    _source_push_w2_backward_expert_blocks,
+    _source_push_w2_backward_from_flat_h,
+    _source_push_w2_dw2_pallas_call,
+    _source_push_w2_matmul_backward,
+    _source_push_w2_matmul_backward_inferred_block_sizes,
+    _source_push_w2_swiglu_backward,
+    _source_push_w2_valid_blocks_sharded,
+)
 from levanter.grug._moe.source_push_forward import (
     FORWARD_EXECUTION_STAGED_HOST_SYNC,
     FORWARD_STAGE_COMBINE,
@@ -35,17 +78,23 @@ from levanter.grug._moe.source_push_forward import (
     _shard_source_push_forward_inputs,
     _sharded_source_combine_kernel,
     _time_staged_source_push_forward,
-    device_source_push_forward_inputs_from_plan,
-    make_source_push_forward_inputs,
+    make_source_push_forward_plan_inputs,
     make_source_push_forward_source_plan_raw_inputs,
     source_push_forward_with_h_from_plan,
+    source_push_w13_h_expert_major_from_plan,
 )
 from levanter.grug._moe.source_push_inbox import (
     AXIS,
     BYTES_PER_BF16,
+    DIAGNOSTIC_VARIANT_COMPUTE_ONLY_LOCAL,
+    DIAGNOSTIC_VARIANT_FULL,
+    DIAGNOSTIC_VARIANT_STORE_ZERO,
     PushInboxConfig,
     _block_until_ready,
+    _compact_h_expert_capacity_from_metadata,
+    _sharded_w13_h_compact_kernel,
     _sharded_raw_token_w13_h_kernel,
+    _sharded_raw_token_w13_h_compact_kernel,
 )
 from levanter.grug._moe.source_push_inbox_profiles import SOURCE_PUSH_PROFILES, source_push_profile_defaults
 from levanter.grug._moe.source_push_mlp import (
@@ -55,31 +104,102 @@ from levanter.grug._moe.source_push_mlp import (
     source_push_moe_mlp_from_plan,
 )
 from levanter.grug._moe.source_push_plan import (
-    source_push_recv_route_weights_jax,
+    SOURCE_PUSH_MESH_AXIS,
+    _source_push_out_sharding,
+    pack_source_push_tokens_jax,
+    source_push_h_row_route_weights_jax,
 )
-from levanter.grug._moe.source_push_w2_return import _sharded_w2_from_h_return_direct_to_source_kernel
+from levanter.grug._moe.source_push_token_pack import source_push_pack_tokens_pallas_mgpu
+from levanter.grug._moe.source_push_w2_return import (
+    _sharded_w2_from_compact_h_return_direct_to_source_kernel,
+    _sharded_w2_from_h_return_direct_to_source_kernel,
+)
 from levanter.grug.grug_moe import moe_mlp
 from levanter.utils.activation import ActivationFunctionEnum
 
-
 KERNEL_NAME = "source_push_mlp_fwd_bwd"
+SOURCE_PUSH_W13_STABLE_BASELINE_TFLOPS_PER_RANK = 216.949
 MODE_FORWARD = "forward"
 MODE_FORWARD_BACKWARD = "forward_backward"
 MODE_FORWARD_DECOMPOSED = "forward_decomposed"
 MODE_FORWARD_DECOMPOSED_RAW_TOKENS = "forward_decomposed_raw_tokens"
+MODE_FORWARD_W13_DIRECT_COMPACT = "forward_w13_direct_compact"
+MODE_FORWARD_W13_DIRECT_COMPACT_STORE_ZERO = "forward_w13_direct_compact_store_zero"
+MODE_FORWARD_W13_DIRECT_COMPACT_COMPUTE_ONLY_LOCAL = "forward_w13_direct_compact_compute_only_local"
+MODE_FORWARD_COMPACT_H_DECOMPOSED = "forward_compact_h_decomposed"
+MODE_FORWARD_COMPACT_H_DECOMPOSED_WITH_PREP = "forward_compact_h_decomposed_with_prep"
+MODE_FORWARD_COMPACT_H_DECOMPOSED_WITH_PALLAS_PACK = "forward_compact_h_decomposed_with_pallas_pack"
+MODE_FORWARD_COMPACT_H_RAW_TOKENS_DECOMPOSED = "forward_compact_h_raw_tokens_decomposed"
+MODE_FORWARD_PACK_TOTAL = "forward_pack_total"
+MODE_FORWARD_PACK_TOKEN_PACK = "forward_pack_token_pack"
+MODE_FORWARD_PACK_TOKEN_PACK_PALLAS = "forward_pack_token_pack_pallas"
+MODE_FORWARD_PACK_H_ROUTE_WEIGHTS = "forward_pack_h_route_weights"
+MODE_FORWARD_PACK_STATIC_SHARD = "forward_pack_static_shard"
 MODE_BACKWARD_DECOMPOSED = "backward_decomposed"
+MODE_BACKWARD_STAGED_FLAT = "backward_staged_flat"
+MODE_BACKWARD_STAGED_BLOCKS = "backward_staged_blocks"
 FORWARD_DECOMPOSED_STAGE_PACK_INPUTS = "pack_inputs"
+FORWARD_DECOMPOSED_STAGE_PACK_INPUTS_TOKEN_PACK = "pack_inputs_token_pack"
+FORWARD_DECOMPOSED_STAGE_PACK_INPUTS_H_ROUTE_WEIGHTS = "pack_inputs_h_route_weights"
+FORWARD_DECOMPOSED_STAGE_PACK_INPUTS_COMPACT_H_ROUTE_WEIGHTS = "pack_inputs_compact_h_route_weights"
+FORWARD_DECOMPOSED_STAGE_PACK_INPUTS_STATIC_SHARD = "pack_inputs_static_shard"
 FORWARD_DECOMPOSED_STAGE_PREPARE_INPUTS = "prepare_inputs"
+FORWARD_DECOMPOSED_STAGE_PREPACKED_INPUTS = "prepacked_inputs"
 BACKWARD_STAGE_TOTAL = "backward_total"
 BACKWARD_STAGE_FORWARD_H = "forward_h"
+BACKWARD_STAGE_H_WEIGHT_GATHER = "h_weight_gather"
 BACKWARD_STAGE_DY_ROUTE = "dy_route"
 BACKWARD_STAGE_ACTIVATION = "activation"
 BACKWARD_STAGE_W2 = "w2_backward"
+BACKWARD_STAGE_W2_GATHER = "w2_h_weight_gather"
+BACKWARD_STAGE_W2_ACTIVATION = "w2_activation_weight"
+BACKWARD_STAGE_W2_MATMUL = "w2_matmul"
+BACKWARD_STAGE_W2_D_WEIGHTED_ACTIVATION = "w2_d_weighted_activation"
+BACKWARD_STAGE_W2_DW2 = "w2_dw2"
+BACKWARD_STAGE_W2_SWIGLU = "w2_swiglu"
+BACKWARD_STAGE_W2_SCATTER = "w2_scatter"
 BACKWARD_STAGE_SWIGLU = "swiglu_backward"
 BACKWARD_STAGE_X_REMAT = "x_rematerialization"
 BACKWARD_STAGE_W13 = "w13_backward"
 BACKWARD_STAGE_DX_COMBINE = "dx_return_combine"
+BACKWARD_IMPLEMENTATION_DEFAULT = "default"
+BACKWARD_STOP_AFTER_NONE = "none"
+BACKWARD_STOP_AFTER_STAGES = (
+    BACKWARD_STOP_AFTER_NONE,
+    BACKWARD_STAGE_DY_ROUTE,
+    BACKWARD_STAGE_W2,
+    BACKWARD_STAGE_W13,
+    BACKWARD_STAGE_DX_COMBINE,
+)
+BACKWARD_DY_ROUTE_IMPLEMENTATIONS = (
+    BACKWARD_IMPLEMENTATION_DEFAULT,
+    "reference",
+    "pallas_mgpu",
+    "source_push_pallas_mgpu",
+)
+BACKWARD_W2_IMPLEMENTATIONS = (
+    BACKWARD_IMPLEMENTATION_DEFAULT,
+    "reference",
+    "reference_matmul_pallas_mgpu_swiglu",
+    "pallas_mgpu_matmul_reference_swiglu",
+    "pallas_mgpu_fused",
+)
+BACKWARD_W13_IMPLEMENTATIONS = (
+    BACKWARD_IMPLEMENTATION_DEFAULT,
+    "reference",
+    "tiled",
+    "pallas_mgpu",
+    SOURCE_PUSH_W13_BACKWARD_IMPLEMENTATION_PALLAS_MGPU_COMPACT,
+    SOURCE_PUSH_W13_BACKWARD_DIAGNOSTIC_PALLAS_MGPU_COMPACT_DX_ONLY,
+    SOURCE_PUSH_W13_BACKWARD_DIAGNOSTIC_SOURCE_GATHER_DW13_ONLY,
+)
+BACKWARD_RETURN_IMPLEMENTATIONS = (
+    BACKWARD_IMPLEMENTATION_DEFAULT,
+    "jax",
+    "pallas_mgpu",
+)
 BACKWARD_STAGES = (
+    BACKWARD_STAGE_H_WEIGHT_GATHER,
     BACKWARD_STAGE_DY_ROUTE,
     BACKWARD_STAGE_ACTIVATION,
     BACKWARD_STAGE_W2,
@@ -88,13 +208,61 @@ BACKWARD_STAGES = (
     BACKWARD_STAGE_W13,
     BACKWARD_STAGE_DX_COMBINE,
 )
+BACKWARD_W2_SPLIT_STAGES = (
+    BACKWARD_STAGE_W2_GATHER,
+    BACKWARD_STAGE_W2_ACTIVATION,
+    BACKWARD_STAGE_W2_MATMUL,
+    BACKWARD_STAGE_W2_D_WEIGHTED_ACTIVATION,
+    BACKWARD_STAGE_W2_DW2,
+    BACKWARD_STAGE_W2_SWIGLU,
+    BACKWARD_STAGE_W2_SCATTER,
+)
+
+
+def _backward_staged_block_timed_stages(stop_after_stage: str) -> tuple[str, ...]:
+    stages = (BACKWARD_STAGE_DY_ROUTE,)
+    if stop_after_stage in (
+        BACKWARD_STAGE_W2,
+        BACKWARD_STAGE_W13,
+        BACKWARD_STAGE_DX_COMBINE,
+        BACKWARD_STOP_AFTER_NONE,
+    ):
+        stages = (*stages, BACKWARD_STAGE_W2)
+    if stop_after_stage in (BACKWARD_STAGE_W13, BACKWARD_STAGE_DX_COMBINE, BACKWARD_STOP_AFTER_NONE):
+        stages = (*stages, BACKWARD_STAGE_W13)
+    if stop_after_stage in (BACKWARD_STAGE_DX_COMBINE, BACKWARD_STOP_AFTER_NONE):
+        stages = (*stages, BACKWARD_STAGE_DX_COMBINE)
+    return stages
+
+
 MODES = (
     MODE_FORWARD,
     MODE_FORWARD_BACKWARD,
     MODE_FORWARD_DECOMPOSED,
     MODE_FORWARD_DECOMPOSED_RAW_TOKENS,
+    MODE_FORWARD_W13_DIRECT_COMPACT,
+    MODE_FORWARD_W13_DIRECT_COMPACT_STORE_ZERO,
+    MODE_FORWARD_W13_DIRECT_COMPACT_COMPUTE_ONLY_LOCAL,
+    MODE_FORWARD_COMPACT_H_DECOMPOSED,
+    MODE_FORWARD_COMPACT_H_DECOMPOSED_WITH_PREP,
+    MODE_FORWARD_COMPACT_H_DECOMPOSED_WITH_PALLAS_PACK,
+    MODE_FORWARD_COMPACT_H_RAW_TOKENS_DECOMPOSED,
+    MODE_FORWARD_PACK_TOTAL,
+    MODE_FORWARD_PACK_TOKEN_PACK,
+    MODE_FORWARD_PACK_TOKEN_PACK_PALLAS,
+    MODE_FORWARD_PACK_H_ROUTE_WEIGHTS,
+    MODE_FORWARD_PACK_STATIC_SHARD,
     MODE_BACKWARD_DECOMPOSED,
+    MODE_BACKWARD_STAGED_FLAT,
+    MODE_BACKWARD_STAGED_BLOCKS,
 )
+FORWARD_PACK_PROBE_MODE_TO_STAGE = {
+    MODE_FORWARD_PACK_TOTAL: FORWARD_DECOMPOSED_STAGE_PACK_INPUTS,
+    MODE_FORWARD_PACK_TOKEN_PACK: FORWARD_DECOMPOSED_STAGE_PACK_INPUTS_TOKEN_PACK,
+    MODE_FORWARD_PACK_TOKEN_PACK_PALLAS: FORWARD_DECOMPOSED_STAGE_PACK_INPUTS_TOKEN_PACK,
+    MODE_FORWARD_PACK_H_ROUTE_WEIGHTS: FORWARD_DECOMPOSED_STAGE_PACK_INPUTS_H_ROUTE_WEIGHTS,
+    MODE_FORWARD_PACK_STATIC_SHARD: FORWARD_DECOMPOSED_STAGE_PACK_INPUTS_STATIC_SHARD,
+}
 BACKEND_RING = "ring"
 BACKEND_RAGGED_A2A = "ragged_all_to_all"
 BACKEND_PUBLIC_SOURCE_PUSH = "public_source_push"
@@ -132,6 +300,12 @@ SUMMARY_METRICS = (
     "useful_tflops_per_rank",
     "rounded_tflops_per_rank",
     "dropped_routes",
+    "w13_payload_send_bytes_per_rank",
+    "w13_lhs_compute_read_bytes_per_rank",
+    "w13_weight_read_bytes_per_rank",
+    "w13_compact_h_store_bytes_per_rank",
+    "w13_estimated_total_bytes_per_rank",
+    "w13_estimated_total_gbps_per_rank",
 )
 
 
@@ -152,6 +326,7 @@ class InputPackTiming(NamedTuple):
     first_call_time: float
     steady_state_times: list[float]
     output: Any
+    stage_steady_state_times: dict[str, list[float]] | None = None
 
 
 class RawTokenForwardInputs(NamedTuple):
@@ -164,7 +339,27 @@ class RawTokenForwardInputs(NamedTuple):
     expert_base: jax.Array
     src_base_by_expert: jax.Array
     w_gate_up: jax.Array
-    recv_route_weights: jax.Array
+    h_route_weights: jax.Array
+    w_down: jax.Array
+    queue_dst_ord: jax.Array
+    queue_entry: jax.Array
+    queue_row: jax.Array
+    route_combine_weights: jax.Array
+    route_valid_mask: jax.Array
+    use_exact_expert_major: bool
+
+
+class RawTokenCompactHForwardInputs(NamedTuple):
+    """Device inputs for raw-token W13 with compact expert-major H."""
+
+    x: jax.Array
+    token_ids: jax.Array
+    send_meta: jax.Array
+    recv_meta: jax.Array
+    expert_base: jax.Array
+    src_base_by_expert: jax.Array
+    w_gate_up: jax.Array
+    h_route_weights: jax.Array
     w_down: jax.Array
     queue_dst_ord: jax.Array
     queue_entry: jax.Array
@@ -193,6 +388,13 @@ class BackwardDecomposedTiming(NamedTuple):
     stage_steady_state_times: dict[str, list[float]]
 
 
+def _parse_int_csv(value: str) -> tuple[int, ...]:
+    values = tuple(int(part) for part in value.split(",") if part)
+    if not values:
+        raise argparse.ArgumentTypeError("expected a comma-separated list of integers")
+    return values
+
+
 def _profile_defaults(argv: Sequence[str] | None = None) -> dict[str, Any]:
     pre_parser = argparse.ArgumentParser(add_help=False)
     pre_parser.add_argument("--source-push-profile", choices=SOURCE_PUSH_PROFILES, default="none")
@@ -213,6 +415,7 @@ def parse_source_push_mlp_fwd_bwd_args(argv: Sequence[str] | None = None) -> arg
     parser.add_argument("--ep-size", type=int, default=default("ep_size", 8))
     parser.add_argument("--entries-per-rank", type=int, default=default("entries_per_rank", 2))
     parser.add_argument("--inbox-slots", type=int, default=default("inbox_slots", 2))
+    parser.add_argument("--sweep-inbox-slots", type=_parse_int_csv, default=None)
     parser.add_argument("--hidden-dim", type=int, default=default("hidden_dim", 2560))
     parser.add_argument("--intermediate-dim", type=int, default=default("intermediate_dim", 1280))
     parser.add_argument("--block-m", type=int, default=default("block_m", 64))
@@ -220,18 +423,22 @@ def parse_source_push_mlp_fwd_bwd_args(argv: Sequence[str] | None = None) -> arg
     parser.add_argument("--block-k", type=int, default=default("block_k", 128))
     parser.add_argument("--n-group", type=int, default=default("n_group", 1))
     parser.add_argument("--n-groups-per-job", type=int, default=default("n_groups_per_job", 1))
+    parser.add_argument("--sweep-n-groups-per-job", type=_parse_int_csv, default=None)
     parser.add_argument("--experts-per-rank", type=int, default=default("experts_per_rank", 32))
     parser.add_argument(
         "--send-worker-programs-per-peer",
         type=int,
         default=default("send_worker_programs_per_peer", 4),
     )
+    parser.add_argument("--sweep-send-worker-programs-per-peer", type=_parse_int_csv, default=None)
     parser.add_argument(
         "--worker-programs-per-peer",
         type=int,
         default=default("worker_programs_per_peer", 16),
     )
+    parser.add_argument("--sweep-worker-programs-per-peer", type=_parse_int_csv, default=None)
     parser.add_argument("--send-pipeline-depth", type=int, default=default("send_pipeline_depth", 1))
+    parser.add_argument("--sweep-send-pipeline-depth", type=_parse_int_csv, default=None)
     parser.add_argument("--routing", type=str, default=default("routing", "balanced"))
     parser.add_argument("--tokens-per-rank", type=int, default=default("tokens_per_rank", 32768))
     parser.add_argument("--topk", type=int, default=default("topk", 4))
@@ -242,6 +449,30 @@ def parse_source_push_mlp_fwd_bwd_args(argv: Sequence[str] | None = None) -> arg
     parser.add_argument("--repeat-runs", type=int, default=default("repeat_runs", 1))
     parser.add_argument("--backends", default=BACKEND_SOURCE_PUSH_PALLAS)
     parser.add_argument("--modes", default=f"{MODE_FORWARD},{MODE_FORWARD_BACKWARD}")
+    parser.add_argument(
+        "--use-exact-expert-major",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Use exact expert-major flat-H metadata instead of source-padded rows for source-push paths.",
+    )
+    parser.add_argument(
+        "--backward-dy-route-implementation", choices=BACKWARD_DY_ROUTE_IMPLEMENTATIONS, default="default"
+    )
+    parser.add_argument("--backward-w2-implementation", choices=BACKWARD_W2_IMPLEMENTATIONS, default="default")
+    parser.add_argument(
+        "--backward-w2-split-timing",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Benchmark-only: split staged-flat W2 timing into gather, activation, matmul, SwiGLU, and scatter.",
+    )
+    parser.add_argument("--backward-w13-implementation", choices=BACKWARD_W13_IMPLEMENTATIONS, default="default")
+    parser.add_argument("--backward-return-implementation", choices=BACKWARD_RETURN_IMPLEMENTATIONS, default="default")
+    parser.add_argument(
+        "--backward-stop-after-stage",
+        choices=BACKWARD_STOP_AFTER_STAGES,
+        default=BACKWARD_STOP_AFTER_NONE,
+        help="Benchmark-only diagnostic stop point for staged-flat backward decomposition.",
+    )
     parser.add_argument(
         "--outer-jit",
         choices=OUTER_JIT_CHOICES,
@@ -262,46 +493,76 @@ def main(argv: Sequence[str] | None = None) -> None:
         if jsonl_dir:
             os.makedirs(jsonl_dir, exist_ok=True)
 
-    config = PushInboxConfig(
-        ep_size=args.ep_size,
-        entries_per_rank=args.entries_per_rank,
-        inbox_slots=args.inbox_slots,
-        hidden_dim=args.hidden_dim,
-        intermediate_dim=args.intermediate_dim,
-        block_m=args.block_m,
-        block_n=args.block_n,
-        block_k=args.block_k,
-        n_group=args.n_group,
-        n_groups_per_job=args.n_groups_per_job,
-        experts_per_rank=args.experts_per_rank,
-        send_worker_programs_per_peer=args.send_worker_programs_per_peer,
-        worker_programs_per_peer=args.worker_programs_per_peer,
-        send_pipeline_depth=args.send_pipeline_depth,
-        routing=args.routing,
-        tokens_per_rank=args.tokens_per_rank,
-        topk=args.topk,
-        routing_seed=args.routing_seed,
-        capacity_factor=args.capacity_factor,
+    inbox_slots_values = args.sweep_inbox_slots or (args.inbox_slots,)
+    send_worker_programs_per_peer_values = args.sweep_send_worker_programs_per_peer or (
+        args.send_worker_programs_per_peer,
     )
-    rows = run_source_push_mlp_fwd_bwd(
-        config,
-        backends=_parse_csv_choices(args.backends, BACKENDS, flag="--backends"),
-        modes=_parse_csv_choices(args.modes, MODES, flag="--modes"),
-        warmup=args.warmup,
-        steps=args.steps,
-        repeat_runs=args.repeat_runs,
-        outer_jit=args.outer_jit,
-        separate_compile=args.separate_compile,
-        debug_exceptions=args.debug_exceptions,
-    )
-    for row in rows:
-        if args.git_sha is not None:
-            row["git_sha"] = args.git_sha
-        line = json.dumps(row, sort_keys=True)
-        print(line, flush=True)
-        if args.jsonl:
-            with open(args.jsonl, "a", encoding="utf-8") as f:
-                print(line, file=f, flush=True)
+    worker_programs_per_peer_values = args.sweep_worker_programs_per_peer or (args.worker_programs_per_peer,)
+    send_pipeline_depth_values = args.sweep_send_pipeline_depth or (args.send_pipeline_depth,)
+    n_groups_per_job_values = args.sweep_n_groups_per_job or (args.n_groups_per_job,)
+    backends = _parse_csv_choices(args.backends, BACKENDS, flag="--backends")
+    modes = _parse_csv_choices(args.modes, MODES, flag="--modes")
+
+    for (
+        inbox_slots,
+        send_worker_programs_per_peer,
+        worker_programs_per_peer,
+        send_pipeline_depth,
+        n_groups_per_job,
+    ) in product(
+        inbox_slots_values,
+        send_worker_programs_per_peer_values,
+        worker_programs_per_peer_values,
+        send_pipeline_depth_values,
+        n_groups_per_job_values,
+    ):
+        config = PushInboxConfig(
+            ep_size=args.ep_size,
+            entries_per_rank=args.entries_per_rank,
+            inbox_slots=inbox_slots,
+            hidden_dim=args.hidden_dim,
+            intermediate_dim=args.intermediate_dim,
+            block_m=args.block_m,
+            block_n=args.block_n,
+            block_k=args.block_k,
+            n_group=args.n_group,
+            n_groups_per_job=n_groups_per_job,
+            experts_per_rank=args.experts_per_rank,
+            send_worker_programs_per_peer=send_worker_programs_per_peer,
+            worker_programs_per_peer=worker_programs_per_peer,
+            send_pipeline_depth=send_pipeline_depth,
+            routing=args.routing,
+            tokens_per_rank=args.tokens_per_rank,
+            topk=args.topk,
+            routing_seed=args.routing_seed,
+            capacity_factor=args.capacity_factor,
+        )
+        rows = run_source_push_mlp_fwd_bwd(
+            config,
+            backends=backends,
+            modes=modes,
+            warmup=args.warmup,
+            steps=args.steps,
+            repeat_runs=args.repeat_runs,
+            outer_jit=args.outer_jit,
+            separate_compile=args.separate_compile,
+            use_exact_expert_major=args.use_exact_expert_major,
+            debug_exceptions=args.debug_exceptions,
+            backward_dy_route_implementation=args.backward_dy_route_implementation,
+            backward_w2_implementation=args.backward_w2_implementation,
+            backward_w2_split_timing=args.backward_w2_split_timing,
+            backward_w13_implementation=args.backward_w13_implementation,
+            backward_return_implementation=args.backward_return_implementation,
+            backward_stop_after_stage=args.backward_stop_after_stage,
+        )
+        for row in rows:
+            if args.git_sha is not None:
+                row["git_sha"] = args.git_sha
+            line = json.dumps(row, sort_keys=True)
+            print(line, flush=True)
+            if args.jsonl:
+                with open(args.jsonl, "a", encoding="utf-8") as f:
+                    print(line, file=f, flush=True)
 
 
 def run_source_push_mlp_fwd_bwd(
@@ -314,7 +575,14 @@ def run_source_push_mlp_fwd_bwd(
     repeat_runs: int,
     outer_jit: str,
     separate_compile: bool,
+    use_exact_expert_major: bool = False,
     debug_exceptions: bool = False,
+    backward_dy_route_implementation: str = BACKWARD_IMPLEMENTATION_DEFAULT,
+    backward_w2_implementation: str = BACKWARD_IMPLEMENTATION_DEFAULT,
+    backward_w2_split_timing: bool = False,
+    backward_w13_implementation: str = BACKWARD_IMPLEMENTATION_DEFAULT,
+    backward_return_implementation: str = BACKWARD_IMPLEMENTATION_DEFAULT,
+    backward_stop_after_stage: str = BACKWARD_STOP_AFTER_NONE,
 ) -> list[dict[str, Any]]:
     """Run public/preplanned MLP forward and forward+backward timings."""
 
@@ -331,7 +599,14 @@ def run_source_push_mlp_fwd_bwd(
                     repeat_runs=repeat_runs,
                     outer_jit=outer_jit,
                     separate_compile=separate_compile,
+                    use_exact_expert_major=use_exact_expert_major,
                     debug_exceptions=debug_exceptions,
+                    backward_dy_route_implementation=backward_dy_route_implementation,
+                    backward_w2_implementation=backward_w2_implementation,
+                    backward_w2_split_timing=backward_w2_split_timing,
+                    backward_w13_implementation=backward_w13_implementation,
+                    backward_return_implementation=backward_return_implementation,
+                    backward_stop_after_stage=backward_stop_after_stage,
                 )
             )
     return rows
@@ -347,7 +622,14 @@ def _run_one(
     repeat_runs: int,
     outer_jit: str,
     separate_compile: bool,
+    use_exact_expert_major: bool,
     debug_exceptions: bool,
+    backward_dy_route_implementation: str,
+    backward_w2_implementation: str,
+    backward_w2_split_timing: bool,
+    backward_w13_implementation: str,
+    backward_return_implementation: str,
+    backward_stop_after_stage: str,
 ) -> list[dict[str, Any]]:
     try:
         config.validate()
@@ -357,13 +639,11 @@ def _run_one(
             raise ValueError(f"steps must be positive, got {steps}")
         mesh = _make_public_ep_mesh(config.ep_size)
         raw_inputs = make_source_push_forward_source_plan_raw_inputs(config)
-        host_inputs = make_source_push_forward_inputs(
+        host_inputs = make_source_push_forward_plan_inputs(
             config,
-            raw_inputs.x,
             raw_inputs.selected_experts,
-            raw_inputs.combine_weights,
-            raw_inputs.w_gate_up,
-            raw_inputs.w_down,
+            input_mode="exact_source_push_plan" if use_exact_expert_major else "source_push_plan",
+            use_exact_expert_major=use_exact_expert_major,
         )
         route_table = source_push_mlp_route_table_from_plan(
             host_inputs.plan,
@@ -380,6 +660,63 @@ def _run_one(
                 host_inputs=host_inputs,
                 route_table=route_table,
                 inputs=inputs,
+                warmup=warmup,
+                steps=steps,
+                repeat_runs=repeat_runs,
+                backward_dy_route_implementation=backward_dy_route_implementation,
+                backward_w2_implementation=backward_w2_implementation,
+                backward_w2_split_timing=backward_w2_split_timing,
+                backward_w13_implementation=backward_w13_implementation,
+                backward_return_implementation=backward_return_implementation,
+            )
+        if mode == MODE_BACKWARD_STAGED_FLAT:
+            if backend != BACKEND_SOURCE_PUSH_PALLAS:
+                raise ValueError(f"{mode!r} only supports backend={BACKEND_SOURCE_PUSH_PALLAS!r}")
+            return _run_source_push_backward_staged_flat(
+                config,
+                mesh=mesh,
+                host_inputs=host_inputs,
+                route_table=route_table,
+                inputs=inputs,
+                warmup=warmup,
+                steps=steps,
+                repeat_runs=repeat_runs,
+                backward_dy_route_implementation=backward_dy_route_implementation,
+                backward_w2_implementation=backward_w2_implementation,
+                backward_w2_split_timing=backward_w2_split_timing,
+                backward_w13_implementation=backward_w13_implementation,
+                backward_return_implementation=backward_return_implementation,
+                backward_stop_after_stage=backward_stop_after_stage,
+            )
+        if mode == MODE_BACKWARD_STAGED_BLOCKS:
+            if backend != BACKEND_SOURCE_PUSH_PALLAS:
+                raise ValueError(f"{mode!r} only supports backend={BACKEND_SOURCE_PUSH_PALLAS!r}")
+            return _run_source_push_backward_staged_blocks(
+                config,
+                mesh=mesh,
+                host_inputs=host_inputs,
+                route_table=route_table,
+                inputs=inputs,
+                warmup=warmup,
+                steps=steps,
+                repeat_runs=repeat_runs,
+                backward_dy_route_implementation=backward_dy_route_implementation,
+                backward_w2_implementation=backward_w2_implementation,
+                backward_w13_implementation=backward_w13_implementation,
+                backward_return_implementation=backward_return_implementation,
+                backward_stop_after_stage=backward_stop_after_stage,
+            )
+        if mode in FORWARD_PACK_PROBE_MODE_TO_STAGE:
+            if backend != BACKEND_SOURCE_PUSH_PALLAS:
+                raise ValueError(f"{mode!r} only supports backend={BACKEND_SOURCE_PUSH_PALLAS!r}")
+            return _run_source_push_pack_probe(
+                config,
+                mesh=mesh,
+                host_inputs=host_inputs,
+                inputs=inputs,
+                mode=mode,
+                stage=FORWARD_PACK_PROBE_MODE_TO_STAGE[mode],
+                use_pallas_token_pack=mode == MODE_FORWARD_PACK_TOKEN_PACK_PALLAS,
                 warmup=warmup,
                 steps=steps,
                 repeat_runs=repeat_runs,
@@ -401,6 +738,63 @@ def _run_one(
                 config,
                 mesh=mesh,
                 host_inputs=host_inputs,
+                inputs=inputs,
+                warmup=warmup,
+                steps=steps,
+                repeat_runs=repeat_runs,
+            )
+        if mode in (
+            MODE_FORWARD_W13_DIRECT_COMPACT,
+            MODE_FORWARD_W13_DIRECT_COMPACT_STORE_ZERO,
+            MODE_FORWARD_W13_DIRECT_COMPACT_COMPUTE_ONLY_LOCAL,
+        ):
+            if backend != BACKEND_SOURCE_PUSH_PALLAS:
+                raise ValueError(f"{mode!r} only supports backend={BACKEND_SOURCE_PUSH_PALLAS!r}")
+            diagnostic_variant = DIAGNOSTIC_VARIANT_FULL
+            if mode == MODE_FORWARD_W13_DIRECT_COMPACT_STORE_ZERO:
+                diagnostic_variant = DIAGNOSTIC_VARIANT_STORE_ZERO
+            elif mode == MODE_FORWARD_W13_DIRECT_COMPACT_COMPUTE_ONLY_LOCAL:
+                diagnostic_variant = DIAGNOSTIC_VARIANT_COMPUTE_ONLY_LOCAL
+            return _run_source_push_forward_w13_direct_compact(
+                config,
+                mesh=mesh,
+                host_inputs=host_inputs,
+                inputs=inputs,
+                warmup=warmup,
+                steps=steps,
+                repeat_runs=repeat_runs,
+                mode=mode,
+                diagnostic_variant=diagnostic_variant,
+            )
+        if mode in (
+            MODE_FORWARD_COMPACT_H_DECOMPOSED,
+            MODE_FORWARD_COMPACT_H_DECOMPOSED_WITH_PREP,
+            MODE_FORWARD_COMPACT_H_DECOMPOSED_WITH_PALLAS_PACK,
+        ):
+            if backend != BACKEND_SOURCE_PUSH_PALLAS:
+                raise ValueError(f"{mode!r} only supports backend={BACKEND_SOURCE_PUSH_PALLAS!r}")
+            return _run_source_push_forward_compact_h_decomposed(
+                config,
+                mesh=mesh,
+                host_inputs=host_inputs,
+                route_table=route_table,
+                inputs=inputs,
+                warmup=warmup,
+                steps=steps,
+                repeat_runs=repeat_runs,
+                include_prepare=mode
+                in (MODE_FORWARD_COMPACT_H_DECOMPOSED_WITH_PREP, MODE_FORWARD_COMPACT_H_DECOMPOSED_WITH_PALLAS_PACK),
+                use_pallas_token_pack=mode == MODE_FORWARD_COMPACT_H_DECOMPOSED_WITH_PALLAS_PACK,
+                mode=mode,
+            )
+        if mode == MODE_FORWARD_COMPACT_H_RAW_TOKENS_DECOMPOSED:
+            if backend != BACKEND_SOURCE_PUSH_PALLAS:
+                raise ValueError(f"{mode!r} only supports backend={BACKEND_SOURCE_PUSH_PALLAS!r}")
+            return _run_source_push_forward_compact_h_raw_token_decomposed(
+                config,
+                mesh=mesh,
+                host_inputs=host_inputs,
+                route_table=route_table,
                 inputs=inputs,
                 warmup=warmup,
                 steps=steps,
@@ -464,6 +858,194 @@ def _run_one(
         jax.clear_caches()
 
 
+def _run_source_push_pack_probe(
+    config: PushInboxConfig,
+    *,
+    mesh: Mesh,
+    host_inputs,
+    inputs: dict[str, jax.Array],
+    mode: str,
+    stage: str,
+    use_pallas_token_pack: bool,
+    warmup: int,
+    steps: int,
+    repeat_runs: int,
+) -> list[dict[str, Any]]:
+    probe = _make_source_push_pack_probe(
+        config,
+        mesh=mesh,
+        host_inputs=host_inputs,
+        inputs=inputs,
+        stage=stage,
+        use_pallas_token_pack=use_pallas_token_pack,
+    )
+
+    start = time.perf_counter()
+    output = probe()
+    first_call_time = time.perf_counter() - start
+    _block_until_ready(output)
+
+    for _ in range(warmup):
+        _block_until_ready(probe())
+
+    steady_state_times = []
+    for _ in range(repeat_runs):
+        start = time.perf_counter()
+        for _ in range(steps):
+            _block_until_ready(probe())
+        steady_state_times.append((time.perf_counter() - start) / steps)
+
+    rows = [
+        _pack_probe_row(
+            config,
+            queue_stats=host_inputs.queue_stats,
+            mode=mode,
+            stage=stage,
+            repeat_run=repeat_run,
+            repeat_runs=repeat_runs,
+            steady_state_time=steady_state_time,
+            first_call_time=first_call_time,
+        )
+        for repeat_run, steady_state_time in enumerate(steady_state_times)
+    ]
+    summary = _summary_row(rows)
+    return [*rows, summary]
+
+
+def _make_source_push_pack_probe(
+    config: PushInboxConfig,
+    *,
+    mesh: Mesh,
+    host_inputs,
+    inputs: dict[str, jax.Array],
+    stage: str,
+    use_pallas_token_pack: bool = False,
+) -> Callable[[], Any]:
+    x = inputs["x_source"]
+    route_weights = inputs["combine_source"]
+    w13 = inputs["w13_source"]
+    w2 = inputs["w2_source"]
+
+    if stage == FORWARD_DECOMPOSED_STAGE_PACK_INPUTS:
+        return lambda: _pack_probe_total(config, mesh, host_inputs, x, route_weights, w13, w2)
+    if stage == FORWARD_DECOMPOSED_STAGE_PACK_INPUTS_TOKEN_PACK:
+        return lambda: _pack_probe_token_pack(mesh, host_inputs, x, use_pallas_token_pack=use_pallas_token_pack)
+    if stage == FORWARD_DECOMPOSED_STAGE_PACK_INPUTS_H_ROUTE_WEIGHTS:
+        return lambda: _pack_probe_h_route_weights(config, mesh, host_inputs, route_weights)
+    if stage == FORWARD_DECOMPOSED_STAGE_PACK_INPUTS_STATIC_SHARD:
+        with jax.set_mesh(mesh):
+            packed_x = pack_source_push_tokens_jax(x, host_inputs.plan).astype(jnp.bfloat16)
+            h_route_weights = source_push_h_row_route_weights_jax(
+                route_weights,
+                host_inputs.plan,
+                host_inputs.send_meta,
+                host_inputs.expert_base,
+                host_inputs.src_base_by_expert,
+                hidden_rows_per_rank=config.hidden_rows_per_rank,
+                use_exact_expert_major=host_inputs.use_exact_expert_major,
+            ).astype(jnp.bfloat16)
+        _block_until_ready((packed_x, h_route_weights))
+        return lambda: _pack_probe_static_shard(mesh, host_inputs, packed_x, h_route_weights, w13, w2)
+    raise ValueError(f"unsupported pack probe stage {stage!r}")
+
+
+def _pack_probe_total(config: PushInboxConfig, mesh: Mesh, host_inputs, x, route_weights, w13, w2):
+    with jax.set_mesh(mesh):
+        packed = device_source_push_forward_inputs_from_plan(config, host_inputs, x, route_weights, w13, w2)
+        packed = _shard_source_push_forward_inputs(mesh, packed)
+    return _block_source_push_forward_device_inputs(packed)
+
+
+def _pack_probe_token_pack(mesh: Mesh, host_inputs, x, *, use_pallas_token_pack: bool):
+    with jax.set_mesh(mesh):
+        if use_pallas_token_pack:
+            return source_push_pack_tokens_pallas_mgpu(x, host_inputs.plan, mesh=mesh)
+        packed_x = pack_source_push_tokens_jax(x, host_inputs.plan).astype(jnp.bfloat16)
+    return packed_x
+
+
+def _pack_probe_h_route_weights(config: PushInboxConfig, mesh: Mesh, host_inputs, route_weights):
+    with jax.set_mesh(mesh):
+        return source_push_h_row_route_weights_jax(
+            route_weights,
+            host_inputs.plan,
+            host_inputs.send_meta,
+            host_inputs.expert_base,
+            host_inputs.src_base_by_expert,
+            hidden_rows_per_rank=config.hidden_rows_per_rank,
+            use_exact_expert_major=host_inputs.use_exact_expert_major,
+        ).astype(jnp.bfloat16)
+
+
+def _pack_probe_static_shard(mesh: Mesh, host_inputs, packed_x, h_route_weights, w13, w2):
+    with jax.set_mesh(mesh):
+        packed = SourcePushForwardDeviceInputs(
+            x=packed_x,
+            send_meta=jnp.asarray(host_inputs.send_meta, dtype=jnp.int32),
+            recv_meta=jnp.asarray(host_inputs.recv_meta, dtype=jnp.int32),
+            expert_base=jnp.asarray(host_inputs.expert_base, dtype=jnp.int32),
+            src_base_by_expert=jnp.asarray(host_inputs.src_base_by_expert, dtype=jnp.int32),
+            w_gate_up=jnp.asarray(w13, dtype=jnp.bfloat16),
+            w_down=jnp.asarray(w2, dtype=jnp.bfloat16),
+            queue_dst_ord=jnp.asarray(host_inputs.queue_dst_ord, dtype=jnp.int32),
+            queue_entry=jnp.asarray(host_inputs.queue_entry, dtype=jnp.int32),
+            queue_row=jnp.asarray(host_inputs.queue_row, dtype=jnp.int32),
+            h_route_weights=h_route_weights,
+            route_combine_weights=jnp.asarray(host_inputs.route_combine_weights, dtype=jnp.bfloat16),
+            route_valid_mask=jnp.asarray(host_inputs.route_valid_mask, dtype=jnp.bool_),
+            queue_stats=host_inputs.queue_stats,
+            use_exact_expert_major=host_inputs.use_exact_expert_major,
+        )
+        packed = _shard_source_push_forward_inputs(mesh, packed)
+    return _block_source_push_forward_device_inputs(packed)
+
+
+def _pack_probe_row(
+    config: PushInboxConfig,
+    *,
+    queue_stats: dict[str, Any],
+    mode: str,
+    stage: str,
+    repeat_run: int,
+    repeat_runs: int,
+    steady_state_time: float,
+    first_call_time: float,
+) -> dict[str, Any]:
+    return {
+        "kernel": KERNEL_NAME,
+        "implementation": f"{BACKEND_SOURCE_PUSH_PALLAS}_{stage}",
+        "backend": BACKEND_SOURCE_PUSH_PALLAS,
+        "mode": mode,
+        "stage": stage,
+        "row_type": "repeat",
+        "config": asdict(config),
+        "queue_stats": queue_stats,
+        **queue_stats,
+        "outer_jit": False,
+        "compile_time": None,
+        "lower_compile_time": None,
+        "first_run_time": None,
+        "first_call_time": first_call_time,
+        "repeat_run": repeat_run,
+        "repeat_runs": repeat_runs,
+        "steady_state_time": steady_state_time,
+        "bytes_per_rank": None,
+        "forward_gbps_per_rank": None,
+        "useful_forward_tflops_per_rank": None,
+        "rounded_forward_tflops_per_rank": None,
+        "useful_fwd_bwd_tflops_per_rank": None,
+        "rounded_fwd_bwd_tflops_per_rank": None,
+        "useful_backward_tflops_per_rank": None,
+        "rounded_backward_tflops_per_rank": None,
+        "useful_tflops_per_rank": None,
+        "rounded_tflops_per_rank": None,
+        "dropped_routes": int(jax.device_get(queue_stats["dropped_routes"])),
+        "error": None,
+        "error_type": None,
+        "error_message": None,
+    }
+
+
 def _run_source_push_forward_decomposed(
     config: PushInboxConfig,
     *,
@@ -496,7 +1078,7 @@ def _run_source_push_forward_decomposed(
         packed.expert_base,
         packed.src_base_by_expert,
         packed.w_gate_up,
-        packed.recv_route_weights,
+        packed.h_route_weights,
         packed.w_down,
         packed.queue_dst_ord,
         packed.queue_entry,
@@ -561,6 +1143,261 @@ def _run_source_push_forward_raw_token_decomposed(
     )
 
 
+def _run_source_push_forward_compact_h_raw_token_decomposed(
+    config: PushInboxConfig,
+    *,
+    mesh: Mesh,
+    host_inputs,
+    route_table,
+    inputs: dict[str, jax.Array],
+    warmup: int,
+    steps: int,
+    repeat_runs: int,
+) -> list[dict[str, Any]]:
+    compact_expert_capacity = _compact_h_expert_capacity_from_metadata(
+        config,
+        host_inputs.send_meta,
+        host_inputs.expert_base,
+        host_inputs.src_base_by_expert,
+        use_exact_expert_major=host_inputs.use_exact_expert_major,
+    )
+    prepare_timing = _time_source_push_raw_token_compact_h_input_prepare(
+        config,
+        mesh=mesh,
+        host_inputs=host_inputs,
+        route_table=route_table,
+        x=inputs["x_source"],
+        route_weights=inputs["combine_source"],
+        w13=inputs["w13_source"],
+        w2=inputs["w2_source"],
+        compact_expert_capacity=compact_expert_capacity,
+        warmup=warmup,
+        steps=steps,
+        repeat_runs=repeat_runs,
+    )
+    raw_inputs = prepare_timing.output
+    staged_timing = _time_staged_source_push_forward_raw_tokens_compact_h(
+        mesh,
+        config,
+        raw_inputs,
+        compact_expert_capacity=compact_expert_capacity,
+        warmup=warmup,
+        steps=steps,
+        repeat_runs=repeat_runs,
+    )
+    rows = _decomposed_forward_rows(
+        config,
+        pack_timing=prepare_timing,
+        staged_timing=staged_timing,
+        queue_stats=host_inputs.queue_stats,
+        repeat_runs=repeat_runs,
+        mode=MODE_FORWARD_COMPACT_H_RAW_TOKENS_DECOMPOSED,
+        input_stage=FORWARD_DECOMPOSED_STAGE_PREPARE_INPUTS,
+    )
+    for row in rows:
+        row["compact_h_layout"] = "direct_padded_expert_major"
+        row["compact_expert_capacity"] = compact_expert_capacity
+    return rows
+
+
+def _run_source_push_forward_w13_direct_compact(
+    config: PushInboxConfig,
+    *,
+    mesh: Mesh,
+    host_inputs,
+    inputs: dict[str, jax.Array],
+    warmup: int,
+    steps: int,
+    repeat_runs: int,
+    mode: str = MODE_FORWARD_W13_DIRECT_COMPACT,
+    diagnostic_variant: str = DIAGNOSTIC_VARIANT_FULL,
+) -> list[dict[str, Any]]:
+    packed = _pack_probe_total(
+        config,
+        mesh,
+        host_inputs,
+        inputs["x_source"],
+        inputs["combine_source"],
+        inputs["w13_source"],
+        inputs["w2_source"],
+    )
+    compact_expert_capacity = _compact_h_expert_capacity_from_metadata(
+        config,
+        host_inputs.send_meta,
+        host_inputs.expert_base,
+        host_inputs.src_base_by_expert,
+        use_exact_expert_major=host_inputs.use_exact_expert_major,
+    )
+    timing = _time_source_push_w13_direct_compact(
+        mesh,
+        config,
+        packed,
+        compact_expert_capacity=compact_expert_capacity,
+        warmup=warmup,
+        steps=steps,
+        repeat_runs=repeat_runs,
+        diagnostic_variant=diagnostic_variant,
+    )
+    return _w13_direct_compact_rows(
+        config,
+        timing=timing,
+        queue_stats=host_inputs.queue_stats,
+        compact_expert_capacity=compact_expert_capacity,
+        repeat_runs=repeat_runs,
+        mode=mode,
+        diagnostic_variant=diagnostic_variant,
+    )
+
+
+def _run_source_push_forward_compact_h_decomposed(
+    config: PushInboxConfig,
+    *,
+    mesh: Mesh,
+    host_inputs,
+    route_table,
+    inputs: dict[str, jax.Array],
+    warmup: int,
+    steps: int,
+    repeat_runs: int,
+    include_prepare: bool = False,
+    use_pallas_token_pack: bool = False,
+    mode: str = MODE_FORWARD_COMPACT_H_DECOMPOSED,
+) -> list[dict[str, Any]]:
+    compact_expert_capacity = _compact_h_expert_capacity_from_metadata(
+        config,
+        host_inputs.send_meta,
+        host_inputs.expert_base,
+        host_inputs.src_base_by_expert,
+        use_exact_expert_major=host_inputs.use_exact_expert_major,
+    )
+    if include_prepare:
+        pack_timing = _time_source_push_compact_h_input_pack(
+            config,
+            mesh=mesh,
+            host_inputs=host_inputs,
+            route_table=route_table,
+            x=inputs["x_source"],
+            route_weights=inputs["combine_source"],
+            w13=inputs["w13_source"],
+            w2=inputs["w2_source"],
+            compact_expert_capacity=compact_expert_capacity,
+            use_pallas_token_pack=use_pallas_token_pack,
+            warmup=warmup,
+            steps=steps,
+            repeat_runs=repeat_runs,
+        )
+        packed, h_route_weights = pack_timing.output
+        input_stage = FORWARD_DECOMPOSED_STAGE_PREPARE_INPUTS
+    else:
+        packed, h_route_weights = _pack_compact_h_probe_total(
+            config,
+            mesh,
+            host_inputs,
+            route_table,
+            inputs["x_source"],
+            inputs["combine_source"],
+            inputs["w13_source"],
+            inputs["w2_source"],
+            compact_expert_capacity=compact_expert_capacity,
+        )
+        pack_timing = InputPackTiming(
+            first_call_time=0.0,
+            steady_state_times=[0.0 for _ in range(repeat_runs)],
+            output=(packed, h_route_weights),
+        )
+        input_stage = FORWARD_DECOMPOSED_STAGE_PREPACKED_INPUTS
+    staged_timing = _time_staged_source_push_forward_compact_h(
+        mesh,
+        config,
+        packed,
+        h_route_weights,
+        compact_expert_capacity=compact_expert_capacity,
+        warmup=warmup,
+        steps=steps,
+        repeat_runs=repeat_runs,
+    )
+    rows = _decomposed_forward_rows(
+        config,
+        pack_timing=pack_timing,
+        staged_timing=staged_timing,
+        queue_stats=host_inputs.queue_stats,
+        repeat_runs=repeat_runs,
+        mode=mode,
+        input_stage=input_stage,
+    )
+    for row in rows:
+        row["compact_h_layout"] = "direct_padded_expert_major"
+        row["compact_expert_capacity"] = compact_expert_capacity
+    return rows
+
+
+def _pack_compact_h_probe_total(
+    config: PushInboxConfig,
+    mesh: Mesh,
+    host_inputs,
+    route_table,
+    x: jax.Array,
+    route_weights: jax.Array,
+    w13: jax.Array,
+    w2: jax.Array,
+    *,
+    compact_expert_capacity: int,
+    use_pallas_token_pack: bool = False,
+) -> tuple[SourcePushForwardDeviceInputs, jax.Array]:
+    with jax.set_mesh(mesh):
+        if use_pallas_token_pack:
+            packed_x = source_push_pack_tokens_pallas_mgpu(x, host_inputs.plan, mesh=mesh)
+        else:
+            packed_x = pack_source_push_tokens_jax(x, host_inputs.plan).astype(jnp.bfloat16)
+        expert_route_weights = source_push_mlp._source_push_mlp_route_weights_to_all_expert_major(
+            route_table,
+            route_weights,
+        )
+        h_route_weights = source_push_mlp._source_push_mlp_pad_expert_route_weights(
+            expert_route_weights,
+            compact_expert_capacity,
+        ).astype(jnp.bfloat16)
+        packed = _pack_compact_h_static_inputs(mesh, host_inputs, packed_x, h_route_weights, w13, w2, config)
+    return _block_compact_h_forward_inputs(packed, h_route_weights)
+
+
+def _pack_compact_h_static_inputs(
+    mesh: Mesh,
+    host_inputs,
+    packed_x: jax.Array,
+    h_route_weights: jax.Array,
+    w13: jax.Array,
+    w2: jax.Array,
+    config: PushInboxConfig,
+) -> SourcePushForwardDeviceInputs:
+    h_route_weights = jax.device_put(h_route_weights, NamedSharding(mesh, P(AXIS, None, None)))
+    packed = SourcePushForwardDeviceInputs(
+        x=packed_x,
+        send_meta=jnp.asarray(host_inputs.send_meta, dtype=jnp.int32),
+        recv_meta=jnp.asarray(host_inputs.recv_meta, dtype=jnp.int32),
+        expert_base=jnp.asarray(host_inputs.expert_base, dtype=jnp.int32),
+        src_base_by_expert=jnp.asarray(host_inputs.src_base_by_expert, dtype=jnp.int32),
+        w_gate_up=jnp.asarray(w13, dtype=jnp.bfloat16),
+        w_down=jnp.asarray(w2, dtype=jnp.bfloat16),
+        queue_dst_ord=jnp.asarray(host_inputs.queue_dst_ord, dtype=jnp.int32),
+        queue_entry=jnp.asarray(host_inputs.queue_entry, dtype=jnp.int32),
+        queue_row=jnp.asarray(host_inputs.queue_row, dtype=jnp.int32),
+        h_route_weights=jnp.zeros((config.ep_size, config.hidden_rows_per_rank), dtype=jnp.bfloat16),
+        route_combine_weights=jnp.asarray(host_inputs.route_combine_weights, dtype=jnp.bfloat16),
+        route_valid_mask=jnp.asarray(host_inputs.route_valid_mask, dtype=jnp.bool_),
+        queue_stats=host_inputs.queue_stats,
+        use_exact_expert_major=host_inputs.use_exact_expert_major,
+    )
+    return _shard_source_push_forward_inputs(mesh, packed)
+
+
+def _block_compact_h_forward_inputs(
+    packed: SourcePushForwardDeviceInputs,
+    h_route_weights: jax.Array,
+) -> tuple[SourcePushForwardDeviceInputs, jax.Array]:
+    return _block_source_push_forward_device_inputs(packed), _block_until_ready(h_route_weights)
+
+
 def _run_source_push_backward_decomposed(
     config: PushInboxConfig,
     *,
@@ -572,8 +1409,7 @@ def _run_source_push_backward_decomposed(
     steps: int,
     repeat_runs: int,
 ) -> list[dict[str, Any]]:
-    with jax.set_mesh(mesh):
-        forward_start = time.perf_counter()
+    def call_forward_h():
         out, h_flat, dropped_routes = source_push_forward_with_h_from_plan(
             config,
             host_inputs,
@@ -585,15 +1421,35 @@ def _run_source_push_backward_decomposed(
             mesh=mesh,
         )
         _block_until_ready((out, h_flat, dropped_routes))
-        forward_h_time = time.perf_counter() - forward_start
+        return out, h_flat, dropped_routes
+
+    with jax.set_mesh(mesh):
+        forward_start = time.perf_counter()
+        out, h_flat, dropped_routes = call_forward_h()
+        forward_h_first_call_time = time.perf_counter() - forward_start
+
+        for _ in range(warmup):
+            out, h_flat, dropped_routes = call_forward_h()
+
+        forward_h_times = []
+        for _ in range(repeat_runs):
+            start = time.perf_counter()
+            for _ in range(steps):
+                out, h_flat, dropped_routes = call_forward_h()
+            forward_h_times.append((time.perf_counter() - start) / steps)
 
     dy = jnp.ones_like(out, dtype=jnp.float32)
     with jax.set_mesh(mesh):
+        expert_route_weights = source_push_mlp._source_push_mlp_route_weights_to_all_expert_major(
+            route_table,
+            inputs["combine_source"],
+        )
+        _block_until_ready(expert_route_weights)
         timing = _time_source_push_backward_decomposed(
             route_table,
             jnp.asarray(host_inputs.expert_base, dtype=jnp.int32),
             inputs["x_source"],
-            inputs["combine_source"],
+            expert_route_weights,
             inputs["w13_source"],
             inputs["w2_source"],
             h_flat,
@@ -602,21 +1458,294 @@ def _run_source_push_backward_decomposed(
             steps=steps,
             repeat_runs=repeat_runs,
         )
-    return _decomposed_backward_rows(
+    rows = _decomposed_backward_rows(
         config,
         timing=timing,
         queue_stats=host_inputs.queue_stats,
         repeat_runs=repeat_runs,
         dropped_routes=int(jax.device_get(dropped_routes)),
-        forward_h_time=forward_h_time,
+        forward_h_first_call_time=forward_h_first_call_time,
+        forward_h_times=forward_h_times,
     )
+    return rows
+
+
+def _run_source_push_backward_staged_flat(
+    config: PushInboxConfig,
+    *,
+    mesh: Mesh,
+    host_inputs,
+    route_table,
+    inputs: dict[str, jax.Array],
+    warmup: int,
+    steps: int,
+    repeat_runs: int,
+    backward_dy_route_implementation: str,
+    backward_w2_implementation: str,
+    backward_w2_split_timing: bool,
+    backward_w13_implementation: str,
+    backward_return_implementation: str,
+    backward_stop_after_stage: str,
+) -> list[dict[str, Any]]:
+    def call_forward_residuals():
+        out, h_flat, dropped_routes = source_push_forward_with_h_from_plan(
+            config,
+            host_inputs,
+            inputs["x_source"],
+            inputs["combine_source"],
+            inputs["w13_source"],
+            inputs["w2_source"],
+            execution_mode=FORWARD_EXECUTION_STAGED_HOST_SYNC,
+            mesh=mesh,
+        )
+        h_route_weights = source_push_h_row_route_weights_jax(
+            inputs["combine_source"],
+            host_inputs.plan,
+            host_inputs.send_meta,
+            host_inputs.expert_base,
+            host_inputs.src_base_by_expert,
+            hidden_rows_per_rank=config.hidden_rows_per_rank,
+            use_exact_expert_major=host_inputs.use_exact_expert_major,
+        )
+        _block_until_ready((out, h_flat, h_route_weights, dropped_routes))
+        return out, h_flat, h_route_weights, dropped_routes
+
+    with jax.set_mesh(mesh):
+        forward_start = time.perf_counter()
+        out, h_flat, h_route_weights, dropped_routes = call_forward_residuals()
+        forward_h_first_call_time = time.perf_counter() - forward_start
+
+        for _ in range(warmup):
+            out, h_flat, h_route_weights, dropped_routes = call_forward_residuals()
+
+        forward_h_times = []
+        for _ in range(repeat_runs):
+            start = time.perf_counter()
+            for _ in range(steps):
+                out, h_flat, h_route_weights, dropped_routes = call_forward_residuals()
+            forward_h_times.append((time.perf_counter() - start) / steps)
+
+    dy = jnp.ones_like(out, dtype=jnp.float32)
+    expert_base = jnp.asarray(host_inputs.expert_base, dtype=jnp.int32)
+    with jax.set_mesh(mesh):
+        return_route_indices = source_push_backward_return_flat_route_indices_jax(
+            host_inputs.plan,
+            expert_base=expert_base,
+            src_base_by_expert=host_inputs.src_base_by_expert,
+        )
+        _block_until_ready(return_route_indices)
+        timing = _time_source_push_backward_staged_flat(
+            config,
+            host_inputs,
+            route_table,
+            expert_base,
+            inputs["x_source"],
+            h_route_weights,
+            inputs["w13_source"],
+            inputs["w2_source"],
+            h_flat,
+            dy,
+            return_route_indices=return_route_indices,
+            mesh=mesh,
+            warmup=warmup,
+            steps=steps,
+            repeat_runs=repeat_runs,
+            backward_dy_route_implementation=backward_dy_route_implementation,
+            backward_w2_implementation=backward_w2_implementation,
+            backward_w2_split_timing=backward_w2_split_timing,
+            backward_w13_implementation=backward_w13_implementation,
+            backward_return_implementation=backward_return_implementation,
+            backward_stop_after_stage=backward_stop_after_stage,
+        )
+    stages = _staged_flat_backward_stages(backward_stop_after_stage)
+    if backward_w2_split_timing and BACKWARD_STAGE_W2 in stages:
+        stages = (*stages, *BACKWARD_W2_SPLIT_STAGES)
+    rows = _decomposed_backward_rows(
+        config,
+        timing=timing,
+        queue_stats=host_inputs.queue_stats,
+        repeat_runs=repeat_runs,
+        dropped_routes=int(jax.device_get(dropped_routes)),
+        forward_h_first_call_time=forward_h_first_call_time,
+        forward_h_times=forward_h_times,
+        mode=MODE_BACKWARD_STAGED_FLAT,
+        stages=stages,
+    )
+    resolved_w2_implementation, resolved_w2_matmul_implementation, resolved_w2_swiglu_implementation = (
+        _resolve_w2_backward_implementations(
+            backward_w2_implementation,
+            source_push_mlp._source_push_mlp_backward_w2_implementation(SOURCE_PUSH_MLP_IMPLEMENTATION_PALLAS_MGPU),
+        )
+    )
+    if backward_w2_implementation == BACKWARD_IMPLEMENTATION_DEFAULT:
+        resolved_w2_matmul_implementation = source_push_mlp._source_push_mlp_backward_w2_matmul_implementation(
+            SOURCE_PUSH_MLP_IMPLEMENTATION_PALLAS_MGPU
+        )
+        resolved_w2_swiglu_implementation = source_push_mlp._source_push_mlp_backward_w2_swiglu_implementation(
+            SOURCE_PUSH_MLP_IMPLEMENTATION_PALLAS_MGPU
+        )
+    for row in rows:
+        row["backward_dy_route_implementation"] = backward_dy_route_implementation
+        row["backward_w2_implementation"] = backward_w2_implementation
+        row["resolved_backward_w2_implementation"] = resolved_w2_implementation
+        row["resolved_backward_w2_matmul_implementation"] = resolved_w2_matmul_implementation
+        row["resolved_backward_w2_swiglu_implementation"] = resolved_w2_swiglu_implementation
+        row["backward_w13_implementation"] = backward_w13_implementation
+        row["backward_return_implementation"] = backward_return_implementation
+        row["backward_stop_after_stage"] = backward_stop_after_stage
+    return rows
+
+
+def _run_source_push_backward_staged_blocks(
+    config: PushInboxConfig,
+    *,
+    mesh: Mesh,
+    host_inputs,
+    route_table,
+    inputs: dict[str, jax.Array],
+    warmup: int,
+    steps: int,
+    repeat_runs: int,
+    backward_dy_route_implementation: str,
+    backward_w2_implementation: str,
+    backward_w13_implementation: str,
+    backward_return_implementation: str,
+    backward_stop_after_stage: str,
+) -> list[dict[str, Any]]:
+    """Benchmark W2 backward with expert-block H/dy inputs instead of flat-H reconstruction."""
+
+    if backward_stop_after_stage not in BACKWARD_STOP_AFTER_STAGES:
+        raise ValueError(
+            f"{MODE_BACKWARD_STAGED_BLOCKS!r} supports stop-after {BACKWARD_STOP_AFTER_STAGES}, "
+            f"got {backward_stop_after_stage!r}"
+        )
+
+    def call_forward_residuals():
+        h_blocks, dropped_routes = source_push_w13_h_expert_major_from_plan(
+            config,
+            host_inputs,
+            inputs["x_source"],
+            inputs["w13_source"],
+            mesh=mesh,
+        )
+        _block_until_ready(h_blocks)
+        return h_blocks, dropped_routes
+
+    with jax.set_mesh(mesh):
+        expert_route_weights = source_push_mlp._source_push_mlp_route_weights_to_all_expert_major(
+            route_table,
+            inputs["combine_source"],
+        )
+        _block_until_ready(expert_route_weights)
+
+    with jax.set_mesh(mesh):
+        forward_start = time.perf_counter()
+        h_blocks, dropped_routes = call_forward_residuals()
+        forward_h_first_call_time = time.perf_counter() - forward_start
+
+        for _ in range(warmup):
+            h_blocks, dropped_routes = call_forward_residuals()
+
+        forward_h_times = []
+        for _ in range(repeat_runs):
+            start = time.perf_counter()
+            for _ in range(steps):
+                h_blocks, dropped_routes = call_forward_residuals()
+            forward_h_times.append((time.perf_counter() - start) / steps)
+
+    dy = jax.device_put(
+        jnp.ones((config.ep_size, config.tokens_per_rank, config.hidden_dim), dtype=jnp.float32),
+        NamedSharding(mesh, P(SOURCE_PUSH_MESH_AXIS, None, None)),
+    )
+    expert_base = jnp.asarray(host_inputs.expert_base, dtype=jnp.int32)
+    with jax.set_mesh(mesh):
+        return_route_indices = None
+        if backward_stop_after_stage == BACKWARD_STOP_AFTER_NONE:
+            resolved_w13_for_return_indices = _resolve_backward_stage_implementation(
+                backward_w13_implementation,
+                source_push_mlp._source_push_mlp_backward_w13_implementation(
+                    SOURCE_PUSH_MLP_IMPLEMENTATION_PALLAS_MGPU
+                ),
+            )
+            if resolved_w13_for_return_indices in (
+                SOURCE_PUSH_W13_BACKWARD_IMPLEMENTATION_TILED,
+                SOURCE_PUSH_W13_BACKWARD_IMPLEMENTATION_PALLAS_MGPU_COMPACT,
+            ):
+                return_route_indices = source_push_backward_return_route_indices_jax(
+                    host_inputs.plan,
+                    src_base_by_expert=host_inputs.src_base_by_expert,
+                )
+            else:
+                return_route_indices = source_push_backward_return_flat_route_indices_jax(
+                    host_inputs.plan,
+                    expert_base=expert_base,
+                    src_base_by_expert=host_inputs.src_base_by_expert,
+                )
+            _block_until_ready(return_route_indices)
+        timing = _time_source_push_backward_staged_blocks(
+            config,
+            host_inputs,
+            route_table,
+            expert_base,
+            inputs["x_source"],
+            expert_route_weights,
+            inputs["w13_source"],
+            inputs["w2_source"],
+            h_blocks,
+            dy,
+            mesh=mesh,
+            warmup=warmup,
+            steps=steps,
+            repeat_runs=repeat_runs,
+            backward_dy_route_implementation=backward_dy_route_implementation,
+            backward_w2_implementation=backward_w2_implementation,
+            backward_w13_implementation=backward_w13_implementation,
+            backward_return_implementation=backward_return_implementation,
+            backward_stop_after_stage=backward_stop_after_stage,
+            return_route_indices=return_route_indices,
+        )
+    stages = _backward_staged_block_timed_stages(backward_stop_after_stage)
+    rows = _decomposed_backward_rows(
+        config,
+        timing=timing,
+        queue_stats=host_inputs.queue_stats,
+        repeat_runs=repeat_runs,
+        dropped_routes=int(jax.device_get(dropped_routes)),
+        forward_h_first_call_time=forward_h_first_call_time,
+        forward_h_times=forward_h_times,
+        mode=MODE_BACKWARD_STAGED_BLOCKS,
+        stages=stages,
+    )
+    resolved_w2_implementation, resolved_w2_matmul_implementation, resolved_w2_swiglu_implementation = (
+        _resolve_w2_backward_implementations(
+            backward_w2_implementation,
+            source_push_mlp._source_push_mlp_backward_w2_implementation(SOURCE_PUSH_MLP_IMPLEMENTATION_PALLAS_MGPU),
+        )
+    )
+    if backward_w2_implementation == BACKWARD_IMPLEMENTATION_DEFAULT:
+        resolved_w2_matmul_implementation = source_push_mlp._source_push_mlp_backward_w2_matmul_implementation(
+            SOURCE_PUSH_MLP_IMPLEMENTATION_PALLAS_MGPU
+        )
+        resolved_w2_swiglu_implementation = source_push_mlp._source_push_mlp_backward_w2_swiglu_implementation(
+            SOURCE_PUSH_MLP_IMPLEMENTATION_PALLAS_MGPU
+        )
+    for row in rows:
+        row["backward_dy_route_implementation"] = backward_dy_route_implementation
+        row["backward_w2_implementation"] = backward_w2_implementation
+        row["resolved_backward_w2_implementation"] = resolved_w2_implementation
+        row["resolved_backward_w2_matmul_implementation"] = resolved_w2_matmul_implementation
+        row["resolved_backward_w2_swiglu_implementation"] = resolved_w2_swiglu_implementation
+        row["backward_w13_implementation"] = backward_w13_implementation
+        row["backward_return_implementation"] = backward_return_implementation
+        row["backward_stop_after_stage"] = backward_stop_after_stage
+    return rows
 
 
 def _time_source_push_backward_decomposed(
     route_table,
     expert_base: jax.Array,
     x: jax.Array,
-    route_weights: jax.Array,
+    expert_route_weights: jax.Array,
     w13: jax.Array,
     w2: jax.Array,
     h_flat: jax.Array,
@@ -628,34 +1757,59 @@ def _time_source_push_backward_decomposed(
 ) -> BackwardDecomposedTiming:
     def call_backward(*, record_stage_times: bool = False):
         stage_times = {stage: 0.0 for stage in BACKWARD_STAGES}
-        dx = jnp.zeros_like(x, dtype=jnp.float32)
-        d_route_weights = jnp.zeros_like(route_weights, dtype=jnp.float32)
-        dw13 = jnp.zeros_like(w13, dtype=jnp.float32)
-        dw2 = jnp.zeros_like(w2, dtype=jnp.float32)
+        gradients = source_push_mlp._source_push_mlp_zero_gradients(
+            route_table,
+            x,
+            expert_route_weights,
+            w13,
+            w2,
+        )
 
         for expert in range(route_table.experts_per_rank):
-            _, safe_src, safe_token, safe_slot, valid_f = source_push_mlp._source_push_mlp_expert_route_indices(
+            if not record_stage_times:
+                h_block = source_push_mlp._source_push_mlp_h_flat_for_expert(route_table, expert_base, h_flat, expert)
+                backward = source_push_mlp._source_push_mlp_backward_for_expert(
+                    route_table,
+                    x,
+                    expert_route_weights,
+                    w13,
+                    w2,
+                    dy,
+                    h_block,
+                    expert,
+                )
+                gradients = source_push_mlp._source_push_mlp_accumulate_expert_backward_outputs(
+                    gradients,
+                    expert,
+                    backward,
+                )
+                continue
+
+            route_indices = source_push_mlp._source_push_mlp_expert_route_indices(
                 route_table,
                 expert,
             )
 
             stage_start = time.perf_counter()
             h_block = source_push_mlp._source_push_mlp_h_flat_for_expert(route_table, expert_base, h_flat, expert)
-            h_block = h_block.astype(jnp.float32) * valid_f[..., None]
+            h_block = h_block.astype(jnp.float32) * route_indices.valid_f[..., None]
+            weights = source_push_mlp._source_push_mlp_route_weights_to_expert_major(
+                expert_route_weights,
+                expert,
+                route_indices.valid_f,
+            )
+            _block_until_ready((h_block, weights))
+            if record_stage_times:
+                stage_times[BACKWARD_STAGE_H_WEIGHT_GATHER] += time.perf_counter() - stage_start
+
+            stage_start = time.perf_counter()
             dy_block = source_push_mlp._source_push_mlp_dy_to_expert_major(
                 dy,
-                safe_src,
-                safe_token,
-                valid_f,
+                route_indices.safe_src,
+                route_indices.safe_token,
+                route_indices.valid_f,
             )
-            weights = source_push_mlp._source_push_mlp_route_weights_to_expert_major(
-                route_weights,
-                safe_src,
-                safe_token,
-                safe_slot,
-                valid_f,
-            )
-            _block_until_ready((h_block, dy_block, weights))
+            _block_until_ready(dy_block)
             if record_stage_times:
                 stage_times[BACKWARD_STAGE_DY_ROUTE] += time.perf_counter() - stage_start
 
@@ -673,7 +1827,7 @@ def _time_source_push_backward_decomposed(
                 activation,
                 weighted_activation,
                 w2_block,
-                valid_f,
+                route_indices.valid_f,
             )
             _block_until_ready((d_weighted_activation, d_route_block, dw2_block))
             if record_stage_times:
@@ -692,47 +1846,54 @@ def _time_source_push_backward_decomposed(
                 stage_times[BACKWARD_STAGE_SWIGLU] += time.perf_counter() - stage_start
 
             stage_start = time.perf_counter()
-            x_block = source_push_mlp._source_push_mlp_x_to_expert_major(x, safe_src, safe_token, valid_f)
+            x_block = source_push_mlp._source_push_mlp_x_to_expert_major(
+                x,
+                route_indices.safe_src,
+                route_indices.safe_token,
+                route_indices.valid_f,
+            )
             _block_until_ready(x_block)
             if record_stage_times:
                 stage_times[BACKWARD_STAGE_X_REMAT] += time.perf_counter() - stage_start
 
             stage_start = time.perf_counter()
             w13_block = w13[:, expert].astype(jnp.float32)
-            dx_block, dw13_block = source_push_mlp._source_push_mlp_w13_backward_for_expert(
+            x_w13 = source_push_mlp._source_push_mlp_w13_backward_for_expert(
                 x_block,
                 d_h_block,
                 w13_block,
             )
+            dx_block = x_w13.dx_block
+            dw13_block = x_w13.dw13_block
             _block_until_ready((dx_block, dw13_block))
             if record_stage_times:
                 stage_times[BACKWARD_STAGE_W13] += time.perf_counter() - stage_start
 
             stage_start = time.perf_counter()
-            dx, d_route_weights, dw13, dw2 = source_push_mlp._source_push_mlp_accumulate_expert_backward_outputs(
-                dx,
-                d_route_weights,
-                dw13,
-                dw2,
-                expert,
-                safe_src,
-                safe_token,
-                safe_slot,
-                dx_block,
-                d_route_block,
-                dw13_block,
-                dw2_block,
+            backward = source_push_mlp._SourcePushMlpExpertBackwardOutput(
+                route_indices=route_indices,
+                dx_block=dx_block,
+                d_route_block=d_route_block,
+                dw13_block=dw13_block,
+                dw2_block=dw2_block,
             )
-            _block_until_ready((dx, d_route_weights, dw13, dw2))
+            gradients = source_push_mlp._source_push_mlp_accumulate_expert_backward_outputs(
+                gradients,
+                expert,
+                backward,
+            )
+            _block_until_ready(gradients)
             if record_stage_times:
                 stage_times[BACKWARD_STAGE_DX_COMBINE] += time.perf_counter() - stage_start
 
-        output = (
-            dx.astype(x.dtype),
-            d_route_weights.astype(route_weights.dtype),
-            dw13.astype(w13.dtype),
-            dw2.astype(w2.dtype),
+        gradients = source_push_mlp._source_push_mlp_cast_gradients(
+            gradients,
+            x,
+            expert_route_weights,
+            w13,
+            w2,
         )
+        output = (gradients.dx, gradients.d_route_weights, gradients.dw13, gradients.dw2)
         _block_until_ready(output)
         return output, stage_times
 
@@ -766,6 +1927,713 @@ def _time_source_push_backward_decomposed(
     )
 
 
+def _time_source_push_backward_staged_flat(
+    config: PushInboxConfig,
+    host_inputs,
+    route_table,
+    expert_base: jax.Array,
+    x: jax.Array,
+    h_route_weights: jax.Array,
+    w13: jax.Array,
+    w2: jax.Array,
+    h_flat: jax.Array,
+    dy: jax.Array,
+    *,
+    return_route_indices,
+    mesh: Mesh,
+    warmup: int,
+    steps: int,
+    repeat_runs: int,
+    backward_dy_route_implementation: str,
+    backward_w2_implementation: str,
+    backward_w2_split_timing: bool,
+    backward_w13_implementation: str,
+    backward_return_implementation: str,
+    backward_stop_after_stage: str,
+) -> BackwardDecomposedTiming:
+    dy_route_implementation = _resolve_backward_stage_implementation(
+        backward_dy_route_implementation,
+        source_push_mlp._source_push_mlp_backward_dy_route_implementation(SOURCE_PUSH_MLP_IMPLEMENTATION_PALLAS_MGPU),
+    )
+    w13_implementation = _resolve_backward_stage_implementation(
+        backward_w13_implementation,
+        source_push_mlp._source_push_mlp_backward_w13_implementation(SOURCE_PUSH_MLP_IMPLEMENTATION_PALLAS_MGPU),
+    )
+    w13_diagnostic_only = w13_implementation in (
+        SOURCE_PUSH_W13_BACKWARD_DIAGNOSTIC_PALLAS_MGPU_COMPACT_DX_ONLY,
+        SOURCE_PUSH_W13_BACKWARD_DIAGNOSTIC_SOURCE_GATHER_DW13_ONLY,
+    )
+    if w13_diagnostic_only and backward_stop_after_stage != BACKWARD_STAGE_W13:
+        raise ValueError(
+            "W13 dx-only/dw13-only diagnostics produce partial gradients and require "
+            f"--backward-stop-after-stage {BACKWARD_STAGE_W13!r}"
+        )
+    w2_implementation, w2_matmul_implementation, w2_swiglu_implementation = _resolve_w2_backward_implementations(
+        backward_w2_implementation,
+        source_push_mlp._source_push_mlp_backward_w2_implementation(SOURCE_PUSH_MLP_IMPLEMENTATION_PALLAS_MGPU),
+    )
+    if backward_w2_implementation == BACKWARD_IMPLEMENTATION_DEFAULT:
+        w2_matmul_implementation = source_push_mlp._source_push_mlp_backward_w2_matmul_implementation(
+            SOURCE_PUSH_MLP_IMPLEMENTATION_PALLAS_MGPU
+        )
+        w2_swiglu_implementation = source_push_mlp._source_push_mlp_backward_w2_swiglu_implementation(
+            SOURCE_PUSH_MLP_IMPLEMENTATION_PALLAS_MGPU
+        )
+    return_implementation = _resolve_backward_stage_implementation(
+        backward_return_implementation,
+        source_push_mlp._source_push_mlp_backward_return_implementation(SOURCE_PUSH_MLP_IMPLEMENTATION_PALLAS_MGPU),
+    )
+    flat_stages = _staged_flat_backward_stages(backward_stop_after_stage)
+    timed_stages = BACKWARD_STAGES
+    if backward_w2_split_timing and BACKWARD_STAGE_W2 in flat_stages:
+        timed_stages = (*BACKWARD_STAGES, *BACKWARD_W2_SPLIT_STAGES)
+
+    def call_w2_backward(
+        expert_base_arg: jax.Array,
+        h_flat_arg: jax.Array,
+        h_route_weights_arg: jax.Array,
+        dy_flat_arg: jax.Array,
+        w2_arg: jax.Array,
+        valid_by_expert_arg: jax.Array,
+    ) -> _SourcePushW2BackwardOutput:
+        return _source_push_w2_backward_from_flat_h(
+            expert_base_arg,
+            h_flat_arg,
+            h_route_weights_arg,
+            dy_flat_arg,
+            w2_arg,
+            valid_by_expert_arg,
+            implementation=w2_implementation,
+            matmul_implementation=w2_matmul_implementation,
+            swiglu_implementation=w2_swiglu_implementation,
+            mesh=mesh,
+            contiguous_expert_gather=not host_inputs.use_exact_expert_major,
+        )
+
+    jitted_w2_backward = jax.jit(call_w2_backward)
+
+    def call_backward(*, record_stage_times: bool = False):
+        stage_times = {stage: 0.0 for stage in timed_stages}
+
+        stage_start = time.perf_counter()
+        dy_flat = _source_push_backward_dy_to_h_rows(
+            config,
+            host_inputs,
+            dy,
+            implementation=dy_route_implementation,
+            mesh=mesh,
+        )
+        _block_until_ready(dy_flat)
+        if record_stage_times:
+            stage_times[BACKWARD_STAGE_DY_ROUTE] = time.perf_counter() - stage_start
+        if backward_stop_after_stage == BACKWARD_STAGE_DY_ROUTE:
+            return dy_flat, stage_times
+
+        stage_start = time.perf_counter()
+        if backward_w2_split_timing:
+            w2_grads, w2_stage_times = _source_push_w2_backward_from_flat_h_split_timing(
+                expert_base,
+                h_flat,
+                h_route_weights,
+                dy_flat,
+                w2,
+                route_table.valid_by_expert,
+                implementation=w2_implementation,
+                matmul_implementation=w2_matmul_implementation,
+                swiglu_implementation=w2_swiglu_implementation,
+                mesh=mesh,
+                record_stage_times=record_stage_times,
+                contiguous_expert_gather=not host_inputs.use_exact_expert_major,
+            )
+        else:
+            w2_stage_times = {}
+            w2_grads = jitted_w2_backward(
+                expert_base,
+                h_flat,
+                h_route_weights,
+                dy_flat,
+                w2,
+                route_table.valid_by_expert,
+            )
+        _block_until_ready(w2_grads)
+        if record_stage_times:
+            stage_times[BACKWARD_STAGE_W2] = time.perf_counter() - stage_start
+            stage_times.update(w2_stage_times)
+        if backward_stop_after_stage == BACKWARD_STAGE_W2:
+            return w2_grads, stage_times
+
+        stage_start = time.perf_counter()
+        w13_grads = source_push_w13_backward(
+            x,
+            w2_grads.d_h,
+            w13,
+            host_inputs.plan,
+            host_inputs.send_meta,
+            expert_base,
+            host_inputs.src_base_by_expert,
+            use_exact_expert_major=host_inputs.use_exact_expert_major,
+            implementation=w13_implementation,
+            mesh=mesh,
+        )
+        _block_until_ready(w13_grads)
+        if record_stage_times:
+            stage_times[BACKWARD_STAGE_W13] = time.perf_counter() - stage_start
+        if backward_stop_after_stage == BACKWARD_STAGE_W13:
+            return w13_grads, stage_times
+
+        stage_start = time.perf_counter()
+        returned = source_push_backward_return_flat(
+            w13_grads.dx_expert_major,
+            w2_grads.d_route_weight,
+            host_inputs.plan,
+            expert_base=expert_base,
+            src_base_by_expert=host_inputs.src_base_by_expert,
+            route_indices=return_route_indices,
+            implementation=return_implementation,
+            mesh=mesh,
+        )
+        output = (
+            returned.dx.astype(x.dtype),
+            returned.d_route_weights.astype(h_route_weights.dtype),
+            w13_grads.dw13.astype(w13.dtype),
+            w2_grads.dw2.astype(w2.dtype),
+        )
+        _block_until_ready(output)
+        if record_stage_times:
+            stage_times[BACKWARD_STAGE_DX_COMBINE] = time.perf_counter() - stage_start
+
+        return output, stage_times
+
+    start = time.perf_counter()
+    output, _ = call_backward(record_stage_times=False)
+    first_call_time = time.perf_counter() - start
+
+    for _ in range(warmup):
+        output, _ = call_backward(record_stage_times=False)
+
+    steady_state_times = []
+    stage_steady_state_times: dict[str, list[float]] = {stage: [] for stage in timed_stages}
+    for _ in range(repeat_runs):
+        total_elapsed = 0.0
+        stage_elapsed = {stage: 0.0 for stage in timed_stages}
+        for _ in range(steps):
+            start = time.perf_counter()
+            output, step_stage_times = call_backward(record_stage_times=True)
+            total_elapsed += time.perf_counter() - start
+            for stage in timed_stages:
+                stage_elapsed[stage] += step_stage_times[stage]
+        steady_state_times.append(total_elapsed / steps)
+        for stage in timed_stages:
+            stage_steady_state_times[stage].append(stage_elapsed[stage] / steps)
+
+    return BackwardDecomposedTiming(
+        first_call_time=first_call_time,
+        steady_state_times=steady_state_times,
+        output=output,
+        stage_steady_state_times=stage_steady_state_times,
+    )
+
+
+def _time_source_push_backward_staged_blocks(
+    config: PushInboxConfig,
+    host_inputs,
+    route_table,
+    expert_base: jax.Array,
+    x: jax.Array,
+    expert_route_weights: jax.Array,
+    w13: jax.Array,
+    w2: jax.Array,
+    h_blocks: jax.Array,
+    dy: jax.Array,
+    *,
+    mesh: Mesh,
+    warmup: int,
+    steps: int,
+    repeat_runs: int,
+    backward_dy_route_implementation: str,
+    backward_w2_implementation: str,
+    backward_w13_implementation: str,
+    backward_return_implementation: str,
+    backward_stop_after_stage: str,
+    return_route_indices,
+) -> BackwardDecomposedTiming:
+    w2_implementation, w2_matmul_implementation, w2_swiglu_implementation = _resolve_w2_backward_implementations(
+        backward_w2_implementation,
+        source_push_mlp._source_push_mlp_backward_w2_implementation(SOURCE_PUSH_MLP_IMPLEMENTATION_PALLAS_MGPU),
+    )
+    if backward_w2_implementation == BACKWARD_IMPLEMENTATION_DEFAULT:
+        w2_matmul_implementation = source_push_mlp._source_push_mlp_backward_w2_matmul_implementation(
+            SOURCE_PUSH_MLP_IMPLEMENTATION_PALLAS_MGPU
+        )
+        w2_swiglu_implementation = source_push_mlp._source_push_mlp_backward_w2_swiglu_implementation(
+            SOURCE_PUSH_MLP_IMPLEMENTATION_PALLAS_MGPU
+        )
+    w13_implementation = _resolve_backward_stage_implementation(
+        backward_w13_implementation,
+        source_push_mlp._source_push_mlp_backward_w13_implementation(SOURCE_PUSH_MLP_IMPLEMENTATION_PALLAS_MGPU),
+    )
+    return_implementation = _resolve_backward_stage_implementation(
+        backward_return_implementation,
+        source_push_mlp._source_push_mlp_backward_return_implementation(SOURCE_PUSH_MLP_IMPLEMENTATION_PALLAS_MGPU),
+    )
+    dy_route_implementation = _resolve_backward_stage_implementation(
+        backward_dy_route_implementation,
+        source_push_mlp._source_push_mlp_backward_dy_route_implementation(SOURCE_PUSH_MLP_IMPLEMENTATION_PALLAS_MGPU),
+    )
+
+    def call_w2_backward(
+        h_blocks_arg: jax.Array,
+        expert_route_weights_arg: jax.Array,
+        dy_blocks_arg: jax.Array,
+        w2_arg: jax.Array,
+        valid_arg: jax.Array,
+    ) -> _SourcePushW2BackwardOutput:
+        return _source_push_w2_backward_expert_blocks(
+            h_blocks_arg,
+            expert_route_weights_arg,
+            dy_blocks_arg,
+            w2_arg,
+            valid_arg,
+            implementation=w2_implementation,
+            matmul_implementation=w2_matmul_implementation,
+            swiglu_implementation=w2_swiglu_implementation,
+            mesh=mesh,
+        )
+
+    jitted_w2_backward = jax.jit(call_w2_backward)
+    valid = _source_push_w2_valid_blocks_sharded(route_table.valid_by_expert)
+    compact_meta_sharding = NamedSharding(mesh, P(SOURCE_PUSH_MESH_AXIS, None, None))
+    source_rank_by_expert = jax.device_put(route_table.source_rank_by_expert, compact_meta_sharding)
+    token_id_by_expert = jax.device_put(route_table.token_id_by_expert, compact_meta_sharding)
+    stages = _backward_staged_block_timed_stages(backward_stop_after_stage)
+
+    def call_backward(*, record_stage_times: bool = False):
+        stage_times = {stage: 0.0 for stage in stages}
+
+        stage_start = time.perf_counter()
+        if dy_route_implementation == SOURCE_PUSH_DY_ROUTE_IMPLEMENTATION_SOURCE_PUSH_PALLAS_MGPU:
+            dy_blocks = _source_push_backward_dy_to_expert_major_source_push_pallas_call(
+                mesh,
+                dy,
+                host_inputs.plan.token_ids,
+                host_inputs.send_meta,
+                ep_size=config.ep_size,
+                entries_per_rank=config.entries_per_rank,
+                block_m=config.block_m,
+                experts_per_rank=config.experts_per_rank,
+                expert_capacity=route_table.valid_by_expert.shape[-1],
+                row_block=config.block_m,
+                hidden_block=128,
+            )
+        else:
+            dy_blocks = _source_push_backward_dy_to_expert_major(
+                dy,
+                source_rank_by_expert,
+                token_id_by_expert,
+                valid,
+                implementation=dy_route_implementation,
+                mesh=mesh,
+            )
+        _block_until_ready(dy_blocks)
+        if record_stage_times:
+            stage_times[BACKWARD_STAGE_DY_ROUTE] = time.perf_counter() - stage_start
+        if backward_stop_after_stage == BACKWARD_STAGE_DY_ROUTE:
+            return dy_blocks, stage_times
+
+        stage_start = time.perf_counter()
+        w2_grads = jitted_w2_backward(h_blocks, expert_route_weights, dy_blocks, w2, valid)
+        _block_until_ready(w2_grads)
+        if record_stage_times:
+            stage_times[BACKWARD_STAGE_W2] = time.perf_counter() - stage_start
+        if backward_stop_after_stage == BACKWARD_STAGE_W2:
+            return w2_grads, stage_times
+
+        stage_start = time.perf_counter()
+        if w13_implementation == SOURCE_PUSH_W13_BACKWARD_IMPLEMENTATION_TILED:
+            w13_grads = source_push_w13_backward_expert_blocks_tiled_reference(
+                x,
+                w2_grads.d_h,
+                w13,
+                source_rank_by_expert,
+                token_id_by_expert,
+                valid,
+            )
+        elif w13_implementation == SOURCE_PUSH_W13_BACKWARD_IMPLEMENTATION_PALLAS_MGPU_COMPACT:
+            w13_grads = _source_push_w13_backward_expert_blocks_pallas_mgpu(
+                x,
+                w2_grads.d_h,
+                w13,
+                source_rank_by_expert,
+                token_id_by_expert,
+                valid,
+                mesh=mesh,
+            )
+        elif w13_implementation == SOURCE_PUSH_W13_BACKWARD_DIAGNOSTIC_PALLAS_MGPU_COMPACT_DX_ONLY:
+            w13_grads = _source_push_w13_backward_expert_blocks_dx_only_pallas_mgpu(
+                w2_grads.d_h,
+                w13,
+                valid,
+                mesh=mesh,
+            )
+        elif w13_implementation == SOURCE_PUSH_W13_BACKWARD_DIAGNOSTIC_SOURCE_GATHER_DW13_ONLY:
+            w13_grads = source_push_w13_backward_expert_blocks_source_gather_dw13_only(
+                x,
+                w2_grads.d_h,
+                source_rank_by_expert,
+                token_id_by_expert,
+                valid,
+            )
+        else:
+            d_h_flat = _flatten_expert_blocks_to_flat_rows(
+                expert_base,
+                w2_grads.d_h,
+                flat_rows_per_rank=config.hidden_rows_per_rank,
+                valid=valid,
+            )
+            w13_grads = source_push_w13_backward(
+                x,
+                d_h_flat,
+                w13,
+                host_inputs.plan,
+                host_inputs.send_meta,
+                expert_base,
+                host_inputs.src_base_by_expert,
+                use_exact_expert_major=host_inputs.use_exact_expert_major,
+                implementation=w13_implementation,
+                mesh=mesh,
+            )
+        _block_until_ready(w13_grads)
+        if record_stage_times:
+            stage_times[BACKWARD_STAGE_W13] = time.perf_counter() - stage_start
+        if backward_stop_after_stage == BACKWARD_STAGE_W13:
+            return w13_grads, stage_times
+
+        stage_start = time.perf_counter()
+        if w13_implementation in (
+            SOURCE_PUSH_W13_BACKWARD_IMPLEMENTATION_TILED,
+            SOURCE_PUSH_W13_BACKWARD_IMPLEMENTATION_PALLAS_MGPU_COMPACT,
+        ):
+            returned = source_push_backward_return(
+                w13_grads.dx_expert_major,
+                w2_grads.d_route_weight,
+                host_inputs.plan,
+                src_base_by_expert=host_inputs.src_base_by_expert,
+                route_indices=return_route_indices,
+                implementation=return_implementation,
+                mesh=mesh,
+            )
+        else:
+            d_route_flat = _flatten_expert_blocks_to_flat_rows(
+                expert_base,
+                w2_grads.d_route_weight,
+                flat_rows_per_rank=config.hidden_rows_per_rank,
+                valid=valid,
+            )
+            returned = source_push_backward_return_flat(
+                w13_grads.dx_expert_major,
+                d_route_flat,
+                host_inputs.plan,
+                expert_base=expert_base,
+                src_base_by_expert=host_inputs.src_base_by_expert,
+                route_indices=return_route_indices,
+                implementation=return_implementation,
+                mesh=mesh,
+            )
+        output = (
+            returned.dx.astype(x.dtype),
+            returned.d_route_weights.astype(expert_route_weights.dtype),
+            w13_grads.dw13.astype(w13.dtype),
+            w2_grads.dw2.astype(w2.dtype),
+        )
+        _block_until_ready(output)
+        if record_stage_times:
+            stage_times[BACKWARD_STAGE_DX_COMBINE] = time.perf_counter() - stage_start
+
+        return output, stage_times
+
+    start = time.perf_counter()
+    output, _ = call_backward(record_stage_times=False)
+    first_call_time = time.perf_counter() - start
+
+    for _ in range(warmup):
+        output, _ = call_backward(record_stage_times=False)
+
+    steady_state_times = []
+    stage_steady_state_times: dict[str, list[float]] = {stage: [] for stage in stages}
+    for _ in range(repeat_runs):
+        total_elapsed = 0.0
+        stage_elapsed = {stage: 0.0 for stage in stages}
+        for _ in range(steps):
+            start = time.perf_counter()
+            output, step_stage_times = call_backward(record_stage_times=True)
+            total_elapsed += time.perf_counter() - start
+            for stage in stages:
+                stage_elapsed[stage] += step_stage_times[stage]
+        steady_state_times.append(total_elapsed / steps)
+        for stage in stages:
+            stage_steady_state_times[stage].append(stage_elapsed[stage] / steps)
+
+    return BackwardDecomposedTiming(
+        first_call_time=first_call_time,
+        steady_state_times=steady_state_times,
+        output=output,
+        stage_steady_state_times=stage_steady_state_times,
+    )
+
+
+def _flatten_expert_blocks_to_flat_rows(
+    expert_base: jax.Array,
+    blocks: jax.Array,
+    *,
+    flat_rows_per_rank: int,
+    valid: jax.Array,
+) -> jax.Array:
+    rows_per_expert = valid.shape[-1]
+    flat_rows = _expert_flat_rows(expert_base, rows_per_expert)
+    dst_index = _dst_indices(expert_base.shape[0], expert_base.shape[1], rows_per_expert)
+    out_shape = (expert_base.shape[0], flat_rows_per_rank, *blocks.shape[3:])
+    mask = valid.astype(blocks.dtype)
+    while mask.ndim < blocks.ndim:
+        mask = mask[..., None]
+    out = jnp.zeros(out_shape, dtype=blocks.dtype)
+    return out.at[dst_index, flat_rows].add(
+        blocks * mask,
+        out_sharding=_source_push_out_sharding(SOURCE_PUSH_MESH_AXIS, *(None for _ in range(blocks.ndim - 2))),
+    )
+
+
+def _source_push_w2_backward_from_flat_h_split_timing(
+    expert_base: jax.Array,
+    h: jax.Array,
+    route_weight: jax.Array,
+    dy: jax.Array,
+    w2: jax.Array,
+    valid: jax.Array,
+    *,
+    implementation: str,
+    matmul_implementation: str | None,
+    swiglu_implementation: str | None,
+    mesh: Mesh,
+    record_stage_times: bool,
+    contiguous_expert_gather: bool,
+) -> tuple[_SourcePushW2BackwardOutput, dict[str, float]]:
+    """Benchmark-only decomposition of staged-flat W2 backward.
+
+    This mirrors ``_source_push_w2_backward_from_flat_h`` but exposes the major
+    materialization boundaries. Each substage is explicitly synchronized when
+    timing is requested, so use this to locate taxes rather than as a production
+    timing path.
+    """
+
+    stage_times = {stage: 0.0 for stage in BACKWARD_W2_SPLIT_STAGES}
+    if implementation == "reference_matmul_pallas_mgpu_swiglu":
+        implementation = "reference"
+        matmul_implementation = "reference"
+        swiglu_implementation = "pallas_mgpu"
+    if implementation != "reference":
+        raise ValueError(
+            "--backward-w2-split-timing currently supports reference/staged W2 implementations only, "
+            f"got {implementation!r}"
+        )
+    matmul_implementation = matmul_implementation or "reference"
+    swiglu_implementation = swiglu_implementation or "reference"
+
+    stage_start = time.perf_counter()
+    if contiguous_expert_gather:
+        h_blocks = _gather_flat_rows_by_expert_slice(h, expert_base, valid.shape[-1])
+        route_weight_blocks = _gather_flat_rows_by_expert_slice(route_weight, expert_base, valid.shape[-1])
+        dy_blocks = _gather_flat_rows_by_expert_slice(dy, expert_base, valid.shape[-1])
+    else:
+        flat_rows = _expert_flat_rows(expert_base, valid.shape[-1])
+        h_blocks = _gather_flat_rows(h, flat_rows, fill_value=0)
+        route_weight_blocks = _gather_flat_rows(route_weight, flat_rows, fill_value=0)
+        dy_blocks = _gather_flat_rows(dy, flat_rows, fill_value=0)
+    valid_blocks = _source_push_w2_valid_blocks_sharded(valid)
+    if record_stage_times:
+        _block_until_ready((h_blocks, route_weight_blocks, dy_blocks, valid_blocks))
+        stage_times[BACKWARD_STAGE_W2_GATHER] = time.perf_counter() - stage_start
+
+    stage_start = time.perf_counter()
+    _activation, weighted_activation = _source_push_w2_activation_and_weighted_activation_reference(
+        h_blocks,
+        route_weight_blocks,
+        valid_blocks,
+    )
+    if record_stage_times:
+        _block_until_ready(weighted_activation)
+        stage_times[BACKWARD_STAGE_W2_ACTIVATION] = time.perf_counter() - stage_start
+
+    matmul_output, matmul_stage_times = _source_push_w2_matmul_backward_split_timing(
+        weighted_activation,
+        dy_blocks,
+        w2,
+        valid_blocks,
+        implementation=matmul_implementation,
+        mesh=mesh,
+        record_stage_times=record_stage_times,
+    )
+    if record_stage_times:
+        _block_until_ready(matmul_output)
+        stage_times[BACKWARD_STAGE_W2_MATMUL] = (
+            matmul_stage_times[BACKWARD_STAGE_W2_D_WEIGHTED_ACTIVATION] + matmul_stage_times[BACKWARD_STAGE_W2_DW2]
+        )
+        stage_times.update(matmul_stage_times)
+
+    stage_start = time.perf_counter()
+    swiglu_output = _source_push_w2_swiglu_backward(
+        h_blocks,
+        route_weight_blocks,
+        matmul_output.d_weighted_activation,
+        valid_blocks,
+        implementation=swiglu_implementation,
+        mesh=mesh,
+    )
+    if record_stage_times:
+        _block_until_ready(swiglu_output)
+        stage_times[BACKWARD_STAGE_W2_SWIGLU] = time.perf_counter() - stage_start
+
+    stage_start = time.perf_counter()
+    valid_f = valid_blocks.astype(swiglu_output.d_h.dtype)
+    flat_rows = _expert_flat_rows(expert_base, valid.shape[-1])
+    dst_index = _dst_indices(expert_base.shape[0], expert_base.shape[1], valid.shape[-1])
+    d_h = jnp.zeros(h.shape, dtype=swiglu_output.d_h.dtype)
+    d_route_weight = jnp.zeros(route_weight.shape, dtype=swiglu_output.d_route_weight.dtype)
+    d_h = d_h.at[dst_index, flat_rows].add(
+        swiglu_output.d_h * valid_f[..., None],
+        out_sharding=_source_push_out_sharding(SOURCE_PUSH_MESH_AXIS, None, None),
+    )
+    d_route_weight = d_route_weight.at[dst_index, flat_rows].add(
+        swiglu_output.d_route_weight * valid_f,
+        out_sharding=_source_push_out_sharding(SOURCE_PUSH_MESH_AXIS, None),
+    )
+    output = _SourcePushW2BackwardOutput(d_h=d_h, d_route_weight=d_route_weight, dw2=matmul_output.dw2)
+    if record_stage_times:
+        _block_until_ready(output)
+        stage_times[BACKWARD_STAGE_W2_SCATTER] = time.perf_counter() - stage_start
+    return output, stage_times
+
+
+def _source_push_w2_matmul_backward_split_timing(
+    weighted_activation: jax.Array,
+    dy: jax.Array,
+    w2: jax.Array,
+    valid: jax.Array,
+    *,
+    implementation: str,
+    mesh: Mesh,
+    record_stage_times: bool,
+) -> tuple[_SourcePushW2MatmulBackwardOutput, dict[str, float]]:
+    stage_times = {
+        BACKWARD_STAGE_W2_D_WEIGHTED_ACTIVATION: 0.0,
+        BACKWARD_STAGE_W2_DW2: 0.0,
+    }
+    if implementation == "reference":
+        valid_f = valid.astype(jnp.float32)
+        weighted_activation = weighted_activation.astype(jnp.float32) * valid_f[..., None]
+        dy = dy.astype(jnp.float32) * valid_f[..., None]
+        w2 = w2.astype(jnp.float32)
+
+        stage_start = time.perf_counter()
+        d_weighted_activation = jnp.einsum("dech,deih->deci", dy, w2)
+        if record_stage_times:
+            _block_until_ready(d_weighted_activation)
+            stage_times[BACKWARD_STAGE_W2_D_WEIGHTED_ACTIVATION] = time.perf_counter() - stage_start
+
+        stage_start = time.perf_counter()
+        dw2 = jnp.einsum("deci,dech->deih", weighted_activation, dy)
+        if record_stage_times:
+            _block_until_ready(dw2)
+            stage_times[BACKWARD_STAGE_W2_DW2] = time.perf_counter() - stage_start
+        return _SourcePushW2MatmulBackwardOutput(d_weighted_activation=d_weighted_activation, dw2=dw2), stage_times
+
+    if implementation != "pallas_mgpu":
+        output = _source_push_w2_matmul_backward(
+            weighted_activation,
+            dy,
+            w2,
+            valid,
+            implementation=implementation,
+            mesh=mesh,
+        )
+        return output, stage_times
+
+    original_rows = weighted_activation.shape[2]
+    weighted_activation_padded, dy_padded, valid_padded = _pad_w2_matmul_rows_for_pallas(
+        weighted_activation,
+        dy,
+        valid,
+        row_multiple=MIN_SOURCE_PUSH_W2_MATMUL_ROW_BLOCK,
+    )
+    block_sizes = _source_push_w2_matmul_backward_inferred_block_sizes(weighted_activation_padded, dy_padded, w2)
+    dy_for_wgmma = dy_padded.astype(w2.dtype)
+    weighted_activation_for_wgmma = weighted_activation_padded.astype(w2.dtype)
+
+    stage_start = time.perf_counter()
+    d_weighted_activation = _source_push_w2_d_weighted_activation_pallas_call(
+        dy_for_wgmma,
+        w2,
+        valid_padded,
+        row_block=block_sizes.row_block,
+        intermediate_block=block_sizes.intermediate_block,
+        hidden_block=block_sizes.hidden_block,
+        interpret=False,
+        mesh=mesh,
+    )
+    d_weighted_activation = d_weighted_activation[:, :, :original_rows, :]
+    if record_stage_times:
+        _block_until_ready(d_weighted_activation)
+        stage_times[BACKWARD_STAGE_W2_D_WEIGHTED_ACTIVATION] = time.perf_counter() - stage_start
+
+    stage_start = time.perf_counter()
+    dw2 = _source_push_w2_dw2_pallas_call(
+        weighted_activation_for_wgmma,
+        dy_for_wgmma,
+        valid_padded,
+        row_block=block_sizes.row_block,
+        intermediate_block=block_sizes.intermediate_block,
+        hidden_block=block_sizes.hidden_block,
+        interpret=False,
+        mesh=mesh,
+    )
+    if record_stage_times:
+        _block_until_ready(dw2)
+        stage_times[BACKWARD_STAGE_W2_DW2] = time.perf_counter() - stage_start
+    return _SourcePushW2MatmulBackwardOutput(d_weighted_activation=d_weighted_activation, dw2=dw2), stage_times
+
+
+def _resolve_backward_stage_implementation(requested: str, default_implementation: str) -> str:
+    if requested == BACKWARD_IMPLEMENTATION_DEFAULT:
+        return default_implementation
+    return requested
+
+
+def _resolve_w2_backward_implementations(
+    requested: str,
+    default_implementation: str,
+) -> tuple[str, str | None, str | None]:
+    if requested == "pallas_mgpu_matmul_reference_swiglu":
+        return "reference", "pallas_mgpu", "reference"
+    if requested == "pallas_mgpu_matmul_pallas_mgpu_swiglu":
+        return "reference", "pallas_mgpu", "pallas_mgpu"
+    return _resolve_backward_stage_implementation(requested, default_implementation), None, None
+
+
+def _staged_flat_backward_stages(stop_after_stage: str) -> tuple[str, ...]:
+    stages = (
+        BACKWARD_STAGE_DY_ROUTE,
+        BACKWARD_STAGE_W2,
+        BACKWARD_STAGE_W13,
+        BACKWARD_STAGE_DX_COMBINE,
+    )
+    if stop_after_stage == BACKWARD_STOP_AFTER_NONE:
+        return stages
+    if stop_after_stage not in stages:
+        raise ValueError(
+            f"backward_stop_after_stage must be one of {BACKWARD_STOP_AFTER_STAGES}, got {stop_after_stage!r}"
+        )
+    return stages[: stages.index(stop_after_stage) + 1]
+
+
 def _time_source_push_input_pack(
     config: PushInboxConfig,
     *,
@@ -785,6 +2653,50 @@ def _time_source_push_input_pack(
             packed = _shard_source_push_forward_inputs(mesh, packed)
         return _block_source_push_forward_device_inputs(packed)
 
+    def pack_inputs_with_stage_times() -> tuple[SourcePushForwardDeviceInputs, dict[str, float]]:
+        stage_times = {}
+        with jax.set_mesh(mesh):
+            stage_start = time.perf_counter()
+            packed_x = pack_source_push_tokens_jax(x, host_inputs.plan).astype(jnp.bfloat16)
+            _block_until_ready(packed_x)
+            stage_times[FORWARD_DECOMPOSED_STAGE_PACK_INPUTS_TOKEN_PACK] = time.perf_counter() - stage_start
+
+            stage_start = time.perf_counter()
+            h_route_weights = source_push_h_row_route_weights_jax(
+                route_weights,
+                host_inputs.plan,
+                host_inputs.send_meta,
+                host_inputs.expert_base,
+                host_inputs.src_base_by_expert,
+                hidden_rows_per_rank=config.hidden_rows_per_rank,
+                use_exact_expert_major=host_inputs.use_exact_expert_major,
+            ).astype(jnp.bfloat16)
+            _block_until_ready(h_route_weights)
+            stage_times[FORWARD_DECOMPOSED_STAGE_PACK_INPUTS_H_ROUTE_WEIGHTS] = time.perf_counter() - stage_start
+
+            stage_start = time.perf_counter()
+            packed = SourcePushForwardDeviceInputs(
+                x=packed_x,
+                send_meta=jnp.asarray(host_inputs.send_meta, dtype=jnp.int32),
+                recv_meta=jnp.asarray(host_inputs.recv_meta, dtype=jnp.int32),
+                expert_base=jnp.asarray(host_inputs.expert_base, dtype=jnp.int32),
+                src_base_by_expert=jnp.asarray(host_inputs.src_base_by_expert, dtype=jnp.int32),
+                w_gate_up=jnp.asarray(w13, dtype=jnp.bfloat16),
+                w_down=jnp.asarray(w2, dtype=jnp.bfloat16),
+                queue_dst_ord=jnp.asarray(host_inputs.queue_dst_ord, dtype=jnp.int32),
+                queue_entry=jnp.asarray(host_inputs.queue_entry, dtype=jnp.int32),
+                queue_row=jnp.asarray(host_inputs.queue_row, dtype=jnp.int32),
+                h_route_weights=h_route_weights,
+                route_combine_weights=jnp.asarray(host_inputs.route_combine_weights, dtype=jnp.bfloat16),
+                route_valid_mask=jnp.asarray(host_inputs.route_valid_mask, dtype=jnp.bool_),
+                queue_stats=host_inputs.queue_stats,
+                use_exact_expert_major=host_inputs.use_exact_expert_major,
+            )
+            packed = _shard_source_push_forward_inputs(mesh, packed)
+        packed = _block_source_push_forward_device_inputs(packed)
+        stage_times[FORWARD_DECOMPOSED_STAGE_PACK_INPUTS_STATIC_SHARD] = time.perf_counter() - stage_start
+        return packed, stage_times
+
     start = time.perf_counter()
     output = pack_inputs()
     first_call_time = time.perf_counter() - start
@@ -793,16 +2705,126 @@ def _time_source_push_input_pack(
         output = pack_inputs()
 
     steady_state_times = []
+    stage_steady_state_times = {
+        FORWARD_DECOMPOSED_STAGE_PACK_INPUTS_TOKEN_PACK: [],
+        FORWARD_DECOMPOSED_STAGE_PACK_INPUTS_H_ROUTE_WEIGHTS: [],
+        FORWARD_DECOMPOSED_STAGE_PACK_INPUTS_STATIC_SHARD: [],
+    }
     for _ in range(repeat_runs):
         start = time.perf_counter()
         for _ in range(steps):
             output = pack_inputs()
         steady_state_times.append((time.perf_counter() - start) / steps)
 
+        stage_elapsed = {stage: 0.0 for stage in stage_steady_state_times}
+        for _ in range(steps):
+            _, step_stage_times = pack_inputs_with_stage_times()
+            for stage, elapsed in step_stage_times.items():
+                stage_elapsed[stage] += elapsed
+        for stage in stage_steady_state_times:
+            stage_steady_state_times[stage].append(stage_elapsed[stage] / steps)
+
     return InputPackTiming(
         first_call_time=first_call_time,
         steady_state_times=steady_state_times,
         output=output,
+        stage_steady_state_times=stage_steady_state_times,
+    )
+
+
+def _time_source_push_compact_h_input_pack(
+    config: PushInboxConfig,
+    *,
+    mesh: Mesh,
+    host_inputs,
+    route_table,
+    x: jax.Array,
+    route_weights: jax.Array,
+    w13: jax.Array,
+    w2: jax.Array,
+    compact_expert_capacity: int,
+    use_pallas_token_pack: bool,
+    warmup: int,
+    steps: int,
+    repeat_runs: int,
+) -> InputPackTiming:
+    def pack_inputs() -> tuple[SourcePushForwardDeviceInputs, jax.Array]:
+        return _pack_compact_h_probe_total(
+            config,
+            mesh,
+            host_inputs,
+            route_table,
+            x,
+            route_weights,
+            w13,
+            w2,
+            compact_expert_capacity=compact_expert_capacity,
+            use_pallas_token_pack=use_pallas_token_pack,
+        )
+
+    def pack_inputs_with_stage_times() -> tuple[tuple[SourcePushForwardDeviceInputs, jax.Array], dict[str, float]]:
+        stage_times = {}
+        with jax.set_mesh(mesh):
+            stage_start = time.perf_counter()
+            if use_pallas_token_pack:
+                packed_x = source_push_pack_tokens_pallas_mgpu(x, host_inputs.plan, mesh=mesh)
+            else:
+                packed_x = pack_source_push_tokens_jax(x, host_inputs.plan).astype(jnp.bfloat16)
+            _block_until_ready(packed_x)
+            stage_times[FORWARD_DECOMPOSED_STAGE_PACK_INPUTS_TOKEN_PACK] = time.perf_counter() - stage_start
+
+            stage_start = time.perf_counter()
+            expert_route_weights = source_push_mlp._source_push_mlp_route_weights_to_all_expert_major(
+                route_table,
+                route_weights,
+            )
+            h_route_weights = source_push_mlp._source_push_mlp_pad_expert_route_weights(
+                expert_route_weights,
+                compact_expert_capacity,
+            ).astype(jnp.bfloat16)
+            _block_until_ready(h_route_weights)
+            stage_times[FORWARD_DECOMPOSED_STAGE_PACK_INPUTS_COMPACT_H_ROUTE_WEIGHTS] = (
+                time.perf_counter() - stage_start
+            )
+
+            stage_start = time.perf_counter()
+            packed = _pack_compact_h_static_inputs(mesh, host_inputs, packed_x, h_route_weights, w13, w2, config)
+        output = _block_compact_h_forward_inputs(packed, h_route_weights)
+        stage_times[FORWARD_DECOMPOSED_STAGE_PACK_INPUTS_STATIC_SHARD] = time.perf_counter() - stage_start
+        return output, stage_times
+
+    start = time.perf_counter()
+    output = pack_inputs()
+    first_call_time = time.perf_counter() - start
+
+    for _ in range(warmup):
+        output = pack_inputs()
+
+    steady_state_times = []
+    stage_steady_state_times = {
+        FORWARD_DECOMPOSED_STAGE_PACK_INPUTS_TOKEN_PACK: [],
+        FORWARD_DECOMPOSED_STAGE_PACK_INPUTS_COMPACT_H_ROUTE_WEIGHTS: [],
+        FORWARD_DECOMPOSED_STAGE_PACK_INPUTS_STATIC_SHARD: [],
+    }
+    for _ in range(repeat_runs):
+        start = time.perf_counter()
+        for _ in range(steps):
+            output = pack_inputs()
+        steady_state_times.append((time.perf_counter() - start) / steps)
+
+        stage_elapsed = {stage: 0.0 for stage in stage_steady_state_times}
+        for _ in range(steps):
+            _, step_stage_times = pack_inputs_with_stage_times()
+            for stage, elapsed in step_stage_times.items():
+                stage_elapsed[stage] += elapsed
+        for stage in stage_steady_state_times:
+            stage_steady_state_times[stage].append(stage_elapsed[stage] / steps)
+
+    return InputPackTiming(
+        first_call_time=first_call_time,
+        steady_state_times=steady_state_times,
+        output=output,
+        stage_steady_state_times=stage_steady_state_times,
     )
 
 
@@ -821,7 +2843,15 @@ def _time_source_push_raw_token_input_prepare(
 ) -> InputPackTiming:
     def prepare_inputs() -> RawTokenForwardInputs:
         with jax.set_mesh(mesh):
-            recv_route_weights = source_push_recv_route_weights_jax(route_weights, host_inputs.plan)
+            h_route_weights = source_push_h_row_route_weights_jax(
+                route_weights,
+                host_inputs.plan,
+                host_inputs.send_meta,
+                host_inputs.expert_base,
+                host_inputs.src_base_by_expert,
+                hidden_rows_per_rank=config.hidden_rows_per_rank,
+                use_exact_expert_major=host_inputs.use_exact_expert_major,
+            )
             prepared = RawTokenForwardInputs(
                 x=x.astype(jnp.bfloat16),
                 token_ids=jnp.asarray(host_inputs.plan.token_ids, dtype=jnp.int32),
@@ -830,7 +2860,7 @@ def _time_source_push_raw_token_input_prepare(
                 expert_base=jnp.asarray(host_inputs.expert_base, dtype=jnp.int32),
                 src_base_by_expert=jnp.asarray(host_inputs.src_base_by_expert, dtype=jnp.int32),
                 w_gate_up=jnp.asarray(w13, dtype=jnp.bfloat16),
-                recv_route_weights=recv_route_weights.astype(jnp.bfloat16),
+                h_route_weights=h_route_weights.astype(jnp.bfloat16),
                 w_down=jnp.asarray(w2, dtype=jnp.bfloat16),
                 queue_dst_ord=jnp.asarray(host_inputs.queue_dst_ord, dtype=jnp.int32),
                 queue_entry=jnp.asarray(host_inputs.queue_entry, dtype=jnp.int32),
@@ -863,6 +2893,125 @@ def _time_source_push_raw_token_input_prepare(
     )
 
 
+def _time_source_push_raw_token_compact_h_input_prepare(
+    config: PushInboxConfig,
+    *,
+    mesh: Mesh,
+    host_inputs,
+    route_table,
+    x: jax.Array,
+    route_weights: jax.Array,
+    w13: jax.Array,
+    w2: jax.Array,
+    compact_expert_capacity: int,
+    warmup: int,
+    steps: int,
+    repeat_runs: int,
+) -> InputPackTiming:
+    def prepare_inputs() -> RawTokenCompactHForwardInputs:
+        with jax.set_mesh(mesh):
+            expert_route_weights = source_push_mlp._source_push_mlp_route_weights_to_all_expert_major(
+                route_table,
+                route_weights,
+            )
+            h_route_weights = source_push_mlp._source_push_mlp_pad_expert_route_weights(
+                expert_route_weights,
+                compact_expert_capacity,
+            ).astype(jnp.bfloat16)
+            prepared = RawTokenCompactHForwardInputs(
+                x=x.astype(jnp.bfloat16),
+                token_ids=jnp.asarray(host_inputs.plan.token_ids, dtype=jnp.int32),
+                send_meta=jnp.asarray(host_inputs.send_meta, dtype=jnp.int32),
+                recv_meta=jnp.asarray(host_inputs.recv_meta, dtype=jnp.int32),
+                expert_base=jnp.asarray(host_inputs.expert_base, dtype=jnp.int32),
+                src_base_by_expert=jnp.asarray(host_inputs.src_base_by_expert, dtype=jnp.int32),
+                w_gate_up=jnp.asarray(w13, dtype=jnp.bfloat16),
+                h_route_weights=h_route_weights,
+                w_down=jnp.asarray(w2, dtype=jnp.bfloat16),
+                queue_dst_ord=jnp.asarray(host_inputs.queue_dst_ord, dtype=jnp.int32),
+                queue_entry=jnp.asarray(host_inputs.queue_entry, dtype=jnp.int32),
+                queue_row=jnp.asarray(host_inputs.queue_row, dtype=jnp.int32),
+                route_combine_weights=jnp.asarray(host_inputs.route_combine_weights, dtype=jnp.bfloat16),
+                route_valid_mask=jnp.asarray(host_inputs.route_valid_mask, dtype=jnp.bool_),
+                use_exact_expert_major=host_inputs.use_exact_expert_major,
+            )
+            prepared = _shard_raw_token_compact_h_forward_inputs(mesh, prepared)
+        return _block_raw_token_compact_h_forward_inputs(prepared)
+
+    def prepare_inputs_with_stage_times() -> tuple[RawTokenCompactHForwardInputs, dict[str, float]]:
+        stage_times = {}
+        with jax.set_mesh(mesh):
+            stage_start = time.perf_counter()
+            expert_route_weights = source_push_mlp._source_push_mlp_route_weights_to_all_expert_major(
+                route_table,
+                route_weights,
+            )
+            h_route_weights = source_push_mlp._source_push_mlp_pad_expert_route_weights(
+                expert_route_weights,
+                compact_expert_capacity,
+            ).astype(jnp.bfloat16)
+            _block_until_ready(h_route_weights)
+            stage_times[FORWARD_DECOMPOSED_STAGE_PACK_INPUTS_COMPACT_H_ROUTE_WEIGHTS] = (
+                time.perf_counter() - stage_start
+            )
+
+            stage_start = time.perf_counter()
+            prepared = RawTokenCompactHForwardInputs(
+                x=x.astype(jnp.bfloat16),
+                token_ids=jnp.asarray(host_inputs.plan.token_ids, dtype=jnp.int32),
+                send_meta=jnp.asarray(host_inputs.send_meta, dtype=jnp.int32),
+                recv_meta=jnp.asarray(host_inputs.recv_meta, dtype=jnp.int32),
+                expert_base=jnp.asarray(host_inputs.expert_base, dtype=jnp.int32),
+                src_base_by_expert=jnp.asarray(host_inputs.src_base_by_expert, dtype=jnp.int32),
+                w_gate_up=jnp.asarray(w13, dtype=jnp.bfloat16),
+                h_route_weights=h_route_weights,
+                w_down=jnp.asarray(w2, dtype=jnp.bfloat16),
+                queue_dst_ord=jnp.asarray(host_inputs.queue_dst_ord, dtype=jnp.int32),
+                queue_entry=jnp.asarray(host_inputs.queue_entry, dtype=jnp.int32),
+                queue_row=jnp.asarray(host_inputs.queue_row, dtype=jnp.int32),
+                route_combine_weights=jnp.asarray(host_inputs.route_combine_weights, dtype=jnp.bfloat16),
+                route_valid_mask=jnp.asarray(host_inputs.route_valid_mask, dtype=jnp.bool_),
+                use_exact_expert_major=host_inputs.use_exact_expert_major,
+            )
+            prepared = _shard_raw_token_compact_h_forward_inputs(mesh, prepared)
+        prepared = _block_raw_token_compact_h_forward_inputs(prepared)
+        stage_times[FORWARD_DECOMPOSED_STAGE_PACK_INPUTS_STATIC_SHARD] = time.perf_counter() - stage_start
+        return prepared, stage_times
+
+    start = time.perf_counter()
+    output = prepare_inputs()
+    first_call_time = time.perf_counter() - start
+
+    for _ in range(warmup):
+        output = prepare_inputs()
+
+    steady_state_times = []
+    stage_steady_state_times = {
+        FORWARD_DECOMPOSED_STAGE_PACK_INPUTS_COMPACT_H_ROUTE_WEIGHTS: [],
+        FORWARD_DECOMPOSED_STAGE_PACK_INPUTS_STATIC_SHARD: [],
+    }
+    for _ in range(repeat_runs):
+        start = time.perf_counter()
+        for _ in range(steps):
+            output = prepare_inputs()
+        steady_state_times.append((time.perf_counter() - start) / steps)
+
+        stage_elapsed = {stage: 0.0 for stage in stage_steady_state_times}
+        for _ in range(steps):
+            _, step_stage_times = prepare_inputs_with_stage_times()
+            for stage, elapsed in step_stage_times.items():
+                stage_elapsed[stage] += elapsed
+        for stage in stage_steady_state_times:
+            stage_steady_state_times[stage].append(stage_elapsed[stage] / steps)
+
+    return InputPackTiming(
+        first_call_time=first_call_time,
+        steady_state_times=steady_state_times,
+        output=output,
+        stage_steady_state_times=stage_steady_state_times,
+    )
+
+
 def _shard_raw_token_forward_inputs(mesh: Mesh, inputs: RawTokenForwardInputs) -> RawTokenForwardInputs:
     return RawTokenForwardInputs(
         x=jax.device_put(inputs.x, NamedSharding(mesh, P(AXIS, None, None))),
@@ -872,7 +3021,29 @@ def _shard_raw_token_forward_inputs(mesh: Mesh, inputs: RawTokenForwardInputs) -
         expert_base=jax.device_put(inputs.expert_base, NamedSharding(mesh, P(AXIS, None))),
         src_base_by_expert=jax.device_put(inputs.src_base_by_expert, NamedSharding(mesh, P(AXIS, None, None))),
         w_gate_up=jax.device_put(inputs.w_gate_up, NamedSharding(mesh, P(AXIS, None, None, None))),
-        recv_route_weights=jax.device_put(inputs.recv_route_weights, NamedSharding(mesh, P(AXIS, None, None, None))),
+        h_route_weights=jax.device_put(inputs.h_route_weights, NamedSharding(mesh, P(AXIS, None))),
+        w_down=jax.device_put(inputs.w_down, NamedSharding(mesh, P(AXIS, None, None, None))),
+        queue_dst_ord=jax.device_put(inputs.queue_dst_ord, NamedSharding(mesh, P(AXIS, None, None))),
+        queue_entry=jax.device_put(inputs.queue_entry, NamedSharding(mesh, P(AXIS, None, None))),
+        queue_row=jax.device_put(inputs.queue_row, NamedSharding(mesh, P(AXIS, None, None))),
+        route_combine_weights=jax.device_put(inputs.route_combine_weights, NamedSharding(mesh, P(AXIS, None, None))),
+        route_valid_mask=jax.device_put(inputs.route_valid_mask, NamedSharding(mesh, P(AXIS, None, None))),
+        use_exact_expert_major=inputs.use_exact_expert_major,
+    )
+
+
+def _shard_raw_token_compact_h_forward_inputs(
+    mesh: Mesh, inputs: RawTokenCompactHForwardInputs
+) -> RawTokenCompactHForwardInputs:
+    return RawTokenCompactHForwardInputs(
+        x=jax.device_put(inputs.x, NamedSharding(mesh, P(AXIS, None, None))),
+        token_ids=jax.device_put(inputs.token_ids, NamedSharding(mesh, P(AXIS, None, None, None))),
+        send_meta=jax.device_put(inputs.send_meta, NamedSharding(mesh, P(AXIS, None, None, None))),
+        recv_meta=jax.device_put(inputs.recv_meta, NamedSharding(mesh, P(AXIS, None, None, None))),
+        expert_base=jax.device_put(inputs.expert_base, NamedSharding(mesh, P(AXIS, None))),
+        src_base_by_expert=jax.device_put(inputs.src_base_by_expert, NamedSharding(mesh, P(AXIS, None, None))),
+        w_gate_up=jax.device_put(inputs.w_gate_up, NamedSharding(mesh, P(AXIS, None, None, None))),
+        h_route_weights=jax.device_put(inputs.h_route_weights, NamedSharding(mesh, P(AXIS, None, None))),
         w_down=jax.device_put(inputs.w_down, NamedSharding(mesh, P(AXIS, None, None, None))),
         queue_dst_ord=jax.device_put(inputs.queue_dst_ord, NamedSharding(mesh, P(AXIS, None, None))),
         queue_entry=jax.device_put(inputs.queue_entry, NamedSharding(mesh, P(AXIS, None, None))),
@@ -886,6 +3057,70 @@ def _shard_raw_token_forward_inputs(mesh: Mesh, inputs: RawTokenForwardInputs) -
 def _block_raw_token_forward_inputs(inputs: RawTokenForwardInputs) -> RawTokenForwardInputs:
     _block_until_ready(tuple(value for value in inputs[:-1]))
     return inputs
+
+
+def _block_raw_token_compact_h_forward_inputs(
+    inputs: RawTokenCompactHForwardInputs,
+) -> RawTokenCompactHForwardInputs:
+    _block_until_ready(tuple(value for value in inputs[:-1]))
+    return inputs
+
+
+def _time_source_push_w13_direct_compact(
+    mesh: Mesh,
+    config: PushInboxConfig,
+    inputs: SourcePushForwardDeviceInputs,
+    *,
+    compact_expert_capacity: int,
+    warmup: int,
+    steps: int,
+    repeat_runs: int,
+    diagnostic_variant: str = DIAGNOSTIC_VARIANT_FULL,
+) -> MlpTiming:
+    w13_h_fn = jax.jit(
+        _sharded_w13_h_compact_kernel(
+            mesh,
+            config,
+            compact_expert_capacity=compact_expert_capacity,
+            use_exact_expert_major=inputs.use_exact_expert_major,
+            diagnostic_variant=diagnostic_variant,
+        )
+    )
+
+    def call_w13_compact():
+        _, h = w13_h_fn(
+            inputs.x,
+            inputs.send_meta,
+            inputs.recv_meta,
+            inputs.expert_base,
+            inputs.src_base_by_expert,
+            inputs.w_gate_up,
+        )
+        return h
+
+    start = time.perf_counter()
+    output = call_w13_compact()
+    _block_until_ready(output)
+    compile_time = time.perf_counter() - start
+
+    for _ in range(warmup):
+        _block_until_ready(call_w13_compact())
+
+    steady_state_times = []
+    for _ in range(repeat_runs):
+        start = time.perf_counter()
+        for _ in range(steps):
+            _block_until_ready(call_w13_compact())
+        steady_state_times.append((time.perf_counter() - start) / steps)
+
+    return MlpTiming(
+        compile_time=compile_time,
+        lower_compile_time=None,
+        first_run_time=None,
+        first_call_time=compile_time,
+        steady_state_times=steady_state_times,
+        output=output,
+    )
 
 
 def _time_staged_source_push_forward_raw_tokens(
@@ -933,7 +3168,208 @@ def _time_staged_source_push_forward_raw_tokens(
         stage_start = time.perf_counter()
         source_return = w2_from_h_return_fn(
             h,
-            inputs.recv_route_weights,
+            inputs.h_route_weights,
+            inputs.recv_meta,
+            inputs.expert_base,
+            inputs.src_base_by_expert,
+            inputs.w_down,
+        )
+        _block_until_ready(source_return)
+        if record_stage_times:
+            stage_times[FORWARD_STAGE_W2_RETURN] = time.perf_counter() - stage_start
+
+        stage_start = time.perf_counter()
+        out = combine_fn(
+            source_return,
+            inputs.queue_dst_ord,
+            inputs.queue_entry,
+            inputs.queue_row,
+            jnp.ones_like(inputs.route_combine_weights),
+            inputs.route_valid_mask,
+        )
+        _block_until_ready(out)
+        if record_stage_times:
+            stage_times[FORWARD_STAGE_COMBINE] = time.perf_counter() - stage_start
+        return out, stage_times
+
+    start = time.perf_counter()
+    out, stage_compile_times = call_stages(record_stage_times=True)
+    compile_time = time.perf_counter() - start
+
+    for _ in range(warmup):
+        out, _ = call_stages()
+
+    steady_state_times = []
+    stage_steady_state_times: dict[str, list[float]] = {stage: [] for stage in FORWARD_STAGES}
+    for _ in range(repeat_runs):
+        start = time.perf_counter()
+        stage_elapsed = {stage: 0.0 for stage in FORWARD_STAGES}
+        for _ in range(steps):
+            out, step_stage_times = call_stages(record_stage_times=True)
+            for stage in FORWARD_STAGES:
+                stage_elapsed[stage] += step_stage_times[stage]
+        steady_state_times.append((time.perf_counter() - start) / steps)
+        for stage in FORWARD_STAGES:
+            stage_steady_state_times[stage].append(stage_elapsed[stage] / steps)
+
+    return RawTokenForwardTiming(
+        compile_time=compile_time,
+        steady_state_times=steady_state_times,
+        output=out,
+        stage_steady_state_times=stage_steady_state_times,
+        stage_compile_times=stage_compile_times,
+    )
+
+
+def _time_staged_source_push_forward_raw_tokens_compact_h(
+    mesh: Mesh,
+    config: PushInboxConfig,
+    inputs: RawTokenCompactHForwardInputs,
+    *,
+    compact_expert_capacity: int,
+    warmup: int,
+    steps: int,
+    repeat_runs: int,
+) -> RawTokenForwardTiming:
+    w13_h_fn = jax.jit(
+        _sharded_raw_token_w13_h_compact_kernel(
+            mesh,
+            config,
+            compact_expert_capacity=compact_expert_capacity,
+            use_exact_expert_major=inputs.use_exact_expert_major,
+        )
+    )
+    w2_from_h_return_fn = jax.jit(
+        _sharded_w2_from_compact_h_return_direct_to_source_kernel(
+            mesh,
+            config,
+            use_exact_expert_major=inputs.use_exact_expert_major,
+        )
+    )
+    combine_fn = jax.jit(_sharded_source_combine_kernel(mesh, config))
+
+    def call_stages(*, record_stage_times: bool = False):
+        stage_times: dict[str, float] = {}
+
+        stage_start = time.perf_counter()
+        _, h = w13_h_fn(
+            inputs.x,
+            inputs.token_ids,
+            inputs.send_meta,
+            inputs.recv_meta,
+            inputs.expert_base,
+            inputs.src_base_by_expert,
+            inputs.w_gate_up,
+        )
+        _block_until_ready(h)
+        if record_stage_times:
+            stage_times[FORWARD_STAGE_W13] = time.perf_counter() - stage_start
+
+        stage_start = time.perf_counter()
+        source_return = w2_from_h_return_fn(
+            h,
+            inputs.h_route_weights,
+            inputs.recv_meta,
+            inputs.expert_base,
+            inputs.src_base_by_expert,
+            inputs.w_down,
+        )
+        _block_until_ready(source_return)
+        if record_stage_times:
+            stage_times[FORWARD_STAGE_W2_RETURN] = time.perf_counter() - stage_start
+
+        stage_start = time.perf_counter()
+        out = combine_fn(
+            source_return,
+            inputs.queue_dst_ord,
+            inputs.queue_entry,
+            inputs.queue_row,
+            jnp.ones_like(inputs.route_combine_weights),
+            inputs.route_valid_mask,
+        )
+        _block_until_ready(out)
+        if record_stage_times:
+            stage_times[FORWARD_STAGE_COMBINE] = time.perf_counter() - stage_start
+
+        return out, stage_times
+
+    start = time.perf_counter()
+    out, stage_compile_times = call_stages(record_stage_times=True)
+    compile_time = time.perf_counter() - start
+
+    for _ in range(warmup):
+        out, _ = call_stages()
+
+    steady_state_times = []
+    stage_steady_state_times: dict[str, list[float]] = {stage: [] for stage in FORWARD_STAGES}
+    for _ in range(repeat_runs):
+        start = time.perf_counter()
+        stage_elapsed = {stage: 0.0 for stage in FORWARD_STAGES}
+        for _ in range(steps):
+            out, step_stage_times = call_stages(record_stage_times=True)
+            for stage in FORWARD_STAGES:
+                stage_elapsed[stage] += step_stage_times[stage]
+        steady_state_times.append((time.perf_counter() - start) / steps)
+        for stage in FORWARD_STAGES:
+            stage_steady_state_times[stage].append(stage_elapsed[stage] / steps)
+
+    return RawTokenForwardTiming(
+        compile_time=compile_time,
+        steady_state_times=steady_state_times,
+        output=out,
+        stage_steady_state_times=stage_steady_state_times,
+        stage_compile_times=stage_compile_times,
+    )
+
+
+def _time_staged_source_push_forward_compact_h(
+    mesh: Mesh,
+    config: PushInboxConfig,
+    inputs: SourcePushForwardDeviceInputs,
+    h_route_weights: jax.Array,
+    *,
+    compact_expert_capacity: int,
+    warmup: int,
+    steps: int,
+    repeat_runs: int,
+) -> RawTokenForwardTiming:
+    w13_h_fn = jax.jit(
+        _sharded_w13_h_compact_kernel(
+            mesh,
+            config,
+            compact_expert_capacity=compact_expert_capacity,
+            use_exact_expert_major=inputs.use_exact_expert_major,
+        )
+    )
+    w2_from_h_return_fn = jax.jit(
+        _sharded_w2_from_compact_h_return_direct_to_source_kernel(
+            mesh,
+            config,
+            use_exact_expert_major=inputs.use_exact_expert_major,
+        )
+    )
+    combine_fn = jax.jit(_sharded_source_combine_kernel(mesh, config))
+
+    def call_stages(*, record_stage_times: bool = False):
+        stage_times: dict[str, float] = {}
+
+        stage_start = time.perf_counter()
+        _, h = w13_h_fn(
+            inputs.x,
+            inputs.send_meta,
+            inputs.recv_meta,
+            inputs.expert_base,
+            inputs.src_base_by_expert,
+            inputs.w_gate_up,
+        )
+        _block_until_ready(h)
+        if record_stage_times:
+            stage_times[FORWARD_STAGE_W13] = time.perf_counter() - stage_start
+
+        stage_start = time.perf_counter()
+        source_return = w2_from_h_return_fn(
+            h,
+            h_route_weights,
             inputs.recv_meta,
             inputs.expert_base,
             inputs.src_base_by_expert,
@@ -999,7 +3435,7 @@ def _block_source_push_forward_device_inputs(inputs: SourcePushForwardDeviceInpu
             inputs.queue_dst_ord,
             inputs.queue_entry,
             inputs.queue_row,
-            inputs.recv_route_weights,
+            inputs.h_route_weights,
             inputs.route_combine_weights,
             inputs.route_valid_mask,
         )
@@ -1062,6 +3498,25 @@ def _decomposed_forward_rows(
                 mode=mode,
             )
         )
+        if pack_timing.stage_steady_state_times is not None:
+            for stage, stage_times in pack_timing.stage_steady_state_times.items():
+                rows.append(
+                    _decomposed_forward_row(
+                        config,
+                        queue_stats=queue_stats,
+                        repeat_run=repeat_run,
+                        repeat_runs=repeat_runs,
+                        stage=stage,
+                        steady_state_time=stage_times[repeat_run],
+                        first_call_time=None,
+                        compile_time=None,
+                        bytes_per_rank=None,
+                        useful_forward_flops=None,
+                        rounded_forward_flops=None,
+                        dropped_routes=dropped_routes,
+                        mode=mode,
+                    )
+                )
         for stage in FORWARD_STAGES:
             stage_time = staged_timing.stage_steady_state_times[stage][repeat_run]
             rows.append(
@@ -1085,13 +3540,8 @@ def _decomposed_forward_rows(
             )
 
     grouped_rows = []
-    for stage in (
-        FORWARD_STAGE_TOTAL,
-        input_stage,
-        FORWARD_STAGE_W13,
-        FORWARD_STAGE_W2_RETURN,
-        FORWARD_STAGE_COMBINE,
-    ):
+    pack_substages = tuple(pack_timing.stage_steady_state_times or ())
+    for stage in (FORWARD_STAGE_TOTAL, input_stage, *pack_substages, *FORWARD_STAGES):
         stage_rows = [row for row in rows if row["stage"] == stage]
         grouped_rows.extend(stage_rows)
         grouped_rows.append(_summary_row(stage_rows))
@@ -1114,8 +3564,28 @@ def _decomposed_forward_row(
     dropped_routes: int,
     mode: str,
 ) -> dict[str, Any]:
-    useful_tflops = None if useful_forward_flops is None else useful_forward_flops / steady_state_time / 1e12
-    rounded_tflops = None if rounded_forward_flops is None else rounded_forward_flops / steady_state_time / 1e12
+    has_positive_time = steady_state_time > 0.0
+    useful_tflops = (
+        None
+        if useful_forward_flops is None or not has_positive_time
+        else useful_forward_flops / steady_state_time / 1e12
+    )
+    rounded_tflops = (
+        None
+        if rounded_forward_flops is None or not has_positive_time
+        else rounded_forward_flops / steady_state_time / 1e12
+    )
+    is_w13_stage = stage == FORWARD_STAGE_W13
+    h_layout = (
+        "direct_padded_expert_major"
+        if mode
+        in (
+            MODE_FORWARD_COMPACT_H_DECOMPOSED,
+            MODE_FORWARD_COMPACT_H_DECOMPOSED_WITH_PREP,
+            MODE_FORWARD_COMPACT_H_RAW_TOKENS_DECOMPOSED,
+        )
+        else "flat_expert_major"
+    )
     return {
         "kernel": KERNEL_NAME,
         "implementation": (
@@ -1137,7 +3607,9 @@ def _decomposed_forward_row(
         "repeat_runs": repeat_runs,
         "steady_state_time": steady_state_time,
         "bytes_per_rank": bytes_per_rank,
-        "forward_gbps_per_rank": None if bytes_per_rank is None else bytes_per_rank / steady_state_time / 1e9,
+        "forward_gbps_per_rank": (
+            None if bytes_per_rank is None or not has_positive_time else bytes_per_rank / steady_state_time / 1e9
+        ),
         "useful_forward_tflops_per_rank": useful_tflops,
         "rounded_forward_tflops_per_rank": rounded_tflops,
         "useful_fwd_bwd_tflops_per_rank": None,
@@ -1146,10 +3618,110 @@ def _decomposed_forward_row(
         "rounded_backward_tflops_per_rank": None,
         "useful_tflops_per_rank": useful_tflops,
         "rounded_tflops_per_rank": rounded_tflops,
+        "w13_baseline_tflops_per_rank": (SOURCE_PUSH_W13_STABLE_BASELINE_TFLOPS_PER_RANK if is_w13_stage else None),
+        "passes_w13_216_949_gate": (
+            None
+            if not is_w13_stage or useful_tflops is None
+            else useful_tflops >= SOURCE_PUSH_W13_STABLE_BASELINE_TFLOPS_PER_RANK
+        ),
+        "h_layout": h_layout if is_w13_stage else None,
         "dropped_routes": dropped_routes,
         "error": None,
         "error_type": None,
         "error_message": None,
+    }
+
+
+def _w13_direct_compact_rows(
+    config: PushInboxConfig,
+    *,
+    timing: MlpTiming,
+    queue_stats: dict[str, Any],
+    compact_expert_capacity: int,
+    repeat_runs: int,
+    mode: str = MODE_FORWARD_W13_DIRECT_COMPACT,
+    diagnostic_variant: str = DIAGNOSTIC_VARIANT_FULL,
+) -> list[dict[str, Any]]:
+    useful_flops = _stage_useful_flops_per_rank(config, queue_stats, FORWARD_STAGE_W13)
+    rounded_flops = _stage_rounded_flops_per_rank(config, queue_stats, FORWARD_STAGE_W13)
+    bytes_per_rank = _stage_bytes_per_rank(config, queue_stats, FORWARD_STAGE_W13)
+    if useful_flops is None or rounded_flops is None:
+        raise ValueError("W13 direct compact rows require W13 flop accounting")
+
+    dropped_routes = int(jax.device_get(queue_stats["dropped_routes"]))
+    byte_breakdown = _w13_direct_compact_bytes_per_rank(config, queue_stats)
+    rows = []
+    for repeat_run, steady_state_time in enumerate(timing.steady_state_times):
+        useful_tflops = useful_flops / steady_state_time / 1e12
+        rounded_tflops = rounded_flops / steady_state_time / 1e12
+        total_estimated_gbps = byte_breakdown["w13_estimated_total_bytes_per_rank"] / steady_state_time / 1e9
+        rows.append(
+            {
+                "kernel": KERNEL_NAME,
+                "implementation": f"{BACKEND_SOURCE_PUSH_PALLAS}_w13_direct_compact",
+                "backend": BACKEND_SOURCE_PUSH_PALLAS,
+                "mode": mode,
+                "stage": FORWARD_STAGE_W13,
+                "row_type": "repeat",
+                "diagnostic_variant": diagnostic_variant,
+                "diagnostic": diagnostic_variant != DIAGNOSTIC_VARIANT_FULL,
+                "config": asdict(config),
+                "queue_stats": queue_stats,
+                **queue_stats,
+                "outer_jit": False,
+                "compile_time": timing.compile_time,
+                "lower_compile_time": timing.lower_compile_time,
+                "first_run_time": timing.first_run_time,
+                "first_call_time": timing.first_call_time,
+                "repeat_run": repeat_run,
+                "repeat_runs": repeat_runs,
+                "steady_state_time": steady_state_time,
+                "bytes_per_rank": bytes_per_rank,
+                "forward_gbps_per_rank": None if bytes_per_rank is None else bytes_per_rank / steady_state_time / 1e9,
+                **byte_breakdown,
+                "w13_estimated_total_gbps_per_rank": total_estimated_gbps,
+                "useful_forward_tflops_per_rank": useful_tflops,
+                "rounded_forward_tflops_per_rank": rounded_tflops,
+                "useful_fwd_bwd_tflops_per_rank": None,
+                "rounded_fwd_bwd_tflops_per_rank": None,
+                "useful_backward_tflops_per_rank": None,
+                "rounded_backward_tflops_per_rank": None,
+                "useful_tflops_per_rank": useful_tflops,
+                "rounded_tflops_per_rank": rounded_tflops,
+                "w13_baseline_tflops_per_rank": SOURCE_PUSH_W13_STABLE_BASELINE_TFLOPS_PER_RANK,
+                "passes_w13_216_949_gate": useful_tflops >= SOURCE_PUSH_W13_STABLE_BASELINE_TFLOPS_PER_RANK,
+                "h_layout": "direct_padded_expert_major",
+                "compact_h_layout": "direct_padded_expert_major",
+                "compact_expert_capacity": compact_expert_capacity,
+                "dropped_routes": dropped_routes,
+                "error": None,
+                "error_type": None,
+                "error_message": None,
+            }
+        )
+    return [*rows, _summary_row(rows)]
+
+
+def _w13_direct_compact_bytes_per_rank(config: PushInboxConfig, queue_stats: dict[str, Any]) -> dict[str, float]:
+    """Approximate W13 direct-compact GMEM traffic per rank."""
+
+    rounded_rows = float(queue_stats["rounded_rows_per_rank_mean"])
+    send_rounded_rows = float(queue_stats["send_rounded_rows_per_rank_mean"])
+    live_entries = float(queue_stats["live_entries_per_rank_mean"])
+    n_tiles = config.intermediate_dim // config.block_n
+    n_work_groups = n_tiles // config.n_group
+
+    payload_send_bytes = send_rounded_rows * config.hidden_dim * BYTES_PER_BF16
+    lhs_compute_read_bytes = rounded_rows * config.hidden_dim * BYTES_PER_BF16 * n_work_groups
+    weight_read_bytes = live_entries * 2 * config.hidden_dim * config.intermediate_dim * BYTES_PER_BF16
+    compact_h_store_bytes = rounded_rows * 2 * config.intermediate_dim * BYTES_PER_BF16
+    estimated_total_bytes = payload_send_bytes + lhs_compute_read_bytes + weight_read_bytes + compact_h_store_bytes
+    return {
+        "w13_payload_send_bytes_per_rank": float(payload_send_bytes),
+        "w13_lhs_compute_read_bytes_per_rank": float(lhs_compute_read_bytes),
+        "w13_weight_read_bytes_per_rank": float(weight_read_bytes),
+        "w13_compact_h_store_bytes_per_rank": float(compact_h_store_bytes),
+        "w13_estimated_total_bytes_per_rank": float(estimated_total_bytes),
     }
 
 
@@ -1160,7 +3732,10 @@ def _decomposed_backward_rows(
     queue_stats: dict[str, Any],
     repeat_runs: int,
     dropped_routes: int,
-    forward_h_time: float,
+    forward_h_first_call_time: float,
+    forward_h_times: list[float],
+    mode: str = MODE_BACKWARD_DECOMPOSED,
+    stages: Sequence[str] = BACKWARD_STAGES,
 ) -> list[dict[str, Any]]:
     useful_backward_flops, rounded_backward_flops = _backward_flops_per_rank(config, queue_stats)
     rows = []
@@ -1177,6 +3752,7 @@ def _decomposed_backward_rows(
                 useful_backward_flops=useful_backward_flops,
                 rounded_backward_flops=rounded_backward_flops,
                 dropped_routes=dropped_routes,
+                mode=mode,
             )
         )
         rows.append(
@@ -1186,14 +3762,15 @@ def _decomposed_backward_rows(
                 repeat_run=repeat_run,
                 repeat_runs=repeat_runs,
                 stage=BACKWARD_STAGE_FORWARD_H,
-                steady_state_time=forward_h_time,
-                first_call_time=forward_h_time,
+                steady_state_time=forward_h_times[repeat_run],
+                first_call_time=forward_h_first_call_time,
                 useful_backward_flops=None,
                 rounded_backward_flops=None,
                 dropped_routes=dropped_routes,
+                mode=mode,
             )
         )
-        for stage in BACKWARD_STAGES:
+        for stage in stages:
             stage_time = timing.stage_steady_state_times[stage][repeat_run]
             stage_useful_flops, stage_rounded_flops = _backward_stage_flops_per_rank(config, queue_stats, stage)
             rows.append(
@@ -1208,6 +3785,7 @@ def _decomposed_backward_rows(
                     useful_backward_flops=stage_useful_flops,
                     rounded_backward_flops=stage_rounded_flops,
                     dropped_routes=dropped_routes,
+                    mode=mode,
                 )
             )
 
@@ -1215,7 +3793,7 @@ def _decomposed_backward_rows(
     for stage in (
         BACKWARD_STAGE_FORWARD_H,
         BACKWARD_STAGE_TOTAL,
-        *BACKWARD_STAGES,
+        *stages,
     ):
         stage_rows = [row for row in rows if row["stage"] == stage]
         grouped_rows.extend(stage_rows)
@@ -1235,6 +3813,7 @@ def _decomposed_backward_row(
     useful_backward_flops: float | None,
     rounded_backward_flops: float | None,
     dropped_routes: int,
+    mode: str,
 ) -> dict[str, Any]:
     useful_tflops = None if useful_backward_flops is None else useful_backward_flops / steady_state_time / 1e12
     rounded_tflops = None if rounded_backward_flops is None else rounded_backward_flops / steady_state_time / 1e12
@@ -1244,7 +3823,7 @@ def _decomposed_backward_row(
             BACKEND_SOURCE_PUSH_PALLAS if stage == BACKWARD_STAGE_TOTAL else f"{BACKEND_SOURCE_PUSH_PALLAS}_{stage}"
         ),
         "backend": BACKEND_SOURCE_PUSH_PALLAS,
-        "mode": MODE_BACKWARD_DECOMPOSED,
+        "mode": mode,
         "stage": stage,
         "row_type": "repeat",
         "config": asdict(config),
@@ -1550,9 +4129,26 @@ def _summary_row(rows: list[dict[str, Any]]) -> dict[str, Any]:
     }
     if "stage" in first:
         summary["stage"] = first["stage"]
+    if "diagnostic_variant" in first:
+        summary["diagnostic_variant"] = first["diagnostic_variant"]
+    if "diagnostic" in first:
+        summary["diagnostic"] = first["diagnostic"]
     summary.update(first["queue_stats"])
     for metric in SUMMARY_METRICS:
         summary[f"median_{metric}"] = _median(rows, metric)
+    if first.get("w13_baseline_tflops_per_rank") is not None:
+        summary["w13_baseline_tflops_per_rank"] = first["w13_baseline_tflops_per_rank"]
+        summary["h_layout"] = first.get("h_layout") or first.get("compact_h_layout")
+        if first.get("compact_h_layout") is not None:
+            summary["compact_h_layout"] = first["compact_h_layout"]
+        if first.get("compact_expert_capacity") is not None:
+            summary["compact_expert_capacity"] = first["compact_expert_capacity"]
+        median_useful_tflops = summary["median_useful_forward_tflops_per_rank"]
+        summary["passes_w13_216_949_gate"] = (
+            False
+            if median_useful_tflops is None
+            else median_useful_tflops >= SOURCE_PUSH_W13_STABLE_BASELINE_TFLOPS_PER_RANK
+        )
     return summary
 
 

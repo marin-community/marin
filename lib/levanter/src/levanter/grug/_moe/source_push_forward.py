@@ -3,7 +3,7 @@
 #
 # pyrefly: ignore-errors
 
-"""Package-private full forward harness for the source-push MGPU MoE prototype."""
+"""Package-private staged forward helpers behind the source-push MGPU MoE MLP boundary."""
 
 from __future__ import annotations
 
@@ -44,16 +44,18 @@ from levanter.grug._moe.source_push_inbox import (
     ROW_START_MODE_SOURCE_PADDED,
     _add_source_push_plan_queue_stats,
     _block_until_ready,
+    _compact_h_expert_capacity_from_metadata,
     _device_inputs_from_host,
     _make_mesh,
     _make_source_tokens,
-    _make_weights,
+    _make_weights_host,
     _queue_stats,
     _recv_meta_from_send_meta,
     _reference_hidden,
     _reference_h_flat,
     _routing_counts,
     _selected_experts_from_counts,
+    _sharded_w13_h_compact_kernel,
     _sharded_kernel,
     _sharded_w13_h_kernel,
     _source_padded_plan_send_meta,
@@ -66,14 +68,14 @@ from levanter.grug._moe.source_push_plan import (
     pack_source_push_tokens_jax,
     source_push_combine,
     source_push_combine_preweighted,
-    source_push_recv_route_weights,
-    source_push_recv_route_weights_jax,
+    source_push_h_row_route_weights_jax,
     source_push_w13_h,
     source_push_w2_from_h_return,
     source_push_source_padded_row_bases,
     source_push_w2_return,
 )
 from levanter.grug._moe.source_push_w2_return import (
+    _sharded_w2_from_compact_h_return_direct_to_source_kernel,
     _sharded_w2_from_h_return_direct_to_source_kernel,
     _sharded_w2_return_direct_to_source_kernel,
     make_w_down,
@@ -93,7 +95,7 @@ FORWARD_STAGES = (FORWARD_STAGE_W13, FORWARD_STAGE_W2_RETURN, FORWARD_STAGE_COMB
 SOURCE_PUSH_FORWARD_IMPLEMENTATION_REFERENCE = "reference"
 SOURCE_PUSH_FORWARD_IMPLEMENTATION_PALLAS_MGPU = "pallas_mgpu"
 SourcePushForwardImplementation: TypeAlias = Literal["reference", "pallas_mgpu"]
-_STAGED_FORWARD_CALL_CACHE: dict[tuple[Any, ...], Callable[..., tuple[jax.Array, jax.Array]]] = {}
+_STAGED_FORWARD_CALL_CACHE: dict[tuple[Any, ...], Callable[..., Any]] = {}
 FORWARD_SUMMARY_METRICS = (
     "steady_state_time",
     "bytes_per_rank",
@@ -140,7 +142,7 @@ class SourcePushForwardHostInputs:
     queue_dst_ord: np.ndarray
     queue_entry: np.ndarray
     queue_row: np.ndarray
-    recv_route_weights: np.ndarray
+    h_route_weights: np.ndarray
     route_combine_weights: np.ndarray
     route_valid_mask: np.ndarray
     plan: SourcePushPlan
@@ -173,7 +175,7 @@ class SourcePushForwardDeviceInputs:
     queue_dst_ord: jax.Array
     queue_entry: jax.Array
     queue_row: jax.Array
-    recv_route_weights: jax.Array
+    h_route_weights: jax.Array
     route_combine_weights: jax.Array
     route_valid_mask: jax.Array
     queue_stats: dict[str, Any]
@@ -318,6 +320,58 @@ def make_source_push_forward_plan_inputs(
     )
 
 
+def make_source_push_forward_plan_inputs_from_plan(
+    config: PushInboxConfig,
+    plan: SourcePushPlan,
+    *,
+    input_mode: str = "source_push_plan",
+    use_exact_expert_major: bool = False,
+) -> SourcePushForwardHostInputs:
+    """Build source-push host metadata from an already-sized static plan."""
+
+    validate_source_push_forward_config(config)
+    expected_routes = (config.ep_size, config.tokens_per_rank, config.topk)
+    placeholder_route_weights = np.zeros(expected_routes, dtype=np.float32)
+    packed_x = np.zeros(
+        (
+            config.ep_size,
+            config.ep_size,
+            config.entries_per_rank,
+            config.block_m,
+            config.hidden_dim,
+        ),
+        dtype=np.float32,
+    )
+    w_gate_up = np.zeros(
+        (
+            config.ep_size,
+            config.experts_per_rank,
+            config.hidden_dim,
+            2 * config.intermediate_dim,
+        ),
+        dtype=np.float32,
+    )
+    w_down = np.zeros(
+        (
+            config.ep_size,
+            config.experts_per_rank,
+            config.intermediate_dim,
+            config.hidden_dim,
+        ),
+        dtype=np.float32,
+    )
+    return _make_source_push_forward_inputs_from_plan(
+        config,
+        plan,
+        packed_x,
+        placeholder_route_weights,
+        w_gate_up,
+        w_down,
+        input_mode=input_mode,
+        use_exact_expert_major=use_exact_expert_major,
+    )
+
+
 def make_source_push_forward_source_plan_inputs(config: PushInboxConfig) -> SourcePushForwardHostInputs:
     """Build shared source-push plan inputs for full forward timing."""
 
@@ -364,7 +418,7 @@ def make_source_push_forward_source_plan_raw_inputs(config: PushInboxConfig) -> 
         x=source_tokens,
         selected_experts=selected_experts,
         combine_weights=combine_weights,
-        w_gate_up=np.asarray(jax.device_get(_make_weights(config)), dtype=np.float32),
+        w_gate_up=_make_weights_host(config),
         w_down=make_w_down(config),
     )
 
@@ -403,8 +457,16 @@ def _make_source_push_forward_inputs_from_plan(
         row_layout = ROW_LAYOUT_SOURCE_PADDED_EXPERT_MAJOR
         layout_rows_total = int(np.sum(rounded_counts))
     route_inverse = _make_route_inverse(config, plan)
-    recv_route_weights = np.asarray(
-        source_push_recv_route_weights(jnp.asarray(route_weights, dtype=jnp.float32), plan),
+    h_route_weights = np.asarray(
+        source_push_h_row_route_weights_jax(
+            jnp.asarray(route_weights, dtype=jnp.float32),
+            plan,
+            send_meta,
+            expert_base,
+            src_base_by_expert,
+            hidden_rows_per_rank=config.hidden_rows_per_rank,
+            use_exact_expert_major=use_exact_expert_major,
+        ),
         dtype=np.float32,
     )
     valid_mask = np.asarray(jax.device_get(plan.valid_mask), dtype=np.bool_)
@@ -440,7 +502,7 @@ def _make_source_push_forward_inputs_from_plan(
         queue_dst_ord=route_inverse["queue_dst_ord"],
         queue_entry=route_inverse["queue_entry"],
         queue_row=route_inverse["queue_row"],
-        recv_route_weights=recv_route_weights,
+        h_route_weights=h_route_weights,
         route_combine_weights=route_inverse["route_combine_weights"],
         route_valid_mask=route_inverse["route_valid_mask"],
         plan=plan,
@@ -512,7 +574,7 @@ def device_source_push_forward_inputs_from_host(
         queue_dst_ord=jnp.asarray(host_inputs.queue_dst_ord, dtype=jnp.int32),
         queue_entry=jnp.asarray(host_inputs.queue_entry, dtype=jnp.int32),
         queue_row=jnp.asarray(host_inputs.queue_row, dtype=jnp.int32),
-        recv_route_weights=jnp.asarray(host_inputs.recv_route_weights, dtype=jnp.bfloat16),
+        h_route_weights=jnp.asarray(host_inputs.h_route_weights, dtype=jnp.bfloat16),
         route_combine_weights=jnp.asarray(host_inputs.route_combine_weights, dtype=jnp.bfloat16),
         route_valid_mask=jnp.asarray(host_inputs.route_valid_mask, dtype=jnp.bool_),
         queue_stats=host_inputs.queue_stats,
@@ -530,7 +592,15 @@ def device_source_push_forward_inputs_from_plan(
 ) -> SourcePushForwardDeviceInputs:
     """Build device inputs from static plan metadata and dynamic differentiable arrays."""
 
-    recv_route_weights = source_push_recv_route_weights_jax(route_weights, host_inputs.plan)
+    h_route_weights = source_push_h_row_route_weights_jax(
+        route_weights,
+        host_inputs.plan,
+        host_inputs.send_meta,
+        host_inputs.expert_base,
+        host_inputs.src_base_by_expert,
+        hidden_rows_per_rank=config.hidden_rows_per_rank,
+        use_exact_expert_major=host_inputs.use_exact_expert_major,
+    )
     return SourcePushForwardDeviceInputs(
         x=pack_source_push_tokens_jax(x, host_inputs.plan).astype(jnp.bfloat16),
         send_meta=jnp.asarray(host_inputs.send_meta, dtype=jnp.int32),
@@ -542,7 +612,7 @@ def device_source_push_forward_inputs_from_plan(
         queue_dst_ord=jnp.asarray(host_inputs.queue_dst_ord, dtype=jnp.int32),
         queue_entry=jnp.asarray(host_inputs.queue_entry, dtype=jnp.int32),
         queue_row=jnp.asarray(host_inputs.queue_row, dtype=jnp.int32),
-        recv_route_weights=recv_route_weights.astype(jnp.bfloat16),
+        h_route_weights=h_route_weights.astype(jnp.bfloat16),
         route_combine_weights=jnp.asarray(host_inputs.route_combine_weights, dtype=jnp.bfloat16),
         route_valid_mask=jnp.asarray(host_inputs.route_valid_mask, dtype=jnp.bool_),
         queue_stats=host_inputs.queue_stats,
@@ -630,10 +700,9 @@ def source_push_forward(
 ) -> tuple[Float[Array, "S T D"], Int[Array, ""]]:
     """Run source-push full forward from explicit source-major EP inputs.
 
-    This is package-private while the planner remains host-side. It is the
-    integration-facing boundary for the staged source-push prototype: callers
-    provide real source-local tokens, routing, combine weights, and local expert
-    weights, and receive source-local token outputs plus the clipped-route count.
+    This package-private helper exists for benchmarks and forward-only smokes.
+    The production differentiable boundary is ``source_push_moe_mlp_from_plan``;
+    do not add a separate VJP to this staged helper.
     """
 
     if implementation not in (
@@ -678,6 +747,9 @@ def source_push_forward_with_h(
     mesh: Mesh | None = None,
 ) -> tuple[Float[Array, "S T D"], Float[Array, "Dst rows twoI"], Int[Array, ""]]:
     """Run source-push forward and return the W13 preactivation checkpoint.
+
+    This is an implementation stage used by the MLP-level custom VJP, not a
+    separately differentiated public unit.
 
     The returned H uses the production W13 output layout:
     ``[destination_rank, source_padded_expert_major_row, 2 * intermediate_dim]``.
@@ -730,7 +802,7 @@ def source_push_forward_with_h_from_plan(
 
     ``host_inputs`` supplies the nondifferentiable routing metadata. The
     differentiable arrays are packed/gathered with JAX before entering the
-    Pallas stages, so callers do not have to rebuild ``packed_x`` or receive
+    Pallas stages, so callers do not have to rebuild ``packed_x`` or H-row
     route weights on the host.
     """
 
@@ -752,6 +824,184 @@ def source_push_forward_with_h_from_plan(
     out, h = _call_source_push_forward_device_inputs_with_h(mesh, config, inputs, execution_mode=execution_mode)
     _block_until_ready((out, h))
     return out, h, host_inputs.plan.dropped_routes
+
+
+def source_push_w13_h_expert_major_from_plan(
+    config: PushInboxConfig,
+    host_inputs: SourcePushForwardHostInputs,
+    x: Float[Array, "S T D"],
+    w_gate_up: Float[Array, "S E D twoI"],
+    *,
+    mesh: Mesh | None = None,
+) -> tuple[Float[Array, "Dst E C twoI"], Int[Array, ""]]:
+    """Run only source-push W13 and return direct expert-major H.
+
+    The returned H layout is ``[destination_rank, local_expert, expert_row,
+    2 * intermediate_dim]``. ``expert_row`` is the compact per-expert row from
+    ``SourcePushPlan.src_base_by_expert + local_row_start + row``; padding rows
+    required by the block writer are trimmed before returning.
+    """
+
+    if mesh is None:
+        mesh = _make_mesh(config.ep_size)
+    store_capacity = _compact_h_expert_capacity_from_metadata(
+        config,
+        host_inputs.send_meta,
+        host_inputs.expert_base,
+        host_inputs.src_base_by_expert,
+        use_exact_expert_major=host_inputs.use_exact_expert_major,
+    )
+    live_capacity = _compact_h_expert_capacity_from_metadata(
+        config,
+        host_inputs.send_meta,
+        host_inputs.expert_base,
+        host_inputs.src_base_by_expert,
+        use_exact_expert_major=host_inputs.use_exact_expert_major,
+        include_store_padding=False,
+    )
+    inputs = _shard_source_push_forward_inputs(
+        mesh,
+        _source_push_forward_device_inputs_without_flat_route_weights(
+            config,
+            host_inputs,
+            x,
+            w_gate_up,
+            host_inputs.w_down,
+        ),
+    )
+    h = _call_source_push_w13_h_expert_major_device_inputs(
+        mesh,
+        config,
+        inputs,
+        store_capacity=store_capacity,
+        live_capacity=live_capacity,
+    )
+    _block_until_ready(h)
+    return h, host_inputs.plan.dropped_routes
+
+
+def _call_source_push_w13_h_expert_major_device_inputs(
+    mesh: Mesh,
+    config: PushInboxConfig,
+    inputs: SourcePushForwardDeviceInputs,
+    *,
+    store_capacity: int,
+    live_capacity: int,
+) -> Float[Array, "Dst E C twoI"]:
+    call_w13_h = _cached_source_push_w13_h_expert_major_call(
+        mesh,
+        config,
+        store_capacity=store_capacity,
+        use_exact_expert_major=inputs.use_exact_expert_major,
+    )
+    h = call_w13_h(inputs)
+    return h[:, :, :live_capacity, :]
+
+
+def _cached_source_push_w13_h_expert_major_call(
+    mesh: Mesh,
+    config: PushInboxConfig,
+    *,
+    store_capacity: int,
+    use_exact_expert_major: bool,
+) -> Callable[[SourcePushForwardDeviceInputs], Float[Array, "Dst E C twoI"]]:
+    key = (
+        *_staged_forward_call_cache_key(mesh, config, use_exact_expert_major=use_exact_expert_major),
+        "w13_h_expert_major",
+        store_capacity,
+    )
+    cached_call = _STAGED_FORWARD_CALL_CACHE.get(key)
+    if cached_call is not None:
+        return cached_call
+
+    w13_h_fn = jax.jit(
+        _sharded_w13_h_compact_kernel(
+            mesh,
+            config,
+            compact_expert_capacity=store_capacity,
+            use_exact_expert_major=use_exact_expert_major,
+        )
+    )
+
+    def call_w13_h(inputs: SourcePushForwardDeviceInputs) -> Float[Array, "Dst E C twoI"]:
+        _, h = w13_h_fn(
+            inputs.x,
+            inputs.send_meta,
+            inputs.recv_meta,
+            inputs.expert_base,
+            inputs.src_base_by_expert,
+            inputs.w_gate_up,
+        )
+        return h
+
+    _STAGED_FORWARD_CALL_CACHE[key] = call_w13_h
+    return call_w13_h
+
+
+def source_push_forward_with_compact_h_from_plan(
+    config: PushInboxConfig,
+    host_inputs: SourcePushForwardHostInputs,
+    x: Float[Array, "S T D"],
+    h_route_weights: Float[Array, "Dst E C"],
+    w_gate_up: Float[Array, "S E D twoI"],
+    w_down: Float[Array, "S E I D"],
+    *,
+    compact_expert_capacity: int,
+    mesh: Mesh | None = None,
+) -> tuple[Float[Array, "S T D"], Float[Array, "Dst E C twoI"], Int[Array, ""]]:
+    """Run staged source-push forward with compact expert-major H between W13 and W2."""
+
+    if mesh is None:
+        mesh = _make_mesh(config.ep_size)
+    inputs = _source_push_forward_device_inputs_without_flat_route_weights(
+        config,
+        host_inputs,
+        x,
+        w_gate_up,
+        w_down,
+    )
+    inputs = _shard_source_push_forward_inputs(mesh, inputs)
+    h_route_weights = jax.device_put(
+        jnp.asarray(h_route_weights, dtype=jnp.bfloat16),
+        NamedSharding(mesh, P(AXIS, None, None)),
+    )
+    out, h = _call_staged_source_push_forward_compact_h_device_inputs(
+        mesh,
+        config,
+        inputs,
+        h_route_weights,
+        compact_expert_capacity=compact_expert_capacity,
+    )
+    _block_until_ready((out, h))
+    return out, h, host_inputs.plan.dropped_routes
+
+
+def _source_push_forward_device_inputs_without_flat_route_weights(
+    config: PushInboxConfig,
+    host_inputs: SourcePushForwardHostInputs,
+    x: Float[Array, "S T D"],
+    w_gate_up: Float[Array, "S E D twoI"],
+    w_down: Float[Array, "S E I D"],
+) -> SourcePushForwardDeviceInputs:
+    """Build device inputs for compact-H staged forward without flat H-route weights."""
+
+    return SourcePushForwardDeviceInputs(
+        x=pack_source_push_tokens_jax(x, host_inputs.plan).astype(jnp.bfloat16),
+        send_meta=jnp.asarray(host_inputs.send_meta, dtype=jnp.int32),
+        recv_meta=jnp.asarray(host_inputs.recv_meta, dtype=jnp.int32),
+        expert_base=jnp.asarray(host_inputs.expert_base, dtype=jnp.int32),
+        src_base_by_expert=jnp.asarray(host_inputs.src_base_by_expert, dtype=jnp.int32),
+        w_gate_up=jnp.asarray(w_gate_up, dtype=jnp.bfloat16),
+        w_down=jnp.asarray(w_down, dtype=jnp.bfloat16),
+        queue_dst_ord=jnp.asarray(host_inputs.queue_dst_ord, dtype=jnp.int32),
+        queue_entry=jnp.asarray(host_inputs.queue_entry, dtype=jnp.int32),
+        queue_row=jnp.asarray(host_inputs.queue_row, dtype=jnp.int32),
+        h_route_weights=jnp.zeros((config.ep_size, config.hidden_rows_per_rank), dtype=jnp.bfloat16),
+        route_combine_weights=jnp.asarray(host_inputs.route_combine_weights, dtype=jnp.bfloat16),
+        route_valid_mask=jnp.asarray(host_inputs.route_valid_mask, dtype=jnp.bool_),
+        queue_stats=host_inputs.queue_stats,
+        use_exact_expert_major=host_inputs.use_exact_expert_major,
+    )
 
 
 def _sharded_source_push_forward_kernel(mesh: Mesh, config: PushInboxConfig, *, use_exact_expert_major: bool = False):
@@ -819,7 +1069,7 @@ def _sharded_source_push_forward_h_kernel(
         expert_base: Int[Array, "Dst E"],
         src_base_by_expert: Int[Array, "Dst S E"],
         w_gate_up: Float[Array, "Dst E D twoI"],
-        recv_route_weights: Float[Array, "Dst SRC Q M"],
+        h_route_weights: Float[Array, "Dst rows"],
         w_down: Float[Array, "Dst E I D"],
         queue_dst_ord: Int[Array, "S T K"],
         queue_entry: Int[Array, "S T K"],
@@ -837,7 +1087,7 @@ def _sharded_source_push_forward_h_kernel(
         )
         source_return = w2_from_h_kernel(
             h,
-            recv_route_weights,
+            h_route_weights,
             recv_meta,
             expert_base,
             src_base_by_expert,
@@ -931,10 +1181,7 @@ def _shard_source_push_forward_inputs(
         queue_dst_ord=jax.device_put(inputs.queue_dst_ord, NamedSharding(mesh, P(AXIS, None, None))),
         queue_entry=jax.device_put(inputs.queue_entry, NamedSharding(mesh, P(AXIS, None, None))),
         queue_row=jax.device_put(inputs.queue_row, NamedSharding(mesh, P(AXIS, None, None))),
-        recv_route_weights=jax.device_put(
-            inputs.recv_route_weights,
-            NamedSharding(mesh, P(AXIS, None, None, None)),
-        ),
+        h_route_weights=jax.device_put(inputs.h_route_weights, NamedSharding(mesh, P(AXIS, None))),
         route_combine_weights=jax.device_put(
             inputs.route_combine_weights,
             NamedSharding(mesh, P(AXIS, None, None)),
@@ -966,7 +1213,7 @@ def _call_source_push_forward_device_inputs(
         inputs.expert_base,
         inputs.src_base_by_expert,
         inputs.w_gate_up,
-        inputs.recv_route_weights,
+        inputs.h_route_weights,
         inputs.w_down,
         inputs.queue_dst_ord,
         inputs.queue_entry,
@@ -1004,6 +1251,89 @@ def _call_staged_source_push_forward_device_inputs(
     return call_stages(inputs)
 
 
+def _call_staged_source_push_forward_compact_h_device_inputs(
+    mesh: Mesh,
+    config: PushInboxConfig,
+    inputs: SourcePushForwardDeviceInputs,
+    h_route_weights: Float[Array, "Dst E C"],
+    *,
+    compact_expert_capacity: int,
+) -> tuple[Float[Array, "S T D"], Float[Array, "Dst E C twoI"]]:
+    call_stages = _cached_staged_source_push_forward_compact_h_call(
+        mesh,
+        config,
+        compact_expert_capacity=compact_expert_capacity,
+        use_exact_expert_major=inputs.use_exact_expert_major,
+    )
+    return call_stages(inputs, h_route_weights)
+
+
+def _cached_staged_source_push_forward_compact_h_call(
+    mesh: Mesh,
+    config: PushInboxConfig,
+    *,
+    compact_expert_capacity: int,
+    use_exact_expert_major: bool,
+) -> Callable[[SourcePushForwardDeviceInputs, jax.Array], tuple[jax.Array, jax.Array]]:
+    key = (
+        *_staged_forward_call_cache_key(mesh, config, use_exact_expert_major=use_exact_expert_major),
+        "compact_h",
+        compact_expert_capacity,
+    )
+    cached_call = _STAGED_FORWARD_CALL_CACHE.get(key)
+    if cached_call is not None:
+        return cached_call
+
+    w13_h_fn = jax.jit(
+        _sharded_w13_h_compact_kernel(
+            mesh,
+            config,
+            compact_expert_capacity=compact_expert_capacity,
+            use_exact_expert_major=use_exact_expert_major,
+        )
+    )
+    w2_from_h_return_fn = jax.jit(
+        _sharded_w2_from_compact_h_return_direct_to_source_kernel(
+            mesh,
+            config,
+            use_exact_expert_major=use_exact_expert_major,
+        )
+    )
+    combine_fn = jax.jit(_sharded_source_combine_kernel(mesh, config))
+
+    def call_stages(inputs: SourcePushForwardDeviceInputs, h_route_weights: jax.Array) -> tuple[jax.Array, jax.Array]:
+        _, h = w13_h_fn(
+            inputs.x,
+            inputs.send_meta,
+            inputs.recv_meta,
+            inputs.expert_base,
+            inputs.src_base_by_expert,
+            inputs.w_gate_up,
+        )
+        _block_until_ready(h)
+        source_return = w2_from_h_return_fn(
+            h,
+            h_route_weights,
+            inputs.recv_meta,
+            inputs.expert_base,
+            inputs.src_base_by_expert,
+            inputs.w_down,
+        )
+        _block_until_ready(source_return)
+        out = combine_fn(
+            source_return,
+            inputs.queue_dst_ord,
+            inputs.queue_entry,
+            inputs.queue_row,
+            jnp.ones_like(inputs.route_combine_weights),
+            inputs.route_valid_mask,
+        )
+        return out, h
+
+    _STAGED_FORWARD_CALL_CACHE[key] = call_stages
+    return call_stages
+
+
 def _cached_staged_source_push_forward_call(
     mesh: Mesh,
     config: PushInboxConfig,
@@ -1037,7 +1367,7 @@ def _cached_staged_source_push_forward_call(
         _block_until_ready(h)
         source_return = w2_from_h_return_fn(
             h,
-            inputs.recv_route_weights,
+            inputs.h_route_weights,
             inputs.recv_meta,
             inputs.expert_base,
             inputs.src_base_by_expert,
@@ -1080,7 +1410,7 @@ def _time_staged_source_push_forward(
     expert_base: jax.Array,
     src_base_by_expert: jax.Array,
     w_gate_up: jax.Array,
-    recv_route_weights: jax.Array,
+    h_route_weights: jax.Array,
     w_down: jax.Array,
     queue_dst_ord: jax.Array,
     queue_entry: jax.Array,
@@ -1123,7 +1453,7 @@ def _time_staged_source_push_forward(
             stage_times[FORWARD_STAGE_W13] = time.perf_counter() - stage_start
 
         stage_start = time.perf_counter()
-        source_return = w2_from_h_return_fn(h, recv_route_weights, recv_meta, expert_base, src_base_by_expert, w_down)
+        source_return = w2_from_h_return_fn(h, h_route_weights, recv_meta, expert_base, src_base_by_expert, w_down)
         _block_until_ready(source_return)
         if record_stage_times:
             stage_times[FORWARD_STAGE_W2_RETURN] = time.perf_counter() - stage_start
@@ -1236,7 +1566,7 @@ def _run_forward_one(
         expert_base = inputs.expert_base
         src_base_by_expert = inputs.src_base_by_expert
         w_gate_up = inputs.w_gate_up
-        recv_route_weights = inputs.recv_route_weights
+        h_route_weights = inputs.h_route_weights
         w_down = inputs.w_down
         queue_dst_ord = inputs.queue_dst_ord
         queue_entry = inputs.queue_entry
@@ -1254,7 +1584,7 @@ def _run_forward_one(
                 expert_base,
                 src_base_by_expert,
                 w_gate_up,
-                recv_route_weights,
+                h_route_weights,
                 w_down,
                 queue_dst_ord,
                 queue_entry,
@@ -1284,7 +1614,7 @@ def _run_forward_one(
                     expert_base,
                     src_base_by_expert,
                     w_gate_up,
-                    recv_route_weights,
+                    h_route_weights,
                     w_down,
                     queue_dst_ord,
                     queue_entry,

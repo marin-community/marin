@@ -1,7 +1,7 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Opt-in public-shape adapter for the source-push MGPU MoE forward prototype."""
+"""Opt-in public-shape adapter for the source-push MGPU MoE MLP boundary."""
 
 from __future__ import annotations
 
@@ -13,25 +13,31 @@ from jaxtyping import Array, Float, Int
 
 from levanter.grug._moe.source_push_forward import (
     FORWARD_EXECUTION_STAGED_HOST_SYNC,
-    make_source_push_forward_plan_inputs,
+    make_source_push_forward_plan_inputs_from_plan,
 )
 from levanter.grug._moe.source_push_inbox import AXIS, PushInboxConfig
+from levanter.grug._moe.source_push_inbox_profiles import (
+    SOURCE_PUSH_PROFILE_STABLE_216,
+    source_push_profile_defaults,
+)
 from levanter.grug._moe.source_push_mlp import (
     SOURCE_PUSH_MLP_IMPLEMENTATION_PALLAS_MGPU,
     source_push_mlp_route_table_from_plan,
     source_push_moe_mlp_from_plan,
 )
-from levanter.grug._moe.source_push_plan import build_source_push_plan
+from levanter.grug._moe.source_push_plan import SourcePushPlan, build_source_push_plan
 from levanter.utils.activation import ActivationFunctionEnum
 
 
 SOURCE_PUSH_PUBLIC_IMPLEMENTATION = "pallas_mgpu_source_push"
-_BLOCK_M = 64
-_BLOCK_N = 128
 _TARGET_BLOCK_K = 128
 _SMALL_BLOCK_K = 64
 _MAX_EP_SIZE = 8
-_MAX_INBOX_SLOTS = 12
+_STATIC_PUBLIC_ROUTE_ERROR = (
+    f"{SOURCE_PUSH_PUBLIC_IMPLEMENTATION!r} currently builds SourcePushPlan metadata on the host, so "
+    "selected_experts must be concrete/static at Python plan-build time. Use this backend with preplanned "
+    "routing metadata until the source-push planner is device-side."
+)
 
 
 def moe_mlp_ep_source_push_mgpu(
@@ -46,7 +52,11 @@ def moe_mlp_ep_source_push_mgpu(
     batch_spec: P,
     capacity_factor: float,
 ) -> tuple[Float[Array, "T D"], Int[Array, ""]]:
-    """Run the opt-in source-push MGPU backend from the public EP ``moe_mlp`` layout."""
+    """Run the opt-in source-push MGPU MLP backend from the public EP ``moe_mlp`` layout.
+
+    The current planner is host-side, so ``selected_experts`` must be
+    concrete/static at Python plan-build time.
+    """
 
     _validate_source_push_public_request(
         activation=activation,
@@ -81,7 +91,7 @@ def moe_mlp_ep_source_push_mgpu(
         hidden_dim,
     )
 
-    config = _source_push_config_from_public_inputs(
+    config, plan = _source_push_config_and_plan_from_public_inputs(
         selected_source,
         ep_size=ep_size,
         tokens_per_rank=tokens_per_rank,
@@ -93,10 +103,7 @@ def moe_mlp_ep_source_push_mgpu(
     )
     if not isinstance(mesh, Mesh):
         raise ValueError(f"{SOURCE_PUSH_PUBLIC_IMPLEMENTATION!r} requires a concrete Mesh")
-    host_inputs = make_source_push_forward_plan_inputs(
-        config,
-        selected_source,
-    )
+    host_inputs = make_source_push_forward_plan_inputs_from_plan(config, plan)
     route_table = source_push_mlp_route_table_from_plan(
         host_inputs.plan,
         src_base_by_expert=host_inputs.src_base_by_expert,
@@ -184,53 +191,82 @@ def _source_push_config_from_public_inputs(
     experts_per_rank: int,
     capacity_factor: float,
 ) -> PushInboxConfig:
-    block_k = _source_push_block_k(hidden_dim)
-    if intermediate_dim % _BLOCK_N:
+    config, _ = _source_push_config_and_plan_from_public_inputs(
+        selected_experts,
+        ep_size=ep_size,
+        tokens_per_rank=tokens_per_rank,
+        topk=topk,
+        hidden_dim=hidden_dim,
+        intermediate_dim=intermediate_dim,
+        experts_per_rank=experts_per_rank,
+        capacity_factor=capacity_factor,
+    )
+    return config
+
+
+def _source_push_config_and_plan_from_public_inputs(
+    selected_experts: Int[Array, "S T K"],
+    *,
+    ep_size: int,
+    tokens_per_rank: int,
+    topk: int,
+    hidden_dim: int,
+    intermediate_dim: int,
+    experts_per_rank: int,
+    capacity_factor: float,
+) -> tuple[PushInboxConfig, SourcePushPlan]:
+    profile_defaults = source_push_profile_defaults(SOURCE_PUSH_PROFILE_STABLE_216)
+    block_m = int(profile_defaults["block_m"])
+    block_n = int(profile_defaults["block_n"])
+    block_k = _source_push_block_k(hidden_dim, preferred_block_k=int(profile_defaults["block_k"]))
+    if intermediate_dim % block_n:
         raise ValueError(
-            f"{SOURCE_PUSH_PUBLIC_IMPLEMENTATION!r} requires intermediate_dim divisible by {_BLOCK_N}, "
+            f"{SOURCE_PUSH_PUBLIC_IMPLEMENTATION!r} requires intermediate_dim divisible by {block_n}, "
             f"got {intermediate_dim}"
         )
 
     probe_weights = jnp.zeros(selected_experts.shape, dtype=jnp.float32)
-    probe_plan = build_source_push_plan(
-        selected_experts,
-        probe_weights,
-        ep_size=ep_size,
-        experts_per_rank=experts_per_rank,
-        block_m=_BLOCK_M,
-        capacity_factor=capacity_factor,
-        entries_per_dst=None,
-    )
+    try:
+        probe_plan = build_source_push_plan(
+            selected_experts,
+            probe_weights,
+            ep_size=ep_size,
+            experts_per_rank=experts_per_rank,
+            block_m=block_m,
+            capacity_factor=capacity_factor,
+            entries_per_dst=None,
+        )
+    except (jax.errors.ConcretizationTypeError, jax.errors.TracerArrayConversionError) as exc:
+        raise ValueError(_STATIC_PUBLIC_ROUTE_ERROR) from exc
     entries_per_rank = max(1, int(probe_plan.assignment_ids.shape[2]))
-    n_work_groups = intermediate_dim // _BLOCK_N
-    n_groups_per_job = min(2, n_work_groups)
-    send_worker_programs_per_peer = 1 if entries_per_rank <= 2 else 2
-    worker_programs_per_peer = 8 if entries_per_rank <= 2 else 32
-    return PushInboxConfig(
+    n_work_groups = intermediate_dim // block_n
+    n_groups_per_job = min(int(profile_defaults["n_groups_per_job"]), n_work_groups)
+    config = PushInboxConfig(
         ep_size=ep_size,
         entries_per_rank=entries_per_rank,
-        inbox_slots=max(1, min(_MAX_INBOX_SLOTS, entries_per_rank)),
+        inbox_slots=max(1, min(int(profile_defaults["inbox_slots"]), entries_per_rank)),
         hidden_dim=hidden_dim,
         intermediate_dim=intermediate_dim,
-        block_m=_BLOCK_M,
-        block_n=_BLOCK_N,
+        block_m=block_m,
+        block_n=block_n,
         block_k=block_k,
-        n_group=1,
+        n_group=int(profile_defaults["n_group"]),
         n_groups_per_job=n_groups_per_job,
         experts_per_rank=experts_per_rank,
-        send_worker_programs_per_peer=send_worker_programs_per_peer,
-        worker_programs_per_peer=worker_programs_per_peer,
-        send_pipeline_depth=1,
-        routing="balanced",
+        send_worker_programs_per_peer=int(profile_defaults["send_worker_programs_per_peer"]),
+        worker_programs_per_peer=int(profile_defaults["worker_programs_per_peer"]),
+        send_pipeline_depth=int(profile_defaults["send_pipeline_depth"]),
+        routing=str(profile_defaults["routing"]),
         tokens_per_rank=tokens_per_rank,
         topk=topk,
         capacity_factor=capacity_factor,
     )
+    return config, probe_plan
 
 
-def _source_push_block_k(hidden_dim: int) -> int:
-    if hidden_dim >= 256 and hidden_dim % _TARGET_BLOCK_K == 0:
-        return _TARGET_BLOCK_K
+def _source_push_block_k(hidden_dim: int, *, preferred_block_k: int = _TARGET_BLOCK_K) -> int:
+    if hidden_dim >= preferred_block_k and hidden_dim % preferred_block_k == 0:
+        return preferred_block_k
     if hidden_dim % _SMALL_BLOCK_K == 0:
         return _SMALL_BLOCK_K
     raise ValueError(

@@ -1,7 +1,7 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Package-private source-push inbox prototype for MGPU MoE permute_up.
+"""Package-private source-push inbox transport/W13 stage for MGPU MoE MLP.
 
 This module contains the current Hopper source-push inbox kernel harness:
 
@@ -77,6 +77,7 @@ ROW_START_MODE_SOURCE_PADDED = "source_padded_row_start"
 ROW_START_MODE_EXACT_EXPERT_MAJOR = "exact_expert_major_row_start"
 ROW_LAYOUT_SOURCE_PADDED_EXPERT_MAJOR = "source_padded_expert_major"
 ROW_LAYOUT_EXACT_EXPERT_MAJOR = "exact_expert_major"
+ROW_LAYOUT_COMPACT_EXPERT_MAJOR = "compact_expert_major"
 SOURCE_INPUT_PACKED_QUEUE = "packed_queue"
 SOURCE_INPUT_RAW_TOKENS = "raw_tokens"
 ROUTING_MODES = (
@@ -294,9 +295,18 @@ def _hidden_output_shape_for_kernel(
     diagnostic_variant: str,
     *,
     output_preactivation_h: bool = False,
-) -> tuple[int, int]:
+    output_compact_preactivation_h: bool = False,
+    compact_expert_capacity: int | None = None,
+) -> tuple[int, ...]:
     if diagnostic_variant in (DIAGNOSTIC_VARIANT_SEMAPHORE_ONLY, DIAGNOSTIC_VARIANT_COPY_RELEASE_ONLY):
         return (1, 1)
+    if output_compact_preactivation_h:
+        if compact_expert_capacity is None or compact_expert_capacity <= 0:
+            raise ValueError(
+                "compact_expert_capacity must be positive when writing compact preactivation H; "
+                f"got {compact_expert_capacity}"
+            )
+        return (config.experts_per_rank, compact_expert_capacity, 2 * config.intermediate_dim)
     if diagnostic_variant == DIAGNOSTIC_VARIANT_WGMMA_TINY_OUTPUT:
         n_tiles = config.intermediate_dim // config.block_n
         return (config.hidden_rows_per_rank, n_tiles * TINY_OUTPUT_COLUMNS_PER_N_TILE)
@@ -311,6 +321,8 @@ def _make_kernel(
     *,
     use_exact_expert_major: bool = False,
     output_preactivation_h: bool = False,
+    output_compact_preactivation_h: bool = False,
+    compact_expert_capacity: int | None = None,
     source_input_mode: str = SOURCE_INPUT_PACKED_QUEUE,
 ):
     _validate_diagnostic_variant(diagnostic_variant)
@@ -345,6 +357,12 @@ def _make_kernel(
         DIAGNOSTIC_VARIANT_FULL,
         DIAGNOSTIC_VARIANT_COMPUTE_ONLY_LOCAL,
     )
+    stores_compact_preactivation_h = output_compact_preactivation_h and diagnostic_variant in (
+        DIAGNOSTIC_VARIANT_FULL,
+        DIAGNOSTIC_VARIANT_COMPUTE_ONLY_LOCAL,
+    )
+    if stores_compact_preactivation_h and not stores_preactivation_h:
+        raise ValueError("compact preactivation H requires output_preactivation_h=True")
 
     def _body_impl(
         x_ref: Float[Ref, "... D"],
@@ -560,6 +578,14 @@ def _make_kernel(
                 return expert_base_ref[expert] + src_base_by_expert_ref[src_rank, expert] + local_row_start
             return recv_meta_ref[src_ordinal, entry, 2]
 
+        def _hidden_expert_row_start(src_ordinal, entry):
+            expert = recv_meta_ref[src_ordinal, entry, 1]
+            if use_exact_expert_major:
+                src_rank = recv_meta_ref[src_ordinal, entry, 0]
+                local_row_start = recv_meta_ref[src_ordinal, entry, 2]
+                return src_base_by_expert_ref[src_rank, expert] + local_row_start
+            return recv_meta_ref[src_ordinal, entry, 2] - expert_base_ref[expert]
+
         def _store_hidden(src_ordinal, entry, n_tile, hidden) -> None:
             dst_row_start = _hidden_row_start(src_ordinal, entry)
             if stores_tiny_output:
@@ -578,15 +604,29 @@ def _make_kernel(
                 hidden_ref[idx] = output
 
         def _store_h_tile(src_ordinal, entry, n_tile, gate, up) -> None:
-            dst_row_start = _hidden_row_start(src_ordinal, entry)
-            gate_idx = (
-                pl.ds(dst_row_start, config.block_m),
-                pl.ds(n_tile * config.block_n, config.block_n),
-            )
-            up_idx = (
-                pl.ds(dst_row_start, config.block_m),
-                pl.ds((n_tile + n_tiles) * config.block_n, config.block_n),
-            )
+            if stores_compact_preactivation_h:
+                expert = recv_meta_ref[src_ordinal, entry, 1]
+                dst_row_start = _hidden_expert_row_start(src_ordinal, entry)
+                gate_idx = (
+                    expert,
+                    pl.ds(dst_row_start, config.block_m),
+                    pl.ds(n_tile * config.block_n, config.block_n),
+                )
+                up_idx = (
+                    expert,
+                    pl.ds(dst_row_start, config.block_m),
+                    pl.ds((n_tile + n_tiles) * config.block_n, config.block_n),
+                )
+            else:
+                dst_row_start = _hidden_row_start(src_ordinal, entry)
+                gate_idx = (
+                    pl.ds(dst_row_start, config.block_m),
+                    pl.ds(n_tile * config.block_n, config.block_n),
+                )
+                up_idx = (
+                    pl.ds(dst_row_start, config.block_m),
+                    pl.ds((n_tile + n_tiles) * config.block_n, config.block_n),
+                )
             hidden_ref[gate_idx] = gate.astype(hidden_ref.dtype)
             hidden_ref[up_idx] = up.astype(hidden_ref.dtype)
 
@@ -599,7 +639,43 @@ def _make_kernel(
             zeros = jnp.zeros((config.block_m, config.block_n), dtype=hidden_ref.dtype)
             hidden_ref[idx] = zeros
 
+        def _store_zero_h_tile(src_ordinal, entry, n_tile) -> None:
+            zeros = jnp.zeros((config.block_m, config.block_n), dtype=hidden_ref.dtype)
+            if output_compact_preactivation_h:
+                expert = recv_meta_ref[src_ordinal, entry, 1]
+                dst_row_start = _hidden_expert_row_start(src_ordinal, entry)
+                gate_idx = (
+                    expert,
+                    pl.ds(dst_row_start, config.block_m),
+                    pl.ds(n_tile * config.block_n, config.block_n),
+                )
+                up_idx = (
+                    expert,
+                    pl.ds(dst_row_start, config.block_m),
+                    pl.ds((n_tile + n_tiles) * config.block_n, config.block_n),
+                )
+            else:
+                dst_row_start = _hidden_row_start(src_ordinal, entry)
+                gate_idx = (
+                    pl.ds(dst_row_start, config.block_m),
+                    pl.ds(n_tile * config.block_n, config.block_n),
+                )
+                up_idx = (
+                    pl.ds(dst_row_start, config.block_m),
+                    pl.ds((n_tile + n_tiles) * config.block_n, config.block_n),
+                )
+            hidden_ref[gate_idx] = zeros
+            hidden_ref[up_idx] = zeros
+
         def _store_zero_n_group(src_ordinal, entry, n_group_i) -> None:
+            if output_preactivation_h:
+                if config.n_group == 1:
+                    _store_zero_h_tile(src_ordinal, entry, n_group_i)
+                else:
+                    n_tile = n_group_i * 2
+                    _store_zero_h_tile(src_ordinal, entry, n_tile)
+                    _store_zero_h_tile(src_ordinal, entry, n_tile + 1)
+                return
             if config.n_group == 1:
                 _store_zero_hidden(src_ordinal, entry, n_group_i)
             else:
@@ -936,6 +1012,8 @@ def _make_kernel(
                 config,
                 diagnostic_variant,
                 output_preactivation_h=output_preactivation_h,
+                output_compact_preactivation_h=output_compact_preactivation_h,
+                compact_expert_capacity=compact_expert_capacity,
             ),
             jnp.bfloat16,
         ),
@@ -969,7 +1047,7 @@ def _recv_src_ordinal(config: PushInboxConfig, dst: int, src: int) -> int:
     return (src - dst) % config.ep_size
 
 
-def _make_weights(config: PushInboxConfig):
+def _make_weights_host(config: PushInboxConfig) -> np.ndarray:
     w_host = np.empty(
         (config.ep_size, config.experts_per_rank, config.hidden_dim, 2 * config.intermediate_dim),
         dtype=np.float32,
@@ -982,6 +1060,11 @@ def _make_weights(config: PushInboxConfig):
     ]
     w_host[:, :, :, : config.intermediate_dim] = gate_scale
     w_host[:, :, :, config.intermediate_dim :] = up_scale
+    return w_host
+
+
+def _make_weights(config: PushInboxConfig):
+    w_host = _make_weights_host(config)
     return jnp.asarray(w_host, dtype=jnp.bfloat16)
 
 
@@ -1612,6 +1695,23 @@ def _make_w13_h_kernel(
     )
 
 
+def _make_w13_h_compact_kernel(
+    config: PushInboxConfig,
+    *,
+    compact_expert_capacity: int,
+    use_exact_expert_major: bool = False,
+    diagnostic_variant: str = DIAGNOSTIC_VARIANT_FULL,
+):
+    return _make_kernel(
+        config,
+        diagnostic_variant,
+        use_exact_expert_major=use_exact_expert_major,
+        output_preactivation_h=True,
+        output_compact_preactivation_h=True,
+        compact_expert_capacity=compact_expert_capacity,
+    )
+
+
 def _make_raw_token_w13_h_kernel(
     config: PushInboxConfig,
     *,
@@ -1622,6 +1722,23 @@ def _make_raw_token_w13_h_kernel(
         DIAGNOSTIC_VARIANT_FULL,
         use_exact_expert_major=use_exact_expert_major,
         output_preactivation_h=True,
+        source_input_mode=SOURCE_INPUT_RAW_TOKENS,
+    )
+
+
+def _make_raw_token_w13_h_compact_kernel(
+    config: PushInboxConfig,
+    *,
+    compact_expert_capacity: int,
+    use_exact_expert_major: bool = False,
+):
+    return _make_kernel(
+        config,
+        DIAGNOSTIC_VARIANT_FULL,
+        use_exact_expert_major=use_exact_expert_major,
+        output_preactivation_h=True,
+        output_compact_preactivation_h=True,
+        compact_expert_capacity=compact_expert_capacity,
         source_input_mode=SOURCE_INPUT_RAW_TOKENS,
     )
 
@@ -1677,6 +1794,64 @@ def _sharded_w13_h_kernel(
     )
 
 
+def _sharded_w13_h_compact_kernel(
+    mesh: Mesh,
+    config: PushInboxConfig,
+    *,
+    compact_expert_capacity: int,
+    use_exact_expert_major: bool = False,
+    diagnostic_variant: str = DIAGNOSTIC_VARIANT_FULL,
+):
+    kernel = _make_w13_h_compact_kernel(
+        config,
+        compact_expert_capacity=compact_expert_capacity,
+        use_exact_expert_major=use_exact_expert_major,
+        diagnostic_variant=diagnostic_variant,
+    )
+
+    def local_fn(
+        x_local: Float[Array, "1 DST Q M D"],
+        send_meta_local: Int[Array, "1 DST Q F"],
+        recv_meta_local: Int[Array, "1 SRC Q F"],
+        expert_base_local: Int[Array, "1 E"],
+        src_base_by_expert_local: Int[Array, "1 SRC E"],
+        w_local: Float[Array, "1 E D twoI"],
+    ):
+        x_local = x_local[0]
+        send_meta_local = send_meta_local[0]
+        recv_meta_local = recv_meta_local[0]
+        expert_base_local = expert_base_local[0]
+        src_base_by_expert_local = src_base_by_expert_local[0]
+        w_local = w_local[0]
+        inbox, h = kernel(
+            x_local,
+            send_meta_local,
+            recv_meta_local,
+            expert_base_local,
+            src_base_by_expert_local,
+            w_local,
+        )
+        return inbox[None, ...], h[None, ...]
+
+    return shard_map(
+        local_fn,
+        mesh=mesh,
+        in_specs=(
+            P(AXIS, None, None, None, None),
+            P(AXIS, None, None, None),
+            P(AXIS, None, None, None),
+            P(AXIS, None),
+            P(AXIS, None, None),
+            P(AXIS, None, None, None),
+        ),
+        out_specs=(
+            P(AXIS, None, None, None, None),
+            P(AXIS, None, None, None),
+        ),
+        check_vma=False,
+    )
+
+
 def _sharded_raw_token_w13_h_kernel(
     mesh: Mesh,
     config: PushInboxConfig,
@@ -1727,6 +1902,66 @@ def _sharded_raw_token_w13_h_kernel(
         out_specs=(
             P(AXIS, None, None, None, None),
             P(AXIS, None, None),
+        ),
+        check_vma=False,
+    )
+
+
+def _sharded_raw_token_w13_h_compact_kernel(
+    mesh: Mesh,
+    config: PushInboxConfig,
+    *,
+    compact_expert_capacity: int,
+    use_exact_expert_major: bool = False,
+):
+    kernel = _make_raw_token_w13_h_compact_kernel(
+        config,
+        compact_expert_capacity=compact_expert_capacity,
+        use_exact_expert_major=use_exact_expert_major,
+    )
+
+    def local_fn(
+        x_local: Float[Array, "1 T D"],
+        token_ids_local: Int[Array, "1 DST Q M"],
+        send_meta_local: Int[Array, "1 DST Q F"],
+        recv_meta_local: Int[Array, "1 SRC Q F"],
+        expert_base_local: Int[Array, "1 E"],
+        src_base_by_expert_local: Int[Array, "1 SRC E"],
+        w_local: Float[Array, "1 E D twoI"],
+    ):
+        x_local = x_local[0]
+        token_ids_local = token_ids_local[0]
+        send_meta_local = send_meta_local[0]
+        recv_meta_local = recv_meta_local[0]
+        expert_base_local = expert_base_local[0]
+        src_base_by_expert_local = src_base_by_expert_local[0]
+        w_local = w_local[0]
+        inbox, h = kernel(
+            x_local,
+            token_ids_local,
+            send_meta_local,
+            recv_meta_local,
+            expert_base_local,
+            src_base_by_expert_local,
+            w_local,
+        )
+        return inbox[None, ...], h[None, ...]
+
+    return shard_map(
+        local_fn,
+        mesh=mesh,
+        in_specs=(
+            P(AXIS, None, None),
+            P(AXIS, None, None, None),
+            P(AXIS, None, None, None),
+            P(AXIS, None, None, None),
+            P(AXIS, None),
+            P(AXIS, None, None),
+            P(AXIS, None, None, None),
+        ),
+        out_specs=(
+            P(AXIS, None, None, None, None),
+            P(AXIS, None, None, None),
         ),
         check_vma=False,
     )
@@ -1933,6 +2168,91 @@ def _reference_h_flat(
                 h_block = x_float[src, dst_ordinal, entry] @ w_float[dst, expert]
                 rows_to_store = valid_rows if use_exact_expert_major else config.block_m
                 h[dst, row : row + rows_to_store, :] = h_block[:rows_to_store]
+    return h
+
+
+def _compact_h_expert_capacity_from_metadata(
+    config: PushInboxConfig,
+    send_meta_host,
+    expert_base_host,
+    src_base_by_expert_host=None,
+    *,
+    use_exact_expert_major: bool,
+    include_store_padding: bool = True,
+) -> int:
+    """Return the per-expert row capacity needed by the direct compact W13 writer."""
+
+    send_meta = np.asarray(send_meta_host, dtype=np.int32)
+    expert_base = np.asarray(expert_base_host, dtype=np.int32)
+    if src_base_by_expert_host is None:
+        src_base_by_expert = np.zeros((config.ep_size, config.ep_size, config.experts_per_rank), dtype=np.int32)
+    else:
+        src_base_by_expert = np.asarray(src_base_by_expert_host, dtype=np.int32)
+    max_row = 0
+    for src in range(config.ep_size):
+        for dst in range(config.ep_size):
+            dst_ordinal = _dst_ordinal(config, src, dst)
+            for entry in range(config.entries_per_rank):
+                valid_rows = int(send_meta[src, dst_ordinal, entry, 3])
+                if valid_rows <= 0:
+                    continue
+                expert = int(send_meta[src, dst_ordinal, entry, 1])
+                metadata_row_start = int(send_meta[src, dst_ordinal, entry, 2])
+                if use_exact_expert_major:
+                    expert_row_start = int(src_base_by_expert[dst, src, expert]) + metadata_row_start
+                else:
+                    expert_row_start = metadata_row_start - int(expert_base[dst, expert])
+                rows_to_store = config.block_m if include_store_padding else valid_rows
+                max_row = max(max_row, expert_row_start + rows_to_store)
+    return max(max_row, 1)
+
+
+def _reference_h_compact(
+    config: PushInboxConfig,
+    x_host,
+    send_meta_host,
+    w_host,
+    expert_base_host,
+    src_base_by_expert_host=None,
+    *,
+    use_exact_expert_major: bool = False,
+    expert_capacity: int | None = None,
+) -> np.ndarray:
+    if expert_capacity is None:
+        expert_capacity = _compact_h_expert_capacity_from_metadata(
+            config,
+            send_meta_host,
+            expert_base_host,
+            src_base_by_expert_host,
+            use_exact_expert_major=use_exact_expert_major,
+        )
+    h = np.zeros(
+        (config.ep_size, config.experts_per_rank, expert_capacity, 2 * config.intermediate_dim),
+        dtype=np.float32,
+    )
+    x_float = np.asarray(x_host, dtype=np.float32)
+    send_meta = np.asarray(send_meta_host, dtype=np.int32)
+    w_float = np.asarray(w_host, dtype=np.float32)
+    expert_base = np.asarray(expert_base_host, dtype=np.int32)
+    if src_base_by_expert_host is None:
+        src_base_by_expert = np.zeros((config.ep_size, config.ep_size, config.experts_per_rank), dtype=np.int32)
+    else:
+        src_base_by_expert = np.asarray(src_base_by_expert_host, dtype=np.int32)
+    for src in range(config.ep_size):
+        for dst in range(config.ep_size):
+            dst_ordinal = _dst_ordinal(config, src, dst)
+            for entry in range(config.entries_per_rank):
+                valid_rows = int(send_meta[src, dst_ordinal, entry, 3])
+                if valid_rows <= 0:
+                    continue
+                expert = int(send_meta[src, dst_ordinal, entry, 1])
+                metadata_row_start = int(send_meta[src, dst_ordinal, entry, 2])
+                if use_exact_expert_major:
+                    expert_row_start = int(src_base_by_expert[dst, src, expert]) + metadata_row_start
+                else:
+                    expert_row_start = metadata_row_start - int(expert_base[dst, expert])
+                h_block = x_float[src, dst_ordinal, entry] @ w_float[dst, expert]
+                h[dst, expert, expert_row_start : expert_row_start + valid_rows, :] = h_block[:valid_rows]
     return h
 
 

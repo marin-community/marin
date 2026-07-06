@@ -11,6 +11,7 @@ import jax
 import numpy as np
 import pytest
 import jax.numpy as jnp
+from jax.sharding import AxisType, Mesh
 
 import levanter.grug._moe.source_push_inbox as source_push_inbox
 import levanter.grug._moe.source_push_combine as source_push_combine
@@ -82,6 +83,40 @@ assert DIAGNOSTIC_SCRIPT_SPEC.loader is not None
 DIAGNOSTIC_SCRIPT_SPEC.loader.exec_module(source_push_diagnostic_cli)
 
 
+def _skip_without_h100_devices(device_count: int) -> None:
+    devices = jax.devices()
+    if len(devices) < device_count:
+        pytest.skip(f"source-push MGPU smoke requires at least {device_count} visible devices")
+    if not devices or devices[0].platform != "gpu":
+        pytest.skip("source-push MGPU smoke requires GPUs")
+    if not all("H100" in getattr(device, "device_kind", "").upper() for device in devices[:device_count]):
+        pytest.skip("source-push MGPU smoke is restricted to H100")
+
+
+def _assert_h_route_weights_match_live_rows(h_route_weights, route_weights, inputs):
+    h_route_weights = np.asarray(h_route_weights)
+    route_weights = np.asarray(route_weights)
+    valid_mask = np.asarray(inputs.plan.valid_mask)
+    token_ids = np.asarray(inputs.plan.token_ids)
+    route_slots = np.asarray(inputs.plan.route_slots)
+    send_meta = np.asarray(inputs.send_meta)
+    expert_base = np.asarray(inputs.expert_base)
+    src_base_by_expert = np.asarray(inputs.src_base_by_expert)
+    ep_size = valid_mask.shape[0]
+
+    live_rows = np.argwhere(valid_mask)
+    assert live_rows.shape[0] > 0
+    for src, dst_ord, entry, row in live_rows:
+        dst = (src + dst_ord) % ep_size
+        row_start = send_meta[src, dst_ord, entry, source_push_plan.SOURCE_PUSH_META_LOCAL_ROW_START]
+        if inputs.use_exact_expert_major:
+            expert = send_meta[src, dst_ord, entry, source_push_plan.SOURCE_PUSH_META_LOCAL_EXPERT]
+            row_start = expert_base[dst, expert] + src_base_by_expert[dst, src, expert] + row_start
+        token = token_ids[src, dst_ord, entry, row]
+        route_slot = route_slots[src, dst_ord, entry, row]
+        np.testing.assert_array_equal(h_route_weights[dst, row_start + row], route_weights[src, token, route_slot])
+
+
 @pytest.mark.parametrize(
     ("profile", "expected_routing", "expected_send_pipeline_depth"),
     [
@@ -134,6 +169,192 @@ def test_source_push_profile_allows_explicit_overrides():
     assert args.n_groups_per_job == 2
 
 
+def test_source_push_mlp_benchmark_accepts_direct_compact_w13_mode():
+    args = source_push_mlp_fwd_bwd_cli.parse_source_push_mlp_fwd_bwd_args(
+        [
+            "--modes",
+            "forward_w13_direct_compact,forward_w13_direct_compact_store_zero,"
+            "forward_w13_direct_compact_compute_only_local",
+            "--backends",
+            "source_push_pallas_mgpu",
+        ]
+    )
+
+    assert (
+        args.modes == "forward_w13_direct_compact,forward_w13_direct_compact_store_zero,"
+        "forward_w13_direct_compact_compute_only_local"
+    )
+    assert "forward_w13_direct_compact" in source_push_mlp_fwd_bwd_cli.MODES
+    assert "forward_w13_direct_compact_store_zero" in source_push_mlp_fwd_bwd_cli.MODES
+    assert "forward_w13_direct_compact_compute_only_local" in source_push_mlp_fwd_bwd_cli.MODES
+
+
+def test_source_push_mlp_benchmark_accepts_refill_sweep_flags():
+    args = source_push_mlp_fwd_bwd_cli.parse_source_push_mlp_fwd_bwd_args(
+        [
+            "--sweep-inbox-slots",
+            "12,24,48",
+            "--sweep-n-groups-per-job",
+            "2,5",
+            "--sweep-send-pipeline-depth",
+            "1,2",
+            "--sweep-send-worker-programs-per-peer",
+            "1,2,4",
+            "--sweep-worker-programs-per-peer",
+            "32",
+        ]
+    )
+
+    assert args.sweep_inbox_slots == (12, 24, 48)
+    assert args.sweep_n_groups_per_job == (2, 5)
+    assert args.sweep_send_pipeline_depth == (1, 2)
+    assert args.sweep_send_worker_programs_per_peer == (1, 2, 4)
+    assert args.sweep_worker_programs_per_peer == (32,)
+
+
+def test_source_push_mlp_direct_compact_w13_rows_report_byte_breakdown():
+    config = source_push_inbox.PushInboxConfig(
+        ep_size=2,
+        tokens_per_rank=4,
+        hidden_dim=4,
+        intermediate_dim=4,
+        experts_per_rank=2,
+        topk=1,
+        capacity_factor=1.0,
+        block_m=2,
+        block_n=2,
+        block_k=2,
+        n_group=1,
+    )
+    queue_stats = {
+        "dropped_routes": 0,
+        "valid_rows_per_rank_mean": 4,
+        "rounded_rows_per_rank_mean": 6,
+        "send_rounded_rows_per_rank_mean": 4,
+        "live_entries_per_rank_mean": 3,
+    }
+    timing = source_push_mlp_fwd_bwd_cli.MlpTiming(
+        compile_time=0.0,
+        lower_compile_time=None,
+        first_run_time=None,
+        first_call_time=0.0,
+        steady_state_times=[1e-6],
+        output=None,
+    )
+
+    rows = source_push_mlp_fwd_bwd_cli._w13_direct_compact_rows(
+        config,
+        timing=timing,
+        queue_stats=queue_stats,
+        compact_expert_capacity=8,
+        repeat_runs=1,
+    )
+    row = rows[0]
+
+    assert row["w13_payload_send_bytes_per_rank"] == 32.0
+    assert row["w13_lhs_compute_read_bytes_per_rank"] == 96.0
+    assert row["w13_weight_read_bytes_per_rank"] == 192.0
+    assert row["w13_compact_h_store_bytes_per_rank"] == 96.0
+    assert row["w13_estimated_total_bytes_per_rank"] == 416.0
+    assert row["w13_estimated_total_gbps_per_rank"] == 0.416
+    summary = rows[-1]
+    assert summary["h_layout"] == "direct_padded_expert_major"
+    assert summary["compact_h_layout"] == "direct_padded_expert_major"
+    assert summary["compact_expert_capacity"] == 8
+    assert summary["median_w13_estimated_total_bytes_per_rank"] == 416.0
+    assert summary["median_w13_estimated_total_gbps_per_rank"] == 0.416
+    assert summary["passes_w13_216_949_gate"] is False
+
+    diagnostic_rows = source_push_mlp_fwd_bwd_cli._w13_direct_compact_rows(
+        config,
+        timing=timing,
+        queue_stats=queue_stats,
+        compact_expert_capacity=8,
+        repeat_runs=1,
+        mode="forward_w13_direct_compact_store_zero",
+        diagnostic_variant="store_zero",
+    )
+    diagnostic_row = diagnostic_rows[0]
+    diagnostic_summary = diagnostic_rows[-1]
+    assert diagnostic_row["mode"] == "forward_w13_direct_compact_store_zero"
+    assert diagnostic_row["diagnostic_variant"] == "store_zero"
+    assert diagnostic_row["diagnostic"] is True
+    assert diagnostic_summary["diagnostic_variant"] == "store_zero"
+    assert diagnostic_summary["diagnostic"] is True
+
+
+def test_source_push_mlp_decomposed_w13_rows_report_gate_and_h_layout():
+    config = source_push_inbox.PushInboxConfig(
+        ep_size=2,
+        tokens_per_rank=4,
+        hidden_dim=4,
+        intermediate_dim=4,
+        experts_per_rank=2,
+        topk=1,
+        capacity_factor=1.0,
+        block_m=2,
+        block_n=2,
+        block_k=2,
+    )
+    queue_stats = {"dropped_routes": 0}
+
+    row = source_push_mlp_fwd_bwd_cli._decomposed_forward_row(
+        config,
+        queue_stats=queue_stats,
+        repeat_run=0,
+        repeat_runs=1,
+        stage=source_push_mlp_fwd_bwd_cli.FORWARD_STAGE_W13,
+        steady_state_time=1e-9,
+        first_call_time=None,
+        compile_time=None,
+        bytes_per_rank=0,
+        useful_forward_flops=source_push_mlp_fwd_bwd_cli.SOURCE_PUSH_W13_STABLE_BASELINE_TFLOPS_PER_RANK * 1e3,
+        rounded_forward_flops=source_push_mlp_fwd_bwd_cli.SOURCE_PUSH_W13_STABLE_BASELINE_TFLOPS_PER_RANK * 1e3,
+        dropped_routes=0,
+        mode=source_push_mlp_fwd_bwd_cli.MODE_FORWARD_DECOMPOSED,
+    )
+    summary = source_push_mlp_fwd_bwd_cli._summary_row([row])
+
+    assert row["h_layout"] == "flat_expert_major"
+    assert (
+        row["w13_baseline_tflops_per_rank"]
+        == source_push_mlp_fwd_bwd_cli.SOURCE_PUSH_W13_STABLE_BASELINE_TFLOPS_PER_RANK
+    )
+    assert row["passes_w13_216_949_gate"]
+    assert summary["h_layout"] == "flat_expert_major"
+    assert summary["passes_w13_216_949_gate"]
+
+
+def test_source_push_mlp_benchmark_staged_block_stop_stage_reports_reached_stages():
+    stage_sets = {
+        source_push_mlp_fwd_bwd_cli.BACKWARD_STAGE_DY_ROUTE: (source_push_mlp_fwd_bwd_cli.BACKWARD_STAGE_DY_ROUTE,),
+        source_push_mlp_fwd_bwd_cli.BACKWARD_STAGE_W2: (
+            source_push_mlp_fwd_bwd_cli.BACKWARD_STAGE_DY_ROUTE,
+            source_push_mlp_fwd_bwd_cli.BACKWARD_STAGE_W2,
+        ),
+        source_push_mlp_fwd_bwd_cli.BACKWARD_STAGE_W13: (
+            source_push_mlp_fwd_bwd_cli.BACKWARD_STAGE_DY_ROUTE,
+            source_push_mlp_fwd_bwd_cli.BACKWARD_STAGE_W2,
+            source_push_mlp_fwd_bwd_cli.BACKWARD_STAGE_W13,
+        ),
+        source_push_mlp_fwd_bwd_cli.BACKWARD_STAGE_DX_COMBINE: (
+            source_push_mlp_fwd_bwd_cli.BACKWARD_STAGE_DY_ROUTE,
+            source_push_mlp_fwd_bwd_cli.BACKWARD_STAGE_W2,
+            source_push_mlp_fwd_bwd_cli.BACKWARD_STAGE_W13,
+            source_push_mlp_fwd_bwd_cli.BACKWARD_STAGE_DX_COMBINE,
+        ),
+        source_push_mlp_fwd_bwd_cli.BACKWARD_STOP_AFTER_NONE: (
+            source_push_mlp_fwd_bwd_cli.BACKWARD_STAGE_DY_ROUTE,
+            source_push_mlp_fwd_bwd_cli.BACKWARD_STAGE_W2,
+            source_push_mlp_fwd_bwd_cli.BACKWARD_STAGE_W13,
+            source_push_mlp_fwd_bwd_cli.BACKWARD_STAGE_DX_COMBINE,
+        ),
+    }
+
+    for stop_stage, expected in stage_sets.items():
+        assert source_push_mlp_fwd_bwd_cli._backward_staged_block_timed_stages(stop_stage) == expected
+
+
 def test_source_push_profile_defaults_are_copied():
     defaults = source_push_profile_defaults(SOURCE_PUSH_PROFILE_STABLE_216)
     defaults["routing"] = "uniform"
@@ -158,6 +379,173 @@ def test_source_push_profile_returns_typed_config_and_run_settings():
     assert not settings.check
     assert settings.separate_compile
     assert settings.progress_events
+
+
+def test_source_push_direct_compact_h_reference_matches_flat_writer_live_rows():
+    config = source_push_inbox.PushInboxConfig(
+        ep_size=2,
+        entries_per_rank=5,
+        inbox_slots=2,
+        hidden_dim=8,
+        intermediate_dim=8,
+        block_m=4,
+        block_k=4,
+        block_n=4,
+        experts_per_rank=2,
+        send_worker_programs_per_peer=1,
+        worker_programs_per_peer=4,
+        routing="roughly_balanced",
+        routing_seed=3,
+        tokens_per_rank=16,
+        topk=2,
+        capacity_factor=2.0,
+    )
+    raw_inputs = source_push_forward.make_source_push_forward_source_plan_raw_inputs(config)
+    host_inputs = source_push_forward.make_source_push_forward_inputs(
+        config,
+        raw_inputs.x,
+        raw_inputs.selected_experts,
+        raw_inputs.combine_weights,
+        raw_inputs.w_gate_up,
+        raw_inputs.w_down,
+        input_mode="source_push_plan",
+        use_exact_expert_major=False,
+    )
+    compact_capacity = source_push_inbox._compact_h_expert_capacity_from_metadata(
+        config,
+        host_inputs.send_meta,
+        host_inputs.expert_base,
+        host_inputs.src_base_by_expert,
+        use_exact_expert_major=host_inputs.use_exact_expert_major,
+    )
+
+    flat_h = source_push_inbox._reference_h_flat(
+        config,
+        host_inputs.x,
+        host_inputs.send_meta,
+        host_inputs.w_gate_up,
+        host_inputs.expert_base,
+        host_inputs.src_base_by_expert,
+        use_exact_expert_major=host_inputs.use_exact_expert_major,
+    )
+    compact_h = source_push_inbox._reference_h_compact(
+        config,
+        host_inputs.x,
+        host_inputs.send_meta,
+        host_inputs.w_gate_up,
+        host_inputs.expert_base,
+        host_inputs.src_base_by_expert,
+        use_exact_expert_major=host_inputs.use_exact_expert_major,
+        expert_capacity=compact_capacity,
+    )
+
+    assert compact_h.shape == (config.ep_size, config.experts_per_rank, compact_capacity, 2 * config.intermediate_dim)
+    valid_mask = np.asarray(host_inputs.plan.valid_mask)
+    token_ids = np.asarray(host_inputs.plan.token_ids)
+    assert np.any(valid_mask)
+    for src, dst_ord, entry, row in np.argwhere(valid_mask):
+        dst = (src + dst_ord) % config.ep_size
+        expert = host_inputs.send_meta[src, dst_ord, entry, source_push_plan.SOURCE_PUSH_META_LOCAL_EXPERT]
+        flat_row = host_inputs.send_meta[src, dst_ord, entry, source_push_plan.SOURCE_PUSH_META_LOCAL_ROW_START] + row
+        expert_row = flat_row - host_inputs.expert_base[dst, expert]
+        token = token_ids[src, dst_ord, entry, row]
+        assert token >= 0
+        np.testing.assert_allclose(
+            compact_h[dst, expert, expert_row],
+            flat_h[dst, flat_row],
+            atol=0,
+            rtol=0,
+        )
+
+
+def test_source_push_direct_compact_h_pallas_matches_reference_on_h100():
+    _skip_without_h100_devices(2)
+    config = source_push_inbox.PushInboxConfig(
+        ep_size=2,
+        entries_per_rank=8,
+        inbox_slots=2,
+        hidden_dim=128,
+        intermediate_dim=128,
+        block_m=64,
+        block_k=64,
+        block_n=128,
+        n_group=1,
+        n_groups_per_job=1,
+        experts_per_rank=2,
+        send_worker_programs_per_peer=1,
+        worker_programs_per_peer=8,
+        send_pipeline_depth=1,
+        routing="roughly_balanced",
+        routing_seed=7,
+        tokens_per_rank=128,
+        topk=2,
+        capacity_factor=1.25,
+    )
+    raw_inputs = source_push_forward.make_source_push_forward_source_plan_raw_inputs(config)
+    host_inputs = source_push_forward.make_source_push_forward_inputs(
+        config,
+        raw_inputs.x,
+        raw_inputs.selected_experts,
+        raw_inputs.combine_weights,
+        raw_inputs.w_gate_up,
+        raw_inputs.w_down,
+        input_mode="source_push_plan",
+        use_exact_expert_major=False,
+    )
+    compact_capacity = source_push_inbox._compact_h_expert_capacity_from_metadata(
+        config,
+        host_inputs.send_meta,
+        host_inputs.expert_base,
+        host_inputs.src_base_by_expert,
+        use_exact_expert_major=host_inputs.use_exact_expert_major,
+    )
+    mesh = source_push_inbox._make_mesh(config.ep_size)
+    device_inputs = source_push_forward._shard_source_push_forward_inputs(
+        mesh,
+        source_push_forward.device_source_push_forward_inputs_from_host(config, host_inputs),
+    )
+    w13_h_fn = jax.jit(
+        source_push_inbox._sharded_w13_h_compact_kernel(
+            mesh,
+            config,
+            compact_expert_capacity=compact_capacity,
+            use_exact_expert_major=host_inputs.use_exact_expert_major,
+        )
+    )
+    _, observed_h = w13_h_fn(
+        device_inputs.x,
+        device_inputs.send_meta,
+        device_inputs.recv_meta,
+        device_inputs.expert_base,
+        device_inputs.src_base_by_expert,
+        device_inputs.w_gate_up,
+    )
+    source_push_inbox._block_until_ready(observed_h)
+    expected_h = source_push_inbox._reference_h_compact(
+        config,
+        host_inputs.x,
+        host_inputs.send_meta,
+        host_inputs.w_gate_up,
+        host_inputs.expert_base,
+        host_inputs.src_base_by_expert,
+        use_exact_expert_major=host_inputs.use_exact_expert_major,
+        expert_capacity=compact_capacity,
+    )
+
+    valid_mask = np.asarray(host_inputs.plan.valid_mask)
+    assert np.any(valid_mask)
+    observed_host = np.asarray(observed_h, dtype=np.float32)
+    for src, dst_ord, entry, row in np.argwhere(valid_mask):
+        dst = (src + dst_ord) % config.ep_size
+        expert = host_inputs.send_meta[src, dst_ord, entry, source_push_plan.SOURCE_PUSH_META_LOCAL_EXPERT]
+        flat_row = host_inputs.send_meta[src, dst_ord, entry, source_push_plan.SOURCE_PUSH_META_LOCAL_ROW_START] + row
+        expert_row = flat_row - host_inputs.expert_base[dst, expert]
+        np.testing.assert_allclose(
+            observed_host[dst, expert, expert_row],
+            expected_h[dst, expert, expert_row],
+            atol=0.03125,
+            rtol=0,
+        )
 
 
 def test_source_push_profile_exposes_single_stable_candidate():
@@ -1027,17 +1415,8 @@ def test_source_push_forward_inputs_share_one_plan_across_all_stages():
         config.block_m,
         config.hidden_dim,
     )
-    assert inputs.recv_route_weights.shape == (
-        config.ep_size,
-        config.ep_size,
-        config.entries_per_rank,
-        config.block_m,
-    )
-    expected_recv_weights = np.asarray(
-        source_push_plan.source_push_recv_route_weights(jnp.asarray(inputs.route_combine_weights), inputs.plan),
-        dtype=np.float32,
-    )
-    np.testing.assert_allclose(inputs.recv_route_weights, expected_recv_weights, atol=0, rtol=0)
+    assert inputs.h_route_weights.shape == (config.ep_size, config.hidden_rows_per_rank)
+    _assert_h_route_weights_match_live_rows(inputs.h_route_weights, inputs.route_combine_weights, inputs)
     assert expected.shape == (config.ep_size, config.tokens_per_rank, config.hidden_dim)
     assert np.count_nonzero(expected) > 0
     assert int(np.asarray(inputs.plan.token_ids[src, dst_ord, entry, row])) == int(token)
@@ -1086,11 +1465,10 @@ def test_source_push_forward_device_inputs_from_plan_use_dynamic_jax_arrays():
         dynamic_w2,
     )
     expected_packed_x = source_push_plan.pack_source_push_tokens_jax(dynamic_x, host_inputs.plan).astype(jnp.bfloat16)
-    expected_recv_weights = source_push_plan.source_push_recv_route_weights_jax(dynamic_weights, host_inputs.plan)
-    expected_recv_weights = expected_recv_weights.astype(jnp.bfloat16)
+    expected_h_weights = np.asarray(dynamic_weights.astype(jnp.bfloat16))
 
     np.testing.assert_array_equal(np.asarray(device_inputs.x), np.asarray(expected_packed_x))
-    np.testing.assert_array_equal(np.asarray(device_inputs.recv_route_weights), np.asarray(expected_recv_weights))
+    _assert_h_route_weights_match_live_rows(device_inputs.h_route_weights, expected_h_weights, host_inputs)
     np.testing.assert_array_equal(np.asarray(device_inputs.w_gate_up), np.asarray(dynamic_w13.astype(jnp.bfloat16)))
     np.testing.assert_array_equal(np.asarray(device_inputs.w_down), np.asarray(dynamic_w2.astype(jnp.bfloat16)))
 
@@ -1153,11 +1531,10 @@ def test_source_push_forward_plan_inputs_do_not_capture_differentiable_arrays():
         dynamic_w2,
     )
     expected_packed_x = source_push_plan.pack_source_push_tokens_jax(dynamic_x, plan_inputs.plan).astype(jnp.bfloat16)
-    expected_recv_weights = source_push_plan.source_push_recv_route_weights_jax(dynamic_weights, plan_inputs.plan)
-    expected_recv_weights = expected_recv_weights.astype(jnp.bfloat16)
+    expected_h_weights = np.asarray(dynamic_weights.astype(jnp.bfloat16))
 
     np.testing.assert_array_equal(np.asarray(device_inputs.x), np.asarray(expected_packed_x))
-    np.testing.assert_array_equal(np.asarray(device_inputs.recv_route_weights), np.asarray(expected_recv_weights))
+    _assert_h_route_weights_match_live_rows(device_inputs.h_route_weights, expected_h_weights, plan_inputs)
     np.testing.assert_array_equal(np.asarray(device_inputs.w_gate_up), np.asarray(dynamic_w13.astype(jnp.bfloat16)))
     np.testing.assert_array_equal(np.asarray(device_inputs.w_down), np.asarray(dynamic_w2.astype(jnp.bfloat16)))
 
@@ -1673,12 +2050,16 @@ def test_source_push_mlp_backward_decomposed_matches_flat_h_backward():
         w2,
     )
     dy = jnp.linspace(-0.5, 0.7, x.size, dtype=jnp.float32).reshape(x.shape)
+    expert_route_weights = source_push_mlp._source_push_mlp_route_weights_to_all_expert_major(
+        route_table,
+        route_weights,
+    )
 
     expected = source_push_mlp._source_push_moe_mlp_backward_from_h_flat(
         route_table,
         expert_base,
         x,
-        route_weights,
+        expert_route_weights,
         w13,
         w2,
         h_flat,
@@ -1688,7 +2069,7 @@ def test_source_push_mlp_backward_decomposed_matches_flat_h_backward():
         route_table,
         expert_base,
         x,
-        route_weights,
+        expert_route_weights,
         w13,
         w2,
         h_flat,
@@ -1701,6 +2082,110 @@ def test_source_push_mlp_backward_decomposed_matches_flat_h_backward():
     for observed, expected_grad in zip(timing.output, expected, strict=True):
         np.testing.assert_allclose(np.asarray(observed), np.asarray(expected_grad), atol=0, rtol=0)
     assert set(timing.stage_steady_state_times) == set(source_push_mlp_fwd_bwd_cli.BACKWARD_STAGES)
+
+
+def test_source_push_mlp_backward_staged_flat_split_timing_records_w2_substages():
+    config, inputs, _route_table, x, route_weights, w13, w2 = _small_source_push_mlp_gradient_case()
+    route_table = source_push_mlp.source_push_mlp_route_table_from_plan(
+        inputs.plan,
+        src_base_by_expert=inputs.src_base_by_expert,
+    )
+    expert_base = jnp.asarray(inputs.expert_base, dtype=jnp.int32)
+    y, h_flat = source_push_mlp.source_push_moe_mlp_reference_with_h_flat(
+        route_table,
+        expert_base,
+        config.hidden_rows_per_rank,
+        x,
+        route_weights,
+        w13,
+        w2,
+    )
+    h_route_weights = source_push_plan.source_push_h_row_route_weights_jax(
+        route_weights,
+        inputs.plan,
+        inputs.send_meta,
+        inputs.expert_base,
+        inputs.src_base_by_expert,
+        hidden_rows_per_rank=config.hidden_rows_per_rank,
+        use_exact_expert_major=inputs.use_exact_expert_major,
+    )
+    mesh = Mesh(np.asarray(jax.devices()[:1]), (source_push_inbox.AXIS,), axis_types=(AxisType.Explicit,))
+
+    timing = source_push_mlp_fwd_bwd_cli._time_source_push_backward_staged_flat(
+        config,
+        inputs,
+        route_table,
+        expert_base,
+        x,
+        h_route_weights,
+        w13,
+        w2,
+        h_flat,
+        jnp.ones_like(y, dtype=jnp.float32),
+        return_route_indices=jnp.zeros((1,), dtype=jnp.int32),
+        mesh=mesh,
+        warmup=0,
+        steps=1,
+        repeat_runs=1,
+        backward_dy_route_implementation="reference",
+        backward_w2_implementation="reference",
+        backward_w2_split_timing=True,
+        backward_w13_implementation="reference",
+        backward_return_implementation="reference",
+        backward_stop_after_stage=source_push_mlp_fwd_bwd_cli.BACKWARD_STAGE_W2,
+    )
+
+    expected_stages = set(source_push_mlp_fwd_bwd_cli.BACKWARD_STAGES).union(
+        source_push_mlp_fwd_bwd_cli.BACKWARD_W2_SPLIT_STAGES
+    )
+    assert set(timing.stage_steady_state_times) == expected_stages
+    for stage in source_push_mlp_fwd_bwd_cli.BACKWARD_W2_SPLIT_STAGES:
+        assert len(timing.stage_steady_state_times[stage]) == 1
+
+
+def test_source_push_mlp_backward_staged_blocks_uses_compact_h_forward(monkeypatch):
+    config, host_inputs, route_table, x, route_weights, w13, w2 = _small_source_push_mlp_gradient_case()
+    mesh = Mesh(np.asarray(jax.devices()[:1]), (source_push_inbox.AXIS,), axis_types=(AxisType.Explicit,))
+    raw_inputs = source_push_forward.make_source_push_forward_source_plan_raw_inputs(config)
+    inputs = source_push_mlp_fwd_bwd_cli._device_benchmark_inputs(config, raw_inputs, mesh)
+    calls = []
+
+    def fail_flat_forward(*_args, **_kwargs):
+        raise AssertionError("staged-block backward should build residuals from compact H, not flat H")
+
+    def direct_w13_h(_config, _host_inputs, x_arg, _w13_arg, *, mesh):
+        del mesh
+        calls.append(_host_inputs)
+        h_shape = (
+            x_arg.shape[0],
+            config.experts_per_rank,
+            route_table.valid_by_expert.shape[-1],
+            2 * config.intermediate_dim,
+        )
+        return jnp.ones(h_shape, dtype=x_arg.dtype), _host_inputs.plan.dropped_routes
+
+    monkeypatch.setattr(source_push_mlp_fwd_bwd_cli, "source_push_forward_with_h_from_plan", fail_flat_forward)
+    monkeypatch.setattr(source_push_mlp_fwd_bwd_cli, "source_push_w13_h_expert_major_from_plan", direct_w13_h)
+
+    rows = source_push_mlp_fwd_bwd_cli._run_source_push_backward_staged_blocks(
+        config,
+        mesh=mesh,
+        host_inputs=host_inputs,
+        route_table=route_table,
+        inputs=inputs,
+        warmup=0,
+        steps=1,
+        repeat_runs=1,
+        backward_dy_route_implementation="reference",
+        backward_w2_implementation="reference",
+        backward_w13_implementation="reference",
+        backward_return_implementation="reference",
+        backward_stop_after_stage=source_push_mlp_fwd_bwd_cli.BACKWARD_STAGE_DY_ROUTE,
+    )
+
+    assert calls
+    assert rows[-1]["mode"] == source_push_mlp_fwd_bwd_cli.MODE_BACKWARD_STAGED_BLOCKS
+    assert rows[-1]["stage"] == source_push_mlp_fwd_bwd_cli.BACKWARD_STAGE_DY_ROUTE
 
 
 def _naive_source_push_forward(
@@ -2268,7 +2753,9 @@ def test_source_push_mlp_fwd_bwd_cli_passes_profile_defaults(monkeypatch, capsys
         repeat_runs,
         outer_jit,
         separate_compile,
+        use_exact_expert_major,
         debug_exceptions,
+        **_kwargs,
     ):
         calls.append(
             (
@@ -2281,6 +2768,7 @@ def test_source_push_mlp_fwd_bwd_cli_passes_profile_defaults(monkeypatch, capsys
                 repeat_runs,
                 outer_jit,
                 separate_compile,
+                use_exact_expert_major,
                 debug_exceptions,
             )
         )
@@ -2311,6 +2799,7 @@ def test_source_push_mlp_fwd_bwd_cli_passes_profile_defaults(monkeypatch, capsys
             "--outer-jit",
             "false",
             "--separate-compile",
+            "--use-exact-expert-major",
             "--git-sha",
             "abc123",
         ]
@@ -2328,6 +2817,7 @@ def test_source_push_mlp_fwd_bwd_cli_passes_profile_defaults(monkeypatch, capsys
             3,
             "false",
             True,
+            True,
             False,
         )
     ]
@@ -2339,6 +2829,86 @@ def test_source_push_mlp_fwd_bwd_cli_passes_profile_defaults(monkeypatch, capsys
             "mode": "forward_backward",
         }
     ]
+
+
+def test_source_push_mlp_fwd_bwd_cli_runs_refill_sweep_configs(monkeypatch, capsys):
+    calls = []
+
+    def fake_run_source_push_mlp_fwd_bwd(
+        config,
+        *,
+        backends,
+        modes,
+        warmup,
+        steps,
+        repeat_runs,
+        outer_jit,
+        separate_compile,
+        use_exact_expert_major,
+        debug_exceptions,
+        **_kwargs,
+    ):
+        calls.append(
+            (
+                config.inbox_slots,
+                config.n_groups_per_job,
+                config.send_pipeline_depth,
+                config.send_worker_programs_per_peer,
+                config.worker_programs_per_peer,
+            )
+        )
+        return [
+            {
+                "kernel": "source_push_mlp_fwd_bwd",
+                "backend": backends[0],
+                "mode": modes[0],
+                "inbox_slots": config.inbox_slots,
+                "n_groups_per_job": config.n_groups_per_job,
+            }
+        ]
+
+    monkeypatch.setattr(
+        source_push_mlp_fwd_bwd_cli,
+        "run_source_push_mlp_fwd_bwd",
+        fake_run_source_push_mlp_fwd_bwd,
+    )
+
+    source_push_mlp_fwd_bwd_cli.main(
+        [
+            "--backends",
+            "source_push_pallas_mgpu",
+            "--modes",
+            "forward_w13_direct_compact",
+            "--sweep-inbox-slots",
+            "12,24",
+            "--sweep-n-groups-per-job",
+            "2,5",
+            "--send-pipeline-depth",
+            "1",
+            "--send-worker-programs-per-peer",
+            "2",
+            "--worker-programs-per-peer",
+            "32",
+        ]
+    )
+
+    rows = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    assert calls == [
+        (12, 2, 1, 2, 32),
+        (12, 5, 1, 2, 32),
+        (24, 2, 1, 2, 32),
+        (24, 5, 1, 2, 32),
+    ]
+    assert [(row["inbox_slots"], row["n_groups_per_job"]) for row in rows] == [
+        (12, 2),
+        (12, 5),
+        (24, 2),
+        (24, 5),
+    ]
+
+
+def test_source_push_mlp_fwd_bwd_auto_outer_jit_skips_package_private_source_push():
+    assert not source_push_mlp_fwd_bwd_cli._resolve_outer_jit("source_push_pallas_mgpu", "auto")
 
 
 def test_source_push_mlp_fwd_bwd_cli_accepts_forward_decomposed_mode(monkeypatch, capsys):
@@ -2355,6 +2925,7 @@ def test_source_push_mlp_fwd_bwd_cli_accepts_forward_decomposed_mode(monkeypatch
         outer_jit,
         separate_compile,
         debug_exceptions,
+        **_kwargs,
     ):
         calls.append((backends, modes))
         return [
@@ -2410,6 +2981,7 @@ def test_source_push_mlp_fwd_bwd_cli_accepts_raw_token_forward_decomposed_mode(m
         outer_jit,
         separate_compile,
         debug_exceptions,
+        **_kwargs,
     ):
         calls.append((backends, modes))
         return [
@@ -2451,7 +3023,16 @@ def test_source_push_mlp_fwd_bwd_cli_accepts_raw_token_forward_decomposed_mode(m
     ]
 
 
-def test_source_push_mlp_fwd_bwd_cli_accepts_backward_decomposed_mode(monkeypatch, capsys):
+@pytest.mark.parametrize(
+    ("mode", "stage"),
+    [
+        ("forward_pack_total", "pack_inputs"),
+        ("forward_pack_token_pack", "pack_inputs_token_pack"),
+        ("forward_pack_h_route_weights", "pack_inputs_h_route_weights"),
+        ("forward_pack_static_shard", "pack_inputs_static_shard"),
+    ],
+)
+def test_source_push_mlp_fwd_bwd_cli_accepts_forward_pack_probe_modes(monkeypatch, capsys, mode, stage):
     calls = []
 
     def fake_run_source_push_mlp_fwd_bwd(
@@ -2465,6 +3046,64 @@ def test_source_push_mlp_fwd_bwd_cli_accepts_backward_decomposed_mode(monkeypatc
         outer_jit,
         separate_compile,
         debug_exceptions,
+        **_kwargs,
+    ):
+        calls.append((backends, modes))
+        return [
+            {
+                "kernel": "source_push_mlp_fwd_bwd",
+                "backend": backends[0],
+                "mode": modes[0],
+                "stage": stage,
+            }
+        ]
+
+    monkeypatch.setattr(
+        source_push_mlp_fwd_bwd_cli,
+        "run_source_push_mlp_fwd_bwd",
+        fake_run_source_push_mlp_fwd_bwd,
+    )
+
+    source_push_mlp_fwd_bwd_cli.main(
+        [
+            "--backends",
+            "source_push_pallas_mgpu",
+            "--modes",
+            mode,
+            "--git-sha",
+            "abc123",
+        ]
+    )
+
+    rows = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    assert calls == [(("source_push_pallas_mgpu",), (mode,))]
+    assert rows == [
+        {
+            "backend": "source_push_pallas_mgpu",
+            "git_sha": "abc123",
+            "kernel": "source_push_mlp_fwd_bwd",
+            "mode": mode,
+            "stage": stage,
+        }
+    ]
+
+
+@pytest.mark.parametrize("mode", ["backward_decomposed", "backward_staged_flat"])
+def test_source_push_mlp_fwd_bwd_cli_accepts_backward_modes(monkeypatch, capsys, mode):
+    calls = []
+
+    def fake_run_source_push_mlp_fwd_bwd(
+        config,
+        *,
+        backends,
+        modes,
+        warmup,
+        steps,
+        repeat_runs,
+        outer_jit,
+        separate_compile,
+        debug_exceptions,
+        **_kwargs,
     ):
         calls.append((backends, modes))
         return [
@@ -2487,20 +3126,20 @@ def test_source_push_mlp_fwd_bwd_cli_accepts_backward_decomposed_mode(monkeypatc
             "--backends",
             "source_push_pallas_mgpu",
             "--modes",
-            "backward_decomposed",
+            mode,
             "--git-sha",
             "abc123",
         ]
     )
 
     rows = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
-    assert calls == [(("source_push_pallas_mgpu",), ("backward_decomposed",))]
+    assert calls == [(("source_push_pallas_mgpu",), (mode,))]
     assert rows == [
         {
             "backend": "source_push_pallas_mgpu",
             "git_sha": "abc123",
             "kernel": "source_push_mlp_fwd_bwd",
-            "mode": "backward_decomposed",
+            "mode": mode,
             "stage": "dy_route",
         }
     ]

@@ -347,26 +347,50 @@ def source_push_queue_route_weights_jax(
     return _with_source_push_sharding(queue_weights, SOURCE_PUSH_MESH_AXIS, None, None, None)
 
 
-def source_push_recv_route_weights_jax(
+def source_push_h_row_route_weights_jax(
     route_weights: Float[Array, "S T K"],
     plan: SourcePushPlan,
-) -> Float[Array, "Dst Src Q M"]:
-    """Gather route weights in destination receive order using JAX from a fixed plan."""
+    send_meta: Int[Array, "S Dst Q F"] | np.ndarray,
+    expert_base: Int[Array, "Dst E"] | np.ndarray,
+    src_base_by_expert: Int[Array, "Dst S E"] | np.ndarray,
+    *,
+    hidden_rows_per_rank: int,
+    use_exact_expert_major: bool,
+) -> Float[Array, "Dst rows"]:
+    """Gather route weights into the same flat destination row layout as H."""
 
     queue_weights = source_push_queue_route_weights_jax(route_weights, plan)
-    ep_size = plan.assignment_ids.shape[0]
-    recv_by_dst = []
-    for dst in range(ep_size):
-        recv_sources = []
-        for recv_ord in range(ep_size):
-            src = (dst + recv_ord) % ep_size
-            send_dst_ord = dst_ordinal(src, dst, ep_size)
-            recv_sources.append(
-                queue_weights.at[src, send_dst_ord].get(out_sharding=_source_push_out_sharding(None, None))
-            )
-        recv_by_dst.append(jnp.stack(recv_sources, axis=0))
-    recv_weights = jnp.stack(recv_by_dst, axis=0)
-    return _with_source_push_sharding(recv_weights, SOURCE_PUSH_MESH_AXIS, None, None, None)
+    send_meta = jnp.asarray(send_meta, dtype=jnp.int32)
+    expert_base = jnp.asarray(expert_base, dtype=jnp.int32)
+    src_base_by_expert = jnp.asarray(src_base_by_expert, dtype=jnp.int32)
+    valid_mask = jnp.asarray(plan.valid_mask, dtype=jnp.bool_)
+
+    ep_size, _, entries_per_dst, block_m = valid_mask.shape
+    src = jnp.arange(ep_size, dtype=jnp.int32)[:, None, None]
+    dst_ordinal = jnp.arange(ep_size, dtype=jnp.int32)[None, :, None]
+    src = jnp.broadcast_to(src, (ep_size, ep_size, entries_per_dst))
+    dst = (src + dst_ordinal) % ep_size
+
+    metadata_row_start = send_meta[..., SOURCE_PUSH_META_LOCAL_ROW_START]
+    if use_exact_expert_major:
+        expert = jnp.maximum(send_meta[..., SOURCE_PUSH_META_LOCAL_EXPERT], 0)
+        base_row = expert_base.at[dst, expert].get()
+        src_base = src_base_by_expert.at[dst, src, expert].get()
+        row_start = base_row + src_base + metadata_row_start
+    else:
+        row_start = metadata_row_start
+
+    row_offsets = jnp.arange(block_m, dtype=jnp.int32)[None, None, None, :]
+    flat_row = jnp.where(valid_mask, row_start[..., None] + row_offsets, jnp.zeros((), dtype=jnp.int32))
+    flat_dst = jnp.where(valid_mask, jnp.broadcast_to(dst[..., None], flat_row.shape), jnp.zeros((), dtype=jnp.int32))
+    weighted_rows = jnp.where(valid_mask, queue_weights, jnp.zeros((), dtype=queue_weights.dtype))
+    weighted_rows = _with_source_push_sharding(weighted_rows, None, None, None, None)
+    out = jnp.zeros((ep_size, hidden_rows_per_rank), dtype=route_weights.dtype)
+    h_row_weights = out.at[flat_dst, flat_row].add(
+        weighted_rows,
+        out_sharding=_source_push_out_sharding(SOURCE_PUSH_MESH_AXIS, None),
+    )
+    return _with_source_push_sharding(h_row_weights, SOURCE_PUSH_MESH_AXIS, None)
 
 
 def source_push_w2_return(
@@ -626,37 +650,6 @@ def source_push_combine_preweighted(
                     route_slot = route_slots[src, dst_ord, entry, row]
                     route_buffer[src, token, route_slot, :] = return_host[src, dst_ord, entry, row, :]
     return jnp.asarray(np.sum(route_buffer, axis=2))
-
-
-def source_push_recv_route_weights(
-    route_weights: Float[Array, "S T K"],
-    plan: SourcePushPlan,
-) -> Float[Array, "Dst Src Q M"]:
-    """Gather live route weights into destination receive order."""
-
-    route_weights_host = np.asarray(jax.device_get(route_weights))
-    token_ids = np.asarray(jax.device_get(plan.token_ids), dtype=np.int32)
-    route_slots = np.asarray(jax.device_get(plan.route_slots), dtype=np.int32)
-    valid_mask = np.asarray(jax.device_get(plan.valid_mask), dtype=np.bool_)
-    if route_weights_host.ndim != 3:
-        raise ValueError(f"route_weights must have shape [src, token, topk], got {route_weights_host.shape}")
-    if route_weights_host.shape[0] != valid_mask.shape[0]:
-        raise ValueError(
-            f"route_weights source dim {route_weights_host.shape[0]} must match plan ep_size {valid_mask.shape[0]}"
-        )
-
-    recv_weights = np.zeros(
-        (valid_mask.shape[1], valid_mask.shape[0], *valid_mask.shape[2:]), dtype=route_weights_host.dtype
-    )
-    for src in range(valid_mask.shape[0]):
-        for dst_ord in range(valid_mask.shape[1]):
-            dst = (src + dst_ord) % valid_mask.shape[1]
-            recv_ord = recv_src_ordinal(dst, src, valid_mask.shape[1])
-            rows = valid_mask[src, dst_ord]
-            tokens = token_ids[src, dst_ord]
-            slots = route_slots[src, dst_ord]
-            recv_weights[dst, recv_ord][rows] = route_weights_host[src, tokens[rows], slots[rows]]
-    return jnp.asarray(recv_weights)
 
 
 def _expert_capacity_for_source_bases(plan: SourcePushPlan, src_base_by_expert: np.ndarray) -> int:

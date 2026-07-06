@@ -7,6 +7,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
+from jax.sharding import AbstractMesh, AxisType, NamedSharding, PartitionSpec as P, use_abstract_mesh
 
 from levanter.grug._moe.common import _prepare_moe_dispatch_indices_with_assignment_ids
 from levanter.grug._moe.ep_common import _clip_receiver_group_sizes, _expert_prefix_keep_mask
@@ -22,9 +23,8 @@ from levanter.grug._moe.source_push_plan import (
     pack_source_push_tokens_jax,
     source_push_combine,
     source_push_combine_preweighted,
+    source_push_h_row_route_weights_jax,
     source_push_queue_route_weights_jax,
-    source_push_recv_route_weights,
-    source_push_recv_route_weights_jax,
     source_push_w13_h,
     source_push_w2_from_h_return,
     recv_src_ordinal,
@@ -32,6 +32,10 @@ from levanter.grug._moe.source_push_plan import (
     source_push_route_buffer,
     source_push_source_padded_row_bases,
     source_push_w2_return,
+)
+from levanter.grug._moe.source_push_token_pack import (
+    SourcePushTokenPackPallasBlockSizes,
+    source_push_pack_tokens_pallas_mgpu,
 )
 
 
@@ -54,6 +58,23 @@ def _small_routing_inputs() -> tuple[jax.Array, jax.Array]:
 
 def _expert_major_row_count(expert_base: np.ndarray, rows_per_local_expert: np.ndarray) -> int:
     return int(np.max(expert_base + rows_per_local_expert))
+
+
+def _source_padded_h_row_metadata(plan):
+    rounded_counts, expert_base, src_base_by_expert = source_push_source_padded_row_bases(plan, BLOCK_M)
+    send_meta = np.asarray(plan.send_meta).copy()
+    local_experts = np.asarray(plan.local_experts)
+    local_row_starts = np.asarray(plan.local_row_starts)
+    valid_entries = send_meta[..., SOURCE_PUSH_META_VALID_ROWS] > 0
+    for src, dst_ord, entry in np.argwhere(valid_entries):
+        dst = (src + dst_ord) % EP_SIZE
+        expert = local_experts[src, dst_ord, entry]
+        send_meta[src, dst_ord, entry, SOURCE_PUSH_META_LOCAL_ROW_START] = (
+            expert_base[dst, expert] + src_base_by_expert[dst, src, expert] + local_row_starts[src, dst_ord, entry]
+        )
+    rows_per_local_expert = np.sum(rounded_counts, axis=0, dtype=np.int32)
+    hidden_rows = _expert_major_row_count(expert_base, rows_per_local_expert)
+    return send_meta, expert_base, src_base_by_expert, hidden_rows
 
 
 def test_source_push_plan_queues_source_assignments_in_destination_expert_order():
@@ -250,16 +271,153 @@ def test_source_push_plan_jax_pack_and_route_weight_gathers_match_host_plan():
     observed_queue_weights = jax.jit(lambda weights_arg: source_push_queue_route_weights_jax(weights_arg, plan))(
         combine_weights
     )
-    observed_recv_weights = jax.jit(lambda weights_arg: source_push_recv_route_weights_jax(weights_arg, plan))(
-        combine_weights
-    )
 
     np.testing.assert_array_equal(np.asarray(observed_packed), np.asarray(pack_source_push_tokens(x, plan)))
     np.testing.assert_array_equal(np.asarray(observed_queue_weights), np.asarray(plan.combine_weights))
-    np.testing.assert_array_equal(
-        np.asarray(observed_recv_weights),
-        np.asarray(source_push_recv_route_weights(combine_weights, plan)),
+
+
+def test_source_push_pallas_token_pack_matches_jax_pack_in_interpret_mode():
+    selected_experts, combine_weights = _small_routing_inputs()
+    plan = build_source_push_plan(
+        selected_experts,
+        combine_weights,
+        ep_size=EP_SIZE,
+        experts_per_rank=EXPERTS_PER_RANK,
+        block_m=BLOCK_M,
+        capacity_factor=2.0,
     )
+    x = jnp.arange(EP_SIZE * selected_experts.shape[1] * 8, dtype=jnp.float32).reshape(EP_SIZE, -1, 8)
+
+    observed = source_push_pack_tokens_pallas_mgpu(
+        x,
+        plan,
+        block_sizes=SourcePushTokenPackPallasBlockSizes(hidden_block=4),
+        interpret=True,
+    )
+    expected = pack_source_push_tokens_jax(x, plan).astype(jnp.bfloat16)
+
+    np.testing.assert_array_equal(np.asarray(observed), np.asarray(expected))
+
+
+def test_source_push_h_row_route_weights_match_exact_expert_major_rows():
+    selected_experts, combine_weights = _small_routing_inputs()
+    plan = build_source_push_plan(
+        selected_experts,
+        combine_weights,
+        ep_size=EP_SIZE,
+        experts_per_rank=EXPERTS_PER_RANK,
+        block_m=BLOCK_M,
+        capacity_factor=2.0,
+    )
+    hidden_rows = _expert_major_row_count(np.asarray(plan.expert_base), np.asarray(plan.rows_per_local_expert))
+
+    h_route_weights = np.asarray(
+        source_push_h_row_route_weights_jax(
+            combine_weights,
+            plan,
+            plan.send_meta,
+            plan.expert_base,
+            plan.src_base_by_expert,
+            hidden_rows_per_rank=hidden_rows,
+            use_exact_expert_major=True,
+        )
+    )
+
+    assignment_ids = np.asarray(plan.assignment_ids)
+    token_ids = np.asarray(plan.token_ids)
+    route_slots = np.asarray(plan.route_slots)
+    valid_mask = np.asarray(plan.valid_mask)
+    local_experts = np.asarray(plan.local_experts)
+    local_row_starts = np.asarray(plan.local_row_starts)
+    expert_base = np.asarray(plan.expert_base)
+    src_base_by_expert = np.asarray(plan.src_base_by_expert)
+    route_weights = np.asarray(combine_weights)
+    for src, dst_ord, entry, row in np.argwhere(valid_mask):
+        dst = (src + dst_ord) % EP_SIZE
+        expert = local_experts[src, dst_ord, entry]
+        expert_row = src_base_by_expert[dst, src, expert] + local_row_starts[src, dst_ord, entry] + row
+        flat_row = expert_base[dst, expert] + expert_row
+        assignment = assignment_ids[src, dst_ord, entry, row]
+        token = token_ids[src, dst_ord, entry, row]
+        route_slot = route_slots[src, dst_ord, entry, row]
+        assert token == assignment // combine_weights.shape[-1]
+        assert route_slot == assignment % combine_weights.shape[-1]
+        np.testing.assert_array_equal(h_route_weights[dst, flat_row], route_weights[src, token, route_slot])
+
+
+def test_source_push_h_row_route_weights_match_source_padded_metadata_rows():
+    selected_experts, combine_weights = _small_routing_inputs()
+    plan = build_source_push_plan(
+        selected_experts,
+        combine_weights,
+        ep_size=EP_SIZE,
+        experts_per_rank=EXPERTS_PER_RANK,
+        block_m=BLOCK_M,
+        capacity_factor=2.0,
+    )
+    send_meta, expert_base, src_base_by_expert, hidden_rows = _source_padded_h_row_metadata(plan)
+
+    h_route_weights = np.asarray(
+        source_push_h_row_route_weights_jax(
+            combine_weights,
+            plan,
+            send_meta,
+            expert_base,
+            src_base_by_expert,
+            hidden_rows_per_rank=hidden_rows,
+            use_exact_expert_major=False,
+        )
+    )
+
+    token_ids = np.asarray(plan.token_ids)
+    route_slots = np.asarray(plan.route_slots)
+    route_weights = np.asarray(combine_weights)
+    for src, dst_ord, entry, row in np.argwhere(np.asarray(plan.valid_mask)):
+        dst = (src + dst_ord) % EP_SIZE
+        flat_row = send_meta[src, dst_ord, entry, SOURCE_PUSH_META_LOCAL_ROW_START] + row
+        token = token_ids[src, dst_ord, entry, row]
+        route_slot = route_slots[src, dst_ord, entry, row]
+        np.testing.assert_array_equal(h_route_weights[dst, flat_row], route_weights[src, token, route_slot])
+
+
+def test_source_push_h_row_route_weights_lowers_from_source_sharded_route_weights():
+    selected_experts, combine_weights = _small_routing_inputs()
+    plan = build_source_push_plan(
+        selected_experts,
+        combine_weights,
+        ep_size=EP_SIZE,
+        experts_per_rank=EXPERTS_PER_RANK,
+        block_m=BLOCK_M,
+        capacity_factor=2.0,
+    )
+    send_meta, expert_base, src_base_by_expert, hidden_rows = _source_padded_h_row_metadata(plan)
+    mesh = AbstractMesh(
+        axis_sizes=(EP_SIZE,),
+        axis_names=("expert",),
+        axis_types=(AxisType.Explicit,),
+    )
+
+    def h_row_weights(weights_arg):
+        return source_push_h_row_route_weights_jax(
+            weights_arg,
+            plan,
+            send_meta,
+            expert_base,
+            src_base_by_expert,
+            hidden_rows_per_rank=hidden_rows,
+            use_exact_expert_major=False,
+        )
+
+    with use_abstract_mesh(mesh):
+        source_sharded_weights = jax.ShapeDtypeStruct(
+            combine_weights.shape,
+            combine_weights.dtype,
+            sharding=NamedSharding(mesh, P("expert", None, None)),
+        )
+        out_shape = jax.eval_shape(h_row_weights, source_sharded_weights)
+        assert out_shape.shape == (EP_SIZE, hidden_rows)
+        assert out_shape.sharding.spec == P("expert", None)
+        jax.jit(h_row_weights).trace(source_sharded_weights).lower(lowering_platforms=("cpu",))
 
 
 def test_source_push_w2_return_preserves_queue_identity_from_exact_expert_major_hidden():
@@ -418,7 +576,6 @@ def test_source_push_h_forward_applies_route_weights_before_w2():
     h = source_push_w13_h(packed_x, w_gate_up, plan)
     return_y = source_push_w2_from_h_return(h, route_weights, w_down, plan)
     observed = np.asarray(source_push_combine_preweighted(return_y, plan), dtype=np.float32)
-    recv_route_weights = np.asarray(source_push_recv_route_weights(route_weights, plan), dtype=np.float32)
 
     expected = np.zeros((EP_SIZE, selected_experts.shape[1], x.shape[-1]), dtype=np.float32)
     selected_host = np.asarray(selected_experts)
@@ -447,13 +604,12 @@ def test_source_push_h_forward_applies_route_weights_before_w2():
     h_host = np.asarray(h, dtype=np.float32)
     for src, dst_ord, entry, row in np.argwhere(valid_mask):
         dst = (src + dst_ord) % EP_SIZE
-        recv_ord = recv_src_ordinal(dst, src, EP_SIZE)
         expert = local_experts[src, dst_ord, entry]
         expert_row = src_base_by_expert[dst, src, expert] + local_row_starts[src, dst_ord, entry] + row
         assignment = assignment_ids[src, dst_ord, entry, row]
         token = assignment // selected_experts.shape[2]
         route_slot = assignment % selected_experts.shape[2]
-        assert recv_route_weights[dst, recv_ord, entry, row] == route_weights_host[src, token, route_slot]
+        assert np.asarray(plan.combine_weights)[src, dst_ord, entry, row] == route_weights_host[src, token, route_slot]
         np.testing.assert_allclose(
             h_host[dst, expert, expert_row],
             x_host[src, token] @ w_gate_up_host[dst, expert],

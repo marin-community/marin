@@ -20,6 +20,12 @@ import levanter.grug._moe.source_push_forward as source_push_forward
 from levanter.grug._moe.source_push_forward import make_source_push_forward_source_plan_raw_inputs
 import levanter.grug._moe.source_push_inbox as source_push_inbox
 from levanter.grug._moe.source_push_inbox import PushInboxConfig
+from levanter.grug._moe.source_push_inbox_profiles import (
+    SOURCE_PUSH_PROFILE_STABLE_216,
+    source_push_profile_defaults,
+)
+import levanter.grug._moe.source_push_mlp as source_push_mlp
+import levanter.grug._moe.source_push_public as source_push_public
 import levanter.grug._moe.source_push_w2_return as source_push_w2_return
 from levanter.grug._moe.sonic import sonic_gather_sum
 from levanter.grug.grug_moe import (
@@ -229,6 +235,344 @@ def test_moe_mlp_source_push_backend_requires_concrete_expert_mesh():
             implementation="pallas_mgpu_source_push",
             mesh=None,
         )
+
+
+def test_moe_mlp_source_push_backend_uses_mlp_level_boundary(monkeypatch):
+    devices = np.asarray([jax.devices()[0], jax.devices()[0]], dtype=object)
+    mesh = Mesh(
+        devices,
+        ("expert",),
+        axis_types=(AxisType.Explicit,),
+    )
+    x = jnp.arange(4 * 128, dtype=jnp.float32).reshape(4, 128)
+    selected_experts = jnp.array([[0], [1], [0], [1]], dtype=jnp.int32)
+    combine_weights = jnp.array([[0.25], [0.5], [0.75], [0.125]], dtype=jnp.float32)
+    w_gate_up = jnp.arange(2 * 128 * 256, dtype=jnp.float32).reshape(2, 128, 256)
+    w_down = jnp.arange(2 * 128 * 128, dtype=jnp.float32).reshape(2, 128, 128)
+    calls = {}
+
+    monkeypatch.setattr(source_push_public, "_validate_source_push_public_request", lambda **_: None)
+    monkeypatch.setattr(source_push_public.jax, "device_put", lambda value, _sharding=None: value)
+
+    def fake_source_push_moe_mlp_from_plan(
+        config,
+        host_inputs,
+        route_table,
+        x_source,
+        route_weights,
+        w13,
+        w2,
+        *,
+        implementation,
+        execution_mode,
+        mesh,
+    ):
+        calls["config"] = config
+        calls["host_inputs"] = host_inputs
+        calls["route_table"] = route_table
+        calls["x_source"] = x_source
+        calls["route_weights"] = route_weights
+        calls["w13"] = w13
+        calls["w2"] = w2
+        calls["implementation"] = implementation
+        calls["execution_mode"] = execution_mode
+        calls["mesh"] = mesh
+        return x_source + 1.0, jnp.array(0, dtype=jnp.int32)
+
+    monkeypatch.setattr(source_push_public, "source_push_moe_mlp_from_plan", fake_source_push_moe_mlp_from_plan)
+
+    out, dropped = moe_mlp(
+        jax.device_put(x, NamedSharding(mesh, P("expert", None))),
+        jax.device_put(selected_experts, NamedSharding(mesh, P("expert", None))),
+        jax.device_put(combine_weights, NamedSharding(mesh, P("expert", None))),
+        jax.device_put(w_gate_up, NamedSharding(mesh, P("expert", None, None))),
+        jax.device_put(w_down, NamedSharding(mesh, P("expert", None, None))),
+        implementation="pallas_mgpu_source_push",
+        mesh=mesh,
+        capacity_factor=2.0,
+        report_capacity_overflow=True,
+    )
+
+    assert calls["config"].ep_size == 2
+    assert calls["config"].experts_per_rank == 1
+    assert calls["host_inputs"].plan.assignment_ids.shape == (
+        2,
+        2,
+        calls["config"].entries_per_rank,
+        calls["config"].block_m,
+    )
+    assert calls["route_table"].ep_size == 2
+    assert calls["route_table"].experts_per_rank == 1
+    assert calls["route_table"].source_rank.shape[0] == int(jnp.sum(calls["host_inputs"].plan.valid_mask))
+    assert calls["implementation"] == source_push_public.SOURCE_PUSH_MLP_IMPLEMENTATION_PALLAS_MGPU
+    assert calls["execution_mode"] == source_push_public.FORWARD_EXECUTION_STAGED_HOST_SYNC
+    assert calls["mesh"] is mesh
+    np.testing.assert_array_equal(np.asarray(calls["x_source"]), np.asarray(x.reshape(2, 2, 128)))
+    np.testing.assert_array_equal(np.asarray(calls["route_weights"]), np.asarray(combine_weights.reshape(2, 2, 1)))
+    np.testing.assert_array_equal(np.asarray(calls["w13"]), np.asarray(w_gate_up.reshape(2, 1, 128, 256)))
+    np.testing.assert_array_equal(np.asarray(calls["w2"]), np.asarray(w_down.reshape(2, 1, 128, 128)))
+    np.testing.assert_array_equal(np.asarray(out), np.asarray(x + 1.0))
+    assert int(dropped) == 0
+
+
+def test_moe_mlp_source_push_public_config_uses_stable_profile_tunables():
+    ep_size = 8
+    tokens_per_rank = 16
+    topk = 4
+    experts_per_rank = 32
+    selected_experts = jnp.arange(ep_size * tokens_per_rank * topk, dtype=jnp.int32).reshape(
+        ep_size, tokens_per_rank, topk
+    ) % (ep_size * experts_per_rank)
+
+    config = source_push_public._source_push_config_from_public_inputs(
+        selected_experts,
+        ep_size=ep_size,
+        tokens_per_rank=tokens_per_rank,
+        topk=topk,
+        hidden_dim=2560,
+        intermediate_dim=1280,
+        experts_per_rank=experts_per_rank,
+        capacity_factor=1.25,
+    )
+    defaults = source_push_profile_defaults(SOURCE_PUSH_PROFILE_STABLE_216)
+
+    config.validate()
+    assert config.entries_per_rank > 0
+    assert config.inbox_slots == min(defaults["inbox_slots"], config.entries_per_rank)
+    assert config.block_m == defaults["block_m"]
+    assert config.block_n == defaults["block_n"]
+    assert config.block_k == defaults["block_k"]
+    assert config.n_group == defaults["n_group"]
+    assert config.n_groups_per_job == defaults["n_groups_per_job"]
+    assert config.send_worker_programs_per_peer == defaults["send_worker_programs_per_peer"]
+    assert config.worker_programs_per_peer == defaults["worker_programs_per_peer"]
+    assert config.send_pipeline_depth == defaults["send_pipeline_depth"]
+    assert config.routing == defaults["routing"]
+
+
+def test_moe_mlp_source_push_public_config_rejects_traced_selected_experts():
+    selected_experts = jnp.array([[[0], [1]], [[1], [0]]], dtype=jnp.int32)
+
+    def entries_per_rank(selected):
+        config = source_push_public._source_push_config_from_public_inputs(
+            selected,
+            ep_size=2,
+            tokens_per_rank=2,
+            topk=1,
+            hidden_dim=128,
+            intermediate_dim=128,
+            experts_per_rank=1,
+            capacity_factor=2.0,
+        )
+        return jnp.asarray(config.entries_per_rank, dtype=jnp.int32)
+
+    with pytest.raises(ValueError, match="selected_experts must be concrete/static"):
+        jax.jit(entries_per_rank)(selected_experts)
+
+
+def test_moe_mlp_source_push_public_adapter_builds_plan_with_stable_profile_config(monkeypatch):
+    devices = np.asarray([jax.devices()[0], jax.devices()[0]], dtype=object)
+    mesh = Mesh(devices, ("expert",), axis_types=(AxisType.Explicit,))
+    x = jnp.arange(4 * 128, dtype=jnp.float32).reshape(4, 128)
+    selected_experts = jnp.array([[0], [1], [0], [1]], dtype=jnp.int32)
+    combine_weights = jnp.ones((4, 1), dtype=jnp.float32)
+    w_gate_up = jnp.arange(2 * 128 * 256, dtype=jnp.float32).reshape(2, 128, 256)
+    w_down = jnp.arange(2 * 128 * 128, dtype=jnp.float32).reshape(2, 128, 128)
+    defaults = source_push_profile_defaults(SOURCE_PUSH_PROFILE_STABLE_216)
+    calls = {}
+
+    monkeypatch.setattr(source_push_public, "_validate_source_push_public_request", lambda **_: None)
+    monkeypatch.setattr(source_push_public.jax, "device_put", lambda value, _sharding=None: value)
+
+    def fake_source_push_moe_mlp_from_plan(
+        config,
+        host_inputs,
+        route_table,
+        x_source,
+        route_weights,
+        w13,
+        w2,
+        *,
+        implementation,
+        execution_mode,
+        mesh,
+    ):
+        config.validate()
+        calls["config"] = config
+        calls["host_inputs"] = host_inputs
+        calls["route_table"] = route_table
+        calls["x_source"] = x_source
+        calls["route_weights"] = route_weights
+        calls["w13"] = w13
+        calls["w2"] = w2
+        calls["implementation"] = implementation
+        calls["execution_mode"] = execution_mode
+        calls["mesh"] = mesh
+        return x_source + 2.0, jnp.array(0, dtype=jnp.int32)
+
+    monkeypatch.setattr(source_push_public, "source_push_moe_mlp_from_plan", fake_source_push_moe_mlp_from_plan)
+
+    out, dropped = source_push_public.moe_mlp_ep_source_push_mgpu(
+        x,
+        selected_experts,
+        combine_weights,
+        w_gate_up,
+        w_down,
+        activation=ActivationFunctionEnum.silu,
+        mesh=mesh,
+        batch_spec=P("expert", None),
+        capacity_factor=1.25,
+    )
+
+    config = calls["config"]
+    assert config.ep_size == 2
+    assert config.tokens_per_rank == 2
+    assert config.topk == 1
+    assert config.block_m == defaults["block_m"]
+    assert config.block_n == defaults["block_n"]
+    assert config.block_k == defaults["block_k"]
+    assert config.send_worker_programs_per_peer == defaults["send_worker_programs_per_peer"]
+    assert config.worker_programs_per_peer == defaults["worker_programs_per_peer"]
+    assert config.send_pipeline_depth == defaults["send_pipeline_depth"]
+    assert config.routing == defaults["routing"]
+    assert calls["host_inputs"].plan.assignment_ids.shape == (2, 2, config.entries_per_rank, config.block_m)
+    assert calls["route_table"].ep_size == 2
+    assert calls["route_table"].experts_per_rank == 1
+    assert calls["implementation"] == source_push_public.SOURCE_PUSH_MLP_IMPLEMENTATION_PALLAS_MGPU
+    assert calls["execution_mode"] == source_push_public.FORWARD_EXECUTION_STAGED_HOST_SYNC
+    assert calls["mesh"] is mesh
+    np.testing.assert_array_equal(np.asarray(calls["x_source"]), np.asarray(x.reshape(2, 2, 128)))
+    np.testing.assert_array_equal(np.asarray(calls["route_weights"]), np.asarray(combine_weights.reshape(2, 2, 1)))
+    np.testing.assert_array_equal(np.asarray(calls["w13"]), np.asarray(w_gate_up.reshape(2, 1, 128, 256)))
+    np.testing.assert_array_equal(np.asarray(calls["w2"]), np.asarray(w_down.reshape(2, 1, 128, 128)))
+    np.testing.assert_array_equal(np.asarray(out), np.asarray(x + 2.0))
+    assert int(dropped) == 0
+
+
+def test_moe_mlp_source_push_public_adapter_preserves_mlp_gradients(monkeypatch):
+    ep_size = 2
+    tokens_per_rank = 2
+    hidden_dim = 128
+    intermediate_dim = 128
+    experts_per_rank = 1
+    topk = 1
+    devices = np.asarray([jax.devices()[0], jax.devices()[0]], dtype=object)
+    mesh = Mesh(devices, ("expert",), axis_types=(AxisType.Explicit,))
+    x = jnp.linspace(-0.3, 0.4, ep_size * tokens_per_rank * hidden_dim, dtype=jnp.float32).reshape(
+        ep_size * tokens_per_rank,
+        hidden_dim,
+    )
+    selected_experts = jnp.array([[0], [1], [0], [1]], dtype=jnp.int32)
+    combine_weights = jnp.array([[0.50], [0.75], [0.25], [0.60]], dtype=jnp.float32)
+    w_gate_up = jnp.linspace(
+        -0.4,
+        0.5,
+        ep_size * experts_per_rank * hidden_dim * 2 * intermediate_dim,
+        dtype=jnp.float32,
+    ).reshape(ep_size * experts_per_rank, hidden_dim, 2 * intermediate_dim)
+    w_down = jnp.linspace(
+        -0.2,
+        0.3,
+        ep_size * experts_per_rank * intermediate_dim * hidden_dim,
+        dtype=jnp.float32,
+    ).reshape(ep_size * experts_per_rank, intermediate_dim, hidden_dim)
+    cotangent = jnp.linspace(-0.5, 0.7, x.size, dtype=jnp.float32).reshape(x.shape)
+    capacity_factor = 2.0
+
+    monkeypatch.setattr(source_push_public, "_validate_source_push_public_request", lambda **_: None)
+    monkeypatch.setattr(source_push_public.jax, "device_put", lambda value, _sharding=None: value)
+
+    def reference_source_push_moe_mlp_from_plan(
+        config,
+        host_inputs,
+        route_table,
+        x_source,
+        route_weights,
+        w13,
+        w2,
+        *,
+        implementation,
+        execution_mode,
+        mesh,
+    ):
+        del implementation, execution_mode, mesh
+        return source_push_mlp.source_push_moe_mlp_from_plan(
+            config,
+            host_inputs,
+            route_table,
+            x_source,
+            route_weights,
+            w13,
+            w2,
+            implementation=source_push_mlp.SOURCE_PUSH_MLP_IMPLEMENTATION_REFERENCE,
+        )
+
+    monkeypatch.setattr(
+        source_push_public,
+        "source_push_moe_mlp_from_plan",
+        reference_source_push_moe_mlp_from_plan,
+    )
+
+    selected_source = selected_experts.reshape(ep_size, tokens_per_rank, topk)
+    config, plan = source_push_public._source_push_config_and_plan_from_public_inputs(
+        selected_source,
+        ep_size=ep_size,
+        tokens_per_rank=tokens_per_rank,
+        topk=topk,
+        hidden_dim=hidden_dim,
+        intermediate_dim=intermediate_dim,
+        experts_per_rank=experts_per_rank,
+        capacity_factor=capacity_factor,
+    )
+    host_inputs = source_push_forward.make_source_push_forward_plan_inputs_from_plan(config, plan)
+    route_table = source_push_mlp.source_push_mlp_route_table_from_plan(
+        host_inputs.plan,
+        src_base_by_expert=host_inputs.src_base_by_expert,
+    )
+    assert int(plan.dropped_routes) == 0
+
+    def reference_loss(x_arg, combine_weights_arg, w_gate_up_arg, w_down_arg):
+        out_source = source_push_mlp.source_push_moe_mlp_reference(
+            route_table,
+            x_arg.reshape(ep_size, tokens_per_rank, hidden_dim),
+            combine_weights_arg.reshape(ep_size, tokens_per_rank, topk),
+            w_gate_up_arg.reshape(ep_size, experts_per_rank, hidden_dim, 2 * intermediate_dim),
+            w_down_arg.reshape(ep_size, experts_per_rank, intermediate_dim, hidden_dim),
+        )
+        return jnp.sum(out_source.reshape(x.shape) * cotangent)
+
+    def public_loss(x_arg, combine_weights_arg, w_gate_up_arg, w_down_arg):
+        out, dropped = moe_mlp(
+            x_arg,
+            selected_experts,
+            combine_weights_arg,
+            w_gate_up_arg,
+            w_down_arg,
+            activation=ActivationFunctionEnum.silu,
+            implementation="pallas_mgpu_source_push",
+            mesh=mesh,
+            capacity_factor=capacity_factor,
+            report_capacity_overflow=True,
+        )
+        return jnp.sum(out * cotangent) + dropped.astype(jnp.float32) * 0.0
+
+    reference_value, reference_grads = jax.value_and_grad(reference_loss, argnums=(0, 1, 2, 3))(
+        x,
+        combine_weights,
+        w_gate_up,
+        w_down,
+    )
+    public_value, public_grads = jax.value_and_grad(public_loss, argnums=(0, 1, 2, 3))(
+        x,
+        combine_weights,
+        w_gate_up,
+        w_down,
+    )
+
+    np.testing.assert_allclose(np.asarray(public_value), np.asarray(reference_value), atol=1e-6, rtol=1e-6)
+    for observed, expected in zip(public_grads, reference_grads, strict=True):
+        np.testing.assert_allclose(np.asarray(observed), np.asarray(expected), atol=1e-5, rtol=1e-5)
+    assert float(jnp.max(jnp.abs(public_grads[1]))) > 0.0
 
 
 def test_moe_mlp_default_matches_explicit_ring_without_ep_axis():
@@ -1082,6 +1426,89 @@ def test_source_push_forward_handles_tail_blocks_empty_experts_topk4_on_h100():
         assert int(jax.device_get(baseline_dropped)) == 0
         assert float(np.max(diff)) <= 0.03125
         assert float(np.mean(diff)) <= 0.002
+
+
+def test_source_push_mlp_from_plan_pallas_custom_vjp_matches_reference_on_h100():
+    _skip_without_h100x8()
+
+    config = PushInboxConfig(
+        ep_size=8,
+        entries_per_rank=2,
+        inbox_slots=1,
+        hidden_dim=128,
+        intermediate_dim=128,
+        block_m=64,
+        block_n=128,
+        block_k=64,
+        n_group=1,
+        n_groups_per_job=1,
+        experts_per_rank=2,
+        send_worker_programs_per_peer=1,
+        worker_programs_per_peer=8,
+        send_pipeline_depth=1,
+        routing="balanced",
+        tokens_per_rank=64,
+        topk=2,
+        capacity_factor=1.25,
+    )
+    raw_inputs = make_source_push_forward_source_plan_raw_inputs(config)
+    host_inputs = source_push_forward.make_source_push_forward_plan_inputs(config, raw_inputs.selected_experts)
+    route_table = source_push_mlp.source_push_mlp_route_table_from_plan(
+        host_inputs.plan,
+        src_base_by_expert=host_inputs.src_base_by_expert,
+    )
+    assert int(jax.device_get(host_inputs.plan.dropped_routes)) == 0
+
+    x = jnp.asarray(raw_inputs.x, dtype=jnp.bfloat16)
+    route_weights = jnp.asarray(raw_inputs.combine_weights, dtype=jnp.bfloat16)
+    w13 = jnp.asarray(raw_inputs.w_gate_up, dtype=jnp.bfloat16)
+    w2 = jnp.asarray(raw_inputs.w_down, dtype=jnp.bfloat16)
+    cotangent = jnp.linspace(-0.25, 0.35, x.size, dtype=jnp.float32).reshape(x.shape)
+    mesh = Mesh(
+        np.asarray(jax.devices()[: config.ep_size]),
+        ("expert",),
+        axis_types=(AxisType.Explicit,),
+    )
+
+    def loss(implementation: source_push_mlp.SourcePushMlpImplementation, *, mesh_arg: Mesh | None):
+        def _loss(x_arg, route_weights_arg, w13_arg, w2_arg):
+            y, dropped_routes = source_push_mlp.source_push_moe_mlp_from_plan(
+                config,
+                host_inputs,
+                route_table,
+                x_arg,
+                route_weights_arg,
+                w13_arg,
+                w2_arg,
+                implementation=implementation,
+                mesh=mesh_arg,
+            )
+            assert int(jax.device_get(dropped_routes)) == 0
+            return jnp.sum(y.astype(jnp.float32) * cotangent)
+
+        return _loss
+
+    with jax.set_mesh(mesh):
+        reference_value, reference_grads = jax.value_and_grad(
+            loss(source_push_mlp.SOURCE_PUSH_MLP_IMPLEMENTATION_REFERENCE, mesh_arg=None),
+            argnums=(0, 1, 2, 3),
+        )(x, route_weights, w13, w2)
+        pallas_value, pallas_grads = jax.value_and_grad(
+            loss(source_push_mlp.SOURCE_PUSH_MLP_IMPLEMENTATION_PALLAS_MGPU, mesh_arg=mesh),
+            argnums=(0, 1, 2, 3),
+        )(x, route_weights, w13, w2)
+
+    np.testing.assert_allclose(
+        np.asarray(pallas_value, dtype=np.float32),
+        np.asarray(reference_value, dtype=np.float32),
+        atol=5e-2,
+        rtol=5e-2,
+    )
+    for observed, expected in zip(pallas_grads, reference_grads, strict=True):
+        diff = np.abs(np.asarray(observed, dtype=np.float32) - np.asarray(expected, dtype=np.float32))
+        assert float(np.max(diff)) <= 0.25
+        assert float(np.mean(diff)) <= 0.02
+    assert float(jnp.max(jnp.abs(pallas_grads[1].astype(jnp.float32)))) > 0.0
 
 
 def test_moe_mlp_runs_with_ep_axis_when_available():
