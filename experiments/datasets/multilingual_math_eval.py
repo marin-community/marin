@@ -4,9 +4,9 @@
 """Held-out multilingual (de/ru/zh) and math validation subsets for the tokenizer soak.
 
 :mod:`experiments.datasets.uncheatable` covers the English + code domains of the
-tokenizer bake-off. The 24h tokenizer soak (:mod:`experiments.grug.moe.launch_tokenizer_soak`)
+tokenizer bake-off. The 24h tokenizer soak (:mod:`experiments.tokenization.train_model`)
 also trains on German, Russian, and Chinese Wikipedia plus FineMath
-(:data:`~experiments.grug.moe.launch_tokenizer_soak.SOAK_SOURCES`), so its BPB eval needs
+(:data:`~experiments.tokenization.train_model.SOAK_SOURCES`), so its BPB eval needs
 held-out data in those domains too, disjoint from what the soak trains on:
 
 - ``ml-de`` / ``ml-ru`` / ``ml-zh``: one parquet shard each from
@@ -70,7 +70,7 @@ def multilingual_math_validation(arm_name: str, tokenizer: str) -> dict[str, Art
     """Held-out ml-de/ml-ru/ml-zh (Wikisource) + math (MATH test) validation, tokenized with ``tokenizer``.
 
     Named per arm for the same reason as
-    :func:`experiments.grug.moe.launch_tokenizer_bakeoff.bakeoff_validation`: the artifact store
+    :func:`experiments.tokenization.proxy_ladder.bakeoff_validation`: the artifact store
     adopts a cache by name@version, so a shared name would silently reuse another tokenizer's
     tokens.
     """

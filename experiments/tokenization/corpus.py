@@ -3,7 +3,7 @@
 
 """Raw text corpus for training our own tokenizers (Track C).
 
-``train_tokenizers.py`` needs raw, untokenized text to learn merges from — unlike the rest of
+``train_tokenizer.py`` needs raw, untokenized text to learn merges from — unlike the rest of
 ``experiments/datasets/``, which builds already-tokenized ``TokenizedCache`` handles via
 :func:`marin.experiment.data.tokenized`. This module follows the same lazy-artifact convention
 (:func:`marin.experiment.data.raw_download`, an :class:`~marin.execution.lazy.ArtifactStep`,
@@ -11,7 +11,7 @@ build-opt-in under ``--run``) but produces a plain :class:`~marin.execution.arti
 sharded ``<domain>.jsonl.gz`` text files plus a ``manifest.json`` of what was actually written.
 
 Domains span English web, code, several languages, and math — a representative pretraining mix
-— and pull from a different split or a skipped prefix than ``fertility_report.EVAL_DOMAINS`` so
+— and pull from a different split or a skipped prefix than ``fertility.EVAL_DOMAINS`` so
 the ~4 GB training sample never contains the ~4 MB held-out fertility-eval sample.
 """
 
@@ -38,7 +38,7 @@ DomainSpec = tuple[str, str | None, str, str]
 # budget is split evenly across its sub-sources. This mirrors the representative composition of a
 # general 10T pretraining mixture (web-heavy, plus code, multiple languages, and math) so the
 # trained tokenizers learn merges for the full range of content they are deployed on — not just
-# English prose. fertility_report.EVAL_DOMAINS reads english_web from the "validation" split of
+# English prose. fertility.EVAL_DOMAINS reads english_web from the "validation" split of
 # the same dataset (zero overlap by construction) and math from the same "train" split used here,
 # so math skips a leading prefix of the stream (_EVAL_OVERLAP_SKIP_BYTES) before collecting,
 # comfortably past the ~4 MB/domain the fertility harness reads. Multilingual spans three scripts
@@ -109,7 +109,7 @@ def _stream_domain_shard(specs: tuple[DomainSpec, ...], *, max_bytes: int, skip_
     The domain's ``max_bytes`` is divided evenly across its sub-sources so a multi-language or
     multi-source domain is balanced across them. A sub-source that fails to stream (gated, moved,
     or a transient Hub error) is logged and skipped rather than aborting the whole corpus build —
-    the same tolerance ``fertility_report`` applies per-domain.
+    the same tolerance ``fertility`` applies per-domain.
     """
     per_source_budget = max(1, max_bytes // len(specs))
     sources: list[dict] = []
@@ -161,7 +161,7 @@ def build_tokenizer_training_corpus(cfg: CorpusBuildConfig) -> dict:
 
 
 def tokenizer_training_corpus_raw() -> ArtifactStep[Artifact]:
-    """The raw (untokenized) text corpus :mod:`train_tokenizers` learns merges from."""
+    """The raw (untokenized) text corpus :mod:`train_tokenizer` learns merges from."""
     return raw_download(
         "raw/tokenizer_bakeoff_training_corpus",
         fn=build_tokenizer_training_corpus,

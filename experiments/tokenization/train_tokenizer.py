@@ -1,20 +1,20 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Train our own tokenizers on the grug-moe data mix (Track C).
+"""Train our own tokenizers on the grug-moe data mix and stage them for cluster workers.
 
-Off-the-shelf arms (``bakeoff_tokenizers.BASELINE_ARMS``/``SUPERBPE_ARMS``) sample whatever
-vocabulary and segmentation other teams optimized for other data. This harness instead trains
-plain BPE and SuperBPE (two-stage superword BPE; see ``superbpe_trainer.py`` for the method and
-why it is a reimplementation rather than the paper's own code) directly on
-``experiments.tokenize.corpus``'s English/code/math sample, and exports each as an HF
-``tokenizer.json`` + ``tokenizer_config.json`` pair ready to register as a
-:class:`~experiments.tokenize.bakeoff_tokenizers.TokenizerArm`.
+Off-the-shelf arms (``arms.BASELINE_ARMS``/``SUPERBPE_ARMS``) sample whatever vocabulary and
+segmentation other teams optimized for other data. This module instead trains plain BPE and
+SuperBPE (two-stage superword BPE; see ``superbpe.py`` for the method and why it is a
+reimplementation rather than the paper's own code) directly on
+:mod:`experiments.tokenization.corpus`'s English/code/multilingual/math sample, exports each as
+an HF ``tokenizer.json`` + ``tokenizer_config.json`` pair, and pushes it into the
+``mirror://tokenizers/trained/<name>/`` cache that ``levanter.load_tokenizer`` reads so a cluster
+worker can load a trained arm by the bare ref ``trained/<name>`` with no code changes.
 
-Run:
-  uv run python -m experiments.tokenize.corpus --run          # build the training corpus once
-  uv run python -m experiments.tokenize.train_tokenizers \\
-      --corpus-dir <printed corpus output_path> --out-dir experiments/tokenize/results/trained_tokenizers
+:func:`trained_tokenizer` is the "train a tokenizer" stage as an :class:`ArtifactStep`: it deps on
+the corpus artifact, trains one :class:`TrainSpec`, and pushes it — one cluster-dispatched CPU
+step per tokenizer. :func:`main` runs a subset directly through the step runner.
 """
 
 from __future__ import annotations
@@ -24,22 +24,39 @@ import json
 import logging
 import os
 import random
+import tempfile
 import time
-from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass, replace
 from enum import StrEnum
 
+from fray.cluster import ResourceConfig
+from huggingface_hub import __version__ as hf_hub_version
+from marin.execution.artifact import Artifact
+from marin.execution.lazy import OUT, ArtifactStep, apply
+from marin.execution.remote import remote
+from marin.execution.step_runner import StepRunner
 from rigging.filesystem import open_url
 
-from experiments.tokenize.superbpe_trainer import Pretok, extend_with_superwords, pretok_config, train_plain_bpe
+from experiments.tokenization.corpus import tokenizer_training_corpus_raw
+from experiments.tokenization.superbpe import Pretok, extend_with_superwords, pretok_config, train_plain_bpe
 
 logger = logging.getLogger(__name__)
 
 EOS_TOKEN = "<|endoftext|>"
 CORPUS_DOMAINS: tuple[str, ...] = ("english_web", "code", "multilingual", "math")
 
+# Push destination: must match ``_MIRROR_TOKENIZER_PREFIX`` in lib/levanter/src/levanter/tokenizers.py.
+# ``levanter.load_tokenizer("trained/<name>")`` stages ``mirror://tokenizers/trained/<name>/hf-hub-<v>/``
+# before falling back to the HF Hub, so a trained arm resolves exactly like an off-the-shelf one.
+_MIRROR_TOKENIZER_PREFIX = "tokenizers"
+_TOKENIZER_FILES = ("tokenizer.json", "tokenizer_config.json")
+
+# Training reads the ~4 GB corpus into memory and (for SuperBPE) runs single-threaded stage-2
+# merge learning, so one arm wants a few CPUs and generous RAM headroom.
+_TRAIN_RESOURCES = ResourceConfig(cpu=4, ram="64g", disk="64g")
+
 # Stage 1 (plain BPE, stock Rust trainer) uses the full corpus — it is cheap regardless of
-# corpus size. Stage 2's from-scratch merge learner (superbpe_trainer._learn_merges) costs
+# corpus size. Stage 2's from-scratch merge learner (superbpe._learn_merges) costs
 # roughly a fixed amount per merge, dominated by one global vectorized pair-recount per batch
 # over its flattened segment array (see that module's docstring); recount cost scales with
 # array size, i.e. with corpus size. Benchmarked at ~2-5ms/merge on a 60 MB sample (~12-15M
@@ -88,7 +105,7 @@ class TrainSpec:
     """One tokenizer to train. ``transition_vocab_size`` is SuperBPE's stage-1 cutoff ``t``.
 
     ``pretok`` selects the pretokenizer variant (word-split regex + digit handling); see
-    :class:`~experiments.tokenize.superbpe_trainer.Pretok`.
+    :class:`~experiments.tokenization.superbpe.Pretok`.
     """
 
     name: str
@@ -151,7 +168,7 @@ FIXED_SOAK_SPECS: tuple[TrainSpec, ...] = tuple(
 
 
 def read_corpus(corpus_dir: str, domains: tuple[str, ...] = CORPUS_DOMAINS) -> list[str]:
-    """Load the ``<domain>.jsonl.gz`` shards :mod:`experiments.tokenize.corpus` wrote."""
+    """Load the ``<domain>.jsonl.gz`` shards :mod:`experiments.tokenization.corpus` wrote."""
     texts: list[str] = []
     for domain in domains:
         path = f"{corpus_dir}/{domain}.jsonl.gz"
@@ -244,50 +261,105 @@ def train_one(spec: TrainSpec, texts: list[str], out_dir: str) -> dict:
     }
 
 
-def _train_one_into(spec: TrainSpec, texts: list[str], out_dir: str) -> dict:
-    # Top-level (not a closure) so it is picklable for ProcessPoolExecutor's fork workers.
-    return train_one(spec, texts, out_dir)
+def arm_ref(name: str) -> str:
+    """The ``TokenizerArm.ref`` a pushed tokenizer named ``name`` resolves under."""
+    return f"trained/{name}"
+
+
+def _stage_files(src_dir: str, dest_prefix: str) -> list[str]:
+    """Copy the tokenizer files (+manifest) from local ``src_dir`` to ``dest_prefix`` (fsspec)."""
+    staged = []
+    for filename in (*_TOKENIZER_FILES, "manifest.json"):
+        local_path = os.path.join(src_dir, filename)
+        if not os.path.isfile(local_path):
+            continue
+        with open(local_path, "rb") as src:
+            data = src.read()
+        with open_url(f"{dest_prefix}/{filename}", "wb") as dst:
+            dst.write(data)
+        staged.append(filename)
+    return staged
+
+
+def push_to_mirror(src_dir: str, name: str) -> None:
+    """Stage a trained tokenizer under ``mirror://tokenizers/trained/<name>/`` for load_tokenizer.
+
+    Writes to both the functional cache path (``.../hf-hub-<version>/``, what ``load_tokenizer``
+    stages) and a version-less, human-browsable copy at the manifest path.
+    """
+    ref = arm_ref(name)
+    cache_prefix = f"mirror://{_MIRROR_TOKENIZER_PREFIX}/{ref}/hf-hub-{hf_hub_version}"
+    manifest_prefix = f"mirror://{_MIRROR_TOKENIZER_PREFIX}/{ref}"
+    for prefix in (cache_prefix, manifest_prefix):
+        _stage_files(src_dir, prefix)
+    logger.info("pushed %s -> %s and %s", name, cache_prefix, manifest_prefix)
+
+
+def build_and_push_tokenizer(out: str, corpus_dir: str, spec: TrainSpec) -> None:
+    """Train one ``spec`` from the corpus at ``corpus_dir``, write it to ``out``, and mirror it.
+
+    Trains into a local temp dir first (the ``tokenizers`` library saves only to a local path),
+    then uploads the ``tokenizer.json`` + ``tokenizer_config.json`` + ``manifest.json`` to the
+    step's ``out`` artifact directory and stages a copy under ``mirror://tokenizers/trained/<name>``.
+    """
+    texts = read_corpus(corpus_dir)
+    total_bytes = sum(len(t.encode("utf-8")) for t in texts)
+    logger.info("loaded corpus: %d docs, %.1f MB from %s", len(texts), total_bytes / 1e6, corpus_dir)
+    with tempfile.TemporaryDirectory() as tmp:
+        row = train_one(spec, texts, tmp)
+        with open(os.path.join(tmp, "manifest.json"), "w") as f:
+            json.dump(row, f, indent=2)
+        _stage_files(tmp, out)
+        push_to_mirror(tmp, spec.name)
+
+
+def trained_tokenizer(
+    spec: TrainSpec,
+    corpus: ArtifactStep[Artifact],
+    *,
+    resources: ResourceConfig | None = _TRAIN_RESOURCES,
+    version: str = "dev",
+) -> ArtifactStep[Artifact]:
+    """The "train a tokenizer" stage: one :class:`TrainSpec` trained from the ``corpus`` artifact.
+
+    Deps on the corpus; trains + pushes to the mirror in a single cluster-dispatched CPU step
+    (``resources=None`` runs it inline instead). Registers under the same ``trained/<name>`` ref
+    the arm in :mod:`experiments.tokenization.arms` names, so training and loading agree.
+    """
+    fn = remote(build_and_push_tokenizer, resources=resources) if resources is not None else build_and_push_tokenizer
+    return apply(
+        f"tokenizers/trained/{spec.name}",
+        fn,
+        version=version,
+        out=OUT,
+        corpus_dir=corpus,
+        spec=spec,
+    )
 
 
 def main() -> None:
+    """Train a subset of :data:`TRAIN_SPECS` through the step runner (one remote job per arm)."""
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
     ap = argparse.ArgumentParser()
-    ap.add_argument("--corpus-dir", required=True, help="output_path from experiments.tokenize.corpus")
-    ap.add_argument("--out-dir", default="experiments/tokenize/results/trained_tokenizers")
-    ap.add_argument("--arms", default=None, help="comma-separated TrainSpec names (default: all)")
-    ap.add_argument("--jobs", type=int, default=1, help="train this many arms concurrently (separate processes)")
+    ap.add_argument("--arms", default=None, help="comma-separated TrainSpec names (default: the fixed soak arms)")
+    ap.add_argument("--version", default="dev", help="artifact version for the trained-tokenizer steps")
+    ap.add_argument("--local", action="store_true", help="train inline instead of dispatching a per-arm cluster job")
     args = ap.parse_args()
 
-    specs = TRAIN_SPECS
+    by_name = {s.name: s for s in (*TRAIN_SPECS, *FIXED_SOAK_SPECS)}
     if args.arms:
-        wanted = set(args.arms.split(","))
-        unknown = wanted - {s.name for s in TRAIN_SPECS}
+        wanted = args.arms.split(",")
+        unknown = [n for n in wanted if n not in by_name]
         if unknown:
-            raise SystemExit(f"unknown --arms {sorted(unknown)}; known: {[s.name for s in TRAIN_SPECS]}")
-        specs = tuple(s for s in TRAIN_SPECS if s.name in wanted)
-
-    texts = read_corpus(args.corpus_dir)
-    total_bytes = sum(len(t.encode("utf-8")) for t in texts)
-    logger.info("loaded corpus: %d docs, %.1f MB from %s", len(texts), total_bytes / 1e6, args.corpus_dir)
-
-    if args.jobs <= 1:
-        manifest = [train_one(spec, texts, f"{args.out_dir}/{spec.name}") for spec in specs]
+            raise SystemExit(f"unknown --arms {unknown}; known: {sorted(by_name)}")
+        specs = [by_name[n] for n in wanted]
     else:
-        # Fork workers share the parent's already-loaded `texts` via copy-on-write (Linux's
-        # default multiprocessing start method), so this does not duplicate the corpus in
-        # memory per worker.
-        with ProcessPoolExecutor(max_workers=args.jobs) as pool:
-            futures = {
-                pool.submit(_train_one_into, spec, texts, f"{args.out_dir}/{spec.name}"): spec.name for spec in specs
-            }
-            manifest = []
-            for future in as_completed(futures):
-                manifest.append(future.result())
+        specs = list(FIXED_SOAK_SPECS)
 
-    manifest_path = f"{args.out_dir}/manifest.json"
-    with open(manifest_path, "w") as f:
-        json.dump(manifest, f, indent=2)
-    logger.info("wrote %s", manifest_path)
+    corpus = tokenizer_training_corpus_raw()
+    resources = None if args.local else _TRAIN_RESOURCES
+    steps = [trained_tokenizer(spec, corpus, resources=resources, version=args.version).lower() for spec in specs]
+    StepRunner().run([corpus.lower(), *steps])
 
 
 if __name__ == "__main__":

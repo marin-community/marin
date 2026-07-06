@@ -106,7 +106,7 @@ LM-head cost of a large vocab free. Our rubric adds it back.
 
 Cost is a *model*, not a constant, and it is applied at analysis time to the raw
 measurements (§2.6). `ServingCostModel` in
-`experiments/tokenize/flop_equivalent.py` captures the deployment regime and turns
+`experiments/tokenization/cost_model.py` captures the deployment regime and turns
 `(vocab_size, fertility)` into a serving cost per arm:
 
 ```
@@ -217,11 +217,11 @@ serving ratio ρ, even the eval-domain mix) is an *assumption*, and assumptions
 change. So the pipeline never bakes a cost into a training run:
 
 - **Experiments log raw, cost-free measurements.** The fertility pre-filter
-  (`fertility_report.py`) writes per-arm, per-domain **token and byte counts**
+  (`fertility.py`) writes per-arm, per-domain **token and byte counts**
   (`fertility_raw.json`), not ratios or FLOPs. Training runs log per-arm
   `(training_FLOPs, BPB)` points. Neither carries any deployment-model assumption.
 - **A separate analysis step applies the cost model.**
-  `experiments/tokenize/bakeoff_analysis.py` reads those raw files and recomputes
+  `experiments/tokenization/analysis.py` reads those raw files and recomputes
   fertility (with an optional domain reweighting), serving cost, the Pareto
   frontier, and feBPB under a `ServingCostModel` supplied on the command line
   (`--context-len`, `--attention-window`, `--global-period`, `--speed-factor`,
@@ -427,7 +427,7 @@ training and reuse across all compute points for an arm.
 
 ## 5. Marin tokenizer extensions to build
 
-New code lives under `experiments/tokenizer/` (a tokenizer-construction package)
+New code lives under `experiments/tokenization/` (a tokenizer-construction package)
 plus a small `levanter` backend addition where a non-HF tokenizer is needed.
 Each built tokenizer is saved to a location the cluster workers can load
 (`load_tokenizer` accepts an HF id or a path; we push built tokenizers to the HF
@@ -463,7 +463,7 @@ Two models with distinct roles (§2.3): a **deployment target** the tokenizer is
 priced for, and a small **proxy** we actually train to measure BPB.
 
 - **Target (pricing only, never trained here):** ~250B-total / ~20B-active MoE,
-  `TARGET_MODEL_SHAPE` in `experiments/tokenize/flop_equivalent.py` — hidden 6144, 64
+  `TARGET_MODEL_SHAPE` in `experiments/tokenization/cost_model.py` — hidden 6144, 64
   layers, 256 experts, top-8, seq 4096. All cost multipliers use this width.
 - **Proxy (trained to measure BPB):** a fixed small Grug-MoE, non-embedding shape
   held constant across arms. Starting point (tunable after the smoke run), ~300M
@@ -560,7 +560,7 @@ uv run iris --cluster=cw-rno2a job run --cpu 2 --memory 3GB --extra cpu \
   -e SCALE_NUM_EXPERTS 32 -e SCALE_TOP_K 4 -e SCALE_BATCH <b> \
   -e SCALE_SEQ_LEN 2048 -e SCALE_STEPS <s> -e RUN_ID tok-<arm>-<pt> \
   -e WANDB_API_KEY "$WANDB_API_KEY" \
-  -- python -m experiments.grug.moe.launch_tokenizer_bakeoff
+  -- python -m experiments.tokenization.proxy_ladder
 ```
 
 `MARIN_PREFIX=s3://marin-us-east-02a/marin` is injected by the cluster config;

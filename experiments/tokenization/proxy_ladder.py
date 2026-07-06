@@ -8,7 +8,7 @@ independent variable. It differs from the scale launcher in exactly the three wa
 bake-off needs (everything else — the SCALE_* shape/mesh/batch/step knobs — is inherited):
 
 1. **Tokenizer is chosen by ``BAKEOFF_ARM``** (default ``marin-128k``), resolved through
-   the arm registry in :mod:`experiments.tokenize.bakeoff_tokenizers`. That one choice sets
+   the arm registry in :mod:`experiments.tokenization.arms`. That one choice sets
    both the data tokenization *and* the model ``vocab_size`` (the scale launcher hardcodes
    llama3 and 128256 independently).
 2. **A held-out validation set is attached** — the Uncheatable-Eval subsets, tokenized with
@@ -25,11 +25,11 @@ Run one arm at one compute point (the isoFLOP ladder is several of these — var
       -e SCALE_NUM_LAYERS 16 -e SCALE_NUM_EXPERTS 32 -e SCALE_TOP_K 4 \
       -e SCALE_BATCH 128 -e SCALE_SEQ_LEN 1024 -e SCALE_STEPS 2000 \
       -e SCALE_TRACKER wandb -e RUN_ID bakeoff-marin-c0 \
-      -- python -m experiments.grug.moe.launch_tokenizer_bakeoff
+      -- python -m experiments.tokenization.proxy_ladder
 
 Use ``SCALE_TRACKER=wandb`` for a durable, queryable ``eval/bpb`` history; the default
 ``json_logger`` only writes to the run log (scrape with
-``experiments.tokenize.collect_metrics``).
+``experiments.tokenization.collect_results``).
 """
 
 import dataclasses
@@ -60,7 +60,7 @@ from experiments.grug.moe.launch_cw_scale import (
     build_scale_model,
 )
 from experiments.grug.moe.train import GrugEvalConfig, GrugTrainerConfig
-from experiments.tokenize.bakeoff_tokenizers import arm_by_name
+from experiments.tokenization.arms import arm_by_name
 
 # SlimPajama-6B tokenization OOMs at the default worker resources (matches launch.py).
 _SLIMPAJAMA_TOKENIZE_RESOURCES = ResourceConfig(ram="64g", disk="64g")

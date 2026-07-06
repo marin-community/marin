@@ -4,7 +4,7 @@ Companion results doc to the protocol in
 [`20260703_tokenizer_flop_equivalent_bakeoff.md`](20260703_tokenizer_flop_equivalent_bakeoff.md).
 That doc is the *design* (what we measure and why); this doc is the *result* (what we found).
 The full chronological experiment log, with a reproduce/replay command per experiment, is
-[`experiments/tokenize/EXPERIMENT_LOG.md`](../../experiments/tokenize/EXPERIMENT_LOG.md).
+[`experiments/tokenization/EXPERIMENT_LOG.md`](../../experiments/tokenization/EXPERIMENT_LOG.md).
 
 ## TL;DR — corrected result
 
@@ -215,21 +215,21 @@ and strictly causal, and gated behind `BAKEOFF_NGRAM`.
    training-setup difference, and extend the 64k arms past ~2e20 to confirm whether their low-budget
    edge is real or also reverses.
 
-The harness (`experiments/tokenize/{corpus,train_tokenizers,push_trained_tokenizers}.py`, the
-`ServingCostModel`/feBPB scorer, and the soak ladder `soak_wandb_ladder.py`) is reproducible and is
+The harness (`experiments/tokenization/{corpus,train_tokenizer}.py`, the
+`ServingCostModel`/feBPB scorer, and the soak ladder `collect_results.py`) is reproducible and is
 the reusable artifact regardless of the verdict.
 
 ## Reproduce
 
 ```bash
 # serving cost, any deployment assumption (no cluster)
-uv run python -m experiments.tokenize.bakeoff_analysis \
-  --fertility experiments/tokenize/results/fertility_trained.json \
+uv run python -m experiments.tokenization.analysis \
+  --fertility experiments/tokenization/results/fertility_trained.json \
   --domain-weights english_web=0.8,math=0.2
 # full feBPB scorecard once ladders are collected (assembler folds composed arms + re-keys trained)
-uv run python -m experiments.tokenize.bakeoff_analysis \
+uv run python -m experiments.tokenization.analysis \
   --fertility <assembled_fert.json> --bpb <assembled_bpb.json> \
   --domain-weights english_web=0.8,math=0.2 --reference marin-128k
 ```
 
-Per-experiment reproduce/replay commands: `experiments/tokenize/EXPERIMENT_LOG.md`.
+Per-experiment reproduce/replay commands: `experiments/tokenization/EXPERIMENT_LOG.md`.

@@ -12,19 +12,19 @@ improvement over the stock Llama-3 tokenizer** for target grug-moe models.
 - **Proxy shape** (unless noted): hidden 1024, 16 layers, 32 experts, top-4, expert-axis 4,
   batch 128, seq 1024. Only `vocab_size` follows the tokenizer arm.
 - **isoFLOP ladder**: SCALE_STEPS ∈ {1500, 3500, 8000} → 3 `(train_flops, BPB)` points/arm; ≥3
-  lets `bakeoff_analysis` fit `BPB(C)=a·C^-b+c`.
+  lets `analysis` fit `BPB(C)=a·C^-b+c`.
 - **Metric**: BPB on the Uncheatable-Eval held-out subsets (`eval/bpb`, tokenizer-agnostic).
   feBPB = BPB read at the FLOP budget an arm earns after its serving-cost discount.
-- **Collect**: `python -m experiments.tokenize.collect_ladder --prefix grug-bakeoff- --cluster cw-rno2a --out results/ladder.json`
-  (state-first, skips non-succeeded jobs). **Score**:
-  `python -m experiments.tokenize.bakeoff_analysis --fertility results/fertility_raw.json --bpb results/ladder.json [knobs]`.
+- **Collect**: `python -m experiments.tokenization.collect_results --out-dir results/`
+  (pulls the BPB ladder from W&B). **Score**:
+  `python -m experiments.tokenization.analysis --fertility results/fertility_raw.json --bpb results/ladder.json [knobs]`.
 
 ---
 
 ## EXP-001 — Fertility pre-filter (no training)
 
 - **Hypothesis**: rank tokenizer arms by serving cost (tokens/byte × head cost) before spending GPU.
-- **Reproduce**: `uv run python -m experiments.tokenize.fertility_report --max-mb 4 --out results/fertility_raw.json`
+- **Reproduce**: `uv run python -m experiments.tokenization.fertility --max-mb 4 --out results/fertility_raw.json`
 - **Result** (`results/fertility_raw.json`): superbpe-128k emits ~30% more bytes/token than
   Llama-3 on English/code/math (−18% serving FLOPs/byte at equal vocab); regresses −37% on
   Chinese. gpt-neox-50k cheap head but high fertility; gemma3-262k/qwen3 expensive.
@@ -106,8 +106,10 @@ Best composed arm: **64k-t32k + n-gram = −6.8%** — the best measured.
 - **Hypothesis**: at equal training FLOPs, a superword tokenizer reaches lower BPB (ingests more
   bytes/FLOP); the FLOP-fair rubric will demote big-head arms that only look good on raw BPB.
 - **Arms**: marin-128k (llama3), superbpe-128k, gpt-oss-200k, qwen3-152k, gpt-neox-50k.
-- **Reproduce**: `uv run python -m experiments.tokenize.launch_bakeoff_ladder --arms marin-128k,superbpe-128k,gpt-oss-200k,qwen3-152k,gpt-neox-50k --run`
-- **Replay**: `bakeoff_analysis --fertility results/fertility_raw.json --bpb results/ladder.json --domain-weights english_web=0.8,math=0.2`
+- **Reproduce**: launch each arm via `experiments.tokenization.proxy_ladder` (`BAKEOFF_ARM=<arm>`,
+  one `iris job run` per arm × SCALE_STEPS point — see the module docstring for the launch
+  template); arms: marin-128k, superbpe-128k, gpt-oss-200k, qwen3-152k, gpt-neox-50k.
+- **Replay**: `analysis --fertility results/fertility_raw.json --bpb results/ladder.json --domain-weights english_web=0.8,math=0.2`
 - **Result** (BPB at matched FLOPs; feBPB @ English/math, 16k ctx):
 
   | arm | BPB s1500/s3500/s8000 | feBPB | vs llama3 |
@@ -156,10 +158,11 @@ Best composed arm: **64k-t32k + n-gram = −6.8%** — the best measured.
   (low-rank + up-proj), init norm-matched to base (ratio 1.0), buckets swept. Screen at s3500.
 - **Buckets swept**: 65_537 (repro-bad) · 786_433 · 3_145_739 · 4_000_037 (all primes chosen to
   avoid integer multiples of the 128,256 base vocab, per the paper's collision-spike warning).
-- **Reproduce**: `uv run python -m experiments.tokenize.launch_ngram_sweep --base marin-128k --steps 3500 --rev 2 --run`
+- **Reproduce**: launch each bucket config via `experiments.tokenization.proxy_ladder`
+  (`BAKEOFF_ARM=marin-128k BAKEOFF_NGRAM=1 BAKEOFF_NGRAM_BUCKETS=<n> …`, SCALE_STEPS=3500)
   (7 configs: b65k/b786k/b3M/b4M + b4M-o345/b4M-r0p5/b4M-r2).
-- **Collect**: `python -m experiments.tokenize.collect_ladder --prefix grug-ngram- --out results/ngram_screen.json`
-  (each config is its own arm key, e.g. `marin-128k-b4M`).
+- **Collect**: `python -m experiments.tokenization.collect_results --out-dir results/`
+  (pulls the ladder from W&B; each config is its own arm key, e.g. `marin-128k-b4M`).
 - **Infra fix (OOMKilled)**: the first launch of this sweep OOM-killed the 256g training pod. The
   n-gram tables are ~12 GB (4M×128×6, fp32), ~50 GB with Adam state; the *forced final checkpoint*
   gathers that whole train state to host to serialize it, overflowing 256g. Fixed by requesting
@@ -183,8 +186,8 @@ Best composed arm: **64k-t32k + n-gram = −6.8%** — the best measured.
   compete equally with the base embedding through the post-embedding RMSNorm, drowning signal in
   noise. A *lighter* n-gram (smaller ratio) should help; a heavier one should hurt.
 - **Config**: marin-128k, b4M (4M buckets, mean, orders 2,3,4, rank 128), s3500, ratio swept.
-- **Reproduce**: env `…BAKEOFF_NGRAM_RATIO=<r>…` on `launch_tokenizer_bakeoff` (see the ratio_run
-  helper in the campaign; also `launch_ngram_sweep`'s b4M-r0p5/b4M-r2 cells).
+- **Reproduce**: env `…BAKEOFF_NGRAM_RATIO=<r>…` on `experiments.tokenization.proxy_ladder` (see the
+  ratio_run helper in the campaign; also the bucket sweep's b4M-r0p5/b4M-r2 cells).
 - **Result** (BPB @ s3500, baseline 1.2376):
 
   | ratio | 0.25 | 0.5 | 0.75 | 1.0 | 2.0 |
@@ -259,7 +262,8 @@ Best composed arm: **64k-t32k + n-gram = −6.8%** — the best measured.
   hidden-2048 (4× params) and compare the BPB gap to the hidden-1024 gap.
 - **Reproduce**: `scratchpad/launch_64k_w2048.py` (64k-t32k at SCALE_HIDDEN_DIM=2048, 2 replicas,
   s3500/s8000); marin-128k @ hidden-2048 already run in EXP-007 (`grug-w2048-marin-128k-s{3500,8000}`).
-  **Replay**: `collect_ladder --point w2048-t64k-s3500=… --point w2048-t64k-s8000=…`, then the gap
+  **Replay**: `experiments.tokenization.collect_results --out-dir results/` (pulls
+  w2048-t64k-s3500/s8000 from W&B), then the gap
   vs the stored marin-2048 points.
 - **Result — the win is scale-robust at the budget that matters** (raw BPB gap 64k vs marin at matched
   steps):
@@ -288,7 +292,7 @@ Best composed arm: **64k-t32k + n-gram = −6.8%** — the best measured.
   its life, so serving dominates (ρ ≫ 1). The right question for grug-moe is the win at its **actual**
   ρ, and the replayable rubric is built exactly for this re-scoring.
 - **Reproduce / replay** (no new training — pure re-score of stored curves):
-  `bakeoff_analysis … --reference marin-128k --serving-ratio <ρ>`.
+  `analysis … --reference marin-128k --serving-ratio <ρ>`.
 - **Result — feBPB(ρ) for the best arm, 64k-t32k + n-gram** (all read *within* the fitted curve; the
   reference budget `C_ref` = marin's middle ladder point ≈ 9.2e17, and at ρ=8 the arm reads at
   ≈ 2.0e18 = the top measured point, so **no extrapolation**):
@@ -369,7 +373,7 @@ different regime. A tokenizer that is *both* superword *and* right-sized for our
   the whitespace constraint so later merges span former word boundaries ("superwords", e.g.
   `` of the`` as one token). The authors' implementation needs a custom Rust fork of
   `tokenizers` (`alisawuffles/tokenizers-superbpe`) that conflicts with the stock package this
-  repo depends on everywhere else, so `superbpe_trainer.py` reimplements the *algorithm* on
+  repo depends on everywhere else, so `superbpe.py` reimplements the *algorithm* on
   stock `tokenizers`: the Rust `BpeTrainer` for stage 1, a from-scratch vectorized (numpy)
   greedy BPE merge learner for stage 2. Newer methods surveyed for this pass: BoundlessBPE and
   Picky-BPE (both extend/prune a standard BPE trainer with no reference implementation
@@ -380,8 +384,8 @@ different regime. A tokenizer that is *both* superword *and* right-sized for our
 - **Harness**: `corpus.py` builds a ~1.5 GB English/code/math raw-text sample (70/20/10 split:
   `DKYoon/SlimPajama-6B`, `codeparrot/codeparrot-clean-valid`, `HuggingFaceTB/finemath`) as a
   lazy `raw_download` `ArtifactStep`, following the `experiments/datasets/` convention.
-  `train_tokenizers.py` trains a sweep of plain-BPE/SuperBPE configs on it and exports each as
-  an HF `tokenizer.json`/`tokenizer_config.json` pair; `push_trained_tokenizers.py` stages them
+  `train_tokenizer.py` trains a sweep of plain-BPE/SuperBPE configs on it and exports each as
+  an HF `tokenizer.json`/`tokenizer_config.json` pair; its `push_to_mirror` stages them
   into the `mirror://tokenizers/trained/<name>/...` cache `levanter.load_tokenizer` reads, so a
   trained arm loads by name with no code changes (verified on-cluster).
 - **Sweep**: plain BPE at {64k, 96k, 128k}; SuperBPE at (vocab × t) ∈ {96k×{38k,77k},
@@ -397,15 +401,16 @@ different regime. A tokenizer that is *both* superword *and* right-sized for our
   trainer) always uses the full 1.5 GB. **All 11 configs reached their full requested vocab**
   (no early stopping); wall time on cw-rno2a (128 CPU, 11-way parallel) ranged 297s (plain BPE
   64k) to 780s (SuperBPE 160k×t64k, ~96k merges — the largest merge count in the sweep).
-  Reproduce: `uv run python -m experiments.tokenize.corpus --run` then
-  `uv run python -m experiments.tokenize.train_tokenizers --corpus-dir <printed output_path> --jobs 11`.
+  Reproduce: `uv run python -m experiments.tokenization.corpus --run` then
+  `uv run python -m experiments.tokenization.train_tokenizer --arms trained-bpe-64k,trained-bpe-96k,trained-bpe-128k,trained-superbpe-96k-t38k,trained-superbpe-96k-t77k,trained-superbpe-128k-t51k,trained-superbpe-128k-t102k,trained-superbpe-160k-t64k,trained-superbpe-160k-t128k,trained-superbpe-64k-t32k,trained-superbpe-80k-t40k`
+  (the 11-config sweep).
 - **Fertility pre-filter**: registered all 11 as `TokenizerArm`s (axis `trained_bpe`/`superbpe`)
-  in `bakeoff_tokenizers.py`; measured with `fertility_report.py` on the same held-out sample as
+  in `arms.py`; measured with `fertility.py` on the same held-out sample as
   EXP-001 (code domain unavailable — same `github-code-clean` legacy-script failure noted
   there). Raw per-domain counts: `results/fertility_trained.json`.
-  Reproduce: `uv run python -m experiments.tokenize.fertility_report --arms <names> --out results/fertility_trained.json`.
+  Reproduce: `uv run python -m experiments.tokenization.fertility --arms <names> --out results/fertility_trained.json`.
 - **Result** (bytes/token, English-dominant weighting matching EXP-002's replay convention —
-  `bakeoff_analysis --domain-weights english_web=0.8,math=0.2`; higher = fewer tokens = cheaper):
+  `analysis --domain-weights english_web=0.8,math=0.2`; higher = fewer tokens = cheaper):
 
   | arm | vocab | B/tok | rel_serve | vs superbpe-128k |
   |---|---|---|---|---|
@@ -429,9 +434,12 @@ different regime. A tokenizer that is *both* superword *and* right-sized for our
 - **Hypothesis**: the trained SuperBPE arms' bytes/token edge (EXP-008) → lower serving cost →
   lower feBPB than off-the-shelf superbpe-128k. Also test the "small-vocab superword" idea
   (80k-t40k: gpt-neox-style cheap head + superword packing).
-- **Reproduce**: `launch_bakeoff_ladder --arms trained-superbpe-128k-t51k,trained-superbpe-160k-t64k,trained-superbpe-128k-t102k,trained-superbpe-80k-t40k,trained-superbpe-160k-t128k --run`
-  (5 arms × 3 pts). **Replay**: `collect_ladder --prefix grug-bakeoff-trained-`, re-key with the
-  `trained-` prefix, then `bakeoff_analysis` (see `scratchpad/build_febpb_inputs.py`).
+- **Reproduce**: launch each arm via `experiments.tokenization.proxy_ladder`
+  (`BAKEOFF_ARM=<arm>`, one `iris job run` per arm × SCALE_STEPS point) for
+  trained-superbpe-128k-t51k, trained-superbpe-160k-t64k, trained-superbpe-128k-t102k,
+  trained-superbpe-80k-t40k, trained-superbpe-160k-t128k (5 arms × 3 pts). **Replay**:
+  `experiments.tokenization.collect_results --out-dir results/`, re-key with the
+  `trained-` prefix, then `analysis` (see `scratchpad/build_febpb_inputs.py`).
 - **Result** (BPB @ s8000, off-the-shelf superbpe-128k = 1.114; feBPB @ target scale, marin ref 1.2376):
 
   | arm | vocab | B/tok | rel_serve | s8000 BPB | feBPB | vs marin |
@@ -489,9 +497,9 @@ different regime. A tokenizer that is *both* superword *and* right-sized for our
 - **Reproduce**:
   1. tokenizers (corpus→train→push, one cluster CPU job):
      `iris --cluster=cw-rno2a job run --cpu 32 --memory 400GB --extra cpu --enable-extra-resources
-      -e MARIN_PREFIX s3://marin-us-east-02a/marin -- python -m experiments.tokenize.build_soak_tokenizers`
+      -e MARIN_PREFIX s3://marin-us-east-02a/marin -- python -m experiments.tokenization.bakeoff prep --run`
   2. arm 1 (baseline, no trained tokenizer): `BAKEOFF_ARM=marin-128k … python -m
-     experiments.grug.moe.launch_tokenizer_soak` (SCALE_HIDDEN_DIM=2560 NUM_LAYERS=8 NUM_EXPERTS=128
+     experiments.tokenization.train_model` (SCALE_HIDDEN_DIM=2560 NUM_LAYERS=8 NUM_EXPERTS=128
      TOP_K=4 GPU_REPLICAS=8 EXPERT_AXIS=8 BATCH=128 SEQ_LEN=4096 STEPS=100000 TRACKER=wandb).
   3. arms 2–7: `scratchpad/launch_arms.sh 128`; arm 8 (ngram): `scratchpad/launch_arm8.sh 128`,
      run after arm 2's tokenization exists (they share the soak-superbpe-64k tokenizer/caches).
@@ -502,7 +510,7 @@ different regime. A tokenizer that is *both* superword *and* right-sized for our
   form, as in ci-coreweave-gpu-smoke). Tracked in issue #6940. BATCH=256 OOMs (a ~27.5 GiB
   activation op on top of the ~22 GiB/device expert weights+Adam state); BATCH=128 fits.
 - **Replay / score**: pull each run's `eval/bpb` history from wandb (project `marin_moe`, group
-  `tokenizer-soak`) → per-arm (train_flops, BPB) curve → `bakeoff_analysis` feBPB with the same
+  `tokenizer-soak`) → per-arm (train_flops, BPB) curve → `analysis` feBPB with the same
   serving-cost model as the proxy. Report raw BPB @ 24h, per-domain BPB (digit arms on math),
   fertility, feBPB @ ρ=1 and serving-weighted.
 - **Status**: 6 soak tokenizers trained + pushed; 8 arms training at 10B/500M on 8×8×H100. Results
@@ -557,8 +565,8 @@ data already on S3) reach training in ~3 min with ~8 pods; PARTIAL arms re-token
   (all mine, soak tokenize workers) inflates reconcile lists — delete via
   `kubectl get pods -n iris --field-selector=status.phase=Succeeded -o name | grep soak | xargs kubectl delete -n iris`.
 - **Scoring pipeline (built + validated, push-button)**: `scratchpad/finalize_report.sh` runs
-  `soak_wandb_ladder.py` (W&B group `tokenizer-soak` → per-arm BPB-vs-FLOPs ladder + per-domain
-  finals) → `bakeoff_analysis.py --fertility scratchpad/soak_fertility.json --bpb …`. Soak-arm
+  `collect_results.py` (W&B group `tokenizer-soak` → per-arm BPB-vs-FLOPs ladder + per-domain
+  finals) → `analysis.py --fertility scratchpad/soak_fertility.json --bpb …`. Soak-arm
   **fertility already measured** (`scratchpad/soak_fertility.json`, ngram entry added). Phase-1
   serving cost (final): superbpe-128k(-llama) rel_serve **0.864** (−13.5% vs marin), 64k **0.942**,
   digits **1.06–1.14** (digit-split = more tokens). Interim feBPB posted to #6796.
@@ -602,9 +610,9 @@ data already on S3) reach training in ~3 min with ~8 pods; PARTIAL arms re-token
   `-{64k,128k}-llama-fixed` (Llama-3 word-regex pretok held equal to baseline), off-the-shelf
   `superbpe-128k`, and Llama-3 `marin-128k` (reused). Fertility measured 8-arm
   (`results/rerun_fertility.json`). Scored on a **domain-fair macro over the 7 shared English+code
-  domains** (marin only eval'd those): `soak_wandb_ladder.py --domain-curves-out` →
-  `fair_domain_bpb.py` (mean over the 7 domains at each FLOP point) → `bakeoff_analysis.py
-  --bpb … --ref-budget … --serving-ratio {0,1}`.
+  domains** (marin only eval'd those): `collect_results.py` (writes `domain_curves.json`) →
+  `collect_results.py`'s `fair_macro_ladder` (mean over the 7 domains at each FLOP point) →
+  `analysis.py --bpb … --ref-budget … --serving-ratio {0,1}`.
   **Result: the SuperBPE advantage is budget-dependent and REVERSES at scale.** At 6e19 (common
   floor): 64k-fixed feBPB 0.9465 (−0.77% vs marin 0.9538), 128k-fixed 0.9529 (−0.09%), 5/7 arms
   nominally beat marin. At 2.3e20 (the budgets the 128k arms actually reached): marin WINS, feBPB

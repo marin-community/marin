@@ -87,12 +87,12 @@ SUPERBPE_ARMS: tuple[TokenizerArm, ...] = (
 )
 
 # Track C: tokenizers trained from scratch on the grug-moe data mix (English web
-# + code + math; see corpus.py/train_tokenizers.py), rather than borrowed off-the-shelf. Refs
+# + code + math; see corpus.py/train_tokenizer.py), rather than borrowed off-the-shelf. Refs
 # resolve through the `mirror://tokenizers/trained/<name>/...` cache that
-# push_trained_tokenizers.py populates (see that module for why a bare ref, not a raw s3:// path).
+# train_tokenizer.py's push_to_mirror populates (see that module for why a bare ref, not a raw s3:// path).
 # Vocab sizes are each spec's requested size + 1 (the added `<|endoftext|>` special token);
 # every config in the sweep reached its full requested vocab (see
-# experiments/tokenize/results/trained_tokenizers_manifest.json for per-arm training time).
+# experiments/tokenization/results/trained_tokenizers_manifest.json for per-arm training time).
 TRAINED_BPE_ARMS: tuple[TokenizerArm, ...] = (
     TokenizerArm(
         "trained-bpe-64k", "trained/trained-bpe-64k", 64_001, Axis.TRAINED_BPE, "plain BPE, trained on our mix"
@@ -105,7 +105,7 @@ TRAINED_BPE_ARMS: tuple[TokenizerArm, ...] = (
     ),
 )
 
-# Track C SuperBPE: our own two-stage superword BPE (superbpe_trainer.py, a from-scratch
+# Track C SuperBPE: our own two-stage superword BPE (superbpe.py, a from-scratch
 # reimplementation of arXiv:2503.13423 — see that module's docstring), trained on the same mix,
 # at a (vocab, transition-point t) sweep plus a small-vocab pair. `note` records t/vocab.
 TRAINED_SUPERBPE_ARMS: tuple[TokenizerArm, ...] = (
@@ -229,10 +229,10 @@ SOAK_ARMS: tuple[TokenizerArm, ...] = (
 # Fixed soak arms: the base 64k/128k SuperBPE, the individual-digit-pretok, and the Llama-3-word-
 # regex-pretok SOAK_ARMS above, retrained after commit 11bd2f4e9c fixed the stage-2 corpus
 # sampling bug (the soak-* arms above were trained on an English-only stage-2 sample; see
-# build_fixed_soak_tokenizers.py). The -llama variants hold the stage-1 pretokenizer equal to the
+# train_tokenizer.py). The -llama variants hold the stage-1 pretokenizer equal to the
 # marin-128k baseline, so a SuperBPE win over the baseline can be attributed to superwords rather
-# than the pretokenizer regex. Must match train_tokenizers.py's `_FIXED_SOAK_BASE_NAMES`. Refs
-# follow the same `trained/<name>` convention push_trained_tokenizers.arm_ref produces.
+# than the pretokenizer regex. Must match train_tokenizer.py's `_FIXED_SOAK_BASE_NAMES`. Refs
+# follow the same `trained/<name>` convention train_tokenizer.arm_ref produces.
 _FIXED_SOAK_BASE_NAMES: tuple[str, ...] = (
     "soak-superbpe-64k",
     "soak-superbpe-128k",
