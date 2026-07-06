@@ -551,14 +551,13 @@ class ControllerDashboard:
 
     @public
     def _auth_config(self, request: Request) -> JSONResponse:
-        """Unauthenticated endpoint telling the frontend whether auth is required
-        and whether this request is already authenticated.
+        """Report whether auth is required and whether this request is authenticated.
 
-        ``authenticated`` resolves the request through the same policy the RPC
-        surface enforces, so an IAP-fronted caller — authenticated by the signed
-        edge header and holding no session cookie — is recognized without a login
-        round-trip. A cookie-only check would send every IAP user to the
-        bearer-token login page even though IAP already admitted them.
+        Public endpoint the frontend reads before rendering to decide whether to
+        show the login page. ``authenticated`` resolves the request through the
+        same policy the RPC surface enforces, so a request carrying any accepted
+        credential — a session cookie, a bearer token, or the signed IAP edge
+        header — is reported as authenticated.
         """
         try:
             _resolve_request_identity(self._auth_policy, request)
