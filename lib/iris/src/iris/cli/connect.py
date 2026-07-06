@@ -127,7 +127,8 @@ def client_credentials(
     """Resolve the cluster's client credentials via the shared rigging resolver.
 
     ``impersonate_service_account`` authenticates to an IAP cluster as that SA by
-    impersonating it (the browserless path); see :func:`rigging.credentials.credentials_for`.
+    impersonating it (the browserless path), defaulting to
+    ``$MARIN_IMPERSONATE_SERVICE_ACCOUNT``.
     """
     auth = (
         _cluster_auth_from_config(config.auth)
