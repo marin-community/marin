@@ -32,7 +32,7 @@ from fray.cluster import ResourceConfig
 from levanter.callbacks.profiler import ProfilerConfig
 from levanter.checkpoint import CheckpointerConfig, latest_checkpoint_path
 from levanter.data.text import BlockShuffleConfig
-from levanter.optim import AdamConfig
+from levanter.optim import GrugMuonConfig, OptimizerConfig
 from levanter.tracker.json_logger import JsonLoggerConfig
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
@@ -74,6 +74,12 @@ def build_basic_model() -> GrugModelConfig:
     attn_impl = os.environ.get("SCALE_ATTN_IMPL") or None
     if attn_impl not in (None, "reference", "gpu_fa4_cute", "gpu_fa4_thd", "tpu_splash"):
         raise ValueError(f"SCALE_ATTN_IMPL={attn_impl!r} is not a known GrugAttentionImplementation")
+    # MoE dispatch backend for the leading MoE layers; None -> grug default ("ring").
+    # On single-node GPU (no expert parallelism) the local backends are the right choice:
+    # "scatter" (grouped GMM + scatter-add) or "sonic" (Triton gather/combine).
+    moe_impl = os.environ.get("SCALE_MOE_IMPL") or None
+    if moe_impl not in (None, "ring", "ragged_all_to_all", "deepep", "scatter", "sonic"):
+        raise ValueError(f"SCALE_MOE_IMPL={moe_impl!r} is not a known MoeImplementation")
     # SCALE_ZERO_INIT zeros every weight (std=0): keeps the norm-free deep model finite
     # for throughput probes where we only measure fit/MFU, not learning.
     initializer_std = 0.0 if os.environ.get("SCALE_ZERO_INIT") == "1" else 0.02
@@ -87,8 +93,10 @@ def build_basic_model() -> GrugModelConfig:
         head_dim=HEAD_DIM,
         intermediate_dim=intermediate_dim,
         shared_expert_intermediate_dim=0,  # dense model: no shared expert
-        num_experts=1,  # unused by model_basic; kept for config/FLOP compatibility
-        num_experts_per_token=1,
+        # MoE knobs used only by the leading SCALE_NUM_MOE_LAYERS layers; 1/1 keeps dense.
+        num_experts=env_int("SCALE_NUM_EXPERTS", 1),
+        num_experts_per_token=env_int("SCALE_EXPERTS_PER_TOKEN", 1),
+        moe_implementation=moe_impl,
         max_seq_len=seq_len,
         sliding_window=seq_len,
         remat_mode=cast(RematMode, remat_mode),
@@ -153,7 +161,13 @@ def build_basic_checkpoint(*, version: str = "dev") -> ArtifactStep[LevanterChec
     # LR override for the throughput/profile run (the no-norm model needs a tiny LR
     # to stay finite long enough to reach the profiler window).
     lr = float(os.environ.get("SCALE_LR") or SCALE_OPTIMIZER.learning_rate)
-    optimizer = dataclasses.replace(SCALE_OPTIMIZER, learning_rate=lr)
+    optimizer: OptimizerConfig
+    if os.environ.get("SCALE_OPTIMIZER", "adam").lower() in ("muon", "grug_muon"):
+        # Muon (one momentum buffer) for matrix/expert weights + AdamW for embed/head:
+        # ~8 B/param vs Adam's 12, the memory lever for large-expert-count MoE.
+        optimizer = GrugMuonConfig(learning_rate=lr, adam_lr=lr)
+    else:
+        optimizer = dataclasses.replace(SCALE_OPTIMIZER, learning_rate=lr)
 
     checkpoint_mode = os.environ.get("SCALE_CHECKPOINTS", "s3").lower()
     if checkpoint_mode == "local":
@@ -216,7 +230,7 @@ def build_basic_checkpoint(*, version: str = "dev") -> ArtifactStep[LevanterChec
             seed=0,
             mp=mp,
             tracker=tracker,
-            optimizer=cast(AdamConfig, optimizer),
+            optimizer=optimizer,
             grug_trainer=grug_trainer,
             processes_per_task=processes_per_task,
             eval=None,

@@ -54,26 +54,36 @@ logger = logging.getLogger(__name__)
 
 
 def _basic_compute_flops(model_config: GrugModelConfig) -> tuple[float, dict[str, float]]:
-    """Analytic FLOPs for the basic dense transformer.
+    """Analytic FLOPs for the basic transformer.
 
-    Differs from the MoE ``_compute_flops``: the MLP is a plain two-matrix GELU
-    block (no GLU gate, so 2 matmuls not 3), and attention is dropped entirely
-    when ``SCALE_MLP_ONLY`` selects attention-free blocks.
+    Differs from the MoE ``_compute_flops``: the dense MLP is a plain two-matrix
+    GELU block (no GLU gate, so 2 matmuls not 3), attention is dropped entirely
+    when ``SCALE_MLP_ONLY`` selects attention-free blocks, and the leading
+    ``SCALE_NUM_MOE_LAYERS`` layers use routed-expert (top-k) MLP FLOPs.
     """
     h = model_config.hidden_dim
-    inter = model_config.intermediate_dim
     seq = model_config.max_seq_len
-    per_layer = 2 * 2 * h * inter  # up + down projections, 2 FLOPs each, no gate
-    if not model_basic.mlp_only_enabled():
+
+    def attn_flops() -> float:
         head_dim = h / model_config.num_heads
         qkv_proj = 2 * h * (model_config.num_heads * head_dim + 2 * model_config.num_kv_heads * head_dim)
         dense_proj = 2 * h * h
         seq_flops = 2 * seq**2 * model_config.num_heads * head_dim
         seq_flops += 3 * seq * seq * model_config.num_heads
         seq_flops += 2 * seq * seq * head_dim * model_config.num_heads
-        per_layer += qkv_proj + dense_proj + seq_flops / seq
+        return qkv_proj + dense_proj + seq_flops / seq
+
+    dense_mlp = 2 * 2 * h * model_config.intermediate_dim  # up + down, 2 FLOPs each
+    # Each active expert is a SwiGLU FFN: gate + up + down = 3 matmuls = 6*H*I; plus the
+    # dense router projection. Only the top-k experts run per token.
+    expert_inter = model_basic.moe_expert_intermediate(model_config)
+    moe_mlp = model_config.num_experts_per_token * 2 * 3 * h * expert_inter + 2 * h * model_config.num_experts
+
+    n_moe = model_basic.moe_layer_count(model_config.num_layers)
+    per_dense = dense_mlp + (0.0 if model_basic.mlp_only_enabled() else attn_flops())
+    per_moe = moe_mlp + attn_flops()  # MoE blocks always have attention
     lm_head = 2 * h * model_config.vocab_size
-    flops_per_token = model_config.num_layers * per_layer + lm_head
+    flops_per_token = n_moe * per_moe + (model_config.num_layers - n_moe) * per_dense + lm_head
     flops_per_example = 3 * flops_per_token * seq
     return flops_per_example, {
         "throughput/flops_per_token_analytic": flops_per_token,

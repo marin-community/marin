@@ -213,13 +213,17 @@ def fused_linear_softmax_cross_entropy_loss(
         flat_weight = shard_weight.reshape((-1,))
 
         if os.environ.get("CE_IMPL") == "liger":
+            ce_chunk = int(os.environ.get("CE_LIGER_CHUNK", "8192"))
+            if ce_chunk <= 0:
+                # 0 -> one chunk per shard: a single CE iteration per device (max MFU).
+                ce_chunk = flat_hidden.shape[0]
             loss = _liger_weighted_ce(
                 flat_hidden,
                 shard_lm_head,
                 flat_labels,
                 flat_weight.astype(dtype),
                 float(logsumexp_weight or 0.0),
-                int(os.environ.get("CE_LIGER_CHUNK", "8192")),
+                ce_chunk,
             )
         else:
             loss = fused_cross_entropy_loss_and_logsumexp_penalty(

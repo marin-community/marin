@@ -10,6 +10,7 @@ All 2D arrays are routed to Muon, except those whose path contains
 """
 
 import math
+import os
 from dataclasses import dataclass
 from functools import partial
 
@@ -133,8 +134,9 @@ class GrugMuonConfig(MuonConfig):
             elif (
                 hasattr(param, "ndim")
                 and param.ndim == 3
-                and ("w_up_gate" in path_lower or "w_gate_up" in path_lower or "w_down" in path_lower)
+                and any(k in path_lower for k in ("w_up_gate", "w_gate_up", "w_gate", "w_up", "w_down"))
             ):
+                # 3D stacked MoE expert weights (combined w_gate_up or separate w_gate/w_up/w_down).
                 return "muon"
             else:
                 return "adamw"
@@ -183,6 +185,10 @@ def _grug_scale_with_muon(
 
         def transform_array(x, param):
             if not hasattr(x, "ndim") or x.ndim not in (2, 3):
+                return x
+            if os.environ.get("SCALE_MUON_NO_NS") == "1":
+                # No-op the Newton-Schulz orthogonalization (momentum-only update): skips
+                # the all-gather/reshard transient. Not real Muon; for memory/fit probes.
                 return x
             if x.ndim == 2:
                 updated = _zeropower_via_newtonschulz_replicated(
