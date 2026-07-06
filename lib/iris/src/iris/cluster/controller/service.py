@@ -25,7 +25,7 @@ from rigging.server_auth import get_verified_identity, require_identity
 from rigging.timing import Duration, ExponentialBackoff, Timer, Timestamp
 from sqlalchemy import bindparam, case, func, select, text, tuple_
 
-from iris.cluster.bundle import BundleStore
+from iris.cluster.bundle import MAX_BUNDLE_SIZE_BYTES, BundleStore
 from iris.cluster.constraints import (
     Constraint,
     backend_directive,
@@ -120,8 +120,6 @@ class UserStats:
     job_state_counts: dict[int, int] = field(default_factory=dict)
 
 
-# Maximum bundle size in bytes (25 MB) - matches client-side limit
-MAX_BUNDLE_SIZE_BYTES = 25 * 1024 * 1024
 WORKDIR_FILE_OFFLOAD_THRESHOLD = 10 * 1024  # 10KB — externalize large workdir files to blob store
 
 # Soft cap on how long launch_job waits for a replaced job's worker-bound
