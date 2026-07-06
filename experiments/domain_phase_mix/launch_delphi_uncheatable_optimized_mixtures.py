@@ -25,6 +25,8 @@ mixtures:
   0.05, 0.1, 0.2, 0.25, and 0.3.
 - Repeat controls for the one-phase DSP Table-9 KL=0.1 tied-phase candidate
   and the two-phase split-saturation/penalty Table-9 KL=0.3 candidate.
+- Gamma-capped asymmetric-bowl/effective-exposure DSP probes at the 3e18
+  validation rung.
 
 Unlike ``launch_delphi_baseline_mixtures.py``, this script intentionally accepts
 phase-asymmetric mixtures and uses the historical 80/20 Dolma3/Dolmino
@@ -104,10 +106,10 @@ REFERENCE_OUTPUT_DIR = SCRIPT_DIR / "exploratory" / "two_phase_many" / "referenc
 LOCAL_ARTIFACT_DIR = REFERENCE_OUTPUT_DIR / "delphi_uncheatable_optimized_mixtures_20260625"
 MIXTURE_ASSET_DIR = SCRIPT_DIR / "assets" / "delphi_optimized_mixtures"
 KL_SWEEP_MIXTURE_GCS_DIR = (
-    "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/" "delphi_table9_dsp_kl_sweep_3e18_20260627/mixtures"
+    "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_table9_dsp_kl_sweep_3e18_20260627/mixtures"
 )
 TABLE9_DSP_VALIDATION_MIXTURE_GCS_DIR = (
-    "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/" "delphi_table9_dsp_validation_mixtures_20260628/mixtures"
+    "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_table9_dsp_validation_mixtures_20260628/mixtures"
 )
 TABLE9_ADAPTIVE_SHRINKAGE_VALIDATION_MIXTURE_GCS_DIR = (
     "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/"
@@ -118,21 +120,45 @@ TABLE9_PHASE_SPLIT_DSP_VALIDATION_MIXTURE_GCS_DIR = (
     "delphi_table9_phase_split_dsp_validation_mixtures_20260630/mixtures"
 )
 DSP_EXPOSURE_REPAIR_VALIDATION_MIXTURE_GCS_DIR = (
-    "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/"
-    "delphi_dsp_exposure_repair_validation_mixtures_20260702/mixtures"
+    "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_dsp_exposure_repair_validation_mixtures_20260702/mixtures"
 )
 DSP_SUPPORT_AWARE_VALIDATION_MIXTURE_GCS_DIR = (
-    "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/" "delphi_dsp_support_aware_validation_mixtures_20260703/mixtures"
+    "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_dsp_support_aware_validation_mixtures_20260703/mixtures"
+)
+DSP_CANONICAL_BOWL_VALIDATION_MIXTURE_GCS_DIR = (
+    "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_dsp_canonical_bowl_validation_mixtures_20260703/mixtures"
+)
+DSP_GAMMA_CAPPED_BOWL_VALIDATION_MIXTURE_GCS_DIR = (
+    "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/"
+    "delphi_dsp_gamma_capped_bowl_validation_mixtures_20260704/mixtures"
+)
+DSP_SUFFICIENCY_FLOORED_MIXTURE_GCS_DIR = (
+    "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_sufficiency_floored_mixtures_20260705/mixtures"
+)
+DSP_WINNER_NEIGHBORHOOD_MIXTURE_GCS_DIR = (
+    "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_winner_neighborhood_mixtures_20260705/mixtures"
+)
+DSP_AUGMENTED_PROFILE_MIXTURE_GCS_DIR = (
+    "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_augmented_profile_mixtures_20260705/mixtures"
+)
+DSP_TABLE9_CONTROLLED_TILT_MIXTURE_GCS_DIR = (
+    "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_table9_controlled_tilt_mixtures_20260705/mixtures"
+)
+DSP_TABLE9_FRESH_ANNEAL_MIXTURE_GCS_DIR = (
+    "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_table9_fresh_anneal_mixtures_20260705/mixtures"
 )
 DELPHI_BASELINE_NOISE_VALIDATION_MIXTURE_GCS_DIR = (
-    "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/" "delphi_baseline_noise_validation_mixtures_20260703/mixtures"
+    "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_baseline_noise_validation_mixtures_20260703/mixtures"
 )
 ONE_PHASE_TABLE9_VALIDATION_MIXTURE_GCS_DIR = (
-    "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/" "delphi_one_phase_table9_validation_mixtures_20260628/mixtures"
+    "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_one_phase_table9_validation_mixtures_20260628/mixtures"
 )
 ONE_PHASE_UNCHEATABLE_VALIDATION_MIXTURE_GCS_DIR = (
     "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/"
     "delphi_one_phase_uncheatable_validation_mixtures_20260629/mixtures"
+)
+ONE_PHASE_OLMIX_KL_SWEEP_MIXTURE_GCS_DIR = (
+    "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_one_phase_olmix_kl_sweep_3e18_20260705/mixtures"
 )
 TABLE9_REQUEST_SET_DIR = InputName.hardcoded("raw/eval-datasets/olmo_base_eval_table9/v2")
 TABLE9_EVAL_RESOURCES = ResourceConfig.with_tpu("v6e-8", regions=["us-east5"], zone="us-east5-b", disk="80g")
@@ -140,7 +166,7 @@ TABLE9_TARGET_METRIC = "olmo_base_easy/table9_51_component_macro_bpb"
 
 EXPERIMENT_NAME = "pinlin_calvin_xu/data_mixture/delphi_uncheatable_optimized_mixtures_20260625"
 DEFAULT_ANALYSIS_OUTPUT_PATH = (
-    "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/" "delphi_baseline_mixtures_issue6607_20260623/analysis-af9355"
+    "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_baseline_mixtures_issue6607_20260623/analysis-af9355"
 )
 DEFAULT_MAX_CONCURRENT = 4
 RUN_ID_BASE = 662_000
@@ -185,8 +211,24 @@ class DelphiValidationMixture(StrEnum):
     DSP_SPLIT_TABLE9_L2_0P01_KL0P4_REPEAT = "dsp_split_table9_l2_0p01_kl0p4_repeat"
     DSP_EFFECTIVE_EXPOSURE_TABLE9_L2_0P01_KL0P5 = "dsp_effexp_table9_l2_0p01_kl0p5"
     OLMIX_ONE_PHASE_UNCHEATABLE_D001_KL005_CAP4 = "olmix_onephase_uncheatable_d001_kl005_cap4"
+    OLMIX_ONE_PHASE_UNCHEATABLE_D001_KL0_CAP4 = "olmix_onephase_uncheatable_d001_kl0_cap4"
+    OLMIX_ONE_PHASE_UNCHEATABLE_D001_KL0P005_CAP4 = "olmix_onephase_uncheatable_d001_kl0p005_cap4"
+    OLMIX_ONE_PHASE_UNCHEATABLE_D001_KL0P01_CAP4 = "olmix_onephase_uncheatable_d001_kl0p01_cap4"
+    OLMIX_ONE_PHASE_UNCHEATABLE_D001_KL0P025_CAP4 = "olmix_onephase_uncheatable_d001_kl0p025_cap4"
+    OLMIX_ONE_PHASE_UNCHEATABLE_D001_KL0P075_CAP4 = "olmix_onephase_uncheatable_d001_kl0p075_cap4"
+    OLMIX_ONE_PHASE_UNCHEATABLE_D001_KL0P1_CAP4 = "olmix_onephase_uncheatable_d001_kl0p1_cap4"
+    OLMIX_ONE_PHASE_UNCHEATABLE_D001_KL0P2_CAP4 = "olmix_onephase_uncheatable_d001_kl0p2_cap4"
+    OLMIX_ONE_PHASE_UNCHEATABLE_D001_KL0P5_CAP4 = "olmix_onephase_uncheatable_d001_kl0p5_cap4"
     DSP_ONE_PHASE_EFFECTIVE_EXPOSURE_UNCHEATABLE_KL0P1 = "dsp_onephase_effexp_uncheatable_kl0p1"
     OLMIX_ONE_PHASE_TABLE9_D001_KL005_CAP4 = "olmix_onephase_table9_d001_kl005_cap4"
+    OLMIX_ONE_PHASE_TABLE9_D001_KL0_CAP4 = "olmix_onephase_table9_d001_kl0_cap4"
+    OLMIX_ONE_PHASE_TABLE9_D001_KL0P005_CAP4 = "olmix_onephase_table9_d001_kl0p005_cap4"
+    OLMIX_ONE_PHASE_TABLE9_D001_KL0P01_CAP4 = "olmix_onephase_table9_d001_kl0p01_cap4"
+    OLMIX_ONE_PHASE_TABLE9_D001_KL0P025_CAP4 = "olmix_onephase_table9_d001_kl0p025_cap4"
+    OLMIX_ONE_PHASE_TABLE9_D001_KL0P075_CAP4 = "olmix_onephase_table9_d001_kl0p075_cap4"
+    OLMIX_ONE_PHASE_TABLE9_D001_KL0P1_CAP4 = "olmix_onephase_table9_d001_kl0p1_cap4"
+    OLMIX_ONE_PHASE_TABLE9_D001_KL0P2_CAP4 = "olmix_onephase_table9_d001_kl0p2_cap4"
+    OLMIX_ONE_PHASE_TABLE9_D001_KL0P5_CAP4 = "olmix_onephase_table9_d001_kl0p5_cap4"
     DSP_ONE_PHASE_EFFECTIVE_EXPOSURE_TABLE9_KL0P05 = "dsp_onephase_effexp_table9_kl0p05"
     DSP_ONE_PHASE_EFFECTIVE_EXPOSURE_TABLE9_KL0P1 = "dsp_onephase_effexp_table9_kl0p1"
     DSP_ONE_PHASE_EFFECTIVE_EXPOSURE_TABLE9_KL0P2 = "dsp_onephase_effexp_table9_kl0p2"
@@ -201,6 +243,83 @@ class DelphiValidationMixture(StrEnum):
     DSP_UNCHEATABLE_SUPPORT_AWARE_RAW_OPTIMUM = "dsp_uncheatable_support_aware_raw_optimum"
     DSP_TABLE9_EXPOSURE_TARGETED = "dsp_table9_exposure_targeted"
     DSP_TABLE9_EXPOSURE_ALL_DEFICITS = "dsp_table9_exposure_all_deficits"
+    DSP_CANON_TABLE9_KL0P2 = "dsp_canon_table9_kl0p2"
+    DSP_CANON_TABLE9_KL0P5 = "dsp_canon_table9_kl0p5"
+    DSP_ABOWL_TABLE9_KL0P05 = "dsp_abowl_table9_kl0p05"
+    DSP_ABOWL_TABLE9_KL0P1 = "dsp_abowl_table9_kl0p1"
+    DSP_ABOWL_TABLE9_KL0P2 = "dsp_abowl_table9_kl0p2"
+    DSP_CANON_UNCHEATABLE_KL0P2 = "dsp_canon_uncheatable_kl0p2"
+    DSP_CANON_UNCHEATABLE_KL0P5 = "dsp_canon_uncheatable_kl0p5"
+    DSP_ABOWL_UNCHEATABLE_KL0P05 = "dsp_abowl_uncheatable_kl0p05"
+    DSP_ABOWL_UNCHEATABLE_KL0P1 = "dsp_abowl_uncheatable_kl0p1"
+    DSP_ABOWL_UNCHEATABLE_KL0P2 = "dsp_abowl_uncheatable_kl0p2"
+    DSP_GAMMA_BOWL_TABLE9_G1_KL0P2_TWOPHASE = "dsp_gamma_bowl_table9_g1_kl0p2_twophase"
+    DSP_GAMMA_BOWL_TABLE9_G8_KL0P2_TWOPHASE = "dsp_gamma_bowl_table9_g8_kl0p2_twophase"
+    DSP_GAMMA_BOWL_TABLE9_G10_KL0P2_TWOPHASE = "dsp_gamma_bowl_table9_g10_kl0p2_twophase"
+    DSP_GAMMA_BOWL_TABLE9_G12_KL0P2_TWOPHASE = "dsp_gamma_bowl_table9_g12_kl0p2_twophase"
+    DSP_GAMMA_BOWL_TABLE9_G16_KL0P2_TWOPHASE = "dsp_gamma_bowl_table9_g16_kl0p2_twophase"
+    DSP_GAMMA_BOWL_TABLE9_G10_KL0P1_TWOPHASE = "dsp_gamma_bowl_table9_g10_kl0p1_twophase"
+    DSP_GAMMA_BOWL_TABLE9_G10_KL0P3_TWOPHASE = "dsp_gamma_bowl_table9_g10_kl0p3_twophase"
+    DSP_GAMMA_BOWL_TABLE9_G10_KL0P1_ONEPHASE = "dsp_gamma_bowl_table9_g10_kl0p1_onephase"
+    DSP_GAMMA_BOWL_TABLE9_G10_KL0P2_ONEPHASE = "dsp_gamma_bowl_table9_g10_kl0p2_onephase"
+    DSP_GAMMA_EFFEXP_TABLE9_G10_KL0P2_TWOPHASE = "dsp_gamma_effexp_table9_g10_kl0p2_twophase"
+    DSP_GAMMA_BOWL_UNCHEATABLE_G10_KL0P2_TWOPHASE = "dsp_gamma_bowl_uncheatable_g10_kl0p2_twophase"
+    DSP_GAMMA_BOWL_UNCHEATABLE_G10_KL0P2_ONEPHASE = "dsp_gamma_bowl_uncheatable_g10_kl0p2_onephase"
+    SUFF_UNCHEAT_FLOOR_A0 = "suff_uncheat_floor_a0"
+    SUFF_UNCHEAT_FLOOR_A0P7 = "suff_uncheat_floor_a0p7"
+    SUFF_UNCHEAT_FLOOR_A1P0 = "suff_uncheat_floor_a1p0"
+    SUFF_UNCHEAT_FLOOR_A1P2 = "suff_uncheat_floor_a1p2"
+    SUFF_UNCHEAT_FLOOR_A1P0_G6 = "suff_uncheat_floor_a1p0_g6"
+    SUFF_UNCHEAT_FLOOR_A1P0_EFFEXP = "suff_uncheat_floor_a1p0_effexp"
+    SUFF_UNCHEAT_ONEPHASE = "suff_uncheat_onephase"
+    SUFF_UNCHEAT_EVALREL = "suff_uncheat_evalrel"
+    SUFF_TABLE9_FLOOR_A0 = "suff_table9_floor_a0"
+    SUFF_TABLE9_FLOOR_A1P0 = "suff_table9_floor_a1p0"
+    SUFF_TABLE9_ONEPHASE = "suff_table9_onephase"
+    WNBR_UNCHEAT_WINNER = "wnbr_uncheat_winner"
+    WNBR_UNCHEAT_TILT_K0 = "wnbr_uncheat_tilt_k0"
+    WNBR_UNCHEAT_TILT_K0P5 = "wnbr_uncheat_tilt_k0p5"
+    WNBR_UNCHEAT_TILT_K1P5 = "wnbr_uncheat_tilt_k1p5"
+    WNBR_UNCHEAT_OVERWEIGHT_0P7 = "wnbr_uncheat_overweight_0p7"
+    WNBR_UNCHEAT_OVERWEIGHT_1P3 = "wnbr_uncheat_overweight_1p3"
+    WNBR_TABLE9_WINNER = "wnbr_table9_winner"
+    WNBR_TABLE9_TILT_K1P5 = "wnbr_table9_tilt_k1p5"
+    WNBR_TABLE9_OVERWEIGHT_1P3 = "wnbr_table9_overweight_1p3"
+    AUGP_UNCHEAT_PROFILE = "augp_uncheat_profile"
+    AUGP_UNCHEAT_PROFILE_1PHASE = "augp_uncheat_profile_1phase"
+    AUGP_UNCHEAT_BLEND = "augp_uncheat_blend"
+    AUGP_TABLE9_PROFILE = "augp_table9_profile"
+    T9TILT_K0 = "t9_tilt_k0_onephase"
+    T9TILT_KMOD = "t9_tilt_kmod"
+    T9TILT_KHIGH = "t9_tilt_khigh"
+    T9TILT_KMAX = "t9_tilt_kmax"
+    T9ANNEAL_K0 = "t9anneal_k0_onephase"
+    T9ANNEAL_KMOD = "t9anneal_kmod"
+    T9ANNEAL_KHIGH = "t9anneal_khigh"
+    T9ANNEAL_KMAX = "t9anneal_kmax"
+    T9AN2_K0 = "t9an2_k0_onephase"
+    T9AN2_K0R = "t9an2_k0_repeat"
+    T9AN2_E10 = "t9an2_expanded_k0p10"
+    T9AN2_E18 = "t9an2_expanded_k0p18"
+    T9AN2_E28 = "t9an2_expanded_k0p28"
+    T9AN2_N15 = "t9an2_narrow_k0p15"
+    T9REP_NARROW_S0 = "t9rep_narrow_s0"
+    T9REP_NARROW_S1 = "t9rep_narrow_s1"
+    T9REP_NARROW_S2 = "t9rep_narrow_s2"
+    T9REP_ONEPH_S0 = "t9rep_oneph_s0"
+    T9REP_ONEPH_S1 = "t9rep_oneph_s1"
+    T9REP_ONEPH_S2 = "t9rep_oneph_s2"
+    T9VR_K0 = "t9vr_k0"
+    T9VR_KMOD = "t9vr_kmod"
+    T9VR_KHIGH = "t9vr_khigh"
+    T9VRR_KMOD_S0 = "t9vrr_kmod_s0"
+    T9VRR_KMOD_S1 = "t9vrr_kmod_s1"
+    T9VRR_KMOD_S2 = "t9vrr_kmod_s2"
+    T9VRR_KMOD_S3 = "t9vrr_kmod_s3"
+    T9VRR_K0_S0 = "t9vrr_k0_s0"
+    T9VRR_K0_S1 = "t9vrr_k0_s1"
+    T9VRR_K0_S2 = "t9vrr_k0_s2"
+    T9VRR_K0_S3 = "t9vrr_k0_s3"
     PROPORTIONAL_NOISE_3E18_A = "proportional_noise_3e18_a"
     PROPORTIONAL_NOISE_3E18_B = "proportional_noise_3e18_b"
     PROPORTIONAL_NOISE_3E18_C = "proportional_noise_3e18_c"
@@ -285,6 +404,27 @@ def _one_phase_uncheatable_validation_source(
     )
 
 
+def _one_phase_olmix_kl_sweep_source(
+    *,
+    key: DelphiValidationMixture,
+    display_name: str,
+    github_issue: int,
+    target_metric: str,
+    method: str,
+    expected_max_simulated_epoch: float = 4.00001,
+) -> MixtureSource:
+    return MixtureSource(
+        key=key,
+        display_name=display_name,
+        source_csv=f"{ONE_PHASE_OLMIX_KL_SWEEP_MIXTURE_GCS_DIR}/{key.value}.csv",
+        github_issue=github_issue,
+        target_metric=target_metric,
+        method=method,
+        wandb_series_tag="delphi-one-phase-olmix-kl-sweep",
+        expected_max_simulated_epoch=expected_max_simulated_epoch,
+    )
+
+
 def _table9_adaptive_shrinkage_source(
     *,
     key: DelphiValidationMixture,
@@ -339,6 +479,144 @@ def _dsp_exposure_repair_source(
         target_metric=target_metric,
         method=method,
         wandb_series_tag="delphi-dsp-exposure-repair-validation",
+        expected_max_simulated_epoch=expected_max_simulated_epoch,
+    )
+
+
+def _dsp_canonical_bowl_source(
+    *,
+    key: DelphiValidationMixture,
+    display_name: str,
+    target_metric: str,
+    method: str,
+    expected_max_simulated_epoch: float,
+) -> MixtureSource:
+    return MixtureSource(
+        key=key,
+        display_name=display_name,
+        source_csv=f"{DSP_CANONICAL_BOWL_VALIDATION_MIXTURE_GCS_DIR}/{key.value}.csv",
+        github_issue=6611,
+        target_metric=target_metric,
+        method=method,
+        wandb_series_tag="delphi-dsp-canonical-bowl-validation",
+        expected_max_simulated_epoch=expected_max_simulated_epoch,
+    )
+
+
+def _dsp_gamma_capped_bowl_source(
+    *,
+    key: DelphiValidationMixture,
+    display_name: str,
+    target_metric: str,
+    method: str,
+    expected_max_simulated_epoch: float,
+) -> MixtureSource:
+    return MixtureSource(
+        key=key,
+        display_name=display_name,
+        source_csv=f"{DSP_GAMMA_CAPPED_BOWL_VALIDATION_MIXTURE_GCS_DIR}/{key.value}.csv",
+        github_issue=6611,
+        target_metric=target_metric,
+        method=method,
+        wandb_series_tag="delphi-dsp-gamma-capped-bowl-validation",
+        expected_max_simulated_epoch=expected_max_simulated_epoch,
+    )
+
+
+def _sufficiency_floored_source(
+    *,
+    key: DelphiValidationMixture,
+    display_name: str,
+    target_metric: str,
+    method: str,
+    expected_max_simulated_epoch: float,
+) -> MixtureSource:
+    return MixtureSource(
+        key=key,
+        display_name=display_name,
+        source_csv=f"{DSP_SUFFICIENCY_FLOORED_MIXTURE_GCS_DIR}/{key.value}.csv",
+        github_issue=6611,
+        target_metric=target_metric,
+        method=method,
+        wandb_series_tag="delphi-sufficiency-floored-validation",
+        expected_max_simulated_epoch=expected_max_simulated_epoch,
+    )
+
+
+def _winner_neighborhood_source(
+    *,
+    key: DelphiValidationMixture,
+    display_name: str,
+    target_metric: str,
+    method: str,
+    expected_max_simulated_epoch: float,
+) -> MixtureSource:
+    return MixtureSource(
+        key=key,
+        display_name=display_name,
+        source_csv=f"{DSP_WINNER_NEIGHBORHOOD_MIXTURE_GCS_DIR}/{key.value}.csv",
+        github_issue=6611,
+        target_metric=target_metric,
+        method=method,
+        wandb_series_tag="delphi-winner-neighborhood-validation",
+        expected_max_simulated_epoch=expected_max_simulated_epoch,
+    )
+
+
+def _augmented_profile_source(
+    *,
+    key: DelphiValidationMixture,
+    display_name: str,
+    target_metric: str,
+    method: str,
+    expected_max_simulated_epoch: float,
+) -> MixtureSource:
+    return MixtureSource(
+        key=key,
+        display_name=display_name,
+        source_csv=f"{DSP_AUGMENTED_PROFILE_MIXTURE_GCS_DIR}/{key.value}.csv",
+        github_issue=6611,
+        target_metric=target_metric,
+        method=method,
+        wandb_series_tag="delphi-augmented-profile-validation",
+        expected_max_simulated_epoch=expected_max_simulated_epoch,
+    )
+
+
+def _table9_controlled_tilt_source(
+    *,
+    key: DelphiValidationMixture,
+    display_name: str,
+    method: str,
+    expected_max_simulated_epoch: float,
+) -> MixtureSource:
+    return MixtureSource(
+        key=key,
+        display_name=display_name,
+        source_csv=f"{DSP_TABLE9_CONTROLLED_TILT_MIXTURE_GCS_DIR}/{key.value}.csv",
+        github_issue=6611,
+        target_metric=TABLE9_TARGET_METRIC,
+        method=method,
+        wandb_series_tag="delphi-table9-controlled-tilt-validation",
+        expected_max_simulated_epoch=expected_max_simulated_epoch,
+    )
+
+
+def _table9_fresh_anneal_source(
+    *,
+    key: DelphiValidationMixture,
+    display_name: str,
+    method: str,
+    expected_max_simulated_epoch: float,
+) -> MixtureSource:
+    return MixtureSource(
+        key=key,
+        display_name=display_name,
+        source_csv=f"{DSP_TABLE9_FRESH_ANNEAL_MIXTURE_GCS_DIR}/{key.value}.csv",
+        github_issue=6611,
+        target_metric=TABLE9_TARGET_METRIC,
+        method=method,
+        wandb_series_tag="delphi-table9-fresh-anneal-validation",
         expected_max_simulated_epoch=expected_max_simulated_epoch,
     )
 
@@ -622,6 +900,62 @@ MIXTURE_SOURCES: dict[DelphiValidationMixture, MixtureSource] = {
         method="one_phase_olmix_uncheatable_delta0p01_kl0p05_cap4",
         expected_max_simulated_epoch=4.000002,
     ),
+    DelphiValidationMixture.OLMIX_ONE_PHASE_UNCHEATABLE_D001_KL0_CAP4: _one_phase_olmix_kl_sweep_source(
+        key=DelphiValidationMixture.OLMIX_ONE_PHASE_UNCHEATABLE_D001_KL0_CAP4,
+        display_name="One-phase OLMix uncheatable BPB delta=0.01 KL=0 cap=4",
+        github_issue=6608,
+        target_metric="eval/uncheatable_eval/bpb",
+        method="one_phase_olmix_uncheatable_delta0p01_kl0_cap4",
+    ),
+    DelphiValidationMixture.OLMIX_ONE_PHASE_UNCHEATABLE_D001_KL0P005_CAP4: _one_phase_olmix_kl_sweep_source(
+        key=DelphiValidationMixture.OLMIX_ONE_PHASE_UNCHEATABLE_D001_KL0P005_CAP4,
+        display_name="One-phase OLMix uncheatable BPB delta=0.01 KL=0.005 cap=4",
+        github_issue=6608,
+        target_metric="eval/uncheatable_eval/bpb",
+        method="one_phase_olmix_uncheatable_delta0p01_kl0p005_cap4",
+    ),
+    DelphiValidationMixture.OLMIX_ONE_PHASE_UNCHEATABLE_D001_KL0P01_CAP4: _one_phase_olmix_kl_sweep_source(
+        key=DelphiValidationMixture.OLMIX_ONE_PHASE_UNCHEATABLE_D001_KL0P01_CAP4,
+        display_name="One-phase OLMix uncheatable BPB delta=0.01 KL=0.01 cap=4",
+        github_issue=6608,
+        target_metric="eval/uncheatable_eval/bpb",
+        method="one_phase_olmix_uncheatable_delta0p01_kl0p01_cap4",
+    ),
+    DelphiValidationMixture.OLMIX_ONE_PHASE_UNCHEATABLE_D001_KL0P025_CAP4: _one_phase_olmix_kl_sweep_source(
+        key=DelphiValidationMixture.OLMIX_ONE_PHASE_UNCHEATABLE_D001_KL0P025_CAP4,
+        display_name="One-phase OLMix uncheatable BPB delta=0.01 KL=0.025 cap=4",
+        github_issue=6608,
+        target_metric="eval/uncheatable_eval/bpb",
+        method="one_phase_olmix_uncheatable_delta0p01_kl0p025_cap4",
+    ),
+    DelphiValidationMixture.OLMIX_ONE_PHASE_UNCHEATABLE_D001_KL0P075_CAP4: _one_phase_olmix_kl_sweep_source(
+        key=DelphiValidationMixture.OLMIX_ONE_PHASE_UNCHEATABLE_D001_KL0P075_CAP4,
+        display_name="One-phase OLMix uncheatable BPB delta=0.01 KL=0.075 cap=4",
+        github_issue=6608,
+        target_metric="eval/uncheatable_eval/bpb",
+        method="one_phase_olmix_uncheatable_delta0p01_kl0p075_cap4",
+    ),
+    DelphiValidationMixture.OLMIX_ONE_PHASE_UNCHEATABLE_D001_KL0P1_CAP4: _one_phase_olmix_kl_sweep_source(
+        key=DelphiValidationMixture.OLMIX_ONE_PHASE_UNCHEATABLE_D001_KL0P1_CAP4,
+        display_name="One-phase OLMix uncheatable BPB delta=0.01 KL=0.1 cap=4",
+        github_issue=6608,
+        target_metric="eval/uncheatable_eval/bpb",
+        method="one_phase_olmix_uncheatable_delta0p01_kl0p1_cap4",
+    ),
+    DelphiValidationMixture.OLMIX_ONE_PHASE_UNCHEATABLE_D001_KL0P2_CAP4: _one_phase_olmix_kl_sweep_source(
+        key=DelphiValidationMixture.OLMIX_ONE_PHASE_UNCHEATABLE_D001_KL0P2_CAP4,
+        display_name="One-phase OLMix uncheatable BPB delta=0.01 KL=0.2 cap=4",
+        github_issue=6608,
+        target_metric="eval/uncheatable_eval/bpb",
+        method="one_phase_olmix_uncheatable_delta0p01_kl0p2_cap4",
+    ),
+    DelphiValidationMixture.OLMIX_ONE_PHASE_UNCHEATABLE_D001_KL0P5_CAP4: _one_phase_olmix_kl_sweep_source(
+        key=DelphiValidationMixture.OLMIX_ONE_PHASE_UNCHEATABLE_D001_KL0P5_CAP4,
+        display_name="One-phase OLMix uncheatable BPB delta=0.01 KL=0.5 cap=4",
+        github_issue=6608,
+        target_metric="eval/uncheatable_eval/bpb",
+        method="one_phase_olmix_uncheatable_delta0p01_kl0p5_cap4",
+    ),
     DelphiValidationMixture.DSP_ONE_PHASE_EFFECTIVE_EXPOSURE_UNCHEATABLE_KL0P1: _one_phase_uncheatable_validation_source(
         key=DelphiValidationMixture.DSP_ONE_PHASE_EFFECTIVE_EXPOSURE_UNCHEATABLE_KL0P1,
         display_name="One-phase DSP effective-exposure uncheatable BPB KL=0.1",
@@ -633,6 +967,62 @@ MIXTURE_SOURCES: dict[DelphiValidationMixture, MixtureSource] = {
         display_name="One-phase OLMix Table-9 macro delta=0.01 KL=0.05 cap=4",
         method="one_phase_olmix_table9_delta0p01_kl0p05_cap4",
         expected_max_simulated_epoch=4.0,
+    ),
+    DelphiValidationMixture.OLMIX_ONE_PHASE_TABLE9_D001_KL0_CAP4: _one_phase_olmix_kl_sweep_source(
+        key=DelphiValidationMixture.OLMIX_ONE_PHASE_TABLE9_D001_KL0_CAP4,
+        display_name="One-phase OLMix Table-9 macro delta=0.01 KL=0 cap=4",
+        github_issue=6611,
+        target_metric=TABLE9_TARGET_METRIC,
+        method="one_phase_olmix_table9_delta0p01_kl0_cap4",
+    ),
+    DelphiValidationMixture.OLMIX_ONE_PHASE_TABLE9_D001_KL0P005_CAP4: _one_phase_olmix_kl_sweep_source(
+        key=DelphiValidationMixture.OLMIX_ONE_PHASE_TABLE9_D001_KL0P005_CAP4,
+        display_name="One-phase OLMix Table-9 macro delta=0.01 KL=0.005 cap=4",
+        github_issue=6611,
+        target_metric=TABLE9_TARGET_METRIC,
+        method="one_phase_olmix_table9_delta0p01_kl0p005_cap4",
+    ),
+    DelphiValidationMixture.OLMIX_ONE_PHASE_TABLE9_D001_KL0P01_CAP4: _one_phase_olmix_kl_sweep_source(
+        key=DelphiValidationMixture.OLMIX_ONE_PHASE_TABLE9_D001_KL0P01_CAP4,
+        display_name="One-phase OLMix Table-9 macro delta=0.01 KL=0.01 cap=4",
+        github_issue=6611,
+        target_metric=TABLE9_TARGET_METRIC,
+        method="one_phase_olmix_table9_delta0p01_kl0p01_cap4",
+    ),
+    DelphiValidationMixture.OLMIX_ONE_PHASE_TABLE9_D001_KL0P025_CAP4: _one_phase_olmix_kl_sweep_source(
+        key=DelphiValidationMixture.OLMIX_ONE_PHASE_TABLE9_D001_KL0P025_CAP4,
+        display_name="One-phase OLMix Table-9 macro delta=0.01 KL=0.025 cap=4",
+        github_issue=6611,
+        target_metric=TABLE9_TARGET_METRIC,
+        method="one_phase_olmix_table9_delta0p01_kl0p025_cap4",
+    ),
+    DelphiValidationMixture.OLMIX_ONE_PHASE_TABLE9_D001_KL0P075_CAP4: _one_phase_olmix_kl_sweep_source(
+        key=DelphiValidationMixture.OLMIX_ONE_PHASE_TABLE9_D001_KL0P075_CAP4,
+        display_name="One-phase OLMix Table-9 macro delta=0.01 KL=0.075 cap=4",
+        github_issue=6611,
+        target_metric=TABLE9_TARGET_METRIC,
+        method="one_phase_olmix_table9_delta0p01_kl0p075_cap4",
+    ),
+    DelphiValidationMixture.OLMIX_ONE_PHASE_TABLE9_D001_KL0P1_CAP4: _one_phase_olmix_kl_sweep_source(
+        key=DelphiValidationMixture.OLMIX_ONE_PHASE_TABLE9_D001_KL0P1_CAP4,
+        display_name="One-phase OLMix Table-9 macro delta=0.01 KL=0.1 cap=4",
+        github_issue=6611,
+        target_metric=TABLE9_TARGET_METRIC,
+        method="one_phase_olmix_table9_delta0p01_kl0p1_cap4",
+    ),
+    DelphiValidationMixture.OLMIX_ONE_PHASE_TABLE9_D001_KL0P2_CAP4: _one_phase_olmix_kl_sweep_source(
+        key=DelphiValidationMixture.OLMIX_ONE_PHASE_TABLE9_D001_KL0P2_CAP4,
+        display_name="One-phase OLMix Table-9 macro delta=0.01 KL=0.2 cap=4",
+        github_issue=6611,
+        target_metric=TABLE9_TARGET_METRIC,
+        method="one_phase_olmix_table9_delta0p01_kl0p2_cap4",
+    ),
+    DelphiValidationMixture.OLMIX_ONE_PHASE_TABLE9_D001_KL0P5_CAP4: _one_phase_olmix_kl_sweep_source(
+        key=DelphiValidationMixture.OLMIX_ONE_PHASE_TABLE9_D001_KL0P5_CAP4,
+        display_name="One-phase OLMix Table-9 macro delta=0.01 KL=0.5 cap=4",
+        github_issue=6611,
+        target_metric=TABLE9_TARGET_METRIC,
+        method="one_phase_olmix_table9_delta0p01_kl0p5_cap4",
     ),
     DelphiValidationMixture.DSP_ONE_PHASE_EFFECTIVE_EXPOSURE_TABLE9_KL0P05: _one_phase_table9_validation_source(
         key=DelphiValidationMixture.DSP_ONE_PHASE_EFFECTIVE_EXPOSURE_TABLE9_KL0P05,
@@ -721,7 +1111,7 @@ MIXTURE_SOURCES: dict[DelphiValidationMixture, MixtureSource] = {
     DelphiValidationMixture.DSP_UNCHEATABLE_SUPPORT_AWARE_RAW_OPTIMUM: MixtureSource(
         key=DelphiValidationMixture.DSP_UNCHEATABLE_SUPPORT_AWARE_RAW_OPTIMUM,
         display_name="DSP uncheatable support-aware raw optimum",
-        source_csv=(f"{DSP_SUPPORT_AWARE_VALIDATION_MIXTURE_GCS_DIR}/" "dsp_uncheatable_support_aware_raw_optimum.csv"),
+        source_csv=(f"{DSP_SUPPORT_AWARE_VALIDATION_MIXTURE_GCS_DIR}/dsp_uncheatable_support_aware_raw_optimum.csv"),
         github_issue=6602,
         target_metric="eval/uncheatable_eval/bpb",
         method="dsp_uncheatable_support_aware_effexp_floor_raw_optimum",
@@ -740,6 +1130,514 @@ MIXTURE_SOURCES: dict[DelphiValidationMixture, MixtureSource] = {
         display_name="DSP Table-9 aggregate-exposure all-deficits repair",
         target_metric=TABLE9_TARGET_METRIC,
         method="dsp_table9_exposure_all_deficits_repair",
+        expected_max_simulated_epoch=16.541118,
+    ),
+    DelphiValidationMixture.DSP_CANON_TABLE9_KL0P2: _dsp_canonical_bowl_source(
+        key=DelphiValidationMixture.DSP_CANON_TABLE9_KL0P2,
+        display_name="Canonical DSP Table-9 macro KL=0.2",
+        target_metric=TABLE9_TARGET_METRIC,
+        method="dsp_canonical_table9_kl0p2",
+        expected_max_simulated_epoch=11.087,
+    ),
+    DelphiValidationMixture.DSP_CANON_TABLE9_KL0P5: _dsp_canonical_bowl_source(
+        key=DelphiValidationMixture.DSP_CANON_TABLE9_KL0P5,
+        display_name="Canonical DSP Table-9 macro KL=0.5",
+        target_metric=TABLE9_TARGET_METRIC,
+        method="dsp_canonical_table9_kl0p5",
+        expected_max_simulated_epoch=2.312,
+    ),
+    DelphiValidationMixture.DSP_ABOWL_TABLE9_KL0P05: _dsp_canonical_bowl_source(
+        key=DelphiValidationMixture.DSP_ABOWL_TABLE9_KL0P05,
+        display_name="Asymmetric-bowl DSP Table-9 macro KL=0.05",
+        target_metric=TABLE9_TARGET_METRIC,
+        method="dsp_asymmetric_bowl_table9_kl0p05",
+        expected_max_simulated_epoch=8.164,
+    ),
+    DelphiValidationMixture.DSP_ABOWL_TABLE9_KL0P1: _dsp_canonical_bowl_source(
+        key=DelphiValidationMixture.DSP_ABOWL_TABLE9_KL0P1,
+        display_name="Asymmetric-bowl DSP Table-9 macro KL=0.1",
+        target_metric=TABLE9_TARGET_METRIC,
+        method="dsp_asymmetric_bowl_table9_kl0p1",
+        expected_max_simulated_epoch=6.454,
+    ),
+    DelphiValidationMixture.DSP_ABOWL_TABLE9_KL0P2: _dsp_canonical_bowl_source(
+        key=DelphiValidationMixture.DSP_ABOWL_TABLE9_KL0P2,
+        display_name="Asymmetric-bowl DSP Table-9 macro KL=0.2",
+        target_metric=TABLE9_TARGET_METRIC,
+        method="dsp_asymmetric_bowl_table9_kl0p2",
+        expected_max_simulated_epoch=4.767,
+    ),
+    DelphiValidationMixture.DSP_CANON_UNCHEATABLE_KL0P2: _dsp_canonical_bowl_source(
+        key=DelphiValidationMixture.DSP_CANON_UNCHEATABLE_KL0P2,
+        display_name="Canonical DSP uncheatable BPB KL=0.2",
+        target_metric="eval/uncheatable_eval/bpb",
+        method="dsp_canonical_uncheatable_kl0p2",
+        expected_max_simulated_epoch=4.814,
+    ),
+    DelphiValidationMixture.DSP_CANON_UNCHEATABLE_KL0P5: _dsp_canonical_bowl_source(
+        key=DelphiValidationMixture.DSP_CANON_UNCHEATABLE_KL0P5,
+        display_name="Canonical DSP uncheatable BPB KL=0.5",
+        target_metric="eval/uncheatable_eval/bpb",
+        method="dsp_canonical_uncheatable_kl0p5",
+        expected_max_simulated_epoch=3.092,
+    ),
+    DelphiValidationMixture.DSP_ABOWL_UNCHEATABLE_KL0P05: _dsp_canonical_bowl_source(
+        key=DelphiValidationMixture.DSP_ABOWL_UNCHEATABLE_KL0P05,
+        display_name="Asymmetric-bowl DSP uncheatable BPB KL=0.05",
+        target_metric="eval/uncheatable_eval/bpb",
+        method="dsp_asymmetric_bowl_uncheatable_kl0p05",
+        expected_max_simulated_epoch=4.592,
+    ),
+    DelphiValidationMixture.DSP_ABOWL_UNCHEATABLE_KL0P1: _dsp_canonical_bowl_source(
+        key=DelphiValidationMixture.DSP_ABOWL_UNCHEATABLE_KL0P1,
+        display_name="Asymmetric-bowl DSP uncheatable BPB KL=0.1",
+        target_metric="eval/uncheatable_eval/bpb",
+        method="dsp_asymmetric_bowl_uncheatable_kl0p1",
+        expected_max_simulated_epoch=3.958,
+    ),
+    DelphiValidationMixture.DSP_ABOWL_UNCHEATABLE_KL0P2: _dsp_canonical_bowl_source(
+        key=DelphiValidationMixture.DSP_ABOWL_UNCHEATABLE_KL0P2,
+        display_name="Asymmetric-bowl DSP uncheatable BPB KL=0.2",
+        target_metric="eval/uncheatable_eval/bpb",
+        method="dsp_asymmetric_bowl_uncheatable_kl0p2",
+        expected_max_simulated_epoch=3.210,
+    ),
+    DelphiValidationMixture.DSP_GAMMA_BOWL_TABLE9_G1_KL0P2_TWOPHASE: _dsp_gamma_capped_bowl_source(
+        key=DelphiValidationMixture.DSP_GAMMA_BOWL_TABLE9_G1_KL0P2_TWOPHASE,
+        display_name="Gamma-capped bowl Table-9 gamma=1 KL=0.2 two-phase",
+        target_metric=TABLE9_TARGET_METRIC,
+        method="dsp_gamma_capped_bowl_table9_g1_kl0p2_twophase",
+        expected_max_simulated_epoch=7.528739,
+    ),
+    DelphiValidationMixture.DSP_GAMMA_BOWL_TABLE9_G8_KL0P2_TWOPHASE: _dsp_gamma_capped_bowl_source(
+        key=DelphiValidationMixture.DSP_GAMMA_BOWL_TABLE9_G8_KL0P2_TWOPHASE,
+        display_name="Gamma-capped bowl Table-9 gamma=8 KL=0.2 two-phase",
+        target_metric=TABLE9_TARGET_METRIC,
+        method="dsp_gamma_capped_bowl_table9_g8_kl0p2_twophase",
+        expected_max_simulated_epoch=4.878790,
+    ),
+    DelphiValidationMixture.DSP_GAMMA_BOWL_TABLE9_G10_KL0P2_TWOPHASE: _dsp_gamma_capped_bowl_source(
+        key=DelphiValidationMixture.DSP_GAMMA_BOWL_TABLE9_G10_KL0P2_TWOPHASE,
+        display_name="Gamma-capped bowl Table-9 gamma=10 KL=0.2 two-phase",
+        target_metric=TABLE9_TARGET_METRIC,
+        method="dsp_gamma_capped_bowl_table9_g10_kl0p2_twophase",
+        expected_max_simulated_epoch=4.933405,
+    ),
+    DelphiValidationMixture.DSP_GAMMA_BOWL_TABLE9_G12_KL0P2_TWOPHASE: _dsp_gamma_capped_bowl_source(
+        key=DelphiValidationMixture.DSP_GAMMA_BOWL_TABLE9_G12_KL0P2_TWOPHASE,
+        display_name="Gamma-capped bowl Table-9 gamma=12 KL=0.2 two-phase",
+        target_metric=TABLE9_TARGET_METRIC,
+        method="dsp_gamma_capped_bowl_table9_g12_kl0p2_twophase",
+        expected_max_simulated_epoch=4.720611,
+    ),
+    DelphiValidationMixture.DSP_GAMMA_BOWL_TABLE9_G16_KL0P2_TWOPHASE: _dsp_gamma_capped_bowl_source(
+        key=DelphiValidationMixture.DSP_GAMMA_BOWL_TABLE9_G16_KL0P2_TWOPHASE,
+        display_name="Gamma-capped bowl Table-9 gamma=16 KL=0.2 two-phase",
+        target_metric=TABLE9_TARGET_METRIC,
+        method="dsp_gamma_capped_bowl_table9_g16_kl0p2_twophase",
+        expected_max_simulated_epoch=4.298583,
+    ),
+    DelphiValidationMixture.DSP_GAMMA_BOWL_TABLE9_G10_KL0P1_TWOPHASE: _dsp_gamma_capped_bowl_source(
+        key=DelphiValidationMixture.DSP_GAMMA_BOWL_TABLE9_G10_KL0P1_TWOPHASE,
+        display_name="Gamma-capped bowl Table-9 gamma=10 KL=0.1 two-phase",
+        target_metric=TABLE9_TARGET_METRIC,
+        method="dsp_gamma_capped_bowl_table9_g10_kl0p1_twophase",
+        expected_max_simulated_epoch=6.627094,
+    ),
+    DelphiValidationMixture.DSP_GAMMA_BOWL_TABLE9_G10_KL0P3_TWOPHASE: _dsp_gamma_capped_bowl_source(
+        key=DelphiValidationMixture.DSP_GAMMA_BOWL_TABLE9_G10_KL0P3_TWOPHASE,
+        display_name="Gamma-capped bowl Table-9 gamma=10 KL=0.3 two-phase",
+        target_metric=TABLE9_TARGET_METRIC,
+        method="dsp_gamma_capped_bowl_table9_g10_kl0p3_twophase",
+        expected_max_simulated_epoch=4.097390,
+    ),
+    DelphiValidationMixture.DSP_GAMMA_BOWL_TABLE9_G10_KL0P1_ONEPHASE: _dsp_gamma_capped_bowl_source(
+        key=DelphiValidationMixture.DSP_GAMMA_BOWL_TABLE9_G10_KL0P1_ONEPHASE,
+        display_name="Gamma-capped bowl Table-9 gamma=10 KL=0.1 one-phase",
+        target_metric=TABLE9_TARGET_METRIC,
+        method="dsp_gamma_capped_bowl_table9_g10_kl0p1_onephase",
+        expected_max_simulated_epoch=11.296483,
+    ),
+    DelphiValidationMixture.DSP_GAMMA_BOWL_TABLE9_G10_KL0P2_ONEPHASE: _dsp_gamma_capped_bowl_source(
+        key=DelphiValidationMixture.DSP_GAMMA_BOWL_TABLE9_G10_KL0P2_ONEPHASE,
+        display_name="Gamma-capped bowl Table-9 gamma=10 KL=0.2 one-phase",
+        target_metric=TABLE9_TARGET_METRIC,
+        method="dsp_gamma_capped_bowl_table9_g10_kl0p2_onephase",
+        expected_max_simulated_epoch=7.575692,
+    ),
+    DelphiValidationMixture.DSP_GAMMA_EFFEXP_TABLE9_G10_KL0P2_TWOPHASE: _dsp_gamma_capped_bowl_source(
+        key=DelphiValidationMixture.DSP_GAMMA_EFFEXP_TABLE9_G10_KL0P2_TWOPHASE,
+        display_name="Gamma-capped effective-exposure Table-9 gamma=10 KL=0.2 two-phase",
+        target_metric=TABLE9_TARGET_METRIC,
+        method="dsp_gamma_capped_effexp_table9_g10_kl0p2_twophase",
+        expected_max_simulated_epoch=8.549688,
+    ),
+    DelphiValidationMixture.DSP_GAMMA_BOWL_UNCHEATABLE_G10_KL0P2_TWOPHASE: _dsp_gamma_capped_bowl_source(
+        key=DelphiValidationMixture.DSP_GAMMA_BOWL_UNCHEATABLE_G10_KL0P2_TWOPHASE,
+        display_name="Gamma-capped bowl uncheatable BPB gamma=10 KL=0.2 two-phase",
+        target_metric="eval/uncheatable_eval/bpb",
+        method="dsp_gamma_capped_bowl_uncheatable_g10_kl0p2_twophase",
+        expected_max_simulated_epoch=3.162718,
+    ),
+    DelphiValidationMixture.DSP_GAMMA_BOWL_UNCHEATABLE_G10_KL0P2_ONEPHASE: _dsp_gamma_capped_bowl_source(
+        key=DelphiValidationMixture.DSP_GAMMA_BOWL_UNCHEATABLE_G10_KL0P2_ONEPHASE,
+        display_name="Gamma-capped bowl uncheatable BPB gamma=10 KL=0.2 one-phase",
+        target_metric="eval/uncheatable_eval/bpb",
+        method="dsp_gamma_capped_bowl_uncheatable_g10_kl0p2_onephase",
+        expected_max_simulated_epoch=4.956585,
+    ),
+    DelphiValidationMixture.SUFF_UNCHEAT_FLOOR_A0: _sufficiency_floored_source(
+        key=DelphiValidationMixture.SUFF_UNCHEAT_FLOOR_A0,
+        display_name="Sufficiency-floored bowl uncheatable alpha=0 (base) two-phase",
+        target_metric="eval/uncheatable_eval/bpb",
+        method="suff_uncheat_floor_a0",
+        expected_max_simulated_epoch=3.162718,
+    ),
+    DelphiValidationMixture.SUFF_UNCHEAT_FLOOR_A0P7: _sufficiency_floored_source(
+        key=DelphiValidationMixture.SUFF_UNCHEAT_FLOOR_A0P7,
+        display_name="Sufficiency-floored bowl uncheatable alpha=0.7 two-phase",
+        target_metric="eval/uncheatable_eval/bpb",
+        method="suff_uncheat_floor_a0p7",
+        expected_max_simulated_epoch=3.435798,
+    ),
+    DelphiValidationMixture.SUFF_UNCHEAT_FLOOR_A1P0: _sufficiency_floored_source(
+        key=DelphiValidationMixture.SUFF_UNCHEAT_FLOOR_A1P0,
+        display_name="Sufficiency-floored bowl uncheatable alpha=1.0 two-phase",
+        target_metric="eval/uncheatable_eval/bpb",
+        method="suff_uncheat_floor_a1p0",
+        expected_max_simulated_epoch=4.773820,
+    ),
+    DelphiValidationMixture.SUFF_UNCHEAT_FLOOR_A1P2: _sufficiency_floored_source(
+        key=DelphiValidationMixture.SUFF_UNCHEAT_FLOOR_A1P2,
+        display_name="Sufficiency-floored bowl uncheatable alpha=1.2 over-repair two-phase",
+        target_metric="eval/uncheatable_eval/bpb",
+        method="suff_uncheat_floor_a1p2",
+        expected_max_simulated_epoch=3.958145,
+    ),
+    DelphiValidationMixture.SUFF_UNCHEAT_FLOOR_A1P0_G6: _sufficiency_floored_source(
+        key=DelphiValidationMixture.SUFF_UNCHEAT_FLOOR_A1P0_G6,
+        display_name="Sufficiency-floored bowl uncheatable alpha=1.0 gamma=6 two-phase",
+        target_metric="eval/uncheatable_eval/bpb",
+        method="suff_uncheat_floor_a1p0_g6",
+        expected_max_simulated_epoch=5.045360,
+    ),
+    DelphiValidationMixture.SUFF_UNCHEAT_FLOOR_A1P0_EFFEXP: _sufficiency_floored_source(
+        key=DelphiValidationMixture.SUFF_UNCHEAT_FLOOR_A1P0_EFFEXP,
+        display_name="Sufficiency-floored effexp uncheatable alpha=1.0 two-phase",
+        target_metric="eval/uncheatable_eval/bpb",
+        method="suff_uncheat_floor_a1p0_effexp",
+        expected_max_simulated_epoch=6.309046,
+    ),
+    DelphiValidationMixture.SUFF_UNCHEAT_ONEPHASE: _sufficiency_floored_source(
+        key=DelphiValidationMixture.SUFF_UNCHEAT_ONEPHASE,
+        display_name="Sufficiency panel bowl uncheatable one-phase control",
+        target_metric="eval/uncheatable_eval/bpb",
+        method="suff_uncheat_onephase",
+        expected_max_simulated_epoch=4.956234,
+    ),
+    DelphiValidationMixture.SUFF_UNCHEAT_EVALREL: _sufficiency_floored_source(
+        key=DelphiValidationMixture.SUFF_UNCHEAT_EVALREL,
+        display_name="Eval-relevant late heuristic uncheatable two-phase",
+        target_metric="eval/uncheatable_eval/bpb",
+        method="suff_uncheat_evalrel",
+        expected_max_simulated_epoch=7.210945,
+    ),
+    DelphiValidationMixture.SUFF_TABLE9_FLOOR_A0: _sufficiency_floored_source(
+        key=DelphiValidationMixture.SUFF_TABLE9_FLOOR_A0,
+        display_name="Sufficiency-floored bowl Table-9 alpha=0 (base) two-phase",
+        target_metric=TABLE9_TARGET_METRIC,
+        method="suff_table9_floor_a0",
+        expected_max_simulated_epoch=4.878790,
+    ),
+    DelphiValidationMixture.SUFF_TABLE9_FLOOR_A1P0: _sufficiency_floored_source(
+        key=DelphiValidationMixture.SUFF_TABLE9_FLOOR_A1P0,
+        display_name="Sufficiency-floored bowl Table-9 alpha=1.0 two-phase",
+        target_metric=TABLE9_TARGET_METRIC,
+        method="suff_table9_floor_a1p0",
+        expected_max_simulated_epoch=7.056531,
+    ),
+    DelphiValidationMixture.SUFF_TABLE9_ONEPHASE: _sufficiency_floored_source(
+        key=DelphiValidationMixture.SUFF_TABLE9_ONEPHASE,
+        display_name="Sufficiency panel bowl Table-9 one-phase control",
+        target_metric=TABLE9_TARGET_METRIC,
+        method="suff_table9_onephase",
+        expected_max_simulated_epoch=7.221461,
+    ),
+    DelphiValidationMixture.WNBR_UNCHEAT_WINNER: _winner_neighborhood_source(
+        key=DelphiValidationMixture.WNBR_UNCHEAT_WINNER,
+        display_name="Winner-neighborhood uncheatable winner-exact (0.985974 re-anchor)",
+        target_metric="eval/uncheatable_eval/bpb",
+        method="wnbr_uncheat_winner",
+        expected_max_simulated_epoch=8.128129,
+    ),
+    DelphiValidationMixture.WNBR_UNCHEAT_TILT_K0: _winner_neighborhood_source(
+        key=DelphiValidationMixture.WNBR_UNCHEAT_TILT_K0,
+        display_name="Winner-neighborhood uncheatable winner-aggregate no-tilt (one-phase)",
+        target_metric="eval/uncheatable_eval/bpb",
+        method="wnbr_uncheat_tilt_k0",
+        expected_max_simulated_epoch=8.128129,
+    ),
+    DelphiValidationMixture.WNBR_UNCHEAT_TILT_K0P5: _winner_neighborhood_source(
+        key=DelphiValidationMixture.WNBR_UNCHEAT_TILT_K0P5,
+        display_name="Winner-neighborhood uncheatable less-tilt k=0.5",
+        target_metric="eval/uncheatable_eval/bpb",
+        method="wnbr_uncheat_tilt_k0p5",
+        expected_max_simulated_epoch=8.128129,
+    ),
+    DelphiValidationMixture.WNBR_UNCHEAT_TILT_K1P5: _winner_neighborhood_source(
+        key=DelphiValidationMixture.WNBR_UNCHEAT_TILT_K1P5,
+        display_name="Winner-neighborhood uncheatable more-tilt k=1.5",
+        target_metric="eval/uncheatable_eval/bpb",
+        method="wnbr_uncheat_tilt_k1p5",
+        expected_max_simulated_epoch=8.124668,
+    ),
+    DelphiValidationMixture.WNBR_UNCHEAT_OVERWEIGHT_0P7: _winner_neighborhood_source(
+        key=DelphiValidationMixture.WNBR_UNCHEAT_OVERWEIGHT_0P7,
+        display_name="Winner-neighborhood uncheatable less-overweight 0.7",
+        target_metric="eval/uncheatable_eval/bpb",
+        method="wnbr_uncheat_overweight_0p7",
+        expected_max_simulated_epoch=7.199548,
+    ),
+    DelphiValidationMixture.WNBR_UNCHEAT_OVERWEIGHT_1P3: _winner_neighborhood_source(
+        key=DelphiValidationMixture.WNBR_UNCHEAT_OVERWEIGHT_1P3,
+        display_name="Winner-neighborhood uncheatable more-overweight 1.3",
+        target_metric="eval/uncheatable_eval/bpb",
+        method="wnbr_uncheat_overweight_1p3",
+        expected_max_simulated_epoch=9.056778,
+    ),
+    DelphiValidationMixture.WNBR_TABLE9_WINNER: _winner_neighborhood_source(
+        key=DelphiValidationMixture.WNBR_TABLE9_WINNER,
+        display_name="Winner-neighborhood Table-9 winner-exact re-anchor",
+        target_metric=TABLE9_TARGET_METRIC,
+        method="wnbr_table9_winner",
+        expected_max_simulated_epoch=16.541118,
+    ),
+    DelphiValidationMixture.WNBR_TABLE9_TILT_K1P5: _winner_neighborhood_source(
+        key=DelphiValidationMixture.WNBR_TABLE9_TILT_K1P5,
+        display_name="Winner-neighborhood Table-9 more-tilt k=1.5",
+        target_metric=TABLE9_TARGET_METRIC,
+        method="wnbr_table9_tilt_k1p5",
+        expected_max_simulated_epoch=16.541057,
+    ),
+    DelphiValidationMixture.WNBR_TABLE9_OVERWEIGHT_1P3: _winner_neighborhood_source(
+        key=DelphiValidationMixture.WNBR_TABLE9_OVERWEIGHT_1P3,
+        display_name="Winner-neighborhood Table-9 more-overweight 1.3",
+        target_metric=TABLE9_TARGET_METRIC,
+        method="wnbr_table9_overweight_1p3",
+        expected_max_simulated_epoch=19.848261,
+    ),
+    DelphiValidationMixture.AUGP_UNCHEAT_PROFILE: _augmented_profile_source(
+        key=DelphiValidationMixture.AUGP_UNCHEAT_PROFILE,
+        display_name="Augmented-profile uncheatable two-phase (aug aggregate + winner tilt)",
+        target_metric="eval/uncheatable_eval/bpb",
+        method="augp_uncheat_profile",
+        expected_max_simulated_epoch=8.196884,
+    ),
+    DelphiValidationMixture.AUGP_UNCHEAT_PROFILE_1PHASE: _augmented_profile_source(
+        key=DelphiValidationMixture.AUGP_UNCHEAT_PROFILE_1PHASE,
+        display_name="Augmented-profile uncheatable one-phase control",
+        target_metric="eval/uncheatable_eval/bpb",
+        method="augp_uncheat_profile_1phase",
+        expected_max_simulated_epoch=8.045398,
+    ),
+    DelphiValidationMixture.AUGP_UNCHEAT_BLEND: _augmented_profile_source(
+        key=DelphiValidationMixture.AUGP_UNCHEAT_BLEND,
+        display_name="Augmented+winner 50/50 blend uncheatable two-phase",
+        target_metric="eval/uncheatable_eval/bpb",
+        method="augp_uncheat_blend",
+        expected_max_simulated_epoch=7.612009,
+    ),
+    DelphiValidationMixture.AUGP_TABLE9_PROFILE: _augmented_profile_source(
+        key=DelphiValidationMixture.AUGP_TABLE9_PROFILE,
+        display_name="Augmented-profile Table-9 two-phase",
+        target_metric=TABLE9_TARGET_METRIC,
+        method="augp_table9_profile",
+        expected_max_simulated_epoch=22.929399,
+    ),
+    DelphiValidationMixture.T9TILT_K0: _table9_controlled_tilt_source(
+        key=DelphiValidationMixture.T9TILT_K0,
+        display_name="Table-9 controlled-tilt k=0 (one-phase ablation of eff-exp kl0.1)",
+        method="t9_tilt_k0_onephase",
+        expected_max_simulated_epoch=16.541118,
+    ),
+    DelphiValidationMixture.T9TILT_KMOD: _table9_controlled_tilt_source(
+        key=DelphiValidationMixture.T9TILT_KMOD,
+        display_name="Table-9 controlled-tilt k=0.10 (moderate late tilt)",
+        method="t9_tilt_kmod",
+        expected_max_simulated_epoch=16.541118,
+    ),
+    DelphiValidationMixture.T9TILT_KHIGH: _table9_controlled_tilt_source(
+        key=DelphiValidationMixture.T9TILT_KHIGH,
+        display_name="Table-9 controlled-tilt k=0.20 (higher late tilt)",
+        method="t9_tilt_khigh",
+        expected_max_simulated_epoch=15.379907,
+    ),
+    DelphiValidationMixture.T9TILT_KMAX: _table9_controlled_tilt_source(
+        key=DelphiValidationMixture.T9TILT_KMAX,
+        display_name="Table-9 controlled-tilt k=0.32 (aggressive late tilt)",
+        method="t9_tilt_kmax",
+        expected_max_simulated_epoch=12.036290,
+    ),
+    DelphiValidationMixture.T9ANNEAL_K0: _table9_fresh_anneal_source(
+        key=DelphiValidationMixture.T9ANNEAL_K0,
+        display_name="Table-9 fresh-anneal k=0 (one-phase ablation)",
+        method="t9anneal_k0_onephase",
+        expected_max_simulated_epoch=16.541118,
+    ),
+    DelphiValidationMixture.T9ANNEAL_KMOD: _table9_fresh_anneal_source(
+        key=DelphiValidationMixture.T9ANNEAL_KMOD,
+        display_name="Table-9 fresh-HQ anneal k=0.15",
+        method="t9anneal_kmod",
+        expected_max_simulated_epoch=16.541118,
+    ),
+    DelphiValidationMixture.T9ANNEAL_KHIGH: _table9_fresh_anneal_source(
+        key=DelphiValidationMixture.T9ANNEAL_KHIGH,
+        display_name="Table-9 fresh-HQ anneal k=0.35",
+        method="t9anneal_khigh",
+        expected_max_simulated_epoch=16.541118,
+    ),
+    DelphiValidationMixture.T9ANNEAL_KMAX: _table9_fresh_anneal_source(
+        key=DelphiValidationMixture.T9ANNEAL_KMAX,
+        display_name="Table-9 fresh-HQ anneal k=0.6",
+        method="t9anneal_kmax",
+        expected_max_simulated_epoch=16.541118,
+    ),
+    DelphiValidationMixture.T9AN2_K0: _table9_fresh_anneal_source(
+        key=DelphiValidationMixture.T9AN2_K0,
+        display_name="Table-9 anneal-v2 k=0 (one-phase ablation)",
+        method="t9an2_k0_onephase",
+        expected_max_simulated_epoch=16.541118,
+    ),
+    DelphiValidationMixture.T9AN2_K0R: _table9_fresh_anneal_source(
+        key=DelphiValidationMixture.T9AN2_K0R,
+        display_name="Table-9 anneal-v2 k=0 repeat (noise floor)",
+        method="t9an2_k0_repeat",
+        expected_max_simulated_epoch=16.541118,
+    ),
+    DelphiValidationMixture.T9AN2_E10: _table9_fresh_anneal_source(
+        key=DelphiValidationMixture.T9AN2_E10,
+        display_name="Table-9 anneal-v2 expanded k=0.10",
+        method="t9an2_expanded_k0p10",
+        expected_max_simulated_epoch=16.541118,
+    ),
+    DelphiValidationMixture.T9AN2_E18: _table9_fresh_anneal_source(
+        key=DelphiValidationMixture.T9AN2_E18,
+        display_name="Table-9 anneal-v2 expanded k=0.18",
+        method="t9an2_expanded_k0p18",
+        expected_max_simulated_epoch=16.541118,
+    ),
+    DelphiValidationMixture.T9AN2_E28: _table9_fresh_anneal_source(
+        key=DelphiValidationMixture.T9AN2_E28,
+        display_name="Table-9 anneal-v2 expanded k=0.28",
+        method="t9an2_expanded_k0p28",
+        expected_max_simulated_epoch=16.541118,
+    ),
+    DelphiValidationMixture.T9AN2_N15: _table9_fresh_anneal_source(
+        key=DelphiValidationMixture.T9AN2_N15,
+        display_name="Table-9 anneal-v2 narrow k=0.15 (v1 repro)",
+        method="t9an2_narrow_k0p15",
+        expected_max_simulated_epoch=16.541118,
+    ),
+    DelphiValidationMixture.T9REP_NARROW_S0: _table9_fresh_anneal_source(
+        key=DelphiValidationMixture.T9REP_NARROW_S0,
+        display_name="Table-9 anneal repeat narrow s0",
+        method="t9rep_narrow_s0",
+        expected_max_simulated_epoch=16.541118,
+    ),
+    DelphiValidationMixture.T9REP_NARROW_S1: _table9_fresh_anneal_source(
+        key=DelphiValidationMixture.T9REP_NARROW_S1,
+        display_name="Table-9 anneal repeat narrow s1",
+        method="t9rep_narrow_s1",
+        expected_max_simulated_epoch=16.541118,
+    ),
+    DelphiValidationMixture.T9REP_NARROW_S2: _table9_fresh_anneal_source(
+        key=DelphiValidationMixture.T9REP_NARROW_S2,
+        display_name="Table-9 anneal repeat narrow s2",
+        method="t9rep_narrow_s2",
+        expected_max_simulated_epoch=16.541118,
+    ),
+    DelphiValidationMixture.T9REP_ONEPH_S0: _table9_fresh_anneal_source(
+        key=DelphiValidationMixture.T9REP_ONEPH_S0,
+        display_name="Table-9 anneal repeat oneph s0",
+        method="t9rep_oneph_s0",
+        expected_max_simulated_epoch=16.541118,
+    ),
+    DelphiValidationMixture.T9REP_ONEPH_S1: _table9_fresh_anneal_source(
+        key=DelphiValidationMixture.T9REP_ONEPH_S1,
+        display_name="Table-9 anneal repeat oneph s1",
+        method="t9rep_oneph_s1",
+        expected_max_simulated_epoch=16.541118,
+    ),
+    DelphiValidationMixture.T9REP_ONEPH_S2: _table9_fresh_anneal_source(
+        key=DelphiValidationMixture.T9REP_ONEPH_S2,
+        display_name="Table-9 anneal repeat oneph s2",
+        method="t9rep_oneph_s2",
+        expected_max_simulated_epoch=16.541118,
+    ),
+    DelphiValidationMixture.T9VR_K0: _table9_fresh_anneal_source(
+        key=DelphiValidationMixture.T9VR_K0,
+        display_name="Table-9 value-room k=0 (one-phase ablation)",
+        method="t9vr_k0",
+        expected_max_simulated_epoch=16.541118,
+    ),
+    DelphiValidationMixture.T9VR_KMOD: _table9_fresh_anneal_source(
+        key=DelphiValidationMixture.T9VR_KMOD,
+        display_name="Table-9 value-room tilt k=0.15 (surrogate-derived anneal)",
+        method="t9vr_kmod",
+        expected_max_simulated_epoch=16.541118,
+    ),
+    DelphiValidationMixture.T9VR_KHIGH: _table9_fresh_anneal_source(
+        key=DelphiValidationMixture.T9VR_KHIGH,
+        display_name="Table-9 value-room tilt k=0.30",
+        method="t9vr_khigh",
+        expected_max_simulated_epoch=16.541118,
+    ),
+    DelphiValidationMixture.T9VRR_KMOD_S0: _table9_fresh_anneal_source(
+        key=DelphiValidationMixture.T9VRR_KMOD_S0,
+        display_name="Table-9 value-room kmod repeat s0",
+        method="t9vrr_kmod_s0",
+        expected_max_simulated_epoch=16.541118,
+    ),
+    DelphiValidationMixture.T9VRR_KMOD_S1: _table9_fresh_anneal_source(
+        key=DelphiValidationMixture.T9VRR_KMOD_S1,
+        display_name="Table-9 value-room kmod repeat s1",
+        method="t9vrr_kmod_s1",
+        expected_max_simulated_epoch=16.541118,
+    ),
+    DelphiValidationMixture.T9VRR_KMOD_S2: _table9_fresh_anneal_source(
+        key=DelphiValidationMixture.T9VRR_KMOD_S2,
+        display_name="Table-9 value-room kmod repeat s2",
+        method="t9vrr_kmod_s2",
+        expected_max_simulated_epoch=16.541118,
+    ),
+    DelphiValidationMixture.T9VRR_KMOD_S3: _table9_fresh_anneal_source(
+        key=DelphiValidationMixture.T9VRR_KMOD_S3,
+        display_name="Table-9 value-room kmod repeat s3",
+        method="t9vrr_kmod_s3",
+        expected_max_simulated_epoch=16.541118,
+    ),
+    DelphiValidationMixture.T9VRR_K0_S0: _table9_fresh_anneal_source(
+        key=DelphiValidationMixture.T9VRR_K0_S0,
+        display_name="Table-9 value-room k0 repeat s0",
+        method="t9vrr_k0_s0",
+        expected_max_simulated_epoch=16.541118,
+    ),
+    DelphiValidationMixture.T9VRR_K0_S1: _table9_fresh_anneal_source(
+        key=DelphiValidationMixture.T9VRR_K0_S1,
+        display_name="Table-9 value-room k0 repeat s1",
+        method="t9vrr_k0_s1",
+        expected_max_simulated_epoch=16.541118,
+    ),
+    DelphiValidationMixture.T9VRR_K0_S2: _table9_fresh_anneal_source(
+        key=DelphiValidationMixture.T9VRR_K0_S2,
+        display_name="Table-9 value-room k0 repeat s2",
+        method="t9vrr_k0_s2",
+        expected_max_simulated_epoch=16.541118,
+    ),
+    DelphiValidationMixture.T9VRR_K0_S3: _table9_fresh_anneal_source(
+        key=DelphiValidationMixture.T9VRR_K0_S3,
+        display_name="Table-9 value-room k0 repeat s3",
+        method="t9vrr_k0_s3",
         expected_max_simulated_epoch=16.541118,
     ),
     DelphiValidationMixture.PROPORTIONAL_NOISE_3E18_A: _proportional_noise_source(
@@ -1145,8 +2043,7 @@ def _read_phase_weights(source: MixtureSource) -> tuple[dict[str, dict[str, floa
             recorded = float(row["simulated_epochs"])
             if abs(recorded - simulated_epoch) > max(1e-6, 1e-6 * abs(simulated_epoch)):
                 raise ValueError(
-                    f"{source.key.value}/{domain} recorded simulated_epochs={recorded} "
-                    f"but recomputed {simulated_epoch}"
+                    f"{source.key.value}/{domain} recorded simulated_epochs={recorded} but recomputed {simulated_epoch}"
                 )
 
     phase0_sum = sum(phase_weights["phase_0"].values())
@@ -1797,8 +2694,7 @@ def main() -> None:
     )
     if os.getenv("CI") is not None:
         logger.info(
-            "Built Delphi optimized-mixture graph with %d training steps and %d eval steps; "
-            "skipping executor launch.",
+            "Built Delphi optimized-mixture graph with %d training steps and %d eval steps; skipping executor launch.",
             len(artifacts.training_steps),
             len(artifacts.eval_steps),
         )

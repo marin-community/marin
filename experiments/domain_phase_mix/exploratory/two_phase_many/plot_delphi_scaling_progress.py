@@ -1,6 +1,8 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+# ruff: noqa: E402, E501
+
 # /// script
 # requires-python = ">=3.12"
 # dependencies = [
@@ -58,7 +60,7 @@ from experiments.domain_phase_mix.exploratory.two_phase_many.fit_olmo_base_easy_
 )
 
 OUTPUT_DIR = Path(
-    "experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/" "delphi_scaling_progress_20260625"
+    "experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_scaling_progress_20260625"
 )
 
 RUN_BASES = [
@@ -279,7 +281,10 @@ def native_eval_names_for_run_base(run_base: str) -> tuple[str, ...]:
     if mixture == "proportional":
         return (f"t9_{scale}_proportional",)
     if mixture == "unimax8":
-        return (f"t9_{scale}_unimax8",)
+        names = [f"t9_{scale}_unimax8"]
+        if scale == "1e21":
+            names.append("t9_1e21_unimax8_missing")
+        return tuple(names)
     if mixture == "olmix_d001_kl005_cap4":
         return (f"t9_{scale}_olmix_uncheatable",)
     if mixture == "dsp_effexp_kl01":
@@ -289,7 +294,10 @@ def native_eval_names_for_run_base(run_base: str) -> tuple[str, ...]:
     if mixture == "dsp_onephase_effexp_uncheatable_kl0p1":
         return (f"t9_dsp_onephase_effexp_uncheatable_kl0p1_{scale}",)
     if mixture == "olmix_table9_d001_kl005_cap4":
-        return (f"t9_{scale}_olmix_table9",)
+        names = [f"t9_{scale}_olmix_table9"]
+        if scale == "1e21":
+            names.append("t9_1e21_olmix_table9_missing")
+        return tuple(names)
     if mixture == "dsp_effexp_table9_kl0025":
         return (f"t9_{scale}_dsp_table9",)
     if mixture == "olmix_onephase_table9_d001_kl005_cap4":
