@@ -1046,13 +1046,28 @@ def controller_checkpoint(ctx, stop: bool):
 @click.option(
     "--checkpoint-timeout", type=int, default=300, show_default=True, help="Checkpoint RPC timeout in seconds."
 )
+@click.option(
+    "--image",
+    "image_override",
+    default=None,
+    help=(
+        "Redeploy this exact pre-built controller image instead of building from the "
+        "working tree. Use for ROLLBACK: pass a previously-deployed tag, e.g. "
+        "ghcr.io/marin-community/iris-controller:<tree-hash> (resolve_image maps it to the "
+        "cluster's registry mirror). Skips the image build entirely; the controller restores "
+        "from its on-VM state DB, so cluster state and running workers are preserved."
+    ),
+)
 @click.pass_context
-def controller_restart(ctx, skip_checkpoint: bool, checkpoint_timeout: int):
+def controller_restart(ctx, skip_checkpoint: bool, checkpoint_timeout: int, image_override: str | None):
     """Restart controller with state preservation (remote platforms only).
 
-    Takes a checkpoint, builds fresh images, stops the controller, and starts
-    a new one. The new controller auto-restores from the checkpoint.
-    Workers on separate VMs survive the restart.
+    Takes a checkpoint, builds fresh images from the working tree, stops the
+    controller, and starts a new one. The new controller auto-restores from the
+    checkpoint. Workers on separate VMs survive the restart.
+
+    Pass ``--image <tag>`` to redeploy a specific pre-built controller image
+    without building — the rollback path back to a known-good deploy.
     """
     config = ctx.obj.get("config")
     if not config:
@@ -1065,6 +1080,13 @@ def controller_restart(ctx, skip_checkpoint: bool, checkpoint_timeout: int):
             "Stop and restart the 'iris cluster start --local' process instead."
         )
 
+    # --image pins the controller to a pre-built tag and skips the working-tree
+    # build (rollback / redeploy). Only the controller image is overridden;
+    # worker/task images are untouched since a controller restart leaves workers
+    # in place.
+    if image_override:
+        config.controller.image = image_override
+
     bundle = provider_bundle(config)
 
     # Try to discover existing controller for checkpoint + restart.
@@ -1073,14 +1095,17 @@ def controller_restart(ctx, skip_checkpoint: bool, checkpoint_timeout: int):
         controller_url = require_controller_url(ctx)
     except (RuntimeError, click.ClickException):
         click.echo("No existing controller found. Starting fresh...")
-        git_sha = get_git_sha()
-        _pin_latest_images(config, git_sha)
-        verbose = ctx.obj.get("verbose", False)
-        built = _build_cluster_images(config, git_sha, verbose=verbose)
-        if built:
-            click.echo("Built image tags:")
-            for name, tag in built.items():
-                click.echo(f"  {name}: {tag}")
+        if image_override:
+            click.echo(f"Deploying pinned controller image (no build): {image_override}")
+        else:
+            git_sha = get_git_sha()
+            _pin_latest_images(config, git_sha)
+            verbose = ctx.obj.get("verbose", False)
+            built = _build_cluster_images(config, git_sha, verbose=verbose)
+            if built:
+                click.echo("Built image tags:")
+                for name, tag in built.items():
+                    click.echo(f"  {name}: {tag}")
         try:
             address = bundle.controller.start_controller(config)
         except Exception as e:
@@ -1105,15 +1130,19 @@ def controller_restart(ctx, skip_checkpoint: bool, checkpoint_timeout: int):
                 raise SystemExit(1) from e
         click.echo(f"Checkpoint: {resp.checkpoint_path} ({resp.job_count} jobs, {resp.worker_count} workers)")
 
-    # Build fresh images so the new controller VM gets the latest code
-    git_sha = get_git_sha()
-    _pin_latest_images(config, git_sha)
-    verbose = ctx.obj.get("verbose", False)
-    built = _build_cluster_images(config, git_sha, verbose=verbose)
-    if built:
-        click.echo("Built image tags:")
-        for name, tag in built.items():
-            click.echo(f"  {name}: {tag}")
+    # Build fresh images so the new controller VM gets the latest code, unless a
+    # pinned --image was given (rollback / redeploy of an existing tag).
+    if image_override:
+        click.echo(f"Redeploying pinned controller image (no build): {image_override}")
+    else:
+        git_sha = get_git_sha()
+        _pin_latest_images(config, git_sha)
+        verbose = ctx.obj.get("verbose", False)
+        built = _build_cluster_images(config, git_sha, verbose=verbose)
+        if built:
+            click.echo("Built image tags:")
+            for name, tag in built.items():
+                click.echo(f"  {name}: {tag}")
 
     try:
         address = bundle.controller.restart_controller(config)
