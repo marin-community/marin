@@ -75,6 +75,7 @@ from levanter.grug._moe.source_push_forward import (
     FORWARD_STAGE_W2_RETURN,
     FORWARD_STAGES,
     SourcePushForwardDeviceInputs,
+    _call_source_push_w13_h_expert_major_device_inputs,
     _shard_source_push_forward_inputs,
     _sharded_source_combine_kernel,
     _time_staged_source_push_forward,
@@ -82,7 +83,6 @@ from levanter.grug._moe.source_push_forward import (
     make_source_push_forward_plan_inputs,
     make_source_push_forward_source_plan_raw_inputs,
     source_push_forward_with_h_from_plan,
-    source_push_w13_h_expert_major_from_plan,
 )
 from levanter.grug._moe.source_push_inbox import (
     AXIS,
@@ -969,6 +969,39 @@ def _pack_probe_total(config: PushInboxConfig, mesh: Mesh, host_inputs, x, route
     return packed
 
 
+def _prepack_w13_h_expert_major_inputs(
+    config: PushInboxConfig,
+    mesh: Mesh,
+    host_inputs,
+    x: jax.Array,
+    w13: jax.Array,
+    w2: jax.Array,
+) -> tuple[SourcePushForwardDeviceInputs, int, int]:
+    store_capacity = _compact_h_expert_capacity_from_metadata(
+        config,
+        host_inputs.send_meta,
+        host_inputs.expert_base,
+        host_inputs.src_base_by_expert,
+        use_exact_expert_major=host_inputs.use_exact_expert_major,
+    )
+    live_capacity = _compact_h_expert_capacity_from_metadata(
+        config,
+        host_inputs.send_meta,
+        host_inputs.expert_base,
+        host_inputs.src_base_by_expert,
+        use_exact_expert_major=host_inputs.use_exact_expert_major,
+        include_store_padding=False,
+    )
+    with jax.set_mesh(mesh):
+        packed_x = pack_source_push_tokens_jax(x, host_inputs.plan).astype(jnp.bfloat16)
+        h_route_weights = jnp.zeros(
+            (config.ep_size, config.experts_per_rank, store_capacity),
+            dtype=jnp.bfloat16,
+        )
+        packed = _pack_compact_h_static_inputs(mesh, host_inputs, packed_x, h_route_weights, w13, w2, config)
+    return packed, store_capacity, live_capacity
+
+
 def _pack_probe_token_pack(mesh: Mesh, host_inputs, x, *, use_pallas_token_pack: bool):
     with jax.set_mesh(mesh):
         if use_pallas_token_pack:
@@ -1633,16 +1666,25 @@ def _run_source_push_backward_staged_blocks(
             f"got {backward_stop_after_stage!r}"
         )
 
+    packed_w13_h_inputs, store_capacity, live_capacity = _prepack_w13_h_expert_major_inputs(
+        config,
+        mesh,
+        host_inputs,
+        inputs["x_source"],
+        inputs["w13_source"],
+        inputs["w2_source"],
+    )
+
     def call_forward_residuals():
-        h_blocks, dropped_routes = source_push_w13_h_expert_major_from_plan(
+        h_blocks = _call_source_push_w13_h_expert_major_device_inputs(
+            mesh,
             config,
-            host_inputs,
-            inputs["x_source"],
-            inputs["w13_source"],
-            mesh=mesh,
+            packed_w13_h_inputs,
+            store_capacity=store_capacity,
+            live_capacity=live_capacity,
         )
         _block_until_ready(h_blocks)
-        return h_blocks, dropped_routes
+        return h_blocks, host_inputs.plan.dropped_routes
 
     with jax.set_mesh(mesh):
         expert_route_weights = source_push_mlp._source_push_mlp_route_weights_to_all_expert_major(

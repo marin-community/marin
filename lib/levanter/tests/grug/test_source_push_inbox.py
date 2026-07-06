@@ -2148,24 +2148,40 @@ def test_source_push_mlp_backward_staged_blocks_uses_compact_h_forward(monkeypat
     mesh = Mesh(np.asarray(jax.devices()[:1]), (source_push_inbox.AXIS,), axis_types=(AxisType.Explicit,))
     raw_inputs = source_push_forward.make_source_push_forward_source_plan_raw_inputs(config)
     inputs = source_push_mlp_fwd_bwd_cli._device_benchmark_inputs(config, raw_inputs, mesh)
-    calls = []
+    prepack_calls = []
+    direct_calls = []
 
     def fail_flat_forward(*_args, **_kwargs):
         raise AssertionError("staged-block backward should build residuals from compact H, not flat H")
 
-    def direct_w13_h(_config, _host_inputs, x_arg, _w13_arg, *, mesh):
-        del mesh
-        calls.append(_host_inputs)
+    def fail_high_level_w13_wrapper(*_args, **_kwargs):
+        raise AssertionError("staged-block forward_h timing should use prepacked W13-H device inputs")
+
+    def fake_prepack(config_arg, mesh_arg, host_inputs_arg, x_arg, w13_arg, w2_arg):
+        prepack_calls.append((config_arg, mesh_arg, host_inputs_arg, x_arg, w13_arg, w2_arg))
+        return object(), route_table.expert_capacity + 1, route_table.expert_capacity
+
+    def direct_w13_h(mesh_arg, config_arg, packed_inputs_arg, *, store_capacity, live_capacity):
+        direct_calls.append((mesh_arg, config_arg, packed_inputs_arg, store_capacity, live_capacity))
         h_shape = (
-            x_arg.shape[0],
+            config.ep_size,
             config.experts_per_rank,
-            route_table.valid_by_expert.shape[-1],
+            live_capacity,
             2 * config.intermediate_dim,
         )
-        return jnp.ones(h_shape, dtype=x_arg.dtype), _host_inputs.plan.dropped_routes
+        return jnp.ones(h_shape, dtype=jnp.bfloat16)
 
     monkeypatch.setattr(source_push_mlp_fwd_bwd_cli, "source_push_forward_with_h_from_plan", fail_flat_forward)
-    monkeypatch.setattr(source_push_mlp_fwd_bwd_cli, "source_push_w13_h_expert_major_from_plan", direct_w13_h)
+    monkeypatch.setattr(
+        source_push_mlp_fwd_bwd_cli,
+        "source_push_w13_h_expert_major_from_plan",
+        fail_high_level_w13_wrapper,
+        raising=False,
+    )
+    monkeypatch.setattr(source_push_mlp_fwd_bwd_cli, "_prepack_w13_h_expert_major_inputs", fake_prepack)
+    monkeypatch.setattr(
+        source_push_mlp_fwd_bwd_cli, "_call_source_push_w13_h_expert_major_device_inputs", direct_w13_h
+    )
 
     rows = source_push_mlp_fwd_bwd_cli._run_source_push_backward_staged_blocks(
         config,
@@ -2183,7 +2199,9 @@ def test_source_push_mlp_backward_staged_blocks_uses_compact_h_forward(monkeypat
         backward_stop_after_stage=source_push_mlp_fwd_bwd_cli.BACKWARD_STAGE_DY_ROUTE,
     )
 
-    assert calls
+    assert len(prepack_calls) == 1
+    assert len(direct_calls) == 2
+    assert all(call[3:] == (route_table.expert_capacity + 1, route_table.expert_capacity) for call in direct_calls)
     assert rows[-1]["mode"] == source_push_mlp_fwd_bwd_cli.MODE_BACKWARD_STAGED_BLOCKS
     assert rows[-1]["stage"] == source_push_mlp_fwd_bwd_cli.BACKWARD_STAGE_DY_ROUTE
 
