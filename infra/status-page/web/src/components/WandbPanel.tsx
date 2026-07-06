@@ -105,7 +105,7 @@ function ChartCard({ chart }: { chart: WandbChart }) {
               domain={["dataMin", "dataMax"]}
               tickFormatter={formatTokens}
               stroke="#475569"
-              fontSize={11}
+              tick={{ fill: "#cbd5e1", fontSize: 11 }}
             />
             <YAxis
               width={58}
@@ -114,7 +114,7 @@ function ChartCard({ chart }: { chart: WandbChart }) {
               allowDataOverflow
               tickFormatter={(v: number) => v.toFixed(2)}
               stroke="#475569"
-              fontSize={11}
+              tick={{ fill: "#cbd5e1", fontSize: 11 }}
             />
             <Tooltip
               contentStyle={{
