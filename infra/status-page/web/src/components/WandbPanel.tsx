@@ -18,7 +18,7 @@ const SERIES_COLORS = [
   "#10b981", // emerald-500
 ];
 
-// Cumulative-token axis formatter: 33500000000 → "33.5B", 1.5e12 → "1.5T".
+// Cumulative-token axis formatter: 33500000000 → "34B", 1.5e12 → "1.5T".
 function formatTokens(value: number): string {
   if (value >= 1e12) return `${(value / 1e12).toFixed(1)}T`;
   if (value >= 1e9) return `${(value / 1e9).toFixed(0)}B`;
