@@ -1382,8 +1382,8 @@ def _relative_shard_path(output_path: str, shard_path: str) -> str:
     """Return ``shard_path`` as a ledger key relative to ``output_path``.
 
     Compares parsed path segments, so a trailing or doubled separator on either side
-    cannot fork the writer's shard path from the reader's (#6838). Raises ``ValueError``
-    unless ``shard_path`` lies strictly under ``output_path``.
+    cannot fork the writer's shard path from the reader's. Raises ``ValueError`` unless
+    ``shard_path`` lies strictly under ``output_path``.
     """
     try:
         relative = StoragePath.parse(shard_path).relative_to(StoragePath.parse(output_path))
