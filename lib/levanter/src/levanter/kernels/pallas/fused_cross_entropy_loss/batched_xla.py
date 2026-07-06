@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import os
 from functools import partial
 from typing import NamedTuple, Optional
 
@@ -386,6 +387,10 @@ def _h100_full_vocab_b_tiled_block_size(
         return None
     if w.shape[1] < _LARGE_VOCAB_THRESHOLD:
         return None
+    # CE_B_BLOCK env override lets us sweep the full-vocab batch tile for profiling.
+    override = os.environ.get("CE_B_BLOCK")
+    if override:
+        return int(override)
     return _H100_FULL_VOCAB_B_TILED_BLOCK_SIZE
 
 
