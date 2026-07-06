@@ -211,7 +211,7 @@ def _region_probe(monkeypatch):
     runner_module._region_confirmed_buckets.clear()
 
     def _configure(vm_region, bucket_location):
-        monkeypatch.setattr(runner_module, "_vm_region", lambda: vm_region)
+        monkeypatch.setattr(runner_module, "cached_marin_region", lambda: vm_region)
 
         def _lookup(_bucket):
             if isinstance(bucket_location, Exception):

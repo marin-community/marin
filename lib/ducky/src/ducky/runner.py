@@ -25,15 +25,15 @@ import shutil
 import threading
 import time
 from collections.abc import Callable
-from functools import lru_cache
 
 import duckdb
 from iris.env_resources import TaskResources
 from rigging.filesystem import (
     MARIN_CROSS_REGION_OVERRIDE_ENV,
+    StoragePath,
+    cached_marin_region,
     get_bucket_location,
     is_cross_region_url,
-    marin_region,
 )
 
 from ducky.catalog import DATAKIT_SCHEMA, FINELOG_SCHEMA, View, build_catalog
@@ -87,20 +87,6 @@ def _is_gcs_uri(uri: str) -> bool:
 _region_confirmed_buckets: set[str] = set()
 
 
-@lru_cache(maxsize=1)
-def _vm_region() -> str | None:
-    """This VM's region (from GCP metadata), cached for the process. ``None`` off-GCP."""
-    return marin_region()
-
-
-def _gcs_bucket(uri: str) -> str | None:
-    """Bucket name from a ``gs://``/``gcs://`` URI, else ``None``."""
-    for scheme in ("gs://", "gcs://"):
-        if uri.lower().startswith(scheme):
-            return uri[len(scheme) :].split("/", 1)[0]
-    return None
-
-
 def _region_resolvable(bucket: str) -> bool:
     """Whether ``bucket``'s GCS location metadata is readable. Successes are cached; failures
     retry (not cached) so a transient error or permission blip self-heals."""
@@ -126,10 +112,10 @@ def needs_cross_region_optin(uri: str) -> bool:
     """
     if is_cross_region_url(uri):
         return True
-    if _vm_region() is None or os.environ.get(MARIN_CROSS_REGION_OVERRIDE_ENV):
+    if cached_marin_region() is None or os.environ.get(MARIN_CROSS_REGION_OVERRIDE_ENV):
         return False
-    bucket = _gcs_bucket(uri)
-    if bucket is None or _region_resolvable(bucket):
+    bucket = StoragePath.parse(uri).netloc
+    if not bucket or _region_resolvable(bucket):
         return False
     logger.warning("cross-region guard: could not resolve region for gs://%s; requiring opt-in", bucket)
     return True

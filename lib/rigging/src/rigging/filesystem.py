@@ -876,8 +876,8 @@ def mirror_budget(budget_gb: float) -> Generator[None, None, None]:
 
 
 @functools.lru_cache(maxsize=1)
-def _cached_marin_region() -> str | None:
-    """Return the current VM region, cached for the process lifetime."""
+def cached_marin_region() -> str | None:
+    """Return the current VM region, cached for the process lifetime (the VM region is stable)."""
     return marin_region()
 
 
@@ -940,7 +940,7 @@ def _is_cross_region_url(url: str) -> bool:
     bucket = _bucket_from_gcs_url(url)
     if bucket is None:
         return False
-    vm_region = _cached_marin_region()
+    vm_region = cached_marin_region()
     if vm_region is None:
         return False
     bucket_location = _cached_bucket_location(bucket)
@@ -1017,7 +1017,7 @@ class CrossRegionGuardedFS:
     ):
         self._fs = fs
         self._cross_region_checker = cross_region_checker
-        self._current_region = None if cross_region_checker else _cached_marin_region()
+        self._current_region = None if cross_region_checker else cached_marin_region()
         self._budget = budget if budget is not None else _global_transfer_budget
 
     # -- cross-region detection ----------------------------------------------
