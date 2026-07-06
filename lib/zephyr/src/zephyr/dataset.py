@@ -22,6 +22,16 @@ from zephyr.readers import DEFAULT_FILE_PATH_COLUMN, InputFileSpec
 logger = logging.getLogger(__name__)
 
 
+def _collapse_double_slashes(path: str) -> str:
+    """Collapse repeated slashes in ``path`` while preserving the ``://`` protocol separator.
+
+    The ``(?<!:)`` lookbehind keeps ``gs://``, ``s3://``, ``http://`` etc. intact
+    while normalizing accidental ``//`` elsewhere (e.g. from joining a prefix that
+    ends in ``/`` with a pattern that starts with ``/``).
+    """
+    return re.sub(r"(?<!:)//+", "/", path)
+
+
 @dataclass(frozen=True)
 class GlobSource:
     """Lazy file source resolved at plan time via a bulk list-objects call.
@@ -57,7 +67,7 @@ def resolve_glob(source: GlobSource) -> list[FileEntry]:
     Uses fsspec glob(detail=True) which returns file metadata from the same
     list-objects API call — no extra per-file stat RPCs.
     """
-    pattern = re.sub(r"(?<!:)//+", "/", source.pattern)
+    pattern = _collapse_double_slashes(source.pattern)
 
     fs, _ = url_to_fs(pattern)
     protocol = fsspec.core.split_protocol(pattern)[0]
@@ -111,10 +121,7 @@ def format_shard_path(pattern: str, shard_idx: int, total: int) -> str:
     basename = f"shard_{shard_idx}"
     formatted = pattern.format(shard=shard_idx, total=total, basename=basename)
 
-    # Normalize double slashes while preserving protocol (e.g., gs://, s3://, http://)
-    normalized = re.sub(r"(?<!:)//+", "/", formatted)
-
-    return normalized
+    return _collapse_double_slashes(formatted)
 
 
 def _normalize_output_pattern(output_pattern: str | Callable[[int, int], str]) -> Callable[[int, int], str]:
