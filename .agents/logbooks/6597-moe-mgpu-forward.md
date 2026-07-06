@@ -2523,3 +2523,45 @@ Tuned the B200 destination and return transport copy tile dimensions after the W
 Current conclusion: the best B200 full-forward profile is now about 696 rounded TFLOP/s/rank. The 800 full-forward goal
 is still not met. The remaining gap is likely in the Lane transport stages plus input preparation; larger transport
 tiles beyond 256 are not viable because of async-copy limits.
+
+## 2026-07-06 03:20 - B200 full-forward verification and block_m sweep
+
+Re-synced the clean `codex/blackwell-source-push-stack` source copy at `4d4a04889` and re-ran B200 forward timing on the
+current Blackwell 65K/D3072/I3072 profile.
+
+- Code state:
+  - Branch: `codex/blackwell-source-push-stack`
+  - Commit: `4d4a04889`
+- Fine-stage diagnostic:
+  - Artifact: `bw-fwd-stage-64957.out`
+  - Prepared-input median: 17.90 ms, 854.71 useful TFLOP/s/rank
+  - Stage medians including dynamic input prep:
+    - input prep: 58.88 ms
+    - destination transport: 5.41 ms
+    - W13: 5.66 ms
+    - W2: 3.72 ms
+    - return transport: 3.98 ms
+    - combine: 1.09 ms
+  - Interpretation: the staged-device-sync diagnostic is useful for prepared-input and per-stage attribution, but its
+    un-jitted input-prep timing should not be compared to the production-style outer-JIT forward number.
+- MLP forward verification:
+  - Artifact: `blackwell_mlp_forward_outerjit_64960.jsonl`
+  - Median: 696.28 useful / 717.49 rounded TFLOP/s/rank, 21.32 ms, 0 dropped routes
+  - Non-outer-JIT control artifact: `blackwell_mlp_forward_64959.jsonl`
+  - Non-outer-JIT median: 168.78 useful / 173.92 rounded TFLOP/s/rank, 87.95 ms
+  - Interpretation: use `--outer-jit true` for production-style full-forward timing; otherwise the benchmark mostly
+    measures staged Python/dispatch overhead.
+- `block_m` sweep with capacity held roughly constant:
+  - Artifact: `blackwell_mlp_blockm_sweep_64961.jsonl`
+  - `block_m=32`, `entries_per_rank=1152`, `inbox_slots=64`: 699.58 useful / 710.28 rounded TFLOP/s/rank, 21.22 ms
+  - `block_m=48`, `entries_per_rank=768`, `inbox_slots=48`: 698.02 useful / 714.19 rounded TFLOP/s/rank, 21.27 ms
+  - Both had 0 dropped routes.
+  - Interpretation: smaller `block_m` improves row efficiency but adds queue-entry overhead, so it does not materially
+    close the gap to 800. The best useful result is now about 700 TFLOP/s/rank; the best rounded result remains about
+    717 TFLOP/s/rank.
+
+Current conclusion: the checked-in B200 profile is still the most conservative default. A `block_m=32` profile is a
+small exploratory win on useful TFLOP/s/rank but a rounded regression; do not promote it without more evidence. The
+remaining full-forward gap is about 14% versus the 800 useful TFLOP/s/rank target, while the prepared-input path is
+already above 800. The next worthwhile direction is structural reduction of compiled input preparation / dispatch
+overhead or further transport fusion, not simple queue/block-size sweeps.
