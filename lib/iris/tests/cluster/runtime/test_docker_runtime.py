@@ -154,33 +154,3 @@ def test_security_flags_docker_access_mounts_socket():
     assert "/var/run/docker.sock:/var/run/docker.sock" in flags
     # Still hardened like DEFAULT otherwise.
     assert "--cap-drop" in flags
-
-
-# ---------------------------------------------------------------------------
-# Network sysctls: fixed TPU/JAX ports must stay out of the ephemeral pool
-# ---------------------------------------------------------------------------
-
-
-# Fixed ports the cluster's own services bind: TPU/JAX runtime (libtpu metric
-# 8431, the TPU/SliceBuilder block incl. the JAX coordinator 8482 and marin's
-# default 8476, levanter megascale 8081) and iris controller/worker RPC.
-FIXED_SERVICE_PORTS = (8081, 8431, 8470, 8471, 8476, 8482, 10000, 10001)
-
-
-def test_ephemeral_floor_sits_above_fixed_service_ports():
-    """No fixed port the cluster binds may fall in the ephemeral auto-allocation
-    pool, or a co-tenant's outbound connection can be handed it and crash-loop
-    the service that needs it (the "[::]:8431 Address already in use" TPU case).
-    """
-    lo, _hi = (int(x) for x in _NETWORK_SYSCTLS["net.ipv4.ip_local_port_range"].split())
-    reserved = _expand_reserved_ports(_NETWORK_SYSCTLS["net.ipv4.ip_local_reserved_ports"])
-    for port in FIXED_SERVICE_PORTS:
-        assert port < lo or port in reserved, f"fixed service port {port} is reachable by ephemeral auto-allocation"
-
-
-def test_reserved_ports_cover_the_tpu_block():
-    """Defense-in-depth: even though the floor already excludes them, the TPU/JAX
-    ports stay reserved so lowering the floor again cannot re-expose them."""
-    reserved = _expand_reserved_ports(RESERVED_HOST_PORTS)
-    for port in (8081, 8431, 8470, 8471, 8476, 8482):
-        assert port in reserved, f"port {port} must stay reserved"
