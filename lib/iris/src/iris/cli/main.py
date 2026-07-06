@@ -147,10 +147,12 @@ def login(ctx, headless):
     RPC silently re-mints the short-lived edge token IAP requires. Non-IAP
     clusters need no login (in-network / loopback trust admits the caller).
 
-    Headless (CI / agent) callers cannot use this browser flow. They skip
-    ``iris login`` and instead impersonate an IAP-allowlisted service account with
-    the global ``--impersonate-service-account`` flag (or
-    ``$MARIN_IMPERSONATE_SERVICE_ACCOUNT``); see ``lib/iris/docs/iap-gclb.md``.
+    On a box with no local browser but where you can open a URL elsewhere, pass
+    ``--headless`` (auto-detected when no browser is registered) to authenticate by
+    pasting the returned code. Fully unattended callers (CI / agents, no human at
+    all) instead impersonate an IAP-allowlisted service account with the global
+    ``--impersonate-service-account`` flag (or ``$MARIN_IMPERSONATE_SERVICE_ACCOUNT``);
+    see ``lib/iris/docs/iap-gclb.md``.
     """
     controller_url = require_controller_url(ctx)
     config = ctx.obj.get("config")
