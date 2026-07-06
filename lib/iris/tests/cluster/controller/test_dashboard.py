@@ -1282,27 +1282,13 @@ def test_fetch_logs_for_missing_task_returns_empty_entries(client):
     [
         "/iris.cluster.ControllerService/FetchLogs",
         "/iris.logging.LogService/FetchLogs",
+        "/finelog.logging.LogService/FetchLogs",
     ],
 )
 def test_fetch_logs_outside_endpoint_proxy_is_not_exposed(client, path):
     resp = client.post(path, json={}, headers={"Content-Type": "application/json"})
 
     assert resp.status_code == 404
-
-
-def test_fetch_logs_via_legacy_bare_path_is_bridged(client):
-    """Clients built before the proxy lift resolve /system/log-server to the bare
-    controller URL and call /finelog.logging.LogService/FetchLogs directly. That
-    bare path is bridged to the log server through the generic endpoint proxy.
-    """
-    task_id = JobName.root("test-user", "nonexistent").task(0).to_wire()
-    resp = client.post(
-        "/finelog.logging.LogService/FetchLogs",
-        json={"source": f"{task_id}:", "match_scope": "MATCH_SCOPE_PREFIX"},
-        headers={"Content-Type": "application/json"},
-    )
-    assert resp.status_code == 200
-    assert resp.json().get("entries", []) == []
 
 
 # =============================================================================
