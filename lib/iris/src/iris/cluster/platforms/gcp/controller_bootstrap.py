@@ -149,7 +149,7 @@ sudo docker run -d --name {{ container_name }} \\
     {{ config_volume }} \\
     {{ docker_image }} \\
     .venv/bin/python -m iris.cluster.controller.main serve \\
-        --host 0.0.0.0 --port {{ port }} {{ config_flag }} {{ fresh_flag }}
+        --host 0.0.0.0 --port {{ port }} {{ config_flag }} {{ fresh_flag }} {{ checkpoint_flag }}
 
 echo "[iris-controller] [5/5] Controller container started"
 
@@ -220,6 +220,7 @@ def build_controller_bootstrap_script(
     port: int,
     config_yaml: str = "",
     fresh: bool = False,
+    restore_checkpoint: str | None = None,
 ) -> str:
     """Build bootstrap script for controller VM.
 
@@ -229,7 +230,12 @@ def build_controller_bootstrap_script(
         config_yaml: Optional YAML config to write to /etc/iris/config.yaml
         fresh: When True, pass ``--fresh`` to the controller serve command so
             it starts with an empty local database and skips checkpoint restore.
+        restore_checkpoint: When set, pass ``--checkpoint-path`` so the controller
+            replaces its local DB with exactly this checkpoint on start (the
+            deploy-rollback path). Mutually exclusive with ``fresh``.
     """
+    if fresh and restore_checkpoint:
+        raise ValueError("fresh and restore_checkpoint are mutually exclusive")
     if config_yaml:
         config_setup = _build_config_setup(config_yaml, log_prefix="[iris-controller]")
         config_volume = "-v /etc/iris/config.yaml:/etc/iris/config.yaml:ro"
@@ -248,6 +254,7 @@ def build_controller_bootstrap_script(
         config_volume=config_volume,
         config_flag=config_flag,
         fresh_flag="--fresh" if fresh else "",
+        checkpoint_flag=f"--checkpoint-path {restore_checkpoint}" if restore_checkpoint else "",
         port_range=EPHEMERAL_PORT_RANGE,
     )
 
@@ -256,6 +263,7 @@ def build_controller_bootstrap_script_from_config(
     config: IrisClusterConfig,
     resolve_image: Callable[[str, str | None], str],
     fresh: bool = False,
+    restore_checkpoint: str | None = None,
 ) -> str:
     """Build controller bootstrap script from the full cluster config.
 
@@ -264,6 +272,8 @@ def build_controller_bootstrap_script_from_config(
         resolve_image: Resolves a container image tag for the target registry.
         fresh: When True, pass ``--fresh`` to the controller serve command so
             it starts with an empty local database and skips checkpoint restore.
+        restore_checkpoint: When set, pass ``--checkpoint-path`` so the controller
+            replaces its local DB with exactly this checkpoint on start (rollback).
     """
     # #6873 render guard: a raw inlined secret must never reach GCE startup
     # metadata. References render verbatim (resolved at the controller runtime);
@@ -282,4 +292,6 @@ def build_controller_bootstrap_script_from_config(
 
     image = resolve_image(image, zone)
 
-    return build_controller_bootstrap_script(image, port, config_yaml, fresh=fresh)
+    return build_controller_bootstrap_script(
+        image, port, config_yaml, fresh=fresh, restore_checkpoint=restore_checkpoint
+    )

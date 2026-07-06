@@ -1064,22 +1064,41 @@ def controller_checkpoint(ctx, stop: bool):
     default=None,
     help=(
         "Redeploy this exact pre-built controller image instead of building from the "
-        "working tree. Use for ROLLBACK: pass a previously-deployed tag, e.g. "
-        "ghcr.io/marin-community/iris-controller:<tree-hash> (resolve_image maps it to the "
-        "cluster's registry mirror). Skips the image build entirely; the controller restores "
-        "from its on-VM state DB, so cluster state and running workers are preserved."
+        "working tree, e.g. ghcr.io/marin-community/iris-controller:<tree-hash> (resolve_image "
+        "maps it to the cluster's registry mirror). Skips the image build; the controller "
+        "reuses its on-VM state DB, so cluster state and running workers are preserved."
+    ),
+)
+@click.option(
+    "--rollback",
+    "rollback_checkpoint",
+    default=None,
+    metavar="CHECKPOINT_DIR",
+    help=(
+        "Roll back a bad deploy: restore this pre-deploy checkpoint "
+        "(gs://…/controller-state/<epoch_ms>) over the local DB on start, discarding any "
+        "forward migrations the current controller applied. Requires --image (roll the code "
+        "back too — an old checkpoint under the new image would just re-migrate); implies "
+        "--skip-checkpoint. Take the checkpoint before the deploy (`controller checkpoint`)."
     ),
 )
 @click.pass_context
-def controller_restart(ctx, skip_checkpoint: bool, checkpoint_timeout: int, image_override: str | None):
+def controller_restart(
+    ctx,
+    skip_checkpoint: bool,
+    checkpoint_timeout: int,
+    image_override: str | None,
+    rollback_checkpoint: str | None,
+):
     """Restart controller with state preservation (remote platforms only).
 
     Takes a checkpoint, builds fresh images from the working tree, stops the
     controller, and starts a new one. The new controller auto-restores from the
     checkpoint. Workers on separate VMs survive the restart.
 
-    Pass ``--image <tag>`` to redeploy a specific pre-built controller image
-    without building — the rollback path back to a known-good deploy.
+    Pass ``--image <tag>`` to redeploy a specific pre-built image without
+    building. Pass ``--rollback <checkpoint>`` with ``--image`` to revert a bad
+    deploy — both the image and the pre-deploy state.
     """
     config = ctx.obj.get("config")
     if not config:
@@ -1091,6 +1110,17 @@ def controller_restart(ctx, skip_checkpoint: bool, checkpoint_timeout: int, imag
             "controller restart is not supported for local clusters. "
             "Stop and restart the 'iris cluster start --local' process instead."
         )
+
+    if rollback_checkpoint and not image_override:
+        raise click.ClickException(
+            "--rollback requires --image: roll the controller image back alongside its state. "
+            "Restoring a pre-deploy checkpoint under the current (new) image would just re-apply "
+            "the same migrations. Pass --image <previously-deployed tag>."
+        )
+    if rollback_checkpoint:
+        # Restoring an OLDER checkpoint — snapshotting the current (bad) controller
+        # first is pointless, and its migrated DB stays on the VM if ever needed.
+        skip_checkpoint = True
 
     # --image pins the controller to a pre-built tag and skips the working-tree
     # build (rollback / redeploy). Only the controller image is overridden;
@@ -1106,6 +1136,10 @@ def controller_restart(ctx, skip_checkpoint: bool, checkpoint_timeout: int, imag
     try:
         controller_url = require_controller_url(ctx)
     except (RuntimeError, click.ClickException):
+        if rollback_checkpoint:
+            raise click.ClickException(
+                "--rollback needs a running controller to restart in place; none was found."
+            ) from None
         click.echo("No existing controller found. Starting fresh...")
         if image_override:
             click.echo(f"Deploying pinned controller image (no build): {image_override}")
@@ -1142,8 +1176,11 @@ def controller_restart(ctx, skip_checkpoint: bool, checkpoint_timeout: int, imag
     else:
         _build_and_pin_deploy_images(ctx, config)
 
+    if rollback_checkpoint:
+        click.echo(f"Rolling back: restoring pre-deploy checkpoint {rollback_checkpoint}")
+
     try:
-        address = bundle.controller.restart_controller(config)
+        address = bundle.controller.restart_controller(config, restore_checkpoint=rollback_checkpoint)
     except Exception as e:
         click.echo(f"Failed to restart controller: {e}", err=True)
         raise SystemExit(1) from e

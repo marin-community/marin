@@ -73,11 +73,12 @@ class GcpControllerProvider:
         )
         return address
 
-    def restart_controller(self, config: IrisClusterConfig) -> str:
+    def restart_controller(self, config: IrisClusterConfig, *, restore_checkpoint: str | None = None) -> str:
         address, _vm = vm_restart_controller(
             self.worker_provider,
             config,
             resolve_image=self.worker_provider.resolve_image,
+            restore_checkpoint=restore_checkpoint,
         )
         return address
 

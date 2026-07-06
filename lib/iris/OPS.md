@@ -69,15 +69,15 @@ If checkpoint times out: `iris cluster controller restart --skip-checkpoint` (re
 
 **Redeploy a specific image (no schema change).** `iris cluster controller restart --image ghcr.io/marin-community/iris-controller:<old-hash>` redeploys a pre-built controller image as-is (skips the working-tree build; `resolve_image` maps it to the registry mirror). Only the controller container is replaced; workers and cluster state are preserved. Run it while the controller is still reachable so it takes the in-place path.
 
-**When the deploy applied DB migrations, `--image` alone is NOT enough.** A restart runs forward-only migrations in place on the on-VM state DB (`schema_migrations` tracks applied stems; there is no down-migration), and some are destructive — e.g. `0039_drop_api_keys`, `0040_drop_users`. The old code then loads a schema it does not understand and hits missing-table errors at runtime. A correct rollback must **also restore the pre-deploy (pre-migration) checkpoint** — the one taken while the old code was still running. Use:
+**When the deploy applied DB migrations, `--image` alone is NOT enough.** A restart runs forward-only migrations in place on the on-VM state DB (`schema_migrations` tracks applied stems; there is no down-migration), and some are destructive — e.g. `0039_drop_api_keys`, `0040_drop_users`. The old code then loads a schema it does not understand and hits missing-table errors at runtime. A correct rollback must **also restore the pre-deploy (pre-migration) checkpoint** — the one taken while the old code was still running. Pass `--rollback` alongside `--image`:
 
 ```bash
-OLD_IMAGE=ghcr.io/marin-community/iris-controller:<old-hash> \
-CHECKPOINT_DIR=gs://marin-us-central2/iris/marin/state/controller-state/<epoch_ms> \
-  scripts/iris/rollback_controller.sh --execute   # omit --execute to print the plan
+iris --cluster=marin cluster controller restart \
+  --image ghcr.io/marin-community/iris-controller:<old-hash> \
+  --rollback gs://marin-us-central2/iris/marin/state/controller-state/<epoch_ms>
 ```
 
-It redeploys `OLD_IMAGE` in place (Phase A — the old code may fail its health check on the still-migrated DB; that is expected), then on the VM stops the container, moves the post-migration DB aside (preserved as `db.postmigration.bak.<ts>`, never deleted), restores `CHECKPOINT_DIR` into the DB dir, and starts the old image on it (Phase B). It **requires the controller to be reachable** (in-place path); for a wedged/unreachable controller use the fully-manual on-VM procedure below instead, which never risks recreating the VM.
+`--rollback <checkpoint>` requires `--image` (roll code and state back together — an old checkpoint under the new image would just re-migrate) and implies `--skip-checkpoint`. The redeployed controller wipes its migrated local DB and restores exactly that checkpoint on start (`serve --checkpoint-path` is authoritative — it does not fall through to the local-freshness reuse). Run it while the controller is still reachable so it takes the in-place path; for a wedged/unreachable controller use the fully-manual on-VM procedure below instead, which never risks recreating the VM.
 
 ### Controller Checkpoint Rollback (wedged / OOM recovery)
 

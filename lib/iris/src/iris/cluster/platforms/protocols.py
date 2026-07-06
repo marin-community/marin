@@ -41,8 +41,13 @@ class ControllerProvider(Protocol):
         """
         ...
 
-    def restart_controller(self, config: IrisClusterConfig) -> str:
-        """Restart controller in-place without destroying underlying compute."""
+    def restart_controller(self, config: IrisClusterConfig, *, restore_checkpoint: str | None = None) -> str:
+        """Restart controller in-place without destroying underlying compute.
+
+        If ``restore_checkpoint`` (a ``gs://…/controller-state/<epoch_ms>`` dir) is
+        set, the restarted controller replaces its local DB with that checkpoint
+        instead of reusing it — the deploy-rollback path.
+        """
         ...
 
     def stop_controller(self, config: IrisClusterConfig) -> None:

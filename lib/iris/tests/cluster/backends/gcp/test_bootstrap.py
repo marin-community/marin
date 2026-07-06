@@ -5,6 +5,7 @@
 
 import pytest
 from iris.cluster.config import GcpPlatformConfig, WorkerConfig
+from iris.cluster.platforms.gcp.controller_bootstrap import build_controller_bootstrap_script
 from iris.cluster.platforms.gcp.fake import InMemoryGcpService
 from iris.cluster.platforms.gcp.worker_bootstrap import (
     build_worker_bootstrap_script,
@@ -145,3 +146,21 @@ def test_gcp_provider_resolve_image_requires_zone_for_ghcr() -> None:
 
     with pytest.raises(ValueError, match="zone is required"):
         provider.resolve_image("ghcr.io/org/img:v1")
+
+
+def test_controller_bootstrap_emits_checkpoint_path_when_restoring() -> None:
+    """restore_checkpoint threads a --checkpoint-path into the serve command (rollback)."""
+    ckpt = "gs://bucket/iris/state/controller-state/1783357684695"
+    script = build_controller_bootstrap_script("img:tag", 10000, restore_checkpoint=ckpt)
+    assert f"--checkpoint-path {ckpt}" in script
+
+
+def test_controller_bootstrap_omits_checkpoint_path_by_default() -> None:
+    """A normal restart carries no --checkpoint-path, so the controller reuses its local DB."""
+    script = build_controller_bootstrap_script("img:tag", 10000)
+    assert "--checkpoint-path" not in script
+
+
+def test_controller_bootstrap_fresh_and_restore_are_mutually_exclusive() -> None:
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        build_controller_bootstrap_script("img:tag", 10000, fresh=True, restore_checkpoint="gs://b/cs/1")
