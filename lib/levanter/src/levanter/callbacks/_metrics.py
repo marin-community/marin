@@ -22,8 +22,6 @@ from levanter.utils.jax_utils import jnp_to_python
 
 logger = pylogging.getLogger(__name__)
 
-RUN_PROGRESS_KEY = "run_progress"
-
 
 @dataclass
 class InstantThroughput:
@@ -76,9 +74,9 @@ def log_step_info(total_steps: Optional[int], batch_schedule: Optional[BatchSche
             if batch_schedule is not None:
                 total_examples = batch_schedule.global_data_offset_by_step(total_steps)
                 current_examples = batch_schedule.global_data_offset_by_step(step.step + 1)
-                metrics[RUN_PROGRESS_KEY] = current_examples / total_examples
+                metrics["run_progress"] = current_examples / total_examples
             else:
-                metrics[RUN_PROGRESS_KEY] = step.step / total_steps
+                metrics["run_progress"] = step.step / total_steps
         log_optimizer_hyperparams(step.opt_state, step=step.step, prefix="optim")
         levanter.tracker.log(metrics, step=step.step)
 

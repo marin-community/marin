@@ -14,7 +14,7 @@ import pytest
 
 import levanter.tracker as tracker_mod
 from levanter.callbacks import eval_loss_loop
-from levanter.callbacks._metrics import RUN_PROGRESS_KEY, compute_instant_throughput, log_step_info
+from levanter.callbacks._metrics import compute_instant_throughput, log_step_info
 from levanter.metrics import (
     Metric,
     ReductionType,
@@ -402,7 +402,7 @@ def test_log_step_info_token_progress_uniform_batch():
         cb(_make_step_info(49))  # step 49 done → 50 steps completed
 
     # token-based: global_data_offset(50) / global_data_offset(100) = 50*32 / 100*32 = 0.5
-    assert abs(logged[RUN_PROGRESS_KEY] - 0.5) < 1e-9
+    assert abs(logged["run_progress"] - 0.5) < 1e-9
 
 
 def test_log_step_info_token_progress_variable_batch():
@@ -420,9 +420,9 @@ def test_log_step_info_token_progress_variable_batch():
         cb(_make_step_info(74))
 
     expected = 3200 / 4800
-    assert abs(logged[RUN_PROGRESS_KEY] - expected) < 1e-9
+    assert abs(logged["run_progress"] - expected) < 1e-9
     # Also confirm it differs from naive step ratio
-    assert abs(logged[RUN_PROGRESS_KEY] - 74 / 100) > 0.01
+    assert abs(logged["run_progress"] - 74 / 100) > 0.01
 
 
 def test_log_step_info_falls_back_to_step_progress_without_schedule():
@@ -434,4 +434,4 @@ def test_log_step_info_falls_back_to_step_progress_without_schedule():
     with _patch_tracker(logged):
         cb(_make_step_info(25))
 
-    assert abs(logged[RUN_PROGRESS_KEY] - 0.25) < 1e-9
+    assert abs(logged["run_progress"] - 0.25) < 1e-9
