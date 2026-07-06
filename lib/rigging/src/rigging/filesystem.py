@@ -402,14 +402,12 @@ class StoragePath:
         segments: tuple[str, ...] = (),
         rooted: bool = True,
     ):
-        """Parse *value* (a URL/path string or another :class:`StoragePath`), or build
-        structurally from the keyword parts.
-
-        ``init=False`` on the dataclass hands construction here so ``StoragePath(x)``
-        parses. ``dataclasses.replace`` passes only the dataclass *fields* as keywords
-        (never ``value``), so it lands on the structural branch and keeps working — as do
-        :meth:`__truediv__` and :attr:`parent`, which build via ``replace``.
+        """Parse *value* (a URL/path string, or another :class:`StoragePath`); when
+        *value* is omitted, build directly from the keyword parts.
         """
+        # A positional value parses; the keyword parts build structurally. dataclasses
+        # .replace passes only the fields (never value), so it takes the keyword branch —
+        # keeping replace, __truediv__, and parent working under init=False.
         if value is not None:
             if isinstance(value, StoragePath):
                 scheme, netloc, segments, rooted = value.scheme, value.netloc, value.segments, value.rooted
@@ -544,7 +542,7 @@ class StoragePath:
         return open_url(str(self), mode, **kwargs)
 
 
-def _reattach_protocol(fs: Any, path: str) -> str:
+def _reattach_protocol(fs: fsspec.AbstractFileSystem, path: str) -> str:
     """Re-attach ``fs``'s protocol to a bare ``path`` so it round-trips through ``url_to_fs``.
 
     ``fsspec`` glob/find results drop the protocol prefix (e.g. ``gs://``), which makes
