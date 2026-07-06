@@ -14,9 +14,9 @@ from levanter.store.cache import (
     CACHE_LAYOUT_CONSOLIDATED,
     CACHE_LAYOUT_SHARDED,
     CacheLedger,
+    ShardedCacheLayout,
     TreeCache,
     _expose_cache_rows,
-    _relative_shard_path,
     consolidate_shard_cache_ledgers,
     consolidate_shard_caches,
 )
@@ -97,9 +97,10 @@ def test_relative_shard_path_requires_child_paths():
         internal_shard = os.path.join(output_path, "part-00000")
         external_shard = os.path.join(tmpdir, "source", "part-00000")
 
-        assert _relative_shard_path(output_path, internal_shard) == "part-00000"
+        layout = ShardedCacheLayout.parse(output_path)
+        assert layout.relative_shard(internal_shard) == "part-00000"
         with pytest.raises(ValueError, match="not under output path"):
-            _relative_shard_path(output_path, external_shard)
+            layout.relative_shard(external_shard)
 
 
 def test_relative_shard_path_requires_child_uri_paths():
@@ -107,9 +108,10 @@ def test_relative_shard_path_requires_child_uri_paths():
     internal_shard = "gs://bucket/cache/train/part-00000"
     external_shard = "gs://bucket/other/train/part-00000"
 
-    assert _relative_shard_path(output_path, internal_shard) == "part-00000"
+    layout = ShardedCacheLayout.parse(output_path)
+    assert layout.relative_shard(internal_shard) == "part-00000"
     with pytest.raises(ValueError, match="not under output path"):
-        _relative_shard_path(output_path, external_shard)
+        layout.relative_shard(external_shard)
 
 
 def test_relative_shard_path_tolerates_double_slash_output():
@@ -119,7 +121,7 @@ def test_relative_shard_path_tolerates_double_slash_output():
     output_path = "s3://marin-na/marin//slimpajama-6b/2026.06.28/train"
     shard_path = "s3://marin-na/marin/slimpajama-6b/2026.06.28/train/part-00000-of-00048"
 
-    assert _relative_shard_path(output_path, shard_path) == "part-00000-of-00048"
+    assert ShardedCacheLayout.parse(output_path).relative_shard(shard_path) == "part-00000-of-00048"
 
 
 @pytest.mark.asyncio

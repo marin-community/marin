@@ -174,9 +174,6 @@ class TreeCache(AsyncDataset[T_co]):
     def is_sharded(self) -> bool:
         return self.ledger.layout == CACHE_LAYOUT_SHARDED
 
-    def _shard_path(self, shard_name: str) -> str:
-        return self._layout.shard(shard_name)
-
     async def async_len(self) -> int:
         return await self._reader.async_len()
 
@@ -319,7 +316,7 @@ class TreeCache(AsyncDataset[T_co]):
     def _shard_store(self, shard_name: str) -> TreeStore[T_co]:
         store = self._shard_stores.get(shard_name)
         if store is None:
-            store = TreeStore.open(self._exemplar, self._shard_path(shard_name), mode="r", cache_metadata=True)
+            store = TreeStore.open(self._exemplar, self._layout.shard(shard_name), mode="r", cache_metadata=True)
             self._shard_stores[shard_name] = store
         return store
 
@@ -329,7 +326,7 @@ class TreeCache(AsyncDataset[T_co]):
         if store is None:
             tree_store = TreeStore.open(
                 _field_exemplar(self._exemplar, field),
-                self._shard_path(shard_name),
+                self._layout.shard(shard_name),
                 mode="r",
                 cache_metadata=True,
             )
@@ -343,7 +340,7 @@ class TreeCache(AsyncDataset[T_co]):
         if store is None:
             tree_store = await TreeStore.open_async(
                 _field_exemplar(self._exemplar, field),
-                self._shard_path(shard_name),
+                self._layout.shard(shard_name),
                 mode="r",
                 cache_metadata=True,
             )
