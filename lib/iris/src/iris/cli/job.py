@@ -8,6 +8,7 @@ Usage:
     iris --config cluster.yaml job run --tpu v5litepod-16 -e WANDB_API_KEY $WANDB_API_KEY -- python train.py
 """
 
+import csv
 import difflib
 import logging
 import os
@@ -104,19 +105,20 @@ def _print_terminated(terminated: list[JobName]) -> None:
 def _read_targets_from_stdin() -> list[str]:
     """Read Iris job/task ids from stdin, one per line.
 
-    Tolerates ``iris query -f csv`` output directly: each line is reduced to its
-    first comma/whitespace-delimited field, and only fields that look like Iris
-    ids (leading ``/``) are kept — so a CSV header row and any trailing columns
-    are ignored. This is the glue for the query→act pattern:
+    Parses each line as a CSV record (symmetric with ``iris query -f csv``, which
+    quotes fields through ``csv.writer``) and keeps the first field when it looks
+    like an Iris id (leading ``/``). This consumes ``iris query -f csv`` output
+    directly — a header row and trailing columns are dropped, and ids that
+    contain a comma (quoted by the writer) or a space survive intact, since a
+    JobName component may hold either:
 
         iris query -f csv "SELECT task_id FROM tasks WHERE ..." | iris job kick --stdin
     """
     targets: list[str] = []
-    for raw in sys.stdin:
-        line = raw.strip()
-        if not line:
+    for row in csv.reader(sys.stdin):
+        if not row:
             continue
-        field = line.split(",", 1)[0].split()[0]
+        field = row[0].strip()
         if field.startswith("/"):
             targets.append(field)
     return targets

@@ -378,6 +378,22 @@ def test_read_targets_from_stdin_ignores_blank_and_non_id_lines(monkeypatch):
     assert _read_targets_from_stdin() == ["/alice/job/0", "/bob/job"]
 
 
+def test_read_targets_from_stdin_preserves_quoted_comma_and_space_ids(monkeypatch):
+    # JobName components may contain commas and spaces; iris query -f csv quotes
+    # comma-bearing fields via csv.writer, so a real CSV parse must round-trip them.
+    stdin = io.StringIO('task_id,state\n"/alice/a,b/0",3\n/alice/my job/1,3\n')
+    monkeypatch.setattr("iris.cli.job.sys.stdin", stdin)
+    assert _read_targets_from_stdin() == ["/alice/a,b/0", "/alice/my job/1"]
+
+
+def test_read_targets_from_stdin_skips_rows_with_empty_first_field(monkeypatch):
+    # A NULL first column (e.g. an unassigned current_worker_id) emits a leading
+    # comma; the empty field must be skipped, not crash the whole action.
+    stdin = io.StringIO(",3\n/alice/job/0,worker-1\n")
+    monkeypatch.setattr("iris.cli.job.sys.stdin", stdin)
+    assert _read_targets_from_stdin() == ["/alice/job/0"]
+
+
 def test_collect_targets_merges_positional_and_stdin(monkeypatch):
     monkeypatch.setattr("iris.cli.job.sys.stdin", io.StringIO("/from/stdin/0\n"))
     assert _collect_targets(("/pos/job/0",), use_stdin=True) == ["/pos/job/0", "/from/stdin/0"]
