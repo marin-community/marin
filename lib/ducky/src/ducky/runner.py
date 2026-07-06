@@ -118,14 +118,18 @@ def check_query_access(
     """
     if not allowed:
         return
-    uris = _object_uris(sql)
-    forbidden = [uri for uri in uris if not _is_allowed(uri, allowed)]
+    forbidden = disallowed_uris(sql, allowed)
     if forbidden:
         raise BucketNotAllowedError(
             f"query references buckets outside the allowlist: {', '.join(forbidden)}; "
             f"allowed prefixes: {', '.join(allowed)}"
         )
-    cross = [uri for uri in uris if _is_gcs_uri(uri) and not _is_allowed(uri, exempt_prefixes) and is_cross_region(uri)]
+    # Every referenced URI is allowed at this point; gate cross-region GCS reads.
+    cross = [
+        uri
+        for uri in _object_uris(sql)
+        if _is_gcs_uri(uri) and not _is_allowed(uri, exempt_prefixes) and is_cross_region(uri)
+    ]
     if cross and not _opts_in_cross_region(sql):
         raise CrossRegionNotAllowedError(
             f"query reads cross-region buckets: {', '.join(cross)}; "
