@@ -14,8 +14,8 @@ accelerator-provisioning rollup. Deployed as Cloud Run + native IAP.
 - **Server** — Node 20 + TypeScript + [Hono](https://hono.dev). Exposes
   `/api/ferry`, `/api/builds`, `/api/iris`, `/api/workers`,
   `/api/control-plane/health`, `/api/workers/history`,
-  `/api/provisioning/history`, `/api/jobs`, `/api/probes`, `/api/health`,
-  and serves the built web UI from `web/dist`.
+  `/api/provisioning/history`, `/api/jobs`, `/api/probes`, `/api/wandb`,
+  `/api/health`, and serves the built web UI from `web/dist`.
 - **Web** — Vite + React 18 + TypeScript + Jotai + `@tanstack/react-query`
   + Tailwind.
 - Single `package.json`, multi-stage Dockerfile, single service account,
@@ -38,6 +38,7 @@ server/
     clusterHistory.ts  24h worker + provisioning history from finelog canary rows
     jobs.ts            iris 24h job-state breakdown via ExecuteRawQuery
     probes.ts          synthetic-canary checks + provisioning from finelog
+    wandb.ts           W&B training charts via the anonymous GraphQL API
     finelogQuery.ts    finelog StatsService SQL query → Arrow IPC decode
     controllerQuery.ts helper for the raw-SQL Connect RPC
     discovery.ts       GCE label → controller internal URL
@@ -58,6 +59,7 @@ web/
       useProvisioningHistory.ts
       useJobs.ts
       useProbes.ts
+      useWandb.ts
     components/
       FerryPanel.tsx
       BuildPanel.tsx  GitHub CI, last 100 runs on main
@@ -66,10 +68,9 @@ web/
       WorkersPanel.tsx  live worker counts + side-by-side availability & provisioning history
       ProvisioningHistoryChart.tsx per-region + fleet-average provisioning success ratio
       JobsPanel.tsx
-      WandbPanel.tsx  W&B training charts (iframe of the status-page mini report)
+      WandbPanel.tsx  W&B training charts for the MoE hero run
       ProbesPanel.tsx synthetic-canary health checks + provisioning rollup
     style.css       Tailwind entry
-wandb_report.py     defines the W&B mini report the Training panel embeds
 Dockerfile          multi-stage build → node:20-slim runtime
 deploy.sh           Cloud Run + IAP deploy
 ```
@@ -236,29 +237,27 @@ metrics (e.g. before first deploy, or if the namespace is missing).
 
 ### Training panel (W&B)
 
-The Training panel (below Workers in the Iris section) is an iframe of a
-dedicated two-panel W&B report,
-["67B-A2B MoE on 10T: status-page hero charts"](https://wandb.ai/marin-community/marin_moe/reports/67B-A2B-MoE-on-10T:-status-page-hero-charts--VmlldzoxNzQzMTI4MQ==),
-which mirrors the headline charts (train cross-entropy loss and Paloma
-macro loss vs cumulative training tokens) of the hero report
-["67B-A2B MoE on 10T tokens"](https://wandb.ai/marin-community/marin_moe/reports/67B-A2B-MoE-on-10T-tokens--VmlldzoxNzM1OTMxMQ).
+The Training panel (below Workers in the Iris section) renders the
+headline charts of the public W&B report
+["67B-A2B MoE on 10T tokens"](https://wandb.ai/marin-community/marin_moe/reports/67B-A2B-MoE-on-10T-tokens--VmlldzoxNzM1OTMxMQ):
+train cross-entropy loss and Paloma macro loss, both against cumulative
+training tokens.
 
-Why a mini report: W&B officially supports iframing public *reports*
-(they serve frame-friendly headers plus embed chrome), but individual
-panels are not URL-addressable, and pixel-cropping the full hero report
-is unreliable — its layout shifts with progressive rendering and any
-report edit. A purpose-built report that *only contains* the wanted
-panels embeds whole, no cropping.
+`server/sources/wandb.ts` first reads the **report's spec** (the
+`view(id:)` GraphQL field) and charts whatever runs the report's runset
+pins — so when a new resume run is added to the report, the panel picks
+it up on the next fetch with no code change. Which metrics are charted
+is fixed in the `CHARTS` constant. Run history comes from the
+`sampledHistory` GraphQL field (800 samples per series, one request per
+run). `marin-community` is a public entity, so everything is anonymous —
+**no `WANDB_API_KEY` is needed**; if the project ever goes private the
+panel will surface the GraphQL error and we'd need to plumb a key.
 
-`wandb_report.py` (uv script, run from this directory) is the source of
-truth for the mini report — rerun it with a `WANDB_API_KEY` that has
-`marin-community` write access to recreate it or push definition
-changes. The runset is a run-name search (`sw2k_v4_2048_muon`) rather
-than pinned run ids, so new hero resumes appear on the page with no
-action. There is **no automatic sync with the parent report**: if its
-headline panels change, update `wandb_report.py` and rerun. The browser
-loads the iframe straight from wandb.ai (the report is public; the
-dashboard's IAP is not involved), so the panel needs no server support.
+Readability treatment in `WandbPanel.tsx`: dense series get a debiased
+EMA (`SMOOTHING_ALPHA`) drawn over a faint raw trace, sparse eval series
+are plotted as-is, and the y-domain is clipped at the 98th percentile so
+warmup loss spikes don't squash the curve (the same effect as the y-axis
+cap the report's own panels use).
 
 ## Deploy
 
@@ -293,6 +292,7 @@ plus the dev controller discovery settings.
 | Provisioning history | 60s    | 60s                        | 24h from finelog    |
 | Jobs            | 60s         | 60s                        | 24h window          |
 | Probes          | 60s         | 60s                        | latest cycle        |
+| W&B training    | 5min        | 5min                       | full run history (sampled) |
 
 Backend TTL is the authoritative shield against the GitHub rate limit —
 frontend polling can be tuned without affecting upstream. Concurrent
@@ -346,11 +346,13 @@ break** — we'll need to plumb a service-account bearer token.
 - **Single active environment per deployment.** Prod and dev should run
   as separate Cloud Run services so each dashboard keeps its own worker,
   job, and control-plane history.
-- **The Training panel's mini report is manually synced.** New hero
-  resumes appear automatically (runset is a name search), but panel or
-  metric changes in the parent report require editing `wandb_report.py`
-  and rerunning it. A first-visit W&B cookie banner may show inside the
-  iframe until dismissed, and the embed is light-themed.
+- **The Training panel's metrics are hardcoded.** Runs follow the parent
+  report's runset automatically, but the charted metrics live in the
+  `CHARTS` constant in `server/sources/wandb.ts` — if the report's
+  headline panels change, update it by hand. The run list also assumes
+  the report keeps pinning runs in its first panel grid's runset
+  (`selections.tree`); a switch to filter-based selection would surface
+  as a panel error.
 - **Max one instance.** More than one would split the TTL cache and push
   GitHub + controller traffic up by N×. If we ever need scale, move caching
   out of process (Cloud Memorystore) or pre-compute into GCS.
