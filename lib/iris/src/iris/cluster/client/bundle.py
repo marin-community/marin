@@ -12,10 +12,9 @@ import zipfile
 from collections.abc import Sequence
 from pathlib import Path
 
-logger = logging.getLogger(__name__)
+from iris.cluster.bundle import MAX_BUNDLE_SIZE_BYTES
 
-# Maximum bundle size in bytes (25 MB)
-MAX_BUNDLE_SIZE_BYTES = 25 * 1024 * 1024
+logger = logging.getLogger(__name__)
 
 # Default exclude pattern applied to all bundles.  Matches against the
 # *relative* path (forward-slash separated, no leading slash).

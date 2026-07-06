@@ -48,10 +48,14 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # EdDSA (Ed25519) JWT verification for the authenticated ingress front. The
 # delegation tokens are asymmetric: a relaying controller signs with its private
-# key and finelog verifies against that cluster's inline public key. `ring`
-# (jsonwebtoken's crypto backend) is already in the lock via the TLS/object-store
-# stack, so this adds no new heavy build dependency and we do not hand-roll JWS.
-jsonwebtoken = "9"
+# key and finelog verifies against that cluster's inline public key. jsonwebtoken
+# 10 dropped the `ring` backend and forces an explicit crypto provider; we pick
+# the pure-Rust `rust_crypto` (ed25519-dalek + hmac/sha2) over `aws_lc_rs` to
+# avoid pulling the aws-lc C/asm build toolchain, and we do not hand-roll JWS.
+# `use_pem` (the only default feature) keeps the PEM key loaders (`from_ed_pem`).
+# `ring` still reaches the tree via the TLS/object_store stack, so this choice
+# does not add it — nor, now, remove it.
+jsonwebtoken = { version = "10", default-features = false, features = ["use_pem", "rust_crypto"] }
 axum = "0.7"
 # Phase 5d: ServeDir static-file service for the Vue SPA `/static` mount. The
 # `fs` feature is the only one needed; tower-http 0.6 is compatible with the
