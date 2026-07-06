@@ -186,10 +186,10 @@ def _is_under_s3_prefix(path: str, prefix: str) -> bool:
         return False
     if parsed_path.netloc != parsed_prefix.netloc:
         return False
-    prefix_key = parsed_prefix.path.strip("/")
+    prefix_key = posixpath.normpath("/" + parsed_prefix.path.lstrip("/")).lstrip("/")
     if not prefix_key:
         return True
-    path_key = parsed_path.path.strip("/")
+    path_key = posixpath.normpath("/" + parsed_path.path.lstrip("/")).lstrip("/")
     return path_key == prefix_key or path_key.startswith(prefix_key + "/")
 
 

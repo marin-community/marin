@@ -55,12 +55,20 @@ _REAL_CHECKPOINT_HIDDEN_DIM = 512
 
 
 def _expert_gate_up_tensors(expert: Any, intermediate_dim: int) -> tuple[Any, Any]:
-    try:
+    if dataclasses.is_dataclass(expert):
+        field_names = {field.name for field in dataclasses.fields(expert)}
+    else:
+        field_names = set(vars(expert))
+
+    if {"w_gate", "w_up"} <= field_names:
         return expert.w_gate, expert.w_up
-    except AttributeError:
+
+    if "w_gate_up" in field_names:
         import jax.numpy as jnp  # noqa: PLC0415
 
         return jnp.split(expert.w_gate_up, [intermediate_dim], axis=-1)
+
+    raise AttributeError("expected expert layout with w_gate/w_up or w_gate_up")
 
 
 @dataclass(frozen=True)

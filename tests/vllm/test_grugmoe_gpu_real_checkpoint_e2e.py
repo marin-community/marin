@@ -230,7 +230,8 @@ def test_expert_gate_up_tensors_accepts_current_split_layout() -> None:
 
 def test_expert_gate_up_tensors_accepts_legacy_fused_layout() -> None:
     class FusedExpert:
-        w_gate_up = np.array([[0, 1, 2, 3, 4, 5], [6, 7, 8, 9, 10, 11]])
+        def __init__(self) -> None:
+            self.w_gate_up = np.array([[0, 1, 2, 3, 4, 5], [6, 7, 8, 9, 10, 11]])
 
     gate, up = backend.common._expert_gate_up_tensors(FusedExpert(), intermediate_dim=2)
 
