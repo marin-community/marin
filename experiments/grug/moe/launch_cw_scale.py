@@ -105,10 +105,18 @@ def build_scale_model() -> GrugModelConfig:
     if hidden_dim % HEAD_DIM != 0:
         raise ValueError(f"SCALE_HIDDEN_DIM={hidden_dim} must be a multiple of head_dim={HEAD_DIM}")
     num_heads = hidden_dim // HEAD_DIM
-    # ~4:1 grouped-query attention; back off to the nearest divisor of num_heads.
-    num_kv_heads = max(1, num_heads // 4)
-    while num_heads % num_kv_heads != 0:
-        num_kv_heads -= 1
+    # SCALE_NUM_KV_HEADS overrides the KV-head count (set == num_heads for full MHA, which
+    # the gpu_fa4_cute flash kernel supports; GQA needs the THD kernel, which requires
+    # packed segment metadata the JAX path doesn't provide). Default ~4:1 GQA.
+    kv_env = os.environ.get("SCALE_NUM_KV_HEADS")
+    if kv_env is not None:
+        num_kv_heads = int(kv_env)
+        if num_kv_heads <= 0 or num_heads % num_kv_heads != 0:
+            raise ValueError(f"SCALE_NUM_KV_HEADS={num_kv_heads} must be a positive divisor of num_heads={num_heads}")
+    else:
+        num_kv_heads = max(1, num_heads // 4)
+        while num_heads % num_kv_heads != 0:
+            num_kv_heads -= 1
     intermediate_dim = hidden_dim // 2  # expert FFN inner width (~d/2)
     seq_len = env_int("SCALE_SEQ_LEN", DEFAULT_SEQ_LEN)
     remat_mode = os.environ.get("SCALE_REMAT", "recompute_all")
