@@ -23,6 +23,7 @@ from datetime import timedelta
 import jmp
 from fray.cluster import ResourceConfig
 from levanter.callbacks.profiler import ProfilerConfig
+from levanter.callbacks.watch import WatchConfig
 from levanter.checkpoint import CheckpointerConfig, latest_checkpoint_path
 from levanter.data.text.datasets import LmDataConfig
 from levanter.optim.config import OptimizerConfig
@@ -150,6 +151,11 @@ def run_grug_moe_trial(config: GrugMoeLaunchConfig) -> None:
     blocks until it completes.
     """
     initialize_from = latest_checkpoint_path(config.init_from) if config.init_from is not None else None
+    # SCALE_WATCH=0 disables the grad/param watch callback. It fires every
+    # WatchConfig.interval steps and (with split_scan_layers) unstacks all layers to
+    # compute per-parameter norms -- a memory spike (e.g. at step 10) that OOMs a model
+    # sitting near the HBM limit even though the plain train step fits.
+    watch = WatchConfig(watch_targets=[]) if os.environ.get("SCALE_WATCH") == "0" else WatchConfig()
     trainer = TrainerConfig(
         id=config.run_id,
         seed=config.seed,
@@ -158,6 +164,7 @@ def run_grug_moe_trial(config: GrugMoeLaunchConfig) -> None:
         profiler=config.profiler,
         mp=jmp.get_policy(config.mp),
         tracker=_resolve_tracker(config.tracker, config.run_id),
+        watch=watch,
         use_explicit_mesh_axes=True,
         require_accelerator=True,
         allow_nondivisible_batch_size=False,
