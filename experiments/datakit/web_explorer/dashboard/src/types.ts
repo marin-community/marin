@@ -40,6 +40,9 @@ export interface Overview {
   counters: Record<string, number>
   buckets: Bucket[]
   source_summary: SourceSummaryRow[]
+  /** false while the app is still counting per-source sizes in the background. */
+  source_summary_ready: boolean
+  source_summary_total: number
 }
 
 export interface HistBucket {

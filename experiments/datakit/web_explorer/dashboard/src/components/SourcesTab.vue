@@ -57,6 +57,9 @@ function display(key: SortKey, value: unknown): string {
 
 <template>
   <div class="rounded-lg border border-surface-border bg-surface p-4">
+    <p v-if="!ov.source_summary_ready" class="mb-2 text-sm text-accent">
+      computing per-source sizes in the background… {{ rows.length }}/{{ ov.source_summary_total }}
+    </p>
     <template v-if="rows.length">
       <h3 class="mb-1 font-semibold">
         Per-source pipeline summary
@@ -93,6 +96,6 @@ function display(key: SortKey, value: unknown): string {
         </tbody>
       </table>
     </template>
-    <p v-else class="text-sm text-text-muted">no source summary baked in (set WEB_EXPLORER_SOURCE_SUMMARY)</p>
+    <p v-else-if="ov.source_summary_ready" class="text-sm text-text-muted">no source summary available</p>
   </div>
 </template>
