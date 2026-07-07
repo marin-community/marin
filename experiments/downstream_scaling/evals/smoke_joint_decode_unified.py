@@ -8,9 +8,10 @@ sliding-window admission, token-budget ramp) on two local chips via the
 joint-decode package and the tpu-inference token-decision callback overlay.
 Run on a TPU worker with the Marin vllm extra available, for example:
 
-    uv run --package marin --extra vllm python \
+    uv sync --all-packages --extra=vllm
+    uv run --no-sync python \
       experiments/downstream_scaling/evals/smoke_joint_decode_unified.py \
-      --model-a <path-or-hf-id> --model-b <path-or-hf-id>
+      --model-a <hf-checkpoint-path> --model-b <hf-checkpoint-path>
 
 With the default budget of max_model_len + max_microbatch_size, the
 coordinator admits one request per decision round, so the run exercises the
