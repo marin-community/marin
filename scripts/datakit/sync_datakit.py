@@ -71,6 +71,7 @@ Usage::
 
 import argparse
 import logging
+import os
 import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from enum import StrEnum
@@ -243,13 +244,13 @@ def _copy_shard(
     is safe — fsspec funnels async ops onto a single dedicated event loop,
     and synchronous APIs are reentrant.
     """
-    src_fs, _ = fsspec.core.url_to_fs(src_dir)
+    src_fs, _ = _url_to_fs(src_dir)
     # ``fixed_upload_size=True`` (set inside ``_open_kwargs_for`` for s3 dests)
     # is required for Cloudflare R2's multipart PUT and harmless on AWS S3.
     # It only matters for the write through ``dst_fs.open(..., "wb")``; the
     # ``fs.mv`` inside atomic_rename is a single ``CopyObject`` and can use
     # any S3 client config.
-    dst_fs, _ = fsspec.core.url_to_fs(dst_dir, **_open_kwargs_for(dst_dir))
+    dst_fs, _ = _url_to_fs(dst_dir, **_open_kwargs_for(dst_dir))
     src_base = src_dir.rstrip("/")
     dst_base = dst_dir.rstrip("/")
 
@@ -287,7 +288,7 @@ def _list_relative_files(src_dir: str) -> list[tuple[str, str]]:
       last step (see ``_finalize_executor_status``) so its presence on dst
       cleanly signals "this leaf is fully synced".
     """
-    src_fs, _ = fsspec.core.url_to_fs(src_dir)
+    src_fs, _ = _url_to_fs(src_dir)
     stripped_root = src_fs._strip_protocol(src_dir).rstrip("/")
     entries: list[tuple[str, str]] = []
     skipped_tmp = 0
@@ -326,6 +327,40 @@ def _open_kwargs_for(path: str) -> dict:
     return {"fixed_upload_size": True} if path.startswith("s3://") else {}
 
 
+# R2 data buckets whose filesystem must be built with *explicit* R2 endpoint +
+# credentials from ``R2_*`` env vars, rather than the process-global S3 config.
+# This is what lets a single process copy R2 -> CoreWeave: the CW side uses the
+# ambient S3 config (the cluster default, e.g. cwlota) and the R2 side is pinned
+# to its own client via constructor kwargs, so the two never clobber each other
+# (fsspec caches filesystems by their kwargs). Set ``R2_ACCESS_KEY``,
+# ``R2_SECRET``, ``R2_ENDPOINT_URL`` in the job env.
+_R2_BUCKETS = frozenset({"marin-na"})
+
+
+def _s3_creds_kwargs(path: str) -> dict:
+    """Explicit R2 endpoint+creds for an ``s3://marin-na/...`` path, else ``{}``.
+
+    Returns empty for any non-R2 path so it keeps using the ambient S3 config
+    (the cluster's default object store). Only activates when the ``R2_*`` env
+    vars are present, so the script still works unchanged in single-backend runs.
+    """
+    if not path.startswith("s3://"):
+        return {}
+    bucket = path[len("s3://") :].split("/", 1)[0]
+    if bucket in _R2_BUCKETS and os.environ.get("R2_ENDPOINT_URL"):
+        return {
+            "key": os.environ["R2_ACCESS_KEY"],
+            "secret": os.environ["R2_SECRET"],
+            "client_kwargs": {"endpoint_url": os.environ["R2_ENDPOINT_URL"], "region_name": "auto"},
+        }
+    return {}
+
+
+def _url_to_fs(path: str, **extra):
+    """``fsspec.core.url_to_fs`` with per-bucket R2 creds injected (see :func:`_s3_creds_kwargs`)."""
+    return fsspec.core.url_to_fs(path, **_s3_creds_kwargs(path), **extra)
+
+
 def _finalize_executor_status(src_dir: str, dst_dir: str) -> None:
     """Copy ``.executor_status`` from ``src_dir`` to ``dst_dir`` as a single op.
 
@@ -335,11 +370,11 @@ def _finalize_executor_status(src_dir: str, dst_dir: str) -> None:
     """
     src = _executor_status_path(src_dir)
     dst = _executor_status_path(dst_dir)
-    src_fs, _ = fsspec.core.url_to_fs(src)
+    src_fs, _ = _url_to_fs(src)
     if not src_fs.exists(src):
         logger.warning("source has no %s — not finalizing %s", _EXECUTOR_STATUS_FILENAME, dst_dir)
         return
-    dst_fs, _ = fsspec.core.url_to_fs(dst, **_open_kwargs_for(dst))
+    dst_fs, _ = _url_to_fs(dst, **_open_kwargs_for(dst))
     _copy_one(src_fs, dst_fs, src, dst)
     logger.info("Finalized %s", dst)
 
@@ -364,7 +399,7 @@ def _remove_tmp_orphans(dst_dir: str) -> None:
     them around would make a byte-for-byte src/dst comparison fail despite
     the real data matching.
     """
-    dst_fs, _ = fsspec.core.url_to_fs(dst_dir)
+    dst_fs, _ = _url_to_fs(dst_dir)
     if not dst_fs.exists(dst_dir):
         return
     orphans = [full for full in dst_fs.find(dst_dir) if _ATOMIC_RENAME_TMP_RE.search(full)]
