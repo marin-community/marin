@@ -69,6 +69,7 @@ from levanter.tracker import TrackerConfig, capture_time
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer_state import InsideJitInfo, TrainerState, saveable_training_mask
 from levanter.utils import cloud_utils, fsspec_utils
+from levanter.utils.hardware_topology import hardware_topology_summary
 from levanter.utils.jax_utils import zeros_like_tree
 from levanter.utils.mesh import MeshConfig, create_mesh_from_axis_specs
 from levanter.utils.tree_utils import inference_mode
@@ -792,6 +793,16 @@ def _initialize_global_tracker(config, run_id):
     levanter.tracker.set_global_tracker(tracker)
 
 
+def _log_hardware_topology() -> None:
+    try:
+        topology = hardware_topology_summary()
+    except Exception:
+        logger.exception("Failed to collect hardware topology for tracker.")
+        return
+
+    levanter.tracker.log_summary({"hardware_topology": topology})
+
+
 @dataclass
 class TrainerConfig:
     seed: int = 0  # random seed
@@ -928,6 +939,7 @@ class TrainerConfig:
         id = self._maybe_set_id()
         levanter.utils.logging.init_logging(self.log_dir, f"{id}.log")
         _initialize_global_tracker(self.tracker, id)
+        _log_hardware_topology()
 
         if self.require_accelerator is None:
             self.require_accelerator = not sys.platform.startswith("darwin")
