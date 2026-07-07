@@ -52,14 +52,15 @@ def test_tpu_topology_shape_uses_device_coordinate_extents():
 
 def test_nvidia_topology_matrix_summary_counts_gpu_and_nic_links():
     topology = """
-        GPU0    GPU1    GPU2    NIC0    CPU Affinity    NUMA Affinity
-GPU0     X      NV18    SYS     PIX     0-95            0
-GPU1    NV18     X      SYS     PXB     0-95            0
-GPU2    SYS     SYS      X      SYS     0-95            0
-NIC0    PIX     PXB     SYS      X
+        GPU0    GPU1    GPU2    NIC0    mlx5_0    CPU Affinity    NUMA Affinity
+GPU0     X      NV18    SYS     PIX     SYS       0-95            0
+GPU1    NV18     X      SYS     PXB     PIX       0-95            0
+GPU2    SYS     SYS      X      SYS     SYS       0-95            0
+NIC0    PIX     PXB     SYS      X      SYS
+mlx5_0  SYS     PIX     SYS     SYS      X
     """
 
     assert nvidia_topology_matrix_summary(topology) == {
         "gpu_gpu_link_counts": {"NV18": 1, "SYS": 2},
-        "gpu_nic_link_counts": {"PIX": 1, "PXB": 1, "SYS": 1},
+        "gpu_nic_link_counts": {"PIX": 2, "PXB": 1, "SYS": 3},
     }

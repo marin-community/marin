@@ -103,7 +103,7 @@ def nvidia_topology_matrix_summary(stdout: str) -> dict[str, Any]:
         return {}
 
     gpu_labels = [label for label in header if label.startswith("GPU")]
-    nic_labels = [label for label in header if label.startswith("NIC")]
+    interface_labels = [label for label in header if not label.startswith("GPU")]
     gpu_gpu_link_counts: dict[str, int] = {}
     gpu_nic_link_counts: dict[str, int] = {}
 
@@ -120,8 +120,8 @@ def nvidia_topology_matrix_summary(stdout: str) -> dict[str, Any]:
                 continue
             gpu_gpu_link_counts[link] = gpu_gpu_link_counts.get(link, 0) + 1
 
-        for nic in nic_labels:
-            col_index = header.index(nic)
+        for interface in interface_labels:
+            col_index = header.index(interface)
             if col_index >= len(row):
                 continue
             link = row[col_index]
