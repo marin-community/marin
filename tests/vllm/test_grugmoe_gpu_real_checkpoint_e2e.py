@@ -144,6 +144,76 @@ def levanter_result(e2e_paths: E2EPaths, export_result: dict[str, Any]) -> dict[
     return backend._read_json(e2e_paths.levanter_result_path)
 
 
+def _assert_levanter_golden_reference(export_result: dict[str, Any], levanter_result: dict[str, Any]) -> None:
+    assert export_result["jax_runtime"]["gpu_device_count"] >= backend.EXPECTED_GPU_COUNT
+    assert export_result["jax_mesh"]["shape"]["expert"] == backend.LEVANTER_EXPERT_AXIS_SIZE
+
+    assert levanter_result["prompt"] == backend.PROMPT
+    assert levanter_result["max_new_tokens"] == backend.MAX_NEW_TOKENS
+    assert levanter_result["expected_continuation"] == backend.EXPECTED_CONTINUATION
+    assert levanter_result["completion"] == backend.EXPECTED_CONTINUATION
+
+    expected_reference_completions = [backend.EXPECTED_CONTINUATION] * backend.LEVANTER_REFERENCE_REPEAT_COUNT
+    reference_check_completions = [reference["completion"] for reference in levanter_result["reference_checks"]]
+    assert len(set(levanter_result["reference_completions"])) == 1
+    assert levanter_result["reference_completions"] == expected_reference_completions
+    assert reference_check_completions == expected_reference_completions
+
+    assert levanter_result["tokenization"]["prompt_token_count"] == len(
+        levanter_result["tokenization"]["prompt_token_ids"]
+    )
+    assert levanter_result["tokenization"]["prompt_token_count"] > 0
+    assert levanter_result["jax_runtime"]["gpu_device_count"] >= backend.EXPECTED_GPU_COUNT
+    assert levanter_result["jax_mesh"]["device_count"] >= backend.EXPECTED_GPU_COUNT
+    assert levanter_result["jax_mesh"]["shape"]["expert"] == backend.LEVANTER_EXPERT_AXIS_SIZE
+    assert levanter_result["decode_batch_size"] == backend.EXPECTED_GPU_COUNT
+    assert len(levanter_result["reference_checks"]) == backend.LEVANTER_REFERENCE_REPEAT_COUNT
+    assert all(result["generated_token_ids"] for result in levanter_result["reference_checks"])
+    assert all(result["serving_decode"]["skip_special_tokens"] is True for result in levanter_result["reference_checks"])
+
+
+def _assert_vllm_result_matches_golden(
+    attention_backend: str,
+    vllm_result: dict[str, Any],
+    levanter_result: dict[str, Any],
+) -> None:
+    assert "failure" not in vllm_result, vllm_result.get("failure")
+    assert vllm_result["prompt"] == backend.PROMPT
+    assert vllm_result["max_new_tokens"] == backend.MAX_NEW_TOKENS
+    assert vllm_result["expected_continuation"] == backend.EXPECTED_CONTINUATION
+    assert vllm_result["vllm_attention_backend"] == attention_backend
+    assert vllm_result["torch_runtime"]["device_count"] >= backend.EXPECTED_GPU_COUNT
+    assert all("H100" in device for device in vllm_result["torch_runtime"]["devices"])
+
+    assert vllm_result["single_prompt_completion"] == levanter_result["completion"]
+    assert vllm_result["single_prompt_completion"] == backend.EXPECTED_CONTINUATION
+    assert vllm_result["single_prompt_output"]["prompt"] == backend.PROMPT
+    assert vllm_result["single_prompt_output"]["completion"] == levanter_result["completion"]
+    assert vllm_result["single_prompt_output"]["choice_summary"]["text"] == levanter_result["completion"]
+
+    vllm_outputs = vllm_result["vllm_outputs"]
+    vllm_output_completions = [output["completion"] for output in vllm_outputs]
+    expected_batch_completions = [backend.EXPECTED_CONTINUATION] * backend.PROMPT_BATCH_SIZE
+    assert len(vllm_outputs) == backend.PROMPT_BATCH_SIZE
+    assert [output["prompt_index"] for output in vllm_outputs] == list(range(backend.PROMPT_BATCH_SIZE))
+    assert [output["prompt"] for output in vllm_outputs] == [backend.PROMPT] * backend.PROMPT_BATCH_SIZE
+    assert all(output["choice_summary"]["text"] == output["completion"] for output in vllm_outputs)
+    assert vllm_result["completions"] == vllm_output_completions
+    assert vllm_result["levanter_reference_completion"] == levanter_result["completion"]
+    assert vllm_result["levanter_reference_outputs"] == levanter_result["reference_checks"]
+    assert vllm_result["completions"] == [levanter_result["completion"]] * backend.PROMPT_BATCH_SIZE
+    assert vllm_result["completions"] == expected_batch_completions
+    assert vllm_result["completion"] == vllm_outputs[0]["completion"]
+
+    assert vllm_result["requested_data_parallel_ranks"] == list(range(backend.VLLM_DATA_PARALLEL_SIZE))
+    assert [batch["batch_size"] for batch in vllm_result["rank_request_batches"]] == [
+        backend.PROMPTS_PER_VLLM_DATA_PARALLEL_RANK
+    ] * backend.VLLM_DATA_PARALLEL_SIZE
+    assert vllm_result["vllm_log_artifacts"]["copied"] is True
+    assert "token_ids" in vllm_result["single_prompt_choice_summary"]
+    assert all("token_ids" in summary for summary in vllm_result["main_choice_summaries"])
+
+
 def _write_contract_summary(
     e2e_paths: E2EPaths,
     *,
@@ -152,9 +222,7 @@ def _write_contract_summary(
     vllm_results: dict[str, dict[str, Any]],
 ) -> None:
     summary = {
-        "passed": (
-            levanter_result["passed"] is True and all(result["passed"] is True for result in vllm_results.values())
-        ),
+        "passed": True,
         "checkpoint_path": backend.CHECKPOINT_PATH,
         "checkpoint_scope": backend.CHECKPOINT_SCOPE,
         "tokenizer_path": backend.TOKENIZER_PATH,
@@ -167,10 +235,16 @@ def _write_contract_summary(
         "prompt": backend.PROMPT,
         "expected_continuation": backend.EXPECTED_CONTINUATION,
         "max_new_tokens": backend.MAX_NEW_TOKENS,
+        "golden_reference": {
+            "source": "levanter",
+            "completion": levanter_result["completion"],
+            "reference_completions": levanter_result["reference_completions"],
+            "reference_repeat_count": levanter_result["reference_repeat_count"],
+        },
         "levanter": {
             "completion": levanter_result["completion"],
-            "reference_stable": levanter_result["reference_stable"],
             "reference_repeat_count": levanter_result["reference_repeat_count"],
+            "reference_completions": levanter_result["reference_completions"],
             "prompt_token_count": levanter_result["tokenization"]["prompt_token_count"],
             "prompt_token_ids": levanter_result["tokenization"]["prompt_token_ids"],
             "jax_gpu_device_count": levanter_result["jax_runtime"]["gpu_device_count"],
@@ -179,8 +253,8 @@ def _write_contract_summary(
         "vllm": {
             attention_backend: {
                 "completion": result["completion"],
-                "all_completions_match_levanter": result["all_completions_match_levanter"],
-                "all_completions_match_expected": result["all_completions_match_expected"],
+                "single_prompt_completion": result["single_prompt_completion"],
+                "completions": result["completions"],
                 "requested_data_parallel_ranks": result["requested_data_parallel_ranks"],
                 "torch_device_count": result["torch_runtime"]["device_count"],
             }
@@ -306,6 +380,46 @@ def test_grugmoe_completion_request_sends_explicit_data_parallel_rank(
     assert payload["choices"][0]["text"] == backend.EXPECTED_CONTINUATION
 
 
+def test_vllm_completion_batch_summary_returns_all_prompt_outputs() -> None:
+    payloads: list[dict[str, Any]] = []
+    rank_request_batches: list[dict[str, Any]] = []
+    for data_parallel_rank in range(backend.VLLM_DATA_PARALLEL_SIZE):
+        rank_start = data_parallel_rank * backend.PROMPTS_PER_VLLM_DATA_PARALLEL_RANK
+        prompt_indices = list(range(rank_start, rank_start + backend.PROMPTS_PER_VLLM_DATA_PARALLEL_RANK))
+        payloads.append(
+            {
+                "choices": [
+                    {"text": f" output-{prompt_index}", "finish_reason": "length", "token_ids": [prompt_index]}
+                    for prompt_index in prompt_indices
+                ]
+            }
+        )
+        rank_request_batches.append(
+            {
+                "data_parallel_rank": data_parallel_rank,
+                "prompt_indices": prompt_indices,
+                "batch_size": len(prompt_indices),
+            }
+        )
+    batch = backend.VllmCompletionBatch(
+        single_payload={
+            "choices": [{"text": " single", "finish_reason": "length", "token_ids": [backend.PROMPT_BATCH_SIZE]}]
+        },
+        payloads=payloads,
+        rank_request_batches=rank_request_batches,
+    )
+
+    summary = backend._summarize_vllm_completion_batch(batch)
+
+    assert summary.single_completion == " single"
+    assert summary.single_prompt_output["completion"] == " single"
+    assert summary.completions == [f" output-{index}" for index in range(backend.PROMPT_BATCH_SIZE)]
+    assert [output["prompt_index"] for output in summary.main_outputs] == list(range(backend.PROMPT_BATCH_SIZE))
+    assert [output["data_parallel_rank"] for output in summary.main_outputs] == [
+        index // backend.PROMPTS_PER_VLLM_DATA_PARALLEL_RANK for index in range(backend.PROMPT_BATCH_SIZE)
+    ]
+
+
 @pytest.mark.gpu_ci
 @pytest.mark.integration
 @pytest.mark.slow
@@ -317,49 +431,11 @@ def test_grugmoe_gpu_real_checkpoint_contract(
     vllm_results: dict[str, dict[str, Any]],
     levanter_result: dict[str, Any],
 ) -> None:
-    assert export_result["jax_runtime"]["gpu_device_count"] >= backend.EXPECTED_GPU_COUNT
-    assert export_result["jax_mesh"]["shape"]["expert"] == backend.LEVANTER_EXPERT_AXIS_SIZE
-
-    assert levanter_result["passed"] is True
-    assert levanter_result["completion"] == backend.EXPECTED_CONTINUATION
-    assert levanter_result["reference_stable"] is True
-    assert levanter_result["reference_matches_expected"] is True
-    assert (
-        levanter_result["reference_completions"]
-        == [backend.EXPECTED_CONTINUATION] * backend.LEVANTER_REFERENCE_REPEAT_COUNT
-    )
-    assert levanter_result["tokenization"]["prompt_token_ids"]
-    assert levanter_result["jax_runtime"]["gpu_device_count"] >= backend.EXPECTED_GPU_COUNT
-    assert levanter_result["jax_mesh"]["device_count"] >= backend.EXPECTED_GPU_COUNT
-    assert levanter_result["jax_mesh"]["shape"]["expert"] == backend.LEVANTER_EXPERT_AXIS_SIZE
-    assert levanter_result["decode_batch_size"] == backend.EXPECTED_GPU_COUNT
-    assert len(levanter_result["reference_checks"]) == backend.LEVANTER_REFERENCE_REPEAT_COUNT
-    assert all(result["completion"] == backend.EXPECTED_CONTINUATION for result in levanter_result["reference_checks"])
-    assert all(result["generated_token_ids"] for result in levanter_result["reference_checks"])
-    assert all(result["serving_decode"]["skip_special_tokens"] is True for result in levanter_result["reference_checks"])
+    _assert_levanter_golden_reference(export_result, levanter_result)
 
     assert set(vllm_results) == set(backend.VLLM_ATTENTION_BACKENDS_UNDER_TEST)
     for attention_backend, vllm_result in vllm_results.items():
-        assert vllm_result["passed"] is True, vllm_result.get("failure")
-        assert vllm_result["vllm_attention_backend"] == attention_backend
-        assert vllm_result["torch_runtime"]["device_count"] >= backend.EXPECTED_GPU_COUNT
-        assert all("H100" in device for device in vllm_result["torch_runtime"]["devices"])
-        assert vllm_result["single_prompt_completion"] == vllm_result["levanter_reference_completion"]
-        assert len(vllm_result["completions"]) == backend.PROMPT_BATCH_SIZE
-        assert vllm_result["levanter_reference_completion"] == levanter_result["completion"]
-        assert vllm_result["levanter_reference_match"] is True
-        assert vllm_result["levanter_reference_single_match"] is True
-        assert vllm_result["all_completions_match_levanter"] is True
-        assert vllm_result["all_completions_match_expected"] is True
-        assert all(completion == levanter_result["completion"] for completion in vllm_result["completions"])
-        assert all(completion == backend.EXPECTED_CONTINUATION for completion in vllm_result["completions"])
-        assert vllm_result["requested_data_parallel_ranks"] == list(range(backend.VLLM_DATA_PARALLEL_SIZE))
-        assert [batch["batch_size"] for batch in vllm_result["rank_request_batches"]] == [
-            backend.PROMPTS_PER_VLLM_DATA_PARALLEL_RANK
-        ] * backend.VLLM_DATA_PARALLEL_SIZE
-        assert vllm_result["vllm_log_artifacts"]["copied"] is True
-        assert "token_ids" in vllm_result["single_prompt_choice_summary"]
-        assert all("token_ids" in summary for summary in vllm_result["main_choice_summaries"])
+        _assert_vllm_result_matches_golden(attention_backend, vllm_result, levanter_result)
 
     _write_contract_summary(
         e2e_paths,
