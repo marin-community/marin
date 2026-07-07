@@ -52,7 +52,7 @@ TOP_LOGPROBS = 128
 # Aggressive enough that queue spikes abandon requests, the suspected trigger.
 CLIENT_TIMEOUT_SECONDS = 60.0
 PROMPT_SEED_TOKENS = 32
-MAX_CONTEXT_TOKENS = 6_000
+MAX_CONTEXT_TOKENS = 3_800
 WEDGE_MINUTES = 5
 
 
@@ -61,12 +61,20 @@ class _Stats:
         self.lock = threading.Lock()
         self.ok = 0
         self.timeouts = 0
+        self.http4xx = 0
+        self.http5xx = 0
         self.other = 0
+        self.first_bad: str | None = None
 
-    def snapshot_and_reset(self) -> tuple[int, int, int]:
+    def record_bad(self, detail: str) -> None:
         with self.lock:
-            snap = (self.ok, self.timeouts, self.other)
-            self.ok = self.timeouts = self.other = 0
+            if self.first_bad is None:
+                self.first_bad = detail
+
+    def snapshot_and_reset(self) -> tuple[int, int, int, int, int]:
+        with self.lock:
+            snap = (self.ok, self.timeouts, self.http4xx, self.http5xx, self.other)
+            self.ok = self.timeouts = self.http4xx = self.http5xx = self.other = 0
         return snap
 
 
@@ -95,7 +103,17 @@ def _client_loop(base_url: str, model: str, stats: _Stats, stop: threading.Event
         except requests.Timeout:
             with stats.lock:
                 stats.timeouts += 1
-        except Exception:
+        except requests.HTTPError as exc:
+            status = exc.response.status_code if exc.response is not None else 0
+            body = exc.response.text[:200] if exc.response is not None else ""
+            stats.record_bad(f"status={status} prompt_len={len(ids)} body={body!r}")
+            with stats.lock:
+                if 400 <= status < 500:
+                    stats.http4xx += 1
+                else:
+                    stats.http5xx += 1
+        except Exception as exc:
+            stats.record_bad(f"non-http error prompt_len={len(ids)}: {exc!r:.200}")
             with stats.lock:
                 stats.other += 1
             time.sleep(1)
@@ -122,11 +140,23 @@ def drive_load(running_model: RunningModel, *, clients: int, duration_minutes: i
     try:
         for minute in range(duration_minutes):
             time.sleep(60)
-            ok, timeouts, other = stats.snapshot_and_reset()
-            print(f"minute={minute + 1} ok={ok} timeouts={timeouts} other={other}", flush=True)
-            dead_minutes = dead_minutes + 1 if ok == 0 else 0
+            ok, timeouts, http4xx, http5xx, other = stats.snapshot_and_reset()
+            print(
+                f"minute={minute + 1} ok={ok} timeouts={timeouts} 4xx={http4xx} 5xx={http5xx} other={other}",
+                flush=True,
+            )
+            if ok > 0:
+                dead_minutes = 0
+                continue
+            if http4xx > timeouts:
+                # Fast application-level rejections are a different bug (e.g.
+                # context past the model limit), not brokered-serving death.
+                print(f"CONFOUNDED: zero successes but 4xx-dominated; first bad: {stats.first_bad}", flush=True)
+                raise SystemExit(3)
+            dead_minutes += 1
             if dead_minutes >= WEDGE_MINUTES:
                 print(f"WEDGED: {WEDGE_MINUTES} consecutive minutes with zero successes", flush=True)
+                print(f"first bad response: {stats.first_bad}", flush=True)
                 return True
         print("survived without wedging", flush=True)
         return False
