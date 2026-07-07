@@ -38,6 +38,10 @@ const rows = computed(() => {
   })
 })
 
+// While the background computation runs, count sources that already have their
+// full stats (quality present) so the banner shows real progress.
+const withStats = computed(() => (props.ov.source_summary || []).filter((r) => r.q_avg != null).length)
+
 // Same thresholds as the legacy dashboard: red for pathological values, orange for suspect ones.
 function warnClass(key: SortKey, value: unknown): string {
   if (value == null || typeof value !== 'number') return ''
@@ -58,7 +62,7 @@ function display(key: SortKey, value: unknown): string {
 <template>
   <div class="rounded-lg border border-surface-border bg-surface p-4">
     <p v-if="!ov.source_summary_ready" class="mb-2 text-sm text-accent">
-      computing per-source sizes in the background… {{ rows.length }}/{{ ov.source_summary_total }}
+      computing per-source stats in the background… {{ withStats }}/{{ ov.source_summary_total }}
     </p>
     <template v-if="rows.length">
       <h3 class="mb-1 font-semibold">

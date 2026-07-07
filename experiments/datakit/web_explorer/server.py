@@ -144,29 +144,50 @@ class _SourceSummary:
 
 
 def _start_source_summary(dv: WebExplorer, lineage: StoreLineage, ducky: DuckyClient, state: _SourceSummary) -> None:
-    """Count each source's parquet files in the background, feeding the store
-    sampler's ``source_docs`` and ``state`` progressively as results arrive.
+    """Compute the Sources leaderboard in the background, in two progressive passes.
 
-    A glob file-count is a fast listing (bounded regardless of file count), unlike
-    an exact ``count(*)`` that reads every parquet footer; it is monotonic in source
-    size, which is all the sampler's smallest-source-first ordering needs.
+    Pass 1 counts each source's parquet *files* (a fast, bounded glob listing) and
+    installs them as ``source_docs`` so the store sampler's smallest-source-first
+    ordering is ready within seconds. Pass 2 computes the full per-source stats
+    (exact doc count, quality distribution, contamination, dedup) one source at a
+    time, filling the leaderboard columns live; the exact doc counts replace the
+    file-count proxy in ``source_docs`` only once all are in, to keep the sampler's
+    size ordering on a single consistent scale throughout.
     """
 
     def _run() -> None:
-        docs: dict[str, int] = {}
-        rows: list[dict] = []
+        rows: dict[str, dict] = {}
+        # pass 1: file-count sizes -> sampler ordering (consistent scale, fast)
+        sizes: dict[str, int] = {}
         for src, base in sorted(lineage.normalize.items()):
             try:
                 n = ducky.run(f"SELECT count(*) FROM glob('{base}/outputs/main/*.parquet')").scalar()
             except DuckyError:
                 n = None
             if n:
-                docs[src] = n
-            rows.append({"source": src, "docs_est": n})
-            dv.source_docs = dict(docs)  # atomic swap; the sampler reads source_docs.get(...)
-            state.rows = list(rows)
+                sizes[src] = n
+            rows[src] = {"source": src, "docs_est": n}
+            dv.source_docs = dict(sizes)  # atomic swap; the sampler reads source_docs.get(...)
+            state.rows = list(rows.values())
+        logger.info("source sizes counted: %d sources", len(rows))
+        # pass 2: full per-source stats -> leaderboard columns, progressive.
+        # Smallest sources first (by the pass-1 sizes) so most columns fill fast,
+        # leaving the few huge sources (slow exact counts) for last.
+        exact: dict[str, int] = {}
+        for src in sorted(lineage.normalize, key=lambda s: sizes.get(s, 1 << 62)):
+            try:
+                stats = dv.source_summary_stats(src)
+            except DuckyError as e:
+                logger.warning("source stats for %s failed: %s", src, e)
+                continue
+            rows[src] = {**rows[src], **stats}
+            if stats.get("docs_est"):
+                exact[src] = stats["docs_est"]
+            state.rows = list(rows.values())
+        if exact:
+            dv.source_docs = exact  # exact counts, one consistent scale for ordering + display
         state.ready = True
-        logger.info("source summary computed: %d sources", len(rows))
+        logger.info("source summary fully computed: %d sources", len(rows))
 
     threading.Thread(target=_run, name="source-summary", daemon=True).start()
 

@@ -34,6 +34,7 @@ DEFAULT_SEED = 7
 _POOL_BROAD = 4000  # unfiltered / broad-search sampling
 _POOL_FILTER = 500  # selective filters (a cluster, a quality-score range)
 _POOL_RARE = 200  # rare filters (contamination)
+_DEDUP_WINDOW = 500_000  # bounded window for per-source dedup cluster stats (avoids OOM on full attr)
 
 
 def _sql_str(value: str) -> str:
@@ -77,6 +78,54 @@ class WebExplorer:
             "cluster_assign": source in self.lineage.cluster_assign,
             "quality": source in self.lineage.quality,
         }
+
+    # -- per-source summary -------------------------------------------------
+    def source_summary_stats(self, source: str) -> dict:
+        """Per-source pipeline stats for the Sources leaderboard, one source at a time.
+
+        Returns the columns beyond ``docs_est``: quality score distribution
+        (avg / sd / fraction≈0), contamination rate, and dedup cluster stats +
+        drop rate. Quality and contamination are sampled (``_SAMPLE``); dedup
+        cluster stats use a bounded window (``_DEDUP_WINDOW``) like the dedup
+        drill-down. ``docs_est`` here is the *exact* doc count (parquet metadata),
+        which also anchors the drop-rate denominator.
+        """
+        stats: dict = {
+            "docs_est": self.ducky.run(f"SELECT count(*) FROM read_parquet('{self._normalize_glob(source)}')").scalar()
+        }
+        if source in self.lineage.quality:
+            stats.update(
+                self.ducky.run(
+                    f"SELECT round(avg(score), 4) AS q_avg, round(stddev(score), 4) AS q_sd, "
+                    f"round(avg((score < 0.01)::int), 4) AS q_zero "
+                    f"FROM (SELECT score FROM read_parquet('{self._flat_glob(self.lineage.quality, source)}') "
+                    f"LIMIT {self._SAMPLE})"
+                ).dicts()[0]
+            )
+        if source in self.lineage.decontam:
+            stats["decon_pct"] = self.ducky.run(
+                f"SELECT round(100.0 * avg(attributes.contaminated::int), 4) "
+                f"FROM (SELECT attributes FROM read_parquet('{self._flat_glob(self.lineage.decontam, source)}') "
+                f"LIMIT {self._SAMPLE})"
+            ).scalar()
+        if source in self.dedup_attr:
+            attr = self._dedup_glob(source)
+            n_dup = self.ducky.run(f"SELECT count(*) FROM read_parquet('{attr}')").scalar()
+            win = self.ducky.run(
+                f"WITH w AS (SELECT attributes.dup_cluster_id AS d, attributes.is_cluster_canonical AS c "
+                f"FROM read_parquet('{attr}') LIMIT {_DEDUP_WINDOW}), "
+                f"cl AS (SELECT d, count(*) AS sz FROM w GROUP BY d) "
+                f"SELECT (SELECT max(sz) FROM cl) AS dup_largest, (SELECT round(avg(sz), 2) FROM cl) AS dup_avg_size, "
+                f"(SELECT avg((NOT c)::int) FROM w) AS frac_nc"
+            ).dicts()[0]
+            stats["dup_largest"] = win["dup_largest"]
+            stats["dup_avg_size"] = win["dup_avg_size"]
+            # overall drop rate = (dropped non-canonical docs) / total docs, where
+            # dropped ≈ all dup docs x windowed non-canonical fraction.
+            docs = stats.get("docs_est")
+            if docs and n_dup and win["frac_nc"] is not None:
+                stats["drop_rate"] = round(n_dup * win["frac_nc"] / docs, 4)
+        return stats
 
     # -- normalized ---------------------------------------------------------
     # Char-length aggregates over the whole source would scan all text (multi-TB
