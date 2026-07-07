@@ -97,7 +97,9 @@ def build_testbed_decon_steps(
                 worker_resources=WORKER_RESOURCES,
             )
         )
-    logger.info("testbed decon: %d sources, %d steps (bloom + decon; deps pull sample/normalize)", len(sampled), len(steps))
+    logger.info(
+        "testbed decon: %d sources, %d steps (bloom + decon; deps pull sample/normalize)", len(sampled), len(steps)
+    )
     return steps
 
 
