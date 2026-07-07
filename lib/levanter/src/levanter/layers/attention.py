@@ -601,6 +601,7 @@ def _fa4_attention(
                 jnp.any(segment_ids_arr != kv_segment_ids_arr),
                 "FlashAttention-4 attention requires matching q/kv segment_ids.",
             )
+        segment_ids_arr = _packed_segment_ids_or_error(segment_ids_arr)
 
     lower_bounds, valid = causal_self_attention_lower_bounds(
         segment_ids_arr,
@@ -673,6 +674,27 @@ def _fa4_attention(
     attn_output = attn_output.rearrange(reference_out_shape.axes).astype(reference_out_shape.dtype)
 
     return haliax.shard(attn_output)
+
+
+def _packed_segment_ids_or_error(segment_ids: jax.Array) -> jax.Array:
+    """Runtime-assert that each segment id forms a single contiguous run per row.
+
+    The FA4 lower-bound metadata can only express contiguous packed segments, while the
+    `AttentionMask` segment contract is plain id equality. A segment id repeated in
+    non-adjacent runs (e.g. ``[0, 1, 0]``) would silently change attention semantics,
+    so it must fail loudly instead.
+    """
+    previous = jnp.concatenate([segment_ids[:, :1] - 1, segment_ids[:, :-1]], axis=1)
+    num_runs = jnp.sum(segment_ids != previous, axis=1)
+    sorted_ids = jnp.sort(segment_ids, axis=1)
+    previous_sorted = jnp.concatenate([sorted_ids[:, :1] - 1, sorted_ids[:, :-1]], axis=1)
+    num_distinct = jnp.sum(sorted_ids != previous_sorted, axis=1)
+    return eqx.error_if(
+        segment_ids,
+        jnp.any(num_runs != num_distinct),
+        "FlashAttention-4 attention requires packed segment_ids (each id in one contiguous run). "
+        "Pass attn_backend=jax_flash for non-packed segment masks.",
+    )
 
 
 def _segment_ids_to_bs(segment_ids: NamedArray, q_class: dict, Pos: Axis) -> jax.Array:

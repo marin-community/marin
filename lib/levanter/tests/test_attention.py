@@ -29,6 +29,7 @@ from levanter.layers.attention import (
     AttentionMask,
     AttentionWithSink,
     _bin_and_group_axes_by_function,
+    _packed_segment_ids_or_error,
     _te_flash_attention,
     _tpu_splash_attention,
     default_attention_type,
@@ -660,6 +661,31 @@ def test_fa4_forced_backend_raises_on_unsupported_config(unsupported_kwargs):
         dot_product_attention(
             data.QPos, data.KPos, data.D, data.q, data.k, data.v, attn_backend=AttentionBackend.FA4, **kwargs
         )
+
+
+def test_fa4_packed_segment_id_check_flags_non_contiguous_ids():
+    # AttentionMask segment semantics are id equality, so [0, 1, 0] lets the trailing 0-run
+    # attend back to the first; FA4 metadata cannot express that and must fail loudly.
+    packed = jnp.asarray([[3, 3, 1, 1, -1, -1]], dtype=jnp.int32)
+    jax.block_until_ready(jax.jit(_packed_segment_ids_or_error)(packed))
+
+    non_contiguous = jnp.asarray([[0, 1, 1, 0, -1, -1]], dtype=jnp.int32)
+    with pytest.raises(Exception, match="packed segment_ids"):
+        jax.block_until_ready(jax.jit(_packed_segment_ids_or_error)(non_contiguous))
+
+
+def test_fa4_rejects_non_contiguous_segment_ids():
+    _skip_unless_fa4_gpu()
+
+    data = _fa4_test_qkv(q_heads_per_group=1, head_dim=64)
+    half = data.QPos.size // 2
+    ids = jnp.zeros((data.B.size, data.QPos.size), dtype=jnp.int32).at[:, half:].set(1).at[:, -1:].set(0)
+    mask = AttentionMask.causal().with_segment_ids(hax.named(ids, (data.B, data.QPos)))
+    with pytest.raises(Exception, match="packed segment_ids"):
+        out = dot_product_attention(
+            data.QPos, data.KPos, data.D, data.q, data.k, data.v, mask=mask, attn_backend=AttentionBackend.FA4
+        )
+        jax.block_until_ready(out.array)
 
 
 @pytest.mark.parametrize("impl", ["default", "jax_flash", "vanilla"])
