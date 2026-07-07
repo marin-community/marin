@@ -185,7 +185,7 @@ vllm = { git = "https://github.com/RohithKuditipudi/vllm.git", rev = "e0ce7b17fc
 # https://github.com/RohithKuditipudi/tpu-inference/compare/808415f45bbfcb512e9c593c4a3330aed115917e...d00748dbe8db8460640d88fb9631dbee9b5185b5
 tpu-inference = { git = "https://github.com/RohithKuditipudi/tpu-inference.git", rev = "d00748dbe8db8460640d88fb9631dbee9b5185b5" }
 # Backend-neutral joint decoding (coordinator, worker loop, gpu/tpu backends).
-joint-decode = { git = "https://github.com/RohithKuditipudi/joint-decode.git", rev = "832f6a00e924245c4c6c9f2220f8bb36114686a8" }
+joint-decode = { git = "https://github.com/RohithKuditipudi/joint-decode.git", rev = "4ef8c2831f48186b609a11b74e4adf75e532fd6a" }
 # ### BEGIN RUST-DEV SOURCES ###
 # ### END RUST-DEV SOURCES ###
 
