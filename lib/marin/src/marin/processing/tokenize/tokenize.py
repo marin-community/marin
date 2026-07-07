@@ -17,7 +17,6 @@ The shared tokenization core lives in :mod:`marin.processing.tokenize._core`.
 import abc
 import dataclasses
 import logging
-import os
 import re
 import time
 from collections.abc import Sequence
@@ -32,7 +31,9 @@ from levanter.data.text import (
     TextLmDatasetFormat,
     UrlDatasetSourceConfig,
 )
+from levanter.store.cache import ShardedCacheLayout
 from levanter.tokenizers import TokenizerBackend
+from rigging.filesystem import prefix_join
 from zephyr import Dataset, ZephyrContext
 from zephyr.dataset import FileEntry
 from zephyr.readers import load_file
@@ -283,7 +284,7 @@ def _local_preprocess_paths(files: list[FileEntry], config: TokenizeConfigBase) 
 
 
 def _split_already_done(cache_path: str, split_name: str) -> bool:
-    ledger_path = os.path.join(cache_path, split_name, "shard_ledger.json")
+    ledger_path = ShardedCacheLayout.parse(cache_path).child(split_name).ledger
     if fsspec_exists(ledger_path):
         logger.info("Shard ledger already exists for %s at %s; skipping", split_name, ledger_path)
         return True
@@ -297,7 +298,7 @@ def _run_split(
     split_name: str,
 ) -> None:
     """End-to-end pipeline for one split: glob → tokenize → consolidate → stats."""
-    prefix = os.path.join(config.cache_path, split_name)
+    prefix = prefix_join(config.cache_path, split_name)
     pipeline_start = time.monotonic()
 
     sample_path = parquet_window_hint(file_groups)

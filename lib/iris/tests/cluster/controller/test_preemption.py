@@ -940,7 +940,6 @@ def test_preempted_task_retries():
             finalize(
                 cur,
                 [TerminalDecision(TerminalKind.PREEMPT, task.task_id, "Preempted by /bob/prod-job:0")],
-                endpoints=state._endpoints,
                 now=Timestamp.now(),
             )
 
@@ -972,7 +971,6 @@ def test_preempted_task_exhausted_retries():
             finalize(
                 cur,
                 [TerminalDecision(TerminalKind.PREEMPT, task.task_id, "preempted")],
-                endpoints=state._endpoints,
                 now=Timestamp.now(),
             )
 
@@ -1221,9 +1219,7 @@ def test_pending_child_order_uses_parent_job_config_not_stamped_task_band():
             replicas=1,
         )
         with state._db.transaction() as cur:
-            ops.job.submit(
-                cur, job_id=child_id, request=child_req, ts=Timestamp.now(), run_template_cache=state._run_template_cache
-            )
+            ops.job.submit(cur, job_id=child_id, request=child_req, ts=Timestamp.now())
         interactive_tasks = harness.submit(
             "/bob/interactive",
             cpu=1,
@@ -1266,7 +1262,6 @@ def _dispatch_with_band(state, task, worker_id, priority_band: int) -> None:
                 )
             ],
             health=state._health,
-            endpoints=state._endpoints,
             now=Timestamp.now(),
         )
 
@@ -1295,7 +1290,6 @@ def test_preempted_assigned_task_always_retries():
             finalize(
                 cur,
                 [TerminalDecision(TerminalKind.PREEMPT, task.task_id, "preempted while assigned")],
-                endpoints=state._endpoints,
                 now=Timestamp.now(),
             )
 
@@ -1418,7 +1412,6 @@ def test_preemption_nonexistent_task_is_noop():
             result = finalize(
                 cur,
                 [TerminalDecision(TerminalKind.PREEMPT, JobName.from_wire("/ghost/job:0"), "does not exist")],
-                endpoints=state._endpoints,
                 now=Timestamp.now(),
             )
         assert not result.tasks
@@ -1450,7 +1443,6 @@ def test_preempt_then_worker_terminal_heartbeat_stamps_finished_at_ms():
             finalize(
                 cur,
                 [TerminalDecision(TerminalKind.PREEMPT, task.task_id, "preempted by /bob/prod-job:0")],
-                endpoints=state._endpoints,
                 now=Timestamp.now(),
             )
         attempt = query_attempt(state, task.task_id, attempt_id)
@@ -1474,7 +1466,6 @@ def test_preempt_then_worker_terminal_heartbeat_stamps_finished_at_ms():
                     )
                 ],
                 health=state._health,
-                endpoints=state._endpoints,
                 now=Timestamp.now(),
             )
 
@@ -1504,7 +1495,6 @@ def test_preemption_terminal_task_is_noop():
             finalize(
                 cur,
                 [TerminalDecision(TerminalKind.PREEMPT, task.task_id, "too late")],
-                endpoints=state._endpoints,
                 now=Timestamp.now(),
             )
         assert query_task(state, task.task_id).state == job_pb2.TASK_STATE_SUCCEEDED
@@ -1517,62 +1507,57 @@ def test_preemption_terminal_task_is_noop():
 
 def test_resolve_failure_assigned_always_retries():
     """ASSIGNED tasks always retry regardless of preemption budget."""
-    new_state, count = _resolve_task_failure_state(
+    new_state = _resolve_task_failure_state(
         job_pb2.TASK_STATE_ASSIGNED,
         preemption_count=0,
         max_preemptions=0,
         terminal_state=job_pb2.TASK_STATE_PREEMPTED,
     )
     assert new_state == job_pb2.TASK_STATE_PENDING
-    assert count == 0  # preemption_count not incremented for ASSIGNED
 
 
 def test_resolve_failure_running_retries_within_budget():
     """RUNNING task retries when preemption budget remains."""
-    new_state, count = _resolve_task_failure_state(
+    new_state = _resolve_task_failure_state(
         job_pb2.TASK_STATE_RUNNING,
         preemption_count=0,
         max_preemptions=3,
         terminal_state=job_pb2.TASK_STATE_PREEMPTED,
     )
     assert new_state == job_pb2.TASK_STATE_PENDING
-    assert count == 1
 
 
 def test_resolve_failure_running_terminal_when_budget_exhausted():
     """RUNNING task goes terminal when preemption budget is exhausted."""
-    new_state, count = _resolve_task_failure_state(
+    new_state = _resolve_task_failure_state(
         job_pb2.TASK_STATE_RUNNING,
         preemption_count=3,
         max_preemptions=3,
         terminal_state=job_pb2.TASK_STATE_PREEMPTED,
     )
     assert new_state == job_pb2.TASK_STATE_PREEMPTED
-    assert count == 4
 
 
 def test_resolve_failure_building_retries_within_budget():
     """BUILDING task (executing state) retries when budget remains."""
-    new_state, count = _resolve_task_failure_state(
+    new_state = _resolve_task_failure_state(
         job_pb2.TASK_STATE_BUILDING,
         preemption_count=0,
         max_preemptions=1,
         terminal_state=job_pb2.TASK_STATE_WORKER_FAILED,
     )
     assert new_state == job_pb2.TASK_STATE_PENDING
-    assert count == 1
 
 
 def test_resolve_failure_building_terminal_when_exhausted():
     """BUILDING task goes terminal when preemption budget is exhausted."""
-    new_state, count = _resolve_task_failure_state(
+    new_state = _resolve_task_failure_state(
         job_pb2.TASK_STATE_BUILDING,
         preemption_count=1,
         max_preemptions=1,
         terminal_state=job_pb2.TASK_STATE_WORKER_FAILED,
     )
     assert new_state == job_pb2.TASK_STATE_WORKER_FAILED
-    assert count == 2
 
 
 # ---------------------------------------------------------------------------
@@ -1601,7 +1586,6 @@ def test_preempt_task_retries_when_budget_remains():
             result = finalize(
                 cur,
                 [TerminalDecision(TerminalKind.PREEMPT, task.task_id, "Evicted by /bob/prod:0")],
-                endpoints=state._endpoints,
                 now=Timestamp.now(),
             )
 
@@ -1639,7 +1623,6 @@ def test_preempt_task_terminal_when_budget_exhausted():
             result = finalize(
                 cur,
                 [TerminalDecision(TerminalKind.PREEMPT, task.task_id, "budget gone")],
-                endpoints=state._endpoints,
                 now=Timestamp.now(),
             )
 
@@ -1689,7 +1672,6 @@ def test_preempt_task_requeues_coscheduled_siblings_on_retry():
             result = finalize(
                 cur,
                 [TerminalDecision(TerminalKind.PREEMPT, tasks[0].task_id, "evicted")],
-                endpoints=state._endpoints,
                 now=Timestamp.now(),
             )
 
@@ -1751,7 +1733,6 @@ def test_preempt_task_cascades_coscheduled_siblings():
             result0 = finalize(
                 cur,
                 [TerminalDecision(TerminalKind.PREEMPT, tasks[0].task_id, "preempted by prod")],
-                endpoints=state._endpoints,
                 now=Timestamp.now(),
             )
 
@@ -1804,7 +1785,6 @@ def test_late_heartbeat_after_preempt_to_pending_does_not_revive_attempt():
             finalize(
                 cur,
                 [TerminalDecision(TerminalKind.PREEMPT, task.task_id, "Preempted by /bob/prod-job:0")],
-                endpoints=state._endpoints,
                 now=Timestamp.now(),
             )
 
@@ -1840,7 +1820,6 @@ def test_late_heartbeat_after_preempt_to_pending_does_not_revive_attempt():
                     )
                 ],
                 health=state._health,
-                endpoints=state._endpoints,
                 now=Timestamp.now(),
             )
 

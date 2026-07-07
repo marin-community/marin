@@ -44,6 +44,8 @@ from marin.execution.step_spec import StepSpec
 from rigging.filesystem import marin_prefix
 from rigging.log_setup import configure_logging
 
+from experiments.datakit.decontam.prepare_eval_corpus import DECON_EXCLUDED_EVAL_TASKS
+
 logger = logging.getLogger(__name__)
 
 
@@ -72,7 +74,11 @@ WORKER_RESOURCES = ResourceConfig(cpu=2, ram="8g")
 
 def build_decon_steps() -> list[StepSpec]:
     # One combined bloom from the parquet tree under EVAL_ROOT. Decon
-    # workers consume this directly — no merge step.
+    # workers consume this directly — no merge step. ``exclude_eval_dirs``
+    # drops the answerless corpus-material eval tasks at read time, so an
+    # already-materialized eval corpus that still contains those dirs is
+    # excluded without regenerating it (see marin#6852). Because the set is
+    # folded into the step hash, the bloom rebuilds at a fresh path.
     combined_bloom = build_eval_bloom_step(
         name="datakit/bloom/_combined",
         eval_data_sources=[EVAL_ROOT],
@@ -80,6 +86,7 @@ def build_decon_steps() -> list[StepSpec]:
         overlap_threshold=OVERLAP_THRESHOLD,
         estimated_doc_count=ESTIMATED_DOC_COUNT,
         false_positive_rate=FALSE_POSITIVE_RATE,
+        exclude_eval_dirs=DECON_EXCLUDED_EVAL_TASKS,
     )
 
     # Per-corpus decon steps, all consuming the same combined bloom.

@@ -7,9 +7,19 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import duckdb
+import ducky.runner as runner_module
 import pytest
 from ducky.config import DuckyConfig
-from ducky.runner import BucketNotAllowedError, QueryError, QueryRunner, disallowed_uris
+from ducky.runner import (
+    BucketNotAllowedError,
+    CrossRegionNotAllowedError,
+    QueryError,
+    QueryRunner,
+    _opts_in_cross_region,
+    check_query_access,
+    disallowed_uris,
+    needs_cross_region_optin,
+)
 from iris.env_resources import TaskResources
 
 _SMALL_HOST = TaskResources(memory_bytes=2 * 1024**3, cpu_cores=2, gpu_count=0, tpu_count=0)
@@ -111,6 +121,138 @@ def test_run_query_refuses_bucket_outside_allowlist(make_runner):
         runner.run_query("SELECT * FROM read_parquet('gs://marin-us-central2/x.parquet')", uuid.uuid4().hex)
 
 
+@pytest.mark.parametrize(
+    "sql, opted_in",
+    [
+        ("-- cross-region: allow\nSELECT 1", True),
+        ("-- cross-region allow\nSELECT 1", True),  # colon optional
+        ("-- cross region: allowed\nSELECT 1", True),  # space + 'allowed'
+        ("\n\n  -- Cross-Region: Allow\nSELECT 1", True),  # blank lines + case
+        ("SELECT 1 -- cross-region: allow", False),  # not in the leading comment block
+        ("SELECT 'cross-region: allow'", False),  # inside a string, not a comment
+        ("-- just a normal comment\nSELECT 1", False),
+        ("SELECT 1", False),
+    ],
+)
+def test_opts_in_cross_region(sql, opted_in):
+    assert _opts_in_cross_region(sql) is opted_in
+
+
+# Stub region checker: any GCS bucket other than us-east5 counts as cross-region. Stands in for
+# rigging.filesystem.is_cross_region_url so the tests don't depend on live GCS metadata.
+def _stub_cross_region(url: str) -> bool:
+    return url.lower().startswith(("gs://", "gcs://")) and "us-east5" not in url
+
+
+_ALLOW_ALL_MARIN = ("gs://marin-", "s3://marin-")
+
+
+def test_check_query_access_cross_region_requires_opt_in():
+    sql = "SELECT * FROM read_parquet('gs://marin-us-central2/x.parquet')"
+    with pytest.raises(CrossRegionNotAllowedError, match="cross-region: allow"):
+        check_query_access(sql, _ALLOW_ALL_MARIN, (), _stub_cross_region)
+    # the same query with the opt-in comment passes the guard (no raise)
+    check_query_access(f"-- cross-region: allow\n{sql}", _ALLOW_ALL_MARIN, (), _stub_cross_region)
+
+
+def test_check_query_access_forbidden_bucket_hard_refused():
+    # a bucket outside the allowlist is refused even with the opt-in comment
+    sql = "-- cross-region: allow\nSELECT * FROM read_parquet('gs://other-corp/x.parquet')"
+    with pytest.raises(BucketNotAllowedError, match="other-corp"):
+        check_query_access(sql, _ALLOW_ALL_MARIN, (), _stub_cross_region)
+
+
+def test_check_query_access_same_region_needs_no_opt_in():
+    # us-east5 is same-region per the stub → no opt-in comment required
+    check_query_access(
+        "SELECT * FROM read_parquet('gs://marin-us-east5/x.parquet')", _ALLOW_ALL_MARIN, (), _stub_cross_region
+    )
+
+
+def test_check_query_access_s3_never_cross_region_gated():
+    # S3 (R2/CoreWeave) reads are always allowed and never cross-region-gated, even if the
+    # checker would flag everything — rigging models GCS regions only.
+    check_query_access("SELECT * FROM read_parquet('s3://marin-na/x.parquet')", _ALLOW_ALL_MARIN, (), lambda _url: True)
+
+
+def test_check_query_access_catalog_root_exempt_from_opt_in():
+    # a literal read of a configured catalog root skips the opt-in (deliberate always-on egress)
+    root = "gs://marin-us-central2/finelog"
+    check_query_access(
+        f"SELECT * FROM read_parquet('{root}/marin/x.parquet')",
+        _ALLOW_ALL_MARIN,
+        (root,),
+        lambda _url: True,
+    )
+
+
+def test_check_query_access_empty_allowlist_disables_enforcement():
+    # allow-all: neither the bucket bound nor the cross-region gate applies
+    check_query_access("SELECT * FROM read_parquet('gs://anywhere/x.parquet')", (), (), lambda _url: True)
+
+
+def test_run_query_refuses_cross_region_without_opt_in(make_runner, monkeypatch):
+    monkeypatch.setattr("ducky.runner.is_cross_region_url", lambda url: "us-central2" in url)
+    runner = make_runner(allowed_buckets=("gs://marin-",))
+    with pytest.raises(CrossRegionNotAllowedError, match="us-central2"):
+        runner.run_query("SELECT * FROM read_parquet('gs://marin-us-central2/x.parquet')", uuid.uuid4().hex)
+
+
+@pytest.fixture
+def _region_probe(monkeypatch):
+    """Patch the region primitives needs_cross_region_optin depends on, and clear its cache.
+
+    Yields a setter (vm_region, bucket_location) where bucket_location can be an exception
+    instance to simulate a failed metadata lookup."""
+    monkeypatch.delenv("MARIN_I_WILL_PAY_FOR_ALL_FEES", raising=False)
+    # is_cross_region_url positively confirms *different* region; here nothing is confirmed
+    # cross-region so the fail-closed path is what's under test.
+    monkeypatch.setattr(runner_module, "is_cross_region_url", lambda _uri: False)
+    runner_module._region_confirmed_buckets.clear()
+
+    def _configure(vm_region, bucket_location):
+        monkeypatch.setattr(runner_module, "cached_marin_region", lambda: vm_region)
+
+        def _lookup(_bucket):
+            if isinstance(bucket_location, Exception):
+                raise bucket_location
+            return bucket_location
+
+        monkeypatch.setattr(runner_module, "get_bucket_location", _lookup)
+
+    return _configure
+
+
+def test_needs_cross_region_optin_fails_closed_when_region_unresolvable(_region_probe):
+
+    # on a GCP VM but the bucket-location lookup fails (e.g. missing storage.buckets.get)
+    _region_probe(vm_region="us-east5", bucket_location=PermissionError("denied"))
+    assert needs_cross_region_optin("gs://marin-us-central2/x.parquet") is True
+
+
+def test_needs_cross_region_optin_allows_confirmed_same_region(_region_probe):
+
+    _region_probe(vm_region="us-east5", bucket_location="us-east5")
+    assert needs_cross_region_optin("gs://marin-us-east5/x.parquet") is False
+
+
+def test_needs_cross_region_optin_off_gcp_disables_gating(_region_probe):
+
+    # no VM region (local/smoke) → gating not applicable even if metadata is unreadable
+    _region_probe(vm_region=None, bucket_location=RuntimeError("unreachable"))
+    assert needs_cross_region_optin("gs://marin-us-central2/x.parquet") is False
+
+
+def test_needs_cross_region_optin_confirmed_cross_region_short_circuits(monkeypatch):
+
+    # is_cross_region_url positively True → needs opt-in without any bucket-location probe
+    monkeypatch.setattr(runner_module, "is_cross_region_url", lambda _uri: True)
+    monkeypatch.setattr(
+        runner_module, "get_bucket_location", lambda _b: pytest.fail("should not probe when confirmed cross-region")
+    )
+    assert needs_cross_region_optin("gs://marin-eu-west4/x.parquet") is True
+
+
 def test_run_query_allowlist_does_not_block_non_object_queries(make_runner):
     runner = make_runner(allowed_buckets=("gs://marin-us-east5",))
     result = runner.run_query("SELECT * FROM range(3) t(x)", uuid.uuid4().hex)
@@ -151,6 +293,83 @@ def test_httpfs_retries_are_configured(make_runner):
     runner = make_runner()
     cursor = runner._con.cursor()
     assert cursor.execute("SELECT current_setting('http_retries')").fetchone()[0] == 10
+
+
+def test_parquet_footer_cache_is_enabled(make_runner):
+    # repeat queries over the same object-store files should reuse cached parquet footers;
+    # GLOBAL so the per-query cursor inherits it.
+    cursor = make_runner()._con.cursor()
+    assert cursor.execute("SELECT current_setting('parquet_metadata_cache')").fetchone()[0] is True
+
+
+def _write_parquet(con, path: Path, sql: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    con.execute(f"COPY ({sql}) TO '{path}'")
+
+
+def test_catalog_views_are_queryable(make_runner, tmp_path):
+    # a finelog-like local layout: <root>/<namespace>/seg_L*.parquet
+    finelog_root = tmp_path / "finelog"
+    con = duckdb.connect()
+    _write_parquet(con, finelog_root / "log" / "seg_L0_0.parquet", "SELECT 1 AS level, 'hi' AS data")
+    _write_parquet(con, finelog_root / "iris.task" / "seg_L0_0.parquet", "SELECT 'task-1' AS task_id")
+    con.close()
+
+    runner = make_runner(finelog_root=str(finelog_root))
+    assert runner.run_query('SELECT data FROM finelog."log"', uuid.uuid4().hex).preview_rows == [["hi"]]
+    # the dotted namespace resolves as a quoted view name
+    assert runner.run_query('SELECT task_id FROM finelog."iris.task"', uuid.uuid4().hex).preview_rows == [["task-1"]]
+    # created views are tracked (so the server advertises only what exists)
+    assert {'finelog."log"', 'finelog."iris.task"'} <= runner.created_view_names
+
+
+def test_configured_root_readable_despite_restrictive_allowlist(make_runner, tmp_path):
+    # configuring finelog_root declares it readable, so its views are created and queryable
+    # even when allowed_buckets doesn't cover it (the root joins effective_allowed_buckets).
+    finelog_root = tmp_path / "finelog"
+    con = duckdb.connect()
+    _write_parquet(con, finelog_root / "log" / "seg_L0_0.parquet", "SELECT 1 AS level")
+    con.close()
+
+    runner = make_runner(finelog_root=str(finelog_root), allowed_buckets=("gs://marin-us-east5",))
+    assert 'finelog."log"' in runner.created_view_names
+    assert runner.run_query('SELECT * FROM finelog."log"', uuid.uuid4().hex).total_rows == 1
+
+
+def test_configured_root_extends_literal_read_allowlist():
+    # a literal read_parquet of the configured root prefix is allowed — consistent with the
+    # view — while a different bucket in the same region stays blocked.
+    config = DuckyConfig(
+        scratch_bucket="/tmp/ducky",
+        allowed_buckets=("gs://marin-us-east5",),
+        finelog_root="gs://marin-us-central2/finelog/marin",
+    )
+    eff = config.effective_allowed_buckets
+    assert disallowed_uris("read('gs://marin-us-central2/finelog/marin/log/s.parquet')", eff) == []
+    assert disallowed_uris("read('gs://marin-us-central2/other/x.parquet')", eff) == [
+        "gs://marin-us-central2/other/x.parquet"
+    ]
+
+
+def test_datakit_view_globs_hashed_dir(make_runner, tmp_path):
+    datakit_root = tmp_path / "normalized"
+    con = duckdb.connect()
+    # <root>/<name>_<hash8>/outputs/main/part-*.parquet — the view must glob past the hash
+    part = datakit_root / "finetranslations_abcd1234" / "outputs" / "main" / "part-00000-of-00001.parquet"
+    _write_parquet(con, part, "SELECT 'doc-1' AS id, 'hello' AS text")
+    con.close()
+
+    runner = make_runner(datakit_root=str(datakit_root))
+    assert runner.run_query('SELECT id FROM datakit."finetranslations"', uuid.uuid4().hex).preview_rows == [["doc-1"]]
+
+
+def test_missing_catalog_dataset_is_skipped_not_fatal(make_runner, tmp_path):
+    # a root with no matching parquet: view creation fails per-view, but the runner still
+    # comes up and serves ordinary queries.
+    runner = make_runner(finelog_root=str(tmp_path / "empty-finelog"))
+    assert runner.run_query("SELECT 1 AS a", uuid.uuid4().hex).preview_rows == [[1]]
+    with pytest.raises(QueryError):  # the un-created view is simply absent
+        runner.run_query('SELECT * FROM finelog."log"', uuid.uuid4().hex)
 
 
 def test_run_query_is_concurrency_safe(make_runner):

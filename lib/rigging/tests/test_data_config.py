@@ -115,6 +115,17 @@ def test_resolved_root_env_wins(monkeypatch):
     assert config.resolved_root() == "gs://override-bucket/data"
 
 
+def test_resolved_root_strips_trailing_slash(monkeypatch):
+    """A trailing slash on the configured prefix must not reach path joins, where it
+    would fork the object-store key namespace (marin-community/marin#6904)."""
+    monkeypatch.setenv("MARIN_PREFIX", "s3://marin-na/marin/")
+    assert DataConfig(region_buckets={}).resolved_root() == "s3://marin-na/marin"
+
+    monkeypatch.delenv("MARIN_PREFIX", raising=False)
+    config = DataConfig(region_buckets={}, scheme="s3", root="s3://marin-na/marin/")
+    assert config.resolved_root() == "s3://marin-na/marin"
+
+
 def test_resolved_root_uses_explicit_root(monkeypatch):
     """An explicit root is used when MARIN_PREFIX is unset."""
     monkeypatch.delenv("MARIN_PREFIX", raising=False)

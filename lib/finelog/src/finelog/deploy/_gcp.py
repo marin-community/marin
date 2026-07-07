@@ -3,10 +3,9 @@
 
 """GCE deployment backend for finelog.
 
-Lifted verbatim from the original `cli.py`, reshaped to take a
-`FinelogConfig` instead of click args. All subprocess-to-gcloud plumbing
-(image-digest pinning, instance create, SSH-based bootstrap re-run,
-/health poll, status, logs) lives here.
+Takes a `FinelogConfig` and drives all subprocess-to-gcloud plumbing:
+image-digest pinning, instance create, SSH-based bootstrap re-run, /health
+poll, status, and logs.
 """
 
 import json
@@ -18,7 +17,7 @@ import time
 import click
 
 from finelog.deploy.bootstrap import CONTAINER_NAME, render_bootstrap
-from finelog.deploy.config import FinelogConfig, assert_inlineable_auth, auth_policy_json
+from finelog.deploy.config import FinelogConfig, auth_policy_json
 from finelog.deploy.image import resolve_image_digest
 
 LABEL_KEY = "finelog-name"
@@ -101,15 +100,15 @@ def _render_bootstrap(cfg: FinelogConfig) -> str:
     """Pin the image and render the VM bootstrap script for ``cfg``.
 
     The script becomes startup-script metadata (readable to anyone with instance-
-    metadata access), so an auth stack carrying jwt secrets is rejected — those must
-    come through an operator-managed metadata secret, never inline.
+    metadata access). Every auth layer is inline-safe — a jwt layer carries only
+    Ed25519 public keys and a cidr layer only network prefixes — so the policy inlines
+    directly.
     """
     pinned = resolve_image_digest(cfg.image)
     if pinned != cfg.image:
         click.echo(f"Pinned image: {cfg.image} -> {pinned}")
     else:
         click.echo(f"Using image: {pinned}")
-    assert_inlineable_auth(cfg)
     return render_bootstrap(
         image=pinned,
         port=cfg.port,

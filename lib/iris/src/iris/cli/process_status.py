@@ -17,7 +17,6 @@ import click
 import humanfriendly
 from finelog.client import LogClient
 from finelog.rpc import logging_pb2
-from google.protobuf import json_format
 from rigging.connect import proxy_path
 
 from iris.cli.connect import require_controller_url, rpc_client_for_ctx
@@ -61,19 +60,15 @@ def process_group():
     default=None,
     help="RPC target path, e.g. /system/worker/<id> or /alice/job/0 (default: controller)",
 )
-@click.option("--json", "as_json", is_flag=True, help="Output as JSON")
 @click.pass_context
-def status(ctx, target: str | None, as_json: bool):
+def status(ctx, target: str | None):
     """Show process status (host info, resource usage)."""
     url = require_controller_url(ctx)
     label = target or "Controller"
     with rpc_client_for_ctx(ctx, url=url) as client:
         # GetProcessStatus uses empty string for controller
         resp = client.get_process_status(job_pb2.GetProcessStatusRequest(max_log_lines=0, target=target or ""))
-    if as_json:
-        click.echo(json_format.MessageToJson(resp.process_info, preserving_proto_field_name=True, indent=2))
-    else:
-        _print_status(resp, label)
+    _print_status(resp, label)
 
 
 @process_group.command()

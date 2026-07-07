@@ -731,9 +731,9 @@ scale_groups:
         example_configs = [
             iris_root / "config" / "marin.yaml",
             iris_root / "config" / "marin-dev.yaml",
-            iris_root / "config" / "coreweave.yaml",
-            iris_root / "config" / "coreweave-ci.yaml",
-            iris_root / "config" / "test.yaml",
+            iris_root / "config" / "examples" / "coreweave.yaml",
+            iris_root / "config" / "ci-coreweave.yaml",
+            iris_root / "config" / "ci-test.yaml",
         ]
 
         for config_path in example_configs:
@@ -1875,12 +1875,12 @@ def test_coreweave_worker_provider_rejected():
         validate_config(config)
 
 
-SMOKE_GCP_CONFIG = Path(__file__).resolve().parents[3] / "config" / "smoke-gcp.yaml"
+SMOKE_GCP_CONFIG = Path(__file__).resolve().parents[3] / "config" / "ci-gcp-smoke.yaml"
 
 
 @pytest.mark.timeout(15)
 def test_smoke_gcp_config_boots_locally():
-    """Load smoke-gcp.yaml, convert to local mode, verify workers join."""
+    """Load ci-gcp-smoke.yaml, convert to local mode, verify workers join."""
     config = load_config(SMOKE_GCP_CONFIG)
     config = make_local_config(config)
 
@@ -1897,7 +1897,7 @@ def test_smoke_gcp_config_boots_locally():
         ExponentialBackoff(initial=0.05, maximum=0.5).wait_until_or_raise(
             _has_healthy_worker,
             timeout=Duration.from_seconds(15.0),
-            error_message="No healthy workers with smoke-gcp.yaml in local mode",
+            error_message="No healthy workers with ci-gcp-smoke.yaml in local mode",
         )
         client.close()
 

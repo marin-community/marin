@@ -203,9 +203,7 @@ def _start_running_job(
         replicas=replicas,
     )
     with state._db.transaction() as cur:
-        ops.job.submit(
-            cur, job_id=job_id, request=request, ts=Timestamp.now(), run_template_cache=state._run_template_cache
-        )
+        ops.job.submit(cur, job_id=job_id, request=request, ts=Timestamp.now())
 
     worker_id = WorkerId(f"w-{user}")
     with state._db.transaction() as cur:
@@ -222,7 +220,6 @@ def _start_running_job(
             ),
             ts=Timestamp.now(),
             health=state._health,
-            worker_attrs=state._worker_attrs,
         )
     for idx in range(replicas):
         task_id = job_id.task(idx)
@@ -238,7 +235,6 @@ def _start_running_job(
                     )
                 ],
                 health=state._health,
-                endpoints=state._endpoints,
                 now=Timestamp.now(),
             )
 
@@ -260,9 +256,7 @@ def test_compute_user_spend_excludes_pending(state):
     job_id = JobName.root("bob", "pending")
     request = _launch_request(job_id.to_wire(), cpu_millicores=2000, memory_bytes=8 * GiB)
     with state._db.transaction() as cur:
-        ops.job.submit(
-            cur, job_id=job_id, request=request, ts=Timestamp.now(), run_template_cache=state._run_template_cache
-        )
+        ops.job.submit(cur, job_id=job_id, request=request, ts=Timestamp.now())
     with state._db.read_snapshot() as snap:
         assert compute_user_spend(snap).get("bob", 0) == 0
 
@@ -288,9 +282,8 @@ def service(state, tmp_path, log_client) -> ControllerServiceImpl:
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
         log_client=log_client,
         db=state._db,
-        endpoints=state._endpoints,
         auth=ControllerAuth(provider="static"),
-        endpoint_service=EndpointServiceImpl(db=state._db, endpoints=state._endpoints),
+        endpoint_service=EndpointServiceImpl(db=state._db),
     )
 
 

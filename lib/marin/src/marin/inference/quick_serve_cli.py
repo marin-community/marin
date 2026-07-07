@@ -21,21 +21,17 @@ import logging
 import re
 import time
 import uuid
-from contextlib import AbstractContextManager
 from pathlib import Path
 
 import click
 import requests
-from iris.cli.connect import IRIS_CLUSTER_CONFIG_DIRS
+from iris.cli.connect import open_controller_endpoint
 from iris.client import IrisClient, Job
-from iris.cluster.composer import provider_bundle
-from iris.cluster.config import load_config
 from iris.cluster.constraints import region_constraint
-from iris.cluster.local_cluster import LocalCluster
 from iris.cluster.tpu_topology import get_tpu_topology
-from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec, is_job_finished, tpu_device
-from rigging.config_discovery import resolve_cluster_config
-from rigging.connect import proxy_path
+from iris.cluster.types import EndpointAccess, Entrypoint, EnvironmentSpec, ResourceSpec, is_job_finished, tpu_device
+from rigging.connect import capability_path, proxy_path
+from rigging.timing import Duration
 
 from marin.inference.quick_serve import QuickServeConfig, serve_in_job
 
@@ -65,38 +61,6 @@ def _resolve_chat_template(spec: str | None) -> str | None:
     return path.read_text()
 
 
-def _resolve_controller(cluster: str | None, controller: str | None) -> tuple[AbstractContextManager[str], str | None]:
-    """Resolve a reachable controller URL and the cluster's public dashboard origin.
-
-    Returns a context manager yielding the controller URL to talk to (a local SSH
-    tunnel for a named ``--cluster``), plus the public dashboard origin (e.g.
-    ``https://iris.oa.dev``) used to build shareable proxy links, or ``None`` when
-    a bare ``--controller`` is given (no cluster config to read it from).
-    """
-    if controller:
-        return contextlib.nullcontext(controller), None
-    if not cluster:
-        raise click.ClickException("Either --controller or --cluster is required.")
-
-    try:
-        resolved = resolve_cluster_config(cluster, dirs=IRIS_CLUSTER_CONFIG_DIRS)
-    except FileNotFoundError as exc:
-        raise click.ClickException(f"Unknown cluster {cluster!r}; run `iris cluster list`.") from exc
-
-    iris_config = load_config(str(resolved))
-    dashboard_url = iris_config.dashboard_url or None
-    bundle = provider_bundle(iris_config)
-    if iris_config.controller.controller_kind() == "local":
-        controller_address = LocalCluster(iris_config).start()
-        return contextlib.nullcontext(controller_address), dashboard_url
-
-    controller_address = iris_config.controller_address() or bundle.controller.discover_controller(
-        iris_config.controller
-    )
-    click.echo(f"Opening SSH tunnel to controller {controller_address} …")
-    return bundle.controller.tunnel(address=controller_address), dashboard_url
-
-
 def _wait_for_endpoint(client: IrisClient, job: Job, endpoint_name: str, timeout_seconds: float) -> str:
     """Poll the controller registry until the endpoint registers; return its address."""
     deadline = time.monotonic() + timeout_seconds
@@ -115,6 +79,34 @@ def _wait_for_endpoint(client: IrisClient, job: Job, endpoint_name: str, timeout
         f"Timed out after {timeout_seconds:.0f}s waiting for {endpoint_name!r}. "
         "The job is still booting vLLM; re-check later via the Iris dashboard."
     )
+
+
+def _mint_and_print_capability_url(
+    client: IrisClient, endpoint: str, dashboard_url: str | None, ttl_hours: float
+) -> None:
+    """Mint a scoped endpoint token and print the off-cluster capability URL.
+
+    Runs CLI-side under the launching user's identity, so the controller's owner
+    check passes. The URL embeds the scoped token in its path (gist-style):
+    possession of the URL is the credential, so no auth header is needed. It
+    authorizes only this endpoint and expires after ``ttl_hours`` (clamped to the
+    controller's maximum).
+    """
+    resp = client._cluster_client.mint_endpoint_token(endpoint, ttl=Duration.from_hours(ttl_hours))
+    hours_left = max(0.0, (resp.expires_at.epoch_ms - int(time.time() * 1000)) / 3_600_000)
+    click.echo("  Shared capability URL (token in the path — anyone with the URL can call it):")
+    if dashboard_url:
+        base_url = f"{dashboard_url.rstrip('/')}{capability_path(endpoint, resp.token)}/v1"
+        click.echo(f"    base_url   {base_url}")
+        click.echo("    api_key    <any non-empty string>   (the URL already carries the credential)")
+        click.echo(f"    expires    in {hours_left:.1f}h")
+        click.echo(f"    example    curl {base_url}/models")
+    else:
+        # No public origin known (bare --controller); front the controller's
+        # /proxy/t route for this to be reachable off-cluster.
+        click.echo(f"    path       {capability_path(endpoint, resp.token)}/v1  (front the controller /proxy/t route)")
+        click.echo(f"    expires    in {hours_left:.1f}h")
+    click.echo("")
 
 
 @click.command(context_settings={"show_default": True})
@@ -138,6 +130,13 @@ def _wait_for_endpoint(client: IrisClient, job: Job, endpoint_name: str, timeout
     "--no-cache", is_flag=True, default=False, help="Skip the GCS model cache; always download from HuggingFace."
 )
 @click.option("--timeout-hours", type=float, default=24.0, help="Wall-clock lifetime before the server self-stops.")
+@click.option(
+    "--access",
+    type=click.Choice(["private", "link"]),
+    default="private",
+    help="Proxy access. private: cluster identity only. link: mints a scoped capability "
+    "URL anyone with the link can call off-cluster (printed once vLLM is ready).",
+)
 @click.option("--region", default=None, help="Comma-separated region(s) to pin the slice to.")
 @click.option("--cpu", type=float, default=8.0)
 @click.option("--memory", default="64g")
@@ -166,6 +165,7 @@ def main(
     cache_ttl_days: int,
     no_cache: bool,
     timeout_hours: float,
+    access: str,
     region: str | None,
     cpu: float,
     memory: str,
@@ -197,10 +197,13 @@ def main(
     if "." in endpoint:
         raise click.ClickException("--endpoint-name cannot contain '.' (it breaks controller proxy routing).")
 
+    endpoint_access = EndpointAccess.Value(f"ENDPOINT_ACCESS_{access.upper()}")
+
     config = QuickServeConfig(
         model=model,
         tpu_type=tpu,
         endpoint_name=endpoint,
+        access=endpoint_access,
         dtype=dtype,
         max_model_len=max_model_len,
         max_num_batched_tokens=max_num_batched_tokens,
@@ -220,10 +223,12 @@ def main(
         if regions:
             constraints = [region_constraint(regions)]
 
-    controller_cm, dashboard_url = _resolve_controller(cluster, controller)
-    with controller_cm as controller_url:
+    endpoint_cluster = cluster if controller is None else None
+    with open_controller_endpoint(cluster_name=endpoint_cluster, controller_url=controller) as endpoint_info:
+        controller_url = endpoint_info.url
+        dashboard_url = endpoint_info.config.dashboard_url if endpoint_info.config else None
         click.echo(f"Using controller {controller_url}")
-        with IrisClient.remote(controller_url, workspace=Path.cwd()) as client:
+        with IrisClient.remote(controller_url, workspace=Path.cwd(), credentials=endpoint_info.credentials) as client:
             job = client.submit(
                 entrypoint=Entrypoint.from_callable(serve_in_job, config),
                 name=job_name,
@@ -245,11 +250,16 @@ def main(
             else:
                 click.echo(f"  proxy path   {proxy_path(endpoint)}/")
             click.echo(f"  timeout      {timeout_hours:g}h")
-            click.echo(f"  stop with    iris job stop {job} --cluster {cluster or ''}".rstrip())
+            if controller is None and cluster:
+                click.echo(f"  stop with    iris --cluster {cluster} job stop {job}")
+            else:
+                click.echo(f"  stop with    iris --controller-url {controller_url} job stop {job}")
             click.echo("")
 
             if not wait:
                 click.echo("Submitted. Open the dashboard from the Iris UI once vLLM has booted.")
+                if endpoint_access == EndpointAccess.ENDPOINT_ACCESS_LINK:
+                    click.echo("Re-run with --wait once vLLM registers to mint the off-cluster capability URL.")
                 return
 
             click.echo("Waiting for vLLM to boot and register (Ctrl-C to detach; the job keeps running) …")
@@ -260,6 +270,10 @@ def main(
             if dashboard_url:
                 click.echo(f"        share:     {dashboard_url.rstrip('/')}{proxy_path(endpoint)}/")
             click.echo("")
+            if endpoint_access == EndpointAccess.ENDPOINT_ACCESS_LINK:
+                # Mint after the endpoint registers (the controller resolves the row
+                # for owner authz), so the token is bound to a live endpoint.
+                _mint_and_print_capability_url(client, endpoint, dashboard_url, timeout_hours)
             click.echo("Tunnel held open; press Ctrl-C to detach (the server stays up on Iris).")
             with contextlib.suppress(KeyboardInterrupt):
                 while True:

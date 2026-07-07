@@ -42,10 +42,8 @@ from sqlalchemy import (
 from sqlalchemy.sql.elements import ColumnElement
 from sqlalchemy.types import TypeDecorator
 
-from iris.cluster.types import JobName, WorkerId
+from iris.cluster.types import LOCAL_CLUSTER, JobName, WorkerId
 
-USER_ROLE_DEFAULT = "user"
-USER_ROLE_CHECK = "role IN ('admin', 'user', 'worker')"
 WORKER_ATTR_VALUE_TYPE_CHECK = "value_type IN ('str', 'int', 'float')"
 
 
@@ -242,22 +240,13 @@ meta_table = Table(
 )
 
 
-users_table = Table(
-    "users",
-    metadata,
-    Column("user_id", String, primary_key=True),
-    Column("created_at_ms", TimestampMsType, nullable=False),
-    Column("display_name", String),
-    Column("role", String, nullable=False, server_default=USER_ROLE_DEFAULT),
-    CheckConstraint(USER_ROLE_CHECK, name="users_role_check"),
-)
-
-
 jobs_table = Table(
     "jobs",
     metadata,
     Column("job_id", JobNameType, primary_key=True),
-    Column("user_id", String, ForeignKey("users.user_id"), nullable=False),
+    # Plain owner string: roles are resolved from the config-derived RolePolicy
+    # (see controller/auth.py), so there is no ``users`` table to anchor an FK to.
+    Column("user_id", String, nullable=False),
     Column("parent_job_id", JobNameType, ForeignKey("jobs.job_id", ondelete="CASCADE")),
     Column("root_job_id", String, nullable=False),
     Column("depth", Integer, nullable=False),
@@ -272,10 +261,11 @@ jobs_table = Table(
     Column("num_tasks", Integer, nullable=False),
     Column("name", String, nullable=False, server_default=""),
     Column("backend_id", String, nullable=False, server_default=""),
-    # Federation discriminator, orthogonal to backend_id: "" == owned locally,
-    # "<peer>" == handed off to that peer cluster. Mutually exclusive with a
-    # local backend_id by construction (a federated job has backend_id="").
-    Column("child_cluster", String, nullable=False, server_default=""),
+    # The cluster coordinate, always set: "local" == owned by this controller,
+    # "<peer>" == handed off to that peer cluster. Orthogonal to backend_id, but
+    # a local backend_id implies cluster="local" by construction (a federated job
+    # has backend_id="").
+    Column("cluster", String, nullable=False, server_default=LOCAL_CLUSTER),
     Index("idx_jobs_parent", "parent_job_id"),
     Index("idx_jobs_state", text("state"), text("submitted_at_ms DESC")),
     Index("idx_jobs_depth_state", text("depth"), text("state"), text("submitted_at_ms DESC")),
@@ -342,8 +332,10 @@ tasks_table = Table(
     Column("finished_at_ms", TimestampMsType),
     Column("max_retries_failure", Integer, nullable=False),
     Column("max_retries_preemption", Integer, nullable=False),
-    Column("failure_count", Integer, nullable=False),
-    Column("preemption_count", Integer, nullable=False),
+    # failure_count / preemption_count are NOT stored: they are derived from the
+    # task's attempt rows (iris.cluster.controller.attempt_counts) and served from
+    # an in-memory cache. current_attempt_id stays denormalized — it is the live
+    # in-flight-attempt pointer, written atomically with each attempt insert.
     Column("current_attempt_id", Integer, nullable=False, server_default="-1"),
     Column("priority_neg_depth", Integer, nullable=False),
     Column("priority_root_submitted_ms", Integer, nullable=False),
@@ -353,11 +345,11 @@ tasks_table = Table(
     Column("current_worker_id", WorkerIdType, ForeignKey("workers.worker_id", ondelete="SET NULL")),
     Column("current_worker_address", String),
     Column("backend_id", String, nullable=False, server_default=""),
-    # Federation discriminator; see jobs.child_cluster. A federated task has
-    # child_cluster set, backend_id="", and no local worker/attempt rows. Every
-    # control-plane reader sources the ``local_tasks`` selectable (child_cluster
-    # = "") so these rows are structurally invisible to the scheduler fold.
-    Column("child_cluster", String, nullable=False, server_default=""),
+    # The cluster coordinate; see jobs.cluster. A federated task has cluster set to
+    # a peer id, backend_id="", and no local worker/attempt rows. Every
+    # control-plane reader sources the ``local_tasks`` selectable (cluster =
+    # 'local') so these rows are structurally invisible to the scheduler fold.
+    Column("cluster", String, nullable=False, server_default=LOCAL_CLUSTER),
     UniqueConstraint("job_id", "task_index", name="tasks_job_id_task_index_key"),
     Index("idx_tasks_job_state", "job_id", "state"),
     Index("idx_tasks_backend_state", "backend_id", "state"),
@@ -380,18 +372,16 @@ tasks_table = Table(
         "priority_root_submitted_ms",
         "submitted_at_ms",
         "priority_insertion",
-        sqlite_where=text("child_cluster = ''"),
+        sqlite_where=text(f"cluster = '{LOCAL_CLUSTER}'"),
     ),
     Index("idx_tasks_state", "state"),
-    Index("idx_tasks_state_local", "state", sqlite_where=text("child_cluster = ''")),
+    Index("idx_tasks_state_local", "state", sqlite_where=text(f"cluster = '{LOCAL_CLUSTER}'")),
     Index("idx_tasks_state_attempt", "state", "task_id", "current_attempt_id", "job_id"),
-    Index("idx_tasks_job_failures", "job_id", "failure_count", "preemption_count"),
     Index(
         "idx_tasks_current_worker",
         "current_worker_id",
         sqlite_where=text("current_worker_id IS NOT NULL"),
     ),
-    Index("idx_tasks_job_state_counts", "job_id", "state", "failure_count", "preemption_count"),
 )
 
 
@@ -411,12 +401,12 @@ def hint_rare_state(predicate: ColumnElement[bool]) -> ColumnElement[bool]:
 # Structural fold-exclusion for federated tasks. Every control-plane reader
 # (scheduling, routing, reconcile/dispatch, budget, capacity/autoscale, cancel,
 # timeout, pruner) sources this selectable instead of raw ``tasks_table`` so
-# rows handed off to a peer (``child_cluster != ''``) are invisible to the fold.
-# SQLite flattens the subquery and drives off the ``… WHERE child_cluster = ''``
+# rows handed off to a peer (``cluster != 'local'``) are invisible to the fold.
+# SQLite flattens the subquery and drives off the ``… WHERE cluster = 'local'``
 # partial indexes, so the exclusion is free at read time. User-facing read paths
 # (job/task detail, list, status) keep reading raw ``tasks_table`` so federated
 # rows still render in listings.
-local_tasks = select(tasks_table).where(tasks_table.c.child_cluster == "").subquery("local_tasks")
+local_tasks = select(tasks_table).where(tasks_table.c.cluster == LOCAL_CLUSTER).subquery("local_tasks")
 
 
 task_attempts_table = Table(
@@ -442,6 +432,9 @@ task_attempts_table = Table(
     ),
     Index("idx_task_attempts_uid", "attempt_uid", unique=True),
     Index("idx_task_attempts_backend", "backend_id"),
+    # Covers the failure/preemption derivation (COUNT by state, filtered on
+    # started_at_ms), grouped per task — see iris.cluster.controller.attempt_counts.
+    Index("idx_task_attempts_task_state", "task_id", "state", "started_at_ms"),
 )
 
 
@@ -519,6 +512,10 @@ endpoints_table = Table(
     # backfill; a NULL deadline is treated as never-expiring until the registrant
     # next re-registers with a real lease.
     Column("lease_deadline_ms", TimestampMsType, nullable=True),
+    # Proxy access mode (EndpointAccess int). Nullable so it can be added to an
+    # existing DB without a backfill; a NULL is read as PRIVATE (today's
+    # cluster-identity-required behavior), so pre-migration rows are unchanged.
+    Column("access", Integer, nullable=True),
     Index("idx_endpoints_name", "name"),
     Index("idx_endpoints_task", "task_id"),
     Index("idx_endpoints_job_id", "job_id"),
@@ -555,7 +552,9 @@ slices_table = Table(
 user_budgets_table = Table(
     "user_budgets",
     metadata,
-    Column("user_id", String, ForeignKey("users.user_id"), primary_key=True),
+    # Standalone runtime state (set via ``iris user budget set``); ``user_id`` is a
+    # plain-string PK with no FK — a budget can be set for any owner id.
+    Column("user_id", String, primary_key=True),
     Column("budget_limit", Integer, nullable=False, server_default="0"),
     Column("max_band", Integer, nullable=False, server_default="2"),
     Column("updated_at_ms", TimestampMsType, nullable=False),
@@ -565,8 +564,8 @@ user_budgets_table = Table(
 # ---------------------------------------------------------------------------
 # Federation sidecars.
 #
-# The federated job/task rows live in ``jobs``/``tasks`` with ``child_cluster``
-# set; state/timing/counts are the single source of truth there. These tables
+# The federated job/task rows live in ``jobs``/``tasks`` with ``cluster`` set to a
+# peer id; state/timing/counts are the single source of truth there. These tables
 # are thin join sidecars carrying only federation-only metadata that has no home
 # in the main rows — the same shape as ``jobs`` ⋈ ``job_config`` today.
 # ---------------------------------------------------------------------------
@@ -574,7 +573,8 @@ user_budgets_table = Table(
 
 # One row per job this controller has federated, in either direction:
 #   SENT     — this cluster is the parent; it handed the job to peer_id and tracks
-#              the handoff lifecycle (remote_job_id, handoff_state, cancel intent).
+#              the handoff lifecycle (handoff_state, cancel intent). The peer runs
+#              the job under the same, cluster-invariant job_id.
 #   RECEIVED — this cluster is the peer; peer_id is the requester that handed it off.
 # Joining jobs ⋈ federated_jobs tells you where a job was federated to/from. The
 # SENT-only columns are null on RECEIVED rows.
@@ -586,12 +586,8 @@ federated_jobs_table = Table(
     # The counterparty cluster: the destination when SENT, the requester when RECEIVED.
     Column("peer_id", String, nullable=False),
     Column("owner_principal", String, nullable=False, server_default=""),  # end-user identity
-    # Deterministic, globally unique id the peer runs the job under (SENT only).
-    Column("remote_job_id", String),
-    Column("handoff_state", Integer),  # SENT only: PENDING_HANDOFF | HANDED_OFF
+    Column("handoff_state", Integer),  # SENT only: PENDING_HANDOFF | HANDED_OFF | HANDOFF_REJECTED
     Column("cancel_intent_version", Integer, nullable=False, server_default="0"),
-    Column("last_sync_ms", TimestampMsType),
-    Column("terminal_error", String),
     Index("idx_federated_jobs_direction_peer", "direction", "peer_id"),
 )
 
@@ -602,7 +598,6 @@ federation_sync_state_table = Table(
     Column("peer_id", String, primary_key=True),
     # Opaque monotonic watermark into the peer's changelog; one row per peer.
     Column("cursor", String, nullable=False, server_default=""),
-    Column("last_full_resync_ms", TimestampMsType),
 )
 
 
@@ -645,23 +640,6 @@ federation_changelog_table = Table(
     # AUTOINCREMENT: seq is a cursor watermark, so it must never be reused after a
     # delete (a plain rowid alias can reuse the max after a delete).
     sqlite_autoincrement=True,
-)
-
-
-auth_api_keys_table = Table(
-    "api_keys",
-    auth_metadata,
-    Column("key_id", String, primary_key=True),
-    # Human-readable key prefix surfaced in `iris key list` / CreateApiKey
-    # responses ("jwt" for JWT-backed keys, the token's first 8 chars otherwise).
-    Column("key_prefix", String, nullable=False),
-    Column("user_id", String, nullable=False),
-    Column("name", String, nullable=False),
-    Column("created_at_ms", TimestampMsType, nullable=False),
-    Column("last_used_at_ms", TimestampMsType),
-    Column("expires_at_ms", TimestampMsType),
-    Column("revoked_at_ms", TimestampMsType),
-    Index("idx_api_keys_user", "user_id"),
 )
 
 

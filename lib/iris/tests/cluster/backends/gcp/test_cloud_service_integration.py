@@ -17,13 +17,13 @@ from dataclasses import dataclass, field
 
 import httpx
 import pytest
-from iris.cluster.backends.types import QuotaExhaustedError
 from iris.cluster.platforms.gcp.service import (
     CloudGcpService,
     TpuCreateRequest,
     VmCreateRequest,
     operation_error,
 )
+from iris.cluster.platforms.types import QuotaExhaustedError
 from iris.cluster.types import CapacityType
 
 logger = logging.getLogger(__name__)

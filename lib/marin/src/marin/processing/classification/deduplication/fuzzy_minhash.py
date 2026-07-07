@@ -22,6 +22,7 @@ import dupekit
 import pyarrow as pa
 from fray import ResourceConfig
 from pydantic import BaseModel
+from rigging.filesystem import prefix_join
 from zephyr import Dataset, ZephyrContext, counters
 
 from marin.datakit.normalize import NormalizedData
@@ -201,9 +202,9 @@ def compute_minhash_attrs(
         seed=seed,
         text_cap_chars=text_cap_chars,
     )
-    attr_dir = os.path.join(output_path, "outputs")
+    attr_dir = prefix_join(output_path, "outputs")
 
-    source_shards = sorted(fsspec_glob(f"{source.main_output_dir.rstrip('/')}/*.parquet"))
+    source_shards = sorted(fsspec_glob(prefix_join(source.main_output_dir, "*.parquet")))
     if not source_shards:
         raise FileNotFoundError(f"No parquet shards found under {source.main_output_dir}")
 
@@ -229,7 +230,7 @@ def compute_minhash_attrs(
     output_basenames = tuple(os.path.basename(p) for p in source_shards)
 
     def _output_path(shard_idx: int, total_shards: int, ad: str = attr_dir, bn: tuple = output_basenames) -> str:
-        return f"{ad}/{bn[shard_idx]}"
+        return prefix_join(ad, bn[shard_idx])
 
     pipeline = (
         Dataset.from_list(source_shards)

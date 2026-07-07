@@ -27,7 +27,7 @@ from typing import Any
 import pandas as pd
 import wandb
 from huggingface_hub import snapshot_download
-from rigging.filesystem import is_remote_path, open_url
+from rigging.filesystem import is_remote_path, open_url, prefix_join
 
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.evaluation.evaluators.evaluator import Evaluator, ModelConfig
@@ -140,12 +140,12 @@ def _restore_trials_from_gcs(gcs_output_path: str, local_job_dir: Path) -> int:
 
     Returns the number of trials restored.
     """
-    trials_gcs_path = os.path.join(gcs_output_path, "harbor_trials")
+    trials_gcs_path = prefix_join(gcs_output_path, "harbor_trials")
     if not fsspec_exists(trials_gcs_path):
         return 0
 
     # Find completed trials (those with result.json)
-    result_files = fsspec_glob(os.path.join(trials_gcs_path, "*/result.json"))
+    result_files = fsspec_glob(prefix_join(trials_gcs_path, "*/result.json"))
 
     restored = 0
     for result_file in result_files:
@@ -187,7 +187,7 @@ def _create_trial_upload_hook(gcs_output_path: str, local_job_dir: Path):
         _fix_docker_permissions(local_trial_dir)
 
         # Upload to GCS: {output_path}/harbor_trials/{trial_name}/
-        trial_gcs_path = os.path.join(gcs_output_path, "harbor_trials", trial_name)
+        trial_gcs_path = prefix_join(gcs_output_path, f"harbor_trials/{trial_name}")
         try:
             upload_to_gcs(str(local_trial_dir), trial_gcs_path)
             logger.info(f"Uploaded trial {trial_name} to GCS")

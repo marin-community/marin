@@ -10,7 +10,7 @@ from scripts.ci.validate_canary_metrics import lookup_metric, main, read_summary
 
 HEALTHY_SUMMARY = {
     "train": {"loss": 5.5},
-    "_step": 476,
+    "_step": 238,
     "_runtime": 2400,
 }
 

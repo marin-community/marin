@@ -4,36 +4,36 @@
 //! Authenticated ingress front for the finelog server.
 //!
 //! A globally shared finelog receives pushes from many controllers across the
-//! internet, so it can no longer rely on being private behind one controller's
-//! proxy. This module gates every RPC with an ordered stack of auth *layers*,
-//! mirroring rigging's `server_auth` (each layer *allows*, *falls through*, or
-//! *rejects*).
+//! internet, so it cannot rely on being private behind one controller's proxy. This
+//! module gates every RPC with an ordered stack of auth layers, each of which allows,
+//! falls through, or rejects a request (the same shape as rigging's `server_auth`).
 //!
-//! The policy is **default-deny**: a request no layer *allows* is rejected
-//! `Unauthenticated`. Auth is a stack of allow-layers on top of that deny —
-//! there is no "empty means open" path. The interceptor is *always* installed
-//! (see `ServerConfig`); the only variable is the layer list. When nothing is
-//! configured the default is [`AuthPolicy::allow_localhost`] (loopback only), so
-//! a bare finelog is reachable for local debugging but never open to its network.
-//! Two layer kinds compose:
-//! - [`AuthLayer::Jwt`] — a bearer whose HS256 signature verifies against one of a
-//!   set of trusted per-cluster keys, and which has not expired, admits the
-//!   request. This mirrors marin's own token model (`JwtTokenManager` mints
-//!   `HS256` JWTs signed with a per-cluster HMAC key); each relaying controller
-//!   mints a short-lived finelog-delegation JWT and the store verifies it against
-//!   that cluster's key — the same JWT mechanism the control plane uses, so the
-//!   log plane adds no second credential *system*. The store holds only
-//!   delegation keys (a key that grants finelog access, not control-plane token
-//!   minting), and checks signature + `exp` only (it cannot reach a controller's
-//!   revocation table, so exposure is TTL-bounded). Every configured key admits
-//!   equally — federation members are mutually trusted for the log plane.
-//! - [`AuthLayer::Cidr`] — a request whose transport peer is in a trusted network
-//!   is admitted without a token. This reproduces today's intra-cluster
-//!   reachability explicitly: a global finelog that also serves its own cluster
-//!   lists that cluster's loopback/VPC ranges (e.g. `127.0.0.0/8`, `10.0.0.0/8`)
-//!   so local clients keep working without a JWT, while remote pushes must sign.
-//!   CIDR matches the transport peer only (never a forwarded header), the same
-//!   distrust of spoofable `X-Forwarded-For` that rigging's loopback check applies.
+//! The policy is default-deny: a request no layer allows is rejected
+//! `Unauthenticated`. Auth is a stack of allow-layers on top of that deny — there is
+//! no "empty means open" path. The interceptor is always installed (see
+//! `ServerConfig`); the only variable is the layer list. With nothing configured the
+//! default is [`AuthPolicy::allow_localhost`] (loopback only), so a bare finelog is
+//! reachable for local debugging but never open to its network. Two layer kinds
+//! compose:
+//! - [`AuthLayer::Jwt`] — a bearer whose EdDSA (Ed25519) signature verifies against
+//!   one of a set of trusted per-cluster public keys, whose audience is exactly
+//!   `finelog`, and which has not expired, admits the request. Each relaying controller
+//!   mints a short-lived finelog-delegation JWT (`aud="finelog"`) with its per-cluster
+//!   private key and the store verifies it against that cluster's public key — the same
+//!   JWT mechanism the control plane uses, so the log plane adds no second credential
+//!   system. The store holds only public keys (which grant no minting power), verified
+//!   via `jsonwebtoken`, and checks signature + `aud="finelog"` + `exp` only (it cannot
+//!   reach a controller's revocation table, so exposure is TTL-bounded). Requiring
+//!   `aud="finelog"` is the load-bearing cross-plane guard (RFC 8725): a control-plane
+//!   `aud="iris"` token, though signed by the same key, is rejected here. Each cluster
+//!   may carry multiple public keys so a key rotation overlaps (old + new both verify).
+//!   Every configured cluster admits equally — federation members are mutually trusted
+//!   for the log plane.
+//! - [`AuthLayer::Cidr`] — a request whose transport peer is in a trusted network is
+//!   admitted without a token, so a finelog that also serves its own cluster lists that
+//!   cluster's loopback/VPC ranges (e.g. `127.0.0.0/8`, `10.0.0.0/8`) and local clients
+//!   reach it without a JWT while remote pushes must sign. CIDR matches the transport
+//!   peer only, never a spoofable `X-Forwarded-For` value.
 //!
 //! The layers are walked in order: the first `Allow` admits, the first `Reject`
 //! denies, and a request no layer claims is denied. Order matters — the CIDR
@@ -45,31 +45,25 @@
 use std::fmt;
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use axum::extract::{ConnectInfo, Request, State};
 use axum::http::StatusCode;
 use axum::middleware::Next as AxumNext;
 use axum::response::{IntoResponse, Response};
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use base64::Engine;
 use connectrpc::{
     async_trait, ConnectError, Interceptor, Next, RequestContext, UnaryRequest, UnaryResponse,
 };
-use hmac::{Hmac, Mac};
+use jsonwebtoken::{decode, Algorithm, DecodingKey, Validation};
 use serde::Deserialize;
-use sha2::Sha256;
 
-type HmacSha256 = Hmac<Sha256>;
+/// The one audience this delegation plane accepts. A token minted for any other
+/// plane (e.g. control-plane `aud="iris"`), even under the same signing key, is
+/// rejected — the load-bearing cross-plane guard (RFC 8725).
+const FINELOG_AUDIENCE: &str = "finelog";
 
 /// Accept a token whose `exp` is at most this far in the past, to tolerate small
 /// clock skew between a minting controller and the store.
-const EXP_LEEWAY_SECONDS: i64 = 60;
-
-/// Reject an HS256 delegation secret shorter than this (a too-short HMAC key is a
-/// misconfiguration, not a valid key). marin's own keys are `token_hex(32)` = 64
-/// ASCII bytes, well above this floor.
-const MIN_SECRET_BYTES: usize = 16;
+const EXP_LEEWAY_SECONDS: u64 = 60;
 
 /// One rule's verdict over a request, mirroring rigging's
 /// AUTHENTICATED / ABSENT / REJECTED.
@@ -161,82 +155,104 @@ fn prefix_matches(net: &[u8], addr: &[u8], prefix_len: u8) -> bool {
     true
 }
 
-/// A trusted per-cluster delegation key: the cluster it authenticates and the
-/// HS256 secret (the JWT signing key's raw bytes). `Debug` renders the cluster
-/// but never the secret.
+/// A trusted per-cluster delegation issuer: the cluster it authenticates and the
+/// set of Ed25519 public keys that verify its tokens. A cluster carries more
+/// than one key only across a rotation overlap (old + new both accepted). `Debug`
+/// renders the cluster and key count but never key material (public keys are not
+/// secret, but there is no reason to spill PEM into logs).
 struct JwtKey {
     cluster: String,
-    secret: Vec<u8>,
+    decoding_keys: Vec<DecodingKey>,
 }
 
 impl fmt::Debug for JwtKey {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("JwtKey")
             .field("cluster", &self.cluster)
+            .field("public_keys", &self.decoding_keys.len())
             .finish_non_exhaustive()
     }
 }
 
-/// Verifies HS256 JWTs against a set of trusted per-cluster delegation keys.
+/// Verifies EdDSA (Ed25519) JWTs against a set of trusted per-cluster public keys.
 ///
-/// A token is accepted iff its signature verifies against one configured key
-/// (constant-time HMAC compare) and its `exp` is in the future within
-/// [`EXP_LEEWAY_SECONDS`]. Only delegation keys are held — never a controller's
-/// control-plane signing key — so the store can verify a cluster's tokens
-/// without gaining the power to mint control-plane ones. On success the matching
-/// cluster is returned for attribution. Every configured delegation key admits
-/// equally: federation members are mutually trusted for the log plane, so a
-/// valid token may write under any namespace (per-cluster write isolation is not
-/// enforced in v1).
+/// A token is accepted iff its signature verifies against one configured public
+/// key, its `aud` is exactly `finelog` (the cross-plane guard), and its `exp` is
+/// in the future within [`EXP_LEEWAY_SECONDS`]. Only public keys are held — never
+/// a controller's private signing key — so the store can verify a cluster's tokens
+/// without gaining the power to mint any. On success the matching cluster is
+/// returned for attribution. Every configured cluster admits equally: federation
+/// members are mutually trusted for the log plane, so a valid token may write under
+/// any namespace (per-cluster write isolation is not enforced in v1).
 #[derive(Debug)]
 pub struct JwtVerifier {
     keys: Vec<JwtKey>,
+    validation: Validation,
 }
 
 impl JwtVerifier {
-    /// Build from `(cluster, secret)` pairs. The secret is HMAC-keyed as raw
-    /// ASCII bytes to match PyJWT (`jwt.encode(payload, signing_key, "HS256")`
-    /// HMACs the signing-key STRING's bytes), so a hex `secrets.token_hex(32)`
-    /// key is passed through verbatim, never hex-decoded. Rejects an empty
-    /// cluster or a secret shorter than [`MIN_SECRET_BYTES`].
-    fn new(keys: Vec<(String, String)>) -> Result<Self, String> {
+    /// Build from `(cluster, public_keys)` pairs, each PEM an Ed25519
+    /// SubjectPublicKeyInfo (`-----BEGIN PUBLIC KEY-----`). Rejects an empty
+    /// cluster, a cluster with no public keys, or a PEM `jsonwebtoken` cannot parse
+    /// as an Ed25519 public key, so a bad config fails the server at startup rather
+    /// than silently admitting nothing.
+    fn new(keys: Vec<(String, Vec<String>)>) -> Result<Self, String> {
         let mut compiled = Vec::with_capacity(keys.len());
-        for (cluster, secret) in keys {
+        for (cluster, pems) in keys {
             if cluster.is_empty() {
                 return Err("jwt key entry has an empty cluster".to_string());
             }
-            if secret.len() < MIN_SECRET_BYTES {
+            if pems.is_empty() {
                 return Err(format!(
-                    "jwt delegation secret for cluster {cluster:?} is too short \
-                     ({} bytes; need >= {MIN_SECRET_BYTES})",
-                    secret.len()
+                    "jwt key entry for cluster {cluster:?} has no public keys"
                 ));
+            }
+            let mut decoding_keys = Vec::with_capacity(pems.len());
+            for pem in &pems {
+                let key = DecodingKey::from_ed_pem(pem.as_bytes()).map_err(|e| {
+                    format!(
+                        "jwt public key for cluster {cluster:?} is not a valid Ed25519 PEM: {e}"
+                    )
+                })?;
+                decoding_keys.push(key);
             }
             compiled.push(JwtKey {
                 cluster,
-                secret: secret.into_bytes(),
+                decoding_keys,
             });
         }
-        Ok(Self { keys: compiled })
+        Ok(Self {
+            keys: compiled,
+            validation: finelog_validation(),
+        })
     }
 
-    /// The cluster whose key verifies `token` (HS256 signature valid + unexpired
-    /// at `now_unix` within the skew leeway), or `None` if none does. Decodes the
-    /// JWS envelope once, then tries each trusted key against the same bytes.
-    fn verify(&self, token: &str, now_unix: i64) -> Option<&str> {
-        let parts = JwtParts::split(token)?;
-        if !parts.is_hs256() {
-            return None;
-        }
-        let claims = parts.claims()?;
-        if claims.exp + EXP_LEEWAY_SECONDS < now_unix {
-            return None; // expired beyond the skew allowance
-        }
+    /// The cluster whose public key verifies `token` — a valid EdDSA signature,
+    /// `aud="finelog"`, and unexpired within [`EXP_LEEWAY_SECONDS`] — or `None` if
+    /// none does. `jsonwebtoken` validates signature, algorithm (EdDSA only, so an
+    /// HS256/`alg:none` token is rejected as algorithm confusion), audience, and
+    /// expiry in one pass; we try each trusted key and return the first that admits.
+    fn verify(&self, token: &str) -> Option<&str> {
         self.keys
             .iter()
-            .find(|k| parts.signature_valid(&k.secret))
+            .find(|k| {
+                k.decoding_keys
+                    .iter()
+                    .any(|dk| decode::<JwtClaims>(token, dk, &self.validation).is_ok())
+            })
             .map(|k| k.cluster.as_str())
     }
+}
+
+/// The `jsonwebtoken` validation policy: EdDSA only, `aud` must be exactly
+/// `finelog`, `exp` and `aud` are required claims (a token missing either is
+/// rejected), and a [`EXP_LEEWAY_SECONDS`] skew allowance on `exp`.
+fn finelog_validation() -> Validation {
+    let mut validation = Validation::new(Algorithm::EdDSA);
+    validation.set_audience(&[FINELOG_AUDIENCE]);
+    validation.set_required_spec_claims(&["exp", "aud"]);
+    validation.leeway = EXP_LEEWAY_SECONDS;
+    validation
 }
 
 /// The declarative shape of one auth layer, deserialized from the
@@ -247,15 +263,17 @@ impl JwtVerifier {
 enum AuthLayerConfig {
     /// Admit a request whose transport peer is in one of these networks.
     Cidr { cidrs: Vec<String> },
-    /// Admit a request bearing a JWT that verifies against one of these
-    /// per-cluster delegation keys.
+    /// Admit a request bearing an EdDSA JWT (`aud="finelog"`) that verifies
+    /// against one of these per-cluster public keys.
     Jwt { keys: Vec<JwtKeyConfig> },
 }
 
 #[derive(Debug, Deserialize)]
 struct JwtKeyConfig {
     cluster: String,
-    secret: String,
+    /// The cluster's Ed25519 public keys in PEM (SubjectPublicKeyInfo). A list so a
+    /// key rotation can list old + new during the overlap window; both verify.
+    public_keys: Vec<String>,
 }
 
 /// One compiled entry in the ordered auth stack.
@@ -283,7 +301,10 @@ impl AuthLayer {
                 if keys.is_empty() {
                     return Err("jwt layer has no keys".to_string());
                 }
-                let pairs = keys.into_iter().map(|k| (k.cluster, k.secret)).collect();
+                let pairs = keys
+                    .into_iter()
+                    .map(|k| (k.cluster, k.public_keys))
+                    .collect();
                 Ok(AuthLayer::Jwt(JwtVerifier::new(pairs)?))
             }
         }
@@ -302,7 +323,7 @@ impl AuthLayer {
             // bearer → reject, never downgraded to a weaker layer.
             AuthLayer::Jwt(verifier) => match bearer {
                 None => Verdict::Fallthrough,
-                Some(tok) => match verifier.verify(tok, now_unix()) {
+                Some(tok) => match verifier.verify(tok) {
                     Some(cluster) => {
                         tracing::trace!(cluster, "finelog: admitted jwt-authenticated request");
                         Verdict::Allow
@@ -314,78 +335,24 @@ impl AuthLayer {
     }
 }
 
-/// The three dot-separated base64url segments of a JWT, plus the signing input.
-struct JwtParts<'a> {
-    header_b64: &'a str,
-    payload_b64: &'a str,
-    signature: Vec<u8>,
-}
-
-impl<'a> JwtParts<'a> {
-    fn split(token: &'a str) -> Option<Self> {
-        let mut it = token.split('.');
-        let header_b64 = it.next()?;
-        let payload_b64 = it.next()?;
-        let sig_b64 = it.next()?;
-        if it.next().is_some() {
-            return None; // a JWS has exactly three segments
-        }
-        let signature = URL_SAFE_NO_PAD.decode(sig_b64).ok()?;
-        Some(Self {
-            header_b64,
-            payload_b64,
-            signature,
-        })
-    }
-
-    /// Reject anything but HS256 up front (guards against `alg: none` and
-    /// algorithm-confusion tokens, even though we only ever HMAC-verify).
-    fn is_hs256(&self) -> bool {
-        let Ok(bytes) = URL_SAFE_NO_PAD.decode(self.header_b64) else {
-            return false;
-        };
-        let Ok(header) = serde_json::from_slice::<JwtHeader>(&bytes) else {
-            return false;
-        };
-        header.alg.eq_ignore_ascii_case("HS256")
-    }
-
-    fn claims(&self) -> Option<JwtClaims> {
-        let bytes = URL_SAFE_NO_PAD.decode(self.payload_b64).ok()?;
-        serde_json::from_slice(&bytes).ok()
-    }
-
-    /// Constant-time HMAC-SHA256 check of `header.payload` against `key`.
-    fn signature_valid(&self, key: &[u8]) -> bool {
-        let Ok(mut mac) = HmacSha256::new_from_slice(key) else {
-            return false;
-        };
-        mac.update(self.header_b64.as_bytes());
-        mac.update(b".");
-        mac.update(self.payload_b64.as_bytes());
-        mac.verify_slice(&self.signature).is_ok()
-    }
-}
-
-#[derive(serde::Deserialize)]
-struct JwtHeader {
-    #[serde(default)]
-    alg: String,
-}
-
-#[derive(serde::Deserialize)]
+/// The delegation-token claims finelog reads. `jsonwebtoken` validates the
+/// signature, algorithm, `aud`, and `exp`; these fields are the subset finelog
+/// deserializes for attribution and the audience check. The signer always emits
+/// `iss`/`aud`/`sub`/`exp`, so all four are required (a token missing any is
+/// rejected at deserialization).
+#[derive(Deserialize)]
 struct JwtClaims {
+    #[allow(dead_code)]
+    iss: String,
+    #[allow(dead_code)]
+    aud: String,
+    #[allow(dead_code)]
+    sub: String,
+    #[allow(dead_code)]
     exp: i64,
 }
 
-fn now_unix() -> i64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0)
-}
-
-/// An ordered stack of auth layers with a **default-deny** terminal. Always
+/// An ordered stack of auth layers with a default-deny terminal. Always
 /// installed (see `ServerConfig`); the private default is [`allow_localhost`].
 ///
 /// [`allow_localhost`]: AuthPolicy::allow_localhost
@@ -408,11 +375,11 @@ impl AuthPolicy {
     }
 
     /// Parse an ordered layer list from JSON (the `FINELOG_AUTH_POLICY` value):
-    /// `[{"type":"cidr","cidrs":[..]},{"type":"jwt","keys":[{"cluster":..,"secret":..}]}]`.
+    /// `[{"type":"cidr","cidrs":[..]},{"type":"jwt","keys":[{"cluster":..,"public_keys":[..]}]}]`.
     /// An empty list is rejected (that is a total lockout — omit the policy
     /// entirely for the allow-localhost default). A malformed entry, CIDR, or
-    /// too-short secret errors so the server fails at startup rather than silently
-    /// mis-admitting.
+    /// unparseable public-key PEM errors so the server fails at startup rather than
+    /// silently mis-admitting.
     pub fn parse(json: &str) -> Result<Self, String> {
         let configs: Vec<AuthLayerConfig> =
             serde_json::from_str(json).map_err(|e| format!("invalid auth policy JSON: {e}"))?;
@@ -628,33 +595,88 @@ mod tests {
             .with_extensions(extensions)
     }
 
-    // Delegation secrets (>= MIN_SECRET_BYTES) and the cluster names they map to.
-    const KEY_A: &str = "delegation-key-cluster-a";
-    const KEY_B: &str = "delegation-key-cluster-b";
-    // Year 2286 / 1970+100s — fixed so exp checks never flake on wall-clock.
+    // Fixed Ed25519 test keypairs (PKCS8 private + SPKI public PEM), generated once
+    // with `openssl genpkey -algorithm ed25519`. Cluster `alpha` verifies against
+    // PUB_A, `bravo` against PUB_B; PRIV_UNTRUSTED is a keypair no verifier trusts.
+    // A `mint(PRIV, ..)`-signed token is a Rust-self-signed vector; the authoritative
+    // Python(PyJWT-EdDSA)↔Rust cross-language vector lives in the shared conformance
+    // suite (rigging.auth_vectors) — a self-signed vector suffices for these units.
+    const PRIV_A: &str = "-----BEGIN PRIVATE KEY-----\nMC4CAQAwBQYDK2VwBCIEIMD3AX82bVpf0SoIIVssOXbemV9PNWzwtiJhuA61/AeG\n-----END PRIVATE KEY-----\n";
+    const PUB_A: &str = "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAqwwvfFvyRQ+8Dhh0li8h2HtCT4yP40s0pzBwwSAkK5s=\n-----END PUBLIC KEY-----\n";
+    const PRIV_B: &str = "-----BEGIN PRIVATE KEY-----\nMC4CAQAwBQYDK2VwBCIEIBmJ8qWzlhzFbTWMHs8snOv+rGewn4IUj+ZNPMKTdCtn\n-----END PRIVATE KEY-----\n";
+    const PUB_B: &str = "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEANlmOBl+nfp+EBodU+vEmzW1UBGhLsN2MC2YjSBjnBGg=\n-----END PUBLIC KEY-----\n";
+    const PRIV_UNTRUSTED: &str = "-----BEGIN PRIVATE KEY-----\nMC4CAQAwBQYDK2VwBCIEIILe2LqkmmgNBtRgBZNAy/OdPM1jlvKsAkD2/0PkHTty\n-----END PRIVATE KEY-----\n";
+
+    // Year 2286 / 1970+100s — fixed so exp checks never flake on wall-clock
+    // (jsonwebtoken validates `exp` against the real clock).
     const FUTURE: i64 = 9_999_999_999;
     const PAST: i64 = 100;
 
-    /// Mint an HS256 JWT (`{"sub":"c","exp":<exp>}`) signed with `key`.
-    fn mint(key: &str, exp: i64) -> String {
-        let header = URL_SAFE_NO_PAD.encode(br#"{"alg":"HS256","typ":"JWT"}"#);
-        let payload = URL_SAFE_NO_PAD.encode(format!(r#"{{"sub":"c","exp":{exp}}}"#).as_bytes());
-        let signing_input = format!("{header}.{payload}");
-        let mut mac = HmacSha256::new_from_slice(key.as_bytes()).unwrap();
-        mac.update(signing_input.as_bytes());
-        let sig = URL_SAFE_NO_PAD.encode(mac.finalize().into_bytes());
-        format!("{signing_input}.{sig}")
+    fn unix_now() -> i64 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64
+    }
+
+    /// Mint an EdDSA JWT (`{"iss","aud","sub","exp"}`, header `kid`) signed with the
+    /// Ed25519 private key `private_pem`, for audience `aud`.
+    fn mint(private_pem: &str, aud: &str, exp: i64) -> String {
+        #[derive(serde::Serialize)]
+        struct Claims<'a> {
+            iss: &'a str,
+            aud: &'a str,
+            sub: &'a str,
+            exp: i64,
+        }
+        let claims = Claims {
+            iss: "alpha",
+            aud,
+            sub: "relay",
+            exp,
+        };
+        let mut header = jsonwebtoken::Header::new(Algorithm::EdDSA);
+        header.kid = Some("test-kid".to_string());
+        let key = jsonwebtoken::EncodingKey::from_ed_pem(private_pem.as_bytes()).unwrap();
+        jsonwebtoken::encode(&header, &claims, &key).unwrap()
+    }
+
+    /// Mint an EdDSA JWT with the delegation-plane audience (`aud="finelog"`).
+    fn mint_finelog(private_pem: &str, exp: i64) -> String {
+        mint(private_pem, FINELOG_AUDIENCE, exp)
+    }
+
+    /// Mint an HS256 JWT that is otherwise well-formed (right `aud`, unexpired) —
+    /// used to prove the EdDSA verifier rejects an algorithm-confusion token.
+    fn mint_hs256(exp: i64) -> String {
+        #[derive(serde::Serialize)]
+        struct Claims<'a> {
+            iss: &'a str,
+            aud: &'a str,
+            sub: &'a str,
+            exp: i64,
+        }
+        let claims = Claims {
+            iss: "alpha",
+            aud: FINELOG_AUDIENCE,
+            sub: "relay",
+            exp,
+        };
+        let header = jsonwebtoken::Header::new(Algorithm::HS256);
+        let key = jsonwebtoken::EncodingKey::from_secret(b"an-hmac-secret-an-attacker-picks");
+        jsonwebtoken::encode(&header, &claims, &key).unwrap()
     }
 
     fn bearer(token: &str) -> String {
         format!("Bearer {token}")
     }
 
+    /// A verifier trusting one public key per cluster.
     fn verifier(pairs: &[(&str, &str)]) -> JwtVerifier {
         JwtVerifier::new(
             pairs
                 .iter()
-                .map(|(c, s)| (c.to_string(), s.to_string()))
+                .map(|(c, pem)| (c.to_string(), vec![pem.to_string()]))
                 .collect(),
         )
         .unwrap()
@@ -662,88 +684,114 @@ mod tests {
 
     #[test]
     fn jwt_verifier_returns_cluster_rejects_forged_and_expired() {
-        let v = verifier(&[("alpha", KEY_A), ("bravo", KEY_B)]);
-        // Signed by a trusted key, unexpired → returns the matching cluster.
-        assert_eq!(v.verify(&mint(KEY_A, FUTURE), 1_000), Some("alpha"));
-        assert_eq!(v.verify(&mint(KEY_B, FUTURE), 1_000), Some("bravo"));
+        let v = verifier(&[("alpha", PUB_A), ("bravo", PUB_B)]);
+        // Signed by a trusted key, aud=finelog, unexpired → the matching cluster.
+        assert_eq!(v.verify(&mint_finelog(PRIV_A, FUTURE)), Some("alpha"));
+        assert_eq!(v.verify(&mint_finelog(PRIV_B, FUTURE)), Some("bravo"));
         // Signed by an untrusted key → None (signature fails against all keys).
-        assert_eq!(
-            v.verify(&mint("an-untrusted-signing-key", FUTURE), 1_000),
-            None
-        );
+        assert_eq!(v.verify(&mint_finelog(PRIV_UNTRUSTED, FUTURE)), None);
         // Trusted key but long-expired → None.
-        assert_eq!(v.verify(&mint(KEY_A, PAST), 1_000), None);
+        assert_eq!(v.verify(&mint_finelog(PRIV_A, PAST)), None);
         // Malformed → None, never panics.
-        assert_eq!(v.verify("not-a-jwt", 1_000), None);
-        assert_eq!(v.verify("a.b", 1_000), None);
+        assert_eq!(v.verify("not-a-jwt"), None);
+        assert_eq!(v.verify("a.b"), None);
     }
 
     #[test]
-    fn jwt_verifier_accepts_pyjwt_minted_token() {
-        // Cross-language contract: a token minted by PyJWT (`JwtTokenManager` on the
-        // relaying controller) must verify here. Pinned so a change to either side's
-        // base64url/HMAC/claims handling is caught. Minted with:
-        //   jwt.encode({"sub":"marin","role":"finelog-relay","jti":"fixedjti0001",
-        //               "iat":1000000000,"exp":4102444800}, KEY, algorithm="HS256")
-        const KEY: &str = "delegation-key-0123456789abcdefX";
-        const TOKEN: &str = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJtYXJpbiIsInJvbGUiOiJmaW5lbG9nLXJlbGF5IiwianRpIjoiZml4ZWRqdGkwMDAxIiwiaWF0IjoxMDAwMDAwMDAwLCJleHAiOjQxMDI0NDQ4MDB9.kTVu3jf6JUbqdHe8WYswdHWzw7WBNT1NfyCxtMoiaPE";
-        let v = verifier(&[("marin", KEY)]);
-        // exp is 4102444800 (2100-01-01); verify at a 2020-era clock.
-        assert_eq!(v.verify(TOKEN, 1_600_000_000), Some("marin"));
-        // A one-byte-different key must not verify (guards against a trivial match).
-        let wrong = verifier(&[("marin", "delegation-key-0123456789abcdefY")]);
-        assert_eq!(wrong.verify(TOKEN, 1_600_000_000), None);
+    fn jwt_verifier_rejects_wrong_audience() {
+        // The cross-plane guard (RFC 8725): a token signed by the SAME trusted key,
+        // unexpired and well-formed, but minted for the control plane (aud="iris")
+        // must NOT verify at finelog. Without this a control-plane token would replay
+        // against the log plane.
+        let v = verifier(&[("alpha", PUB_A)]);
+        assert_eq!(v.verify(&mint(PRIV_A, "iris", FUTURE)), None);
+        assert_eq!(v.verify(&mint(PRIV_A, "iris-peer", FUTURE)), None);
+        // The delegation audience still verifies with the same key.
+        assert_eq!(v.verify(&mint_finelog(PRIV_A, FUTURE)), Some("alpha"));
+    }
+
+    #[test]
+    fn jwt_verifier_rejects_hs256_alg_confusion() {
+        // An HS256 token (right aud, unexpired) must be rejected: the validation is
+        // EdDSA-only, so a symmetric token is algorithm confusion, never admitted.
+        let v = verifier(&[("alpha", PUB_A)]);
+        assert_eq!(v.verify(&mint_hs256(FUTURE)), None);
+    }
+
+    #[test]
+    fn jwt_verifier_rejects_tampered_token() {
+        // A valid token with its final signature character flipped must fail the
+        // signature check.
+        let v = verifier(&[("alpha", PUB_A)]);
+        let token = mint_finelog(PRIV_A, FUTURE);
+        let mut tampered = token.clone();
+        let last = tampered.pop().unwrap();
+        tampered.push(if last == 'A' { 'B' } else { 'A' });
+        assert_ne!(tampered, token);
+        assert_eq!(v.verify(&tampered), None);
+    }
+
+    #[test]
+    fn jwt_verifier_rotation_accepts_either_key() {
+        // A cluster mid-rotation lists both its old and new public keys; a token
+        // signed by either private half verifies and attributes to that cluster.
+        let v = JwtVerifier::new(vec![(
+            "alpha".to_string(),
+            vec![PUB_A.to_string(), PUB_B.to_string()],
+        )])
+        .unwrap();
+        assert_eq!(v.verify(&mint_finelog(PRIV_A, FUTURE)), Some("alpha"));
+        assert_eq!(v.verify(&mint_finelog(PRIV_B, FUTURE)), Some("alpha"));
+        // A key outside the rotation set still fails.
+        assert_eq!(v.verify(&mint_finelog(PRIV_UNTRUSTED, FUTURE)), None);
     }
 
     #[test]
     fn jwt_verifier_exp_leeway_tolerates_small_skew() {
-        let v = verifier(&[("alpha", KEY_A)]);
-        let now = 1_000_000;
+        let v = verifier(&[("alpha", PUB_A)]);
+        let now = unix_now();
+        let leeway = EXP_LEEWAY_SECONDS as i64;
         // Expired by less than the leeway → still accepted (clock skew).
         assert_eq!(
-            v.verify(&mint(KEY_A, now - (EXP_LEEWAY_SECONDS - 5)), now),
+            v.verify(&mint_finelog(PRIV_A, now - (leeway - 5))),
             Some("alpha")
         );
         // Expired well beyond the leeway → rejected.
-        assert_eq!(
-            v.verify(&mint(KEY_A, now - (EXP_LEEWAY_SECONDS + 60)), now),
-            None
-        );
+        assert_eq!(v.verify(&mint_finelog(PRIV_A, now - (leeway + 60))), None);
     }
 
     #[test]
-    fn jwt_verifier_new_rejects_short_secret_and_empty_cluster() {
-        assert!(JwtVerifier::new(vec![("alpha".into(), "short".into())]).is_err());
-        assert!(JwtVerifier::new(vec![(String::new(), KEY_A.into())]).is_err());
-        assert!(JwtVerifier::new(vec![("alpha".into(), KEY_A.into())]).is_ok());
+    fn jwt_verifier_new_rejects_bad_pem_and_empty_fields() {
+        // A PEM jsonwebtoken cannot parse as an Ed25519 public key fails the build.
+        assert!(JwtVerifier::new(vec![("alpha".into(), vec!["not-a-pem".into()])]).is_err());
+        // An empty cluster fails the build.
+        assert!(JwtVerifier::new(vec![(String::new(), vec![PUB_A.into()])]).is_err());
+        // A cluster with no public keys fails the build.
+        assert!(JwtVerifier::new(vec![("alpha".into(), vec![])]).is_err());
+        assert!(JwtVerifier::new(vec![("alpha".into(), vec![PUB_A.into()])]).is_ok());
     }
 
-    #[test]
-    fn jwt_verifier_rejects_alg_none_forgery() {
-        // A token whose header claims `alg: none` (unsigned) must be rejected even
-        // with an empty signature segment.
-        let header = URL_SAFE_NO_PAD.encode(br#"{"alg":"none","typ":"JWT"}"#);
-        let payload = URL_SAFE_NO_PAD.encode(format!(r#"{{"exp":{FUTURE}}}"#).as_bytes());
-        let forged = format!("{header}.{payload}.");
-        assert_eq!(verifier(&[("alpha", KEY_A)]).verify(&forged, 1_000), None);
+    fn jwt_policy_json(cluster: &str, pem: &str) -> String {
+        serde_json::json!([
+            {"type": "jwt", "keys": [{"cluster": cluster, "public_keys": [pem]}]}
+        ])
+        .to_string()
     }
 
-    fn jwt_policy_json(cluster: &str, secret: &str) -> String {
-        format!(r#"[{{"type":"jwt","keys":[{{"cluster":"{cluster}","secret":"{secret}"}}]}}]"#)
-    }
-
-    fn stacked_policy_json(cidr: &str, cluster: &str, secret: &str) -> String {
-        format!(
-            r#"[{{"type":"cidr","cidrs":["{cidr}"]}},{{"type":"jwt","keys":[{{"cluster":"{cluster}","secret":"{secret}"}}]}}]"#
-        )
+    fn stacked_policy_json(cidr: &str, cluster: &str, pem: &str) -> String {
+        serde_json::json!([
+            {"type": "cidr", "cidrs": [cidr]},
+            {"type": "jwt", "keys": [{"cluster": cluster, "public_keys": [pem]}]}
+        ])
+        .to_string()
     }
 
     fn token_policy() -> AuthPolicy {
-        AuthPolicy::parse(&jwt_policy_json("alpha", KEY_A)).unwrap()
+        AuthPolicy::parse(&jwt_policy_json("alpha", PUB_A)).unwrap()
     }
 
     fn stacked_policy() -> AuthPolicy {
-        AuthPolicy::parse(&stacked_policy_json("10.0.0.0/8", "alpha", KEY_A)).unwrap()
+        AuthPolicy::parse(&stacked_policy_json("10.0.0.0/8", "alpha", PUB_A)).unwrap()
     }
 
     #[test]
@@ -754,8 +802,8 @@ mod tests {
         assert!(AuthPolicy::parse(r#"[{"type":"cidr","cidrs":["nope/8"]}]"#).is_err());
         assert!(AuthPolicy::parse(r#"[{"type":"cidr","cidrs":[]}]"#).is_err());
         assert!(AuthPolicy::parse(r#"[{"type":"jwt","keys":[]}]"#).is_err());
-        // A too-short delegation secret fails the whole policy at parse time.
-        assert!(AuthPolicy::parse(&jwt_policy_json("alpha", "short")).is_err());
+        // An unparseable public-key PEM fails the whole policy at parse time.
+        assert!(AuthPolicy::parse(&jwt_policy_json("alpha", "not-a-pem")).is_err());
     }
 
     #[test]
@@ -778,12 +826,12 @@ mod tests {
     fn jwt_layer_admits_valid_denies_others() {
         let p = token_policy();
         assert!(p
-            .authorize(&ctx(Some(&bearer(&mint(KEY_A, FUTURE))), None))
+            .authorize(&ctx(Some(&bearer(&mint_finelog(PRIV_A, FUTURE))), None))
             .is_ok());
         // Present but forged → rejected (not downgraded).
         assert!(p
             .authorize(&ctx(
-                Some(&bearer(&mint("an-untrusted-signing-key", FUTURE))),
+                Some(&bearer(&mint_finelog(PRIV_UNTRUSTED, FUTURE))),
                 None
             ))
             .is_err());
@@ -803,18 +851,21 @@ mod tests {
         assert!(p.authorize(&ctx(None, Some(trusted))).is_ok());
         assert!(p
             .authorize(&ctx(
-                Some(&bearer(&mint("an-untrusted-signing-key", FUTURE))),
+                Some(&bearer(&mint_finelog(PRIV_UNTRUSTED, FUTURE))),
                 Some(trusted)
             ))
             .is_ok());
         // Out-of-VPC client must present a valid JWT.
         assert!(p
-            .authorize(&ctx(Some(&bearer(&mint(KEY_A, FUTURE))), Some(untrusted)))
+            .authorize(&ctx(
+                Some(&bearer(&mint_finelog(PRIV_A, FUTURE))),
+                Some(untrusted)
+            ))
             .is_ok());
         assert!(p.authorize(&ctx(None, Some(untrusted))).is_err());
         assert!(p
             .authorize(&ctx(
-                Some(&bearer(&mint("an-untrusted-signing-key", FUTURE))),
+                Some(&bearer(&mint_finelog(PRIV_UNTRUSTED, FUTURE))),
                 Some(untrusted)
             ))
             .is_err());
@@ -848,7 +899,7 @@ mod tests {
     async fn interceptor_admits_valid_token() {
         let (ran, result) = run_through(
             token_policy(),
-            ctx(Some(&bearer(&mint(KEY_A, FUTURE))), None),
+            ctx(Some(&bearer(&mint_finelog(PRIV_A, FUTURE))), None),
         )
         .await;
         assert!(result.is_ok());
@@ -863,5 +914,88 @@ mod tests {
             connectrpc::ErrorCode::Unauthenticated
         );
         assert!(!ran, "handler never ran for an unauthenticated request");
+    }
+
+    /// Translate one shared-vector layer into finelog's policy-JSON form. A `cidr`
+    /// layer already matches finelog's shape (`{"type":"cidr","cidrs":[..]}`) and
+    /// passes through unchanged; a `jwt` layer gains the fixed test public key
+    /// [`PUB_A`] under a single "vector" cluster (the vector file's jwt verifier is
+    /// mocked, so any trusted key works). An unknown type also passes through
+    /// unchanged so finelog's own parser is the one that rejects it.
+    fn translate_vector_layer(layer: &serde_json::Value) -> serde_json::Value {
+        match layer.get("type").and_then(|v| v.as_str()) {
+            Some("jwt") => serde_json::json!({
+                "type": "jwt",
+                "keys": [{"cluster": "vector", "public_keys": [PUB_A]}],
+            }),
+            _ => layer.clone(),
+        }
+    }
+
+    /// Translate a whole shared-vector `stack` into finelog's `AuthPolicy::parse`
+    /// JSON string.
+    fn translate_vector_stack(stack: &[serde_json::Value]) -> String {
+        let layers: Vec<serde_json::Value> = stack.iter().map(translate_vector_layer).collect();
+        serde_json::Value::Array(layers).to_string()
+    }
+
+    /// Run the SHARED cross-language auth conformance vectors through finelog's
+    /// engine and assert every allow/deny verdict matches.
+    ///
+    /// The vector file (`lib/rigging/src/rigging/auth_vectors.json`) is the single
+    /// source of truth consumed by BOTH engines; the Python counterpart is
+    /// `lib/rigging/tests/test_auth_vectors.py`. We load the file in place from its
+    /// shared location (never copy it) so the two engines cannot drift.
+    ///
+    /// The jwt verifier is mocked per the file's `note`: `token == "valid"` maps to
+    /// a real bearer signed by the trusted [`PRIV_A`] (verifies against [`PUB_A`],
+    /// `aud="finelog"`); `"invalid"` maps to a bearer signed by [`PRIV_UNTRUSTED`]
+    /// (present but unverifiable ⇒ Reject); `null` maps to no bearer. Only the
+    /// verdict is checked — the Python-only `expect.matched` field does not apply here
+    /// (finelog's `admits` returns a bare bool).
+    #[test]
+    fn conformance_vectors_match_rigging() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../rigging/src/rigging/auth_vectors.json");
+        let raw = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("read shared auth vectors at {}: {e}", path.display()));
+        let doc: serde_json::Value = serde_json::from_str(&raw).unwrap();
+
+        for vector in doc["vectors"].as_array().unwrap() {
+            let name = vector["name"].as_str().unwrap();
+            let stack = vector["stack"].as_array().unwrap();
+            let policy = AuthPolicy::parse(&translate_vector_stack(stack))
+                .unwrap_or_else(|e| panic!("vector {name}: policy parse failed: {e}"));
+
+            let request = &vector["request"];
+            // Map the mocked token to a real finelog bearer (raw token, no `Bearer `
+            // prefix, since `admits` takes the already-stripped credential).
+            let bearer: Option<String> = match request["token"].as_str() {
+                Some("valid") => Some(mint_finelog(PRIV_A, FUTURE)),
+                Some("invalid") => Some(mint_finelog(PRIV_UNTRUSTED, FUTURE)),
+                Some(other) => panic!("vector {name}: unexpected token {other:?}"),
+                None => None,
+            };
+            let peer: SocketAddr = request["peer"].as_str().unwrap().parse().unwrap();
+
+            let admitted = policy.admits(bearer.as_deref(), Some(peer.ip()));
+            let expected = vector["expect"]["verdict"].as_str().unwrap() == "allow";
+            assert_eq!(
+                admitted,
+                expected,
+                "vector {name}: {}",
+                vector["description"].as_str().unwrap_or("")
+            );
+        }
+
+        for case in doc["parse_error_stacks"].as_array().unwrap() {
+            let name = case["name"].as_str().unwrap();
+            let stack = case["stack"].as_array().unwrap();
+            let policy_json = translate_vector_stack(stack);
+            assert!(
+                AuthPolicy::parse(&policy_json).is_err(),
+                "parse_error case {name}: expected AuthPolicy::parse to reject {policy_json}"
+            );
+        }
     }
 }

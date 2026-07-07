@@ -4,10 +4,10 @@
 """Tests for migration ``0035_federation_unify``.
 
 Builds a pre-unification DB (the 0034 ``federated_jobs`` shape, SENT-only, with
-``remote_job_id``/``handoff_state`` ``NOT NULL`` and no ``direction``), seeds an
-outbound handoff row, and asserts the migration: rebuilds ``federated_jobs`` into
-the unified shape (adds ``direction``, relaxes the SENT-only columns to nullable,
-tags existing rows ``SENT``), creates the ``federation_changelog`` table with its
+``handoff_state`` ``NOT NULL`` and no ``direction``), seeds an outbound handoff
+row, and asserts the migration: rebuilds ``federated_jobs`` into the unified shape
+(adds ``direction``, relaxes the SENT-only ``handoff_state`` to nullable, tags
+existing rows ``SENT``), creates the ``federation_changelog`` table with its
 ``requester_id`` index, and is idempotent on re-run.
 """
 
@@ -18,13 +18,13 @@ from pathlib import Path
 _MIGRATION = Path(__file__).parents[3] / "src/iris/cluster/controller/migrations/0035_federation_unify.py"
 
 # The pre-0035 (0034-era) federation schema: federated_jobs is SENT-only with the
-# handoff columns NOT NULL, and there is no changelog table yet.
+# handoff column NOT NULL, and there is no changelog table yet. Job ids are
+# cluster-invariant, so the peer runs the same id and there is no separate remote id.
 _OLD_SCHEMA = """
 CREATE TABLE jobs (job_id VARCHAR PRIMARY KEY, state INTEGER NOT NULL);
 CREATE TABLE federated_jobs (
     job_id VARCHAR NOT NULL PRIMARY KEY REFERENCES jobs(job_id) ON DELETE CASCADE,
     peer_id VARCHAR NOT NULL,
-    remote_job_id VARCHAR NOT NULL,
     owner_principal VARCHAR NOT NULL,
     handoff_state INTEGER NOT NULL,
     spend_snapshot_micros INTEGER NOT NULL DEFAULT 0,
@@ -46,9 +46,8 @@ def _seed(conn: sqlite3.Connection) -> None:
     conn.executescript(_OLD_SCHEMA)
     conn.execute("INSERT INTO jobs (job_id, state) VALUES ('/alice/train', 1)")
     conn.execute(
-        "INSERT INTO federated_jobs "
-        "(job_id, peer_id, remote_job_id, owner_principal, handoff_state) "
-        "VALUES ('/alice/train', 'cw', '/alice/sf~train', 'alice', 2)"
+        "INSERT INTO federated_jobs (job_id, peer_id, owner_principal, handoff_state) "
+        "VALUES ('/alice/train', 'cw', 'alice', 2)"
     )
     conn.commit()
 
@@ -73,19 +72,16 @@ def test_migration_0035_unifies_federated_jobs_and_adds_changelog():
     assert "direction" in _columns(conn, "federated_jobs")
     assert "idx_federated_jobs_direction_peer" in _indexes(conn)
     row = conn.execute(
-        "SELECT direction, peer_id, remote_job_id, handoff_state FROM federated_jobs WHERE job_id='/alice/train'"
+        "SELECT direction, peer_id, handoff_state FROM federated_jobs WHERE job_id='/alice/train'"
     ).fetchone()
-    assert row == (0, "cw", "/alice/sf~train", 2)
+    assert row == (0, "cw", 2)
 
-    # The SENT-only columns are now nullable — a RECEIVED (1) row carries neither a
-    # remote_job_id nor a handoff_state.
+    # The SENT-only handoff_state is now nullable — a RECEIVED (1) row carries none.
     conn.execute("INSERT INTO jobs (job_id, state) VALUES ('/bob/eval', 1)")
     conn.execute("INSERT INTO federated_jobs (job_id, direction, peer_id) VALUES ('/bob/eval', 1, 'requester-cluster')")
     conn.commit()
-    received = conn.execute(
-        "SELECT remote_job_id, handoff_state FROM federated_jobs WHERE job_id='/bob/eval'"
-    ).fetchone()
-    assert received == (None, None)
+    received = conn.execute("SELECT handoff_state FROM federated_jobs WHERE job_id='/bob/eval'").fetchone()
+    assert received == (None,)
 
     # The changelog table exists, keyed for per-requester paging.
     assert "requester_id" in _columns(conn, "federation_changelog")

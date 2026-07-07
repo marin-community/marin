@@ -18,12 +18,12 @@ from dataclasses import dataclass, field
 
 from rigging.timing import Duration
 
-from iris.cluster.backends.types import CommandResult
 from iris.cluster.platforms.remote_exec import (
     RemoteExec,
     run_streaming_with_retry,
     wait_for_connection,
 )
+from iris.cluster.platforms.types import CommandResult
 
 logger = logging.getLogger(__name__)
 

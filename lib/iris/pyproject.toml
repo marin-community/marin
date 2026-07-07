@@ -27,7 +27,8 @@ dependencies = [
     "httpx>=0.28.1",
     "humanfriendly>=10.0",
     "pydantic>=2.0",
-    "PyJWT>=2.12.0",
+    # [crypto] pulls in `cryptography`, which the EdDSA service tokens need.
+    "PyJWT[crypto]>=2.12.0",
     "pyyaml>=6.0",
     "sqlalchemy>=2.0",
     "starlette>=0.50.0",
@@ -40,6 +41,11 @@ dependencies = [
 [project.optional-dependencies]
 controller = [
     "kubernetes>=31.0.0,<36",
+    # The controller resolves `gcp-secret://` config references (e.g. the auth
+    # signing key) at startup via rigging.secrets, which imports the Secret
+    # Manager client. Only the controller runs resolve_config_secrets, so this
+    # stays off the worker/CLI import path.
+    "marin-rigging[secrets]",
 ]
 worker = []
 # Interactive `iris login` against an IAP-fronted cluster (desktop OAuth flow).
@@ -47,7 +53,7 @@ worker = []
 iap = ["marin-rigging[iap]"]
 
 [project.scripts]
-iris = "iris.cli:iris"
+iris = "iris.cli:main"
 iris-run = "iris.cli.run:run"
 
 [dependency-groups]

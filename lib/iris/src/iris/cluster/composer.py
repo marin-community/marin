@@ -21,7 +21,6 @@ from rigging.timing import Duration
 
 from iris.cluster.backends.k8s.tasks import _CW_DEFAULT_TOPOLOGIES, _DEFAULT_PRIORITY_CLASS_NAMES, K8sTaskProvider
 from iris.cluster.backends.rpc.backend import RpcTaskBackend, RpcWorkerStubFactory
-from iris.cluster.backends.types import local_queue_name
 from iris.cluster.config import (
     BackendConfig,
     IrisClusterConfig,
@@ -40,6 +39,7 @@ from iris.cluster.controller.transition_reader import DbTransitionReader
 from iris.cluster.inject_env import TASK_ENV_SECRET_NAME, projects_task_env_secret
 from iris.cluster.platforms.factory import ProviderBundle, create_provider_bundle
 from iris.cluster.platforms.k8s.service import CloudK8sService
+from iris.cluster.platforms.types import local_queue_name
 from iris.rpc import job_pb2
 
 logger = logging.getLogger(__name__)

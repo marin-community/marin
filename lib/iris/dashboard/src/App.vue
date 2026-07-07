@@ -11,7 +11,12 @@ import { useBackends } from '@/composables/useBackends'
 const route = useRoute()
 const router = useRouter()
 const { isDark, toggle: toggleDark } = useDarkMode()
-const { capabilities, multiBackend, fetchConfig } = useBackends()
+const { capabilities, backends, peers, fetchConfig, ensurePeers } = useBackends()
+
+// Show the scope selector once there is more than one execution target to pick
+// between — counting backends and federation peers, so a 1-backend + N-peer
+// deployment still gets the selector.
+const showScope = computed(() => backends.value.length + peers.value.length > 1)
 
 const authEnabled = ref(false)
 const legendOpen = ref(false)
@@ -76,14 +81,22 @@ onMounted(async () => {
   try {
     // fetchConfig fetches /auth/config once, populates capabilities + backends,
     // and returns auth-related fields for login redirection.
-    const { authEnabled: ae, hasSession, authOptional } = await fetchConfig()
+    const { authEnabled: ae, authenticated, authOptional } = await fetchConfig()
     authEnabled.value = ae
-    if (ae && !authOptional && !hasSession && route.path !== '/login') {
+    // Only send the browser to the login page when auth is required and this
+    // request is not already authenticated. Behind IAP the caller is
+    // authenticated at the edge (no session cookie), so `authenticated` is true
+    // and the bearer-token login page is skipped.
+    if (ae && !authOptional && !authenticated && route.path !== '/login') {
       router.push('/login')
     }
   } catch {
     // Auth config endpoint unavailable — assume no auth
   }
+
+  // Load the peer roster so the scope selector can count peers; inert (empty)
+  // on a single-cluster deployment.
+  void ensurePeers()
 })
 
 onUnmounted(() => {
@@ -134,8 +147,8 @@ onUnmounted(() => {
       :tabs="TABS"
       :active-tab="activeTab"
     >
-      <!-- BackendScope selector: visible only when controller has >1 backend -->
-      <BackendScope v-if="multiBackend" />
+      <!-- Scope selector: visible with >1 execution target (backends + peers) -->
+      <BackendScope v-if="showScope" />
     </TabNav>
     <main class="max-w-7xl mx-auto px-6 py-6">
       <router-view />

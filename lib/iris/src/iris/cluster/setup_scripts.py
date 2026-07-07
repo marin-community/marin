@@ -134,15 +134,18 @@ def wants_gpu_extra(extras: Sequence[str]) -> bool:
 _LIBDEVICE_FILE = "libdevice.10.bc"
 # XLA's built-in default --xla_gpu_cuda_data_dir, resolved relative to the workdir.
 _XLA_CUDA_DATA_DIR = "cuda_sdk_lib"
+CUDNN_CU13_PACKAGE = "nvidia-cudnn-cu13"
 
 
 def cuda_toolchain_setup_script() -> str:
     """Return a setup script that exposes the venv's CUDA toolchain to JAX/Pallas.
 
-    Appended to a GPU job's setup so Mosaic GPU kernels compile: it puts the
-    ``jax[cuda13]`` toolchain (``ptxas``/``nvlink``) on ``PATH`` by symlinking it
-    into the venv's ``bin``, and stages ``libdevice.10.bc`` where XLA looks, with no
-    run-phase changes. A no-op when the venv carries no CUDA toolchain.
+    Appended to a GPU job's setup so Mosaic GPU kernels compile and JAX sees the
+    CUDA 13 cuDNN wheel after mixed CUDA package installs. It puts the
+    ``jax[cuda13]`` toolchain (``ptxas``/``nvlink``) on ``PATH``, stages
+    ``libdevice.10.bc`` where XLA looks, and restores CUDA 13 cuDNN library
+    precedence when that package is installed. A no-op when the venv carries no
+    CUDA toolchain.
     """
     return rf"""set -e
 cuda_bin=""
@@ -157,6 +160,29 @@ if [ -f "$_libdevice" ]; then
   mkdir -p "$IRIS_WORKDIR/{_XLA_CUDA_DATA_DIR}/nvvm/libdevice"
   cp -f "$_libdevice" "$IRIS_WORKDIR/{_XLA_CUDA_DATA_DIR}/nvvm/libdevice/{_LIBDEVICE_FILE}"
   cp -f "$_libdevice" "$IRIS_WORKDIR/{_LIBDEVICE_FILE}"
+fi
+_cudnn_cu13_package="{CUDNN_CU13_PACKAGE}"
+_cudnn_cu13_version=""
+if [ -x "$IRIS_VENV/bin/python" ]; then
+  _cudnn_cu13_version="$(
+    "$IRIS_VENV/bin/python" - "$_cudnn_cu13_package" <<'PY'
+import importlib.metadata as md
+import sys
+
+try:
+    print(md.version(sys.argv[1]))
+except md.PackageNotFoundError:
+    pass
+PY
+  )"
+fi
+if [ -n "$_cudnn_cu13_version" ]; then
+  echo 'restoring CUDA 13 cuDNN library precedence'
+  uv pip install --python "$IRIS_VENV/bin/python" \
+    --offline \
+    --link-mode symlink \
+    --reinstall-package "$_cudnn_cu13_package" \
+    "$_cudnn_cu13_package==$_cudnn_cu13_version"
 fi
 """
 

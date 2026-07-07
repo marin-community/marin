@@ -330,15 +330,18 @@ def test_poll_for_coordinator_propagates_real_connect_errors() -> None:
 
 @contextmanager
 def _isolated_jax_cache_config():
-    """Restore ``jax.config`` and a clean ``JAX_COMPILATION_CACHE_DIR`` around a test."""
-    original = jax.config.jax_compilation_cache_dir
+    """Restore ``jax.config`` and cache-related env vars around a test."""
+    original_cache_dir = jax.config.jax_compilation_cache_dir
+    original_enable_xla_caches = jax.config.jax_persistent_cache_enable_xla_caches
     jax.config.update("jax_compilation_cache_dir", None)
     try:
         with patch.dict(os.environ, {}, clear=False):
             os.environ.pop("JAX_COMPILATION_CACHE_DIR", None)
+            os.environ.pop("JAX_PERSISTENT_CACHE_ENABLE_XLA_CACHES", None)
             yield
     finally:
-        jax.config.update("jax_compilation_cache_dir", original)
+        jax.config.update("jax_compilation_cache_dir", original_cache_dir)
+        jax.config.update("jax_persistent_cache_enable_xla_caches", original_enable_xla_caches)
 
 
 def test_configure_compilation_cache_derives_from_marin_prefix() -> None:
@@ -369,6 +372,53 @@ def test_configure_compilation_cache_keeps_explicit_dir(source: str) -> None:
         else:
             assert jax.config.jax_compilation_cache_dir == "gs://explicit/cache"
             assert "JAX_COMPILATION_CACHE_DIR" not in os.environ
+
+
+@pytest.mark.parametrize("scheme", ["gs://", "s3://"])
+def test_configure_compilation_cache_clears_xla_autotune_compile_option(scheme: str) -> None:
+    """A remote cache dir clears the XLA compile option that would otherwise crash.
+
+    Without the guard, JAX hands XLA's C++ debug_options a raw
+    ``xla_gpu_per_fusion_autotune_cache_dir`` built from the remote URL, which
+    XLA's `tsl::Env` cannot open (UNIMPLEMENTED: file system scheme not
+    implemented). This drives JAX's own compile-options builder to confirm the
+    field is empty after ``configure_jax_compilation_cache`` runs.
+    """
+    from jax._src import compiler as jax_compiler  # noqa: PLC0415
+
+    with _isolated_jax_cache_config():
+        with patch("iris.runtime.jax_init.marin_prefix", return_value=f"{scheme}marin-eu/marin/"):
+            configure_jax_compilation_cache()
+
+        options = jax_compiler.get_compile_options(num_replicas=1, num_partitions=1)
+        assert options.executable_build_options.debug_options.xla_gpu_per_fusion_autotune_cache_dir == ""
+
+
+def test_configure_compilation_cache_keeps_xla_autotune_for_local_dir() -> None:
+    """A local cache dir leaves XLA's autotune sub-cache derivation untouched."""
+    from jax._src import compiler as jax_compiler  # noqa: PLC0415
+
+    with _isolated_jax_cache_config():
+        with patch("iris.runtime.jax_init.marin_prefix", return_value="/mnt/local/marin/"):
+            configure_jax_compilation_cache()
+
+        options = jax_compiler.get_compile_options(num_replicas=1, num_partitions=1)
+        assert options.executable_build_options.debug_options.xla_gpu_per_fusion_autotune_cache_dir != ""
+
+
+def test_configure_compilation_cache_keeps_explicit_xla_autotune_setting() -> None:
+    """An explicit JAX_PERSISTENT_CACHE_ENABLE_XLA_CACHES env var is not overridden."""
+    with _isolated_jax_cache_config():
+        original = jax.config.jax_persistent_cache_enable_xla_caches
+        os.environ["JAX_PERSISTENT_CACHE_ENABLE_XLA_CACHES"] = "all"
+        with patch("iris.runtime.jax_init.marin_prefix", return_value="s3://marin-eu/marin/"):
+            configure_jax_compilation_cache()
+
+        # We never call jax.config.update for this setting when the env var is
+        # already present, so jax.config keeps whatever it already had; the env
+        # var itself (which JAX reads directly) is left as the caller set it.
+        assert jax.config.jax_persistent_cache_enable_xla_caches == original
+        assert os.environ["JAX_PERSISTENT_CACHE_ENABLE_XLA_CACHES"] == "all"
 
 
 def test_poll_for_coordinator_default_interval() -> None:

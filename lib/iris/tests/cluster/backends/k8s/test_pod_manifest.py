@@ -156,6 +156,16 @@ def test_build_pod_manifest_no_env_secret_omits_envfrom():
     assert "envFrom" not in manifest["spec"]["containers"][0]
 
 
+def test_build_pod_manifest_task_container_falls_back_to_logs_on_error():
+    """The task container captures its tail log output into terminated.message
+    on a non-zero exit, instead of leaving operators with a bare "Error" reason
+    and no clue what actually happened."""
+    req = make_run_req("/test-job/0")
+    manifest = _build_pod_manifest(req, pod_config())
+    container = manifest["spec"]["containers"][0]
+    assert container["terminationMessagePolicy"] == "FallbackToLogsOnError"
+
+
 def test_build_pod_manifest_gpu():
     req = make_run_req("/test-job/0")
     req.resources.device.gpu.CopyFrom(job_pb2.GpuDevice(variant="A100", count=4))
@@ -253,6 +263,24 @@ def test_task_update_application_error_is_failed():
     update = _task_update_from_pod(entry, pod)
     assert update.new_state == job_pb2.TASK_STATE_FAILED
     assert update.exit_code == 1
+
+
+def test_task_update_error_prefers_termination_message_over_bare_reason():
+    """With terminationMessagePolicy: FallbackToLogsOnError, the kubelet fills in
+    ``message`` with the container's tail log output on a non-zero exit. This is
+    the real payoff of that manifest field: _extract_error already prefers a
+    non-empty message over the generic "Error" reason, so the actual crash
+    (traceback, fatal-error banner, ...) reaches the task/job error instead."""
+    entry = RunningTaskEntry(task_id=JobName.from_wire("/job/0"), attempt_id=0)
+    pod = make_pod(
+        "iris-job-0-0",
+        "Failed",
+        exit_code=1,
+        reason="Error",
+        message="RuntimeError: CUDA error: an illegal memory access was encountered",
+    )
+    update = _task_update_from_pod(entry, pod)
+    assert update.error == "RuntimeError: CUDA error: an illegal memory access was encountered"
 
 
 def test_is_infrastructure_failure_with_pod_level_reason():
@@ -664,7 +692,7 @@ def test_iris_env_vars_injected():
     manifest = _build_pod_manifest(req, pod_config(controller_address="http://ctrl:8080"))
 
     env_by_name = {e["name"]: e for e in manifest["spec"]["containers"][0]["env"]}
-    assert env_by_name["IRIS_TASK_ID"]["value"] == "/test-job/0"
+    assert env_by_name["IRIS_TASK_ID"]["value"] == "/test-job/0:0"
     assert env_by_name["IRIS_NUM_TASKS"]["value"] == "4"
     assert env_by_name["IRIS_BUNDLE_ID"]["value"] == "bundle-abc"
     assert env_by_name["IRIS_CONTROLLER_ADDRESS"]["value"] == "http://ctrl:8080"
@@ -706,7 +734,7 @@ def test_iris_env_overrides_user_env():
     manifest = _build_pod_manifest(req, pod_config())
 
     env_by_name = {e["name"]: e.get("value") for e in manifest["spec"]["containers"][0]["env"]}
-    assert env_by_name["IRIS_TASK_ID"] == "/test-job/0"
+    assert env_by_name["IRIS_TASK_ID"] == "/test-job/0:0"
 
 
 def test_task_script_runs_each_setup_command_before_exec():
@@ -754,11 +782,11 @@ def test_build_common_iris_env_includes_attempt_suffix_on_retry():
     assert env["IRIS_TASK_ID"] == "/test-job/0:3"
 
 
-def test_build_common_iris_env_no_attempt_suffix_for_first_attempt():
-    """IRIS_TASK_ID has no suffix when attempt_id is 0."""
+def test_build_common_iris_env_includes_attempt_suffix_for_first_attempt():
+    """IRIS_TASK_ID carries the :0 suffix on the first attempt, matching retries."""
     req = make_run_req("/test-job/0", attempt_id=0)
     env = common_env_from_req(req, controller_address=None)
-    assert env["IRIS_TASK_ID"] == "/test-job/0"
+    assert env["IRIS_TASK_ID"] == "/test-job/0:0"
 
 
 # ---------------------------------------------------------------------------

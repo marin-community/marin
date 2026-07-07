@@ -42,8 +42,6 @@ class TaskRowDelta:
     exit_code: int | None = None
     started_at: Timestamp | None = None
     finished_at: Timestamp | None = None
-    failure_count: int | None = None
-    preemption_count: int | None = None
     container_id: str | None = None
 
 

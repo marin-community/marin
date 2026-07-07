@@ -55,7 +55,7 @@ struct Args {
 
     /// Authenticated-ingress policy as a JSON list of layers (env
     /// `FINELOG_AUTH_POLICY`), e.g.
-    /// `[{"type":"cidr","cidrs":["10.0.0.0/8","127.0.0.0/8"]},{"type":"jwt","keys":[{"cluster":"marin","secret":"<hex>"}]}]`.
+    /// `[{"type":"cidr","cidrs":["10.0.0.0/8","127.0.0.0/8"]},{"type":"jwt","keys":[{"cluster":"marin","public_keys":["<ed25519-pem>"]}]}]`.
     /// List order is evaluation order (first Allow admits, first Reject denies,
     /// none → deny). Empty (the default) installs the private allow-localhost
     /// policy: reachable from loopback for local debugging, never open to the

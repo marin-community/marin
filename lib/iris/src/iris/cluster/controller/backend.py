@@ -38,8 +38,6 @@ from iris.cluster.controller.autoscaler.models import DemandEntry
 from iris.cluster.controller.autoscaler.state import AutoscalerState
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.ops.task import Assignment
-from iris.cluster.controller.projections.endpoints import EndpointsProjection
-from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
 from iris.cluster.controller.reads import ControlSnapshot
 from iris.cluster.controller.reconcile import ControllerEffects
 from iris.cluster.controller.reconcile.task import TerminalDecision, TerminalKind
@@ -49,7 +47,6 @@ from iris.cluster.controller.reconcile.worker import (
     WorkerReconcilePlan,
     build_reconcile_plans,
 )
-from iris.cluster.controller.run_template import RunTemplateCache
 from iris.cluster.controller.scheduling.decision import apply_preemptions, compute_diagnostics
 from iris.cluster.controller.scheduling.policy import (
     GatedCandidates,
@@ -444,10 +441,6 @@ class BackendRuntime:
     autoscaler groups it authors, so the controller never has to tag them afterward."""
     db: ControllerDB
     """The controller database."""
-    endpoints: EndpointsProjection
-    """The worker-endpoint projection."""
-    run_template_cache: RunTemplateCache
-    """Per-job ``RunTaskRequest`` template cache."""
     owns_scale_group: Callable[[str], bool]
     """Whether a scale group belongs to this backend (the default backend also claims
     scale groups mapped to no backend)."""
@@ -487,14 +480,6 @@ class TaskBackend(Protocol):
         workers (k8s). The backend folds and reaps through it; the controller reaches
         worker liveness through it (routed by scale group) for its Fleet/exec/capacity/
         prune readers and to seed/register a worker into its owning backend."""
-        ...
-
-    @property
-    def worker_attrs(self) -> WorkerAttrsProjection | None:
-        """The worker-attributes projection this backend constructs and owns, holding
-        only the workers in its scale groups, or None for a backend that tracks no
-        Iris workers (k8s). The controller reaches it (routed by scale group) to
-        register a worker's attributes into its owning backend."""
         ...
 
     allowed_users: frozenset[str]

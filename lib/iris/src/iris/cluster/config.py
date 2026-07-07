@@ -18,20 +18,23 @@ these are normalized at the parse boundary.
 from __future__ import annotations
 
 import copy
+import ipaddress
 import logging
 import os
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from pathlib import Path
 from typing import Annotated, Any, ClassVar, Literal
 
 import fsspec
 import yaml
-from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, PlainSerializer, model_validator
+from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, PlainSerializer, field_validator, model_validator
+from rigging.secrets import as_secret_spec, is_secret_reference, resolve_secret_spec
 from rigging.timing import Duration
 
 from iris.cluster.tpu_topology import TPU_FAMILY_VARIANT_PREFIX, get_tpu_topology, tpu_variant_name
 from iris.cluster.types import (
     DEFAULT_BACKEND_ID,
+    LOCAL_CLUSTER,
     AcceleratorType,
     CapacityType,
     GcpSliceMode,
@@ -104,6 +107,23 @@ def _coerce_priority_band(value: Any) -> int:
 
 CapacityTypeField = Annotated[CapacityType, BeforeValidator(_coerce_capacity_type)]
 PriorityBandField = Annotated[int, BeforeValidator(_coerce_priority_band)]
+
+
+class SecretRef:
+    """Marker carried in a field's ``Annotated`` metadata tagging it a secret reference.
+
+    An explicit marker, deliberately not the ``is_sensitive_key_name`` name
+    heuristic (which misses ``signing_key`` and matches the whole non-secret
+    ``auth`` block). Only fields typed :data:`SecretRefSpec` are resolved at the
+    controller runtime (:func:`resolve_config_secrets`) and guarded against being
+    inlined into a rendered deploy artifact (:func:`assert_no_inlined_secrets`).
+    """
+
+
+# A secret-bearing config field: a bare reference (``env:`` / ``file:`` /
+# ``gcp-secret://``) or an ordered list of them (first-present-wins). Empty means
+# unset. Marked with :class:`SecretRef` so the resolver / render guard find it.
+SecretRefSpec = Annotated[str | tuple[str, ...], SecretRef()]
 
 
 def _normalize_oneof(data: Any, keys: tuple[str, ...]) -> Any:
@@ -439,11 +459,23 @@ class CoreweaveControllerConfig(_Config):
     port: int = 0  # default: 10000
     service_name: str = ""  # K8s Service name for discovery
     scale_group: str = ""  # scale group whose NodePool runs the controller
+    # When set, start_controller creates an Ingress publishing ONLY /proxy
+    # off-cluster; the controller's per-endpoint auth is the sole gate, so keep
+    # auth.provider set. See docs/coreweave.md.
+    public_proxy_host: str = ""
+    ingress_class: str = "traefik"  # ingressClassName for the /proxy ingress
+    tls_secret: str = ""  # secret holding the TLS cert for public_proxy_host
+    # cert-manager ClusterIssuer. When set, the Ingress is annotated
+    # cert-manager.io/cluster-issuer=<name> so cert-manager auto-issues the cert
+    # into tls_secret. Empty = bring your own cert in tls_secret (or no TLS).
+    cluster_issuer: str = ""
 
 
 class ControllerVmConfig(_OneofConfig):
     _ONEOF_ARMS = ("gcp", "manual", "local", "coreweave")
     image: str = ""  # controller docker image (shared by all controller types)
+    # Periodic checkpoint interval (seconds); 0 = controller default (hourly).
+    checkpoint_interval_seconds: float = 0
     gcp: GcpControllerConfig | None = None
     manual: ManualControllerConfig | None = None
     local: LocalControllerConfig | None = None
@@ -484,31 +516,54 @@ class DefaultsConfig(_Config):
 # ---------------------------------------------------------------------------
 
 
-class GcpAuthConfig(_Config):
-    project_id: str = ""
-
-
-class StaticAuthConfig(_Config):
-    tokens: dict[str, str] = Field(default_factory=dict)  # token -> username
-
-
 class IapAuthConfig(_Config):
     url: str = ""
+    # Desktop OAuth client the CLI drives for the browser edge-login flow.
     oauth_client_id: str = ""
-    oauth_client_secret: str = ""
-    audiences: list[str] = Field(default_factory=list)
+    # A secret reference (env: / file: / gcp-secret://), never an inlined value.
+    oauth_client_secret: SecretRefSpec = ""
+    # Audiences a service-account (CI / in-cluster) caller mints its IAP *edge*
+    # token for. Empty falls back to the desktop client id, which IAP registers as
+    # a programmatic client (sufficient for the common single-client setup); set
+    # this only to give machine callers an `aud` distinct from the desktop client.
+    programmatic_audiences: list[str] = Field(default_factory=list)
     signed_header_audience: str = ""
+    # Role granted to an IAP-verified email the role policy does not match (not in
+    # admin_users); admin_users always resolve to admin. "admin" here makes IAP's
+    # own allowlist the sole gate.
+    unprovisioned_role: Literal["admin", "user", "dashboard"] = "dashboard"
 
 
 class AuthConfig(_OneofConfig):
-    _ONEOF_ARMS = ("gcp", "static", "iap")
-    gcp: GcpAuthConfig | None = None
-    static: StaticAuthConfig | None = None
+    _ONEOF_ARMS = ("iap",)
     iap: IapAuthConfig | None = None
+    # Network-location trust, orthogonal to the login-provider arm: a tokenless
+    # request whose *direct transport peer* is inside one of these CIDRs
+    # authenticates as the anonymous admin identity (like loopback). Requests
+    # forwarded through a proxy hop (X-Forwarded-For present) never match, so
+    # an in-network ingress cannot lend its address to external traffic. With
+    # no arm selected, a non-empty list alone enables auth (provider "cidr").
+    trusted_cidrs: list[str] = Field(default_factory=list)
     admin_users: list[str] = Field(default_factory=list)
     # Authenticate-but-not-require: valid tokens get their identity; tokenless
     # requests fall through as anonymous admin; invalid tokens still rejected.
     optional: bool = False
+    # The controller's per-cluster EdDSA private signing key, as a secret
+    # reference (env: / file: / gcp-secret://). Empty = unset → the controller
+    # mints an ephemeral in-process keypair (dev / null-auth; tokens do not
+    # survive a restart). Never inlined; never stored in the DB.
+    signing_key: SecretRefSpec = ""
+    # Retained previous public signing keys (SubjectPublicKeyInfo PEMs), inline
+    # and NOT secret. Served on JWKS alongside the current key during a rotation
+    # overlap so verifiers accept tokens minted by the prior key.
+    previous_public_keys: tuple[str, ...] = ()
+
+    @field_validator("trusted_cidrs")
+    @classmethod
+    def _parse_cidrs(cls, cidrs: list[str]) -> list[str]:
+        for cidr in cidrs:
+            ipaddress.ip_network(cidr)  # ValueError on a malformed CIDR — fail at load
+        return cidrs
 
     def provider_kind(self) -> str | None:
         return self._selected_arm()
@@ -605,7 +660,7 @@ class BackendConfig(_Config):
 class PeerConfig(_Config):
     """One federation peer: a remote Iris controller this cluster may delegate to.
 
-    A peer is *not* a backend. A backend is a local execution substrate this
+    A peer is not a backend. A backend is a local execution substrate this
     controller drives and folds into its own job DAG; a peer owns its own DAG and
     is handed whole jobs. A peer declares identity, reachability, and trust — never
     capabilities, which the peer advertises live at runtime (the capability
@@ -614,14 +669,14 @@ class PeerConfig(_Config):
 
     ``cluster`` names the peer's cluster manifest, from which the client
     credentials this controller presents to the peer are resolved (the same
-    ``credentials_for`` path every cross-cluster client uses). Empty ``cluster``
-    means loopback / no-auth — a local or same-VPC peer that trusts the connection.
+    ``credentials_for`` path every cross-cluster client uses); no shared symmetric
+    secret is held here. Empty ``cluster`` means loopback / no-auth — a local or
+    same-VPC peer that trusts the connection.
     """
 
     controller_address: str  # peer controller RPC address (reachability)
     dashboard_url: str = ""  # peer public dashboard origin, for deep links
     cluster: str = ""  # peer cluster manifest name; resolves the presented credentials
-    static_token: str = ""  # client token for a peer whose manifest uses static auth
 
 
 class ClusterFinelogConfig(_Config):
@@ -632,25 +687,18 @@ class ClusterFinelogConfig(_Config):
     that forwards this cluster's logs to a shared global finelog; leave it empty and the
     log plane stays single-cluster (no relay, local reads, byte-identical behavior).
 
-    The relay authenticates its pushes with a delegation credential the global finelog
-    verifies on ingress:
-
-    - ``delegation_key`` — a shared HS256 secret. When set, the relay mints a short-lived
-      JWT signed with it, and the global finelog carries a matching ``jwt`` layer keyed on
-      ``{cluster: <this cluster's name>, secret: <delegation_key>}``. Dedicated (not the
-      control-plane signing key), so the shared store can *verify* this cluster's tokens
-      without gaining the power to *mint* control-plane tokens. HS256-only: an IAP/GCP
-      token would not verify.
-    - ``static_token`` — a pre-minted bearer used verbatim, for a simple/local deployment.
-      Lower-preference than ``delegation_key``.
-    - Neither — no bearer; the global finelog must admit this controller by a ``cidr``
-      layer (a same-VPC/loopback dev store).
+    The relay authenticates its pushes with a short-lived ``aud="finelog"`` delegation
+    JWT minted by THIS controller's signer (its per-cluster EdDSA key), under this
+    cluster's name. The shared finelog verifies it against this controller's public
+    key — no shared symmetric secret. The ``aud="finelog"`` binding means the same token
+    is rejected by this controller's own control-plane verifier, so it can never be
+    replayed at the RPC surface. With no signer (null-auth), no bearer is sent and the
+    global finelog must admit this controller by a ``cidr`` layer (a same-VPC/loopback
+    dev store).
     """
 
     config: str = ""  # finelog deploy-config name; iris derives /system/log-server from it
     relay_address: str = ""  # shared global finelog to forward logs to (empty = single-cluster)
-    delegation_key: str = ""  # shared HS256 secret; the relay mints short-lived JWTs with it
-    static_token: str = ""  # pre-minted static bearer (alternative to delegation_key)
 
 
 # ---------------------------------------------------------------------------
@@ -941,35 +989,33 @@ def _validate_backends(config: IrisClusterConfig) -> None:
 
 
 def _validate_peers(config: IrisClusterConfig) -> None:
-    """Validate the ``peers:`` federation registry."""
+    """Validate the ``peers:`` federation registry.
+
+    ``'local'`` is reserved as the federation sentinel for "this controller"; the
+    cluster's own ``name`` and every peer id must stay disjoint from it so the
+    sentinel and the real cluster-id namespace never collide.
+    """
+    if config.name == LOCAL_CLUSTER:
+        raise ValueError(
+            f"cluster name may not be {LOCAL_CLUSTER!r}: it is reserved as the federation "
+            "sentinel for this controller. Choose a distinct cluster name."
+        )
     for peer_id, peer in config.peers.items():
         if not peer_id.strip():
             raise ValueError("peers: peer id must be a non-empty string.")
+        if peer_id == LOCAL_CLUSTER:
+            raise ValueError(
+                f"peer id may not be {LOCAL_CLUSTER!r}: it is reserved as the federation "
+                "sentinel. A peer must have a distinct cluster id."
+            )
         if not peer.controller_address.strip():
             raise ValueError(f"peer '{peer_id}': controller_address is required.")
-        if peer.static_token and not peer.cluster:
-            raise ValueError(
-                f"peer '{peer_id}': static_token requires cluster to be set (the manifest "
-                "whose static auth the token authenticates against)."
-            )
-
-
-def _validate_finelog_relay(config: IrisClusterConfig) -> None:
-    """Validate the finelog relay credential (only when ``finelog.relay_address`` is set)."""
-    finelog = config.finelog
-    if not finelog.relay_address.strip():
-        return
-    # The finelog HS256 verifier rejects a delegation secret shorter than 16 bytes
-    # (MIN_SECRET_BYTES); fail fast here rather than at the store on first push.
-    if finelog.delegation_key and len(finelog.delegation_key.encode()) < 16:
-        raise ValueError("finelog.delegation_key must be at least 16 bytes.")
 
 
 def validate_config(config: IrisClusterConfig) -> None:
     """Validate cluster config; raises ValueError on the first violation."""
     _validate_backends(config)
     _validate_peers(config)
-    _validate_finelog_relay(config)
     _validate_provider_platform_compat(config)
     _validate_accelerator_types(config)
     validate_scale_group_resources(config.scale_groups)
@@ -978,6 +1024,92 @@ def validate_config(config: IrisClusterConfig) -> None:
     _validate_worker_defaults(config)
     _validate_gcp_service_accounts(config)
     validate_autoscaler_config(config.defaults.autoscaler, context="config.defaults.autoscaler")
+
+
+# ===========================================================================
+# Secret references (SecretRefSpec fields)
+# ===========================================================================
+
+
+def iter_secret_ref_fields(config: BaseModel) -> Iterator[tuple[BaseModel, str]]:
+    """Yield ``(model, field_name)`` for every :class:`SecretRef`-marked field.
+
+    Walks the config tree (nested models, and models inside dict/list values),
+    finding fields by their ``Annotated`` metadata marker — not a name heuristic.
+    """
+    seen: set[int] = set()
+
+    def walk_value(value: Any) -> Iterator[tuple[BaseModel, str]]:
+        if isinstance(value, BaseModel):
+            yield from walk(value)
+        elif isinstance(value, Mapping):
+            for item in value.values():
+                yield from walk_value(item)
+        elif isinstance(value, (list, tuple)):
+            for item in value:
+                yield from walk_value(item)
+
+    def walk(model: BaseModel) -> Iterator[tuple[BaseModel, str]]:
+        if id(model) in seen:
+            return
+        seen.add(id(model))
+        for name, field in type(model).model_fields.items():
+            if any(isinstance(marker, SecretRef) for marker in field.metadata):
+                yield model, name
+            yield from walk_value(getattr(model, name))
+
+    yield from walk(config)
+
+
+def resolve_config_secrets(config: IrisClusterConfig) -> IrisClusterConfig:
+    """Return a copy with each set-to-a-reference ``SecretRefSpec`` field resolved.
+
+    Called once on the controller serve path (never on the deploy/render path,
+    which renders references verbatim). Per marked field: an empty value is left
+    empty (unset → dev/ephemeral); a value that is a secret reference (or an
+    ordered list of them) is replaced by ``resolve_secret_spec(...).value``; a
+    non-reference literal is left untouched (the render guard rejects inlining at
+    deploy). A configured-but-erroring source raises immediately (fail-fast).
+    """
+    resolved = config.model_copy(deep=True)
+    for model, field in iter_secret_ref_fields(resolved):
+        value = getattr(model, field)
+        if not value:
+            continue
+        refs = as_secret_spec(value)
+        if all(is_secret_reference(ref) for ref in refs):
+            setattr(model, field, resolve_secret_spec(refs).value)
+    return resolved
+
+
+def assert_no_inlined_secrets(config: IrisClusterConfig) -> None:
+    """Raise if any ``SecretRefSpec`` field holds an inlined (non-reference) literal.
+
+    Render guard (#6873): called at each deploy/render site before serializing
+    config into a broadly-readable ConfigMap / GCE metadata. Empty ⇒ pass (unset;
+    resolves via a reference at the controller runtime). A reference ⇒ pass.
+    """
+    for model, field in iter_secret_ref_fields(config):
+        value = getattr(model, field)
+        if not value:
+            continue
+        for ref in as_secret_spec(value):
+            if ref and not is_secret_reference(ref):
+                raise ValueError(
+                    f"{type(model).__name__}.{field} holds an inlined secret literal; a SecretRefSpec "
+                    "field must be a reference (env: / file: / gcp-secret://) so plaintext is never "
+                    "serialized into a ConfigMap or GCE metadata (#6873). Provision the secret and set "
+                    "the field to its reference."
+                )
+
+    # A literal worker auth_token is a raw bearer with no reference form (it is
+    # minted at controller runtime), so guard it explicitly — a plaintext bearer
+    # must never render into a broadly-readable ConfigMap / GCE metadata.
+    if config.defaults.worker.auth_token:
+        raise ValueError(
+            "defaults.worker.auth_token is a raw bearer secret minted at controller runtime; it must "
+            "not be set to a literal in a deployed config (#6873)."
+        )
 
 
 # ===========================================================================

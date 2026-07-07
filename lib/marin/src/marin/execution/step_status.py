@@ -27,7 +27,7 @@ from rigging.distributed_lock import (
     create_lock,
     default_worker_id,
 )
-from rigging.filesystem import url_to_fs
+from rigging.filesystem import prefix_join, url_to_fs
 
 logger = logging.getLogger(__name__)
 
@@ -41,7 +41,7 @@ STATUS_DEP_FAILED = "DEP_FAILED"  # Dependency failed
 
 def get_status_path(output_path: str) -> str:
     """Return the path of the status file associated with `output_path`."""
-    return os.path.join(output_path, ".executor_status")
+    return prefix_join(output_path, ".executor_status")
 
 
 class StatusFile:

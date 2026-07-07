@@ -33,7 +33,7 @@ from iris.cluster.federation.store import (
     HandoffAdmission,
     HandoffSpec,
 )
-from iris.cluster.types import JobName, TaskAttempt
+from iris.cluster.types import JobName
 from iris.managed_thread import ManagedThread, ThreadContainer
 from iris.rpc import controller_pb2, job_pb2
 
@@ -44,34 +44,6 @@ DEFAULT_SYNC_INTERVAL = Duration.from_seconds(3)
 _JOIN_TIMEOUT = Duration.from_seconds(5.0)
 
 _PEER_RPC_ERRORS = (ConnectError, ConnectionError, OSError)
-
-
-def encode_remote_job_id(cluster_id: str, parent_job_id: JobName) -> str:
-    """The deterministic, globally-unique wire id a peer runs a handoff under:
-    ``parent_job_id``'s root folded under ``cluster_id`` (``/<user>/<cluster>~<name>``)."""
-    return JobName.federated_remote_root(cluster_id, parent_job_id.root_job).to_wire()
-
-
-def _rebase_task_id(task_id: str, remote_job_id: str) -> str:
-    """Rewrite a full task wire id (``/user/job/0``) onto ``remote_job_id``'s root job,
-    preserving the child path and task index."""
-    remote_root = JobName.from_wire(remote_job_id)
-    # Parse as a JobName, not a TaskAttempt: a ':' is legal in a job-name component,
-    # and TaskAttempt.from_wire would mis-split it as an attempt qualifier.
-    return JobName.from_wire(task_id).with_root_job(remote_root).to_wire()
-
-
-def _rebase_profile_target(target: str, remote_job_id: str) -> str:
-    """Rewrite a profile ``target`` onto the peer's ``remote_job_id`` root job.
-
-    ``target`` is a :class:`~iris.cluster.types.TaskAttempt` wire string — a task id
-    with an optional ``:attempt`` qualifier — so the root job is replaced while the
-    child path, task index, and any attempt qualifier are preserved.
-    """
-    parsed = TaskAttempt.from_wire(target)
-    remote_root = JobName.from_wire(remote_job_id)
-    rebased = TaskAttempt(task_id=parsed.task_id.with_root_job(remote_root), attempt_id=parsed.attempt_id)
-    return rebased.to_wire()
 
 
 class FederationManager:
@@ -141,7 +113,7 @@ class FederationManager:
     def submit_federated_handle(
         self,
         *,
-        parent_job_id: JobName,
+        local_job_id: JobName,
         request: controller_pb2.Controller.LaunchJobRequest,
         peer_id: str,
         owner_principal: str,
@@ -149,20 +121,19 @@ class FederationManager:
         """Persist a federated handle and synchronously hand the job to its peer.
 
         In one local transaction the store persists the
-        ``jobs``/``job_config``/``federated_jobs`` handle (no task rows) with a
-        deterministic ``remote_job_id`` in ``PENDING_HANDOFF``. When freshly
-        admitted it then calls the peer's ``LaunchJob`` and flips the handle to
-        ``HANDED_OFF``; an idempotent resubmit skips delivery. A failed delivery is
-        not fatal — the handle persists and the sync loop re-drives it.
+        ``jobs``/``job_config``/``federated_jobs`` handle (no task rows) in
+        ``PENDING_HANDOFF``. When freshly admitted it then calls the peer's
+        ``LaunchJob`` — the peer runs the job under the same, cluster-invariant
+        ``local_job_id`` — and flips the handle to ``HANDED_OFF``; an idempotent
+        resubmit skips delivery. A failed delivery is not fatal — the handle
+        persists and the sync loop re-drives it.
         """
         if self._store is None:
             raise RuntimeError("federation handoff requires a store")
         self._require_peer(peer_id)
 
-        remote_job_id = encode_remote_job_id(self._cluster_id, parent_job_id)
         spec = HandoffSpec(
-            parent_job_id=parent_job_id,
-            remote_job_id=remote_job_id,
+            local_job_id=local_job_id,
             peer_id=peer_id,
             owner_principal=owner_principal,
             request=request,
@@ -172,18 +143,18 @@ class FederationManager:
 
     # -- cancel (parent side) ------------------------------------------------
 
-    def cancel_federated(self, parent_job_id: JobName) -> None:
+    def cancel_federated(self, local_job_id: JobName) -> None:
         """Route a versioned cancel for a federated job to its peer.
 
         Bumps ``cancel_intent_version`` (so a cancelled pending handoff is never
         delivered and a retried cancel is a no-op) and routes the idempotent
-        ``TerminateJob(remote_job_id)``. A transient failure is not fatal — the sync
-        loop re-drives the cancel until the peer acks or sync observes the job
-        terminal/pruned.
+        ``TerminateJob(local_job_id)`` (the peer runs the same id). A transient
+        failure is not fatal — the sync loop re-drives the cancel until the peer acks
+        or sync observes the job terminal/pruned.
         """
         if self._store is None:
             raise RuntimeError("federation cancel requires a store")
-        target = self._store.bump_cancel_intent(parent_job_id)
+        target = self._store.bump_cancel_intent(local_job_id)
         if target is not None:
             self._deliver_cancel(target)
 
@@ -198,25 +169,25 @@ class FederationManager:
         peer = self._peers.get(target.peer_id)
         if peer is None:
             logger.warning(
-                "Cannot cancel federated job %s: peer %s is not configured", target.parent_job_id, target.peer_id
+                "Cannot cancel federated job %s: peer %s is not configured", target.local_job_id, target.peer_id
             )
             return
         try:
-            peer.terminate_job(JobName.from_wire(target.remote_job_id))
+            peer.terminate_job(target.local_job_id)
         except ConnectError as exc:
             if exc.code == Code.NOT_FOUND:
-                self._store.mark_cancel_satisfied(target.parent_job_id, now_ms=Timestamp.now().epoch_ms())
+                self._store.mark_cancel_satisfied(target.local_job_id, now_ms=Timestamp.now().epoch_ms())
                 return
             logger.warning(
                 "Routed cancel of %s to peer %s failed (will retry): %s",
-                target.parent_job_id,
+                target.local_job_id,
                 target.peer_id,
                 exc,
             )
         except (ConnectionError, OSError) as exc:
             logger.warning(
                 "Routed cancel of %s to peer %s failed (will retry): %s",
-                target.parent_job_id,
+                target.local_job_id,
                 target.peer_id,
                 exc,
             )
@@ -227,42 +198,33 @@ class FederationManager:
         self,
         *,
         peer_id: str,
-        remote_job_id: str,
         request: job_pb2.ProfileTaskRequest,
     ) -> job_pb2.ProfileTaskResponse:
         """Forward a profile RPC for a federated task to its peer controller.
 
-        Rewrites the request's target onto the peer's remote root job (preserving
-        the task index and any attempt qualifier) so the peer resolves the same
-        task in its own tree, then proxies to the peer's ``ProfileTask``. The peer
+        Job ids are cluster-invariant, so the request's target names the same task
+        on the peer — it is proxied verbatim to the peer's ``ProfileTask``. The peer
         is authoritative: its answer — including a ``NOT_FOUND`` for a task it has
-        since moved or finished — propagates back verbatim.
+        since moved or finished — propagates back.
         """
         peer = self._require_peer(peer_id)
-        forwarded = job_pb2.ProfileTaskRequest()
-        forwarded.CopyFrom(request)
-        forwarded.target = _rebase_profile_target(request.target, remote_job_id)
-        return peer.profile_task(forwarded)
+        return peer.profile_task(request)
 
     def proxy_exec(
         self,
         *,
         peer_id: str,
-        remote_job_id: str,
         request: controller_pb2.Controller.ExecInContainerRequest,
     ) -> controller_pb2.Controller.ExecInContainerResponse:
         """Forward an exec RPC for a federated task to its peer controller.
 
-        Rewrites the request's task id onto the peer's remote root job (preserving
-        the task index) so the peer resolves the same task in its own tree, then
-        proxies to the peer's ``ExecInContainer``. The peer is authoritative: its
-        answer — including a ``NOT_FOUND`` — propagates back verbatim.
+        Job ids are cluster-invariant, so the request's task id names the same task
+        on the peer — it is proxied verbatim to the peer's ``ExecInContainer``. The
+        peer is authoritative: its answer — including a ``NOT_FOUND`` — propagates
+        back.
         """
         peer = self._require_peer(peer_id)
-        forwarded = controller_pb2.Controller.ExecInContainerRequest()
-        forwarded.CopyFrom(request)
-        forwarded.task_id = _rebase_task_id(request.task_id, remote_job_id)
-        return peer.exec_in_container(forwarded)
+        return peer.exec_in_container(request)
 
     # -- background loops ----------------------------------------------------
 
@@ -318,15 +280,27 @@ class FederationManager:
         assert self._store is not None
         peer = self._peers.get(spec.peer_id)
         if peer is None:
-            logger.warning("Cannot hand off %s: peer %s is not configured", spec.parent_job_id, spec.peer_id)
+            logger.warning("Cannot hand off %s: peer %s is not configured", spec.local_job_id, spec.peer_id)
             return
-        handoff = self._build_handoff_request(spec.request, spec.remote_job_id, spec.owner_principal)
+        handoff = self._build_handoff_request(spec.request, spec.local_job_id, spec.owner_principal)
         try:
             peer.launch_job(handoff)
-        except _PEER_RPC_ERRORS as exc:
-            logger.warning("Handoff of %s to peer %s failed (will retry): %s", spec.parent_job_id, spec.peer_id, exc)
+        except ConnectError as exc:
+            # A genuine name collision on the peer (a local job, or a job it received
+            # from a different requester) is terminal, not transient — terminalize the
+            # handle so the re-drive stops rather than re-delivering forever.
+            if exc.code == Code.ALREADY_EXISTS:
+                self._store.mark_handoff_rejected(
+                    spec.local_job_id,
+                    reason=f"Peer {spec.peer_id} rejected the handoff: job {spec.local_job_id} already exists there",
+                )
+                return
+            logger.warning("Handoff of %s to peer %s failed (will retry): %s", spec.local_job_id, spec.peer_id, exc)
             return
-        self._store.mark_handed_off(spec.parent_job_id, now_ms=Timestamp.now().epoch_ms())
+        except (ConnectionError, OSError) as exc:
+            logger.warning("Handoff of %s to peer %s failed (will retry): %s", spec.local_job_id, spec.peer_id, exc)
+            return
+        self._store.mark_handed_off(spec.local_job_id)
 
     def _sync_peer(self, peer: FederationPeer) -> None:
         assert self._store is not None
@@ -349,19 +323,17 @@ class FederationManager:
     def _build_handoff_request(
         self,
         request: controller_pb2.Controller.LaunchJobRequest,
-        remote_job_id: str,
+        local_job_id: JobName,
         owner_principal: str,
     ) -> controller_pb2.Controller.LaunchJobRequest:
-        """The request delivered to the peer: remote name, federation attribution,
-        the routing directives stripped (the peer matches workers, not the parent's
-        ``backend``/``cluster`` pins), and KEEP so a re-drive is idempotent."""
+        """The request delivered to the peer: the same cluster-invariant job name,
+        federation attribution, and the routing directives stripped (the peer matches
+        workers, not the parent's ``backend``/``cluster`` pins). Idempotency of a
+        re-drive is owned by the peer's federation-aware admission, which returns the
+        existing job for a re-drive from the same requester."""
         handoff = controller_pb2.Controller.LaunchJobRequest()
         handoff.CopyFrom(request)
-        handoff.name = remote_job_id
-        # A re-sent handoff (retry or boot recovery) carries the same deterministic
-        # id; KEEP makes the peer return the existing job rather than reject it, so
-        # delivery is exactly-once.
-        handoff.existing_job_policy = job_pb2.EXISTING_JOB_POLICY_KEEP
+        handoff.name = local_job_id.to_wire()
         kept = [c for c in request.constraints if c.key not in (BACKEND_CONSTRAINT_KEY, CLUSTER_CONSTRAINT_KEY)]
         del handoff.constraints[:]
         handoff.constraints.extend(kept)
@@ -381,7 +353,7 @@ class FederationManager:
             controller_address=peer.controller_address,
             dashboard_url=peer.dashboard_url,
             reachable=heartbeat.reachable,
-            last_sync_ms=heartbeat.last_contact_ms,
+            last_contact_ms=heartbeat.last_contact_ms,
             active_federated_jobs=active,
             backends=heartbeat.backends,
         )

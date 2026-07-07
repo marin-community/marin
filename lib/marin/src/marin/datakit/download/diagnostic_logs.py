@@ -21,7 +21,7 @@ import fsspec
 import requests
 from fray import ResourceConfig
 from pydantic import BaseModel, ConfigDict
-from rigging.filesystem import marin_prefix, open_url, url_to_fs
+from rigging.filesystem import marin_prefix, open_url, prefix_join, url_to_fs
 from zephyr import Dataset, ZephyrContext, counters
 
 from marin.datakit.ingestion_manifest import (
@@ -517,7 +517,7 @@ def _write_source_metadata(
 def _normalize_input_path(path: str) -> str:
     if path.startswith("/") or "://" in path:
         return path
-    return os.path.join(marin_prefix(), path)
+    return prefix_join(marin_prefix(), path)
 
 
 def _path_exists(path: str) -> bool:
@@ -537,14 +537,14 @@ def _download_to_path(url: str, destination_path: str) -> None:
 
 
 def _stage_logchunks_if_missing(destination_dir: str) -> str:
-    archive_path = os.path.join(destination_dir, LOGCHUNKS_ZIP_FILENAME)
+    archive_path = prefix_join(destination_dir, LOGCHUNKS_ZIP_FILENAME)
     if not _path_exists(archive_path):
         _download_to_path(LOGCHUNKS_DOWNLOAD_URL, archive_path)
     return destination_dir
 
 
 def _stage_loghub_if_missing(destination_dir: str) -> str:
-    loghub_root = os.path.join(destination_dir, LOGHUB_DIRNAME)
+    loghub_root = prefix_join(destination_dir, LOGHUB_DIRNAME)
     if _list_loghub_files(loghub_root, 1):
         return destination_dir
 
@@ -558,7 +558,7 @@ def _stage_loghub_if_missing(destination_dir: str) -> str:
             _, _, relative_path = member.filename.partition("/")
             if not relative_path:
                 continue
-            destination_path = os.path.join(loghub_root, relative_path)
+            destination_path = prefix_join(loghub_root, relative_path)
             fsspec_mkdirs(os.path.dirname(destination_path), exist_ok=True)
             with archive.open(member, "r") as reader, open_url(destination_path, "wb") as writer:
                 shutil.copyfileobj(reader, writer)
@@ -567,7 +567,7 @@ def _stage_loghub_if_missing(destination_dir: str) -> str:
 
 def _resolve_ghalogs_archive_path(input_path: str) -> tuple[str, str]:
     normalized_input_path = _normalize_input_path(input_path)
-    archive_path = os.path.join(normalized_input_path, GHALOGS_STAGED_ARCHIVE_RELATIVE_PATH)
+    archive_path = prefix_join(normalized_input_path, GHALOGS_STAGED_ARCHIVE_RELATIVE_PATH)
     if not _path_exists(archive_path):
         raise FileNotFoundError(
             "Missing staged GHALogs archive. "
@@ -579,7 +579,7 @@ def _resolve_ghalogs_archive_path(input_path: str) -> tuple[str, str]:
 
 def _resolve_logchunks_input_path(input_path: str | None) -> str:
     normalized_input_path = _normalize_input_path(input_path or LOGCHUNKS_STAGED_PREFIX)
-    archive_path = os.path.join(normalized_input_path, LOGCHUNKS_ZIP_FILENAME)
+    archive_path = prefix_join(normalized_input_path, LOGCHUNKS_ZIP_FILENAME)
     if not _path_exists(archive_path):
         normalized_input_path = _stage_logchunks_if_missing(normalized_input_path)
     return normalized_input_path
@@ -587,7 +587,7 @@ def _resolve_logchunks_input_path(input_path: str | None) -> str:
 
 def _resolve_loghub_input_path(input_path: str | None) -> str:
     normalized_input_path = _normalize_input_path(input_path or LOGHUB_STAGED_PREFIX)
-    loghub_root = os.path.join(normalized_input_path, LOGHUB_DIRNAME)
+    loghub_root = prefix_join(normalized_input_path, LOGHUB_DIRNAME)
     if not _list_loghub_files(loghub_root, 1):
         normalized_input_path = _stage_loghub_if_missing(normalized_input_path)
     return normalized_input_path
@@ -664,7 +664,7 @@ def materialize_ghalogs_to_parquet(
         .reshard(num_shards)
         .flat_map(lambda batch: _process_ghalogs_member_batch(batch, archive_path))
         .write_parquet(
-            f"{output_path}/data-{{shard:05d}}-of-{{total:05d}}.parquet",
+            prefix_join(output_path, "data-{shard:05d}-of-{total:05d}.parquet"),
             skip_existing=True,
         )
     )
@@ -679,7 +679,7 @@ def materialize_ghalogs_to_parquet(
     return MaterializedDiagnosticLogParquet(
         source_label=manifest.source_label,
         output_dir=output_path,
-        data_glob=f"{output_path}/*.parquet",
+        data_glob=prefix_join(output_path, "*.parquet"),
         record_count=counters_dict.get("zephyr/records_out", 0),
         counters=counters_dict,
         content_fingerprint=manifest.fingerprint(),
@@ -710,11 +710,11 @@ def materialize_ghalogs_partition_to_parquet(
     output files.
     """
     pipeline = (
-        Dataset.from_files(f"{input_path}/*.parquet")
+        Dataset.from_files(prefix_join(input_path, "*.parquet"))
         .load_parquet()
         .filter(lambda record: record.get("partition") == partition.value)
         .map(lambda record: _count_partition_record(record, partition))
-        .write_parquet(f"{output_path}/data-{{shard:05d}}-of-{{total:05d}}.parquet", skip_existing=True)
+        .write_parquet(prefix_join(output_path, "data-{shard:05d}-of-{total:05d}.parquet"), skip_existing=True)
     )
 
     resources = worker_resources or ResourceConfig(cpu=1, ram="8g", disk="10g")
@@ -727,7 +727,7 @@ def materialize_ghalogs_partition_to_parquet(
     return MaterializedDiagnosticLogParquet(
         source_label=manifest.source_label,
         output_dir=output_path,
-        data_glob=f"{output_path}/*.parquet",
+        data_glob=prefix_join(output_path, "*.parquet"),
         record_count=counters_dict.get("zephyr/records_out", 0),
         counters=counters_dict,
         content_fingerprint=manifest.fingerprint(),
@@ -751,9 +751,9 @@ def extract_ghalogs(
 
     output_file_paths: dict[str, str] = {}
     for partition in DiagnosticPartition:
-        partition_dir = os.path.join(output_path, partition.value)
+        partition_dir = prefix_join(output_path, partition.value)
         fsspec_mkdirs(partition_dir, exist_ok=True)
-        output_file_paths[partition.value] = os.path.join(partition_dir, "data-00000-of-00001.jsonl")
+        output_file_paths[partition.value] = prefix_join(partition_dir, "data-00000-of-00001.jsonl")
 
     logger.info("Extracting at most %d members from %s", max_members, archive_path)
     with open_url(archive_path, "rb") as archive_handle, zipfile.ZipFile(archive_handle) as archive:
@@ -849,11 +849,11 @@ def extract_logchunks(
         raise ValueError(f"max_examples must be positive, got {max_examples}")
 
     input_path = _resolve_logchunks_input_path(input_path)
-    archive_path = os.path.join(input_path, LOGCHUNKS_ZIP_FILENAME)
-    output_file = os.path.join(output_path, "eval_only", "logchunks", "data-00000-of-00001.jsonl")
+    archive_path = prefix_join(input_path, LOGCHUNKS_ZIP_FILENAME)
+    output_file = prefix_join(output_path, "eval_only/logchunks/data-00000-of-00001.jsonl")
     kept_records, bytes_written = _write_jsonl_records(output_file, _iter_logchunks_records(archive_path, max_examples))
     manifest = SOURCE_MANIFESTS["logchunks"]
-    slice_output_dir = os.path.join(output_path, "eval_only", "logchunks")
+    slice_output_dir = prefix_join(output_path, "eval_only/logchunks")
     metadata_path = _write_source_metadata(
         manifest=manifest,
         input_path=input_path,
@@ -912,11 +912,11 @@ def extract_loghub(
         raise ValueError(f"max_files must be positive, got {max_files}")
 
     input_path = _resolve_loghub_input_path(input_path)
-    loghub_path = os.path.join(input_path, LOGHUB_DIRNAME)
-    output_file = os.path.join(output_path, "eval_only", "loghub", "data-00000-of-00001.jsonl")
+    loghub_path = prefix_join(input_path, LOGHUB_DIRNAME)
+    output_file = prefix_join(output_path, "eval_only/loghub/data-00000-of-00001.jsonl")
     kept_records, bytes_written = _write_jsonl_records(output_file, _iter_loghub_records(loghub_path, max_files))
     manifest = SOURCE_MANIFESTS["loghub"]
-    slice_output_dir = os.path.join(output_path, "eval_only", "loghub")
+    slice_output_dir = prefix_join(output_path, "eval_only/loghub")
     metadata_path = _write_source_metadata(
         manifest=manifest,
         input_path=input_path,

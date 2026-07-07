@@ -61,16 +61,28 @@ class K8sDeployment:
     # plus the operator's R2 creds, projected into the pod via envFrom so the
     # server can authenticate. Unused for `gs://` (GCS uses workload identity).
     object_storage_endpoint: str | None = None
+    # PriorityClass stamped on the finelog pod. When finelog is the log backend
+    # for an Iris control plane, set this to `iris-system` so a user job cannot
+    # preempt it off the shared control node. `deploy up` creates the class
+    # (idempotently) from name+value before applying the Deployment, so finelog
+    # can still be brought up first on a fresh cluster. Iris is the canonical
+    # owner of the iris-* bands (see IRIS_PRIORITY_CLASSES); keep priority_class_value
+    # in sync with it — value/preemptionPolicy are immutable, so a mismatch makes
+    # one side's apply fail loudly rather than silently disagree.
+    priority_class_name: str | None = None
+    priority_class_value: int | None = None
+
+    def __post_init__(self) -> None:
+        if (self.priority_class_name is None) != (self.priority_class_value is None):
+            raise ValueError("priority_class_name and priority_class_value must be set together")
 
 
 @dataclass(frozen=True)
 class CidrAuthLayer:
     """Admit a request whose transport peer is in one of ``cidrs``.
 
-    Reproduces intra-cluster reachability: a finelog serving its own cluster lists
-    that cluster's loopback/VPC ranges (e.g. ``10.0.0.0/8``, ``127.0.0.0/8``) so
-    local clients keep working without a token. Matches the transport peer only,
-    never a spoofable forwarded header.
+    Matches the transport peer only, never a spoofable forwarded header. See
+    ``INTRA_CLUSTER_CIDRS`` for the ranges an in-cluster finelog trusts.
     """
 
     cidrs: tuple[str, ...]
@@ -79,28 +91,50 @@ class CidrAuthLayer:
         return {"type": "cidr", "cidrs": list(self.cidrs)}
 
 
+# The private-network + loopback ranges an in-cluster finelog trusts by cidr: its
+# own cluster's pods (CoreWeave is 10.x; the rest of RFC 1918 covers other
+# platforms) plus loopback (a port-forward), never the public internet. The
+# bundled deploy configs (`lib/finelog/config/*.yaml`) spell the same set into
+# their `cidr` layer; the controller's embedded fallback server uses it directly
+# (see iris `build_log_stack`).
+INTRA_CLUSTER_CIDRS: tuple[str, ...] = (
+    "10.0.0.0/8",
+    "172.16.0.0/12",
+    "192.168.0.0/16",
+    "127.0.0.0/8",
+    "::1/128",
+)
+
+
 @dataclass(frozen=True)
 class JwtKeyEntry:
-    """A trusted cluster and its HS256 delegation secret."""
+    """A trusted cluster and its Ed25519 delegation public keys (PEM).
+
+    ``public_keys`` is a list so a key rotation can carry the old and new keys
+    together during the overlap window; a token signed by either verifies.
+    """
 
     cluster: str
-    secret: str
+    public_keys: tuple[str, ...]
 
 
 @dataclass(frozen=True)
 class JwtAuthLayer:
-    """Admit a bearer JWT whose HS256 signature verifies against one of ``keys``.
+    """Admit a bearer JWT whose EdDSA signature verifies against one of ``keys`` and
+    whose audience is ``finelog``.
 
-    Each key is a trusted cluster's HS256 delegation secret; every configured key
-    admits equally. The keys are secret material, so a jwt layer may not be inlined
-    into a plaintext deploy artifact — the deploy path rejects it and requires a
-    secret source instead.
+    Each key is a trusted cluster's Ed25519 public key(s); every configured key
+    admits equally. Public keys are not secret material, so a jwt layer inlines
+    safely into a plaintext deploy artifact.
     """
 
     keys: tuple[JwtKeyEntry, ...]
 
     def to_policy_dict(self) -> dict:
-        return {"type": "jwt", "keys": [{"cluster": k.cluster, "secret": k.secret} for k in self.keys]}
+        return {
+            "type": "jwt",
+            "keys": [{"cluster": k.cluster, "public_keys": list(k.public_keys)} for k in self.keys],
+        }
 
 
 # One entry in the ordered auth stack. Evaluation order == list order (first
@@ -112,21 +146,6 @@ def auth_policy_json(layers: tuple[AuthLayer, ...]) -> str:
     """Serialize an ordered auth-layer stack to the `FINELOG_AUTH_POLICY` JSON the
     finelog server parses."""
     return json.dumps([layer.to_policy_dict() for layer in layers], separators=(",", ":"))
-
-
-def assert_inlineable_auth(cfg: "FinelogConfig") -> None:
-    """Raise if the auth stack carries secret material that must not be inlined.
-
-    A `jwt` layer holds HS256 delegation keys; both deploy paths bake the policy into a
-    plaintext artifact (GCE startup-script metadata, a k8s manifest), so jwt keys must
-    instead come through a secret source (the finelog-env Secret, or an operator-managed
-    metadata secret). A cidr-only policy carries no secrets and inlines safely.
-    """
-    if any(isinstance(layer, JwtAuthLayer) for layer in cfg.auth):
-        raise ValueError(
-            f"{cfg.name}: jwt auth layers carry secret keys and cannot be inlined into a plaintext "
-            "deploy artifact; supply FINELOG_AUTH_POLICY through a secret source instead"
-        )
 
 
 @dataclass(frozen=True)
@@ -195,7 +214,9 @@ def _build_auth_layers(raw: list, path: Path) -> tuple[AuthLayer, ...]:
         if layer_type == "cidr":
             layers.append(CidrAuthLayer(cidrs=tuple(item.get("cidrs") or ())))
         elif layer_type == "jwt":
-            keys = tuple(JwtKeyEntry(cluster=k["cluster"], secret=k["secret"]) for k in item.get("keys") or ())
+            keys = tuple(
+                JwtKeyEntry(cluster=k["cluster"], public_keys=tuple(k["public_keys"])) for k in item.get("keys") or ()
+            )
             layers.append(JwtAuthLayer(keys=keys))
         else:
             raise ValueError(f"{path}: auth[{i}] has unknown type {layer_type!r} (expected cidr|jwt)")
@@ -203,11 +224,14 @@ def _build_auth_layers(raw: list, path: Path) -> tuple[AuthLayer, ...]:
 
 
 def _build_k8s(raw: dict) -> K8sDeployment:
+    priority_class_value = raw.get("priority_class_value")
     return K8sDeployment(
         namespace=raw["namespace"],
         storage_class=raw.get("storage_class"),
         storage_gb=int(raw.get("storage_gb", 200)),
         object_storage_endpoint=raw.get("object_storage_endpoint"),
+        priority_class_name=raw.get("priority_class_name"),
+        priority_class_value=None if priority_class_value is None else int(priority_class_value),
     )
 
 

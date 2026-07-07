@@ -33,7 +33,6 @@ class AuthzAction(StrEnum):
     """Actions requiring authorization. Add new actions here; policy is in POLICY."""
 
     ACT_AS_WORKER = "act_as_worker"
-    MANAGE_OTHER_KEYS = "manage_other_keys"
     MANAGE_BUDGETS = "manage_budgets"
     SET_CONTAINER_PROFILE = "set_container_profile"
 
@@ -41,7 +40,6 @@ class AuthzAction(StrEnum):
 # Action → frozenset of roles allowed. Admin is implicitly always allowed.
 POLICY: dict[AuthzAction, frozenset[str]] = {
     AuthzAction.ACT_AS_WORKER: frozenset({"worker"}),
-    AuthzAction.MANAGE_OTHER_KEYS: frozenset(),  # admin only
     AuthzAction.MANAGE_BUDGETS: frozenset(),  # admin only
     AuthzAction.SET_CONTAINER_PROFILE: frozenset(),  # admin only (elevated container profiles)
 }
@@ -74,9 +72,7 @@ DASHBOARD_READABLE_RPCS: frozenset[str] = frozenset(
         # Federation (read-only peer observation)
         "ListPeers",
         # Identity, users, budgets (read)
-        "GetAuthInfo",
         "GetCurrentUser",
-        "ListApiKeys",
         "ListUsers",
         "GetUserBudget",
         "ListUserBudgets",
@@ -89,12 +85,21 @@ DASHBOARD_READABLE_RPCS: frozenset[str] = frozenset(
 def authorize_method(identity: VerifiedIdentity, method_name: str) -> None:
     """Enforce per-method access for restricted roles before dispatch.
 
+    An endpoint-scoped token (``identity.audience`` set) has zero RPC authority:
+    it may reach only its endpoint's /proxy path (enforced there), never the
+    control RPC surface.
+
     The ``dashboard`` role is read-only: it may call only the methods in
     ``DASHBOARD_READABLE_RPCS``. Other roles are unrestricted here — their
     mutating actions remain gated inside the handlers by ``authorize`` /
     ``authorize_resource_owner``. Raises ``PERMISSION_DENIED`` for a dashboard
     caller invoking a non-readable method.
     """
+    if identity.audience is not None:
+        raise ConnectError(
+            Code.PERMISSION_DENIED,
+            "endpoint-scoped token cannot call control RPCs",
+        )
     if identity.role == DASHBOARD_ROLE and method_name not in DASHBOARD_READABLE_RPCS:
         raise ConnectError(
             Code.PERMISSION_DENIED,

@@ -16,7 +16,12 @@ from dataclasses import dataclass
 
 from rigging.timing import Timestamp
 
-from iris.cluster.backends.types import (
+from iris.cluster.config import SshConfig
+from iris.cluster.platforms._worker_base import RemoteExecWorkerBase
+from iris.cluster.platforms.gcp.service import GcpService
+from iris.cluster.platforms.gcp.ssh import ssh_impersonate_service_account
+from iris.cluster.platforms.remote_exec import GceRemoteExec, GcloudRemoteExec
+from iris.cluster.platforms.types import (
     CloudSliceState,
     CloudWorkerState,
     InfraError,
@@ -24,11 +29,6 @@ from iris.cluster.backends.types import (
     SliceStatus,
     WorkerStatus,
 )
-from iris.cluster.config import SshConfig
-from iris.cluster.platforms._worker_base import RemoteExecWorkerBase
-from iris.cluster.platforms.gcp.service import GcpService
-from iris.cluster.platforms.gcp.ssh import ssh_impersonate_service_account
-from iris.cluster.platforms.remote_exec import GceRemoteExec, GcloudRemoteExec
 from iris.cluster.tpu_topology import get_tpu_topology
 
 logger = logging.getLogger(__name__)

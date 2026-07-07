@@ -144,10 +144,30 @@ def _resolve_profiler_bin(container_id: str, venv_bin: str, fallback: str) -> st
     return venv_bin if probe.returncode == 0 else fallback
 
 
+# Widened ephemeral port range for high-connection workloads: the controller and
+# workers fan out to thousands of peers and would otherwise exhaust the default
+# ~28k-port pool. The floor is deliberately above every fixed port the cluster's
+# own services bind — the TPU/JAX runtime (8081, 8431, 8470-8482) and iris'
+# controller/worker RPC (10000/10001). An earlier floor of 1024 pulled those into
+# the kernel's random ephemeral pool, so a co-tenant's outbound connection could
+# be handed e.g. 8431 and block the TPU trainer from binding it, crash-looping
+# with "[::]:8431 ... Address already in use". 11000-65535 still leaves ~54k
+# ephemeral ports.
+EPHEMERAL_PORT_RANGE = "11000 65535"
+
+# Belt-and-suspenders for the fixed TPU/JAX ports that sit just below the floor:
+# reserve them so they stay out of automatic ephemeral assignment even if the
+# floor is ever lowered again. An explicit bind() by the TPU runtime is
+# unaffected. libtpu's Runtime Metric Service is 8431; 8470-8482 is the Cloud TPU
+# runtime/SliceBuilder block (incl. the JAX coordinator 8482 and marin's default
+# 8476); 8081 is levanter megascale.
+RESERVED_HOST_PORTS = "8081,8431,8470-8482"
+
 # Network sysctl tuning for containers with their own network namespace (#3066).
 # Host-network containers inherit host settings (configured at VM bootstrap).
 _NETWORK_SYSCTLS: dict[str, str] = {
-    "net.ipv4.ip_local_port_range": "1024 65535",
+    "net.ipv4.ip_local_port_range": EPHEMERAL_PORT_RANGE,
+    "net.ipv4.ip_local_reserved_ports": RESERVED_HOST_PORTS,
     "net.ipv4.tcp_tw_reuse": "1",
 }
 

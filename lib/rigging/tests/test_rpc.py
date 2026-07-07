@@ -7,9 +7,10 @@ from dataclasses import dataclass
 from unittest.mock import Mock
 
 import pytest
+import rigging.rpc
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
-from rigging.rpc import ConcurrencyLimitInterceptor
+from rigging.rpc import ConcurrencyLimitInterceptor, _release_if_acquired
 
 
 @dataclass(frozen=True)
@@ -153,7 +154,7 @@ async def test_concurrency_limit_async_does_not_block_event_loop():
 
 
 @pytest.mark.asyncio
-async def test_concurrency_limit_async_cancelled_waiter_does_not_leak_slot():
+async def test_concurrency_limit_async_cancelled_waiter_does_not_leak_slot(monkeypatch):
     """Cancelling a queued async caller must not leak a permit.
 
     Worker threads keep blocking on ``threading.Semaphore.acquire`` past
@@ -164,6 +165,17 @@ async def test_concurrency_limit_async_cancelled_waiter_does_not_leak_slot():
     interceptor = ConcurrencyLimitInterceptor({"FetchLogs": limit})
     holder_release = threading.Event()
     holders_started = 0
+
+    # Count late-releases so the test can wait for every cancelled waiter's worker
+    # thread to drain before returning (see the wait at the end).
+    drained = 0
+
+    def counting_release(fut):
+        nonlocal drained
+        _release_if_acquired(fut)
+        drained += 1
+
+    monkeypatch.setattr(rigging.rpc, "_release_if_acquired", counting_release)
 
     async def held_handler(req, ctx):
         nonlocal holders_started
@@ -209,6 +221,16 @@ async def test_concurrency_limit_async_cancelled_waiter_does_not_leak_slot():
         timeout=5.0,
     )
     assert results == ["fast"] * limit
+
+    # Drain every cancelled waiter before the test returns. Each still has a worker
+    # thread parked in sem.acquire(), and its late-release callback fires only while
+    # the event loop runs: a thread that takes a permit after loop teardown can never
+    # release it, so the remaining threads park forever and the loop's executor
+    # shutdown joins them forever. On runners slow enough that the drain outlives the
+    # test body this wedged teardown deterministically (10s pytest-timeout on CI).
+    async with asyncio.timeout(5):
+        while drained < len(waiters):
+            await asyncio.sleep(0.01)
 
 
 @pytest.mark.asyncio

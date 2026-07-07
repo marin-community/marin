@@ -3,17 +3,17 @@
 
 """The cross-lib slice of a cluster manifest (``config/<cluster>.yaml``).
 
-A *cluster manifest* is the single top-level file describing one logical cluster.
+A cluster manifest is the single top-level file describing one logical cluster.
 Different layers read different slices of it:
 
-- ``rigging`` models the **narrow** slice every client must agree on — the
+- ``rigging`` models the narrow slice every client must agree on — the
   cluster's identity (name, public origins) and how to authenticate to its edge
   (:class:`ClusterAuth`). This is pure mechanism: a typed view over YAML, with no
   IO, no orchestration, and no knowledge of what mints a token.
 - ``data:`` is parsed separately into a :class:`~rigging.filesystem.DataConfig`
   (storage layout); :func:`load_manifest` attaches it but does not redefine it.
-- Sections owned by callers *above* rigging — ``provisioning:`` (one-time GCP
-  rollouts) and ``policy:`` (per-user budgets/roles) — are intentionally **not**
+- Sections owned by callers above rigging — ``provisioning:`` (one-time GCP
+  rollouts) and ``policy:`` (per-user budgets/roles) — are intentionally not
   modeled here. The loader tolerates them and exposes the raw document via
   :attr:`ClusterManifest.document` so a higher layer can parse its own slice.
 
@@ -46,7 +46,6 @@ class AuthProvider(StrEnum):
 
     IAP = "iap"
     GCP = "gcp"
-    STATIC = "static"
     NONE = "none"
 
 
@@ -54,7 +53,7 @@ class AuthProvider(StrEnum):
 class IapAuth:
     """IAP edge-auth parameters a client needs to authenticate and a backend to verify.
 
-    ``desktop_oauth_client_secret`` is the Google *desktop* client secret, which is
+    ``desktop_oauth_client_secret`` is the Google desktop client secret, which is
     non-confidential per RFC 8252 §8.5 and may be committed; confidential material
     (e.g. the GCLB web client secret) belongs in ``provisioning:`` as a reference.
     """
@@ -113,8 +112,6 @@ def _parse_auth(raw: Mapping[str, Any]) -> ClusterAuth:
         return ClusterAuth(AuthProvider.IAP, iap=_parse_iap(raw["iap"]), admin_users=admin_users)
     if raw.get("gcp"):
         return ClusterAuth(AuthProvider.GCP, admin_users=admin_users)
-    if "static" in raw:
-        return ClusterAuth(AuthProvider.STATIC, admin_users=admin_users)
     return ClusterAuth(AuthProvider.NONE, admin_users=admin_users)
 
 
