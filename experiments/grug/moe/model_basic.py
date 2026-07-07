@@ -36,6 +36,7 @@ from experiments.grug.moe.model import (
     MoEMLP,
     _batch_spec,
     _init_weight,
+    rms_norm,
 )
 
 # FSDP axes for the non-expert params (attention, dense MLP, embed, lm_head): shard over
@@ -76,6 +77,11 @@ class BasicAttention(eqx.Module):
         q = rearrange(jnp.einsum("bsh,hd->bsd", x, self.w_q), "... (n d) -> ... n d", d=head_dim)
         k = rearrange(jnp.einsum("bsh,hd->bsd", x, self.w_k), "... (n d) -> ... n d", d=head_dim)
         v = rearrange(jnp.einsum("bsh,hd->bsd", x, self.w_v), "... (n d) -> ... n d", d=head_dim)
+
+        # Non-parametric QK norm (RMS over head_dim) before RoPE, matching model.py.
+        if qk_norm_enabled():
+            q = rms_norm(q)
+            k = rms_norm(k)
 
         if not no_rope_enabled():
             q, k = apply_rotary_embedding(q, k, seq_len=seq_len, head_dim=head_dim, rope=self.cfg.rope)
@@ -242,6 +248,11 @@ def moe_expert_intermediate(cfg: GrugModelConfig) -> int:
 def no_rope_enabled() -> bool:
     """Env toggle (SCALE_NO_ROPE=1): skip rotary position embedding (NoPE attention)."""
     return os.environ.get("SCALE_NO_ROPE") == "1"
+
+
+def qk_norm_enabled() -> bool:
+    """Env toggle (SCALE_QK_NORM=1): non-parametric RMS norm on Q and K before RoPE."""
+    return os.environ.get("SCALE_QK_NORM") == "1"
 
 
 def remat_every_k() -> int:
