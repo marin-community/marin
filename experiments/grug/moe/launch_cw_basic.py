@@ -82,9 +82,16 @@ def build_basic_model() -> GrugModelConfig:
     moe_impl = os.environ.get("SCALE_MOE_IMPL") or None
     if moe_impl not in (None, "ring", "ragged_all_to_all", "deepep", "scatter", "sonic"):
         raise ValueError(f"SCALE_MOE_IMPL={moe_impl!r} is not a known MoeImplementation")
-    # SCALE_ZERO_INIT zeros every weight (std=0): keeps the norm-free deep model finite
-    # for throughput probes where we only measure fit/MFU, not learning.
-    initializer_std = 0.0 if os.environ.get("SCALE_ZERO_INIT") == "1" else 0.02
+    # SCALE_INIT_STD sets the weight init std directly (used for every weight, incl. embed
+    # and router via embed_router_std); else SCALE_ZERO_INIT zeros every weight (std=0) for
+    # throughput probes; else the 0.02 default.
+    init_std_env = os.environ.get("SCALE_INIT_STD")
+    if init_std_env is not None:
+        initializer_std = float(init_std_env)
+    elif os.environ.get("SCALE_ZERO_INIT") == "1":
+        initializer_std = 0.0
+    else:
+        initializer_std = 0.02
     return GrugModelConfig(
         initializer_std=initializer_std,
         vocab_size=VOCAB_SIZE,
