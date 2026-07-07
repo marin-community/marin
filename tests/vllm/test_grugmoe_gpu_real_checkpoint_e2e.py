@@ -423,6 +423,8 @@ def test_vllm_completion_batch_summary_returns_all_prompt_outputs() -> None:
     ]
 
 
+# Run this opt-in H100 contract with `-o addopts= --session-timeout=0 -m gpu_ci`;
+# the marker timeout does not override the repo-wide pytest session timeout.
 @pytest.mark.gpu_ci
 @pytest.mark.integration
 @pytest.mark.slow
