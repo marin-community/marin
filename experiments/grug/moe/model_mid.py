@@ -41,6 +41,7 @@ from levanter.utils.activation import ActivationFunctionEnum
 
 from experiments.grug.moe.model import (
     DenseMLP,
+    GatedNorm,
     GrugModelConfig,
     MoEMLP,
     RMSNorm,
@@ -69,6 +70,12 @@ def shared_expert_intermediate(cfg: GrugModelConfig) -> int:
     return int(os.environ.get("SCALE_SHARED_EXPERT_INTERMEDIATE", str(cfg.hidden_dim)))
 
 
+def gated_norm_enabled() -> bool:
+    """Env toggle (SCALE_GATED_NORM=1): apply grug's learnable GatedNorm (rank 128) after
+    the pre-attn and pre-MLP RMSNorm, matching model.py."""
+    return os.environ.get("SCALE_GATED_NORM") == "1"
+
+
 class MoeMidBlock(eqx.Module):
     """Residual (pre-norm attention) + (pre-norm routed MoE + shared SwiGLU expert).
 
@@ -81,13 +88,15 @@ class MoeMidBlock(eqx.Module):
 
     attn: BasicAttention
     norm_attn: RMSNorm
+    gated_attn: GatedNorm | None
     norm_mlp: RMSNorm
+    gated_mlp: GatedNorm | None
     shared: DenseMLP
     moe: MoEMLP
 
     @staticmethod
     def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> "MoeMidBlock":
-        attn_key, shared_key, moe_key, router_key = random.split(key, 4)
+        attn_key, shared_key, moe_key, router_key, ga_key, gm_key = random.split(key, 6)
         # MoEMLP reads cfg.intermediate_dim as the *expert* width; swap in the (narrower)
         # routed-expert width so the config's own intermediate_dim is untouched.
         moe_cfg = dataclasses.replace(cfg, intermediate_dim=moe_expert_intermediate(cfg))
@@ -97,18 +106,26 @@ class MoeMidBlock(eqx.Module):
         router = reshard(_init_weight(router_key, moe.router.shape, embed_router_std(cfg)), P(None, None))
         moe = eqx.tree_at(lambda m: m.router, moe, router)
         shared = DenseMLP.init(cfg.hidden_dim, shared_expert_intermediate(cfg), cfg.initializer_std, key=shared_key)
+        gated = gated_norm_enabled()
         return MoeMidBlock(
             attn=BasicAttention.init(cfg, key=attn_key),
             norm_attn=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
+            gated_attn=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=ga_key) if gated else None,
             norm_mlp=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
+            gated_mlp=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=gm_key) if gated else None,
             shared=shared,
             moe=moe,
         )
 
     @named_call
     def __call__(self, x: Float[Array, "B S D"], mask: AttentionMask | jax.Array) -> Float[Array, "B S D"]:
-        x = x + self.attn(self.norm_attn(x), mask)
+        attn_in = self.norm_attn(x)
+        if self.gated_attn is not None:
+            attn_in = self.gated_attn(attn_in)
+        x = x + self.attn(attn_in, mask)
         mlp_in = self.norm_mlp(x)
+        if self.gated_mlp is not None:
+            mlp_in = self.gated_mlp(mlp_in)
         moe_out, _router_stats = self.moe(mlp_in)  # forward-only QB routing; stats unused
         shared_out = self.shared(mlp_in, activation=ActivationFunctionEnum.silu)
         return x + moe_out + shared_out
