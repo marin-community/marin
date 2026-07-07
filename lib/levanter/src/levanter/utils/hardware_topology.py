@@ -31,7 +31,7 @@ def jsonable_topology_value(value: Any) -> JsonAtom | list[Any] | dict[str, Any]
     return str(value)
 
 
-def device_topology_entry(device: Any) -> dict[str, Any]:
+def device_topology_entry(device: object) -> dict[str, Any]:
     entry: dict[str, Any] = {}
     for attr in (
         "id",
@@ -50,7 +50,7 @@ def device_topology_entry(device: Any) -> dict[str, Any]:
     return entry
 
 
-def tpu_topology_shape(devices: Sequence[Any]) -> str | None:
+def tpu_topology_shape(devices: Sequence[object]) -> str | None:
     """Return the TPU coordinate extent as ``AxBxC`` or ``None`` when unavailable."""
     coords = []
     for device in devices:
