@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import math
+from dataclasses import replace
 
 import jax
 import jax.numpy as jnp
@@ -22,9 +23,12 @@ from levanter.grug._moe.source_push_plan import (
     pack_source_push_tokens_jax,
     source_push_combine,
     source_push_combine_preweighted,
+    source_push_expert_offsets_from_counts,
     source_push_queue_route_weights_jax,
+    source_push_queue_entry_metadata_from_counts,
     source_push_recv_route_weights,
     source_push_recv_route_weights_jax,
+    source_push_route_rows_host_from_plan,
     source_push_w13_h,
     source_push_w2_from_h_return,
     recv_src_ordinal,
@@ -179,6 +183,101 @@ def test_source_push_plan_derives_expert_major_offsets_from_accepted_counts():
     assert occupied_offsets[(0, 1)] == {4, 5, 6}
     assert occupied_offsets[(1, 0)] == {0, 1, 2, 3, 4}
     assert occupied_offsets[(1, 1)] == {5, 6, 7, 8}
+
+
+def test_source_push_plan_cached_entry_metadata_is_derived_from_counts():
+    selected_experts, combine_weights = _small_routing_inputs()
+    plan = build_source_push_plan(
+        selected_experts,
+        combine_weights,
+        ep_size=EP_SIZE,
+        experts_per_rank=EXPERTS_PER_RANK,
+        block_m=BLOCK_M,
+        capacity_factor=2.0,
+    )
+
+    rows_per_expert, expert_base, src_base_by_expert = source_push_expert_offsets_from_counts(
+        plan.counts_by_src_dst_expert
+    )
+    np.testing.assert_array_equal(rows_per_expert, np.asarray(plan.rows_per_local_expert))
+    np.testing.assert_array_equal(expert_base, np.asarray(plan.expert_base))
+    np.testing.assert_array_equal(src_base_by_expert, np.asarray(plan.src_base_by_expert))
+
+    entry_metadata = source_push_queue_entry_metadata_from_counts(
+        plan.counts_by_src_dst_expert,
+        BLOCK_M,
+        entries_per_dst=plan.assignment_ids.shape[2],
+    )
+    np.testing.assert_array_equal(entry_metadata.local_experts, np.asarray(plan.local_experts))
+    np.testing.assert_array_equal(entry_metadata.local_row_starts, np.asarray(plan.local_row_starts))
+    np.testing.assert_array_equal(entry_metadata.send_meta, np.asarray(plan.send_meta))
+    np.testing.assert_array_equal(entry_metadata.recv_meta, np.asarray(plan.recv_meta))
+
+
+def test_source_push_plan_route_rows_derive_destination_expert_and_rows_from_global_assignments():
+    selected_experts, combine_weights = _small_routing_inputs()
+    plan = build_source_push_plan(
+        selected_experts,
+        combine_weights,
+        ep_size=EP_SIZE,
+        experts_per_rank=EXPERTS_PER_RANK,
+        block_m=BLOCK_M,
+        capacity_factor=2.0,
+    )
+
+    route_rows = source_push_route_rows_host_from_plan(plan)
+    selected_host = np.asarray(selected_experts)
+    token_ids = np.asarray(plan.token_ids)
+    route_slots = np.asarray(plan.route_slots)
+    valid_mask = np.asarray(plan.valid_mask)
+    src_base_by_expert = np.asarray(plan.src_base_by_expert)
+
+    np.testing.assert_array_equal(route_rows.token_id[valid_mask], token_ids[valid_mask])
+    np.testing.assert_array_equal(route_rows.route_slot[valid_mask], route_slots[valid_mask])
+    for src, dst_ord, entry, row in np.argwhere(valid_mask):
+        token = token_ids[src, dst_ord, entry, row]
+        route_slot = route_slots[src, dst_ord, entry, row]
+        global_expert = selected_host[src, token, route_slot]
+        expected_dst = global_expert // EXPERTS_PER_RANK
+        expected_expert = global_expert % EXPERTS_PER_RANK
+        expected_expert_row = (
+            src_base_by_expert[expected_dst, src, expected_expert]
+            + int(plan.local_row_starts[src, dst_ord, entry])
+            + row
+        )
+
+        assert route_rows.dst[src, dst_ord, entry, row] == expected_dst
+        assert route_rows.local_expert[src, dst_ord, entry, row] == expected_expert
+        assert route_rows.expert_row[src, dst_ord, entry, row] == expected_expert_row
+
+
+def test_source_push_plan_route_rows_ignore_cached_kernel_entry_metadata():
+    selected_experts, combine_weights = _small_routing_inputs()
+    plan = build_source_push_plan(
+        selected_experts,
+        combine_weights,
+        ep_size=EP_SIZE,
+        experts_per_rank=EXPERTS_PER_RANK,
+        block_m=BLOCK_M,
+        capacity_factor=2.0,
+    )
+
+    expected = source_push_route_rows_host_from_plan(plan)
+    corrupted_plan = replace(
+        plan,
+        local_experts=jnp.full_like(plan.local_experts, 1),
+        local_row_starts=jnp.full_like(plan.local_row_starts, 123),
+    )
+    observed = source_push_route_rows_host_from_plan(corrupted_plan)
+
+    np.testing.assert_array_equal(observed.src, expected.src)
+    np.testing.assert_array_equal(observed.dst, expected.dst)
+    np.testing.assert_array_equal(observed.local_expert, expected.local_expert)
+    np.testing.assert_array_equal(observed.expert_row, expected.expert_row)
+    np.testing.assert_array_equal(observed.token_id, expected.token_id)
+    np.testing.assert_array_equal(observed.route_slot, expected.route_slot)
+    np.testing.assert_array_equal(observed.assignment_id, expected.assignment_id)
+    np.testing.assert_array_equal(observed.valid, expected.valid)
 
 
 def test_source_push_plan_packs_tokens_and_restores_source_route_buffer():

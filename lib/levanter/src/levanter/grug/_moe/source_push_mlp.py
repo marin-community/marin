@@ -25,6 +25,7 @@ from levanter.grug._moe.source_push_plan import (
     SourcePushPlan,
     _source_push_out_sharding,
     build_source_push_plan,
+    source_push_route_rows_host_from_plan,
 )
 
 
@@ -79,6 +80,9 @@ class SourcePushMlpRouteTable:
     source_rank_by_expert: Int[Array, "Dst E C"]
     token_id_by_expert: Int[Array, "Dst E C"]
     route_slot_by_expert: Int[Array, "Dst E C"]
+    dst_ordinal_by_expert: Int[Array, "Dst E C"]
+    entry_by_expert: Int[Array, "Dst E C"]
+    row_in_entry_by_expert: Int[Array, "Dst E C"]
     valid_by_expert: Bool[Array, "Dst E C"]
     ep_size: int = field(metadata={"static": True})
     experts_per_rank: int = field(metadata={"static": True})
@@ -126,55 +130,39 @@ def source_push_mlp_route_table_from_plan(
 ) -> SourcePushMlpRouteTable:
     """Convert a ``SourcePushPlan`` into differentiable MLP route indices."""
 
-    assignment_ids = np.asarray(jax.device_get(plan.assignment_ids), dtype=np.int32)
-    valid_mask = np.asarray(jax.device_get(plan.valid_mask), dtype=np.bool_)
-    token_ids = np.asarray(jax.device_get(plan.token_ids), dtype=np.int32)
-    route_slots = np.asarray(jax.device_get(plan.route_slots), dtype=np.int32)
-    local_experts = np.asarray(jax.device_get(plan.local_experts), dtype=np.int32)
-    local_row_starts = np.asarray(jax.device_get(plan.local_row_starts), dtype=np.int32)
+    route_rows = source_push_route_rows_host_from_plan(plan, src_base_by_expert=src_base_by_expert)
     if src_base_by_expert is None:
         src_base_host = np.asarray(jax.device_get(plan.src_base_by_expert), dtype=np.int32)
     else:
         src_base_host = np.asarray(jax.device_get(src_base_by_expert), dtype=np.int32)
 
-    source_ranks = []
-    token_list = []
-    slot_list = []
-    destination_ranks = []
-    expert_list = []
-    row_list = []
-    ep_size = assignment_ids.shape[0]
+    valid_mask = route_rows.valid
+    source_ranks = route_rows.src[valid_mask]
+    token_list = route_rows.token_id[valid_mask]
+    slot_list = route_rows.route_slot[valid_mask]
+    destination_ranks = route_rows.dst[valid_mask]
+    expert_list = route_rows.local_expert[valid_mask]
+    row_list = route_rows.expert_row[valid_mask]
+    ep_size = valid_mask.shape[0]
     experts_per_rank = src_base_host.shape[-1]
-    for src in range(ep_size):
-        for dst_ordinal in range(assignment_ids.shape[1]):
-            dst = (src + dst_ordinal) % ep_size
-            for entry in range(assignment_ids.shape[2]):
-                expert = int(local_experts[src, dst_ordinal, entry])
-                if expert < 0:
-                    continue
-                base_row = int(src_base_host[dst, src, expert]) + int(local_row_starts[src, dst_ordinal, entry])
-                for row in range(assignment_ids.shape[3]):
-                    if not valid_mask[src, dst_ordinal, entry, row]:
-                        continue
-                    source_ranks.append(src)
-                    token_list.append(int(token_ids[src, dst_ordinal, entry, row]))
-                    slot_list.append(int(route_slots[src, dst_ordinal, entry, row]))
-                    destination_ranks.append(dst)
-                    expert_list.append(expert)
-                    row_list.append(base_row + row)
-
-    expert_capacity = max(row_list) + 1 if row_list else 0
+    expert_capacity = int(np.max(row_list)) + 1 if row_list.size else 0
     source_rank_by_expert = np.full((ep_size, experts_per_rank, expert_capacity), -1, dtype=np.int32)
     token_id_by_expert = np.full_like(source_rank_by_expert, -1)
     route_slot_by_expert = np.full_like(source_rank_by_expert, -1)
+    dst_ordinal_by_expert = np.full_like(source_rank_by_expert, -1)
+    entry_by_expert = np.full_like(source_rank_by_expert, -1)
+    row_in_entry_by_expert = np.full_like(source_rank_by_expert, -1)
     valid_by_expert = np.zeros_like(source_rank_by_expert, dtype=np.bool_)
-    for route in range(len(source_ranks)):
-        dst = destination_ranks[route]
-        expert = expert_list[route]
-        row = row_list[route]
-        source_rank_by_expert[dst, expert, row] = source_ranks[route]
-        token_id_by_expert[dst, expert, row] = token_list[route]
-        route_slot_by_expert[dst, expert, row] = slot_list[route]
+    for src, dst_ord, entry, row_in_entry in np.argwhere(valid_mask):
+        dst = int(route_rows.dst[src, dst_ord, entry, row_in_entry])
+        expert = int(route_rows.local_expert[src, dst_ord, entry, row_in_entry])
+        row = int(route_rows.expert_row[src, dst_ord, entry, row_in_entry])
+        source_rank_by_expert[dst, expert, row] = int(route_rows.src[src, dst_ord, entry, row_in_entry])
+        token_id_by_expert[dst, expert, row] = int(route_rows.token_id[src, dst_ord, entry, row_in_entry])
+        route_slot_by_expert[dst, expert, row] = int(route_rows.route_slot[src, dst_ord, entry, row_in_entry])
+        dst_ordinal_by_expert[dst, expert, row] = int(dst_ord)
+        entry_by_expert[dst, expert, row] = int(entry)
+        row_in_entry_by_expert[dst, expert, row] = int(row_in_entry)
         valid_by_expert[dst, expert, row] = True
 
     return SourcePushMlpRouteTable(
@@ -187,6 +175,9 @@ def source_push_mlp_route_table_from_plan(
         source_rank_by_expert=jnp.asarray(source_rank_by_expert, dtype=jnp.int32),
         token_id_by_expert=jnp.asarray(token_id_by_expert, dtype=jnp.int32),
         route_slot_by_expert=jnp.asarray(route_slot_by_expert, dtype=jnp.int32),
+        dst_ordinal_by_expert=jnp.asarray(dst_ordinal_by_expert, dtype=jnp.int32),
+        entry_by_expert=jnp.asarray(entry_by_expert, dtype=jnp.int32),
+        row_in_entry_by_expert=jnp.asarray(row_in_entry_by_expert, dtype=jnp.int32),
         valid_by_expert=jnp.asarray(valid_by_expert, dtype=jnp.bool_),
         ep_size=ep_size,
         experts_per_rank=experts_per_rank,

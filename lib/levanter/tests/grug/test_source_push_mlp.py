@@ -19,6 +19,7 @@ from levanter.grug._moe.source_push_mlp import (
     source_push_moe_mlp_reference_with_h,
     source_push_mlp_route_table_from_plan,
 )
+from levanter.grug._moe.source_push_plan import source_push_route_rows_host_from_plan
 
 
 EP_SIZE = 2
@@ -118,6 +119,31 @@ def _small_forward_plan_inputs():
     )
     assert int(host_inputs.plan.dropped_routes) == 0
     return config, host_inputs, route_table, x, route_weights, w13, w2
+
+
+def test_source_push_mlp_route_table_derives_compact_return_slots_from_plan_rows():
+    _config, host_inputs, route_table, _x, _route_weights, _w13, _w2 = _small_forward_plan_inputs()
+    route_rows = source_push_route_rows_host_from_plan(
+        host_inputs.plan,
+        src_base_by_expert=host_inputs.src_base_by_expert,
+    )
+
+    for src, dst_ord, entry, row_in_entry in np.argwhere(route_rows.valid):
+        dst = int(route_rows.dst[src, dst_ord, entry, row_in_entry])
+        expert = int(route_rows.local_expert[src, dst_ord, entry, row_in_entry])
+        expert_row = int(route_rows.expert_row[src, dst_ord, entry, row_in_entry])
+
+        assert int(route_table.source_rank_by_expert[dst, expert, expert_row]) == src
+        assert int(route_table.token_id_by_expert[dst, expert, expert_row]) == int(
+            route_rows.token_id[src, dst_ord, entry, row_in_entry]
+        )
+        assert int(route_table.route_slot_by_expert[dst, expert, expert_row]) == int(
+            route_rows.route_slot[src, dst_ord, entry, row_in_entry]
+        )
+        assert int(route_table.dst_ordinal_by_expert[dst, expert, expert_row]) == dst_ord
+        assert int(route_table.entry_by_expert[dst, expert, expert_row]) == entry
+        assert int(route_table.row_in_entry_by_expert[dst, expert, expert_row]) == row_in_entry
+        assert bool(route_table.valid_by_expert[dst, expert, expert_row])
 
 
 def test_source_push_moe_mlp_reference_saves_w13_preactivation_h():

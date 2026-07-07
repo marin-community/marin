@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
+from typing import NamedTuple
 
 import jax
 import jax.numpy as jnp
@@ -83,6 +84,28 @@ class SourcePushPlanRowStats:
     masked_row_fraction: float
 
 
+class SourcePushQueueEntryMetadata(NamedTuple):
+    """Expanded queue-entry metadata derived from per-source destination counts."""
+
+    local_experts: np.ndarray
+    local_row_starts: np.ndarray
+    send_meta: np.ndarray
+    recv_meta: np.ndarray
+
+
+class SourcePushRouteRowsHostData(NamedTuple):
+    """Host route identity and compact expert-row placement derived from a plan."""
+
+    src: np.ndarray
+    dst: np.ndarray
+    local_expert: np.ndarray
+    expert_row: np.ndarray
+    token_id: np.ndarray
+    route_slot: np.ndarray
+    assignment_id: np.ndarray
+    valid: np.ndarray
+
+
 def dst_ordinal(src: int, dst: int, ep_size: int) -> int:
     """Return the source-local destination ordinal used by the transport queue."""
 
@@ -93,6 +116,87 @@ def recv_src_ordinal(dst: int, src: int, ep_size: int) -> int:
     """Return the destination-local source ordinal used by receive metadata."""
 
     return (src - dst) % ep_size
+
+
+def source_push_expert_offsets_from_counts(
+    counts_by_src_dst_expert: Int[Array, "S Dst E"] | np.ndarray,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Derive exact expert-major row counts and prefix offsets from accepted counts."""
+
+    counts = _counts_host(counts_by_src_dst_expert)
+    rows_per_local_expert = np.asarray(np.sum(counts, axis=0, dtype=np.int32), dtype=np.int32)
+    expert_base = _exclusive_cumsum(rows_per_local_expert, axis=1)
+    src_base_by_expert = np.zeros((counts.shape[1], counts.shape[0], counts.shape[2]), dtype=np.int32)
+    for dst in range(counts.shape[1]):
+        src_base_by_expert[dst] = _exclusive_cumsum(counts[:, dst, :], axis=0)
+    return rows_per_local_expert, expert_base, src_base_by_expert
+
+
+def source_push_queue_entry_metadata_from_counts(
+    counts_by_src_dst_expert: Int[Array, "S Dst E"] | np.ndarray,
+    block_m: int,
+    *,
+    entries_per_dst: int | None = None,
+) -> SourcePushQueueEntryMetadata:
+    """Derive queue-entry expert, row-start, and send/receive metadata from counts.
+
+    This is the analytical representation behind ``local_experts``,
+    ``local_row_starts``, ``send_meta``, and ``recv_meta``. The arrays remain on
+    ``SourcePushPlan`` as cached kernel inputs, but their ownership is the
+    per-``(source, destination, local_expert)`` count tensor plus ``block_m``.
+    """
+
+    if block_m <= 0:
+        raise ValueError(f"block_m must be positive, got {block_m}")
+    counts = _counts_host(counts_by_src_dst_expert)
+    ep_size, dst_count, experts_per_rank = counts.shape
+    if ep_size != dst_count:
+        raise ValueError(f"source-push counts must be square in source/destination dims, got {counts.shape}")
+
+    required_entries_per_dst = _required_entries_per_dst(counts, block_m)
+    if entries_per_dst is None:
+        entries_per_dst = required_entries_per_dst
+    if entries_per_dst < required_entries_per_dst:
+        raise ValueError(
+            "source-push queue capacity overflow: "
+            f"entries_per_dst={entries_per_dst} but required {required_entries_per_dst}"
+        )
+
+    local_experts = np.full((ep_size, ep_size, entries_per_dst), INVALID_ASSIGNMENT_ID, dtype=np.int32)
+    local_row_starts = np.zeros((ep_size, ep_size, entries_per_dst), dtype=np.int32)
+    send_meta = np.zeros((ep_size, ep_size, entries_per_dst, SOURCE_PUSH_META_FIELDS), dtype=np.int32)
+
+    for src in range(ep_size):
+        for dst in range(ep_size):
+            dst_entry = 0
+            dst_ord = dst_ordinal(src, dst, ep_size)
+            for local_expert in range(experts_per_rank):
+                accepted_count = int(counts[src, dst, local_expert])
+                for local_row_start in range(0, accepted_count, block_m):
+                    valid_rows = min(block_m, accepted_count - local_row_start)
+                    local_experts[src, dst_ord, dst_entry] = local_expert
+                    local_row_starts[src, dst_ord, dst_entry] = local_row_start
+                    send_meta[src, dst_ord, dst_entry, :] = (
+                        src,
+                        local_expert,
+                        local_row_start,
+                        valid_rows,
+                    )
+                    dst_entry += 1
+
+    recv_meta = np.zeros_like(send_meta)
+    for dst in range(ep_size):
+        for src in range(ep_size):
+            send_dst_ord = dst_ordinal(src, dst, ep_size)
+            recv_src_ord = recv_src_ordinal(dst, src, ep_size)
+            recv_meta[dst, recv_src_ord, :, :] = send_meta[src, send_dst_ord, :, :]
+
+    return SourcePushQueueEntryMetadata(
+        local_experts=local_experts,
+        local_row_starts=local_row_starts,
+        send_meta=send_meta,
+        recv_meta=recv_meta,
+    )
 
 
 def build_source_push_plan(
@@ -152,8 +256,7 @@ def build_source_push_plan(
     )
     counts_by_src_dst_expert = clipped_group_sizes.reshape(ep_size, ep_size, experts_per_rank)
 
-    entries_required = np.sum(_ceil_div(counts_by_src_dst_expert, block_m), axis=2)
-    required_entries_per_dst = int(np.max(entries_required)) if entries_required.size else 0
+    required_entries_per_dst = _required_entries_per_dst(counts_by_src_dst_expert, block_m)
     if entries_per_dst is None:
         entries_per_dst = required_entries_per_dst
     if entries_per_dst < required_entries_per_dst:
@@ -162,11 +265,14 @@ def build_source_push_plan(
             f"entries_per_dst={entries_per_dst} but required {required_entries_per_dst}"
         )
 
-    rows_per_local_expert = np.sum(counts_by_src_dst_expert, axis=0, dtype=np.int32)
-    expert_base = _exclusive_cumsum(rows_per_local_expert, axis=1)
-    src_base_by_expert = np.zeros((ep_size, ep_size, experts_per_rank), dtype=np.int32)
-    for dst in range(ep_size):
-        src_base_by_expert[dst] = _exclusive_cumsum(counts_by_src_dst_expert[:, dst, :], axis=0)
+    rows_per_local_expert, expert_base, src_base_by_expert = source_push_expert_offsets_from_counts(
+        counts_by_src_dst_expert
+    )
+    entry_metadata = source_push_queue_entry_metadata_from_counts(
+        counts_by_src_dst_expert,
+        block_m,
+        entries_per_dst=entries_per_dst,
+    )
 
     queue_shape = (ep_size, ep_size, entries_per_dst, block_m)
     assignment_ids = np.full(queue_shape, INVALID_ASSIGNMENT_ID, dtype=np.int32)
@@ -174,9 +280,10 @@ def build_source_push_plan(
     route_slots = np.full(queue_shape, INVALID_ASSIGNMENT_ID, dtype=np.int32)
     combine_weights_host = np.zeros(queue_shape, dtype=weights_host.dtype)
     valid_mask = np.zeros(queue_shape, dtype=np.bool_)
-    local_experts = np.full((ep_size, ep_size, entries_per_dst), INVALID_ASSIGNMENT_ID, dtype=np.int32)
-    local_row_starts = np.zeros((ep_size, ep_size, entries_per_dst), dtype=np.int32)
-    send_meta = np.zeros((ep_size, ep_size, entries_per_dst, SOURCE_PUSH_META_FIELDS), dtype=np.int32)
+    local_experts = entry_metadata.local_experts
+    local_row_starts = entry_metadata.local_row_starts
+    send_meta = entry_metadata.send_meta
+    recv_meta = entry_metadata.recv_meta
 
     flat_assignment_ids = np.arange(assignments_per_source, dtype=np.int32)
     for src in range(ep_size):
@@ -205,22 +312,7 @@ def build_source_push_plan(
                     route_slots[src, dst_ord, dst_entry, row_slice] = block_assignment_ids % topk
                     combine_weights_host[src, dst_ord, dst_entry, row_slice] = source_weights[block_assignment_ids]
                     valid_mask[src, dst_ord, dst_entry, row_slice] = True
-                    local_experts[src, dst_ord, dst_entry] = local_expert
-                    local_row_starts[src, dst_ord, dst_entry] = local_row_start
-                    send_meta[src, dst_ord, dst_entry, :] = (
-                        src,
-                        local_expert,
-                        local_row_start,
-                        valid_rows,
-                    )
                     dst_entry += 1
-
-    recv_meta = np.zeros_like(send_meta)
-    for dst in range(ep_size):
-        for src in range(ep_size):
-            send_dst_ord = dst_ordinal(src, dst, ep_size)
-            recv_src_ord = recv_src_ordinal(dst, src, ep_size)
-            recv_meta[dst, recv_src_ord, :, :] = send_meta[src, send_dst_ord, :, :]
 
     dropped_routes = selected_host.size - int(np.sum(counts_by_src_dst_expert, dtype=np.int64))
     return SourcePushPlan(
@@ -293,6 +385,63 @@ def source_push_source_padded_row_bases(
     return rounded_counts, expert_base, src_base_by_expert
 
 
+def source_push_route_rows_host_from_plan(
+    plan: SourcePushPlan,
+    *,
+    src_base_by_expert: Int[Array, "Dst S E"] | np.ndarray | None = None,
+) -> SourcePushRouteRowsHostData:
+    """Derive queue route identity and compact expert rows from plan counts.
+
+    ``local_experts`` and ``local_row_starts`` are intentionally not read from
+    the plan here. They are cached kernel metadata; the analytical owner is the
+    count tensor plus ``block_m`` and the selected compact source bases.
+    """
+
+    assignment_ids = np.asarray(jax.device_get(plan.assignment_ids), dtype=np.int32)
+    token_ids = np.asarray(jax.device_get(plan.token_ids), dtype=np.int32)
+    route_slots = np.asarray(jax.device_get(plan.route_slots), dtype=np.int32)
+    valid = np.asarray(jax.device_get(plan.valid_mask), dtype=np.bool_)
+    block_m = assignment_ids.shape[-1]
+    metadata = source_push_queue_entry_metadata_from_counts(
+        plan.counts_by_src_dst_expert,
+        block_m,
+        entries_per_dst=assignment_ids.shape[2],
+    )
+    if src_base_by_expert is None:
+        src_base_host = np.asarray(jax.device_get(plan.src_base_by_expert), dtype=np.int32)
+    else:
+        src_base_host = np.asarray(jax.device_get(src_base_by_expert), dtype=np.int32)
+
+    _validate_route_rows_shapes(assignment_ids, token_ids, route_slots, valid, metadata, src_base_host)
+
+    ep_size, dst_ord_count, entries_per_dst, _ = valid.shape
+    src_by_entry = np.arange(ep_size, dtype=np.int32)[:, None, None]
+    dst_ord_by_entry = np.arange(dst_ord_count, dtype=np.int32)[None, :, None]
+    src_by_entry = np.broadcast_to(src_by_entry, (ep_size, dst_ord_count, entries_per_dst))
+    dst_by_entry = (src_by_entry + dst_ord_by_entry) % ep_size
+    dst_by_entry = np.broadcast_to(dst_by_entry, src_by_entry.shape)
+
+    safe_expert_by_entry = np.maximum(metadata.local_experts, 0)
+    row_base = src_base_host[dst_by_entry, src_by_entry, safe_expert_by_entry]
+    row_offsets = np.arange(block_m, dtype=np.int32)[None, None, None, :]
+    expert_row = row_base[..., None] + metadata.local_row_starts[..., None] + row_offsets
+
+    src = np.broadcast_to(src_by_entry[..., None], valid.shape)
+    dst = np.broadcast_to(dst_by_entry[..., None], valid.shape)
+    local_expert = np.broadcast_to(safe_expert_by_entry[..., None], valid.shape)
+    zeros = np.zeros((), dtype=np.int32)
+    return SourcePushRouteRowsHostData(
+        src=np.where(valid, src, zeros),
+        dst=np.where(valid, dst, zeros),
+        local_expert=np.where(valid, local_expert, zeros),
+        expert_row=np.where(valid, expert_row, zeros),
+        token_id=np.where(valid, np.maximum(token_ids, 0), zeros),
+        route_slot=np.where(valid, np.maximum(route_slots, 0), zeros),
+        assignment_id=np.where(valid, np.maximum(assignment_ids, 0), zeros),
+        valid=valid,
+    )
+
+
 def pack_source_push_tokens(
     x: Float[Array, "S T D"],
     plan: SourcePushPlan,
@@ -345,6 +494,52 @@ def source_push_queue_route_weights_jax(
     )
     queue_weights = jnp.where(plan.valid_mask, queue_weights, jnp.zeros((), dtype=route_weights.dtype))
     return _with_source_push_sharding(queue_weights, SOURCE_PUSH_MESH_AXIS, None, None, None)
+
+
+def source_push_h_row_route_weights_jax(
+    route_weights: Float[Array, "S T K"],
+    plan: SourcePushPlan,
+    send_meta: Int[Array, "S Dst Q F"] | np.ndarray,
+    expert_base: Int[Array, "Dst E"] | np.ndarray,
+    src_base_by_expert: Int[Array, "Dst S E"] | np.ndarray,
+    *,
+    hidden_rows_per_rank: int,
+    use_exact_expert_major: bool,
+) -> Float[Array, "Dst rows"]:
+    """Gather route weights into the same flat destination row layout as H."""
+
+    queue_weights = source_push_queue_route_weights_jax(route_weights, plan)
+    send_meta = jnp.asarray(send_meta, dtype=jnp.int32)
+    expert_base = jnp.asarray(expert_base, dtype=jnp.int32)
+    src_base_by_expert = jnp.asarray(src_base_by_expert, dtype=jnp.int32)
+    valid_mask = jnp.asarray(plan.valid_mask, dtype=jnp.bool_)
+
+    ep_size, _, entries_per_dst, block_m = valid_mask.shape
+    src = jnp.arange(ep_size, dtype=jnp.int32)[:, None, None]
+    dst_ordinal = jnp.arange(ep_size, dtype=jnp.int32)[None, :, None]
+    src = jnp.broadcast_to(src, (ep_size, ep_size, entries_per_dst))
+    dst = (src + dst_ordinal) % ep_size
+
+    metadata_row_start = send_meta[..., SOURCE_PUSH_META_LOCAL_ROW_START]
+    if use_exact_expert_major:
+        expert = jnp.maximum(send_meta[..., SOURCE_PUSH_META_LOCAL_EXPERT], 0)
+        base_row = expert_base.at[dst, expert].get()
+        src_base = src_base_by_expert.at[dst, src, expert].get()
+        row_start = base_row + src_base + metadata_row_start
+    else:
+        row_start = metadata_row_start
+
+    row_offsets = jnp.arange(block_m, dtype=jnp.int32)[None, None, None, :]
+    flat_row = jnp.where(valid_mask, row_start[..., None] + row_offsets, jnp.zeros((), dtype=jnp.int32))
+    flat_dst = jnp.where(valid_mask, jnp.broadcast_to(dst[..., None], flat_row.shape), jnp.zeros((), dtype=jnp.int32))
+    weighted_rows = jnp.where(valid_mask, queue_weights, jnp.zeros((), dtype=queue_weights.dtype))
+    weighted_rows = _with_source_push_sharding(weighted_rows, None, None, None, None)
+    out = jnp.zeros((ep_size, hidden_rows_per_rank), dtype=route_weights.dtype)
+    h_row_weights = out.at[flat_dst, flat_row].add(
+        weighted_rows,
+        out_sharding=_source_push_out_sharding(SOURCE_PUSH_MESH_AXIS, None),
+    )
+    return _with_source_push_sharding(h_row_weights, SOURCE_PUSH_MESH_AXIS, None)
 
 
 def source_push_recv_route_weights_jax(
@@ -482,6 +677,46 @@ def _ceil_div(values: np.ndarray, divisor: int) -> np.ndarray:
 def _exclusive_cumsum(values: np.ndarray, axis: int) -> np.ndarray:
     cumsum = np.cumsum(values, axis=axis, dtype=np.int32)
     return cumsum - values
+
+
+def _counts_host(counts_by_src_dst_expert: Int[Array, "S Dst E"] | np.ndarray) -> np.ndarray:
+    counts = np.asarray(jax.device_get(counts_by_src_dst_expert), dtype=np.int32)
+    if counts.ndim != 3:
+        raise ValueError(f"counts_by_src_dst_expert must have shape [source, destination, expert], got {counts.shape}")
+    if np.any(counts < 0):
+        raise ValueError("counts_by_src_dst_expert must be non-negative")
+    return counts
+
+
+def _required_entries_per_dst(counts_by_src_dst_expert: np.ndarray, block_m: int) -> int:
+    entries_required = np.sum(_ceil_div(counts_by_src_dst_expert, block_m), axis=2)
+    return int(np.max(entries_required)) if entries_required.size else 0
+
+
+def _validate_route_rows_shapes(
+    assignment_ids: np.ndarray,
+    token_ids: np.ndarray,
+    route_slots: np.ndarray,
+    valid: np.ndarray,
+    metadata: SourcePushQueueEntryMetadata,
+    src_base_by_expert: np.ndarray,
+) -> None:
+    if token_ids.shape != assignment_ids.shape:
+        raise ValueError(f"token_ids shape {token_ids.shape} must match assignment_ids {assignment_ids.shape}")
+    if route_slots.shape != assignment_ids.shape:
+        raise ValueError(f"route_slots shape {route_slots.shape} must match assignment_ids {assignment_ids.shape}")
+    if valid.shape != assignment_ids.shape:
+        raise ValueError(f"valid shape {valid.shape} must match assignment_ids {assignment_ids.shape}")
+
+    entry_shape = assignment_ids.shape[:3]
+    if metadata.local_experts.shape != entry_shape:
+        raise ValueError(f"derived local_experts shape {metadata.local_experts.shape} must match {entry_shape}")
+    if metadata.local_row_starts.shape != entry_shape:
+        raise ValueError(f"derived local_row_starts shape {metadata.local_row_starts.shape} must match {entry_shape}")
+
+    ep_size = assignment_ids.shape[0]
+    if src_base_by_expert.shape[0] != ep_size or src_base_by_expert.shape[1] != ep_size:
+        raise ValueError(f"src_base_by_expert shape {src_base_by_expert.shape} must start with {(ep_size, ep_size)}")
 
 
 def _validate_w2_return_shapes(
