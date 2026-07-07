@@ -200,12 +200,11 @@ byte-for-byte identical on all backends (GPU Triton / TPU Megablox / XLA).
 
 ### Delayed per-tensor scaling
 
-`Fp8RaggedDotOp` uses TE-style delayed per-tensor scaling for the activation (lhs),
-expert weight (rhs), and output gradient.  Each carries a `scale` and
-`amax_history` that update automatically through the custom VJP as
-`OverwriteWithGradient` cotangents — they thread through
-`partition_for_grad_overwrite` / `apply_updates` and stay out of the
-optimizer/EMA state.  No explicit scale management is required.
+`Fp8RaggedDotOp` carries the same delayed-scaling state as
+[haliax.quantization.Fp8DotGeneralOp][] — a `scale` and `amax_history` per
+tensor (activation, expert weight, and output gradient), updated through the
+gradient hijack described in [How FP8 works](#how-fp8-works) above — and shares
+the same scaling-recipe helpers, so the two ops quantize identically.
 
 ### Mixed backward
 
@@ -221,19 +220,18 @@ mantissa, which can distort large-magnitude output gradients).  Gradient
 relative-Frobenius error at the operating point is < 6e-2 for both recipes
 (within the accepted FP8 tolerance).
 
-### Performance (H100, d2560 grug-MoE operating point)
+### Performance (H100, d=2560 MoE operating point)
 
 Operating point: w13 shape, E_local=64, 1024 tokens/expert (non-uniform groups).
 Measured fwd+bwd speedup vs the bf16 Triton baseline, with a throughput timer
-(enqueue N calls, block once — representative of a pipelined training step):
-**1.35×** at the operating point, **1.20×** at the w2 (down-projection) point
-(**1.38×** / **1.23×** at the EP4 per-device batch of 1280 tokens/expert;
-measured with the uniform `e4m3` backward -- the genuine mixed `e5m2 x e4m3`
-backward has repeatedly measured within run-to-run variance of it, so the
-correct E5M2 gradient costs nothing).
-Per-call latency timing (sync after every call) reports lower speedups because
-the added sync penalizes FP8's extra kernel launches; training runs see the
-throughput number.  See `lib/haliax/bench/bench_fp8_ragged_dot.py` for the full
+(enqueue N calls, block once — representative of a pipelined training step;
+a per-call sync would penalize FP8's extra kernel launches and understate what
+a training run sees): **1.35×** at the operating point, **1.20×** at the w2
+(down-projection) point (**1.38×** / **1.23×** at the EP4 per-device batch of
+1280 tokens/expert; measured with the uniform `e4m3` backward -- the genuine
+mixed `e5m2 x e4m3` backward has repeatedly measured within run-to-run variance
+of it, so the correct E5M2 gradient costs nothing).  See
+`lib/haliax/bench/bench_fp8_ragged_dot.py` for the full
 sweep (E_local ∈ {16,32,64}, tokens/expert ∈ {512,1024,2048,4096}, w13 and w2
 shapes).
 

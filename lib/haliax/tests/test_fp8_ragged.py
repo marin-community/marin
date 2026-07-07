@@ -9,7 +9,12 @@ import numpy as np
 import pytest
 
 from haliax.nn.ragged_dot import ragged_dot
-from haliax.quantization import Fp8RaggedDotOp, _jax_supports_mixed_fp8_wgmma, apply_updates, partition_for_grad_overwrite
+from haliax.quantization import (
+    Fp8RaggedDotOp,
+    _jax_supports_mixed_fp8_wgmma,
+    apply_updates,
+    partition_for_grad_overwrite,
+)
 
 
 def _on_hopper_gpu() -> bool:
