@@ -168,11 +168,11 @@ def run_grug_moe_trial(config: GrugMoeLaunchConfig) -> None:
         require_accelerator=True,
         allow_nondivisible_batch_size=False,
         initialize_from=initialize_from,
-        # Rolling temporary checkpoint every 2 min (debugging the first-save rank-0 death);
-        # keep=None means no periodic permanent checkpoints -- only the trainer's forced final save.
+        # Rolling temporary checkpoint every 20 min (preemption recovery); keep=None means no
+        # periodic permanent checkpoints -- only the trainer's forced final save at num_train_steps.
         checkpointer=config.checkpointer
         or resolve_checkpointer_output_path(
-            CheckpointerConfig(save_interval=timedelta(minutes=2), keep=None),
+            CheckpointerConfig(save_interval=timedelta(minutes=20), keep=None),
             config.output_path,
         ),
     )
