@@ -51,6 +51,7 @@ def device_topology_entry(device: Any) -> dict[str, Any]:
 
 
 def tpu_topology_shape(devices: Sequence[Any]) -> str | None:
+    """Return the TPU coordinate extent as ``AxBxC`` or ``None`` when unavailable."""
     coords = []
     for device in devices:
         if getattr(device, "platform", None) != "tpu" or not hasattr(device, "coords"):
@@ -136,6 +137,12 @@ def nvidia_topology_matrix_summary(stdout: str) -> dict[str, dict[str, int]]:
 
 
 def nvidia_smi_topology() -> dict[str, Any] | None:
+    """Return ``nvidia-smi topo -m`` output, or ``None`` when ``nvidia-smi`` is absent.
+
+    Raises:
+        OSError: If ``nvidia-smi`` cannot be executed.
+        subprocess.SubprocessError: If ``nvidia-smi`` exits nonzero or times out.
+    """
     nvidia_smi = shutil.which("nvidia-smi")
     if nvidia_smi is None:
         return None
