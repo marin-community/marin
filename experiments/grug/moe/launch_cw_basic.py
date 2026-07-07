@@ -54,6 +54,7 @@ from experiments.grug.moe.launch_cw_scale import (
     VOCAB_SIZE,
 )
 from experiments.grug.moe.model import GrugModelConfig, RematMode
+from experiments.grug.moe.optimizer import GrugMoeAdamHConfig, GrugMoeMuonHConfig
 from experiments.grug.moe.train import GrugRunConfig, GrugTrainerConfig
 from experiments.grug.moe.train_basic import run_grug_basic
 from experiments.grug.moe.train_mid import run_grug_mid
@@ -166,10 +167,17 @@ def build_basic_checkpoint(*, version: str = "dev") -> ArtifactStep[LevanterChec
     # to stay finite long enough to reach the profiler window).
     lr = float(os.environ.get("SCALE_LR") or SCALE_OPTIMIZER.learning_rate)
     optimizer: OptimizerConfig
-    if os.environ.get("SCALE_OPTIMIZER", "adam").lower() in ("muon", "grug_muon"):
+    opt_name = os.environ.get("SCALE_OPTIMIZER", "adam").lower()
+    if opt_name in ("muon", "grug_muon"):
         # Muon (one momentum buffer) for matrix/expert weights + AdamW for embed/head:
         # ~8 B/param vs Adam's 12, the memory lever for large-expert-count MoE.
         optimizer = GrugMuonConfig(learning_rate=lr, adam_lr=lr)
+    elif opt_name in ("muonh", "grug_moe_muonh"):
+        # May Recipe MuonH: Newton-Schulz + norm-preserving ("H") step on the matrix
+        # groups (attn / experts / shared / gated), AdamH on lm_head, Adam on the rest.
+        optimizer = GrugMoeMuonHConfig(learning_rate=lr, adam_lr=lr)
+    elif opt_name in ("adamh", "grug_moe_adamh"):
+        optimizer = GrugMoeAdamHConfig(learning_rate=lr, adam_lr=lr)
     else:
         optimizer = dataclasses.replace(SCALE_OPTIMIZER, learning_rate=lr)
 
