@@ -793,10 +793,6 @@ def _initialize_global_tracker(config, run_id):
     levanter.tracker.set_global_tracker(tracker)
 
 
-def _log_hardware_topology() -> None:
-    levanter.tracker.log_summary({"hardware_topology": hardware_topology_summary()})
-
-
 @dataclass
 class TrainerConfig:
     seed: int = 0  # random seed
@@ -933,7 +929,7 @@ class TrainerConfig:
         id = self._maybe_set_id()
         levanter.utils.logging.init_logging(self.log_dir, f"{id}.log")
         _initialize_global_tracker(self.tracker, id)
-        _log_hardware_topology()
+        levanter.tracker.log_summary({"hardware_topology": hardware_topology_summary()})
 
         if self.require_accelerator is None:
             self.require_accelerator = not sys.platform.startswith("darwin")
