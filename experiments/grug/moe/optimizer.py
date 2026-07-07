@@ -197,8 +197,12 @@ class GrugMoeAdamHConfig(OptimizerConfig):
                 return "adam"
             if "router_bias" in path_lower or "attn_gate" in path_lower or ".router" in path_lower:
                 return "adam"
-            # RMSNorm/LayerNorm gains -> plain Adam.
-            if "norm" in path_lower:
+            # GatedNorm projections are matrices -> adamh; checked before the rms/norm test
+            # (model.py names them *_gated_norm).
+            if "gated" in path_lower:
+                return "adamh"
+            # RMSNorm/LayerNorm gains -> plain Adam (model.py rms_*, model_mid norm_*).
+            if "rms" in path_lower or "norm" in path_lower:
                 return "adam"
             if "expert_mlp.w_" in path_lower or ".shared.w_" in path_lower:
                 return "adamh_expert"
@@ -300,12 +304,17 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                 return "adam"
             if "output_proj" in path_lower or "lm_head" in path_lower:
                 return "adamh"
-            # RMSNorm/LayerNorm gains are per-dimension scales (stack to 2D under scan),
-            # not orthogonalizable matrices -> plain Adam.
-            if "norm" in path_lower:
+            # GatedNorm low-rank projections are real matrices -> MuonH. Checked before the
+            # norm test since model.py names them *_gated_norm (contains "norm"); model_mid
+            # names them gated_*.
+            if "gated" in path_lower:
+                return "muonh"
+            # RMSNorm/LayerNorm gains are per-dimension scales (stack to 2D under scan), not
+            # orthogonalizable matrices -> plain Adam. Handles model.py's rms_attn/rms_mlp
+            # and model_mid's norm_* naming.
+            if "rms" in path_lower or "norm" in path_lower:
                 return "adam"
-            # Matrices -> MuonH: attention, MoE experts (4D when stacked under scan), shared
-            # expert, and GatedNorm low-rank projections.
+            # Matrices -> MuonH: attention, MoE experts (4D when stacked under scan), shared.
             if hasattr(param, "ndim") and param.ndim in (2, 3, 4):
                 return "muonh"
             return "adam"
