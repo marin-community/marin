@@ -23,6 +23,7 @@ import numpy as np
 import pytest
 
 from tests.vllm import grugmoe_gpu_real_checkpoint_backend as backend
+from tests.vllm.grugmoe_real_checkpoint_backend import E2EPaths, _expert_gate_up_tensors
 
 BACKEND_PATH = Path(__file__).with_name("grugmoe_gpu_real_checkpoint_backend.py").resolve()
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -42,20 +43,18 @@ def _resolve_run_id() -> str:
     return f"{stamp}-{uuid.uuid4().hex[:8]}"
 
 
-def _artifact_dir(run_id: str, output_dir: str) -> str:
-    if backend._remote_artifact_upload_enabled():
-        return backend._join_path(output_dir, "artifact")
+def _artifact_dir(run_id: str) -> str:
     return str(Path(backend.LOCAL_ARTIFACT_ROOT) / run_id / "artifact")
 
 
 @pytest.fixture(scope="module")
-def e2e_paths() -> backend.E2EPaths:
+def e2e_paths() -> E2EPaths:
     run_id = _resolve_run_id()
     output_dir = os.environ.get(backend.OUTPUT_DIR_ENV) or backend._join_path(backend.OUTPUT_ROOT, run_id)
-    return backend.E2EPaths(
+    return E2EPaths(
         output_dir=output_dir,
         cache_dir=backend._join_path(backend.CACHE_ROOT, run_id),
-        artifact_dir=_artifact_dir(run_id, output_dir),
+        artifact_dir=_artifact_dir(run_id),
         export_result_path=backend._join_path(output_dir, "export-result.json"),
         vllm_result_path=backend._join_path(output_dir, "vllm-result-triton_attn.json"),
         levanter_result_path=backend._join_path(output_dir, "levanter-result.json"),
@@ -63,11 +62,11 @@ def e2e_paths() -> backend.E2EPaths:
     )
 
 
-def _vllm_result_path(paths: backend.E2EPaths, attention_backend: str) -> str:
+def _vllm_result_path(paths: E2EPaths, attention_backend: str) -> str:
     return backend._join_path(paths.output_dir, f"vllm-result-{attention_backend.lower()}.json")
 
 
-def _vllm_result_paths(paths: backend.E2EPaths) -> dict[str, str]:
+def _vllm_result_paths(paths: E2EPaths) -> dict[str, str]:
     return {
         attention_backend: _vllm_result_path(paths, attention_backend)
         for attention_backend in backend.VLLM_ATTENTION_BACKENDS_UNDER_TEST
@@ -76,7 +75,7 @@ def _vllm_result_paths(paths: backend.E2EPaths) -> dict[str, str]:
 
 def _run_backend(
     phase: str,
-    paths: backend.E2EPaths,
+    paths: E2EPaths,
     result_path: str,
     *,
     attention_backend: str = "",
@@ -121,12 +120,12 @@ def _run_backend(
 
 
 @pytest.fixture(scope="module")
-def export_result(e2e_paths: backend.E2EPaths) -> dict[str, Any]:
+def export_result(e2e_paths: E2EPaths) -> dict[str, Any]:
     return _run_backend("export", e2e_paths, e2e_paths.export_result_path)
 
 
 @pytest.fixture(scope="module")
-def vllm_results(e2e_paths: backend.E2EPaths, export_result: dict[str, Any]) -> dict[str, dict[str, Any]]:
+def vllm_results(e2e_paths: E2EPaths, export_result: dict[str, Any]) -> dict[str, dict[str, Any]]:
     del export_result
     return {
         attention_backend: _run_backend(
@@ -140,13 +139,13 @@ def vllm_results(e2e_paths: backend.E2EPaths, export_result: dict[str, Any]) -> 
 
 
 @pytest.fixture(scope="module")
-def levanter_result(e2e_paths: backend.E2EPaths, export_result: dict[str, Any]) -> dict[str, Any]:
+def levanter_result(e2e_paths: E2EPaths, export_result: dict[str, Any]) -> dict[str, Any]:
     del export_result
     return backend._read_json(e2e_paths.levanter_result_path)
 
 
 def _write_contract_summary(
-    e2e_paths: backend.E2EPaths,
+    e2e_paths: E2EPaths,
     *,
     export_result: dict[str, Any],
     levanter_result: dict[str, Any],
@@ -165,7 +164,6 @@ def _write_contract_summary(
             "vllm": _vllm_result_paths(e2e_paths),
         },
         "artifact_dir": e2e_paths.artifact_dir,
-        "remote_artifact_upload_enabled": backend._remote_artifact_upload_enabled(),
         "prompt": backend.PROMPT,
         "expected_continuation": backend.EXPECTED_CONTINUATION,
         "max_new_tokens": backend.MAX_NEW_TOKENS,
@@ -222,7 +220,7 @@ def test_expert_gate_up_tensors_accepts_current_split_layout() -> None:
             self.w_up = [[5, 6], [7, 8]]
 
     expert = SplitExpert()
-    gate, up = backend.common._expert_gate_up_tensors(expert, intermediate_dim=2)
+    gate, up = _expert_gate_up_tensors(expert, intermediate_dim=2)
 
     assert gate is expert.w_gate
     assert up is expert.w_up
@@ -233,7 +231,7 @@ def test_expert_gate_up_tensors_accepts_legacy_fused_layout() -> None:
         def __init__(self) -> None:
             self.w_gate_up = np.array([[0, 1, 2, 3, 4, 5], [6, 7, 8, 9, 10, 11]])
 
-    gate, up = backend.common._expert_gate_up_tensors(FusedExpert(), intermediate_dim=2)
+    gate, up = _expert_gate_up_tensors(FusedExpert(), intermediate_dim=2)
 
     assert gate.tolist() == [[0, 1], [6, 7]]
     assert up.tolist() == [[2, 3, 4, 5], [8, 9, 10, 11]]
@@ -314,7 +312,7 @@ def test_grugmoe_completion_request_sends_explicit_data_parallel_rank(
 @pytest.mark.data_integration
 @pytest.mark.timeout(7200)
 def test_grugmoe_gpu_real_checkpoint_contract(
-    e2e_paths: backend.E2EPaths,
+    e2e_paths: E2EPaths,
     export_result: dict[str, Any],
     vllm_results: dict[str, dict[str, Any]],
     levanter_result: dict[str, Any],

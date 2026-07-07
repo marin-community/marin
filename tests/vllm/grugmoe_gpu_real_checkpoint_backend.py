@@ -28,8 +28,27 @@ from urllib.parse import urlparse
 
 import fsspec
 import requests
+from rigging.filesystem import StoragePath, marin_temp_bucket, open_url, prefix_join, url_to_fs
 
-from tests.vllm import grugmoe_real_checkpoint_backend as common
+from tests.vllm.grugmoe_real_checkpoint_backend import (
+    DECODE_SEQ_LEN,
+    LEVANTER_PROMPT_ADD_SPECIAL_TOKENS,
+    MAX_MODEL_LEN,
+    MAX_SHARD_SIZE,
+    SERVER_TIMEOUT_SECONDS,
+    StagedArtifact,
+    _executable_model_from_legacy_split,
+    _greedy_decode,
+    _legacy_split_expert_inference_state_dict,
+    _load_legacy_split_expert_checkpoint,
+    _local_filesystem_path,
+    _mesh_batch_axis_size,
+    _real_checkpoint_model_config,
+    _tokenizer_encode,
+)
+from tests.vllm.grugmoe_real_checkpoint_backend import (
+    _stage_artifact_for_vllm as _common_stage_artifact_for_vllm,
+)
 
 COREWEAVE_S3_PREFIX = "s3://marin-us-east-02a/"
 COREWEAVE_SIGNING_REGION = "US-EAST-02A"
@@ -50,14 +69,17 @@ LEVANTER_EXPERT_AXIS_SIZE = EXPECTED_GPU_COUNT
 LEVANTER_REFERENCE_REPEAT_COUNT = 2
 RUN_ID_ENV = "MARIN_GRUGMOE_GPU_E2E_RUN_ID"
 OUTPUT_DIR_ENV = "MARIN_GRUGMOE_GPU_E2E_OUTPUT_DIR"
-REMOTE_ARTIFACT_ENV = "MARIN_GRUGMOE_GPU_E2E_REMOTE_ARTIFACT"
 VLLM_ATTENTION_BACKENDS_UNDER_TEST = ("TRITON_ATTN", "FLASH_ATTN")
 LEVANTER_MOE_CAPACITY_FACTOR = float(EXPECTED_GPU_COUNT)
 LEVANTER_DECODE_USE_ACTIVE_PREFIX = True
 CHECKPOINT_SCOPE = "small-real-checkpoint"
 CHECKPOINT_PATH = "s3://marin-us-east-02a/marin/grug/moe_may_compute_opt_d512_ep1-05c39b/checkpoints/step-10980"
 TOKENIZER_PATH = "s3://marin-us-east-02a/marin/tokenizers/marin-community/marin-tokenizer/hf-hub-0.36.2"
-OUTPUT_ROOT = "s3://marin-us-east-02a/tmp/ttl=14d/grugmoe-gpu-real-checkpoint-e2e"
+OUTPUT_ROOT = marin_temp_bucket(
+    ttl_days=14,
+    prefix="grugmoe-gpu-real-checkpoint-e2e",
+    source_prefix=COREWEAVE_S3_PREFIX,
+)
 CACHE_ROOT = "s3://marin-us-east-02a/compilation-cache/grugmoe-gpu-real-checkpoint-e2e"
 LOCAL_ARTIFACT_ROOT = os.path.join(tempfile.gettempdir(), "grugmoe-gpu-real-checkpoint-e2e-artifacts")
 VLLM_LOCAL_CACHE_ROOT = os.path.join(tempfile.gettempdir(), "grugmoe-gpu-vllm-cache")
@@ -66,29 +88,9 @@ PROMPT_BATCH_SIZE = 16
 PROMPTS = tuple(PROMPT for _ in range(PROMPT_BATCH_SIZE))
 PROMPTS_PER_VLLM_DATA_PARALLEL_RANK = PROMPT_BATCH_SIZE // VLLM_DATA_PARALLEL_SIZE
 EXPECTED_CONTINUATION = " America"
-MAX_MODEL_LEN = common.MAX_MODEL_LEN
 MAX_NUM_BATCHED_TOKENS = 1024
 MAX_NEW_TOKENS = 1
-LEVANTER_PROMPT_ADD_SPECIAL_TOKENS = common.LEVANTER_PROMPT_ADD_SPECIAL_TOKENS
-DECODE_SEQ_LEN = common.DECODE_SEQ_LEN
-SERVER_TIMEOUT_SECONDS = common.SERVER_TIMEOUT_SECONDS
 SERVED_MODEL_NAME = "grugmoe-gpu-real-checkpoint-e2e"
-MAX_SHARD_SIZE = common.MAX_SHARD_SIZE
-
-E2EPaths = common.E2EPaths
-StagedArtifact = common.StagedArtifact
-_join_path = common._join_path
-_real_checkpoint_model_config = common._real_checkpoint_model_config
-_legacy_split_expert_inference_state_dict = common._legacy_split_expert_inference_state_dict
-_load_legacy_split_expert_checkpoint = common._load_legacy_split_expert_checkpoint
-_local_filesystem_path = common._local_filesystem_path
-_tokenizer_encode = common._tokenizer_encode
-_mesh_batch_axis_size = common._mesh_batch_axis_size
-_executable_model_from_legacy_split = common._executable_model_from_legacy_split
-
-
-def _remote_artifact_upload_enabled() -> bool:
-    return os.environ.get(REMOTE_ARTIFACT_ENV) == "1"
 
 
 @cache
@@ -129,26 +131,32 @@ def _configure_coreweave_s3_env() -> dict[str, Any]:
     }
 
 
-def _fs_path(path: str):
+def _join_path(base: str, *parts: str) -> str:
+    joined = base
+    for part in parts:
+        joined = prefix_join(joined, part)
+    return joined
+
+
+def _coreweave_url_to_fs(path: str):
     if path.startswith("s3://"):
         _configure_coreweave_s3_env()
-
-    return fsspec.core.url_to_fs(path)
+    return url_to_fs(path)
 
 
 def _exists(path: str) -> bool:
-    fs, plain_path = _fs_path(path)
+    fs, plain_path = _coreweave_url_to_fs(path)
     return fs.exists(plain_path)
 
 
 def _remove_tree(path: str) -> None:
-    fs, plain_path = _fs_path(path)
+    fs, plain_path = _coreweave_url_to_fs(path)
     if fs.exists(plain_path):
         fs.rm(plain_path, recursive=True)
 
 
 def _write_json(path: str, payload: dict[str, Any]) -> None:
-    fs, plain_path = _fs_path(path)
+    fs, plain_path = _coreweave_url_to_fs(path)
     plain_parent = posixpath.dirname(plain_path)
     if plain_parent:
         fs.makedirs(plain_parent, exist_ok=True)
@@ -159,7 +167,7 @@ def _write_json(path: str, payload: dict[str, Any]) -> None:
 
 def _copy_local_file(source_path: str, destination_path: str) -> None:
     _require_coreweave_path("destination_path", destination_path)
-    fs, plain_destination_path = _fs_path(destination_path)
+    fs, plain_destination_path = _coreweave_url_to_fs(destination_path)
     plain_parent = posixpath.dirname(plain_destination_path)
     if plain_parent:
         fs.makedirs(plain_parent, exist_ok=True)
@@ -172,31 +180,29 @@ def _read_json(path: str) -> dict[str, Any]:
     if path.startswith("s3://"):
         _configure_coreweave_s3_env()
 
-    with fsspec.open(path, "r") as f:
+    with open_url(path, "r") as f:
         payload = json.load(f)
     if not isinstance(payload, dict):
         raise TypeError(f"expected JSON object at {path}, got {type(payload).__name__}")
     return payload
 
 
-def _is_under_s3_prefix(path: str, prefix: str) -> bool:
-    parsed_path = urlparse(path)
-    parsed_prefix = urlparse(prefix)
-    if parsed_path.scheme != "s3" or parsed_prefix.scheme != "s3":
+def _is_coreweave_s3_path(path: str) -> bool:
+    parsed_path = StoragePath.parse(path)
+    parsed_prefix = StoragePath.parse(COREWEAVE_S3_PREFIX)
+    if (parsed_path.scheme, parsed_path.netloc) != (parsed_prefix.scheme, parsed_prefix.netloc):
         return False
-    if parsed_path.netloc != parsed_prefix.netloc:
+    try:
+        parsed_path.relative_to(parsed_prefix)
+    except ValueError:
         return False
-    prefix_key = posixpath.normpath("/" + parsed_prefix.path.lstrip("/")).lstrip("/")
-    if not prefix_key:
-        return True
-    path_key = posixpath.normpath("/" + parsed_path.path.lstrip("/")).lstrip("/")
-    return path_key == prefix_key or path_key.startswith(prefix_key + "/")
+    return True
 
 
 def _require_coreweave_path(label: str, path: str) -> None:
     parsed = urlparse(path)
     if parsed.scheme == "s3":
-        if _is_under_s3_prefix(path, COREWEAVE_S3_PREFIX):
+        if _is_coreweave_s3_path(path):
             return
         raise ValueError(f"{label} must be under {COREWEAVE_S3_PREFIX}, got {path!r}")
     if parsed.scheme in {"", "file"}:
@@ -555,7 +561,6 @@ def _export_backend(args: argparse.Namespace) -> None:
         "checkpoint_scope": CHECKPOINT_SCOPE,
         "tokenizer_path": args.tokenizer_path,
         "artifact_dir": args.artifact_dir,
-        "remote_artifact_upload_enabled": _remote_artifact_upload_enabled(),
         "levanter_result_path": args.levanter_result_path,
         "result_path": args.result_path,
         "coreweave_s3": s3_env,
@@ -571,7 +576,7 @@ def _export_backend(args: argparse.Namespace) -> None:
 
 
 def _stage_artifact_for_vllm(artifact_dir: str) -> StagedArtifact:
-    return common._stage_artifact_for_vllm(
+    return _common_stage_artifact_for_vllm(
         artifact_dir,
         path_validator=_require_coreweave_path,
         temp_prefix="grugmoe-gpu-real-checkpoint-vllm-artifact-",
@@ -994,7 +999,7 @@ def _build_levanter_reference_result(
     reference_checks: list[dict[str, Any]] = []
     completions: list[str] = []
     for _ in range(LEVANTER_REFERENCE_REPEAT_COUNT):
-        decode_result = common._greedy_decode(
+        decode_result = _greedy_decode(
             model,
             tokenizer,
             prompt_ids,
