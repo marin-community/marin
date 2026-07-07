@@ -343,6 +343,36 @@ def _prepare_aa() -> None:
         logger.info("aa/%s: %d records -> %s", cfg.subdir, n, out_path)
 
 
+# Eval tasks excluded from the *decontamination* bloom (they remain valid
+# benchmarks for actual evaluation — this only affects what we treat as
+# "eval content to scrub from training data"). Each of these has test
+# "documents" that are ordinary, ubiquitous corpus material rather than a
+# secret answer key, so matching against them flags large volumes of
+# legitimate training data with no real test-answer leakage:
+#   - code2text_* (CodeXGLUE): documents are plain public GitHub functions;
+#     any code corpus containing those popular files matches verbatim.
+#   - jsonschema_bench_*: documents are public JSON schemas from GitHub.
+#   - swde: documents are raw scraped web pages (structured web extraction).
+#   - realtoxicityprompts: documents are random spans of open web text.
+# Confirmed empirically as dominant false-positive drivers on code/web
+# corpora (see marin#6852).
+_DECON_EXCLUDED_TASKS: frozenset[str] = frozenset(
+    {
+        "code2text_go",
+        "code2text_java",
+        "code2text_javascript",
+        "code2text_php",
+        "code2text_python",
+        "code2text_ruby",
+        "jsonschema_bench_easy",
+        "jsonschema_bench_medium",
+        "jsonschema_bench_hard",
+        "swde",
+        "realtoxicityprompts",
+    }
+)
+
+
 def _lmh_task_names() -> list[str]:
     bundles: tuple[Iterable, ...] = (
         CORE_TASKS,
@@ -370,7 +400,7 @@ def _lmh_task_names() -> list[str]:
     for bundle in bundles:
         for cfg in bundle:
             names.add(cfg.name)
-    return sorted(names)
+    return sorted(names - _DECON_EXCLUDED_TASKS)
 
 
 def _prepare_lmh() -> None:
