@@ -127,6 +127,9 @@ def build_scale_model() -> GrugModelConfig:
         raise ValueError(f"SCALE_MOE_IMPL={moe_impl!r} is not a known MoeImplementation")
     attn_impl = os.environ.get("SCALE_ATTN_IMPL") or None
     initializer_std = float(os.environ.get("SCALE_INIT_STD", "0.02"))
+    # SCALE_SCAN_LAYERS=1 stacks the blocks and runs them under one lax.scan (needs the
+    # homogeneous body -> requires disable_pko, which is the model default).
+    use_stacked_blocks = os.environ.get("SCALE_SCAN_LAYERS") == "1"
     return GrugModelConfig(
         vocab_size=VOCAB_SIZE,
         hidden_dim=hidden_dim,
@@ -144,6 +147,7 @@ def build_scale_model() -> GrugModelConfig:
         moe_implementation=moe_impl,
         attention_implementation=attn_impl,
         initializer_std=initializer_std,
+        use_array_stacked_blocks=use_stacked_blocks,
     )
 
 
