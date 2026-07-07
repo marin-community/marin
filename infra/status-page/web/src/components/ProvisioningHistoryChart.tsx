@@ -132,25 +132,23 @@ export function ProvisioningHistoryChart({
               {regions.map((region) => (
                 <Line
                   key={region}
-                  type="monotone"
+                  type="linear"
                   dataKey={region}
                   name={region}
                   stroke={colorByRegion.get(region) ?? FALLBACK_REGION_COLOR}
                   strokeWidth={1.5}
                   dot={false}
                   isAnimationActive={false}
-                  connectNulls
                 />
               ))}
               <Line
-                type="monotone"
+                type="linear"
                 dataKey={FLEET_KEY}
                 name="average"
                 stroke={FLEET_COLOR}
                 strokeWidth={2.5}
                 dot={false}
                 isAnimationActive={false}
-                connectNulls
               />
             </LineChart>
           ) : (

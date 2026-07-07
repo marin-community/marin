@@ -227,14 +227,13 @@ export function WorkersPanel() {
                   {chartRegions.map((region) => (
                     <Line
                       key={region}
-                      type="monotone"
+                      type="linear"
                       dataKey={region}
                       name={region}
                       stroke={colorByRegion.get(region)}
                       strokeWidth={2}
                       dot={false}
                       isAnimationActive={false}
-                      connectNulls
                     />
                   ))}
                 </LineChart>
