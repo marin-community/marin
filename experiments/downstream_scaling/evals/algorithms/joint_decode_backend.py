@@ -19,10 +19,12 @@ for step construction everywhere.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import os
 import tempfile
+from collections.abc import Iterator
 from dataclasses import dataclass
 
 import fsspec
@@ -99,7 +101,51 @@ def _package_model_config(params: EngineModelParams, chip: int, resolved_path: s
     )
 
 
-def _write_chunk(
+@contextlib.contextmanager
+def open_joint_decoder(
+    *,
+    decoder: EngineModelParams,
+    advisor: EngineModelParams,
+    max_tokens: int,
+    top_k_a: int,
+    top_k_b: int,
+    seed: int,
+    stop: tuple[str, ...],
+    select_token: SelectTokens,
+    chip_a: int,
+    chip_b: int,
+    max_microbatch_size: int,
+    max_num_batched_tokens: int | None,
+    barrier_timeout_s: float,
+) -> Iterator[JointDecoder]:
+    """Open one package JointDecoder pair from marin-side engine parameters.
+
+    Owns the entire marin-to-package mapping: checkpoint resolution (runs
+    here, on the TPU VM, where region-dependent mirror localization must
+    happen), package config construction, and the worker cache directory.
+    """
+    with tempfile.TemporaryDirectory(prefix="joint_decode_") as cache_dir:
+        decode_config = PackageConfig(
+            model_a=_package_model_config(decoder, chip_a, _resolve_model_path(decoder.model_path)),
+            model_b=_package_model_config(advisor, chip_b, _resolve_model_path(advisor.model_path)),
+            sampling=PackageSamplingConfig(
+                max_tokens_a=max_tokens,
+                max_tokens_b=max_tokens,
+                top_k_a=top_k_a,
+                top_k_b=top_k_b,
+                barrier_timeout_s=barrier_timeout_s,
+                seed=seed,
+                stop=stop,
+                max_microbatch_size=max_microbatch_size,
+                max_num_batched_tokens=max_num_batched_tokens,
+            ),
+            cache_dir=cache_dir,
+        )
+        with joint_decoder(decode_config, select_token=select_token) as jd:
+            yield jd
+
+
+def write_chunk(
     chunk: ChunkSpec,
     *,
     decoder: JointDecoder,
@@ -170,37 +216,34 @@ def run_completion_chunks(
     chunks_dir = os.path.join(output_path, "chunks", f"chunk_size={chunk_size}")
     chunks = chunk_specs(chunks_dir, len(prompt_rows), n_samples, chunk_size)
 
-    with tempfile.TemporaryDirectory(prefix="joint_decode_") as cache_dir:
-        decode_config = PackageConfig(
-            model_a=_package_model_config(decoder, chip_a, _resolve_model_path(decoder.model_path)),
-            model_b=_package_model_config(advisor, chip_b, _resolve_model_path(advisor.model_path)),
-            sampling=PackageSamplingConfig(
-                max_tokens_a=max_tokens,
-                max_tokens_b=max_tokens,
-                top_k_a=top_k_a,
-                top_k_b=top_k_b,
-                barrier_timeout_s=barrier_timeout_s,
-                seed=seed,
-                stop=stop,
-                max_microbatch_size=max_microbatch_size,
-                max_num_batched_tokens=max_num_batched_tokens,
-            ),
-            cache_dir=cache_dir,
-        )
-        with joint_decoder(decode_config, select_token=select_token) as jd:
-            for chunk in chunks:
-                if fsspec_exists(chunk.success_path):
-                    logger.info("chunk %d already done; skipping", chunk.chunk_id)
-                    continue
-                _write_chunk(
-                    chunk,
-                    decoder=jd,
-                    prompt_ids=prompt_ids,
-                    prompts=prompts,
-                    n_samples=n_samples,
-                )
-                with fsspec.open(chunk.success_path, "wt") as f:
-                    f.write("ok\n")
+    with open_joint_decoder(
+        decoder=decoder,
+        advisor=advisor,
+        max_tokens=max_tokens,
+        top_k_a=top_k_a,
+        top_k_b=top_k_b,
+        seed=seed,
+        stop=stop,
+        select_token=select_token,
+        chip_a=chip_a,
+        chip_b=chip_b,
+        max_microbatch_size=max_microbatch_size,
+        max_num_batched_tokens=max_num_batched_tokens,
+        barrier_timeout_s=barrier_timeout_s,
+    ) as jd:
+        for chunk in chunks:
+            if fsspec_exists(chunk.success_path):
+                logger.info("chunk %d already done; skipping", chunk.chunk_id)
+                continue
+            write_chunk(
+                chunk,
+                decoder=jd,
+                prompt_ids=prompt_ids,
+                prompts=prompts,
+                n_samples=n_samples,
+            )
+            with fsspec.open(chunk.success_path, "wt") as f:
+                f.write("ok\n")
 
     path = completions_file(output_path)
     aggregate_pipeline = (
