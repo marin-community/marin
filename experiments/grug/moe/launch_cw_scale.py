@@ -41,6 +41,7 @@ Env knobs (all optional; defaults give the full 90B run on 256 H100):
     RUN_ID              unique run identifier
 """
 
+import dataclasses
 import datetime
 import os
 from typing import cast
@@ -49,7 +50,8 @@ from fray.cluster import ResourceConfig
 from levanter.callbacks.profiler import ProfilerConfig
 from levanter.checkpoint import CheckpointerConfig
 from levanter.data.text.datasets import BlockShuffleConfig
-from levanter.optim.config import AdamConfig
+from levanter.optim.config import AdamConfig, OptimizerConfig
+from levanter.optim.grugmuon import GrugMuonConfig
 from levanter.tracker.json_logger import JsonLoggerConfig
 from levanter.tracker.wandb import WandbConfig
 from marin.execution.build_context import resolve_version
@@ -61,6 +63,7 @@ from marin.training.training import LevanterCheckpoint
 
 from experiments.grug.moe.launch import GrugMoeLaunchConfig, env_int, run_grug_moe_trial, slimpajama_6b_dataset
 from experiments.grug.moe.model import GrugModelConfig, RematMode
+from experiments.grug.moe.optimizer import GrugMoeAdamHConfig, GrugMoeMuonHConfig
 from experiments.grug.moe.train import GrugTrainerConfig
 from experiments.llama import llama3_tokenizer_vocab_size
 
@@ -111,6 +114,11 @@ def build_scale_model() -> GrugModelConfig:
     remat_mode = os.environ.get("SCALE_REMAT", "recompute_all")
     if remat_mode not in ("recompute_all", "save_moe"):
         raise ValueError(f"SCALE_REMAT={remat_mode!r} must be 'recompute_all' or 'save_moe'")
+    moe_impl = os.environ.get("SCALE_MOE_IMPL") or None
+    if moe_impl not in (None, "ring", "ragged_all_to_all", "deepep", "scatter", "sonic"):
+        raise ValueError(f"SCALE_MOE_IMPL={moe_impl!r} is not a known MoeImplementation")
+    attn_impl = os.environ.get("SCALE_ATTN_IMPL") or None
+    initializer_std = float(os.environ.get("SCALE_INIT_STD", "0.02"))
     return GrugModelConfig(
         vocab_size=VOCAB_SIZE,
         hidden_dim=hidden_dim,
@@ -125,6 +133,9 @@ def build_scale_model() -> GrugModelConfig:
         max_seq_len=seq_len,
         sliding_window=seq_len,
         remat_mode=cast(RematMode, remat_mode),
+        moe_implementation=moe_impl,
+        attention_implementation=attn_impl,
+        initializer_std=initializer_std,
     )
 
 
@@ -187,6 +198,19 @@ def build_scale_checkpoint(*, version: str | None = None) -> ArtifactStep[Levant
     )
 
     mp = os.environ.get("SCALE_MP", "params=float32,compute=bfloat16,output=bfloat16")
+
+    lr = float(os.environ.get("SCALE_LR") or SCALE_OPTIMIZER.learning_rate)
+    opt_name = os.environ.get("SCALE_OPTIMIZER", "adam").lower()
+    optimizer: OptimizerConfig
+    if opt_name in ("muon", "grug_muon"):
+        optimizer = GrugMuonConfig(learning_rate=lr, adam_lr=lr)
+    elif opt_name in ("muonh", "grug_moe_muonh"):
+        optimizer = GrugMoeMuonHConfig(learning_rate=lr, adam_lr=lr)
+    elif opt_name in ("adamh", "grug_moe_adamh"):
+        optimizer = GrugMoeAdamHConfig(learning_rate=lr, adam_lr=lr)
+    else:
+        optimizer = dataclasses.replace(SCALE_OPTIMIZER, learning_rate=lr)
+
     name = f"grug-moe-cw-d{model.hidden_dim}-L{model.num_layers}-e{model.num_experts}-r{replicas}"
     slim = slimpajama_6b_dataset()
 
@@ -213,7 +237,7 @@ def build_scale_checkpoint(*, version: str | None = None) -> ArtifactStep[Levant
             seed=0,
             mp=mp,
             tracker=tracker,
-            optimizer=SCALE_OPTIMIZER,
+            optimizer=optimizer,
             grug_trainer=grug_trainer,
             processes_per_task=processes_per_task,
             eval=None,
