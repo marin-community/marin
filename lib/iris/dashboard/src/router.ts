@@ -11,6 +11,10 @@ const routes = [
     component: () => import('./components/controller/JobsTab.vue'),
   },
   {
+    path: '/backends',
+    component: () => import('./components/controller/BackendsTab.vue'),
+  },
+  {
     path: '/fleet',
     component: () => import('./components/controller/FleetTab.vue'),
   },
@@ -19,12 +23,12 @@ const routes = [
     component: () => import('./components/controller/CapacityTab.vue'),
   },
   {
-    path: '/cluster',
-    component: () => import('./components/controller/KubernetesClusterTab.vue'),
-  },
-  {
     path: '/endpoints',
     component: () => import('./components/controller/EndpointsTab.vue'),
+  },
+  {
+    path: '/logs',
+    component: () => import('./components/controller/LogsTab.vue'),
   },
   {
     path: '/status',

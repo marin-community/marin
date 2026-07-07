@@ -37,13 +37,6 @@ coordinator periodically via heartbeats and as a final snapshot on task
 completion.
 
 Outside of a Zephyr worker context, all calls are silent no-ops.
-
-**Legacy aliases** — the bare module-level functions delegate to
-``counters.pipeline`` and are preserved for backward compatibility::
-
-    counters.increment("documents_processed", 100)  # same as pipeline.update_counter(...)
-    counters.set_counter("mem_bytes", value)
-    counters.get_counters()
 """
 
 import logging
@@ -51,6 +44,18 @@ import logging
 from zephyr.worker_context import Aggregation, _worker_ctx_var
 
 logger = logging.getLogger(__name__)
+
+
+# Built-in pipeline counters emitted by zephyr's readers, writers, and planner.
+# Defined here (rather than inline at each call site) so the name stays consistent
+# across the modules that emit them — a typo at one site would otherwise create a
+# silently-separate counter.
+RECORDS_IN = "zephyr/records_in"
+"""Records read by the loaders (jsonl/parquet/vortex/zip)."""
+RECORDS_OUT = "zephyr/records_out"
+"""Records written by the output writers (jsonl/parquet/vortex/binary)."""
+PARTITIONS_SKIPPED = "zephyr/partitions_skipped"
+"""Output partitions skipped because the target already existed (``skip_existing``)."""
 
 
 class ScopedCounters:
@@ -133,33 +138,3 @@ def current_stage() -> ScopedCounters:
     if worker is None:
         return pipeline
     return ScopedCounters(stage=worker.current_stage_name())
-
-
-# ---------------------------------------------------------------------------
-# Legacy module-level aliases (delegate to pipeline scope)
-# ---------------------------------------------------------------------------
-
-
-def increment(name: str, value: int = 1) -> None:
-    """Increment a named pipeline counter by ``value`` (default 1).
-
-    Alias for ``counters.pipeline.update_counter()``. No-op outside a Zephyr worker.
-    """
-    pipeline.update_counter(name, value)
-
-
-def set_counter(name: str, value: int | float) -> None:
-    """Overwrite a named pipeline counter with ``value`` (not additive).
-
-    Alias for ``counters.pipeline.set_counter()``. No-op outside a Zephyr worker.
-    """
-    pipeline.set_counter(name, value)
-
-
-def get_counters() -> dict[str, int | float]:
-    """Return a snapshot of pipeline-level counters.
-
-    Alias for ``counters.pipeline.get_counters()``. Returns an empty dict
-    outside a Zephyr worker context.
-    """
-    return pipeline.get_counters()

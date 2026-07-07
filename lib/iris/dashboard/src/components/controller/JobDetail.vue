@@ -4,10 +4,12 @@ import { RouterLink } from 'vue-router'
 import { controllerRpcCall, useLogServerStatsRpc } from '@/composables/useRpc'
 import { useAutoRefresh } from '@/composables/useAutoRefresh'
 import { stateToName, stateDisplayName } from '@/types/status'
-import type {
-  JobStatus, TaskStatus, LaunchJobRequest, JobQuery,
-  GetJobStatusResponse, ListTasksResponse, ListJobsResponse,
-  EndpointInfo, ListEndpointsResponse,
+import { useBackends } from '@/composables/useBackends'
+import {
+  LOCAL_CLUSTER, isFederated,
+  type JobStatus, type TaskStatus, type LaunchJobRequest, type JobQuery,
+  type GetJobStatusResponse, type GetTaskStatusResponse, type ListTasksResponse, type ListJobsResponse,
+  type EndpointInfo, type ListEndpointsResponse,
 } from '@/types/rpc'
 import { timestampMs, formatTimestamp, formatDuration, formatRelativeTime, formatBytes, formatCpuMillicores, formatDeviceConfig, bandDisplayName, bandColor } from '@/utils/formatting'
 import { decodeArrowIpc } from '@/utils/arrow'
@@ -22,6 +24,7 @@ import EmptyState from '@/components/shared/EmptyState.vue'
 import LogViewer from '@/components/shared/LogViewer.vue'
 import MarkdownRenderer from '@/components/shared/MarkdownRenderer.vue'
 import EndpointLink from '@/components/shared/EndpointLink.vue'
+import ClusterLink from '@/components/shared/ClusterLink.vue'
 import { useMediaQuery } from '@/composables/useMediaQuery'
 
 // Tailwind's `sm` breakpoint is 640px. Cards on mobile, table on desktop.
@@ -32,6 +35,8 @@ const props = defineProps<{
   jobId: string
 }>()
 
+const { multiBackend, peers, ensurePeers } = useBackends()
+
 const TERMINAL_STATES = new Set(['succeeded', 'failed', 'killed', 'worker_failed', 'cosched_failed', 'preempted', 'unschedulable'])
 const FAILED_TERMINAL_STATES = new Set(['failed', 'worker_failed', 'cosched_failed', 'preempted', 'unschedulable'])
 
@@ -40,6 +45,8 @@ const FAILED_TERMINAL_STATES = new Set(['failed', 'worker_failed', 'cosched_fail
 const job = ref<JobStatus | null>(null)
 const jobRequest = ref<LaunchJobRequest | null>(null)
 const tasks = ref<TaskStatus[]>([])
+// Distilled log highlights for the failed job's root-cause task (see below).
+const rootCauseHighlights = ref<string[]>([])
 // Endpoints registered by this job's tasks, grouped by wire-format task id.
 const endpointsByTask = ref<Map<string, EndpointInfo[]>>(new Map())
 const childJobsByParent = ref<Map<string, JobStatus[]>>(new Map())
@@ -291,6 +298,14 @@ async function fetchData() {
     jobRequest.value = jobResp.request ?? null
     tasks.value = tasksResp.tasks ?? []
 
+    // Surface the crash for a failed job: one on-demand fetch for the single
+    // root-cause task, gated so a healthy or still-running job pays nothing.
+    if (jobResp.job.error && TERMINAL_STATES.has(stateToName(jobResp.job.state))) {
+      void fetchRootCauseHighlights(gen)
+    } else {
+      rootCauseHighlights.value = []
+    }
+
     // Refresh stats only once tasks are known so the SQL filter targets the
     // current job's tasks. Failures here surface as zero values — never block
     // the rest of the page.
@@ -320,11 +335,46 @@ async function fetchData() {
 
 
 onMounted(fetchData)
+// Federation roster (for a handed-off job's peer reachability); lazy, shared.
+onMounted(() => void ensurePeers())
 
 // Auto-refresh while job is not terminal
 const isTerminal = computed(() => {
   if (!job.value) return false
   return TERMINAL_STATES.has(stateToName(job.value.state))
+})
+
+interface HandoffBadge { label: string; classes: string }
+
+// Badge next to the Cluster InfoRow surfacing where a federated job sits in the
+// handoff lifecycle. Absent for a local job, a terminal job, or once the peer
+// has both acked the handoff and reported at least one task (PEER_STATUS_SYNCED).
+const handoffBadge = computed<HandoffBadge | null>(() => {
+  const j = job.value
+  if (!j || !isFederated(j.cluster) || isTerminal.value) return null
+  if (j.peerStatus === 'PEER_STATUS_PENDING_SCHEDULING') {
+    return { label: 'awaiting peer acceptance', classes: 'bg-status-warning-bg text-status-warning border-status-warning-border' }
+  }
+  if (j.peerStatus === 'PEER_STATUS_ASSIGNED') {
+    return { label: 'awaiting first status report', classes: 'bg-surface-sunken text-text-muted border-surface-border' }
+  }
+  return null
+})
+
+// The peer this job was handed off to, from the shared federation roster
+// (populated lazily via ensurePeers). Undefined for a local job or before the
+// roster has loaded.
+const jobPeer = computed(() => {
+  const j = job.value
+  if (!j || !isFederated(j.cluster)) return undefined
+  return peers.value.find(p => p.peerId === j.cluster)
+})
+
+// A handed-off, non-terminal job whose peer failed its last capability
+// heartbeat: the one signal that explains a stuck PENDING_SCHEDULING.
+const peerUnreachable = computed(() => {
+  if (isTerminal.value || !job.value || !isFederated(job.value.cluster)) return false
+  return jobPeer.value?.reachable === false
 })
 
 const { stop: stopRefresh, start: startRefresh } = useAutoRefresh(fetchData, 10_000)
@@ -558,12 +608,13 @@ interface TaskFailureSummary {
   failureCount: number  // failed attempts of this state for the task
 }
 
-// One entry per task — its most recent failed attempt plus the authoritative
-// retry count — so a single task that fails repeatedly doesn't crowd out other
-// failing tasks. ListTasks attaches only the latest failed attempt per state
-// (not the full history), so the failure stays visible after the task is
-// retried back into a running/pending state without shipping every attempt; the
-// ``count`` for the badge comes from the per-task counter on the TaskStatus.
+// One entry per task — its most recent failed attempt plus a retry count — so a
+// single task that fails repeatedly doesn't crowd out other failing tasks.
+// ListTasks attaches only the latest failed attempt per state (not the full
+// history), so the failure stays visible after the task is retried back into a
+// running/pending state. The badge counts the attached attempts, so it reflects
+// the failures shown here, not the task's authoritative lifetime total (those
+// job-level totals live on JobStatus).
 function collectFailuresByState(stateName: string, count: (t: TaskStatus) => number): TaskFailureSummary[] {
   const out: TaskFailureSummary[] = []
   for (const task of tasks.value) {
@@ -589,7 +640,7 @@ function collectFailuresByState(stateName: string, count: (t: TaskStatus) => num
 }
 
 const recentTaskFailures = computed<TaskFailureSummary[]>(() =>
-  collectFailuresByState('failed', t => t.failureCount ?? 0),
+  collectFailuresByState('failed', t => (t.attempts ?? []).filter(a => stateToName(a.state) === 'failed').length),
 )
 // Worker failures share the preemption budget with kills/preemptions, so there
 // is no clean per-task "worker failure" counter; surface the latest one without
@@ -597,6 +648,32 @@ const recentTaskFailures = computed<TaskFailureSummary[]>(() =>
 const recentWorkerFailures = computed<TaskFailureSummary[]>(() =>
   collectFailuresByState('worker_failed', () => 0),
 )
+
+// The job's root cause is the earliest-finished failed attempt among the
+// failures surfaced above (matching the controller's job.error pick). Its logs
+// are the ones worth distilling into a stack trace.
+const rootCauseFailure = computed<TaskFailureSummary | null>(() => {
+  const candidates = [...recentTaskFailures.value, ...recentWorkerFailures.value]
+  return candidates.length
+    ? candidates.reduce((earliest, f) => (f.finishedAtMs < earliest.finishedAtMs ? f : earliest))
+    : null
+})
+
+// Fetch the root-cause task's distilled log highlights on demand — one task per
+// failed job, never a per-task fetch across the whole list. Best-effort: a
+// failure here never blocks the page.
+async function fetchRootCauseHighlights(gen: number): Promise<void> {
+  rootCauseHighlights.value = []
+  const taskId = rootCauseFailure.value?.taskId
+  if (!taskId) return
+  try {
+    const resp = await controllerRpcCall<GetTaskStatusResponse>('GetTaskStatus', { taskId })
+    if (gen !== fetchGeneration) return
+    rootCauseHighlights.value = resp.rootCauseHighlights ?? []
+  } catch {
+    // Highlights are advisory; leave them empty on any fetch error.
+  }
+}
 
 // Failure / preemption budgets from the launch request. The reconstructed
 // request always carries these int32 fields, but proto3 omits zero defaults
@@ -844,6 +921,29 @@ async function handleProfile(taskId: string, profilerType: string, format: strin
         <span class="font-semibold">Error:</span> {{ job.error }}
       </div>
 
+      <!-- Likely root cause: highlights distilled from the root-cause task's own logs -->
+      <div
+        v-if="rootCauseHighlights.length"
+        class="mb-4 px-4 py-3 rounded-lg border border-status-danger-border bg-status-danger-bg"
+      >
+        <div class="text-sm font-semibold text-status-danger mb-2">Likely Root Cause</div>
+        <pre class="text-xs font-mono text-status-danger whitespace-pre-wrap break-all">{{ rootCauseHighlights.join('\n') }}</pre>
+      </div>
+
+      <!-- Peer unreachable banner: this job's handoff target failed its last
+           capability heartbeat, so its status updates may be stale — the one
+           signal that explains a stuck "awaiting peer acceptance". -->
+      <div
+        v-if="peerUnreachable"
+        class="mb-4 px-4 py-3 bg-status-warning-bg border border-status-warning-border rounded-lg text-sm text-status-warning"
+      >
+        <span class="font-semibold">Peer {{ job.cluster }} is unreachable.</span>
+        <span v-if="jobPeer?.lastContactMs && jobPeer.lastContactMs !== '0'">
+          Last contact {{ formatRelativeTime(Number(jobPeer.lastContactMs)) }}.
+        </span>
+        <RouterLink to="/backends" class="ml-1 text-accent hover:underline">View execution targets</RouterLink>
+      </div>
+
       <!-- Pending reason banner -->
       <div
         v-if="job.pendingReason"
@@ -954,6 +1054,24 @@ async function handleProfile(taskId: string, profilerType: string, format: strin
               {{ bandDisplayName(jobRequest.priorityBand) }}
             </span>
           </InfoRow>
+          <InfoRow v-if="multiBackend && job?.backendId" label="Backend">
+            <span class="font-mono">{{ job!.backendId }}</span>
+          </InfoRow>
+          <!-- Cluster: every job carries a cluster coordinate (`'local'` by
+               default); links inward to the parent's jobs list filtered to it.
+               For a federated job, a badge surfaces its handoff posture. -->
+          <InfoRow label="Cluster">
+            <span class="flex items-center gap-2">
+              <ClusterLink :cluster="job?.cluster ?? LOCAL_CLUSTER" />
+              <span
+                v-if="handoffBadge"
+                class="inline-flex items-center px-1.5 py-0.5 rounded text-xs border"
+                :class="handoffBadge.classes"
+              >
+                {{ handoffBadge.label }}
+              </span>
+            </span>
+          </InfoRow>
         </InfoCard>
 
         <InfoCard title="Task Summary">
@@ -983,7 +1101,9 @@ async function handleProfile(taskId: string, profilerType: string, format: strin
           </InfoRow>
           <InfoRow label="Disk">{{ diskDisplay }}</InfoRow>
           <InfoRow label="Accelerator">{{ acceleratorDisplay }}</InfoRow>
-          <InfoRow label="Replicas">{{ tasks.length || '-' }}</InfoRow>
+          <!-- Falls back to the requested replica count (job.taskCount) for a
+               federated job whose peer has not yet reported its task set. -->
+          <InfoRow label="Replicas">{{ tasks.length || job.taskCount || '-' }}</InfoRow>
         </InfoCard>
       </div>
 
@@ -1233,7 +1353,17 @@ async function handleProfile(taskId: string, profilerType: string, format: strin
         </div>
       </div>
 
-      <EmptyState v-if="tasks.length === 0" message="No tasks" />
+      <!-- A federated job's tasks live on the peer until the first FederationSync
+           mirrors them back; name the peer and the requested count instead of a
+           bare "No tasks" over an unexplained empty table. -->
+      <p
+        v-if="tasks.length === 0 && job.cluster && isFederated(job.cluster) && !isTerminal"
+        class="py-16 text-center text-sm text-text-muted"
+      >
+        {{ job.taskCount ?? 0 }} task{{ (job.taskCount ?? 0) !== 1 ? 's' : '' }} on peer
+        <ClusterLink :cluster="job.cluster" /> — awaiting first status report
+      </p>
+      <EmptyState v-else-if="tasks.length === 0" message="No tasks" />
       <EmptyState v-else-if="filteredTasks.length === 0" message="No matching tasks" />
 
       <template v-else>
@@ -1497,7 +1627,9 @@ async function handleProfile(taskId: string, profilerType: string, format: strin
         <h3 class="text-sm font-semibold uppercase tracking-wider text-text-secondary mb-3">
           Job Logs
         </h3>
-        <LogViewer :task-id="jobId" />
+        <!-- Logs are served under the job id in the shared finelog; a federated
+             job passes its cluster so LogViewer filters to the peer's rows. -->
+        <LogViewer :task-id="jobId" :cluster="job?.cluster" />
       </div>
     </template>
 

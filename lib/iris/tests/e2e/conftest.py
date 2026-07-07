@@ -58,7 +58,7 @@ from .chronos import VirtualClock
 
 MARIN_ROOT = Path(__file__).resolve().parents[4]  # repo root
 IRIS_ROOT = MARIN_ROOT / "lib" / "iris"
-DEFAULT_CONFIG = IRIS_ROOT / "config" / "test.yaml"
+DEFAULT_CONFIG = IRIS_ROOT / "config" / "ci-test.yaml"
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -160,6 +160,7 @@ class IrisTestCluster:
         replicas: int = 1,
         max_retries_failure: int = 0,
         max_retries_preemption: int = 1000,
+        max_task_failures: int = 0,
         timeout: Duration | None = None,
         coscheduling: CoschedulingConfig | None = None,
         constraints: list[Constraint] | None = None,
@@ -177,6 +178,7 @@ class IrisTestCluster:
             replicas=replicas,
             max_retries_failure=max_retries_failure,
             max_retries_preemption=max_retries_preemption,
+            max_task_failures=max_task_failures,
             timeout=timeout,
             coscheduling=coscheduling,
             constraints=constraints,

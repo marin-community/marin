@@ -11,9 +11,12 @@ Read first:
 
 ## Mission
 
-Marin maintains forks of `vllm` and `tpu-inference` with required patches.
-Update those forks to the latest tested upstream pair, reconcile Marin overlay
-commits, then open the Marin PR that pins the refreshed fork tips.
+Marin maintains forks of `vllm` and `tpu-inference` with required patches. Use
+this skill to update those forks to the latest tested upstream pair, reconcile
+Marin overlay commits, then open the Marin PR that pins the refreshed fork tips.
+
+Manual fixed-base overlay changes are a separate workflow; see
+`docs/overlay-only-pr.md`.
 
 Example run: [marin-community/marin#6453](https://github.com/marin-community/marin/pull/6453).
 
@@ -44,6 +47,16 @@ PR. Create or update one `marin-community/marin` issue assigned to `@yonromai`,
 titled `TPU-vLLM fork refresh blocked: <short reason>`, with current pins,
 selected release, branch names/SHAs if created, attempted fixes, remaining
 failure, artifacts, and the logs Gist.
+
+## Post-Merge Follow-Up
+
+This skill does not run post-merge fork-main promotion. A successful refresh run
+stops after opening the Marin PR; if blocked, it stops after filing or updating
+the blocker issue.
+
+After the Marin PR has merged and Marin `main` contains the new exact fork SHA
+pins, a separate operator may run the post-merge protocol in
+`docs/post-merge-protocol.md`.
 
 ## Workspace Setup
 
@@ -156,9 +169,15 @@ Push the finished branch to the corresponding `marin-community` fork.
 
 Update Marin root `pyproject.toml` so `tool.uv.sources` pins exact fork branch
 tip SHAs. Add adjacent compare comments that show the retained overlay commits
-against the selected upstream base:
+against the selected upstream base. Keep the short workflow pointer immediately
+above the TPU-vLLM pins so future editors know which procedure owns the SHAs:
 
 ```toml
+# Changes to TPU-vLLM fork SHAs must follow one of these protocols: if this is a
+# release/LKG refresh, then follow .agents/skills/refresh-tpu-vllm-forks/SKILL.md;
+# if this is a fixed-base overlay PR, then follow
+# .agents/skills/refresh-tpu-vllm-forks/docs/overlay-only-pr.md. PR-head SHAs are
+# temporary and must be replaced by the landed fork main SHA.
 # https://github.com/marin-community/vllm/compare/<vllm-upstream-base-sha>...<vllm-branch-tip-sha>
 vllm = { git = "https://github.com/marin-community/vllm.git", rev = "<vllm-branch-tip-sha>" }
 # https://github.com/marin-community/tpu-inference/compare/<tpu-inference-upstream-base-sha>...<tpu-inference-branch-tip-sha>
@@ -169,6 +188,15 @@ Also make only fork-stack update changes needed in Marin:
 
 - remove any old `vllm-tpu==0.19.0` path;
 - make `marin-core[vllm]` own the TPU-vLLM runtime stack;
+- keep shared Marin workspace dependencies aligned by default. When the refresh
+  requires a new version of packages shared with training/test stacks
+  (`jax`, `jaxlib`, `libtpu`, `transformers`, `torch`, etc.), first update all
+  relevant Marin workspace consumers together, including `marin-core`,
+  `marin-levanter`, and `marin-fray`, then validate the unified graph;
+- do not add resolver conflicts or package splits that isolate serving from
+  training/test profiles unless the unified monorepo update has been attempted,
+  the failure is understood, and the PR or blocker issue explains why the split
+  is necessary and how it should be removed later;
 - preserve worker/eval paths that intentionally combine `tpu` and `vllm`
   extras, unless refreshed-stack validation proves they must change;
 - set `VLLM_TARGET_DEVICE=tpu` for TPU source-build workers.

@@ -198,6 +198,20 @@ pub fn add_common_filters(
     }
 }
 
+/// Append the origin-cluster filter to `where_parts`.
+///
+/// The `cluster` column carries the writer-supplied origin of each push, so
+/// filtering on it namespaces a global finelog's logs by origin cluster. A
+/// non-empty `cluster` restricts to rows whose column equals it exactly; empty
+/// adds no predicate (all origins — the local single-cluster read behavior).
+/// Segments written before the column existed store NULL, which
+/// `cluster = <literal>` excludes — correct, since those rows predate federation.
+pub fn add_cluster_filter(where_parts: &mut Vec<String>, cluster: &str) {
+    if !cluster.is_empty() {
+        where_parts.push(format!("cluster = {}", sql_literal(cluster)));
+    }
+}
+
 /// One result row from the log read. `key` is `Some` only when the scope
 /// included it in the SELECT.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -417,6 +431,24 @@ mod tests {
                 "(level = 0 OR level >= 3)".to_string(),
             ]
         );
+    }
+
+    #[test]
+    fn cluster_filter_appends_escaped_equality_or_nothing() {
+        let mut wp = vec!["seq > 0".to_string()];
+        add_cluster_filter(&mut wp, "alpha");
+        assert_eq!(
+            wp,
+            vec!["seq > 0".to_string(), "cluster = 'alpha'".to_string()]
+        );
+        // Empty cluster adds no predicate (unfiltered / local read).
+        let mut wp = vec!["seq > 0".to_string()];
+        add_cluster_filter(&mut wp, "");
+        assert_eq!(wp, vec!["seq > 0".to_string()]);
+        // A single quote in the cluster name is SQL-escaped.
+        let mut wp: Vec<String> = vec![];
+        add_cluster_filter(&mut wp, "o'brien");
+        assert_eq!(wp, vec!["cluster = 'o''brien'".to_string()]);
     }
 
     #[test]

@@ -1,0 +1,167 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+"""Tests for the iris.runtime.multigpu in-task GPU process supervisor and the
+client-side entrypoint wrapping that drives it. None of this imports jax."""
+
+from __future__ import annotations
+
+import signal
+import subprocess
+import sys
+import textwrap
+
+import pytest
+from iris.client.client import _wrap_entrypoint_for_multiprocess
+from iris.cluster.types import Entrypoint, ResourceSpec, gpu_device
+from iris.runtime import multigpu
+from iris.runtime.multigpu import run
+from rigging.timing import Duration
+
+
+def _py(code: str) -> list[str]:
+    """A child command that runs `code` with this interpreter."""
+    return [sys.executable, "-c", code]
+
+
+def test_run_all_children_succeed_returns_zero() -> None:
+    # Each child sees the global world size the supervisor stamped on it.
+    check = _py("import os; assert os.environ['IRIS_MULTIGPU_PROCESS_COUNT'] == '3'")
+    assert run(nproc=3, devices_per_proc=1, child_argv=check) == 0
+
+
+def test_run_propagates_first_child_failure() -> None:
+    # The rank-1 child exits 7; siblings exit 0. The supervisor surfaces 7.
+    code = "import os,sys; sys.exit(7 if os.environ['IRIS_MULTIGPU_PROCESS_INDEX']=='1' else 0)"
+    assert run(nproc=3, devices_per_proc=1, child_argv=_py(code)) == 7
+
+
+def test_run_terminates_peers_when_one_fails() -> None:
+    # Rank 0 fails immediately; the peers would otherwise sleep 30s. The
+    # supervisor must tear them down and return promptly with the failure code.
+    code = "import os,sys,time; sys.exit(3) if os.environ['IRIS_MULTIGPU_PROCESS_INDEX']=='0' else time.sleep(30)"
+    assert run(nproc=3, devices_per_proc=1, child_argv=_py(code)) == 3
+
+
+def test_run_sigkills_a_peer_that_ignores_sigterm(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Rank 0 fails; the peer traps SIGTERM and would sleep 30s. With escalation,
+    # the supervisor SIGKILLs it after the grace period and still returns 3.
+    monkeypatch.setattr(multigpu, "_TERMINATE_GRACE", Duration.from_seconds(0.5))
+    code = (
+        "import os,sys,signal,time\n"
+        "if os.environ['IRIS_MULTIGPU_PROCESS_INDEX']=='0': sys.exit(3)\n"
+        "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+        "time.sleep(30)\n"
+    )
+    assert run(nproc=2, devices_per_proc=1, child_argv=_py(code)) == 3
+
+
+def test_spawn_failure_kills_already_started_children(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Rank 0 spawns; rank 1's Popen raises. The started rank-0 child must be
+    # killed (not orphaned) before the error propagates.
+    real_popen = subprocess.Popen
+    started: list[subprocess.Popen] = []
+    calls = {"n": 0}
+
+    def flaky_popen(*args, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 2:
+            raise OSError("simulated spawn failure")
+        proc = real_popen(*args, **kwargs)
+        started.append(proc)
+        return proc
+
+    monkeypatch.setattr(multigpu.subprocess, "Popen", flaky_popen)
+    with pytest.raises(OSError, match="simulated spawn failure"):
+        run(nproc=3, devices_per_proc=1, child_argv=_py("import time; time.sleep(30)"))
+    assert len(started) == 1
+    # Killed by SIGKILL → returncode is the negative signal number, never 0.
+    assert started[0].returncode is not None and started[0].returncode < 0
+
+
+def test_external_sigterm_returns_128_plus_signum() -> None:
+    # The supervisor itself is SIGTERMed (preemption/task termination). It
+    # forwards the signal to the children, which die reporting negative signal
+    # codes (-15). The supervisor must surface 128+SIGTERM (143) — the killed
+    # task — not map a child's -15 to an arbitrary failure code (241).
+    supervisor_src = textwrap.dedent(
+        """
+        import sys
+        from iris.runtime.multigpu import run
+        child = [sys.executable, "-c", "print('READY', flush=True); import time; time.sleep(30)"]
+        sys.exit(run(nproc=2, devices_per_proc=1, child_argv=child))
+        """
+    )
+    proc = subprocess.Popen(
+        [sys.executable, "-c", supervisor_src], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True
+    )
+    assert proc.stdout is not None
+    # Signal only once both children are live, so the forwarded SIGTERM is what
+    # ends them (rather than racing their startup).
+    ready = 0
+    for line in proc.stdout:
+        if "READY" in line:
+            ready += 1
+            if ready == 2:
+                break
+    assert ready == 2, "children did not start"
+    proc.send_signal(signal.SIGTERM)
+    proc.communicate(timeout=30)
+    assert proc.returncode == 128 + signal.SIGTERM
+
+
+def test_run_rejects_empty_command() -> None:
+    with pytest.raises(ValueError, match="no child command"):
+        run(nproc=2, devices_per_proc=1, child_argv=[])
+
+
+def _gpu_resources(count: int) -> ResourceSpec:
+    return ResourceSpec(cpu=4, memory="8GB", disk="16GB", device=gpu_device("H100", count))
+
+
+def test_wrap_entrypoint_one_process_per_gpu() -> None:
+    wrapped = _wrap_entrypoint_for_multiprocess(
+        Entrypoint.from_command("python", "train.py", "--steps", "10"), _gpu_resources(8), processes_per_task=8
+    )
+    assert wrapped.command == [
+        "python",
+        "-m",
+        "iris.runtime.multigpu",
+        "--nproc",
+        "8",
+        "--devices-per-proc",
+        "1",
+        "--",
+        "python",
+        "train.py",
+        "--steps",
+        "10",
+    ]
+
+
+def test_wrap_entrypoint_groups_devices_when_fewer_processes() -> None:
+    wrapped = _wrap_entrypoint_for_multiprocess(
+        Entrypoint.from_command("python", "train.py"), _gpu_resources(8), processes_per_task=4
+    )
+    assert wrapped.command[:8] == [
+        "python",
+        "-m",
+        "iris.runtime.multigpu",
+        "--nproc",
+        "4",
+        "--devices-per-proc",
+        "2",
+        "--",
+    ]
+
+
+def test_wrap_entrypoint_requires_gpu() -> None:
+    cpu_only = ResourceSpec(cpu=4, memory="8GB", disk="16GB", device=None)
+    with pytest.raises(ValueError, match="requires a GPU device"):
+        _wrap_entrypoint_for_multiprocess(Entrypoint.from_command("python", "x.py"), cpu_only, processes_per_task=2)
+
+
+def test_wrap_entrypoint_requires_divisible_gpu_count() -> None:
+    entry = Entrypoint.from_command("python", "x.py")
+    with pytest.raises(ValueError, match="must divide the GPU count"):
+        _wrap_entrypoint_for_multiprocess(entry, _gpu_resources(8), processes_per_task=3)

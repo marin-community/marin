@@ -23,7 +23,6 @@ from iris.cluster.controller.service import PendingKick
 from iris.cluster.types import JobName, WorkerId
 from iris.rpc import controller_pb2, job_pb2
 from rigging.timing import Timestamp
-
 from tests.cluster.controller._test_support import ControllerTestState
 from tests.cluster.controller.transition_driver import WorkerTaskUpdates, apply_task_observations
 
@@ -52,7 +51,6 @@ def _observe(state, worker_id, task_id, attempt_id, new_state, error=None):
                 )
             ],
             health=state._health,
-            endpoints=state._endpoints,
             now=Timestamp.now(),
         )
 
@@ -73,10 +71,7 @@ def _running_task_on_controller(ctrl, request=None):
     """Submit a single-replica job, register a worker, and drive its task to RUNNING."""
     state = ControllerTestState(
         ctrl._db,
-        health=ctrl._health,
-        endpoints=ctrl._endpoints,
-        worker_attrs=ctrl._worker_attrs,
-        run_template_cache=ctrl._run_template_cache,
+        health=ctrl.provider.health,
     )
     register_worker(state, "w0", "10.0.0.1", make_worker_metadata())
     submit_job(state, "job-a", request or make_direct_job_request("job-a", replicas=1))

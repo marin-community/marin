@@ -29,14 +29,6 @@ from typing import TypeVar
 from finelog.client.log_client import Table
 from rigging.timing import Duration, Timestamp, TokenBucket
 
-from iris.cluster.backends.protocols import WorkerInfraProvider
-from iris.cluster.backends.types import (
-    CloudSliceState,
-    QuotaExhaustedError,
-    RemoteWorkerHandle,
-    SliceHandle,
-    SliceStatus,
-)
 from iris.cluster.config import AutoscalerConfig, WorkerConfig
 from iris.cluster.constraints import Constraint
 from iris.cluster.controller.autoscaler.models import (
@@ -73,6 +65,14 @@ from iris.cluster.controller.autoscaler.status import PendingHint, build_job_pen
 from iris.cluster.controller.autoscaler.worker_registry import TrackedWorker, WorkerRegistry
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.worker_health import CONSECUTIVE_FAILURE_THRESHOLD
+from iris.cluster.platforms.protocols import WorkerInfraProvider
+from iris.cluster.platforms.types import (
+    CloudSliceState,
+    QuotaExhaustedError,
+    RemoteWorkerHandle,
+    SliceHandle,
+    SliceStatus,
+)
 from iris.cluster.types import WorkerStatusMap
 from iris.rpc import job_pb2, vm_pb2
 from iris.time_proto import timestamp_to_proto

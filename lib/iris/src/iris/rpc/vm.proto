@@ -128,6 +128,10 @@ message ScalingDecision {
 // Runtime state of a scale group (for status API)
 message ScaleGroupStatus {
   string name = 1;
+  // Owning backend id. GetAutoscalerStatus merges every backend's autoscaler into
+  // one status; this disambiguates the merged groups list. Empty from a single
+  // autoscaler that does not stamp it.
+  string backend_id = 2;
   // Config summary surfaced to clients (the full cluster config is not on the
   // wire). device_type is "cpu"|"gpu"|"tpu"|"".
   string device_type = 80;

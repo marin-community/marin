@@ -597,8 +597,10 @@ class FrayIrisClient:
                 constraints=iris_constraints if iris_constraints else None,
                 coscheduling=coscheduling,
                 replicas=replicas,
+                processes_per_task=request.processes_per_task,
                 max_retries_failure=request.max_retries_failure,
                 max_retries_preemption=request.max_retries_preemption,
+                max_task_failures=request.max_task_failures,
                 existing_job_policy=policy,
                 task_image=request.resources.image,
                 priority_band=request.priority,
@@ -688,6 +690,11 @@ class FrayIrisClient:
         retry_kwargs: dict[str, Any] = {}
         if actor_config.max_task_retries is not None:
             retry_kwargs["max_retries_failure"] = actor_config.max_task_retries
+            # max_task_failures is a cumulative job-level budget: a job fails once the
+            # running total of hard task failures exceeds it. Mirror the per-task retry
+            # count so an actor group tolerates that many failures across its replicas
+            # rather than dying on the first crash.
+            retry_kwargs["max_task_failures"] = actor_config.max_task_retries
 
         job = self._iris.submit(
             entrypoint=entrypoint,

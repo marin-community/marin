@@ -15,7 +15,14 @@ from finelog.deploy._k8s import (
     _render_manifest,
     _s3_secret_name,
 )
-from finelog.deploy.config import Deployment, FinelogConfig, K8sDeployment
+from finelog.deploy.config import (
+    CidrAuthLayer,
+    Deployment,
+    FinelogConfig,
+    JwtAuthLayer,
+    JwtKeyEntry,
+    K8sDeployment,
+)
 
 
 def _s3_cfg(**k8s_overrides) -> FinelogConfig:
@@ -71,6 +78,74 @@ def test_render_deployment_threads_port_to_env_and_probes(cfg: FinelogConfig) ->
     assert "name: FINELOG_PORT" in rendered
     assert 'value: "20001"' in rendered
     assert 'value: "gs://bucket/logs"' in rendered
+
+
+def test_render_deployment_omits_priority_class_by_default(cfg: FinelogConfig) -> None:
+    """No priority_class_name configured -> the pod carries no priorityClassName."""
+    rendered = _render_manifest(_K8S_MANIFEST_DIR / "02-deployment.yaml.tmpl", cfg)
+    assert "priorityClassName" not in rendered
+
+
+def test_render_deployment_stamps_priority_class_when_configured() -> None:
+    """A configured priority_class_name lands in the pod spec so the control-plane
+    finelog is not preemptible by user jobs on the shared node."""
+    cfg = FinelogConfig(
+        name="finelog",
+        port=20001,
+        image="ghcr.io/example/finelog:dev",
+        remote_log_dir="gs://bucket/logs",
+        deployment=Deployment(
+            k8s=K8sDeployment(namespace="iris", priority_class_name="iris-system", priority_class_value=10000)
+        ),
+    )
+    rendered = _render_manifest(_K8S_MANIFEST_DIR / "02-deployment.yaml.tmpl", cfg)
+    assert "priorityClassName: iris-system" in rendered
+
+
+def test_k8s_deployment_rejects_priority_class_name_without_value() -> None:
+    """Name and value are meaningless apart — deploy up needs the value to create
+    the class, so half a config must fail at construction, not at apply time."""
+    with pytest.raises(ValueError, match="must be set together"):
+        K8sDeployment(namespace="iris", priority_class_name="iris-system")
+
+
+def test_render_deployment_inlines_cidr_auth_policy() -> None:
+    cfg = FinelogConfig(
+        name="finelog",
+        port=10001,
+        image="img",
+        remote_log_dir="gs://bucket/logs",
+        deployment=Deployment(k8s=K8sDeployment(namespace="iris")),
+        auth=(CidrAuthLayer(cidrs=("10.0.0.0/8",)),),
+    )
+    rendered = _render_manifest(_K8S_MANIFEST_DIR / "02-deployment.yaml.tmpl", cfg)
+    assert "name: FINELOG_AUTH_POLICY" in rendered
+    assert '"type":"cidr"' in rendered
+
+
+# An Ed25519 public key in PEM (SubjectPublicKeyInfo). Public, so inline-safe.
+_PUB_PEM = (
+    "-----BEGIN PUBLIC KEY-----\n"
+    "MCowBQYDK2VwAyEAqwwvfFvyRQ+8Dhh0li8h2HtCT4yP40s0pzBwwSAkK5s=\n"
+    "-----END PUBLIC KEY-----\n"
+)
+
+
+def test_render_deployment_inlines_jwt_public_key() -> None:
+    # jwt keys are Ed25519 public keys, not symmetric secrets, so the deploy path
+    # inlines them into the plaintext manifest like a cidr layer.
+    cfg = FinelogConfig(
+        name="finelog",
+        port=10001,
+        image="img",
+        remote_log_dir="gs://bucket/logs",
+        deployment=Deployment(k8s=K8sDeployment(namespace="iris")),
+        auth=(JwtAuthLayer(keys=(JwtKeyEntry(cluster="marin", public_keys=(_PUB_PEM,)),)),),
+    )
+    rendered = _render_manifest(_K8S_MANIFEST_DIR / "02-deployment.yaml.tmpl", cfg)
+    assert "name: FINELOG_AUTH_POLICY" in rendered
+    assert '"type":"jwt"' in rendered
+    assert '"public_keys"' in rendered
 
 
 def test_render_service_uses_configured_port(cfg: FinelogConfig) -> None:

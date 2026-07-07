@@ -4,11 +4,14 @@ import { RouterLink, useRouter } from 'vue-router'
 import { useControllerRpc, useLogServerStatsRpc } from '@/composables/useRpc'
 import { useAutoRefresh } from '@/composables/useAutoRefresh'
 import { stateToName } from '@/types/status'
-import type {
-  TaskStatus,
-  GetTaskStatusResponse,
-  EndpointInfo,
-  ListEndpointsResponse,
+import { useBackends } from '@/composables/useBackends'
+import {
+  isLocal,
+  LOCAL_CLUSTER,
+  type TaskStatus,
+  type GetTaskStatusResponse,
+  type EndpointInfo,
+  type ListEndpointsResponse,
 } from '@/types/rpc'
 import { timestampMs, formatBytes, formatCpuMillicores, formatDuration, formatRelativeTime } from '@/utils/formatting'
 import { decodeArrowIpc } from '@/utils/arrow'
@@ -28,11 +31,14 @@ import LogViewer from '@/components/shared/LogViewer.vue'
 import MarkdownRenderer from '@/components/shared/MarkdownRenderer.vue'
 import CopyButton from '@/components/shared/CopyButton.vue'
 import EndpointLink from '@/components/shared/EndpointLink.vue'
+import ClusterLink from '@/components/shared/ClusterLink.vue'
 
 const props = defineProps<{
   jobId: string
   taskId: string
 }>()
+
+const { multiBackend } = useBackends()
 
 const {
   data: taskResponse,
@@ -42,7 +48,11 @@ const {
 } = useControllerRpc<GetTaskStatusResponse>('GetTaskStatus', () => ({ taskId: props.taskId }))
 
 const task = computed(() => taskResponse.value?.task ?? null)
+
 const jobResources = computed(() => taskResponse.value?.jobResources ?? null)
+
+// Root-cause log lines the controller distilled from a failed task's logs.
+const rootCauseHighlights = computed(() => taskResponse.value?.rootCauseHighlights ?? [])
 
 // Endpoints this task registered with the controller. Each is reachable
 // through the controller's reverse proxy, so we render a link to jump to an
@@ -309,12 +319,16 @@ watch(() => props.taskId, async () => {
             <StatusBadge :status="task.state" size="sm" />
           </InfoRow>
           <InfoRow v-if="task.workerId" label="Worker">
+            <!-- A federated task's worker is an opaque peer-side id with no local
+                 worker row, so /worker/<id> would 404 — render it as plain text. -->
             <RouterLink
+              v-if="isLocal(task.cluster)"
               :to="`/worker/${task.workerId}`"
               class="font-mono text-accent hover:underline"
             >
               {{ task.workerId }}
             </RouterLink>
+            <span v-else class="font-mono text-text-secondary">{{ task.workerId }}</span>
           </InfoRow>
           <InfoRow label="Started">
             <span class="font-mono">{{ startedDisplay }}</span>
@@ -335,6 +349,14 @@ watch(() => props.taskId, async () => {
           </InfoRow>
           <InfoRow v-if="task.pendingReason" label="Pending Reason">
             <span class="text-status-warning">{{ task.pendingReason }}</span>
+          </InfoRow>
+          <InfoRow v-if="multiBackend && task.backendId" label="Backend">
+            <span class="font-mono">{{ task.backendId }}</span>
+          </InfoRow>
+          <!-- Cluster: every task carries a cluster coordinate (`'local'` by
+               default); links inward to the parent's jobs list filtered to it. -->
+          <InfoRow label="Cluster">
+            <ClusterLink :cluster="task.cluster ?? LOCAL_CLUSTER" />
           </InfoRow>
           <div v-if="isActive" class="mt-3 pt-3 border-t border-surface-border">
             <ProfileButtons :profiling="profiling" @profile="handleProfile" />
@@ -431,6 +453,15 @@ watch(() => props.taskId, async () => {
         </div>
       </InfoCard>
 
+      <!-- Likely root cause: log highlights distilled from the failed task's own logs -->
+      <div
+        v-if="rootCauseHighlights.length"
+        class="mb-6 rounded-lg border border-status-danger-border bg-status-danger-bg p-4"
+      >
+        <h3 class="text-sm font-semibold text-status-danger mb-2">Likely Root Cause</h3>
+        <pre class="text-xs font-mono text-status-danger whitespace-pre-wrap break-all">{{ rootCauseHighlights.join('\n') }}</pre>
+      </div>
+
       <!-- Error display -->
       <div
         v-if="task.error"
@@ -520,7 +551,7 @@ watch(() => props.taskId, async () => {
       <!-- Task logs -->
       <div id="task-logs-section" class="mb-6">
         <h3 class="text-sm font-semibold text-text mb-3">Logs</h3>
-        <LogViewer ref="logViewerRef" :task-id="taskId" :attempts="task.attempts" :current-attempt-id="task.currentAttemptId" />
+        <LogViewer ref="logViewerRef" :task-id="taskId" :cluster="task.cluster" :attempts="task.attempts" :current-attempt-id="task.currentAttemptId" />
       </div>
 
       <!-- Latest captured profile for this task; self-hides when none exist -->

@@ -1,0 +1,48 @@
+@import '@fontsource-variable/noto-sans';
+@import '@fontsource-variable/noto-sans-mono';
+@import 'tailwindcss';
+
+@config '../../tailwind.config.ts';
+
+/* Design tokens — light default, overridden under .dark. Referenced by the
+   Tailwind color aliases in tailwind.config.ts and directly in components. */
+:root {
+  --c-surface: #ffffff;
+  --c-surface-raised: #f7f7f9;
+  --c-surface-sunken: #eef0f3;
+  --c-surface-border: #e0e2e7;
+  --c-text: #1b1c1f;
+  --c-text-secondary: #45474d;
+  --c-text-muted: #797c85;
+  --c-accent: #2563eb;
+  --c-accent-hover: #1d4ed8;
+  --c-accent-subtle: #e8effc;
+  --c-status-success: #1f9d63;
+  --c-status-warning: #b45309;
+  --c-status-danger: #d0463f;
+}
+
+.dark {
+  --c-surface: #131417;
+  --c-surface-raised: #1c1e22;
+  --c-surface-sunken: #0d0e10;
+  --c-surface-border: #2b2e34;
+  --c-text: #e9eaec;
+  --c-text-secondary: #b6b8be;
+  --c-text-muted: #888b93;
+  --c-accent: #5c8dff;
+  --c-accent-hover: #78a2ff;
+  --c-accent-subtle: #16223c;
+  --c-status-success: #35c987;
+  --c-status-warning: #e5a83b;
+  --c-status-danger: #f0716b;
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+}

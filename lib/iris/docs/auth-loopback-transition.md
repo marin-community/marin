@@ -1,5 +1,13 @@
 # Loopback-trust auth: the SSH→public transition for Iris
 
+> **Superseded.** The `gcp` login provider and the controller-minted session JWT
+> this doc describes have been removed. Public clusters now authenticate users
+> **only through IAP** (the GCLB verifies an OIDC token and forwards a signed
+> assertion the controller checks; the controller mints no user token). See
+> `lib/iris/docs/iap-gclb.md` for the current model. The loopback / trusted-CIDR
+> trust and the null-auth reasoning below still apply; the `gcp`-provider
+> workflow and config examples do not.
+
 Part of the rollout of a public Iris controller (weaver #132). This documents
 the auth transition path for the users who today reach the controller over an
 SSH tunnel, and the security reasoning behind it.
@@ -161,11 +169,11 @@ auth {
 
 ## Implementation map
 
-- `lib/iris/src/iris/rpc/auth.py` — `is_trusted_loopback()`, `LOOPBACK_IDENTITY`,
-  and `resolve_auth()` (tokenless loopback → admin).
-- `lib/iris/src/iris/cluster/controller/dashboard.py` — `_DashboardAuthInterceptor`
-  and `_enforce_http_auth()` pass the transport peer + headers into the shared
-  resolver.
+- `lib/rigging/src/rigging/server_auth.py` — `is_trusted_loopback()`,
+  `ANONYMOUS_ADMIN`, and `resolve_auth()` (tokenless loopback → admin).
+- `lib/iris/src/iris/cluster/controller/dashboard.py` — the RPC interceptor and
+  route middleware (`PolicyAuthInterceptor` / `RouteAuthMiddleware` from
+  rigging) pass the transport peer + headers into the shared resolver.
 - `lib/iris/src/iris/cluster/controller/service.py` — `LaunchJob` reconciles the
   principal against the requested owner segment (admins act-as; non-admins pinned).
 - `lib/iris/src/iris/cluster/client/job_info.py` — `resolve_job_user()` stamps

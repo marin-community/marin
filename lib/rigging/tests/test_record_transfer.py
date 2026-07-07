@@ -11,7 +11,7 @@ from rigging.filesystem import TransferBudget, TransferBudgetExceeded, record_tr
 @pytest.fixture()
 def patched_regions(monkeypatch):
     """VM is in us-central1; bucket lookup is faked from the URL."""
-    monkeypatch.setattr(rfs, "_cached_marin_region", lambda: "us-central1")
+    monkeypatch.setattr(rfs, "cached_marin_region", lambda: "us-central1")
     monkeypatch.setattr(
         rfs,
         "_cached_bucket_location",

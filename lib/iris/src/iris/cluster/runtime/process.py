@@ -596,10 +596,6 @@ class ProcessRuntime:
             bundle_store.extract_bundle_to(bundle_id, workdir)
         write_workdir_files(workdir, workdir_files)
 
-    def list_containers(self) -> list[ProcessContainerHandle]:
-        """List all managed container handles."""
-        return list(self._handles)
-
     def list_iris_containers(self, all_states: bool = True) -> list[str]:
         """List all container IDs."""
         del all_states

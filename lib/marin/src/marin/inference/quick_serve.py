@@ -15,20 +15,19 @@ the slice; the ``marin-serve`` launcher CLI is a separate module.
 
 import json
 import logging
-import re
 import socket
 import tempfile
 import time
 from dataclasses import dataclass, field
 
-import fsspec
 import requests
 from iris.client import iris_ctx
 from iris.cluster.client.job_info import get_job_info
 from iris.cluster.tpu_topology import get_tpu_topology
-from levanter.model_cache import cache_hf_model
+from iris.cluster.types import EndpointAccess
+from levanter.model_cache import resolve_cached_model_path
 from rigging.connect import proxy_path
-from rigging.filesystem import marin_temp_bucket
+from rigging.filesystem import open_url
 from rigging.log_setup import configure_logging
 from transformers import AutoConfig
 
@@ -50,8 +49,6 @@ _VLLM_API_SUFFIX = "/v1"
 _TIMEOUT_POLL_SECONDS = 30
 # GCS prefix (under the region-local TTL temp bucket) for mirrored HF snapshots.
 _MODEL_CACHE_PREFIX = "quick-serve-models"
-# Written last after a snapshot mirror so a half-uploaded cache never reads as a hit.
-_CACHE_COMPLETE_MARKER = ".quick_serve_complete"
 
 
 @dataclass(frozen=True)
@@ -67,6 +64,9 @@ class QuickServeConfig:
     """Single-host TPU slice type, e.g. ``v6e-8`` or ``v5litepod-8``."""
     endpoint_name: str
     """Iris endpoint name registered for the dashboard (a leading ``/`` is verbatim)."""
+    access: int = EndpointAccess.ENDPOINT_ACCESS_PRIVATE
+    """Proxy access mode. PRIVATE (cluster identity only) or LINK (a scoped capability
+    URL, minted CLI-side, that anyone holding the link can call off-cluster)."""
     port_name: str = "http"
     dtype: str = "bfloat16"
     max_model_len: int | None = None
@@ -133,30 +133,19 @@ def read_attention_heads(model: str) -> tuple[int, int | None]:
 def _read_model_config_dict(model: str) -> dict:
     if _is_object_store_path(model):
         config_path = model.rstrip("/") + "/config.json"
-        with fsspec.open(config_path, "r") as handle:
+        with open_url(config_path, "r") as handle:
             return json.load(handle)
     return AutoConfig.from_pretrained(model, trust_remote_code=True).to_dict()
-
-
-def _model_cache_slug(model: str) -> str:
-    return re.sub(r"[^A-Za-z0-9._-]+", "_", model.strip("/"))
 
 
 def resolve_model_path(model: str, cache_ttl_days: int) -> str:
     """Resolve ``model`` to a path vLLM can load, mirroring HF repos to a TTL'd GCS cache.
 
-    Object-store paths are served directly. HF ids are mirrored once to a region-local
-    GCS cache (``marin_temp_bucket``); a later serve of the same model reads the cached
-    snapshot from same-region GCS instead of re-downloading from HuggingFace. The mirror
-    is populated under a distributed lock (:func:`levanter.model_cache.cache_to_prefix`),
-    so concurrent serves of the same model do not all hit HuggingFace at once: the first
-    worker downloads while the rest block until the cache is populated.
+    HuggingFace repo ids are mirrored once to a region-local GCS cache under a distributed
+    lock, so a later serve of the same model reads the snapshot from same-region GCS instead
+    of re-downloading from HuggingFace; object-store paths are served directly.
     """
-    if cache_ttl_days <= 0 or _is_object_store_path(model):
-        return model
-
-    cache_path = marin_temp_bucket(cache_ttl_days, f"{_MODEL_CACHE_PREFIX}/{_model_cache_slug(model)}")
-    return cache_hf_model(cache_path, model, complete_marker=_CACHE_COMPLETE_MARKER)
+    return resolve_cached_model_path(model, cache_ttl_days=cache_ttl_days, cache_prefix=_MODEL_CACHE_PREFIX)
 
 
 def detect_chat_support(vllm_base_url: str, model_id: str) -> bool:
@@ -299,7 +288,7 @@ def serve_in_job(config: QuickServeConfig) -> None:
                 "tpu": config.tpu_type,
                 "tensor_parallel_size": str(tensor_parallel_size),
             }
-            endpoint_id = ctx.registry.register(config.endpoint_name, address, metadata)
+            endpoint_id = ctx.registry.register(config.endpoint_name, address, metadata, access=config.access)
             logger.info(
                 "Registered quick-serve endpoint name=%s address=%s id=%s proxy_path=%s",
                 config.endpoint_name,

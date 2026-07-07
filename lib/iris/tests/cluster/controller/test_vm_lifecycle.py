@@ -30,17 +30,6 @@ from collections.abc import Callable
 from contextlib import AbstractContextManager, nullcontext
 
 import pytest
-from iris.cluster.backends.types import (
-    CloudWorkerState,
-    CommandResult,
-    SliceHandle,
-    WorkerStatus,
-)
-from iris.cluster.backends.vm_lifecycle import (
-    _build_controller_vm_config,
-    start_controller,
-    stop_controller,
-)
 from iris.cluster.config import (
     ControllerVmConfig,
     GcpControllerConfig,
@@ -49,6 +38,17 @@ from iris.cluster.config import (
     PlatformConfig,
     SliceConfig,
     VmConfig,
+)
+from iris.cluster.platforms.types import (
+    CloudWorkerState,
+    CommandResult,
+    SliceHandle,
+    WorkerStatus,
+)
+from iris.cluster.platforms.vm_lifecycle import (
+    _build_controller_vm_config,
+    start_controller,
+    stop_controller,
 )
 from rigging.timing import Duration
 

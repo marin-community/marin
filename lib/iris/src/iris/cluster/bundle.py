@@ -25,6 +25,10 @@ import fsspec.core
 
 logger = logging.getLogger(__name__)
 
+# Maximum size (bytes) of a submitted workspace bundle. Enforced by the client
+# when creating the zip and re-checked by the controller when receiving it.
+MAX_BUNDLE_SIZE_BYTES = 25 * 1024 * 1024
+
 
 def content_id(data: bytes) -> str:
     """Canonical content id (SHA-256 hex digest) for arbitrary bytes."""

@@ -13,8 +13,8 @@ from iris.cluster.backends.k8s.logship import (
     _LineBuffer,
     _log_dir_glob,
     _make_log_entry,
+    log_key_and_attempt,
     parse_cri_line,
-    split_key_attempt,
 )
 
 
@@ -100,16 +100,31 @@ def test_partial_lines_join_onto_following_full_line():
 # ---------------------------------------------------------------------------
 
 
-def test_split_key_attempt_with_retry_suffix():
-    key, attempt = split_key_attempt("/u/job/0:2")
+def test_log_key_and_attempt_with_retry_suffix():
+    key, attempt = log_key_and_attempt("/u/job/0:2")
     assert key == "/u/job/0:2"
     assert attempt == 2
 
 
-def test_split_key_attempt_first_attempt_has_no_suffix():
-    key, attempt = split_key_attempt("/u/job/0")
-    assert key == "/u/job/0"
+def test_log_key_and_attempt_first_attempt_gets_zero_suffix():
+    """Attempt 0 arrives as the bare wire id but must be keyed with the ``:0``
+    suffix so it matches the per-task log query, not just the job-level scan."""
+    key, attempt = log_key_and_attempt("/u/job/0")
+    assert key == "/u/job/0:0"
     assert attempt == 0
+
+
+def test_log_key_and_attempt_tolerates_colon_in_job_name():
+    """A colon is a legal job-name char (used by federated job names); only a
+    trailing ``:<digits>`` is the attempt, so an interior colon stays in the key
+    and the id still gains the ``:0`` suffix when no attempt is present."""
+    key, attempt = log_key_and_attempt("/u/train:debug/0")
+    assert key == "/u/train:debug/0:0"
+    assert attempt == 0
+
+    key, attempt = log_key_and_attempt("/u/train:debug/0:2")
+    assert key == "/u/train:debug/0:2"
+    assert attempt == 2
 
 
 def test_log_dir_glob_targets_task_container():

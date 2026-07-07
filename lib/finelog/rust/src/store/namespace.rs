@@ -379,9 +379,9 @@ impl Namespace {
 
     /// Append already-built log columns (`seq` excluded) and return the last seq.
     ///
-    /// `columns` are the five non-seq log columns in registered order
-    /// (key/source/data/epoch_ms/level), prepared by the caller OUTSIDE the
-    /// lock. `num_rows` is their common length and `added_bytes` their raw
+    /// `columns` are the six non-seq log columns in registered order
+    /// (key/source/data/epoch_ms/level/cluster), prepared by the caller OUTSIDE
+    /// the lock. `num_rows` is their common length and `added_bytes` their raw
     /// buffer size.
     pub fn append_log_batch(
         &self,

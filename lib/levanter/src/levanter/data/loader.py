@@ -40,7 +40,6 @@ from levanter.utils.background_iterable import BackgroundIterator
 from levanter.utils.jax_utils import local_cpu_mesh
 from levanter.utils.thread_utils import AsyncIteratorWrapper, blocking_wait
 
-
 Ex = TypeVar("Ex")
 
 _TensorSliceIndex = tuple[slice, ...]
@@ -350,7 +349,7 @@ class DataLoaderIterator(Iterator[Ex]):
         Stacks the individual examples (pytrees) into a single example (pytree) with the batch axis added
         and creates a global array for each leaf of the example.
         """
-        cache: dict[tuple[int, int], list[Array | hax.NamedArray]] = {}
+        cache: dict[tuple[int, int], list[Array | hax.NamedArray | np.ndarray]] = {}
         padded_batch_size = self.dl.rounded_batch_size_at_step(batch.index)
         Batch = hax.Axis(self.dl.batch_axis_name, padded_batch_size)
 
@@ -368,14 +367,14 @@ class DataLoaderIterator(Iterator[Ex]):
 
             # TODO: if we ever do "big data" (i.e. huge examples) we might want to be able to load part of an example
             # which will require support from the datastore (i.e. tensorstore)
-            device_batch = stack_tree(self.dl.batch_axis_name, local_data)
-            batch_leaves = hax.tree_util.tree_leaves(device_batch)
+            host_batch = _stack_tree_on_host(self.dl.batch_axis_name, local_data)
+            batch_leaves = hax.tree_util.tree_leaves(host_batch)
 
             cache[(begin, end)] = batch_leaves
 
             return batch_leaves
 
-        def get_local_data_for_leaf(indices: _TensorSliceIndex, leaf_index: int) -> Array:
+        def get_local_data_for_leaf(indices: _TensorSliceIndex, leaf_index: int) -> Array | np.ndarray:
             batch_slice = indices[0]
             begin, end, stride = batch_slice.indices(padded_batch_size)
             if stride != 1:
@@ -564,6 +563,19 @@ def stack_tree(batch_name, individual_datums):
             return jnp.stack(leaves)
 
     return jax.tree.map(_stack_leaves_unchecked, *individual_datums, is_leaf=is_named_array)
+
+
+def _stack_tree_on_host(batch_name, individual_datums):
+    def _stack_leaves_on_host(*leaves):
+        if is_named_array(leaves[0]):
+            batch_axis = hax.Axis(batch_name, len(leaves)) if isinstance(batch_name, str) else batch_name
+            return hax.NamedArray(
+                np.stack([np.asarray(leaf.array) for leaf in leaves]), (batch_axis,) + leaves[0].axes
+            )
+        else:
+            return np.stack([np.asarray(leaf) for leaf in leaves])
+
+    return jax.tree.map(_stack_leaves_on_host, *individual_datums, is_leaf=is_named_array)
 
 
 def check_sharded_consistency(tree: PyTree, check_disjoint_indices_are_different: bool = False):

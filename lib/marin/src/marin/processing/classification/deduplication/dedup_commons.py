@@ -10,11 +10,12 @@ import pyarrow as pa
 import pyarrow.json as pa_json
 import pyarrow.parquet as pq
 import wandb
+from rigging.filesystem import rebase_file_path
 from zephyr import counters, write_parquet_file
 from zephyr.readers import SUPPORTED_EXTENSIONS, open_file
 
 from marin.utilities.wandb_utils import init_wandb
-from marin.utils import fsspec_glob, rebase_file_path
+from marin.utils import fsspec_glob
 
 logger = logging.getLogger(__name__)
 
@@ -165,12 +166,12 @@ def make_document_dedup_aggregator(
             for record in records:
                 is_dup: bool = record["is_dup"]
                 total += 1
-                counters.increment(f"{counter_prefix}/total")
+                counters.pipeline.update_counter(f"{counter_prefix}/total", 1)
                 if is_dup:
                     dups += 1
-                    counters.increment(f"{counter_prefix}/dups")
+                    counters.pipeline.update_counter(f"{counter_prefix}/dups", 1)
                 else:
-                    counters.increment(f"{counter_prefix}/unique")
+                    counters.pipeline.update_counter(f"{counter_prefix}/unique", 1)
                 yield record
 
         def only_dups(records: Iterator[dict]) -> Iterator[dict]:

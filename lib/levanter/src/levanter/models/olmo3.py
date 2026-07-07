@@ -24,6 +24,7 @@ from haliax.nn.scan import BlockFoldable, BlockSeq, ScanCheckpointPolicy, Stacke
 from haliax.state_dict import ModuleWithStateDictSerialization
 
 from levanter.compat.hf_checkpoints import HFCheckpointConverter, HFCompatConfig
+from levanter.compat.hf_config import hf_config_from_kwargs, hf_rope_config
 from levanter.layers import RmsNormConfig
 from levanter.layers.attention import Attention, AttentionBackend, AttentionConfig, AttentionMask
 from levanter.layers.rotary import DefaultRotaryEmbeddingsConfig, RotaryEmbeddingsConfig
@@ -101,8 +102,8 @@ class Olmo3Config(HFCompatConfig):
 
     @classmethod
     def from_hf_config(cls, hf_config: HfConfig) -> "Olmo3Config":  # type: ignore[override]
-        rope_theta = getattr(hf_config, "rope_theta", 10000.0)
-        rope_config = RotaryEmbeddingsConfig.from_hf_config(rope_theta, hf_config.rope_scaling)
+        rope_theta, rope_scaling = hf_rope_config(hf_config)
+        rope_config = RotaryEmbeddingsConfig.from_hf_config(rope_theta, rope_scaling)
         return Olmo3Config(
             max_seq_len=hf_config.max_position_embeddings,
             hidden_dim=hf_config.hidden_size,
@@ -127,7 +128,8 @@ class Olmo3Config(HFCompatConfig):
 
         rope_theta, rope_scaling = self.rope.to_hf_config()
 
-        return HfOlmo3Config(
+        return hf_config_from_kwargs(
+            HfOlmo3Config,
             max_position_embeddings=self.max_seq_len,
             hidden_size=self.hidden_dim,
             intermediate_size=self.intermediate_dim,
@@ -207,22 +209,12 @@ class Olmo3Config(HFCompatConfig):
         )
 
     def attention_config_for_layer(self, layer_idx: int) -> AttentionConfig:
-        """Build attention config for a specific layer.
-
-        OLMo3 uses different RoPE configurations per layer type:
-        - sliding_attention: uses "default" (vanilla) RoPE + sliding window
-        - full_attention: uses the model's rope config (e.g., YARN)
-
-        This matches HuggingFace's implementation which creates separate rotary
-        embedding modules for each attention type.
-        """
+        """Build attention config for a specific layer."""
         attn_config = self.attention_config()
         layer_types = self.get_layer_types()
         attention_type = layer_types[layer_idx]
         if attention_type == "sliding_attention":
-            # Sliding attention uses vanilla RoPE (not YARN) + sliding window
-            vanilla_rope = DefaultRotaryEmbeddingsConfig(theta=self.rope.theta)
-            return dataclasses.replace(attn_config, sliding_window=self.sliding_window, rope=vanilla_rope)
+            return dataclasses.replace(attn_config, sliding_window=self.sliding_window)
         return attn_config
 
     def init_attention(self, layer_idx: int, *, key) -> Attention:

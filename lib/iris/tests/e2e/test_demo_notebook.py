@@ -7,13 +7,13 @@ from pathlib import Path
 
 import pytest
 from iris.client import IrisClient
-from iris.cluster.backends.local.cluster import LocalCluster
 from iris.cluster.config import (
     IrisClusterConfig,
     ScaleGroupConfig,
     ScaleGroupResources,
     make_local_config,
 )
+from iris.cluster.local_cluster import LocalCluster
 from iris.cluster.types import AcceleratorType, CapacityType, Entrypoint, ResourceSpec
 
 pytestmark = pytest.mark.requires_cluster

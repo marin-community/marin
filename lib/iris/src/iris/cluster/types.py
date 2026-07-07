@@ -19,17 +19,18 @@ import sys
 import urllib.parse
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from enum import StrEnum
+from enum import IntEnum, StrEnum
 from pathlib import Path
 from typing import Any, NewType
 
 import cloudpickle
 import humanfriendly
+from rigging.provenance import LAUNCH_PROVENANCE_ENV, launch_provenance
 from rigging.timing import Timestamp
 
-from iris.cluster.setup import cuda_toolchain_setup_script, default_setup_script, setup_is_quiet, wants_gpu_extra
+from iris.cluster.setup_scripts import cuda_toolchain_setup_script, default_setup_script, setup_is_quiet, wants_gpu_extra
 from iris.cluster.tpu_topology import get_tpu_topology
-from iris.rpc import job_pb2
+from iris.rpc import controller_pb2, job_pb2
 
 
 class AcceleratorType(StrEnum):
@@ -55,6 +56,23 @@ class GcpSliceMode(StrEnum):
     VM = "vm"
 
 
+DEFAULT_BACKEND_ID = "default"
+"""Backend id of the implicit single backend synthesized from top-level config.
+
+Shared by the runtime config synthesis (``iris.cluster.config.resolve_backends``)
+and the ``0032_backend_id`` migration backfill — the migration has only a raw DB
+connection (no config object), so both must agree on this exact literal.
+"""
+
+
+class BackendStatus(IntEnum):
+    """Lifecycle state of a task backend, stored as an INTEGER in ``backends``."""
+
+    ACTIVE = 0
+    DRAINING = 1
+    REMOVED = 2
+
+
 class WellKnownAttribute(StrEnum):
     """Canonical attribute keys for constraint-based scheduling."""
 
@@ -69,6 +87,25 @@ class WellKnownAttribute(StrEnum):
     TPU_VM_COUNT = "tpu-vm-count"
     GPU_VARIANT = "gpu-variant"
     GPU_COUNT = "gpu-count"
+
+
+# The reserved cluster name for work this controller owns and runs itself. Every
+# ``jobs``/``tasks`` row carries a ``cluster`` column that defaults to
+# ``LOCAL_CLUSTER`` and holds a peer's id once the job is handed off, so the
+# control plane folds on ``cluster == LOCAL_CLUSTER`` instead of special-casing a
+# local-vs-federated boolean. It is a reserved name — a real cluster id may not be
+# ``"local"`` (enforced in config validation) — so the sentinel and the global
+# cluster-id namespace stay disjoint.
+LOCAL_CLUSTER = "local"
+
+
+def is_federated(cluster: str) -> bool:
+    """Whether a job/task ``cluster`` value denotes a peer this controller handed off to.
+
+    Its complement — a locally-owned job — is ``cluster == LOCAL_CLUSTER``; call sites
+    that need the fold predicate compare against ``LOCAL_CLUSTER`` directly.
+    """
+    return cluster != LOCAL_CLUSTER
 
 
 @dataclass(frozen=True, slots=True)
@@ -377,10 +414,9 @@ class PendingTask:
 
     task_id: JobName
     job_id: JobName
+    backend_id: str
     state: int
     current_attempt_id: int
-    failure_count: int
-    preemption_count: int
     max_retries_failure: int
     max_retries_preemption: int
     submitted_at_ms: Timestamp
@@ -657,6 +693,9 @@ class EnvironmentSpec:
     - TOKENIZERS_PARALLELISM: "false" (avoids tokenizer deadlocks)
     - HF_TOKEN: from os.environ (if set)
     - WANDB_API_KEY: from os.environ (if set)
+    - MARIN_PROVENANCE: the launch's ``rigging.provenance.Provenance`` as JSON, captured
+      at submission (or forwarded from this process's own env when re-submitting inside
+      a task), so tasks stamp artifacts with the submitter's git identity
 
     Setup:
     - ``setup_scripts=None`` builds the default uv-sync script. ``sync_packages``
@@ -664,7 +703,7 @@ class EnvironmentSpec:
     - ``setup_scripts`` set to a list runs those scripts verbatim before the
       command, with the task's ``IRIS_*`` env available; ``[]`` means no setup (the
       image is used as-is). Build the default and tweak it via
-      ``iris.cluster.setup.default_setup_script``.
+      ``iris.cluster.setup_scripts.default_setup_script``.
 
     Whenever any setup runs (default or custom), iris appends its own
     ``iris_runtime_setup_script`` so cloudpickle/profiler support is always
@@ -691,6 +730,10 @@ class EnvironmentSpec:
             "TOKENIZERS_PARALLELISM": "false",
             "HF_TOKEN": os.getenv("HF_TOKEN"),
             "WANDB_API_KEY": os.getenv("WANDB_API_KEY"),
+            # Launch provenance: a task running from a git-less bundle inherits the
+            # submitter's identity via Provenance.capture(); transitive, since a task
+            # re-submitting captures this same env value.
+            LAUNCH_PROVENANCE_ENV: launch_provenance().to_json(),
         }
 
         merged_env_vars = {k: v for k, v in {**default_env_vars, **(self.env_vars or {})}.items() if v is not None}
@@ -789,6 +832,7 @@ def is_task_finished(state: int) -> bool:
 
 JobState = job_pb2.JobState
 TaskState = job_pb2.TaskState
+EndpointAccess = controller_pb2.Controller.EndpointAccess
 
 
 # TPU topology table and lookup helpers live in iris.cluster.tpu_topology so

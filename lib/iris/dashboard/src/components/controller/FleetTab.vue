@@ -6,6 +6,7 @@ import { useControllerRpc } from '@/composables/useRpc'
 import { useAutoRefresh, DEFAULT_REFRESH_MS } from '@/composables/useAutoRefresh'
 import type { ListWorkersResponse, WorkerHealthStatus, WorkerQuery } from '@/types/rpc'
 import { timestampMs, formatRelativeTime, formatBytes, formatWorkerDevice } from '@/utils/formatting'
+import { useBackends } from '@/composables/useBackends'
 
 import DataTable, { type Column } from '@/components/shared/DataTable.vue'
 import EmptyState from '@/components/shared/EmptyState.vue'
@@ -31,6 +32,7 @@ const SORT_DIRS: SortDir[] = ['asc', 'desc']
 
 const route = useRoute()
 const router = useRouter()
+const { multiBackend, currentBackend } = useBackends()
 
 function queryStr(v: LocationQueryValue | LocationQueryValue[]): string {
   if (Array.isArray(v)) return v[0] ?? ''
@@ -54,6 +56,11 @@ const sortDir = ref<SortDir>(parseDir(queryStr(route.query.dir)))
 const containsFilter = ref(queryStr(route.query.contains))
 const localContains = ref(queryStr(route.query.contains))
 
+const backendId = computed(() => currentBackend(route))
+
+// Show the Backend column only in "All backends" mode and when multiBackend.
+const showBackendColumn = computed(() => multiBackend.value && !backendId.value)
+
 const { data, loading, error, refresh } = useControllerRpc<ListWorkersResponse>('ListWorkers', () => ({
   query: {
     contains: containsFilter.value || undefined,
@@ -61,6 +68,7 @@ const { data, loading, error, refresh } = useControllerRpc<ListWorkersResponse>(
     sortDirection: sortDir.value === 'asc' ? 'SORT_DIRECTION_ASC' : 'SORT_DIRECTION_DESC',
     offset: page.value * PAGE_SIZE,
     limit: PAGE_SIZE,
+    backendId: backendId.value || undefined,
   } satisfies WorkerQuery,
 }))
 
@@ -72,11 +80,11 @@ const totalCount = computed(() => data.value?.totalCount ?? 0)
 const hasMore = computed(() => data.value?.hasMore ?? false)
 const totalPages = computed(() => Math.max(1, Math.ceil(totalCount.value / PAGE_SIZE)))
 
-watch([page, sortField, sortDir, containsFilter], () => {
+watch([page, sortField, sortDir, containsFilter, backendId], () => {
   refresh()
 })
 
-watch(containsFilter, () => {
+watch([containsFilter, backendId], () => {
   page.value = 0
 })
 
@@ -104,19 +112,25 @@ function handleFilterClear() {
 
 const hasActiveFilter = computed(() => !!containsFilter.value)
 
-const columns: Column[] = [
-  { key: 'workerId', label: 'Worker ID', mono: true },
-  { key: 'address', label: 'Address', mono: true },
-  { key: 'device', label: 'Accelerator' },
-  { key: 'zone', label: 'Zone' },
-  { key: 'tpuName', label: 'TPU Name', mono: true },
-  { key: 'healthy', label: 'Health', align: 'center' },
-  { key: 'cpuCount', label: 'CPU', align: 'right' },
-  { key: 'memory', label: 'Memory', align: 'right' },
-  { key: 'tasks', label: 'Tasks', align: 'right' },
-  { key: 'lastHeartbeat', label: 'Last Heartbeat' },
-  { key: 'error', label: 'Error' },
-]
+const columns = computed<Column[]>(() => {
+  const cols: Column[] = [
+    { key: 'workerId', label: 'Worker ID', mono: true },
+    { key: 'address', label: 'Address', mono: true },
+    { key: 'device', label: 'Accelerator' },
+    { key: 'zone', label: 'Zone' },
+    { key: 'tpuName', label: 'TPU Name', mono: true },
+    { key: 'healthy', label: 'Health', align: 'center' },
+    { key: 'cpuCount', label: 'CPU', align: 'right' },
+    { key: 'memory', label: 'Memory', align: 'right' },
+    { key: 'tasks', label: 'Tasks', align: 'right' },
+    { key: 'lastHeartbeat', label: 'Last Heartbeat' },
+    { key: 'error', label: 'Error' },
+  ]
+  if (showBackendColumn.value) {
+    cols.push({ key: 'backend', label: 'Backend', mono: true })
+  }
+  return cols
+})
 </script>
 
 <template>
@@ -256,6 +270,17 @@ const columns: Column[] = [
             {{ (row as WorkerHealthStatus).statusMessage }}
           </span>
           <span v-else class="text-text-muted">-</span>
+        </template>
+
+        <template v-if="showBackendColumn" #cell-backend="{ row }">
+          <button
+            v-if="(row as WorkerHealthStatus).backendId"
+            class="text-accent hover:underline font-mono text-xs"
+            @click="router.replace({ query: { ...route.query, backend: (row as WorkerHealthStatus).backendId } })"
+          >
+            {{ (row as WorkerHealthStatus).backendId }}
+          </button>
+          <span v-else class="text-text-muted">—</span>
         </template>
       </DataTable>
 

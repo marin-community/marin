@@ -4,7 +4,6 @@
 """Download and filter HPLT v3.0 dataset, keeping only non-Common Crawl sources (WIDE, survey)."""
 
 import logging
-import os
 from collections.abc import Iterator
 from contextlib import closing
 from dataclasses import dataclass
@@ -12,6 +11,7 @@ from functools import cache
 
 import requests
 from fray import ResourceConfig
+from rigging.filesystem import prefix_join
 from zephyr import Dataset, ZephyrContext, counters
 
 from marin.datakit.download.http_session import build_retrying_session
@@ -191,9 +191,9 @@ def _download_and_filter_shard(shard: HpltShard) -> Iterator[dict]:
                     },
                 }
     finally:
-        counters.increment("hplt/input", num_input)
-        counters.increment("hplt/non_cc", num_non_cc)
-        counters.increment("hplt/kept", num_kept)
+        counters.pipeline.update_counter("hplt/input", num_input)
+        counters.pipeline.update_counter("hplt/non_cc", num_non_cc)
+        counters.pipeline.update_counter("hplt/kept", num_kept)
 
 
 def download_hplt_v3(output_path: str) -> None:
@@ -204,7 +204,7 @@ def download_hplt_v3(output_path: str) -> None:
     pipeline = (
         Dataset.from_list(all_shards)
         .flat_map(_download_and_filter_shard)
-        .write_parquet(os.path.join(output_path, "data-{shard:05d}-of-{total:05d}.parquet"), skip_existing=True)
+        .write_parquet(prefix_join(output_path, "data-{shard:05d}-of-{total:05d}.parquet"), skip_existing=True)
     )
 
     ctx = ZephyrContext(

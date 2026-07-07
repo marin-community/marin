@@ -2,17 +2,15 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
-import os
 from collections import Counter
 from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import Any, Sequence
 
-import fsspec
 import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
-from rigging.filesystem import open_url
+from rigging.filesystem import open_url, prefix_join
 
 from levanter.analysis.perplexity_gap import (
     LOG2E,
@@ -200,17 +198,17 @@ def write_model_score_files(
     vocab_size: int | None = None,
     token_id_to_text: dict[int, str] | None = None,
 ) -> None:
-    summary_path = os.path.join(output_path, SUMMARY_FILENAME)
-    scored_documents_path = os.path.join(output_path, SCORED_DOCUMENTS_FILENAME)
-    token_counts_path = os.path.join(output_path, TOKEN_COUNTS_FILENAME)
-    token_count_summary_path = os.path.join(output_path, TOKEN_COUNT_SUMMARY_FILENAME)
+    summary_path = prefix_join(output_path, SUMMARY_FILENAME)
+    scored_documents_path = prefix_join(output_path, SCORED_DOCUMENTS_FILENAME)
+    token_counts_path = prefix_join(output_path, TOKEN_COUNTS_FILENAME)
+    token_count_summary_path = prefix_join(output_path, TOKEN_COUNT_SUMMARY_FILENAME)
     mkdirs(output_path)
 
     with open_url(summary_path, "w") as f:
         json.dump(summary, f, indent=2, sort_keys=True)
 
     table = _scored_documents_table(scored_documents)
-    with fsspec.open(scored_documents_path, "wb") as f:
+    with open_url(scored_documents_path, "wb") as f:
         pq.write_table(table, f)
 
     token_count_summary, token_count_table = _token_count_artifacts(
@@ -220,25 +218,25 @@ def write_model_score_files(
     )
     with open_url(token_count_summary_path, "w") as f:
         json.dump(token_count_summary, f, indent=2, sort_keys=True)
-    with fsspec.open(token_counts_path, "wb") as f:
+    with open_url(token_counts_path, "wb") as f:
         pq.write_table(token_count_table, f)
 
 
 def read_model_score_summary(output_path: str) -> dict[str, Any]:
-    summary_path = os.path.join(output_path, SUMMARY_FILENAME)
+    summary_path = prefix_join(output_path, SUMMARY_FILENAME)
     with open_url(summary_path) as f:
         return json.load(f)
 
 
 def read_scored_documents(output_path: str) -> list[ScoredDocument]:
-    scored_documents_path = os.path.join(output_path, SCORED_DOCUMENTS_FILENAME)
-    with fsspec.open(scored_documents_path, "rb") as f:
+    scored_documents_path = prefix_join(output_path, SCORED_DOCUMENTS_FILENAME)
+    with open_url(scored_documents_path, "rb") as f:
         table = pq.read_table(f)
     return [_scored_document_from_row(row) for row in table.to_pylist()]
 
 
 def read_token_count_summary(output_path: str) -> dict[str, Any]:
-    token_count_summary_path = os.path.join(output_path, TOKEN_COUNT_SUMMARY_FILENAME)
+    token_count_summary_path = prefix_join(output_path, TOKEN_COUNT_SUMMARY_FILENAME)
     with open_url(token_count_summary_path) as f:
         return json.load(f)
 

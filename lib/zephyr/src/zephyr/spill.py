@@ -19,9 +19,9 @@ import pickle
 from collections.abc import Iterable, Iterator
 from typing import Any
 
-import fsspec
 import pyarrow as pa
 import pyarrow.parquet as pq
+from rigging.filesystem import open_url
 
 from zephyr.writers import ThreadedBatchWriter
 
@@ -87,7 +87,15 @@ class SpillWriter:
         compression: str = "zstd",
         compression_level: int = 1,
     ) -> None:
-        self._writer = pq.ParquetWriter(path, _SCHEMA, compression=compression, compression_level=compression_level)
+        # Route writes through fsspec (rather than handing PyArrow a raw path,
+        # which it resolves via its native S3 client) so the filesystem's
+        # configured options apply — notably R2's ``fixed_upload_size`` from
+        # ``FSSPEC_S3``, which keeps multipart parts uniformly sized.
+        self._fs_file = open_url(path, "wb")
+        file_handle = self._fs_file.open()
+        self._writer = pq.ParquetWriter(
+            file_handle, _SCHEMA, compression=compression, compression_level=compression_level
+        )
         self._accumulator = _TableAccumulator(row_group_bytes)
 
         def _drain(tables: Iterable[pa.Table]) -> None:
@@ -119,7 +127,15 @@ class SpillWriter:
                 self._threaded.submit(remaining)
             self._threaded.close()
         finally:
+            self._close_writer()
+
+    def _close_writer(self) -> None:
+        # Finalize the Parquet footer, then close the fsspec stream so the
+        # filesystem completes the upload (e.g. the S3 multipart upload).
+        try:
             self._writer.close()
+        finally:
+            self._fs_file.close()
 
     def __enter__(self) -> "SpillWriter":
         return self
@@ -137,7 +153,7 @@ class SpillWriter:
             # without blocking the caller.
             self._threaded.__exit__(exc_type, exc_val, exc_tb)
         finally:
-            self._writer.close()
+            self._close_writer()
 
 
 class SpillReader:
@@ -159,7 +175,7 @@ class SpillReader:
         Returns 0 for an empty spill. Useful as a memory-budgeting hint without
         exposing the underlying format.
         """
-        with fsspec.open(self._path, "rb") as f:
+        with open_url(self._path, "rb") as f:
             md = pq.ParquetFile(f).metadata
             if md.num_rows <= 0:
                 return 0
@@ -173,7 +189,7 @@ class SpillReader:
         set on the reader, in which case items are re-batched to approximately
         that size.
         """
-        with fsspec.open(self._path, "rb") as f:
+        with open_url(self._path, "rb") as f:
             pf = pq.ParquetFile(f)
             if self._batch_size is None:
                 for i in range(pf.num_row_groups):

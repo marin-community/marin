@@ -12,12 +12,13 @@ Token sources are provided against ambient Google credentials:
 ``GcpAccessTokenProvider`` mints OAuth2 *access* tokens (for Google APIs and
 loopback-trust services). Two providers mint the Google-signed OIDC *ID* token
 an IAP-fronted service requires, differing only in where the credential comes
-from: ``IapServiceAccountTokenProvider`` uses ``fetch_id_token`` (service
-accounts, GCE metadata, impersonation — the in-cluster / CI path), while
-``IapRefreshTokenProvider`` re-mints from a cached desktop-OAuth refresh token
-(the human path; obtain the initial token once with ``run_iap_desktop_login``).
-All cache the token until shortly before expiry and only touch the network
-inside ``get_token``.
+from: ``IapRefreshTokenProvider`` re-mints from a cached desktop-OAuth refresh
+token (the human path; obtain the initial token once with
+``run_iap_desktop_login``); ``IapServiceAccountTokenProvider`` mints from the
+ambient service-account credentials the standard resolver finds — a key file,
+GCE metadata, or an impersonated ADC from ``gcloud auth application-default
+login --impersonate-service-account`` (the unattended path). Both cache the token
+until shortly before expiry and only touch the network inside ``get_token``.
 
 A single ``BearerTokenInjector`` attaches the token to outgoing requests under a
 caller-chosen header — ``authorization`` for app auth, ``proxy-authorization``
@@ -29,11 +30,13 @@ both sync and async clients.
 import json
 import os
 import time
+import webbrowser
 from dataclasses import dataclass
 from typing import Protocol, cast
 
 import google.auth
 import google.auth.exceptions
+import google.auth.impersonated_credentials
 import google.auth.jwt
 import google.auth.transport.requests
 import google.oauth2.credentials
@@ -41,12 +44,35 @@ import google.oauth2.id_token
 
 _REFRESH_MARGIN_SECONDS = 300
 
+# Impersonation mints the ID token through the IAM Credentials API, which needs
+# the cloud-platform scope on the source (user) credentials.
+_IMPERSONATION_SCOPES = ["https://www.googleapis.com/auth/cloud-platform"]
+
 # OAuth scopes for the IAP desktop-login flow. "openid" makes the token endpoint
 # return an OIDC ID token (the credential IAP requires); "email" puts the user's
 # address in the token so the service can attribute the identity.
 IAP_LOGIN_SCOPES = ["openid", "email"]
 _GOOGLE_TOKEN_URI = "https://oauth2.googleapis.com/token"
 _GOOGLE_AUTH_URI = "https://accounts.google.com/o/oauth2/auth"
+
+
+class IapCredentialsUnavailable(Exception):
+    """No usable source credentials to mint an IAP token for the cluster.
+
+    Raised when the ambient path finds no credentials it can turn into an IAP OIDC
+    token — the caller has neither a cached interactive login nor service-account
+    credentials the resolver can use. Carries an actionable message; the CLI
+    catches it to render cleanly.
+    """
+
+
+_NO_IAP_CREDENTIALS_MESSAGE = (
+    "No credentials to authenticate to this IAP-protected cluster. Authenticate "
+    "interactively, or for an unattended caller configure application-default "
+    "credentials for a service account on the cluster's IAP allowlist — e.g. "
+    "`gcloud auth application-default login --impersonate-service-account=<sa>` "
+    "(needs roles/iam.serviceAccountTokenCreator on the SA)."
+)
 
 
 def _monotonic_expiry(expiry_wall: float | None) -> float:
@@ -122,11 +148,14 @@ class GcpAccessTokenProvider:
 class IapServiceAccountTokenProvider:
     """Mints OIDC ID tokens for IAP from ambient *service-account* credentials.
 
-    Uses ``fetch_id_token``, which works for service accounts, GCE metadata, and
-    impersonated credentials (the in-cluster / CI path) but **not** end-user
-    ``gcloud`` credentials. The audience is the OAuth client id of the
-    IAP-protected resource. The token is cached until five minutes before its
-    ``exp`` claim; credential access happens only inside ``get_token``.
+    Works with any non-interactive service-account credential: a key file (via
+    ``GOOGLE_APPLICATION_CREDENTIALS``), GCE/Cloud Run metadata, or an impersonated
+    ADC written by ``gcloud auth application-default login
+    --impersonate-service-account``. Bare end-user ``gcloud`` credentials cannot
+    produce an IAP token and raise :class:`IapCredentialsUnavailable`. The audience
+    is the OAuth client id of the IAP-protected resource. The token is cached until
+    five minutes before its ``exp`` claim; credential access happens only inside
+    ``get_token``.
     """
 
     def __init__(self, audience: str):
@@ -138,12 +167,34 @@ class IapServiceAccountTokenProvider:
         if self._cached_token is not None and time.monotonic() < self._expires_at:
             return self._cached_token
 
-        token = google.oauth2.id_token.fetch_id_token(google.auth.transport.requests.Request(), self._audience)
+        token = self._mint_id_token()
         claims = google.auth.jwt.decode(token, verify=False)
-
         self._cached_token = token
         self._expires_at = _monotonic_expiry(claims.get("exp"))
         return self._cached_token
+
+    def _mint_id_token(self) -> str:
+        request = google.auth.transport.requests.Request()
+        # fetch_id_token covers a service-account key (GOOGLE_APPLICATION_CREDENTIALS)
+        # and the GCE/Cloud Run metadata server.
+        try:
+            return cast(str, google.oauth2.id_token.fetch_id_token(request, self._audience))
+        except google.auth.exceptions.DefaultCredentialsError:
+            pass
+        # fetch_id_token never reads the well-known ADC file, so an impersonated
+        # ADC (gcloud auth application-default login --impersonate-service-account)
+        # lands here. Mint through it; bare user creds or no ADC cannot.
+        try:
+            source, _ = google.auth.default(scopes=_IMPERSONATION_SCOPES)
+        except google.auth.exceptions.DefaultCredentialsError as exc:
+            raise IapCredentialsUnavailable(_NO_IAP_CREDENTIALS_MESSAGE) from exc
+        if not isinstance(source, google.auth.impersonated_credentials.Credentials):
+            raise IapCredentialsUnavailable(_NO_IAP_CREDENTIALS_MESSAGE)
+        id_creds = google.auth.impersonated_credentials.IDTokenCredentials(
+            source, target_audience=self._audience, include_email=True
+        )
+        id_creds.refresh(request)
+        return cast(str, id_creds.token)
 
 
 class IapRefreshTokenProvider:
@@ -223,7 +274,10 @@ def run_iap_desktop_login(
     redirect on a localhost port — the right choice on a workstation. With
     ``headless=True`` (no local browser, e.g. an SSH session) it instead prints
     the authorization URL and reads back the pasted redirect URL or code, so no
-    browser or port-forward on the box is required.
+    browser or port-forward on the box is required. Even with ``headless=False``
+    we fall back to that paste flow automatically when no browser is registered,
+    since ``run_local_server``'s localhost redirect is unreachable from wherever
+    the user would otherwise open the URL.
 
     Returns the freshly minted OIDC ID token and the long-lived refresh token to
     cache for silent re-minting via :class:`IapRefreshTokenProvider`.
@@ -237,6 +291,13 @@ def run_iap_desktop_login(
             "IAP desktop login requires google-auth-oauthlib; install it with `pip install marin-rigging[iap]`"
         ) from exc
 
+    # Both loopback paths trip oauthlib's strict defaults, and both are expected
+    # and safe here: the redirect is http://localhost (not real transport), and
+    # Google expands the requested "email" scope to its full userinfo URL, which
+    # otherwise raises "Scope has changed". Relax both before either flow runs.
+    os.environ.setdefault("OAUTHLIB_INSECURE_TRANSPORT", "1")
+    os.environ.setdefault("OAUTHLIB_RELAX_TOKEN_SCOPE", "1")
+
     client_config = {
         "installed": {
             "client_id": client_id,
@@ -246,7 +307,7 @@ def run_iap_desktop_login(
         }
     }
 
-    if headless:
+    if headless or not _browser_available():
         creds = _console_oauth(Flow, client_config)
     else:
         flow = InstalledAppFlow.from_client_config(client_config, scopes=IAP_LOGIN_SCOPES)
@@ -260,18 +321,30 @@ def run_iap_desktop_login(
     return cast(str, creds.id_token), cast(str, creds.refresh_token)
 
 
+def _browser_available() -> bool:
+    """True when a usable web browser is registered for ``webbrowser.open``.
+
+    ``webbrowser.get()`` raises ``webbrowser.Error`` on a box with no browser
+    (a headless server or a bare SSH session), which is exactly where the
+    localhost-redirect flow cannot work and the paste-the-code flow must run.
+    """
+    try:
+        webbrowser.get()
+        return True
+    except webbrowser.Error:
+        return False
+
+
 def _console_oauth(flow_cls, client_config: dict):
     """Manual loopback OAuth: print the URL, read back the pasted redirect/code.
 
     Works without a local browser or a reachable localhost port — the user opens
     the URL on any machine and pastes the resulting ``http://localhost/?code=...``
     URL (which the browser fails to load, but whose address bar holds the code).
+    Callers must relax OAUTHLIB_INSECURE_TRANSPORT / OAUTHLIB_RELAX_TOKEN_SCOPE
+    first (``run_iap_desktop_login`` does), since the http loopback redirect and
+    Google's scope expansion both trip oauthlib's strict defaults.
     """
-    # http://localhost loopback redirect + Google adding the 'openid' scope both
-    # trip oauthlib's defaults; both are expected and safe for this local flow.
-    os.environ.setdefault("OAUTHLIB_INSECURE_TRANSPORT", "1")
-    os.environ.setdefault("OAUTHLIB_RELAX_TOKEN_SCOPE", "1")
-
     flow = flow_cls.from_client_config(client_config, scopes=IAP_LOGIN_SCOPES, redirect_uri="http://localhost")
     auth_url, _ = flow.authorization_url(access_type="offline", prompt="consent")
     print(

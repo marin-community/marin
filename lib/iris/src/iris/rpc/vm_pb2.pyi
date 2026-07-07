@@ -136,7 +136,7 @@ class ScalingDecision(_message.Message):
     def __init__(self, scale_group: _Optional[str] = ..., action: _Optional[_Union[ScalingAction, str]] = ..., slice_delta: _Optional[int] = ..., reason: _Optional[str] = ...) -> None: ...
 
 class ScaleGroupStatus(_message.Message):
-    __slots__ = ("name", "device_type", "device_variant", "quota_pool", "allocation_tier", "region", "current_demand", "peak_demand", "backoff_until", "consecutive_failures", "last_scale_up", "last_scale_down", "slices", "slice_state_counts", "availability_status", "availability_reason", "blocked_until", "scale_up_cooldown_until", "idle_threshold_ms")
+    __slots__ = ("name", "backend_id", "device_type", "device_variant", "quota_pool", "allocation_tier", "region", "current_demand", "peak_demand", "backoff_until", "consecutive_failures", "last_scale_up", "last_scale_down", "slices", "slice_state_counts", "availability_status", "availability_reason", "blocked_until", "scale_up_cooldown_until", "idle_threshold_ms")
     class SliceStateCountsEntry(_message.Message):
         __slots__ = ("key", "value")
         KEY_FIELD_NUMBER: _ClassVar[int]
@@ -145,6 +145,7 @@ class ScaleGroupStatus(_message.Message):
         value: int
         def __init__(self, key: _Optional[str] = ..., value: _Optional[int] = ...) -> None: ...
     NAME_FIELD_NUMBER: _ClassVar[int]
+    BACKEND_ID_FIELD_NUMBER: _ClassVar[int]
     DEVICE_TYPE_FIELD_NUMBER: _ClassVar[int]
     DEVICE_VARIANT_FIELD_NUMBER: _ClassVar[int]
     QUOTA_POOL_FIELD_NUMBER: _ClassVar[int]
@@ -164,6 +165,7 @@ class ScaleGroupStatus(_message.Message):
     SCALE_UP_COOLDOWN_UNTIL_FIELD_NUMBER: _ClassVar[int]
     IDLE_THRESHOLD_MS_FIELD_NUMBER: _ClassVar[int]
     name: str
+    backend_id: str
     device_type: str
     device_variant: str
     quota_pool: str
@@ -182,7 +184,7 @@ class ScaleGroupStatus(_message.Message):
     blocked_until: _time_pb2.Timestamp
     scale_up_cooldown_until: _time_pb2.Timestamp
     idle_threshold_ms: int
-    def __init__(self, name: _Optional[str] = ..., device_type: _Optional[str] = ..., device_variant: _Optional[str] = ..., quota_pool: _Optional[str] = ..., allocation_tier: _Optional[int] = ..., region: _Optional[str] = ..., current_demand: _Optional[int] = ..., peak_demand: _Optional[int] = ..., backoff_until: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., consecutive_failures: _Optional[int] = ..., last_scale_up: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., last_scale_down: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., slices: _Optional[_Iterable[_Union[SliceInfo, _Mapping]]] = ..., slice_state_counts: _Optional[_Mapping[str, int]] = ..., availability_status: _Optional[str] = ..., availability_reason: _Optional[str] = ..., blocked_until: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., scale_up_cooldown_until: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., idle_threshold_ms: _Optional[int] = ...) -> None: ...
+    def __init__(self, name: _Optional[str] = ..., backend_id: _Optional[str] = ..., device_type: _Optional[str] = ..., device_variant: _Optional[str] = ..., quota_pool: _Optional[str] = ..., allocation_tier: _Optional[int] = ..., region: _Optional[str] = ..., current_demand: _Optional[int] = ..., peak_demand: _Optional[int] = ..., backoff_until: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., consecutive_failures: _Optional[int] = ..., last_scale_up: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., last_scale_down: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., slices: _Optional[_Iterable[_Union[SliceInfo, _Mapping]]] = ..., slice_state_counts: _Optional[_Mapping[str, int]] = ..., availability_status: _Optional[str] = ..., availability_reason: _Optional[str] = ..., blocked_until: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., scale_up_cooldown_until: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., idle_threshold_ms: _Optional[int] = ...) -> None: ...
 
 class AutoscalerAction(_message.Message):
     __slots__ = ("timestamp", "action_type", "scale_group", "slice_id", "reason", "status")
