@@ -1,16 +1,21 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""New-engine side of the joint-decode A/B gate: GSM8K accuracy, standalone.
+"""New-engine side of the joint-decode A/B gate: standalone GSM8K generation.
 
 Runs the joint-decode package engine pair directly on two local TPU chips —
-no executor, no cluster jobs — over GSM8K few-shot prompts built by the
-canonical task code, grades with the canonical grader, and prints accuracy.
-The gen-0 counterpart (``ab_gsm8k_joint_decode_gen0.py`` on the
-``jd-gen0-reference`` branch) has the identical structure and sampling
-configuration; the two printed accuracies are the A/B comparison.
+no executor, no cluster jobs — over a pre-staged prompts file (the
+production GSM8K prompts artifact, e.g. ``prompts/gsm8k-99b4ac``), writes
+chunk files for later scoring, and prints per-chunk timing plus
+finish-reason and completion-length summaries. The gen-0 counterpart
+(``ab_gsm8k_joint_decode_gen0.py`` on the ``jd-gen0-reference`` branch) has
+the identical structure and sampling configuration; the summaries — and,
+once graded, the stored chunks' accuracies — are the A/B comparison.
+Grading is deferred: the canonical lm_eval grader is broken under current
+pins (see the plan doc), and the chunk files keep until it is fixed.
 
-Run on a TPU worker (needs the vllm and eval extras):
+Run on a TPU worker (vllm extra), with prompts.jsonl.gz staged in
+--output-dir first:
 
     uv run --no-sync python \\
       experiments/downstream_scaling/evals/ab_gsm8k_joint_decode_new.py \\
@@ -26,7 +31,9 @@ import gzip
 import json
 import logging
 import os
+import statistics
 import time
+from collections import Counter
 from pathlib import Path
 
 from joint_decode.config import JointDecodeSamplingConfig
@@ -35,11 +42,6 @@ from joint_decode.tpu.config import JointDecodeConfig, JointDecodeModelConfig
 from joint_decode.tpu.decoder import joint_decoder
 
 from experiments.downstream_scaling.evals.framework.schema import prompts_file, read_prompt_rows
-from experiments.downstream_scaling.evals.tasks.gsm8k import (
-    GSM8KPromptsConfig,
-    _grade_gsm8k_shard,
-    write_gsm8k_prompts,
-)
 
 logger = logging.getLogger(__name__)
 
@@ -69,20 +71,20 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def ensure_prompts(output_dir: str, n_problems: int) -> list[dict]:
+def load_prompts(output_dir: str, n_problems: int) -> list[dict]:
     path = prompts_file(output_dir)
     if not os.path.exists(path):
-        write_gsm8k_prompts(
-            GSM8KPromptsConfig(
-                output_path=output_dir,
-                num_fewshot=NUM_FEWSHOT,
-                fewshot_seed=FEWSHOT_SEED,
-                n_problems=n_problems,
-            )
+        raise FileNotFoundError(
+            f"{path} not found; stage the production GSM8K prompts artifact there first "
+            "(e.g. downstream_scaling/evals/prompts/gsm8k-99b4ac/prompts.jsonl.gz)"
         )
     rows = list(read_prompt_rows(path))
     if len(rows) != n_problems:
-        raise ValueError(f"{path} has {len(rows)} prompts; expected {n_problems} (stale output dir?)")
+        raise ValueError(f"{path} has {len(rows)} prompts; expected {n_problems}")
+    for row in rows:
+        metadata = row["metadata"]
+        if metadata["num_fewshot"] != NUM_FEWSHOT or metadata["fewshot_seed"] != FEWSHOT_SEED:
+            raise ValueError(f"prompt {row['id']} has fewshot config {metadata}; expected {NUM_FEWSHOT}/{FEWSHOT_SEED}")
     return rows
 
 
@@ -160,26 +162,21 @@ def generate(args: argparse.Namespace, rows: list[dict], chunks_dir: Path) -> No
             logger.info("chunk %d/%d done in %.1fs", chunk_id + 1, n_chunks, time.monotonic() - chunk_start)
 
 
-def grade(rows: list[dict], chunks_dir: Path) -> tuple[int, int]:
-    rows_by_id = {row["id"]: row for row in rows}
-    items = []
+def summarize(chunks_dir: Path) -> None:
+    finish_reasons: Counter[str] = Counter()
+    lengths: list[int] = []
     for chunk_file in sorted(chunks_dir.glob("chunk-*.jsonl.gz")):
         with gzip.open(chunk_file, "rt") as f:
             for line in f:
                 record = json.loads(line)
-                row = rows_by_id[record["id"]]
-                items.append(
-                    {
-                        "id": record["id"],
-                        "completion_index": record["completion_index"],
-                        "completion": record["completion"]["text"],
-                        "problem": row["metadata"]["problem"],
-                        "ground_truth": row["ground_truth"],
-                    }
-                )
-    grades = list(_grade_gsm8k_shard(items, None))
-    correct = sum(1 for g in grades if g["grade"]["score"] > 0)
-    return correct, len(grades)
+                finish_reasons[str(record["completion"]["metadata"]["finish_reason"])] += 1
+                lengths.append(len(record["completion"]["text"]))
+    quantiles = statistics.quantiles(lengths, n=10)
+    print(f"completions: {len(lengths)}")
+    print(f"finish_reasons: {dict(finish_reasons.most_common())}")
+    print(
+        f"completion chars: mean={statistics.mean(lengths):.0f} p10={quantiles[0]:.0f} p50={quantiles[4]:.0f} p90={quantiles[8]:.0f}"
+    )
 
 
 def main() -> None:
@@ -189,10 +186,9 @@ def main() -> None:
     chunks_dir = Path(output_dir) / "chunks"
     chunks_dir.mkdir(parents=True, exist_ok=True)
 
-    rows = ensure_prompts(output_dir, args.n_problems)
+    rows = load_prompts(output_dir, args.n_problems)
     generate(args, rows, chunks_dir)
-    correct, total = grade(rows, chunks_dir)
-    print(f"ab_gsm8k_joint_decode_new accuracy: {correct}/{total} = {correct / total:.4f}")
+    summarize(chunks_dir)
 
 
 if __name__ == "__main__":
