@@ -197,7 +197,10 @@ class GrugMoeAdamHConfig(OptimizerConfig):
                 return "adam"
             if "router_bias" in path_lower or "attn_gate" in path_lower or ".router" in path_lower:
                 return "adam"
-            if ".mlp.expert_mlp.w_" in path_lower or ".mlp.w_" in path_lower or ".shared.w_" in path_lower:
+            # RMSNorm/LayerNorm gains -> plain Adam.
+            if "norm" in path_lower:
+                return "adam"
+            if "expert_mlp.w_" in path_lower or ".shared.w_" in path_lower:
                 return "adamh_expert"
             if hasattr(param, "ndim") and param.ndim >= 2:
                 return "adamh"
@@ -297,10 +300,13 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                 return "adam"
             if "output_proj" in path_lower or "lm_head" in path_lower:
                 return "adamh"
-            # GatedNorms route to muonh (NS + Frobenius hyperball), same as matrices.
-            if "gated_norm" in path_lower:
-                return "muonh"
-            if hasattr(param, "ndim") and param.ndim in (2, 3):
+            # RMSNorm/LayerNorm gains are per-dimension scales (stack to 2D under scan),
+            # not orthogonalizable matrices -> plain Adam.
+            if "norm" in path_lower:
+                return "adam"
+            # Matrices -> MuonH: attention, MoE experts (4D when stacked under scan), shared
+            # expert, and GatedNorm low-rank projections.
+            if hasattr(param, "ndim") and param.ndim in (2, 3, 4):
                 return "muonh"
             return "adam"
 
