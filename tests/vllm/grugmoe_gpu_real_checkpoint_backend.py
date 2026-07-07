@@ -16,7 +16,6 @@ import json
 import os
 import posixpath
 import shutil
-import site
 import sys
 import tempfile
 import time
@@ -399,52 +398,6 @@ def _mesh_snapshot(mesh: Any) -> dict[str, Any]:
     }
 
 
-def _python_library_dirs() -> list[str]:
-    roots: list[Path] = []
-    for path in (*site.getsitepackages(), site.getusersitepackages(), *sys.path):
-        if path:
-            roots.append(Path(path))
-
-    seen: set[str] = set()
-    library_dirs: list[str] = []
-    for root in roots:
-        resolved_root = str(root)
-        if resolved_root in seen:
-            continue
-        seen.add(resolved_root)
-
-        nvidia_root = root / "nvidia"
-        if nvidia_root.is_dir():
-            for pattern in ("*/lib", "*/lib64"):
-                for lib_dir in sorted(nvidia_root.glob(pattern)):
-                    if lib_dir.is_dir() and any(lib_dir.glob("*.so*")):
-                        library_dirs.append(str(lib_dir))
-
-        torch_lib = root / "torch" / "lib"
-        if torch_lib.is_dir() and any(torch_lib.glob("*.so*")):
-            library_dirs.append(str(torch_lib))
-    return list(dict.fromkeys(library_dirs))
-
-
-def _prepend_env_path(name: str, values: list[str]) -> None:
-    if not values:
-        return
-    existing = [value for value in os.environ.get(name, "").split(os.pathsep) if value]
-    os.environ[name] = os.pathsep.join(list(dict.fromkeys([*values, *existing])))
-
-
-def _configure_cuda_library_path() -> dict[str, Any]:
-    library_dirs = _python_library_dirs()
-    _prepend_env_path("LD_LIBRARY_PATH", library_dirs)
-    ld_library_path_entry_count = len(
-        [value for value in os.environ.get("LD_LIBRARY_PATH", "").split(os.pathsep) if value]
-    )
-    return {
-        "added_library_dirs": library_dirs,
-        "ld_library_path_entry_count": ld_library_path_entry_count,
-    }
-
-
 def _configure_vllm_gpu_env() -> dict[str, Any]:
     os.environ["VLLM_TARGET_DEVICE"] = "cuda"
     os.environ["VLLM_ENABLE_V1_MULTIPROCESSING"] = "0"
@@ -463,9 +416,7 @@ def _configure_vllm_gpu_env() -> dict[str, Any]:
     os.environ.setdefault("VLLM_LOGGING_LEVEL", "DEBUG")
     os.environ.setdefault("MODEL_IMPL_TYPE", "vllm")
     os.environ.setdefault("PYTHONUNBUFFERED", "1")
-    cuda_library_path = _configure_cuda_library_path()
     return {
-        **cuda_library_path,
         "local_cache_dirs": {name: os.environ.get(name) for name in local_cache_dirs},
         "vllm_logging_level": os.environ.get("VLLM_LOGGING_LEVEL"),
     }
