@@ -179,12 +179,23 @@ def build_reverse_deps(repo_root: Path) -> dict[str, set[str]]:
     return dict(reverse)
 
 
+def is_test_module(filename: str) -> bool:
+    """Whether pytest would collect this file by name (default ``python_files`` convention).
+
+    Only such files may be passed to pytest explicitly: an explicit path is imported even
+    when it does not match the collection convention, so handing pytest a helper module
+    (workload script, stub, generator) crashes the run if the helper's imports are not
+    installed in the lane's environment.
+    """
+    return (filename.startswith("test_") or filename.endswith("_test.py")) and filename.endswith(".py")
+
+
 def all_test_files(scope: str, repo_root: Path) -> list[Path]:
-    """All .py files in a scope's test directory, excluding conftest.py."""
+    """All pytest-collectable test modules in a scope's test directory."""
     test_dir = repo_root / "tests" if scope == "marin" else repo_root / f"lib/{scope}/tests"
     if not test_dir.exists():
         return []
-    return sorted(p for p in test_dir.rglob("*.py") if p.name != "conftest.py")
+    return sorted(p for p in test_dir.rglob("*.py") if is_test_module(p.name))
 
 
 # ---------------------------------------------------------------------------
@@ -247,13 +258,13 @@ def classify(
                 break
 
             if filepath.startswith(test_prefix):
-                if p.name == "conftest.py":
-                    forced.add(scope)
-                elif p.suffix == ".py":
+                if is_test_module(p.name):
                     direct_tests[scope].append(filepath)
                 else:
-                    # Non-Python test asset (snapshot, fixture, data file): run the full
-                    # scope so the tests that own this file are not missed.
+                    # conftest.py, helper modules (stubs, workload scripts, generators), and
+                    # non-Python assets (snapshots, fixtures, data files) can all change test
+                    # behavior without being directly collectable: run the full scope so the
+                    # tests that own this file are not missed.
                     forced.add(scope)
                 break
 
