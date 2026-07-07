@@ -33,23 +33,15 @@ from dataclasses import dataclass, field
 
 import draccus
 import fsspec
-import marin.execution.executor as executor_module
 import pyarrow.parquet as pq
 from fray import ResourceConfig
 from huggingface_hub import __version__ as hf_hub_version
 from levanter.tokenizers import TokenizerBackend
 from marin.datakit.normalize import NormalizedData
-from marin.execution.executor import (
-    ExecutorMainConfig,
-    ExecutorStep,
-    executor_main,
-    this_output_path,
-    versioned,
-)
 from marin.execution.remote import remote
+from marin.execution.step_runner import StepRunner
 from marin.execution.step_spec import StepSpec
 from marin.processing.tokenize import TokenizeConfig, tokenize
-from marin.processing.tokenize.data_configs import TokenizerStep
 from marin.utils import fsspec_glob, fsspec_mkdirs
 from rigging.filesystem import open_url, url_to_fs
 from rigging.log_setup import configure_logging
@@ -61,6 +53,11 @@ logger = logging.getLogger(__name__)
 PLACE_ALIGNED_DIGIT_MAX_RUN_CHARS = 510
 PLACE_ALIGNED_DIGIT_CHUNK_SIZE = 3
 PLACE_ALIGNED_DIGIT_PRETOKENIZER_REVISION = "bounded-leading-triplets-v2"
+DEFAULT_TOKENIZER_SWEEP_TPU_TYPES = ("v5p-8", "v6e-4", "v4-8", "v5litepod-4")
+
+
+def _default_tokenizer_sweep_tpu_types() -> list[str]:
+    return list(DEFAULT_TOKENIZER_SWEEP_TPU_TYPES)
 
 
 @dataclass(frozen=True)
@@ -69,12 +66,12 @@ class ResourceConfigSpec:
     ram: str
     disk: str = "16g"
     preemptible: bool = True
-    tpu_type: str | None = None
+    tpu_types: list[str] = field(default_factory=list)
 
     def to_resource_config(self, regions: Sequence[str]) -> ResourceConfig:
-        if self.tpu_type:
+        if self.tpu_types:
             return ResourceConfig.with_tpu(
-                self.tpu_type,
+                self.tpu_types,
                 cpu=self.cpu,
                 ram=self.ram,
                 disk=self.disk,
@@ -148,7 +145,7 @@ class TokenizerSweepConfig:
     regions: list[str] = field(default_factory=lambda: ["europe-west4"])
     resource_revision: str = "regional-highmem-v2"
     sample_resource: ResourceConfigSpec = field(
-        default_factory=lambda: ResourceConfigSpec(cpu=1, ram="8g", tpu_type="v6e-8")
+        default_factory=lambda: ResourceConfigSpec(cpu=1, ram="8g", tpu_types=_default_tokenizer_sweep_tpu_types())
     )
     hf_train_resource: ResourceConfigSpec = field(
         default_factory=lambda: ResourceConfigSpec(
@@ -156,11 +153,17 @@ class TokenizerSweepConfig:
             ram="768g",
             disk="1000g",
             preemptible=False,
-            tpu_type="v6e-8",
+            tpu_types=_default_tokenizer_sweep_tpu_types(),
         )
     )
     tokenize_worker_resource: ResourceConfigSpec = field(
-        default_factory=lambda: ResourceConfigSpec(cpu=1, ram="10g", disk="5g", preemptible=True, tpu_type="v6e-8")
+        default_factory=lambda: ResourceConfigSpec(
+            cpu=1,
+            ram="10g",
+            disk="5g",
+            preemptible=True,
+            tpu_types=_default_tokenizer_sweep_tpu_types(),
+        )
     )
     hf_batch_size: int = 1024
     hf_train_threads: int = 64
@@ -209,23 +212,6 @@ def _token_count_label(tokens: int) -> str:
     if tokens % 1_000_000 == 0:
         return f"{tokens // 1_000_000}m"
     return str(tokens)
-
-
-def _skip_executor_info_writes_for_generated_dag() -> None:
-    """Avoid pre-run per-step metadata writes for this large generated DAG.
-
-    Executor status files and step outputs are still written normally. This
-    only skips the data-browser JSON sidecar files that otherwise issue one
-    preflight write per step/dependency and can block before remote jobs launch.
-    """
-
-    def write_infos(self):
-        caller = os.path.basename(self.executor_info.caller_path).replace(".py", "")
-        self.executor_info_path = os.path.join(self.executor_info_base_path, f"{caller}-metadata-skipped.json")
-        logger.info("Skipping executor info sidecar writes for generated tokenizer sweep DAG")
-        logger.info("Executor info placeholder: %s", self.executor_info_path)
-
-    executor_module.Executor.write_infos = write_infos
 
 
 def _part_name(idx: int, total: int) -> str:
@@ -1028,43 +1014,41 @@ def official_truncated_hf_family_step(config: TokenizerSweepConfig, family_confi
     )
 
 
-@dataclass(frozen=True)
-class TokenizeAfterTokenizerConfig:
-    tokenize: TokenizeConfig
-    tokenizer_done: str
-
-
-def tokenize_after_tokenizer(config: TokenizeAfterTokenizerConfig):
-    return tokenize(config.tokenize)
-
-
 def holdout_tokenize_step(
     *,
     config: TokenizerSweepConfig,
     bucket_name: str,
-    sampled_exec: ExecutorStep,
+    sampled_step: StepSpec,
     tokenizer_name: str,
     tokenizer_backend: TokenizerBackend,
-    tokenizer_exec: ExecutorStep,
-) -> TokenizerStep:
-    return ExecutorStep(
+    tokenizer_step: StepSpec,
+) -> StepSpec:
+    def run(output_path: str) -> None:
+        tokenize(
+            TokenizeConfig(
+                train_paths=[f"{sampled_step.output_path}/outputs/main/*.parquet"],
+                validation_paths=[],
+                cache_path=output_path,
+                tokenizer=tokenizer_name,
+                tokenizer_backend=tokenizer_backend,
+                worker_resources=config.tokenize_worker_resource.to_resource_config(config.regions),
+            )
+        )
+
+    return StepSpec(
         name=os.path.join("data/datakit", "tokenized", config.run_id, bucket_name),
-        fn=tokenize_after_tokenizer,
-        config=TokenizeAfterTokenizerConfig(
-            tokenize=TokenizeConfig(
-                train_paths=[sampled_exec / "outputs/main/*.parquet"],
-                validation_paths=versioned([]),
-                cache_path=this_output_path(),
-                tokenizer=versioned(tokenizer_name),
-                tokenizer_backend=versioned(tokenizer_backend),
-                worker_resources=versioned(config.tokenize_worker_resource.to_resource_config(config.regions)),
-            ),
-            tokenizer_done=tokenizer_exec / "metadata.json",
-        ),
+        deps=[sampled_step, tokenizer_step],
+        hash_attrs={
+            "tokenizer": tokenizer_name,
+            "tokenizer_backend": tokenizer_backend.value,
+            "tokenize_worker_resources": dataclasses.asdict(config.tokenize_worker_resource),
+            "regions": config.regions,
+        },
+        fn=run,
     )
 
 
-def build_steps(config: TokenizerSweepConfig | None = None, phase: str | None = None) -> list[ExecutorStep]:
+def build_steps(config: TokenizerSweepConfig | None = None, phase: str | None = None) -> list[StepSpec]:
     config = config or issue_5821_default_config()
     config.validate()
     phase = phase or config.phase
@@ -1149,18 +1133,14 @@ def build_steps(config: TokenizerSweepConfig | None = None, phase: str | None = 
         if unknown_sizes:
             raise ValueError(f"Unknown size_filter entries: {sorted(unknown_sizes)}")
 
-    holdout_execs = {source_name: step.as_executor_step() for source_name, step in holdout_samples.items()}
-    retokenize_train_execs = {
-        source_name: step.as_executor_step() for source_name, step in retokenize_train_samples.items()
-    }
-    tokenizer_execs = {family: step.as_executor_step() for family, (step, _, _) in tokenizer_steps.items()}
+    tokenizer_execs = {family: step for family, (step, _, _) in tokenizer_steps.items()}
 
     if phase == "prep":
-        prep_steps = [*holdout_execs.values(), *tokenizer_execs.values()]
+        prep_steps = [*holdout_samples.values(), *tokenizer_execs.values()]
         logger.info(
             "Tokenizer sweep prep DAG: %d sources, %d holdout samples, %d tokenizer-training targets",
             len(sources),
-            len(holdout_execs),
+            len(holdout_samples),
             len(tokenizer_execs),
         )
         return prep_steps
@@ -1168,15 +1148,15 @@ def build_steps(config: TokenizerSweepConfig | None = None, phase: str | None = 
         raise ValueError(f"Unknown phase={phase!r}; expected 'prep', 'all', or 'train_tokenization'")
 
     if phase == "train_tokenization":
-        sample_execs = retokenize_train_execs
+        sample_steps = retokenize_train_samples
         sample_names = retokenize_train_samples
         output_prefix = config.train_label
     else:
-        sample_execs = holdout_execs
+        sample_steps = holdout_samples
         sample_names = holdout_samples
         output_prefix = ""
 
-    tokenized_steps: list[ExecutorStep] = []
+    tokenized_steps: list[StepSpec] = []
     for family, (_tokenizer_step, backend, names_by_size) in tokenizer_steps.items():
         for size, tokenizer_name in names_by_size.items():
             if size_filter is not None and size not in size_filter:
@@ -1190,10 +1170,10 @@ def build_steps(config: TokenizerSweepConfig | None = None, phase: str | None = 
                     holdout_tokenize_step(
                         config=config,
                         bucket_name=bucket_name,
-                        sampled_exec=sample_execs[source_name],
+                        sampled_step=sample_steps[source_name],
                         tokenizer_name=tokenizer_name,
                         tokenizer_backend=backend,
-                        tokenizer_exec=tokenizer_execs[family],
+                        tokenizer_step=tokenizer_execs[family],
                     )
                 )
     logger.info(
@@ -1207,17 +1187,21 @@ def build_steps(config: TokenizerSweepConfig | None = None, phase: str | None = 
 
 
 @dataclass(frozen=True)
-class TokenizerSweepMainConfig(ExecutorMainConfig):
+class TokenizerSweepMainConfig:
+    prefix: str | None = None
+    dry_run: bool = False
     sweep: TokenizerSweepConfig = field(default_factory=issue_5821_default_config)
 
 
 def main() -> None:
     config = draccus.parse(TokenizerSweepMainConfig)
-    if config.prefix is None:
-        config = dataclasses.replace(config, prefix=config.sweep.staging_prefix)
-    os.environ["MARIN_PREFIX"] = config.prefix
-    _skip_executor_info_writes_for_generated_dag()
-    executor_main(config, build_steps(config.sweep), max_concurrent=config.sweep.max_step_concurrency)
+    prefix = config.prefix or config.sweep.staging_prefix
+    os.environ["MARIN_PREFIX"] = prefix
+    StepRunner().run(
+        build_steps(config.sweep),
+        dry_run=config.dry_run,
+        max_concurrent=config.sweep.max_step_concurrency,
+    )
 
 
 if __name__ == "__main__":

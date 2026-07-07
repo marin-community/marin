@@ -7,6 +7,7 @@ import time
 from tokenizers import AddedToken, Tokenizer, models, pre_tokenizers, trainers
 
 from experiments.datakit_testbed.tokenizer_sweep import (
+    DEFAULT_TOKENIZER_SWEEP_TPU_TYPES,
     PLACE_ALIGNED_DIGIT_MAX_RUN_CHARS,
     CorpusConfig,
     HfTokenizerFamilyConfig,
@@ -33,9 +34,9 @@ def test_issue_5821_default_config_captures_expected_recipe() -> None:
     assert config.tokenizer_train.sample_mode == "random-shards"
     assert config.holdout.start_tokens == 100_000_000_000
     assert config.holdout.tokens == 100_000_000_000
-    assert config.sample_resource.tpu_type == "v6e-8"
-    assert config.hf_train_resource.tpu_type == "v6e-8"
-    assert config.tokenize_worker_resource.tpu_type == "v6e-8"
+    assert config.sample_resource.tpu_types == list(DEFAULT_TOKENIZER_SWEEP_TPU_TYPES)
+    assert config.hf_train_resource.tpu_types == list(DEFAULT_TOKENIZER_SWEEP_TPU_TYPES)
+    assert config.tokenize_worker_resource.tpu_types == list(DEFAULT_TOKENIZER_SWEEP_TPU_TYPES)
     assert [(family.name, family.base_tokenizer, family.place_aligned_digits) for family in config.hf_families] == [
         ("gpt-oss", "openai/gpt-oss-20b", False),
         ("llama", "meta-llama/Meta-Llama-3.1-8B", False),
@@ -55,10 +56,10 @@ def test_build_steps_accepts_custom_config_without_env(monkeypatch) -> None:
         tokenizer_train=WindowConfig(tokens=1_000, sample_mode="random-shards"),
         holdout=WindowConfig(tokens=1_000, start_tokens=1_000),
         train_retokenize=WindowConfig(tokens=1_000),
-        vocab_sizes=[1024, 512],
+        vocab_sizes=[2048, 1024],
         hf_families=[HfTokenizerFamilyConfig("custom", "org/custom-tokenizer")],
         family_filter=["custom"],
-        size_filter=[512],
+        size_filter=[1024],
     )
 
     steps = build_steps(config, phase="prep")
@@ -67,6 +68,16 @@ def test_build_steps_accepts_custom_config_without_env(monkeypatch) -> None:
         "data/datakit/tokenizer_sweep/custom-tokenizer-sweep/holdout/source",
         "tokenizers/custom-tokenizer-sweep/custom",
     }
+
+    tokenized_steps = build_steps(config, phase="all")
+
+    assert {step.name for step in tokenized_steps} == {
+        "data/datakit/tokenized/custom-tokenizer-sweep/custom-1k/source",
+    }
+    assert [dep.name for dep in tokenized_steps[0].deps] == [
+        "data/datakit/tokenizer_sweep/custom-tokenizer-sweep/holdout/source",
+        "tokenizers/custom-tokenizer-sweep/custom",
+    ]
 
 
 def test_place_aligned_digit_pieces_match_lookahead_through_cap() -> None:

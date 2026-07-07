@@ -79,8 +79,9 @@ it as the script config. The most important fields are:
 - `sweep.official_truncated_families`: optional HF tokenizers to truncate without retraining;
 - `sweep.family_filter` and `sweep.size_filter`: optional subsets for a particular submission.
 - `sweep.sample_resource`, `sweep.hf_train_resource`, and `sweep.tokenize_worker_resource`: worker resources.
-  The default recipe uses TPU-backed `v6e-8` workers so tokenizer and retokenization jobs do not launch
-  CPU-only nodes.
+  The default recipe uses TPU-backed flexible workers over `v5p-8`, `v6e-4`, `v4-8`, and `v5litepod-4`
+  so tokenizer and retokenization jobs do not launch CPU-only nodes. Fray flexible TPU requests must
+  use topology-compatible alternatives; override `tpu_types` with a different compatible list for other TPU sets.
 
 TokenMonster is intentionally not part of this default recipe; add it in a
 separate focused experiment if needed.
