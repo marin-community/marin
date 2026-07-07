@@ -12,38 +12,40 @@ This builds proportional windows from a normalized Datakit corpus:
 By default, this reproduces the Llama/GPT-OSS tokenizer sweep from issue #5821:
 initialize from upstream tokenizer repositories, train a 262k tokenizer on a
 50B-token-equivalent sample, then derive 128k, 32k, and 8k vocabularies from
-that same trained tokenizer. Environment variables below make the corpus,
-windows, vocab sizes, and tokenizer families configurable for future sweeps.
+that same trained tokenizer. Typed config below makes the corpus, windows,
+vocab sizes, and tokenizer families configurable for future sweeps.
 """
 
 from __future__ import annotations
 
 import dataclasses
 import hashlib
-import io
 import json
 import logging
 import math
 import os
 import shutil
-import stat
-import subprocess
 import tempfile
 import unicodedata
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import draccus
 import fsspec
-import pyarrow as pa
+import marin.execution.executor as executor_module
 import pyarrow.parquet as pq
 from fray import ResourceConfig
-from huggingface_hub import hf_hub_download
+from huggingface_hub import __version__ as hf_hub_version
 from levanter.tokenizers import TokenizerBackend
 from marin.datakit.normalize import NormalizedData
-from marin.execution.executor import ExecutorMainConfig, ExecutorStep, InputName, executor_main, this_output_path, versioned
-import marin.execution.executor as executor_module
+from marin.execution.executor import (
+    ExecutorMainConfig,
+    ExecutorStep,
+    executor_main,
+    this_output_path,
+    versioned,
+)
 from marin.execution.remote import remote
 from marin.execution.step_spec import StepSpec
 from marin.processing.tokenize import TokenizeConfig, tokenize
@@ -51,97 +53,154 @@ from marin.processing.tokenize.data_configs import TokenizerStep
 from marin.utils import fsspec_glob, fsspec_mkdirs
 from rigging.filesystem import open_url, url_to_fs
 from rigging.log_setup import configure_logging
+from tokenizers import Regex, pre_tokenizers
+from transformers import AutoTokenizer
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_HF_TOKENIZER_FAMILIES = {
-    "gpt-oss": ("openai/gpt-oss-20b", False),
-    "llama": ("meta-llama/Meta-Llama-3.1-8B", False),
-    "gpt-oss-place-digits": ("openai/gpt-oss-20b", True),
-    "llama-place-digits": ("meta-llama/Meta-Llama-3.1-8B", True),
-}
-DEFAULT_OFFICIAL_TRUNCATED_TOKENIZER_FAMILIES = {
-    "llama-official": "meta-llama/Meta-Llama-3.1-8B",
-}
-
-
-def _env_int(name: str, default: int) -> int:
-    return int(os.environ.get(name, str(default)))
-
-
-def _env_int_tuple(name: str, default: tuple[int, ...]) -> tuple[int, ...]:
-    raw = os.environ.get(name)
-    if raw is None:
-        return default
-    values = tuple(int(part.strip()) for part in raw.split(",") if part.strip())
-    if not values:
-        raise ValueError(f"{name} must contain at least one integer")
-    return values
-
-
-def _env_hf_tokenizer_families() -> dict[str, tuple[str, bool]]:
-    """Parse custom HF tokenizer family specs.
-
-    ``TOKENIZER_SWEEP_HF_FAMILIES_JSON`` accepts either:
-
-    * ``{"name": "hf/repo"}`` for a vanilla family, or
-    * ``{"name": {"base_tokenizer": "hf/repo", "place_aligned_digits": true}}``.
-    """
-    raw = os.environ.get("TOKENIZER_SWEEP_HF_FAMILIES_JSON")
-    if not raw:
-        return DEFAULT_HF_TOKENIZER_FAMILIES
-    data = json.loads(raw)
-    families: dict[str, tuple[str, bool]] = {}
-    for family, spec in data.items():
-        if isinstance(spec, str):
-            families[family] = (spec, False)
-        else:
-            base = spec.get("base_tokenizer") or spec.get("base")
-            if base is None:
-                raise ValueError(f"Missing base_tokenizer for tokenizer family {family!r}")
-            families[family] = (base, bool(spec.get("place_aligned_digits", False)))
-    return families
-
-
-def _env_official_truncated_tokenizer_families() -> dict[str, str]:
-    raw = os.environ.get("TOKENIZER_SWEEP_OFFICIAL_TRUNCATED_FAMILIES_JSON")
-    if not raw:
-        return DEFAULT_OFFICIAL_TRUNCATED_TOKENIZER_FAMILIES
-    data = json.loads(raw)
-    if not isinstance(data, dict):
-        raise ValueError("TOKENIZER_SWEEP_OFFICIAL_TRUNCATED_FAMILIES_JSON must be a JSON object")
-    return {str(family): str(base_tokenizer) for family, base_tokenizer in data.items()}
-
-
-STAGING_PREFIX = os.environ.get("TOKENIZER_SWEEP_STAGING_PREFIX", "gs://marin-eu-west4")
-NORMALIZED_BASE = os.environ.get(
-    "TOKENIZER_SWEEP_NORMALIZED_BASE",
-    "gs://marin-eu-west4/data/datakit/sample/2026-05-26",
-)
-TOTAL_TOKENIZED_TOKENS = _env_int("TOKENIZER_SWEEP_TOTAL_TOKENIZED_TOKENS", 1_099_611_681_172)
-HOLDOUT_TOKENS = _env_int("TOKENIZER_SWEEP_HOLDOUT_TOKENS", 100_000_000_000)
-HOLDOUT_START_TOKENS = _env_int("TOKENIZER_SWEEP_HOLDOUT_START_TOKENS", HOLDOUT_TOKENS)
-HOLDOUT_FRACTION = HOLDOUT_TOKENS / TOTAL_TOKENIZED_TOKENS
-HOLDOUT_START_FRACTION = HOLDOUT_START_TOKENS / TOTAL_TOKENIZED_TOKENS
-TOKENIZER_TRAIN_TOKENS = _env_int("TOKENIZER_SWEEP_TOKENIZER_TRAIN_TOKENS", 50_000_000_000)
-TOKENIZER_TRAIN_FRACTION = TOKENIZER_TRAIN_TOKENS / TOTAL_TOKENIZED_TOKENS
-RETOKENIZE_TRAIN_TOKENS = _env_int("TOKENIZER_SWEEP_RETOKENIZE_TRAIN_TOKENS", 50_000_000_000)
-RETOKENIZE_TRAIN_START_TOKENS = _env_int("TOKENIZER_SWEEP_RETOKENIZE_TRAIN_START_TOKENS", 0)
-RETOKENIZE_TRAIN_FRACTION = RETOKENIZE_TRAIN_TOKENS / TOTAL_TOKENIZED_TOKENS
-RETOKENIZE_TRAIN_START_FRACTION = RETOKENIZE_TRAIN_START_TOKENS / TOTAL_TOKENIZED_TOKENS
-
-RUN_ID = os.environ.get("TOKENIZER_SWEEP_RUN_ID", "tokenizer-sweep")
-MAX_STEP_CONCURRENCY = int(os.environ.get("TOKENIZER_SWEEP_MAX_STEP_CONCURRENCY", "24"))
-VOCAB_SIZES = _env_int_tuple("TOKENIZER_SWEEP_VOCAB_SIZES", (262_144, 131_072, 32_768, 8_192))
-HF_TOKENIZER_FAMILIES = _env_hf_tokenizer_families()
-OFFICIAL_TRUNCATED_TOKENIZER_FAMILIES = _env_official_truncated_tokenizer_families()
 PLACE_ALIGNED_DIGIT_MAX_RUN_CHARS = 510
 PLACE_ALIGNED_DIGIT_CHUNK_SIZE = 3
 PLACE_ALIGNED_DIGIT_PRETOKENIZER_REVISION = "bounded-leading-triplets-v2"
 
 
-def _env_regions(name: str, default: str) -> tuple[str, ...]:
-    return tuple(region.strip() for region in os.environ.get(name, default).split(",") if region.strip())
+@dataclass(frozen=True)
+class ResourceConfigSpec:
+    cpu: int
+    ram: str
+    disk: str = "16g"
+    preemptible: bool = True
+    tpu_type: str | None = None
+
+    def to_resource_config(self, regions: Sequence[str]) -> ResourceConfig:
+        if self.tpu_type:
+            return ResourceConfig.with_tpu(
+                self.tpu_type,
+                cpu=self.cpu,
+                ram=self.ram,
+                disk=self.disk,
+                regions=regions,
+                preemptible=self.preemptible,
+            )
+        return ResourceConfig(
+            cpu=self.cpu,
+            ram=self.ram,
+            disk=self.disk,
+            regions=regions,
+            preemptible=self.preemptible,
+        )
+
+
+@dataclass(frozen=True)
+class CorpusConfig:
+    normalized_base: str = "gs://marin-eu-west4/data/datakit/sample/2026-05-26"
+    total_tokenized_tokens: int = 1_099_611_681_172
+
+
+@dataclass(frozen=True)
+class WindowConfig:
+    tokens: int
+    start_tokens: int = 0
+    sample_mode: str = "contiguous"
+
+    def fraction(self, corpus: CorpusConfig) -> float:
+        return self.tokens / corpus.total_tokenized_tokens
+
+    def start_fraction(self, corpus: CorpusConfig) -> float:
+        return self.start_tokens / corpus.total_tokenized_tokens
+
+
+@dataclass(frozen=True)
+class HfTokenizerFamilyConfig:
+    name: str
+    base_tokenizer: str
+    place_aligned_digits: bool = False
+    train_new_from_iterator: bool = True
+
+
+@dataclass(frozen=True)
+class TokenizerSweepConfig:
+    run_id: str = "tokenizer-sweep-issue-5821"
+    staging_prefix: str = "gs://marin-eu-west4"
+    max_step_concurrency: int = 24
+    phase: str = "all"
+    corpus: CorpusConfig = field(default_factory=CorpusConfig)
+    tokenizer_train: WindowConfig = field(
+        default_factory=lambda: WindowConfig(tokens=50_000_000_000, sample_mode="random-shards")
+    )
+    holdout: WindowConfig = field(
+        default_factory=lambda: WindowConfig(tokens=100_000_000_000, start_tokens=100_000_000_000)
+    )
+    train_retokenize: WindowConfig = field(default_factory=lambda: WindowConfig(tokens=50_000_000_000))
+    retokenize_train_label: str | None = None
+    train_random_seed: int = 5821
+    vocab_sizes: list[int] = field(default_factory=lambda: [262_144, 131_072, 32_768, 8_192])
+    hf_families: list[HfTokenizerFamilyConfig] = field(
+        default_factory=lambda: [
+            HfTokenizerFamilyConfig("gpt-oss", "openai/gpt-oss-20b"),
+            HfTokenizerFamilyConfig("llama", "meta-llama/Meta-Llama-3.1-8B"),
+            HfTokenizerFamilyConfig("gpt-oss-place-digits", "openai/gpt-oss-20b", place_aligned_digits=True),
+            HfTokenizerFamilyConfig("llama-place-digits", "meta-llama/Meta-Llama-3.1-8B", place_aligned_digits=True),
+        ]
+    )
+    official_truncated_families: list[HfTokenizerFamilyConfig] = field(default_factory=list)
+    family_filter: list[str] | None = None
+    size_filter: list[int] | None = None
+    regions: list[str] = field(default_factory=lambda: ["europe-west4"])
+    resource_revision: str = "regional-highmem-v2"
+    sample_resource: ResourceConfigSpec = field(
+        default_factory=lambda: ResourceConfigSpec(cpu=1, ram="8g", tpu_type="v6e-8")
+    )
+    hf_train_resource: ResourceConfigSpec = field(
+        default_factory=lambda: ResourceConfigSpec(
+            cpu=64,
+            ram="768g",
+            disk="1000g",
+            preemptible=False,
+            tpu_type="v6e-8",
+        )
+    )
+    tokenize_worker_resource: ResourceConfigSpec = field(
+        default_factory=lambda: ResourceConfigSpec(cpu=1, ram="10g", disk="5g", preemptible=True, tpu_type="v6e-8")
+    )
+    hf_batch_size: int = 1024
+    hf_train_threads: int = 64
+    hf_corpus_max_bytes: int = 0
+
+    @property
+    def train_label(self) -> str:
+        if self.retokenize_train_label:
+            return self.retokenize_train_label
+        return f"train{_token_count_label(self.train_retokenize.tokens)}"
+
+    def validate(self) -> None:
+        if not self.vocab_sizes:
+            raise ValueError("vocab_sizes must be non-empty")
+        if len(set(self.vocab_sizes)) != len(self.vocab_sizes):
+            raise ValueError(f"vocab_sizes must be unique, got {self.vocab_sizes}")
+        if self.corpus.total_tokenized_tokens <= 0:
+            raise ValueError("corpus.total_tokenized_tokens must be positive")
+        for name, window in {
+            "tokenizer_train": self.tokenizer_train,
+            "holdout": self.holdout,
+            "train_retokenize": self.train_retokenize,
+        }.items():
+            if window.tokens <= 0:
+                raise ValueError(f"{name}.tokens must be positive")
+            if window.start_tokens < 0:
+                raise ValueError(f"{name}.start_tokens must be non-negative")
+            if window.start_tokens + window.tokens > self.corpus.total_tokenized_tokens:
+                raise ValueError(f"{name} exceeds corpus token budget")
+            if window.sample_mode not in {"contiguous", "random-shards"}:
+                raise ValueError(f"{name}.sample_mode must be 'contiguous' or 'random-shards'")
+        if self.hf_corpus_max_bytes < 0:
+            raise ValueError("hf_corpus_max_bytes must be non-negative")
+        family_names = [family.name for family in [*self.hf_families, *self.official_truncated_families]]
+        if len(set(family_names)) != len(family_names):
+            raise ValueError(f"Tokenizer family names must be unique, got {family_names}")
+
+
+def issue_5821_default_config() -> TokenizerSweepConfig:
+    return TokenizerSweepConfig()
 
 
 def _token_count_label(tokens: int) -> str:
@@ -150,97 +209,6 @@ def _token_count_label(tokens: int) -> str:
     if tokens % 1_000_000 == 0:
         return f"{tokens // 1_000_000}m"
     return str(tokens)
-
-
-RETOKENIZE_TRAIN_LABEL = os.environ.get(
-    "TOKENIZER_SWEEP_RETOKENIZE_TRAIN_LABEL",
-    f"train{_token_count_label(RETOKENIZE_TRAIN_TOKENS)}",
-)
-
-
-TOKENIZER_SWEEP_RESOURCE_REVISION = os.environ.get(
-    "TOKENIZER_SWEEP_RESOURCE_REVISION",
-    "regional-highmem-v2-tokenmonster-oom",
-)
-TOKENIZER_SWEEP_REGIONS = _env_regions("TOKENIZER_SWEEP_REGIONS", "europe-west4")
-TOKENIZER_SWEEP_TM_CORPUS_BATCH_SIZE = int(os.environ.get("TOKENIZER_SWEEP_TM_CORPUS_BATCH_SIZE", "64"))
-TOKENIZER_SWEEP_TM_CORPUS_MAX_BYTES = int(os.environ.get("TOKENIZER_SWEEP_TM_CORPUS_MAX_BYTES", "1000000000"))
-TOKENIZER_SWEEP_HF_BATCH_SIZE = int(os.environ.get("TOKENIZER_SWEEP_HF_BATCH_SIZE", "1024"))
-TOKENIZER_SWEEP_HF_TRAIN_THREADS = int(
-    os.environ.get("TOKENIZER_SWEEP_HF_TRAIN_THREADS", os.environ.get("TOKENIZER_SWEEP_HF_CPU", "64"))
-)
-TOKENIZER_SWEEP_HF_CORPUS_MAX_BYTES = int(
-    os.environ.get("TOKENIZER_SWEEP_HF_CORPUS_MAX_BYTES", "0")
-)
-TOKENIZER_SWEEP_TRAIN_SAMPLE_MODE = os.environ.get(
-    "TOKENIZER_SWEEP_TRAIN_SAMPLE_MODE",
-    "random-shards",
-).lower()
-TOKENIZER_SWEEP_TRAIN_RANDOM_SEED = int(os.environ.get("TOKENIZER_SWEEP_TRAIN_RANDOM_SEED", "5821"))
-TOKENIZER_SWEEP_TM_GETALLTOKENS_WORKERS = int(os.environ.get("TOKENIZER_SWEEP_TM_GETALLTOKENS_WORKERS", "1"))
-TOKENIZER_SWEEP_TM_TRAINVOCAB_WORKERS = int(os.environ.get("TOKENIZER_SWEEP_TM_TRAINVOCAB_WORKERS", "8"))
-TOKENIZER_SWEEP_TM_TRAIN_REVISION = os.environ.get("TOKENIZER_SWEEP_TM_TRAIN_REVISION", "tokenmonster-1gb-corpus-v1")
-TOKENIZER_SWEEP_TM_CHUNK_SIZE = os.environ.get("TOKENIZER_SWEEP_TM_CHUNK_SIZE", "10MB")
-TOKENIZER_SWEEP_TM_MICRO_CHUNKS = int(os.environ.get("TOKENIZER_SWEEP_TM_MICRO_CHUNKS", "10"))
-TOKENIZER_SWEEP_TM_MIN_OCCUR_CHUNK = int(os.environ.get("TOKENIZER_SWEEP_TM_MIN_OCCUR_CHUNK", "2"))
-TOKENIZER_SWEEP_TM_MIN_OCCUR_MICRO_CHUNK = int(os.environ.get("TOKENIZER_SWEEP_TM_MIN_OCCUR_MICRO_CHUNK", "1"))
-TOKENIZER_SWEEP_PREEMPTIBLE_TRAINING = os.environ.get("TOKENIZER_SWEEP_PREEMPTIBLE_TRAINING", "false").lower() in {
-    "1",
-    "true",
-    "yes",
-}
-TOKENIZER_SWEEP_PREEMPTIBLE_TOKENIZATION = os.environ.get(
-    "TOKENIZER_SWEEP_PREEMPTIBLE_TOKENIZATION", "true"
-).lower() in {
-    "1",
-    "true",
-    "yes",
-}
-TOKENIZER_SWEEP_WORKER_TPU_TYPE = os.environ.get("TOKENIZER_SWEEP_WORKER_TPU_TYPE")
-
-
-def _resource_config(
-    *,
-    cpu: int,
-    ram: str,
-    disk: str = "16g",
-    preemptible: bool = True,
-) -> ResourceConfig:
-    if TOKENIZER_SWEEP_WORKER_TPU_TYPE:
-        return ResourceConfig.with_tpu(
-            TOKENIZER_SWEEP_WORKER_TPU_TYPE,
-            cpu=cpu,
-            ram=ram,
-            disk=disk,
-            regions=TOKENIZER_SWEEP_REGIONS,
-            preemptible=preemptible,
-        )
-    return ResourceConfig(cpu=cpu, ram=ram, disk=disk, regions=TOKENIZER_SWEEP_REGIONS, preemptible=preemptible)
-
-_SAMPLE_RESOURCES = _resource_config(cpu=1, ram="8g")
-_HF_TRAIN_RESOURCES = _resource_config(
-    cpu=int(os.environ.get("TOKENIZER_SWEEP_HF_CPU", "64")),
-    ram=os.environ.get("TOKENIZER_SWEEP_HF_RAM", "768g"),
-    disk=os.environ.get("TOKENIZER_SWEEP_HF_DISK", "1000g"),
-    preemptible=TOKENIZER_SWEEP_PREEMPTIBLE_TRAINING,
-)
-_TM_CORPUS_RESOURCES = _resource_config(
-    cpu=int(os.environ.get("TOKENIZER_SWEEP_TM_CORPUS_CPU", "16")),
-    ram=os.environ.get("TOKENIZER_SWEEP_TM_CORPUS_RAM", "512g"),
-    disk=os.environ.get("TOKENIZER_SWEEP_TM_CORPUS_DISK", "3000g"),
-)
-_TM_TRAIN_RESOURCES = _resource_config(
-    cpu=int(os.environ.get("TOKENIZER_SWEEP_TM_TRAIN_CPU", "32")),
-    ram=os.environ.get("TOKENIZER_SWEEP_TM_TRAIN_RAM", "768g"),
-    disk=os.environ.get("TOKENIZER_SWEEP_TM_TRAIN_DISK", "3000g"),
-    preemptible=TOKENIZER_SWEEP_PREEMPTIBLE_TRAINING,
-)
-_TOKENIZE_WORKER_RESOURCES = _resource_config(
-    cpu=int(os.environ.get("TOKENIZER_SWEEP_TOKENIZE_WORKER_CPU", "1")),
-    ram=os.environ.get("TOKENIZER_SWEEP_TOKENIZE_WORKER_RAM", "10g"),
-    disk=os.environ.get("TOKENIZER_SWEEP_TOKENIZE_WORKER_DISK", "5g"),
-    preemptible=TOKENIZER_SWEEP_PREEMPTIBLE_TOKENIZATION,
-)
 
 
 def _skip_executor_info_writes_for_generated_dag() -> None:
@@ -276,7 +244,7 @@ def _load_normalized_data(path: str) -> NormalizedData:
 
 def _copy_shard(src: str, dst: str) -> int:
     src_fs, src_path = url_to_fs(src)
-    dst_fs, dst_path = url_to_fs(dst)
+    _dst_fs, dst_path = url_to_fs(dst)
     parent = os.path.dirname(dst_path)
     if parent:
         fsspec_mkdirs(parent, exist_ok=True)
@@ -345,7 +313,7 @@ def sample_normalized_random_shards(
     with first_fs.open(first_path, "rb") as first_file:
         rows_per_file = pq.ParquetFile(first_file).metadata.num_rows
     total_rows_est = rows_per_file * len(shards)
-    target_rows = max(1, min(total_rows_est, int(math.ceil(total_rows_est * sample_fraction))))
+    target_rows = max(1, min(total_rows_est, math.ceil(total_rows_est * sample_fraction)))
 
     shard_order = sorted(
         range(len(shards)),
@@ -439,8 +407,8 @@ def sample_normalized_window(
     with first_fs.open(first_path, "rb") as first_file:
         rows_per_file = pq.ParquetFile(first_file).metadata.num_rows
     total_rows_est = rows_per_file * len(shards)
-    start_row = int(math.floor(total_rows_est * start_fraction))
-    stop_row = min(total_rows_est, int(math.ceil(total_rows_est * (start_fraction + sample_fraction))))
+    start_row = math.floor(total_rows_est * start_fraction)
+    stop_row = min(total_rows_est, math.ceil(total_rows_est * (start_fraction + sample_fraction)))
 
     first_shard = start_row // rows_per_file
     last_shard = (stop_row - 1) // rows_per_file
@@ -473,7 +441,9 @@ def sample_normalized_window(
 
     rows_out = 0
     with ThreadPoolExecutor(max_workers=32) as pool:
-        futures = [pool.submit(copy_or_slice, i, shard_idx) for i, shard_idx in enumerate(range(first_shard, last_shard + 1))]
+        futures = [
+            pool.submit(copy_or_slice, i, shard_idx) for i, shard_idx in enumerate(range(first_shard, last_shard + 1))
+        ]
         for fut in futures:
             _, wrote = fut.result()
             rows_out += wrote
@@ -498,9 +468,11 @@ def sample_window_step(
     normalized_path: str,
     start_fraction: float,
     sample_fraction: float,
-    window_tokens: int = HOLDOUT_TOKENS,
+    window_tokens: int,
+    total_tokenized_tokens: int,
+    sample_resources: ResourceConfig,
     sample_mode: str = "contiguous",
-    random_seed: int = TOKENIZER_SWEEP_TRAIN_RANDOM_SEED,
+    random_seed: int = 0,
 ) -> StepSpec:
     def run(output_path: str) -> NormalizedData:
         if sample_mode == "random-shards":
@@ -528,20 +500,20 @@ def sample_window_step(
             "start_fraction": start_fraction,
             "sample_fraction": sample_fraction,
             "window_tokens": window_tokens,
-            "total_tokenized_tokens": TOTAL_TOKENIZED_TOKENS,
+            "total_tokenized_tokens": total_tokenized_tokens,
             "sample_mode": sample_mode,
             "random_seed": random_seed if sample_mode == "random-shards" else None,
         },
-        fn=remote(run, resources=_SAMPLE_RESOURCES),
+        fn=remote(run, resources=sample_resources),
     )
 
 
-def existing_normalized_sources() -> dict[str, str]:
+def existing_normalized_sources(normalized_base: str) -> dict[str, str]:
     """Return all source artifacts that exist in the configured normalized sample."""
-    if not NORMALIZED_BASE.startswith("gs://"):
-        raise ValueError(f"expected GCS NORMALIZED_BASE, got {NORMALIZED_BASE}")
+    if not normalized_base.startswith("gs://"):
+        raise ValueError(f"expected GCS normalized_base, got {normalized_base}")
     fs = fsspec.filesystem("gcs")
-    base = NORMALIZED_BASE.removeprefix("gs://").rstrip("/")
+    base = normalized_base.removeprefix("gs://").rstrip("/")
     artifact_paths: set[str] = set()
 
     def artifact_in(entries: list[str]) -> str | None:
@@ -593,79 +565,13 @@ def existing_normalized_sources() -> dict[str, str]:
     paths: dict[str, str] = {}
     for artifact_path in sorted(artifact_paths):
         path = f"gs://{artifact_path.rsplit('/', 1)[0]}"
-        source_name = path.removeprefix(f"{NORMALIZED_BASE}/")
+        source_name = path.removeprefix(f"{normalized_base}/")
         paths[source_name] = path
 
     if not paths:
-        raise ValueError(f"No normalized source artifacts found under {NORMALIZED_BASE}")
-    logger.info("Discovered %d existing normalized sources under %s", len(paths), NORMALIZED_BASE)
+        raise ValueError(f"No normalized source artifacts found under {normalized_base}")
+    logger.info("Discovered %d existing normalized sources under %s", len(paths), normalized_base)
     return paths
-
-
-def _iter_text_batches(paths: list[str], *, batch_size: int = 1024) -> Iterator[list[str]]:
-    batch: list[str] = []
-    for pattern in paths:
-        for shard in sorted(fsspec_glob(pattern)):
-            fs, resolved = url_to_fs(shard)
-            with fs.open(resolved, "rb") as f:
-                pf = pq.ParquetFile(f)
-                for record_batch in pf.iter_batches(columns=["text"], batch_size=batch_size):
-                    texts = record_batch.column("text").to_pylist()
-                    batch.extend(str(t) for t in texts if t is not None)
-                    if len(batch) >= batch_size:
-                        yield batch
-                        batch = []
-    if batch:
-        yield batch
-
-
-def _iter_limited_round_robin_text_batches(
-    paths: list[str],
-    *,
-    batch_size: int,
-    max_bytes: int,
-    stats: dict[str, int] | None = None,
-) -> Iterator[list[str]]:
-    """Yield up to ``max_bytes`` of text, round-robin across source patterns."""
-    docs = 0
-    bytes_read = 0
-    batch: list[str] = []
-    has_byte_limit = max_bytes > 0
-    iterators = [_iter_text_batches([pattern], batch_size=batch_size) for pattern in paths]
-    active = list(range(len(iterators)))
-    try:
-        while active and (not has_byte_limit or bytes_read < max_bytes):
-            next_active: list[int] = []
-            for idx in active:
-                try:
-                    source_batch = next(iterators[idx])
-                except StopIteration:
-                    continue
-
-                next_active.append(idx)
-                for text in source_batch:
-                    encoded_len = len(text.encode("utf-8")) + 1
-                    if has_byte_limit and docs > 0 and bytes_read + encoded_len > max_bytes:
-                        break
-                    batch.append(text)
-                    docs += 1
-                    bytes_read += encoded_len
-                    if len(batch) >= batch_size:
-                        yield batch
-                        batch = []
-                    if has_byte_limit and bytes_read >= max_bytes:
-                        break
-                if has_byte_limit and bytes_read >= max_bytes:
-                    break
-            active = next_active
-        if batch:
-            yield batch
-    finally:
-        for iterator in iterators:
-            iterator.close()
-        if stats is not None:
-            stats["documents"] = docs
-            stats["bytes"] = bytes_read
 
 
 def _iter_limited_shuffled_text_batches(
@@ -775,9 +681,6 @@ def place_aligned_digit_pieces(text: str) -> list[str]:
 
 
 def _place_aligned_digit_pretokenizer(original_pretokenizer):
-    from tokenizers import Regex
-    from tokenizers import pre_tokenizers
-
     leading_width = PLACE_ALIGNED_DIGIT_CHUNK_SIZE - 1
     return pre_tokenizers.Sequence(
         [
@@ -786,10 +689,7 @@ def _place_aligned_digit_pretokenizer(original_pretokenizer):
                 behavior="isolated",
             ),
             pre_tokenizers.Split(
-                Regex(
-                    rf"^\p{{N}}{{1,{leading_width}}}"
-                    rf"(?=(?:\p{{N}}{{{PLACE_ALIGNED_DIGIT_CHUNK_SIZE}}})+$)"
-                ),
+                Regex(rf"^\p{{N}}{{1,{leading_width}}}" rf"(?=(?:\p{{N}}{{{PLACE_ALIGNED_DIGIT_CHUNK_SIZE}}})+$)"),
                 behavior="isolated",
             ),
             pre_tokenizers.Split(
@@ -808,8 +708,6 @@ def _apply_place_aligned_digit_pretokenizer(tokenizer) -> None:
 
 
 def _mirror_hf_tokenizer(local_dir: str, tokenizer_name: str) -> None:
-    from huggingface_hub import __version__ as hf_hub_version
-
     mirror_base = f"mirror://tokenizers/{tokenizer_name}/hf-hub-{hf_hub_version}"
     for filename in sorted(os.listdir(local_dir)):
         src = os.path.join(local_dir, filename)
@@ -876,9 +774,7 @@ def _derive_hf_bpe_tokenizer_dir(base_dir: str, target_size: int, output_dir: st
 
     old_vocab: dict[str, int] = model["vocab"]
     retained_model_tokens = [
-        token
-        for token, _ in sorted(old_vocab.items(), key=lambda item: item[1])
-        if token not in set(special_contents)
+        token for token, _ in sorted(old_vocab.items(), key=lambda item: item[1]) if token not in set(special_contents)
     ][:model_vocab_size]
     if len(retained_model_tokens) < model_vocab_size:
         raise ValueError(
@@ -925,19 +821,18 @@ def _derive_hf_bpe_tokenizer_dir(base_dir: str, target_size: int, output_dir: st
 def _train_hf_family(
     output_path: str,
     *,
+    config: TokenizerSweepConfig,
     family: str,
     base_tokenizer: str,
     train_patterns: list[str],
     place_aligned_digits: bool,
 ) -> dict:
-    from transformers import AutoTokenizer
-
-    base_size = VOCAB_SIZES[0]
+    base_size = config.vocab_sizes[0]
     corpus_stats: dict[str, int] = {}
     logger.info("Training %s base tokenizer at vocab size %d from %s", family, base_size, base_tokenizer)
     os.environ["TOKENIZERS_PARALLELISM"] = "true"
-    os.environ["RAYON_NUM_THREADS"] = str(TOKENIZER_SWEEP_HF_TRAIN_THREADS)
-    logger.info("Using HF tokenizer training parallelism with %d Rayon threads", TOKENIZER_SWEEP_HF_TRAIN_THREADS)
+    os.environ["RAYON_NUM_THREADS"] = str(config.hf_train_threads)
+    logger.info("Using HF tokenizer training parallelism with %d Rayon threads", config.hf_train_threads)
     base = AutoTokenizer.from_pretrained(base_tokenizer, trust_remote_code=True)
     if place_aligned_digits:
         logger.info(
@@ -949,9 +844,9 @@ def _train_hf_family(
     tokenizer = base.train_new_from_iterator(
         _iter_limited_shuffled_text_batches(
             train_patterns,
-            batch_size=TOKENIZER_SWEEP_HF_BATCH_SIZE,
-            max_bytes=TOKENIZER_SWEEP_HF_CORPUS_MAX_BYTES,
-            seed=TOKENIZER_SWEEP_TRAIN_RANDOM_SEED,
+            batch_size=config.hf_batch_size,
+            max_bytes=config.hf_corpus_max_bytes,
+            seed=config.train_random_seed,
             stats=corpus_stats,
         ),
         vocab_size=base_size,
@@ -962,14 +857,14 @@ def _train_hf_family(
     tokenizer.save_pretrained(base_local_dir)
 
     results = {}
-    for size in VOCAB_SIZES:
+    for size in config.vocab_sizes:
         local_dir = base_local_dir
         if size != base_size:
             logger.info("Deriving %s tokenizer at vocab size %d from %d base", family, size, base_size)
             local_dir = tempfile.mkdtemp(prefix=f"{family}-{size}-")
             _derive_hf_bpe_tokenizer_dir(base_local_dir, size, local_dir)
 
-        tokenizer_name = f"marin-community/{RUN_ID}-{family}-{size // 1024}k"
+        tokenizer_name = f"marin-community/{config.run_id}-{family}-{size // 1024}k"
         _mirror_hf_tokenizer(local_dir, tokenizer_name)
         _copy_dir_to_url(local_dir, f"{output_path}/{family}/{size}")
         results[str(size)] = {
@@ -988,11 +883,11 @@ def _train_hf_family(
                 "corpus": {
                     "documents": corpus_stats.get("documents", 0),
                     "bytes": corpus_stats.get("bytes", 0),
-                    "max_bytes": TOKENIZER_SWEEP_HF_CORPUS_MAX_BYTES,
+                    "max_bytes": config.hf_corpus_max_bytes,
                     "sources": len(train_patterns),
                     "shards": corpus_stats.get("shards", 0),
                     "format": "deterministic-shuffled-parquet-text",
-                    "seed": TOKENIZER_SWEEP_TRAIN_RANDOM_SEED,
+                    "seed": config.train_random_seed,
                     "upstream_tokenizer_repo": base_tokenizer,
                 },
                 "pretokenizer": {
@@ -1000,9 +895,7 @@ def _train_hf_family(
                     "numeric_run_cap": PLACE_ALIGNED_DIGIT_MAX_RUN_CHARS if place_aligned_digits else None,
                     "numeric_chunk_size": PLACE_ALIGNED_DIGIT_CHUNK_SIZE if place_aligned_digits else None,
                     "revision": PLACE_ALIGNED_DIGIT_PRETOKENIZER_REVISION if place_aligned_digits else None,
-                    "issue": "https://github.com/marin-community/marin/issues/4915"
-                    if place_aligned_digits
-                    else None,
+                    "issue": "https://github.com/marin-community/marin/issues/4915" if place_aligned_digits else None,
                 },
             },
             f,
@@ -1012,63 +905,67 @@ def _train_hf_family(
 
 
 def train_hf_family_step(
-    family: str,
-    base_tokenizer: str,
+    config: TokenizerSweepConfig,
+    family_config: HfTokenizerFamilyConfig,
     train_samples: list[StepSpec],
-    *,
-    place_aligned_digits: bool,
 ) -> StepSpec:
     train_patterns = [f"{s.output_path}/outputs/main/*.parquet" for s in train_samples]
 
     def run(output_path: str) -> dict:
         return _train_hf_family(
             output_path,
-            family=family,
-            base_tokenizer=base_tokenizer,
+            config=config,
+            family=family_config.name,
+            base_tokenizer=family_config.base_tokenizer,
             train_patterns=train_patterns,
-            place_aligned_digits=place_aligned_digits,
+            place_aligned_digits=family_config.place_aligned_digits,
         )
 
+    resources = config.hf_train_resource.to_resource_config(config.regions)
+
     return StepSpec(
-        name=f"tokenizers/{RUN_ID}/{family}",
+        name=f"tokenizers/{config.run_id}/{family_config.name}",
         deps=train_samples,
         hash_attrs={
-            "family": family,
-            "base_tokenizer": base_tokenizer,
-            "vocab_sizes": VOCAB_SIZES,
-            "window_tokens": TOKENIZER_TRAIN_TOKENS,
-            "derive_from": f"train {VOCAB_SIZES[0]} once, then truncate BPE vocab/merges",
-            "resource_revision": TOKENIZER_SWEEP_RESOURCE_REVISION,
-            "regions": TOKENIZER_SWEEP_REGIONS,
-            "ram": _HF_TRAIN_RESOURCES.ram,
-            "preemptible": _HF_TRAIN_RESOURCES.preemptible,
-            "corpus_max_bytes": TOKENIZER_SWEEP_HF_CORPUS_MAX_BYTES,
-            "batch_size": TOKENIZER_SWEEP_HF_BATCH_SIZE,
-            "train_threads": TOKENIZER_SWEEP_HF_TRAIN_THREADS,
+            "family": family_config.name,
+            "base_tokenizer": family_config.base_tokenizer,
+            "vocab_sizes": config.vocab_sizes,
+            "window_tokens": config.tokenizer_train.tokens,
+            "derive_from": f"train {config.vocab_sizes[0]} once, then truncate BPE vocab/merges",
+            "resource_revision": config.resource_revision,
+            "regions": config.regions,
+            "ram": resources.ram,
+            "preemptible": resources.preemptible,
+            "corpus_max_bytes": config.hf_corpus_max_bytes,
+            "batch_size": config.hf_batch_size,
+            "train_threads": config.hf_train_threads,
             "tokenizers_parallelism": "true",
             "sampling": "deterministic-shuffled-files-and-row-groups",
-            "sampling_seed": TOKENIZER_SWEEP_TRAIN_RANDOM_SEED,
-            "place_aligned_digits": place_aligned_digits,
-            "digit_max_run_chars": PLACE_ALIGNED_DIGIT_MAX_RUN_CHARS if place_aligned_digits else None,
-            "digit_chunk_size": PLACE_ALIGNED_DIGIT_CHUNK_SIZE if place_aligned_digits else None,
-            "digit_pretokenizer_revision": PLACE_ALIGNED_DIGIT_PRETOKENIZER_REVISION
-            if place_aligned_digits
-            else None,
+            "sampling_seed": config.train_random_seed,
+            "place_aligned_digits": family_config.place_aligned_digits,
+            "digit_max_run_chars": PLACE_ALIGNED_DIGIT_MAX_RUN_CHARS if family_config.place_aligned_digits else None,
+            "digit_chunk_size": PLACE_ALIGNED_DIGIT_CHUNK_SIZE if family_config.place_aligned_digits else None,
+            "digit_pretokenizer_revision": (
+                PLACE_ALIGNED_DIGIT_PRETOKENIZER_REVISION if family_config.place_aligned_digits else None
+            ),
         },
-        fn=remote(run, resources=_HF_TRAIN_RESOURCES),
+        fn=remote(run, resources=resources),
     )
 
 
-def _derive_official_hf_family(output_path: str, *, family: str, base_tokenizer: str) -> dict:
-    from transformers import AutoTokenizer
-
-    base_size = VOCAB_SIZES[0]
+def _derive_official_hf_family(
+    output_path: str,
+    *,
+    config: TokenizerSweepConfig,
+    family: str,
+    base_tokenizer: str,
+) -> dict:
+    base_size = config.vocab_sizes[0]
     logger.info("Deriving %s tokenizer sizes from official %s", family, base_tokenizer)
     base = AutoTokenizer.from_pretrained(base_tokenizer, trust_remote_code=True)
     base_local_dir = tempfile.mkdtemp(prefix=f"{family}-{base_size}-")
     base.save_pretrained(base_local_dir)
-    size_filter_raw = _env_filter("TOKENIZER_SWEEP_SIZES")
-    derive_sizes = tuple(int(size) for size in size_filter_raw) if size_filter_raw is not None else VOCAB_SIZES
+    derive_sizes = config.size_filter if config.size_filter is not None else config.vocab_sizes
 
     results = {}
     for size in derive_sizes:
@@ -1078,7 +975,7 @@ def _derive_official_hf_family(output_path: str, *, family: str, base_tokenizer:
             local_dir = tempfile.mkdtemp(prefix=f"{family}-{size}-")
             _derive_hf_bpe_tokenizer_dir(base_local_dir, size, local_dir)
 
-        tokenizer_name = f"marin-community/{RUN_ID}-{family}-{size // 1024}k"
+        tokenizer_name = f"marin-community/{config.run_id}-{family}-{size // 1024}k"
         _mirror_hf_tokenizer(local_dir, tokenizer_name)
         _copy_dir_to_url(local_dir, f"{output_path}/{family}/{size}")
         results[str(size)] = {
@@ -1103,244 +1000,31 @@ def _derive_official_hf_family(output_path: str, *, family: str, base_tokenizer:
     return results
 
 
-def official_truncated_hf_family_step(family: str, base_tokenizer: str) -> StepSpec:
+def official_truncated_hf_family_step(config: TokenizerSweepConfig, family_config: HfTokenizerFamilyConfig) -> StepSpec:
     def run(output_path: str) -> dict:
-        return _derive_official_hf_family(output_path, family=family, base_tokenizer=base_tokenizer)
+        return _derive_official_hf_family(
+            output_path,
+            config=config,
+            family=family_config.name,
+            base_tokenizer=family_config.base_tokenizer,
+        )
+
+    resources = config.hf_train_resource.to_resource_config(config.regions)
 
     return StepSpec(
-        name=f"tokenizers/{RUN_ID}/{family}",
+        name=f"tokenizers/{config.run_id}/{family_config.name}",
         hash_attrs={
-            "family": family,
-            "base_tokenizer": base_tokenizer,
-            "vocab_sizes": VOCAB_SIZES,
-            "derive_sizes": os.environ.get("TOKENIZER_SWEEP_SIZES", ",".join(str(size) for size in VOCAB_SIZES)),
+            "family": family_config.name,
+            "base_tokenizer": family_config.base_tokenizer,
+            "vocab_sizes": config.vocab_sizes,
+            "derive_sizes": config.size_filter if config.size_filter is not None else config.vocab_sizes,
             "derive_from": "official HF tokenizer, then truncate BPE vocab/merges by rank",
-            "resource_revision": TOKENIZER_SWEEP_RESOURCE_REVISION,
-            "regions": TOKENIZER_SWEEP_REGIONS,
-            "ram": _HF_TRAIN_RESOURCES.ram,
-            "preemptible": _HF_TRAIN_RESOURCES.preemptible,
+            "resource_revision": config.resource_revision,
+            "regions": config.regions,
+            "ram": resources.ram,
+            "preemptible": resources.preemptible,
         },
-        fn=remote(run, resources=_HF_TRAIN_RESOURCES),
-    )
-
-
-def _write_tokenmonster_corpus(output_path: str, *, train_patterns: list[str]) -> dict:
-    """Stream TokenMonster's required plain-text corpus to the output path.
-
-    TokenMonster's trainer is designed for a single representative text file
-    around 1GB, not the full 100B-token tokenizer sweep window. Keep source
-    coverage broad by taking batches round-robin across the sampled sources,
-    then stop at the configured byte budget.
-    """
-    dst = f"{output_path.rstrip('/')}/train.txt"
-    docs = 0
-    bytes_written = 0
-    iterators = [
-        _iter_text_batches([pattern], batch_size=TOKENIZER_SWEEP_TM_CORPUS_BATCH_SIZE)
-        for pattern in train_patterns
-    ]
-    active = list(range(len(iterators)))
-    with fsspec.open(dst, "wb") as raw_out:
-        out = io.TextIOWrapper(raw_out, encoding="utf-8", write_through=False)
-        try:
-            while active and bytes_written < TOKENIZER_SWEEP_TM_CORPUS_MAX_BYTES:
-                next_active: list[int] = []
-                for idx in active:
-                    try:
-                        batch = next(iterators[idx])
-                    except StopIteration:
-                        continue
-
-                    next_active.append(idx)
-                    for text in batch:
-                        encoded_len = len(text.encode("utf-8")) + 1
-                        if docs > 0 and bytes_written + encoded_len > TOKENIZER_SWEEP_TM_CORPUS_MAX_BYTES:
-                            break
-                        out.write(text)
-                        out.write("\n")
-                        docs += 1
-                        bytes_written += encoded_len
-                    if docs % 100_000 == 0:
-                        out.flush()
-                    if bytes_written >= TOKENIZER_SWEEP_TM_CORPUS_MAX_BYTES:
-                        break
-                active = next_active
-        finally:
-            for iterator in iterators:
-                iterator.close()
-        out.flush()
-    metadata = {
-        "path": dst,
-        "documents": docs,
-        "bytes": bytes_written,
-        "max_bytes": TOKENIZER_SWEEP_TM_CORPUS_MAX_BYTES,
-        "sources": len(train_patterns),
-        "format": "round-robin-source-plain-text-lines",
-    }
-    with open_url(f"{output_path}/metadata.json", "w") as f:
-        json.dump(metadata, f, indent=2)
-    return metadata
-
-
-def tokenmonster_corpus_step(train_samples: list[StepSpec]) -> StepSpec:
-    train_patterns = [f"{s.output_path}/outputs/main/*.parquet" for s in train_samples]
-
-    def run(output_path: str) -> dict:
-        return _write_tokenmonster_corpus(output_path, train_patterns=train_patterns)
-
-    return StepSpec(
-        name=f"tokenizers/{RUN_ID}/tokenmonster-corpus",
-        deps=train_samples,
-        hash_attrs={
-            "window_tokens": TOKENIZER_TRAIN_TOKENS,
-            "format": "plain-text-lines",
-            "resource_revision": TOKENIZER_SWEEP_RESOURCE_REVISION,
-            "regions": TOKENIZER_SWEEP_REGIONS,
-            "writer": "direct-gcs-stream",
-            "ram": _TM_CORPUS_RESOURCES.ram,
-            "batch_size": TOKENIZER_SWEEP_TM_CORPUS_BATCH_SIZE,
-            "max_bytes": TOKENIZER_SWEEP_TM_CORPUS_MAX_BYTES,
-            "sampling": "round-robin-over-tokenizer-train-samples",
-        },
-        fn=remote(run, resources=_TM_CORPUS_RESOURCES),
-    )
-
-
-def _download_tokenmonster_binary(name: str, dest_dir: str) -> str:
-    candidates = [
-        f"binaries/linux_x86_64/{name}",
-        f"binaries/linux-amd64/{name}",
-        f"binaries/{name}",
-    ]
-    last_error: Exception | None = None
-    for repo_path in candidates:
-        try:
-            path = hf_hub_download("alasdairforsythe/tokenmonster", repo_path)
-            dst = os.path.join(dest_dir, name)
-            shutil.copy2(path, dst)
-            os.chmod(dst, os.stat(dst).st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
-            return dst
-        except Exception as e:
-            last_error = e
-    raise RuntimeError(f"Could not download TokenMonster binary {name}") from last_error
-
-
-def _train_tokenmonster(output_path: str, *, corpus_path: str) -> dict:
-    work_base = os.environ.get("TOKENIZER_SWEEP_TM_WORK_BASE", os.getcwd())
-    os.makedirs(work_base, exist_ok=True)
-    work = tempfile.mkdtemp(prefix="tokenmonster-train-", dir=work_base)
-    corpus = os.path.join(work, "train.txt")
-    with fsspec.open(corpus_path, "rb") as src, open(corpus, "wb") as dst:
-        shutil.copyfileobj(src, dst)
-
-    getalltokens = _download_tokenmonster_binary("getalltokens", work)
-    trainvocab = _download_tokenmonster_binary("trainvocab", work)
-    exportvocab = _download_tokenmonster_binary("exportvocab", work)
-    dictionary = os.path.join(work, "dictionary.txt")
-    train_dir = os.path.join(work, "trainvocab-output")
-
-    subprocess.run(
-        [
-            getalltokens,
-            "-dataset",
-            corpus,
-            "-output",
-            dictionary,
-            "-charset",
-            "UTF-8",
-            "-mode",
-            "clean",
-            "-capcode",
-            "2",
-            "-workers",
-            str(TOKENIZER_SWEEP_TM_GETALLTOKENS_WORKERS),
-            "-chunk-size",
-            TOKENIZER_SWEEP_TM_CHUNK_SIZE,
-            "-micro-chunks",
-            str(TOKENIZER_SWEEP_TM_MICRO_CHUNKS),
-            "-min-occur-chunk",
-            str(TOKENIZER_SWEEP_TM_MIN_OCCUR_CHUNK),
-            "-min-occur-micro-chunk",
-            str(TOKENIZER_SWEEP_TM_MIN_OCCUR_MICRO_CHUNK),
-        ],
-        check=True,
-    )
-    subprocess.run(
-        [
-            trainvocab,
-            "-dataset",
-            corpus,
-            "-dictionary",
-            dictionary,
-            "-dir",
-            train_dir,
-            "-vocab-size",
-            str(VOCAB_SIZES[0]),
-            "-include-256-bytes",
-            "-workers",
-            str(TOKENIZER_SWEEP_TM_TRAINVOCAB_WORKERS),
-        ],
-        check=True,
-    )
-
-    results = {}
-    base_vocab = os.path.join(work, "tokenmonster-262k.vocab")
-    subprocess.run([exportvocab, "-input", train_dir, "-output", base_vocab, "-reset-token-ids"], check=True)
-    for size in VOCAB_SIZES:
-        out_vocab = base_vocab if size == VOCAB_SIZES[0] else os.path.join(work, f"tokenmonster-{size}.vocab")
-        if size != VOCAB_SIZES[0]:
-            subprocess.run(
-                [
-                    exportvocab,
-                    "-input-vocab",
-                    base_vocab,
-                    "-resize",
-                    str(size),
-                    "-output",
-                    out_vocab,
-                    "-reset-token-ids",
-                ],
-                check=True,
-            )
-        dst = f"{output_path.rstrip('/')}/tokenmonster/{size}/tokenizer.vocab"
-        with open(out_vocab, "rb") as src, fsspec.open(dst, "wb") as dst_f:
-            shutil.copyfileobj(src, dst_f)
-        results[str(size)] = {"tokenizer": dst, "backend": "tokenmonster", "path": dst}
-
-    with open_url(f"{output_path}/metadata.json", "w") as f:
-        json.dump({"family": "tokenmonster", "results": results, "corpus_path": corpus_path}, f, indent=2)
-    return results
-
-
-def train_tokenmonster_step(corpus_step: StepSpec) -> StepSpec:
-    corpus_path = f"{corpus_step.output_path}/train.txt"
-
-    def run(output_path: str) -> dict:
-        return _train_tokenmonster(output_path, corpus_path=corpus_path)
-
-    return StepSpec(
-        name=f"tokenizers/{RUN_ID}/tokenmonster",
-        deps=[corpus_step],
-        hash_attrs={
-            "vocab_sizes": VOCAB_SIZES,
-            "mode": "clean",
-            "capcode": 2,
-            "window_tokens": TOKENIZER_TRAIN_TOKENS,
-            "corpus_max_bytes": TOKENIZER_SWEEP_TM_CORPUS_MAX_BYTES,
-            "resource_revision": TOKENIZER_SWEEP_RESOURCE_REVISION,
-            "regions": TOKENIZER_SWEEP_REGIONS,
-            "ram": _TM_TRAIN_RESOURCES.ram,
-            "preemptible": _TM_TRAIN_RESOURCES.preemptible,
-            "getalltokens_workers": TOKENIZER_SWEEP_TM_GETALLTOKENS_WORKERS,
-            "getalltokens_chunk_size": TOKENIZER_SWEEP_TM_CHUNK_SIZE,
-            "getalltokens_micro_chunks": TOKENIZER_SWEEP_TM_MICRO_CHUNKS,
-            "getalltokens_min_occur_chunk": TOKENIZER_SWEEP_TM_MIN_OCCUR_CHUNK,
-            "getalltokens_min_occur_micro_chunk": TOKENIZER_SWEEP_TM_MIN_OCCUR_MICRO_CHUNK,
-            "trainvocab_workers": TOKENIZER_SWEEP_TM_TRAINVOCAB_WORKERS,
-            "train_dir_name": "trainvocab-output",
-            "train_revision": TOKENIZER_SWEEP_TM_TRAIN_REVISION,
-        },
-        fn=remote(run, resources=_TM_TRAIN_RESOURCES),
+        fn=remote(run, resources=resources),
     )
 
 
@@ -1356,6 +1040,7 @@ def tokenize_after_tokenizer(config: TokenizeAfterTokenizerConfig):
 
 def holdout_tokenize_step(
     *,
+    config: TokenizerSweepConfig,
     bucket_name: str,
     sampled_exec: ExecutorStep,
     tokenizer_name: str,
@@ -1363,7 +1048,7 @@ def holdout_tokenize_step(
     tokenizer_exec: ExecutorStep,
 ) -> TokenizerStep:
     return ExecutorStep(
-        name=os.path.join("data/datakit", "tokenized", RUN_ID, bucket_name),
+        name=os.path.join("data/datakit", "tokenized", config.run_id, bucket_name),
         fn=tokenize_after_tokenizer,
         config=TokenizeAfterTokenizerConfig(
             tokenize=TokenizeConfig(
@@ -1372,97 +1057,97 @@ def holdout_tokenize_step(
                 cache_path=this_output_path(),
                 tokenizer=versioned(tokenizer_name),
                 tokenizer_backend=versioned(tokenizer_backend),
-                worker_resources=versioned(_TOKENIZE_WORKER_RESOURCES),
+                worker_resources=versioned(config.tokenize_worker_resource.to_resource_config(config.regions)),
             ),
             tokenizer_done=tokenizer_exec / "metadata.json",
         ),
     )
 
 
-def _env_filter(name: str) -> set[str] | None:
-    raw = os.environ.get(name)
-    if not raw:
-        return None
-    values = {part.strip() for part in raw.split(",") if part.strip()}
-    return values or None
+def build_steps(config: TokenizerSweepConfig | None = None, phase: str | None = None) -> list[ExecutorStep]:
+    config = config or issue_5821_default_config()
+    config.validate()
+    phase = phase or config.phase
+    family_filter = set(config.family_filter) if config.family_filter is not None else None
+    size_filter = set(config.size_filter) if config.size_filter is not None else None
+    sample_resources = config.sample_resource.to_resource_config(config.regions)
 
-
-def build_steps(phase: str = "all") -> list[ExecutorStep]:
-    family_filter = _env_filter("TOKENIZER_SWEEP_FAMILIES")
-    size_filter_raw = _env_filter("TOKENIZER_SWEEP_SIZES")
-    size_filter = {int(size) for size in size_filter_raw} if size_filter_raw is not None else None
-
-    sources = existing_normalized_sources()
+    sources = existing_normalized_sources(config.corpus.normalized_base)
     train_samples: dict[str, StepSpec] = {}
     holdout_samples: dict[str, StepSpec] = {}
     retokenize_train_samples: dict[str, StepSpec] = {}
     for source_name, normalized_path in sources.items():
         safe_source_name = source_name.replace("/", "__")
         train_samples[source_name] = sample_window_step(
-            name=f"data/datakit/tokenizer_sweep/{RUN_ID}/train/{safe_source_name}",
+            name=f"data/datakit/tokenizer_sweep/{config.run_id}/train/{safe_source_name}",
             normalized_path=normalized_path,
             start_fraction=0.0,
-            sample_fraction=TOKENIZER_TRAIN_FRACTION,
-            window_tokens=TOKENIZER_TRAIN_TOKENS,
-            sample_mode=TOKENIZER_SWEEP_TRAIN_SAMPLE_MODE,
-            random_seed=TOKENIZER_SWEEP_TRAIN_RANDOM_SEED,
+            sample_fraction=config.tokenizer_train.fraction(config.corpus),
+            window_tokens=config.tokenizer_train.tokens,
+            total_tokenized_tokens=config.corpus.total_tokenized_tokens,
+            sample_resources=sample_resources,
+            sample_mode=config.tokenizer_train.sample_mode,
+            random_seed=config.train_random_seed,
         )
         retokenize_train_samples[source_name] = sample_window_step(
-            name=f"data/datakit/tokenizer_sweep/{RUN_ID}/{RETOKENIZE_TRAIN_LABEL}/{safe_source_name}",
+            name=f"data/datakit/tokenizer_sweep/{config.run_id}/{config.train_label}/{safe_source_name}",
             normalized_path=normalized_path,
-            start_fraction=RETOKENIZE_TRAIN_START_FRACTION,
-            sample_fraction=RETOKENIZE_TRAIN_FRACTION,
-            window_tokens=RETOKENIZE_TRAIN_TOKENS,
+            start_fraction=config.train_retokenize.start_fraction(config.corpus),
+            sample_fraction=config.train_retokenize.fraction(config.corpus),
+            window_tokens=config.train_retokenize.tokens,
+            total_tokenized_tokens=config.corpus.total_tokenized_tokens,
+            sample_resources=sample_resources,
+            sample_mode=config.train_retokenize.sample_mode,
+            random_seed=config.train_random_seed,
         )
         holdout_samples[source_name] = sample_window_step(
-            name=f"data/datakit/tokenizer_sweep/{RUN_ID}/holdout/{safe_source_name}",
+            name=f"data/datakit/tokenizer_sweep/{config.run_id}/holdout/{safe_source_name}",
             normalized_path=normalized_path,
-            start_fraction=HOLDOUT_START_FRACTION,
-            sample_fraction=HOLDOUT_FRACTION,
-            window_tokens=HOLDOUT_TOKENS,
+            start_fraction=config.holdout.start_fraction(config.corpus),
+            sample_fraction=config.holdout.fraction(config.corpus),
+            window_tokens=config.holdout.tokens,
+            total_tokenized_tokens=config.corpus.total_tokenized_tokens,
+            sample_resources=sample_resources,
+            sample_mode=config.holdout.sample_mode,
+            random_seed=config.train_random_seed,
         )
 
     train_sample_list = list(train_samples.values())
     tokenizer_steps: dict[str, tuple[StepSpec, TokenizerBackend, dict[int, str]]] = {}
-    for family, (base, place_aligned_digits) in HF_TOKENIZER_FAMILIES.items():
-        step = train_hf_family_step(
-            family,
-            base,
-            train_sample_list,
-            place_aligned_digits=place_aligned_digits,
-        )
-        tokenizer_steps[family] = (
+    for family_config in config.hf_families:
+        if not family_config.train_new_from_iterator:
+            raise ValueError(
+                f"{family_config.name} has train_new_from_iterator=False; "
+                "put official truncation families in official_truncated_families"
+            )
+        step = train_hf_family_step(config, family_config, train_sample_list)
+        tokenizer_steps[family_config.name] = (
             step,
             TokenizerBackend.HF,
-            {size: f"marin-community/{RUN_ID}-{family}-{size // 1024}k" for size in VOCAB_SIZES},
+            {
+                size: f"marin-community/{config.run_id}-{family_config.name}-{size // 1024}k"
+                for size in config.vocab_sizes
+            },
         )
-    for family, base in OFFICIAL_TRUNCATED_TOKENIZER_FAMILIES.items():
-        step = official_truncated_hf_family_step(family, base)
-        tokenizer_steps[family] = (
+    for family_config in config.official_truncated_families:
+        step = official_truncated_hf_family_step(config, family_config)
+        tokenizer_steps[family_config.name] = (
             step,
             TokenizerBackend.HF,
-            {size: f"marin-community/{RUN_ID}-{family}-{size // 1024}k" for size in VOCAB_SIZES},
+            {
+                size: f"marin-community/{config.run_id}-{family_config.name}-{size // 1024}k"
+                for size in config.vocab_sizes
+            },
         )
-
-    corpus = tokenmonster_corpus_step(train_sample_list)
-    tokenmonster_step = train_tokenmonster_step(corpus)
-    tokenizer_steps["tokenmonster"] = (
-        tokenmonster_step,
-        TokenizerBackend.TOKENMONSTER,
-        {
-            size: f"{tokenmonster_step.output_path}/tokenmonster/{size}/tokenizer.vocab"
-            for size in VOCAB_SIZES
-        },
-    )
     if family_filter is not None:
         unknown = family_filter - set(tokenizer_steps)
         if unknown:
-            raise ValueError(f"Unknown TOKENIZER_SWEEP_FAMILIES entries: {sorted(unknown)}")
+            raise ValueError(f"Unknown family_filter entries: {sorted(unknown)}")
         tokenizer_steps = {family: value for family, value in tokenizer_steps.items() if family in family_filter}
     if size_filter is not None:
-        unknown_sizes = size_filter - set(VOCAB_SIZES)
+        unknown_sizes = size_filter - set(config.vocab_sizes)
         if unknown_sizes:
-            raise ValueError(f"Unknown TOKENIZER_SWEEP_SIZES entries: {sorted(unknown_sizes)}")
+            raise ValueError(f"Unknown size_filter entries: {sorted(unknown_sizes)}")
 
     holdout_execs = {source_name: step.as_executor_step() for source_name, step in holdout_samples.items()}
     retokenize_train_execs = {
@@ -1480,21 +1165,19 @@ def build_steps(phase: str = "all") -> list[ExecutorStep]:
         )
         return prep_steps
     if phase not in {"all", "train_tokenization"}:
-        raise ValueError(
-            f"Unknown TOKENIZER_SWEEP_PHASE={phase!r}; expected 'prep', 'all', or 'train_tokenization'"
-        )
+        raise ValueError(f"Unknown phase={phase!r}; expected 'prep', 'all', or 'train_tokenization'")
 
     if phase == "train_tokenization":
         sample_execs = retokenize_train_execs
         sample_names = retokenize_train_samples
-        output_prefix = RETOKENIZE_TRAIN_LABEL
+        output_prefix = config.train_label
     else:
         sample_execs = holdout_execs
         sample_names = holdout_samples
         output_prefix = ""
 
     tokenized_steps: list[ExecutorStep] = []
-    for family, (tokenizer_step, backend, names_by_size) in tokenizer_steps.items():
+    for family, (_tokenizer_step, backend, names_by_size) in tokenizer_steps.items():
         for size, tokenizer_name in names_by_size.items():
             if size_filter is not None and size not in size_filter:
                 continue
@@ -1505,6 +1188,7 @@ def build_steps(phase: str = "all") -> list[ExecutorStep]:
                     bucket_name = f"{output_prefix}/{bucket_name}"
                 tokenized_steps.append(
                     holdout_tokenize_step(
+                        config=config,
                         bucket_name=bucket_name,
                         sampled_exec=sample_execs[source_name],
                         tokenizer_name=tokenizer_name,
@@ -1516,20 +1200,24 @@ def build_steps(phase: str = "all") -> list[ExecutorStep]:
         "Tokenizer sweep DAG: %d sources, %d tokenizer families, %d vocab sizes, %d tokenization steps",
         len(sources),
         len(tokenizer_steps),
-        len(size_filter or set(VOCAB_SIZES)),
+        len(size_filter or set(config.vocab_sizes)),
         len(tokenized_steps),
     )
     return tokenized_steps
 
 
+@dataclass(frozen=True)
+class TokenizerSweepMainConfig(ExecutorMainConfig):
+    sweep: TokenizerSweepConfig = field(default_factory=issue_5821_default_config)
+
+
 def main() -> None:
-    config = draccus.parse(ExecutorMainConfig)
+    config = draccus.parse(TokenizerSweepMainConfig)
     if config.prefix is None:
-        config = dataclasses.replace(config, prefix=STAGING_PREFIX)
+        config = dataclasses.replace(config, prefix=config.sweep.staging_prefix)
     os.environ["MARIN_PREFIX"] = config.prefix
-    phase = os.environ.get("TOKENIZER_SWEEP_PHASE", "all")
     _skip_executor_info_writes_for_generated_dag()
-    executor_main(config, build_steps(phase), max_concurrent=MAX_STEP_CONCURRENCY)
+    executor_main(config, build_steps(config.sweep), max_concurrent=config.sweep.max_step_concurrency)
 
 
 if __name__ == "__main__":

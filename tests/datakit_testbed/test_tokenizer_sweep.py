@@ -4,22 +4,69 @@
 import re
 import time
 
-from tokenizers import Tokenizer
-from tokenizers import AddedToken
-from tokenizers import models
-from tokenizers import pre_tokenizers
-from tokenizers import trainers
+from tokenizers import AddedToken, Tokenizer, models, pre_tokenizers, trainers
 
 from experiments.datakit_testbed.tokenizer_sweep import (
     PLACE_ALIGNED_DIGIT_MAX_RUN_CHARS,
+    CorpusConfig,
+    HfTokenizerFamilyConfig,
+    TokenizerSweepConfig,
+    WindowConfig,
     _derive_hf_bpe_tokenizer_dir,
     _place_aligned_digit_pretokenizer,
+    build_steps,
+    issue_5821_default_config,
     place_aligned_digit_pieces,
 )
 
 
 def _lookahead_digit_pieces(text: str) -> list[str]:
     return [piece for piece in re.split(r"(?=(?:\d{3})+(?!\d))", text) if piece]
+
+
+def test_issue_5821_default_config_captures_expected_recipe() -> None:
+    config = issue_5821_default_config()
+
+    assert config.run_id == "tokenizer-sweep-issue-5821"
+    assert config.vocab_sizes == [262_144, 131_072, 32_768, 8_192]
+    assert config.tokenizer_train.tokens == 50_000_000_000
+    assert config.tokenizer_train.sample_mode == "random-shards"
+    assert config.holdout.start_tokens == 100_000_000_000
+    assert config.holdout.tokens == 100_000_000_000
+    assert config.sample_resource.tpu_type == "v6e-8"
+    assert config.hf_train_resource.tpu_type == "v6e-8"
+    assert config.tokenize_worker_resource.tpu_type == "v6e-8"
+    assert [(family.name, family.base_tokenizer, family.place_aligned_digits) for family in config.hf_families] == [
+        ("gpt-oss", "openai/gpt-oss-20b", False),
+        ("llama", "meta-llama/Meta-Llama-3.1-8B", False),
+        ("gpt-oss-place-digits", "openai/gpt-oss-20b", True),
+        ("llama-place-digits", "meta-llama/Meta-Llama-3.1-8B", True),
+    ]
+
+
+def test_build_steps_accepts_custom_config_without_env(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "experiments.datakit_testbed.tokenizer_sweep.existing_normalized_sources",
+        lambda _normalized_base: {"source": "gs://example/normalized/source"},
+    )
+    config = TokenizerSweepConfig(
+        run_id="custom-tokenizer-sweep",
+        corpus=CorpusConfig(normalized_base="gs://example/normalized", total_tokenized_tokens=10_000),
+        tokenizer_train=WindowConfig(tokens=1_000, sample_mode="random-shards"),
+        holdout=WindowConfig(tokens=1_000, start_tokens=1_000),
+        train_retokenize=WindowConfig(tokens=1_000),
+        vocab_sizes=[1024, 512],
+        hf_families=[HfTokenizerFamilyConfig("custom", "org/custom-tokenizer")],
+        family_filter=["custom"],
+        size_filter=[512],
+    )
+
+    steps = build_steps(config, phase="prep")
+
+    assert {step.name for step in steps} == {
+        "data/datakit/tokenizer_sweep/custom-tokenizer-sweep/holdout/source",
+        "tokenizers/custom-tokenizer-sweep/custom",
+    }
 
 
 def test_place_aligned_digit_pieces_match_lookahead_through_cap() -> None:
