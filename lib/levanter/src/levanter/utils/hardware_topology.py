@@ -77,7 +77,7 @@ def tpu_topology_shape(devices: Sequence[Any]) -> str | None:
     return "x".join(str(axis_size) for axis_size in axis_sizes)
 
 
-def nvidia_topology_matrix_summary(stdout: str) -> dict[str, Any]:
+def nvidia_topology_matrix_summary(stdout: str) -> dict[str, dict[str, int]]:
     lines = [line.strip() for line in stdout.splitlines() if line.strip()]
     header: list[str] | None = None
     rows: dict[str, list[str]] = {}
@@ -127,7 +127,7 @@ def nvidia_topology_matrix_summary(stdout: str) -> dict[str, Any]:
             link = row[col_index]
             gpu_nic_link_counts[link] = gpu_nic_link_counts.get(link, 0) + 1
 
-    summary: dict[str, Any] = {}
+    summary: dict[str, dict[str, int]] = {}
     if gpu_gpu_link_counts:
         summary["gpu_gpu_link_counts"] = gpu_gpu_link_counts
     if gpu_nic_link_counts:
