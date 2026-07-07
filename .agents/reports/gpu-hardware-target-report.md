@@ -2,6 +2,8 @@
 
 Date: 2026-07-07
 
+Coordinating issue: https://github.com/marin-community/marin/issues/7010
+
 ## TL;DR
 
 - H100 per-GPU compute and HBM values are experimentally grounded for our JAX stack: 700 TFLOP/s bf16, 1.25-1.45 PFLOP/s fp8, and 2.85 TB/s measured HBM stream bandwidth. The H100 SXM capacity and peak reference values come from NVIDIA's product specs.

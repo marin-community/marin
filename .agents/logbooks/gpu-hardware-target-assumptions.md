@@ -1,5 +1,6 @@
 ---
 topic: gpu-hardware-target-assumptions
+issue: https://github.com/marin-community/marin/issues/7010
 description: H100 and Blackwell hardware/network assumptions for training cost modeling
 author: dlwh
 ---
@@ -10,6 +11,7 @@ author: dlwh
 - Goal: Establish cost-model inputs for Target A = H100 and Target B = Blackwell/GB200-class hardware.
 - Primary metrics: Achievable GEMM TFLOP/s, HBM capacity and bandwidth, NCCL bus bandwidth by topology, and topology assumptions for PP/DP communication costs.
 - Constraints: Use public/durable sources only in this brief.
+- Coordinating issue: https://github.com/marin-community/marin/issues/7010
 
 ## Current TL;DR
 - Use H100 SXM for Target A unless the SKU is explicitly PCIe: 700 bf16 TFLOP/s, 1,250 fp8 TFLOP/s, 80 GB HBM, 3.05 TB/s achievable HBM bandwidth.
@@ -314,6 +316,7 @@ Oversubscription:
   - Durable report avoids private cluster names and labels evidence as measured, source-backed, inferred, or unknown.
 - Result:
   - Report path: `.agents/reports/gpu-hardware-target-report.md`.
+  - Coordinating issue: https://github.com/marin-community/marin/issues/7010.
   - Private-name hygiene check returned no matches.
 - Interpretation:
   - The report answers the original request where the evidence exists, and explicitly marks the missing pieces: GB200/NVL72 local measurements, native NCCL all-gather/reduce-scatter, large H100 two-node reduce-scatter, and fabric oversubscription.
