@@ -6,7 +6,9 @@
 import asyncio
 import contextlib
 import functools
+import itertools
 import logging
+import math
 import os
 import urllib.parse
 from dataclasses import dataclass
@@ -101,9 +103,31 @@ async def _transfer_shard_to_pageable_host(shard) -> np.ndarray:
     return np.array(data, copy=False)
 
 
+def _replica_count(arr: Any) -> int:
+    """Number of identical replicas of ``arr`` across the mesh.
+
+    A checkpoint writes each shard exactly once; jax picks the copy whose
+    ``shard.replica_id`` matches the ``replica_id`` passed to ``async_serialize`` (default
+    0). The valid ids are ``0..replica_count-1``, where the replica count is the product of
+    the mesh axes the array is *not* sharded over -- each such axis multiplies the number of
+    identical copies. Returns 1 for non-``NamedSharding`` (e.g. single-device) arrays.
+    """
+    sharding = getattr(arr, "sharding", None)
+    if not isinstance(sharding, jax.sharding.NamedSharding):
+        return 1
+    sharded_axes: set[str] = set()
+    for entry in sharding.spec:
+        if entry is None:
+            continue
+        for name in entry if isinstance(entry, tuple) else (entry,):
+            sharded_axes.add(name)
+    return math.prod(size for ax, size in sharding.mesh.shape.items() if ax not in sharded_axes)
+
+
 @contextlib.contextmanager
 def _serialize_with_bounded_host_memory():
-    """Patch two per-save host-RAM leaks around ``GlobalAsyncCheckpointManager.serialize``.
+    """Patch two per-save host-RAM leaks (and spread the write across hosts) around
+    ``GlobalAsyncCheckpointManager.serialize``.
 
     JAX serializes every checkpoint through one process-lifetime ``Context`` singleton
     (``tensorstore_impl._TS_CONTEXT``). Each save writes a distinct OCDBT database (fresh
@@ -123,10 +147,22 @@ def _serialize_with_bounded_host_memory():
     original_async_serialize = ts_impl.async_serialize
     original_transfer = ts_impl._transfer_shard_to_host
 
+    # Round-robin which replica writes each array. jax defaults every array to replica_id=0,
+    # so under cross-node replication (each host holds a full copy of the model) host 0 alone
+    # stages and writes the entire model -- its host RAM peaks at the full state and OOMs.
+    # Assigning replica_id = counter % replica_count spreads the per-array D2H+write across
+    # hosts, so each writes ~1/replica_count of the arrays. ``serialize`` tree_maps over the
+    # identical array list on every host, so the counter yields the same assignment
+    # everywhere; every array is still written exactly once. No-op for single-replica arrays.
+    write_replica_counter = itertools.count()
+
     @functools.wraps(original_async_serialize)
-    def async_serialize_with_fresh_context(*args, **kwargs):
+    def async_serialize_with_fresh_context(arr_inp, *args, **kwargs):
         kwargs.setdefault("context", fresh_context)
-        return original_async_serialize(*args, **kwargs)
+        n_repl = _replica_count(arr_inp)
+        if n_repl > 1 and "replica_id" not in kwargs:
+            kwargs["replica_id"] = next(write_replica_counter) % n_repl
+        return original_async_serialize(arr_inp, *args, **kwargs)
 
     ts_impl.async_serialize = async_serialize_with_fresh_context
     ts_impl._transfer_shard_to_host = _transfer_shard_to_pageable_host
