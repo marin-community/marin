@@ -4,24 +4,21 @@
 """SWE-rebench ConTree trace dataset.
 
 Line-by-line Python execution traces for the test suites of SWE-rebench V2
-instances, produced upstream by ``experiments/swe_rebench_trace/contree_pipeline.py``
-and published to the HuggingFace Hub as
-``marin-community/swe-rebench-v2-CodeWorldModeling``. Each parquet row is one
-(instance_id, test_id) tuple with a pre-rendered ``text`` field containing the
-test source, pre-patch trace, patch, post-patch trace, and the broad-phase
-trace block. The published shards are already sentinel-filtered.
+instances, produced by the SWE-rebench ConTree tracing pipeline and published to
+the HuggingFace Hub as ``marin-community/swe-rebench-v2-CodeWorldModeling``. Each
+parquet row is one (instance_id, test_id) tuple with a pre-rendered ``text`` field
+containing the test source, pre-patch trace, patch, post-patch trace, and the
+broad-phase trace block. The published shards are already sentinel-filtered.
 
 Trace data lives under ``data/*.parquet``; the ``metadata/licenses.parquet``
 sidecar is excluded by the download glob.
 """
 
-import hashlib
-
 from fray import ResourceConfig
 from zephyr import Dataset, ZephyrContext, counters
 
 from marin.datakit.download.huggingface import download_hf_step
-from marin.datakit.download.rollout_transforms import load_parquet_batched
+from marin.datakit.download.rollout_transforms import load_parquet_batched, text_document
 from marin.datakit.normalize import normalize_step
 from marin.execution.step_spec import StepSpec
 
@@ -31,15 +28,8 @@ SOURCE_LABEL = "marin-community/swe-rebench-v2-CodeWorldModeling"
 
 
 def row_to_doc(row: dict) -> list[dict]:
-    text = row["text"]
     counters.pipeline.update_counter("swe_rebench_contree/kept", 1)
-    return [
-        {
-            "id": hashlib.sha256(text.encode("utf-8")).hexdigest(),
-            "text": text,
-            "source": SOURCE_LABEL,
-        }
-    ]
+    return [text_document(row["text"], SOURCE_LABEL)]
 
 
 def transform(input_path: str, output_path: str) -> None:
