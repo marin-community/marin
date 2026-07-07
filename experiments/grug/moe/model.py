@@ -19,7 +19,7 @@ from einops import rearrange
 from haliax import Axis
 from haliax.jax_utils import named_call
 from jax import core, random
-from jax.sharding import NamedSharding, get_abstract_mesh, reshard
+from jax.sharding import NamedSharding, SingleDeviceSharding, get_abstract_mesh, reshard
 from jax.sharding import PartitionSpec as P
 
 try:
@@ -86,7 +86,12 @@ def _partition_spec_of(x: jax.Array) -> P | None:
     sharding = jax.typeof(x).sharding if isinstance(x, core.Tracer) else x.sharding
     if isinstance(sharding, NamedSharding):
         return sharding.spec
-    return None
+    if sharding is None or isinstance(sharding, SingleDeviceSharding):
+        return None
+    raise TypeError(
+        "grug/moe expected attention output to use NamedSharding or single-device sharding, "
+        f"got {type(sharding).__name__}: {sharding!r}"
+    )
 
 
 def _layer_attention_masks(mask: AttentionMask, *, sliding_window: int) -> tuple[AttentionMask, AttentionMask]:
