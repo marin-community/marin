@@ -332,8 +332,8 @@ def _open_kwargs_for(path: str) -> dict:
 # This is what lets a single process copy R2 -> CoreWeave: the CW side uses the
 # ambient S3 config (the cluster default, e.g. cwlota) and the R2 side is pinned
 # to its own client via constructor kwargs, so the two never clobber each other
-# (fsspec caches filesystems by their kwargs). Set ``R2_ACCESS_KEY``,
-# ``R2_SECRET``, ``R2_ENDPOINT_URL`` in the job env.
+# (fsspec caches filesystems by their kwargs). Set ``R2_ACCESS_KEY_ID``,
+# ``R2_SECRET_ACCESS_KEY``, ``R2_ENDPOINT_URL`` in the job env.
 _R2_BUCKETS = frozenset({"marin-na"})
 
 
@@ -349,8 +349,8 @@ def _s3_creds_kwargs(path: str) -> dict:
     bucket = path[len("s3://") :].split("/", 1)[0]
     if bucket in _R2_BUCKETS and os.environ.get("R2_ENDPOINT_URL"):
         return {
-            "key": os.environ["R2_ACCESS_KEY"],
-            "secret": os.environ["R2_SECRET"],
+            "key": os.environ["R2_ACCESS_KEY_ID"],
+            "secret": os.environ["R2_SECRET_ACCESS_KEY"],
             "client_kwargs": {"endpoint_url": os.environ["R2_ENDPOINT_URL"], "region_name": "auto"},
         }
     return {}
