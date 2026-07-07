@@ -215,19 +215,6 @@ def _require_file(label: str, path: str) -> None:
         raise FileNotFoundError(f"{label} not found at {path}")
 
 
-def _torch_cuda_snapshot() -> dict[str, Any]:
-    import torch  # noqa: PLC0415
-
-    device_count = int(torch.cuda.device_count())
-    return {
-        "available": bool(torch.cuda.is_available()),
-        "device_count": device_count,
-        "expected_gpu_count": EXPECTED_GPU_COUNT,
-        "devices": [torch.cuda.get_device_name(index) for index in range(device_count)],
-        "cuda_visible_devices": os.environ.get("CUDA_VISIBLE_DEVICES"),
-    }
-
-
 def _vllm_extra_args(attention_backend: str) -> list[str]:
     return [
         "--runner",
@@ -424,16 +411,24 @@ def _configure_vllm_gpu_env() -> dict[str, Any]:
     }
 
 
-def _require_torch_cuda_runtime() -> dict[str, Any]:
-    snapshot = _torch_cuda_snapshot()
-    if not snapshot.get("available"):
-        raise RuntimeError(f"Expected torch CUDA for GrugMoE vLLM e2e; got {snapshot!r}")
-    if int(snapshot.get("device_count") or 0) < EXPECTED_GPU_COUNT:
-        raise RuntimeError(f"Expected at least {EXPECTED_GPU_COUNT} CUDA devices for GrugMoE vLLM e2e; got {snapshot!r}")
-    h100_devices = [device for device in snapshot["devices"] if "H100" in device]
+def _require_h100_torch_runtime() -> dict[str, Any]:
+    import torch  # noqa: PLC0415
+
+    device_count = int(torch.cuda.device_count())
+    devices = [torch.cuda.get_device_name(index) for index in range(device_count)]
+    runtime = {
+        "device_count": device_count,
+        "devices": devices,
+        "cuda_visible_devices": os.environ.get("CUDA_VISIBLE_DEVICES"),
+    }
+    if not torch.cuda.is_available():
+        raise RuntimeError(f"Expected torch CUDA for GrugMoE vLLM e2e; got {runtime!r}")
+    if device_count < EXPECTED_GPU_COUNT:
+        raise RuntimeError(f"Expected at least {EXPECTED_GPU_COUNT} CUDA devices for GrugMoE vLLM e2e; got {runtime!r}")
+    h100_devices = [device for device in devices if "H100" in device]
     if len(h100_devices) < EXPECTED_GPU_COUNT:
-        raise RuntimeError(f"Expected {EXPECTED_GPU_COUNT} H100 CUDA devices for GrugMoE vLLM e2e; got {snapshot!r}")
-    return snapshot
+        raise RuntimeError(f"Expected {EXPECTED_GPU_COUNT} H100 CUDA devices for GrugMoE vLLM e2e; got {runtime!r}")
+    return runtime
 
 
 def _export_artifact_and_run_levanter_reference(args: argparse.Namespace) -> None:
@@ -836,7 +831,7 @@ def _vllm_backend(args: argparse.Namespace) -> None:
     phase_timings: dict[str, float] = {}
     s3_env = _configure_coreweave_s3_env()
     vllm_env = _configure_vllm_gpu_env()
-    torch_runtime = _require_torch_cuda_runtime()
+    torch_runtime = _require_h100_torch_runtime()
     levanter_reference = _read_json(args.levanter_result_path)
 
     from marin.evaluation.evaluators.evaluator import ModelConfig  # noqa: PLC0415
