@@ -794,13 +794,7 @@ def _initialize_global_tracker(config, run_id):
 
 
 def _log_hardware_topology() -> None:
-    try:
-        topology = hardware_topology_summary()
-    except Exception:
-        logger.exception("Failed to collect hardware topology for tracker.")
-        return
-
-    levanter.tracker.log_summary({"hardware_topology": topology})
+    levanter.tracker.log_summary({"hardware_topology": hardware_topology_summary()})
 
 
 @dataclass
