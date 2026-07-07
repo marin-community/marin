@@ -208,19 +208,27 @@ def _is_hidden_dir(root: str, resolved: str) -> bool:
     return any(p.startswith(".") for p in rel.split(os.sep))
 
 
-def _discover_eval_files(eval_paths: list[str]) -> Iterator[str]:
+def _discover_eval_files(eval_paths: list[str], exclude_dir_names: frozenset[str] = frozenset()) -> Iterator[str]:
     """Walk all *eval_paths* recursively and yield zephyr-readable data files.
 
     Filters by ``zephyr.readers.SUPPORTED_EXTENSIONS`` so common sidecars
     (``README``, ``_SUCCESS``, ``provenance.json``, ``.executor_info``, …)
     that live alongside eval data don't kill the whole decon step when
     ``load_file`` later rejects their extension. Mirrors ``normalize._discover_files``.
+
+    *exclude_dir_names* skips any file whose immediate parent directory name is
+    in the set (the eval-corpus layout is ``<root>/<split>/<task>/<file>``, so the
+    task name is the parent dir). This lets a caller drop specific eval tasks from
+    the bloom *at read time*, so an already-materialized eval corpus that still
+    contains those task dirs is excluded without regenerating it.
     """
     for source in eval_paths:
         fs, resolved = url_to_fs(source)
         protocol = source.split("://")[0] if "://" in source else ""
         for root, _dirs, files in fs.walk(resolved):
             if _is_hidden_dir(root, resolved):
+                continue
+            if os.path.basename(root.rstrip("/")) in exclude_dir_names:
                 continue
             for fname in files:
                 if fname.startswith(".") or not fname.endswith(SUPPORTED_EXTENSIONS):
@@ -240,6 +248,7 @@ def _build_filter(
     ngram: NGramConfig | None,
     estimated_doc_count: int,
     false_positive_rate: float,
+    exclude_dir_names: frozenset[str] = frozenset(),
 ) -> int:
     """Build a bloom filter and a streaming hash → eval_id sidecar.
 
@@ -261,7 +270,7 @@ def _build_filter(
     stats = {"n_records": 0, "n_index_rows": 0}
 
     def emit_index_rows() -> Iterator[dict[str, Any]]:
-        for path in _discover_eval_files(eval_paths):
+        for path in _discover_eval_files(eval_paths, exclude_dir_names):
             for idx, record in enumerate(load_file(path)):
                 text = record.get(text_field)
                 if not text:
@@ -496,6 +505,7 @@ def build_eval_bloom(
     ngram: NGramConfig | None = None,
     estimated_doc_count: int = 1_000_000,
     false_positive_rate: float = 1e-9,
+    exclude_eval_dirs: frozenset[str] = frozenset(),
 ) -> EvalBloom:
     """Build a reusable bloom + hash-index sidecar from one or more eval sources.
 
@@ -520,6 +530,9 @@ def build_eval_bloom(
             blooms intended for :func:`merge_eval_blooms` MUST share both
             values across all per-eval builds — ``dupekit.Bloom.update``
             requires identical sizing.
+        exclude_eval_dirs: Eval task directory names to skip while walking
+            ``eval_data_sources`` (see :func:`_discover_eval_files`). Excludes
+            those tasks from the bloom without regenerating the eval corpus.
 
     Returns:
         :class:`EvalBloom` artifact pointing at the produced files.
@@ -537,6 +550,7 @@ def build_eval_bloom(
         ngram=ngram,
         estimated_doc_count=estimated_doc_count,
         false_positive_rate=false_positive_rate,
+        exclude_dir_names=exclude_eval_dirs,
     )
     return EvalBloom(
         bloom_dir=output_path,
@@ -641,6 +655,7 @@ def build_eval_bloom_step(
     overlap_threshold: float = 0.5,
     estimated_doc_count: int = 1_000_000,
     false_positive_rate: float = 1e-9,
+    exclude_eval_dirs: frozenset[str] = frozenset(),
     output_path_prefix: str | None = None,
     override_output_path: str | None = None,
 ) -> StepSpec:
@@ -653,6 +668,9 @@ def build_eval_bloom_step(
             cache); StepSpec entries become DAG deps.
         text_field, ngram_length, overlap_threshold: ngram config.
         estimated_doc_count, false_positive_rate: bloom sizing.
+        exclude_eval_dirs: Eval task directory names to drop from the bloom
+            (see :func:`build_eval_bloom`). Folded into ``hash_attrs`` so
+            changing the exclusion set rebuilds the bloom at a fresh path.
         output_path_prefix, override_output_path: StepSpec routing.
     """
     raw_paths: list[str] = []
@@ -677,6 +695,7 @@ def build_eval_bloom_step(
         # Raw paths aren't deps — fingerprint them so swapping a path
         # invalidates the cache.
         "eval_data_sources": tuple(sorted(s for s in raw_paths if s not in (d.output_path for d in step_deps))),
+        "exclude_eval_dirs": tuple(sorted(exclude_eval_dirs)),
     }
 
     return StepSpec(
@@ -688,6 +707,7 @@ def build_eval_bloom_step(
             ngram=ngram,
             estimated_doc_count=estimated_doc_count,
             false_positive_rate=false_positive_rate,
+            exclude_eval_dirs=exclude_eval_dirs,
         ),
         deps=step_deps,
         hash_attrs=hash_attrs,

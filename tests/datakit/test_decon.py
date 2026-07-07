@@ -770,6 +770,56 @@ def test_build_eval_bloom_then_decon_matches_inline(fox_corpus):
         assert sorted(pre["matched_hashes"]) == sorted(inline["matched_hashes"])
 
 
+def test_build_eval_bloom_excludes_named_task_dirs(tmp_path: Path):
+    """``exclude_eval_dirs`` drops matching task dirs at read time.
+
+    An already-materialized eval corpus can be pruned without regenerating it:
+    the excluded task's records never enter the bloom or the hash index, while a
+    kept task in the same tree still drives contamination matches.
+    """
+    eval_root = tmp_path / "evals"
+    _write_eval_jsonl(
+        eval_root / "lmh" / "kept_task" / "eval.jsonl.gz", [{"id": "kept-1", "text": "alpha beta gamma delta"}]
+    )
+    _write_eval_jsonl(
+        eval_root / "lmh" / "code2text_python" / "eval.jsonl.gz",
+        [{"id": "excl-1", "text": "epsilon zeta eta theta"}],
+    )
+
+    bloom_dir = tmp_path / "bloom"
+    build_eval_bloom(
+        eval_data_sources=str(eval_root),
+        output_path=str(bloom_dir),
+        ngram=NGramConfig(ngram_length=3, overlap_threshold=0.5),
+        estimated_doc_count=1_000,
+        false_positive_rate=1e-9,
+        exclude_eval_dirs=frozenset({"code2text_python"}),
+    )
+    _, index_path = bloom_paths(str(bloom_dir))
+    eval_ids = set(pq.read_table(index_path).column("eval_id").to_pylist())
+    assert eval_ids == {"kept-1"}, "excluded task dir must not contribute to the hash index"
+
+    # A doc matching the excluded eval text is NOT flagged; the kept one is.
+    input_dir = tmp_path / "input"
+    output_dir = tmp_path / "output"
+    _write_input_parquet(
+        input_dir / "part-00000-of-00001.parquet",
+        [
+            {"id": "hits-kept", "text": "alpha beta gamma delta", "partition_id": 0},
+            {"id": "hits-excluded", "text": "epsilon zeta eta theta", "partition_id": 0},
+        ],
+    )
+    decon_to_parquet(
+        normalized_data=_as_source(input_dir),
+        prebuilt_bloom_dir=str(bloom_dir),
+        output_path=str(output_dir),
+        ngram=NGramConfig(ngram_length=3, overlap_threshold=0.5),
+    )
+    rows = _read_attributes(output_dir)
+    assert rows["hits-kept"]["contaminated"] is True
+    assert rows["hits-excluded"]["contaminated"] is False
+
+
 def test_merge_eval_blooms_equals_single_build(tmp_path: Path):
     """merge_eval_blooms over N per-eval builds detects everything a single combined build does.
 

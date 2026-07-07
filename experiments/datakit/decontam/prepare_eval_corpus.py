@@ -356,7 +356,7 @@ def _prepare_aa() -> None:
 #   - realtoxicityprompts: documents are random spans of open web text.
 # Confirmed empirically as dominant false-positive drivers on code/web
 # corpora (see marin#6852).
-_DECON_EXCLUDED_TASKS: frozenset[str] = frozenset(
+DECON_EXCLUDED_EVAL_TASKS: frozenset[str] = frozenset(
     {
         "code2text_go",
         "code2text_java",
@@ -400,7 +400,7 @@ def _lmh_task_names() -> list[str]:
     for bundle in bundles:
         for cfg in bundle:
             names.add(cfg.name)
-    return sorted(names - _DECON_EXCLUDED_TASKS)
+    return sorted(names - DECON_EXCLUDED_EVAL_TASKS)
 
 
 def _prepare_lmh() -> None:
