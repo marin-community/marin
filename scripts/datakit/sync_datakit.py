@@ -348,10 +348,17 @@ def _s3_creds_kwargs(path: str) -> dict:
         return {}
     bucket = path[len("s3://") :].split("/", 1)[0]
     if bucket in _R2_BUCKETS and os.environ.get("R2_ENDPOINT_URL"):
+        # ``endpoint_url`` must be a *top-level* s3fs kwarg, not inside
+        # ``client_kwargs``: fsspec shallow-merges the ambient ``FSSPEC_S3`` config
+        # (which carries the cluster's top-level ``endpoint_url``, e.g. cwlota) with
+        # ours. A top-level key overrides it; putting it in ``client_kwargs`` instead
+        # leaves the ambient top-level endpoint in place and s3fs then passes
+        # ``endpoint_url`` to ``create_client`` twice.
         return {
             "key": os.environ["R2_ACCESS_KEY_ID"],
             "secret": os.environ["R2_SECRET_ACCESS_KEY"],
-            "client_kwargs": {"endpoint_url": os.environ["R2_ENDPOINT_URL"], "region_name": "auto"},
+            "endpoint_url": os.environ["R2_ENDPOINT_URL"],
+            "client_kwargs": {"region_name": "auto"},
         }
     return {}
 
