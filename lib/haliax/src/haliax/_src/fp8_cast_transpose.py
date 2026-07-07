@@ -20,6 +20,12 @@ and store through a transposed SMEM view -- both FP8 stores are then contiguous.
 ``in_q_ct`` wraps this in the same ``OverwriteWithGradient`` custom-VJP
 threading as ``in_q`` so the per-tensor scale / amax-history state still flows
 through ``apply_updates``.
+
+HBM cost of the dual layout: both FP8 copies persist in HBM (the forward and
+each backward GEMM consume different layouts), but at 1 byte/element the two
+copies together equal the footprint of the single bf16 operand they quantize
+-- materializing the transpose is what lets all three GEMMs run genuine FP8
+``wgmma``, which cannot transpose an operand at runtime.
 """
 
 import functools

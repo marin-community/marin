@@ -63,7 +63,7 @@ _GEMM_BLOCKS = (128, 64, 32, 16)
 def _autotuned_config(m: int, n: int, k: int) -> dict:
     """Static Mosaic block config for the ragged FP8 wgmma forward/dgrad kernel.
 
-    Tuned on H100 at the d2560 grug-MoE shapes (per-leg sweeps, both the
+    Tuned on H100 at the d=2560 MoE shapes (hidden 2560, intermediate 1280) (per-leg sweeps, both the
     forward and the dgrad orientation): ``(block_m, block_n, block_k) =
     (128, 128, 128)`` with a six-step pipeline beats a ``192 x 5``
     block/pipeline by ~10-14% -- the shorter accumulator
@@ -91,7 +91,7 @@ def _autotuned_config(m: int, n: int, k: int) -> dict:
 def _dwgrad_config(k: int, n: int) -> dict:
     """Static Mosaic block config for the ragged FP8 weight-gradient kernel.
 
-    Tuned on H100 at the d2560 grug-MoE shapes. ``block_m`` tiles the output K,
+    Tuned on H100 at the d=2560 MoE shapes (hidden 2560, intermediate 1280). ``block_m`` tiles the output K,
     ``block_n`` the output N, and ``block_k=128`` the ragged token (contracting)
     dim. The tile *pair* matters more than either dimension alone: wide-N
     ``(64, 256)`` beats ``(128, 128)``, but ``(128, 256)`` collapses, so the
@@ -165,7 +165,7 @@ def quantized_ragged_dot(
     lhs,  # [T, K] original operand: differentiable, receives grad_lhs
     rhs,  # [E, K, N] original operand: differentiable, receives grad_rhs
     group_sizes,  # [E]
-    rev_dtype,  # static: output-gradient FP8 dtype (E4M3 here)
+    rev_dtype,  # static: output-gradient FP8 dtype (E5M2 by default)
 ):
     """FP8 ragged forward of pre-quantized E4M3 operands; FP8 dgrad and wgrad.
 

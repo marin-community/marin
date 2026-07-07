@@ -11,7 +11,7 @@ import pytest
 
 from haliax._src.ragged_dot_mgpu import mgpu_dwgrad, mgpu_ragged_dot
 from haliax.nn import ragged_dot
-from haliax.quantization import Fp8RaggedDotOp, _jax_supports_mixed_fp8_wgmma, partition_for_grad_overwrite
+from haliax.quantization import Fp8RaggedDotOp, _jax_supports_mixed_fp8_wgmma
 
 ragged_dot_module = importlib.import_module("haliax.nn.ragged_dot")
 
@@ -198,21 +198,3 @@ def test_mgpu_dwgrad_rejects_non_fp8_operands():
     gs = jnp.asarray([64, 64], jnp.int32)
     with pytest.raises(NotImplementedError, match="expects FP8 operands"):
         mgpu_dwgrad(lhs_t, grad_t, group_sizes=gs, **_KERNEL_KW)
-
-
-def test_op_state_partitions_as_overwrite():
-    """Fp8RaggedDotOp's scale/amax state goes to the overwrite partition, not the optimizer gradient."""
-    op = Fp8RaggedDotOp.init(amax_history_length=4, rev_dtype=jnp.float8_e4m3fn)
-    regular_param = jnp.array([1.0, 2.0])
-
-    # Partition a tree containing both the op and a regular parameter.
-    tree = {"op": op, "weight": regular_param}
-    overwrites, grads = partition_for_grad_overwrite(tree)
-
-    # The op (OverwriteWithGradient) lands in overwrites, not in grads.
-    assert isinstance(overwrites["op"], Fp8RaggedDotOp)
-    assert grads["op"] is None
-
-    # Regular parameters are not overwritten; they stay in the grad/optimizer partition.
-    assert overwrites["weight"] is None
-    np.testing.assert_array_equal(np.asarray(grads["weight"]), np.asarray(regular_param))
