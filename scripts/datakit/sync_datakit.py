@@ -651,6 +651,13 @@ def _parse_args() -> argparse.Namespace:
         help=f"Where shard sentinels + step status live (default: {DEFAULT_STATUS_PREFIX!r}).",
     )
     parser.add_argument(
+        "--max-sources",
+        type=int,
+        default=8,
+        help="Max source-syncs run concurrently by StepRunner (default 8). Each source "
+        "further fans out into its own Zephyr copy workers.",
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Build StepSpecs and list them, but don't run.",
@@ -750,7 +757,7 @@ def main() -> None:
         print(f"{len(steps)} sync StepSpec(s) built (dry run).")
         return
 
-    StepRunner().run(steps)
+    StepRunner().run(steps, max_concurrent=args.max_sources)
     print(f"Synced {len(steps)} source(s): {src_prefix} -> {args.dest_prefix}.")
 
 
