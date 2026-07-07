@@ -6,10 +6,11 @@
 A mid-point between ``model_basic`` (dense / a few MoE layers) and the full
 ``model.py`` (RMSNorm + GatedNorm + PKO/XSA/half-RoPE). *Every* layer here is::
 
-    x = x + attn(x)
-    x = x + routed_moe(x) + shared_expert(x)
+    x = x + attn(norm_attn(x))
+    x = x + routed_moe(norm_mlp(x)) + shared_expert(norm_mlp(x))
 
-with **no normalization**. The shared expert is a SwiGLU FFN at width
+with learnable-gain :class:`RMSNorm` pre-attention and pre-MLP, plus an input norm
+(after the embedding) and an output norm (before the LM head). The shared expert is a SwiGLU FFN at width
 ``hidden_dim`` (grug's :class:`~experiments.grug.moe.model.DenseMLP`); the routed
 component is grug's QB-routed :class:`~experiments.grug.moe.model.MoEMLP` picking
 ``num_experts_per_token`` of ``num_experts`` (e.g. 4 of 64). Shared and routed
@@ -42,6 +43,7 @@ from experiments.grug.moe.model import (
     DenseMLP,
     GrugModelConfig,
     MoEMLP,
+    RMSNorm,
     _batch_spec,
     _init_weight,
 )
@@ -68,15 +70,18 @@ def shared_expert_intermediate(cfg: GrugModelConfig) -> int:
 
 
 class MoeMidBlock(eqx.Module):
-    """Residual attention + (routed MoE + shared SwiGLU expert), no norms.
+    """Residual (pre-norm attention) + (pre-norm routed MoE + shared SwiGLU expert).
 
     Reuses ``model_basic``'s :class:`BasicAttention`, grug's :class:`MoEMLP` (routed,
-    top-(K+1) QB gating, ragged-dot dispatch), and grug's :class:`DenseMLP` (SwiGLU
-    shared expert). Forward-only QB: the router bias stays zero and the returned
-    router stats are discarded.
+    top-(K+1) QB gating, ragged-dot dispatch), grug's :class:`DenseMLP` (SwiGLU shared
+    expert), and grug's learnable-gain :class:`RMSNorm` applied pre-attention and
+    pre-MLP. Forward-only QB: the router bias stays zero and the returned router stats
+    are discarded.
     """
 
     attn: BasicAttention
+    norm_attn: RMSNorm
+    norm_mlp: RMSNorm
     shared: DenseMLP
     moe: MoEMLP
 
@@ -92,13 +97,20 @@ class MoeMidBlock(eqx.Module):
         router = reshard(_init_weight(router_key, moe.router.shape, embed_router_std(cfg)), P(None, None))
         moe = eqx.tree_at(lambda m: m.router, moe, router)
         shared = DenseMLP.init(cfg.hidden_dim, shared_expert_intermediate(cfg), cfg.initializer_std, key=shared_key)
-        return MoeMidBlock(attn=BasicAttention.init(cfg, key=attn_key), shared=shared, moe=moe)
+        return MoeMidBlock(
+            attn=BasicAttention.init(cfg, key=attn_key),
+            norm_attn=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
+            norm_mlp=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
+            shared=shared,
+            moe=moe,
+        )
 
     @named_call
     def __call__(self, x: Float[Array, "B S D"], mask: AttentionMask | jax.Array) -> Float[Array, "B S D"]:
-        x = x + self.attn(x, mask)
-        moe_out, _router_stats = self.moe(x)  # forward-only QB routing; stats unused
-        shared_out = self.shared(x, activation=ActivationFunctionEnum.silu)
+        x = x + self.attn(self.norm_attn(x), mask)
+        mlp_in = self.norm_mlp(x)
+        moe_out, _router_stats = self.moe(mlp_in)  # forward-only QB routing; stats unused
+        shared_out = self.shared(mlp_in, activation=ActivationFunctionEnum.silu)
         return x + moe_out + shared_out
 
 
@@ -112,6 +124,8 @@ class Transformer(eqx.Module):
 
     token_embed: Float[Array, "V D"]
     output_proj: Float[Array, "D V"]
+    norm_input: RMSNorm
+    norm_output: RMSNorm
     blocks: tuple[MoeMidBlock, ...] | MoeMidBlock
     config: GrugModelConfig = eqx.field(static=True)
 
@@ -132,7 +146,14 @@ class Transformer(eqx.Module):
             blocks = jax.tree_util.tree_map(lambda *leaves: jnp.stack(leaves), *block_list)
         else:
             blocks = tuple(block_list)
-        return Transformer(token_embed=token_embed, output_proj=output_proj, blocks=blocks, config=cfg)
+        return Transformer(
+            token_embed=token_embed,
+            output_proj=output_proj,
+            norm_input=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
+            norm_output=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
+            blocks=blocks,
+            config=cfg,
+        )
 
     @property
     def Vocab(self) -> Axis:
@@ -154,7 +175,7 @@ class Transformer(eqx.Module):
     ) -> Float[Array, "B S D"]:
         if mask is None:
             mask = AttentionMask.causal()
-        hidden = self.token_embed.at[token_ids].get(out_sharding=_batch_spec())
+        hidden = self.norm_input(self.token_embed.at[token_ids].get(out_sharding=_batch_spec()))
         base_remat = self.config.remat_mode != "none"
         policy = remat_policy()
         # Every block is MoE: save the tagged dispatch tensors (save_moe) only when asked,
@@ -174,30 +195,29 @@ class Transformer(eqx.Module):
                 # Checkpoint every layer (full remat) — the safe minimum-memory path.
                 step = eqx.filter_checkpoint(run_layer, policy=block_policy) if base_remat else run_layer
                 hidden, _ = jax.lax.scan(step, hidden, block_params)
-                return hidden
+            else:
+                # Nested scan: checkpoint every `group` layers. The inner scan runs the group
+                # (activations kept within it); the outer body is checkpointed so only the
+                # group input is stacked -> fewer recomputes than per-layer full remat.
+                if self.config.num_layers % group != 0:
+                    raise ValueError(f"SCALE_SCAN_CHUNK={group} must divide num_layers={self.config.num_layers}")
+                grouped = jax.tree_util.tree_map(
+                    lambda x: x.reshape(self.config.num_layers // group, group, *x.shape[1:]), block_params
+                )
 
-            # Nested scan: checkpoint every `group` layers. The inner scan runs the group
-            # (activations kept within it); the outer body is checkpointed so only the
-            # group input is stacked -> fewer recomputes than per-layer full remat.
-            if self.config.num_layers % group != 0:
-                raise ValueError(f"SCALE_SCAN_CHUNK={group} must divide num_layers={self.config.num_layers}")
-            grouped = jax.tree_util.tree_map(
-                lambda x: x.reshape(self.config.num_layers // group, group, *x.shape[1:]), block_params
-            )
+                def run_group(carry, group_params):
+                    out, _ = jax.lax.scan(run_layer, carry, group_params)
+                    return out, None
 
-            def run_group(carry, group_params):
-                out, _ = jax.lax.scan(run_layer, carry, group_params)
-                return out, None
+                step = eqx.filter_checkpoint(run_group, policy=block_policy) if base_remat else run_group
+                hidden, _ = jax.lax.scan(step, hidden, grouped)
+        else:
+            every_k = remat_every_k()
+            for i, block in enumerate(self.blocks):
+                do_remat = (i % every_k == 0) if every_k > 0 else base_remat
+                hidden = (eqx.filter_checkpoint(block, policy=block_policy) if do_remat else block)(hidden, mask)
 
-            step = eqx.filter_checkpoint(run_group, policy=block_policy) if base_remat else run_group
-            hidden, _ = jax.lax.scan(step, hidden, grouped)
-            return hidden
-
-        every_k = remat_every_k()
-        for i, block in enumerate(self.blocks):
-            do_remat = (i % every_k == 0) if every_k > 0 else base_remat
-            hidden = (eqx.filter_checkpoint(block, policy=block_policy) if do_remat else block)(hidden, mask)
-        return hidden
+        return self.norm_output(hidden)
 
     @named_call
     def logits(

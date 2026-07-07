@@ -134,7 +134,9 @@ class GrugMuonConfig(MuonConfig):
             # bias/scalar (<2D) use AdamW.
             if not hasattr(param, "ndim") or param.ndim < 2:
                 return "adamw"
-            if any(k in path_lower for k in ("embed", "lm_head", "output", "router")):
+            # RMSNorm/LayerNorm gains are per-dimension scales, not orthogonalizable matrices
+            # (they stack to 2D under scan), so keep them on AdamW alongside embed/head/router.
+            if any(k in path_lower for k in ("embed", "lm_head", "output", "router", "norm")):
                 return "adamw"
             return "muon"
 
