@@ -3,6 +3,7 @@
 
 import math
 from contextlib import ExitStack
+from typing import NamedTuple
 
 import equinox
 import equinox as eqx
@@ -529,7 +530,18 @@ def _skip_unless_fa4_gpu():
     pytest.importorskip("flash_attn.cute.flash_bwd_preprocess", reason="flash-attn-4 is required for FA4 backward")
 
 
-def _fa4_test_qkv(q_heads_per_group: int, head_dim: int, seq_len: int = 256):
+class _Fa4TestData(NamedTuple):
+    B: Axis
+    QPos: Axis
+    KPos: Axis
+    D: Axis
+    q: hax.NamedArray
+    k: hax.NamedArray
+    v: hax.NamedArray
+    cotangent: hax.NamedArray
+
+
+def _fa4_test_qkv(q_heads_per_group: int, head_dim: int, seq_len: int = 256) -> _Fa4TestData:
     B = hax.Axis("batch", 2)
     QPos = hax.Axis("position", seq_len)
     KPos = hax.Axis("key_position", seq_len)
@@ -543,7 +555,7 @@ def _fa4_test_qkv(q_heads_per_group: int, head_dim: int, seq_len: int = 256):
     k = hax.random.normal(keys[1], (B, Head, KPos, D)).astype(jnp.bfloat16)
     v = hax.random.normal(keys[2], (B, Head, KPos, D)).astype(jnp.bfloat16)
     cotangent = hax.random.normal(keys[3], q_axes).astype(jnp.float32)
-    return B, QPos, KPos, D, q, k, v, cotangent
+    return _Fa4TestData(B, QPos, KPos, D, q, k, v, cotangent)
 
 
 def _assert_fa4_matches_reference(QPos, KPos, D, q, k, v, mask, cotangent, *, fa4_backend=AttentionBackend.FA4):
@@ -590,15 +602,15 @@ def _assert_fa4_matches_reference(QPos, KPos, D, q, k, v, mask, cotangent, *, fa
 def test_fa4_dense_attention_matches_reference(q_heads_per_group, head_dim, packed, sliding_window):
     _skip_unless_fa4_gpu()
 
-    B, QPos, KPos, D, q, k, v, cotangent = _fa4_test_qkv(q_heads_per_group, head_dim)
+    data = _fa4_test_qkv(q_heads_per_group, head_dim)
     mask = AttentionMask.causal(sliding_window=sliding_window)
     if packed:
         # 4 packed segments per row
-        segment_ids = jnp.repeat(jnp.arange(4, dtype=jnp.int32), QPos.size // 4)
-        segment_ids = jnp.broadcast_to(segment_ids[None, :], (B.size, QPos.size))
-        mask = mask.with_segment_ids(hax.named(segment_ids, (B, QPos)))
+        segment_ids = jnp.repeat(jnp.arange(4, dtype=jnp.int32), data.QPos.size // 4)
+        segment_ids = jnp.broadcast_to(segment_ids[None, :], (data.B.size, data.QPos.size))
+        mask = mask.with_segment_ids(hax.named(segment_ids, (data.B, data.QPos)))
 
-    _assert_fa4_matches_reference(QPos, KPos, D, q, k, v, mask, cotangent)
+    _assert_fa4_matches_reference(data.QPos, data.KPos, data.D, data.q, data.k, data.v, mask, data.cotangent)
 
 
 def test_fa4_is_gpu_default_and_matches_reference():
@@ -606,18 +618,28 @@ def test_fa4_is_gpu_default_and_matches_reference():
     _skip_unless_fa4_gpu()
     assert default_attention_type() == AttentionBackend.FA4
 
-    B, QPos, KPos, D, q, k, v, cotangent = _fa4_test_qkv(q_heads_per_group=2, head_dim=128)
+    data = _fa4_test_qkv(q_heads_per_group=2, head_dim=128)
     mask = AttentionMask.causal()
-    _assert_fa4_matches_reference(QPos, KPos, D, q, k, v, mask, cotangent, fa4_backend=AttentionBackend.DEFAULT)
+    _assert_fa4_matches_reference(
+        data.QPos,
+        data.KPos,
+        data.D,
+        data.q,
+        data.k,
+        data.v,
+        mask,
+        data.cotangent,
+        fa4_backend=AttentionBackend.DEFAULT,
+    )
 
 
 def test_fa4_dense_attention_under_mesh_matches_reference():
     _skip_unless_fa4_gpu()
 
-    B, QPos, KPos, D, q, k, v, cotangent = _fa4_test_qkv(q_heads_per_group=2, head_dim=64)
+    data = _fa4_test_qkv(q_heads_per_group=2, head_dim=64)
     mask = AttentionMask.causal()
     with use_test_mesh():
-        _assert_fa4_matches_reference(QPos, KPos, D, q, k, v, mask, cotangent)
+        _assert_fa4_matches_reference(data.QPos, data.KPos, data.D, data.q, data.k, data.v, mask, data.cotangent)
 
 
 @pytest.mark.parametrize(
@@ -632,10 +654,12 @@ def test_fa4_forced_backend_raises_on_unsupported_config(unsupported_kwargs):
     """Explicitly requesting attn_backend=fa4 must raise rather than silently fall back."""
     _skip_unless_fa4_gpu()
 
-    _, QPos, KPos, D, q, k, v, _ = _fa4_test_qkv(q_heads_per_group=1, head_dim=64)
+    data = _fa4_test_qkv(q_heads_per_group=1, head_dim=64)
     kwargs = {"mask": AttentionMask.causal(), **unsupported_kwargs}
     with pytest.raises(NotImplementedError):
-        dot_product_attention(QPos, KPos, D, q, k, v, attn_backend=AttentionBackend.FA4, **kwargs)
+        dot_product_attention(
+            data.QPos, data.KPos, data.D, data.q, data.k, data.v, attn_backend=AttentionBackend.FA4, **kwargs
+        )
 
 
 @pytest.mark.parametrize("impl", ["default", "jax_flash", "vanilla"])
