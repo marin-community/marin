@@ -614,7 +614,7 @@ def test_fa4_dense_attention_matches_reference(q_heads_per_group, head_dim, pack
 
 
 def test_fa4_is_gpu_default_and_matches_reference():
-    """Regression for #7013: the GPU default backend must be fused and actually installed."""
+    """The GPU default backend must be a fused kernel that is actually installed."""
     _skip_unless_fa4_gpu()
     assert default_attention_type() == AttentionBackend.FA4
 

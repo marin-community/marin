@@ -155,14 +155,10 @@ def _self_attention_lower_bounds(
 ) -> tuple[Int[Array, "B S"], Bool[Array, "B S"]]:
     mask = _validate_causal_self_attention(q, k, mask, backend_name=backend_name)
     if mask.segment_ids is None:
-        return _simple_causal_lower_bounds(
-            batch_size=q.shape[0],
-            seq_len=q.shape[1],
-            sliding_window=mask.sliding_window,
-        )
-
-    q_segment_ids = _packed_self_attention_segment_ids(q, k, mask, backend_name=backend_name)
-    return _packed_segment_causal_lower_bounds(
+        q_segment_ids = None
+    else:
+        q_segment_ids = _packed_self_attention_segment_ids(q, k, mask, backend_name=backend_name)
+    return causal_self_attention_lower_bounds(
         q_segment_ids,
         batch_size=q.shape[0],
         seq_len=q.shape[1],
