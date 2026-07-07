@@ -20,6 +20,7 @@ import dataclasses
 import functools
 import getpass
 import json
+import logging
 import os
 import re
 import subprocess
@@ -28,6 +29,8 @@ import threading
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 LAUNCH_PROVENANCE_ENV = "MARIN_PROVENANCE"
 """Env var carrying the launch's :class:`Provenance` as JSON.
@@ -102,7 +105,7 @@ class Provenance:
             try:
                 return cls.from_json(raw)
             except (json.JSONDecodeError, KeyError, TypeError):
-                pass
+                logger.warning("Ignoring malformed %s value: %r", LAUNCH_PROVENANCE_ENV, raw)
 
         cwd = str(repo_dir) if repo_dir is not None else None
 
@@ -165,17 +168,14 @@ def _capture_once() -> Provenance:
     return Provenance.capture()
 
 
+# functools.cache does not serialize concurrent first calls, and two concurrent
+# `git stash create` runs race on the repo's index.lock — the loser silently stamps
+# a dirty tree as clean HEAD. The lock makes the cache-filling capture exclusive.
 _capture_lock = threading.Lock()
 
 
 def launch_provenance() -> Provenance:
-    """The current launch's provenance, captured once per process.
-
-    Provenance is constant within a launch, so capture it once: callers stamping many
-    artifacts from worker threads would otherwise repeat the git shell-outs and race on the
-    repo's ``index.lock`` (``git stash create``). The lock serializes the first,
-    cache-filling call.
-    """
+    """The current launch's provenance, captured once per process (thread-safe)."""
     with _capture_lock:
         return _capture_once()
 
