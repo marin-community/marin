@@ -487,7 +487,7 @@ class Checkpointer:
                 raise ValueError("Step policies must be sorted by 'until' value")
 
         # The default of 5 minutes is too short even for modestly sized models for some reason
-        self._manager = GlobalAsyncCheckpointManager(timeout_secs=60 * 30)
+        self._manager = GlobalAsyncCheckpointManager(timeout_secs=60 * 120)
 
         if jax.process_index() == 0:
             self._async_checkpoint_remover_queue: queue.Queue[str] = queue.Queue(maxsize=-1)
