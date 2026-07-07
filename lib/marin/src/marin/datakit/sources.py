@@ -42,6 +42,7 @@ from marin.datakit.download.numinamath_v1_5 import numinamath_v1_5_normalize_ste
 from marin.datakit.download.starcoder2_extras import starcoder2_extras_normalize_steps
 from marin.datakit.download.superior_reasoning import superior_reasoning_normalize_steps
 from marin.datakit.download.svgfind import svgfind_creativecommons_normalize_steps
+from marin.datakit.download.swe_rebench_contree import swe_rebench_contree_normalize_steps
 from marin.datakit.download.swe_rebench_openhands import swe_rebench_openhands_normalize_steps
 from marin.datakit.download.swe_zero_12m import swe_zero_12m_normalize_steps
 from marin.datakit.download.synthetic1 import synthetic1_normalize_steps
@@ -155,6 +156,7 @@ def all_sources() -> dict[str, DatakitSource]:
         ("numinamath-tir", numinamath_tir_normalize_steps, 0.08),
         ("superior-reasoning", superior_reasoning_normalize_steps, 7.08),
         ("svg", svgfind_creativecommons_normalize_steps, 8.95),
+        ("swe-rebench-contree", swe_rebench_contree_normalize_steps, 182.60),
         ("swe-rebench-openhands", swe_rebench_openhands_normalize_steps, 2.47),
         ("swe-zero-12m", swe_zero_12m_normalize_steps, 106.91),
         ("synthetic-1", synthetic1_normalize_steps, 7.32),
