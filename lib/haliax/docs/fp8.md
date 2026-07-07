@@ -163,9 +163,14 @@ information on how it works.
 
 !!! warning "Experimental — scientific validation required before training use"
 
-    `ragged_dot` FP8 is opt-in and uses an **approximate backward**.  bf16 remains
-    the training default.  Validate loss curves and gradient norms before using FP8
-    in a production training run.
+    `ragged_dot` FP8 is opt-in and uses an **approximate backward**: the output
+    gradient is quantized to E4M3 rather than the numerically correct E5M2,
+    because stock jaxlib's Mosaic `wgmma` cannot mix operand dtypes (see
+    [the caveat below](#approximate-same-dtype-backward-caveat); blocked on
+    [jax-ml/jax#38859](https://github.com/jax-ml/jax/pull/38859) — drop this
+    warning when the pinned jaxlib includes it).  bf16 remains the training
+    default.  Validate loss curves and gradient norms before using FP8 in a
+    production training run.
 
 Haliax supports FP8 for the expert-grouped matmul in Mixture-of-Experts layers via
 [haliax.nn.ragged_dot][].  This is distinct from the dense `Fp8DotGeneralOp` (above):
@@ -198,12 +203,11 @@ byte-for-byte identical on all backends (GPU Triton / TPU Megablox / XLA).
 
 ### Delayed per-tensor scaling
 
-`Fp8RaggedDotOp` uses TE-style delayed per-tensor scaling for the activation (lhs),
-expert weight (rhs), and output gradient.  Each carries a `scale` and
-`amax_history` that update automatically through the custom VJP as
-`OverwriteWithGradient` cotangents — they thread through
-`partition_for_grad_overwrite` / `apply_updates` and stay out of the
-optimizer/EMA state.  No explicit scale management is required.
+`Fp8RaggedDotOp` carries the same delayed-scaling state as
+[haliax.quantization.Fp8DotGeneralOp][] — a `scale` and `amax_history` per
+tensor (activation, expert weight, and output gradient), updated through the
+gradient hijack described in [How FP8 works](#how-fp8-works) above — and shares
+the same scaling-recipe helpers, so the two ops quantize identically.
 
 ### Approximate same-dtype backward (caveat)
 
@@ -216,16 +220,15 @@ and can distort large-magnitude output gradients.  The genuine mixed
 `e5m2 x e4m3` backward is a deferred follow-up.  Gradient relative-Frobenius error
 at the operating point is < 6e-2 (within the accepted FP8 tolerance).
 
-### Performance (H100, d2560 grug-MoE operating point)
+### Performance (H100, d=2560 MoE operating point)
 
 Operating point: w13 shape, E_local=64, 1024 tokens/expert (non-uniform groups).
 Measured fwd+bwd speedup vs the bf16 Triton baseline, with a throughput timer
-(enqueue N calls, block once — representative of a pipelined training step):
-**1.35×** at the operating point, **1.20×** at the w2 (down-projection) point
-(**1.38×** / **1.23×** at the EP4 per-device batch of 1280 tokens/expert).
-Per-call latency timing (sync after every call) reports lower speedups because
-the added sync penalizes FP8's extra kernel launches; training runs see the
-throughput number.  See `lib/haliax/bench/bench_fp8_ragged_dot.py` for the full
+(enqueue N calls, block once — representative of a pipelined training step;
+a per-call sync would penalize FP8's extra kernel launches and understate what
+a training run sees): **1.35×** at the operating point, **1.20×** at the w2
+(down-projection) point (**1.38×** / **1.23×** at the EP4 per-device batch of
+1280 tokens/expert).  See `lib/haliax/bench/bench_fp8_ragged_dot.py` for the full
 sweep (E_local ∈ {16,32,64}, tokens/expert ∈ {512,1024,2048,4096}, w13 and w2
 shapes).
 

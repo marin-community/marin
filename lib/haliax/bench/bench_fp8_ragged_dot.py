@@ -4,38 +4,27 @@
 # SPDX-License-Identifier: Apache-2.0
 """Microbenchmark: FP8 ``ragged_dot`` (MoE grouped matmul) vs the bf16 Triton baseline.
 
-Run on the H100 dev pod::
+Run on an H100 machine with a GPU-enabled JAX environment::
 
-    ./h100 python lib/haliax/bench/bench_fp8_ragged_dot.py
-    ./h100 python lib/haliax/bench/bench_fp8_ragged_dot.py --iters 30
+    python lib/haliax/bench/bench_fp8_ragged_dot.py
+    python lib/haliax/bench/bench_fp8_ragged_dot.py --iters 30
 
-Reports, for the realistic d2560 grug-MoE expert GEMMs across a sweep of
-``E_local`` and ``tokens_per_expert``, both w13 and w2 gate+up / down shapes:
+Reports, for realistic MoE expert GEMMs (hidden 2560, intermediate 1280) across
+a sweep of ``E_local`` and ``tokens_per_expert``, both w13 and w2 gate+up / down
+shapes:
 
   * forward TFLOP/s and fp8/bf16 speedup,
-  * end-to-end fwd+bwd throughput speedup and latency speedup (see methodology below),
+  * end-to-end fwd+bwd throughput speedup,
   * forward relative-Frobenius error of the FP8 path vs the bf16 baseline.
 
 Baseline is ``haliax.nn.ragged_dot(..., implementation="triton")`` in bf16.
 
-## Timing methodology — two numbers
-
-Two valid measurement methodologies give different numbers for the same JIT'd
-``value_and_grad`` fwd+bwd call:
-
-**Throughput** (``time_throughput_ms``): enqueue N calls, ``block_until_ready`` once.
-Representative of a real pipelined training step where the host enqueues multiple
-XLA operations ahead of the device and the runtime overlaps host and device work.
-
-**Per-call latency** (``time_latency_ms``): ``block_until_ready`` after every call.
-The artificial per-step device sync penalizes FP8's higher kernel-launch count
-(the fused cast-transpose kernel + the extra delayed-scaling update), so this
-timer reports a lower speedup.
-
-This harness is the perf acceptance gate for the FP8 ragged path (wall-clock
-speedup assertions do not belong in the pytest suite); the speedup target was
-defined against the throughput timer.  Both numbers are legitimate; training
-runs see the throughput number.
+Timing methodology: the throughput timer enqueues N ``value_and_grad`` calls and
+``block_until_ready``s once, representing a pipelined training step where the
+host runs ahead of the device.  (A per-call sync would add an artificial stall
+per step that penalizes FP8's higher kernel-launch count and understates the
+speedup a training run sees.)  This harness is the perf acceptance gate for the
+FP8 ragged path; wall-clock speedup assertions do not belong in the pytest suite.
 """
 
 import argparse
@@ -46,7 +35,7 @@ import jax
 import jax.numpy as jnp
 from haliax.quantization import Fp8RaggedDotOp, apply_updates, partition_for_grad_overwrite
 
-# d2560 grug MoE: hidden D=2560, intermediate F=1280.  Per-device expert GEMMs:
+# MoE with hidden D=2560, intermediate F=1280.  Per-device expert GEMMs:
 #   w13 (gate+up): lhs[T, 2560] x rhs[E, 2560, 2560]  (out 2F = 2560)
 #   w2  (down):    lhs[T, 1280] x rhs[E, 1280, 2560]
 SHAPES = {"w13": (2560, 2560), "w2": (1280, 2560)}
@@ -92,24 +81,6 @@ def time_throughput_ms(fn, *args, iters=30, warmup=5):
     return (time.perf_counter() - t0) / iters * 1e3
 
 
-def time_latency_ms(fn, *args, iters=30, warmup=5):
-    """Per-call latency timer: block after every call.
-
-    Adds an artificial device sync per step; penalizes paths with more kernel
-    launches.  Reported for transparency but the acceptance gate uses throughput.
-    """
-    jfn = jax.jit(fn)
-    jax.block_until_ready(jfn(*args))
-    for _ in range(warmup):
-        jax.block_until_ready(jfn(*args))
-    total = 0.0
-    for _ in range(iters):
-        t0 = time.perf_counter()
-        jax.block_until_ready(jfn(*args))
-        total += time.perf_counter() - t0
-    return total / iters * 1e3
-
-
 def relfrob(a, b):
     a = a.astype(jnp.float32)
     b = b.astype(jnp.float32)
@@ -153,10 +124,8 @@ def bench_config(e, tpe, k, n, iters):
     flops_fwd = 2 * (e * tpe) * k * n
     f8 = time_throughput_ms(fp8_fwd, lhs, rhs, group_sizes, iters=iters)
     bf = time_throughput_ms(bf16_fwd, lhs, rhs, group_sizes, iters=iters)
-    f8_fb_tput = time_throughput_ms(fp8_fb, lhs, rhs, iters=iters)
-    bf_fb_tput = time_throughput_ms(bf16_fb, lhs, rhs, iters=iters)
-    f8_fb_lat = time_latency_ms(fp8_fb, lhs, rhs, iters=iters)
-    bf_fb_lat = time_latency_ms(bf16_fb, lhs, rhs, iters=iters)
+    f8_fb = time_throughput_ms(fp8_fb, lhs, rhs, iters=iters)
+    bf_fb = time_throughput_ms(bf16_fb, lhs, rhs, iters=iters)
 
     out_fp8 = jax.jit(fp8_fwd)(lhs, rhs, group_sizes)
     out_bf16 = jax.jit(bf16_fwd)(lhs, rhs, group_sizes)
@@ -168,8 +137,7 @@ def bench_config(e, tpe, k, n, iters):
         "fp8_tflops": flops_fwd / (f8 * 1e-3) / 1e12,
         "bf16_tflops": flops_fwd / (bf * 1e-3) / 1e12,
         "fwd_speedup": bf / f8,
-        "fwd_bwd_tput_speedup": bf_fb_tput / f8_fb_tput,
-        "fwd_bwd_lat_speedup": bf_fb_lat / f8_fb_lat,
+        "fwd_bwd_speedup": bf_fb / f8_fb,
         "relfrob": err,
     }
 
@@ -193,7 +161,7 @@ def main():
     header = (
         f"{'shape':5s} {'E':>3s} {'tok/E':>6s} {'K':>5s} {'N':>5s} "
         f"{'fp8 TF':>7s} {'bf16 TF':>7s} {'fwd x':>6s} "
-        f"{'fb(tput)x':>9s} {'fb(lat)x':>8s} {'relfrob':>9s}"
+        f"{'fwd+bwd x':>9s} {'relfrob':>9s}"
     )
     print(header)
     print("-" * len(header))
@@ -212,7 +180,7 @@ def main():
                 f"{name:5s} {e:3d} {tpe:6d} {k:5d} {n:5d} "
                 f"{r['fp8_tflops']:7.0f} {r['bf16_tflops']:7.0f} "
                 f"{r['fwd_speedup']:6.2f} "
-                f"{r['fwd_bwd_tput_speedup']:9.2f} {r['fwd_bwd_lat_speedup']:8.2f} "
+                f"{r['fwd_bwd_speedup']:9.2f} "
                 f"{r['relfrob']:9.2e}{star}"
             )
         except Exception as exc:  # surface OOM/compile failures inline
