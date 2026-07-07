@@ -61,6 +61,7 @@ from marin.experiment.data import mixture
 from marin.experiment.namespacing import user_namespaced_name
 from marin.training.training import LevanterCheckpoint
 
+from experiments.grug.moe.heuristic import MoeHeuristic
 from experiments.grug.moe.launch import GrugMoeLaunchConfig, env_int, run_grug_moe_trial, slimpajama_6b_dataset
 from experiments.grug.moe.model import GrugModelConfig, RematMode
 from experiments.grug.moe.optimizer import GrugMoeAdamHConfig, GrugMoeMuonHConfig
@@ -216,6 +217,13 @@ def build_scale_checkpoint(*, version: str | None = None) -> ArtifactStep[Levant
     optimizer: OptimizerConfig
     if opt_name in ("muon", "grug_muon"):
         optimizer = GrugMuonConfig(learning_rate=lr, adam_lr=lr)
+    elif opt_name in ("muonh_heuristic", "muonh_heur"):
+        # May Recipe compute-scaling heuristic sets LR/beta/epsilon from tokens & dim,
+        # with warmup=0.01 (1pct) and min_lr_ratio=0.05, noclip.
+        total_tokens = float(steps * batch_size * model.max_seq_len)
+        optimizer = MoeHeuristic(min_lr_ratio=0.05).build_optimizer_config(
+            batch_size=batch_size, tokens=total_tokens, hidden_dim=model.hidden_dim, seq_len=model.max_seq_len
+        )
     elif opt_name in ("muonh", "grug_moe_muonh"):
         optimizer = GrugMoeMuonHConfig(learning_rate=lr, adam_lr=lr)
     elif opt_name in ("adamh", "grug_moe_adamh"):
