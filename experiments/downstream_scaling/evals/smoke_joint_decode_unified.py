@@ -16,15 +16,26 @@ Run on a TPU worker with the Marin vllm extra available, for example:
 With the default budget of max_model_len + max_microbatch_size, the
 coordinator admits one request per decision round, so the run exercises the
 admission ramp as well as steady-state paired decode.
+
+Asymmetric --max-tokens-a/--max-tokens-b exercises force-stop: the side with
+the larger budget must be stopped by the coordinator when its peer finishes
+first (the run asserts side A never finishes with reason "length" when its
+budget is the larger one). --hold-every N exercises multi-token holds: every
+Nth selection returns a doubled token, so the scheduler holds the
+single-token rids via held_request_ids while the doubled rids drain their
+pending queue.
 """
 
 from __future__ import annotations
 
 import argparse
 import logging
+import random
 import tempfile
+from typing import Any
 
 from joint_decode.config import JointDecodeSamplingConfig
+from joint_decode.coordinator import SelectTokens
 from joint_decode.selection import select_top_rank
 from joint_decode.tpu.config import JointDecodeConfig, JointDecodeModelConfig
 from joint_decode.tpu.decoder import run_joint_decode
@@ -40,6 +51,27 @@ PROMPTS = [
 ]
 
 
+def make_hold_selector(period: int) -> SelectTokens:
+    """Wrap select_top_rank so every `period`-th selection returns a doubled
+    token, creating ragged pending-token state that engages held_request_ids."""
+    calls = 0
+
+    def select(
+        a_topk: list[dict[str, Any]],
+        b_topk: list[dict[str, Any]],
+        *,
+        rng: random.Random,
+    ) -> int | tuple[list[int], list[int]]:
+        nonlocal calls
+        calls += 1
+        token = select_top_rank(a_topk, b_topk, rng=rng)
+        if calls % period:
+            return token
+        return [token, token], [token, token]
+
+    return select
+
+
 def main() -> None:
     logging.basicConfig(level=logging.INFO)
     parser = argparse.ArgumentParser()
@@ -48,7 +80,9 @@ def main() -> None:
     parser.add_argument("--chip-a", type=int, default=0)
     parser.add_argument("--chip-b", type=int, default=1)
     parser.add_argument("--max-model-len", type=int, default=512)
-    parser.add_argument("--max-tokens", type=int, default=32)
+    parser.add_argument("--max-tokens-a", type=int, default=32)
+    parser.add_argument("--max-tokens-b", type=int, default=32)
+    parser.add_argument("--hold-every", type=int, default=0)
     parser.add_argument("--max-microbatch-size", type=int, default=4)
     parser.add_argument("--max-num-batched-tokens", type=int, default=None)
     parser.add_argument("--top-k", type=int, default=8)
@@ -77,8 +111,8 @@ def main() -> None:
             model_a=model_config(args.model_a, args.chip_a),
             model_b=model_config(args.model_b, args.chip_b),
             sampling=JointDecodeSamplingConfig(
-                max_tokens_a=args.max_tokens,
-                max_tokens_b=args.max_tokens,
+                max_tokens_a=args.max_tokens_a,
+                max_tokens_b=args.max_tokens_b,
                 top_k_a=args.top_k,
                 top_k_b=args.top_k,
                 barrier_timeout_s=args.barrier_timeout_s,
@@ -89,12 +123,19 @@ def main() -> None:
             ),
             cache_dir=cache_dir,
         )
-        outputs = run_joint_decode(config, PROMPTS, PROMPTS, select_token=select_top_rank)
+        select_token = make_hold_selector(args.hold_every) if args.hold_every else select_top_rank
+        outputs = run_joint_decode(config, PROMPTS, PROMPTS, select_token=select_token)
 
     for prompt, output in zip(PROMPTS, outputs, strict=True):
         logger.info("prompt=%r finish=%s completion=%r", prompt, output.finish_reason, output.text)
     assert len(outputs) == len(PROMPTS)
     assert all(output.text for output in outputs)
+    if args.max_tokens_b < args.max_tokens_a:
+        # Side B finishes by length first; the coordinator must force-stop
+        # side A's rows, so A can never exhaust its own (larger) budget.
+        assert not any(
+            output.finish_reason == "length" for output in outputs
+        ), "side A finished by length; force-stop never fired"
     logger.info("joint-decode unified TPU smoke passed: %d completions", len(outputs))
 
 
