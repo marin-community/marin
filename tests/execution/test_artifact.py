@@ -16,6 +16,7 @@ import pytest
 from marin.execution.artifact import (
     Artifact,
     FingerprintMismatchError,
+    StepRecordIdentity,
     read_artifact,
     read_record,
     write_artifact,
@@ -280,13 +281,15 @@ def test_write_step_record_roundtrips_identity_and_payload(tmp_path):
     stamps best-effort provenance without failing when git is unavailable."""
     out = tmp_path.as_posix()
     write_step_record(
-        name="child",
+        StepRecordIdentity(
+            name="child",
+            deps=["parent_ab12cd34"],
+            dep_paths=[f"{out}/normalize"],
+            config={"tokenizer": "gpt2"},
+            fingerprint_payload="fp-json",
+        ),
         output_path=out,
-        deps=["parent_ab12cd34"],
-        dep_paths=[f"{out}/normalize"],
-        config={"tokenizer": "gpt2"},
         result=_Meta(path=out, n=7),
-        fingerprint_payload="fp-json",
     )
 
     rec = read_record(out)
@@ -304,7 +307,8 @@ def test_write_step_record_roundtrips_identity_and_payload(tmp_path):
 def test_write_step_record_tolerates_none_result(tmp_path):
     """A side-effect step (fn returns None) records identity + lineage with a null payload."""
     out = tmp_path.as_posix()
-    write_step_record(name="train", output_path=out, deps=[], dep_paths=[], config={"seed": 42}, result=None)
+    identity = StepRecordIdentity(name="train", deps=[], dep_paths=[], config={"seed": 42})
+    write_step_record(identity, output_path=out, result=None)
 
     rec = read_record(out)
     assert rec is not None

@@ -24,7 +24,7 @@ import functools
 import json
 import logging
 import threading
-from dataclasses import asdict, is_dataclass
+from dataclasses import asdict, dataclass, is_dataclass
 from typing import Self, TypeVar, cast
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -318,34 +318,40 @@ def _best_effort_provenance() -> Provenance:
         return _capture_provenance_once()
 
 
-def write_step_record(
-    *,
-    name: str,
-    output_path: str,
-    deps: list[str],
-    dep_paths: list[str],
-    config: dict[str, JSONValue] | None,
-    result: object,
-    fingerprint_payload: str | None = None,
-) -> None:
+@dataclass(frozen=True)
+class StepRecordIdentity:
+    """Identity + lineage of a ``StepRunner`` step, as plain data (no callable) so a remote
+    write site can serialize it into a worker closure."""
+
+    name: str
+    deps: list[str]
+    """Dependency identities, each a ``name_with_hash``."""
+    dep_paths: list[str]
+    """Resolved dependency locations, aligned index-wise with ``deps``."""
+    config: dict[str, JSONValue] | None
+    """The step's ``hash_attrs`` -- its materialized identity params."""
+    fingerprint_payload: str | None = None
+
+
+def write_step_record(identity: StepRecordIdentity, *, output_path: str, result: object) -> None:
     """Persist a ``StepRunner`` step's full record: identity + lineage + payload + provenance.
 
     Unlike :func:`write_artifact` (which records only ``output_path`` + ``result``), this carries
     the ``name``, the dependency identities (``deps`` -- each a ``name_with_hash``) alongside their
     resolved locations (``dep_paths`` -- where each dep's record actually lives, even when the dep
-    overrode its output path), the ``config`` that determined the output (a StepSpec's
-    ``hash_attrs``), and best-effort provenance -- so a produced directory answers "what made me,
-    from what" on its own, walkable recursively through ``dep_paths``.
+    overrode its output path), the ``config`` that determined the output, and best-effort
+    provenance -- so a produced directory answers "what made me, from what" on its own, walkable
+    recursively through ``dep_paths``.
     """
     write_record(
         ArtifactRecord(
-            name=name,
+            name=identity.name,
             output_path=output_path,
-            deps=deps,
-            dep_paths=dep_paths,
-            config=config,
+            deps=identity.deps,
+            dep_paths=identity.dep_paths,
+            config=identity.config,
             result=_payload_json(result) if result is not None else None,
-            fingerprint_payload=fingerprint_payload,
+            fingerprint_payload=identity.fingerprint_payload,
             provenance=_best_effort_provenance(),
         )
     )

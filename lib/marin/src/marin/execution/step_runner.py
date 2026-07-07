@@ -33,6 +33,7 @@ from marin.execution.artifact import (
     FINGERPRINT_KEY,
     STEP_RUNNER_EXECUTOR_VERSION,
     VERSION_KEY,
+    StepRecordIdentity,
     check_drift,
     is_mutable_version,
     write_step_record,
@@ -390,19 +391,15 @@ def check_cache(output_path: str) -> bool:
     return False
 
 
-def _step_record_identity(step: StepSpec) -> dict[str, Any]:
-    """The step's record identity (name, dep refs, config, fingerprint) as a plain dict.
-
-    One mapping for both write sites, and plain/serializable so the remote worker closure
-    captures only this -- never the ``StepSpec`` (which carries ``fn``).
-    """
-    return {
-        "name": step.name,
-        "deps": step.dep_names,
-        "dep_paths": step.dep_paths,
-        "config": step.hash_attrs,
-        "fingerprint_payload": step.fingerprint_payload,
-    }
+def _step_record_identity(step: StepSpec) -> StepRecordIdentity:
+    """The step's record identity, safe to serialize -- never the ``StepSpec``, which carries ``fn``."""
+    return StepRecordIdentity(
+        name=step.name,
+        deps=step.dep_names,
+        dep_paths=step.dep_paths,
+        config=step.hash_attrs,
+        fingerprint_payload=step.fingerprint_payload,
+    )
 
 
 def run_step(step: StepSpec) -> None:
@@ -439,7 +436,7 @@ def run_step(step: StepSpec) -> None:
                     # A lazy step writes its own full record; a plain step's return is saved
                     # with its identity + lineage (name, deps, config) so the output is traceable.
                     if not step.writes_record:
-                        write_step_record(output_path=output_path, result=result, **_step_record_identity(step))
+                        write_step_record(_step_record_identity(step), output_path=output_path, result=result)
                 elapsed = timedelta(seconds=time.monotonic() - t0)
 
                 # 4. Mark success
@@ -467,13 +464,11 @@ def _submit_iris_job(
     :func:`~marin.execution.artifact.write_step_record` inside the submitted job, since Fray
     jobs cannot return values back to the caller.
     """
-    # Extract identity as plain data (not the StepSpec, which carries ``fn``) so the worker
-    # closure serializes only JSON-able fields.
     identity = _step_record_identity(step)
 
     def _fn_with_artifact_save() -> None:
         result = raw_fn(output_path)
-        write_step_record(output_path=output_path, result=result, **identity)
+        write_step_record(identity, output_path=output_path, result=result)
 
     job_name = _sanitize_job_name(f"{step.name_with_hash}-{uuid.uuid4().hex[:8]}")
     dependency_groups = dependency_groups_for_resources(resources, pip_dependency_groups)
