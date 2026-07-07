@@ -23,13 +23,12 @@ their producers (``LevanterCheckpoint`` in ``marin.training.training``, ``Tokeni
 import functools
 import json
 import logging
-import threading
 from dataclasses import asdict, dataclass, is_dataclass
 from typing import Self, TypeVar, cast
 
 from pydantic import BaseModel, ConfigDict, Field
 from rigging.filesystem import marin_prefix, open_url, prefix_join, url_to_fs
-from rigging.provenance import Provenance
+from rigging.provenance import Provenance, launch_provenance
 
 from marin.execution.fingerprint import describe_drift
 from marin.execution.step_spec import StepSpec, _is_relative_path
@@ -297,27 +296,6 @@ def write_artifact(value: object, output_path: str) -> None:
     write_record(ArtifactRecord(output_path=output_path, result=_payload_json(value)))
 
 
-@functools.cache
-def _capture_provenance_once() -> Provenance:
-    return Provenance.capture()
-
-
-_provenance_lock = threading.Lock()
-
-
-def _best_effort_provenance() -> Provenance:
-    """The run's provenance, captured once per process.
-
-    Provenance is constant within a run, so capture it once: the runner writes records from many
-    worker threads, and calling ``capture()`` per step would both repeat the work and race on the
-    repo's ``index.lock`` (``git stash create``) when the driver runs from a real checkout. The
-    lock serializes the first, cache-filling call across those threads. ``capture()`` itself never
-    raises -- git fields degrade to empty outside a checkout or without a ``git`` binary.
-    """
-    with _provenance_lock:
-        return _capture_provenance_once()
-
-
 @dataclass(frozen=True)
 class StepRecordIdentity:
     """Identity + lineage of a ``StepRunner`` step, as plain data (no callable) so a remote
@@ -352,7 +330,7 @@ def write_step_record(identity: StepRecordIdentity, *, output_path: str, result:
             config=identity.config,
             result=_payload_json(result) if result is not None else None,
             fingerprint_payload=identity.fingerprint_payload,
-            provenance=_best_effort_provenance(),
+            provenance=launch_provenance(),
         )
     )
 

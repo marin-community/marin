@@ -17,14 +17,25 @@ outside a checkout — for stamping an artifact built by an arbitrary launch.
 """
 
 import dataclasses
+import functools
 import getpass
 import json
+import os
 import re
 import subprocess
 import sys
+import threading
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+
+LAUNCH_PROVENANCE_ENV = "MARIN_PROVENANCE"
+"""Env var carrying the launch's :class:`Provenance` as JSON.
+
+A submitting client stamps it into a job's environment (see iris
+``EnvironmentSpec.to_proto``), so a process running from a ``.git``-less bundle inherits the
+submission's provenance — :meth:`Provenance.capture` prefers it over shelling out to git.
+"""
 
 
 @dataclass(frozen=True)
@@ -79,10 +90,20 @@ class Provenance:
         """Best-effort provenance of the current launch: git context plus the origin
         remote, capture time, and argv.
 
-        Tolerant: every git field degrades to empty/``None`` outside a checkout or when
-        the ``git`` binary is absent, so it never raises. Use to stamp an artifact built
-        by an arbitrary run.
+        Prefers the provenance published in ``MARIN_PROVENANCE`` (stamped by the submitting
+        client) — returned verbatim, so a remote process reports the launch that produced it,
+        not itself. Otherwise tolerant git capture: every git field degrades to empty/``None``
+        outside a checkout or when the ``git`` binary is absent, so it never raises. Use to
+        stamp an artifact built by an arbitrary run.
         """
+        raw = os.environ.get(LAUNCH_PROVENANCE_ENV)
+        if raw:
+            # A malformed value must not break stamping; fall through to the git path.
+            try:
+                return cls.from_json(raw)
+            except (json.JSONDecodeError, KeyError, TypeError):
+                pass
+
         cwd = str(repo_dir) if repo_dir is not None else None
 
         def g(*args: str) -> str:
@@ -137,6 +158,26 @@ class Provenance:
         if self.dirty:
             return f"{self.tree_hash} (off of {self.base_commit}){suffix}"
         return f"{self.base_commit}{suffix}"
+
+
+@functools.cache
+def _capture_once() -> Provenance:
+    return Provenance.capture()
+
+
+_capture_lock = threading.Lock()
+
+
+def launch_provenance() -> Provenance:
+    """The current launch's provenance, captured once per process.
+
+    Provenance is constant within a launch, so capture it once: callers stamping many
+    artifacts from worker threads would otherwise repeat the git shell-outs and race on the
+    repo's ``index.lock`` (``git stash create``). The lock serializes the first,
+    cache-filling call.
+    """
+    with _capture_lock:
+        return _capture_once()
 
 
 def _git(args: list[str], cwd: str | None, check: bool = True) -> str:

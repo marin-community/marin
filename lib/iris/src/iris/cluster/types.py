@@ -25,6 +25,7 @@ from typing import Any, NewType
 
 import cloudpickle
 import humanfriendly
+from rigging.provenance import LAUNCH_PROVENANCE_ENV, launch_provenance
 from rigging.timing import Timestamp
 
 from iris.cluster.setup_scripts import cuda_toolchain_setup_script, default_setup_script, setup_is_quiet, wants_gpu_extra
@@ -692,6 +693,9 @@ class EnvironmentSpec:
     - TOKENIZERS_PARALLELISM: "false" (avoids tokenizer deadlocks)
     - HF_TOKEN: from os.environ (if set)
     - WANDB_API_KEY: from os.environ (if set)
+    - MARIN_PROVENANCE: the launch's ``rigging.provenance.Provenance`` as JSON, captured
+      at submission (or forwarded from this process's own env when re-submitting inside
+      a task), so tasks stamp artifacts with the submitter's git identity
 
     Setup:
     - ``setup_scripts=None`` builds the default uv-sync script. ``sync_packages``
@@ -726,6 +730,10 @@ class EnvironmentSpec:
             "TOKENIZERS_PARALLELISM": "false",
             "HF_TOKEN": os.getenv("HF_TOKEN"),
             "WANDB_API_KEY": os.getenv("WANDB_API_KEY"),
+            # Launch provenance: a task running from a git-less bundle inherits the
+            # submitter's identity via Provenance.capture(); transitive, since a task
+            # re-submitting captures this same env value.
+            LAUNCH_PROVENANCE_ENV: launch_provenance().to_json(),
         }
 
         merged_env_vars = {k: v for k, v in {**default_env_vars, **(self.env_vars or {})}.items() if v is not None}

@@ -5,7 +5,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
-from rigging.provenance import Provenance, username_segment
+from rigging.provenance import LAUNCH_PROVENANCE_ENV, Provenance, username_segment
 
 
 def test_str_clean_shows_commit_branch_user():
@@ -102,6 +102,32 @@ def test_capture_tolerates_missing_git_binary(tmp_path, monkeypatch):
     assert p.dirty is False
     assert p.command_line  # argv, captured regardless of git
     assert p.created_at  # timestamp, captured regardless of git
+
+
+def test_capture_prefers_launch_provenance_env(monkeypatch):
+    # A submitting client publishes its provenance in MARIN_PROVENANCE; a process running
+    # from a git-less bundle (or anywhere) inherits the launch's provenance verbatim,
+    # including built_by and argv, instead of describing itself.
+    submitted = Provenance(
+        tree_hash="feed",
+        base_commit="beef",
+        dirty=True,
+        branch="rav/pipeline",
+        built_by="rav",
+        git_remote="git@github.com:o/r.git",
+        created_at="2026-07-07T00:00:00",
+        command_line=("python", "experiments/foo.py"),
+    )
+    monkeypatch.setenv(LAUNCH_PROVENANCE_ENV, submitted.to_json())
+    assert Provenance.capture() == submitted
+
+
+def test_capture_ignores_malformed_launch_provenance_env(tmp_path, monkeypatch):
+    # A corrupt env value must not break record stamping; capture falls back to the git path.
+    monkeypatch.setenv(LAUNCH_PROVENANCE_ENV, "not json")
+    p = Provenance.capture(tmp_path)
+    assert p.tree_hash == ""
+    assert p.created_at
 
 
 def test_json_round_trip_preserves_run_fields():
