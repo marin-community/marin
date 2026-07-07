@@ -167,7 +167,8 @@ def summarize(chunks_dir: Path) -> None:
     print(f"completions: {len(lengths)}")
     print(f"finish_reasons: {dict(finish_reasons.most_common())}")
     print(
-        f"completion chars: mean={statistics.mean(lengths):.0f} p10={quantiles[0]:.0f} p50={quantiles[4]:.0f} p90={quantiles[8]:.0f}"
+        f"completion chars: mean={statistics.mean(lengths):.0f} "
+        f"p10={quantiles[0]:.0f} p50={quantiles[4]:.0f} p90={quantiles[8]:.0f}"
     )
 
 
