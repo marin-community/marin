@@ -158,6 +158,10 @@ class ArtifactRecord(BaseModel):
     output_path: str = ""
     deps: list[str] = Field(default_factory=list)
     """Dependency identities as ``name@version`` strings."""
+    dep_paths: list[str] = Field(default_factory=list)
+    """Resolved output paths of the dependencies, aligned index-wise with ``deps``. ``deps`` is
+    the portable identity; this is where each dep's record actually lives, which differs from a
+    reconstruction off the identity when the dep overrode its output path."""
     config: dict[str, JSONValue] | None = None
     """The materialized config that ran (canonical-encoded), for humans and consumer metadata."""
     source: str | None = None
@@ -294,30 +298,21 @@ def write_artifact(value: object, output_path: str) -> None:
 
 
 @functools.cache
-def _capture_provenance_once() -> Provenance | None:
-    """``Provenance.capture()`` or ``None`` when the ``git`` binary is absent.
-
-    ``capture()`` degrades every git field to empty *outside* a checkout, but still shells out to
-    ``git`` -- a missing binary raises ``FileNotFoundError``, which it does not catch. A step often
-    runs from a ``.git``-less bundle (or an image without git at all), so guard it: a record must
-    never fail to write because provenance could not be stamped.
-    """
-    try:
-        return Provenance.capture()
-    except FileNotFoundError:
-        return None
+def _capture_provenance_once() -> Provenance:
+    return Provenance.capture()
 
 
 _provenance_lock = threading.Lock()
 
 
-def _best_effort_provenance() -> Provenance | None:
+def _best_effort_provenance() -> Provenance:
     """The run's provenance, captured once per process.
 
     Provenance is constant within a run, so capture it once: the runner writes records from many
     worker threads, and calling ``capture()`` per step would both repeat the work and race on the
     repo's ``index.lock`` (``git stash create``) when the driver runs from a real checkout. The
-    lock serializes the first, cache-filling call across those threads.
+    lock serializes the first, cache-filling call across those threads. ``capture()`` itself never
+    raises -- git fields degrade to empty outside a checkout or without a ``git`` binary.
     """
     with _provenance_lock:
         return _capture_provenance_once()
@@ -328,6 +323,7 @@ def write_step_record(
     name: str,
     output_path: str,
     deps: list[str],
+    dep_paths: list[str],
     config: dict[str, JSONValue] | None,
     result: object,
     fingerprint_payload: str | None = None,
@@ -335,16 +331,18 @@ def write_step_record(
     """Persist a ``StepRunner`` step's full record: identity + lineage + payload + provenance.
 
     Unlike :func:`write_artifact` (which records only ``output_path`` + ``result``), this carries
-    the ``name``, the dependency identities (``deps`` -- each a ``name_with_hash`` that reconstructs
-    the dep's output directory under ``marin_prefix()``), the ``config`` that determined the output
-    (a StepSpec's ``hash_attrs``), and best-effort provenance -- so a produced directory answers
-    "what made me, from what" on its own, walkable recursively through ``deps``.
+    the ``name``, the dependency identities (``deps`` -- each a ``name_with_hash``) alongside their
+    resolved locations (``dep_paths`` -- where each dep's record actually lives, even when the dep
+    overrode its output path), the ``config`` that determined the output (a StepSpec's
+    ``hash_attrs``), and best-effort provenance -- so a produced directory answers "what made me,
+    from what" on its own, walkable recursively through ``dep_paths``.
     """
     write_record(
         ArtifactRecord(
             name=name,
             output_path=output_path,
             deps=deps,
+            dep_paths=dep_paths,
             config=config,
             result=_payload_json(result) if result is not None else None,
             fingerprint_payload=fingerprint_payload,

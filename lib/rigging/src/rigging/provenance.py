@@ -79,13 +79,19 @@ class Provenance:
         """Best-effort provenance of the current launch: git context plus the origin
         remote, capture time, and argv.
 
-        Tolerant: every git field degrades to empty/``None`` outside a checkout, so
-        it never raises. Use to stamp an artifact built by an arbitrary run.
+        Tolerant: every git field degrades to empty/``None`` outside a checkout or when
+        the ``git`` binary is absent, so it never raises. Use to stamp an artifact built
+        by an arbitrary run.
         """
         cwd = str(repo_dir) if repo_dir is not None else None
 
         def g(*args: str) -> str:
-            return _git(list(args), cwd, check=False)
+            # A missing `git` binary (bundle image without git) degrades like being outside
+            # a checkout: git fields empty, launch context still captured.
+            try:
+                return _git(list(args), cwd, check=False)
+            except FileNotFoundError:
+                return ""
 
         stash = g("stash", "create")
         ref = stash or "HEAD"

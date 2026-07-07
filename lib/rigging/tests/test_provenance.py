@@ -92,6 +92,18 @@ def test_capture_is_best_effort_outside_a_repo(tmp_path):
     assert p.created_at  # timestamp, captured regardless of git
 
 
+def test_capture_tolerates_missing_git_binary(tmp_path, monkeypatch):
+    # A bundle image may lack git entirely: subprocess raises FileNotFoundError instead of
+    # returning a nonzero exit. capture degrades like being outside a checkout.
+    monkeypatch.setenv("PATH", "")
+    p = Provenance.capture(tmp_path)
+    assert p.tree_hash == ""
+    assert p.base_commit == ""
+    assert p.dirty is False
+    assert p.command_line  # argv, captured regardless of git
+    assert p.created_at  # timestamp, captured regardless of git
+
+
 def test_json_round_trip_preserves_run_fields():
     p = Provenance(
         tree_hash="aaaa",

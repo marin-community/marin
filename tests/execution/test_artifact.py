@@ -283,6 +283,7 @@ def test_write_step_record_roundtrips_identity_and_payload(tmp_path):
         name="child",
         output_path=out,
         deps=["parent_ab12cd34"],
+        dep_paths=[f"{out}/normalize"],
         config={"tokenizer": "gpt2"},
         result=_Meta(path=out, n=7),
         fingerprint_payload="fp-json",
@@ -292,17 +293,18 @@ def test_write_step_record_roundtrips_identity_and_payload(tmp_path):
     assert rec is not None
     assert rec.name == "child"
     assert rec.deps == ["parent_ab12cd34"]
+    assert rec.dep_paths == [f"{out}/normalize"]
     assert rec.config == {"tokenizer": "gpt2"}
     assert rec.fingerprint_payload == "fp-json"
     assert rec.result == {"path": out, "n": 7}
-    # provenance is best-effort: a value in a checkout, None on a git-less bundle; never raises
+    # provenance is best-effort: git fields degrade to empty on a git-less bundle; never raises
     assert read_artifact(out, _Meta).n == 7
 
 
 def test_write_step_record_tolerates_none_result(tmp_path):
     """A side-effect step (fn returns None) records identity + lineage with a null payload."""
     out = tmp_path.as_posix()
-    write_step_record(name="train", output_path=out, deps=[], config={"seed": 42}, result=None)
+    write_step_record(name="train", output_path=out, deps=[], dep_paths=[], config={"seed": 42}, result=None)
 
     rec = read_record(out)
     assert rec is not None

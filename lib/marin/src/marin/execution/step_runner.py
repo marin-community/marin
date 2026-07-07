@@ -399,6 +399,7 @@ def _step_record_identity(step: StepSpec) -> dict[str, Any]:
     return {
         "name": step.name,
         "deps": step.dep_names,
+        "dep_paths": step.dep_paths,
         "config": step.hash_attrs,
         "fingerprint_payload": step.fingerprint_payload,
     }
