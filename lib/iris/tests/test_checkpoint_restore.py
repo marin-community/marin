@@ -14,7 +14,7 @@ from iris.rpc import controller_pb2, job_pb2
 from iris.rpc.controller_connect import ControllerServiceClientSync
 
 IRIS_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_CONFIG = IRIS_ROOT / "config" / "test.yaml"
+DEFAULT_CONFIG = IRIS_ROOT / "config" / "ci-test.yaml"
 
 
 def _quick():

@@ -15,11 +15,12 @@ import re
 import subprocess
 from dataclasses import replace
 from pathlib import Path
+from urllib.parse import urlparse
 
 import click
 
 from finelog.deploy.bootstrap import render_template
-from finelog.deploy.config import FinelogConfig, assert_inlineable_auth, auth_policy_json
+from finelog.deploy.config import FinelogConfig, auth_policy_json
 from finelog.deploy.image import resolve_image_digest
 
 _TEMPLATE_VAR_RE = re.compile(r"\{\{ (\w+) \}\}")
@@ -27,6 +28,10 @@ _TEMPLATE_VAR_RE = re.compile(r"\{\{ (\w+) \}\}")
 # Suffix for the finelog-owned Secret that carries S3 credentials into the pod.
 # Distinct from iris's own task-env Secret so finelog manages its own lifecycle.
 _S3_SECRET_SUFFIX = "-env"
+
+# S3-compatible endpoints that accept only virtual-hosted-style requests
+# (bucket as a host subdomain).
+_VIRTUAL_HOST_ONLY_S3_DOMAINS = ("cwobject.com", "cwlota.com")
 
 # Manifests live at `lib/finelog/deploy/k8s/*.yaml` in the repo. We resolve
 # this once at import time; the directory is part of the source tree, not
@@ -39,17 +44,25 @@ _MANIFESTS = ("01-pvc.yaml.tmpl", "02-deployment.yaml.tmpl", "03-service.yaml.tm
 def _auth_env_block(cfg: FinelogConfig) -> str:
     """Render the `FINELOG_AUTH_POLICY` container-env entry, or "" for no policy.
 
-    A cidr-only policy carries no secrets and is injected inline. A policy with a
-    jwt layer carries key material, so it is rejected here — it must be supplied
-    through the `{name}-env` Secret rather than baked into a plaintext manifest.
+    Every layer kind is inline-safe: a cidr layer carries no secrets and a jwt layer
+    carries only Ed25519 public keys, so the policy inlines directly into the plaintext
+    manifest.
     """
     if not cfg.auth:
         return ""
-    assert_inlineable_auth(cfg)
     policy = auth_policy_json(cfg.auth)
     if "'" in policy:
         raise ValueError("auth policy must not contain a single quote")
     return f"            - name: FINELOG_AUTH_POLICY\n              value: '{policy}'"
+
+
+def _priority_class_block(cfg: FinelogConfig) -> str:
+    """Render the pod-spec `priorityClassName` line, or "" when none is configured."""
+    assert cfg.deployment.k8s is not None
+    name = cfg.deployment.k8s.priority_class_name
+    if not name:
+        return ""
+    return f"      priorityClassName: {name}"
 
 
 def _render_manifest(template_path: Path, cfg: FinelogConfig) -> str:
@@ -75,6 +88,7 @@ def _render_manifest(template_path: Path, cfg: FinelogConfig) -> str:
         "storage_class_block": storage_class_block,
         "storage_gb": k8s.storage_gb,
         "auth_env_block": _auth_env_block(cfg),
+        "priority_class_block": _priority_class_block(cfg),
     }
     referenced = set(_TEMPLATE_VAR_RE.findall(template))
     return render_template(template, **{k: v for k, v in all_vars.items() if k in referenced})
@@ -112,15 +126,31 @@ def _build_s3_secret_manifest(cfg: FinelogConfig) -> str | None:
             "R2_ACCESS_KEY_ID and R2_SECRET_ACCESS_KEY must be set in the deploy "
             f"environment to deploy {cfg.name!r} with an s3:// archive"
         )
+    endpoint = k8s.object_storage_endpoint
     env = {
         "AWS_ACCESS_KEY_ID": key_id,
         "AWS_SECRET_ACCESS_KEY": key_secret,
-        "AWS_ENDPOINT_URL": k8s.object_storage_endpoint,
         # Non-AWS S3 endpoints (R2, CoreWeave) reject a real region in the v4
         # signature; "auto" skips region validation.
         "AWS_REGION": "auto",
         "AWS_DEFAULT_REGION": "auto",
     }
+    # The server's Rust object_store S3 client takes the addressing style and
+    # the plain-http opt-in from env. CoreWeave Object Storage endpoints
+    # (cwobject.com; cwlota.com, the in-cluster LOTA cache, plain http) accept
+    # only virtual-hosted-style requests, and object_store uses the endpoint
+    # verbatim as the base URL in that mode — so the archive bucket must be
+    # baked into the endpoint host (http://<bucket>.cwlota.com).
+    parsed = urlparse(endpoint)
+    hostname = parsed.hostname or ""
+    if any(hostname == d or hostname.endswith("." + d) for d in _VIRTUAL_HOST_ONLY_S3_DOMAINS):
+        env["AWS_VIRTUAL_HOSTED_STYLE_REQUEST"] = "true"
+        bucket = cfg.remote_log_dir.removeprefix("s3://").split("/", 1)[0]
+        if not hostname.startswith(f"{bucket}."):
+            endpoint = f"{parsed.scheme}://{bucket}.{parsed.netloc}"
+    env["AWS_ENDPOINT_URL"] = endpoint
+    if endpoint.startswith("http://"):
+        env["AWS_ALLOW_HTTP"] = "true"
     manifest = {
         "apiVersion": "v1",
         "kind": "Secret",
@@ -139,6 +169,33 @@ def _kubectl_apply(manifest: str) -> None:
     _kubectl("apply", "-f", "-", stdin=manifest)
 
 
+def _ensure_priority_class(cfg: FinelogConfig) -> None:
+    """Create the configured PriorityClass (idempotently) before the Deployment.
+
+    A pod referencing a missing PriorityClass is rejected at admission, and on a
+    fresh cluster finelog is brought up before Iris creates the iris-* bands. So
+    finelog provisions its own scheduling dependency rather than depending on
+    ordering. `kubectl apply` is a no-op when the class already exists with the
+    same immutable value/preemptionPolicy (e.g. Iris created it first), and fails
+    loudly on a real mismatch. PreemptLowerPriority matches the iris-system band:
+    the control plane may evict a lower-priority pod to stay scheduled.
+    """
+    assert cfg.deployment.k8s is not None
+    k8s = cfg.deployment.k8s
+    if k8s.priority_class_name is None:
+        return
+    manifest = {
+        "apiVersion": "scheduling.k8s.io/v1",
+        "kind": "PriorityClass",
+        "metadata": {"name": k8s.priority_class_name},
+        "value": k8s.priority_class_value,
+        "preemptionPolicy": "PreemptLowerPriority",
+        "globalDefault": False,
+    }
+    click.echo(f"Ensuring PriorityClass {k8s.priority_class_name} (value {k8s.priority_class_value})...")
+    _kubectl_apply(json.dumps(manifest))
+
+
 def k8s_up(cfg: FinelogConfig) -> None:
     """Render manifests and apply them; wait for the deployment to roll out.
 
@@ -149,6 +206,7 @@ def k8s_up(cfg: FinelogConfig) -> None:
     assert cfg.deployment.k8s is not None
     cfg = replace(cfg, image=resolve_image_digest(cfg.image))
     k8s = cfg.deployment.k8s
+    _ensure_priority_class(cfg)
     secret_manifest = _build_s3_secret_manifest(cfg)
     if secret_manifest is not None:
         click.echo(f"Applying Secret {_s3_secret_name(cfg)} (S3 credentials)...")

@@ -2,10 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
-from contextlib import contextmanager
 
-import pytest
-from iris.rpc import job_pb2
 from rigging.redaction import REDACTED_VALUE
 
 from scripts.ci import iris_monitor
@@ -28,18 +25,6 @@ def _statuses(*pods: dict) -> list[iris_monitor.K8sPodStatus]:
     return iris_monitor._controller_pods_from_json(json.dumps({"items": list(pods)}))
 
 
-def _job(job_id: str, state: str) -> job_pb2.JobStatus:
-    return job_pb2.JobStatus(job_id=job_id, state=job_pb2.JobState.Value(state))
-
-
-class _FakeClient:
-    def __init__(self, polls: list[list[job_pb2.JobStatus]]) -> None:
-        self._polls = iter(polls)
-
-    def list_jobs(self, *, prefix=None):
-        return next(self._polls)
-
-
 def test_settled_coreweave_controller_requires_exactly_one_ready_pod() -> None:
     assert iris_monitor._settled_controller_pod_name(_statuses(_pod("iris-controller-new"))) == "iris-controller-new"
 
@@ -57,70 +42,7 @@ def test_settled_coreweave_controller_requires_exactly_one_ready_pod() -> None:
     assert iris_monitor._settled_controller_pod_name(_statuses(_pod("iris-controller-new", phase="Pending"))) is None
 
 
-def test_wait_for_child_job_times_out_when_no_child_starts(monkeypatch: pytest.MonkeyPatch) -> None:
-    """If the parent waits too long without a running child, fail fast."""
-    parent_id = "/runner/parent"
-    child_id = f"{parent_id}/grug-train-canary-tpu-1"
-    fake = _FakeClient(
-        [
-            [_job(parent_id, "JOB_STATE_RUNNING"), _job(child_id, "JOB_STATE_PENDING")],
-            [_job(parent_id, "JOB_STATE_RUNNING"), _job(child_id, "JOB_STATE_PENDING")],
-        ]
-    )
-
-    @contextmanager
-    def fake_open(**_kwargs):
-        yield fake
-
-    monkeypatch.setattr(iris_monitor, "_open_iris_client", fake_open)
-    monkeypatch.setattr(iris_monitor.time, "sleep", lambda _s: None)
-    times = iter([0.0, 100.0, 5000.0])
-    monkeypatch.setattr(iris_monitor.time, "monotonic", lambda: next(times))
-
-    with pytest.raises(TimeoutError, match="No child reached RUNNING"):
-        iris_monitor.wait_for_child_job(
-            parent_id,
-            iris_config=None,
-            controller_url=None,
-            poll_interval=1,
-            child_wait_timeout=3000,
-            repo_root=iris_monitor._REPO_ROOT,
-        )
-
-
-def test_wait_for_child_job_real_child_running_drops_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A training child reaching RUNNING drops the queue timeout."""
-    parent_id = "/runner/parent"
-    child_id = f"{parent_id}/grug-train-canary-tpu-1"
-    polls = [
-        [_job(parent_id, "JOB_STATE_RUNNING"), _job(child_id, "JOB_STATE_RUNNING")],
-        [_job(parent_id, "JOB_STATE_SUCCEEDED"), _job(child_id, "JOB_STATE_SUCCEEDED")],
-    ]
-    fake = _FakeClient(polls)
-
-    @contextmanager
-    def fake_open(**_kwargs):
-        yield fake
-
-    monkeypatch.setattr(iris_monitor, "_open_iris_client", fake_open)
-    monkeypatch.setattr(iris_monitor.time, "sleep", lambda _s: None)
-    # Second poll lands past the deadline; the run must still succeed because the real
-    # child already dropped the queue timeout on the first poll.
-    times = iter([0.0, 100.0, 5000.0, 6000.0])
-    monkeypatch.setattr(iris_monitor.time, "monotonic", lambda: next(times))
-
-    result = iris_monitor.wait_for_child_job(
-        parent_id,
-        iris_config=None,
-        controller_url=None,
-        poll_interval=1,
-        child_wait_timeout=3000,
-        repo_root=iris_monitor._REPO_ROOT,
-    )
-    assert result.state == job_pb2.JOB_STATE_SUCCEEDED
-
-
-def test_redact_pod_doc_redacts_env_values_and_preserves_context():
+def test_redact_pod_doc_redacts_env_values_and_preserves_context() -> None:
     pod = {
         "metadata": {"name": "worker-0"},
         "spec": {

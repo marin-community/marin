@@ -14,7 +14,6 @@ import logging
 
 from finelog.client.log_client import Table
 
-from iris.cluster.backends.protocols import WorkerInfraProvider
 from iris.cluster.config import (
     AutoscalerConfig,
     ScaleGroupConfig,
@@ -28,6 +27,7 @@ from iris.cluster.controller.autoscaler.scaling_group import (
     DEFAULT_SCALE_UP_RATE_LIMIT,
     ScalingGroup,
 )
+from iris.cluster.platforms.protocols import WorkerInfraProvider
 
 logger = logging.getLogger(__name__)
 

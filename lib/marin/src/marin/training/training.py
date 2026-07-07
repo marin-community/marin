@@ -22,7 +22,7 @@ from levanter.main.train_lm import TrainLmConfig
 from levanter.schedule import BatchSchedule
 from mergedeep import mergedeep
 from pydantic import BaseModel
-from rigging.filesystem import check_gcs_paths_same_region, marin_temp_bucket, open_url, url_to_fs
+from rigging.filesystem import check_gcs_paths_same_region, marin_temp_bucket, open_url, prefix_join, url_to_fs
 
 from marin.execution.artifact import Artifact
 from marin.processing.tokenize import read_tokenized_cache_stats
@@ -64,14 +64,14 @@ class LevanterCheckpoint(Artifact):
     @property
     def checkpoint_dir(self) -> str:
         """The directory holding this run's rolling checkpoints."""
-        return f"{self.path}/{_CHECKPOINTS_SUBDIR}"
+        return prefix_join(self.path, _CHECKPOINTS_SUBDIR)
 
     def training_metrics(self) -> TrainMetrics:
         """This run's final metrics, parsed from ``tracker_metrics.jsonl`` under its output.
 
         Raises :class:`FileNotFoundError` if the run wrote no metrics file.
         """
-        path = f"{self.path}/{_TRACKER_METRICS_FILE}"
+        path = prefix_join(self.path, _TRACKER_METRICS_FILE)
         if not url_to_fs(path, use_listings_cache=False)[0].exists(path):
             raise FileNotFoundError(f"no {_TRACKER_METRICS_FILE} for checkpoint at {self.path}")
         with open_url(path, "r") as f:
@@ -170,7 +170,7 @@ def resolve_checkpointer_output_path(checkpointer: CheckpointerConfig, output_pa
     """
     return replace(
         checkpointer,
-        base_path=os.path.join(output_path, DEFAULT_CHECKPOINTS_PATH),
+        base_path=prefix_join(output_path, DEFAULT_CHECKPOINTS_PATH),
         temporary_base_path=temporary_checkpoint_base_path(output_path),
         append_run_id_to_base_path=False,
     )
@@ -189,7 +189,7 @@ def apply_output_path(train_config: TrainConfigT, output_path: str) -> TrainConf
             train_config.trainer,
             checkpointer=resolve_checkpointer_output_path(train_config.trainer.checkpointer, output_path),
         ),
-        hf_save_path=os.path.join(output_path, DEFAULT_HF_CHECKPOINTS_PATH),
+        hf_save_path=prefix_join(output_path, DEFAULT_HF_CHECKPOINTS_PATH),
     )
 
     if isinstance(config, (TrainDpoConfig, TrainLmConfig)) and not isinstance(config.adapter, NoAdaptorConfig):

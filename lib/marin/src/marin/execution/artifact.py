@@ -23,12 +23,12 @@ their producers (``LevanterCheckpoint`` in ``marin.training.training``, ``Tokeni
 import functools
 import json
 import logging
-from dataclasses import asdict, is_dataclass
+from dataclasses import asdict, dataclass, is_dataclass
 from typing import Self, TypeVar, cast
 
 from pydantic import BaseModel, ConfigDict, Field
-from rigging.filesystem import marin_prefix, open_url, url_to_fs
-from rigging.provenance import Provenance
+from rigging.filesystem import marin_prefix, open_url, prefix_join, url_to_fs
+from rigging.provenance import Provenance, launch_provenance
 
 from marin.execution.fingerprint import describe_drift
 from marin.execution.step_spec import StepSpec, _is_relative_path
@@ -50,6 +50,13 @@ RECORD_FILENAME = ".artifact.json"
 # Nemotron-CC caches — carry their materialized ``config`` (tokenizer, format, tags) only there,
 # so we read it as a last resort to recover the record. Never written.
 _LEGACY_EXECUTOR_INFO_FILENAME = ".executor_info"
+
+# The lazy ``StepRunner`` also writes a ``.executor_info`` — but at *schedule* time, before the
+# step runs — tagged with this ``executor_version``. Unlike a genuine legacy Ray sidecar, its
+# ``config`` is the identity ``hash_attrs`` (deps/fingerprint/version), not the materialized
+# config. ``read_record`` ignores it so an incomplete step's stub can never be served as a
+# record — which would present, e.g., a tokenizer-less tokenized cache (#6836).
+STEP_RUNNER_EXECUTOR_VERSION = "step_runner"
 
 # Keys under ``StepSpec.hash_attrs`` carrying the artifact's identity, so the runner can
 # apply the drift check without knowing about the lazy layer.
@@ -150,6 +157,10 @@ class ArtifactRecord(BaseModel):
     output_path: str = ""
     deps: list[str] = Field(default_factory=list)
     """Dependency identities as ``name@version`` strings."""
+    dep_paths: list[str] = Field(default_factory=list)
+    """Resolved output paths of the dependencies, aligned index-wise with ``deps``. ``deps`` is
+    the portable identity; this is where each dep's record actually lives, which differs from a
+    reconstruction off the identity when the dep overrode its output path."""
     config: dict[str, JSONValue] | None = None
     """The materialized config that ran (canonical-encoded), for humans and consumer metadata."""
     source: str | None = None
@@ -173,15 +184,11 @@ def _resolved(output_path: str) -> str:
     Mirrors the launcher's path resolution so a manual ``read_artifact``/``read_record`` of a
     relative step name reads the same location the runner wrote.
     """
-    return f"{marin_prefix()}/{output_path}" if _is_relative_path(output_path) else output_path
-
-
-def _join(output_path: str, filename: str) -> str:
-    return f"{output_path.rstrip('/')}/{filename}"
+    return prefix_join(marin_prefix(), output_path) if _is_relative_path(output_path) else output_path
 
 
 def _read_text(output_path: str, filename: str) -> str | None:
-    path = _join(output_path, filename)
+    path = prefix_join(output_path, filename)
     fs = url_to_fs(path, use_listings_cache=False)[0]
     if not fs.exists(path):
         return None
@@ -189,15 +196,22 @@ def _read_text(output_path: str, filename: str) -> str | None:
         return f.read()
 
 
-def _record_from_executor_info(text: str) -> ArtifactRecord:
+def _record_from_executor_info(text: str) -> ArtifactRecord | None:
     """Map an old Ray executor ``.executor_info`` sidecar into an :class:`ArtifactRecord`.
 
     Only the fields a consumer reads back are carried across: ``name``, the materialized
     ``config`` (where a tokenized cache keeps its tokenizer/format/tags), ``output_path``, and
     ``dependencies`` (recorded as output paths, not ``name@version``). The legacy ``version`` is a
     per-dependency dict rather than a string, so it is dropped rather than coerced.
+
+    Returns ``None`` for a schedule-time ``StepRunner`` stub (``executor_version`` is
+    ``STEP_RUNNER_EXECUTOR_VERSION``): that file predates the step's own record and carries only
+    the identity ``hash_attrs`` under ``config``, so serving it would present a config-less (e.g.
+    tokenizer-less) record for a cache that may never have finished (#6836).
     """
     info = json.loads(text)
+    if info.get("executor_version") == STEP_RUNNER_EXECUTOR_VERSION:
+        return None
     return ArtifactRecord(
         name=info.get("name") or "",
         config=info.get("config"),
@@ -206,17 +220,43 @@ def _record_from_executor_info(text: str) -> ArtifactRecord:
     )
 
 
+# Record-native identity fields a genuine ArtifactRecord sets; a pre-#6649 bare payload has none.
+_RECORD_IDENTITY_FIELDS = ("name", "fingerprint", "result_type", "result")
+_RECORD_FIELDS = frozenset(ArtifactRecord.model_fields)
+
+
+def _parse_record(text: str) -> ArtifactRecord:
+    """Parse an ``.artifact.json``, adopting a pre-#6649 bare payload as the record's ``result``.
+
+    Before #6649 the value model was serialized straight into ``.artifact.json`` (e.g.
+    ``{"version": "v1", "output_dir": ..., "counters": ...}``), so it parses as an
+    :class:`ArtifactRecord` with every native field defaulted and the real payload dropped as
+    ignored extras — leaving ``read_artifact`` with no ``result``. Detect that shape (no record
+    identity, but keys foreign to the record schema) and take the whole document as ``result`` so
+    those caches load. A genuine record never carries foreign keys, so it is untouched.
+    """
+    record = ArtifactRecord.model_validate_json(text)
+    if any(getattr(record, field) for field in _RECORD_IDENTITY_FIELDS):
+        return record
+    document = json.loads(text)
+    if isinstance(document, dict) and document.keys() - _RECORD_FIELDS:
+        return ArtifactRecord(result=document)
+    return record
+
+
 def read_record(output_path: str) -> ArtifactRecord | None:
     """The record at ``{output_path}/.artifact.json``, else ``None``.
 
-    Falls back to an old Ray executor ``.executor_info`` sidecar when no record file is present, so
-    caches built before the record file existed still resolve their config. A corrupt/partial file
-    raises :class:`pydantic.ValidationError`.
+    Falls back to a genuine legacy Ray executor ``.executor_info`` sidecar when no record file is
+    present, so caches built before the record file existed still resolve their config. A
+    schedule-time ``StepRunner`` stub (see :data:`STEP_RUNNER_EXECUTOR_VERSION`) is *not* honored:
+    it carries no materialized config, so such an output reads back as having no record. A
+    corrupt/partial file raises :class:`pydantic.ValidationError`.
     """
     output_path = _resolved(output_path)
     text = _read_text(output_path, RECORD_FILENAME)
     if text is not None:
-        return ArtifactRecord.model_validate_json(text)
+        return _parse_record(text)
     executor_info = _read_text(output_path, _LEGACY_EXECUTOR_INFO_FILENAME)
     if executor_info is not None:
         return _record_from_executor_info(executor_info)
@@ -225,7 +265,7 @@ def read_record(output_path: str) -> ArtifactRecord | None:
 
 def write_record(record: ArtifactRecord) -> None:
     """Write ``record`` to ``{record.output_path}/.artifact.json``."""
-    with open_url(_join(record.output_path, RECORD_FILENAME), "w") as f:
+    with open_url(prefix_join(record.output_path, RECORD_FILENAME), "w") as f:
         f.write(record.model_dump_json(indent=2))
 
 
@@ -254,6 +294,45 @@ def read_artifact(output_path: str, schema: type[M]) -> M:
 def write_artifact(value: object, output_path: str) -> None:
     """Write a minimal record carrying ``value`` as its ``result`` — the manual save API."""
     write_record(ArtifactRecord(output_path=output_path, result=_payload_json(value)))
+
+
+@dataclass(frozen=True)
+class StepRecordIdentity:
+    """Identity + lineage of a ``StepRunner`` step, as plain data (no callable) so a remote
+    write site can serialize it into a worker closure."""
+
+    name: str
+    deps: list[str]
+    """Dependency identities, each a ``name_with_hash``."""
+    dep_paths: list[str]
+    """Resolved dependency locations, aligned index-wise with ``deps``."""
+    config: dict[str, JSONValue] | None
+    """The step's ``hash_attrs`` -- its materialized identity params."""
+    fingerprint_payload: str | None = None
+
+
+def write_step_record(identity: StepRecordIdentity, *, output_path: str, result: object) -> None:
+    """Persist a ``StepRunner`` step's full record: identity + lineage + payload + provenance.
+
+    Unlike :func:`write_artifact` (which records only ``output_path`` + ``result``), this carries
+    the ``name``, the dependency identities (``deps`` -- each a ``name_with_hash``) alongside their
+    resolved locations (``dep_paths`` -- where each dep's record actually lives, even when the dep
+    overrode its output path), the ``config`` that determined the output, and best-effort
+    provenance -- so a produced directory answers "what made me, from what" on its own, walkable
+    recursively through ``dep_paths``.
+    """
+    write_record(
+        ArtifactRecord(
+            name=identity.name,
+            output_path=output_path,
+            deps=identity.deps,
+            dep_paths=identity.dep_paths,
+            config=identity.config,
+            result=_payload_json(result) if result is not None else None,
+            fingerprint_payload=identity.fingerprint_payload,
+            provenance=launch_provenance(),
+        )
+    )
 
 
 def check_drift(step: StepSpec) -> bool:

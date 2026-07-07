@@ -29,7 +29,15 @@ from fray.types import Entrypoint, JobRequest, ResourceConfig, create_environmen
 from rigging.filesystem import open_url, url_to_fs
 from rigging.log_setup import configure_logging
 
-from marin.execution.artifact import FINGERPRINT_KEY, VERSION_KEY, check_drift, is_mutable_version, write_artifact
+from marin.execution.artifact import (
+    FINGERPRINT_KEY,
+    STEP_RUNNER_EXECUTOR_VERSION,
+    VERSION_KEY,
+    StepRecordIdentity,
+    check_drift,
+    is_mutable_version,
+    write_step_record,
+)
 from marin.execution.remote import RemoteCallable, _sanitize_job_name
 from marin.execution.step_spec import StepSpec
 
@@ -60,13 +68,18 @@ def _write_executor_info(step: StepSpec) -> None:
 
     Skips writing if the file already exists (e.g. ``Executor.write_infos()``
     wrote a richer version before this step launched).
+
+    This runs at schedule time, before the step produces its ``.artifact.json``, and its
+    ``config`` is the identity ``hash_attrs`` — not the materialized config. It is tagged
+    ``STEP_RUNNER_EXECUTOR_VERSION`` so ``read_record`` ignores it as a record source and never
+    mistakes the stub for a completed cache (#6836).
     """
     info_path = os.path.join(step.output_path, ".executor_info")
     fs = url_to_fs(info_path, use_listings_cache=False)[0]
     if fs.exists(info_path):
         return
     info = {
-        "executor_version": "step_runner",
+        "executor_version": STEP_RUNNER_EXECUTOR_VERSION,
         "name": step.name,
         "fn_name": str(step.fn) if step.fn is not None else "None",
         "config": step.hash_attrs,
@@ -378,13 +391,25 @@ def check_cache(output_path: str) -> bool:
     return False
 
 
+def _step_record_identity(step: StepSpec) -> StepRecordIdentity:
+    """The step's record identity, safe to serialize -- never the ``StepSpec``, which carries ``fn``."""
+    return StepRecordIdentity(
+        name=step.name,
+        deps=step.dep_names,
+        dep_paths=step.dep_paths,
+        config=step.hash_attrs,
+        fingerprint_payload=step.fingerprint_payload,
+    )
+
+
 def run_step(step: StepSpec) -> None:
     """Execute a single step with explicit cache check, locking, heartbeat, and artifact saving.
 
     An inline step that does not write its own record (``writes_record=False``) has its
-    return saved via :func:`~marin.execution.artifact.write_artifact`. For ``RemoteCallable``
-    steps (or any step with explicit ``resources``), the raw function + artifact save are
-    submitted as a Fray job; the runner process only manages the lock and status file.
+    return saved via :func:`~marin.execution.artifact.write_step_record` (identity + lineage +
+    payload). For ``RemoteCallable`` steps (or any step with explicit ``resources``), the raw
+    function + artifact save are submitted as a Fray job; the runner process only manages the
+    lock and status file.
     """
     output_path = step.output_path
     step_label = step.name_with_hash
@@ -408,9 +433,10 @@ def run_step(step: StepSpec) -> None:
                     _run_remote_step(step, output_path)
                 else:
                     result = step.fn(output_path)  # pyrefly: ignore[not-callable]
-                    # A lazy step writes its own full record; a plain step's return is saved.
+                    # A lazy step writes its own full record; a plain step's return is saved
+                    # with its identity + lineage (name, deps, config) so the output is traceable.
                     if not step.writes_record:
-                        write_artifact(result, output_path)
+                        write_step_record(_step_record_identity(step), output_path=output_path, result=result)
                 elapsed = timedelta(seconds=time.monotonic() - t0)
 
                 # 4. Mark success
@@ -435,13 +461,14 @@ def _submit_iris_job(
     """Submit ``raw_fn(output_path)`` as a Fray job and block until completion.
 
     ``raw_fn`` is wrapped to also persist its return value via
-    :func:`~marin.execution.artifact.write_artifact` inside the submitted job, since Fray
+    :func:`~marin.execution.artifact.write_step_record` inside the submitted job, since Fray
     jobs cannot return values back to the caller.
     """
+    identity = _step_record_identity(step)
 
     def _fn_with_artifact_save() -> None:
         result = raw_fn(output_path)
-        write_artifact(result, output_path)
+        write_step_record(identity, output_path=output_path, result=result)
 
     job_name = _sanitize_job_name(f"{step.name_with_hash}-{uuid.uuid4().hex[:8]}")
     dependency_groups = dependency_groups_for_resources(resources, pip_dependency_groups)

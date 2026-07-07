@@ -10,13 +10,13 @@ backed by in-memory fakes rather than MagicMock.
 
 import unittest.mock
 
-from iris.cluster.backends.types import CloudSliceState
 from iris.cluster.config import AutoscalerConfig, WorkerConfig
 from iris.cluster.constraints import DeviceType, PlacementRequirements
 from iris.cluster.controller.autoscaler import Autoscaler
 from iris.cluster.controller.autoscaler.models import DemandEntry, ScalingAction
 from iris.cluster.controller.autoscaler.scaling_group import GroupAvailability, ScalingGroup
 from iris.cluster.platforms.gcp.fake import InMemoryGcpService
+from iris.cluster.platforms.types import CloudSliceState
 from iris.rpc import job_pb2
 from rigging.timing import Duration, Timestamp
 from tests.cluster.controller.conftest import (

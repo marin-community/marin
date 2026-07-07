@@ -1,31 +1,10 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Infrastructure provider abstraction layer.
+"""TaskBackend implementations.
 
-Re-exports the core types and protocols. Concrete implementations live in
-subpackages (gcp/, k8s/, local/, manual/).
+Each subpackage implements the `TaskBackend` contract from
+`iris.cluster.controller.backend`: `rpc/` fans work out to Iris worker
+daemons; `k8s/` places tasks directly on a Kubernetes cluster via Kueue.
+Machine-lifecycle providers live in `iris.cluster.platforms`.
 """
-
-from iris.cluster.backends.protocols import ControllerProvider, WorkerInfraProvider
-from iris.cluster.backends.types import (
-    CloudSliceState,
-    CloudWorkerState,
-    CommandResult,
-    InfraError,
-    InfraUnavailableError,
-    Labels,
-    QuotaExhaustedError,
-    RemoteWorkerHandle,
-    ResourceNotFoundError,
-    SliceHandle,
-    SliceStatus,
-    StandaloneWorkerHandle,
-    WorkerStatus,
-    default_stop_all,
-    find_free_port,
-    generate_slice_suffix,
-    port_is_open,
-    probe_outbound_ip,
-    resolve_external_host,
-)

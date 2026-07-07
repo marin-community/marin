@@ -576,7 +576,9 @@ class Trainer:
 
     def _add_default_hooks(self):
         self.add_hook(levanter.callbacks.pbar_logger(total=self.config.num_train_steps), every=1)
-        self.add_hook(levanter.callbacks.log_step_info(self.config.num_train_steps), every=1)
+        self.add_hook(
+            levanter.callbacks.log_step_info(self.config.num_train_steps, self.config.batch_schedule), every=1
+        )
         # engine.add_hook(callbacks.log_memory_usage(), every=1)
         checkpointer = self.config.checkpointer.create(self.run_id)
 

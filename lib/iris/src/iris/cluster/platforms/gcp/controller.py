@@ -16,16 +16,16 @@ from dataclasses import dataclass
 
 from rigging.timing import ExponentialBackoff, retry_with_backoff
 
-from iris.cluster.backends.types import (
+from iris.cluster.config import ControllerVmConfig, GcpControllerConfig, IrisClusterConfig, SshConfig
+from iris.cluster.platforms.gcp.service import GcpService
+from iris.cluster.platforms.gcp.ssh import ssh_impersonate_service_account
+from iris.cluster.platforms.gcp.workers import GcpWorkerProvider
+from iris.cluster.platforms.types import (
     Labels,
     default_stop_all,
     find_free_port,
     wait_for_port,
 )
-from iris.cluster.config import ControllerVmConfig, GcpControllerConfig, IrisClusterConfig, SshConfig
-from iris.cluster.platforms.gcp.service import GcpService
-from iris.cluster.platforms.gcp.ssh import ssh_impersonate_service_account
-from iris.cluster.platforms.gcp.workers import GcpWorkerProvider
 from iris.cluster.platforms.vm_lifecycle import restart_controller as vm_restart_controller
 from iris.cluster.platforms.vm_lifecycle import start_controller as vm_start_controller
 from iris.cluster.platforms.vm_lifecycle import stop_controller as vm_stop_controller

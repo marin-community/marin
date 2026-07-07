@@ -15,16 +15,6 @@ from dataclasses import dataclass, field
 
 from rigging.timing import Duration, Timestamp
 
-from iris.cluster.backends.types import (
-    CloudSliceState,
-    CloudWorkerState,
-    InfraError,
-    Labels,
-    ListedSlice,
-    SliceStatus,
-    WorkerStatus,
-    generate_slice_suffix,
-)
 from iris.cluster.config import (
     ManualSliceConfig,
     ManualVmConfig,
@@ -36,6 +26,16 @@ from iris.cluster.config import (
 from iris.cluster.platforms._worker_base import RemoteExecWorkerBase
 from iris.cluster.platforms.gcp.worker_bootstrap import build_worker_bootstrap_script
 from iris.cluster.platforms.remote_exec import DirectSshRemoteExec
+from iris.cluster.platforms.types import (
+    CloudSliceState,
+    CloudWorkerState,
+    InfraError,
+    Labels,
+    ListedSlice,
+    SliceStatus,
+    WorkerStatus,
+    generate_slice_suffix,
+)
 from iris.cluster.worker.env_probe import construct_worker_id
 
 logger = logging.getLogger(__name__)

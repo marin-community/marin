@@ -14,6 +14,7 @@ import json
 import re
 
 from iris.cluster.config import WorkerConfig
+from iris.cluster.runtime.docker import EPHEMERAL_PORT_RANGE, RESERVED_HOST_PORTS
 
 # GCP multi-region locations used for AR remote repos that proxy GHCR.
 # Each AR remote repo is a pull-through cache for ghcr.io, deployed to a
@@ -188,7 +189,14 @@ export PATH="$PATH:/snap/bin"
 # Tune network stack for high-connection workloads (#3066).
 # Expands ephemeral port range, allows reuse of TIME_WAIT sockets,
 # and raises listen backlog for actor servers handling 1000s of workers.
-sudo sysctl -w net.ipv4.ip_local_port_range="1024 65535"
+# The ephemeral floor stays above every fixed port the cluster binds (TPU/JAX
+# 8081/8431/8470-8482, iris 10000/10001); a lower floor let a co-tenant's
+# outbound connection be handed one of them and block the TPU trainer, which
+# crash-loops with "[::]:8431 ... Address already in use". Host-network task
+# containers share this netns, so this covers them. ip_local_reserved_ports
+# additionally pins the TPU/JAX ports as defense-in-depth.
+sudo sysctl -w net.ipv4.ip_local_port_range="{{ port_range }}"
+sudo sysctl -w net.ipv4.ip_local_reserved_ports="{{ reserved_ports }}"
 sudo sysctl -w net.ipv4.tcp_tw_reuse=1
 sudo sysctl -w net.core.somaxconn=4096
 
@@ -322,4 +330,6 @@ def build_worker_bootstrap_script(
         docker_image=worker_config.docker_image,
         worker_port=worker_config.port,
         worker_config_json=worker_config_json,
+        port_range=EPHEMERAL_PORT_RANGE,
+        reserved_ports=RESERVED_HOST_PORTS,
     )

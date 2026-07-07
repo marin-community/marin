@@ -9,7 +9,7 @@ objects (or ``Sequence[Row]`` / dicts of them), others return typed dataclasses
 plain sets/dicts of ids.
 
 Areas covered:
-  budgets         — user budgets and roles
+  budgets         — user budgets
   dashboard       — job listing, task summaries, parent-child helpers
   jobs            — job/job_config lookups and CTEs
   scheduling      — pending tasks, running tasks, per-user spend
@@ -20,13 +20,18 @@ Areas covered:
 """
 
 from collections.abc import Callable, Iterable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Protocol
 
 from rigging.timing import Timestamp
-from sqlalchemy import Integer, Row, bindparam, case, cast, exists, func, literal_column, select, tuple_
+from sqlalchemy import Row, bindparam, case, exists, func, literal_column, select, tuple_
 
 from iris.cluster.constraints import AttributeValue
+from iris.cluster.controller.attempt_counts import (
+    AttemptCounts,
+    failure_count_expr,
+    preemption_count_expr,
+)
 from iris.cluster.controller.codec import (
     device_counts_from_json,
     resource_spec_from_scalars,
@@ -35,8 +40,8 @@ from iris.cluster.controller.db import Tx
 from iris.cluster.controller.reconcile.policy import NON_TERMINAL_TASK_STATES
 from iris.cluster.controller.reconcile.worker import ReconcileRow
 from iris.cluster.controller.schema import (
-    USER_ROLE_DEFAULT,
     federated_jobs_table,
+    federated_tasks_table,
     federation_changelog_table,
     federation_sync_state_table,
     hint_rare_state,
@@ -48,7 +53,6 @@ from iris.cluster.controller.schema import (
     task_attempts_table,
     tasks_table,
     user_budgets_table,
-    users_table,
     workers_table,
 )
 from iris.cluster.controller.task_state import (
@@ -60,7 +64,15 @@ from iris.cluster.controller.task_state import (
 )
 from iris.cluster.controller.worker_health import WorkerHealthTracker
 from iris.cluster.federation.store import FederationDirection, HandoffState
-from iris.cluster.types import TERMINAL_JOB_STATES, AttemptUid, JobName, PendingTask, WorkerId, WorkerUsability
+from iris.cluster.types import (
+    LOCAL_CLUSTER,
+    TERMINAL_JOB_STATES,
+    AttemptUid,
+    JobName,
+    PendingTask,
+    WorkerId,
+    WorkerUsability,
+)
 from iris.rpc import controller_pb2, job_pb2
 
 # ---------------------------------------------------------------------------
@@ -196,21 +208,6 @@ def get_all_user_budget_limits(tx: Tx) -> dict[str, int]:
     return {str(row.user_id): int(row.budget_limit) for row in rows}
 
 
-def get_user_role_or_none(tx: Tx, user_id: str) -> str | None:
-    """Return the user's stored role, or None if the user is not provisioned."""
-    row = tx.execute(
-        select(users_table.c.role).where(users_table.c.user_id == bindparam("user_id")),
-        {"user_id": user_id},
-    ).first()
-    return str(row.role) if row is not None else None
-
-
-def get_user_role(tx: Tx, user_id: str) -> str:
-    """Return the user's role, or ``USER_ROLE_DEFAULT`` if not found."""
-    role = get_user_role_or_none(tx, user_id)
-    return role if role is not None else USER_ROLE_DEFAULT
-
-
 # ---------------------------------------------------------------------------
 # Dashboard composite reads (previously reads/dashboard.py)
 # ---------------------------------------------------------------------------
@@ -230,8 +227,11 @@ _STATE_SORT_ORDER: dict[int, int] = {
     job_pb2.JOB_STATE_UNSCHEDULABLE: 7,
 }
 
-_AGG_FAILURES = func.coalesce(func.sum(tasks_table.c.failure_count), 0).label("agg_failures")
-_AGG_PREEMPTIONS = func.coalesce(func.sum(tasks_table.c.preemption_count), 0).label("agg_preemptions")
+# Job-level failure/preemption totals for the sort, derived from task_attempts
+# (the FROM in ``list_jobs`` outer-joins tasks → task_attempts when a count sort
+# is requested, so these aggregate a job's attempts across all its tasks).
+_AGG_FAILURES = failure_count_expr().label("agg_failures")
+_AGG_PREEMPTIONS = preemption_count_expr().label("agg_preemptions")
 
 _STATE_SORT_CASE = case(
     {state: order for state, order in _STATE_SORT_ORDER.items()},
@@ -266,6 +266,7 @@ _JOB_ROW_COLUMNS = (
     jobs_table.c.finished_at_ms,
     jobs_table.c.error,
     jobs_table.c.exit_code,
+    jobs_table.c.num_tasks,
     jobs_table.c.name,
     jobs_table.c.depth,
     job_config_table.c.res_cpu_millicores,
@@ -273,7 +274,7 @@ _JOB_ROW_COLUMNS = (
     job_config_table.c.res_disk_bytes,
     job_config_table.c.res_device_json,
     jobs_table.c.backend_id,
-    jobs_table.c.child_cluster,
+    jobs_table.c.cluster,
 )
 
 # Task states considered "completed" for dashboard task-summary counts.
@@ -289,6 +290,7 @@ def _apply_job_filters(
     name_filter: str,
     job_id_prefix: str,
     backend_id_filter: str = "",
+    cluster_filter: str = "",
 ):
     """Apply the standard set of job WHERE predicates to ``stmt``.
 
@@ -307,6 +309,8 @@ def _apply_job_filters(
         stmt = stmt.where(jobs_table.c.job_id.like(f"{escaped}%", escape="\\"))
     if backend_id_filter:
         stmt = stmt.where(jobs_table.c.backend_id == backend_id_filter)
+    if cluster_filter:
+        stmt = stmt.where(jobs_table.c.cluster == cluster_filter)
     return stmt
 
 
@@ -355,7 +359,9 @@ def list_jobs(
         jobs_table.join(job_config_table, job_config_table.c.job_id == jobs_table.c.job_id)
     )
     if needs_task_agg:
-        stmt = stmt.outerjoin(tasks_table, tasks_table.c.job_id == jobs_table.c.job_id)
+        stmt = stmt.outerjoin(tasks_table, tasks_table.c.job_id == jobs_table.c.job_id).outerjoin(
+            task_attempts_table, task_attempts_table.c.task_id == tasks_table.c.task_id
+        )
 
     stmt = _apply_job_filters(
         stmt,
@@ -365,6 +371,7 @@ def list_jobs(
         name_filter=query.name_filter,
         job_id_prefix=query.job_id_prefix,
         backend_id_filter=query.backend_id,
+        cluster_filter=query.cluster,
     )
 
     if needs_task_agg:
@@ -380,6 +387,7 @@ def list_jobs(
         name_filter=query.name_filter,
         job_id_prefix=query.job_id_prefix,
         backend_id_filter=query.backend_id,
+        cluster_filter=query.cluster,
     )
 
     offset = max(query.offset, 0)
@@ -393,24 +401,36 @@ def list_jobs(
     return rows, total
 
 
+# Task-count / completed / state-histogram come from the ``tasks`` table; the
+# failure/preemption totals are supplied separately, derived from attempts (via
+# the AttemptCountsProjection cache) and merged in ``task_summaries_for_jobs``.
 _TASK_SUMMARIES_FOR_JOBS_STMT = (
     select(
         tasks_table.c.job_id,
         tasks_table.c.state,
         func.count().label("cnt"),
-        cast(func.coalesce(func.sum(tasks_table.c.failure_count), 0), Integer).label("total_failures"),
-        cast(func.coalesce(func.sum(tasks_table.c.preemption_count), 0), Integer).label("total_preemptions"),
     )
     .where(tasks_table.c.job_id.in_(bindparam("job_ids", expanding=True)))
     .group_by(tasks_table.c.job_id, tasks_table.c.state)
 )
 
 
-def task_summaries_for_jobs(tx: Tx, job_ids: Iterable[JobName]) -> dict[JobName, TaskJobSummary]:
-    """Return ``{job_id: TaskJobSummary}`` aggregating each job's tasks."""
+def task_summaries_for_jobs(
+    tx: Tx,
+    job_ids: Iterable[JobName],
+    *,
+    attempt_counts: Mapping[JobName, AttemptCounts] | None = None,
+) -> dict[JobName, TaskJobSummary]:
+    """Return ``{job_id: TaskJobSummary}`` aggregating each job's tasks.
+
+    ``attempt_counts`` carries the per-job failure/preemption totals derived from
+    ``task_attempts`` (typically from the cache); a job absent from it (or a
+    ``None`` map) contributes zero for those two counters.
+    """
     ids = list(job_ids)
     if not ids:
         return {}
+    counts = attempt_counts or {}
 
     rows = tx.execute(_TASK_SUMMARIES_FOR_JOBS_STMT, {"job_ids": ids}).all()
     summaries: dict[JobName, TaskJobSummary] = {}
@@ -423,11 +443,16 @@ def task_summaries_for_jobs(tx: Tx, job_ids: Iterable[JobName]) -> dict[JobName,
             job_id=jid,
             task_count=prev.task_count + cnt,
             completed_count=prev.completed_count + (cnt if state in _COMPLETED_TASK_STATES else 0),
-            failure_count=prev.failure_count + int(row.total_failures),
-            preemption_count=prev.preemption_count + int(row.total_preemptions),
             task_state_counts={**prev.task_state_counts, state: cnt},
         )
-    return summaries
+    return {
+        jid: replace(
+            summary,
+            failure_count=counts.get(jid, AttemptCounts()).failure_count,
+            preemption_count=counts.get(jid, AttemptCounts()).preemption_count,
+        )
+        for jid, summary in summaries.items()
+    }
 
 
 def parent_ids_with_children(tx: Tx, job_ids: Iterable[JobName]) -> set[JobName]:
@@ -461,7 +486,7 @@ def get_job_state(tx: Tx, job_id: JobName) -> int | None:
 def find_prunable_job(tx: Tx, terminal_states: Iterable[int], before_ts: Timestamp) -> JobName | None:
     """Return one terminal *local* job finished before ``before_ts``, or None.
 
-    Federated jobs (``child_cluster != ''``) are excluded: the parent mirrors the
+    Federated jobs (``cluster != 'local'``) are excluded: the parent mirrors the
     peer, so a peer-issued tombstone is the only path that deletes their rows.
     """
     row = tx.execute(
@@ -470,7 +495,7 @@ def find_prunable_job(tx: Tx, terminal_states: Iterable[int], before_ts: Timesta
             jobs_table.c.state.in_(bindparam("terminal_states", expanding=True)),
             jobs_table.c.finished_at_ms.is_not(None),
             jobs_table.c.finished_at_ms < bindparam("before_ts"),
-            jobs_table.c.child_cluster == "",
+            jobs_table.c.cluster == LOCAL_CLUSTER,
         )
         .limit(1),
         {"terminal_states": list(terminal_states), "before_ts": before_ts},
@@ -521,7 +546,7 @@ def get_job_detail(tx: Tx, job_id: JobName):
             jobs_table.c.depth,
             jobs_table.c.parent_job_id,
             jobs_table.c.backend_id,
-            jobs_table.c.child_cluster,
+            jobs_table.c.cluster,
             job_config_table.c.res_cpu_millicores,
             job_config_table.c.res_memory_bytes,
             job_config_table.c.res_disk_bytes,
@@ -781,8 +806,6 @@ PENDING_TASK_COLS = (
     local_tasks.c.backend_id,
     local_tasks.c.state,
     local_tasks.c.current_attempt_id,
-    local_tasks.c.failure_count,
-    local_tasks.c.preemption_count,
     local_tasks.c.max_retries_failure,
     local_tasks.c.max_retries_preemption,
     local_tasks.c.submitted_at_ms,
@@ -800,8 +823,6 @@ def _row_to_pending_task(row: Row) -> PendingTask:
         backend_id=str(row.backend_id),
         state=int(row.state),
         current_attempt_id=int(row.current_attempt_id),
-        failure_count=int(row.failure_count),
-        preemption_count=int(row.preemption_count),
         max_retries_failure=int(row.max_retries_failure),
         max_retries_preemption=int(row.max_retries_preemption),
         submitted_at_ms=row.submitted_at_ms,
@@ -964,22 +985,99 @@ def bulk_get_attempts(
     return result
 
 
-_RESOLVE_ATTEMPT_UIDS_STMT = select(
-    task_attempts_table.c.attempt_uid,
-    task_attempts_table.c.task_id,
-    task_attempts_table.c.attempt_id,
-).where(task_attempts_table.c.attempt_uid.in_(bindparam("uids", expanding=True)))
+def attempt_counts_for_tasks(tx: Tx, task_ids: Sequence[JobName]) -> dict[JobName, AttemptCounts]:
+    """Return ``{task_id: AttemptCounts}`` derived from each task's attempt rows.
+
+    Tasks with no attempts are absent from the map (callers default to zero).
+    """
+    ids = list(task_ids)
+    if not ids:
+        return {}
+    rows = tx.execute(
+        select(
+            task_attempts_table.c.task_id,
+            failure_count_expr().label("failure_count"),
+            preemption_count_expr().label("preemption_count"),
+        )
+        .where(task_attempts_table.c.task_id.in_(bindparam("task_ids", expanding=True)))
+        .group_by(task_attempts_table.c.task_id),
+        {"task_ids": ids},
+    ).all()
+    return {
+        row.task_id: AttemptCounts(failure_count=int(row.failure_count), preemption_count=int(row.preemption_count))
+        for row in rows
+    }
+
+
+def attempt_counts_for_jobs(tx: Tx, job_ids: Sequence[JobName]) -> dict[JobName, AttemptCounts]:
+    """Return ``{job_id: AttemptCounts}`` summing every task's derived counts per job.
+
+    Jobs with no attempt rows are absent from the map (callers default to zero).
+    """
+    ids = list(job_ids)
+    if not ids:
+        return {}
+    rows = tx.execute(
+        select(
+            tasks_table.c.job_id,
+            failure_count_expr().label("failure_count"),
+            preemption_count_expr().label("preemption_count"),
+        )
+        .select_from(tasks_table.join(task_attempts_table, task_attempts_table.c.task_id == tasks_table.c.task_id))
+        .where(tasks_table.c.job_id.in_(bindparam("job_ids", expanding=True)))
+        .group_by(tasks_table.c.job_id),
+        {"job_ids": ids},
+    ).all()
+    return {
+        row.job_id: AttemptCounts(failure_count=int(row.failure_count), preemption_count=int(row.preemption_count))
+        for row in rows
+    }
+
+
+def all_attempts_for_tasks(tx: Tx, task_ids: Sequence[JobName]) -> dict[JobName, tuple[object, ...]]:
+    """Return ``{task_id: (attempt_row, ...)}`` with every attempt per task, ascending by attempt id.
+
+    Returns the complete attempt history per task, with no per-task cap.
+    """
+    if not task_ids:
+        return {}
+    rows = tx.execute(
+        select(*ATTEMPT_COLS)
+        .where(task_attempts_table.c.task_id.in_(bindparam("task_ids", expanding=True)))
+        .order_by(task_attempts_table.c.task_id.asc(), task_attempts_table.c.attempt_id.asc()),
+        {"task_ids": list(task_ids)},
+    ).all()
+    grouped: dict[JobName, list[object]] = {}
+    for row in rows:
+        grouped.setdefault(row.task_id, []).append(row)
+    return {task_id: tuple(attempts) for task_id, attempts in grouped.items()}
+
+
+# Resolution joins ``local_tasks`` so it only ever resolves attempts of locally
+# owned tasks. A federated task's mirrored attempts (task ``cluster`` set to a peer)
+# are excluded, keeping this worker-routing / reconcile reader off the fold.
+_RESOLVE_ATTEMPT_UIDS_STMT = (
+    select(
+        task_attempts_table.c.attempt_uid,
+        task_attempts_table.c.task_id,
+        task_attempts_table.c.attempt_id,
+    )
+    .select_from(task_attempts_table.join(local_tasks, local_tasks.c.task_id == task_attempts_table.c.task_id))
+    .where(task_attempts_table.c.attempt_uid.in_(bindparam("uids", expanding=True)))
+)
 
 
 def resolve_attempt_uids(
     tx: Tx,
     uids: Sequence[AttemptUid],
 ) -> dict[AttemptUid, tuple[JobName, int]]:
-    """Return ``{attempt_uid: (task_id, attempt_id)}`` for the requested UIDs.
+    """Return ``{attempt_uid: (task_id, attempt_id)}`` for locally owned tasks' UIDs.
 
     Drives the worker-routing path: an ``AttemptObservation`` carrying an
     ``attempt_uid`` is resolved to its composite key through the
-    ``idx_task_attempts_uid`` unique index. Missing UIDs are silently absent.
+    ``idx_task_attempts_uid`` unique index. Restricted to ``local_tasks`` so a
+    federated task's mirrored attempt never resolves. Missing UIDs are silently
+    absent.
     """
     if not uids:
         return {}
@@ -1020,8 +1118,6 @@ TASK_DETAIL_COLS = (
     tasks_table.c.job_id,
     tasks_table.c.state,
     tasks_table.c.current_attempt_id,
-    tasks_table.c.failure_count,
-    tasks_table.c.preemption_count,
     tasks_table.c.max_retries_failure,
     tasks_table.c.max_retries_preemption,
     tasks_table.c.submitted_at_ms,
@@ -1034,28 +1130,78 @@ TASK_DETAIL_COLS = (
     tasks_table.c.current_worker_address,
     tasks_table.c.container_id,
     tasks_table.c.backend_id,
-    tasks_table.c.child_cluster,
+    tasks_table.c.cluster,
 )
 
 
+def task_detail_query():
+    """Select ``TASK_DETAIL_COLS`` plus the ``federated_tasks.peer_worker_label`` sidecar.
+
+    The outer join yields ``peer_worker_label`` for a federated task (its display
+    worker identity, since it has no local worker row) and NULL for a local task.
+    """
+    return select(*TASK_DETAIL_COLS, federated_tasks_table.c.peer_worker_label).select_from(
+        tasks_table.outerjoin(federated_tasks_table, federated_tasks_table.c.task_id == tasks_table.c.task_id)
+    )
+
+
+def _task_detail_from_row(row, counts: AttemptCounts) -> TaskDetailRow:
+    """Assemble a :class:`TaskDetailRow` from a ``task_detail_query`` row plus its
+    derived attempt counts."""
+    return TaskDetailRow(
+        task_id=row.task_id,
+        job_id=row.job_id,
+        state=int(row.state),
+        current_attempt_id=int(row.current_attempt_id),
+        failure_count=counts.failure_count,
+        preemption_count=counts.preemption_count,
+        max_retries_failure=int(row.max_retries_failure),
+        max_retries_preemption=int(row.max_retries_preemption),
+        submitted_at_ms=row.submitted_at_ms,
+        priority_band=int(row.priority_band),
+        error=row.error,
+        exit_code=row.exit_code,
+        started_at_ms=row.started_at_ms,
+        finished_at_ms=row.finished_at_ms,
+        current_worker_id=row.current_worker_id,
+        current_worker_address=row.current_worker_address,
+        container_id=row.container_id,
+        backend_id=str(row.backend_id or ""),
+        cluster=str(row.cluster),
+        peer_worker_label=row.peer_worker_label,
+    )
+
+
 def get_task_detail(tx: Tx, task_id: JobName) -> TaskDetailRow | None:
-    """Return SA Row for ``task_id`` or None."""
-    return tx.execute(  # type: ignore[return-value]
-        select(*TASK_DETAIL_COLS).where(tasks_table.c.task_id == bindparam("task_id")),
+    """Return the :class:`TaskDetailRow` for ``task_id`` or None.
+
+    Failure/preemption counts are derived from the task's attempt rows.
+    """
+    row = tx.execute(
+        task_detail_query().where(tasks_table.c.task_id == bindparam("task_id")),
         {"task_id": task_id},
     ).first()
+    if row is None:
+        return None
+    counts = attempt_counts_for_tasks(tx, [task_id]).get(task_id, AttemptCounts())
+    return _task_detail_from_row(row, counts)
 
 
 def bulk_get_task_detail(tx: Tx, task_ids: Iterable[JobName]) -> dict[JobName, TaskDetailRow]:
-    """Return ``{task_id: TaskDetailRow}`` for all ``task_ids`` that exist. Missing keys are silently absent."""
+    """Return ``{task_id: TaskDetailRow}`` for all ``task_ids`` that exist. Missing keys are silently absent.
+
+    Failure/preemption counts are derived from the tasks' attempt rows in one
+    aggregate query.
+    """
     ids = list(task_ids)
     if not ids:
         return {}
     rows = tx.execute(
-        select(*TASK_DETAIL_COLS).where(tasks_table.c.task_id.in_(bindparam("task_ids", expanding=True))),
+        task_detail_query().where(tasks_table.c.task_id.in_(bindparam("task_ids", expanding=True))),
         {"task_ids": ids},
     ).all()
-    return {row.task_id: row for row in rows}  # type: ignore[return-value]
+    counts = attempt_counts_for_tasks(tx, [row.task_id for row in rows])
+    return {row.task_id: _task_detail_from_row(row, counts.get(row.task_id, AttemptCounts())) for row in rows}
 
 
 _ACTIVE_TASK_COLS = (
@@ -1064,8 +1210,6 @@ _ACTIVE_TASK_COLS = (
     local_tasks.c.state,
     local_tasks.c.current_attempt_id,
     local_tasks.c.current_worker_id,
-    local_tasks.c.failure_count,
-    local_tasks.c.preemption_count,
     local_tasks.c.max_retries_failure,
     local_tasks.c.max_retries_preemption,
     job_config_table.c.has_coscheduling,
@@ -1074,15 +1218,14 @@ _ACTIVE_TASK_COLS = (
 _ACTIVE_TASK_FROM = local_tasks.join(job_config_table, job_config_table.c.job_id == local_tasks.c.job_id)
 
 
-def _row_to_active_task(row) -> ActiveTaskRow:
+def _row_to_active_task(row, counts: AttemptCounts) -> ActiveTaskRow:
     return ActiveTaskRow(
         task_id=row.task_id,
         job_id=row.job_id,
         state=int(row.state),
         current_attempt_id=int(row.current_attempt_id),
         current_worker_id=row.current_worker_id,
-        failure_count=int(row.failure_count),
-        preemption_count=int(row.preemption_count),
+        preemption_count=counts.preemption_count,
         max_retries_failure=int(row.max_retries_failure),
         max_retries_preemption=int(row.max_retries_preemption),
         has_coscheduling=bool(row.has_coscheduling),
@@ -1155,7 +1298,8 @@ def list_active_tasks(
         stmt = stmt.limit(limit)
 
     rows = tx.execute(stmt, params).all()
-    return [_row_to_active_task(row) for row in rows]
+    counts = attempt_counts_for_tasks(tx, [row.task_id for row in rows])
+    return [_row_to_active_task(row, counts.get(row.task_id, AttemptCounts())) for row in rows]
 
 
 def list_active_tasks_for_jobs(
@@ -1185,9 +1329,10 @@ def list_active_tasks_for_jobs(
         )
     )
     rows = tx.execute(stmt, {"bulk_job_ids": ids, "active_states": list(states_tuple)}).all()
+    counts = attempt_counts_for_tasks(tx, [row.task_id for row in rows])
     lists: dict[JobName, list[ActiveTaskRow]] = {}
     for row in rows:
-        lists.setdefault(row.job_id, []).append(_row_to_active_task(row))
+        lists.setdefault(row.job_id, []).append(_row_to_active_task(row, counts.get(row.task_id, AttemptCounts())))
     for jid, task_rows in lists.items():
         result[jid] = tuple(task_rows)
     return result
@@ -1663,9 +1808,8 @@ def load_control_snapshot(
 class FederatedHandle:
     """A parent-side SENT federated job handle (``federated_jobs`` ⋈ ``jobs``)."""
 
-    job_id: JobName  # this cluster's local (root) job id
+    job_id: JobName  # this cluster's local (root) job id; the peer runs the same id
     peer_id: str
-    remote_job_id: str
     owner_principal: str
     handoff_state: int
     cancel_intent_version: int
@@ -1674,7 +1818,6 @@ class FederatedHandle:
 _SENT_HANDLE_COLUMNS = (
     federated_jobs_table.c.job_id,
     federated_jobs_table.c.peer_id,
-    federated_jobs_table.c.remote_job_id,
     federated_jobs_table.c.owner_principal,
     federated_jobs_table.c.handoff_state,
     federated_jobs_table.c.cancel_intent_version,
@@ -1685,7 +1828,6 @@ def _sent_handle(row) -> FederatedHandle:
     return FederatedHandle(
         job_id=row.job_id,
         peer_id=row.peer_id,
-        remote_job_id=row.remote_job_id,
         owner_principal=row.owner_principal,
         handoff_state=int(row.handoff_state),
         cancel_intent_version=int(row.cancel_intent_version),
@@ -1743,34 +1885,75 @@ def pending_cancel_handles(tx: Tx) -> list[FederatedHandle]:
     return [_sent_handle(r) for r in rows]
 
 
-def federated_job_for_remote_id(tx: Tx, peer_id: str, remote_job_id: str) -> JobName | None:
-    """The local SENT job id for a peer's ``remote_job_id`` handle, or ``None``."""
+def federated_sent_job(tx: Tx, peer_id: str, job_id: JobName) -> JobName | None:
+    """``job_id`` iff a SENT ``federated_jobs`` handle for ``(peer_id, job_id)`` exists.
+
+    Job ids are cluster-invariant — the peer runs and reports the same id the parent
+    handed it — so the peer's reported id IS the local id. Confirms the parent
+    actually handed ``job_id`` to ``peer_id`` before mirroring the peer's report; a
+    peer reporting an id it was never handed is ignored.
+    """
     row = tx.execute(
         select(federated_jobs_table.c.job_id).where(
             federated_jobs_table.c.direction == int(FederationDirection.SENT),
             federated_jobs_table.c.peer_id == peer_id,
-            federated_jobs_table.c.remote_job_id == remote_job_id,
+            federated_jobs_table.c.job_id == job_id,
         )
     ).first()
     return row.job_id if row is not None else None
 
 
-def federated_handles_for_peer(tx: Tx, peer_id: str) -> dict[str, JobName]:
-    """``{remote_job_id: local_job_id}`` for every *handed-off* SENT handle to ``peer_id``.
+def handoff_states(tx: Tx, job_ids: Sequence[JobName]) -> dict[JobName, int]:
+    """``{job_id: handoff_state}`` for the SENT handles among ``job_ids``.
+
+    The list path's batched counterpart to :func:`federated_handle`: one
+    ``IN (...)`` read for a whole page instead of a per-job handle load. Job ids
+    without a SENT handle (local jobs, peer-side RECEIVED rows) are simply absent
+    from the result.
+    """
+    if not job_ids:
+        return {}
+    rows = tx.execute(
+        select(federated_jobs_table.c.job_id, federated_jobs_table.c.handoff_state).where(
+            federated_jobs_table.c.direction == int(FederationDirection.SENT),
+            federated_jobs_table.c.job_id.in_(bindparam("job_ids", expanding=True)),
+        ),
+        {"job_ids": list(job_ids)},
+    ).all()
+    return {r.job_id: int(r.handoff_state) for r in rows}
+
+
+def received_requester(tx: Tx, job_id: JobName) -> str | None:
+    """The requester ``peer_id`` of a RECEIVED ``federated_jobs`` row for ``job_id``, else ``None``.
+
+    Drives peer-side handoff admission: a re-drive from the same requester is an
+    idempotent replay; any other existing row is a genuine collision.
+    """
+    row = tx.execute(
+        select(federated_jobs_table.c.peer_id).where(
+            federated_jobs_table.c.job_id == job_id,
+            federated_jobs_table.c.direction == int(FederationDirection.RECEIVED),
+        )
+    ).first()
+    return row.peer_id if row is not None else None
+
+
+def federated_handles_for_peer(tx: Tx, peer_id: str) -> set[JobName]:
+    """The set of *handed-off* SENT job ids delegated to ``peer_id``.
 
     Restricted to ``HANDED_OFF`` handles: a still-``PENDING_HANDOFF`` handle is not
     on the peer yet (the re-drive owns it), so its absence from the peer's active
     set is expected — a full resync must not reap it.
     """
     rows = tx.execute(
-        select(federated_jobs_table.c.remote_job_id, federated_jobs_table.c.job_id).where(
+        select(federated_jobs_table.c.job_id).where(
             federated_jobs_table.c.direction == int(FederationDirection.SENT),
             federated_jobs_table.c.peer_id == peer_id,
             federated_jobs_table.c.handoff_state == bindparam("handed_off"),
         ),
         {"handed_off": int(HandoffState.HANDED_OFF)},
     ).all()
-    return {r.remote_job_id: r.job_id for r in rows}
+    return {r.job_id for r in rows}
 
 
 def active_federated_job_count(tx: Tx, peer_id: str) -> int:
@@ -1804,7 +1987,7 @@ def read_sync_cursor(tx: Tx, peer_id: str) -> str:
 class ChangelogRow:
     """One raw ``federation_changelog`` row for a requester."""
 
-    job_id: JobName  # the peer's local job id (== the requester's remote_job_id)
+    job_id: JobName  # the cluster-invariant job id (same on peer and requester)
     task_index: int | None  # None = a job-level change ("all tasks")
     tombstone: bool
     seq: int
@@ -1820,7 +2003,7 @@ def changelog_min_seq(tx: Tx) -> int:
     return int(tx.execute(select(func.coalesce(func.min(federation_changelog_table.c.seq), 0))).scalar() or 0)
 
 
-def active_received_jobs(tx: Tx, requester_id: str) -> list[JobName]:
+def received_jobs_for_requester(tx: Tx, requester_id: str) -> list[JobName]:
     """Every still-present job this peer received from ``requester_id`` (the full set
     a stale/first-contact requester is resynced with)."""
     rows = tx.execute(

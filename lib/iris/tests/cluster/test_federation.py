@@ -54,7 +54,6 @@ def test_peers_config_round_trips_through_serialization():
                     "controller_address": "http://cw:10000",
                     "dashboard_url": "https://cw.dev",
                     "cluster": "cw-east",
-                    "static_token": "shhh",
                 }
             }
         )
@@ -64,7 +63,6 @@ def test_peers_config_round_trips_through_serialization():
     assert peer.controller_address == "http://cw:10000"
     assert peer.dashboard_url == "https://cw.dev"
     assert peer.cluster == "cw-east"
-    assert peer.static_token == "shhh"
 
 
 def test_no_peers_configured_is_valid_and_empty():
@@ -81,21 +79,6 @@ def test_peers_config_rejects_unknown_field():
     # a typo we reject rather than silently ignore (extra="forbid").
     with pytest.raises(pydantic.ValidationError):
         parse_config(_config(peers={"cw": {"controller_address": "http://cw", "capabilities": ["H100"]}}))
-
-
-def test_peers_config_rejects_static_token_without_cluster():
-    with pytest.raises(ValueError, match="static_token requires cluster"):
-        parse_config(_config(peers={"cw": {"controller_address": "http://cw", "static_token": "shhh"}}))
-
-
-# ---------------------------------------------------------------------------
-# finelog relay: validation
-# ---------------------------------------------------------------------------
-
-
-def test_finelog_relay_rejects_short_delegation_key():
-    with pytest.raises(ValueError, match="delegation_key must be at least 16 bytes"):
-        parse_config(_config(finelog={"relay_address": "dns:///g:1", "delegation_key": "short"}))
 
 
 # ---------------------------------------------------------------------------
@@ -164,7 +147,7 @@ def test_list_peers_view_surfaces_heartbeat_backends():
     assert forwarded.backend_id == "tpu-fleet"
     assert forwarded.kind == "worker-daemon"
     assert forwarded.worker_count == 3
-    assert summary.last_sync_ms > 0
+    assert summary.last_contact_ms > 0
 
 
 class _RecordingStub:
@@ -221,7 +204,7 @@ def test_manager_without_peers_is_inert():
         manager = FederationManager([], threads=threads)
         manager.start()  # nothing to probe; no heartbeat thread
         assert manager.peer_summaries() == []
-        request = RoutingRequest(constraints=[], user="alice", local_feasible=True)
+        request = RoutingRequest(constraints=[], local_feasible=True)
         assert manager.route_submit(request).is_local is True
         manager.stop()  # idempotent no-op
 
@@ -252,7 +235,7 @@ def test_build_peers_orders_by_id_and_uses_injected_factory():
 def test_router_prefers_local_when_feasible_even_with_a_reachable_peer():
     peer = _peer("cw", _StubConnection((_device_backend("tpu-fleet", "tpu"),)))
     peer.probe()
-    request = RoutingRequest(constraints=[_device_constraint("tpu")], user="alice", local_feasible=True)
+    request = RoutingRequest(constraints=[_device_constraint("tpu")], local_feasible=True)
     decision = PeerRouter([peer]).decide(request)
     assert decision.is_local is True
     assert decision.peer_id == ""
@@ -261,7 +244,7 @@ def test_router_prefers_local_when_feasible_even_with_a_reachable_peer():
 def test_router_hands_off_when_local_infeasible_and_a_peer_can_host():
     peer = _peer("cw", _StubConnection((_device_backend("tpu-fleet", "tpu"),)))
     peer.probe()
-    request = RoutingRequest(constraints=[_device_constraint("tpu")], user="alice", local_feasible=False)
+    request = RoutingRequest(constraints=[_device_constraint("tpu")], local_feasible=False)
     decision = PeerRouter([peer]).decide(request)
     assert decision.peer_id == "cw"
 
@@ -271,7 +254,7 @@ def test_router_stays_local_when_no_peer_can_host_the_shape():
     # caller fails it unschedulable rather than wedging it on an incapable peer.
     peer = _peer("cw", _StubConnection((_device_backend("cpu-fleet", "cpu"),)))
     peer.probe()
-    request = RoutingRequest(constraints=[_device_constraint("tpu")], user="alice", local_feasible=False)
+    request = RoutingRequest(constraints=[_device_constraint("tpu")], local_feasible=False)
     assert PeerRouter([peer]).decide(request).is_local is True
 
 
@@ -281,12 +264,12 @@ def test_router_skips_an_unreachable_peer():
     peer.probe()
     connection.fail = True
     peer.probe()  # now unreachable; its last-known backends are stale
-    request = RoutingRequest(constraints=[_device_constraint("tpu")], user="alice", local_feasible=False)
+    request = RoutingRequest(constraints=[_device_constraint("tpu")], local_feasible=False)
     assert PeerRouter([peer]).decide(request).is_local is True
 
 
 def test_router_cluster_pin_forces_the_peer_even_when_locally_feasible():
     peer = _peer("cw", _StubConnection((_device_backend("tpu-fleet", "tpu"),)))
     peer.probe()
-    request = RoutingRequest(constraints=[], user="alice", local_feasible=True, cluster_pin="cw")
+    request = RoutingRequest(constraints=[], local_feasible=True, cluster_pin="cw")
     assert PeerRouter([peer]).decide(request).peer_id == "cw"

@@ -16,9 +16,11 @@ import pytest
 from marin.execution.artifact import (
     Artifact,
     FingerprintMismatchError,
+    StepRecordIdentity,
     read_artifact,
     read_record,
     write_artifact,
+    write_step_record,
 )
 from marin.execution.lazy import ArtifactStep, run
 from pydantic import BaseModel
@@ -208,3 +210,108 @@ def test_read_record_prefers_modern_record_over_executor_info(tmp_path):
     record = read_record(tmp_path.as_posix())
     assert record.name == "modern"
     assert record.config == {"tokenizer": "gpt2"}
+
+
+# --- the pre-#6649 bare-payload .artifact.json ---------------------------------
+
+# Before #6649 the value model was serialized straight into ``.artifact.json`` with no record
+# wrapper: every payload field sits at top level and there is no name/fingerprint/result_type/result.
+_LEGACY_BARE_PAYLOAD = json.dumps(
+    {"version": "v1", "output_dir": "gs://bucket/datakit/embed/cp/peps_52c03790", "counters": {"rows": 128}}
+)
+
+
+class _EmbedPayload(BaseModel):
+    version: str
+    output_dir: str
+    counters: dict
+
+
+def test_read_artifact_adopts_pre_6649_bare_payload(tmp_path):
+    """A pre-#6649 bare ``.artifact.json`` loads: the whole document becomes the result payload."""
+    (tmp_path / ".artifact.json").write_text(_LEGACY_BARE_PAYLOAD)
+
+    loaded = read_artifact(tmp_path.as_posix(), _EmbedPayload)
+    assert loaded == _EmbedPayload(
+        version="v1", output_dir="gs://bucket/datakit/embed/cp/peps_52c03790", counters={"rows": 128}
+    )
+
+
+def test_read_record_leaves_a_genuine_data_record_untouched(tmp_path):
+    """A modern record with identity but no ``result`` is not mistaken for a bare payload."""
+    (tmp_path / ".artifact.json").write_text(
+        '{"name": "datasets/x", "version": "v1", "fingerprint": "abc", "result": null}'
+    )
+
+    record = read_record(tmp_path.as_posix())
+    assert record.name == "datasets/x"
+    assert record.result is None
+
+
+# --- the schedule-time StepRunner .executor_info stub --------------------------
+
+# A schedule-time ``StepRunner`` stub: same filename, but ``executor_version == "step_runner"`` and
+# a ``config`` that is the identity ``hash_attrs`` (no materialized tokenizer/format/tags).
+_STEP_RUNNER_STUB = json.dumps(
+    {
+        "executor_version": "step_runner",
+        "name": "paloma/4chan-llama3",
+        "config": {"fingerprint": "449bd131", "version": "2026.06.28", "deps": []},
+        "output_path": "gs://bucket/paloma/4chan-llama3/2026.06.28",
+    }
+)
+
+
+def test_read_record_ignores_step_runner_stub(tmp_path):
+    """A schedule-time ``StepRunner`` ``.executor_info`` stub is not served as a record — it
+    carries no materialized config, so the output reads back as record-less rather than as a
+    tokenizer-less cache (#6836)."""
+    (tmp_path / ".executor_info").write_text(_STEP_RUNNER_STUB)
+
+    assert read_record(tmp_path.as_posix()) is None
+
+
+class _Meta(BaseModel):
+    path: str
+    n: int
+
+
+def test_write_step_record_roundtrips_identity_and_payload(tmp_path):
+    """The full step record carries name/deps/config/fingerprint_payload + the typed payload, and
+    stamps best-effort provenance without failing when git is unavailable."""
+    out = tmp_path.as_posix()
+    write_step_record(
+        StepRecordIdentity(
+            name="child",
+            deps=["parent_ab12cd34"],
+            dep_paths=[f"{out}/normalize"],
+            config={"tokenizer": "gpt2"},
+            fingerprint_payload="fp-json",
+        ),
+        output_path=out,
+        result=_Meta(path=out, n=7),
+    )
+
+    rec = read_record(out)
+    assert rec is not None
+    assert rec.name == "child"
+    assert rec.deps == ["parent_ab12cd34"]
+    assert rec.dep_paths == [f"{out}/normalize"]
+    assert rec.config == {"tokenizer": "gpt2"}
+    assert rec.fingerprint_payload == "fp-json"
+    assert rec.result == {"path": out, "n": 7}
+    # provenance is best-effort: git fields degrade to empty on a git-less bundle; never raises
+    assert read_artifact(out, _Meta).n == 7
+
+
+def test_write_step_record_tolerates_none_result(tmp_path):
+    """A side-effect step (fn returns None) records identity + lineage with a null payload."""
+    out = tmp_path.as_posix()
+    identity = StepRecordIdentity(name="train", deps=[], dep_paths=[], config={"seed": 42})
+    write_step_record(identity, output_path=out, result=None)
+
+    rec = read_record(out)
+    assert rec is not None
+    assert rec.name == "train"
+    assert rec.config == {"seed": 42}
+    assert rec.result is None

@@ -1,6 +1,9 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import contextlib
+from unittest.mock import MagicMock
+
 import equinox as eqx
 import haliax as hax
 import jax
@@ -9,8 +12,9 @@ import jmp
 import optax
 import pytest
 
+import levanter.tracker as tracker_mod
 from levanter.callbacks import eval_loss_loop
-from levanter.callbacks._metrics import compute_instant_throughput
+from levanter.callbacks._metrics import compute_instant_throughput, log_step_info
 from levanter.metrics import (
     Metric,
     ReductionType,
@@ -18,6 +22,7 @@ from levanter.metrics import (
     fold,
     unwrap_metrics,
 )
+from levanter.schedule import BatchSchedule, ScheduleStep
 from levanter.tracker import NoopConfig
 from levanter.trainer import Trainer, TrainerConfig, WrappedLossFunction
 
@@ -357,3 +362,76 @@ def test_microbatching_metric_aggregation():
         assert jnp.allclose(logged_metrics["train/accuracy"], 0.95)
         assert jnp.allclose(logged_metrics["train/num_tokens"], 256.0)
         assert jnp.allclose(logged_metrics["train/max_logit"], 5.0)
+
+
+def _make_step_info(step_number: int, loss: float = 1.0) -> MagicMock:
+    """Create a minimal StepInfo mock for testing log_step_info."""
+    info = MagicMock()
+    info.step = step_number
+    info.loss = loss
+    info.opt_state = {}
+    return info
+
+
+def _patch_tracker(logged: dict):
+    """Context manager that redirects tracker.log into ``logged``."""
+
+    @contextlib.contextmanager
+    def _ctx():
+        orig_log = tracker_mod.log
+        orig_log_optim = tracker_mod.log_optimizer_hyperparams
+        tracker_mod.log = lambda m, step=None, commit=None: logged.update(m)
+        tracker_mod.log_optimizer_hyperparams = lambda *a, **kw: None
+        try:
+            yield
+        finally:
+            tracker_mod.log = orig_log
+            tracker_mod.log_optimizer_hyperparams = orig_log_optim
+
+    return _ctx()
+
+
+def test_log_step_info_token_progress_uniform_batch():
+    """With a uniform batch schedule, progress equals completed_steps / total_steps."""
+    schedule = BatchSchedule(32)
+    total_steps = 100
+    logged: dict = {}
+
+    cb = log_step_info(total_steps, schedule)
+    with _patch_tracker(logged):
+        cb(_make_step_info(49))  # step 49 done → 50 steps completed
+
+    # token-based: global_data_offset(50) / global_data_offset(100) = 50*32 / 100*32 = 0.5
+    assert abs(logged["run_progress"] - 0.5) < 1e-9
+
+
+def test_log_step_info_token_progress_variable_batch():
+    """Token-based progress is batch-size independent when the schedule changes mid-run."""
+    # Steps 0–49: batch 32  → 50 * 32 = 1600 examples
+    # Steps 50–99: batch 64 → 50 * 64 = 3200 examples
+    # Total: 4800 examples
+    schedule = BatchSchedule([ScheduleStep(0, 32), ScheduleStep(50, 64)])
+    total_steps = 100
+    logged: dict = {}
+
+    cb = log_step_info(total_steps, schedule)
+    with _patch_tracker(logged):
+        # After step 74 (0-indexed): examples = 1600 + 25*64 = 3200; total = 4800
+        cb(_make_step_info(74))
+
+    expected = 3200 / 4800
+    assert abs(logged["run_progress"] - expected) < 1e-9
+    # Also confirm it differs from naive step ratio
+    assert abs(logged["run_progress"] - 74 / 100) > 0.01
+
+
+def test_log_step_info_falls_back_to_step_progress_without_schedule():
+    """Without a batch schedule, run_progress falls back to step ratio."""
+    total_steps = 100
+    logged: dict = {}
+
+    cb = log_step_info(total_steps)
+    with _patch_tracker(logged):
+        cb(_make_step_info(25))
+
+    assert abs(logged["run_progress"] - 0.25) < 1e-9

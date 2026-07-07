@@ -9,6 +9,7 @@ import dupekit
 import humanfriendly
 import pyarrow as pa
 from fray import ResourceConfig
+from rigging.filesystem import rebase_file_path
 from zephyr import DEFAULT_FILE_PATH_COLUMN, ZephyrContext, counters, write_parquet_file
 from zephyr.dataset import Dataset
 
@@ -23,7 +24,6 @@ from marin.processing.classification.deduplication.dedup_commons import (
     finalize_dedup,
     make_document_dedup_aggregator,
 )
-from marin.utils import rebase_file_path
 
 logger = logging.getLogger(__name__)
 

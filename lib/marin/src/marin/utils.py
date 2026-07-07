@@ -165,52 +165,6 @@ def is_path_like(path: str) -> bool:
     return os.path.exists(path)
 
 
-def rebase_file_path(
-    base_in_path: str,
-    file_path: str,
-    base_out_path: str,
-    new_extension: str | None = None,
-    old_extension: str | None = None,
-) -> str:
-    """
-    Rebase a file path from one directory to another, with an option to change the file extension.
-
-    Args:
-        base_in_path (str): The base directory of the input file
-        file_path (str): The path of the file
-        base_out_path (str): The base directory of the output file
-        new_extension (str, optional): If provided, the new file extension to use (including the dot, e.g., '.txt')
-        old_extension (str, optional): If provided along with new_extension, specifies the old extension to replace.
-                                       Must be the actual suffix of ``file_path``; a ``ValueError`` is raised if not.
-                                       If not provided (but `new_extension` is), the function will replace everything
-                                       after the last dot. If there is no dot, ``new_extension`` is appended.
-
-    Returns:
-        str: The rebased file path
-    """
-
-    rel_path = os.path.relpath(file_path, base_in_path)
-
-    if old_extension and not new_extension:
-        raise ValueError("old_extension requires new_extension to be set")
-
-    if new_extension:
-        if old_extension:
-            # Use endswith rather than rfind so we fail loudly on a mismatch instead of
-            # silently truncating the path (rfind returns -1, and rel_path[:-1] drops
-            # the last character).
-            if not rel_path.endswith(old_extension):
-                raise ValueError(
-                    f"Cannot rebase {file_path!r}: relative path {rel_path!r} does not end with "
-                    f"old_extension={old_extension!r}"
-                )
-            rel_path = rel_path[: -len(old_extension)] + new_extension
-        else:
-            dot_idx = rel_path.rfind(".")
-            rel_path = (rel_path[:dot_idx] if dot_idx != -1 else rel_path) + new_extension
-    return os.path.join(base_out_path, rel_path)
-
-
 def get_directory_friendly_name(name: str) -> str:
     """Convert a huggingface repo name to a directory friendly name."""
     return name.replace("/", "--").replace(".", "-").replace("#", "-")

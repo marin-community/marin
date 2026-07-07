@@ -3,7 +3,8 @@ import { ref, computed, onMounted } from 'vue'
 import { RouterLink } from 'vue-router'
 import { useBackends } from '@/composables/useBackends'
 import { useAutoRefresh, DEFAULT_REFRESH_MS } from '@/composables/useAutoRefresh'
-import type { BackendSummary, UnroutableJob } from '@/types/rpc'
+import type { BackendSummary, PeerSummary, UnroutableJob, ListPeersResponse } from '@/types/rpc'
+import { formatRelativeTime } from '@/utils/formatting'
 import InfoRow from '@/components/shared/InfoRow.vue'
 import MetricCard from '@/components/shared/MetricCard.vue'
 import ConstraintChip from '@/components/shared/ConstraintChip.vue'
@@ -11,12 +12,21 @@ import EmptyState from '@/components/shared/EmptyState.vue'
 import LoadingSpinner from '@/components/shared/LoadingSpinner.vue'
 import BackendDetailPanel from '@/components/controller/BackendDetailPanel.vue'
 
-// Above this threshold render a compact table instead of the card grid.
+// Above this threshold (counting backends + peers) render a compact table
+// instead of the card grid.
 const TABLE_THRESHOLD = 8
 
-const { listBackends } = useBackends()
+const { listBackends, listPeers } = useBackends()
+
+// proto3 JSON omits empty repeated fields, so a backend with no scale groups or
+// capabilities arrives with those keys absent. Fill them in at the boundary so
+// the card/table renderers can treat them as always-present arrays.
+function normalizeBackend(b: BackendSummary): BackendSummary {
+  return { ...b, capabilities: b.capabilities ?? [], scaleGroups: b.scaleGroups ?? [] }
+}
 
 const backendSummaries = ref<BackendSummary[]>([])
+const peerSummaries = ref<PeerSummary[]>([])
 const unroutableJobCount = ref(0)
 const unroutableSample = ref<UnroutableJob[]>([])
 const loading = ref(true)
@@ -42,10 +52,19 @@ async function refresh() {
   loading.value = true
   error.value = null
   try {
-    const resp = await listBackends()
-    backendSummaries.value = resp.backends ?? []
-    unroutableJobCount.value = resp.unroutableJobCount ?? 0
-    unroutableSample.value = resp.unroutableSample ?? []
+    // Peers and backends are distinct RPCs (distinct ownership); the tab is a
+    // display merge only. A peers failure must not blank the backends view.
+    const [backendsResp, peersResp] = await Promise.all([
+      listBackends(),
+      listPeers().catch(() => ({ peers: [] }) as ListPeersResponse),
+    ])
+    backendSummaries.value = (backendsResp.backends ?? []).map(normalizeBackend)
+    unroutableJobCount.value = backendsResp.unroutableJobCount ?? 0
+    unroutableSample.value = backendsResp.unroutableSample ?? []
+    peerSummaries.value = (peersResp.peers ?? []).map((p) => ({
+      ...p,
+      backends: (p.backends ?? []).map(normalizeBackend),
+    }))
   } catch (e) {
     error.value = e instanceof Error ? e.message : String(e)
   } finally {
@@ -56,7 +75,9 @@ async function refresh() {
 onMounted(refresh)
 useAutoRefresh(refresh, DEFAULT_REFRESH_MS)
 
-const useTable = computed(() => backendSummaries.value.length > TABLE_THRESHOLD)
+const targetCount = computed(() => backendSummaries.value.length + peerSummaries.value.length)
+const useTable = computed(() => targetCount.value > TABLE_THRESHOLD)
+const isEmpty = computed(() => targetCount.value === 0)
 
 /**
  * Derive a health dot color class from BackendSummary.capacityHealth + counts.
@@ -108,6 +129,57 @@ function deviceChips(b: BackendSummary): string[] {
   }
   return chips
 }
+
+// -- Peer (federation) helpers: a peer is displayed as one execution target,
+// aggregating its forwarded backends' topology. Ownership stays distinct in the
+// code and RPCs (ListBackends vs ListPeers); only this tab merges them. --
+
+function peerBackends(p: PeerSummary): BackendSummary[] {
+  return p.backends ?? []
+}
+
+function peerCaps(p: PeerSummary): string[] {
+  const set = new Set<string>()
+  for (const b of peerBackends(p)) for (const c of b.capabilities ?? []) set.add(c)
+  return [...set]
+}
+
+function peerDeviceChips(p: PeerSummary): string[] {
+  const set = new Set<string>()
+  for (const b of peerBackends(p)) for (const chip of deviceChips(b)) set.add(chip)
+  return [...set]
+}
+
+function peerWorkerCount(p: PeerSummary): number {
+  return peerBackends(p).reduce((a, b) => a + (b.workerCount ?? 0), 0)
+}
+
+function peerRunningCount(p: PeerSummary): number {
+  return peerBackends(p).reduce((a, b) => a + (b.runningTaskCount ?? 0), 0)
+}
+
+function peerPendingCount(p: PeerSummary): number {
+  return peerBackends(p).reduce((a, b) => a + (b.pendingTaskCount ?? 0), 0)
+}
+
+function peerNeverContacted(p: PeerSummary): boolean {
+  return !p.lastContactMs || p.lastContactMs === '0'
+}
+
+function peerHealthDotClass(p: PeerSummary): string {
+  if (p.reachable) return 'bg-status-success'
+  return peerNeverContacted(p) ? 'bg-text-muted' : 'bg-status-danger'
+}
+
+function peerHealthLabel(p: PeerSummary): string {
+  if (p.reachable) return 'reachable'
+  return peerNeverContacted(p) ? 'never contacted' : 'unreachable'
+}
+
+function peerLastContact(p: PeerSummary): string {
+  const ms = Number(p.lastContactMs ?? '0')
+  return ms > 0 ? formatRelativeTime(ms) : 'never'
+}
 </script>
 
 <template>
@@ -115,8 +187,10 @@ function deviceChips(b: BackendSummary): string[] {
     <div class="flex items-center justify-between mb-4">
       <h2 class="text-xl font-semibold text-text">
         Backends
-        <span v-if="backendSummaries.length" class="ml-2 text-sm font-normal text-text-muted">
-          {{ backendSummaries.length }} backend{{ backendSummaries.length !== 1 ? 's' : '' }}
+        <span v-if="!isEmpty" class="ml-2 text-sm font-normal text-text-muted">
+          {{ backendSummaries.length }} backend{{ backendSummaries.length !== 1 ? 's' : '' }}<span
+            v-if="peerSummaries.length"
+          > · {{ peerSummaries.length }} peer{{ peerSummaries.length !== 1 ? 's' : '' }}</span>
         </span>
       </h2>
     </div>
@@ -150,15 +224,15 @@ function deviceChips(b: BackendSummary): string[] {
       {{ error }}
     </div>
 
-    <LoadingSpinner v-if="loading && backendSummaries.length === 0" />
+    <LoadingSpinner v-if="loading && isEmpty" />
 
     <EmptyState
-      v-else-if="!loading && backendSummaries.length === 0"
+      v-else-if="!loading && isEmpty"
       message="No backends registered"
       icon="🖥"
     />
 
-    <!-- Compact table for many backends -->
+    <!-- Compact table for many targets -->
     <div v-else-if="useTable" class="rounded-lg border border-surface-border bg-surface overflow-x-auto">
       <table class="w-full border-collapse text-sm">
         <thead>
@@ -174,7 +248,7 @@ function deviceChips(b: BackendSummary): string[] {
         <tbody>
           <template
             v-for="b in backendSummaries"
-            :key="b.backendId"
+            :key="'backend:' + b.backendId"
           >
             <tr
               class="border-b border-surface-border-subtle hover:bg-surface-raised transition-colors"
@@ -227,15 +301,57 @@ function deviceChips(b: BackendSummary): string[] {
               </td>
             </tr>
           </template>
+
+          <!-- Peer rows: not expandable; the ID links inward to the parent's jobs
+               list filtered to that cluster (?cluster=). -->
+          <tr
+            v-for="p in peerSummaries"
+            :key="'peer:' + p.peerId"
+            class="border-b border-surface-border-subtle hover:bg-surface-raised transition-colors"
+          >
+            <td class="px-3 py-2 font-mono text-xs">
+              <span class="flex items-center gap-1.5">
+                <span class="inline-block w-3" />
+                <span class="w-2 h-2 rounded-full shrink-0" :class="peerHealthDotClass(p)" />
+                <RouterLink
+                  :to="{ path: '/', query: { cluster: p.peerId } }"
+                  class="text-accent hover:underline"
+                >{{ p.peerId }}</RouterLink>
+                <span class="inline-block rounded bg-accent/10 text-accent px-1 text-[10px] font-semibold uppercase tracking-wide">peer</span>
+              </span>
+            </td>
+            <td class="px-3 py-2 text-text-secondary">peer</td>
+            <td class="px-3 py-2">
+              <span class="flex flex-wrap gap-1">
+                <span
+                  v-for="cap in peerCaps(p)"
+                  :key="cap"
+                  class="inline-block rounded bg-surface-sunken px-1.5 py-0.5 font-mono text-xs text-text-secondary"
+                >
+                  {{ cap }}
+                </span>
+              </span>
+            </td>
+            <td class="px-3 py-2 text-right font-mono tabular-nums" @click.stop>
+              <RouterLink :to="`/?cluster=${encodeURIComponent(p.peerId)}`" class="text-accent hover:underline">
+                {{ peerWorkerCount(p) }}
+              </RouterLink>
+            </td>
+            <td class="px-3 py-2 text-right font-mono tabular-nums text-xs">
+              {{ peerRunningCount(p) }} · {{ peerPendingCount(p) }}
+            </td>
+            <td class="px-3 py-2 text-xs text-text-secondary">{{ peerHealthLabel(p) }}</td>
+          </tr>
         </tbody>
       </table>
     </div>
 
-    <!-- Card grid for small backend counts -->
+    <!-- Card grid: one grid of cards, each a place work can run (backends first,
+         then peers). -->
     <div v-else class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
       <div
         v-for="b in backendSummaries"
-        :key="b.backendId"
+        :key="'backend:' + b.backendId"
         class="rounded-lg border border-surface-border bg-surface"
       >
         <!-- Card header -->
@@ -328,6 +444,66 @@ function deviceChips(b: BackendSummary): string[] {
 
         <!-- Expanded detail panel -->
         <BackendDetailPanel v-if="hasDetail(b) && expanded.has(b.backendId)" :backend="b" />
+      </div>
+
+      <!-- Peer cards: a federation peer as one execution target. -->
+      <div
+        v-for="p in peerSummaries"
+        :key="'peer:' + p.peerId"
+        class="rounded-lg border border-surface-border bg-surface"
+      >
+        <div class="px-4 pt-4 pb-2 flex items-center justify-between gap-2">
+          <div class="flex items-center gap-2 min-w-0">
+            <span
+              class="w-2.5 h-2.5 rounded-full shrink-0"
+              :class="peerHealthDotClass(p)"
+              :title="peerHealthLabel(p)"
+            />
+            <h3 class="font-semibold text-sm text-text truncate font-mono">{{ p.peerId }}</h3>
+            <span class="inline-block rounded bg-accent/10 text-accent px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide shrink-0">peer</span>
+          </div>
+          <span class="flex gap-1 shrink-0">
+            <span
+              v-for="cap in peerCaps(p)"
+              :key="cap"
+              class="inline-block rounded bg-surface-sunken px-1.5 py-0.5 font-mono text-xs text-text-secondary"
+            >
+              {{ cap }}
+            </span>
+          </span>
+        </div>
+
+        <div class="px-4 pb-4 space-y-2">
+          <InfoRow label="kind">peer</InfoRow>
+          <InfoRow label="status">{{ peerHealthLabel(p) }}</InfoRow>
+          <InfoRow label="last contact">{{ peerLastContact(p) }}</InfoRow>
+
+          <!-- Advertised device chips, unioned across the peer's backends -->
+          <div v-if="peerDeviceChips(p).length > 0" class="flex items-start gap-2 text-sm">
+            <span class="shrink-0 text-text-secondary">devices</span>
+            <span class="flex flex-wrap gap-1">
+              <ConstraintChip
+                v-for="chip in peerDeviceChips(p)"
+                :key="chip"
+                :constraint="chip"
+              />
+            </span>
+          </div>
+
+          <div class="grid grid-cols-3 gap-2 pt-1">
+            <MetricCard :value="peerBackends(p).length" label="Backends" size="sm" />
+            <MetricCard :value="peerWorkerCount(p)" label="Workers" size="sm" />
+            <MetricCard :value="`${peerRunningCount(p)}·${peerPendingCount(p)}`" label="Tasks" size="sm" />
+          </div>
+
+          <InfoRow label="active jobs">{{ p.activeFederatedJobs ?? 0 }}</InfoRow>
+
+          <div class="flex items-center gap-3 pt-1 text-xs">
+            <RouterLink :to="{ path: '/', query: { cluster: p.peerId } }" class="ml-auto text-accent hover:underline">
+              Jobs →
+            </RouterLink>
+          </div>
+        </div>
       </div>
     </div>
   </div>

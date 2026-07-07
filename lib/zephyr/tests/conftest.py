@@ -31,7 +31,7 @@ from zephyr.stage_io import ZephyrTaskResources
 ZEPHYR_ROOT = Path(__file__).resolve().parents[1]
 
 # Use Iris demo config as base
-IRIS_CONFIG = Path(__file__).resolve().parents[2] / "iris" / "config" / "test.yaml"
+IRIS_CONFIG = Path(__file__).resolve().parents[2] / "iris" / "config" / "ci-test.yaml"
 
 
 @pytest.fixture(scope="module")

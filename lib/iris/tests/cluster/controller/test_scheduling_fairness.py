@@ -152,9 +152,7 @@ def test_depth_boost_within_band():
             replicas=1,
         )
         with state._db.transaction() as cur:
-            ops.job.submit(
-                cur, job_id=child_id, request=child_req, ts=Timestamp.now(), run_template_cache=state._run_template_cache
-            )
+            ops.job.submit(cur, job_id=child_id, request=child_req, ts=Timestamp.now())
         child_tasks = query_tasks_for_job(state, child_id)
 
         schedulable = _pending(state)
@@ -195,9 +193,7 @@ def test_child_resolves_parent_band_from_job_config():
             replicas=1,
         )
         with state._db.transaction() as cur:
-            ops.job.submit(
-                cur, job_id=child_id, request=child_req, ts=Timestamp.now(), run_template_cache=state._run_template_cache
-            )
+            ops.job.submit(cur, job_id=child_id, request=child_req, ts=Timestamp.now())
         child_tasks = query_tasks_for_job(state, child_id)
 
         # Pending rows no longer inherit by reading parent task rows; the
@@ -333,9 +329,7 @@ def test_get_priority_bands_resolves_via_parent_chain():
             replicas=1,
         )
         with state._db.transaction() as cur:
-            ops.job.submit(
-                cur, job_id=sub_id, request=sub_req, ts=Timestamp.now(), run_template_cache=state._run_template_cache
-            )
+            ops.job.submit(cur, job_id=sub_id, request=sub_req, ts=Timestamp.now())
 
         # Sub-job with its own explicit BATCH → BATCH (own band wins, no walk).
         batch_sub_id = prod_job_id.child("batch-sub")
@@ -353,7 +347,6 @@ def test_get_priority_bands_resolves_via_parent_chain():
                 job_id=batch_sub_id,
                 request=batch_sub_req,
                 ts=Timestamp.now(),
-                run_template_cache=state._run_template_cache,
             )
 
         with state._db.read_snapshot() as snap:
@@ -427,7 +420,6 @@ def test_unplaceable_tasks_do_not_starve_placeable_tasks(make_controller, tmp_pa
                 job_id=jid,
                 request=tpu_req,
                 ts=Timestamp.now(),
-                run_template_cache=ctrl._run_template_cache,
             )
 
     # Submit 1 CPU task for alice — this should be placeable on the CPU worker
@@ -440,7 +432,6 @@ def test_unplaceable_tasks_do_not_starve_placeable_tasks(make_controller, tmp_pa
             job_id=cpu_jid,
             request=cpu_req,
             ts=Timestamp.now(),
-            run_template_cache=ctrl._run_template_cache,
         )
 
     # Register exactly 1 CPU worker — no TPU workers
@@ -452,7 +443,6 @@ def test_unplaceable_tasks_do_not_starve_placeable_tasks(make_controller, tmp_pa
             metadata=make_worker_metadata(cpu=4, memory_bytes=8 * 1024**3),
             ts=Timestamp.now(),
             health=ctrl.provider.health,
-            worker_attrs=ctrl.provider.worker_attrs,
         )
 
     outcome = ctrl._run_scheduling()

@@ -18,12 +18,12 @@ from dataclasses import dataclass
 from iris.cluster.constraints import AttributeValue
 from iris.cluster.controller import writes
 from iris.cluster.controller.db import ControllerDB
+from iris.cluster.controller.projections.attempt_counts import AttemptCountsProjection
 from iris.cluster.controller.projections.endpoints import EndpointsProjection
+from iris.cluster.controller.projections.run_templates import RunTemplatesProjection
 from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
-from iris.cluster.controller.run_template import RunTemplateCache, new_run_template_cache
 from iris.cluster.controller.schema import (
     tasks_table,
-    worker_attributes_table,
     workers_table,
 )
 from iris.cluster.controller.task_state import ACTIVE_TASK_STATES
@@ -32,7 +32,6 @@ from iris.cluster.types import JobName, WorkerId
 from rigging.timing import Timestamp
 from sqlalchemy import bindparam, select
 from sqlalchemy import update as sa_update
-from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
 
 @dataclass
@@ -41,32 +40,36 @@ class ControllerTestState:
     without booting a full ``Controller``.
 
     Field names match the underscored ones a single-backend :class:`Controller`
-    exposes through its default backend (``_db``, ``_health``, ``_endpoints``,
-    ``_run_template_cache``) so the same helpers work against either. Unlike a
-    real backend's scale-group-scoped projections, ``_worker_attrs`` here claims
-    every worker by default, since tests built on this state simulate one backend.
+    exposes through its default backend (``_db``, ``_health``) so the same helpers
+    work against either. ``_endpoints`` is a convenience property backed by the DB
+    cache registry.
     """
 
     _db: ControllerDB
     _health: WorkerHealthTracker
-    _endpoints: EndpointsProjection
     _worker_attrs: WorkerAttrsProjection
-    _run_template_cache: RunTemplateCache
 
     def __init__(
         self,
         db: ControllerDB,
         *,
         health: WorkerHealthTracker | None = None,
-        endpoints: EndpointsProjection | None = None,
-        worker_attrs: WorkerAttrsProjection | None = None,
-        run_template_cache: RunTemplateCache | None = None,
     ) -> None:
         self._db = db
+        # Mirror a real Controller: each Projection self-registers into
+        # ``db.caches`` on construction; cursors the DB mints reach them as
+        # ``tx.caches[Projection]`` when helpers commit effects / purge jobs /
+        # read derived counts.
+        AttemptCountsProjection(db)
         self._health = health or WorkerHealthTracker()
-        self._endpoints = endpoints or EndpointsProjection(db)
-        self._worker_attrs = worker_attrs or WorkerAttrsProjection(db, owns_scale_group=lambda _scale_group: True)
-        self._run_template_cache = run_template_cache or new_run_template_cache()
+        EndpointsProjection(db)
+        RunTemplatesProjection(db)
+        self._worker_attrs = WorkerAttrsProjection(db)
+
+    @property
+    def _endpoints(self) -> EndpointsProjection:
+        """The endpoints projection, looked up from the DB cache registry."""
+        return self._db.caches[EndpointsProjection]
 
 
 def set_worker_health_for_test(ctrl: ControllerTestState, worker_id: WorkerId, healthy: bool) -> None:
@@ -78,38 +81,7 @@ def set_worker_attribute_for_test(
     ctrl: ControllerTestState, worker_id: WorkerId, key: str, value: AttributeValue
 ) -> None:
     """Upsert one worker attribute in DB and mirror it into the in-memory projection."""
-    str_value = int_value = float_value = None
-    value_type = "str"
-    if isinstance(value.value, int):
-        value_type = "int"
-        int_value = int(value.value)
-    elif isinstance(value.value, float):
-        value_type = "float"
-        float_value = float(value.value)
-    else:
-        str_value = str(value.value)
-
     with ctrl._db.transaction() as cur:
-        cur.execute(
-            sqlite_insert(worker_attributes_table)
-            .values(
-                worker_id=worker_id,
-                key=key,
-                value_type=value_type,
-                str_value=str_value,
-                int_value=int_value,
-                float_value=float_value,
-            )
-            .on_conflict_do_update(
-                index_elements=["worker_id", "key"],
-                set_=dict(
-                    value_type=value_type,
-                    str_value=str_value,
-                    int_value=int_value,
-                    float_value=float_value,
-                ),
-            )
-        )
         existing = ctrl._worker_attrs.get(worker_id)
         merged = {**existing, key: value}
         ctrl._worker_attrs.set(cur, worker_id, merged)

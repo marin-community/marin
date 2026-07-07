@@ -16,6 +16,14 @@
 > exclusion, namespaced logs), and §12.3 for the final codex precision pass (full `local_tasks` reader
 > inventory, changelog mechanism, task-detail branch, finelog auth decided).
 
+> **⚠️ Naming / identity / logging superseded (2026-07-03) by
+> [`cluster_native_model.md`](./cluster_native_model.md).** The `~`-folded `remote_job_id` (§5.1), the
+> rebased remote root (§6.1), the `child_cluster` discriminator, and the "honest empty state" log
+> deferral (§6.2, §8) are **replaced** by a first-class `cluster` coordinate (always set, default
+> `local`; job ids are cluster-invariant, so a peer runs/logs/reports the *same* id the parent
+> submitted) and native log serving via finelog's server-stamped `cluster` column. Read that doc for the
+> current identity/logging model; the data-model and rollout shape (§4, §11) still stand.
+
 ## 1. The mental model: two downstreams, distinguished by ownership
 
 An Iris controller has exactly two kinds of downstream. They are **not** unified — Model D's whole
@@ -121,13 +129,16 @@ exactly the same places:
 held off in a parallel projection. The payoff (per review): the *list-shaped* reads — `ListTasks`, the
 task-count `GROUP BY`, the dashboard task table, `JobQuery`/`WorkerQuery` filters — *just work* with no
 federated branch, because they read `tasks.state`/`child_cluster` directly, exactly as they already
-work across `backend_id`. Task **detail** is the one read that still needs a small federated branch:
-`GetTaskStatus`'s `started_at`/`finished_at`/`worker`/`attempts` are derived from `task_attempts` +
-the local `workers` FK (`service.py:310`, `schema.py:348/391`), which a federated task has none of, so
-detail sources those from the `tasks` row + the `federated_tasks` sidecar and deep-links attempt
-history to the peer (§4.2). (The branch-free alternative — mirror one synthetic `task_attempts` row +
-allow a null worker FK — is heavier and writes fake rows into an authoritative table, so the small
-detail branch is preferred.)
+work across `backend_id`. Task **detail** renders natively too: the sync mirrors a federated task's
+full `task_attempts` history (with a null `worker_id`, since there is no local `workers` row) and
+surfaces the peer-side worker identity from the `federated_tasks.peer_worker_label` sidecar, so
+`GetTaskStatus`'s `started_at`/`finished_at`/`worker`/`attempts` come straight from the mirrored rows
+with no deep-link. The mirrored attempts stay off the control-plane fold the same way tasks do: every
+worker/attempt reader joins `local_tasks` (so a federated task's attempts are excluded), and
+`resolve_attempt_uids` — the one worker-routing reader that hit `task_attempts` unguarded — now joins
+`local_tasks`; the mirrored `attempt_uid` is namespaced under the peer to stay unique. (An earlier
+revision deep-linked attempt history to the peer to avoid "fake rows in an authoritative table"; since
+users cannot reach a peer's dashboard, mirroring the rows — kept off the fold — is preferred.)
 
 **How this stays inside Model D — the fold is excluded structurally, not the rows.** Model D says
 "never mirror remote task rows"; the operative danger is the *fold/scheduler operating on* those rows,
@@ -198,11 +209,13 @@ federated_tasks_table = Table(
 )
 ```
 
-Attempt-level history (`task_attempts`) is **deliberately not mirrored** — task detail shows the current
-attempt from the `tasks` row + `federated_tasks` sidecar (timing/worker sourced there, since a federated
-task has no `task_attempts` rows or local `workers` FK, §4.1) and deep-links to the peer for the full
-attempt list; a conscious *reduced* path. The `tasks` row carries `current_attempt_id`, exit, state,
-timing, counts, so the task *list* renders natively; only detail's per-attempt drill-down defers.
+Attempt-level history (`task_attempts`) **is mirrored** — the sync loads each changed task's full
+attempt list on the peer and the parent upserts one `task_attempts` row per attempt (null `worker_id`,
+peer-namespaced `attempt_uid`), so the task-detail attempt table renders natively with no deep-link. The
+peer-side worker identity is surfaced from the `federated_tasks.peer_worker_label` sidecar (display only;
+there is no local `workers` row, so it renders as text, not a worker link). The `tasks` row still carries
+`current_attempt_id`, exit, state, timing, counts for the list view. The mirrored attempts are kept off
+the control-plane fold by `local_tasks` (see §4.1).
 
 **Why unified tables, not a separate projection (the review's question).** v3 put federated tasks in a
 parallel `federated_tasks` projection so the fold physically couldn't see them — but that forces *every
@@ -213,7 +226,7 @@ move the guarantee to the *control-plane* side:
 | | v3 — separate `federated_tasks` projection | **chosen — `tasks` + `child_cluster` + `local_tasks` selectable** |
 |---|---|---|
 | List/counts/filter reads | **branch** on `child_cluster`, union the projection | **unchanged** — read raw `tasks`, works like `backend_id` |
-| Task-detail read | branch (read projection) | small branch (timing/worker from `tasks`+sidecar; attempts deep-link) |
+| Task-detail read | branch (read projection) | native — mirrored `task_attempts` + `federated_tasks` sidecar, no branch |
 | Fold/scheduler safety | structural (rows not in `tasks`) | structural (control plane reads `local_tasks`; federated rows opt-*out*) |
 | Where the boundary lives | in every *read* | at **one** source (`local_tasks`) + the control-plane repoint (§4.3) |
 | New-code failure mode | a new read forgets to union → missing federated data (display bug) | a new control-plane query hits raw `tasks` → sees federated rows (caught by the `local_tasks` convention + PR1 tests) |
@@ -490,8 +503,13 @@ peers or ten — a single-cluster deployment just sees one execution target and 
 - **Job/Task detail**: a `Cluster` `InfoRow` (`JobDetail.vue:960`) and — because federated tasks live in
   the normal `tasks` table (§4.2) — the **native task table and task-detail pages render with no
   federated branch at all** (state, worker, exit code, timing come straight from the `tasks` row).
-  Attempt-level drill-down deep-links to the peer (`ClusterManifest.dashboard_url`), the one place the
-  mirror stops.
+  Attempt-level drill-down renders natively too, from the mirrored `task_attempts` (§4.2); the worker is
+  shown as the peer-side label (no local worker page). **No affordance links to a peer's own dashboard —
+  users can't reach it** — so a `cluster:` annotation links *inward* to the parent's `?cluster=` jobs
+  filter. Logs render **natively**: the dashboard queries the shared global finelog by the job's
+  cluster-invariant id, filtered by the peer's `cluster` for a federated job (finelog's server-stamped
+  `cluster` column) — see [`cluster_native_model.md`](./cluster_native_model.md) §4. (Supersedes the
+  earlier empty-state / #6883 deferral.)
 - **Scope selector**: extend `useBackends.ts`/`BackendScope.vue` to an `All ▾` selector over *backends +
   peers* (one combined list, below), writing `?cluster=`/`?backend=`; server-side filter via
   `JobQuery.child_cluster`.

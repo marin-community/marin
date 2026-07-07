@@ -153,6 +153,43 @@ def test_grug_moe_layer_masks_preserve_thd_segment_metadata():
     assert long_mask.segment_ids is mask.segment_ids
 
 
+def test_grug_moe_xsa_forward_lowers_with_gpu_fa4_thd_gqa_sharding():
+    if jax.default_backend() != "gpu":
+        pytest.skip("gpu_fa4_thd requires the JAX GPU backend")
+
+    model_module = importlib.import_module("experiments.grug.moe.model")
+    mesh, _ = model_module.debug_mesh_and_token_pspec(num_devices=8)
+    cfg = model_module.GrugModelConfig(
+        vocab_size=128,
+        hidden_dim=512,
+        intermediate_dim=64,
+        shared_expert_intermediate_dim=64,
+        num_layers=1,
+        num_heads=4,
+        num_kv_heads=1,
+        max_seq_len=8,
+        sliding_window=8,
+        num_experts=4,
+        num_experts_per_token=2,
+        attention_implementation="gpu_fa4_thd",
+    )
+
+    def forward():
+        attn = model_module.CausalSelfAttention.init(cfg, key=jax.random.PRNGKey(0))
+        x = jax.sharding.reshard(
+            jnp.zeros((8, 16, cfg.hidden_dim), dtype=jnp.bfloat16),
+            jax.sharding.PartitionSpec(("replica_dcn", "data", "expert"), None, None),
+        )
+        segment_ids = jnp.zeros((8, 16), dtype=jnp.int32)
+        mask = GrugAttentionMask.causal().with_segment_ids(segment_ids, max_segments=1)
+        return attn(x, mask)
+
+    with _reset_abstract_mesh(), use_abstract_mesh(mesh):
+        out_shape = eqx.filter_eval_shape(forward)
+
+    assert out_shape.shape == (8, 16, cfg.hidden_dim)
+
+
 def _seed_cache_records(step, prefix: str) -> None:
     """Write the minimal record a built ``TokenizedCache`` dep would leave, so the run-time
     ``mixture`` can read each dataset's tokenizer/format offline (mirrors a real run, where the
@@ -208,8 +245,8 @@ def test_grug_variant_one_step_contract_lowers_with_default_ctor(variant: str):
     train_step = make_train_step(optimizer, mp, z_loss_weight=0.0, ema_beta=None)
     mesh, token_pspec = mesh_fn(num_devices=4)
     batch = GrugLmExample(
-        tokens=jnp.zeros((8, 4), dtype=jnp.int32),
-        loss_weight=jnp.ones((8, 4), dtype=jnp.float32),
+        tokens=jnp.zeros((32, 4), dtype=jnp.int32),
+        loss_weight=jnp.ones((32, 4), dtype=jnp.float32),
         attn_mask=GrugAttentionMask.causal(),
     )
 

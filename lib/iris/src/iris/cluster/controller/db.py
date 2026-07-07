@@ -55,6 +55,7 @@ from sqlalchemy import Engine, create_engine, event, text
 from sqlalchemy.engine import Connection
 from sqlalchemy.engine.cursor import CursorResult
 
+from iris.cluster.controller.caches import CacheRegistry
 from iris.cluster.controller.schema import auth_metadata, metadata, schema_migrations_table
 
 logger = logging.getLogger(__name__)
@@ -147,14 +148,25 @@ class Tx:
     while the write lock is still held (see ``write_transaction``).
     """
 
-    def __init__(self, conn: Connection):
+    def __init__(self, conn: Connection, caches: CacheRegistry, seq: int):
         self.conn = conn
         self._hooks: list[Callable[[], None]] = []
+        # The DB commit sequence sampled just BEFORE this cursor's snapshot was
+        # established (``BEGIN``). It is a conservative lower bound on what the
+        # snapshot sees — any commit that ticked ``commit_seq`` after this sample
+        # either lands in the snapshot or not, but is never counted as seen when it
+        # isn't. Lazy-fill guards compare it against a per-key invalidation seq to
+        # reject a fill computed from a pre-invalidation snapshot (the stale set).
+        self.seq = seq
         # Per-transaction extension slot: a write helper may attach one typed cache
         # object here to memoize a lookup across calls within one transaction (e.g.
         # the federation changelog gate resolving a job's requester once per root).
         # Never persists past the transaction, so a cached value can never go stale.
         self.memo: dict[str, object] = {}
+        # The owning DB's per-controller cache registry (see ``caches.py``), shared
+        # by every Tx the DB mints. Persists across transactions, so a write sink
+        # holding only this cursor reaches a memo without it being threaded in.
+        self.caches = caches
 
     def execute(self, stmt, params=None) -> CursorResult:
         """Execute a SA Core construct. Returns a ``CursorResult``.
@@ -187,6 +199,7 @@ class Tx:
 def write_transaction(
     write_engine: Engine,
     write_lock: threading.RLock,
+    caches: CacheRegistry,
 ) -> Iterator[Tx]:
     """Open a write transaction backed by ``write_engine``.
 
@@ -194,19 +207,29 @@ def write_transaction(
     ``BEGIN IMMEDIATE``, yields a ``Tx``, and commits on clean exit.
     Post-commit hooks registered via ``Tx.register`` fire **while the
     lock is still held** so in-memory caches stay consistent with the DB.
+
+    ``caches`` is the owning DB's per-controller cache registry, mirrored onto
+    the yielded ``Tx`` as ``tx.caches`` so write sinks can reach a memo through
+    the cursor (see :mod:`iris.cluster.controller.caches`).
     """
     write_lock.acquire()
     conn: Connection | None = None
     try:
         conn = write_engine.connect()
+        # Sample the commit sequence BEFORE opening the snapshot (conservative).
+        seq = caches.commit_seq
         conn.execute(text("BEGIN IMMEDIATE"))
-        tx = Tx(conn)
+        tx = Tx(conn, caches, seq)
         try:
             yield tx
         except Exception:
             conn.execute(text("ROLLBACK"))
             raise
         conn.execute(text("COMMIT"))
+        # Tick the commit sequence under the still-held write lock, before hooks
+        # fire, so an invalidation hook stamps the post-commit seq and a concurrent
+        # reader's guard sees this commit as either fully applied or not at all.
+        caches.tick()
         tx._fire_hooks()
     finally:
         if conn is not None:
@@ -215,19 +238,26 @@ def write_transaction(
 
 
 @contextmanager
-def read_snapshot(read_engine: Engine) -> Iterator[Tx]:
+def read_snapshot(read_engine: Engine, caches: CacheRegistry) -> Iterator[Tx]:
     """Open a read-only snapshot against ``read_engine``.
 
     ``query_only`` is pinned at connect time on the read engine, so this
     path only pays for the BEGIN/ROLLBACK round-trips per call. Yields a
     ``Tx`` over a pooled connection and rolls back on exit so the
     snapshot does not leak into the next checkout from the pool.
+
+    ``caches`` is mirrored onto the yielded ``Tx`` as ``tx.caches`` (see
+    :func:`write_transaction`); a read handler that consults a derived-count memo
+    reaches it there. Post-commit hooks never fire on a read snapshot, so the
+    invalidation path is inert here — only the memo *read* path is used.
     """
     conn = read_engine.connect()
     try:
+        # Sample the commit sequence BEFORE opening the snapshot (conservative).
+        seq = caches.commit_seq
         conn.execute(text("BEGIN"))
         try:
-            yield Tx(conn)
+            yield Tx(conn, caches, seq)
         finally:
             conn.execute(text("ROLLBACK"))
     finally:
@@ -248,6 +278,11 @@ class ControllerDB:
         self._auth_db_path = self._db_dir / self.AUTH_DB_FILENAME
         self._lock = RLock()
         self._reopen_hooks: list[Callable[[], None]] = []
+        # Per-controller cache registry, mirrored onto every Tx this DB mints as
+        # ``tx.caches``. Built before the engines so no cursor is ever minted
+        # without it. Populated by higher layers (each per-controller memo
+        # registers itself on construction) — the raw layer stays cache-agnostic.
+        self._caches = CacheRegistry()
 
         # Build SA engines first so apply_migrations can use raw_connection().
         t0 = time.monotonic()
@@ -299,6 +334,16 @@ class ControllerDB:
     def sa_write_engine(self) -> Engine:
         """SA Core write engine."""
         return self._sa_write_engine
+
+    @property
+    def caches(self) -> CacheRegistry:
+        """The per-controller cache registry (also reachable via any ``Tx.caches``)."""
+        return self._caches
+
+    @property
+    def commit_seq(self) -> int:
+        """Monotonic write-commit counter (ticked per commit and per DB-file swap)."""
+        return self._caches.commit_seq
 
     @property
     def db_dir(self) -> Path:
@@ -357,14 +402,15 @@ class ControllerDB:
 
     @contextmanager
     def transaction(self) -> Iterator[Tx]:
-        """Open an IMMEDIATE write transaction and yield a ``Tx``.
+        """Open an IMMEDIATE write transaction and yield a cursor.
 
         On successful commit, any hooks registered via ``Tx.register``
         fire while the write lock is still held — keeping in-memory caches
         in sync with the DB without exposing a torn snapshot to concurrent
-        readers.
+        readers. The yielded cursor carries this DB's cache registry as
+        ``tx.caches`` so write sinks reach per-controller memos through it.
         """
-        with write_transaction(self._sa_write_engine, self._lock) as tx:
+        with write_transaction(self._sa_write_engine, self._lock, self._caches) as tx:
             yield tx
 
     @contextmanager
@@ -375,7 +421,7 @@ class ControllerDB:
         concurrent use from dashboard/RPC threads while the scheduling
         loop holds the write lock.
         """
-        with read_snapshot(self._sa_read_engine) as tx:
+        with read_snapshot(self._sa_read_engine, self._caches) as tx:
             yield tx
 
     @contextmanager
@@ -388,7 +434,7 @@ class ControllerDB:
         (the single control-loop thread, or the scheduling/autoscaler loops on
         the legacy path).
         """
-        with read_snapshot(self._sa_control_read_engine) as tx:
+        with read_snapshot(self._sa_control_read_engine, self._caches) as tx:
             yield tx
 
     @contextmanager
@@ -400,7 +446,7 @@ class ControllerDB:
         must not see auth tables). Use this context manager for auth-only
         read queries so they remain non-blocking while the write lock is free.
         """
-        with read_snapshot(self._sa_auth_read_engine) as tx:
+        with read_snapshot(self._sa_auth_read_engine, self._caches) as tx:
             yield tx
 
     def apply_migrations(self) -> None:
@@ -653,6 +699,10 @@ class ControllerDB:
             )
 
         self.apply_migrations()
+        # The DB file was swapped: every open snapshot's seq now predates a file
+        # that shares no history with the new one. Tick so a lazy guard's floor
+        # (set by the reopen ``clear`` hook below) rejects any pre-restore fill.
+        self._caches.tick()
         for hook in self._reopen_hooks:
             hook()
 

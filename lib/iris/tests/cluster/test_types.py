@@ -17,12 +17,53 @@ from iris.cluster.constraints import (
     preemptible_constraint,
     region_constraint,
 )
-from iris.cluster.types import Entrypoint, JobName, TaskAttempt, adjust_tpu_replicas, gpu_device, tpu_device
+from iris.cluster.types import (
+    LOCAL_CLUSTER,
+    Entrypoint,
+    EnvironmentSpec,
+    JobName,
+    TaskAttempt,
+    adjust_tpu_replicas,
+    gpu_device,
+    is_federated,
+    tpu_device,
+)
 from iris.rpc import job_pb2
+from rigging.provenance import LAUNCH_PROVENANCE_ENV, Provenance, _capture_once
 
 
 def _add(a, b):
     return a + b
+
+
+@pytest.fixture
+def fresh_launch_provenance():
+    """Reset the per-process capture cache around a test that manipulates MARIN_PROVENANCE."""
+    _capture_once.cache_clear()
+    yield
+    _capture_once.cache_clear()
+
+
+def test_environment_to_proto_stamps_launch_provenance(monkeypatch, fresh_launch_provenance):
+    """Every submission's env carries the launch provenance so a git-less task can stamp
+    records with the submitter's identity. Re-submitting from inside a task forwards the
+    inherited value verbatim; an explicit caller value wins over the default."""
+    submitted = Provenance(tree_hash="feed", base_commit="beef", dirty=False, branch="rav/pipeline", built_by="rav")
+    monkeypatch.setenv(LAUNCH_PROVENANCE_ENV, submitted.to_json())
+
+    stamped = EnvironmentSpec().to_proto().env_vars[LAUNCH_PROVENANCE_ENV]
+    assert Provenance.from_json(stamped) == submitted
+
+    explicit = EnvironmentSpec(env_vars={LAUNCH_PROVENANCE_ENV: "caller-value"}).to_proto()
+    assert explicit.env_vars[LAUNCH_PROVENANCE_ENV] == "caller-value"
+
+
+def test_environment_to_proto_captures_local_checkout(monkeypatch, fresh_launch_provenance):
+    """A local submission (no env var) stamps provenance captured from the checkout."""
+    monkeypatch.delenv(LAUNCH_PROVENANCE_ENV, raising=False)
+
+    stamped = Provenance.from_json(EnvironmentSpec().to_proto().env_vars[LAUNCH_PROVENANCE_ENV])
+    assert stamped.created_at  # launch context always captured; git fields best-effort
 
 
 def test_entrypoint_from_callable_resolve_roundtrip():
@@ -93,48 +134,12 @@ def test_job_name_roundtrip_and_hierarchy():
     assert not parsed.is_ancestor_of(JobName.root("test-user", "root"), include_self=False)
 
 
-def test_job_name_with_root_job_rebases_below_the_root():
-    # A direct task and a nested-child task both keep everything below the root.
-    remote_root = JobName.from_string("/alice/cw~job")
-    assert JobName.from_string("/alice/job/0").with_root_job(remote_root) == JobName.from_string("/alice/cw~job/0")
-    assert JobName.from_string("/alice/job/child/0").with_root_job(remote_root) == JobName.from_string(
-        "/alice/cw~job/child/0"
-    )
-    # The root itself rebases to the new root.
-    assert JobName.from_string("/alice/job").with_root_job(remote_root) == remote_root
-
-
-def test_job_name_with_root_job_requires_a_root():
-    with pytest.raises(ValueError):
-        JobName.from_string("/alice/job/0").with_root_job(JobName.from_string("/alice/cw~job/child"))
-
-
-def test_federated_remote_root_encodes_and_reverses():
-    root = JobName.from_string("/alice/train")
-    remote = JobName.federated_remote_root("cw", root)
-    assert remote == JobName.from_string("/alice/cw~train")
-    assert remote.is_federated_remote
-    assert remote.split_federated_root() == ("cw", root)
-    # Reversible even when the original name itself contains the delimiter: the
-    # cluster id is delimiter-free, so the first '~' is the join.
-    weird = JobName.federated_remote_root("cw", JobName.from_string("/alice/a~b"))
-    assert weird.split_federated_root() == ("cw", JobName.from_string("/alice/a~b"))
-
-
-def test_federated_remote_root_rejects_bad_cluster_id_and_non_root():
-    with pytest.raises(ValueError):
-        JobName.federated_remote_root("", JobName.from_string("/alice/train"))
-    with pytest.raises(ValueError):
-        JobName.federated_remote_root("c~w", JobName.from_string("/alice/train"))
-    with pytest.raises(ValueError):
-        JobName.federated_remote_root("cw", JobName.from_string("/alice/train/child"))
-
-
-def test_split_federated_root_rejects_a_local_name():
-    local = JobName.from_string("/alice/train/0")
-    assert not local.is_federated_remote
-    with pytest.raises(ValueError):
-        local.split_federated_root()
+def test_cluster_coordinate_helpers():
+    # Job ids are cluster-invariant; a job/task's cluster is either the reserved
+    # local sentinel (owned here) or a peer id (handed off), never both.
+    assert LOCAL_CLUSTER == "local"
+    assert not is_federated(LOCAL_CLUSTER)
+    assert is_federated("cw-us-east")
 
 
 @pytest.mark.parametrize("base", ["https://iris.oa.dev", "https://iris.oa.dev/"])

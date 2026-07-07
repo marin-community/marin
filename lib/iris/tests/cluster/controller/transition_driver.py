@@ -16,7 +16,6 @@ from dataclasses import dataclass
 from iris.cluster.controller.db import Tx
 from iris.cluster.controller.ops.task import apply_dispatch_updates
 from iris.cluster.controller.ops.worker import apply_reconcile
-from iris.cluster.controller.projections.endpoints import EndpointsProjection
 from iris.cluster.controller.reconcile.commit import commit_effects
 from iris.cluster.controller.reconcile.effects import ControllerEffects
 from iris.cluster.controller.reconcile.loader import load_closed_snapshot
@@ -81,7 +80,6 @@ def commit_reconcile(
     cur: Tx,
     plan_results: list[tuple[WorkerReconcilePlan, WorkerReconcileResult]],
     *,
-    endpoints: EndpointsProjection,
     now: Timestamp,
 ) -> ControllerEffects:
     """Author + commit worker-reconcile effects against a write cursor (test glue).
@@ -92,7 +90,7 @@ def commit_reconcile(
     the effects commit into.
     """
     effects = apply_reconcile(CursorTransitionReader(cur), plan_results, now=now)
-    commit_effects(cur, effects, endpoints=endpoints)
+    commit_effects(cur, effects)
     return effects
 
 
@@ -100,12 +98,11 @@ def commit_dispatch_updates(
     cur: Tx,
     updates: list[TaskUpdate],
     *,
-    endpoints: EndpointsProjection,
     now: Timestamp,
 ) -> ControllerEffects:
     """Author + commit direct-provider effects against a write cursor (test glue)."""
     effects = apply_dispatch_updates(CursorTransitionReader(cur), updates, now=now)
-    commit_effects(cur, effects, endpoints=endpoints)
+    commit_effects(cur, effects)
     return effects
 
 
@@ -136,7 +133,6 @@ def apply_task_observations(
     requests: list[WorkerTaskUpdates],
     *,
     health: WorkerHealthTracker,
-    endpoints: EndpointsProjection,
     now: Timestamp,
 ) -> ControllerEffects:
     """Land ``requests`` through the production reconcile-observation verb.
@@ -166,7 +162,7 @@ def apply_task_observations(
     # reading from this write transaction, then commit them — the controller now
     # does these as two separate steps.
     effects = apply_reconcile(CursorTransitionReader(cur), plan_results, now=now)
-    commit_effects(cur, effects, endpoints=endpoints)
+    commit_effects(cur, effects)
     build_events = [WorkerHealthEvent(wid, WorkerHealthEventKind.BUILD_FAILED) for wid in effects.health.build_failed]
     if build_events:
         health.apply(build_events, now_ms=now.epoch_ms())

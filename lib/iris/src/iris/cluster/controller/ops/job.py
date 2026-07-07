@@ -7,7 +7,6 @@ from dataclasses import dataclass
 
 from rigging.timing import Timestamp
 from sqlalchemy import Integer, bindparam, cast, func, insert, select
-from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
 from iris.cluster.controller import reads, writes
 from iris.cluster.controller.audit_logging import log_event
@@ -17,20 +16,20 @@ from iris.cluster.controller.codec import (
     proto_to_json,
 )
 from iris.cluster.controller.db import Tx
+from iris.cluster.controller.projections.attempt_counts import AttemptCountsProjection
 from iris.cluster.controller.projections.endpoints import EndpointsProjection
+from iris.cluster.controller.projections.run_templates import RunTemplatesProjection
 from iris.cluster.controller.reconcile import ReconcileState
 from iris.cluster.controller.reconcile.commit import commit_effects
 from iris.cluster.controller.reconcile.loader import load_closed_snapshot
 from iris.cluster.controller.reconcile.policy import (
     MAX_REPLICAS_PER_JOB,
 )
-from iris.cluster.controller.run_template import RunTemplateCache
 from iris.cluster.controller.schema import (
     job_workdir_files_table,
     jobs_table,
-    users_table,
 )
-from iris.cluster.types import TERMINAL_JOB_STATES, JobName
+from iris.cluster.types import LOCAL_CLUSTER, TERMINAL_JOB_STATES, JobName
 from iris.rpc import controller_pb2, job_pb2
 from iris.time_proto import duration_from_proto
 
@@ -103,10 +102,9 @@ def submit(
     job_id: JobName,
     request: controller_pb2.Controller.LaunchJobRequest,
     ts: Timestamp,
-    run_template_cache: RunTemplateCache,
 ) -> None:
     """Insert the job row and expand its tasks. Caller owns the transaction."""
-    inserted = insert_job_and_config(cur, job_id=job_id, request=request, ts=ts, run_template_cache=run_template_cache)
+    inserted = insert_job_and_config(cur, job_id=job_id, request=request, ts=ts)
     if inserted.validation_error is None:
         _materialize_tasks(
             cur,
@@ -134,18 +132,14 @@ def insert_job_and_config(
     job_id: JobName,
     request: controller_pb2.Controller.LaunchJobRequest,
     ts: Timestamp,
-    run_template_cache: RunTemplateCache,
-    child_cluster: str = "",
+    cluster: str = LOCAL_CLUSTER,
 ) -> JobInsertResult:
     """Insert the ``jobs`` + ``job_config`` (+ workdir file) rows for one job.
 
     Does NOT materialize tasks — :func:`submit` adds them for a local job; a
-    federated handoff (``child_cluster`` set) has no local tasks (the peer creates
-    them; the sync mirrors them back). Caller owns the transaction.
+    federated handoff (``cluster`` set to a peer) has no local tasks (the peer
+    creates them; the sync mirrors them back). Caller owns the transaction.
     """
-    # Same-name replacement reuses ``job_id``; drop any stale cached
-    # template before the new row's fields land in the DB.
-    run_template_cache.pop(job_id.to_wire())
 
     submitted_ms = ts.epoch_ms()
 
@@ -174,17 +168,6 @@ def insert_job_and_config(
         deadline_epoch_ms = (
             Timestamp.from_ms(effective_submission_ms).add(duration_from_proto(request.scheduling_timeout)).epoch_ms()
         )
-
-    # Idempotently create a ``users`` row at submission time.
-    cur.execute(
-        sqlite_insert(users_table)
-        .values(
-            user_id=job_id.user,
-            created_at_ms=Timestamp.from_ms(effective_submission_ms),
-            role="user",
-        )
-        .on_conflict_do_nothing(index_elements=["user_id"])
-    )
 
     requested_band = int(request.priority_band)
     if requested_band != job_pb2.PRIORITY_BAND_UNSPECIFIED:
@@ -238,7 +221,7 @@ def insert_job_and_config(
         exit_code=None,
         num_tasks=replicas,
         name=job_name_lower,
-        child_cluster=child_cluster,
+        cluster=cluster,
     )
     writes.insert_job_config(
         cur,
@@ -286,12 +269,16 @@ def insert_job_and_config(
             job_id=job_id,
             requester_id=request.federation.requester_id,
             owner_principal=request.federation.owner_principal,
-            now_ms=ts.epoch_ms(),
         )
 
     # Record the job-level creation for any requester federating with this peer (a
     # no-op unless this job's root was received via handoff).
     writes.record_federation_change(cur, job_id)
+
+    # Invalidate post-commit so a concurrent reader cannot refill the template
+    # cache from the pre-commit snapshot and have that stale value persist past
+    # the new row's commit.
+    cur.caches[RunTemplatesProjection].invalidate_for_job(cur, job_id)
 
     return JobInsertResult(
         replicas=replicas,
@@ -307,7 +294,6 @@ def cancel(
     *,
     job_id: JobName,
     reason: str,
-    endpoints: EndpointsProjection,
 ) -> None:
     """Cancel ``job_id`` and its descendant subtree through the kernel.
 
@@ -329,13 +315,25 @@ def cancel(
     # No per-job state preload: the cascade-kill merge guard skips already-
     # terminal rows (excluding WORKER_FAILED, which cancel overwrites).
     effects = ReconcileState.open(snapshot).cancel_job(job_id, reason, now)
-    commit_effects(cur, effects, endpoints=endpoints)
+    commit_effects(cur, effects)
     # Sweep endpoints that survived because their owning task was already
     # terminal before cancel ran (kernel only emits EndpointDeletion for
     # tasks we actively killed). Derive the same subtree the kernel cancelled
     # from the snapshot's transitive descendants.
     subtree = [job_id, *snapshot.job_descendants[job_id].descendants]
-    endpoints.remove_by_job_ids(cur, subtree)
+    cur.caches[EndpointsProjection].remove_by_job_ids(cur, subtree)
+
+
+def purge_job(cur: Tx, job_id: JobName) -> None:
+    """Delete a job and drop its derived-count and run-template memos.
+
+    Deletions route through here rather than :func:`writes.delete_job` so a later
+    job minted with the same id cannot serve the dead job's cached counts or
+    template.
+    """
+    writes.delete_job(cur, job_id)
+    cur.caches[AttemptCountsProjection].invalidate_for_jobs(cur, [job_id])
+    cur.caches[RunTemplatesProjection].invalidate_for_job(cur, job_id)
 
 
 def remove_finished(
@@ -352,7 +350,7 @@ def remove_finished(
         return False
     if job_state not in TERMINAL_JOB_STATES:
         return False
-    writes.delete_job(cur, job_id)
+    purge_job(cur, job_id)
     cur.register(
         lambda: log_event(
             "job_removed",

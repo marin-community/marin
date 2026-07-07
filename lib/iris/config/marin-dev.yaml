@@ -29,6 +29,26 @@ defaults:
 storage:
   remote_state_dir: gs://marin-us-central2/iris/marin-dev/state
 
+# Request auth mirrors marin.yaml: external traffic is authenticated by the
+# IAP-signed X-Goog-IAP-JWT-Assertion header (never the GCLB source ranges);
+# trusted_cidrs admits only direct in-VPC peers (workers/tasks; loopback for
+# tunnels). Anything forwarded through the LB carries X-Forwarded-For and never
+# matches a CIDR.
+auth:
+  iap:
+    url: https://iris-dev.oa.dev
+    # Same Marin desktop OAuth client as prod (rigging.auth.MARIN_DESKTOP_OAUTH_CLIENT)
+    # drives `iris login` and the service-account edge token (no programmatic_audiences
+    # entry needed — the edge falls back to the desktop client id).
+    # Audience of IAP's signed assertion: the iris-marin-dev-be backend service.
+    signed_header_audience: /projects/748532799086/global/backendServices/1538373592429329340
+    # IAP's allowlist is the gate; anyone Google admits acts as admin.
+    unprovisioned_role: admin
+  trusted_cidrs: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 127.0.0.0/8, "::1/128"]
+  # Controller server-identity signing key (Ed25519), resolved from Secret Manager
+  # at startup — provision with `iris cluster init-keys --gcp-secret …`.
+  signing_key: gcp-secret://projects/hai-gcp-models/secrets/iris-marin-dev-signing-key/versions/1
+
 worker_provider: {}
 
 controller:

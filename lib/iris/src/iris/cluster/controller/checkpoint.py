@@ -34,6 +34,7 @@ from pathlib import Path
 
 import fsspec.core
 import zstandard
+from rigging.filesystem import prefix_join
 from rigging.timing import Duration, Timestamp
 
 from iris.cluster.controller import reads
@@ -211,7 +212,7 @@ def upload_checkpoint(
     This is the slow half of checkpointing (zstd compression + GCS upload)
     and does not need any write lock on the database.
     """
-    prefix = remote_state_dir.rstrip("/") + "/controller-state"
+    prefix = prefix_join(remote_state_dir, "controller-state")
     checkpoint_dir = f"{prefix}/{backup.created_at.epoch_ms()}"
 
     _compress_and_upload_db(backup.main_path, f"{checkpoint_dir}/{ControllerDB.DB_FILENAME}.zst", "main")
@@ -269,7 +270,7 @@ def _list_checkpoint_entries(remote_state_dir: str) -> list[str] | None:
 
     Returns None if the directory does not exist.
     """
-    prefix = remote_state_dir.rstrip("/") + "/controller-state"
+    prefix = prefix_join(remote_state_dir, "controller-state")
     fs, fs_path = fsspec.core.url_to_fs(prefix)
 
     if not fs.exists(fs_path):
@@ -305,6 +306,14 @@ def _find_latest_checkpoint_dir(remote_state_dir: str) -> str | None:
     timestamp_dirs.sort(reverse=True)
     _, latest_path = timestamp_dirs[0]
     return _reconstruct_uri(remote_state_dir, latest_path)
+
+
+def latest_checkpoint_epoch_ms(remote_state_dir: str) -> int | None:
+    """Return the epoch_ms of the most recent remote checkpoint, or None if none exists."""
+    found = _find_latest_checkpoint_dir(remote_state_dir)
+    if found is None:
+        return None
+    return int(found.rstrip("/").rsplit("/", 1)[-1])
 
 
 def prune_old_checkpoints(

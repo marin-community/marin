@@ -49,7 +49,7 @@ jobs:
 
       - name: Start local Iris cluster
         run: |
-          uv run iris --config lib/iris/config/test.yaml \
+          uv run iris --config lib/iris/config/ci-test.yaml \
             cluster start --local > /tmp/iris-cluster.log 2>&1 &
           CLUSTER_PID=$!
           echo "CLUSTER_PID=$CLUSTER_PID" >> "$GITHUB_ENV"

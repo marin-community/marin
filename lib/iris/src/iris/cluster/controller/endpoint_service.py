@@ -12,6 +12,7 @@ endpoints are served from an in-memory map and never expire.
 
 import logging
 import uuid
+from dataclasses import dataclass
 from typing import Any
 
 from connectrpc.code import Code
@@ -25,7 +26,7 @@ from iris.cluster.controller.projections.endpoints import (
     EndpointRow,
     EndpointsProjection,
 )
-from iris.cluster.types import JobName
+from iris.cluster.types import EndpointAccess, JobName
 from iris.rpc import controller_pb2, job_pb2
 from iris.time_proto import duration_from_proto, duration_to_proto
 
@@ -42,6 +43,28 @@ ENDPOINT_LEASE = Duration.from_hours(120)
 MIN_ENDPOINT_LEASE = Duration.from_minutes(3)
 
 
+def proxy_name_to_endpoint_names(proxy_name: str) -> tuple[str, str]:
+    """Decode a proxy ``.``-encoded name into endpoint-name lookup candidates.
+
+    Proxy URLs and subdomains encode ``/`` as ``.`` (``user.jobX.dash`` ->
+    ``/user/jobX/dash``). Endpoint names start with ``/``, so the
+    slash-prefixed form is tried first; the bare form covers endpoints
+    registered without a leading slash.
+    """
+    slashed = proxy_name.replace(".", "/")
+    return f"/{slashed}", slashed
+
+
+@dataclass(frozen=True, slots=True)
+class ResolvedEndpoint:
+    """A proxy request's resolved target: canonical endpoint name, address, and access mode."""
+
+    name: str
+    address: str
+    # A Controller.EndpointAccess value.
+    access: int
+
+
 class EndpointServiceImpl:
     """Leased service-discovery registry over the shared endpoints projection."""
 
@@ -49,12 +72,10 @@ class EndpointServiceImpl:
         self,
         *,
         db: ControllerDB,
-        endpoints: EndpointsProjection,
         system_endpoints: dict[str, str] | None = None,
         lease: Duration = ENDPOINT_LEASE,
     ) -> None:
         self._db = db
-        self._endpoints = endpoints
         self._system_endpoints: dict[str, str] = system_endpoints or {}
         self._lease = lease
 
@@ -106,13 +127,14 @@ class EndpointServiceImpl:
             metadata=dict(request.metadata),
             registered_at=Timestamp.now(),
             lease_deadline=Timestamp.now().add(granted),
+            access=request.access,
         )
 
         # Validation runs inside the writer transaction in
         # ``EndpointsProjection.add``: NOT_FOUND if the task row is missing,
         # FAILED_PRECONDITION if the task is terminal or the attempt is stale.
         with self._db.transaction() as cur:
-            outcome = self._endpoints.add(cur, endpoint, expected_attempt_id=request.attempt_id)
+            outcome = cur.caches[EndpointsProjection].add(cur, endpoint, expected_attempt_id=request.attempt_id)
         if outcome is AddEndpointOutcome.NOT_FOUND:
             raise ConnectError(Code.NOT_FOUND, f"Task {request.task_id} not found")
         if outcome is AddEndpointOutcome.STALE_ATTEMPT:
@@ -138,7 +160,7 @@ class EndpointServiceImpl:
     ) -> job_pb2.Empty:
         """Unregister a service endpoint. Idempotent."""
         with self._db.transaction() as cur:
-            self._endpoints.remove(cur, request.endpoint_id)
+            cur.caches[EndpointsProjection].remove(cur, request.endpoint_id)
         return job_pb2.Empty()
 
     def list_endpoints(
@@ -155,7 +177,7 @@ class EndpointServiceImpl:
         if prefix.startswith("/system/"):
             return self._list_system_endpoints(prefix, exact=request.exact)
 
-        endpoints = self._endpoints.query(
+        endpoints = self._db.caches[EndpointsProjection].query(
             EndpointQuery(
                 exact_name=prefix if request.exact else None,
                 name_prefix=None if request.exact else prefix,
@@ -170,6 +192,7 @@ class EndpointServiceImpl:
                     address=e.address,
                     task_id=e.task_id.to_wire(),
                     metadata=e.metadata,
+                    access=e.access,
                 )
                 for e in endpoints
             ]
@@ -182,10 +205,37 @@ class EndpointServiceImpl:
 
         Task endpoints (live leases) take priority over ``/system/`` endpoints.
         """
-        row = self._endpoints.resolve(name)
+        row = self._db.caches[EndpointsProjection].resolve(name)
         if row is not None:
             return row.address
         return self._system_endpoints.get(name)
+
+    def resolve_task_endpoint(self, name: str) -> EndpointRow | None:
+        """Resolve a task-registered endpoint row by wire name, or None.
+
+        Used for owner authorization on token minting; ``/system/`` endpoints
+        (no owning task) are intentionally not returned. Accepts either the
+        ``/``-prefixed name or the bare form.
+        """
+        for candidate in proxy_name_to_endpoint_names(name):
+            row = self._db.caches[EndpointsProjection].resolve(candidate)
+            if row is not None:
+                return row
+        return None
+
+    def resolve_proxy_target(self, encoded_name: str) -> ResolvedEndpoint | None:
+        """Resolve a proxy request's ``encoded_name`` to its target, or None.
+
+        ``/system/`` endpoints always resolve as ``PRIVATE``.
+        """
+        for name in proxy_name_to_endpoint_names(encoded_name):
+            row = self._db.caches[EndpointsProjection].resolve(name)
+            if row is not None:
+                return ResolvedEndpoint(name=row.name, address=row.address, access=row.access)
+            address = self._system_endpoints.get(name)
+            if address is not None:
+                return ResolvedEndpoint(name=name, address=address, access=EndpointAccess.ENDPOINT_ACCESS_PRIVATE)
+        return None
 
     def _list_system_endpoints(self, prefix: str, *, exact: bool) -> controller_pb2.Controller.ListEndpointsResponse:
         """Resolve system endpoints from the in-memory map."""

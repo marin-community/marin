@@ -18,8 +18,7 @@ from iris.cluster.controller import reads
 from iris.cluster.controller.auth import ControllerAuth
 from iris.cluster.controller.backend import BackendCapability
 from iris.cluster.controller.endpoint_service import EndpointServiceImpl
-from iris.cluster.controller.reconcile import dispatch
-from iris.cluster.controller.run_template import RunTemplateCache
+from iris.cluster.controller.projections.run_templates import RunTemplatesProjection
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.types import JobName
 from iris.rpc import controller_pb2, job_pb2
@@ -48,9 +47,8 @@ def _make_service(state, tmp_path, log_client, auth: ControllerAuth) -> Controll
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
         log_client=log_client,
         db=state._db,
-        endpoints=state._endpoints,
         auth=auth,
-        endpoint_service=EndpointServiceImpl(db=state._db, endpoints=state._endpoints),
+        endpoint_service=EndpointServiceImpl(db=state._db),
     )
 
 
@@ -128,6 +126,6 @@ def test_profile_persisted_and_stamped_on_run_request(service, state):
         assert detail is not None
         assert detail.container_profile == PRIVILEGED
 
-        template = dispatch.run_request_template(RunTemplateCache(256), snap, job_id)
+        template = snap.caches[RunTemplatesProjection].get(snap, job_id)
     assert template is not None
     assert template.container_profile == PRIVILEGED

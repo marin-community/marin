@@ -9,10 +9,23 @@ deployment:
     machine_type: n2-standard-4
     boot_disk_size_gb: 200
     service_account: iris-controller@hai-gcp-models.iam.gserviceaccount.com
-# Authenticated-ingress policy. This LOCAL finelog is default-deny;
-# it admits its own cluster's private network (VPC + pod ranges) and loopback (SSH
-# tunnel / controller proxy), never the public internet. No jwt layer — that is
-# the GLOBAL finelog's job, for cross-cluster relay pushes.
+# Authenticated-ingress policy: default-deny, admitting this cluster's private network
+# (VPC + pod ranges) and loopback (SSH tunnel / controller proxy) by cidr, never the
+# public internet. No jwt layer here — cross-cluster relay pushes are the global
+# finelog's job.
 auth:
   - type: cidr
     cidrs: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 127.0.0.0/8, "::1/128"]
+  # A global finelog also trusts each federated iris controller by its public key, to
+  # verify aud="finelog" relay-delegation tokens. This local finelog takes no
+  # cross-cluster pushes, so the jwt layer stays commented. A marin admin script will
+  # generate it from each controller's public key — see issue #6961. Shape, one entry
+  # per federated cluster:
+  # - type: jwt
+  #   keys:
+  #     - cluster: <iris-cluster-name>
+  #       public_keys:
+  #         - |
+  #             -----BEGIN PUBLIC KEY-----
+  #             <iris-controller-ed25519-public-key-pem>
+  #             -----END PUBLIC KEY-----

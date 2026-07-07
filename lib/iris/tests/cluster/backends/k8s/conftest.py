@@ -121,22 +121,16 @@ def make_batch(
     )
 
 
-def make_pod(name: str, phase: str, exit_code: int | None = None, reason: str = "") -> dict:
+def make_pod(name: str, phase: str, exit_code: int | None = None, reason: str = "", message: str = "") -> dict:
     pod: dict = {
         "metadata": {"name": name},
         "status": {"phase": phase, "containerStatuses": []},
     }
     if exit_code is not None:
-        pod["status"]["containerStatuses"] = [
-            {
-                "state": {
-                    "terminated": {
-                        "exitCode": exit_code,
-                        "reason": reason,
-                    }
-                }
-            }
-        ]
+        terminated: dict = {"exitCode": exit_code, "reason": reason}
+        if message:
+            terminated["message"] = message
+        pod["status"]["containerStatuses"] = [{"state": {"terminated": terminated}}]
     return pod
 
 

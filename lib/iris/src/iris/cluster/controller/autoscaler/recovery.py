@@ -9,8 +9,6 @@ from dataclasses import dataclass
 
 from sqlalchemy import select
 
-from iris.cluster.backends.protocols import WorkerInfraProvider
-from iris.cluster.backends.types import CloudSliceState, SliceHandle
 from iris.cluster.controller.autoscaler.scaling_group import (
     GroupSnapshot,
     ScalingGroup,
@@ -20,6 +18,8 @@ from iris.cluster.controller.autoscaler.scaling_group import (
 from iris.cluster.controller.autoscaler.worker_registry import TrackedWorker, TrackedWorkerRow, restore_tracked_workers
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.schema import scaling_groups_table, slices_table, workers_table
+from iris.cluster.platforms.protocols import WorkerInfraProvider
+from iris.cluster.platforms.types import CloudSliceState, SliceHandle
 
 _LIVE_CLOUD_STATES = frozenset({CloudSliceState.CREATING, CloudSliceState.READY, CloudSliceState.REPAIRING})
 

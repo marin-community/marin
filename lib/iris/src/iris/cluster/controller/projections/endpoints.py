@@ -25,9 +25,9 @@ from sqlalchemy import bindparam, delete, insert, select
 
 from iris.cluster.controller import db
 from iris.cluster.controller.db import ControllerDB
-from iris.cluster.controller.projections import PROJECTIONS
+from iris.cluster.controller.projections.base import Projection
 from iris.cluster.controller.schema import endpoints_table, tasks_table
-from iris.cluster.types import TERMINAL_TASK_STATES, JobName
+from iris.cluster.types import TERMINAL_TASK_STATES, EndpointAccess, JobName
 
 
 @dataclass(frozen=True)
@@ -37,6 +37,11 @@ class EndpointQuery:
     exact_name: str | None = None
     task_ids: tuple[JobName, ...] = ()
     limit: int | None = None
+
+
+def access_from_db(value: int | None) -> int:
+    """Decode a stored ``access`` column (NULL ⇒ PRIVATE) to an EndpointAccess value."""
+    return EndpointAccess.ENDPOINT_ACCESS_PRIVATE if value is None else value
 
 
 @dataclass(frozen=True, slots=True)
@@ -52,6 +57,8 @@ class EndpointRow:
     # Lease expiry; ``None`` never expires (only fixtures that skip leasing).
     # A passed deadline is hidden from reads and swept by ``sweep_expired``.
     lease_deadline: Timestamp | None = None
+    # A Controller.EndpointAccess value; who may reach this endpoint via /proxy.
+    access: int = EndpointAccess.ENDPOINT_ACCESS_PRIVATE
 
     def is_expired(self, now: Timestamp) -> bool:
         return self.lease_deadline is not None and self.lease_deadline <= now
@@ -87,7 +94,7 @@ class AddEndpointOutcome(StrEnum):
     TERMINAL = "terminal"
 
 
-class EndpointsProjection:
+class EndpointsProjection(Projection):
     """Process-local write-through cache over the ``endpoints`` table.
 
     Reads serve the latest committed state from in-memory dicts guarded
@@ -96,20 +103,16 @@ class EndpointsProjection:
     manual wire-format conversion appears here.
     """
 
-    sources: ClassVar = (endpoints_table,)
+    owns: ClassVar = (endpoints_table,)
 
     def __init__(self, db: ControllerDB) -> None:
-        self._db = db
         self._lock = RLock()
         self._by_id: dict[str, EndpointRow] = {}
         # One name can map to multiple endpoint_ids — the schema does not
         # enforce uniqueness on ``name`` and the upsert keys off endpoint_id.
         self._by_name: dict[str, set[str]] = {}
         self._by_task: dict[JobName, set[str]] = {}
-        PROJECTIONS.append(self)
-        self.rehydrate()
-        # Caches reload after a checkpoint restore via db.replace_from().
-        db.register_reopen_hook(self.rehydrate)
+        super().__init__(db)
 
     # -- Loading --------------------------------------------------------------
 
@@ -125,7 +128,7 @@ class EndpointsProjection:
             self._by_id.clear()
             self._by_name.clear()
             self._by_task.clear()
-            with db.read_snapshot(self._db.sa_read_engine) as tx:
+            with self._db.read_snapshot() as tx:
                 for row in tx.execute(select(endpoints_table)).all():
                     endpoint = EndpointRow(
                         endpoint_id=row.endpoint_id,
@@ -135,6 +138,7 @@ class EndpointsProjection:
                         metadata=row.metadata_json,
                         registered_at=row.registered_at_ms,
                         lease_deadline=row.lease_deadline_ms,
+                        access=access_from_db(row.access),
                     )
                     self._index(endpoint)
         logger.info("EndpointsProjection loaded %d endpoint(s) from DB", len(self._by_id))
@@ -269,6 +273,7 @@ class EndpointsProjection:
                 "metadata_json": endpoint.metadata,
                 "registered_at_ms": endpoint.registered_at,
                 "lease_deadline_ms": endpoint.lease_deadline,
+                "access": endpoint.access,
             },
         )
 

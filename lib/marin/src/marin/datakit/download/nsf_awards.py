@@ -10,11 +10,11 @@ single Parquet file per year.
 
 import json
 import logging
-import os
 import zipfile
 from io import BytesIO
 
 import requests
+from rigging.filesystem import prefix_join
 from zephyr import Dataset, ZephyrContext, counters
 from zephyr.writers import write_parquet_file
 
@@ -104,7 +104,7 @@ def download_and_convert_year(year: int, download_url: str, output_path: str) ->
         logger.warning(f"No awards with abstracts for {year}, skipping.")
         return {"year": year, "num_awards": 0}
 
-    output_file = os.path.join(output_path, f"{year}.parquet")
+    output_file = prefix_join(output_path, f"{year}.parquet")
     result = write_parquet_file(records, output_file)
 
     logger.info(f"Wrote {len(records)} awards for {year} to {output_file}")
@@ -130,7 +130,7 @@ def download_nsf_awards(min_year: int, max_year: int, output_path: str) -> None:
     pipeline = (
         Dataset.from_list(tasks)
         .map(lambda task: download_and_convert_year(task["year"], task["url"], task["output_path"]))
-        .write_jsonl(f"{output_path}/.metrics/download-{{shard:05d}}.jsonl", skip_existing=True)
+        .write_jsonl(prefix_join(output_path, ".metrics/download-{shard:05d}.jsonl"), skip_existing=True)
     )
     ctx = ZephyrContext(name="download-nsf-awards")
     ctx.execute(pipeline)

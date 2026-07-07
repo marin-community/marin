@@ -269,7 +269,7 @@ def test_prepare_moe_dispatch_indices_match_materialized_dispatch():
     )
 
 
-def test_moe_expert_mlp_init_uses_concat_w13_for_sonic_backend():
+def test_moe_expert_mlp_init_matches_across_backends():
     k_mlp = jax.random.key(26)
     hidden_dim = 16
     intermediate_dim = 24
@@ -293,8 +293,14 @@ def test_moe_expert_mlp_init_uses_concat_w13_for_sonic_backend():
     )
 
     np.testing.assert_allclose(
-        np.asarray(sonic_mlp.w_gate_up),
-        np.asarray(scatter_mlp.w_gate_up),
+        np.asarray(sonic_mlp.w_gate),
+        np.asarray(scatter_mlp.w_gate),
+        rtol=1e-5,
+        atol=1e-5,
+    )
+    np.testing.assert_allclose(
+        np.asarray(sonic_mlp.w_up),
+        np.asarray(scatter_mlp.w_up),
         rtol=1e-5,
         atol=1e-5,
     )
@@ -426,7 +432,8 @@ def test_moe_expert_mlp_init_uses_logical_weight_pspecs():
             pspecs=pspecs,
         )
 
-    assert mlp.w_gate_up.sharding.spec == P(None, "data", "model")
+    assert mlp.w_gate.sharding.spec == P(None, "data", "model")
+    assert mlp.w_up.sharding.spec == P(None, "data", "model")
     assert mlp.w_down.sharding.spec == P(None, "model", "data")
 
 

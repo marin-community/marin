@@ -28,11 +28,12 @@ from levanter.data.text import (
     dataset_for_trace_chat_format,
 )
 from levanter.eval import LabeledEvaluator, eval_labeled_model
-from levanter.model_loading import load_hf_checkpoint, load_levanter_checkpoint
 from levanter.models.llama import LlamaConfig
 from levanter.models.lm_model import LmConfig
 from levanter.tokenizers import load_tokenizer as load_marin_tokenizer
 from levanter.trainer import TrainerConfig
+
+from marin.evaluation.model_loading import load_eval_model
 
 logger = logging.getLogger(__name__)
 
@@ -541,22 +542,16 @@ def trace_labeled_eval(config: TraceLabeledEvalConfig) -> None:
             mp: jmp.Policy = config.trainer.mp
 
             assert config.checkpoint_path is not None  # ensured by _validate_eval_config
-            if config.checkpoint_is_hf:
-                model = load_hf_checkpoint(
-                    config.model,
-                    config.checkpoint_path,
-                    axis_mapping=parameter_axis_mapping,
-                    tokenizer=tokenizer,
-                    compute_dtype=mp.compute_dtype,
-                )
-            else:
-                model = load_levanter_checkpoint(
-                    config.model,
-                    config.checkpoint_path,
-                    Vocab=Vocab,
-                    axis_mapping=parameter_axis_mapping,
-                    key=key,
-                )
+            model = load_eval_model(
+                config.model,
+                config.checkpoint_path,
+                checkpoint_is_hf=config.checkpoint_is_hf,
+                Vocab=Vocab,
+                axis_mapping=parameter_axis_mapping,
+                tokenizer=tokenizer,
+                mp=mp,
+                key=key,
+            )
 
             results = _load_or_create_results(config)
             dataset_results = _dataset_results(results)
