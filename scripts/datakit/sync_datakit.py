@@ -267,6 +267,9 @@ def _copy_shard(
     counters.pipeline.update_counter("upload/shards_copied", 1)
     counters.pipeline.update_counter("upload/files_copied", len(entries))
     counters.pipeline.update_counter("upload/bytes_copied", bytes_copied)
+    # Per-shard progress line so a long multi-shard sync is monitorable in the
+    # worker logs (the coordinator otherwise only dumps counters at shutdown).
+    logger.info("shard copied: %d files, %.1f MiB -> %s", len(entries), bytes_copied / 1024 / 1024, dst_dir)
     return {"shard_hash": _shard_hash(entries), "files": len(entries), "bytes": bytes_copied}
 
 
