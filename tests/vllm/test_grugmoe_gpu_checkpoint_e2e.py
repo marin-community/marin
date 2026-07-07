@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Opt-in real-checkpoint GrugMoE e2e for GPU vLLM and Levanter/JAX.
+"""Opt-in checkpoint GrugMoE e2e for GPU vLLM and Levanter/JAX.
 
 This is the CoreWeave/CUDA analogue of the TPU e2e. It validates the trained
 checkpoint through the new vLLM PyTorch implementation and the JAX/Levanter
@@ -11,6 +11,7 @@ reference on GPUs.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import subprocess
 import sys
@@ -22,11 +23,12 @@ from typing import Any
 import numpy as np
 import pytest
 
-from tests.vllm import grugmoe_gpu_real_checkpoint_backend as backend
+from tests.vllm import grugmoe_gpu_checkpoint_backend as backend
 from tests.vllm.grugmoe_real_checkpoint_backend import E2EPaths, _expert_gate_up_tensors
 
-BACKEND_PATH = Path(__file__).with_name("grugmoe_gpu_real_checkpoint_backend.py").resolve()
+BACKEND_PATH = Path(__file__).with_name("grugmoe_gpu_checkpoint_backend.py").resolve()
 REPO_ROOT = Path(__file__).resolve().parents[2]
+logger = logging.getLogger(__name__)
 
 
 def _repo_git_sha() -> str:
@@ -107,7 +109,7 @@ def _run_subprocess_phase(
     env["CUDA_VISIBLE_DEVICES"] = backend.VISIBLE_CUDA_DEVICES
     env.setdefault("MARIN_GIT_SHA", _repo_git_sha())
     env["PYTHONPATH"] = os.pathsep.join(value for value in (str(REPO_ROOT), env.get("PYTHONPATH", "")) if value)
-    print("grugmoe_gpu_real_checkpoint_e2e_command=" + json.dumps(command), flush=True)
+    logger.info("grugmoe_gpu_checkpoint_e2e_command=%s", json.dumps(command))
     completed = subprocess.run(command, check=False, env=env, cwd=REPO_ROOT)
     if completed.returncode == 0:
         return backend._read_json(result_path)
@@ -267,7 +269,7 @@ def _write_contract_summary(
         "reference_setup_elapsed_seconds": levanter_reference_setup_result.get("elapsed_seconds"),
     }
     backend._write_json(e2e_paths.summary_result_path, summary)
-    print("grugmoe_gpu_real_checkpoint_e2e_result=" + json.dumps(summary, sort_keys=True), flush=True)
+    logger.info("grugmoe_gpu_checkpoint_e2e_result=%s", json.dumps(summary, sort_keys=True))
 
 
 def test_serving_completion_from_generated_ids_stops_at_eos() -> None:
@@ -430,7 +432,7 @@ def test_vllm_completion_batch_summary_returns_all_prompt_outputs() -> None:
 @pytest.mark.slow
 @pytest.mark.data_integration
 @pytest.mark.timeout(7200)
-def test_grugmoe_gpu_real_checkpoint_contract(
+def test_grugmoe_gpu_checkpoint_contract(
     e2e_paths: E2EPaths,
     levanter_reference_setup_result: dict[str, Any],
     vllm_results: dict[str, dict[str, Any]],

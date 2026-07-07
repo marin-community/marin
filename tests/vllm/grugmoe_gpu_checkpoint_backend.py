@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""GPU/CoreWeave backend subprocess entrypoints for GrugMoE real-checkpoint e2e.
+"""GPU/CoreWeave backend subprocess entrypoints for GrugMoE checkpoint e2e.
 
 This mirrors ``grugmoe_real_checkpoint_backend`` while keeping the CoreWeave
 S3, CUDA, and JAX GPU guards separate from the TPU/GCS path.
@@ -13,6 +13,7 @@ import argparse
 import dataclasses
 import hashlib
 import json
+import logging
 import os
 import posixpath
 import shutil
@@ -27,7 +28,7 @@ from urllib.parse import urlparse
 
 import fsspec
 import requests
-from rigging.filesystem import StoragePath, marin_temp_bucket, open_url, prefix_join, url_to_fs
+from rigging.filesystem import marin_temp_bucket, open_url, prefix_join, url_to_fs
 
 from tests.vllm.grugmoe_real_checkpoint_backend import (
     DECODE_SEQ_LEN,
@@ -48,6 +49,8 @@ from tests.vllm.grugmoe_real_checkpoint_backend import (
 from tests.vllm.grugmoe_real_checkpoint_backend import (
     _stage_artifact_for_vllm as _common_stage_artifact_for_vllm,
 )
+
+logger = logging.getLogger(__name__)
 
 COREWEAVE_S3_PREFIX = "s3://marin-us-east-02a/"
 COREWEAVE_SIGNING_REGION = "US-EAST-02A"
@@ -71,16 +74,16 @@ OUTPUT_DIR_ENV = "MARIN_GRUGMOE_GPU_E2E_OUTPUT_DIR"
 VLLM_ATTENTION_BACKENDS_UNDER_TEST = ("TRITON_ATTN", "FLASH_ATTN")
 LEVANTER_MOE_CAPACITY_FACTOR = float(EXPECTED_GPU_COUNT)
 LEVANTER_DECODE_USE_ACTIVE_PREFIX = True
-CHECKPOINT_SCOPE = "small-real-checkpoint"
+CHECKPOINT_SCOPE = "small-checkpoint"
 CHECKPOINT_PATH = "s3://marin-us-east-02a/marin/grug/moe_may_compute_opt_d512_ep1-05c39b/checkpoints/step-10980"
 TOKENIZER_PATH = "s3://marin-us-east-02a/marin/tokenizers/marin-community/marin-tokenizer/hf-hub-0.36.2"
 OUTPUT_ROOT = marin_temp_bucket(
     ttl_days=14,
-    prefix="grugmoe-gpu-real-checkpoint-e2e",
+    prefix="grugmoe-gpu-checkpoint-e2e",
     source_prefix=COREWEAVE_S3_PREFIX,
 )
-CACHE_ROOT = "s3://marin-us-east-02a/compilation-cache/grugmoe-gpu-real-checkpoint-e2e"
-LOCAL_ARTIFACT_ROOT = os.path.join(tempfile.gettempdir(), "grugmoe-gpu-real-checkpoint-e2e-artifacts")
+CACHE_ROOT = "s3://marin-us-east-02a/compilation-cache/grugmoe-gpu-checkpoint-e2e"
+LOCAL_ARTIFACT_ROOT = os.path.join(tempfile.gettempdir(), "grugmoe-gpu-checkpoint-e2e-artifacts")
 VLLM_LOCAL_CACHE_ROOT = os.path.join(tempfile.gettempdir(), "grugmoe-gpu-vllm-cache")
 PROMPT = "United States of"
 PROMPT_BATCH_SIZE = 16
@@ -89,7 +92,7 @@ PROMPTS_PER_VLLM_DATA_PARALLEL_RANK = PROMPT_BATCH_SIZE // VLLM_DATA_PARALLEL_SI
 EXPECTED_CONTINUATION = " America"
 MAX_NUM_BATCHED_TOKENS = 1024
 MAX_NEW_TOKENS = 1
-SERVED_MODEL_NAME = "grugmoe-gpu-real-checkpoint-e2e"
+SERVED_MODEL_NAME = "grugmoe-gpu-checkpoint-e2e"
 
 
 @cache
@@ -165,7 +168,6 @@ def _write_json(path: str, payload: dict[str, Any]) -> None:
 
 
 def _copy_local_file(source_path: str, destination_path: str) -> None:
-    _require_coreweave_path("destination_path", destination_path)
     fs, plain_destination_path = _coreweave_url_to_fs(destination_path)
     plain_parent = posixpath.dirname(plain_destination_path)
     if plain_parent:
@@ -175,7 +177,6 @@ def _copy_local_file(source_path: str, destination_path: str) -> None:
 
 
 def _read_json(path: str) -> dict[str, Any]:
-    _require_coreweave_path("json_path", path)
     if path.startswith("s3://"):
         _configure_coreweave_s3_env()
 
@@ -186,31 +187,16 @@ def _read_json(path: str) -> dict[str, Any]:
     return payload
 
 
-def _is_coreweave_s3_path(path: str) -> bool:
-    parsed_path = StoragePath.parse(path)
-    parsed_prefix = StoragePath.parse(COREWEAVE_S3_PREFIX)
-    if (parsed_path.scheme, parsed_path.netloc) != (parsed_prefix.scheme, parsed_prefix.netloc):
-        return False
-    try:
-        parsed_path.relative_to(parsed_prefix)
-    except ValueError:
-        return False
-    return True
-
-
-def _require_coreweave_path(label: str, path: str) -> None:
+def _require_coreweave_or_local_path(label: str, path: str) -> None:
     parsed = urlparse(path)
-    if parsed.scheme == "s3":
-        if _is_coreweave_s3_path(path):
-            return
-        raise ValueError(f"{label} must be under {COREWEAVE_S3_PREFIX}, got {path!r}")
+    if parsed.scheme == "s3" and path.startswith(COREWEAVE_S3_PREFIX):
+        return
     if parsed.scheme in {"", "file"}:
         return
     raise ValueError(f"{label} must be a local path or {COREWEAVE_S3_PREFIX} path, got {path!r}")
 
 
 def _require_file(label: str, path: str) -> None:
-    _require_coreweave_path(label, path)
     if not _exists(path):
         raise FileNotFoundError(f"{label} not found at {path}")
 
@@ -496,7 +482,7 @@ def _export_artifact_and_run_levanter_reference(args: argparse.Namespace) -> Non
     }
     levanter_result["phase_timings"] = levanter_timings
     _write_json(args.levanter_result_path, levanter_result)
-    print("grugmoe_gpu_real_checkpoint_levanter_result=" + json.dumps(levanter_result, sort_keys=True), flush=True)
+    logger.info("grugmoe_gpu_checkpoint_levanter_result=%s", json.dumps(levanter_result, sort_keys=True))
     result = {
         "phase": "export_and_levanter_reference",
         "checkpoint_path": args.checkpoint_path,
@@ -514,17 +500,17 @@ def _export_artifact_and_run_levanter_reference(args: argparse.Namespace) -> Non
     phase_timings["total_seconds"] = result["elapsed_seconds"]
     result["phase_timings"] = phase_timings
     _write_json(args.result_path, result)
-    print(
-        "grugmoe_gpu_real_checkpoint_export_and_levanter_reference_result=" + json.dumps(result, sort_keys=True),
-        flush=True,
+    logger.info(
+        "grugmoe_gpu_checkpoint_export_and_levanter_reference_result=%s",
+        json.dumps(result, sort_keys=True),
     )
 
 
 def _stage_artifact_for_vllm(artifact_dir: str) -> StagedArtifact:
     return _common_stage_artifact_for_vllm(
         artifact_dir,
-        path_validator=_require_coreweave_path,
-        temp_prefix="grugmoe-gpu-real-checkpoint-vllm-artifact-",
+        path_validator=lambda label, path: None,
+        temp_prefix="grugmoe-gpu-checkpoint-vllm-artifact-",
     )
 
 
@@ -557,12 +543,12 @@ def _post_completion_request(
         json=payload,
         timeout=300,
     )
-    print("vllm_gpu_completions_status_code=" + str(response.status_code), flush=True)
+    logger.info("vllm_gpu_completions_status_code=%s", response.status_code)
     if not response.ok:
-        print("vllm_gpu_completions_response_text=" + response.text[:4000], flush=True)
-        print("vllm_gpu_server_logs_tail_begin", flush=True)
-        print(env.logs_tail(max_lines=400), flush=True)
-        print("vllm_gpu_server_logs_tail_end", flush=True)
+        logger.info("vllm_gpu_completions_response_text=%s", response.text[:4000])
+        logger.info("vllm_gpu_server_logs_tail_begin")
+        logger.info("%s", env.logs_tail(max_lines=400))
+        logger.info("vllm_gpu_server_logs_tail_end")
         response.raise_for_status()
     return response.json()
 
@@ -866,11 +852,11 @@ def _vllm_backend(args: argparse.Namespace) -> None:
         startup_started = time.time()
         with VllmEnvironment(model=model, timeout_seconds=SERVER_TIMEOUT_SECONDS, extra_args=extra_args) as env:
             phase_timings["vllm_startup_load_seconds"] = time.time() - startup_started
-            print("vllm_gpu_server_initialized=True", flush=True)
-            print("vllm_gpu_server_url=" + env.server_url, flush=True)
-            print("vllm_gpu_model_path=" + staged_artifact.vllm_model_path, flush=True)
-            print("vllm_gpu_artifact_staging=" + json.dumps(staged_artifact.staging, sort_keys=True), flush=True)
-            print("vllm_gpu_server_log_dir=" + (env.vllm_server.log_dir if env.vllm_server else ""), flush=True)
+            logger.info("vllm_gpu_server_initialized=True")
+            logger.info("vllm_gpu_server_url=%s", env.server_url)
+            logger.info("vllm_gpu_model_path=%s", staged_artifact.vllm_model_path)
+            logger.info("vllm_gpu_artifact_staging=%s", json.dumps(staged_artifact.staging, sort_keys=True))
+            logger.info("vllm_gpu_server_log_dir=%s", env.vllm_server.log_dir if env.vllm_server else "")
             generation_started = time.time()
             completion_batch = _collect_vllm_completion_batch(env, attention_backend=attention_backend)
             phase_timings["vllm_generation_seconds"] = time.time() - generation_started
@@ -899,7 +885,7 @@ def _vllm_backend(args: argparse.Namespace) -> None:
             phase_timings=phase_timings,
         )
         _write_json(args.result_path, failure_result)
-        print("grugmoe_gpu_real_checkpoint_vllm_result=" + json.dumps(failure_result, sort_keys=True), flush=True)
+        logger.info("grugmoe_gpu_checkpoint_vllm_result=%s", json.dumps(failure_result, sort_keys=True))
         raise
     completion_summary = _summarize_vllm_completion_batch(completion_batch)
     phase_timings["total_seconds"] = time.time() - started
@@ -913,7 +899,7 @@ def _vllm_backend(args: argparse.Namespace) -> None:
         phase_timings=phase_timings,
     )
     _write_json(args.result_path, result)
-    print("grugmoe_gpu_real_checkpoint_vllm_result=" + json.dumps(result, sort_keys=True), flush=True)
+    logger.info("grugmoe_gpu_checkpoint_vllm_result=%s", json.dumps(result, sort_keys=True))
 
 
 def _build_levanter_reference_result(
@@ -998,7 +984,7 @@ def _build_levanter_reference_result(
 
 
 def _parse_backend_args(argv: list[str]) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Internal GrugMoE GPU real-checkpoint e2e subprocess")
+    parser = argparse.ArgumentParser(description="Internal GrugMoE GPU checkpoint e2e subprocess")
     parser.add_argument("--phase", choices=("export-and-levanter-reference", "vllm"), required=True)
     parser.add_argument("--checkpoint-path", required=True)
     parser.add_argument("--tokenizer-path", required=True)
@@ -1008,10 +994,26 @@ def _parse_backend_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--result-path", required=True)
     parser.add_argument("--levanter-result-path", required=True)
     parser.add_argument("--attention-backend", choices=VLLM_ATTENTION_BACKENDS_UNDER_TEST)
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+    _validate_backend_paths(args)
+    return args
+
+
+def _validate_backend_paths(args: argparse.Namespace) -> None:
+    for label, path in (
+        ("checkpoint_path", args.checkpoint_path),
+        ("tokenizer_path", args.tokenizer_path),
+        ("output_dir", args.output_dir),
+        ("artifact_dir", args.artifact_dir),
+        ("cache_dir", args.cache_dir),
+        ("result_path", args.result_path),
+        ("levanter_result_path", args.levanter_result_path),
+    ):
+        _require_coreweave_or_local_path(label, path)
 
 
 def main(argv: list[str] | None = None) -> int:
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
     args = _parse_backend_args(sys.argv[1:] if argv is None else argv)
     match args.phase:
         case "export-and-levanter-reference":
