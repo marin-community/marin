@@ -73,7 +73,7 @@ def _vllm_result_paths(paths: E2EPaths) -> dict[str, str]:
     }
 
 
-def _run_backend(
+def _run_subprocess_phase(
     phase: str,
     paths: E2EPaths,
     result_path: str,
@@ -83,7 +83,7 @@ def _run_backend(
     command = [
         sys.executable,
         str(BACKEND_PATH),
-        "--backend",
+        "--phase",
         phase,
         "--checkpoint-path",
         backend.CHECKPOINT_PATH,
@@ -120,15 +120,15 @@ def _run_backend(
 
 
 @pytest.fixture(scope="module")
-def export_result(e2e_paths: E2EPaths) -> dict[str, Any]:
-    return _run_backend("export", e2e_paths, e2e_paths.export_result_path)
+def levanter_reference_setup_result(e2e_paths: E2EPaths) -> dict[str, Any]:
+    return _run_subprocess_phase("export-and-levanter-reference", e2e_paths, e2e_paths.export_result_path)
 
 
 @pytest.fixture(scope="module")
-def vllm_results(e2e_paths: E2EPaths, export_result: dict[str, Any]) -> dict[str, dict[str, Any]]:
-    del export_result
+def vllm_results(e2e_paths: E2EPaths, levanter_reference_setup_result: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    del levanter_reference_setup_result
     return {
-        attention_backend: _run_backend(
+        attention_backend: _run_subprocess_phase(
             "vllm",
             e2e_paths,
             _vllm_result_path(e2e_paths, attention_backend),
@@ -139,14 +139,17 @@ def vllm_results(e2e_paths: E2EPaths, export_result: dict[str, Any]) -> dict[str
 
 
 @pytest.fixture(scope="module")
-def levanter_result(e2e_paths: E2EPaths, export_result: dict[str, Any]) -> dict[str, Any]:
-    del export_result
+def levanter_result(e2e_paths: E2EPaths, levanter_reference_setup_result: dict[str, Any]) -> dict[str, Any]:
+    del levanter_reference_setup_result
     return backend._read_json(e2e_paths.levanter_result_path)
 
 
-def _assert_levanter_golden_reference(export_result: dict[str, Any], levanter_result: dict[str, Any]) -> None:
-    assert export_result["jax_runtime"]["gpu_device_count"] >= backend.EXPECTED_GPU_COUNT
-    assert export_result["jax_mesh"]["shape"]["expert"] == backend.LEVANTER_EXPERT_AXIS_SIZE
+def _assert_levanter_golden_reference(
+    levanter_reference_setup_result: dict[str, Any],
+    levanter_result: dict[str, Any],
+) -> None:
+    assert levanter_reference_setup_result["jax_runtime"]["gpu_device_count"] >= backend.EXPECTED_GPU_COUNT
+    assert levanter_reference_setup_result["jax_mesh"]["shape"]["expert"] == backend.LEVANTER_EXPERT_AXIS_SIZE
 
     assert levanter_result["prompt"] == backend.PROMPT
     assert levanter_result["max_new_tokens"] == backend.MAX_NEW_TOKENS
@@ -217,7 +220,7 @@ def _assert_vllm_result_matches_golden(
 def _write_contract_summary(
     e2e_paths: E2EPaths,
     *,
-    export_result: dict[str, Any],
+    levanter_reference_setup_result: dict[str, Any],
     levanter_result: dict[str, Any],
     vllm_results: dict[str, dict[str, Any]],
 ) -> None:
@@ -227,7 +230,7 @@ def _write_contract_summary(
         "checkpoint_scope": backend.CHECKPOINT_SCOPE,
         "tokenizer_path": backend.TOKENIZER_PATH,
         "result_paths": {
-            "export": e2e_paths.export_result_path,
+            "export_and_levanter_reference": e2e_paths.export_result_path,
             "levanter": e2e_paths.levanter_result_path,
             "vllm": _vllm_result_paths(e2e_paths),
         },
@@ -261,7 +264,7 @@ def _write_contract_summary(
             for attention_backend, result in sorted(vllm_results.items())
         },
         "attention_backends_tested": sorted(vllm_results),
-        "export_elapsed_seconds": export_result.get("elapsed_seconds"),
+        "reference_setup_elapsed_seconds": levanter_reference_setup_result.get("elapsed_seconds"),
     }
     backend._write_json(e2e_paths.summary_result_path, summary)
     print("grugmoe_gpu_real_checkpoint_e2e_result=" + json.dumps(summary, sort_keys=True), flush=True)
@@ -427,11 +430,11 @@ def test_vllm_completion_batch_summary_returns_all_prompt_outputs() -> None:
 @pytest.mark.timeout(7200)
 def test_grugmoe_gpu_real_checkpoint_contract(
     e2e_paths: E2EPaths,
-    export_result: dict[str, Any],
+    levanter_reference_setup_result: dict[str, Any],
     vllm_results: dict[str, dict[str, Any]],
     levanter_result: dict[str, Any],
 ) -> None:
-    _assert_levanter_golden_reference(export_result, levanter_result)
+    _assert_levanter_golden_reference(levanter_reference_setup_result, levanter_result)
 
     assert set(vllm_results) == set(backend.VLLM_ATTENTION_BACKENDS_UNDER_TEST)
     for attention_backend, vllm_result in vllm_results.items():
@@ -439,7 +442,7 @@ def test_grugmoe_gpu_real_checkpoint_contract(
 
     _write_contract_summary(
         e2e_paths,
-        export_result=export_result,
+        levanter_reference_setup_result=levanter_reference_setup_result,
         levanter_result=levanter_result,
         vllm_results=vllm_results,
     )

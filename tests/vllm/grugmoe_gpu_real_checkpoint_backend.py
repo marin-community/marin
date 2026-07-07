@@ -436,7 +436,7 @@ def _require_torch_cuda_runtime() -> dict[str, Any]:
     return snapshot
 
 
-def _export_backend(args: argparse.Namespace) -> None:
+def _export_artifact_and_run_levanter_reference(args: argparse.Namespace) -> None:
     phase_timings: dict[str, float] = {}
     s3_env = _configure_coreweave_s3_env()
     jax_env = _configure_jax_gpu_env(args.cache_dir)
@@ -503,7 +503,7 @@ def _export_backend(args: argparse.Namespace) -> None:
     _write_json(args.levanter_result_path, levanter_result)
     print("grugmoe_gpu_real_checkpoint_levanter_result=" + json.dumps(levanter_result, sort_keys=True), flush=True)
     result = {
-        "phase": "export",
+        "phase": "export_and_levanter_reference",
         "checkpoint_path": args.checkpoint_path,
         "checkpoint_scope": CHECKPOINT_SCOPE,
         "tokenizer_path": args.tokenizer_path,
@@ -519,7 +519,10 @@ def _export_backend(args: argparse.Namespace) -> None:
     phase_timings["total_seconds"] = result["elapsed_seconds"]
     result["phase_timings"] = phase_timings
     _write_json(args.result_path, result)
-    print("grugmoe_gpu_real_checkpoint_export_result=" + json.dumps(result, sort_keys=True), flush=True)
+    print(
+        "grugmoe_gpu_real_checkpoint_export_and_levanter_reference_result=" + json.dumps(result, sort_keys=True),
+        flush=True,
+    )
 
 
 def _stage_artifact_for_vllm(artifact_dir: str) -> StagedArtifact:
@@ -1000,8 +1003,8 @@ def _build_levanter_reference_result(
 
 
 def _parse_backend_args(argv: list[str]) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Internal GrugMoE GPU real-checkpoint e2e backend")
-    parser.add_argument("--backend", choices=("export", "vllm"), required=True)
+    parser = argparse.ArgumentParser(description="Internal GrugMoE GPU real-checkpoint e2e subprocess")
+    parser.add_argument("--phase", choices=("export-and-levanter-reference", "vllm"), required=True)
     parser.add_argument("--checkpoint-path", required=True)
     parser.add_argument("--tokenizer-path", required=True)
     parser.add_argument("--output-dir", required=True)
@@ -1015,9 +1018,9 @@ def _parse_backend_args(argv: list[str]) -> argparse.Namespace:
 
 def main(argv: list[str] | None = None) -> int:
     args = _parse_backend_args(sys.argv[1:] if argv is None else argv)
-    match args.backend:
-        case "export":
-            _export_backend(args)
+    match args.phase:
+        case "export-and-levanter-reference":
+            _export_artifact_and_run_levanter_reference(args)
         case "vllm":
             _vllm_backend(args)
     return 0
