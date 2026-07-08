@@ -1139,10 +1139,13 @@ def ghalogs_public_normalize_steps(
     ``download`` streams the Zenodo archive to ``source_path`` and is wired as a
     dependency of ``materialize`` so the ~142 GB archive is auto-staged before
     materialization reads it (idempotent — a no-op when already staged).
+    ``materialize`` reads from the download step's resolved ``output_path`` so
+    the two always agree on the archive location, even when ``output_path_prefix``
+    differs from ``marin_prefix()``.
     """
     download = download_ghalogs_step(source_path=source_path, output_path_prefix=output_path_prefix)
     materialized = materialize_ghalogs_step(
-        source_path=source_path,
+        source_path=download.output_path,
         max_members=max_members,
         num_shards=num_materialize_shards,
         deps=[download],

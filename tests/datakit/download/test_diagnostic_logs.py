@@ -420,6 +420,34 @@ def test_ghalogs_public_normalize_steps_write_datakit_normalized_train_partition
     assert rows[0]["source_id"] != rows[0]["id"]
 
 
+def test_ghalogs_public_normalize_steps_read_where_download_wrote(tmp_path, monkeypatch):
+    # Regression: with a custom output_path_prefix and the default relative
+    # source_path, the download step resolves its output under output_path_prefix
+    # while materialize must read from that same location (not marin_prefix()).
+    steps_prefix = tmp_path / "steps"
+    download, materialized, _train, _normalized = ghalogs_public_normalize_steps(
+        max_members=1,
+        num_materialize_shards=1,
+        output_path_prefix=str(steps_prefix),
+    )
+
+    # Stage the fixture archive exactly where the download step resolves its
+    # output — a location distinct from marin_prefix(), which the misaligned
+    # version read from and would have missed.
+    staged_archive = Path(download.output_path) / GHALOGS_STAGED_ARCHIVE_RELATIVE_PATH
+    staged_archive.parent.mkdir(parents=True)
+    train_member = _member_path_for_partition(DiagnosticPartition.TRAIN)
+    with zipfile.ZipFile(staged_archive, "w") as archive:
+        archive.writestr(train_member, "ERROR token=abc123456789 traceback")
+
+    # Archive is pre-staged; no-op the Zenodo stream.
+    monkeypatch.setattr(diagnostic_logs, "stage_ghalogs_archive", lambda output_path: None)
+    StepRunner().run([download, materialized])
+
+    rows = _read_parquet_rows(Path(materialized.output_path))
+    assert [row["archive_path"] for row in rows] == [train_member]
+
+
 class _FakeStreamResponse:
     """Minimal stand-in for a streamed ``requests`` response."""
 
