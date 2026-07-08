@@ -154,10 +154,6 @@ def _parse_local_device_ids(raw: str | None) -> list[int] | None:
     return [int(part) for part in raw.split(",") if part]
 
 
-def _tpu_runtime_requested(pjrt_device: str, jax_platforms: str) -> bool:
-    return pjrt_device.upper() == "TPU" or "tpu" in {platform.strip().lower() for platform in jax_platforms.split(",")}
-
-
 class _CoordinatorRole(StrEnum):
     """How a supervised rank obtains the JAX coordinator address."""
 
@@ -292,9 +288,6 @@ def initialize_jax(
         return
 
     if job_info is None:
-        if _tpu_runtime_requested(os.environ.get("PJRT_DEVICE", ""), os.environ.get("JAX_PLATFORMS", "")):
-            logger.info("TPU detected outside Iris job context; initializing JAX distributed via TPU runtime")
-            jax.distributed.initialize()
         return
 
     if job_info.num_tasks <= 1:
