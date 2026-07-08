@@ -1010,7 +1010,7 @@ def stage_ghalogs_archive(output_path: str) -> None:
         logger.info("GHALogs archive already staged (%d bytes): %s", GHALOGS_ARCHIVE_BYTES, archive_path)
         return
 
-    fsspec_mkdirs(os.path.dirname(archive_path), exist_ok=True)
+    StoragePath(os.path.dirname(archive_path)).mkdirs(exist_ok=True)
     logger.info("Streaming %s -> %s (%d bytes expected)", GHALOGS_DOWNLOAD_URL, archive_path, GHALOGS_ARCHIVE_BYTES)
     total = 0
     next_log = _GHALOGS_LOG_EVERY_BYTES
