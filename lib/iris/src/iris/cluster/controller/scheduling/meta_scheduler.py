@@ -19,14 +19,22 @@ without any change to ``evaluate_constraint``.
 A backend with no advertised attributes matches every job (it is a catch-all):
 only constraint keys that *some* backend advertises participate in routing;
 all other constraints are left to the per-backend scheduler. This makes the
-implicit single backend an identity router.
+implicit single backend an identity router. A ``device-type=cpu`` constraint
+never participates either — CPU is fungible across every backend, so like the
+federation and scaling-group routers this one drops it before matching.
 """
 
 import logging
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 
-from iris.cluster.constraints import AttributeValue, Constraint, ConstraintIndex, backend_directive
+from iris.cluster.constraints import (
+    AttributeValue,
+    Constraint,
+    ConstraintIndex,
+    backend_directive,
+    is_cpu_device_type_constraint,
+)
 from iris.cluster.types import JobName
 
 logger = logging.getLogger(__name__)
@@ -107,8 +115,9 @@ def route_jobs_to_backends(
     id). No static match finalizes the job UNSCHEDULABLE.
 
     Only constraint keys some backend advertises participate in matching; the
-    rest are left to the per-backend scheduler. The unschedulable reason never
-    names a backend the user may not see.
+    rest are left to the per-backend scheduler, and a ``device-type=cpu``
+    constraint is dropped because CPU is fungible across all backends. The
+    unschedulable reason never names a backend the user may not see.
     """
     routing_keys = {key for route in routing.values() for key in route.advertised}
     result = RoutingResult()
@@ -128,7 +137,9 @@ def route_jobs_to_backends(
                 result.unschedulable[job.job_id] = f"backend '{directive}' does not exist"
             continue
 
-        routing_constraints = [c for c in job.constraints if c.key in routing_keys]
+        routing_constraints = [
+            c for c in job.constraints if c.key in routing_keys and not is_cpu_device_type_constraint(c)
+        ]
         matched = index.matching_entities(routing_constraints) & allowed
         if not matched:
             result.unschedulable[job.job_id] = "no backend matches the job's constraints"

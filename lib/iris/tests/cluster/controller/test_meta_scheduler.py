@@ -254,3 +254,34 @@ def test_single_backend_rejects_a_variant_it_does_not_provide():
 
     assert job.job_id not in result.pins
     assert "no backend matches" in result.unschedulable[job.job_id]
+
+
+def test_explicit_cpu_device_type_constraint_stays_routable():
+    # A GPU backend advertises device-type, making it a routing key. A CPU-pinned
+    # job (explicit device-type=cpu) must not be rejected: CPU is fungible, so the
+    # constraint is dropped before matching — as the federation and scaling-group
+    # routers already do — and the job routes to a backend.
+    configs = {
+        "cpu": _accel_backend(("cpu", "")),
+        "gpu": _accel_backend(("gpu", "H100")),
+    }
+    job = _job("j", _eq("device-type", "cpu"))
+
+    result = _route(configs, job)
+
+    assert job.job_id in result.pins
+    assert result.unschedulable == {}
+
+
+def test_cpu_constraint_alongside_gpu_variant_still_routes_by_variant():
+    # Dropping device-type=cpu must not drop the other routing constraints: a job
+    # carrying both device-type=cpu and device-variant=h100 still routes by variant.
+    configs = {
+        "cw": _accel_backend(("gpu", "H100")),
+        "gcp": _accel_backend(("gpu", "A100")),
+    }
+    job = _job("j", _eq("device-type", "cpu"), _eq("device-variant", "h100"))
+
+    result = _route(configs, job)
+
+    assert result.pins == {job.job_id: "cw"}
