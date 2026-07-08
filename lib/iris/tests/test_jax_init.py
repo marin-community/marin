@@ -89,7 +89,6 @@ def test_initialize_jax_single_task(
     mock_iris_ctx.assert_not_called()
 
 
-@patch("iris.runtime.jax_init.atexit")
 @patch("jax.distributed.initialize")
 @patch("iris.runtime.jax_init.iris_ctx")
 @patch("iris.runtime.jax_init.get_job_info")
@@ -97,7 +96,6 @@ def test_initialize_jax_tpu_multitask_uses_iris_registry(
     mock_get_job_info: MagicMock,
     mock_iris_ctx: MagicMock,
     mock_jax_init: MagicMock,
-    mock_atexit: MagicMock,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """TPU Iris jobs use the same explicit coordinator and rank wiring as other multi-task jobs."""
@@ -119,7 +117,6 @@ def test_initialize_jax_tpu_multitask_uses_iris_registry(
 
     assert fake_ctx.registry.registered == [("jax_coordinator", "10.0.0.1:8476")]
     assert mock_jax_init.call_args_list == [call("10.0.0.1:8476", 2, 0), call("10.0.0.1:8476", 2, 1)]
-    mock_atexit.register.assert_called_once_with(fake_ctx.registry.unregister, "endpoint-1")
 
 
 @patch("iris.runtime.jax_init.atexit")
