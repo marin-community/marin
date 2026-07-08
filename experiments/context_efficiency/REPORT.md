@@ -32,7 +32,9 @@ transcripts, February–July 2026. Pipeline and data schema: `experiments/contex
   nets ~0.3%, because 556 of 569 proposed article topics never recur across sessions.
 
 The highest-leverage single change is an automatic semantic code index; it serves the one addressable
-bucket that matters (code navigation, ~40% of the tool surface). A shared wiki is worth building at
+bucket that matters (code navigation, ~40% of the tool surface). A direct retrieval benchmark on 150
+real navigation needs (§6.4) confirms it: a local dense index finds a satisfying snippet for 77% of
+them within 5 hits at ~⅓ the tokens of ripgrep. A shared wiki is worth building at
 subsystem granularity and for correctness/onboarding, not as a per-fact token play, and any persistent
 memory must be retrieval-gated — a memory concatenated into the always-on prelude is re-read every
 turn and costs more than it saves. The largest structural lever sits outside the supermemory framing:
@@ -367,6 +369,83 @@ optimistic Haiku labels. Roughly half of it (~4.7% calibrated) is the automatic 
 plus better tool defaults plus result compaction, which need no authoring. The other half is
 maintained subsystem architecture docs, and only if written at subsystem granularity. A per-fact
 wiki or naive memory contributes ~0.3%.
+
+### 6.4 Empirical check: does a semantic index actually retrieve, and at what size?
+
+The semantic-index saving above rests on two labeler estimates: that such an index would *find* the
+code (coverage), and that it would return it in ~0.36× the tokens of the tool results it replaces
+(the mean size ratio in §6.2). Both are soft. To de-risk them we built a separate benchmark
+(`experiments/code_search_eval/`, its own report): 150 real navigation needs mined from these
+sessions — the gold answer is the file the agent actually read/edited after searching — run against a
+ripgrep baseline, a BM25 index, and a local dense embedding index (`fastembed` bge-small + cosine)
+over the full monorepo. Each engine returns its top 10; an agent judge (never shown the gold) marks
+whether a returned snippet answers the need. `tokens@5` is the mean snippet tokens across the top 5,
+extracted uniformly so answer size is comparable across engines.
+
+| engine | recall@5 | judge-hit@1 | judge-hit@5 | judge-hit@10 | MRR | tokens@5 |
+|---|---|---|---|---|---|---|
+| dense (local embedding index) | 0.53 | **0.42** | **0.77** | 0.91 | 0.41 | **1,882** |
+| bm25 | 0.37 | 0.27 | 0.63 | 0.81 | 0.30 | 2,012 |
+| ripgrep (baseline) | 0.36 | 0.19 | 0.56 | 0.79 | 0.25 | 5,865 |
+
+Both assumptions hold. **Coverage:** the dense index locates a satisfying snippet for 77% of needs
+within the top 5 (91% within 10), versus 56% for ripgrep — it clears the "does it find it" bar that
+§6.3 assumed for the automatic saving, and doubles ripgrep's top-1 hit rate (0.42 vs 0.19).
+**Size:** dense reaches that better answer at 1,882 tokens against ripgrep's 5,865 — a **0.32× size
+ratio**, independently landing on the 0.36 the labels assumed. So recommendation 1 is not resting on
+a label guess: the retrieval mechanism behind it, measured end to end, both finds the code and
+returns it in roughly a third of the tokens — and those tokens are then carried on every subsequent
+turn, which is where §4 showed the budget actually goes.
+
+Two practical qualifiers. BM25 alone captures about half of dense's ranking gain (judge-hit@5 0.63)
+for a 4-second index build versus dense's ~40 minutes on CPU, so a lexical index is the cheap first
+step and the dense index is the upgrade where the build amortizes. And this measures retrieval
+quality and answer size, not the full within-session budget saving — it validates the two inputs to
+the §6.2/§6.3 estimate, it does not re-derive the percentage. Off-the-shelf local tools we also tried
+(SeaGOAT, VectorCode) did not run headless at monorepo scale; a ~70-line dense adapter did, which is
+the relevant bar for agent integration.
+
+### 6.5 What this looks like in a session
+
+Concretely, the intervention is one tool the agent calls instead of a burst of `Grep`/`Glob`/`Read`.
+Call it `sem` — a query against the local index that returns ranked `file:line` snippets. The two
+examples below are real needs from the corpus (the query is what the agent was actually after), run
+through the benchmark's dense index and its ripgrep baseline.
+
+A behavioral need with no obvious identifier to grep — the agent was debugging a job stuck `Running`
+with `failures=0` and wanted the code that decides requeue vs. terminate:
+
+```
+$ sem "what code path handles job requeue vs terminate by status and failure count"
+1  lib/iris/src/iris/cluster/controller/reconcile/task.py:451-490      0.79   ← the reconcile path
+2  lib/iris/tests/cluster/controller/test_transitions.py:4381-4420    0.79
+3  lib/iris/src/iris/cluster/controller/service.py:571-610            0.78
+```
+
+Rank 1 is the actual transition logic (judge: full answer at rank 1). The status quo for the same
+need is a keyword hunt — `rg -i 'requeue|terminate|failure'` spreads across the tree and its
+top hits are `autoscaler/scaling_group.py`, `zephyr/execution.py`, `client/client.py`, none of which
+hold the reconcile path (judge: nothing in the top 10 answers it). The phrase the agent knows
+("requeue vs terminate") is not the vocabulary the code uses, so lexical search cannot bridge it; the
+agent instead opens several files to reconstruct the path by hand.
+
+A definition lookup, where a literal token *does* exist but does not help ranking — "where is the
+`ChatProcessor` class and its `__init__` signature":
+
+```
+$ sem "where is the ChatProcessor class and its __init__ signature"
+1  lib/levanter/src/levanter/data/text/formats.py:241-280   0.76   ← class definition
+2  lib/levanter/tests/test_text_chat.py:211-250             0.76
+```
+
+Rank 1 is the definition (judge: full). Grepping `ChatProcessor` returns every mention — the
+definition sits behind `actor_pb2.pyi` and `data/text/datasets.py` at rank 4 (judge: partial),
+because coverage ranking cannot tell a definition from its many call sites. `sem` returns the
+40-line chunk around the class; the agent reads one region instead of triaging a match list.
+
+The win in both cases is that one call lands the region at rank 1 where the keyword path returns the
+wrong files or none — the aggregate token effect in §6.4 (~⅓ the snippet tokens for a better answer)
+follows from the agent no longer issuing a burst of searches and reading several files to compensate.
 
 ## 7. Recommendations
 
