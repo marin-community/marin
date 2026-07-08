@@ -48,17 +48,14 @@ storage:
   # network-attached PVC.
   local_state_dir: /mnt/local/iris-controller-state
 
-# Request auth. No login arm — identity is by network location: direct
-# in-cluster peers (CKS pods/nodes are RFC1918; loopback covers kubectl
-# port-forward) are trusted as admin. A non-empty trusted_cidrs alone makes the
-# controller ENFORCING (was null-auth): an off-cluster request reaches the
-# controller through Traefik, which appends X-Forwarded-For, so it never matches
-# a CIDR and must present a bearer token. This is the identity gate behind the
-# IP-restricted federation ingress (lib/iris/scripts/install_cw_network.py):
-# the marin controller presents a federation JWT, everything else is rejected.
-# No signing_key is needed — this cluster runs no finelog relay, so an ephemeral
-# key is fine (as on cw-us-east-02a). See docs/coreweave.md for the federation
-# auth model (the marin peer's federation_peers trust anchor).
+# Request auth. Identity is by network location: in-cluster peers (RFC1918
+# pods/nodes, loopback for kubectl port-forward) are trusted as admin. A non-empty
+# trusted_cidrs makes the controller enforcing — an off-cluster request arrives
+# through Traefik with an appended X-Forwarded-For, never matches a CIDR, and must
+# present a bearer. This is the identity gate behind the IP-restricted federation
+# ingress (scripts/install_cw_network.py). No signing_key is needed: this cluster
+# runs no finelog relay, so an ephemeral key is fine
+# (require_persistent_signing_key only fires with finelog.relay_address set).
 auth:
   trusted_cidrs: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 127.0.0.0/8, "::1/128"]
 

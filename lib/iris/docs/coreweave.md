@@ -256,13 +256,14 @@ and neither alone sufficient:
    *identity* factor. The ingress does **not** do method policy; the controller
    does.
 
-Because the controller is the identity gate, it **must be enforcing**. A permissive
+Because the controller is the identity gate, it **must be enforcing** — a permissive
 (null-auth) controller behind only an IP lock hands anonymous admin over its entire
-control plane to anything arriving from the allowlisted IP.
-`install_cw_network.py` warns loudly when its target is still permissive.
-`cw-us-east-02a` is enforcing (`trusted_cidrs`); `cw-rno2a` gains the same
-`trusted_cidrs` block (see below), which flips it from null-auth to enforcing so an
-off-cluster request must present a bearer.
+control plane to anything arriving from the allowlisted IP. Both CoreWeave
+controllers enforce via `auth.trusted_cidrs`: in-cluster peers (RFC1918 pods/nodes,
+loopback for `kubectl port-forward`) authenticate by network location, while an
+off-cluster request arrives through Traefik with an appended `X-Forwarded-For`,
+never matches a CIDR, and must present a bearer. `install_cw_network.py` warns if
+pointed at a still-permissive controller.
 
 The route **reuses the controller's `iris-cw-*.oa.dev` host** rather than a
 dedicated name. Where the cluster already publishes `/proxy` (`cw-us-east-02a`),
@@ -286,11 +287,10 @@ uv run lib/iris/scripts/install_cw_network.py --cluster cw-rno2a install \
 ```
 
 The federation Ingress + Middleware are independent objects, so applying them does
-**not** restart the controller — the networking lands before the config change and
-controller restart that turn on enforcement. If CoreWeave's LoadBalancer SNATs
-(Traefik sees the LB, not the real client), pass `--xff-depth 1` so the allowlist
-reads the client IP from `X-Forwarded-For`; verify by confirming a request from a
-non-allowlisted host is refused (below).
+**not** restart the controller. If CoreWeave's LoadBalancer SNATs (Traefik sees the
+LB, not the real client), pass `--xff-depth 1` so the allowlist reads the client IP
+from `X-Forwarded-For`; verify by confirming a request from a non-allowlisted host
+is refused (below).
 
 **Verify from the marin controller VM:**
 
@@ -326,53 +326,6 @@ IAP-only inbound with *no* external IP, so egress goes through Cloud NAT): reser
 a regional static IP and pin Cloud NAT to it (`gcloud compute routers nats update
 … --nat-external-ip-pool=iris-marin-fed-egress`). Removing the VM's external IP is
 a larger change — do it only with explicit approval, never as a side effect here.
-
-#### Auth on `cw-rno2a`: enforcing base chain now, federation verifier later
-
-`cw-rno2a` had no `auth:` block, so its RPC chain was null-auth — *permissive*,
-admitting any caller as the anonymous admin. This config now gives it the same
-`trusted_cidrs` block `cw-us-east-02a` runs:
-
-```yaml
-auth:
-  trusted_cidrs: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 127.0.0.0/8, "::1/128"]
-```
-
-A non-empty `trusted_cidrs` alone makes the controller enforcing: in-cluster peers
-(RFC1918 pods/nodes; loopback for `kubectl port-forward`) authenticate as admin by
-network location, while an off-cluster request reaches the controller through
-Traefik — which appends `X-Forwarded-For`, so it never matches a CIDR and must
-present a bearer. That is what makes exposing the RPC surface behind the IP
-allowlist safe: an off-cluster caller with no valid bearer is rejected, not
-admitted. No `signing_key` is needed — this cluster runs no finelog relay, so an
-ephemeral key is fine (as on `cw-us-east-02a`); `require_persistent_signing_key`
-only fires when `finelog.relay_address` is set.
-
-It takes effect on the next controller restart. **Never restart a CoreWeave or the
-marin controller without explicit approval** (`AGENTS.md`); this config is staged
-ahead of that restart.
-
-The **federation verifier** — the method-scoped `aud="federation"` check that lets
-the marin controller's handoff RPCs through — is separate. It is built in the
-federation-auth code and activated by controller config that must land only after
-that code merges:
-
-```yaml
-# DEPENDS ON the federation-auth code merging first — pydantic forbids unknown keys
-# (config.py, extra="forbid"), so adding these before the code lands breaks config
-# load. Stage, do not apply, until then.
-auth:
-  federation_peers:                       # trust anchor: the marin root's public key
-    marin: { public_key: "<PEM from marin init-keys>" }
-federation:
-  allowed_submitters: ["*@openathena.ai"] # CW-side submitter allowlist (re-check)
-```
-
-Until those land, `cw-rno2a` is enforcing but has no federation verifier, so a
-federation handoff is rejected (unknown issuer) — federation stays dark, but the
-surface is never an open hole. Once they land, the federation RPCs are admitted for
-the marin peer only. Full sequencing and rollback are in
-`.agents/projects/iris_federation/rollout.md`.
 
 ## 3. Tools
 
