@@ -235,6 +235,126 @@ issue with `letsencrypt-http01-staging` first to avoid LE rate limits, then flip
 `cluster_issuer` to prod. Leave `tls_secret`/`cluster_issuer` empty for plain
 HTTP (dev only).
 
+### Federation ingress (GCP `marin` → CoreWeave)
+
+The GCP `marin` controller federates whole jobs to the CoreWeave controllers by
+dialing their RPC surface directly (the pull model — CoreWeave must be reachable
+*inbound*; a peer behind NAT with no ingress is out of scope). That reach is a
+**second, dedicated ingress**, wholly distinct from the `/proxy` route above:
+
+- **`/proxy`** publishes the endpoint proxy for off-cluster agents; per-endpoint
+  auth (`PRIVATE`/`LINK`) is its gate.
+- **the federation ingress** publishes only the six federation RPC methods
+  (`LaunchJob`, `TerminateJob`, `FederationSync`, `ListBackends`, `ProfileTask`,
+  `ExecInContainer`) on a separate host, `iris-fed-<cluster>.oa.dev`
+  (`iris-fed-rno2a.oa.dev`, `iris-fed-us-east-02a.oa.dev`).
+
+The rest of the controller RPC surface — job submission for arbitrary users,
+budgets, users, scheduler state — and the dashboard stay ClusterIP-internal. The
+whole `ControllerService` shares one flat ConnectRPC path prefix
+(`/iris.cluster.ControllerService/…`), so the ingress matches those six method
+paths **exactly**, never the bare prefix.
+
+**Two independent gates, both required — neither alone suffices:**
+
+1. **IP allowlist** (a Traefik `ipAllowList` Middleware on the ingress): only the
+   marin controller's egress IP reaches the route.
+2. **Federation JWT** (the controller's method-scoped `aud="federation"`
+   verifier): an unauthenticated request is rejected. **This is only enforcing if
+   the controller runs the federation verifier.** `cw-rno2a` is null-auth today —
+   its RPC chain is *permissive*, admitting any caller as the anonymous admin
+   (`controller/auth.py`, the null-auth branch). A `signing_key` alone does **not**
+   flip it: enforcement needs a provider arm or `trusted_cidrs`, and the federation
+   methods specifically need `auth.federation_peers` configured (see below). Until
+   then the IP allowlist is the *only* gate, so the ingress must not be treated as
+   enforcing. `install_federation_ingress.py` warns loudly when its target is still
+   permissive.
+
+**Stand it up** (after the Traefik/cert-manager prerequisites above; this reuses
+them and installs nothing cluster-wide). Dry-run without `--apply`:
+
+```bash
+# Prints the Middleware + Ingress manifests and the null-auth pre-flight warning.
+uv run lib/iris/scripts/install_federation_ingress.py --cluster cw-rno2a \
+    install --allow-source <marin-egress-ip>
+# Apply once iris-fed-<cluster>.oa.dev CNAMEs to the Traefik LoadBalancer FQDN
+# (same target as the /proxy host — read it with the kubectl command that
+# `install_traefik_proxy.py` prints). Staging issuer first, then flip to prod:
+uv run lib/iris/scripts/install_federation_ingress.py --cluster cw-rno2a \
+    install --allow-source <marin-egress-ip> --cluster-issuer letsencrypt-http01-prod --apply
+# Tear the federation route back down (Traefik/cert-manager/`/proxy` untouched):
+uv run lib/iris/scripts/install_federation_ingress.py --cluster cw-rno2a uninstall --apply
+```
+
+The ingress is a standalone object, so applying it does **not** restart the
+controller — the networking (rollout P2) lands before the config + controller
+restart that turns on enforcement (rollout P3). If CoreWeave's LoadBalancer SNATs
+(Traefik sees the LB, not the real client), pass `--xff-depth 1` so the allowlist
+reads the client IP from `X-Forwarded-For`; verify by confirming a request from a
+non-allowlisted host is refused (below).
+
+**Verify from the marin controller VM (rollout P2):**
+
+- `ListBackends` **with** the federation JWT from the allowlisted egress IP → succeeds.
+- the same call **without** the JWT (once the controller is enforcing) → `UNAUTHENTICATED`.
+- the same call from a **non-allowlisted IP** → refused (`403`).
+
+#### Stable egress IP for the marin controller
+
+CoreWeave allowlists exactly one address, so the marin controller needs a
+**stable** egress IP. Its GCE VM (`iris-controller-marin`, zone `us-central1-a`,
+project `hai-gcp-models`) is created with an *ephemeral* external IP, which
+changes on stop/start. Make it stable **without touching the VM** by promoting
+that in-use address to a reserved static IP — same address, no access-config
+change, no restart:
+
+```bash
+PROJECT=hai-gcp-models ZONE=us-central1-a REGION=us-central1 VM=iris-controller-marin
+# 1. Read the VM's current external IP.
+EGRESS_IP=$(gcloud compute instances describe "$VM" --project "$PROJECT" --zone "$ZONE" \
+  --format='get(networkInterfaces[0].accessConfigs[0].natIP)')
+echo "marin controller egress IP: $EGRESS_IP"
+# 2. Promote that exact IP to a reserved static address (idempotent; no VM change,
+#    no connectivity drop — the VM keeps the same address).
+gcloud compute addresses create iris-marin-fed-egress --project "$PROJECT" \
+  --region "$REGION" --addresses "$EGRESS_IP"
+```
+
+Allowlist `$EGRESS_IP` in `--allow-source`. Reserving an in-use address is safe
+and reversible (`gcloud compute addresses delete iris-marin-fed-egress` releases
+it back to ephemeral). **Alternative** (only if the controller is later moved to
+IAP-only inbound with *no* external IP, so egress goes through Cloud NAT): reserve
+a regional static IP and pin Cloud NAT to it (`gcloud compute routers nats update
+… --nat-external-ip-pool=iris-marin-fed-egress`). Removing the VM's external IP is
+a larger change — do it only with explicit approval, never as a side effect here.
+
+#### Making `cw-rno2a` enforcing (rollout P3, coordinated config PR)
+
+The federation JWT gate is real only once the controller runs the method-scoped
+federation verifier. That verifier is built in the sibling federation-auth PR and
+activated by controller config that lands in the coordinated config PR (rollout
+WS-6): on each CoreWeave controller,
+
+```yaml
+# DEPENDS ON the sibling federation-auth code merging first — pydantic forbids
+# unknown keys (config.py, extra="forbid"), so adding these before the code lands
+# breaks config load. Stage, do not apply, until P3.
+auth:
+  signing_key: gcp-secret://…            # persistent EdDSA key (iris cluster init-keys)
+  federation_peers:                       # trust anchor: the marin root's public key
+    marin: { public_key: "<PEM from marin init-keys>" }
+federation:
+  allowed_submitters: ["*@openathena.ai"] # CW-side submitter allowlist (re-check)
+```
+
+`cw-rno2a` has no `auth:` block at all today, so it must gain both the enforcing
+`auth` (the `federation_peers` trust anchor makes the federation methods enforce
+even while the base chain stays permissive for in-cluster callers) and this config
+is applied with a controller restart in rollout P3. **Never restart a CoreWeave or
+the marin controller without explicit approval** (`AGENTS.md`); the networking here
+is staged ahead of that restart. Full sequencing and rollback are in
+`.agents/projects/iris_federation/rollout.md` (§5, WS-5/WS-6).
+
 ## 3. Tools
 
 ### CoreWeave Intelligent CLI (`cwic`)
