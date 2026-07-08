@@ -76,7 +76,7 @@ _HASH_RE = re.compile(rf"^(.+)_([0-9a-f]{{{_HASH_LEN}}})$")
 def _build_resolution_index(root: str) -> dict[str, str]:
     """Walk ``root`` via shallow ``fs.ls`` and return ``{source_name: full_path}``.
 
-    A previous version used ``fsspec_glob(<root>/<src>_*)`` per source, but
+    A shallow ``fs.ls`` is used per root rather than a ``<root>/<src>_*`` glob:
     gcsfs implements glob as a recursive ``_find`` that lists every object
     under the prefix and caches the result. With 4 roots x ~100 sources that
     blew up to multiple GB of cached listings, OOM'ing the 8g driver in <2 min.

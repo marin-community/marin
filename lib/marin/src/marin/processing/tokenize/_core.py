@@ -25,13 +25,12 @@ import pyarrow.parquet as pq
 from levanter.data._preprocessor import BatchProcessor
 from levanter.data.text import LmDatasetFormatBase, preprocessor_for_format
 from levanter.tokenizers import MarinTokenizer, load_tokenizer
-from rigging.filesystem import url_to_fs
+from rigging.filesystem import StoragePath, url_to_fs
 from zephyr import Dataset, counters, zephyr_worker_ctx
 from zephyr.dataset import FileEntry
 from zephyr.readers import InputFileSpec
 
 from marin.datakit.normalize import generate_id
-from marin.utils import fsspec_isdir
 
 logger = logging.getLogger(__name__)
 
@@ -48,8 +47,7 @@ def avg_parquet_row_group_rows(path: str) -> int | None:
 
     Returns ``None`` if the file has no row groups (empty parquet footer).
     """
-    fs, resolved = url_to_fs(path)
-    with fs.open(resolved, "rb") as f:
+    with StoragePath(path).open("rb") as f:
         meta = pq.ParquetFile(f).metadata
     if meta.num_row_groups == 0:
         return None
@@ -98,7 +96,7 @@ def expand_tokenize_paths(input_paths: list[str]) -> list[str]:
     patterns: list[str] = []
     for path in input_paths:
         assert path != "/"
-        if path.endswith("/") or fsspec_isdir(path):
+        if path.endswith("/") or StoragePath(path).isdir():
             logger.info(f"Getting all {_TOKENIZE_EXTENSIONS} files in {path}")
             for ex in _TOKENIZE_EXTENSIONS:
                 patterns.append(os.path.join(path, f"**/*.{ex}"))

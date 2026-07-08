@@ -15,8 +15,9 @@
 #      Secret (addressing style is derived from the endpoint domain):
 #        export CW_KEY_ID=<coreweave-access-key-id>
 #        export CW_KEY_SECRET=<coreweave-access-key-secret>
-#   2. Point kubectl/iris at the region kubeconfig:
-#        export KUBECONFIG=~/.kube/coreweave-iris-rno2a   # context marin-rn02a_RNO2A
+#   2. Install the kubeconfig (Console -> Tokens) at ~/.kube/coreweave-iris.
+#      Operations are bound to kube_context below, so no KUBECONFIG export and no
+#      current-context switching is needed.
 #   3. Start / inspect the cluster:
 #        uv run iris --cluster=cw-rno2a cluster start
 #        uv run iris --cluster=cw-rno2a cluster status
@@ -33,7 +34,8 @@ platform:
   coreweave:
     region: RNO2A
     namespace: iris
-    kubeconfig_path: ~/.kube/coreweave-iris-rno2a
+    kubeconfig_path: ~/.kube/coreweave-iris
+    kube_context: marin-rn02a_RNO2A
     # CoreWeave AI Object Storage via LOTA, the in-cluster local cache
     # endpoint (use https://cwobject.com from outside CoreWeave). Bare
     # endpoint only: buckets use virtual-hosted addressing

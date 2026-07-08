@@ -30,7 +30,7 @@ from typing import (
 
 import equinox as eqx
 import haliax as hax
-from rigging.filesystem import open_url
+from rigging.filesystem import StoragePath
 import haliax.tree_util
 import jax
 import jax.numpy as jnp
@@ -68,7 +68,7 @@ from levanter.schedule import BatchSchedule, IntSchedule, ScheduleStep, distinct
 from levanter.tracker import TrackerConfig, capture_time
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer_state import InsideJitInfo, TrainerState, saveable_training_mask
-from levanter.utils import cloud_utils, fsspec_utils
+from levanter.utils import cloud_utils
 from levanter.utils.hardware_topology import hardware_topology_summary
 from levanter.utils.jax_utils import zeros_like_tree
 from levanter.utils.mesh import MeshConfig, create_mesh_from_axis_specs
@@ -423,7 +423,7 @@ class Trainer:
 
         load_checkpoint = self.config.load_checkpoint
         # we don't save the full trainer state, so we need to filter out the non-trainable parameters
-        if load_checkpoint is True and not any(fsspec_utils.exists(path) for path in checkpoint_search_paths):
+        if load_checkpoint is True and not any(StoragePath(path).exists() for path in checkpoint_search_paths):
             raise FileNotFoundError(f"Checkpoint search paths do not exist: {checkpoint_search_paths}")
         elif load_checkpoint is None:
             load_checkpoint = any(levanter.checkpoint.is_checkpoint_path(path) for path in checkpoint_search_paths)
@@ -751,11 +751,9 @@ class Trainer:
         artifact_path = dir / name
 
         if isinstance(artifact, str):
-            with open_url(str(artifact_path), "w", compression="infer") as f:
-                f.write(artifact)
+            StoragePath(str(artifact_path)).write_text(artifact, compression="infer")
         else:
-            with open_url(str(artifact_path), "wb", compression="infer") as f:
-                f.write(artifact)
+            StoragePath(str(artifact_path)).write_bytes(artifact, compression="infer")
 
         self.tracker.log_artifact(artifact_path, name=name, type=type)
 

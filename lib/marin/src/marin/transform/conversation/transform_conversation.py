@@ -23,7 +23,7 @@ import datasets
 import draccus
 import fsspec
 from marin.core.conversation import DolmaConversationOutput, OpenAIChatMessage
-from marin.utils import fsspec_mkdirs, load_dataset_with_backoff
+from marin.utils import load_dataset_with_backoff
 from rigging.filesystem import StoragePath, prefix_join, url_to_fs
 from zephyr import Dataset, ZephyrContext, load_jsonl, write_jsonl_file
 
@@ -184,7 +184,7 @@ def create_shard_output_directory(output_filename: str) -> str:
         output_path = f"{protocol}://{path_without_suffix}"
     else:
         output_path = str(path_without_suffix)
-    fsspec_mkdirs(output_path)
+    StoragePath(output_path).mkdirs()
     return output_path
 
 
@@ -315,8 +315,7 @@ def process_shard_task(task: ShardTask) -> dict:
     output_filename = _shard_filename(task.output_path, task.shard_idx)
 
     # If output already exists, skip the work to let Zephyr resume cleanly without sentinels.
-    fs, _ = url_to_fs(output_filename)
-    if fs.exists(output_filename):
+    if StoragePath(output_filename).exists():
         logger.info(
             f"Skipping subset={subset_name} split={task.split} shard={task.shard_idx} "
             f"because output exists: {output_filename}"

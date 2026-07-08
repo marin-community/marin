@@ -18,8 +18,8 @@ from dataclasses import dataclass, field
 import datasets
 import draccus
 from datasets import get_dataset_config_info
-from marin.utils import fsspec_url, is_path_like
-from rigging.filesystem import url_to_fs
+from marin.utils import is_path_like
+from rigging.filesystem import StoragePath
 from zephyr import Dataset, ZephyrContext, write_jsonl_file
 
 from .preference_data_adapters import PreferenceTransformAdapter, get_preference_adapter
@@ -64,33 +64,31 @@ def generate_hash_from_pair(chosen, rejected) -> str:
 
 def _find_split_files(input_path: str, subset: str | None, split: str, filetype: str) -> list[str]:
     """Find split shard files under an fsspec path."""
-    fs, base_path = url_to_fs(input_path)
-    roots = [base_path]
+    roots = [StoragePath(input_path)]
     if subset and subset != "default":
-        roots.append(os.path.join(base_path, subset))
+        roots.append(StoragePath(input_path) / subset)
     patterns = []
     for root in roots:
-        patterns.append(os.path.join(root, f"{split}-*.{filetype}"))
-        patterns.append(os.path.join(root, "data", f"{split}-*.{filetype}"))
+        patterns.append(str(root / f"{split}-*.{filetype}"))
+        patterns.append(str(root / "data" / f"{split}-*.{filetype}"))
     matches = []
     for pattern in patterns:
-        matches.extend(fs.glob(pattern))
+        matches.extend(str(match) for match in StoragePath(pattern).glob())
     if not matches:
         raise FileNotFoundError(
             f"No {filetype} files found for split '{split}' under {input_path}. " f"Tried patterns: {patterns}"
         )
-    return [fsspec_url(fs, path) for path in sorted(set(matches))]
+    return sorted(set(matches))
 
 
 def _infer_splits_from_files(input_path: str, subsets: list[str | None], filetype: str) -> list[str]:
     """Infer split names from filenames in an fsspec path."""
-    fs, base_path = url_to_fs(input_path)
-    roots = [base_path]
-    roots.extend(os.path.join(base_path, subset) for subset in subsets if subset)
+    roots = [StoragePath(input_path)]
+    roots.extend(StoragePath(input_path) / subset for subset in subsets if subset)
     candidates = []
     for root in roots:
-        candidates.extend(fs.glob(os.path.join(root, f"*.{filetype}")))
-        candidates.extend(fs.glob(os.path.join(root, "data", f"*.{filetype}")))
+        candidates.extend(str(match) for match in (root / f"*.{filetype}").glob())
+        candidates.extend(str(match) for match in (root / "data" / f"*.{filetype}").glob())
     splits = set()
     for path in candidates:
         filename = os.path.basename(path)

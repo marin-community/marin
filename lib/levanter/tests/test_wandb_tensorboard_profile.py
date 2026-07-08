@@ -6,7 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from rigging.filesystem import url_to_fs
+from rigging.filesystem import StoragePath
 
 SCRIPT_PATH = Path(__file__).resolve().parents[1] / "scripts" / "wandb_tensorboard_profile.py"
 SCRIPT_SPEC = importlib.util.spec_from_file_location("wandb_tensorboard_profile", SCRIPT_PATH)
@@ -46,11 +46,11 @@ def test_mirror_profile_dir_returns_existing_local_directory(tmp_path, root_fact
 
 def test_mirror_profile_dir_copies_remote_directory_to_download_root(tmp_path):
     source = "memory://wandb/runs/run-123/profiler"
-    fs, fs_path = url_to_fs(source)
-    fs.makedirs(fs_path, exist_ok=True)
-    fs.makedirs(f"{fs_path}/plugins/profile/2024_01_01_00_00_00", exist_ok=True)
-    with fs.open(f"{fs_path}/plugins/profile/2024_01_01_00_00_00/perfetto_trace.json.gz", "wb") as f:
-        f.write(b"trace")
+    source_path = StoragePath(source)
+    source_path.mkdirs()
+    trace_dir = source_path / "plugins/profile/2024_01_01_00_00_00"
+    trace_dir.mkdirs()
+    (trace_dir / "perfetto_trace.json.gz").write_bytes(b"trace")
 
     mirrored = mirror_profile_dir(source, tmp_path / "download", run_id="run-123")
 

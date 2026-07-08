@@ -5,7 +5,7 @@ import logging
 from dataclasses import dataclass
 
 from marin.execution.step_spec import StepSpec
-from rigging.filesystem import open_url
+from rigging.filesystem import StoragePath
 
 logger = logging.getLogger(__name__)
 
@@ -29,20 +29,17 @@ def compute_tokenized_bucket_weights(config: TokenizedBucketWeightsConfig) -> No
     weights: dict[str, float] = {}
     for name, out_path in config.tokenized_paths.items():
         stats_path = f"{out_path}/train/.stats.json"
-        with open_url(stats_path) as f:
-            stats = json.load(f)
+        stats = json.loads(StoragePath(stats_path).read_text())
         weights[name] = float(stats["total_tokens"])
 
     out = f"{config.output_path}/{_WEIGHTS_FILENAME}"
-    with open_url(out, "w") as f:
-        json.dump(weights, f)
+    StoragePath(out).write_text(json.dumps(weights))
     logger.info("Wrote bucket weights for %d buckets to %s", len(weights), out)
 
 
 def read_bucket_weights(weights_dir: str) -> dict[str, float]:
     """Read the weights.json produced by ``compute_tokenized_bucket_weights``."""
-    with open_url(f"{weights_dir}/{_WEIGHTS_FILENAME}") as f:
-        return json.load(f)
+    return json.loads(StoragePath(f"{weights_dir}/{_WEIGHTS_FILENAME}").read_text())
 
 
 def tokenized_bucket_weights_step(name: str, tokenized_buckets: dict[str, StepSpec]) -> StepSpec:

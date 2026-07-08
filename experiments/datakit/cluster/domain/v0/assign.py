@@ -28,9 +28,8 @@ import numpy as np
 import pyarrow as pa
 from fray import ResourceConfig
 from marin.execution.artifact import write_artifact
-from marin.utils import fsspec_glob
 from pydantic import BaseModel
-from rigging.filesystem import open_url
+from rigging.filesystem import StoragePath, open_url
 from zephyr import Dataset, InputFileSpec, ShardInfo, ZephyrContext, counters, load_file
 from zephyr.runners import InlineRunner
 
@@ -51,7 +50,7 @@ class AssignmentAttrData(BaseModel):
     counters: dict[str, int | float] = {}
 
     def shard_paths(self) -> list[str]:
-        return sorted(fsspec_glob(f"{self.output_dir.rstrip('/')}/*.parquet"))
+        return sorted(str(m) for m in StoragePath(f"{self.output_dir.rstrip('/')}/*.parquet").glob())
 
 
 def _read_npy(uri: str) -> np.ndarray:

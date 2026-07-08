@@ -53,7 +53,7 @@ import pyarrow.parquet as pq
 from datasets import Image as DatasetsImage
 from datasets import load_dataset
 from huggingface_hub import hf_hub_download
-from rigging.filesystem import url_to_fs
+from rigging.filesystem import StoragePath
 from rigging.log_setup import configure_logging
 
 from experiments.datakit.decontam.lmh_loader import (
@@ -239,14 +239,13 @@ def _write_parquet(path: str, records: Iterator[dict]) -> int:
     Compression: zstd. zephyr's parquet reader picks up the file regardless
     of the compression codec.
     """
-    fs_, resolved = url_to_fs(path)
-    parent = "/".join(resolved.split("/")[:-1])
-    if parent:
-        fs_.makedirs(parent, exist_ok=True)
+    parent = StoragePath(path).parent
+    if parent.key:
+        parent.mkdirs()
     n = 0
     batch_ids: list[str] = []
     batch_texts: list[str] = []
-    with fs_.open(resolved, "wb") as raw:
+    with StoragePath(path).open("wb") as raw:
         writer = pq.ParquetWriter(raw, _PARQUET_SCHEMA, compression="zstd")
         try:
             for rec in records:
@@ -308,8 +307,7 @@ def _iter_aa_rows(cfg: AAEvalConfig) -> Iterator[dict[str, Any]]:
 def _prepare_aa() -> None:
     for cfg in AA_EVALS:
         out_path = f"{OUTPUT_ROOT}/aa/{cfg.subdir}/{cfg.split}.parquet"
-        fs_, resolved = url_to_fs(out_path)
-        if fs_.exists(resolved):
+        if StoragePath(out_path).exists():
             logger.info("aa/%s: exists, skipping", cfg.subdir)
             continue
         try:
@@ -431,8 +429,7 @@ def _prepare_lmh() -> None:
 
         for child_name, task in leaves:
             out_path = f"{OUTPUT_ROOT}/lmh/{child_name}/eval.parquet"
-            fs_, resolved = url_to_fs(out_path)
-            if fs_.exists(resolved):
+            if StoragePath(out_path).exists():
                 logger.info("lmh/%s: exists, skipping", child_name)
                 skipped_existing += 1
                 continue

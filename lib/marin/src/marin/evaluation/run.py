@@ -15,6 +15,7 @@ import os
 import time
 
 import draccus
+from rigging.filesystem import StoragePath
 
 from marin.evaluation.evaluation_config import EvaluationConfig
 from marin.evaluation.evaluators.evalchemy_evaluator import EvalchemyEvaluator
@@ -24,7 +25,6 @@ from marin.evaluation.evaluators.levanter_lm_eval_evaluator import LevanterLmEva
 from marin.evaluation.evaluators.lm_evaluation_harness_evaluator import LMEvaluationHarnessEvaluator
 from marin.evaluation.evaluators.simple_evaluator import SimpleEvaluator
 from marin.evaluation.utils import discover_hf_checkpoints
-from marin.utils import fsspec_exists
 
 logger = logging.getLogger(__name__)
 
@@ -131,7 +131,7 @@ def _normalize_model_path(model_path: str) -> str:
     model_path = model_path.rstrip("/")
 
     def has_hf_files(path: str) -> bool:
-        return fsspec_exists(os.path.join(path, "config.json"))
+        return StoragePath(os.path.join(path, "config.json")).exists()
 
     if has_hf_files(model_path):
         return model_path

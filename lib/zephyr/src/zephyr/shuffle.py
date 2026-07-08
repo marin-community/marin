@@ -46,7 +46,7 @@ import cloudpickle
 import msgspec
 import zstandard as zstd
 from iris.env_resources import TaskResources
-from rigging.filesystem import is_remote_path, open_url, url_to_fs
+from rigging.filesystem import StoragePath, is_remote_path, url_to_fs
 from rigging.timing import RateLimiter, log_time
 
 from zephyr.shard_keys import composite_sort_key, deterministic_hash
@@ -167,8 +167,7 @@ def _write_scatter_meta(data_path: str, sidecar: dict) -> None:
     meta_path = _scatter_meta_path(data_path)
     payload = _sidecar_encoder().encode(sidecar)
     with log_time(f"Writing scatter meta for {data_path} to {meta_path}", level=logging.DEBUG):
-        with open_url(meta_path, "wb") as f:
-            f.write(payload)
+        StoragePath(meta_path).write_bytes(payload)
 
 
 @dataclass(frozen=True)

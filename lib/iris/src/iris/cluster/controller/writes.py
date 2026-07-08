@@ -29,6 +29,8 @@ from sqlalchemy.exc import IntegrityError
 
 from iris.cluster.controller.caches import CacheRegistry
 from iris.cluster.controller.db import Tx
+from iris.cluster.controller.projections.attempt_counts import AttemptCountsProjection
+from iris.cluster.controller.projections.run_templates import RunTemplatesProjection
 from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
 from iris.cluster.controller.schema import (
     federated_jobs_table,
@@ -36,6 +38,7 @@ from iris.cluster.controller.schema import (
     federation_changelog_table,
     federation_sync_state_table,
     job_config_table,
+    job_workdir_files_table,
     jobs_table,
     meta_table,
     slices_table,
@@ -292,9 +295,13 @@ def insert_job_config(
     )
 
 
-@writes_to(jobs_table)
+@writes_to(jobs_table, cascades_into=(task_attempts_table, job_config_table, job_workdir_files_table))
 def delete_job(tx: Tx, job_id: JobName) -> None:
-    """Delete a job row. ``ON DELETE CASCADE`` handles tasks, attempts, endpoints."""
+    """Delete a job row and drop the per-job memos its cascade would strand.
+
+    ``ON DELETE CASCADE`` removes the job's tasks, attempts, endpoints, config, and
+    workdir files.
+    """
     # Record the tombstone BEFORE the delete so a parent federating with this peer
     # learns the job was pruned. The event resolves and stamps its requester from
     # the RECEIVED federated_jobs row (still present here) and carries no FK to
@@ -302,6 +309,12 @@ def delete_job(tx: Tx, job_id: JobName) -> None:
     # root was received via handoff).
     record_federation_change(tx, job_id, tombstone=True)
     tx.execute(delete(jobs_table).where(jobs_table.c.job_id == job_id))
+    # The attempt-counts and run-template memos are keyed by job id and derived from
+    # the cascaded rows. Drop them at this chokepoint — every job-row deletion flows
+    # through here — so a job later minted with the same id (a federation set-replace
+    # that drops a handle, then a re-handoff) cannot serve the dead job's counts.
+    tx.caches[AttemptCountsProjection].invalidate_for_jobs(tx, [job_id])
+    tx.caches[RunTemplatesProjection].invalidate_for_job(tx, job_id)
 
 
 @writes_to(slices_table)

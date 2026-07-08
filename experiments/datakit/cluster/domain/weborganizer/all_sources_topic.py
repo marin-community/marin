@@ -46,8 +46,8 @@ from marin.datakit.sources import all_sources
 from marin.execution.artifact import read_artifact
 from marin.execution.step_runner import StepRunner
 from marin.execution.step_spec import StepSpec
-from marin.utils import fsspec_glob
 from pydantic import BaseModel
+from rigging.filesystem import StoragePath
 from rigging.log_setup import configure_logging
 from zephyr import Dataset, ZephyrContext
 from zephyr.readers import load_file
@@ -120,7 +120,7 @@ def _run_one_source(
     worker_resources: ResourceConfig,
     max_workers: int | None,
 ) -> WeborgTopicOutput:
-    files = sorted(fsspec_glob(f"{normalized.main_output_dir.rstrip('/')}/**/*.parquet"))
+    files = sorted(str(m) for m in StoragePath(f"{normalized.main_output_dir.rstrip('/')}/**/*.parquet").glob())
     if not files:
         raise FileNotFoundError(f"{source_name}: no .parquet files under {normalized.main_output_dir}")
     output_pattern = f"{output_path.rstrip('/')}/data-{{shard:05d}}-of-{{total:05d}}.parquet"

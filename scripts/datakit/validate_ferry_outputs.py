@@ -25,8 +25,7 @@ from levanter.store.cache import CacheLedger
 from marin.datakit.normalize import NormalizedData
 from marin.execution.artifact import read_artifact
 from marin.processing.classification.deduplication.fuzzy_dups import FuzzyDupsAttrData
-from marin.utils import fsspec_glob
-from rigging.filesystem import url_to_fs
+from rigging.filesystem import StoragePath
 from rigging.log_setup import configure_logging
 
 logger = logging.getLogger(__name__)
@@ -56,7 +55,7 @@ CONSOLIDATE_REQUIRED_COLUMNS = NORMALIZE_REQUIRED_COLUMNS
 
 def _list_parquet(path: str) -> list[str]:
     """Glob for parquet files under path; raise if none found."""
-    files = fsspec_glob(f"{path}/*.parquet")
+    files = [str(m) for m in StoragePath(f"{path}/*.parquet").glob()]
     if not files:
         raise SystemExit(f"No parquet files found under {path}")
     return files
@@ -64,18 +63,16 @@ def _list_parquet(path: str) -> list[str]:
 
 def _count_parquet_rows(files: list[str]) -> int:
     """Sum row counts from parquet file metadata (no data read)."""
-    fs, _ = url_to_fs(files[0])
     total = 0
     for path in files:
-        with fs.open(path, "rb") as f:
+        with StoragePath(path).open("rb") as f:
             total += pq.ParquetFile(f).metadata.num_rows
     return total
 
 
 def _check_schema(path: str, required: set[str]) -> list[str]:
     """Verify a parquet file contains the required columns. Returns actual column names."""
-    fs, _ = url_to_fs(path)
-    with fs.open(path, "rb") as f:
+    with StoragePath(path).open("rb") as f:
         names = pq.ParquetFile(f).schema_arrow.names
     missing = required - set(names)
     if missing:
@@ -85,7 +82,7 @@ def _check_schema(path: str, required: set[str]) -> list[str]:
 
 def _validate_download(base: str) -> int:
     dl_path = f"{base}/download"
-    files = fsspec_glob(f"{dl_path}/**/*.parquet")
+    files = [str(m) for m in StoragePath(f"{dl_path}/**/*.parquet").glob()]
     if not files:
         raise SystemExit(f"No download parquet files under {dl_path}")
     if len(files) != DOWNLOAD_EXPECTED_FILES:
@@ -125,10 +122,9 @@ def _validate_normalize(base: str, download_rows: int) -> int:
 
 def _count_canonicals(files: list[str]) -> int:
     """Sum is_cluster_canonical=True rows across fuzzy-dups attr files."""
-    fs, _ = url_to_fs(files[0])
     total = 0
     for path in files:
-        with fs.open(path, "rb") as f:
+        with StoragePath(path).open("rb") as f:
             tbl = pq.ParquetFile(f).read(columns=["attributes"])
         if tbl.num_rows == 0:
             continue

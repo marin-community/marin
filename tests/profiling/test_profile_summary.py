@@ -23,7 +23,7 @@ from marin.profiling.xplane import (
     summarize_xplane,
     summarize_xplane_tables,
 )
-from rigging.filesystem import url_to_fs
+from rigging.filesystem import StoragePath
 
 
 def test_summarize_trace_produces_deterministic_breakdown_and_hot_ops(tmp_path: Path) -> None:
@@ -630,10 +630,9 @@ def test_summarize_cli_run_target_honors_download_root(tmp_path: Path, monkeypat
 
 def test_download_profile_dir_for_run_mirrors_remote_log_dir(tmp_path: Path, monkeypatch) -> None:
     source = "memory://wandb/logs/trainer-456/profiler"
-    fs, fs_path = url_to_fs(source)
-    fs.makedirs(f"{fs_path}/plugins/profile/2026_05_11_12_00_00", exist_ok=True)
-    with fs.open(f"{fs_path}/plugins/profile/2026_05_11_12_00_00/perfetto_trace.json.gz", "wb") as handle:
-        handle.write(b"trace")
+    trace_dir = StoragePath(source) / "plugins/profile/2026_05_11_12_00_00"
+    trace_dir.mkdirs()
+    (trace_dir / "perfetto_trace.json.gz").write_bytes(b"trace")
 
     fake_run = SimpleNamespace(
         path=["entity", "project", "run-123"],

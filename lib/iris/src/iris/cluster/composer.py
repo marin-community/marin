@@ -108,7 +108,11 @@ def make_task_backend(
         local_queue = local_queue_name(label_prefix) if kp.kueue.cluster_queue else ""
         env_secret_name = TASK_ENV_SECRET_NAME if projects_task_env_secret(config) else ""
         return K8sTaskProvider(
-            kubectl=CloudK8sService(namespace=namespace, kubeconfig_path=kp.kubeconfig or None),
+            kubectl=CloudK8sService(
+                namespace=namespace,
+                kubeconfig_path=kp.kubeconfig or None,
+                context=kp.kube_context or None,
+            ),
             namespace=namespace,
             default_image=kp.default_image,
             logship_image=config.controller.image,

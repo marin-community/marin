@@ -50,7 +50,7 @@ import numpy as np
 from huggingface_hub import hf_hub_download
 from marin.execution.step_spec import StepSpec
 from pydantic import BaseModel
-from rigging.filesystem import atomic_rename, url_to_fs
+from rigging.filesystem import StoragePath, atomic_rename
 from zephyr import counters
 
 logger = logging.getLogger(__name__)
@@ -126,12 +126,10 @@ def prepare_fasttext_model(
     local = hf_hub_download(repo_id=hf_repo_id, filename=hf_filename, revision=revision)
     size = os.path.getsize(local)
     target = os.path.join(output_path, _MODEL_FILENAME)
-    target_fs, resolved = url_to_fs(target)
-    target_fs.mkdirs(os.path.dirname(resolved), exist_ok=True)
+    StoragePath(target).parent.mkdirs()
     # atomic_rename keeps the staged path crash-safe: a half-uploaded blob never appears at `target`.
     with atomic_rename(target) as tmp:
-        tmp_fs, tmp_resolved = url_to_fs(tmp)
-        tmp_fs.put(local, tmp_resolved)
+        StoragePath(tmp).upload_from(local)
     logger.info("Staged %s@%s/%s → %s (%d bytes)", hf_repo_id, revision, hf_filename, target, size)
     return FastTextModel(
         model_dir=output_path,
@@ -179,10 +177,9 @@ def _load_fasttext_model(model_path_str: str) -> Any:
         np.array = _np_array_copy_compat
         np._fasttext_copy_compat = True
 
-    fs, resolved = url_to_fs(model_path_str)
     fd, local = tempfile.mkstemp(prefix="fasttext-", suffix=".bin")
     os.close(fd)
-    fs.get(resolved, local)
+    StoragePath(model_path_str).download_to(local)
     return fasttext.load_model(local)
 
 

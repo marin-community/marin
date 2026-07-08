@@ -13,12 +13,13 @@ from typing import Optional, Union
 import jax.numpy as jnp
 from jax.experimental.array_serialization.serialization import GlobalAsyncCheckpointManager
 
+from rigging.filesystem import StoragePath
+
 import levanter
 from levanter.checkpoint import save_checkpoint
 from levanter.compat.hf_checkpoints import RepoRef, load_tokenizer
 from levanter.models.llama import LlamaConfig
 from levanter.models.lm_model import LmConfig
-from levanter.utils.fsspec_utils import mkdirs
 from levanter.utils.jax_utils import use_cpu_device
 
 logger = logging.getLogger(__name__)
@@ -93,7 +94,7 @@ def main(config: ImportHfConfig):
             resize_vocab_to_match_tokenizer=config.resize_vocab_to_match_tokenizer,
         )
 
-    mkdirs(config.output_path)
+    StoragePath(config.output_path).mkdirs()
     logger.info(f"Output directory ready: {config.output_path}")
 
     logger.info(f"Saving checkpoint to Tensorstore format: {config.output_path}")

@@ -14,7 +14,7 @@ import functools
 import json
 import logging
 
-from rigging.filesystem import open_url, url_to_fs
+from rigging.filesystem import StoragePath, url_to_fs
 
 from marin.execution.artifact import Artifact
 
@@ -42,8 +42,7 @@ class LevanterEvalResult(Artifact):
         path = f"{self.path}/{_RESULTS_FILE}"
         if not url_to_fs(path, use_listings_cache=False)[0].exists(path):
             raise FileNotFoundError(f"no {_RESULTS_FILE} for eval result at {self.path}")
-        with open_url(path, "r") as f:
-            return json.load(f)
+        return json.loads(StoragePath(path).read_text())
 
     def task_metrics(self) -> dict[str, dict[str, float]]:
         """The numeric metrics for every evaluated task, as ``{task: {metric: value}}``."""

@@ -351,9 +351,13 @@ class K8sControllerProvider:
         if kubectl is not None:
             self._kubectl: K8sService = kubectl
         else:
+            # KUBECONFIG (when exported) picks the file, but the configured context
+            # always binds — so a stale env var cannot redirect operations to
+            # whatever cluster that file's current-context happens to point at.
             self._kubectl = CloudK8sService(
                 namespace=self._namespace,
                 kubeconfig_path=None if os.environ.get("KUBECONFIG") else (config.kubeconfig_path or None),
+                context=config.kube_context or None,
                 timeout=_KUBECTL_TIMEOUT,
             )
         self._poll_interval = poll_interval
@@ -1153,4 +1157,5 @@ class K8sControllerProvider:
         config_dict = config_to_dict(config)
         cw_dict = config_dict.get("platform", {}).get("coreweave", {})
         cw_dict.pop("kubeconfig_path", None)
+        cw_dict.pop("kube_context", None)
         return json.dumps(config_dict)
