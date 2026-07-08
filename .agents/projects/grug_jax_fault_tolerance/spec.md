@@ -306,17 +306,15 @@ from enum import StrEnum
 from marin.transfer import TransferConfig
 
 
-class GrugRecoveryMode(StrEnum):
+class GrugTransferRecoveryMode(StrEnum):
     DISABLED = "disabled"
-    ABORT_TO_CHECKPOINT = "abort_to_checkpoint"
     TRANSFER_WITHOUT_DONATION = "transfer_without_donation"
     PERIODIC_TRANSFER_BACKUP = "periodic_transfer_backup"
 
 
 @dataclass(frozen=True)
-class GrugFaultToleranceConfig:
-    heartbeat_timeout_seconds: int = 10
-    recovery_mode: GrugRecoveryMode = GrugRecoveryMode.DISABLED
+class GrugTransferRecoveryConfig:
+    mode: GrugTransferRecoveryMode = GrugTransferRecoveryMode.DISABLED
     transfer: TransferConfig | None = None
     backup_interval_steps: int | None = None
 
@@ -333,20 +331,21 @@ class GrugRecoveryConfigError(ValueError):
 this helper module. Their `GrugTrainerConfig` types gain:
 
 ```python
-fault_tolerance: GrugFaultToleranceConfig = field(default_factory=GrugFaultToleranceConfig)
+transfer_recovery: GrugTransferRecoveryConfig = field(default_factory=GrugTransferRecoveryConfig)
 ```
 
 Contract:
 
-- `DISABLED` preserves current Grug behavior.
-- Any non-disabled mode requires a GPU backend and JAX recoverability. TPU raises `JaxRecoverabilityUnsupportedError`.
-- Before `trainer.initialize()`, non-disabled Grug fault tolerance constructs a replaced `TrainerConfig` whose `distributed` config has `enable_recoverability=True` and `heartbeat_timeout_seconds=config.trainer.fault_tolerance.heartbeat_timeout_seconds`.
+- When `config.trainer.trainer.distributed.enable_recoverability` is false and `transfer_recovery.mode == DISABLED`, Grug preserves current behavior.
+- M0 abort-to-checkpoint is selected by the existing nested `TrainerConfig`: `config.trainer.trainer.distributed.enable_recoverability=True`. Heartbeat timeout comes from `config.trainer.trainer.distributed.heartbeat_timeout_seconds`.
+- Grug must not add a second heartbeat or recoverability switch outside `TrainerConfig.distributed`. Launch helpers may construct a replaced `TrainerConfig` before calling `run_grug`, but the train loop reads the already-configured `config.trainer.trainer`.
+- Any recoverability mode requires a GPU backend and JAX recoverability. TPU raises `JaxRecoverabilityUnsupportedError`.
 - If JAX distributed is already initialized without recoverability, Grug raises `JaxRecoverabilityUnsupportedError`.
 - A train step is committed only after the `live_devices` context exits successfully and the loss has been blocked.
 - On liveness failure, Grug raises `GrugStepAtomicityError` after skipping all callbacks/checkpoint hooks. It must not attempt to reuse the donated pre-step train-state buffers.
-- `ABORT_TO_CHECKPOINT` is the first milestone. It keeps current train-state donation, does not require `TransferConfig`, relies on Fray/job retry to restart from the last durable checkpoint, and does not continue in-process.
-- `TRANSFER_WITHOUT_DONATION` is a second-milestone mode. It requires `transfer`, compiles or dispatches a no-donation train-step variant, and uses `marin.transfer` to publish and fetch the latest committed train state. A payload is recoverable only after every rank-local shard needed for the target mesh has been published or is otherwise reconstructable from surviving ranks. If a failed rank owned unique shards that were never externalized or replicated, recovery must fail over to durable checkpoint restore.
-- `PERIODIC_TRANSFER_BACKUP` is a second-milestone mode. It requires `transfer` and `backup_interval_steps > 0`, keeps donation enabled for the hot train step, and publishes a complete train-state backup through `marin.transfer` after every configured number of successfully committed steps. Recovery fetches the newest complete transfer payload and falls back to durable checkpoint restore when no complete payload is available.
+- M0 abort-to-checkpoint keeps current train-state donation, does not require `TransferConfig`, relies on Fray/job retry to restart from the last durable checkpoint, and does not continue in-process.
+- `TRANSFER_WITHOUT_DONATION` is a second-milestone transfer mode. It requires `transfer`, compiles or dispatches a no-donation train-step variant, and uses `marin.transfer` to publish and fetch the latest committed train state. A payload is recoverable only after every rank-local shard needed for the target mesh has been published or is otherwise reconstructable from surviving ranks. If a failed rank owned unique shards that were never externalized or replicated, recovery must fail over to durable checkpoint restore.
+- `PERIODIC_TRANSFER_BACKUP` is a second-milestone transfer mode. It requires `transfer` and `backup_interval_steps > 0`, keeps donation enabled for the hot train step, and publishes a complete train-state backup through `marin.transfer` after every configured number of successfully committed steps. Recovery fetches the newest complete transfer payload and falls back to durable checkpoint restore when no complete payload is available.
 - `live_devices` is a side-effect commit barrier, not an in-process rollback mechanism. Transfer recovery modes must restore from a committed transfer payload; they must not rely on the donated pre-step object surviving a failed step.
 
 ## Out Of Scope
@@ -371,6 +370,6 @@ Contract:
 | `lib/marin/src/marin/rl/weight_transfer/` | Compatibility adapters over `marin.transfer` |
 | `lib/levanter/src/levanter/distributed.py` | Recoverability and heartbeat init config |
 | `lib/iris/src/iris/runtime/jax_init.py` | Iris distributed init plumbing |
-| `experiments/grug/fault_tolerance.py` | Shared Grug fault-tolerance config, errors, and helper contracts |
+| `experiments/grug/fault_tolerance.py` | Shared Grug transfer-recovery config, errors, and helper contracts |
 | `experiments/grug/base/train.py` | Atomic step commit integration |
 | `experiments/grug/moe/train.py` | Atomic step commit integration |

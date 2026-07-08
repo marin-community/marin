@@ -16,6 +16,8 @@ Grug dispatch already goes through Fray and forwards runtime-tuning environment 
 
 Distributed JAX initialization is not Grug-owned. Levanter calls `DistributedConfig.initialize()`, which delegates Iris jobs to `iris.runtime.jax_init.initialize_jax()`. Iris TPU initialization currently calls `jax.distributed.initialize()` with TPU runtime autodiscovery, while GPU paths pass coordinator/process arguments but not heartbeat timeout in [`lib/iris/src/iris/runtime/jax_init.py`](https://github.com/marin-community/marin/blob/e45473443aa963ef86ce6e613aaf55dc32b04702/lib/iris/src/iris/runtime/jax_init.py#L278) and [`jax_init.py`](https://github.com/marin-community/marin/blob/e45473443aa963ef86ce6e613aaf55dc32b04702/lib/iris/src/iris/runtime/jax_init.py#L291).
 
+Both Grug base and MoE already carry a Levanter `TrainerConfig` at `config.trainer.trainer` and call `trainer.initialize()` on it before building the mesh. That existing nested config should remain the source of truth for recoverability and heartbeat settings.
+
 ## Prior Art
 
 JAX's fault-tolerant distributed guide says multi-controller JAX is fault-intolerant by default: one failed process causes other processes to fail intentionally. It also warns the feature is experimental and currently fully supported only on GPUs. The public shape is `jax.config.update("jax_enable_recoverability", True)`, `jax.distributed.initialize(..., heartbeat_timeout_seconds=...)`, and `jax.experimental.multihost_utils.live_devices(jax.devices())` around collective work. The key semantic constraint is atomicity: a step must only commit after the post-work liveness check succeeds, because collectives may raise, return, or produce different results on different processes if a process fails mid-collective.
@@ -32,6 +34,7 @@ Installed `jax==0.10.1` also contains `jax.experimental.transfer`. Its source ex
 - Do not treat existing Arrow Flight code as exact train-state transfer. It is model-weight oriented and may perform lossy dtype conversion.
 - Do not retry a failed donated step in-process with the old `GrugTrainState`. Base and MoE Grug donate the state argument, so the pre-step buffers may be invalid after the jitted step launches.
 - Do not wire transfer service into M0 just to have it present. Transfer recovery only makes sense when Grug either disables donation at the recovery boundary or publishes a complete backup state before failure.
+- Do not add a second Grug recoverability/heartbeat config. Grug already has `config.trainer.trainer: TrainerConfig`, and recoverability belongs in that existing distributed config.
 
 ## Evidence Map
 
@@ -75,7 +78,7 @@ Installed `jax==0.10.1` also contains `jax.experimental.transfer`. Its source ex
 
 ## Recommended Plan
 
-1. M0: add Levanter/Iris JAX recoverability plumbing and opt-in Grug fault tolerance with GPU-only guard, `live_devices` step atomicity, and durable checkpoint fallback.
+1. M0: add Levanter/Iris JAX recoverability plumbing on the existing `TrainerConfig.distributed`, then have Grug read that config for GPU-only `live_devices` step atomicity and durable checkpoint fallback.
 2. Extract `marin.transfer`: neutral payload IDs, manifests, metrics, publisher/subscriber protocols, checkpoint backend, and adapters for RL's existing weight transfer.
 3. M1 option A: add no-donation transfer recovery, where Grug compiles a no-donation train-step variant and restores from a complete committed transfer payload.
 4. M1 option B: add periodic backup offload, where Grug keeps donation enabled and publishes complete train-state backups through `marin.transfer` every configured interval.
