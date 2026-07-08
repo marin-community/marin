@@ -37,6 +37,7 @@ from rigging.filesystem import (
     cached_marin_region,
     get_bucket_location,
     is_cross_region_url,
+    prefix_join,
 )
 
 from ducky.catalog import DATAKIT_SCHEMA, FINELOG_SCHEMA, View, build_catalog
@@ -291,7 +292,7 @@ class QueryRunner:
         # object stores create the prefix implicitly.
         scratch_is_remote = "://" in config.scratch_bucket
         if not scratch_is_remote:
-            os.makedirs(f"{config.scratch_bucket.rstrip('/')}/ducky/{_CACHE_SUBDIR}", exist_ok=True)
+            os.makedirs(prefix_join(config.scratch_bucket, f"ducky/{_CACHE_SUBDIR}"), exist_ok=True)
         # Harden: when results go to object storage, block user SQL from touching the local
         # filesystem (e.g. read_text('/proc/self/environ') to exfil the injected creds). Object
         # stores are separate DuckDB filesystems and spilling is internal, so both still work.
@@ -418,7 +419,7 @@ class QueryRunner:
             needs_cross_region_optin,
         )
 
-        result_path = f"{self._config.scratch_bucket.rstrip('/')}/ducky/{query_id}.parquet"
+        result_path = prefix_join(self._config.scratch_bucket, f"ducky/{query_id}.parquet")
         path_literal = _sql_literal(result_path)
         # hive_partitioning=false: the scratch path embeds a `tmp/ttl=Nd/` segment, which
         # DuckDB would otherwise read back as a phantom `ttl` partition column.
@@ -473,7 +474,7 @@ class QueryRunner:
 
     def _sidecar_path(self, sql: str) -> str:
         """Scratch-bucket path of the cache sidecar for ``sql`` (content-addressed by SQL hash)."""
-        return f"{self._config.scratch_bucket.rstrip('/')}/ducky/{_CACHE_SUBDIR}/{_sql_hash(sql)}.meta.parquet"
+        return prefix_join(self._config.scratch_bucket, f"ducky/{_CACHE_SUBDIR}/{_sql_hash(sql)}.meta.parquet")
 
     def _write_persistent_cache(self, sql: str, result: QueryResult) -> None:
         """Write the restart-survivable cache sidecar for ``sql`` (best-effort).
@@ -511,7 +512,13 @@ class QueryRunner:
         cache) and rebuilds the ``QueryResult`` — no source scan. Returns None if the sidecar is
         absent, unreadable, or older than ``result_ttl_days`` (its result parquet may have been
         reaped by the scratch bucket's lifecycle rule). Fails open: any error is a miss, so a
-        hiccup here just falls back to a normal run."""
+        hiccup here just falls back to a normal run.
+
+        A hit is served only if the SQL still passes the *current* access policy: because the
+        persistent tier outlives the restart that re-reads config, a sidecar written under a looser
+        policy must not keep serving SQL that a tightened ``allowed_buckets``/region policy would
+        now refuse. The check runs against live config and raises (as a fresh run would) rather
+        than returning a stale-authorized result."""
         if not self._config.persist_cache:
             return None
         try:
@@ -529,6 +536,13 @@ class QueryRunner:
             return None
         if (time.time() - float(row[0])) > self._config.result_ttl_days * 86400:
             return None  # past the TTL; the spilled result may already be gone
+        # Re-enforce the current egress/region policy on the cached SQL before serving it.
+        check_query_access(
+            sql,
+            self._config.effective_allowed_buckets,
+            self._config.catalog_root_prefixes,
+            needs_cross_region_optin,
+        )
         return QueryResult(
             columns=json.loads(row[1]),
             preview_rows=json.loads(row[2]),

@@ -14,6 +14,7 @@ from ducky.runner import (
     BucketNotAllowedError,
     CrossRegionNotAllowedError,
     QueryError,
+    QueryResult,
     QueryRunner,
     _opts_in_cross_region,
     check_query_access,
@@ -115,6 +116,19 @@ def test_persistent_cache_drops_entry_past_ttl(make_runner):
     runner = make_runner(result_ttl_days=0)  # any positive age is already stale
     runner.run_query("SELECT 1 AS x", uuid.uuid4().hex)
     assert runner.lookup_persistent("SELECT 1 AS x") is None
+
+
+def test_persistent_hit_reenforces_current_access_policy(make_runner):
+    """A sidecar written under a looser policy must not keep serving SQL a tightened allowlist
+    now refuses — the persistent tier outlives the restart that re-applies policy."""
+    sql = "SELECT * FROM read_parquet('s3://marin-na/some/data/*.parquet')"
+    cached = QueryResult(["x"], [[1]], 1, False, "gs://marin-us-east5/tmp/r.parquet", 1, 1)
+    # Plant a sidecar as if this SQL had run when marin-na was allowed (allow-all default).
+    make_runner()._write_persistent_cache(sql, cached)
+    # A runner whose current allowlist excludes marin-na must refuse the cached hit, not serve it.
+    strict = make_runner(allowed_buckets=("gs://marin-",))
+    with pytest.raises(BucketNotAllowedError):
+        strict.lookup_persistent(sql)
 
 
 def test_remote_scratch_blocks_local_filesystem_access(tmp_path):
