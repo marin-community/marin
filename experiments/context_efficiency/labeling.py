@@ -98,7 +98,7 @@ Slugs:
 """
 
 
-def _extract_json(stdout: str) -> dict | None:
+def extract_json(stdout: str) -> dict | None:
     """Pull the JSON object out of an agent's stdout.
 
     Handles a raw JSON object, a Claude ``--output-format json`` envelope (the
@@ -149,7 +149,7 @@ def _extract_json(stdout: str) -> dict | None:
     return None
 
 
-def _run_agent(agent_cmd: list[str], prompt: str, timeout: int) -> str | None:
+def run_agent(agent_cmd: list[str], prompt: str, timeout: int) -> str | None:
     """Invoke the headless agent with the prompt on stdin; return stdout or None."""
     try:
         proc = subprocess.run(agent_cmd, input=prompt, capture_output=True, text=True, timeout=timeout)
@@ -168,8 +168,8 @@ def _label_one_batch(batch_path: str, out_path: str, agent_cmd: list[str], timeo
     ids = {e["episode_id"] for e in episodes}
     prompt = RUBRIC + "\n".join(json.dumps(e) for e in episodes)
     for attempt in range(retries + 1):
-        stdout = _run_agent(agent_cmd, prompt, timeout)
-        parsed = _extract_json(stdout) if stdout else None
+        stdout = run_agent(agent_cmd, prompt, timeout)
+        parsed = extract_json(stdout) if stdout else None
         labels = parsed.get("labels") if isinstance(parsed, dict) else None
         if isinstance(labels, list):
             kept = [x for x in labels if isinstance(x, dict) and x.get("episode_id") in ids]
@@ -281,8 +281,8 @@ def run_clustering(cfg: ClusterConfig) -> None:
         return
 
     prompt = CLUSTER_PROMPT + "\n".join(f"- {s}" for s in slugs)
-    stdout = _run_agent(shlex.split(cfg.agent_command), prompt, cfg.timeout)
-    parsed = _extract_json(stdout) if stdout else None
+    stdout = run_agent(shlex.split(cfg.agent_command), prompt, cfg.timeout)
+    parsed = extract_json(stdout) if stdout else None
     assignments = parsed.get("assignments") if isinstance(parsed, dict) else None
     if not isinstance(assignments, list):
         # Degrade to identity clustering (each slug its own cluster) rather than fail
