@@ -30,6 +30,7 @@ Installed `jax==0.10.1` also contains `jax.experimental.transfer`. Its source ex
 - Do not add only environment variables. The Grug loop must move callback/checkpoint commit behind `live_devices` atomicity.
 - Do not leave the transfer abstraction owned by RL. RL and Grug have different payloads and consumers.
 - Do not treat existing Arrow Flight code as exact train-state transfer. It is model-weight oriented and may perform lossy dtype conversion.
+- Do not retry a failed donated step in-process with the old `GrugTrainState`. Base and MoE Grug donate the state argument, so the pre-step buffers may be invalid after the jitted step launches.
 
 ## Evidence Map
 
@@ -50,6 +51,7 @@ Installed `jax==0.10.1` also contains `jax.experimental.transfer`. Its source ex
 - Support:
   - JAX docs explicitly require liveness checks around collective work to prevent divergent commits.
   - Grug currently commits state, callbacks, and checkpointing after `block_until_ready`, without a liveness barrier.
+  - Grug donates its train-state argument, so liveness failure must abort to durable state rather than retry with old in-memory buffers.
 - Contradictions:
   - Existing Fray retries already restore after full job failure.
 - Directness to Marin: high

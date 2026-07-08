@@ -327,8 +327,9 @@ Contract:
 - Before `trainer.initialize()`, Grug constructs a replaced `TrainerConfig` whose `distributed` config has `enable_recoverability=True` and `heartbeat_timeout_seconds=config.trainer.fault_tolerance.heartbeat_timeout_seconds`.
 - If JAX distributed is already initialized without recoverability, Grug raises `JaxRecoverabilityUnsupportedError`.
 - A train step is committed only after the `live_devices` context exits successfully and the loss has been blocked.
-- On liveness failure, Grug raises `GrugStepAtomicityError` after preserving the pre-step state and skipping all callbacks/checkpoint hooks.
+- On liveness failure, Grug raises `GrugStepAtomicityError` after skipping all callbacks/checkpoint hooks. It must not attempt to reuse the donated pre-step train-state buffers.
 - The first recovery mode is abort-to-checkpoint: Grug relies on Fray/job retry to restart from the last durable checkpoint and does not continue in-process.
+- `live_devices` is a side-effect commit barrier, not an in-process rollback mechanism. Any future in-process recovery mode must either publish a committed state before donation, restore from a durable checkpoint, or explicitly disable donation for the recovery boundary it needs to retry.
 
 ## Out Of Scope
 

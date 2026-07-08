@@ -27,6 +27,8 @@ JAX recoverability belongs in distributed initialization, not the Grug loop. Lev
 
 Grug then adds an opt-in `GrugFaultToleranceConfig`. When disabled, the loop is unchanged. When enabled, Grug replaces the trainer's distributed config before `trainer.initialize()`, checks that the runtime is GPU, builds the normal compact mesh, and wraps each train step with `jax.experimental.multihost_utils.live_devices(jax.devices())`. The train step still returns a new `GrugTrainState`, but that state is only committed to callbacks and checkpointing if the liveness context exits successfully after `jax.block_until_ready`. If the liveness check fails, Grug raises a step-atomicity error, skips callbacks/checkpointing, and relies on Fray retry to restart from the last durable checkpoint. It does not continue in-process in the first milestone.
 
+Argument donation makes that abort-only contract necessary. Base and MoE Grug donate the train-state argument into the jitted step, so a failed step cannot assume the pre-step device buffers are still reusable. `live_devices` provides side-effect atomicity, not memory-state rollback: after a liveness failure the process should treat the in-memory state as poisoned and exit through the retry path.
+
 This design allows an atomic Grug-only patch to land before the transfer extraction. The shared transfer package is required before any in-memory `transfer_restore` mode or reusable JAX transfer-server backend. Dynamic reduced-device meshes also stay out of the first milestone. `compact_grug_mesh` currently reshapes all `jax.devices()`, so continuing with fewer live devices requires careful divisibility checks and data-loader behavior.
 
 ## Testing
