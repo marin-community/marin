@@ -46,10 +46,17 @@ from marin.execution.step_runner import StepRunner
 from marin.experiment.data import mixture
 from marin.experiment.namespacing import user_namespaced_name
 from marin.processing.tokenize.tokenize import TokenizedCache
-from marin.scaling_laws import FitScalingLawsResult, IsoFlopRecord, ScalingFit, fit_scaling_laws, round_flops_to_bucket
+from marin.scaling_laws import (
+    IsoFlopRecord,
+    ScalingFit,
+    fit_scaling_laws,
+    predict_optimal_config,
+    round_flops_to_bucket,
+)
 from marin.scaling_laws.eval_metrics_reader import read_eval_records
 from marin.training.training import LevanterCheckpoint, TrainLmOnPodConfig, run_levanter_train_lm
 from marin.utilities.wandb_utils import WANDB_ENTITY, WANDB_PROJECT
+from pydantic import Field
 from rigging.filesystem import prefix_join
 
 from experiments.datasets.nemotron import nemotron_datasets
@@ -248,34 +255,15 @@ def _transform_levanter_metrics(
     return records
 
 
-def _save_isoflop_analysis_result(result: FitScalingLawsResult, output_path: str) -> None:
-    fs, _, _ = fsspec.get_fs_token_paths(output_path)
-    fs.makedirs(output_path, exist_ok=True)
+class IsoFlopAnalysisArtifact(Artifact):
+    """Typed artifact for IsoFLOP analysis results.
 
-    result_path = prefix_join(output_path, "isoflop_analysis_result.json")
-    result_dict = {
-        "minima_records": [
-            {
-                "label": r.label,
-                "flops": r.flops,
-                "optimal_tokens": r.optimal_tokens,
-                "loss_at_optimal": r.loss_at_optimal,
-                "optimal_params": r.optimal_params,
-                "scaling_alpha": r.scaling_alpha,
-                "scaling_A": r.scaling_A,
-            }
-            for r in result.minima_records
-        ],
-        "scaling_fits": {k: list(v) for k, v in result.scaling_fits.items()},
-    }
-    with fs.open(result_path, "w") as f:
-        json.dump(result_dict, f, indent=2)
-    logger.info(f"Saved scaling law results to {result_path}")
+    ``scaling_fits`` is persisted in ``record.result`` so downstream steps resolve
+    it via ``ctx.resolved()`` without reading any sidecar files.  The quadratic
+    fit coefficients are still written to ``fit_curves.json`` for human inspection.
+    """
 
-    fit_curves_path = prefix_join(output_path, "fit_curves.json")
-    fit_curves_json = {f"{label}|{flops}": list(coeffs) for (label, flops), coeffs in result.fit_curves.items()}
-    with fs.open(fit_curves_path, "w") as f:
-        json.dump(fit_curves_json, f, indent=2)
+    scaling_fits: dict[str, tuple[float, float]] = Field(default_factory=dict)
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -288,7 +276,7 @@ class IsoFlopAnalysisConfig:
     wandb_entity_project: str = f"{WANDB_ENTITY}/{WANDB_PROJECT}"
 
 
-def run_isoflop_analysis(config: IsoFlopAnalysisConfig) -> None:
+def run_isoflop_analysis(config: IsoFlopAnalysisConfig) -> IsoFlopAnalysisArtifact:
     raw_records = read_eval_records(
         training_runs=list(config.training_runs),
         metrics_filename=config.metrics_filename,
@@ -305,7 +293,14 @@ def run_isoflop_analysis(config: IsoFlopAnalysisConfig) -> None:
     for label, scaling_fit in result.scaling_fits.items():
         logger.info(f"  {label}: D* = {scaling_fit.A:.2e} * C^{scaling_fit.alpha:.3f}")
 
-    _save_isoflop_analysis_result(result, config.output_path)
+    # Write fit_curves.json as a human-readable sidecar (not consumed by downstream steps).
+    fs, _, _ = fsspec.get_fs_token_paths(config.output_path)
+    fs.makedirs(config.output_path, exist_ok=True)
+    fit_curves_json = {f"{label}|{flops}": list(coeffs) for (label, flops), coeffs in result.fit_curves.items()}
+    with fs.open(prefix_join(config.output_path, "fit_curves.json"), "w") as f:
+        json.dump(fit_curves_json, f, indent=2)
+
+    return IsoFlopAnalysisArtifact(scaling_fits={k: (v.alpha, v.A) for k, v in result.scaling_fits.items()})
 
 
 # --- Optimal training ---
@@ -313,7 +308,7 @@ def run_isoflop_analysis(config: IsoFlopAnalysisConfig) -> None:
 
 @dataclass(frozen=True)
 class OptimalTrainingConfig:
-    analysis_output_path: str
+    scaling_fits: dict[str, tuple[float, float]]
     target_budget: float
     resources: ResourceConfig
     batch_size: int
@@ -324,19 +319,8 @@ class OptimalTrainingConfig:
 
 
 def run_optimal_training(config: OptimalTrainingConfig) -> None:
-    """Read scaling fits, predict optimal config, dispatch TPU training."""
-    result_path = prefix_join(config.analysis_output_path, "isoflop_analysis_result.json")
-    fs, _, _ = fsspec.get_fs_token_paths(result_path)
-    with fs.open(result_path, "r") as f:
-        analysis_result = json.load(f)
-
-    scaling_fits: dict[str, ScalingFit] = {}
-    for key, value in analysis_result["scaling_fits"].items():
-        if len(value) != 2:
-            raise ValueError(f"Expected 2 scaling fit values for '{key}', got {len(value)}")
-        scaling_fits[key] = ScalingFit(float(value[0]), float(value[1]))
-
-    from marin.scaling_laws import predict_optimal_config  # noqa: PLC0415  # local import
+    """Predict compute-optimal config from scaling fits and dispatch TPU training."""
+    scaling_fits = {k: ScalingFit(*v) for k, v in config.scaling_fits.items()}
 
     candidate = predict_optimal_config(
         scaling_fits=scaling_fits,
@@ -422,7 +406,7 @@ def run_optimal_training(config: OptimalTrainingConfig) -> None:
 # --- ArtifactStep builders ---
 
 
-def _analysis_step(*, version: str) -> ArtifactStep[Artifact]:
+def _analysis_step(*, version: str) -> ArtifactStep[IsoFlopAnalysisArtifact]:
     def build_config(ctx: StepContext) -> IsoFlopAnalysisConfig:
         return IsoFlopAnalysisConfig(
             training_runs=_ADAMH_V6_ISOFLOP_RUNS,
@@ -432,7 +416,7 @@ def _analysis_step(*, version: str) -> ArtifactStep[Artifact]:
     return ArtifactStep(
         name=user_namespaced_name(f"{EXPERIMENT_NAME}-analysis", version),
         version=version,
-        artifact_type=Artifact,
+        artifact_type=IsoFlopAnalysisArtifact,
         run=remote(run_isoflop_analysis, resources=ResourceConfig.with_cpu()),
         build_config=build_config,
         deps=(),
@@ -441,7 +425,7 @@ def _analysis_step(*, version: str) -> ArtifactStep[Artifact]:
 
 def _optimal_step(
     *,
-    analysis: ArtifactStep[Artifact],
+    analysis: ArtifactStep[IsoFlopAnalysisArtifact],
     budget: float,
     tpu_type: str,
     batch_size: int,
@@ -453,8 +437,9 @@ def _optimal_step(
     name = user_namespaced_name(f"{EXPERIMENT_NAME}-optimal-{budget:.0e}{suffix}", version)
 
     def build_config(ctx: StepContext) -> OptimalTrainingConfig:
+        artifact = ctx.resolved(analysis)
         return OptimalTrainingConfig(
-            analysis_output_path=ctx.artifact_path(analysis),
+            scaling_fits=artifact.scaling_fits,
             target_budget=budget,
             resources=resources,
             batch_size=batch_size,
@@ -474,7 +459,7 @@ def _optimal_step(
     )
 
 
-def build(*, version: str = "dev") -> list[ArtifactStep[Artifact] | ArtifactStep[LevanterCheckpoint]]:
+def build(*, version: str = "dev") -> list[ArtifactStep[IsoFlopAnalysisArtifact] | ArtifactStep[LevanterCheckpoint]]:
     """Return all steps: [analysis, optimal-1e21-seed0, ..., optimal-1e23]."""
     analysis = _analysis_step(version=version)
     optimal_runs: list[ArtifactStep[LevanterCheckpoint]] = []

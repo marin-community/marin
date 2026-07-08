@@ -47,6 +47,7 @@ from marin.execution.step_runner import StepRunner
 from marin.experiment.data import mixture
 from marin.experiment.namespacing import user_namespaced_name
 from marin.processing.tokenize.tokenize import TokenizedCache
+from rigging.filesystem import prefix_join
 
 from experiments.datasets.nemotron import nemotron_datasets
 from experiments.datasets.paloma import paloma_datasets
@@ -130,9 +131,29 @@ SWEEP = SweepSettings(
 
 SUGGESTIONS_FILENAME = "vizier_suggestions.json"
 UPDATE_FILENAME = "vizier_update.json"
-RESOURCE_FILENAME = "vizier_resource.json"
 OPTIMAL_FILENAME = "vizier_optimal.json"
 VIZIER_DB_FILENAME = "vizier.db"
+
+
+class VizierSuggestArtifact(Artifact):
+    """Output of a suggest step: a Vizier DB snapshot and a suggestions JSON."""
+
+    @property
+    def db_path(self) -> str:
+        return prefix_join(self.path, VIZIER_DB_FILENAME)
+
+    @property
+    def suggestions_path(self) -> str:
+        return prefix_join(self.path, SUGGESTIONS_FILENAME)
+
+
+class VizierUpdateArtifact(Artifact):
+    """Output of an update step: a Vizier DB snapshot with completed trial measurements."""
+
+    @property
+    def db_path(self) -> str:
+        return prefix_join(self.path, VIZIER_DB_FILENAME)
+
 
 # --- Data handles (shared across all training steps) ---
 _NEMOTRON_WEIGHTS = {
@@ -511,8 +532,6 @@ def run_vizier_update(config: VizierUpdateConfig) -> None:
 
     with fs.open(os.path.join(config.output_path, UPDATE_FILENAME), "w") as f:
         json.dump(output, f, indent=2)
-    with fs.open(os.path.join(config.output_path, RESOURCE_FILENAME), "w") as f:
-        json.dump({"study_resource_name": config.study_resource_name}, f, indent=2)
 
     _sync_vizier_db_to_gcs(local_db_path, output_db_path)
 
@@ -548,18 +567,16 @@ def run_vizier_optimal(config: VizierOptimalConfig) -> None:
 def _suggest_step(
     *,
     loop_index: int,
-    prev_update: ArtifactStep[Artifact] | None,
+    prev_update: ArtifactStep[VizierUpdateArtifact] | None,
     version: str,
-) -> ArtifactStep[Artifact]:
+) -> ArtifactStep[VizierSuggestArtifact]:
     client_id = f"{SWEEP.client_id_prefix}-loop-{loop_index}"
 
     def build_config(ctx: StepContext) -> VizierSuggestConfig:
         return VizierSuggestConfig(
             study_owner=SWEEP.study_owner,
             study_id=SWEEP.study_id,
-            input_db_path=(
-                ctx.artifact_path(prev_update) + "/" + VIZIER_DB_FILENAME if prev_update is not None else None
-            ),
+            input_db_path=(ctx.resolved(prev_update).db_path if prev_update is not None else None),
             output_path=ctx.output_path,
             num_suggestions=SWEEP.suggestions_per_loop,
             client_id=client_id,
@@ -574,7 +591,7 @@ def _suggest_step(
     return ArtifactStep(
         name=user_namespaced_name(f"{SWEEP.experiment_name}/suggest/loop-{loop_index}", version),
         version=version,
-        artifact_type=Artifact,
+        artifact_type=VizierSuggestArtifact,
         run=remote(run_vizier_suggest, resources=ResourceConfig.with_cpu(), pip_dependency_groups=["vizier"]),
         build_config=build_config,
         deps=deps,
@@ -585,7 +602,7 @@ def _train_step(
     *,
     loop_index: int,
     trial_index: int,
-    suggest: ArtifactStep[Artifact],
+    suggest: ArtifactStep[VizierSuggestArtifact],
     version: str,
 ) -> ArtifactStep[Artifact]:
     def build_config(ctx: StepContext) -> VizierTrainConfig:
@@ -620,7 +637,7 @@ def _train_step(
             steps_per_eval=500,
         )
         return VizierTrainConfig(
-            suggestions_path=ctx.artifact_path(suggest) + "/" + SUGGESTIONS_FILENAME,
+            suggestions_path=ctx.resolved(suggest).suggestions_path,
             suggestion_index=trial_index,
             base_launch_config=base,
             target_tokens=SWEEP.target_tokens,
@@ -642,16 +659,17 @@ def _train_step(
 def _update_step(
     *,
     loop_index: int,
-    suggest: ArtifactStep[Artifact],
+    suggest: ArtifactStep[VizierSuggestArtifact],
     training_steps: list[ArtifactStep[Artifact]],
     version: str,
-) -> ArtifactStep[Artifact]:
+) -> ArtifactStep[VizierUpdateArtifact]:
     def build_config(ctx: StepContext) -> VizierUpdateConfig:
+        suggest_artifact = ctx.resolved(suggest)
         return VizierUpdateConfig(
             study_id=SWEEP.study_id,
             study_resource_name=SWEEP.study_resource_name,
-            input_db_path=ctx.artifact_path(suggest) + "/" + VIZIER_DB_FILENAME,
-            suggestions_path=ctx.artifact_path(suggest) + "/" + SUGGESTIONS_FILENAME,
+            input_db_path=suggest_artifact.db_path,
+            suggestions_path=suggest_artifact.suggestions_path,
             run_paths=[ctx.artifact_path(t) for t in training_steps],
             metric_file=SWEEP.metric_file,
             metric_key=SWEEP.metric_key,
@@ -663,7 +681,7 @@ def _update_step(
     return ArtifactStep(
         name=user_namespaced_name(f"{SWEEP.experiment_name}/update/loop-{loop_index}", version),
         version=version,
-        artifact_type=Artifact,
+        artifact_type=VizierUpdateArtifact,
         run=remote(run_vizier_update, resources=ResourceConfig.with_cpu(), pip_dependency_groups=["vizier"]),
         build_config=build_config,
         deps=(suggest, *training_steps),
@@ -672,14 +690,14 @@ def _update_step(
 
 def _optimal_step(
     *,
-    final_update: ArtifactStep[Artifact],
+    final_update: ArtifactStep[VizierUpdateArtifact],
     version: str,
 ) -> ArtifactStep[Artifact]:
     def build_config(ctx: StepContext) -> VizierOptimalConfig:
         return VizierOptimalConfig(
             study_id=SWEEP.study_id,
             study_resource_name=SWEEP.study_resource_name,
-            input_db_path=ctx.artifact_path(final_update) + "/" + VIZIER_DB_FILENAME,
+            input_db_path=ctx.resolved(final_update).db_path,
             output_path=ctx.output_path,
         )
 
@@ -700,7 +718,7 @@ def build(*, num_loops: int | None = None, version: str = "dev") -> ArtifactStep
     ``num_loops`` overrides ``SWEEP.num_loops`` (useful for CI smoke tests).
     """
     loops = num_loops if num_loops is not None else SWEEP.num_loops
-    prev_update: ArtifactStep[Artifact] | None = None
+    prev_update: ArtifactStep[VizierUpdateArtifact] | None = None
 
     for loop_index in range(loops):
         suggest = _suggest_step(loop_index=loop_index, prev_update=prev_update, version=version)
