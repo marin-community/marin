@@ -112,10 +112,13 @@ The rest of the plan assumes **(a) string column** and **(b) signed-submitter Mo
    skips non-admitting peers. (Gate on `submitting_user`, **not** `owner_principal` — on `marin`,
    `unprovisioned_role: admin` makes every IAP user admin, so the friendly owner is attacker-
    chosen; only the authenticated principal is trustworthy — codex confirmed.)
-4. Enforce at the **CW peer** (independent boundary): on `request.HasField("federation")`, after
-   the existing admin-peer guard (`service.py:1244`), verify `federation.submitting_user ==
-   token.submitting_user` (WS-4) **and** that it matches a CW-side `federation.allowed_submitters:
-   ["*@openathena.ai"]`. Reject otherwise.
+4. Enforce at the **CW peer** (independent boundary): on `request.HasField("federation")`, the
+   federation token proves the requester (its verified issuer == `federation.requester_id`), and the
+   handoff's asserted `submitting_user` (proto) is checked against `auth.allowed_submitters:
+   ["*@openathena.ai"]`, with `local_admin` rejected outright. **Implemented (WS-4):** we trust a
+   verified peer's asserted submitter rather than signing it into the token — the token is a static
+   per-connection credential proving the requester only; see the trust-boundary note in the goal
+   artifact. Reject otherwise.
 
 ### WS-3 — GPU meta-scheduler for federated routing
 *`cli/job.py:828` (`job run` opts) / `build_job_constraints`, `federation/router.py`,
@@ -183,13 +186,20 @@ The rest of the plan assumes **(a) string column** and **(b) signed-submitter Mo
 ### WS-6 — Config wiring
 *`lib/iris/config/{marin,cw-rno2a,cw-us-east-02a}.yaml`.*
 
-- `marin.yaml`: add `peers:` for `rno2a` and `us-east-02a` (`controller_address` = the federation
+- **`name:` is load-bearing (all three configs).** Startup feeds `cluster_config.name` into both the
+  JWT issuer (`iss`) and the federation `cluster_id`/`requester_id` (`controller/main.py`). None of the
+  current YAMLs declare `name`, so as-is they mint under the fallback issuer and send an empty requester
+  id — the `federation_peers` trust and the requester binding would both fail. Set `name: marin`,
+  `name: cw-rno2a`, `name: cw-us-east-02a` as part of this step; the peer id keys and `allow_policy`
+  targets must match these exactly.
+- `marin.yaml`: add `peers:` for `cw-rno2a` and `cw-us-east-02a` (`controller_address` = the federation
   ingress URL, `cluster` = the peer manifest name for credential resolution, `dashboard_url`,
   `allow_policy: {users: ["*@openathena.ai"]}`).
-- CW configs: persistent `auth.signing_key`; `auth.federation_peers: {marin: {public_key}}`;
-  `federation.allowed_submitters: ["*@openathena.ai"]`; convert to explicit `backends:` with device
-  `attributes:`; the federation ingress. `cw-rno2a.yaml` is null-auth today and must gain the
-  enforcing federation verifier config.
+- CW configs: persistent `auth.signing_key`; trust anchor `auth.federation_peers: {marin: "<PEM>"}`;
+  inbound allowlist `auth.allowed_submitters: ["*@openathena.ai"]`; the federation ingress.
+  `cw-rno2a.yaml` is null-auth today and must gain the enforcing federation verifier config. Backend
+  device attributes are auto-derived from `scale_groups.resources` (the backend-attr-derivation
+  follow-up, weaver #411) — no manual `attributes:` duplication.
 
 ---
 
@@ -215,7 +225,10 @@ unauthenticated/wrong-IP ingress rejection, and a **federated child-job** case (
    `federation_store.py:149`). Decide how a federated subtree's child jobs are mirrored/attributed
    before relying on RE-driven children.
 4. Does the CW allowlist include `local_admin` (a Marin operator SSH'd to the GCP controller), or is
-   CW strictly `*@openathena.ai`? Default: strictly OA.
+   CW strictly `*@openathena.ai`? **RESOLVED:** `local_admin` is never a valid federation submitter —
+   an enforcing parent refuses to federate a local_admin submission (service-side, with a clear
+   "authenticate first" error) and the CW peer rejects it outright regardless of its allowlist. CW is
+   strictly `*@openathena.ai`.
 5. GPU routing for v1: explicit `--target-cluster` only (recommended) vs. capacity-aware auto-routing.
 6. Allowlist pattern syntax: confirm domain-on-email (`*@openathena.ai`).
 
@@ -230,9 +243,10 @@ controller without explicit user approval** (AGENTS.md).
 - **P2 CW networking.** Stand up the IP-restricted, enforcing federation ingress (federation RPC
   subset only). Reserve + allowlist the marin static egress IP. Verify from the marin VM: `ListBackends`
   succeeds **with** the federation JWT, refused **without** it / from a non-allowlisted IP.
-- **P3 CW config + restart (approval).** Apply explicit `backends:`+attributes, `allowed_submitters`,
-  `signing_key`, `federation_peers`, rno2a→enforcing. Restart CW controllers (builds from local tree —
-  ensure merged code). Confirm CW advertises GPU attributes.
+- **P3 CW config + restart (approval).** Set `name:`, and apply `auth.allowed_submitters`,
+  `auth.signing_key`, `auth.federation_peers`, rno2a→enforcing (device attributes auto-derive from
+  `scale_groups.resources` once weaver #411 lands — no manual `attributes:`). Restart CW controllers
+  (builds from local tree — ensure merged code). Confirm CW advertises GPU attributes.
 - **P4 enable on marin (approval).** Add `peers:` with `allow_policy` scoped to **one OA test user**.
   Restart marin. Confirm the Peers tab shows both CW clusters reachable.
 - **P5 smoke.** As the OA test user: `--target-cluster rno2a` GPU job → handoff → runs on CW → status/

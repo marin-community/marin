@@ -1132,8 +1132,16 @@ class ControllerServiceImpl:
         token yields the ``federation-peer`` role) is admitted only under its own signed
         requester id and only for a submitter this cluster's allowlist permits; a local
         admin (loopback/trusted) is also honored. Any other caller setting ``federation``
-        is forging a handoff to run a job as another user.
+        is forging a handoff to run a job as another user. ``local_admin`` is never a
+        valid federation submitter, regardless of the allowlist.
         """
+        if request.federation.submitting_user == LOCAL_ADMIN_SUBMITTER:
+            raise ConnectError(
+                Code.PERMISSION_DENIED,
+                "A federated job cannot be submitted as local_admin — a CIDR/loopback identity is "
+                "never a valid federation submitter. The submitting user must be an authenticated "
+                "principal (an IAP or JWT user).",
+            )
         if identity is not None and identity.role == FEDERATION_PEER_ROLE:
             if request.federation.requester_id != identity.user_id:
                 raise ConnectError(
@@ -1141,7 +1149,7 @@ class ControllerServiceImpl:
                     f"Federation requester {request.federation.requester_id!r} does not match "
                     f"the authenticated peer {identity.user_id!r}",
                 )
-            if not user_admitted(self._auth.federation_allowed_submitters, request.federation.submitting_user):
+            if not user_admitted(self._auth.allowed_submitters, request.federation.submitting_user):
                 raise ConnectError(
                     Code.PERMISSION_DENIED,
                     f"Submitter {request.federation.submitting_user!r} is not admitted for federation to this cluster",
@@ -1631,12 +1639,31 @@ class ControllerServiceImpl:
                     )
                 )
             except PeerAdmissionDenied as denied:
+                if denied.submitting_user == LOCAL_ADMIN_SUBMITTER:
+                    raise ConnectError(
+                        Code.PERMISSION_DENIED,
+                        "A local_admin (CIDR/loopback) identity cannot submit a federated job. "
+                        "Federating to a remote cluster requires an authenticated user — log in via "
+                        "IAP or present a user token so the submission carries your identity.",
+                    ) from denied
                 raise ConnectError(
                     Code.PERMISSION_DENIED,
-                    f"Submitter {denied.submitting_user!r} is not permitted to run on cluster " f"{denied.peer_id!r}.",
+                    f"Submitter {denied.submitting_user!r} is not permitted to run on cluster {denied.peer_id!r}.",
                 ) from denied
 
         if not routing.is_local:
+            # With auth on, a local_admin (CIDR/loopback) submission is never federated:
+            # a federated job must carry an accountable authenticated user, and the peer
+            # would reject it anyway. Fail here with a clear message rather than after a
+            # round-trip. In null-auth (dev/loopback) there is no real identity to carry,
+            # so local federation is left to work.
+            if self._auth.provider and submitting_user == LOCAL_ADMIN_SUBMITTER:
+                raise ConnectError(
+                    Code.PERMISSION_DENIED,
+                    "A local_admin (CIDR/loopback) identity cannot submit a federated job. "
+                    "Federating to a remote cluster requires an authenticated user — log in via "
+                    "IAP or present a user token so the submission carries your identity.",
+                )
             return self._hand_off_job(job_id, request, routing.peer_id, submitting_user)
 
         # Local (including a received handoff): only now is infeasibility fatal —

@@ -17,6 +17,7 @@ from iris.cluster.federation import peer as peer_module
 from iris.cluster.federation.manager import FederationManager
 from iris.cluster.federation.peer import FederationPeer, build_peers
 from iris.cluster.federation.router import PeerAdmissionDenied, PeerRouter, RoutingRequest
+from iris.cluster.types import LOCAL_ADMIN_SUBMITTER
 from iris.managed_thread import get_thread_container, thread_container_scope
 from iris.rpc import controller_pb2
 from rigging.timing import Duration, ExponentialBackoff
@@ -365,6 +366,19 @@ def test_router_cluster_pin_admits_a_submitter_in_the_allowed_domain():
         constraints=[], local_feasible=True, cluster_pin="cw", submitting_user="alice@openathena.ai"
     )
     assert PeerRouter([peer]).decide(request).peer_id == "cw"
+
+
+def test_router_cluster_pin_denies_a_local_admin_under_a_domain_policy():
+    # local_admin has no '@', so a domain allow policy never admits it; the pin is
+    # denied. (An enforcing parent also blocks local_admin federation service-side,
+    # regardless of the peer's policy — see the handoff tests.)
+    peer = _peer("cw", _StubConnection((_device_backend("tpu-fleet", "tpu"),)), allow_policy=["*@openathena.ai"])
+    peer.probe()
+    request = RoutingRequest(
+        constraints=[], local_feasible=True, cluster_pin="cw", submitting_user=LOCAL_ADMIN_SUBMITTER
+    )
+    with pytest.raises(PeerAdmissionDenied):
+        PeerRouter([peer]).decide(request)
 
 
 def test_router_auto_match_skips_a_peer_that_does_not_admit_the_submitter():

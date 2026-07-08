@@ -421,11 +421,11 @@ class ControllerAuth:
     # Config-derived role map (admins + default role). The sole source of truth for
     # roles; rebuilt from config on each controller start.
     role_policy: RolePolicy | None = None
-    # Which authenticated submitters this cluster admits via an inbound federation
-    # handoff, matched against the proto's asserted submitting_user (allow-policy
-    # syntax). Empty admits none (fail closed). The federation token itself only
-    # proves the requester; the verifier that checks it is folded into ``verifier``.
-    federation_allowed_submitters: tuple[str, ...] = ()
+    # Which submitters this cluster admits via an inbound federation handoff, matched
+    # against the proto's asserted submitting_user (allow-policy syntax). Empty admits
+    # none (fail closed). The federation token itself only proves the requester; the
+    # verifier that checks it is folded into ``verifier``.
+    allowed_submitters: tuple[str, ...] = ()
 
 
 def request_auth_policy(auth: ControllerAuth | None) -> RequestAuthPolicy:
@@ -550,7 +550,7 @@ def create_controller_auth(
     # the composite) federation tokens; the federation token stays method-scoped.
     federation_peers = dict(auth_config.federation_peers) if auth_config is not None else {}
     federation_verifier = FederationTokenVerifier(federation_peers) if federation_peers else None
-    federation_allowed_submitters = tuple(auth_config.federation_allowed_submitters) if auth_config is not None else ()
+    allowed_submitters = tuple(auth_config.allowed_submitters) if auth_config is not None else ()
     request_verifier: TokenVerifier = (
         _ControlPlaneOrFederationVerifier(jwt_mgr, federation_verifier) if federation_verifier is not None else jwt_mgr
     )
@@ -564,7 +564,7 @@ def create_controller_auth(
             worker_token=worker_token,
             jwt_manager=jwt_mgr,
             role_policy=_build_role_policy(auth_config, None),
-            federation_allowed_submitters=federation_allowed_submitters,
+            allowed_submitters=allowed_submitters,
         )
 
     provider = auth_config.provider_kind() or CIDR_PROVIDER
@@ -603,7 +603,7 @@ def create_controller_auth(
         iap_assertion_verifier=iap_assertion_verifier,
         trusted_cidrs=tuple(auth_config.trusted_cidrs),
         role_policy=role_policy,
-        federation_allowed_submitters=federation_allowed_submitters,
+        allowed_submitters=allowed_submitters,
     )
 
 

@@ -28,7 +28,7 @@ from iris.cluster.controller.service import ControllerServiceImpl, _peer_status
 from iris.cluster.federation.manager import FederationManager
 from iris.cluster.federation.peer import FederationPeer
 from iris.cluster.federation.store import HandoffAdmission, HandoffSpec, HandoffState
-from iris.cluster.types import LOCAL_CLUSTER, AttemptUid, JobName
+from iris.cluster.types import LOCAL_ADMIN_SUBMITTER, LOCAL_CLUSTER, AttemptUid, JobName
 from iris.managed_thread import get_thread_container
 from iris.rpc import controller_pb2, job_pb2
 from iris.rpc.auth import FEDERATION_PEER_ROLE
@@ -181,7 +181,7 @@ def _run_peer_task_to_success(peer_state: ControllerTestState, job_id: JobName) 
 # ---------------------------------------------------------------------------
 
 # An enforcing peer (a provider is configured) that admits only openathena submitters.
-_ENFORCING_AUTH = ControllerAuth(provider="cidr", federation_allowed_submitters=("*@openathena.ai",))
+_ENFORCING_AUTH = ControllerAuth(provider="cidr", allowed_submitters=("*@openathena.ai",))
 
 
 def _peer_handoff_request(name: str, requester_id: str, submitting_user: str):
@@ -231,6 +231,32 @@ def test_inbound_handoff_rejects_a_non_peer_identity(tmp_path, log_client):
         peer_service, _ = _make_service(stack, "peer", tmp_path, log_client, auth=_ENFORCING_AUTH)
         request = _peer_handoff_request("fed-job", "parent-cluster", "alice@openathena.ai")
         with identity_scope(VerifiedIdentity("alice@openathena.ai", "user")):
+            with pytest.raises(ConnectError) as exc:
+                peer_service.launch_job(request, None)
+        assert exc.value.code == Code.PERMISSION_DENIED
+
+
+def test_enforcing_parent_refuses_to_federate_a_local_admin_submission(tmp_path, log_client):
+    """With auth on, a local_admin (CIDR/loopback) submission is refused before handoff
+    with a clear message — even to a peer whose policy would admit it — because a
+    federated job must carry an authenticated user."""
+    with ExitStack() as stack:
+        parent_service, _ = _make_service(stack, "parent", tmp_path, log_client, auth=_ENFORCING_AUTH)
+        peer_service, _ = _make_service(stack, "peer", tmp_path, log_client)
+        _attach_federation(parent_service, _InProcessPeerConnection(peer_service))
+        # No identity scope: an unauthenticated (CIDR/loopback) caller resolves to local_admin.
+        with pytest.raises(ConnectError) as exc:
+            parent_service.launch_job(_cluster_pinned_request("fed-job"), None)
+        assert exc.value.code == Code.PERMISSION_DENIED
+
+
+def test_inbound_handoff_rejects_a_local_admin_submitter(tmp_path, log_client):
+    """A local_admin (CIDR/loopback) identity is never a valid federation submitter,
+    even for a verified peer — rejected regardless of the allowlist."""
+    with ExitStack() as stack:
+        peer_service, _ = _make_service(stack, "peer", tmp_path, log_client, auth=_ENFORCING_AUTH)
+        request = _peer_handoff_request("fed-job", "parent-cluster", LOCAL_ADMIN_SUBMITTER)
+        with identity_scope(VerifiedIdentity("parent-cluster", FEDERATION_PEER_ROLE)):
             with pytest.raises(ConnectError) as exc:
                 peer_service.launch_job(request, None)
         assert exc.value.code == Code.PERMISSION_DENIED
