@@ -171,16 +171,16 @@ def parse_session(path, block_rows, turn_rows):
     recs = list(iter_records(path))
     if not recs:
         return
-    # First pass: order assistant turns and note the turn index active *after*
-    # each record position, so a tool_result's first paid turn = the next
-    # assistant turn. Also detect compaction/summary censor points.
+    # Walk records in order, counting assistant turns. n_turns is the session
+    # length; a tool_result's first paid turn is the next assistant turn.
+    # Compaction/summary censoring of chunk lifetimes is not modeled here — the
+    # downstream cost model caps read lifetime with the observed amplifier instead.
     turn_idx = 0
     n_turns = sum(1 for d in recs if d.get("type") == "assistant")
     if n_turns == 0:
         return
     prev_ts = None
     id_to_tool = {}  # tool_use_id -> (tool_name, target)
-    # pending tool_results seen before their paid turn; resolved when next assistant appears
     for d in recs:
         t = d.get("type")
         ts = parse_ts(d.get("timestamp", ""))

@@ -10,9 +10,9 @@
 
 Answers three questions the uplift estimate depends on:
 
-1. **Denominators.** Total budget expressed three ways (codex review #1):
-   raw distinct-input tokens, base-price input-equivalents, full dollar-equivalent
-   (incl. output). The headline uplift % must name which it divides by.
+1. **Denominators.** Total budget expressed three ways: raw distinct-input tokens,
+   base-price input-equivalents, full dollar-equivalent (incl. output). The
+   headline uplift % must name which it divides by.
 2. **Cost-model validation.** Does `billed(C,t,T)=1.25C+0.10C(T-t)` describe the
    data? We compare the *observed* amortization ratio (Σcache_read/Σcache_creation)
    to the ratio implied by the visible body blocks under the turn-lifetime model.
@@ -91,13 +91,13 @@ def calibrate(blocks, turns):
     }
 
 
-def validate_model(blocks, turns, k):
+def validate_model(blocks, turns):
     """Structural check of the amortization law, per session then aggregated.
 
-    For each session: modeled_create = k*Σ est_tokens(body); modeled_read =
-    k*Σ est_tokens*(n_turns - first_paid_turn) capped at >=0. Compare the ratio
-    modeled_read/modeled_create against observed cache_read/cache_creation. If the
-    law holds, the two ratios track (k cancels within the ratio).
+    For each session: modeled_create = Σ est_tokens(body); modeled_read =
+    Σ est_tokens*(n_turns - first_paid_turn) capped at >=0. Compare the ratio
+    modeled_read/modeled_create against observed cache_read/cache_creation. The
+    chars->token factor cancels within the ratio, so this check is proxy-free.
     """
     body = blocks[blocks.block_type.isin(BODY_BLOCKS)].copy()
     nt = turns.groupby("session_id").turn_idx.max().rename("n_turns")
@@ -142,7 +142,7 @@ def prelude_residual(blocks, turns, k):
 
     body_create_est = k * Σ est_tokens(body). residual = actual_creation - that.
     Also measure warm starts: first-turn cache_read>0 means the prelude prefix was
-    already cached (codex #6). eph_1h vs eph_5m indicates long-TTL prelude caching.
+    already cached. eph_1h vs eph_5m indicates long-TTL prelude caching.
     """
     body = blocks[blocks.block_type.isin(BODY_BLOCKS)]
     body_est = k * body.est_tokens.sum()
@@ -180,7 +180,7 @@ def main():
     cal = calibrate(blocks, turns)
     k = cal["k_chars_to_tokens"]
     dn = denominators(turns)
-    val, per = validate_model(blocks, turns, k)
+    val, per = validate_model(blocks, turns)
     pre = prelude_residual(blocks, turns, k)
     trb = tool_result_breakdown(blocks, k)
 

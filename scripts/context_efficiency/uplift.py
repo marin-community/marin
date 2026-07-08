@@ -101,7 +101,7 @@ def interventions(red, budget):
     wiki_total = {k: wiki_cache[k] + wiki_summary[k] for k in wiki_cache}
     # Docs/repo-map delivers the SAME changed-file summary pool by another route,
     # so the combined estimate unions it with wiki_summary (counts it once) rather
-    # than adding a second copy (masking, codex #10). rag is a disjoint tiny pool.
+    # than adding a second copy. rag is a disjoint tiny pool, so it is additive.
     combined_memory_plus_docs = {k: wiki_cache[k] + wiki_summary[k] + rag_net[k] for k in wiki_cache}
     return {
         "shared_wiki_memory": {
@@ -127,7 +127,7 @@ def interventions(red, budget):
     }
 
 
-def ablation(blocks, amp, budget):
+def ablation(blocks, amp):
     """Concentration of modeled read+explore savings in the heaviest sessions."""
     body = blocks[blocks.block_type == "tool_result"].copy()
     body = body.merge(amp[["session_id", "n_turns", "observed_amplifier"]], on="session_id", how="left")
@@ -200,7 +200,7 @@ def main():
         "addressable_ceiling": addressable_ceiling(blocks, amp, budget),
         "prelude_carry": prelude_carry(turns, budget),
         "interventions": interventions(red, budget),
-        "ablation_heaviest_sessions": ablation(blocks, amp, budget),
+        "ablation_heaviest_sessions": ablation(blocks, amp),
         "sensitivity_changed_hit_rate": sensitivity(red, budget),
         "hit_rate_bands": BANDS,
         "replacement_frac": REPLACEMENT_FRAC,
