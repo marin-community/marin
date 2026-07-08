@@ -21,7 +21,7 @@ from connectrpc.errors import ConnectError
 from connectrpc.request import RequestContext
 from finelog.client import LogClient
 from finelog.rpc import logging_pb2
-from rigging.server_auth import get_verified_identity, require_identity
+from rigging.server_auth import ANONYMOUS_ADMIN, VerifiedIdentity, get_verified_identity, require_identity
 from rigging.timing import Duration, ExponentialBackoff, Timer, Timestamp
 from sqlalchemy import bindparam, case, func, select, text, tuple_
 
@@ -86,6 +86,7 @@ from iris.cluster.runtime.profile import (
     profile_local_process,
 )
 from iris.cluster.types import (
+    LOCAL_ADMIN_SUBMITTER,
     TERMINAL_JOB_STATES,
     TERMINAL_TASK_STATES,
     JobName,
@@ -106,6 +107,24 @@ from iris.rpc.proto_display import (
 from iris.time_proto import duration_from_proto, timestamp_to_proto
 
 logger = logging.getLogger(__name__)
+
+
+def submitting_user_for_root(
+    identity: VerifiedIdentity | None, request: controller_pb2.Controller.LaunchJobRequest
+) -> str:
+    """The authenticated principal to attribute a *root* submission to.
+
+    A received handoff carries the submitter as a signed claim the receiving peer
+    already re-checked against the presented token, so it is authoritative here. An
+    IAP/JWT caller is its verified email; a CIDR/loopback caller authenticates as the
+    anonymous admin (a machine, not a person) and is attributed to ``local_admin``.
+    Child jobs do not call this — they inherit their root's value at insert time.
+    """
+    if request.HasField("federation"):
+        return request.federation.submitting_user
+    if identity is None or identity.user_id == ANONYMOUS_ADMIN.user_id:
+        return LOCAL_ADMIN_SUBMITTER
+    return identity.user_id
 
 
 def attempt_is_worker_failure(state: int) -> bool:
@@ -1159,6 +1178,7 @@ class ControllerServiceImpl:
         job_id: JobName,
         request: controller_pb2.Controller.LaunchJobRequest,
         peer_id: str,
+        submitting_user: str,
     ) -> controller_pb2.Controller.LaunchJobResponse:
         """Hand a job off to a federation peer and return the parent's job id.
 
@@ -1179,6 +1199,7 @@ class ControllerServiceImpl:
             request=request,
             peer_id=peer_id,
             owner_principal=job_id.user,
+            submitting_user=submitting_user,
         )
         return controller_pb2.Controller.LaunchJobResponse(job_id=job_id.to_wire())
 
@@ -1255,6 +1276,12 @@ class ControllerServiceImpl:
         # For non-root jobs, verify the caller owns the parent hierarchy
         if self._auth.provider and identity is not None and not job_id.is_root:
             self._authorize_job_owner(job_id)
+
+        # The authenticated principal to attribute this submission to — the key a
+        # peer's per-cluster federation allowlist gates on. A root resolves it from
+        # the verified identity (or, for a received handoff, the parent's signed
+        # claim); a child inherits its root's value at insert time.
+        submitting_user = submitting_user_for_root(identity, request)
 
         # Priority band validation.
         #
@@ -1540,7 +1567,7 @@ class ControllerServiceImpl:
             )
 
         if not routing.is_local:
-            return self._hand_off_job(job_id, request, routing.peer_id)
+            return self._hand_off_job(job_id, request, routing.peer_id, submitting_user)
 
         # Local (including a received handoff): only now is infeasibility fatal —
         # no peer could take it either.
@@ -1582,6 +1609,7 @@ class ControllerServiceImpl:
                 job_id=job_id,
                 request=request,
                 ts=Timestamp.now(),
+                submitting_user=submitting_user,
             )
         self._controller.wake()
 

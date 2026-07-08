@@ -59,6 +59,7 @@ class ControllerFederationStore:
                 request=spec.request,
                 ts=now,
                 cluster=spec.peer_id,
+                submitting_user=spec.submitting_user,
             )
             writes.insert_federated_handle(
                 cur,
@@ -91,6 +92,7 @@ class ControllerFederationStore:
                         local_job_id=handle.job_id,
                         peer_id=handle.peer_id,
                         owner_principal=handle.owner_principal,
+                        submitting_user=job.submitting_user,
                         request=reconstruct_launch_job_request(job),
                     )
                 )
@@ -149,11 +151,13 @@ class ControllerFederationStore:
         with self._db.transaction() as cur:
             for delta in deltas:
                 # Job ids are cluster-invariant: the peer reports the same id the
-                # parent handed it. Guard on a SENT handle for (peer, id) — a peer
-                # reporting an id it was never handed is a disagreement, not normal
-                # traffic, so log and ignore it.
+                # parent handed it. Guard on a SENT handle for the delta's *root* —
+                # a job whose root this parent handed to this peer is legitimately
+                # part of that subtree, whether it is the root itself or a child the
+                # peer spawned under it. A delta whose root was never handed here is
+                # a disagreement, not normal traffic, so log and ignore it.
                 local_job_id = JobName.from_wire(delta.job_id)
-                if reads.federated_sent_job(cur, peer_id, local_job_id) is None:
+                if reads.federated_sent_job(cur, peer_id, local_job_id.root_job) is None:
                     logger.warning("peer %s reported job %s it was not handed; ignoring", peer_id, local_job_id)
                     continue
                 if delta.tombstone:
@@ -168,6 +172,13 @@ class ControllerFederationStore:
 
     def _mirror_delta(self, cur: Tx, peer_id: str, local_job_id: JobName, delta) -> None:
         summary = delta.summary
+        # The root's mirror row is created at handoff; a child the peer spawned under
+        # it has none until its first delta, so create it before mirroring state (and
+        # before its tasks, which FK to the job row).
+        if reads.get_job_state(cur, local_job_id) is None and not self._insert_child_mirror(
+            cur, peer_id, local_job_id, summary
+        ):
+            return
         writes.mirror_federated_job(
             cur,
             job_id=local_job_id,
@@ -204,6 +215,46 @@ class ControllerFederationStore:
             # The parent derives the federated task's counts from these mirrored
             # attempts, so drop the job's cached totals via the cursor's memo.
             cur.caches[AttemptCountsProjection].invalidate_for_tasks(cur, [local_task_id])
+
+    def _insert_child_mirror(self, cur: Tx, peer_id: str, local_job_id: JobName, summary) -> bool:
+        """Create the local mirror row for a child a peer spawned under a received root.
+
+        The whole federated subtree shares the root's submitter and root submit time,
+        read from the (already-present) parent; the row is stamped with the peer
+        cluster so it folds out of local scheduling and renders as federated. Returns
+        ``False`` (and skips) if the parent is not mirrored yet — deltas arrive in
+        changelog order, so the parent's creation precedes the child's and this is
+        only a defensive guard; the child is re-created on its next delta.
+        """
+        parent = local_job_id.parent
+        if parent is None:
+            return False
+        seed = reads.parent_mirror_seed(cur, parent)
+        if seed is None:
+            logger.warning("peer %s reported child %s before its parent; will retry", peer_id, local_job_id)
+            return False
+        root_submitted_ms = seed.root_submitted_at_ms.epoch_ms()
+        writes.insert_job(
+            cur,
+            job_id=local_job_id,
+            user_id=local_job_id.user,
+            submitting_user=seed.submitting_user,
+            parent_job_id=parent,
+            root_job_id=local_job_id.root_job.to_wire(),
+            depth=local_job_id.depth,
+            state=summary.state,
+            submitted_at_ms=root_submitted_ms,
+            root_submitted_at_ms=root_submitted_ms,
+            started_at_ms=_proto_ms(summary.HasField("started_at"), summary.started_at),
+            finished_at_ms=_proto_ms(summary.HasField("finished_at"), summary.finished_at),
+            scheduling_deadline_epoch_ms=None,
+            error=summary.error or None,
+            exit_code=summary.exit_code or None,
+            num_tasks=summary.task_count,
+            name=local_job_id.name,
+            cluster=peer_id,
+        )
+        return True
 
     def _set_replace(self, cur: Tx, peer_id: str, deltas) -> None:
         """Full-resync set-replacement: drop any local handle for ``peer_id``

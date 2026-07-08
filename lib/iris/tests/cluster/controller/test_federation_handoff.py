@@ -519,6 +519,7 @@ def test_admit_persists_a_pending_handle_and_is_idempotent(tmp_path, log_client)
             local_job_id=parent_job_id,
             peer_id="cw",
             owner_principal=_USER,
+            submitting_user=_USER,
             request=make_direct_job_request("fed-job", replicas=1),
         )
 

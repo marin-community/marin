@@ -174,6 +174,7 @@ def insert_job(
     *,
     job_id: JobName,
     user_id: str,
+    submitting_user: str,
     parent_job_id: JobName | None,
     root_job_id: str,
     depth: int,
@@ -199,6 +200,7 @@ def insert_job(
         insert(jobs_table).values(
             job_id=job_id,
             user_id=user_id,
+            submitting_user=submitting_user,
             parent_job_id=parent_job_id,
             root_job_id=root_job_id,
             depth=depth,

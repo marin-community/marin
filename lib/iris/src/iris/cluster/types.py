@@ -98,6 +98,14 @@ class WellKnownAttribute(StrEnum):
 # cluster-id namespace stay disjoint.
 LOCAL_CLUSTER = "local"
 
+LOCAL_ADMIN_SUBMITTER = "local_admin"
+"""``submitting_user`` for a job admitted without an authenticated email.
+
+A CIDR/loopback (null-auth) submitter authenticates as the anonymous admin rather
+than a person, so its jobs are attributed to this well-known principal. Per-cluster
+federation allowlists key on ``submitting_user``, so ``local_admin`` is admitted to
+a peer only if that peer's policy names it explicitly."""
+
 
 def is_federated(cluster: str) -> bool:
     """Whether a job/task ``cluster`` value denotes a peer this controller handed off to.

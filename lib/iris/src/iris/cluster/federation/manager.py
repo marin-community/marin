@@ -117,6 +117,7 @@ class FederationManager:
         request: controller_pb2.Controller.LaunchJobRequest,
         peer_id: str,
         owner_principal: str,
+        submitting_user: str,
     ) -> None:
         """Persist a federated handle and synchronously hand the job to its peer.
 
@@ -136,6 +137,7 @@ class FederationManager:
             local_job_id=local_job_id,
             peer_id=peer_id,
             owner_principal=owner_principal,
+            submitting_user=submitting_user,
             request=request,
         )
         if self._store.admit_and_persist_handoff(spec) is HandoffAdmission.ADMITTED:
@@ -282,7 +284,9 @@ class FederationManager:
         if peer is None:
             logger.warning("Cannot hand off %s: peer %s is not configured", spec.local_job_id, spec.peer_id)
             return
-        handoff = self._build_handoff_request(spec.request, spec.local_job_id, spec.owner_principal)
+        handoff = self._build_handoff_request(
+            spec.request, spec.local_job_id, spec.owner_principal, spec.submitting_user
+        )
         try:
             peer.launch_job(handoff)
         except ConnectError as exc:
@@ -325,6 +329,7 @@ class FederationManager:
         request: controller_pb2.Controller.LaunchJobRequest,
         local_job_id: JobName,
         owner_principal: str,
+        submitting_user: str,
     ) -> controller_pb2.Controller.LaunchJobRequest:
         """The request delivered to the peer: the same cluster-invariant job name,
         federation attribution, and the routing directives stripped (the peer matches
@@ -341,6 +346,7 @@ class FederationManager:
             controller_pb2.Controller.FederationHandoff(
                 requester_id=self._cluster_id,
                 owner_principal=owner_principal,
+                submitting_user=submitting_user,
             )
         )
         return handoff
