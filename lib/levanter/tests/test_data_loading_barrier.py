@@ -52,6 +52,10 @@ def coordination(monkeypatch):
     return client
 
 
+def _no_sleep(_interval: float) -> None:
+    """Inter-poll sleep replacement so the barrier loop runs on no real wall-clock time."""
+
+
 def _set_world(monkeypatch, *, num_processes: int, process_id: int) -> None:
     monkeypatch.setattr(jax, "process_count", lambda: num_processes)
     monkeypatch.setattr(jax, "process_index", lambda: process_id)
@@ -83,7 +87,7 @@ def test_waits_for_a_lagging_process(monkeypatch):
     client = _FakeKVClient(on_dir_get=reveal_peer_on_third_poll)
     monkeypatch.setattr(jax_distributed.global_state, "client", client)
 
-    data_loading_barrier(3, timeout=5.0)
+    data_loading_barrier(3, timeout=5.0, sleep=_no_sleep)
 
     # returned only after polling until the lagging peer showed up
     assert polls >= 3
@@ -96,17 +100,18 @@ def test_timeout_names_the_missing_process(coordination, monkeypatch):
     # process 2 never publishes
 
     with pytest.raises(TimeoutError) as exc:
-        data_loading_barrier(9, timeout=0.3, warn_interval=0.05)
+        data_loading_barrier(9, timeout=0.3, warn_interval=0.05, sleep=_no_sleep)
 
     assert "2" in str(exc.value)
 
 
-def test_single_process_is_a_noop(monkeypatch):
-    # No coordination client installed: a single-process job must not touch it.
-    monkeypatch.setattr(jax_distributed.global_state, "client", None)
+def test_single_process_is_a_noop(coordination, monkeypatch):
     _set_world(monkeypatch, num_processes=1, process_id=0)
 
     data_loading_barrier(0, timeout=5.0)
+
+    # a single-process job returns before touching the coordination store
+    assert coordination.store == {}
 
 
 def test_leader_cleans_up_previous_step(coordination, monkeypatch):

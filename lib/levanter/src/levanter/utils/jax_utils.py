@@ -24,7 +24,7 @@ from jax import numpy as jnp
 from jax._src.mesh import get_concrete_mesh
 from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec
 from jaxtyping import PRNGKeyArray, PyTree
-from rigging.timing import Deadline, Duration, ExponentialBackoff
+from rigging.timing import ExponentialBackoff
 
 from levanter.utils.mesh import create_mesh_from_axis_specs
 from levanter.utils.tree_utils import key_path_to_str, tree_flatten_one_level_with_keys
@@ -192,7 +192,13 @@ _DATA_READY_PREFIX = "levanter/data_ready"
 _MAX_LOGGED_LAGGARDS = 32
 
 
-def data_loading_barrier(step: int, *, timeout: float, warn_interval: float = 30.0) -> None:
+def data_loading_barrier(
+    step: int,
+    *,
+    timeout: float,
+    warn_interval: float = 30.0,
+    sleep: Callable[[float], None] = time.sleep,
+) -> None:
     """Block until every process has loaded its batch for ``step``, then return.
 
     Call this between fetching a batch and the collective train step. It gates entry to the
@@ -208,6 +214,8 @@ def data_loading_barrier(step: int, *, timeout: float, warn_interval: float = 30
             keys from ``step - 1``.
         timeout: Maximum seconds to wait for all processes before raising.
         warn_interval: How often (seconds) process 0 logs the still-missing processes.
+        sleep: Injection seam for the inter-poll delay; the clock advances only through it,
+            so tests pass a no-op to run the loop without a real wait.
     """
     num_processes = jax.process_count()
     if num_processes == 1:
@@ -229,7 +237,6 @@ def data_loading_barrier(step: int, *, timeout: float, warn_interval: float = 30
     prefix = f"{_DATA_READY_PREFIX}/{step}"
     client.key_value_set(f"{prefix}/{process_id}", "1")
 
-    deadline = Deadline.from_now(Duration.from_seconds(timeout))
     backoff = ExponentialBackoff(initial=0.05, maximum=min(warn_interval, 5.0))
     ready: set[int] = set()
     next_warn = warn_interval
@@ -241,7 +248,7 @@ def data_loading_barrier(step: int, *, timeout: float, warn_interval: float = 30
             return
 
         missing = sorted(set(range(num_processes)) - ready)
-        if deadline.expired():
+        if elapsed >= timeout:
             raise TimeoutError(
                 f"data_loading_barrier timed out after {timeout:.0f}s at step {step}: "
                 f"{len(missing)}/{num_processes} processes never signalled data-ready. "
@@ -249,7 +256,7 @@ def data_loading_barrier(step: int, *, timeout: float, warn_interval: float = 30
             )
 
         interval = backoff.next_interval()
-        time.sleep(interval)
+        sleep(interval)
         elapsed += interval
 
         if is_leader and elapsed >= next_warn:
