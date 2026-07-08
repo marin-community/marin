@@ -606,6 +606,7 @@ def _train_step(
                 tags=list(SWEEP.base_train_tags),
                 group=SWEEP.experiment_name,
                 name=None,
+                replicate_path=ctx.output_path,
             ),
             optimizer=_build_adamh_config(
                 learning_rate=SWEEP.search_space["lr"][0],

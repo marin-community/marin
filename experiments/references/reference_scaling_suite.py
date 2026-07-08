@@ -351,9 +351,7 @@ def run_optimal_training(config: OptimalTrainingConfig) -> None:
     model_config = candidate.model_config
     params = model_config.total_trainable_params(completed_adamh_heuristic.vocab_size)
     hidden_dim = model_config.hidden_dim
-    tpu_type = config.resources.device.tpu_type if hasattr(config.resources.device, "tpu_type") else "unknown"
-    cores = int(tpu_type.split("-")[1]) if "-" in tpu_type else 128
-    chips = cores // 2
+    chips = config.resources.chip_count()
 
     tp = 1
     while hidden_dim % (chips // tp) != 0 and tp < 8:
