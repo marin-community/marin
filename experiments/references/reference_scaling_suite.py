@@ -48,8 +48,9 @@ from marin.experiment.namespacing import user_namespaced_name
 from marin.processing.tokenize.tokenize import TokenizedCache
 from marin.scaling_laws import FitScalingLawsResult, IsoFlopRecord, ScalingFit, fit_scaling_laws, round_flops_to_bucket
 from marin.scaling_laws.eval_metrics_reader import read_eval_records
-from marin.training.training import TrainLmOnPodConfig, run_levanter_train_lm
+from marin.training.training import LevanterCheckpoint, TrainLmOnPodConfig, run_levanter_train_lm
 from marin.utilities.wandb_utils import WANDB_ENTITY, WANDB_PROJECT
+from rigging.filesystem import prefix_join
 
 from experiments.datasets.nemotron import nemotron_datasets
 from experiments.datasets.paloma import paloma_datasets
@@ -251,7 +252,7 @@ def _save_isoflop_analysis_result(result: FitScalingLawsResult, output_path: str
     fs, _, _ = fsspec.get_fs_token_paths(output_path)
     fs.makedirs(output_path, exist_ok=True)
 
-    result_path = os.path.join(output_path, "isoflop_analysis_result.json")
+    result_path = prefix_join(output_path, "isoflop_analysis_result.json")
     result_dict = {
         "minima_records": [
             {
@@ -271,7 +272,7 @@ def _save_isoflop_analysis_result(result: FitScalingLawsResult, output_path: str
         json.dump(result_dict, f, indent=2)
     logger.info(f"Saved scaling law results to {result_path}")
 
-    fit_curves_path = os.path.join(output_path, "fit_curves.json")
+    fit_curves_path = prefix_join(output_path, "fit_curves.json")
     fit_curves_json = {f"{label}|{flops}": list(coeffs) for (label, flops), coeffs in result.fit_curves.items()}
     with fs.open(fit_curves_path, "w") as f:
         json.dump(fit_curves_json, f, indent=2)
@@ -324,7 +325,7 @@ class OptimalTrainingConfig:
 
 def run_optimal_training(config: OptimalTrainingConfig) -> None:
     """Read scaling fits, predict optimal config, dispatch TPU training."""
-    result_path = os.path.join(config.analysis_output_path, "isoflop_analysis_result.json")
+    result_path = prefix_join(config.analysis_output_path, "isoflop_analysis_result.json")
     fs, _, _ = fsspec.get_fs_token_paths(result_path)
     with fs.open(result_path, "r") as f:
         analysis_result = json.load(f)
@@ -448,7 +449,7 @@ def _optimal_step(
     batch_size: int,
     seed: int,
     version: str,
-) -> ArtifactStep[Artifact]:
+) -> ArtifactStep[LevanterCheckpoint]:
     resources = ResourceConfig.with_tpu(tpu_type)
     suffix = f"-seed{seed}" if seed != 0 else ""
     name = user_namespaced_name(f"{EXPERIMENT_NAME}-optimal-{budget:.0e}{suffix}", version)
@@ -468,17 +469,17 @@ def _optimal_step(
     return ArtifactStep(
         name=name,
         version=version,
-        artifact_type=Artifact,
+        artifact_type=LevanterCheckpoint,
         run=remote(run_optimal_training, resources=ResourceConfig.with_cpu()),
         build_config=build_config,
         deps=(analysis, *_ALL_DATA_DEPS),
     )
 
 
-def build(*, version: str = "dev") -> list[ArtifactStep[Artifact]]:
+def build(*, version: str = "dev") -> list[ArtifactStep[Artifact] | ArtifactStep[LevanterCheckpoint]]:
     """Return all steps: [analysis, optimal-1e21-seed0, ..., optimal-1e23]."""
     analysis = _analysis_step(version=version)
-    optimal_runs: list[ArtifactStep[Artifact]] = []
+    optimal_runs: list[ArtifactStep[LevanterCheckpoint]] = []
     for budget, (tpu_type, batch_size) in TARGET_BUDGETS.items():
         for seed in SEEDS_PER_BUDGET[budget]:
             optimal_runs.append(
