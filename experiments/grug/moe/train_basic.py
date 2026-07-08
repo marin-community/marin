@@ -299,6 +299,28 @@ def _run_grug_local(
 
         state = _init_state(model_key)
 
+        # SCALE_MEM_PROFILE=1: compile (but don't run) the train step and print XLA's per-device
+        # memory breakdown, then exit. Buffer assignment happens at compile, so this reports the
+        # split between persistent state (params+optimizer = arguments) and peak scratch
+        # (activations/MoE/CE = temp) even for a config that OOMs at execution.
+        if os.environ.get("SCALE_MEM_PROFILE") == "1":
+            GB = 1024**3
+            profile_batch = next(iter(train_loader))
+            compiled = train_step.lower(state, profile_batch, compute_watch=False).compile()
+            m = compiled.memory_analysis()
+            n_params = parameter_count(state.params)
+            logger.info(
+                "[mem-profile] params=%.2fB | per-device: arguments(params+opt)=%.2f GB  "
+                "temp(activations/MoE/CE scratch)=%.2f GB  output=%.2f GB  code=%.2f GB  host_temp=%.2f GB",
+                n_params / 1e9,
+                m.argument_size_in_bytes / GB,
+                m.temp_size_in_bytes / GB,
+                m.output_size_in_bytes / GB,
+                m.generated_code_size_in_bytes / GB,
+                m.host_temp_size_in_bytes / GB,
+            )
+            return
+
         # SCALE_CHECKPOINTS=none disables all checkpoint writes. The final save is
         # otherwise forced regardless of save_interval, and the throughput probes have
         # no use for a multi-billion-param checkpoint.
