@@ -34,9 +34,9 @@ from dataclasses import dataclass
 
 from rigging.filesystem import StoragePath, prefix_join
 
-from experiments.code_search_eval.common import read_jsonl, write_jsonl
+from experiments.code_search_eval.common import write_jsonl
 from experiments.context_efficiency.episodes import block_list, text_of
-from experiments.context_efficiency.labeling import extract_json, run_agent
+from experiments.context_efficiency.labeling import agent_json_list
 from experiments.context_efficiency.transcripts import iter_records, norm_path
 
 logger = logging.getLogger(__name__)
@@ -192,15 +192,10 @@ def _clean_batch(cands: list[dict], agent_cmd: list[str], timeout: int) -> list[
     ids = {c["cand_id"] for c in cands}
     items = [{"cand_id": c["cand_id"], "intent": c["raw_query"], "search_terms": c["search_terms"]} for c in cands]
     prompt = CLEAN_PROMPT + "\n".join(json.dumps(it) for it in items)
-    stdout = run_agent(agent_cmd, prompt, timeout)
-    parsed = extract_json(stdout) if stdout else None
-    results = parsed.get("results") if isinstance(parsed, dict) else None
-    if not isinstance(results, list):
-        return []
     return [
         r
-        for r in results
-        if isinstance(r, dict) and r.get("cand_id") in ids and r.get("is_navigation") and (r.get("query") or "").strip()
+        for r in agent_json_list(agent_cmd, prompt, timeout, "results")
+        if r.get("cand_id") in ids and r.get("is_navigation") and (r.get("query") or "").strip()
     ]
 
 
@@ -276,7 +271,3 @@ def run_benchmark(cfg: BenchmarkConfig) -> None:
             indent=2,
         )
     logger.info("wrote %d benchmark queries to %s", len(rows), cfg.output_path)
-
-
-def load_benchmark(output_path: str) -> list[dict]:
-    return read_jsonl(prefix_join(output_path, "benchmark.jsonl"))

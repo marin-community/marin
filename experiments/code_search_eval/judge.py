@@ -24,7 +24,7 @@ from dataclasses import dataclass
 from rigging.filesystem import StoragePath, prefix_join
 
 from experiments.code_search_eval.common import read_jsonl, snippet, write_jsonl
-from experiments.context_efficiency.labeling import extract_json, run_agent
+from experiments.context_efficiency.labeling import agent_json_list
 
 logger = logging.getLogger(__name__)
 
@@ -78,12 +78,7 @@ def _judge_item(query: dict, hits: list[dict], repo_root: str) -> dict:
 def _judge_batch(items: list[dict], agent_cmd: list[str], timeout: int) -> list[dict]:
     ids = {it["query_id"] for it in items}
     prompt = JUDGE_PROMPT + "\n".join(json.dumps(it) for it in items)
-    stdout = run_agent(agent_cmd, prompt, timeout)
-    parsed = extract_json(stdout) if stdout else None
-    results = parsed.get("results") if isinstance(parsed, dict) else None
-    if not isinstance(results, list):
-        return []
-    return [r for r in results if isinstance(r, dict) and r.get("query_id") in ids]
+    return [r for r in agent_json_list(agent_cmd, prompt, timeout, "results") if r.get("query_id") in ids]
 
 
 def run_judge(cfg: JudgeConfig) -> None:

@@ -29,6 +29,8 @@ from dataclasses import dataclass
 import pandas as pd
 from rigging.filesystem import StoragePath, prefix_join
 
+from experiments.context_efficiency.transcripts import CHARS_PER_TOK
+
 logger = logging.getLogger(__name__)
 
 # Anthropic prompt-cache price multipliers (relative to base input = 1.0).
@@ -52,7 +54,7 @@ def _tok(path: str) -> float:
     if not path:
         return 0.0
     try:
-        return os.path.getsize(path) / 4.0
+        return os.path.getsize(path) / CHARS_PER_TOK
     except OSError:
         return 0.0
 

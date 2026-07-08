@@ -15,7 +15,6 @@ small general model, and ``build``/``query`` must use the same one (its name is
 persisted in the index).
 """
 
-import json
 import os
 import sys
 
@@ -24,7 +23,7 @@ sys.path.insert(0, __file__.rsplit("/experiments/", 1)[0])
 import numpy as np
 from fastembed import TextEmbedding
 
-from experiments.code_search_eval.common import Hit, chunk_file, iter_source_files, run_engine_cli
+from experiments.code_search_eval.common import Hit, collect_chunks, read_chunk_meta, run_engine_cli, write_chunk_meta
 
 DEFAULT_MODEL = "BAAI/bge-small-en-v1.5"
 EMBED_BATCH = 256
@@ -46,27 +45,20 @@ def _embed_passages(model: TextEmbedding, texts: list[str]) -> np.ndarray:
 
 def build_index(repo_root: str, index_dir: str) -> None:
     name = os.environ.get("CSE_EMBED_MODEL", DEFAULT_MODEL)
-    meta, texts = [], []
-    for rel in iter_source_files(repo_root):
-        for ch in chunk_file(repo_root, rel):
-            meta.append({"file": ch["file"], "start_line": ch["start_line"], "end_line": ch["end_line"]})
-            texts.append(ch["file"] + "\n" + ch["text"])
+    meta, texts = collect_chunks(repo_root)
     if not texts:
         raise ValueError(f"no indexable chunks under {repo_root}")
     model = TextEmbedding(model_name=name)
     vecs = _embed_passages(model, texts)
     np.save(os.path.join(index_dir, "embeddings.npy"), vecs)
-    with open(os.path.join(index_dir, "chunks.jsonl"), "w", encoding="utf-8") as fh:
-        for m in meta:
-            fh.write(json.dumps(m) + "\n")
+    write_chunk_meta(index_dir, meta)
     with open(os.path.join(index_dir, "model.txt"), "w", encoding="utf-8") as fh:
         fh.write(name)
 
 
 def query_index(repo_root: str, index_dir: str, queries: list[dict], k: int) -> list[dict]:
     vecs = np.load(os.path.join(index_dir, "embeddings.npy"))
-    with open(os.path.join(index_dir, "chunks.jsonl"), encoding="utf-8") as fh:
-        meta = [json.loads(line) for line in fh if line.strip()]
+    meta = read_chunk_meta(index_dir)
     model = TextEmbedding(model_name=_model_name(index_dir))
     q_texts = [q["query"] for q in queries]
     q_vecs = np.asarray(list(model.query_embed(q_texts)), dtype=np.float32)

@@ -108,6 +108,35 @@ def chunk_file(repo_root: str, relpath: str) -> list[dict]:
     return chunks
 
 
+CHUNK_META_NAME = "chunks.jsonl"
+
+
+def collect_chunks(repo_root: str) -> tuple[list[dict], list[str]]:
+    """(chunk metadata, index texts) for every source file, shared by the indexing engines.
+
+    ``meta`` rows are ``{file, start_line, end_line}``; each text is ``"path\\ncode"`` so
+    filename and module tokens are searchable alongside the body.
+    """
+    meta: list[dict] = []
+    texts: list[str] = []
+    for rel in iter_source_files(repo_root):
+        for ch in chunk_file(repo_root, rel):
+            meta.append({"file": ch["file"], "start_line": ch["start_line"], "end_line": ch["end_line"]})
+            texts.append(ch["file"] + "\n" + ch["text"])
+    return meta, texts
+
+
+def write_chunk_meta(index_dir: str, meta: list[dict]) -> None:
+    with open(os.path.join(index_dir, CHUNK_META_NAME), "w", encoding="utf-8") as fh:
+        for m in meta:
+            fh.write(json.dumps(m) + "\n")
+
+
+def read_chunk_meta(index_dir: str) -> list[dict]:
+    with open(os.path.join(index_dir, CHUNK_META_NAME), encoding="utf-8") as fh:
+        return [json.loads(line) for line in fh if line.strip()]
+
+
 def snippet(repo_root: str, relpath: str, start_line: int, end_line: int) -> str:
     """The text of ``relpath`` lines [start_line, end_line], empty if unreadable."""
     try:

@@ -24,13 +24,15 @@ import numpy as np
 import pandas as pd
 from rigging.filesystem import StoragePath, prefix_join
 
+from experiments.context_efficiency.accounting import P_READ, P_WRITE
 from experiments.context_efficiency.schema import AUTHORED_REPO, AUTHORED_TOPIC, AUTOMATIC, SUBSTITUTES
 
 logger = logging.getLogger(__name__)
 
 # Always-on prelude carry rate: a token parked in the prefix is written once and
-# re-read every subsequent turn. Median session ~54 turns => ~0.10*54 + 1.25.
-PRELUDE_CARRY_PER_TOKEN = 0.10 * 54 + 1.25
+# re-read every subsequent turn. Median session ~54 turns.
+MEDIAN_SESSION_TURNS = 54
+PRELUDE_CARRY_PER_TOKEN = P_READ * MEDIAN_SESSION_TURNS + P_WRITE
 
 
 def load_labels(label_dir: str) -> pd.DataFrame:

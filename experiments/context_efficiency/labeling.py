@@ -162,20 +162,29 @@ def run_agent(agent_cmd: list[str], prompt: str, timeout: int) -> str | None:
     return proc.stdout
 
 
+def agent_json_list(agent_cmd: list[str], prompt: str, timeout: int, list_key: str) -> list[dict]:
+    """Run the agent on ``prompt`` and return the JSON list under ``list_key``.
+
+    The shared scaffold behind every batched agent call (labeling, query cleaning,
+    judging): invoke, extract the JSON envelope, hand back the list of dict rows (empty
+    on any failure). Callers apply their own per-row validation.
+    """
+    stdout = run_agent(agent_cmd, prompt, timeout)
+    parsed = extract_json(stdout) if stdout else None
+    items = parsed.get(list_key) if isinstance(parsed, dict) else None
+    return [x for x in items if isinstance(x, dict)] if isinstance(items, list) else []
+
+
 def _label_one_batch(batch_path: str, out_path: str, agent_cmd: list[str], timeout: int, retries: int) -> int:
     """Label one batch file, writing ``out_path``. Returns the number of labels, 0 on failure."""
     episodes = [json.loads(line) for line in StoragePath(batch_path).read_text().splitlines() if line.strip()]
     ids = {e["episode_id"] for e in episodes}
     prompt = RUBRIC + "\n".join(json.dumps(e) for e in episodes)
     for attempt in range(retries + 1):
-        stdout = run_agent(agent_cmd, prompt, timeout)
-        parsed = extract_json(stdout) if stdout else None
-        labels = parsed.get("labels") if isinstance(parsed, dict) else None
-        if isinstance(labels, list):
-            kept = [x for x in labels if isinstance(x, dict) and x.get("episode_id") in ids]
-            if kept:
-                StoragePath(out_path).write_text(json.dumps({"labels": kept}, indent=2))
-                return len(kept)
+        kept = [x for x in agent_json_list(agent_cmd, prompt, timeout, "labels") if x.get("episode_id") in ids]
+        if kept:
+            StoragePath(out_path).write_text(json.dumps({"labels": kept}, indent=2))
+            return len(kept)
         logger.warning(
             "batch %s: no usable labels (attempt %d/%d)", os.path.basename(batch_path), attempt + 1, retries + 1
         )

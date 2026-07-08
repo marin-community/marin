@@ -10,42 +10,29 @@
 dense engine, the embeddings are not buying much on this corpus.
 """
 
-import json
-import os
 import sys
 
 sys.path.insert(0, __file__.rsplit("/experiments/", 1)[0])
 
 import bm25s
 
-from experiments.code_search_eval.common import Hit, chunk_file, iter_source_files, run_engine_cli
-
-META_NAME = "chunks.jsonl"
+from experiments.code_search_eval.common import Hit, collect_chunks, read_chunk_meta, run_engine_cli, write_chunk_meta
 
 
 def build_index(repo_root: str, index_dir: str) -> None:
-    meta = []
-    corpus = []
-    for rel in iter_source_files(repo_root):
-        for ch in chunk_file(repo_root, rel):
-            meta.append({"file": ch["file"], "start_line": ch["start_line"], "end_line": ch["end_line"]})
-            # index the path alongside the text so filename/module tokens are searchable
-            corpus.append(ch["file"] + "\n" + ch["text"])
+    meta, corpus = collect_chunks(repo_root)
     if not corpus:
         raise ValueError(f"no indexable chunks under {repo_root}")
     tokens = bm25s.tokenize(corpus, stopwords="en", show_progress=False)
     retriever = bm25s.BM25()
     retriever.index(tokens, show_progress=False)
     retriever.save(index_dir)
-    with open(os.path.join(index_dir, META_NAME), "w", encoding="utf-8") as fh:
-        for m in meta:
-            fh.write(json.dumps(m) + "\n")
+    write_chunk_meta(index_dir, meta)
 
 
 def query_index(repo_root: str, index_dir: str, queries: list[dict], k: int) -> list[dict]:
     retriever = bm25s.BM25.load(index_dir, load_corpus=False)
-    with open(os.path.join(index_dir, META_NAME), encoding="utf-8") as fh:
-        meta = [json.loads(line) for line in fh if line.strip()]
+    meta = read_chunk_meta(index_dir)
     results = []
     for q in queries:
         qt = bm25s.tokenize(q["query"], stopwords="en", show_progress=False)

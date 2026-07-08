@@ -66,8 +66,8 @@ def _search(repo_root: str, kws: list[str]) -> dict[str, dict[int, set[str]]]:
     cmd.append(repo_root)
     try:
         proc = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
-    except (subprocess.TimeoutExpired, FileNotFoundError):
-        return {}
+    except subprocess.TimeoutExpired:
+        return {}  # a slow query degrades to no hits; a missing rg binary must fail loudly
     kws_low = [k.lower() for k in kws]
     hits: dict[str, dict[int, set[str]]] = {}
     for line in proc.stdout.splitlines():
