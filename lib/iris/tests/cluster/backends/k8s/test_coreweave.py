@@ -30,7 +30,6 @@ from iris.cluster.config import (
 from iris.cluster.platforms.k8s.controller import (
     _CONTROLLER_CPU_REQUEST,
     _CONTROLLER_MEMORY_REQUEST,
-    _CONTROLLER_PROXY_INGRESS_NAME,
     _CONTROLLER_STATE_PVC_NAME,
     _CONTROLLER_STATE_PVC_SIZE,
     K8sControllerProvider,
@@ -211,9 +210,6 @@ def test_start_controller_creates_all_resources():
     pvc = k8s.get_json(K8sResource.PERSISTENT_VOLUME_CLAIMS, _CONTROLLER_STATE_PVC_NAME)
     assert pvc["spec"]["accessModes"] == ["ReadWriteOnce"]
     assert pvc["spec"]["resources"]["requests"]["storage"] == _CONTROLLER_STATE_PVC_SIZE
-
-    # No public_proxy_host configured → no Ingress (ClusterIP only).
-    assert k8s.get_json(K8sResource.INGRESSES, _CONTROLLER_PROXY_INGRESS_NAME) is None
 
     t.join(timeout=5)
     provider.shutdown()

@@ -559,7 +559,7 @@ def _print_next_steps(settings: NetworkSettings, *, host: str, cluster_issuer: s
         click.secho("       (Traefik's FQDN isn't allocated yet — read it in a minute, then CNAME to it:)", fg="yellow")
         click.echo(
             f"       kubectl get svc {settings.traefik_release} -n {settings.traefik_namespace} "
-            "-o=jsonpath='{.status.conditions[?(@.type==\"ExternalRecords\")].message}'"
+            f"-o=jsonpath='{_FQDN_JSONPATH}'"
         )
         click.echo(f"        {host}   CNAME   <that>{_COREWEAVE_APP}")
 

@@ -53,11 +53,12 @@ storage:
   # network-attached PVC.
   local_state_dir: /mnt/local/iris-controller-state
 
-# Request auth. No login arm — identity is by network location: direct
-# in-cluster peers (CKS pods/nodes are RFC1918; loopback covers kubectl
-# port-forward) are trusted as admin. External traffic reaches only /proxy via
-# Traefik, which appends X-Forwarded-For — a forwarded request never matches a
-# CIDR, so it must present a bearer token (per-endpoint access mode).
+# Request auth. Identity is by network location: in-cluster peers (RFC1918
+# pods/nodes, loopback for kubectl port-forward) are trusted as admin. A non-empty
+# trusted_cidrs makes the controller enforcing — an off-cluster request arrives
+# through Traefik with an appended X-Forwarded-For, never matches a CIDR, and must
+# present a bearer. This is the identity gate behind the IP-restricted federation
+# ingress (scripts/install_cw_network.py).
 auth:
   trusted_cidrs: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 127.0.0.0/8, "::1/128"]
 

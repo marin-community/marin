@@ -460,16 +460,9 @@ class CoreweaveControllerConfig(_Config):
     port: int = 0  # default: 10000
     service_name: str = ""  # K8s Service name for discovery
     scale_group: str = ""  # scale group whose NodePool runs the controller
-    # When set, start_controller creates an Ingress publishing ONLY /proxy
-    # off-cluster; the controller's per-endpoint auth is the sole gate, so keep
-    # auth.provider set. See docs/coreweave.md.
-    public_proxy_host: str = ""
-    ingress_class: str = "traefik"  # ingressClassName for the /proxy ingress
-    tls_secret: str = ""  # secret holding the TLS cert for public_proxy_host
-    # cert-manager ClusterIssuer. When set, the Ingress is annotated
-    # cert-manager.io/cluster-issuer=<name> so cert-manager auto-issues the cert
-    # into tls_secret. Empty = bring your own cert in tls_secret (or no TLS).
-    cluster_issuer: str = ""
+    # IngressClass the operator-managed federation ingress binds to; see
+    # scripts/install_cw_network.py and docs/coreweave.md.
+    ingress_class: str = "traefik"
 
 
 class ControllerVmConfig(_OneofConfig):
