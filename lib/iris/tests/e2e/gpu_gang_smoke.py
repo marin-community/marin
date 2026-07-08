@@ -178,7 +178,10 @@ class ControllerTarget:
         )
 
     def _kc(self, *args: str) -> list[str]:
-        return ["kubectl", "--kubeconfig", self.kubeconfig, *args]
+        cmd = ["kubectl", "--kubeconfig", self.kubeconfig]
+        if self.kube_context:
+            cmd.extend(["--context", self.kube_context])
+        return [*cmd, *args]
 
     def _ensure_namespace(self) -> None:
         # Teardown deletes the namespace asynchronously; if a prior run's namespace
