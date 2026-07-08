@@ -159,6 +159,14 @@ _MERGED_AUTOSCALER_ACTIONS = 100
 # Max unroutable job sample entries returned by ListBackends.
 _UNROUTABLE_SAMPLE_SIZE = 10
 
+# Shown when a local_admin (CIDR/loopback) caller tries to federate a job — a federated
+# job must carry an accountable authenticated user.
+_LOCAL_ADMIN_FEDERATION_DENIED = (
+    "A local_admin (CIDR/loopback) identity cannot submit a federated job. "
+    "Federating to a remote cluster requires an authenticated user — log in via "
+    "IAP or present a user token so the submission carries your identity."
+)
+
 
 def _accumulate_routing_decision(merged: vm_pb2.RoutingDecision, sub: vm_pb2.RoutingDecision) -> None:
     """Fold one backend's routing decision into the merged decision.
@@ -1640,12 +1648,7 @@ class ControllerServiceImpl:
                 )
             except PeerAdmissionDenied as denied:
                 if denied.submitting_user == LOCAL_ADMIN_SUBMITTER:
-                    raise ConnectError(
-                        Code.PERMISSION_DENIED,
-                        "A local_admin (CIDR/loopback) identity cannot submit a federated job. "
-                        "Federating to a remote cluster requires an authenticated user — log in via "
-                        "IAP or present a user token so the submission carries your identity.",
-                    ) from denied
+                    raise ConnectError(Code.PERMISSION_DENIED, _LOCAL_ADMIN_FEDERATION_DENIED) from denied
                 raise ConnectError(
                     Code.PERMISSION_DENIED,
                     f"Submitter {denied.submitting_user!r} is not permitted to run on cluster {denied.peer_id!r}.",
@@ -1653,17 +1656,10 @@ class ControllerServiceImpl:
 
         if not routing.is_local:
             # With auth on, a local_admin (CIDR/loopback) submission is never federated:
-            # a federated job must carry an accountable authenticated user, and the peer
-            # would reject it anyway. Fail here with a clear message rather than after a
-            # round-trip. In null-auth (dev/loopback) there is no real identity to carry,
-            # so local federation is left to work.
+            # the peer would reject it anyway, so fail here rather than after a round-trip.
+            # Null-auth (dev/loopback) has no real identity to carry, so it federates.
             if self._auth.provider and submitting_user == LOCAL_ADMIN_SUBMITTER:
-                raise ConnectError(
-                    Code.PERMISSION_DENIED,
-                    "A local_admin (CIDR/loopback) identity cannot submit a federated job. "
-                    "Federating to a remote cluster requires an authenticated user — log in via "
-                    "IAP or present a user token so the submission carries your identity.",
-                )
+                raise ConnectError(Code.PERMISSION_DENIED, _LOCAL_ADMIN_FEDERATION_DENIED)
             return self._hand_off_job(job_id, request, routing.peer_id, submitting_user)
 
         # Local (including a received handoff): only now is infeasibility fatal —

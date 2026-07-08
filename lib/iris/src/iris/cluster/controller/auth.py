@@ -113,15 +113,13 @@ FINELOG_RELAY_ROLE = "finelog-relay"
 DEFAULT_ENDPOINT_TOKEN_TTL_SECONDS = 3600  # 1 hour
 MAX_ENDPOINT_TOKEN_TTL_SECONDS = 86400  # 24 hours
 
-# Federation plane: the token a parent controller presents to hand a whole job to
-# this cluster (and to drive its sync/cancel/exec/profile). Verified against the
-# PARENT's published key by a dedicated verifier, and deliberately kept OUT of
-# CONTROL_PLANE_AUDIENCES — a federation bearer must never become a full RPC
-# identity. Method-scoping is enforced by FEDERATION_PEER_ROLE (authorize_method
-# restricts it to the federation RPC subset), never by the general audience set.
+# Federation plane: the token a parent controller presents on RPCs to this cluster,
+# verified against the parent's published key by a dedicated verifier. Kept OUT of
+# CONTROL_PLANE_AUDIENCES so a federation bearer can never become a full RPC identity;
+# authorize_method restricts FEDERATION_PEER_ROLE to the federation RPC subset.
 FEDERATION_AUDIENCE = "federation"
-# Short, per-handoff, unrevocable: replay is bounded by TTL + the IP allowlist + the
-# issuer/aud/requester binding, so keep the window small.
+# Short-lived and unrevocable: a fresh token is minted per outgoing RPC, so replay is
+# bounded by the TTL plus the IP allowlist and the issuer/aud/requester binding.
 FEDERATION_TOKEN_TTL_SECONDS = 300  # 5 minutes
 
 
@@ -228,16 +226,12 @@ class JwtTokenManager:
         key_id: str,
         ttl_seconds: int = FEDERATION_TOKEN_TTL_SECONDS,
     ) -> str:
-        """Mint a federation token this controller presents to a peer it hands jobs to.
+        """Mint the federation bearer this controller presents on outgoing peer RPCs.
 
         Carries ``aud="federation"``, ``role="federation-peer"``, and this cluster's id
-        as ``sub`` (the requester). The signer's ``iss`` is this cluster, verified by
-        the peer against this controller's published public key — so the token proves
-        *which trusted peer* is calling. The per-job ``submitting_user`` rides in the
-        handoff proto (the peer trusts a verified peer's asserted submitter, gated by
-        its allowlist), so one connection-level token serves every handoff. The
-        ``aud="federation"`` is rejected by any control-plane verifier, so the token
-        can never be replayed at the peer's general RPC surface.
+        as ``sub``/``iss`` (the requester), which the peer verifies against this
+        controller's published key. The ``aud`` sits outside every control-plane
+        verifier's audience set, so the token cannot authenticate a general RPC.
         """
         return self._signer.mint(
             {"sub": requester_id, "role": FEDERATION_PEER_ROLE, "jti": key_id},
@@ -284,13 +278,12 @@ class JwtTokenManager:
 
 
 class FederationTokenVerifier:
-    """Verifies federation-plane tokens against the configured peer public keys.
+    """Verifies inbound federation tokens against the configured peer public keys.
 
-    A verifier separate from the control plane: its issuers are the trusted parent
-    clusters and its sole audience is ``"federation"``, so a federation token is
-    bound to a peer's published EdDSA key AND the federation plane. Kept off the
-    control-plane audience set so the same token can never authenticate a general
-    RPC; :func:`~iris.rpc.auth.authorize_method` method-scopes the identity it yields.
+    Issuers are the trusted peer clusters and the sole audience is ``"federation"``.
+    Held separate from the control-plane verifier so a federation token cannot
+    authenticate a general RPC; the ``federation-peer`` identity it yields is
+    method-scoped by :func:`~iris.rpc.auth.authorize_method`.
     """
 
     def __init__(self, federation_peers: Mapping[str, str]):
@@ -300,13 +293,10 @@ class FederationTokenVerifier:
         )
 
     def verify(self, token: str) -> VerifiedIdentity:
-        """The :class:`TokenVerifier` surface: a method-scoped federation-peer identity.
+        """Return a method-scoped federation-peer identity for a valid token.
 
-        ``user_id`` is the cryptographically verified requester (the peer cluster, from
-        the token's ``iss``), so a peer cannot assert a requester id other than its own.
-        The ``federation-peer`` role has no RPC authority beyond the federation subset
-        (``authorize_method``); the handler binds ``request.federation.requester_id``
-        against this identity and gates the proto's ``submitting_user`` on the allowlist.
+        ``user_id`` is the verified requester (the peer cluster, from the token's
+        ``iss``), so a peer cannot assert a requester id other than its own.
         """
         claims = self._verifier.verify(token)
         return VerifiedIdentity(user_id=claims.iss, role=FEDERATION_PEER_ROLE)
@@ -317,10 +307,7 @@ class FederationTokenProvider:
 
     A ``rigging.auth.TokenProvider``: each call mints a fresh short-lived
     ``aud="federation"`` token asserting this cluster as the requester, which the peer
-    verifies against this cluster's published key. The per-job ``submitting_user`` is
-    not in the token — it rides in the handoff proto (a verified peer's asserted
-    submitter, gated by the peer's allowlist) — so one provider serves every handoff,
-    delta-sync, and routed cancel.
+    verifies against this cluster's published key.
     """
 
     def __init__(self, requester_id: str, jwt_manager: JwtTokenManager):
@@ -335,10 +322,9 @@ class _ControlPlaneOrFederationVerifier:
     """Routes a bearer to the control-plane verifier, falling back to federation.
 
     A control-plane token (``aud`` in ``{iris, iris-proxy}``) verifies via the JWT
-    manager; a federation token (``aud="federation"``) is rejected there — the
-    cross-plane replay guard — and verified by the federation verifier instead,
-    yielding a method-scoped federation-peer identity. Each plane does a full crypto
-    check, and no token satisfies both audiences, so the fallback never crosses planes.
+    manager; a federation token (``aud="federation"``) is rejected there and verified
+    by the federation verifier instead, yielding a method-scoped federation-peer
+    identity. No token satisfies both audiences, so the fallback never crosses planes.
     """
 
     def __init__(self, control_plane: JwtTokenManager, federation: FederationTokenVerifier):

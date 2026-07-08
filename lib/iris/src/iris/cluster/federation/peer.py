@@ -4,13 +4,11 @@
 """One connection per federation peer, plus its capability-heartbeat state.
 
 :class:`FederationPeer` holds one connection per peer (keyed by peer id) and caches
-the backends that peer last advertised — its static topology and current state. The
-connection speaks the generated controller stub directly (not the end-user
-``RemoteClusterClient``): federation only ever drives a peer with the raw RPCs —
-``LaunchJob`` (handoff), ``TerminateJob`` (routed cancel), ``FederationSync``, and
-``ListBackends`` (heartbeat). It is authenticated with the credentials this
-controller presents to the peer, resolved from the peer's cluster manifest via the
-shared ``credentials_for`` path — no second credential system.
+the backends that peer last advertised. The connection speaks the generated controller
+stub directly (not the end-user ``RemoteClusterClient``): federation drives a peer only
+with the raw RPCs — ``LaunchJob`` (handoff), ``TerminateJob`` (routed cancel),
+``FederationSync``, and ``ListBackends`` (heartbeat). It presents the credentials
+resolved from the peer's cluster manifest via ``credentials_for``.
 """
 
 import logging
@@ -49,16 +47,12 @@ logger = logging.getLogger(__name__)
 
 
 class PeerConnection(Protocol):
-    """The peer-controller surface federation drives: capability heartbeat plus
-    the handoff, delta-sync, routed-cancel, and proxied on-demand RPCs.
+    """The peer-controller surface federation drives.
 
-    Handoff reuses the ordinary ``LaunchJob`` (the request carries the job name and
-    federation attribution); a routed cancel reuses ``TerminateJob`` (targeting the
-    job id, cluster-invariant — the same id the parent submitted); ``federation_sync``
-    is federation's one
-    purpose-built endpoint; ``profile_task``/``exec_in_container`` proxy an
-    on-demand RPC against a handed-off task through the peer controller, which
-    does its own task->worker resolution.
+    ``list_backends`` is the capability heartbeat; ``launch_job`` delivers a handoff;
+    ``terminate_job`` routes a cancel; ``federation_sync`` runs one delta-sync round;
+    ``profile_task``/``exec_in_container`` proxy an on-demand RPC against a handed-off
+    task, which the peer resolves to its own worker.
     """
 
     def list_backends(self) -> list[controller_pb2.Controller.BackendSummary]: ...
