@@ -4,6 +4,8 @@
 import contextlib
 import functools
 import json
+import logging
+import time
 import warnings
 from dataclasses import fields
 from typing import Any, Callable, Optional, TypeVar
@@ -22,9 +24,12 @@ from jax import numpy as jnp
 from jax._src.mesh import get_concrete_mesh
 from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec
 from jaxtyping import PRNGKeyArray, PyTree
+from rigging.timing import Deadline, Duration, ExponentialBackoff
 
 from levanter.utils.mesh import create_mesh_from_axis_specs
 from levanter.utils.tree_utils import key_path_to_str, tree_flatten_one_level_with_keys
+
+logger = logging.getLogger(__name__)
 
 X = TypeVar("X")
 T = TypeVar("T", bound=PyTree)
@@ -181,6 +186,92 @@ def barrier_sync(timeout: float = 200):
 
     _sync_counter += 1
     client.wait_at_barrier(f"levanter_barrier_sync_{_sync_counter}", timeout_in_ms=int(timeout * 1000.0))
+
+
+_DATA_READY_PREFIX = "levanter/data_ready"
+_last_data_ready_step: int | None = None
+
+
+def data_loading_barrier(step: int, *, timeout: float, warn_interval: float = 30.0) -> None:
+    """Wait until every process has its input batch for ``step`` in hand before the train step.
+
+    A Levanter train step is a cross-host collective: every process must feed its data
+    shard and enter the step together. When one process's loader stalls (e.g. a slow GCS
+    read), the processes that already have data enter the on-device collective and block
+    on the straggler. That wait lives on the device/collective path, where a timeout is
+    fatal and takes down the whole job with an opaque coordination-service shutdown.
+
+    This barrier moves the wait onto JAX's coordination service instead. Each process
+    publishes a readiness key once its batch is loaded, then polls until all processes
+    have published (or ``timeout`` elapses). While waiting, a process is idle host-side
+    and keeps heartbeating, so a slow loader merely delays its peers rather than tripping
+    a fatal collective timeout. Lagging processes are named in the logs, and if the
+    barrier never clears the raised ``TimeoutError`` names the processes that never
+    signalled — a real hang still fails, but legibly.
+
+    Args:
+        step: The training step whose batch must be ready. Used to namespace the keys;
+            must advance monotonically across calls.
+        timeout: Maximum seconds to wait for all processes before raising.
+        warn_interval: How often (seconds) process 0 logs the still-missing processes.
+    """
+    global _last_data_ready_step
+
+    num_processes = jax.process_count()
+    if num_processes == 1:
+        return
+
+    client = jax_distributed.global_state.client
+    if client is None:
+        raise RuntimeError("data_loading_barrier requires jax distributed client to be initialized")
+
+    process_id = jax.process_index()
+    is_leader = process_id == 0
+
+    # A train step is a global collective, so no process can reach the barrier for `step`
+    # until every process has cleared the previous one. That makes it safe for the leader
+    # to delete the previous step's keys here, bounding growth of the coordination store.
+    if is_leader and _last_data_ready_step is not None:
+        client.key_value_delete(f"{_DATA_READY_PREFIX}/{_last_data_ready_step}/")
+    _last_data_ready_step = step
+
+    prefix = f"{_DATA_READY_PREFIX}/{step}"
+    client.key_value_set(f"{prefix}/{process_id}", "1")
+
+    deadline = Deadline.from_now(Duration.from_seconds(timeout))
+    backoff = ExponentialBackoff(initial=0.05, maximum=min(warn_interval, 5.0))
+    ready: set[int] = set()
+    next_warn = warn_interval
+    elapsed = 0.0
+
+    while True:
+        ready |= {int(key.rsplit("/", 1)[1]) for key, _ in client.key_value_dir_get(f"{prefix}/")}
+        if len(ready) >= num_processes:
+            return
+
+        if deadline.expired():
+            missing = sorted(set(range(num_processes)) - ready)
+            raise TimeoutError(
+                f"data_loading_barrier timed out after {timeout:.0f}s at step {step}: "
+                f"{len(missing)}/{num_processes} processes never signalled data-ready. "
+                f"Missing (first 32): {missing[:32]}"
+            )
+
+        interval = backoff.next_interval()
+        time.sleep(interval)
+        elapsed += interval
+
+        if is_leader and elapsed >= next_warn:
+            missing = sorted(set(range(num_processes)) - ready)
+            logger.warning(
+                "data_loading_barrier: %.0fs waiting on %d/%d processes to load step %d. Missing (first 32): %s",
+                elapsed,
+                len(missing),
+                num_processes,
+                step,
+                missing[:32],
+            )
+            next_warn += warn_interval
 
 
 # from https://stackoverflow.com/questions/2166818/how-to-check-if-an-object-is-an-instance-of-a-namedtuple

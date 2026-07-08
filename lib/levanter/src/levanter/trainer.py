@@ -69,7 +69,7 @@ from levanter.tracker import TrackerConfig, capture_time
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer_state import InsideJitInfo, TrainerState, saveable_training_mask
 from levanter.utils import cloud_utils
-from levanter.utils.jax_utils import zeros_like_tree
+from levanter.utils.jax_utils import data_loading_barrier, zeros_like_tree
 from levanter.utils.mesh import MeshConfig, create_mesh_from_axis_specs
 from levanter.utils.tree_utils import inference_mode
 from levanter.utils.types import ComputeLossFunction, FilterSpec
@@ -535,6 +535,9 @@ class Trainer:
                     loading_time(),
                 )
 
+            if self.config.data_loading_barrier_timeout is not None:
+                data_loading_barrier(int(state.step), timeout=self.config.data_loading_barrier_timeout)
+
             info = self.train_step(state, example)
             state = info.state
 
@@ -846,6 +849,18 @@ class TrainerConfig:
     num_train_steps: int = 400_000  # number of training steps
     steps_per_eval: int = 1_000  # how often to evaluate
     max_eval_batches: Optional[int] = None  # max number of batches to evaluate on. None means all batches
+
+    data_loading_barrier_timeout: Optional[float] = None
+    """If set, all processes rendezvous on the coordination service before each train step to
+    confirm their input batch is loaded, waiting up to this many seconds for stragglers.
+
+    This protects large multi-host runs from a slow data loader (e.g. a transient GCS slowdown)
+    taking down the whole job: without it, processes that already have their batch enter the
+    train-step collective and block on the straggler on the device path, where a timeout is
+    fatal and shuts down the job opaquely. With it, the wait happens host-side where a slow
+    loader merely delays its peers. None (default) disables the barrier. Recommended for large
+    multislice runs; leave off for small fast-stepping runs where a per-step coordination
+    round-trip is a meaningful fraction of step time."""
 
     checkpointer: CheckpointerConfig = field(default_factory=CheckpointerConfig)
     load_checkpoint: Optional[bool] = None
