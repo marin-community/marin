@@ -196,6 +196,7 @@ def data_loading_barrier(
     step: int,
     *,
     timeout: float,
+    previous_step: int | None = None,
     warn_interval: float = 30.0,
     sleep: Callable[[float], None] = time.sleep,
 ) -> None:
@@ -208,11 +209,16 @@ def data_loading_barrier(
     still missing after ``warn_interval`` seconds are named in a log line by process 0; if
     any are still missing after ``timeout`` seconds, raises ``TimeoutError`` naming them.
 
+    Callers must invoke this on the same ``step`` on every process, or a process that skips
+    it will strand the others until they time out.
+
     Args:
-        step: The training step whose batch must be ready. Must increase by one on each
-            call: it namespaces the coordination keys, and entering ``step`` cleans up the
-            keys from ``step - 1``.
+        step: The training step whose batch must be ready. Namespaces the coordination keys.
         timeout: Maximum seconds to wait for all processes before raising.
+        previous_step: The step passed on the prior call, whose keys the leader deletes to
+            bound coordination-store growth. None on the first call. Safe because a train
+            step is a global collective, so every process cleared ``previous_step`` before
+            any process reaches this one.
         warn_interval: How often (seconds) process 0 logs the still-missing processes.
         sleep: Injection seam for the inter-poll delay; the clock advances only through it,
             so tests pass a no-op to run the loop without a real wait.
@@ -228,11 +234,8 @@ def data_loading_barrier(
     process_id = jax.process_index()
     is_leader = process_id == 0
 
-    # A train step is a global collective, so no process can reach the barrier for `step`
-    # until every process cleared `step - 1`. That makes it safe for the leader to delete
-    # the previous step's keys here, bounding growth of the coordination store.
-    if is_leader and step > 0:
-        client.key_value_delete(f"{_DATA_READY_PREFIX}/{step - 1}/")
+    if is_leader and previous_step is not None:
+        client.key_value_delete(f"{_DATA_READY_PREFIX}/{previous_step}/")
 
     prefix = f"{_DATA_READY_PREFIX}/{step}"
     client.key_value_set(f"{prefix}/{process_id}", "1")

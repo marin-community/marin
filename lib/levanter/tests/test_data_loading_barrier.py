@@ -14,6 +14,7 @@ import jax
 import jax._src.distributed as jax_distributed
 import pytest
 
+from levanter.trainer import _barrier_active
 from levanter.utils.jax_utils import data_loading_barrier
 
 
@@ -122,8 +123,25 @@ def test_leader_cleans_up_previous_step(coordination, monkeypatch):
     assert "levanter/data_ready/10/0" in coordination.store
 
     coordination.store["levanter/data_ready/11/1"] = "1"
-    data_loading_barrier(11, timeout=5.0)
+    data_loading_barrier(11, timeout=5.0, previous_step=10)
 
-    # entering step 11 deletes step 10's directory
+    # entering step 11 with previous_step=10 deletes step 10's directory
     assert not any(k.startswith("levanter/data_ready/10/") for k in coordination.store)
     assert "levanter/data_ready/11/0" in coordination.store
+
+
+@pytest.mark.parametrize(
+    "step, expected",
+    [
+        (100, True),  # run start: within the first active_steps
+        (104, True),  # last step of the cold-start window
+        (105, False),  # cold-start window closed, no recent save
+        (140, False),  # steady state, far from any save
+        (201, True),  # first step after a save at 200
+        (205, True),  # last step of the post-save window
+        (206, False),  # post-save window closed
+    ],
+)
+def test_barrier_active_windows(step, expected):
+    # run resumed at step 100, most recent checkpoint saved at step 200, active_steps=5
+    assert _barrier_active(step, run_start_step=100, last_save_step=200, active_steps=5) is expected
