@@ -242,9 +242,8 @@ def initialize_jax(
     initialization is skipped — JAX works correctly without distributed
     init when there is only one process.
 
-    Iris TPU jobs also use the Iris endpoint registry. Relying on TPU runtime
-    autodiscovery inside Iris can leave multi-slice tasks without matching
-    process rank and world-size arguments.
+    Iris TPU jobs use the same endpoint-registry coordinator path as other Iris
+    multi-task jobs.
 
     Args:
         port: Coordinator port. Overridden by IRIS_PORT_jax if allocated.
