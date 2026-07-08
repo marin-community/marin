@@ -31,9 +31,13 @@ import logging
 import os
 import random
 from dataclasses import dataclass
+from typing import NamedTuple
 
 import pandas as pd
 from rigging.filesystem import StoragePath, prefix_join
+
+from experiments.context_efficiency.accounting import P_READ, P_WRITE
+from experiments.context_efficiency.transcripts import CHARS_PER_TOK, iter_records
 
 logger = logging.getLogger(__name__)
 
@@ -42,8 +46,6 @@ GATHER_TOOLS = {
     "NotebookRead", "ToolSearch", "TaskGet", "TaskList", "TaskOutput", "LS",
 }  # fmt: skip
 MUTATE_TOOLS = {"Edit", "Write", "NotebookEdit", "MultiEdit"}
-P_WRITE, P_READ = 1.25, 0.10
-CHARS_PER_TOK = 4.0
 MAX_STEPS = 12
 REQ_CHARS, INTENT_CHARS, INPUT_CHARS, PREVIEW_CHARS = 700, 180, 200, 260
 
@@ -76,20 +78,11 @@ def input_summary(inp):
 
 def build_episodes(path, sid):
     """Yield episodes (dicts, without sampling metadata) for one session file."""
-    rows = []
-    with open(path, encoding="utf-8") as fh:
-        for line in fh:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                d = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if d.get("isSidechain"):  # sub-agent transcript, not the main loop
-                continue
-            if d.get("type") in ("user", "assistant"):
-                rows.append(d)
+    rows = [
+        d
+        for d in iter_records(path)
+        if d.get("type") in ("user", "assistant") and not d.get("isSidechain")  # skip sub-agent transcripts
+    ]
 
     user_request = ""
     pending_intent = ""
@@ -170,7 +163,15 @@ def build_episodes(path, sid):
     return episodes
 
 
-def _pps_sample(all_eps, n, seed):
+class PpsSample(NamedTuple):
+    sampled: list[dict]
+    total_cost: float
+    threshold: float  # cost above which an episode is a certainty unit
+    interval_cost: float  # cost each remainder pick represents
+    n_certainty: int
+
+
+def _pps_sample(all_eps, n, seed) -> PpsSample:
     """PPS-systematic sample with the heavy tail taken as certainty units.
 
     A high-cost episode above the ``total/n`` threshold is always included and
@@ -199,7 +200,7 @@ def _pps_sample(all_eps, n, seed):
             e2["weight_cost"] = step  # each remainder pick represents one interval of cost
             sampled.append(e2)
             ti += 1
-    return sampled, total_cost, threshold, step, len(certainty)
+    return PpsSample(sampled, total_cost, threshold, step, len(certainty))
 
 
 @dataclass(frozen=True)
@@ -249,10 +250,14 @@ def run_sampling(cfg: EpisodesConfig) -> None:
         raise ValueError(f"no episodes built from {cfg.projects_dir}/{cfg.session_glob} — is the amplifier table empty?")
     total_cost = sum(e["cost"] for e in all_eps)
     n_sess = len({e["session_id"] for e in all_eps})
-    logger.info("%d episodes / %d sessions, cost %.0fM, %d files unreadable", len(all_eps), n_sess, total_cost / 1e6, skipped)
+    logger.info(
+        "%d episodes / %d sessions, cost %.0fM, %d files unreadable", len(all_eps), n_sess, total_cost / 1e6, skipped
+    )
 
-    sampled, total_cost, threshold, step, n_certainty = _pps_sample(all_eps, cfg.n, cfg.seed)
-    logger.info("sampled %d (%d certainty + %d PPS)", len(sampled), n_certainty, len(sampled) - n_certainty)
+    pps = _pps_sample(all_eps, cfg.n, cfg.seed)
+    logger.info(
+        "sampled %d (%d certainty + %d PPS)", len(pps.sampled), pps.n_certainty, len(pps.sampled) - pps.n_certainty
+    )
 
     # group sampled episodes into labeling shards and write each batch once. Clear any
     # prior shards so a re-run with different parameters cannot leave stale batches behind.
@@ -264,7 +269,7 @@ def run_sampling(cfg: EpisodesConfig) -> None:
     bsp.mkdirs()
     batches: dict[int, list[dict]] = {}
     meta = []
-    for j, e in enumerate(sampled):
+    for j, e in enumerate(pps.sampled):
         bi = j // cfg.batch
         payload = {
             "episode_id": e["episode_id"],
@@ -290,7 +295,7 @@ def run_sampling(cfg: EpisodesConfig) -> None:
                 "amplifier": e["amplifier"],
                 "cost": e["cost"],
                 "weight_cost": e["weight_cost"],
-                "is_certainty": e["cost"] >= threshold,
+                "is_certainty": e["cost"] >= pps.threshold,
             }
         )
     for bi, payloads in batches.items():
@@ -303,9 +308,9 @@ def run_sampling(cfg: EpisodesConfig) -> None:
             {
                 "n_episodes_population": len(all_eps),
                 "total_cost_population": total_cost,
-                "n_sampled": len(sampled),
-                "n_certainty": n_certainty,
-                "remainder_interval_cost": step,
+                "n_sampled": len(pps.sampled),
+                "n_certainty": pps.n_certainty,
+                "remainder_interval_cost": pps.interval_cost,
                 "n_batches": len(batches),
                 "batch_size": cfg.batch,
             },

@@ -120,7 +120,8 @@ def bash_shape(cmd: str):
     return _shape_of_segment(segs[-1]) if segs else (None, None)
 
 
-def sha(text: str) -> str:
+def content_hash(text: str) -> str:
+    """Short content fingerprint for a tool result (MD5, non-cryptographic)."""
     return hashlib.md5((text or "").encode("utf-8", "replace")).hexdigest()[:12]
 
 
@@ -215,7 +216,7 @@ def parse_session(path, block_rows, turn_rows):
                     "output_tokens": u.get("output_tokens", 0) or 0,
                     "eph_5m": cc.get("ephemeral_5m_input_tokens", 0) or 0,
                     "eph_1h": cc.get("ephemeral_1h_input_tokens", 0) or 0,
-                    "gap_sec": gap,
+                    "gap": gap,
                 }
             )
             for b in m.get("content", []):
@@ -230,19 +231,33 @@ def parse_session(path, block_rows, turn_rows):
                     txt = json.dumps(inp)
                     block_rows.append(
                         {
-                            **common, "turn_idx": turn_idx, "role": "assistant", "block_type": "tool_use",
-                            "tool_name": name, "target": target, "content_chars": len(txt),
-                            "est_tokens": len(txt) / CHARS_PER_TOK, "content_sha": None, "first_paid_turn": turn_idx,
-                        }  # fmt: skip
+                            **common,
+                            "turn_idx": turn_idx,
+                            "role": "assistant",
+                            "block_type": "tool_use",
+                            "tool_name": name,
+                            "target": target,
+                            "content_chars": len(txt),
+                            "est_tokens": len(txt) / CHARS_PER_TOK,
+                            "content_hash": None,
+                            "first_paid_turn": turn_idx,
+                        }
                     )
                 elif bt in ("text", "thinking"):
                     txt = b.get(bt, "") or ""
                     block_rows.append(
                         {
-                            **common, "turn_idx": turn_idx, "role": "assistant", "block_type": bt,
-                            "tool_name": None, "target": None, "content_chars": len(txt),
-                            "est_tokens": len(txt) / CHARS_PER_TOK, "content_sha": None, "first_paid_turn": turn_idx,
-                        }  # fmt: skip
+                            **common,
+                            "turn_idx": turn_idx,
+                            "role": "assistant",
+                            "block_type": bt,
+                            "tool_name": None,
+                            "target": None,
+                            "content_chars": len(txt),
+                            "est_tokens": len(txt) / CHARS_PER_TOK,
+                            "content_hash": None,
+                            "first_paid_turn": turn_idx,
+                        }
                     )
         elif t == "user":
             m = d.get("message", {})
@@ -257,18 +272,32 @@ def parse_session(path, block_rows, turn_rows):
                     txt = result_text(b)
                     block_rows.append(
                         {
-                            **common, "turn_idx": turn_idx, "role": "tool_result", "block_type": "tool_result",
-                            "tool_name": name, "target": target, "content_chars": len(txt),
-                            "est_tokens": len(txt) / CHARS_PER_TOK, "content_sha": sha(txt), "first_paid_turn": first_paid,
-                        }  # fmt: skip
+                            **common,
+                            "turn_idx": turn_idx,
+                            "role": "tool_result",
+                            "block_type": "tool_result",
+                            "tool_name": name,
+                            "target": target,
+                            "content_chars": len(txt),
+                            "est_tokens": len(txt) / CHARS_PER_TOK,
+                            "content_hash": content_hash(txt),
+                            "first_paid_turn": first_paid,
+                        }
                     )
             elif isinstance(c, str):
                 block_rows.append(
                     {
-                        **common, "turn_idx": turn_idx, "role": "user", "block_type": "user_text",
-                        "tool_name": None, "target": None, "content_chars": len(c),
-                        "est_tokens": len(c) / CHARS_PER_TOK, "content_sha": None, "first_paid_turn": turn_idx + 1,
-                    }  # fmt: skip
+                        **common,
+                        "turn_idx": turn_idx,
+                        "role": "user",
+                        "block_type": "user_text",
+                        "tool_name": None,
+                        "target": None,
+                        "content_chars": len(c),
+                        "est_tokens": len(c) / CHARS_PER_TOK,
+                        "content_hash": None,
+                        "first_paid_turn": turn_idx + 1,
+                    }
                 )
 
 

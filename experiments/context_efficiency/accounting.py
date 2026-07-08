@@ -228,7 +228,7 @@ def eviction(turns, budget) -> dict:
     """Cache re-creation on turns following a gap longer than the TTL."""
     t = turns.sort_values(["session_id", "turn_idx"])
     t = t[t.turn_idx > 0]
-    g = t.gap_sec.fillna(0)
+    g = t.gap.fillna(0)
     evicted_create = t[g > TTL].cache_creation.sum()
     total_create = turns.cache_creation.sum()
     return {
