@@ -136,7 +136,7 @@ this by looking at files directly.) Hot re-read paths:
 **Code search (the RAG lever).** After classifying Bash/Grep/Glob by
 answer-stability — an allowlist of stable-answer shapes (`rg`, `grep`, `find`,
 `cat`, `git log`, `git show`, `gh … view`), excluding volatile self-inspection —
-the exact-repeat stable-output discovery pool across sessions is **60K
+the exact-repeat stable-output discovery pool across sessions is **97K
 input-equiv, essentially zero**. Agents rarely re-run the identical search with
 the same output in a different session. The large discovery costs are volatile:
 `git diff` alone is **32M input-equiv** (7,924 calls, 1,736 sessions), inspecting
@@ -180,7 +180,7 @@ them ([`uplift.py`](uplift.py)):
 | Intervention | Conservative | Likely | Optimistic | Primary value |
 |---|---:|---:|---:|---|
 | Shared wiki / memory | 0.18% | 0.28% | 0.46% | correctness/onboarding |
-| RAG semantic search | 0.00% | 0.001% | 0.001% | (not for tokens) |
+| RAG semantic search | 0.00% | 0.001% | 0.002% | (not for tokens) |
 | Better docs / repo-map | 0.13% | 0.22% | 0.39% | same pool as wiki summary |
 | Combined (non-double-counted) | 0.18% | 0.28% | 0.46% | — |
 

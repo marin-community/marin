@@ -43,6 +43,7 @@ DOC_RE = ("AGENTS.md", "OPS.md", "CLAUDE.md", "README", "TESTING.md", ".md")
 ADDRESSABLE_SHAPES = {
     "rg",
     "grep",
+    "glob",
     "find",
     "cat",
     "head",

@@ -222,7 +222,11 @@ def parse_session(path, block_rows, turn_rows):
                         shp, arg = bash_shape(inp.get("command"))
                         target = f"{shp}\t{arg}" if shp else None
                     elif name in ("Grep", "Glob"):
-                        target = inp.get("pattern") or inp.get("glob")
+                        # Prefix a verb so `target.split("\t")[0]` yields the tool,
+                        # not the pattern, matching Bash's `verb\targ` convention.
+                        pat = inp.get("pattern") or inp.get("glob") or inp.get("path")
+                        verb = "grep" if name == "Grep" else "glob"
+                        target = f"{verb}\t{pat}" if pat else None
                     else:
                         target = None
                     id_to_tool[b.get("id")] = (name, target)

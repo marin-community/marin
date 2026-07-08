@@ -372,3 +372,11 @@ unioned with wiki-summary; prelude carry **14.8%**; top-100 sessions hold 59% of
 tool-result cost. Report written in marin report style (`REPORT.md`), published
 as weaver artifact `report`. Committed, lint-review clean, **PR #7035** open.
 Closing weaver #405.
+
+**Post-PR fix (codex bot review).** Native `Grep`/`Glob` tool calls stored only
+the pattern as `target`, so `exploration_redundancy` read the verb from the
+pattern and dropped them from the addressable pool. Fixed to prefix a `grep`/
+`glob` verb (matching Bash's `verb\targ`). The stable-addressable pool went 12→37
+targets, 60K→97K input-equiv (native `glob lib/**/*.py` repeats now counted). RAG
+net stays ~0.001–0.002% and the headline is unchanged — the RAG≈0 conclusion is
+robust to the bug. Report numbers updated.
