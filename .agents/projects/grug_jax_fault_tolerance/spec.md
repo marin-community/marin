@@ -187,11 +187,21 @@ except in test-only fallback utilities.
 
 ```python
 class ArrowFlightTransferPublisher(TransferPublisher):
-    def __init__(self, config: TransferConfig, *, coordinator_handle=None) -> None: ...
+    def __init__(
+        self,
+        config: TransferConfig,
+        *,
+        coordinator_handle: TransferCoordinator | None = None,
+    ) -> None: ...
 
 
 class ArrowFlightTransferSubscriber(TransferSubscriber):
-    def __init__(self, config: TransferConfig, *, coordinator_handle=None) -> None: ...
+    def __init__(
+        self,
+        config: TransferConfig,
+        *,
+        coordinator_handle: TransferCoordinator | None = None,
+    ) -> None: ...
 ```
 
 The shared Arrow Flight backend transfers exact flattened pytree leaves with dtype and shape metadata. It must not downcast by default. RL-specific bfloat16 inference conversion remains outside this backend.
@@ -204,11 +214,21 @@ class JaxTransferUnavailableError(RuntimeError):
 
 
 class JaxTransferPublisher(TransferPublisher):
-    def __init__(self, config: TransferConfig, *, coordinator_handle=None) -> None: ...
+    def __init__(
+        self,
+        config: TransferConfig,
+        *,
+        coordinator_handle: TransferCoordinator | None = None,
+    ) -> None: ...
 
 
 class JaxTransferSubscriber(TransferSubscriber):
-    def __init__(self, config: TransferConfig, *, coordinator_handle=None) -> None: ...
+    def __init__(
+        self,
+        config: TransferConfig,
+        *,
+        coordinator_handle: TransferCoordinator | None = None,
+    ) -> None: ...
 ```
 
 The JAX backend starts a `jax.experimental.transfer` server and publishes server addresses through `TransferCoordinator`. It raises `JaxTransferUnavailableError` at construction time if the runtime cannot import and start the JAX transfer server. It uses the subscriber template to build the shape/dtype/sharding tree passed to `TransferConnection.pull`.
@@ -228,7 +248,7 @@ def create_transfer_publisher(
     *,
     mesh: object | None = None,
     axis_mapping: object | None = None,
-    coordinator_handle=None,
+    coordinator_handle: TransferCoordinator | None = None,
 ) -> TransferPublisher:
     """Construct a publisher for `config.mode`."""
 
@@ -238,14 +258,20 @@ def create_transfer_subscriber(
     *,
     mesh: object | None = None,
     axis_mapping: object | None = None,
-    coordinator_handle=None,
+    coordinator_handle: TransferCoordinator | None = None,
 ) -> TransferSubscriber:
     """Construct a subscriber for `config.mode`."""
 ```
 
-## RL Compatibility Surface
+## RL Weight Transfer Surface
 
-Existing imports from `marin.rl.weight_transfer` remain as adapters while RL call sites are updated. The adapter must preserve existing public imports, defaults, method names, and metric field names until call sites are removed. `WeightTransferConfig.mode` continues to default to `WeightTransferMode.ARROW_FLIGHT` and maps explicitly to `TransferMode.ARROW_FLIGHT`. RL-only fields such as `sync_interval_steps`, `max_weight_transfer_wait_time`, and `convert_to_bfloat16` remain in RL config.
+RL call sites update to use `marin.transfer` directly for shared publishing,
+fetching, manifests, and metrics. RL-only scheduling and inference behavior stays
+in RL code: `sync_interval_steps`, `max_weight_transfer_wait_time`, and any
+bfloat16 inference conversion happen before calling the shared transfer backend.
+The shared package must not preserve legacy `marin.rl.weight_transfer` imports as
+a compatibility surface; implementation PRs should update or remove those call
+sites in the same change.
 
 ## Levanter / Iris JAX Initialization
 
@@ -365,7 +391,7 @@ Contract:
 | `lib/marin/src/marin/transfer/arrow_flight.py` | New exact-pytree Arrow Flight backend |
 | `lib/marin/src/marin/transfer/jax_transfer.py` | New JAX transfer server backend |
 | `lib/marin/src/marin/transfer/__init__.py` | Backend factory exports |
-| `lib/marin/src/marin/rl/weight_transfer/` | Compatibility adapters over `marin.transfer` |
+| `lib/marin/src/marin/rl/weight_transfer/` | RL-only scheduling and inference conversion, or deleted after call sites move |
 | `lib/levanter/src/levanter/distributed.py` | Recoverability and heartbeat init config |
 | `lib/iris/src/iris/runtime/jax_init.py` | Iris distributed init plumbing |
 | `experiments/grug/fault_tolerance.py` | Shared Grug transfer-recovery config, errors, and helper contracts |

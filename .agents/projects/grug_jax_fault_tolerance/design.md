@@ -19,7 +19,7 @@ The other hard part is ownership. RL has the closest transfer machinery today, b
 
 ## Design
 
-The long-lived abstraction is a neutral `marin.transfer` package. It owns payload IDs, manifests, metrics, publisher/subscriber protocols, and backend factories. RL's current `marin.rl.weight_transfer` package becomes a thin compatibility layer around the shared package. The checkpoint backend can be lifted almost directly from RL's `GCSCheckpointServer` and `GCSCheckpointClient`, which already save and load pytrees through Levanter checkpointing. Arrow Flight stays available, but the shared Arrow backend must preserve exact dtypes by default; RL can opt into inference-specific bfloat16 conversion in its adapter.
+The long-lived abstraction is a neutral `marin.transfer` package. It owns payload IDs, manifests, metrics, publisher/subscriber protocols, and backend factories. RL call sites should move to that package, keeping RL-specific scheduling and inference conversion outside the shared backend. The checkpoint backend can be lifted almost directly from RL's `GCSCheckpointServer` and `GCSCheckpointClient`, which already save and load pytrees through Levanter checkpointing. Arrow Flight stays available, but the shared Arrow backend must preserve exact dtypes; RL can opt into inference-specific bfloat16 conversion before publishing.
 
 JAX transfer server becomes another backend of this same interface, not a separate Grug mechanism. Its backend starts a `jax.experimental.transfer` server, publishes each rank's address through the shared coordinator, and transfers shape/dtype-described pytrees with `await_pull` and `pull`. Because local import fails on the macOS wheel, this backend is gated behind runtime capability detection and a GPU smoke test before Grug uses it.
 
@@ -38,7 +38,7 @@ This design allows an atomic Grug-only patch to land before the transfer extract
 
 ## Testing
 
-The transfer extraction should preserve RL behavior first. Existing RL weight-transfer tests should run against the compatibility adapter, plus new tests that publish and fetch an arbitrary pytree through the shared checkpoint backend without importing `marin.rl`.
+The transfer extraction should preserve RL behavior first. Existing RL weight-transfer tests should move with the updated RL call sites, plus new tests that publish and fetch an arbitrary pytree through the shared checkpoint backend without importing `marin.rl`.
 
 The JAX init change needs focused unit tests around argument passing: recoverability is set before distributed init, heartbeat timeout reaches GPU `jax.distributed.initialize`, and TPU recoverability fails fast. The Grug loop needs a behavior test with a fake liveness context proving callbacks and checkpoint hooks run only after successful atomic completion.
 
