@@ -639,9 +639,10 @@ class BackendConfig(_Config):
     (``kubernetes_provider``). ``transport`` must be ``in_process``; ``remote`` is
     rejected by :func:`validate_config`.
 
-    ``attributes`` values are comma-split into sets by
-    :func:`backend_attribute_sets` for the task→backend meta-scheduler (for
-    example ``device-variant: "v5e-4,v5p-8"``).
+    ``attributes`` holds any extra routing attributes as comma-split value sets
+    (for example ``device-variant: "v5e-4,v5p-8"``). Device attributes need not be
+    listed here: ``backend_attribute_sets`` derives ``device-type``/``device-variant``
+    from ``scale_groups`` and unions them in.
     """
 
     kind: Literal["worker_daemon", "k8s"]
@@ -1119,14 +1120,48 @@ def assert_no_inlined_secrets(config: IrisClusterConfig) -> None:
 # ===========================================================================
 
 
-def backend_attribute_sets(backend: BackendConfig) -> dict[str, set[str]]:
-    """Comma-split each ``attributes`` value into a normalized set.
+def _scale_group_device_attributes(scale_groups: Mapping[str, ScaleGroupConfig]) -> dict[str, set[str]]:
+    """Collect the ``device-type``/``device-variant`` a backend's scale groups offer.
 
-    ``device-variant: "v5e-4, v5p-8"`` becomes ``{"device-variant": {"v5e-4", "v5p-8"}}``.
-    Empty and whitespace-only entries are dropped. The task→backend meta-scheduler
-    uses this to expand set-valued attributes into posting lists.
+    Only accelerator scale groups contribute: a CPU (or unset) device type emits
+    nothing, matching a job's resource spec, whose CPU resources carry no device
+    constraint — so a CPU-only backend advertises no device attribute and stays a
+    catch-all. A blank or ``auto`` variant emits no ``device-variant``. Values are
+    lowercased so an advertised value equals the constraint literal a job matches
+    with, which is lowercased on construction. Scale groups of different variants
+    union into one set, e.g. ``device-variant: {"h100", "a100"}``.
     """
-    return {key: {part.strip() for part in raw.split(",") if part.strip()} for key, raw in backend.attributes.items()}
+    derived: dict[str, set[str]] = {}
+    for sg in scale_groups.values():
+        resources = sg.resources
+        if resources is None:
+            continue
+        device_type = resources.device_type
+        if device_type is None or device_type == AcceleratorType.CPU:
+            continue
+        derived.setdefault(WellKnownAttribute.DEVICE_TYPE.value, set()).add(device_type.value)
+        variant = resources.device_variant.strip().lower()
+        if variant and variant != "auto":
+            derived.setdefault(WellKnownAttribute.DEVICE_VARIANT.value, set()).add(variant)
+    return derived
+
+
+def backend_attribute_sets(backend: BackendConfig) -> dict[str, set[str]]:
+    """The routing attributes a backend advertises to the meta-scheduler and peers.
+
+    Explicit ``attributes`` values are comma-split into sets (``device-variant:
+    "v5e-4, v5p-8"`` becomes ``{"device-variant": {"v5e-4", "v5p-8"}}``); empty and
+    whitespace-only entries are dropped. ``device-type`` and ``device-variant`` are
+    additionally derived from ``scale_groups[*].resources`` and unioned in, so a
+    backend advertises the devices its scale groups offer without the operator
+    restating them in ``attributes``.
+    """
+    attributes = {
+        key: {part.strip() for part in raw.split(",") if part.strip()} for key, raw in backend.attributes.items()
+    }
+    for key, values in _scale_group_device_attributes(backend.scale_groups).items():
+        attributes.setdefault(key, set()).update(values)
+    return attributes
 
 
 def resolve_backends(config: IrisClusterConfig) -> dict[str, BackendConfig]:

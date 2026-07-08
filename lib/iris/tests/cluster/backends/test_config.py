@@ -1909,6 +1909,21 @@ def _worker_daemon_backend(**overrides) -> BackendConfig:
     return BackendConfig(**fields)
 
 
+def _accel_scale_group(device_type: AcceleratorType, device_variant: str = "") -> ScaleGroupConfig:
+    """A scale group carrying the device fields backend attribute derivation reads."""
+    return ScaleGroupConfig(
+        name="accel",
+        num_vms=1,
+        resources=ScaleGroupResources(
+            cpu_millicores=8000,
+            memory_bytes=16 * 1024**3,
+            device_type=device_type,
+            device_variant=device_variant,
+            capacity_type=CapacityType.ON_DEMAND,
+        ),
+    )
+
+
 class TestBackendsConfig:
     """The explicit ``backends:`` map and the implicit single-backend synthesis."""
 
@@ -2001,3 +2016,63 @@ class TestBackendsConfig:
             "device-variant": {"v5e-4", "v5p-8"},
             "device-type": {"tpu"},
         }
+
+    def test_device_attrs_derived_from_scale_group_resources(self):
+        # A GPU scale group with no explicit backend attributes advertises the
+        # device-type/device-variant its resources declare, lowercased ('H100' -> 'h100')
+        # so the value equals the constraint literal a GPU job matches with.
+        backend = _worker_daemon_backend(scale_groups={"h100-8x": _accel_scale_group(AcceleratorType.GPU, "H100")})
+        assert backend_attribute_sets(backend) == {"device-type": {"gpu"}, "device-variant": {"h100"}}
+
+    def test_cpu_scale_group_advertises_no_device_attrs(self):
+        # A CPU-only backend derives nothing, staying a routing catch-all as before.
+        backend = _worker_daemon_backend(scale_groups={"cpu": _accel_scale_group(AcceleratorType.CPU)})
+        assert backend_attribute_sets(backend) == {}
+
+    def test_multi_scale_group_backend_advertises_variant_union(self):
+        # Several accelerator groups union their variants; a CPU group adds nothing.
+        backend = _worker_daemon_backend(
+            scale_groups={
+                "h100": _accel_scale_group(AcceleratorType.GPU, "H100"),
+                "a100": _accel_scale_group(AcceleratorType.GPU, "A100"),
+                "cpu": _accel_scale_group(AcceleratorType.CPU),
+            }
+        )
+        assert backend_attribute_sets(backend) == {"device-type": {"gpu"}, "device-variant": {"h100", "a100"}}
+
+    def test_derived_device_attrs_union_with_explicit_attributes(self):
+        # Explicit non-device attributes are preserved; an explicit device-variant
+        # unions with the derived one rather than being overwritten.
+        backend = _worker_daemon_backend(
+            attributes={"pool": "h100-8x", "device-variant": "a100"},
+            scale_groups={"h100": _accel_scale_group(AcceleratorType.GPU, "H100")},
+        )
+        assert backend_attribute_sets(backend) == {
+            "pool": {"h100-8x"},
+            "device-type": {"gpu"},
+            "device-variant": {"a100", "h100"},
+        }
+
+    def test_auto_variant_derives_device_type_only(self):
+        # A blank or 'auto' variant yields device-type but no device-variant,
+        # matching constraints_from_resources which emits no variant constraint.
+        backend = _worker_daemon_backend(scale_groups={"tpu": _accel_scale_group(AcceleratorType.TPU, "auto")})
+        assert backend_attribute_sets(backend) == {"device-type": {"tpu"}}
+
+    def test_coreweave_implicit_config_advertises_gpu_attrs(self):
+        # The CoreWeave configs use the implicit single-backend shape (no backends:).
+        # resolve_backends synthesizes one backend whose GPU scale group must
+        # advertise device-type/device-variant, else a GPU job can neither route to
+        # it locally nor federate to it as a peer.
+        iris_root = Path(__file__).parent.parent.parent.parent
+        for rel in ("config/examples/coreweave.yaml", "config/cw-us-east-02a.yaml"):
+            config_path = iris_root / rel
+            if not config_path.exists():
+                pytest.skip(f"Config not found: {rel}")
+            config = load_config(config_path)
+            resolved = resolve_backends(config)
+            assert list(resolved) == [DEFAULT_BACKEND_ID]
+            assert backend_attribute_sets(resolved[DEFAULT_BACKEND_ID]) == {
+                "device-type": {"gpu"},
+                "device-variant": {"h100"},
+            }
