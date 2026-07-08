@@ -112,8 +112,6 @@ def create_steps(prefix: str, synth_data: str, tokenizer: str) -> list[StepSpec]
         fn=lambda output_path: dedup_exact_paragraph(
             input_paths=[read_artifact(normalize_hq_spec.output_path, NormalizedData).main_output_dir],
             output_path=output_path,
-            max_parallelism=4,
-            worker_resources=ResourceConfig(cpu=1, ram="1g"),
         ),
     )
 

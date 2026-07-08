@@ -160,7 +160,8 @@ def compute_minhash_attrs(
     seed: int = 42,
     worker_resources: ResourceConfig | None = None,
     max_workers: int | None = None,
-    map_workers_per_actor: int | None = None,
+    map_worker_resources: ResourceConfig | None = None,
+    reduce_worker_resources: ResourceConfig | None = None,
 ) -> MinHashAttrData:
     """Compute MinHash bucket attributes for *source* and persist as Parquet.
 
@@ -189,6 +190,8 @@ def compute_minhash_attrs(
             a native thread pool and may consume up to ~2 cores beyond the
             Python thread.
         max_workers: Max Zephyr workers. Defaults to Zephyr's own default.
+        map_worker_resources: ResourceConfig for map-stage tasks.
+        reduce_worker_resources: ResourceConfig for reduce-stage tasks.
 
     Returns:
         :class:`MinHashAttrData` describing the attr directory and counters.
@@ -219,12 +222,15 @@ def compute_minhash_attrs(
 
     ctx_kwargs: dict = {
         "name": "minhash-attrs",
-        "resources": worker_resources or ResourceConfig(cpu=5, ram="32g", disk="5g"),
     }
     if max_workers is not None:
         ctx_kwargs["max_workers"] = max_workers
-    if map_workers_per_actor is not None:
-        ctx_kwargs["map_workers_per_actor"] = map_workers_per_actor
+    if map_worker_resources is not None:
+        ctx_kwargs["map_worker_resources"] = map_worker_resources
+    if reduce_worker_resources is not None:
+        ctx_kwargs["reduce_worker_resources"] = reduce_worker_resources
+    if map_worker_resources is None and reduce_worker_resources is None:
+        ctx_kwargs["resources"] = worker_resources or ResourceConfig(cpu=5, ram="32g", disk="5g")
     ctx = ZephyrContext(**ctx_kwargs)
 
     # Preserve source basenames; zephyr's `{basename}` placeholder is synthetic.
