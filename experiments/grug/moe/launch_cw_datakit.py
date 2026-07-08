@@ -30,7 +30,6 @@ from marin.experiment.namespacing import user_namespaced_name
 from marin.training.training import LevanterCheckpoint
 from rigging.filesystem import prefix_join
 
-from experiments.datasets.paloma import paloma_datasets
 from experiments.datasets.uncheatable import uncheatable_datasets
 from experiments.grug.moe.heuristic import MoeHeuristic
 from experiments.grug.moe.launch import GrugMoeLaunchConfig, env_int, run_grug_moe_trial
@@ -317,23 +316,23 @@ def _datakit_components(ctx: StepContext) -> dict[str, DatasetComponent | Concat
 
 
 def _validation_components(ctx: StepContext, val_handles) -> dict[str, DatasetComponent]:
-    """Paloma + uncheatable eval caches as zero-weight components (-> tagged eval sets).
+    """Eval caches as zero-weight components (-> tagged eval sets).
 
-    At run time each handle resolves to its recorded cache (correct split/flat_cache); at
-    fingerprint time no record exists, so use the deterministic ``artifact_path`` placeholder.
+    Built DIRECTLY from each handle's ``{name}/{version}`` identity path (MARIN_PREFIX-relative)
+    with ``split="validation"``, rather than via ``ctx.resolved`` -- the lazy executor rebuilds
+    a non-adopted tokenize recipe even when the cache exists on disk, and the raw source isn't
+    on CoreWeave. A direct component reads the existing cache with no build.
     """
-    components: dict[str, DatasetComponent] = {}
-    for handle in val_handles:
-        if ctx.is_fingerprint:
-            components[handle.name] = DatasetComponent(
-                cache_dir=ctx.artifact_path(handle),
-                format=TextLmDatasetFormat(),
-                tags=[handle.name],
-                split="validation",
-            )
-        else:
-            components[handle.name] = ctx.resolved(handle).as_component()
-    return components
+    return {
+        handle.name: DatasetComponent(
+            source=None,
+            cache_dir=prefix_join(ctx.prefix, f"{handle.name}/{handle.version}"),
+            format=TextLmDatasetFormat(),
+            tags=[handle.name],
+            split="validation",
+        )
+        for handle in val_handles
+    }
 
 
 def _datakit_data_config(
@@ -420,10 +419,10 @@ def build_datakit_checkpoint(*, version: str = "dev") -> ArtifactStep[LevanterCh
         optimizer = dataclasses.replace(SCALE_OPTIMIZER, learning_rate=lr)
 
     name = f"grug-moe-datakit-d{model.hidden_dim}-L{model.num_layers}-e{model.num_experts}-r{replicas}"
-    val_handles = [
-        *paloma_datasets().values(),
-        *uncheatable_datasets().values(),
-    ]
+    # uncheatable_eval only: its caches are materialized on CoreWeave (paloma's are incomplete
+    # stubs there). Eval components are built directly from the handles' identity paths, so the
+    # handles are used only for their name/version -- not as deps to materialize.
+    val_handles = [*uncheatable_datasets().values()]
 
     def build_config(ctx: StepContext) -> GrugMoeLaunchConfig:
         if use_wandb:
@@ -469,7 +468,7 @@ def build_datakit_checkpoint(*, version: str = "dev") -> ArtifactStep[LevanterCh
         artifact_type=LevanterCheckpoint,
         run=run_grug_moe_trial,
         build_config=build_config,
-        deps=tuple(val_handles),
+        deps=(),
         runtime_args={"train_resources": resources},
     )
 
