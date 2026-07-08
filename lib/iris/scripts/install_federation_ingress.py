@@ -67,6 +67,9 @@ _INGRESS_NAME = "iris-federation"
 _MIDDLEWARE_NAME = "iris-federation-ipallowlist"
 _MIDDLEWARE_CRD = "middlewares.traefik.io"
 
+# _auth_mode's value for a permissive controller (no login arm, no trusted_cidrs).
+_NULL_AUTH = "null-auth"
+
 # TLS secret for the ingress when the cluster has no existing controller cert to
 # reuse (e.g. cw-rno2a, which publishes no /proxy host today).
 DEFAULT_TLS_SECRET = "iris-controller-fed-tls"
@@ -103,7 +106,7 @@ def kubectl_apply_docs(docs: list[dict], kflags: list[str]) -> None:
 
 
 def resource_present(kind: str, name: str, kflags: list[str]) -> bool:
-    """True if ``kind/name`` exists (quietly; used for pre-flight and teardown)."""
+    """True if ``kind/name`` exists; queries quietly, emitting no output."""
     result = subprocess.run(
         ["kubectl", *kflags, "get", kind, name],
         stdout=subprocess.DEVNULL,
@@ -138,7 +141,7 @@ def _auth_mode(config) -> str:
     """
     auth = config.auth
     if auth is None or (auth.provider_kind() is None and not auth.trusted_cidrs):
-        return "null-auth"
+        return _NULL_AUTH
     return auth.provider_kind() or "cidr"
 
 
@@ -282,7 +285,7 @@ def _warn_if_permissive(settings: FederationIngressSettings) -> None:
     anything from the allowlisted IP — so the controller must be enforcing before
     this ingress is a real boundary.
     """
-    if settings.auth_mode != "null-auth":
+    if settings.auth_mode != _NULL_AUTH:
         return
     click.secho(
         f"\nwarn: {settings.cluster} runs NULL-AUTH (permissive) — its RPC surface admits any caller\n"
@@ -397,7 +400,7 @@ def _print_next_steps(settings: FederationIngressSettings, *, host: str, cluster
             fg="green",
             bold=True,
         )
-    if settings.auth_mode == "null-auth":
+    if settings.auth_mode == _NULL_AUTH:
         click.secho(
             "  NOTE: this controller is still permissive — add auth.trusted_cidrs and restart so an "
             "off-cluster request must present a bearer; the IP allowlist alone is not an identity gate.",
