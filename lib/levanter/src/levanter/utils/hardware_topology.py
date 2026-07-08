@@ -4,31 +4,14 @@
 import logging
 import shutil
 import subprocess
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 from typing import Any
 
 import jax
-import numpy as np
 
-from levanter.config import JsonAtom
+from levanter.tracker.json_logger import _to_jsonable
 
 logger = logging.getLogger(__name__)
-
-
-def jsonable_topology_value(value: Any) -> JsonAtom | list[Any] | dict[str, Any]:
-    if isinstance(value, str | int | float | bool) or value is None:
-        return value
-    if isinstance(value, np.integer):
-        return int(value)
-    if isinstance(value, np.floating):
-        return float(value)
-    if isinstance(value, np.bool_):
-        return bool(value)
-    if isinstance(value, Sequence) and not isinstance(value, str | bytes | bytearray):
-        return [jsonable_topology_value(item) for item in value]
-    if isinstance(value, Mapping):
-        return {str(key): jsonable_topology_value(item) for key, item in value.items()}
-    return str(value)
 
 
 def device_topology_entry(device: object) -> dict[str, Any]:
@@ -46,7 +29,7 @@ def device_topology_entry(device: object) -> dict[str, Any]:
         "core_on_chip",
     ):
         if hasattr(device, attr):
-            entry[attr] = jsonable_topology_value(getattr(device, attr))
+            entry[attr] = _to_jsonable(getattr(device, attr))
     return entry
 
 
