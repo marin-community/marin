@@ -152,7 +152,7 @@ class QueryManager:
             self._record(query_id, sql, hit_state)
             return query_id
         logger.info("query %s submitted: %s", query_id, _log_sql(sql))
-        self._executor.submit(self._run, sql, query_id)
+        self._executor.submit(self._run, sql, query_id, use_cache)
         return query_id
 
     def get(self, query_id: str) -> QueryState | None:
@@ -176,9 +176,15 @@ class QueryManager:
         self._cache.move_to_end(sql)  # LRU: a hit keeps the entry fresh against eviction
         return result
 
-    def _run(self, sql: str, query_id: str) -> None:
+    def _run(self, sql: str, query_id: str, use_cache: bool = True) -> None:
         try:
-            result = self._runner.run_query(sql, query_id)
+            # Restart-survivable tier: on an in-memory miss, a sidecar left by a prior run (before
+            # the restart that cleared the in-memory cache) rebuilds the result without re-scanning
+            # the source. A hit here is still a "cached" reply; a miss falls through to a fresh run.
+            result = self._runner.lookup_persistent(sql) if use_cache else None
+            from_cache = result is not None
+            if result is None:
+                result = self._runner.run_query(sql, query_id)
         except DuckyError as e:
             logger.warning("query %s failed: %s", query_id, str(e).splitlines()[0])
             error_state = QueryState(QueryStatus.ERROR, error=str(e))
@@ -194,13 +200,14 @@ class QueryManager:
             self._record(query_id, sql, error_state)
             return
         logger.info(
-            "query %s done: %d rows, %s, %d ms",
+            "query %s %s: %d rows, %s, %d ms",
             query_id,
+            "persistent-cache hit" if from_cache else "done",
             result.total_rows,
             _human_bytes(result.result_bytes),
             result.elapsed_ms,
         )
-        done_state = QueryState(QueryStatus.DONE, result=result, cached=False)
+        done_state = QueryState(QueryStatus.DONE, result=result, cached=from_cache)
         with self._lock:
             self._store_cache(sql, result)
             self._set_state(query_id, done_state)
@@ -329,6 +336,7 @@ def create_app(
         executor=executor,
         max_workers=config.max_concurrent_queries,
         cache_ttl=config.result_ttl_days * 86400,
+        max_cache_entries=config.max_cache_entries,
         query_log=query_log,
     )
 

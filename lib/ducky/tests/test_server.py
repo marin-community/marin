@@ -46,6 +46,9 @@ class _FakeRunner:
         assert self._result is not None
         return self._result
 
+    def lookup_persistent(self, sql: str) -> QueryResult | None:
+        return None  # no restart-survivable sidecar by default
+
 
 def _client(runner) -> TestClient:
     return TestClient(create_app(runner, _CONFIG, executor=_InlineExecutor()))
@@ -199,6 +202,46 @@ def test_use_cache_false_forces_fresh_run():
     assert runner.calls == 2
 
 
+class _PersistentRunner(_FakeRunner):
+    """Serves every SQL from a restart-survivable sidecar; counts lookups and executions."""
+
+    def __init__(self, result):
+        super().__init__(result=result)
+        self._persistent = result
+        self.run_calls = 0
+        self.lookup_calls = 0
+
+    def run_query(self, sql, query_id):
+        self.run_calls += 1
+        return super().run_query(sql, query_id)
+
+    def lookup_persistent(self, sql):
+        self.lookup_calls += 1
+        return self._persistent
+
+
+def test_persistent_cache_hit_serves_without_executing():
+    """On an in-memory miss, a sidecar hit returns cached=True without running the query —
+    the path that survives the restarts that drop the in-memory cache."""
+    runner = _PersistentRunner(QueryResult(["x"], [[1]], 1, False, "gs://b/ducky/prior.parquet", 42, 7))
+    payload = _run(_client(runner), "SELECT 1")
+
+    assert payload["status"] == "done"
+    assert payload["cached"] is True
+    assert payload["result_path"] == "gs://b/ducky/prior.parquet"
+    assert runner.lookup_calls == 1 and runner.run_calls == 0  # served from the sidecar, not executed
+
+
+def test_use_cache_false_bypasses_persistent_cache():
+    """A forced fresh run skips the persistent tier too, then executes."""
+    runner = _PersistentRunner(QueryResult(["x"], [[1]], 1, False, "gs://b/x.parquet", 1, 1))
+    manager = QueryManager(runner, executor=_InlineExecutor())
+
+    manager.submit("SELECT 1", use_cache=False)
+    assert runner.lookup_calls == 0  # persistent tier not consulted
+    assert runner.run_calls == 1  # ran fresh
+
+
 def test_query_error_surfaces_in_result():
     fake = _FakeRunner(error=QueryError("Catalog Error: table not found"))
     payload = _run(_client(fake), "SELECT * FROM nope")
@@ -270,6 +313,9 @@ class _ScriptedRunner:
         if sql in self._errors:
             raise self._errors[sql]
         return self._results[sql]
+
+    def lookup_persistent(self, sql: str) -> QueryResult | None:
+        return None
 
 
 def test_every_submission_is_recorded():

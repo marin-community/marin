@@ -22,6 +22,16 @@ GET  /proxy/ducky/result/<id>
 Pass `{"use_cache": false}` on the POST to force a fresh run (by default an identical prior
 query's result is reused).
 
+Result caching is two-tier and **survives restarts**. An exact-SQL repeat is served first from a
+process-local in-memory cache (`DUCKY_MAX_CACHE_ENTRIES`), and on a miss from a small
+`ducky/cache/<sql_hash>.meta.parquet` sidecar ducky writes next to each spilled result — so a
+repeat query returns instantly without re-scanning the source even after the (preemptible) service
+restarts and drops its in-memory cache. The sidecar shares the `ducky/` prefix, so the scratch
+bucket's lifecycle rule reaps it alongside the result it points at; a hit older than
+`result_ttl_days` is ignored. Set `DUCKY_PERSIST_CACHE=0` to disable the persistent tier. Caching
+keys on the exact SQL text, so identical SQL reuses a prior result even if the underlying data
+changed — use `use_cache: false` to force a fresh read.
+
 ### From the CLI (auto-tunnel)
 
 ```bash
