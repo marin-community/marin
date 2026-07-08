@@ -51,8 +51,9 @@ def device_topology_entry(device: object) -> dict[str, Any]:
 
 
 def tpu_topology_shape(devices: Sequence[object]) -> str | None:
-    """Return the TPU coordinate extent as ``AxBxC`` or ``None`` when unavailable."""
+    """Return the TPU coordinate extent as ``AxBxC`` or ``SxAxBxC`` when multi-slice."""
     coords = []
+    slice_indices = set()
     for device in devices:
         if getattr(device, "platform", None) != "tpu" or not hasattr(device, "coords"):
             continue
@@ -62,6 +63,9 @@ def tpu_topology_shape(devices: Sequence[object]) -> str | None:
             continue
 
         coords.append(tuple(int(axis) for axis in coord))
+        slice_index = getattr(device, "slice_index", None)
+        if slice_index is not None:
+            slice_indices.add(int(slice_index))
 
     if not coords:
         return None
@@ -74,6 +78,9 @@ def tpu_topology_shape(devices: Sequence[object]) -> str | None:
     for axis in range(rank):
         axis_values = [coord[axis] for coord in coords]
         axis_sizes.append(max(axis_values) - min(axis_values) + 1)
+
+    if len(slice_indices) > 1:
+        axis_sizes.insert(0, max(slice_indices) - min(slice_indices) + 1)
 
     return "x".join(str(axis_size) for axis_size in axis_sizes)
 

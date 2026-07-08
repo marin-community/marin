@@ -50,6 +50,18 @@ def test_tpu_topology_shape_uses_device_coordinate_extents():
     assert tpu_topology_shape(devices) == "4x8x8"
 
 
+def test_tpu_topology_shape_includes_multiple_slices():
+    devices = [
+        SimpleNamespace(platform="tpu", slice_index=s, coords=(x, y, z))
+        for s in range(2)
+        for x in range(4)
+        for y in range(8)
+        for z in range(8)
+    ]
+
+    assert tpu_topology_shape(devices) == "2x4x8x8"
+
+
 def test_nvidia_topology_matrix_summary_counts_gpu_and_nic_links():
     topology = """
         GPU0    GPU1    GPU2    NIC0    mlx5_0    CPU Affinity    NUMA Affinity
