@@ -150,11 +150,14 @@ def run_grug_moe_trial(config: GrugMoeLaunchConfig) -> None:
     blocks until it completes.
     """
     initialize_from = latest_checkpoint_path(config.init_from) if config.init_from is not None else None
-    # SCALE_WATCH=0 disables the grad/param watch callback. It fires every
-    # WatchConfig.interval steps and (with split_scan_layers) unstacks all layers to
-    # compute per-parameter norms -- a memory spike (e.g. at step 10) that OOMs a model
-    # sitting near the HBM limit even though the plain train step fits.
-    watch = WatchConfig(watch_targets=[]) if os.environ.get("SCALE_WATCH") == "0" else WatchConfig()
+    # The grad/param watch callback fires every WatchConfig.interval steps. With
+    # split_scan_layers it unstacks all scanned layers to log per-layer norms -- a ~24x
+    # memory spike (e.g. at step 10) that OOMs a model near the HBM limit even though the
+    # plain train step fits. Keep watch on but log norms over the stacked array
+    # (split_scan_layers=False), which avoids the unstack. SCALE_WATCH=0 disables it entirely.
+    watch = (
+        WatchConfig(watch_targets=[]) if os.environ.get("SCALE_WATCH") == "0" else WatchConfig(split_scan_layers=False)
+    )
     trainer = TrainerConfig(
         id=config.run_id,
         seed=config.seed,
