@@ -16,7 +16,7 @@
 #      Secret (addressing style is derived from the endpoint domain):
 #        export CW_KEY_ID=<coreweave-access-key-id>
 #        export CW_KEY_SECRET=<coreweave-access-key-secret>
-#   2. Merge the region kubeconfigs (Console -> Tokens) into ~/.kube/coreweave-iris.
+#   2. Install the kubeconfig (Console -> Tokens) at ~/.kube/coreweave-iris.
 #      Operations are bound to kube_context below, so no KUBECONFIG export and no
 #      current-context switching is needed.
 #   3. Start / inspect the cluster:

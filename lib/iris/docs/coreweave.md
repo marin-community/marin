@@ -9,10 +9,10 @@ the full operator runbook (RBAC, NodePools, Kueue, troubleshooting).
 
 Active clusters:
 
-All clusters share one merged kubeconfig at `~/.kube/coreweave-iris`; each
-cluster config pins its own `kube_context` inside it, so iris/kubectl
-operations are context-bound per `--cluster` and never depend on the file's
-current-context or an exported `KUBECONFIG`.
+All clusters share one kubeconfig at `~/.kube/coreweave-iris`; each cluster
+config pins its own `kube_context` inside it, so iris/kubectl operations are
+context-bound per `--cluster` and never depend on the file's current-context
+or an exported `KUBECONFIG`.
 
 | Iris cluster | CW cluster / region | Fleet | Kube context |
 |--------------|---------------------|-------|--------------|
@@ -25,20 +25,15 @@ Console links:
 - Health dashboard: https://cks-grafana.coreweave.com/d/cluster-health/cluster-health?var-cluster-org=208261&var-cluster=marin-gpu&var-region=US-EAST-02
 
 **1. Make a token / kubeconfig.** In the [Tokens console](https://console.coreweave.com/tokens),
-create a token for the cluster and download its kubeconfig.
+create a token and download the kubeconfig — it carries a context per cluster
+(named `<cw-cluster>_<REGION>`).
 
-**2. Merge the kubeconfig** into `~/.kube/coreweave-iris` (CoreWeave-generated
-contexts are named `<cw-cluster>_<REGION>`, so region files merge without
-collisions), plus controller extras:
+**2. Install the kubeconfig** at `~/.kube/coreweave-iris`, plus controller
+extras:
 
 ```bash
 mkdir -p ~/.kube
-# First cluster: just move it into place.
 mv ~/Downloads/kubeconfig.yaml ~/.kube/coreweave-iris
-# Additional clusters: merge into the existing file.
-KUBECONFIG=~/.kube/coreweave-iris:~/Downloads/kubeconfig.yaml \
-  kubectl config view --flatten > ~/.kube/coreweave-iris.merged \
-  && mv ~/.kube/coreweave-iris.merged ~/.kube/coreweave-iris
 kubectl --kubeconfig ~/.kube/coreweave-iris config get-contexts   # sanity check
 
 uv pip install 'marin-iris[controller]'
@@ -399,8 +394,8 @@ re-run the install after it is Ready.
 
 ### Bringing up a new cluster
 
-1. Download the kubeconfig (§0), merge it into `~/.kube/coreweave-iris`, and
-   export `CW_KEY_ID`, `CW_KEY_SECRET`.
+1. Install the kubeconfig (§0) at `~/.kube/coreweave-iris` and export
+   `CW_KEY_ID`, `CW_KEY_SECRET`.
 2. Copy an existing cluster config pair — `lib/iris/config/cw-*.yaml` and
    `lib/finelog/config/cw-*.yaml` — and adjust region, `kube_context`,
    instance types, and fleet sizes. The console capacity view's display label is NOT the k8s
