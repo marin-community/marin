@@ -1,0 +1,1268 @@
+---
+topic: jaxpp-grug-moe
+description: JaxPP pipeline parallelism for experiments/grug/moe training
+author: dlwh
+---
+
+# JaxPP Grug MoE: Task Logbook
+
+## Scope
+- Goal: Implement and debug an NVIDIA/JaxPP-based pipeline-parallel training path for `experiments/grug/moe/train.py`, then test it on 4x 8xH100 CoreWeave east02 nodes with the May d=2560 shape.
+- Primary metric(s): A pipelined train step can compile/run on the intended NVIDIA GPU environment; optimizer/loss semantics match the non-pipelined path for equivalent global batches; MFU is captured for relevant JaxPP schedules.
+- Constraints: Keep default Grug MoE behavior unchanged when pipeline config is unset; do not add broad dependency churn until the runtime environment decision is explicit.
+- Coordinating issue/PR: https://github.com/marin-community/marin/issues/7024
+
+## Current TL;DR
+- `GRUG-JAXPP-001`: Explicit JaxPP MPMD training is implemented behind `GrugTrainerConfig.pipeline.implementation="explicit_mpmd"` with stage-local model/optimizer state and contiguous layer splits.
+- Explicit GPipe is now functional with 4 microbatches. Best completed GPipe result: 4x 8xH100 east02, d2560, 24 layers, top-k 4, 128 experts, batch 32, seq 128, `XLA_PYTHON_CLIENT_MEM_FRACTION=0.80`, 4 stages. It reports `31,147,999,232` parameters, `throughput/mean_mfu=0.3793670762020138`, and loss `9.03332233428955`.
+- Explicit `std_1f1b` is now functional with 4 microbatches. Best completed 4x 8xH100 8-expert result remains the two-stage batch-64 run with `2,829,071,552` parameters, `throughput/mean_mfu=0.5767728036698782`, and loss `9.026140213012695`; the best 4-stage 8-expert run reports `throughput/mean_mfu=0.11854193750695625`.
+- The larger 64-expert 4x 8xH100 `std_1f1b` comparison succeeds in both two-stage and four-stage form. The best completed 64-expert 1F1B result is now the four-stage batch-32 run at `0.70` prealloc with `16,044,571,136` parameters, loss `9.034103393554688`, and `throughput/mean_mfu=0.4853452360321486`, slightly above the 64-expert GPipe result (`0.47585952009098575`).
+- Best completed non-GPipe explicit MPMD result remains the 64-expert rung with `throughput/mean_mfu=0.7529189015282038`; the non-GPipe 128-expert rung reported `throughput/mean_mfu=0.1034576068697843`.
+- The largest completed explicit 4-stage `std_1f1b` rung is now 128 experts at `0.70` prealloc: `31,147,999,232` parameters, loss `9.033186912536621`, and `throughput/mean_mfu=0.38657153827935514`.
+- Larger explicit 4-stage `std_1f1b` rungs reached hparams/init but did not fit optimizer-state initialization: 192 experts failed on a `300.00MiB` allocation, and 256 experts reported `61,354,855,424` parameters before failing after XLA estimated `63.60GiB` input/output against the `0.70` base limit and then hit a `400.00MiB` allocation OOM.
+- Automatic JaxPP schedules remain blocked. Moving batch reshaping outside the JaxPP trace fixed the earlier after-loop batch placement assertion, and the opt-in const-sharding patch gets the reduced `std_1f1b` smoke past JaxPP explicit sharding inference. The current blocker is later input placement: JaxPP attempts to `device_put` a stage-local expert weight with a global `NamedSharding` whose mesh still includes the non-addressable `pipeline` axis.
+
+## Hypothesis Queue
+
+### Active
+- `GRUG-JAXPP-001`: A JaxPP explicit-MPMD path can pipeline the MoE train step with stage-local weights and optimizer state. Evidence: [2026-07-08 14:28 PDT - 128-expert 4-stage 1F1B succeeds, 192/256 expert rungs do not fit](#2026-07-08-1428-pdt---128-expert-4-stage-1f1b-succeeds-192256-expert-rungs-do-not-fit). Next test: reduce optimizer-state memory for 192/256 experts, or improve automatic schedule input placement.
+- `GRUG-JAXPP-002`: Router histograms need a dedicated cross-microbatch reducer before full metric parity is safe. Evidence: [2026-07-07 22:45 PDT - initial implementation](#2026-07-07-2245-pdt---initial-implementation). Next test: implement/validate a `SummaryStats` merge or compute summary metrics outside the pipeline loop.
+- `GRUG-JAXPP-004`: At least one JaxPP implementation can run the May d=2560 Grug MoE family on 4x 8xH100 with measurable MFU. Evidence: 64- and 128-expert explicit GPipe, two-stage explicit `std_1f1b`, a 4-stage explicit `std_1f1b` smoke, and non-GPipe explicit rungs. Next test: scale 4-stage explicit 1F1B to 24 layers or fix automatic JaxPP's stage-local input placement blocker before claiming broader schedule coverage.
+
+### Blocked
+- `GRUG-JAXPP-003`: Local end-to-end JaxPP train-step execution is blocked on lack of a representative NVIDIA GPU runtime in this worktree. Resume when a GPU Iris/CoreWeave smoke is available.
+- `GRUG-JAXPP-005`: Automatic JaxPP schedule sweep over `gpipe`, `std_1f1b`, `eager_1f1b`, `zero_bubble`, and interleaved schedules. Blocker: automatic `std_1f1b` reaches tracing and clears the prior sharding-inference assertion with the const-sharding patch, but JaxPP input placement now tries to `device_put` stage-local arrays with a non-addressable global `pipeline` mesh sharding. Resume when automatic JaxPP can call compiled functions with addressable stage-local input shardings.
+
+### Falsified / Dead End
+- None yet.
+
+### Promoted
+- None yet.
+
+## Entry Log
+
+### 2026-07-07 22:45 PDT - initial implementation
+- Hypothesis: JaxPP can be introduced as an optional MoE train-step path by adding stage markers to the model and replacing the single global `value_and_grad` with a `jaxpp.treduce` over microbatches.
+- Commit Hash: uncommitted working tree on `research/jaxpp-grug-moe` at baseline `5c36c4374a`.
+- Command:
+  - `git switch -c research/jaxpp-grug-moe`
+  - `git clone --depth 1 https://github.com/NVIDIA/jaxpp.git /tmp/jaxpp`
+  - `uv run python -m py_compile experiments/grug/moe/train.py experiments/grug/moe/model.py`
+  - `uv run python - <<'PY' ... import GrugJaxPPConfig, GrugTrainerConfig; _pipeline_stage_end_layers(6, 3) ... PY`
+  - `XLA_FLAGS=--xla_force_host_platform_device_count=4 JAX_PLATFORMS=cpu uv run python - <<'PY' ... _compact_or_pipeline_grug_mesh ... _reshape_batch_for_pipeline ... PY`
+  - `uv pip install -e /tmp/jaxpp`
+  - `uv pip install --no-deps -e /tmp/jaxpp`
+  - `XLA_FLAGS=--xla_force_host_platform_device_count=4 JAX_PLATFORMS=cpu uv run python - <<'PY' ... jaxpp.treduce(... operation=((jaxpp.Add, jaxpp.Add), jaxpp.Add)) ... PY`
+  - `XLA_FLAGS=--xla_force_host_platform_device_count=4 JAX_PLATFORMS=cpu uv run python - <<'PY' ... jax.jit(_reshape_batch_for_pipeline) ... PY`
+  - `./infra/pre-commit.py --fix experiments/grug/moe/train.py experiments/grug/moe/model.py`
+- Config:
+  - New `GrugJaxPPConfig(stages, microbatches, schedule="std_1f1b", stage_axis_name="pipeline")`.
+  - `GrugTrainerConfig.pipeline=None` preserves the existing non-pipelined path.
+  - Pipeline mesh shape is `(pipeline, replica_dcn, data, expert, model)`.
+  - Stage cuts require `num_layers % stages == 0`.
+- Result:
+  - Added optional `jaxpp` imports with fail-fast errors when pipeline mode is requested without the package.
+  - Added `pipeline_stages` threading through `Transformer.__call__`, `logits`, and `next_token_loss`.
+  - Added `jaxpp.mark_stage_end` after each configured stage boundary, including the final stage marker required by current upstream JaxPP.
+  - Added a pipelined train-step branch that reshapes batch leaves to `(microbatches, microbatch_size, ...)`, uses `jaxpp.treduce`, averages loss/grads/QB betas, and leaves default train-step behavior unchanged.
+  - `uv pip install -e /tmp/jaxpp` failed on macOS because upstream `jaxpp==0.10.2` depends on `cupy-cuda13x`, which has no matching macOS wheel. `uv pip install --no-deps -e /tmp/jaxpp` succeeded for API smoke.
+  - A review pass found that the first reshape implementation would skip tracer leaves inside `jax.jit`; fixed by accepting `jax.core.Tracer`, and the jitted reshape smoke now returns `(2, 2, 3)` for both token and loss-weight leaves.
+  - A tiny full MoE CPU loss smoke with an unrealistic small config failed inside existing local MoE scatter shape handling, before showing a pipeline-specific failure. This is not treated as evidence about GPU JaxPP runtime correctness.
+- Interpretation:
+  - The structural implementation is ready for a real GPU smoke run, but runtime correctness and performance are unproven.
+  - Full router metric parity is intentionally incomplete in the JaxPP path; the pipeline branch currently preserves `train/loss` and `qb_beta_per_layer` for QB updates, while avoiding incorrect `SummaryStats` reductions.
+- Next action:
+  - Launch or reserve a small NVIDIA GPU environment with `jaxpp` installed from NVIDIA/jaxpp and run a 1-2 step Grug MoE pipeline smoke.
+  - Decide whether to add a narrow dependency hook for `jaxpp` to Grug GPU jobs or keep it as an explicit experimental environment prerequisite.
+
+### 2026-07-07 23:02 PDT - tracking issue
+- Hypothesis: The research thread needs a durable issue/logbook trail before cluster runs start.
+- Commit Hash: uncommitted working tree on `research/jaxpp-grug-moe`.
+- Command:
+  - `gh issue list --repo marin-community/marin --state open --search "jaxpp grug moe pipeline parallelism in:title,body" --json number,title,url,labels,createdAt,updatedAt --limit 20`
+  - `gh issue create --repo marin-community/marin --title "[grug] Track JaxPP pipeline-parallel MoE training" --label experiment --label agent-generated --body-file ...`
+- Result:
+  - Created coordinating experiment issue: https://github.com/marin-community/marin/issues/7024
+  - Linked the issue to this logbook and recorded the 4x 8xH100 May d=2560 schedule/MFU objective.
+- Next action:
+  - Port or adapt the CoreWeave May d=2560 launcher and add JaxPP schedule knobs for the first GPU smoke.
+
+### 2026-07-07 23:12 PDT - CoreWeave smoke launch plumbing
+- Hypothesis: A 4-node H100 JaxPP smoke can use the May d=2560 shape with 24 layers, 256 experts, top-k 4, expert axis 8, four physical pipeline ranks, and eight microbatches.
+- Commit Hash: uncommitted working tree on `research/jaxpp-grug-moe`.
+- Command:
+  - `experiments/grug/moe/run_cw_jaxpp_may_d2560.sh --schedule std_1f1b --steps 2 --tracker json_logger`
+  - `experiments/grug/moe/run_cw_jaxpp_may_d2560.sh --submit --schedule std_1f1b --steps 2 --tracker json_logger --run-id jaxpp-may-d2560-std-smoke-...`
+  - `experiments/grug/moe/run_cw_jaxpp_may_d2560.sh --submit --schedule std_1f1b --steps 2 --tracker json_logger --run-id jaxpp-may-d2560-std-smoke-r2-...`
+  - `experiments/grug/moe/run_cw_jaxpp_may_d2560.sh --submit --schedule std_1f1b --steps 2 --tracker json_logger --run-id jaxpp-may-d2560-std-direct-...`
+- Config:
+  - Default smoke model: `hidden_dim=2560`, `num_layers=24`, `seq_len=4096`, `num_experts=256`, `top_k=4`.
+  - Mesh: `PP_MPMD_DIM=4`, `MAY_GPU_REPLICAS=4`, `MAY_EXPERT_AXIS=8`, `MAY_REPLICA_AXIS=1`.
+  - Pipeline: `PP_SCHEDULE=std_1f1b`, `PP_STAGES=4`, `PP_MICROBATCHES=8`.
+  - Data: deterministic synthetic `GrugLmExample` stream to isolate systems/runtime behavior from tokenization and object-store reads.
+- Result:
+  - Added `experiments/grug/moe/launch_cw_jaxpp_may_d2560.py` and `run_cw_jaxpp_may_d2560.sh`.
+  - Added `post_setup_scripts` plumbing so GPU worker jobs can install pinned NVIDIA/JaxPP after normal Iris GPU sync.
+  - Added JaxPP schedule names for `gpipe`, `std_1f1b`, `eager_1f1b`, `zero_bubble`, `interleaved_gpipe`, `interleaved_1f1b`, `dualpipe_v`, and `kimi_k2`.
+  - First parent job `/dlwh/iris-run-job-20260708-060558` failed before launching training: `StepRunner` tried to create `s3://marin-na/...` and S3 returned `InvalidRegion`.
+  - Second parent job `/dlwh/iris-run-job-20260708-060836` preserved the `dlwh` namespace but failed with the same `StepRunner` S3 artifact sidecar error.
+  - Switched the launcher default to direct mode (`MAY_DIRECT=true`) so the CPU parent dispatches the GPU training job with local output/checkpoint paths and bypasses StepRunner artifact writes.
+  - Third parent job `/dlwh/iris-run-job-20260708-061147` bypassed parent artifact writes, launched the 4-task GPU child, installed `cupy-cuda13x` and `jaxpp==0.10.2`, initialized JAX distributed, and reached JaxPP tracing.
+  - The GPU child failed in tracing with `ValueError: use_abstract_mesh cannot change the size of the mesh` because the outer Grug mesh context was size 32 while JaxPP enters stage-local size-8 meshes.
+  - Patched `_run_grug_local` so setup/init still runs under the global mesh, default non-pipeline train steps still run under `set_mesh(mesh)`, and JaxPP pipeline train steps run outside the global mesh context.
+- Interpretation:
+  - The first failure mode is unrelated to JaxPP or Grug; it is parent artifact bookkeeping against the cluster object-store configuration.
+  - Direct mode is the correct path for disposable throughput probes until the CoreWeave/R2 artifact prefix handling is cleaned up.
+  - JaxPP cannot trace inside the global Grug `set_mesh(mesh)` context; the stage-local mesh must be the active mesh during the pipeline train-step trace.
+- Next action:
+  - Resubmit the direct-mode `std_1f1b` smoke and watch for the next tracing/compile failure or first-step metrics.
+
+### 2026-07-07 23:26 PDT - microbatch sharding failure
+- Hypothesis: Once JaxPP traces outside the global Grug mesh, the next failure will identify whether the microbatch dimension can be consumed by `jaxpp.treduce` under the `(pipeline, replica_dcn, data, expert, model)` mesh.
+- Commit Hash: uncommitted working tree on `research/jaxpp-grug-moe`.
+- Command:
+  - `uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job list --prefix /dlwh/iris-run-job-20260708-061923`
+  - `uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job logs ... /dlwh/iris-run-job-20260708-061923/grug-train-jaxpp-may-d2560-std-meshfix-20260708-061920`
+  - `XLA_FLAGS=--xla_force_host_platform_device_count=32 JAX_PLATFORMS=cpu uv run python - <<'PY' ... _reshape_batch_for_pipeline ... PY`
+  - `./infra/pre-commit.py --fix experiments/grug/moe/train.py .agents/logbooks/jaxpp-grug-moe.md`
+- Config:
+  - Parent job: `/dlwh/iris-run-job-20260708-061923`
+  - GPU child: `/dlwh/iris-run-job-20260708-061923/grug-train-jaxpp-may-d2560-std-meshfix-20260708-061920`
+  - Model: d2560, 24 layers, 256 experts, top-k 4, sequence length 4096.
+  - Mesh: 4 physical pipeline ranks, expert axis 8, replica axis 1, batch 256.
+  - Pipeline: `std_1f1b`, 4 logical stages, 8 microbatches.
+- Result:
+  - The run passed worker setup, installed pinned NVIDIA/JaxPP, initialized JAX distributed, and got past the earlier `use_abstract_mesh` size conflict.
+  - It then failed inside JaxPP `treduce` when JaxPP internally called `jax.numpy.take(..., axis=0)` on the microbatch tree. JAX reported `ShardingTypeError` because the newly inserted microbatch axis inherited batch sharding: `operand=ShapedArray(int32[8@(replica_dcn,data,expert),32,4096])`.
+  - Patched `_reshape_batch_for_pipeline` to call `x.reshape(..., out_sharding=P(None, ("replica_dcn", "data", "expert"), ...))`, leaving the leading microbatch axis unsharded and preserving the original per-microbatch batch sharding.
+  - Added `JAX_COMPILATION_CACHE_DIR=/tmp/jax-compilation-cache` to the CoreWeave launcher environment so repeated debug smokes avoid the broken remote persistent compilation cache path.
+- Interpretation:
+  - The mesh-context fix was real progress: JaxPP now owns the active stage-local mesh during trace.
+  - The current evidence points to a batch-reshape sharding bug in the experimental integration, not a model or optimizer failure.
+- Next action:
+  - Resubmit `std_1f1b` with the explicit microbatch-axis sharding and watch for compile progress, first-step loss, or the next JaxPP runtime error.
+
+### 2026-07-07 23:34 PDT - native abort after JaxPP trace
+- Hypothesis: With microbatch sharding fixed, the next failure will show whether `std_1f1b` can compile the 24-layer May d=2560 MoE step or whether another integration issue appears after JaxPP's second loop trace.
+- Commit Hash: uncommitted working tree on `research/jaxpp-grug-moe`.
+- Command:
+  - `experiments/grug/moe/run_cw_jaxpp_may_d2560.sh --submit --schedule std_1f1b --steps 2 --tracker json_logger --run-id jaxpp-may-d2560-std-reshard-20260708-062725`
+  - `uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job summary /dlwh/iris-run-job-20260708-062728/grug-train-jaxpp-may-d2560-std-reshard-20260708-062725`
+  - `uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job logs --no-tail --max-lines 1400 /dlwh/iris-run-job-20260708-062728/grug-train-jaxpp-may-d2560-std-reshard-20260708-062725 ...`
+  - `./infra/pre-commit.py --fix experiments/grug/moe/launch.py experiments/grug/moe/run_cw_jaxpp_may_d2560.sh experiments/grug/moe/launch_cw_jaxpp_may_d2560.py experiments/grug/moe/train.py .agents/logbooks/jaxpp-grug-moe.md`
+- Config:
+  - Parent job: `/dlwh/iris-run-job-20260708-062728`
+  - GPU child: `/dlwh/iris-run-job-20260708-062728/grug-train-jaxpp-may-d2560-std-reshard-20260708-062725`
+  - Model/pipeline: d2560, 24 layers, 256 experts, top-k 4, `std_1f1b`, 4 stages, 8 microbatches.
+- Result:
+  - The run passed worker setup, installed JaxPP, initialized JAX distributed, and got past the earlier microbatch `ShardingTypeError`.
+  - No `train/loss` or MFU metrics were emitted.
+  - Iris summary reported task 0 exited `139`; tasks 1-3 exited cleanly but were killed after max task failures.
+  - Logs were dominated by `TrainerConfig.log_jaxprs=true` and `log_xla_hlo=true` output, including large JaxPP/JAX jaxpr dumps immediately before the native abort. There was no clean Python traceback.
+  - Patched `experiments/grug/moe/launch.py` to honor `GRUG_LOG_JAXPRS`, `GRUG_LOG_XLA_HLO`, and `JAX_COMPILATION_CACHE_DIR` when building `TrainerConfig`.
+  - Patched the CoreWeave JaxPP wrapper to default `GRUG_LOG_JAXPRS=false`, `GRUG_LOG_XLA_HLO=false`, and `JAX_COMPILATION_CACHE_DIR=/tmp/jax-compilation-cache`.
+- Interpretation:
+  - The explicit microbatch sharding fix worked, but the run now reaches a native crash during or immediately after JaxPP/JAX tracing/compilation.
+  - The next run should remove noisy IR logging as a confounder and make the failure surface smaller if the native crash persists.
+- Next action:
+  - Resubmit the same `std_1f1b` 2-step smoke with JaxPR/HLO logging disabled and collect either first metrics or a cleaner compiler/runtime failure.
+
+### 2026-07-07 23:44 PDT - clean trace still segfaults
+- Hypothesis: If the native abort was caused by giant JaxPR/HLO logging, disabling IR logging should let the 24-layer May d=2560 `std_1f1b` smoke reach compile or first metrics.
+- Commit Hash: uncommitted working tree on `research/jaxpp-grug-moe`.
+- Command:
+  - `experiments/grug/moe/run_cw_jaxpp_may_d2560.sh --submit --schedule std_1f1b --steps 2 --tracker json_logger --run-id jaxpp-may-d2560-std-noir-20260708-063540`
+  - `uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job summary /dlwh/iris-run-job-20260708-063543/grug-train-jaxpp-may-d2560-std-noir-20260708-063540`
+- Config:
+  - Parent job: `/dlwh/iris-run-job-20260708-063543`
+  - GPU child: `/dlwh/iris-run-job-20260708-063543/grug-train-jaxpp-may-d2560-std-noir-20260708-063540`
+  - Model/pipeline: d2560, 24 layers, 256 experts, top-k 4, `std_1f1b`, 4 stages, 8 microbatches.
+  - Debug knobs: `log_jaxprs=false`, `log_xla_hlo=false`, `jax_compilation_cache_dir=/tmp/jax-compilation-cache`.
+- Result:
+  - The worker hparams confirmed the logging/cache knobs landed.
+  - JaxPP first-loop tracing completed on all tasks in about 6.4-6.8 seconds; second-loop tracing completed in about 0.33 seconds.
+  - No `train/loss` or MFU metrics were emitted.
+  - The job still aborted natively after about one minute in the train loop. Iris summary reported one task with exit `139`; the remaining tasks were killed after max task failures.
+- Interpretation:
+  - Logging volume was not the primary cause.
+  - The failure now looks like a native compiler/runtime crash after JaxPP tracing. The next useful split is to shrink the model while keeping the same 4 physical pipeline stages.
+- Next action:
+  - Submit a 4-layer d2560 smoke with fewer experts and microbatches to test whether the JaxPP train-step path can run at all on this cluster/runtime.
+
+### 2026-07-08 00:06 PDT - reduced MoE exposes JaxPP clustering failure
+- Hypothesis: Shrinking the May d=2560 run to four layers and fewer experts should distinguish a size-related compiler crash from a structural JaxPP/Grug incompatibility.
+- Commit Hash: uncommitted working tree on `research/jaxpp-grug-moe` at baseline `5c36c4374a`.
+- Command:
+  - `experiments/grug/moe/run_cw_jaxpp_may_d2560.sh --submit --schedule std_1f1b --steps 2 --tracker json_logger --layers 4 --experts 32 --top-k 2 --batch 32 --expert-axis 8 --microbatches 4 --run-id jaxpp-d2560-l4-e32-std-20260708-064441`
+  - `experiments/grug/moe/run_cw_jaxpp_may_d2560.sh --submit --schedule std_1f1b --steps 2 --tracker json_logger --layers 4 --experts 32 --top-k 2 --batch 32 --seq-len 512 --expert-axis 1 --microbatches 4 --moe-implementation scatter --run-id jaxpp-d2560-l4-scatter-20260708-065703`
+  - `uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job summary /dlwh/iris-run-job-20260708-065712/grug-train-jaxpp-d2560-l4-scatter-20260708-065703`
+  - `uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job logs --no-tail --max-lines 2500 /dlwh/iris-run-job-20260708-065712/grug-train-jaxpp-d2560-l4-scatter-20260708-065703 ...`
+- Config:
+  - Ring/EP parent job: `/dlwh/iris-run-job-20260708-064444`
+  - Scatter/no-EP parent job: `/dlwh/iris-run-job-20260708-065712`
+  - Shared model shape: d2560, 4 layers, 32 experts, top-k 2, `std_1f1b`, 4 stages, 4 microbatches.
+  - Scatter split: `seq_len=512`, `expert_axis=1`, `moe_implementation=scatter`, default CE implementation.
+- Result:
+  - The reduced ring/EP run still took about 284-288 seconds in JaxPP first-loop tracing and failed before `train/loss`; the large jaxpr included the EP ring path, `haliax.nn.ragged_dot`, Pallas calls, and EP collectives.
+  - The scatter/no-EP run removed expert-parallel collectives but still failed before `train/loss`.
+  - Scatter/no-EP first-loop tracing spent about 273-277 seconds, mostly in fused CE autotune for `batched_xla`; selected block sizes were `BlockSizes(b_block_size=1024, h_block_size=512, v_block_size=64)`.
+  - The autotune cache write attempted `s3://marin-na/marin/levanter_kernel_autotune/fused_cross_entropy_loss/block_sizes_v1.json` and hit the same R2/S3 `InvalidRegion` warning seen in the parent StepRunner artifact path.
+  - After tracing, task 1 raised `AssertionError: Failed on loop body jaxpr` inside JaxPP `cluster_jaxpr`; the printed jaxpr showed nested Grug MoE `shard_map` and Pallas `ragged_dot` calls even in the local scatter path.
+- Interpretation:
+  - Four-layer size reduction did not produce a working JaxPP step.
+  - The reduced scatter failure is cleaner than the 24-layer native abort: JaxPP conservative loop clustering cannot assign all loop-body equations to pipeline stages when Grug MoE runs its nested mesh/shard_map/Pallas body.
+  - CE autotune is also too expensive for these JaxPP traces and its remote cache path is region-misconfigured for this CoreWeave/R2 environment.
+- Next action:
+  - Relaunch the same scatter/no-EP shape with `loss_implementation=xla`, `LEVANTER_PALLAS_CE_AUTOTUNE_ON_MISS=false`, and `JAXPP_CONSERVATIVE_LOOP_CLUSTERING=false` to test whether the structural failure is only the conservative assignment check or a deeper lowering/runtime blocker.
+
+### 2026-07-08 00:07 PDT - non-conservative clustering probe launched
+- Hypothesis: Disabling JaxPP's conservative loop-clustering assertion will allow unclustered nested Grug MoE equations to fall into the final task, letting the reduced scatter/no-EP run reach compilation or first-step metrics.
+- Commit Hash: uncommitted working tree on `research/jaxpp-grug-moe` at baseline `5c36c4374a`.
+- Command:
+  - `experiments/grug/moe/run_cw_jaxpp_may_d2560.sh --submit --schedule std_1f1b --steps 2 --tracker json_logger --layers 4 --experts 32 --top-k 2 --batch 32 --seq-len 512 --expert-axis 1 --microbatches 4 --moe-implementation scatter --loss-implementation xla --ce-autotune-on-miss false --conservative-loop-clustering false --run-id jaxpp-d2560-l4-scatter-xla-nonconservative-20260708-070725`
+- Config:
+  - Parent job: `/dlwh/iris-run-job-20260708-070725`
+  - Model/pipeline: d2560, 4 layers, 32 experts, top-k 2, sequence length 512, `std_1f1b`, 4 stages, 4 microbatches.
+  - Isolation knobs: `expert_axis=1`, `moe_implementation=scatter`, `loss_implementation=xla`, `LEVANTER_PALLAS_CE_AUTOTUNE_ON_MISS=false`, `JAXPP_CONSERVATIVE_LOOP_CLUSTERING=false`.
+- Result:
+  - The job failed quickly before `train/loss`.
+  - Hparams confirmed `moe_implementation="scatter"`, `loss_implementation="xla"`, `expert_axis_size=1`, and the reduced d2560/4-layer/seq-512 shape.
+  - Disabling conservative loop clustering got past the prior `Failed on loop body jaxpr` assertion, but JaxPP failed in `wrap_into_tasks_after_loop` with `AssertionError: After loop computation is not replicateable`.
+  - The source stack pointed at `optax.apply_updates(qb_params, updates)`, specifically the `p + update` add inside Optax.
+- Interpretation:
+  - The loop-body clustering issue is not the only blocker.
+  - Grug's after-loop optimizer update sees replicated/global parameters and MPMD-stage-local updates; JaxPP does not infer placement for the plain Optax add.
+- Next action:
+  - Apply pipeline updates with JaxPP's `place_with(param, update)` primitive and resubmit the same reduced probe.
+
+### 2026-07-08 00:11 PDT - place_with update retry launched
+- Hypothesis: Explicitly placing parameters with their corresponding updates before `p + update` will let JaxPP handle the after-loop optimizer application.
+- Commit Hash: uncommitted working tree on `research/jaxpp-grug-moe` at baseline `5c36c4374a`.
+- Command:
+  - `./infra/pre-commit.py --fix experiments/grug/moe/train.py experiments/grug/moe/model.py experiments/grug/moe/launch_cw_jaxpp_may_d2560.py experiments/grug/moe/run_cw_jaxpp_may_d2560.sh .agents/logbooks/jaxpp-grug-moe.md`
+  - `experiments/grug/moe/run_cw_jaxpp_may_d2560.sh --submit --schedule std_1f1b --steps 2 --tracker json_logger --layers 4 --experts 32 --top-k 2 --batch 32 --seq-len 512 --expert-axis 1 --microbatches 4 --moe-implementation scatter --loss-implementation xla --ce-autotune-on-miss false --conservative-loop-clustering false --run-id jaxpp-d2560-l4-scatter-xla-placewith-20260708-071127`
+- Config:
+  - Parent job: `/dlwh/iris-run-job-20260708-071127`
+  - Same reduced scatter/no-EP/XLA-loss shape as the prior probe.
+  - Code change: pipeline branch applies updates as `jaxpp.place_with(param, update) + update` instead of raw `optax.apply_updates`.
+- Result:
+  - The job failed quickly before `train/loss`.
+  - Hparams confirmed the intended reduced scatter/no-EP/XLA-loss shape.
+  - JaxPP first-loop/overall tracing completed in about 3.2 seconds, so the CE autotune delay was removed.
+  - The same `AssertionError: After loop computation is not replicateable` remained, now sourced at the explicit `jaxpp.place_with(param, update)` call in the pipeline update helper.
+- Interpretation:
+  - `place_with` is not accepted as a post-loop replication bridge in this context.
+  - The next likely shape is to turn the stage-local update into an explicitly cross-MPMD value before adding it to the replicated parameter leaf.
+- Next action:
+  - Replace `place_with(param, update) + update` with `param + jaxpp.cross_mpmd_all_reduce(update)` and resubmit the same reduced probe.
+
+### 2026-07-08 00:14 PDT - cross-MPMD update retry launched
+- Hypothesis: Explicitly reducing each Optax update leaf across MPMD ranks will make the post-loop parameter update replicable.
+- Commit Hash: uncommitted working tree on `research/jaxpp-grug-moe` at baseline `5c36c4374a`.
+- Command:
+  - `uv run python -m py_compile experiments/grug/moe/train.py`
+  - `./infra/pre-commit.py --fix experiments/grug/moe/train.py .agents/logbooks/jaxpp-grug-moe.md`
+  - `experiments/grug/moe/run_cw_jaxpp_may_d2560.sh --submit --schedule std_1f1b --steps 2 --tracker json_logger --layers 4 --experts 32 --top-k 2 --batch 32 --seq-len 512 --expert-axis 1 --microbatches 4 --moe-implementation scatter --loss-implementation xla --ce-autotune-on-miss false --conservative-loop-clustering false --run-id jaxpp-d2560-l4-scatter-xla-crossreduce-...`
+- Config:
+  - Same reduced scatter/no-EP/XLA-loss probe.
+  - Code change: pipeline update helper applies `jaxpp.cross_mpmd_all_reduce(update)` before adding each update leaf to its parameter leaf.
+- Result:
+  - Parent job: `/dlwh/iris-run-job-20260708-071424`.
+  - The job failed quickly before `train/loss`.
+  - Hparams confirmed the intended reduced scatter/no-EP/XLA-loss shape.
+  - JaxPP first-loop/overall tracing completed in about 3.15 seconds.
+  - The same `AssertionError: After loop computation is not replicateable` remained, sourced at `param + replicated_update`.
+- Interpretation:
+  - A one-input `cross_mpmd_all_reduce(update)` does not make the update available on the parameter leaf's placement. It preserves the update's existing MPMD placement, so the following add still has disjoint placements for at least one parameter leaf.
+- Next action:
+  - Retry the reduced probe with `jaxpp.cross_mpmd_all_reduce(update, jnp.zeros_like(param))`, which gives JaxPP both the update placement and the parameter placement without changing the numeric update.
+
+### 2026-07-08 00:22 PDT - cross-MPMD update plus zero retry launched
+- Hypothesis: Reducing each update leaf together with a zero leaf shaped like its corresponding parameter will materialize the update on both the update's stage and the parameter's stage, making the post-loop `param + update` add replicable.
+- Commit Hash: uncommitted working tree on `research/jaxpp-grug-moe` at baseline `5c36c4374a`.
+- Command:
+  - `uv run python -m py_compile experiments/grug/moe/train.py`
+  - `./infra/pre-commit.py --fix experiments/grug/moe/train.py .agents/logbooks/jaxpp-grug-moe.md`
+  - `experiments/grug/moe/run_cw_jaxpp_may_d2560.sh --submit --schedule std_1f1b --steps 2 --tracker json_logger --layers 4 --experts 32 --top-k 2 --batch 32 --seq-len 512 --expert-axis 1 --microbatches 4 --moe-implementation scatter --loss-implementation xla --ce-autotune-on-miss false --conservative-loop-clustering false --run-id jaxpp-d2560-l4-scatter-xla-crosszero-...`
+- Config:
+  - Same reduced scatter/no-EP/XLA-loss probe.
+  - Code change: pipeline update helper applies `jaxpp.cross_mpmd_all_reduce(update, jnp.zeros_like(param))` before adding each update leaf to its parameter leaf.
+- Result:
+  - Parent job: `/dlwh/iris-run-job-20260708-072104`.
+  - Child job: `/dlwh/iris-run-job-20260708-072104/grug-train-jaxpp-d2560-l4-scatter-xla-crosszero-20260708-072232`.
+  - The job failed before `train/loss`; task 2/3 showed the Python root cause and task 0 later aborted with exit 139 after coordination shutdown.
+  - JaxPP tracing was short: first-loop tracing about 1.10 seconds, second-loop tracing about 0.055 seconds, total tracing about 2.78 seconds.
+  - The failure remained `AssertionError: After loop computation is not replicateable`, sourced at `param + replicated_update` in the update helper.
+- Interpretation:
+  - The post-loop issue is not solved by adding zeros to the cross-MPMD reduce. The more fundamental problem is that the training state was still passed as SPMD/global arrays, so parameters were not partitioned into the pipeline-stage-owned structure JaxPP inferred for the train step.
+- Next action:
+  - Compile the JaxPP train step once, use `compiled.in_shardings` to obtain the state and batch `MpmdSharding` trees, convert the initial train state and per-step batches with `jaxpp.spmd_to_mpmd_reshard`, and restore ordinary `optax.apply_updates`.
+
+### 2026-07-08 00:31 PDT - state and batch MPMD partitioning launched
+- Hypothesis: Feeding JaxPP `MpmdArray` inputs with the compiled step's inferred shardings will partition weights by pipeline stage and remove the after-loop replicated/global parameter update conflict.
+- Commit Hash: uncommitted working tree on `research/jaxpp-grug-moe` at baseline `5c36c4374a`.
+- Command:
+  - `uv run python -m py_compile experiments/grug/moe/train.py`
+  - `./infra/pre-commit.py --fix experiments/grug/moe/train.py .agents/logbooks/jaxpp-grug-moe.md`
+  - `experiments/grug/moe/run_cw_jaxpp_may_d2560.sh --submit --schedule std_1f1b --steps 2 --tracker json_logger --layers 4 --experts 32 --top-k 2 --batch 32 --seq-len 512 --expert-axis 1 --microbatches 4 --moe-implementation scatter --loss-implementation xla --ce-autotune-on-miss false --conservative-loop-clustering false --run-id jaxpp-d2560-l4-scatter-xla-mpmdstate-...`
+- Config:
+  - Same reduced scatter/no-EP/XLA-loss probe.
+  - Code change: pipeline loop compiles the JaxPP step once, reads `compiled_pipeline_train_step.in_shardings`, reshards initial `GrugTrainState` and each batch with `jaxpp.spmd_to_mpmd_reshard`, keeps state as MPMD-owned across steps, disables watch-stat tracing for the pipeline path, and uses ordinary `optax.apply_updates`.
+- Result:
+  - Parent job: `/dlwh/iris-run-job-20260708-072741`.
+  - Child job: `/dlwh/iris-run-job-20260708-072741/grug-train-jaxpp-d2560-l4-scatter-xla-mpmdstate-20260708-073124`.
+  - The job failed before `train/loss` during `train_step.compile(...)`, so the post-compile `spmd_to_mpmd_reshard` path did not run.
+  - JaxPP first-loop tracing took about 1.08-1.12 seconds, second-loop tracing about 0.05 seconds, and total tracing about 2.75-3.07 seconds.
+  - The root source stack remained Optax's `p + u` in `optax.apply_updates`, and JaxPP again raised `AssertionError: After loop computation is not replicateable`.
+- Interpretation:
+  - Post-compile resharding is too late for this failure because JaxPP must first place the after-loop optimizer update while tracing.
+  - JaxPP's after-loop pass explicitly rewrites JAX's `add_any` primitive across disjoint MPMD placements, but Optax emits ordinary `add`.
+- Next action:
+  - Keep the compile-then-reshard loop, but replace only the pipeline update application with a small `add_any`-based helper using `jax.interpreters.ad.add_jaxvals_p`; submit the same reduced probe.
+
+### 2026-07-08 00:38 PDT - pipeline apply-updates with add_any launched
+- Hypothesis: Using `add_any` for pipeline parameter updates will let JaxPP rewrite cross-placement parameter/update additions during after-loop placement, allowing compile to finish and then letting the loop reshard state/batches into inferred `MpmdSharding`s.
+- Commit Hash: uncommitted working tree on `research/jaxpp-grug-moe` at baseline `5c36c4374a`.
+- Command:
+  - `uv run python -m py_compile experiments/grug/moe/train.py`
+  - `./infra/pre-commit.py --fix experiments/grug/moe/train.py .agents/logbooks/jaxpp-grug-moe.md`
+  - `experiments/grug/moe/run_cw_jaxpp_may_d2560.sh --submit --schedule std_1f1b --steps 2 --tracker json_logger --layers 4 --experts 32 --top-k 2 --batch 32 --seq-len 512 --expert-axis 1 --microbatches 4 --moe-implementation scatter --loss-implementation xla --ce-autotune-on-miss false --conservative-loop-clustering false --run-id jaxpp-d2560-l4-scatter-xla-addany-...`
+- Config:
+  - Same reduced scatter/no-EP/XLA-loss probe.
+  - Code change: default/non-pipeline training still uses `optax.apply_updates`; the pipeline branch applies update leaves with `jax.interpreters.ad.add_jaxvals_p.bind(param, update)` so JaxPP sees `add_any`.
+- Result:
+  - Pending launch at time of entry.
+- Interpretation:
+  - Pending.
+- Next action:
+  - Submit and watch whether compile gets past after-loop placement.
+
+### 2026-07-08 00:40 PDT - explicit MPMD pivot analysis
+- Hypothesis: The automatic `treduce` path is fighting Grug's replicated state tree and after-loop optimizer update; the explicit `jaxpp.experimental.mpmd` pattern from `examples/mpmd.py` may be a cleaner fit because it initializes and updates stage-local parameter trees directly.
+- Commit Hash: uncommitted working tree on `research/jaxpp-grug-moe` at baseline `5c36c4374a`.
+- Command:
+  - `sed -n '1,780p' /private/tmp/jaxpp/examples/mpmd.py`
+  - `sed -n '715,950p' experiments/grug/moe/model.py`
+- Observation:
+  - `examples/mpmd.py` builds an explicit `MpmdMesh`, creates stage-local `NamedSharding`s, initializes parameter tuples directly on `mpmd_mesh.unstack[stage]`, and expresses the 1F1B schedule as named `mpmd.task` calls plus explicit activation/gradient `mpmd.transfer`s.
+  - It avoids a global replicated parameter tree in the pipelined step. Stage params, grad accumulators, residuals, and activations all have explicit stage-local shardings before lowering.
+  - Grug can be split around `Transformer.blocks`, but the stage contract must handle embedding on stage 0, intermediate block slices on middle stages, and final norm/LM head/cross entropy on the last stage.
+  - The smallest Grug-compatible explicit-MPMD smoke should target 2 pipeline stages first, with 4 layers, scatter MoE, XLA CE, synthetic data, and no router metric parity beyond loss/QB beta needed for the smoke.
+- Interpretation:
+  - The current automatic `treduce` branch may still be useful if the pending `add_any` run compiles, but a robust implementation likely needs an explicit stage-owned state tree similar to `mpmd.py`.
+  - A direct port is more than a one-line fix: it needs stage wrappers, stage-local state initialization/restoration, explicit activation shape/sharding definitions, and optimizer-state ownership by stage.
+- Next action:
+  - If the pending `add_any` smoke fails or remains stuck, start a new explicit-MPMD implementation slice for a two-stage smoke rather than continuing to patch after-loop placement in the automatic path.
+
+### 2026-07-08 00:50 PDT - stage-local weight partition scaffolding
+- Hypothesis: Explicit MPMD needs Grug weights and optimizer state represented as pipeline-stage-owned pytrees before the scheduler is wired; otherwise the implementation will repeat the automatic path's global-state placement conflict.
+- Commit Hash: uncommitted working tree on `research/jaxpp-grug-moe` at baseline `5c36c4374a`.
+- Command:
+  - `uv run python -m py_compile experiments/grug/moe/model.py experiments/grug/moe/train.py`
+  - `./infra/pre-commit.py --fix experiments/grug/moe/model.py experiments/grug/moe/train.py`
+  - `uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job summary /dlwh/iris-run-job-20260708-073255/grug-train-jaxpp-d2560-l4-scatter-xla-addany-20260708-073814`
+- Config:
+  - Local code refactor only; no new Iris launch.
+  - `Transformer` now exposes `embed_tokens`, `block_range`, `finalize_hidden`, `hidden_next_token_loss`, `split_for_pipeline`, and `merge_pipeline_stages`.
+  - `TransformerPipelineStage` owns only the params needed by one contiguous layer range: stage 0 owns embeddings, middle stages own block slices, and the last stage owns final norm plus LM head.
+  - `GrugPipelineTrainState` stores `params: tuple[TransformerPipelineStage, ...]` and per-stage `opt_state: tuple[optax.OptState, ...]`.
+- Result:
+  - Targeted Python compile passed.
+  - Targeted repo pre-commit hooks passed for `experiments/grug/moe/model.py` and `experiments/grug/moe/train.py`.
+  - The add-any Iris smoke was still running with all 4 tasks in `building` after about 17 minutes, so it remains inconclusive.
+- Interpretation:
+  - The code now has the weight partition structure requested for pipeline parallelism, but the explicit `jaxpp.experimental.mpmd` scheduler is not wired yet.
+  - The add-any automatic path has not produced evidence beyond the previous compile failures because it has not reached execution logs.
+- Next action:
+  - Wire a first explicit-MPMD two-stage, one-microbatch smoke using the stage-local state; keep router z-loss disabled and update params/opt state inside owning-stage tasks.
+
+### 2026-07-08 10:14 PDT - explicit MPMD reaches runtime transfer
+- Hypothesis: The `examples/mpmd.py` style explicit scheduler is the right shape for Grug because it keeps params, optimizer state, and QB router state stage-local before lowering instead of asking automatic JaxPP to infer ownership of a global train state.
+- Commit Hash: uncommitted working tree on `research/jaxpp-grug-moe` at baseline `5c36c4374a`.
+- Commands:
+  - `uv run python -m py_compile experiments/grug/moe/train.py experiments/grug/moe/model.py experiments/grug/moe/launch_cw_jaxpp_may_d2560.py`
+  - `./infra/pre-commit.py --fix experiments/grug/moe/train.py experiments/grug/moe/model.py experiments/grug/moe/launch_cw_jaxpp_may_d2560.py experiments/grug/moe/run_cw_jaxpp_may_d2560.sh`
+  - `experiments/grug/moe/run_cw_jaxpp_may_d2560.sh --submit --implementation explicit_mpmd --physical-stages 2 --logical-stages 2 --microbatches 1 --nodes 2 --expert-axis 1 --layers 4 --experts 32 --top-k 2 --batch 16 --seq-len 128 --moe-implementation scatter --loss-implementation xla --steps 1 --tracker json_logger --run-id jaxpp-d2560-l4-explicit-mpmd-hoststep-...`
+  - `experiments/grug/moe/run_cw_jaxpp_may_d2560.sh --submit --implementation explicit_mpmd --physical-stages 2 --logical-stages 2 --microbatches 1 --nodes 2 --expert-axis 1 --layers 4 --experts 16 --top-k 1 --vocab-size 32768 --batch 16 --seq-len 64 --moe-implementation scatter --loss-implementation xla --steps 1 --tracker json_logger --run-id jaxpp-d2560-l4-explicit-mpmd-vocab32k-b16-...`
+- Changes:
+  - Added an explicit two-stage MPMD train-step path using `jaxpp.experimental.mpmd` tasks and transfers.
+  - Added `TransformerPipelineStage` stage-owned parameter wrappers and split/merge helpers so pipeline weights and optimizer state are partitioned before the MPMD step.
+  - Fixed explicit-state conversion to use `jaxpp.spmd_to_mpmd_reshard` with `MpmdSharding` targets, while keeping `NamedSharding` trees for `mpmd.task` input/output shardings.
+  - Duplicated batch leaves before sending the same logical batch to stage 0 and stage 1 because `spmd_to_mpmd_reshard` donates/consumes the input arrays.
+  - Moved step bookkeeping out of the MPMD function because `jaxpp.experimental.mpmd` only accepts task/transfer/stack/slice primitives at top level and scalar step placement is not part of the stage computation.
+  - Added smoke-only `MAY_VOCAB_SIZE` / `--vocab-size`; defaults still use the May heuristic vocabulary.
+- Results:
+  - `/dlwh/iris-run-job-20260708-170126/...batchcopy...` passed state reshards but failed on top-level `state.step + 1` inside the MPMD wrapper: `got jit`.
+  - `/dlwh/iris-run-job-20260708-170453/...steptask...` moved the scalar add into a task but failed because the scalar step aval lived on a single pipeline mesh while the task context was the full pipeline mesh.
+  - `/dlwh/iris-run-job-20260708-170755/...hoststep...` got past lowering, created DIME streams/communicator, compiled `grug_stage0_forward`, and then failed during activation transfer with NCCL reporting `Cuda failure 2 'out of memory'`.
+  - `/dlwh/iris-run-job-20260708-171247/...vocab32k...` with `batch=8` failed before training in Levanter validation with `ZeroDivisionError` from `data_axis_size == 0`.
+  - `/dlwh/iris-run-job-20260708-171442/...vocab32k-b16...` is the current reduced-vocab d2560 transfer smoke.
+- Interpretation:
+  - The current explicit path has cleared the earlier JaxPP tracing/after-loop placement failures and is now exercising runtime cross-stage transfer.
+  - Full-vocab d2560, even at 4 layers, is memory-heavy enough that the first runtime transfer can OOM before any loss metric; the reduced-vocab smoke should distinguish implementation correctness from the memory envelope.
+- Next action:
+  - Poll `/dlwh/iris-run-job-20260708-171442`; if it reaches a loss, scale vocabulary/sequence/layers back up incrementally before the 24-layer target.
+
+### 2026-07-08 10:44 PDT - explicit MPMD one-step smoke succeeds
+- Hypothesis: The remaining failure after explicit MPMD task execution was host-side state materialization, not the JaxPP task graph.
+- Commit Hash: uncommitted working tree on `research/jaxpp-grug-moe` at baseline `5c36c4374a`.
+- Commands:
+  - `uv run python -m py_compile experiments/grug/moe/train.py experiments/grug/moe/model.py experiments/grug/moe/launch_cw_jaxpp_may_d2560.py`
+  - `./infra/pre-commit.py --fix experiments/grug/moe/train.py experiments/grug/moe/model.py experiments/grug/moe/launch_cw_jaxpp_may_d2560.py experiments/grug/moe/run_cw_jaxpp_may_d2560.sh .agents/logbooks/jaxpp-grug-moe.md`
+  - `XLA_PYTHON_CLIENT_MEM_FRACTION=0.70 experiments/grug/moe/run_cw_jaxpp_may_d2560.sh --submit --implementation explicit_mpmd --physical-stages 2 --logical-stages 2 --microbatches 1 --nodes 2 --gpus-per-replica 1 --expert-axis 1 --layers 4 --experts 4 --top-k 1 --vocab-size 8192 --batch 2 --seq-len 32 --moe-implementation scatter --loss-implementation xla --steps 1 --tracker json_logger --run-id jaxpp-d2560-l4-explicit-mpmd-callback-20260708-174046`
+  - `uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job summary /dlwh/iris-run-job-20260708-174049`
+- Result:
+  - `/dlwh/iris-run-job-20260708-174049` succeeded.
+  - Stage 0 logged `train/loss=9.066007614135742` and completed one train step.
+  - The explicit path compiled and ran `grug_stage0_forward`, `grug_stage1_loss_backward`, `grug_stage1_update`, `grug_stage0_backward`, `grug_stage0_update`, and `grug_keep_step`.
+- Changes since the previous failed smoke:
+  - Added a local lowered-output adapter for `jaxpp.experimental.mpmd.LoweredMpmdFun` so nonlocal outputs reuse prior stage-local leaves instead of relying on JaxPP's empty-array placeholder construction.
+  - Transferred the scalar loss back to stage 0 for logging.
+  - Disabled checkpoint writes for explicit MPMD until stage-local arrays have a deliberate global checkpoint materialization path.
+  - Gated explicit-MPMD host callbacks to stage 0 to avoid logging fallback loss values from non-loss-owning stages.
+- Interpretation:
+  - Weight partitioning and the explicit two-stage MPMD train graph are now functional for a reduced d2560/4-layer smoke.
+  - Earlier full-vocab OOMs were sensitive to XLA preallocation; future scale-up smokes should use a lower `XLA_PYTHON_CLIENT_MEM_FRACTION` such as 0.50.
+- Next action:
+  - Launch a 24-layer reduced-vocab smoke with `XLA_PYTHON_CLIENT_MEM_FRACTION=0.50`, then scale sequence/batch/vocab back up if it succeeds.
+
+### 2026-07-08 10:49 PDT - 24-layer explicit MPMD smoke succeeds
+- Hypothesis: Lowering XLA preallocation should avoid the earlier NCCL transfer OOM and allow a 24-layer stage-partitioned Grug smoke to complete.
+- Commit Hash: uncommitted working tree on `research/jaxpp-grug-moe` at baseline `5c36c4374a`.
+- Commands:
+  - `XLA_PYTHON_CLIENT_MEM_FRACTION=0.50 experiments/grug/moe/run_cw_jaxpp_may_d2560.sh --submit --implementation explicit_mpmd --physical-stages 2 --logical-stages 2 --microbatches 1 --nodes 2 --gpus-per-replica 1 --expert-axis 1 --layers 24 --experts 4 --top-k 1 --vocab-size 8192 --batch 2 --seq-len 32 --moe-implementation scatter --loss-implementation xla --steps 1 --tracker json_logger --run-id jaxpp-d2560-l24-explicit-mpmd-xlamem50-20260708-174431`
+  - `uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job summary /dlwh/iris-run-job-20260708-174434`
+- Result:
+  - `/dlwh/iris-run-job-20260708-174434` succeeded.
+  - Stage 0 logged `train/loss=9.049333572387695`.
+  - Parameter count was `1,885,107,296`.
+  - One step took about `90.9s` including first compilation; no OOM at `XLA_PYTHON_CLIENT_MEM_FRACTION=0.50`.
+- Interpretation:
+  - The explicit MPMD implementation now runs a 24-layer d2560 Grug model with stage-local weight/optimizer partitioning across two JaxPP stages.
+  - Remaining gaps are productionizing checkpoint materialization for stage-local JaxPP arrays and scaling the smoke back toward larger vocab/sequence/batch/expert counts.
+- Next action:
+  - Keep `XLA_PYTHON_CLIENT_MEM_FRACTION` below the default for larger JaxPP smokes; try larger vocab or more GPUs per stage next.
+
+### 2026-07-08 11:03 PDT - automatic full-shape retry reaches JaxPP compile
+- Hypothesis: The full May d2560 shape on 4x8 H100s needs a higher XLA heap than the 0.50 smoke, but still benefits from lowering the default preallocation below the previous 0.95 launcher default.
+- Commit Hash: uncommitted working tree on `research/jaxpp-grug-moe` at baseline `5c36c4374a`.
+- Commands:
+  - `TF_GPU_ALLOCATOR=cuda_malloc_async XLA_PYTHON_CLIENT_MEM_FRACTION=0.90 experiments/grug/moe/run_cw_jaxpp_may_d2560.sh --submit --schedule std_1f1b --steps 2 --tracker json_logger --layers 24 --experts 256 --top-k 4 --batch 256 --seq-len 4096 --expert-axis 8 --moe-implementation ring --loss-implementation xla --ce-autotune-on-miss false --conservative-loop-clustering false --run-id jaxpp-may-d2560-auto-std-4x8-xlamem90-async-20260708-175530`
+  - `uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job logs /dlwh/iris-run-job-20260708-175532 --tail --max-lines 700`
+- Config:
+  - Automatic JaxPP `std_1f1b`, `PP_STAGES=4`, `PP_MPMD_DIM=4`, `PP_MICROBATCHES=8`.
+  - Full May target shape: d2560, 24 layers, 256 experts, top-k 4, vocab 128256, batch 256, seq 4096, ring MoE, XLA CE.
+  - 4 CoreWeave H100 nodes, 8 GPUs per node, expert axis 8.
+- Result:
+  - `/dlwh/iris-run-job-20260708-175135` with `XLA_PYTHON_CLIENT_MEM_FRACTION=0.50` failed during `jit__init_state` because XLA's base limit was about 42.5 GB while init needed about 70.47 GiB.
+  - `/dlwh/iris-run-job-20260708-175532` with `XLA_PYTHON_CLIENT_MEM_FRACTION=0.90` and `TF_GPU_ALLOCATOR=cuda_malloc_async` got past model init on all four processes.
+  - The run reported `parameter_count=61,969,583,104`, H100 theoretical throughput summary, and entered the train loop.
+  - It then failed in JaxPP compile after `After loop replication` with `AssertionError` involving a `float32[24,256]` aux tensor and the `int32[256,4096]` token batch.
+- Interpretation:
+  - The full shape is no longer blocked at initialization when the XLA heap is raised from 0.50 to 0.90, but automatic `treduce` cannot carry the per-layer/per-expert QB aux tensor through the after-loop placement.
+  - The launcher default `XLA_PYTHON_CLIENT_MEM_FRACTION` was lowered from `0.95` to `0.88`, and `--xla-memory-fraction` was added so runs record the choice explicitly. Full-shape runs may still need an override near 0.89-0.90.
+- Next action:
+  - Remove QB aux from the automatic JaxPP `treduce` output for schedule/MFU probes while preserving explicit-MPMD QB feedback, then relaunch a reduced automatic compile smoke before returning to full shape.
+
+### 2026-07-08 11:03 PDT - PP-aware launcher mesh and reduced follow-up probes
+- Hypothesis: Automatic JaxPP schedule probes can compile if the reducer returns only loss/grads, and small explicit-MPMD probes need Levanter validation to see the same pipeline/expert batch sharding as the custom Grug mesh.
+- Commit Hash: uncommitted working tree on `research/jaxpp-grug-moe` at baseline `5c36c4374a`.
+- Commands:
+  - `uv run python -m py_compile experiments/grug/moe/train.py experiments/grug/moe/model.py experiments/grug/moe/launch.py experiments/grug/moe/launch_cw_jaxpp_may_d2560.py`
+  - `./infra/pre-commit.py --fix experiments/grug/moe/train.py experiments/grug/moe/model.py experiments/grug/moe/launch.py experiments/grug/moe/launch_cw_jaxpp_may_d2560.py experiments/grug/moe/run_cw_jaxpp_may_d2560.sh`
+  - `TF_GPU_ALLOCATOR=cuda_malloc_async experiments/grug/moe/run_cw_jaxpp_may_d2560.sh --submit --schedule std_1f1b --implementation auto --physical-stages 4 --microbatches 4 --nodes 4 --gpus-per-replica 8 --expert-axis 8 --layers 4 --experts 8 --top-k 1 --vocab-size 8192 --batch 32 --seq-len 128 --moe-implementation ring --loss-implementation xla --steps 1 --tracker json_logger --xla-memory-fraction 0.70 --conservative-loop-clustering false --run-id jaxpp-d2560-l4-auto-std-qbskip-meshfix-20260708-180102`
+  - `TF_GPU_ALLOCATOR=cuda_malloc_async experiments/grug/moe/run_cw_jaxpp_may_d2560.sh --submit --implementation explicit_mpmd --physical-stages 4 --logical-stages 4 --microbatches 1 --nodes 4 --gpus-per-replica 8 --expert-axis 8 --layers 24 --experts 8 --top-k 4 --vocab-size 8192 --batch 8 --seq-len 32 --moe-implementation ring --loss-implementation xla --steps 1 --tracker json_logger --xla-memory-fraction 0.50 --run-id jaxpp-d2560-l24-explicit-4stage-meshfix-20260708-180102`
+- Changes:
+  - Automatic JaxPP `treduce` now reduces only loss and gradients; it keeps `state.pending_qb_betas` unchanged instead of returning `qb_beta_per_layer`.
+  - `run_grug_moe_trial` now passes a PP-aware `MeshConfig` into `TrainerConfig` whenever `GrugJaxPPConfig` is present, with `pipeline`, `replica_dcn`, `data`, `expert`, and `model` axes.
+  - The launcher wrapper now defaults `XLA_PYTHON_CLIENT_MEM_FRACTION` to `0.88`, accepts `--xla-memory-fraction`, prints it in dry runs, and passes through `TF_GPU_ALLOCATOR` / `XLA_PYTHON_CLIENT_PREALLOCATE` when set.
+- Result:
+  - Targeted Python compile passed.
+  - Targeted pre-commit hooks passed.
+  - Prior explicit 4-stage run `/dlwh/iris-run-job-20260708-175602` failed before model init with Levanter `ZeroDivisionError` because small `batch=8` inferred `per_device_parallelism=0` against the default all-data mesh.
+  - New follow-up jobs are running:
+    - `/dlwh/iris-run-job-20260708-180234`: automatic `std_1f1b` QB-skip/mesh-fix reduced smoke.
+    - `/dlwh/iris-run-job-20260708-180235`: explicit-MPMD 4-stage mesh-fix reduced smoke.
+- Interpretation:
+  - The latest code addresses the two newest blockers: JaxPP after-loop QB aux placement on automatic schedules and Levanter validation using the wrong batch-shard topology for PP runs.
+- Next action:
+  - Poll `/dlwh/iris-run-job-20260708-180234` and `/dlwh/iris-run-job-20260708-180235`; if the automatic smoke succeeds, relaunch the full 24-layer 256-expert `std_1f1b` run with an explicit memory fraction near 0.89-0.90, then expand to other JaxPP schedules.
+
+### 2026-07-08 11:06 PDT - move pipeline mesh axis to DCN for CoreWeave
+- Hypothesis: The PP-aware Levanter mesh must place `pipeline` across CoreWeave slices/nodes, because each JAX process sees one 8-GPU slice and one pipeline rank.
+- Commit Hash: uncommitted working tree on `research/jaxpp-grug-moe` at baseline `5c36c4374a`.
+- Commands:
+  - `uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job logs /dlwh/iris-run-job-20260708-180234 --tail --max-lines 1000`
+  - `uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job logs /dlwh/iris-run-job-20260708-180235 --tail --max-lines 1000`
+  - `uv run python -m py_compile experiments/grug/moe/launch.py experiments/grug/moe/train.py experiments/grug/moe/launch_cw_jaxpp_may_d2560.py`
+  - `./infra/pre-commit.py --fix experiments/grug/moe/launch.py experiments/grug/moe/train.py experiments/grug/moe/launch_cw_jaxpp_may_d2560.py .agents/logbooks/jaxpp-grug-moe.md`
+  - `TF_GPU_ALLOCATOR=cuda_malloc_async experiments/grug/moe/run_cw_jaxpp_may_d2560.sh --submit --schedule std_1f1b --implementation auto --physical-stages 4 --microbatches 4 --nodes 4 --gpus-per-replica 8 --expert-axis 8 --layers 4 --experts 8 --top-k 1 --vocab-size 8192 --batch 32 --seq-len 128 --moe-implementation ring --loss-implementation xla --steps 1 --tracker json_logger --xla-memory-fraction 0.70 --conservative-loop-clustering false --run-id jaxpp-d2560-l4-auto-std-qbskip-dcnmesh-20260708-180536`
+  - `TF_GPU_ALLOCATOR=cuda_malloc_async experiments/grug/moe/run_cw_jaxpp_may_d2560.sh --submit --implementation explicit_mpmd --physical-stages 4 --logical-stages 4 --microbatches 1 --nodes 4 --gpus-per-replica 8 --expert-axis 8 --layers 24 --experts 8 --top-k 4 --vocab-size 8192 --batch 8 --seq-len 32 --moe-implementation ring --loss-implementation xla --steps 1 --tracker json_logger --xla-memory-fraction 0.50 --run-id jaxpp-d2560-l24-explicit-4stage-dcnmesh-20260708-180551`
+- Result:
+  - `/dlwh/iris-run-job-20260708-180234` and `/dlwh/iris-run-job-20260708-180235` both failed in Levanter mesh validation with `ValueError: ICI product 32 does not divide devices_per_slice 8`.
+  - The corrected `MeshConfig` keeps `expert`, `data`, `replica`, and `model` in ICI axes and places `pipeline` plus `replica_dcn` in DCN axes.
+  - Targeted Python compile and pre-commit passed.
+  - New follow-up jobs:
+    - `/dlwh/iris-run-job-20260708-180542`: automatic `std_1f1b` QB-skip with pipeline in DCN mesh.
+    - `/dlwh/iris-run-job-20260708-180600`: explicit-MPMD 4-stage with pipeline in DCN mesh.
+- Interpretation:
+  - CoreWeave exposes four slices of eight GPUs for the 4x8 run; the trainer validation mesh must reflect that topology even though the Grug training loop later builds its own concrete JaxPP mesh.
+- Next action:
+  - Poll `/dlwh/iris-run-job-20260708-180542` and `/dlwh/iris-run-job-20260708-180600` for hparams/loss/compile errors.
+
+### 2026-07-08 11:09 PDT - remove QB leaf from automatic JaxPP state
+- Hypothesis: The remaining automatic JaxPP after-loop assertion is caused by the unchanged `pending_qb_betas` leaf in `GrugTrainState`, not by the `treduce` aux output, so automatic schedule probes need to remove that state leaf entirely.
+- Commit Hash: uncommitted working tree on `research/jaxpp-grug-moe` at baseline `5c36c4374a`.
+- Commands:
+  - `uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job logs /dlwh/iris-run-job-20260708-180542 --tail --max-lines 800`
+  - `uv run python -m py_compile experiments/grug/moe/train.py experiments/grug/moe/launch.py experiments/grug/moe/model.py experiments/grug/moe/launch_cw_jaxpp_may_d2560.py`
+  - `./infra/pre-commit.py --fix experiments/grug/moe/train.py experiments/grug/moe/launch.py experiments/grug/moe/model.py experiments/grug/moe/launch_cw_jaxpp_may_d2560.py .agents/logbooks/jaxpp-grug-moe.md`
+  - `TF_GPU_ALLOCATOR=cuda_malloc_async experiments/grug/moe/run_cw_jaxpp_may_d2560.sh --submit --schedule std_1f1b --implementation auto --physical-stages 4 --microbatches 4 --nodes 4 --gpus-per-replica 8 --expert-axis 8 --layers 4 --experts 8 --top-k 1 --vocab-size 8192 --batch 32 --seq-len 128 --moe-implementation ring --loss-implementation xla --steps 1 --tracker json_logger --xla-memory-fraction 0.70 --conservative-loop-clustering false --run-id jaxpp-d2560-l4-auto-std-noqbstate-20260708-180908`
+- Result:
+  - `/dlwh/iris-run-job-20260708-180542` reached hparams and train-loop setup with the corrected DCN mesh, then failed in JaxPP compile with `AssertionError` involving `float32[4,8]` and the `int32[32,128]` token batch.
+  - Code change: `GrugTrainState.pending_qb_betas` is now optional; automatic JaxPP replaces it with `None` before compiling, while explicit pipeline splitting still requires real QB tensors.
+  - Targeted Python compile and pre-commit passed.
+  - New automatic follow-up job: `/dlwh/iris-run-job-20260708-180907`.
+  - Explicit 4-stage follow-up `/dlwh/iris-run-job-20260708-180600` is still running.
+- Interpretation:
+  - Automatic JaxPP has now cleared trainer mesh validation and reduced the failing aux state to the QB leaf specifically; the next run tests whether removing that leaf is sufficient.
+- Next action:
+  - Poll `/dlwh/iris-run-job-20260708-180907` and `/dlwh/iris-run-job-20260708-180600`.
+
+### 2026-07-08 11:13 PDT - explicit 4-stage run emits loss and MFU
+- Hypothesis: The explicit `jaxpp.experimental.mpmd` implementation should scale from the earlier 2-stage reduced smoke to a 4-stage CoreWeave topology once the launcher mesh places `pipeline` in DCN axes.
+- Commit Hash: uncommitted working tree on `research/jaxpp-grug-moe` at baseline `5c36c4374a`.
+- Command:
+  - `uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job logs /dlwh/iris-run-job-20260708-180600 --tail --max-lines 1200`
+- Config:
+  - Explicit MPMD, `PP_STAGES=4`, `PP_MPMD_DIM=4`, `PP_MICROBATCHES=1`.
+  - 4 CoreWeave H100 nodes, 8 GPUs per node, `MAY_EXPERT_AXIS=8`.
+  - d2560, 24 layers, 8 experts, top-k 4, vocab 8192, batch 8, seq 32, ring MoE, XLA CE.
+  - `XLA_PYTHON_CLIENT_MEM_FRACTION=0.50`, `TF_GPU_ALLOCATOR=cuda_malloc_async`.
+- Result:
+  - `/dlwh/iris-run-job-20260708-180600` reached hparams on all four stages and reported `parameter_count=2,829,071,552`.
+  - It compiled the expected explicit graph pieces: `grug_stage0_forward`, `grug_stage1_forward`, `grug_stage2_forward`, `grug_stage3_loss_backward`, stage updates/backwards, and `grug_keep_step`.
+  - Stage 0 emitted one training result: `train/loss=9.041923522949219`, `throughput/mfu=8.186476590141406e-05`, `throughput/duration=108.68707649502903`, `tokens_per_second=2.3553858310993263`.
+  - The Iris parent job was still marked running at the time of this entry, so the run has useful metrics but is not yet sealed as fully exited.
+- Interpretation:
+  - The explicit-MPMD path now demonstrates 4-stage, stage-local weight/optimizer partitioning on 4x8 H100 and emits an MFU datapoint.
+  - The MFU includes first-compile cost and a tiny one-step reduced workload, so it is a correctness/placement signal rather than a throughput claim.
+- Next action:
+  - Keep polling `/dlwh/iris-run-job-20260708-180600` for clean exit or nonzero-stage hang; keep polling `/dlwh/iris-run-job-20260708-180907` for the automatic no-QB-state compile result.
+
+### 2026-07-08 11:15 PDT - explicit clean exit; automatic blocked on batch placement
+- Hypothesis: Removing QB tensors from the automatic pipeline state should leave no after-loop tensor that JaxPP rejects.
+- Commit Hash: uncommitted working tree on `research/jaxpp-grug-moe` at baseline `5c36c4374a`.
+- Commands:
+  - `uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job summary /dlwh/iris-run-job-20260708-180600`
+  - `uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job summary /dlwh/iris-run-job-20260708-180907`
+  - `uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job logs /dlwh/iris-run-job-20260708-180907 --tail --max-lines 1200`
+- Result:
+  - `/dlwh/iris-run-job-20260708-180600` fully succeeded at the Iris level (`State: succeeded`) after `6 minutes and 45.44 seconds`.
+  - `/dlwh/iris-run-job-20260708-180907` reached hparams and train setup, with `parameter_count=507,560,992`.
+  - Automatic `std_1f1b` still failed during `train_step.compile`, but the assertion is now narrowed to the batch token input only: `AssertionError: ([Var(...):int32[32@(replica_dcn,data,expert),128]], [P()])`.
+- Interpretation:
+  - Explicit-MPMD is the working path for now: 4-stage CoreWeave topology, stage-local weights/optimizer state, clean job exit, and a first MFU datapoint.
+  - The automatic `mpmd_jit_with_loop`/`treduce` path no longer fails on QB state, but JaxPP still tries to place the input token batch as replicated scalar-like `P()` after-loop state. The next automatic fix should focus on batch input placement/lifetime around `treduce`, not model weights.
+- Next action:
+  - For throughput work, scale the explicit-MPMD path first. Resume automatic schedule work only after understanding why JaxPP's after-loop replication includes the batch token var.
+
+### 2026-07-08 11:16 PDT - launch explicit 64-expert scale probe
+- Hypothesis: The explicit-MPMD path that succeeded at 8 experts should scale to a larger 64-expert, top-k 4 workload on the same 4-stage CoreWeave topology and produce a more useful MFU signal over multiple steps.
+- Commit Hash: uncommitted working tree on `research/jaxpp-grug-moe` at baseline `5c36c4374a`.
+- Command:
+  - `TF_GPU_ALLOCATOR=cuda_malloc_async experiments/grug/moe/run_cw_jaxpp_may_d2560.sh --submit --implementation explicit_mpmd --physical-stages 4 --logical-stages 4 --microbatches 1 --nodes 4 --gpus-per-replica 8 --expert-axis 8 --layers 24 --experts 64 --top-k 4 --vocab-size 8192 --batch 32 --seq-len 128 --moe-implementation ring --loss-implementation xla --steps 3 --tracker json_logger --xla-memory-fraction 0.80 --run-id jaxpp-d2560-l24-explicit-4stage-e64-b32-s128-20260708-1116`
+- Config:
+  - Explicit MPMD, 4 physical/logical stages, 1 microbatch.
+  - 4 CoreWeave H100 nodes, 8 GPUs per node, expert axis 8.
+  - d2560, 24 layers, 64 experts, top-k 4, vocab 8192, batch 32, seq 128, ring MoE, XLA CE, 3 train steps.
+  - `XLA_PYTHON_CLIENT_MEM_FRACTION=0.80`, `TF_GPU_ALLOCATOR=cuda_malloc_async`.
+- Result:
+  - Submitted as `/dlwh/iris-run-job-20260708-181634`.
+  - Pending at entry time.
+- Interpretation:
+  - This is the next explicit-MPMD scaling rung toward May shape; it keeps vocab/sequence reduced but materially increases experts, tokens/step, and step count.
+- Next action:
+  - Poll `/dlwh/iris-run-job-20260708-181634`; if it succeeds, try 256 experts at reduced sequence/batch or increase sequence/batch depending on the limiting factor.
+
+### 2026-07-08 11:23 PDT - explicit 64-expert probe succeeds at 0.75 MFU
+- Hypothesis: The explicit-MPMD path that succeeded at 8 experts should scale to a larger 64-expert, top-k 4 workload on the same 4-stage CoreWeave topology and produce a more useful MFU signal over multiple steps.
+- Commit Hash: uncommitted working tree on `research/jaxpp-grug-moe` at baseline `5c36c4374a`.
+- Commands:
+  - `uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job summary /dlwh/iris-run-job-20260708-181634`
+  - `uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job logs /dlwh/iris-run-job-20260708-181634 --tail --max-lines 1200`
+- Config:
+  - Explicit MPMD, 4 physical/logical stages, 1 microbatch.
+  - 4 CoreWeave H100 nodes, 8 GPUs per node, expert axis 8.
+  - d2560, 24 layers, 64 experts, top-k 4, vocab 8192, batch 32, seq 128, ring MoE, XLA CE, 3 train steps.
+  - `XLA_PYTHON_CLIENT_MEM_FRACTION=0.80`, `TF_GPU_ALLOCATOR=cuda_malloc_async`.
+- Result:
+  - `/dlwh/iris-run-job-20260708-181634` fully succeeded at the Iris level (`State: succeeded`) after `5 minutes and 1.93 seconds`.
+  - Reported `parameter_count=16,044,571,136`.
+  - Stage 0 emitted stable post-compile metrics by step 2: `train/loss=9.035113334655762`, `tokens_per_second=21483.455929944237`, `gflops_per_second=238404.24097989046`, and `throughput/mfu=0.7529189015282038`.
+  - Summary metrics reported `throughput/mean_mfu=0.7529189015282038`, `p10/p50/p90=0.7529189015282038`, `sample_count=2`.
+- Interpretation:
+  - The explicit JaxPP/MpMD path is now a real throughput path, not just a compile smoke: stage-local weights/optimizer state work on a 4x8 H100 topology with a 16B-parameter 24-layer MoE.
+  - The lowered prealloc fraction plus `cuda_malloc_async` avoided the earlier full-state init OOM pattern at this scale.
+- Next action:
+  - Launch the 256-expert top-k 4 rung with the same lowered-prealloc setup, keeping vocab and sequence reduced first. If memory fails, reduce batch before backing off expert count.
+
+### 2026-07-08 11:24 PDT - launch explicit 256-expert scale probe
+- Hypothesis: The explicit-MPMD implementation that reached 0.75 MFU at 64 experts can carry the requested 256-expert, top-k 4 expert scale if batch is reduced before token/sequence scale and XLA preallocation remains below the earlier 0.88-0.90 settings.
+- Commit Hash: uncommitted working tree on `research/jaxpp-grug-moe` at baseline `5c36c4374a`.
+- Command:
+  - `TF_GPU_ALLOCATOR=cuda_malloc_async experiments/grug/moe/run_cw_jaxpp_may_d2560.sh --submit --implementation explicit_mpmd --physical-stages 4 --logical-stages 4 --microbatches 1 --nodes 4 --gpus-per-replica 8 --expert-axis 8 --layers 24 --experts 256 --top-k 4 --vocab-size 8192 --batch 16 --seq-len 128 --moe-implementation ring --loss-implementation xla --steps 3 --tracker json_logger --xla-memory-fraction 0.80 --run-id jaxpp-d2560-l24-explicit-4stage-e256-b16-s128-20260708-1125`
+- Config:
+  - Explicit MPMD, 4 physical/logical stages, 1 microbatch.
+  - 4 CoreWeave H100 nodes, 8 GPUs per node, expert axis 8.
+  - d2560, 24 layers, 256 experts, top-k 4, vocab 8192, batch 16, seq 128, ring MoE, XLA CE, 3 train steps.
+  - `XLA_PYTHON_CLIENT_MEM_FRACTION=0.80`, `TF_GPU_ALLOCATOR=cuda_malloc_async`.
+- Result:
+  - Submitted as `/dlwh/iris-run-job-20260708-182427`.
+  - Initial poll showed Iris setup running.
+- Interpretation:
+  - This tests the expert-count target directly while holding vocabulary, sequence length, and batch below full May shape.
+- Next action:
+  - Poll `/dlwh/iris-run-job-20260708-182427`; if it OOMs, reduce batch or tune preallocation before reducing experts.
+
+### 2026-07-08 11:28 PDT - 256-expert probe hits XLA base limit at 0.80
+- Hypothesis: The explicit-MPMD implementation can carry 256 experts if batch is reduced and XLA preallocation stays below the earlier high settings.
+- Commit Hash: uncommitted working tree on `research/jaxpp-grug-moe` at baseline `5c36c4374a`.
+- Commands:
+  - `uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job logs /dlwh/iris-run-job-20260708-182427 --tail --max-lines 5000 | rg -C 4 'RESOURCE_EXHAUSTED|out of memory|Out of memory|failed to allocate|Current allocation summary|bytes|GiB|MiB|Traceback|ERROR|RuntimeError'`
+  - `uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job stop /dlwh/iris-run-job-20260708-182427`
+- Config:
+  - Explicit MPMD, 4 physical/logical stages, d2560, 24 layers, 256 experts, top-k 4, vocab 8192, batch 16, seq 128.
+  - `XLA_PYTHON_CLIENT_MEM_FRACTION=0.80`, `TF_GPU_ALLOCATOR=cuda_malloc_async`.
+- Result:
+  - The run reached JAX distributed startup and hparams on all four stages.
+  - XLA reported `The byte size of input/output arguments (68289171792) exceeds the base limit (68015673538)`.
+  - Rematerialization could not reduce below `63.60GiB (68289171784 bytes)`.
+  - Workers then emitted repeated BFC OOM messages for tiny allocations (`1.25MiB`, then `4B`), so the job was stopped manually as `/dlwh/iris-run-job-20260708-182427`.
+- Interpretation:
+  - This failure is not driven by batch activations; the stage input/output state is already slightly larger than the `0.80` XLA base limit.
+  - Reducing batch further is unlikely to fix the first failure. The next run should raise the fraction modestly while staying below the earlier `0.88-0.90` high-prealloc settings.
+- Next action:
+  - Retry the same 256-expert batch-16 shape at `XLA_PYTHON_CLIENT_MEM_FRACTION=0.84`.
+
+### 2026-07-08 11:28 PDT - launch explicit 256-expert retry at 0.84
+- Hypothesis: The 256-expert batch-16 shape failed at `0.80` only because the stage input/output footprint was slightly above the XLA base limit; `0.84` should leave enough headroom while still avoiding the earlier high `0.88-0.90` preallocation settings.
+- Commit Hash: uncommitted working tree on `research/jaxpp-grug-moe` at baseline `5c36c4374a`.
+- Command:
+  - `TF_GPU_ALLOCATOR=cuda_malloc_async experiments/grug/moe/run_cw_jaxpp_may_d2560.sh --submit --implementation explicit_mpmd --physical-stages 4 --logical-stages 4 --microbatches 1 --nodes 4 --gpus-per-replica 8 --expert-axis 8 --layers 24 --experts 256 --top-k 4 --vocab-size 8192 --batch 16 --seq-len 128 --moe-implementation ring --loss-implementation xla --steps 3 --tracker json_logger --xla-memory-fraction 0.84 --run-id jaxpp-d2560-l24-explicit-4stage-e256-b16-s128-xla084-20260708-1128`
+- Config:
+  - Explicit MPMD, 4 physical/logical stages, d2560, 24 layers, 256 experts, top-k 4, vocab 8192, batch 16, seq 128, ring MoE, XLA CE.
+  - `XLA_PYTHON_CLIENT_MEM_FRACTION=0.84`, `TF_GPU_ALLOCATOR=cuda_malloc_async`.
+- Result:
+  - Submitted as `/dlwh/iris-run-job-20260708-182830`.
+- Interpretation:
+  - This is the same requested expert-scale target as the failed 0.80 attempt; only the memory fraction changed.
+- Next action:
+  - Poll `/dlwh/iris-run-job-20260708-182830` for init/compile progress and MFU.
+
+### 2026-07-08 11:32 PDT - 256-expert retry clears base limit but OOMs at 400 MiB allocation
+- Hypothesis: Raising the memory fraction from `0.80` to `0.84` should clear the XLA stage input/output base-limit failure for 256 experts while staying below the earlier high preallocation settings.
+- Commit Hash: uncommitted working tree on `research/jaxpp-grug-moe` at baseline `5c36c4374a`.
+- Commands:
+  - `uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job summary /dlwh/iris-run-job-20260708-182830`
+  - `uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job logs /dlwh/iris-run-job-20260708-182830 --tail --max-lines 4000 | rg 'parameter_count|throughput/|train/loss|Compiling|Finished|compile|OOM|RESOURCE_EXHAUSTED|out of memory|failed to allocate|base limit|Current allocation summary|Traceback|AssertionError|ERROR|finished|summary'`
+- Config:
+  - Explicit MPMD, 4 physical/logical stages, d2560, 24 layers, 256 experts, top-k 4, vocab 8192, batch 16, seq 128.
+  - `XLA_PYTHON_CLIENT_MEM_FRACTION=0.84`, `TF_GPU_ALLOCATOR=cuda_malloc_async`.
+- Result:
+  - `/dlwh/iris-run-job-20260708-182830` failed after `3 minutes and 13.64 seconds`.
+  - The run cleared the earlier base-limit check and reported `parameter_count=61,354,855,424`.
+  - It also reported `throughput/flops_per_token_analytic=3,722,629,120`, `throughput/flops_per_example_analytic=1,429,489,582,080`, and H100 theoretical FLOPs `3.1664e+16`.
+  - It then failed on all stages with `jax.errors.JaxRuntimeError: RESOURCE_EXHAUSTED: Out of memory while trying to allocate 400.00MiB`.
+- Interpretation:
+  - The 256-expert 24-layer target reaches full model initialization/accounting with stage-local explicit MPMD, but the 0.84 allocator pool leaves too little runtime slack.
+  - Since the failed allocation is only 400 MiB after a 61.35B-param model is resident, try one `0.88` run before reducing expert count. If `0.88` still fails, reduce to 192 or 128 experts rather than spending more runs on batch changes.
+- Next action:
+  - Retry 256 experts at `XLA_PYTHON_CLIENT_MEM_FRACTION=0.88`.
+
+### 2026-07-08 11:33 PDT - launch explicit 256-expert retry at 0.88
+- Hypothesis: The 256-expert batch-16 shape is close enough that the default-lower `0.88` fraction may clear the 400 MiB runtime allocation failure seen at `0.84`.
+- Commit Hash: uncommitted working tree on `research/jaxpp-grug-moe` at baseline `5c36c4374a`.
+- Command:
+  - `TF_GPU_ALLOCATOR=cuda_malloc_async experiments/grug/moe/run_cw_jaxpp_may_d2560.sh --submit --implementation explicit_mpmd --physical-stages 4 --logical-stages 4 --microbatches 1 --nodes 4 --gpus-per-replica 8 --expert-axis 8 --layers 24 --experts 256 --top-k 4 --vocab-size 8192 --batch 16 --seq-len 128 --moe-implementation ring --loss-implementation xla --steps 3 --tracker json_logger --xla-memory-fraction 0.88 --run-id jaxpp-d2560-l24-explicit-4stage-e256-b16-s128-xla088-20260708-1133`
+- Config:
+  - Explicit MPMD, 4 physical/logical stages, d2560, 24 layers, 256 experts, top-k 4, vocab 8192, batch 16, seq 128.
+  - `XLA_PYTHON_CLIENT_MEM_FRACTION=0.88`, `TF_GPU_ALLOCATOR=cuda_malloc_async`.
+- Result:
+  - Submitted as `/dlwh/iris-run-job-20260708-183245`.
+- Interpretation:
+  - This is the last direct 256-expert memory-fraction probe before reducing expert count.
+- Next action:
+  - Poll `/dlwh/iris-run-job-20260708-183245`.
+
+### 2026-07-08 11:36 PDT - 256-expert retry at 0.88 still OOMs
+- Hypothesis: The 256-expert batch-16 shape may only need the default-lower `0.88` memory fraction to clear the 400 MiB allocation failure observed at `0.84`.
+- Commit Hash: uncommitted working tree on `research/jaxpp-grug-moe` at baseline `5c36c4374a`.
+- Commands:
+  - `uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job summary /dlwh/iris-run-job-20260708-183245`
+  - `uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job logs /dlwh/iris-run-job-20260708-183245 --tail --max-lines 4500 | rg 'parameter_count|throughput/|train/loss|Compiling|Finished|compile|OOM|RESOURCE_EXHAUSTED|out of memory|failed to allocate|base limit|Current allocation summary|Traceback|AssertionError|ERROR|finished|summary'`
+- Config:
+  - Explicit MPMD, 4 physical/logical stages, d2560, 24 layers, 256 experts, top-k 4, vocab 8192, batch 16, seq 128.
+  - `XLA_PYTHON_CLIENT_MEM_FRACTION=0.88`, `TF_GPU_ALLOCATOR=cuda_malloc_async`.
+- Result:
+  - `/dlwh/iris-run-job-20260708-183245` failed after `3 minutes and 4.54 seconds`.
+  - It again reported `parameter_count=61,354,855,424` and the same analytic FLOP numbers as the `0.84` run.
+  - It again failed on all stages with `jax.errors.JaxRuntimeError: RESOURCE_EXHAUSTED: Out of memory while trying to allocate 400.00MiB`.
+- Interpretation:
+  - The current explicit-MPMD state layout can initialize/account for the 256-expert 24-layer model but cannot execute it on 4x8 H100 at batch 16 with practical memory fractions up to `0.88`.
+  - The repeated 400 MiB failure after full parameter accounting suggests reducing batch is not the right first fix; reduce expert count while preserving 24 layers/top-k 4.
+- Next action:
+  - Launch a 192-expert, top-k 4 rung at `XLA_PYTHON_CLIENT_MEM_FRACTION=0.80`.
+
+### 2026-07-08 11:37 PDT - launch explicit 192-expert reduced rung
+- Hypothesis: With 256 experts ruled out by repeated 400 MiB runtime OOMs, a 192-expert 24-layer top-k 4 run should preserve most of the expert-scale target while fitting under the lower `0.80` memory fraction.
+- Commit Hash: uncommitted working tree on `research/jaxpp-grug-moe` at baseline `5c36c4374a`.
+- Command:
+  - `TF_GPU_ALLOCATOR=cuda_malloc_async experiments/grug/moe/run_cw_jaxpp_may_d2560.sh --submit --implementation explicit_mpmd --physical-stages 4 --logical-stages 4 --microbatches 1 --nodes 4 --gpus-per-replica 8 --expert-axis 8 --layers 24 --experts 192 --top-k 4 --vocab-size 8192 --batch 16 --seq-len 128 --moe-implementation ring --loss-implementation xla --steps 3 --tracker json_logger --xla-memory-fraction 0.80 --run-id jaxpp-d2560-l24-explicit-4stage-e192-b16-s128-20260708-1137`
+- Config:
+  - Explicit MPMD, 4 physical/logical stages, d2560, 24 layers, 192 experts, top-k 4, vocab 8192, batch 16, seq 128.
+  - `XLA_PYTHON_CLIENT_MEM_FRACTION=0.80`, `TF_GPU_ALLOCATOR=cuda_malloc_async`.
+- Result:
+  - Submitted as `/dlwh/iris-run-job-20260708-183650`.
+- Interpretation:
+  - This is the nearest reduced-expert rung after 256 experts failed at `0.80`, `0.84`, and `0.88`.
+- Next action:
+  - Poll `/dlwh/iris-run-job-20260708-183650` for fit and MFU.
+
+### 2026-07-08 11:40 PDT - 192-expert lower-fraction run OOMs at 300 MiB allocation
+- Hypothesis: A 192-expert 24-layer top-k 4 run should preserve most of the expert-scale target while fitting under the lower `0.80` memory fraction.
+- Commit Hash: uncommitted working tree on `research/jaxpp-grug-moe` at baseline `5c36c4374a`.
+- Commands:
+  - `uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job summary /dlwh/iris-run-job-20260708-183650`
+  - `uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job logs /dlwh/iris-run-job-20260708-183650 --tail --max-lines 5000 | rg 'parameter_count|throughput/|train/loss|Compiling|Finished|compile|OOM|RESOURCE_EXHAUSTED|out of memory|failed to allocate|base limit|Current allocation summary|Traceback|AssertionError|ERROR|finished|summary'`
+- Config:
+  - Explicit MPMD, 4 physical/logical stages, d2560, 24 layers, 192 experts, top-k 4, vocab 8192, batch 16, seq 128.
+  - `XLA_PYTHON_CLIENT_MEM_FRACTION=0.80`, `TF_GPU_ALLOCATOR=cuda_malloc_async`.
+- Result:
+  - `/dlwh/iris-run-job-20260708-183650` failed after `3 minutes and 4.93 seconds`.
+  - It reported `parameter_count=46,251,427,328`, `throughput/flops_per_token_analytic=3,714,764,800`, and `throughput/flops_per_example_analytic=1,426,469,683,200`.
+  - It failed on all stages with `jax.errors.JaxRuntimeError: RESOURCE_EXHAUSTED: Out of memory while trying to allocate 300.00MiB`.
+- Interpretation:
+  - 192 experts is much closer to fitting than 256, but the `0.80` pool is too tight after model state is resident.
+  - Unlike the 256-expert run, a modest fraction increase has a plausible chance of fitting because the failed allocation is smaller and the parameter footprint is ~15.1B parameters lower.
+- Next action:
+  - Retry 192 experts at `XLA_PYTHON_CLIENT_MEM_FRACTION=0.84`.
+
+### 2026-07-08 11:41 PDT - launch explicit 192-expert retry at 0.84
+- Hypothesis: A modest memory-fraction increase from `0.80` to `0.84` should give the 192-expert shape enough runtime slack to clear the previous 300 MiB allocation failure.
+- Commit Hash: uncommitted working tree on `research/jaxpp-grug-moe` at baseline `5c36c4374a`.
+- Command:
+  - `TF_GPU_ALLOCATOR=cuda_malloc_async experiments/grug/moe/run_cw_jaxpp_may_d2560.sh --submit --implementation explicit_mpmd --physical-stages 4 --logical-stages 4 --microbatches 1 --nodes 4 --gpus-per-replica 8 --expert-axis 8 --layers 24 --experts 192 --top-k 4 --vocab-size 8192 --batch 16 --seq-len 128 --moe-implementation ring --loss-implementation xla --steps 3 --tracker json_logger --xla-memory-fraction 0.84 --run-id jaxpp-d2560-l24-explicit-4stage-e192-b16-s128-xla084-20260708-1141`
+- Config:
+  - Explicit MPMD, 4 physical/logical stages, d2560, 24 layers, 192 experts, top-k 4, vocab 8192, batch 16, seq 128.
+  - `XLA_PYTHON_CLIENT_MEM_FRACTION=0.84`, `TF_GPU_ALLOCATOR=cuda_malloc_async`.
+- Result:
+  - Submitted as `/dlwh/iris-run-job-20260708-184109`.
+- Interpretation:
+  - This keeps the nearest reduced-expert target and uses a lower fraction than the direct 256-expert attempts at `0.88`.
+- Next action:
+  - Poll `/dlwh/iris-run-job-20260708-184109` for fit and MFU.
+
+### 2026-07-08 11:45 PDT - 192-expert retry at 0.84 still OOMs
+- Hypothesis: A modest memory-fraction increase from `0.80` to `0.84` should give the 192-expert shape enough runtime slack to clear the previous 300 MiB allocation failure.
+- Commit Hash: uncommitted working tree on `research/jaxpp-grug-moe` at baseline `5c36c4374a`.
+- Commands:
+  - `uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job summary /dlwh/iris-run-job-20260708-184109`
+  - `uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job logs /dlwh/iris-run-job-20260708-184109 --tail --max-lines 6000 | rg 'parameter_count|throughput/|train/loss|Compiling|Finished|compile|OOM|RESOURCE_EXHAUSTED|out of memory|failed to allocate|base limit|Current allocation summary|Traceback|AssertionError|ERROR|finished|summary'`
+- Config:
+  - Explicit MPMD, 4 physical/logical stages, d2560, 24 layers, 192 experts, top-k 4, vocab 8192, batch 16, seq 128.
+  - `XLA_PYTHON_CLIENT_MEM_FRACTION=0.84`, `TF_GPU_ALLOCATOR=cuda_malloc_async`.
+- Result:
+  - `/dlwh/iris-run-job-20260708-184109` failed after `3 minutes and 32.58 seconds`.
+  - It again reported `parameter_count=46,251,427,328` and the same analytic FLOP numbers as the `0.80` run.
+  - It again failed on all stages with `jax.errors.JaxRuntimeError: RESOURCE_EXHAUSTED: Out of memory while trying to allocate 300.00MiB`.
+- Interpretation:
+  - The current explicit-MPMD state layout does not fit 192 experts on 4x8 H100, even with `0.84`.
+  - The next useful reduced expert count is 128. Since 64 experts succeeded at batch 32, try 128 experts with batch 32 and `0.80` to get a stronger MFU point.
+- Next action:
+  - Launch 128 experts, top-k 4, 24 layers, batch 32, seq 128 at `XLA_PYTHON_CLIENT_MEM_FRACTION=0.80`.
+
+### 2026-07-08 11:46 PDT - launch explicit 128-expert batch-32 rung
+- Hypothesis: Since 64 experts succeeded at batch 32 but 192 experts failed even at batch 16, 128 experts should fit at batch 32 and provide the strongest reduced-expert MFU point so far.
+- Commit Hash: uncommitted working tree on `research/jaxpp-grug-moe` at baseline `5c36c4374a`.
+- Command:
+  - `TF_GPU_ALLOCATOR=cuda_malloc_async experiments/grug/moe/run_cw_jaxpp_may_d2560.sh --submit --implementation explicit_mpmd --physical-stages 4 --logical-stages 4 --microbatches 1 --nodes 4 --gpus-per-replica 8 --expert-axis 8 --layers 24 --experts 128 --top-k 4 --vocab-size 8192 --batch 32 --seq-len 128 --moe-implementation ring --loss-implementation xla --steps 3 --tracker json_logger --xla-memory-fraction 0.80 --run-id jaxpp-d2560-l24-explicit-4stage-e128-b32-s128-20260708-1146`
+- Config:
+  - Explicit MPMD, 4 physical/logical stages, d2560, 24 layers, 128 experts, top-k 4, vocab 8192, batch 32, seq 128.
+  - `XLA_PYTHON_CLIENT_MEM_FRACTION=0.80`, `TF_GPU_ALLOCATOR=cuda_malloc_async`.
+- Result:
+  - Submitted as `/dlwh/iris-run-job-20260708-184545`.
+- Interpretation:
+  - This keeps the lower preallocation fraction and restores the 64-expert run's token batch while doubling expert count.
+- Next action:
+  - Poll `/dlwh/iris-run-job-20260708-184545` for fit and MFU.
+
+### 2026-07-08 11:52 PDT - explicit 128-expert batch-32 rung succeeds
+- Hypothesis: Since 64 experts succeeded at batch 32 but 192 experts failed even at batch 16, 128 experts should fit at batch 32 and provide the strongest reduced-expert MFU point so far.
+- Commit Hash: uncommitted working tree on `research/jaxpp-grug-moe` at baseline `5c36c4374a`.
+- Commands:
+  - `uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job summary /dlwh/iris-run-job-20260708-184545`
+  - `uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job logs /dlwh/iris-run-job-20260708-184545 --tail --max-lines 7000 | rg 'parameter_count|throughput/|train/loss|Compiling|Finished|compile|OOM|RESOURCE_EXHAUSTED|out of memory|failed to allocate|base limit|Current allocation summary|Traceback|AssertionError|ERROR|finished|summary|event": "metrics"'`
+- Config:
+  - Explicit MPMD, 4 physical/logical stages, d2560, 24 layers, 128 experts, top-k 4, vocab 8192, batch 32, seq 128.
+  - `XLA_PYTHON_CLIENT_MEM_FRACTION=0.80`, `TF_GPU_ALLOCATOR=cuda_malloc_async`.
+- Result:
+  - `/dlwh/iris-run-job-20260708-184545` fully succeeded at the Iris level (`State: succeeded`) after `5 minutes and 42.93 seconds`.
+  - Reported `parameter_count=31,147,999,232`.
+  - Stage 0 emitted step-2 metrics: `train/loss=9.034143447875977`, `tokens_per_second=2945.7509327081166`, `gflops_per_second=32758.816639248496`, and `throughput/mfu=0.1034576068697843`.
+  - Summary metrics reported `throughput/mean_mfu=0.1034576068697843`, `p10/p50/p90=0.1034576068697843`, and `mfu_sample_count=2`.
+- Interpretation:
+  - The explicit MPMD path supports 24-layer top-k 4 Grug MoE at 128 experts on 4x8 H100 with lower `0.80` preallocation and stage-local weights/optimizer state.
+  - 192 and 256 experts initialize/account for params but fail runtime allocation under the current explicit state layout, so 128 experts is the largest completed reduced expert rung in this session.
+- Next action:
+  - Report the 64/128/192/256 expert ladder on issue #7024, including the automatic JaxPP batch-placement blocker and the memory limit for larger explicit-MPMD shapes.
+
+### 2026-07-08 11:56 PDT - lower launcher memory fraction and move auto microbatch reshape outside JaxPP trace
+- Hypothesis: The automatic JaxPP `std_1f1b` path's after-loop placement assertion on the token batch may be caused by reshaping the full batch inside the JaxPP-traced function. If the compiled step receives the already-microbatched batch tree, the full batch should no longer appear as an after-loop value. Separately, the default launcher memory fraction should match the successful lower-preallocation explicit runs.
+- Commit Hash: uncommitted working tree on `research/jaxpp-grug-moe` at baseline `5c36c4374a`.
+- Commands:
+  - `./infra/pre-commit.py --fix experiments/grug/moe/train.py experiments/grug/moe/run_cw_jaxpp_may_d2560.sh`
+  - `TF_GPU_ALLOCATOR=cuda_malloc_async experiments/grug/moe/run_cw_jaxpp_may_d2560.sh --submit --schedule std_1f1b --implementation auto --steps 1 --tracker json_logger --layers 4 --experts 8 --top-k 1 --batch 32 --seq-len 128 --vocab-size 8192 --expert-axis 8 --microbatches 4 --moe-implementation ring --loss-implementation xla --ce-autotune-on-miss false --conservative-loop-clustering false --xla-memory-fraction 0.80 --run-id jaxpp-auto-std-l4-e8-microarg-20260708-185618`
+- Config:
+  - Automatic JaxPP, `std_1f1b`, 4 physical/logical stages, 4 microbatches, d2560, 4 layers, 8 experts, top-k 1, batch 32, seq 128, vocab 8192, ring MoE, XLA CE.
+  - `XLA_PYTHON_CLIENT_MEM_FRACTION=0.80`, `TF_GPU_ALLOCATOR=cuda_malloc_async`.
+  - Launcher default changed from `0.88` to `0.80`.
+- Result:
+  - Submitted as `/dlwh/iris-run-job-20260708-185621`.
+  - The run failed before JaxPP compile with `ValueError: Using PartitionSpec when you are not under a mesh context is not allowed. Got P(None, ('replica_dcn', 'data', 'expert'), None)`.
+  - The failure occurred at `_reshape_batch_for_pipeline(...)` in the outer Python loop after moving the reshape outside the JaxPP trace.
+- Interpretation:
+  - Moving the reshape out of the trace is still plausible, but it must run under the global Grug mesh so the `PartitionSpec` in `out_sharding` can be canonicalized.
+  - Lowering the launcher default to `0.80` matches the successful explicit 64/128-expert runs and avoids the higher preallocation default unless explicitly requested.
+- Next action:
+  - Wrap the pre-JaxPP batch reshape in `set_mesh(mesh)` and rerun the same automatic reduced probe.
+
+### 2026-07-08 12:00 PDT - auto microbatch pre-reshape clears batch placement but hits JaxPP sharding inference
+- Hypothesis: Running `_reshape_batch_for_pipeline` under the global Grug mesh before JaxPP compile should preserve the unsharded microbatch axis without reintroducing the full batch as an after-loop value.
+- Commit Hash: uncommitted working tree on `research/jaxpp-grug-moe` at baseline `5c36c4374a`.
+- Commands:
+  - `uv run python -m py_compile experiments/grug/moe/train.py`
+  - `./infra/pre-commit.py --fix experiments/grug/moe/train.py experiments/grug/moe/run_cw_jaxpp_may_d2560.sh`
+  - `TF_GPU_ALLOCATOR=cuda_malloc_async experiments/grug/moe/run_cw_jaxpp_may_d2560.sh --submit --schedule std_1f1b --implementation auto --steps 1 --tracker json_logger --layers 4 --experts 8 --top-k 1 --batch 32 --seq-len 128 --vocab-size 8192 --expert-axis 8 --microbatches 4 --moe-implementation ring --loss-implementation xla --ce-autotune-on-miss false --conservative-loop-clustering false --xla-memory-fraction 0.80 --run-id jaxpp-auto-std-l4-e8-meshreshape-20260708-185958`
+- Config:
+  - Same reduced automatic `std_1f1b` probe as the prior entry, with the pre-reshape wrapped in the global mesh context.
+- Result:
+  - Submitted as `/dlwh/iris-run-job-20260708-190000`.
+  - The prior batch after-loop placement assertion did not recur.
+  - The run failed in `jaxpp/core.py` during `TraceableFunction.compile(...).infer_intermediate_shardings()`:
+    `AssertionError` at `jaxpp/sharding_inference.py:613`, comparing equation input specs with environment specs.
+  - The assertion payload includes Grug sharded parameter avals such as `float32[2560@data,2560@model]`, `float32[8@expert,2560@data,1280@model]`, and inferred specs like `P(None, None)` / `P('expert', None, None)`.
+- Interpretation:
+  - The batch lifetime issue appears fixed. The automatic schedule path is now blocked by JaxPP explicit sharding inference over Grug's manually sharded parameters.
+  - This is a different blocker from the earlier token-batch after-loop assertion and occurs before any schedule-specific MFU can be measured.
+- Next action:
+  - Test whether automatic JaxPP can use a non-explicit mesh to route through JaxPP's non-explicit sharding reconciliation path.
+
+### 2026-07-08 12:04 PDT - non-explicit mesh path is incompatible with Grug init
+- Hypothesis: If the automatic JaxPP path uses a non-explicit stage mesh, JaxPP may avoid the stricter `infer_shardings_explicit` assertion and use ordinary sharding reconciliation instead.
+- Commit Hash: uncommitted working tree on `research/jaxpp-grug-moe` at baseline `5c36c4374a`.
+- Commands:
+  - `uv run python -m py_compile experiments/grug/moe/train.py experiments/grug/moe/launch.py`
+  - `./infra/pre-commit.py --fix experiments/grug/moe/train.py experiments/grug/moe/launch.py experiments/grug/moe/run_cw_jaxpp_may_d2560.sh`
+  - `TF_GPU_ALLOCATOR=cuda_malloc_async experiments/grug/moe/run_cw_jaxpp_may_d2560.sh --submit --schedule std_1f1b --implementation auto --steps 1 --tracker json_logger --layers 4 --experts 8 --top-k 1 --batch 32 --seq-len 128 --vocab-size 8192 --expert-axis 8 --microbatches 4 --moe-implementation ring --loss-implementation xla --ce-autotune-on-miss false --conservative-loop-clustering false --xla-memory-fraction 0.80 --run-id jaxpp-auto-std-l4-e8-implicitmesh-20260708-190436`
+- Config:
+  - Same reduced automatic `std_1f1b` probe, but with an experimental patch making automatic JaxPP use a non-explicit mesh and `TrainerConfig.use_explicit_mesh_axes=false`.
+- Result:
+  - Submitted as `/dlwh/iris-run-job-20260708-190439`.
+  - The run failed during model initialization before JaxPP trace:
+    `ValueError: PartitionSpec passed to reshard cannot contain axis names that are of type Auto or Manual. Got PartitionSpec: P('model', ('replica_dcn', 'data')) with axis name: model of type: AxisType.Auto`.
+  - The failure points at `Transformer.init` when initializing `token_embed`.
+  - The experimental non-explicit mesh patch was reverted.
+- Interpretation:
+  - Grug's model initialization depends on explicit mesh axes because it calls `reshard(..., PartitionSpec(...))` directly for model/data/expert-sharded parameters.
+  - Automatic JaxPP therefore needs to handle Grug's explicit shardings, or we need a separate no-sharding model/launcher variant for schedule-only probes.
+- Next action:
+  - Keep automatic JaxPP on explicit axes and treat sharding inference as the current schedule-sweep blocker.
+
+### 2026-07-08 12:10 PDT - 4x1 automatic no-intra-stage-sharding control hits topology validation
+- Hypothesis: A 4x1 H100 automatic run with one GPU per physical pipeline stage might avoid real data/model/expert partitioning and show whether automatic schedules can run when intra-stage sharding is effectively absent.
+- Commit Hash: uncommitted working tree on `research/jaxpp-grug-moe` at baseline `5c36c4374a`.
+- Command:
+  - `TF_GPU_ALLOCATOR=cuda_malloc_async experiments/grug/moe/run_cw_jaxpp_may_d2560.sh --submit --schedule std_1f1b --implementation auto --steps 1 --tracker json_logger --nodes 4 --gpus-per-replica 1 --physical-stages 4 --microbatches 4 --layers 4 --experts 8 --top-k 1 --batch 4 --seq-len 128 --vocab-size 8192 --expert-axis 1 --moe-implementation ring --loss-implementation xla --ce-autotune-on-miss false --conservative-loop-clustering false --xla-memory-fraction 0.80 --run-id jaxpp-auto-std-l4-e8-4x1-20260708-190938`
+- Config:
+  - Automatic JaxPP, `std_1f1b`, 4 requested physical stages, 4 requested Iris replicas, 1 H100 per replica, d2560, 4 layers, 8 experts, top-k 1, batch 4, seq 128.
+- Result:
+  - Submitted as `/dlwh/iris-run-job-20260708-190941`.
+  - The run failed before model init/JaxPP trace in Levanter mesh validation:
+    `ValueError: DCN product 4 does not divide num_slices 2`.
+- Interpretation:
+  - This is a launcher/topology mismatch, not evidence for or against JaxPP schedules.
+  - The current CoreWeave/Iris placement for `count=1, replicas=4` did not produce the four DCN slices required by `PP_MPMD_DIM=4`.
+- Next action:
+  - Either keep schedule debugging on the validated 4x8 topology or add a dedicated launcher path for smaller per-stage GPU counts before using 4x1 as a schedule control.
+
+### 2026-07-08 12:33 PDT - explicit GPipe microbatch smoke succeeds with task-local reductions
+- Hypothesis: The explicit MPMD GPipe path can support multiple microbatches if all cross-microbatch accumulation and averaging are expressed as `mpmd.task` calls rather than ordinary JAX arithmetic in the MPMD driver trace.
+- Commit Hash: uncommitted working tree on `research/jaxpp-grug-moe` at baseline `5c36c4374a`.
+- Commands:
+  - `uv run python -m py_compile experiments/grug/moe/train.py`
+  - `./infra/pre-commit.py --fix experiments/grug/moe/train.py`
+  - `TF_GPU_ALLOCATOR=cuda_malloc_async experiments/grug/moe/run_cw_jaxpp_may_d2560.sh --submit --schedule gpipe --implementation explicit_mpmd --physical-stages 4 --logical-stages 4 --microbatches 4 --nodes 4 --gpus-per-replica 8 --expert-axis 8 --layers 4 --experts 8 --top-k 1 --batch 32 --seq-len 128 --vocab-size 8192 --moe-implementation ring --loss-implementation xla --steps 1 --tracker json_logger --xla-memory-fraction 0.80 --run-id jaxpp-explicit-gpipe-l4-e8-taskreduce-20260708-192641`
+- Config:
+  - Explicit MPMD GPipe, 4 physical/logical stages, 4 microbatches, d2560, 4 layers, 8 experts, top-k 1, batch 32, seq 128, vocab 8192.
+  - `XLA_PYTHON_CLIENT_MEM_FRACTION=0.80`, `TF_GPU_ALLOCATOR=cuda_malloc_async`.
+- Result:
+  - Parent launcher: `/dlwh/iris-run-job-20260708-192645`.
+  - Child training job: `/dlwh/iris-run-job-20260708-192645/grug-train-jaxpp-explicit-gpipe-l4-e8-taskreduce-20260708-192641`.
+  - Child succeeded on all 4 tasks.
+  - Parameter count: `507,560,992`.
+  - Step 0 metrics: loss `9.045722961425781`, tokens/s `58.40267300249191`, GFLOP/s `72.60306334899732`, MFU `0.00022929214044023916`.
+- Interpretation:
+  - The prior `jaxpp.experimental.mpmd ... got slice` failure was fixed by slicing microbatches outside the MPMD trace.
+  - The follow-up `... got jit` failure was fixed by moving microbatch sum/average operations into named `mpmd.task` calls with stage-local shardings.
+  - The measured MFU is compile-dominated because this smoke ran only one step on a tiny 4-layer model, but it proves functional multi-microbatch explicit GPipe execution.
+- Next action:
+  - Run the same explicit GPipe path with 24 layers and a few measured steps.
+
+### 2026-07-08 12:39 PDT - 24-layer explicit GPipe run succeeds
+- Hypothesis: The task-local GPipe implementation should scale from the 4-layer smoke to the user-accepted 24-layer depth while keeping stage-local weight and optimizer partitioning across 4 physical stages.
+- Commit Hash: uncommitted working tree on `research/jaxpp-grug-moe` at baseline `5c36c4374a`.
+- Command:
+  - `TF_GPU_ALLOCATOR=cuda_malloc_async experiments/grug/moe/run_cw_jaxpp_may_d2560.sh --submit --schedule gpipe --implementation explicit_mpmd --physical-stages 4 --logical-stages 4 --microbatches 4 --nodes 4 --gpus-per-replica 8 --expert-axis 8 --layers 24 --experts 8 --top-k 4 --batch 32 --seq-len 128 --vocab-size 8192 --moe-implementation ring --loss-implementation xla --steps 3 --tracker json_logger --xla-memory-fraction 0.80 --run-id jaxpp-explicit-gpipe-l24-e8-taskreduce-20260708-193310`
+- Config:
+  - Explicit MPMD GPipe, 4 physical/logical stages, 4 microbatches, d2560, 24 layers, 8 experts, top-k 4, batch 32, seq 128, vocab 8192.
+  - `XLA_PYTHON_CLIENT_MEM_FRACTION=0.80`, `TF_GPU_ALLOCATOR=cuda_malloc_async`.
+- Result:
+  - Parent launcher: `/dlwh/iris-run-job-20260708-193316`.
+  - Child training job: `/dlwh/iris-run-job-20260708-193316/grug-train-jaxpp-explicit-gpipe-l24-e8-taskreduce-20260708-193310`.
+  - Child succeeded on all 4 tasks.
+  - Parameter count: `2,829,071,552`.
+  - Step 2 metrics: loss `9.036118507385254`, tokens/s `3806.936077293086`, GFLOP/s `42167.39284687717`, MFU `0.13317140237139077`.
+  - Summary: `throughput/mean_mfu=0.13317140237139077`, `throughput/mfu_sample_count=2`.
+- Interpretation:
+  - 24-layer stage-split weights and optimizer state work under explicit MPMD GPipe with 4 microbatches.
+  - This is a functional pipeline-parallel training run rather than only a compile smoke.
+  - The MFU is lower than the earlier single-microbatch 64-expert rung because this 8-expert shape is much smaller; use a 64-expert GPipe run for a more meaningful schedule comparison.
+- Next action:
+  - Run explicit GPipe with 64 experts, top-k 4, 24 layers, batch 32, seq 128 at the same `0.80` memory fraction.
+
+### 2026-07-08 12:47 PDT - 64-expert explicit GPipe run succeeds
+- Hypothesis: The 24-layer GPipe path should remain stable at the earlier successful 64-expert parameter scale and provide a higher-signal MFU point than the 8-expert run.
+- Commit Hash: uncommitted working tree on `research/jaxpp-grug-moe` at baseline `5c36c4374a`.
+- Command:
+  - `TF_GPU_ALLOCATOR=cuda_malloc_async experiments/grug/moe/run_cw_jaxpp_may_d2560.sh --submit --schedule gpipe --implementation explicit_mpmd --physical-stages 4 --logical-stages 4 --microbatches 4 --nodes 4 --gpus-per-replica 8 --expert-axis 8 --layers 24 --experts 64 --top-k 4 --batch 32 --seq-len 128 --vocab-size 8192 --moe-implementation ring --loss-implementation xla --steps 3 --tracker json_logger --xla-memory-fraction 0.80 --run-id jaxpp-explicit-gpipe-l24-e64-taskreduce-20260708-193919`
+- Config:
+  - Explicit MPMD GPipe, 4 physical/logical stages, 4 microbatches, d2560, 24 layers, 64 experts, top-k 4, batch 32, seq 128, vocab 8192.
+  - `XLA_PYTHON_CLIENT_MEM_FRACTION=0.80`, `TF_GPU_ALLOCATOR=cuda_malloc_async`.
+- Result:
+  - Parent launcher: `/dlwh/iris-run-job-20260708-193922`.
+  - Child training job: `/dlwh/iris-run-job-20260708-193922/grug-train-jaxpp-explicit-gpipe-l24-e64-taskreduce-20260708-193919`.
+  - Child succeeded on all 4 tasks.
+  - Parameter count: `16,044,571,136`.
+  - Step 2 metrics: loss `9.034236907958984`, tokens/s `13577.965711804029`, GFLOP/s `150676.15844160973`, MFU `0.47585952009098575`.
+  - Summary: `throughput/mean_mfu=0.47585952009098575`, `throughput/mfu_sample_count=2`.
+- Interpretation:
+  - Explicit GPipe is stable at the same 64-expert scale where the single-microbatch explicit MPMD path previously reported `throughput/mean_mfu=0.7529189015282038`.
+  - The GPipe implementation trades lower MFU for functional 4-microbatch pipeline execution; further tuning should compare 1F1B-style scheduling or reduce per-microbatch overhead.
+- Next action:
+  - Try the same GPipe path at 128 experts, matching the largest explicit single-microbatch rung that succeeded at batch 32.
+
+### 2026-07-08 12:54 PDT - 128-expert explicit GPipe run succeeds
+- Hypothesis: The GPipe implementation should still fit at the largest expert count that previously succeeded in the single-microbatch explicit MPMD path, despite storing multi-microbatch stage inputs for the backward pass.
+- Commit Hash: uncommitted working tree on `research/jaxpp-grug-moe` at baseline `5c36c4374a`.
+- Command:
+  - `TF_GPU_ALLOCATOR=cuda_malloc_async experiments/grug/moe/run_cw_jaxpp_may_d2560.sh --submit --schedule gpipe --implementation explicit_mpmd --physical-stages 4 --logical-stages 4 --microbatches 4 --nodes 4 --gpus-per-replica 8 --expert-axis 8 --layers 24 --experts 128 --top-k 4 --batch 32 --seq-len 128 --vocab-size 8192 --moe-implementation ring --loss-implementation xla --steps 3 --tracker json_logger --xla-memory-fraction 0.80 --run-id jaxpp-explicit-gpipe-l24-e128-taskreduce-20260708-194716`
+- Config:
+  - Explicit MPMD GPipe, 4 physical/logical stages, 4 microbatches, d2560, 24 layers, 128 experts, top-k 4, batch 32, seq 128, vocab 8192.
+  - `XLA_PYTHON_CLIENT_MEM_FRACTION=0.80`, `TF_GPU_ALLOCATOR=cuda_malloc_async`.
+- Result:
+  - Parent launcher: `/dlwh/iris-run-job-20260708-194719`.
+  - Child training job: `/dlwh/iris-run-job-20260708-194719/grug-train-jaxpp-explicit-gpipe-l24-e128-taskreduce-20260708-194716`.
+  - Child succeeded on all 4 tasks.
+  - Parameter count: `31,147,999,232`.
+  - Step 2 metrics: loss `9.03332233428955`, tokens/s `10801.727899693138`, GFLOP/s `120122.79100860565`, MFU `0.3793670762020138`.
+  - Summary: `throughput/mean_mfu=0.3793670762020138`, `throughput/mfu_sample_count=2`.
+- Interpretation:
+  - Explicit GPipe now works at 24 layers and 128 experts on 4x 8xH100 with stage-partitioned weights and optimizer state.
+  - This is the largest completed GPipe result so far. 192/256 expert GPipe would likely face the same or worse memory pressure as the earlier single-microbatch explicit MPMD rungs.
+  - Compared with the single-microbatch explicit 128-expert rung (`throughput/mean_mfu=0.1034576068697843`), GPipe improves throughput substantially at this scale, though the 64-expert single-microbatch rung remains the highest MFU datapoint.
+- Next action:
+  - Post this milestone to the tracking issue and run focused repo checks.
+
+### 2026-07-08 13:02 PDT - two-stage explicit 1F1B smoke succeeds
+- Hypothesis: A hand-written two-stage explicit MPMD `std_1f1b` path, patterned after NVIDIA/JaxPP `examples/mpmd.py`, can run Grug microbatching without the automatic JaxPP sharding-inference path.
+- Commit Hash: uncommitted working tree on `research/jaxpp-grug-moe` at baseline `5c36c4374a`.
+- Commands:
+  - `uv run python -m py_compile experiments/grug/moe/train.py experiments/grug/moe/launch_cw_jaxpp_may_d2560.py`
+  - `./infra/pre-commit.py --fix experiments/grug/moe/train.py`
+  - `TF_GPU_ALLOCATOR=cuda_malloc_async experiments/grug/moe/run_cw_jaxpp_may_d2560.sh --submit --schedule std_1f1b --implementation explicit_mpmd --physical-stages 2 --logical-stages 2 --microbatches 4 --nodes 2 --gpus-per-replica 8 --expert-axis 8 --layers 4 --experts 8 --top-k 1 --batch 32 --seq-len 128 --vocab-size 8192 --moe-implementation ring --loss-implementation xla --steps 1 --tracker json_logger --xla-memory-fraction 0.80 --run-id jaxpp-explicit-std1f1b-l4-e8-20260708-195905`
+- Config:
+  - Explicit MPMD `std_1f1b`, 2 physical/logical stages, 4 microbatches, d2560, 4 layers, 8 experts, top-k 1, batch 32, seq 128, vocab 8192.
+  - `XLA_PYTHON_CLIENT_MEM_FRACTION=0.80`, `TF_GPU_ALLOCATOR=cuda_malloc_async`.
+- Result:
+  - Parent launcher: `/dlwh/iris-run-job-20260708-195908`.
+  - Child training job: `/dlwh/iris-run-job-20260708-195908/grug-train-jaxpp-explicit-std1f1b-l4-e8-20260708-195905`.
+  - Child compiled `grug_1f1b_*` forward/backward/update tasks and emitted finish metrics.
+  - Parameter count: `507,560,992`.
+  - Step 0 metrics: loss `9.045732498168945`, tokens/s `72.74860433222855`, GFLOP/s `90.43715394085764`, MFU `0.0005712301284793938`.
+- Interpretation:
+  - The explicit 1F1B path avoids the automatic `std_1f1b` sharding inference blocker.
+  - This is only a compile-dominated 4-layer smoke, but it proves the new two-stage schedule function is valid under `jaxpp.experimental.mpmd`.
+  - The implementation is intentionally limited to `explicit_mpmd + std_1f1b + stages=2 + microbatches>1`.
+- Next action:
+  - Scale the same explicit `std_1f1b` path to 24 layers and measure MFU.
+
+### 2026-07-08 13:08 PDT - two-stage 24-layer explicit 1F1B run succeeds on 2x8 H100
+- Hypothesis: The two-stage explicit `std_1f1b` implementation should scale from the 4-layer smoke to the user-accepted 24-layer depth.
+- Commit Hash: uncommitted working tree on `research/jaxpp-grug-moe` at baseline `5c36c4374a`.
+- Command:
+  - `TF_GPU_ALLOCATOR=cuda_malloc_async experiments/grug/moe/run_cw_jaxpp_may_d2560.sh --submit --schedule std_1f1b --implementation explicit_mpmd --physical-stages 2 --logical-stages 2 --microbatches 4 --nodes 2 --gpus-per-replica 8 --expert-axis 8 --layers 24 --experts 8 --top-k 4 --batch 32 --seq-len 128 --vocab-size 8192 --moe-implementation ring --loss-implementation xla --steps 3 --tracker json_logger --xla-memory-fraction 0.80 --run-id jaxpp-explicit-std1f1b-l24-e8-20260708-200218`
+- Config:
+  - Explicit MPMD `std_1f1b`, 2 physical/logical stages, 4 microbatches, d2560, 24 layers, 8 experts, top-k 4, batch 32, seq 128, vocab 8192.
+  - 2x 8xH100, `XLA_PYTHON_CLIENT_MEM_FRACTION=0.80`, `TF_GPU_ALLOCATOR=cuda_malloc_async`.
+- Result:
+  - Parent launcher: `/dlwh/iris-run-job-20260708-200220`.
+  - Child training job: `/dlwh/iris-run-job-20260708-200220/grug-train-jaxpp-explicit-std1f1b-l24-e8-20260708-200218`.
+  - Child succeeded on both tasks.
+  - Parameter count: `2,829,071,552`.
+  - Step 2 metrics: loss `9.036020278930664`, tokens/s `14352.960046017917`, GFLOP/s `158980.05442905021`, MFU `1.0041691158984982`.
+- Interpretation:
+  - Explicit `std_1f1b` works at 24 layers via the hand-written MPMD path.
+  - The MFU is not directly comparable to the 4x8 GPipe runs because this run used only 16 H100s and the analytic FLOP accounting likely overstates the useful work for this small 8-expert shape.
+- Next action:
+  - Repeat the 24-layer 8-expert two-stage `std_1f1b` run on 4x8 H100 by using two `replica_dcn` groups under the two pipeline stages.
+
+### 2026-07-08 13:12 PDT - 4x8 two-stage 1F1B batch-32 run needs larger microbatches
+- Hypothesis: A two-stage explicit `std_1f1b` run can use 4x8 H100 by placing two pipeline stages across four Iris tasks with extra intra-stage data sharding.
+- Commit Hash: uncommitted working tree on `research/jaxpp-grug-moe` at baseline `5c36c4374a`.
+- Command:
+  - `TF_GPU_ALLOCATOR=cuda_malloc_async experiments/grug/moe/run_cw_jaxpp_may_d2560.sh --submit --schedule std_1f1b --implementation explicit_mpmd --physical-stages 2 --logical-stages 2 --microbatches 4 --nodes 4 --gpus-per-replica 8 --expert-axis 8 --layers 24 --experts 8 --top-k 4 --batch 32 --seq-len 128 --vocab-size 8192 --moe-implementation ring --loss-implementation xla --steps 3 --tracker json_logger --xla-memory-fraction 0.80 --run-id jaxpp-explicit-std1f1b-l24-e8-4x8-20260708-200826`
+- Config:
+  - Explicit MPMD `std_1f1b`, 2 physical/logical stages, 4 microbatches, d2560, 24 layers, 8 experts, top-k 4, batch 32, seq 128, vocab 8192, 4x 8xH100.
+- Result:
+  - Parent launcher: `/dlwh/iris-run-job-20260708-200828`.
+  - Child training job: `/dlwh/iris-run-job-20260708-200828/grug-train-jaxpp-explicit-std1f1b-l24-e8-4x8-20260708-200826`.
+  - The run reached parameter accounting (`2,829,071,552`) but failed before compile:
+    `ValueError: Sharding spec ('replica_dcn', 'data', 'expert') implies that array axis 1 is partitioned 16 times, but does not evenly divide the dimension size 8. Got shape: (4, 8, 128) ... spec=P(None, ('replica_dcn', 'data', 'expert'), None)`.
+- Interpretation:
+  - The 4x8 two-stage topology is valid, but batch 32 with 4 microbatches produces per-microbatch batch axis size 8.
+  - The local stage mesh shards that microbatch axis over `data=2, expert=8`, requiring divisibility by 16.
+- Next action:
+  - Retry the same 4x8 two-stage `std_1f1b` run with batch 64 so each of 4 microbatches has batch axis size 16.
+
+### 2026-07-08 13:17 PDT - 4x8 two-stage 1F1B batch-64 run succeeds
+- Hypothesis: Increasing global batch to 64 should make each of the 4 microbatches have batch axis size 16, matching the 4x8 two-stage local stage mesh sharding over `data=2` and `expert=8`.
+- Commit Hash: uncommitted working tree on `research/jaxpp-grug-moe` at baseline `5c36c4374a`.
+- Command:
+  - `TF_GPU_ALLOCATOR=cuda_malloc_async experiments/grug/moe/run_cw_jaxpp_may_d2560.sh --submit --schedule std_1f1b --implementation explicit_mpmd --physical-stages 2 --logical-stages 2 --microbatches 4 --nodes 4 --gpus-per-replica 8 --expert-axis 8 --layers 24 --experts 8 --top-k 4 --batch 64 --seq-len 128 --vocab-size 8192 --moe-implementation ring --loss-implementation xla --steps 3 --tracker json_logger --xla-memory-fraction 0.80 --run-id jaxpp-explicit-std1f1b-l24-e8-b64-4x8-20260708-201204`
+- Config:
+  - Explicit MPMD `std_1f1b`, 2 physical/logical pipeline stages, 4 microbatches, d2560, 24 layers, 8 experts, top-k 4, batch 64, seq 128, vocab 8192, 4x 8xH100.
+  - The 4 Iris tasks form two pipeline stages plus two `replica_dcn` groups; each microbatch has batch axis size 16.
+  - `XLA_PYTHON_CLIENT_MEM_FRACTION=0.80`, `TF_GPU_ALLOCATOR=cuda_malloc_async`.
+- Result:
+  - Parent launcher: `/dlwh/iris-run-job-20260708-201206`.
+  - Child training job: `/dlwh/iris-run-job-20260708-201206/grug-train-jaxpp-explicit-std1f1b-l24-e8-b64-4x8-20260708-201204`.
+  - Child succeeded on all 4 tasks.
+  - Parameter count: `2,829,071,552`.
+  - Stage-0 task 1 step 2 metrics: loss `9.026140213012695`, tokens/s `16488.05340780921`, GFLOP/s `182629.3405540302`, MFU `0.5767728036698782`.
+  - Stage-0 task 0 step 2 metrics: loss `9.026140213012695`, tokens/s `16439.069656854095`, GFLOP/s `182086.77376864132`, MFU `0.5750592905780739`.
+  - Summary: best reporting stage-0 task `throughput/mean_mfu=0.5767728036698782`, `throughput/mfu_sample_count=2`.
+- Interpretation:
+  - The hand-written JaxPP explicit MPMD `std_1f1b` path now has a successful 4x 8xH100, 24-layer run.
+  - Lowering the default XLA client memory fraction to `0.80` is sufficient for this 8-expert shape and keeps the launcher conservative for larger expert-count probes.
+  - The 1F1B result is not directly comparable to 128-expert GPipe because it uses only 8 experts; it is currently the schedule-functionality datapoint, while GPipe remains the larger-parameter datapoint.
+- Next action:
+  - Run focused compile/pre-commit checks, then post the 4x8 `std_1f1b` milestone to the tracking issue.
+
+### 2026-07-08 13:24 PDT - 64-expert 4x8 two-stage 1F1B comparison succeeds
+- Hypothesis: The same two-stage explicit `std_1f1b` path should scale from the 8-expert schedule-functionality point to the 64-expert parameter scale used by the earlier GPipe and single-microbatch comparisons.
+- Commit Hash: uncommitted working tree on `research/jaxpp-grug-moe` at baseline `5c36c4374a`.
+- Command:
+  - `TF_GPU_ALLOCATOR=cuda_malloc_async experiments/grug/moe/run_cw_jaxpp_may_d2560.sh --submit --schedule std_1f1b --implementation explicit_mpmd --physical-stages 2 --logical-stages 2 --microbatches 4 --nodes 4 --gpus-per-replica 8 --expert-axis 8 --layers 24 --experts 64 --top-k 4 --batch 64 --seq-len 128 --vocab-size 8192 --moe-implementation ring --loss-implementation xla --steps 3 --tracker json_logger --xla-memory-fraction 0.80 --run-id jaxpp-explicit-std1f1b-l24-e64-b64-4x8-20260708-2020`
+- Config:
+  - Explicit MPMD `std_1f1b`, 2 physical/logical pipeline stages, 4 microbatches, d2560, 24 layers, 64 experts, top-k 4, batch 64, seq 128, vocab 8192, 4x 8xH100.
+  - `XLA_PYTHON_CLIENT_MEM_FRACTION=0.80`, `TF_GPU_ALLOCATOR=cuda_malloc_async`.
+- Result:
+  - Parent launcher: `/dlwh/iris-run-job-20260708-201923`.
+  - Child training job: `/dlwh/iris-run-job-20260708-201923/grug-train-jaxpp-explicit-std1f1b-l24-e64-b64-4x8-20260708-2020`.
+  - Child succeeded on all 4 tasks.
+  - Parameter count: `16,044,571,136`.
+  - Stage-0 task 1 step 2 metrics: loss `9.023824691772461`, tokens/s `4785.771846091158`, GFLOP/s `53108.22933660344`, MFU `0.16772432205850002`.
+  - Stage-0 task 0 step 2 metrics: loss `9.023824691772461`, tokens/s `4693.756221608463`, GFLOP/s `52087.121969864034`, MFU `0.1644995009154372`.
+  - Summary: best reporting stage-0 task `throughput/mean_mfu=0.16772432205850002`, `throughput/mfu_sample_count=2`.
+- Interpretation:
+  - The two-stage explicit `std_1f1b` path scales to the 16B-parameter 64-expert comparison point at the conservative `0.80` XLA memory fraction.
+  - Throughput is materially lower than the 64-expert explicit GPipe result (`throughput/mean_mfu=0.47585952009098575`), so this hand-written 1F1B path is currently useful as schedule evidence rather than a performance win.
+  - The stage-0 backward compile still emits XLA involuntary rematerialization warnings when repartitioning hidden activations, which is a plausible contributor to the performance gap.
+- Next action:
+  - Post this comparison to the tracking issue and decide whether the next work should generalize explicit 1F1B to 4 stages or return to the automatic JaxPP sharding-inference blocker.
+
+### 2026-07-08 13:55 PDT - automatic JaxPP blocker advanced past sharding inference
+- Hypothesis: The automatic `mpmd_jit_with_loop` path fails because JaxPP treats ClosedJaxpr consts as replicated inputs even when the const payloads are explicitly sharded Grug parameter arrays.
+- Commit Hash: uncommitted working tree on `research/jaxpp-grug-moe` at baseline `5c36c4374a`.
+- Code changes:
+  - Added opt-in `GRUG_JAXPP_PATCH_CONST_SHARDINGS=1`, which monkey-patches `jaxpp.core.extract_params` to derive leading const input shardings from `params["jaxpr"].consts`.
+  - Added `GRUG_JAXPP_AUTO_EXPLICIT_IN_SHARDINGS=1`, which rebuilds the automatic JaxPP train step with sampled explicit `(state, pipeline_batch)` `in_shardings`.
+  - Forwarded `GRUG_JAXPP_*`, `XLA_PYTHON_CLIENT_*`, and `TF_GPU_ALLOCATOR` from the Grug dispatcher into child train tasks; before this, parent launcher envs were not necessarily present in the training child.
+  - Kept the CoreWeave wrapper default at `XLA_PYTHON_CLIENT_MEM_FRACTION=0.80`.
+- Failed setup run:
+  - Parent `/dlwh/iris-run-job-20260708-203854`, child `/dlwh/iris-run-job-20260708-203854/grug-train-jaxpp-auto-std-l4-e8-constshard-20260708-2044`.
+  - Intended command used `GRUG_JAXPP_AUTO_EXPLICIT_IN_SHARDINGS=1 GRUG_JAXPP_PATCH_CONST_SHARDINGS=1`, but the wrapper/dispatcher did not yet forward those vars to the child.
+  - Result: same `jaxpp/sharding_inference.py:613` assertion as before; this was an env-propagation negative result, not a valid const-sharding patch test.
+- Failed setup run:
+  - Parent `/dlwh/iris-run-job-20260708-204218`, child `/dlwh/iris-run-job-20260708-204218/grug-train-jaxpp-auto-std-l4-e8-constshard2-20260708-2046`.
+  - After env forwarding, JaxPP reached tracing and failed earlier with `ValueError: pjit does not support kwargs when in_shardings is specified`.
+  - Fix: make `compute_watch` positional and compile the automatic pipeline path without keyword args.
+- Failed setup run:
+  - Parent `/dlwh/iris-run-job-20260708-204450`, child `/dlwh/iris-run-job-20260708-204450/grug-train-jaxpp-auto-std-l4-e8-constshard3-20260708-2049`.
+  - JaxPP reached tracing and no longer hit the explicit sharding inference assertion.
+  - It failed at call time with `AssertionError` in `jaxpp/core.py:3553`, `assert self.in_info.in_tree == in_tree`.
+  - Fix: the automatic path now compiles and calls the JaxPP function with only the dynamic `(state, pipeline_batch)` inputs, since watch is disabled there.
+- Failed setup run:
+  - Parent `/dlwh/iris-run-job-20260708-204723`, child `/dlwh/iris-run-job-20260708-204723/grug-train-jaxpp-auto-std-l4-e8-constshard4-20260708-2052`.
+  - Command shape:
+    `GRUG_LOG_JAXPRS=0 GRUG_LOG_XLA_HLO=0 GRUG_JAXPP_AUTO_EXPLICIT_IN_SHARDINGS=1 GRUG_JAXPP_PATCH_CONST_SHARDINGS=1 TF_GPU_ALLOCATOR=cuda_malloc_async experiments/grug/moe/run_cw_jaxpp_may_d2560.sh --submit --schedule std_1f1b --implementation auto --physical-stages 4 --logical-stages 4 --microbatches 4 --nodes 4 --gpus-per-replica 8 --expert-axis 8 --layers 4 --experts 8 --top-k 1 --batch 32 --seq-len 128 --vocab-size 8192 --moe-implementation ring --loss-implementation xla --steps 1 --tracker json_logger --xla-memory-fraction 0.80 --conservative-loop-clustering false --run-id jaxpp-auto-std-l4-e8-constshard4-20260708-2052`.
+  - JaxPP completed first/second loop tracing and did not fail in `infer_shardings_explicit`.
+  - New root failure:
+    `ValueError: device_put's second argument must be a Device or a Sharding which represents addressable devices, but got NamedSharding(mesh=Mesh('pipeline': 4, 'replica_dcn': 1, 'data': 1, 'expert': 8, 'model': 1, ...), spec=P('expert', 'data', 'model'), memory_kind=device)`.
+  - JaxPP logged the offending input as `state.params.blocks[3].mlp.expert_mlp.w_gate`, local shape `(8, 2560, 1280)`, target sharding `P('expert', 'data', 'model')`.
+- Interpretation:
+  - The const-sharding patch appears to clear the original automatic-path `infer_shardings_explicit` assertion for this reduced Grug shape.
+  - The next automatic blocker is input placement: JaxPP's `_maybe_shard_inputs` tries to `device_put` a stage-local parameter array using a global sharding whose mesh still contains the non-addressable `pipeline` axis.
+  - This is now downstream of schedule tracing/placement, so automatic `std_1f1b` is closer than before but still not runnable.
+- Next action:
+  - Either teach the automatic path to pass stage-local inputs with addressable stage mesh shardings before `GlobalMpmdFunction.__call__`, or keep relying on the explicit `mpmd.py`-style path for schedule results and performance comparisons.
+
+### 2026-07-08 14:02 PDT - four-stage explicit 1F1B smoke succeeds
+- Hypothesis: The `mpmd.py`-style explicit `std_1f1b` implementation can be generalized from two physical stages to four physical stages by recursively forcing forward/backward dependencies and transferring activations/activation-gradients between adjacent stages.
+- Commit Hash: uncommitted working tree on `research/jaxpp-grug-moe` at baseline `5c36c4374a`.
+- Code changes:
+  - Removed the `stages == 2` guard for `implementation="explicit_mpmd", schedule="std_1f1b"`.
+  - Replaced the two-stage-specific 1F1B step with a generic scheduler over `num_stages` and `microbatches`.
+  - Each stage now has a local warmup/steady/drain task list, while recursive dependency helpers ensure upstream forwards and downstream backwards are materialized before the local task runs.
+  - Kept stage-local params and optimizer state split by contiguous transformer layers; the smoke therefore exercises the same weight partitioning structure intended for 24-layer runs.
+  - Lowered the CoreWeave wrapper default `XLA_PYTHON_CLIENT_MEM_FRACTION` from `0.80` to `0.70` for future JaxPP probes.
+- Commands:
+  - `uv run python -m py_compile experiments/grug/moe/train.py experiments/grug/moe/launch_cw_jaxpp_may_d2560.py`
+  - `./infra/pre-commit.py --fix experiments/grug/moe/train.py`
+  - `TF_GPU_ALLOCATOR=cuda_malloc_async experiments/grug/moe/run_cw_jaxpp_may_d2560.sh --submit --schedule std_1f1b --implementation explicit_mpmd --physical-stages 4 --logical-stages 4 --microbatches 4 --nodes 4 --gpus-per-replica 8 --expert-axis 8 --layers 4 --experts 8 --top-k 1 --batch 32 --seq-len 128 --vocab-size 8192 --moe-implementation ring --loss-implementation xla --steps 1 --tracker json_logger --xla-memory-fraction 0.80 --run-id jaxpp-explicit-std1f1b4-l4-e8-20260708-2058`
+- Config:
+  - Explicit MPMD `std_1f1b`, four physical/logical pipeline stages, 4 microbatches, d2560, 4 layers, 8 experts, top-k 1, batch 32, seq 128, vocab 8192.
+  - 4x 8xH100, `TF_GPU_ALLOCATOR=cuda_malloc_async`, `XLA_PYTHON_CLIENT_MEM_FRACTION=0.80` for this smoke.
+- Result:
+  - Parent launcher: `/dlwh/iris-run-job-20260708-205734`.
+  - Child training job: `/dlwh/iris-run-job-20260708-205734/grug-train-jaxpp-explicit-std1f1b4-l4-e8-20260708-2058`.
+  - Child succeeded on all 4 tasks.
+  - Parameter count: `507,560,992`.
+  - Stage-0 step 0 metrics: loss `9.045722007751465`, tokens/s `58.831121678516`, GFLOP/s `73.13568770962965`, MFU `0.00023097425375704164`.
+- Interpretation:
+  - Four-stage explicit `std_1f1b` now executes end to end on CoreWeave H100s, including stage-local weight partitioning and activation-gradient transfers.
+  - The one-step 4-layer result is compile dominated and should not be used as a performance datapoint.
+  - This validates the path requested by the user's pointer to JaxPP's `examples/mpmd.py`; it avoids the current automatic JaxPP non-addressable input-sharding blocker.
+- Next action:
+  - Launch a 24-layer 4-stage explicit `std_1f1b` run at lower XLA prealloc (`0.70`) and record comparable MFU.
+
+### 2026-07-08 14:08 PDT - 24-layer 4-stage 1F1B run succeeds at lower prealloc
+- Hypothesis: The generic four-stage explicit `std_1f1b` path should scale from the 4-layer smoke to the user-accepted 24-layer d2560 shape at a lower XLA prealloc fraction.
+- Commit Hash: uncommitted working tree on `research/jaxpp-grug-moe` at baseline `5c36c4374a`.
+- Command:
+  - `TF_GPU_ALLOCATOR=cuda_malloc_async experiments/grug/moe/run_cw_jaxpp_may_d2560.sh --submit --schedule std_1f1b --implementation explicit_mpmd --physical-stages 4 --logical-stages 4 --microbatches 4 --nodes 4 --gpus-per-replica 8 --expert-axis 8 --layers 24 --experts 8 --top-k 4 --batch 32 --seq-len 128 --vocab-size 8192 --moe-implementation ring --loss-implementation xla --steps 3 --tracker json_logger --xla-memory-fraction 0.70 --run-id jaxpp-explicit-std1f1b4-l24-e8-b32-xla070-20260708-2104`
+- Config:
+  - Explicit MPMD `std_1f1b`, four physical/logical pipeline stages, 4 microbatches, d2560, 24 layers, 8 experts, top-k 4, batch 32, seq 128, vocab 8192.
+  - 4x 8xH100, `TF_GPU_ALLOCATOR=cuda_malloc_async`, `XLA_PYTHON_CLIENT_MEM_FRACTION=0.70`.
+- Result:
+  - Parent launcher: `/dlwh/iris-run-job-20260708-210253`.
+  - Child training job: `/dlwh/iris-run-job-20260708-210253/grug-train-jaxpp-explicit-std1f1b4-l24-e8-b32-xla070-20260708-2104`.
+  - Child succeeded on all 4 tasks.
+  - Parameter count: `2,829,071,552`.
+  - Stage-0 step 2 metrics: loss `9.036020278930664`, tokens/s `3388.72738839914`, GFLOP/s `37535.11909220262`, MFU `0.11854193750695625`.
+  - Summary: `throughput/mean_mfu=0.11854193750695625`, `throughput/mfu_sample_count=2`.
+- Interpretation:
+  - The generalized 4-stage explicit 1F1B scheduler runs at the requested 24-layer depth and lower prealloc.
+  - The 8-expert four-stage result is slower than the two-stage 8-expert batch-64 run, so the more important comparison is the 64-expert rung below.
+- Next action:
+  - Run a 64-expert 4-stage comparison to match the earlier 64-expert GPipe parameter scale.
+
+### 2026-07-08 14:16 PDT - 64-expert 4-stage 1F1B comparison succeeds
+- Hypothesis: The 4-stage explicit `std_1f1b` schedule should scale to the 64-expert comparison shape and produce a cleaner schedule comparison against 4-stage GPipe.
+- Commit Hash: uncommitted working tree on `research/jaxpp-grug-moe` at baseline `5c36c4374a`.
+- Command:
+  - `TF_GPU_ALLOCATOR=cuda_malloc_async experiments/grug/moe/run_cw_jaxpp_may_d2560.sh --submit --schedule std_1f1b --implementation explicit_mpmd --physical-stages 4 --logical-stages 4 --microbatches 4 --nodes 4 --gpus-per-replica 8 --expert-axis 8 --layers 24 --experts 64 --top-k 4 --batch 32 --seq-len 128 --vocab-size 8192 --moe-implementation ring --loss-implementation xla --steps 3 --tracker json_logger --xla-memory-fraction 0.70 --run-id jaxpp-explicit-std1f1b4-l24-e64-b32-xla070-20260708-2110`
+- Config:
+  - Explicit MPMD `std_1f1b`, four physical/logical pipeline stages, 4 microbatches, d2560, 24 layers, 64 experts, top-k 4, batch 32, seq 128, vocab 8192.
+  - 4x 8xH100, `TF_GPU_ALLOCATOR=cuda_malloc_async`, `XLA_PYTHON_CLIENT_MEM_FRACTION=0.70`.
+- Result:
+  - Parent launcher: `/dlwh/iris-run-job-20260708-210906`.
+  - Child training job: `/dlwh/iris-run-job-20260708-210906/grug-train-jaxpp-explicit-std1f1b4-l24-e64-b32-xla070-20260708-2110`.
+  - Child succeeded on all 4 tasks.
+  - Parameter count: `16,044,571,136`.
+  - Stage-0 step 2 metrics: loss `9.034103393554688`, tokens/s `13848.62694765867`, GFLOP/s `153679.71553721954`, MFU `0.4853452360321486`.
+  - Summary: `throughput/mean_mfu=0.4853452360321486`, `throughput/mfu_sample_count=2`.
+- Interpretation:
+  - Four-stage explicit `std_1f1b` now matches the 64-expert comparison scale and slightly exceeds the earlier 64-expert GPipe MFU (`0.47585952009098575`) under the short three-step synthetic probe.
+  - Lowering XLA prealloc to `0.70` did not prevent the 64-expert 24-layer rung from compiling and running.
+  - The full 256-expert May shape remains unproven; prior 192/256 expert attempts failed allocation in other schedule/topology settings, so the next capacity test should use this 4-stage 1F1B path.
+- Next action:
+  - Post the 4-stage `std_1f1b` results to issue 7024 and decide whether to attempt 128/192 experts with `0.70` or spend the next pass on the automatic JaxPP input-placement blocker.
+
+### 2026-07-08 14:28 PDT - 128-expert 4-stage 1F1B succeeds, 192/256 expert rungs do not fit
+- Hypothesis: The working 4-stage explicit `std_1f1b` path can push beyond 64 experts toward the requested 256-expert May shape at `0.70` XLA prealloc.
+- Commit Hash: uncommitted working tree on `research/jaxpp-grug-moe` at baseline `5c36c4374a`.
+- Successful 128-expert command:
+  - `TF_GPU_ALLOCATOR=cuda_malloc_async experiments/grug/moe/run_cw_jaxpp_may_d2560.sh --submit --schedule std_1f1b --implementation explicit_mpmd --physical-stages 4 --logical-stages 4 --microbatches 4 --nodes 4 --gpus-per-replica 8 --expert-axis 8 --layers 24 --experts 128 --top-k 4 --batch 32 --seq-len 128 --vocab-size 8192 --moe-implementation ring --loss-implementation xla --steps 3 --tracker json_logger --xla-memory-fraction 0.70 --run-id jaxpp-explicit-std1f1b4-l24-e128-b32-xla070-20260708-2119`
+- Successful 128-expert result:
+  - Parent launcher: `/dlwh/iris-run-job-20260708-211950`.
+  - Child training job: `/dlwh/iris-run-job-20260708-211950/grug-train-jaxpp-explicit-std1f1b4-l24-e128-b32-xla070-20260708-2119`.
+  - Child succeeded on all 4 tasks.
+  - Parameter count: `31,147,999,232`.
+  - Stage-0 step 2 metrics: loss `9.033186912536621`, tokens/s `11006.860721977533`, GFLOP/s `122404.011880775`, MFU `0.38657153827935514`.
+  - Summary: `throughput/mean_mfu=0.38657153827935514`, `throughput/mfu_sample_count=2`.
+- Failed 256-expert command:
+  - `TF_GPU_ALLOCATOR=cuda_malloc_async experiments/grug/moe/run_cw_jaxpp_may_d2560.sh --submit --schedule std_1f1b --implementation explicit_mpmd --physical-stages 4 --logical-stages 4 --microbatches 4 --nodes 4 --gpus-per-replica 8 --expert-axis 8 --layers 24 --experts 256 --top-k 4 --batch 32 --seq-len 128 --vocab-size 8192 --moe-implementation ring --loss-implementation xla --steps 3 --tracker json_logger --xla-memory-fraction 0.70 --run-id jaxpp-explicit-std1f1b4-l24-e256-b32-xla070-20260708-2129`
+- Failed 256-expert result:
+  - Parent launcher: `/dlwh/iris-run-job-20260708-212827`.
+  - Child training job: `/dlwh/iris-run-job-20260708-212827/grug-train-jaxpp-explicit-std1f1b4-l24-e256-b32-xla070-20260708-2129`.
+  - Hparams logged on all 4 tasks.
+  - Parameter count before failure: `61,354,855,424`.
+  - XLA reported input/output argument bytes `68,289,171,792` (`63.60GiB`) exceeding the `0.70` base limit `59,513,712,445`.
+  - All ranks failed during `jit__init_state` with `RESOURCE_EXHAUSTED: Out of memory while trying to allocate 400.00MiB`.
+- Failed 192-expert command:
+  - `TF_GPU_ALLOCATOR=cuda_malloc_async experiments/grug/moe/run_cw_jaxpp_may_d2560.sh --submit --schedule std_1f1b --implementation explicit_mpmd --physical-stages 4 --logical-stages 4 --microbatches 4 --nodes 4 --gpus-per-replica 8 --expert-axis 8 --layers 24 --experts 192 --top-k 4 --batch 32 --seq-len 128 --vocab-size 8192 --moe-implementation ring --loss-implementation xla --steps 3 --tracker json_logger --xla-memory-fraction 0.70 --run-id jaxpp-explicit-std1f1b4-l24-e192-b32-xla070-20260708-2135`
+- Failed 192-expert result:
+  - Parent launcher: `/dlwh/iris-run-job-20260708-213340`.
+  - Child training job: `/dlwh/iris-run-job-20260708-213340/grug-train-jaxpp-explicit-std1f1b4-l24-e192-b32-xla070-20260708-2135`.
+  - Hparams logged on all 4 tasks.
+  - All ranks failed while initializing optimizer state with `RESOURCE_EXHAUSTED: Out of memory while trying to allocate 300.00MiB`.
+- Interpretation:
+  - The 4-stage explicit 1F1B path reaches a larger completed parameter scale than GPipe did in this session at the same short synthetic settings: 128 experts and `31.15B` parameters.
+  - The requested 256-expert count still does not fit with the current optimizer-state initialization and four-stage split, even at `0.70` prealloc.
+  - 192 experts also does not fit, so the practical capacity boundary for this exact optimizer/state setup is currently between 128 and 192 experts.
+- Next action:
+  - Post the capacity ladder to issue 7024. Future work to reach 192/256 should reduce optimizer-state memory or change the partitioning/state-init strategy rather than only retrying with schedule changes.
+
+### 2026-07-08 15:06 PDT - Stage-local explicit init fits the 24-layer 256-expert rung
+- Hypothesis: The 192/256-expert failures were caused by constructing full optimizer state before splitting the model into pipeline stages; explicit MPMD should fit the requested 256-expert shape if parameters and optimizer state are initialized stage-locally.
+- Commit Hash: uncommitted working tree on `research/jaxpp-grug-moe` at baseline `5c36c4374a`.
+- Code changes:
+  - Added `initial_pipeline_state` for `explicit_mpmd`; it initializes model parameters, immediately reshards split pipeline stages into JaxPP MPMD shardings, and initializes optimizer state from those stage-local parameters instead of from the full `Transformer`.
+  - Added stage-local scalar construction for `state.step` and Optax schedule counters using the same empty-array pattern as NVIDIA/jaxpp's `examples/mpmd.py`; this avoids full-mesh scalar avals inside stage-local tasks.
+  - Added shape-based parameter counting for explicit MPMD because JaxPP `MpmdArray` leaves do not expose `.size` on the multi-process run path.
+  - Kept the CoreWeave wrapper default at `XLA_PYTHON_CLIENT_MEM_FRACTION=0.70`; the earlier `0.70` failure was a full-state init issue, not evidence that lower prealloc would help.
+- Local checks:
+  - `uv run python -m py_compile experiments/grug/moe/train.py`
+  - CPU-only four-device init probe with `GRUG_JAXPP_RESHARD_THRESHOLD_BYTES=1048576` and `XLA_FLAGS=--xla_force_host_platform_device_count=4`; verified stage-local `state.step` and Optax scalar leaves report pipeline mesh size `1`.
+- H100 smoke:
+  - Parent launcher: `/dlwh/iris-run-job-20260708-215602`.
+  - Child training job: `/dlwh/iris-run-job-20260708-215602/grug-train-jaxpp-explicit-initstage-smoke4-l4-e8-20260708-2157`.
+  - Config: explicit MPMD `std_1f1b`, four stages, 4 microbatches, d2560, 4 layers, 8 experts, top-k 1, batch 32, seq 128, 4x 8xH100, `TF_GPU_ALLOCATOR=cuda_malloc_async`, `XLA_PYTHON_CLIENT_MEM_FRACTION=0.70`.
+  - Result: all four tasks succeeded after the stage-local scalar fixes.
+- 24-layer 256-expert run:
+  - Command:
+    - `TF_GPU_ALLOCATOR=cuda_malloc_async experiments/grug/moe/run_cw_jaxpp_may_d2560.sh --submit --schedule std_1f1b --implementation explicit_mpmd --physical-stages 4 --logical-stages 4 --microbatches 4 --nodes 4 --gpus-per-replica 8 --expert-axis 8 --layers 24 --experts 256 --top-k 4 --batch 32 --seq-len 128 --vocab-size 8192 --moe-implementation ring --loss-implementation xla --steps 2 --tracker json_logger --xla-memory-fraction 0.70 --run-id jaxpp-explicit-initstage-l24-e256-b32-xla070-20260708-2200`
+  - Parent launcher: `/dlwh/iris-run-job-20260708-220012`.
+  - Child training job: `/dlwh/iris-run-job-20260708-220012/grug-train-jaxpp-explicit-initstage-l24-e256-b32-xla070-20260708-2200`.
+  - Result: all four tasks succeeded.
+  - Parameter count: `61,354,855,424`.
+  - Stage-0 final metrics: loss `9.045845985412598`, tokens/s `6630.2587767668865`, GFLOP/s `74045.98318658397`, MFU `0.23384911314610907`.
+  - Summary: `throughput/mean_mfu=0.23384911314610907`, `throughput/mfu_sample_count=1`.
+- Interpretation:
+  - The user-requested 24-layer, 256-expert, top-k 4 shape now fits and executes on 4x 8xH100 with explicit JaxPP MPMD `std_1f1b`.
+  - Stage-local optimizer initialization was the missing weight/state partitioning step; reducing XLA prealloc alone could not have fixed the prior full-state optimizer init OOM.
+  - The short two-step synthetic run is compile-dominated and has only one MFU sample; use it as a correctness/capacity proof, not a final performance number.
+- Next action:
+  - Post the successful 256-expert result to issue 7024 and run pre-commit over the touched files.

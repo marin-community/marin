@@ -4,12 +4,13 @@
 import logging
 import os
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from typing import TypeVar
 
 from fray.cluster import ResourceConfig
 from fray.current_client import current_client
 from fray.types import Entrypoint, JobRequest, create_environment
+from iris.cluster.setup_scripts import default_setup_script, setup_is_quiet
 from marin.training.run_environment import extras_for_resources
 from marin.training.training import resolve_training_env
 
@@ -22,7 +23,15 @@ ConfigT = TypeVar("ConfigT")
 # given (e.g. `iris job run -e XLA_FLAGS ...`) must be re-exported explicitly.
 # JAX_PLATFORMS is excluded: the dispatcher runs CPU-only and its value must
 # not leak onto accelerator tasks.
-_FORWARDED_ENV_PREFIXES = ("XLA_FLAGS", "LIBTPU_INIT_ARGS", "NCCL_", "JAX_")
+_FORWARDED_ENV_PREFIXES = (
+    "XLA_FLAGS",
+    "XLA_PYTHON_CLIENT_",
+    "LIBTPU_INIT_ARGS",
+    "NCCL_",
+    "JAX_",
+    "TF_GPU_ALLOCATOR",
+    "GRUG_JAXPP_",
+)
 _FORWARDED_ENV_EXCLUDE = ("JAX_PLATFORMS",)
 
 
@@ -45,15 +54,23 @@ def dispatch_grug_training_run(
     resources: ResourceConfig,
     max_retries_failure: int = 3,
     processes_per_task: int = 1,
+    post_setup_scripts: Sequence[str] = (),
 ) -> None:
     """Submit a grug train entrypoint through Fray and wait for completion."""
     safe_run_id = _safe_job_suffix(run_id)
     env_vars = resolve_training_env(base_env=_forwarded_env_vars(), resources=resources)
+    extras = extras_for_resources(resources)
+    setup_scripts = None
+    if post_setup_scripts:
+        setup_scripts = [
+            default_setup_script(extras=extras, quiet=setup_is_quiet(env_vars)),
+            *post_setup_scripts,
+        ]
     request = JobRequest(
         name=f"grug-train-{safe_run_id}",
         entrypoint=Entrypoint.from_callable(local_entrypoint, args=[config]),
         resources=resources,
-        environment=create_environment(env_vars=env_vars, extras=extras_for_resources(resources)),
+        environment=create_environment(env_vars=env_vars, extras=extras, setup_scripts=setup_scripts),
         max_retries_failure=max_retries_failure,
         processes_per_task=processes_per_task,
     )

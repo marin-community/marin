@@ -29,6 +29,7 @@ from levanter.optim import OptimizerConfig
 from levanter.tracker import TrackerConfig
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
+from levanter.utils.mesh import MeshConfig
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.execution.step_runner import StepRunner
 from marin.experiment.data import mixture, tokenized
@@ -98,6 +99,8 @@ class GrugMoeLaunchConfig:
     """Override the checkpointer. None builds the default (periodic + final saves
     under output_path). Throughput experiments point this at node-local disk so a
     slow object-store commit can't wedge the end-of-run barrier."""
+    post_setup_scripts: tuple[str, ...] = ()
+    """Additional setup scripts appended after the default Iris worker dependency sync."""
     init_from: str | None = None
     """Checkpoint base directory to initialize weights from (the latest checkpoint
     under it is loaded). None trains from scratch. Used to chain training phases —
@@ -108,6 +111,14 @@ def env_int(key: str, default: int) -> int:
     """Read an int from ``os.environ[key]``, falling back to ``default`` when unset/empty."""
     raw = os.environ.get(key, "")
     return int(raw) if raw else default
+
+
+def env_bool(key: str, default: bool) -> bool:
+    """Read a bool from ``os.environ[key]``, falling back to ``default`` when unset/empty."""
+    raw = os.environ.get(key, "")
+    if not raw:
+        return default
+    return raw.lower() in ("1", "true", "yes", "on")
 
 
 def slimpajama_6b_dataset() -> ArtifactStep[TokenizedCache]:
@@ -149,17 +160,35 @@ def run_grug_moe_trial(config: GrugMoeLaunchConfig) -> None:
     blocks until it completes.
     """
     initialize_from = latest_checkpoint_path(config.init_from) if config.init_from is not None else None
+    mesh = MeshConfig()
+    if config.grug_trainer.pipeline is not None:
+        pipeline = config.grug_trainer.pipeline
+        mesh = MeshConfig(
+            axes={
+                "replica": 1,
+                "data": -1,
+                "expert": config.grug_trainer.expert_axis_size,
+                "model": 1,
+            },
+            dcn_axes={pipeline.stage_axis_name: pipeline.mpmd_dim or pipeline.stages, "replica_dcn": -1},
+            compute_mapping={"batch": ["replica_dcn", "data", "expert"]},
+            param_mapping={"embed": "data"},
+        )
     trainer = TrainerConfig(
         id=config.run_id,
         seed=config.seed,
         train_batch_size=config.batch_size,
         num_train_steps=config.steps,
+        mesh=mesh,
         profiler=config.profiler,
         mp=jmp.get_policy(config.mp),
         tracker=_resolve_tracker(config.tracker, config.run_id),
         use_explicit_mesh_axes=True,
         require_accelerator=True,
         allow_nondivisible_batch_size=False,
+        log_jaxprs=env_bool("GRUG_LOG_JAXPRS", True),
+        log_xla_hlo=env_bool("GRUG_LOG_XLA_HLO", True),
+        jax_compilation_cache_dir=os.environ.get("JAX_COMPILATION_CACHE_DIR") or None,
         initialize_from=initialize_from,
         checkpointer=config.checkpointer
         or resolve_checkpointer_output_path(
@@ -178,6 +207,7 @@ def run_grug_moe_trial(config: GrugMoeLaunchConfig) -> None:
         trainer=grug_trainer,
         eval=config.eval,
         processes_per_task=config.processes_per_task,
+        post_setup_scripts=config.post_setup_scripts,
     )
     run_grug(run_config)
 

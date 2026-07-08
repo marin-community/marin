@@ -1,0 +1,292 @@
+#!/usr/bin/env bash
+# Launch a JaxPP May d=2560 Grug MoE profile run on CoreWeave H100s.
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
+
+CLUSTER="cw-us-east-02a"
+DEFAULT_ENV_FILE="$HOME/.config/marin/marin-r2.env"
+if [ ! -f "$DEFAULT_ENV_FILE" ] && [ -f "$HOME/.config/marin/cloudflare-r2.env" ]; then
+    DEFAULT_ENV_FILE="$HOME/.config/marin/cloudflare-r2.env"
+fi
+ENV_FILE="${MARIN_R2_ENV_FILE:-$DEFAULT_ENV_FILE}"
+ENV_FILE_EXPLICIT=false
+KUBECONFIG_PATH="${KUBECONFIG:-$HOME/.kube/coreweave-iris-gpu}"
+MARIN_PREFIX="s3://marin-na/marin"
+OBJECT_STORAGE_ENDPOINT="https://74981a43be0de7712369306c7b19133d.r2.cloudflarestorage.com"
+SUBMIT=false
+
+RUN_ID=""
+SCHEDULE="std_1f1b"
+IMPLEMENTATION="auto"
+PHYSICAL_STAGES=4
+LOGICAL_STAGES=""
+MICROBATCHES=8
+NODES=4
+GPUS_PER_REPLICA=8
+EXPERT_AXIS=8
+REPLICA_AXIS=1
+BATCH=256
+SEQ_LEN=4096
+LAYERS=24
+NUM_EXPERTS=256
+TOP_K=4
+VOCAB_SIZE=""
+MOE_IMPLEMENTATION="ring"
+LOSS_IMPLEMENTATION=""
+CE_AUTOTUNE_ON_MISS="${LEVANTER_PALLAS_CE_AUTOTUNE_ON_MISS:-false}"
+JAXPP_CONSERVATIVE_LOOP_CLUSTERING="${JAXPP_CONSERVATIVE_LOOP_CLUSTERING:-true}"
+STEPS=20
+DATA="synthetic"
+TRACKER="wandb"
+PROFILER_START=8
+PROFILER_STEPS=0
+WORKER_CPU=32
+WORKER_RAM="256g"
+WORKER_DISK="256g"
+REMAT="save_moe"
+MP="params=float32,compute=bfloat16,output=bfloat16"
+JAXPP_REVISION="7091a9b5ce02cd1a6bdc905f6a36e89370a5fba9"
+XLA_MEMORY_FRACTION="${XLA_PYTHON_CLIENT_MEM_FRACTION:-0.70}"
+
+usage() {
+    cat <<'EOF'
+Usage:
+  experiments/grug/moe/run_cw_jaxpp_may_d2560.sh [options]
+
+Options:
+  --submit                  Submit the Iris dispatcher job. Without this, print a dry-run summary.
+  --run-id RUN_ID           Use a fixed run id instead of generating one.
+  --schedule NAME           gpipe, std_1f1b, eager_1f1b, zero_bubble, interleaved_gpipe,
+                            interleaved_1f1b, dualpipe_v, or kimi_k2 (default: std_1f1b).
+  --implementation NAME     PP_IMPLEMENTATION: auto or explicit_mpmd (default: auto).
+  --physical-stages N       PP_MPMD_DIM / physical pipeline ranks (default: 4).
+  --logical-stages N        PP_STAGES / logical pipeline stage cuts. Omit to infer per schedule.
+  --microbatches N          PP_MICROBATCHES (default: 8).
+  --nodes N                 H100 node count / MAY_GPU_REPLICAS (default: 4).
+  --gpus-per-replica N      H100 GPUs per Iris replica / MAY_GPUS_PER_REPLICA (default: 8).
+  --expert-axis N           MAY_EXPERT_AXIS (default: 8).
+  --layers N                MAY_NUM_LAYERS (default: 24).
+  --experts N               MAY_NUM_EXPERTS (default: 256).
+  --top-k N                 MAY_TOP_K (default: 4).
+  --vocab-size N            MAY_VOCAB_SIZE. Omit to use the May heuristic default.
+  --batch N                 MAY_BATCH (default: 256).
+  --seq-len N               MAY_SEQ_LEN (default: 4096).
+  --moe-implementation NAME ring, ragged_all_to_all, deepep, scatter, or sonic (default: ring).
+  --loss-implementation NAME
+                            Cross-entropy implementation: batched_xla, xla, or reference.
+                            Omit to use Levanter default.
+  --ce-autotune-on-miss BOOL
+                            LEVANTER_PALLAS_CE_AUTOTUNE_ON_MISS (default: false).
+  --conservative-loop-clustering BOOL
+                            JAXPP_CONSERVATIVE_LOOP_CLUSTERING (default: true).
+  --xla-memory-fraction N   XLA_PYTHON_CLIENT_MEM_FRACTION (default: 0.70).
+  --steps N                 MAY_STEPS (default: 20).
+  --tracker NAME            MAY_TRACKER: wandb or json_logger (default: wandb).
+  --data NAME               MAY_DATA: synthetic (default: synthetic).
+  --profiler-steps N        MAY_PROFILER_STEPS (default: 0).
+  --env-file PATH           Load R2 credentials from PATH.
+  --prefix URI              MARIN_PREFIX for outputs (default: s3://marin-na/marin/).
+  --cluster NAME            Iris cluster name (default: cw-us-east-02a).
+  --kubeconfig PATH         Kubeconfig path (default: $KUBECONFIG or ~/.kube/coreweave-iris-gpu).
+  -h, --help                Show this help.
+EOF
+}
+
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --submit) SUBMIT=true; shift ;;
+        --run-id) RUN_ID="$2"; shift 2 ;;
+        --schedule) SCHEDULE="$2"; shift 2 ;;
+        --implementation) IMPLEMENTATION="$2"; shift 2 ;;
+        --physical-stages) PHYSICAL_STAGES="$2"; shift 2 ;;
+        --logical-stages) LOGICAL_STAGES="$2"; shift 2 ;;
+        --microbatches) MICROBATCHES="$2"; shift 2 ;;
+        --nodes) NODES="$2"; shift 2 ;;
+        --gpus-per-replica) GPUS_PER_REPLICA="$2"; shift 2 ;;
+        --expert-axis) EXPERT_AXIS="$2"; shift 2 ;;
+        --layers) LAYERS="$2"; shift 2 ;;
+        --experts) NUM_EXPERTS="$2"; shift 2 ;;
+        --top-k) TOP_K="$2"; shift 2 ;;
+        --vocab-size) VOCAB_SIZE="$2"; shift 2 ;;
+        --batch) BATCH="$2"; shift 2 ;;
+        --seq-len) SEQ_LEN="$2"; shift 2 ;;
+        --moe-implementation) MOE_IMPLEMENTATION="$2"; shift 2 ;;
+        --loss-implementation) LOSS_IMPLEMENTATION="$2"; shift 2 ;;
+        --ce-autotune-on-miss) CE_AUTOTUNE_ON_MISS="$2"; shift 2 ;;
+        --conservative-loop-clustering) JAXPP_CONSERVATIVE_LOOP_CLUSTERING="$2"; shift 2 ;;
+        --xla-memory-fraction) XLA_MEMORY_FRACTION="$2"; shift 2 ;;
+        --steps) STEPS="$2"; shift 2 ;;
+        --tracker) TRACKER="$2"; shift 2 ;;
+        --data) DATA="$2"; shift 2 ;;
+        --profiler-steps) PROFILER_STEPS="$2"; shift 2 ;;
+        --env-file) ENV_FILE="$2"; ENV_FILE_EXPLICIT=true; shift 2 ;;
+        --prefix) MARIN_PREFIX="$2"; shift 2 ;;
+        --cluster) CLUSTER="$2"; shift 2 ;;
+        --kubeconfig) KUBECONFIG_PATH="$2"; shift 2 ;;
+        -h|--help) usage; exit 0 ;;
+        *)
+            echo "ERROR: unknown argument: $1" >&2
+            usage >&2
+            exit 1
+            ;;
+    esac
+done
+
+case "$SCHEDULE" in
+    gpipe|std_1f1b|eager_1f1b|zero_bubble|interleaved_gpipe|interleaved_1f1b|dualpipe_v|kimi_k2) ;;
+    *)
+        echo "ERROR: unsupported schedule: $SCHEDULE" >&2
+        exit 1
+        ;;
+esac
+
+case "$IMPLEMENTATION" in
+    auto|explicit_mpmd) ;;
+    *)
+        echo "ERROR: unsupported implementation: $IMPLEMENTATION" >&2
+        exit 1
+        ;;
+esac
+
+R2_HELPER="${REPO_ROOT}/scripts/iris/cloudflare_r2_env.sh"
+if [ -x "$R2_HELPER" ]; then
+    if [ -f "$ENV_FILE" ] || [ "$ENV_FILE_EXPLICIT" = true ]; then
+        R2_EXPORTS="$("$R2_HELPER" "$ENV_FILE")"
+    else
+        R2_EXPORTS="$("$R2_HELPER")"
+    fi
+    eval "$R2_EXPORTS"
+elif [ -f "$ENV_FILE" ]; then
+    set -a
+    # shellcheck disable=SC1090
+    source "$ENV_FILE"
+    set +a
+fi
+export KUBECONFIG="$KUBECONFIG_PATH"
+
+if [ -z "$RUN_ID" ]; then
+    RUN_ID="jaxpp-may-d2560-${SCHEDULE}-$(date -u +%Y%m%d-%H%M%S)"
+fi
+
+ENV_ARGS=(
+    -e MARIN_PREFIX "$MARIN_PREFIX"
+    -e RUN_ID "$RUN_ID"
+    -e USER "${USER:-dlwh}"
+    -e LOGNAME "${LOGNAME:-${USER:-dlwh}}"
+    -e AWS_ENDPOINT_URL "$OBJECT_STORAGE_ENDPOINT"
+    -e AWS_ENDPOINT_URL_S3 "$OBJECT_STORAGE_ENDPOINT"
+    -e AWS_DEFAULT_REGION "auto"
+    -e AWS_REGION "auto"
+    -e MAY_GPU_REPLICAS "$NODES"
+    -e MAY_GPUS_PER_REPLICA "$GPUS_PER_REPLICA"
+    -e MAY_CPU_PER_REPLICA "$WORKER_CPU"
+    -e MAY_WORKER_RAM "$WORKER_RAM"
+    -e MAY_WORKER_DISK "$WORKER_DISK"
+    -e MAY_EXPERT_AXIS "$EXPERT_AXIS"
+    -e MAY_REPLICA_AXIS "$REPLICA_AXIS"
+    -e MAY_BATCH "$BATCH"
+    -e MAY_SEQ_LEN "$SEQ_LEN"
+    -e MAY_NUM_LAYERS "$LAYERS"
+    -e MAY_NUM_EXPERTS "$NUM_EXPERTS"
+    -e MAY_TOP_K "$TOP_K"
+    -e MAY_MOE_IMPLEMENTATION "$MOE_IMPLEMENTATION"
+    -e MAY_STEPS "$STEPS"
+    -e MAY_DATA "$DATA"
+    -e MAY_TRACKER "$TRACKER"
+    -e MAY_REMAT "$REMAT"
+    -e MAY_MP "$MP"
+    -e MAY_PROFILER_START "$PROFILER_START"
+    -e MAY_PROFILER_STEPS "$PROFILER_STEPS"
+    -e PP_IMPLEMENTATION "$IMPLEMENTATION"
+    -e PP_SCHEDULE "$SCHEDULE"
+    -e PP_MPMD_DIM "$PHYSICAL_STAGES"
+    -e PP_MICROBATCHES "$MICROBATCHES"
+    -e JAXPP_REVISION "$JAXPP_REVISION"
+    -e JAX_COMPILATION_CACHE_DIR "/tmp/jax-compilation-cache"
+    -e GRUG_LOG_JAXPRS "${GRUG_LOG_JAXPRS:-false}"
+    -e GRUG_LOG_XLA_HLO "${GRUG_LOG_XLA_HLO:-false}"
+    -e LEVANTER_PALLAS_CE_AUTOTUNE_ON_MISS "$CE_AUTOTUNE_ON_MISS"
+    -e JAXPP_CONSERVATIVE_LOOP_CLUSTERING "$JAXPP_CONSERVATIVE_LOOP_CLUSTERING"
+    -e XLA_PYTHON_CLIENT_MEM_FRACTION "$XLA_MEMORY_FRACTION"
+)
+
+for maybe_env in \
+    AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN \
+    R2_ACCESS_KEY_ID R2_SECRET_ACCESS_KEY R2_ENDPOINT_URL \
+    CLOUDFLARE_ACCOUNT_ID CLOUDFLARE_API_TOKEN; do
+    if [ -n "${!maybe_env:-}" ]; then
+        ENV_ARGS+=(-e "$maybe_env" "${!maybe_env}")
+    fi
+done
+
+if [ -n "$LOGICAL_STAGES" ]; then
+    ENV_ARGS+=(-e PP_STAGES "$LOGICAL_STAGES")
+fi
+
+if [ -n "$LOSS_IMPLEMENTATION" ]; then
+    ENV_ARGS+=(-e MAY_LOSS_IMPLEMENTATION "$LOSS_IMPLEMENTATION")
+fi
+
+if [ -n "$VOCAB_SIZE" ]; then
+    ENV_ARGS+=(-e MAY_VOCAB_SIZE "$VOCAB_SIZE")
+fi
+
+for maybe_env in \
+    WANDB_API_KEY WANDB_ENTITY WANDB_PROJECT MAY_WANDB_GROUP \
+    IRIS_DEBUG_UV_SYNC GRUG_JAXPP_LOWER_EXPLICIT \
+    GRUG_JAXPP_AUTO_EXPLICIT_IN_SHARDINGS GRUG_JAXPP_PATCH_CONST_SHARDINGS \
+    TF_GPU_ALLOCATOR XLA_PYTHON_CLIENT_PREALLOCATE; do
+    if [ -n "${!maybe_env:-}" ]; then
+        ENV_ARGS+=(-e "$maybe_env" "${!maybe_env}")
+    fi
+done
+
+CMD=(
+    uv run --package marin-iris --extra controller iris --cluster="$CLUSTER"
+    job run --no-wait
+    --memory=2G --disk=4G --cpu=1 --extra=cpu
+    "${ENV_ARGS[@]}"
+    -- python -m experiments.grug.moe.launch_cw_jaxpp_may_d2560
+)
+
+if [ "$SUBMIT" != true ]; then
+    cat <<EOF
+Dry run: not submitting. Add --submit to launch.
+cluster: $CLUSTER
+run_id: $RUN_ID
+kubeconfig: $KUBECONFIG
+prefix: $MARIN_PREFIX
+nodes: $NODES
+gpus_per_replica: $GPUS_PER_REPLICA
+schedule: $SCHEDULE
+implementation: $IMPLEMENTATION
+physical_stages: $PHYSICAL_STAGES
+logical_stages: ${LOGICAL_STAGES:-inferred}
+microbatches: $MICROBATCHES
+model: d2560 L${LAYERS} experts=${NUM_EXPERTS} top_k=${TOP_K} seq_len=${SEQ_LEN} vocab=${VOCAB_SIZE:-default}
+batch: $BATCH
+loss_implementation: ${LOSS_IMPLEMENTATION:-default}
+ce_autotune_on_miss: $CE_AUTOTUNE_ON_MISS
+conservative_loop_clustering: $JAXPP_CONSERVATIVE_LOOP_CLUSTERING
+xla_memory_fraction: $XLA_MEMORY_FRACTION
+steps: $STEPS
+tracker: $TRACKER
+data: $DATA
+jaxpp_revision: $JAXPP_REVISION
+
+Command shape:
+  uv run --package marin-iris --extra controller iris --cluster=$CLUSTER job run --no-wait ... -- python -m experiments.grug.moe.launch_cw_jaxpp_may_d2560
+EOF
+    exit 0
+fi
+
+if [ ! -f "$KUBECONFIG" ]; then
+    echo "ERROR: kubeconfig not found: $KUBECONFIG" >&2
+    exit 1
+fi
+
+cd "$REPO_ROOT"
+exec "${CMD[@]}"

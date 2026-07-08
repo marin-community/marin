@@ -49,6 +49,11 @@ from levanter.tracker.histogram import Histogram, SummaryStats
 from levanter.utils.activation import ActivationFunctionEnum
 from transformers import PretrainedConfig as HfConfig
 
+try:
+    import jaxpp.api as jaxpp
+except ModuleNotFoundError:
+    jaxpp = None
+
 _DEFAULT_EP_CAPACITY_FACTOR = 1.0
 _GATED_NORM_RANK = 128
 _ROUTING_RENORM_SUM = 2.5
@@ -91,6 +96,44 @@ def _partition_spec_of(x: jax.Array) -> P | None:
 
 def _layer_attention_masks(mask: AttentionMask, *, sliding_window: int) -> tuple[AttentionMask, AttentionMask]:
     return mask.with_sliding_window(sliding_window // 2), mask.with_sliding_window(sliding_window)
+
+
+def _pipeline_stage_end_layers(num_blocks: int, pipeline_stages: int | None) -> tuple[int, ...]:
+    if pipeline_stages is None:
+        return ()
+    if pipeline_stages <= 0:
+        raise ValueError(f"pipeline_stages must be positive, got {pipeline_stages}")
+    if pipeline_stages > num_blocks:
+        raise ValueError(f"pipeline_stages ({pipeline_stages}) must be <= num_layers ({num_blocks})")
+    base_layers_per_stage, extra_layers = divmod(num_blocks, pipeline_stages)
+    stage_sizes = tuple(
+        base_layers_per_stage + (1 if stage_index < extra_layers else 0) for stage_index in range(pipeline_stages)
+    )
+    stage_end_layers = []
+    layer_count = 0
+    for stage_size in stage_sizes:
+        layer_count += stage_size
+        stage_end_layers.append(layer_count - 1)
+    return tuple(stage_end_layers)
+
+
+def _pipeline_stage_bounds(num_blocks: int, pipeline_stages: int) -> tuple[tuple[int, int], ...]:
+    stage_end_layers = _pipeline_stage_end_layers(num_blocks, pipeline_stages)
+    start = 0
+    bounds = []
+    for end_layer in stage_end_layers:
+        end = end_layer + 1
+        bounds.append((start, end))
+        start = end
+    return tuple(bounds)
+
+
+def _mark_pipeline_stage_end(hidden: jax.Array, *, layer_index: int) -> jax.Array:
+    if jaxpp is None:
+        raise ModuleNotFoundError(
+            "jaxpp is required when pipeline_stages is set. Install NVIDIA/jaxpp in the training environment."
+        )
+    return jaxpp.mark_stage_end(hidden, name=f"grug_moe_layer_{layer_index}")
 
 
 class GrugMoeHfConfig(HfConfig):
@@ -138,6 +181,7 @@ class GrugModelConfig:
     still apply half-RoPE. Set to False to keep RoPE on long layers."""
     attention_implementation: GrugAttentionImplementation | None = None
     moe_implementation: MoeImplementation | None = None
+    loss_implementation: str | tuple[str, ...] | None = None
     remat_mode: RematMode = "recompute_all"
     """Per-block gradient checkpointing. "recompute_all" reruns the whole block in
     backward (lowest memory); "save_moe" keeps the tagged MoE dispatch tensors so
@@ -511,6 +555,19 @@ def _summarize_router_metrics(router_metrics: dict[str, jax.Array]) -> dict[str,
     return out
 
 
+def _stack_router_metrics(moe_router_stats: list[dict[str, jax.Array]]) -> dict[str, jax.Array]:
+    if not moe_router_stats:
+        raise ValueError("at least one block is required to produce router metrics")
+    return {
+        "routing_entropy_per_layer": jnp.stack([s["routing_entropy"] for s in moe_router_stats], axis=0),
+        "routing_counts_per_layer": jnp.stack([s["routing_counts"] for s in moe_router_stats], axis=0),
+        "load_balancing_loss_per_layer": jnp.stack([s["load_balancing_loss"] for s in moe_router_stats], axis=0),
+        "router_z_loss_per_layer": jnp.stack([s["router_z_loss"] for s in moe_router_stats], axis=0),
+        "qb_beta_per_layer": jnp.stack([s["qb_beta"] for s in moe_router_stats], axis=0),
+        "capacity_overflow_per_layer": jnp.stack([s["capacity_overflow"] for s in moe_router_stats], axis=0),
+    }
+
+
 def _histogram_from_expert_counts(expert_counts: jax.Array) -> SummaryStats:
     counts = jnp.asarray(expert_counts, dtype=jnp.float32)
     num_experts = counts.shape[0]
@@ -679,6 +736,124 @@ class Block(eqx.Module):
         return x, router_stats
 
 
+class TransformerPipelineStage(eqx.Module):
+    """Stage-local subset of a Transformer for explicit MPMD pipeline training."""
+
+    token_embed: jax.Array | None
+    embed_norm: RMSNorm | None
+    embed_gated_norm: GatedNorm | None
+    output_proj: jax.Array | None
+    blocks: tuple[Block, ...]
+    final_norm: RMSNorm | None
+    final_gated_norm: GatedNorm | None
+    config: GrugModelConfig = eqx.field(static=True)
+    stage_index: int = eqx.field(static=True)
+    start_layer: int = eqx.field(static=True)
+    end_layer: int = eqx.field(static=True)
+    pipeline_stages: int = eqx.field(static=True)
+
+    @property
+    def is_first_stage(self) -> bool:
+        return self.stage_index == 0
+
+    @property
+    def is_last_stage(self) -> bool:
+        return self.stage_index == self.pipeline_stages - 1
+
+    @named_call
+    def embed_tokens(self, token_ids: Int[Array, "B S"]) -> Float[Array, "B S D"]:
+        if self.token_embed is None or self.embed_norm is None or self.embed_gated_norm is None:
+            raise ValueError("only the first pipeline stage owns token embedding parameters")
+        batch_spec = _batch_spec()
+        hidden = self.token_embed.at[token_ids].get(out_sharding=batch_spec)
+        return self.embed_gated_norm(self.embed_norm(hidden))
+
+    @named_call
+    def block_range(
+        self,
+        hidden: Float[Array, "B S D"],
+        mask: AttentionMask | jax.Array | None = None,
+        *,
+        mark_stage_end: bool = False,
+    ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
+        if mask is None:
+            mask = AttentionMask.causal()
+        if not self.blocks:
+            raise ValueError("pipeline stages must own at least one transformer block")
+
+        cfg = self.config
+        num_blocks = self.config.num_layers
+        segment_ids = mask.segment_ids if isinstance(mask, AttentionMask) else None
+        short_mask = AttentionMask(is_causal=True, sliding_window=cfg.sliding_window, segment_ids=segment_ids)
+        long_mask = AttentionMask(is_causal=True, sliding_window=None, segment_ids=segment_ids)
+        if cfg.remat_mode == "save_moe":
+            remat_policy = jax.checkpoint_policies.save_only_these_names(*MOE_REMAT_SAVE_NAMES)
+        else:
+            remat_policy = None
+
+        moe_router_stats: list[dict[str, jax.Array]] = []
+        for local_index, block in enumerate(self.blocks):
+            layer_index = self.start_layer + local_index
+            is_last = layer_index == num_blocks - 1
+            is_long = layer_index % 4 == 3 or is_last
+            layer_mask = long_mask if is_long else short_mask
+            use_pko = is_long and not cfg.disable_pko
+            disable_rope = is_long and cfg.disable_long_rope
+            hidden, router_stats = eqx.filter_checkpoint(block, policy=remat_policy)(
+                hidden, layer_mask, use_pko, disable_rope
+            )
+            moe_router_stats.append(router_stats)
+
+        if mark_stage_end:
+            hidden = _mark_pipeline_stage_end(hidden, layer_index=self.end_layer - 1)
+        return hidden, _stack_router_metrics(moe_router_stats)
+
+    @named_call
+    def finalize_hidden(self, hidden: Float[Array, "B S D"]) -> Float[Array, "B S D"]:
+        if self.final_norm is None or self.final_gated_norm is None:
+            raise ValueError("only the final pipeline stage owns final norm parameters")
+        return self.final_gated_norm(self.final_norm(hidden))
+
+    @named_call
+    def hidden_next_token_loss(
+        self,
+        hidden: Float[Array, "B S D"],
+        token_ids: Int[Array, "B S"],
+        loss_weight: Float[Array, "B S"],
+        router_metrics: dict[str, jax.Array],
+        *,
+        reduction: str = "mean",
+        logsumexp_weight: float | None = None,
+        loss_dtype: jnp.dtype = jnp.float32,
+        return_router_metrics: bool = False,
+    ) -> jax.Array | tuple[jax.Array, dict[str, jax.Array | SummaryStats]]:
+        if self.output_proj is None:
+            raise ValueError("only the final pipeline stage owns output projection parameters")
+
+        labels = jnp.concatenate([token_ids[:, 1:], token_ids[:, :1] * 0], axis=1).astype(jnp.int32)
+        loss_weight = loss_weight.astype(loss_dtype)
+        cross_entropy_loss = fused_linear_softmax_cross_entropy_loss(
+            hidden,
+            self.output_proj,
+            labels,
+            weight=loss_weight,
+            reduction=reduction,
+            logsumexp_weight=logsumexp_weight,
+            dtype=loss_dtype,
+            implementation=self.config.loss_implementation,
+        )
+        num_moe_layers = router_metrics["router_z_loss_per_layer"].shape[0]
+        rzl = jnp.sum(router_metrics["router_z_loss_per_layer"]) / num_moe_layers
+        aux_loss = self.config.router_z_loss_coef * rzl
+        loss = cross_entropy_loss + aux_loss if reduction != "none" else cross_entropy_loss
+        if return_router_metrics:
+            summarized_metrics = _summarize_router_metrics(router_metrics)
+            summarized_metrics["train/cross_entropy_loss"] = cross_entropy_loss
+            summarized_metrics["train/router/aux_loss_weighted"] = aux_loss
+            return loss, summarized_metrics
+        return loss
+
+
 class Transformer(eqx.Module):
     token_embed: jax.Array
     embed_norm: RMSNorm
@@ -730,19 +905,88 @@ class Transformer(eqx.Module):
     def Vocab(self) -> Axis:
         return Axis("vocab", self.config.vocab_size)
 
+    def split_for_pipeline(self, pipeline_stages: int) -> tuple[TransformerPipelineStage, ...]:
+        """Partition Transformer weights into contiguous pipeline-stage pytrees."""
+        bounds = _pipeline_stage_bounds(len(self.blocks), pipeline_stages)
+        stages = []
+        for stage_index, (start_layer, end_layer) in enumerate(bounds):
+            is_first = stage_index == 0
+            is_last = stage_index == pipeline_stages - 1
+            stages.append(
+                TransformerPipelineStage(
+                    token_embed=self.token_embed if is_first else None,
+                    embed_norm=self.embed_norm if is_first else None,
+                    embed_gated_norm=self.embed_gated_norm if is_first else None,
+                    output_proj=self.output_proj if is_last else None,
+                    blocks=self.blocks[start_layer:end_layer],
+                    final_norm=self.final_norm if is_last else None,
+                    final_gated_norm=self.final_gated_norm if is_last else None,
+                    config=self.config,
+                    stage_index=stage_index,
+                    start_layer=start_layer,
+                    end_layer=end_layer,
+                    pipeline_stages=pipeline_stages,
+                )
+            )
+        return tuple(stages)
+
+    @staticmethod
+    def merge_pipeline_stages(stages: tuple[TransformerPipelineStage, ...]) -> "Transformer":
+        """Reconstruct a full Transformer from stage-local weights."""
+        if not stages:
+            raise ValueError("at least one pipeline stage is required")
+        for expected_index, stage in enumerate(stages):
+            if stage.stage_index != expected_index:
+                raise ValueError(
+                    f"pipeline stages must be provided in order; expected stage {expected_index}, "
+                    f"got stage {stage.stage_index}"
+                )
+
+        first = stages[0]
+        last = stages[-1]
+        if first.token_embed is None or first.embed_norm is None or first.embed_gated_norm is None:
+            raise ValueError("first pipeline stage is missing embedding parameters")
+        if last.output_proj is None or last.final_norm is None or last.final_gated_norm is None:
+            raise ValueError("last pipeline stage is missing output head parameters")
+
+        blocks = tuple(block for stage in stages for block in stage.blocks)
+        return Transformer(
+            token_embed=first.token_embed,
+            embed_norm=first.embed_norm,
+            embed_gated_norm=first.embed_gated_norm,
+            output_proj=last.output_proj,
+            blocks=blocks,
+            final_norm=last.final_norm,
+            final_gated_norm=last.final_gated_norm,
+            config=first.config,
+        )
+
     @named_call
-    def __call__(
+    def embed_tokens(self, token_ids: Int[Array, "B S"]) -> Float[Array, "B S D"]:
+        batch_spec = _batch_spec()
+        hidden = self.token_embed.at[token_ids].get(out_sharding=batch_spec)
+        return self.embed_gated_norm(self.embed_norm(hidden))
+
+    @named_call
+    def block_range(
         self,
-        token_ids: Int[Array, "B S"],
+        hidden: Float[Array, "B S D"],
         mask: AttentionMask | jax.Array | None = None,
+        *,
+        start_layer: int,
+        end_layer: int,
+        pipeline_stage_end_layers: tuple[int, ...] = (),
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
         if mask is None:
             mask = AttentionMask.causal()
 
-        batch_spec = _batch_spec()
         cfg = self.config
-        hidden = self.token_embed.at[token_ids].get(out_sharding=batch_spec)
-        hidden = self.embed_gated_norm(self.embed_norm(hidden))
+        num_blocks = len(self.blocks)
+        if not 0 <= start_layer < end_layer <= num_blocks:
+            raise ValueError(
+                f"block range must satisfy 0 <= start_layer < end_layer <= {num_blocks}, "
+                f"got start_layer={start_layer}, end_layer={end_layer}"
+            )
 
         # Short layers: sliding window. Long layers (every 4th + last): full causal.
         segment_ids = mask.segment_ids if isinstance(mask, AttentionMask) else None
@@ -754,9 +998,8 @@ class Transformer(eqx.Module):
         else:
             remat_policy = None
 
-        num_blocks = len(self.blocks)
         moe_router_stats: list[dict[str, jax.Array]] = []
-        for i, block in enumerate(self.blocks):
+        for i, block in enumerate(self.blocks[start_layer:end_layer], start=start_layer):
             is_last = i == num_blocks - 1
             is_long = i % 4 == 3 or is_last
             layer_mask = long_mask if is_long else short_mask
@@ -765,17 +1008,34 @@ class Transformer(eqx.Module):
             hidden, router_stats = eqx.filter_checkpoint(block, policy=remat_policy)(
                 hidden, layer_mask, use_pko, disable_rope
             )
+            if i in pipeline_stage_end_layers:
+                hidden = _mark_pipeline_stage_end(hidden, layer_index=i)
             moe_router_stats.append(router_stats)
 
-        router_metrics = {
-            "routing_entropy_per_layer": jnp.stack([s["routing_entropy"] for s in moe_router_stats], axis=0),
-            "routing_counts_per_layer": jnp.stack([s["routing_counts"] for s in moe_router_stats], axis=0),
-            "load_balancing_loss_per_layer": jnp.stack([s["load_balancing_loss"] for s in moe_router_stats], axis=0),
-            "router_z_loss_per_layer": jnp.stack([s["router_z_loss"] for s in moe_router_stats], axis=0),
-            "qb_beta_per_layer": jnp.stack([s["qb_beta"] for s in moe_router_stats], axis=0),
-            "capacity_overflow_per_layer": jnp.stack([s["capacity_overflow"] for s in moe_router_stats], axis=0),
-        }
-        hidden = self.final_gated_norm(self.final_norm(hidden))
+        return hidden, _stack_router_metrics(moe_router_stats)
+
+    @named_call
+    def finalize_hidden(self, hidden: Float[Array, "B S D"]) -> Float[Array, "B S D"]:
+        return self.final_gated_norm(self.final_norm(hidden))
+
+    @named_call
+    def __call__(
+        self,
+        token_ids: Int[Array, "B S"],
+        mask: AttentionMask | jax.Array | None = None,
+        *,
+        pipeline_stages: int | None = None,
+    ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
+        num_blocks = len(self.blocks)
+        hidden = self.embed_tokens(token_ids)
+        hidden, router_metrics = self.block_range(
+            hidden,
+            mask=mask,
+            start_layer=0,
+            end_layer=num_blocks,
+            pipeline_stage_end_layers=_pipeline_stage_end_layers(num_blocks, pipeline_stages),
+        )
+        hidden = self.finalize_hidden(hidden)
         return hidden, router_metrics
 
     @named_call
@@ -783,9 +1043,11 @@ class Transformer(eqx.Module):
         self,
         token_ids: Int[Array, "B S"],
         mask: AttentionMask | jax.Array | None = None,
+        *,
+        pipeline_stages: int | None = None,
     ) -> Float[Array, "B S V"]:
         batch_spec = _batch_spec()
-        hidden, _ = self(token_ids, mask=mask)
+        hidden, _ = self(token_ids, mask=mask, pipeline_stages=pipeline_stages)
         return jnp.einsum("bsh,hd->bsd", hidden, self.output_proj, out_sharding=batch_spec)
 
     def to_state_dict(self, prefix: str | None = None) -> dict[str, jax.Array]:
@@ -801,8 +1063,33 @@ class Transformer(eqx.Module):
         logsumexp_weight: float | None = None,
         loss_dtype: jnp.dtype = jnp.float32,
         return_router_metrics: bool = False,
+        pipeline_stages: int | None = None,
     ) -> jax.Array | tuple[jax.Array, dict[str, jax.Array | SummaryStats]]:
-        hidden, router_metrics = self(token_ids, mask=mask)
+        hidden, router_metrics = self(token_ids, mask=mask, pipeline_stages=pipeline_stages)
+        return self.hidden_next_token_loss(
+            hidden,
+            token_ids,
+            loss_weight,
+            router_metrics,
+            reduction=reduction,
+            logsumexp_weight=logsumexp_weight,
+            loss_dtype=loss_dtype,
+            return_router_metrics=return_router_metrics,
+        )
+
+    @named_call
+    def hidden_next_token_loss(
+        self,
+        hidden: Float[Array, "B S D"],
+        token_ids: Int[Array, "B S"],
+        loss_weight: Float[Array, "B S"],
+        router_metrics: dict[str, jax.Array],
+        *,
+        reduction: str = "mean",
+        logsumexp_weight: float | None = None,
+        loss_dtype: jnp.dtype = jnp.float32,
+        return_router_metrics: bool = False,
+    ) -> jax.Array | tuple[jax.Array, dict[str, jax.Array | SummaryStats]]:
         labels = jnp.concatenate([token_ids[:, 1:], token_ids[:, :1] * 0], axis=1).astype(jnp.int32)
         loss_weight = loss_weight.astype(loss_dtype)
 
@@ -814,6 +1101,7 @@ class Transformer(eqx.Module):
             reduction=reduction,
             logsumexp_weight=logsumexp_weight,
             dtype=loss_dtype,
+            implementation=self.config.loss_implementation,
         )
         # No load-balancing loss; router z-loss only.
         num_moe_layers = router_metrics["router_z_loss_per_layer"].shape[0]
@@ -923,6 +1211,7 @@ __all__ = [
     "MoeActivation",
     "RMSNorm",
     "Transformer",
+    "TransformerPipelineStage",
     "debug_mesh_and_token_pspec",
     "grugmoe_inference_state_dict",
 ]

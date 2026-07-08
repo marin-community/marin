@@ -4,8 +4,10 @@
 import dataclasses
 import functools
 import logging
+import os
 import time
 from dataclasses import dataclass, field
+from typing import Any, Literal
 
 import equinox as eqx
 import jax
@@ -13,11 +15,14 @@ import jax.numpy as jnp
 import jmp
 import levanter.callbacks as callbacks
 import levanter.tracker
+import numpy as np
 import optax
 from fray.cluster import ResourceConfig
 from haliax import Axis
 from haliax.partitioning import set_mesh
-from jax.sharding import Mesh, NamedSharding
+from jax import core
+from jax.interpreters import ad as jax_ad
+from jax.sharding import AxisType, Mesh, NamedSharding
 from jax.sharding import PartitionSpec as P
 from jax.tree_util import register_dataclass
 from jaxtyping import PRNGKeyArray
@@ -39,14 +44,73 @@ from levanter.utils.logging import LoadingTimeTrackerIterator
 
 from experiments.grug.checkpointing import restore_grug_state_from_checkpoint
 from experiments.grug.dispatch import dispatch_grug_training_run
-from experiments.grug.moe.model import GrugModelConfig, Transformer
+from experiments.grug.moe.model import GrugModelConfig, Transformer, TransformerPipelineStage
 from experiments.grug.sharding_dump import dump_grug_state_sharding_run_artifact
 
 # This file intentionally mirrors `experiments/grug/base/train.py` with
 # variant-specific model/loss/FLOP wiring, per the grug copy-first workflow in
 # `.agents/skills/change-grug/`.
 
+try:
+    import jaxpp.api as jaxpp
+    import jaxpp.core as jaxpp_core
+    from jaxpp.experimental import mpmd as jaxpp_explicit_mpmd
+except ModuleNotFoundError:
+    jaxpp = None
+    jaxpp_core = None
+    jaxpp_explicit_mpmd = None
+
 logger = logging.getLogger(__name__)
+
+JaxPPSchedule = Literal[
+    "gpipe",
+    "std_1f1b",
+    "eager_1f1b",
+    "zero_bubble",
+    "interleaved_gpipe",
+    "interleaved_1f1b",
+    "dualpipe_v",
+    "kimi_k2",
+]
+JaxPPImplementation = Literal["auto", "explicit_mpmd"]
+
+
+@dataclass(frozen=True)
+class GrugJaxPPConfig:
+    """Experimental JaxPP pipeline-parallel training settings."""
+
+    stages: int
+    microbatches: int
+    schedule: JaxPPSchedule = "std_1f1b"
+    implementation: JaxPPImplementation = "auto"
+    mpmd_dim: int | None = None
+    stage_axis_name: str = "pipeline"
+
+    def __post_init__(self) -> None:
+        if self.stages <= 0:
+            raise ValueError(f"stages must be positive, got {self.stages}")
+        if self.microbatches <= 0:
+            raise ValueError(f"microbatches must be positive, got {self.microbatches}")
+        if self.implementation == "explicit_mpmd":
+            if self.stages < 2:
+                raise ValueError("explicit_mpmd requires at least 2 pipeline stages")
+            explicit_microbatch_schedules = ("gpipe", "std_1f1b")
+            if self.microbatches != 1 and self.schedule not in explicit_microbatch_schedules:
+                raise ValueError(
+                    "explicit_mpmd currently supports microbatches > 1 only for "
+                    f"schedule in {explicit_microbatch_schedules}"
+                )
+            if self.mpmd_dim is not None and self.mpmd_dim != self.stages:
+                raise ValueError("explicit_mpmd requires PP_MPMD_DIM to match PP_STAGES")
+        if self.mpmd_dim is not None and self.mpmd_dim <= 0:
+            raise ValueError(f"mpmd_dim must be positive when set, got {self.mpmd_dim}")
+        if self.schedule in ("zero_bubble", "dualpipe_v") and self.microbatches < self.stages:
+            raise ValueError(
+                f"{self.schedule} requires microbatches >= stages; got "
+                f"microbatches={self.microbatches}, stages={self.stages}"
+            )
+        if not self.stage_axis_name:
+            raise ValueError("stage_axis_name must be non-empty")
 
 
 @dataclass(frozen=True)
@@ -68,6 +132,7 @@ class GrugTrainerConfig:
     # slice) and expert_axis_size>1 (expert parallelism over the intra-slice devices).
     expert_axis_size: int = 1
     replica_axis_size: int | None = None
+    pipeline: GrugJaxPPConfig | None = None
     sharding_dump_path: str | None = None
 
 
@@ -97,6 +162,7 @@ class GrugRunConfig:
     # GPU processes per task: > 1 runs one JAX process per GPU (multi-controller)
     # via the iris.runtime.multigpu supervisor instead of one process per node.
     processes_per_task: int = 1
+    post_setup_scripts: tuple[str, ...] = ()
 
 
 def build_train_dataset(
@@ -124,6 +190,7 @@ def build_train_dataset(
 
 
 _BATCH_AXES: tuple[str, ...] = ("replica_dcn", "data", "expert")
+_GRUG_MESH_AXIS_NAMES: tuple[str, ...] = ("replica_dcn", "data", "expert", "model")
 
 
 def build_train_loader(
@@ -143,6 +210,184 @@ def build_train_loader(
         batch_axis_name="__BATCH__",
         allow_nondivisible_batch_size=False,
     )
+
+
+def _require_jaxpp():
+    if jaxpp is None:
+        raise ModuleNotFoundError(
+            "jaxpp is required when GrugTrainerConfig.pipeline is set. "
+            "Install NVIDIA/jaxpp in the training environment."
+        )
+    return jaxpp
+
+
+def _require_jaxpp_explicit_mpmd():
+    _require_jaxpp()
+    if jaxpp_explicit_mpmd is None:
+        raise ModuleNotFoundError(
+            "jaxpp.experimental.mpmd is required when GrugTrainerConfig.pipeline.implementation='explicit_mpmd'."
+        )
+    return jaxpp_explicit_mpmd
+
+
+def _install_jaxpp_const_sharding_patch() -> None:
+    """Preserve ClosedJaxpr const shardings for automatic JaxPP schedule probes."""
+    _require_jaxpp()
+    if jaxpp_core is None:
+        raise ModuleNotFoundError("jaxpp.core is required for GRUG_JAXPP_PATCH_CONST_SHARDINGS")
+    original_extract_params = jaxpp_core.extract_params
+    if getattr(original_extract_params, "_grug_const_sharding_patch", False):
+        return
+
+    def extract_params_with_const_shardings(params, n_consts, replicated_sharding):
+        (
+            donated_invars,
+            flat_in_shardings,
+            flat_out_shardings,
+            flat_in_layouts,
+            flat_out_layouts,
+        ) = original_extract_params(params, n_consts, replicated_sharding)
+
+        consts = tuple(params["jaxpr"].consts[:n_consts])
+        if not consts:
+            return (
+                donated_invars,
+                flat_in_shardings,
+                flat_out_shardings,
+                flat_in_layouts,
+                flat_out_layouts,
+            )
+
+        def const_sharding(value):
+            if not _is_shardable_array(value):
+                return replicated_sharding
+            value_sharding = value.sharding
+            if isinstance(value_sharding, NamedSharding):
+                sharding = NamedSharding(replicated_sharding.mesh, value_sharding.spec)
+                memory_kind = getattr(value_sharding, "memory_kind", None)
+                if memory_kind is not None:
+                    sharding = sharding.with_memory_kind(memory_kind)
+                return sharding
+            return NamedSharding(replicated_sharding.mesh, P(*([None] * value.ndim)))
+
+        const_shardings = tuple(const_sharding(const) for const in consts)
+        return (
+            donated_invars,
+            const_shardings + tuple(flat_in_shardings[n_consts:]),
+            flat_out_shardings,
+            flat_in_layouts,
+            flat_out_layouts,
+        )
+
+    extract_params_with_const_shardings._grug_const_sharding_patch = True
+    jaxpp_core.extract_params = extract_params_with_const_shardings
+
+
+def _pipeline_schedule(pipeline: GrugJaxPPConfig):
+    pp = _require_jaxpp()
+    schedules = __import__("jaxpp.schedules", fromlist=["schedules"])
+    mpmd_dim = _pipeline_mpmd_dim(pipeline)
+    if pipeline.schedule == "gpipe":
+        return schedules.GPipe(num_stages=pipeline.stages, mpmd_dim=mpmd_dim)
+    if pipeline.schedule == "std_1f1b":
+        return pp.Std1F1B(num_stages=pipeline.stages)
+    if pipeline.schedule == "eager_1f1b":
+        return pp.Eager1F1B(num_stages=pipeline.stages)
+    if pipeline.schedule == "zero_bubble":
+        return pp.ZeroBubble(num_stages=pipeline.stages)
+    if pipeline.schedule == "interleaved_gpipe":
+        return schedules.InterleavedGPipe(num_stages=pipeline.stages, mpmd_dim=mpmd_dim)
+    if pipeline.schedule == "interleaved_1f1b":
+        return pp.Interleaved1F1B(num_stages=pipeline.stages, mpmd_dim=mpmd_dim)
+    if pipeline.schedule == "dualpipe_v":
+        return pp.DualPipeV(num_stages=pipeline.stages, mpmd_dim=mpmd_dim)
+    if pipeline.schedule == "kimi_k2":
+        return pp.KimiK2(num_stages=pipeline.stages, mpmd_dim=mpmd_dim)
+    raise ValueError(f"Unknown JaxPP schedule: {pipeline.schedule}")
+
+
+def jaxpp_setup_scripts(*, revision: str = "7091a9b5ce02cd1a6bdc905f6a36e89370a5fba9") -> tuple[str, ...]:
+    """Install JaxPP into an Iris worker venv after the normal GPU sync."""
+    package = f"jaxpp @ git+https://github.com/NVIDIA/jaxpp.git@{revision}"
+    return (
+        "\n".join(
+            [
+                'cd "$IRIS_WORKDIR"',
+                "echo 'installing JaxPP runtime deps'",
+                "uv pip install --link-mode symlink cupy-cuda13x",
+                "uv pip install --link-mode symlink --no-deps " + repr(package),
+            ]
+        )
+        + "\n",
+    )
+
+
+def _pipeline_mpmd_dim(pipeline: GrugJaxPPConfig) -> int:
+    return pipeline.mpmd_dim or pipeline.stages
+
+
+def _reshape_batch_for_pipeline(batch: GrugLmExample, microbatches: int) -> GrugLmExample:
+    def reshape_leaf(x):
+        if not isinstance(x, jax.Array | core.Tracer):
+            return x
+        if x.ndim == 0:
+            return x
+        if x.shape[0] % microbatches != 0:
+            raise ValueError(f"Batch axis size {x.shape[0]} must be divisible by microbatches={microbatches}")
+        microbatch_size = x.shape[0] // microbatches
+        return x.reshape(
+            (microbatches, microbatch_size, *x.shape[1:]),
+            out_sharding=P(None, _BATCH_AXES, *([None] * (x.ndim - 1))),
+        )
+
+    return jax.tree.map(reshape_leaf, batch)
+
+
+def _select_pipeline_microbatch(batch: GrugLmExample, microbatch_index: int, microbatches: int) -> GrugLmExample:
+    def select_leaf(x):
+        if isinstance(x, jax.Array) and x.ndim > 0 and x.shape[0] == microbatches:
+            return x[microbatch_index]
+        return x
+
+    return jax.tree.map(select_leaf, batch)
+
+
+def _compact_or_pipeline_grug_mesh(
+    *,
+    expert_axis_size: int,
+    replica_axis_size: int | None,
+    pipeline: GrugJaxPPConfig | None,
+) -> Mesh:
+    if pipeline is None:
+        return compact_grug_mesh(expert_axis_size=expert_axis_size, replica_axis_size=replica_axis_size)
+
+    mpmd_dim = _pipeline_mpmd_dim(pipeline)
+    if replica_axis_size is None:
+        replica_axis_size = max(1, jax.process_count() // mpmd_dim)
+
+    global_device_count = jax.device_count()
+    fixed_axes = mpmd_dim * replica_axis_size * expert_axis_size
+    if global_device_count % fixed_axes != 0:
+        raise ValueError(
+            f"global_device_count ({global_device_count}) must be divisible by pipeline mpmd_dim ({mpmd_dim}) * "
+            f"replica_axis_size ({replica_axis_size}) * expert_axis_size ({expert_axis_size})"
+        )
+
+    data_axis_size = global_device_count // fixed_axes
+    shape = (mpmd_dim, replica_axis_size, data_axis_size, expert_axis_size, 1)
+    axis_names = (pipeline.stage_axis_name, *_GRUG_MESH_AXIS_NAMES)
+    devices = np.array(jax.devices(), dtype=object).reshape(shape)
+    mesh = Mesh(devices, axis_names, axis_types=tuple(AxisType.Explicit for _ in axis_names))
+
+    if mesh.is_multi_process:
+        local_pipeline_indices = {np.argwhere(devices == device)[0][0] for device in jax.local_devices()}
+        if len(local_pipeline_indices) != 1:
+            raise ValueError(
+                "Each JAX process must own devices from exactly one JaxPP pipeline stage; "
+                f"local process spans stages {sorted(local_pipeline_indices)}"
+            )
+
+    return mesh
 
 
 def build_tagged_evaluator(
@@ -250,11 +495,258 @@ class GrugTrainState:
     params: Transformer
     opt_state: optax.OptState
     ema_params: Transformer | None
-    pending_qb_betas: jax.Array
+    pending_qb_betas: jax.Array | None
 
 
-def _apply_qb_betas(model: Transformer, qb_betas: jax.Array) -> Transformer:
+@register_dataclass
+@dataclass(frozen=True)
+class GrugPipelineTrainState:
+    step: jax.Array
+    params: tuple[TransformerPipelineStage, ...]
+    opt_state: tuple[optax.OptState, ...]
+    ema_params: tuple[TransformerPipelineStage, ...] | None
+    pending_qb_betas: tuple[jax.Array, ...]
+
+
+def _split_state_for_pipeline(
+    state: GrugTrainState,
+    *,
+    pipeline: GrugJaxPPConfig,
+    optimizer: optax.GradientTransformation,
+) -> GrugPipelineTrainState:
+    params = state.params.split_for_pipeline(pipeline.stages)
+    ema_params = None if state.ema_params is None else state.ema_params.split_for_pipeline(pipeline.stages)
+    if state.pending_qb_betas is None:
+        raise ValueError("explicit pipeline state splitting requires pending_qb_betas")
+    pending_qb_betas = tuple(state.pending_qb_betas[stage.start_layer : stage.end_layer] for stage in params)
+    return GrugPipelineTrainState(
+        step=state.step,
+        params=params,
+        opt_state=tuple(optimizer.init(stage_params) for stage_params in params),
+        ema_params=ema_params,
+        pending_qb_betas=pending_qb_betas,
+    )
+
+
+def _merge_pipeline_state(state: GrugPipelineTrainState) -> GrugTrainState:
+    return GrugTrainState(
+        step=state.step,
+        params=Transformer.merge_pipeline_stages(state.params),
+        opt_state=state.opt_state,
+        ema_params=None if state.ema_params is None else Transformer.merge_pipeline_stages(state.ema_params),
+        pending_qb_betas=jnp.concatenate(state.pending_qb_betas, axis=0),
+    )
+
+
+def _array_sharding(value, mesh: Mesh) -> NamedSharding:
+    value_sharding = value.sharding
+    if hasattr(value_sharding, "spec"):
+        sharding = NamedSharding(mesh, value_sharding.spec)
+        memory_kind = getattr(value_sharding, "memory_kind", None)
+        if memory_kind is not None:
+            sharding = sharding.with_memory_kind(memory_kind)
+        return sharding
+    return NamedSharding(mesh, P(*([None] * value.ndim)))
+
+
+def _is_shardable_array(value) -> bool:
+    return hasattr(value, "sharding") and hasattr(value, "ndim")
+
+
+def _tree_named_shardings_on_stage(mpmd_mesh, stage_index: int, tree):
+    stage_mesh = mpmd_mesh.unstack[stage_index]
+
+    def leaf_sharding(value):
+        if _is_shardable_array(value):
+            return _array_sharding(value, stage_mesh)
+        return None
+
+    return jax.tree.map(leaf_sharding, tree)
+
+
+def _tree_named_shardings_on_mesh(mesh: Mesh, tree):
+    def leaf_sharding(value):
+        if _is_shardable_array(value):
+            return _array_sharding(value, mesh)
+        return None
+
+    return jax.tree.map(leaf_sharding, tree)
+
+
+def _mpmd_sharding_like(value, mpmd_mesh, stage_index: int):
+    if isinstance(value.sharding, NamedSharding):
+        return _require_jaxpp().MpmdSharding(
+            mpmd_mesh,
+            mesh_ids={stage_index},
+            spec=value.sharding.spec,
+            memory_kind=value.sharding.memory_kind,
+        )
+    return _require_jaxpp().MpmdSharding(
+        mpmd_mesh,
+        mesh_ids={stage_index},
+        spec=P(*([None] * value.ndim)),
+    )
+
+
+def _tree_mpmd_shardings_on_stage(mpmd_mesh, stage_index: int, tree):
+    def leaf_sharding(value):
+        if _is_shardable_array(value):
+            return _mpmd_sharding_like(value, mpmd_mesh, stage_index)
+        return None
+
+    return jax.tree.map(leaf_sharding, tree)
+
+
+def _pipeline_state_shardings(mpmd_mesh, state: GrugPipelineTrainState) -> GrugPipelineTrainState:
+    return dataclasses.replace(
+        state,
+        step=_require_jaxpp().MpmdSharding(mpmd_mesh, mesh_ids={0}, spec=P()),
+        params=tuple(
+            _tree_mpmd_shardings_on_stage(mpmd_mesh, stage_index, params)
+            for stage_index, params in enumerate(state.params)
+        ),
+        opt_state=tuple(
+            _tree_mpmd_shardings_on_stage(mpmd_mesh, stage_index, opt_state)
+            for stage_index, opt_state in enumerate(state.opt_state)
+        ),
+        pending_qb_betas=tuple(
+            _tree_mpmd_shardings_on_stage(mpmd_mesh, stage_index, qb_betas)
+            for stage_index, qb_betas in enumerate(state.pending_qb_betas)
+        ),
+    )
+
+
+def _pipeline_state_named_shardings(mpmd_mesh, state: GrugPipelineTrainState) -> GrugPipelineTrainState:
+    return dataclasses.replace(
+        state,
+        step=NamedSharding(mpmd_mesh.unstack[0], P()),
+        params=tuple(
+            _tree_named_shardings_on_stage(mpmd_mesh, stage_index, params)
+            for stage_index, params in enumerate(state.params)
+        ),
+        opt_state=tuple(
+            _tree_named_shardings_on_stage(mpmd_mesh, stage_index, opt_state)
+            for stage_index, opt_state in enumerate(state.opt_state)
+        ),
+        pending_qb_betas=tuple(
+            _tree_named_shardings_on_stage(mpmd_mesh, stage_index, qb_betas)
+            for stage_index, qb_betas in enumerate(state.pending_qb_betas)
+        ),
+    )
+
+
+def _reshard_to_mpmd(mpmd_mesh, tree, target_shardings):
+    threshold_raw = os.environ.get("GRUG_JAXPP_RESHARD_THRESHOLD_BYTES")
+    threshold = int(threshold_raw) if threshold_raw else None
+    return _require_jaxpp().spmd_to_mpmd_reshard(mpmd_mesh, tree, target_shardings, threshold=threshold)
+
+
+def _split_state_for_explicit_mpmd(
+    state: GrugTrainState,
+    *,
+    pipeline: GrugJaxPPConfig,
+    optimizer: optax.GradientTransformation,
+    mpmd_mesh,
+) -> GrugPipelineTrainState:
+    stage_state = _split_state_for_pipeline(state, pipeline=pipeline, optimizer=optimizer)
+    if stage_state.ema_params is not None:
+        raise ValueError("explicit_mpmd does not yet support EMA")
+    return _reshard_to_mpmd(mpmd_mesh, stage_state, _pipeline_state_shardings(mpmd_mesh, stage_state))
+
+
+def _put_batch_on_stage(mpmd_mesh, stage_index: int, batch: GrugLmExample) -> GrugLmExample:
+    return _reshard_to_mpmd(mpmd_mesh, batch, _tree_mpmd_shardings_on_stage(mpmd_mesh, stage_index, batch))
+
+
+def _copy_shardable_tree(tree):
+    def copy_leaf(value):
+        if isinstance(value, jax.Array):
+            return jnp.array(value, copy=True)
+        return value
+
+    return jax.tree.map(copy_leaf, tree)
+
+
+def _shape_parameter_count(tree) -> int:
+    total = 0
+    for leaf in jax.tree.leaves(tree):
+        shape = getattr(leaf, "shape", None)
+        if shape is not None:
+            total += int(np.prod(shape, dtype=np.int64))
+    return total
+
+
+def _process_has_sharding(sharding: NamedSharding) -> bool:
+    process_index = jax.process_index()
+    return any(device.process_index == process_index for device in sharding.mesh.devices.flat)
+
+
+def _empty_sharded_array(shape: tuple[int, ...], dtype: jnp.dtype, sharding: NamedSharding) -> jax.Array:
+    return jax.make_array_from_single_device_arrays(
+        shape=shape,
+        sharding=sharding,
+        arrays=[],
+        dtype=dtype,
+    )
+
+
+def _stage_local_scalar(value: jax.Array, sharding: NamedSharding) -> jax.Array:
+    dtype = value.dtype
+    if not _process_has_sharding(sharding):
+        return _empty_sharded_array((), dtype, sharding)
+    return jax.device_put(np.array(0, dtype=np.dtype(dtype)), sharding)
+
+
+def _localize_stage_optimizer_state(mpmd_mesh, stage_index: int, opt_state: optax.OptState) -> optax.OptState:
+    stage_mesh = mpmd_mesh.unstack[stage_index]
+
+    def localize_leaf(value):
+        if _is_shardable_array(value) and value.shape == ():
+            return _stage_local_scalar(value, NamedSharding(stage_mesh, P()))
+        return value
+
+    return jax.tree.map(localize_leaf, opt_state)
+
+
+@dataclass(frozen=True)
+class _LocalLoweredExplicitMpmdStep:
+    lowered: Any
+
+    def __call__(
+        self,
+        state: GrugPipelineTrainState,
+        batches: tuple[GrugLmExample, ...],
+    ) -> tuple[GrugPipelineTrainState, dict[str, jax.Array], None]:
+        flat_args, args_tree = jax.tree_util.tree_flatten((state, batches))
+        in_tree = jax.tree_util.tree_structure(self.lowered.in_shardings)
+        if args_tree != in_tree:
+            raise ValueError("lowered explicit MPMD train step received an unexpected input tree")
+
+        local_jaxpr = self.lowered._local_jaxpr
+        local_outs = self.lowered.eval_local(*(flat_args[idx] for idx in local_jaxpr.global_invar_indices))
+        local_outs_by_idx = dict(zip(local_jaxpr.global_outvar_indices, local_outs, strict=True))
+
+        local_loss = jax.device_put(
+            jnp.zeros((), dtype=jnp.float32),
+            NamedSharding(self.lowered.mpmd_mesh.unstack[self.lowered.mpmd_mesh.my_mpmd_axis_index], P()),
+        )
+        fallback = (state, {"train/loss": local_loss, "qb_beta_per_layer": state.pending_qb_betas}, None)
+        flat_fallback, fallback_tree = jax.tree_util.tree_flatten(fallback)
+        flat_out_shape, out_tree = jax.tree_util.tree_flatten(self.lowered.out_shape)
+        if fallback_tree != out_tree:
+            raise ValueError("explicit MPMD lowered output fallback does not match the traced output tree")
+
+        flat_outs = [
+            local_outs_by_idx[idx] if idx in local_outs_by_idx else flat_fallback[idx]
+            for idx in range(len(flat_out_shape))
+        ]
+        return jax.tree_util.tree_unflatten(out_tree, flat_outs)
+
+
+def _apply_qb_betas(model: Transformer, qb_betas: jax.Array | None) -> Transformer:
     """Set router biases from QB betas (computed on previous step)."""
+    if qb_betas is None:
+        return model
     new_blocks = list(model.blocks)
     moe_idx = 0
     for i, block in enumerate(model.blocks):
@@ -266,6 +758,630 @@ def _apply_qb_betas(model: Transformer, qb_betas: jax.Array) -> Transformer:
         new_blocks[i] = eqx.tree_at(lambda b: b.mlp, block, new_mlp)
         moe_idx += 1
     return eqx.tree_at(lambda t: t.blocks, model, tuple(new_blocks))
+
+
+def _apply_stage_qb_betas(stage: TransformerPipelineStage, qb_betas: jax.Array) -> TransformerPipelineStage:
+    new_blocks = list(stage.blocks)
+    for local_index, block in enumerate(stage.blocks):
+        if block.mlp is None:
+            continue
+        new_bias = -qb_betas[local_index]
+        new_bias = new_bias - jnp.mean(new_bias)
+        new_mlp = eqx.tree_at(lambda m: m.router_bias, block.mlp, new_bias)
+        new_blocks[local_index] = eqx.tree_at(lambda b: b.mlp, block, new_mlp)
+    return eqx.tree_at(lambda t: t.blocks, stage, tuple(new_blocks))
+
+
+def _make_explicit_mpmd_train_step(
+    optimizer: optax.GradientTransformation,
+    mp: jmp.Policy,
+    *,
+    z_loss_weight: float,
+    pipeline: GrugJaxPPConfig,
+    mpmd_mesh,
+    sample_state: GrugPipelineTrainState,
+    sample_batches,
+):
+    mpmd = _require_jaxpp_explicit_mpmd()
+    z_loss = z_loss_weight if z_loss_weight > 0 else None
+    num_stages = len(sample_state.params)
+    if num_stages < 2:
+        raise ValueError("explicit MPMD requires at least 2 pipeline stages")
+    if pipeline.microbatches == 1:
+        if len(sample_batches) != num_stages:
+            raise ValueError(f"expected {num_stages} stage-local batches, got {len(sample_batches)}")
+    else:
+        if len(sample_batches) != pipeline.microbatches:
+            raise ValueError(f"expected {pipeline.microbatches} microbatch groups, got {len(sample_batches)}")
+        for microbatch_index, microbatch_batches in enumerate(sample_batches):
+            if len(microbatch_batches) != num_stages:
+                raise ValueError(
+                    f"expected {num_stages} stage-local batches for microbatch {microbatch_index}, "
+                    f"got {len(microbatch_batches)}"
+                )
+    explicit_microbatch_schedules = ("gpipe", "std_1f1b")
+    if pipeline.microbatches != 1 and pipeline.schedule not in explicit_microbatch_schedules:
+        raise ValueError(f"explicit MPMD microbatching supports only schedule in {explicit_microbatch_schedules}")
+    activation_pspec = P(_BATCH_AXES, None, None)
+    qb_pspec = P(None, None)
+
+    activation_shardings = tuple(
+        NamedSharding(mpmd_mesh.unstack[stage_index], activation_pspec) for stage_index in range(num_stages)
+    )
+    qb_shardings = tuple(NamedSharding(mpmd_mesh.unstack[stage_index], qb_pspec) for stage_index in range(num_stages))
+    stage0_loss_sharding = NamedSharding(mpmd_mesh.unstack[0], P())
+    last_loss_sharding = NamedSharding(mpmd_mesh.unstack[num_stages - 1], P())
+    stage0_step_sharding = NamedSharding(mpmd_mesh.unstack[0], P())
+
+    param_shardings = tuple(
+        _tree_named_shardings_on_stage(mpmd_mesh, stage_index, params)
+        for stage_index, params in enumerate(sample_state.params)
+    )
+    opt_state_shardings = tuple(
+        _tree_named_shardings_on_stage(mpmd_mesh, stage_index, opt_state)
+        for stage_index, opt_state in enumerate(sample_state.opt_state)
+    )
+
+    def stage_batch_shardings(stage_batches):
+        return tuple(
+            _tree_named_shardings_on_stage(mpmd_mesh, stage_index, sample_batch)
+            for stage_index, sample_batch in enumerate(stage_batches)
+        )
+
+    if pipeline.microbatches == 1:
+        batch_in_shardings = stage_batch_shardings(sample_batches)
+    else:
+        batch_in_shardings = tuple(stage_batch_shardings(microbatch_batches) for microbatch_batches in sample_batches)
+
+    in_shardings = (_pipeline_state_named_shardings(mpmd_mesh, sample_state), batch_in_shardings)
+
+    def apply_stage_updates(params, updates):
+        def apply_one(param, update):
+            if param is None:
+                return None
+            return (param + update).astype(param.dtype)
+
+        return jax.tree.map(apply_one, params, updates, is_leaf=lambda x: x is None)
+
+    def stage0_forward(params: TransformerPipelineStage, qb_betas: jax.Array, batch: GrugLmExample):
+        compute_params = mp.cast_to_compute(_apply_stage_qb_betas(params, qb_betas))
+        hidden = compute_params.embed_tokens(batch.tokens)
+        hidden, router_metrics = compute_params.block_range(hidden, mask=batch.attn_mask)
+        return hidden, router_metrics["qb_beta_per_layer"]
+
+    def stage_forward(params: TransformerPipelineStage, qb_betas: jax.Array, hidden, batch: GrugLmExample):
+        compute_params = mp.cast_to_compute(_apply_stage_qb_betas(params, qb_betas))
+        hidden, router_metrics = compute_params.block_range(hidden, mask=batch.attn_mask)
+        return hidden, router_metrics["qb_beta_per_layer"]
+
+    def stage0_backward(params: TransformerPipelineStage, qb_betas: jax.Array, batch: GrugLmExample, d_hidden):
+        def activation_projection(stage_params):
+            hidden, _ = stage0_forward(stage_params, qb_betas, batch)
+            return jnp.sum(hidden.astype(jnp.float32) * d_hidden.astype(jnp.float32))
+
+        return jax.grad(activation_projection)(params)
+
+    def stage_backward(
+        params: TransformerPipelineStage,
+        qb_betas: jax.Array,
+        hidden,
+        batch: GrugLmExample,
+        d_hidden,
+    ):
+        def activation_projection(stage_params, stage_hidden):
+            stage_hidden, _ = stage_forward(stage_params, qb_betas, stage_hidden, batch)
+            return jnp.sum(stage_hidden.astype(jnp.float32) * d_hidden.astype(jnp.float32))
+
+        return jax.grad(activation_projection, argnums=(0, 1))(params, hidden)
+
+    def last_stage_loss_and_grads(
+        params: TransformerPipelineStage,
+        qb_betas: jax.Array,
+        hidden,
+        batch: GrugLmExample,
+    ):
+        def loss_fn(stage_params, stage_hidden):
+            compute_params = mp.cast_to_compute(_apply_stage_qb_betas(stage_params, qb_betas))
+            stage_hidden, router_metrics = compute_params.block_range(stage_hidden, mask=batch.attn_mask)
+            stage_hidden = compute_params.finalize_hidden(stage_hidden)
+            loss, metrics = compute_params.hidden_next_token_loss(
+                stage_hidden,
+                batch.tokens,
+                batch.loss_weight,
+                router_metrics,
+                reduction="mean",
+                logsumexp_weight=z_loss,
+                return_router_metrics=True,
+            )
+            return loss, metrics["qb_beta_per_layer"]
+
+        (loss, qb_betas_next), (grads, d_hidden) = jax.value_and_grad(loss_fn, argnums=(0, 1), has_aux=True)(
+            params, hidden
+        )
+        return loss, qb_betas_next, grads, d_hidden
+
+    def update_stage(params: TransformerPipelineStage, opt_state: optax.OptState, grads):
+        updates, opt_state = optimizer.update(grads, opt_state, params)
+        return apply_stage_updates(params, updates), opt_state
+
+    def keep_step(step: jax.Array):
+        return step
+
+    def add_trees(left, right):
+        return jax.tree.map(lambda x, y: x + y, left, right)
+
+    def average_tree(tree):
+        scale = jnp.asarray(1.0 / pipeline.microbatches, dtype=jnp.float32)
+        return jax.tree.map(lambda value: value * scale, tree)
+
+    def average_loss(loss):
+        return loss * jnp.asarray(1.0 / pipeline.microbatches, dtype=loss.dtype)
+
+    def accumulate_or_set(accumulated, value, *, name: str, out_shardings):
+        if accumulated is None:
+            return value
+        return mpmd.task(add_trees, name=name, out_shardings=out_shardings)(accumulated, value)
+
+    @mpmd.mpmd(mpmd_mesh, in_shardings=in_shardings, infer_donation=True)
+    def explicit_pipeline_step(
+        state: GrugPipelineTrainState,
+        batches: tuple[GrugLmExample, ...],
+    ) -> tuple[GrugPipelineTrainState, dict[str, jax.Array], None]:
+        params = list(state.params)
+        opt_state = list(state.opt_state)
+        qb_betas = state.pending_qb_betas
+        qb_betas_next = [None] * num_stages
+        grads = [None] * num_stages
+
+        hidden, qb_betas_next[0] = mpmd.task(
+            stage0_forward,
+            name="grug_stage0_forward",
+            out_shardings=(activation_shardings[0], qb_shardings[0]),
+        )(params[0], qb_betas[0], batches[0])
+
+        stage_inputs = [hidden]
+        for stage_index in range(1, num_stages - 1):
+            hidden = mpmd.transfer(hidden, out_shardings=activation_shardings[stage_index]).done()
+            stage_inputs.append(hidden)
+            hidden, qb_betas_next[stage_index] = mpmd.task(
+                stage_forward,
+                name=f"grug_stage{stage_index}_forward",
+                out_shardings=(activation_shardings[stage_index], qb_shardings[stage_index]),
+            )(params[stage_index], qb_betas[stage_index], hidden, batches[stage_index])
+
+        hidden = mpmd.transfer(hidden, out_shardings=activation_shardings[num_stages - 1]).done()
+        stage_inputs.append(hidden)
+        loss, qb_betas_next[num_stages - 1], grads[num_stages - 1], d_hidden = mpmd.task(
+            last_stage_loss_and_grads,
+            name=f"grug_stage{num_stages - 1}_loss_backward",
+            out_shardings=(
+                last_loss_sharding,
+                qb_shardings[num_stages - 1],
+                param_shardings[num_stages - 1],
+                activation_shardings[num_stages - 1],
+            ),
+        )(params[num_stages - 1], qb_betas[num_stages - 1], hidden, batches[num_stages - 1])
+
+        for stage_index in range(num_stages - 2, 0, -1):
+            d_hidden = mpmd.transfer(d_hidden, out_shardings=activation_shardings[stage_index]).done()
+            grads[stage_index], d_hidden = mpmd.task(
+                stage_backward,
+                name=f"grug_stage{stage_index}_backward",
+                out_shardings=(param_shardings[stage_index], activation_shardings[stage_index]),
+            )(params[stage_index], qb_betas[stage_index], stage_inputs[stage_index], batches[stage_index], d_hidden)
+
+        d_hidden = mpmd.transfer(d_hidden, out_shardings=activation_shardings[0]).done()
+        grads[0] = mpmd.task(
+            stage0_backward,
+            name="grug_stage0_backward",
+            out_shardings=param_shardings[0],
+        )(params[0], qb_betas[0], batches[0], d_hidden)
+
+        for stage_index in range(num_stages):
+            params[stage_index], opt_state[stage_index] = mpmd.task(
+                update_stage,
+                name=f"grug_stage{stage_index}_update",
+                out_shardings=(param_shardings[stage_index], opt_state_shardings[stage_index]),
+            )(params[stage_index], opt_state[stage_index], grads[stage_index])
+        step = mpmd.task(
+            keep_step,
+            name="grug_keep_step",
+            out_shardings=stage0_step_sharding,
+        )(state.step)
+        loss_for_metrics = mpmd.transfer(loss, out_shardings=stage0_loss_sharding).done()
+
+        next_state = dataclasses.replace(
+            state,
+            step=step,
+            params=tuple(params),
+            opt_state=tuple(opt_state),
+            pending_qb_betas=tuple(qb_betas_next),
+        )
+        metrics = {"train/loss": loss_for_metrics, "qb_beta_per_layer": tuple(qb_betas_next)}
+        return next_state, metrics, None
+
+    @mpmd.mpmd(mpmd_mesh, in_shardings=in_shardings, infer_donation=True)
+    def explicit_gpipe_step(
+        state: GrugPipelineTrainState,
+        batches_by_microbatch,
+    ) -> tuple[GrugPipelineTrainState, dict[str, jax.Array], None]:
+        params = list(state.params)
+        opt_state = list(state.opt_state)
+        qb_betas = state.pending_qb_betas
+        qb_betas_next = [None] * num_stages
+        grads = [None] * num_stages
+        stage_inputs_by_microbatch = []
+        loss_sum = None
+
+        for microbatch_index in range(pipeline.microbatches):
+            microbatches = batches_by_microbatch[microbatch_index]
+            hidden, stage_qb_betas = mpmd.task(
+                stage0_forward,
+                name=f"grug_gpipe_mb{microbatch_index}_stage0_forward",
+                out_shardings=(activation_shardings[0], qb_shardings[0]),
+            )(params[0], qb_betas[0], microbatches[0])
+            qb_betas_next[0] = accumulate_or_set(
+                qb_betas_next[0],
+                stage_qb_betas,
+                name=f"grug_gpipe_mb{microbatch_index}_stage0_accumulate_qb",
+                out_shardings=qb_shardings[0],
+            )
+
+            stage_inputs = [hidden]
+            for stage_index in range(1, num_stages - 1):
+                hidden = mpmd.transfer(hidden, out_shardings=activation_shardings[stage_index]).done()
+                stage_inputs.append(hidden)
+                hidden, stage_qb_betas = mpmd.task(
+                    stage_forward,
+                    name=f"grug_gpipe_mb{microbatch_index}_stage{stage_index}_forward",
+                    out_shardings=(activation_shardings[stage_index], qb_shardings[stage_index]),
+                )(params[stage_index], qb_betas[stage_index], hidden, microbatches[stage_index])
+                qb_betas_next[stage_index] = accumulate_or_set(
+                    qb_betas_next[stage_index],
+                    stage_qb_betas,
+                    name=f"grug_gpipe_mb{microbatch_index}_stage{stage_index}_accumulate_qb",
+                    out_shardings=qb_shardings[stage_index],
+                )
+
+            hidden = mpmd.transfer(hidden, out_shardings=activation_shardings[num_stages - 1]).done()
+            stage_inputs.append(hidden)
+            stage_inputs_by_microbatch.append(tuple(stage_inputs))
+
+        for microbatch_index in range(pipeline.microbatches - 1, -1, -1):
+            microbatches = batches_by_microbatch[microbatch_index]
+            stage_inputs = stage_inputs_by_microbatch[microbatch_index]
+            loss, stage_qb_betas, stage_grads, d_hidden = mpmd.task(
+                last_stage_loss_and_grads,
+                name=f"grug_gpipe_mb{microbatch_index}_stage{num_stages - 1}_loss_backward",
+                out_shardings=(
+                    last_loss_sharding,
+                    qb_shardings[num_stages - 1],
+                    param_shardings[num_stages - 1],
+                    activation_shardings[num_stages - 1],
+                ),
+            )(
+                params[num_stages - 1],
+                qb_betas[num_stages - 1],
+                stage_inputs[num_stages - 1],
+                microbatches[num_stages - 1],
+            )
+            loss_sum = accumulate_or_set(
+                loss_sum,
+                loss,
+                name=f"grug_gpipe_mb{microbatch_index}_accumulate_loss",
+                out_shardings=last_loss_sharding,
+            )
+            qb_betas_next[num_stages - 1] = accumulate_or_set(
+                qb_betas_next[num_stages - 1],
+                stage_qb_betas,
+                name=f"grug_gpipe_mb{microbatch_index}_stage{num_stages - 1}_accumulate_qb",
+                out_shardings=qb_shardings[num_stages - 1],
+            )
+            grads[num_stages - 1] = accumulate_or_set(
+                grads[num_stages - 1],
+                stage_grads,
+                name=f"grug_gpipe_mb{microbatch_index}_stage{num_stages - 1}_accumulate_grads",
+                out_shardings=param_shardings[num_stages - 1],
+            )
+
+            for stage_index in range(num_stages - 2, 0, -1):
+                d_hidden = mpmd.transfer(d_hidden, out_shardings=activation_shardings[stage_index]).done()
+                stage_grads, d_hidden = mpmd.task(
+                    stage_backward,
+                    name=f"grug_gpipe_mb{microbatch_index}_stage{stage_index}_backward",
+                    out_shardings=(param_shardings[stage_index], activation_shardings[stage_index]),
+                )(
+                    params[stage_index],
+                    qb_betas[stage_index],
+                    stage_inputs[stage_index],
+                    microbatches[stage_index],
+                    d_hidden,
+                )
+                grads[stage_index] = accumulate_or_set(
+                    grads[stage_index],
+                    stage_grads,
+                    name=f"grug_gpipe_mb{microbatch_index}_stage{stage_index}_accumulate_grads",
+                    out_shardings=param_shardings[stage_index],
+                )
+
+            d_hidden = mpmd.transfer(d_hidden, out_shardings=activation_shardings[0]).done()
+            stage_grads = mpmd.task(
+                stage0_backward,
+                name=f"grug_gpipe_mb{microbatch_index}_stage0_backward",
+                out_shardings=param_shardings[0],
+            )(params[0], qb_betas[0], microbatches[0], d_hidden)
+            grads[0] = accumulate_or_set(
+                grads[0],
+                stage_grads,
+                name=f"grug_gpipe_mb{microbatch_index}_stage0_accumulate_grads",
+                out_shardings=param_shardings[0],
+            )
+
+        if loss_sum is None:
+            raise ValueError("explicit GPipe did not accumulate any microbatch losses")
+        loss = mpmd.task(average_loss, name="grug_gpipe_average_loss", out_shardings=last_loss_sharding)(loss_sum)
+        qb_betas_next = [
+            mpmd.task(
+                average_tree,
+                name=f"grug_gpipe_stage{stage_index}_average_qb",
+                out_shardings=qb_shardings[stage_index],
+            )(stage_qb_betas)
+            for stage_index, stage_qb_betas in enumerate(qb_betas_next)
+        ]
+        grads = [
+            mpmd.task(
+                average_tree,
+                name=f"grug_gpipe_stage{stage_index}_average_grads",
+                out_shardings=param_shardings[stage_index],
+            )(stage_grads)
+            for stage_index, stage_grads in enumerate(grads)
+        ]
+
+        for stage_index in range(num_stages):
+            params[stage_index], opt_state[stage_index] = mpmd.task(
+                update_stage,
+                name=f"grug_gpipe_stage{stage_index}_update",
+                out_shardings=(param_shardings[stage_index], opt_state_shardings[stage_index]),
+            )(params[stage_index], opt_state[stage_index], grads[stage_index])
+        step = mpmd.task(
+            keep_step,
+            name="grug_gpipe_keep_step",
+            out_shardings=stage0_step_sharding,
+        )(state.step)
+        loss_for_metrics = mpmd.transfer(loss, out_shardings=stage0_loss_sharding).done()
+
+        next_state = dataclasses.replace(
+            state,
+            step=step,
+            params=tuple(params),
+            opt_state=tuple(opt_state),
+            pending_qb_betas=tuple(qb_betas_next),
+        )
+        metrics = {"train/loss": loss_for_metrics, "qb_beta_per_layer": tuple(qb_betas_next)}
+        return next_state, metrics, None
+
+    def std_1f1b_stage_schedule(stage_index: int) -> tuple[tuple[str, int], ...]:
+        warmup = min(num_stages - stage_index, pipeline.microbatches)
+        tasks = [("fwd", microbatch_index) for microbatch_index in range(warmup)]
+        for microbatch_index in range(warmup, pipeline.microbatches):
+            tasks.append(("bwd", microbatch_index - warmup))
+            tasks.append(("fwd", microbatch_index))
+        tasks.extend(
+            ("bwd", microbatch_index)
+            for microbatch_index in range(pipeline.microbatches - warmup, pipeline.microbatches)
+        )
+        return tuple(tasks)
+
+    @mpmd.mpmd(mpmd_mesh, in_shardings=in_shardings, infer_donation=True)
+    def explicit_std_1f1b_step(
+        state: GrugPipelineTrainState,
+        batches_by_microbatch,
+    ) -> tuple[GrugPipelineTrainState, dict[str, jax.Array], None]:
+        params = list(state.params)
+        opt_state = list(state.opt_state)
+        qb_betas = state.pending_qb_betas
+        qb_betas_next = [None] * num_stages
+        grads = [None] * num_stages
+        loss_sum = None
+        stage_inputs = {}
+        forward_futures = {}
+        d_hidden_futures = {}
+        forward_done = set()
+        backward_done = set()
+
+        def ensure_forward(stage_index: int, microbatch_index: int):
+            key = (stage_index, microbatch_index)
+            if key in forward_done:
+                return
+            microbatches = batches_by_microbatch[microbatch_index]
+
+            if stage_index == 0:
+                hidden, stage_qb_betas = mpmd.task(
+                    stage0_forward,
+                    name=f"grug_1f1b_mb{microbatch_index}_stage0_forward",
+                    out_shardings=(activation_shardings[0], qb_shardings[0]),
+                )(params[0], qb_betas[0], microbatches[0])
+                qb_betas_next[0] = accumulate_or_set(
+                    qb_betas_next[0],
+                    stage_qb_betas,
+                    name=f"grug_1f1b_mb{microbatch_index}_stage0_accumulate_qb",
+                    out_shardings=qb_shardings[0],
+                )
+                forward_futures[(1, microbatch_index)] = mpmd.transfer(
+                    hidden,
+                    out_shardings=activation_shardings[1],
+                )
+                forward_done.add(key)
+                return
+
+            ensure_forward(stage_index - 1, microbatch_index)
+            hidden = forward_futures[key].done()
+            stage_inputs[key] = hidden
+            if stage_index == num_stages - 1:
+                forward_done.add(key)
+                return
+
+            hidden, stage_qb_betas = mpmd.task(
+                stage_forward,
+                name=f"grug_1f1b_mb{microbatch_index}_stage{stage_index}_forward",
+                out_shardings=(activation_shardings[stage_index], qb_shardings[stage_index]),
+            )(params[stage_index], qb_betas[stage_index], hidden, microbatches[stage_index])
+            qb_betas_next[stage_index] = accumulate_or_set(
+                qb_betas_next[stage_index],
+                stage_qb_betas,
+                name=f"grug_1f1b_mb{microbatch_index}_stage{stage_index}_accumulate_qb",
+                out_shardings=qb_shardings[stage_index],
+            )
+            forward_futures[(stage_index + 1, microbatch_index)] = mpmd.transfer(
+                hidden,
+                out_shardings=activation_shardings[stage_index + 1],
+            )
+            forward_done.add(key)
+
+        def ensure_backward(stage_index: int, microbatch_index: int):
+            nonlocal loss_sum
+            key = (stage_index, microbatch_index)
+            if key in backward_done:
+                return
+            microbatches = batches_by_microbatch[microbatch_index]
+
+            if stage_index == num_stages - 1:
+                ensure_forward(stage_index, microbatch_index)
+                loss, stage_qb_betas, stage_grads, d_hidden = mpmd.task(
+                    last_stage_loss_and_grads,
+                    name=f"grug_1f1b_mb{microbatch_index}_stage{stage_index}_loss_backward",
+                    out_shardings=(
+                        last_loss_sharding,
+                        qb_shardings[stage_index],
+                        param_shardings[stage_index],
+                        activation_shardings[stage_index],
+                    ),
+                )(params[stage_index], qb_betas[stage_index], stage_inputs[key], microbatches[stage_index])
+                loss_sum = accumulate_or_set(
+                    loss_sum,
+                    loss,
+                    name=f"grug_1f1b_mb{microbatch_index}_accumulate_loss",
+                    out_shardings=last_loss_sharding,
+                )
+                qb_betas_next[stage_index] = accumulate_or_set(
+                    qb_betas_next[stage_index],
+                    stage_qb_betas,
+                    name=f"grug_1f1b_mb{microbatch_index}_stage{stage_index}_accumulate_qb",
+                    out_shardings=qb_shardings[stage_index],
+                )
+                grads[stage_index] = accumulate_or_set(
+                    grads[stage_index],
+                    stage_grads,
+                    name=f"grug_1f1b_mb{microbatch_index}_stage{stage_index}_accumulate_grads",
+                    out_shardings=param_shardings[stage_index],
+                )
+                d_hidden_futures[(stage_index - 1, microbatch_index)] = mpmd.transfer(
+                    d_hidden,
+                    out_shardings=activation_shardings[stage_index - 1],
+                )
+                backward_done.add(key)
+                return
+
+            ensure_backward(stage_index + 1, microbatch_index)
+            d_hidden = d_hidden_futures[key].done()
+            if stage_index == 0:
+                stage_grads = mpmd.task(
+                    stage0_backward,
+                    name=f"grug_1f1b_mb{microbatch_index}_stage0_backward",
+                    out_shardings=param_shardings[0],
+                )(params[0], qb_betas[0], microbatches[0], d_hidden)
+                grads[0] = accumulate_or_set(
+                    grads[0],
+                    stage_grads,
+                    name=f"grug_1f1b_mb{microbatch_index}_stage0_accumulate_grads",
+                    out_shardings=param_shardings[0],
+                )
+                backward_done.add(key)
+                return
+
+            ensure_forward(stage_index, microbatch_index)
+            stage_grads, d_hidden = mpmd.task(
+                stage_backward,
+                name=f"grug_1f1b_mb{microbatch_index}_stage{stage_index}_backward",
+                out_shardings=(param_shardings[stage_index], activation_shardings[stage_index]),
+            )(
+                params[stage_index],
+                qb_betas[stage_index],
+                stage_inputs[key],
+                microbatches[stage_index],
+                d_hidden,
+            )
+            grads[stage_index] = accumulate_or_set(
+                grads[stage_index],
+                stage_grads,
+                name=f"grug_1f1b_mb{microbatch_index}_stage{stage_index}_accumulate_grads",
+                out_shardings=param_shardings[stage_index],
+            )
+            d_hidden_futures[(stage_index - 1, microbatch_index)] = mpmd.transfer(
+                d_hidden,
+                out_shardings=activation_shardings[stage_index - 1],
+            )
+            backward_done.add(key)
+
+        stage_schedules = tuple(std_1f1b_stage_schedule(stage_index) for stage_index in range(num_stages))
+        for task_index in range(2 * pipeline.microbatches):
+            for stage_index, stage_schedule in enumerate(stage_schedules):
+                direction, microbatch_index = stage_schedule[task_index]
+                if direction == "fwd":
+                    ensure_forward(stage_index, microbatch_index)
+                else:
+                    ensure_backward(stage_index, microbatch_index)
+
+        if loss_sum is None:
+            raise ValueError("explicit 1F1B did not accumulate any microbatch losses")
+        loss = mpmd.task(average_loss, name="grug_1f1b_average_loss", out_shardings=last_loss_sharding)(loss_sum)
+        qb_betas_next = [
+            mpmd.task(
+                average_tree,
+                name=f"grug_1f1b_stage{stage_index}_average_qb",
+                out_shardings=qb_shardings[stage_index],
+            )(stage_qb_betas)
+            for stage_index, stage_qb_betas in enumerate(qb_betas_next)
+        ]
+        grads = [
+            mpmd.task(
+                average_tree,
+                name=f"grug_1f1b_stage{stage_index}_average_grads",
+                out_shardings=param_shardings[stage_index],
+            )(stage_grads)
+            for stage_index, stage_grads in enumerate(grads)
+        ]
+
+        for stage_index in range(num_stages):
+            params[stage_index], opt_state[stage_index] = mpmd.task(
+                update_stage,
+                name=f"grug_1f1b_stage{stage_index}_update",
+                out_shardings=(param_shardings[stage_index], opt_state_shardings[stage_index]),
+            )(params[stage_index], opt_state[stage_index], grads[stage_index])
+        step = mpmd.task(
+            keep_step,
+            name="grug_1f1b_keep_step",
+            out_shardings=stage0_step_sharding,
+        )(state.step)
+        loss_for_metrics = mpmd.transfer(loss, out_shardings=stage0_loss_sharding).done()
+
+        next_state = dataclasses.replace(
+            state,
+            step=step,
+            params=tuple(params),
+            opt_state=tuple(opt_state),
+            pending_qb_betas=tuple(qb_betas_next),
+        )
+        metrics = {"train/loss": loss_for_metrics, "qb_beta_per_layer": tuple(qb_betas_next)}
+        return next_state, metrics, None
+
+    if pipeline.microbatches == 1:
+        return explicit_pipeline_step
+    if pipeline.schedule == "gpipe":
+        return explicit_gpipe_step
+    if pipeline.schedule == "std_1f1b":
+        return explicit_std_1f1b_step
+    raise ValueError(f"Unsupported explicit MPMD schedule with microbatches > 1: {pipeline.schedule}")
 
 
 def initial_state(
@@ -287,12 +1403,60 @@ def initial_state(
     )
 
 
+def initial_pipeline_state(
+    model_config: GrugModelConfig,
+    *,
+    optimizer: optax.GradientTransformation,
+    mp: jmp.Policy,
+    key: PRNGKeyArray,
+    pipeline: GrugJaxPPConfig,
+    mpmd_mesh,
+) -> GrugPipelineTrainState:
+    """Initialize explicit MPMD pipeline state without materializing full optimizer state."""
+    params = mp.cast_to_param(Transformer.init(model_config, key=key))
+    stage_params = params.split_for_pipeline(pipeline.stages)
+    stage_params = _reshard_to_mpmd(
+        mpmd_mesh,
+        stage_params,
+        tuple(
+            _tree_mpmd_shardings_on_stage(mpmd_mesh, stage_index, params)
+            for stage_index, params in enumerate(stage_params)
+        ),
+    )
+    pending_qb_betas = tuple(
+        jnp.zeros((stage.end_layer - stage.start_layer, model_config.num_experts), dtype=jnp.float32)
+        for stage in stage_params
+    )
+    pending_qb_betas = _reshard_to_mpmd(
+        mpmd_mesh,
+        pending_qb_betas,
+        tuple(
+            _tree_mpmd_shardings_on_stage(mpmd_mesh, stage_index, qb_betas)
+            for stage_index, qb_betas in enumerate(pending_qb_betas)
+        ),
+    )
+    step = _stage_local_scalar(jnp.array(0, dtype=jnp.int32), NamedSharding(mpmd_mesh.unstack[0], P()))
+    return GrugPipelineTrainState(
+        step=step,
+        params=stage_params,
+        opt_state=tuple(
+            _localize_stage_optimizer_state(mpmd_mesh, stage_index, optimizer.init(params))
+            for stage_index, params in enumerate(stage_params)
+        ),
+        ema_params=None,
+        pending_qb_betas=pending_qb_betas,
+    )
+
+
 def _make_train_step(
     optimizer: optax.GradientTransformation,
     mp: jmp.Policy,
     *,
     z_loss_weight: float,
     ema_beta: float | None,
+    pipeline: GrugJaxPPConfig | None = None,
+    mpmd_mesh=None,
+    in_shardings=None,
     watch_config: WatchConfig | None = None,
 ):
     one = jnp.array(1, dtype=jnp.int32)
@@ -305,8 +1469,35 @@ def _make_train_step(
     else:
         watch_targets = ()
 
-    @functools.partial(jax.jit, donate_argnums=(0,), static_argnames=("compute_watch",))
-    def train_step(state: GrugTrainState, batch, *, compute_watch: bool = False):
+    if pipeline is None:
+        train_step_jit = functools.partial(jax.jit, donate_argnums=(0,), static_argnames=("compute_watch",))
+        pipeline_schedule = None
+    else:
+        pp = _require_jaxpp()
+        if mpmd_mesh is None:
+            raise ValueError("mpmd_mesh is required when JaxPP pipeline training is enabled")
+        train_step_jit = functools.partial(
+            pp.mpmd_jit_with_loop,
+            mpmd_mesh=mpmd_mesh,
+            in_shardings=in_shardings,
+            donate_argnums=(0,),
+            static_argnames=("compute_watch",),
+        )
+        pipeline_schedule = _pipeline_schedule(pipeline)
+
+    def apply_updates(params, updates):
+        if pipeline is None:
+            return optax.apply_updates(params, updates)
+
+        def apply_one(param, update):
+            if param is None:
+                return None
+            return jnp.asarray(jax_ad.add_jaxvals_p.bind(param, update)).astype(jnp.asarray(param).dtype)
+
+        return jax.tree.map(apply_one, params, updates, is_leaf=lambda x: x is None)
+
+    @train_step_jit
+    def train_step(state: GrugTrainState, batch, compute_watch: bool = False):
         # Apply pending QB betas to router biases inside JIT (avoids eager
         # host-side TPU kernel launches that can cause SPMD sync issues).
         qb_params = _apply_qb_betas(state.params, state.pending_qb_betas)
@@ -326,10 +1517,45 @@ def _make_train_step(
                 return_router_metrics=True,
             )
 
-        (loss, summarized_metrics), grads = jax.value_and_grad(loss_fn, has_aux=True)(qb_params)
-        metrics = {"train/loss": loss, **summarized_metrics}
+        if pipeline is None:
+            (loss, summarized_metrics), grads = jax.value_and_grad(loss_fn, has_aux=True)(qb_params)
+            metrics = {"train/loss": loss, **summarized_metrics}
+        else:
+            if pipeline_schedule is None:
+                raise ValueError("pipeline_schedule must be initialized when JaxPP pipeline training is enabled")
+
+            def microbatch_loss_fn(params, this_microbatch):
+                compute_params = mp.cast_to_compute(params)
+                this_loss = compute_params.next_token_loss(
+                    this_microbatch.tokens,
+                    this_microbatch.loss_weight,
+                    mask=this_microbatch.attn_mask,
+                    reduction="mean",
+                    logsumexp_weight=z_loss,
+                    return_router_metrics=False,
+                    pipeline_stages=pipeline.stages,
+                )
+                return this_loss
+
+            microbatch_grad = functools.partial(jax.value_and_grad(microbatch_loss_fn), qb_params)
+            loss_sum, grads_sum = _require_jaxpp().treduce(
+                microbatch_grad,
+                batch,
+                schedule=pipeline_schedule,
+                operation=(_require_jaxpp().Add, _require_jaxpp().Add),
+            )
+            scale = jnp.asarray(1.0 / pipeline.microbatches, dtype=loss_sum.dtype)
+            loss = loss_sum * scale
+            grads = jax.tree.map(lambda grad: grad * scale, grads_sum)
+            metrics = {
+                "train/loss": loss,
+                # Automatic JaxPP lowering currently rejects this per-layer,
+                # per-expert aux tensor as an after-loop value. Keep the prior
+                # QB feedback in place for schedule/MFU probes.
+                "qb_beta_per_layer": state.pending_qb_betas,
+            }
         updates, opt_state = optimizer.update(grads, state.opt_state, qb_params)
-        params = optax.apply_updates(qb_params, updates)
+        params = apply_updates(qb_params, updates)
 
         if ema_beta is None:
             ema_params = None
@@ -383,26 +1609,43 @@ def _run_grug_local(config: GrugRunConfig) -> None:
 
     optimizer = config.optimizer.build(trainer.num_train_steps)
     watch_config = trainer.watch
-    train_step = _make_train_step(
-        optimizer,
-        trainer.mp,
-        z_loss_weight=config.trainer.z_loss_weight,
-        ema_beta=config.trainer.ema_beta,
-        watch_config=watch_config if watch_config.is_enabled else None,
-    )
-
-    data_key, model_key = jax.random.split(jax.random.PRNGKey(trainer.seed), 2)
-    if config.trainer.data_seed is not None:
-        data_key = jax.random.PRNGKey(config.trainer.data_seed)
 
     # Grug uses raw PartitionSpecs rather than Trainer's logical axis mapping.
     # Keep the mesh compact so the batch pspec derived by `_batch_spec(mesh)` spans slices directly.
     # replica_axis_size=None lets compact_grug_mesh default to jax.process_count() (full
-    # cross-slice replication); set it to 1 on GrugTrainerConfig for cross-slice FSDP.
-    mesh = compact_grug_mesh(
+    # cross-slice replication); for JaxPP, it instead means one replica group per pipeline stage.
+    mesh = _compact_or_pipeline_grug_mesh(
         expert_axis_size=config.trainer.expert_axis_size,
         replica_axis_size=config.trainer.replica_axis_size,
+        pipeline=config.trainer.pipeline,
     )
+    mpmd_mesh = None
+    if config.trainer.pipeline is not None:
+        mpmd_mesh = _require_jaxpp().MpmdMesh(mesh, config.trainer.pipeline.stage_axis_name)
+        if config.trainer.pipeline.implementation == "auto" and os.environ.get(
+            "GRUG_JAXPP_PATCH_CONST_SHARDINGS", "false"
+        ).lower() in ("1", "true", "yes", "on"):
+            _install_jaxpp_const_sharding_patch()
+
+    explicit_mpmd = config.trainer.pipeline is not None and config.trainer.pipeline.implementation == "explicit_mpmd"
+    if explicit_mpmd:
+        if config.trainer.ema_beta is not None:
+            raise ValueError("explicit_mpmd does not yet support EMA")
+        train_step = None
+    else:
+        train_step = _make_train_step(
+            optimizer,
+            trainer.mp,
+            z_loss_weight=config.trainer.z_loss_weight,
+            ema_beta=config.trainer.ema_beta,
+            pipeline=config.trainer.pipeline,
+            mpmd_mesh=mpmd_mesh,
+            watch_config=watch_config if watch_config.is_enabled else None,
+        )
+
+    data_key, model_key = jax.random.split(jax.random.PRNGKey(trainer.seed), 2)
+    if config.trainer.data_seed is not None:
+        data_key = jax.random.PRNGKey(config.trainer.data_seed)
     with set_mesh(mesh):
         batch_schedule = trainer.batch_schedule
 
@@ -418,34 +1661,50 @@ def _run_grug_local(config: GrugRunConfig) -> None:
             mesh=mesh,
         )
 
-        @jax.jit
-        def _init_state(model_rng):
-            return initial_state(
+        checkpointer = trainer.checkpointer.create(run_id)
+        log_callbacks = not explicit_mpmd or (mpmd_mesh is not None and mpmd_mesh.my_mpmd_axis_index == 0)
+        if explicit_mpmd:
+            if mpmd_mesh is None or config.trainer.pipeline is None:
+                raise ValueError("mpmd_mesh and pipeline must be initialized when explicit_mpmd is enabled")
+            state = initial_pipeline_state(
                 config.model,
                 optimizer=optimizer,
                 mp=trainer.mp,
-                key=model_rng,
-                ema_beta=config.trainer.ema_beta,
+                key=model_key,
+                pipeline=config.trainer.pipeline,
+                mpmd_mesh=mpmd_mesh,
+            )
+            logger.warning("explicit_mpmd uses stage-local JaxPP arrays; checkpoint writes are disabled for now")
+            checkpointer = None
+        else:
+
+            @jax.jit
+            def _init_state(model_rng):
+                return initial_state(
+                    config.model,
+                    optimizer=optimizer,
+                    mp=trainer.mp,
+                    key=model_rng,
+                    ema_beta=config.trainer.ema_beta,
+                )
+
+            state = _init_state(model_key)
+            state = restore_grug_state_from_checkpoint(
+                state,
+                checkpoint_search_paths=trainer.checkpoint_search_paths(run_id),
+                load_checkpoint_setting=trainer.load_checkpoint,
+                mesh=mesh,
+                allow_partial=trainer.allow_partial_checkpoint,
+            )
+            dump_grug_state_sharding_run_artifact(
+                state,
+                log_dir=trainer.log_dir,
+                run_id=run_id,
+                path_override=config.trainer.sharding_dump_path,
             )
 
-        state = _init_state(model_key)
-
-        checkpointer = trainer.checkpointer.create(run_id)
-        state = restore_grug_state_from_checkpoint(
-            state,
-            checkpoint_search_paths=trainer.checkpoint_search_paths(run_id),
-            load_checkpoint_setting=trainer.load_checkpoint,
-            mesh=mesh,
-            allow_partial=trainer.allow_partial_checkpoint,
-        )
-        dump_grug_state_sharding_run_artifact(
-            state,
-            log_dir=trainer.log_dir,
-            run_id=run_id,
-            path_override=config.trainer.sharding_dump_path,
-        )
-
-        levanter.tracker.log_summary({"parameter_count": parameter_count(state.params)})
+        parameter_count_value = _shape_parameter_count(state.params) if explicit_mpmd else parameter_count(state.params)
+        levanter.tracker.log_summary({"parameter_count": parameter_count_value})
 
         flops_per_example, flops_summary = _compute_flops(model_config=config.model)
         levanter.tracker.log_summary(flops_summary)
@@ -465,9 +1724,10 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         profiler_enabled = profiler_cfg.is_enabled and profiler_num_steps > 0
 
         log_every = max(1, config.trainer.log_every)
-        iterator = LoadingTimeTrackerIterator(train_loader.iter_from_step(int(state.step)))
+        iterator_start_step = 0 if explicit_mpmd else int(state.step)
+        iterator = LoadingTimeTrackerIterator(train_loader.iter_from_step(iterator_start_step))
 
-        state_callbacks = StateCallbackRunner[GrugTrainState](
+        state_callbacks = StateCallbackRunner[Any](
             step_getter=lambda s: s.step,
             model_getter=lambda s: s.params,
             eval_model_getter=lambda s: s.ema_params if s.ema_params is not None else s.params,
@@ -504,32 +1764,167 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                     every=interval,
                 )
 
-        last_loss: float | jax.Array = 0.0
-        last_step_duration = 0.0
+        explicit_loop_step = 0 if explicit_mpmd else None
 
-        # Main optimization loop.
-        try:
-            while int(state.step) < trainer.num_train_steps:
-                with jax.profiler.TraceAnnotation("load_batch"):
-                    batch = next(iterator)
-                step_start = time.perf_counter()
-                current_step = int(state.step)
-                # grad_watch runs only on its configured interval.
-                compute_watch = (
-                    watch_config.is_enabled and watch_config.interval > 0 and current_step % watch_config.interval == 0
+    last_loss: float | jax.Array = 0.0
+    last_step_duration = 0.0
+
+    # Main optimization loop. JaxPP enters a stage-local mesh while tracing, so
+    # pipeline train steps must run outside the global Grug mesh context above.
+    compiled_pipeline_train_step = None
+    explicit_mpmd_train_step = None
+    pipeline_state_sharding = None
+    pipeline_batch_sharding = None
+    try:
+        while (explicit_loop_step if explicit_loop_step is not None else int(state.step)) < trainer.num_train_steps:
+            with jax.profiler.TraceAnnotation("load_batch"):
+                batch = next(iterator)
+            step_start = time.perf_counter()
+            current_step = explicit_loop_step if explicit_loop_step is not None else int(state.step)
+            # grad_watch runs only on its configured interval.
+            compute_watch = (
+                watch_config.is_enabled and watch_config.interval > 0 and current_step % watch_config.interval == 0
+            )
+            if config.trainer.pipeline is None:
+                with set_mesh(mesh):
+                    if train_step is None:
+                        raise ValueError("train_step must be initialized for non-pipeline training")
+                    state, metrics, watch_stats = train_step(state, batch, compute_watch)
+            elif explicit_mpmd:
+                if mpmd_mesh is None or config.trainer.pipeline is None:
+                    raise ValueError("mpmd_mesh and pipeline must be initialized when explicit_mpmd is enabled")
+                if not isinstance(state, GrugPipelineTrainState):
+                    raise TypeError("explicit_mpmd expects GrugPipelineTrainState")
+                compute_watch = False
+                if config.trainer.pipeline.microbatches > 1:
+                    with set_mesh(mesh):
+                        explicit_batch = _reshape_batch_for_pipeline(batch, config.trainer.pipeline.microbatches)
+                    host_stage_batches = tuple(
+                        tuple(
+                            (
+                                _select_pipeline_microbatch(
+                                    explicit_batch,
+                                    microbatch_index,
+                                    config.trainer.pipeline.microbatches,
+                                )
+                                if stage_index == 0
+                                else _copy_shardable_tree(
+                                    _select_pipeline_microbatch(
+                                        explicit_batch,
+                                        microbatch_index,
+                                        config.trainer.pipeline.microbatches,
+                                    )
+                                )
+                            )
+                            for stage_index in range(config.trainer.pipeline.stages)
+                        )
+                        for microbatch_index in range(config.trainer.pipeline.microbatches)
+                    )
+                    stage_batches = tuple(
+                        tuple(
+                            _put_batch_on_stage(mpmd_mesh, stage_index, host_stage_batch)
+                            for stage_index, host_stage_batch in enumerate(microbatch_batches)
+                        )
+                        for microbatch_batches in host_stage_batches
+                    )
+                else:
+                    host_stage_batches = tuple(
+                        batch if stage_index == 0 else _copy_shardable_tree(batch)
+                        for stage_index in range(config.trainer.pipeline.stages)
+                    )
+                    stage_batches = tuple(
+                        _put_batch_on_stage(mpmd_mesh, stage_index, host_stage_batch)
+                        for stage_index, host_stage_batch in enumerate(host_stage_batches)
+                    )
+                if explicit_mpmd_train_step is None:
+                    explicit_mpmd_train_step = _make_explicit_mpmd_train_step(
+                        optimizer,
+                        trainer.mp,
+                        z_loss_weight=config.trainer.z_loss_weight,
+                        pipeline=config.trainer.pipeline,
+                        mpmd_mesh=mpmd_mesh,
+                        sample_state=state,
+                        sample_batches=stage_batches,
+                    )
+                    lower_explicit_mpmd = os.environ.get("GRUG_JAXPP_LOWER_EXPLICIT", "true").lower() not in (
+                        "0",
+                        "false",
+                        "no",
+                    )
+                    if mpmd_mesh.jax_mesh.is_multi_process and lower_explicit_mpmd:
+                        explicit_mpmd_train_step = _LocalLoweredExplicitMpmdStep(
+                            explicit_mpmd_train_step.lower(state, stage_batches)
+                        )
+                state, metrics, watch_stats = explicit_mpmd_train_step(state, stage_batches)
+            else:
+                if mpmd_mesh is None:
+                    raise ValueError("mpmd_mesh must be initialized when JaxPP pipeline training is enabled")
+                pp = _require_jaxpp()
+                compute_watch = False
+                with set_mesh(mesh):
+                    pipeline_batch = _reshape_batch_for_pipeline(batch, config.trainer.pipeline.microbatches)
+                if compiled_pipeline_train_step is None:
+                    if train_step is None:
+                        raise ValueError("train_step must be initialized for automatic JaxPP training")
+                    if isinstance(state, GrugTrainState) and state.pending_qb_betas is not None:
+                        state = dataclasses.replace(state, pending_qb_betas=None)
+                    explicit_auto_in_shardings = os.environ.get(
+                        "GRUG_JAXPP_AUTO_EXPLICIT_IN_SHARDINGS", "false"
+                    ).lower() in ("1", "true", "yes", "on")
+                    if explicit_auto_in_shardings:
+                        train_step = _make_train_step(
+                            optimizer,
+                            trainer.mp,
+                            z_loss_weight=config.trainer.z_loss_weight,
+                            ema_beta=config.trainer.ema_beta,
+                            pipeline=config.trainer.pipeline,
+                            mpmd_mesh=mpmd_mesh,
+                            in_shardings=(
+                                _tree_named_shardings_on_mesh(mesh, state),
+                                _tree_named_shardings_on_mesh(mesh, pipeline_batch),
+                            ),
+                            watch_config=watch_config if watch_config.is_enabled else None,
+                        )
+                    compiled_pipeline_train_step = train_step.compile(
+                        state,
+                        pipeline_batch,
+                    )
+                    args_mpmd_shardings, kwargs_mpmd_shardings = compiled_pipeline_train_step.in_shardings
+                    if kwargs_mpmd_shardings:
+                        raise ValueError(f"Unexpected JaxPP keyword shardings: {kwargs_mpmd_shardings}")
+                    pipeline_state_sharding, pipeline_batch_sharding = args_mpmd_shardings
+                    state = pp.spmd_to_mpmd_reshard(mpmd_mesh, state, pipeline_state_sharding)
+                if pipeline_batch_sharding is None:
+                    raise ValueError("pipeline_batch_sharding must be initialized after compiling the JaxPP step")
+                pipeline_batch = pp.spmd_to_mpmd_reshard(mpmd_mesh, pipeline_batch, pipeline_batch_sharding)
+                state, metrics, watch_stats = compiled_pipeline_train_step(
+                    state,
+                    pipeline_batch,
                 )
-                state, metrics, watch_stats = train_step(state, batch, compute_watch=compute_watch)
-                step = int(state.step) - 1
+            if explicit_loop_step is not None:
+                explicit_loop_step += 1
+            step = current_step
 
-                jax.block_until_ready(metrics["train/loss"])
+            jax.block_until_ready(metrics["train/loss"])
 
-                if jnp.isnan(metrics["train/loss"]):
-                    logger.error(f"NaN loss at step {int(state.step)}. Stopping training.")
-                    break
-                duration = time.perf_counter() - step_start
-                hook_start = time.perf_counter()
+            if jnp.isnan(metrics["train/loss"]):
+                logger.error(f"NaN loss at step {current_step}. Stopping training.")
+                break
+            duration = time.perf_counter() - step_start
+            hook_start = time.perf_counter()
+            callback_state = state
+            if log_callbacks:
                 with jax.profiler.TraceAnnotation("callbacks"):
-                    state_callbacks.run(state, loss=metrics["train/loss"], step_duration=duration)
+                    if isinstance(state, GrugPipelineTrainState) and not explicit_mpmd:
+                        callback_state = _merge_pipeline_state(state)
+                    else:
+                        callback_state = state
+                    if explicit_loop_step is not None:
+                        callback_state = dataclasses.replace(
+                            callback_state,
+                            step=jnp.array(explicit_loop_step, dtype=jnp.int32),
+                        )
+                    state_callbacks.run(callback_state, loss=metrics["train/loss"], step_duration=duration)
                     last_loss = metrics["train/loss"]
                     last_step_duration = duration
                     levanter.tracker.log({"throughput/hook_time": time.perf_counter() - hook_start}, step=step)
@@ -551,19 +1946,27 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                     if watch_stats is not None:
                         levanter.tracker.log(watch_stats, step=step)
 
-                if checkpointer is not None:
-                    checkpointer.on_step(tree=state, step=int(state.step))
-        except BaseException:
-            logger.exception(
-                "Fatal error in grug training loop; skipping final callbacks/checkpoint to preserve root cause"
-            )
-            raise
-        else:
-            # Mirror classic trainer behavior: force callbacks on the last completed step.
-            state_callbacks.run(state, loss=last_loss, step_duration=last_step_duration, force=True)
             if checkpointer is not None:
-                checkpointer.on_step(tree=state, step=int(state.step), force=True)
-                checkpointer.wait_until_finished()
+                checkpoint_step = explicit_loop_step if explicit_loop_step is not None else int(state.step)
+                checkpoint_tree = callback_state if explicit_loop_step is not None else state
+                checkpointer.on_step(tree=checkpoint_tree, step=checkpoint_step)
+    except BaseException:
+        logger.exception("Fatal error in grug training loop; skipping final callbacks/checkpoint to preserve root cause")
+        raise
+    else:
+        # Mirror classic trainer behavior: force callbacks on the last completed step.
+        if log_callbacks:
+            if isinstance(state, GrugPipelineTrainState) and not explicit_mpmd:
+                final_state = _merge_pipeline_state(state)
+            else:
+                final_state = state
+            if explicit_loop_step is not None:
+                final_state = dataclasses.replace(final_state, step=jnp.array(explicit_loop_step, dtype=jnp.int32))
+            state_callbacks.run(final_state, loss=last_loss, step_duration=last_step_duration, force=True)
+        if checkpointer is not None:
+            checkpoint_step = explicit_loop_step if explicit_loop_step is not None else int(state.step)
+            checkpointer.on_step(tree=final_state, step=checkpoint_step, force=True)
+            checkpointer.wait_until_finished()
 
     levanter.tracker.current_tracker().finish()
 
@@ -580,14 +1983,19 @@ def run_grug(config: GrugRunConfig) -> None:
         local_entrypoint=_run_grug_local,
         resources=config.resources,
         processes_per_task=config.processes_per_task,
+        post_setup_scripts=config.post_setup_scripts,
     )
 
 
 __all__ = [
     "GrugEvalConfig",
+    "GrugJaxPPConfig",
+    "GrugPipelineTrainState",
     "GrugRunConfig",
     "GrugTrainState",
     "GrugTrainerConfig",
+    "JaxPPImplementation",
     "initial_state",
+    "jaxpp_setup_scripts",
     "run_grug",
 ]
