@@ -666,12 +666,14 @@ def test_fa4_forced_backend_raises_on_unsupported_config(unsupported_kwargs):
 def test_fa4_packed_segment_id_check_flags_non_contiguous_ids():
     # AttentionMask segment semantics are id equality, so [0, 1, 0] lets the trailing 0-run
     # attend back to the first; FA4 metadata cannot express that and must fail loudly.
-    packed = jnp.asarray([[3, 3, 1, 1, -1, -1]], dtype=jnp.int32)
-    jax.block_until_ready(jax.jit(_packed_segment_ids_or_error)(packed))
+    # Pin to CPU: the TPU runtime cannot raise from on-device eqx.error_if assertions.
+    with jax.default_device(jax.devices("cpu")[0]):
+        packed = jnp.asarray([[3, 3, 1, 1, -1, -1]], dtype=jnp.int32)
+        jax.block_until_ready(jax.jit(_packed_segment_ids_or_error)(packed))
 
-    non_contiguous = jnp.asarray([[0, 1, 1, 0, -1, -1]], dtype=jnp.int32)
-    with pytest.raises(Exception, match="packed segment_ids"):
-        jax.block_until_ready(jax.jit(_packed_segment_ids_or_error)(non_contiguous))
+        non_contiguous = jnp.asarray([[0, 1, 1, 0, -1, -1]], dtype=jnp.int32)
+        with pytest.raises(Exception, match="packed segment_ids"):
+            jax.block_until_ready(jax.jit(_packed_segment_ids_or_error)(non_contiguous))
 
 
 def test_fa4_rejects_non_contiguous_segment_ids():
