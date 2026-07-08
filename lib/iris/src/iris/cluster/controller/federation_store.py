@@ -157,7 +157,7 @@ class ControllerFederationStore:
                     logger.warning("peer %s reported job %s it was not handed; ignoring", peer_id, local_job_id)
                     continue
                 if delta.tombstone:
-                    ops.job.purge_job(cur, local_job_id)
+                    writes.delete_job(cur, local_job_id)
                     continue
                 self._mirror_delta(cur, peer_id, local_job_id, delta)
 
@@ -212,4 +212,4 @@ class ControllerFederationStore:
         active = {delta.job_id for delta in deltas if not delta.tombstone}
         for local_job_id in reads.federated_handles_for_peer(cur, peer_id):
             if local_job_id.to_wire() not in active:
-                ops.job.purge_job(cur, local_job_id)
+                writes.delete_job(cur, local_job_id)
