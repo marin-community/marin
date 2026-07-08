@@ -12,7 +12,15 @@ from iris.cluster.controller.auth import (
     CONTROL_PLANE_AUDIENCES,
     JwtTokenManager,
 )
-from iris.rpc.auth import DASHBOARD_ROLE, AuthzAction, authorize, authorize_method, authorize_resource_owner
+from iris.rpc.auth import (
+    DASHBOARD_ROLE,
+    FEDERATION_PEER_ROLE,
+    FEDERATION_RPCS,
+    AuthzAction,
+    authorize,
+    authorize_method,
+    authorize_resource_owner,
+)
 from rigging.server_auth import VerifiedIdentity, _verified_identity
 from rigging.token_authority import (
     Ed25519Keypair,
@@ -58,6 +66,26 @@ def test_authorize_method_unrestricted_for_other_roles(role):
     # Non-dashboard roles are not gated by method name here; their mutating
     # actions are still checked inside the handlers by authorize/owner checks.
     authorize_method(VerifiedIdentity("alice", role), "LaunchJob")
+
+
+# --- federation-peer role: method-scoped to the federation RPC subset ---------
+
+
+@pytest.mark.parametrize("method", sorted(FEDERATION_RPCS))
+def test_authorize_method_allows_federation_rpcs_for_a_peer(method):
+    # Does not raise: the federation loop (handoff, cancel, sync, heartbeat) is the
+    # federation-peer role's whole contract.
+    authorize_method(VerifiedIdentity("peer-cluster", FEDERATION_PEER_ROLE), method)
+
+
+@pytest.mark.parametrize("method", ["ProfileTask", "ExecInContainer", "SetUserBudget", "ListJobs", "GetJobStatus"])
+def test_authorize_method_denies_non_federation_rpcs_for_a_peer(method):
+    # A federation bearer accepted by the composite verifier cannot reach any RPC
+    # outside the federation subset — including the exec/profile proxies deferred
+    # from v1 and every read the dashboard role would be allowed.
+    with pytest.raises(ConnectError) as exc:
+        authorize_method(VerifiedIdentity("peer-cluster", FEDERATION_PEER_ROLE), method)
+    assert exc.value.code == Code.PERMISSION_DENIED
 
 
 # ---------------------------------------------------------------------------

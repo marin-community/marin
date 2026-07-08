@@ -26,7 +26,7 @@ from iris.cluster.bundle import BundleStore
 from iris.cluster.config import BackendConfig, ClusterFinelogConfig, PeerConfig
 from iris.cluster.controller import ops, reads, writes
 from iris.cluster.controller.audit_logging import log_event
-from iris.cluster.controller.auth import ControllerAuth, request_auth_policy
+from iris.cluster.controller.auth import ControllerAuth, FederationTokenProvider, request_auth_policy
 from iris.cluster.controller.autoscaler.persistence import persist_autoscaler_state
 from iris.cluster.controller.backend import (
     AutoscaleRequest,
@@ -389,9 +389,16 @@ class Controller:
         # Federation: remote clusters this controller may delegate whole jobs to.
         # Inert with no peers configured (build_peers returns nothing, the loops
         # never start), so a single-cluster deployment is unchanged. The store
-        # gives the manager durable access to this controller's tables.
+        # gives the manager durable access to this controller's tables. Each peer
+        # connection presents this cluster's federation token (minted from the auth
+        # signing key) so an enforcing peer admits the handoff as a trusted requester.
+        federation_token_provider = (
+            FederationTokenProvider(config.cluster_id, config.auth.jwt_manager)
+            if config.peers and config.auth and config.auth.jwt_manager
+            else None
+        )
         self._federation = FederationManager(
-            build_peers(config.peers),
+            build_peers(config.peers, federation_token_provider=federation_token_provider),
             threads=self._threads,
             store=ControllerFederationStore(
                 self._db,

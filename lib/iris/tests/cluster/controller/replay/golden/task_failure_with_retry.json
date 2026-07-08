@@ -62,6 +62,7 @@
       "started_at_ms": 1704067200000,
       "state": 4,
       "submitted_at_ms": 1704067200000,
+      "submitting_user": "local_admin",
       "user_id": "test-user"
     }
   ],

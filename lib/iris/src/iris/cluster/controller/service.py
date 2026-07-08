@@ -26,6 +26,7 @@ from rigging.timing import Duration, ExponentialBackoff, Timer, Timestamp
 from sqlalchemy import bindparam, case, func, select, text, tuple_
 
 from iris.cluster.bundle import MAX_BUNDLE_SIZE_BYTES, BundleStore
+from iris.cluster.config import user_admitted
 from iris.cluster.constraints import (
     Constraint,
     backend_directive,
@@ -97,7 +98,7 @@ from iris.cluster.types import (
     is_job_finished,
 )
 from iris.rpc import controller_pb2, job_pb2, query_pb2, vm_pb2, worker_pb2
-from iris.rpc.auth import AuthzAction, authorize, authorize_resource_owner
+from iris.rpc.auth import FEDERATION_PEER_ROLE, AuthzAction, authorize, authorize_resource_owner
 from iris.rpc.proto_display import (
     job_state_friendly,
     priority_band_name,
@@ -1119,6 +1120,55 @@ class ControllerServiceImpl:
             return
         authorize_resource_owner(job_id.user)
 
+    def _authorize_federation_handoff(
+        self,
+        identity: VerifiedIdentity | None,
+        request: controller_pb2.Controller.LaunchJobRequest,
+        job_id: JobName,
+    ) -> None:
+        """Authorize an inbound federation handoff (the ``federation`` field is set).
+
+        Only reached with an auth provider configured. A verified federation peer (its
+        token yields the ``federation-peer`` role) is admitted only under its own signed
+        requester id and only for a submitter this cluster's allowlist permits; a local
+        admin (loopback/trusted) is also honored. Any other caller setting ``federation``
+        is forging a handoff to run a job as another user.
+        """
+        if identity is not None and identity.role == FEDERATION_PEER_ROLE:
+            if request.federation.requester_id != identity.user_id:
+                raise ConnectError(
+                    Code.PERMISSION_DENIED,
+                    f"Federation requester {request.federation.requester_id!r} does not match "
+                    f"the authenticated peer {identity.user_id!r}",
+                )
+            if not user_admitted(self._auth.federation_allowed_submitters, request.federation.submitting_user):
+                raise ConnectError(
+                    Code.PERMISSION_DENIED,
+                    f"Submitter {request.federation.submitting_user!r} is not admitted for federation to this cluster",
+                )
+        elif identity is None or identity.role != "admin":
+            raise ConnectError(Code.PERMISSION_DENIED, "The federation handoff field may only be set by a trusted peer.")
+        if not job_id.is_root:
+            raise ConnectError(Code.INVALID_ARGUMENT, "A federation handoff must be a root job.")
+
+    def _authorize_job_actor(self, job_id: JobName) -> None:
+        """Authorize the caller to act on ``job_id`` (e.g. route a cancel).
+
+        The job owner or an admin passes, as with :meth:`_authorize_job_owner`. A
+        federation peer additionally passes for a job it federated here — its verified
+        requester matches the job's received handle — so the parent can route a cancel
+        for a handed-off job whose local owner it is not.
+        """
+        if not self._auth.provider:
+            return
+        identity = get_verified_identity()
+        if identity is not None and identity.role == FEDERATION_PEER_ROLE:
+            with self._db.read_snapshot() as snap:
+                if reads.received_requester(snap, job_id) == identity.user_id:
+                    return
+            raise ConnectError(Code.PERMISSION_DENIED, f"Peer {identity.user_id!r} did not federate job {job_id}")
+        authorize_resource_owner(job_id.user)
+
     def _wait_until_job_drained(self, job_id: JobName, wait: Duration) -> bool:
         """Wait up to ``wait`` for ``job_id`` to have no unfinished worker-bound
         attempts. Returns ``True`` if drained, ``False`` if the wait elapsed.
@@ -1254,23 +1304,27 @@ class ControllerServiceImpl:
         # handoff name's user segment), so re-pinning to the peer's own principal
         # would corrupt the attribution.
         identity = get_verified_identity()
+        is_received_handoff = request.HasField("federation")
 
         # ``federation`` is a field on the public LaunchJobRequest, so guard who may
-        # set it. With auth on it marks a trusted peer-to-peer handoff — honor it
-        # only from an admin principal (a peer authenticates with admin credentials).
-        # A non-admin, or an unauthenticated caller under configured auth, that sets
-        # it is forging a handoff to run a job as another user, so reject it. In
-        # no-auth mode the cluster already trusts the name, so there is nothing to
-        # forge. A received handoff is always a root job.
-        if request.HasField("federation") and self._auth.provider:
-            if identity is None or identity.role != "admin":
-                raise ConnectError(
-                    Code.PERMISSION_DENIED, "The federation handoff field may only be set by a trusted peer."
-                )
-            if not job_id.is_root:
-                raise ConnectError(Code.INVALID_ARGUMENT, "A federation handoff must be a root job.")
+        # set it. With auth on it marks a trusted peer-to-peer handoff, admitted only
+        # from a verified federation peer (bound to its signed requester and this
+        # cluster's submitter allowlist) or a local admin; anyone else is forging a
+        # handoff to run a job as another user. In no-auth mode the cluster already
+        # trusts the name, so there is nothing to forge.
+        if is_received_handoff and self._auth.provider:
+            self._authorize_federation_handoff(identity, request, job_id)
 
-        if self._auth.provider and identity is not None and job_id.is_root and identity.role != "admin":
+        # A received handoff carries the acting owner in its handoff name (from the
+        # parent's signed ``owner_principal``), so it is exempt from re-pinning — the
+        # peer's own identity is the requesting cluster, not the job's owner.
+        if (
+            self._auth.provider
+            and identity is not None
+            and job_id.is_root
+            and identity.role != "admin"
+            and not is_received_handoff
+        ):
             job_id = JobName.root(identity.user_id, job_id.name)
 
         # For non-root jobs, verify the caller owns the parent hierarchy
@@ -1293,9 +1347,15 @@ class ControllerServiceImpl:
         #   configured tiers and UserBudgetDefaults still bite — an unlisted
         #   submitter hits the INTERACTIVE default cap and can't punch up to
         #   PRODUCTION just by skipping auth.
-        # UNSPECIFIED (0) defaults to INTERACTIVE.
+        # UNSPECIFIED (0) defaults to INTERACTIVE. A received handoff's band was
+        # authorized by the parent against the original submitter and their budget
+        # tier; the receiving cluster does not manage that user, so it trusts the
+        # parent rather than re-gating on its own tiers (the submitter allowlist
+        # bounds who may federate here).
         band = request.priority_band or job_pb2.PRIORITY_BAND_INTERACTIVE
-        if band == job_pb2.PRIORITY_BAND_PRODUCTION and self._auth.provider:
+        if is_received_handoff:
+            pass
+        elif band == job_pb2.PRIORITY_BAND_PRODUCTION and self._auth.provider:
             authorize(AuthzAction.MANAGE_BUDGETS)
         else:
             with self._db.read_snapshot() as _snap:
@@ -1317,7 +1377,10 @@ class ControllerServiceImpl:
         # and require the admin role. The check only runs when an auth provider is
         # configured; a trusted-loopback caller resolves to admin.
         if _profile_is_elevated(request.container_profile):
-            if self._auth.provider:
+            # A received handoff's elevated profile was authorized by the parent; the
+            # receiving cluster trusts that decision (as it does the band), so it only
+            # re-gates a locally submitted job.
+            if self._auth.provider and not is_received_handoff:
                 authorize(AuthzAction.SET_CONTAINER_PROFILE)
             logger.info(
                 "Job %s using elevated container profile %s",
@@ -1741,7 +1804,8 @@ class ControllerServiceImpl:
         if state is None:
             raise ConnectError(Code.NOT_FOUND, f"Job {request.job_id} not found")
 
-        self._authorize_job_owner(job_id)
+        # Owner, admin, or the peer that federated this job here (a routed cancel).
+        self._authorize_job_actor(job_id)
 
         # A federated handle owns no local tasks — its subtree lives on the peer.
         # Route a versioned, idempotent cancel there; the next sync mirrors the
@@ -3186,8 +3250,20 @@ class ControllerServiceImpl:
         whose changelog rows advanced past the cursor — a tombstone for a pruned job,
         else the job's summary plus its changed tasks. Assembled in one snapshot.
         """
-        require_identity()
+        # Requester binding: a federation peer may sync only the jobs IT handed off —
+        # its verified identity is the requester. A local admin (loopback/trusted) may
+        # sync on any requester's behalf; any other identity is denied, so an ordinary
+        # authenticated user cannot read another requester's federated set.
+        identity = require_identity()
         requester_id = request.requester_id
+        if identity.role == FEDERATION_PEER_ROLE:
+            if requester_id != identity.user_id:
+                raise ConnectError(
+                    Code.PERMISSION_DENIED,
+                    f"Peer {identity.user_id!r} may not sync jobs for requester {requester_id!r}",
+                )
+        elif identity.role != "admin":
+            raise ConnectError(Code.PERMISSION_DENIED, "federation_sync requires a federation-peer or admin identity")
         cursor = request.cursor
         cursor_seq = int(cursor) if cursor else 0
         deltas: list[controller_pb2.Controller.FederationJobDelta] = []

@@ -29,7 +29,7 @@ before any policy runs.
 import dataclasses
 import logging
 import secrets
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 
 from rigging.server_auth import (
     IapAssertionVerifier,
@@ -45,6 +45,7 @@ from rigging.token_authority import (
 )
 
 from iris.cluster.config import AuthConfig
+from iris.rpc.auth import FEDERATION_PEER_ROLE
 
 logger = logging.getLogger(__name__)
 
@@ -111,6 +112,17 @@ ENDPOINT_TOKEN_SCOPE = "proxy"
 FINELOG_RELAY_ROLE = "finelog-relay"
 DEFAULT_ENDPOINT_TOKEN_TTL_SECONDS = 3600  # 1 hour
 MAX_ENDPOINT_TOKEN_TTL_SECONDS = 86400  # 24 hours
+
+# Federation plane: the token a parent controller presents to hand a whole job to
+# this cluster (and to drive its sync/cancel/exec/profile). Verified against the
+# PARENT's published key by a dedicated verifier, and deliberately kept OUT of
+# CONTROL_PLANE_AUDIENCES — a federation bearer must never become a full RPC
+# identity. Method-scoping is enforced by FEDERATION_PEER_ROLE (authorize_method
+# restricts it to the federation RPC subset), never by the general audience set.
+FEDERATION_AUDIENCE = "federation"
+# Short, per-handoff, unrevocable: replay is bounded by TTL + the IP allowlist + the
+# issuer/aud/requester binding, so keep the window small.
+FEDERATION_TOKEN_TTL_SECONDS = 300  # 5 minutes
 
 
 # ---------------------------------------------------------------------------
@@ -210,6 +222,29 @@ class JwtTokenManager:
             ttl_seconds=ttl_seconds,
         )
 
+    def create_federation_token(
+        self,
+        requester_id: str,
+        key_id: str,
+        ttl_seconds: int = FEDERATION_TOKEN_TTL_SECONDS,
+    ) -> str:
+        """Mint a federation token this controller presents to a peer it hands jobs to.
+
+        Carries ``aud="federation"``, ``role="federation-peer"``, and this cluster's id
+        as ``sub`` (the requester). The signer's ``iss`` is this cluster, verified by
+        the peer against this controller's published public key — so the token proves
+        *which trusted peer* is calling. The per-job ``submitting_user`` rides in the
+        handoff proto (the peer trusts a verified peer's asserted submitter, gated by
+        its allowlist), so one connection-level token serves every handoff. The
+        ``aud="federation"`` is rejected by any control-plane verifier, so the token
+        can never be replayed at the peer's general RPC surface.
+        """
+        return self._signer.mint(
+            {"sub": requester_id, "role": FEDERATION_PEER_ROLE, "jti": key_id},
+            audience=FEDERATION_AUDIENCE,
+            ttl_seconds=ttl_seconds,
+        )
+
     def verify(self, token: str) -> VerifiedIdentity:
         """Verify a control-plane token and apply the aud↔scope policy.
 
@@ -241,6 +276,80 @@ class JwtTokenManager:
             role=claims.claims.get("role", "user"),
             audience=endpoint,
         )
+
+
+# ---------------------------------------------------------------------------
+# Federation trust — a dedicated verifier for inbound peer handoffs
+# ---------------------------------------------------------------------------
+
+
+class FederationTokenVerifier:
+    """Verifies federation-plane tokens against the configured peer public keys.
+
+    A verifier separate from the control plane: its issuers are the trusted parent
+    clusters and its sole audience is ``"federation"``, so a federation token is
+    bound to a peer's published EdDSA key AND the federation plane. Kept off the
+    control-plane audience set so the same token can never authenticate a general
+    RPC; :func:`~iris.rpc.auth.authorize_method` method-scopes the identity it yields.
+    """
+
+    def __init__(self, federation_peers: Mapping[str, str]):
+        self._verifier = JwksVerifier(
+            issuers={peer_id: [pem] for peer_id, pem in federation_peers.items()},
+            expected_audiences=frozenset({FEDERATION_AUDIENCE}),
+        )
+
+    def verify(self, token: str) -> VerifiedIdentity:
+        """The :class:`TokenVerifier` surface: a method-scoped federation-peer identity.
+
+        ``user_id`` is the cryptographically verified requester (the peer cluster, from
+        the token's ``iss``), so a peer cannot assert a requester id other than its own.
+        The ``federation-peer`` role has no RPC authority beyond the federation subset
+        (``authorize_method``); the handler binds ``request.federation.requester_id``
+        against this identity and gates the proto's ``submitting_user`` on the allowlist.
+        """
+        claims = self._verifier.verify(token)
+        return VerifiedIdentity(user_id=claims.iss, role=FEDERATION_PEER_ROLE)
+
+
+class FederationTokenProvider:
+    """Mints this cluster's federation bearer for outgoing peer RPCs.
+
+    A ``rigging.auth.TokenProvider``: each call mints a fresh short-lived
+    ``aud="federation"`` token asserting this cluster as the requester, which the peer
+    verifies against this cluster's published key. The per-job ``submitting_user`` is
+    not in the token — it rides in the handoff proto (a verified peer's asserted
+    submitter, gated by the peer's allowlist) — so one provider serves every handoff,
+    delta-sync, and routed cancel.
+    """
+
+    def __init__(self, requester_id: str, jwt_manager: JwtTokenManager):
+        self._requester_id = requester_id
+        self._jwt_manager = jwt_manager
+
+    def get_token(self) -> str | None:
+        return self._jwt_manager.create_federation_token(self._requester_id, secrets.token_hex(8))
+
+
+class _ControlPlaneOrFederationVerifier:
+    """Routes a bearer to the control-plane verifier, falling back to federation.
+
+    A control-plane token (``aud`` in ``{iris, iris-proxy}``) verifies via the JWT
+    manager; a federation token (``aud="federation"``) is rejected there — the
+    cross-plane replay guard — and verified by the federation verifier instead,
+    yielding a method-scoped federation-peer identity. Each plane does a full crypto
+    check, and no token satisfies both audiences, so the fallback never crosses planes.
+    """
+
+    def __init__(self, control_plane: JwtTokenManager, federation: FederationTokenVerifier):
+        self._control_plane = control_plane
+        self._federation = federation
+
+    def verify(self, token: str) -> VerifiedIdentity:
+        try:
+            return self._control_plane.verify(token)
+        except ValueError:
+            return self._federation.verify(token)
 
 
 # ---------------------------------------------------------------------------
@@ -312,6 +421,11 @@ class ControllerAuth:
     # Config-derived role map (admins + default role). The sole source of truth for
     # roles; rebuilt from config on each controller start.
     role_policy: RolePolicy | None = None
+    # Which authenticated submitters this cluster admits via an inbound federation
+    # handoff, matched against the proto's asserted submitting_user (allow-policy
+    # syntax). Empty admits none (fail closed). The federation token itself only
+    # proves the requester; the verifier that checks it is folded into ``verifier``.
+    federation_allowed_submitters: tuple[str, ...] = ()
 
 
 def request_auth_policy(auth: ControllerAuth | None) -> RequestAuthPolicy:
@@ -431,15 +545,26 @@ def create_controller_auth(
     )
     worker_token = _create_worker_jwt(jwt_mgr)
 
+    # Inbound federation trust: a dedicated verifier over the configured peer keys.
+    # When present, the request verifier accepts both control-plane tokens and (via
+    # the composite) federation tokens; the federation token stays method-scoped.
+    federation_peers = dict(auth_config.federation_peers) if auth_config is not None else {}
+    federation_verifier = FederationTokenVerifier(federation_peers) if federation_peers else None
+    federation_allowed_submitters = tuple(auth_config.federation_allowed_submitters) if auth_config is not None else ()
+    request_verifier: TokenVerifier = (
+        _ControlPlaneOrFederationVerifier(jwt_mgr, federation_verifier) if federation_verifier is not None else jwt_mgr
+    )
+
     # Null-auth: no login-provider arm and no trusted CIDRs. The anonymous/loopback
     # admin identity is assigned by the permissive auth chain, not resolved here.
     if auth_config is None or (auth_config.provider_kind() is None and not auth_config.trusted_cidrs):
         logger.info("Authentication disabled — null-auth mode (workers use JWT)")
         return ControllerAuth(
-            verifier=jwt_mgr,
+            verifier=request_verifier,
             worker_token=worker_token,
             jwt_manager=jwt_mgr,
             role_policy=_build_role_policy(auth_config, None),
+            federation_allowed_submitters=federation_allowed_submitters,
         )
 
     provider = auth_config.provider_kind() or CIDR_PROVIDER
@@ -470,7 +595,7 @@ def create_controller_auth(
         len(auth_config.trusted_cidrs),
     )
     return ControllerAuth(
-        verifier=jwt_mgr,
+        verifier=request_verifier,
         provider=provider,
         worker_token=worker_token,
         jwt_manager=jwt_mgr,
@@ -478,6 +603,7 @@ def create_controller_auth(
         iap_assertion_verifier=iap_assertion_verifier,
         trusted_cidrs=tuple(auth_config.trusted_cidrs),
         role_policy=role_policy,
+        federation_allowed_submitters=federation_allowed_submitters,
     )
 
 

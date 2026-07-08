@@ -15,12 +15,16 @@ from iris.cluster.bundle import BundleStore
 from iris.cluster.config import AuthConfig, IapAuthConfig
 from iris.cluster.controller.auth import (
     CONTROL_PLANE_AUDIENCES,
+    FEDERATION_AUDIENCE,
+    FEDERATION_PEER_ROLE,
     FINELOG_AUDIENCE,
     SESSION_TOKEN_TTL_SECONDS,
     WORKER_USER,
     ControllerAuth,
+    FederationTokenVerifier,
     JwtTokenManager,
     RolePolicy,
+    _ControlPlaneOrFederationVerifier,
     create_controller_auth,
     request_auth_policy,
     require_persistent_signing_key,
@@ -322,6 +326,73 @@ def test_control_plane_verify_rejects_delegation_token():
         mgr.verify(delegation)
     # Sanity: the token's audience really is the finelog plane.
     assert jwt.decode(delegation, options={"verify_signature": False})["aud"] == FINELOG_AUDIENCE
+
+
+def _federation_setup(requester: str = "parent-cluster"):
+    """A parent JwtTokenManager plus a peer's verifier trusting the parent's key."""
+    key = signing_key_from_private_pem(generate_ed25519_keypair().private_pem)
+    signer = JwtSigner(key, issuer=requester)
+    cp_verifier = JwksVerifier(issuers={requester: [key.public_pem]}, expected_audiences=CONTROL_PLANE_AUDIENCES)
+    parent = JwtTokenManager(signer, cp_verifier)
+    peer_verifier = FederationTokenVerifier({requester: key.public_pem})
+    return parent, peer_verifier
+
+
+def test_federation_token_round_trips_to_a_scoped_requester_identity():
+    """A peer verifies a parent's federation token against the parent's key and gets a
+    method-scoped federation-peer identity whose user_id is the verified requester."""
+    parent, peer_verifier = _federation_setup("parent-cluster")
+    token = parent.create_federation_token("parent-cluster", "k-fed")
+    identity = peer_verifier.verify(token)
+    assert identity.user_id == "parent-cluster"
+    assert identity.role == FEDERATION_PEER_ROLE
+    assert identity.audience is None
+
+
+def test_control_plane_verify_rejects_a_federation_token():
+    """The cross-plane guard: a parent's own aud="federation" token is rejected at its
+    control-plane verify, so it can never be replayed at the general RPC surface."""
+    parent, _ = _federation_setup("parent-cluster")
+    token = parent.create_federation_token("parent-cluster", "k-fed")
+    with pytest.raises(ValueError):
+        parent.verify(token)
+    assert jwt.decode(token, options={"verify_signature": False})["aud"] == FEDERATION_AUDIENCE
+
+
+def test_federation_verifier_rejects_a_control_plane_token():
+    """The federation verifier accepts only aud="federation"; a control-plane token
+    signed by the same key is rejected (the plane is bound, not just the key)."""
+    parent, peer_verifier = _federation_setup("parent-cluster")
+    control = parent.create_token("bob", "admin", "k-ctl", ttl_seconds=60)
+    with pytest.raises(ValueError):
+        peer_verifier.verify(control)
+
+
+def test_federation_verifier_rejects_an_untrusted_issuer():
+    """A federation token minted by a cluster the peer does not trust is rejected —
+    only configured peer keys verify, so the requester can't be forged."""
+    stranger, _ = _federation_setup("evil-cluster")
+    _, peer_verifier = _federation_setup("parent-cluster")  # trusts only parent-cluster
+    forged = stranger.create_federation_token("evil-cluster", "k-fed")
+    with pytest.raises(ValueError):
+        peer_verifier.verify(forged)
+
+
+def test_composite_verifier_routes_each_plane_to_its_verifier():
+    """The composite accepts a control-plane token as a full identity and a federation
+    token as a method-scoped federation-peer identity, never crossing planes."""
+    parent, peer_verifier = _federation_setup("parent-cluster")
+    composite = _ControlPlaneOrFederationVerifier(parent, peer_verifier)
+
+    control = parent.create_token("bob", "admin", "k-ctl", ttl_seconds=60)
+    control_identity = composite.verify(control)
+    assert control_identity.user_id == "bob"
+    assert control_identity.role == "admin"
+
+    federation = parent.create_federation_token("parent-cluster", "k-fed")
+    fed_identity = composite.verify(federation)
+    assert fed_identity.role == FEDERATION_PEER_ROLE
+    assert fed_identity.user_id == "parent-cluster"
 
 
 def test_endpoint_token_surfaces_endpoint_as_audience():

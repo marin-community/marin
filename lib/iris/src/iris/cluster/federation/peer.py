@@ -21,6 +21,7 @@ from typing import Protocol
 
 from connectrpc.errors import ConnectError
 from connectrpc.interceptor import InterceptorSync
+from rigging.auth import TokenProvider
 from rigging.cluster_manifest import load_manifest
 from rigging.credentials import ClientCredentials, credentials_for
 from rigging.timing import Timestamp
@@ -93,17 +94,21 @@ class PeerHeartbeat:
     last_contact_ms: int = 0
 
 
-def _peer_credentials(peer: PeerConfig) -> ClientCredentials:
+def _peer_credentials(peer: PeerConfig, federation_token_provider: TokenProvider | None) -> ClientCredentials:
     """The client credentials this controller presents to ``peer``.
 
-    Resolved from the peer's cluster manifest via the shared ``credentials_for``
-    path. An empty ``cluster`` yields no credentials — loopback/no-auth, for a
-    local or same-VPC peer that trusts the connection.
+    The federation bearer — this cluster's short-lived ``aud="federation"`` token,
+    minted per request by ``federation_token_provider`` — rides on ``Authorization``
+    so an enforcing peer admits the handoff as a trusted requester. The peer's
+    manifest still supplies the IAP edge token on ``Proxy-Authorization``. With no
+    provider and an empty ``cluster``, no credentials are sent — loopback/no-auth,
+    for a local or same-VPC peer that trusts the connection.
     """
-    if not peer.cluster:
-        return ClientCredentials()
-    manifest = load_manifest(peer.cluster)
-    return credentials_for(peer.cluster, manifest.auth)
+    base = credentials_for(peer.cluster, load_manifest(peer.cluster).auth) if peer.cluster else ClientCredentials()
+    return ClientCredentials(
+        token_provider=federation_token_provider or base.token_provider,
+        iap_provider=base.iap_provider,
+    )
 
 
 class _PeerRpcConnection:
@@ -157,9 +162,13 @@ class _PeerRpcConnection:
         self._client.close()
 
 
-def connect_to_peer(peer: PeerConfig) -> PeerConnection:
-    """Open one authenticated connection to a peer controller."""
-    return _PeerRpcConnection(peer.controller_address, _peer_credentials(peer).interceptors())
+def connect_to_peer(peer: PeerConfig, federation_token_provider: TokenProvider | None = None) -> PeerConnection:
+    """Open one authenticated connection to a peer controller.
+
+    The connection presents this cluster's federation token (via
+    ``federation_token_provider``) on every RPC to the peer.
+    """
+    return _PeerRpcConnection(peer.controller_address, _peer_credentials(peer, federation_token_provider).interceptors())
 
 
 class FederationPeer:
@@ -246,11 +255,15 @@ class FederationPeer:
 def build_peers(
     peers: Mapping[str, PeerConfig],
     *,
-    connect: PeerConnectFactory = connect_to_peer,
+    federation_token_provider: TokenProvider | None = None,
+    connect: PeerConnectFactory | None = None,
 ) -> list[FederationPeer]:
     """Build one :class:`FederationPeer` per configured peer, ordered by peer id.
 
-    ``connect`` builds each peer connection; the default opens a real
-    authenticated connection to the peer's controller stub.
+    Each connection presents this cluster's federation token (via
+    ``federation_token_provider``) so an enforcing peer admits the handoff as a
+    trusted requester. ``connect`` overrides the connection factory (tests inject a
+    stub); the default opens a real authenticated connection to the peer's stub.
     """
-    return [FederationPeer(peer_id, config, connect(config)) for peer_id, config in sorted(peers.items())]
+    factory = connect or (lambda config: connect_to_peer(config, federation_token_provider))
+    return [FederationPeer(peer_id, config, factory(config)) for peer_id, config in sorted(peers.items())]

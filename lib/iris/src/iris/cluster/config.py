@@ -557,6 +557,18 @@ class AuthConfig(_OneofConfig):
     # and NOT secret. Served on JWKS alongside the current key during a rotation
     # overlap so verifiers accept tokens minted by the prior key.
     previous_public_keys: tuple[str, ...] = ()
+    # Inbound federation trust — this cluster acting as a peer that receives whole
+    # jobs. Maps a parent cluster id to its published EdDSA public key (a
+    # SubjectPublicKeyInfo PEM, inline, non-secret). The dedicated federation JWT
+    # verifier trusts exactly these issuers under aud="federation", kept off the
+    # control-plane audience set so a federation bearer never becomes a full RPC
+    # identity. Empty leaves inbound federation closed (no token verifies).
+    federation_peers: dict[str, str] = Field(default_factory=dict)
+    # Which authenticated submitters this cluster admits via an inbound handoff,
+    # keyed on the signed submitting_user claim — allow-policy syntax ("*",
+    # "*@domain", or an exact identity). Empty admits none (fail closed); a
+    # receiving cluster narrows it explicitly, e.g. ["*@openathena.ai"].
+    federation_allowed_submitters: list[str] = Field(default_factory=list)
 
     @field_validator("trusted_cidrs")
     @classmethod
