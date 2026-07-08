@@ -1,6 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import json
 import re
 import time
 
@@ -144,10 +145,11 @@ def test_derive_hf_bpe_tokenizer_rewrites_special_ids_and_filters_merges(tmp_pat
     _derive_hf_bpe_tokenizer_dir(str(base_dir), 8, str(out_dir))
 
     derived = Tokenizer.from_file(str(out_dir / "tokenizer.json"))
-    tokenizer_json = derived.to_str()
-    assert '"<bos>":5' in tokenizer_json
-    assert '"<eos>":6' in tokenizer_json
-    assert '"<pad>":7' in tokenizer_json
+    tokenizer_json = json.loads(derived.to_str())
+    added_token_ids = {token["content"]: token["id"] for token in tokenizer_json["added_tokens"]}
+    assert added_token_ids["<bos>"] == 5
+    assert added_token_ids["<eos>"] == 6
+    assert added_token_ids["<pad>"] == 7
     assert derived.token_to_id("<bos>") == 5
     assert derived.token_to_id("<eos>") == 6
     assert derived.token_to_id("<pad>") == 7
