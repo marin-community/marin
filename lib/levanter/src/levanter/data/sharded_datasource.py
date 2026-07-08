@@ -285,7 +285,6 @@ class UrlDataSource(UrlBackedShardedDataSource[dict]):
 
     def open_shard_at_row(self, shard_name: str, row: int) -> Iterator[dict]:
         url = self._shard_name_to_url_mapping[shard_name]
-        i = 0
         compression = "infer"
         if url.endswith(".zstd"):  # hacky way to detect zstd
             compression = "zstd"
@@ -294,16 +293,11 @@ class UrlDataSource(UrlBackedShardedDataSource[dict]):
         match format:
             case ".jsonl":
                 with open_url(url, "r", compression=compression) as f:
-                    # TODO: would be nice if we could seek faster than this. Right now, all we do is skip json parsing
-                    # which is not nothing, but not ideal.
-                    for line in f:
-                        if i >= row:
-                            obj = json.loads(line)
-                            if self.columns:
-                                yield {col: obj[col] for col in self.columns}
-                            else:
-                                yield obj
-                        i += 1
+                    for obj in _iter_jsonl_from_row(f, row):
+                        if self.columns:
+                            yield {col: obj[col] for col in self.columns}
+                        else:
+                            yield obj
             case ".json":
                 with open_url(url, "r", compression=compression) as f:
                     data = json.load(f)
@@ -361,20 +355,14 @@ class AudioTextUrlDataSource(UrlBackedShardedDataSource[Tuple[np.ndarray, int, s
 
     def open_shard_at_row(self, shard_name: str, row: int) -> Iterator[Tuple[np.ndarray, int, str]]:
         url = self._shard_name_to_url_mapping[shard_name]
-        i = 0
         with open_url(url, "r", compression="infer") as f:
             format = _sniff_format_for_dataset(url)
             match format:
                 case ".jsonl":
-                    # TODO: would be nice if we could seek faster than this. Right now, all we do is skip json parsing
-                    # which is not nothing, but not ideal.
-                    for line in f:
-                        if i >= row:
-                            mat_json = json.loads(line)
-                            audio_pointer = mat_json[self.audio_key]
-                            audio = AudioTextUrlDataSource.resolve_audio_pointer(audio_pointer, self.sampling_rate)
-                            yield (audio["array"], audio["sampling_rate"], mat_json[self.text_key])
-                        i += 1
+                    for mat_json in _iter_jsonl_from_row(f, row):
+                        audio_pointer = mat_json[self.audio_key]
+                        audio = AudioTextUrlDataSource.resolve_audio_pointer(audio_pointer, self.sampling_rate)
+                        yield (audio["array"], audio["sampling_rate"], mat_json[self.text_key])
                 case ".json":
                     data = json.load(f)
                     for doc in data[row:]:
@@ -433,6 +421,17 @@ def _sniff_format_for_dataset(url):
     return format_from_url
 
 
+def _iter_jsonl_from_row(f: Iterable[str], row: int) -> Iterator[Any]:
+    """Yield parsed JSON objects from a JSONL stream, skipping the first ``row`` lines.
+
+    TODO: would be nice if we could seek faster than this. Right now, all we do is skip json parsing
+    which is not nothing, but not ideal.
+    """
+    for i, line in enumerate(f):
+        if i >= row:
+            yield json.loads(line)
+
+
 def _iter_parquet_from_row(parquet_file: pq.ParquetFile, row: int, columns=None) -> Iterator[dict]:
     """Iterate over rows in a ParquetFile starting from a given row offset.
 
@@ -471,14 +470,8 @@ class JsonlDataSource(UrlBackedShardedDataSource[dict]):
 
     def open_shard_at_row(self, shard_name: str, row: int) -> Iterator[dict]:
         url = self._shard_name_to_url_mapping[shard_name]
-        i = 0
         with open_url(url, "r", compression="infer") as f:
-            # TODO: would be nice if we could seek faster than this. Right now, all we do is skip json parsing
-            # which is not nothing, but not ideal.
-            for line in f:
-                if i >= row:
-                    yield json.loads(line)
-                i += 1
+            yield from _iter_jsonl_from_row(f, row)
 
 
 class JsonDataSource(UrlBackedShardedDataSource[dict]):
