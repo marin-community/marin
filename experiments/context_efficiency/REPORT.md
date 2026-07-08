@@ -1,7 +1,8 @@
 # Where the token budget goes in agentic coding sessions, and what memory/wikis/indexes can save
 
 Analysis of 3,251 Claude Code sessions (174,931 turns) from one engineer's `~/.claude`
-transcripts, February–July 2026. Scripts and data schema: `scripts/context_efficiency/`.
+transcripts, February–July 2026. Pipeline and data schema: `experiments/context_efficiency/`
+(see §9).
 
 ## TL;DR
 
@@ -57,13 +58,13 @@ The analysis has two halves:
 
 ```mermaid
 flowchart LR
-  T[raw transcripts<br/>~/.claude/projects/*.jsonl] --> P[parse_sessions.py<br/>blocks + turns]
-  P --> A[token_accounting.py<br/>amplifier, denominators]
-  P --> B[budget_decomposition.py<br/>ground-truth by-class]
-  P --> S[sample_episodes.py<br/>PPS-weighted episodes]
+  T[raw transcripts<br/>~/.claude/projects/*.jsonl] --> P[transcripts.py<br/>blocks + turns]
+  P --> A[accounting.py<br/>amplifier, denominators]
+  P --> B[accounting.py<br/>ground-truth by-class]
+  P --> S[episodes.py<br/>PPS-weighted episodes]
   A --> S
-  S --> L[label workflow<br/>haiku bulk + sonnet validate]
-  L --> M[semantic_analysis.py<br/>uplift by intervention]
+  S --> L[labeling.py<br/>claude -p: haiku bulk + sonnet validate]
+  L --> M[analysis.py<br/>uplift by intervention]
   B --> M
   M --> R[REPORT.md]
 ```
@@ -83,7 +84,7 @@ flowchart LR
 One session is one transcript file. A "turn" is one assistant response with its usage record
 (`cache_creation`, `cache_read`, `input_tokens`, `output_tokens`). A "block" is one content unit
 inside a turn (a `tool_result`, `tool_use`, assistant `text`, `thinking`, or `user_text`). Parsing
-details and field definitions: `parse_sessions.py`.
+details and field definitions: `transcripts.py`.
 
 ## 3. Cost model
 
@@ -422,17 +423,34 @@ promising place to look next.
 
 ## 9. Reproduction
 
+The analysis is a single `ArtifactStep` pipeline (`experiments/context_efficiency/`), one
+module per stage, each reading the previous stage's structured output:
+
 ```
-scripts/context_efficiency/
-  parse_sessions.py         # transcripts -> _data/{blocks,turns}.parquet
-  token_accounting.py       # denominators, amplifier -> _data/session_amplifier.parquet
-  budget_decomposition.py   # ground-truth by-class split, prelude, eviction
-  sample_episodes.py        # PPS-weighted episode sample -> _data/episode_batches/
-  semantic_analysis.py      # labels -> uplift by intervention
+experiments/context_efficiency/
+  transcripts.py   # ~/.claude/*.jsonl        -> blocks.parquet + turns.parquet
+  accounting.py    # blocks/turns             -> token_accounting.json, session_amplifier.parquet,
+                   #                             budget_decomposition.json (by-class split, prelude, eviction)
+  episodes.py      # + amplifier              -> PPS-weighted episode sample + labeling batches
+  labeling.py      # batches -> claude -p     -> per-episode semantic labels; slug -> doc clusters
+  analysis.py      # labels + budget anchor   -> semantic_analysis.json  (final output)
+  pipeline.py      # wires the DAG; `python -m experiments.context_efficiency.pipeline`
 ```
 
-Run order: `parse_sessions.py` → `token_accounting.py` → `budget_decomposition.py` →
-`sample_episodes.py` → labeling workflow → `semantic_analysis.py`. Data (`_data/`) is gitignored.
+Run it end to end (outputs land under `$MARIN_PREFIX/context_efficiency/*`):
+
+```sh
+MARIN_PREFIX=~/scratch/ce python -m experiments.context_efficiency.pipeline \
+    --agent-command 'claude -p --model haiku' \
+    --val-agent-command 'claude -p --model sonnet' \
+    --agents-md AGENTS.md --memory-md ~/.claude/.../memory/MEMORY.md
+```
+
+The labeling stage shells out to a headless agent (`claude -p` by default; `codex exec` or
+any other headless CLI works), one invocation per batch. `--val-agent-command` re-labels a
+fraction with a stronger model to calibrate the bulk labeler's optimism. Everything else is
+local compute. Sampling is seeded and labeling is content-addressed, so a re-run on the same
+transcript corpus reuses prior labels; new sessions in the corpus trigger a fresh sample.
 
 ## Appendix A — Cost-model derivation
 

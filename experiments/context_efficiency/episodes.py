@@ -1,41 +1,41 @@
-#!/usr/bin/env python3
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-# /// script
-# requires-python = ">=3.12"
-# dependencies = ["pandas", "pyarrow"]
-# ///
 """Build goal-directed tool-call *episodes* from raw transcripts and draw a
 token-cost-weighted sample for semantic labeling.
 
-An **episode** is a contiguous run of information-gathering tool calls (Read,
-Grep, Glob, Bash, WebFetch, ...) inside one session that serve a single sub-goal.
-It is bounded by a human message, a mutating edit (Write/Edit), or a length cap.
-Each episode carries the governing user request, the assistant's stated intent
-before each call, a summary of each call, and a truncated result preview — enough
-for a sub-agent to judge *why* the calls happened and whether a wiki / semantic
-index / persistent memory / better tool / result compaction would have served the
-same need with a smaller answer.
+An **episode** is a contiguous run of information-gathering tool calls (Read, Grep,
+Glob, Bash, WebFetch, ...) inside one session that serve a single sub-goal. It is
+bounded by a human message, a mutating edit (Write/Edit), or a length cap. Each
+episode carries the governing user request, the assistant's stated intent before
+each call, a summary of each call, and a truncated result preview — enough for a
+labeler to judge *why* the calls happened and whether a wiki / semantic index /
+persistent memory / better tool / result compaction would have served the same need
+with a smaller answer.
 
 Sampling is **PPS (probability proportional to size)** on each episode's amplified
 carry cost, with the heavy tail taken as certainty units. This makes the labeled
-coverage fractions map directly onto the ground-truth tool budget: a sampled
-episode represents a known slice of token cost, so
-`population_saved = Σ certainty cost_i·frac_i + (remainder_total/n_rem)·Σ_rem frac_i`.
+coverage fractions map directly onto the ground-truth tool budget: a sampled episode
+represents a known slice of token cost.
 
-Outputs:
-- `_data/episode_batches/batch_NNN.jsonl` — self-contained episodes for labelers.
-- `_data/episodes_sampled.parquet` — per-episode metadata + sampling weight for the
-  analysis join.
+Outputs (under the step's output directory):
+
+- ``episode_batches/batch_NNN.jsonl`` — self-contained episodes for labelers.
+- ``episodes_sampled.parquet`` — per-episode metadata + sampling weight for the join.
+- ``episodes_meta.json`` — population totals and sampling parameters.
 """
-import argparse
+
 import glob
 import json
+import logging
 import os
 import random
+from dataclasses import dataclass
 
 import pandas as pd
+from rigging.filesystem import StoragePath, prefix_join
+
+logger = logging.getLogger(__name__)
 
 GATHER_TOOLS = {
     "Read", "Grep", "Glob", "Bash", "WebFetch", "WebSearch",
@@ -74,8 +74,8 @@ def input_summary(inp):
     return json.dumps(inp)[:INPUT_CHARS]
 
 
-def parse_session(path, sid):
-    """Yield episodes as dicts (without sampling metadata)."""
+def build_episodes(path, sid):
+    """Yield episodes (dicts, without sampling metadata) for one session file."""
     rows = []
     with open(path, encoding="utf-8") as fh:
         for line in fh:
@@ -170,59 +170,23 @@ def parse_session(path, sid):
     return episodes
 
 
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--data", default=os.path.join(os.path.dirname(__file__), "_data"))
-    ap.add_argument("--projects", default=os.path.expanduser("~/.claude/projects"))
-    ap.add_argument("--n", type=int, default=2000, help="target labeled episodes")
-    ap.add_argument("--batch", type=int, default=15, help="episodes per labeling shard")
-    ap.add_argument("--seed", type=int, default=17)
-    args = ap.parse_args()
+def _pps_sample(all_eps, n, seed):
+    """PPS-systematic sample with the heavy tail taken as certainty units.
 
-    amp = pd.read_parquet(os.path.join(args.data, "session_amplifier.parquet")).set_index("session_id")
-    amp_map = amp["observed_amplifier"].to_dict()
-    repo_map = {}
-    b = pd.read_parquet(os.path.join(args.data, "blocks.parquet"))
-    for sid, r in b.groupby("session_id").repo.first().items():
-        repo_map[sid] = r
-
-    all_eps = []
-    skipped = 0
-    files = glob.glob(os.path.join(args.projects, "*", "*.jsonl"))
-    for i, path in enumerate(files):
-        sid = os.path.basename(path)[:-6]
-        if sid not in amp_map:
-            continue
-        try:
-            eps = parse_session(path, sid)
-        except (OSError, UnicodeDecodeError):
-            skipped += 1
-            continue
-        a = float(amp_map.get(sid, 1.0))
-        for e in eps:
-            e["repo"] = repo_map.get(sid, "?")
-            e["amplifier"] = round(a, 2)
-            tok = e["total_result_chars"] / CHARS_PER_TOK
-            e["result_tokens"] = int(tok)
-            e["cost"] = tok * (P_WRITE + P_READ * max(a, 1.0))
-            all_eps.append(e)
-        if (i + 1) % 500 == 0:
-            print(f"  scanned {i + 1}/{len(files)} files, {len(all_eps)} episodes")
-
+    A high-cost episode above the ``total/n`` threshold is always included and
+    represents exactly its own cost; each remainder pick represents one interval of
+    remainder cost. So ``weight_cost`` is the slice of tool budget each labeled
+    episode stands for.
+    """
     total_cost = sum(e["cost"] for e in all_eps)
-    n_sess = len({e["session_id"] for e in all_eps})
-    print(f"\n{len(all_eps)} episodes / {n_sess} sessions, cost {total_cost/1e6:.0f}M, {skipped} files unreadable")
-
-    # PPS-systematic with certainty units for the heavy tail
-    rng = random.Random(args.seed)
+    rng = random.Random(seed)
     rng.shuffle(all_eps)
-    threshold = total_cost / args.n
+    threshold = total_cost / n
     certainty = [e for e in all_eps if e["cost"] >= threshold]
     remainder = [e for e in all_eps if e["cost"] < threshold]
-    n_rem = max(args.n - len(certainty), 1)
+    n_rem = max(n - len(certainty), 1)
     rem_total = sum(e["cost"] for e in remainder)
     step = rem_total / n_rem
-    # systematic PPS over the remainder
     sampled = list(certainty)
     for e in certainty:
         e["weight_cost"] = e["cost"]
@@ -235,16 +199,73 @@ def main():
             e2["weight_cost"] = step  # each remainder pick represents one interval of cost
             sampled.append(e2)
             ti += 1
-    print(f"sampled {len(sampled)} ({len(certainty)} certainty + {len(sampled)-len(certainty)} PPS)")
+    return sampled, total_cost, threshold, step, len(certainty)
 
-    # write labeling shards (compact, self-contained)
-    bdir = os.path.join(args.data, "episode_batches")
-    os.makedirs(bdir, exist_ok=True)
-    for old in glob.glob(os.path.join(bdir, "*.jsonl")):
-        os.remove(old)
+
+@dataclass(frozen=True)
+class EpisodesConfig:
+    sessions_path: str
+    accounting_path: str
+    projects_dir: str
+    session_glob: str
+    n: int
+    batch: int
+    seed: int
+    output_path: str
+
+
+def run_sampling(cfg: EpisodesConfig) -> None:
+    amp = pd.read_parquet(prefix_join(cfg.accounting_path, "session_amplifier.parquet")).set_index("session_id")
+    amp_map = amp["observed_amplifier"].to_dict()
+    b = pd.read_parquet(prefix_join(cfg.sessions_path, "blocks.parquet"))
+    repo_map = b.groupby("session_id").repo.first().to_dict()
+
+    all_eps = []
+    skipped = 0
+    # sorted so the seeded sample is reproducible: unsorted glob order would make the
+    # shuffle pick a different sample each run and silently invalidate prior labels.
+    files = sorted(glob.glob(os.path.join(cfg.projects_dir, cfg.session_glob, "*.jsonl")))
+    for i, path in enumerate(files):
+        sid = os.path.basename(path)[:-6]
+        if sid not in amp_map:
+            continue
+        try:
+            eps = build_episodes(path, sid)
+        except (OSError, UnicodeDecodeError):
+            skipped += 1
+            continue
+        a = float(amp_map.get(sid, 1.0))
+        for e in eps:
+            e["repo"] = repo_map.get(sid, "?")
+            e["amplifier"] = round(a, 2)
+            tok = e["total_result_chars"] / CHARS_PER_TOK
+            e["result_tokens"] = int(tok)
+            e["cost"] = tok * (P_WRITE + P_READ * max(a, 1.0))
+            all_eps.append(e)
+        if (i + 1) % 500 == 0:
+            logger.info("  scanned %d/%d files, %d episodes", i + 1, len(files), len(all_eps))
+
+    if not all_eps:
+        raise ValueError(f"no episodes built from {cfg.projects_dir}/{cfg.session_glob} — is the amplifier table empty?")
+    total_cost = sum(e["cost"] for e in all_eps)
+    n_sess = len({e["session_id"] for e in all_eps})
+    logger.info("%d episodes / %d sessions, cost %.0fM, %d files unreadable", len(all_eps), n_sess, total_cost / 1e6, skipped)
+
+    sampled, total_cost, threshold, step, n_certainty = _pps_sample(all_eps, cfg.n, cfg.seed)
+    logger.info("sampled %d (%d certainty + %d PPS)", len(sampled), n_certainty, len(sampled) - n_certainty)
+
+    # group sampled episodes into labeling shards and write each batch once. Clear any
+    # prior shards so a re-run with different parameters cannot leave stale batches behind.
+    StoragePath(cfg.output_path).mkdirs()
+    bdir = prefix_join(cfg.output_path, "episode_batches")
+    bsp = StoragePath(bdir)
+    if bsp.exists():
+        bsp.rmtree()
+    bsp.mkdirs()
+    batches: dict[int, list[dict]] = {}
     meta = []
     for j, e in enumerate(sampled):
-        e["batch"] = j // args.batch
+        bi = j // cfg.batch
         payload = {
             "episode_id": e["episode_id"],
             "repo": e["repo"],
@@ -255,16 +276,16 @@ def main():
                 for k, s in enumerate(e["steps"])
             ],
         }  # fmt: skip
-        with open(os.path.join(bdir, f"batch_{e['batch']:03d}.jsonl"), "a", encoding="utf-8") as fh:
-            fh.write(json.dumps(payload) + "\n")
+        batches.setdefault(bi, []).append(payload)
         meta.append(
             {
                 "episode_id": e["episode_id"],
                 "session_id": e["session_id"],
                 "repo": e["repo"],
-                "batch": e["batch"],
+                "batch": bi,
                 "n_steps": e["n_steps"],
-                "dominant_tool": max(set(e["tools"]), key=e["tools"].count),
+                # sorted() breaks count ties deterministically (set iteration order is hash-seeded)
+                "dominant_tool": max(sorted(set(e["tools"])), key=e["tools"].count),
                 "result_tokens": e["result_tokens"],
                 "amplifier": e["amplifier"],
                 "cost": e["cost"],
@@ -272,25 +293,23 @@ def main():
                 "is_certainty": e["cost"] >= threshold,
             }
         )
-    n_batches = (len(sampled) + args.batch - 1) // args.batch
-    pd.DataFrame(meta).to_parquet(os.path.join(args.data, "episodes_sampled.parquet"), index=False)
-    with open(os.path.join(args.data, "episodes_meta.json"), "w") as fh:
+    for bi, payloads in batches.items():
+        text = "\n".join(json.dumps(p) for p in payloads) + "\n"
+        StoragePath(prefix_join(bdir, f"batch_{bi:03d}.jsonl")).write_text(text)
+
+    pd.DataFrame(meta).to_parquet(prefix_join(cfg.output_path, "episodes_sampled.parquet"), index=False)
+    with StoragePath(prefix_join(cfg.output_path, "episodes_meta.json")).open("w") as fh:
         json.dump(
             {
                 "n_episodes_population": len(all_eps),
                 "total_cost_population": total_cost,
                 "n_sampled": len(sampled),
-                "n_certainty": len(certainty),
+                "n_certainty": n_certainty,
                 "remainder_interval_cost": step,
-                "n_batches": n_batches,
-                "batch_size": args.batch,
+                "n_batches": len(batches),
+                "batch_size": cfg.batch,
             },
             fh,
             indent=2,
         )
-    print(f"wrote {n_batches} batches to {bdir}")
-    print("wrote episodes_sampled.parquet + episodes_meta.json")
-
-
-if __name__ == "__main__":
-    main()
+    logger.info("wrote %d batches to %s", len(batches), bdir)

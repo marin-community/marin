@@ -467,3 +467,38 @@ diagnostic + amplifier export (dropped the flawed full-retention comparison that
 carried the eviction mis-statement). Report rewritten as a paper: TL;DR, cost
 model, ground-truth decomposition, labeling method, results, ranked recommendations,
 threats, reproduction, appendices A–C, two mermaid diagrams.
+
+## M9 — Packaged as an ArtifactStep pipeline (experiments/context_efficiency/)
+
+Rebuilt the standalone `uv` scripts as a single `marin.execution.lazy.ArtifactStep`
+DAG under `experiments/context_efficiency/`, one module per stage, each reading the
+previous stage's structured output; `pipeline.py` wires it and is the entry point
+(`python -m experiments.context_efficiency.pipeline`). The labeling stage shells out
+to a configurable headless agent (`--agent-command 'claude -p'`, or `codex exec`, ...)
+one invocation per batch, prompt on stdin — the same agent-agnostic contract the lint
+`--review` uses. Local by default: `run=fn` (no `remote()`), outputs under
+`$MARIN_PREFIX` (falls back to `/tmp/marin`). `ExecutorStep`/`executor_main` are gone
+from marin; this is the current pattern (PR #7029).
+
+Validated end to end on a 500-session subset: all eight steps run through the
+`StepRunner`, produce their artifacts, and cache; `claude -p` labeling (haiku bulk +
+sonnet validation) and slug clustering both work; the final `semantic_analysis.json`
+carries every report section.
+
+Two real determinism bugs surfaced while testing re-run idempotency (both silently
+invalidated prior labels):
+
+1. **Unsorted `glob.glob`** in the sampler (inherited from the original script) —
+   same seed, different file order → different shuffle → different sample each run.
+   Fixed with `sorted(glob(...))`.
+2. **Index-keyed label files** (`batch_NNN.json`) reused across different batch
+   content after a re-sample. Fixed by naming label files by the batch's content hash
+   (`labels_<sha>.json`), so changed content relabels and stale labels are harmless
+   (dropped by the meta join). Also made `dominant_tool` tie-breaking deterministic
+   (`sorted(set(...))`, since set iteration is `PYTHONHASHSEED`-dependent) and made
+   the sampler clear its batch dir on re-run.
+
+With those fixes the pipeline is byte-reproducible for a fixed transcript corpus
+(verified: two separate processes produce identical batch files); a growing `~/.claude`
+corpus correctly triggers a fresh sample. The docs (REPORT/README/this log) moved from
+`scripts/context_efficiency/` to `experiments/context_efficiency/` alongside the code.
