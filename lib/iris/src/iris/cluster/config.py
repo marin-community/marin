@@ -204,6 +204,7 @@ class CoreweavePlatformConfig(_Config):
     region: str = ""
     namespace: str = ""  # default: "iris"
     kubeconfig_path: str = ""  # optional; in-cluster auth if empty
+    kube_context: str = ""  # kubeconfig context to bind to; empty = the file's current-context
     object_storage_endpoint: str = ""  # S3 base endpoint, not bucket-specific
 
 
@@ -592,6 +593,7 @@ class KueueConfig(_Config):
 class KubernetesProviderConfig(_Config):
     namespace: str = ""  # default: "iris"
     kubeconfig: str = ""  # empty = in-cluster auth
+    kube_context: str = ""  # kubeconfig context to bind to; empty = the file's current-context
     default_image: str = ""
     service_account: str = ""
     host_network: bool = False

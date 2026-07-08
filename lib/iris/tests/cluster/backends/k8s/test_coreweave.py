@@ -547,17 +547,19 @@ def test_start_controller_deployment_command_references_config_json():
 
 
 def test_configmap_strips_kubeconfig_path():
-    """ConfigMap must not contain kubeconfig_path so pods use in-cluster auth."""
+    """ConfigMap must not contain kubeconfig_path/kube_context so pods use in-cluster auth."""
     k8s = InMemoryK8sService(namespace="iris")
     cw_config = CoreweavePlatformConfig(
         region="LGA1",
         namespace="iris",
         kubeconfig_path="/home/user/.kube/coreweave-iris",
+        kube_context="marin_LGA1",
     )
     provider = K8sControllerProvider(config=cw_config, label_prefix="iris", poll_interval=0.05, kubectl=k8s)
 
     cluster_config = _make_cluster_config()
     cluster_config.platform.coreweave.kubeconfig_path = "/home/user/.kube/coreweave-iris"
+    cluster_config.platform.coreweave.kube_context = "marin_LGA1"
 
     t = threading.Thread(target=_auto_ready_deployment, args=(k8s, "iris-controller"), daemon=True)
     t.start()
@@ -568,6 +570,7 @@ def test_configmap_strips_kubeconfig_path():
     cm_data = json.loads(cm["data"]["config.json"])
     cw_config_data = cm_data.get("platform", {}).get("coreweave", {})
     assert "kubeconfig_path" not in cw_config_data
+    assert "kube_context" not in cw_config_data
 
     t.join(timeout=5)
     provider.shutdown()
