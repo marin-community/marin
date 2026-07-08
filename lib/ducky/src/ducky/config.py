@@ -165,7 +165,10 @@ class DuckyConfig:
     instead of holding it forever."""
 
     result_ttl_days: int = 7
-    """Informational — enforced by the scratch bucket's lifecycle rule, not by ducky (ducky only writes)."""
+    """Retention of spilled results: ducky never deletes them — the scratch bucket's lifecycle
+    rule does — but ducky reads this to bound cache reuse against that reaping. It's the max age of
+    a persistent-cache hit (a sidecar older than this is ignored, since its spilled result may
+    already be gone) and, as ``result_ttl_days * 86400``, the in-memory result cache's TTL."""
 
     persist_cache: bool = True
     """Whether to back the in-memory result cache with a restart-survivable tier in the scratch
