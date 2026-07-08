@@ -75,32 +75,26 @@ class TaskHistogramRow:
     finished_at: Timestamp | None = None
 
 
-# Errors the controller stamps to describe the *consequence* of another task's
-# failure — or an orchestration action — rather than an application fault. When
-# a coscheduled gang crash-loops, every sibling is stamped one of these (see
-# reconcile/peers.py), so they swamp the single real crash. They carry no
-# root-cause signal of their own, so ``pick_earliest_task_error`` deprioritizes
-# them: they represent a job only when nothing better was recorded. Anchored so
-# an application error that merely quotes one of these phrases is not misread as
-# derived. Each generator is cited next to its pattern.
-_DERIVED_ERROR_PATTERNS = (
-    re.compile(r"^Coscheduled sibling\b"),  # gang unwind cascade — reconcile/peers.py
-    re.compile(r"^Preempted by\b"),  # preemption — controller/backend.py
-    re.compile(r"^Scheduling timeout exceeded\b"),  # scheduling gave up — reconcile/task.py
-    re.compile(r"^Cancelled\b"),  # federation/user cancel — federation_store.py
-    re.compile(r"^worker_lost_spec$"),  # worker dropped the task spec — reconcile/worker.py
-    re.compile(r"^Reconcile RPC failed:"),  # worker reconcile RPC error — reconcile/worker.py
-)
+# The controller stamps a coscheduled gang's siblings with a derived error when
+# the gang unwinds: ``Coscheduled sibling <id> failed`` / ``... bounced for
+# atomic re-scheduling`` (reconcile/peers.py). These only echo the one sibling
+# that actually crashed, so when a job's root cause is chosen they must not mask
+# it. Scoped deliberately to the coscheduled cascade: a scheduling timeout,
+# preemption, or cancellation is a standalone reason a task failed — often the
+# state-driving one — so demoting those would detach ``job.error`` from the
+# job's terminal state. Anchored so an application error that merely quotes the
+# phrase is not misread as derived.
+_DERIVED_ERROR_PATTERNS = (re.compile(r"^Coscheduled sibling\b"),)
 
-# States whose recorded error is derived by construction: the task did not fail
-# on its own merits but was torn down because a coscheduled sibling did. Caught
-# by state even if the error text drifts from the patterns above.
+# COSCHED_FAILED is the cascade by construction: the task was torn down or
+# bounced because a sibling failed, not on its own merits. Caught by state even
+# if the recorded error text drifts from the pattern above.
 _DERIVED_ERROR_STATES = frozenset({job_pb2.TASK_STATE_COSCHED_FAILED})
 
 
 def is_derived_task_error(state: int, error: str) -> bool:
-    """Whether a terminal task's error only echoes another task's failure or an
-    orchestration action, carrying no root-cause signal of its own.
+    """Whether a terminal task's error only echoes a coscheduled sibling's
+    failure, carrying no root-cause signal of its own.
 
     Used to keep a coscheduled gang's cascade — every sibling stamped
     ``Coscheduled sibling ... bounced for atomic re-scheduling`` — from masking
@@ -123,12 +117,11 @@ def pick_earliest_task_error(candidates: Iterable[tuple[int, int, Timestamp | No
     succeeded (a stale error preserved from an earlier failed attempt) are
     excluded.
 
-    Derived errors (``is_derived_task_error`` — a coscheduled sibling bounce, a
-    preemption, a scheduling giveup) are deprioritized against genuine failures:
-    they only echo another task's failure or an orchestration action, so a real
-    application error is preferred even when a derived one finished first. A
-    derived error surfaces only when it is the sole thing recorded — better than
-    an empty error.
+    Derived errors (``is_derived_task_error`` — a coscheduled sibling bounce or
+    teardown) are deprioritized against genuine failures: they only echo the
+    sibling that actually crashed, so a real application error is preferred even
+    when a derived one finished first. A derived error surfaces only when it is
+    the sole thing recorded — better than an empty error.
     """
     failed = [
         (finished_at, task_index, state, error)

@@ -4599,19 +4599,23 @@ def test_pick_earliest_task_error_flags_cosched_failed_state_even_with_odd_text(
 @pytest.mark.parametrize(
     ("state", "error", "derived"),
     [
+        # The coscheduled cascade — both message variants, even when the text
+        # has drifted onto a task re-terminated as FAILED.
         (job_pb2.TASK_STATE_FAILED, "Coscheduled sibling /j/7 bounced for atomic re-scheduling", True),
         (job_pb2.TASK_STATE_FAILED, "Coscheduled sibling /j/7 failed", True),
-        (job_pb2.TASK_STATE_PREEMPTED, "Preempted by /other/job", True),
-        (job_pb2.TASK_STATE_FAILED, "Scheduling timeout exceeded (10m)", True),
-        (job_pb2.TASK_STATE_KILLED, "Cancelled before handoff", True),
-        (job_pb2.TASK_STATE_WORKER_FAILED, "worker_lost_spec", True),
-        (job_pb2.TASK_STATE_WORKER_FAILED, "Reconcile RPC failed: connection reset", True),
+        # COSCHED_FAILED is derived by state regardless of the recorded text.
         (job_pb2.TASK_STATE_COSCHED_FAILED, "anything at all", True),
+        # Standalone failure reasons are NOT derived: each can be the
+        # state-driving root cause, so demoting it would detach job.error from
+        # the job's terminal state (e.g. an UNSCHEDULABLE job's timeout).
+        (job_pb2.TASK_STATE_UNSCHEDULABLE, "Scheduling timeout exceeded (10m)", False),
+        (job_pb2.TASK_STATE_PREEMPTED, "Preempted by /other/job", False),
+        (job_pb2.TASK_STATE_KILLED, "Cancelled before handoff", False),
         # Genuine application failures are not derived.
         (job_pb2.TASK_STATE_FAILED, "RuntimeError: CUDA error", False),
         (job_pb2.TASK_STATE_FAILED, "DEADLINE_EXCEEDED: Shutdown barrier has failed", False),
-        # An app error that merely quotes a derived phrase mid-line is not derived.
-        (job_pb2.TASK_STATE_FAILED, "AssertionError: expected 'Preempted by' in header", False),
+        # An app error that merely quotes the derived phrase mid-line is not derived.
+        (job_pb2.TASK_STATE_FAILED, "AssertionError: expected 'Coscheduled sibling' in header", False),
     ],
 )
 def test_is_derived_task_error(state, error, derived):
