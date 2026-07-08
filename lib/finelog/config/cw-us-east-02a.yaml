@@ -22,8 +22,6 @@ remote_log_dir: s3://marin-na/finelog/cw-us-east-02a
 deployment:
   k8s:
     namespace: iris
-    # Same merged kubeconfig + context the iris cluster config pins
-    # (lib/iris/config/cw-us-east-02a.yaml); every kubectl call is context-bound.
     kubeconfig: ~/.kube/coreweave-iris
     kube_context: marin-gpu_US-EAST-02A
     # storage_class omitted -> the cluster's default StorageClass (shared-vast,
