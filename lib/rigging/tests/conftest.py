@@ -21,7 +21,7 @@ def _hermetic_cluster_config(monkeypatch):
     monkeypatch.setattr(
         fs,
         "MARIN_CLUSTER_CONFIG_DIRS",
-        tuple(p for p in fs.MARIN_CLUSTER_CONFIG_DIRS if p != "~/.config/marin/clusters"),
+        tuple(p for p in fs.MARIN_CLUSTER_CONFIG_DIRS if p != fs.PER_USER_CLUSTER_CONFIG_DIR),
     )
     find_project_root.cache_clear()
     fs.reset_data_config_cache()

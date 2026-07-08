@@ -60,7 +60,7 @@ def _default_launcher_region(monkeypatch):
     # shadow the repo-committed config/marin.yaml with a data-less document,
     # dropping the eu-west4 -> europe-west4 bucket normalization these tests
     # rely on. Force resolution onto the repo-committed config dirs only.
-    hermetic_dirs = tuple(p for p in fs.MARIN_CLUSTER_CONFIG_DIRS if p != "~/.config/marin/clusters")
+    hermetic_dirs = tuple(p for p in fs.MARIN_CLUSTER_CONFIG_DIRS if p != fs.PER_USER_CLUSTER_CONFIG_DIR)
     monkeypatch.setattr(fs, "MARIN_CLUSTER_CONFIG_DIRS", hermetic_dirs)
     fs.reset_data_config_cache()
     yield

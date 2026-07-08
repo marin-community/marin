@@ -78,6 +78,14 @@ def _bundled_cluster_config_dir() -> str | None:
     return str(bundled) if bundled.is_dir() else None
 
 
+# A per-user override dir for connecting to a live cluster (e.g. on a dev VM).
+# Named so tests can filter it out of MARIN_CLUSTER_CONFIG_DIRS by identity
+# rather than re-hardcoding the path, since it makes cluster-config resolution
+# host-dependent: a document there may lack a `data:` block, silently swapping
+# the loaded DataConfig out from under a test that expects the committed
+# config/marin.yaml layout.
+PER_USER_CLUSTER_CONFIG_DIR = "~/.config/marin/clusters"
+
 # Cluster config search dirs, highest priority first: a per-user override, the
 # repo-root ``config/`` directory (in-tree checkout), then the bundled copy for
 # installed wheels. Relative paths resolve against the marin workspace root via
@@ -85,7 +93,7 @@ def _bundled_cluster_config_dir() -> str | None:
 MARIN_CLUSTER_CONFIG_DIRS: tuple[str, ...] = tuple(
     p
     for p in (
-        "~/.config/marin/clusters",
+        PER_USER_CLUSTER_CONFIG_DIR,
         "config",
         _bundled_cluster_config_dir(),
     )
