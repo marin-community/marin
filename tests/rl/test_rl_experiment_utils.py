@@ -28,6 +28,19 @@ from marin.training.training import LevanterCheckpoint
 
 MODEL_NAME = "meta-llama/Llama-3.1-8B-Instruct"
 
+# A minimal DataConfig covering just the regions these tests exercise (mirrors the
+# relevant entries in config/marin.yaml). eu-west4 -> europe-west4 stands in for any
+# non-identity bucket-to-region normalization; the mapping itself isn't what's under
+# test, so it's bound explicitly rather than resolved from the ambient cluster config.
+_TEST_DATA_CONFIG = fs.DataConfig(
+    scheme="gs",
+    region_buckets={
+        "us-central1": fs.BucketSpec(name="marin-us-central1", store=fs.StoreType.GCS),
+        "us-east5": fs.BucketSpec(name="marin-us-east5", store=fs.StoreType.GCS),
+        "europe-west4": fs.BucketSpec(name="marin-eu-west4", store=fs.StoreType.GCS),
+    },
+)
+
 
 @dataclasses.dataclass(frozen=True)
 class _EmptyConfig:
@@ -56,15 +69,11 @@ def _default_launcher_region(monkeypatch):
     # GCP host that resolves a real region and silently overrides the prefix
     # these tests set, so pin it to "not on GCP" for hermetic region resolution.
     monkeypatch.setattr(fs, "region_from_metadata", lambda: None)
-    # A per-user ~/.config/marin/clusters override (real on some dev hosts) can
-    # shadow the repo-committed config/marin.yaml with a data-less document,
-    # dropping the eu-west4 -> europe-west4 bucket normalization these tests
-    # rely on. Force resolution onto the repo-committed config dirs only.
-    hermetic_dirs = tuple(p for p in fs.MARIN_CLUSTER_CONFIG_DIRS if p != fs.PER_USER_CLUSTER_CONFIG_DIR)
-    monkeypatch.setattr(fs, "MARIN_CLUSTER_CONFIG_DIRS", hermetic_dirs)
-    fs.reset_data_config_cache()
-    yield
-    fs.reset_data_config_cache()
+    # Bind a fixed DataConfig instead of resolving the ambient cluster config, so
+    # these tests are independent of the host's config search path (a per-user
+    # ~/.config/marin/clusters override, cwd, missing config/ dir, etc).
+    with fs.use_data_config(_TEST_DATA_CONFIG):
+        yield
 
 
 def _test_config(
