@@ -33,6 +33,7 @@ from rigging.timing import Duration
 
 from iris.cluster.tpu_topology import TPU_FAMILY_VARIANT_PREFIX, get_tpu_topology, tpu_variant_name
 from iris.cluster.types import (
+    AUTO_DEVICE_VARIANT,
     DEFAULT_BACKEND_ID,
     LOCAL_CLUSTER,
     AcceleratorType,
@@ -1141,7 +1142,7 @@ def _scale_group_device_attributes(scale_groups: Mapping[str, ScaleGroupConfig])
             continue
         derived.setdefault(WellKnownAttribute.DEVICE_TYPE.value, set()).add(device_type.value)
         variant = resources.device_variant.strip().lower()
-        if variant and variant != "auto":
+        if variant and variant != AUTO_DEVICE_VARIANT:
             derived.setdefault(WellKnownAttribute.DEVICE_VARIANT.value, set()).add(variant)
     return derived
 

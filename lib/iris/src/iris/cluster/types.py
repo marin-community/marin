@@ -89,6 +89,14 @@ class WellKnownAttribute(StrEnum):
     GPU_COUNT = "gpu-count"
 
 
+AUTO_DEVICE_VARIANT = "auto"
+"""Device-variant sentinel meaning "unspecified — let the platform pick a variant".
+
+A resource spec or scale group carrying this variant emits no ``device-variant``
+routing constraint or advertised attribute, so the job matches any variant.
+"""
+
+
 # The reserved cluster name for work this controller owns and runs itself. Every
 # ``jobs``/``tasks`` row carries a ``cluster`` column that defaults to
 # ``LOCAL_CLUSTER`` and holds a peer's id once the job is handed off, so the
