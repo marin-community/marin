@@ -36,7 +36,6 @@ class TransferConfig:
     max_retained_payloads: int | None = 5
     flight_host: str = "0.0.0.0"
     flight_port: int = 0
-    preserve_dtypes: bool = True
 
 
 @dataclass(frozen=True)
@@ -89,10 +88,9 @@ class TransferPublisher(Protocol):
         """Publish one exact pytree payload.
 
         `payload_id` is caller-owned and may move backward after recovery. Backends must
-        preserve array dtype and shape when `TransferConfig.preserve_dtypes` is true.
-        A successful return means later subscribers in the same namespace can observe the
-        manifest. Implementations may retain only the latest payload unless configured
-        otherwise.
+        preserve array dtype and shape. A successful return means later subscribers in
+        the same namespace can observe the manifest. Implementations may retain only
+        the latest payload unless configured otherwise.
         """
 
     def close(self) -> None:
