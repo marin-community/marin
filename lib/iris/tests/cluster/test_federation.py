@@ -33,6 +33,25 @@ def _device_constraint(device_type: str) -> Constraint:
     return Constraint.create(key=WellKnownAttribute.DEVICE_TYPE, op=ConstraintOp.EQ, value=device_type)
 
 
+def _gpu_backend(backend_id: str, variant: str) -> controller_pb2.Controller.BackendSummary:
+    """A peer GPU backend advertising both the device type and the variant."""
+    return _backend(
+        backend_id,
+        advertised_attributes={
+            WellKnownAttribute.DEVICE_TYPE: controller_pb2.StringList(values=["gpu"]),
+            WellKnownAttribute.DEVICE_VARIANT: controller_pb2.StringList(values=[variant]),
+        },
+    )
+
+
+def _gpu_constraints(variant: str) -> list[Constraint]:
+    """The routing constraints ``constraints_from_resources`` emits for a GPU request."""
+    return [
+        Constraint.create(key=WellKnownAttribute.DEVICE_TYPE, op=ConstraintOp.EQ, value="gpu"),
+        Constraint.create(key=WellKnownAttribute.DEVICE_VARIANT, op=ConstraintOp.EQ, value=variant),
+    ]
+
+
 def _config(**extra) -> dict:
     return {"name": "parent", "platform": {"local": {}}, **extra}
 
@@ -276,6 +295,37 @@ def test_router_cluster_pin_forces_the_peer_even_when_locally_feasible():
     peer = _peer("cw", _StubConnection((_device_backend("tpu-fleet", "tpu"),)))
     peer.probe()
     request = RoutingRequest(constraints=[], local_feasible=True, cluster_pin="cw")
+    assert PeerRouter([peer]).decide(request).peer_id == "cw"
+
+
+def test_router_hands_off_a_gpu_job_to_a_peer_advertising_the_matching_variant():
+    # The matching mechanism: a peer whose backend advertises device-type=gpu and the
+    # requested device-variant hosts a GPU job (both routing constraints are satisfied).
+    peer = _peer("cw", _StubConnection((_gpu_backend("h100-fleet", "h100"),)))
+    peer.probe()
+    request = RoutingRequest(constraints=_gpu_constraints("h100"), local_feasible=False)
+    assert PeerRouter([peer]).decide(request).peer_id == "cw"
+
+
+def test_router_does_not_auto_route_a_gpu_job_to_a_peer_advertising_no_device_attributes():
+    # A peer backend that advertises nothing (today's implicit single-backend CoreWeave
+    # config synthesizes empty backend attributes) cannot satisfy device-type=gpu, so an
+    # auto-match GPU job stays local — the operational gap that keeps GPU federation on
+    # the explicit --target-cluster pin, which bypasses this capability check, until the
+    # backend advertises its device attributes.
+    peer = _peer("cw", _StubConnection((_backend("gpu-fleet"),)))
+    peer.probe()
+    request = RoutingRequest(constraints=_gpu_constraints("h100"), local_feasible=False)
+    assert PeerRouter([peer]).decide(request).is_local is True
+
+
+def test_router_pin_forces_a_gpu_peer_even_without_advertised_attributes():
+    # The v1 mitigation: an explicit pin force-routes regardless of advertised
+    # capability, so a GPU handoff to CoreWeave works today even though auto-match does
+    # not (see the empty-attributes case above).
+    peer = _peer("cw", _StubConnection((_backend("gpu-fleet"),)))
+    peer.probe()
+    request = RoutingRequest(constraints=_gpu_constraints("h100"), local_feasible=False, cluster_pin="cw")
     assert PeerRouter([peer]).decide(request).peer_id == "cw"
 
 
