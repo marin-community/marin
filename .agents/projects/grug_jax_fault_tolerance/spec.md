@@ -307,6 +307,7 @@ from marin.transfer import TransferConfig
 
 
 class GrugRecoveryMode(StrEnum):
+    DISABLED = "disabled"
     ABORT_TO_CHECKPOINT = "abort_to_checkpoint"
     TRANSFER_WITHOUT_DONATION = "transfer_without_donation"
     PERIODIC_TRANSFER_BACKUP = "periodic_transfer_backup"
@@ -314,9 +315,8 @@ class GrugRecoveryMode(StrEnum):
 
 @dataclass(frozen=True)
 class GrugFaultToleranceConfig:
-    enabled: bool = False
     heartbeat_timeout_seconds: int = 10
-    recovery_mode: GrugRecoveryMode = GrugRecoveryMode.ABORT_TO_CHECKPOINT
+    recovery_mode: GrugRecoveryMode = GrugRecoveryMode.DISABLED
     transfer: TransferConfig | None = None
     backup_interval_steps: int | None = None
 
@@ -338,9 +338,9 @@ fault_tolerance: GrugFaultToleranceConfig = field(default_factory=GrugFaultToler
 
 Contract:
 
-- Disabled mode preserves current Grug behavior.
-- Enabled mode requires a GPU backend and JAX recoverability. TPU raises `JaxRecoverabilityUnsupportedError`.
-- Before `trainer.initialize()`, Grug constructs a replaced `TrainerConfig` whose `distributed` config has `enable_recoverability=True` and `heartbeat_timeout_seconds=config.trainer.fault_tolerance.heartbeat_timeout_seconds`.
+- `DISABLED` preserves current Grug behavior.
+- Any non-disabled mode requires a GPU backend and JAX recoverability. TPU raises `JaxRecoverabilityUnsupportedError`.
+- Before `trainer.initialize()`, non-disabled Grug fault tolerance constructs a replaced `TrainerConfig` whose `distributed` config has `enable_recoverability=True` and `heartbeat_timeout_seconds=config.trainer.fault_tolerance.heartbeat_timeout_seconds`.
 - If JAX distributed is already initialized without recoverability, Grug raises `JaxRecoverabilityUnsupportedError`.
 - A train step is committed only after the `live_devices` context exits successfully and the loss has been blocked.
 - On liveness failure, Grug raises `GrugStepAtomicityError` after skipping all callbacks/checkpoint hooks. It must not attempt to reuse the donated pre-step train-state buffers.
