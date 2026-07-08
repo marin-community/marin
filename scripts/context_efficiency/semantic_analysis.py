@@ -55,16 +55,19 @@ AUTHORED_TOPIC = {"shared-wiki", "persistent-memory"}
 
 
 def load_labels(label_dir):
-    rows = []
+    rows, bad = [], []
     for fp in sorted(glob.glob(os.path.join(label_dir, "*.json"))):
         try:
             with open(fp) as fh:
                 d = json.load(fh)
         except (json.JSONDecodeError, OSError):
+            bad.append(os.path.basename(fp))
             continue
         for L in d.get("labels", []):
             if isinstance(L, dict) and L.get("episode_id"):
                 rows.append(L)
+    if bad:
+        print(f"WARNING: {len(bad)} unreadable label files under-count coverage: {bad}")
     df = pd.DataFrame(rows)
     if df.empty:
         return df

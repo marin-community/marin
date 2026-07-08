@@ -43,6 +43,7 @@ GATHER_TOOLS = {
 }  # fmt: skip
 MUTATE_TOOLS = {"Edit", "Write", "NotebookEdit", "MultiEdit"}
 P_WRITE, P_READ = 1.25, 0.10
+CHARS_PER_TOK = 4.0
 MAX_STEPS = 12
 REQ_CHARS, INTENT_CHARS, INPUT_CHARS, PREVIEW_CHARS = 700, 180, 200, 260
 
@@ -64,7 +65,7 @@ def text_of(content):
     return ""
 
 
-def input_summary(tool, inp):
+def input_summary(inp):
     if not isinstance(inp, dict):
         return ""
     for key in ("command", "pattern", "file_path", "path", "url", "query", "prompt"):
@@ -155,7 +156,7 @@ def parse_session(path, sid):
                     step = {
                         "tool": name,
                         "intent": pending_intent,
-                        "input": input_summary(name, b.get("input")),
+                        "input": input_summary(b.get("input")),
                         "result_chars": 0,
                         "result_preview": "",
                     }
@@ -186,6 +187,7 @@ def main():
         repo_map[sid] = r
 
     all_eps = []
+    skipped = 0
     files = glob.glob(os.path.join(args.projects, "*", "*.jsonl"))
     for i, path in enumerate(files):
         sid = os.path.basename(path)[:-6]
@@ -194,12 +196,13 @@ def main():
         try:
             eps = parse_session(path, sid)
         except (OSError, UnicodeDecodeError):
+            skipped += 1
             continue
         a = float(amp_map.get(sid, 1.0))
         for e in eps:
             e["repo"] = repo_map.get(sid, "?")
             e["amplifier"] = round(a, 2)
-            tok = e["total_result_chars"] / 4.0
+            tok = e["total_result_chars"] / CHARS_PER_TOK
             e["result_tokens"] = int(tok)
             e["cost"] = tok * (P_WRITE + P_READ * max(a, 1.0))
             all_eps.append(e)
@@ -208,7 +211,7 @@ def main():
 
     total_cost = sum(e["cost"] for e in all_eps)
     n_sess = len({e["session_id"] for e in all_eps})
-    print(f"\n{len(all_eps)} episodes across {n_sess} sessions, total cost {total_cost/1e6:.0f}M")
+    print(f"\n{len(all_eps)} episodes / {n_sess} sessions, cost {total_cost/1e6:.0f}M, {skipped} files unreadable")
 
     # PPS-systematic with certainty units for the heavy tail
     rng = random.Random(args.seed)
@@ -248,7 +251,7 @@ def main():
             "user_request": e["user_request"],
             "steps": [
                 {"i": k, "tool": s["tool"], "intent": s["intent"], "call": s["input"],
-                 "result_tokens": int(s["result_chars"] / 4), "result_preview": s["result_preview"]}
+                 "result_tokens": int(s["result_chars"] / CHARS_PER_TOK), "result_preview": s["result_preview"]}
                 for k, s in enumerate(e["steps"])
             ],
         }  # fmt: skip

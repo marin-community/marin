@@ -43,6 +43,8 @@ MEMORY_MD = "/home/power/.claude/projects/-home-power-code-marin/memory/MEMORY.m
 
 
 def _tok(path):
+    # marin-controlled prelude files; a missing one degrades that component to 0
+    # (visible in the output) rather than failing the whole decomposition.
     try:
         return os.path.getsize(path) / 4.0
     except OSError:
@@ -96,7 +98,7 @@ def top_split(turns, prelude):
     }
 
 
-def prelude_decomp(prelude, budget):
+def prelude_decomp(prelude):
     fixed_med = float(prelude.prelude.median())
     claudemd = _tok(os.path.join(REPO_ROOT, "AGENTS.md"))
     memory = _tok(MEMORY_MD)
@@ -120,7 +122,7 @@ def prelude_decomp(prelude, budget):
     }
 
 
-def tool_surface(blocks, split, budget):
+def tool_surface(blocks, split):
     """Tool content's share of conversation-carry + new-content-write (lower bound)."""
     mass = blocks.groupby("block_type").est_tokens.sum()
     conv = {c: float(mass.get(c, 0)) for c in ["tool_result", "tool_use", "text", "user_text"]}
@@ -176,8 +178,8 @@ def main():
         "n_turns": len(turns),
         "aggregate_read_over_create_amplifier": round(turns.cache_read.sum() / max(turns.cache_creation.sum(), 1), 1),
         **split,
-        "prelude_decomposition": prelude_decomp(prelude, budget),
-        "tool_addressable_surface": tool_surface(blocks, split, budget),
+        "prelude_decomposition": prelude_decomp(prelude),
+        "tool_addressable_surface": tool_surface(blocks, split),
         "eviction": eviction(turns, budget),
     }
     with open(args.out, "w") as fh:
