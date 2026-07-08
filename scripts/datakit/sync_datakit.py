@@ -42,7 +42,10 @@ For each source, this script builds a single :class:`StepSpec`. The step's
   output IS the resume marker. When the destination is ``s3://``, the dst
   ``S3FileSystem`` is constructed with ``fixed_upload_size=True`` so R2
   accepts the multipart upload (AWS S3 accepts uniform-size parts too, so
-  the flag is harmless there).
+  the flag is harmless there). ``.artifact.json`` step records are the one
+  exception to the byte copy: their embedded ``main_output_dir``/``dup_output_dir``
+  are rebased from the source root to the destination root so the relocated
+  record doesn't point back at the source store (see :func:`_copy_artifact`).
 * After all shards complete, copies the leaf's root ``.executor_status``
   marker as a single follow-up op. Its presence on dst is what whole-source
   skip keys off — re-runs of an already-synced source short-circuit before
@@ -120,6 +123,13 @@ _ATOMIC_RENAME_TMP_RE = re.compile(r"\.tmp\.[0-9a-f]{32}$")
 # batch shards and copy it as the very last step so its presence on dst
 # means "this leaf is fully synced" — enabling whole-source skip on resume.
 _EXECUTOR_STATUS_FILENAME = ".executor_status"
+
+# Step record written next to a step's output. Its ``main_output_dir`` /
+# ``dup_output_dir`` are absolute URIs baked at write time (rooted at whatever
+# ``MARIN_PREFIX`` produced them), so a byte-for-byte copy across stores leaves
+# them pointing back at the source store. ``_copy_artifact`` rebases them to the
+# destination root instead (see there).
+_ARTIFACT_RECORD_FILENAME = ".artifact.json"
 
 
 # ----------------------------------------------------------------------
@@ -225,6 +235,27 @@ def _copy_one(src_fs, dst_fs, src_path: str, dst_path: str) -> int:
     return total
 
 
+def _copy_artifact(src_fs, dst_fs, src_path: str, dst_path: str, src_base: str, dst_base: str) -> int:
+    """Copy a ``.artifact.json`` record, rebasing embedded source-rooted paths.
+
+    A step record's ``main_output_dir``/``dup_output_dir`` are absolute URIs
+    under the source directory being copied (e.g. ``s3://marin-na/.../outputs/main``
+    on R2). A plain byte copy would leave a reader at the destination following
+    them back to the source store — a cross-network read, or a hard failure when
+    the source bucket is unreachable from the destination environment. Rewriting
+    the source root (``src_base``) to the destination root (``dst_base``) makes the
+    relocated record self-consistent. The record is a small JSON blob, so reading
+    it whole is fine.
+    """
+    with src_fs.open(src_path, "rb") as fin:
+        text = fin.read().decode("utf-8")
+    rewritten = text.replace(src_base, dst_base).encode("utf-8")
+    with atomic_rename(dst_path, fs=dst_fs) as temp_path:
+        with dst_fs.open(temp_path, "wb") as fout:
+            fout.write(rewritten)
+    return len(rewritten)
+
+
 def _copy_shard(
     entries: list[tuple[str, str]],
     *,
@@ -256,9 +287,15 @@ def _copy_shard(
 
     bytes_copied = 0
     with ThreadPoolExecutor(max_workers=copy_threads) as pool:
-        futures = [
-            pool.submit(_copy_one, src_fs, dst_fs, f"{src_base}/{rel}", f"{dst_base}/{rel}") for rel, _fp in entries
-        ]
+        futures = []
+        for rel, _fp in entries:
+            src_path, dst_path = f"{src_base}/{rel}", f"{dst_base}/{rel}"
+            # ``.artifact.json`` records embed source-rooted absolute paths; rebase
+            # them to the destination root instead of copying bytes verbatim.
+            if os.path.basename(rel) == _ARTIFACT_RECORD_FILENAME:
+                futures.append(pool.submit(_copy_artifact, src_fs, dst_fs, src_path, dst_path, src_base, dst_base))
+            else:
+                futures.append(pool.submit(_copy_one, src_fs, dst_fs, src_path, dst_path))
         # Surface the first failure immediately — a partial shard must NOT
         # produce a JSONL output, since that's what marks the shard "done".
         for fut in as_completed(futures):
