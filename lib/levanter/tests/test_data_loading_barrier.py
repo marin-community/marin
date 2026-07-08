@@ -10,24 +10,30 @@ returns ``(key, value)`` pairs under a prefix, and ``key_value_delete`` removes 
 single key or, when the argument ends in ``/``, every key under that directory.
 """
 
-import threading
-
 import jax
 import jax._src.distributed as jax_distributed
 import pytest
 
-import levanter.utils.jax_utils as jax_utils
 from levanter.utils.jax_utils import data_loading_barrier
 
 
 class _FakeKVClient:
-    def __init__(self):
+    """In-memory stand-in for JAX's coordination key-value store.
+
+    ``on_dir_get`` is an optional hook invoked before each directory read, letting a test
+    reveal a lagging peer after a set number of polls without racing on wall-clock time.
+    """
+
+    def __init__(self, on_dir_get=None):
         self.store: dict[str, str] = {}
+        self._on_dir_get = on_dir_get
 
     def key_value_set(self, key: str, value: str) -> None:
         self.store[key] = value
 
     def key_value_dir_get(self, prefix: str):
+        if self._on_dir_get is not None:
+            self._on_dir_get(self.store)
         return [(k, v) for k, v in self.store.items() if k.startswith(prefix)]
 
     def key_value_delete(self, key: str) -> None:
@@ -40,10 +46,9 @@ class _FakeKVClient:
 
 @pytest.fixture
 def coordination(monkeypatch):
-    """Install a fake coordination client and reset the module's cleanup cursor."""
+    """Install a fake coordination client for the duration of a test."""
     client = _FakeKVClient()
     monkeypatch.setattr(jax_distributed.global_state, "client", client)
-    monkeypatch.setattr(jax_utils, "_last_data_ready_step", None)
     return client
 
 
@@ -63,20 +68,26 @@ def test_returns_when_all_processes_ready(coordination, monkeypatch):
     assert coordination.store["levanter/data_ready/7/0"] == "1"
 
 
-def test_waits_for_a_lagging_process(coordination, monkeypatch):
+def test_waits_for_a_lagging_process(monkeypatch):
     _set_world(monkeypatch, num_processes=2, process_id=0)
 
-    def publish_late():
-        # peer 1 shows up after this process is already polling
-        coordination.store["levanter/data_ready/3/1"] = "1"
+    # peer 1 is absent for the first two polls, then appears — deterministic, no wall clock.
+    polls = 0
 
-    timer = threading.Timer(0.2, publish_late)
-    timer.start()
-    try:
-        # small warn_interval exercises the leader's periodic still-waiting log path
-        data_loading_barrier(3, timeout=5.0, warn_interval=0.05)
-    finally:
-        timer.cancel()
+    def reveal_peer_on_third_poll(store):
+        nonlocal polls
+        polls += 1
+        if polls >= 3:
+            store["levanter/data_ready/3/1"] = "1"
+
+    client = _FakeKVClient(on_dir_get=reveal_peer_on_third_poll)
+    monkeypatch.setattr(jax_distributed.global_state, "client", client)
+
+    data_loading_barrier(3, timeout=5.0)
+
+    # returned only after polling until the lagging peer showed up
+    assert polls >= 3
+    assert client.store["levanter/data_ready/3/0"] == "1"
 
 
 def test_timeout_names_the_missing_process(coordination, monkeypatch):
@@ -99,10 +110,7 @@ def test_single_process_is_a_noop(monkeypatch):
 
 
 def test_leader_cleans_up_previous_step(coordination, monkeypatch):
-    _set_world(monkeypatch, num_processes=1, process_id=0)
-    # single-process short-circuits, so drive with a 1-process world but a real client by
-    # calling with a 2-process world where the peer is pre-published.
-    monkeypatch.setattr(jax, "process_count", lambda: 2)
+    _set_world(monkeypatch, num_processes=2, process_id=0)
 
     coordination.store["levanter/data_ready/10/1"] = "1"
     data_loading_barrier(10, timeout=5.0)

@@ -189,34 +189,26 @@ def barrier_sync(timeout: float = 200):
 
 
 _DATA_READY_PREFIX = "levanter/data_ready"
-_last_data_ready_step: int | None = None
+_MAX_LOGGED_LAGGARDS = 32
 
 
 def data_loading_barrier(step: int, *, timeout: float, warn_interval: float = 30.0) -> None:
-    """Wait until every process has its input batch for ``step`` in hand before the train step.
+    """Block until every process has loaded its batch for ``step``, then return.
 
-    A Levanter train step is a cross-host collective: every process must feed its data
-    shard and enter the step together. When one process's loader stalls (e.g. a slow GCS
-    read), the processes that already have data enter the on-device collective and block
-    on the straggler. That wait lives on the device/collective path, where a timeout is
-    fatal and takes down the whole job with an opaque coordination-service shutdown.
-
-    This barrier moves the wait onto JAX's coordination service instead. Each process
-    publishes a readiness key once its batch is loaded, then polls until all processes
-    have published (or ``timeout`` elapses). While waiting, a process is idle host-side
-    and keeps heartbeating, so a slow loader merely delays its peers rather than tripping
-    a fatal collective timeout. Lagging processes are named in the logs, and if the
-    barrier never clears the raised ``TimeoutError`` names the processes that never
-    signalled — a real hang still fails, but legibly.
+    Call this between fetching a batch and the collective train step. It gates entry to the
+    step on all processes being ready, so a process whose data loader stalls (e.g. a slow
+    GCS read) delays its peers host-side instead of stalling them inside the on-device
+    collective, where the wait is fatal on timeout and takes down the whole job. Processes
+    still missing after ``warn_interval`` seconds are named in a log line by process 0; if
+    any are still missing after ``timeout`` seconds, raises ``TimeoutError`` naming them.
 
     Args:
-        step: The training step whose batch must be ready. Used to namespace the keys;
-            must advance monotonically across calls.
+        step: The training step whose batch must be ready. Must increase by one on each
+            call: it namespaces the coordination keys, and entering ``step`` cleans up the
+            keys from ``step - 1``.
         timeout: Maximum seconds to wait for all processes before raising.
         warn_interval: How often (seconds) process 0 logs the still-missing processes.
     """
-    global _last_data_ready_step
-
     num_processes = jax.process_count()
     if num_processes == 1:
         return
@@ -229,11 +221,10 @@ def data_loading_barrier(step: int, *, timeout: float, warn_interval: float = 30
     is_leader = process_id == 0
 
     # A train step is a global collective, so no process can reach the barrier for `step`
-    # until every process has cleared the previous one. That makes it safe for the leader
-    # to delete the previous step's keys here, bounding growth of the coordination store.
-    if is_leader and _last_data_ready_step is not None:
-        client.key_value_delete(f"{_DATA_READY_PREFIX}/{_last_data_ready_step}/")
-    _last_data_ready_step = step
+    # until every process cleared `step - 1`. That makes it safe for the leader to delete
+    # the previous step's keys here, bounding growth of the coordination store.
+    if is_leader and step > 0:
+        client.key_value_delete(f"{_DATA_READY_PREFIX}/{step - 1}/")
 
     prefix = f"{_DATA_READY_PREFIX}/{step}"
     client.key_value_set(f"{prefix}/{process_id}", "1")
@@ -249,12 +240,12 @@ def data_loading_barrier(step: int, *, timeout: float, warn_interval: float = 30
         if len(ready) >= num_processes:
             return
 
+        missing = sorted(set(range(num_processes)) - ready)
         if deadline.expired():
-            missing = sorted(set(range(num_processes)) - ready)
             raise TimeoutError(
                 f"data_loading_barrier timed out after {timeout:.0f}s at step {step}: "
                 f"{len(missing)}/{num_processes} processes never signalled data-ready. "
-                f"Missing (first 32): {missing[:32]}"
+                f"Missing (first {_MAX_LOGGED_LAGGARDS}): {missing[:_MAX_LOGGED_LAGGARDS]}"
             )
 
         interval = backoff.next_interval()
@@ -262,14 +253,14 @@ def data_loading_barrier(step: int, *, timeout: float, warn_interval: float = 30
         elapsed += interval
 
         if is_leader and elapsed >= next_warn:
-            missing = sorted(set(range(num_processes)) - ready)
             logger.warning(
-                "data_loading_barrier: %.0fs waiting on %d/%d processes to load step %d. Missing (first 32): %s",
+                "data_loading_barrier: %.0fs waiting on %d/%d processes to load step %d. Missing (first %d): %s",
                 elapsed,
                 len(missing),
                 num_processes,
                 step,
-                missing[:32],
+                _MAX_LOGGED_LAGGARDS,
+                missing[:_MAX_LOGGED_LAGGARDS],
             )
             next_warn += warn_interval
 
