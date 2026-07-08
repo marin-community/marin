@@ -967,6 +967,11 @@ class LmDataConfig:
 
         caches: dict[str, TreeCache[dict]] = {}
         to_build: list[tuple[str, tuple[str, ShardedDataSource, LmDatasetFormatBase]]] = []
+        # Pre-warm the tokenizer once (single-threaded) before the pool. `_load_or_defer` loads it
+        # per component, and concurrent HF downloads to the shared /tmp cache race on the
+        # chat_template.jinja atomic rename (`.tmp -> .jinja`), which surfaces as a spurious
+        # FileNotFoundError -> "No source and no cache found". One warm-up populates the cache.
+        _ = self.the_tokenizer
         max_workers = min(32, len(items))
         with (
             log_time(f"build_caches[{split}] over {len(items)} components"),
