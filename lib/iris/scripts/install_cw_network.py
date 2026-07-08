@@ -20,10 +20,6 @@ pass so there is no "ran one script but not the other" gap:
   * **The federation ingress** — an IP-locked route publishing the controller's
     RPC surface to the GCP ``marin`` controller (see below).
 
-The controller creates its own ``/proxy`` Ingress at start-up
-(``K8sControllerProvider.start_controller``); this script installs the cluster-wide
-prerequisites that Ingress depends on, and adds the federation route beside it.
-
 Federation ingress — how the GCP ``marin`` controller reaches this one:
 
     marin federates whole jobs to the CoreWeave controllers by dialing their RPC
@@ -35,24 +31,19 @@ Federation ingress — how the GCP ``marin`` controller reaches this one:
 
       1. **IP allowlist** — a Traefik ``ipAllowList`` Middleware admits only the
          marin controller's egress IP. The *network* factor.
-      2. **The controller's own auth** — the method-scoped ``aud="federation"``
-         verifier gates the handoff RPCs, and the general auth chain gates the
-         rest. The *identity* factor. The ingress does NOT do method policy.
+      2. **The controller's own auth** — the ``aud="federation"`` verifier for the
+         handoff RPCs, the general auth chain for the rest. The *identity* factor.
 
     Because the controller is the identity gate, it MUST be enforcing. A permissive
     (null-auth) controller behind only an IP lock hands anonymous admin over its
     entire control plane to anything arriving from the allowlisted IP — so this
-    script warns loudly when its target is still permissive. ``cw-us-east-02a`` is
-    enforcing (``trusted_cidrs``); ``cw-rno2a`` gains ``trusted_cidrs`` too (see
-    ``docs/coreweave.md``).
+    script warns loudly when its target is still permissive. Both CoreWeave
+    controllers enforce via ``trusted_cidrs``.
 
-    The route reuses the controller's ``iris-cw-*.oa.dev`` host rather than a
-    dedicated name. Where the cluster already publishes ``/proxy``
-    (``cw-us-east-02a``), that world-open route keeps its own more-specific Traefik
-    router (Traefik prefers the longer path match), so ``/proxy`` stays open while
-    the federation route allowlists the rest of the surface and reuses the existing
-    TLS cert. Where there is no ``/proxy`` host (``cw-rno2a``), the federation route
-    publishes the whole controller host and cert-manager issues a fresh cert.
+    A single ``ipAllowList`` catch-all route covers the WHOLE controller host
+    (``iris-cw-<cluster>.oa.dev``) — there is no world-open surface. cert-manager
+    issues the TLS cert. Install removes the controller's legacy world-open
+    ``/proxy`` Ingress (``iris-controller-proxy``) so no path stays public.
 
 Target a cluster with ``--cluster <name>`` (resolved the same way ``iris --cluster``
 does): the host, ingress class, namespace, controller Service, and kubeconfig all
@@ -125,12 +116,18 @@ _FQDN_JSONPATH = '{.status.conditions[?(@.type=="ExternalRecords")].message}'
 _FQDN_WAIT_SECONDS = 90.0
 _COREWEAVE_APP = ".coreweave.app"
 
-# Federation route: an IP-locked Ingress + ipAllowList Middleware on the controller host.
+# Federation route: an IP-locked Ingress + ipAllowList Middleware covering the
+# WHOLE controller host. It is the only off-cluster ingress for a CoreWeave
+# controller — there is no world-open surface (users reach Iris via iris.oa.dev,
+# marin federates outward, so marin's egress is the only external caller).
 _INGRESS_NAME = "iris-federation"
 _MIDDLEWARE_NAME = "iris-federation-ipallowlist"
 _MIDDLEWARE_CRD = "middlewares.traefik.io"
-# TLS secret for the federation route when the cluster has no /proxy cert to reuse
-# (e.g. cw-rno2a, which publishes no /proxy host today).
+# The controller's legacy world-open /proxy Ingress. The IP-locked route here
+# supersedes it, so install removes it (leaving it would keep /proxy world-open,
+# since Traefik prefers its longer path prefix).
+_CONTROLLER_PROXY_INGRESS_NAME = "iris-controller-proxy"
+# TLS secret cert-manager issues for the federation route.
 DEFAULT_TLS_SECRET = "iris-controller-fed-tls"
 # Staging first to avoid Let's Encrypt rate limits while DNS/allowlist are shaken
 # out; flip to the prod issuer once the staging cert validates.
@@ -228,8 +225,6 @@ class NetworkSettings(NamedTuple):
     service_name: str  # controller Service the federation route backends onto
     port: int
     ingress_class: str
-    proxy_host: str  # the cluster's existing /proxy host, if any (host + cert to reuse)
-    proxy_tls_secret: str  # the cluster's existing /proxy TLS secret, if any
     auth_mode: str  # "null-auth" (permissive) | "iap" | "cidr"
     kubeconfig: str | None
     context: str | None
@@ -258,8 +253,6 @@ class _DerivedConfig(NamedTuple):
     service_name: str
     port: int
     ingress_class: str
-    proxy_host: str
-    proxy_tls_secret: str
     auth_mode: str
     kubeconfig: str
     context: str
@@ -286,8 +279,6 @@ def _derive_from_cluster(name: str) -> _DerivedConfig:
         service_name=cw.service_name or "iris-controller-svc",
         port=cw.port or 10000,
         ingress_class=cw.ingress_class or DEFAULT_INGRESS_CLASS,
-        proxy_host=cw.public_proxy_host,
-        proxy_tls_secret=cw.tls_secret,
         auth_mode=_auth_mode(config),
         kubeconfig=(platform.kubeconfig_path if platform else "") or "",
         context=(platform.kube_context if platform else "") or "",
@@ -295,9 +286,7 @@ def _derive_from_cluster(name: str) -> _DerivedConfig:
 
 
 def _default_host(settings: NetworkSettings) -> str:
-    """Reuse the cluster's /proxy host, else ``iris-cw-<cluster>.oa.dev``."""
-    if settings.proxy_host:
-        return settings.proxy_host
+    """The controller's public host, ``iris-cw-<cluster>.oa.dev`` (override with ``--host``)."""
     short = settings.cluster[len("cw-") :] if settings.cluster.startswith("cw-") else settings.cluster
     return f"iris-cw-{short}.oa.dev"
 
@@ -369,18 +358,13 @@ def _build_federation_ingress(
     tls_secret: str,
     cluster_issuer: str,
 ) -> dict:
-    """Ingress routing the controller host to the RPC surface, IP-locked by the Middleware.
+    """Single catch-all Ingress routing the whole controller host, IP-locked by the Middleware.
 
-    A single catch-all path attaches the ``ipAllowList`` Middleware via the
-    router-middlewares annotation (``<ns>-<name>@kubernetescrd``). Where the
-    cluster also publishes ``/proxy``, that route keeps its own more-specific
-    Traefik router (Traefik prefers the longer path match), so ``/proxy`` stays
-    world-open while everything else is allowlisted here.
-
-    ``cluster_issuer`` empty means the TLS cert is managed elsewhere (the ``/proxy``
-    Ingress) and this route only references ``tls_secret``; set it to have
-    cert-manager issue the cert here. cert-manager's HTTP-01 solver runs on its own
-    unrestricted Ingress, so the allowlist does not block ACME validation.
+    One ``/`` path attaches the ``ipAllowList`` Middleware via the router-middlewares
+    annotation (``<ns>-<name>@kubernetescrd``), so the entire controller surface is
+    reachable only from the allowlisted source. cert-manager issues the cert via
+    ``cluster_issuer``; its HTTP-01 solver runs on its own unrestricted Ingress, so
+    the allowlist does not block ACME validation.
     """
     annotations = {
         "traefik.ingress.kubernetes.io/router.middlewares": f"{namespace}-{_MIDDLEWARE_NAME}@kubernetescrd",
@@ -470,7 +454,6 @@ def install(
         if not skip_issuers and acme_email
         else []
     )
-    reusing_cert = not cluster_issuer and host == settings.proxy_host
     middleware = _build_ipallowlist_middleware(
         namespace=settings.namespace, source_ranges=source_ranges, xff_depth=xff_depth
     )
@@ -498,16 +481,12 @@ def install(
     if issuer_docs:
         click.secho("==> ClusterIssuers (HTTP-01 via Traefik):", fg="blue", bold=True)
         click.echo(yaml.safe_dump_all(issuer_docs, default_flow_style=False, sort_keys=False))
-    click.secho("==> Federation ingress:", fg="blue", bold=True)
+    click.secho("==> Federation ingress (IP-locked; the whole controller host):", fg="blue", bold=True)
     click.echo(f"  host:         {host}  (CNAME -> the Traefik LoadBalancer FQDN)")
     click.echo(f"  allowlist:    {', '.join(source_ranges)}")
     click.echo(f"  backend:      {settings.service_name}:{settings.port} (namespace {settings.namespace})")
-    if reusing_cert:
-        click.echo(f"  tls secret:   {tls_secret}  (reusing the existing /proxy cert on this host)")
-    else:
-        click.echo(f"  tls secret:   {tls_secret}  (cert-manager issues via {cluster_issuer})")
-    if settings.proxy_host == host:
-        click.echo("  note:         /proxy keeps its own world-open router; this allowlists the rest.")
+    click.echo(f"  tls secret:   {tls_secret}  (cert-manager issues via {cluster_issuer})")
+    click.echo(f"  removes:      the controller's world-open {_CONTROLLER_PROXY_INGRESS_NAME} Ingress, if present")
     click.echo(yaml.safe_dump_all([middleware, ingress], default_flow_style=False, sort_keys=False))
 
     _warn_if_permissive(settings)
@@ -552,6 +531,7 @@ def install(
             "Install Traefik (drop --skip-traefik) before the federation route."
         )
     kubectl_apply_docs([middleware, ingress], kflags, "the federation ingress")
+    _delete_controller_proxy_ingress(settings, kflags)
 
     _print_next_steps(settings, host=host, cluster_issuer=cluster_issuer)
 
@@ -570,40 +550,26 @@ def _print_next_steps(settings: NetworkSettings, *, host: str, cluster_issuer: s
     kflags = kubectl_flags(settings.kubeconfig, settings.context)
     click.secho("==> Done. To finish wiring the CoreWeave network:", fg="green", bold=True)
 
-    # 1. DNS. The host serves both /proxy (if configured) and the federation route.
-    if host == settings.proxy_host:
-        click.secho(f"  1) {host} already resolves (the existing /proxy host) — no new DNS needed.", fg="green")
+    # 1. DNS. The whole host resolves to Traefik's LB; the IP-locked ingress serves it.
+    click.secho(f"  1) CNAME {host} at the Traefik LoadBalancer FQDN:", fg="green", bold=True)
+    fqdn = read_traefik_fqdn(settings.traefik_release, settings.traefik_namespace, kflags)
+    if fqdn:
+        click.echo(f"        {host}   CNAME   {fqdn}")
     else:
-        click.secho(f"  1) CNAME {host} at the Traefik LoadBalancer FQDN:", fg="green", bold=True)
-        fqdn = read_traefik_fqdn(settings.traefik_release, settings.traefik_namespace, kflags)
-        if fqdn:
-            click.echo(f"        {host}   CNAME   {fqdn}")
-        else:
-            click.secho(
-                "       (Traefik's FQDN isn't allocated yet — read it in a minute, then CNAME to it:)", fg="yellow"
-            )
-            click.echo(
-                f"       kubectl get svc {settings.traefik_release} -n {settings.traefik_namespace} "
-                "-o=jsonpath='{.status.conditions[?(@.type==\"ExternalRecords\")].message}'"
-            )
-            click.echo(f"        {host}   CNAME   <that>{_COREWEAVE_APP}")
-
-    # 2. The controller creates its own /proxy Ingress at start-up; a cluster that
-    # publishes /proxy needs a running controller for that route to exist.
-    if settings.proxy_host:
-        click.secho(
-            f"  2) If {settings.cluster}'s controller has not yet created its /proxy Ingress, restart it so it does:",
-            fg="green",
+        click.secho("       (Traefik's FQDN isn't allocated yet — read it in a minute, then CNAME to it:)", fg="yellow")
+        click.echo(
+            f"       kubectl get svc {settings.traefik_release} -n {settings.traefik_namespace} "
+            "-o=jsonpath='{.status.conditions[?(@.type==\"ExternalRecords\")].message}'"
         )
-        click.echo(f"       iris --cluster {settings.cluster} cluster restart")
+        click.echo(f"        {host}   CNAME   <that>{_COREWEAVE_APP}")
 
-    click.secho("  3) Verify federation reach from the marin controller VM:", fg="green", bold=True)
+    click.secho("  2) Verify federation reach from the marin controller VM:", fg="green", bold=True)
     click.echo("       - ListBackends WITH the federation JWT from the allowlisted egress IP  -> succeeds")
     click.echo("       - the same call WITHOUT the JWT (controller enforcing)                 -> UNAUTHENTICATED")
     click.echo("       - the same call from a non-allowlisted IP                              -> refused (403)")
     if cluster_issuer and "staging" in cluster_issuer:
         click.secho(
-            "  4) Staging issuer in use — once the cert validates, re-run with --skip-traefik "
+            "  3) Staging issuer in use — once the cert validates, re-run with --skip-traefik "
             "--skip-cert-manager --skip-issuers --cluster-issuer letsencrypt-http01-prod --apply.",
             fg="green",
         )
@@ -705,6 +671,28 @@ def _delete_federation_ingress(settings: NetworkSettings, kflags: list[str]) -> 
         )
 
 
+def _delete_controller_proxy_ingress(settings: NetworkSettings, kflags: list[str]) -> None:
+    """Remove the controller's legacy world-open /proxy Ingress, if present.
+
+    The IP-locked route supersedes it and covers the whole host; leaving it would
+    keep /proxy world-open (Traefik prefers its longer prefix). Harmless where it
+    was never created (e.g. cw-rno2a).
+    """
+    run(
+        [
+            "kubectl",
+            *kflags,
+            "delete",
+            "ingress",
+            _CONTROLLER_PROXY_INGRESS_NAME,
+            "-n",
+            settings.namespace,
+            "--ignore-not-found",
+        ],
+        check=True,
+    )
+
+
 def _scan_leftovers(
     settings: NetworkSettings,
     *,
@@ -758,6 +746,9 @@ def uninstall(settings: NetworkSettings, *, apply: bool) -> None:
 
     click.secho("==> Plan (teardown of the CoreWeave network stack):", fg="blue", bold=True)
     click.echo(f"  kubectl delete ingress {_INGRESS_NAME} + middleware {_MIDDLEWARE_NAME} -n {settings.namespace}")
+    click.echo(
+        f"  kubectl delete ingress {_CONTROLLER_PROXY_INGRESS_NAME} -n {settings.namespace}   # the legacy /proxy route"
+    )
     click.echo(f"  kubectl delete clusterissuer {' '.join(issuers)}   # first, while the CRD still exists")
     for release, namespace in release_pairs:
         click.echo(f"  helm uninstall {release} -n {namespace}")
@@ -775,9 +766,11 @@ def uninstall(settings: NetworkSettings, *, apply: bool) -> None:
         click.secho("\nwarn: dry run — nothing deleted. Re-run with --apply to uninstall.", fg="yellow", err=True)
         return
 
-    # 0. The federation route (in the controller namespace, outside the chart teardown).
+    # 0. The federation route + the legacy /proxy Ingress (both in the controller
+    # namespace, outside the chart teardown).
     click.secho("==> Deleting the federation ingress", fg="blue", bold=True)
     _delete_federation_ingress(settings, kflags)
+    _delete_controller_proxy_ingress(settings, kflags)
 
     # 1. ClusterIssuers next: once the CRD is deleted they become unaddressable.
     click.secho("==> Deleting ClusterIssuers (before the CRD goes)", fg="blue", bold=True)
@@ -885,8 +878,6 @@ def main(
         service_name=derived.service_name,
         port=derived.port,
         ingress_class=derived.ingress_class,
-        proxy_host=derived.proxy_host,
-        proxy_tls_secret=derived.proxy_tls_secret,
         auth_mode=derived.auth_mode,
         kubeconfig=kubeconfig or derived.kubeconfig or None,
         context=context or derived.context or None,
@@ -910,19 +901,12 @@ def main(
     required=True,
     help="IP or CIDR permitted to reach the federation route (repeatable). The marin egress IP.",
 )
-@click.option(
-    "--host",
-    default="",
-    help="Federation ingress host [default: the cluster's /proxy host, else iris-cw-<cluster>.oa.dev].",
-)
-@click.option(
-    "--tls-secret", default="", help="TLS secret [default: reuse the cluster's /proxy secret, else a new one]."
-)
+@click.option("--host", default="", help="Ingress host [default: iris-cw-<cluster>.oa.dev].")
+@click.option("--tls-secret", default="", help="TLS secret [default: iris-controller-fed-tls].")
 @click.option(
     "--cluster-issuer",
     default="",
-    help="cert-manager ClusterIssuer for the federation cert [default: none when reusing an existing cert, "
-    "else letsencrypt-http01-staging].",
+    help="cert-manager ClusterIssuer for the cert [default: letsencrypt-http01-staging].",
 )
 @click.option(
     "--xff-depth",
@@ -954,18 +938,12 @@ def install_cmd(
 ) -> None:
     """Install the whole CoreWeave network stack (dry-run without --apply)."""
     source_ranges = [_normalize_source(value) for value in allow_sources]
-    resolved_host = host or _default_host(settings)
-    # Reuse the controller's existing /proxy cert when publishing on that same
-    # host; otherwise cert-manager issues a fresh cert for the federation route.
-    reuse_existing_cert = resolved_host == settings.proxy_host and bool(settings.proxy_tls_secret)
-    resolved_tls_secret = tls_secret or (settings.proxy_tls_secret if reuse_existing_cert else DEFAULT_TLS_SECRET)
-    resolved_issuer = cluster_issuer or ("" if reuse_existing_cert else DEFAULT_CLUSTER_ISSUER)
     install(
         settings,
-        host=resolved_host,
+        host=host or _default_host(settings),
         source_ranges=source_ranges,
-        tls_secret=resolved_tls_secret,
-        cluster_issuer=resolved_issuer,
+        tls_secret=tls_secret or DEFAULT_TLS_SECRET,
+        cluster_issuer=cluster_issuer or DEFAULT_CLUSTER_ISSUER,
         xff_depth=xff_depth,
         acme_email=acme_email,
         traefik_version=traefik_version,
