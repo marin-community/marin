@@ -46,6 +46,7 @@ from experiments.grug.moe.optimizer import GrugMoeMuonHConfig
 from experiments.grug.moe.train import GrugEvalConfig, GrugRunConfig, GrugTrainerConfig, run_grug
 
 
+@OptimizerConfig.register_subclass("grug_moe_muonh_resume")
 @dataclass(frozen=True)
 class GrugMoeMuonHResumeConfig(GrugMoeMuonHConfig):
     """MuonH config with a piecewise LR schedule for a BS-ramp resume.
