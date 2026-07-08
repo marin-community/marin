@@ -4,24 +4,25 @@
 
 # /// script
 # requires-python = ">=3.12"
-# dependencies = ["pandas", "pyarrow", "numpy"]
+# dependencies = ["pandas", "pyarrow"]
 # ///
-"""Token accounting: denominators, cost-model validation, calibration.
+"""Denominators, the output-fidelity diagnostic, and the per-session amplifier.
 
-Answers three questions the uplift estimate depends on:
+Three outputs the rest of the pipeline needs:
 
-1. **Denominators.** Total budget expressed three ways: raw distinct-input tokens,
-   base-price input-equivalents, full dollar-equivalent (incl. output). The
-   headline uplift % must name which it divides by.
-2. **Cost-model validation.** Does `billed(C,t,T)=1.25C+0.10C(T-t)` describe the
-   data? We compare the *observed* amortization ratio (Σcache_read/Σcache_creation)
-   to the ratio implied by the visible body blocks under the turn-lifetime model.
-   The chars/4 proxy cancels in that ratio, so it is a clean structural check.
-3. **Calibration + prelude residual.** Use chars/4 (k=1.0) as the content proxy;
-   the output_tokens ratio is reported only as a diagnostic (it reveals that
-   thinking is not persisted). Estimate the fixed-prelude share of cache_creation
-   as a residual — reported with the TTL-recreation and warm-start caveats, not
-   asserted.
+1. **Denominators.** The budget expressed three ways: raw distinct-input tokens,
+   base-price input-equivalents (the headline denominator), and full
+   dollar-equivalent including output. Any uplift % must name which it divides by.
+2. **Output-fidelity diagnostic.** `real_output / est(text+thinking+tool_use)`
+   comes out ~13x. That is not a tokenization factor — it is evidence that thinking
+   blocks are billed but largely absent from the stored transcript, which is why we
+   anchor the budget decomposition on usage records, not the chars/4 proxy.
+3. **Per-session amplifier** `A_S = cache_read_S / cache_creation_S`, exported to
+   `session_amplifier.parquet` and used to price each saved chunk with its own
+   session's realized re-read multiple.
+
+The by-class budget split, prelude decomposition, and eviction measurement live in
+`budget_decomposition.py`.
 """
 import argparse
 import json
@@ -34,8 +35,6 @@ P_WRITE = 1.25  # 5m cache write
 P_READ = 0.10  # cache read
 P_IN = 1.0  # uncached input
 P_OUT = 5.0  # output (Opus list ratio; parameterized for sensitivity)
-
-BODY_BLOCKS = {"tool_result", "user_text", "text", "thinking", "tool_use"}
 
 
 def load(data_dir):
@@ -64,110 +63,28 @@ def denominators(turns):
     }
 
 
-def calibrate(blocks, turns):
-    """Content-token proxy factor + a diagnostic that reveals missing thinking.
-
-    We use k=1.0 (chars/4 is the standard proxy; ~3.5-4 chars/token for code+prose)
-    with a sensitivity band. We deliberately do NOT anchor k on output_tokens: the
-    ratio real_output / est(text+thinking+tool_use) comes out ~13x, which is not a
-    tokenization factor — it is evidence that **thinking blocks are largely absent
-    from the stored transcript** while the model was still billed for generating
-    them. We report that ratio as a diagnostic (and threat-to-validity), not a
-    calibration.
-    """
+def output_fidelity(blocks, turns):
+    """Diagnostic: how much generated (billed) output is missing from the transcript."""
     gen = blocks[blocks.block_type.isin(["text", "thinking", "tool_use"])]
     est_out = gen.est_tokens.sum()
     real_out = turns.output_tokens.sum()
     return {
-        "k_chars_to_tokens": 1.0,
-        "k_sensitivity_band": [0.9, 1.2],
-        "output_ratio_diagnostic": round(real_out / max(est_out, 1), 2),
+        "output_ratio_real_over_est": round(real_out / max(est_out, 1), 2),
         "est_visible_generated_tokens": int(est_out),
         "real_output_tokens": int(real_out),
-        "note": (
-            "output_ratio>>1 => thinking not fully persisted; output-token "
-            "re-derivation savings are therefore under-observed, not measurable here."
-        ),
+        "note": "ratio >> 1 => thinking billed but not persisted; output-side re-derivation savings are under-observed",
     }
 
 
-def validate_model(blocks, turns):
-    """Structural check of the amortization law, per session then aggregated.
-
-    For each session: modeled_create = Σ est_tokens(body); modeled_read =
-    Σ est_tokens*(n_turns - first_paid_turn) capped at >=0. Compare the ratio
-    modeled_read/modeled_create against observed cache_read/cache_creation. The
-    chars->token factor cancels within the ratio, so this check is proxy-free.
-    """
-    body = blocks[blocks.block_type.isin(BODY_BLOCKS)].copy()
-    nt = turns.groupby("session_id").turn_idx.max().rename("n_turns")
-    body = body.join(nt, on="session_id")
-    body["remaining"] = (body["n_turns"] - body["first_paid_turn"]).clip(lower=0)
-    body["m_create"] = body["est_tokens"]
-    body["m_read"] = body["est_tokens"] * body["remaining"]
-    per = body.groupby("session_id").agg(m_create=("m_create", "sum"), m_read=("m_read", "sum")).reset_index()
-    act = (
+def session_amplifier(turns):
+    """Per-session realized re-read multiple A_S = cache_read / cache_creation."""
+    per = (
         turns.groupby("session_id")
         .agg(a_create=("cache_creation", "sum"), a_read=("cache_read", "sum"), n_turns=("turn_idx", "max"))
         .reset_index()
     )
-    per = per.merge(act, on="session_id")
-    per["modeled_ratio"] = per.m_read / per.m_create.clip(lower=1)
-    per["observed_ratio"] = per.a_read / per.a_create.clip(lower=1)
-    # aggregate (token-weighted) ratios
-    agg = {
-        "modeled_full_retention_read_over_create": round(per.m_read.sum() / max(per.m_create.sum(), 1), 2),
-        "observed_read_over_create": round(per.a_read.sum() / max(per.a_create.sum(), 1), 2),
-        "interpretation": (
-            "Full-retention model overcounts reads ~12x because it "
-            "assumes every chunk survives to session end (ignores "
-            "compaction + 1h-TTL eviction). Spearman shows it RANKS "
-            "sessions correctly, so we keep per-session shape but "
-            "GROUND the read multiple on each session's OBSERVED "
-            "amplifier in the uplift model, not on (T-t)."
-        ),
-    }
-    # correlation across sessions with >=5 turns (where amortization is meaningful)
-    sub = per[per.n_turns >= 5]
-    if len(sub) > 10:
-        # Spearman = Pearson of ranks (avoids a scipy dependency).
-        agg["ratio_spearman_ge5turns"] = round(sub.modeled_ratio.rank().corr(sub.observed_ratio.rank()), 3)
-        agg["n_sessions_ge5turns"] = len(sub)
     per["observed_amplifier"] = per.a_read / per.a_create.clip(lower=1)
-    return agg, per
-
-
-def prelude_residual(blocks, turns, k):
-    """cache_creation not explained by visible body = prelude + TTL re-creation.
-
-    body_create_est = k * Σ est_tokens(body). residual = actual_creation - that.
-    Also measure warm starts: first-turn cache_read>0 means the prelude prefix was
-    already cached. eph_1h vs eph_5m indicates long-TTL prelude caching.
-    """
-    body = blocks[blocks.block_type.isin(BODY_BLOCKS)]
-    body_est = k * body.est_tokens.sum()
-    actual_create = turns.cache_creation.sum()
-    residual = actual_create - body_est
-    # warm-start: fraction of sessions whose first turn already reads cache
-    first = turns.sort_values("turn_idx").groupby("session_id").first()
-    warm = (first.cache_read > 0).mean()
-    return {
-        "actual_cache_creation": int(actual_create),
-        "body_creation_est_calibrated": int(body_est),
-        "residual_prelude_plus_recreation": int(residual),
-        "residual_frac_of_creation": round(residual / max(actual_create, 1), 3),
-        "eph_1h_frac_of_creation": round(turns.eph_1h.sum() / max(actual_create, 1), 3),
-        "eph_5m_frac_of_creation": round(turns.eph_5m.sum() / max(actual_create, 1), 3),
-        "warm_start_session_frac": round(float(warm), 3),
-        "mean_prelude_per_session": int(residual / max(turns.session_id.nunique(), 1)),
-    }
-
-
-def tool_result_breakdown(blocks, k):
-    tr = blocks[blocks.block_type == "tool_result"]
-    by = (tr.groupby("tool_name").est_tokens.sum() * k).sort_values(ascending=False)
-    total = by.sum()
-    return {name: {"tokens": int(v), "pct": round(100 * v / max(total, 1), 1)} for name, v in by.head(12).items()}
+    return per
 
 
 def main():
@@ -177,26 +94,17 @@ def main():
     args = ap.parse_args()
     blocks, turns = load(args.data)
 
-    cal = calibrate(blocks, turns)
-    k = cal["k_chars_to_tokens"]
-    dn = denominators(turns)
-    val, per = validate_model(blocks, turns)
-    pre = prelude_residual(blocks, turns, k)
-    trb = tool_result_breakdown(blocks, k)
-
+    per = session_amplifier(turns)
     result = {
         "n_sessions": int(turns.session_id.nunique()),
         "n_turns": len(turns),
         "price_multipliers": {"write": P_WRITE, "read": P_READ, "input": P_IN, "output": P_OUT},
-        "denominators": dn,
-        "calibration": cal,
-        "cost_model_validation": val,
-        "prelude": pre,
-        "tool_result_tokens_by_tool": trb,
+        "denominators": denominators(turns),
+        "output_fidelity": output_fidelity(blocks, turns),
+        "amplifier_median_session": round(float(per.observed_amplifier.median()), 2),
     }
     with open(args.out, "w") as fh:
         json.dump(result, fh, indent=2)
-    # per-session observed amplifier, consumed by uplift.py to price saved chunks.
     amp_path = os.path.join(args.data, "session_amplifier.parquet")
     per[["session_id", "n_turns", "a_create", "a_read", "observed_amplifier"]].to_parquet(amp_path, index=False)
 

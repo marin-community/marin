@@ -380,3 +380,90 @@ pattern and dropped them from the addressable pool. Fixed to prefix a `grep`/
 targets, 60K→97K input-equiv (native `glob lib/**/*.py` repeats now counted). RAG
 net stays ~0.001–0.002% and the headline is unchanged — the RAG≈0 conclusion is
 robust to the bug. Report numbers updated.
+
+## M6 — Redo after user critique (2026-07-08)
+
+User rejected the v1 analysis on four points; all four were correct.
+
+1. **"Cutting tool calls cuts the re-read conversation too."** v1 framed the tool
+   surface as a disjoint 7.8% of budget. That was wrong twice over: `est_tokens`
+   (chars/4) undercounts real billed tokens ~8.6x (tool results are truncated in
+   storage, thinking is stripped, images cost tokens with ~0 chars), and the
+   per-block carry capped reads at the median-2 amplifier while the budget lives
+   in high-amplifier mega-sessions. Rebuilt on **ground-truth usage**
+   (`budget_decomposition.py`): the budget is 72.3% cache-read / 26.5% write /
+   1.2% input, and splits as conversation-carry 58.1% + new-content-write 23.8% +
+   prelude-carry 14.2% + prelude-write 2.7% + input 1.2%. Tool content is ≥57% of
+   conversation mass → **tool-addressable surface ≈ 59% of budget (lower bound)**,
+   not 7.8%. The v1 headline was wrong by ~6x.
+2. **Prelude components.** Decomposed: median prelude 23.4k tok = harness
+   system+tools+skills 80.4% (not in transcript; measured as residual) + AGENTS.md
+   9.0% + MEMORY.md index 10.6%. Marin controls ~20% (~4.6k tok), re-read every
+   turn.
+3. **Eviction direction.** v1 said TTL eviction makes carry cheaper — backwards.
+   Eviction turns a 0.10x read into a 1.25x rewrite (12.5x more). Measured real
+   eviction (turns after >5min gap) = 1.1% of budget; small because turns are
+   mostly <1min apart. TTL is harness-fixed (user confirmed we cannot change it);
+   the lever is prefix SIZE, which cuts read AND eviction cost. So amplifier-priced
+   savings are a conservative floor.
+4. **Semantic, not syntactic.** The `ADDRESSABLE_SHAPES` allowlist + hash-churn
+   proxy cannot tell why a call happened or whether a substitute would answer it.
+   Replacing it with a labeled dataset: sample tool-call episodes, have haiku/sonnet
+   sub-agents label intent + best substitute + coverage (sufficient?) + size ratio,
+   join back to ground-truth token cost, price with the session amplifier. Coverage
+   priced by clustering episodes on a proposed wiki-topic slug. (in progress)
+
+## M7 — Semantic pipeline built + preliminary numbers (2026-07-08)
+
+- `sample_episodes.py`: 13,274 gather-tool episodes across 2,237 sessions; PPS
+  sample of 2,000 by amplified carry cost (226 certainty units). Shards to
+  `_data/episode_batches/`.
+- Labeling workflow `label-tool-episodes` (Workflow tool): 134 Haiku 4.5 batches
+  + 10 Sonnet 5 validation batches. First launch failed (`args` arrived as a JSON
+  string — `args.val_batches.map` on undefined); fixed with a defensive
+  `typeof args === 'string' ? JSON.parse(args) : args` and relaunched (w7lfthcmf).
+- `semantic_analysis.py`: joins labels to PPS weights + the ground-truth tool
+  anchor. Preliminary (on ~70/134 batches):
+  - Irreducible (`none`): ~41% of the tool surface (volatile/compute/read-own-output).
+  - Per-episode potential: ~37% of tool surface = ~22% of budget (a ceiling).
+  - **Realizable ~14% of budget**, split: automatic (semantic index + better tools
+    + result compaction) 10.0%, authored repo-map/docs 3.4%, authored wiki/memory
+    only 0.8% after the recurrence gate (8 of 311 proposed topics recur across ≥2
+    sessions — a lower bound, slugs fragment).
+- Flips the v1 recommendation: the realizable winner is an automatic semantic code
+  index + better tool defaults + result compaction, NOT a hand-authored wiki.
+  Wiki has high per-episode potential but low realizable yield because durable-fact
+  lookups are mostly one-off in this single-user corpus.
+- TODO before final: (1) cluster the 311 topic slugs semantically for a fairer
+  recurrence range; (2) fold in Sonnet validation agreement to bound labeler
+  optimism; (3) fill REPORT §5.3/§6/§7 + Appendix C.
+
+## M8 — Final results + report as paper (2026-07-08)
+
+Full label set (144 agents, 0 errors, 7.7M subagent tokens, ~24min). Numbers:
+- Tool surface ≥59.1% of budget; **49.8% irreducible** (`none`).
+- Savings concentrate in durable code-navigation (understand-usage +
+  explore-structure + locate-definition + read-docs = ~40% of tool surface,
+  54–68% addressable). git/PR inspection, test runs, verify-own-changes,
+  read-own-output are mostly irreducible.
+- Per-episode potential: 18.5% budget (haiku) / 9.6% (sonnet-calibrated).
+- **Sonnet validation is the key calibration**: 150 episodes re-labeled, mean
+  saved_frac 0.149 (sonnet) vs 0.287 (haiku) → ratio 0.519; addressable-vs-none
+  agreement 0.667. Lead with sonnet-calibrated, keep haiku as optimistic bound.
+- Realizability (calibrated): automatic index+tools+compaction 4.65%, authored
+  repo-map/docs 1.40%, authored wiki/memory 0.30% (per-fact slug) → 2.96%
+  (per-subsystem doc). **Realizable total ~6–9% of budget.**
+- Recurrence gate: 569 raw slugs → 126 maintainable-doc clusters (Sonnet pass);
+  70 recur across ≥2 sessions (top subsystems in 8–17 sessions each). Per-fact
+  wiki does NOT pay back (556/569 one-off); per-subsystem architecture docs do.
+- Top realizable lever: automatic semantic code index (~3.5% alone). Largest
+  structural lever (context hygiene in the top-100 sessions holding 70% of budget)
+  is outside the supermemory framing and unquantified — the harness already
+  compacts aggressively (amplifier 34× vs naive full-retention).
+
+Cleanup: deleted `redundancy.py`/`uplift.py` (syntactic pools, superseded by the
+semantic pipeline); slimmed `token_accounting.py` to denominators + output-fidelity
+diagnostic + amplifier export (dropped the flawed full-retention comparison that
+carried the eviction mis-statement). Report rewritten as a paper: TL;DR, cost
+model, ground-truth decomposition, labeling method, results, ranked recommendations,
+threats, reproduction, appendices A–C, two mermaid diagrams.
