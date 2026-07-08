@@ -30,6 +30,7 @@ from marin.experiment.namespacing import user_namespaced_name
 from marin.training.training import LevanterCheckpoint
 from rigging.filesystem import prefix_join
 
+from experiments.datasets.paloma import paloma_datasets
 from experiments.datasets.uncheatable import uncheatable_datasets
 from experiments.grug.moe.heuristic import MoeHeuristic
 from experiments.grug.moe.launch import GrugMoeLaunchConfig, env_int, run_grug_moe_trial
@@ -419,10 +420,10 @@ def build_datakit_checkpoint(*, version: str = "dev") -> ArtifactStep[LevanterCh
         optimizer = dataclasses.replace(SCALE_OPTIMIZER, learning_rate=lr)
 
     name = f"grug-moe-datakit-d{model.hidden_dim}-L{model.num_layers}-e{model.num_experts}-r{replicas}"
-    # uncheatable_eval only: its caches are materialized on CoreWeave (paloma's are incomplete
-    # stubs there). Eval components are built directly from the handles' identity paths, so the
-    # handles are used only for their name/version -- not as deps to materialize.
-    val_handles = [*uncheatable_datasets().values()]
+    # paloma + uncheatable_eval, both materialized on CoreWeave. Eval components are built
+    # directly from the handles' identity paths, so the handles are used only for their
+    # name/version -- not as deps to materialize (the lazy executor would rebuild otherwise).
+    val_handles = [*paloma_datasets().values(), *uncheatable_datasets().values()]
 
     def build_config(ctx: StepContext) -> GrugMoeLaunchConfig:
         if use_wandb:
