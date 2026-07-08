@@ -330,6 +330,27 @@ def test_storage_path_glob_local(tmp_path):
     assert all(m.is_local for m in StoragePath(str(tmp_path / "sub" / "*.txt")).glob())
 
 
+def test_storage_path_expand_glob_keeps_named_literals(tmp_path):
+    """expand_glob globs magic members but keeps plain literals whether or not they exist."""
+    sub = StoragePath(str(tmp_path / "sub"))
+    sub.mkdirs()
+    (sub / "train.jsonl").write_text("x")
+
+    # A brace of pure literals with one member absent: glob() drops the miss, expand_glob keeps it.
+    pattern = StoragePath(str(tmp_path / "sub" / "{train,extra}.jsonl"))
+    assert sorted(str(m) for m in pattern.glob()) == [str(tmp_path / "sub" / "train.jsonl")]
+    assert sorted(str(m) for m in pattern.expand_glob()) == [
+        str(tmp_path / "sub" / "extra.jsonl"),
+        str(tmp_path / "sub" / "train.jsonl"),
+    ]
+
+    # A magic member still resolves against the filesystem; a non-match contributes nothing.
+    assert [str(m) for m in StoragePath(str(tmp_path / "sub" / "*.jsonl")).expand_glob()] == [
+        str(tmp_path / "sub" / "train.jsonl")
+    ]
+    assert StoragePath(str(tmp_path / "sub" / "*.missing")).expand_glob() == []
+
+
 def test_storage_path_ls_and_isfile_local(tmp_path):
     """ls lists immediate children as reopenable paths; isfile distinguishes files from dirs."""
     root = StoragePath(str(tmp_path / "d"))

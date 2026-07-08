@@ -505,7 +505,9 @@ def _mk_shard_name_mapping(urls):
     missing_urls: List[str] = []
 
     def _expand_or_placeholder(url):
-        expanded = [str(m) for m in StoragePath(url).glob()]
+        # expand_glob keeps a named-but-absent literal (so it warns/fails below rather
+        # than vanishing); the fallback keeps an all-glob spec that matched nothing.
+        expanded = [str(m) for m in StoragePath(url).expand_glob()]
         return expanded if expanded else [url]
 
     urls = [globbed for url in urls for globbed in _expand_or_placeholder(url)]

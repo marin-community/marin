@@ -170,9 +170,11 @@ cross-region transfer budget, `mirror://` is not resolved, and S3/R2 filesystems
 build without the finite timeouts that stop a dead socket from wedging a shard
 (#6487). Each `fs, path = url_to_fs(url); fs.<op>(path)` also re-derives the
 protocol split by hand and drifts. `StoragePath` carries the guarded verbs — `exists`,
-`isfile`, `isdir`, `size`, `mtime`, `ls`, `walk`, `glob`, `mkdirs`, `rm`, `rmtree`,
-`rename`, `open`, `read_text`/`write_text`/`read_bytes`/`write_bytes`, and
+`isfile`, `isdir`, `size`, `mtime`, `ls`, `walk`, `glob`, `expand_glob`, `mkdirs`, `rm`,
+`rmtree`, `rename`, `open`, `read_text`/`write_text`/`read_bytes`/`write_bytes`, and
 `download_to`/`upload_from` — so a path opens, lists, and stats through one type.
+(`glob` matches patterns and drops non-matches; `expand_glob` resolves a shard spec,
+keeping an explicitly named literal even when it is absent.)
 
 **When allowed:** Byte-range reads (`fs.cat_file(path, start, end)`); bulk detail
 listing (`fs.ls(path, detail=True)` for a browser/report); an `fs` built with a

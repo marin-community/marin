@@ -10,7 +10,6 @@ from dataclasses import dataclass
 from functools import cached_property
 from typing import Any, Dict, Iterator, List, Mapping, Optional, Sequence, Tuple, cast
 
-import braceexpand
 import datasets
 import equinox as eqx
 import haliax as hax
@@ -202,14 +201,7 @@ class AudioDatasetSourceConfig:
         else:
             raise ValueError(f"Unknown split {split}")
 
-        def fsspec_expand_glob(url):
-            if "*" in url:
-                return [str(p) for p in StoragePath(url).glob()]
-            else:
-                return [url]
-
-        urls = [globbed for pat in urls for url in braceexpand.braceexpand(pat) for globbed in fsspec_expand_glob(url)]
-        return urls
+        return [str(m) for pat in urls for m in StoragePath(pat).expand_glob()]
 
 
 @dataclass

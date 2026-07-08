@@ -35,6 +35,7 @@ import contextlib
 import contextvars
 import dataclasses
 import functools
+import glob
 import logging
 import os
 import pathlib
@@ -523,17 +524,38 @@ class StoragePath:
         fs.makedirs(path, exist_ok=exist_ok)
 
     def glob(self) -> list["StoragePath"]:
-        """Expand this path as a glob pattern into the matching paths.
+        """Match this glob pattern against the filesystem.
 
-        Brace-expands first (``{a,b}``), then globs each candidate and reattaches the
-        filesystem's protocol so every result is a reopenable :class:`StoragePath`. A
-        non-magic literal is existence-checked (matches when present, drops when absent);
-        no match yields an empty list. Local matches stay scheme-less.
+        Brace-expands first (``{a,b}``), then globs each member and reattaches the
+        filesystem's protocol so every result is a reopenable :class:`StoragePath`.
+        Every member is treated as a pattern, so one that matches nothing — a magic
+        pattern with no hits or a plain literal that is absent — contributes nothing
+        and an all-missing input yields an empty list. Local matches stay scheme-less.
+        Use :meth:`expand_glob` instead when a named-but-absent shard must be kept.
         """
         out: list[StoragePath] = []
         for pattern in braceexpand.braceexpand(str(self)):
             fs, path = url_to_fs(pattern)
             out.extend(StoragePath(_reattach_protocol(fs, match)) for match in fs.glob(path))
+        return out
+
+    def expand_glob(self) -> list["StoragePath"]:
+        """Resolve this shard specification into concrete paths, keeping named literals.
+
+        Brace-expands first (``{a,b}``, ``{1..8}``); a member carrying glob magic
+        (``*``, ``?``, ``[``) is matched against the filesystem, while a plain literal
+        is kept as-is whether or not it exists. This is the difference from :meth:`glob`:
+        an explicitly named but missing shard is preserved — so the caller can surface it
+        — rather than silently dropped. A magic member that matches nothing still yields
+        nothing.
+        """
+        out: list[StoragePath] = []
+        for member in braceexpand.braceexpand(str(self)):
+            fs, path = url_to_fs(member)
+            if glob.has_magic(path):
+                out.extend(StoragePath(_reattach_protocol(fs, match)) for match in fs.glob(path))
+            else:
+                out.append(StoragePath(member))
         return out
 
     def open(self, mode: str = "rb", **kwargs: Any) -> "fsspec.core.OpenFile":
