@@ -154,6 +154,10 @@ def _parse_local_device_ids(raw: str | None) -> list[int] | None:
     return [int(part) for part in raw.split(",") if part]
 
 
+def _tpu_runtime_requested(pjrt_device: str, jax_platforms: str) -> bool:
+    return pjrt_device.upper() == "TPU" or "tpu" in {platform.strip().lower() for platform in jax_platforms.split(",")}
+
+
 class _CoordinatorRole(StrEnum):
     """How a supervised rank obtains the JAX coordinator address."""
 
@@ -238,9 +242,9 @@ def initialize_jax(
     initialization is skipped — JAX works correctly without distributed
     init when there is only one process.
 
-    On TPU, JAX handles coordinator discovery via the TPU runtime, so this
-    function calls ``jax.distributed.initialize()`` with no arguments and
-    returns — the TPU runtime supplies all necessary addresses automatically.
+    Iris TPU jobs also use the Iris endpoint registry. Relying on TPU runtime
+    autodiscovery inside Iris can leave multi-slice tasks without matching
+    process rank and world-size arguments.
 
     Args:
         port: Coordinator port. Overridden by IRIS_PORT_jax if allocated.
@@ -269,17 +273,6 @@ def initialize_jax(
         logger.info("jax.distributed already initialized; skipping")
         return
 
-    # TPU has its own coordinator discovery via the TPU runtime, so avoid the
-    # Iris endpoint dance. We still call JAX distributed initialization to
-    # create the host-side distributed client used by Levanter multihost
-    # utilities. levanter.distributed delegates here when running under Iris
-    # (see lib/levanter/src/levanter/distributed.py initialize_distributed),
-    # so this is the single init site on the Iris+TPU path.
-    if os.environ.get("PJRT_DEVICE", "").upper() == "TPU" or os.environ.get("JAX_PLATFORMS", "") == "tpu":
-        logger.info("TPU detected; initializing JAX distributed via TPU runtime autodiscovery")
-        jax.distributed.initialize()
-        return
-
     job_info = get_job_info()
     _log_jax_bootstrap_inputs(job_info, port=port, endpoint_name=endpoint_name)
 
@@ -300,6 +293,9 @@ def initialize_jax(
         return
 
     if job_info is None:
+        if _tpu_runtime_requested(os.environ.get("PJRT_DEVICE", ""), os.environ.get("JAX_PLATFORMS", "")):
+            logger.info("TPU detected outside Iris job context; initializing JAX distributed via TPU runtime")
+            jax.distributed.initialize()
         return
 
     if job_info.num_tasks <= 1:
