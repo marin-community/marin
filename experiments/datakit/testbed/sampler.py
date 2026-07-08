@@ -27,6 +27,7 @@ Design choices:
   against ``RAW_TARGET_TOTAL_TOKENS_B`` via :func:`proportional_sample_fractions`.
 """
 
+import hashlib
 import logging
 import math
 import os
@@ -40,7 +41,7 @@ from marin.datakit.sources import DatakitSource, all_sources
 from marin.execution.artifact import read_artifact
 from marin.execution.remote import remote
 from marin.execution.step_spec import StepSpec
-from rigging.filesystem import StoragePath, url_to_fs
+from rigging.filesystem import StoragePath, marin_prefix, url_to_fs
 
 from experiments.datakit.testbed.settings import RAW_TARGET_TOTAL_TOKENS_B
 
@@ -325,16 +326,45 @@ def sample_normalized_shards_step(
     )
 
 
+def _size_tag(target_total_tokens_b: float) -> str:
+    """Short human label for a token target: ``1000.0`` -> ``1t``, ``100.0`` -> ``100b``."""
+    tb = target_total_tokens_b
+    if tb >= 1000 and tb % 1000 == 0:
+        return f"{int(tb // 1000)}t"
+    return f"{int(tb)}b" if tb == int(tb) else f"{tb:g}b"
+
+
+def _sample_root(target_total_tokens_b: float, fractions: dict[str, float]) -> str:
+    """Per-size output root ``{MARIN_PREFIX}/datakit/sample_{tag}_{hash}``.
+
+    ``hash`` is a deterministic digest of the token target and every source's
+    sample fraction, so a testbed size is content-addressed: change the target,
+    the source set, or any source's token count (which shifts the fractions) and
+    the whole sample lands at a fresh root. All sources for a size share the one
+    root and nest under it by name (``.../sample_1t_<hash>/<source>/``).
+    """
+    key = repr((round(target_total_tokens_b, 6), tuple(sorted((n, round(f, 12)) for n, f in fractions.items()))))
+    digest = hashlib.sha256(key.encode()).hexdigest()[:8]
+    return f"{marin_prefix()}/datakit/sample_{_size_tag(target_total_tokens_b)}_{digest}"
+
+
 def _sample_step_for(
     src: DatakitSource,
     normalized: StepSpec,
     sample_fraction: float,
+    output_root: str,
 ) -> StepSpec:
-    """Per-source post-normalize sampler. Copies first ceil(N * fraction) shards."""
+    """Per-source post-normalize sampler. Copies first ceil(N * fraction) shards.
+
+    Step name stays ``data/datakit/normalized/{src.name}`` (consumers map
+    sources by step name), while the data is routed under the shared per-size
+    ``output_root`` via ``override_output_path``.
+    """
     return sample_normalized_shards_step(
         name=f"data/datakit/normalized/{src.name}",
         normalized=normalized,
         sample_fraction=sample_fraction,
+        override_output_path=f"{output_root}/{src.name}",
     )
 
 
@@ -350,10 +380,11 @@ def build_testbed_steps(
     Each :class:`DatakitSource` already carries its full
     ``(download, ..., normalize)`` :class:`StepSpec` chain; this function
     appends the testbed-specific sample stage on top of every source's
-    terminal normalize step. Sample outputs land at hashed paths
-    (``data/datakit/normalized/{src.name}-{hash}/``) — the hash incorporates
-    ``sample_fraction`` so different fractions don't collide. Tokenize
-    runs in the training executor graph (see
+    terminal normalize step. All sample outputs for a size land under one
+    content-addressed root ``{MARIN_PREFIX}/datakit/sample_{tag}_{hash}/`` and
+    nest under it by source name (see :func:`_sample_root`); the ``hash``
+    covers the token target + every source's fraction, so different sizes never
+    collide. Tokenize runs in the training executor graph (see
     :mod:`experiments.datakit.testbed.train`), not the ferry.
 
     Args:
@@ -376,6 +407,7 @@ def build_testbed_steps(
         raise ValueError("build_testbed_steps requires at least one source")
 
     fractions = proportional_sample_fractions(sources, target_total_tokens_b=target_total_tokens_b)
+    output_root = _sample_root(target_total_tokens_b, fractions)
 
     # Flat list of every source's normalize chain + terminal sample step.
     # StepRunner walks transitive deps and dedupes by output_path, so shared
@@ -384,12 +416,13 @@ def build_testbed_steps(
     all_steps: list[StepSpec] = []
     for src in sources:
         all_steps.extend(src.normalize_steps)
-        all_steps.append(_sample_step_for(src, src.normalized, fractions[src.name]))
+        all_steps.append(_sample_step_for(src, src.normalized, fractions[src.name], output_root))
 
     logger.info(
-        "Built testbed DAG: %d sources, %d steps (normalize chains + sample), target %.0fB tokens",
+        "Built testbed DAG: %d sources, %d steps (normalize chains + sample), target %.0fB tokens -> %s",
         len(sources),
         len(all_steps),
         target_total_tokens_b,
+        output_root,
     )
     return all_steps
