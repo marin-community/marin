@@ -38,7 +38,7 @@ from typing import Any, TypeVar
 
 import cloudpickle
 import psutil
-from rigging.filesystem import open_url
+from rigging.filesystem import StoragePath
 
 from zephyr import counters
 from zephyr.plan import Scatter, StageContext, run_stage
@@ -105,8 +105,7 @@ class _InProcessWorkerContext:
         if name not in self._shared_data_cache:
             path = _shared_data_path(self._chunk_prefix, self._execution_id, name)
             logger.info("Loading shared data '%s' from %s", name, path)
-            with open_url(path, "rb") as f:
-                self._shared_data_cache[name] = cloudpickle.loads(f.read())
+            self._shared_data_cache[name] = cloudpickle.loads(StoragePath(path).read_bytes())
         return self._shared_data_cache[name]
 
     def set_counter(self, name: str, value: int | float, stage: str | None = None) -> None:

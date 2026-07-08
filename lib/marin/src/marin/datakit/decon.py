@@ -43,14 +43,13 @@ import dupekit
 import pyarrow as pa
 from fray import ResourceConfig
 from pydantic import BaseModel
-from rigging.filesystem import url_to_fs
+from rigging.filesystem import StoragePath, url_to_fs
 from zephyr import Dataset, ShardInfo, ZephyrContext, counters, write_parquet_file
 from zephyr.readers import SUPPORTED_EXTENSIONS, load_file
 
 from marin.datakit.normalize import NormalizedData
 from marin.execution.artifact import read_artifact
 from marin.execution.step_spec import StepSpec
-from marin.utils import fsspec_glob
 
 logger = logging.getLogger(__name__)
 
@@ -290,19 +289,16 @@ def _build_filter(
                 stats["n_records"] += 1
 
     # Stream the index parquet; this iteration also fills the bloom.
-    fs_idx, ip = url_to_fs(index_path)
-    idx_dir = os.path.dirname(ip)
+    idx_dir = os.path.dirname(index_path)
     if idx_dir:
-        fs_idx.makedirs(idx_dir, exist_ok=True)
+        StoragePath(idx_dir).mkdirs()
     write_parquet_file(emit_index_rows(), output_path=index_path, schema=_INDEX_SCHEMA)
 
     # Persist the populated bloom.
-    fs_bf, bp = url_to_fs(bloom_path)
-    bloom_dir = os.path.dirname(bp)
+    bloom_dir = os.path.dirname(bloom_path)
     if bloom_dir:
-        fs_bf.makedirs(bloom_dir, exist_ok=True)
-    with fs_bf.open(bp, "wb") as f:
-        f.write(bf.save_bytes())
+        StoragePath(bloom_dir).mkdirs()
+    StoragePath(bloom_path).write_bytes(bf.save_bytes())
 
     logger.info(
         "decon: built bloom + index from %d eval records (%d index rows) → bloom=%s, index=%s",
@@ -350,9 +346,7 @@ def _make_marker(
 
     def mark_shard(paths: Iterator[str], shard: ShardInfo) -> Iterator[dict[str, Any]]:
         # Load bloom once per shard.
-        fs, bp = url_to_fs(bloom_path)
-        with fs.open(bp, "rb") as f:
-            bf = dupekit.Bloom.load_bytes(f.read())
+        bf = dupekit.Bloom.load_bytes(StoragePath(bloom_path).read_bytes())
 
         for input_path in paths:
 
@@ -456,7 +450,7 @@ def decon_to_parquet(
         raise ValueError("provide exactly one of eval_data_sources or prebuilt_bloom_dir")
 
     input_path = normalized_data.main_output_dir
-    files = sorted(fsspec_glob(f"{input_path.rstrip('/')}/**/*.parquet"))
+    files = sorted(str(m) for m in StoragePath(f"{input_path.rstrip('/')}/**/*.parquet").glob())
     if not files:
         raise FileNotFoundError(f"No .parquet files found under {input_path}")
     num_partitions = len(files)
@@ -587,25 +581,21 @@ def merge_eval_blooms(
         raise ValueError("per_eval_bloom_dirs must be non-empty")
 
     out_bloom_path, out_index_path = bloom_paths(output_path)
-    fs_bf, bp = url_to_fs(out_bloom_path)
-    out_dir = os.path.dirname(bp)
+    out_dir = os.path.dirname(out_bloom_path)
     if out_dir:
-        fs_bf.makedirs(out_dir, exist_ok=True)
+        StoragePath(out_dir).mkdirs()
 
     # Bit-OR merge of input blooms (dupekit raises on size mismatch).
     merged: dupekit.Bloom | None = None
     for d in per_eval_bloom_dirs:
         src_bloom, _ = bloom_paths(d)
-        fs, p = url_to_fs(src_bloom)
-        with fs.open(p, "rb") as f:
-            bf = dupekit.Bloom.load_bytes(f.read())
+        bf = dupekit.Bloom.load_bytes(StoragePath(src_bloom).read_bytes())
         if merged is None:
             merged = bf
         else:
             merged.update(bf)
     assert merged is not None  # non-empty list checked above
-    with fs_bf.open(bp, "wb") as f:
-        f.write(merged.save_bytes())
+    StoragePath(out_bloom_path).write_bytes(merged.save_bytes())
 
     # Concatenate per-eval hash-index parquets, streaming row-by-row.
     src_indexes = [bloom_paths(d)[1] for d in per_eval_bloom_dirs]

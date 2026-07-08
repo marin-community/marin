@@ -10,12 +10,11 @@ import pyarrow as pa
 import pyarrow.json as pa_json
 import pyarrow.parquet as pq
 import wandb
-from rigging.filesystem import rebase_file_path
+from rigging.filesystem import StoragePath, rebase_file_path
 from zephyr import counters, write_parquet_file
 from zephyr.readers import SUPPORTED_EXTENSIONS, open_file
 
 from marin.utilities.wandb_utils import init_wandb
-from marin.utils import fsspec_glob
 
 logger = logging.getLogger(__name__)
 
@@ -59,7 +58,7 @@ def _collect_input_files(*, input_paths: str | list[str], filetypes: list[str]) 
         logger.info(f"Collecting files from path: {path}")
         path_files: list[str] = []
         for ext in filetypes:
-            path_files.extend(fsspec_glob(f"{path.rstrip('/')}/**/*.{ext}"))
+            path_files.extend(str(m) for m in StoragePath(f"{path.rstrip('/')}/**/*.{ext}").glob())
         if path_files:
             all_files.extend(path_files)
         else:

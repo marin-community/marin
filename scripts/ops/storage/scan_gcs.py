@@ -31,7 +31,6 @@ from dataclasses import field as dataclass_field
 from typing import Any
 
 import click
-import fsspec
 import google.auth
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -41,6 +40,7 @@ from iris.actor.client import ActorClient
 from iris.client import iris_ctx
 from iris.cluster.client import get_job_info
 from iris.cluster.types import Entrypoint, ResourceSpec
+from rigging.filesystem import StoragePath
 
 from scripts.ops.storage.constants import (
     ADAPTIVE_MAX_DEPTH,
@@ -157,7 +157,7 @@ def _write_parquet_to_gcs(table: pa.Table, staging_dir: str) -> str:
 
     segment_id = uuid.uuid4().hex[:12]
     path = f"{staging_dir}/objects_{segment_id}.parquet"
-    with fsspec.open(path, "wb") as f:
+    with StoragePath(path).open("wb") as f:
         pq.write_table(table, f, compression="zstd")
     return path
 
@@ -170,14 +170,13 @@ def _truncate_staging_dir(staging_dir: str) -> None:
     sees N-way duplicated (bucket, name) rows.
     """
 
-    fs, _ = fsspec.core.url_to_fs(staging_dir)
     pattern = f"{staging_dir.rstrip('/')}/objects_*.parquet"
-    existing = fs.glob(pattern)
+    existing = StoragePath(pattern).glob()
     if not existing:
         return
     print(f"Truncating {len(existing)} stale segments under {staging_dir}")
     for path in existing:
-        fs.rm(path)
+        path.rm()
 
 
 # ---------------------------------------------------------------------------

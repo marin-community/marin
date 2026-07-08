@@ -49,7 +49,7 @@
       "backend_id": "",
       "cluster": "local",
       "depth": 1,
-      "error": "Coscheduled sibling /test-user/cosched5-job/2 failed",
+      "error": "boom",
       "exit_code": null,
       "finished_at_ms": 1704067200006,
       "job_id": "/test-user/cosched5-job",

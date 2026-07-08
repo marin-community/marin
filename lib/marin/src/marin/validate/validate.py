@@ -19,7 +19,7 @@ from dataclasses import dataclass
 import draccus
 import numpy as np
 from marin.utilities.validation_utils import compute_global_mean_std, summarize_document
-from rigging.filesystem import open_url
+from rigging.filesystem import StoragePath
 from zephyr import Dataset, ZephyrContext, load_jsonl
 
 
@@ -131,8 +131,7 @@ def aggregate_and_write_metadata(shard_metadata_iter: Iterator[list[dict]], outp
         "examples": examples,
     }
 
-    with open_url(output_path, "wt") as f:
-        json.dump(metadata, f, indent=2)
+    StoragePath(output_path).write_text(json.dumps(metadata, indent=2))
 
     return {
         "path": output_path,

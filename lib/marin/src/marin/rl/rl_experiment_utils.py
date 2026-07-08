@@ -16,7 +16,6 @@ from levanter.layers.attention import AttentionBackend
 from levanter.optim import AdamConfig
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
-from levanter.utils.fsspec_utils import join_path
 from levanter.utils.mesh import MeshConfig
 from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep, StepContext
@@ -37,6 +36,7 @@ from marin.rl.rollout_storage import RolloutStorageConfig, StorageType
 from marin.rl.rollout_worker import RolloutTrackerConfig
 from marin.rl.weight_transfer import WeightTransferConfig, WeightTransferMode
 from marin.training.training import LevanterCheckpoint
+from rigging.filesystem import StoragePath
 
 logger = logging.getLogger(__name__)
 
@@ -251,8 +251,8 @@ def _build_rl_job_config(
     )
 
     tags = [*config.tags, config.model_config.name.split("/")[-1]]
-    checkpoints_path = join_path(output_path, "checkpoints")
-    rollout_storage_path = join_path(output_path, "rollouts")
+    checkpoints_path = str(StoragePath(output_path) / "checkpoints")
+    rollout_storage_path = str(StoragePath(output_path) / "rollouts")
 
     trainer_config = TrainerConfig(
         tracker=WandbConfig(

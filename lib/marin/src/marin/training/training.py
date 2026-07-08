@@ -22,7 +22,7 @@ from levanter.main.train_lm import TrainLmConfig
 from levanter.schedule import BatchSchedule
 from mergedeep import mergedeep
 from pydantic import BaseModel
-from rigging.filesystem import check_gcs_paths_same_region, marin_temp_bucket, open_url, prefix_join, url_to_fs
+from rigging.filesystem import StoragePath, check_gcs_paths_same_region, marin_temp_bucket, prefix_join, url_to_fs
 
 from marin.execution.artifact import Artifact
 from marin.processing.tokenize import read_tokenized_cache_stats
@@ -74,8 +74,7 @@ class LevanterCheckpoint(Artifact):
         path = prefix_join(self.path, _TRACKER_METRICS_FILE)
         if not url_to_fs(path, use_listings_cache=False)[0].exists(path):
             raise FileNotFoundError(f"no {_TRACKER_METRICS_FILE} for checkpoint at {self.path}")
-        with open_url(path, "r") as f:
-            lines = [line for line in f.read().splitlines() if line.strip()]
+        lines = [line for line in StoragePath(path).read_text().splitlines() if line.strip()]
         if not lines:
             raise FileNotFoundError(f"empty {_TRACKER_METRICS_FILE} at {path}")
         summary = json.loads(lines[-1]).get("summary", {})

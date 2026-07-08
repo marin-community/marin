@@ -25,7 +25,7 @@ from typing import Any
 import dupekit
 from fray import ResourceConfig
 from pydantic import BaseModel
-from rigging.filesystem import prefix_join, url_to_fs
+from rigging.filesystem import StoragePath, prefix_join, url_to_fs
 from zephyr import Dataset, ShardInfo, ZephyrContext, counters, write_parquet_file
 from zephyr.readers import SUPPORTED_EXTENSIONS, load_file
 from zephyr.writers import ThreadedBatchWriter
@@ -210,11 +210,7 @@ def _discover_files(
 
 def _compute_total_bytes(file_paths: list[str]) -> int:
     """Sum the byte sizes of all *file_paths*."""
-    total = 0
-    for path in file_paths:
-        fs, resolved = url_to_fs(path)
-        total += fs.size(resolved)
-    return total
+    return sum(StoragePath(path).size() for path in file_paths)
 
 
 def _make_whitespace_compactor(max_whitespace_run_chars: int) -> Callable[[dict[str, Any]], dict[str, Any]]:

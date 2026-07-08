@@ -40,8 +40,7 @@ from marin.datakit.sources import DatakitSource, all_sources
 from marin.execution.artifact import read_artifact
 from marin.execution.remote import remote
 from marin.execution.step_spec import StepSpec
-from marin.utils import fsspec_glob, fsspec_mkdirs
-from rigging.filesystem import url_to_fs
+from rigging.filesystem import StoragePath, url_to_fs
 
 from experiments.datakit.testbed.settings import RAW_TARGET_TOTAL_TOKENS_B
 
@@ -96,7 +95,7 @@ def _copy_shard(src: str, dst: str) -> int:
     ), f"sampler: src/dst filesystem mismatch: {src_fs.protocol!r} vs {dst_fs.protocol!r}. "
     parent = os.path.dirname(dst_path)
     if parent:
-        fsspec_mkdirs(parent, exist_ok=True)
+        StoragePath(parent).mkdirs(exist_ok=True)
     src_fs.copy(src_path, dst_path)
     size = int(src_fs.size(src_path) or 0)
     assert size > 0, f"sampler: source shard has zero size: {src}"
@@ -114,7 +113,7 @@ def _sample_rows_within_shard(src: str, dst: str, sample_fraction: float) -> tup
     dst_fs, dst_path = url_to_fs(dst)
     parent = os.path.dirname(dst_path)
     if parent:
-        fsspec_mkdirs(parent, exist_ok=True)
+        StoragePath(parent).mkdirs(exist_ok=True)
 
     with src_fs.open(src_path, "rb") as sf:
         pf = pq.ParquetFile(sf)
@@ -151,8 +150,7 @@ def _sample_rows_within_shard(src: str, dst: str, sample_fraction: float) -> tup
 
 def _parquet_num_rows(path: str) -> int:
     """Read the parquet footer at *path* and return its row count."""
-    fs, resolved = url_to_fs(path)
-    with fs.open(resolved, "rb") as f:
+    with StoragePath(path).open("rb") as f:
         return pq.ParquetFile(f).metadata.num_rows
 
 
@@ -194,7 +192,7 @@ def sample_normalized_shards(
 
     input_base = source.main_output_dir.rstrip("/")
     logger.info("sampler: starting (fraction=%.4f) %s → %s", sample_fraction, input_base, output_path)
-    shards = sorted(fsspec_glob(f"{input_base}/**/*.parquet"))
+    shards = sorted(str(m) for m in StoragePath(f"{input_base}/**/*.parquet").glob())
     if not shards:
         raise ValueError(f"No parquet shards under {input_base}")
     total = len(shards)

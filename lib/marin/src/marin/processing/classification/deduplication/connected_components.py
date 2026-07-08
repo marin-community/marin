@@ -6,9 +6,8 @@ from collections.abc import Iterator, Sequence
 from typing import Any, TypedDict
 
 import dupekit
+from rigging.filesystem import StoragePath
 from zephyr import Dataset, ShardInfo, ZephyrContext, counters, write_parquet_file
-
-from marin.utils import fsspec_glob
 
 logger = logging.getLogger(__name__)
 
@@ -26,7 +25,7 @@ def _find_last_complete_iteration(
     last_complete = -1
     last_paths: list[str] = []
     for i in range(max_iterations + 1):
-        paths = fsspec_glob(f"{output_dir}/it_{i}/*.parquet")
+        paths = [str(m) for m in StoragePath(f"{output_dir}/it_{i}/*.parquet").glob()]
         if len(paths) != expected_parquets:
             break
         last_complete = i

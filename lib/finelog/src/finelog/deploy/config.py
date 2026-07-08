@@ -54,6 +54,12 @@ class K8sDeployment:
     """Kubernetes deployment knobs."""
 
     namespace: str
+    # Kubeconfig file and context every kubectl operation binds to. Unset falls
+    # back to kubectl's own resolution (KUBECONFIG env var or ~/.kube/config);
+    # setting both makes deploys independent of the operator's environment and
+    # of the file's current-context.
+    kubeconfig: str | None = None
+    kube_context: str | None = None
     storage_class: str | None = None
     storage_gb: int = 200
     # S3-compatible endpoint (e.g. Cloudflare R2) for an `s3://` remote_log_dir.
@@ -227,6 +233,8 @@ def _build_k8s(raw: dict) -> K8sDeployment:
     priority_class_value = raw.get("priority_class_value")
     return K8sDeployment(
         namespace=raw["namespace"],
+        kubeconfig=raw.get("kubeconfig"),
+        kube_context=raw.get("kube_context"),
         storage_class=raw.get("storage_class"),
         storage_gb=int(raw.get("storage_gb", 200)),
         object_storage_endpoint=raw.get("object_storage_endpoint"),
@@ -318,4 +326,10 @@ def tunnel_target_for(cfg: FinelogConfig) -> TunnelTarget:
         )
     assert cfg.deployment.k8s is not None  # guaranteed by Deployment.__post_init__
     k8s = cfg.deployment.k8s
-    return K8sPortForwardTarget(namespace=k8s.namespace, service=cfg.name, port=cfg.port)
+    return K8sPortForwardTarget(
+        namespace=k8s.namespace,
+        service=cfg.name,
+        port=cfg.port,
+        kubeconfig=str(Path(k8s.kubeconfig).expanduser()) if k8s.kubeconfig else None,
+        context=k8s.kube_context,
+    )

@@ -7,14 +7,13 @@ import json
 import logging
 
 from fray.cluster import ResourceConfig
-from rigging.filesystem import atomic_rename, open_url, prefix_join
+from rigging.filesystem import StoragePath, atomic_rename, open_url, prefix_join
 from zephyr import Dataset, ZephyrContext
 
 from marin.datakit.download.http_session import build_retrying_session
 from marin.datakit.download.zstd_jsonl import iter_jsonl_from_zstd_stream
 from marin.datakit.normalize import normalize_step
 from marin.execution.step_spec import StepSpec
-from marin.utils import fsspec_exists
 
 logger = logging.getLogger(__name__)
 
@@ -72,7 +71,7 @@ def download_nemotron_cc(output_path: str, base_url: str = NCC_BASE_URL) -> None
 
     pipeline = (
         Dataset.from_list(all_files)
-        .filter(lambda file_info: not fsspec_exists(file_info[1]))
+        .filter(lambda file_info: not StoragePath(file_info[1]).exists())
         .map(lambda file_info: download_single_nemotron_path(file_info[0], file_info[1], base_url=base_url))
         .write_jsonl(prefix_join(output_path, ".metrics/download-{shard:05d}.jsonl"), skip_existing=True)
     )

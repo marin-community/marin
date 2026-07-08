@@ -18,7 +18,7 @@ import numpy as np
 from draccus import ChoiceRegistry, field
 from haliax import Axis
 from jaxtyping import PRNGKeyArray
-from rigging.filesystem import prefix_join
+from rigging.filesystem import StoragePath, prefix_join
 from rigging.timing import log_time
 
 import levanter
@@ -54,7 +54,6 @@ from levanter.data.text.formats import (
 from levanter.models.lm_model import LmExample
 from levanter.schedule import BatchSchedule
 from levanter.store.cache import CacheOptions, TreeCache
-from levanter.utils import fsspec_utils
 from levanter.tokenizers import MarinTokenizer, load_tokenizer as load_marin_tokenizer
 from levanter.utils.jax_utils import key_iterator
 from levanter.utils.logging import silence_transformer_nag
@@ -943,7 +942,7 @@ class LmDataConfig:
                 return name, cache, None
 
             shard_source = source.get_shard_source(split)
-            cache_exists = fsspec_utils.exists(cache_path)
+            cache_exists = StoragePath(cache_path).exists()
 
             if shard_source is None:
                 if not cache_exists:

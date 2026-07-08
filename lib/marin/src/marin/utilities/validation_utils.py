@@ -15,7 +15,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from pydantic import BaseModel
-from rigging.filesystem import open_url
+from rigging.filesystem import StoragePath
 
 logger = logging.getLogger(__name__)
 
@@ -53,8 +53,7 @@ def write_provenance_json(output_path, metadata: dict[str, Any]) -> None:
     # Dot-prefix keeps the sidecar out of data-discovery passes that match by
     # extension (e.g. ``normalize._discover_files`` would otherwise read it as
     # JSONL — see #5864).
-    with open_url(f"{output_path}/.provenance.json", "w") as f:
-        json.dump(metadata, f, indent=4, sort_keys=True)
+    StoragePath(f"{output_path}/.provenance.json").write_text(json.dumps(metadata, indent=4, sort_keys=True))
 
 
 # === Sharding Utilities ===

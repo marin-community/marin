@@ -70,6 +70,21 @@ def _make_job_info(task_index: int = 0, num_tasks: int = 1) -> JobInfo:
     )
 
 
+@pytest.fixture(autouse=True)
+def _mock_compilation_cache_config(monkeypatch: pytest.MonkeyPatch) -> None:
+    """initialize_jax() always calls configure_jax_compilation_cache() first.
+
+    Unmocked, that call resolves the real marin_prefix() on whatever host runs
+    the test; on a host where it resolves a remote gs:// path, it permanently
+    flips jax_persistent_cache_enable_xla_caches to "none" for the rest of the
+    process (no test here restores it), breaking later compilation-cache
+    tests. The tests below that exercise configure_jax_compilation_cache()
+    directly call it through their own imported reference, which this
+    module-attribute patch does not touch.
+    """
+    monkeypatch.setattr("iris.runtime.jax_init.configure_jax_compilation_cache", MagicMock())
+
+
 @patch("iris.runtime.jax_init.atexit")
 @patch("jax.distributed.initialize")
 @patch("iris.runtime.jax_init.iris_ctx")

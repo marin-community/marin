@@ -21,7 +21,7 @@ import fsspec
 import requests
 from fray import ResourceConfig
 from pydantic import BaseModel, ConfigDict
-from rigging.filesystem import marin_prefix, open_url, prefix_join, url_to_fs
+from rigging.filesystem import StoragePath, marin_prefix, open_url, prefix_join, url_to_fs
 from zephyr import Dataset, ZephyrContext, counters
 
 from marin.datakit.ingestion_manifest import (
@@ -38,7 +38,6 @@ from marin.datakit.ingestion_manifest import (
 )
 from marin.datakit.normalize import normalize_step
 from marin.execution.step_spec import StepSpec
-from marin.utils import fsspec_mkdirs
 
 logger = logging.getLogger(__name__)
 
@@ -480,7 +479,7 @@ def _write_jsonl_records(output_file: str, records: Iterable[dict[str, str]]) ->
     kept_records = 0
     bytes_written = 0
     output_dir = os.path.dirname(output_file)
-    fsspec_mkdirs(output_dir, exist_ok=True)
+    StoragePath(output_dir).mkdirs(exist_ok=True)
     with open_url(output_file, "wt", encoding="utf-8") as writer:
         for record in records:
             kept_records += 1
@@ -521,12 +520,11 @@ def _normalize_input_path(path: str) -> str:
 
 
 def _path_exists(path: str) -> bool:
-    fs, relative_path = url_to_fs(path)
-    return fs.exists(relative_path)
+    return StoragePath(path).exists()
 
 
 def _download_to_path(url: str, destination_path: str) -> None:
-    fsspec_mkdirs(os.path.dirname(destination_path), exist_ok=True)
+    StoragePath(os.path.dirname(destination_path)).mkdirs(exist_ok=True)
     logger.info("Downloading %s to %s", url, destination_path)
     with requests.get(url, stream=True, timeout=_DOWNLOAD_TIMEOUT) as response:
         response.raise_for_status()
@@ -559,7 +557,7 @@ def _stage_loghub_if_missing(destination_dir: str) -> str:
             if not relative_path:
                 continue
             destination_path = prefix_join(loghub_root, relative_path)
-            fsspec_mkdirs(os.path.dirname(destination_path), exist_ok=True)
+            StoragePath(os.path.dirname(destination_path)).mkdirs(exist_ok=True)
             with archive.open(member, "r") as reader, open_url(destination_path, "wb") as writer:
                 shutil.copyfileobj(reader, writer)
     return destination_dir
@@ -752,7 +750,7 @@ def extract_ghalogs(
     output_file_paths: dict[str, str] = {}
     for partition in DiagnosticPartition:
         partition_dir = prefix_join(output_path, partition.value)
-        fsspec_mkdirs(partition_dir, exist_ok=True)
+        StoragePath(partition_dir).mkdirs(exist_ok=True)
         output_file_paths[partition.value] = prefix_join(partition_dir, "data-00000-of-00001.jsonl")
 
     logger.info("Extracting at most %d members from %s", max_members, archive_path)
@@ -895,8 +893,7 @@ def _list_loghub_files(input_path: str, max_files: int) -> list[str]:
 
 def _iter_loghub_records(input_path: str, max_files: int) -> Iterable[dict[str, str]]:
     for log_path in _list_loghub_files(input_path, max_files):
-        with open_url(log_path, "rb") as handle:
-            record = loghub_file_to_record(log_path, handle.read())
+        record = loghub_file_to_record(log_path, StoragePath(log_path).read_bytes())
         if record is not None:
             yield record
 

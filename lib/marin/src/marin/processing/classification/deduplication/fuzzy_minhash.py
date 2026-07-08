@@ -22,14 +22,13 @@ import dupekit
 import pyarrow as pa
 from fray import ResourceConfig
 from pydantic import BaseModel
-from rigging.filesystem import prefix_join
+from rigging.filesystem import StoragePath, prefix_join
 from zephyr import Dataset, ZephyrContext, counters
 
 from marin.datakit.normalize import NormalizedData
 from marin.execution.artifact import read_artifact
 from marin.execution.step_spec import StepSpec
 from marin.processing.classification.deduplication.dedup_commons import _load_batches
-from marin.utils import fsspec_glob
 
 logger = logging.getLogger(__name__)
 
@@ -204,7 +203,7 @@ def compute_minhash_attrs(
     )
     attr_dir = prefix_join(output_path, "outputs")
 
-    source_shards = sorted(fsspec_glob(prefix_join(source.main_output_dir, "*.parquet")))
+    source_shards = sorted(str(m) for m in StoragePath(prefix_join(source.main_output_dir, "*.parquet")).glob())
     if not source_shards:
         raise FileNotFoundError(f"No parquet shards found under {source.main_output_dir}")
 

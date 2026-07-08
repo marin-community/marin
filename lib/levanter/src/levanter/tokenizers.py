@@ -34,7 +34,7 @@ import jinja2.sandbox
 from huggingface_hub import __version__ as _hf_hub_version
 from huggingface_hub import hf_hub_download, snapshot_download
 from huggingface_hub.utils import EntryNotFoundError, RepositoryNotFoundError
-from rigging.filesystem import filesystem, open_url
+from rigging.filesystem import StoragePath, filesystem, open_url
 from tokenizers import Tokenizer as HfBaseTokenizer
 
 logger = logging.getLogger(__name__)
@@ -683,8 +683,7 @@ def _fetch_file_atomic(src_url: str, dest_path: str) -> bool:
     """
     tmp = dest_path + ".tmp"
     try:
-        with open_url(src_url, "rb") as src:
-            data = src.read()
+        data = StoragePath(src_url).read_bytes()
         with open(tmp, "wb") as dst:
             dst.write(data)
         os.replace(tmp, dest_path)

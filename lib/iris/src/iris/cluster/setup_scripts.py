@@ -179,7 +179,6 @@ fi
 if [ -n "$_cudnn_cu13_version" ]; then
   echo 'restoring CUDA 13 cuDNN library precedence'
   uv pip install --python "$IRIS_VENV/bin/python" \
-    --offline \
     --link-mode symlink \
     --reinstall-package "$_cudnn_cu13_package" \
     "$_cudnn_cu13_package==$_cudnn_cu13_version"

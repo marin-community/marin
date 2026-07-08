@@ -21,12 +21,11 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
 from typing import Any
 
-import levanter.utils.fsspec_utils as fsspec_utils
 from fray.client import JobHandle, JobStatus
 from fray.current_client import _current_client_var, current_client, set_current_client
 from fray.local_backend import LocalJobHandle
 from fray.types import Entrypoint, JobRequest, ResourceConfig, create_environment
-from rigging.filesystem import open_url, url_to_fs
+from rigging.filesystem import StoragePath, url_to_fs
 from rigging.log_setup import configure_logging
 
 from marin.execution.artifact import (
@@ -89,9 +88,8 @@ def _write_executor_info(step: StepSpec) -> None:
         "dependencies": list(step.dep_paths),
         "output_path": step.output_path,
     }
-    fsspec_utils.mkdirs(step.output_path)
-    with open_url(info_path, "w") as f:
-        f.write(json.dumps(info, indent=2, cls=CustomJsonEncoder))
+    StoragePath(step.output_path).mkdirs()
+    StoragePath(info_path).write_text(json.dumps(info, indent=2, cls=CustomJsonEncoder))
 
 
 # ---------------------------------------------------------------------------

@@ -36,7 +36,7 @@ from levanter.store.cache import (
     write_levanter_cache,
 )
 from pydantic import BaseModel
-from rigging.filesystem import open_url, prefix_join, url_to_fs
+from rigging.filesystem import StoragePath, prefix_join
 from zephyr import Dataset, ZephyrContext
 from zephyr.dataset import format_shard_path
 from zephyr.readers import load_file
@@ -44,7 +44,6 @@ from zephyr.readers import load_file
 from marin.execution.artifact import read_artifact
 from marin.execution.step_spec import StepSpec
 from marin.processing.tokenize.attributes import TokenizedAttrData
-from marin.utils import fsspec_exists
 
 logger = logging.getLogger(__name__)
 
@@ -160,8 +159,7 @@ def build_from_datasets(
         """
         shard_path = format_shard_path(output_pattern, shard_info.shard_idx, shard_info.total_shards)
         if skip_existing:
-            fs = url_to_fs(shard_path)[0]
-            if fs.exists(prefix_join(shard_path, ".success")):
+            if StoragePath(prefix_join(shard_path, ".success")).exists():
                 logger.info("Skipping write, output exists: %s", shard_path)
                 yield (shard_path, None)
                 return
@@ -208,8 +206,7 @@ def write_stats_json(output_path: str, ledger: CacheLedger) -> tuple[str, dict[s
     total_tokens = ledger.field_counts.get("input_ids", 0)
     stats = {"total_tokens": total_tokens, "total_elements": ledger.total_num_rows}
     stats_path = prefix_join(output_path, ".stats.json")
-    with open_url(stats_path, "w") as f:
-        json.dump(stats, f)
+    StoragePath(stats_path).write_text(json.dumps(stats))
     return stats_path, stats
 
 
@@ -318,7 +315,7 @@ def build_levanter_store(config: BuildLevanterStoreConfig) -> LevanterStoreData:
 
 def _ledger_exists(cache_path: str) -> bool:
     """Return whether a Levanter cache ledger already exists at ``cache_path``."""
-    return fsspec_exists(ShardedCacheLayout.parse(cache_path).ledger)
+    return StoragePath(ShardedCacheLayout.parse(cache_path).ledger).exists()
 
 
 def build_levanter_store_step(

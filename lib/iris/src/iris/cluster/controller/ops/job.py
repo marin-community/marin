@@ -16,7 +16,6 @@ from iris.cluster.controller.codec import (
     proto_to_json,
 )
 from iris.cluster.controller.db import Tx
-from iris.cluster.controller.projections.attempt_counts import AttemptCountsProjection
 from iris.cluster.controller.projections.endpoints import EndpointsProjection
 from iris.cluster.controller.projections.run_templates import RunTemplatesProjection
 from iris.cluster.controller.reconcile import ReconcileState
@@ -324,18 +323,6 @@ def cancel(
     cur.caches[EndpointsProjection].remove_by_job_ids(cur, subtree)
 
 
-def purge_job(cur: Tx, job_id: JobName) -> None:
-    """Delete a job and drop its derived-count and run-template memos.
-
-    Deletions route through here rather than :func:`writes.delete_job` so a later
-    job minted with the same id cannot serve the dead job's cached counts or
-    template.
-    """
-    writes.delete_job(cur, job_id)
-    cur.caches[AttemptCountsProjection].invalidate_for_jobs(cur, [job_id])
-    cur.caches[RunTemplatesProjection].invalidate_for_job(cur, job_id)
-
-
 def remove_finished(
     cur: Tx,
     job_id: JobName,
@@ -350,7 +337,7 @@ def remove_finished(
         return False
     if job_state not in TERMINAL_JOB_STATES:
         return False
-    purge_job(cur, job_id)
+    writes.delete_job(cur, job_id)
     cur.register(
         lambda: log_event(
             "job_removed",

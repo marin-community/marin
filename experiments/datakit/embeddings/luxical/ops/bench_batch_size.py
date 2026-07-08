@@ -29,7 +29,7 @@ import time
 import numpy as np
 import pyarrow.parquet as pq
 from huggingface_hub import hf_hub_download
-from rigging.filesystem import open_url
+from rigging.filesystem import StoragePath
 
 logger = logging.getLogger(__name__)
 
@@ -125,8 +125,7 @@ def main() -> None:
         "warmup_s": warmup_s,
         "results": results,
     }
-    with open_url(RESULT_URI, "w") as f:
-        json.dump(output, f, indent=2)
+    StoragePath(RESULT_URI).write_text(json.dumps(output, indent=2))
     logger.info("Wrote results to %s", RESULT_URI)
 
 

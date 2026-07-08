@@ -16,6 +16,7 @@ import pytest
 from fsspec import AbstractFileSystem
 from jax.random import PRNGKey
 from numpy.testing import assert_allclose
+from rigging.filesystem import filesystem
 from test_utils import arrays_only, skip_if_hf_model_not_accessible, skip_if_no_torch
 from transformers import AutoModelForCausalLM
 from transformers import GPT2Config as HfGpt2Config
@@ -211,7 +212,7 @@ def test_hf_save_to_fs_spec():
 
         with tempfile.TemporaryDirectory() as tmpdir:
             # now copy the model to tmp because loading from memory doesn't work
-            fs: AbstractFileSystem = fsspec.filesystem("memory")
+            fs: AbstractFileSystem = filesystem("memory")
             fs.get("model/", f"{tmpdir}/test", recursive=True)
 
             loaded_model = converter.load_pretrained(Gpt2LMHeadModel, ref=f"{tmpdir}/test")

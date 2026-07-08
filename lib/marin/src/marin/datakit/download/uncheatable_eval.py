@@ -13,12 +13,11 @@ from dataclasses import dataclass
 from typing import Any
 
 import requests
-from rigging.filesystem import atomic_rename, open_url
+from rigging.filesystem import StoragePath, atomic_rename, open_url
 from zephyr import Dataset, ZephyrContext
 
 from marin.datakit.download.http_session import build_retrying_session
 from marin.execution.step_spec import StepSpec
-from marin.utils import fsspec_mkdirs
 
 logger = logging.getLogger(__name__)
 
@@ -246,7 +245,7 @@ def _download_and_convert_single(
     if not isinstance(payload, list):
         raise ValueError(f"Expected list in dataset {task.dataset.name}, found {type(payload).__name__}")
 
-    fsspec_mkdirs(os.path.dirname(task.output_file_path), exist_ok=True)
+    StoragePath(os.path.dirname(task.output_file_path)).mkdirs(exist_ok=True)
 
     record_count = 0
     with atomic_rename(task.output_file_path) as temp_path:
@@ -286,8 +285,7 @@ def _write_metadata(cfg: UncheatableEvalDownloadConfig, records: list[dict[str, 
     if not records:
         return
     metadata_path = posixpath.join(str(cfg.output_path), cfg.metadata_filename)
-    with open_url(metadata_path, "w", encoding="utf-8") as meta_file:
-        json.dump(records, meta_file, indent=2, ensure_ascii=False)
+    StoragePath(metadata_path).write_text(json.dumps(records, indent=2, ensure_ascii=False), encoding="utf-8")
     logger.info("Wrote metadata to %s", metadata_path)
 
 
@@ -303,7 +301,7 @@ def download_latest_uncheatable_eval(cfg: UncheatableEvalDownloadConfig) -> dict
         return {"success": False, "reason": "no_datasets"}
 
     output_path = str(cfg.output_path)
-    fsspec_mkdirs(output_path, exist_ok=True)
+    StoragePath(output_path).mkdirs(exist_ok=True)
 
     tasks, filtered_datasets = _generate_tasks(latest_datasets, cfg)
 
@@ -322,8 +320,7 @@ def download_latest_uncheatable_eval(cfg: UncheatableEvalDownloadConfig) -> dict
     output_paths = ctx.execute(pipeline).results
 
     for dataset, metadata_file in zip(filtered_datasets, output_paths, strict=True):
-        with open_url(metadata_file, "r", encoding="utf-8") as meta_file:
-            result = json.load(meta_file)
+        result = json.loads(StoragePath(metadata_file).read_text(encoding="utf-8"))
 
         try:
             metadata_records.append(
