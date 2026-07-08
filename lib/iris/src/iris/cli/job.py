@@ -27,7 +27,9 @@ from iris.cli.connect import iris_client_for_ctx, require_controller_url
 from iris.client import IrisClient
 from iris.client.client import Job, JobFailedError
 from iris.cluster.constraints import (
+    CLUSTER_CONSTRAINT_KEY,
     Constraint,
+    ConstraintOp,
     WellKnownAttribute,
     availability_constraint,
     device_variant_constraint,
@@ -539,12 +541,17 @@ def build_job_constraints(
     regions: tuple[str, ...] | None = None,
     zone: str | None = None,
     preemptible: bool | None = None,
+    target_cluster: str | None = None,
 ) -> list[Constraint]:
     """Assemble the constraint list for a submitted job.
 
     An explicit ``preemptible`` value wins over the executor heuristic:
     ``infer_preemptible_constraint`` short-circuits when any preemptible
     constraint is already present, so we append the user's choice first.
+
+    ``target_cluster``, if set, appends a ``cluster EQ <peer>`` federation
+    pin (``CLUSTER_CONSTRAINT_KEY``) that routes the whole job to the named
+    federation peer instead of scheduling it locally.
     """
     constraints: list[Constraint] = []
     if regions:
@@ -555,6 +562,8 @@ def build_job_constraints(
         constraints.append(device_variant_constraint(tpu_variants))
     if preemptible is not None:
         constraints.append(preemptible_constraint(preemptible))
+    if target_cluster:
+        constraints.append(Constraint.create(key=CLUSTER_CONSTRAINT_KEY, op=ConstraintOp.EQ, value=target_cluster))
 
     # Executor heuristic: small CPU-only CLI jobs (no accelerators, 1 replica,
     # CPU ≤ 0.5 cores, RAM ≤ 4 GiB) are auto-tagged as non-preemptible so
@@ -597,6 +606,7 @@ def run_iris_job(
     credentials: ClientCredentials | None = None,
     submit_argv: list[str] | None = None,
     dashboard_url: str | None = None,
+    target_cluster: str | None = None,
 ) -> int:
     """Core job submission logic.
 
@@ -612,6 +622,9 @@ def run_iris_job(
             that confine the job to a zone where the named accelerator can be found.
         preemptible: If True/False, force scheduling on (non-)preemptible workers
             and bypass the executor heuristic. If None (default), the heuristic runs.
+        target_cluster: If provided, federate the whole job to this peer cluster
+            instead of scheduling it locally. Distinct from the connection-level
+            ``--cluster`` option, which only selects which controller the CLI talks to.
         task_image: Optional task container image override. When None, workers use
             their cluster-configured default task image.
 
@@ -636,6 +649,7 @@ def run_iris_job(
         regions=regions,
         zone=zone,
         preemptible=preemptible,
+        target_cluster=target_cluster,
     )
 
     if reserve:
@@ -666,6 +680,8 @@ def run_iris_job(
         logger.info(f"Zone constraint: {zone}")
     if preemptible is not None:
         logger.info(f"Preemptible constraint: {preemptible}")
+    if target_cluster:
+        logger.info(f"Federating to peer cluster: {target_cluster}")
     if reserve:
         logger.info(f"Availability constraint: {', '.join(reserve)}")
     if task_image:
@@ -879,6 +895,17 @@ Examples:
 @click.option("--timeout", type=int, default=0, show_default=True, help="Job timeout in seconds (0 = no timeout)")
 @click.option("--region", multiple=True, help="Restrict to region(s) (e.g., --region us-central2). Can be repeated.")
 @click.option("--zone", type=str, help="Restrict to zone (e.g., --zone us-central2-b).")
+@click.option(
+    "--target-cluster",
+    type=str,
+    default=None,
+    help=(
+        "Federate the whole job to this peer cluster instead of scheduling it locally. "
+        "This is distinct from the top-level --cluster option, which only selects which "
+        "controller the CLI connects to; --target-cluster stays connected to that "
+        "controller and asks it to hand the job off to the named peer."
+    ),
+)
 @click.option("--extra", multiple=True, help="UV extras to install (e.g., --extra cpu). Can be repeated.")
 @click.option(
     "--sync-package",
@@ -925,8 +952,7 @@ Examples:
     type=str,
     default=None,
     help=(
-        "Override the task container image for this job. "
-        "The image must already exist in a registry visible to workers."
+        "Override the task container image for this job. The image must already exist in a registry visible to workers."
     ),
 )
 @click.option(
@@ -963,6 +989,7 @@ def run(
     timeout: int,
     region: tuple[str, ...],
     zone: str | None,
+    target_cluster: str | None,
     extra: tuple[str, ...],
     sync_package: tuple[str, ...],
     no_sync: bool,
@@ -1025,6 +1052,7 @@ def run(
             terminate_on_exit=terminate_on_exit,
             regions=region or None,
             zone=zone,
+            target_cluster=target_cluster,
             reserve=reserve or None,
             priority=priority,
             preemptible=preemptible,
