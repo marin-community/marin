@@ -54,7 +54,7 @@ storage:
 # controller ENFORCING (was null-auth): an off-cluster request reaches the
 # controller through Traefik, which appends X-Forwarded-For, so it never matches
 # a CIDR and must present a bearer token. This is the identity gate behind the
-# IP-restricted federation ingress (lib/iris/scripts/install_federation_ingress.py):
+# IP-restricted federation ingress (lib/iris/scripts/install_cw_network.py):
 # the marin controller presents a federation JWT, everything else is rejected.
 # No signing_key is needed — this cluster runs no finelog relay, so an ephemeral
 # key is fine (as on cw-us-east-02a). The federation verifier itself

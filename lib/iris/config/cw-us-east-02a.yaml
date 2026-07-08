@@ -88,7 +88,7 @@ controller:
     service_name: iris-controller-svc
     scale_group: cpu-genoa
     # Publishes ONLY /proxy off-cluster; per-endpoint auth is the gate.
-    # Prerequisites + DNS: docs/coreweave.md (scripts/install_traefik_proxy.py).
+    # Prerequisites + DNS: docs/coreweave.md (scripts/install_cw_network.py).
     public_proxy_host: iris-cw-us-east-02a.oa.dev
     tls_secret: iris-controller-proxy-tls
     # Staging first (avoids Let's Encrypt rate limits); flip to

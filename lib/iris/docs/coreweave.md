@@ -178,15 +178,19 @@ URL — possession of the link is the credential) — the same access modes as t
 GCP path. Keep `auth.provider` set (never null-auth) so `PRIVATE`/`LINK` are
 actually enforced.
 
-CKS ships no ingress controller and no TLS issuer, so two cluster-wide,
-install-once prerequisites must be in place first — install them with
-`scripts/install_traefik_proxy.py` (operator-run; dry-run without `--apply`):
+CKS ships no ingress controller and no TLS issuer, and the controller's own
+ServiceAccount can't install CRDs, so an operator runs `scripts/install_cw_network.py`
+once per cluster to set up everything the controller can't do itself — Traefik
+(CoreWeave's blessed ingress controller), cert-manager, the HTTP-01 Let's Encrypt
+issuers, and the IP-locked federation ingress (below). It is idempotent; dry-run
+without `--apply`:
 
 ```bash
-# Traefik (CoreWeave's blessed ingress controller) + cert-manager + HTTP-01 issuers.
-uv run lib/iris/scripts/install_traefik_proxy.py --cluster <name> install --acme-email you@oa.dev --apply
-# Tear it back down (releases, namespaces, CRDs/webhooks/RBAC/IngressClass), verified:
-uv run lib/iris/scripts/install_traefik_proxy.py --cluster <name> uninstall --apply
+# Traefik + cert-manager + HTTP-01 issuers + the federation route, in one pass.
+uv run lib/iris/scripts/install_cw_network.py --cluster <name> \
+    install --acme-email you@oa.dev --allow-source <marin-egress-ip> --apply
+# Tear it all back down (federation route, releases, namespaces, CRDs/webhooks/RBAC), verified:
+uv run lib/iris/scripts/install_cw_network.py --cluster <name> uninstall --apply
 ```
 
 Then configure the controller's `coreweave` block. `start_controller` reconciles
@@ -215,7 +219,7 @@ Ingress keeps only `/proxy` public.
 
 The external address is served by Traefik's LoadBalancer, not the controller
 Pod, and CoreWeave gives it a stable FQDN under `*.coreweave.app` — you never
-chase a churning IP. `install_traefik_proxy.py install --apply` prints the exact
+chase a churning IP. `install_cw_network.py install --apply` prints the exact
 CNAME record to create (`<public_proxy_host>  CNAME  <that FQDN>`); `oa.dev` DNS
 is at Namecheap, Advanced DNS panel.
 
@@ -226,7 +230,7 @@ printed off-cluster capability URLs are usable as-is). The
 and TLS are on the `oa.dev` name.
 
 TLS terminates in-cluster (no IAP/edge layer; Namecheap doesn't proxy TLS).
-`install_traefik_proxy.py` creates HTTP-01 Let's Encrypt ClusterIssuers
+`install_cw_network.py` creates HTTP-01 Let's Encrypt ClusterIssuers
 (`letsencrypt-http01-staging`, `letsencrypt-http01-prod`) validated through
 Traefik — CoreWeave's bundled issuers only cover `*.coreweave.app` (DNS-01 via
 `acme.coreweave.com`), so a custom `oa.dev` host needs these. Note: HTTP-01 needs
@@ -255,7 +259,7 @@ and neither alone sufficient:
 Because the controller is the identity gate, it **must be enforcing**. A permissive
 (null-auth) controller behind only an IP lock hands anonymous admin over its entire
 control plane to anything arriving from the allowlisted IP.
-`install_federation_ingress.py` warns loudly when its target is still permissive.
+`install_cw_network.py` warns loudly when its target is still permissive.
 `cw-us-east-02a` is enforcing (`trusted_cidrs`); `cw-rno2a` gains the same
 `trusted_cidrs` block (see below), which flips it from null-auth to enforcing so an
 off-cluster request must present a bearer.
@@ -263,35 +267,30 @@ off-cluster request must present a bearer.
 The route **reuses the controller's `iris-cw-*.oa.dev` host** rather than a
 dedicated name. Where the cluster already publishes `/proxy` (`cw-us-east-02a`),
 that world-open route keeps its own more-specific Traefik router (Traefik prefers
-the longer path match) with no allowlist, while this Ingress adds an allowlisted
-catch-all router for the rest of the surface and **reuses the existing TLS cert**.
-Where there is no `/proxy` host (`cw-rno2a`), this Ingress publishes the whole
-controller host, allowlisted, and cert-manager issues a fresh cert.
+the longer path match) with no allowlist, while the federation Ingress adds an
+allowlisted catch-all router for the rest of the surface and **reuses the existing
+TLS cert**. Where there is no `/proxy` host (`cw-rno2a`), the federation Ingress
+publishes the whole controller host, allowlisted, and cert-manager issues a fresh
+cert.
 
-**Stand it up** (after the Traefik/cert-manager prerequisites above; this reuses
-them and installs nothing cluster-wide). Dry-run without `--apply`:
+**It is installed by the same `install_cw_network.py`** shown above — the
+`--allow-source` you pass is the marin egress IP the `ipAllowList` admits. To
+reconcile just the federation route on a cluster whose stack is already installed,
+skip the stack:
 
 ```bash
-# Prints the Middleware + Ingress manifests and the pre-flight findings. The host,
-# TLS secret, and issuer default from the cluster config (reuse the /proxy cert
-# where one exists, else issue a new one).
-uv run lib/iris/scripts/install_federation_ingress.py --cluster cw-rno2a \
-    install --allow-source <marin-egress-ip>
-# Apply once the host CNAMEs to the Traefik LoadBalancer FQDN (read it with the
-# kubectl command that `install_traefik_proxy.py` prints). Staging issuer first,
-# then flip to prod:
-uv run lib/iris/scripts/install_federation_ingress.py --cluster cw-rno2a \
-    install --allow-source <marin-egress-ip> --cluster-issuer letsencrypt-http01-prod --apply
-# Tear the federation route back down (Traefik/cert-manager/`/proxy` untouched):
-uv run lib/iris/scripts/install_federation_ingress.py --cluster cw-rno2a uninstall --apply
+# Federation route only (stack already present); flip staging->prod once the cert validates.
+uv run lib/iris/scripts/install_cw_network.py --cluster cw-rno2a install \
+    --allow-source <marin-egress-ip> --skip-traefik --skip-cert-manager --skip-issuers \
+    --cluster-issuer letsencrypt-http01-prod --apply
 ```
 
-The ingress is a standalone object, so applying it does **not** restart the
-controller — the networking lands before the config change and controller restart
-that turn on enforcement. If CoreWeave's LoadBalancer SNATs (Traefik sees the LB,
-not the real client), pass `--xff-depth 1` so the allowlist reads the client IP
-from `X-Forwarded-For`; verify by confirming a request from a non-allowlisted host
-is refused (below).
+The federation Ingress + Middleware are independent objects, so applying them does
+**not** restart the controller — the networking lands before the config change and
+controller restart that turn on enforcement. If CoreWeave's LoadBalancer SNATs
+(Traefik sees the LB, not the real client), pass `--xff-depth 1` so the allowlist
+reads the client IP from `X-Forwarded-For`; verify by confirming a request from a
+non-allowlisted host is refused (below).
 
 **Verify from the marin controller VM:**
 
