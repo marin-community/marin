@@ -644,13 +644,7 @@ def _helm_release_installed(release: str, namespace: str, hflags: list[str]) -> 
 
 
 def _delete_federation_ingress(settings: NetworkSettings, kflags: list[str]) -> None:
-    """Delete the federation Ingress + Middleware in the controller namespace.
-
-    Both live in the controller namespace, not the chart namespaces, so the stack
-    teardown below would not reach the Ingress; the Middleware is a traefik.io CR
-    that the CRD sweep would remove, but deleting it explicitly keeps teardown
-    order-independent.
-    """
+    """Delete the federation Ingress and its ipAllowList Middleware from the controller namespace."""
     run(
         ["kubectl", *kflags, "delete", "ingress", _INGRESS_NAME, "-n", settings.namespace, "--ignore-not-found"],
         check=True,
