@@ -751,8 +751,19 @@ def test_port_binding_failure(mock_bundle_store, tmp_path):
 
 
 def _worker_with_mock_client(config, mock_bundle_store, mock_runtime):
-    """Build a Worker and attach a fake LogClient (normally built in start())."""
-    worker = Worker(config, bundle_store=mock_bundle_store, container_runtime=mock_runtime)
+    """Build a Worker and attach a fake LogClient (normally built in start()).
+
+    Injects empty ``worker_metadata`` so construction never probes host hardware
+    or the GCE metadata server: worker_id comes solely from the config, keeping
+    these tests hermetic on real cloud VMs where the metadata server would
+    otherwise infer an instance-name-derived worker_id.
+    """
+    worker = Worker(
+        config,
+        bundle_store=mock_bundle_store,
+        container_runtime=mock_runtime,
+        worker_metadata=job_pb2.WorkerMetadata(),
+    )
 
     class _FakeClient:
         def write_batch(self, key, entries):
@@ -789,15 +800,23 @@ def test_attach_log_handler_uses_worker_log_key_before_register(mock_bundle_stor
 
 
 def test_attach_log_handler_noop_without_worker_id(mock_bundle_store, mock_runtime, tmp_path):
-    """Before the worker_id is known, attach is a no-op."""
+    """Before the worker_id is known, attach is a no-op.
+
+    Hermetic on real GCP VMs: even with a reachable metadata server that would
+    resolve an instance name, the worker uses its injected metadata (see
+    ``_worker_with_mock_client``) rather than probing the host, so no worker_id
+    is inferred and the id stays unknown.
+    """
     config = WorkerConfig(
         port=0,
         port_range=(50000, 50100),
         cache_dir=tmp_path / "cache",
         default_task_image="mock-image",
     )
-    worker = _worker_with_mock_client(config, mock_bundle_store, mock_runtime)
+    with patch("iris.cluster.worker.env_probe._probe_gce_instance_name", return_value="some-gce-vm"):
+        worker = _worker_with_mock_client(config, mock_bundle_store, mock_runtime)
 
+    assert worker._worker_id is None
     worker._attach_log_handler()
     assert worker._log_handler is None
 
