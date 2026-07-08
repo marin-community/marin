@@ -353,3 +353,22 @@ This is the report's central, non-obvious conclusion: *how* memory is integrated
 dominates *whether* it exists.
 
 Next (M5): fold LLM audit result; write the marin-style report; PR; close #405.
+
+---
+
+## 2026-07-08 — M5: Audit, report, PR
+
+LLM audit of the 15 hottest re-read files landed the changed-file replaceable
+fraction at **~0.17 token-weighted** (0.10/0.17/0.30), matching the model band.
+It confirmed the mechanism: reads-per-session ~1 = replaceable orientation reads;
+3–5 = within-session edit-tracing a summary can't replace; and it surfaced
+realized staleness (`executor.py`, 76 reads, no longer exists) and that
+`lazy.py`/`data.py` already carry docstrings that act as wiki entries yet are
+still re-read. Folded into `uplift.py` (`_data/audit_result.json`).
+
+Final headline (base-price input-equiv budget 3,827M): addressable ceiling
+**7.84%**; shared wiki/memory net uplift **0.18/0.28/0.46%**; RAG ~0.001%; docs
+unioned with wiki-summary; prelude carry **14.8%**; top-100 sessions hold 59% of
+tool-result cost. Report written in marin report style (`REPORT.md`), published
+as weaver artifact `report`. Committed, lint-review clean, **PR #7035** open.
+Closing weaver #405.
