@@ -29,7 +29,12 @@ Grug then adds an opt-in `GrugFaultToleranceConfig`. When disabled, the loop is 
 
 Argument donation makes that abort-only contract necessary. Base and MoE Grug donate the train-state argument into the jitted step, so a failed step cannot assume the pre-step device buffers are still reusable. `live_devices` provides side-effect atomicity, not memory-state rollback: after a liveness failure the process should treat the in-memory state as poisoned and exit through the retry path.
 
-This design allows an atomic Grug-only patch to land before the transfer extraction. The shared transfer package is required before any in-memory `transfer_restore` mode or reusable JAX transfer-server backend. Dynamic reduced-device meshes also stay out of the first milestone. `compact_grug_mesh` currently reshapes all `jax.devices()`, so continuing with fewer live devices requires careful divisibility checks and data-loader behavior.
+This makes the milestone split important. M0 is a Grug-only abort-to-checkpoint change and does not require `marin.transfer`. Transfer service starts paying for itself in M1, where Grug can choose one of two recovery modes:
+
+- Turn off train-state argument donation at the recovery boundary and recover through `marin.transfer`. In this mode the old in-memory state remains eligible to publish after a failed step, but disabling donation alone is not enough: a dead rank's unique shards are gone unless they were already externalized or replicated elsewhere. The transfer backend must therefore either hold all rank-local shards from the latest committed step or be restricted to states whose shards can be reconstructed from survivors.
+- Keep donation in the hot step and periodically offload a full backup state through `marin.transfer`. Recovery uses the newest transfer payload, falling back to the durable checkpoint if no complete payload is available. This preserves the memory benefit of donation most steps, but introduces a tunable backup interval and transfer bandwidth cost.
+
+This design allows an atomic Grug-only patch to land before the transfer extraction. The shared transfer package is required before M1 transfer recovery modes or a reusable JAX transfer-server backend. Dynamic reduced-device meshes also stay out of the first milestone. `compact_grug_mesh` currently reshapes all `jax.devices()`, so continuing with fewer live devices requires careful divisibility checks and data-loader behavior.
 
 ## Testing
 
@@ -39,8 +44,10 @@ The JAX init change needs focused unit tests around argument passing: recoverabi
 
 The live proof should run on a small GPU Grug/MoE job with one process per GPU, using a shared helper so base and MoE do not diverge. Kill a nonzero process during a step and verify that no checkpoint metadata advances past the last atomic successful step. A separate GPU smoke should prove the JAX transfer backend can start, publish rank addresses, and pull a small sharded pytree before Grug recovery depends on it.
 
+For M1, tests should distinguish the two transfer modes. The no-donation mode needs a fault-injection test proving the donated-state jitted variant is not used and recovery never depends on invalidated buffers. The backup-offload mode needs a test proving only fully published payloads are accepted, incomplete payloads fall back to checkpoint restore, and recovery can lose at most `backup_interval_steps - 1` committed steps relative to the latest checkpoint.
+
 ## Open Questions
 
 - Should the first Grug proof land in the MoE variant, where GPU `processes_per_task` already exists, or should base Grug receive GPU launch plumbing first?
-- Is checkpoint-only abort recovery enough for the first production use, or do we need in-memory transfer from surviving ranks before this is useful?
+- For M1, is the right first transfer mode no-donation live recovery, periodic backup offload, or both behind one config surface?
 - Should `marin.transfer` stay in `lib/marin`, or should the interface live lower if Levanter should eventually consume it without depending on Marin?

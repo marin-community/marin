@@ -31,6 +31,7 @@ Installed `jax==0.10.1` also contains `jax.experimental.transfer`. Its source ex
 - Do not leave the transfer abstraction owned by RL. RL and Grug have different payloads and consumers.
 - Do not treat existing Arrow Flight code as exact train-state transfer. It is model-weight oriented and may perform lossy dtype conversion.
 - Do not retry a failed donated step in-process with the old `GrugTrainState`. Base and MoE Grug donate the state argument, so the pre-step buffers may be invalid after the jitted step launches.
+- Do not wire transfer service into M0 just to have it present. Transfer recovery only makes sense when Grug either disables donation at the recovery boundary or publishes a complete backup state before failure.
 
 ## Evidence Map
 
@@ -63,25 +64,28 @@ Installed `jax==0.10.1` also contains `jax.experimental.transfer`. Its source ex
 - Support:
   - Its API transfers device-array pytrees by pull, which matches recovering-rank state transfer.
   - It avoids making Grug depend on host serialization details.
+  - Transfer service is only useful for Grug recovery once the design has a committed source of recoverable state: no-donation live state or periodic backup offload.
 - Contradictions:
   - Local import fails due missing jaxlib C++ symbols.
   - API is experimental.
+  - A live transfer backend cannot recover a dead rank's unique shards unless those shards were already externalized or replicated.
 - Directness to Marin: medium-high
 - Confidence: exploratory until tested on GPU
-- Action: specify the backend contract and require a GPU smoke before Grug depends on it.
+- Action: keep transfer service out of M0; specify it for M1 no-donation or backup-offload recovery and require a GPU smoke before Grug depends on JAX transfer.
 
 ## Recommended Plan
 
-1. Extract `marin.transfer`: neutral payload IDs, manifests, metrics, publisher/subscriber protocols, checkpoint backend, and adapters for RL's existing weight transfer.
-2. Add Levanter/Iris JAX recoverability plumbing: recoverability flag and heartbeat timeout before `jax.distributed.initialize`.
-3. Add opt-in Grug fault tolerance: GPU-only guard, `live_devices` step atomicity, and durable checkpoint fallback.
-4. Add JAX transfer service backend under `marin.transfer` after a GPU smoke proves the C++ symbols and pull semantics work.
-5. Add exact-pytree Arrow Flight backend only if checkpoint restore is too slow for Grug recovery.
+1. M0: add Levanter/Iris JAX recoverability plumbing and opt-in Grug fault tolerance with GPU-only guard, `live_devices` step atomicity, and durable checkpoint fallback.
+2. Extract `marin.transfer`: neutral payload IDs, manifests, metrics, publisher/subscriber protocols, checkpoint backend, and adapters for RL's existing weight transfer.
+3. M1 option A: add no-donation transfer recovery, where Grug compiles a no-donation train-step variant and restores from a complete committed transfer payload.
+4. M1 option B: add periodic backup offload, where Grug keeps donation enabled and publishes complete train-state backups through `marin.transfer` every configured interval.
+5. Add JAX transfer service backend under `marin.transfer` after a GPU smoke proves the C++ symbols and pull semantics work.
+6. Add exact-pytree Arrow Flight backend only if checkpoint or JAX-transfer backup restore is too slow for Grug recovery.
 
 ## Open Questions
 
 - Should the first runtime proof target Grug MoE on CoreWeave H100, since it already has `processes_per_task`, or should base Grug get the launch plumbing first?
-- Is abort-to-checkpoint enough for initial Grug use, or does recovery need to continue immediately from a surviving rank's in-memory state?
+- For M1, should we first spend memory by disabling donation at the recovery boundary or spend bandwidth by periodically offloading a backup state?
 - Should the shared transfer package live at `marin.transfer` or in a lower-level package if Levanter should eventually use it directly?
 
 ## Source Ledger

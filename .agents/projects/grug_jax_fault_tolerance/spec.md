@@ -300,17 +300,33 @@ class JaxRecoverabilityUnsupportedError(RuntimeError):
 ### `experiments/grug/fault_tolerance.py`
 
 ```python
-from dataclasses import dataclass, field
+from dataclasses import dataclass
+from enum import StrEnum
+
+from marin.transfer import TransferConfig
+
+
+class GrugRecoveryMode(StrEnum):
+    ABORT_TO_CHECKPOINT = "abort_to_checkpoint"
+    TRANSFER_WITHOUT_DONATION = "transfer_without_donation"
+    PERIODIC_TRANSFER_BACKUP = "periodic_transfer_backup"
 
 
 @dataclass(frozen=True)
 class GrugFaultToleranceConfig:
     enabled: bool = False
     heartbeat_timeout_seconds: int = 10
+    recovery_mode: GrugRecoveryMode = GrugRecoveryMode.ABORT_TO_CHECKPOINT
+    transfer: TransferConfig | None = None
+    backup_interval_steps: int | None = None
 
 
 class GrugStepAtomicityError(RuntimeError):
     """Raised when a fault-tolerant Grug step cannot be committed atomically."""
+
+
+class GrugRecoveryConfigError(ValueError):
+    """Raised when a recovery mode is missing the transfer or interval it requires."""
 ```
 
 `experiments/grug/base/train.py` and `experiments/grug/moe/train.py` both use
@@ -328,14 +344,16 @@ Contract:
 - If JAX distributed is already initialized without recoverability, Grug raises `JaxRecoverabilityUnsupportedError`.
 - A train step is committed only after the `live_devices` context exits successfully and the loss has been blocked.
 - On liveness failure, Grug raises `GrugStepAtomicityError` after skipping all callbacks/checkpoint hooks. It must not attempt to reuse the donated pre-step train-state buffers.
-- The first recovery mode is abort-to-checkpoint: Grug relies on Fray/job retry to restart from the last durable checkpoint and does not continue in-process.
-- `live_devices` is a side-effect commit barrier, not an in-process rollback mechanism. Any future in-process recovery mode must either publish a committed state before donation, restore from a durable checkpoint, or explicitly disable donation for the recovery boundary it needs to retry.
+- `ABORT_TO_CHECKPOINT` is the first milestone. It keeps current train-state donation, does not require `TransferConfig`, relies on Fray/job retry to restart from the last durable checkpoint, and does not continue in-process.
+- `TRANSFER_WITHOUT_DONATION` is a second-milestone mode. It requires `transfer`, compiles or dispatches a no-donation train-step variant, and uses `marin.transfer` to publish and fetch the latest committed train state. A payload is recoverable only after every rank-local shard needed for the target mesh has been published or is otherwise reconstructable from surviving ranks. If a failed rank owned unique shards that were never externalized or replicated, recovery must fail over to durable checkpoint restore.
+- `PERIODIC_TRANSFER_BACKUP` is a second-milestone mode. It requires `transfer` and `backup_interval_steps > 0`, keeps donation enabled for the hot train step, and publishes a complete train-state backup through `marin.transfer` after every configured number of successfully committed steps. Recovery fetches the newest complete transfer payload and falls back to durable checkpoint restore when no complete payload is available.
+- `live_devices` is a side-effect commit barrier, not an in-process rollback mechanism. Transfer recovery modes must restore from a committed transfer payload; they must not rely on the donated pre-step object surviving a failed step.
 
 ## Out Of Scope
 
 - TPU fault-tolerant continuation through JAX recoverability.
 - Continuing on a smaller live-device mesh in the first Grug milestone.
-- In-process Grug `transfer_restore`; this needs a follow-up spec that defines which ranks fetch, from whom, and when.
+- In-process Grug `transfer_restore` in M0.
 - Changing Grug checkpoint file formats beyond the shared checkpoint-transfer layout.
 - Replacing Fray retry semantics.
 - Making Arrow Flight the default Grug recovery backend before exact-pytree tests exist.
