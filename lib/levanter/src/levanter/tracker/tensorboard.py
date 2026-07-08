@@ -13,6 +13,7 @@ import numpy as np
 from rigging.filesystem import StoragePath
 
 from levanter.tracker.histogram import SummaryStats
+from levanter.tracker.json_logger import _flatten
 from levanter.tracker.tracker import Tracker, TrackerConfig
 
 pylogger = logging.getLogger(__name__)
@@ -71,7 +72,7 @@ class TensorboardTracker(Tracker):
             return
 
         del commit
-        metrics = _flatten_nested_dict(metrics)
+        metrics = _flatten(metrics)
         for k, value in metrics.items():
             try:
                 if isinstance(value, jax.Array):
@@ -103,15 +104,27 @@ class TensorboardTracker(Tracker):
                 pylogger.exception(f"Error logging metric {k} with value {value}")
 
     def log_summary(self, metrics: dict[str, Any]):
+        metrics = _flatten(metrics)
         for k, v in metrics.items():
+            if isinstance(v, jax.Array):
+                if v.ndim == 0:
+                    v = v.item()
+                else:
+                    v = np.array(v)
+
             if _is_scalar(v):
                 self.writer.add_scalar(k, v, global_step=None)
             elif isinstance(v, SummaryStats):
                 _log_summary_stats(self.writer, k, v, step=None)
             elif isinstance(v, str):
                 self.writer.add_text(k, v, global_step=None)
+            elif isinstance(v, np.ndarray) and np.issubdtype(v.dtype, np.number):
+                if v.ndim == 0:
+                    self.writer.add_scalar(k, v.item(), global_step=None)
+                else:
+                    self.writer.add_histogram(k, v.ravel(), global_step=None)
             else:
-                pylogger.error(f"Unsupported metric type: {type(v)} for key {k}")
+                self.writer.add_text(k, str(v), global_step=None)
 
     def log_artifact(self, artifact_path, *, name: Optional[str] = None, type: Optional[str] = None):
         log_path = self.writer.logdir
@@ -158,15 +171,3 @@ class TensorboardConfig(TrackerConfig):
         )
 
         return TensorboardTracker(writer)
-
-
-def _flatten_nested_dict(d):
-    def items():
-        for key, value in d.items():
-            if isinstance(value, dict):
-                for subkey, subvalue in _flatten_nested_dict(value).items():
-                    yield key + "/" + subkey, subvalue
-            else:
-                yield key, value
-
-    return dict(items())

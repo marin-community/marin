@@ -69,6 +69,7 @@ from levanter.tracker import TrackerConfig, capture_time
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer_state import InsideJitInfo, TrainerState, saveable_training_mask
 from levanter.utils import cloud_utils
+from levanter.utils.hardware_topology import hardware_topology_summary
 from levanter.utils.jax_utils import data_loading_barrier, zeros_like_tree
 from levanter.utils.mesh import MeshConfig, create_mesh_from_axis_specs
 from levanter.utils.tree_utils import inference_mode
@@ -987,6 +988,7 @@ class TrainerConfig:
         id = self._maybe_set_id()
         levanter.utils.logging.init_logging(self.log_dir, f"{id}.log")
         _initialize_global_tracker(self.tracker, id)
+        levanter.tracker.log_summary({"hardware_topology": hardware_topology_summary()})
 
         if self.require_accelerator is None:
             self.require_accelerator = not sys.platform.startswith("darwin")
