@@ -31,8 +31,7 @@ Two independent gates, both required (neither alone suffices):
 This is intentionally a standalone operator step, NOT part of ``start_controller``
 (unlike the ``/proxy`` Ingress): an Ingress + Middleware are independent objects,
 so applying them does not restart the controller. That lets the networking land
-(rollout P2) before the config + controller restart that turns on enforcement
-(rollout P3). See ``.agents/projects/iris_federation/rollout.md`` (WS-5) and
+before the config change and controller restart that turn on enforcement. See
 ``docs/coreweave.md``.
 
 Prerequisites (install once per cluster, before this script):
@@ -60,10 +59,10 @@ from iris.cli.connect import IRIS_CLUSTER_CONFIG_DIRS
 from iris.cluster.config import load_config
 from rigging.config_discovery import resolve_cluster_config
 
-# The federation RPC subset (rollout WS-4.4): the only methods the ingress exposes.
-# ConnectRPC maps each to POST /{package}.{Service}/{Method}; the whole service
-# shares one flat prefix, so the ingress matches these paths EXACTLY (never the
-# bare prefix, which would expose the entire control plane).
+# The federation RPC subset: the only methods the ingress exposes. ConnectRPC maps
+# each to POST /{package}.{Service}/{Method}; the whole service shares one flat
+# prefix, so the ingress matches these paths EXACTLY (never the bare prefix, which
+# would expose the entire control plane).
 _RPC_SERVICE_PATH = "/iris.cluster.ControllerService"
 FEDERATION_RPC_METHODS = (
     "LaunchJob",  # federation handoff (a plain LaunchJob is gated by the JWT verifier)
@@ -138,7 +137,7 @@ class FederationIngressSettings(NamedTuple):
 
 
 def _auth_mode(config) -> str:
-    """The controller's request-auth mode (mirrors controller/auth.py:436).
+    """The controller's request-auth mode.
 
     ``null-auth`` means the RPC surface is PERMISSIVE: no login-provider arm and
     no ``trusted_cidrs``, so every request is admitted as the anonymous admin.
@@ -179,7 +178,7 @@ def _derive_from_cluster(name: str, kubeconfig_override: str, context_override: 
 
 
 def _default_host(cluster: str) -> str:
-    """``cw-rno2a`` -> ``iris-fed-rno2a.oa.dev`` (rollout WS-5.1 hostnames)."""
+    """``cw-rno2a`` -> ``iris-fed-rno2a.oa.dev``."""
     short = cluster[len("cw-") :] if cluster.startswith("cw-") else cluster
     return f"iris-fed-{short}.oa.dev"
 
@@ -206,7 +205,7 @@ def _build_ipallowlist_middleware(*, namespace: str, source_ranges: list[str], x
     If the CoreWeave LoadBalancer SNATs (so Traefik sees the LB, not the real
     client), set ``xff_depth`` to the number of trusted proxy hops and Traefik
     reads the client IP from ``X-Forwarded-For`` instead. Verify which applies by
-    testing a refused request from a non-allowlisted host (rollout P2).
+    testing a refused request from a non-allowlisted host.
     """
     ip_allow_list: dict = {"sourceRange": source_ranges}
     if xff_depth > 0:
@@ -275,10 +274,10 @@ def _warn_if_permissive(settings: FederationIngressSettings) -> None:
     click.secho(
         f"\nwarn: {settings.cluster} runs NULL-AUTH (permissive) — its RPC surface admits any caller\n"
         "      as the anonymous admin. Until the method-scoped federation verifier is activated\n"
-        "      (auth.federation_peers in the controller config + a controller restart, rollout P3),\n"
+        "      (auth.federation_peers in the controller config, then a controller restart),\n"
         "      the IP allowlist below is the ONLY gate on the federation route. Both the IP\n"
-        "      allowlist AND the federation JWT are required (rollout WS-5.4); do not treat this\n"
-        "      ingress as enforcing until the controller is no longer permissive.",
+        "      allowlist AND the federation JWT are required; do not treat this ingress as\n"
+        "      enforcing until the controller is no longer permissive. See docs/coreweave.md.",
         fg="yellow",
         err=True,
     )
@@ -365,7 +364,7 @@ def _print_next_steps(settings: FederationIngressSettings, *, host: str, cluster
         "       kubectl get svc traefik -n traefik "
         "-o=jsonpath='{.status.conditions[?(@.type==\"ExternalRecords\")].message}'"
     )
-    click.secho("  2) Verify from the marin controller VM (rollout P2):", fg="green", bold=True)
+    click.secho("  2) Verify from the marin controller VM:", fg="green", bold=True)
     click.echo("       - ListBackends WITH the federation JWT from the allowlisted egress IP  -> succeeds")
     click.echo("       - the same call WITHOUT the JWT (once the controller is enforcing)      -> UNAUTHENTICATED")
     click.echo("       - the same call from a non-allowlisted IP                               -> refused (403)")
@@ -379,7 +378,7 @@ def _print_next_steps(settings: FederationIngressSettings, *, host: str, cluster
     if settings.auth_mode == "null-auth":
         click.secho(
             "  NOTE: this controller is still permissive — the IP allowlist is the only gate until "
-            "auth.federation_peers is configured and the controller restarted (rollout P3).",
+            "auth.federation_peers is configured and the controller restarted.",
             fg="yellow",
         )
     click.echo(
