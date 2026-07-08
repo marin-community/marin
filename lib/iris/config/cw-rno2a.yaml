@@ -48,6 +48,20 @@ storage:
   # network-attached PVC.
   local_state_dir: /mnt/local/iris-controller-state
 
+# Request auth. No login arm — identity is by network location: direct
+# in-cluster peers (CKS pods/nodes are RFC1918; loopback covers kubectl
+# port-forward) are trusted as admin. A non-empty trusted_cidrs alone makes the
+# controller ENFORCING (was null-auth): an off-cluster request reaches the
+# controller through Traefik, which appends X-Forwarded-For, so it never matches
+# a CIDR and must present a bearer token. This is the identity gate behind the
+# IP-restricted federation ingress (lib/iris/scripts/install_federation_ingress.py):
+# the marin controller presents a federation JWT, everything else is rejected.
+# No signing_key is needed — this cluster runs no finelog relay, so an ephemeral
+# key is fine (as on cw-us-east-02a). The federation verifier itself
+# (auth.federation_peers) lands with the federation-auth code; see docs/coreweave.md.
+auth:
+  trusted_cidrs: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 127.0.0.0/8, "::1/128"]
+
 kubernetes_provider:
   namespace: iris
   default_image: ghcr.io/marin-community/iris-task:latest

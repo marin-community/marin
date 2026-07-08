@@ -239,47 +239,47 @@ HTTP (dev only).
 
 The GCP `marin` controller federates whole jobs to the CoreWeave controllers by
 dialing their RPC surface directly (the pull model — CoreWeave must be reachable
-*inbound*; a peer behind NAT with no ingress is out of scope). That reach is a
-**second, dedicated ingress**, wholly distinct from the `/proxy` route above:
+*inbound*; a peer behind NAT with no ingress is out of scope). CoreWeave has no
+user surface of its own: end users reach Iris only through `iris.oa.dev` (IAP) and
+marin federates outward, so the **only** external caller of a CoreWeave controller
+is the marin controller. That makes the auth surface two factors, both required
+and neither alone sufficient:
 
-- **`/proxy`** publishes the endpoint proxy for off-cluster agents; per-endpoint
-  auth (`PRIVATE`/`LINK`) is its gate.
-- **the federation ingress** publishes only the six federation RPC methods
-  (`LaunchJob`, `TerminateJob`, `FederationSync`, `ListBackends`, `ProfileTask`,
-  `ExecInContainer`) on a separate host, `iris-fed-<cluster>.oa.dev`
-  (`iris-fed-rno2a.oa.dev`, `iris-fed-us-east-02a.oa.dev`).
+1. **IP allowlist** — a Traefik `ipAllowList` Middleware admits only the marin
+   controller's egress IP. The *network* factor.
+2. **The controller's own auth** — the method-scoped `aud="federation"` verifier
+   gates the handoff RPCs, and the general auth chain gates everything else. The
+   *identity* factor. The ingress does **not** do method policy; the controller
+   does.
 
-The rest of the controller RPC surface — job submission for arbitrary users,
-budgets, users, scheduler state — and the dashboard stay ClusterIP-internal. The
-whole `ControllerService` shares one flat ConnectRPC path prefix
-(`/iris.cluster.ControllerService/…`), so the ingress matches those six method
-paths **exactly**, never the bare prefix.
+Because the controller is the identity gate, it **must be enforcing**. A permissive
+(null-auth) controller behind only an IP lock hands anonymous admin over its entire
+control plane to anything arriving from the allowlisted IP.
+`install_federation_ingress.py` warns loudly when its target is still permissive.
+`cw-us-east-02a` is enforcing (`trusted_cidrs`); `cw-rno2a` gains the same
+`trusted_cidrs` block (see below), which flips it from null-auth to enforcing so an
+off-cluster request must present a bearer.
 
-**Two independent gates, both required — neither alone suffices:**
-
-1. **IP allowlist** (a Traefik `ipAllowList` Middleware on the ingress): only the
-   marin controller's egress IP reaches the route.
-2. **Federation JWT** (the controller's method-scoped `aud="federation"`
-   verifier): an unauthenticated request is rejected. **This is only enforcing if
-   the controller runs the federation verifier.** `cw-rno2a` is null-auth today —
-   its RPC chain is *permissive*, admitting any caller as the anonymous admin
-   (`controller/auth.py`, the null-auth branch). A `signing_key` alone does **not**
-   flip it: enforcement needs a provider arm or `trusted_cidrs`, and the federation
-   methods specifically need `auth.federation_peers` configured (see below). Until
-   then the IP allowlist is the *only* gate, so the ingress must not be treated as
-   enforcing. `install_federation_ingress.py` warns loudly when its target is still
-   permissive.
+The route **reuses the controller's `iris-cw-*.oa.dev` host** rather than a
+dedicated name. Where the cluster already publishes `/proxy` (`cw-us-east-02a`),
+that world-open route keeps its own more-specific Traefik router (Traefik prefers
+the longer path match) with no allowlist, while this Ingress adds an allowlisted
+catch-all router for the rest of the surface and **reuses the existing TLS cert**.
+Where there is no `/proxy` host (`cw-rno2a`), this Ingress publishes the whole
+controller host, allowlisted, and cert-manager issues a fresh cert.
 
 **Stand it up** (after the Traefik/cert-manager prerequisites above; this reuses
 them and installs nothing cluster-wide). Dry-run without `--apply`:
 
 ```bash
-# Prints the Middleware + Ingress manifests and the null-auth pre-flight warning.
+# Prints the Middleware + Ingress manifests and the pre-flight findings. The host,
+# TLS secret, and issuer default from the cluster config (reuse the /proxy cert
+# where one exists, else issue a new one).
 uv run lib/iris/scripts/install_federation_ingress.py --cluster cw-rno2a \
     install --allow-source <marin-egress-ip>
-# Apply once iris-fed-<cluster>.oa.dev CNAMEs to the Traefik LoadBalancer FQDN
-# (same target as the /proxy host — read it with the kubectl command that
-# `install_traefik_proxy.py` prints). Staging issuer first, then flip to prod:
+# Apply once the host CNAMEs to the Traefik LoadBalancer FQDN (read it with the
+# kubectl command that `install_traefik_proxy.py` prints). Staging issuer first,
+# then flip to prod:
 uv run lib/iris/scripts/install_federation_ingress.py --cluster cw-rno2a \
     install --allow-source <marin-egress-ip> --cluster-issuer letsencrypt-http01-prod --apply
 # Tear the federation route back down (Traefik/cert-manager/`/proxy` untouched):
@@ -287,16 +287,16 @@ uv run lib/iris/scripts/install_federation_ingress.py --cluster cw-rno2a uninsta
 ```
 
 The ingress is a standalone object, so applying it does **not** restart the
-controller — the networking (rollout P2) lands before the config + controller
-restart that turns on enforcement (rollout P3). If CoreWeave's LoadBalancer SNATs
-(Traefik sees the LB, not the real client), pass `--xff-depth 1` so the allowlist
-reads the client IP from `X-Forwarded-For`; verify by confirming a request from a
-non-allowlisted host is refused (below).
+controller — the networking lands before the config change and controller restart
+that turn on enforcement. If CoreWeave's LoadBalancer SNATs (Traefik sees the LB,
+not the real client), pass `--xff-depth 1` so the allowlist reads the client IP
+from `X-Forwarded-For`; verify by confirming a request from a non-allowlisted host
+is refused (below).
 
-**Verify from the marin controller VM (rollout P2):**
+**Verify from the marin controller VM:**
 
 - `ListBackends` **with** the federation JWT from the allowlisted egress IP → succeeds.
-- the same call **without** the JWT (once the controller is enforcing) → `UNAUTHENTICATED`.
+- the same call **without** the JWT (controller enforcing) → `UNAUTHENTICATED`.
 - the same call from a **non-allowlisted IP** → refused (`403`).
 
 #### Stable egress IP for the marin controller
@@ -328,32 +328,52 @@ a regional static IP and pin Cloud NAT to it (`gcloud compute routers nats updat
 … --nat-external-ip-pool=iris-marin-fed-egress`). Removing the VM's external IP is
 a larger change — do it only with explicit approval, never as a side effect here.
 
-#### Making `cw-rno2a` enforcing (rollout P3, coordinated config PR)
+#### Auth on `cw-rno2a`: enforcing base chain now, federation verifier later
 
-The federation JWT gate is real only once the controller runs the method-scoped
-federation verifier. That verifier is built in the sibling federation-auth PR and
-activated by controller config that lands in the coordinated config PR (rollout
-WS-6): on each CoreWeave controller,
+`cw-rno2a` had no `auth:` block, so its RPC chain was null-auth — *permissive*,
+admitting any caller as the anonymous admin. This config now gives it the same
+`trusted_cidrs` block `cw-us-east-02a` runs:
 
 ```yaml
-# DEPENDS ON the sibling federation-auth code merging first — pydantic forbids
-# unknown keys (config.py, extra="forbid"), so adding these before the code lands
-# breaks config load. Stage, do not apply, until P3.
 auth:
-  signing_key: gcp-secret://…            # persistent EdDSA key (iris cluster init-keys)
+  trusted_cidrs: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 127.0.0.0/8, "::1/128"]
+```
+
+A non-empty `trusted_cidrs` alone makes the controller enforcing: in-cluster peers
+(RFC1918 pods/nodes; loopback for `kubectl port-forward`) authenticate as admin by
+network location, while an off-cluster request reaches the controller through
+Traefik — which appends `X-Forwarded-For`, so it never matches a CIDR and must
+present a bearer. That is what makes exposing the RPC surface behind the IP
+allowlist safe: an off-cluster caller with no valid bearer is rejected, not
+admitted. No `signing_key` is needed — this cluster runs no finelog relay, so an
+ephemeral key is fine (as on `cw-us-east-02a`); `require_persistent_signing_key`
+only fires when `finelog.relay_address` is set.
+
+It takes effect on the next controller restart. **Never restart a CoreWeave or the
+marin controller without explicit approval** (`AGENTS.md`); this config is staged
+ahead of that restart.
+
+The **federation verifier** — the method-scoped `aud="federation"` check that lets
+the marin controller's handoff RPCs through — is separate. It is built in the
+federation-auth code and activated by controller config that must land only after
+that code merges:
+
+```yaml
+# DEPENDS ON the federation-auth code merging first — pydantic forbids unknown keys
+# (config.py, extra="forbid"), so adding these before the code lands breaks config
+# load. Stage, do not apply, until then.
+auth:
   federation_peers:                       # trust anchor: the marin root's public key
     marin: { public_key: "<PEM from marin init-keys>" }
 federation:
   allowed_submitters: ["*@openathena.ai"] # CW-side submitter allowlist (re-check)
 ```
 
-`cw-rno2a` has no `auth:` block at all today, so it must gain both the enforcing
-`auth` (the `federation_peers` trust anchor makes the federation methods enforce
-even while the base chain stays permissive for in-cluster callers) and this config
-is applied with a controller restart in rollout P3. **Never restart a CoreWeave or
-the marin controller without explicit approval** (`AGENTS.md`); the networking here
-is staged ahead of that restart. Full sequencing and rollback are in
-`.agents/projects/iris_federation/rollout.md` (§5, WS-5/WS-6).
+Until those land, `cw-rno2a` is enforcing but has no federation verifier, so a
+federation handoff is rejected (unknown issuer) — federation stays dark, but the
+surface is never an open hole. Once they land, the federation RPCs are admitted for
+the marin peer only. Full sequencing and rollback are in
+`.agents/projects/iris_federation/rollout.md`.
 
 ## 3. Tools
 
