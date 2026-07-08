@@ -63,6 +63,20 @@ If checkpoint times out: `iris cluster controller restart --skip-checkpoint` (re
 
 **Restart builds and deploys your local working tree.** `iris cluster controller restart` builds fresh controller/worker/task images from your **current checkout — HEAD plus any staged/unstaged changes** (`get_git_sha()` is a tree-content hash), pushes them (`:<hash>` and `:latest`), pins the deploy to `:<hash>` in memory, and restarts the container in place. So the restart ships whatever code is in your tree; there is no separate image-rebuild step. To deploy a merged controller fix: update your checkout (`git pull`, or check out the fix) **then** restart — restarting from a stale checkout ships that stale code. Always confirm the controller is running the `:<git-short-hash>` you expect (`iris cluster status`), not just that it came back up; a stale-checkout deploy once cost ~5 red-canary days (`.agents/ops/2026-06-08-canary-ferry-reservation-taint-timeouts.md`).
 
+**Rollout state is recorded automatically.** Each `controller restart` writes a rollout record to `gs://…/<cluster>/state/rollout-record.json` — the image it deployed, the image it replaced, the pre-deploy checkpoint it took, and a phase (`pending` → `committed` for a forward deploy; `rollback_requested` → `rolled_back` for a revert). The rollback coordinates are captured as part of the deploy, so you never track them by hand. A forward restart also **health-checks the new controller and auto-rolls back** to the previous image + its pre-deploy checkpoint if the deploy fails to come up. (The *first* deploy after this landed has no prior record, so there is nothing to auto-roll back to — recover a failed first deploy by checking out known-good code and restarting forward, or use the on-VM procedure below.)
+
+### Rolling back a controller deploy (migration-aware)
+
+**Roll back the last deploy.** `iris cluster controller restart --rollback` reads `rollout-record.json`, then redeploys the previous image and restores its pre-deploy checkpoint — no coordinates to look up. Run it while the controller is still reachable so it takes the in-place path.
+
+```bash
+iris --cluster=marin cluster controller restart --rollback
+```
+
+**Why it restores a checkpoint, not just the old image.** A restart runs forward-only migrations in place on the on-VM state DB (`schema_migrations` tracks applied stems; there is no down-migration), and some are destructive — e.g. `0039_drop_api_keys`, `0040_drop_users`. Redeploying the old image alone would leave it loading a schema it does not understand, hitting missing-table errors at runtime. So a correct rollback must **also restore the pre-deploy (pre-migration) checkpoint** — the one taken while the old code was still running. `--rollback` does both from the record: it writes `rollback_requested` and restarts the previous image; on boot the controller restores that checkpoint over its migrated local DB, then marks the record `rolled_back`. That consume-once step is a one-shot — a later crash or VM reboot reuses the restored DB instead of rewinding to the checkpoint again.
+
+For a wedged/unreachable controller, or a deploy with no prior rollout record, use the fully-manual on-VM procedure below instead, which never risks recreating the VM.
+
 ### Controller Checkpoint Rollback (wedged / OOM recovery)
 
 **When.** The controller is wedged by a bloated local DB — typically a controller-VM OOM after a large job backlog: RPCs hang and the healthcheck times out. A plain restart does **not** help: startup reuses the local DB whenever it is present (`download_checkpoint_to_local` only runs when the db dir is absent — see `controller/main.py`), so `docker restart` / `gcloud compute reset` just reload the same bloated DB and re-wedge.

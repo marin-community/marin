@@ -95,7 +95,6 @@ const cluster = ref<number>(0)
 const quality = ref<string>('')
 const sampleSize = ref(12)
 const seed = ref(DEFAULT_SEED)
-const fromCache = ref(false)
 
 const samples = useQuery<Record<string, unknown>[]>()
 const sampleLabel = ref('')
@@ -106,18 +105,6 @@ function sampleBucket(c: number, q: string) {
   cluster.value = c
   quality.value = q
   const n = sampleSize.value || 12
-  if (fromCache.value) {
-    if (q === '') {
-      samples.result.value = null
-      samples.error.value = 'store-cache sampling needs a specific quality bucket'
-      return
-    }
-    sampleLabel.value = `cluster ${c} · q${q} · store cache (detokenized)`
-    sampleColumns.value = ['index', 'n_tokens', 'text']
-    sampleEmptyText.value = 'empty bucket cache'
-    void samples.run('store_cache_samples', { cluster: c, quality_bucket: +q, n, seed: seed.value, runs: 4 })
-    return
-  }
   sampleEmptyText.value = 'no documents matched in the sampled sources'
   if (q === '') {
     sampleLabel.value = `cluster ${c} · any quality`
@@ -264,13 +251,6 @@ function sample() {
         class="w-16 rounded border border-surface-border bg-surface px-2 py-1 text-[13px] text-text"
       />
       <SeedControl v-model="seed" @reroll="sample" />
-      <label
-        class="flex items-center gap-1.5 text-sm text-text-secondary"
-        title="read the store's tokenized Levanter cache directly and detokenize (ground truth; needs a specific quality bucket)"
-      >
-        <input v-model="fromCache" type="checkbox" />
-        from store cache
-      </label>
       <button
         class="rounded-md bg-accent px-3 py-1.5 text-sm font-semibold text-white hover:bg-accent-hover"
         @click="sample"
@@ -286,8 +266,7 @@ function sample() {
     <p v-else-if="samples.error.value" class="text-sm text-status-danger">error: {{ samples.error.value }}</p>
     <template v-else-if="samples.result.value">
       <h4 class="mb-2 font-semibold">
-        {{ sampleLabel }} — {{ samples.result.value.length }}
-        {{ fromCache ? 'samples' : 'sample documents (exact text)' }}
+        {{ sampleLabel }} — {{ samples.result.value.length }} sample documents (exact text)
       </h4>
       <SampleTable v-if="samples.result.value.length" :rows="samples.result.value" :columns="sampleColumns" />
       <p v-else class="text-sm text-text-muted">{{ sampleEmptyText }}</p>

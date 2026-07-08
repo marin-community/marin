@@ -23,7 +23,7 @@ Console links:
 create a token for the cluster and download its kubeconfig.
 
 **2. Install the kubeconfig** at the path from the table above, plus controller
-extras and CoreWeave Object Storage credentials:
+extras:
 
 ```bash
 mkdir -p ~/.kube
@@ -32,9 +32,12 @@ export KUBECONFIG=~/.kube/coreweave-iris-gpu
 kubectl cluster-info   # sanity check
 
 uv pip install 'marin-iris[controller]'
-export CW_KEY_ID=<coreweave-access-key-id>
-export CW_KEY_SECRET=<coreweave-access-key-secret>
 ```
+
+That's all a job submitter needs. `CW_KEY_ID` / `CW_KEY_SECRET` (CoreWeave
+Object Storage access keys) are only required when running
+`iris cluster start` — they seed the in-cluster `iris-task-env` Secret (see
+"Storage defaults" below).
 
 **3. Check cluster status.** `--cluster=cw-us-east-02a` resolves the in-tree
 config and opens a `kubectl port-forward` to the controller for you:
@@ -62,6 +65,18 @@ uv run iris --cluster=cw-us-east-02a job run \
 
 Follow logs of a detached job with
 `uv run iris --cluster=cw-us-east-02a job logs <job-id> -f`.
+
+**Storage defaults.** CoreWeave clusters default to CoreWeave AI Object
+Storage — no per-job storage setup is needed:
+
+- `MARIN_PREFIX` is preset to `s3://marin-us-east-02a/marin` (via
+  `defaults.task_env` in the cluster config) on both clusters.
+- Task pods carry the CoreWeave Object Storage S3 configuration and
+  credentials (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`,
+  `AWS_ENDPOINT_URL`, `FSSPEC_S3`, ...) via the platform-managed
+  `iris-task-env` Secret, so `s3://` reads/writes work out of the box.
+- Task pods carry ONE endpoint/credential set. Data on other S3-compatible
+  stores is not reachable unless the job overrides `AWS_*`/`FSSPEC_S3` itself.
 
 ## 1. Overview
 
@@ -256,10 +271,13 @@ operator reference (any `--cluster=NAME`) and the lifecycle details behind it.
 - Images pushed to `ghcr.io/marin-community/`
 - Controller extras: `uv pip install 'marin-iris[controller]'`
 
-For S3 storage, export `CW_KEY_ID` / `CW_KEY_SECRET` (CoreWeave Object Storage
-access keys); `iris cluster start` folds them — plus the derived
+CoreWeave clusters default to CoreWeave AI Object Storage
+(`object_storage_endpoint: http://cwlota.com` in the cluster configs). Export
+`CW_KEY_ID` / `CW_KEY_SECRET` (CoreWeave Object Storage access keys) before
+`iris cluster start`; it folds them — plus the derived
 endpoint/region/`FSSPEC_S3` config — into the `iris-task-env` Secret, projected
-into the controller and task pods via `envFrom`.
+into the controller and task pods via `envFrom`. From then on every task has
+working S3 credentials embedded; job submitters never handle storage keys.
 
 > **Note**: CoreWeave AI Object Storage (`cwobject.com`, `cwlota.com`) uses
 > virtual-hosted-style S3 addressing, which is auto-detected and configured
@@ -269,7 +287,12 @@ into the controller and task pods via `envFrom`.
 
 ### CoreWeave AI Object Storage access
 
-Use `s3://marin-us-east-02a` for CoreWeave-local object storage. The bucket is
+Use `s3://marin-us-east-02a` for CoreWeave-local object storage — it is the
+shared bucket for both clusters, and `MARIN_PREFIX` is preset to
+`s3://marin-us-east-02a/marin` in every task. **Inside the cluster none of the
+setup below is needed**: task pods already carry the endpoint, addressing
+style, and credentials (see "Storage defaults" in §0). The rest of this
+section is for access from *outside* CoreWeave (laptop, GCP). The bucket is
 browsable in the
 [CoreWeave console](https://console.coreweave.com/object-storage/buckets/marin-us-east-02a).
 Follow CoreWeave's
@@ -735,6 +758,7 @@ The platform detects fatal errors before the full timeout expires:
 | `AWS_ENDPOINT_URL` | `envFrom` | From `iris-task-env`; derived from `object_storage_endpoint` |
 | `AWS_REGION` / `AWS_DEFAULT_REGION` | `envFrom` | From `iris-task-env`; `auto` for CoreWeave Object Storage endpoints |
 | `FSSPEC_S3` | `envFrom` | From `iris-task-env`; JSON-encoded fsspec S3 config (endpoint + addressing style) |
+| `MARIN_PREFIX` | `defaults.task_env` (cluster config) | Preset to `s3://marin-us-east-02a/marin` on both CoreWeave clusters |
 
 ## 11. Timeouts
 

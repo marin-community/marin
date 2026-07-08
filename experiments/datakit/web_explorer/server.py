@@ -7,10 +7,9 @@ Point it at one datakit store (``WEB_EXPLORER_STORE``); it resolves the store's
 upstream stage datasets (:mod:`experiments.datakit.web_explorer.lineage`) and serves a
 Vue SPA (built into ``dashboard/dist``) with a tab per stage — normalized data,
 decontamination, deduplication, quality classifier, and the final cluster x quality
-store. Most data is fetched by issuing SQL to the ducky service
-(:class:`ducky.client.DuckyClient`); the store's tokenized bucket caches are read
-directly and detokenized for the "from store cache" view
-(:mod:`experiments.datakit.web_explorer.store_cache`).
+store. **All** I/O goes through the ducky service (:class:`ducky.client.DuckyClient`):
+stage data via SQL, and the store artifact / lineage cache / dedup record via
+``read_text`` — so the dashboard itself needs no object-store credentials.
 
 Queries run **asynchronously** (``POST /api/query`` -> ``query_id``, poll
 ``GET /api/result/{id}``) so a slow aggregate never trips the controller proxy's
@@ -31,6 +30,7 @@ import argparse
 import concurrent.futures
 import dataclasses
 import enum
+import json
 import logging
 import os
 import threading
@@ -43,7 +43,6 @@ from ducky.client import DuckyClient, DuckyError, iap_token_provider
 from iris.client.client import iris_ctx
 from iris.cluster.client.job_info import get_job_info
 from iris.cluster.dashboard_common import on_shutdown
-from rigging.filesystem import StoragePath
 from starlette.applications import Starlette
 from starlette.concurrency import run_in_threadpool
 from starlette.requests import Request
@@ -57,11 +56,10 @@ from experiments.datakit.web_explorer.lineage import (
     StoreLineage,
     load_lineage,
     read_store_payload,
+    read_text,
     resolve_lineage,
-    save_lineage,
 )
 from experiments.datakit.web_explorer.queries import DEFAULT_SEED, WebExplorer
-from experiments.datakit.web_explorer.store_cache import StoreCacheSampler
 
 logger = logging.getLogger(__name__)
 
@@ -132,25 +130,84 @@ def _source_docs(source_summary: list[dict] | None) -> dict[str, int]:
     return {r["source"]: r["docs_est"] for r in source_summary or [] if r.get("docs_est")}
 
 
-def _dedup_attr_map(lineage: StoreLineage) -> dict[str, str]:
-    """Map source -> per-source fuzzy-dup attr dir, from the dedup artifact.
+@dataclasses.dataclass
+class _SourceSummary:
+    """Per-source doc-count summary, filled progressively by a background thread.
+
+    ``docs_est`` is a parquet file-count — a fast, bounded size proxy that drives
+    the store sampler's cheapest-source-first ordering; the leaderboard displays it
+    as it fills in. ``ready`` flips true once every source has been counted.
+    """
+
+    rows: list[dict] = dataclasses.field(default_factory=list)
+    ready: bool = False
+
+
+def _start_source_summary(dv: WebExplorer, lineage: StoreLineage, ducky: DuckyClient, state: _SourceSummary) -> None:
+    """Compute the Sources leaderboard in the background, in two progressive passes.
+
+    Pass 1 counts each source's parquet *files* (a fast, bounded glob listing) and
+    installs them as ``source_docs`` so the store sampler's smallest-source-first
+    ordering is ready within seconds. Pass 2 computes the full per-source stats
+    (exact doc count, quality distribution, contamination, dedup) one source at a
+    time, filling the leaderboard columns live; the exact doc counts replace the
+    file-count proxy in ``source_docs`` only once all are in, to keep the sampler's
+    size ordering on a single consistent scale throughout.
+    """
+
+    def _run() -> None:
+        rows: dict[str, dict] = {}
+        # pass 1: file-count sizes -> sampler ordering (consistent scale, fast)
+        sizes: dict[str, int] = {}
+        for src, base in sorted(lineage.normalize.items()):
+            try:
+                n = ducky.run(f"SELECT count(*) FROM glob('{base}/outputs/main/*.parquet')").scalar()
+            except DuckyError:
+                n = None
+            if n:
+                sizes[src] = n
+            rows[src] = {"source": src, "docs_est": n}
+            dv.source_docs = dict(sizes)  # atomic swap; the sampler reads source_docs.get(...)
+            state.rows = list(rows.values())
+        logger.info("source sizes counted: %d sources", len(rows))
+        # pass 2: full per-source stats -> leaderboard columns, progressive.
+        # Smallest sources first (by the pass-1 sizes) so most columns fill fast,
+        # leaving the few huge sources (slow exact counts) for last.
+        exact: dict[str, int] = {}
+        for src in sorted(lineage.normalize, key=lambda s: sizes.get(s, 1 << 62)):
+            try:
+                stats = dv.source_summary_stats(src)
+            except DuckyError as e:
+                logger.warning("source stats for %s failed: %s", src, e)
+                continue
+            rows[src] = {**rows[src], **stats}
+            if stats.get("docs_est"):
+                exact[src] = stats["docs_est"]
+            state.rows = list(rows.values())
+        if exact:
+            dv.source_docs = exact  # exact counts, one consistent scale for ordering + display
+        state.ready = True
+        logger.info("source summary fully computed: %d sources", len(rows))
+
+    threading.Thread(target=_run, name="source-summary", daemon=True).start()
+
+
+def _dedup_attr_map(ducky: DuckyClient, lineage: StoreLineage) -> dict[str, str]:
+    """Map source -> per-source fuzzy-dup attr dir, from the dedup artifact (via ducky).
 
     The dedup artifact keys its ``sources`` by each source's normalized *main*
     dir; we join that to the resolved normalize paths to get source -> attr_dir.
     """
     if not lineage.dedup:
         return {}
-    import json  # noqa: PLC0415 — startup-only
-
-    doc = None
+    content = None
     for name in (".artifact.json", "artifact.json"):
-        try:
-            doc = json.loads(StoragePath(f"{lineage.dedup}/{name}").read_text())
+        content = read_text(ducky, f"{lineage.dedup}/{name}")
+        if content is not None:
             break
-        except FileNotFoundError:
-            continue
-    if not doc:
+    if content is None:
         return {}
+    doc = json.loads(content)
     by_main = {main: entry["attr_dir"] for main, entry in doc.get("sources", {}).items()}
     return {
         src: by_main[f"{ndir}/outputs/main"]
@@ -159,16 +216,13 @@ def _dedup_attr_map(lineage: StoreLineage) -> dict[str, str]:
     }
 
 
-def _build_views(dv: WebExplorer, cache_sampler: StoreCacheSampler) -> dict[str, Callable[[dict], object]]:
+def _build_views(dv: WebExplorer) -> dict[str, Callable[[dict], object]]:
     """Map dashboard view name -> handler(params) -> JSON-serializable result."""
 
     def _seed(p: dict) -> int:
         return int(p.get("seed", DEFAULT_SEED))
 
     return {
-        "store_cache_samples": lambda p: cache_sampler.samples(
-            int(p["cluster"]), int(p["quality_bucket"]), int(p.get("n", 12)), _seed(p), int(p.get("runs", 4))
-        ),
         "normalized_stats": lambda p: dv.normalized_stats(p["source"]),
         "normalized_hist": lambda p: dv.normalized_length_hist(p["source"]).dicts(),
         "normalized_samples": (
@@ -233,11 +287,13 @@ def build_app(
     source_summary: list[dict] | None = None,
 ) -> Starlette:
     dist = _dashboard_dist()
-    dv = WebExplorer(lineage, ducky, _source_docs(source_summary), _dedup_attr_map(lineage))
-    cache_sampler = StoreCacheSampler(
-        lineage.store_path, lineage.tokenizer, {(b.cluster_id, b.quality_bucket) for b in payload.buckets}
-    )
-    manager = QueryManager(_build_views(dv, cache_sampler))
+    dv = WebExplorer(lineage, ducky, _source_docs(source_summary), _dedup_attr_map(ducky, lineage))
+    manager = QueryManager(_build_views(dv))
+    # A pre-baked WEB_EXPLORER_SOURCE_SUMMARY is used as-is; otherwise the app
+    # computes per-source sizes itself in the background and fills them in live.
+    summary = _SourceSummary(rows=source_summary or [], ready=source_summary is not None)
+    if source_summary is None:
+        _start_source_summary(dv, lineage, ducky, summary)
 
     def overview() -> dict:
         buckets = [
@@ -268,7 +324,9 @@ def build_app(
             "dedup": lineage.dedup,
             "counters": payload.counters,
             "buckets": buckets,
-            "source_summary": source_summary or [],
+            "source_summary": summary.rows,
+            "source_summary_ready": summary.ready,
+            "source_summary_total": len(lineage.normalize),
         }
 
     async def index(request: Request) -> HTMLResponse:
@@ -276,6 +334,10 @@ def build_app(
 
     async def api_overview(_request: Request) -> JSONResponse:
         return JSONResponse(overview())
+
+    async def api_source_summary(_request: Request) -> JSONResponse:
+        # Lightweight endpoint the dashboard polls while the background count fills in.
+        return JSONResponse({"ready": summary.ready, "rows": summary.rows, "total": len(lineage.normalize)})
 
     async def api_query(request: Request) -> JSONResponse:
         body = await request.json()
@@ -308,6 +370,7 @@ def build_app(
         routes=[
             Route("/", index),
             Route("/api/overview", api_overview),
+            Route("/api/source-summary", api_source_summary),
             Route("/api/query", api_query, methods=["POST"]),
             Route("/api/result/{query_id:str}", api_result),
             Route("/api/ducky-status", api_ducky_status),
@@ -343,23 +406,20 @@ def _build_ducky(explicit_url: str | None, timeout: float) -> DuckyClient:
 def _load(
     store_path: str, ducky: DuckyClient, cache_path: str | None, config: WebExplorerConfig
 ) -> tuple[StoreLineage, ClusteredStoreData]:
-    payload = read_store_payload(store_path)
-    # StoragePath.exists() handles gs:// (os.path.exists would silently miss a remote
-    # cache and force a ducky-dependent re-resolve at startup).
-    if cache_path and StoragePath(cache_path).exists():
-        logger.info("loading cached lineage from %s", cache_path)
-        lineage = load_lineage(cache_path)
-    else:
-        logger.info("resolving lineage for %s (this issues ducky globs; ~1-2 min)", store_path)
-        lineage = resolve_lineage(
-            store_path,
-            ducky,
-            domain_centroids=config.domain_centroids,
-            quality_model=config.quality_model,
-        )
-        if cache_path:
-            save_lineage(lineage, cache_path)
-            logger.info("cached lineage to %s", cache_path)
+    payload = read_store_payload(ducky, store_path)
+    # An optional pre-baked lineage cache, read via ducky. The explorer can't write
+    # it back (ducky is read-only), so a miss just falls through to live resolution.
+    if cache_path:
+        try:
+            lineage = load_lineage(ducky, cache_path)
+            logger.info("loaded cached lineage from %s", cache_path)
+            return lineage, payload
+        except FileNotFoundError:
+            logger.info("no lineage cache at %s; resolving", cache_path)
+    logger.info("resolving lineage for %s (ducky globs; ~1-2 min)", store_path)
+    lineage = resolve_lineage(
+        store_path, ducky, domain_centroids=config.domain_centroids, quality_model=config.quality_model
+    )
     return lineage, payload
 
 
@@ -381,10 +441,12 @@ def main() -> None:
     lineage, payload = _load(args.store, ducky, args.lineage_cache, config)
     source_summary = None
     if config.source_summary:
-        import json  # noqa: PLC0415 — only needed on this optional path
-
-        source_summary = json.loads(StoragePath(config.source_summary).read_text())
-        logger.info("loaded source summary (%d rows) from %s", len(source_summary), config.source_summary)
+        content = read_text(ducky, config.source_summary)
+        if content is not None:
+            source_summary = json.loads(content)
+            logger.info("loaded source summary (%d rows) from %s", len(source_summary), config.source_summary)
+        else:
+            logger.warning("source summary not found at %s", config.source_summary)
     app = build_app(lineage, payload, ducky, source_summary)
     logger.info(
         "web_explorer for %s: %d sources, %d buckets",
