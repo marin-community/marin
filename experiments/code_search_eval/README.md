@@ -44,13 +44,18 @@ benchmark ─┬─────────────────────�
 
 ## Engines
 
-| engine | kind | index | deps |
-|---|---|---|---|
-| `ripgrep` | lexical regex over query keywords (baseline) | none | none |
-| `bm25` | sparse ranked lexical over line-window chunks | build | `bm25s` |
-| `dense` | local embedding + cosine (the recommended index) | build | `fastembed` |
-| `vectorcode` | off-the-shelf ChromaDB code RAG | build | `vectorcode`, `chromadb` |
-| `seagoat` | off-the-shelf local semantic search | build | `seagoat` |
+| engine | kind | index | deps | status |
+|---|---|---|---|---|
+| `ripgrep` | lexical regex over query keywords (baseline) | none | none | scored |
+| `bm25` | sparse ranked lexical over line-window chunks | build | `bm25s` | scored |
+| `dense` | local embedding + cosine (the recommended index) | build | `fastembed` | scored |
+| `vectorcode` | off-the-shelf ChromaDB code RAG | build | `vectorcode`, `chromadb` | adapter only¹ |
+| `seagoat` | off-the-shelf local semantic search | build | `seagoat` | adapter only¹ |
+
+¹ Adapters ship in `engines/` but neither completed a scored run headless over the full
+monorepo (SeaGOAT's per-line build is too slow at that scale; VectorCode's per-invocation
+ChromaDB server would not accept a connection in our non-interactive environment). See
+`REPORT.md`.
 
 `dense` is our reference implementation of the recommended index: line-window chunking,
 a local ONNX embedding model via `fastembed` (default `BAAI/bge-small-en-v1.5`, set with
@@ -62,7 +67,7 @@ a local ONNX embedding model via `fastembed` (default `BAAI/bge-small-en-v1.5`, 
 MARIN_PREFIX=~/scratch/cse python -m experiments.code_search_eval.pipeline \
     --glob='-home-you-code-marin*' \
     --repo /home/you/code/marin \
-    --engines ripgrep,bm25,dense,vectorcode \
+    --engines ripgrep,bm25,dense \
     --agent-command 'claude -p' \
     --judge-agent-command 'claude -p'
 ```

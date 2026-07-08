@@ -1,0 +1,9 @@
+{
+  "n_sessions_scanned": 2927,
+  "n_raw_candidates": 1197,
+  "n_cleaned_pool": 600,
+  "n_kept_navigation": 237,
+  "n_benchmark_queries": 150,
+  "repo_root": "/home/power/code/marin",
+  "seed": 17
+}

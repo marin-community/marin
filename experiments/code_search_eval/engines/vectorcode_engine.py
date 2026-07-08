@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # /// script
 # requires-python = ">=3.12,<3.14"
-# dependencies = ["vectorcode>=0.7", "chromadb==0.6.3"]
+# dependencies = ["vectorcode>=0.7", "chromadb==0.6.3", "tree-sitter==0.25.1"]
 #
 # [tool.uv]
 # prerelease = "allow"
@@ -24,7 +24,9 @@ lands in the repo or in the caller's home directory.
 `chromadb` is pinned explicitly because an unconstrained resolve of VectorCode's
 `chromadb<=0.6.3` picks a version too old to expose the async client API VectorCode
 imports; that pin in turn needs `prerelease = "allow"` because chromadb 0.6.3 depends
-on a beta-versioned `opentelemetry-instrumentation-fastapi` release.
+on a beta-versioned `opentelemetry-instrumentation-fastapi` release. `tree-sitter` is
+pinned below 0.26 because its 0.26 core segfaults the precompiled grammars in
+`tree-sitter-language-pack` that VectorCode chunks with.
 """
 
 import json
@@ -53,6 +55,12 @@ def _configure(index_dir: str) -> None:
         "db_log_path": db_log_path,
         "embedding_function": "SentenceTransformerEmbeddingFunction",
         "embedding_params": {"model_name": "all-MiniLM-L6-v2"},
+        # Force tree-sitter grammars for extensions whose Pygments lexer name is not a
+        # grammar name: VectorCode would call get_parser("protocol buffer" / "text only"
+        # / "reStructuredText"), which the language pack answers with an (uncaught)
+        # DownloadError instead of a LookupError, aborting the whole vectorise. Plain
+        # text has no grammar, so .txt is chunked with the markdown grammar.
+        "filetype_map": {"proto": ["^proto$"], "markdown": ["^txt$"], "rst": ["^rst$"]},
     }
     with open(os.path.join(vc_dir, "config.json"), "w", encoding="utf-8") as fh:
         json.dump(config, fh)
