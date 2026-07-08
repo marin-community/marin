@@ -57,8 +57,8 @@ storage:
 # IP-restricted federation ingress (lib/iris/scripts/install_cw_network.py):
 # the marin controller presents a federation JWT, everything else is rejected.
 # No signing_key is needed — this cluster runs no finelog relay, so an ephemeral
-# key is fine (as on cw-us-east-02a). The federation verifier itself
-# (auth.federation_peers) lands with the federation-auth code; see docs/coreweave.md.
+# key is fine (as on cw-us-east-02a). See docs/coreweave.md for the federation
+# auth model (the marin peer's federation_peers trust anchor).
 auth:
   trusted_cidrs: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 127.0.0.0/8, "::1/128"]
 

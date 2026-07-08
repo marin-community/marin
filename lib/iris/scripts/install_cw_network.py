@@ -705,6 +705,45 @@ def _delete_federation_ingress(settings: NetworkSettings, kflags: list[str]) -> 
         )
 
 
+def _scan_leftovers(
+    settings: NetworkSettings,
+    *,
+    release_pairs: tuple[tuple[str, str], ...],
+    releases: tuple[str, ...],
+    namespaces: list[str],
+    ingress_class: str,
+    hflags: list[str],
+    kflags: list[str],
+) -> list[str]:
+    """Everything the teardown should have removed that is still present.
+
+    Re-queries the cluster rather than trusting the delete calls returned success,
+    so an empty result is real evidence the teardown is complete.
+    """
+    leftovers: list[str] = []
+    fed_ingress = subprocess.run(
+        ["kubectl", *kflags, "get", "ingress", _INGRESS_NAME, "-n", settings.namespace],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    if fed_ingress.returncode == 0:
+        leftovers.append(f"ingress/{_INGRESS_NAME} (namespace {settings.namespace})")
+    for release, namespace in release_pairs:
+        if _helm_release_installed(release, namespace, hflags):
+            leftovers.append(f"helm release {release} (namespace {namespace})")
+    existing = {_short_name(name) for name in _resource_names("namespace", kflags)}
+    leftovers += [f"namespace/{ns}" for ns in namespaces if ns in existing]
+    leftovers += _group_crds(kflags)
+    for kind in SWEEP_KINDS:
+        leftovers += _release_scoped(kind, releases, kflags)
+    leftovers += [
+        f"ingressclass/{ingress_class}"
+        for name in _resource_names("ingressclass", kflags)
+        if _short_name(name) == ingress_class
+    ]
+    return leftovers
+
+
 def uninstall(settings: NetworkSettings, *, apply: bool) -> None:
     hflags = helm_flags(settings.kubeconfig, settings.context)
     kflags = kubectl_flags(settings.kubeconfig, settings.context)
@@ -789,29 +828,17 @@ def uninstall(settings: NetworkSettings, *, apply: bool) -> None:
     else:
         click.echo(f"  ingressclass/{ingress_class}: already absent")
 
-    # 5. Verify: list anything still present rather than assuming the sweeps worked.
+    # 5. Verify: re-scan for anything still present rather than assuming the sweeps worked.
     click.secho("==> Verifying teardown", fg="blue", bold=True)
-    leftovers: list[str] = []
-    fed_ingress = subprocess.run(
-        ["kubectl", *kflags, "get", "ingress", _INGRESS_NAME, "-n", settings.namespace],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
+    leftovers = _scan_leftovers(
+        settings,
+        release_pairs=release_pairs,
+        releases=releases,
+        namespaces=namespaces,
+        ingress_class=ingress_class,
+        hflags=hflags,
+        kflags=kflags,
     )
-    if fed_ingress.returncode == 0:
-        leftovers.append(f"ingress/{_INGRESS_NAME} (namespace {settings.namespace})")
-    for release, namespace in release_pairs:
-        if _helm_release_installed(release, namespace, hflags):
-            leftovers.append(f"helm release {release} (namespace {namespace})")
-    existing = {_short_name(name) for name in _resource_names("namespace", kflags)}
-    leftovers += [f"namespace/{ns}" for ns in namespaces if ns in existing]
-    leftovers += _group_crds(kflags)
-    for kind in SWEEP_KINDS:
-        leftovers += _release_scoped(kind, releases, kflags)
-    leftovers += [
-        f"ingressclass/{ingress_class}"
-        for name in _resource_names("ingressclass", kflags)
-        if _short_name(name) == ingress_class
-    ]
     if leftovers:
         click.secho("warn: still present after teardown:", fg="yellow", err=True)
         for item in leftovers:
