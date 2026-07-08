@@ -74,7 +74,9 @@ def _make_job_info(task_index: int = 0, num_tasks: int = 1) -> JobInfo:
 @patch("jax.distributed.initialize")
 @patch("iris.runtime.jax_init.iris_ctx")
 @patch("iris.runtime.jax_init.get_job_info")
+@patch("iris.runtime.jax_init.configure_jax_compilation_cache")
 def test_initialize_jax_single_task(
+    mock_configure_cache: MagicMock,
     mock_get_job_info: MagicMock,
     mock_iris_ctx: MagicMock,
     mock_jax_init: MagicMock,
@@ -92,7 +94,9 @@ def test_initialize_jax_single_task(
 @pytest.mark.parametrize("env_key,env_val", [("PJRT_DEVICE", "TPU"), ("JAX_PLATFORMS", "tpu")])
 @patch("jax.distributed.initialize")
 @patch("iris.runtime.jax_init.get_job_info")
+@patch("iris.runtime.jax_init.configure_jax_compilation_cache")
 def test_initialize_jax_tpu_uses_runtime_autodiscovery(
+    mock_configure_cache: MagicMock,
     mock_get_job_info: MagicMock,
     mock_jax_init: MagicMock,
     env_key: str,
@@ -110,7 +114,9 @@ def test_initialize_jax_tpu_uses_runtime_autodiscovery(
 @patch("jax.distributed.initialize")
 @patch("iris.runtime.jax_init.iris_ctx")
 @patch("iris.runtime.jax_init.get_job_info")
+@patch("iris.runtime.jax_init.configure_jax_compilation_cache")
 def test_initialize_jax_no_job_info(
+    mock_configure_cache: MagicMock,
     mock_get_job_info: MagicMock,
     mock_iris_ctx: MagicMock,
     mock_jax_init: MagicMock,
@@ -129,7 +135,9 @@ def test_initialize_jax_no_job_info(
 @patch("jax.distributed.initialize")
 @patch("iris.runtime.jax_init.iris_ctx")
 @patch("iris.runtime.jax_init.get_job_info")
+@patch("iris.runtime.jax_init.configure_jax_compilation_cache")
 def test_initialize_jax_task0_registers(
+    mock_configure_cache: MagicMock,
     mock_get_job_info: MagicMock,
     mock_iris_ctx: MagicMock,
     mock_jax_init: MagicMock,
@@ -151,7 +159,9 @@ def test_initialize_jax_task0_registers(
 @patch("jax.distributed.initialize")
 @patch("iris.runtime.jax_init.iris_ctx")
 @patch("iris.runtime.jax_init.get_job_info")
+@patch("iris.runtime.jax_init.configure_jax_compilation_cache")
 def test_initialize_jax_task0_uses_iris_port(
+    mock_configure_cache: MagicMock,
     mock_get_job_info: MagicMock,
     mock_iris_ctx: MagicMock,
     mock_jax_init: MagicMock,
@@ -173,7 +183,9 @@ def test_initialize_jax_task0_uses_iris_port(
 @patch("jax.distributed.initialize")
 @patch("iris.runtime.jax_init.iris_ctx")
 @patch("iris.runtime.jax_init.get_job_info")
+@patch("iris.runtime.jax_init.configure_jax_compilation_cache")
 def test_initialize_jax_taskN_polls(
+    mock_configure_cache: MagicMock,
     mock_get_job_info: MagicMock,
     mock_iris_ctx: MagicMock,
     mock_jax_init: MagicMock,
@@ -198,7 +210,9 @@ def test_initialize_jax_taskN_polls(
 @patch("jax.distributed.initialize")
 @patch("iris.runtime.jax_init.iris_ctx")
 @patch("iris.runtime.jax_init.get_job_info")
+@patch("iris.runtime.jax_init.configure_jax_compilation_cache")
 def test_initialize_jax_poll_timeout(
+    mock_configure_cache: MagicMock,
     mock_get_job_info: MagicMock,
     mock_iris_ctx: MagicMock,
     mock_jax_init: MagicMock,
@@ -220,7 +234,9 @@ def test_initialize_jax_poll_timeout(
 @patch("jax.distributed.initialize")
 @patch("iris.runtime.jax_init.iris_ctx")
 @patch("iris.runtime.jax_init.get_job_info")
+@patch("iris.runtime.jax_init.configure_jax_compilation_cache")
 def test_initialize_jax_supervised_single_host(
+    mock_configure_cache: MagicMock,
     mock_get_job_info: MagicMock,
     mock_iris_ctx: MagicMock,
     mock_jax_init: MagicMock,
@@ -243,7 +259,9 @@ def test_initialize_jax_supervised_single_host(
 @patch("jax.distributed.initialize")
 @patch("iris.runtime.jax_init.iris_ctx")
 @patch("iris.runtime.jax_init.get_job_info")
+@patch("iris.runtime.jax_init.configure_jax_compilation_cache")
 def test_initialize_jax_supervised_global_rank0_registers(
+    mock_configure_cache: MagicMock,
     mock_get_job_info: MagicMock,
     mock_iris_ctx: MagicMock,
     mock_jax_init: MagicMock,
@@ -267,7 +285,9 @@ def test_initialize_jax_supervised_global_rank0_registers(
 @patch("jax.distributed.initialize")
 @patch("iris.runtime.jax_init.iris_ctx")
 @patch("iris.runtime.jax_init.get_job_info")
+@patch("iris.runtime.jax_init.configure_jax_compilation_cache")
 def test_initialize_jax_supervised_other_host_polls(
+    mock_configure_cache: MagicMock,
     mock_get_job_info: MagicMock,
     mock_iris_ctx: MagicMock,
     mock_jax_init: MagicMock,

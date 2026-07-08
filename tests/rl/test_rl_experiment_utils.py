@@ -5,6 +5,7 @@ import dataclasses
 from types import SimpleNamespace
 
 import pytest
+import rigging.filesystem as fs
 from levanter.models.llama import LlamaConfig
 from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep, materialized_config
@@ -51,6 +52,19 @@ def _noop(_config: _EmptyConfig) -> None:
 @pytest.fixture(autouse=True)
 def _default_launcher_region(monkeypatch):
     monkeypatch.setenv("MARIN_PREFIX", "gs://marin-us-central1")
+    # marin_region() checks GCE instance metadata before MARIN_PREFIX; on a real
+    # GCP host that resolves a real region and silently overrides the prefix
+    # these tests set, so pin it to "not on GCP" for hermetic region resolution.
+    monkeypatch.setattr(fs, "region_from_metadata", lambda: None)
+    # A per-user ~/.config/marin/clusters override (real on some dev hosts) can
+    # shadow the repo-committed config/marin.yaml with a data-less document,
+    # dropping the eu-west4 -> europe-west4 bucket normalization these tests
+    # rely on. Force resolution onto the repo-committed config dirs only.
+    hermetic_dirs = tuple(p for p in fs.MARIN_CLUSTER_CONFIG_DIRS if p != "~/.config/marin/clusters")
+    monkeypatch.setattr(fs, "MARIN_CLUSTER_CONFIG_DIRS", hermetic_dirs)
+    fs.reset_data_config_cache()
+    yield
+    fs.reset_data_config_cache()
 
 
 def _test_config(

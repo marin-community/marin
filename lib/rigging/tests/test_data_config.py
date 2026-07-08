@@ -6,7 +6,6 @@ field-default parsing, and prefix resolution."""
 
 import pytest
 import rigging.filesystem as fs
-from rigging.config_discovery import find_project_root
 from rigging.filesystem import (
     BucketSpec,
     DataConfig,
@@ -19,16 +18,6 @@ from rigging.filesystem import (
     s3_data_buckets,
     use_data_config,
 )
-
-
-@pytest.fixture(autouse=True)
-def _clear_caches():
-    """Reset config-discovery and data-config caches around each test."""
-    find_project_root.cache_clear()
-    reset_data_config_cache()
-    yield
-    reset_data_config_cache()
-
 
 # --- loading / active-config selection -------------------------------------
 
