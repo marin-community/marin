@@ -76,13 +76,13 @@ import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from enum import StrEnum
 
-import fsspec
 from fray import ResourceConfig
 from marin.datakit.sources import DatakitSource, all_sources
 from marin.execution.step_runner import StepRunner
 from marin.execution.step_spec import StepSpec
 from marin.execution.step_status import STATUS_SUCCESS, StatusFile, StepAlreadyDone, step_lock
 from rigging.filesystem import atomic_rename, marin_prefix
+from rigging.filesystem import url_to_fs as _rigging_url_to_fs
 from rigging.log_setup import configure_logging
 from zephyr import Dataset, ZephyrContext, counters
 from zephyr.shard_keys import deterministic_hash
@@ -367,8 +367,15 @@ def _s3_creds_kwargs(path: str) -> dict:
 
 
 def _url_to_fs(path: str, **extra):
-    """``fsspec.core.url_to_fs`` with per-bucket R2 creds injected (see :func:`_s3_creds_kwargs`)."""
-    return fsspec.core.url_to_fs(path, **_s3_creds_kwargs(path), **extra)
+    """``url_to_fs`` with per-bucket R2 creds injected (see :func:`_s3_creds_kwargs`).
+
+    Goes through rigging's ``url_to_fs`` rather than raw fsspec so every S3
+    filesystem (both the R2 source and the CoreWeave dest) gets finite
+    ``connect_timeout``/``read_timeout`` + bounded retries. Without them a wedged
+    R2/CoreWeave socket (e.g. a hung ``CompleteMultipartUpload``) blocks
+    ``fsspec.asyn.sync`` forever and the copy thread never returns (#6487).
+    """
+    return _rigging_url_to_fs(path, **_s3_creds_kwargs(path), **extra)
 
 
 def _finalize_executor_status(src_dir: str, dst_dir: str) -> None:
