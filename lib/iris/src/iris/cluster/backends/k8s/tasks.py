@@ -25,6 +25,7 @@ from typing import ClassVar
 from finelog.client.log_client import Table
 from rigging.timing import Timestamp
 
+from iris.cluster.config import user_admitted
 from iris.cluster.controller.autoscaler import Autoscaler
 from iris.cluster.controller.backend import (
     AutoscaleRequest,
@@ -37,7 +38,6 @@ from iris.cluster.controller.backend import (
     ScheduleRequest,
     ScheduleResult,
     TaskTarget,
-    user_admitted,
 )
 from iris.cluster.controller.ops.task import apply_dispatch_updates
 from iris.cluster.controller.reconcile.loader import TransitionReader

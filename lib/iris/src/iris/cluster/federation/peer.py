@@ -173,9 +173,14 @@ class FederationPeer:
         self.peer_id = peer_id
         self.controller_address = config.controller_address
         self.dashboard_url = config.dashboard_url
+        self._allow_policy = config.allow_policy
         self._connection = connection
         self._lock = threading.Lock()
         self._heartbeat = PeerHeartbeat()
+
+    def admits(self, submitting_user: str) -> bool:
+        """Whether this peer's allow policy permits ``submitting_user`` to federate here."""
+        return self._allow_policy.admits(submitting_user)
 
     def probe(self) -> None:
         """Refresh the peer's advertised backends via one heartbeat RPC.

@@ -73,7 +73,7 @@ from iris.cluster.controller.schema import (
 from iris.cluster.controller.task_state import ACTIVE_TASK_STATES, task_row_can_be_scheduled
 from iris.cluster.controller.worker_health import WorkerLiveness
 from iris.cluster.federation.manager import FederationManager
-from iris.cluster.federation.router import RoutingRequest, SubmitRouting
+from iris.cluster.federation.router import PeerAdmissionDenied, RoutingRequest, SubmitRouting
 from iris.cluster.federation.store import HandoffState
 from iris.cluster.log_highlights import extract_failure_highlights
 from iris.cluster.log_keys import build_log_source
@@ -1558,13 +1558,20 @@ class ControllerServiceImpl:
         if is_received_handoff:
             routing = SubmitRouting()
         else:
-            routing = self._controller.federation.route_submit(
-                RoutingRequest(
-                    constraints=constraints,
-                    local_feasible=feasible,
-                    cluster_pin=cluster_pin or "",
+            try:
+                routing = self._controller.federation.route_submit(
+                    RoutingRequest(
+                        constraints=constraints,
+                        local_feasible=feasible,
+                        cluster_pin=cluster_pin or "",
+                        submitting_user=submitting_user,
+                    )
                 )
-            )
+            except PeerAdmissionDenied as denied:
+                raise ConnectError(
+                    Code.PERMISSION_DENIED,
+                    f"Submitter {denied.submitting_user!r} is not permitted to run on cluster " f"{denied.peer_id!r}.",
+                ) from denied
 
         if not routing.is_local:
             return self._hand_off_job(job_id, request, routing.peer_id, submitting_user)

@@ -11,12 +11,12 @@ live backends, the ListPeers view, and the submit router's decision matrix
 import pydantic
 import pytest
 from iris.cluster.backends.rpc.backend import EXEC_IN_CONTAINER_MAX_TIMEOUT
-from iris.cluster.config import PeerConfig, config_to_dict, parse_config
+from iris.cluster.config import PeerConfig, config_to_dict, parse_config, user_admitted
 from iris.cluster.constraints import Constraint, ConstraintOp, WellKnownAttribute
 from iris.cluster.federation import peer as peer_module
 from iris.cluster.federation.manager import FederationManager
 from iris.cluster.federation.peer import FederationPeer, build_peers
-from iris.cluster.federation.router import PeerRouter, RoutingRequest
+from iris.cluster.federation.router import PeerAdmissionDenied, PeerRouter, RoutingRequest
 from iris.managed_thread import get_thread_container, thread_container_scope
 from iris.rpc import controller_pb2
 from rigging.timing import Duration, ExponentialBackoff
@@ -105,12 +105,16 @@ class _StubConnection:
         self.shutdown_count += 1
 
 
-def _peer(peer_id: str, connection: _StubConnection, *, dashboard_url: str = "https://cw.dev") -> FederationPeer:
-    return FederationPeer(
-        peer_id,
-        PeerConfig(controller_address="http://cw:10000", dashboard_url=dashboard_url),
-        connection,
-    )
+def _peer(
+    peer_id: str,
+    connection: _StubConnection,
+    *,
+    dashboard_url: str = "https://cw.dev",
+    allow_policy: list[str] | None = None,
+) -> FederationPeer:
+    extra = {"allow_policy": {"users": allow_policy}} if allow_policy is not None else {}
+    config = PeerConfig(controller_address="http://cw:10000", dashboard_url=dashboard_url, **extra)
+    return FederationPeer(peer_id, config, connection)
 
 
 def test_peer_probe_populates_backends_and_reachability():
@@ -272,4 +276,68 @@ def test_router_cluster_pin_forces_the_peer_even_when_locally_feasible():
     peer = _peer("cw", _StubConnection((_device_backend("tpu-fleet", "tpu"),)))
     peer.probe()
     request = RoutingRequest(constraints=[], local_feasible=True, cluster_pin="cw")
+    assert PeerRouter([peer]).decide(request).peer_id == "cw"
+
+
+# ---------------------------------------------------------------------------
+# per-cluster allowlist (allow_policy on the submitting_user)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "allowed, user, admitted",
+    [
+        (["*"], "anyone@anywhere.com", True),
+        (["*@openathena.ai"], "alice@openathena.ai", True),
+        (["*@openathena.ai"], "alice@OPENATHENA.AI", True),  # domain match is case-insensitive
+        (["*@openathena.ai"], "mallory@evil.com", False),
+        (["*@openathena.ai"], "local_admin", False),  # no @ — never a domain match
+        (["alice@openathena.ai"], "alice@openathena.ai", True),  # exact identity
+        (["alice@openathena.ai"], "bob@openathena.ai", False),
+    ],
+)
+def test_user_admitted_matches_wildcard_domain_and_exact(allowed, user, admitted):
+    assert user_admitted(allowed, user) is admitted
+
+
+def test_router_cluster_pin_denied_for_a_submitter_outside_the_allowlist():
+    peer = _peer("cw", _StubConnection((_device_backend("tpu-fleet", "tpu"),)), allow_policy=["*@openathena.ai"])
+    peer.probe()
+    request = RoutingRequest(constraints=[], local_feasible=True, cluster_pin="cw", submitting_user="mallory@evil.com")
+    with pytest.raises(PeerAdmissionDenied):
+        PeerRouter([peer]).decide(request)
+
+
+def test_router_cluster_pin_admits_a_submitter_in_the_allowed_domain():
+    peer = _peer("cw", _StubConnection((_device_backend("tpu-fleet", "tpu"),)), allow_policy=["*@openathena.ai"])
+    peer.probe()
+    request = RoutingRequest(
+        constraints=[], local_feasible=True, cluster_pin="cw", submitting_user="alice@openathena.ai"
+    )
+    assert PeerRouter([peer]).decide(request).peer_id == "cw"
+
+
+def test_router_auto_match_skips_a_peer_that_does_not_admit_the_submitter():
+    peer = _peer(
+        "cw",
+        _StubConnection((_device_backend("tpu-fleet", "tpu"),)),
+        allow_policy=["*@openathena.ai"],
+    )
+    peer.probe()
+    # The peer can host the shape but must not receive a non-OA submitter, so an
+    # auto-match stays local (the caller then fails it as unschedulable).
+    request = RoutingRequest(constraints=[_device_constraint("tpu")], local_feasible=False, submitting_user="x@evil.com")
+    assert PeerRouter([peer]).decide(request).is_local is True
+
+
+def test_router_auto_match_uses_a_peer_that_admits_the_submitter():
+    peer = _peer(
+        "cw",
+        _StubConnection((_device_backend("tpu-fleet", "tpu"),)),
+        allow_policy=["*@openathena.ai"],
+    )
+    peer.probe()
+    request = RoutingRequest(
+        constraints=[_device_constraint("tpu")], local_feasible=False, submitting_user="alice@openathena.ai"
+    )
     assert PeerRouter([peer]).decide(request).peer_id == "cw"

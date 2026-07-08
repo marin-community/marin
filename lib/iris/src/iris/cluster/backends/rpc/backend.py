@@ -24,6 +24,7 @@ from typing import ClassVar, Protocol, TypeVar
 from rigging.timing import Duration, Timestamp
 
 from iris.chaos import chaos
+from iris.cluster.config import user_admitted
 from iris.cluster.controller.autoscaler import Autoscaler
 from iris.cluster.controller.autoscaler.status import overlay_worker_usability
 from iris.cluster.controller.backend import (
@@ -41,7 +42,6 @@ from iris.cluster.controller.backend import (
     assemble_scheduling_context,
     plans_from_snapshot,
     run_scheduling_decision,
-    user_admitted,
 )
 from iris.cluster.controller.backend_store import BackendWorkerStore, DbBackendWorkerStore
 from iris.cluster.controller.ops.worker import apply_reconcile
