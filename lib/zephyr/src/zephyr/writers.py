@@ -224,22 +224,36 @@ def write_parquet_file(
     ensure_parent_dir(output_path)
     count = 0
 
+    # Hand pyarrow an fsspec-backed write stream (via rigging's ``url_to_fs``)
+    # rather than a URI string. Given a URI, pyarrow builds its own native
+    # ``S3FileSystem``, which uses path-style addressing and is rejected by
+    # CoreWeave object storage (HTTP 400 ``PathStyleRequestNotAllowed``). Routing
+    # the stream through fsspec uses the correctly-addressed client — the same
+    # reason the parquet reader opens via fsspec (see ``readers.py``).
     with atomic_rename(output_path) as temp_path:
+        fs, resolved_temp = url_to_fs(temp_path)
         writer: pq.ParquetWriter | None = None
+        sink = None
         try:
             for table in _accumulate_tables(records, schema=schema, target_bytes=target_buffer_bytes):
                 if writer is None:
-                    writer = pq.ParquetWriter(temp_path, table.schema)
+                    sink = fs.open(resolved_temp, "wb", block_size=_WRITE_BLOCK_SIZE)
+                    writer = pq.ParquetWriter(sink, table.schema)
                 writer.write_table(table)
                 count += len(table)
                 counters.pipeline.update_counter(counters.RECORDS_OUT, len(table))
         finally:
+            # Close the writer first so it flushes the parquet footer into the
+            # stream, then close the stream to publish the object.
             if writer is not None:
                 writer.close()
+            if sink is not None:
+                sink.close()
 
         if writer is None:
             actual_schema = schema or pa.schema([])
-            pq.write_table(pa.Table.from_pylist([], schema=actual_schema), temp_path)
+            with fs.open(resolved_temp, "wb", block_size=_WRITE_BLOCK_SIZE) as empty_sink:
+                pq.write_table(pa.Table.from_pylist([], schema=actual_schema), empty_sink)
 
     return {"path": output_path, "count": count}
 
