@@ -162,8 +162,7 @@ def test_fresh_db_schema_matches_replaying_every_delta(tmp_path: Path) -> None:
     so replaying them over a fresh baseline yields the same tables and indexes. A
     delta that adds schema the baseline does not declare fails here.
 
-    The comparison covers schema alone. The two DBs differ by one row: ``0033``
-    seeds a ``backends`` row on the replayed DB, and no code reads that table.
+    The comparison covers schema alone.
     """
     skipped = tmp_path / "skipped"
     _migrate(skipped)

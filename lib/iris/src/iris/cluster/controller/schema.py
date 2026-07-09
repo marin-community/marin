@@ -444,18 +444,6 @@ task_attempts_table = Table(
 )
 
 
-backends_table = Table(
-    "backends",
-    metadata,
-    Column("backend_id", String, primary_key=True),
-    Column("kind", String, nullable=False, server_default=""),
-    Column("status", Integer, nullable=False, server_default="0"),
-    Column("attributes_json", String, nullable=False, server_default="{}"),
-    Column("allow_policy_json", String, nullable=False, server_default="{}"),
-    Column("last_seen_ms", Integer),
-)
-
-
 workers_table = Table(
     "workers",
     metadata,
