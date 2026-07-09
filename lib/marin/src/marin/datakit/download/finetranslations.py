@@ -83,6 +83,10 @@ def finetranslations_normalize_steps() -> tuple[StepSpec, ...]:
         hf_dataset_id=FINETRANSLATIONS_HF_ID,
         revision=FINETRANSLATIONS_REVISION,
         hf_urls_glob=["data/**/*.parquet"],
+        # ~7.1k parquet files; the default 8-way download crawls. 16 workers
+        # roughly halves wall-clock (not a hash_attr, so bumping it resumes the
+        # existing partial download rather than restarting it).
+        zephyr_max_parallelism=16,
     )
     processed = StepSpec(
         name="processed/finetranslations",
