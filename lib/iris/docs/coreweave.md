@@ -219,12 +219,14 @@ client), pass `--xff-depth 1` so the allowlist reads the client IP from
 
 #### External address and DNS (`oa.dev` -> `coreweave.app`)
 
-The external address is served by Traefik's LoadBalancer, not the controller Pod,
-and CoreWeave gives it a stable FQDN under `*.coreweave.app` — you never chase a
-churning IP. `install_cw_network.py install --apply` prints the exact CNAME record
-to create (`iris-cw-<cluster>.oa.dev  CNAME  <that FQDN>`); `oa.dev` DNS is at
-Namecheap, Advanced DNS panel. The `coreweave.app` name is only a stable CNAME
-target — all routing, Host matching, and TLS are on the `oa.dev` name.
+The external address is served by Traefik's LoadBalancer, not the controller Pod.
+CoreWeave publishes a wildcard record for it, `*.<tenant>.coreweave.app`, so every
+label under that domain resolves to the LoadBalancer and you never chase a churning
+IP. `install_cw_network.py install --apply` prints the exact CNAME record to create,
+resolving the wildcard against the ingress host's own first label
+(`iris-cw-<cluster>.oa.dev  CNAME  iris-cw-<cluster>.<tenant>.coreweave.app`); `oa.dev`
+DNS is at Namecheap, Advanced DNS panel. The `coreweave.app` name is only a stable
+CNAME target — all routing, Host matching, and TLS are on the `oa.dev` name.
 
 TLS terminates in-cluster (no IAP/edge layer; Namecheap doesn't proxy TLS).
 `install_cw_network.py` creates HTTP-01 Let's Encrypt ClusterIssuers
@@ -315,9 +317,16 @@ operator reference (any `--cluster=NAME`) and the lifecycle details behind it.
 - Images pushed to `ghcr.io/marin-community/`
 - Controller extras: `uv pip install 'marin-iris[controller]'`
 
-CoreWeave clusters default to CoreWeave AI Object Storage
-(`object_storage_endpoint: http://cwlota.com` in the cluster configs). Export
-`CW_KEY_ID` / `CW_KEY_SECRET` (CoreWeave Object Storage access keys) before
+CoreWeave clusters default to CoreWeave AI Object Storage. The configs name the
+bucket twice, once per vantage point: `object_storage_endpoint: http://cwlota.com`
+is LOTA, the in-cluster cache, and `external_object_storage_endpoint:
+https://cwobject.com` is the same bucket as an operator's own machine reaches it.
+Pods get the first; `iris` running outside the cluster signs against the second.
+LOTA's name resolves to a private address, so a config with only the first field
+strands every operator-side S3 call (`iris cluster controller restart` reads the
+rollout record from object storage).
+
+Export `CW_KEY_ID` / `CW_KEY_SECRET` (CoreWeave Object Storage access keys) before
 `iris cluster start`; it folds them — plus the derived
 endpoint/region/`FSSPEC_S3` config — into the `iris-task-env` Secret, projected
 into the controller and task pods via `envFrom`. From then on every task has
@@ -325,9 +334,7 @@ working S3 credentials embedded; job submitters never handle storage keys.
 
 > **Note**: CoreWeave AI Object Storage (`cwobject.com`, `cwlota.com`) uses
 > virtual-hosted-style S3 addressing, which is auto-detected and configured
-> (including JAX/tensorstore checkpointing). In-cluster consumers should use
-> `http://cwlota.com` — LOTA, the node-local cache endpoint; use
-> `https://cwobject.com` from outside CoreWeave.
+> (including JAX/tensorstore checkpointing).
 
 ### CoreWeave AI Object Storage access
 
