@@ -65,12 +65,17 @@ def _load_eval_texts(eval_ids: set[str]) -> dict[str, str]:
     return texts
 
 
+_READ_BATCH_ROWS = 131072
+
+
 def _read_parquet(path: str, columns: list[str] | None = None):
+    """Yield record batches (not whole tables) so a huge file — e.g. the 36M-row
+    eval_hash_index — never materializes at once and OOMs the exporter."""
     fs, resolved = url_to_fs(path)
     files = sorted(f for f in fs.find(resolved) if f.endswith(".parquet"))
     for f in files:
         with fs.open(f, "rb") as fh:
-            yield pq.read_table(fh, columns=columns)
+            yield from pq.ParquetFile(fh).iter_batches(batch_size=_READ_BATCH_ROWS, columns=columns)
 
 
 def _source_rows(decon_out: str, k: int, rng: random.Random) -> tuple[int, int, list[dict]]:
