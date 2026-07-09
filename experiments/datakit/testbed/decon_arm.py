@@ -29,6 +29,7 @@ import os
 
 from fray.types import ResourceConfig
 from marin.datakit.decon import build_eval_bloom_step, decon_step
+from marin.datakit.sources import all_sources
 from marin.execution.step_runner import StepRunner
 from marin.execution.step_spec import StepSpec
 from rigging.filesystem import marin_prefix
@@ -54,16 +55,24 @@ WORKER_RESOURCES = ResourceConfig(cpu=2, ram="8g")
 def build_testbed_decon_steps(
     target_total_tokens_b: float = RAW_TARGET_TOTAL_TOKENS_B,
     only_sources: list[str] | None = None,
+    exclude_sources: frozenset[str] = frozenset(),
 ) -> list[StepSpec]:
     """Bloom (fixed) + one decon step per sampled source.
 
     ``only_sources`` restricts the decon fan-out to named sources (for smokes);
     StepRunner still walks each decon step's deps, so the matching sample +
-    normalize chains run on demand. Sample fractions are always the full 1T
-    proportional fractions, so a restricted run still decons a source's true
-    1T-share sample.
+    normalize chains run on demand.
+
+    ``exclude_sources`` drops sources from the sample *construction* — the
+    proportional fractions are recomputed over the kept set, so this must match
+    the exclusion used to build the samples being deconned (e.g. the
+    finetranslations + ghalogs/public exclusion behind the CoreWeave testbed's
+    115-source ``sample_{100b,500b,1t}_*`` roots). Leave empty for the full
+    117-source fractions. Mutually distinct from ``only_sources``, which only
+    narrows the fan-out without changing fractions.
     """
-    testbed_steps = build_testbed_steps(target_total_tokens_b=target_total_tokens_b)
+    sources = [s for n, s in all_sources().items() if n not in exclude_sources] if exclude_sources else None
+    testbed_steps = build_testbed_steps(target_total_tokens_b=target_total_tokens_b, sources=sources)
     sampled = {
         s.name.removeprefix(_SAMPLE_STEP_PREFIX): s for s in testbed_steps if s.name.startswith(_SAMPLE_STEP_PREFIX)
     }
@@ -108,9 +117,22 @@ def main() -> None:
     configure_logging(logging.INFO)
     ap = argparse.ArgumentParser()
     ap.add_argument("--only", nargs="*", default=None, help="restrict decon to these source names (smoke)")
+    ap.add_argument(
+        "--exclude",
+        nargs="*",
+        default=None,
+        help="drop these sources from the sample construction (recomputes fractions; "
+        "match the samples being deconned, e.g. finetranslations ghalogs/public for the CoreWeave testbed)",
+    )
     ap.add_argument("--target-tokens-b", type=float, default=RAW_TARGET_TOTAL_TOKENS_B)
     args = ap.parse_args()
-    StepRunner().run(build_testbed_decon_steps(target_total_tokens_b=args.target_tokens_b, only_sources=args.only))
+    StepRunner().run(
+        build_testbed_decon_steps(
+            target_total_tokens_b=args.target_tokens_b,
+            only_sources=args.only,
+            exclude_sources=frozenset(args.exclude or ()),
+        )
+    )
 
 
 if __name__ == "__main__":
