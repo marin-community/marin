@@ -512,6 +512,8 @@ export interface LogEntry {
   attemptId?: number
   level?: string
   key?: string
+  /** Store row id, ascending in write order. int64, so proto JSON sends a string. */
+  seq?: string
 }
 
 export interface FetchLogsResponse {

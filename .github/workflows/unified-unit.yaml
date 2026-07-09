@@ -1,15 +1,10 @@
-name: "Marin - Unit (unified)"
+name: "Marin - Unit"
 
 on:
   pull_request:
   push:
     branches: [main]
   workflow_dispatch:
-    inputs:
-      force_run_all:
-        description: "Bypass the analyzer; run every package's full suite."
-        type: boolean
-        default: false
 
 concurrency:
   group: unified-unit-${{ github.event.pull_request.number || github.ref }}
@@ -23,26 +18,36 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.analyze.outputs.matrix }}
+      suites: ${{ steps.analyze.outputs.suites }}
     steps:
       - uses: actions/checkout@v5
         with:
           fetch-depth: 0
+          # A pull_request event checks out refs/pull/N/merge by default. Diffing the
+          # base against that merge commit also yields every commit merged into main
+          # since the branch point, which is not what this pull request changed.
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - id: analyze
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
         run: |
-          BASE_REF="${{ github.event.pull_request.base.sha || github.event.before }}"
+          # A pull request selects tests from its diff. A push to main re-runs every unit
+          # test, which is what catches anything the import graph failed to select on the
+          # pull request that introduced it; it still gates the accelerator and browser
+          # suites on the diff, because those are chosen by directory and never by import.
+          # A manual run, and a push whose base is unknown, run everything.
           ARGS=()
-          if [ "${{ inputs.force_run_all }}" = "true" ] \
-              || [ -z "$BASE_REF" ] \
-              || [ "$BASE_REF" = "0000000000000000000000000000000000000000" ]; then
-            ARGS+=(--force-run-all)
-          else
-            ARGS+=(--base-ref "$BASE_REF")
+          if [ "${{ github.event_name }}" != "pull_request" ]; then
+            ARGS+=(--run-all-tests)
+          fi
+          if [ -n "$BASE_SHA" ] && [ "$BASE_SHA" != "0000000000000000000000000000000000000000" ]; then
+            ARGS+=(--base-ref "$BASE_SHA")
           fi
           result=$(python3 infra/ci/select_tests.py "${ARGS[@]}")
-          echo "Result of select tests:"
           echo "$result"
-          echo "matrix=$(echo "$result" | jq -c .matrix)" >> "$GITHUB_OUTPUT"
+          echo "matrix=$(jq -c .matrix <<<"$result")" >> "$GITHUB_OUTPUT"
+          echo "suites=$(jq -c .suites <<<"$result")" >> "$GITHUB_OUTPUT"
 
   unit:
     needs: select
@@ -59,8 +64,11 @@ jobs:
       - uses: astral-sh/setup-uv@v7
         with:
           python-version: "3.12"
+          enable-cache: true
 
-      - run: >-
+      - env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: >-
           uv run
           --package ${{ matrix.package }}
           ${{ matrix.extras }}
@@ -68,14 +76,216 @@ jobs:
           pytest --durations=5 -n auto --dist=worksteal --tb=short
           ${{ matrix.test_paths }}
 
-  aggregate:
-    needs: [select, unit]
+  levanter_torch:
+    name: levanter-torch
+    needs: select
+    if: ${{ contains(fromJSON(needs.select.outputs.suites), 'levanter-torch') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: lib/levanter
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install uv and Python
+        uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.12"
+          enable-cache: true
+          working-directory: lib/levanter
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+
+      - name: Install dependencies
+        run: uv sync --package marin-levanter --dev --group test --frozen --extra torch_test --no-install-package torch
+
+      - name: Install locked CPU torch wheel
+        run: |
+          TORCH_CPU_VERSION=$(python3 - <<'PY'
+          import tomllib
+          from pathlib import Path
+          lock = tomllib.loads(Path("../../uv.lock").read_text())
+          versions = {
+              package["version"]
+              for package in lock.get("package", [])
+              if package.get("name") == "torch" and package.get("version", "").endswith("+cpu")
+          }
+          if len(versions) != 1:
+              raise SystemExit(
+                  f"Expected exactly one torch +cpu version in uv.lock, found {len(versions)}: {sorted(versions)}"
+              )
+          print(next(iter(versions)))
+          PY
+          )
+          echo "Using torch ${TORCH_CPU_VERSION}"
+          # download.pytorch.org's index lists each wheel on its download-r2 CDN
+          # host; install the CPU wheel by direct URL on the canonical host and
+          # pull its dependencies from PyPI.
+          CP_TAG=$(../../.venv/bin/python -c "import sys; print(f'cp{sys.version_info[0]}{sys.version_info[1]}')")
+          uv pip install \
+            "https://download.pytorch.org/whl/cpu/torch-${TORCH_CPU_VERSION/+/%2B}-${CP_TAG}-${CP_TAG}-manylinux_2_28_x86_64.whl"
+
+      - name: Install FFmpeg runtime
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+
+      - name: Test torch-marked suite
+        # Run directly on CPU to avoid GPU dependency issues.
+        run: CUDA_VISIBLE_DEVICES="" ../../.venv/bin/python -m pytest tests -m "torch" --durations=20
+
+  levanter_tpu:
+    name: levanter-tpu
+    needs: select
+    if: >-
+      ${{ contains(fromJSON(needs.select.outputs.suites), 'levanter-tpu')
+      && (github.event_name != 'pull_request'
+          || github.event.pull_request.head.repo.full_name == github.repository) }}
+    runs-on: [tpu-ci]
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Run Levanter TPU tests in Docker
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          WANDB_API_KEY: ${{ secrets.WANDB_API_KEY }}
+        run: |
+          bash infra/tpu-ci/clean-tpu.sh
+          DOCKER_IMAGE="ghcr.io/marin-community/marin/tpu-ci:latest"
+          echo "Using Docker image: $DOCKER_IMAGE"
+          mkdir -p /tmp/uv-cache
+          chmod 777 /tmp/uv-cache
+          # Run Levanter tests with the package TPU extra so CI validates the
+          # explicit jax/jaxlib/libtpu pins shipped by marin-levanter.
+          # TPU collection imports call jax.devices(), so keep pytest single-process here.
+          docker run --rm \
+            --device /dev/vfio:/dev/vfio \
+            --shm-size=100g \
+            --stop-timeout=5 \
+            --cap-add=SYS_RESOURCE \
+            --ulimit memlock=68719476736:68719476736 \
+            -e TPU_CI=true \
+            -e JAX_COORDINATOR_ADDRESS=127.0.0.1 \
+            -e TPU_STDERR_LOG_LEVEL=3 \
+            -e TPU_MIN_LOG_LEVEL=3 \
+            -e PYTHONPATH=/workspace \
+            -e JAX_PLATFORMS=tpu,cpu \
+            -e PJRT_DEVICE=TPU \
+            -e HF_TOKEN \
+            -e WANDB_API_KEY \
+            -e WANDB_MODE=offline \
+            -e UV_CACHE_DIR=/tmp/uv-cache \
+            -v ${{ github.workspace }}:/workspace-src:ro \
+            -v /tmp/uv-cache:/tmp/uv-cache:rw \
+            -w /workspace \
+            $DOCKER_IMAGE \
+            bash -c "\
+              # Install Node.js in userspace if not present (needed for protobuf generation during uv sync)
+              if ! command -v npx >/dev/null 2>&1; then \
+                echo '::group::Installing Node.js in userspace'; \
+                curl -fsSL https://nodejs.org/dist/v22.16.0/node-v22.16.0-linux-x64.tar.xz | tar -xJ -C /tmp && \
+                export PATH=/tmp/node-v22.16.0-linux-x64/bin:\$PATH; \
+                echo '::endgroup::'; \
+              fi && \
+              cp -a /workspace-src/. /workspace/ && cd /workspace && \
+              timeout --kill-after=5 --signal=TERM 1490 \
+              uv run --package marin-levanter --frozen --group test --extra tpu \
+              pytest -n 0 lib/levanter/tests \
+              --ignore=lib/levanter/tests/test_audio.py \
+              --ignore=lib/levanter/tests/test_new_cache.py \
+              --ignore=lib/levanter/tests/test_hf_checkpoints.py \
+              --ignore=lib/levanter/tests/test_hf_gpt2_serialize.py \
+              --ignore=lib/levanter/tests/test_gdn_layer.py \
+              -v --tb=short --log-cli-level=WARNING --durations=20"
+
+  iris_e2e_smoke:
+    name: iris-e2e-smoke
+    needs: select
+    if: ${{ contains(fromJSON(needs.select.outputs.suites), 'iris-e2e-smoke') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN || secrets.CLAUDE_MAX_OAUTH_TOKEN }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.12"
+          enable-cache: true
+          cache-dependency-glob: "lib/iris/pyproject.toml"
+
+      - name: Resolve Playwright version
+        id: playwright-version
+        run: |
+          version=$(awk '/^name = "playwright"$/{getline; print}' uv.lock | sed -E 's/version = "(.*)"/\1/')
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Cache Playwright browsers
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ steps.playwright-version.outputs.version }}
+
+      - name: Install Playwright browsers
+        # Always run: `playwright install` only downloads browsers it does not already
+        # have, so a warm cache stays fast, while a partial or stale cache self-heals
+        # instead of leaving a missing browser binary. `--with-deps` reinstalls the system
+        # libraries that the browser cache cannot hold.
+        run: uv run --package marin-iris playwright install --with-deps chromium
+
+      - name: Run E2E smoke tests
+        env:
+          IRIS_SCREENSHOT_DIR: ${{ github.workspace }}/iris-screenshots
+          PYTHONASYNCIODEBUG: "1"
+        run: |
+          mkdir -p ${{ github.workspace }}/iris-screenshots
+          uv run --package marin-iris --frozen --group test pytest \
+            lib/iris/tests/e2e/test_smoke.py \
+            -m requires_cluster -o "addopts=" --tb=short -v
+
+      - name: Verify screenshots with Claude
+        # Skip on PRs without secrets access (forks, dependabot): no token means
+        # the claude CLI can't authenticate, so the step would only error out.
+        if: always() && env.CLAUDE_CODE_OAUTH_TOKEN != '' && hashFiles('iris-screenshots/*.txt') != ''
+        run: |
+          npm install -g @anthropic-ai/claude-code
+          python lib/iris/scripts/verify_screenshots.py \
+            --screenshot-dir ${{ github.workspace }}/iris-screenshots
+
+      - name: Upload screenshots
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: iris-smoke-screenshots
+          path: iris-screenshots/
+          retention-days: 14
+          if-no-files-found: ignore
+
+  unit_tests:
+    name: unit-tests
+    needs: [select, unit, levanter_torch, levanter_tpu, iris_e2e_smoke]
     if: always()
     runs-on: ubuntu-latest
     steps:
       - run: |
           [ "${{ needs.select.result }}" = "success" ] || exit 1
-          case "${{ needs.unit.result }}" in
-            success|skipped) exit 0 ;;
-            *) exit 1 ;;
-          esac
+          for result in \
+            "${{ needs.unit.result }}" \
+            "${{ needs.levanter_torch.result }}" \
+            "${{ needs.levanter_tpu.result }}" \
+            "${{ needs.iris_e2e_smoke.result }}"
+          do
+            case "$result" in
+              success|skipped) ;;
+              *) echo "job result: $result"; exit 1 ;;
+            esac
+          done
