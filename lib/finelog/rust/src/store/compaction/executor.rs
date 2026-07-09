@@ -143,27 +143,28 @@ fn apply_merge(
 
     let sort_cols = sort_col_indices(arrow_schema, key_column);
 
-    // Read each input, project onto the namespace schema (additive null-fill),
-    // then SORT it on the merge keys. L0 segments are written UNSORTED, so this
-    // sort is what lets the k-way merge produce globally `(key, seq)`-ordered
-    // output. One sorted batch per input keeps the merge a true N-way merge.
+    // Read each input's row-group batches, project onto the namespace schema
+    // (additive null-fill), then SORT each batch and feed it to the k-way merge
+    // as its own sorted run. L0 segments are written UNSORTED, so this per-batch
+    // sort is what lets the merge produce globally `(key, seq)`-ordered output.
+    // An N-way merge is partition-independent — splitting one segment into its
+    // row-group batches yields identical output to merging the segment whole.
+    //
+    // We deliberately do NOT concat an input's batches into a single RecordBatch
+    // first. A segment's decompressed `data` column can exceed Arrow's 2^31
+    // 32-bit-offset `Utf8` ceiling (high-ratio log-text compression inflates a
+    // ~256 MiB compressed `log` segment past 2 GiB), and that concat overflowed
+    // and wedged the `log` namespace's compaction indefinitely. Each reader batch
+    // is row-group-bounded, so sorting it in isolation never overflows.
     let mut projected: Vec<RecordBatch> = Vec::new();
     for inp in &job.inputs {
-        let batches = read_segment_batches(Path::new(&inp.path))?;
-        let mut cols: Vec<RecordBatch> = Vec::with_capacity(batches.len());
-        for b in batches {
-            cols.push(
-                project_to_schema(&b, arrow_schema)
-                    .map_err(|e| StatsError::Internal(format!("project merge input: {e}")))?,
-            );
+        for b in read_segment_batches(Path::new(&inp.path))? {
+            let projected_batch = project_to_schema(&b, arrow_schema)
+                .map_err(|e| StatsError::Internal(format!("project merge input: {e}")))?;
+            let sorted = sort_batch_by(&projected_batch, &sort_cols)
+                .map_err(|e| StatsError::Internal(format!("sort merge input: {e}")))?;
+            projected.push(sorted);
         }
-        // Concatenate the input's own batches into one, then sort it as a unit
-        // (a single segment can span multiple row groups / batches).
-        let combined = arrow::compute::concat_batches(arrow_schema, &cols)
-            .map_err(|e| StatsError::Internal(format!("concat merge input: {e}")))?;
-        let sorted = sort_batch_by(&combined, &sort_cols)
-            .map_err(|e| StatsError::Internal(format!("sort merge input: {e}")))?;
-        projected.push(sorted);
     }
 
     let merged = kway_merge(&projected, &sort_cols)
@@ -401,6 +402,63 @@ mod tests {
         let mut sorted = keyed.clone();
         sorted.sort();
         assert_eq!(keyed, sorted, "globally sorted by (key, seq)");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Regression for the `log`-namespace compaction wedge: an input segment
+    /// spanning multiple parquet row groups must merge WITHOUT concatenating its
+    /// batches into one array. The executor used to `concat_batches` each input
+    /// whole before sorting, which overflowed Arrow's 2^31 `Utf8` offset ceiling
+    /// once a segment's decompressed `data` column crossed 2 GiB — every
+    /// subsequent `run_maintenance` failed on the same poison segment and remote
+    /// uploads froze. This exercises the per-row-group merge path and asserts no
+    /// row loss and global (key, seq) order across row-group boundaries.
+    #[test]
+    fn merge_multi_row_group_input_no_concat() {
+        use crate::store::segment::ROW_GROUP_SIZE;
+        let dir = tempdir("multirg");
+
+        // One large L0 segment: >2 row groups, written UNSORTED (descending key)
+        // so the per-batch sort is load-bearing. seq is unique and monotonic.
+        let n = (ROW_GROUP_SIZE as i64) * 2 + 500;
+        let big: Vec<(i64, i64, &str)> = (1..=n).map(|s| (s, n - s + 1, "big")).collect();
+        let (p_big, _) = write_segment_to_dir(&dir, 0, 1, &batch(&big)).unwrap();
+        let (p_small, _) =
+            write_segment_to_dir(&dir, 0, n + 1, &batch(&[(n + 1, 7, "s")])).unwrap();
+
+        // Reading `big` back yields many row-group-bounded batches, not one array
+        // — the condition under which the old concat path overflowed.
+        assert!(
+            read_segment_batches(&p_big).unwrap().len() > 1,
+            "large input must span multiple reader batches"
+        );
+
+        let job = CompactionJob {
+            inputs: vec![
+                row_for(&p_big.to_string_lossy(), 0, 1, n, 100),
+                row_for(&p_small.to_string_lossy(), 0, n + 1, n + 1, 100),
+            ],
+            output_level: 1,
+            output_min_seq: 1,
+            output_max_seq: n + 1,
+        };
+        let bounds = |_: &str| (Some(1), Some(n));
+        let swap = run_job(&job, &dir, &schema(), Some("key"), &[], bounds).unwrap();
+
+        assert_eq!(swap.added.row_count, n + 1, "no row loss");
+        let out = PathBuf::from(&swap.added.path);
+        let mut keyed: Vec<(i64, i64)> = Vec::new();
+        for b in &read_segment_batches(&out).unwrap() {
+            let seqs = b.column(0).as_any().downcast_ref::<Int64Array>().unwrap();
+            let keys = b.column(1).as_any().downcast_ref::<Int64Array>().unwrap();
+            for i in 0..b.num_rows() {
+                keyed.push((keys.value(i), seqs.value(i)));
+            }
+        }
+        assert_eq!(keyed.len() as i64, n + 1);
+        let mut sorted = keyed.clone();
+        sorted.sort();
+        assert_eq!(keyed, sorted, "globally (key, seq)-sorted across row groups");
         std::fs::remove_dir_all(&dir).ok();
     }
 
