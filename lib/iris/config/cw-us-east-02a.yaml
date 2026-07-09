@@ -23,8 +23,7 @@
 #        uv run iris --cluster=cw-us-east-02a cluster start
 #        uv run iris --cluster=cw-us-east-02a cluster status
 
-# This cluster's identity: it issues every token this controller mints and is the
-# id a federation peer keys its trust on.
+# This cluster's identity. Used for token minting and for authenticating to peers.
 name: cw-us-east-02a
 
 # External finelog log server (in-cluster k8s Deployment, namespace `iris`).
@@ -45,11 +44,9 @@ platform:
     namespace: iris
     kubeconfig_path: ~/.kube/coreweave-iris
     kube_context: marin-gpu_US-EAST-02A
-    # CoreWeave AI Object Storage. In-cluster traffic goes through LOTA, the local
-    # cache, whose name resolves to a private address only a pod can reach; an
-    # operator running iris from outside addresses the same buckets over the public
-    # endpoint. Bare endpoints only: buckets use virtual-hosted addressing
-    # (http://<bucket>.cwlota.com), which iris detects from these domains.
+    # CoreWeave AI Object Storage: LOTA is the in-cluster cache, cwobject.com the
+    # endpoint an operator's own machine reaches. Bare endpoints only; buckets use
+    # virtual-hosted addressing (http://<bucket>.cwlota.com), detected from these domains.
     object_storage_endpoint: http://cwlota.com
     external_object_storage_endpoint: https://cwobject.com
 
@@ -65,17 +62,16 @@ storage:
 # through Traefik with an appended X-Forwarded-For, never matches a CIDR, and must
 # present a bearer. This is the identity gate behind the IP-restricted federation
 # ingress (scripts/install_cw_network.py).
-#
-# Inbound federation is a separate door from the CIDR one: marin's public key
-# admits its handoffs, and allowed_submitters names who it may run here. The list
-# is fail-closed — empty admits nobody — and a local_admin is never a valid
-# federation submitter, whatever it says.
 auth:
   trusted_cidrs: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 127.0.0.0/8, "::1/128"]
   federation_peers:
     marin: |
       -----BEGIN PUBLIC KEY-----
       MCowBQYDK2VwAyEAubVBH+W56J9tNAcffmYkWLLHNgFy1cKYGNNEGwrexMs=
+      -----END PUBLIC KEY-----
+    marin-dev: |
+      -----BEGIN PUBLIC KEY-----
+      MCowBQYDK2VwAyEA42ziFTlGKgaA/fQ1wJCONKOml7rx5Y8UAQqVLTCtrCo=
       -----END PUBLIC KEY-----
   allowed_submitters: ["*@openathena.ai"]
 
