@@ -59,6 +59,17 @@ auth:
   # at startup — provision with `iris cluster init-keys --gcp-secret …`.
   signing_key: gcp-secret://projects/hai-gcp-models/secrets/iris-marin-signing-key/versions/1
 
+# Federation peers this cluster may hand whole jobs to. A job pinned with
+# `cluster=cw-rno2a`, or one no local backend can host whose shape the peer
+# advertises, is delivered there and runs under the same job id. The peer decides
+# who it admits; the credential is this controller's short-lived aud="federation"
+# token, signed by the key above and trusted by name at the peer. No dashboard_url:
+# the peer's ingress admits only this controller's egress IP, so a deep link from a
+# browser would 403.
+peers:
+  cw-rno2a:
+    controller_address: https://iris-cw-rno2a.oa.dev
+
 worker_provider: {}
 
 controller:

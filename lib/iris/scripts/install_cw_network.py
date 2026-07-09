@@ -71,6 +71,7 @@ Usage:
 """
 
 import ipaddress
+import os
 import subprocess
 import time
 from typing import NamedTuple
@@ -191,12 +192,14 @@ def wait_for_crd(crd: str, kflags: list[str]) -> None:
     raise click.ClickException(f"CRD {crd} not present after {_CRD_WAIT_SECONDS:.0f}s (is cert-manager installed?)")
 
 
-def read_traefik_fqdn(release: str, namespace: str, kflags: list[str]) -> str:
-    """Poll the Traefik LoadBalancer Service for its allocated ``*.coreweave.app`` FQDN.
+def read_traefik_fqdn(release: str, namespace: str, kflags: list[str], host: str) -> str:
+    """Poll the Traefik LoadBalancer Service for a CNAME target under ``*.coreweave.app``.
 
-    Returns the bare FQDN, or "" if not allocated within the wait window (the
-    External Hostname Controller assigns it asynchronously). Polls quietly (no
-    per-attempt command echo) since it may take several tries.
+    The External Hostname Controller allocates a wildcard record — every label under
+    it resolves to the LoadBalancer — so the wildcard is resolved against ``host``'s
+    own first label to yield a name a CNAME can actually point at. Returns "" if the
+    record is not allocated within the wait window (allocation is asynchronous).
+    Polls quietly (no per-attempt command echo) since it may take several tries.
     """
     click.secho(f"==> Reading Traefik LoadBalancer FQDN (svc/{release} -n {namespace}) …", fg="blue", bold=True)
     deadline = time.monotonic() + _FQDN_WAIT_SECONDS
@@ -209,7 +212,7 @@ def read_traefik_fqdn(release: str, namespace: str, kflags: list[str]) -> str:
         for token in (result.stdout or "").replace(",", " ").split():
             candidate = token.strip(".;\"'")
             if candidate.endswith(_COREWEAVE_APP):
-                return candidate
+                return candidate.replace("*", host.split(".", 1)[0], 1)
         time.sleep(3.0)
     return ""
 
@@ -552,7 +555,7 @@ def _print_next_steps(settings: NetworkSettings, *, host: str, cluster_issuer: s
 
     # 1. DNS. The whole host resolves to Traefik's LB; the IP-locked ingress serves it.
     click.secho(f"  1) CNAME {host} at the Traefik LoadBalancer FQDN:", fg="green", bold=True)
-    fqdn = read_traefik_fqdn(settings.traefik_release, settings.traefik_namespace, kflags)
+    fqdn = read_traefik_fqdn(settings.traefik_release, settings.traefik_namespace, kflags, host)
     if fqdn:
         click.echo(f"        {host}   CNAME   {fqdn}")
     else:
@@ -561,6 +564,7 @@ def _print_next_steps(settings: NetworkSettings, *, host: str, cluster_issuer: s
             f"       kubectl get svc {settings.traefik_release} -n {settings.traefik_namespace} "
             f"-o=jsonpath='{_FQDN_JSONPATH}'"
         )
+        click.echo(f"       (substitute {host.split('.', 1)[0]} for the '*' label — the record is a wildcard)")
         click.echo(f"        {host}   CNAME   <that>{_COREWEAVE_APP}")
 
     click.secho("  2) Verify federation reach from the marin controller VM:", fg="green", bold=True)
@@ -873,7 +877,9 @@ def main(
         port=derived.port,
         ingress_class=derived.ingress_class,
         auth_mode=derived.auth_mode,
-        kubeconfig=kubeconfig or derived.kubeconfig or None,
+        # helm and kubectl are handed this path as an argv value, and neither expands
+        # a leading '~' the way a shell would; cluster configs write one.
+        kubeconfig=os.path.expanduser(kubeconfig or derived.kubeconfig) or None,
         context=context or derived.context or None,
         traefik_namespace=traefik_namespace,
         traefik_release=traefik_release,
