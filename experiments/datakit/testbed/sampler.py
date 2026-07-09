@@ -41,7 +41,7 @@ from marin.datakit.sources import DatakitSource, all_sources
 from marin.execution.artifact import read_artifact
 from marin.execution.remote import remote
 from marin.execution.step_spec import StepSpec
-from rigging.filesystem import StoragePath, marin_prefix, url_to_fs
+from rigging.filesystem import StoragePath, marin_prefix, prefix_join, url_to_fs
 
 from experiments.datakit.testbed.settings import RAW_TARGET_TOTAL_TOKENS_B
 
@@ -364,7 +364,7 @@ def _sample_step_for(
         name=f"data/datakit/normalized/{src.name}",
         normalized=normalized,
         sample_fraction=sample_fraction,
-        override_output_path=f"{output_root}/{src.name}",
+        override_output_path=prefix_join(output_root, src.name),
     )
 
 
