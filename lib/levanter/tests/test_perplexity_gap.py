@@ -648,7 +648,7 @@ def test_score_main_writes_outputs_without_uploading_model_score_artifact(monkey
     def fake_iter_raw_text_documents(*args, **kwargs):
         yield document
 
-    monkeypatch.setattr(perplexity_gap_main.levanter, "initialize", lambda config: None)
+    monkeypatch.setattr(perplexity_gap_main.levanter.trainer, "initialize", lambda config: None)
     monkeypatch.setattr(perplexity_gap_main, "_load_model_runner", lambda **kwargs: FakeRunner())
     monkeypatch.setattr(perplexity_gap_main, "iter_raw_text_documents", fake_iter_raw_text_documents)
 

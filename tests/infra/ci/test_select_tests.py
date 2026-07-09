@@ -283,6 +283,19 @@ def test_scope_legs_keeps_a_small_selection_in_one_leg(tmp_path: Path) -> None:
     assert legs[0]["label"] == "levanter"
 
 
+def test_scope_legs_never_shards_below_the_minimum(tmp_path: Path) -> None:
+    """A medium selection stays one leg rather than splitting into sub-minimum runners."""
+    # Just over the threshold and just under two full shards both stay a single leg...
+    for count in (MIN_FILES_PER_SHARD + 1, 2 * MIN_FILES_PER_SHARD - 1):
+        legs = scope_legs("levanter", _levanter_suite(tmp_path, count), tmp_path)
+        assert [leg["label"] for leg in legs] == ["levanter"], count
+
+    # ...and two full shards' worth is the first size that fans out, each at/above the minimum.
+    legs = scope_legs("levanter", _levanter_suite(tmp_path, 2 * MIN_FILES_PER_SHARD), tmp_path)
+    assert len(legs) == 2
+    assert all(len(leg["test_paths"].split()) >= MIN_FILES_PER_SHARD for leg in legs)
+
+
 def test_scope_legs_shards_the_full_levanter_suite(tmp_path: Path) -> None:
     """A full-suite (tests=None) sharded scope expands its directory to the file list."""
     files = _levanter_suite(tmp_path, 60)

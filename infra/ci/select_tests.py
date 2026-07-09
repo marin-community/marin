@@ -437,7 +437,10 @@ def scope_legs(scope: str, tests: list[str] | None, repo_root: Path) -> list[dic
     if cap <= 1 or files is None or len(files) <= MIN_FILES_PER_SHARD:
         return [matrix_leg(scope, files or [])]
 
-    count = min(cap, -(-len(files) // MIN_FILES_PER_SHARD))
+    # Floor, not ceil: pick the largest shard count that still leaves every shard at least
+    # MIN_FILES_PER_SHARD files, so a medium selection is not split into runners so small that
+    # setup overhead dominates (16 files stays one leg, not two 8-file legs).
+    count = min(cap, len(files) // MIN_FILES_PER_SHARD)
     if count <= 1:
         return [matrix_leg(scope, sorted(files))]
     chunks = shard_files(sorted(files), count)

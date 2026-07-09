@@ -76,7 +76,7 @@ import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from enum import StrEnum
 
-from fray import ResourceConfig
+from fray.types import ResourceConfig
 from marin.datakit.sources import DatakitSource, all_sources
 from marin.execution.step_runner import StepRunner
 from marin.execution.step_spec import StepSpec
@@ -84,7 +84,9 @@ from marin.execution.step_status import STATUS_SUCCESS, StatusFile, StepAlreadyD
 from rigging.filesystem import atomic_rename, marin_prefix
 from rigging.filesystem import url_to_fs as _rigging_url_to_fs
 from rigging.log_setup import configure_logging
-from zephyr import Dataset, ZephyrContext, counters
+from zephyr import counters
+from zephyr.dataset import Dataset
+from zephyr.execution import ZephyrContext
 from zephyr.shard_keys import deterministic_hash
 
 logger = logging.getLogger(__name__)
