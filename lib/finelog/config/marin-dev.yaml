@@ -17,11 +17,17 @@ deployment:
 # through the load balancer carries a Google front-end source address, falls past this
 # layer, and must present a token.
 #
-# The jwt layer admits the federated iris controllers that relay their logs here, each
-# by its own Ed25519 public key, verifying the aud="finelog" delegation token their
-# controller mints hourly. Only clusters that arrive over the load balancer need an
-# entry; marin-dev's own controller is admitted by cidr above. Cloud Armor narrows the
-# edge to those clusters' egress prefixes first (lib/iris/scripts/iap_gclb.py).
+# The jwt layer admits a federated iris controller that relays its logs here, by its own
+# Ed25519 public key, verifying the aud="finelog" delegation token that controller mints
+# hourly. Only a cluster arriving over the load balancer needs an entry; marin-dev's own
+# controller is admitted by cidr above. Cloud Armor narrows the edge to that cluster's
+# egress prefixes first (lib/iris/scripts/iap_gclb.py).
+#
+# No cluster relays here by default — marin's finelog is the federation's global sink, and
+# every CoreWeave `finelog.relay_address` names it. This entry keeps finelog-dev.oa.dev a
+# working target, so a change to the relay or to this auth stack can be rehearsed end to
+# end against a dev log server before it reaches prod. Point a cluster's relay_address at
+# finelog-dev.oa.dev to use it.
 auth:
   - type: cidr
     cidrs: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 127.0.0.0/8, "::1/128"]
