@@ -34,6 +34,8 @@ th{background:#141821;cursor:pointer;user-select:none;position:sticky;top:56px}
 .meta{color:#9aa4b2;font-size:12px}.hi{color:#ffd479}.pos{color:#7bd88f}.neg{color:#ff6b6b}.zero{color:#6b7280}
 .evals{margin-top:8px;border-left:2px solid #2b4557;padding-left:8px}.evitem{margin:5px 0}
 .doc pre.ev{background:#0a1410;color:#bfe0c8;max-height:180px}
+.ngrams{margin-top:8px;border-left:2px solid #7a5c1f;padding-left:8px}
+.doc pre.ng{background:#1a1408;color:#ffd479;max-height:none;margin:3px 0}
 </style>"""
 
 _JS = """
@@ -42,12 +44,15 @@ function esc(t){return (t||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replac
 function chips(fs){return (fs||[]).map(function(x){return '<span class=chip>'+esc(''+x[0])+' '+x[1]+'</span>'}).join(' ')}
 function evhtml(d){return (d.matched_evals||[]).map(function(e){return '<div class=evitem><span class=meta>'+
  '<span class=chip>'+esc(''+e.family)+' x'+e.hits+'</span> '+esc(e.eval_id)+'</span><pre class=ev>'+esc(e.text)+'</pre></div>'}).join('')}
+function nghtml(d){var ns=d.matched_ngrams||[];if(!ns.length)return '';
+ return '<div class=ngrams><span class=meta>overlapping 13-grams (the literal doc∩eval strings that triggered the flag):</span>'+
+  ns.map(function(n){return '<pre class=ng>'+esc(n)+'</pre>'}).join('')+'</div>'}
 function toggle(i){var r=document.getElementById('d'+i);r.classList.toggle('open');
  if(r.dataset.filled)return;r.dataset.filled=1;var s=DATA.sources[i],h='';
  (s.samples||[]).forEach(function(d){var ev=evhtml(d);h+='<div class=doc><span class=meta>overlap <span class=hi>'+
   d.max_overlap.toFixed(3)+'</span> · '+d.n_matched+' matched ngrams · '+esc(d.id)+'</span><div>'+
-  chips(d.families)+'</div><pre>'+esc(d.text)+'</pre>'+
-  (ev?'<div class=evals><span class=meta>matched eval text:</span>'+ev+'</div>':'')+'</div>'});
+  chips(d.families)+'</div>'+nghtml(d)+'<pre>'+esc(d.text)+'</pre>'+
+  (ev?'<div class=evals><span class=meta>example eval records sharing a matched n-gram (one n-gram recurs across many eval items, so these may be different problems):</span>'+ev+'</div>':'')+'</div>'});
  r.cells[0].innerHTML=h||'<span class=meta>(no sampled docs)</span>'}
 function sortBy(k){var S=DATA.sources.slice();var asc=(window._sk===k)?!window._asc:false;window._sk=k;window._asc=asc;
  S.sort(function(a,b){var x=a[k],y=b[k];if(typeof x==='string')return (x<y?-1:1)*(asc?1:-1);return (x-y)*(asc?1:-1)});

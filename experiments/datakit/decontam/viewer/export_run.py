@@ -25,7 +25,7 @@ import re
 from collections import Counter
 
 import pyarrow.parquet as pq
-from marin.datakit.decon import bloom_paths
+from marin.datakit.decon import _bloom_hash, _extract_ngrams, bloom_paths
 from rigging.filesystem import marin_prefix, prefix_join, url_to_fs
 
 from experiments.datakit.testbed.decon_arm import build_testbed_decon_steps
@@ -37,6 +37,30 @@ _SAMPLES_PER_SOURCE = 60
 _TEXT_CLIP = 4000
 _EVAL_TEXT_CLIP = 1200
 _MAX_MATCHED_EVALS = 5
+# Must match the decon run's NGramConfig (decon_arm uses the ngram_length=13 default).
+_NGRAM_LENGTH = 13
+_MAX_MATCHED_NGRAMS = 8
+
+
+def _overlapping_ngrams(text: str, matched_hashes: set[int]) -> list[str]:
+    """The literal doc n-grams that hit the eval bloom — the honest evidence for a flag.
+
+    A single hashed n-gram maps to many eval records (a shared template or
+    formula recurs across a whole task), so the report's per-eval attribution
+    can surface an arbitrary, unrelated eval problem. The overlapping n-gram
+    text itself is unambiguous: it is exactly the string the doc and some eval
+    share. Re-extract with the same paragraph/n-gram policy as the mark side.
+    """
+    seen: set[str] = set()
+    out: list[str] = []
+    for para in text.split("\n"):
+        for ng in _extract_ngrams(para, _NGRAM_LENGTH, 0):
+            if ng not in seen and _bloom_hash(ng) in matched_hashes:
+                seen.add(ng)
+                out.append(ng)
+                if len(out) >= _MAX_MATCHED_NGRAMS:
+                    return out
+    return out
 
 
 def eval_id_to_family(eval_id: str) -> str:
@@ -191,14 +215,16 @@ def main() -> None:
                 }
                 for eid, hits in eval_hits.most_common(_MAX_MATCHED_EVALS)
             ]
+            full_text = id_to_text.get(r["id"], "") or ""
             docs.append(
                 {
                     "id": r["id"],
                     "max_overlap": r["max_overlap"],
                     "n_matched": len(r["matched_hashes"]),
                     "families": fams.most_common(8),
+                    "matched_ngrams": _overlapping_ngrams(full_text, set(r["matched_hashes"])),
                     "matched_evals": matched_evals,
-                    "text": (id_to_text.get(r["id"], "") or "")[:_TEXT_CLIP],
+                    "text": full_text[:_TEXT_CLIP],
                 }
             )
         src["top_families"] = fam_counter.most_common(12)
