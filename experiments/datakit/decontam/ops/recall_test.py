@@ -19,12 +19,15 @@ import os
 import random
 
 import dupekit
-import fsspec
 from marin.datakit.decon import NGramConfig, _bloom_hash, _extract_features, _paragraph_overlap_and_matches
+from rigging.filesystem import url_to_fs
 from zephyr.readers import load_file
 
+from experiments.datakit.decontam.all_sources_decon import NGRAM_LENGTH, OVERLAP_THRESHOLD
+from experiments.datakit.decontam.prepare_eval_corpus import DECON_EXCLUDED_EVAL_TASKS
+
 EVALS = "s3://marin-na/marin/datakit/decontam/evals"
-NGRAM = NGramConfig(ngram_length=13, stride=0, overlap_threshold=0.5)
+NGRAM = NGramConfig(ngram_length=NGRAM_LENGTH, stride=0, overlap_threshold=OVERLAP_THRESHOLD)
 
 # zephyr's load_file resolves the S3 client from ambient AWS_* env; point it at R2.
 os.environ.setdefault("AWS_ACCESS_KEY_ID", os.environ.get("R2_ACCESS_KEY_ID", ""))
@@ -38,7 +41,7 @@ FILLER = (
 
 
 def _r2():
-    return fsspec.core.url_to_fs(
+    return url_to_fs(
         EVALS,
         key=os.environ["R2_ACCESS_KEY_ID"],
         secret=os.environ["R2_SECRET_ACCESS_KEY"],
@@ -68,6 +71,8 @@ def main() -> None:
 
     fs = _r2()
     files = sorted(f if f.startswith("s3://") else "s3://" + f for f in fs.find(EVALS) if f.endswith(".parquet"))
+    # Mirror the production bloom population: skip the tasks decon excludes at read time.
+    files = [f for f in files if f.split("/")[-2] not in DECON_EXCLUDED_EVAL_TASKS]
     files = rng.sample(files, min(args.tasks, len(files)))
 
     # Build a bloom over the sampled eval tasks + collect their items (with >= 1 ngram).

@@ -26,7 +26,7 @@ from collections import Counter
 
 import pyarrow.parquet as pq
 from marin.datakit.decon import bloom_paths
-from rigging.filesystem import url_to_fs
+from rigging.filesystem import prefix_join, url_to_fs
 
 from experiments.datakit.testbed.decon_arm import build_testbed_decon_steps
 
@@ -166,7 +166,7 @@ def main() -> None:
         "root": per_source[0]["sample_path"].rsplit("/", 1)[0] if per_source else None,
         "sources": sorted(per_source, key=lambda s: s["rate"], reverse=True),
     }
-    out_path = f"{args.out.rstrip('/')}/{args.label}.json"
+    out_path = prefix_join(args.out, f"{args.label}.json")
     fs, _ = url_to_fs(out_path)
     with fs.open(out_path, "w") as f:
         json.dump(run, f)

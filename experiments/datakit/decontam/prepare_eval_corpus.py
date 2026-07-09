@@ -247,7 +247,7 @@ _PASSAGE_FIELDS: frozenset[str] = frozenset(
 )
 
 
-def _lmh_doc_text(doc: Any, prompt_fn: Any, target_fn: Any) -> str:
+def _lmh_doc_text(doc: Any, prompt_fn: Callable, target_fn: Callable) -> str:
     """Indexed eval text for one lm-eval-harness doc.
 
     Passage-bearing docs (a field in :data:`_PASSAGE_FIELDS`) index only

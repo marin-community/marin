@@ -22,10 +22,11 @@ import dupekit
 from datasets import load_dataset
 from marin.datakit.decon import NGramConfig, _bloom_hash, _extract_features, _paragraph_overlap_and_matches
 
+from experiments.datakit.decontam.all_sources_decon import NGRAM_LENGTH, OVERLAP_THRESHOLD
 from experiments.datakit.decontam.prepare_eval_corpus import _PASSAGE_FIELDS, _concat_strings, _lmh_doc_text
 
 logging.basicConfig(level=logging.WARNING)
-NGRAM = NGramConfig(ngram_length=13, stride=0, overlap_threshold=0.5)
+NGRAM = NGramConfig(ngram_length=NGRAM_LENGTH, stride=0, overlap_threshold=OVERLAP_THRESHOLD)
 _MAX = 300
 
 # (label, hf_id, config, split, prompt_fn, target_fn) — passage field is auto-detected.
@@ -93,14 +94,12 @@ def _flagged(text: str, bf: dupekit.Bloom) -> bool:
 
 
 def _stringify(doc: dict) -> dict:
-    """Coerce non-str/list scalars to str so _concat_strings/_lmh see them as raw fields."""
-    out = {}
-    for k, v in doc.items():
-        if isinstance(v, (str, list)):
-            out[k] = v
-        elif isinstance(v, (int, float, bool)):
-            out[k] = str(v)
-    return out
+    """Coerce scalar fields to str so _concat_strings/_lmh treat them as raw text.
+
+    str/list/dict are kept as-is — dropping dicts here would strip e.g. SQuAD's
+    ``answers`` dict before the target lambda reads it (understating Q+A recall).
+    """
+    return {k: str(v) if isinstance(v, (int, float, bool)) else v for k, v in doc.items()}
 
 
 def main() -> None:
