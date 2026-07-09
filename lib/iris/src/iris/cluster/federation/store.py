@@ -59,7 +59,8 @@ class HandoffSpec:
 
     local_job_id: JobName  # this cluster's local (root) job id; the peer runs the same id
     peer_id: str
-    owner_principal: str  # end-user identity asserted to the peer
+    owner_principal: str  # end-user friendly owner asserted to the peer (attribution)
+    submitting_user: str  # authenticated principal the peer's allowlist gates on
     request: controller_pb2.Controller.LaunchJobRequest  # normalized request, for job_config
 
 

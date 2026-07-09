@@ -22,13 +22,8 @@ from dataclasses import dataclass
 from enum import StrEnum
 
 from fray import ResourceConfig
-from rigging.filesystem import rebase_file_path
+from rigging.filesystem import StoragePath, rebase_file_path
 from zephyr import Dataset, ZephyrContext, ZephyrExecutionResult
-
-from marin.utils import (
-    fsspec_exists,
-    fsspec_glob,
-)
 
 
 class FilterType(StrEnum):
@@ -89,9 +84,9 @@ def _resolve_attribute_path(input_base: str, input_path: str, filt: FilterConfig
         new_extension=new_extension,
         old_extension=f".{filetype}",
     )
-    if fsspec_exists(attr_path):
+    if StoragePath(attr_path).exists():
         return attr_path
-    candidates = fsspec_glob(f"{attr_path}.*")
+    candidates = [str(m) for m in StoragePath(f"{attr_path}.*").glob()]
     if candidates:
         return candidates[0]
     return None
@@ -168,7 +163,7 @@ def consolidate(
         max_workers: Maximum number of Zephyr workers (defaults to Zephyr's default).
         map_workers_per_actor: Number of workers per actor for the map stage.
     """
-    input_paths = sorted(fsspec_glob(os.path.join(input_path, f"**/*.{filetype}")))
+    input_paths = sorted(str(m) for m in StoragePath(os.path.join(input_path, f"**/*.{filetype}")).glob())
     if not input_paths:
         raise ValueError(f"No input files matched {input_path}/**/*.{filetype}")
     logger.info(f"Consolidating {len(input_paths)} document files via {len(filters)} filters")

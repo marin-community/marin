@@ -18,7 +18,7 @@ import huggingface_hub
 from fray import ResourceConfig
 from huggingface_hub.errors import HfHubHTTPError
 from packaging.version import Version
-from rigging.filesystem import atomic_rename, open_url, prefix_join, url_to_fs
+from rigging.filesystem import StoragePath, atomic_rename, open_url, prefix_join, url_to_fs
 from rigging.log_setup import configure_logging
 from zephyr import Dataset, ZephyrContext
 
@@ -161,13 +161,11 @@ def _relative_path_in_source(file_path: str, source_path: str) -> str:
 
 def ensure_fsspec_path_writable(output_path: str) -> None:
     """Check if the fsspec path is writable by trying to create and delete a temporary file."""
-    fs, _ = url_to_fs(output_path)
     try:
-        fs.mkdirs(output_path, exist_ok=True)
+        StoragePath(output_path).mkdirs()
         test_path = prefix_join(output_path, "test_write_access")
-        with fs.open(test_path, "w") as f:
-            f.write("test")
-        fs.rm(test_path)
+        StoragePath(test_path).write_text("test")
+        StoragePath(test_path).rm()
     except Exception as e:
         raise ValueError(f"No write access to fsspec path: {output_path} ({e})") from e
 
@@ -193,7 +191,6 @@ def stream_file_to_fsspec(
         expected_size: Expected file size in bytes for validation. If provided,
             the download will fail if the downloaded size doesn't match.
     """
-    target_fs, _ = url_to_fs(gcs_output_path)
     chunk_size = max(1, int(read_chunk_size_mib)) * 1024 * 1024
     max_retries = 20
     # 15 minutes max sleep
@@ -205,7 +202,7 @@ def stream_file_to_fsspec(
     last_exception = None
     for attempt in range(max_retries):
         try:
-            target_fs.mkdirs(os.path.dirname(fsspec_file_path), exist_ok=True)
+            StoragePath(os.path.dirname(fsspec_file_path)).mkdirs()
             bytes_written = 0
             with atomic_rename(fsspec_file_path) as temp_path:
                 previous_socket_timeout = socket.getdefaulttimeout()

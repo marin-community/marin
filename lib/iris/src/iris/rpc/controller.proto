@@ -133,6 +133,12 @@ message Controller {
   message FederationHandoff {
     string requester_id = 1;     // the handing-off (parent) cluster's id
     string owner_principal = 2;  // the end-user identity the parent asserts
+    // The authenticated principal that submitted the root (an email, or
+    // "local_admin"). Unlike owner_principal (a friendly, caller-chosen name),
+    // this is the parent's verified identity and the key a peer's per-cluster
+    // allowlist gates on. The peer re-checks it against the same claim carried in
+    // the federation JWT before trusting it (defense in depth).
+    string submitting_user = 3;
   }
 
   message LaunchJobResponse {

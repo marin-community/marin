@@ -41,7 +41,7 @@ from collections.abc import Iterator
 
 import click
 from fray import ResourceConfig
-from rigging.filesystem import url_to_fs
+from rigging.filesystem import StoragePath
 from rigging.log_setup import configure_logging
 from zephyr import Dataset
 from zephyr.dataset import ShardInfo
@@ -252,9 +252,7 @@ def main(
 
     status_path = os.environ.get("BENCH_STATUS_PATH")
     if status_path:
-        fs, _ = url_to_fs(status_path)
-        with fs.open(status_path, "w") as f:
-            f.write(json.dumps(summary))
+        StoragePath(status_path).write_text(json.dumps(summary))
 
 
 if __name__ == "__main__":

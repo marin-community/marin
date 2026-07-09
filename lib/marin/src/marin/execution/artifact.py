@@ -27,7 +27,7 @@ from dataclasses import asdict, dataclass, is_dataclass
 from typing import Self, TypeVar, cast
 
 from pydantic import BaseModel, ConfigDict, Field
-from rigging.filesystem import marin_prefix, open_url, prefix_join, url_to_fs
+from rigging.filesystem import StoragePath, marin_prefix, prefix_join, url_to_fs
 from rigging.provenance import Provenance, launch_provenance
 
 from marin.execution.fingerprint import describe_drift
@@ -192,8 +192,7 @@ def _read_text(output_path: str, filename: str) -> str | None:
     fs = url_to_fs(path, use_listings_cache=False)[0]
     if not fs.exists(path):
         return None
-    with open_url(path, "r") as f:
-        return f.read()
+    return StoragePath(path).read_text()
 
 
 def _record_from_executor_info(text: str) -> ArtifactRecord | None:
@@ -265,8 +264,7 @@ def read_record(output_path: str) -> ArtifactRecord | None:
 
 def write_record(record: ArtifactRecord) -> None:
     """Write ``record`` to ``{record.output_path}/.artifact.json``."""
-    with open_url(prefix_join(record.output_path, RECORD_FILENAME), "w") as f:
-        f.write(record.model_dump_json(indent=2))
+    StoragePath(prefix_join(record.output_path, RECORD_FILENAME)).write_text(record.model_dump_json(indent=2))
 
 
 def _payload_json(value: object) -> JSONValue:

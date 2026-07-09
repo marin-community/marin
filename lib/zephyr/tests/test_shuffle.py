@@ -12,6 +12,7 @@ import os
 
 import fsspec
 import pytest
+from rigging.filesystem import filesystem
 from zephyr.external_sort import EXTERNAL_SORT_FAN_IN, external_sort_merge
 from zephyr.runners import _InProcessWorkerContext
 from zephyr.shard_keys import deterministic_hash
@@ -422,7 +423,7 @@ class _FakeObjectStore(fsspec.AbstractFileSystem):
 @pytest.fixture
 def fake_object_store():
     fsspec.register_implementation("fakempu", _FakeObjectStore, clobber=True)
-    fs = fsspec.filesystem("fakempu")
+    fs = filesystem("fakempu")
     fs.store.clear()
     fs.open_uploads.clear()
     fs.aborted.clear()

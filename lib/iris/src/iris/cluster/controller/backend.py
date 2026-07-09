@@ -286,11 +286,6 @@ class AutoscaleRequest:
     dead_workers: list[WorkerId] = field(default_factory=list)
 
 
-def user_admitted(allowed_users: frozenset[str], user: str) -> bool:
-    """Whether an allow policy permits ``user`` (``"*"`` matches any user)."""
-    return "*" in allowed_users or user in allowed_users
-
-
 def assemble_scheduling_context(inputs: BackendSchedulingInputs, request: ScheduleRequest) -> SchedulingContext:
     """Join a backend's own worker-side inputs with the controller-owned request.
 

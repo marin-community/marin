@@ -34,7 +34,7 @@ from collections.abc import Iterator
 import pyarrow as pa
 import pyarrow.parquet as pq
 from fray import ResourceConfig
-from rigging.filesystem import open_url, url_to_fs
+from rigging.filesystem import StoragePath
 from rigging.log_setup import configure_logging
 from zephyr import Dataset, ZephyrContext, counters
 
@@ -80,18 +80,15 @@ def _build_file_idx_map() -> dict[int, dict]:
     in caller order: ``file_idx`` is the global position. Basenames match
     between minhash, dedup attr, and normalized (all co-partitioned).
     """
-    with open_url(f"{DEDUP_ROOT}/.executor_info", "rb") as fh:
-        info = json.loads(fh.read())
+    info = json.loads(StoragePath(f"{DEDUP_ROOT}/.executor_info").read_bytes())
     minhash_deps = [d for d in info["dependencies"] if "/datakit/minhash/" in d]
     logger.info("dedup was invoked with %d minhash inputs (caller order)", len(minhash_deps))
 
     def _resolve(minhash_dir: str) -> tuple[str, list[str]]:
-        afs, _ = url_to_fs(minhash_dir)
-        with afs.open(minhash_dir.removeprefix("gs://") + "/.artifact.json", "rb") as fh:
-            art = json.loads(fh.read())
+        art = json.loads(StoragePath(f"{minhash_dir}/.artifact.json").read_bytes())
         source_main_dir = art["source_main_dir"]
         minhash_attr = art["attr_dir"]
-        files = sorted(f for f in afs.ls(minhash_attr.removeprefix("gs://")) if f.endswith(".parquet"))
+        files = sorted(str(p) for p in StoragePath(minhash_attr).ls() if str(p).endswith(".parquet"))
         return source_main_dir, files
 
     resolved: list[tuple[str, list[str]]] = [(None, None)] * len(minhash_deps)  # type: ignore[list-item]
@@ -115,13 +112,12 @@ def _build_file_idx_map() -> dict[int, dict]:
 
 
 def _read_index() -> list[dict]:
-    fs, base = url_to_fs(INDEX_DIR)
-    files = sorted(f for f in fs.ls(base) if f.endswith(".parquet"))
+    files = sorted((p for p in StoragePath(INDEX_DIR).ls() if str(p).endswith(".parquet")), key=str)
     if not files:
         raise FileNotFoundError(f"no parquet files under {INDEX_DIR}")
 
-    def _read_one(f: str) -> list[dict]:
-        with fs.open(f, "rb") as fh:
+    def _read_one(f: StoragePath) -> list[dict]:
+        with f.open("rb") as fh:
             t = pq.read_table(fh)
         out: list[dict] = []
         cids = t.column("component_id").to_pylist()
@@ -174,10 +170,9 @@ def _build_tasks(rows: list[dict], fi_map: dict[int, dict]) -> list[dict]:
 def _fetch_one(task: dict) -> Iterator[dict]:
     """Per-shard worker: stream the normalized parquet, emit one record per wanted member."""
     wanted_ids = {m["doc_id"]: m for m in task["members"]}
-    fs, p = url_to_fs(task["norm_path"])
     found = 0
     target = len(wanted_ids)
-    with fs.open(p, "rb") as fh:
+    with StoragePath(task["norm_path"]).open("rb") as fh:
         pf = pq.ParquetFile(fh)
         for batch in pf.iter_batches(columns=["id", "text"], batch_size=READ_BATCH_ROWS):
             ids = batch.column("id").to_pylist()

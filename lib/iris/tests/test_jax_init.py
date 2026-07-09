@@ -6,7 +6,7 @@ from __future__ import annotations
 import os
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, call, patch
 
 import pytest
 
@@ -70,6 +70,21 @@ def _make_job_info(task_index: int = 0, num_tasks: int = 1) -> JobInfo:
     )
 
 
+@pytest.fixture(autouse=True)
+def _mock_compilation_cache_config(monkeypatch: pytest.MonkeyPatch) -> None:
+    """initialize_jax() always calls configure_jax_compilation_cache() first.
+
+    Unmocked, that call resolves the real marin_prefix() on whatever host runs
+    the test; on a host where it resolves a remote gs:// path, it permanently
+    flips jax_persistent_cache_enable_xla_caches to "none" for the rest of the
+    process (no test here restores it), breaking later compilation-cache
+    tests. The tests below that exercise configure_jax_compilation_cache()
+    directly call it through their own imported reference, which this
+    module-attribute patch does not touch.
+    """
+    monkeypatch.setattr("iris.runtime.jax_init.configure_jax_compilation_cache", MagicMock())
+
+
 @patch("iris.runtime.jax_init.atexit")
 @patch("jax.distributed.initialize")
 @patch("iris.runtime.jax_init.iris_ctx")
@@ -89,21 +104,34 @@ def test_initialize_jax_single_task(
     mock_iris_ctx.assert_not_called()
 
 
-@pytest.mark.parametrize("env_key,env_val", [("PJRT_DEVICE", "TPU"), ("JAX_PLATFORMS", "tpu")])
 @patch("jax.distributed.initialize")
+@patch("iris.runtime.jax_init.iris_ctx")
 @patch("iris.runtime.jax_init.get_job_info")
-def test_initialize_jax_tpu_uses_runtime_autodiscovery(
+def test_initialize_jax_tpu_multitask_uses_iris_registry(
     mock_get_job_info: MagicMock,
+    mock_iris_ctx: MagicMock,
     mock_jax_init: MagicMock,
-    env_key: str,
-    env_val: str,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """On TPU, initialize_jax delegates coordinator discovery to the TPU runtime."""
-    monkeypatch.setenv(env_key, env_val)
+    """TPU Iris jobs use the same explicit coordinator and rank wiring as other multi-task jobs."""
+    monkeypatch.setenv("PJRT_DEVICE", "TPU")
+    monkeypatch.setenv("JAX_PLATFORMS", "tpu,cpu")
+    mock_get_job_info.side_effect = [
+        _make_job_info(task_index=0, num_tasks=2),
+        _make_job_info(task_index=1, num_tasks=2),
+    ]
+    found = ResolveResult(
+        name="jax_coordinator",
+        endpoints=[ResolvedEndpoint(url="10.0.0.1:8476", actor_id="ep-1")],
+    )
+    fake_ctx = FakeContext(resolver=FakeResolver(results=[found]))
+    mock_iris_ctx.return_value = fake_ctx
+
     initialize_jax()
-    mock_jax_init.assert_called_once_with()
-    mock_get_job_info.assert_not_called()
+    initialize_jax(poll_timeout=10.0, poll_interval=0.01)
+
+    assert fake_ctx.registry.registered == [("jax_coordinator", "10.0.0.1:8476")]
+    assert mock_jax_init.call_args_list == [call("10.0.0.1:8476", 2, 0), call("10.0.0.1:8476", 2, 1)]
 
 
 @patch("iris.runtime.jax_init.atexit")

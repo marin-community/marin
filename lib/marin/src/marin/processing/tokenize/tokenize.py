@@ -33,7 +33,7 @@ from levanter.data.text import (
 )
 from levanter.store.cache import ShardedCacheLayout
 from levanter.tokenizers import TokenizerBackend
-from rigging.filesystem import prefix_join
+from rigging.filesystem import StoragePath, prefix_join
 from zephyr import Dataset, ZephyrContext
 from zephyr.dataset import FileEntry
 from zephyr.readers import load_file
@@ -50,7 +50,6 @@ from marin.processing.tokenize._core import (
     tokenize_pipeline,
 )
 from marin.processing.tokenize.store_builder import build_from_datasets, write_stats_json
-from marin.utils import fsspec_exists
 
 logger = logging.getLogger(__name__)
 
@@ -285,7 +284,7 @@ def _local_preprocess_paths(files: list[FileEntry], config: TokenizeConfigBase) 
 
 def _split_already_done(cache_path: str, split_name: str) -> bool:
     ledger_path = ShardedCacheLayout.parse(cache_path).child(split_name).ledger
-    if fsspec_exists(ledger_path):
+    if StoragePath(ledger_path).exists():
         logger.info("Shard ledger already exists for %s at %s; skipping", split_name, ledger_path)
         return True
     return False

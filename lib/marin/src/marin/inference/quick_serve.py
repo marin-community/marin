@@ -27,7 +27,7 @@ from iris.cluster.tpu_topology import get_tpu_topology
 from iris.cluster.types import EndpointAccess
 from levanter.model_cache import resolve_cached_model_path
 from rigging.connect import proxy_path
-from rigging.filesystem import open_url
+from rigging.filesystem import StoragePath
 from rigging.log_setup import configure_logging
 from transformers import AutoConfig
 
@@ -133,8 +133,7 @@ def read_attention_heads(model: str) -> tuple[int, int | None]:
 def _read_model_config_dict(model: str) -> dict:
     if _is_object_store_path(model):
         config_path = model.rstrip("/") + "/config.json"
-        with open_url(config_path, "r") as handle:
-            return json.load(handle)
+        return json.loads(StoragePath(config_path).read_text())
     return AutoConfig.from_pretrained(model, trust_remote_code=True).to_dict()
 
 

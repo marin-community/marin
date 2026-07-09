@@ -4,13 +4,11 @@
 """One connection per federation peer, plus its capability-heartbeat state.
 
 :class:`FederationPeer` holds one connection per peer (keyed by peer id) and caches
-the backends that peer last advertised — its static topology and current state. The
-connection speaks the generated controller stub directly (not the end-user
-``RemoteClusterClient``): federation only ever drives a peer with the raw RPCs —
-``LaunchJob`` (handoff), ``TerminateJob`` (routed cancel), ``FederationSync``, and
-``ListBackends`` (heartbeat). It is authenticated with the credentials this
-controller presents to the peer, resolved from the peer's cluster manifest via the
-shared ``credentials_for`` path — no second credential system.
+the backends that peer last advertised. The connection speaks the generated controller
+stub directly (not the end-user ``RemoteClusterClient``): federation drives a peer only
+with the raw RPCs — ``LaunchJob`` (handoff), ``TerminateJob`` (routed cancel),
+``FederationSync``, and ``ListBackends`` (heartbeat). It presents the credentials
+resolved from the peer's cluster manifest via ``credentials_for``.
 """
 
 import logging
@@ -21,6 +19,7 @@ from typing import Protocol
 
 from connectrpc.errors import ConnectError
 from connectrpc.interceptor import InterceptorSync
+from rigging.auth import TokenProvider
 from rigging.cluster_manifest import load_manifest
 from rigging.credentials import ClientCredentials, credentials_for
 from rigging.timing import Timestamp
@@ -48,16 +47,12 @@ logger = logging.getLogger(__name__)
 
 
 class PeerConnection(Protocol):
-    """The peer-controller surface federation drives: capability heartbeat plus
-    the handoff, delta-sync, routed-cancel, and proxied on-demand RPCs.
+    """The peer-controller surface federation drives.
 
-    Handoff reuses the ordinary ``LaunchJob`` (the request carries the job name and
-    federation attribution); a routed cancel reuses ``TerminateJob`` (targeting the
-    job id, cluster-invariant — the same id the parent submitted); ``federation_sync``
-    is federation's one
-    purpose-built endpoint; ``profile_task``/``exec_in_container`` proxy an
-    on-demand RPC against a handed-off task through the peer controller, which
-    does its own task->worker resolution.
+    ``list_backends`` is the capability heartbeat; ``launch_job`` delivers a handoff;
+    ``terminate_job`` routes a cancel; ``federation_sync`` runs one delta-sync round;
+    ``profile_task``/``exec_in_container`` proxy an on-demand RPC against a handed-off
+    task, which the peer resolves to its own worker.
     """
 
     def list_backends(self) -> list[controller_pb2.Controller.BackendSummary]: ...
@@ -93,17 +88,21 @@ class PeerHeartbeat:
     last_contact_ms: int = 0
 
 
-def _peer_credentials(peer: PeerConfig) -> ClientCredentials:
+def _peer_credentials(peer: PeerConfig, federation_token_provider: TokenProvider | None) -> ClientCredentials:
     """The client credentials this controller presents to ``peer``.
 
-    Resolved from the peer's cluster manifest via the shared ``credentials_for``
-    path. An empty ``cluster`` yields no credentials — loopback/no-auth, for a
-    local or same-VPC peer that trusts the connection.
+    The federation bearer — this cluster's short-lived ``aud="federation"`` token,
+    minted per request by ``federation_token_provider`` — rides on ``Authorization``
+    so an enforcing peer admits the handoff as a trusted requester. The peer's
+    manifest still supplies the IAP edge token on ``Proxy-Authorization``. With no
+    provider and an empty ``cluster``, no credentials are sent — loopback/no-auth,
+    for a local or same-VPC peer that trusts the connection.
     """
-    if not peer.cluster:
-        return ClientCredentials()
-    manifest = load_manifest(peer.cluster)
-    return credentials_for(peer.cluster, manifest.auth)
+    base = credentials_for(peer.cluster, load_manifest(peer.cluster).auth) if peer.cluster else ClientCredentials()
+    return ClientCredentials(
+        token_provider=federation_token_provider or base.token_provider,
+        iap_provider=base.iap_provider,
+    )
 
 
 class _PeerRpcConnection:
@@ -157,9 +156,13 @@ class _PeerRpcConnection:
         self._client.close()
 
 
-def connect_to_peer(peer: PeerConfig) -> PeerConnection:
-    """Open one authenticated connection to a peer controller."""
-    return _PeerRpcConnection(peer.controller_address, _peer_credentials(peer).interceptors())
+def connect_to_peer(peer: PeerConfig, federation_token_provider: TokenProvider | None = None) -> PeerConnection:
+    """Open one authenticated connection to a peer controller.
+
+    The connection presents this cluster's federation token (via
+    ``federation_token_provider``) on every RPC to the peer.
+    """
+    return _PeerRpcConnection(peer.controller_address, _peer_credentials(peer, federation_token_provider).interceptors())
 
 
 class FederationPeer:
@@ -173,9 +176,14 @@ class FederationPeer:
         self.peer_id = peer_id
         self.controller_address = config.controller_address
         self.dashboard_url = config.dashboard_url
+        self._allow_policy = config.allow_policy
         self._connection = connection
         self._lock = threading.Lock()
         self._heartbeat = PeerHeartbeat()
+
+    def admits(self, submitting_user: str) -> bool:
+        """Whether this peer's allow policy permits ``submitting_user`` to federate here."""
+        return self._allow_policy.admits(submitting_user)
 
     def probe(self) -> None:
         """Refresh the peer's advertised backends via one heartbeat RPC.
@@ -241,11 +249,15 @@ class FederationPeer:
 def build_peers(
     peers: Mapping[str, PeerConfig],
     *,
-    connect: PeerConnectFactory = connect_to_peer,
+    federation_token_provider: TokenProvider | None = None,
+    connect: PeerConnectFactory | None = None,
 ) -> list[FederationPeer]:
     """Build one :class:`FederationPeer` per configured peer, ordered by peer id.
 
-    ``connect`` builds each peer connection; the default opens a real
-    authenticated connection to the peer's controller stub.
+    Each connection presents this cluster's federation token (via
+    ``federation_token_provider``) so an enforcing peer admits the handoff as a
+    trusted requester. ``connect`` overrides the connection factory (tests inject a
+    stub); the default opens a real authenticated connection to the peer's stub.
     """
-    return [FederationPeer(peer_id, config, connect(config)) for peer_id, config in sorted(peers.items())]
+    factory = connect or (lambda config: connect_to_peer(config, federation_token_provider))
+    return [FederationPeer(peer_id, config, factory(config)) for peer_id, config in sorted(peers.items())]

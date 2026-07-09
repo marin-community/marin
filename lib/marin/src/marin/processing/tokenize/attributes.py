@@ -31,7 +31,7 @@ from fray import ResourceConfig
 from levanter.data.text import LmDatasetFormatBase, TextLmDatasetFormat
 from levanter.tokenizers import TokenizerBackend
 from pydantic import BaseModel
-from rigging.filesystem import prefix_join
+from rigging.filesystem import StoragePath, prefix_join
 from zephyr import Dataset, ZephyrContext
 from zephyr.readers import load_file
 
@@ -39,7 +39,6 @@ from marin.datakit.normalize import NormalizedData
 from marin.execution.artifact import read_artifact
 from marin.execution.step_spec import StepSpec
 from marin.processing.tokenize._core import tokenize_pipeline
-from marin.utils import fsspec_glob
 
 logger = logging.getLogger(__name__)
 
@@ -81,7 +80,7 @@ class TokenizedAttrData(BaseModel):
         d = self.output_dirs.get(split)
         if d is None:
             return []
-        return sorted(fsspec_glob(prefix_join(d, "*.parquet")))
+        return sorted(str(m) for m in StoragePath(prefix_join(d, "*.parquet")).glob())
 
 
 @dataclasses.dataclass(frozen=True, kw_only=True)
@@ -127,7 +126,7 @@ def _process_split(
 
     Returns ``(split_output_dir, counters)``.
     """
-    source_shards = sorted(fsspec_glob(prefix_join(source.main_output_dir, "*.parquet")))
+    source_shards = sorted(str(m) for m in StoragePath(prefix_join(source.main_output_dir, "*.parquet")).glob())
     if not source_shards:
         raise FileNotFoundError(f"No parquet shards found under {source.main_output_dir}")
 

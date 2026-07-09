@@ -15,12 +15,11 @@ import tarfile
 from collections.abc import Iterable
 
 import requests
-from rigging.filesystem import atomic_rename, open_url, prefix_join
+from rigging.filesystem import StoragePath, atomic_rename, open_url, prefix_join
 from tqdm_loggable.auto import tqdm
 from zephyr import Dataset, ZephyrContext, load_jsonl
 
 from marin.execution.step_spec import StepSpec
-from marin.utils import fsspec_size
 
 logger = logging.getLogger(__name__)
 
@@ -31,7 +30,7 @@ def download_tar(url: str, output_prefix: str) -> str:
     logger.info(f"Downloading URL: {url} to {output_filename}")
 
     try:
-        total_size = fsspec_size(url)
+        total_size = StoragePath(url).size()
         pbar = tqdm(total=total_size, desc="Downloading File", unit="B", unit_scale=True)
 
         with atomic_rename(output_filename) as tmp_filename, open_url(tmp_filename, "wb") as f:

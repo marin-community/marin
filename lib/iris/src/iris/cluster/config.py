@@ -21,18 +21,19 @@ import copy
 import ipaddress
 import logging
 import os
-from collections.abc import Iterator, Mapping
+from collections.abc import Collection, Iterator, Mapping
 from pathlib import Path
 from typing import Annotated, Any, ClassVar, Literal
 
-import fsspec
 import yaml
 from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, PlainSerializer, field_validator, model_validator
+from rigging.filesystem import StoragePath
 from rigging.secrets import as_secret_spec, is_secret_reference, resolve_secret_spec
 from rigging.timing import Duration
 
 from iris.cluster.tpu_topology import TPU_FAMILY_VARIANT_PREFIX, get_tpu_topology, tpu_variant_name
 from iris.cluster.types import (
+    AUTO_DEVICE_VARIANT,
     DEFAULT_BACKEND_ID,
     LOCAL_CLUSTER,
     AcceleratorType,
@@ -204,6 +205,7 @@ class CoreweavePlatformConfig(_Config):
     region: str = ""
     namespace: str = ""  # default: "iris"
     kubeconfig_path: str = ""  # optional; in-cluster auth if empty
+    kube_context: str = ""  # kubeconfig context to bind to; empty = the file's current-context
     object_storage_endpoint: str = ""  # S3 base endpoint, not bucket-specific
 
 
@@ -459,16 +461,9 @@ class CoreweaveControllerConfig(_Config):
     port: int = 0  # default: 10000
     service_name: str = ""  # K8s Service name for discovery
     scale_group: str = ""  # scale group whose NodePool runs the controller
-    # When set, start_controller creates an Ingress publishing ONLY /proxy
-    # off-cluster; the controller's per-endpoint auth is the sole gate, so keep
-    # auth.provider set. See docs/coreweave.md.
-    public_proxy_host: str = ""
-    ingress_class: str = "traefik"  # ingressClassName for the /proxy ingress
-    tls_secret: str = ""  # secret holding the TLS cert for public_proxy_host
-    # cert-manager ClusterIssuer. When set, the Ingress is annotated
-    # cert-manager.io/cluster-issuer=<name> so cert-manager auto-issues the cert
-    # into tls_secret. Empty = bring your own cert in tls_secret (or no TLS).
-    cluster_issuer: str = ""
+    # IngressClass the operator-managed federation ingress binds to; see
+    # scripts/install_cw_network.py and docs/coreweave.md.
+    ingress_class: str = "traefik"
 
 
 class ControllerVmConfig(_OneofConfig):
@@ -557,6 +552,19 @@ class AuthConfig(_OneofConfig):
     # and NOT secret. Served on JWKS alongside the current key during a rotation
     # overlap so verifiers accept tokens minted by the prior key.
     previous_public_keys: tuple[str, ...] = ()
+    # Inbound federation trust — this cluster acting as a peer that receives whole
+    # jobs. Maps a parent cluster id to its published EdDSA public key (a
+    # SubjectPublicKeyInfo PEM, inline, non-secret). The dedicated federation JWT
+    # verifier trusts exactly these issuers under aud="federation", kept off the
+    # control-plane audience set so a federation bearer never becomes a full RPC
+    # identity. Empty leaves inbound federation closed (no token verifies).
+    federation_peers: dict[str, str] = Field(default_factory=dict)
+    # Which submitters this cluster admits via an inbound federation handoff, keyed
+    # on the asserted submitting_user — allow-policy syntax ("*", "*@domain", or an
+    # exact identity). Empty admits none (fail closed); a receiving cluster narrows
+    # it explicitly, e.g. ["*@openathena.ai"]. A local_admin (CIDR/loopback) identity
+    # is never a valid federation submitter regardless of this list.
+    allowed_submitters: list[str] = Field(default_factory=list)
 
     @field_validator("trusted_cidrs")
     @classmethod
@@ -592,6 +600,7 @@ class KueueConfig(_Config):
 class KubernetesProviderConfig(_Config):
     namespace: str = ""  # default: "iris"
     kubeconfig: str = ""  # empty = in-cluster auth
+    kube_context: str = ""  # kubeconfig context to bind to; empty = the file's current-context
     default_image: str = ""
     service_account: str = ""
     host_network: bool = False
@@ -623,10 +632,32 @@ class EndpointSpec(_Config):
 # ---------------------------------------------------------------------------
 
 
+def user_admitted(allowed_users: Collection[str], user: str) -> bool:
+    """Whether an allow policy admits ``user``.
+
+    ``"*"`` admits anyone; ``"*@example.com"`` admits any email in that domain
+    (case-insensitive on the domain part); every other entry is an exact match on
+    the full identity. The one matcher shared by backend routing policy and
+    per-peer federation policy, so both admit users the same way.
+    """
+    if "*" in allowed_users or user in allowed_users:
+        return True
+    if "@" not in user:
+        return False
+    domain = user.rsplit("@", 1)[1].lower()
+    return f"*@{domain}" in {entry.lower() for entry in allowed_users}
+
+
 class AllowPolicy(_Config):
-    """Which users may route tasks to a backend. ``"*"`` matches all users."""
+    """Which users an allow policy admits — to route tasks to a backend, or to
+    federate a job to a peer. ``"*"`` matches all users; ``"*@example.com"`` matches
+    any email in that domain; anything else is an exact identity match."""
 
     users: list[str] = Field(default_factory=lambda: ["*"])
+
+    def admits(self, user: str) -> bool:
+        """Whether this policy admits ``user`` (see :func:`user_admitted`)."""
+        return user_admitted(self.users, user)
 
 
 class BackendConfig(_Config):
@@ -637,9 +668,10 @@ class BackendConfig(_Config):
     (``kubernetes_provider``). ``transport`` must be ``in_process``; ``remote`` is
     rejected by :func:`validate_config`.
 
-    ``attributes`` values are comma-split into sets by
-    :func:`backend_attribute_sets` for the task→backend meta-scheduler (for
-    example ``device-variant: "v5e-4,v5p-8"``).
+    ``attributes`` holds any extra routing attributes as comma-split value sets
+    (for example ``device-variant: "v5e-4,v5p-8"``). Device attributes need not be
+    listed here: ``backend_attribute_sets`` derives ``device-type``/``device-variant``
+    from ``scale_groups`` and unions them in.
     """
 
     kind: Literal["worker_daemon", "k8s"]
@@ -677,6 +709,10 @@ class PeerConfig(_Config):
     controller_address: str  # peer controller RPC address (reachability)
     dashboard_url: str = ""  # peer public dashboard origin, for deep links
     cluster: str = ""  # peer cluster manifest name; resolves the presented credentials
+    # Which submitting_users this cluster may federate to this peer. Gates on the
+    # authenticated principal (never the caller-chosen owner). Defaults to admit-all,
+    # so a peer must be narrowed in config (e.g. ["*@openathena.ai"]) to restrict it.
+    allow_policy: AllowPolicy = Field(default_factory=AllowPolicy)
 
 
 class ClusterFinelogConfig(_Config):
@@ -1117,14 +1153,48 @@ def assert_no_inlined_secrets(config: IrisClusterConfig) -> None:
 # ===========================================================================
 
 
-def backend_attribute_sets(backend: BackendConfig) -> dict[str, set[str]]:
-    """Comma-split each ``attributes`` value into a normalized set.
+def _scale_group_device_attributes(scale_groups: Mapping[str, ScaleGroupConfig]) -> dict[str, set[str]]:
+    """Collect the ``device-type``/``device-variant`` a backend's scale groups offer.
 
-    ``device-variant: "v5e-4, v5p-8"`` becomes ``{"device-variant": {"v5e-4", "v5p-8"}}``.
-    Empty and whitespace-only entries are dropped. The task→backend meta-scheduler
-    uses this to expand set-valued attributes into posting lists.
+    Only accelerator scale groups contribute: a CPU (or unset) device type emits
+    nothing, matching a job's resource spec, whose CPU resources carry no device
+    constraint — so a CPU-only backend advertises no device attribute and stays a
+    catch-all. A blank or ``auto`` variant emits no ``device-variant``. Values are
+    lowercased so an advertised value equals the constraint literal a job matches
+    with, which is lowercased on construction. Scale groups of different variants
+    union into one set, e.g. ``device-variant: {"h100", "a100"}``.
     """
-    return {key: {part.strip() for part in raw.split(",") if part.strip()} for key, raw in backend.attributes.items()}
+    derived: dict[str, set[str]] = {}
+    for sg in scale_groups.values():
+        resources = sg.resources
+        if resources is None:
+            continue
+        device_type = resources.device_type
+        if device_type is None or device_type == AcceleratorType.CPU:
+            continue
+        derived.setdefault(WellKnownAttribute.DEVICE_TYPE.value, set()).add(device_type.value)
+        variant = resources.device_variant.strip().lower()
+        if variant and variant != AUTO_DEVICE_VARIANT:
+            derived.setdefault(WellKnownAttribute.DEVICE_VARIANT.value, set()).add(variant)
+    return derived
+
+
+def backend_attribute_sets(backend: BackendConfig) -> dict[str, set[str]]:
+    """The routing attributes a backend advertises to the meta-scheduler and peers.
+
+    Explicit ``attributes`` values are comma-split into sets (``device-variant:
+    "v5e-4, v5p-8"`` becomes ``{"device-variant": {"v5e-4", "v5p-8"}}``); empty and
+    whitespace-only entries are dropped. ``device-type`` and ``device-variant`` are
+    additionally derived from ``scale_groups[*].resources`` and unioned in, so a
+    backend advertises the devices its scale groups offer without the operator
+    restating them in ``attributes``.
+    """
+    attributes = {
+        key: {part.strip() for part in raw.split(",") if part.strip()} for key, raw in backend.attributes.items()
+    }
+    for key, values in _scale_group_device_attributes(backend.scale_groups).items():
+        attributes.setdefault(key, set()).update(values)
+    return attributes
 
 
 def resolve_backends(config: IrisClusterConfig) -> dict[str, BackendConfig]:
@@ -1450,6 +1520,6 @@ def build_ssh_command_config(config: IrisClusterConfig, group_name: str | None =
 
 def clear_remote_state(remote_state_dir: str) -> None:
     """Remove all files under the remote state dir so the controller starts fresh."""
-    fs, path = fsspec.core.url_to_fs(remote_state_dir)
-    if fs.exists(path):
-        fs.rm(path, recursive=True)
+    path = StoragePath(remote_state_dir)
+    if path.exists():
+        path.rmtree()

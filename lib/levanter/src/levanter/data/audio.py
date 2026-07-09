@@ -10,11 +10,10 @@ from dataclasses import dataclass
 from functools import cached_property
 from typing import Any, Dict, Iterator, List, Mapping, Optional, Sequence, Tuple, cast
 
-import braceexpand
 import datasets
 import equinox as eqx
 import haliax as hax
-from rigging.filesystem import url_to_fs
+from rigging.filesystem import StoragePath
 import jax
 import numpy as np
 from draccus import field
@@ -202,15 +201,7 @@ class AudioDatasetSourceConfig:
         else:
             raise ValueError(f"Unknown split {split}")
 
-        def fsspec_expand_glob(url):
-            if "*" in url:
-                fs = url_to_fs(url)[0]
-                return fs.glob(url)
-            else:
-                return [url]
-
-        urls = [globbed for pat in urls for url in braceexpand.braceexpand(pat) for globbed in fsspec_expand_glob(url)]
-        return urls
+        return [str(m) for pat in urls for m in StoragePath(pat).expand_glob()]
 
 
 @dataclass

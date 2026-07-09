@@ -68,9 +68,8 @@ from marin.datakit.decon import DeconAttributes
 from marin.execution.artifact import write_artifact
 from marin.processing.classification.deduplication.fuzzy_dups import FuzzyDupsAttrData
 from marin.processing.tokenize.attributes import TokenizedAttrData
-from marin.utils import fsspec_exists, fsspec_glob
 from pydantic import BaseModel
-from rigging.filesystem import open_url, url_to_fs
+from rigging.filesystem import StoragePath
 from zephyr import Dataset, ZephyrContext, counters
 from zephyr.dataset import ShardInfo, format_shard_path
 from zephyr.writers import atomic_rename
@@ -157,7 +156,7 @@ def _per_source_shard_tuples(
     tok_dir = tokenize.output_dirs.get(split)
     if tok_dir is None:
         raise FileNotFoundError(f"{source_name}: tokenize has no split={split!r}")
-    tok_shards = sorted(fsspec_glob(f"{tok_dir.rstrip('/')}/*.parquet"))
+    tok_shards = sorted(str(m) for m in StoragePath(f"{tok_dir.rstrip('/')}/*.parquet").glob())
     if not tok_shards:
         raise FileNotFoundError(f"{source_name}: no tokenize shards under {tok_dir}")
 
@@ -244,7 +243,7 @@ def _load_dedup_canonical(path: str) -> dict[str, bool]:
     Dedup is sparse: ids missing from this dict are singletons (kept). Ids
     present are non-singleton cluster members; only the canonical one survives.
     """
-    if not fsspec_exists(path):
+    if not StoragePath(path).exists():
         return {}
     # Sources with zero non-singletons (e.g. ghalogs/public) get an empty
     # parquet stub from the dedup writer -- 176 bytes, num_rows=0, zero
@@ -291,10 +290,8 @@ def _write_shard_sidecar(path: str, records: list[_WrittenShard]) -> None:
     """
     payload = json.dumps([dataclasses.asdict(r) for r in records])
     tmp_path = f"{path}.tmp"
-    with open_url(tmp_path, "w") as fh:
-        fh.write(payload)
-    fs, _ = url_to_fs(path)
-    fs.mv(tmp_path, path)
+    StoragePath(tmp_path).write_text(payload)
+    StoragePath(tmp_path).rename(path)
 
 
 def _load_shard_sidecar(path: str) -> list[_WrittenShard] | None:
@@ -305,10 +302,9 @@ def _load_shard_sidecar(path: str) -> list[_WrittenShard] | None:
     re-runs it. ``atomic_rename`` on the Levanter caches makes the re-run
     safe: bucket dirs that already exist get overwritten.
     """
-    if not fsspec_exists(path):
+    if not StoragePath(path).exists():
         return None
-    with open_url(path, "r") as fh:
-        data = json.loads(fh.read())
+    data = json.loads(StoragePath(path).read_text())
     return [_WrittenShard(**d) for d in data]
 
 
@@ -446,8 +442,7 @@ def _join_filter_stream_shard(
             del decon_ids, cluster_ids, quality_ids
             dedup_canonical = _load_dedup_canonical(dedup_path)
 
-            fs, resolved = url_to_fs(tok_path)
-            with fs.open(resolved, "rb") as fh:
+            with StoragePath(tok_path).open("rb") as fh:
                 pf = pq.ParquetFile(fh)
                 row_idx = 0
                 for batch in pf.iter_batches(batch_size=_TOKENIZE_BATCH_SIZE, columns=["id", "input_ids"]):
@@ -752,7 +747,7 @@ def build_clustered_store(
     # Aggregation: scan per-shard sidecars in GCS rather than carrying
     # the full _WrittenShard records through coord.outcome.results.
     sidecar_glob = f"{output_path.rstrip('/')}/_done/shard-*.json"
-    sidecar_paths = sorted(fsspec_glob(sidecar_glob))
+    sidecar_paths = sorted(str(m) for m in StoragePath(sidecar_glob).glob())
     logger.info("build_clustered_store: loading %d shard sidecars (parallel)", len(sidecar_paths))
 
     def _load_one(sp: str) -> list[_WrittenShard]:

@@ -11,12 +11,14 @@
 # whatever the NodePools hold. See lib/iris/docs/coreweave.md.
 #
 # Workflow:
-#   1. Set CoreWeave AI Object Storage credentials (required for s3:// storage URIs):
+#   1. Set CoreWeave AI Object Storage credentials (console -> Object Storage ->
+#      Access Keys). `iris cluster start` turns them into the iris-task-env
+#      Secret (addressing style is derived from the endpoint domain):
 #        export CW_KEY_ID=<coreweave-access-key-id>
 #        export CW_KEY_SECRET=<coreweave-access-key-secret>
-#      `iris cluster start` turns these into the iris-task-env Secret.
-#   2. Point kubectl/iris at the region kubeconfig:
-#        export KUBECONFIG=~/.kube/coreweave-iris-gpu   # context marin-gpu_US-EAST-02A
+#   2. Install the kubeconfig (Console -> Tokens) at ~/.kube/coreweave-iris.
+#      Operations are bound to kube_context below, so no KUBECONFIG export and no
+#      current-context switching is needed.
 #   3. Start / inspect the cluster:
 #        uv run iris --cluster=cw-us-east-02a cluster start
 #        uv run iris --cluster=cw-us-east-02a cluster status
@@ -28,9 +30,8 @@
 finelog:
   config: cw-us-east-02a
 
-# Public origin for off-cluster proxy links. Only /proxy is served here (see
-# controller.coreweave.public_proxy_host); marin-serve uses this to print the
-# off-cluster OpenAI base_url + BEARER api_key.
+# Public host of this controller. The whole surface is IP-locked to the marin
+# egress (scripts/install_cw_network.py); there is no off-cluster user surface.
 dashboard_url: https://iris-cw-us-east-02a.oa.dev
 
 platform:
@@ -38,20 +39,26 @@ platform:
   coreweave:
     region: US-EAST-02A
     namespace: iris
-    kubeconfig_path: ~/.kube/coreweave-iris-gpu
-    object_storage_endpoint: https://74981a43be0de7712369306c7b19133d.r2.cloudflarestorage.com
+    kubeconfig_path: ~/.kube/coreweave-iris
+    kube_context: marin-gpu_US-EAST-02A
+    # CoreWeave AI Object Storage via LOTA, the in-cluster local cache
+    # endpoint (use https://cwobject.com from outside CoreWeave). Bare
+    # endpoint only: buckets use virtual-hosted addressing
+    # (http://<bucket>.cwlota.com), which iris detects from this domain.
+    object_storage_endpoint: http://cwlota.com
 
 storage:
-  remote_state_dir: s3://marin-na/iris/cw-us-east-02a/state
+  remote_state_dir: s3://marin-us-east-02a/iris/cw-us-east-02a/state
   # Node-local NVMe for the controller's SQLite state, not the default
   # network-attached PVC.
   local_state_dir: /mnt/local/iris-controller-state
 
-# Request auth. No login arm — identity is by network location: direct
-# in-cluster peers (CKS pods/nodes are RFC1918; loopback covers kubectl
-# port-forward) are trusted as admin. External traffic reaches only /proxy via
-# Traefik, which appends X-Forwarded-For — a forwarded request never matches a
-# CIDR, so it must present a bearer token (per-endpoint access mode).
+# Request auth. Identity is by network location: in-cluster peers (RFC1918
+# pods/nodes, loopback for kubectl port-forward) are trusted as admin. A non-empty
+# trusted_cidrs makes the controller enforcing — an off-cluster request arrives
+# through Traefik with an appended X-Forwarded-For, never matches a CIDR, and must
+# present a bearer. This is the identity gate behind the IP-restricted federation
+# ingress (scripts/install_cw_network.py).
 auth:
   trusted_cidrs: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 127.0.0.0/8, "::1/128"]
 
@@ -80,13 +87,8 @@ controller:
     port: 10000
     service_name: iris-controller-svc
     scale_group: cpu-genoa
-    # Publishes ONLY /proxy off-cluster; per-endpoint auth is the gate.
-    # Prerequisites + DNS: docs/coreweave.md (scripts/install_traefik_proxy.py).
-    public_proxy_host: iris-cw-us-east-02a.oa.dev
-    tls_secret: iris-controller-proxy-tls
-    # Staging first (avoids Let's Encrypt rate limits); flip to
-    # letsencrypt-http01-prod once the staging cert validates.
-    cluster_issuer: letsencrypt-http01-staging
+    # Off-cluster reach is the operator-managed, IP-locked federation ingress
+    # (docs/coreweave.md, scripts/install_cw_network.py).
 
 defaults:
   autoscaler:
@@ -97,7 +99,11 @@ defaults:
     scale_down_delay:
       milliseconds: 300000
   task_env:
-    MARIN_PREFIX: s3://marin-na/marin
+    # The shared CoreWeave bucket (everything lives in marin-us-east-02a; LOTA
+    # caches reads locally). Task pods carry ONE endpoint/credential set, so R2
+    # data under s3://marin-na/ is not reachable from jobs unless they override
+    # AWS_ENDPOINT_URL and credentials themselves.
+    MARIN_PREFIX: s3://marin-us-east-02a/marin
     # H100 hostNetwork pods also see IB and SR-IOV link-local interfaces. Exclude
     # IB/IPoIB (ibs*, ibp*) and virtual interfaces so NCCL's bootstrap socket falls
     # back to the host ethernet PF that carries the node IP. The exact PF name

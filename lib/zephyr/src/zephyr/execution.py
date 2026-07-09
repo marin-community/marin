@@ -36,7 +36,7 @@ from fray.local_backend import LocalClient
 from fray.types import Entrypoint, JobRequest
 from iris.client import get_iris_ctx
 from iris.cluster.client.job_info import get_job_info
-from rigging.filesystem import TransferBudgetExceeded, marin_temp_bucket, open_url, url_to_fs
+from rigging.filesystem import StoragePath, TransferBudgetExceeded, marin_temp_bucket
 from rigging.timing import ExponentialBackoff, RateLimiter, log_time
 
 from zephyr.dataset import Dataset
@@ -141,13 +141,12 @@ def _push_iris_task_status(
 
 def _cleanup_execution(prefix: str, execution_id: str) -> None:
     """Remove all chunk files for an execution."""
-    exec_dir = f"{prefix}/{execution_id}"
-    fs = url_to_fs(exec_dir)[0]
+    exec_dir = StoragePath(f"{prefix}/{execution_id}")
 
     with log_time(f"Cleaning up execution directory {exec_dir}"):
-        if fs.exists(exec_dir):
+        if exec_dir.exists():
             try:
-                fs.rm(exec_dir, recursive=True)
+                exec_dir.rmtree()
             except Exception as e:
                 logger.warning(f"Failed to cleanup chunks at {exec_dir}: {e}")
 
@@ -1510,8 +1509,7 @@ def _run_coordinator_job(config_path: str, result_path: str) -> None:
     maintenance loop (no separate watchdog thread).
     """
     logger.info("Loading coordinator config from %s", config_path)
-    with open_url(config_path, "rb") as f:
-        config: _CoordinatorJobConfig = cloudpickle.loads(f.read())
+    config: _CoordinatorJobConfig = cloudpickle.loads(StoragePath(config_path).read_bytes())
 
     job_info = get_job_info()
     attempt_id = job_info.attempt_id if job_info else 0
@@ -1592,8 +1590,7 @@ def _run_coordinator_job(config_path: str, result_path: str) -> None:
             payload = ZephyrExecutionResult(results=results, counters=dict(raw_counters))
 
             ensure_parent_dir(result_path)
-            with open_url(result_path, "wb") as f:
-                f.write(cloudpickle.dumps(payload))
+            StoragePath(result_path).write_bytes(cloudpickle.dumps(payload))
         except Exception as e:
             # Persist the exception so the caller can recover the original type
             # (important for non-retryable error detection). Normalize first so a
@@ -1601,8 +1598,7 @@ def _run_coordinator_job(config_path: str, result_path: str) -> None:
             # caller's revival crash and mask the real failure.
             with suppress(Exception):
                 ensure_parent_dir(result_path)
-                with open_url(result_path, "wb") as f:
-                    f.write(cloudpickle.dumps(_ensure_picklable_exception(e)))
+                StoragePath(result_path).write_bytes(cloudpickle.dumps(_ensure_picklable_exception(e)))
             raise
     finally:
         # Signal coordinator shutdown first so workers receive SHUTDOWN from
@@ -1636,8 +1632,7 @@ def _run_coordinator_job(config_path: str, result_path: str) -> None:
 
 def _read_coordinator_result(result_path: str) -> Any:
     """Read the coordinator job's result file. Returns the deserialized object."""
-    with open_url(result_path, "rb") as f:
-        data = f.read()
+    data = StoragePath(result_path).read_bytes()
     try:
         return cloudpickle.loads(data)
     except Exception as e:
@@ -1778,8 +1773,7 @@ class ZephyrContext:
             t0 = time.monotonic()
             data = cloudpickle.dumps(obj)
             elapsed = time.monotonic() - t0
-            with open_url(path, "wb") as f:
-                f.write(data)
+            StoragePath(path).write_bytes(data)
             logger.info(
                 "Shared data '%s' written to %s (serialized %d bytes in %.2fs)",
                 name,
@@ -1850,8 +1844,7 @@ class ZephyrContext:
                     max_shard_infra_failures=self.max_shard_infra_failures,
                 )
                 ensure_parent_dir(config_path)
-                with open_url(config_path, "wb") as f:
-                    f.write(cloudpickle.dumps(config))
+                StoragePath(config_path).write_bytes(cloudpickle.dumps(config))
 
                 job_name = f"zephyr-{self.name}-p{self._pipeline_id}-a{attempt}"
                 # The wrapper job just blocks on child actors; real

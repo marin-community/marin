@@ -1,6 +1,10 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+"""Tests for region resolution, temp-bucket routing, cross-region guards, and the
+guarded filesystem entry points. See test_data_config.py for DataConfig loading and
+resolved_root(), and test_filesystem.py for StoragePath."""
+
 import concurrent.futures
 import os
 from dataclasses import dataclass
@@ -17,7 +21,6 @@ from rigging.filesystem import (
     check_gcs_paths_same_region,
     collect_gcs_paths,
     filesystem,
-    marin_prefix,
     marin_region,
     marin_temp_bucket,
     open_url,
@@ -61,30 +64,6 @@ def test_region_from_metadata_returns_none_on_failure():
 )
 def test_region_from_prefix(prefix, expected):
     assert region_from_prefix(prefix) == expected
-
-
-def test_marin_prefix_from_env():
-    with patch.dict(os.environ, {"MARIN_PREFIX": "gs://marin-us-central1"}):
-        assert marin_prefix() == "gs://marin-us-central1"
-
-
-def test_marin_prefix_from_metadata():
-    with (
-        patch(
-            "rigging.filesystem.urllib.request.urlopen",
-            return_value=_mock_urlopen(b"projects/12345/zones/us-central2-b"),
-        ),
-        patch.dict(os.environ, {}, clear=True),
-    ):
-        assert marin_prefix() == "gs://marin-us-central2"
-
-
-def test_marin_prefix_falls_back_to_local():
-    with (
-        patch("rigging.filesystem.urllib.request.urlopen", side_effect=OSError("not on GCP")),
-        patch.dict(os.environ, {}, clear=True),
-    ):
-        assert marin_prefix() == "/tmp/marin"
 
 
 def test_marin_region_from_metadata():

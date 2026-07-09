@@ -113,12 +113,14 @@ class Controller(_message.Message):
         federation: Controller.FederationHandoff
         def __init__(self, name: _Optional[str] = ..., entrypoint: _Optional[_Union[_job_pb2.RuntimeEntrypoint, _Mapping]] = ..., resources: _Optional[_Union[_job_pb2.ResourceSpecProto, _Mapping]] = ..., environment: _Optional[_Union[_job_pb2.EnvironmentConfig, _Mapping]] = ..., bundle_id: _Optional[str] = ..., bundle_blob: _Optional[bytes] = ..., scheduling_timeout: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ..., ports: _Optional[_Iterable[str]] = ..., max_task_failures: _Optional[int] = ..., max_retries_failure: _Optional[int] = ..., max_retries_preemption: _Optional[int] = ..., constraints: _Optional[_Iterable[_Union[_job_pb2.Constraint, _Mapping]]] = ..., coscheduling: _Optional[_Union[_job_pb2.CoschedulingConfig, _Mapping]] = ..., replicas: _Optional[int] = ..., timeout: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ..., fail_if_exists: _Optional[bool] = ..., preemption_policy: _Optional[_Union[_job_pb2.JobPreemptionPolicy, str]] = ..., existing_job_policy: _Optional[_Union[_job_pb2.ExistingJobPolicy, str]] = ..., priority_band: _Optional[_Union[_job_pb2.PriorityBand, str]] = ..., task_image: _Optional[str] = ..., submit_argv: _Optional[_Iterable[str]] = ..., client_revision_date: _Optional[str] = ..., container_profile: _Optional[_Union[_job_pb2.ContainerProfile, str]] = ..., federation: _Optional[_Union[Controller.FederationHandoff, _Mapping]] = ...) -> None: ...
     class FederationHandoff(_message.Message):
-        __slots__ = ("requester_id", "owner_principal")
+        __slots__ = ("requester_id", "owner_principal", "submitting_user")
         REQUESTER_ID_FIELD_NUMBER: _ClassVar[int]
         OWNER_PRINCIPAL_FIELD_NUMBER: _ClassVar[int]
+        SUBMITTING_USER_FIELD_NUMBER: _ClassVar[int]
         requester_id: str
         owner_principal: str
-        def __init__(self, requester_id: _Optional[str] = ..., owner_principal: _Optional[str] = ...) -> None: ...
+        submitting_user: str
+        def __init__(self, requester_id: _Optional[str] = ..., owner_principal: _Optional[str] = ..., submitting_user: _Optional[str] = ...) -> None: ...
     class LaunchJobResponse(_message.Message):
         __slots__ = ("job_id",)
         JOB_ID_FIELD_NUMBER: _ClassVar[int]

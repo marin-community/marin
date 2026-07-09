@@ -89,6 +89,14 @@ class WellKnownAttribute(StrEnum):
     GPU_COUNT = "gpu-count"
 
 
+AUTO_DEVICE_VARIANT = "auto"
+"""Device-variant sentinel meaning "unspecified — let the platform pick a variant".
+
+A resource spec or scale group carrying this variant emits no ``device-variant``
+routing constraint or advertised attribute, so the job matches any variant.
+"""
+
+
 # The reserved cluster name for work this controller owns and runs itself. Every
 # ``jobs``/``tasks`` row carries a ``cluster`` column that defaults to
 # ``LOCAL_CLUSTER`` and holds a peer's id once the job is handed off, so the
@@ -97,6 +105,14 @@ class WellKnownAttribute(StrEnum):
 # ``"local"`` (enforced in config validation) — so the sentinel and the global
 # cluster-id namespace stay disjoint.
 LOCAL_CLUSTER = "local"
+
+LOCAL_ADMIN_SUBMITTER = "local_admin"
+"""``submitting_user`` for a job admitted without an authenticated email.
+
+A CIDR/loopback (null-auth) submitter authenticates as the anonymous admin rather
+than a person, so its jobs are attributed to this well-known principal. Per-cluster
+federation allowlists key on ``submitting_user``, so ``local_admin`` is admitted to
+a peer only if that peer's policy names it explicitly."""
 
 
 def is_federated(cluster: str) -> bool:

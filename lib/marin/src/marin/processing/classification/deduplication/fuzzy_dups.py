@@ -38,6 +38,7 @@ from typing import Any
 
 from fray import ResourceConfig
 from pydantic import BaseModel
+from rigging.filesystem import StoragePath
 from zephyr import Dataset, ZephyrContext, counters, write_parquet_file, zephyr_worker_ctx
 
 from marin.execution.artifact import read_artifact
@@ -45,7 +46,6 @@ from marin.execution.step_spec import StepSpec
 from marin.processing.classification.deduplication.connected_components import connected_components
 from marin.processing.classification.deduplication.dedup_commons import _load_batches
 from marin.processing.classification.deduplication.fuzzy_minhash import MinHashAttrData, MinHashParams
-from marin.utils import fsspec_glob
 
 logger = logging.getLogger(__name__)
 
@@ -126,7 +126,7 @@ def _build_shard_index(inputs: list[MinHashAttrData]) -> tuple[list[dict[str, An
 
     entries: list[dict[str, Any]] = []
     for m in inputs:
-        attr_shards = sorted(fsspec_glob(f"{m.attr_dir.rstrip('/')}/*.parquet"))
+        attr_shards = sorted(str(shard) for shard in StoragePath(f"{m.attr_dir.rstrip('/')}/*.parquet").glob())
         if not attr_shards:
             raise FileNotFoundError(f"No attr parquet shards under {m.attr_dir}")
         for attr_path in attr_shards:

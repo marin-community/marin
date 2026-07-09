@@ -25,7 +25,9 @@ from iris.cli.job import (
 )
 from iris.cluster.config import IrisClusterConfig, ScaleGroupConfig, WorkerSettings
 from iris.cluster.constraints import (
+    CLUSTER_CONSTRAINT_KEY,
     Constraint,
+    ConstraintOp,
     WellKnownAttribute,
     infer_preemptible_constraint,
     preemptible_constraint,
@@ -188,6 +190,28 @@ def test_build_job_constraints_preemptible_true_overrides_heuristic():
 
     # Exactly one preemptible constraint, and it reflects the user's choice.
     assert _preemptible_values(constraints) == ["true"]
+
+
+def test_build_job_constraints_target_cluster_appends_cluster_pin():
+    """--target-cluster appends exactly one cluster EQ constraint naming the peer."""
+    resources_proto = build_resources(tpu=None, gpu=None, cpu=0.5, memory="1GB", disk="5GB").to_proto()
+
+    constraints = build_job_constraints(resources_proto, tpu_variants=[], replicas=1, target_cluster="peer-cluster")
+
+    cluster_constraints = [c for c in constraints if c.key == CLUSTER_CONSTRAINT_KEY]
+    assert len(cluster_constraints) == 1
+    pin = cluster_constraints[0]
+    assert pin.op == ConstraintOp.EQ
+    assert pin.values[0].value == "peer-cluster"
+
+
+def test_build_job_constraints_no_target_cluster_omits_cluster_pin():
+    """Omitting --target-cluster appends no cluster constraint."""
+    resources_proto = build_resources(tpu=None, gpu=None, cpu=0.5, memory="1GB", disk="5GB").to_proto()
+
+    constraints = build_job_constraints(resources_proto, tpu_variants=[], replicas=1, target_cluster=None)
+
+    assert [c for c in constraints if c.key == CLUSTER_CONSTRAINT_KEY] == []
 
 
 def test_job_run_cli_accepts_task_image_override(monkeypatch):

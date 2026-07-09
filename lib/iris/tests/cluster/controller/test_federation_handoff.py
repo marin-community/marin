@@ -21,15 +21,17 @@ from iris.cluster.bundle import BundleStore
 from iris.cluster.config import PeerConfig
 from iris.cluster.constraints import CLUSTER_CONSTRAINT_KEY, Constraint, ConstraintOp
 from iris.cluster.controller import reads, writes
+from iris.cluster.controller.auth import ControllerAuth
 from iris.cluster.controller.endpoint_service import EndpointServiceImpl
 from iris.cluster.controller.federation_store import ControllerFederationStore
 from iris.cluster.controller.service import ControllerServiceImpl, _peer_status
 from iris.cluster.federation.manager import FederationManager
 from iris.cluster.federation.peer import FederationPeer
 from iris.cluster.federation.store import HandoffAdmission, HandoffSpec, HandoffState
-from iris.cluster.types import LOCAL_CLUSTER, AttemptUid, JobName
+from iris.cluster.types import LOCAL_ADMIN_SUBMITTER, LOCAL_CLUSTER, AttemptUid, JobName
 from iris.managed_thread import get_thread_container
 from iris.rpc import controller_pb2, job_pb2
+from iris.rpc.auth import FEDERATION_PEER_ROLE
 from rigging.server_auth import VerifiedIdentity, identity_scope
 
 from ._test_support import ControllerTestState
@@ -102,7 +104,7 @@ class _UnreachablePeerConnection(_InProcessPeerConnection):
 
 
 def _make_service(
-    stack: ExitStack, subdir: str, tmp_path, log_client
+    stack: ExitStack, subdir: str, tmp_path, log_client, auth: ControllerAuth | None = None
 ) -> tuple[ControllerServiceImpl, ControllerTestState]:
     state = stack.enter_context(make_controller_state())
     mock = MockController()
@@ -113,6 +115,7 @@ def _make_service(
         log_client=log_client,
         db=state._db,
         endpoint_service=EndpointServiceImpl(db=state._db),
+        auth=auth,
     )
     return service, state
 
@@ -171,6 +174,122 @@ def _run_peer_task_to_success(peer_state: ControllerTestState, job_id: JobName) 
     (task,) = query_tasks_for_job(peer_state, job_id)
     dispatch_task(peer_state, task, worker)
     transition_task(peer_state, task.task_id, job_pb2.TASK_STATE_SUCCEEDED)
+
+
+# ---------------------------------------------------------------------------
+# inbound admission: an enforcing peer gates who may hand off
+# ---------------------------------------------------------------------------
+
+# An enforcing peer (a provider is configured) that admits only openathena submitters.
+_ENFORCING_AUTH = ControllerAuth(provider="cidr", allowed_submitters=("*@openathena.ai",))
+
+
+def _peer_handoff_request(name: str, requester_id: str, submitting_user: str):
+    """A handoff request carrying the peer-verified requester and the asserted submitter."""
+    request = _received_handoff_request(name, requester_id)
+    request.federation.submitting_user = submitting_user
+    return request
+
+
+def test_inbound_handoff_admits_a_verified_peer_for_an_allowed_submitter(tmp_path, log_client):
+    """An enforcing peer admits a handoff whose federation-peer identity matches the
+    asserted requester and whose submitter the allowlist permits."""
+    with ExitStack() as stack:
+        peer_service, _ = _make_service(stack, "peer", tmp_path, log_client, auth=_ENFORCING_AUTH)
+        request = _peer_handoff_request("fed-job", "parent-cluster", "alice@openathena.ai")
+        with identity_scope(VerifiedIdentity("parent-cluster", FEDERATION_PEER_ROLE)):
+            response = peer_service.launch_job(request, None)
+        assert JobName.from_wire(response.job_id).name == "fed-job"
+
+
+def test_inbound_handoff_rejects_a_submitter_outside_the_allowlist(tmp_path, log_client):
+    """A verified peer cannot federate a submitter the receiving cluster does not admit."""
+    with ExitStack() as stack:
+        peer_service, _ = _make_service(stack, "peer", tmp_path, log_client, auth=_ENFORCING_AUTH)
+        request = _peer_handoff_request("fed-job", "parent-cluster", "eve@gmail.com")
+        with identity_scope(VerifiedIdentity("parent-cluster", FEDERATION_PEER_ROLE)):
+            with pytest.raises(ConnectError) as exc:
+                peer_service.launch_job(request, None)
+        assert exc.value.code == Code.PERMISSION_DENIED
+
+
+def test_inbound_handoff_rejects_a_requester_that_mismatches_the_peer(tmp_path, log_client):
+    """The asserted requester must equal the authenticated peer — a peer cannot relay a
+    handoff under another cluster's requester id."""
+    with ExitStack() as stack:
+        peer_service, _ = _make_service(stack, "peer", tmp_path, log_client, auth=_ENFORCING_AUTH)
+        request = _peer_handoff_request("fed-job", "other-cluster", "alice@openathena.ai")
+        with identity_scope(VerifiedIdentity("parent-cluster", FEDERATION_PEER_ROLE)):
+            with pytest.raises(ConnectError) as exc:
+                peer_service.launch_job(request, None)
+        assert exc.value.code == Code.PERMISSION_DENIED
+
+
+def test_inbound_handoff_rejects_a_non_peer_identity(tmp_path, log_client):
+    """An ordinary authenticated user cannot forge a handoff by setting the field."""
+    with ExitStack() as stack:
+        peer_service, _ = _make_service(stack, "peer", tmp_path, log_client, auth=_ENFORCING_AUTH)
+        request = _peer_handoff_request("fed-job", "parent-cluster", "alice@openathena.ai")
+        with identity_scope(VerifiedIdentity("alice@openathena.ai", "user")):
+            with pytest.raises(ConnectError) as exc:
+                peer_service.launch_job(request, None)
+        assert exc.value.code == Code.PERMISSION_DENIED
+
+
+def test_enforcing_parent_refuses_to_federate_a_local_admin_submission(tmp_path, log_client):
+    """With auth on, a local_admin (CIDR/loopback) submission is refused before handoff
+    with a clear message — even to a peer whose policy would admit it — because a
+    federated job must carry an authenticated user."""
+    with ExitStack() as stack:
+        parent_service, _ = _make_service(stack, "parent", tmp_path, log_client, auth=_ENFORCING_AUTH)
+        peer_service, _ = _make_service(stack, "peer", tmp_path, log_client)
+        _attach_federation(parent_service, _InProcessPeerConnection(peer_service))
+        # No identity scope: an unauthenticated (CIDR/loopback) caller resolves to local_admin.
+        with pytest.raises(ConnectError) as exc:
+            parent_service.launch_job(_cluster_pinned_request("fed-job"), None)
+        assert exc.value.code == Code.PERMISSION_DENIED
+
+
+def test_inbound_handoff_rejects_a_local_admin_submitter(tmp_path, log_client):
+    """A local_admin (CIDR/loopback) identity is never a valid federation submitter,
+    even for a verified peer — rejected regardless of the allowlist."""
+    with ExitStack() as stack:
+        peer_service, _ = _make_service(stack, "peer", tmp_path, log_client, auth=_ENFORCING_AUTH)
+        request = _peer_handoff_request("fed-job", "parent-cluster", LOCAL_ADMIN_SUBMITTER)
+        with identity_scope(VerifiedIdentity("parent-cluster", FEDERATION_PEER_ROLE)):
+            with pytest.raises(ConnectError) as exc:
+                peer_service.launch_job(request, None)
+        assert exc.value.code == Code.PERMISSION_DENIED
+
+
+def test_federation_sync_binds_the_requester_to_the_authenticated_peer(tmp_path, log_client):
+    """A peer may sync only its own requester set; another requester's is denied and its
+    own is authorized."""
+    with ExitStack() as stack:
+        peer_service, _ = _make_service(stack, "peer", tmp_path, log_client, auth=_ENFORCING_AUTH)
+        with identity_scope(VerifiedIdentity("parent-cluster", FEDERATION_PEER_ROLE)):
+            with pytest.raises(ConnectError) as exc:
+                peer_service.federation_sync(
+                    controller_pb2.Controller.FederationSyncRequest(requester_id="other-cluster"), None
+                )
+            assert exc.value.code == Code.PERMISSION_DENIED
+            # Its own requester is authorized (an empty set, but not denied).
+            peer_service.federation_sync(
+                controller_pb2.Controller.FederationSyncRequest(requester_id="parent-cluster"), None
+            )
+
+
+def test_federation_sync_rejects_an_ordinary_user(tmp_path, log_client):
+    """Only a federation peer (or admin) may sync — an ordinary user cannot read another
+    requester's federated set."""
+    with ExitStack() as stack:
+        peer_service, _ = _make_service(stack, "peer", tmp_path, log_client, auth=_ENFORCING_AUTH)
+        with identity_scope(VerifiedIdentity("alice", "user")):
+            with pytest.raises(ConnectError) as exc:
+                peer_service.federation_sync(
+                    controller_pb2.Controller.FederationSyncRequest(requester_id="parent-cluster"), None
+                )
+        assert exc.value.code == Code.PERMISSION_DENIED
 
 
 # ---------------------------------------------------------------------------
@@ -519,6 +638,7 @@ def test_admit_persists_a_pending_handle_and_is_idempotent(tmp_path, log_client)
             local_job_id=parent_job_id,
             peer_id="cw",
             owner_principal=_USER,
+            submitting_user=_USER,
             request=make_direct_job_request("fed-job", replicas=1),
         )
 
