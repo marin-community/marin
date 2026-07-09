@@ -47,6 +47,7 @@ from zephyr.readers import load_file
 from zephyr.runners import InlineRunner
 
 from experiments.datakit.cluster.quality.fast_transformer.scorer import PooledScorer
+from experiments.datakit.cluster.quality.v0.ops.eval_holdout import predict_p_high
 from experiments.datakit.fasttext import _load_fasttext_model
 
 logger = logging.getLogger(__name__)
@@ -84,21 +85,6 @@ def _score_bme(scorer: PooledScorer, texts: list[str]) -> np.ndarray:
     return np.array([s[a:b].mean() for a, b in spans])
 
 
-def _old_scores(model, texts: list[str]) -> np.ndarray:
-    """Baseline fasttext P(__label__1) per text (fasttext-wheel batch predict is broken)."""
-    out = np.zeros(len(texts), dtype=float)
-    for i, t in enumerate(texts):
-        clean = " ".join((t or "").split())[:MAX_TEXT_CHARS]
-        if not clean:
-            continue
-        labels, probs = model.predict(clean, k=-1)
-        for lab, pr in zip(labels, probs, strict=True):
-            if lab.removeprefix("__label__") == "1":
-                out[i] = float(pr)
-                break
-    return out
-
-
 @functools.cache
 def _load_scorer(model_dir: str, calib_file: str = MODEL_CALIB) -> tuple[PooledScorer, np.ndarray, np.ndarray]:
     """Load the scorer + calibration once per worker process (streams the .eqx local)."""
@@ -113,23 +99,36 @@ def _load_scorer(model_dir: str, calib_file: str = MODEL_CALIB) -> tuple[PooledS
     return scorer, np.asarray(calib["xk"], dtype=np.float64), np.asarray(calib["yk"], dtype=np.float64)
 
 
-def _predict_batch(records: list[dict], *, model_dir: str) -> Iterator[dict]:
-    """Score a batch of records; annotate each with calibrated ``score`` + ``quality_bucket``."""
-    scorer, xk, yk = _load_scorer(model_dir)
-    texts = [(r.get("text") or "")[:MAX_TEXT_CHARS] for r in records]
-    cal = np.interp(scorer.score(texts), xk, yk)
+def _predict_batch(
+    records: list[dict], *, model_dir: str, score_mode: str = "first", calib_file: str = MODEL_CALIB
+) -> Iterator[dict]:
+    """Score a batch of records; annotate each with calibrated ``score`` + ``quality_bucket``.
+    ``score_mode='bme'`` mean-pools begin/middle/end windows of the whole doc."""
+    scorer, xk, yk = _load_scorer(model_dir, calib_file)
+    if score_mode == "bme":
+        raw = _score_bme(scorer, [r.get("text") or "" for r in records])
+    else:
+        raw = scorer.score([(r.get("text") or "")[:MAX_TEXT_CHARS] for r in records])
+    cal = np.interp(raw, xk, yk)
     buckets = np.digitize(cal, BUCKET_EDGES)
     for r, c, b in zip(records, cal, buckets, strict=True):
         yield {**r, "score": float(c), "quality_bucket": int(b)}
 
 
-def get_ft_batch_predict(*, model_dir: str):
-    """Bind the model dir and return a ``flat_map`` batch-predict callable."""
-    return functools.partial(_predict_batch, model_dir=model_dir)
+def get_ft_batch_predict(*, model_dir: str, score_mode: str = "first", calib_file: str = MODEL_CALIB):
+    """Bind the model dir + scoring config and return a ``flat_map`` batch-predict callable."""
+    return functools.partial(_predict_batch, model_dir=model_dir, score_mode=score_mode, calib_file=calib_file)
 
 
 def run_one_source(
-    *, input_dir: str, output_path: str, source_name: str, model_dir: str, max_workers: int | None = None
+    *,
+    input_dir: str,
+    output_path: str,
+    source_name: str,
+    model_dir: str,
+    max_workers: int | None = None,
+    score_mode: str = "first",
+    calib_file: str = MODEL_CALIB,
 ):
     """Score one source's normalized parquet shards on the cluster, writing id/score/bucket."""
     files = sorted(str(m) for m in StoragePath(f"{input_dir.rstrip('/')}/**/*.parquet").glob())
@@ -140,7 +139,7 @@ def run_one_source(
         Dataset.from_list(files)
         .flat_map(load_file)
         .window(BATCH_SIZE)
-        .flat_map(get_ft_batch_predict(model_dir=model_dir))
+        .flat_map(get_ft_batch_predict(model_dir=model_dir, score_mode=score_mode, calib_file=calib_file))
         .select("id", "score", "quality_bucket")
         .write_parquet(pattern, skip_existing=True)
     )
@@ -208,7 +207,7 @@ def run_direct(
         cal = np.interp(raw, xk, yk)
         buckets = np.digitize(cal, BUCKET_EDGES)
         if oldm is not None:
-            old = _old_scores(oldm, texts)
+            old = np.array([predict_p_high(oldm, t, MAX_TEXT_CHARS) for t in texts])
             oldb = np.digitize(old, BUCKET_EDGES)
         else:
             old = np.full(len(texts), float("nan"))
@@ -269,6 +268,8 @@ def main() -> None:
             source_name=src,
             model_dir=args.model_dir,
             max_workers=args.max_workers,
+            score_mode=args.score_mode,
+            calib_file=args.calib_file,
         )
         logger.info("done %s: counters=%s", src, dict(outcome.counters))
 
