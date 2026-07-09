@@ -722,6 +722,12 @@ def _merge_sorted_chunks(
         yield from groupby(timed_iter(merged_stream, timers, "reduce/merge_pull_seconds"), key=key_fn)
     finally:
         stage_counters.update_counter("reduce/merge_pull_seconds", timers["reduce/merge_pull_seconds"])
+        # Stage counters never reach finelog (ZephyrStageStat has a fixed
+        # schema), so log the per-task snapshot for post-run analysis. The
+        # worker context is per task, so this is one shard's values (and it
+        # includes the fetch/deserialize counters accumulated by _iter_chunk).
+        snapshot = {k: round(v, 3) for k, v in stage_counters.get_counters().items() if k.startswith("reduce/")}
+        logger.info("reduce timers: %s", snapshot)
 
 
 def _sorted_merge_join(

@@ -728,7 +728,12 @@ class ScatterWriter:
         logger.info(
             "[shard %d] scatter timers: %s",
             self._source_shard,
-            {k: round(v, 3) for k, v in sorted(self.timers.items())},
+            {k: round(v, 3) for k, v in sorted(self.timers.items())}
+            | {
+                "scatter/flush_count": self._n_chunks_written,
+                "scatter/rows_written": self._total_rows_written,
+                "scatter/bytes_written": self._total_bytes_written,
+            },
         )
 
         self._result = ListShard(refs=[MemChunk(items=[self._data_path])])
