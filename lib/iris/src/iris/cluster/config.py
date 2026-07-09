@@ -690,9 +690,8 @@ class PeerConfig(_Config):
     heartbeat), so a peer that loses a pool stops advertising it without a config
     edit here.
 
-    A peer also declares no admission policy. Which submitters a peer admits is the
-    peer's own ``auth.allowed_submitters``, enforced where the job lands; a parent
-    holding a second copy could only disagree with it.
+    Which submitters a peer admits is the peer's own ``auth.allowed_submitters``,
+    enforced where the job lands and surfaced from the handoff.
 
     ``cluster`` names the peer's cluster manifest, from which the client
     credentials this controller presents to the peer are resolved (the same

@@ -305,6 +305,8 @@ def _s3_cluster_config(endpoint: str, external: str = "") -> IrisClusterConfig:
         ("http://cwlota.com", "https://cwobject.com", "https://cwobject.com"),
         # An endpoint reachable from both sides (R2) needs no second address.
         ("https://acct.r2.cloudflarestorage.com", "", "https://acct.r2.cloudflarestorage.com"),
+        # Either field alone is enough to configure the operator's client.
+        ("", "https://cwobject.com", "https://cwobject.com"),
     ],
 )
 def test_operator_client_signs_against_the_externally_reachable_endpoint(endpoint, external, expected, monkeypatch):

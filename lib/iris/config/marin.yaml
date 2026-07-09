@@ -69,6 +69,8 @@ auth:
 peers:
   cw-rno2a:
     controller_address: https://iris-cw-rno2a.oa.dev
+  cw-us-east-02a:
+    controller_address: https://iris-cw-us-east-02a.oa.dev
 
 worker_provider: {}
 

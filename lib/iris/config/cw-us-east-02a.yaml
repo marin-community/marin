@@ -65,8 +65,19 @@ storage:
 # through Traefik with an appended X-Forwarded-For, never matches a CIDR, and must
 # present a bearer. This is the identity gate behind the IP-restricted federation
 # ingress (scripts/install_cw_network.py).
+#
+# Inbound federation is a separate door from the CIDR one: marin's public key
+# admits its handoffs, and allowed_submitters names who it may run here. The list
+# is fail-closed — empty admits nobody — and a local_admin is never a valid
+# federation submitter, whatever it says.
 auth:
   trusted_cidrs: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 127.0.0.0/8, "::1/128"]
+  federation_peers:
+    marin: |
+      -----BEGIN PUBLIC KEY-----
+      MCowBQYDK2VwAyEAubVBH+W56J9tNAcffmYkWLLHNgFy1cKYGNNEGwrexMs=
+      -----END PUBLIC KEY-----
+  allowed_submitters: ["*@openathena.ai"]
 
 kubernetes_provider:
   namespace: iris

@@ -96,15 +96,16 @@ def configure_client_s3(config: IrisClusterConfig) -> None:
     with the correct endpoint and addressing style. No-op if the config has no
     CoreWeave object storage endpoint.
 
-    This configures the *operator's* process, which runs outside the cluster, so it
+    This configures the operator's own process, which runs outside the cluster, so it
     prefers ``external_object_storage_endpoint``; ``object_storage_endpoint`` is the
-    pod's view and may name an address only a pod can resolve. See :meth:`_s3_task_env`
-    for the in-cluster side.
+    pod's view and may name an address only a pod can resolve.
     """
     coreweave = config.platform.coreweave
-    if coreweave is None or not coreweave.object_storage_endpoint:
+    if coreweave is None:
         return
     endpoint = coreweave.external_object_storage_endpoint or coreweave.object_storage_endpoint
+    if not endpoint:
+        return
 
     cw_key = os.environ.get("CW_KEY_ID", "")
     cw_secret = os.environ.get("CW_KEY_SECRET", "")
