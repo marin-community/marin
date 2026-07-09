@@ -3,51 +3,40 @@
 
 """Recall harness for decon (marin#6852).
 
-Injects real eval items into synthetic corpus docs in three forms — verbatim,
-re-wrapped to short lines, and embedded in filler — builds a bloom over a sample
-of the staged eval corpus, marks the injected docs, and reports the flag rate
-per form. Quantifies recall and the known short-line / embedded recall gaps so a
-regression is visible if the algorithm changes.
+Injects real eval items into synthetic corpus docs in four forms — verbatim,
+verbatim as its own paragraph, re-wrapped to short lines, and embedded in filler
+— builds a bloom over a sample of the staged eval corpus, marks the injected
+docs, and reports the flag rate per form. Quantifies recall and the known
+short-line / embedded recall gaps so a regression is visible if the algorithm
+changes.
 
-    python experiments/datakit/decontam/ops/recall_test.py [--tasks 80] [--items 200]
+Reads the eval corpus at ``{marin_prefix()}/datakit/decontam/evals`` — relative
+to ``MARIN_PREFIX`` — so it runs against whichever store that points at (R2 / CW /
+GCS), given that store's creds + endpoint in the environment. No cluster:
 
-Reads the eval corpus from R2 (marin-na) using ``R2_*`` env creds — no cluster.
+    AWS_ACCESS_KEY_ID=… AWS_SECRET_ACCESS_KEY=… AWS_ENDPOINT_URL=<store-endpoint> \\
+        MARIN_PREFIX=s3://marin-na/marin \\
+        python experiments/datakit/decontam/ops/recall_test.py [--tasks 80] [--items 200]
 """
 
 import argparse
-import os
 import random
 
 import dupekit
+import pyarrow.parquet as pq
 from marin.datakit.decon import NGramConfig, _bloom_hash, _extract_features, _paragraph_overlap_and_matches
-from rigging.filesystem import url_to_fs
-from zephyr.readers import load_file
+from rigging.filesystem import marin_prefix, url_to_fs
 
 from experiments.datakit.decontam.all_sources_decon import NGRAM_LENGTH, OVERLAP_THRESHOLD
 from experiments.datakit.decontam.prepare_eval_corpus import DECON_EXCLUDED_EVAL_TASKS
 
-EVALS = "s3://marin-na/marin/datakit/decontam/evals"
+_EVALS_RELATIVE = "datakit/decontam/evals"
 NGRAM = NGramConfig(ngram_length=NGRAM_LENGTH, stride=0, overlap_threshold=OVERLAP_THRESHOLD)
-
-# zephyr's load_file resolves the S3 client from ambient AWS_* env; point it at R2.
-os.environ.setdefault("AWS_ACCESS_KEY_ID", os.environ.get("R2_ACCESS_KEY_ID", ""))
-os.environ.setdefault("AWS_SECRET_ACCESS_KEY", os.environ.get("R2_SECRET_ACCESS_KEY", ""))
-os.environ.setdefault("AWS_ENDPOINT_URL", os.environ.get("R2_ENDPOINT_URL", ""))
 FILLER = (
     "This section contains general background commentary unrelated to any benchmark, "
     "written to pad the surrounding document with ordinary prose so the injected span "
     "is diluted among many other sentences that share no ngrams with the eval item. "
 )
-
-
-def _r2():
-    return url_to_fs(
-        EVALS,
-        key=os.environ["R2_ACCESS_KEY_ID"],
-        secret=os.environ["R2_SECRET_ACCESS_KEY"],
-        endpoint_url=os.environ["R2_ENDPOINT_URL"],
-        client_kwargs={"region_name": "auto"},
-    )[0]
 
 
 def _short_line_wrap(text: str, words_per_line: int = 8) -> str:
@@ -69,8 +58,8 @@ def main() -> None:
     args = ap.parse_args()
     rng = random.Random(0)
 
-    fs = _r2()
-    files = sorted(f if f.startswith("s3://") else "s3://" + f for f in fs.find(EVALS) if f.endswith(".parquet"))
+    fs, root = url_to_fs(f"{marin_prefix()}/{_EVALS_RELATIVE}")
+    files = sorted(f for f in fs.find(root) if f.endswith(".parquet"))
     # Mirror the production bloom population: skip the tasks decon excludes at read time.
     files = [f for f in files if f.split("/")[-2] not in DECON_EXCLUDED_EVAL_TASKS]
     files = rng.sample(files, min(args.tasks, len(files)))
@@ -79,8 +68,10 @@ def main() -> None:
     bloom = dupekit.Bloom(5_000_000, 1e-9)
     items: list[str] = []
     for f in files:
-        for rec in load_file(f):
-            text = str(rec.get("text") or "")
+        with fs.open(f, "rb") as fh:
+            texts = pq.read_table(fh, columns=["text"]).column("text").to_pylist()
+        for text in texts:
+            text = str(text or "")
             feats = list(_extract_features(text, NGRAM))
             if not feats:
                 continue
