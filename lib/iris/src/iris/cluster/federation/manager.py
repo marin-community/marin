@@ -380,7 +380,6 @@ class FederationManager:
         return controller_pb2.Controller.PeerSummary(
             peer_id=peer.peer_id,
             controller_address=peer.controller_address,
-            dashboard_url=peer.dashboard_url,
             reachable=heartbeat.reachable,
             last_contact_ms=heartbeat.last_contact_ms,
             active_federated_jobs=active,

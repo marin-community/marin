@@ -2,8 +2,7 @@
 # warm between runs; the H100 pool may autoscale to a second node for manual
 # multi-host canary runs.
 
-# This cluster's identity: it issues every token this controller mints and is the
-# id a federation peer keys its trust on.
+# This cluster's identity. Used for token minting and for authenticating to peers.
 name: ci-coreweave
 
 platform:

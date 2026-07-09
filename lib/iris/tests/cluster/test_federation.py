@@ -71,7 +71,6 @@ def test_peers_config_round_trips_through_serialization():
             peers={
                 "cw-east": {
                     "controller_address": "http://cw:10000",
-                    "dashboard_url": "https://cw.dev",
                     "cluster": "cw-east",
                 }
             }
@@ -80,7 +79,6 @@ def test_peers_config_round_trips_through_serialization():
     reparsed = parse_config(config_to_dict(config))
     peer = reparsed.peers["cw-east"]
     assert peer.controller_address == "http://cw:10000"
-    assert peer.dashboard_url == "https://cw.dev"
     assert peer.cluster == "cw-east"
 
 
@@ -124,9 +122,8 @@ class _StubConnection:
         self.shutdown_count += 1
 
 
-def _peer(peer_id: str, connection: _StubConnection, *, dashboard_url: str = "https://cw.dev") -> FederationPeer:
-    config = PeerConfig(controller_address="http://cw:10000", dashboard_url=dashboard_url)
-    return FederationPeer(peer_id, config, connection)
+def _peer(peer_id: str, connection: _StubConnection) -> FederationPeer:
+    return FederationPeer(peer_id, PeerConfig(controller_address="http://cw:10000"), connection)
 
 
 def test_peer_probe_populates_backends_and_reachability():
@@ -157,7 +154,6 @@ def test_list_peers_view_surfaces_heartbeat_backends():
     (summary,) = manager.peer_summaries()
     assert summary.peer_id == "cw-east"
     assert summary.controller_address == "http://cw:10000"
-    assert summary.dashboard_url == "https://cw.dev"
     assert summary.reachable is True
     (forwarded,) = summary.backends
     assert forwarded.backend_id == "tpu-fleet"

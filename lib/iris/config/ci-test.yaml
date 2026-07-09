@@ -1,8 +1,7 @@
 # Iris test configuration
 # Multiple scale groups for realistic testing with diverse scenarios
 
-# This cluster's identity: it issues every token this controller mints and is the
-# id a federation peer keys its trust on.
+# This cluster's identity. Used for token minting and for authenticating to peers.
 name: ci-test
 
 platform:

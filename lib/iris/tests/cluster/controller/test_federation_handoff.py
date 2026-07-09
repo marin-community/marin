@@ -143,9 +143,7 @@ def _attach_federation(
     connection: _InProcessPeerConnection,
 ) -> FederationManager:
     """Give ``parent_service`` a one-peer federation manager delegating to ``connection``."""
-    peer = FederationPeer(
-        "cw", PeerConfig(controller_address="http://peer:10000", dashboard_url="https://cw.dev"), connection
-    )
+    peer = FederationPeer("cw", PeerConfig(controller_address="http://peer:10000"), connection)
     peer.probe()
     store = ControllerFederationStore(
         parent_service._db,

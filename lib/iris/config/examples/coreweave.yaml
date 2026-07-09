@@ -28,8 +28,7 @@
 #   Set platform.coreweave.kubeconfig_path below, or:
 #   export KUBECONFIG=~/.kube/coreweave-iris
 
-# This cluster's identity: it issues every token this controller mints and is the
-# id a federation peer keys its trust on.
+# This cluster's identity. Used for token minting and for authenticating to peers.
 name: example-coreweave
 
 platform:

@@ -175,7 +175,6 @@ class FederationPeer:
     def __init__(self, peer_id: str, config: PeerConfig, connection: PeerConnection):
         self.peer_id = peer_id
         self.controller_address = config.controller_address
-        self.dashboard_url = config.dashboard_url
         self._connection = connection
         self._lock = threading.Lock()
         self._heartbeat = PeerHeartbeat()

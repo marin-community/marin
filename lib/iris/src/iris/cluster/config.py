@@ -706,7 +706,6 @@ class PeerConfig(_Config):
     """
 
     controller_address: str  # peer controller RPC address (reachability)
-    dashboard_url: str = ""  # peer public dashboard origin, for deep links
     cluster: str = ""  # peer cluster manifest name; resolves the presented credentials
 
 

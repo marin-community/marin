@@ -9,8 +9,7 @@
 # validates the whole software path short of real CUDA/IB. See
 # ci-coreweave-gpu-smoke.yaml for the real H100 variant.
 
-# This cluster's identity: it issues every token this controller mints and is the
-# id a federation peer keys its trust on.
+# This cluster's identity. Used for token minting and for authenticating to peers.
 name: ci-kind-gpu-smoke
 
 platform:

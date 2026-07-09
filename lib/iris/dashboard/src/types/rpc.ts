@@ -688,7 +688,6 @@ export interface PeerSummary {
   // proto3 JSON omits default-valued fields, so string/bool/repeated fields are
   // absent on the wire when empty — hence optional here.
   controllerAddress?: string
-  dashboardUrl?: string
   /** Last capability heartbeat succeeded. */
   reachable?: boolean
   /** Last successful contact, ms since epoch (0/absent if never contacted). int64 → string. */

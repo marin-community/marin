@@ -693,9 +693,9 @@ message Controller {
   // execution substrate this controller drives and folds into its own DAG; a
   // peer owns its own DAG and is handed whole jobs.
   message PeerSummary {
+    reserved 3;  // was dashboard_url (a peer's jobs and tasks are mirrored into the local dashboard)
     string peer_id = 1;
     string controller_address = 2;
-    string dashboard_url = 3;
     bool reachable = 4;               // last capability heartbeat succeeded
     int64 last_contact_ms = 5;        // last successful capability heartbeat, ms since epoch
     int32 active_federated_jobs = 6;

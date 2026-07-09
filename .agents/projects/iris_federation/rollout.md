@@ -194,11 +194,11 @@ The rest of the plan assumes **(a) string column** and **(b) signed-submitter Mo
   JWT issuer (`iss`) and the federation `cluster_id`/`requester_id` (`controller/main.py`). None of the
   current YAMLs declare `name`, so as-is they mint under the fallback issuer and send an empty requester
   id — the `federation_peers` trust and the requester binding would both fail. Set `name: marin`,
-  `name: cw-rno2a`, `name: cw-us-east-02a` as part of this step; the peer id keys and `allow_policy`
-  targets must match these exactly.
+  `name: cw-rno2a`, `name: cw-us-east-02a` as part of this step; the peer id keys must match these
+  exactly.
 - `marin.yaml`: add `peers:` for `cw-rno2a` and `cw-us-east-02a` (`controller_address` = the federation
-  ingress URL, `cluster` = the peer manifest name for credential resolution, `dashboard_url`,
-  `allow_policy: {users: ["*@openathena.ai"]}`).
+  ingress URL, `cluster` = the peer manifest name for credential resolution). Admission is the
+  receiving peer's own `auth.allowed_submitters`.
 - CW configs: persistent `auth.signing_key`; trust anchor `auth.federation_peers: {marin: "<PEM>"}`;
   inbound allowlist `auth.allowed_submitters: ["*@openathena.ai"]`; the federation ingress.
   `cw-rno2a.yaml` is null-auth today and must gain the enforcing federation verifier config. Backend
