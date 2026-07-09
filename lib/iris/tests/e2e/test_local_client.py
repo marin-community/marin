@@ -21,6 +21,25 @@ def extract_log_text(response: logging_pb2.FetchLogsResponse) -> str:
     return "\n".join(e.data for e in response.entries)
 
 
+def wait_for_log_markers(client, source: str, *markers: str, timeout: float = 30.0) -> str:
+    """Poll ``client.fetch_logs`` (prefix match) until every marker is present.
+
+    Log shipping is asynchronous: a worker flushes buffered lines only after the
+    task exits, so a just-completed task's logs are not immediately queryable.
+    Returns the joined log text once all markers land.
+    """
+    deadline = time.monotonic() + timeout
+    log_text = ""
+    while time.monotonic() < deadline:
+        response = client.fetch_logs(source, match_scope=logging_pb2.MATCH_SCOPE_PREFIX)
+        log_text = extract_log_text(response)
+        if all(marker in log_text for marker in markers):
+            return log_text
+        time.sleep(0.5)
+    missing = [m for m in markers if m not in log_text]
+    raise AssertionError(f"log markers {missing} for {source!r} not queryable within {timeout:.0f}s; got: {log_text!r}")
+
+
 @pytest.fixture(scope="module")
 def iris_client():
     """Boot a single in-process LocalCluster + IrisClient for the whole module."""
@@ -46,8 +65,7 @@ def test_command_entrypoint_preserves_env_vars(client):
 
     resources = job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3)
 
-    with client._db.transaction() as cur:
-        client.submit_job(cur, job_id=job_id, entrypoint=entrypoint, resources=resources)
+    client.submit_job(job_id=job_id, entrypoint=entrypoint, resources=resources)
 
     # Wait for job completion
     status = client.wait_for_job(job_id, timeout=10.0, poll_interval=0.1)
@@ -57,12 +75,7 @@ def test_command_entrypoint_preserves_env_vars(client):
     # IRIS_TASK_ID is the canonical TaskAttempt wire form, so the first attempt
     # carries the :0 suffix.
     expected = f"{job_id.task(0).to_wire()}:0"
-    response = client.fetch_logs(
-        f"{job_id.task(0).to_wire()}:",
-        match_scope=logging_pb2.MATCH_SCOPE_PREFIX,
-    )
-    log_text = extract_log_text(response)
-    assert f"IRIS_TASK_ID={expected}" in log_text
+    wait_for_log_markers(client, f"{job_id.task(0).to_wire()}:", f"IRIS_TASK_ID={expected}")
 
 
 def test_log_streaming_captures_output_without_trailing_newline(client):
@@ -74,8 +87,7 @@ def test_log_streaming_captures_output_without_trailing_newline(client):
 
     resources = job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3)
 
-    with client._db.transaction() as cur:
-        client.submit_job(cur, job_id=job_id, entrypoint=entrypoint, resources=resources)
+    client.submit_job(job_id=job_id, entrypoint=entrypoint, resources=resources)
 
     # Wait for job completion
     status = client.wait_for_job(job_id, timeout=10.0, poll_interval=0.1)
@@ -83,12 +95,7 @@ def test_log_streaming_captures_output_without_trailing_newline(client):
     assert status.state == job_pb2.JOB_STATE_SUCCEEDED
 
     # Check logs contain the output
-    response = client.fetch_logs(
-        f"{job_id.task(0).to_wire()}:",
-        match_scope=logging_pb2.MATCH_SCOPE_PREFIX,
-    )
-    log_text = extract_log_text(response)
-    assert "output without newline" in log_text
+    wait_for_log_markers(client, f"{job_id.task(0).to_wire()}:", "output without newline")
 
 
 def test_callable_entrypoint_succeeds(client):
@@ -102,8 +109,7 @@ def test_callable_entrypoint_succeeds(client):
 
     resources = job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3)
 
-    with client._db.transaction() as cur:
-        client.submit_job(cur, job_id=job_id, entrypoint=entrypoint, resources=resources)
+    client.submit_job(job_id=job_id, entrypoint=entrypoint, resources=resources)
 
     status = client.wait_for_job(job_id, timeout=10.0, poll_interval=0.1)
 
@@ -120,14 +126,12 @@ def test_command_entrypoint_with_custom_env_var(client):
     resources = job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3)
     environment = EnvironmentSpec(env_vars={"CUSTOM_VAR": "custom_value"}).to_proto()
 
-    with client._db.transaction() as cur:
-        client.submit_job(
-            cur,
-            job_id=job_id,
-            entrypoint=entrypoint,
-            resources=resources,
-            environment=environment,
-        )
+    client.submit_job(
+        job_id=job_id,
+        entrypoint=entrypoint,
+        resources=resources,
+        environment=environment,
+    )
 
     # Wait for job completion
     status = client.wait_for_job(job_id, timeout=10.0, poll_interval=0.1)
@@ -135,12 +139,7 @@ def test_command_entrypoint_with_custom_env_var(client):
     assert status.state == job_pb2.JOB_STATE_SUCCEEDED
 
     # Check logs contain the custom env var
-    response = client.fetch_logs(
-        f"{job_id.task(0).to_wire()}:",
-        match_scope=logging_pb2.MATCH_SCOPE_PREFIX,
-    )
-    log_text = extract_log_text(response)
-    assert "CUSTOM_VAR=custom_value" in log_text
+    wait_for_log_markers(client, f"{job_id.task(0).to_wire()}:", "CUSTOM_VAR=custom_value")
 
 
 def test_job_wait_with_stream_logs(client, iris_client, caplog):
@@ -151,8 +150,7 @@ def test_job_wait_with_stream_logs(client, iris_client, caplog):
     entrypoint = Entrypoint.from_command("sh", "-c", "echo 'hello from streaming'")
     resources = job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3)
 
-    with client._db.transaction() as cur:
-        client.submit_job(cur, job_id=job_id, entrypoint=entrypoint, resources=resources)
+    client.submit_job(job_id=job_id, entrypoint=entrypoint, resources=resources)
     job = Job(iris, job_id)
 
     with caplog.at_level(logging.INFO, logger="iris.client.client"):
@@ -221,20 +219,12 @@ def test_child_job_logs_sorted_by_timestamp(client):
     entrypoint = Entrypoint.from_callable(_parent_with_two_children)
     resources = job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3)
 
-    with client._db.transaction() as cur:
-        client.submit_job(cur, job_id=parent_id, entrypoint=entrypoint, resources=resources)
+    client.submit_job(job_id=parent_id, entrypoint=entrypoint, resources=resources)
 
     status = client.wait_for_job(parent_id, timeout=60.0, poll_interval=0.2)
     assert status.state == job_pb2.JOB_STATE_SUCCEEDED, f"Parent job failed: {status}"
 
-    response = client.fetch_logs(
-        f"{parent_id.to_wire()}/",
-        match_scope=logging_pb2.MATCH_SCOPE_PREFIX,
-    )
-
-    log_text = " ".join(e.data for e in response.entries)
-    assert "CHILD_A_LINE_1" in log_text, f"Missing child-a logs in: {log_text}"
-    assert "CHILD_B_LINE_1" in log_text, f"Missing child-b logs in: {log_text}"
+    wait_for_log_markers(client, f"{parent_id.to_wire()}/", "CHILD_A_LINE_1", "CHILD_B_LINE_1")
 
 
 def test_wait_stream_logs_discovers_child_tasks(client, iris_client, caplog):
@@ -244,8 +234,7 @@ def test_wait_stream_logs_discovers_child_tasks(client, iris_client, caplog):
     entrypoint = Entrypoint.from_callable(_parent_with_delayed_child)
     resources = job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3)
 
-    with client._db.transaction() as cur:
-        client.submit_job(cur, job_id=parent_id, entrypoint=entrypoint, resources=resources)
+    client.submit_job(job_id=parent_id, entrypoint=entrypoint, resources=resources)
     job = Job(iris, parent_id)
 
     with caplog.at_level(logging.INFO, logger="iris.client.client"):
@@ -281,8 +270,7 @@ def test_stream_logs_surfaces_child_failure(client, iris_client):
     entrypoint = Entrypoint.from_callable(_parent_with_failing_child)
     resources = job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3)
 
-    with client._db.transaction() as cur:
-        client.submit_job(cur, job_id=parent_id, entrypoint=entrypoint, resources=resources)
+    client.submit_job(job_id=parent_id, entrypoint=entrypoint, resources=resources)
     job = Job(iris, parent_id)
 
     status = job.wait(
