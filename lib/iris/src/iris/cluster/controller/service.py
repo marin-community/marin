@@ -74,7 +74,7 @@ from iris.cluster.controller.schema import (
 from iris.cluster.controller.task_state import ACTIVE_TASK_STATES, task_row_can_be_scheduled
 from iris.cluster.controller.worker_health import WorkerLiveness
 from iris.cluster.federation.manager import FederationManager
-from iris.cluster.federation.router import PeerAdmissionDenied, RoutingRequest, SubmitRouting
+from iris.cluster.federation.router import RoutingRequest, SubmitRouting
 from iris.cluster.federation.store import HandoffState
 from iris.cluster.log_highlights import extract_failure_highlights
 from iris.cluster.log_keys import build_log_source
@@ -1251,9 +1251,11 @@ class ControllerServiceImpl:
         Only a root job is ever handed off — the peer runs it under the same,
         cluster-invariant job id, so handing off a non-root job would clash with the
         job's own tree on the peer. The manager persists the federated handle in one
-        local transaction, then synchronously delivers it to the peer. A failed
-        delivery is not fatal — the sync loop re-drives the handle — so an admitted or
-        already-present handle still returns its id.
+        local transaction, then synchronously delivers it to the peer. A transient
+        delivery failure is not fatal — the sync loop re-drives the handle — so an
+        admitted or already-present handle still returns its id. A rejection the peer
+        will repeat (its allowlist refuses the submitter, or it already runs that job)
+        propagates to the caller, having terminalized the local handle.
         """
         if not job_id.is_root:
             raise ConnectError(
@@ -1637,22 +1639,13 @@ class ControllerServiceImpl:
         if is_received_handoff:
             routing = SubmitRouting()
         else:
-            try:
-                routing = self._controller.federation.route_submit(
-                    RoutingRequest(
-                        constraints=constraints,
-                        local_feasible=feasible,
-                        cluster_pin=cluster_pin or "",
-                        submitting_user=submitting_user,
-                    )
+            routing = self._controller.federation.route_submit(
+                RoutingRequest(
+                    constraints=constraints,
+                    local_feasible=feasible,
+                    cluster_pin=cluster_pin or "",
                 )
-            except PeerAdmissionDenied as denied:
-                if denied.submitting_user == LOCAL_ADMIN_SUBMITTER:
-                    raise ConnectError(Code.PERMISSION_DENIED, _LOCAL_ADMIN_FEDERATION_DENIED) from denied
-                raise ConnectError(
-                    Code.PERMISSION_DENIED,
-                    f"Submitter {denied.submitting_user!r} is not permitted to run on cluster {denied.peer_id!r}.",
-                ) from denied
+            )
 
         if not routing.is_local:
             # With auth on, a local_admin (CIDR/loopback) submission is never federated:
@@ -3127,9 +3120,6 @@ class ControllerServiceImpl:
 
         summaries: list[controller_pb2.Controller.BackendSummary] = []
         for backend_id, backend in sorted(backends.items()):
-            allowed_users = backend.allowed_users
-            restricted = "*" not in allowed_users
-
             caps = backend.capabilities
             if BackendCapability.CLUSTER_VIEW in caps:
                 kind = "kubernetes"
@@ -3160,8 +3150,6 @@ class ControllerServiceImpl:
                 name=backend.name,
                 kind=kind,
                 capabilities=sorted(c.value for c in caps),
-                restricted=restricted,
-                allowed_user_count=len(allowed_users),
                 scale_groups=sorted(backend_to_sgs.get(backend_id, [])),
                 worker_count=worker_count_by_backend.get(backend_id, 0),
                 pending_task_count=pending_by_backend.get(backend_id, 0),

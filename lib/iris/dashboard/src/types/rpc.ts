@@ -657,8 +657,6 @@ export interface BackendSummary {
   capabilities: string[]
   /** Map of attribute key → list of string values. */
   advertisedAttributes: Record<string, { values: string[] }>
-  restricted: boolean
-  allowedUserCount: number
   scaleGroups: string[]
   workerCount: number
   pendingTaskCount: number

@@ -16,6 +16,10 @@
 # the ingress. Each RPC carries the IAP OIDC ID token in Proxy-Authorization; the
 # controller authenticates it from IAP's signed assertion and mints no token.
 
+# This cluster's identity: it issues every token this controller mints and is the
+# id a federation peer keys its trust on.
+name: example-iap
+
 platform:
   local:
 

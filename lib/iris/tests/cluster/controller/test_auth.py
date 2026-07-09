@@ -14,16 +14,19 @@ from connectrpc.errors import ConnectError
 from iris.cluster.bundle import BundleStore
 from iris.cluster.config import AuthConfig, IapAuthConfig
 from iris.cluster.controller.auth import (
+    _LEGACY_ISSUER,
     CONTROL_PLANE_AUDIENCES,
     FEDERATION_AUDIENCE,
     FEDERATION_PEER_ROLE,
     FINELOG_AUDIENCE,
     SESSION_TOKEN_TTL_SECONDS,
+    WORKER_TOKEN_TTL_SECONDS,
     WORKER_USER,
     ControllerAuth,
     FederationTokenVerifier,
     JwtTokenManager,
     RolePolicy,
+    _build_jwt_token_manager,
     _ControlPlaneOrFederationVerifier,
     create_controller_auth,
     request_auth_policy,
@@ -65,7 +68,9 @@ CSRF_HEADERS = {"Origin": "http://testserver"}
 
 # A persistent signing key for authed create_controller_auth calls: an authed
 # cluster requires one (the ephemeral fallback is null-auth only).
-_SIGNING_KEY = generate_ed25519_keypair().private_pem
+_SIGNING_KEYPAIR = generate_ed25519_keypair()
+_SIGNING_KEY = _SIGNING_KEYPAIR.private_pem
+_PUBLIC_KEY = _SIGNING_KEYPAIR.public_pem
 
 
 def _jwt_manager() -> JwtTokenManager:
@@ -376,6 +381,64 @@ def test_federation_verifier_rejects_an_untrusted_issuer():
     forged = stranger.create_federation_token("evil-cluster", "k-fed")
     with pytest.raises(ValueError):
         peer_verifier.verify(forged)
+
+
+# ---------------------------------------------------------------------------
+# Token issuer: the cluster name, with a transitional legacy issuer
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("audience", "mint"),
+    [
+        ("control-plane", lambda mgr: mgr.create_token("alice", "admin", "k", ttl_seconds=60)),
+        ("proxy", lambda mgr: mgr.create_endpoint_token("ep", "k")),
+        ("finelog", lambda mgr: mgr.create_delegation_token("named", "k", ttl_seconds=60)),
+        ("federation", lambda mgr: mgr.create_federation_token("named", "k")),
+    ],
+)
+def test_every_token_is_issued_under_the_cluster_name(audience, mint):
+    """``iss`` is the cluster's identity on every plane — it is what a federation peer
+    keys its trust on, so no audience may mint under a different issuer."""
+    mgr = _build_jwt_token_manager(cluster_name="named", signing_key_pem=_SIGNING_KEY, previous_public_keys=())
+    assert jwt.decode(mint(mgr), options={"verify_signature": False})["iss"] == "named"
+
+
+def test_worker_token_minted_before_the_cluster_was_named_still_verifies():
+    """Naming a cluster must not invalidate the worker tokens its fleet already holds.
+
+    A worker token is minted once per controller start and injected into every worker with
+    no refresh path, so it outlives the restart that first sets ``name``. Under the same
+    signing key, the control-plane verifier still accepts the legacy issuer."""
+    unnamed = _build_jwt_token_manager(cluster_name="", signing_key_pem=_SIGNING_KEY, previous_public_keys=())
+    legacy = unnamed.create_token(WORKER_USER, "worker", "w1", ttl_seconds=WORKER_TOKEN_TTL_SECONDS)
+    assert jwt.decode(legacy, options={"verify_signature": False})["iss"] == _LEGACY_ISSUER
+
+    named = _build_jwt_token_manager(cluster_name="named", signing_key_pem=_SIGNING_KEY, previous_public_keys=())
+    identity = named.verify(legacy)
+    assert identity.user_id == WORKER_USER
+    assert identity.role == "worker"
+
+
+def test_legacy_issuer_is_not_accepted_on_the_federation_plane():
+    """The legacy issuer is a control-plane migration aid only. A peer trusts each
+    cluster under its real name, so an unnamed cluster cannot federate to it."""
+    unnamed = _build_jwt_token_manager(cluster_name="", signing_key_pem=_SIGNING_KEY, previous_public_keys=())
+    peer_verifier = FederationTokenVerifier({"named": _PUBLIC_KEY})
+    with pytest.raises(ValueError, match="issuer"):
+        peer_verifier.verify(unnamed.create_federation_token("", "k-fed"))
+
+
+def test_legacy_issuer_still_requires_this_controllers_key():
+    """Accepting the legacy issuer widens nothing: it resolves to the same key set, so a
+    token another cluster signed under ``iris`` is still rejected on the signature."""
+    stranger = _build_jwt_token_manager(
+        cluster_name="", signing_key_pem=generate_ed25519_keypair().private_pem, previous_public_keys=()
+    )
+    forged = stranger.create_token("mallory", "admin", "k", ttl_seconds=60)
+    named = _build_jwt_token_manager(cluster_name="named", signing_key_pem=_SIGNING_KEY, previous_public_keys=())
+    with pytest.raises(ValueError, match="signature"):
+        named.verify(forged)
 
 
 def test_composite_verifier_routes_each_plane_to_its_verifier():

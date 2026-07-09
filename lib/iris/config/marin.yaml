@@ -1,6 +1,10 @@
 # Iris production configuration for Marin cluster
 # Usage: uv run iris --cluster=marin cluster start
 
+# This cluster's identity: it issues every token this controller mints and is the
+# id a federation peer keys its trust on.
+name: marin
+
 finelog:
   config: marin
 dashboard_url: https://iris.oa.dev

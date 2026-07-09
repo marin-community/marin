@@ -2,6 +2,10 @@
 # Mirrors production marin.yaml with isolated state and smaller scale caps.
 # Usage: uv run iris --cluster=marin-dev cluster start
 
+# This cluster's identity: it issues every token this controller mints and is the
+# id a federation peer keys its trust on.
+name: marin-dev
+
 finelog:
   config: marin-dev
 dashboard_url: https://iris-dev.oa.dev

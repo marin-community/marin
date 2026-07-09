@@ -802,7 +802,8 @@ def mark_federated_job_killed(tx: Tx, job_id: JobName, *, now_ms: int, error: st
 
     A federated handle owns no local tasks, so there is no subtree to cancel — the
     jobs row alone flips to KILLED. Used when a ``PENDING_HANDOFF`` handoff is
-    cancelled before delivery; a delivered job's terminal state arrives via sync.
+    cancelled before delivery, and when the peer refuses it outright; a delivered
+    job's terminal state arrives via sync.
     """
     tx.execute(
         update(jobs_table)

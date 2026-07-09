@@ -23,6 +23,10 @@
 #        uv run iris --cluster=cw-us-east-02a cluster start
 #        uv run iris --cluster=cw-us-east-02a cluster status
 
+# This cluster's identity: it issues every token this controller mints and is the
+# id a federation peer keys its trust on.
+name: cw-us-east-02a
+
 # External finelog log server (in-cluster k8s Deployment, namespace `iris`).
 # Resolves to k8s://finelog-cw-use02a.iris; see lib/finelog/config/cw-us-east-02a.yaml.
 # Without this the controller falls back to an in-process MemStore (logs lost on

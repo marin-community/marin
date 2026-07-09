@@ -664,8 +664,7 @@ message Controller {
     string kind = 3;
     repeated string capabilities = 4;
     map<string, StringList> advertised_attributes = 5;
-    bool restricted = 6;
-    int32 allowed_user_count = 7;
+    reserved 6, 7;  // was: bool restricted, int32 allowed_user_count
     repeated string scale_groups = 8;
     int32 worker_count = 9;
     int32 pending_task_count = 10;

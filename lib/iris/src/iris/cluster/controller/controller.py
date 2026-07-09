@@ -353,8 +353,7 @@ class Controller:
         # The meta-scheduler routes against what each backend advertises, not the
         # config. Attributes are immutable, so the routing index is built once.
         self._backend_routing = {
-            bid: BackendRouting(advertised=backend.advertised_attributes(), admits=backend.admits)
-            for bid, backend in self._backends.items()
+            bid: BackendRouting(advertised=backend.advertised_attributes()) for bid, backend in self._backends.items()
         }
         self._backend_index = build_backend_index(self._backend_routing)
         # Worker→backend ownership by scale group, used to wire each backend's
@@ -1073,7 +1072,6 @@ class Controller:
             if task.backend_id == "" and task.job_id not in unpinned:
                 unpinned[task.job_id] = RoutableJob(
                     job_id=task.job_id,
-                    user=task.job_id.user,
                     constraints=constraints_from_json(task.constraints_json),
                 )
         if not unpinned:

@@ -660,8 +660,6 @@ def test_dashboard_backends_tab_with_peer(smoke_cluster, smoke_page, smoke_scree
                             "kind": "kubernetes",
                             "capabilities": ["gpu"],
                             "advertisedAttributes": {"accelerator": {"values": ["H100"]}},
-                            "restricted": False,
-                            "allowedUserCount": 0,
                             "scaleGroups": [],
                             "workerCount": 4,
                             "pendingTaskCount": 1,

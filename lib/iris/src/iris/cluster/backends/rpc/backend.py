@@ -24,7 +24,6 @@ from typing import ClassVar, Protocol, TypeVar
 from rigging.timing import Duration, Timestamp
 
 from iris.chaos import chaos
-from iris.cluster.config import user_admitted
 from iris.cluster.controller.autoscaler import Autoscaler
 from iris.cluster.controller.autoscaler.status import overlay_worker_usability
 from iris.cluster.controller.backend import (
@@ -193,9 +192,8 @@ class RpcTaskBackend:
     # backend's tracker reaps it; configures the WorkerHealthTracker built below.
     unreachable_grace: Duration = field(default_factory=lambda: DEFAULT_UNREACHABLE_GRACE)
     # Static routing metadata the meta-scheduler reads. ``advertised`` expands into
-    # routing posting lists; ``allowed_users`` is the allow policy (``*`` = any).
+    # routing posting lists.
     advertised: dict[str, set[str]] = field(default_factory=dict)
-    allowed_users: frozenset[str] = frozenset({"*"})
     capabilities: ClassVar[frozenset[BackendCapability]] = frozenset(
         {BackendCapability.WORKER_DAEMON, BackendCapability.IRIS_AUTOSCALER}
     )
@@ -243,12 +241,8 @@ class RpcTaskBackend:
     def advertised_attributes(self) -> dict[str, set[str]]:
         return self.advertised
 
-    def admits(self, user: str) -> bool:
-        return user_admitted(self.allowed_users, user)
-
-    def configure_routing(self, advertised: dict[str, set[str]], allowed_users: frozenset[str]) -> None:
+    def configure_routing(self, advertised: dict[str, set[str]]) -> None:
         self.advertised = advertised
-        self.allowed_users = allowed_users
 
     def autoscaler_status(self) -> vm_pb2.AutoscalerStatus:
         """Author this backend's autoscaler status from the state it owns.
