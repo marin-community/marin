@@ -15,7 +15,10 @@ and Llama sweep:
 
 ## Numeric pretokenizer
 
-The `*-place-digits` variants make three numeric-specific changes:
+The upstream Llama and GPT-OSS pretokenizers already isolate numeric text with
+`\p{N}{1,3}`, which splits a run from the left (`1234567 -> 123|456|7`). The
+`*-place-digits` variants change those boundaries to right-aligned groups
+(`1234567 -> 1|234|567`) using a three-stage pipeline:
 
 - isolate contiguous numeric runs from surrounding text;
 - split each run into right-aligned groups of three digits, e.g. `1234567 -> 1|234|567`;
