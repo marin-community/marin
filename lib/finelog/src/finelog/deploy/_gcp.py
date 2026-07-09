@@ -230,8 +230,6 @@ def apply_bootstrap(cfg: FinelogConfig, bootstrap: str) -> bool:
 
 def gcp_restart(cfg: FinelogConfig) -> None:
     """Restart finelog in-place by re-running the bootstrap over SSH."""
-    assert cfg.deployment.gcp is not None
-
     bootstrap = _pinned_bootstrap(cfg)
     click.echo(f"Re-running bootstrap on {cfg.name} via SSH...")
     if not apply_bootstrap(cfg, bootstrap):
