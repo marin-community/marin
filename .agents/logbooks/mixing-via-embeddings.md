@@ -1,6 +1,7 @@
 # Logbook: mixing-via-embeddings validation experiments
 
-Design: `.agents/projects/mixing_via_embeddings/` (PR #6969). Goal: validate embedding-space
+Design: `.agents/projects/mixing_via_embeddings/` (PR #6969). Experiment issue: #7067.
+Goal: validate embedding-space
 mixture featurization via H1 (information audit) → H2a (content→domain-value LODO gate) →
 H2b (held-out-dose retrodiction) → H4 (ablations) → H3 (live, gated). Append-only.
 
