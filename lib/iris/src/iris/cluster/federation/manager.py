@@ -151,7 +151,9 @@ class FederationManager:
             request=request,
         )
         if self._store.admit_and_persist_handoff(spec) is HandoffAdmission.ADMITTED:
-            self._deliver_handoff(spec, propagate=True)
+            rejection = self._deliver_handoff(spec)
+            if rejection is not None:
+                raise rejection
 
     # -- cancel (parent side) ------------------------------------------------
 
@@ -288,19 +290,20 @@ class FederationManager:
         for target in self._store.pending_cancels():
             self._deliver_cancel(target)
 
-    def _deliver_handoff(self, spec: HandoffSpec, *, propagate: bool = False) -> None:
+    def _deliver_handoff(self, spec: HandoffSpec) -> ConnectError | None:
         """Deliver one handle to its peer, terminalizing a rejection the peer will repeat.
 
-        ``propagate`` re-raises that rejection to the caller. Only the submit path sets
-        it — delivery there runs inside ``LaunchJob``, so the peer's answer is the
-        answer the submitter gets. The re-drive loop must never propagate: it runs on
-        the sync thread, which dies on an uncaught exception.
+        Returns that rejection — the handle already marked ``HANDOFF_REJECTED`` — so the
+        submit path can answer its caller with the peer's own verdict. Returns ``None``
+        when the handle landed or is still worth re-driving. It never raises on a peer's
+        answer: the re-drive loop calls this on the sync thread, which dies on an
+        uncaught exception.
         """
         assert self._store is not None
         peer = self._peers.get(spec.peer_id)
         if peer is None:
             logger.warning("Cannot hand off %s: peer %s is not configured", spec.local_job_id, spec.peer_id)
-            return
+            return None
         handoff = self._build_handoff_request(
             spec.request, spec.local_job_id, spec.owner_principal, spec.submitting_user
         )
@@ -314,18 +317,17 @@ class FederationManager:
             # succeed on a later attempt and stays pending.
             if exc.code not in _TERMINAL_HANDOFF_CODES:
                 logger.warning("Handoff of %s to peer %s failed (will retry): %s", spec.local_job_id, spec.peer_id, exc)
-                return
+                return None
             self._store.mark_handoff_rejected(
                 spec.local_job_id,
                 reason=f"Peer {spec.peer_id} rejected the handoff: {exc.message}",
             )
-            if propagate:
-                raise
-            return
+            return exc
         except (ConnectionError, OSError) as exc:
             logger.warning("Handoff of %s to peer %s failed (will retry): %s", spec.local_job_id, spec.peer_id, exc)
-            return
+            return None
         self._store.mark_handed_off(spec.local_job_id)
+        return None
 
     def _sync_peer(self, peer: FederationPeer) -> None:
         assert self._store is not None

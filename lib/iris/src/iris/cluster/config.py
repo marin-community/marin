@@ -633,7 +633,7 @@ class EndpointSpec(_Config):
 
 
 # ---------------------------------------------------------------------------
-# Backends
+# Submitter allowlist
 # ---------------------------------------------------------------------------
 
 
@@ -650,6 +650,11 @@ def user_admitted(allowed_users: Collection[str], user: str) -> bool:
         return False
     domain = user.rsplit("@", 1)[1].lower()
     return f"*@{domain}" in {entry.lower() for entry in allowed_users}
+
+
+# ---------------------------------------------------------------------------
+# Backends
+# ---------------------------------------------------------------------------
 
 
 class BackendConfig(_Config):
