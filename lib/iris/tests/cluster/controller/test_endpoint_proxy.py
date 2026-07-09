@@ -90,6 +90,10 @@ def _build_upstream_app(handle: UpstreamHandle) -> Starlette:
         await _record(request)
         return PlainTextResponse("upstream blew up", status_code=500)
 
+    async def unauthorized(request: Request) -> Response:
+        await _record(request)
+        return PlainTextResponse("finelog rejected the controller", status_code=401)
+
     async def slow(request: Request) -> Response:
         await _record(request)
         # Just-long-enough to outlast the proxy's 0.5s timeout. Keeping this
@@ -149,6 +153,7 @@ def _build_upstream_app(handle: UpstreamHandle) -> Starlette:
     routes = [
         Route("/echo", echo, methods=list(ALLOWED_METHODS)),
         Route("/500", upstream_500),
+        Route("/401", unauthorized),
         Route("/slow", slow),
         Route("/large", large),
         Route("/cookie", cookie_setter),
@@ -345,6 +350,21 @@ def test_upstream_5xx_passes_through(proxy: ProxyHandle) -> None:
         resp = client.get(f"{proxy.base_url}/proxy/{ENDPOINT_URL_NAME}/500")
     assert resp.status_code == 500
     assert resp.text == "upstream blew up"
+
+
+def test_upstream_401_translated_to_502(proxy: ProxyHandle) -> None:
+    """An upstream 401 must not reach the browser as a 401.
+
+    The dashboard treats any 401 as an iris auth challenge and pops its login
+    modal. A 401 from a proxied upstream (e.g. finelog refusing the controller)
+    is not a browser auth challenge — the browser never authenticated to the
+    upstream — so the proxy rewrites it to 502 with the upstream body preserved
+    as the error detail.
+    """
+    with httpx.Client() as client:
+        resp = client.get(f"{proxy.base_url}/proxy/{ENDPOINT_URL_NAME}/401")
+    assert resp.status_code == 502
+    assert "finelog rejected the controller" in resp.json()["detail"]
 
 
 def test_upstream_connection_refused_returns_502(threads: ThreadContainer) -> None:

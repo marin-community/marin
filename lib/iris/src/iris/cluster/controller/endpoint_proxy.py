@@ -41,6 +41,11 @@ modern Python frameworks honor to mount themselves under the ``/proxy/<name>``
 prefix. Subdomain-style mode does not set ``X-Forwarded-Prefix``: the
 upstream effectively owns the whole origin.
 
+An upstream ``401`` is translated to a ``502`` (upstream body kept as the error
+detail). The browser never authenticates to the upstream directly, so an
+upstream 401 is not an auth challenge to the browser; relaying it verbatim makes
+the dashboard mistake it for an iris auth challenge and pop its login modal.
+
 ``Location`` and ``Content-Location`` response headers are rewritten so 3xx
 redirects (and any other absolute-URL hints) keep the browser inside the
 proxy instead of escaping to the upstream's bind address. Without this,
@@ -300,6 +305,22 @@ class EndpointProxy:
             logger.warning("Proxy upstream error for %s: %s", encoded_name, exc)
             return JSONResponse(
                 {"error": f"Upstream error: {exc!r}"},
+                status_code=502,
+            )
+
+        # An upstream 401 means the upstream refused *the controller's* request,
+        # not that the browser must authenticate to iris. The dashboard treats any
+        # 401 as an iris auth challenge and pops its login modal, but the browser
+        # never authenticated to the upstream (Authorization is stripped
+        # client -> upstream), so a verbatim relay misdirects the user. Translate
+        # it to a 502 — the controller was authorized; its gateway call upstream
+        # was refused — keeping the upstream body as the error detail.
+        if upstream_resp.status_code == 401:
+            detail = (await upstream_resp.aread()).decode("utf-8", errors="replace")
+            await upstream_resp.aclose()
+            logger.warning("Proxy upstream 401 for %s -> 502: %s", encoded_name, detail)
+            return JSONResponse(
+                {"error": f"Upstream '{encoded_name}' refused the controller (401)", "detail": detail},
                 status_code=502,
             )
 
