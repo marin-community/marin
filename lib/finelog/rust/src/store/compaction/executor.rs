@@ -458,7 +458,10 @@ mod tests {
         assert_eq!(keyed.len() as i64, n + 1);
         let mut sorted = keyed.clone();
         sorted.sort();
-        assert_eq!(keyed, sorted, "globally (key, seq)-sorted across row groups");
+        assert_eq!(
+            keyed, sorted,
+            "globally (key, seq)-sorted across row groups"
+        );
         std::fs::remove_dir_all(&dir).ok();
     }
 
