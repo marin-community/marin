@@ -13,31 +13,30 @@ author: dlwh
 - Coordinating issue/PR: https://github.com/marin-community/marin/issues/7024
 
 ## Current TL;DR
-- `GRUG-JAXPP-001`: Explicit JaxPP MPMD training is implemented behind `GrugTrainerConfig.pipeline.implementation="explicit_mpmd"` with stage-local model/optimizer state and contiguous layer splits.
-- Explicit GPipe is now functional with 4 microbatches. Best completed GPipe result: 4x 8xH100 east02, d2560, 24 layers, top-k 4, 128 experts, batch 32, seq 128, `XLA_PYTHON_CLIENT_MEM_FRACTION=0.80`, 4 stages. It reports `31,147,999,232` parameters, `throughput/mean_mfu=0.3793670762020138`, and loss `9.03332233428955`.
-- Explicit `std_1f1b` is now functional with 4 microbatches. Best completed 4x 8xH100 8-expert result remains the two-stage batch-64 run with `2,829,071,552` parameters, `throughput/mean_mfu=0.5767728036698782`, and loss `9.026140213012695`; the best 4-stage 8-expert run reports `throughput/mean_mfu=0.11854193750695625`.
-- The larger 64-expert 4x 8xH100 `std_1f1b` comparison succeeds in both two-stage and four-stage form. The best completed 64-expert 1F1B result is now the four-stage batch-32 run at `0.70` prealloc with `16,044,571,136` parameters, loss `9.034103393554688`, and `throughput/mean_mfu=0.4853452360321486`, slightly above the 64-expert GPipe result (`0.47585952009098575`).
-- Best completed non-GPipe explicit MPMD result remains the 64-expert rung with `throughput/mean_mfu=0.7529189015282038`; the non-GPipe 128-expert rung reported `throughput/mean_mfu=0.1034576068697843`.
-- The largest completed explicit 4-stage `std_1f1b` rung is now 128 experts at `0.70` prealloc: `31,147,999,232` parameters, loss `9.033186912536621`, and `throughput/mean_mfu=0.38657153827935514`.
-- Larger explicit 4-stage `std_1f1b` rungs reached hparams/init but did not fit optimizer-state initialization: 192 experts failed on a `300.00MiB` allocation, and 256 experts reported `61,354,855,424` parameters before failing after XLA estimated `63.60GiB` input/output against the `0.70` base limit and then hit a `400.00MiB` allocation OOM.
-- Automatic JaxPP schedules remain blocked. Moving batch reshaping outside the JaxPP trace fixed the earlier after-loop batch placement assertion, and the opt-in const-sharding patch gets the reduced `std_1f1b` smoke past JaxPP explicit sharding inference. The current blocker is later input placement: JaxPP attempts to `device_put` a stage-local expert weight with a global `NamedSharding` whose mesh still includes the non-addressable `pipeline` axis.
+- `GRUG-JAXPP-001`: Explicit JaxPP MPMD training is implemented behind `GrugTrainerConfig.pipeline.implementation="explicit_mpmd"` with stage-local model/optimizer state, contiguous layer splits, explicit GPipe and explicit `std_1f1b` schedules. Milestone implementation commit: `abd979b82a` (`[grug] Add explicit JaxPP pipeline training`).
+- The requested 24-layer, d2560, 256-expert, top-k 4 shape now fits and executes on 4x 8xH100 CoreWeave east02 after optimizer state is initialized from stage-local pipeline weights instead of from the full 61B-param model.
+- Best completed throughput point so far: explicit MPMD GPipe, 24 layers, 256 experts, top-k 4, seq 4096, batch 128, four physical/logical stages, 4 microbatches, `XLA_PYTHON_CLIENT_MEM_FRACTION=0.70`. Run `/dlwh/iris-run-job-20260708-225414/grug-train-jaxpp-explicit-perf-l24-e256-b128-s4096-gpipe-xla070-20260708-1555` reported `170,567.57` tokens/s, `2,406,803.30` GFLOP/s, and mean MFU `7.5981`.
+- Best completed `std_1f1b` seq4096 point: explicit MPMD, 24 layers, 256 experts, top-k 4, batch 96, four stages, 4 microbatches, `0.70` prealloc. Run `/dlwh/iris-run-job-20260708-224507/grug-train-jaxpp-explicit-perf-l24-e256-b96-s4096-xla070-20260708-1545` reported `167,681.85` tokens/s, `2,366,084.23` GFLOP/s, and mean MFU `7.4980`.
+- Profile captured for explicit MPMD GPipe at the stable batch-96 seq4096 point after commit `a0f8130985` (`[grug] Upload explicit MPMD profile artifacts`). W&B run: <https://wandb.ai/marin-community/marin_moe/runs/jaxpp-explicit-profile-l24-e256-b96-s4096-gpipe-xla070-artifact-20260709-0018>. Artifact: `marin-community/marin_moe/jaxpp-explicit-profile-l24-e256-b96-s4096-gpipe-xla070-artifact-20260709-0018-profiler:v0`.
+- Profile readout: communication-dominated exclusive timeline, with `48.75%` communication, `45.10%` compute, and `6.15%` stall. Largest exclusive kernel is `ncclDevKernel_SendRecv` (`104` calls, about `7.35s` total exclusive in the profile window), followed by all-gather and reduce-scatter collectives.
+- Automatic JaxPP schedules remain blocked. Moving batch reshaping outside the JaxPP trace fixed the earlier after-loop batch placement assertion, and the opt-in const-sharding patch gets reduced `std_1f1b` past JaxPP explicit sharding inference. The current blocker is later input placement: JaxPP attempts to `device_put` a stage-local expert weight with a global `NamedSharding` whose mesh still includes the non-addressable `pipeline` axis. Automatic `eager_1f1b` at the full 61B shape also failed during full-state init before training.
 
 ## Hypothesis Queue
 
 ### Active
-- `GRUG-JAXPP-001`: A JaxPP explicit-MPMD path can pipeline the MoE train step with stage-local weights and optimizer state. Evidence: [2026-07-08 14:28 PDT - 128-expert 4-stage 1F1B succeeds, 192/256 expert rungs do not fit](#2026-07-08-1428-pdt---128-expert-4-stage-1f1b-succeeds-192256-expert-rungs-do-not-fit). Next test: reduce optimizer-state memory for 192/256 experts, or improve automatic schedule input placement.
 - `GRUG-JAXPP-002`: Router histograms need a dedicated cross-microbatch reducer before full metric parity is safe. Evidence: [2026-07-07 22:45 PDT - initial implementation](#2026-07-07-2245-pdt---initial-implementation). Next test: implement/validate a `SummaryStats` merge or compute summary metrics outside the pipeline loop.
-- `GRUG-JAXPP-004`: At least one JaxPP implementation can run the May d=2560 Grug MoE family on 4x 8xH100 with measurable MFU. Evidence: 64- and 128-expert explicit GPipe, two-stage explicit `std_1f1b`, a 4-stage explicit `std_1f1b` smoke, and non-GPipe explicit rungs. Next test: scale 4-stage explicit 1F1B to 24 layers or fix automatic JaxPP's stage-local input placement blocker before claiming broader schedule coverage.
+- `GRUG-JAXPP-006`: The seq4096 batch-96/batch-128 performance boundary is communication dominated. Evidence: [2026-07-08 17:35 PDT - profile and artifact checkpoint](#2026-07-08-1735-pdt---profile-and-artifact-checkpoint). Next test: reduce pipeline send/recv pressure or increase useful compute per transfer, then re-profile the same shape.
 
 ### Blocked
-- `GRUG-JAXPP-003`: Local end-to-end JaxPP train-step execution is blocked on lack of a representative NVIDIA GPU runtime in this worktree. Resume when a GPU Iris/CoreWeave smoke is available.
 - `GRUG-JAXPP-005`: Automatic JaxPP schedule sweep over `gpipe`, `std_1f1b`, `eager_1f1b`, `zero_bubble`, and interleaved schedules. Blocker: automatic `std_1f1b` reaches tracing and clears the prior sharding-inference assertion with the const-sharding patch, but JaxPP input placement now tries to `device_put` stage-local arrays with a non-addressable global `pipeline` mesh sharding. Resume when automatic JaxPP can call compiled functions with addressable stage-local input shardings.
 
 ### Falsified / Dead End
 - None yet.
 
 ### Promoted
-- None yet.
+- `GRUG-JAXPP-001`: Explicit MPMD stage-local weights/optimizer state are the working pipeline implementation. Evidence: milestone commit `abd979b82a`, issue update <https://github.com/marin-community/marin/issues/7024#issuecomment-4919647823>, and the seq4096 perf/profile results.
+- `GRUG-JAXPP-003`: GPU runtime availability is no longer blocked; CoreWeave east02 4x8 H100 jobs validated the implementation path.
+- `GRUG-JAXPP-004`: The May d=2560 family runs with measurable MFU on 4x 8xH100. Best measured point so far is explicit GPipe seq4096 batch128 with mean MFU `7.5981`; profiled stable point is explicit GPipe seq4096 batch96 with mean MFU `7.2239`.
 
 ## Entry Log
 
@@ -1266,3 +1265,72 @@ author: dlwh
   - The short two-step synthetic run is compile-dominated and has only one MFU sample; use it as a correctness/capacity proof, not a final performance number.
 - Next action:
   - Post the successful 256-expert result to issue 7024 and run pre-commit over the touched files.
+
+### 2026-07-08 15:35 PDT - implementation snapshot and seq4096 perf sweep
+- Hypothesis: Once the explicit MPMD implementation is snapshotted, larger sequence length and batch should produce a more representative MFU than the compile-dominated seq128 capacity proof.
+- Commit Hash: `abd979b82a` (`[grug] Add explicit JaxPP pipeline training`).
+- Commands:
+  - `./infra/pre-commit.py --changed-files --fix`
+  - `git add experiments/grug/moe/model.py experiments/grug/moe/train.py experiments/grug/moe/launch.py experiments/grug/moe/launch_cw_jaxpp_may_d2560.py experiments/grug/moe/run_cw_jaxpp_may_d2560.sh .agents/logbooks/jaxpp-grug-moe.md`
+  - `git commit -m "[grug] Add explicit JaxPP pipeline training"`
+  - `TF_GPU_ALLOCATOR=cuda_malloc_async experiments/grug/moe/run_cw_jaxpp_may_d2560.sh --submit --implementation explicit_mpmd --physical-stages 4 --logical-stages 4 --microbatches 4 --nodes 4 --gpus-per-replica 8 --expert-axis 8 --layers 24 --experts 256 --top-k 4 --vocab-size 8192 --moe-implementation ring --loss-implementation xla --steps 6 --tracker wandb --xla-memory-fraction 0.70 ...`
+- Config:
+  - Core shape: d2560, 24 layers, 256 experts, top-k 4, vocab 8192, ring MoE, XLA loss, 4x 8xH100 east02, 4 physical/logical pipeline stages, 4 microbatches, `XLA_PYTHON_CLIENT_MEM_FRACTION=0.70`, `TF_GPU_ALLOCATOR=cuda_malloc_async`.
+  - Schedules: explicit MPMD `std_1f1b` and explicit MPMD `gpipe`.
+- Results:
+
+| Schedule | Seq | Batch | Run | Status | Tokens/s | GFLOP/s | Mean MFU | Notes |
+| --- | ---: | ---: | --- | --- | ---: | ---: | ---: | --- |
+| `std_1f1b` | 512 | 64 | `/dlwh/iris-run-job-20260708-221312/grug-train-jaxpp-explicit-perf-l24-e256-b64-s512-xla070-20260708-1512` | succeeded | `54,404.6` | `623,077` | `1.9681` | first larger-token point |
+| `std_1f1b` | 4096 | 16 | `/dlwh/iris-run-job-20260708-222010/grug-train-jaxpp-explicit-perf-l24-e256-b16-s4096-xla070-20260708-1520` | failed | | | | per-microbatch batch `4` not divisible by expert axis `8` |
+| `std_1f1b` | 4096 | 32 | `/dlwh/iris-run-job-20260708-222319/grug-train-jaxpp-explicit-perf-l24-e256-b32-s4096-xla070-20260708-1524` | succeeded | `117,063` | `1,651,819` | `5.2170` | large seq improves MFU materially |
+| `std_1f1b` | 4096 | 64 | `/dlwh/iris-run-job-20260708-222719/grug-train-jaxpp-explicit-perf-l24-e256-b64-s4096-xla070-20260708-1528` | succeeded | `151,157` | `2,132,909` | `6.7251` | best point before schedule/batch sweep |
+| `std_1f1b` | 4096 | 96 | `/dlwh/iris-run-job-20260708-224507/grug-train-jaxpp-explicit-perf-l24-e256-b96-s4096-xla070-20260708-1545` | succeeded | `167,681.85` | `2,366,084.23` | `7.4980` | best `std_1f1b` point |
+| `gpipe` | 4096 | 96 | `/dlwh/iris-run-job-20260708-224938/grug-train-jaxpp-explicit-perf-l24-e256-b96-s4096-gpipe-xla070-20260708-1550` | succeeded | `162,738.58` | `2,296,331.90` | `7.2628` | comparable stable profile target |
+| `gpipe` | 4096 | 128 | `/dlwh/iris-run-job-20260708-225414/grug-train-jaxpp-explicit-perf-l24-e256-b128-s4096-gpipe-xla070-20260708-1555` | succeeded | `170,567.57` | `2,406,803.30` | `7.5981` | best completed point |
+| `gpipe` | 4096 | 160 | `/dlwh/iris-run-job-20260708-225923/grug-train-jaxpp-explicit-perf-l24-e256-b160-s4096-gpipe-xla070-20260708-1559` | failed | | | | compile OOM allocating `22.62GiB` in stage-3 loss backward |
+| automatic `eager_1f1b` | 4096 | 64 | `/dlwh/iris-run-job-20260708-230301/grug-train-jaxpp-auto-probe-l24-e256-b64-s4096-eager1f1b-xla070-20260708-1603` | failed | | | | full-state init OOM before training |
+
+- Interpretation:
+  - The earlier low MFU was real for tiny compile-dominated smokes, but not representative once seq length and batch are increased.
+  - At the 61B-param 256-expert shape, seq4096 batch96/128 reaches roughly `7.3-7.6` in the repo's percent-style MFU metric.
+  - Explicit MPMD remains the viable path. Automatic JaxPP schedules need stage-local init/input placement fixes before full-shape schedule comparisons are meaningful.
+- Issue updates:
+  - Milestone/perf sweep: <https://github.com/marin-community/marin/issues/7024#issuecomment-4919854060>
+  - Schedule/batch sweep: <https://github.com/marin-community/marin/issues/7024#issuecomment-4919983732>
+- Next action:
+  - Capture a TensorBoard/XPlane profile at the stable seq4096 batch96 GPipe point, then use the profile to decide whether communication, compute, or stalls dominate.
+
+### 2026-07-08 17:35 PDT - profile and artifact checkpoint
+- Hypothesis: The stable explicit MPMD GPipe seq4096 batch96 point should produce a usable XPlane/TensorBoard profile, and the profile should explain whether the remaining throughput gap is dominated by pipeline communication or device compute.
+- Commit Hash: `a0f8130985` (`[grug] Upload explicit MPMD profile artifacts`).
+- Commands:
+  - Profile attempt, batch128 GPipe: explicit MPMD GPipe, 24 layers, 256 experts, seq4096, batch128, `trainer.profiler.enabled=true`, `trainer.profiler.start_step=3`, `trainer.profiler.num_steps=6`.
+  - Successful profile, batch96 GPipe: explicit MPMD GPipe, 24 layers, 256 experts, seq4096, batch96, `XLA_PYTHON_CLIENT_MEM_FRACTION=0.70`, profiler enabled with artifact upload.
+  - `uv run python lib/marin/tools/profile_summary.py summarize --profile-dir scratch/profiles/jaxpp_profile_b96_gpipe_artifact --breakdown-mode exclusive_global --output scratch/jaxpp_profile_b96_gpipe_artifact_summary.json`
+  - `uv run python lib/marin/tools/profile_summary.py report --summary scratch/jaxpp_profile_b96_gpipe_artifact_summary.json --output scratch/jaxpp_profile_b96_gpipe_artifact_report.md`
+  - `uv run --isolated --with tensorboard --with tensorboard-plugin-profile --with 'setuptools<81' python -m tensorboard.main --logdir /Users/dlwh/.codex/worktrees/04c0/marin/scratch/profiles/jaxpp_profile_b96_gpipe_artifact --host 127.0.0.1 --port 6006`
+- Config:
+  - Explicit MPMD GPipe, 4 physical/logical stages, 4 microbatches, d2560, 24 layers, 256 experts, top-k 4, seq4096, global batch 96, ring MoE, XLA loss, 4x 8xH100 east02, `XLA_PYTHON_CLIENT_MEM_FRACTION=0.70`, `TF_GPU_ALLOCATOR=cuda_malloc_async`.
+- Result:
+  - Initial batch128 profile run `/dlwh/iris-run-job-20260708-230824/grug-train-jaxpp-explicit-profile-l24-e256-b128-s4096-gpipe-xla070-20260708-2308` captured trace files but failed in `levanter_barrier_sync_2::0` because only task 0 runs callbacks under explicit MPMD. The job was stopped to avoid leaving a failed profile run alive.
+  - Patched Levanter profiler callback to accept `sync_after_stop=False` and passed that for explicit MPMD profiles, then added explicit profile artifact upload from `trainer.log_dir / run_id / "profiler"`.
+  - Batch128 retry `/dlwh/iris-run-job-20260708-231945/grug-train-jaxpp-explicit-profile-l24-e256-b128-s4096-gpipe-xla070-20260708-2320` segfaulted inside the JaxPP MPMD compiled step before the profile window.
+  - Successful batch96 profile run: `/dlwh/iris-run-job-20260709-001640/grug-train-jaxpp-explicit-profile-l24-e256-b96-s4096-gpipe-xla070-artifact-20260709-0018`.
+  - W&B: <https://wandb.ai/marin-community/marin_moe/runs/jaxpp-explicit-profile-l24-e256-b96-s4096-gpipe-xla070-artifact-20260709-0018>
+  - Artifact: `marin-community/marin_moe/jaxpp-explicit-profile-l24-e256-b96-s4096-gpipe-xla070-artifact-20260709-0018-profiler:v0`
+  - Local profile directory: `scratch/profiles/jaxpp_profile_b96_gpipe_artifact`
+  - Local summary/report:
+    - `scratch/jaxpp_profile_b96_gpipe_artifact_summary.json`
+    - `scratch/jaxpp_profile_b96_gpipe_artifact_report.md`
+  - Profiled metrics: `161,656.17` tokens/s, `2,281,058.48` GFLOP/s, mean MFU `7.2239`, `61,354,855,424` params.
+  - TensorBoard served locally at `http://127.0.0.1:6006/#profile`; indexed run `2026_07_09_00_24_12`, host `g739bec`.
+- Interpretation:
+  - The profile is communication dominated: `48.75%` communication, `45.10%` compute, `6.15%` stall.
+  - Top exclusive kernel is `ncclDevKernel_SendRecv` (`104` calls, about `7.35s` total exclusive in the profile window), followed by all-gather (`~1.14s`), reduce-scatter (`~0.83s`), and all-reduce (`~0.22s`).
+  - The trace was not suspected truncated, but step markers were not present; use this profile for kernel/collective attribution rather than step-time histogramming.
+  - TensorBoard launch required transient `setuptools<81` because current setuptools no longer provides TensorBoard's deprecated `pkg_resources` import.
+- Issue update:
+  - <https://github.com/marin-community/marin/issues/7024#issuecomment-4920404840>
+- Next action:
+  - Treat pipeline send/recv as the first optimization target. Candidate next tests are reducing activation transfer volume, improving overlap, or increasing useful compute per pipeline transfer, then re-profiling the same batch96 seq4096 shape.
