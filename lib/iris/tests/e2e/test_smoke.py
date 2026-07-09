@@ -446,9 +446,30 @@ def test_dashboard_task_logs(smoke_cluster, verbose_job, smoke_page, smoke_scree
         "Should have structural elements like a status card and resource info.",
     )
 
-    # "validation failed" only appears in ERROR lines. The text filter applies
-    # on Enter, not on every keystroke.
-    filter_input = "input[placeholder^='Filter text']"
+    # This job logs plenty of ERROR-level lines but never crashes. Exception
+    # navigation keys off tracebacks and fatal banners, not severity, so it must
+    # find nothing here.
+    assert_visible(smoke_page, "text=No exceptions")
+
+    # Search marks matching lines in place. "validation failed" only appears in
+    # ERROR lines, so the INFO lines around them must survive — that is the whole
+    # point of search being distinct from filter.
+    search_input = "input[placeholder^='Search loaded lines']"
+    smoke_page.fill(search_input, "validation failed")
+    smoke_page.wait_for_function(
+        "() => document.querySelectorAll('mark').length > 0 && "
+        "document.body.textContent.includes('processing data batch')",
+        timeout=5000,
+    )
+    smoke_screenshot(
+        "task-logs-searched",
+        "Task detail page with a log search box populated; matching text is highlighted in place "
+        "and non-matching log lines are still visible around the highlights.",
+    )
+
+    # The filter re-queries the server and drops non-matching lines entirely. It
+    # applies on Enter, not on every keystroke.
+    filter_input = "input[placeholder^='Filter:']"
     smoke_page.fill(filter_input, "validation failed")
     smoke_page.press(filter_input, "Enter")
     smoke_page.wait_for_function(
@@ -459,6 +480,33 @@ def test_dashboard_task_logs(smoke_cluster, verbose_job, smoke_page, smoke_scree
     smoke_screenshot(
         "task-logs-filtered",
         "Task detail page with log filter input populated and filtered log lines visible in the log viewer.",
+    )
+
+
+def test_dashboard_jump_to_exception(smoke_cluster, smoke_page, smoke_screenshot):
+    """A crashed task's log viewer finds and steps to the traceback."""
+    failed = smoke_cluster.submit(TestJobs.fail, "smoke-exception")
+    smoke_cluster.wait(failed, timeout=smoke_cluster.job_timeout)
+
+    task_status = smoke_cluster.task_status(failed)
+    _wait_for_task_log_marker(smoke_cluster, task_status.task_id, task_status.current_attempt_id, "Traceback")
+
+    dashboard_goto(
+        smoke_page,
+        f"{smoke_cluster.url}/job/{failed.job_id.to_wire()}/task/{task_status.task_id}",
+    )
+    wait_for_dashboard_ready(smoke_page)
+
+    # The control counts failures, not ERROR-level lines, and a whole traceback
+    # collapses to a single stop.
+    jump = smoke_page.locator("button", has_text="Jump to exception")
+    jump.wait_for(timeout=10000)
+    jump.click()
+    assert_visible(smoke_page, "text=/Exception 1 \\/ \\d+/")
+    smoke_screenshot(
+        "task-logs-exception",
+        "Task detail page for a failed task; the log viewer's exception control reads 'Exception 1 / N' "
+        "and a highlighted traceback line is visible in the log output.",
     )
 
 

@@ -12,35 +12,44 @@ from finelog.rpc import logging_pb2
 from finelog.types import str_to_log_level
 from rigging.log_setup import parse_log_level
 
+from iris.cluster.log_highlights import is_progress_bar_line
 from iris.cluster.types import JobName, TaskAttempt
 
 CONTROLLER_LOG_KEY = "/system/controller"
 _WORKER_LOG_PREFIX = "/system/worker/"
 
+STDOUT_SOURCE = "stdout"
+STDERR_SOURCE = "stderr"
+# The synthetic source iris stamps on failure lines it injects itself (OOM kills,
+# infrastructure errors), as opposed to anything the task wrote.
+INJECTED_ERROR_SOURCE = "error"
+
 # Default level per capture stream when a line carries no parseable prefix.
-# "error" is the synthetic source iris uses for injected failure lines (OOM
-# kills, infrastructure errors). Streams not listed here (e.g. "build") fall
-# back to UNKNOWN, which stays visible under every min_level filter.
+# Streams not listed here (e.g. "build") fall back to UNKNOWN, which stays
+# visible under every min_level filter.
 _STREAM_DEFAULT_LEVEL = {
-    "stdout": logging_pb2.LOG_LEVEL_INFO,
-    "stderr": logging_pb2.LOG_LEVEL_ERROR,
-    "error": logging_pb2.LOG_LEVEL_ERROR,
+    STDOUT_SOURCE: logging_pb2.LOG_LEVEL_INFO,
+    STDERR_SOURCE: logging_pb2.LOG_LEVEL_ERROR,
 }
 
 
 def classify_log_level(source: str, data: str) -> int:
     """Assign a finelog ``LogLevel`` to a captured task log line.
 
-    A parseable glog-style level prefix in ``data`` always wins, so a prefixed
-    ``INFO`` line on ``stderr`` is classified ``INFO``, not ``ERROR``. Otherwise
-    the level defaults from ``source`` (the capture stream): ``stdout`` is
-    informational, ``stderr`` and iris's injected failure lines are errors. This
-    keeps mundane stdout out of the ``min_level``-filtered error view, where an
-    ``UNKNOWN`` line would otherwise pass through every filter.
+    Lines from ``INJECTED_ERROR_SOURCE`` are errors whatever they say. Otherwise
+    a glog-style level prefix in ``data`` wins, so a prefixed ``INFO`` line on
+    ``stderr`` classifies as ``INFO``. An unprefixed tqdm progress bar on
+    ``stderr`` classifies as ``INFO``. Any other unprefixed line takes its
+    stream's default: ``stdout`` informational, ``stderr`` error, and an
+    unrecognized stream ``UNKNOWN``, which passes every ``min_level`` filter.
     """
+    if source == INJECTED_ERROR_SOURCE:
+        return logging_pb2.LOG_LEVEL_ERROR
     parsed = str_to_log_level(parse_log_level(data))
     if parsed != logging_pb2.LOG_LEVEL_UNKNOWN:
         return parsed
+    if source == STDERR_SOURCE and is_progress_bar_line(data):
+        return logging_pb2.LOG_LEVEL_INFO
     return _STREAM_DEFAULT_LEVEL.get(source, logging_pb2.LOG_LEVEL_UNKNOWN)
 
 

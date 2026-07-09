@@ -65,6 +65,17 @@ _TRACEBACK = [
                 "Terminating process because the JAX distributed service detected fatal errors",
             ],
         ),
+        # A described bar and a totalless bar are noise too, wherever they sit
+        # on the line.
+        (
+            [
+                "Loading shards:  45%|####5     | 450/1000 [00:12<00:15,  1.20s/it]",
+                "450it [00:12,  3.21it/s]",
+                "RuntimeError: shard missing",
+            ],
+            20,
+            ["RuntimeError: shard missing"],
+        ),
         # No signal line → fall back to the de-noised tail so output is never empty.
         (["step 1", "step 2", "step 3"], 20, ["step 1", "step 2", "step 3"]),
         # Empty input → empty output.
