@@ -3,7 +3,8 @@
 
 """Prepare AA + lm-eval-harness eval text as decon bloom input.
 
-Two sub-corpora written under ``gs://marin-eu-west4/datakit/decontam/evals/``:
+Two sub-corpora written under ``{MARIN_PREFIX}/datakit/decontam/evals/`` (the
+iris ``--region`` selects the store MARIN_PREFIX resolves to):
 
 - ``aa/<eval>/<split>.parquet`` -- AA Intelligence Index v4.0 core 8.
 - ``lmh/<task>/<split>.parquet`` -- every unique task in
@@ -53,7 +54,7 @@ import pyarrow.parquet as pq
 from datasets import Image as DatasetsImage
 from datasets import load_dataset
 from huggingface_hub import hf_hub_download
-from rigging.filesystem import StoragePath
+from rigging.filesystem import StoragePath, marin_prefix
 from rigging.log_setup import configure_logging
 
 from experiments.datakit.decontam.lmh_loader import (
@@ -86,8 +87,13 @@ from experiments.evals.task_configs import (
 
 logger = logging.getLogger(__name__)
 
-# TODO (rav): don't hardcode
-OUTPUT_ROOT = "gs://marin-eu-west4/datakit/decontam/evals"
+_EVALS_RELATIVE = "datakit/decontam/evals"
+
+
+def _output_root() -> str:
+    """Eval-corpus write root, relative to the active ``MARIN_PREFIX`` (store-agnostic)."""
+    return f"{marin_prefix()}/{_EVALS_RELATIVE}"
+
 
 # Bump when the LMH text-extraction policy (`_lmh_doc_text`) changes. Written to a
 # `.extraction_version` sidecar next to each `lmh/<task>/eval.parquet`; the prepare
@@ -371,7 +377,7 @@ def _iter_aa_rows(cfg: AAEvalConfig) -> Iterator[dict[str, Any]]:
 
 def _prepare_aa() -> None:
     for cfg in AA_EVALS:
-        out_path = f"{OUTPUT_ROOT}/aa/{cfg.subdir}/{cfg.split}.parquet"
+        out_path = f"{_output_root()}/aa/{cfg.subdir}/{cfg.split}.parquet"
         if StoragePath(out_path).exists():
             logger.info("aa/%s: exists, skipping", cfg.subdir)
             continue
@@ -500,8 +506,8 @@ def _prepare_lmh() -> None:
             logger.info("lmh/%s: group expanded to %d leaf tasks", name, len(leaves))
 
         for child_name, task in leaves:
-            out_path = f"{OUTPUT_ROOT}/lmh/{child_name}/eval.parquet"
-            version_path = f"{OUTPUT_ROOT}/lmh/{child_name}/{_LMH_VERSION_SIDECAR}"
+            out_path = f"{_output_root()}/lmh/{child_name}/eval.parquet"
+            version_path = f"{_output_root()}/lmh/{child_name}/{_LMH_VERSION_SIDECAR}"
             # Skip only if the shard exists AND was built with the current extraction
             # policy; a version bump forces a rewrite so policy changes reach the corpus.
             if StoragePath(out_path).exists() and _staged_lmh_version(version_path) == _LMH_EXTRACTION_VERSION:
