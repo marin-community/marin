@@ -37,8 +37,9 @@ import io
 import logging
 import os
 import pickle
+import time
 from collections import defaultdict
-from collections.abc import Callable, Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator, MutableMapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -49,6 +50,7 @@ from iris.env_resources import TaskResources
 from rigging.filesystem import StoragePath, is_remote_path, url_to_fs
 from rigging.timing import RateLimiter, log_time
 
+from zephyr import counters
 from zephyr.shard_keys import composite_sort_key, deterministic_hash
 from zephyr.worker_context import zephyr_worker_ctx
 from zephyr.writers import ensure_parent_dir
@@ -297,6 +299,24 @@ class ScatterFileIterator:
             yield _iter_chunk(self._fs, self._fs_path, offset, length)
 
 
+def timed_iter(items: Iterable, timers: MutableMapping[str, float], key: str) -> Iterator:
+    """Yield from *items*, accumulating time spent pulling each element into ``timers[key]``.
+
+    Perf instrumentation for A/B timing of the shuffle (see PR #5963); the
+    per-element cost is two ``perf_counter`` calls.
+    """
+    it = iter(items)
+    while True:
+        t0 = time.perf_counter()
+        try:
+            item = next(it)
+        except StopIteration:
+            timers[key] += time.perf_counter() - t0
+            return
+        timers[key] += time.perf_counter() - t0
+        yield item
+
+
 def _iter_chunk(fs: Any, fs_path: str, offset: int, length: int) -> Iterator:
     """Fetch one chunk's compressed bytes via cat_file and stream items.
 
@@ -305,14 +325,27 @@ def _iter_chunk(fs: Any, fs_path: str, offset: int, length: int) -> Iterator:
     sub-batch at a time, so per-iterator memory is bounded by the
     sub-batch size plus the chunk's compressed bytes.
     """
+    stage_counters = counters.current_stage()
+    t0 = time.perf_counter()
     blob = fs.cat_file(fs_path, start=offset, end=offset + length)
-    with zstd.ZstdDecompressor().stream_reader(io.BytesIO(blob)) as reader:
-        while True:
-            try:
-                sub_batch = pickle.load(reader)
-            except EOFError:
-                return
-            yield from sub_batch
+    stage_counters.update_counter("reduce/fetch_seconds", time.perf_counter() - t0)
+    stage_counters.update_counter("reduce/fetch_bytes", length)
+    # `reduce/deserialize_seconds` covers zstd decompression + unpickle, timed
+    # per sub-batch and emitted once per chunk (in finally, since consumers may
+    # abandon the iterator early).
+    deserialize_seconds = 0.0
+    try:
+        with zstd.ZstdDecompressor().stream_reader(io.BytesIO(blob)) as reader:
+            while True:
+                t0 = time.perf_counter()
+                try:
+                    sub_batch = pickle.load(reader)
+                except EOFError:
+                    return
+                deserialize_seconds += time.perf_counter() - t0
+                yield from sub_batch
+    finally:
+        stage_counters.update_counter("reduce/deserialize_seconds", deserialize_seconds)
 
 
 # ---------------------------------------------------------------------------
@@ -351,6 +384,7 @@ class ScatterReader:
         weighted_bytes = 0.0
         total_chunks_for_avg = 0
 
+        t0 = time.perf_counter()
         with log_time(
             f"Building ScatterReader for target shard {target_shard} "
             f"from {len(scatter_paths)} sidecars (concurrency={_SIDECAR_READ_CONCURRENCY})"
@@ -362,6 +396,7 @@ class ScatterReader:
                     count = len(slice_.ranges)
                     weighted_bytes += slice_.avg_item_bytes * count
                     total_chunks_for_avg += count
+        counters.current_stage().update_counter("reduce/sidecar_seconds", time.perf_counter() - t0)
 
         avg_item_bytes = weighted_bytes / total_chunks_for_avg if total_chunks_for_avg > 0 else 0.0
 
@@ -541,6 +576,11 @@ class ScatterWriter:
         # operators see how representative the first item was.
         self._item_bytes_estimate: float = 0.0  # set on first write()
         self._first_item_bytes: float = 0.0  # logged at close for comparison
+        self._total_rows_written: int = 0
+        self._total_bytes_written: int = 0  # compressed frame bytes
+        # Perf instrumentation (PR #5963): accumulated phase timings, emitted
+        # as stage counters and a summary log line in close().
+        self.timers: defaultdict[str, float] = defaultdict(float)
 
         ensure_parent_dir(data_path)
         self._fs, self._fs_path = url_to_fs(data_path)
@@ -550,9 +590,14 @@ class ScatterWriter:
         self._result: ListShard | None = None
 
     def _flush(self, target: int, buf: list) -> None:
+        flush_start = time.perf_counter()
         if self._combiner_fn is not None:
+            t0 = time.perf_counter()
             buf = _apply_combiner(buf, self._key_fn, self._combiner_fn)
+            self.timers["scatter/flush_combine_seconds"] += time.perf_counter() - t0
+        t0 = time.perf_counter()
         buf.sort(key=self._sort_key)
+        self.timers["scatter/flush_sort_seconds"] += time.perf_counter() - t0
 
         if buf:
             # Sample a subset of the buffer to update the byte-size estimate.
@@ -560,6 +605,7 @@ class ScatterWriter:
             # smaller sample to track drift cheaply via EMA. This prevents OOM
             # when early items are small but later items are large — the estimate
             # stays current rather than being frozen at the first-flush value.
+            t0 = time.perf_counter()
             n = _SCATTER_SAMPLE_SIZE if not self._sampled_avg else _SCATTER_ONGOING_SAMPLE_SIZE
             sample = buf[: min(len(buf), n)]
             observed = sum(len(pickle.dumps(item, protocol=pickle.HIGHEST_PROTOCOL)) for item in sample) / len(sample)
@@ -569,12 +615,20 @@ class ScatterWriter:
             else:
                 self._avg_item_bytes = (1 - _ESTIMATE_EMA_ALPHA) * self._avg_item_bytes + _ESTIMATE_EMA_ALPHA * observed
             self._item_bytes_estimate = self._avg_item_bytes
+            self.timers["scatter/estimate_seconds"] += time.perf_counter() - t0
 
+        t0 = time.perf_counter()
         frame = _write_chunk_frame(buf)
+        self.timers["scatter/flush_encode_seconds"] += time.perf_counter() - t0
+        t0 = time.perf_counter()
         offset = self._out.tell()
         self._out.write(frame)
+        self.timers["scatter/flush_upload_seconds"] += time.perf_counter() - t0
         self._shard_ranges[target].append((offset, len(frame)))
         self._per_shard_max_rows[target] = max(self._per_shard_max_rows[target], len(buf))
+        self._total_rows_written += len(buf)
+        self._total_bytes_written += len(frame)
+        self.timers["scatter/flush_seconds"] += time.perf_counter() - flush_start
 
         self._n_chunks_written += 1
         if self._progress_log_limiter.should_run():
@@ -595,6 +649,7 @@ class ScatterWriter:
             # closed loop: if the estimate is too low no flush fires, so it never
             # updates). Interval-based sampling amortises the pickle.dumps cost
             # to 1-in-10 items while still catching step-changes within a few rows.
+            t0 = time.perf_counter()
             observed = float(len(pickle.dumps(item, protocol=pickle.HIGHEST_PROTOCOL)))
             if self._total_buffer_rows == 0:
                 self._item_bytes_estimate = observed
@@ -603,6 +658,7 @@ class ScatterWriter:
                 self._item_bytes_estimate = (
                     1 - _ESTIMATE_EMA_ALPHA
                 ) * self._item_bytes_estimate + _ESTIMATE_EMA_ALPHA * observed
+            self.timers["scatter/estimate_seconds"] += time.perf_counter() - t0
 
         key = self._key_fn(item)
         target = deterministic_hash(key) % self._num_output_shards
@@ -633,7 +689,9 @@ class ScatterWriter:
                 if buf:
                     self._flush(target, buf)
                     close_flushes += 1
+        t0 = time.perf_counter()
         self._out.close()
+        self.timers["scatter/flush_upload_seconds"] += time.perf_counter() - t0
 
         measured_avg = self._avg_item_bytes if self._sampled_avg else self._item_bytes_estimate
         logger.info(
@@ -660,6 +718,18 @@ class ScatterWriter:
 
         with log_time(f"Writing scatter meta for {self._data_path}"):
             _write_scatter_meta(self._data_path, sidecar)
+
+        stage_counters = counters.current_stage()
+        for name, secs in sorted(self.timers.items()):
+            stage_counters.update_counter(name, secs)
+        stage_counters.update_counter("scatter/flush_count", self._n_chunks_written)
+        stage_counters.update_counter("scatter/rows_written", self._total_rows_written)
+        stage_counters.update_counter("scatter/bytes_written", self._total_bytes_written)
+        logger.info(
+            "[shard %d] scatter timers: %s",
+            self._source_shard,
+            {k: round(v, 3) for k, v in sorted(self.timers.items())},
+        )
 
         self._result = ListShard(refs=[MemChunk(items=[self._data_path])])
         return self._result
@@ -724,7 +794,7 @@ def _write_scatter(
         sort_fn=sort_fn,
         combiner_fn=combiner_fn,
     ) as writer:
-        for item in items:
+        for item in timed_iter(items, writer.timers, "scatter/input_pull_seconds"):
             writer.write(item)
         # __exit__ discards the in-flight upload if anything above raises.
         return writer.close()

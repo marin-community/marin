@@ -47,7 +47,7 @@ from zephyr.expr import Expr, referenced_columns
 from zephyr.external_sort import compute_fan_in, compute_write_batch_size, external_sort_merge
 from zephyr.readers import InputFileSpec, compute_parquet_splits, load_file, load_file_batch
 from zephyr.shard_keys import composite_sort_key
-from zephyr.shuffle import ScatterReader
+from zephyr.shuffle import ScatterReader, timed_iter
 from zephyr.writers import write_binary_file, write_jsonl_file, write_parquet_file, write_vortex_file
 
 logger = logging.getLogger(__name__)
@@ -682,6 +682,7 @@ def _merge_sorted_chunks(
         memory_limit = _TaskResources.from_environment().memory_bytes
         use_external = shard.needs_external_sort(memory_limit)
 
+    stage_counters = counters.current_stage()
     if use_external:
         assert memory_limit is not None
         # Per-iterator memory ~= compressed bytes for one chunk held by
@@ -698,6 +699,7 @@ def _merge_sorted_chunks(
             write_batch_size,
             external_sort_dir,
         )
+        stage_counters.update_counter("reduce/external_sort_count", 1)
         # Pass lazy generator — external_sort_merge consumes in batches without opening all files
         merged_stream = external_sort_merge(
             shard.get_iterators(),
@@ -709,8 +711,17 @@ def _merge_sorted_chunks(
     else:
         chunk_iterators = list(shard.get_iterators())
         logger.info(f"Merging {len(chunk_iterators):,} sorted chunk iterators")
+        if isinstance(shard, ScatterReader):
+            stage_counters.update_counter("reduce/external_sort_count", 0)
         merged_stream = heapq.merge(*chunk_iterators, key=merge_key)
-    yield from groupby(merged_stream, key=key_fn)
+    # `reduce/merge_pull_seconds` is the total time spent producing merged
+    # items (fetch + merge + deserialize); reducer time is the remainder of
+    # the stage wall. Mirrored in the polars branch's _reduce_gen.
+    timers: dict[str, float] = {"reduce/merge_pull_seconds": 0.0}
+    try:
+        yield from groupby(timed_iter(merged_stream, timers, "reduce/merge_pull_seconds"), key=key_fn)
+    finally:
+        stage_counters.update_counter("reduce/merge_pull_seconds", timers["reduce/merge_pull_seconds"])
 
 
 def _sorted_merge_join(

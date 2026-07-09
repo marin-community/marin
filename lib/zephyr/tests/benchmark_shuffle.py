@@ -28,16 +28,23 @@ Examples:
     # Skewed: 90% of items routed to a single hot reducer (shard 0)
     ... --hot-shard-frac 0.9 --hot-key-pool 128 ...
 
+    # Tier2-shaped item-size skew (lognormal + Pareto tail + mega docs),
+    # mirroring scripts/datakit/generate_tier2_skewed.py at reduced scale
+    ... --size-dist tier2 --item-bytes 5000 --mega-per-shard 2 ...
+
 Output: prints a single JSON line ``RESULT: {...}`` for easy log scraping.
 """
 
+import base64
 import json
 import logging
+import math
 import os
 import random
 import string
 import time
 from collections.abc import Iterator
+from dataclasses import asdict, dataclass
 
 import click
 from fray.types import ResourceConfig
@@ -53,6 +60,50 @@ logger = logging.getLogger(__name__)
 def _make_payload(rnd: random.Random, n: int) -> str:
     """Random ASCII payload of length n. Uses random chars so zstd cannot trivialise."""
     return "".join(rnd.choices(string.ascii_letters + string.digits, k=n))
+
+
+@dataclass(frozen=True)
+class SizeSkew:
+    """Item-size distribution for the generated payloads.
+
+    ``dist="fixed"`` keeps the historical behavior (every payload is
+    ``item_bytes`` long). ``dist="tier2"`` mirrors
+    ``scripts/datakit/generate_tier2_skewed.py`` at reduced scale:
+    ``1 - heavy_frac`` lognormal centered at ``item_bytes`` (sigma 0.5),
+    ``heavy_frac`` truncated Pareto with scale ``0.4 * item_bytes``, plus
+    ``mega_per_shard`` forced docs uniform in [mega_min_bytes, mega_max_bytes]
+    at random positions in each input shard.
+    """
+
+    dist: str = "fixed"
+    heavy_frac: float = 0.3
+    pareto_alpha: float = 1.1
+    max_item_bytes: int = 32 * 1024 * 1024
+    mega_per_shard: int = 0
+    mega_min_bytes: int = 8 * 1024 * 1024
+    mega_max_bytes: int = 16 * 1024 * 1024
+
+
+def _make_random_ascii(n: int) -> str:
+    """Random ASCII payload of length n, fast enough for multi-MB docs.
+
+    base64 over urandom runs at native speed where per-char ``random.choices``
+    would take seconds per mega doc. The result is incompressible (the
+    conservative case for encode/upload timing). Content randomness is not
+    seeded — only sizes and keys (both seeded) affect routing and grouping, so
+    A/B runs still shuffle identically shaped data.
+    """
+    return base64.b64encode(os.urandom((n * 3) // 4 + 3)).decode("ascii")[:n]
+
+
+def _sample_item_bytes(rnd: random.Random, mean_bytes: int, skew: SizeSkew) -> int:
+    """Sample one payload size from the tier2-skewed mixture."""
+    if rnd.random() < skew.heavy_frac:
+        # Pareto(alpha, scale): X = scale * U^(-1/alpha) for U ~ Uniform(0,1).
+        size = 0.4 * mean_bytes * (rnd.random() ** (-1.0 / skew.pareto_alpha))
+    else:
+        size = rnd.lognormvariate(math.log(mean_bytes), 0.5)
+    return max(64, min(int(size), skew.max_item_bytes))
 
 
 def _hot_keys_for_shard(target_shard: int, num_output_shards: int, count: int) -> list[int]:
@@ -77,27 +128,40 @@ def _gen_shard(
     num_keys: int,
     hot_shard_frac: float,
     hot_keys: list[int],
+    skew: SizeSkew,
 ):
     """Generate ``items_per_shard`` synthetic dicts for this input shard.
 
     Each dict has a routing ``key`` (drawn from ``num_keys`` distinct values)
-    and a payload of approximately ``item_bytes`` random characters. With
+    and a payload sized per ``skew`` (fixed ``item_bytes``, or the tier2
+    mixture with ``item_bytes`` as the lognormal mean). With
     ``hot_shard_frac > 0``, that fraction of items is biased to keys routing
     to a single hot reducer, the rest are uniform.
     """
     rnd = random.Random(info.shard_idx)
     payload_size = max(0, item_bytes - 32)  # leave headroom for dict + key overhead
     n_hot = len(hot_keys)
+    mega_indices: set[int] = set()
+    if skew.dist == "tier2" and skew.mega_per_shard > 0:
+        mega_indices = set(rnd.sample(range(items_per_shard), min(skew.mega_per_shard, items_per_shard)))
     for i in range(items_per_shard):
         if hot_shard_frac > 0 and rnd.random() < hot_shard_frac:
             key = hot_keys[rnd.randrange(n_hot)]
         else:
             key = rnd.randrange(num_keys)
+        if skew.dist == "tier2":
+            if i in mega_indices:
+                n = rnd.randint(skew.mega_min_bytes, skew.mega_max_bytes)
+            else:
+                n = _sample_item_bytes(rnd, item_bytes, skew)
+            payload = _make_random_ascii(n)
+        else:
+            payload = _make_payload(rnd, payload_size)
         yield {
             "key": key,
             "seq": i,
             "src": info.shard_idx,
-            "payload": _make_payload(rnd, payload_size),
+            "payload": payload,
         }
 
 
@@ -113,6 +177,7 @@ def _build_pipeline(
     num_output_shards: int,
     hot_shard_frac: float,
     hot_keys: list[int],
+    skew: SizeSkew,
 ) -> Dataset:
     """Empty seed -> generate items -> group_by -> count.
 
@@ -124,7 +189,9 @@ def _build_pipeline(
     return (
         Dataset.from_list(seeds)
         .map_shard(
-            lambda items, info: _gen_shard(items, info, items_per_shard, item_bytes, num_keys, hot_shard_frac, hot_keys)
+            lambda items, info: _gen_shard(
+                items, info, items_per_shard, item_bytes, num_keys, hot_shard_frac, hot_keys, skew
+            )
         )
         .group_by(
             key=lambda x: x["key"],
@@ -158,6 +225,20 @@ def _build_pipeline(
     default=128,
     help="Number of distinct keys all routing to the hot shard (only used when --hot-shard-frac > 0)",
 )
+@click.option(
+    "--size-dist",
+    type=click.Choice(["fixed", "tier2"]),
+    default="fixed",
+    show_default=True,
+    help="Payload size distribution: fixed --item-bytes, or the tier2 lognormal+Pareto mixture "
+    "with --item-bytes as the lognormal mean.",
+)
+@click.option("--size-heavy-frac", type=float, default=0.3, help="tier2: fraction of Pareto-tail items")
+@click.option("--size-pareto-alpha", type=float, default=1.1, help="tier2: Pareto tail exponent")
+@click.option("--max-item-bytes", type=int, default=32 * 1024 * 1024, help="tier2: cap on sampled payload size")
+@click.option("--mega-per-shard", type=int, default=0, help="tier2: forced mega docs per input shard")
+@click.option("--mega-min-bytes", type=int, default=8 * 1024 * 1024, help="tier2: mega doc lower bound")
+@click.option("--mega-max-bytes", type=int, default=16 * 1024 * 1024, help="tier2: mega doc upper bound")
 @click.option("--worker-cpu", type=int, default=1)
 @click.option("--worker-ram", type=str, default="4g")
 @click.option("--max-workers", type=int, default=None)
@@ -177,6 +258,13 @@ def main(
     num_output_shards: int | None,
     hot_shard_frac: float,
     hot_key_pool: int,
+    size_dist: str,
+    size_heavy_frac: float,
+    size_pareto_alpha: float,
+    max_item_bytes: int,
+    mega_per_shard: int,
+    mega_min_bytes: int,
+    mega_max_bytes: int,
     worker_cpu: int,
     worker_ram: str,
     max_workers: int | None,
@@ -185,8 +273,19 @@ def main(
 ) -> None:
     configure_logging()
 
+    skew = SizeSkew(
+        dist=size_dist,
+        heavy_frac=size_heavy_frac,
+        pareto_alpha=size_pareto_alpha,
+        max_item_bytes=max_item_bytes,
+        mega_per_shard=mega_per_shard,
+        mega_min_bytes=mega_min_bytes,
+        mega_max_bytes=mega_max_bytes,
+    )
     n_out = num_output_shards if num_output_shards is not None else num_input_shards
     total_items = num_input_shards * items_per_shard
+    # For tier2 sizes this is the nominal (lognormal-mean) volume, not the
+    # realized one; use the zephyr/bytes_processed counter for actual bytes.
     target_gb = total_items * item_bytes / (1024**3)
     hot_keys = _hot_keys_for_shard(0, n_out, hot_key_pool) if hot_shard_frac > 0 else []
 
@@ -203,7 +302,9 @@ def main(
         repeat,
     )
 
-    pipeline = _build_pipeline(num_input_shards, items_per_shard, item_bytes, num_keys, n_out, hot_shard_frac, hot_keys)
+    pipeline = _build_pipeline(
+        num_input_shards, items_per_shard, item_bytes, num_keys, n_out, hot_shard_frac, hot_keys, skew
+    )
 
     ctx_kwargs: dict = {
         "name": label,
@@ -239,6 +340,7 @@ def main(
             "num_output_shards": n_out,
             "hot_shard_frac": hot_shard_frac,
             "hot_key_pool": len(hot_keys),
+            "size_skew": asdict(skew),
             "expected_items": total_items,
             "counted_items": counted,
             "elapsed_s": round(elapsed, 2),
