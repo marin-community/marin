@@ -98,6 +98,7 @@ def profile(
     num_steps: int,
     create_perfetto_link: bool,
     profiler_options: jax.profiler.ProfileOptions | None = None,
+    sync_after_stop: bool = True,
 ) -> Callable[[StepInfo], None]:
     trace_started = False
     mkdirs(path)
@@ -144,7 +145,8 @@ def profile(
 
         if create_perfetto_link and jax.process_index() == 0:
             event.set()
-        barrier_sync()
+        if sync_after_stop:
+            barrier_sync()
 
     return profiler_callback_fn
 

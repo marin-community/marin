@@ -1746,6 +1746,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                     profiler_cfg.start_step,
                     profiler_num_steps,
                     profiler_cfg.perfetto_link,
+                    sync_after_stop=not explicit_mpmd,
                 ),
                 every=1,
             )
@@ -1967,6 +1968,15 @@ def _run_grug_local(config: GrugRunConfig) -> None:
             checkpoint_step = explicit_loop_step if explicit_loop_step is not None else int(state.step)
             checkpointer.on_step(tree=final_state, step=checkpoint_step, force=True)
             checkpointer.wait_until_finished()
+
+    if profiler_enabled and log_callbacks:
+        profile_dir = trainer.log_dir / run_id / "profiler"
+        if profile_dir.exists():
+            levanter.tracker.current_tracker().log_artifact(
+                profile_dir,
+                name=f"{run_id}-profiler",
+                type="profiler",
+            )
 
     levanter.tracker.current_tracker().finish()
 
