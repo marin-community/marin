@@ -8,9 +8,6 @@ from datetime import timedelta
 from enum import Enum
 from pathlib import Path
 
-# Todo(Percy, dlwh): Can we remove this jax dependency?
-from jax.numpy import bfloat16, float32
-
 logger = logging.getLogger(__name__)
 
 
@@ -22,8 +19,6 @@ class CustomJsonEncoder(json.JSONEncoder):
             return str(o)
         if isinstance(o, Enum):
             return o.value
-        if o in (float32, bfloat16):
-            return str(o)
         if dataclasses.is_dataclass(o) and not isinstance(o, type):
             return dataclasses.asdict(o)
         try:
