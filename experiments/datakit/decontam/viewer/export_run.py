@@ -26,7 +26,7 @@ from collections import Counter
 
 import pyarrow.parquet as pq
 from marin.datakit.decon import bloom_paths
-from rigging.filesystem import prefix_join, url_to_fs
+from rigging.filesystem import marin_prefix, prefix_join, url_to_fs
 
 from experiments.datakit.testbed.decon_arm import build_testbed_decon_steps
 
@@ -35,11 +35,34 @@ logger = logging.getLogger(__name__)
 _SPLIT_RE = re.compile(r"^(.*)-(validation|test|training|train|dev|eval)-\d+$")
 _SAMPLES_PER_SOURCE = 60
 _TEXT_CLIP = 4000
+_EVAL_TEXT_CLIP = 1200
+_MAX_MATCHED_EVALS = 5
 
 
 def eval_id_to_family(eval_id: str) -> str:
     m = _SPLIT_RE.match(eval_id)
     return m.group(1) if m else eval_id
+
+
+def _load_eval_texts(eval_ids: set[str]) -> dict[str, str]:
+    """Load the text of each matched eval record from the staged eval corpus.
+
+    Only reads the eval files whose task (parent dir, recovered from the eval_id)
+    is referenced, so it stays cheap despite the corpus being ~250 MB.
+    """
+    if not eval_ids:
+        return {}
+    tasks = {eval_id_to_family(e) for e in eval_ids}
+    fs, root = url_to_fs(f"{marin_prefix()}/datakit/decontam/evals")
+    files = [f for f in fs.find(root) if f.endswith(".parquet") and f.split("/")[-2] in tasks]
+    texts: dict[str, str] = {}
+    for f in files:
+        with fs.open(f, "rb") as fh:
+            tbl = pq.read_table(fh, columns=["id", "text"])
+        for i, t in zip(tbl.column("id").to_pylist(), tbl.column("text").to_pylist(), strict=True):
+            if i in eval_ids:
+                texts[i] = t
+    return texts
 
 
 def _read_parquet(path: str, columns: list[str] | None = None):
@@ -118,17 +141,22 @@ def main() -> None:
         )
         logger.info("source %s: %d/%d flagged (%.4f%%)", source, n_flagged, n_docs, 100 * per_source[-1]["rate"])
 
-    # Load only the needed hash → family rows from the eval index.
-    hash_to_families: dict[int, set[str]] = {}
+    # Load needed hash → eval_id rows from the index. Keep the eval ids (not just
+    # the family) so we can also surface the matched eval TEXT.
+    hash_to_evals: dict[int, set[str]] = {}
     for tbl in _read_parquet(index_path):
         hs = tbl.column("hash").to_pylist()
         eids = tbl.column("eval_id").to_pylist()
         for h, eid in zip(hs, eids, strict=True):
             if h in needed_hashes:
-                hash_to_families.setdefault(h, set()).add(eval_id_to_family(str(eid)))
-    logger.info("resolved %d/%d needed hashes to families", len(hash_to_families), len(needed_hashes))
+                hash_to_evals.setdefault(h, set()).add(str(eid))
+    needed_eval_ids: set[str] = set().union(*hash_to_evals.values()) if hash_to_evals else set()
+    eval_texts = _load_eval_texts(needed_eval_ids)
+    logger.info(
+        "resolved %d hashes -> %d eval ids (%d with text)", len(hash_to_evals), len(needed_eval_ids), len(eval_texts)
+    )
 
-    # Second pass: attach text + family attribution to sampled flagged docs.
+    # Second pass: attach doc text + eval attribution (family counts + matched eval records w/ text).
     for src in per_source:
         sampled = src.pop("sampled")
         want_ids = {r["id"] for r in sampled}
@@ -143,16 +171,28 @@ def main() -> None:
         docs = []
         for r in sampled:
             fams: Counter = Counter()
+            eval_hits: Counter = Counter()
             for h in r["matched_hashes"]:
-                for fam in hash_to_families.get(h, ()):  # a hash can map to >1 family
-                    fams[fam] += 1
+                for eid in hash_to_evals.get(h, ()):  # a hash can map to >1 eval record
+                    fams[eval_id_to_family(eid)] += 1
+                    eval_hits[eid] += 1
             fam_counter.update(fams.keys())
+            matched_evals = [
+                {
+                    "eval_id": eid,
+                    "family": eval_id_to_family(eid),
+                    "hits": hits,
+                    "text": (eval_texts.get(eid, "") or "")[:_EVAL_TEXT_CLIP],
+                }
+                for eid, hits in eval_hits.most_common(_MAX_MATCHED_EVALS)
+            ]
             docs.append(
                 {
                     "id": r["id"],
                     "max_overlap": r["max_overlap"],
                     "n_matched": len(r["matched_hashes"]),
                     "families": fams.most_common(8),
+                    "matched_evals": matched_evals,
                     "text": (id_to_text.get(r["id"], "") or "")[:_TEXT_CLIP],
                 }
             )
