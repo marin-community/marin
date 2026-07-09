@@ -6,11 +6,13 @@
 Dispatch/combine as in ``scatter``, but the expert MLP GEMMs run on QuACK's
 ``GemmGatedSm100`` / ``GemmDefaultSm100`` via the vendored ``cutlass.jax.cutlass_call``
 shim. QuACK does all four activation-path grouped GEMMs (gate/up fwd fused with
-SwiGLU, down fwd, and the ``dh``/``dx`` backward matmuls); the SwiGLU backward is
-elementwise in JAX; the two weight-gradient GEMMs (``dw13``/``dw2``) stay on XLA
-``ragged_dot`` (a different varlen-k grouping). QuACK covers ~2/3 of the MoE FLOPs.
+SwiGLU, down fwd, and the ``dh``/``dx`` backward matmuls, and — via the varlen-k
+mode — the two weight-gradient GEMMs ``dw13``/``dw2``); the SwiGLU backward is
+elementwise in JAX. Set ``SONIC_CUTE_WGRAD=xla`` to fall back to the XLA
+``ragged_dot`` weight grads for A/B comparison.
 """
 
+import os
 from collections.abc import Callable
 from functools import partial
 
@@ -28,7 +30,16 @@ from levanter.grug._moe.common import (
     _prepare_moe_dispatch,
     _zero_dropped_assignments,
 )
-from levanter.grug._moe.quack_moe_cute import quack_gated_grouped_gemm, quack_grouped_gemm
+from levanter.grug._moe.quack_moe_cute import (
+    quack_gated_grouped_gemm,
+    quack_grouped_gemm,
+    quack_grouped_wgrad_gemm,
+)
+
+# Weight-grad GEMM backend: "quack" (varlen-k grouped GEMM on SM100) or "xla" (ragged_dot).
+_WGRAD_IMPL = os.environ.get("SONIC_CUTE_WGRAD", "quack")
+if _WGRAD_IMPL not in ("quack", "xla"):
+    raise ValueError(f"SONIC_CUTE_WGRAD={_WGRAD_IMPL!r} must be 'quack' or 'xla'")
 
 
 def _interleave_gate_up(moe_w13: jax.Array, moe_dim: int) -> jax.Array:
@@ -59,7 +70,11 @@ def _expert_mlp_bwd(res, dy):
     x_dispatch, w13_il, moe_w2, gu, h, group_sizes, cu = res
     # down backward: dh via QuACK (transposed contraction), dw2 via XLA weight-grad
     dh = quack_grouped_gemm(dy, moe_w2, cu, b_major="k")
-    (dw2,) = jax.vjp(lambda w: ragged_dot(h, w, group_sizes), moe_w2)[1](dy)
+    num_experts = moe_w2.shape[0]
+    if _WGRAD_IMPL == "quack":
+        dw2 = quack_grouped_wgrad_gemm(h, dy, cu, num_experts)
+    else:
+        (dw2,) = jax.vjp(lambda w: ragged_dot(h, w, group_sizes), moe_w2)[1](dy)
     # SwiGLU backward (interleaved gate/up), elementwise
     gate, up = gu[:, 0::2], gu[:, 1::2]
     sg = jax.nn.sigmoid(gate)
@@ -69,7 +84,10 @@ def _expert_mlp_bwd(res, dy):
     d_gu = jnp.stack([dgate, dup], axis=-1).reshape(gu.shape)
     # gate/up backward: dx via QuACK, dw13 via XLA weight-grad
     dx = quack_grouped_gemm(d_gu, w13_il, cu, b_major="k")
-    (dw13_il,) = jax.vjp(lambda w: ragged_dot(x_dispatch, w, group_sizes), w13_il)[1](d_gu)
+    if _WGRAD_IMPL == "quack":
+        dw13_il = quack_grouped_wgrad_gemm(x_dispatch, d_gu, cu, num_experts)
+    else:
+        (dw13_il,) = jax.vjp(lambda w: ragged_dot(x_dispatch, w, group_sizes), w13_il)[1](d_gu)
     # int-typed routing args get float0 zero cotangents
     gs_ct = np.zeros(group_sizes.shape, dtype=jax.dtypes.float0)
     cu_ct = np.zeros(cu.shape, dtype=jax.dtypes.float0)
