@@ -18,6 +18,7 @@ from pathlib import Path
 
 import uvicorn
 from finelog.client import RemoteLogHandler
+from rigging.filesystem import prefix_join
 from rigging.server_auth import TokenVerifier
 from rigging.timing import Duration, ExponentialBackoff, RateLimiter, Timestamp, TokenBucket
 from sqlalchemy import Row
@@ -396,7 +397,7 @@ class Controller:
             if config.peers and config.auth and config.auth.jwt_manager
             else None
         )
-        self._bundle_store = BundleStore(storage_dir=f"{config.remote_state_dir.rstrip('/')}/bundles")
+        self._bundle_store = BundleStore(storage_dir=prefix_join(config.remote_state_dir, "bundles"))
         self._federation = FederationManager(
             build_peers(config.peers, federation_token_provider=federation_token_provider),
             threads=self._threads,

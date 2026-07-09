@@ -11,7 +11,7 @@ from types import SimpleNamespace
 
 import pytest
 from click.testing import CliRunner
-from google.api_core.exceptions import AlreadyExists, NotFound
+from google.api_core.exceptions import AlreadyExists, FailedPrecondition, NotFound
 from iris.cli import cluster as cluster_cli
 from rigging.token_authority import generate_ed25519_keypair, signing_key_from_private_pem
 
@@ -129,6 +129,21 @@ def test_a_secret_holding_something_other_than_a_signing_key_is_an_error(_fake_c
     assert result.exit_code != 0
     assert "does not hold an Ed25519 private key" in result.output
     assert len(secrets.payloads) == 1, "a bad payload must not be papered over with a new version"
+
+
+def test_a_disabled_latest_version_is_an_error_not_a_silent_rotation(_fake_client, existing_key):
+    secrets = _fake_client(_FakeSecretManager([existing_key.private_pem.encode()]))
+
+    def disabled(request):
+        raise FailedPrecondition("version is disabled")
+
+    secrets.access_secret_version = disabled
+
+    result = _run(["--gcp-secret", RESOURCE])
+
+    assert result.exit_code != 0
+    assert "disabled or destroyed" in result.output
+    assert len(secrets.payloads) == 1, "an unreadable key must not be replaced with a fresh identity"
 
 
 def test_reuse_still_grants_the_accessor(_fake_client, existing_key):

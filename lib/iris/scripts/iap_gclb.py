@@ -40,7 +40,8 @@ the whole rollout — or any single stage — is safe to re-run. ``deploy`` runs
 stages in dependency order; the per-stage subcommands (``address``, ``cert``,
 ``backend``, ``iap``, ``frontend``, ``route``, ``grant``, ``firewall``,
 ``token-proxy``, ``finelog``) expose each on its own. ``status`` reports what
-exists and ``teardown`` removes a cluster's backend.
+exists; ``teardown`` removes a cluster's backend and ``finelog-teardown`` a
+finelog's route off-VPC.
 
 The ``firewall`` stage is kept separate and is *not* run by ``deploy`` unless
 ``--with-firewall`` is passed: its allow-rule is a prerequisite for the LB health
@@ -140,6 +141,11 @@ FINELOG_RELAY_SOURCE_RANGES: dict[str, tuple[str, ...]] = {
 # rule (a fixed, un-deletable priority) is flipped from its allow-all default to deny.
 ARMOR_ALLOW_PRIORITY = 1000
 ARMOR_DEFAULT_PRIORITY = 2147483647
+
+# Firewall rule priorities: the allow rule must outrank the deny rule that follows it
+# (a lower number wins), so a denied-by-default port still admits its allowed sources.
+FIREWALL_ALLOW_PRIORITY = 900
+FIREWALL_DENY_PRIORITY = 1000
 
 
 @dataclasses.dataclass(frozen=True)
@@ -489,28 +495,52 @@ def ensure_controller_tag(backend: Backend, *, dry_run: bool) -> None:
     )
 
 
+def _ensure_firewall_rule(
+    *,
+    project: str,
+    name: str,
+    action: str,
+    port: int,
+    source_ranges: str,
+    target_tag: str,
+    priority: int,
+    dry_run: bool,
+) -> None:
+    """Create an INGRESS rule for *port* on the default network if it is missing."""
+    _ensure(
+        f"firewall {name}",
+        _exists(_compute(project, "firewall-rules", "describe", name)),
+        _compute(
+            project,
+            "firewall-rules",
+            "create",
+            name,
+            "--network=default",
+            "--direction=INGRESS",
+            f"--action={action}",
+            f"--rules=tcp:{port}",
+            f"--source-ranges={source_ranges}",
+            f"--target-tags={target_tag}",
+            f"--priority={priority}",
+        ),
+        dry_run=dry_run,
+    )
+
+
 def ensure_allow_firewall(backend: Backend, *, dry_run: bool) -> None:
     """Allow the controller port from the Google front-end / health-check ranges.
 
     Additive: without it the LB health check cannot reach the controller, so the
     backend never becomes healthy.
     """
-    _ensure(
-        f"firewall allow-LB {backend.allow_firewall}",
-        _exists(_compute(backend.project, "firewall-rules", "describe", backend.allow_firewall)),
-        _compute(
-            backend.project,
-            "firewall-rules",
-            "create",
-            backend.allow_firewall,
-            "--network=default",
-            "--direction=INGRESS",
-            "--action=ALLOW",
-            f"--rules=tcp:{CONTROLLER_PORT}",
-            f"--source-ranges={GOOGLE_LB_RANGES}",
-            f"--target-tags={backend.controller_label}",
-            "--priority=900",
-        ),
+    _ensure_firewall_rule(
+        project=backend.project,
+        name=backend.allow_firewall,
+        action="ALLOW",
+        port=CONTROLLER_PORT,
+        source_ranges=GOOGLE_LB_RANGES,
+        target_tag=backend.controller_label,
+        priority=FIREWALL_ALLOW_PRIORITY,
         dry_run=dry_run,
     )
 
@@ -523,22 +553,14 @@ def ensure_deny_firewall(backend: Backend, *, dry_run: bool) -> None:
     task blob fetch) is cut. Apply only after confirming nothing internal needs
     direct ``:{port}`` access.
     """
-    _ensure(
-        f"firewall deny-public {backend.deny_firewall}",
-        _exists(_compute(backend.project, "firewall-rules", "describe", backend.deny_firewall)),
-        _compute(
-            backend.project,
-            "firewall-rules",
-            "create",
-            backend.deny_firewall,
-            "--network=default",
-            "--direction=INGRESS",
-            "--action=DENY",
-            f"--rules=tcp:{CONTROLLER_PORT}",
-            "--source-ranges=0.0.0.0/0",
-            f"--target-tags={backend.controller_label}",
-            "--priority=1000",
-        ),
+    _ensure_firewall_rule(
+        project=backend.project,
+        name=backend.deny_firewall,
+        action="DENY",
+        port=CONTROLLER_PORT,
+        source_ranges="0.0.0.0/0",
+        target_tag=backend.controller_label,
+        priority=FIREWALL_DENY_PRIORITY,
         dry_run=dry_run,
     )
 
@@ -779,6 +801,42 @@ def _proxy_cert_names(frontend: Frontend) -> list[str]:
     )
     raw = (result.stdout or "").replace(";", " ").split()
     return [ref.rsplit("/", 1)[-1] for ref in raw]
+
+
+def _delete_resource(label: str, cmd: Sequence[str], *, dry_run: bool) -> None:
+    """Delete a resource, treating an already-absent one as done."""
+    logger.info("→ deleting %s", label)
+    result = _run([*cmd, "--quiet"], dry_run=dry_run, check=False, capture=True)
+    if not dry_run and result.returncode != 0:
+        logger.info("  (skip: %s missing or already deleted)", label)
+
+
+def remove_proxy_cert(frontend: Frontend, cert: str, *, dry_run: bool) -> None:
+    """Detach *cert* from the shared HTTPS proxy, keeping the others (idempotent).
+
+    A managed cert cannot be deleted while a target proxy still references it.
+    """
+    current = _proxy_cert_names(frontend)
+    if cert not in current:
+        logger.info("✓ cert %s already off proxy %s", cert, frontend.https_proxy)
+        return
+    remaining = [name for name in current if name != cert]
+    if not remaining:
+        raise click.ClickException(
+            f"{cert} is the only cert on {frontend.https_proxy}; removing it would break TLS for every cluster"
+        )
+    logger.info("→ detaching cert %s from proxy %s (certs now: %s)", cert, frontend.https_proxy, ",".join(remaining))
+    _run(
+        _compute(
+            frontend.project,
+            "target-https-proxies",
+            "update",
+            frontend.https_proxy,
+            "--global",
+            f"--ssl-certificates={','.join(remaining)}",
+        ),
+        dry_run=dry_run,
+    )
 
 
 def add_proxy_cert(frontend: Frontend, cert: str, *, dry_run: bool) -> None:
@@ -1098,63 +1156,59 @@ def relay_source_ranges() -> list[str]:
     return ranges
 
 
-def discover_finelog_ip(fb: FinelogBackend) -> str:
+def discover_finelog_ip(finelog: FinelogBackend) -> str:
     """Resolve the finelog VM's internal IP from the label ``finelog deploy`` set."""
     result = _run(
         _compute(
-            fb.project,
+            finelog.project,
             "instances",
             "list",
-            f"--filter=labels.{FINELOG_LABEL_KEY}={fb.vm}",
+            f"--filter=labels.{FINELOG_LABEL_KEY}={finelog.vm}",
             "--format=value(networkInterfaces[0].networkIP)",
         ),
         capture=True,
     )
     values = (result.stdout or "").split()
     if not values:
-        raise click.ClickException(f"no VM labelled {FINELOG_LABEL_KEY}={fb.vm}; run `finelog deploy up {fb.cluster}`")
+        raise click.ClickException(
+            f"no VM labelled {FINELOG_LABEL_KEY}={finelog.vm}; run `finelog deploy up {finelog.cluster}`"
+        )
     if len(values) > 1:
-        raise click.ClickException(f"multiple VMs match {FINELOG_LABEL_KEY}={fb.vm} ({values})")
+        raise click.ClickException(f"multiple VMs match {FINELOG_LABEL_KEY}={finelog.vm} ({values})")
     return values[0]
 
 
-def ensure_finelog_tag(fb: FinelogBackend, *, dry_run: bool) -> None:
+def ensure_finelog_tag(finelog: FinelogBackend, *, dry_run: bool) -> None:
     """Tag the finelog VM so its firewall rules apply to it (idempotent)."""
-    logger.info("→ ensuring network tag %s on finelog VM %s", fb.tag, fb.vm)
+    logger.info("→ ensuring network tag %s on finelog VM %s", finelog.tag, finelog.vm)
     _run(
-        _compute(fb.project, "instances", "add-tags", fb.vm, f"--zone={fb.zone}", f"--tags={fb.tag}"),
+        _compute(
+            finelog.project, "instances", "add-tags", finelog.vm, f"--zone={finelog.zone}", f"--tags={finelog.tag}"
+        ),
         dry_run=dry_run,
     )
 
 
-def ensure_finelog_allow_firewall(fb: FinelogBackend, *, dry_run: bool) -> None:
+def ensure_finelog_allow_firewall(finelog: FinelogBackend, *, dry_run: bool) -> None:
     """Allow the finelog port from inside the VPC and from the Google LB ranges.
 
     Every in-VPC caller — the controller, every GCP worker — reaches finelog directly
     on its internal address, bypassing the load balancer and Cloud Armor entirely.
     The LB ranges carry the health check and the off-VPC relay pushes.
     """
-    _ensure(
-        f"firewall allow-LB {fb.allow_firewall}",
-        _exists(_compute(fb.project, "firewall-rules", "describe", fb.allow_firewall)),
-        _compute(
-            fb.project,
-            "firewall-rules",
-            "create",
-            fb.allow_firewall,
-            "--network=default",
-            "--direction=INGRESS",
-            "--action=ALLOW",
-            f"--rules=tcp:{FINELOG_PORT}",
-            f"--source-ranges={VPC_PRIVATE_RANGE},{GOOGLE_LB_RANGES}",
-            f"--target-tags={fb.tag}",
-            "--priority=900",
-        ),
+    _ensure_firewall_rule(
+        project=finelog.project,
+        name=finelog.allow_firewall,
+        action="ALLOW",
+        port=FINELOG_PORT,
+        source_ranges=f"{VPC_PRIVATE_RANGE},{GOOGLE_LB_RANGES}",
+        target_tag=finelog.tag,
+        priority=FIREWALL_ALLOW_PRIORITY,
         dry_run=dry_run,
     )
 
 
-def ensure_finelog_deny_firewall(fb: FinelogBackend, *, dry_run: bool) -> None:
+def ensure_finelog_deny_firewall(finelog: FinelogBackend, *, dry_run: bool) -> None:
     """Deny every other source to the finelog port.
 
     Unlike the controller's deny rule this cuts nothing that works today: the allow
@@ -1162,27 +1216,19 @@ def ensure_finelog_deny_firewall(fb: FinelogBackend, *, dry_run: bool) -> None:
     public address, which no rule opens. It stops a later broad allow from reaching
     finelog.
     """
-    _ensure(
-        f"firewall deny-public {fb.deny_firewall}",
-        _exists(_compute(fb.project, "firewall-rules", "describe", fb.deny_firewall)),
-        _compute(
-            fb.project,
-            "firewall-rules",
-            "create",
-            fb.deny_firewall,
-            "--network=default",
-            "--direction=INGRESS",
-            "--action=DENY",
-            f"--rules=tcp:{FINELOG_PORT}",
-            "--source-ranges=0.0.0.0/0",
-            f"--target-tags={fb.tag}",
-            "--priority=1000",
-        ),
+    _ensure_firewall_rule(
+        project=finelog.project,
+        name=finelog.deny_firewall,
+        action="DENY",
+        port=FINELOG_PORT,
+        source_ranges="0.0.0.0/0",
+        target_tag=finelog.tag,
+        priority=FIREWALL_DENY_PRIORITY,
         dry_run=dry_run,
     )
 
 
-def ensure_armor_policy(fb: FinelogBackend, source_ranges: Sequence[str], *, dry_run: bool) -> None:
+def ensure_armor_policy(finelog: FinelogBackend, source_ranges: Sequence[str], *, dry_run: bool) -> None:
     """Admit only *source_ranges* at the edge of the finelog backend, denying the rest.
 
     Reconciling: re-running with a wider (or narrower) set rewrites the allow rule in
@@ -1197,14 +1243,14 @@ def ensure_armor_policy(fb: FinelogBackend, source_ranges: Sequence[str], *, dry
         raise click.ClickException("no relay source ranges; a policy denying everything would strand the relay")
 
     _ensure(
-        f"Cloud Armor policy {fb.armor_policy}",
-        _exists(_compute(fb.project, "security-policies", "describe", fb.armor_policy)),
+        f"Cloud Armor policy {finelog.armor_policy}",
+        _exists(_compute(finelog.project, "security-policies", "describe", finelog.armor_policy)),
         _compute(
-            fb.project,
+            finelog.project,
             "security-policies",
             "create",
-            fb.armor_policy,
-            f"--description=relay sources admitted to {fb.vm}",
+            finelog.armor_policy,
+            f"--description=relay sources admitted to {finelog.vm}",
         ),
         dry_run=dry_run,
     )
@@ -1212,66 +1258,66 @@ def ensure_armor_policy(fb: FinelogBackend, source_ranges: Sequence[str], *, dry
     ranges = ",".join(source_ranges)
     rule_exists = _exists(
         _compute(
-            fb.project,
+            finelog.project,
             "security-policies",
             "rules",
             "describe",
             str(ARMOR_ALLOW_PRIORITY),
-            f"--security-policy={fb.armor_policy}",
+            f"--security-policy={finelog.armor_policy}",
         )
     )
     verb = "update" if rule_exists else "create"
-    logger.info("→ Cloud Armor %s: %s allow rule %d for %s", fb.armor_policy, verb, ARMOR_ALLOW_PRIORITY, ranges)
+    logger.info("→ Cloud Armor %s: %s allow rule %d for %s", finelog.armor_policy, verb, ARMOR_ALLOW_PRIORITY, ranges)
     _run(
         _compute(
-            fb.project,
+            finelog.project,
             "security-policies",
             "rules",
             verb,
             str(ARMOR_ALLOW_PRIORITY),
-            f"--security-policy={fb.armor_policy}",
+            f"--security-policy={finelog.armor_policy}",
             f"--src-ip-ranges={ranges}",
             "--action=allow",
         ),
         dry_run=dry_run,
     )
 
-    logger.info("→ Cloud Armor %s: default rule -> deny-403", fb.armor_policy)
+    logger.info("→ Cloud Armor %s: default rule -> deny-403", finelog.armor_policy)
     _run(
         _compute(
-            fb.project,
+            finelog.project,
             "security-policies",
             "rules",
             "update",
             str(ARMOR_DEFAULT_PRIORITY),
-            f"--security-policy={fb.armor_policy}",
+            f"--security-policy={finelog.armor_policy}",
             "--action=deny-403",
         ),
         dry_run=dry_run,
     )
 
-    logger.info("→ attaching Cloud Armor %s to backend %s", fb.armor_policy, fb.service)
+    logger.info("→ attaching Cloud Armor %s to backend %s", finelog.armor_policy, finelog.service)
     _run(
         _compute(
-            fb.project,
+            finelog.project,
             "backend-services",
             "update",
-            fb.service,
+            finelog.service,
             "--global",
-            f"--security-policy={fb.armor_policy}",
+            f"--security-policy={finelog.armor_policy}",
         ),
         dry_run=dry_run,
     )
 
 
-def ensure_finelog_route(frontend: Frontend, fb: FinelogBackend, *, dry_run: bool) -> None:
-    """Route ``fb.domain`` to the finelog backend service in the shared URL map."""
-    if not fb.domain:
-        raise click.ClickException(f"--domain is required to route finelog {fb.vm}")
-    if _url_map_has_matcher(frontend, fb.path_matcher):
-        logger.info("✓ host rule %s -> %s already in %s", fb.domain, fb.service, frontend.url_map)
+def ensure_finelog_route(frontend: Frontend, finelog: FinelogBackend, *, dry_run: bool) -> None:
+    """Route ``finelog.domain`` to the finelog backend service in the shared URL map."""
+    if not finelog.domain:
+        raise click.ClickException(f"--domain is required to route finelog {finelog.vm}")
+    if _url_map_has_matcher(frontend, finelog.path_matcher):
+        logger.info("✓ host rule %s -> %s already in %s", finelog.domain, finelog.service, frontend.url_map)
         return
-    logger.info("→ routing %s -> %s in %s", fb.domain, fb.service, frontend.url_map)
+    logger.info("→ routing %s -> %s in %s", finelog.domain, finelog.service, frontend.url_map)
     _run(
         _compute(
             frontend.project,
@@ -1279,12 +1325,84 @@ def ensure_finelog_route(frontend: Frontend, fb: FinelogBackend, *, dry_run: boo
             "add-path-matcher",
             frontend.url_map,
             "--global",
-            f"--path-matcher-name={fb.path_matcher}",
-            f"--default-service={fb.service}",
-            f"--new-hosts={fb.domain}",
+            f"--path-matcher-name={finelog.path_matcher}",
+            f"--default-service={finelog.service}",
+            f"--new-hosts={finelog.domain}",
         ),
         dry_run=dry_run,
     )
+
+
+def remove_finelog(frontend: Frontend, finelog: FinelogBackend, *, dry_run: bool) -> None:
+    """Delete a finelog's LB resources, in the reverse of the order that built them.
+
+    The finelog VM itself is owned by ``finelog deploy`` and is left running; only its
+    route off-VPC is withdrawn. Each delete tolerates an already-absent resource, so a
+    partial rollout can be cleaned up by re-running.
+    """
+    if not finelog.domain:
+        raise click.ClickException(f"--domain is required to tear down finelog {finelog.vm}")
+
+    # The URL map and the HTTPS proxy hold the last references; drop them first, or the
+    # backend service and cert refuse to delete.
+    if _url_map_has_matcher(frontend, finelog.path_matcher):
+        _delete_resource(
+            f"host rule {finelog.domain}",
+            _compute(
+                frontend.project,
+                "url-maps",
+                "remove-host-rule",
+                frontend.url_map,
+                "--global",
+                f"--host={finelog.domain}",
+            ),
+            dry_run=dry_run,
+        )
+        _delete_resource(
+            f"path matcher {finelog.path_matcher}",
+            _compute(
+                frontend.project,
+                "url-maps",
+                "remove-path-matcher",
+                frontend.url_map,
+                "--global",
+                f"--path-matcher-name={finelog.path_matcher}",
+            ),
+            dry_run=dry_run,
+        )
+    remove_proxy_cert(frontend, finelog.cert, dry_run=dry_run)
+
+    for label, cmd in (
+        (
+            f"backend service {finelog.service}",
+            _compute(finelog.project, "backend-services", "delete", finelog.service, "--global"),
+        ),
+        (
+            f"Cloud Armor policy {finelog.armor_policy}",
+            _compute(finelog.project, "security-policies", "delete", finelog.armor_policy),
+        ),
+        (
+            f"health check {finelog.health_check}",
+            _compute(finelog.project, "health-checks", "delete", finelog.health_check, "--global"),
+        ),
+        (
+            f"NEG {finelog.neg}",
+            _compute(finelog.project, "network-endpoint-groups", "delete", finelog.neg, f"--zone={finelog.zone}"),
+        ),
+        (
+            f"firewall {finelog.deny_firewall}",
+            _compute(finelog.project, "firewall-rules", "delete", finelog.deny_firewall),
+        ),
+        (
+            f"firewall {finelog.allow_firewall}",
+            _compute(finelog.project, "firewall-rules", "delete", finelog.allow_firewall),
+        ),
+        (
+            f"managed SSL cert {finelog.cert}",
+            _compute(finelog.project, "ssl-certificates", "delete", finelog.cert, "--global"),
+        ),
+    ):
+        _delete_resource(label, cmd, dry_run=dry_run)
 
 
 def grant_access(backend: Backend, member: str, *, dry_run: bool) -> None:
@@ -1622,41 +1740,59 @@ def finelog_cmd(
     and re-run; the allow rule is rewritten in place.
     """
     fe = Frontend(name=frontend_name, project=project)
-    fb = FinelogBackend(cluster=cluster, project=project, zone=zone, domain=domain)
+    finelog = FinelogBackend(cluster=cluster, project=project, zone=zone, domain=domain)
     ranges = relay_source_ranges()
-    vm_ip = finelog_ip or discover_finelog_ip(fb)
+    vm_ip = finelog_ip or discover_finelog_ip(finelog)
 
-    _ensure_managed_cert(fb.project, fb.cert, domain, dry_run=dry_run)
+    _ensure_managed_cert(finelog.project, finelog.cert, domain, dry_run=dry_run)
     _ensure_neg_backend(
-        project=fb.project,
-        zone=fb.zone,
-        neg=fb.neg,
-        health_check=fb.health_check,
-        service=fb.service,
-        instance=fb.vm,
+        project=finelog.project,
+        zone=finelog.zone,
+        neg=finelog.neg,
+        health_check=finelog.health_check,
+        service=finelog.service,
+        instance=finelog.vm,
         ip=vm_ip,
         port=FINELOG_PORT,
         dry_run=dry_run,
     )
-    ensure_armor_policy(fb, ranges, dry_run=dry_run)
-    ensure_finelog_tag(fb, dry_run=dry_run)
-    ensure_finelog_allow_firewall(fb, dry_run=dry_run)
-    ensure_finelog_deny_firewall(fb, dry_run=dry_run)
+    ensure_armor_policy(finelog, ranges, dry_run=dry_run)
+    ensure_finelog_tag(finelog, dry_run=dry_run)
+    ensure_finelog_allow_firewall(finelog, dry_run=dry_run)
+    ensure_finelog_deny_firewall(finelog, dry_run=dry_run)
 
     reserved_ip = ensure_address(fe, dry_run=dry_run)
-    ensure_finelog_route(fe, fb, dry_run=dry_run)
-    add_proxy_cert(fe, fb.cert, dry_run=dry_run)
+    ensure_finelog_route(fe, finelog, dry_run=dry_run)
+    add_proxy_cert(fe, finelog.cert, dry_run=dry_run)
 
     click.echo()
-    click.echo(f"finelog {fb.vm} fronted by {frontend_name}'s load balancer.")
+    click.echo(f"finelog {finelog.vm} fronted by {frontend_name}'s load balancer.")
     click.echo(f"  Shared IP     : {reserved_ip}")
     click.echo(f"  Domain        : {domain}  (ensure a DNS A record -> {reserved_ip})")
     click.echo(f"  Relay address : https://{domain}")
-    click.echo(f"  Admitted      : {', '.join(ranges)}  (Cloud Armor {fb.armor_policy}; everything else 403)")
+    click.echo(f"  Admitted      : {', '.join(ranges)}  (Cloud Armor {finelog.armor_policy}; everything else 403)")
     click.echo()
-    click.echo(f"The managed cert {fb.cert} stays PROVISIONING until that A record resolves.")
+    click.echo(f"The managed cert {finelog.cert} stays PROVISIONING until that A record resolves.")
     click.echo(f"Set `finelog.relay_address: https://{domain}` on each relaying cluster's iris config,")
     click.echo(f"and add its public key to a `jwt` auth layer in lib/finelog/config/{cluster}.yaml.")
+
+
+@cli.command("finelog-teardown")
+@_common_options
+@_frontend_option
+@click.option("--domain", required=True, help="finelog domain whose route, cert and backend should be removed")
+def finelog_teardown_cmd(cluster: str, project: str, zone: str, dry_run: bool, frontend_name: str, domain: str) -> None:
+    """Withdraw a finelog's route off-VPC: its host rule, cert, backend, armor policy and firewall.
+
+    The finelog VM keeps running and stays reachable in-VPC; only relaying clusters lose
+    their path to it. Inverse of the ``finelog`` stage.
+    """
+    fe = Frontend(name=frontend_name, project=project)
+    finelog = FinelogBackend(cluster=cluster, project=project, zone=zone, domain=domain)
+    remove_finelog(fe, finelog, dry_run=dry_run)
+    click.echo()
+    click.echo(f"finelog {finelog.vm} is no longer reachable at https://{domain}.")
+    click.echo(f"The VM keeps serving in-VPC callers; `finelog deploy down {cluster}` removes it.")
 
 
 @cli.command()
@@ -1666,11 +1802,20 @@ def status(cluster: str, project: str, zone: str, dry_run: bool, frontend_name: 
     """Report which resources exist for the shared frontend and the cluster's backend."""
     fe = Frontend(name=frontend_name, project=project)
     backend = Backend(cluster=cluster, project=project, zone=zone)
+    finelog = FinelogBackend(cluster=cluster, project=project, zone=zone)
     frontend_checks = [
         ("static IP", _compute(project, "addresses", "describe", fe.address, "--global")),
         ("URL map", _compute(project, "url-maps", "describe", fe.url_map, "--global")),
         ("HTTPS proxy", _compute(project, "target-https-proxies", "describe", fe.https_proxy, "--global")),
         ("forwarding rule", _compute(project, "forwarding-rules", "describe", fe.forwarding_rule, "--global")),
+    ]
+    finelog_checks = [
+        ("allow-LB firewall", _compute(project, "firewall-rules", "describe", finelog.allow_firewall)),
+        ("deny-public firewall", _compute(project, "firewall-rules", "describe", finelog.deny_firewall)),
+        ("NEG", _compute(project, "network-endpoint-groups", "describe", finelog.neg, f"--zone={zone}")),
+        ("health check", _compute(project, "health-checks", "describe", finelog.health_check, "--global")),
+        ("backend service", _compute(project, "backend-services", "describe", finelog.service, "--global")),
+        ("Cloud Armor policy", _compute(project, "security-policies", "describe", finelog.armor_policy)),
     ]
     backend_checks = [
         ("allow-LB firewall", _compute(project, "firewall-rules", "describe", backend.allow_firewall)),
@@ -1703,6 +1848,14 @@ def status(cluster: str, project: str, zone: str, dry_run: bool, frontend_name: 
     audience = discover_signed_header_audience(backend)
     if audience:
         click.echo(f"  iap jwt aud : {audience}  (auth.iap.signed_header_audience)")
+
+    click.echo(f"finelog {finelog.vm} (IAP-free; relay ingress):")
+    for label, describe in finelog_checks:
+        click.echo(f"  [{'OK ' if _exists(describe) else 'off '}] {label}")
+    has_finelog_route = _url_map_has_matcher(fe, finelog.path_matcher)
+    click.echo(f"  [{'OK ' if has_finelog_route else 'off '}] host route in {fe.url_map}")
+    if has_finelog_route:
+        click.echo(f"  relay sources : {', '.join(relay_source_ranges())}")
 
 
 @cli.command()

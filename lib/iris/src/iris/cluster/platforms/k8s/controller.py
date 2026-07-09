@@ -148,9 +148,9 @@ def configure_client_s3(config: IrisClusterConfig) -> None:
 def _projects_controller_env_secret(config: IrisClusterConfig) -> bool:
     """Whether the cluster populates the iris-controller-env Secret.
 
-    True exactly when the cluster carries its own signing key. The Deployment adds the
-    ``envFrom`` reference and teardown removes the Secret on this same predicate, so
-    the two cannot drift into an envFrom dereferencing a Secret that was never created.
+    True exactly when the cluster carries its own signing key. Creation, the Deployment's
+    ``envFrom`` reference, and teardown share this one predicate, so an ``envFrom`` can
+    never dereference a Secret that was not created.
     """
     return bool(config.auth and config.auth.signing_key)
 

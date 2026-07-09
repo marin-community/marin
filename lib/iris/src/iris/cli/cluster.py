@@ -302,9 +302,11 @@ def _split_secret_resource(resource: str) -> tuple[str, str]:
 def _latest_signing_key(client, resource: str) -> tuple[SigningKey, str] | None:
     """The key held by `resource`'s latest enabled version, with that version's name.
 
-    None when the secret does not exist or holds no usable version. A payload that
-    is not an Ed25519 private key is an error: it means `resource` is not a signing
-    key secret, and overwriting it would be the wrong repair.
+    None only when the secret does not exist, which is the one case where minting is
+    safe. Every other failure to read it is an error: a payload that is not an Ed25519
+    private key means `resource` is not a signing key secret, and a latest version that
+    is disabled or destroyed means the key is there but unreadable. Minting in either
+    case would rotate the cluster's identity behind the operator's back.
     """
     from google.api_core.exceptions import (  # noqa: PLC0415  # optional dep
         FailedPrecondition,
@@ -312,15 +314,20 @@ def _latest_signing_key(client, resource: str) -> tuple[SigningKey, str] | None:
         PermissionDenied,
     )
 
+    rotation_warning = (
+        "Minting a new key would rotate the cluster's identity and invalidate every token it has "
+        "issued; pass --rotate only if that is what you want."
+    )
     try:
         version = client.access_secret_version(request={"name": f"{resource}/versions/latest"})
-    except (NotFound, FailedPrecondition):
+    except NotFound:
         return None
-    except PermissionDenied as exc:
+    except FailedPrecondition as exc:
         raise click.ClickException(
-            f"No permission to read {resource}. Minting a new key would rotate the cluster's "
-            "identity and invalidate every token it has issued; pass --rotate only if that is what you want."
+            f"{resource}'s latest version is disabled or destroyed. Re-enable it, or {rotation_warning}"
         ) from exc
+    except PermissionDenied as exc:
+        raise click.ClickException(f"No permission to read {resource}. {rotation_warning}") from exc
 
     try:
         key = signing_key_from_private_pem(version.payload.data.decode("utf-8"))
