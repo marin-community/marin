@@ -3,6 +3,7 @@
 
 import contextvars
 import json
+import logging
 import os
 import threading
 from pathlib import Path
@@ -715,6 +716,83 @@ def test_runner_preserves_underlying_step_exception(tmp_path: Path):
     assert "Step failed: failing_step" in str(step_failure)
     assert isinstance(step_failure.__cause__, ValueError)
     assert "sentinel step failure" in str(step_failure.__cause__)
+
+
+# ---------------------------------------------------------------------------
+# SPMD / secondary-task warning (#7080)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "task_id, expected",
+    [
+        ("/alice/train/0", 0),
+        ("/alice/train/3", 3),
+        ("/alice/train/3:2", 3),  # ":<attempt>" suffix is stripped
+        ("/alice/train", None),  # a job name, not a task
+        ("/alice/train/notanint", None),  # trailing component not an integer
+        ("", None),
+    ],
+)
+def test_iris_task_index_parses_wire_task_id(monkeypatch, task_id, expected):
+    monkeypatch.setenv("IRIS_TASK_ID", task_id)
+    assert step_runner_module._iris_task_index() == expected
+
+
+def test_iris_task_index_none_when_unset(monkeypatch):
+    monkeypatch.delenv("IRIS_TASK_ID", raising=False)
+    assert step_runner_module._iris_task_index() is None
+
+
+def test_runner_warns_when_secondary_spmd_task(tmp_path, monkeypatch, caplog):
+    """A non-zero Iris task must emit a loud warning before running (#7080).
+
+    The warning is best-effort: it flags a likely-unintended SPMD launch (where
+    the per-step distributed lock would deadlock the collective) but does not
+    block the step, which still runs.
+    """
+    executed: list[str] = []
+    step = _recording_step("only", (tmp_path / "only").as_posix(), executed)
+
+    monkeypatch.setenv("IRIS_TASK_ID", "/alice/train/3")
+    monkeypatch.setenv("IRIS_NUM_TASKS", "16")
+
+    with caplog.at_level(logging.WARNING):
+        StepRunner().run([step])
+
+    assert executed == ["only"]  # best-effort: the step still runs
+    messages = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+    assert any("Iris task index 3" in m and "IRIS_NUM_TASKS=16" in m for m in messages)
+    assert any("DEADLOCK" in m for m in messages)
+
+
+def test_runner_no_warning_for_task_zero(tmp_path, monkeypatch, caplog):
+    """Task index 0 (the lock winner / single driver) must not warn."""
+    executed: list[str] = []
+    step = _recording_step("only", (tmp_path / "only").as_posix(), executed)
+
+    monkeypatch.setenv("IRIS_TASK_ID", "/alice/train/0")
+    monkeypatch.setenv("IRIS_NUM_TASKS", "16")
+
+    with caplog.at_level(logging.WARNING):
+        StepRunner().run([step])
+
+    assert executed == ["only"]
+    assert not any("Iris task index" in r.getMessage() for r in caplog.records)
+
+
+def test_runner_no_warning_outside_iris(tmp_path, monkeypatch, caplog):
+    """A plain (non-Iris) run has no task-id env var and must not warn."""
+    executed: list[str] = []
+    step = _recording_step("only", (tmp_path / "only").as_posix(), executed)
+
+    monkeypatch.delenv("IRIS_TASK_ID", raising=False)
+
+    with caplog.at_level(logging.WARNING):
+        StepRunner().run([step])
+
+    assert executed == ["only"]
+    assert not any("Iris task index" in r.getMessage() for r in caplog.records)
 
 
 # ---------------------------------------------------------------------------

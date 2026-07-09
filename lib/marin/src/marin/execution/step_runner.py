@@ -56,10 +56,79 @@ from marin.utilities.json_encoder import CustomJsonEncoder
 
 logger = logging.getLogger(__name__)
 
+# Iris injects these into every task's environment (see
+# ``iris.cluster.runtime.env`` / ``iris.cluster.client.job_info``). Read them
+# directly rather than importing iris so the core executor keeps a light import
+# footprint and no import-time coupling to iris's proto machinery (#7080).
+IRIS_TASK_ID_ENV = "IRIS_TASK_ID"
+IRIS_NUM_TASKS_ENV = "IRIS_NUM_TASKS"
+
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+def _iris_task_index() -> int | None:
+    """This process's 0-based Iris task index, or ``None`` when not an Iris task.
+
+    ``IRIS_TASK_ID`` is a wire task id ``/user/job/<index>`` with an optional
+    ``:<attempt>`` suffix (e.g. ``/alice/train/3:2`` -> index 3). Best-effort:
+    returns ``None`` when the var is unset or its trailing component is not an
+    integer.
+    """
+    raw = os.environ.get(IRIS_TASK_ID_ENV)
+    if not raw:
+        return None
+    task_part = raw.rsplit(":", 1)[0]  # drop any ":<attempt>" suffix
+    last = task_part.rsplit("/", 1)[-1]
+    try:
+        return int(last)
+    except ValueError:
+        return None
+
+
+def _iris_num_tasks() -> int:
+    """Total tasks in this Iris job (``IRIS_NUM_TASKS``); 1 when unset/unparseable."""
+    try:
+        return int(os.environ.get(IRIS_NUM_TASKS_ENV, "1"))
+    except ValueError:
+        return 1
+
+
+def _warn_if_secondary_spmd_task() -> None:
+    """Loudly warn when the executor starts as a non-zero Iris task (best-effort).
+
+    In an SPMD launch -- every rank runs the same ``ExecutorStep`` (e.g. a
+    multi-host Levanter training step launched under ``srun``) -- the executor's
+    per-step distributed lock is won by exactly one rank. The other ranks lose
+    the lock race and spin, so they never enter the step body and never join the
+    JAX multi-process collective; the lock winner then blocks forever at the
+    barrier and the job deadlocks (marin-community/marin#7080).
+
+    This only reads env vars and never blocks the run; it flags a launch mode the
+    user probably did not intend so they can submit a single driver task, or run
+    the step directly on every rank instead of through the executor.
+    """
+    task_index = _iris_task_index()
+    if task_index is None or task_index == 0:
+        return
+    num_tasks = _iris_num_tasks()
+    logger.warning(
+        "\n"
+        "================================ marin executor ================================\n"
+        "StepRunner is starting as Iris task index %d (IRIS_NUM_TASKS=%d).\n"
+        "The executor's per-step distributed lock lets only ONE task run each step, so\n"
+        "this task will lose the lock race and spin without entering the step body. If a\n"
+        "step launches a multi-process/SPMD collective (e.g. a multi-host Levanter train\n"
+        "step calling jax.distributed.initialize()), the ranks that never enter the step\n"
+        "will not join the collective and the job will DEADLOCK (marin-community/marin#7080).\n"
+        "If you meant an SPMD run, launch the step directly on every rank instead of through\n"
+        "the executor; if you meant a single-driver run, submit only task 0.\n"
+        "================================================================================",
+        task_index,
+        num_tasks,
+    )
 
 
 def _write_executor_info(step: StepSpec) -> None:
@@ -184,6 +253,10 @@ class StepRunner:
         # skipped when the driver (or a wrapping app) already installed handlers.
         if not logging.getLogger().handlers:
             configure_logging(level=logging.INFO)
+
+        # SPMD launches (every rank runs the executor) deadlock on the per-step
+        # distributed lock; warn loudly before doing any work (#7080).
+        _warn_if_secondary_spmd_task()
 
         max_workers = max_concurrent or 8
         if max_workers < 1:
