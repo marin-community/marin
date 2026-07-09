@@ -42,9 +42,30 @@ REGION_PREFIX = "gs://marin-eu-west4"
 DCLM_BASELINE_100M_CACHE = f"{REGION_PREFIX}/tokenized/dclm_baseline_100m_llama3-f42a23"
 DEFAULT_VERSION = "2026.07.09"
 DEFAULT_NUM_TRAIN_STEPS = 20
-DEFAULT_OVERHEAD_FACTOR = 2.0
+DEFAULT_OVERHEAD_FACTOR = 1.0
 DEFAULT_HBM_UTILIZATION = 1.0
+STUDY_ID = "reps80g-nosave"
 WANDB_GROUP_PREFIX = "coral-batch-config-study"
+TPU_HOST_RAM = "80g"
+
+TPUS = ("v5litepod-4", "v5litepod-8", "v6e-4")
+BATCH_SIZES = (128, 256, 512)
+REPLICATES = (1, 2, 3)
+
+llama_2_4b = LlamaConfig(
+    max_seq_len=1024,
+    hidden_dim=2048,
+    intermediate_dim=8192,
+    num_heads=16,
+    num_kv_heads=16,
+    num_layers=28,
+)
+
+
+@dataclass(frozen=True)
+class ModelSpec:
+    name: str
+    model: LlamaConfig
 
 
 @dataclass(frozen=True)
@@ -54,6 +75,7 @@ class StudyCase:
     model_name: str
     model: LlamaConfig
     batch_size: int
+    replicate: int
 
 
 @dataclass(frozen=True)
@@ -68,15 +90,31 @@ class CaseEstimate:
     gradient_accumulation: int
 
 
-CASES: tuple[StudyCase, ...] = (
-    StudyCase("llama150m-v5litepod4-bs256", "v5litepod-4", "llama150m", llama_150m, 256),
-    StudyCase("llama600m-v5litepod4-bs128", "v5litepod-4", "llama600m", llama_600m, 128),
-    StudyCase("llama600m-v5litepod8-bs128", "v5litepod-8", "llama600m", llama_600m, 128),
-    StudyCase("llama600m-v5litepod8-bs256", "v5litepod-8", "llama600m", llama_600m, 256),
-    StudyCase("llama600m-v6e4-bs128", "v6e-4", "llama600m", llama_600m, 128),
-    StudyCase("llama600m-v6e4-bs256", "v6e-4", "llama600m", llama_600m, 256),
-    StudyCase("llama600m-v6e8-bs256", "v6e-8", "llama600m", llama_600m, 256),
-    StudyCase("llama600m-v6e8-bs512", "v6e-8", "llama600m", llama_600m, 512),
+MODEL_SPECS: tuple[ModelSpec, ...] = (
+    ModelSpec("llama150m", llama_150m),
+    ModelSpec("llama600m", llama_600m),
+    ModelSpec("llama2p4b", llama_2_4b),
+)
+
+
+def _case_name(model_name: str, tpu: str, batch_size: int, replicate: int) -> str:
+    tpu_name = tpu.replace("v5litepod-", "v5litepod").replace("v6e-", "v6e")
+    return f"{model_name}-{tpu_name}-bs{batch_size}-r{replicate}"
+
+
+CASES: tuple[StudyCase, ...] = tuple(
+    StudyCase(
+        _case_name(model_spec.name, tpu, batch_size, replicate),
+        tpu,
+        model_spec.name,
+        model_spec.model,
+        batch_size,
+        replicate,
+    )
+    for tpu in TPUS
+    for batch_size in BATCH_SIZES
+    for model_spec in MODEL_SPECS
+    for replicate in REPLICATES
 )
 
 
@@ -150,10 +188,10 @@ def build_case(
 ) -> ArtifactStep[LevanterCheckpoint]:
     """Build one training artifact with estimated batch settings applied."""
     estimate = estimate_case(case, overhead_factor=overhead_factor, hbm_utilization=hbm_utilization)
-    run_id = f"coral-batch-config-{case.name}-{version}"
+    run_id = f"coral-batch-config-{STUDY_ID}-{case.name}-{version}"
     dataset = dclm_baseline_100m_europe_west4()
     base = train_lm(
-        name=f"checkpoints/coral/batch-config-study/{case.name}",
+        name=f"checkpoints/coral/batch-config-study-{STUDY_ID}/{case.name}",
         version=version,
         model=case.model,
         optimizer=AdamConfig(learning_rate=6e-4, weight_decay=0.1),
@@ -163,24 +201,26 @@ def build_case(
         num_train_steps=num_train_steps,
         z_loss_weight=None,
         evals=None,
-        resources=ResourceConfig.with_tpu(case.tpu, regions=[REGION]),
+        resources=ResourceConfig.with_tpu(case.tpu, regions=[REGION], ram=TPU_HOST_RAM),
         wandb_project=wandb_project,
-        wandb_group=f"{WANDB_GROUP_PREFIX}-{version}",
+        wandb_group=f"{WANDB_GROUP_PREFIX}-{STUDY_ID}-{version}",
         run_id=run_id,
         tags=[
             "coral",
             "batch-config-study",
+            STUDY_ID,
             "dclm-baseline-100m-europe-west4",
             case.tpu,
             case.model_name,
             f"batch-{case.batch_size}",
+            f"replicate-{case.replicate}",
             f"per-device-parallelism-{estimate.per_device_parallelism}",
             f"gradient-accumulation-{estimate.gradient_accumulation}",
             f"estimated-hbm-gib-{_gib(estimate.total_bytes):.1f}",
         ],
         env_vars=_training_env(wandb_project),
     )
-    return _with_per_device_parallelism(base, estimate.per_device_parallelism)
+    return _with_study_overrides(base, estimate.per_device_parallelism)
 
 
 def build(
@@ -206,13 +246,22 @@ def build(
     ]
 
 
-def _with_per_device_parallelism(
+def _with_study_overrides(
     base: ArtifactStep[LevanterCheckpoint], per_device_parallelism: int
 ) -> ArtifactStep[LevanterCheckpoint]:
     def build_config(ctx):
         pod_config = base.build_config(ctx)
-        trainer = replace(pod_config.train_config.trainer, per_device_parallelism=per_device_parallelism)
-        train_config = replace(pod_config.train_config, trainer=trainer)
+        trainer = replace(
+            pod_config.train_config.trainer,
+            per_device_parallelism=per_device_parallelism,
+            checkpointer=None,
+        )
+        train_config = replace(
+            pod_config.train_config,
+            trainer=trainer,
+            hf_save_path=None,
+            hf_save_steps=None,
+        )
         return replace(pod_config, train_config=train_config)
 
     return ArtifactStep(
@@ -266,17 +315,17 @@ def _print_plan(
     print()
     print(
         "| case | tpu | model | batch | params | estimate GiB | capacity GiB | "
-        "per_device_parallelism | gradient_accumulation | run id |"
+        "per_device_parallelism | gradient_accumulation | replicate | run id |"
     )
-    print("|---|---:|---:|---:|---:|---:|---:|---:|---:|---|")
+    print("|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|")
     for case in _selected_cases(case_names):
         estimate = estimate_case(case, overhead_factor=overhead_factor, hbm_utilization=hbm_utilization)
-        run_id = f"coral-batch-config-{case.name}-{version}"
+        run_id = f"coral-batch-config-{STUDY_ID}-{case.name}-{version}"
         print(
             f"| {case.name} | {case.tpu} | {case.model_name} | {case.batch_size} | "
             f"{estimate.parameter_count:,} | {_gib(estimate.total_bytes):.2f} | "
             f"{_gib(estimate.hbm_capacity_bytes):.2f} | {estimate.per_device_parallelism} | "
-            f"{estimate.gradient_accumulation} | {run_id} |"
+            f"{estimate.gradient_accumulation} | {case.replicate} | {run_id} |"
         )
 
 
