@@ -33,6 +33,7 @@ import math
 import os
 from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 
 import pyarrow.parquet as pq
 from fray import ResourceConfig
@@ -334,37 +335,42 @@ def _size_tag(target_total_tokens_b: float) -> str:
     return f"{int(tb)}b" if tb == int(tb) else f"{tb:g}b"
 
 
-def _sample_root(target_total_tokens_b: float, fractions: dict[str, float]) -> str:
+def _sample_root(target_total_tokens_b: float, sample_step_hashes: Sequence[str]) -> str:
     """Per-size output root ``{MARIN_PREFIX}/datakit/sample_{tag}_{hash}``.
 
-    ``hash`` is a deterministic digest of the token target and every source's
-    sample fraction, so a testbed size is content-addressed: change the target,
-    the source set, or any source's token count (which shifts the fractions) and
-    the whole sample lands at a fresh root. All sources for a size share the one
-    root and nest under it by name (``.../sample_1t_<hash>/<source>/``).
+    ``hash`` digests the token target plus every source's sample-step identity
+    (``StepSpec.name_with_hash``). A sample step already hashes its
+    ``sample_fraction`` and its ``normalized`` dependency, so seeding the root
+    with those identities makes the size fully content-addressed: change the
+    target, the source set, a source's token count (shifts a fraction), or a
+    source's normalize recipe (changes its dep hash) and the whole sample lands
+    at a fresh root. All sources for a size share the one root and nest under it
+    by name (``.../sample_1t_<hash>/<source>/``).
+
+    We fold the sample-step identity into the *root* rather than the per-source
+    path so the flat ``sample_<tag>_<hash>/<source>/`` layout is preserved while
+    still closing the stale-shard hole ``override_output_path`` would otherwise
+    open — it pins each sample to a fixed path, bypassing the step's own hash.
     """
-    key = repr((round(target_total_tokens_b, 6), tuple(sorted((n, round(f, 12)) for n, f in fractions.items()))))
+    key = repr((round(target_total_tokens_b, 6), tuple(sorted(sample_step_hashes))))
     digest = hashlib.sha256(key.encode()).hexdigest()[:8]
     return f"{marin_prefix()}/datakit/sample_{_size_tag(target_total_tokens_b)}_{digest}"
 
 
-def _sample_step_for(
-    src: DatakitSource,
-    normalized: StepSpec,
-    sample_fraction: float,
-    output_root: str,
-) -> StepSpec:
-    """Per-source post-normalize sampler. Copies first ceil(N * fraction) shards.
+def _sample_step_for(src: DatakitSource, normalized: StepSpec, sample_fraction: float) -> StepSpec:
+    """Per-source post-normalize sampler (bare; output routing applied later).
 
-    Step name stays ``data/datakit/normalized/{src.name}`` (consumers map
-    sources by step name), while the data is routed under the shared per-size
-    ``output_root`` via ``override_output_path``.
+    Copies the first ceil(N * fraction) shards. Step name stays
+    ``data/datakit/normalized/{src.name}`` (consumers map sources by step name).
+    Built without an output override: the returned step's ``name_with_hash``
+    already bundles ``sample_fraction`` + the ``normalized`` dep and is
+    independent of the final root, so it seeds the content-addressed root, which
+    is then routed back in via ``replace(override_output_path=...)``.
     """
     return sample_normalized_shards_step(
         name=f"data/datakit/normalized/{src.name}",
         normalized=normalized,
         sample_fraction=sample_fraction,
-        override_output_path=prefix_join(output_root, src.name),
     )
 
 
@@ -383,8 +389,9 @@ def build_testbed_steps(
     terminal normalize step. All sample outputs for a size land under one
     content-addressed root ``{MARIN_PREFIX}/datakit/sample_{tag}_{hash}/`` and
     nest under it by source name (see :func:`_sample_root`); the ``hash``
-    covers the token target + every source's fraction, so different sizes never
-    collide. Tokenize runs in the training executor graph (see
+    covers the token target + every source's sample-step identity (its fraction
+    and normalize dep), so different sizes never collide and an upstream
+    normalize change re-addresses the sample. Tokenize runs in the training executor graph (see
     :mod:`experiments.datakit.testbed.train`), not the ferry.
 
     Args:
@@ -407,16 +414,21 @@ def build_testbed_steps(
         raise ValueError("build_testbed_steps requires at least one source")
 
     fractions = proportional_sample_fractions(sources, target_total_tokens_b=target_total_tokens_b)
-    output_root = _sample_root(target_total_tokens_b, fractions)
+    # Build each source's sample step first; its name_with_hash already bundles
+    # sample_fraction + the normalized dep and is independent of the output root,
+    # so it seeds the content-addressed root before we route the step under it.
+    sample_steps = {src.name: _sample_step_for(src, src.normalized, fractions[src.name]) for src in sources}
+    output_root = _sample_root(target_total_tokens_b, [s.name_with_hash for s in sample_steps.values()])
 
-    # Flat list of every source's normalize chain + terminal sample step.
+    # Flat list of every source's normalize chain + terminal sample step, the
+    # latter re-routed under the shared per-size root via override_output_path.
     # StepRunner walks transitive deps and dedupes by output_path, so shared
     # family downloads (e.g. Nemotron v2 subsets) are safe to emit more than
     # once; hidden deps reached only through a step's ``.deps`` resolve too.
     all_steps: list[StepSpec] = []
     for src in sources:
         all_steps.extend(src.normalize_steps)
-        all_steps.append(_sample_step_for(src, src.normalized, fractions[src.name], output_root))
+        all_steps.append(replace(sample_steps[src.name], override_output_path=prefix_join(output_root, src.name)))
 
     logger.info(
         "Built testbed DAG: %d sources, %d steps (normalize chains + sample), target %.0fB tokens -> %s",
