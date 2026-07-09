@@ -14,8 +14,6 @@ All discovered files are merged into a single output: main records land in
 ``<output_path>/outputs/dups/``. Input directory structure is not preserved.
 """
 
-from __future__ import annotations
-
 import logging
 import os
 import re
@@ -27,7 +25,7 @@ from typing import Any
 import dupekit
 from fray import ResourceConfig
 from pydantic import BaseModel
-from rigging.filesystem import url_to_fs
+from rigging.filesystem import StoragePath, prefix_join, url_to_fs
 from zephyr import Dataset, ShardInfo, ZephyrContext, counters, write_parquet_file
 from zephyr.readers import SUPPORTED_EXTENSIONS, load_file
 from zephyr.writers import ThreadedBatchWriter
@@ -76,7 +74,7 @@ class NormalizedData(BaseModel):
     version: str = "v1"
     main_output_dir: str
     dup_output_dir: str
-    counters: dict[str, int]
+    counters: dict[str, int | float]
 
 
 def generate_id(text: str) -> str:
@@ -212,11 +210,7 @@ def _discover_files(
 
 def _compute_total_bytes(file_paths: list[str]) -> int:
     """Sum the byte sizes of all *file_paths*."""
-    total = 0
-    for path in file_paths:
-        fs, resolved = url_to_fs(path)
-        total += fs.size(resolved)
-    return total
+    return sum(StoragePath(path).size() for path in file_paths)
 
 
 def _make_whitespace_compactor(max_whitespace_run_chars: int) -> Callable[[dict[str, Any]], dict[str, Any]]:
@@ -233,7 +227,7 @@ def _make_whitespace_compactor(max_whitespace_run_chars: int) -> Callable[[dict[
         text = record["text"]
         compacted = pattern.sub(lambda m: m.group(0)[:max_whitespace_run_chars], text)
         if len(compacted) != len(text):
-            counters.increment(COMPACTED_WHITESPACE_COUNTER)
+            counters.pipeline.update_counter(COMPACTED_WHITESPACE_COUNTER, 1)
             record = {**record, "text": compacted, "id": generate_id(compacted)}
         return record
 
@@ -272,8 +266,8 @@ def _make_split_writer(
     ) -> Iterator[dict[str, dict[str, Any]]]:
         # NOTE: we could add support for split_existing - but we intentionally don't
         shard_filename = partition_filename(shard.shard_idx, shard.total_shards)
-        main_path = f"{output_dir}/outputs/main/{shard_filename}"
-        dup_path = f"{output_dir}/outputs/dups/{shard_filename}"
+        main_path = prefix_join(output_dir, f"outputs/main/{shard_filename}")
+        dup_path = prefix_join(output_dir, f"outputs/dups/{shard_filename}")
 
         # Results are populated by each writer thread. Safe to read only after
         # the ThreadedBatchWriter context exits (which joins the thread).
@@ -291,10 +285,10 @@ def _make_split_writer(
         ):
             for item in records:
                 if isinstance(item, MainOutput):
-                    counters.increment("normalize/unique_records_out")
+                    counters.pipeline.update_counter("normalize/unique_records_out", 1)
                     main_writer.submit(item.data)
                 else:
-                    counters.increment("normalize/duplicate_records_out")
+                    counters.pipeline.update_counter("normalize/duplicate_records_out", 1)
                     dup_writer.submit(item.data)
 
         yield results
@@ -333,7 +327,7 @@ def _build_pipeline(
     def has_text(record: dict[str, Any]) -> bool:
         text = record.get(text_field)
         if text is None or str(text).strip() == "":
-            counters.increment("normalize/empty_text_filtered")
+            counters.pipeline.update_counter("normalize/empty_text_filtered", 1)
             return False
         return True
 
@@ -460,8 +454,8 @@ def normalize_to_parquet(
         )
 
     return NormalizedData(
-        main_output_dir=os.path.join(output_path, "outputs/main"),
-        dup_output_dir=os.path.join(output_path, "outputs/dups"),
+        main_output_dir=prefix_join(output_path, "outputs/main"),
+        dup_output_dir=prefix_join(output_path, "outputs/dups"),
         counters=counters_dict,
     )
 
@@ -506,11 +500,10 @@ def normalize_step(
             Defaults to ``DedupMode.EXACT``; use ``DedupMode.NONE`` to skip.
     """
     if relative_input_path:
-        # ``os.path.join`` collapses redundant separators when ``download.output_path``
-        # ends with ``/`` (e.g. ``override_output_path="gs://.../nemotro-cc-eeb783/"``);
-        # naive f-string concatenation would yield ``gs://.../nemotro-cc-eeb783//<rel>``,
-        # which ``_discover_files`` then fails to resolve on GCS.
-        resolved_input = os.path.join(download.output_path, relative_input_path)
+        # ``prefix_join`` yields exactly one separator even when ``download.output_path``
+        # ends with ``/`` (e.g. ``gs://.../nemotro-cc-eeb783/``); a naive f-string join
+        # would leave the doubled ``//`` that ``_discover_files`` then fails to resolve on GCS.
+        resolved_input = prefix_join(download.output_path, relative_input_path)
     else:
         resolved_input = download.output_path
 

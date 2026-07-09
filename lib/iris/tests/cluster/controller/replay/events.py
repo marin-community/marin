@@ -15,20 +15,22 @@ those methods directly when needed.
 from dataclasses import dataclass
 from typing import Any
 
-from iris.cluster.controller import ops, writes
+from iris.cluster.controller import ops
 from iris.cluster.controller.ops.task import Assignment, apply_dispatch_updates, finalize
 from iris.cluster.controller.projections.endpoints import EndpointRow
 from iris.cluster.controller.reconcile import dispatch
+from iris.cluster.controller.reconcile.commit import commit_effects
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.reconcile.task import TerminalDecision, TerminalKind
-from iris.cluster.controller.scheduling.policy import refresh_reservation_claims_in_tx
-from iris.cluster.controller.schema import ReservationClaim
 from iris.cluster.types import JobName, WorkerId
 from iris.rpc import controller_pb2, job_pb2
 from rigging.timing import Timestamp
-
 from tests.cluster.controller._test_support import ControllerTestState
-from tests.cluster.controller.transition_driver import WorkerTaskUpdates, apply_task_observations
+from tests.cluster.controller.transition_driver import (
+    CursorTransitionReader,
+    WorkerTaskUpdates,
+    apply_task_observations,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -96,20 +98,6 @@ class RemoveEndpoint:
     endpoint_id: str
 
 
-@dataclass(frozen=True, slots=True)
-class ReplaceReservationClaims:
-    claims: dict[WorkerId, ReservationClaim]
-
-
-@dataclass(frozen=True, slots=True)
-class RunReservationClaimCycle:
-    """Run the controller's reservation claim phase: clean up stale claims, then
-    claim eligible workers for unsatisfied reservation entries, persisting the
-    result. Drives the same ``policy.refresh_reservation_claims`` path
-    the controller runs each scheduling cycle.
-    """
-
-
 IrisEvent = (
     SubmitJob
     | CancelJob
@@ -122,8 +110,6 @@ IrisEvent = (
     | ApplyDirectProviderUpdates
     | AddEndpoint
     | RemoveEndpoint
-    | ReplaceReservationClaims
-    | RunReservationClaimCycle
 )
 
 
@@ -144,10 +130,9 @@ def apply_event(transitions: ControllerTestState, event: IrisEvent) -> Any:
                     job_id=job_id,
                     request=request,
                     ts=ts,
-                    run_template_cache=transitions._run_template_cache,
                 )
             case CancelJob(job_id, reason):
-                return ops.job.cancel(cur, job_id=job_id, reason=reason, endpoints=transitions._endpoints)
+                return ops.job.cancel(cur, job_id=job_id, reason=reason)
             case RegisterOrRefreshWorker(worker_id, address, metadata, ts, slice_id, scale_group):
                 return ops.worker.register(
                     cur,
@@ -156,7 +141,6 @@ def apply_event(transitions: ControllerTestState, event: IrisEvent) -> Any:
                     metadata=metadata,
                     ts=ts,
                     health=transitions._health,
-                    worker_attrs=transitions._worker_attrs,
                     slice_id=slice_id,
                     scale_group=scale_group,
                 )
@@ -167,14 +151,12 @@ def apply_event(transitions: ControllerTestState, event: IrisEvent) -> Any:
                     cur,
                     [request],
                     health=transitions._health,
-                    endpoints=transitions._endpoints,
                     now=Timestamp.now(),
                 )
             case PreemptTask(task_id, reason):
                 return finalize(
                     cur,
                     [TerminalDecision(TerminalKind.PREEMPT, task_id, reason)],
-                    endpoints=transitions._endpoints,
                     now=Timestamp.now(),
                 )
             case CancelTasksForTimeout(task_ids, reason):
@@ -184,34 +166,19 @@ def apply_event(transitions: ControllerTestState, event: IrisEvent) -> Any:
                         TerminalDecision(TerminalKind.TIMEOUT, tid, reason)
                         for tid in sorted(task_ids, key=lambda t: t.to_wire())
                     ],
-                    endpoints=transitions._endpoints,
                     now=Timestamp.now(),
                 )
             case DrainForDirectProvider(max_promotions):
-                return dispatch.drain_for_dispatch(
-                    cur, cache=transitions._run_template_cache, max_promotions=max_promotions
-                )
+                return dispatch.drain_for_dispatch(cur, max_promotions=max_promotions)
             case ApplyDirectProviderUpdates(updates):
-                return apply_dispatch_updates(
-                    cur,
-                    updates,
-                    endpoints=transitions._endpoints,
-                    now=Timestamp.now(),
-                )
+                # Relocated glue: author the effects from this write transaction,
+                # then commit them — the two steps the controller now does apart.
+                effects = apply_dispatch_updates(CursorTransitionReader(cur), updates, now=Timestamp.now())
+                commit_effects(cur, effects)
+                return effects
             case AddEndpoint(endpoint):
                 return transitions._endpoints.add(cur, endpoint)
             case RemoveEndpoint(endpoint_id):
                 return transitions._endpoints.remove(cur, endpoint_id)
-            case ReplaceReservationClaims(claims):
-                return writes.replace_reservation_claims(cur, claims)
-            case RunReservationClaimCycle():
-                # Run the claim refresh and persist through the caller's open
-                # ``cur`` rather than the standalone ``refresh_reservation_claims``
-                # write transaction, which would nest inside this one. The refresh
-                # reads through ``cur`` too.
-                claims, changed = refresh_reservation_claims_in_tx(cur, transitions._health, transitions._worker_attrs)
-                if changed:
-                    writes.replace_reservation_claims(cur, claims)
-                return claims
             case _:
                 raise TypeError(f"unhandled IrisEvent variant: {type(event).__name__}")

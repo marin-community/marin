@@ -11,13 +11,13 @@ config schema, mirroring how `iris cluster start` decides backend from
 cluster yaml.
 """
 
-from __future__ import annotations
-
 import csv
 import json
 import logging
 import re
 import sys
+from collections.abc import Generator
+from contextlib import contextmanager
 from datetime import datetime
 from enum import StrEnum
 
@@ -25,37 +25,46 @@ import click
 import duckdb
 import fsspec
 import pyarrow as pa
+from rigging.auth import IapLoginRequired
+from rigging.connect import IapAuth, connect, disconnect
+from rigging.credentials import iap_edge_provider
 from rigging.log_setup import configure_logging
-from rigging.tunnel import GcpSshForwardTarget, K8sPortForwardTarget, TunnelTarget, open_tunnel
+from rigging.tunnel import open_tunnel
 
 from finelog.client.log_client import LogClient
 from finelog.deploy import _gcp, _k8s
 from finelog.deploy.build import build_image as build_finelog_image
-from finelog.deploy.config import FinelogConfig, load_finelog_config
+from finelog.deploy.config import FinelogConfig, load_finelog_config, tunnel_target_for
 
 _SEGMENT_FILENAME_RE = re.compile(r"seg_L\d+_\d+\.parquet$")
 
 
-def _tunnel_target(cfg: FinelogConfig) -> TunnelTarget:
-    """Translate a finelog deployment block into a rigging tunnel target.
-
-    The GCP path forwards ``deployment.gcp.service_account`` as the SSH
-    impersonation principal — matching the deploy CLI's own SSH calls
-    (see ``_gcp._ssh_args``), so this command works wherever
-    ``finelog deploy status`` does.
-    """
-    if cfg.deployment.gcp is not None:
-        gcp = cfg.deployment.gcp
-        return GcpSshForwardTarget(
-            project=gcp.project,
-            zone=gcp.zone,
-            instance=cfg.name,
-            port=cfg.port,
-            impersonate_service_account=gcp.service_account,
+@contextmanager
+def _log_client(cfg: FinelogConfig, name: str, tunnel_timeout: float) -> Generator[LogClient, None, None]:
+    """Yield a LogClient: via the controller IAP proxy if cfg.client_url is set, else an SSH/k8s tunnel."""
+    if cfg.client_url:
+        provider = iap_edge_provider(name)
+        if provider is None:
+            raise IapLoginRequired(f"no cached IAP credentials for {name!r}; log in to {name!r} to refresh them")
+        client = connect(
+            cfg.client_url,
+            lambda ep: LogClient.connect(ep.url, interceptors=ep.interceptors),
+            auth=IapAuth(provider),
+            connect_timeout=tunnel_timeout,
         )
-    assert cfg.deployment.k8s is not None
-    k8s = cfg.deployment.k8s
-    return K8sPortForwardTarget(namespace=k8s.namespace, service=cfg.name, port=cfg.port)
+        try:
+            yield client
+        finally:
+            client.close()
+            disconnect(client)
+    else:
+        target = tunnel_target_for(cfg)
+        with open_tunnel(target, timeout=tunnel_timeout) as url:
+            client = LogClient.connect(url)
+            try:
+                yield client
+            finally:
+                client.close()
 
 
 def _dispatch_up(cfg: FinelogConfig) -> None:
@@ -252,21 +261,20 @@ _PRINTERS = {
     help="Seconds to wait for the local tunnel to become reachable.",
 )
 def query_cmd(name: str, sql: str, output_format: str, max_rows: int, tunnel_timeout: float) -> None:
-    """Run SQL against the deployed finelog `<name>` via a tunnel.
+    """Run SQL against the deployed finelog `<name>`.
 
-    Opens an IAP tunnel (GCP) or `kubectl port-forward` (k8s) to the
-    configured finelog server, runs `<sql>` through `StatsService.Query`,
-    and prints results in `--format` (table/json/csv).
+    Connects via the controller IAP proxy when ``client_url`` is configured in
+    the finelog config, otherwise opens an SSH (GCP) or ``kubectl port-forward``
+    (k8s) tunnel to the configured finelog server. Runs ``<sql>`` through
+    ``StatsService.Query`` and prints results in ``--format`` (table/json/csv).
     """
     configure_logging(level=logging.INFO)
     cfg = load_finelog_config(name)
-    target = _tunnel_target(cfg)
-    with open_tunnel(target, timeout=tunnel_timeout) as url:
-        client = LogClient.connect(url)
-        try:
+    try:
+        with _log_client(cfg, name, tunnel_timeout) as client:
             table = client.query(sql, max_rows=max_rows)
-        finally:
-            client.close()
+    except IapLoginRequired as exc:
+        raise click.ClickException(str(exc)) from exc
     _PRINTERS[OutputFormat(output_format)](table)
 
 

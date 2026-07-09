@@ -11,26 +11,56 @@
 # whatever the NodePools hold. See lib/iris/docs/coreweave.md.
 #
 # Workflow:
-#   1. Set R2 object storage credentials (required for s3:// storage URIs):
-#        export R2_ACCESS_KEY_ID=<your-r2-access-key-id>
-#        export R2_SECRET_ACCESS_KEY=<your-r2-secret-access-key>
-#      `iris cluster start` turns these into the iris-s3-credentials Secret.
-#   2. Point kubectl/iris at the region kubeconfig:
-#        export KUBECONFIG=~/.kube/coreweave-iris-gpu   # context marin-gpu_US-EAST-02A
+#   1. Set CoreWeave AI Object Storage credentials (console -> Object Storage ->
+#      Access Keys). `iris cluster start` turns them into the iris-task-env
+#      Secret (addressing style is derived from the endpoint domain):
+#        export CW_KEY_ID=<coreweave-access-key-id>
+#        export CW_KEY_SECRET=<coreweave-access-key-secret>
+#   2. Install the kubeconfig (Console -> Tokens) at ~/.kube/coreweave-iris.
+#      Operations are bound to kube_context below, so no KUBECONFIG export and no
+#      current-context switching is needed.
 #   3. Start / inspect the cluster:
 #        uv run iris --cluster=cw-us-east-02a cluster start
 #        uv run iris --cluster=cw-us-east-02a cluster status
+
+# External finelog log server (in-cluster k8s Deployment, namespace `iris`).
+# Resolves to k8s://finelog-cw-use02a.iris; see lib/finelog/config/cw-us-east-02a.yaml.
+# Without this the controller falls back to an in-process MemStore (logs lost on
+# restart). Deploy the server first: `uv run finelog deploy up cw-us-east-02a`.
+finelog:
+  config: cw-us-east-02a
+
+# Public host of this controller. The whole surface is IP-locked to the marin
+# egress (scripts/install_cw_network.py); there is no off-cluster user surface.
+dashboard_url: https://iris-cw-us-east-02a.oa.dev
 
 platform:
   label_prefix: cw-use02a
   coreweave:
     region: US-EAST-02A
     namespace: iris
-    kubeconfig_path: ~/.kube/coreweave-iris-gpu
-    object_storage_endpoint: https://74981a43be0de7712369306c7b19133d.r2.cloudflarestorage.com
+    kubeconfig_path: ~/.kube/coreweave-iris
+    kube_context: marin-gpu_US-EAST-02A
+    # CoreWeave AI Object Storage via LOTA, the in-cluster local cache
+    # endpoint (use https://cwobject.com from outside CoreWeave). Bare
+    # endpoint only: buckets use virtual-hosted addressing
+    # (http://<bucket>.cwlota.com), which iris detects from this domain.
+    object_storage_endpoint: http://cwlota.com
 
 storage:
-  remote_state_dir: s3://marin-na/iris/cw-us-east-02a/state
+  remote_state_dir: s3://marin-us-east-02a/iris/cw-us-east-02a/state
+  # Node-local NVMe for the controller's SQLite state, not the default
+  # network-attached PVC.
+  local_state_dir: /mnt/local/iris-controller-state
+
+# Request auth. Identity is by network location: in-cluster peers (RFC1918
+# pods/nodes, loopback for kubectl port-forward) are trusted as admin. A non-empty
+# trusted_cidrs makes the controller enforcing — an off-cluster request arrives
+# through Traefik with an appended X-Forwarded-For, never matches a CIDR, and must
+# present a bearer. This is the identity gate behind the IP-restricted federation
+# ingress (scripts/install_cw_network.py).
+auth:
+  trusted_cidrs: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 127.0.0.0/8, "::1/128"]
 
 kubernetes_provider:
   namespace: iris
@@ -52,10 +82,13 @@ kubernetes_provider:
 
 controller:
   image: ghcr.io/marin-community/iris-controller:latest
+  checkpoint_interval_seconds: 600
   coreweave:
     port: 10000
     service_name: iris-controller-svc
     scale_group: cpu-genoa
+    # Off-cluster reach is the operator-managed, IP-locked federation ingress
+    # (docs/coreweave.md, scripts/install_cw_network.py).
 
 defaults:
   autoscaler:
@@ -65,12 +98,18 @@ defaults:
       milliseconds: 60000
     scale_down_delay:
       milliseconds: 300000
-    startup_grace_period:
-      milliseconds: 2400000    # 40 min — covers cold bare-metal provisioning + Pod startup
   task_env:
-    MARIN_PREFIX: s3://marin-na/marin
-    # H100 hostNetwork pods also see IB and SR-IOV link-local interfaces.
-    NCCL_SOCKET_IFNAME: =enp157s0np0
+    # The shared CoreWeave bucket (everything lives in marin-us-east-02a; LOTA
+    # caches reads locally). Task pods carry ONE endpoint/credential set, so R2
+    # data under s3://marin-na/ is not reachable from jobs unless they override
+    # AWS_ENDPOINT_URL and credentials themselves.
+    MARIN_PREFIX: s3://marin-us-east-02a/marin
+    # H100 hostNetwork pods also see IB and SR-IOV link-local interfaces. Exclude
+    # IB/IPoIB (ibs*, ibp*) and virtual interfaces so NCCL's bootstrap socket falls
+    # back to the host ethernet PF that carries the node IP. The exact PF name
+    # differs per node/region, so an exact-match pin (=enpXsYnpZ) is fragile and was
+    # silently unmatched by the current task image's NCCL build, breaking bootstrap.
+    NCCL_SOCKET_IFNAME: "^ibs,ibp,lo,docker,veth,cilium,lxc"
   worker:
     docker_image: ghcr.io/marin-community/iris-worker:latest
     port: 10001
@@ -82,9 +121,9 @@ scale_groups:
   cpu-genoa:
     num_vms: 1
     resources:
-      cpu: 192
-      ram: 768GB
-      disk: 1TB
+      cpu: 192       # cd-gp-a192-genoa: 192 vCPUs (96 physical Genoa 9454 cores)
+      ram: 1536GB    # 1.5 TB on-node RAM (8 GB per vCPU)
+      disk: 7.68TB   # 7.68 TB local NVMe
       device_type: cpu
       capacity_type: on-demand
     worker:

@@ -24,7 +24,7 @@ import os
 
 from marin.datakit.download.huggingface import download_hf_step
 from marin.datakit.normalize import NormalizedData, normalize_step
-from marin.execution.artifact import Artifact
+from marin.execution.artifact import read_artifact
 from marin.execution.step_runner import StepRunner
 from marin.execution.step_spec import StepSpec
 from marin.processing.classification.consolidate import (
@@ -41,7 +41,7 @@ from marin.processing.classification.deduplication.fuzzy_minhash import (
     compute_minhash_attrs,
 )
 from marin.processing.tokenize.tokenize import TokenizeConfig, tokenize
-from rigging.filesystem import marin_prefix, marin_temp_bucket, url_to_fs
+from rigging.filesystem import StoragePath, marin_prefix, marin_temp_bucket
 from rigging.log_setup import configure_logging
 from rigging.timing import log_time
 
@@ -79,7 +79,7 @@ def build_steps(run_id: str) -> list[StepSpec]:
         name="datakit-tier2-skewed-smoke/minhash",
         deps=[normalized],
         fn=lambda output_path: compute_minhash_attrs(
-            source=Artifact.from_path(normalized, NormalizedData),
+            source=read_artifact(normalized.output_path, NormalizedData),
             output_path=output_path,
         ),
         override_output_path=f"{ttl_base}/minhash",
@@ -91,7 +91,7 @@ def build_steps(run_id: str) -> list[StepSpec]:
         deps=[minhash],
         hash_attrs={"cc_max_iterations": 3},
         fn=lambda output_path: compute_fuzzy_dups_attrs(
-            inputs=[Artifact.from_path(minhash, MinHashAttrData)],
+            inputs=[read_artifact(minhash.output_path, MinHashAttrData)],
             output_path=output_path,
             max_parallelism=64,
             cc_max_iterations=3,
@@ -103,14 +103,14 @@ def build_steps(run_id: str) -> list[StepSpec]:
         name="datakit-tier2-skewed-smoke/consolidate",
         deps=[normalized, deduped],
         fn=lambda output_path: consolidate(
-            input_path=Artifact.from_path(normalized, NormalizedData).main_output_dir,
+            input_path=read_artifact(normalized.output_path, NormalizedData).main_output_dir,
             output_path=output_path,
             filetype="parquet",
             filters=[
                 FilterConfig(
                     type=FilterType.KEEP_DOC,
-                    attribute_path=Artifact.from_path(deduped, FuzzyDupsAttrData)
-                    .sources[Artifact.from_path(normalized, NormalizedData).main_output_dir]
+                    attribute_path=read_artifact(deduped.output_path, FuzzyDupsAttrData)
+                    .sources[read_artifact(normalized.output_path, NormalizedData).main_output_dir]
                     .attr_dir,
                     name="is_cluster_canonical",
                     attribute_filetype="parquet",
@@ -145,9 +145,7 @@ def _write_status(status: str, prefix: str) -> None:
     if not status_path:
         return
     payload = json.dumps({"status": status, "marin_prefix": prefix})
-    fs, _ = url_to_fs(status_path)
-    with fs.open(status_path, "w") as f:
-        f.write(payload)
+    StoragePath(status_path).write_text(payload)
     logger.info("Wrote ferry status to %s", status_path)
 
 

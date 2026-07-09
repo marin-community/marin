@@ -10,7 +10,8 @@ from typing import Callable
 
 import jax
 
-import levanter.tracker
+from rigging.filesystem import StoragePath
+
 from levanter.callbacks._core import StepInfo
 from levanter.utils.jax_utils import barrier_sync
 
@@ -99,8 +100,8 @@ def profile(
     create_perfetto_link: bool,
     profiler_options: jax.profiler.ProfileOptions | None = None,
 ) -> Callable[[StepInfo], None]:
-    artifact_name = f"jax-profile-step-{start_step}-{start_step + num_steps}"
     trace_started = False
+    StoragePath(path).mkdirs()
 
     def profiler_callback_fn(step: StepInfo, *, force: bool = False):
         nonlocal trace_started
@@ -144,12 +145,6 @@ def profile(
 
         if create_perfetto_link and jax.process_index() == 0:
             event.set()
-
-        levanter.tracker.current_tracker().log_artifact(
-            path,
-            name=artifact_name,
-            type="jax_profile",
-        )
         barrier_sync()
 
     return profiler_callback_fn

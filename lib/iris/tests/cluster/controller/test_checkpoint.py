@@ -5,6 +5,7 @@
 
 from iris.cluster.controller.checkpoint import (
     download_checkpoint_to_local,
+    latest_checkpoint_epoch_ms,
     prune_old_checkpoints,
     write_checkpoint,
 )
@@ -75,6 +76,21 @@ def test_download_checkpoint_returns_false_when_missing(tmp_path):
     result = download_checkpoint_to_local(f"file://{tmp_path}/nonexistent", local_db_dir)
     assert result is False
     assert not (local_db_dir / "controller.sqlite3").exists()
+
+
+def test_latest_checkpoint_epoch_ms_none_when_missing(tmp_path):
+    assert latest_checkpoint_epoch_ms(f"file://{tmp_path}/nonexistent") is None
+
+
+def test_latest_checkpoint_epoch_ms_matches_written_checkpoint(tmp_path, make_controller):
+    remote_dir = f"file://{tmp_path}/remote"
+    controller = make_controller(remote_state_dir=remote_dir)
+
+    path, _ = write_checkpoint(controller._db, remote_dir)
+
+    epoch_ms = latest_checkpoint_epoch_ms(remote_dir)
+    assert epoch_ms is not None
+    assert path == f"file://{tmp_path}/remote/controller-state/{epoch_ms}"
 
 
 def test_download_from_explicit_path(tmp_path):

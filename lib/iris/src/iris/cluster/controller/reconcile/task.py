@@ -16,7 +16,7 @@ from rigging.timing import Timestamp
 
 from iris.cluster.controller.reconcile.effects import AttemptRowDelta, TaskRowDelta
 from iris.cluster.controller.reconcile.overlay import Overlay
-from iris.cluster.controller.reconcile.policy import FAILURE_TASK_STATES
+from iris.cluster.controller.reconcile.policy import PEER_CASCADE_TRIGGER_STATES
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate, TransitionSnapshot
 from iris.cluster.controller.task_state import (
     ACTIVE_TASK_STATES,
@@ -146,8 +146,6 @@ def merge_task_termination(
     *,
     stamp_attempt_finished: bool,
     attempt_state: int | None = None,
-    failure_count: int | None = None,
-    preemption_count: int | None = None,
 ) -> None:
     """Move a task to ``task_state`` and record its attempt + endpoint deletion.
 
@@ -155,6 +153,16 @@ def merge_task_termination(
     is stamped: finalizing callers stamp it (the attempt is truly done);
     producer-style terminations leave it NULL so the worker's next terminal
     status update lands the timestamp.
+
+    No retry counter is carried: both the failure and preemption counts derive
+    from the attempt rows this records (see
+    ``iris.cluster.controller.attempt_counts``).
+
+    An already-terminal attempt is left untouched: killing a PENDING task (a
+    cancel or a job-failure cascade) must not overwrite the historical outcome of
+    its last, already-finished attempt (e.g. rewrite a FAILED attempt to KILLED),
+    which would both lose history and, since counts derive from attempt state,
+    miscount that terminal as a preemption instead of the failure it was.
     """
     now = Timestamp.from_ms(now_ms)
     task_finished_at = None if task_state in ACTIVE_TASK_STATES or task_state == job_pb2.TASK_STATE_PENDING else now
@@ -162,15 +170,17 @@ def merge_task_termination(
     task_name = JobName.from_wire(task_id)
 
     if attempt_id is not None and attempt_id >= 0:
-        state.merge_attempt(
-            AttemptRowDelta(
-                task_id=task_name,
-                attempt_id=attempt_id,
-                state=effective_attempt_state,
-                finished_at=now if stamp_attempt_finished else None,
-                error=error,
+        existing_attempt_state = state.attempt_state(task_name, attempt_id)
+        if existing_attempt_state is None or existing_attempt_state not in TERMINAL_TASK_STATES:
+            state.merge_attempt(
+                AttemptRowDelta(
+                    task_id=task_name,
+                    attempt_id=attempt_id,
+                    state=effective_attempt_state,
+                    finished_at=now if stamp_attempt_finished else None,
+                    error=error,
+                )
             )
-        )
 
     state.merge_task(
         TaskRowDelta(
@@ -178,8 +188,6 @@ def merge_task_termination(
             state=task_state,
             error=error,
             finished_at=task_finished_at,
-            failure_count=failure_count,
-            preemption_count=preemption_count,
         )
     )
     state.emit_endpoint_deletion(task_name)
@@ -193,21 +201,18 @@ def resolve_task_failure_state(
     preemption_count: int,
     max_preemptions: int,
     terminal_state: int,
-) -> tuple[int, int]:
-    """Determine new task state after a worker failure or preemption.
+) -> int:
+    """Determine the new task state after a worker failure or preemption.
 
-    Assigned tasks always retry. Executing tasks retry if preemption budget remains,
+    Assigned tasks always retry. Executing tasks retry while the preemption
+    budget remains (this attempt would be the ``preemption_count + 1``-th),
     otherwise go to the given terminal state.
-
-    Returns (new_task_state, updated_preemption_count).
     """
     if prior_state == job_pb2.TASK_STATE_ASSIGNED:
-        return job_pb2.TASK_STATE_PENDING, preemption_count
-    if prior_state in EXECUTING_TASK_STATES:
-        preemption_count += 1
-        if preemption_count <= max_preemptions:
-            return job_pb2.TASK_STATE_PENDING, preemption_count
-    return terminal_state, preemption_count
+        return job_pb2.TASK_STATE_PENDING
+    if prior_state in EXECUTING_TASK_STATES and preemption_count + 1 <= max_preemptions:
+        return job_pb2.TASK_STATE_PENDING
+    return terminal_state
 
 
 # ─── Per-task terminal entry points ───
@@ -255,7 +260,7 @@ def preempt_one(
         return None
 
     now_ms = snapshot.now.epoch_ms()
-    new_state, preemption_count = resolve_task_failure_state(
+    new_state = resolve_task_failure_state(
         prior_state,
         row.preemption_count,
         row.max_retries_preemption,
@@ -270,7 +275,6 @@ def preempt_one(
         now_ms,
         stamp_attempt_finished=False,
         attempt_state=job_pb2.TASK_STATE_PREEMPTED,
-        preemption_count=preemption_count,
     )
     return TransitionOutcome(
         task_id=task_id,
@@ -394,10 +398,11 @@ def apply_one_transition(
     task_state = prior_state
     task_error = update.error
     task_exit = update.exit_code
-    # Budget counters read from the raw snapshot row (not the overlay): safe because
-    # current_attempt_id is immutable within a batch (it is not a TaskRowDelta field)
-    # and the terminal-attempt revival guard above drops any second non-terminal update
-    # for the same current attempt, so each counter is charged at most once per batch.
+    # Committed-derived per-task retry counters read from the snapshot row, used only
+    # for this attempt's local retry decision (failure gates on max_retries_failure,
+    # preemption on max_retries_preemption). Nothing prospective is carried across the
+    # batch: the job-wide failure budget derives from the FAILED attempt this records
+    # (see Overlay.job_basis), symmetric with preemption.
     failure_count = task.failure_count
     preemption_count = task.preemption_count
     charge_worker_build_failures = source is TransitionSource.WORKER_RECONCILE
@@ -446,13 +451,23 @@ def apply_one_transition(
             if failure_count <= task.max_retries_failure:
                 task_state = job_pb2.TASK_STATE_PENDING
                 terminal_ms = None
-        elif update.new_state == job_pb2.TASK_STATE_WORKER_FAILED:
-            # Worker loss / infra -> preemption budget. ASSIGNED retries without
-            # charge (the worker never ran the process); EXECUTING (BUILDING/
-            # RUNNING) charges and gates on max_retries_preemption. A truly-dead
-            # worker also misses its next ping/heartbeat (bumped observer-side),
-            # so we don't double-count here.
-            task_state, preemption_count = resolve_task_failure_state(
+        elif update.new_state in (job_pb2.TASK_STATE_WORKER_FAILED, job_pb2.TASK_STATE_KILLED):
+            # Worker loss / infra (WORKER_FAILED) or an out-of-band container stop
+            # the worker reports as KILLED — a higher-priority job reclaiming the
+            # slice, a node drain, a spot/preemptible reclaim, or a stop directive
+            # the controller issued without recording a matching task transition.
+            # None of these are application failures, so both share the preemption
+            # budget. A genuine user/controller cancel never reaches here: cancel_job
+            # marks the task terminal first, so the worker's echoing KILLED lands on
+            # an already-finished row above and is dropped; a stale stop of an
+            # abandoned attempt arrives under an old attempt_id and is dropped too.
+            # A KILLED that survives to this branch is therefore always the *current*
+            # live attempt stopped out-of-band — which must retry, not fail the job.
+            # ASSIGNED retries without charge (the worker never ran the process);
+            # EXECUTING (BUILDING/RUNNING) charges and gates on max_retries_preemption.
+            # A truly-dead worker also misses its next ping/heartbeat (bumped
+            # observer-side), so we don't double-count here.
+            task_state = resolve_task_failure_state(
                 prior_state,
                 preemption_count,
                 task.max_retries_preemption,
@@ -487,8 +502,6 @@ def apply_one_transition(
             exit_code=task_exit,
             started_at=started_at,
             finished_at=task_finished_at,
-            failure_count=failure_count,
-            preemption_count=preemption_count,
             container_id=update.container_id,
         )
     )
@@ -497,7 +510,7 @@ def apply_one_transition(
         state.emit_endpoint_deletion(update.task_id)
 
     jc = state.job_config(task.job_id)
-    has_cosched = bool(jc is not None and jc.has_coscheduling and update.new_state in FAILURE_TASK_STATES)
+    has_cosched = bool(jc is not None and jc.has_coscheduling and update.new_state in PEER_CASCADE_TRIGGER_STATES)
 
     return TransitionOutcome(
         task_id=update.task_id,
@@ -517,7 +530,7 @@ def timeout_one(
     reason: str,
     now_ms: int,
 ) -> None:
-    """Mark one task FAILED via timeout. Per-task mutation only."""
+    """Mark one task FAILED via timeout by recording a FAILED attempt. Per-task mutation only."""
     merge_task_termination(
         state,
         row.task_id.to_wire(),
@@ -526,5 +539,4 @@ def timeout_one(
         reason,
         now_ms,
         stamp_attempt_finished=False,
-        failure_count=row.failure_count + 1,
     )

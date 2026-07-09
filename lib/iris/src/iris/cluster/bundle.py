@@ -11,8 +11,6 @@ i.e. on workers). Eviction from the in-memory cache does not delete from
 fsspec storage.
 """
 
-from __future__ import annotations
-
 import hashlib
 import io
 import logging
@@ -26,6 +24,10 @@ from urllib.request import urlopen
 import fsspec.core
 
 logger = logging.getLogger(__name__)
+
+# Maximum size (bytes) of a submitted workspace bundle. Enforced by the client
+# when creating the zip and re-checked by the controller when receiving it.
+MAX_BUNDLE_SIZE_BYTES = 25 * 1024 * 1024
 
 
 def content_id(data: bytes) -> str:

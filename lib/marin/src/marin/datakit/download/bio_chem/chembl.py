@@ -15,8 +15,6 @@ Slices:
 * ``chembl_<v>.sdf.gz`` — full SDF dump; capped to a small head.
 """
 
-from __future__ import annotations
-
 from marin.datakit.download.bio_chem._runtime import (
     NotationFormat,
     NotationSliceSpec,

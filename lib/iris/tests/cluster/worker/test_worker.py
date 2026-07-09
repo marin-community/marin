@@ -38,7 +38,6 @@ from iris.managed_thread import ThreadContainer
 from iris.rpc import job_pb2, worker_pb2
 from iris.test_util import wait_for_condition
 from rigging.timing import Deadline, Duration
-
 from tests.cluster.worker.conftest import (
     FakeContainerHandle,
     FakeLogReader,
@@ -789,20 +788,6 @@ def test_attach_log_handler_uses_worker_log_key_before_register(mock_bundle_stor
         worker._detach_log_handler()
 
 
-def test_attach_log_handler_noop_without_worker_id(mock_bundle_store, mock_runtime, tmp_path):
-    """Before the worker_id is known, attach is a no-op."""
-    config = WorkerConfig(
-        port=0,
-        port_range=(50000, 50100),
-        cache_dir=tmp_path / "cache",
-        default_task_image="mock-image",
-    )
-    worker = _worker_with_mock_client(config, mock_bundle_store, mock_runtime)
-
-    worker._attach_log_handler()
-    assert worker._log_handler is None
-
-
 def test_attach_log_handler_idempotent_renames_key(mock_bundle_store, mock_runtime, tmp_path):
     """Re-attach under a new worker_id renames the handler's key in place."""
     config = WorkerConfig(
@@ -946,7 +931,7 @@ def create_test_bundle(tmp_path):
         """[project]
 name = "test-task"
 version = "0.1.0"
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 dependencies = []
 """
     )
@@ -1076,6 +1061,7 @@ def _make_discovered_container(
     phase: ExecutionStage = ExecutionStage.RUN,
     running: bool = True,
     workdir_host_path: str = "/tmp/workdirs/test",
+    ports: dict[str, int] | None = None,
 ) -> DiscoveredContainer:
     return DiscoveredContainer(
         container_id="abc123def456",
@@ -1089,6 +1075,7 @@ def _make_discovered_container(
         exit_code=None if running else 0,
         started_at="2025-01-01T00:00:00Z",
         workdir_host_path=workdir_host_path,
+        ports=ports or {},
     )
 
 
@@ -1411,6 +1398,33 @@ def test_task_attempt_adopt_factory():
     assert proto.current_attempt_id == container.attempt_id
 
 
+def test_adopt_reserves_host_ports_against_reallocation():
+    """A re-adopted task keeps its host ports and the allocator won't re-hand them out.
+
+    Regression for #6721: before the fix, adopt() rebuilt ports={} and never
+    re-marked the allocator, so a restarted worker could double-allocate the
+    in-use ports of an adopted container.
+    """
+    # Three candidate ports: 50500, 50501, 50502. Two belong to the adopted task.
+    port_allocator = PortAllocator(port_range=(50500, 50503))
+    container = _make_discovered_container(ports={"http": 50500, "grpc": 50501})
+
+    attempt = TaskAttempt.adopt(
+        discovered=container,
+        container_handle=create_mock_container_handle(),
+        log_client=None,
+        port_allocator=port_allocator,
+    )
+
+    # The adopted attempt retains its original port mapping.
+    assert attempt.ports == {"http": 50500, "grpc": 50501}
+
+    # The only port the allocator may hand to a new task is the one not in use.
+    assert port_allocator.allocate(1) == [50502]
+    with pytest.raises(RuntimeError, match="No free ports"):
+        port_allocator.allocate(1)
+
+
 # ============================================================================
 # Docker-based Adoption Integration Tests
 # ============================================================================
@@ -1481,6 +1495,7 @@ def test_docker_discover_containers(docker_runtime, tmp_path):
         attempt_uid="cafe9999cafe9999",
         job_id="/test-user/discover-job",
         worker_id="worker-99",
+        ports={"http": 30000, "grpc": 30001},
     )
 
     handle = docker_runtime.create_container(config)
@@ -1498,6 +1513,7 @@ def test_docker_discover_containers(docker_runtime, tmp_path):
         assert d.phase == "run"
         assert d.running is True
         assert d.workdir_host_path == str(workdir)
+        assert d.ports == {"http": 30000, "grpc": 30001}
     finally:
         handle.cleanup()
 

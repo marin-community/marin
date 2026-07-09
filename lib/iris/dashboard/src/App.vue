@@ -4,40 +4,49 @@ import { useRoute, useRouter } from 'vue-router'
 import AppHeader from '@/components/layout/AppHeader.vue'
 import DashboardLegend from '@/components/shared/DashboardLegend.vue'
 import TabNav, { type Tab } from '@/components/layout/TabNav.vue'
+import BackendScope from '@/components/shared/BackendScope.vue'
 import { useDarkMode } from '@/composables/useDarkMode'
+import { useBackends } from '@/composables/useBackends'
 
 const route = useRoute()
 const router = useRouter()
 const { isDark, toggle: toggleDark } = useDarkMode()
+const { capabilities, backends, peers, fetchConfig, ensurePeers } = useBackends()
+
+// Show the scope selector once there is more than one execution target to pick
+// between — counting backends and federation peers, so a 1-backend + N-peer
+// deployment still gets the selector.
+const showScope = computed(() => backends.value.length + peers.value.length > 1)
 
 const authEnabled = ref(false)
-const capabilities = ref<string[]>([])
 const legendOpen = ref(false)
 
 // Tabs always shown have no `requires`; conditional tabs name the capability
-// the backend must advertise (see backend_descriptor in backend.py).
-const ALL_TABS: (Tab & { requires?: string })[] = [
+// the backend must advertise (see backend_descriptor in backend.py). The
+// always-on Backends tab subsumes the per-backend Kubernetes cluster view in its
+// detail panels, so there is no separate Cluster tab.
+const ALL_TABS = computed<(Tab & { requires?: string })[]>(() => [
   { key: 'jobs', label: 'Jobs', to: '/' },
-  { key: 'scheduler', label: 'Scheduler', to: '/scheduler' },
+  { key: 'capacity', label: 'Capacity & Scheduling', to: '/capacity' },
   { key: 'fleet', label: 'Workers', to: '/fleet', requires: 'workers' },
-  { key: 'cluster', label: 'Cluster', to: '/cluster', requires: 'cluster' },
+  { key: 'backends', label: 'Backends', to: '/backends' },
   { key: 'endpoints', label: 'Endpoints', to: '/endpoints' },
-  { key: 'autoscaler', label: 'Autoscaler', to: '/autoscaler', requires: 'autoscaler' },
+  { key: 'logs', label: 'Logs', to: '/logs' },
   { key: 'account', label: 'Account', to: '/account' },
   { key: 'status', label: 'Status', to: '/status' },
-]
+])
 
 const TABS = computed<Tab[]>(() =>
-  ALL_TABS.filter(t => !t.requires || capabilities.value.includes(t.requires))
+  ALL_TABS.value.filter(t => !t.requires || capabilities.value.includes(t.requires))
 )
 
 const PATH_TO_TAB: Record<string, string> = {
   '/': 'jobs',
-  '/scheduler': 'scheduler',
+  '/capacity': 'capacity',
   '/fleet': 'fleet',
-  '/cluster': 'cluster',
+  '/backends': 'backends',
   '/endpoints': 'endpoints',
-  '/autoscaler': 'autoscaler',
+  '/logs': 'logs',
   '/account': 'account',
   '/status': 'status',
 }
@@ -69,24 +78,25 @@ async function logout() {
 onMounted(async () => {
   window.addEventListener('iris-auth-required', onAuthRequired)
 
-  let hasSession = false
-  let authOptional = false
   try {
-    const resp = await fetch('/auth/config')
-    if (resp.ok) {
-      const config = await resp.json()
-      authEnabled.value = config.auth_enabled ?? false
-      hasSession = config.has_session ?? false
-      authOptional = config.optional ?? false
-      capabilities.value = config.backend?.capabilities ?? []
+    // fetchConfig fetches /auth/config once, populates capabilities + backends,
+    // and returns auth-related fields for login redirection.
+    const { authEnabled: ae, authenticated, authOptional } = await fetchConfig()
+    authEnabled.value = ae
+    // Only send the browser to the login page when auth is required and this
+    // request is not already authenticated. Behind IAP the caller is
+    // authenticated at the edge (no session cookie), so `authenticated` is true
+    // and the bearer-token login page is skipped.
+    if (ae && !authOptional && !authenticated && route.path !== '/login') {
+      router.push('/login')
     }
   } catch {
     // Auth config endpoint unavailable — assume no auth
   }
 
-  if (authEnabled.value && !authOptional && !hasSession && route.path !== '/login') {
-    router.push('/login')
-  }
+  // Load the peer roster so the scope selector can count peers; inert (empty)
+  // on a single-cluster deployment.
+  void ensurePeers()
 })
 
 onUnmounted(() => {
@@ -136,7 +146,10 @@ onUnmounted(() => {
       v-if="!isDetailPage"
       :tabs="TABS"
       :active-tab="activeTab"
-    />
+    >
+      <!-- Scope selector: visible with >1 execution target (backends + peers) -->
+      <BackendScope v-if="showScope" />
+    </TabNav>
     <main class="max-w-7xl mx-auto px-6 py-6">
       <router-view />
     </main>

@@ -14,8 +14,6 @@ capsid, etc.) so the slice exercises a range of mmCIF dialects without pulling
 megabytes per entry. Override ``RCSB_DEFAULT_IDS`` to widen the slice.
 """
 
-from __future__ import annotations
-
 from marin.datakit.download.bio_chem._runtime import (
     NotationFormat,
     NotationSliceSpec,

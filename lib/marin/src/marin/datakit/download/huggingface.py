@@ -18,12 +18,11 @@ import huggingface_hub
 from fray import ResourceConfig
 from huggingface_hub.errors import HfHubHTTPError
 from packaging.version import Version
-from rigging.filesystem import atomic_rename, open_url, url_to_fs
+from rigging.filesystem import StoragePath, atomic_rename, open_url, prefix_join, url_to_fs
 from rigging.log_setup import configure_logging
 from zephyr import Dataset, ZephyrContext
 
 from marin.execution.step_spec import StepSpec
-from marin.execution.types import THIS_OUTPUT_PATH
 from marin.utilities.validation_utils import write_provenance_json
 
 logger = logging.getLogger(__name__)
@@ -70,7 +69,7 @@ class DownloadConfig:
     hf_urls_glob: list[str] = field(default_factory=list)
     # List of Glob Patterns to Match Files in HF Dataset, If empty we get all the files in a hf repo
 
-    gcs_output_path: str = THIS_OUTPUT_PATH
+    gcs_output_path: str = ""
     """
     Path to store raw data in persistent storage (e.g. gs://$BUCKET/...).
     This works with any fsspec-compatible path, but for backwards compatibility, we call it gcs_output_path.
@@ -162,13 +161,11 @@ def _relative_path_in_source(file_path: str, source_path: str) -> str:
 
 def ensure_fsspec_path_writable(output_path: str) -> None:
     """Check if the fsspec path is writable by trying to create and delete a temporary file."""
-    fs, _ = url_to_fs(output_path)
     try:
-        fs.mkdirs(output_path, exist_ok=True)
-        test_path = os.path.join(output_path, "test_write_access")
-        with fs.open(test_path, "w") as f:
-            f.write("test")
-        fs.rm(test_path)
+        StoragePath(output_path).mkdirs()
+        test_path = prefix_join(output_path, "test_write_access")
+        StoragePath(test_path).write_text("test")
+        StoragePath(test_path).rm()
     except Exception as e:
         raise ValueError(f"No write access to fsspec path: {output_path} ({e})") from e
 
@@ -194,7 +191,6 @@ def stream_file_to_fsspec(
         expected_size: Expected file size in bytes for validation. If provided,
             the download will fail if the downloaded size doesn't match.
     """
-    target_fs, _ = url_to_fs(gcs_output_path)
     chunk_size = max(1, int(read_chunk_size_mib)) * 1024 * 1024
     max_retries = 20
     # 15 minutes max sleep
@@ -206,7 +202,7 @@ def stream_file_to_fsspec(
     last_exception = None
     for attempt in range(max_retries):
         try:
-            target_fs.mkdirs(os.path.dirname(fsspec_file_path), exist_ok=True)
+            StoragePath(os.path.dirname(fsspec_file_path)).mkdirs()
             bytes_written = 0
             with atomic_rename(fsspec_file_path) as temp_path:
                 previous_socket_timeout = socket.getdefaulttimeout()
@@ -299,12 +295,8 @@ def download_hf(cfg: DownloadConfig) -> None:
     # Some historical datasets were written that way, so this flag keeps backwards compatibility when needed.
 
     # Ensure the output path is writable
-    try:
-        output_path = os.path.join(cfg.gcs_output_path, cfg.revision) if cfg.append_sha_to_path else cfg.gcs_output_path
-        ensure_fsspec_path_writable(output_path)
-    except ValueError as e:
-        logger.exception(f"Output path validation failed: {e}")
-        raise e
+    output_path = prefix_join(cfg.gcs_output_path, cfg.revision) if cfg.append_sha_to_path else cfg.gcs_output_path
+    ensure_fsspec_path_writable(output_path)
 
     # Resolve source URL and filesystem. For production this is an hf:// URL backed
     # by HfFileSystem; tests can set source_url_override to a local/fsspec path.
@@ -345,28 +337,25 @@ def download_hf(cfg: DownloadConfig) -> None:
     download_tasks = []
 
     for file in files:
-        try:
-            relative_file_path = _relative_path_in_source(file, source_root)
-            if relative_file_path.startswith(".."):
-                raise ValueError(f"Computed path escapes source root: source={hf_source_path}, file={file}")
-            fsspec_file_path = os.path.join(output_path, relative_file_path)
-            expected_size = file_sizes.get(file)
-            # Fully-qualify the source URL so subprocess workers can open it via fsspec
-            # without having to reconstruct HfFileSystem / revision state.
-            worker_source_url = file if cfg.source_url_override is not None else f"hf://{file}"
-            download_tasks.append(
-                (
-                    output_path,
-                    worker_source_url,
-                    fsspec_file_path,
-                    expected_size,
-                    cfg.read_timeout_seconds,
-                    cfg.progress_log_interval_seconds,
-                    cfg.read_chunk_size_mib,
-                )
+        relative_file_path = _relative_path_in_source(file, source_root)
+        if relative_file_path.startswith(".."):
+            raise ValueError(f"Computed path escapes source root: source={hf_source_path}, file={file}")
+        fsspec_file_path = prefix_join(output_path, relative_file_path)
+        expected_size = file_sizes.get(file)
+        # Fully-qualify the source URL so subprocess workers can open it via fsspec
+        # without having to reconstruct HfFileSystem / revision state.
+        worker_source_url = file if cfg.source_url_override is not None else f"hf://{file}"
+        download_tasks.append(
+            (
+                output_path,
+                worker_source_url,
+                fsspec_file_path,
+                expected_size,
+                cfg.read_timeout_seconds,
+                cfg.progress_log_interval_seconds,
+                cfg.read_chunk_size_mib,
             )
-        except Exception as e:
-            logging.exception(f"Error preparing task for {file}: {e}")
+        )
 
     total_files = len(download_tasks)
     total_size_gb = sum(s for s in file_sizes.values() if s is not None) / (1024**3)
@@ -376,7 +365,8 @@ def download_hf(cfg: DownloadConfig) -> None:
         Dataset.from_list(download_tasks)
         .map(lambda task: stream_file_to_fsspec(*task))
         .write_jsonl(
-            f"{cfg.gcs_output_path}/.metrics/success-part-{{shard:05d}}-of-{{total:05d}}.jsonl", skip_existing=True
+            prefix_join(cfg.gcs_output_path, ".metrics/success-part-{shard:05d}-of-{total:05d}.jsonl"),
+            skip_existing=True,
         )
     )
     ctx_kwargs: dict = {"name": "download-hf", "max_workers": cfg.zephyr_max_parallelism}

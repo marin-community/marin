@@ -77,12 +77,20 @@ pub fn run_job(
     dir: &Path,
     arrow_schema: &SchemaRef,
     key_column: Option<&str>,
+    indexed_columns: &[&str],
     input_key_bounds: impl Fn(&str) -> (Option<i64>, Option<i64>),
 ) -> Result<PlannedSwap, StatsError> {
     if job.inputs.len() == 1 {
         apply_level_bump(job, dir, &input_key_bounds)
     } else {
-        apply_merge(job, dir, arrow_schema, key_column, &input_key_bounds)
+        apply_merge(
+            job,
+            dir,
+            arrow_schema,
+            key_column,
+            indexed_columns,
+            &input_key_bounds,
+        )
     }
 }
 
@@ -126,6 +134,7 @@ fn apply_merge(
     dir: &Path,
     arrow_schema: &SchemaRef,
     key_column: Option<&str>,
+    indexed_columns: &[&str],
     input_key_bounds: &impl Fn(&str) -> (Option<i64>, Option<i64>),
 ) -> Result<PlannedSwap, StatsError> {
     let merged_filename = seg_filename(job.output_level, job.output_min_seq);
@@ -159,6 +168,11 @@ fn apply_merge(
 
     let merged = kway_merge(&projected, &sort_cols)
         .map_err(|e| StatsError::Internal(format!("k-way merge: {e}")))?;
+    // `kway_merge` copied the rows it needs into `merged`; free the sorted inputs
+    // now so the segment isn't held in RAM twice through the parquet + sidecar
+    // writes below (each input plus the output is a fully materialized,
+    // uncompressed copy of the segment).
+    drop(projected);
     write_merged_segment(&staging_path, arrow_schema, &merged)?;
     std::fs::rename(&staging_path, &merged_path).map_err(|e| {
         StatsError::Internal(format!(
@@ -168,25 +182,24 @@ fn apply_merge(
         ))
     })?;
 
-    // Build the trigram substring-index sidecar next to the merged output (a
-    // no-op for namespaces without the indexed column). Best-effort: the index
-    // is optional, so a missing sidecar only disables row-group pruning for this
-    // segment, never correctness. Sidecars are built here, at the L0->L1+ merge
-    // (where the bulk of queryable data lands), and carried forward verbatim by
-    // single-input level bumps; L0 is intentionally left unindexed.
+    // Build the trigram substring-index sidecar next to the merged output, one
+    // bloom set per `indexed_columns` entry (a no-op for namespaces with no
+    // indexed columns). Best-effort: the index is optional, so a missing sidecar
+    // only disables row-group pruning for this segment, never correctness.
+    // Sidecars are built here, at the L0->L1+ merge (where the bulk of queryable
+    // data lands), and carried forward verbatim by single-input level bumps; L0
+    // is intentionally left unindexed.
     //
     // The parquet rename above already committed the segment, so a crash in the
     // gap before this write leaves the segment without a sidecar. That is the
     // same correct-but-unpruned state as any missing sidecar; a later compaction
-    // consuming this segment rebuilds it. Only a terminal-level segment that is
-    // never re-merged would stay unindexed — closing that fully needs a
-    // boot-adoption sweep that rebuilds missing sidecars, left as a follow-up.
-    if let Err(e) = crate::store::trigram::write_sidecar(
-        &merged_path,
-        &merged,
-        crate::store::trigram::INDEXED_COLUMN,
-        key_column,
-    ) {
+    // consuming this segment rebuilds it. A terminal-level segment that is never
+    // re-merged (or one written before sidecars existed) stays unindexed until
+    // the maintenance backfill (`Namespace::backfill_missing_sidecars`) rebuilds
+    // it a few segments per tick.
+    if let Err(e) =
+        crate::store::trigram::write_sidecar(&merged_path, &merged, indexed_columns, key_column)
+    {
         tracing::warn!(path = %merged_path.display(), error = %e, "trigram sidecar write failed");
     }
 
@@ -357,7 +370,7 @@ mod tests {
                 _ => (None, None),
             }
         };
-        let swap = run_job(&job, &dir, &schema(), Some("key"), bounds).unwrap();
+        let swap = run_job(&job, &dir, &schema(), Some("key"), &[], bounds).unwrap();
         assert!(swap.bump_rename.is_none());
         assert!(swap.unlink_removed);
         assert_eq!(swap.removed.len(), 3);
@@ -405,7 +418,7 @@ mod tests {
             output_max_seq: 2,
         };
         let bounds = |_: &str| (Some(10), Some(20));
-        let swap = run_job(&job, &dir, &schema(), Some("key"), bounds).unwrap();
+        let swap = run_job(&job, &dir, &schema(), Some("key"), &[], bounds).unwrap();
 
         // It's a bump: a deferred rename, not a rewrite.
         let (from, to) = swap.bump_rename.clone().unwrap();
@@ -470,7 +483,7 @@ mod tests {
             output_min_seq: 1,
             output_max_seq: 2,
         };
-        let swap = run_job(&job, &dir, &log, Some("key"), |_| (None, None)).unwrap();
+        let swap = run_job(&job, &dir, &log, Some("key"), &["data"], |_| (None, None)).unwrap();
 
         // The merged output carries a sidecar whose mask prunes correctly.
         let out = PathBuf::from(&swap.added.path);
@@ -581,7 +594,7 @@ mod tests {
             output_min_seq: 1,
             output_max_seq: 2,
         };
-        let swap = run_job(&job, &dir, &wide, Some("key"), |_| (None, None)).unwrap();
+        let swap = run_job(&job, &dir, &wide, Some("key"), &[], |_| (None, None)).unwrap();
         let batches = read_segment_batches(Path::new(&swap.added.path)).unwrap();
         let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
         assert_eq!(total_rows, 2);

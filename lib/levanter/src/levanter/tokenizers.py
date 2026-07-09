@@ -23,17 +23,18 @@ import os
 import re
 import shutil
 import tempfile
+import threading
 import time
 from enum import StrEnum
 from typing import Any, Protocol, runtime_checkable
 
-import fsspec
 import jinja2
 import jinja2.ext
 import jinja2.sandbox
 from huggingface_hub import __version__ as _hf_hub_version
 from huggingface_hub import hf_hub_download, snapshot_download
 from huggingface_hub.utils import EntryNotFoundError, RepositoryNotFoundError
+from rigging.filesystem import StoragePath, filesystem, open_url
 from tokenizers import Tokenizer as HfBaseTokenizer
 
 logger = logging.getLogger(__name__)
@@ -686,8 +687,7 @@ def _fetch_file_atomic(src_url: str, dest_path: str) -> bool:
     """
     tmp = dest_path + ".tmp"
     try:
-        with fsspec.open(src_url, "rb") as src:
-            data = src.read()
+        data = StoragePath(src_url).read_bytes()
         with open(tmp, "wb") as dst:
             dst.write(data)
         os.replace(tmp, dest_path)
@@ -715,7 +715,7 @@ def _copy_file_atomic(src_path: str, dest_path: str) -> None:
 def _populate_mirror_file(local_path: str, mirror_url: str) -> None:
     """Best-effort push of a local file to the mirror. Swallows any failure."""
     try:
-        with open(local_path, "rb") as src, fsspec.open(mirror_url, "wb") as dst:
+        with open(local_path, "rb") as src, open_url(mirror_url, "wb") as dst:
             dst.write(src.read())
     except Exception:
         logger.debug("Could not populate mirror at %s", mirror_url, exc_info=True)
@@ -750,7 +750,7 @@ def _stage_from_mirror(name_or_path: str, local_dir: str) -> bool:
     mirror_base = f"mirror://{mirror_dir}"
     copied = False
     try:
-        mirror_fs = fsspec.filesystem("mirror")
+        mirror_fs = filesystem("mirror")
         if mirror_fs.exists(mirror_dir):
             for entry in mirror_fs.ls(mirror_dir, detail=False):
                 filename = os.path.basename(entry.rstrip("/"))
@@ -813,6 +813,17 @@ def _stage_from_hf(name_or_path: str, local_dir: str) -> None:
         _populate_mirror_file(dest, f"{mirror_base}/{filename}")
 
 
+# Serializes tokenizer staging across threads. ``lru_cache`` deduplicates
+# *repeat* calls but does not serialize concurrent *first* calls for the same
+# key, so without this lock N threads (e.g. one per dataset component in
+# ``build_caches``) race to write the same staging directory. That race
+# corrupts the tokenizer.json a sibling is mid-read of and forces a fatal HF
+# fall-through for mirror-only refs. A single process-wide lock is sufficient:
+# staging is I/O-bound and an app rarely fetches more than one tokenizer, so
+# serializing all staging costs nothing in practice.
+_STAGE_LOCK = threading.Lock()
+
+
 @functools.lru_cache(maxsize=32)
 def _stage_tokenizer(name_or_path: str) -> str:
     """Download the full set of tokenizer files to a stable local directory.
@@ -831,6 +842,9 @@ def _stage_tokenizer(name_or_path: str) -> str:
     Once staged, downstream loaders operate purely on local files — no
     HF Hub network calls (HEAD revalidation, etc.) are made.
 
+    Safe to call concurrently for the same ref: staging is serialized so only
+    one thread downloads while the others reuse the staged files.
+
     Returns the local directory path. ``lru_cache`` makes subsequent calls free.
     """
     local_dir = os.path.join(
@@ -841,17 +855,19 @@ def _stage_tokenizer(name_or_path: str) -> str:
     )
     os.makedirs(local_dir, exist_ok=True)
 
-    # 1. Local cache hit.
-    if _try_load_tokenizer_from_dir(local_dir):
-        return local_dir
+    with _STAGE_LOCK:
+        # 1. Local cache hit (also the double-checked fast path for threads that
+        #    waited on the lock while another thread staged this same ref).
+        if _try_load_tokenizer_from_dir(local_dir):
+            return local_dir
 
-    # 2. Mirror: copy whatever files are present, then try loading.
-    if _stage_from_mirror(name_or_path, local_dir) and _try_load_tokenizer_from_dir(local_dir):
-        return local_dir
+        # 2. Mirror: copy whatever files are present, then try loading.
+        if _stage_from_mirror(name_or_path, local_dir) and _try_load_tokenizer_from_dir(local_dir):
+            return local_dir
 
-    # 3. HF Hub: full download, populate mirror as side-effect.
-    _stage_from_hf(name_or_path, local_dir)
-    return local_dir
+        # 3. HF Hub: full download, populate mirror as side-effect.
+        _stage_from_hf(name_or_path, local_dir)
+        return local_dir
 
 
 def _load_hf_base_tokenizer(local_dir: str) -> HfBaseTokenizer:

@@ -11,11 +11,12 @@ from typing import Generic, TypeVar
 
 from rigging.timing import Timestamp
 
+from iris.cluster.config import UserBudgetTier
 from iris.cluster.controller import reads, writes
 from iris.cluster.controller.codec import device_counts_from_json
 from iris.cluster.controller.db import ControllerDB, Tx
 from iris.cluster.types import UserBudgetDefaults
-from iris.rpc import config_pb2, job_pb2
+from iris.rpc import job_pb2
 
 logger = logging.getLogger(__name__)
 
@@ -137,7 +138,7 @@ _VALID_TIER_BANDS = frozenset(
 
 def reconcile_user_budget_tiers(
     db: ControllerDB,
-    tiers: Iterable[config_pb2.UserBudgetTier],
+    tiers: Iterable[UserBudgetTier],
     now: Timestamp,
 ) -> int:
     """Upsert per-user budgets from cluster config into the user_budgets table.
@@ -168,7 +169,6 @@ def reconcile_user_budget_tiers(
             for user_id in tier.user_ids:
                 if not user_id:
                     raise ValueError("UserBudgetTier.user_ids contains an empty entry")
-                writes.ensure_user(_tx, user_id, now)
                 writes.set_user_budget(_tx, user_id, tier.budget_limit, tier.max_band, now)
                 count += 1
     if count:

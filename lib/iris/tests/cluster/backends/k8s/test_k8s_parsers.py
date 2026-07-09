@@ -3,12 +3,10 @@
 
 """Tests for K8s resource quantity parsers."""
 
-from __future__ import annotations
-
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
-from iris.cluster.backends.k8s.types import parse_k8s_cpu, parse_k8s_quantity, parse_k8s_timestamp
+from iris.cluster.platforms.k8s.types import parse_k8s_cpu, parse_k8s_quantity, parse_k8s_timestamp
 
 
 @pytest.mark.parametrize(
@@ -45,17 +43,17 @@ def test_parse_k8s_memory(value: str, expected: int):
 @pytest.mark.parametrize(
     "value, expected",
     [
-        ("2024-01-01T00:00:00Z", datetime(2024, 1, 1, tzinfo=timezone.utc)),
-        ("2024-01-01T00:00:00+00:00", datetime(2024, 1, 1, tzinfo=timezone.utc)),
+        ("2024-01-01T00:00:00Z", datetime(2024, 1, 1, tzinfo=UTC)),
+        ("2024-01-01T00:00:00+00:00", datetime(2024, 1, 1, tzinfo=UTC)),
         (
             "2024-01-01T00:00:00.123456Z",
-            datetime(2024, 1, 1, 0, 0, 0, 123456, tzinfo=timezone.utc),
+            datetime(2024, 1, 1, 0, 0, 0, 123456, tzinfo=UTC),
         ),
         # The Kubernetes API emits nanosecond precision; fromisoformat truncates
         # to microseconds (the case the removed manual-truncation block handled).
         (
             "2024-01-01T00:00:00.123456789Z",
-            datetime(2024, 1, 1, 0, 0, 0, 123456, tzinfo=timezone.utc),
+            datetime(2024, 1, 1, 0, 0, 0, 123456, tzinfo=UTC),
         ),
     ],
 )

@@ -5,9 +5,10 @@ import dataclasses
 from types import SimpleNamespace
 
 import pytest
+import rigging.filesystem as fs
 from levanter.models.llama import LlamaConfig
-from marin.execution.artifact import PathMetadata
-from marin.execution.types import ExecutorStep, output_path_of
+from marin.execution.artifact import Artifact
+from marin.execution.lazy import ArtifactStep, materialized_config
 from marin.rl.curriculum import CurriculumConfig
 from marin.rl.kl_regularization import KLConfig, KLMode
 from marin.rl.model_utils import is_hf_checkpoint
@@ -18,14 +19,27 @@ from marin.rl.rl_experiment_utils import (
     _build_rl_job_config,
     _run_rl_experiment_step,
     config_class_path,
-    executor_main_config_for_rl_experiment,
     executor_step_resources_for_rl_experiment,
     launcher_region_for_rl_experiment,
     make_rl_step,
 )
 from marin.rl.rl_losses import RLOOLoss
+from marin.training.training import LevanterCheckpoint
 
 MODEL_NAME = "meta-llama/Llama-3.1-8B-Instruct"
+
+# A minimal DataConfig covering just the regions these tests exercise (mirrors the
+# relevant entries in config/marin.yaml). eu-west4 -> europe-west4 stands in for any
+# non-identity bucket-to-region normalization; the mapping itself isn't what's under
+# test, so it's bound explicitly rather than resolved from the ambient cluster config.
+_TEST_DATA_CONFIG = fs.DataConfig(
+    scheme="gs",
+    region_buckets={
+        "us-central1": fs.BucketSpec(name="marin-us-central1", store=fs.StoreType.GCS),
+        "us-east5": fs.BucketSpec(name="marin-us-east5", store=fs.StoreType.GCS),
+        "europe-west4": fs.BucketSpec(name="marin-eu-west4", store=fs.StoreType.GCS),
+    },
+)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -51,6 +65,15 @@ def _noop(_config: _EmptyConfig) -> None:
 @pytest.fixture(autouse=True)
 def _default_launcher_region(monkeypatch):
     monkeypatch.setenv("MARIN_PREFIX", "gs://marin-us-central1")
+    # marin_region() checks GCE instance metadata before MARIN_PREFIX; on a real
+    # GCP host that resolves a real region and silently overrides the prefix
+    # these tests set, so pin it to "not on GCP" for hermetic region resolution.
+    monkeypatch.setattr(fs, "region_from_metadata", lambda: None)
+    # Bind a fixed DataConfig instead of resolving the ambient cluster config, so
+    # these tests are independent of the host's config search path (a per-user
+    # ~/.config/marin/clusters override, cwd, missing config/ dir, etc).
+    with fs.use_data_config(_TEST_DATA_CONFIG):
+        yield
 
 
 def _test_config(
@@ -112,16 +135,6 @@ def test_non_v5p_executor_step_regions_follow_current_launcher_region(monkeypatc
     assert resources.regions == ["europe-west4"]
 
 
-def test_executor_main_config_uses_current_launcher_region_prefix(monkeypatch):
-    monkeypatch.setenv("MARIN_PREFIX", "gs://marin-us-east5")
-
-    executor_config = executor_main_config_for_rl_experiment(
-        _test_config(train_tpu_type="v5p-8", inference_tpu_type="v5p-8")
-    )
-
-    assert executor_config.prefix == "gs://marin-us-east5"
-
-
 def test_launcher_region_raises_when_root_region_conflicts_with_requested_compute(monkeypatch):
     monkeypatch.setenv("MARIN_PREFIX", "gs://marin-eu-west4")
 
@@ -134,30 +147,40 @@ def test_launcher_region_raises_when_root_region_conflicts_with_requested_comput
         launcher_region_for_rl_experiment(_test_config(train_tpu_type="v5p-8", inference_tpu_type="v5p-8"))
 
 
-def test_make_rl_step_uses_model_step_artifact_root_as_dependency(monkeypatch):
+def test_make_rl_step_uses_model_checkpoint_path_as_dependency(monkeypatch):
     monkeypatch.setenv("MARIN_PREFIX", "gs://marin-us-central1")
-    model_step = ExecutorStep(name="models/test-llama", fn=_noop, config=_EmptyConfig())
+    model_checkpoint = ArtifactStep(
+        name="models/test-llama",
+        version="2026.06.28",
+        artifact_type=LevanterCheckpoint,
+        run=_noop,
+        build_config=lambda _ctx: _EmptyConfig(),
+    )
     config = dataclasses.replace(
         _test_config(train_tpu_type="v5p-8", inference_tpu_type="v5p-8"),
         model_config=ModelConfig(
             name=MODEL_NAME,
             type="llama",
-            artifact=model_step,
+            artifact=model_checkpoint,
             config_class_path=config_class_path(LlamaConfig),
         ),
     )
 
-    step = make_rl_step(name="rl-test", config=config, curriculum=_test_curriculum())
+    step = make_rl_step(name="rl-test", config=config, curriculum=_test_curriculum(), version="2026.06.28")
 
-    assert step.config.model_path == output_path_of(model_step)
-    assert step.config.experiment_config.model_config.artifact == output_path_of(model_step)
+    # The model checkpoint is a dependency, and the step's config resolves to its path.
+    assert step.deps == (model_checkpoint,)
+    expected_path = model_checkpoint.path("gs://marin-us-central1")
+    step_config = materialized_config(step, "gs://marin-us-central1")
+    assert step_config.model_path == expected_path
+    assert step_config.experiment_config.model_config.artifact == expected_path
 
 
 def test_is_hf_checkpoint_recognizes_gcs_hf_exports(monkeypatch):
     hf_files = {
         "gs://marin-us-central1/models/test-model/hf/config.json",
     }
-    monkeypatch.setattr("marin.rl.model_utils.fsspec_exists", lambda path: path in hf_files)
+    monkeypatch.setattr("rigging.filesystem.StoragePath.exists", lambda self: str(self) in hf_files)
 
     assert is_hf_checkpoint("gs://marin-us-central1/models/test-model/hf")
     assert not is_hf_checkpoint("gs://marin-us-central1/checkpoints/test-run")
@@ -231,7 +254,7 @@ def test_build_rl_job_config_uses_dummy_load_format_for_non_object_store_model_p
     assert job_config.inference_config.engine.canonical_model_name == MODEL_NAME
 
 
-def test_run_rl_experiment_step_returns_serializable_path_metadata(monkeypatch):
+def test_run_rl_experiment_step_returns_a_path_ref(monkeypatch):
     calls = {}
 
     class _FakeRLJob:
@@ -249,6 +272,7 @@ def test_run_rl_experiment_step_returns_serializable_path_metadata(monkeypatch):
         curriculum=_test_curriculum(),
         model_path="gs://marin-us-central1/models/test-model",
         output_path="gs://marin-us-central1/rl_testing/exec-gcs-small-test",
+        resources=executor_step_resources_for_rl_experiment(runtime_config),
     )
 
     def _fake_build_rl_job_config(**kwargs):
@@ -264,4 +288,4 @@ def test_run_rl_experiment_step_returns_serializable_path_metadata(monkeypatch):
     assert calls["build_kwargs"]["instance_id"].startswith("exec-gcs-small-test-")
     assert calls["job_config"] == "job-config"
     assert calls["name"] == "exec-gcs-small-test"
-    assert result == PathMetadata(path="gs://marin-us-central1/rl_testing/exec-gcs-small-test")
+    assert result == Artifact(path="gs://marin-us-central1/rl_testing/exec-gcs-small-test")

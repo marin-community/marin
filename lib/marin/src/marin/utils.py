@@ -2,85 +2,13 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import os
-from datetime import datetime
 from typing import Any
 
-import braceexpand
 import datasets
 import fsspec
 import requests
 from huggingface_hub.utils import HfHubHTTPError
-from rigging.filesystem import url_to_fs
 from rigging.timing import ExponentialBackoff, retry_with_backoff
-
-
-def fsspec_exists(file_path: str) -> bool:
-    """
-    Check if a file exists in a fsspec filesystem.
-
-    Args:
-        file_path (str): The path of the file
-
-    Returns:
-        bool: True if the file exists, False otherwise.
-    """
-
-    # Use fsspec to check if the file exists
-    fs = url_to_fs(file_path)[0]
-    return fs.exists(file_path)
-
-
-def fsspec_glob(file_path: str) -> list[str]:
-    """
-    Get a list of files in a fsspec filesystem that match a pattern.
-
-    We extend fsspec glob to also work with braces, using braceexpand.
-
-    Args:
-        file_path (str): a file path or pattern, possibly with *, **, ?, or {}'s
-
-    Returns:
-        list[str]: A list of files that match the pattern. returned files have the protocol prepended to them.
-    """
-
-    # Use fsspec to get a list of files
-    fs = url_to_fs(file_path)[0]
-    protocol = fsspec.core.split_protocol(file_path)[0]
-
-    def join_protocol(file: str) -> str:
-        if protocol:
-            return f"{protocol}://{file}"
-        return file
-
-    out: list[str] = []
-
-    # glob has to come after braceexpand
-    for file in braceexpand.braceexpand(file_path):
-        out.extend(join_protocol(file) for file in fs.glob(file))
-
-    return out
-
-
-def fsspec_mkdirs(dir_path: str, exist_ok: bool = True) -> None:
-    """
-    Create a directory in a fsspec filesystem.
-
-    Args:
-        dir_path (str): The path of the directory
-    """
-
-    # Use fsspec to create the directory
-    fs = url_to_fs(dir_path)[0]
-    fs.makedirs(dir_path, exist_ok=exist_ok)
-
-
-def fsspec_isdir(dir_path: str) -> bool:
-    """
-    Check if a path is a directory in fsspec filesystem.
-    """
-    fs, _ = url_to_fs(dir_path)
-    return fs.isdir(dir_path)
-
 
 _HF_RETRY_KEYWORDS = (
     "too many requests",
@@ -124,36 +52,6 @@ def load_dataset_with_backoff(
     )
 
 
-def fsspec_size(file_path: str) -> int:
-    """Get file size (in bytes) of a file on an `fsspec` filesystem."""
-    fs = url_to_fs(file_path)[0]
-
-    return fs.size(file_path)
-
-
-def fsspec_mtime(file_path: str) -> datetime:
-    """Get file modification time (in seconds since epoch) of a file on an `fsspec` filesystem."""
-    fs = url_to_fs(file_path)[0]
-
-    return fs.modified(file_path)
-
-
-def fsspec_url(fs: fsspec.AbstractFileSystem, path: str) -> str:
-    """Re-attach ``fs``'s protocol to a bare ``path`` so it round-trips through ``url_to_fs``.
-
-    ``fsspec`` glob/find results drop the protocol prefix (e.g. ``gs://``), which makes them
-    ambiguous to reopen on a non-local filesystem. Local paths are returned unchanged.
-    """
-    protocol = fs.protocol
-    if isinstance(protocol, (list, tuple)):
-        protocol = protocol[0]
-    if protocol in (None, "file"):
-        return path
-    if path.startswith(f"{protocol}://"):
-        return path
-    return f"{protocol}://{path}"
-
-
 def is_path_like(path: str) -> bool:
     """Return True if path is a URL (gs://, s3://, etc.) or an existing local path.
 
@@ -163,52 +61,6 @@ def is_path_like(path: str) -> bool:
     if protocol is not None:
         return True
     return os.path.exists(path)
-
-
-def rebase_file_path(
-    base_in_path: str,
-    file_path: str,
-    base_out_path: str,
-    new_extension: str | None = None,
-    old_extension: str | None = None,
-) -> str:
-    """
-    Rebase a file path from one directory to another, with an option to change the file extension.
-
-    Args:
-        base_in_path (str): The base directory of the input file
-        file_path (str): The path of the file
-        base_out_path (str): The base directory of the output file
-        new_extension (str, optional): If provided, the new file extension to use (including the dot, e.g., '.txt')
-        old_extension (str, optional): If provided along with new_extension, specifies the old extension to replace.
-                                       Must be the actual suffix of ``file_path``; a ``ValueError`` is raised if not.
-                                       If not provided (but `new_extension` is), the function will replace everything
-                                       after the last dot. If there is no dot, ``new_extension`` is appended.
-
-    Returns:
-        str: The rebased file path
-    """
-
-    rel_path = os.path.relpath(file_path, base_in_path)
-
-    if old_extension and not new_extension:
-        raise ValueError("old_extension requires new_extension to be set")
-
-    if new_extension:
-        if old_extension:
-            # Use endswith rather than rfind so we fail loudly on a mismatch instead of
-            # silently truncating the path (rfind returns -1, and rel_path[:-1] drops
-            # the last character).
-            if not rel_path.endswith(old_extension):
-                raise ValueError(
-                    f"Cannot rebase {file_path!r}: relative path {rel_path!r} does not end with "
-                    f"old_extension={old_extension!r}"
-                )
-            rel_path = rel_path[: -len(old_extension)] + new_extension
-        else:
-            dot_idx = rel_path.rfind(".")
-            rel_path = (rel_path[:dot_idx] if dot_idx != -1 else rel_path) + new_extension
-    return os.path.join(base_out_path, rel_path)
 
 
 def get_directory_friendly_name(name: str) -> str:

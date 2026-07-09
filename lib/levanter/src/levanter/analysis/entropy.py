@@ -7,20 +7,17 @@ import logging
 from typing import Callable, TypeVar
 
 import equinox as eqx
-import jax
-import jax.numpy as jnp
-from jaxtyping import PyTree
-
 import haliax as hax
 import haliax.nn as hnn
+import jax
+import jax.numpy as jnp
 from haliax.jax_utils import named_call
+from jaxtyping import PyTree
 
 import levanter.tracker
 from levanter.callbacks import StepInfo
-
 from levanter.data import DataLoader
 from levanter.tracker.histogram import SummaryStats
-
 
 B = TypeVar("B")
 
@@ -35,9 +32,9 @@ def entropy_from_logits(logits: hax.NamedArray, axis: hax.AxisSelector) -> hax.N
     Computes entropy over the given axis in a numerically stable way using raw logits.
     """
     log_z = hnn.logsumexp(logits, axis=axis)
-    probs = hax.exp(logits - log_z)
-    entropy = log_z - hax.sum(probs * logits, axis=axis)
-    return entropy
+    log_probs = logits - log_z
+    probs = hax.exp(log_probs)
+    return -hax.sum(probs * log_probs, axis=axis)
 
 
 @named_call
@@ -53,15 +50,17 @@ def top2_gap_from_logits(logits: hax.NamedArray, axis: hax.AxisSelector) -> hax.
         A NamedArray with the same shape as logits minus `axis`, containing the top-2 gaps.
     """
 
-    # this uses a ton of memory for no particularly good reason. So we do it in two passes:
-    # sorted_logits = hax.top_k(logits, axis, 2, "top")[0]
-    # top1 = sorted_logits["top", 0]
-    # top2 = sorted_logits["top", 1]
+    # hax.top_k(logits, axis, 2, "top") would materialize a sorted copy of the whole axis,
+    # so instead we take two argmax passes: find the max, mask out its position, take the max again.
+    Axis = logits.resolve_axis(axis)
+    argmax = hax.argmax(logits, axis=Axis)
+    top1 = hax.take(logits, Axis, argmax)
 
-    argmax = hax.argmax(logits, axis=axis)
-    top1 = hax.take(logits, axis, argmax)
-    argmax2 = hax.argmax(hax.where(argmax, -jnp.inf, logits), axis=axis)
-    top2 = hax.take(logits, axis, argmax2)
+    # Mask the winning position (the one whose index equals argmax) with -inf so the second pass
+    # finds the runner-up. argmax lacks the reduced axis, so broadcast it back over Axis to compare.
+    is_top1 = hax.arange(Axis) == argmax.broadcast_axis(Axis)
+    argmax2 = hax.argmax(hax.where(is_top1, -jnp.inf, logits), axis=Axis)
+    top2 = hax.take(logits, Axis, argmax2)
     return top1 - top2
 
 

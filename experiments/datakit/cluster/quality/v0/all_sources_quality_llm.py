@@ -37,8 +37,6 @@ Submit:
               --inference-name sonnet46-thr05
 """
 
-from __future__ import annotations
-
 import argparse
 import logging
 import os
@@ -47,12 +45,11 @@ from typing import Any
 from fray import ResourceConfig
 from marin.datakit.normalize import NormalizedData
 from marin.datakit.sources import all_sources
-from marin.execution.artifact import Artifact
+from marin.execution.artifact import read_artifact
 from marin.execution.step_runner import StepRunner
 from marin.execution.step_spec import StepSpec
-from marin.utils import fsspec_glob
 from pydantic import BaseModel
-from rigging.filesystem import url_to_fs
+from rigging.filesystem import StoragePath
 from rigging.log_setup import configure_logging
 from zephyr import Dataset, ZephyrContext
 from zephyr.readers import load_file
@@ -100,22 +97,21 @@ class LlmQualityOutput(BaseModel):
     version: str = "v1"
     output_dir: str
     model_path: str
-    counters: dict[str, int]
+    counters: dict[str, int | float]
 
 
 def _register_model_step(name: str, model_bin_path: str, output_path_prefix: str | None = None) -> StepSpec:
     """Tiny StepSpec that just emits a FastTextModel artifact pointing at *model_bin_path*.
 
     :func:`classify_llm_quality_step` consumes its ``model_step`` via
-    ``Artifact.from_path(model_step, FastTextModel)``, so we need a step
+    ``read_artifact(model_step.output_path, FastTextModel)``, so we need a step
     whose ``.artifact`` is a :class:`FastTextModel`. The fn here doesn't
     stage anything -- the bin is already on GCS at the path produced by
     :mod:`llm_quality.train`. We just record provenance.
     """
 
     def _fn(_output_path: str) -> FastTextModel:
-        fs, resolved = url_to_fs(model_bin_path)
-        size = int(fs.info(resolved).get("size", 0) or 0)
+        size = StoragePath(model_bin_path).size()
         return FastTextModel(
             model_dir=os.path.dirname(model_bin_path),
             model_path=model_bin_path,
@@ -143,7 +139,7 @@ def _run_one_source(
     worker_resources: ResourceConfig,
     max_workers: int | None,
 ) -> LlmQualityOutput:
-    files = sorted(fsspec_glob(f"{normalized.main_output_dir.rstrip('/')}/**/*.parquet"))
+    files = sorted(str(m) for m in StoragePath(f"{normalized.main_output_dir.rstrip('/')}/**/*.parquet").glob())
     if not files:
         raise FileNotFoundError(f"{source_name}: no .parquet files under {normalized.main_output_dir}")
     output_pattern = f"{output_path.rstrip('/')}/data-{{shard:05d}}-of-{{total:05d}}.parquet"
@@ -218,8 +214,8 @@ def classify_llm_quality_step(
     return StepSpec(
         name=name,
         fn=lambda output_path: _run_one_source(
-            normalized=Artifact.from_path(normalized, NormalizedData),
-            model_path=Artifact.from_path(model_step, FastTextModel).model_path,
+            normalized=read_artifact(normalized.output_path, NormalizedData),
+            model_path=read_artifact(model_step.output_path, FastTextModel).model_path,
             output_path=output_path,
             source_name=source_name,
             worker_resources=resources,

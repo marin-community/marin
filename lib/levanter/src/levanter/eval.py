@@ -189,6 +189,20 @@ def _calculate_bytes_per_token_type(tokenizer: MarinTokenizer) -> Optional[Int[A
     return jnp.array(byte_lengths)
 
 
+def _per_pos_out_sharding(device_mesh, axis_mapping, EvalBatch: hax.Axis) -> Optional[NamedSharding]:
+    """Sharding for the `[EvalBatch, Token]` per-position eval outputs.
+
+    Returns ``None`` unless the batch axis is explicitly sharded over the mesh, in which case
+    downstream `out_sharding` hints can pin per-position gathers to the data-parallel layout.
+    """
+    if device_mesh is None or axis_mapping is None:
+        return None
+    batch_axis_resource = axis_mapping.get(EvalBatch.name, axis_mapping.get("batch"))
+    if batch_axis_resource is not None and axis_resource_is_explicit(device_mesh, batch_axis_resource):
+        return NamedSharding(device_mesh, P(batch_axis_resource, None))
+    return None
+
+
 def _ensure_named_lm_example(batch: LmEvalExample, *, EvalBatch: hax.Axis, model_pos: hax.Axis) -> LmExample:
     if isinstance(batch, LmExample):
         return batch
@@ -504,11 +518,7 @@ class TaggedEvaluator(Generic[Ex, M]):
         self.device_mesh = device_mesh
         self.tokenizer = tokenizer
         self.axis_mapping = axis_mapping
-        self.per_pos_out_sharding = None
-        if device_mesh is not None and axis_mapping is not None:
-            batch_axis_resource = axis_mapping.get(EvalBatch.name, axis_mapping.get("batch"))
-            if batch_axis_resource is not None and axis_resource_is_explicit(device_mesh, batch_axis_resource):
-                self.per_pos_out_sharding = NamedSharding(device_mesh, P(batch_axis_resource, None))
+        self.per_pos_out_sharding = _per_pos_out_sharding(device_mesh, axis_mapping, EvalBatch)
 
         self.bytes_per_token = _calculate_bytes_per_token_type(tokenizer)
         self.hierarchy = self._construct_tag_hierarchy()
@@ -682,11 +692,7 @@ class LabeledEvaluator(Generic[Ex, M]):
         self.axis_mapping = axis_mapping
         self.aggregate_names = label_spec.aggregate_names
         self.aggregate_label_ids = self._padded_aggregate_label_ids(label_spec)
-        self.per_pos_out_sharding = None
-        if device_mesh is not None and axis_mapping is not None:
-            batch_axis_resource = axis_mapping.get(EvalBatch.name, axis_mapping.get("batch"))
-            if batch_axis_resource is not None and axis_resource_is_explicit(device_mesh, batch_axis_resource):
-                self.per_pos_out_sharding = NamedSharding(device_mesh, P(batch_axis_resource, None))
+        self.per_pos_out_sharding = _per_pos_out_sharding(device_mesh, axis_mapping, EvalBatch)
 
         self.bytes_per_token = _calculate_bytes_per_token_type(tokenizer)
         self.accum_for_batch = self._make_accum_for_batch()

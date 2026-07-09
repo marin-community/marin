@@ -19,7 +19,7 @@ import levanter.checkpoint as levanter_checkpoint
 from haliax.partitioning import ResourceMapping
 from jax.sharding import Mesh
 from jaxtyping import PyTree
-from rigging.filesystem import url_to_fs
+from rigging.filesystem import StoragePath, url_to_fs
 
 from .base import (
     WeightTransferClient,
@@ -35,8 +35,7 @@ logger = logging.getLogger(__name__)
 
 def _rm_thread(path: str) -> None:
     try:
-        fs, _ = url_to_fs(path)
-        fs.rm(path, recursive=True)
+        StoragePath(path).rmtree()
     except Exception as e:
         logger.error(f"Failed to delete old checkpoint at {path}: {e}", exc_info=True)
 
@@ -69,9 +68,8 @@ class GCSCheckpointServer(WeightTransferServer):
                 old_path = os.path.join(self.config.checkpoint_dir, f"step_{old_weight_id}")
                 if jax.process_index() == 0:  # Only delete from coordinator
                     logger.info(f"Cleaning up old checkpoint at weight_id {old_weight_id} ({old_path})...")
-                    fs, _ = url_to_fs(old_path)
                     # Dispatch deletion to a separate thread to avoid blocking
-                    if fs.exists(old_path):
+                    if StoragePath(old_path).exists():
                         threading.Thread(target=_rm_thread, args=(old_path,), daemon=True).start()
 
             logger.info(f"Saving checkpoint at weight_id {weight_id}...")

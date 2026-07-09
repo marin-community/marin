@@ -8,8 +8,8 @@ Supports both an interactive curses TUI and non-interactive CLI commands
 for listing, viewing, and copying files.
 
 Usage:
-    export R2_ACCESS_KEY_ID=<your-key-id>
-    export R2_SECRET_ACCESS_KEY=<your-key-secret>
+    export CW_KEY_ID=<your-key-id>
+    export CW_KEY_SECRET=<your-key-secret>
 
     # Interactive TUI (default)
     uv run lib/iris/scripts/fs-browser.py [prefix]
@@ -26,13 +26,14 @@ import os
 import pathlib
 import sys
 from dataclasses import dataclass
+from typing import cast
 
 import click
 import s3fs
 import yaml
 from tabulate import tabulate
 
-DEFAULT_CONFIG = str(pathlib.Path(__file__).parent.parent / "config" / "coreweave.yaml")
+DEFAULT_CONFIG = str(pathlib.Path(__file__).parent.parent / "config" / "cw-us-east-02a.yaml")
 
 MAX_FILE_SIZE = 10 * 1024 * 1024  # 10 MB — refuse to download files larger than this
 
@@ -71,10 +72,10 @@ def normalize_path(arg: str, bucket: str) -> str:
 
 
 def connect(s3_config: S3Config) -> s3fs.S3FileSystem:
-    key_id = os.environ.get("R2_ACCESS_KEY_ID")
-    key_secret = os.environ.get("R2_SECRET_ACCESS_KEY")
+    key_id = os.environ.get("CW_KEY_ID")
+    key_secret = os.environ.get("CW_KEY_SECRET")
     if not key_id or not key_secret:
-        print("ERROR: R2_ACCESS_KEY_ID and R2_SECRET_ACCESS_KEY must be set", file=sys.stderr)
+        print("ERROR: CW_KEY_ID and CW_KEY_SECRET must be set", file=sys.stderr)
         sys.exit(1)
 
     return s3fs.S3FileSystem(
@@ -125,7 +126,8 @@ def format_size(size: int) -> str:
 def fetch_file(fs: s3fs.S3FileSystem, path: str, max_bytes: int = MAX_FILE_SIZE) -> bytes:
     """Download a file from S3, up to max_bytes."""
     with fs.open(path, "rb") as f:
-        return f.read(max_bytes)
+        # Opened "rb", so read() yields bytes; the s3fs stub widens it to bytes | str.
+        return cast(bytes, f.read(max_bytes))
 
 
 def render_json_table(data: object) -> str:

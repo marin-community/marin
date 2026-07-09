@@ -16,6 +16,7 @@ from levanter.store.cache import (
     CACHE_LAYOUT_SHARDED,
     CacheLedger,
     SerialCacheWriter,
+    ShardedCacheLayout,
     TreeCache,
     TreeStore,
     build_or_load_cache,
@@ -246,6 +247,56 @@ async def test_sharded_flat_field_offsets_share_in_flight_build(monkeypatch):
     cached_offsets = await cache._ensure_flat_field_offsets_async("data")
     np.testing.assert_array_equal(cached_offsets, expected_offsets)
     assert build_count == 1
+
+
+@pytest.mark.parametrize(
+    ("output_path", "shard_path", "expected"),
+    [
+        # gs:// shard strictly under output.
+        ("gs://bucket/cache", "gs://bucket/cache/train/shard_0", "train/shard_0"),
+        # A trailing slash on output_path (a trailing-slash MARIN_PREFIX) must not fork
+        # the relative key from the no-trailing-slash writer.
+        ("gs://bucket/cache/", "gs://bucket/cache/train/shard_0", "train/shard_0"),
+        # A doubled interior separator on either side collapses structurally.
+        ("gs://bucket/cache", "gs://bucket/cache//train//shard_0", "train/shard_0"),
+        # Local absolute paths.
+        ("/tmp/cache", "/tmp/cache/shard_0", "shard_0"),
+        # An object-store key may contain a literal `..` segment (keys are not
+        # normalized), so it passes through rather than escaping a directory.
+        ("gs://bucket/cache", "gs://bucket/cache/../weird", "../weird"),
+    ],
+)
+def test_relative_shard_path_structural(output_path, shard_path, expected):
+    assert ShardedCacheLayout.parse(output_path).relative_shard(shard_path) == expected
+
+
+@pytest.mark.parametrize(
+    ("output_path", "shard_path"),
+    [
+        # Sibling, not descendant.
+        ("gs://bucket/cache", "gs://bucket/other/shard_0"),
+        # Different bucket.
+        ("gs://bucket/cache", "gs://other/cache/shard_0"),
+        # shard_path equals output_path — no relative key to emit.
+        ("gs://bucket/cache", "gs://bucket/cache"),
+        # A `..` segment in a local path escapes the cache directory once joined back.
+        ("/tmp/cache", "/tmp/cache/../outside/part"),
+        ("/tmp/cache", "/tmp/cache/a/../../etc"),
+    ],
+)
+def test_relative_shard_path_rejects_non_descendants(output_path, shard_path):
+    with pytest.raises(ValueError, match="not under output path"):
+        ShardedCacheLayout.parse(output_path).relative_shard(shard_path)
+
+
+def test_sharded_cache_layout_members():
+    # A trailing slash on the root must not double the separator on any derived path.
+    layout = ShardedCacheLayout.parse("gs://bucket/cache/")
+    assert layout.ledger == "gs://bucket/cache/shard_ledger.json"
+    assert layout.shard("part-00000-of-00010") == "gs://bucket/cache/part-00000-of-00010"
+    child = layout.child("train")
+    assert str(child) == "gs://bucket/cache/train"
+    assert child.ledger == "gs://bucket/cache/train/shard_ledger.json"
 
 
 def test_sharded_cache_rejects_drifted_aggregate_field_counts():

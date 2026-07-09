@@ -10,8 +10,6 @@ per-call cost from token usage. ``score.py`` imports everything from
 here so the prompt + parsing live in one place.
 """
 
-from __future__ import annotations
-
 import json
 import os
 import re

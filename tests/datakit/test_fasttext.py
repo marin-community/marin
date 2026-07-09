@@ -3,8 +3,6 @@
 
 """Tests for experiments.datakit.fasttext."""
 
-from __future__ import annotations
-
 from typing import Any
 
 import pytest

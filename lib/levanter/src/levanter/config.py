@@ -17,9 +17,8 @@ import jax.numpy as jnp
 import jmp
 from draccus import parse
 from draccus.parsers.decoding import decode_dataclass
-from fsspec import AbstractFileSystem
 from haliax import ScanCheckpointPolicy
-from rigging.filesystem import url_to_fs
+from rigging.filesystem import StoragePath
 
 from levanter.utils.datetime_utils import encode_timedelta, parse_timedelta
 
@@ -137,13 +136,11 @@ def _maybe_get_config_path_and_cmdline_args(args: List[str]):
             config_path = args[config_path_index]
 
             if urllib.parse.urlparse(config_path).scheme:
-                fs: AbstractFileSystem
-                fs, fs_path = url_to_fs(config_path)
                 temp_file = tempfile.NamedTemporaryFile(prefix="config", suffix=".yaml", delete=False)
                 temp_config_path = temp_file.name
                 temp_file.close()
                 atexit.register(lambda path=temp_config_path: os.unlink(path))  # pyrefly: ignore[missing-argument]
-                fs.get(fs_path, temp_config_path)
+                StoragePath(config_path).download_to(temp_config_path)
                 config_path = temp_config_path
 
             config_paths.append(config_path)

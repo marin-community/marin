@@ -70,14 +70,16 @@ def requeue_coscheduled_siblings(
 ) -> None:
     """Bounce coscheduled siblings to PENDING so the job re-coschedules atomically.
 
-    Reservation-holder siblings are skipped; they never hold worker resources
-    and don't participate in the slice.
+    The bounced attempt is stamped ``COSCHED_FAILED``, not ``PREEMPTED``: an
+    atomic gang restart is not the sibling's own preemption, so its budget must
+    stay honest. Since the retry counters are derived from attempt state, a
+    ``PREEMPTED`` stamp here would spuriously charge the sibling; ``COSCHED_FAILED``
+    (terminal, excluded from the preemption states) both records the true cause
+    and keeps the derived ``preemption_count`` at zero.
     """
     error = f"Coscheduled sibling {failed_task_id.to_wire()} bounced for atomic re-scheduling"
 
     for sib in siblings:
-        if sib.is_reservation_holder:
-            continue
         merge_task_termination(
             state,
             sib.task_id.to_wire(),
@@ -86,5 +88,5 @@ def requeue_coscheduled_siblings(
             error,
             now_ms,
             stamp_attempt_finished=False,
-            attempt_state=job_pb2.TASK_STATE_PREEMPTED,
+            attempt_state=job_pb2.TASK_STATE_COSCHED_FAILED,
         )

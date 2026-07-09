@@ -61,6 +61,7 @@ function toggleStar(user: string) {
 
 interface UserRow {
   user: string
+  role: string
   activeJobs: number
   runningJobs: number
   pendingJobs: number
@@ -77,6 +78,7 @@ function toRow(summary: UserSummary): UserRow {
     .reduce((acc, [, count]) => acc + count, 0)
   return {
     user: summary.user,
+    role: summary.role ?? '',
     activeJobs,
     runningJobs: jobCounts['running'] ?? 0,
     pendingJobs: (jobCounts['pending'] ?? 0) + (jobCounts['unschedulable'] ?? 0),
@@ -152,6 +154,7 @@ const rows = computed<UserRow[]>(() => {
         <thead>
           <tr class="border-b border-surface-border">
             <th scope="col" class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary">User</th>
+            <th scope="col" class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary">Role</th>
             <th scope="col" class="px-3 py-2 text-right text-xs font-semibold uppercase tracking-wider text-text-secondary">Running</th>
             <th scope="col" class="px-3 py-2 text-right text-xs font-semibold uppercase tracking-wider text-text-secondary">Pending</th>
             <th scope="col" class="px-3 py-2 text-right text-xs font-semibold uppercase tracking-wider text-text-secondary">Active Jobs</th>
@@ -191,6 +194,16 @@ const rows = computed<UserRow[]>(() => {
                 >{{ row.user }}</RouterLink>
                 <span v-else class="text-text-muted font-mono">(unknown)</span>
               </span>
+            </td>
+            <td class="px-3 py-2 text-[13px]">
+              <span
+                v-if="row.role"
+                class="inline-block px-1.5 py-0.5 rounded text-xs font-medium"
+                :class="row.role === 'admin'
+                  ? 'bg-status-warning-bg text-status-warning'
+                  : 'bg-surface-raised text-text-secondary'"
+              >{{ row.role }}</span>
+              <span v-else class="text-text-muted">—</span>
             </td>
             <td class="px-3 py-2 text-[13px] text-right tabular-nums">
               <span :class="row.runningJobs > 0 ? 'text-accent font-semibold' : 'text-text-muted'">{{ row.runningJobs }}</span>

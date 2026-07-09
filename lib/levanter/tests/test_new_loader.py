@@ -16,7 +16,7 @@ from levanter.data.dataset import AsyncDataset, ListAsyncDataset
 from levanter.data.loader import DataLoader, check_sharded_consistency
 from levanter.schedule import ScheduleStep
 
-from .test_utils import skip_if_not_enough_devices, use_test_mesh
+from test_utils import skip_if_not_enough_devices, use_test_mesh
 
 
 def _small_dataset(seq_len=128, num_sequences=200) -> AsyncDataset[Sequence[int]]:

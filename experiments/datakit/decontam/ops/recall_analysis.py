@@ -46,7 +46,7 @@ import pyarrow.parquet as pq
 import yaml
 from marin.datakit.decon import NGramConfig, _paragraph_overlap_and_matches, bloom_paths
 from pyarrow import fs as pa_fs
-from rigging.filesystem import url_to_fs
+from rigging.filesystem import StoragePath
 from rigging.log_setup import configure_logging
 
 from experiments.datakit.decontam.all_sources_decon import (
@@ -194,9 +194,7 @@ def _bloom_flags(bf: dupekit.Bloom, ngram: NGramConfig, text: str) -> tuple[bool
 
 def _load_bloom(bloom_dir: str) -> dupekit.Bloom:
     bloom_path, _ = bloom_paths(bloom_dir)
-    fs_, p = url_to_fs(bloom_path)
-    with fs_.open(p, "rb") as f:
-        return dupekit.Bloom.load_bytes(f.read())
+    return dupekit.Bloom.load_bytes(StoragePath(bloom_path).read_bytes())
 
 
 def main() -> None:

@@ -5,9 +5,8 @@ import abc
 import dataclasses
 import functools
 import logging
-import os
 from collections.abc import Callable, Mapping, Sequence
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from functools import cached_property
 from typing import Literal, NotRequired, TypeAlias, TypeVar, TypedDict
@@ -19,12 +18,18 @@ import numpy as np
 from draccus import ChoiceRegistry, field
 from haliax import Axis
 from jaxtyping import PRNGKeyArray
+from rigging.filesystem import StoragePath, prefix_join
 from rigging.timing import log_time
 
 import levanter
 from levanter.data import AsyncDataset
 from levanter.data.dataset import MappedAsyncDataset
-from levanter.data.mixture import MixtureDataset, StopStrategy, rescale_mixture_schedule_for_batch_schedule
+from levanter.data.mixture import (
+    ConcatDataset,
+    MixtureDataset,
+    StopStrategy,
+    rescale_mixture_schedule_for_batch_schedule,
+)
 from levanter.data.packing import GreedyPrepackedDataset
 from levanter.data.passthrough_tokenizer import PassthroughTokenizer
 from levanter.data.sharded_datasource import (
@@ -49,11 +54,9 @@ from levanter.data.text.formats import (
 from levanter.models.lm_model import LmExample
 from levanter.schedule import BatchSchedule
 from levanter.store.cache import CacheOptions, TreeCache
-from levanter.utils import fsspec_utils
 from levanter.tokenizers import MarinTokenizer, load_tokenizer as load_marin_tokenizer
 from levanter.utils.jax_utils import key_iterator
 from levanter.utils.logging import silence_transformer_nag
-
 
 silence_transformer_nag()  # noqa
 
@@ -254,7 +257,7 @@ class LmDatasetSourceConfigBase(ChoiceRegistry):
         base_cache = override_cache_dir if override_cache_dir is not None else self.cache_dir
         if base_cache is None:
             raise ValueError("cache_dir must be set or override_cache_dir must be provided")
-        return load_lm_dataset_cache(os.path.join(base_cache, split), self.format, tokenizer, enforce_eos=enforce_eos)
+        return load_lm_dataset_cache(prefix_join(base_cache, split), self.format, tokenizer, enforce_eos=enforce_eos)
 
     @classmethod
     def default_choice_name(cls) -> str | None:
@@ -337,6 +340,8 @@ class DatasetComponent(DatasetComponentBase):
     tags: list[str] | None = None
     loss_weight_fn: Callable[[jax.Array], jax.Array] | None = None
     split: str = "validation"
+    flat_cache: bool = False
+    """Treat ``cache_dir`` as the cache root directly, without appending ``/<split>``."""
 
 
 @DatasetComponentBase.register_subclass("direct")
@@ -345,6 +350,15 @@ class DirectDatasetComponent(DatasetComponentBase):
     """A programmatic dataset component that supplies AsyncDataset examples directly."""
 
     datasets: Mapping[str, AsyncDataset[GrugLmExample]]
+    tags: list[str] | None = None
+
+
+@DatasetComponentBase.register_subclass("concat")
+@dataclass(frozen=True)
+class ConcatDatasetComponent(DatasetComponentBase):
+    """A logical component formed by concatenating cache-backed children."""
+
+    children: dict[str, DatasetComponent]
     tags: list[str] | None = None
 
 
@@ -582,7 +596,7 @@ def _component_cache_dir(name: str, component: DatasetComponent, default_root: s
     if base is None:
         raise ValueError(f"No cache_dir provided for component {name}")
     if component.cache_dir is None:
-        return os.path.join(base, name)
+        return prefix_join(base, name)
     return base
 
 
@@ -624,6 +638,13 @@ DEFAULT_LM_DATA_SHUFFLE = BlockShuffleConfig(
     perm_type="feistel",
 )
 """Default hierarchical block-shuffle policy for LM training data."""
+
+
+# A classified dataset component from `build_caches`: (name, loaded cache, deferred
+# build args). Exactly one of the two trailing fields is non-None.
+_ClassifiedComponent: TypeAlias = tuple[
+    str, "TreeCache[dict] | None", "tuple[str, ShardedDataSource, LmDatasetFormatBase] | None"
+]
 
 
 @dataclass(frozen=True)
@@ -734,6 +755,26 @@ class LmDataConfig:
                     logger.warning("Direct dataset format missing %s split for component %s", split, name)
                     continue
                 datasets[name] = direct
+                continue
+
+            if isinstance(component, ConcatDatasetComponent):
+                child_datasets: dict[str, AsyncDataset[GrugLmExample]] = {}
+                for child_name, child in component.children.items():
+                    child_key = f"{name}/{child_name}"
+                    cache = caches.get(child_key)
+                    if cache is None:
+                        if split == "train":
+                            raise ValueError(f"No cache available for concat child {child_key} in {split} split")
+                        continue
+                    child_datasets[child_name] = dataset_for_component(
+                        child,
+                        Pos,
+                        cache,
+                        eos_id=self.the_tokenizer.eos_token_id,
+                        block_cross_document_attention=self.block_cross_document_attention,
+                    )
+                if child_datasets:
+                    datasets[name] = ConcatDataset(child_datasets)
                 continue
 
             if not isinstance(component, DatasetComponent):
@@ -899,6 +940,10 @@ class LmDataConfig:
                 continue
             if isinstance(component, DirectDatasetComponent):
                 continue
+            if isinstance(component, ConcatDatasetComponent):
+                for child_name, child in component.children.items():
+                    items.append((f"{name}/{child_name}", child))
+                continue
             if not isinstance(component, DatasetComponent):
                 raise ValueError(f"Unsupported component type for {name}: {type(component)}")
             items.append((name, component))
@@ -912,12 +957,15 @@ class LmDataConfig:
         # multiple of those concurrently can cross-wire status broadcasts or
         # hang. Classify each component in the pool, then build any misses
         # serially in the original component order.
-        def _load_or_defer(
-            item: tuple[str, "DatasetComponent"],
-        ) -> tuple[str, TreeCache[dict] | None, tuple[str, ShardedDataSource, LmDatasetFormatBase] | None]:
+        def _load_or_defer(item: tuple[str, "DatasetComponent"]) -> _ClassifiedComponent:
             name, component = item
             cache_root = _component_cache_dir(name, component, self.cache_dir)
-            cache_path = os.path.join(cache_root, split)
+            if component.flat_cache:
+                if split != "train":
+                    return name, None, None
+                cache_path = cache_root
+            else:
+                cache_path = prefix_join(cache_root, split)
             source = component.source
 
             if source is None:
@@ -928,7 +976,7 @@ class LmDataConfig:
                 return name, cache, None
 
             shard_source = source.get_shard_source(split)
-            cache_exists = fsspec_utils.exists(cache_path)
+            cache_exists = StoragePath(cache_path).exists()
 
             if shard_source is None:
                 if not cache_exists:
@@ -958,15 +1006,28 @@ class LmDataConfig:
         caches: dict[str, TreeCache[dict]] = {}
         to_build: list[tuple[str, tuple[str, ShardedDataSource, LmDatasetFormatBase]]] = []
         max_workers = min(32, len(items))
+        classified: dict[int, _ClassifiedComponent] = {}
         with (
             log_time(f"build_caches[{split}] over {len(items)} components"),
             ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="build_caches") as pool,
         ):
-            for name, cache, build_args in pool.map(_load_or_defer, items):
-                if cache is not None:
-                    caches[name] = cache
-                elif build_args is not None:
-                    to_build.append((name, build_args))
+            # Consume results as each future completes rather than in submission
+            # order (`pool.map`), so a worker that raises — e.g. a tokenizer
+            # staging failure — surfaces immediately and aborts the process
+            # instead of being stranded behind a slower sibling's still-pending
+            # load. Key by submission index so the serial build below runs in the
+            # original component order, which must be identical across hosts for
+            # `_distributed_build_cache`'s dispatch-order-paired collectives.
+            index_of = {pool.submit(_load_or_defer, item): index for index, item in enumerate(items)}
+            for future in as_completed(index_of):
+                classified[index_of[future]] = future.result()
+
+        for index in range(len(items)):
+            name, cache, build_args = classified[index]
+            if cache is not None:
+                caches[name] = cache
+            elif build_args is not None:
+                to_build.append((name, build_args))
 
         for name, (cache_path, shard_source, fmt) in to_build:
             caches[name] = build_lm_dataset_cache(

@@ -3,8 +3,6 @@
 
 """E2E integration tests for iris job CLI helpers that boot a real local cluster."""
 
-from __future__ import annotations
-
 import sys
 from pathlib import Path
 
@@ -23,7 +21,7 @@ def local_cluster_and_config(tmp_path_factory):
     """Start local cluster and create config file for it."""
     tmp_path = tmp_path_factory.mktemp("iris_run")
     iris_root = Path(__file__).resolve().parents[2]
-    test_config_path = iris_root / "config" / "test.yaml"
+    test_config_path = iris_root / "config" / "ci-test.yaml"
 
     config = load_config(test_config_path)
     config = make_local_config(config)

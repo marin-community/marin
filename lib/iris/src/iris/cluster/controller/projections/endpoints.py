@@ -25,9 +25,9 @@ from sqlalchemy import bindparam, delete, insert, select
 
 from iris.cluster.controller import db
 from iris.cluster.controller.db import ControllerDB
-from iris.cluster.controller.projections import PROJECTIONS
+from iris.cluster.controller.projections.base import Projection
 from iris.cluster.controller.schema import endpoints_table, tasks_table
-from iris.cluster.types import TERMINAL_TASK_STATES, JobName
+from iris.cluster.types import TERMINAL_TASK_STATES, EndpointAccess, JobName
 
 
 @dataclass(frozen=True)
@@ -37,6 +37,11 @@ class EndpointQuery:
     exact_name: str | None = None
     task_ids: tuple[JobName, ...] = ()
     limit: int | None = None
+
+
+def access_from_db(value: int | None) -> int:
+    """Decode a stored ``access`` column (NULL ⇒ PRIVATE) to an EndpointAccess value."""
+    return EndpointAccess.ENDPOINT_ACCESS_PRIVATE if value is None else value
 
 
 @dataclass(frozen=True, slots=True)
@@ -49,6 +54,14 @@ class EndpointRow:
     task_id: JobName
     metadata: dict
     registered_at: Timestamp
+    # Lease expiry; ``None`` never expires (only fixtures that skip leasing).
+    # A passed deadline is hidden from reads and swept by ``sweep_expired``.
+    lease_deadline: Timestamp | None = None
+    # A Controller.EndpointAccess value; who may reach this endpoint via /proxy.
+    access: int = EndpointAccess.ENDPOINT_ACCESS_PRIVATE
+
+    def is_expired(self, now: Timestamp) -> bool:
+        return self.lease_deadline is not None and self.lease_deadline <= now
 
 
 logger = logging.getLogger(__name__)
@@ -81,7 +94,7 @@ class AddEndpointOutcome(StrEnum):
     TERMINAL = "terminal"
 
 
-class EndpointsProjection:
+class EndpointsProjection(Projection):
     """Process-local write-through cache over the ``endpoints`` table.
 
     Reads serve the latest committed state from in-memory dicts guarded
@@ -90,20 +103,16 @@ class EndpointsProjection:
     manual wire-format conversion appears here.
     """
 
-    sources: ClassVar = (endpoints_table,)
+    owns: ClassVar = (endpoints_table,)
 
     def __init__(self, db: ControllerDB) -> None:
-        self._db = db
         self._lock = RLock()
         self._by_id: dict[str, EndpointRow] = {}
         # One name can map to multiple endpoint_ids — the schema does not
         # enforce uniqueness on ``name`` and the upsert keys off endpoint_id.
         self._by_name: dict[str, set[str]] = {}
         self._by_task: dict[JobName, set[str]] = {}
-        PROJECTIONS.append(self)
-        self.rehydrate()
-        # Caches reload after a checkpoint restore via db.replace_from().
-        db.register_reopen_hook(self.rehydrate)
+        super().__init__(db)
 
     # -- Loading --------------------------------------------------------------
 
@@ -119,7 +128,7 @@ class EndpointsProjection:
             self._by_id.clear()
             self._by_name.clear()
             self._by_task.clear()
-            with db.read_snapshot(self._db.sa_read_engine) as tx:
+            with self._db.read_snapshot() as tx:
                 for row in tx.execute(select(endpoints_table)).all():
                     endpoint = EndpointRow(
                         endpoint_id=row.endpoint_id,
@@ -128,6 +137,8 @@ class EndpointsProjection:
                         task_id=row.task_id,
                         metadata=row.metadata_json,
                         registered_at=row.registered_at_ms,
+                        lease_deadline=row.lease_deadline_ms,
+                        access=access_from_db(row.access),
                     )
                     self._index(endpoint)
         logger.info("EndpointsProjection loaded %d endpoint(s) from DB", len(self._by_id))
@@ -156,7 +167,12 @@ class EndpointsProjection:
     # -- Reads ----------------------------------------------------------------
 
     def query(self, query: EndpointQuery = EndpointQuery()) -> list[EndpointRow]:
-        """Return endpoint rows matching ``query``; all filters AND together."""
+        """Return live endpoint rows matching ``query``; all filters AND together.
+
+        Rows whose lease has expired are treated as gone and never returned,
+        even before the pruner sweeps them from storage.
+        """
+        now = Timestamp.now()
         with self._lock:
             # Narrow the candidate set using the most selective index available.
             if query.endpoint_ids:
@@ -173,6 +189,8 @@ class EndpointsProjection:
 
             results: list[EndpointRow] = []
             for row in candidates:
+                if row.is_expired(now):
+                    continue
                 if query.name_prefix is not None and not row.name.startswith(query.name_prefix):
                     continue
                 if query.exact_name is not None and row.name != query.exact_name:
@@ -187,21 +205,31 @@ class EndpointsProjection:
             return results
 
     def resolve(self, name: str) -> EndpointRow | None:
-        """Return any endpoint with exact ``name``, or None. Used by the actor proxy."""
+        """Return any live endpoint with exact ``name``, or None. Used by the actor proxy."""
+        now = Timestamp.now()
         with self._lock:
             ids = self._by_name.get(name)
             if not ids:
                 return None
             # Arbitrary but stable pick — the original SQL did not specify ORDER BY.
-            return self._by_id[next(iter(ids))]
+            # Skip expired leases so a dead registrant's address is never served.
+            for eid in ids:
+                row = self._by_id[eid]
+                if not row.is_expired(now):
+                    return row
+            return None
 
     def get(self, endpoint_id: str) -> EndpointRow | None:
         with self._lock:
-            return self._by_id.get(endpoint_id)
+            row = self._by_id.get(endpoint_id)
+        if row is None or row.is_expired(Timestamp.now()):
+            return None
+        return row
 
     def all(self) -> list[EndpointRow]:
+        now = Timestamp.now()
         with self._lock:
-            return list(self._by_id.values())
+            return [row for row in self._by_id.values() if not row.is_expired(now)]
 
     # -- Writes ---------------------------------------------------------------
 
@@ -244,6 +272,8 @@ class EndpointsProjection:
                 "task_id": task_id,
                 "metadata_json": endpoint.metadata,
                 "registered_at_ms": endpoint.registered_at,
+                "lease_deadline_ms": endpoint.lease_deadline,
+                "access": endpoint.access,
             },
         )
 
@@ -317,3 +347,27 @@ class EndpointsProjection:
 
         cur.register(apply)
         return to_remove
+
+    def sweep_expired(self, cur: db.Tx, now: Timestamp) -> list[str]:
+        """Delete endpoints whose lease deadline has passed; return removed ids.
+
+        Reads already hide expired rows, so this only reclaims storage, making
+        the lease (not the FK ``CASCADE``) the GC trigger: a crashed task's
+        endpoint expires here even while its task row still exists.
+        """
+        with self._lock:
+            expired = [row.endpoint_id for row in self._by_id.values() if row.is_expired(now)]
+        if not expired:
+            return []
+        cur.execute(
+            delete(endpoints_table).where(endpoints_table.c.endpoint_id.in_(bindparam("ids", expanding=True))),
+            {"ids": expired},
+        )
+
+        def apply() -> None:
+            with self._lock:
+                for eid in expired:
+                    self._unindex(eid)
+
+        cur.register(apply)
+        return expired

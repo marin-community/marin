@@ -38,8 +38,6 @@ score. Individual classifiers wire their own input discovery, output
 naming, hash_attrs, projection, and downstream artifact shape.
 """
 
-from __future__ import annotations
-
 import logging
 import os
 import tempfile
@@ -52,7 +50,7 @@ import numpy as np
 from huggingface_hub import hf_hub_download
 from marin.execution.step_spec import StepSpec
 from pydantic import BaseModel
-from rigging.filesystem import atomic_rename, url_to_fs
+from rigging.filesystem import StoragePath, atomic_rename
 from zephyr import counters
 
 logger = logging.getLogger(__name__)
@@ -128,12 +126,10 @@ def prepare_fasttext_model(
     local = hf_hub_download(repo_id=hf_repo_id, filename=hf_filename, revision=revision)
     size = os.path.getsize(local)
     target = os.path.join(output_path, _MODEL_FILENAME)
-    target_fs, resolved = url_to_fs(target)
-    target_fs.mkdirs(os.path.dirname(resolved), exist_ok=True)
+    StoragePath(target).parent.mkdirs()
     # atomic_rename keeps the staged path crash-safe: a half-uploaded blob never appears at `target`.
     with atomic_rename(target) as tmp:
-        tmp_fs, tmp_resolved = url_to_fs(tmp)
-        tmp_fs.put(local, tmp_resolved)
+        StoragePath(tmp).upload_from(local)
     logger.info("Staged %s@%s/%s → %s (%d bytes)", hf_repo_id, revision, hf_filename, target, size)
     return FastTextModel(
         model_dir=output_path,
@@ -181,10 +177,9 @@ def _load_fasttext_model(model_path_str: str) -> Any:
         np.array = _np_array_copy_compat
         np._fasttext_copy_compat = True
 
-    fs, resolved = url_to_fs(model_path_str)
     fd, local = tempfile.mkstemp(prefix="fasttext-", suffix=".bin")
     os.close(fd)
-    fs.get(resolved, local)
+    StoragePath(model_path_str).download_to(local)
     return fasttext.load_model(local)
 
 
@@ -239,8 +234,8 @@ def _predict_batch(
     to score).
     """
     model = model_load_fn(model_path_str)
-    counters.increment(name="classify/batches_in")
-    counters.increment("classify/docs_in", len(batch))
+    counters.pipeline.update_counter("classify/batches_in", 1)
+    counters.pipeline.update_counter("classify/docs_in", len(batch))
 
     texts: list[str] = []
     records_to_predict: list[dict[str, Any]] = []
@@ -259,13 +254,13 @@ def _predict_batch(
             truncated += 1
         texts.append(normalized)
         records_to_predict.append(record)
-    counters.increment("classify/bytes_in", bytes_in)
-    counters.increment("classify/empty_text", len(batch) - len(texts))
+    counters.pipeline.update_counter("classify/bytes_in", bytes_in)
+    counters.pipeline.update_counter("classify/empty_text", len(batch) - len(texts))
     if truncated:
-        counters.increment("classify/docs_truncated", truncated)
+        counters.pipeline.update_counter("classify/docs_truncated", truncated)
 
     if not texts:
-        counters.increment("classify/batches_skipped_empty")
+        counters.pipeline.update_counter("classify/batches_skipped_empty", 1)
         return
 
     # IMPORTANT: per-text predict, NOT batch predict.
@@ -285,7 +280,7 @@ def _predict_batch(
     for record, text in zip(records_to_predict, texts, strict=True):
         labels, probs = model.predict(text, k=k, threshold=threshold)
         stripped = [_strip_label_prefix(label) for label in labels]
-        counters.increment("classify/predicted")
+        counters.pipeline.update_counter("classify/predicted", 1)
         yield {**record, output_field_name: _value_from_prediction(stripped, probs, score_target_label)}
 
 

@@ -13,8 +13,6 @@ The image must be pushed to a registry the deployment can pull from
 ``config/marin*.yaml`` references). Use ``docker login ghcr.io`` first.
 """
 
-from __future__ import annotations
-
 import subprocess
 from pathlib import Path
 

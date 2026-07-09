@@ -39,7 +39,14 @@ uv run ... \
 ```
 
 Notes:
-- this captures profiles consistently and uploads `jax_profile` artifacts to trackers,
+- this captures profiles consistently under
+  `<trainer.log_dir>/<run_id>/profiler/process_<rank>/`,
+- durable W&B retrieval requires a logged `jax_profile` artifact; a relative
+  `trainer.log_dir` on Iris is task-local unless code explicitly copies or
+  mirrors the profiler directory to the run output path,
+- current Grug MoE launchers mirror completed profiles to
+  `<ctx.output_path>/profiler/`; use that as the durable default for new Grug
+  profile runs,
 - tune `start_step` to skip compile/warmup noise,
 - keep `num_steps` large enough for stable steady-state signal.
 
@@ -63,6 +70,11 @@ Primary artifact:
 
 Typical path inside artifact:
 - `plugins/profile/<timestamp>/perfetto_trace.json.gz`
+
+Run-output profile directories are durable only when the launcher copies or
+mirrors `<trainer.log_dir>/<run_id>/profiler/` to a durable path such as S3.
+`profile_summary.py summarize --run-target` mirrors from `trainer.log_dir`; it
+is not a fallback lookup for missing W&B profile artifacts.
 
 Primary tools:
 - Perfetto: detailed timeline and host/device gaps,

@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from marin.datakit.normalize import NormalizedData, normalize_step
-from marin.execution.artifact import Artifact
+from marin.execution.artifact import read_artifact
 from marin.execution.step_runner import StepRunner
 from marin.execution.step_spec import StepSpec
 from marin.processing.classification.deduplication.fuzzy_dups import compute_fuzzy_dups_attrs
@@ -29,7 +29,7 @@ def build_steps() -> list[StepSpec]:
         name="minhash/fineweb-edu-sample-10bt",
         deps=[normalized],
         fn=lambda op: compute_minhash_attrs(
-            source=Artifact.from_path(normalized, NormalizedData),
+            source=read_artifact(normalized.output_path, NormalizedData),
             output_path=op,
         ),
     )
@@ -37,7 +37,7 @@ def build_steps() -> list[StepSpec]:
         name="dedup_sample/10BT",
         deps=[minhash],
         fn=lambda op: compute_fuzzy_dups_attrs(
-            inputs=[Artifact.from_path(minhash, MinHashAttrData)],
+            inputs=[read_artifact(minhash.output_path, MinHashAttrData)],
             output_path=op,
             max_parallelism=1024,
         ),

@@ -1,0 +1,313 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+"""Complete(d) AdamH scaling heuristic.
+
+Provides the :class:`CompletedAdamHHeuristic` and the :data:`completed_adamh_heuristic`
+singleton used to derive model configs, batch sizes, and optimizer hyperparameters from a
+compute budget. See ``experiments/references/reference_scaling_suite.py`` for the scaling
+ladder that uses this heuristic to build ISOFlop sweep runs.
+
+Close-to-CompletedP heuristic scaling for AdamH.
+
+Let r = (batch_size * seq_len) / tokens, r0 = (B0 * seq_len) / T0.
+
+Formulas:
+- Learning rate: lr = lr0 * sqrt(B/B0) * (T0/T)^0.3         [sqrt batch, 0.3-power token]
+- Adam LR: adam_lr = adam_lr0 * sqrt(r/r0)
+- Epsilon: epsilon = epsilon0 * sqrt(r0/r)
+- Beta1: fixed at 0.9
+- Beta2: beta2 = clip(beta2_0^(B/B0), 0.9, 0.9999)         [constant token half-life]
+
+Reference 0 (B0=64, H0=512, T0=2.5e9, seq_len=4096): optimal AdamH for Qwen3 ~130M on Nemotron Mix.
+"""
+
+import math
+from collections.abc import Iterator
+from dataclasses import dataclass
+
+from levanter.layers.rotary import Llama3RotaryEmbeddingsConfig
+from levanter.models.llama import LlamaConfig
+from levanter.models.qwen import Qwen3Config
+from levanter.optim import AdamHConfig
+from marin.processing.tokenize.data_configs import get_vocab_size_for_tokenizer
+from marin.scaling_laws import CandidateConfig
+from marin.scaling_laws.tpu_utils import V4_SPEC
+
+# --- Constants ---
+SEQ_LEN: int = 4096
+STEPS_PER_RUN: int = 2**16
+
+
+def _round_to_power_of_two(x: float) -> int:
+    """Round x UP to the nearest power of 2."""
+    if x <= 1:
+        return 1
+    return 2 ** math.ceil(math.log2(x))
+
+
+def _compute_tensor_parallel_size(tpu_type: str, batch_size: int, hidden_dim: int, max_tp: int = 4) -> int:
+    """Compute TP degree when batch_size < num_chips on the selected TPU."""
+    cores = int(tpu_type.split("-")[1])
+    num_chips = cores // V4_SPEC.cores_per_chip
+    min_tp = 1 if batch_size >= num_chips else _round_to_power_of_two(math.ceil(num_chips / batch_size))
+    tp = min_tp
+
+    while tp <= max_tp:
+        if num_chips % tp == 0 and hidden_dim % (num_chips // tp) == 0:
+            return tp
+        tp *= 2
+
+    raise ValueError(
+        f"Could not find valid tensor_parallel_size for tpu_type={tpu_type}, "
+        f"batch_size={batch_size}, hidden_dim={hidden_dim}, max_tp={max_tp}"
+    )
+
+
+def _format_run_name(
+    budget: float,
+    hidden_size: int,
+    num_layers: int,
+    batch_size: int,
+    experiment_name: str,
+) -> str:
+    """Format run name: isoflop-{budget}-d{hidden}-L{layers}-B{batch}-{experiment_name}"""
+    return f"isoflop-{budget:.0e}-d{hidden_size}-L{num_layers}-B{batch_size}-{experiment_name}"
+
+
+@dataclass(frozen=True)
+class CompletedAdamHHeuristic:
+    """Complete(d) AdamH scaling heuristic.
+
+    Close-to-CompletedP heuristic scaling where hyperparameters scale with
+    the ratio r/r0 = (B * T0) / (B0 * T) and batch size B/B0,
+    using the AdamH optimizer.
+    """
+
+    name: str = "completed-adamh"
+    tokenizer: str = "marin-community/marin-tokenizer"
+
+    @property
+    def vocab_size(self) -> int:
+        return get_vocab_size_for_tokenizer(self.tokenizer)
+
+    # --- Reference point (B0=64, H0=512, T0=2.5e9, seq_len=4096) ---
+    # Optimal AdamH for Qwen3 ~130M on Nemotron Mix
+    reference_batch_size: int = 64
+    reference_tokens: float = 2.5e9
+    # --- Base hyperparameters (at reference point) ---
+    lr_base: float = 0.00630
+    adam_lr_base: float = 0.000656
+    epsilon_base: float = 1.85e-08
+    beta1: float = 0.9  # fixed
+    beta2_base: float = 0.9999  # beta2 = clip(beta2_0^(B/B0), 0.9, 0.9999)
+
+    # --- Fixed hyperparameters (not scaled) ---
+    max_grad_norm: float = 0.1
+    z_loss_weight: float = 1.0e-07
+    nesterov: bool = False
+
+    # --- Schedule ---
+    min_lr_ratio: float = 0.0
+    warmup: float = 0.1
+    lr_schedule: str = "linear"
+    decay: float = 0.2
+
+    # --- Architecture ratios ---
+    mlp_ratio: int = 4
+    hidden_head_ratio: int = 128
+
+    # --- Depth-to-width scaling ---
+    base_hidden_layer_ratio: int = 64
+    layer_scaling_factor: float = 4.0
+    layer_formula_offset: int = 9
+
+    # --- Constraints ---
+    max_learning_rate: float = 0.01
+    min_batch_size: int = 8
+    max_batch_size: int = 8192
+    base_max_params: float = 12e9
+    base_max_params_budget: float = 3e20
+    global_max_params: float = 1e12
+
+    # --- Beta2 constraints ---
+    min_beta2: float = 0.9
+    max_beta2: float = 0.9999
+
+    # --- Token/param ratio ---
+    max_tokens_per_param: float = 250
+
+    # --- Search step sizes ---
+    small_budget_step_size: int = 128
+    large_budget_step_size: int = 256
+    budget_step_threshold: float = 2e19
+
+    def _compute_scaling_ratio(self, batch_size: int, tokens: float) -> float:
+        """Compute r/r0 = (B * T0) / (B0 * T).
+
+        Equivalent to (B * seq_len / T) / (B0 * seq_len / T0); seq_len cancels.
+        """
+        return (batch_size * self.reference_tokens) / (self.reference_batch_size * tokens)
+
+    def _compute_learning_rate(self, batch_size: int, tokens: float) -> float:
+        """lr = lr0 * sqrt(B/B0) * (T0/T)^0.3"""
+        batch_ratio = batch_size / self.reference_batch_size
+        token_ratio = self.reference_tokens / tokens
+        lr = self.lr_base * math.sqrt(batch_ratio) * (token_ratio**0.3)
+        return min(self.max_learning_rate, lr)
+
+    def _compute_adam_lr(self, batch_size: int, tokens: float) -> float:
+        """adam_lr = adam_lr_base * sqrt(r/r0)"""
+        ratio = self._compute_scaling_ratio(batch_size, tokens)
+        adam_lr = self.adam_lr_base * math.sqrt(ratio)
+        return min(self.max_learning_rate, adam_lr)
+
+    def _compute_epsilon(self, batch_size: int, tokens: float) -> float:
+        """epsilon = epsilon0 * sqrt(r0/r)"""
+        ratio = self._compute_scaling_ratio(batch_size, tokens)
+        return self.epsilon_base * math.sqrt(1.0 / ratio)
+
+    def _compute_beta2(self, batch_size: int) -> float:
+        """beta2 = clip(beta2_0^(B/B0), min_beta2, max_beta2). Constant token half-life."""
+        exponent = batch_size / self.reference_batch_size
+        return max(self.min_beta2, min(self.max_beta2, self.beta2_base**exponent))
+
+    def build_optimizer_config(self, batch_size: int, tokens: float) -> AdamHConfig:
+        lr = self._compute_learning_rate(batch_size, tokens)
+        adam_lr = self._compute_adam_lr(batch_size, tokens)
+        epsilon = self._compute_epsilon(batch_size, tokens)
+        beta2 = self._compute_beta2(batch_size)
+        return AdamHConfig(
+            learning_rate=lr,
+            adam_lr=adam_lr,
+            min_lr_ratio=self.min_lr_ratio,
+            warmup=self.warmup,
+            beta1=self.beta1,
+            beta2=beta2,
+            epsilon=epsilon,
+            max_grad_norm=self.max_grad_norm,
+            lr_schedule=self.lr_schedule,
+            decay=self.decay,
+            nesterov=self.nesterov,
+        )
+
+    def _compute_num_layers(self, hidden_size: int) -> int:
+        hs_pow = math.log2(hidden_size)
+        return round(
+            hidden_size
+            / (self.base_hidden_layer_ratio + (hs_pow * self.layer_scaling_factor) - self.layer_formula_offset)
+        )
+
+    def _get_step_size(self, budget: float) -> int:
+        if budget > self.budget_step_threshold:
+            return self.large_budget_step_size
+        return self.small_budget_step_size
+
+    def _max_params_for_budget(self, budget: float) -> float:
+        scaling = self.base_max_params * math.sqrt(budget / self.base_max_params_budget)
+        return min(max(self.base_max_params, scaling), self.global_max_params)
+
+    def _build_model_config(self, hidden_size: int, seq_len: int = SEQ_LEN) -> LlamaConfig:
+        if hidden_size % self.hidden_head_ratio != 0:
+            raise ValueError(
+                f"hidden_size ({hidden_size}) must be divisible by hidden_head_ratio ({self.hidden_head_ratio})."
+            )
+        num_layers = self._compute_num_layers(hidden_size)
+        intermediate_dim = hidden_size * self.mlp_ratio
+        n_heads = max(1, hidden_size // self.hidden_head_ratio)
+
+        return Qwen3Config(
+            hidden_dim=hidden_size,
+            intermediate_dim=intermediate_dim,
+            num_layers=num_layers,
+            num_heads=n_heads,
+            num_kv_heads=n_heads,
+            max_seq_len=seq_len,
+            rope=Llama3RotaryEmbeddingsConfig(),
+        )
+
+    def estimate_memory_bytes(
+        self,
+        candidate: CandidateConfig,
+        optim_mult: int = 3,
+        dtype_size: int = 4,
+        fudge_factor: float = 2.0,
+    ) -> int:
+        model_config = candidate.model_config
+        batch_size = candidate.batch_size
+        seq_len = model_config.max_seq_len
+        hidden = model_config.hidden_dim
+        intermediate = model_config.intermediate_dim
+        layers = model_config.num_layers
+
+        param_count = model_config.total_trainable_params(self.vocab_size)
+        param_bytes = param_count * optim_mult * dtype_size
+
+        hidden_act = batch_size * seq_len * hidden * 2
+        attn_act = batch_size * seq_len * hidden * 4 * 2
+        mlp_act = batch_size * seq_len * intermediate * 2
+        per_layer_act = hidden_act + attn_act + mlp_act
+        act_bytes = per_layer_act * max(layers * 3 // 4, 4)
+
+        embed_bytes = self.vocab_size * hidden * 2
+
+        total_bytes = param_bytes + act_bytes + embed_bytes
+        return int(total_bytes * fudge_factor)
+
+    def _build_model_configs(self, budget: float, seq_len: int = SEQ_LEN) -> Iterator[LlamaConfig]:
+        step_size = self._get_step_size(budget)
+        for hidden_size in range(2**9, 2**17, step_size):
+            yield self._build_model_config(hidden_size, seq_len)
+
+    def _build_candidate_config(
+        self,
+        model_config: LlamaConfig,
+        tokens: float,
+        flops_budget: float,
+        seq_len: int = SEQ_LEN,
+    ) -> CandidateConfig | None:
+        batch_exact = tokens / (STEPS_PER_RUN * seq_len)
+        batch_size = _round_to_power_of_two(batch_exact)
+
+        # Reduce batch size (extend steps) until all hyperparameters are within valid range
+        while batch_size > self.min_batch_size:
+            lr = self._compute_learning_rate(batch_size, tokens)
+            adam_lr = self._compute_adam_lr(batch_size, tokens)
+            beta2 = self._compute_beta2(batch_size)
+            if lr < self.max_learning_rate and adam_lr < self.max_learning_rate and beta2 > self.min_beta2:
+                break
+            batch_size //= 2
+
+        if batch_size < self.min_batch_size or batch_size > self.max_batch_size:
+            return None
+
+        train_steps = round(tokens / (batch_size * seq_len))
+        actual_tokens = batch_size * train_steps * seq_len
+
+        optimizer_config = self.build_optimizer_config(batch_size, tokens)
+
+        return CandidateConfig(
+            model_config=model_config,
+            optimizer_config=optimizer_config,
+            batch_size=batch_size,
+            train_steps=train_steps,
+            tokens=actual_tokens,
+            flops_budget=flops_budget,
+        )
+
+    def candidates_for_budget(self, budget: float, seq_len: int = SEQ_LEN) -> Iterator[CandidateConfig]:
+        max_params = self._max_params_for_budget(budget)
+        for model_config in self._build_model_configs(budget, seq_len):
+            params = model_config.total_trainable_params(self.vocab_size)
+            if params > max_params:
+                continue
+            flops_per_token = model_config.flops_per_token(self.vocab_size, seq_len)
+            tokens = budget / (3 * flops_per_token)
+            if tokens / params > self.max_tokens_per_param:
+                continue
+            candidate = self._build_candidate_config(model_config, tokens, budget, seq_len)
+            if candidate is not None:
+                yield candidate
+
+
+completed_adamh_heuristic = CompletedAdamHHeuristic()

@@ -19,8 +19,6 @@ as the ``text`` field inside a gzipped JSONL document::
     {"id": str, "text": str, "source": str, "category": str, "row_index": int}
 """
 
-from __future__ import annotations
-
 import csv
 import json
 import logging
@@ -32,12 +30,10 @@ from typing import Any
 from urllib.parse import urljoin
 
 import requests
-from rigging.filesystem import atomic_rename, open_url
+from rigging.filesystem import StoragePath, atomic_rename, open_url
 
 from marin.datakit.download.http_session import build_retrying_session
 from marin.execution.step_spec import StepSpec
-from marin.execution.types import THIS_OUTPUT_PATH
-from marin.utils import fsspec_mkdirs
 
 logger = logging.getLogger(__name__)
 
@@ -155,7 +151,7 @@ def _iter_csv_records(
 def download_uwf_zeek_sample(
     *,
     source: UwfZeekSampleSource,
-    output_path: str = THIS_OUTPUT_PATH,
+    output_path: str = "",
     output_filename: str = DEFAULT_OUTPUT_FILENAME,
     http_timeout_seconds: int = DEFAULT_HTTP_TIMEOUT_SECONDS,
 ) -> dict[str, Any]:
@@ -163,7 +159,7 @@ def download_uwf_zeek_sample(
 
     source.validate()
     output_path = str(output_path)
-    fsspec_mkdirs(output_path, exist_ok=True)
+    StoragePath(output_path).mkdirs(exist_ok=True)
 
     session = build_retrying_session()
     output_file = posixpath.join(output_path, output_filename)
@@ -205,8 +201,7 @@ def download_uwf_zeek_sample(
     }
     manifest_path = posixpath.join(output_path, "manifest.json")
     with atomic_rename(manifest_path) as temp_path:
-        with open_url(temp_path, "w", encoding="utf-8") as handle:
-            json.dump(manifest, handle, indent=2, sort_keys=True)
+        StoragePath(temp_path).write_text(json.dumps(manifest, indent=2, sort_keys=True), encoding="utf-8")
     return manifest
 
 

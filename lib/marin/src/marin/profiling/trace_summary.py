@@ -8,8 +8,6 @@ Perfetto/Chrome trace ingester (`marin.profiling.ingest`) and the XPlane
 ingester (`marin.profiling.xplane`).
 """
 
-from __future__ import annotations
-
 import gzip
 import hashlib
 import json
@@ -22,7 +20,6 @@ from pathlib import Path
 from typing import Any, cast
 
 from marin.profiling.schema import (
-    BreakdownPart,
     CommunicationOp,
     DurationStats,
     GapBeforeOp,
@@ -38,6 +35,7 @@ from marin.profiling.schema import (
     TimeBreakdown,
     TraceOverview,
     TraceProvenance,
+    breakdown_part,
 )
 from marin.profiling.semantics import (
     canonical_op_name,
@@ -516,11 +514,11 @@ def _summarize_breakdown_per_track(events: list[CompleteTraceEvent], exclusive: 
     return TimeBreakdown(
         duration_basis="exclusive_duration_per_track",
         total_duration=total_duration,
-        compute=_breakdown_part(totals["compute"], total_duration),
-        communication=_breakdown_part(totals["communication"], total_duration),
-        host=_breakdown_part(totals["host"], total_duration),
-        stall=_breakdown_part(totals["stall"], total_duration),
-        other=_breakdown_part(totals["other"], total_duration),
+        compute=breakdown_part(totals["compute"], total_duration),
+        communication=breakdown_part(totals["communication"], total_duration),
+        host=breakdown_part(totals["host"], total_duration),
+        stall=breakdown_part(totals["stall"], total_duration),
+        other=breakdown_part(totals["other"], total_duration),
     )
 
 
@@ -538,11 +536,11 @@ def _summarize_breakdown_global(events: list[CompleteTraceEvent]) -> TimeBreakdo
         return TimeBreakdown(
             duration_basis="exclusive_duration_global_timeline",
             total_duration=0.0,
-            compute=_breakdown_part(0.0, 0.0),
-            communication=_breakdown_part(0.0, 0.0),
-            host=_breakdown_part(0.0, 0.0),
-            stall=_breakdown_part(0.0, 0.0),
-            other=_breakdown_part(0.0, 0.0),
+            compute=breakdown_part(0.0, 0.0),
+            communication=breakdown_part(0.0, 0.0),
+            host=breakdown_part(0.0, 0.0),
+            stall=breakdown_part(0.0, 0.0),
+            other=breakdown_part(0.0, 0.0),
         )
     window_start, window_end = window
     window_duration = max(0.0, window_end - window_start)
@@ -596,11 +594,11 @@ def _summarize_breakdown_global(events: list[CompleteTraceEvent]) -> TimeBreakdo
     return TimeBreakdown(
         duration_basis="exclusive_duration_global_timeline",
         total_duration=total_duration,
-        compute=_breakdown_part(totals["compute"], total_duration),
-        communication=_breakdown_part(totals["communication"], total_duration),
-        host=_breakdown_part(totals["host"], total_duration),
-        stall=_breakdown_part(totals["stall"], total_duration),
-        other=_breakdown_part(totals["other"], total_duration),
+        compute=breakdown_part(totals["compute"], total_duration),
+        communication=breakdown_part(totals["communication"], total_duration),
+        host=breakdown_part(totals["host"], total_duration),
+        stall=breakdown_part(totals["stall"], total_duration),
+        other=breakdown_part(totals["other"], total_duration),
     )
 
 
@@ -1529,11 +1527,6 @@ def _finalize_top(
     if stack:
         parent = stack[-1]
         child_durations[parent] = child_durations.get(parent, 0.0) + duration
-
-
-def _breakdown_part(value: float, total: float) -> BreakdownPart:
-    share = (value / total) if total > 0 else 0.0
-    return BreakdownPart(total_duration=value, share_of_total=share)
 
 
 def _string_arg(args_value: Any, key: str) -> str | None:

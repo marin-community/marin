@@ -8,9 +8,9 @@ from unittest.mock import MagicMock
 import pytest
 from iris.cluster.types import JobName
 from iris.rpc import job_pb2
-
 from tests.cluster.controller._test_support import ControllerTestState
 from tests.cluster.controller.conftest import (
+    autoscale_once,
     make_job_request,
     make_worker_metadata,
     query_tasks_for_job,
@@ -37,10 +37,9 @@ def test_dry_run_scheduling_does_not_dispatch(dry_run_controller):
     controller = dry_run_controller
     state = ControllerTestState(
         controller._db,
-        health=controller._health,
-        endpoints=controller._endpoints,
-        worker_attrs=controller._worker_attrs,
-        run_template_cache=controller._run_template_cache,
+        # The single backend owns the liveness tracker and attrs projection now;
+        # register workers into them so the controller's schedule path sees them.
+        health=controller.provider.health,
     )
 
     register_worker(state, "w1", "w1:8080", make_worker_metadata())
@@ -56,11 +55,13 @@ def test_dry_run_scheduling_does_not_dispatch(dry_run_controller):
 
 def test_dry_run_autoscaler_skipped_entirely(dry_run_controller):
     controller = dry_run_controller
-    controller._task_backend.autoscale = MagicMock()
+    controller._representative_backend.autoscale = MagicMock()
 
-    controller._run_autoscaler_once()
+    # In dry-run the control tick short-circuits to the schedule-only path, so
+    # the autoscale phase never reaches the backend even when forced.
+    autoscale_once(controller)
 
-    controller._task_backend.autoscale.assert_not_called()
+    controller._representative_backend.autoscale.assert_not_called()
 
 
 def test_dry_run_checkpoint_returns_sentinel(dry_run_controller):

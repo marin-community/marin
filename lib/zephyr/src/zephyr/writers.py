@@ -3,8 +3,6 @@
 
 """Writers for common output formats."""
 
-from __future__ import annotations
-
 import itertools
 import logging
 import os
@@ -20,7 +18,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import vortex
 import zstandard as zstd
-from rigging.filesystem import atomic_rename, url_to_fs
+from rigging.filesystem import StoragePath, atomic_rename, url_to_fs
 
 from zephyr import counters
 
@@ -48,10 +46,9 @@ def ensure_parent_dir(path: str) -> None:
     # Use os.path.dirname for local paths, otherwise use fsspec
     if "://" in path:
         output_dir = path.rsplit("/", 1)[0]
-        fs, dir_path = url_to_fs(output_dir)
         # mkdirs(exist_ok=True) handles the already-exists case internally;
         # a separate fs.exists() check would add a redundant network round-trip.
-        fs.mkdirs(dir_path, exist_ok=True)
+        StoragePath(output_dir).mkdirs()
     else:
         output_dir = os.path.dirname(path)
         if output_dir:
@@ -87,7 +84,7 @@ def write_jsonl_file(records: Iterable, output_path: str) -> dict:
             for record in records:
                 f.write(encoder.encode(record) + b"\n")
                 count += 1
-                counters.increment("zephyr/records_out")
+                counters.pipeline.update_counter(counters.RECORDS_OUT, 1)
 
     return {"path": output_path, "count": count}
 
@@ -226,22 +223,29 @@ def write_parquet_file(
     ensure_parent_dir(output_path)
     count = 0
 
+    # Route the write through fsspec (rather than handing pyarrow a raw path,
+    # which it resolves via its native S3 client) so the filesystem's configured
+    # options apply: CoreWeave object storage rejects pyarrow's path-style S3
+    # addressing with HTTP 400, and R2 relies on fsspec's ``fixed_upload_size``
+    # to keep multipart parts uniform. Mirrors write_jsonl_file and SpillWriter.
     with atomic_rename(output_path) as temp_path:
-        writer: pq.ParquetWriter | None = None
-        try:
-            for table in _accumulate_tables(records, schema=schema, target_bytes=target_buffer_bytes):
-                if writer is None:
-                    writer = pq.ParquetWriter(temp_path, table.schema)
-                writer.write_table(table)
-                count += len(table)
-                counters.increment("zephyr/records_out", len(table))
-        finally:
-            if writer is not None:
-                writer.close()
+        fs, resolved_temp = url_to_fs(temp_path)
+        with fs.open(resolved_temp, "wb", block_size=_WRITE_BLOCK_SIZE) as f:
+            writer: pq.ParquetWriter | None = None
+            try:
+                for table in _accumulate_tables(records, schema=schema, target_bytes=target_buffer_bytes):
+                    if writer is None:
+                        writer = pq.ParquetWriter(f, table.schema)
+                    writer.write_table(table)
+                    count += len(table)
+                    counters.pipeline.update_counter(counters.RECORDS_OUT, len(table))
+            finally:
+                if writer is not None:
+                    writer.close()
 
-        if writer is None:
-            actual_schema = schema or pa.schema([])
-            pq.write_table(pa.Table.from_pylist([], schema=actual_schema), temp_path)
+            if writer is None:
+                actual_schema = schema or pa.schema([])
+                pq.write_table(pa.Table.from_pylist([], schema=actual_schema), f)
 
     return {"path": output_path, "count": count}
 
@@ -284,11 +288,11 @@ def write_vortex_file(
     def _array_batches():
         nonlocal count
         count += len(first_table)
-        counters.increment("zephyr/records_out", len(first_table))
+        counters.pipeline.update_counter(counters.RECORDS_OUT, len(first_table))
         yield vortex.Array.from_arrow(first_table)
         for table in table_iter:
             count += len(table)
-            counters.increment("zephyr/records_out", len(table))
+            counters.pipeline.update_counter(counters.RECORDS_OUT, len(table))
             yield vortex.Array.from_arrow(table)
 
     array_iter = vortex.ArrayIterator.from_iter(dtype, _array_batches())
@@ -362,7 +366,7 @@ class ThreadedBatchWriter:
         if self._error is not None:
             raise self._error
 
-    def __enter__(self) -> ThreadedBatchWriter:
+    def __enter__(self) -> "ThreadedBatchWriter":
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb) -> bool:
@@ -384,11 +388,13 @@ def write_binary_file(records: Iterable[bytes], output_path: str) -> dict:
 
     count = 0
     with atomic_rename(output_path) as temp_path:
+        # url_to_fs + fs.open so block_size reaches the file opener (AbstractBufferedFile),
+        # not the S3 filesystem constructor (which rejects it) — see readers.open_file.
         fs, resolved_temp = url_to_fs(temp_path)
         with fs.open(resolved_temp, "wb", block_size=_WRITE_BLOCK_SIZE) as f:
             for record in records:
                 f.write(record)
                 count += 1
-                counters.increment("zephyr/records_out")
+                counters.pipeline.update_counter(counters.RECORDS_OUT, 1)
 
     return {"path": output_path, "count": count}

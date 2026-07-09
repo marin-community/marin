@@ -16,8 +16,6 @@ Grouping records into blocks (rather than one record per Dolma row) keeps the
 what Zeek's on-disk format looks like.
 """
 
-from __future__ import annotations
-
 import hashlib
 import logging
 import posixpath

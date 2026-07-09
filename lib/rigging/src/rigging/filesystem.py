@@ -1,17 +1,25 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Marin filesystem helpers: prefix resolution, region-local temp storage,
-and cross-region read guards.
+"""Marin filesystem: the cluster data config, storage-prefix/region resolution,
+region-local temp storage, and cross-region read guards.
 
-Provides a unified API for resolving the marin storage prefix and building
-GCS paths with lifecycle-managed TTL prefixes. Lifecycle rules on the
+A :class:`DataConfig` describes where a cluster's data lives: the
+region-to-bucket mirror set, the URL scheme, and the temp TTL policy.
+:func:`data_config` returns the active config — the one
+bound by :func:`use_data_config`, else the cluster named by ``MARIN_CLUSTER``
+(default ``marin``), loaded from ``config/<cluster>.yaml``. Every "where does
+data live" answer flows through it: :func:`marin_prefix` is
+``data_config().resolved_root()``, and :func:`marin_temp_bucket`, the mirror
+filesystem, and the region helpers all read its fields. Lifecycle rules on the
 ``marin-{region}`` buckets are managed by ``infra/configure_buckets.py``.
 
-Resolution chain for the storage prefix:
+Prefix resolution chain (:meth:`DataConfig.resolved_root`):
   1. ``MARIN_PREFIX`` environment variable
-  2. GCS instance metadata → ``gs://marin-{region}``
-  3. ``/tmp/marin`` (local fallback)
+  2. an explicit ``root`` (single-prefix clusters, e.g. R2)
+  3. the region-local bucket ``region_buckets[<gcs metadata region>]``
+  4. ``gs://marin-{region}`` for a detected-but-unmapped region
+  5. ``/tmp/marin`` (local fallback)
 
 Cross-region transfer budget:
   ``TransferBudget`` tracks cumulative cross-region GCS bytes across all
@@ -27,86 +35,277 @@ import contextlib
 import contextvars
 import dataclasses
 import functools
+import glob
 import logging
 import os
 import pathlib
-import re
 import threading
 import time
 import urllib.error
 import urllib.request
 import uuid
-from collections.abc import Callable, Generator, Sequence
+from collections.abc import Callable, Generator, Mapping, Sequence
+from datetime import datetime
+from enum import StrEnum
 from pathlib import PurePath
+from types import MappingProxyType
 from typing import Any, cast
 
+import braceexpand
 import fsspec
+import yaml
 from fsspec.callbacks import DEFAULT_CALLBACK, Callback
 from fsspec.implementations.local import LocalFileSystem
 from google.api_core.exceptions import Forbidden as GcpForbiddenException
 from google.cloud import storage
 
+from rigging.config_discovery import list_cluster_configs, resolve_cluster_config
 from rigging.distributed_lock import create_lock, default_worker_id
 from rigging.timing import ExponentialBackoff, retry_with_backoff
 
 logger = logging.getLogger(__name__)
 
-_GCP_METADATA_ZONE_URL = "http://metadata.google.internal/computeMetadata/v1/instance/zone"
 
+def _bundled_cluster_config_dir() -> str | None:
+    """Bundled cluster-config dir for an installed (wheel) rigging.
+
+    Populated by the ``force-include`` in ``lib/rigging/pyproject.toml`` at
+    ``rigging/clusters``. Returns ``None`` for a source/editable checkout, where
+    the repo-root ``config/`` entry resolves against the marin workspace root.
+    Mirrors ``iris.cli.connect._bundled_iris_config_dir``.
+    """
+    bundled = pathlib.Path(__file__).resolve().parent / "clusters"
+    return str(bundled) if bundled.is_dir() else None
+
+
+# A per-user override dir for connecting to a live cluster (e.g. on a dev VM).
+# Named so tests can filter it out of MARIN_CLUSTER_CONFIG_DIRS by identity
+# rather than re-hardcoding the path, since it makes cluster-config resolution
+# host-dependent: a document there may lack a `data:` block, silently swapping
+# the loaded DataConfig out from under a test that expects the committed
+# config/marin.yaml layout.
+PER_USER_CLUSTER_CONFIG_DIR = "~/.config/marin/clusters"
+
+# Cluster config search dirs, highest priority first: a per-user override, the
+# repo-root ``config/`` directory (in-tree checkout), then the bundled copy for
+# installed wheels. Relative paths resolve against the marin workspace root via
+# :func:`rigging.config_discovery.resolve_cluster_config`.
+MARIN_CLUSTER_CONFIG_DIRS: tuple[str, ...] = tuple(
+    p
+    for p in (
+        PER_USER_CLUSTER_CONFIG_DIR,
+        "config",
+        _bundled_cluster_config_dir(),
+    )
+    if p is not None
+)
+
+_MARIN_PREFIX_ENV = "MARIN_PREFIX"
+_MARIN_CLUSTER_ENV = "MARIN_CLUSTER"
+_GCP_METADATA_ZONE_URL = "http://metadata.google.internal/computeMetadata/v1/instance/zone"
 _DEFAULT_LOCAL_PREFIX = "/tmp/marin"
 
-# Special-case overrides for primary Marin buckets that do not follow the
-# default `marin-{region}` naming convention.
-_REGION_TO_MARIN_BUCKET_OVERRIDES: dict[str, str] = {
-    "europe-west4": "marin-eu-west4",
-}
 
-# All known primary marin data buckets, keyed by region.
-# Used by the mirror filesystem to scan for files across regions, and by
-# `marin_temp_bucket` to address the region-local TTL-managed scratch area.
-REGION_TO_DATA_BUCKET: dict[str, str] = {
-    "us-central1": "marin-us-central1",
-    "us-central2": "marin-us-central2",
-    "us-east1": "marin-us-east1",
-    "us-east5": "marin-us-east5",
-    "us-west4": "marin-us-west4",
-    "europe-west4": "marin-eu-west4",
-}
+class StoreType(StrEnum):
+    """Object-storage backend serving a bucket.
 
-# Region aliases that resolve to the same physical region (e.g. the "eu-west4"
-# label that some legacy paths and metadata tools surface).
-_REGION_ALIASES: dict[str, str] = {
-    "eu-west4": "europe-west4",
-}
+    Distinguishes the two S3-compatible backends — which share the ``s3://``
+    scheme but differ in endpoint, addressing, and credentials — from GCS.
+    """
 
-# Allowed TTL-day values. Each value N corresponds to a lifecycle rule on every
-# ``marin-{region}`` bucket that deletes objects under ``tmp/ttl=Nd/`` after N
-# days. Keep in sync with ``infra/configure_buckets.py``.
-ALLOWED_TTL_DAYS: tuple[int, ...] = (1, 2, 3, 4, 5, 6, 7, 14, 30)
+    GCS = "gcs"
+    R2 = "r2"
+    COREWEAVE = "coreweave"
 
-# Path prefix under each ``marin-{region}`` bucket where TTL-managed scratch
-# data lives. Lifecycle rules live under ``{TEMP_PATH_PREFIX}/ttl=Nd/``.
-TEMP_PATH_PREFIX: str = "tmp"
 
-# Reverse lookup: bucket name → canonical GCP region.
-# Derived from REGION_TO_DATA_BUCKET so that region_from_prefix can return
-# canonical region names even when the bucket uses abbreviated naming
-# (e.g. "marin-eu-west4" → "europe-west4" instead of "eu-west4").
-_BUCKET_TO_REGION: dict[str, str] = {bucket: region for region, bucket in REGION_TO_DATA_BUCKET.items()}
+@dataclasses.dataclass(frozen=True)
+class BucketSpec:
+    """A single data bucket: its name and which backend serves it.
+
+    Attributes:
+        name: Bucket name without scheme, e.g. ``marin-us-east1`` or ``marin-na``.
+        store: Backend serving the bucket.
+        signing_region: S3 signing region for backends that require one
+            (CoreWeave, e.g. ``US-EAST-02A``). Distinct from the *placement*
+            region (the ``region_buckets`` key). ``None`` for GCS (not S3) and R2
+            (which signs with ``"auto"``).
+    """
+
+    name: str
+    store: StoreType
+    signing_region: str | None = None
+
+
+@dataclasses.dataclass(frozen=True)
+class DataConfig:
+    """Where a cluster's data lives — the single source for storage layout.
+
+    Attributes:
+        region_buckets: Region name -> :class:`BucketSpec` for the cross-region
+            mirror set.
+        scheme: URL scheme for the cluster's storage (e.g. ``"gs"`` or ``"s3"``).
+        temp_path: Path segment for TTL-managed scratch data.
+        ttl_days: Allowed TTL-day values for temp lifecycle rules.
+        root: Explicit single-prefix root (e.g. ``"s3://marin-na/marin"``). Set
+            only for clusters that do not use region-local bucket selection.
+    """
+
+    region_buckets: Mapping[str, BucketSpec]
+    scheme: str = "gs"
+    temp_path: str = "tmp"
+    ttl_days: tuple[int, ...] = (1, 2, 3, 4, 5, 6, 7, 14, 30)
+    root: str | None = None
+
+    def resolved_root(self) -> str:
+        """Resolve the storage root for this config. Never returns ``None``.
+
+        Precedence: ``MARIN_PREFIX`` env > ``self.root`` > region-local bucket
+        from ``region_buckets[<gcs metadata region>]`` > ``{scheme}://marin-{region}``
+        for a detected-but-unmapped region > :data:`_DEFAULT_LOCAL_PREFIX`.
+
+        The env/explicit value is canonicalized through :class:`StoragePath` (trailing
+        ``/`` stripped, interior ``//`` collapsed) so downstream joins never double the
+        separator.
+        """
+        env_prefix = os.environ.get(_MARIN_PREFIX_ENV)
+        if env_prefix:
+            return StoragePath.normalize(env_prefix)
+        if self.root is not None:
+            return StoragePath.normalize(self.root)
+        region = region_from_metadata()
+        if region is not None:
+            spec = self.region_buckets.get(region)
+            if spec is not None:
+                return f"{self.scheme}://{spec.name}"
+            return f"{self.scheme}://marin-{region}"
+        return _DEFAULT_LOCAL_PREFIX
+
+
+# The marin cluster's storage layout lives in ``config/marin.yaml`` (loaded as
+# the default below). This in-code config is only a degraded fallback for when
+# no config file is discoverable — e.g. an installed package running outside a
+# marin checkout. Such contexts set ``MARIN_PREFIX`` (which wins in
+# ``resolved_root``) or detect a region (constructing ``gs://marin-{region}``),
+# so an empty ``region_buckets`` is sufficient.
+_DEFAULT_CLUSTER = "marin"
+_FALLBACK_DATA_CONFIG: DataConfig = DataConfig(region_buckets={})
+
+_active_data_config: contextvars.ContextVar[DataConfig | None] = contextvars.ContextVar(
+    "marin_data_config", default=None
+)
+
+
+def data_config() -> DataConfig:
+    """Return the active :class:`DataConfig`.
+
+    Resolution: the config bound by :func:`use_data_config` (a context-local
+    override), else the cluster named by ``MARIN_CLUSTER`` (default ``marin``)
+    loaded from its ``config/<cluster>.yaml``.
+    """
+    override = _active_data_config.get()
+    if override is not None:
+        return override
+    return load_cluster_config()
+
+
+@contextlib.contextmanager
+def use_data_config(config: DataConfig) -> Generator[DataConfig, None, None]:
+    """Bind *config* as the active :class:`DataConfig` for the duration of the block."""
+    token = _active_data_config.set(config)
+    try:
+        yield config
+    finally:
+        _active_data_config.reset(token)
+
+
+def load_cluster_config(cluster: str | None = None) -> DataConfig:
+    """Load a cluster's :class:`DataConfig` from its ``config/<cluster>.yaml``.
+
+    The cluster name is ``cluster`` arg > ``MARIN_CLUSTER`` env > ``marin``. A
+    parsed ``data:`` block becomes the config; other keys (e.g. ``iris:``) are
+    ignored. When the default ``marin`` config cannot be found (e.g. an installed
+    package outside a checkout), returns :data:`_FALLBACK_DATA_CONFIG`; a missing
+    *named* cluster raises ``FileNotFoundError``. Cached; call
+    :func:`reset_data_config_cache` in tests after changing env or config files.
+    """
+    name = cluster or os.environ.get(_MARIN_CLUSTER_ENV) or _DEFAULT_CLUSTER
+    return _load_cluster_config_cached(name)
+
+
+@functools.cache
+def _load_cluster_config_cached(cluster: str) -> DataConfig:
+    try:
+        config_path = resolve_cluster_config(cluster, MARIN_CLUSTER_CONFIG_DIRS)
+    except FileNotFoundError:
+        if cluster == _DEFAULT_CLUSTER:
+            return _FALLBACK_DATA_CONFIG
+        raise
+    with config_path.open("rb") as f:
+        document = yaml.safe_load(f) or {}
+    data = document.get("data")
+    if not data:
+        return _FALLBACK_DATA_CONFIG
+    return _parse_data_config(data)
+
+
+def _parse_bucket_spec(value: object) -> BucketSpec:
+    """Normalize one ``region_buckets`` YAML entry into a :class:`BucketSpec`.
+
+    Each entry is an explicit mapping ``{bucket, store[, signing_region]}``. The
+    ``store`` (``gcs``/``r2``/``coreweave``) is required because it cannot be
+    inferred — R2 and CoreWeave share the ``s3`` scheme but need different
+    endpoints and credentials. CoreWeave entries must carry a ``signing_region``.
+    """
+    if not isinstance(value, Mapping):
+        raise ValueError(
+            f"region_buckets entry must be a mapping {{bucket, store[, signing_region]}}, "
+            f"got {type(value).__name__}: {value!r}"
+        )
+    if "bucket" not in value or "store" not in value:
+        raise ValueError(f"region_buckets entry must set 'bucket' and 'store': {value!r}")
+    store = StoreType(str(value["store"]))
+    signing_region = str(value["signing_region"]) if value.get("signing_region") is not None else None
+    if store is StoreType.COREWEAVE and signing_region is None:
+        raise ValueError(f"CoreWeave bucket {value['bucket']!r} must specify a 'signing_region'.")
+    return BucketSpec(name=str(value["bucket"]), store=store, signing_region=signing_region)
+
+
+def _parse_data_config(data: Mapping[str, object]) -> DataConfig:
+    """Build a :class:`DataConfig` from a parsed ``data:`` config block.
+
+    Keys absent from the block fall back to the :class:`DataConfig` field
+    defaults, so per-field defaults are defined once on the dataclass.
+    """
+    temp = data.get("temp") or {}
+    raw_ttl = temp.get("ttl_days")
+    root = data.get("root")
+    scheme = str(data.get("scheme") or DataConfig.scheme)
+    raw_buckets = data.get("region_buckets") or {}
+    region_buckets = {region: _parse_bucket_spec(value) for region, value in raw_buckets.items()}
+    return DataConfig(
+        region_buckets=region_buckets,
+        scheme=scheme,
+        temp_path=str(temp.get("path") or DataConfig.temp_path),
+        ttl_days=tuple(raw_ttl) if raw_ttl is not None else DataConfig.ttl_days,
+        root=str(root) if root is not None else None,
+    )
+
+
+def reset_data_config_cache() -> None:
+    """Clear the cluster-config and S3-bucket-registry caches. For tests."""
+    _load_cluster_config_cached.cache_clear()
+    s3_data_buckets.cache_clear()
 
 
 # ---------------------------------------------------------------------------
-# Low-level region helpers
+# Region + prefix resolution
 # ---------------------------------------------------------------------------
 
 
 def region_from_metadata() -> str | None:
-    """Derive GCP region from the instance metadata server, or ``None``."""
+    """Derive the GCP region from the instance metadata server, or ``None``."""
     try:
-        req = urllib.request.Request(
-            _GCP_METADATA_ZONE_URL,
-            headers={"Metadata-Flavor": "Google"},
-        )
+        req = urllib.request.Request(_GCP_METADATA_ZONE_URL, headers={"Metadata-Flavor": "Google"})
         with urllib.request.urlopen(req, timeout=2) as resp:
             zone = resp.read().decode().strip().split("/")[-1]
     except (urllib.error.URLError, OSError, TimeoutError, ValueError):
@@ -119,52 +318,411 @@ def region_from_metadata() -> str | None:
 def region_from_prefix(prefix: str) -> str | None:
     """Extract the canonical GCP region from a ``gs://marin-{region}/…`` prefix.
 
-    Uses ``_BUCKET_TO_REGION`` to normalize abbreviated bucket names
-    (e.g. ``gs://marin-eu-west4`` → ``europe-west4``).
+    Bucket names are normalized through the active config's ``region_buckets``
+    (e.g. ``gs://marin-eu-west4`` -> ``europe-west4``); unknown ``marin-``
+    buckets fall back to stripping the ``marin-`` prefix.
     """
-    m = re.match(r"gs://([^/]+)", prefix)
-    if not m:
+    parsed = StoragePath.parse(prefix)
+    if parsed.scheme != "gs" or not parsed.bucket:
         return None
-    bucket = m.group(1)
-    if bucket in _BUCKET_TO_REGION:
-        return _BUCKET_TO_REGION[bucket]
-    # Fall back to stripping the "marin-" prefix.
+    bucket = parsed.bucket
+    for region, spec in data_config().region_buckets.items():
+        if spec.name == bucket:
+            return region
     if bucket.startswith("marin-"):
         return bucket[len("marin-") :]
     return None
 
 
-# ---------------------------------------------------------------------------
-# High-level API
-# ---------------------------------------------------------------------------
+def marin_region() -> str | None:
+    """Return the current GCP region, from instance metadata or ``MARIN_PREFIX``."""
+    return region_from_metadata() or region_from_prefix(os.environ.get(_MARIN_PREFIX_ENV, ""))
 
 
 def marin_prefix() -> str:
-    """Return the marin storage prefix. Never returns ``None``.
+    """Return the active cluster's storage prefix (``data_config().resolved_root()``)."""
+    return data_config().resolved_root()
 
-    Resolution order:
-      1. ``MARIN_PREFIX`` environment variable
-      2. GCS instance metadata → ``gs://marin-{region}``
-      3. ``/tmp/marin``
+
+def _key_segments(key: str) -> tuple[str, ...]:
+    return tuple(part for part in key.split("/") if part)
+
+
+# Schemes whose ``scheme://`` prefix carries no authority: the entire remainder is the
+# key, not ``authority/key``. The ``mirror://`` filesystem strips its protocol and
+# treats what follows as a path relative to the local prefix, so ``mirror://a/b`` must
+# parse to an empty authority with key ``a/b`` — matching ``parse("mirror://") / "a/b"``.
+_EMPTY_AUTHORITY_SCHEMES: frozenset[str] = frozenset({"mirror"})
+
+
+def _parse_parts(value: str) -> tuple[str | None, str, tuple[str, ...], bool]:
+    """Split a storage URL / path into ``(scheme, netloc, segments, rooted)``."""
+    if "://" in value:
+        scheme, rest = value.split("://", 1)
+        if scheme in _EMPTY_AUTHORITY_SCHEMES:
+            # Empty-authority scheme: no netloc to split off; the whole remainder is the
+            # key. ``rooted=False`` keeps the join convention (``mirror://`` + ``a/b`` ->
+            # ``mirror://a/b``, no third slash).
+            return scheme, "", _key_segments(rest), False
+        netloc, sep, key = rest.partition("/")
+        # With an authority the key is always /-separated, so rooted is pinned True
+        # to keep value equality and relative_to independent of a trailing slash.
+        return scheme, netloc, _key_segments(key), bool(netloc) or bool(sep)
+    return None, "", _key_segments(value), value.startswith("/")
+
+
+@dataclasses.dataclass(frozen=True, init=False)
+class StoragePath:
+    """A parsed storage location with a bounded set of I/O verbs.
+
+    A frozen value type: URL scheme, authority, and key segments. Object-store keys are
+    normalized on round-trip — joins are structural (a segment never contains a
+    separator), so a doubled or trailing separator is unrepresentable and ``parse`` ->
+    ``str`` collapses interior ``//`` and strips a trailing ``/``.
+
+    Construct by parsing a string (``StoragePath("gs://b/k")``); the legacy
+    :meth:`parse` is a thin alias. Paths at rest (configs, artifact records, CLI args)
+    stay ``str``: parse at a boundary, manipulate, and ``str()`` back out. See
+    :func:`prefix_join` for the single-join convenience.
+
+    The I/O verbs are stateless: each resolves through the guarded
+    :func:`url_to_fs`/:func:`open_url` factory (cross-region budget, ``mirror://``, finite
+    S3 timeouts), never memoizing a filesystem handle on the frozen instance. They cover
+    the common surface: stat (:meth:`exists`, :meth:`isfile`, :meth:`isdir`, :meth:`size`,
+    :meth:`mtime`), listing (:meth:`ls`, :meth:`walk`, :meth:`glob`), mutation
+    (:meth:`mkdirs`, :meth:`rm`, :meth:`rmtree`, :meth:`rename`), transfer between local
+    disk and this path (:meth:`download_to`, :meth:`upload_from`), and whole-file access
+    (:meth:`open`, :meth:`read_text`, :meth:`write_text`, :meth:`read_bytes`,
+    :meth:`write_bytes`). :meth:`ls`, :meth:`walk`, and :meth:`glob` return reopenable
+    :class:`StoragePath` values; the read/write verbs forward ``**kwargs`` (e.g.
+    ``compression=``, ``encoding=``) to :func:`open_url` and the ``write_*`` pair truncates.
+    Byte-range reads and detail listings stay on the raw ``fs`` handle.
     """
-    prefix = os.environ.get("MARIN_PREFIX")
-    if prefix:
-        return prefix
-    region = region_from_metadata()
-    if region:
-        bucket = _REGION_TO_MARIN_BUCKET_OVERRIDES.get(region, f"marin-{region}")
-        return f"gs://{bucket}"
-    return _DEFAULT_LOCAL_PREFIX
+
+    scheme: str | None
+    """URL scheme (``gs``, ``s3``, ``mirror``), or ``None`` for a local path."""
+    netloc: str
+    """Bucket/authority; empty for an empty-authority scheme like ``mirror://``."""
+    segments: tuple[str, ...]
+    """Key segments; never empty strings."""
+    rooted: bool = True
+    """Whether a ``/`` precedes the key: a local path's absoluteness (``/tmp/x`` vs
+    ``rel/x``), or the empty-authority join convention (``file:///x`` vs ``mirror://x``).
+    Irrelevant when ``netloc`` is non-empty."""
+
+    def __init__(
+        self,
+        value: "str | StoragePath | None" = None,
+        *,
+        scheme: str | None = None,
+        netloc: str = "",
+        segments: tuple[str, ...] = (),
+        rooted: bool = True,
+    ):
+        """Parse *value* (a URL/path string, or another :class:`StoragePath`); when
+        *value* is omitted, build directly from the keyword parts.
+        """
+        # A positional value parses; the keyword parts build structurally. dataclasses
+        # .replace passes only the fields (never value), so it takes the keyword branch —
+        # keeping replace, __truediv__, and parent working under init=False.
+        if value is not None:
+            if isinstance(value, StoragePath):
+                scheme, netloc, segments, rooted = value.scheme, value.netloc, value.segments, value.rooted
+            else:
+                scheme, netloc, segments, rooted = _parse_parts(value)
+        object.__setattr__(self, "scheme", scheme)
+        object.__setattr__(self, "netloc", netloc)
+        object.__setattr__(self, "segments", tuple(segments))
+        object.__setattr__(self, "rooted", rooted)
+
+    @classmethod
+    def parse(cls, value: str) -> "StoragePath":
+        """Alias for ``StoragePath(value)``, kept for existing call sites."""
+        return cls(value)
+
+    @staticmethod
+    def normalize(value: str) -> str:
+        """``value`` in canonical single-separator form (``str(StoragePath(value))``)."""
+        return str(StoragePath(value))
+
+    def __truediv__(self, relative: str) -> "StoragePath":
+        if "://" in relative or relative.startswith("/"):
+            raise ValueError(f"cannot join non-relative path {relative!r} onto {self}")
+        return dataclasses.replace(self, segments=self.segments + _key_segments(relative))
+
+    def relative_to(self, base: "StoragePath") -> str:
+        """The ``/``-joined segments of this path under ``base``.
+
+        Structural containment — compares parsed segments, not string prefixes, so a
+        doubled separator on either side cannot fork the answer.
+        """
+        same_root = (self.scheme, self.netloc, self.rooted) == (base.scheme, base.netloc, base.rooted)
+        if not same_root or self.segments[: len(base.segments)] != base.segments:
+            raise ValueError(f"{self} is not under {base}")
+        return "/".join(self.segments[len(base.segments) :])
+
+    @property
+    def bucket(self) -> str:
+        """The object-store bucket (the authority); empty for a local or empty-authority path."""
+        return self.netloc
+
+    @property
+    def key(self) -> str:
+        """The ``/``-joined key segments beneath the authority (no leading or trailing ``/``)."""
+        return "/".join(self.segments)
+
+    @property
+    def name(self) -> str:
+        """The last key segment (basename), or ``""`` at the authority/filesystem root."""
+        return self.segments[-1] if self.segments else ""
+
+    @property
+    def parent(self) -> "StoragePath":
+        """This path with its last key segment removed; unchanged once at the root."""
+        if not self.segments:
+            return self
+        return dataclasses.replace(self, segments=self.segments[:-1])
+
+    def __str__(self) -> str:
+        key = "/".join(self.segments)
+        if self.scheme is None:
+            return f"/{key}" if self.rooted else key
+        root = f"{self.scheme}://{self.netloc}"
+        if not key:
+            return root
+        if self.netloc or self.rooted:
+            return f"{root}/{key}"
+        return f"{root}{key}"
+
+    # -- scheme predicates ---------------------------------------------------
+
+    @property
+    def is_local(self) -> bool:
+        """True for a local-disk path (no scheme, or the ``file`` scheme)."""
+        return self.scheme in (None, "file")
+
+    @property
+    def is_remote(self) -> bool:
+        """True for a remote object store (``gs``, ``s3``, ``mirror``, …)."""
+        return not self.is_local
+
+    # -- I/O verbs -----------------------------------------------------------
+    #
+    # Stateless: each resolves through the guarded url_to_fs/open_url factory so it
+    # inherits the cross-region budget, mirror:// protocol, and S3 timeouts.
+
+    def exists(self) -> bool:
+        fs, path = url_to_fs(str(self))
+        return fs.exists(path)
+
+    def isdir(self) -> bool:
+        fs, path = url_to_fs(str(self))
+        return fs.isdir(path)
+
+    def size(self) -> int:
+        fs, path = url_to_fs(str(self))
+        return fs.size(path)
+
+    def mtime(self) -> datetime:
+        fs, path = url_to_fs(str(self))
+        return fs.modified(path)
+
+    def mkdirs(self, *, exist_ok: bool = True) -> None:
+        fs, path = url_to_fs(str(self))
+        fs.makedirs(path, exist_ok=exist_ok)
+
+    def glob(self) -> list["StoragePath"]:
+        """Match this glob pattern against the filesystem.
+
+        Brace-expands first (``{a,b}``), then globs each member and reattaches the
+        filesystem's protocol so every result is a reopenable :class:`StoragePath`.
+        Every member is treated as a pattern, so one that matches nothing — a magic
+        pattern with no hits or a plain literal that is absent — contributes nothing
+        and an all-missing input yields an empty list. Local matches stay scheme-less.
+        Use :meth:`expand_glob` instead when a named-but-absent shard must be kept.
+        """
+        out: list[StoragePath] = []
+        for pattern in braceexpand.braceexpand(str(self)):
+            fs, path = url_to_fs(pattern)
+            out.extend(StoragePath(_reattach_protocol(fs, match)) for match in fs.glob(path))
+        return out
+
+    def expand_glob(self) -> list["StoragePath"]:
+        """Resolve this shard specification into concrete paths, keeping named literals.
+
+        Brace-expands first (``{a,b}``, ``{1..8}``); a member carrying glob magic
+        (``*``, ``?``, ``[``) is matched against the filesystem, while a plain literal
+        is kept as-is whether or not it exists. This is the difference from :meth:`glob`:
+        an explicitly named but missing shard is preserved — so the caller can surface it
+        — rather than silently dropped. A magic member that matches nothing still yields
+        nothing.
+        """
+        out: list[StoragePath] = []
+        for member in braceexpand.braceexpand(str(self)):
+            fs, path = url_to_fs(member)
+            if glob.has_magic(path):
+                out.extend(StoragePath(_reattach_protocol(fs, match)) for match in fs.glob(path))
+            else:
+                out.append(StoragePath(member))
+        return out
+
+    def open(self, mode: str = "rb", **kwargs: Any) -> "fsspec.core.OpenFile":
+        """Open this path, returning a lazy ``fsspec`` ``OpenFile``.
+
+        Delegates to :func:`open_url`, so it charges the cross-region budget for GCS
+        reads and forwards ``compression=``/``encoding=``/``block_size=`` to ``fsspec``.
+        """
+        return open_url(str(self), mode, **kwargs)
+
+    def read_text(self, **kwargs: Any) -> str:
+        with self.open("r", **kwargs) as f:
+            return f.read()
+
+    def read_bytes(self, **kwargs: Any) -> bytes:
+        with self.open("rb", **kwargs) as f:
+            return f.read()
+
+    def write_text(self, data: str, **kwargs: Any) -> None:
+        with self.open("w", **kwargs) as f:
+            f.write(data)
+
+    def write_bytes(self, data: bytes, **kwargs: Any) -> None:
+        with self.open("wb", **kwargs) as f:
+            f.write(data)
+
+    def isfile(self) -> bool:
+        fs, path = url_to_fs(str(self))
+        return fs.isfile(path)
+
+    def ls(self) -> list["StoragePath"]:
+        """List this directory's immediate children as reopenable paths.
+
+        Non-recursive; each child carries its filesystem's protocol so it round-trips
+        back through the verbs. For per-entry metadata (size/mtime) call
+        :meth:`size`/:meth:`mtime` on a child, or drop to raw ``fs.ls(detail=True)``.
+        """
+        fs, path = url_to_fs(str(self))
+        return [StoragePath(_reattach_protocol(fs, child)) for child in fs.ls(path, detail=False)]
+
+    def walk(self) -> "Generator[tuple[StoragePath, list[str], list[str]], None, None]":
+        """Walk this tree top-down, yielding ``(dir, subdir_names, file_names)`` like ``os.walk``.
+
+        ``dir`` is a reopenable :class:`StoragePath`; the name lists are plain strings, so
+        a file is reached as ``dir / name``.
+        """
+        fs, path = url_to_fs(str(self))
+        for dirpath, dirnames, filenames in fs.walk(path):
+            yield StoragePath(_reattach_protocol(fs, dirpath)), list(dirnames), list(filenames)
+
+    def rm(self) -> None:
+        fs, path = url_to_fs(str(self))
+        fs.rm(path)
+
+    def rmtree(self) -> None:
+        fs, path = url_to_fs(str(self))
+        fs.rm(path, recursive=True)
+
+    def rename(self, target: "str | StoragePath") -> None:
+        fs, path = url_to_fs(str(self))
+        fs.mv(path, str(target))
+
+    def download_to(self, local_path: str, *, recursive: bool = False) -> None:
+        """Copy this (remote) path down to ``local_path`` on the local disk."""
+        fs, path = url_to_fs(str(self))
+        fs.get(path, local_path, recursive=recursive)
+
+    def upload_from(self, local_path: str, *, recursive: bool = False) -> None:
+        """Copy ``local_path`` from the local disk up to this (remote) path."""
+        fs, path = url_to_fs(str(self))
+        fs.put(local_path, path, recursive=recursive)
 
 
-def marin_region() -> str | None:
-    """Return the current GCP region, if detectable.
+def _reattach_protocol(fs: fsspec.AbstractFileSystem, path: str) -> str:
+    """Re-attach ``fs``'s protocol to a bare ``path`` so it round-trips through ``url_to_fs``.
 
-    Resolution order:
-      1. GCS instance metadata server
-      2. Infer from ``MARIN_PREFIX`` environment variable
+    ``fsspec`` glob/find results drop the protocol prefix (e.g. ``gs://``), which makes
+    them ambiguous to reopen on a non-local filesystem. Local (``file``/protocol-less)
+    paths and already-qualified paths are returned unchanged.
     """
-    return region_from_metadata() or region_from_prefix(os.environ.get("MARIN_PREFIX", ""))
+    protocol = fs.protocol
+    if isinstance(protocol, (list, tuple)):
+        protocol = protocol[0]
+    if protocol in (None, "file"):
+        return path
+    if path.startswith(f"{protocol}://"):
+        return path
+    return f"{protocol}://{path}"
+
+
+def prefix_join(prefix: str, relative: str) -> str:
+    """Join a relative path onto a storage prefix with exactly one ``/`` separator.
+
+    Object-store keys are not normalized: a naive ``f"{prefix}/{relative}"`` join of a
+    trailing-slash prefix produces a doubled separator — a *different* key — silently
+    splitting writers from slash-collapsing readers. ``str``-in/``str``-out
+    convenience over :class:`StoragePath` for a single join; parse once and use ``/``
+    for repeated manipulation.
+    """
+    return str(StoragePath.parse(prefix) / relative)
+
+
+@functools.cache
+def s3_data_buckets() -> Mapping[str, BucketSpec]:
+    """R2/CoreWeave data buckets (name -> :class:`BucketSpec`) across all configs.
+
+    These S3-compatible buckets carry ``tmp/ttl=Nd/`` lifecycle rules; used to
+    route temp paths (:func:`marin_temp_bucket`) and to drive
+    ``infra/configure_buckets.py``. The set is defined in ``config/*.yaml`` via
+    each bucket's ``store`` type (``r2``/``coreweave``).
+
+    Recognition must be cross-cluster — a launcher on a GCS cluster may target an
+    R2/CoreWeave output prefix (see :func:`marin_temp_bucket`'s ``source_prefix``)
+    — so this aggregates across all cluster configs rather than only the active
+    one. Cached; :func:`reset_data_config_cache` clears it.
+    """
+    registry: dict[str, BucketSpec] = {}
+    for cluster in list_cluster_configs(MARIN_CLUSTER_CONFIG_DIRS):
+        for spec in load_cluster_config(cluster).region_buckets.values():
+            if spec.store in (StoreType.R2, StoreType.COREWEAVE):
+                registry.setdefault(spec.name, spec)
+    return MappingProxyType(registry)
+
+
+# Finite botocore timeouts/retries for every S3/R2 filesystem we build.
+# s3fs/aiobotocore default to *no* read or connect timeout, so a silently dead
+# R2 connection wedges ``upload_part`` forever (#6487): the blocked socket never
+# raises, the shard never completes, and the sequential stage barrier stalls the
+# whole job. With finite timeouts the wedge becomes a retryable error that fails
+# the shard, which the coordinator then re-queues.
+_S3_CONNECT_TIMEOUT = 30
+_S3_READ_TIMEOUT = 120
+_S3_RETRY_MAX_ATTEMPTS = 5
+
+
+# ---------------------------------------------------------------------------
+# Temp storage
+# ---------------------------------------------------------------------------
+
+
+def _s3_bucket_from_prefix(prefix: str | None) -> str | None:
+    """Return the bucket from an ``s3://bucket/…`` prefix, or ``None``.
+
+    Only recognizes buckets in :func:`s3_data_buckets` (the R2/CoreWeave buckets
+    with lifecycle rules configured by ``infra/configure_buckets.py``), so unknown
+    S3 buckets fall through to the flat non-TTL fallback instead of getting a
+    ``tmp/ttl=Nd/`` path that would never be cleaned up.
+    """
+    if not prefix:
+        return None
+    parsed = StoragePath.parse(prefix)
+    if parsed.scheme != "s3":
+        return None
+    return parsed.bucket if parsed.bucket in s3_data_buckets() else None
+
+
+# ---------------------------------------------------------------------------
+# High-level API
+# ---------------------------------------------------------------------------
 
 
 def _append_path_prefix(path: str, prefix: str) -> str:
@@ -173,23 +731,23 @@ def _append_path_prefix(path: str, prefix: str) -> str:
     return path
 
 
-def _resolve_ttl_days(ttl_days: int) -> int:
-    """Map *ttl_days* to the smallest configured value that is ``>= ttl_days``.
+def _resolve_ttl_days(ttl_days: int, allowed: tuple[int, ...]) -> int:
+    """Map *ttl_days* to the smallest *allowed* value that is ``>= ttl_days``.
 
-    Requests above the largest configured value clamp to that maximum (with
+    Requests above the largest allowed value clamp to that maximum (with
     a warning) — temp data is by definition disposable, so capping the TTL
     is preferable to forcing the caller to handle an exception. Logs a
     warning whenever the requested value is rounded.
     """
     if ttl_days <= 0:
-        raise ValueError(f"ttl_days={ttl_days} must be positive. Allowed values: {ALLOWED_TTL_DAYS}.")
-    if ttl_days in ALLOWED_TTL_DAYS:
+        raise ValueError(f"ttl_days={ttl_days} must be positive. Allowed values: {allowed}.")
+    if ttl_days in allowed:
         return ttl_days
-    for n in ALLOWED_TTL_DAYS:
+    for n in allowed:
         if n > ttl_days:
             logger.warning("ttl_days=%d not configured; rounding up to %d", ttl_days, n)
             return n
-    capped = max(ALLOWED_TTL_DAYS)
+    capped = max(allowed)
     logger.warning("ttl_days=%d exceeds the configured maximum; clamping to %d", ttl_days, capped)
     return capped
 
@@ -203,42 +761,65 @@ def marin_temp_bucket(ttl_days: int, prefix: str = "", *, source_prefix: str | N
 
         gs://marin-{region}/tmp/ttl={N}d/{prefix}
 
+    For a known S3-compatible prefix — an R2 or CoreWeave bucket in
+    :func:`s3_data_buckets` — returns a path at the bucket root::
+
+        s3://marin-na/tmp/ttl={N}d/{prefix}
+        s3://marin-us-east-02a/tmp/ttl={N}d/{prefix}
+
     Otherwise falls back to a flat path under the marin prefix::
 
         {marin_prefix}/tmp/{prefix}
 
-    Lifecycle rules on each ``marin-{region}`` bucket — managed by
-    ``infra/configure_buckets.py`` — auto-delete objects under
-    ``tmp/ttl=Nd/`` after *N* days.
+    Lifecycle rules on each ``marin-{region}`` GCS bucket and each R2/CoreWeave
+    data bucket — managed by ``infra/configure_buckets.py`` — auto-delete objects
+    under ``tmp/ttl=Nd/`` after *N* days.
 
     Args:
-        ttl_days: Lifecycle TTL in days.  Values not in
-            :data:`ALLOWED_TTL_DAYS` are rounded up to the nearest configured
-            value (with a warning); values above the maximum clamp to it.
-            Non-positive values raise :class:`ValueError`.
+        ttl_days: Lifecycle TTL in days.  Values not in the active config's
+            ``ttl_days`` are rounded up to the nearest configured value (with a
+            warning); values above the maximum clamp to it.  Non-positive values
+            raise :class:`ValueError`.
         prefix: Optional sub-path appended after the TTL directory.
         source_prefix: Optional path used to choose the temp bucket region.
             Useful when configuring a remote job from a launcher that may be in
             a different region than the job output path.
     """
-    ttl_days = _resolve_ttl_days(ttl_days)
+    cfg = data_config()
+    ttl_days = _resolve_ttl_days(ttl_days, cfg.ttl_days)
 
     mp = marin_prefix()
 
-    region = region_from_prefix(source_prefix) if source_prefix is not None else None
-    if region is None and mp.startswith("gs://"):
-        region = marin_region()
+    # An explicit source_prefix fully determines the backend and region, taking
+    # precedence over the ambient marin prefix and VM metadata so that an R2
+    # source_prefix yields an R2 temp path even on a GCP launcher. Only when
+    # source_prefix is absent do we derive the location from the marin prefix
+    # (and VM metadata for the GCS region).
+    if source_prefix is not None:
+        region = region_from_prefix(source_prefix)
+        s3_bucket = _s3_bucket_from_prefix(source_prefix)
+    else:
+        region = marin_region() if mp.startswith("gs://") else None
+        s3_bucket = _s3_bucket_from_prefix(mp)
 
     if region:
-        canonical = _REGION_ALIASES.get(region, region)
-        bucket = REGION_TO_DATA_BUCKET.get(canonical)
-        if bucket:
-            path = f"gs://{bucket}/{TEMP_PATH_PREFIX}/ttl={ttl_days}d"
+        spec = cfg.region_buckets.get(region)
+        if spec:
+            path = f"gs://{spec.name}/{cfg.temp_path}/ttl={ttl_days}d"
             return _append_path_prefix(path, prefix)
+
+    # R2 and CoreWeave temp lives at the bucket root so the `tmp/ttl=Nd/`
+    # lifecycle prefix configured by infra/configure_buckets.py applies. The
+    # bucket already pins the region (R2 is non-regional; CoreWeave encodes it in
+    # the name, e.g. marin-us-east-02a), and the runtime marin prefix carries a
+    # `marin/` data subdir (e.g. `s3://marin-na/marin`) that we deliberately strip.
+    if s3_bucket:
+        path = f"s3://{s3_bucket}/{cfg.temp_path}/ttl={ttl_days}d"
+        return _append_path_prefix(path, prefix)
 
     if "://" not in mp:
         mp = f"file://{mp}"
-    path = f"{mp}/{TEMP_PATH_PREFIX}"
+    path = f"{mp}/{cfg.temp_path}"
     return _append_path_prefix(path, prefix)
 
 
@@ -252,13 +833,58 @@ def split_gcs_path(gs_uri: str) -> tuple[str, pathlib.Path]:
 
     Returns ``(bucket, Path("."))`` when the URI has no object path component.
     """
-    if not gs_uri.startswith("gs://"):
+    parsed = StoragePath.parse(gs_uri)
+    if parsed.scheme != "gs":
         raise ValueError(f"Invalid GCS URI `{gs_uri}`; expected URI of form `gs://BUCKET/path/to/resource`")
 
-    parts = gs_uri[len("gs://") :].split("/", 1)
-    if len(parts) == 1:
-        return parts[0], pathlib.Path(".")
-    return parts[0], pathlib.Path(parts[1])
+    key = parsed.key
+    return parsed.bucket, pathlib.Path(key) if key else pathlib.Path(".")
+
+
+def rebase_file_path(
+    base_in_path: str,
+    file_path: str,
+    base_out_path: str,
+    new_extension: str | None = None,
+    old_extension: str | None = None,
+) -> str:
+    """Rebase ``file_path`` from under ``base_in_path`` to under ``base_out_path``.
+
+    The path below ``base_in_path`` is preserved beneath ``base_out_path``, optionally
+    swapping the file extension. Containment and joins are structural (via
+    :class:`StoragePath`), so a trailing or doubled separator on any argument cannot
+    double the output separator. ``file_path`` must lie under ``base_in_path``;
+    otherwise a ``ValueError`` is raised.
+
+    Args:
+        base_in_path: The base directory of the input file.
+        file_path: The path of the input file, under ``base_in_path``.
+        base_out_path: The base directory of the output file.
+        new_extension: New file extension including the dot (e.g. ``".parquet"``).
+        old_extension: When given with ``new_extension``, the suffix of ``file_path`` to
+            replace; a ``ValueError`` is raised if ``file_path`` does not end with it.
+            When omitted (but ``new_extension`` is set), everything after the last dot is
+            replaced; with no dot, ``new_extension`` is appended.
+    """
+    rel_path = StoragePath.parse(file_path).relative_to(StoragePath.parse(base_in_path))
+
+    if old_extension and not new_extension:
+        raise ValueError("old_extension requires new_extension to be set")
+
+    if new_extension:
+        if old_extension:
+            # endswith (not rfind) so a mismatch fails loudly instead of silently
+            # truncating: rfind returns -1 and rel_path[:-1] would drop a character.
+            if not rel_path.endswith(old_extension):
+                raise ValueError(
+                    f"Cannot rebase {file_path!r}: relative path {rel_path!r} does not end with "
+                    f"old_extension={old_extension!r}"
+                )
+            rel_path = rel_path[: -len(old_extension)] + new_extension
+        else:
+            dot_idx = rel_path.rfind(".")
+            rel_path = (rel_path[:dot_idx] if dot_idx != -1 else rel_path) + new_extension
+    return prefix_join(base_out_path, rel_path)
 
 
 def get_bucket_location(bucket_name_or_path: str) -> str:
@@ -542,8 +1168,8 @@ def mirror_budget(budget_gb: float) -> Generator[None, None, None]:
 
 
 @functools.lru_cache(maxsize=1)
-def _cached_marin_region() -> str | None:
-    """Return the current VM region, cached for the process lifetime."""
+def cached_marin_region() -> str | None:
+    """Return the current VM region, cached for the process lifetime (the VM region is stable)."""
     return marin_region()
 
 
@@ -593,9 +1219,9 @@ def _is_gcs_protocol(protocol: str) -> bool:
 
 def _bucket_from_gcs_url(url: str) -> str | None:
     """Return the bucket name from a ``gs://``/``gcs://`` URL, or ``None``."""
-    for scheme in ("gs://", "gcs://"):
-        if url.startswith(scheme):
-            return url[len(scheme) :].split("/", 1)[0]
+    parsed = StoragePath.parse(url)
+    if parsed.scheme in ("gs", "gcs"):
+        return parsed.bucket
     return None
 
 
@@ -606,13 +1232,23 @@ def _is_cross_region_url(url: str) -> bool:
     bucket = _bucket_from_gcs_url(url)
     if bucket is None:
         return False
-    vm_region = _cached_marin_region()
+    vm_region = cached_marin_region()
     if vm_region is None:
         return False
     bucket_location = _cached_bucket_location(bucket)
     if bucket_location is None:
         return False
     return not _regions_match(vm_region, bucket_location)
+
+
+def is_cross_region_url(url: str) -> bool:
+    """Return True if reading *url* would cross regions and be charged to the budget.
+
+    Cheap: only cached region lookups, no listing or stat.  Callers can use this
+    to skip an expensive size computation when a read would not be charged
+    anyway (local paths, same-region buckets, unknown VM region, override set).
+    """
+    return _is_cross_region_url(url)
 
 
 def record_transfer(size: int, url: str, *, budget: TransferBudget | None = None) -> None:
@@ -673,7 +1309,7 @@ class CrossRegionGuardedFS:
     ):
         self._fs = fs
         self._cross_region_checker = cross_region_checker
-        self._current_region = None if cross_region_checker else _cached_marin_region()
+        self._current_region = None if cross_region_checker else cached_marin_region()
         self._budget = budget if budget is not None else _global_transfer_budget
 
     # -- cross-region detection ----------------------------------------------
@@ -755,12 +1391,36 @@ class CrossRegionGuardedFS:
 # ---------------------------------------------------------------------------
 
 
+def _with_s3_timeout_defaults(kwargs: dict[str, Any]) -> dict[str, Any]:
+    """Inject finite botocore timeouts/retries into S3 filesystem kwargs.
+
+    Caller-supplied ``config_kwargs`` values win; we only fill in keys the
+    caller did not set. See :data:`_S3_READ_TIMEOUT` and #6487.
+
+    We seed ``config_kwargs`` from the ``FSSPEC_S3`` config block first. fsspec
+    builds the filesystem by shallow-merging ``{**conf, **kwargs}``, so a bare
+    ``config_kwargs`` here would *replace* (not merge with) any ``config_kwargs``
+    in ``FSSPEC_S3`` -- silently dropping settings like
+    ``{"s3": {"addressing_style": "virtual"}}`` that S3-compatible endpoints
+    (CoreWeave object storage) require, which then hangs/path-style-rejects.
+    """
+    conf_config_kwargs = (fsspec.config.conf.get("s3") or {}).get("config_kwargs") or {}
+    config_kwargs = {**conf_config_kwargs, **dict(kwargs.get("config_kwargs") or {})}
+    config_kwargs.setdefault("connect_timeout", _S3_CONNECT_TIMEOUT)
+    config_kwargs.setdefault("read_timeout", _S3_READ_TIMEOUT)
+    config_kwargs.setdefault("retries", {"max_attempts": _S3_RETRY_MAX_ATTEMPTS, "mode": "standard"})
+    return {**kwargs, "config_kwargs": config_kwargs}
+
+
 def url_to_fs(url: str, **kwargs: Any) -> tuple[Any, str]:
     """Like ``fsspec.core.url_to_fs`` but wraps GCS filesystems in a cross-region guard.
 
     Returns ``(fs, path)``.  For non-GCS URLs the filesystem is returned
     unwrapped.  ``mirror://`` URLs are handled by :class:`MirrorFileSystem`.
+    S3/R2 URLs get finite timeouts injected (#6487).
     """
+    if url.startswith("s3://"):
+        kwargs = _with_s3_timeout_defaults(kwargs)
     fs, path = fsspec.core.url_to_fs(url, **kwargs)
     if _fs_is_gcs(fs):
         fs = CrossRegionGuardedFS(fs)
@@ -784,11 +1444,17 @@ def open_url(url: str, mode: str = "rb", **kwargs: Any) -> fsspec.core.OpenFile:
         fs, path = fsspec.core.url_to_fs(url)
         guarded = CrossRegionGuardedFS(fs)
         guarded._guard_read(path)
+    if url.startswith("s3://"):
+        kwargs = _with_s3_timeout_defaults(kwargs)
     return cast(fsspec.core.OpenFile, fsspec.open(url, mode, **kwargs))
 
 
 def filesystem(protocol: str, **kwargs: Any) -> Any:
-    """Like ``fsspec.filesystem`` but wraps GCS filesystems in a cross-region guard."""
+    """Like ``fsspec.filesystem`` but wraps GCS filesystems in a cross-region guard.
+
+    S3/R2 filesystems get finite timeouts injected (#6487)."""
+    if protocol in ("s3", "s3a"):
+        kwargs = _with_s3_timeout_defaults(kwargs)
     fs = fsspec.filesystem(protocol, **kwargs)
     if _is_gcs_protocol(protocol):
         fs = CrossRegionGuardedFS(fs)
@@ -895,8 +1561,8 @@ def atomic_rename(output_path: str, fs: Any = None) -> Generator[str, None, None
 
 
 def _all_data_bucket_prefixes() -> list[str]:
-    """Return gs:// prefixes for all known marin data buckets."""
-    return [f"gs://{bucket}" for bucket in REGION_TO_DATA_BUCKET.values()]
+    """Return gs:// prefixes for all of the active cluster's GCS data buckets."""
+    return [f"gs://{spec.name}" for spec in data_config().region_buckets.values() if spec.store == StoreType.GCS]
 
 
 def _mirror_remote_prefixes(local_prefix: str) -> list[str]:
@@ -951,14 +1617,18 @@ class MirrorFileSystem(fsspec.AbstractFileSystem):
         """Return (fsspec_fs, path) for a full URL or local path."""
         return fsspec.core.url_to_fs(url)
 
+    @property
+    def _local_root(self) -> StoragePath:
+        return StoragePath.parse(self._local_prefix)
+
     def _local_url(self, path: str) -> str:
-        return f"{self._local_prefix}/{path}"
+        return str(self._local_root / path)
 
     def _remote_url(self, prefix: str, path: str) -> str:
-        return f"{prefix}/{path}"
+        return prefix_join(prefix, path)
 
     def _lock_path_for(self, path: str) -> str:
-        return f"{self._local_prefix}/.mirror_locks/{path}.lock"
+        return str(self._local_root / ".mirror_locks" / f"{path}.lock")
 
     def _fs_exists(self, url: str) -> bool:
         fs, fspath = self._get_fs_and_path(url)
@@ -1059,7 +1729,7 @@ class MirrorFileSystem(fsspec.AbstractFileSystem):
         seen: dict[str, dict[str, Any]] = {}
 
         for prefix in [self._local_prefix, *self._remote_prefixes]:
-            url = f"{prefix}/{path}"
+            url = prefix_join(prefix, path)
             fs, fspath = self._get_fs_and_path(url)
             try:
                 entries = fs.ls(fspath, detail=True, **kwargs)

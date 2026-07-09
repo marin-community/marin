@@ -4,11 +4,13 @@
 """Snapshot loader: produces TransitionSnapshot instances for the kernel."""
 
 from collections.abc import Iterable
+from typing import Protocol
 
 from rigging.timing import Timestamp
 from sqlalchemy import bindparam, select
 
 from iris.cluster.controller import reads
+from iris.cluster.controller.attempt_counts import AttemptCounts
 from iris.cluster.controller.db import Tx
 from iris.cluster.controller.reads import TaskScope
 from iris.cluster.controller.reconcile.policy import NON_TERMINAL_TASK_STATES
@@ -18,11 +20,12 @@ from iris.cluster.controller.reconcile.snapshot import (
     JobStateBasis,
     TaskHistogramRow,
     TransitionSnapshot,
+    pick_earliest_task_error,
 )
 from iris.cluster.controller.schema import (
     job_config_table,
     jobs_table,
-    tasks_table,
+    local_tasks,
 )
 from iris.cluster.controller.task_state import ACTIVE_TASK_STATES
 from iris.cluster.types import (
@@ -33,19 +36,39 @@ from iris.cluster.types import (
 )
 
 
+class TransitionReader(Protocol):
+    """A read surface that yields a closed :class:`TransitionSnapshot` for the kernel.
+
+    Lets a backend author its task-state projection from a point-in-time snapshot
+    without reading the controller database directly. Implementations seed by
+    whichever entities their reconcile path starts from (workers + observation
+    uids for the worker path, tasks + attempt keys for the direct path); the
+    snapshot closes over everything the kernel may touch.
+    """
+
+    def transition_snapshot(
+        self,
+        *,
+        now: Timestamp,
+        seed_worker_ids: Iterable[WorkerId] = (),
+        observation_uids: Iterable[AttemptUid] = (),
+        seed_task_ids: Iterable[JobName] = (),
+        extra_attempt_keys: Iterable[tuple[JobName, int]] = (),
+    ) -> TransitionSnapshot:
+        """Load a closed snapshot stamped with ``now``, seeded by the given entities."""
+        ...
+
+
 def _build_multi_root_descendants_stmt():
     """Build a single recursive CTE walking descendants from many roots.
 
     Seeds with all roots (each row carries its own ``root_id``) and walks down
-    via ``parent_job_id``. Returns ``(root_id, descendant_id, is_holder)``
-    triples so a single statement covers both the full and the
-    ``exclude_holders`` views.
+    via ``parent_job_id``. Returns ``(root_id, descendant_id)`` pairs.
     """
     j_seed = jobs_table.alias("j_seed")
     base_q = select(
         j_seed.c.job_id.label("root_id"),
         j_seed.c.job_id.label("descendant_id"),
-        j_seed.c.is_reservation_holder.label("is_holder"),
     ).where(j_seed.c.job_id.in_(bindparam("root_ids", expanding=True)))
     subtree = base_q.cte("subtree", recursive=True)
 
@@ -53,12 +76,11 @@ def _build_multi_root_descendants_stmt():
     recursive_q = select(
         subtree.c.root_id,
         j_child.c.job_id.label("descendant_id"),
-        j_child.c.is_reservation_holder.label("is_holder"),
     ).join(subtree, j_child.c.parent_job_id == subtree.c.descendant_id)
     full = subtree.union_all(recursive_q)
     # Drop the seed rows themselves (root_id == descendant_id) — callers only
     # want strict descendants.
-    return select(full.c.root_id, full.c.descendant_id, full.c.is_holder).where(full.c.root_id != full.c.descendant_id)
+    return select(full.c.root_id, full.c.descendant_id).where(full.c.root_id != full.c.descendant_id)
 
 
 _MULTI_ROOT_DESCENDANTS_STMT = _build_multi_root_descendants_stmt()
@@ -67,25 +89,20 @@ _MULTI_ROOT_DESCENDANTS_STMT = _build_multi_root_descendants_stmt()
 def _load_descendants_multi(cur: Tx, root_ids: Iterable[JobName]) -> dict[JobName, JobDescendants]:
     """Load descendants for all ``root_ids`` in one recursive-CTE query.
 
-    Returns a :class:`JobDescendants` per root, with both the full and the
-    ``exclude_holders`` views derived from a single ``(root_id, descendant_id,
-    is_holder)`` result set.
+    Returns a :class:`JobDescendants` per root from a single ``(root_id,
+    descendant_id)`` result set.
     """
     ids = list(root_ids)
     if not ids:
         return {}
     rows = cur.execute(_MULTI_ROOT_DESCENDANTS_STMT, {"root_ids": ids}).all()
     full_by_root: dict[JobName, list[JobName]] = {root_id: [] for root_id in ids}
-    no_holders_by_root: dict[JobName, list[JobName]] = {root_id: [] for root_id in ids}
     for row in rows:
         full_by_root.setdefault(row.root_id, []).append(row.descendant_id)
-        if not row.is_holder:
-            no_holders_by_root.setdefault(row.root_id, []).append(row.descendant_id)
     return {
         root_id: JobDescendants(
             job_id=root_id,
-            descendants_full=tuple(full_by_root.get(root_id, ())),
-            descendants_no_holders=tuple(no_holders_by_root.get(root_id, ())),
+            descendants=tuple(full_by_root.get(root_id, ())),
         )
         for root_id in ids
     }
@@ -125,17 +142,17 @@ def _bulk_load_job_state_basis(
                 started_at=started_at,
                 max_task_failures=max_task_failures,
                 task_state_counts={},
+                total_failures=0,
                 first_task_error=None,
             )
             continue
 
         rows = all_tasks_by_job.get(job_id, ())
         histogram: dict[int, int] = {}
-        first_error: str | None = None
+        total_failures = 0
         for row in rows:
             histogram[row.state] = histogram.get(row.state, 0) + 1
-            if first_error is None and row.error is not None:
-                first_error = row.error
+            total_failures += row.failure_count
 
         result[job_id] = JobStateBasis(
             job_id=job_id,
@@ -143,26 +160,35 @@ def _bulk_load_job_state_basis(
             started_at=started_at,
             max_task_failures=max_task_failures,
             task_state_counts=histogram,
-            first_task_error=first_error,
+            total_failures=total_failures,
+            first_task_error=pick_earliest_task_error(
+                (row.task_index, row.state, row.finished_at, row.error) for row in rows
+            ),
         )
     return result
 
 
 def _load_all_tasks_for_jobs(cur: Tx, job_ids: Iterable[JobName]) -> dict[JobName, tuple[TaskHistogramRow, ...]]:
-    """Load every task row for ``job_ids``, grouped by job and sorted by task index."""
+    """Load every task row for ``job_ids``, grouped by job and sorted by task index.
+
+    ``failure_count`` is derived from each task's attempt rows (it feeds the
+    job-level cumulative ``total_failures`` budget).
+    """
     ids = list(job_ids)
     if not ids:
         return {}
     rows = cur.execute(
         select(
-            tasks_table.c.task_id,
-            tasks_table.c.job_id,
-            tasks_table.c.task_index,
-            tasks_table.c.state,
-            tasks_table.c.error,
-        ).where(tasks_table.c.job_id.in_(bindparam("job_ids", expanding=True))),
+            local_tasks.c.task_id,
+            local_tasks.c.job_id,
+            local_tasks.c.task_index,
+            local_tasks.c.state,
+            local_tasks.c.error,
+            local_tasks.c.finished_at_ms,
+        ).where(local_tasks.c.job_id.in_(bindparam("job_ids", expanding=True))),
         {"job_ids": ids},
     ).all()
+    counts = reads.attempt_counts_for_tasks(cur, [r.task_id for r in rows])
     grouped: dict[JobName, list[TaskHistogramRow]] = {jid: [] for jid in ids}
     for r in rows:
         grouped.setdefault(r.job_id, []).append(
@@ -170,7 +196,9 @@ def _load_all_tasks_for_jobs(cur: Tx, job_ids: Iterable[JobName]) -> dict[JobNam
                 task_id=r.task_id,
                 task_index=int(r.task_index),
                 state=int(r.state),
+                failure_count=counts.get(r.task_id, AttemptCounts()).failure_count,
                 error=str(r.error) if r.error is not None else None,
+                finished_at=r.finished_at_ms,
             )
         )
     return {jid: tuple(sorted(rows, key=lambda row: row.task_index)) for jid, rows in grouped.items()}
@@ -269,7 +297,7 @@ def load_closed_snapshot(
     job_set: set[JobName] = set(seed_job_ids)
     if job_set:
         for desc in _load_descendants_multi(cur, job_set).values():
-            job_set.update(desc.descendants_full)
+            job_set.update(desc.descendants)
         for rows in _load_all_tasks_for_jobs(cur, job_set).values():
             seed_task_set.update(row.task_id for row in rows)
 
@@ -287,7 +315,7 @@ def load_closed_snapshot(
     job_set.update(task.job_id for task in tasks.values())
     job_descendants = _load_descendants_multi(cur, job_set)
     for desc in job_descendants.values():
-        job_set.update(desc.descendants_full)
+        job_set.update(desc.descendants)
 
     # Re-walk so descendants pulled in above also expose their own subtrees as
     # cascade sources, then close the per-job relations over the full set.

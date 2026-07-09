@@ -46,9 +46,9 @@ import pyarrow.parquet as pq
 import yaml
 from marin.datakit.normalize import NormalizedData
 from marin.datakit.sources import all_sources
-from marin.execution.artifact import Artifact
+from marin.execution.artifact import read_artifact
 from pyarrow import fs as pa_fs
-from rigging.filesystem import url_to_fs
+from rigging.filesystem import StoragePath
 from rigging.log_setup import configure_logging
 
 from experiments.datakit.decontam.all_sources_decon import EVAL_ROOT
@@ -140,8 +140,7 @@ def _load_eval_hash_index(bloom_dir: str) -> dict[int, list[str]]:
     """``hash → list[eval_id]`` from the combined bloom's sidecar."""
     sidecar = bloom_dir.rstrip("/") + "/_bloom/eval_hash_index.parquet"
     logger.info("loading eval hash index from %s", sidecar)
-    fs_, path = url_to_fs(sidecar)
-    with fs_.open(path, "rb") as f:
+    with StoragePath(sidecar).open("rb") as f:
         table = pq.read_table(f)
     by_hash: dict[int, list[str]] = {}
     for h, eid in zip(table.column("hash").to_pylist(), table.column("eval_id").to_pylist(), strict=True):
@@ -203,7 +202,7 @@ def _corpus_id_to_text(source_name: str, sample: list[FlaggedRecord]) -> dict[st
     sources = all_sources()
     if source_name not in sources:
         raise KeyError(f"unknown source {source_name!r}; known: {sorted(sources)}")
-    nd: NormalizedData = Artifact.from_path(sources[source_name].normalized, NormalizedData)
+    nd: NormalizedData = read_artifact(sources[source_name].normalized.output_path, NormalizedData)
     all_files = _list_parquet_recursive(nd.main_output_dir)
     n_total_shards = len(all_files)
 

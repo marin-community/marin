@@ -21,7 +21,7 @@ repository. Follow these notes when implementing new features or fixing bugs.
 
 ## Code Style
 
-* **Python version**: the project targets Python >=3.10.
+* **Python version**: the project targets Python >=3.12.
 * **Formatting and Linting**: We use `./infra/pre-commit.py` (ruff, black, license headers) to keep files consistent.
 * **Typing**: the code base uses `mypy` for static type checking. `mypy` is run by the same `infra/pre-commit.py` entrypoint and the
   configuration is found in `pyproject.toml`.

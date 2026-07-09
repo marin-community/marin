@@ -28,10 +28,10 @@ import os
 
 import pyarrow.parquet as pq
 from fray import ResourceConfig
-from marin.execution.artifact import Artifact
+from marin.execution.artifact import read_artifact
 from marin.processing.tokenize.attributes import TokenizedAttrData
 from marin.processing.tokenize.store_builder import build_from_datasets, write_stats_json
-from rigging.filesystem import url_to_fs
+from rigging.filesystem import StoragePath
 from rigging.log_setup import configure_logging
 from zephyr import Dataset, ZephyrContext
 from zephyr.readers import load_file
@@ -60,9 +60,7 @@ WORKER_RESOURCES = ResourceConfig(cpu=2, ram="16g", disk="10g")
 
 
 def _list_parquets(directory: str) -> list[str]:
-    fs_, base = url_to_fs(directory)
-    protocol = directory.split("://", 1)[0]
-    return sorted(f"{protocol}://{p}" for p in fs_.ls(base) if p.endswith(".parquet"))
+    return sorted(str(p) for p in StoragePath(directory).ls() if str(p).endswith(".parquet"))
 
 
 def _load_contam_ids(decon_dirs: list[str]) -> set[str]:
@@ -87,7 +85,7 @@ def _load_contam_ids(decon_dirs: list[str]) -> set[str]:
 def _all_tokenize_shards(split: str) -> list[str]:
     shards: list[str] = []
     for _, _, tok_dir in SOURCES:
-        tok = Artifact.from_path(tok_dir, TokenizedAttrData)
+        tok = read_artifact(tok_dir, TokenizedAttrData)
         split_dir = tok.output_dirs.get(split)
         if split_dir is None:
             raise FileNotFoundError(f"{tok_dir}: no '{split}' split")
@@ -103,8 +101,7 @@ def _exemplar(shards: list[str]) -> dict:
     blow a 1 GB launcher container.
     """
     for path in shards:
-        fs_, resolved = url_to_fs(path)
-        with fs_.open(resolved, "rb") as fh:
+        with StoragePath(path).open("rb") as fh:
             pf = pq.ParquetFile(fh)
             if pf.metadata.num_rows == 0:
                 continue

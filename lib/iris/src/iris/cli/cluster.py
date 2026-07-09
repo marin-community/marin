@@ -24,18 +24,16 @@ from finelog.deploy.cli import down_cmd, logs_cmd, restart_cmd, status_cmd, up_c
 from rigging.config_discovery import list_cluster_configs
 from rigging.filesystem import marin_temp_bucket
 from rigging.timing import Duration, ExponentialBackoff, Timestamp
+from rigging.token_authority import generate_ed25519_keypair
 
 from iris.cli.build import (
     build_image,
     find_marin_root,
     get_git_sha,
 )
-from iris.cli.connect import IRIS_CLUSTER_CONFIG_DIRS, require_controller_url, rpc_client
-from iris.cluster.backends.gcp.bootstrap import build_worker_bootstrap_script
-from iris.cluster.backends.gcp.workers import GcpWorkerProvider
-from iris.cluster.backends.local.cluster import LocalCluster
-from iris.cluster.backends.types import Labels
-from iris.cluster.config import IrisConfig, clear_remote_state, make_local_config
+from iris.cli.connect import IRIS_CLUSTER_CONFIG_DIRS, require_controller_url, rpc_client_for_ctx
+from iris.cluster.composer import provider_bundle
+from iris.cluster.config import clear_remote_state, make_local_config
 from iris.cluster.controller.autoscaler.scaling_group import (
     _zone_from_template,
     build_worker_config_for_group,
@@ -43,8 +41,21 @@ from iris.cluster.controller.autoscaler.scaling_group import (
 )
 from iris.cluster.controller.dashboard import ProxyControllerDashboard
 from iris.cluster.controller.main import run_controller_serve
+from iris.cluster.controller.rollout import (
+    ROLLOUT_RECORD_FILENAME,
+    RolloutPhase,
+    RolloutRecord,
+    read_rollout_record,
+    write_rollout_record,
+)
 from iris.cluster.dashboard_common import VUE_DIST_DIR
-from iris.rpc import config_pb2, controller_pb2, job_pb2, query_pb2, vm_pb2
+from iris.cluster.inject_env import with_injected_task_env
+from iris.cluster.local_cluster import LocalCluster
+from iris.cluster.platforms.gcp.worker_bootstrap import build_worker_bootstrap_script
+from iris.cluster.platforms.gcp.workers import GcpWorkerProvider
+from iris.cluster.platforms.types import Labels
+from iris.cluster.provenance import provenance_from_proto
+from iris.rpc import controller_pb2, job_pb2, query_pb2, vm_pb2
 from iris.rpc.proto_display import format_accelerator_display, vm_state_name
 from iris.time_proto import timestamp_from_proto
 
@@ -114,14 +125,16 @@ def _format_status_table(status: vm_pb2.AutoscalerStatus) -> str:
     return "\n".join(lines)
 
 
-def _get_autoscaler_status(controller_url: str) -> vm_pb2.AutoscalerStatus:
-    with rpc_client(controller_url) as client:
+def _get_autoscaler_status(ctx: click.Context, controller_url: str) -> vm_pb2.AutoscalerStatus:
+    with rpc_client_for_ctx(ctx, url=controller_url) as client:
         request = controller_pb2.Controller.GetAutoscalerStatusRequest()
         return client.get_autoscaler_status(request).status
 
 
-def _get_worker_status(controller_url: str, worker_id: str) -> controller_pb2.Controller.GetWorkerStatusResponse:
-    with rpc_client(controller_url) as client:
+def _get_worker_status(
+    ctx: click.Context, controller_url: str, worker_id: str
+) -> controller_pb2.Controller.GetWorkerStatusResponse:
+    with rpc_client_for_ctx(ctx, url=controller_url) as client:
         request = controller_pb2.Controller.GetWorkerStatusRequest(id=worker_id)
         return client.get_worker_status(request)
 
@@ -224,6 +237,18 @@ def _pin_latest_images(config, git_sha: str) -> dict[str, str]:
     return {k: v for k, v in pinned.items() if v}
 
 
+def _build_and_pin_deploy_images(ctx, config) -> None:
+    """Pin :latest tags to the working-tree hash, build + push the images, echo them."""
+    git_sha = get_git_sha()
+    _pin_latest_images(config, git_sha)
+    verbose = ctx.obj.get("verbose", False)
+    built = _build_cluster_images(config, git_sha, verbose=verbose)
+    if built:
+        click.echo("Built image tags:")
+        for name, tag in built.items():
+            click.echo(f"  {name}: {tag}")
+
+
 # =============================================================================
 # Top-level cluster group
 # =============================================================================
@@ -255,6 +280,123 @@ def cluster_list():
         click.echo(f"  {name:30s} {path}")
 
 
+def _upload_private_key_to_secret_manager(resource: str, private_pem: str, accessor: str | None) -> str:
+    """Add `private_pem` as a new version of the Secret Manager secret `resource`.
+
+    `resource` is `projects/<project>/secrets/<name>`. Creates the secret container
+    first when the caller has permission; otherwise adds a version to a container an
+    admin pre-created. When `accessor` is set, also grants it
+    roles/secretmanager.secretAccessor on the secret (e.g. the controller service
+    account, so it can read the key at startup). Returns the pinned
+    `gcp-secret://…/versions/<n>` reference to put in auth.signing_key.
+    """
+    try:
+        from google.cloud import secretmanager  # noqa: PLC0415  # optional dep
+    except ImportError as exc:
+        raise click.ClickException(
+            "storing a key in Secret Manager needs the optional dependency; install marin-rigging[secrets]"
+        ) from exc
+    from google.api_core.exceptions import AlreadyExists, PermissionDenied  # noqa: PLC0415  # optional dep
+
+    project, _, name = resource.removeprefix("projects/").partition("/secrets/")
+    if not project or not name:
+        raise click.ClickException(f"--gcp-secret must be projects/<p>/secrets/<name>, got {resource!r}")
+
+    client = secretmanager.SecretManagerServiceClient()
+    try:
+        client.create_secret(
+            request={
+                "parent": f"projects/{project}",
+                "secret_id": name,
+                "secret": {"replication": {"automatic": {}}},
+            }
+        )
+        click.echo(f"Created Secret Manager secret {name}.")
+    except AlreadyExists:
+        pass
+    except PermissionDenied:
+        click.echo(f"No permission to create {name}; adding a version to the existing secret.")
+
+    version = client.add_secret_version(request={"parent": resource, "payload": {"data": private_pem.encode("utf-8")}})
+
+    if accessor is not None:
+        member = accessor if ":" in accessor else f"serviceAccount:{accessor}"
+        role = "roles/secretmanager.secretAccessor"
+        try:
+            policy = client.get_iam_policy(request={"resource": resource})
+            binding = next((b for b in policy.bindings if b.role == role), None)
+            if binding is not None and member in binding.members:
+                click.echo(f"{member} already has {role} on {name}.")
+            else:
+                if binding is None:
+                    policy.bindings.add(role=role, members=[member])
+                else:
+                    binding.members.append(member)
+                client.set_iam_policy(request={"resource": resource, "policy": policy})
+                click.echo(f"Granted {role} on {name} to {member}.")
+        except PermissionDenied:
+            click.echo(f"No permission to set IAM on {name}; grant {role} to {member} manually.")
+
+    return f"gcp-secret://{version.name}"
+
+
+@cluster.command("init-keys")
+@click.option(
+    "--out-file",
+    type=click.Path(path_type=Path, dir_okay=False),
+    default=None,
+    help="Write the PRIVATE key PEM to this file (mode 0600). Reference it from auth.signing_key as file:<abs-path>.",
+)
+@click.option(
+    "--gcp-secret",
+    "gcp_secret",
+    default=None,
+    metavar="projects/<p>/secrets/<name>",
+    help="Store the PRIVATE key as a new version of this Secret Manager secret "
+    "(creating the secret when you have permission). Reference the pinned version from auth.signing_key.",
+)
+@click.option(
+    "--accessor",
+    default=None,
+    metavar="[serviceAccount:]<email>",
+    help="With --gcp-secret, also grant this principal roles/secretmanager.secretAccessor on the "
+    "secret (e.g. the controller service account, so it can read the key at startup).",
+)
+def cluster_init_keys(out_file: Path | None, gcp_secret: str | None, accessor: str | None):
+    """Generate a per-cluster Ed25519 signing keypair for controller auth.
+
+    Writes the PRIVATE key to a SecretSpec destination (a file, and/or a new
+    Secret Manager version) and prints the PUBLIC key + kid for the trust config.
+    The private half is a crown-jewel secret: never commit it, never inline it into
+    a cluster config — reference it from auth.signing_key via file: / gcp-secret://.
+    The public key is inline-safe (JWKS, peer/finelog allowlists, previous_public_keys
+    during a rotation overlap).
+    """
+    if accessor is not None and gcp_secret is None:
+        raise click.UsageError("--accessor only applies with --gcp-secret")
+
+    keypair = generate_ed25519_keypair()
+
+    if out_file is not None:
+        out_file.write_text(keypair.private_pem)
+        out_file.chmod(0o600)
+        click.echo(f"Wrote PRIVATE key to {out_file} (mode 0600).")
+        click.echo(f"  Reference it as: auth.signing_key: file:{out_file.resolve()}")
+
+    if gcp_secret is not None:
+        reference = _upload_private_key_to_secret_manager(gcp_secret, keypair.private_pem, accessor)
+        click.echo(f"Stored PRIVATE key in Secret Manager ({gcp_secret}).")
+        click.echo(f"  Reference it as: auth.signing_key: {reference}")
+
+    if out_file is None and gcp_secret is None:
+        click.echo("# PRIVATE KEY (store securely; do NOT commit or inline into a cluster config):")
+        click.echo(keypair.private_pem.rstrip("\n"))
+
+    click.echo(f"\nkid: {keypair.kid}")
+    click.echo("# PUBLIC KEY (inline-safe — trust config / peer & finelog allowlists / previous_public_keys):")
+    click.echo(keypair.public_pem.rstrip("\n"))
+
+
 @cluster.command("start")
 @click.option("--local", is_flag=True, help="Create a local cluster for testing that mimics the original config")
 @click.option(
@@ -276,7 +418,7 @@ def cluster_start(ctx, local: bool, fresh: bool):
         raise click.ClickException("--config is required for cluster start")
     if local:
         config = make_local_config(config)
-    is_local = config.controller.WhichOneof("controller") == "local"
+    is_local = config.controller.controller_kind() == "local"
     if not is_local:
         git_sha = get_git_sha()
         _pin_latest_images(config, git_sha)
@@ -304,8 +446,7 @@ def cluster_start(ctx, local: bool, fresh: bool):
                 signal.signal(signal.SIGTERM, lambda *_: cluster.close())
             cluster.wait()
         else:
-            iris_config = IrisConfig(config)
-            bundle = iris_config.provider_bundle()
+            bundle = provider_bundle(config)
             address = bundle.controller.start_controller(config, fresh=fresh)
             click.echo(f"Controller started at {address}")
             click.echo("\nController is running with integrated autoscaler.")
@@ -343,8 +484,7 @@ def cluster_start_smoke(ctx, label_prefix, url_file, min_workers, worker_timeout
     verbose = ctx.obj.get("verbose", False)
     _build_cluster_images(config, git_sha, verbose=verbose)
 
-    iris_config = IrisConfig(config)
-    bundle = iris_config.provider_bundle()
+    bundle = provider_bundle(config)
 
     try:
         bundle.controller.stop_all(config)
@@ -370,7 +510,7 @@ def cluster_start_smoke(ctx, label_prefix, url_file, min_workers, worker_timeout
         with bundle.controller.tunnel(address) as url:
             click.echo(f"Tunnel ready: {url}")
 
-            with rpc_client(url) as client:
+            with rpc_client_for_ctx(ctx, url=url) as client:
                 deadline = time.monotonic() + worker_timeout
                 healthy_count = 0
                 while time.monotonic() < deadline:
@@ -409,8 +549,7 @@ def cluster_stop(ctx, dry_run: bool, label_override: str | None):
         click.echo("Stopping cluster (controller + all slices)...")
 
     try:
-        iris_config = IrisConfig(config)
-        bundle = iris_config.provider_bundle()
+        bundle = provider_bundle(config)
         try:
             names = bundle.controller.stop_all(config, dry_run=dry_run, label_prefix=label_override)
         finally:
@@ -446,19 +585,18 @@ def cluster_restart(ctx):
 
 @cluster.group("log-server")
 def log_server() -> None:
-    """Manage the log server referenced by this cluster's log_server_config."""
+    """Manage the log server referenced by this cluster's finelog.config."""
 
 
 def _require_log_server_config(ctx: click.Context) -> str:
     cfg = ctx.obj.get("config")
     if cfg is None:
         raise click.ClickException("--config is required for cluster log-server commands")
-    if not cfg.log_server_config:
+    if not cfg.finelog.config:
         raise click.ClickException(
-            "cluster does not declare log_server_config; "
-            "set it or manage the log server via `finelog deploy` directly"
+            "cluster does not declare finelog.config; " "set it or manage the log server via `finelog deploy` directly"
         )
-    return cfg.log_server_config
+    return cfg.finelog.config
 
 
 @log_server.command("up")
@@ -533,7 +671,7 @@ def cluster_create_slice(ctx, scale_group_name: str):
     config = ctx.obj.get("config")
     if not config:
         raise click.ClickException("--config is required for cluster create-slice")
-    if config.controller.WhichOneof("controller") == "local":
+    if config.controller.controller_kind() == "local":
         raise click.ClickException("create-slice is not supported for local clusters")
 
     sg_config = config.scale_groups.get(scale_group_name)
@@ -545,13 +683,12 @@ def cluster_create_slice(ctx, scale_group_name: str):
     # returned URL may be a tunnel endpoint that's only reachable from the CLI
     # host; workers need the cluster-internal address instead, resolved below.
     require_controller_url(ctx)
-    iris_config = IrisConfig(config)
-    bundle = ctx.obj.get("provider_bundle") or iris_config.provider_bundle()
+    bundle = ctx.obj.get("provider_bundle") or provider_bundle(config)
 
     # Resolve the address workers will connect to. Prefer an explicit value in
     # defaults.worker.controller_address, then discover it via the provider
     # (e.g., GCE label lookup). Never pass the CLI-local tunnel URL here.
-    worker_controller_address = iris_config.controller_address()
+    worker_controller_address = config.controller_address()
     if not worker_controller_address:
         worker_controller_address = bundle.controller.discover_controller(config.controller)
 
@@ -561,11 +698,12 @@ def cluster_create_slice(ctx, scale_group_name: str):
     slice_config = prepare_slice_config(sg_config.slice_template, sg_config, label_prefix)
     slice_config.labels[labels.iris_manual] = "true"
 
-    base_worker_config = config_pb2.WorkerConfig()
-    base_worker_config.CopyFrom(config.defaults.worker)
+    # Fold operator-injected env (defaults.inject_env) into task_env so manually
+    # created slices match autoscaler-provisioned workers.
+    base_worker_config = with_injected_task_env(config).defaults.worker.model_copy(deep=True)
     if not base_worker_config.controller_address:
         base_worker_config.controller_address = worker_controller_address
-    base_worker_config.platform.CopyFrom(config.platform)
+    base_worker_config.platform = config.platform.model_copy(deep=True)
     if config.storage.remote_state_dir:
         base_worker_config.storage_prefix = config.storage.remote_state_dir
 
@@ -597,11 +735,10 @@ def cluster_delete_slice(ctx, slice_id: str):
     config = ctx.obj.get("config")
     if not config:
         raise click.ClickException("--config is required for cluster delete-slice")
-    if config.controller.WhichOneof("controller") == "local":
+    if config.controller.controller_kind() == "local":
         raise click.ClickException("delete-slice is not supported for local clusters")
 
-    iris_config = IrisConfig(config)
-    bundle = ctx.obj.get("provider_bundle") or iris_config.provider_bundle()
+    bundle = ctx.obj.get("provider_bundle") or provider_bundle(config)
 
     label_prefix = config.platform.label_prefix or "iris"
     labels = Labels(label_prefix)
@@ -631,7 +768,7 @@ def cluster_status_cmd(ctx):
     controller_url = require_controller_url(ctx)
     click.echo("Checking controller status...")
     try:
-        with rpc_client(controller_url) as client:
+        with rpc_client_for_ctx(ctx, url=controller_url) as client:
             proc = client.get_process_status(job_pb2.GetProcessStatusRequest()).process_info
             workers = client.list_workers(controller_pb2.Controller.ListWorkersRequest()).workers
             as_status = client.get_autoscaler_status(controller_pb2.Controller.GetAutoscalerStatusRequest()).status
@@ -640,7 +777,7 @@ def cluster_status_cmd(ctx):
         click.echo("  Running: True")
         click.echo("  Healthy: True")
         click.echo(f"  Address: {controller_url}")
-        click.echo(f"  Git Hash: {proc.git_hash}")
+        click.echo(f"  Version: {provenance_from_proto(proc.provenance)}")
         click.echo(f"  Workers: {healthy}/{len(workers)} healthy")
         click.echo("\nAutoscaler Status:")
         if not as_status.groups:
@@ -733,7 +870,7 @@ def vm_status(ctx, scale_group):
     """Show VM and slice status from the controller."""
     controller_url = require_controller_url(ctx)
     try:
-        as_status = _get_autoscaler_status(controller_url)
+        as_status = _get_autoscaler_status(ctx, controller_url)
     except Exception as e:
         click.echo(f"Error connecting to controller: {e}", err=True)
         raise SystemExit(1) from None
@@ -746,9 +883,7 @@ def vm_status(ctx, scale_group):
         counts = dict(group.slice_state_counts)
         total = sum(counts.values())
         click.echo(f"\nScale Group: {group.name}")
-        accel_display = format_accelerator_display(
-            group.config.resources.device_type, group.config.resources.device_variant
-        )
+        accel_display = format_accelerator_display(group.device_type, group.device_variant)
         click.echo(f"  Accelerator: {accel_display}")
         click.echo(f"  Slices: {counts.get('ready', 0)}/{total} ready")
         click.echo(f"    Booting: {counts.get('booting', 0)}")
@@ -785,7 +920,7 @@ def vm_logs(ctx, vm_id):
     """Show VM initialization logs."""
     controller_url = require_controller_url(ctx)
     try:
-        resp = _get_worker_status(controller_url, vm_id)
+        resp = _get_worker_status(ctx, controller_url, vm_id)
     except ConnectError as e:
         if e.code == Code.NOT_FOUND:
             click.echo(f"Worker not found: {vm_id}", err=True)
@@ -893,7 +1028,7 @@ def controller_checkpoint(ctx, stop: bool):
     briefly and writes a consistent checkpoint DB copy.
     """
     controller_url = require_controller_url(ctx)
-    with rpc_client(controller_url) as client:
+    with rpc_client_for_ctx(ctx, url=controller_url) as client:
         try:
             resp = client.begin_checkpoint(controller_pb2.Controller.BeginCheckpointRequest(), timeout_ms=60_000)
         except Exception as e:
@@ -911,8 +1046,7 @@ def controller_checkpoint(ctx, stop: bool):
         if not config:
             click.echo("--stop requires --config", err=True)
             raise SystemExit(1)
-        iris_config = IrisConfig(config)
-        bundle = iris_config.provider_bundle()
+        bundle = provider_bundle(config)
         try:
             bundle.controller.stop_controller(config)
             click.echo("Controller stopped.")
@@ -931,82 +1065,248 @@ def controller_checkpoint(ctx, stop: bool):
 @click.option(
     "--checkpoint-timeout", type=int, default=300, show_default=True, help="Checkpoint RPC timeout in seconds."
 )
+@click.option(
+    "--rollback",
+    is_flag=True,
+    default=False,
+    help=(
+        "Revert the last deploy: read the previous image and pre-deploy checkpoint from the "
+        "rollout record in remote state and restore them, no coordinates needed. Available "
+        "once a prior restart has recorded a deploy."
+    ),
+)
 @click.pass_context
-def controller_restart(ctx, skip_checkpoint: bool, checkpoint_timeout: int):
-    """Restart controller with state preservation (remote platforms only).
+def controller_restart(
+    ctx,
+    skip_checkpoint: bool,
+    checkpoint_timeout: int,
+    rollback: bool,
+):
+    """Restart the controller in place, preserving state (remote platforms only).
 
-    Takes a checkpoint, builds fresh images, stops the controller, and starts
-    a new one. The new controller auto-restores from the checkpoint.
-    Workers on separate VMs survive the restart.
+    Forward deploy: take a pre-deploy checkpoint, build fresh images from the
+    working tree, record the rollout, restart the controller, and health-check it.
+    A failed health check auto-rolls back to the previous image and its pre-deploy
+    checkpoint. Workers on separate VMs survive the restart.
+
+    Pass ``--rollback`` to revert the last deploy — the previous image plus its
+    pre-deploy checkpoint, read from the rollout record.
     """
     config = ctx.obj.get("config")
     if not config:
         raise click.ClickException("--config is required")
 
-    is_local = config.controller.WhichOneof("controller") == "local"
+    is_local = config.controller.controller_kind() == "local"
     if is_local:
         raise click.ClickException(
             "controller restart is not supported for local clusters. "
             "Stop and restart the 'iris cluster start --local' process instead."
         )
 
-    iris_config = IrisConfig(config)
-    bundle = iris_config.provider_bundle()
+    remote_state_dir = config.storage.remote_state_dir
+    prior_record = read_rollout_record(remote_state_dir) if remote_state_dir else None
+    bundle = provider_bundle(config)
 
-    # Try to discover existing controller for checkpoint + restart.
-    # If none exists, fall back to a fresh start (idempotent).
+    if rollback:
+        _rollback_last_deploy(ctx, bundle, config, remote_state_dir, prior_record)
+        return
+
+    # Forward deploy. Fall back to a fresh start when no controller exists.
     try:
         controller_url = require_controller_url(ctx)
     except (RuntimeError, click.ClickException):
         click.echo("No existing controller found. Starting fresh...")
-        git_sha = get_git_sha()
-        _pin_latest_images(config, git_sha)
-        verbose = ctx.obj.get("verbose", False)
-        built = _build_cluster_images(config, git_sha, verbose=verbose)
-        if built:
-            click.echo("Built image tags:")
-            for name, tag in built.items():
-                click.echo(f"  {name}: {tag}")
+        new_image = _build_forward_image(ctx, config)
         try:
             address = bundle.controller.start_controller(config)
         except Exception as e:
             click.echo(f"Failed to start controller: {e}", err=True)
             raise SystemExit(1) from e
         click.echo(f"Controller started at {address}")
+        _record_rollout(
+            remote_state_dir,
+            RolloutRecord(
+                phase=RolloutPhase.COMMITTED,
+                image=new_image,
+                previous_image=(prior_record.image if prior_record else None),
+                rollback_checkpoint=None,
+                updated_at_ms=int(time.time() * 1000),
+            ),
+        )
         return
 
-    # Checkpoint
+    pre_deploy_checkpoint: str | None = None
     if skip_checkpoint:
         click.echo("Skipping pre-restart checkpoint.")
     else:
-        click.echo(f"Taking checkpoint (timeout {checkpoint_timeout}s)...")
-        with rpc_client(controller_url) as client:
-            try:
-                resp = client.begin_checkpoint(
-                    controller_pb2.Controller.BeginCheckpointRequest(),
-                    timeout_ms=checkpoint_timeout * 1000,
-                )
-            except Exception as e:
-                click.echo(f"Checkpoint failed: {e}", err=True)
-                raise SystemExit(1) from e
-        click.echo(f"Checkpoint: {resp.checkpoint_path} ({resp.job_count} jobs, {resp.worker_count} workers)")
+        pre_deploy_checkpoint = _take_pre_deploy_checkpoint(ctx, controller_url, checkpoint_timeout)
 
-    # Build fresh images so the new controller VM gets the latest code
-    git_sha = get_git_sha()
-    _pin_latest_images(config, git_sha)
-    verbose = ctx.obj.get("verbose", False)
-    built = _build_cluster_images(config, git_sha, verbose=verbose)
-    if built:
-        click.echo("Built image tags:")
-        for name, tag in built.items():
-            click.echo(f"  {name}: {tag}")
+    new_image = _build_forward_image(ctx, config)
+    previous_image = prior_record.image if prior_record else None
+
+    # Record the in-flight deploy before restarting: a crash mid-restart leaves a
+    # rollback pointer, and a later --rollback reads back these coordinates.
+    _record_rollout(
+        remote_state_dir,
+        RolloutRecord(
+            phase=RolloutPhase.PENDING,
+            image=new_image,
+            previous_image=previous_image,
+            rollback_checkpoint=pre_deploy_checkpoint,
+            updated_at_ms=int(time.time() * 1000),
+        ),
+    )
 
     try:
         address = bundle.controller.restart_controller(config)
     except Exception as e:
-        click.echo(f"Failed to restart controller: {e}", err=True)
+        click.echo(f"Deploy failed its post-restart health check: {e}", err=True)
+        _auto_rollback(bundle, config, remote_state_dir, previous_image, pre_deploy_checkpoint)
         raise SystemExit(1) from e
+
     click.echo(f"Controller restarted at {address}")
+    _record_rollout(
+        remote_state_dir,
+        RolloutRecord(
+            phase=RolloutPhase.COMMITTED,
+            image=new_image,
+            previous_image=previous_image,
+            rollback_checkpoint=pre_deploy_checkpoint,
+            updated_at_ms=int(time.time() * 1000),
+        ),
+    )
+
+
+def _rollback_last_deploy(ctx, bundle, config, remote_state_dir: str | None, prior_record: RolloutRecord | None) -> None:
+    """Revert the last deploy from the rollout record: previous image + pre-deploy checkpoint.
+
+    Restarts the previous image in place (a running controller is required) and lets
+    the restarted controller restore the pre-deploy checkpoint from the rollout record
+    on boot. There is no pre-deploy checkpoint of its own — this is a revert to older
+    state, not a forward deploy.
+    """
+    if not remote_state_dir:
+        raise click.ClickException("--rollback needs config.storage.remote_state_dir to read the rollout record.")
+    if prior_record is None or not prior_record.previous_image:
+        raise click.ClickException(f"No deploy to roll back to in {remote_state_dir}/{ROLLOUT_RECORD_FILENAME}.")
+    try:
+        require_controller_url(ctx)
+    except (RuntimeError, click.ClickException):
+        raise click.ClickException("Rollback needs a running controller to restart in place; none was found.") from None
+    _rollback_controller(bundle, config, remote_state_dir, prior_record.previous_image, prior_record.rollback_checkpoint)
+
+
+def _build_forward_image(ctx, config) -> str:
+    """Build deploy images from the working tree and return the controller image tag."""
+    _build_and_pin_deploy_images(ctx, config)
+    return config.controller.image
+
+
+def _take_pre_deploy_checkpoint(ctx, controller_url: str, checkpoint_timeout: int) -> str:
+    """Checkpoint the running controller and return the checkpoint directory."""
+    click.echo(f"Taking checkpoint (timeout {checkpoint_timeout}s)...")
+    with rpc_client_for_ctx(ctx, url=controller_url) as client:
+        try:
+            resp = client.begin_checkpoint(
+                controller_pb2.Controller.BeginCheckpointRequest(),
+                timeout_ms=checkpoint_timeout * 1000,
+            )
+        except Exception as e:
+            click.echo(f"Checkpoint failed: {e}", err=True)
+            raise SystemExit(1) from e
+    click.echo(f"Checkpoint: {resp.checkpoint_path} ({resp.job_count} jobs, {resp.worker_count} workers)")
+    return resp.checkpoint_path
+
+
+def _rollback_controller(
+    bundle,
+    config,
+    remote_state_dir: str | None,
+    rollback_image: str,
+    rollback_checkpoint: str | None,
+) -> None:
+    """Restart the controller on ``rollback_image``, restoring ``rollback_checkpoint``.
+
+    Records ROLLBACK_REQUESTED so the restarted controller restores the pre-deploy
+    checkpoint on boot and self-clears to ROLLED_BACK.
+    """
+    config.controller.image = rollback_image
+    detail = rollback_checkpoint or "(none — reuse local DB)"
+    click.echo(f"Rolling back: image {rollback_image}, checkpoint {detail}")
+    _request_rollback(remote_state_dir, rollback_image, rollback_checkpoint)
+    try:
+        address = bundle.controller.restart_controller(config)
+    except Exception as e:
+        click.echo(f"Rollback restart failed: {e}", err=True)
+        raise SystemExit(1) from e
+    click.echo(f"Controller rolled back at {address}")
+
+
+def _auto_rollback(
+    bundle,
+    config,
+    remote_state_dir: str | None,
+    previous_image: str | None,
+    pre_deploy_checkpoint: str | None,
+) -> None:
+    """Revert a failed forward deploy to the previous image and its pre-deploy checkpoint."""
+    if not previous_image:
+        click.echo(
+            "No previous image recorded — cannot auto-roll back. Redeploy known-good code from the working tree.",
+            err=True,
+        )
+        return
+    click.echo(f"Auto-rolling back to previous image {previous_image}...")
+    _rollback_controller(bundle, config, remote_state_dir, previous_image, pre_deploy_checkpoint)
+
+
+def _request_rollback(remote_state_dir: str | None, rollback_image: str, rollback_checkpoint: str | None) -> None:
+    """Write a ROLLBACK_REQUESTED record so the restarted controller restores on boot.
+
+    A checkpoint restore requires the record: without it the old image would boot
+    on the migrated DB. A checkpoint-less rollback (image only) tolerates a failed
+    write, since the controller just reuses its local DB.
+    """
+    record = RolloutRecord(
+        phase=RolloutPhase.ROLLBACK_REQUESTED,
+        image=rollback_image,
+        previous_image=None,
+        rollback_checkpoint=rollback_checkpoint,
+        updated_at_ms=int(time.time() * 1000),
+    )
+    if not remote_state_dir:
+        if rollback_checkpoint:
+            raise click.ClickException(
+                "Rollback checkpoint restore needs config.storage.remote_state_dir to record the request."
+            )
+        return
+    try:
+        write_rollout_record(remote_state_dir, record)
+    except OSError as e:
+        if rollback_checkpoint:
+            raise click.ClickException(
+                f"Could not record the rollback request ({e}); aborting so the old image does not "
+                "boot on the migrated DB."
+            ) from e
+        click.echo(f"Warning: could not record rollback request: {e}", err=True)
+        return
+    click.echo(f"Rollout record: rollback_requested -> {remote_state_dir}/{ROLLOUT_RECORD_FILENAME}")
+
+
+def _record_rollout(remote_state_dir: str | None, record: RolloutRecord) -> None:
+    """Best-effort write of a PENDING/COMMITTED rollout marker; never fails the command.
+
+    A failed write only costs the later --rollback convenience, so it warns and
+    continues rather than aborting the restart.
+    """
+    if not remote_state_dir:
+        return
+    try:
+        write_rollout_record(remote_state_dir, record)
+    except OSError as e:
+        click.echo(f"Warning: could not write rollout record: {e}", err=True)
+        return
+    click.echo(f"Rollout record: {record.phase} -> {remote_state_dir}/{ROLLOUT_RECORD_FILENAME}")
 
 
 @controller.command("worker-restart")
@@ -1072,8 +1372,7 @@ def worker_restart(
     config = ctx.obj.get("config")
     if not config:
         raise click.ClickException("--config is required for worker-restart")
-    iris_config = IrisConfig(config)
-    bundle = ctx.obj.get("provider_bundle") or iris_config.provider_bundle()
+    bundle = ctx.obj.get("provider_bundle") or provider_bundle(config)
     if not isinstance(bundle.workers, GcpWorkerProvider):
         raise click.ClickException("worker-restart is only supported on GCP clusters")
 
@@ -1092,21 +1391,22 @@ def worker_restart(
         _build_and_push_image(config.defaults.worker.default_task_image, "task", git_sha, verbose=verbose)
 
     # Resolve the controller address workers will reconnect to (matches cluster_create_slice).
-    worker_controller_address = iris_config.controller_address()
+    worker_controller_address = config.controller_address()
     if not worker_controller_address:
         worker_controller_address = bundle.controller.discover_controller(config.controller)
 
-    base_worker_config = config_pb2.WorkerConfig()
-    base_worker_config.CopyFrom(config.defaults.worker)
+    # Fold operator-injected env (defaults.inject_env) into task_env so restarted
+    # workers match autoscaler-provisioned ones.
+    base_worker_config = with_injected_task_env(config).defaults.worker.model_copy(deep=True)
     if not base_worker_config.controller_address:
         base_worker_config.controller_address = worker_controller_address
-    base_worker_config.platform.CopyFrom(config.platform)
+    base_worker_config.platform = config.platform.model_copy(deep=True)
     if config.storage.remote_state_dir:
         base_worker_config.storage_prefix = config.storage.remote_state_dir
 
     scale_groups = dict(config.scale_groups)
 
-    with rpc_client(controller_url) as client:
+    with rpc_client_for_ctx(ctx, url=controller_url) as client:
         workers_resp = client.list_workers(controller_pb2.Controller.ListWorkersRequest())
         all_workers = workers_resp.workers
 
@@ -1126,7 +1426,7 @@ def worker_restart(
                 click.echo(f"--skip-current-hash requires a known git_hash (got: {target_hash!r})", err=True)
                 raise SystemExit(1)
             before = len(workers)
-            workers = [w for w in workers if w.metadata.git_hash != target_hash]
+            workers = [w for w in workers if w.metadata.provenance.tree_hash != target_hash]
             skipped = before - len(workers)
             click.echo(f"Skipping {skipped}/{before} worker(s) already at local git_hash {target_hash}")
 

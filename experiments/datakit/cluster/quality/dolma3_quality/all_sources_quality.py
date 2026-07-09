@@ -43,11 +43,11 @@ from typing import Any
 from fray import ResourceConfig
 from marin.datakit.normalize import NormalizedData
 from marin.datakit.sources import all_sources
-from marin.execution.artifact import Artifact
+from marin.execution.artifact import read_artifact
 from marin.execution.step_runner import StepRunner
 from marin.execution.step_spec import StepSpec
-from marin.utils import fsspec_glob
 from pydantic import BaseModel
+from rigging.filesystem import StoragePath
 from rigging.log_setup import configure_logging
 from zephyr import Dataset, ZephyrContext
 from zephyr.readers import load_file
@@ -119,7 +119,7 @@ class DolmaQualityOutput(BaseModel):
     version: str = "v1"
     output_dir: str
     model_path: str
-    counters: dict[str, int]
+    counters: dict[str, int | float]
 
 
 def _run_one_source(
@@ -131,7 +131,7 @@ def _run_one_source(
     worker_resources: ResourceConfig,
     max_workers: int,
 ) -> DolmaQualityOutput:
-    files = sorted(fsspec_glob(f"{normalized.main_output_dir.rstrip('/')}/**/*.parquet"))
+    files = sorted(str(m) for m in StoragePath(f"{normalized.main_output_dir.rstrip('/')}/**/*.parquet").glob())
     if not files:
         raise FileNotFoundError(f"{source_name}: no .parquet files under {normalized.main_output_dir}")
     output_pattern = f"{output_path.rstrip('/')}/data-{{shard:05d}}-of-{{total:05d}}.parquet"
@@ -196,8 +196,8 @@ def classify_dolma3_quality_step(
     return StepSpec(
         name=name,
         fn=lambda output_path: _run_one_source(
-            normalized=Artifact.from_path(normalized, NormalizedData),
-            model_path=Artifact.from_path(model_step, FastTextModel).model_path,
+            normalized=read_artifact(normalized.output_path, NormalizedData),
+            model_path=read_artifact(model_step.output_path, FastTextModel).model_path,
             output_path=output_path,
             source_name=source_name,
             worker_resources=resources,

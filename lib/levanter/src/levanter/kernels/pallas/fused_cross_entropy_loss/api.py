@@ -5,6 +5,7 @@ from collections.abc import Callable, Sequence
 from functools import lru_cache
 import hashlib
 import logging
+import threading
 import time
 from typing import Literal, Optional, TypeAlias, cast, overload
 import warnings
@@ -12,6 +13,7 @@ import warnings
 import jax
 import jax.numpy as jnp
 from jaxtyping import Array, Float, Int
+from rigging.filesystem import marin_prefix
 
 from levanter.kernels.pallas import autotune_cache_utils, autotune_utils
 
@@ -24,11 +26,15 @@ from .tuned_block_sizes import (
 )
 from .reference import linear_softmax_cross_entropy_loss_reference
 from .xla import linear_softmax_cross_entropy_loss_xla
+from .batched_xla import (
+    BatchedXlaUnsupportedError,
+    linear_softmax_cross_entropy_loss_batched_xla,
+)
 
 
 Implementation: TypeAlias = Literal[
     "pallas_tpu",
-    "pallas_gpu",
+    "batched_xla",
     "xla",
     "reference",
 ]
@@ -44,18 +50,102 @@ IMPLEMENTATIONS: dict[str, ArrayImpl] = {
     "xla": linear_softmax_cross_entropy_loss_xla,
 }
 _DEFAULT_IMPLEMENTATION: tuple[Implementation, ...] = ("xla",)
-_PALLAS_FALLBACK_WARNINGS_EMITTED: set[str] = set()
+_IMPLEMENTATION_FALLBACK_WARNINGS_EMITTED: set[str] = set()
 _SELECTED_IMPL_LOGGED: set[str] = set()
 _AUTOTUNE_ON_MISS_ENV_VAR = "LEVANTER_PALLAS_CE_AUTOTUNE_ON_MISS"
+_AUTOTUNE_CACHE_SUBDIR = "levanter_kernel_autotune"
 _AUTOTUNE_KERNEL_NAME = "fused_cross_entropy_loss"
 _AUTOTUNE_CACHE_FILENAME = "block_sizes_v1.json"
-_AUTOTUNE_BLOCK_SIZE_CACHE: dict[str, BlockSizes] = {}
-_AUTOTUNE_CACHE_LOADED = False
+
+
+class _NoViableCandidate:
+    """Marks a key whose autotune sweep found no viable block size."""
+
+
+_NO_VIABLE_CANDIDATE = _NoViableCandidate()
+_AUTOTUNE_NEGATIVE_CACHE_MARKER = "no_viable_candidate"
+
+_AutotuneCacheEntry = BlockSizes | _NoViableCandidate
 _AUTOTUNE_COMPILE_HIT_THRESHOLD_S = 0.20
 _VMEM_COMPILE_FALLBACK_WARNINGS_EMITTED: set[str] = set()
 
 logger = logging.getLogger(__name__)
-_CANONICAL_PALLAS_IMPLEMENTATIONS: dict[str, ArrayImpl] = {}
+
+
+def _encode_autotune_entry(value: _AutotuneCacheEntry) -> dict[str, object]:
+    if isinstance(value, _NoViableCandidate):
+        return {_AUTOTUNE_NEGATIVE_CACHE_MARKER: True}
+    return {
+        "b_block_size": value.b_block_size,
+        "h_block_size": value.h_block_size,
+        "v_block_size": value.v_block_size,
+    }
+
+
+def _decode_autotune_entry(entry: dict) -> _AutotuneCacheEntry | None:
+    if entry.get(_AUTOTUNE_NEGATIVE_CACHE_MARKER) is True:
+        return _NO_VIABLE_CANDIDATE
+    b, h, v = entry.get("b_block_size"), entry.get("h_block_size"), entry.get("v_block_size")
+    if all(isinstance(val, int) for val in (b, h, v)):
+        return BlockSizes(b_block_size=b, h_block_size=h, v_block_size=v)
+    return None
+
+
+def _autotune_cache_url() -> str:
+    """Region-local JSON file holding this kernel's tuned block sizes."""
+    root = marin_prefix().rstrip("/")
+    return f"{root}/{_AUTOTUNE_CACHE_SUBDIR}/{_AUTOTUNE_KERNEL_NAME}/{_AUTOTUNE_CACHE_FILENAME}"
+
+
+class AutotuneBlockSizeCache:
+    """Tuned block sizes keyed by an opaque string, persisted to a JSON file."""
+
+    def __init__(self, url_fn: Callable[[], str | None] = _autotune_cache_url) -> None:
+        self._url_fn = url_fn
+        self._lock = threading.Lock()
+        self._entries: dict[str, _AutotuneCacheEntry] | None = None
+
+    def get(self, key: str) -> _AutotuneCacheEntry | None:
+        with self._lock:
+            return self._loaded_entries().get(key)
+
+    def put(self, key: str, value: _AutotuneCacheEntry) -> None:
+        with self._lock:
+            entries = self._loaded_entries()
+            entries[key] = value
+            self._write(entries)
+
+    def _loaded_entries(self) -> dict[str, _AutotuneCacheEntry]:
+        if self._entries is not None:
+            return self._entries
+        self._entries = {}
+        url = self._url_fn()
+        if url is None:
+            return self._entries
+        try:
+            payload = autotune_cache_utils.load_json(url)
+        except Exception as exc:
+            logger.warning("Unable to load fused CE autotune cache from %s: %s", url, exc)
+            return self._entries
+        for key, raw in payload.items():
+            if isinstance(key, str) and isinstance(raw, dict):
+                entry = _decode_autotune_entry(raw)
+                if entry is not None:
+                    self._entries[key] = entry
+        return self._entries
+
+    def _write(self, entries: dict[str, _AutotuneCacheEntry]) -> None:
+        url = self._url_fn()
+        if url is None:
+            return
+        payload = {key: _encode_autotune_entry(value) for key, value in entries.items()}
+        try:
+            autotune_cache_utils.write_json(url, payload)
+        except Exception as exc:
+            logger.warning("Unable to persist fused CE autotune cache to %s: %s", url, exc)
+
+
+_CANONICAL_BACKEND_IMPLEMENTATIONS: dict[str, ArrayImpl] = {}
 
 try:
     from .pallas_tpu import (
@@ -64,17 +154,12 @@ try:
     )
 
     IMPLEMENTATIONS["pallas_tpu"] = linear_softmax_cross_entropy_loss_pallas
-    _CANONICAL_PALLAS_IMPLEMENTATIONS["pallas_tpu"] = linear_softmax_cross_entropy_loss_pallas
+    _CANONICAL_BACKEND_IMPLEMENTATIONS["pallas_tpu"] = linear_softmax_cross_entropy_loss_pallas
 except ImportError:
     PallasUnsupportedError = NotImplementedError  # type: ignore[assignment]
 
-try:
-    from .pallas_gpu import PallasUnsupportedError, linear_softmax_cross_entropy_loss_pallas_gpu
-
-    IMPLEMENTATIONS["pallas_gpu"] = linear_softmax_cross_entropy_loss_pallas_gpu
-    _CANONICAL_PALLAS_IMPLEMENTATIONS["pallas_gpu"] = linear_softmax_cross_entropy_loss_pallas_gpu
-except ImportError:
-    pass
+IMPLEMENTATIONS["batched_xla"] = linear_softmax_cross_entropy_loss_batched_xla
+_CANONICAL_BACKEND_IMPLEMENTATIONS["batched_xla"] = linear_softmax_cross_entropy_loss_batched_xla
 
 
 @lru_cache(maxsize=1)
@@ -82,27 +167,27 @@ def _default_implementations() -> tuple[Implementation, ...]:
     implementations = _DEFAULT_IMPLEMENTATION
     backend = jax.default_backend()
 
-    if backend == "gpu" and "pallas_gpu" in IMPLEMENTATIONS:
+    if backend == "gpu" and "batched_xla" in IMPLEMENTATIONS:
         devices = jax.devices()
         device_kind = devices[0].device_kind.lower() if devices else ""
         if "gb10" in device_kind:
-            return cast(tuple[Implementation, ...], implementations + ("pallas_gpu",))
-        return cast(tuple[Implementation, ...], ("pallas_gpu",) + implementations)
+            return cast(tuple[Implementation, ...], implementations + ("batched_xla",))
+        return cast(tuple[Implementation, ...], ("batched_xla",) + implementations)
     if backend == "tpu":
         # Keep TPU default stable and robust unless Pallas is explicitly requested.
         return implementations
     return implementations
 
 
-def _warn_pallas_fallback_once(exc: Exception) -> None:
+def _warn_implementation_fallback_once(exc: Exception) -> None:
     message = str(exc)
     if "requires TPU backend" in message:
         return
-    if message in _PALLAS_FALLBACK_WARNINGS_EMITTED:
+    if message in _IMPLEMENTATION_FALLBACK_WARNINGS_EMITTED:
         return
-    _PALLAS_FALLBACK_WARNINGS_EMITTED.add(message)
+    _IMPLEMENTATION_FALLBACK_WARNINGS_EMITTED.add(message)
     warnings.warn(
-        f"Pallas fused cross-entropy unavailable, falling back to XLA: {message}",
+        f"Fused cross-entropy implementation unavailable, falling back to XLA: {message}",
         RuntimeWarning,
     )
 
@@ -125,8 +210,13 @@ def _warn_vmem_compile_fallback_once(exc: Exception, *, impl_name: str) -> None:
     )
 
 
-def _pallas_impl_matches_current_backend(impl_name: str, *, fn: ArrayImpl | None = None) -> bool:
-    canonical_impl = _CANONICAL_PALLAS_IMPLEMENTATIONS.get(impl_name)
+def _raise_if_renamed_implementation(impl: object) -> None:
+    if impl == "pallas_gpu":
+        raise ValueError('implementation="pallas_gpu" was renamed to "batched_xla"; use implementation="batched_xla".')
+
+
+def _implementation_matches_current_backend(impl_name: str, *, fn: ArrayImpl | None = None) -> bool:
+    canonical_impl = _CANONICAL_BACKEND_IMPLEMENTATIONS.get(impl_name)
     if canonical_impl is None:
         return True
     if fn is None:
@@ -135,61 +225,14 @@ def _pallas_impl_matches_current_backend(impl_name: str, *, fn: ArrayImpl | None
         return True
 
     backend = jax.default_backend()
-    return (impl_name == "pallas_tpu" and backend == "tpu") or (impl_name == "pallas_gpu" and backend == "gpu")
+    return (impl_name == "pallas_tpu" and backend == "tpu") or (impl_name == "batched_xla" and backend == "gpu")
 
 
 def _autotune_enabled() -> bool:
     return autotune_cache_utils.is_enabled_from_env(_AUTOTUNE_ON_MISS_ENV_VAR, default=True)
 
 
-def _kernel_autotune_cache_url() -> str | None:
-    return autotune_cache_utils.kernel_autotune_cache_url(
-        kernel_name=_AUTOTUNE_KERNEL_NAME,
-        filename=_AUTOTUNE_CACHE_FILENAME,
-    )
-
-
-def _ensure_autotune_cache_loaded() -> None:
-    global _AUTOTUNE_CACHE_LOADED
-    if _AUTOTUNE_CACHE_LOADED:
-        return
-    _AUTOTUNE_CACHE_LOADED = True
-    cache_url = _kernel_autotune_cache_url()
-    if cache_url is None:
-        return
-    try:
-        payload = autotune_cache_utils.load_json(cache_url)
-        for key, entry in payload.items():
-            if not isinstance(key, str) or not isinstance(entry, dict):
-                continue
-            b = entry.get("b_block_size")
-            h = entry.get("h_block_size")
-            v = entry.get("v_block_size")
-            if all(isinstance(val, int) for val in (b, h, v)):
-                _AUTOTUNE_BLOCK_SIZE_CACHE[key] = BlockSizes(b_block_size=b, h_block_size=h, v_block_size=v)
-        logger.debug("Loaded %d fused CE autotune entries from %s.", len(_AUTOTUNE_BLOCK_SIZE_CACHE), cache_url)
-    except Exception as exc:
-        logger.debug("Unable to load fused CE autotune cache from %s: %s", cache_url, exc)
-        return
-
-
-def _persist_autotune_cache() -> None:
-    cache_url = _kernel_autotune_cache_url()
-    if cache_url is None:
-        return
-    try:
-        payload = {
-            key: {
-                "b_block_size": value.b_block_size,
-                "h_block_size": value.h_block_size,
-                "v_block_size": value.v_block_size,
-            }
-            for key, value in _AUTOTUNE_BLOCK_SIZE_CACHE.items()
-        }
-        autotune_cache_utils.write_json(cache_url, payload)
-    except Exception as exc:
-        logger.debug("Unable to persist fused CE autotune cache to %s: %s", cache_url, exc)
-        return
+_AUTOTUNE_CACHE = AutotuneBlockSizeCache()
 
 
 def _autotune_jaxpr_hash(
@@ -307,7 +350,7 @@ def _candidate_block_sizes(
                         v_block_size=v_block,
                     )
                 )
-    elif impl_name == "pallas_gpu":
+    elif impl_name == "batched_xla":
         for v_block in (64, 128, 256, 512, 1024, 2048, 4096):
             candidates.append(
                 BlockSizes(
@@ -395,7 +438,6 @@ def _autotune_block_sizes_on_miss(
 ) -> BlockSizes:
     if not _autotune_enabled():
         return inferred
-    _ensure_autotune_cache_loaded()
     cache_key = _autotune_cache_key(
         impl_name=impl_name,
         fn=fn,
@@ -408,8 +450,18 @@ def _autotune_block_sizes_on_miss(
         precision=precision,
         return_argmax=return_argmax,
     )
-    cached = _AUTOTUNE_BLOCK_SIZE_CACHE.get(cache_key)
+    cached = _AUTOTUNE_CACHE.get(cache_key)
     if cached is not None:
+        if isinstance(cached, _NoViableCandidate):
+            logger.info(
+                "Fused CE autotune negative-cache hit for %s; no viable block-size candidate. "
+                "Skipping sweep and falling back.",
+                impl_name,
+            )
+            raise ExceptionGroup(
+                f"Fused CE autotune found no viable block-size candidates for {impl_name} (negative-cached)",
+                [RuntimeError("autotune previously found no viable candidate for this key")],
+            )
         logger.info("Fused CE autotune cache hit for %s. Using cached block sizes %s.", impl_name, cached)
         return cached
 
@@ -443,13 +495,14 @@ def _autotune_block_sizes_on_miss(
             best = candidate
 
     if best is None:
+        # The jaxpr-derived cache key invalidates this entry if the kernel changes.
+        _AUTOTUNE_CACHE.put(cache_key, _NO_VIABLE_CANDIDATE)
         raise ExceptionGroup(
             f"Fused CE autotune found no viable block-size candidates for {impl_name}",
             errors or [RuntimeError(f"No candidates generated for {impl_name}.")],
         )
 
-    _AUTOTUNE_BLOCK_SIZE_CACHE[cache_key] = best
-    _persist_autotune_cache()
+    _AUTOTUNE_CACHE.put(cache_key, best)
     logger.info("Fused CE autotune selected block sizes %s for %s.", best, impl_name)
     return best
 
@@ -602,12 +655,13 @@ def fused_cross_entropy_loss_and_logsumexp_penalty(
 
     errors: list[Exception] = []
     for impl in impls:
+        _raise_if_renamed_implementation(impl)
         impl_for_call = impl
         if explicit_block_sizes:
             block_sizes_for_impl = resolved_block_sizes
         elif impl_for_call in ("xla", "reference"):
             block_sizes_for_impl = None
-        elif isinstance(impl_for_call, str) and impl_for_call in ("pallas_tpu", "pallas_gpu"):
+        elif isinstance(impl_for_call, str) and impl_for_call in ("pallas_tpu", "batched_xla"):
             inferred, has_tuned_match = infer_block_sizes_with_tuned_match(
                 x.shape[0],
                 x.shape[1],
@@ -617,7 +671,7 @@ def fused_cross_entropy_loss_and_logsumexp_penalty(
                 w_dtype=w.dtype,
             )
             fn = IMPLEMENTATIONS.get(impl_for_call)
-            if fn is None or not _pallas_impl_matches_current_backend(impl_for_call, fn=fn):
+            if fn is None or not _implementation_matches_current_backend(impl_for_call, fn=fn):
                 block_sizes_for_impl = inferred
             elif has_tuned_match:
                 block_sizes_for_impl = inferred
@@ -638,7 +692,7 @@ def fused_cross_entropy_loss_and_logsumexp_penalty(
                 except Exception as exc:
                     if explicit:
                         raise
-                    _warn_pallas_fallback_once(exc)
+                    _warn_implementation_fallback_once(exc)
                     errors.append(exc)
                     continue
         else:
@@ -661,16 +715,16 @@ def fused_cross_entropy_loss_and_logsumexp_penalty(
                 if return_argmax:
                     kwargs["return_argmax"] = True
                 result = impl_for_call(x, labels, w, **kwargs)
-            except PallasUnsupportedError as e:
+            except (PallasUnsupportedError, BatchedXlaUnsupportedError) as e:
                 if explicit:
                     raise
-                _warn_pallas_fallback_once(e)
+                _warn_implementation_fallback_once(e)
                 errors.append(e)
                 continue
             except NotImplementedError as e:
                 if explicit:
                     raise
-                _warn_pallas_fallback_once(e)
+                _warn_implementation_fallback_once(e)
                 errors.append(e)
                 continue
         else:
@@ -687,23 +741,23 @@ def fused_cross_entropy_loss_and_logsumexp_penalty(
                 if return_argmax:
                     kwargs["return_argmax"] = True
                 result = fn(x, labels, w, **kwargs)
-            except PallasUnsupportedError as e:
+            except (PallasUnsupportedError, BatchedXlaUnsupportedError) as e:
                 if explicit:
                     raise
-                _warn_pallas_fallback_once(e)
+                _warn_implementation_fallback_once(e)
                 errors.append(e)
                 continue
             except NotImplementedError as e:
                 if explicit:
                     raise
-                _warn_pallas_fallback_once(e)
+                _warn_implementation_fallback_once(e)
                 errors.append(e)
                 continue
             except Exception as e:
                 should_try_next_impl = (
                     not explicit
                     and isinstance(impl_for_call, str)
-                    and impl_for_call in ("pallas_tpu", "pallas_gpu")
+                    and impl_for_call == "pallas_tpu"
                     and _is_tpu_vmem_compile_error(e)
                 )
                 if should_try_next_impl:

@@ -4,20 +4,19 @@
 import dataclasses
 import os
 
-import fsspec
 import pytest
+from rigging.filesystem import StoragePath
 
 import levanter.config
 from levanter.data.text import LmDataConfig, UrlDatasetSourceConfig
 
 
 def test_main_wrapper_loads_from_fsspec():
-    with fsspec.open("memory://test.yaml", "w") as f:
-        f.write(
-            """
+    StoragePath("memory://test.yaml").write_text(
+        """
         project: test
         """
-        )
+    )
 
     args = ["--config_path", "memory://test.yaml", "--x", "2"]
 
@@ -39,8 +38,7 @@ def test_remote_config_temp_file_handle_is_closed():
     if not os.path.isdir(fd_dir):
         pytest.skip("/proc/self/fd is required to inspect open file descriptors")
 
-    with fsspec.open("memory://test_fd.yaml", "w") as f:
-        f.write("project: test\n")
+    StoragePath("memory://test_fd.yaml").write_text("project: test\n")
 
     config_path, remaining_args = levanter.config._maybe_get_config_path_and_cmdline_args(
         ["--config_path", "memory://test_fd.yaml"]
@@ -118,8 +116,7 @@ def test_lm_mixture_dataset_config():
 
 
 def _write_yaml_to_memory(yaml: str, path: str = "memory://test.yaml"):
-    with fsspec.open(path, "w") as f:
-        f.write(yaml)
+    StoragePath(path).write_text(yaml)
     return path
 
 

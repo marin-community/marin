@@ -6,9 +6,8 @@ from collections.abc import Iterator, Sequence
 from typing import Any, TypedDict
 
 import dupekit
+from rigging.filesystem import StoragePath
 from zephyr import Dataset, ShardInfo, ZephyrContext, counters, write_parquet_file
-
-from marin.utils import fsspec_glob
 
 logger = logging.getLogger(__name__)
 
@@ -26,7 +25,7 @@ def _find_last_complete_iteration(
     last_complete = -1
     last_paths: list[str] = []
     for i in range(max_iterations + 1):
-        paths = fsspec_glob(f"{output_dir}/it_{i}/*.parquet")
+        paths = [str(m) for m in StoragePath(f"{output_dir}/it_{i}/*.parquet").glob()]
         if len(paths) != expected_parquets:
             break
         last_complete = i
@@ -123,18 +122,18 @@ def connected_components(
             elif norm < hub["id_norm"]:
                 yield _make_link(record, hub)
                 yield _make_link(hub, record)
-                counters.increment("cc/links", 2)
+                counters.pipeline.update_counter("cc/links", 2)
                 hub = record
             else:
                 yield _make_link(hub, record)
                 yield _make_link(record, hub)
-                counters.increment("cc/links", 2)
+                counters.pipeline.update_counter("cc/links", 2)
 
         if hub is None:
             return
 
-        counters.increment("cc/buckets")
-        counters.increment("cc/bucket_nodes", num_unique)
+        counters.pipeline.update_counter("cc/buckets", 1)
+        counters.pipeline.update_counter("cc/bucket_nodes", num_unique)
 
         if preserve_singletons and num_unique == 1:
             yield _make_link(hub, hub)
@@ -190,10 +189,10 @@ def connected_components(
             def counting_iter():
                 nonlocal num_changes
                 for node in nodes:
-                    counters.increment("cc/iteration_nodes")
+                    counters.pipeline.update_counter("cc/iteration_nodes", 1)
                     if node["changed"]:
                         num_changes += 1
-                        counters.increment("cc/changes")
+                        counters.pipeline.update_counter("cc/changes", 1)
                     yield node
 
             path = (
@@ -245,7 +244,7 @@ def _build_adjacency(node_id: str, links: Iterator[dict]) -> CCNode:
     adj: set[str] = {first["dest_id_norm"]}
     for link in links:
         adj.add(link["dest_id_norm"])
-    counters.increment("cc/nodes")
+    counters.pipeline.update_counter("cc/nodes", 1)
     return CCNode(
         record_id=first["source_record_id"],
         id_norm=first["source_id_norm"],

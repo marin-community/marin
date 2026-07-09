@@ -27,8 +27,6 @@ in coordinator RAM.
 Counters emitted: ``embed/docs_in``, ``embed/bytes_in``, ``embed/shards_in``.
 """
 
-from __future__ import annotations
-
 import logging
 import os
 import tempfile
@@ -41,10 +39,9 @@ import pyarrow as pa
 from fray import ResourceConfig
 from huggingface_hub import hf_hub_download
 from marin.datakit.normalize import NormalizedData
-from marin.execution.artifact import Artifact
-from marin.utils import fsspec_glob
+from marin.execution.artifact import write_artifact
 from pydantic import BaseModel
-from rigging.filesystem import marin_temp_bucket, url_to_fs
+from rigging.filesystem import StoragePath, marin_temp_bucket
 from zephyr import Dataset, InputFileSpec, ShardInfo, ZephyrContext, counters, load_file, zephyr_worker_ctx
 from zephyr.runners import InlineRunner
 
@@ -84,7 +81,7 @@ class EmbeddingAttrData(BaseModel):
     Mirrors :class:`~marin.processing.tokenize.attributes.TokenizedAttrData`.
     One output parquet shard per source shard, sharing basename and row order
     (sort-by-id invariant carries through). Persisted as the step's ``.artifact``.
-    Load via ``Artifact.from_path(step, EmbeddingAttrData)``.
+    Load via ``read_artifact(step.output_path, EmbeddingAttrData)``.
 
     Attributes:
         output_dir: Directory containing the per-shard parquet outputs.
@@ -108,10 +105,10 @@ class EmbeddingAttrData(BaseModel):
     quantization_scale: float
     quantization_range: float
     batch_size: int
-    counters: dict[str, int] = {}
+    counters: dict[str, int | float] = {}
 
     def shard_paths(self) -> list[str]:
-        return sorted(fsspec_glob(f"{self.output_dir.rstrip('/')}/*.parquet"))
+        return sorted(str(m) for m in StoragePath(f"{self.output_dir.rstrip('/')}/*.parquet").glob())
 
 
 def quantize_to_int8(arr: np.ndarray) -> np.ndarray:
@@ -143,8 +140,7 @@ def _load_embedder_from_shared() -> Any:
     npz_url: str = zephyr_worker_ctx().get_shared(_LUXICAL_SHARED_KEY)
     fd, local = tempfile.mkstemp(prefix="luxical-", suffix=".npz")
     os.close(fd)
-    fs, resolved = url_to_fs(npz_url)
-    fs.get(resolved, local)
+    StoragePath(npz_url).download_to(local)
     logger.info("Loading native Luxical embedder from %s (staged at %s)", local, npz_url)
     return Embedder.load(local)
 
@@ -156,8 +152,8 @@ def _stage_luxical_to_gcs(repo_id: str, weights_filename: str) -> str:
     runs share the staged file."""
     sanitized_repo = repo_id.replace("/", "__")
     staged_url = f"{marin_temp_bucket(ttl_days=1, prefix='luxical-staging')}/{sanitized_repo}/{weights_filename}"
-    fs, resolved = url_to_fs(staged_url)
-    if fs.exists(resolved):
+    staged = StoragePath(staged_url)
+    if staged.exists():
         logger.info("Luxical weights already staged at %s (cache hit)", staged_url)
         return staged_url
 
@@ -165,8 +161,8 @@ def _stage_luxical_to_gcs(repo_id: str, weights_filename: str) -> str:
     npz_local = hf_hub_download(repo_id=repo_id, filename=weights_filename)
     size_mb = os.path.getsize(npz_local) / 1e6
     logger.info("Uploading %.1f MB of luxical weights to %s", size_mb, staged_url)
-    fs.mkdirs(os.path.dirname(resolved), exist_ok=True)
-    fs.put(npz_local, resolved)
+    staged.parent.mkdirs()
+    staged.upload_from(npz_local)
     return staged_url
 
 
@@ -201,9 +197,9 @@ def _embed_shard(
         q = quantize_to_int8(raw)
         for i, did in enumerate(ids):
             yield {"id": did, "embedding": q[i].tolist()}
-    counters.increment("embed/docs_in", n_docs)
-    counters.increment("embed/bytes_in", n_bytes)
-    counters.increment("embed/shards_in", 1)
+    counters.pipeline.update_counter("embed/docs_in", n_docs)
+    counters.pipeline.update_counter("embed/bytes_in", n_bytes)
+    counters.pipeline.update_counter("embed/shards_in", 1)
     logger.info(
         "shard %d/%d: %d docs (%.1f MB) encoded",
         shard.shard_idx,
@@ -231,7 +227,7 @@ def embed_source(
     Embedder, L2-normalizes, quantizes to int8, and writes one output
     parquet shard with the same basename.
     """
-    source_shards = sorted(fsspec_glob(f"{normalized.main_output_dir.rstrip('/')}/**/*.parquet"))
+    source_shards = sorted(str(m) for m in StoragePath(f"{normalized.main_output_dir.rstrip('/')}/**/*.parquet").glob())
     if max_shards is not None:
         source_shards = source_shards[:max_shards]
     if not source_shards:
@@ -293,5 +289,5 @@ def embed_source(
         batch_size=batch_size,
         counters=dict(outcome.counters),
     )
-    Artifact.save(artifact, output_path)
+    write_artifact(artifact, output_path)
     return artifact

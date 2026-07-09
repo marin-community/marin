@@ -6,11 +6,10 @@
 The counterpart to :mod:`reconcile.worker` (which builds per-worker plans for a
 worker-daemon backend): this reads and writes the DB inside a controller
 transaction to produce the :class:`DispatchBatch` a cluster backend (Kueue
-today) reconciles against. It promotes PENDING tasks, builds per-job
-``RunTaskRequest`` templates (LRU-cached) and per-attempt requests, and
-snapshots the running set. Because it owns DB I/O it lives controller-side, not
-in the DB-less backend; the controller rides its output on the reconcile
-``ControlSnapshot``.
+today) reconciles against. It promotes PENDING tasks, builds per-attempt
+``RunTaskRequest``s, and snapshots the running set. Because it owns DB I/O it
+lives controller-side, not in the DB-less backend; the controller rides its
+output on the reconcile ``ControlSnapshot``.
 """
 
 from dataclasses import dataclass, field
@@ -19,16 +18,15 @@ from rigging.timing import Timestamp
 from sqlalchemy import select
 
 from iris.cluster.controller import reads, writes
-from iris.cluster.controller.codec import constraints_from_json, proto_from_json, resource_spec_from_scalars
 from iris.cluster.controller.db import Tx
+from iris.cluster.controller.projections.run_templates import build_run_request_fields
 from iris.cluster.controller.reads import (
     PENDING_DISPATCH_COLS,
     PendingDispatchRow,
     TaskScope,
     pending_dispatch_row,
 )
-from iris.cluster.controller.run_template import RunTemplateCache
-from iris.cluster.controller.schema import job_config_table, jobs_table, tasks_table
+from iris.cluster.controller.schema import job_config_table, jobs_table, local_tasks
 from iris.cluster.controller.task_state import ACTIVE_TASK_STATES, RunningTaskEntry
 from iris.cluster.types import JobName
 from iris.rpc import job_pb2
@@ -56,95 +54,13 @@ scheduled immediately stay Pending — that signal drives node provisioning.
 This rate limit exists only to bound API server pressure."""
 
 
-def _build_run_request_fields(
-    *,
-    num_tasks: int,
-    entrypoint_json: str,
-    environment_json: str,
-    bundle_id: str,
-    resources: job_pb2.ResourceSpecProto,
-    ports_json: list,
-    constraints_json: str | None,
-    task_image: str,
-    task_id: str = "",
-    attempt_id: int = 0,
-    priority: int = 0,
-) -> job_pb2.RunTaskRequest:
-    """Build a RunTaskRequest carrying the per-job fields shared by the template
-    and per-attempt construction paths.
-
-    The template path leaves ``task_id``/``attempt_id``/``priority`` at their
-    proto defaults; the per-attempt path stamps them. proto_from_json returns
-    shared cached instances — set via constructor kwarg so RunTaskRequest
-    copies them; callers then mutate the copy's workdir_files (never the cached
-    source).
-    """
-    return job_pb2.RunTaskRequest(
-        num_tasks=num_tasks,
-        entrypoint=proto_from_json(entrypoint_json, job_pb2.RuntimeEntrypoint),
-        environment=proto_from_json(environment_json, job_pb2.EnvironmentConfig),
-        bundle_id=bundle_id,
-        resources=resources,
-        ports=ports_json,
-        constraints=[c.to_proto() for c in constraints_from_json(constraints_json)],
-        task_image=task_image,
-        task_id=task_id,
-        attempt_id=attempt_id,
-        priority=priority,
-    )
-
-
-def run_request_template(
-    cache: RunTemplateCache,
-    snap: Tx,
-    job_id: JobName,
-) -> job_pb2.RunTaskRequest | None:
-    """Return a cached per-job ``RunTaskRequest`` template.
-
-    Per-attempt fields (``task_id``, ``attempt_id``) are stamped onto a
-    copy at fan-out time. Returns ``None`` for jobs that have no
-    worker-bound dispatch (e.g. reservation holders, missing rows).
-    """
-    wire = job_id.to_wire()
-    cached = cache.get(wire)
-    if cached is not None:
-        return cached
-
-    job = reads.get_job_detail(snap, job_id)
-    if job is None or job.is_reservation_holder:
-        return None
-
-    resources = resource_spec_from_scalars(
-        job.res_cpu_millicores,
-        job.res_memory_bytes,
-        job.res_disk_bytes,
-        job.res_device_json,
-    )
-    template = _build_run_request_fields(
-        num_tasks=job.num_tasks,
-        entrypoint_json=job.entrypoint_json,
-        environment_json=job.environment_json,
-        bundle_id=job.bundle_id,
-        resources=resources,
-        ports_json=job.ports_json,
-        constraints_json=job.constraints_json,
-        task_image=job.task_image,
-    )
-    for filename, data in reads.get_workdir_files(snap, job_id).items():
-        template.entrypoint.workdir_files[filename] = data
-    # cache.put interns: it returns the already-cached instance for this key if
-    # one exists, otherwise the template we just built. Callers must use the
-    # returned value, not ``template``, to share a single canonical instance.
-    return cache.put(wire, template)
-
-
 def build_run_request(
     cur: Tx,
     row: PendingDispatchRow,
     attempt_id: int,
 ) -> job_pb2.RunTaskRequest:
     """Assemble a RunTaskRequest for a direct-provider dispatch row."""
-    run_req = _build_run_request_fields(
+    run_req = build_run_request_fields(
         num_tasks=row.num_tasks,
         entrypoint_json=row.entrypoint_json,
         environment_json=row.environment_json,
@@ -157,6 +73,7 @@ def build_run_request(
         attempt_id=attempt_id,
         # Priority selects the Kueue WorkloadPriorityClass on the direct path.
         priority=row.priority_band,
+        container_profile=row.container_profile,
     )
     # Load inline workdir files from the job_workdir_files table.
     for filename, data in reads.get_workdir_files(cur, row.job_id).items():
@@ -179,23 +96,15 @@ def _dispatch_query(
     """Fetch :class:`PendingDispatchRow`s for the direct-provider drain.
 
     All drain queries select ``PENDING_DISPATCH_COLS`` over the
-    tasks⋈jobs⋈job_config join and exclude reservation holders; callers
-    supply the distinct state / coscheduling predicates plus optional
-    ordering and limit.
+    tasks⋈jobs⋈job_config join; callers supply the distinct state /
+    coscheduling predicates plus optional ordering and limit.
     """
-    dispatch_join = tasks_table.join(jobs_table, jobs_table.c.job_id == tasks_table.c.job_id).join(
+    dispatch_join = local_tasks.join(jobs_table, jobs_table.c.job_id == local_tasks.c.job_id).join(
         job_config_table, job_config_table.c.job_id == jobs_table.c.job_id
     )
-    stmt = (
-        select(*PENDING_DISPATCH_COLS)
-        .select_from(dispatch_join)
-        .where(
-            jobs_table.c.is_reservation_holder == False,  # noqa: E712
-            *predicates,
-        )
-    )
+    stmt = select(*PENDING_DISPATCH_COLS).select_from(dispatch_join).where(*predicates)
     if order_by_job_id:
-        stmt = stmt.order_by(tasks_table.c.job_id)
+        stmt = stmt.order_by(local_tasks.c.job_id)
     if limit is not None:
         stmt = stmt.limit(limit)
     return [pending_dispatch_row(r) for r in cur.execute(stmt).all()]
@@ -204,8 +113,8 @@ def _dispatch_query(
 def drain_for_dispatch(
     cur: Tx,
     *,
-    cache: RunTemplateCache,
     max_promotions: int = DISPATCH_PROMOTION_RATE,
+    backend_id: str | None = None,
 ) -> DispatchBatch:
     """Drain pending tasks and snapshot running tasks for a direct provider sync cycle.
 
@@ -231,13 +140,18 @@ def drain_for_dispatch(
     now_ms = Timestamp.now().epoch_ms()
     tasks_to_run: list[job_pb2.RunTaskRequest] = []
 
+    # In a multi-backend cluster, scope the drain to this backend's tasks; a
+    # single backend (``backend_id is None``) drains every pending task.
+    backend_pred = () if backend_id is None else (local_tasks.c.backend_id == backend_id,)
+
     # Snapshot redrive set BEFORE the PENDING promotion loop so newly-
     # promoted rows (which become ASSIGNED+null_worker mid-transaction)
     # don't get dispatched twice.
     redrive_rows = _dispatch_query(
         cur,
-        tasks_table.c.state == int(job_pb2.TASK_STATE_ASSIGNED),
-        tasks_table.c.current_worker_id.is_(None),
+        local_tasks.c.state == int(job_pb2.TASK_STATE_ASSIGNED),
+        local_tasks.c.current_worker_id.is_(None),
+        *backend_pred,
     )
 
     def _promote(row: PendingDispatchRow) -> None:
@@ -259,8 +173,9 @@ def drain_for_dispatch(
         # budget-bounded first-fit behavior.
         cosched_pending = _dispatch_query(
             cur,
-            tasks_table.c.state == int(job_pb2.TASK_STATE_PENDING),
+            local_tasks.c.state == int(job_pb2.TASK_STATE_PENDING),
             job_config_table.c.has_coscheduling == True,  # noqa: E712
+            *backend_pred,
             order_by_job_id=True,
         )
         gangs: dict[JobName, list[PendingDispatchRow]] = {}
@@ -289,8 +204,9 @@ def drain_for_dispatch(
         if remaining > 0:
             noncosched_pending = _dispatch_query(
                 cur,
-                tasks_table.c.state == int(job_pb2.TASK_STATE_PENDING),
+                local_tasks.c.state == int(job_pb2.TASK_STATE_PENDING),
                 job_config_table.c.has_coscheduling == False,  # noqa: E712
+                *backend_pred,
                 limit=remaining,
             )
             for row in noncosched_pending:
@@ -312,6 +228,7 @@ def drain_for_dispatch(
         TaskScope(null_worker=True),
         states=ACTIVE_TASK_STATES,
         order_by_task_id=True,
+        backend_id=backend_id,
     )
     running_tasks = [
         RunningTaskEntry(

@@ -2,7 +2,7 @@
 import { computed, ref } from 'vue'
 import { RouterLink } from 'vue-router'
 import type { SliceInfo } from '@/types/rpc'
-import { SLICE_STATE_STYLES } from '@/types/status'
+import { SLICE_STATUS_STYLES, SLICE_STATUS_SUMMARY_ORDER } from '@/types/status'
 import {
   buildSliceView,
   sortSliceViews,
@@ -35,54 +35,17 @@ const visible = computed<SliceView[]>(() =>
 )
 const hiddenCount = computed(() => Math.max(0, views.value.length - COLLAPSED_LIMIT))
 
-// -- Summary line: count by display status --
-
-const STATUS_LABELS: Record<SliceStatus, string> = {
-  in_use: 'in use',
-  ready: 'ready',
-  idle: 'idle',
-  booting: 'booting',
-  requesting: 'requesting',
-  initializing: 'initializing',
-  failed: 'failed',
-}
-const SUMMARY_ORDER: SliceStatus[] = ['in_use', 'ready', 'idle', 'booting', 'requesting', 'initializing', 'failed']
+// -- Summary line: count by display status (slice-granular) --
 
 const summary = computed(() => {
   const counts: Partial<Record<SliceStatus, number>> = {}
   for (const v of views.value) counts[v.status] = (counts[v.status] ?? 0) + 1
-  return SUMMARY_ORDER.filter((s) => counts[s]).map((s) => ({ status: s, label: STATUS_LABELS[s], count: counts[s]! }))
+  return SLICE_STATUS_SUMMARY_ORDER.filter((s) => counts[s]).map((s) => ({
+    status: s,
+    style: SLICE_STATUS_STYLES[s],
+    count: counts[s]!,
+  }))
 })
-
-// -- Badge styling (reuse the canonical slice palette; add an idle style) --
-
-interface BadgeStyle { label: string; bg: string; text: string; border: string; dot: string }
-
-const IDLE_STYLE: BadgeStyle = {
-  label: 'Idle (ready, no tasks — eligible for scale-down)',
-  bg: 'bg-status-warning-bg',
-  text: 'text-status-warning',
-  border: 'border-status-warning-border',
-  dot: 'bg-status-warning',
-}
-
-// Solid dot color per lifecycle key (literals so Tailwind includes them).
-const DOT_CLASS: Record<string, string> = {
-  ready: 'bg-status-success',
-  in_use: 'bg-status-orange',
-  requesting: 'bg-accent',
-  booting: 'bg-status-purple',
-  initializing: 'bg-status-warning',
-  failed: 'bg-status-danger',
-  idle: 'bg-status-warning',
-}
-
-function badge(status: SliceStatus): BadgeStyle {
-  if (status === 'idle') return IDLE_STYLE
-  const s = SLICE_STATE_STYLES[status]
-  if (s) return { label: s.label, bg: s.bg, text: s.text, border: s.border, dot: DOT_CLASS[status] ?? 'bg-text-muted' }
-  return { label: status, bg: 'bg-surface-sunken', text: 'text-text-muted', border: 'border-surface-border', dot: 'bg-text-muted' }
-}
 
 function isPending(v: SliceView): boolean {
   return v.status === 'booting' || v.status === 'requesting' || v.status === 'initializing'
@@ -115,9 +78,14 @@ function formatAge(ms: number | null): string {
     <!-- Summary line -->
     <div class="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-text-muted">
       <span class="font-semibold text-text-secondary">{{ views.length }} slice{{ views.length === 1 ? '' : 's' }}</span>
-      <span v-for="s in summary" :key="s.status" class="inline-flex items-center gap-1">
-        <span class="w-1.5 h-1.5 rounded-full" :class="badge(s.status).dot" />
-        {{ s.count }} {{ s.label }}
+      <span
+        v-for="s in summary"
+        :key="s.status"
+        class="inline-flex items-center gap-1"
+        :title="s.style.description"
+      >
+        <span class="w-1.5 h-1.5 rounded-full" :class="s.style.dot" />
+        {{ s.count }} {{ s.style.label }}
       </span>
     </div>
 
@@ -131,10 +99,10 @@ function formatAge(ms: number | null): string {
         <!-- Status badge -->
         <span
           class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded border font-semibold flex-none w-[88px] justify-center"
-          :class="[badge(v.status).bg, badge(v.status).text, badge(v.status).border]"
-          :title="badge(v.status).label"
+          :class="[SLICE_STATUS_STYLES[v.status].bg, SLICE_STATUS_STYLES[v.status].text, SLICE_STATUS_STYLES[v.status].border]"
+          :title="SLICE_STATUS_STYLES[v.status].description"
         >
-          {{ STATUS_LABELS[v.status] }}
+          {{ SLICE_STATUS_STYLES[v.status].label }}
         </span>
 
         <!-- Slice id -->
@@ -163,6 +131,15 @@ function formatAge(ms: number | null): string {
           <!-- Idle: how long it has been idle -->
           <span v-else-if="v.status === 'idle'" class="text-status-warning">
             idle {{ formatAge(v.idleForMs) }} — eligible for scale-down
+          </span>
+
+          <!-- Degraded: missing or unhealthy hosts, not a placement target -->
+          <span v-else-if="v.status === 'degraded'" class="text-status-orange truncate">
+            <template v-if="v.hostCount === 0">no hosts registered — not schedulable</template>
+            <template v-else>
+              {{ v.hostCount - v.healthyHostCount }}/{{ v.hostCount }}
+              host{{ v.hostCount === 1 ? '' : 's' }} unhealthy — not schedulable
+            </template>
           </span>
 
           <!-- Pending: waiting on cloud provisioning -->
