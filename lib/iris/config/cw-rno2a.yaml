@@ -40,11 +40,13 @@ platform:
     namespace: iris
     kubeconfig_path: ~/.kube/coreweave-iris
     kube_context: marin-rn02a_RNO2A
-    # CoreWeave AI Object Storage via LOTA, the in-cluster local cache
-    # endpoint (use https://cwobject.com from outside CoreWeave). Bare
-    # endpoint only: buckets use virtual-hosted addressing
-    # (http://<bucket>.cwlota.com), which iris detects from this domain.
+    # CoreWeave AI Object Storage. In-cluster traffic goes through LOTA, the local
+    # cache, whose name resolves to a private address only a pod can reach; an
+    # operator running iris from outside addresses the same buckets over the public
+    # endpoint. Bare endpoints only: buckets use virtual-hosted addressing
+    # (http://<bucket>.cwlota.com), which iris detects from these domains.
     object_storage_endpoint: http://cwlota.com
+    external_object_storage_endpoint: https://cwobject.com
 
 storage:
   remote_state_dir: s3://marin-us-east-02a/iris/cw-rno2a/state

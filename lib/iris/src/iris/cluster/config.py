@@ -207,6 +207,11 @@ class CoreweavePlatformConfig(_Config):
     kubeconfig_path: str = ""  # optional; in-cluster auth if empty
     kube_context: str = ""  # kubeconfig context to bind to; empty = the file's current-context
     object_storage_endpoint: str = ""  # S3 base endpoint, not bucket-specific
+    # The same buckets as addressed from outside CoreWeave, for an operator running
+    # `iris` on their own machine. CoreWeave's in-cluster endpoint is a private-address
+    # cache that only a pod can resolve, so a config that names one needs the other too.
+    # Empty falls back to object_storage_endpoint.
+    external_object_storage_endpoint: str = ""
 
 
 class PlatformConfig(_OneofConfig):
