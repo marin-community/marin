@@ -12,11 +12,10 @@ changes.
 
 Reads the eval corpus at ``{marin_prefix()}/datakit/decontam/evals`` — relative
 to ``MARIN_PREFIX`` — so it runs against whichever store that points at (R2 / CW /
-GCS), given that store's creds + endpoint in the environment. No cluster:
+GCS). ``MARIN_PREFIX`` and the store's credentials are assumed present in the
+environment (as on a cluster worker):
 
-    AWS_ACCESS_KEY_ID=… AWS_SECRET_ACCESS_KEY=… AWS_ENDPOINT_URL=<store-endpoint> \\
-        MARIN_PREFIX=s3://marin-na/marin \\
-        python experiments/datakit/decontam/ops/recall_test.py [--tasks 80] [--items 200]
+    python experiments/datakit/decontam/ops/recall_test.py [--tasks 80] [--items 200]
 """
 
 import argparse
