@@ -29,8 +29,15 @@ name: cw-rno2a
 # Resolves to k8s://finelog-cw-rno2a.iris; see lib/finelog/config/cw-rno2a.yaml.
 # Without this the controller falls back to an in-process MemStore (logs lost on
 # restart). Deploy the server first: `uv run finelog deploy up cw-rno2a`.
+#
+# `relay_address` forwards this cluster's logs to marin's finelog, so a job federated
+# here reads back from the cluster that submitted it. The relay authenticates with a
+# short-lived aud="finelog" token signed by this cluster's key below; marin's finelog
+# admits it by the matching public key in its own `jwt` auth layer, and Cloud Armor
+# admits only CoreWeave's egress prefixes (lib/iris/scripts/iap_gclb.py).
 finelog:
   config: cw-rno2a
+  relay_address: https://finelog-dev.oa.dev
 
 platform:
   label_prefix: cw-rno2a
@@ -56,10 +63,17 @@ storage:
 # trusted_cidrs makes the controller enforcing — an off-cluster request arrives
 # through Traefik with an appended X-Forwarded-For, never matches a CIDR, and must
 # present a bearer. This is the identity gate behind the IP-restricted federation
-# ingress (scripts/install_cw_network.py). No signing_key is needed: this cluster
-# runs no finelog relay, so an ephemeral key is fine
-# (require_persistent_signing_key only fires with finelog.relay_address set).
+# ingress (scripts/install_cw_network.py).
+#
+# `signing_key` must persist across restarts: the finelog relay signs every push with
+# it, and marin's finelog trusts the matching public key. The controller pod has no
+# GCP credentials, so `iris cluster up` resolves the Secret Manager reference in the
+# operator's shell and projects it as IRIS_SIGNING_KEY through the iris-controller-env
+# Secret, which task pods do not mount. Rotate with `iris cluster init-keys --rotate`.
 auth:
+  signing_key:
+    - env:IRIS_SIGNING_KEY
+    - gcp-secret://projects/748532799086/secrets/iris-cw-rno2a-signing-key/versions/1
   trusted_cidrs: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 127.0.0.0/8, "::1/128"]
   federation_peers:
     marin: |

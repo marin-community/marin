@@ -19,6 +19,7 @@ from urllib.parse import urlparse
 
 import fsspec.config
 import s3fs
+from rigging.secrets import ENV_SCHEME, as_secret_spec, resolve_secret_spec
 from rigging.timing import Deadline
 
 from iris.cluster.config import (
@@ -71,6 +72,12 @@ _CONTROLLER_MEMORY_REQUEST = "64Gi"
 # queued behind a reconcile tick under heavy load.
 _CONTROLLER_PROBE_TIMEOUT_SECONDS = 10
 _CONTROLLER_PROBE_FAILURE_THRESHOLD = 6
+# Secret holding the controller's own credentials, projected into the controller
+# container alone. Held apart from iris-task-env, which every task pod also mounts:
+# a task must never be able to mint its cluster's tokens.
+CONTROLLER_ENV_SECRET_NAME = "iris-controller-env"
+SIGNING_KEY_ENV_VAR = "IRIS_SIGNING_KEY"
+
 _CONTROLLER_STATE_PVC_NAME = "iris-controller-state"
 # Must match main.py's LOCAL_STATE_DIR_DEFAULT — the path the controller
 # process falls back to when storage.local_state_dir is unset.
@@ -138,6 +145,39 @@ def configure_client_s3(config: IrisClusterConfig) -> None:
 # ============================================================================
 
 
+def _projects_controller_env_secret(config: IrisClusterConfig) -> bool:
+    """Whether the cluster populates the iris-controller-env Secret.
+
+    True exactly when the cluster carries its own signing key. The Deployment adds the
+    ``envFrom`` reference and teardown removes the Secret on this same predicate, so
+    the two cannot drift into an envFrom dereferencing a Secret that was never created.
+    """
+    return bool(config.auth and config.auth.signing_key)
+
+
+def _controller_env(config: IrisClusterConfig) -> dict[str, str]:
+    """Resolve the controller's own secrets against the operator's shell.
+
+    A Kubernetes controller pod holds no cloud credentials, so a ``gcp-secret://``
+    reference can only be read here, at deploy time; the value reaches the controller
+    as ``IRIS_SIGNING_KEY`` through the iris-controller-env Secret. The cluster config
+    must therefore name ``env:IRIS_SIGNING_KEY`` among its references, so the pod reads
+    the projected value instead of re-resolving a source it cannot reach.
+    """
+    if not _projects_controller_env_secret(config):
+        return {}
+    assert config.auth is not None
+    refs = as_secret_spec(config.auth.signing_key)
+    env_ref = f"{ENV_SCHEME}{SIGNING_KEY_ENV_VAR}"
+    if env_ref not in refs:
+        raise ValueError(
+            f"auth.signing_key must list {env_ref!r} for a Kubernetes cluster: the controller pod reads "
+            f"its key from the {CONTROLLER_ENV_SECRET_NAME} Secret, which this deploy populates by "
+            f"resolving the remaining references in the operator's shell. Got {list(refs)}."
+        )
+    return {SIGNING_KEY_ENV_VAR: resolve_secret_spec(refs).value}
+
+
 def _build_controller_deployment(
     *,
     namespace: str,
@@ -145,12 +185,22 @@ def _build_controller_deployment(
     port: int,
     node_selector: dict[str, str],
     task_env_secret: bool = False,
+    controller_env_secret: bool = False,
     fresh: bool = False,
     state_mount_path: str = _DEFAULT_STATE_MOUNT_PATH,
     local_state_hostpath: bool = False,
     checkpoint_interval_seconds: float = 0,
 ) -> dict:
     """Build the controller Deployment manifest as a dict."""
+    # The cluster default env (S3 storage auth + operator-injected vars) arrives via
+    # the iris-task-env Secret, which task pods mount too; the controller's own
+    # credentials arrive via iris-controller-env, which they do not. optional=true so
+    # a controller-only restart that predates either Secret does not crash-loop.
+    env_from: list[dict] = []
+    if task_env_secret:
+        env_from.append({"secretRef": {"name": TASK_ENV_SECRET_NAME, "optional": True}})
+    if controller_env_secret:
+        env_from.append({"secretRef": {"name": CONTROLLER_ENV_SECRET_NAME, "optional": True}})
     # Reserve controller CPU/memory so Kubernetes doesn't classify this Pod as
     # BestEffort. Only memory has a limit, so the Pod is Burstable (not
     # Guaranteed): the controller can burst onto spare node CPU during reconcile
@@ -205,14 +255,7 @@ def _build_controller_deployment(
                             ),
                         ],
                         "ports": [{"containerPort": port}],
-                        # The cluster default env (S3 storage auth + operator-injected
-                        # vars) arrives via the iris-task-env Secret. optional=true so a
-                        # controller-only restart that predates the Secret does not crash-loop.
-                        **(
-                            {"envFrom": [{"secretRef": {"name": TASK_ENV_SECRET_NAME, "optional": True}}]}
-                            if task_env_secret
-                            else {}
-                        ),
+                        **({"envFrom": env_from} if env_from else {}),
                         "securityContext": {"capabilities": {"add": ["SYS_PTRACE"]}},
                         "resources": controller_resources,
                         "volumeMounts": [
@@ -380,6 +423,10 @@ class K8sControllerProvider:
         if default_env:
             self.ensure_task_env_secret(default_env)
 
+        controller_env = _controller_env(config)
+        if controller_env:
+            self.ensure_controller_env_secret(controller_env)
+
         config_json = self._config_json_for_configmap(config)
         configmap_manifest = {
             "apiVersion": "v1",
@@ -405,6 +452,7 @@ class K8sControllerProvider:
             port=port,
             node_selector={self._iris_labels.iris_scale_group: cw.scale_group},
             task_env_secret=projects_task_env_secret(config),
+            controller_env_secret=_projects_controller_env_secret(config),
             state_mount_path=state_mount_path,
             local_state_hostpath=local_state_hostpath,
             checkpoint_interval_seconds=config.controller.checkpoint_interval_seconds,
@@ -503,6 +551,8 @@ class K8sControllerProvider:
         self._kubectl.delete(K8sResource.PERSISTENT_VOLUME_CLAIMS, _CONTROLLER_STATE_PVC_NAME)
         if self.uses_s3_storage(config) or config.defaults.inject_env:
             self._kubectl.delete(K8sResource.SECRETS, TASK_ENV_SECRET_NAME)
+        if _projects_controller_env_secret(config):
+            self._kubectl.delete(K8sResource.SECRETS, CONTROLLER_ENV_SECRET_NAME)
 
         cluster_role_name = self.rbac_cluster_role_name()
         self._kubectl.delete(K8sResource.CLUSTER_ROLE_BINDINGS, cluster_role_name)
@@ -888,6 +938,22 @@ class K8sControllerProvider:
                 "apiVersion": "v1",
                 "kind": "Secret",
                 "metadata": {"name": TASK_ENV_SECRET_NAME, "namespace": self._namespace},
+                "type": "Opaque",
+                "data": {k: base64.b64encode(v.encode()).decode() for k, v in env.items()},
+            }
+        )
+
+    def ensure_controller_env_secret(self, env: dict[str, str]) -> None:
+        """Create the iris-controller-env Secret holding the controller's own credentials.
+
+        Only the controller Deployment references it, so a task pod cannot read the
+        cluster's signing key.
+        """
+        self._kubectl.apply_json(
+            {
+                "apiVersion": "v1",
+                "kind": "Secret",
+                "metadata": {"name": CONTROLLER_ENV_SECRET_NAME, "namespace": self._namespace},
                 "type": "Opaque",
                 "data": {k: base64.b64encode(v.encode()).decode() for k, v in env.items()},
             }

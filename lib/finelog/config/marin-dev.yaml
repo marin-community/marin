@@ -9,23 +9,27 @@ deployment:
     machine_type: n2-standard-4
     boot_disk_size_gb: 200
     service_account: iris-controller@hai-gcp-models.iam.gserviceaccount.com
-# Authenticated-ingress policy: default-deny, admitting this cluster's private network
-# (VPC + pod ranges) and loopback (SSH tunnel / controller proxy) by cidr, never the
-# public internet. No jwt layer here — cross-cluster relay pushes are the global
-# finelog's job.
+# Authenticated-ingress policy: default-deny, evaluated in order.
+#
+# The cidr layer admits this cluster's own callers — the controller and every GCP
+# worker reach finelog directly on its internal address — and loopback for an SSH
+# tunnel. It matches the transport peer, never X-Forwarded-For, so a request arriving
+# through the load balancer carries a Google front-end source address, falls past this
+# layer, and must present a token.
+#
+# The jwt layer admits the federated iris controllers that relay their logs here, each
+# by its own Ed25519 public key, verifying the aud="finelog" delegation token their
+# controller mints hourly. Only clusters that arrive over the load balancer need an
+# entry; marin-dev's own controller is admitted by cidr above. Cloud Armor narrows the
+# edge to those clusters' egress prefixes first (lib/iris/scripts/iap_gclb.py).
 auth:
   - type: cidr
     cidrs: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 127.0.0.0/8, "::1/128"]
-  # A global finelog also trusts each federated iris controller by its public key, to
-  # verify aud="finelog" relay-delegation tokens. This local finelog takes no
-  # cross-cluster pushes, so the jwt layer stays commented. A marin admin script will
-  # generate it from each controller's public key — see issue #6961. Shape, one entry
-  # per federated cluster:
-  # - type: jwt
-  #   keys:
-  #     - cluster: <iris-cluster-name>
-  #       public_keys:
-  #         - |
-  #             -----BEGIN PUBLIC KEY-----
-  #             <iris-controller-ed25519-public-key-pem>
-  #             -----END PUBLIC KEY-----
+  - type: jwt
+    keys:
+      - cluster: cw-rno2a
+        public_keys:
+          - |
+              -----BEGIN PUBLIC KEY-----
+              MCowBQYDK2VwAyEAB7J7n1A0ASyT+ogJqAFbO3kf8FPL2RAVQGHbdSQoLTE=
+              -----END PUBLIC KEY-----

@@ -39,8 +39,8 @@ Every resource is a single ``gcloud`` create guarded by an existence probe, so
 the whole rollout — or any single stage — is safe to re-run. ``deploy`` runs the
 stages in dependency order; the per-stage subcommands (``address``, ``cert``,
 ``backend``, ``iap``, ``frontend``, ``route``, ``grant``, ``firewall``,
-``token-proxy``) expose each on its own. ``status`` reports what exists and
-``teardown`` removes a cluster's backend.
+``token-proxy``, ``finelog``) expose each on its own. ``status`` reports what
+exists and ``teardown`` removes a cluster's backend.
 
 The ``firewall`` stage is kept separate and is *not* run by ``deploy`` unless
 ``--with-firewall`` is passed: its allow-rule is a prerequisite for the LB health
@@ -56,6 +56,13 @@ viewer and any PRIVATE endpoint keep the browser's IAP identity. It runs by
 default as part of ``deploy`` (idempotent); pass ``--no-token-proxy`` to keep the
 controller fully IAP-gated, or run the ``token-proxy`` subcommand standalone.
 
+The ``finelog`` stage puts a cluster's finelog VM behind the same frontend, on its
+own IAP-free backend, so a federated iris controller has a TLS endpoint to relay
+logs to. finelog authenticates each push itself (an Ed25519 ``jwt`` auth layer over
+a default-deny stack); Cloud Armor admits only the relaying clusters' egress
+prefixes. In-VPC callers keep reaching finelog directly on its internal address —
+the load balancer and Cloud Armor sit only on the off-VPC path.
+
 Usage:
     uv run lib/iris/scripts/iap_gclb.py deploy marin \\
         --domain iris.oa.dev \\
@@ -66,6 +73,7 @@ Usage:
         --domain iris-dev.oa.dev \\
         --web-client-secrets scratch/web.json \\
         --desktop-client-secrets scratch/desktop.json
+    uv run lib/iris/scripts/iap_gclb.py finelog marin --domain finelog.oa.dev
     uv run lib/iris/scripts/iap_gclb.py status marin
     uv run lib/iris/scripts/iap_gclb.py teardown marin-dev
 """
@@ -106,6 +114,32 @@ SHARED_FRONTEND = "marin"
 # nobody can bypass IAP by hitting the VM's IP directly.
 GOOGLE_LB_RANGES = "130.211.0.0/22,35.191.0.0/16"
 IAP_ACCESSOR_ROLE = "roles/iap.httpsResourceAccessor"
+
+# The finelog log server's port on its own VM, and the GCE label ``finelog deploy``
+# stamps on that VM.
+FINELOG_PORT = 10001
+FINELOG_LABEL_KEY = "finelog-name"
+
+# Every subnet of the ``default`` network sits inside this range, including the
+# us-central2 TPU subnets that `default-allow-internal`'s narrower 10.128.0.0/9
+# misses. The controller and every GCP worker reach finelog directly over the VPC,
+# never through the load balancer; the LB is only how an off-VPC relay gets in.
+VPC_PRIVATE_RANGE = "10.0.0.0/8"
+
+# Public egress prefixes of the clusters that relay their logs into a GCP-hosted
+# finelog, keyed by iris cluster. Cloud Armor admits only these at the shared
+# frontend, so an unexpected source is rejected at the edge before it reaches the
+# VM; finelog still verifies the relay's aud="finelog" delegation token behind it.
+# Each entry is the cluster's announced egress block (RDAP: COREW-1). Add a cluster
+# here when it starts relaying, then re-run the ``finelog`` stage to widen the policy.
+FINELOG_RELAY_SOURCE_RANGES: dict[str, tuple[str, ...]] = {
+    "cw-rno2a": ("192.112.160.0/20",),
+}
+
+# Cloud Armor rule priorities. The allow rule names the relay sources; the default
+# rule (a fixed, un-deletable priority) is flipped from its allow-all default to deny.
+ARMOR_ALLOW_PRIORITY = 1000
+ARMOR_DEFAULT_PRIORITY = 2147483647
 
 
 @dataclasses.dataclass(frozen=True)
@@ -205,6 +239,70 @@ class Backend:
         """Managed-cert name for the cluster's domain (e.g. iris-oa-dev-cert)."""
         if not self.domain:
             raise click.ClickException(f"cluster {self.cluster} has no --domain, cannot name its cert")
+        return f"{self.domain.replace('.', '-')}-cert"
+
+
+@dataclasses.dataclass(frozen=True)
+class FinelogBackend:
+    """Names of the IAP-free backend fronting one cluster's finelog VM.
+
+    IAP is never enabled here: finelog authenticates every RPC itself against a
+    default-deny stack, and a relaying controller holds no Google identity to
+    present. The load balancer supplies TLS, Cloud Armor narrows the edge to the
+    relay source ranges, and the firewall admits only the Google LB ranges plus the
+    VPC — so the VM's own address is never a way in.
+
+    ``finelog deploy`` creates the VM as ``finelog-<cluster>`` and labels it
+    ``finelog-name=<vm>``.
+    """
+
+    cluster: str
+    project: str = DEFAULT_PROJECT
+    zone: str = DEFAULT_ZONE
+    domain: str | None = None
+
+    @property
+    def vm(self) -> str:
+        return f"finelog-{self.cluster}"
+
+    @property
+    def tag(self) -> str:
+        """Network tag carrying this VM's firewall rules."""
+        return f"{self.vm}-lb"
+
+    @property
+    def neg(self) -> str:
+        return f"{self.vm}-neg"
+
+    @property
+    def health_check(self) -> str:
+        return f"{self.vm}-hc"
+
+    @property
+    def service(self) -> str:
+        return f"{self.vm}-be"
+
+    @property
+    def armor_policy(self) -> str:
+        return f"{self.vm}-armor"
+
+    @property
+    def path_matcher(self) -> str:
+        """The shared URL map's path-matcher name for this finelog's host rule."""
+        return self.vm
+
+    @property
+    def allow_firewall(self) -> str:
+        return f"{self.vm}-allow-lb"
+
+    @property
+    def deny_firewall(self) -> str:
+        return f"{self.vm}-deny-public-{FINELOG_PORT}"
+
+    @property
+    def cert(self) -> str:
+        if not self.domain:
+            raise click.ClickException(f"finelog {self.vm} has no --domain, cannot name its cert")
         return f"{self.domain.replace('.', '-')}-cert"
 
 
@@ -348,20 +446,25 @@ def ensure_address(frontend: Frontend, *, dry_run: bool) -> str:
 # --------------------------------------------------------------------------- #
 
 
-def ensure_cert(backend: Backend, *, dry_run: bool) -> None:
-    """Create the Google-managed SSL certificate for the cluster's domain.
+def _ensure_managed_cert(project: str, cert: str, domain: str, *, dry_run: bool) -> None:
+    """Create a Google-managed SSL certificate for *domain*.
 
     The cert stays PROVISIONING until the domain's DNS A record resolves to the
     shared frontend's static IP and the cert is served by the HTTPS proxy.
     """
-    if not backend.domain:
-        raise click.ClickException("--domain is required to create the managed SSL certificate")
     _ensure(
-        f"managed SSL cert {backend.cert} ({backend.domain})",
-        _exists(_compute(backend.project, "ssl-certificates", "describe", backend.cert, "--global")),
-        _compute(backend.project, "ssl-certificates", "create", backend.cert, "--global", f"--domains={backend.domain}"),
+        f"managed SSL cert {cert} ({domain})",
+        _exists(_compute(project, "ssl-certificates", "describe", cert, "--global")),
+        _compute(project, "ssl-certificates", "create", cert, "--global", f"--domains={domain}"),
         dry_run=dry_run,
     )
+
+
+def ensure_cert(backend: Backend, *, dry_run: bool) -> None:
+    """Create the Google-managed SSL certificate for the cluster's domain."""
+    if not backend.domain:
+        raise click.ClickException("--domain is required to create the managed SSL certificate")
+    _ensure_managed_cert(backend.project, backend.cert, backend.domain, dry_run=dry_run)
 
 
 # --------------------------------------------------------------------------- #
@@ -445,14 +548,14 @@ def ensure_deny_firewall(backend: Backend, *, dry_run: bool) -> None:
 # --------------------------------------------------------------------------- #
 
 
-def _neg_has_endpoint(backend: Backend, ip: str) -> bool:
+def _neg_has_endpoint(project: str, zone: str, neg: str, ip: str) -> bool:
     result = _run(
         _compute(
-            backend.project,
+            project,
             "network-endpoint-groups",
             "list-network-endpoints",
-            backend.neg,
-            f"--zone={backend.zone}",
+            neg,
+            f"--zone={zone}",
             "--format=value(ipAddress)",
         ),
         capture=True,
@@ -460,68 +563,82 @@ def _neg_has_endpoint(backend: Backend, ip: str) -> bool:
     return ip in (result.stdout or "").split()
 
 
-def _backend_has_neg(backend: Backend, service: str | None = None) -> bool:
+def _backend_has_neg(project: str, service: str, neg: str) -> bool:
     result = _run(
         _compute(
-            backend.project,
+            project,
             "backend-services",
             "describe",
-            service or backend.service,
+            service,
             "--global",
             "--format=value(backends[].group)",
         ),
         capture=True,
     )
-    return backend.neg in (result.stdout or "")
+    return neg in (result.stdout or "")
 
 
-def ensure_backend(backend: Backend, controller_name: str, controller_ip: str, *, dry_run: bool) -> None:
-    """Build the backend half: zonal NEG -> controller endpoint -> health check
-    -> backend service -> NEG attachment. IAP is enabled separately (``ensure_iap``)."""
+def _ensure_neg_backend(
+    *,
+    project: str,
+    zone: str,
+    neg: str,
+    health_check: str,
+    service: str,
+    instance: str,
+    ip: str,
+    port: int,
+    dry_run: bool,
+) -> None:
+    """Build a zonal NEG -> VM endpoint -> health check -> backend service -> attachment.
+
+    The backend service is created without IAP; callers enable it (``ensure_iap``)
+    or leave it open and let the upstream authenticate for itself.
+    """
     _ensure(
-        f"zonal NEG {backend.neg}",
-        _exists(_compute(backend.project, "network-endpoint-groups", "describe", backend.neg, f"--zone={backend.zone}")),
+        f"zonal NEG {neg}",
+        _exists(_compute(project, "network-endpoint-groups", "describe", neg, f"--zone={zone}")),
         _compute(
-            backend.project,
+            project,
             "network-endpoint-groups",
             "create",
-            backend.neg,
-            f"--zone={backend.zone}",
+            neg,
+            f"--zone={zone}",
             "--network=default",
             "--subnet=default",
             "--network-endpoint-type=GCE_VM_IP_PORT",
-            f"--default-port={CONTROLLER_PORT}",
+            f"--default-port={port}",
         ),
         dry_run=dry_run,
     )
 
-    if dry_run or not _neg_has_endpoint(backend, controller_ip):
-        logger.info("→ attaching controller endpoint %s:%d to %s", controller_ip, CONTROLLER_PORT, backend.neg)
+    if dry_run or not _neg_has_endpoint(project, zone, neg, ip):
+        logger.info("→ attaching endpoint %s:%d to %s", ip, port, neg)
         _run(
             _compute(
-                backend.project,
+                project,
                 "network-endpoint-groups",
                 "update",
-                backend.neg,
-                f"--zone={backend.zone}",
-                f"--add-endpoint=instance={controller_name},ip={controller_ip},port={CONTROLLER_PORT}",
+                neg,
+                f"--zone={zone}",
+                f"--add-endpoint=instance={instance},ip={ip},port={port}",
             ),
             dry_run=dry_run,
         )
     else:
-        logger.info("✓ endpoint %s:%d already attached to %s", controller_ip, CONTROLLER_PORT, backend.neg)
+        logger.info("✓ endpoint %s:%d already attached to %s", ip, port, neg)
 
     _ensure(
-        f"health check {backend.health_check} (HTTP /health :{CONTROLLER_PORT})",
-        _exists(_compute(backend.project, "health-checks", "describe", backend.health_check, "--global")),
+        f"health check {health_check} (HTTP /health :{port})",
+        _exists(_compute(project, "health-checks", "describe", health_check, "--global")),
         _compute(
-            backend.project,
+            project,
             "health-checks",
             "create",
             "http",
-            backend.health_check,
+            health_check,
             "--global",
-            f"--port={CONTROLLER_PORT}",
+            f"--port={port}",
             "--request-path=/health",
             "--check-interval=10s",
             "--timeout=5s",
@@ -532,41 +649,56 @@ def ensure_backend(backend: Backend, controller_name: str, controller_ip: str, *
     )
 
     _ensure(
-        f"backend service {backend.service}",
-        _exists(_compute(backend.project, "backend-services", "describe", backend.service, "--global")),
+        f"backend service {service}",
+        _exists(_compute(project, "backend-services", "describe", service, "--global")),
         _compute(
-            backend.project,
+            project,
             "backend-services",
             "create",
-            backend.service,
+            service,
             "--global",
             "--protocol=HTTP",
             "--port-name=http",
-            f"--health-checks={backend.health_check}",
+            f"--health-checks={health_check}",
             "--timeout=120s",
             "--load-balancing-scheme=EXTERNAL_MANAGED",
         ),
         dry_run=dry_run,
     )
 
-    if dry_run or not _backend_has_neg(backend):
-        logger.info("→ adding NEG %s to backend service %s", backend.neg, backend.service)
+    if dry_run or not _backend_has_neg(project, service, neg):
+        logger.info("→ adding NEG %s to backend service %s", neg, service)
         _run(
             _compute(
-                backend.project,
+                project,
                 "backend-services",
                 "add-backend",
-                backend.service,
+                service,
                 "--global",
-                f"--network-endpoint-group={backend.neg}",
-                f"--network-endpoint-group-zone={backend.zone}",
+                f"--network-endpoint-group={neg}",
+                f"--network-endpoint-group-zone={zone}",
                 "--balancing-mode=RATE",
                 "--max-rate-per-endpoint=1000",
             ),
             dry_run=dry_run,
         )
     else:
-        logger.info("✓ NEG %s already attached to backend %s", backend.neg, backend.service)
+        logger.info("✓ NEG %s already attached to backend %s", neg, service)
+
+
+def ensure_backend(backend: Backend, controller_name: str, controller_ip: str, *, dry_run: bool) -> None:
+    """Build the backend half for a cluster's controller VM. IAP is enabled separately."""
+    _ensure_neg_backend(
+        project=backend.project,
+        zone=backend.zone,
+        neg=backend.neg,
+        health_check=backend.health_check,
+        service=backend.service,
+        instance=controller_name,
+        ip=controller_ip,
+        port=CONTROLLER_PORT,
+        dry_run=dry_run,
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -830,7 +962,7 @@ def ensure_token_proxy_backend(backend: Backend, *, dry_run: bool) -> None:
         dry_run=dry_run,
     )
 
-    if dry_run or not _backend_has_neg(backend, backend.proxy_service):
+    if dry_run or not _backend_has_neg(backend.project, backend.proxy_service, backend.neg):
         logger.info("→ adding NEG %s to IAP-free backend %s", backend.neg, backend.proxy_service)
         _run(
             _compute(
@@ -940,6 +1072,219 @@ def remove_token_proxy_route(frontend: Frontend, backend: Backend, *, dry_run: b
     matcher["pathRules"] = kept
     logger.info("→ removing /proxy route(s) for %s from %s", backend.domain, frontend.url_map)
     _import_url_map(frontend, doc, dry_run=dry_run)
+
+
+# --------------------------------------------------------------------------- #
+# finelog stage: front a cluster's finelog VM with TLS + Cloud Armor.
+#
+# A federated iris controller relays its logs into a GCP-hosted finelog. finelog
+# speaks plain HTTP and has no notion of TLS, so the relay's aud="finelog" bearer
+# may not cross the public internet on its own. Routing it through the shared LB
+# gives it TLS from the same managed-cert machinery every cluster domain uses, and
+# keeps the finelog VM's own address closed: the LB is the only way in.
+#
+# IAP is never enabled on this backend -- a relaying controller has no Google
+# identity. Authentication is finelog's: a default-deny stack whose `jwt` layer
+# verifies the relay token against the relaying cluster's Ed25519 public key. Cloud
+# Armor narrows the edge to the relay source ranges ahead of it.
+# --------------------------------------------------------------------------- #
+
+
+def relay_source_ranges() -> list[str]:
+    """Flatten :data:`FINELOG_RELAY_SOURCE_RANGES` into Cloud Armor's allow list."""
+    ranges = [r for cluster_ranges in FINELOG_RELAY_SOURCE_RANGES.values() for r in cluster_ranges]
+    if len(ranges) > 10:
+        raise click.ClickException(f"a Cloud Armor rule admits at most 10 source ranges, got {len(ranges)}")
+    return ranges
+
+
+def discover_finelog_ip(fb: FinelogBackend) -> str:
+    """Resolve the finelog VM's internal IP from the label ``finelog deploy`` set."""
+    result = _run(
+        _compute(
+            fb.project,
+            "instances",
+            "list",
+            f"--filter=labels.{FINELOG_LABEL_KEY}={fb.vm}",
+            "--format=value(networkInterfaces[0].networkIP)",
+        ),
+        capture=True,
+    )
+    values = (result.stdout or "").split()
+    if not values:
+        raise click.ClickException(f"no VM labelled {FINELOG_LABEL_KEY}={fb.vm}; run `finelog deploy up {fb.cluster}`")
+    if len(values) > 1:
+        raise click.ClickException(f"multiple VMs match {FINELOG_LABEL_KEY}={fb.vm} ({values})")
+    return values[0]
+
+
+def ensure_finelog_tag(fb: FinelogBackend, *, dry_run: bool) -> None:
+    """Tag the finelog VM so its firewall rules apply to it (idempotent)."""
+    logger.info("→ ensuring network tag %s on finelog VM %s", fb.tag, fb.vm)
+    _run(
+        _compute(fb.project, "instances", "add-tags", fb.vm, f"--zone={fb.zone}", f"--tags={fb.tag}"),
+        dry_run=dry_run,
+    )
+
+
+def ensure_finelog_allow_firewall(fb: FinelogBackend, *, dry_run: bool) -> None:
+    """Allow the finelog port from inside the VPC and from the Google LB ranges.
+
+    Every in-VPC caller — the controller, every GCP worker — reaches finelog directly
+    on its internal address, bypassing the load balancer and Cloud Armor entirely.
+    The LB ranges carry the health check and the off-VPC relay pushes.
+    """
+    _ensure(
+        f"firewall allow-LB {fb.allow_firewall}",
+        _exists(_compute(fb.project, "firewall-rules", "describe", fb.allow_firewall)),
+        _compute(
+            fb.project,
+            "firewall-rules",
+            "create",
+            fb.allow_firewall,
+            "--network=default",
+            "--direction=INGRESS",
+            "--action=ALLOW",
+            f"--rules=tcp:{FINELOG_PORT}",
+            f"--source-ranges={VPC_PRIVATE_RANGE},{GOOGLE_LB_RANGES}",
+            f"--target-tags={fb.tag}",
+            "--priority=900",
+        ),
+        dry_run=dry_run,
+    )
+
+
+def ensure_finelog_deny_firewall(fb: FinelogBackend, *, dry_run: bool) -> None:
+    """Deny every other source to the finelog port.
+
+    Unlike the controller's deny rule this cuts nothing that works today: the allow
+    rule above already admits the whole private range, so all this closes is the VM's
+    public address, which no rule opens. It stops a later broad allow from reaching
+    finelog.
+    """
+    _ensure(
+        f"firewall deny-public {fb.deny_firewall}",
+        _exists(_compute(fb.project, "firewall-rules", "describe", fb.deny_firewall)),
+        _compute(
+            fb.project,
+            "firewall-rules",
+            "create",
+            fb.deny_firewall,
+            "--network=default",
+            "--direction=INGRESS",
+            "--action=DENY",
+            f"--rules=tcp:{FINELOG_PORT}",
+            "--source-ranges=0.0.0.0/0",
+            f"--target-tags={fb.tag}",
+            "--priority=1000",
+        ),
+        dry_run=dry_run,
+    )
+
+
+def ensure_armor_policy(fb: FinelogBackend, source_ranges: Sequence[str], *, dry_run: bool) -> None:
+    """Admit only *source_ranges* at the edge of the finelog backend, denying the rest.
+
+    Reconciling: re-running with a wider (or narrower) set rewrites the allow rule in
+    place, so adding a relaying cluster to :data:`FINELOG_RELAY_SOURCE_RANGES` and
+    re-running this stage is the whole update. The policy's default rule is flipped
+    from its allow-all default to deny, making the allow rule exhaustive.
+
+    Cloud Armor sees only traffic through the load balancer; health checks reach the
+    VM directly and are unaffected.
+    """
+    if not source_ranges:
+        raise click.ClickException("no relay source ranges; a policy denying everything would strand the relay")
+
+    _ensure(
+        f"Cloud Armor policy {fb.armor_policy}",
+        _exists(_compute(fb.project, "security-policies", "describe", fb.armor_policy)),
+        _compute(
+            fb.project,
+            "security-policies",
+            "create",
+            fb.armor_policy,
+            f"--description=relay sources admitted to {fb.vm}",
+        ),
+        dry_run=dry_run,
+    )
+
+    ranges = ",".join(source_ranges)
+    rule_exists = _exists(
+        _compute(
+            fb.project,
+            "security-policies",
+            "rules",
+            "describe",
+            str(ARMOR_ALLOW_PRIORITY),
+            f"--security-policy={fb.armor_policy}",
+        )
+    )
+    verb = "update" if rule_exists else "create"
+    logger.info("→ Cloud Armor %s: %s allow rule %d for %s", fb.armor_policy, verb, ARMOR_ALLOW_PRIORITY, ranges)
+    _run(
+        _compute(
+            fb.project,
+            "security-policies",
+            "rules",
+            verb,
+            str(ARMOR_ALLOW_PRIORITY),
+            f"--security-policy={fb.armor_policy}",
+            f"--src-ip-ranges={ranges}",
+            "--action=allow",
+        ),
+        dry_run=dry_run,
+    )
+
+    logger.info("→ Cloud Armor %s: default rule -> deny-403", fb.armor_policy)
+    _run(
+        _compute(
+            fb.project,
+            "security-policies",
+            "rules",
+            "update",
+            str(ARMOR_DEFAULT_PRIORITY),
+            f"--security-policy={fb.armor_policy}",
+            "--action=deny-403",
+        ),
+        dry_run=dry_run,
+    )
+
+    logger.info("→ attaching Cloud Armor %s to backend %s", fb.armor_policy, fb.service)
+    _run(
+        _compute(
+            fb.project,
+            "backend-services",
+            "update",
+            fb.service,
+            "--global",
+            f"--security-policy={fb.armor_policy}",
+        ),
+        dry_run=dry_run,
+    )
+
+
+def ensure_finelog_route(frontend: Frontend, fb: FinelogBackend, *, dry_run: bool) -> None:
+    """Route ``fb.domain`` to the finelog backend service in the shared URL map."""
+    if not fb.domain:
+        raise click.ClickException(f"--domain is required to route finelog {fb.vm}")
+    if _url_map_has_matcher(frontend, fb.path_matcher):
+        logger.info("✓ host rule %s -> %s already in %s", fb.domain, fb.service, frontend.url_map)
+        return
+    logger.info("→ routing %s -> %s in %s", fb.domain, fb.service, frontend.url_map)
+    _run(
+        _compute(
+            frontend.project,
+            "url-maps",
+            "add-path-matcher",
+            frontend.url_map,
+            "--global",
+            f"--path-matcher-name={fb.path_matcher}",
+            f"--default-service={fb.service}",
+            f"--new-hosts={fb.domain}",
+        ),
+        dry_run=dry_run,
+    )
 
 
 def grant_access(backend: Backend, member: str, *, dry_run: bool) -> None:
@@ -1243,6 +1588,75 @@ def token_proxy(cluster: str, project: str, zone: str, dry_run: bool, frontend_n
     click.echo(f"Opened https://{domain}/proxy/t/* (IAP-free capability URLs) -> {backend.proxy_service}.")
     click.echo("  The scoped token rides in the path; the controller verifies it before forwarding.")
     click.echo("  Everything else under /proxy stays IAP-gated (dashboard identity preserved).")
+
+
+@cli.command("finelog")
+@_common_options
+@_frontend_option
+@click.option("--domain", required=True, help="finelog domain whose DNS A record points at the shared frontend IP")
+@click.option("--finelog-ip", help="finelog VM internal IP (default: discover from the GCE label)")
+def finelog_cmd(
+    cluster: str,
+    project: str,
+    zone: str,
+    dry_run: bool,
+    frontend_name: str,
+    domain: str,
+    finelog_ip: str | None,
+) -> None:
+    """Front the cluster's finelog VM with TLS + Cloud Armor on the shared LB.
+
+    Gives a federated iris controller a TLS endpoint to relay its logs to, without
+    exposing the finelog VM: an IAP-free backend on the shared frontend, a Cloud
+    Armor policy admitting only the relay source ranges, and firewall rules leaving
+    the private range and the Google LB ranges as the sole paths to the port.
+
+    In-VPC callers are untouched: the controller and every GCP worker keep reaching
+    finelog directly on its internal address, never through the LB or Cloud Armor.
+
+    IAP is not enabled — a relaying controller carries no Google identity. finelog
+    authenticates each push itself against its `jwt` auth layer, keyed on the
+    relaying cluster's public key.
+
+    To admit another cluster, add its egress prefixes to FINELOG_RELAY_SOURCE_RANGES
+    and re-run; the allow rule is rewritten in place.
+    """
+    fe = Frontend(name=frontend_name, project=project)
+    fb = FinelogBackend(cluster=cluster, project=project, zone=zone, domain=domain)
+    ranges = relay_source_ranges()
+    vm_ip = finelog_ip or discover_finelog_ip(fb)
+
+    _ensure_managed_cert(fb.project, fb.cert, domain, dry_run=dry_run)
+    _ensure_neg_backend(
+        project=fb.project,
+        zone=fb.zone,
+        neg=fb.neg,
+        health_check=fb.health_check,
+        service=fb.service,
+        instance=fb.vm,
+        ip=vm_ip,
+        port=FINELOG_PORT,
+        dry_run=dry_run,
+    )
+    ensure_armor_policy(fb, ranges, dry_run=dry_run)
+    ensure_finelog_tag(fb, dry_run=dry_run)
+    ensure_finelog_allow_firewall(fb, dry_run=dry_run)
+    ensure_finelog_deny_firewall(fb, dry_run=dry_run)
+
+    reserved_ip = ensure_address(fe, dry_run=dry_run)
+    ensure_finelog_route(fe, fb, dry_run=dry_run)
+    add_proxy_cert(fe, fb.cert, dry_run=dry_run)
+
+    click.echo()
+    click.echo(f"finelog {fb.vm} fronted by {frontend_name}'s load balancer.")
+    click.echo(f"  Shared IP     : {reserved_ip}")
+    click.echo(f"  Domain        : {domain}  (ensure a DNS A record -> {reserved_ip})")
+    click.echo(f"  Relay address : https://{domain}")
+    click.echo(f"  Admitted      : {', '.join(ranges)}  (Cloud Armor {fb.armor_policy}; everything else 403)")
+    click.echo()
+    click.echo(f"The managed cert {fb.cert} stays PROVISIONING until that A record resolves.")
+    click.echo(f"Set `finelog.relay_address: https://{domain}` on each relaying cluster's iris config,")
+    click.echo(f"and add its public key to a `jwt` auth layer in lib/finelog/config/{cluster}.yaml.")
 
 
 @cli.command()

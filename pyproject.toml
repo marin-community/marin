@@ -15,7 +15,10 @@ dependencies = [
     "marin-haliax",
     "marin-levanter",
     "marin-core",
-    "marin-rigging",
+    # [secrets] so `iris cluster up` on a Kubernetes cluster can resolve the
+    # `gcp-secret://` signing key in the operator's shell: the controller pod holds no
+    # cloud credentials and reads the key from a projected Secret instead.
+    "marin-rigging[secrets]",
     "marin-zephyr",
     # marin-finelog is the pure-Python finelog client + deploy/CLI tooling, a
     # workspace member (editable source) so deploy/CLI fixes land without a wheel
