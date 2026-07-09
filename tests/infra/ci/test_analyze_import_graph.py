@@ -7,12 +7,12 @@ import textwrap
 from pathlib import Path
 
 from infra.ci.analyze_import_graph import (
+    all_dependencies_by_test_file,
     analyze,
     blast_radius,
+    dependent_tests_by_module,
     file_report,
     reexport_hubs,
-    all_dependencies_by_test_file,
-    dependent_tests_by_module,
 )
 from infra.ci.select_tests import build_importers, workspace_modules
 
