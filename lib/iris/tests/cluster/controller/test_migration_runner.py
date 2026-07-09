@@ -97,13 +97,8 @@ def _objects(conn: sqlite3.Connection, schema: str) -> list[tuple[str, str]]:
 def _schema(db_dir: Path) -> dict[str, object]:
     """Semantic shape of every table and index across both DB files.
 
-    Tables map each column name to its ``PRAGMA table_info`` type, nullability,
-    default, and primary-key flag — not to the stored ``CREATE`` text, which an
-    upgraded DB spells differently: ``ALTER TABLE ... ADD COLUMN`` appends the
-    clause verbatim, so ``0041`` writes ``NOT NULL DEFAULT ''`` where
-    SQLAlchemy's baseline writes the equivalent ``DEFAULT '' NOT NULL``.
-
-    Indexes are compared by ``CREATE`` text, which carries the partial-index
+    Tables map each column name to its type, nullability, default, and primary-key
+    flag. Indexes map to their ``CREATE`` text, which carries the partial-index
     ``WHERE`` clause that no pragma exposes.
     """
     shape: dict[str, object] = {}
@@ -116,6 +111,9 @@ def _schema(db_dir: Path) -> dict[str, object]:
                         f"SELECT sql FROM {schema}.sqlite_master WHERE name = ?", (name,)
                     ).fetchone()[0]
                 else:
+                    # Column facts, not the table's CREATE text: ALTER TABLE ADD COLUMN
+                    # appends its clause verbatim, so an upgraded DB spells a column
+                    # "NOT NULL DEFAULT ''" where the baseline spells it "DEFAULT '' NOT NULL".
                     # table_info columns: (cid, name, type, notnull, dflt_value, pk)
                     shape[key] = {
                         row[1]: row[2:] for row in conn.execute(f"PRAGMA {schema}.table_info({name})").fetchall()
