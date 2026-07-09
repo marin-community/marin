@@ -188,8 +188,10 @@ def _ep_moe_mesh_or_skip(expert: int = 2) -> Mesh:
 def test_moe_mlp_ring_fp8_wire_parity():
     # End-to-end: values and input gradients stay within FP8 wire tolerance of
     # the bf16-wire path (E4M3 dispatch fwd, E5M2 combine-transpose bwd).
+    # d/i are TPU-tile-sized (128): the reference arm's grad runs the megablox
+    # ragged_dot on TPU, whose Pallas kernel needs 128-divisible trailing dims.
     mesh = _ep_moe_mesh_or_skip()
-    t, d, i, e, k = 64, 32, 16, 16, 4
+    t, d, i, e, k = 64, 128, 128, 16, 4
     key = jax.random.key(0)
     kx, ks, kw, k1, k2, kc = jax.random.split(key, 6)
     batch = P(("data", "expert"))
