@@ -266,9 +266,8 @@ class FinelogBackend:
     ``finelog deploy`` creates the VM as ``finelog-<cluster>`` and labels it
     ``finelog-name=<vm>``.
 
-    ``port`` is read from the cluster's finelog deploy config rather than assumed, so
-    the NEG endpoint, the health check and the firewall rules address the port finelog
-    actually serves.
+    ``port`` is the port finelog serves, and addresses the NEG endpoint, the health check
+    and the firewall rules alike.
     """
 
     cluster: str

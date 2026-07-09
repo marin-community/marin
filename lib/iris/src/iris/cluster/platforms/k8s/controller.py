@@ -164,12 +164,6 @@ def _controller_env(config: IrisClusterConfig) -> dict[str, str]:
     as ``IRIS_SIGNING_KEY`` through the iris-controller-env Secret. The cluster config
     must therefore name ``env:IRIS_SIGNING_KEY`` among its references, so the pod reads
     the projected value instead of re-resolving a source it cannot reach.
-
-    That ``env:`` reference addresses the pod, not this deploy, so it is skipped here:
-    :func:`resolve_secret_spec` takes the first source that is present, and an
-    ``IRIS_SIGNING_KEY`` left over in the operator's shell would otherwise outrank the
-    pinned reference and be projected as the cluster's identity. A spec that names no
-    persistent source falls back to it, which is how an operator supplies the key directly.
     """
     if not _projects_controller_env_secret(config):
         return {}
@@ -182,6 +176,10 @@ def _controller_env(config: IrisClusterConfig) -> dict[str, str]:
             f"its key from the {CONTROLLER_ENV_SECRET_NAME} Secret, which this deploy populates by "
             f"resolving the remaining references in the operator's shell. Got {list(refs)}."
         )
+    # The env: reference addresses the pod, not this deploy, and resolve_secret_spec takes the
+    # first source that is present: an IRIS_SIGNING_KEY in the operator's shell must never
+    # outrank the pinned reference and become the cluster's identity. A spec that names no
+    # persistent source falls back to it, which is how an operator supplies the key directly.
     persistent = tuple(ref for ref in refs if ref != env_ref)
     return {SIGNING_KEY_ENV_VAR: resolve_secret_spec(persistent or refs).value}
 

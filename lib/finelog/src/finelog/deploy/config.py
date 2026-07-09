@@ -198,11 +198,7 @@ def _config_search_paths(name_or_path: str) -> list[Path]:
 
 
 def find_finelog_config(name_or_path: str) -> Path | None:
-    """Return the path `name_or_path` resolves to, or None when no such config exists.
-
-    Callers that treat a finelog deployment as optional — not every iris cluster runs one —
-    use this to decide, rather than provoking :func:`load_finelog_config` into raising.
-    """
+    """Return the path `name_or_path` resolves to, or None when no such config exists."""
     return next((path for path in _config_search_paths(name_or_path) if path.is_file()), None)
 
 
