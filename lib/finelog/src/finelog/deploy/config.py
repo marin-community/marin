@@ -197,6 +197,15 @@ def _config_search_paths(name_or_path: str) -> list[Path]:
     ]
 
 
+def find_finelog_config(name_or_path: str) -> Path | None:
+    """Return the path `name_or_path` resolves to, or None when no such config exists.
+
+    Callers that treat a finelog deployment as optional — not every iris cluster runs one —
+    use this to decide, rather than provoking :func:`load_finelog_config` into raising.
+    """
+    return next((path for path in _config_search_paths(name_or_path) if path.is_file()), None)
+
+
 def _build_gcp(raw: dict) -> GcpDeployment:
     tags = raw.get("network_tags") or ()
     return GcpDeployment(
@@ -251,11 +260,10 @@ def load_finelog_config(name_or_path: str) -> FinelogConfig:
       2. `~/.config/marin/finelog/<name>.yaml`.
       3. Repo-bundled `lib/finelog/config/<name>.yaml`.
     """
-    candidates = _config_search_paths(name_or_path)
-    for path in candidates:
-        if path.is_file():
-            return _load_from_path(path)
-    searched = "\n  ".join(str(p) for p in candidates)
+    path = find_finelog_config(name_or_path)
+    if path is not None:
+        return _load_from_path(path)
+    searched = "\n  ".join(str(p) for p in _config_search_paths(name_or_path))
     raise FileNotFoundError(f"finelog config '{name_or_path}' not found; searched:\n  {searched}")
 
 

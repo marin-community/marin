@@ -92,7 +92,7 @@ from pathlib import Path
 
 import click
 import yaml
-from finelog.deploy.config import load_finelog_config
+from finelog.deploy.config import find_finelog_config, load_finelog_config
 
 logger = logging.getLogger("iap-gclb")
 
@@ -1823,20 +1823,13 @@ def status(cluster: str, project: str, zone: str, dry_run: bool, frontend_name: 
     """Report which resources exist for the shared frontend and the cluster's backend."""
     fe = Frontend(name=frontend_name, project=project)
     backend = Backend(cluster=cluster, project=project, zone=zone)
-    finelog = _finelog_backend(cluster=cluster, project=project, zone=zone)
+    # A cluster need not deploy a finelog; the ones that do not simply have no section to report.
+    finelog = _finelog_backend(cluster=cluster, project=project, zone=zone) if find_finelog_config(cluster) else None
     frontend_checks = [
         ("static IP", _compute(project, "addresses", "describe", fe.address, "--global")),
         ("URL map", _compute(project, "url-maps", "describe", fe.url_map, "--global")),
         ("HTTPS proxy", _compute(project, "target-https-proxies", "describe", fe.https_proxy, "--global")),
         ("forwarding rule", _compute(project, "forwarding-rules", "describe", fe.forwarding_rule, "--global")),
-    ]
-    finelog_checks = [
-        ("allow-LB firewall", _compute(project, "firewall-rules", "describe", finelog.allow_firewall)),
-        ("deny-public firewall", _compute(project, "firewall-rules", "describe", finelog.deny_firewall)),
-        ("NEG", _compute(project, "network-endpoint-groups", "describe", finelog.neg, f"--zone={zone}")),
-        ("health check", _compute(project, "health-checks", "describe", finelog.health_check, "--global")),
-        ("backend service", _compute(project, "backend-services", "describe", finelog.service, "--global")),
-        ("Cloud Armor policy", _compute(project, "security-policies", "describe", finelog.armor_policy)),
     ]
     backend_checks = [
         ("allow-LB firewall", _compute(project, "firewall-rules", "describe", backend.allow_firewall)),
@@ -1870,6 +1863,17 @@ def status(cluster: str, project: str, zone: str, dry_run: bool, frontend_name: 
     if audience:
         click.echo(f"  iap jwt aud : {audience}  (auth.iap.signed_header_audience)")
 
+    if finelog is None:
+        click.echo(f"finelog: no deploy config for {cluster}")
+        return
+    finelog_checks = [
+        ("allow-LB firewall", _compute(project, "firewall-rules", "describe", finelog.allow_firewall)),
+        ("deny-public firewall", _compute(project, "firewall-rules", "describe", finelog.deny_firewall)),
+        ("NEG", _compute(project, "network-endpoint-groups", "describe", finelog.neg, f"--zone={zone}")),
+        ("health check", _compute(project, "health-checks", "describe", finelog.health_check, "--global")),
+        ("backend service", _compute(project, "backend-services", "describe", finelog.service, "--global")),
+        ("Cloud Armor policy", _compute(project, "security-policies", "describe", finelog.armor_policy)),
+    ]
     click.echo(f"finelog {finelog.vm} (IAP-free; relay ingress):")
     for label, describe in finelog_checks:
         click.echo(f"  [{'OK ' if _exists(describe) else 'off '}] {label}")
