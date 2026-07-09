@@ -131,10 +131,14 @@ VPC_PRIVATE_RANGE = "10.0.0.0/8"
 # finelog, keyed by iris cluster. Cloud Armor admits only these at the shared
 # frontend, so an unexpected source is rejected at the edge before it reaches the
 # VM; finelog still verifies the relay's aud="finelog" delegation token behind it.
-# Each entry is the cluster's announced egress block (RDAP: COREW-1). Add a cluster
-# here when it starts relaying, then re-run the ``finelog`` stage to widen the policy.
+# Each entry is the cluster's announced egress block (RDAP: COREW-1), not the single
+# NAT address observed today: CoreWeave rotates egress within the block, and a tighter
+# rule would strand the relay behind a 403 that reads like an auth failure. The token,
+# not the prefix, is what authenticates a push. Add a cluster here when it starts
+# relaying, then re-run the ``finelog`` stage to widen the policy.
 FINELOG_RELAY_SOURCE_RANGES: dict[str, tuple[str, ...]] = {
     "cw-rno2a": ("192.112.160.0/20",),
+    "cw-us-east-02a": ("166.19.0.0/16",),
 }
 
 # Cloud Armor rule priorities. The allow rule names the relay sources; the default
