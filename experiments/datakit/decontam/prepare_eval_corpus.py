@@ -89,6 +89,23 @@ logger = logging.getLogger(__name__)
 # TODO (rav): don't hardcode
 OUTPUT_ROOT = "gs://marin-eu-west4/datakit/decontam/evals"
 
+# Bump when the LMH text-extraction policy (`_lmh_doc_text`) changes. Written to a
+# `.extraction_version` sidecar next to each `lmh/<task>/eval.parquet`; the prepare
+# step rewrites (does not skip) any shard whose sidecar doesn't match. Without this,
+# a policy change like the cluster-B passage drop (marin#6852) never reaches an
+# already-staged corpus — the bloom keeps reading the old passage-bearing text.
+_LMH_EXTRACTION_VERSION = "2-passage-drop"
+_LMH_VERSION_SIDECAR = ".extraction_version"
+
+
+def _staged_lmh_version(version_path: str) -> str | None:
+    """Return the extraction version recorded next to a staged LMH shard, or None."""
+    p = StoragePath(version_path)
+    if not p.exists():
+        return None
+    with p.open("r") as f:
+        return f.read().strip()
+
 
 # AA Intelligence Index v4.0 core (8 text benchmarks). Each entry pins
 # the HF source + the canonical "eval content" fields. ``text_fields`` are
@@ -484,8 +501,11 @@ def _prepare_lmh() -> None:
 
         for child_name, task in leaves:
             out_path = f"{OUTPUT_ROOT}/lmh/{child_name}/eval.parquet"
-            if StoragePath(out_path).exists():
-                logger.info("lmh/%s: exists, skipping", child_name)
+            version_path = f"{OUTPUT_ROOT}/lmh/{child_name}/{_LMH_VERSION_SIDECAR}"
+            # Skip only if the shard exists AND was built with the current extraction
+            # policy; a version bump forces a rewrite so policy changes reach the corpus.
+            if StoragePath(out_path).exists() and _staged_lmh_version(version_path) == _LMH_EXTRACTION_VERSION:
+                logger.info("lmh/%s: exists (extraction %s), skipping", child_name, _LMH_EXTRACTION_VERSION)
                 skipped_existing += 1
                 continue
 
@@ -505,6 +525,8 @@ def _prepare_lmh() -> None:
 
             try:
                 n = _write_parquet(out_path, rows())
+                with StoragePath(version_path).open("w") as vf:
+                    vf.write(_LMH_EXTRACTION_VERSION)
                 logger.info("lmh/%s: %d records (%s split) -> %s", child_name, n, split, out_path)
                 succeeded += 1
             except Exception as exc:
