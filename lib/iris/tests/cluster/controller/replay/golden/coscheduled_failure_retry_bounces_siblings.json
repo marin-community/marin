@@ -1,14 +1,5 @@
 {
-  "backends": [
-    {
-      "allow_policy_json": "{}",
-      "attributes_json": "{}",
-      "backend_id": "default",
-      "kind": "",
-      "last_seen_ms": null,
-      "status": 0
-    }
-  ],
+  "backends": [],
   "endpoints": [],
   "federated_jobs": [],
   "federated_tasks": [],

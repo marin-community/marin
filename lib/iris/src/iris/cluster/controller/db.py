@@ -44,7 +44,7 @@ import logging
 import sqlite3
 import threading
 import time
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 from pathlib import Path
 from threading import RLock
@@ -467,6 +467,10 @@ class ControllerDB:
         are skipped (including legacy pre-baseline stems on upgraded prod DBs).
         Deltas must be idempotent under ``IF [NOT] EXISTS`` so a crash mid-run
         is safe to retry.
+
+        A DB created from the baseline is already at the current schema, so its
+        deltas are recorded as applied without running. A delta runs only against
+        a DB created before it.
         """
         baseline_stem = Path(self.BASELINE_MIGRATION).stem
 
@@ -499,10 +503,18 @@ class ControllerDB:
                 finally:
                     auth_write.dispose()
                 logger.info("Baseline schema created in %.2fs", time.monotonic() - t0)
+                # The schema now matches every delta's post-state, so mark them
+                # applied in the same transaction as the baseline marker: a crash
+                # here leaves a DB that is either fully marked or unmarked, never
+                # one that replays deltas against the baseline.
+                recorded = [self.BASELINE_MIGRATION, *(path.name for path in self._delta_migration_paths())]
             else:
                 logger.info("Legacy DB detected; recording baseline marker without recreating schema")
-            self._record_migration(self.BASELINE_MIGRATION)
-            applied_stems.add(baseline_stem)
+                # Pre-baseline prod DB: its schema predates the deltas, so record
+                # only the baseline marker and let the deltas it has not recorded run.
+                recorded = [self.BASELINE_MIGRATION]
+            self._record_migrations(recorded)
+            applied_stems.update(Path(name).stem for name in recorded)
 
         # Delta migrations.
         raw_conn = self._sa_write_engine.raw_connection()
@@ -543,27 +555,34 @@ class ControllerDB:
             is not None
         )
 
-    def _record_migration(self, name: str) -> None:
+    @staticmethod
+    def _delta_migration_paths() -> list[Path]:
+        """Every delta migration module, in application order."""
+        migrations_dir = Path(__file__).with_name("migrations")
+        if not migrations_dir.exists():
+            return []
+        return [path for path in sorted(migrations_dir.glob("*.py")) if not path.name.startswith("__")]
+
+    def _record_migrations(self, names: Sequence[str]) -> None:
+        """Mark ``names`` applied in one transaction — all or none."""
         raw_conn = self._sa_write_engine.raw_connection()
         try:
-            raw_conn.execute(
-                "INSERT INTO schema_migrations(name, applied_at_ms) VALUES (?, ?)",
-                (name, Timestamp.now().epoch_ms()),
-            )
-            raw_conn.commit()
+            raw_conn.execute("BEGIN IMMEDIATE")
+            try:
+                now_ms = Timestamp.now().epoch_ms()
+                raw_conn.executemany(
+                    "INSERT INTO schema_migrations(name, applied_at_ms) VALUES (?, ?)",
+                    [(name, now_ms) for name in names],
+                )
+                raw_conn.commit()
+            except Exception:
+                raw_conn.execute("ROLLBACK")
+                raise
         finally:
             raw_conn.close()
 
     def _apply_delta_migrations(self, raw_conn, applied_stems: set[str]) -> None:
-        migrations_dir = Path(__file__).with_name("migrations")
-        if not migrations_dir.exists():
-            return
-
-        pending = [
-            path
-            for path in sorted(migrations_dir.glob("*.py"))
-            if not path.name.startswith("__") and path.stem not in applied_stems
-        ]
+        pending = [path for path in self._delta_migration_paths() if path.stem not in applied_stems]
         if not pending:
             return
 
