@@ -7,7 +7,7 @@ import jax
 import jax.numpy as jnp
 import optax
 from levanter.optim import OptimizerConfig
-from levanter.optim.grugmuon import _grug_scale_with_muon
+from levanter.optim.grugmuon import VMAP_REPLICATED, _grug_scale_with_muon
 from levanter.optim.util import CoefficientType
 from levanter.utils.jax_utils import leaf_key_paths
 
@@ -109,6 +109,10 @@ def scale_with_grug_muonh(
         muon_eps=muon_eps,
         use_kimi_scaling=False,
         coefficient_type=coefficient_type,
+        # Unrolled (non-stacked) runs orthogonalize experts as 3D leaves. Route them through the
+        # fully-local replicated NS (as the stacked 4D path does) instead of the batched
+        # stack-sharded path, which discretely corrupts a subset of experts' w_gate norm.
+        orthogonalization_layout=VMAP_REPLICATED,
     )
 
     def init_fn(params):

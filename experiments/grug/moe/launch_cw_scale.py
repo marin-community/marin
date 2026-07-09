@@ -134,6 +134,13 @@ def build_scale_model() -> GrugModelConfig:
     # SCALE_SCAN_LAYERS=1 stacks the blocks and runs them under one lax.scan (needs the
     # homogeneous body -> requires disable_pko, which is the model default).
     use_stacked_blocks = os.environ.get("SCALE_SCAN_LAYERS") == "1"
+    # SCALE_PKO=1 enables per-layer K-shift (PKO) on long layers; SCALE_LONG_ROPE=1 applies
+    # RoPE on long layers too (both off by default). PKO reads a per-layer flag at trace time,
+    # so it is incompatible with the stacked scan -- SCALE_PKO=1 requires SCALE_SCAN_LAYERS!=1.
+    disable_pko = os.environ.get("SCALE_PKO") != "1"
+    disable_long_rope = os.environ.get("SCALE_LONG_ROPE") != "1"
+    if not disable_pko and use_stacked_blocks:
+        raise ValueError("SCALE_PKO=1 is incompatible with SCALE_SCAN_LAYERS=1 (unset SCALE_SCAN_LAYERS).")
     return GrugModelConfig(
         vocab_size=VOCAB_SIZE,
         hidden_dim=hidden_dim,
@@ -151,6 +158,8 @@ def build_scale_model() -> GrugModelConfig:
         moe_implementation=moe_impl,
         attention_implementation=attn_impl,
         initializer_std=initializer_std,
+        disable_pko=disable_pko,
+        disable_long_rope=disable_long_rope,
         use_array_stacked_blocks=use_stacked_blocks,
     )
 
