@@ -215,16 +215,64 @@ def _extract_aa_text(row: dict[str, Any], cfg: AAEvalConfig) -> str:
     return _concat_strings(row)
 
 
-def _concat_strings(record: dict[str, Any]) -> str:
-    """Concat all string-typed fields in sorted key order; flatten list[str]."""
+def _concat_strings(record: dict[str, Any], exclude: frozenset[str] = frozenset()) -> str:
+    """Concat all string-typed fields in sorted key order; flatten list[str].
+
+    Keys whose lowercase name is in *exclude* are skipped.
+    """
     parts: list[str] = []
     for k in sorted(record.keys()):
+        if k.lower() in exclude:
+            continue
         v = record[k]
         if isinstance(v, str) and v.strip():
             parts.append(v)
         elif isinstance(v, list) and all(isinstance(x, str) for x in v):
             parts.extend(s for s in v if s.strip())
     return "\n\n".join(parts)
+
+
+# Reading-comprehension / QA eval docs carry a long, public PASSAGE (article,
+# story, premise, context, …) alongside the distinctive question + answer. The
+# passage is public text, so indexing it flags any corpus doc that merely quotes
+# it (marin#6852 cluster B: anli_r3 news premises, race/coqa/squad passages). For
+# a doc bearing any of these fields we drop the passage — both the raw field and
+# doc_to_text, which renders it — and index only the answer + the remaining raw
+# fields (question / options / hypothesis). This keeps genuine-leakage detection
+# (question + answer) while removing the public-passage false positives.
+# Corner (documented): a passage field named outside this set, or a question
+# field mis-named like a passage, is mis-handled — rare in practice.
+_PASSAGE_FIELDS: frozenset[str] = frozenset(
+    {"passage", "context", "ctx", "article", "story", "premise", "background", "document", "paragraph", "support"}
+)
+
+
+def _lmh_doc_text(doc: Any, prompt_fn: Any, target_fn: Any) -> str:
+    """Indexed eval text for one lm-eval-harness doc.
+
+    Passage-bearing docs (a field in :data:`_PASSAGE_FIELDS`) index only
+    question + answer (drop the passage field and ``doc_to_text``, which renders
+    it). Non-passage docs are unchanged: ``doc_to_text`` (question) +
+    ``doc_to_target`` (answer) + every raw string field.
+    """
+    has_passage = isinstance(doc, dict) and any(k.lower() in _PASSAGE_FIELDS for k in doc)
+    parts: list[str] = []
+    if not has_passage:
+        try:
+            prompt = prompt_fn(doc) or ""
+        except Exception:
+            prompt = ""
+        if prompt:
+            parts.append(str(prompt))
+    try:
+        target = target_fn(doc) or ""
+    except Exception:
+        target = ""
+    if target:
+        parts.append(str(target))
+    if isinstance(doc, dict):
+        parts.append(_concat_strings(doc, exclude=_PASSAGE_FIELDS if has_passage else frozenset()))
+    return "\n\n".join(p for p in parts if p.strip())
 
 
 _PARQUET_SCHEMA = pa.schema([("id", pa.string()), ("text", pa.string())])
@@ -367,6 +415,13 @@ DECON_EXCLUDED_EVAL_TASKS: frozenset[str] = frozenset(
         "jsonschema_bench_hard",
         "swde",
         "realtoxicityprompts",
+        # Perplexity / cloze evals over public text — the "document" is ordinary
+        # public material with no answer to leak (marin#6852 cluster A):
+        "wikitext",  # raw Wikipedia; every web/book corpus overlaps it
+        "lambada_openai",  # last-word cloze over public book passages
+        "lambada_standard",
+        "lambada_openai_cloze_yaml",
+        "lambada_standard_cloze_yaml",
     }
 )
 
@@ -443,22 +498,7 @@ def _prepare_lmh() -> None:
 
             def rows(task=task, docs=docs, split=split, name=child_name) -> Iterator[dict]:
                 for i, doc in enumerate(docs):
-                    try:
-                        prompt = task.doc_to_text(doc) or ""
-                    except Exception:
-                        prompt = ""
-                    try:
-                        target = task.doc_to_target(doc) or ""
-                    except Exception:
-                        target = ""
-                    parts: list[str] = []
-                    if prompt:
-                        parts.append(str(prompt))
-                    if target:
-                        parts.append(str(target))
-                    if isinstance(doc, dict):
-                        parts.append(_concat_strings(doc))
-                    text = "\n\n".join(p for p in parts if p.strip())
+                    text = _lmh_doc_text(doc, task.doc_to_text, task.doc_to_target)
                     if not text:
                         continue
                     yield {"id": f"{name}-{split}-{i}", "text": text}
