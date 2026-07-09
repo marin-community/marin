@@ -44,7 +44,7 @@ DEFAULT_VERSION = "2026.07.09"
 DEFAULT_NUM_TRAIN_STEPS = 20
 DEFAULT_OVERHEAD_FACTOR = 1.0
 DEFAULT_HBM_UTILIZATION = 1.0
-STUDY_ID = "reps80g-nosave"
+STUDY_ID = "reps80g-nohf"
 WANDB_GROUP_PREFIX = "coral-batch-config-study"
 TPU_HOST_RAM = "80g"
 
@@ -254,12 +254,10 @@ def _with_study_overrides(
         trainer = replace(
             pod_config.train_config.trainer,
             per_device_parallelism=per_device_parallelism,
-            checkpointer=None,
         )
         train_config = replace(
             pod_config.train_config,
             trainer=trainer,
-            hf_save_path=None,
             hf_save_steps=None,
         )
         return replace(pod_config, train_config=train_config)
