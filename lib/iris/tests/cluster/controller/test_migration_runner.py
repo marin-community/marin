@@ -8,9 +8,9 @@ at the current schema; its deltas are recorded as applied without running. A DB
 that predates the baseline still runs every delta it has not recorded. These
 tests pin both halves and pin that the two paths converge on the same schema.
 
-Each test boots a real ``ControllerDB``, which migrates on construction. Whether a
-given delta ran is read back as persisted state — canary modules injected into the
-runner's module list create a table when they execute — rather than as a call count.
+Each test boots a real ``ControllerDB``, which migrates on construction. Canary
+modules injected into the runner's module list create a table when they execute, so
+whether a given delta ran is read back as persisted state.
 """
 
 import sqlite3
@@ -135,9 +135,9 @@ def _column_order(db_dir: Path) -> dict[str, list[str]]:
 def _make_legacy(db_dir: Path) -> None:
     """Regress a baseline DB into one that predates the baseline scheme.
 
-    Wipes the migration ledger while the user tables survive — exactly what
-    ``apply_migrations`` sniffs for. ``jobs.submitting_user`` is dropped so that
-    a delta (``0041``) has real forward work to do rather than merely no-opping.
+    An empty migration ledger alongside surviving user tables is what
+    ``apply_migrations`` reads as a pre-baseline DB. Dropping
+    ``jobs.submitting_user`` gives one delta (``0041``) real forward work.
     """
     with closing(_connect(db_dir)) as conn:
         conn.execute("DELETE FROM schema_migrations")
@@ -158,12 +158,12 @@ def test_fresh_db_marks_every_delta_applied_without_running_it(tmp_path: Path, c
 def test_fresh_db_schema_matches_replaying_every_delta(tmp_path: Path) -> None:
     """The correctness claim: skipping the deltas loses no schema.
 
-    Each delta only moved an older DB toward a state the baseline now declares
-    outright, so replaying them over a fresh baseline yields the same tables and
-    indexes. A delta that adds schema the baseline does not declare fails here.
+    Every delta carries an older DB toward a state the baseline declares outright,
+    so replaying them over a fresh baseline yields the same tables and indexes. A
+    delta that adds schema the baseline does not declare fails here.
 
-    Only schema is compared. Row data diverges by one row: ``0033`` seeds a
-    ``backends`` row that a fresh DB no longer gets, and no code reads that table.
+    The comparison covers schema alone. The two DBs differ by one row: ``0033``
+    seeds a ``backends`` row on the replayed DB, and no code reads that table.
     """
     skipped = tmp_path / "skipped"
     _migrate(skipped)
@@ -175,16 +175,16 @@ def test_fresh_db_schema_matches_replaying_every_delta(tmp_path: Path) -> None:
 
     assert _recorded_migrations(replayed) == _recorded_migrations(skipped)
     assert _schema(replayed) == _schema(skipped)
-    # Both were built from the baseline, so no delta may even reorder a column.
+    # Both come from the baseline, so column order holds too.
     assert _column_order(replayed) == _column_order(skipped)
 
 
 def test_legacy_db_runs_every_unrecorded_delta(tmp_path: Path) -> None:
     """A DB seeded before the baseline scheme existed still migrates forward.
 
-    Column order is deliberately not compared: ``0041`` re-adds ``submitting_user``
-    with ``ALTER TABLE ... ADD COLUMN``, which appends it, while the baseline
-    declares it third.
+    The comparison covers column facts, not column order: ``0041`` re-adds
+    ``submitting_user`` with ``ALTER TABLE ... ADD COLUMN``, which appends it,
+    while the baseline declares it third.
     """
     fresh = tmp_path / "fresh"
     _migrate(fresh)

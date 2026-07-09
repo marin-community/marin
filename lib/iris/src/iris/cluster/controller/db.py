@@ -455,11 +455,10 @@ class ControllerDB:
 
         The current schema is materialized declaratively from ``schema.py``'s
         ``metadata`` / ``auth_metadata`` via ``Table.create_all`` — a single
-        ``0001_baseline`` step that runs once per DB. Pre-baseline history
-        (the original ``0001_init`` through the last pre-baseline migration)
-        is no longer carried as files; any prod DB seeded under that scheme
-        already has the schema, and we detect that case and self-heal by
-        recording the baseline marker without recreating anything.
+        ``0001_baseline`` step that runs once per DB. ``migrations/`` carries no
+        pre-baseline files; a prod DB seeded under that scheme already has the
+        schema, and we detect that case and self-heal by recording the baseline
+        marker without recreating anything.
 
         Anything in ``migrations/`` after baseline is a delta — a small Python
         module exposing ``migrate(raw_conn)`` — applied in lexicographic order
@@ -503,15 +502,11 @@ class ControllerDB:
                 finally:
                     auth_write.dispose()
                 logger.info("Baseline schema created in %.2fs", time.monotonic() - t0)
-                # The schema now matches every delta's post-state, so mark them
-                # applied in the same transaction as the baseline marker: a crash
-                # here leaves a DB that is either fully marked or unmarked, never
-                # one that replays deltas against the baseline.
+                # The baseline schema subsumes every delta's post-state.
                 recorded = [self.BASELINE_MIGRATION, *(path.name for path in self._delta_migration_paths())]
             else:
                 logger.info("Legacy DB detected; recording baseline marker without recreating schema")
-                # Pre-baseline prod DB: its schema predates the deltas, so record
-                # only the baseline marker and let the deltas it has not recorded run.
+                # A pre-baseline schema, so the deltas still have work to do.
                 recorded = [self.BASELINE_MIGRATION]
             self._record_migrations(recorded)
             applied_stems.update(Path(name).stem for name in recorded)
@@ -611,8 +606,7 @@ class ControllerDB:
                 raw_conn.commit()
                 logger.info("Migration %s applied in %.2fs", path.name, time.monotonic() - t0)
 
-                # Reuse the held connection: the pool_size=1 write pool cannot
-                # hand out a second one while this migration run holds it.
+                # The write pool has a single connection, already checked out here.
                 self._insert_migration_rows(raw_conn, [path.name])
         finally:
             raw_conn.commit()
