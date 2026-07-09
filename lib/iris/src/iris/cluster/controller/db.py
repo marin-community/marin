@@ -579,7 +579,7 @@ class ControllerDB:
             raise
 
     def _record_migrations(self, names: Sequence[str]) -> None:
-        """Mark ``names`` applied on a freshly checked-out write connection."""
+        """Mark ``names`` applied — all or none. Callers must not hold the write connection."""
         raw_conn = self._sa_write_engine.raw_connection()
         try:
             self._insert_migration_rows(raw_conn, names)
