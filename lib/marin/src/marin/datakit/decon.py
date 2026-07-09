@@ -56,6 +56,12 @@ from marin.execution.step_spec import StepSpec
 
 logger = logging.getLogger(__name__)
 
+# Bump when the ngram feature-extraction policy changes. Both the bloom build and
+# the corpus mark fold this into their step hash_attrs, so a policy change
+# re-addresses cached blooms/marks instead of silently reusing incompatible
+# features. v2 added the no-alphabetic-character ngram filter (marin#6852 cluster D).
+FEATURE_FILTER_VERSION = 2
+
 
 @dataclass(frozen=True)
 class NGramConfig:
@@ -148,10 +154,27 @@ def _bloom_hash(x: str) -> int:
     return int.from_bytes(hashlib.blake2b(x.encode(), digest_size=8).digest(), "big")
 
 
+def _has_alpha(ngram: str) -> bool:
+    """True if *ngram* contains any alphabetic character.
+
+    Cluster-D filter (marin#6852): a 13-gram with no letters — pure numeric
+    sequences (``1 , 2 , 3 …``), punctuation runs, form-field/index boilerplate —
+    carries no distinctive contamination signal but collides with number-list
+    eval items (HLE / MMLU-Pro math). Skipping these on *both* the bloom and the
+    mark side (both go through :func:`_extract_ngrams`) keeps the overlap
+    denominator consistent. Trade-off: drops recall on purely-numeric
+    contamination, which is acceptable — a bare number run is never a leak we can
+    attribute anyway.
+    """
+    return any(c.isalpha() for c in ngram)
+
+
 def _extract_ngrams(text: str, n: int, stride: int) -> Iterator[str]:
     tokens = text.split()
     for i in range(0, len(tokens) - n + 1, stride + 1):
-        yield " ".join(tokens[i : i + n])
+        ngram = " ".join(tokens[i : i + n])
+        if _has_alpha(ngram):
+            yield ngram
 
 
 def _extract_features(text: str, ngram: NGramConfig | None) -> Iterator[str]:
@@ -683,6 +706,7 @@ def build_eval_bloom_step(
         "text_field": text_field,
         "ngram_length": ngram_length,
         "overlap_threshold": overlap_threshold,
+        "feature_filter_version": FEATURE_FILTER_VERSION,
         "estimated_doc_count": estimated_doc_count,
         "false_positive_rate": false_positive_rate,
         # Raw paths aren't deps — fingerprint them so swapping a path
@@ -786,6 +810,7 @@ def decon_step(
         "text_field": text_field,
         "ngram_length": ngram_length,
         "overlap_threshold": overlap_threshold,
+        "feature_filter_version": FEATURE_FILTER_VERSION,
     }
 
     if prebuilt_bloom is not None:

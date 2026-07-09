@@ -15,6 +15,7 @@ from fray.local_backend import LocalClient
 from marin.datakit.decon import (
     EvalBloom,
     NGramConfig,
+    _extract_ngrams,
     bloom_paths,
     build_eval_bloom,
     decon_to_parquet,
@@ -923,6 +924,50 @@ def test_decon_to_parquet_requires_exactly_one_of_eval_or_prebuilt(fox_corpus):
 def test_merge_eval_blooms_requires_non_empty(tmp_path: Path):
     with pytest.raises(ValueError):
         merge_eval_blooms(per_eval_bloom_dirs=[], output_path=str(tmp_path / "out"))
+
+
+# --- cluster D: no-alphabetic-character ngram filter (marin#6852) ------------
+
+
+def test_extract_ngrams_drops_letterless_ngrams():
+    """A 13-gram with no alphabetic character is not emitted; one with a letter is.
+
+    Pins the cluster-D filter: pure numeric sequences and punctuation runs carry
+    no distinctive contamination signal but collide with number-list eval items.
+    """
+    numeric = "1 2 3 4 5 6 7 8 9 10 11 12 13 14 15"
+    assert list(_extract_ngrams(numeric, 13, 0)) == []
+    punct = ", . ; : - / ( ) [ ] { } < >"
+    assert list(_extract_ngrams(punct, 13, 0)) == []
+    # A single letter anywhere in the window keeps it (it now has real content).
+    mixed = "x 2 3 4 5 6 7 8 9 10 11 12 13"
+    assert list(_extract_ngrams(mixed, 13, 0)) == [mixed]
+
+
+def test_decon_skips_numeric_only_contamination(tmp_path: Path):
+    """Cluster D: a numeric-list eval item does NOT flag a verbatim numeric-list
+    corpus doc (no alphabetic 13-gram to key on), while a real textual overlap in
+    the same run is still flagged — confirming the filter costs no text recall.
+    """
+    numbers = "1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16"
+    text = "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu nu"
+    rows = _run_decon_one_shot(
+        tmp_path,
+        eval_records=[
+            {"id": "eval_numbers", "text": numbers},
+            {"id": "eval_text", "text": text},
+        ],
+        input_records=[
+            {"id": "doc_numbers", "partition_id": 0, "text": numbers},  # numeric-only → filtered → not flagged
+            {"id": "doc_text", "partition_id": 0, "text": text},  # real overlap → still flagged
+        ],
+        ngram=NGramConfig(ngram_length=13, overlap_threshold=0.5),
+    )
+    assert rows["doc_numbers"]["contaminated"] is False
+    assert rows["doc_numbers"]["max_overlap"] == 0.0
+    assert rows["doc_numbers"]["matched_hashes"] == []
+    assert rows["doc_text"]["contaminated"] is True
+    assert rows["doc_text"]["max_overlap"] == 1.0
 
 
 def test_merge_eval_blooms_rejects_size_mismatch(tmp_path: Path):
