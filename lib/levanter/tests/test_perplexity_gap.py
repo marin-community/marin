@@ -43,7 +43,8 @@ from levanter.analysis.perplexity_gap import (
 )
 from levanter.checkpoint import save_checkpoint
 from levanter.data.sharded_datasource import ShardedDataSource
-from levanter.data.text import DatasetComponent, TextLmDatasetFormat, UrlDatasetSourceConfig
+from levanter.data.text.datasets import DatasetComponent, UrlDatasetSourceConfig
+from levanter.data.text.formats import TextLmDatasetFormat
 from levanter.distributed import DistributedConfig
 from levanter.main.perplexity_gap import (
     GapFinderConfig,

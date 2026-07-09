@@ -38,7 +38,7 @@ from typing import Any
 
 import fsspec
 from fray.cluster import ResourceConfig
-from levanter.optim import AdamHConfig
+from levanter.optim.adamh import AdamHConfig
 from levanter.tracker.wandb import WandbConfig
 from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep, StepContext

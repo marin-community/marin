@@ -32,7 +32,7 @@ from levanter.kernels.pallas.splash_attention import DEFAULT_SPLASH_BLOCK_SIZE
 from levanter.layers.attention import AttentionBackend
 from levanter.models.flash_attention import BLOCK_SIZE as DEFAULT_FLASH_BLOCK_SIZE
 from levanter.models.lm_model import LmConfig, LmHeadModel
-from levanter.optim import OptimizerConfig
+from levanter.optim.config import OptimizerConfig
 from levanter.tokenizers import MarinTokenizer
 from levanter.trainer import Trainer, TrainerConfig
 from marin.rl import weight_transfer
@@ -287,7 +287,7 @@ class TrainWorker:
         print("Run id: ", config.run_id)
 
         config.trainer.id = f"{config.run_id}-train"
-        levanter.initialize(config.trainer)
+        levanter.trainer.initialize(config.trainer)
 
         self.config = config
         self._runtime = runtime

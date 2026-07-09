@@ -14,7 +14,7 @@ from dataclasses import dataclass, replace
 from typing import Any, TypeVar, cast
 
 from draccus.utils import DataclassInstance
-from fray import CpuConfig, ResourceConfig, TpuConfig
+from fray.types import CpuConfig, ResourceConfig, TpuConfig
 from levanter.adaptor import NoAdaptorConfig
 from levanter.checkpoint import CheckpointerConfig
 from levanter.main.train_dpo import TrainDpoConfig

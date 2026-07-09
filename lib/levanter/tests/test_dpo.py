@@ -25,14 +25,14 @@ from safetensors import safe_open
 from levanter.data.loader import DataLoader
 from levanter.data.dataset import ListAsyncDataset
 from levanter.data.mixture import MixtureDataset
-from levanter.data.text import (
-    DatasetComponent,
+from levanter.data.text.datasets import DatasetComponent
+from levanter.data.text.formats import TextLmDatasetFormat
+from levanter.data.text.preference import (
     DpoExample,
     PreferenceChatLmDatasetFormat,
     PreferenceChatProcessor,
     PreferenceLmDataConfig,
     PreferencePairDataset,
-    TextLmDatasetFormat,
 )
 from levanter.adaptor import AdaptorExportConfig, LoraAdaptorConfig, NoAdaptorConfig
 from levanter.dpo import (
@@ -64,7 +64,7 @@ from levanter.main.train_dpo import (
 from levanter.metrics import Metric
 from levanter.models.gpt2 import Gpt2Config, Gpt2LMHeadModel
 from levanter.models.lm_model import LmExample
-from levanter.optim import AdamConfig
+from levanter.optim.config import AdamConfig
 from levanter.optim.model_averaging import ModelAveraging
 from levanter.store.cache import SerialCacheWriter
 from levanter.tokenizers import MarinTokenizer, load_tokenizer as load_marin_tokenizer

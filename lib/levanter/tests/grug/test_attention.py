@@ -9,7 +9,7 @@ import pytest
 from jax.sharding import NamedSharding
 from jax.sharding import PartitionSpec as P
 
-from levanter.data.text import GrugLmExample
+from levanter.data.text.examples import GrugLmExample
 import levanter.grug.attention._fa4_thd as fa4_thd
 from levanter.grug.attention import (
     AttentionMask,

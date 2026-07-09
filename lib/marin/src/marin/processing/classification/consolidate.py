@@ -21,9 +21,10 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from enum import StrEnum
 
-from fray import ResourceConfig
+from fray.types import ResourceConfig
 from rigging.filesystem import StoragePath, rebase_file_path
-from zephyr import Dataset, ZephyrContext, ZephyrExecutionResult
+from zephyr.dataset import Dataset
+from zephyr.execution import ZephyrContext, ZephyrExecutionResult
 
 
 class FilterType(StrEnum):

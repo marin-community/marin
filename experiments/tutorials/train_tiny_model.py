@@ -14,8 +14,8 @@ mesh, the resumption checkpointer, the Fray dispatch); the same script runs on e
 
 import argparse
 
-from fray import ResourceConfig
-from levanter.optim import AdamConfig
+from fray.types import ResourceConfig
+from levanter.optim.config import AdamConfig
 from marin.execution.lazy import ArtifactStep, lower
 from marin.execution.step_runner import StepRunner
 from marin.experiment.data import pretokenized, tokenized

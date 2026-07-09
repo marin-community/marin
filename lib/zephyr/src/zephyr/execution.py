@@ -29,11 +29,11 @@ from typing import Any
 
 import cloudpickle
 import humanfriendly
-from fray import ActorConfig, ActorFuture, ActorHandle, Client, ResourceConfig, current_actor
-from fray.client import JobHandle
+from fray.actor import ActorFuture, ActorHandle, current_actor
+from fray.client import Client, JobHandle
 from fray.current_client import current_client, set_current_client
 from fray.local_backend import LocalClient
-from fray.types import Entrypoint, JobRequest
+from fray.types import ActorConfig, Entrypoint, JobRequest, ResourceConfig
 from iris.client import get_iris_ctx
 from iris.cluster.client.job_info import get_job_info
 from rigging.filesystem import StoragePath, TransferBudgetExceeded, marin_temp_bucket

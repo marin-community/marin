@@ -37,6 +37,7 @@ from rich.console import Console
 from rich.panel import Panel
 
 import levanter
+import levanter.config
 from levanter.checkpoint import latest_checkpoint_path, load_checkpoint
 from levanter.compat.hf_checkpoints import HFCheckpointConverter, load_tokenizer
 from levanter.tokenizers import MarinTokenizer

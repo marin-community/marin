@@ -27,7 +27,7 @@ import argparse
 import logging
 import os
 
-from fray import ResourceConfig
+from fray.types import ResourceConfig
 from marin.datakit.decon import build_eval_bloom_step, decon_step
 from marin.execution.step_runner import StepRunner
 from marin.execution.step_spec import StepSpec

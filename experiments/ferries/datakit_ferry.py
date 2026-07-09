@@ -11,7 +11,7 @@ import json
 import logging
 import os
 
-from fray import ResourceConfig
+from fray.types import ResourceConfig
 from marin.datakit.download.huggingface import download_hf_step
 from marin.datakit.normalize import NormalizedData, normalize_step
 from marin.execution.artifact import read_artifact

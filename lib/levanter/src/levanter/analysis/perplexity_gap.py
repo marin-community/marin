@@ -13,7 +13,8 @@ import regex
 from rigging.filesystem import StoragePath, open_url, prefix_join
 
 from levanter.data.sharded_datasource import ShardedDataSource
-from levanter.data.text import DatasetComponent, SupervisedLmDatasetFormat, TextLmDatasetFormat
+from levanter.data.text.datasets import DatasetComponent
+from levanter.data.text.formats import SupervisedLmDatasetFormat, TextLmDatasetFormat
 from levanter.tokenizers import MarinTokenizer, _safe_split_for_tokenizer
 
 

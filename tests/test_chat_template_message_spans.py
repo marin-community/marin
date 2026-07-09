@@ -4,11 +4,11 @@
 from itertools import pairwise
 
 import pytest
-from levanter.data.text import TraceChatProcessor
 from levanter.data.text.trace_chat import (
     TRACE_LABEL_ASSISTANT_TOOL_CALL,
     TRACE_LABEL_FINAL_ASSISTANT,
     TRACE_LABEL_OBSERVATION,
+    TraceChatProcessor,
 )
 from levanter.tokenizers import MarinTokenizer, load_tokenizer
 

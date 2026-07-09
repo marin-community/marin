@@ -25,7 +25,8 @@ from haliax.partitioning import ResourceMapping
 
 import levanter.tracker
 from levanter.callbacks import StepInfo
-from levanter.data import AsyncDataset, DataLoader
+from levanter.data.dataset import AsyncDataset
+from levanter.data.loader import DataLoader
 from levanter.data.text.examples import (
     GrugLmExample,
     LabeledLmExample,
