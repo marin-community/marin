@@ -57,9 +57,10 @@ from marin.utilities.json_encoder import CustomJsonEncoder
 logger = logging.getLogger(__name__)
 
 # Iris injects these into every task's environment (see
-# ``iris.cluster.runtime.env`` / ``iris.cluster.client.job_info``). Read them
-# directly rather than importing iris so the core executor keeps a light import
-# footprint and no import-time coupling to iris's proto machinery (#7080).
+# ``iris.cluster.runtime.env`` / ``iris.cluster.client.job_info``). The executor
+# reads them as a plain env lookup rather than via ``get_job_info()`` -- a pure
+# read with no dependency on iris's process-global JobInfo context -- to flag a
+# likely-unintended SPMD launch (#7080).
 IRIS_TASK_ID_ENV = "IRIS_TASK_ID"
 IRIS_NUM_TASKS_ENV = "IRIS_NUM_TASKS"
 
