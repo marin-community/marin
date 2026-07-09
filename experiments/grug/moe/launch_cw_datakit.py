@@ -50,7 +50,7 @@ _STORE_PREFIX = "datakit/store_8ac06c74"
 # block, while aligning cleanly with the heuristic batch size.
 _MIXTURE_BLOCK_SIZE = 49_152
 _PHASE_1_START_FRACTION = 0.8
-ENABLE_SIMULATED_EPOCHING = True
+ENABLE_SIMULATED_EPOCHING = os.environ.get("SCALE_SIM_EPOCH", "1") != "0"
 
 # Natural size of ``datakit/store_8ac06c74``: 167 mixable bucket caches + a 33-cache tail.
 _TARGET_BUDGET_TOKENS = 10_372_343_704_053

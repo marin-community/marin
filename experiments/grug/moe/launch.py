@@ -158,6 +158,10 @@ def run_grug_moe_trial(config: GrugMoeLaunchConfig) -> None:
     watch = (
         WatchConfig(watch_targets=[]) if os.environ.get("SCALE_WATCH") == "0" else WatchConfig(split_scan_layers=False)
     )
+    # SCALE_KEEP_STEPS>0 retains a permanent checkpoint every N steps (on top of the 20-min
+    # rolling temporary); 0 keeps only the trainer's forced final save.
+    keep_steps = env_int("SCALE_KEEP_STEPS", 0)
+    keep_policy = [dict(every=keep_steps)] if keep_steps > 0 else None
     trainer = TrainerConfig(
         id=config.run_id,
         seed=config.seed,
@@ -171,11 +175,11 @@ def run_grug_moe_trial(config: GrugMoeLaunchConfig) -> None:
         require_accelerator=True,
         allow_nondivisible_batch_size=False,
         initialize_from=initialize_from,
-        # Rolling temporary checkpoint every 20 min (preemption recovery); keep=None means no
-        # periodic permanent checkpoints -- only the trainer's forced final save at num_train_steps.
+        # Rolling temporary checkpoint every 20 min (preemption recovery). keep_policy adds a
+        # permanent checkpoint every SCALE_KEEP_STEPS steps (None = only the forced final save).
         checkpointer=config.checkpointer
         or resolve_checkpointer_output_path(
-            CheckpointerConfig(save_interval=timedelta(minutes=20), keep=None),
+            CheckpointerConfig(save_interval=timedelta(minutes=20), keep=keep_policy),
             config.output_path,
         ),
     )

@@ -76,6 +76,9 @@ GPUS_PER_NODE = 8  # H100s per gd-8xh100ib node; the batch-shard math and with_g
 # seq 2048 fits in 80GB while 512 x 4096 OOMs (~58GiB replicated tile).
 DEFAULT_SEQ_LEN = 2048
 DEFAULT_BATCH = 256
+# Local-attention window for the "short" layers. Fixed at 2048 so it is a real window at
+# seq_len > 2048 (every 4th layer + the last stay global via long_mask=sliding_window=None).
+SLIDING_WINDOW = 2048
 
 # Modest, schedule-stable Adam for a short scale/throughput run (not trained to
 # convergence). expert weights share the schedule; the goal is to exercise the
@@ -116,7 +119,9 @@ def build_scale_model() -> GrugModelConfig:
         num_kv_heads = max(1, num_heads // 4)
         while num_heads % num_kv_heads != 0:
             num_kv_heads -= 1
-    intermediate_dim = hidden_dim // 2  # expert FFN inner width (~d/2)
+    intermediate_dim = hidden_dim // 2  # routed expert FFN inner width (~d/2)
+    # Shared (always-on) expert width. Defaults to the full hidden_dim (2x a routed expert).
+    shared_intermediate_dim = env_int("SCALE_SHARED_INTERMEDIATE", hidden_dim)
     seq_len = env_int("SCALE_SEQ_LEN", DEFAULT_SEQ_LEN)
     remat_mode = os.environ.get("SCALE_REMAT", "recompute_all")
     if remat_mode not in ("recompute_all", "save_moe"):
@@ -137,11 +142,11 @@ def build_scale_model() -> GrugModelConfig:
         num_kv_heads=num_kv_heads,
         head_dim=HEAD_DIM,
         intermediate_dim=intermediate_dim,
-        shared_expert_intermediate_dim=intermediate_dim,
+        shared_expert_intermediate_dim=shared_intermediate_dim,
         num_experts=env_int("SCALE_NUM_EXPERTS", 128),
         num_experts_per_token=env_int("SCALE_TOP_K", 4),
         max_seq_len=seq_len,
-        sliding_window=seq_len,
+        sliding_window=SLIDING_WINDOW,
         remat_mode=cast(RematMode, remat_mode),
         moe_implementation=moe_impl,
         attention_implementation=attn_impl,
