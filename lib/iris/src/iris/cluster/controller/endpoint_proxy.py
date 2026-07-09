@@ -41,10 +41,13 @@ modern Python frameworks honor to mount themselves under the ``/proxy/<name>``
 prefix. Subdomain-style mode does not set ``X-Forwarded-Prefix``: the
 upstream effectively owns the whole origin.
 
-An upstream ``401`` is translated to a ``502`` (upstream body kept as the error
-detail). The browser never authenticates to the upstream directly, so an
+An upstream ``401`` is translated to a ``502``, keeping the first
+:data:`_MAX_UPSTREAM_ERROR_DETAIL_BYTES` of the upstream body as the error
+detail. The browser never authenticates to the upstream directly, so an
 upstream 401 is not an auth challenge to the browser; relaying it verbatim makes
-the dashboard mistake it for an iris auth challenge and pop its login modal.
+the dashboard mistake it for an iris auth challenge and pop its login modal. The
+controller's own ``/proxy`` access check runs before a request reaches this
+module, so a genuine iris auth challenge still reaches the browser as a ``401``.
 
 ``Location`` and ``Content-Location`` response headers are rewritten so 3xx
 redirects (and any other absolute-URL hints) keep the browser inside the
@@ -119,6 +122,23 @@ _LOCATION_HEADERS: frozenset[str] = frozenset({"location", "content-location"})
 # surfaces as an uncaught 500. Dashboard-proxy traffic is low, so a fresh
 # connection per request is a fine trade for eliminating that flakiness.
 _HTTPX_LIMITS = httpx.Limits(max_connections=100, max_keepalive_connections=0)
+
+# How much of a rejected upstream's response body is echoed back as the proxy's
+# error detail. Bounds the buffering an upstream can force on the controller.
+_MAX_UPSTREAM_ERROR_DETAIL_BYTES = 2048
+
+
+async def _read_error_detail(response: httpx.Response) -> str:
+    """Read the head of a streamed error body as text, capped and stripped."""
+    chunks: list[bytes] = []
+    read = 0
+    async for chunk in response.aiter_bytes():
+        chunks.append(chunk)
+        read += len(chunk)
+        if read >= _MAX_UPSTREAM_ERROR_DETAIL_BYTES:
+            break
+    body = b"".join(chunks)[:_MAX_UPSTREAM_ERROR_DETAIL_BYTES]
+    return body.decode("utf-8", errors="replace").strip()
 
 
 def _build_forwarded_headers(request: Request, *, proxy_prefix: str) -> dict[str, str]:
@@ -314,13 +334,14 @@ class EndpointProxy:
         # never authenticated to the upstream (Authorization is stripped
         # client -> upstream), so a verbatim relay misdirects the user. Translate
         # it to a 502 — the controller was authorized; its gateway call upstream
-        # was refused — keeping the upstream body as the error detail.
+        # was refused — folding the upstream body into the error the client reads.
         if upstream_resp.status_code == 401:
-            detail = (await upstream_resp.aread()).decode("utf-8", errors="replace")
+            detail = await _read_error_detail(upstream_resp)
             await upstream_resp.aclose()
             logger.warning("Proxy upstream 401 for %s -> 502: %s", encoded_name, detail)
+            refused = f"Upstream '{encoded_name}' refused the controller (401)"
             return JSONResponse(
-                {"error": f"Upstream '{encoded_name}' refused the controller (401)", "detail": detail},
+                {"error": f"{refused}: {detail}" if detail else refused},
                 status_code=502,
             )
 
