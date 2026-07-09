@@ -287,7 +287,11 @@ mod tests {
     use arrow::datatypes::{DataType, Field, Schema as ArrowSchema};
 
     use super::*;
-    use crate::store::segment::{read_segment_footer, write_segment_to_dir};
+    use crate::store::compaction::config::CompactionConfig;
+    use crate::store::compaction::planner::plan;
+    use crate::store::segment::{
+        read_segment_footer, segment_uncompressed_bytes, write_segment_to_dir,
+    };
     use crate::store::types::{seg_filename, SegmentRow};
 
     fn tempdir(tag: &str) -> PathBuf {
@@ -402,6 +406,58 @@ mod tests {
         let mut sorted = keyed.clone();
         sorted.sort();
         assert_eq!(keyed, sorted, "globally sorted by (key, seq)");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The compaction memory ceiling, driven by real parquet footers rather than
+    /// the on-disk (compressed) size: a segment that alone decodes past
+    /// `max_merge_uncompressed_bytes` is isolated into a one-input job, which
+    /// `run_job` resolves to a rename — no read, no merge, no memory. Merging it
+    /// instead is what OOM-killed the `log` namespace's container. Raising the
+    /// ceiling over the pair's combined size must merge them as usual, so the
+    /// ceiling (not an off-by-one) is what decides.
+    #[test]
+    fn segment_over_memory_ceiling_is_promoted_by_rename_not_merged() {
+        let dir = tempdir("ceiling");
+        let big: Vec<(i64, i64, &str)> = (1..=20_000)
+            .map(|s| (s, 20_001 - s, "a-log-line-wide-enough-to-decode"))
+            .collect();
+        let (p_big, _) = write_segment_to_dir(&dir, 0, 1, &batch(&big)).unwrap();
+        let (p_small, _) =
+            write_segment_to_dir(&dir, 0, 20_001, &batch(&[(20_001, 7, "s")])).unwrap();
+
+        let big_decoded = segment_uncompressed_bytes(&p_big).unwrap();
+        let small_decoded = segment_uncompressed_bytes(&p_small).unwrap();
+        assert!(
+            big_decoded > small_decoded,
+            "footer must report the decoded size, not the compressed one"
+        );
+
+        let rows = vec![
+            row_for(&p_big.to_string_lossy(), 0, 1, 20_000, 100),
+            row_for(&p_small.to_string_lossy(), 0, 20_001, 20_001, 100),
+        ];
+        let footer_size = |r: &SegmentRow| {
+            segment_uncompressed_bytes(Path::new(&r.path)).expect("readable footer")
+        };
+        // Count-promote the run so the compressed target never decides the prefix.
+        let config = |ceiling: i64| CompactionConfig {
+            level_targets: vec![i64::MAX],
+            max_segments_per_level: 2,
+            max_merge_uncompressed_bytes: ceiling,
+            ..Default::default()
+        };
+
+        // Ceiling below the big segment alone: isolated, and promoted by rename.
+        let job = plan(&config(big_decoded - 1), &rows, footer_size).unwrap();
+        assert_eq!(job.inputs.len(), 1, "oversized segment must be isolated");
+        let swap = run_job(&job, &dir, &schema(), Some("key"), &[], |_| (None, None)).unwrap();
+        assert!(swap.bump_rename.is_some(), "single-input job is a rename");
+        assert!(!swap.unlink_removed, "a rename leaves nothing to unlink");
+
+        // Ceiling above the pair: both merge, exactly as before the ceiling existed.
+        let job = plan(&config(big_decoded + small_decoded), &rows, footer_size).unwrap();
+        assert_eq!(job.inputs.len(), 2);
         std::fs::remove_dir_all(&dir).ok();
     }
 
