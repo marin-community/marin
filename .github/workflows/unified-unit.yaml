@@ -270,8 +270,8 @@ jobs:
           retention-days: 14
           if-no-files-found: ignore
 
-  unified_unit:
-    name: unified-unit
+  unit_tests:
+    name: unit-tests
     needs: [select, unit, levanter_torch, levanter_tpu, iris_e2e_smoke]
     if: always()
     runs-on: ubuntu-latest

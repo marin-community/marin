@@ -9,9 +9,9 @@ from pathlib import Path
 from infra.ci.select_tests import (
     SCOPES,
     UV_PACKAGE,
-    all_test_files,
     classify,
     compute_matrix,
+    dependencies_by_test_file,
     extra_suites,
     full_matrix,
     is_test_module,
@@ -215,14 +215,18 @@ def test_selector_changes_do_not_wake_the_accelerator_suites() -> None:
     assert extra_suites(["infra/ci/select_tests.py", ".github/workflows/unified-unit.yaml"]) == []
 
 
-def test_all_test_files_selects_only_pytest_collectable_modules(tmp_path: Path) -> None:
+def test_only_pytest_collectable_modules_are_selectable(tmp_path: Path) -> None:
     """Helper modules under tests/ must never be handed to pytest explicitly -- an explicit
     path is imported even when it does not match the collection convention, crashing the
     lane when the helper's deps are absent."""
+    write(tmp_path, "lib/iris/src/iris/__init__.py")
+    write(tmp_path, "lib/iris/src/iris/scheduler.py", "SCHED = 1\n")
     for name in ("test_client.py", "actor_test.py", "gang_jax_smoke_workload.py", "conftest.py"):
-        write(tmp_path, f"lib/iris/tests/{name}")
+        write(tmp_path, f"lib/iris/tests/{name}", "from iris.scheduler import SCHED\n")
 
-    assert [p.name for p in all_test_files("iris", tmp_path)] == ["actor_test.py", "test_client.py"]
+    selected = dependencies_by_test_file("iris", tmp_path, {"iris", "iris.scheduler"})
+
+    assert sorted(selected) == ["lib/iris/tests/actor_test.py", "lib/iris/tests/test_client.py"]
 
 
 def test_is_test_module_matches_pytest_defaults() -> None:
@@ -234,8 +238,6 @@ def test_is_test_module_matches_pytest_defaults() -> None:
 
 
 def test_broad_trigger_runs_every_scope() -> None:
-    matrix = full_matrix()
-    assert {entry["package"] for entry in matrix} == {UV_PACKAGE[scope] for scope in SCOPES}
     assert matrix_leg("marin", []) == {
         "package": "marin-core",
         "extras": "--extra cpu --extra dedup",

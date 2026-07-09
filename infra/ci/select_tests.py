@@ -125,12 +125,10 @@ def ancestors(dotted: str) -> list[str]:
     return [".".join(parts[: i + 1]) for i in range(len(parts))]
 
 
-def _absolute_base(node: ast.ImportFrom, module_name: str | None, is_package: bool) -> str:
+def _absolute_base(node: ast.ImportFrom, module_name: str, is_package: bool) -> str:
     """Absolute dotted prefix named by a ``from ... import`` statement."""
     if node.level == 0:
         return node.module or ""
-    if module_name is None:
-        return ""
     package = module_name if is_package else module_name.rsplit(".", 1)[0] if "." in module_name else ""
     parts = package.split(".") if package else []
     up = node.level - 1
@@ -140,16 +138,14 @@ def _absolute_base(node: ast.ImportFrom, module_name: str | None, is_package: bo
     return ".".join(base_parts + (node.module.split(".") if node.module else []))
 
 
-def imported_names(path: Path, module_name: str | None = None) -> set[str]:
+def imported_names(path: Path, module_name: str) -> set[str]:
     """Absolute dotted names referenced by top-level import statements.
 
     ``from a.b import c`` yields both ``a.b`` and the candidate ``a.b.c``: the caller
-    decides which of those is a real module. Returns an empty set on parse errors.
+    decides which of those is a real module. A file that will not parse would silently
+    drop its edges from the graph, under-selecting tests, so the SyntaxError propagates.
     """
-    try:
-        tree = ast.parse(path.read_text(encoding="utf-8", errors="replace"), filename=str(path))
-    except SyntaxError:
-        return set()
+    tree = ast.parse(path.read_text(encoding="utf-8", errors="replace"), filename=str(path))
 
     names: set[str] = set()
     is_package = path.name == "__init__.py"
@@ -230,14 +226,6 @@ def is_test_module(filename: str) -> bool:
     return (filename.startswith("test_") or filename.endswith("_test.py")) and filename.endswith(".py")
 
 
-def all_test_files(scope: str, repo_root: Path) -> list[Path]:
-    """All pytest-collectable test modules in a scope's test directory."""
-    test_dir = repo_root / TEST_DIR[scope]
-    if not test_dir.exists():
-        return []
-    return sorted(p for p in test_dir.rglob("*.py") if is_test_module(p.name))
-
-
 def _test_tree(scope: str, repo_root: Path) -> dict[str, Path]:
     """Every .py under a scope's test directory, keyed by the name it imports itself as.
 
@@ -283,7 +271,7 @@ def _tree_dependencies(
     return dependencies
 
 
-def test_dependencies(scope: str, repo_root: Path, known: set[str]) -> dict[str, set[str]]:
+def dependencies_by_test_file(scope: str, repo_root: Path, known: set[str]) -> dict[str, set[str]]:
     """Collectable test file (repo-relative) -> workspace modules it transitively imports."""
     tree = _test_tree(scope, repo_root)
     cache: dict[str, set[str]] = {}
@@ -423,7 +411,7 @@ def compute_matrix(
 
         selected = list(direct_tests.get(scope, []))
         if affected:
-            for test_file, dependencies in test_dependencies(scope, repo_root, known).items():
+            for test_file, dependencies in dependencies_by_test_file(scope, repo_root, known).items():
                 if test_file not in selected and dependencies & affected:
                     selected.append(test_file)
 
@@ -434,7 +422,7 @@ def compute_matrix(
 
 
 def full_matrix() -> list[dict[str, str]]:
-    """Matrix for --force-run-all: every scope with the full suite directory."""
+    """Every scope, each running its full suite directory."""
     return [matrix_leg(scope, []) for scope in SCOPES]
 
 
