@@ -24,6 +24,7 @@ from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from rigging.timing import Duration, Timestamp
 
+from iris.cluster.bundle import BundleStore
 from iris.cluster.constraints import BACKEND_CONSTRAINT_KEY, CLUSTER_CONSTRAINT_KEY
 from iris.cluster.federation.peer import FederationPeer
 from iris.cluster.federation.router import PeerRouter, RoutingRequest, SubmitRouting
@@ -62,6 +63,7 @@ class FederationManager:
         *,
         threads: ThreadContainer,
         store: FederationStore | None = None,
+        bundles: BundleStore | None = None,
         cluster_id: str = "",
         heartbeat_interval: Duration = DEFAULT_HEARTBEAT_INTERVAL,
         sync_interval: Duration = DEFAULT_SYNC_INTERVAL,
@@ -69,6 +71,7 @@ class FederationManager:
         self._peers = {peer.peer_id: peer for peer in peers}
         self._threads = threads
         self._store = store
+        self._bundles = bundles
         self._cluster_id = cluster_id
         self._heartbeat_interval = heartbeat_interval
         self._sync_interval = sync_interval
@@ -304,10 +307,10 @@ class FederationManager:
         if peer is None:
             logger.warning("Cannot hand off %s: peer %s is not configured", spec.local_job_id, spec.peer_id)
             return None
-        handoff = self._build_handoff_request(
-            spec.request, spec.local_job_id, spec.owner_principal, spec.submitting_user
-        )
         try:
+            handoff = self._build_handoff_request(
+                spec.request, spec.local_job_id, spec.owner_principal, spec.submitting_user
+            )
             peer.launch_job(handoff)
         except ConnectError as exc:
             # The peer answers a rejected handoff the same way every time — a name
@@ -324,6 +327,8 @@ class FederationManager:
             )
             return exc
         except (ConnectionError, OSError) as exc:
+            # Also covers a blob this cluster's bundle store could not read back for
+            # the handoff; a later attempt can still succeed.
             logger.warning("Handoff of %s to peer %s failed (will retry): %s", spec.local_job_id, spec.peer_id, exc)
             return None
         self._store.mark_handed_off(spec.local_job_id)
@@ -372,7 +377,28 @@ class FederationManager:
                 submitting_user=submitting_user,
             )
         )
+        self._inline_blobs(handoff)
         return handoff
+
+    def _inline_blobs(self, handoff: controller_pb2.Controller.LaunchJobRequest) -> None:
+        """Carry the bytes behind every content id, which only this cluster can resolve.
+
+        ``launch_job`` replaces the submitted workspace bundle and any large workdir
+        file with a content id in this cluster's bundle store, and a task fetches its
+        bundle from the controller that runs it. A peer reads its own store, so the
+        handoff carries the bytes; the peer re-externalizes them under the same
+        content ids on the way in.
+        """
+        refs = dict(handoff.entrypoint.workdir_file_refs)
+        if not handoff.bundle_id and not refs:
+            return
+        assert self._bundles is not None, "federating a job that references blobs needs a bundle store"
+        if handoff.bundle_id:
+            handoff.bundle_blob = self._bundles.get(handoff.bundle_id)
+            handoff.ClearField("bundle_id")
+        for name, blob_id in refs.items():
+            handoff.entrypoint.workdir_files[name] = self._bundles.get(blob_id)
+        handoff.entrypoint.ClearField("workdir_file_refs")
 
     def _build_summary(self, peer: FederationPeer) -> controller_pb2.Controller.PeerSummary:
         heartbeat = peer.heartbeat()

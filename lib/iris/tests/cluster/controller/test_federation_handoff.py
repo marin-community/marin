@@ -17,14 +17,14 @@ from contextlib import ExitStack
 import pytest
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
-from iris.cluster.bundle import BundleStore
+from iris.cluster.bundle import BundleStore, content_id
 from iris.cluster.config import PeerConfig
 from iris.cluster.constraints import CLUSTER_CONSTRAINT_KEY, Constraint, ConstraintOp
 from iris.cluster.controller import reads, writes
 from iris.cluster.controller.auth import ControllerAuth
 from iris.cluster.controller.endpoint_service import EndpointServiceImpl
 from iris.cluster.controller.federation_store import ControllerFederationStore
-from iris.cluster.controller.service import ControllerServiceImpl, _peer_status
+from iris.cluster.controller.service import WORKDIR_FILE_OFFLOAD_THRESHOLD, ControllerServiceImpl, _peer_status
 from iris.cluster.federation.manager import FederationManager
 from iris.cluster.federation.peer import FederationPeer
 from iris.cluster.federation.store import HandoffAdmission, HandoffSpec, HandoffState
@@ -148,7 +148,13 @@ def _attach_federation(
     store = ControllerFederationStore(
         parent_service._db,
     )
-    manager = FederationManager([peer], threads=get_thread_container(), store=store, cluster_id="parent")
+    manager = FederationManager(
+        [peer],
+        threads=get_thread_container(),
+        store=store,
+        bundles=parent_service._bundle_store,
+        cluster_id="parent",
+    )
     parent_service._controller.federation = manager
     return manager
 
@@ -190,6 +196,43 @@ def _run_peer_task_to_success(peer_state: ControllerTestState, job_id: JobName) 
     (task,) = query_tasks_for_job(peer_state, job_id)
     dispatch_task(peer_state, task, worker)
     transition_task(peer_state, task.task_id, job_pb2.TASK_STATE_SUCCEEDED)
+
+
+# ---------------------------------------------------------------------------
+# blobs: a content id resolves only against the store that minted it
+# ---------------------------------------------------------------------------
+
+
+def test_a_federated_job_carries_its_workspace_bundle_to_the_peer(tmp_path, log_client):
+    """The peer's tasks fetch the bundle from the peer's own store, so the handoff
+    carries the bytes rather than the parent's content id."""
+    blob = b"PK\x03\x04 pretend workspace zip"
+    with ExitStack() as stack:
+        parent_service, _ = _make_service(stack, "parent", tmp_path, log_client)
+        peer_service, _ = _make_service(stack, "peer", tmp_path, log_client)
+        _attach_federation(parent_service, _InProcessPeerConnection(peer_service))
+
+        request = _cluster_pinned_request("fed-bundle")
+        request.bundle_blob = blob
+        parent_service.launch_job(request, None)
+
+        assert peer_service._bundle_store.get(content_id(blob)) == blob
+
+
+def test_a_federated_job_carries_its_externalized_workdir_files_to_the_peer(tmp_path, log_client):
+    """A workdir file large enough to be externalized becomes a content id in the
+    parent's store; the peer must receive the bytes, not that id."""
+    big = b"x" * (WORKDIR_FILE_OFFLOAD_THRESHOLD + 1)
+    with ExitStack() as stack:
+        parent_service, _ = _make_service(stack, "parent", tmp_path, log_client)
+        peer_service, _ = _make_service(stack, "peer", tmp_path, log_client)
+        _attach_federation(parent_service, _InProcessPeerConnection(peer_service))
+
+        request = _cluster_pinned_request("fed-workdir")
+        request.entrypoint.workdir_files["big.bin"] = big
+        parent_service.launch_job(request, None)
+
+        assert peer_service._bundle_store.get(content_id(big)) == big
 
 
 # ---------------------------------------------------------------------------

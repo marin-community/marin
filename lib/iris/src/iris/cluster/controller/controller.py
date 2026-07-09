@@ -396,12 +396,14 @@ class Controller:
             if config.peers and config.auth and config.auth.jwt_manager
             else None
         )
+        self._bundle_store = BundleStore(storage_dir=f"{config.remote_state_dir.rstrip('/')}/bundles")
         self._federation = FederationManager(
             build_peers(config.peers, federation_token_provider=federation_token_provider),
             threads=self._threads,
             store=ControllerFederationStore(
                 self._db,
             ),
+            bundles=self._bundle_store,
             cluster_id=config.cluster_id,
             heartbeat_interval=config.federation_heartbeat_interval,
         )
@@ -451,8 +453,6 @@ class Controller:
         # ``find_prunable`` relies on this to keep every ``workers`` row tracked.
         self._seed_backend_liveness()
         self._db.register_reopen_hook(self._seed_backend_liveness)
-
-        self._bundle_store = BundleStore(storage_dir=f"{config.remote_state_dir.rstrip('/')}/bundles")
 
         self._endpoint_service = EndpointServiceImpl(
             db=self._db,
