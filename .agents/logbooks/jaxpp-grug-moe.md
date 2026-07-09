@@ -19,6 +19,7 @@ author: dlwh
 - Best completed `std_1f1b` seq4096 point: explicit MPMD, 24 layers, 256 experts, top-k 4, batch 96, four stages, 4 microbatches, `0.70` prealloc. Run `/dlwh/iris-run-job-20260708-224507/grug-train-jaxpp-explicit-perf-l24-e256-b96-s4096-xla070-20260708-1545` reported `167,681.85` tokens/s, `2,366,084.23` GFLOP/s, and mean MFU `7.4980`.
 - Profile captured for explicit MPMD GPipe at the stable batch-96 seq4096 point after commit `a0f8130985` (`[grug] Upload explicit MPMD profile artifacts`). W&B run: <https://wandb.ai/marin-community/marin_moe/runs/jaxpp-explicit-profile-l24-e256-b96-s4096-gpipe-xla070-artifact-20260709-0018>. Artifact: `marin-community/marin_moe/jaxpp-explicit-profile-l24-e256-b96-s4096-gpipe-xla070-artifact-20260709-0018-profiler:v0`.
 - Profile readout: communication-dominated exclusive timeline, with `48.75%` communication, `45.10%` compute, and `6.15%` stall. Largest exclusive kernel is `ncclDevKernel_SendRecv` (`104` calls, about `7.35s` total exclusive in the profile window), followed by all-gather and reduce-scatter collectives.
+- Follow-up explicit MPMD `std_1f1b` profile at the same 24L/256E/seq4096/batch96 shape also remains communication dominated. W&B run: <https://wandb.ai/marin-community/marin_moe/runs/jaxpp-explicit-profile-l24-e256-b96-s4096-std1f1b-xla070-artifact-20260709-0506>. It reported mean MFU `7.2713`; profile breakdown was `47.40%` communication, `46.91%` compute, and `5.69%` stall. `SendRecv` remained the top op, with average exclusive duration `64.5ms` versus `70.7ms` in the GPipe profile. The raw trace totals are not directly comparable because the `std_1f1b` trace captured a longer wall window than the GPipe trace.
 - Automatic JaxPP schedules remain blocked. Moving batch reshaping outside the JaxPP trace fixed the earlier after-loop batch placement assertion, and the opt-in const-sharding patch gets reduced `std_1f1b` past JaxPP explicit sharding inference. The current blocker is later input placement: JaxPP attempts to `device_put` a stage-local expert weight with a global `NamedSharding` whose mesh still includes the non-addressable `pipeline` axis. Automatic `eager_1f1b` at the full 61B shape also failed during full-state init before training.
 
 ## Hypothesis Queue
@@ -1334,3 +1335,45 @@ author: dlwh
   - <https://github.com/marin-community/marin/issues/7024#issuecomment-4920404840>
 - Next action:
   - Treat pipeline send/recv as the first optimization target. Candidate next tests are reducing activation transfer volume, improving overlap, or increasing useful compute per pipeline transfer, then re-profiling the same batch96 seq4096 shape.
+
+### 2026-07-08 23:45 PDT - std1f1b profile comparison and main merge
+- Hypothesis: If the GPipe profile's `SendRecv` time is mostly pipeline-rendezvous wait, explicit `std_1f1b` at the same 24L/256E/seq4096/batch96 shape should show less exposed communication or better overlap.
+- Commit Hash:
+  - Profile code baseline: `fb7965b783` plus prior profile artifact commit `a0f8130985`.
+  - Branch update: merged `origin/main` at `233b4bf658`.
+- Commands:
+  - Merge: `git fetch origin main && git merge --no-edit origin/main`
+  - Launch:
+    - `TF_GPU_ALLOCATOR=cuda_malloc_async experiments/grug/moe/run_cw_jaxpp_may_d2560.sh --submit --schedule std_1f1b --implementation explicit_mpmd --physical-stages 4 --logical-stages 4 --microbatches 4 --nodes 4 --gpus-per-replica 8 --expert-axis 8 --layers 24 --experts 256 --top-k 4 --batch 96 --seq-len 4096 --vocab-size 8192 --moe-implementation ring --loss-implementation xla --steps 14 --tracker wandb --xla-memory-fraction 0.70 --profiler-steps 6 --run-id jaxpp-explicit-profile-l24-e256-b96-s4096-std1f1b-xla070-artifact-20260709-0506`
+  - Download artifact:
+    - W&B API download of `marin-community/marin_moe/jaxpp-explicit-profile-l24-e256-b96-s4096-std1f1b-xla070-artifact-20260709-0506-profiler:v0` into `scratch/profiles/jaxpp_profile_b96_std1f1b_artifact`.
+  - Summarize/report:
+    - `uv run python lib/marin/tools/profile_summary.py summarize --profile-dir scratch/profiles/jaxpp_profile_b96_std1f1b_artifact --breakdown-mode exclusive_global --output scratch/jaxpp_profile_b96_std1f1b_artifact_summary.json`
+    - `uv run python lib/marin/tools/profile_summary.py report --summary scratch/jaxpp_profile_b96_std1f1b_artifact_summary.json --output scratch/jaxpp_profile_b96_std1f1b_artifact_report.md`
+  - Compare:
+    - `uv run python lib/marin/tools/profile_summary.py compare --before scratch/jaxpp_profile_b96_gpipe_artifact_summary.json --after scratch/jaxpp_profile_b96_std1f1b_artifact_summary.json > scratch/jaxpp_profile_b96_gpipe_vs_std1f1b_compare.md`
+- Config:
+  - Explicit MPMD `std_1f1b`, 4 physical/logical stages, 4 microbatches, d2560, 24 layers, 256 experts, top-k 4, seq4096, batch96, ring MoE, XLA loss, 4x 8xH100 east02, `XLA_PYTHON_CLIENT_MEM_FRACTION=0.70`, `TF_GPU_ALLOCATOR=cuda_malloc_async`.
+- Result:
+  - Parent launcher: `/dlwh/iris-run-job-20260709-050611`.
+  - Child training job: `/dlwh/iris-run-job-20260709-050611/grug-train-jaxpp-explicit-profile-l24-e256-b96-s4096-std1f1b-xla070-artifact-20260709-0506`.
+  - The child waited in Kueue `SchedulingGated` for about 85 minutes, then ran and succeeded on all 4 tasks.
+  - W&B: <https://wandb.ai/marin-community/marin_moe/runs/jaxpp-explicit-profile-l24-e256-b96-s4096-std1f1b-xla070-artifact-20260709-0506>
+  - Artifact: `marin-community/marin_moe/jaxpp-explicit-profile-l24-e256-b96-s4096-std1f1b-xla070-artifact-20260709-0506-profiler:v0`
+  - W&B metrics: loss `8.137009620666504`, tokens/s `165,358.39`, GFLOP/s `2,333,298.90`, mean MFU `7.271346232021006`, `mfu_sample_count=13`, params `61,354,855,424`.
+  - Local files:
+    - `scratch/profiles/jaxpp_profile_b96_std1f1b_artifact`
+    - `scratch/jaxpp_profile_b96_std1f1b_artifact_summary.json`
+    - `scratch/jaxpp_profile_b96_std1f1b_artifact_report.md`
+    - `scratch/jaxpp_profile_b96_gpipe_vs_std1f1b_compare.md`
+  - Profile overview: complete events `3,171,418`, total events `3,262,438`, no suspected truncation, no step markers counted.
+  - Time breakdown: communication `47.40%`, compute `46.91%`, stall `5.69%`.
+  - Communication breakdown: send-recv count `624`, total exclusive `40,255,675.58`, average `64,512.30`; all-gather count `7,680`, total `6,790,019.96`; reduce-scatter count `4,416`, total `4,984,968.49`; all-reduce count `3,648`, total `1,406,057.17`.
+  - Top pre-op gap is before `ncclDevKernel_SendRecv`: `593` gaps, total `260,493,025.13`, max `2,388,744.05`, average `439,279.98`.
+- Interpretation:
+  - `std_1f1b` is not a clear fix for the pipeline-rendezvous bottleneck. Its MFU is slightly above the GPipe profiled run (`7.2713` vs `7.2239`), and its comm share is slightly lower (`47.40%` vs `48.75%`), but `SendRecv` remains the dominant top op.
+  - Raw aggregate durations and counts should not be compared directly: the `std_1f1b` trace window was about `15.5s`, while the prior GPipe trace was about `3.1s`. Normalize by shares and per-call averages instead.
+  - Per-call `SendRecv` average is slightly lower in `std_1f1b` (`64.5ms`) than GPipe (`70.7ms`), but the large pre-op gaps before `SendRecv` are worse on average in this trace. The bottleneck still looks like stage dependency/rendezvous wait more than raw network bandwidth.
+  - After merging `origin/main`, the CoreWeave Iris configs expect consolidated kubeconfig contexts under `~/.kube/coreweave-iris`. This machine still has split/older kubeconfigs; direct rno2a/usw09b API hostnames from `~/.kube/cw-rno2a.yaml` and `~/.kube/cw-usw09b.yaml` currently fail DNS resolution from the local environment.
+- Next action:
+  - Do not treat `std_1f1b` alone as the communication fix. The next optimization target remains reducing pipeline boundary transfer/wait: smaller activation payloads, different layer/stage partitioning, more useful compute per transfer, or explicit overlap improvements.
