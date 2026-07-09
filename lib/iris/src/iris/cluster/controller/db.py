@@ -563,21 +563,26 @@ class ControllerDB:
             return []
         return [path for path in sorted(migrations_dir.glob("*.py")) if not path.name.startswith("__")]
 
+    @staticmethod
+    def _insert_migration_rows(raw_conn, names: Sequence[str]) -> None:
+        """Mark ``names`` applied on ``raw_conn`` in one transaction — all or none."""
+        raw_conn.execute("BEGIN IMMEDIATE")
+        try:
+            now_ms = Timestamp.now().epoch_ms()
+            raw_conn.executemany(
+                "INSERT INTO schema_migrations(name, applied_at_ms) VALUES (?, ?)",
+                [(name, now_ms) for name in names],
+            )
+            raw_conn.commit()
+        except Exception:
+            raw_conn.execute("ROLLBACK")
+            raise
+
     def _record_migrations(self, names: Sequence[str]) -> None:
-        """Mark ``names`` applied in one transaction — all or none."""
+        """Mark ``names`` applied on a freshly checked-out write connection."""
         raw_conn = self._sa_write_engine.raw_connection()
         try:
-            raw_conn.execute("BEGIN IMMEDIATE")
-            try:
-                now_ms = Timestamp.now().epoch_ms()
-                raw_conn.executemany(
-                    "INSERT INTO schema_migrations(name, applied_at_ms) VALUES (?, ?)",
-                    [(name, now_ms) for name in names],
-                )
-                raw_conn.commit()
-            except Exception:
-                raw_conn.execute("ROLLBACK")
-                raise
+            self._insert_migration_rows(raw_conn, names)
         finally:
             raw_conn.close()
 
@@ -606,16 +611,9 @@ class ControllerDB:
                 raw_conn.commit()
                 logger.info("Migration %s applied in %.2fs", path.name, time.monotonic() - t0)
 
-                raw_conn.execute("BEGIN IMMEDIATE")
-                try:
-                    raw_conn.execute(
-                        "INSERT INTO schema_migrations(name, applied_at_ms) VALUES (?, ?)",
-                        (path.name, Timestamp.now().epoch_ms()),
-                    )
-                    raw_conn.commit()
-                except Exception:
-                    raw_conn.execute("ROLLBACK")
-                    raise
+                # Reuse the held connection: the pool_size=1 write pool cannot
+                # hand out a second one while this migration run holds it.
+                self._insert_migration_rows(raw_conn, [path.name])
         finally:
             raw_conn.commit()
             raw_conn.execute("PRAGMA synchronous=NORMAL")

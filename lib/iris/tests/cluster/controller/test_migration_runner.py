@@ -161,8 +161,11 @@ def test_fresh_db_schema_matches_replaying_every_delta(tmp_path: Path) -> None:
     """The correctness claim: skipping the deltas loses no schema.
 
     Each delta only moved an older DB toward a state the baseline now declares
-    outright, so replaying them over a fresh baseline changes nothing. A delta
-    that adds schema the baseline does not declare fails here.
+    outright, so replaying them over a fresh baseline yields the same tables and
+    indexes. A delta that adds schema the baseline does not declare fails here.
+
+    Only schema is compared. Row data diverges by one row: ``0033`` seeds a
+    ``backends`` row that a fresh DB no longer gets, and no code reads that table.
     """
     skipped = tmp_path / "skipped"
     _migrate(skipped)
