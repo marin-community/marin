@@ -30,7 +30,8 @@ Federation ingress — how the GCP ``marin`` controller reaches this one:
     two factors, both required and neither alone sufficient:
 
       1. **IP allowlist** — a Traefik ``ipAllowList`` Middleware admits only the
-         marin controller's egress IP. The *network* factor.
+         marin-side controllers' egress IPs (``FEDERATION_ALLOW_SOURCES``). The
+         *network* factor.
       2. **The controller's own auth** — the ``aud="federation"`` verifier for the
          handoff RPCs, the general auth chain for the rest. The *identity* factor.
 
@@ -58,13 +59,13 @@ orphan — then verifies nothing remains.
 Usage:
     # Dry-run (default): prints the helm commands, manifests, and pre-flight findings.
     uv run lib/iris/scripts/install_cw_network.py --cluster cw-rno2a \\
-        install --acme-email you@oa.dev --allow-source 203.0.113.7
+        install --acme-email you@oa.dev
     # Apply the whole stack, then CNAME the host to the Traefik LoadBalancer FQDN:
     uv run lib/iris/scripts/install_cw_network.py --cluster cw-rno2a \\
-        install --acme-email you@oa.dev --allow-source 203.0.113.7 --apply
+        install --acme-email you@oa.dev --apply
     # Re-run to converge just the federation route (skip the already-installed stack):
     uv run lib/iris/scripts/install_cw_network.py --cluster cw-rno2a install \\
-        --allow-source 203.0.113.7 --skip-traefik --skip-cert-manager --skip-issuers \\
+        --skip-traefik --skip-cert-manager --skip-issuers \\
         --cluster-issuer letsencrypt-http01-prod --apply
     # Tear the whole stack down and verify nothing remains:
     uv run lib/iris/scripts/install_cw_network.py --cluster cw-rno2a uninstall --apply
@@ -124,6 +125,12 @@ _COREWEAVE_APP = ".coreweave.app"
 _INGRESS_NAME = "iris-federation"
 _MIDDLEWARE_NAME = "iris-federation-ipallowlist"
 _MIDDLEWARE_CRD = "middlewares.traefik.io"
+
+# Egress addresses of the marin-side controllers that federate into a CoreWeave cluster,
+# reserved as iris-marin-fed-egress and iris-marin-dev-fed-egress in hai-gcp-models. The
+# Middleware's sourceRange is replaced wholesale on every install, never merged, so an
+# install that names a subset silently strands the omitted cluster at a 403.
+FEDERATION_ALLOW_SOURCES = ("34.27.183.11", "35.254.13.19")
 # The controller's legacy world-open /proxy Ingress. The IP-locked route here
 # supersedes it, so install removes it (leaving it would keep /proxy world-open,
 # since Traefik prefers its longer path prefix).
@@ -898,8 +905,10 @@ def main(
     "--allow-source",
     "allow_sources",
     multiple=True,
-    required=True,
-    help="IP or CIDR permitted to reach the federation route (repeatable). The marin egress IP.",
+    default=FEDERATION_ALLOW_SOURCES,
+    show_default=True,
+    help="IP or CIDR permitted to reach the federation route (repeatable). Defaults to every "
+    "marin-side controller egress; passing this replaces the whole allowlist rather than adding to it.",
 )
 @click.option("--host", default="", help="Ingress host [default: iris-cw-<cluster>.oa.dev].")
 @click.option("--tls-secret", default="", help="TLS secret [default: iris-controller-fed-tls].")
