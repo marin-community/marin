@@ -55,8 +55,8 @@ def canaries(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> list[Path]:
     return paths
 
 
-def _open(db_dir: Path) -> None:
-    """Boot a controller DB against ``db_dir``, which migrates it, then close it."""
+def _migrate(db_dir: Path) -> None:
+    """Migrate ``db_dir`` the way a controller boot does — construction applies migrations."""
     ControllerDB(db_dir=db_dir).close()
 
 
@@ -149,7 +149,7 @@ def _make_legacy(db_dir: Path) -> None:
 
 def test_fresh_db_marks_every_delta_applied_without_running_it(tmp_path: Path, canaries: list[Path]) -> None:
     db_dir = tmp_path / "fresh"
-    _open(db_dir)
+    _migrate(db_dir)
 
     expected = {ControllerDB.BASELINE_MIGRATION, *DELTA_NAMES, *(path.name for path in canaries)}
     assert _recorded_migrations(db_dir) == expected
@@ -165,12 +165,12 @@ def test_fresh_db_schema_matches_replaying_every_delta(tmp_path: Path) -> None:
     that adds schema the baseline does not declare fails here.
     """
     skipped = tmp_path / "skipped"
-    _open(skipped)
+    _migrate(skipped)
 
     replayed = tmp_path / "replayed"
-    _open(replayed)
+    _migrate(replayed)
     _forget_migrations(replayed, DELTA_NAMES)
-    _open(replayed)
+    _migrate(replayed)
 
     assert _recorded_migrations(replayed) == _recorded_migrations(skipped)
     assert _schema(replayed) == _schema(skipped)
@@ -186,14 +186,14 @@ def test_legacy_db_runs_every_unrecorded_delta(tmp_path: Path) -> None:
     declares it third.
     """
     fresh = tmp_path / "fresh"
-    _open(fresh)
+    _migrate(fresh)
 
     legacy = tmp_path / "legacy"
-    _open(legacy)
+    _migrate(legacy)
     _make_legacy(legacy)
     assert "submitting_user" not in _column_names(legacy, "jobs")
 
-    _open(legacy)
+    _migrate(legacy)
 
     assert "submitting_user" in _column_names(legacy, "jobs")
     assert _recorded_migrations(legacy) == {ControllerDB.BASELINE_MIGRATION, *DELTA_NAMES}
@@ -204,10 +204,10 @@ def test_only_unrecorded_deltas_run(tmp_path: Path, canaries: list[Path]) -> Non
     """A DB behind by one delta runs that delta and no other."""
     first, last = canaries
     db_dir = tmp_path / "one_behind"
-    _open(db_dir)
+    _migrate(db_dir)
 
     _forget_migrations(db_dir, {last.name})
-    _open(db_dir)
+    _migrate(db_dir)
 
     assert _table_exists(db_dir, _ran_table(last))
     assert not _table_exists(db_dir, _ran_table(first)), "an already-recorded delta re-ran"
@@ -216,9 +216,9 @@ def test_only_unrecorded_deltas_run(tmp_path: Path, canaries: list[Path]) -> Non
 def test_reopening_a_migrated_db_changes_nothing(tmp_path: Path) -> None:
     """Every controller restart re-runs ``apply_migrations`` against its own DB."""
     db_dir = tmp_path / "twice"
-    _open(db_dir)
+    _migrate(db_dir)
     before = _schema(db_dir), _recorded_migrations(db_dir)
 
-    _open(db_dir)
+    _migrate(db_dir)
 
     assert (_schema(db_dir), _recorded_migrations(db_dir)) == before
