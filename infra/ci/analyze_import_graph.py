@@ -36,6 +36,7 @@ from pathlib import Path
 
 from infra.ci.select_tests import (
     SCOPES,
+    SOURCE_ROOTS,
     TEST_DIR,
     affected_modules,
     build_importers,
@@ -151,10 +152,7 @@ def analyze(repo_root: Path) -> dict:
         "swept_total_selected": swept_total,
         "reduction_from_sweep": baseline - swept_total,
         "hubs": hub_report,
-        "top_modules": [
-            {"module": module, "blast_radius": radius}
-            for module, radius in ranked[:25]
-        ],
+        "top_modules": [{"module": module, "blast_radius": radius} for module, radius in ranked[:25]],
     }
 
 
@@ -192,8 +190,6 @@ def file_report(repo_root: Path, files: list[str]) -> list[dict]:
 
 
 def _import_roots(repo_root: Path) -> list[Path]:
-    from infra.ci.select_tests import SOURCE_ROOTS
-
     return [repo_root / root.import_root for root in SOURCE_ROOTS]
 
 
@@ -238,12 +234,17 @@ def main() -> None:
                     print(f"{entry['file']}: {entry['error']}")
                 else:
                     breakdown = ", ".join(f"{scope}={count}" for scope, count in entry["by_scope"].items())
-                    print(f"{entry['file']} ({entry['module']}): {entry['selected_test_files']} test files  [{breakdown}]")
+                    print(
+                        f"{entry['file']} ({entry['module']}): {entry['selected_test_files']} test files  [{breakdown}]"
+                    )
         return
 
     report = analyze(repo_root)
     if args.hubs:
-        report = {key: report[key] for key in ("baseline_total_selected", "swept_total_selected", "reduction_from_sweep", "hubs")}
+        report = {
+            key: report[key]
+            for key in ("baseline_total_selected", "swept_total_selected", "reduction_from_sweep", "hubs")
+        }
     if args.json:
         print(json.dumps(report, indent=2))
     else:
