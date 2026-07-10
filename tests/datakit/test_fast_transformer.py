@@ -3,7 +3,7 @@
 
 """Tests for the fast-transformer quality scorer's two algorithmic contracts:
 
-- ``score._score_bme`` — whole-doc (begin/middle/end) window coverage + mean-pooling,
+- ``scorer.score_bme`` — whole-doc (begin/middle/end) window coverage + mean-pooling,
   the fix for scoring long docs on a truncated lead / prefix-degenerate sources.
 - ``calibrate.fit_cutpoints`` / ``calibration_knots`` — the monotonic cutpoint remap
   that makes the fixed 0.2-bucket quantization recover the oracle quality level.
