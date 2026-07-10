@@ -134,9 +134,10 @@ def _reference(x: jax.Array, weights: jax.Array, offsets: np.ndarray) -> tuple[j
     pieces = []
     for expert in range(weights.shape[0]):
         pieces.append(x[offsets[expert] : offsets[expert + 1]] @ weights[expert].T)
-    preact = jnp.concatenate(pieces, axis=0)
-    gate, up = jnp.split(preact, 2, axis=1)
-    return preact, jax.nn.silu(gate) * up
+    preact_concat = jnp.concatenate(pieces, axis=0)
+    gate, up = jnp.split(preact_concat, 2, axis=1)
+    preact_interleaved = jnp.stack((gate, up), axis=2).reshape(preact_concat.shape)
+    return preact_interleaved, jax.nn.silu(gate) * up
 
 
 def main() -> None:
