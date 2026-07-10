@@ -19,12 +19,11 @@ from jaxtyping import Array, Float, Int
 
 from levanter.grug._moe.common import (
     _CHECKPOINT_DISPATCH_INPUT,
-    _CHECKPOINT_EXPERT_HIDDEN,
     _CHECKPOINT_MOE_OUTPUT,
     _prepare_moe_dispatch_indices_with_assignment_ids,
     _zero_dropped_assignments,
 )
-from levanter.grug._moe.sonic_quack import quack_gated_varlen, quack_grouped_varlen
+from levanter.grug._moe.sonic_quack import quack_mlp_varlen
 
 try:
     import jax_triton as jt
@@ -329,11 +328,7 @@ def _moe_mlp_local_sonic(
 
     with jax.named_scope("moe_up_down"):
         del activation_fn  # QuACK's fused gated kernel implements SwiGLU.
-        hidden = tree_checkpoint_name(
-            quack_gated_varlen(x_dispatch, moe_w13, group_sizes),
-            _CHECKPOINT_EXPERT_HIDDEN,
-        )
-        out_dispatch = quack_grouped_varlen(hidden, moe_w2, group_sizes)
+        out_dispatch = quack_mlp_varlen(x_dispatch, moe_w13, moe_w2, group_sizes)
         out = tree_checkpoint_name(
             sonic_gather_sum(out_dispatch, dispatch_positions, combine_weights),
             _CHECKPOINT_MOE_OUTPUT,
