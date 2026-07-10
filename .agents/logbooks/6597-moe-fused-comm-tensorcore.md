@@ -544,6 +544,31 @@ exact result rows are in `scratch/6597-w13b-tiny-compare/raw.log` and
 `scratch/6597-w13b-tiny-compare/result-rows.jsonl`; terminal status and task
 summary are alongside them.
 
+## 2026-07-10 FUSED-MOE-015 - W2 compile-first H100 follow-up
+
+Job `/dlwh/bench-semantic-fused-w2-compile6-20260710-1520` ran once on
+`cw-rno2a` at commit `a2637f641f` and reached terminal `JOB_STATE_SUCCEEDED`.
+Its single task exited 0 after 2 minutes 6.56 seconds, with zero failures or
+preemptions. No code change, stop, restart, resubmit, or duplicate was issued.
+
+Both modes succeeded with one repeat row and zero error rows. Return compile,
+lowering, first-run, and steady-state times were `5.132605796097778`,
+`3.0626156540820375`, `2.0699901420157403`, and `0.10240102896932513` seconds;
+throughput was `10.485654634599875` rounded and `8.3885237076799` useful
+TFLOP/s/rank; checksum was `4300405760.0`. Backward values were
+`11.267498516943306`, `10.905288514913991`, `0.36221000202931464`, and
+`0.22411802096758038` seconds; throughput was `9.581932049590257` rounded and
+`7.665545639672207` useful TFLOP/s/rank; checksum was `5054136320.0`.
+
+Both rows reported 0.8 semantic row efficiency and zero queue/layout/metadata
+overflow, routing drops, or dropped routes. Logs contained three non-fatal
+12.50 GiB allocation warnings and 80 non-fatal `CUDA_ERROR_NOT_PERMITTED` VMM
+fallback warnings. Complete raw output, exact rows, terminal summary, and monitor
+state are in `scratch/20260710-1506_bench_semantic_fused_w2_compile6_raw.txt`,
+`scratch/20260710-1506_bench_semantic_fused_w2_compile6_rows.jsonl`,
+`scratch/20260710-1506_bench_semantic_fused_w2_compile6_terminal.txt`, and
+`scratch/20260710-1506_bench_semantic_fused_w2_compile6_monitoring_state.json`.
+
 ## 2026-07-10 FUSED-MOE-013 - W2 compile-first H100 follow-up
 
 Job `/dlwh/bench-semantic-fused-w2-compile5-20260710-1510` ran once on
@@ -570,3 +595,31 @@ output is in `scratch/6597-compile5/final-logs.txt`; compact exact rows are in
 and monitor cadence are in `scratch/6597-compile5/final-status.txt`,
 `scratch/6597-compile5/final-summary.txt`, and
 `scratch/6597-compile5/monitor-status.txt`.
+
+## 2026-07-10 FUSED-MOE-014 - Tiny W13 backward dx/dw13 comparison
+
+Job `/dlwh/bench-semantic-fused-w13b-tiny-compare2-20260710-1520` ran once on
+`cw-rno2a` at commit `a2637f641f` and reached terminal `JOB_STATE_SUCCEEDED`.
+Its single task exited 0 after 49.47 seconds, with zero failures or preemptions.
+The benchmark progressed beyond startup within the six-minute guard, so no stop,
+retry, restart, or duplicate was issued.
+
+`semantic_fused_w13_backward_compare` emitted one successful repeat row. The
+`dw13` comparison was close, with max absolute difference
+`1.52587890625e-05` and mean absolute difference `4.991304649593076e-07`.
+The `dx` comparison was materially discrepant, with max absolute difference
+`420.63323974609375` and mean absolute difference `35.01224136352539`.
+Expected and observed nonfinite error counts were zero for both `dx` and
+`dw13`. Queue overflow, layout overflow, metadata overflow, routing drops, and
+dropped routes were also all zero.
+
+Compile/first-call time was `7.853159782011062` s, lowering/compile time was
+`6.970990175032057` s, first-run time was `0.882169606979005` s, and steady
+state time was `1.8387140007689595` ms. The row reported
+`0.18248858705577575` rounded and `0.1459908696446206` useful TFLOP/s/rank,
+checksum `455.6455078125`, and row efficiency `0.8`. CUDA VMM emitted non-fatal
+`CUDA_ERROR_NOT_PERMITTED` warnings before retrying with simpler handle types.
+Complete Iris output and exact result rows are in
+`scratch/6597-w13b-tiny-compare2/raw.log` and
+`scratch/6597-w13b-tiny-compare2/result-rows.jsonl`; terminal status and task
+summary are alongside them.
