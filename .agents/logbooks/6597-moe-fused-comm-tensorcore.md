@@ -360,3 +360,35 @@ comparison requirement for `h`.
 As in the direct-job run, the allocator logged two failed 12.50 GiB allocation
 attempts before execution and recovered. Iris and all three measured repeats
 completed successfully.
+
+## 2026-07-10 FUSED-MOE-006 - Backward queue protocol correctness
+
+The semantic fused backward scaffolds now use production-relevant queue
+boundaries and bounded-slot ordering:
+
+- fused W2 backward consumes the bf16 forward `return_y[S,DstOrd,Q,M,H]`
+  residual directly instead of a dense token/route tensor;
+- its destination consumers traverse the inverse source ordinal in the same
+  rotating-peer phase order used by producers, preventing finite-slot reuse
+  deadlock;
+- fused W13 backward consumes returned dX tiles in physical
+  `(dst_ordinal, chunk, block, hidden_tile)` order, scatters them into
+  source-owned fp32 dX, and releases each slot generation in production order;
+- route validity is clipped against the rows actually sent, and the sharded
+  wrapper now uses rank-correct partition specifications.
+
+The benchmark adds isolated `semantic_fused_w2_backward_{pallas,compare}`
+modes. Its saved bf16 `return_y` and expert-major activation inputs are built
+outside the timed callable, so the row measures only fused dcombine/dy-route
+and W2 backward.
+
+Local verification:
+
+```text
+pytest benchmark + fused W2 return/backward + fused W13 backward: 49 passed
+scoped pre-commit: passed (Ruff, Black, license, pyrefly, AST, whitespace)
+```
+
+This is a local correctness milestone, not H100 correctness or performance
+evidence. The next gate is one compile-first H100 target run for W2 return, W2
+backward, and W13 backward before custom-VJP integration.

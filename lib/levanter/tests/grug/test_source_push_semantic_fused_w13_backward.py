@@ -87,6 +87,40 @@ def test_fused_w13_backward_metadata_inverts_chunk_rows_and_rotates_peers():
     np.testing.assert_array_equal(np.asarray(metadata.send_return_consumed_target), expected_return_tiles)
 
 
+def test_fused_w13_backward_metadata_invalidates_routes_clipped_from_forward_send():
+    selected_experts = jnp.zeros((2, 40, 2), dtype=jnp.int32)
+    plan = build_source_push_semantic_plan_jax(
+        selected_experts,
+        jnp.ones(selected_experts.shape, dtype=jnp.float32),
+        ep_size=2,
+        experts_per_rank=2,
+        rows_per_src_dst_capacity=80,
+        capacity_factor=4.0,
+    )
+    x = jnp.zeros((2, 40, 256), dtype=jnp.bfloat16)
+
+    metadata = source_push_semantic_fused_w13_backward_metadata_jax(
+        x,
+        plan,
+        send_chunks_per_dst=1,
+        rows_per_expert_capacity=64,
+    )
+
+    route_valid = np.asarray(metadata.route_valid)
+    send_valid_rows = np.asarray(metadata.forward.send_valid_rows)
+    assert np.count_nonzero(route_valid) == int(np.sum(send_valid_rows))
+    assert np.count_nonzero(route_valid) < int(np.asarray(jnp.sum(plan.xcounts)))
+
+    token_ids = np.asarray(metadata.forward.token_ids)
+    for source, token, route in np.argwhere(route_valid):
+        dst_ordinal = int(metadata.route_dst_ordinal[source, token, route])
+        chunk = int(metadata.route_chunk[source, token, route])
+        block = int(metadata.route_block[source, token, route])
+        row = int(metadata.route_row[source, token, route])
+        assert row < send_valid_rows[source, dst_ordinal, chunk, block]
+        assert token_ids[source, dst_ordinal, chunk, block, row] == token
+
+
 def test_fused_w13_backward_generation_accounting_reuses_slots_and_counts_live_returns():
     first = source_push_semantic_fused_w13_backward_generation_accounting(
         0,

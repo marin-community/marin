@@ -9,6 +9,7 @@ import sys
 from pathlib import Path
 from types import SimpleNamespace
 
+import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
@@ -158,6 +159,50 @@ def test_source_push_semantic_plan_semantic_permute_w13_alias_and_cli_help(capsy
 
     assert exc_info.value.code == 0
     assert "semantic_permute_w13" in capsys.readouterr().out
+
+
+def test_source_push_semantic_plan_semantic_fused_stage_alias_includes_queue_shaped_w2_backward():
+    bench_source_push_semantic_plan = _bench_module()
+
+    assert bench_source_push_semantic_plan._parse_modes("semantic_fused_stages") == (
+        bench_source_push_semantic_plan.MODE_SEMANTIC_FUSED_W2_RETURN_PALLAS,
+        bench_source_push_semantic_plan.MODE_SEMANTIC_FUSED_W2_BACKWARD_PALLAS,
+        bench_source_push_semantic_plan.MODE_SEMANTIC_FUSED_W13_BACKWARD_PALLAS,
+    )
+    assert bench_source_push_semantic_plan._parse_modes("semantic_fused_w2_backward_pallas") == (
+        bench_source_push_semantic_plan.MODE_SEMANTIC_FUSED_W2_BACKWARD_PALLAS,
+    )
+
+
+def test_source_push_semantic_plan_source_padded_h_reference_uses_stored_bf16_z():
+    bench_source_push_semantic_plan = _bench_module()
+    x = jnp.asarray([[[1.1, 0.0]]], dtype=jnp.bfloat16)
+    w_gate_up = jnp.asarray([[[[1.1, 1.3], [0.0, 0.0]]]], dtype=jnp.bfloat16)
+    z_fp32 = jnp.einsum(
+        "h,ho->o",
+        x[0, 0].astype(jnp.float32),
+        w_gate_up[0, 0].astype(jnp.float32),
+    )
+    stored_z = z_fp32.astype(jnp.bfloat16).reshape(1, 1, 1, 2)
+    gate, up = jnp.split(stored_z.astype(jnp.float32), 2, axis=-1)
+    stored_h = jax.nn.silu(gate) * up
+    float_gate, float_up = jnp.split(z_fp32, 2, axis=-1)
+    float_h = jax.nn.silu(float_gate) * float_up
+
+    metrics = bench_source_push_semantic_plan._source_padded_expert_sample_metrics(
+        x,
+        w_gate_up,
+        stored_z,
+        stored_h,
+        jnp.ones((1, 1, 1), dtype=jnp.bool_),
+        jnp.zeros((1, 1, 1), dtype=jnp.int32),
+        jnp.zeros((1, 1, 1), dtype=jnp.int32),
+        jnp.ones((1, 1, 1), dtype=jnp.bool_),
+    )
+
+    assert float(jnp.max(jnp.abs(stored_h.reshape(-1) - float_h.reshape(-1)))) > 0
+    assert float(metrics["z_max_abs_diff"]) == 0.0
+    assert float(metrics["h_max_abs_diff"]) == 0.0
 
 
 def test_source_push_semantic_plan_only_reserves_tail_guard_when_requested():
@@ -2057,3 +2102,64 @@ def test_source_push_semantic_plan_bench_emits_composed_pallas_summary_rows(tmp_
         assert summary["error_rows"] == 0
         assert summary["median_steady_state_time"] > 0
         assert summary["median_useful_tflops_per_rank"] is not None
+
+
+def test_source_push_semantic_plan_bench_emits_fused_stage_rows(tmp_path):
+    jsonl = tmp_path / "semantic_fused_stages.jsonl"
+    bench_source_push_semantic_plan = _bench_module()
+    modes = (
+        "semantic_fused_w2_return_pallas,semantic_fused_w2_return_compare,"
+        "semantic_fused_w13_backward_pallas,semantic_fused_w13_backward_compare"
+    )
+
+    bench_source_push_semantic_plan.main(
+        [
+            "--ep-size",
+            "1",
+            "--tokens-per-rank",
+            "64",
+            "--topk",
+            "1",
+            "--experts-per-rank",
+            "1",
+            "--hidden-dim",
+            "256",
+            "--intermediate-dim",
+            "128",
+            "--capacity-factor",
+            "1.0",
+            "--routing",
+            "balanced",
+            "--modes",
+            modes,
+            "--pallas-interpret",
+            "--warmup",
+            "0",
+            "--steps",
+            "1",
+            "--repeat-runs",
+            "1",
+            "--jsonl",
+            str(jsonl),
+        ]
+    )
+
+    rows = [json.loads(line) for line in jsonl.read_text().splitlines()]
+    repeats = {row["mode"]: row for row in rows if row["row_type"] == "repeat"}
+    summaries = {row["mode"]: row for row in rows if row["row_type"] == "summary"}
+    assert set(summaries) == set(modes.split(","))
+    for summary in summaries.values():
+        assert summary["implementation"] == "pallas_mgpu"
+        assert summary["error_rows"] == 0
+        assert summary["median_steady_state_time"] > 0
+        assert summary["median_useful_tflops_per_rank"] is not None
+        assert summary["median_queue_overflow_route_error_count"] == 0.0
+        assert summary["median_layout_overflow_row_error_count"] == 0.0
+
+    w2_compare = repeats["semantic_fused_w2_return_compare"]
+    assert w2_compare["y_max_abs_diff"] == 0.0
+    assert w2_compare["return_y_max_abs_diff"] == 0.0
+    assert w2_compare["valid_error_count"] == 0.0
+    w13_backward_compare = repeats["semantic_fused_w13_backward_compare"]
+    assert w13_backward_compare["dx_max_abs_diff"] == 0.0
+    assert w13_backward_compare["dw13_max_abs_diff"] == 0.0

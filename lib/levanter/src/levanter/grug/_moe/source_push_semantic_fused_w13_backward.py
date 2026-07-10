@@ -173,6 +173,13 @@ def source_push_semantic_fused_w13_backward_metadata_jax(
     route_block = jnp.where(route_valid, route_entry % config.compute_blocks_per_send, 0).astype(jnp.int32)
     route_row = jnp.where(route_valid, queue.route_queue_row, 0).astype(jnp.int32)
     route_dst_ordinal = jnp.where(route_valid, queue.route_dst_ordinal, 0).astype(jnp.int32)
+    source = jnp.arange(x.shape[0], dtype=jnp.int32)[:, None, None]
+    sent_rows = forward.send_valid_rows.at[source, route_dst_ordinal, route_chunk, route_block].get()
+    route_valid &= route_row < sent_rows
+    route_chunk = jnp.where(route_valid, route_chunk, 0)
+    route_block = jnp.where(route_valid, route_block, 0)
+    route_row = jnp.where(route_valid, route_row, 0)
+    route_dst_ordinal = jnp.where(route_valid, route_dst_ordinal, 0)
 
     hidden_tiles = x.shape[-1] // config.block_hidden
     rows_per_chunk = jnp.sum(forward.send_valid_rows, axis=-1, dtype=jnp.int32)
@@ -311,7 +318,6 @@ def _source_push_semantic_fused_w13_backward_sharded(
         experts_per_rank=w13.shape[1],
         rows_per_expert_capacity=dz13.shape[2],
         send_chunks_per_dst=metadata.forward.send_chunks_per_dst,
-        topk=metadata.route_valid.shape[-1],
         dtype=x.dtype,
         config=config,
     )
@@ -323,11 +329,6 @@ def _source_push_semantic_fused_w13_backward_sharded(
         recv_expert_local,
         recv_row_local,
         recv_valid_local,
-        route_dst_local,
-        route_chunk_local,
-        route_block_local,
-        route_row_local,
-        route_valid_local,
         recv_return_target_local,
         dz_local,
         w_local,
@@ -339,11 +340,6 @@ def _source_push_semantic_fused_w13_backward_sharded(
             recv_expert_local[0],
             recv_row_local[0],
             recv_valid_local[0],
-            route_dst_local[0],
-            route_chunk_local[0],
-            route_block_local[0],
-            route_row_local[0],
-            route_valid_local[0],
             recv_return_target_local[0],
             dz_local[0],
             w_local[0],
@@ -352,8 +348,9 @@ def _source_push_semantic_fused_w13_backward_sharded(
 
     source_3d = NamedSharding(mesh, P(SOURCE_PUSH_MESH_AXIS, None, None))
     source_4d = NamedSharding(mesh, P(SOURCE_PUSH_MESH_AXIS, None, None, None))
-    source_route_sharding = NamedSharding(mesh, P(SOURCE_PUSH_MESH_AXIS, None, None, None, None))
+    destination_3d = NamedSharding(mesh, P(SOURCE_PUSH_MESH_AXIS, None, None))
     destination_4d = NamedSharding(mesh, P(SOURCE_PUSH_MESH_AXIS, None, None, None))
+    source_token_sharding = NamedSharding(mesh, P(SOURCE_PUSH_MESH_AXIS, None, None, None, None))
     return shard_map(
         local_fn,
         mesh=mesh,
@@ -364,12 +361,7 @@ def _source_push_semantic_fused_w13_backward_sharded(
             P(SOURCE_PUSH_MESH_AXIS, None, None, None),
             P(SOURCE_PUSH_MESH_AXIS, None, None, None),
             P(SOURCE_PUSH_MESH_AXIS, None, None, None),
-            P(SOURCE_PUSH_MESH_AXIS, None, None, None),
-            P(SOURCE_PUSH_MESH_AXIS, None, None, None),
-            P(SOURCE_PUSH_MESH_AXIS, None, None, None),
-            P(SOURCE_PUSH_MESH_AXIS, None, None, None),
-            P(SOURCE_PUSH_MESH_AXIS, None, None, None),
-            P(SOURCE_PUSH_MESH_AXIS, None, None, None),
+            P(SOURCE_PUSH_MESH_AXIS, None, None),
             P(SOURCE_PUSH_MESH_AXIS, None, None, None),
             P(SOURCE_PUSH_MESH_AXIS, None, None, None),
         ),
@@ -377,17 +369,12 @@ def _source_push_semantic_fused_w13_backward_sharded(
         check_vma=False,
     )(
         jax.sharding.reshard(x, source_3d),
-        jax.sharding.reshard(metadata.forward.token_ids, source_route_sharding),
+        jax.sharding.reshard(metadata.forward.token_ids, source_token_sharding),
         jax.sharding.reshard(metadata.forward.send_valid_rows, source_4d),
         jax.sharding.reshard(metadata.forward.recv_expert, destination_4d),
         jax.sharding.reshard(metadata.forward.recv_row_start, destination_4d),
         jax.sharding.reshard(metadata.forward.recv_valid_rows, destination_4d),
-        jax.sharding.reshard(metadata.route_dst_ordinal, source_4d),
-        jax.sharding.reshard(metadata.route_chunk, source_4d),
-        jax.sharding.reshard(metadata.route_block, source_4d),
-        jax.sharding.reshard(metadata.route_row, source_4d),
-        jax.sharding.reshard(metadata.route_valid, source_4d),
-        jax.sharding.reshard(metadata.recv_return_consumed_target, destination_4d),
+        jax.sharding.reshard(metadata.recv_return_consumed_target, destination_3d),
         jax.sharding.reshard(dz13, destination_4d),
         jax.sharding.reshard(w13, destination_4d),
     )
@@ -402,7 +389,6 @@ def _make_source_push_semantic_fused_w13_backward_kernel(
     experts_per_rank: int,
     rows_per_expert_capacity: int,
     send_chunks_per_dst: int,
-    topk: int,
     dtype: jnp.dtype,
     config: SourcePushSemanticFusedW13BackwardConfig,
 ):
@@ -427,11 +413,6 @@ def _make_source_push_semantic_fused_w13_backward_kernel(
         recv_expert_ref,
         recv_row_ref,
         recv_valid_ref,
-        route_dst_ref,
-        route_chunk_ref,
-        route_block_ref,
-        route_row_ref,
-        route_valid_ref,
         recv_return_target_ref,
         dz_ref,
         w_ref,
@@ -446,6 +427,7 @@ def _make_source_push_semantic_fused_w13_backward_kernel(
         compute_done_sem = pl.get_global(mgpu.SemaphoreType.REGULAR((ep_size, config.inbox_slots)))
         dx_full_sem = pl.get_global(mgpu.SemaphoreType.REGULAR((ep_size, config.inbox_slots, blocks, hidden_tiles)))
         return_consumed_sem = pl.get_global(mgpu.SemaphoreType.REGULAR((ep_size, config.inbox_slots)))
+        dx_init_done_sem = pl.get_global(mgpu.SemaphoreType.REGULAR(()))
         rank = lax.axis_index(SOURCE_PUSH_MESH_AXIS)
         peer_ordinal = pl.program_id(0)
         worker = pl.program_id(1)
@@ -766,63 +748,69 @@ def _make_source_push_semantic_fused_w13_backward_kernel(
         def _combine() -> None:
             local_combine = worker - config.producer_programs_per_peer - config.compute_programs_per_peer
             combine_id = peer_ordinal * config.combine_programs_per_peer + local_combine
-            combine_jobs = tokens_per_source * hidden_tiles
+            initialize_jobs = tokens_per_source * hidden_tiles
 
-            @pl.loop(0, math.ceil(combine_jobs / total_combine_programs))
-            def _combine_loop(iteration) -> None:
+            @pl.loop(0, math.ceil(initialize_jobs / total_combine_programs))
+            def _initialize_dx_loop(iteration) -> None:
                 job = iteration * total_combine_programs + combine_id
 
-                @pl.when(job < combine_jobs)
-                def _owned_combine() -> None:
+                @pl.when(job < initialize_jobs)
+                def _zero_owned_dx() -> None:
                     token = job // hidden_tiles
                     hidden_tile = job % hidden_tiles
                     hidden_start = hidden_tile * config.block_hidden
+                    dx_ref[token, pl.ds(hidden_start, config.block_hidden)] = jnp.zeros(
+                        (config.block_hidden,), dtype=jnp.float32
+                    )
 
-                    def _combine_scope(accumulator) -> None:
-                        accumulator[:] = jnp.zeros((config.block_hidden,), dtype=jnp.float32)
+            pl.semaphore_signal(dx_init_done_sem)
+            pl.semaphore_wait(dx_init_done_sem, value=total_combine_programs, decrement=False)
 
-                        for route in range(topk):
-                            valid = route_valid_ref[token, route]
+            # Consume each bounded slot in the same physical order that produces it.
+            for static_dst_ordinal in range(ep_size):
+                dst = (rank + static_dst_ordinal) % ep_size
 
-                            @pl.when(valid)
-                            def _add_route() -> None:
-                                dst_ordinal = route_dst_ref[token, route]
-                                dst = (rank + dst_ordinal) % ep_size
-                                chunk = route_chunk_ref[token, route]
-                                slot = chunk % config.inbox_slots
-                                generation = chunk // config.inbox_slots + 1
-                                block = route_block_ref[token, route]
-                                row = route_row_ref[token, route]
-                                pl.semaphore_wait(
-                                    dx_full_sem.at[dst, slot, block, hidden_tile],
-                                    value=generation,
-                                    decrement=False,
-                                )
-                                accumulator[:] += dx_return_ref[
-                                    dst,
-                                    slot,
-                                    block * config.compute_m + row,
-                                    pl.ds(hidden_start, config.block_hidden),
-                                ].astype(jnp.float32)
+                @pl.loop(0, send_chunks_per_dst)
+                def _chunk_loop(chunk) -> None:
+                    slot = chunk % config.inbox_slots
+                    generation = chunk // config.inbox_slots + 1
 
-                                def _signal_consumed(static_dst_ordinal: int) -> None:
-                                    static_dst = (rank + static_dst_ordinal) % ep_size
+                    @pl.loop(0, math.ceil((blocks * hidden_tiles) / total_combine_programs))
+                    def _physical_tile_loop(iteration) -> None:
+                        tile = iteration * total_combine_programs + combine_id
+
+                        @pl.when(tile < blocks * hidden_tiles)
+                        def _consume_owned_tile() -> None:
+                            block = tile // hidden_tiles
+                            hidden_tile = tile % hidden_tiles
+                            hidden_start = hidden_tile * config.block_hidden
+                            pl.semaphore_wait(
+                                dx_full_sem.at[dst, slot, block, hidden_tile],
+                                value=generation,
+                                decrement=False,
+                            )
+                            valid_rows = send_valid_ref[static_dst_ordinal, chunk, block]
+
+                            @pl.loop(0, config.compute_m)
+                            def _row_loop(row) -> None:
+                                @pl.when(row < valid_rows)
+                                def _scatter_live_row() -> None:
+                                    token = token_ids_ref[static_dst_ordinal, chunk, block, row]
+                                    dx_tile = dx_return_ref[
+                                        dst,
+                                        slot,
+                                        block * config.compute_m + row,
+                                        pl.ds(hidden_start, config.block_hidden),
+                                    ].astype(jnp.float32)
+                                    mgpu.atomic_add(
+                                        dx_ref.at[token, pl.ds(hidden_start, config.block_hidden)],
+                                        dx_tile,
+                                    )
+
                                     if static_dst_ordinal == 0:
                                         pl.semaphore_signal(return_consumed_sem.at[rank, slot])
                                     else:
-                                        _signal_remote(return_consumed_sem, static_dst, (rank, slot))
-
-                                branches = tuple(
-                                    (lambda ordinal: lambda _: _signal_consumed(ordinal))(i) for i in range(ep_size)
-                                )
-                                lax.switch(dst_ordinal, branches, None)
-
-                        dx_ref[token, pl.ds(hidden_start, config.block_hidden)] = accumulator[:]
-
-                    pl.run_scoped(
-                        _combine_scope,
-                        accumulator=mgpu.SMEM((config.block_hidden,), dtype=jnp.float32),
-                    )
+                                        _signal_remote(return_consumed_sem, dst, (rank, slot))
 
     scratch_shape = (ep_size, config.inbox_slots, config.send_m, hidden_dim)
     return mgpu.kernel(

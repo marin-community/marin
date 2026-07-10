@@ -24,6 +24,9 @@ from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P
 from jaxtyping import Array, Bool, Float, Int
 
 from levanter.grug._moe import source_push_semantic_fused_w13
+from levanter.grug._moe import source_push_semantic_fused_w13_backward
+from levanter.grug._moe import source_push_semantic_fused_w2_backward
+from levanter.grug._moe import source_push_semantic_fused_w2_return
 from levanter.grug._moe.source_push_plan import (
     SOURCE_PUSH_MESH_AXIS,
     SourcePushSemanticPlan,
@@ -197,6 +200,20 @@ MODE_W13_SOURCE_PADDED_INBOX_PALLAS = "w13_source_padded_inbox_pallas"
 MODE_W13_SOURCE_PADDED_INBOX_COMPARE = "w13_source_padded_inbox_compare"
 MODE_SEMANTIC_PERMUTE_W13_PALLAS = "semantic_permute_w13_pallas"
 MODE_SEMANTIC_PERMUTE_W13_COMPARE = "semantic_permute_w13_compare"
+MODE_SEMANTIC_FUSED_W2_RETURN_PALLAS = "semantic_fused_w2_return_pallas"
+MODE_SEMANTIC_FUSED_W2_RETURN_COMPARE = "semantic_fused_w2_return_compare"
+MODE_SEMANTIC_FUSED_W2_BACKWARD_PALLAS = "semantic_fused_w2_backward_pallas"
+MODE_SEMANTIC_FUSED_W2_BACKWARD_COMPARE = "semantic_fused_w2_backward_compare"
+MODE_SEMANTIC_FUSED_W13_BACKWARD_PALLAS = "semantic_fused_w13_backward_pallas"
+MODE_SEMANTIC_FUSED_W13_BACKWARD_COMPARE = "semantic_fused_w13_backward_compare"
+SEMANTIC_FUSED_STAGE_MODES = (
+    MODE_SEMANTIC_FUSED_W2_RETURN_PALLAS,
+    MODE_SEMANTIC_FUSED_W2_RETURN_COMPARE,
+    MODE_SEMANTIC_FUSED_W2_BACKWARD_PALLAS,
+    MODE_SEMANTIC_FUSED_W2_BACKWARD_COMPARE,
+    MODE_SEMANTIC_FUSED_W13_BACKWARD_PALLAS,
+    MODE_SEMANTIC_FUSED_W13_BACKWARD_COMPARE,
+)
 MODE_W13_SOURCE_PADDED_DIRECT_PACK_PALLAS = "w13_source_padded_direct_pack_pallas"
 MODE_W13_SOURCE_PADDED_DIRECT_PACK_COMPARE = "w13_source_padded_direct_pack_compare"
 MODE_W2 = "w2"
@@ -530,6 +547,12 @@ MODES = (
     MODE_W13_SOURCE_PADDED_INBOX_COMPARE,
     MODE_SEMANTIC_PERMUTE_W13_PALLAS,
     MODE_SEMANTIC_PERMUTE_W13_COMPARE,
+    MODE_SEMANTIC_FUSED_W2_RETURN_PALLAS,
+    MODE_SEMANTIC_FUSED_W2_RETURN_COMPARE,
+    MODE_SEMANTIC_FUSED_W2_BACKWARD_PALLAS,
+    MODE_SEMANTIC_FUSED_W2_BACKWARD_COMPARE,
+    MODE_SEMANTIC_FUSED_W13_BACKWARD_PALLAS,
+    MODE_SEMANTIC_FUSED_W13_BACKWARD_COMPARE,
     MODE_W13_SOURCE_PADDED_DIRECT_PACK_PALLAS,
     MODE_W13_SOURCE_PADDED_DIRECT_PACK_COMPARE,
     MODE_W2,
@@ -714,6 +737,11 @@ SOURCE_DRIVEN_EXPLICIT_MODES = (
 
 DEFAULT_ALL_MODES = tuple(mode for mode in MODES if mode not in SOURCE_DRIVEN_EXPLICIT_MODES)
 MODE_ALIASES = {
+    "semantic_fused_stages": (
+        MODE_SEMANTIC_FUSED_W2_RETURN_PALLAS,
+        MODE_SEMANTIC_FUSED_W2_BACKWARD_PALLAS,
+        MODE_SEMANTIC_FUSED_W13_BACKWARD_PALLAS,
+    ),
     "semantic_permute_w13": (
         MODE_SEMANTIC_PERMUTE_W13_PALLAS,
         MODE_W13_SOURCE_PADDED_INBOX_PALLAS,
@@ -825,6 +853,15 @@ class SemanticReturnQueueBenchInputs:
 class SemanticBackwardReturnQueueBenchInputs:
     dy: Float[Array, "S T H"]
     return_y: Float[Array, "S DstOrd Q M H"]
+
+
+@jax.tree_util.register_dataclass
+@dataclass(frozen=True)
+class SemanticFusedW2BackwardBenchInputs:
+    dy: Float[Array, "S T H"]
+    return_y: Float[Array, "S DstOrd Q M H"]
+    h_expert: Float[Array, "Dst E C I"]
+    w_down: Float[Array, "Dst E I H"]
 
 
 @jax.tree_util.register_dataclass
@@ -1024,6 +1061,58 @@ def _make_inputs(args: argparse.Namespace, plan: SourcePushSemanticPlan) -> Sema
         dh_pair=dh_pair,
         dz_pair=dz_pair,
         dx_pair=dx_pair,
+    )
+
+
+def _semantic_fused_queue_shape(
+    args: argparse.Namespace,
+    plan: SourcePushSemanticPlan,
+) -> tuple[int, int, int]:
+    config = source_push_semantic_fused_w2_backward.SourcePushSemanticFusedW2BackwardConfig()
+    conservative_entries = math.ceil(plan.assignment_ids.shape[-1] / config.compute_m) + plan.xcounts.shape[-1] - 1
+    requested_entries = min(
+        SOURCE_PADDED_ENTRIES_PER_RANK,
+        _round_up_to_multiple(conservative_entries, 2),
+    )
+    send_chunks_per_dst = math.ceil(requested_entries / config.compute_blocks_per_send)
+    entries_per_dst = send_chunks_per_dst * config.compute_blocks_per_send
+    rows_per_expert_capacity = _round_up_to_multiple(
+        math.ceil(args.ep_size * send_chunks_per_dst * config.send_m / args.experts_per_rank),
+        config.send_m,
+    )
+    return send_chunks_per_dst, entries_per_dst, rows_per_expert_capacity
+
+
+def _make_semantic_fused_w2_backward_inputs(
+    args: argparse.Namespace,
+    plan: SourcePushSemanticPlan,
+) -> SemanticFusedW2BackwardBenchInputs:
+    inputs = _make_inputs(args, plan)
+    _send_chunks_per_dst, entries_per_dst, rows_per_expert_capacity = _semantic_fused_queue_shape(args, plan)
+    z_expert, _valid = source_push_semantic_pair_to_expert_major_jax(
+        inputs.z_pair,
+        plan,
+        rows_per_expert_capacity=rows_per_expert_capacity,
+    )
+    intermediate_dim = inputs.w_down.shape[-2]
+    gate = z_expert[..., :intermediate_dim].astype(jnp.float32)
+    up = z_expert[..., intermediate_dim:].astype(jnp.float32)
+    h_expert = (jax.nn.silu(gate) * up).astype(jnp.bfloat16)
+    metadata = source_push_semantic_fused_w2_return.source_push_semantic_fused_w2_return_metadata_jax(
+        plan,
+        rows_per_expert_capacity=rows_per_expert_capacity,
+        entries_per_dst=entries_per_dst,
+    )
+    _y, return_y = source_push_semantic_fused_w2_return.source_push_semantic_fused_w2_return_reference_jax(
+        z_expert.astype(jnp.bfloat16),
+        inputs.w_down.astype(jnp.bfloat16),
+        metadata,
+    )
+    return SemanticFusedW2BackwardBenchInputs(
+        dy=inputs.dy.astype(jnp.bfloat16),
+        return_y=return_y,
+        h_expert=h_expert,
+        w_down=inputs.w_down.astype(jnp.bfloat16),
     )
 
 
@@ -1257,6 +1346,21 @@ def _shard_backward_return_queue_inputs(
     )
 
 
+def _shard_semantic_fused_w2_backward_inputs(
+    inputs: SemanticFusedW2BackwardBenchInputs,
+    mesh: Mesh,
+) -> SemanticFusedW2BackwardBenchInputs:
+    source_3d = NamedSharding(mesh, P(SOURCE_PUSH_MESH_AXIS, None, None))
+    source_5d = NamedSharding(mesh, P(SOURCE_PUSH_MESH_AXIS, None, None, None, None))
+    destination_4d = NamedSharding(mesh, P(SOURCE_PUSH_MESH_AXIS, None, None, None))
+    return SemanticFusedW2BackwardBenchInputs(
+        dy=jax.device_put(inputs.dy, source_3d),
+        return_y=jax.device_put(inputs.return_y, source_5d),
+        h_expert=jax.device_put(inputs.h_expert, destination_4d),
+        w_down=jax.device_put(inputs.w_down, destination_4d),
+    )
+
+
 def _shard_w13_expert_inputs(inputs: SemanticW13ExpertBenchInputs, mesh: Mesh) -> SemanticW13ExpertBenchInputs:
     sharding_4d = NamedSharding(mesh, P(SOURCE_PUSH_MESH_AXIS, None, None, None))
     sharding_3d = NamedSharding(mesh, P(SOURCE_PUSH_MESH_AXIS, None, None))
@@ -1464,6 +1568,8 @@ def _mode_flops_per_rank(
         MODE_FORWARD_RETURN_DIRECT_TO_SOURCE_COMPARE,
         MODE_FORWARD_EXPERT_MAJOR_DIRECT_RETURN_COMBINE_PALLAS,
         MODE_FORWARD_EXPERT_MAJOR_DIRECT_RETURN_COMBINE_COMPARE,
+        MODE_SEMANTIC_FUSED_W2_RETURN_PALLAS,
+        MODE_SEMANTIC_FUSED_W2_RETURN_COMPARE,
     ):
         useful = useful_rows_total * w2_per_row
         rounded = rounded_rows_total * w2_per_row
@@ -1541,6 +1647,8 @@ def _mode_flops_per_rank(
         MODE_BACKWARD_W2_EXPERT_MAJOR_PREPACKED_PALLAS,
         MODE_BACKWARD_W2_EXPERT_MAJOR_PREPACKED_COMPARE,
         MODE_BACKWARD_W2_PALLAS_SCAFFOLD,
+        MODE_SEMANTIC_FUSED_W2_BACKWARD_PALLAS,
+        MODE_SEMANTIC_FUSED_W2_BACKWARD_COMPARE,
     ):
         useful = useful_rows_total * (2.0 * w2_per_row)
         rounded = rounded_rows_total * (2.0 * w2_per_row)
@@ -1557,6 +1665,8 @@ def _mode_flops_per_rank(
         MODE_BACKWARD_W13_EXPERT_MAJOR_PREPACKED,
         MODE_BACKWARD_W13_EXPERT_MAJOR_PREPACKED_PALLAS,
         MODE_BACKWARD_W13_EXPERT_MAJOR_PREPACKED_COMPARE,
+        MODE_SEMANTIC_FUSED_W13_BACKWARD_PALLAS,
+        MODE_SEMANTIC_FUSED_W13_BACKWARD_COMPARE,
     ):
         useful = useful_rows_total * (2.0 * w13_per_row)
         rounded = rounded_rows_total * (2.0 * w13_per_row)
@@ -1875,7 +1985,8 @@ def _source_padded_expert_sample_metrics(
             expert_weight.astype(jnp.float32),
             preferred_element_type=jnp.float32,
         )
-        stored_z = z_row.astype(observed_z.dtype)
+        # The fused contract stores Z as bf16 before SwiGLU, so H references must cross that same boundary.
+        stored_z = z_row.astype(jnp.bfloat16)
         gate, up = jnp.split(stored_z.astype(jnp.float32), 2)
         stored_h = (jax.nn.silu(gate) * up).astype(observed_h.dtype)
         return (
@@ -2650,7 +2761,7 @@ def _make_mesh(ep_size: int) -> Mesh:
 
 
 def _is_pallas_mode(mode: str) -> bool:
-    return mode in (
+    return mode in SEMANTIC_FUSED_STAGE_MODES or mode in (
         MODE_METADATA_PALLAS,
         MODE_METADATA_TILE_PALLAS,
         MODE_GATHER_X_PALLAS,
@@ -2822,6 +2933,33 @@ def _is_pallas_mode(mode: str) -> bool:
 
 
 def _block_sizes_for_mode(args: argparse.Namespace, mode: str) -> dict[str, Any]:
+    if mode in (MODE_SEMANTIC_FUSED_W2_RETURN_PALLAS, MODE_SEMANTIC_FUSED_W2_RETURN_COMPARE):
+        return {
+            "compute_m": 64,
+            "block_k": 64,
+            "block_n": 128,
+            "producer_programs_per_peer": 16,
+            "combine_programs": 32,
+        }
+    if mode in (MODE_SEMANTIC_FUSED_W2_BACKWARD_PALLAS, MODE_SEMANTIC_FUSED_W2_BACKWARD_COMPARE):
+        config = source_push_semantic_fused_w2_backward.SourcePushSemanticFusedW2BackwardConfig()
+        return {
+            "compute_m": config.compute_m,
+            "send_m": config.send_m,
+            "send_hidden_block": config.send_hidden_block,
+            "hidden_block": config.hidden_block,
+            "intermediate_block": config.intermediate_block,
+            "inbox_slots": config.inbox_slots,
+        }
+    if mode in (MODE_SEMANTIC_FUSED_W13_BACKWARD_PALLAS, MODE_SEMANTIC_FUSED_W13_BACKWARD_COMPARE):
+        return {
+            "compute_m": 64,
+            "send_m": 256,
+            "send_k": 256,
+            "block_hidden": 128,
+            "block_output": 128,
+            "inbox_slots": 12,
+        }
     if mode in (MODE_METADATA_PALLAS, MODE_METADATA_TILE_PALLAS):
         return {"tile_assignments": args.metadata_tile_assignments}
     if mode == MODE_GATHER_X_PALLAS:
@@ -3277,147 +3415,153 @@ def _mode_callable(mode: str, plan: SourcePushSemanticPlan, args: argparse.Names
     )
     expert_mesh = (
         _make_mesh(args.ep_size)
-        if mode
-        in (
-            MODE_W13_EXPERT_MAJOR_PREPACKED,
-            MODE_W13_EXPERT_MAJOR_PREPACKED_COMPARE,
-            MODE_W13_EXPERT_MAJOR_PREPACKED_PALLAS,
-            MODE_FORWARD_EXPERT_MAJOR_PREPACKED_PALLAS,
-            MODE_FORWARD_EXPERT_MAJOR_PREPACKED_COMPARE,
-            MODE_FORWARD_RETURN_EXPERT_MAJOR_PREPACKED_SHARDED_PALLAS,
-            MODE_FORWARD_RETURN_EXPERT_MAJOR_PREPACKED_SHARDED_COMPARE,
-            MODE_FORWARD_RETURN_SLOT_REDUCE_EXPERT_MAJOR_PREPACKED_SHARDED_PALLAS,
-            MODE_FORWARD_RETURN_SLOT_REDUCE_EXPERT_MAJOR_PREPACKED_SHARDED_COMPARE,
-            MODE_FORWARD_RETURN_SUM_EXPERT_MAJOR_PREPACKED_SHARDED_PALLAS,
-            MODE_FORWARD_RETURN_SUM_EXPERT_MAJOR_PREPACKED_SHARDED_COMPARE,
-            MODE_FORWARD_RETURN_SUM_EXPERT_MAJOR_PREPACKED_OWNER_SHARDED_PALLAS,
-            MODE_FORWARD_RETURN_SUM_EXPERT_MAJOR_PREPACKED_OWNER_SHARDED_COMPARE,
-            MODE_FORWARD_RETURN_SUM_LOOKUP_EXPERT_MAJOR_PREPACKED_OWNER_SHARDED_PALLAS,
-            MODE_FORWARD_RETURN_SUM_LOOKUP_EXPERT_MAJOR_PREPACKED_OWNER_SHARDED_COMPARE,
-            MODE_FORWARD_RETURN_REMOTE_SOURCE_GATHER_EXPERT_MAJOR_PREPACKED_PALLAS,
-            MODE_FORWARD_RETURN_REMOTE_SOURCE_GATHER_EXPERT_MAJOR_PREPACKED_COMPARE,
-            MODE_FORWARD_RETURN_COPY_ONLY_EXPERT_MAJOR_PREPACKED_PALLAS,
-            MODE_FORWARD_RETURN_COPY_ONLY_EXPERT_MAJOR_PREPACKED_COMPARE,
-            MODE_FORWARD_RETURN_DIRECT_TO_SOURCE_PALLAS,
-            MODE_FORWARD_RETURN_DIRECT_TO_SOURCE_COMPARE,
-            MODE_FORWARD_EXPERT_MAJOR_DIRECT_RETURN_COMBINE_PALLAS,
-            MODE_FORWARD_EXPERT_MAJOR_DIRECT_RETURN_COMBINE_COMPARE,
-            MODE_FORWARD_EXPERT_MAJOR_DIRECT_PACK_DIRECT_RETURN_COMBINE_PALLAS,
-            MODE_FORWARD_EXPERT_MAJOR_DIRECT_PACK_DIRECT_RETURN_COMBINE_COMPARE,
-            MODE_FORWARD_EXPERT_MAJOR_PREPACKED_RETURN_PALLAS,
-            MODE_FORWARD_EXPERT_MAJOR_PREPACKED_RETURN_COMPARE,
-            MODE_FORWARD_EXPERT_MAJOR_DIRECT_PACK_OWNER_SHARDED_Y_STOP_PALLAS,
-            MODE_FORWARD_EXPERT_MAJOR_DIRECT_PACK_REMOTE_Y_STOP_PALLAS,
-            MODE_FORWARD_SOURCE_EXPAND_DIRECT_PACK_OWNER_SHARDED_Y_PALLAS,
-            MODE_FORWARD_SOURCE_EXPAND_DIRECT_PACK_REMOTE_Y_PALLAS,
-            MODE_FORWARD_W2_BACKWARD_DIRECT_PACK_OWNER_SHARDED_Y_PALLAS,
-            MODE_FORWARD_W2_BACKWARD_DIRECT_PACK_REMOTE_Y_PALLAS,
-            MODE_FORWARD_W13_BACKWARD_DIRECT_PACK_OWNER_SHARDED_Y_PALLAS,
-            MODE_FORWARD_W13_BACKWARD_DIRECT_PACK_REMOTE_Y_PALLAS,
-            MODE_FORWARD_W13_BACKWARD_DIGEST_DIRECT_PACK_OWNER_SHARDED_Y_PALLAS,
-            MODE_FORWARD_W13_BACKWARD_DIGEST_DIRECT_PACK_REMOTE_Y_PALLAS,
-            MODE_FORWARD_W13_BACKWARD_BARRIER_DIGEST_DIRECT_PACK_OWNER_SHARDED_Y_PALLAS,
-            MODE_FORWARD_W13_BACKWARD_BARRIER_DIGEST_DIRECT_PACK_REMOTE_Y_PALLAS,
-            MODE_FORWARD_SWIGLU_BACKWARD_DIGEST_DIRECT_PACK_OWNER_SHARDED_Y_PALLAS,
-            MODE_FORWARD_SWIGLU_BACKWARD_DIGEST_DIRECT_PACK_REMOTE_Y_PALLAS,
-            MODE_FORWARD_W13_DX_BACKWARD_DIGEST_DIRECT_PACK_OWNER_SHARDED_Y_PALLAS,
-            MODE_FORWARD_W13_DX_BACKWARD_DIGEST_DIRECT_PACK_REMOTE_Y_PALLAS,
-            MODE_FORWARD_W13_DW13_BACKWARD_DIGEST_DIRECT_PACK_OWNER_SHARDED_Y_PALLAS,
-            MODE_FORWARD_W13_DW13_BACKWARD_DIGEST_DIRECT_PACK_REMOTE_Y_PALLAS,
-            MODE_W2_EXPERT_MAJOR_PREPACKED_PALLAS_ASSUME_ZERO_INVALID,
-            MODE_W2_EXPERT_MAJOR_PREPACKED_ASSUME_ZERO_INVALID_COMPARE,
-            MODE_W13_EXPERT_MAJOR_PACK_RESHARD,
-            MODE_W13_EXPERT_MAJOR_PALLAS,
-            MODE_SOURCE_PADDED_INBOX_PACK_PALLAS,
-            MODE_W13_SOURCE_PADDED_INBOX_PALLAS,
-            MODE_W13_SOURCE_PADDED_INBOX_COMPARE,
-            MODE_SEMANTIC_PERMUTE_W13_PALLAS,
-            MODE_SEMANTIC_PERMUTE_W13_COMPARE,
-            MODE_W13_SOURCE_PADDED_DIRECT_PACK_PALLAS,
-            MODE_W13_SOURCE_PADDED_DIRECT_PACK_COMPARE,
-            MODE_FORWARD_SOURCE_PADDED_INBOX_DIRECT_RETURN_COMBINE_PALLAS,
-            MODE_FORWARD_SOURCE_PADDED_INBOX_DIRECT_RETURN_COMBINE_COMPARE,
-            MODE_FORWARD_SOURCE_PADDED_DIRECT_PACK_DIRECT_RETURN_COMBINE_PALLAS,
-            MODE_FORWARD_SOURCE_PADDED_DIRECT_PACK_DIRECT_RETURN_COMBINE_COMPARE,
-            MODE_FORWARD_BACKWARD_SOURCE_PADDED_INBOX_DIRECT_QUEUE_PALLAS,
-            MODE_FORWARD_BACKWARD_SOURCE_PADDED_INBOX_DIRECT_QUEUE_COMPARE,
-            MODE_FORWARD_BACKWARD_SOURCE_PADDED_DIRECT_PACK_DIRECT_QUEUE_PALLAS,
-            MODE_FORWARD_BACKWARD_SOURCE_PADDED_DIRECT_PACK_DIRECT_QUEUE_COMPARE,
-            MODE_FORWARD_BACKWARD_SOURCE_PADDED_DIRECT_PACK_DIRECT_QUEUE_WITH_METADATA_PALLAS,
-            MODE_BACKWARD_W2_EXPERT_MAJOR_PALLAS,
-            MODE_BACKWARD_W2_EXPERT_MAJOR_COMPARE,
-            MODE_BACKWARD_W2_EXPERT_MAJOR_PACK_RESHARD,
-            MODE_BACKWARD_W2_EXPERT_MAJOR_PREPACKED_PALLAS,
-            MODE_BACKWARD_W2_EXPERT_MAJOR_PREPACKED_COMPARE,
-            MODE_BACKWARD_W13_EXPERT_MAJOR_PREPACKED_PALLAS,
-            MODE_BACKWARD_W13_EXPERT_MAJOR_PREPACKED_COMPARE,
-            MODE_BACKWARD_W13_DX_ROUTE_EXPERT_MAJOR_PREPACKED_PALLAS,
-            MODE_BACKWARD_W13_DW13_EXPERT_MAJOR_PREPACKED_PALLAS,
-            MODE_BACKWARD_W13_DX_PAIR_PALLAS,
-            MODE_BACKWARD_W13_DW13_PALLAS,
-            MODE_BACKWARD_W13_PALLAS_SCAFFOLD,
-            MODE_BACKWARD_SOURCE_EXPAND_FROM_EXPERT_MAJOR_PALLAS,
-            MODE_BACKWARD_SOURCE_EXPAND_FROM_EXPERT_MAJOR_COMPARE,
-            MODE_BACKWARD_SOURCE_EXPAND_FROM_SAVED_RETURN_QUEUE_PALLAS,
-            MODE_BACKWARD_SOURCE_EXPAND_FROM_SAVED_RETURN_QUEUE_COMPARE,
-            MODE_BACKWARD_SOURCE_EXPAND_FROM_EXPERT_MAJOR_OWNER_SHARDED_DCOMBINE_PALLAS,
-            MODE_BACKWARD_SOURCE_EXPAND_FROM_EXPERT_MAJOR_OWNER_SHARDED_DCOMBINE_COMPARE,
-            MODE_BACKWARD_DY_ROUTE_SOURCE_PUSH_EXPERT_MAJOR_PALLAS,
-            MODE_BACKWARD_DY_ROUTE_SOURCE_PUSH_EXPERT_MAJOR_COMPARE,
-            MODE_BACKWARD_SOURCE_EXPAND_FROM_EXPERT_MAJOR_SOURCE_PUSH_PALLAS,
-            MODE_BACKWARD_SOURCE_EXPAND_FROM_EXPERT_MAJOR_SOURCE_PUSH_COMPARE,
-            MODE_BACKWARD_DCOMBINE_SOURCE_GATHER_EXPERT_MAJOR_PALLAS,
-            MODE_BACKWARD_DCOMBINE_SOURCE_GATHER_EXPERT_MAJOR_COMPARE,
-            MODE_BACKWARD_SOURCE_EXPAND_FROM_EXPERT_MAJOR_SOURCE_GATHER_PALLAS,
-            MODE_BACKWARD_SOURCE_EXPAND_FROM_EXPERT_MAJOR_SOURCE_GATHER_COMPARE,
-            MODE_DX_RETURN_EXPERT_MAJOR_PREPACKED_PALLAS,
-            MODE_DX_RETURN_EXPERT_MAJOR_PREPACKED_COMPARE,
-            MODE_DX_RETURN_SLOT_REDUCE_EXPERT_MAJOR_PREPACKED_PALLAS,
-            MODE_DX_RETURN_SLOT_REDUCE_EXPERT_MAJOR_PREPACKED_COMPARE,
-            MODE_DX_RETURN_SUM_EXPERT_MAJOR_PREPACKED_PALLAS,
-            MODE_DX_RETURN_SUM_EXPERT_MAJOR_PREPACKED_COMPARE,
-            MODE_DX_RETURN_SOURCE_GATHER_EXPERT_MAJOR_PREPACKED_PALLAS,
-            MODE_DX_RETURN_SOURCE_GATHER_EXPERT_MAJOR_PREPACKED_COMPARE,
-            MODE_DX_RETURN_SOURCE_GATHER_EXPERT_MAJOR_PREPACKED_OWNER_SHARDED_PALLAS,
-            MODE_DX_RETURN_SOURCE_GATHER_EXPERT_MAJOR_PREPACKED_OWNER_SHARDED_COMPARE,
-            MODE_DX_RETURN_REMOTE_SOURCE_GATHER_EXPERT_MAJOR_PREPACKED_PALLAS,
-            MODE_DX_RETURN_REMOTE_SOURCE_GATHER_EXPERT_MAJOR_PREPACKED_COMPARE,
-            MODE_DX_RETURN_COPY_ONLY_EXPERT_MAJOR_PREPACKED_PALLAS,
-            MODE_DX_RETURN_COPY_ONLY_EXPERT_MAJOR_PREPACKED_COMPARE,
-            MODE_DX_RETURN_DIRECT_TO_SOURCE_COMBINE_PALLAS,
-            MODE_DX_RETURN_DIRECT_TO_SOURCE_COMBINE_COMPARE,
-            MODE_BACKWARD_PALLAS_SCAFFOLD,
-            MODE_FORWARD_BACKWARD_PALLAS_SCAFFOLD,
-            MODE_FORWARD_BACKWARD_EXPERT_MAJOR_PALLAS,
-            MODE_FORWARD_BACKWARD_EXPERT_MAJOR_COMPARE,
-            MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_PALLAS,
-            MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_PALLAS,
-            MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_LOOKUP_PACK_PALLAS,
-            MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_LOOKUP_PACK_COMPARE,
-            MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_SOURCE_GATHER_PALLAS,
-            MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_SOURCE_GATHER_COMPARE,
-            MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_OWNER_SHARDED_PALLAS,
-            MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_OWNER_SHARDED_COMPARE,
-            MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_OWNER_SHARDED_Y_PALLAS,
-            MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_DIRECT_RETURN_COMBINE_DUPLICATE_W2_PALLAS,
-            MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_DIRECT_RETURN_COMBINE_DUPLICATE_W2_COMPARE,
-            MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_DIRECT_QUEUE_PALLAS,
-            MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_DIRECT_QUEUE_WITH_METADATA_PALLAS,
-            MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_DIRECT_QUEUE_COMPARE,
-            MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_NO_Y_PALLAS,
-            MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_REMOTE_Y_PALLAS,
-            MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_REMOTE_Y_DELAYED_PALLAS,
-            MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_OWNER_SHARDED_DX_PALLAS,
-            MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_REMOTE_DX_PALLAS,
-            MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_OWNER_SHARDED_Y_WITH_METADATA_PALLAS,
-            MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_OWNER_SHARDED_Y_WITH_PALLAS_METADATA_PALLAS,
-            MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_COMPARE,
+        if (
+            mode in SEMANTIC_FUSED_STAGE_MODES
+            or mode
+            in (
+                MODE_W13_EXPERT_MAJOR_PREPACKED,
+                MODE_W13_EXPERT_MAJOR_PREPACKED_COMPARE,
+                MODE_W13_EXPERT_MAJOR_PREPACKED_PALLAS,
+                MODE_FORWARD_EXPERT_MAJOR_PREPACKED_PALLAS,
+                MODE_FORWARD_EXPERT_MAJOR_PREPACKED_COMPARE,
+                MODE_FORWARD_RETURN_EXPERT_MAJOR_PREPACKED_SHARDED_PALLAS,
+                MODE_FORWARD_RETURN_EXPERT_MAJOR_PREPACKED_SHARDED_COMPARE,
+                MODE_FORWARD_RETURN_SLOT_REDUCE_EXPERT_MAJOR_PREPACKED_SHARDED_PALLAS,
+                MODE_FORWARD_RETURN_SLOT_REDUCE_EXPERT_MAJOR_PREPACKED_SHARDED_COMPARE,
+                MODE_FORWARD_RETURN_SUM_EXPERT_MAJOR_PREPACKED_SHARDED_PALLAS,
+                MODE_FORWARD_RETURN_SUM_EXPERT_MAJOR_PREPACKED_SHARDED_COMPARE,
+                MODE_FORWARD_RETURN_SUM_EXPERT_MAJOR_PREPACKED_OWNER_SHARDED_PALLAS,
+                MODE_FORWARD_RETURN_SUM_EXPERT_MAJOR_PREPACKED_OWNER_SHARDED_COMPARE,
+                MODE_FORWARD_RETURN_SUM_LOOKUP_EXPERT_MAJOR_PREPACKED_OWNER_SHARDED_PALLAS,
+                MODE_FORWARD_RETURN_SUM_LOOKUP_EXPERT_MAJOR_PREPACKED_OWNER_SHARDED_COMPARE,
+                MODE_FORWARD_RETURN_REMOTE_SOURCE_GATHER_EXPERT_MAJOR_PREPACKED_PALLAS,
+                MODE_FORWARD_RETURN_REMOTE_SOURCE_GATHER_EXPERT_MAJOR_PREPACKED_COMPARE,
+                MODE_FORWARD_RETURN_COPY_ONLY_EXPERT_MAJOR_PREPACKED_PALLAS,
+                MODE_FORWARD_RETURN_COPY_ONLY_EXPERT_MAJOR_PREPACKED_COMPARE,
+                MODE_FORWARD_RETURN_DIRECT_TO_SOURCE_PALLAS,
+                MODE_FORWARD_RETURN_DIRECT_TO_SOURCE_COMPARE,
+                MODE_FORWARD_EXPERT_MAJOR_DIRECT_RETURN_COMBINE_PALLAS,
+                MODE_FORWARD_EXPERT_MAJOR_DIRECT_RETURN_COMBINE_COMPARE,
+                MODE_FORWARD_EXPERT_MAJOR_DIRECT_PACK_DIRECT_RETURN_COMBINE_PALLAS,
+                MODE_FORWARD_EXPERT_MAJOR_DIRECT_PACK_DIRECT_RETURN_COMBINE_COMPARE,
+                MODE_FORWARD_EXPERT_MAJOR_PREPACKED_RETURN_PALLAS,
+                MODE_FORWARD_EXPERT_MAJOR_PREPACKED_RETURN_COMPARE,
+                MODE_FORWARD_EXPERT_MAJOR_DIRECT_PACK_OWNER_SHARDED_Y_STOP_PALLAS,
+                MODE_FORWARD_EXPERT_MAJOR_DIRECT_PACK_REMOTE_Y_STOP_PALLAS,
+                MODE_FORWARD_SOURCE_EXPAND_DIRECT_PACK_OWNER_SHARDED_Y_PALLAS,
+                MODE_FORWARD_SOURCE_EXPAND_DIRECT_PACK_REMOTE_Y_PALLAS,
+                MODE_FORWARD_W2_BACKWARD_DIRECT_PACK_OWNER_SHARDED_Y_PALLAS,
+                MODE_FORWARD_W2_BACKWARD_DIRECT_PACK_REMOTE_Y_PALLAS,
+                MODE_FORWARD_W13_BACKWARD_DIRECT_PACK_OWNER_SHARDED_Y_PALLAS,
+                MODE_FORWARD_W13_BACKWARD_DIRECT_PACK_REMOTE_Y_PALLAS,
+                MODE_FORWARD_W13_BACKWARD_DIGEST_DIRECT_PACK_OWNER_SHARDED_Y_PALLAS,
+                MODE_FORWARD_W13_BACKWARD_DIGEST_DIRECT_PACK_REMOTE_Y_PALLAS,
+                MODE_FORWARD_W13_BACKWARD_BARRIER_DIGEST_DIRECT_PACK_OWNER_SHARDED_Y_PALLAS,
+                MODE_FORWARD_W13_BACKWARD_BARRIER_DIGEST_DIRECT_PACK_REMOTE_Y_PALLAS,
+                MODE_FORWARD_SWIGLU_BACKWARD_DIGEST_DIRECT_PACK_OWNER_SHARDED_Y_PALLAS,
+                MODE_FORWARD_SWIGLU_BACKWARD_DIGEST_DIRECT_PACK_REMOTE_Y_PALLAS,
+                MODE_FORWARD_W13_DX_BACKWARD_DIGEST_DIRECT_PACK_OWNER_SHARDED_Y_PALLAS,
+                MODE_FORWARD_W13_DX_BACKWARD_DIGEST_DIRECT_PACK_REMOTE_Y_PALLAS,
+                MODE_FORWARD_W13_DW13_BACKWARD_DIGEST_DIRECT_PACK_OWNER_SHARDED_Y_PALLAS,
+                MODE_FORWARD_W13_DW13_BACKWARD_DIGEST_DIRECT_PACK_REMOTE_Y_PALLAS,
+                MODE_W2_EXPERT_MAJOR_PREPACKED_PALLAS_ASSUME_ZERO_INVALID,
+                MODE_W2_EXPERT_MAJOR_PREPACKED_ASSUME_ZERO_INVALID_COMPARE,
+                MODE_W13_EXPERT_MAJOR_PACK_RESHARD,
+                MODE_W13_EXPERT_MAJOR_PALLAS,
+                MODE_SOURCE_PADDED_INBOX_PACK_PALLAS,
+                MODE_W13_SOURCE_PADDED_INBOX_PALLAS,
+                MODE_W13_SOURCE_PADDED_INBOX_COMPARE,
+                MODE_SEMANTIC_PERMUTE_W13_PALLAS,
+                MODE_SEMANTIC_PERMUTE_W13_COMPARE,
+                MODE_W13_SOURCE_PADDED_DIRECT_PACK_PALLAS,
+                MODE_W13_SOURCE_PADDED_DIRECT_PACK_COMPARE,
+                MODE_FORWARD_SOURCE_PADDED_INBOX_DIRECT_RETURN_COMBINE_PALLAS,
+                MODE_FORWARD_SOURCE_PADDED_INBOX_DIRECT_RETURN_COMBINE_COMPARE,
+                MODE_FORWARD_SOURCE_PADDED_DIRECT_PACK_DIRECT_RETURN_COMBINE_PALLAS,
+                MODE_FORWARD_SOURCE_PADDED_DIRECT_PACK_DIRECT_RETURN_COMBINE_COMPARE,
+                MODE_FORWARD_BACKWARD_SOURCE_PADDED_INBOX_DIRECT_QUEUE_PALLAS,
+                MODE_FORWARD_BACKWARD_SOURCE_PADDED_INBOX_DIRECT_QUEUE_COMPARE,
+                MODE_FORWARD_BACKWARD_SOURCE_PADDED_DIRECT_PACK_DIRECT_QUEUE_PALLAS,
+                MODE_FORWARD_BACKWARD_SOURCE_PADDED_DIRECT_PACK_DIRECT_QUEUE_COMPARE,
+                MODE_FORWARD_BACKWARD_SOURCE_PADDED_DIRECT_PACK_DIRECT_QUEUE_WITH_METADATA_PALLAS,
+                MODE_BACKWARD_W2_EXPERT_MAJOR_PALLAS,
+                MODE_BACKWARD_W2_EXPERT_MAJOR_COMPARE,
+                MODE_BACKWARD_W2_EXPERT_MAJOR_PACK_RESHARD,
+                MODE_BACKWARD_W2_EXPERT_MAJOR_PREPACKED_PALLAS,
+                MODE_BACKWARD_W2_EXPERT_MAJOR_PREPACKED_COMPARE,
+                MODE_BACKWARD_W13_EXPERT_MAJOR_PREPACKED_PALLAS,
+                MODE_BACKWARD_W13_EXPERT_MAJOR_PREPACKED_COMPARE,
+                MODE_BACKWARD_W13_DX_ROUTE_EXPERT_MAJOR_PREPACKED_PALLAS,
+                MODE_BACKWARD_W13_DW13_EXPERT_MAJOR_PREPACKED_PALLAS,
+                MODE_BACKWARD_W13_DX_PAIR_PALLAS,
+                MODE_BACKWARD_W13_DW13_PALLAS,
+                MODE_BACKWARD_W13_PALLAS_SCAFFOLD,
+                MODE_BACKWARD_SOURCE_EXPAND_FROM_EXPERT_MAJOR_PALLAS,
+                MODE_BACKWARD_SOURCE_EXPAND_FROM_EXPERT_MAJOR_COMPARE,
+                MODE_BACKWARD_SOURCE_EXPAND_FROM_SAVED_RETURN_QUEUE_PALLAS,
+                MODE_BACKWARD_SOURCE_EXPAND_FROM_SAVED_RETURN_QUEUE_COMPARE,
+                MODE_BACKWARD_SOURCE_EXPAND_FROM_EXPERT_MAJOR_OWNER_SHARDED_DCOMBINE_PALLAS,
+                MODE_BACKWARD_SOURCE_EXPAND_FROM_EXPERT_MAJOR_OWNER_SHARDED_DCOMBINE_COMPARE,
+                MODE_BACKWARD_DY_ROUTE_SOURCE_PUSH_EXPERT_MAJOR_PALLAS,
+                MODE_BACKWARD_DY_ROUTE_SOURCE_PUSH_EXPERT_MAJOR_COMPARE,
+                MODE_BACKWARD_SOURCE_EXPAND_FROM_EXPERT_MAJOR_SOURCE_PUSH_PALLAS,
+                MODE_BACKWARD_SOURCE_EXPAND_FROM_EXPERT_MAJOR_SOURCE_PUSH_COMPARE,
+                MODE_BACKWARD_DCOMBINE_SOURCE_GATHER_EXPERT_MAJOR_PALLAS,
+                MODE_BACKWARD_DCOMBINE_SOURCE_GATHER_EXPERT_MAJOR_COMPARE,
+                MODE_BACKWARD_SOURCE_EXPAND_FROM_EXPERT_MAJOR_SOURCE_GATHER_PALLAS,
+                MODE_BACKWARD_SOURCE_EXPAND_FROM_EXPERT_MAJOR_SOURCE_GATHER_COMPARE,
+                MODE_DX_RETURN_EXPERT_MAJOR_PREPACKED_PALLAS,
+                MODE_DX_RETURN_EXPERT_MAJOR_PREPACKED_COMPARE,
+                MODE_DX_RETURN_SLOT_REDUCE_EXPERT_MAJOR_PREPACKED_PALLAS,
+                MODE_DX_RETURN_SLOT_REDUCE_EXPERT_MAJOR_PREPACKED_COMPARE,
+                MODE_DX_RETURN_SUM_EXPERT_MAJOR_PREPACKED_PALLAS,
+                MODE_DX_RETURN_SUM_EXPERT_MAJOR_PREPACKED_COMPARE,
+                MODE_DX_RETURN_SOURCE_GATHER_EXPERT_MAJOR_PREPACKED_PALLAS,
+                MODE_DX_RETURN_SOURCE_GATHER_EXPERT_MAJOR_PREPACKED_COMPARE,
+                MODE_DX_RETURN_SOURCE_GATHER_EXPERT_MAJOR_PREPACKED_OWNER_SHARDED_PALLAS,
+                MODE_DX_RETURN_SOURCE_GATHER_EXPERT_MAJOR_PREPACKED_OWNER_SHARDED_COMPARE,
+                MODE_DX_RETURN_REMOTE_SOURCE_GATHER_EXPERT_MAJOR_PREPACKED_PALLAS,
+                MODE_DX_RETURN_REMOTE_SOURCE_GATHER_EXPERT_MAJOR_PREPACKED_COMPARE,
+                MODE_DX_RETURN_COPY_ONLY_EXPERT_MAJOR_PREPACKED_PALLAS,
+                MODE_DX_RETURN_COPY_ONLY_EXPERT_MAJOR_PREPACKED_COMPARE,
+                MODE_DX_RETURN_DIRECT_TO_SOURCE_COMBINE_PALLAS,
+                MODE_DX_RETURN_DIRECT_TO_SOURCE_COMBINE_COMPARE,
+                MODE_BACKWARD_PALLAS_SCAFFOLD,
+                MODE_FORWARD_BACKWARD_PALLAS_SCAFFOLD,
+                MODE_FORWARD_BACKWARD_EXPERT_MAJOR_PALLAS,
+                MODE_FORWARD_BACKWARD_EXPERT_MAJOR_COMPARE,
+                MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_PALLAS,
+                MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_PALLAS,
+                MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_LOOKUP_PACK_PALLAS,
+                MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_LOOKUP_PACK_COMPARE,
+                MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_SOURCE_GATHER_PALLAS,
+                MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_SOURCE_GATHER_COMPARE,
+                MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_OWNER_SHARDED_PALLAS,
+                MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_OWNER_SHARDED_COMPARE,
+                MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_OWNER_SHARDED_Y_PALLAS,
+                MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_DIRECT_RETURN_COMBINE_DUPLICATE_W2_PALLAS,
+                MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_DIRECT_RETURN_COMBINE_DUPLICATE_W2_COMPARE,
+                MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_DIRECT_QUEUE_PALLAS,
+                MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_DIRECT_QUEUE_WITH_METADATA_PALLAS,
+                MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_DIRECT_QUEUE_COMPARE,
+                MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_NO_Y_PALLAS,
+                MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_REMOTE_Y_PALLAS,
+                MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_REMOTE_Y_DELAYED_PALLAS,
+                MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_OWNER_SHARDED_DX_PALLAS,
+                MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_REMOTE_DX_PALLAS,
+                MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_OWNER_SHARDED_Y_WITH_METADATA_PALLAS,
+                MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_OWNER_SHARDED_Y_WITH_PALLAS_METADATA_PALLAS,
+                MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_COMPARE,
+            )
         )
         and jax.default_backend() == "gpu"
         and not args.pallas_interpret
         else None
     )
     source_padded_config = _source_padded_inbox_config(args, plan) if mode in SOURCE_PADDED_MODES else None
+
+    def semantic_fused_queue_shape() -> tuple[int, int, int]:
+        return _semantic_fused_queue_shape(args, plan)
 
     def w13_expert_major_reference_from_prepacked(
         inputs: SemanticW13ExpertBenchInputs,
@@ -3752,6 +3896,124 @@ def _mode_callable(mode: str, plan: SourcePushSemanticPlan, args: argparse.Names
         }
         metrics.update(semantic_permute_overflow_metrics(result, queue))
         return metrics
+
+    def semantic_fused_w2_return(inputs: SemanticBenchInputs, *, interpret: bool):
+        _send_chunks_per_dst, entries_per_dst, fused_rows_per_expert = semantic_fused_queue_shape()
+        z_expert, _valid = source_push_semantic_pair_to_expert_major_jax(
+            inputs.z_pair,
+            plan,
+            rows_per_expert_capacity=fused_rows_per_expert,
+        )
+        return source_push_semantic_fused_w2_return.source_push_semantic_fused_w2_return(
+            z_expert.astype(jnp.bfloat16),
+            inputs.w_down.astype(jnp.bfloat16),
+            plan,
+            entries_per_dst=entries_per_dst,
+            mesh=expert_mesh,
+            interpret=interpret,
+        )
+
+    def semantic_fused_w2_return_pallas(inputs: SemanticBenchInputs):
+        result = semantic_fused_w2_return(inputs, interpret=args.pallas_interpret)
+        return {
+            "y": result.y,
+            "return_y": result.return_y,
+            "valid": result.expert_valid,
+            "queue_overflow_route_error_count": result.queue_overflow_routes,
+            "layout_overflow_row_error_count": result.layout_overflow_rows,
+        }
+
+    def semantic_fused_w2_return_compare(inputs: SemanticBenchInputs):
+        expected = semantic_fused_w2_return(inputs, interpret=True)
+        observed = semantic_fused_w2_return(inputs, interpret=args.pallas_interpret)
+        return {
+            **_comparison_metrics("y", observed.y, expected.y),
+            **_comparison_metrics("return_y", observed.return_y, expected.return_y),
+            "valid_error_count": jnp.sum(observed.expert_valid != expected.expert_valid, dtype=jnp.int32),
+            "queue_overflow_route_error_count": observed.queue_overflow_routes,
+            "layout_overflow_row_error_count": observed.layout_overflow_rows,
+        }
+
+    def semantic_fused_w2_backward(
+        inputs: SemanticFusedW2BackwardBenchInputs,
+        *,
+        interpret: bool,
+    ):
+        send_chunks_per_dst, _entries_per_dst, fused_rows_per_expert = semantic_fused_queue_shape()
+        return source_push_semantic_fused_w2_backward.source_push_semantic_fused_w2_backward(
+            inputs.dy,
+            inputs.return_y,
+            inputs.h_expert,
+            inputs.w_down,
+            plan,
+            send_chunks_per_dst=send_chunks_per_dst,
+            rows_per_expert_capacity=fused_rows_per_expert,
+            mesh=expert_mesh,
+            interpret=interpret,
+        )
+
+    def semantic_fused_w2_backward_pallas(inputs: SemanticFusedW2BackwardBenchInputs):
+        result = semantic_fused_w2_backward(inputs, interpret=args.pallas_interpret)
+        return {
+            "d_h": result.d_h,
+            "d_w2": result.d_w2,
+            "d_route_weight": result.d_route_weight,
+            "queue_overflow_route_error_count": result.queue_overflow_routes,
+            "layout_overflow_row_error_count": result.layout_overflow_rows,
+        }
+
+    def semantic_fused_w2_backward_compare(inputs: SemanticFusedW2BackwardBenchInputs):
+        expected = semantic_fused_w2_backward(inputs, interpret=True)
+        observed = semantic_fused_w2_backward(inputs, interpret=args.pallas_interpret)
+        return {
+            **_comparison_metrics("d_h", observed.d_h, expected.d_h),
+            **_comparison_metrics("d_w2", observed.d_w2, expected.d_w2),
+            **_comparison_metrics(
+                "d_route_weight",
+                observed.d_route_weight,
+                expected.d_route_weight,
+            ),
+            "valid_error_count": jnp.sum(observed.valid != expected.valid, dtype=jnp.int32),
+            "queue_overflow_route_error_count": observed.queue_overflow_routes,
+            "layout_overflow_row_error_count": observed.layout_overflow_rows,
+        }
+
+    def semantic_fused_w13_backward(inputs: SemanticBenchInputs, *, interpret: bool):
+        send_chunks_per_dst, _entries_per_dst, fused_rows_per_expert = semantic_fused_queue_shape()
+        dz13, _valid = source_push_semantic_pair_to_expert_major_jax(
+            inputs.dz_pair,
+            plan,
+            rows_per_expert_capacity=fused_rows_per_expert,
+        )
+        return source_push_semantic_fused_w13_backward.source_push_semantic_fused_w13_backward(
+            inputs.x.astype(jnp.bfloat16),
+            dz13.astype(jnp.bfloat16),
+            inputs.w_gate_up.astype(jnp.bfloat16),
+            plan,
+            send_chunks_per_dst=send_chunks_per_dst,
+            rows_per_expert_capacity=fused_rows_per_expert,
+            mesh=expert_mesh,
+            interpret=interpret,
+        )
+
+    def semantic_fused_w13_backward_pallas(inputs: SemanticBenchInputs):
+        result = semantic_fused_w13_backward(inputs, interpret=args.pallas_interpret)
+        return {
+            "dx": result.dx,
+            "dw13": result.dw13,
+            "queue_overflow_route_error_count": result.queue_overflow_routes,
+            "layout_overflow_row_error_count": result.layout_overflow_rows,
+        }
+
+    def semantic_fused_w13_backward_compare(inputs: SemanticBenchInputs):
+        expected = semantic_fused_w13_backward(inputs, interpret=True)
+        observed = semantic_fused_w13_backward(inputs, interpret=args.pallas_interpret)
+        return {
+            **_comparison_metrics("dx", observed.dx, expected.dx),
+            **_comparison_metrics("dw13", observed.dw13, expected.dw13),
+            "queue_overflow_route_error_count": observed.queue_overflow_routes,
+            "layout_overflow_row_error_count": observed.layout_overflow_rows,
+        }
 
     def forward_source_padded_components(inputs: SemanticBenchInputs, *, output_dtype: jnp.dtype):
         result, queue = source_padded_inbox(inputs)
@@ -7862,6 +8124,12 @@ def _mode_callable(mode: str, plan: SourcePushSemanticPlan, args: argparse.Names
         MODE_W13_SOURCE_PADDED_INBOX_COMPARE: w13_source_padded_inbox_compare,
         MODE_SEMANTIC_PERMUTE_W13_PALLAS: semantic_permute_w13_pallas,
         MODE_SEMANTIC_PERMUTE_W13_COMPARE: semantic_permute_w13_compare,
+        MODE_SEMANTIC_FUSED_W2_RETURN_PALLAS: semantic_fused_w2_return_pallas,
+        MODE_SEMANTIC_FUSED_W2_RETURN_COMPARE: semantic_fused_w2_return_compare,
+        MODE_SEMANTIC_FUSED_W2_BACKWARD_PALLAS: semantic_fused_w2_backward_pallas,
+        MODE_SEMANTIC_FUSED_W2_BACKWARD_COMPARE: semantic_fused_w2_backward_compare,
+        MODE_SEMANTIC_FUSED_W13_BACKWARD_PALLAS: semantic_fused_w13_backward_pallas,
+        MODE_SEMANTIC_FUSED_W13_BACKWARD_COMPARE: semantic_fused_w13_backward_compare,
         MODE_W13_SOURCE_PADDED_DIRECT_PACK_PALLAS: w13_source_padded_direct_pack_pallas,
         MODE_W13_SOURCE_PADDED_DIRECT_PACK_COMPARE: w13_source_padded_direct_pack_compare,
         MODE_W2: w2,
@@ -8653,144 +8921,147 @@ def _run_stage_mode(
     try:
         expert_mesh = (
             _make_mesh(args.ep_size)
-            if mode
-            in (
-                MODE_W13_EXPERT_MAJOR_PREPACKED,
-                MODE_W13_EXPERT_MAJOR_PREPACKED_PALLAS,
-                MODE_W13_EXPERT_MAJOR_PREPACKED_COMPARE,
-                MODE_W13_EXPERT_MAJOR_PALLAS,
-                MODE_W13_EXPERT_MAJOR_COMPARE,
-                MODE_SOURCE_PADDED_INBOX_PACK_PALLAS,
-                MODE_W13_SOURCE_PADDED_DIRECT_PACK_PALLAS,
-                MODE_W13_SOURCE_PADDED_DIRECT_PACK_COMPARE,
-                MODE_W13_SOURCE_PADDED_INBOX_PALLAS,
-                MODE_W13_SOURCE_PADDED_INBOX_COMPARE,
-                MODE_SEMANTIC_PERMUTE_W13_PALLAS,
-                MODE_SEMANTIC_PERMUTE_W13_COMPARE,
-                MODE_W2_EXPERT_MAJOR_PREPACKED_PALLAS,
-                MODE_W2_EXPERT_MAJOR_PREPACKED_COMPARE,
-                MODE_W2_EXPERT_MAJOR_PREPACKED_PALLAS_ASSUME_ZERO_INVALID,
-                MODE_W2_EXPERT_MAJOR_PREPACKED_ASSUME_ZERO_INVALID_COMPARE,
-                MODE_FORWARD_EXPERT_MAJOR_PALLAS,
-                MODE_FORWARD_EXPERT_MAJOR_COMPARE,
-                MODE_FORWARD_EXPERT_MAJOR_PREPACKED_PALLAS,
-                MODE_FORWARD_EXPERT_MAJOR_PREPACKED_COMPARE,
-                MODE_FORWARD_RETURN_EXPERT_MAJOR_PREPACKED_SHARDED_PALLAS,
-                MODE_FORWARD_RETURN_EXPERT_MAJOR_PREPACKED_SHARDED_COMPARE,
-                MODE_FORWARD_RETURN_SLOT_REDUCE_EXPERT_MAJOR_PREPACKED_SHARDED_PALLAS,
-                MODE_FORWARD_RETURN_SLOT_REDUCE_EXPERT_MAJOR_PREPACKED_SHARDED_COMPARE,
-                MODE_FORWARD_RETURN_SUM_EXPERT_MAJOR_PREPACKED_SHARDED_PALLAS,
-                MODE_FORWARD_RETURN_SUM_EXPERT_MAJOR_PREPACKED_SHARDED_COMPARE,
-                MODE_FORWARD_RETURN_SUM_EXPERT_MAJOR_PREPACKED_OWNER_SHARDED_PALLAS,
-                MODE_FORWARD_RETURN_SUM_EXPERT_MAJOR_PREPACKED_OWNER_SHARDED_COMPARE,
-                MODE_FORWARD_RETURN_SUM_LOOKUP_EXPERT_MAJOR_PREPACKED_OWNER_SHARDED_PALLAS,
-                MODE_FORWARD_RETURN_SUM_LOOKUP_EXPERT_MAJOR_PREPACKED_OWNER_SHARDED_COMPARE,
-                MODE_FORWARD_RETURN_REMOTE_SOURCE_GATHER_EXPERT_MAJOR_PREPACKED_PALLAS,
-                MODE_FORWARD_RETURN_REMOTE_SOURCE_GATHER_EXPERT_MAJOR_PREPACKED_COMPARE,
-                MODE_FORWARD_RETURN_REVERSE_ROUTE_SOURCE_GATHER_EXPERT_MAJOR_PREPACKED_PALLAS,
-                MODE_FORWARD_RETURN_REVERSE_ROUTE_SOURCE_GATHER_EXPERT_MAJOR_PREPACKED_COMPARE,
-                MODE_FORWARD_RETURN_COPY_ONLY_EXPERT_MAJOR_PREPACKED_PALLAS,
-                MODE_FORWARD_RETURN_COPY_ONLY_EXPERT_MAJOR_PREPACKED_COMPARE,
-                MODE_FORWARD_RETURN_DIRECT_TO_SOURCE_PALLAS,
-                MODE_FORWARD_RETURN_DIRECT_TO_SOURCE_COMPARE,
-                MODE_FORWARD_EXPERT_MAJOR_DIRECT_RETURN_COMBINE_PALLAS,
-                MODE_FORWARD_EXPERT_MAJOR_DIRECT_RETURN_COMBINE_COMPARE,
-                MODE_FORWARD_EXPERT_MAJOR_DIRECT_PACK_DIRECT_RETURN_COMBINE_PALLAS,
-                MODE_FORWARD_EXPERT_MAJOR_DIRECT_PACK_DIRECT_RETURN_COMBINE_COMPARE,
-                MODE_FORWARD_SOURCE_PADDED_DIRECT_PACK_DIRECT_RETURN_COMBINE_PALLAS,
-                MODE_FORWARD_SOURCE_PADDED_DIRECT_PACK_DIRECT_RETURN_COMBINE_COMPARE,
-                MODE_FORWARD_SOURCE_PADDED_INBOX_DIRECT_RETURN_COMBINE_PALLAS,
-                MODE_FORWARD_SOURCE_PADDED_INBOX_DIRECT_RETURN_COMBINE_COMPARE,
-                MODE_FORWARD_BACKWARD_SOURCE_PADDED_INBOX_DIRECT_QUEUE_PALLAS,
-                MODE_FORWARD_BACKWARD_SOURCE_PADDED_INBOX_DIRECT_QUEUE_COMPARE,
-                MODE_FORWARD_BACKWARD_SOURCE_PADDED_DIRECT_PACK_DIRECT_QUEUE_PALLAS,
-                MODE_FORWARD_BACKWARD_SOURCE_PADDED_DIRECT_PACK_DIRECT_QUEUE_COMPARE,
-                MODE_FORWARD_BACKWARD_SOURCE_PADDED_DIRECT_PACK_DIRECT_QUEUE_WITH_METADATA_PALLAS,
-                MODE_FORWARD_EXPERT_MAJOR_PREPACKED_RETURN_PALLAS,
-                MODE_FORWARD_EXPERT_MAJOR_PREPACKED_RETURN_COMPARE,
-                MODE_FORWARD_EXPERT_MAJOR_RETURN_SUM_PALLAS,
-                MODE_FORWARD_EXPERT_MAJOR_RETURN_SUM_COMPARE,
-                MODE_FORWARD_EXPERT_MAJOR_DIRECT_PACK_OWNER_SHARDED_Y_STOP_PALLAS,
-                MODE_FORWARD_EXPERT_MAJOR_DIRECT_PACK_REMOTE_Y_STOP_PALLAS,
-                MODE_FORWARD_SOURCE_EXPAND_DIRECT_PACK_OWNER_SHARDED_Y_PALLAS,
-                MODE_FORWARD_SOURCE_EXPAND_DIRECT_PACK_REMOTE_Y_PALLAS,
-                MODE_FORWARD_W2_BACKWARD_DIRECT_PACK_OWNER_SHARDED_Y_PALLAS,
-                MODE_FORWARD_W2_BACKWARD_DIRECT_PACK_REMOTE_Y_PALLAS,
-                MODE_FORWARD_W13_BACKWARD_DIRECT_PACK_OWNER_SHARDED_Y_PALLAS,
-                MODE_FORWARD_W13_BACKWARD_DIRECT_PACK_REMOTE_Y_PALLAS,
-                MODE_FORWARD_W13_BACKWARD_DIGEST_DIRECT_PACK_OWNER_SHARDED_Y_PALLAS,
-                MODE_FORWARD_W13_BACKWARD_DIGEST_DIRECT_PACK_REMOTE_Y_PALLAS,
-                MODE_FORWARD_W13_BACKWARD_BARRIER_DIGEST_DIRECT_PACK_OWNER_SHARDED_Y_PALLAS,
-                MODE_FORWARD_W13_BACKWARD_BARRIER_DIGEST_DIRECT_PACK_REMOTE_Y_PALLAS,
-                MODE_FORWARD_SWIGLU_BACKWARD_DIGEST_DIRECT_PACK_OWNER_SHARDED_Y_PALLAS,
-                MODE_FORWARD_SWIGLU_BACKWARD_DIGEST_DIRECT_PACK_REMOTE_Y_PALLAS,
-                MODE_FORWARD_W13_DX_BACKWARD_DIGEST_DIRECT_PACK_OWNER_SHARDED_Y_PALLAS,
-                MODE_FORWARD_W13_DX_BACKWARD_DIGEST_DIRECT_PACK_REMOTE_Y_PALLAS,
-                MODE_FORWARD_W13_DW13_BACKWARD_DIGEST_DIRECT_PACK_OWNER_SHARDED_Y_PALLAS,
-                MODE_FORWARD_W13_DW13_BACKWARD_DIGEST_DIRECT_PACK_REMOTE_Y_PALLAS,
-                MODE_W13_EXPERT_MAJOR_PACK_RESHARD,
-                MODE_BACKWARD_W2_EXPERT_MAJOR_PALLAS,
-                MODE_BACKWARD_W2_EXPERT_MAJOR_COMPARE,
-                MODE_BACKWARD_W2_EXPERT_MAJOR_PACK_RESHARD,
-                MODE_BACKWARD_W2_EXPERT_MAJOR_PREPACKED_PALLAS,
-                MODE_BACKWARD_W2_EXPERT_MAJOR_PREPACKED_COMPARE,
-                MODE_BACKWARD_W13_EXPERT_MAJOR_PREPACKED_PALLAS,
-                MODE_BACKWARD_W13_EXPERT_MAJOR_PREPACKED_COMPARE,
-                MODE_BACKWARD_W13_DX_ROUTE_EXPERT_MAJOR_PREPACKED_PALLAS,
-                MODE_BACKWARD_W13_DW13_EXPERT_MAJOR_PREPACKED_PALLAS,
-                MODE_BACKWARD_SOURCE_EXPAND_FROM_EXPERT_MAJOR_PALLAS,
-                MODE_BACKWARD_SOURCE_EXPAND_FROM_EXPERT_MAJOR_COMPARE,
-                MODE_BACKWARD_SOURCE_EXPAND_FROM_SAVED_RETURN_QUEUE_PALLAS,
-                MODE_BACKWARD_SOURCE_EXPAND_FROM_SAVED_RETURN_QUEUE_COMPARE,
-                MODE_BACKWARD_SOURCE_EXPAND_FROM_EXPERT_MAJOR_OWNER_SHARDED_DCOMBINE_PALLAS,
-                MODE_BACKWARD_SOURCE_EXPAND_FROM_EXPERT_MAJOR_OWNER_SHARDED_DCOMBINE_COMPARE,
-                MODE_BACKWARD_DY_ROUTE_SOURCE_PUSH_EXPERT_MAJOR_PALLAS,
-                MODE_BACKWARD_DY_ROUTE_SOURCE_PUSH_EXPERT_MAJOR_COMPARE,
-                MODE_BACKWARD_SOURCE_EXPAND_FROM_EXPERT_MAJOR_SOURCE_PUSH_PALLAS,
-                MODE_BACKWARD_SOURCE_EXPAND_FROM_EXPERT_MAJOR_SOURCE_PUSH_COMPARE,
-                MODE_BACKWARD_DCOMBINE_SOURCE_GATHER_EXPERT_MAJOR_PALLAS,
-                MODE_BACKWARD_DCOMBINE_SOURCE_GATHER_EXPERT_MAJOR_COMPARE,
-                MODE_BACKWARD_SOURCE_EXPAND_FROM_EXPERT_MAJOR_SOURCE_GATHER_PALLAS,
-                MODE_BACKWARD_SOURCE_EXPAND_FROM_EXPERT_MAJOR_SOURCE_GATHER_COMPARE,
-                MODE_DX_RETURN_EXPERT_MAJOR_PREPACKED_PALLAS,
-                MODE_DX_RETURN_EXPERT_MAJOR_PREPACKED_COMPARE,
-                MODE_DX_RETURN_SLOT_REDUCE_EXPERT_MAJOR_PREPACKED_PALLAS,
-                MODE_DX_RETURN_SLOT_REDUCE_EXPERT_MAJOR_PREPACKED_COMPARE,
-                MODE_DX_RETURN_SUM_EXPERT_MAJOR_PREPACKED_PALLAS,
-                MODE_DX_RETURN_SUM_EXPERT_MAJOR_PREPACKED_COMPARE,
-                MODE_DX_RETURN_SOURCE_GATHER_EXPERT_MAJOR_PREPACKED_PALLAS,
-                MODE_DX_RETURN_SOURCE_GATHER_EXPERT_MAJOR_PREPACKED_COMPARE,
-                MODE_DX_RETURN_SOURCE_GATHER_EXPERT_MAJOR_PREPACKED_OWNER_SHARDED_PALLAS,
-                MODE_DX_RETURN_SOURCE_GATHER_EXPERT_MAJOR_PREPACKED_OWNER_SHARDED_COMPARE,
-                MODE_DX_RETURN_COPY_ONLY_EXPERT_MAJOR_PREPACKED_PALLAS,
-                MODE_DX_RETURN_COPY_ONLY_EXPERT_MAJOR_PREPACKED_COMPARE,
-                MODE_DX_RETURN_DIRECT_TO_SOURCE_COMBINE_PALLAS,
-                MODE_DX_RETURN_DIRECT_TO_SOURCE_COMBINE_COMPARE,
-                MODE_FORWARD_BACKWARD_EXPERT_MAJOR_PALLAS,
-                MODE_FORWARD_BACKWARD_EXPERT_MAJOR_COMPARE,
-                MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_PALLAS,
-                MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_PALLAS,
-                MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_LOOKUP_PACK_PALLAS,
-                MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_LOOKUP_PACK_COMPARE,
-                MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_SOURCE_GATHER_PALLAS,
-                MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_SOURCE_GATHER_COMPARE,
-                MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_OWNER_SHARDED_PALLAS,
-                MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_OWNER_SHARDED_COMPARE,
-                MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_OWNER_SHARDED_Y_PALLAS,
-                MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_DIRECT_RETURN_COMBINE_DUPLICATE_W2_PALLAS,
-                MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_DIRECT_RETURN_COMBINE_DUPLICATE_W2_COMPARE,
-                MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_DIRECT_QUEUE_PALLAS,
-                MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_DIRECT_QUEUE_WITH_METADATA_PALLAS,
-                MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_DIRECT_QUEUE_COMPARE,
-                MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_OWNER_SHARDED_Y_SLOT_REDUCE_PALLAS,
-                MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_NO_Y_PALLAS,
-                MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_REMOTE_Y_PALLAS,
-                MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_REMOTE_Y_DELAYED_PALLAS,
-                MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_OWNER_SHARDED_DX_PALLAS,
-                MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_REMOTE_DX_PALLAS,
-                MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_OWNER_SHARDED_Y_WITH_METADATA_PALLAS,
-                MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_OWNER_SHARDED_Y_WITH_PALLAS_METADATA_PALLAS,
-                MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_COMPARE,
+            if (
+                mode in SEMANTIC_FUSED_STAGE_MODES
+                or mode
+                in (
+                    MODE_W13_EXPERT_MAJOR_PREPACKED,
+                    MODE_W13_EXPERT_MAJOR_PREPACKED_PALLAS,
+                    MODE_W13_EXPERT_MAJOR_PREPACKED_COMPARE,
+                    MODE_W13_EXPERT_MAJOR_PALLAS,
+                    MODE_W13_EXPERT_MAJOR_COMPARE,
+                    MODE_SOURCE_PADDED_INBOX_PACK_PALLAS,
+                    MODE_W13_SOURCE_PADDED_DIRECT_PACK_PALLAS,
+                    MODE_W13_SOURCE_PADDED_DIRECT_PACK_COMPARE,
+                    MODE_W13_SOURCE_PADDED_INBOX_PALLAS,
+                    MODE_W13_SOURCE_PADDED_INBOX_COMPARE,
+                    MODE_SEMANTIC_PERMUTE_W13_PALLAS,
+                    MODE_SEMANTIC_PERMUTE_W13_COMPARE,
+                    MODE_W2_EXPERT_MAJOR_PREPACKED_PALLAS,
+                    MODE_W2_EXPERT_MAJOR_PREPACKED_COMPARE,
+                    MODE_W2_EXPERT_MAJOR_PREPACKED_PALLAS_ASSUME_ZERO_INVALID,
+                    MODE_W2_EXPERT_MAJOR_PREPACKED_ASSUME_ZERO_INVALID_COMPARE,
+                    MODE_FORWARD_EXPERT_MAJOR_PALLAS,
+                    MODE_FORWARD_EXPERT_MAJOR_COMPARE,
+                    MODE_FORWARD_EXPERT_MAJOR_PREPACKED_PALLAS,
+                    MODE_FORWARD_EXPERT_MAJOR_PREPACKED_COMPARE,
+                    MODE_FORWARD_RETURN_EXPERT_MAJOR_PREPACKED_SHARDED_PALLAS,
+                    MODE_FORWARD_RETURN_EXPERT_MAJOR_PREPACKED_SHARDED_COMPARE,
+                    MODE_FORWARD_RETURN_SLOT_REDUCE_EXPERT_MAJOR_PREPACKED_SHARDED_PALLAS,
+                    MODE_FORWARD_RETURN_SLOT_REDUCE_EXPERT_MAJOR_PREPACKED_SHARDED_COMPARE,
+                    MODE_FORWARD_RETURN_SUM_EXPERT_MAJOR_PREPACKED_SHARDED_PALLAS,
+                    MODE_FORWARD_RETURN_SUM_EXPERT_MAJOR_PREPACKED_SHARDED_COMPARE,
+                    MODE_FORWARD_RETURN_SUM_EXPERT_MAJOR_PREPACKED_OWNER_SHARDED_PALLAS,
+                    MODE_FORWARD_RETURN_SUM_EXPERT_MAJOR_PREPACKED_OWNER_SHARDED_COMPARE,
+                    MODE_FORWARD_RETURN_SUM_LOOKUP_EXPERT_MAJOR_PREPACKED_OWNER_SHARDED_PALLAS,
+                    MODE_FORWARD_RETURN_SUM_LOOKUP_EXPERT_MAJOR_PREPACKED_OWNER_SHARDED_COMPARE,
+                    MODE_FORWARD_RETURN_REMOTE_SOURCE_GATHER_EXPERT_MAJOR_PREPACKED_PALLAS,
+                    MODE_FORWARD_RETURN_REMOTE_SOURCE_GATHER_EXPERT_MAJOR_PREPACKED_COMPARE,
+                    MODE_FORWARD_RETURN_REVERSE_ROUTE_SOURCE_GATHER_EXPERT_MAJOR_PREPACKED_PALLAS,
+                    MODE_FORWARD_RETURN_REVERSE_ROUTE_SOURCE_GATHER_EXPERT_MAJOR_PREPACKED_COMPARE,
+                    MODE_FORWARD_RETURN_COPY_ONLY_EXPERT_MAJOR_PREPACKED_PALLAS,
+                    MODE_FORWARD_RETURN_COPY_ONLY_EXPERT_MAJOR_PREPACKED_COMPARE,
+                    MODE_FORWARD_RETURN_DIRECT_TO_SOURCE_PALLAS,
+                    MODE_FORWARD_RETURN_DIRECT_TO_SOURCE_COMPARE,
+                    MODE_FORWARD_EXPERT_MAJOR_DIRECT_RETURN_COMBINE_PALLAS,
+                    MODE_FORWARD_EXPERT_MAJOR_DIRECT_RETURN_COMBINE_COMPARE,
+                    MODE_FORWARD_EXPERT_MAJOR_DIRECT_PACK_DIRECT_RETURN_COMBINE_PALLAS,
+                    MODE_FORWARD_EXPERT_MAJOR_DIRECT_PACK_DIRECT_RETURN_COMBINE_COMPARE,
+                    MODE_FORWARD_SOURCE_PADDED_DIRECT_PACK_DIRECT_RETURN_COMBINE_PALLAS,
+                    MODE_FORWARD_SOURCE_PADDED_DIRECT_PACK_DIRECT_RETURN_COMBINE_COMPARE,
+                    MODE_FORWARD_SOURCE_PADDED_INBOX_DIRECT_RETURN_COMBINE_PALLAS,
+                    MODE_FORWARD_SOURCE_PADDED_INBOX_DIRECT_RETURN_COMBINE_COMPARE,
+                    MODE_FORWARD_BACKWARD_SOURCE_PADDED_INBOX_DIRECT_QUEUE_PALLAS,
+                    MODE_FORWARD_BACKWARD_SOURCE_PADDED_INBOX_DIRECT_QUEUE_COMPARE,
+                    MODE_FORWARD_BACKWARD_SOURCE_PADDED_DIRECT_PACK_DIRECT_QUEUE_PALLAS,
+                    MODE_FORWARD_BACKWARD_SOURCE_PADDED_DIRECT_PACK_DIRECT_QUEUE_COMPARE,
+                    MODE_FORWARD_BACKWARD_SOURCE_PADDED_DIRECT_PACK_DIRECT_QUEUE_WITH_METADATA_PALLAS,
+                    MODE_FORWARD_EXPERT_MAJOR_PREPACKED_RETURN_PALLAS,
+                    MODE_FORWARD_EXPERT_MAJOR_PREPACKED_RETURN_COMPARE,
+                    MODE_FORWARD_EXPERT_MAJOR_RETURN_SUM_PALLAS,
+                    MODE_FORWARD_EXPERT_MAJOR_RETURN_SUM_COMPARE,
+                    MODE_FORWARD_EXPERT_MAJOR_DIRECT_PACK_OWNER_SHARDED_Y_STOP_PALLAS,
+                    MODE_FORWARD_EXPERT_MAJOR_DIRECT_PACK_REMOTE_Y_STOP_PALLAS,
+                    MODE_FORWARD_SOURCE_EXPAND_DIRECT_PACK_OWNER_SHARDED_Y_PALLAS,
+                    MODE_FORWARD_SOURCE_EXPAND_DIRECT_PACK_REMOTE_Y_PALLAS,
+                    MODE_FORWARD_W2_BACKWARD_DIRECT_PACK_OWNER_SHARDED_Y_PALLAS,
+                    MODE_FORWARD_W2_BACKWARD_DIRECT_PACK_REMOTE_Y_PALLAS,
+                    MODE_FORWARD_W13_BACKWARD_DIRECT_PACK_OWNER_SHARDED_Y_PALLAS,
+                    MODE_FORWARD_W13_BACKWARD_DIRECT_PACK_REMOTE_Y_PALLAS,
+                    MODE_FORWARD_W13_BACKWARD_DIGEST_DIRECT_PACK_OWNER_SHARDED_Y_PALLAS,
+                    MODE_FORWARD_W13_BACKWARD_DIGEST_DIRECT_PACK_REMOTE_Y_PALLAS,
+                    MODE_FORWARD_W13_BACKWARD_BARRIER_DIGEST_DIRECT_PACK_OWNER_SHARDED_Y_PALLAS,
+                    MODE_FORWARD_W13_BACKWARD_BARRIER_DIGEST_DIRECT_PACK_REMOTE_Y_PALLAS,
+                    MODE_FORWARD_SWIGLU_BACKWARD_DIGEST_DIRECT_PACK_OWNER_SHARDED_Y_PALLAS,
+                    MODE_FORWARD_SWIGLU_BACKWARD_DIGEST_DIRECT_PACK_REMOTE_Y_PALLAS,
+                    MODE_FORWARD_W13_DX_BACKWARD_DIGEST_DIRECT_PACK_OWNER_SHARDED_Y_PALLAS,
+                    MODE_FORWARD_W13_DX_BACKWARD_DIGEST_DIRECT_PACK_REMOTE_Y_PALLAS,
+                    MODE_FORWARD_W13_DW13_BACKWARD_DIGEST_DIRECT_PACK_OWNER_SHARDED_Y_PALLAS,
+                    MODE_FORWARD_W13_DW13_BACKWARD_DIGEST_DIRECT_PACK_REMOTE_Y_PALLAS,
+                    MODE_W13_EXPERT_MAJOR_PACK_RESHARD,
+                    MODE_BACKWARD_W2_EXPERT_MAJOR_PALLAS,
+                    MODE_BACKWARD_W2_EXPERT_MAJOR_COMPARE,
+                    MODE_BACKWARD_W2_EXPERT_MAJOR_PACK_RESHARD,
+                    MODE_BACKWARD_W2_EXPERT_MAJOR_PREPACKED_PALLAS,
+                    MODE_BACKWARD_W2_EXPERT_MAJOR_PREPACKED_COMPARE,
+                    MODE_BACKWARD_W13_EXPERT_MAJOR_PREPACKED_PALLAS,
+                    MODE_BACKWARD_W13_EXPERT_MAJOR_PREPACKED_COMPARE,
+                    MODE_BACKWARD_W13_DX_ROUTE_EXPERT_MAJOR_PREPACKED_PALLAS,
+                    MODE_BACKWARD_W13_DW13_EXPERT_MAJOR_PREPACKED_PALLAS,
+                    MODE_BACKWARD_SOURCE_EXPAND_FROM_EXPERT_MAJOR_PALLAS,
+                    MODE_BACKWARD_SOURCE_EXPAND_FROM_EXPERT_MAJOR_COMPARE,
+                    MODE_BACKWARD_SOURCE_EXPAND_FROM_SAVED_RETURN_QUEUE_PALLAS,
+                    MODE_BACKWARD_SOURCE_EXPAND_FROM_SAVED_RETURN_QUEUE_COMPARE,
+                    MODE_BACKWARD_SOURCE_EXPAND_FROM_EXPERT_MAJOR_OWNER_SHARDED_DCOMBINE_PALLAS,
+                    MODE_BACKWARD_SOURCE_EXPAND_FROM_EXPERT_MAJOR_OWNER_SHARDED_DCOMBINE_COMPARE,
+                    MODE_BACKWARD_DY_ROUTE_SOURCE_PUSH_EXPERT_MAJOR_PALLAS,
+                    MODE_BACKWARD_DY_ROUTE_SOURCE_PUSH_EXPERT_MAJOR_COMPARE,
+                    MODE_BACKWARD_SOURCE_EXPAND_FROM_EXPERT_MAJOR_SOURCE_PUSH_PALLAS,
+                    MODE_BACKWARD_SOURCE_EXPAND_FROM_EXPERT_MAJOR_SOURCE_PUSH_COMPARE,
+                    MODE_BACKWARD_DCOMBINE_SOURCE_GATHER_EXPERT_MAJOR_PALLAS,
+                    MODE_BACKWARD_DCOMBINE_SOURCE_GATHER_EXPERT_MAJOR_COMPARE,
+                    MODE_BACKWARD_SOURCE_EXPAND_FROM_EXPERT_MAJOR_SOURCE_GATHER_PALLAS,
+                    MODE_BACKWARD_SOURCE_EXPAND_FROM_EXPERT_MAJOR_SOURCE_GATHER_COMPARE,
+                    MODE_DX_RETURN_EXPERT_MAJOR_PREPACKED_PALLAS,
+                    MODE_DX_RETURN_EXPERT_MAJOR_PREPACKED_COMPARE,
+                    MODE_DX_RETURN_SLOT_REDUCE_EXPERT_MAJOR_PREPACKED_PALLAS,
+                    MODE_DX_RETURN_SLOT_REDUCE_EXPERT_MAJOR_PREPACKED_COMPARE,
+                    MODE_DX_RETURN_SUM_EXPERT_MAJOR_PREPACKED_PALLAS,
+                    MODE_DX_RETURN_SUM_EXPERT_MAJOR_PREPACKED_COMPARE,
+                    MODE_DX_RETURN_SOURCE_GATHER_EXPERT_MAJOR_PREPACKED_PALLAS,
+                    MODE_DX_RETURN_SOURCE_GATHER_EXPERT_MAJOR_PREPACKED_COMPARE,
+                    MODE_DX_RETURN_SOURCE_GATHER_EXPERT_MAJOR_PREPACKED_OWNER_SHARDED_PALLAS,
+                    MODE_DX_RETURN_SOURCE_GATHER_EXPERT_MAJOR_PREPACKED_OWNER_SHARDED_COMPARE,
+                    MODE_DX_RETURN_COPY_ONLY_EXPERT_MAJOR_PREPACKED_PALLAS,
+                    MODE_DX_RETURN_COPY_ONLY_EXPERT_MAJOR_PREPACKED_COMPARE,
+                    MODE_DX_RETURN_DIRECT_TO_SOURCE_COMBINE_PALLAS,
+                    MODE_DX_RETURN_DIRECT_TO_SOURCE_COMBINE_COMPARE,
+                    MODE_FORWARD_BACKWARD_EXPERT_MAJOR_PALLAS,
+                    MODE_FORWARD_BACKWARD_EXPERT_MAJOR_COMPARE,
+                    MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_PALLAS,
+                    MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_PALLAS,
+                    MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_LOOKUP_PACK_PALLAS,
+                    MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_LOOKUP_PACK_COMPARE,
+                    MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_SOURCE_GATHER_PALLAS,
+                    MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_SOURCE_GATHER_COMPARE,
+                    MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_OWNER_SHARDED_PALLAS,
+                    MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_OWNER_SHARDED_COMPARE,
+                    MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_OWNER_SHARDED_Y_PALLAS,
+                    MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_DIRECT_RETURN_COMBINE_DUPLICATE_W2_PALLAS,
+                    MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_DIRECT_RETURN_COMBINE_DUPLICATE_W2_COMPARE,
+                    MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_DIRECT_QUEUE_PALLAS,
+                    MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_DIRECT_QUEUE_WITH_METADATA_PALLAS,
+                    MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_DIRECT_QUEUE_COMPARE,
+                    MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_OWNER_SHARDED_Y_SLOT_REDUCE_PALLAS,
+                    MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_NO_Y_PALLAS,
+                    MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_REMOTE_Y_PALLAS,
+                    MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_REMOTE_Y_DELAYED_PALLAS,
+                    MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_OWNER_SHARDED_DX_PALLAS,
+                    MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_REMOTE_DX_PALLAS,
+                    MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_OWNER_SHARDED_Y_WITH_METADATA_PALLAS,
+                    MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_OWNER_SHARDED_Y_WITH_PALLAS_METADATA_PALLAS,
+                    MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_COMPARE,
+                )
             )
             and jax.default_backend() == "gpu"
             and not args.pallas_interpret
@@ -8935,6 +9206,8 @@ def _run_stage_mode(
                 )
             )
         )
+        if mode in (MODE_SEMANTIC_FUSED_W2_BACKWARD_PALLAS, MODE_SEMANTIC_FUSED_W2_BACKWARD_COMPARE):
+            inputs = _make_semantic_fused_w2_backward_inputs(args, plan)
         if (
             mode
             in (
@@ -8946,7 +9219,11 @@ def _run_stage_mode(
         ):
             inputs = _shard_w13_expert_inputs(inputs, expert_mesh)
         if (
-            mode
+            (
+                mode in SEMANTIC_FUSED_STAGE_MODES
+                and mode not in (MODE_SEMANTIC_FUSED_W2_BACKWARD_PALLAS, MODE_SEMANTIC_FUSED_W2_BACKWARD_COMPARE)
+            )
+            or mode
             in (
                 MODE_W13_EXPERT_MAJOR_PALLAS,
                 MODE_W13_EXPERT_MAJOR_COMPARE,
@@ -9007,9 +9284,13 @@ def _run_stage_mode(
                 MODE_FORWARD_BACKWARD_SOURCE_PADDED_DIRECT_PACK_DIRECT_QUEUE_COMPARE,
                 MODE_FORWARD_BACKWARD_SOURCE_PADDED_DIRECT_PACK_DIRECT_QUEUE_WITH_METADATA_PALLAS,
             )
+        ) and expert_mesh is not None:
+            inputs = _shard_w13_expert_major_inputs(inputs, expert_mesh)
+        if (
+            mode in (MODE_SEMANTIC_FUSED_W2_BACKWARD_PALLAS, MODE_SEMANTIC_FUSED_W2_BACKWARD_COMPARE)
             and expert_mesh is not None
         ):
-            inputs = _shard_w13_expert_major_inputs(inputs, expert_mesh)
+            inputs = _shard_semantic_fused_w2_backward_inputs(inputs, expert_mesh)
         if (
             mode
             in (

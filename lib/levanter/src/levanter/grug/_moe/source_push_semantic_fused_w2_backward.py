@@ -84,6 +84,7 @@ class SourcePushSemanticFusedW2BackwardMetadata:
     masked_send_blocks: Int[Array, ""]
     rows_per_expert_capacity: int = field(metadata={"static": True})
     send_chunks_per_dst: int = field(metadata={"static": True})
+    topk: int = field(metadata={"static": True})
 
 
 class SourcePushSemanticFusedW2BackwardResult(NamedTuple):
@@ -114,7 +115,7 @@ class SourcePushSemanticFusedW2BackwardGenerationAccounting:
 
 
 def source_push_semantic_fused_w2_backward_generation_accounting(
-    source_ordinal: int,
+    phase: int,
     chunk: int,
     *,
     hidden_dim: int,
@@ -126,8 +127,8 @@ def source_push_semantic_fused_w2_backward_generation_accounting(
 
     config.validate()
     _validate_kernel_dimensions(hidden_dim, intermediate_dim, config)
-    if source_ordinal < 0 or chunk < 0 or chunk >= send_chunks_per_dst:
-        raise ValueError(f"invalid source/chunk coordinates {source_ordinal=} {chunk=} for {send_chunks_per_dst=}")
+    if phase < 0 or chunk < 0 or chunk >= send_chunks_per_dst:
+        raise ValueError(f"invalid phase/chunk coordinates {phase=} {chunk=} for {send_chunks_per_dst=}")
     generation = chunk // config.inbox_slots + 1
     producer_tiles = config.compute_blocks_per_send * (hidden_dim // config.send_hidden_block)
     dh_jobs = config.compute_blocks_per_send * (intermediate_dim // config.intermediate_block)
@@ -144,7 +145,7 @@ def source_push_semantic_fused_w2_backward_generation_accounting(
         full_generation=generation,
         consumer_done_generation=generation * (dh_jobs + dw2_jobs),
         released_generation=generation + 1,
-        dw2_turn=source_ordinal * send_chunks_per_dst + chunk + 1,
+        dw2_turn=phase * send_chunks_per_dst + chunk + 1,
     )
 
 
@@ -161,6 +162,11 @@ def source_push_semantic_fused_w2_backward_metadata_jax(
     config.validate()
     if send_chunks_per_dst <= 0:
         raise ValueError(f"send_chunks_per_dst must be positive, got {send_chunks_per_dst}")
+    if rows_per_expert_capacity % config.compute_m:
+        raise ValueError(
+            f"rows_per_expert_capacity must be divisible by compute_m={config.compute_m}, "
+            f"got {rows_per_expert_capacity}"
+        )
     entries_per_dst = send_chunks_per_dst * config.compute_blocks_per_send
     queue = source_push_semantic_queue_metadata_jax(
         plan,
@@ -227,12 +233,13 @@ def source_push_semantic_fused_w2_backward_metadata_jax(
         masked_send_blocks=jnp.asarray(send_valid_rows.size, dtype=jnp.int32) - live_send_blocks,
         rows_per_expert_capacity=rows_per_expert_capacity,
         send_chunks_per_dst=send_chunks_per_dst,
+        topk=plan.topk,
     )
 
 
 def source_push_semantic_fused_w2_backward_reference_jax(
     dy: Float[Array, "S T H"],
-    route_y_by_slot: Float[Array, "S T K H"],
+    return_y: Float[Array, "S DstOrd Q M H"],
     h_expert: Float[Array, "Dst E C I"],
     w_down: Float[Array, "Dst E I H"],
     metadata: SourcePushSemanticFusedW2BackwardMetadata,
@@ -280,10 +287,15 @@ def source_push_semantic_fused_w2_backward_reference_jax(
             part = jnp.einsum("sdcbmi,sdcbmh->ih", h_masked, dy_masked, preferred_element_type=jnp.float32)
             dw2 = dw2.at[dst, expert].set(part)
 
-    route_y = route_y_by_slot.at[source, metadata.token_ids, metadata.route_slots].get().astype(jnp.float32)
+    entry = (
+        jnp.arange(_chunks, dtype=jnp.int32)[None, None, :, None, None] * metadata.token_ids.shape[3]
+        + jnp.arange(_blocks, dtype=jnp.int32)[None, None, None, :, None]
+    )
+    queue_row = jnp.arange(compute_m, dtype=jnp.int32)[None, None, None, None, :]
+    route_y = return_y.at[source, dst_ordinal[..., None], entry, queue_row].get().astype(jnp.float32)
     queue_d_route = jnp.sum(dy_rows * route_y, axis=-1)
     queue_d_route = jnp.where(row_valid, queue_d_route, jnp.zeros((), dtype=jnp.float32))
-    d_route = jnp.zeros(route_y_by_slot.shape[:3], dtype=jnp.float32)
+    d_route = jnp.zeros((*dy.shape[:2], metadata.topk), dtype=jnp.float32)
     d_route = d_route.at[source, metadata.token_ids, metadata.route_slots].add(queue_d_route)
     return (
         jnp.where(metadata.valid[..., None], d_h, jnp.zeros((), dtype=d_h.dtype)),
@@ -294,7 +306,7 @@ def source_push_semantic_fused_w2_backward_reference_jax(
 
 def source_push_semantic_fused_w2_backward(
     dy: Float[Array, "S T H"],
-    route_y_by_slot: Float[Array, "S T K H"],
+    return_y: Float[Array, "S DstOrd Q M H"],
     h_expert: Float[Array, "Dst E C I"],
     w_down: Float[Array, "Dst E I H"],
     plan: SourcePushSemanticPlan,
@@ -307,7 +319,16 @@ def source_push_semantic_fused_w2_backward(
 ) -> SourcePushSemanticFusedW2BackwardResult:
     """Fuse source-owned dcombine/dy routing with destination W2 backward."""
 
-    _validate_request(dy, route_y_by_slot, h_expert, w_down, plan, rows_per_expert_capacity, config)
+    _validate_request(
+        dy,
+        return_y,
+        h_expert,
+        w_down,
+        plan,
+        send_chunks_per_dst,
+        rows_per_expert_capacity,
+        config,
+    )
     metadata = source_push_semantic_fused_w2_backward_metadata_jax(
         dy,
         plan,
@@ -317,7 +338,7 @@ def source_push_semantic_fused_w2_backward(
     )
     if interpret:
         d_h, d_w2, d_route = source_push_semantic_fused_w2_backward_reference_jax(
-            dy, route_y_by_slot, h_expert, w_down, metadata
+            dy, return_y, h_expert, w_down, metadata
         )
     else:
         if jax.default_backend() != "gpu":
@@ -328,7 +349,7 @@ def source_push_semantic_fused_w2_backward(
                 raise ValueError("mesh is required for persistent semantic fused W2 backward")
         d_h, d_w2, queue_d_route = _source_push_semantic_fused_w2_backward_sharded(
             dy,
-            route_y_by_slot,
+            return_y,
             h_expert,
             w_down,
             metadata,
@@ -336,7 +357,7 @@ def source_push_semantic_fused_w2_backward(
             mesh=mesh,
         )
         source = jnp.arange(dy.shape[0], dtype=jnp.int32)[:, None, None, None, None]
-        d_route = jnp.zeros(route_y_by_slot.shape[:3], dtype=jnp.float32)
+        d_route = jnp.zeros((*dy.shape[:2], plan.topk), dtype=jnp.float32)
         d_route = d_route.at[source, metadata.token_ids, metadata.route_slots].add(
             jnp.where(metadata.row_valid, queue_d_route, jnp.zeros((), dtype=queue_d_route.dtype))
         )
@@ -355,7 +376,7 @@ def source_push_semantic_fused_w2_backward(
 
 def _source_push_semantic_fused_w2_backward_sharded(
     dy: Array,
-    route_y_by_slot: Array,
+    return_y: Array,
     h_expert: Array,
     w_down: Array,
     metadata: SourcePushSemanticFusedW2BackwardMetadata,
@@ -383,7 +404,6 @@ def _source_push_semantic_fused_w2_backward_sharded(
         dy_local,
         route_y_local,
         token_local,
-        slot_local,
         weight_local,
         send_valid_local,
         recv_expert_local,
@@ -396,7 +416,6 @@ def _source_push_semantic_fused_w2_backward_sharded(
             dy_local[0],
             route_y_local[0],
             token_local[0],
-            slot_local[0],
             weight_local[0],
             send_valid_local[0],
             recv_expert_local[0],
@@ -409,6 +428,7 @@ def _source_push_semantic_fused_w2_backward_sharded(
 
     source_3d = NamedSharding(mesh, P(SOURCE_PUSH_MESH_AXIS, None, None))
     source_4d = NamedSharding(mesh, P(SOURCE_PUSH_MESH_AXIS, None, None, None))
+    source_5d = NamedSharding(mesh, P(SOURCE_PUSH_MESH_AXIS, None, None, None, None))
     source_route_sharding = NamedSharding(mesh, P(SOURCE_PUSH_MESH_AXIS, None, None, None, None))
     destination_4d = NamedSharding(mesh, P(SOURCE_PUSH_MESH_AXIS, None, None, None))
     return shard_map(
@@ -416,7 +436,6 @@ def _source_push_semantic_fused_w2_backward_sharded(
         mesh=mesh,
         in_specs=(
             P(SOURCE_PUSH_MESH_AXIS, None, None),
-            P(SOURCE_PUSH_MESH_AXIS, None, None, None),
             P(SOURCE_PUSH_MESH_AXIS, None, None, None, None),
             P(SOURCE_PUSH_MESH_AXIS, None, None, None, None),
             P(SOURCE_PUSH_MESH_AXIS, None, None, None, None),
@@ -435,9 +454,8 @@ def _source_push_semantic_fused_w2_backward_sharded(
         check_vma=False,
     )(
         jax.sharding.reshard(dy, source_3d),
-        jax.sharding.reshard(route_y_by_slot, source_4d),
+        jax.sharding.reshard(return_y, source_5d),
         jax.sharding.reshard(metadata.token_ids, source_route_sharding),
-        jax.sharding.reshard(metadata.route_slots, source_route_sharding),
         jax.sharding.reshard(metadata.route_weights, source_route_sharding),
         jax.sharding.reshard(metadata.send_valid_rows, source_4d),
         jax.sharding.reshard(metadata.recv_expert, destination_4d),
@@ -483,7 +501,6 @@ def _make_source_push_semantic_fused_w2_backward_kernel(
         dy_ref,
         route_y_ref,
         token_ids_ref,
-        route_slots_ref,
         route_weights_ref,
         send_valid_ref,
         recv_expert_ref,
@@ -582,7 +599,6 @@ def _make_source_push_semantic_fused_w2_backward_kernel(
                                 @pl.loop(0, config.compute_m)
                                 def _row_loop(row) -> None:
                                     token = token_ids_ref[static_peer_ordinal, chunk, block, row]
-                                    route_slot = route_slots_ref[static_peer_ordinal, chunk, block, row]
                                     weight = route_weights_ref[static_peer_ordinal, chunk, block, row]
                                     live = row < valid_rows
                                     source_dy = dy_ref[token, pl.ds(hidden_start, config.send_hidden_block)]
@@ -595,13 +611,15 @@ def _make_source_push_semantic_fused_w2_backward_kernel(
                                     @pl.when(hidden_tile == 0)
                                     def _compute_route_weight_gradient() -> None:
                                         acc = jnp.asarray(0.0, dtype=jnp.float32)
+                                        entry = chunk * blocks + block
                                         for route_hidden_start in range(0, hidden_dim, config.send_hidden_block):
                                             dy_part = dy_ref[
                                                 token, pl.ds(route_hidden_start, config.send_hidden_block)
                                             ].astype(jnp.float32)
                                             route_part = route_y_ref[
-                                                token,
-                                                route_slot,
+                                                static_peer_ordinal,
+                                                entry,
+                                                row,
                                                 pl.ds(route_hidden_start, config.send_hidden_block),
                                             ].astype(jnp.float32)
                                             acc += jnp.sum(dy_part * route_part)
@@ -646,14 +664,15 @@ def _make_source_push_semantic_fused_w2_backward_kernel(
             consumer = worker - config.producer_programs_per_peer
             pl.semaphore_wait(init_ready_sem, value=1, decrement=False)
 
-            for static_source_ordinal in range(ep_size):
+            for phase in range(ep_size):
+                static_source_ordinal = (-phase) % ep_size
                 src = (rank + static_source_ordinal) % ep_size
 
                 @pl.loop(0, send_chunks_per_dst)
                 def _chunk_loop(chunk) -> None:
                     slot = chunk % config.inbox_slots
                     generation = chunk // config.inbox_slots + 1
-                    global_turn = static_source_ordinal * send_chunks_per_dst + chunk + 1
+                    global_turn = phase * send_chunks_per_dst + chunk + 1
 
                     @pl.loop(0, consumer_jobs_per_program)
                     def _job_loop(job_iteration) -> None:
@@ -886,23 +905,29 @@ def _validate_kernel_dimensions(
 
 def _validate_request(
     dy: Array,
-    route_y_by_slot: Array,
+    return_y: Array,
     h_expert: Array,
     w_down: Array,
     plan: SourcePushSemanticPlan,
+    send_chunks_per_dst: int,
     rows_per_expert_capacity: int,
     config: SourcePushSemanticFusedW2BackwardConfig,
 ) -> None:
     config.validate()
     if dy.ndim != 3:
         raise ValueError(f"dy must have shape [source, token, hidden], got {dy.shape}")
-    if route_y_by_slot.shape != (*dy.shape[:2], plan.topk, dy.shape[-1]):
-        raise ValueError(
-            f"route_y_by_slot shape {route_y_by_slot.shape} must be {(*dy.shape[:2], plan.topk, dy.shape[-1])}"
-        )
+    source_count, destination_count, experts_per_rank = plan.xcounts.shape
+    expected_return_shape = (
+        source_count,
+        destination_count,
+        send_chunks_per_dst * config.compute_blocks_per_send,
+        config.compute_m,
+        dy.shape[-1],
+    )
+    if return_y.shape != expected_return_shape:
+        raise ValueError(f"return_y shape {return_y.shape} must be {expected_return_shape}")
     if h_expert.ndim != 4 or w_down.ndim != 4:
         raise ValueError(f"h_expert and w_down must be rank four, got {h_expert.shape=} {w_down.shape=}")
-    source_count, destination_count, experts_per_rank = plan.xcounts.shape
     if source_count != destination_count or dy.shape[:2] != (source_count, plan.tokens_per_source):
         raise ValueError(f"dy shape {dy.shape} is incompatible with semantic plan {plan.xcounts.shape}")
     if h_expert.shape[:3] != (destination_count, experts_per_rank, rows_per_expert_capacity):
@@ -915,8 +940,14 @@ def _validate_request(
             f"w_down shape {w_down.shape} must be "
             f"{(destination_count, experts_per_rank, h_expert.shape[-1], dy.shape[-1])}"
         )
-    if dy.dtype != h_expert.dtype or dy.dtype != w_down.dtype:
+    if dy.dtype != jnp.bfloat16 or h_expert.dtype != jnp.bfloat16 or w_down.dtype != jnp.bfloat16:
         raise ValueError(
-            f"dy, h_expert, and w_down dtypes must match, got {dy.dtype}, {h_expert.dtype}, {w_down.dtype}"
+            f"WGMMA inputs dy, h_expert, and w_down must use bfloat16, got "
+            f"{dy.dtype}, {h_expert.dtype}, {w_down.dtype}"
+        )
+    if rows_per_expert_capacity % config.compute_m:
+        raise ValueError(
+            f"rows_per_expert_capacity must be divisible by compute_m={config.compute_m}, "
+            f"got {rows_per_expert_capacity}"
         )
     _validate_kernel_dimensions(dy.shape[-1], h_expert.shape[-1], config)

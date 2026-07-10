@@ -9,7 +9,10 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from levanter.grug._moe.source_push_plan import build_source_push_semantic_plan_jax
+from levanter.grug._moe.source_push_plan import (
+    build_source_push_semantic_plan_jax,
+    source_push_semantic_queue_metadata_jax,
+)
 from levanter.grug._moe.source_push_semantic_fused_w2_backward import (
     SourcePushSemanticFusedW2BackwardConfig,
     _make_source_push_semantic_fused_w2_backward_kernel,
@@ -44,7 +47,7 @@ def _plan(*, rows_per_pair: int = 12, rows_per_rank: int = 6):
 def _inputs(*, rows_per_expert_capacity: int = 256):
     plan = _plan()
     dy = ((jnp.arange(2 * 6 * 256, dtype=jnp.float32).reshape(2, 6, 256) % 17 - 8) / 16).astype(jnp.bfloat16)
-    route_y = ((jnp.arange(2 * 6 * 2 * 256, dtype=jnp.float32).reshape(2, 6, 2, 256) % 13 - 6) / 32).astype(
+    return_y = ((jnp.arange(2 * 2 * 4 * 64 * 256, dtype=jnp.float32).reshape(2, 2, 4, 64, 256) % 13 - 6) / 32).astype(
         jnp.bfloat16
     )
     h_expert = (
@@ -60,12 +63,12 @@ def _inputs(*, rows_per_expert_capacity: int = 256):
     w_down = ((jnp.arange(2 * 2 * 128 * 256, dtype=jnp.float32).reshape(2, 2, 128, 256) % 7 - 3) / 64).astype(
         jnp.bfloat16
     )
-    return dy, route_y, h_expert, w_down, plan
+    return dy, return_y, h_expert, w_down, plan
 
 
-def _independent_reference(dy, route_y, h_expert, w_down, plan, *, capacity: int):
+def _independent_reference(dy, return_y, h_expert, w_down, plan, *, capacity: int):
     dy_host = np.asarray(dy, dtype=np.float32)
-    route_y_host = np.asarray(route_y, dtype=np.float32)
+    return_y_host = np.asarray(return_y, dtype=np.float32)
     h_host = np.asarray(h_expert, dtype=np.float32)
     w_host = np.asarray(w_down, dtype=np.float32)
     assignment_ids = np.asarray(plan.assignment_ids)
@@ -76,15 +79,22 @@ def _independent_reference(dy, route_y, h_expert, w_down, plan, *, capacity: int
     rounded_counts = ((counts + CONFIG.compute_m - 1) // CONFIG.compute_m) * CONFIG.compute_m
     source_bases = np.zeros((2, 2, 2), dtype=np.int32)
     source_bases[:, 1, :] = rounded_counts[0]
+    queue = source_push_semantic_queue_metadata_jax(plan, return_row_block=64, entries_per_dst=4)
+    queue_expert = np.asarray(queue.local_expert)
+    queue_row_start = np.asarray(queue.local_row_start)
+    queue_valid_rows = np.asarray(queue.valid_rows)
 
     d_h = np.zeros((2, 2, capacity, 128), dtype=np.float32)
     d_w2 = np.zeros((2, 2, 128, 256), dtype=np.float32)
     d_route = np.zeros((2, 6, 2), dtype=np.float32)
     valid = np.zeros((2, 2, capacity), dtype=np.bool_)
     for src in range(2):
-        for dst in range(2):
-            for expert in range(2):
-                for local_row in range(int(counts[src, dst, expert])):
+        for dst_ordinal in range(2):
+            dst = (src + dst_ordinal) % 2
+            for entry in range(4):
+                expert = int(queue_expert[src, dst_ordinal, entry])
+                for row in range(int(queue_valid_rows[src, dst_ordinal, entry])):
+                    local_row = int(queue_row_start[src, dst_ordinal, entry]) + row
                     pair_row = int(pair_bases[src, dst, expert]) + local_row
                     if not pair_valid[src, dst, pair_row]:
                         continue
@@ -98,7 +108,7 @@ def _independent_reference(dy, route_y, h_expert, w_down, plan, *, capacity: int
                     dy_route = dy_token * weights[src, dst, pair_row]
                     d_h[dst, expert, expert_row] = dy_route @ w_host[dst, expert].T
                     d_w2[dst, expert] += np.outer(h_host[dst, expert, expert_row], dy_route)
-                    d_route[src, token, slot] += np.dot(dy_token, route_y_host[src, token, slot])
+                    d_route[src, token, slot] += np.dot(dy_token, return_y_host[src, dst_ordinal, entry, row])
                     valid[dst, expert, expert_row] = True
     return d_h, d_w2, d_route, valid
 
@@ -173,11 +183,11 @@ def test_fused_w2_backward_generation_accounting_tracks_slot_reuse_and_dw2_order
 
 
 def test_fused_w2_backward_interpret_matches_independent_rough_route_reference():
-    dy, route_y, h_expert, w_down, plan = _inputs()
+    dy, return_y, h_expert, w_down, plan = _inputs()
     observed = jax.jit(
-        lambda dy_arg, route_y_arg, h_arg, w_arg, plan_arg: source_push_semantic_fused_w2_backward(
+        lambda dy_arg, return_y_arg, h_arg, w_arg, plan_arg: source_push_semantic_fused_w2_backward(
             dy_arg,
-            route_y_arg,
+            return_y_arg,
             h_arg,
             w_arg,
             plan_arg,
@@ -185,9 +195,9 @@ def test_fused_w2_backward_interpret_matches_independent_rough_route_reference()
             rows_per_expert_capacity=256,
             interpret=True,
         )
-    )(dy, route_y, h_expert, w_down, plan)
+    )(dy, return_y, h_expert, w_down, plan)
     expected_dh, expected_dw2, expected_droute, expected_valid = _independent_reference(
-        dy, route_y, h_expert, w_down, plan, capacity=256
+        dy, return_y, h_expert, w_down, plan, capacity=256
     )
 
     np.testing.assert_allclose(np.asarray(observed.d_h), expected_dh, rtol=2e-4, atol=2e-4)
