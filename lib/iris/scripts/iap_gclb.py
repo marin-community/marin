@@ -58,9 +58,9 @@ default as part of ``deploy`` (idempotent); pass ``--no-token-proxy`` to keep th
 controller fully IAP-gated, or run the ``token-proxy`` subcommand standalone.
 
 The ``finelog`` stage puts a cluster's finelog VM behind the same frontend, on its
-own IAP-free backend, so a federated iris controller has a TLS endpoint to relay
+own IAP-free backend, so a federated cluster's finelog has a TLS endpoint to forward
 logs to. finelog authenticates each push itself (an Ed25519 ``jwt`` auth layer over
-a default-deny stack); Cloud Armor admits only the relaying clusters' egress
+a default-deny stack); Cloud Armor admits only the sending clusters' egress
 prefixes. In-VPC callers keep reaching finelog directly on its internal address —
 the load balancer and Cloud Armor sit only on the off-VPC path.
 
@@ -124,24 +124,24 @@ FINELOG_LABEL_KEY = "finelog-name"
 # Every subnet of the ``default`` network sits inside this range, including the
 # us-central2 TPU subnets that `default-allow-internal`'s narrower 10.128.0.0/9
 # misses. The controller and every GCP worker reach finelog directly over the VPC,
-# never through the load balancer; the LB is only how an off-VPC relay gets in.
+# never through the load balancer; the LB is only how an off-VPC sender gets in.
 VPC_PRIVATE_RANGE = "10.0.0.0/8"
 
-# Public egress prefixes of the clusters that relay their logs into a GCP-hosted
-# finelog, keyed by iris cluster. Cloud Armor admits only these at the shared
-# frontend, so an unexpected source is rejected at the edge before it reaches the
-# VM; finelog still verifies the relay's aud="finelog" delegation token behind it.
+# Public egress prefixes of the clusters whose finelogs forward their logs into a
+# GCP-hosted finelog, keyed by iris cluster. Cloud Armor admits only these at the
+# shared frontend, so an unexpected source is rejected at the edge before it reaches
+# the VM; the hub still verifies the sender's aud="finelog" bearer behind it.
 # Each entry is the cluster's announced egress block (RDAP: COREW-1), not the single
 # NAT address observed today: CoreWeave rotates egress within the block, and a tighter
-# rule would strand the relay behind a 403 that reads like an auth failure. The token,
+# rule would strand the sender behind a 403 that reads like an auth failure. The token,
 # not the prefix, is what authenticates a push. Add a cluster here when it starts
-# relaying, then re-run the ``finelog`` stage to widen the policy.
+# forwarding, then re-run the ``finelog`` stage to widen the policy.
 FINELOG_RELAY_SOURCE_RANGES: dict[str, tuple[str, ...]] = {
     "cw-rno2a": ("192.112.160.0/20",),
     "cw-us-east-02a": ("166.19.0.0/16",),
 }
 
-# Cloud Armor rule priorities. The allow rule names the relay sources; the default
+# Cloud Armor rule priorities. The allow rule names the sending clusters; the default
 # rule (a fixed, un-deletable priority) is flipped from its allow-all default to deny.
 ARMOR_ALLOW_PRIORITY = 1000
 ARMOR_DEFAULT_PRIORITY = 2147483647
@@ -257,7 +257,7 @@ class FinelogBackend:
     """Names of the IAP-free backend fronting one cluster's finelog VM.
 
     IAP is never enabled here: finelog authenticates every RPC itself against a
-    default-deny stack, and a relaying controller holds no Google identity to
+    default-deny stack, and a forwarding finelog holds no Google identity to
     present. The load balancer supplies TLS, Cloud Armor narrows the edge to the
     relay source ranges, and the firewall admits only the Google LB ranges plus the
     VPC — so the VM's own address is never a way in.
@@ -1139,15 +1139,15 @@ def remove_token_proxy_route(frontend: Frontend, backend: Backend, *, dry_run: b
 # --------------------------------------------------------------------------- #
 # finelog stage: front a cluster's finelog VM with TLS + Cloud Armor.
 #
-# A federated iris controller relays its logs into a GCP-hosted finelog. finelog
-# speaks plain HTTP and has no notion of TLS, so the relay's aud="finelog" bearer
+# A federated cluster's finelog forwards its logs into a GCP-hosted finelog. finelog
+# speaks plain HTTP and has no notion of TLS, so the sender's aud="finelog" bearer
 # may not cross the public internet on its own. Routing it through the shared LB
 # gives it TLS from the same managed-cert machinery every cluster domain uses, and
 # keeps the finelog VM's own address closed: the LB is the only way in.
 #
-# IAP is never enabled on this backend -- a relaying controller has no Google
+# IAP is never enabled on this backend -- a forwarding finelog has no Google
 # identity. Authentication is finelog's: a default-deny stack whose `jwt` layer
-# verifies the relay token against the relaying cluster's Ed25519 public key. Cloud
+# verifies the bearer against the sending finelog's Ed25519 public key. Cloud
 # Armor narrows the edge to the relay source ranges ahead of it.
 # --------------------------------------------------------------------------- #
 
@@ -1728,17 +1728,17 @@ def finelog_cmd(
 ) -> None:
     """Front the cluster's finelog VM with TLS + Cloud Armor on the shared LB.
 
-    Gives a federated iris controller a TLS endpoint to relay its logs to, without
-    exposing the finelog VM: an IAP-free backend on the shared frontend, a Cloud
+    Gives a federated cluster's finelog a TLS endpoint to forward its logs to, without
+    exposing the hub's finelog VM: an IAP-free backend on the shared frontend, a Cloud
     Armor policy admitting only the relay source ranges, and firewall rules leaving
     the private range and the Google LB ranges as the sole paths to the port.
 
     In-VPC callers are untouched: the controller and every GCP worker keep reaching
     finelog directly on its internal address, never through the LB or Cloud Armor.
 
-    IAP is not enabled — a relaying controller carries no Google identity. finelog
-    authenticates each push itself against its `jwt` auth layer, keyed on the
-    relaying cluster's public key.
+    IAP is not enabled — a forwarding finelog carries no Google identity. The hub
+    authenticates each push itself against its `jwt` auth layer, keyed on the sending
+    finelog's public key.
 
     To admit another cluster, add its egress prefixes to FINELOG_RELAY_SOURCE_RANGES
     and re-run; the allow rule is rewritten in place.

@@ -797,25 +797,21 @@ mod tests {
         /// under it. The source's watermark is unset: a forwarder started now seeds at
         /// the tip. Call [`Self::forward_from_start`] to drain what is already written.
         async fn new(tag: &str) -> Self {
-            let source = disk_store(&format!("{tag}_source"));
             let target = disk_store(&format!("{tag}_target"));
-            let (source_addr, _) = serve(Arc::clone(&source), AuthPolicy::allow_localhost()).await;
-            let (target_addr, target_requests) = serve(target, hub_policy(SOURCE_CLUSTER)).await;
-            Self {
-                source,
-                source_client: client(source_addr),
-                target_addr,
-                target_url: format!("http://{target_addr}"),
-                target_requests,
-            }
+            Self::with_hub(tag, serve(target, hub_policy(SOURCE_CLUSTER)).await).await
         }
 
         /// As [`Self::new`], but the hub refuses every request with `invalid_argument`.
         /// It keeps no store, so only the source and the request count are observable.
         async fn with_rejecting_hub(tag: &str) -> Self {
+            Self::with_hub(tag, serve_rejecting().await).await
+        }
+
+        /// A source served under `allow_localhost`, forwarding to an already-served hub.
+        async fn with_hub(tag: &str, hub: (SocketAddr, Arc<AtomicUsize>)) -> Self {
+            let (target_addr, target_requests) = hub;
             let source = disk_store(&format!("{tag}_source"));
             let (source_addr, _) = serve(Arc::clone(&source), AuthPolicy::allow_localhost()).await;
-            let (target_addr, target_requests) = serve_rejecting().await;
             Self {
                 source,
                 source_client: client(source_addr),
