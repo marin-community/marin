@@ -168,12 +168,8 @@ _LOCAL_ADMIN_FEDERATION_DENIED = (
 )
 
 
-def _child_federation_denied(job_id: JobName, peer_id: str) -> str:
-    """The refusal shown when a child job routes to ``peer_id``, naming the root-job remedy.
-
-    A peer runs a handed-off job under the same, cluster-invariant job id, so it accepts only
-    a whole root: a child's id names a parent the peer does not have.
-    """
+def _child_federation_refusal(job_id: JobName, peer_id: str) -> str:
+    """The message refusing to federate child ``job_id`` to ``peer_id``, naming the remedy."""
     return (
         f"Job {job_id} requests a shape no local backend provides, and peer {peer_id!r} advertises it, "
         "but only whole root jobs are federated to a peer — a child job stays on the cluster that "
@@ -1663,7 +1659,7 @@ class ControllerServiceImpl:
             # the structural limit is checked ahead of the identity gate below: it is the
             # reason every dispatched accelerator sub-job is refused.
             if not job_id.is_root:
-                raise ConnectError(Code.INVALID_ARGUMENT, _child_federation_denied(job_id, routing.peer_id))
+                raise ConnectError(Code.INVALID_ARGUMENT, _child_federation_refusal(job_id, routing.peer_id))
             # With auth on, a local_admin (CIDR/loopback) submission is never federated:
             # the peer would reject it anyway, so fail here rather than after a round-trip.
             # Null-auth (dev/loopback) has no real identity to carry, so it federates.
