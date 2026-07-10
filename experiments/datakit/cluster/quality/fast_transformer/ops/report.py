@@ -3,11 +3,12 @@
 
 """Render a self-contained quality-score debugging report (single-page HTML app).
 
-Reads the lean parquet written by ``score.py`` (columns ``source``, ``id``, ``score``,
-``quality_bucket``) and fetches the document text for the spot-check sample on demand
-from the normalized corpus (``--sample-prefix``). The output is one standalone ``.html``
-file -- all CSS/JS inlined and the data embedded as JSON, so it works offline and can be
-hosted anywhere -- showing:
+Reads ``score.py``'s two per-source outputs directly: ``outputs/main/`` (lean
+``source``/``id``/``score``/``quality_bucket`` -> the distribution + per-source stats)
+and ``outputs/samples/`` (the systematic sample *with text* -> the spot-check docs, no
+separate text fetch needed). The output is one standalone ``.html`` file -- all CSS/JS
+inlined and the data embedded as JSON, so it works offline and can be hosted anywhere --
+showing:
 
   - the score distribution (histogram + fixed-0.2 bucket bars)
   - per-domain bucket mix + means
@@ -19,8 +20,7 @@ hosted anywhere -- showing:
 Usage::
 
     python -m experiments.datakit.cluster.quality.fast_transformer.ops.report \\
-        --scored        s3://.../quality/scored_1t \\
-        --sample-prefix s3://.../datakit/sample_1t_733c8c5c \\
+        --scored s3://.../quality/scored_1t \\
         --out report.html --scorer "pooled_junkgate2 (bme)" --sample "sample_1t"
 """
 
@@ -122,8 +122,8 @@ def read_scored(scored_prefix: str, per_source: int) -> dict[str, list]:
     prefix = scored_prefix.rstrip("/")
     out: dict[str, list] = {k: [] for k in ("source", "id", "score", "quality_bucket")}
     per: dict[str, int] = defaultdict(int)
-    for f in sorted(str(m) for m in StoragePath(f"{prefix}/**/*.parquet").glob()):
-        src_dir = f.split(prefix + "/", 1)[1].rsplit("/data-", 1)[0]
+    for f in sorted(str(m) for m in StoragePath(f"{prefix}/**/outputs/main/**/*.parquet").glob()):
+        src_dir = f.split(prefix + "/", 1)[1].split("/outputs/main/", 1)[0]
         if per[src_dir] >= per_source:
             continue
         with StoragePath(f).open("rb") as fh:
@@ -142,44 +142,43 @@ def read_scored(scored_prefix: str, per_source: int) -> dict[str, list]:
     return out
 
 
-def fetch_text(sample_prefix: str, needed: dict[str, set[str]]) -> dict[tuple[str, str], str]:
-    """Fetch text for the given ids per source from the normalized sample."""
-    prefix = sample_prefix.rstrip("/")
-    text_by: dict[tuple[str, str], str] = {}
-    for src, ids in needed.items():
-        want = set(ids)
-        for f in sorted(str(m) for m in StoragePath(f"{prefix}/{src}/outputs/main/**/*.parquet").glob()):
-            if not want:
-                break
-            with StoragePath(f).open("rb") as fh:
-                for batch in pq.ParquetFile(fh).iter_batches(batch_size=READ_BATCH, columns=["id", "text"]):
-                    d = batch.to_pydict()
-                    for i, t in zip(d["id"], d["text"], strict=True):
-                        si = str(i)
-                        if si in want:
-                            text_by[(src, si)] = t or ""
-                            want.discard(si)
-                    if not want:
-                        break
-    return text_by
+def read_samples(scored_prefix: str, per_cell: int) -> list[dict]:
+    """Read the samples side output (``source``/``id``/``score``/``quality_bucket``/``text``)
+    that ``score.py`` writes to ``outputs/samples/``, keeping up to ``per_cell`` docs per
+    (source, bucket) for the spot-check. No separate text fetch is needed."""
+    prefix = scored_prefix.rstrip("/")
+    kept: dict[tuple[str, int], list[dict]] = defaultdict(list)
+    for f in sorted(str(m) for m in StoragePath(f"{prefix}/**/outputs/samples/**/*.parquet").glob()):
+        with StoragePath(f).open("rb") as fh:
+            for batch in pq.ParquetFile(fh).iter_batches(
+                batch_size=READ_BATCH, columns=["source", "id", "score", "quality_bucket", "text"]
+            ):
+                d = batch.to_pydict()
+                for s, i, sc, qb, t in zip(
+                    d["source"], d["id"], d["score"], d["quality_bucket"], d["text"], strict=True
+                ):
+                    cell = (s, int(qb))
+                    if len(kept[cell]) >= per_cell:
+                        continue
+                    kept[cell].append(
+                        {
+                            "source": s,
+                            "domain": domain_of(s),
+                            "id": str(i),
+                            "ft": round(float(sc), 3),
+                            "ft_bucket": int(qb),
+                            "old_bucket": -1,
+                            "old": None,
+                            "text": (t or "")[:TEXT_CHARS],
+                        }
+                    )
+    return [doc for docs in kept.values() for doc in docs]
 
 
-def _select_spotcheck(src: np.ndarray, ftb: np.ndarray, fts: np.ndarray) -> list[int]:
-    """Pick up to SAMPLE_PER_CELL indices per (source, bucket), spread across the score range."""
-    by_cell = defaultdict(list)
-    for i in np.argsort(fts):
-        by_cell[(src[i], int(ftb[i]))].append(int(i))
-    picked: list[int] = []
-    for idxs in by_cell.values():
-        step = max(1, len(idxs) // SAMPLE_PER_CELL)
-        picked.extend(idxs[::step][:SAMPLE_PER_CELL])
-    return picked
-
-
-def build_report_data(scored: dict[str, list], text_by: dict[tuple[str, str], str], *, scorer: str, sample: str) -> dict:
-    """Aggregate scored rows (+ fetched text for the spot-check) into the report payload."""
+def build_report_data(scored: dict[str, list], samples: list[dict], *, scorer: str, sample: str) -> dict:
+    """Aggregate the lean scored rows (distribution + per-source) and the samples side
+    output (spot-check docs with text) into the report payload."""
     src = np.array(scored["source"])
-    ids = scored["id"]
     fts = np.array(scored["score"], float)
     ftb = np.array(scored["quality_bucket"], int)
     dom = np.array([domain_of(s) for s in src])
@@ -227,20 +226,8 @@ def build_report_data(scored: dict[str, list], text_by: dict[tuple[str, str], st
         )
     sources.sort(key=lambda r: r["ft_mean"])
 
-    docs = []
-    for i in _select_spotcheck(src, ftb, fts):
-        docs.append(
-            {
-                "source": src[i],
-                "domain": dom[i],
-                "ft_bucket": int(ftb[i]),
-                "old_bucket": -1,
-                "ft": round(float(fts[i]), 3),
-                "old": None,
-                "id": str(ids[i]),
-                "text": text_by.get((src[i], str(ids[i])), "")[:TEXT_CHARS],
-            }
-        )
+    # the samples side output IS the spot-check pool (already carries text)
+    docs = samples
 
     return {
         "meta": {
@@ -267,25 +254,17 @@ def render_html(data: dict, *, title: str) -> str:
 
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("--scored", required=True, help="score.py output prefix (per-source parquets)")
-    p.add_argument("--sample-prefix", required=True, help="normalized sample root, to fetch spot-check text")
+    p.add_argument("--scored", required=True, help="score.py output prefix (per-source outputs/main + outputs/samples)")
     p.add_argument("--out", required=True, help="output .html path (local or storage url)")
-    p.add_argument("--per-source", type=int, default=PER_SOURCE, help="scored rows read per source")
+    p.add_argument("--per-source", type=int, default=PER_SOURCE, help="scored rows read per source (from outputs/main)")
     p.add_argument("--title", default="Quality-Score Debugging Report")
     p.add_argument("--scorer", default="pooled fast-transformer (calibrated)")
     p.add_argument("--sample", default="")
     args = p.parse_args()
 
-    scored = read_scored(args.scored, args.per_source)
-    src = np.array(scored["source"])
-    fts = np.array(scored["score"], float)
-    ftb = np.array(scored["quality_bucket"], int)
-    needed: dict[str, set[str]] = defaultdict(set)
-    for i in _select_spotcheck(src, ftb, fts):
-        needed[src[i]].add(scored["id"][i])
-    text_by = fetch_text(args.sample_prefix, needed)
-
-    data = build_report_data(scored, text_by, scorer=args.scorer, sample=args.sample)
+    scored = read_scored(args.scored, args.per_source)  # outputs/main -> distribution + per-source
+    samples = read_samples(args.scored, SAMPLE_PER_CELL)  # outputs/samples -> spot-check docs with text
+    data = build_report_data(scored, samples, scorer=args.scorer, sample=args.sample)
     doc = render_html(data, title=args.title)
     with StoragePath(args.out).open("w") as fh:
         fh.write(doc)

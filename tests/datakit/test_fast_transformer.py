@@ -22,6 +22,7 @@ from experiments.datakit.cluster.quality.fast_transformer.calibrate import (
     calibration_knots,
     fit_cutpoints,
 )
+from experiments.datakit.cluster.quality.fast_transformer.score import _systematic_take
 from experiments.datakit.cluster.quality.fast_transformer.scorer import CHUNK_CHARS, PooledScorer, score_bme
 
 
@@ -122,3 +123,15 @@ def test_calibration_knots_are_strictly_increasing_and_recover_levels():
     for level in (1, 2, 3, 4, 5):
         bucket = int(np.digitize(np.interp(level / 10.0, xk, yk), BUCKET_EDGES))
         assert abs(bucket - (level - 1)) <= 1
+
+
+# ---------- score: deterministic non-hashing sample ----------
+
+
+def test_systematic_sample_is_deterministic_and_hits_target_fraction():
+    for pct in (0.1, 0.25, 0.5):
+        kept = [i for i in range(1000) if _systematic_take(i, pct)]
+        # deterministic: no RNG / no hashing -> identical across calls
+        assert kept == [i for i in range(1000) if _systematic_take(i, pct)]
+        # ~pct of records, evenly spaced
+        assert abs(len(kept) / 1000 - pct) < 0.01
