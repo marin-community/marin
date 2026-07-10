@@ -623,3 +623,54 @@ Complete Iris output and exact result rows are in
 `scratch/6597-w13b-tiny-compare2/raw.log` and
 `scratch/6597-w13b-tiny-compare2/result-rows.jsonl`; terminal status and task
 summary are alongside them.
+
+## 2026-07-10 FUSED-MOE-016 - Tiny W13 backward dx-fix validation
+
+Job `/dlwh/bench-semantic-fused-w13b-dxfix-20260710-1521` ran once on
+`cw-rno2a` at commit `07b08cd709` and reached terminal `JOB_STATE_SUCCEEDED`.
+Its single task exited 0 after 43.34 seconds, with zero failures or
+preemptions. No code change, stop, restart, resubmit, or duplicate was issued.
+
+`semantic_fused_w13_backward_compare` emitted one successful repeat row and
+zero error rows. The `dx` discrepancy remained large: max absolute difference
+`420.63323974609375` and mean absolute difference `34.988548278808594`.
+The `dw13` comparison remained close: max absolute difference
+`1.52587890625e-05` and mean absolute difference
+`4.986190447198169e-07`. Expected and observed nonfinite error counts were zero
+for both tensors.
+
+Compile/first-call time was `8.298504103091545` s, lowering/compile time was
+`7.4632771600736305` s, first-run time was `0.8352269430179149` s, and steady
+state time was `0.0020637259585782886` s. Queue overflow, layout overflow,
+metadata overflow, routing drops, and dropped routes were all zero. The row
+reported four live semantic pairs, 2,048 useful rows, 2,560 rounded rows, 0.8
+row efficiency, `0.16259151008167685` rounded and `0.13007320806534148` useful
+TFLOP/s/rank, and checksum `455.621826171875`. Twelve non-fatal CUDA VMM handle
+fallback warnings occurred. Complete Iris output and exact result rows are in
+`scratch/6597-w13b-dxfix/raw.log` and
+`scratch/6597-w13b-dxfix/result-rows.jsonl`; terminal status, task summary, and
+monitor state are alongside them.
+
+## 2026-07-10 FUSED-MOE-017 - Parallel queue-consumer W2 backward H100
+
+Job `/dlwh/bench-semantic-fused-w2b-parallel-20260710-1521` ran once on
+`cw-rno2a` at commit `07b08cd709` and reached terminal `JOB_STATE_SUCCEEDED`.
+Its single task exited 0 after 2 minutes 11.71 seconds, with zero failures or
+preemptions. No duplicate, stop, resubmit, kernel edit, or Iris restart was
+issued.
+
+`semantic_fused_w2_backward_pallas` emitted one successful repeat row and zero
+error rows. Exact steady-state time was `0.2073946320451796` seconds, with
+`8.283661449953765` useful and `10.354576812442206` rounded TFLOP/s/rank;
+checksum was `5054136320.0`. Compile/first-call, lowering/compile, and first-run
+times were `11.448272167006508`, `9.255549566005357`, and
+`2.192722601001151` seconds.
+
+Semantic row efficiency was 0.8: 1,048,576 useful rows, 1,310,720 rounded rows,
+64 live pairs, and masked-row fraction 0.2. Queue and layout overflow error
+counts, metadata overflow routes, routing dropped routes, and dropped routes
+were all zero. Logs contained two non-fatal 12.50 GiB allocator warnings and 48
+non-fatal `CUDA_ERROR_NOT_PERMITTED` VMM fallback warnings; there was no
+traceback or actionable failure. Complete raw Iris routine output and terminal
+monitor state are in `scratch/6597-w2b-parallel/raw-routine-output.txt` and
+`scratch/6597-w2b-parallel/monitoring-state.json`.

@@ -1785,6 +1785,20 @@ def _comparison_metrics(prefix: str, observed: Array, expected: Array) -> dict[s
     }
 
 
+def _scale_comparison_metrics(prefix: str, observed: Array, expected: Array) -> dict[str, Array]:
+    observed_f32 = observed.astype(jnp.float32)
+    expected_f32 = expected.astype(jnp.float32)
+    dot = jnp.sum(observed_f32 * expected_f32)
+    observed_norm_sq = jnp.sum(jnp.square(observed_f32))
+    expected_norm_sq = jnp.sum(jnp.square(expected_f32))
+    return {
+        f"{prefix}_expected_abs_sum": jnp.sum(jnp.abs(expected_f32)),
+        f"{prefix}_observed_abs_sum": jnp.sum(jnp.abs(observed_f32)),
+        f"{prefix}_least_squares_scale": dot / jnp.maximum(expected_norm_sq, 1.0e-30),
+        f"{prefix}_cosine_similarity": dot / jnp.sqrt(jnp.maximum(observed_norm_sq * expected_norm_sq, 1.0e-30)),
+    }
+
+
 def _masked_comparison_metrics(
     prefix: str,
     observed: Array,
@@ -4031,6 +4045,7 @@ def _mode_callable(mode: str, plan: SourcePushSemanticPlan, args: argparse.Names
         observed = semantic_fused_w13_backward(inputs, interpret=args.pallas_interpret)
         return {
             **_comparison_metrics("dx", observed.dx, expected.dx),
+            **_scale_comparison_metrics("dx", observed.dx, expected.dx),
             **_comparison_metrics("dw13", observed.dw13, expected.dw13),
             "queue_overflow_route_error_count": observed.queue_overflow_routes,
             "layout_overflow_row_error_count": observed.layout_overflow_rows,
