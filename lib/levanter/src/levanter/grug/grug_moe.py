@@ -337,6 +337,7 @@ __all__ = [
     "MoEExpertMlp",
     "MoEExpertMlpPspecs",
     "MoeImplementation",
+    "MoeRaggedDotOps",
     "PspecAxis",
     "moe_mlp",
     "resolve_moe_implementation",

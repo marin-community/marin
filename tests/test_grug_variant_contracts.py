@@ -23,6 +23,7 @@ import jmp
 import optax
 import pytest
 from fray.cluster import ResourceConfig
+from haliax.quantization import Fp8RaggedDotOp
 from jax._src import config as jax_config
 from jax.sharding import use_abstract_mesh
 from levanter.checkpoint import CheckpointerConfig
@@ -302,6 +303,35 @@ def test_grug_moe_variant_threads_moe_implementation_to_kernel():
         closed_jaxpr, _, _ = eqx.filter_make_jaxpr(one_step)()
 
     assert "ragged_all_to_all" in str(closed_jaxpr)
+
+
+def test_grug_moe_fp8_config_threads_ops_into_expert_mlp():
+    model_module = importlib.import_module("experiments.grug.moe.model")
+    mesh, _ = model_module.debug_mesh_and_token_pspec(num_devices=4)
+
+    def build(fp8):
+        cfg = _small_model_config(model_module.GrugModelConfig, vocab_size=1024, seq_len=4)
+        cfg = dataclasses.replace(cfg, fp8=fp8)
+        return model_module.Transformer.init(cfg, key=jax.random.PRNGKey(0))
+
+    with _reset_abstract_mesh(), use_abstract_mesh(mesh):
+        fp8_model = eqx.filter_eval_shape(build, model_module.GrugFp8Config(amax_history_length=8))
+        gemm_only_model = eqx.filter_eval_shape(build, model_module.GrugFp8Config(wire=False))
+        bf16_model = eqx.filter_eval_shape(build, None)
+
+    fp8_mlp = fp8_model.blocks[0].mlp.expert_mlp
+    assert isinstance(fp8_mlp.ragged_dot_ops.w13, Fp8RaggedDotOp)
+    assert isinstance(fp8_mlp.ragged_dot_ops.w2, Fp8RaggedDotOp)
+    assert fp8_mlp.ragged_dot_ops.w13.input_amax_history.shape == (8,)
+    assert fp8_mlp.fp8_wire
+
+    gemm_only_mlp = gemm_only_model.blocks[0].mlp.expert_mlp
+    assert isinstance(gemm_only_mlp.ragged_dot_ops.w13, Fp8RaggedDotOp)
+    assert not gemm_only_mlp.fp8_wire
+
+    bf16_mlp = bf16_model.blocks[0].mlp.expert_mlp
+    assert bf16_mlp.ragged_dot_ops is None
+    assert not bf16_mlp.fp8_wire
 
 
 def test_grug_moe_data_loaders_build_against_single_expert_mesh():
