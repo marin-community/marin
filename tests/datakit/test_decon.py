@@ -7,6 +7,7 @@ import gzip
 import json
 from pathlib import Path
 
+import dupekit
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
@@ -15,9 +16,14 @@ from fray.local_backend import LocalClient
 from marin.datakit.decon import (
     EvalBloom,
     NGramConfig,
+    _bloom_hash,
     _extract_ngrams,
+    _load_drop_set,
+    _paragraph_overlap_and_matches,
     bloom_paths,
+    build_all_source_drop_sets,
     build_eval_bloom,
+    build_source_drop_set,
     decon_to_parquet,
     merge_eval_blooms,
 )
@@ -472,6 +478,63 @@ def test_decon_short_paragraphs_below_ngram_length_contribute_nothing(tmp_path: 
     assert rows["doc_short_text"]["contaminated"] is False
     assert rows["doc_short_text"]["max_overlap"] == 0.0
     assert rows["doc_short_text"]["matched_hashes"] == []
+
+
+def test_double_newline_delimiter_spans_single_line_breaks(tmp_path: Path):
+    """``paragraph_delimiter="\\n\\n"`` lets n-grams cross single ``\\n`` breaks.
+
+    An eval item wrapped into short lines (each below ``ngram_length``) is
+    invisible under the per-line ``"\\n"`` policy (no line forms an n-gram) but
+    matchable under the true-paragraph ``"\\n\\n"`` policy, since a blank-line
+    block is tokenized as a whole. Pins the short-line recall win (marin#6852).
+    """
+    words = [f"lexeme{i}" for i in range(10)]
+    eval_text = " ".join(words)  # single line
+    wrapped = "\n".join(" ".join(words[i : i + 2]) for i in range(0, len(words), 2))  # 2 words/line
+
+    per_line = _run_decon_one_shot(
+        tmp_path / "nl",
+        eval_records=[{"id": "e", "text": eval_text}],
+        input_records=[{"id": "doc", "text": wrapped, "partition_id": 0}],
+        ngram=NGramConfig(ngram_length=5, overlap_threshold=0.5, paragraph_delimiter="\n"),
+    )
+    assert per_line["doc"]["contaminated"] is False  # short lines form no 5-grams
+
+    true_para = _run_decon_one_shot(
+        tmp_path / "nlnl",
+        eval_records=[{"id": "e", "text": eval_text}],
+        input_records=[{"id": "doc", "text": wrapped, "partition_id": 0}],
+        ngram=NGramConfig(ngram_length=5, overlap_threshold=0.5, paragraph_delimiter="\n\n"),
+    )
+    assert true_para["doc"]["contaminated"] is True
+
+
+def test_double_newline_delimiter_dilutes_isolated_matched_line(tmp_path: Path):
+    """``"\\n\\n"`` measures overlap over the whole block, so a lone matched line
+    among unrelated lines no longer saturates the fraction.
+
+    Under ``"\\n"`` the matched line is its own paragraph → overlap 1.0 → flagged;
+    under ``"\\n\\n"`` it is a small share of the block → below threshold → not
+    flagged. Pins the isolated-line false-positive fix (marin#6852)."""
+    eval_text = "distinctive alpha bravo charlie delta echo foxtrot"  # 7 tokens
+    filler = "\n".join(f"unrelated filler line number {i} here" for i in range(8))
+    block = filler + "\n" + eval_text + "\n" + filler  # all one blank-line-free block
+
+    per_line = _run_decon_one_shot(
+        tmp_path / "nl",
+        eval_records=[{"id": "e", "text": eval_text}],
+        input_records=[{"id": "doc", "text": block, "partition_id": 0}],
+        ngram=NGramConfig(ngram_length=5, overlap_threshold=0.5, paragraph_delimiter="\n"),
+    )
+    assert per_line["doc"]["contaminated"] is True
+
+    true_para = _run_decon_one_shot(
+        tmp_path / "nlnl",
+        eval_records=[{"id": "e", "text": eval_text}],
+        input_records=[{"id": "doc", "text": block, "partition_id": 0}],
+        ngram=NGramConfig(ngram_length=5, overlap_threshold=0.5, paragraph_delimiter="\n\n"),
+    )
+    assert true_para["doc"]["contaminated"] is False
 
 
 # ---------------------------------------------------------------------------
@@ -997,3 +1060,186 @@ def test_merge_eval_blooms_rejects_size_mismatch(tmp_path: Path):
             per_eval_bloom_dirs=[str(tmp_path / "bloom_a"), str(tmp_path / "bloom_b")],
             output_path=str(tmp_path / "merged"),
         )
+
+
+# ---------------------------------------------------------------------------
+# Per-source common-ngram filter (marin#6852)
+# ---------------------------------------------------------------------------
+
+
+def test_paragraph_overlap_drop_hashes_excludes_from_both_sides():
+    """``drop_hashes`` removes matched ngrams from numerator and denominator.
+
+    An all-boilerplate paragraph (every ngram dropped) scores 0; a distinctive
+    ngram left un-dropped still scores 1.0."""
+    ngram = NGramConfig(ngram_length=4, overlap_threshold=0.5)
+    para = "be it enacted by the assembled congress today"  # 8 tokens -> 5 four-grams
+    grams = list(_extract_ngrams(para, 4, 0))
+    bf = dupekit.Bloom(1000, 1e-9)
+    for g in grams:
+        bf.add(_bloom_hash(g))
+
+    assert _paragraph_overlap_and_matches(para, bf, ngram)[0] == 1.0
+    drop = frozenset(_bloom_hash(g) for g in grams)
+    score, hits = _paragraph_overlap_and_matches(para, bf, ngram, drop)
+    assert score == 0.0 and hits == []
+
+
+def test_source_drop_set_filters_source_ubiquitous_ngram(tmp_path: Path):
+    """An eval ngram present in ~every source doc lands in the drop-set and stops
+    flagging boilerplate-only docs, while a distinctive eval match still flags."""
+    eval_dir = tmp_path / "eval"
+    _write_eval_jsonl(
+        eval_dir / "eval.jsonl.gz",
+        [
+            {"id": "boiler", "text": "be it enacted by the assembled congress today"},
+            {"id": "distinct", "text": "the platypus juggled seventeen luminous kumquats"},
+        ],
+    )
+    bloom_dir = tmp_path / "bloom"
+    build_eval_bloom(
+        eval_data_sources=str(eval_dir),
+        output_path=str(bloom_dir),
+        ngram=NGramConfig(ngram_length=4, overlap_threshold=0.5),
+        estimated_doc_count=10_000,
+        false_positive_rate=1e-9,
+    )
+
+    # Source: 20 docs carrying only the boilerplate line + 1 genuine leak.
+    input_dir = tmp_path / "input"
+    docs = [
+        {"id": f"d{i}", "text": "be it enacted by the assembled congress today", "partition_id": 0} for i in range(20)
+    ]
+    docs.append({"id": "leak", "text": "the platypus juggled seventeen luminous kumquats", "partition_id": 0})
+    _write_input_parquet(input_dir / "part-00000-of-00001.parquet", docs)
+
+    drop_dir = tmp_path / "drop"
+    result = build_source_drop_set(
+        df_sample_dir=str(input_dir),
+        prebuilt_bloom_dir=str(bloom_dir),
+        output_path=str(drop_dir),
+        ngram=NGramConfig(ngram_length=4, paragraph_delimiter="\n"),
+        sample_docs=1000,
+        common_frac=0.5,
+        common_min_abs=2,
+    )
+    assert result.n_dropped > 0  # boilerplate ngrams (df=20) dropped; distinctive (df=1) kept
+
+    out_dir = tmp_path / "out"
+    decon_to_parquet(
+        normalized_data=_as_source(input_dir),
+        prebuilt_bloom_dir=str(bloom_dir),
+        output_path=str(out_dir),
+        ngram=NGramConfig(ngram_length=4, overlap_threshold=0.5, paragraph_delimiter="\n"),
+        drop_set_dir=str(drop_dir),
+    )
+    rows = _read_attributes(out_dir)
+    assert rows["d0"]["contaminated"] is False  # boilerplate-only no longer flags
+    assert rows["leak"]["contaminated"] is True  # distinctive leak still flags
+
+
+def test_source_drop_set_empty_leaves_marks_unchanged(tmp_path: Path):
+    """With no ubiquitous ngram, the drop-set is empty and marks are unaffected."""
+    eval_dir = tmp_path / "eval"
+    _write_eval_jsonl(
+        eval_dir / "eval.jsonl.gz", [{"id": "e", "text": "the platypus juggled seventeen luminous kumquats"}]
+    )
+    bloom_dir = tmp_path / "bloom"
+    build_eval_bloom(
+        eval_data_sources=str(eval_dir),
+        output_path=str(bloom_dir),
+        ngram=NGramConfig(ngram_length=4, overlap_threshold=0.5),
+        estimated_doc_count=10_000,
+        false_positive_rate=1e-9,
+    )
+    input_dir = tmp_path / "input"
+    _write_input_parquet(
+        input_dir / "part-00000-of-00001.parquet",
+        [{"id": "leak", "text": "the platypus juggled seventeen luminous kumquats", "partition_id": 0}],
+    )
+    drop_dir = tmp_path / "drop"
+    result = build_source_drop_set(
+        df_sample_dir=str(input_dir),
+        prebuilt_bloom_dir=str(bloom_dir),
+        output_path=str(drop_dir),
+        ngram=NGramConfig(ngram_length=4, paragraph_delimiter="\n"),
+        sample_docs=1000,
+        common_frac=0.5,
+        common_min_abs=5,
+    )
+    assert result.n_dropped == 0
+    out_dir = tmp_path / "out"
+    decon_to_parquet(
+        normalized_data=_as_source(input_dir),
+        prebuilt_bloom_dir=str(bloom_dir),
+        output_path=str(out_dir),
+        ngram=NGramConfig(ngram_length=4, overlap_threshold=0.5, paragraph_delimiter="\n"),
+        drop_set_dir=str(drop_dir),
+    )
+    assert _read_attributes(out_dir)["leak"]["contaminated"] is True
+
+
+def test_build_all_source_drop_sets_distributes_per_source(tmp_path: Path):
+    """The distributed (zephyr) builder writes one drop.parquet per source: a
+    source's ubiquitous ngram is dropped, another source's distinctive one kept."""
+    eval_dir = tmp_path / "eval"
+    _write_eval_jsonl(
+        eval_dir / "eval.jsonl.gz",
+        [
+            {"id": "boiler", "text": "be it enacted by the assembled congress today"},
+            {"id": "distinct", "text": "the platypus juggled seventeen luminous kumquats"},
+        ],
+    )
+    bloom_dir = tmp_path / "bloom"
+    build_eval_bloom(
+        eval_data_sources=str(eval_dir),
+        output_path=str(bloom_dir),
+        ngram=NGramConfig(ngram_length=4, overlap_threshold=0.5),
+        estimated_doc_count=10_000,
+        false_positive_rate=1e-9,
+    )
+    a_dir = tmp_path / "srcA"
+    _write_input_parquet(
+        a_dir / "part-00000-of-00001.parquet",
+        [{"id": f"a{i}", "text": "be it enacted by the assembled congress today", "partition_id": 0} for i in range(20)],
+    )
+    b_dir = tmp_path / "srcB"
+    _write_input_parquet(
+        b_dir / "part-00000-of-00001.parquet",
+        [{"id": "b0", "text": "the platypus juggled seventeen luminous kumquats", "partition_id": 0}],
+    )
+
+    out = tmp_path / "drops"
+    res = build_all_source_drop_sets(
+        sources=[("srcA", str(a_dir)), ("srcB", str(b_dir))],
+        prebuilt_bloom_dir=str(bloom_dir),
+        output_path=str(out),
+        ngram=NGramConfig(ngram_length=4, paragraph_delimiter="\n"),
+        sample_docs=1000,
+        common_frac=0.5,
+        common_min_abs=2,
+    )
+    assert res.num_sources == 2
+    assert len(_load_drop_set(str(out / "srcA"))) > 0  # boilerplate (df=20) dropped
+    assert len(_load_drop_set(str(out / "srcB"))) == 0  # distinctive (df=1) kept
+
+
+def test_decon_flagged_sample_sidecar(fox_corpus):
+    """flagged_sample_size writes a `_flagged` sidecar of contaminated docs + text,
+    so reports read O(sample) instead of rescanning the corpus."""
+    decon_to_parquet(
+        normalized_data=_as_source(Path(fox_corpus["input_dir"])),
+        eval_data_sources=fox_corpus["eval_dir"],
+        output_path=fox_corpus["output_dir"],
+        ngram=NGramConfig(ngram_length=3, overlap_threshold=0.5),
+        flagged_sample_size=10,
+        estimated_doc_count=10_000,
+        false_positive_rate=1e-9,
+    )
+    side = sorted(Path(fox_corpus["output_dir"]).glob("_flagged/*.parquet"))
+    assert side, "expected a _flagged sidecar"
+    rows = [r for f in side for r in pq.read_table(str(f)).to_pylist()]
+    ids = {r["id"] for r in rows}
+    assert "doc_arctic_exact" in ids and "doc_red_exact" in ids  # flagged docs captured
+    assert "doc_unique" not in ids  # clean doc not sampled
+    assert all(r["text"] and r["matched_hashes"] for r in rows)  # text + hashes present
