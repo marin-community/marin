@@ -22,7 +22,7 @@ from experiments.datakit.cluster.quality.fast_transformer.calibrate import (
     calibration_knots,
     fit_cutpoints,
 )
-from experiments.datakit.cluster.quality.fast_transformer.score import _systematic_take
+from experiments.datakit.cluster.quality.fast_transformer.score import _source_of, _systematic_take
 from experiments.datakit.cluster.quality.fast_transformer.scorer import CHUNK_CHARS, PooledScorer, score_bme
 
 
@@ -135,3 +135,15 @@ def test_systematic_sample_is_deterministic_and_hits_target_fraction():
         assert kept == [i for i in range(1000) if _systematic_take(i, pct)]
         # ~pct of records, evenly spaced
         assert abs(len(kept) / 1000 - pct) < 0.01
+
+
+# ---------- score: source recovered from the input file path ----------
+
+
+def test_source_of_recovers_multi_segment_source_from_path():
+    sp = "s3://bucket/marin/datakit/sample_100b_abc"
+    # source may itself contain slashes (e.g. finepdfs/spa_Latn) -> split only on /outputs/main/
+    assert _source_of(f"{sp}/cp/foodista/outputs/main/part-0.parquet", sp) == "cp/foodista"
+    assert _source_of(f"{sp}/finepdfs/spa_Latn/outputs/main/data-00003.parquet", sp) == "finepdfs/spa_Latn"
+    # trailing slash on the prefix must not change the recovered source
+    assert _source_of(f"{sp}/hplt_v3/outputs/main/x.parquet", sp + "/") == "hplt_v3"

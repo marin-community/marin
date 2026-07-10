@@ -3,15 +3,26 @@
 
 """Production batch-scoring of a normalized corpus with the pooled fast-transformer.
 
-Mirrors the v0 fasttext classify step (a zephyr ``Dataset`` map, one job per source
-on iris), but scores with the pooled FT and applies a monotonic calibration so the
-output score's fixed 0.2-bucket quantization is quality-coherent across content types.
+Scores the whole corpus in a *single* zephyr pipeline over every input file (one
+shard per file), so ``--max-workers`` is the one knob that sets the fleet size:
+the files fan out across up to that many workers at once, independent of how the
+docs are split across sources. This is the difference from the v0 fasttext step,
+which ran one iris job per source; here a single driver drives the whole run and a
+big ``--max-workers`` (e.g. 512) saturates a large CPU cluster in ~one wave.
+
+Each doc is scored with the pooled FT and a monotonic calibration is applied so the
+output score's fixed 0.2-bucket quantization is quality-coherent across content
+types. The source (e.g. ``cp/foodista``) is recovered from each input file's path
+(injected by ``load_file`` as ``__file_path``), so output stays partitioned by
+source even though one pipeline handles them all.
 
 Writes two per-source outputs via a split-writer (like normalize's main/dups): the
 lean scored records (``source``, ``id``, ``score`` calibrated in ``[0, 1]``,
-``quality_bucket`` 0..4) to ``outputs/main/``, and a ~``--sample-pct`` systematic
-sample *with text* to ``outputs/samples/`` that the debugging report reads directly
-(no separate text fetch).
+``quality_bucket`` 0..4) to ``<source>/outputs/main/``, and a ~``--sample-pct``
+systematic sample *with text* to ``<source>/outputs/samples/`` that the debugging
+report reads directly (no separate text fetch). Each input file maps 1:1 to one
+output file (named after the input), so ``skip_existing`` is a plain driver-side
+check: input files whose output already exists are dropped before the pipeline runs.
 
 Scoring is whole-doc (bme): the score is the mean over begin/middle/end ~512-token
 windows of each doc, so a shared boilerplate prefix (agent/tool trajectories) can't
@@ -22,36 +33,37 @@ The model dir holds the four scorer artifacts (``*.eqx`` + ``*_remap.json`` +
 cutpoints by default). ``.eqx`` deserialisation needs a local path, so each worker
 streams it down once (cached).
 
-Run over a normalized corpus on iris (one zephyr job per source). Invoke via
-``-c "... import main; main()"`` rather than ``-m``: zephyr pickles the pipeline
-callables by module, and ``-m`` would make this module ``__main__`` so workers
-can't resolve them::
+Run over a normalized corpus on iris. Invoke via ``-c "... import main; main()"``
+rather than ``-m``: zephyr pickles the pipeline callables by module, and ``-m``
+would make this module ``__main__`` so workers can't resolve them::
 
     uv run iris --controller-url http://localhost:10000 job run --no-wait \\
         --cpu 8 --memory 24G --enable-extra-resources --priority production \\
         --job-name ft-quality-score -- \\
         python -c "from experiments.datakit.cluster.quality.fast_transformer.score import main; main()" \\
-          --sample-prefix s3://marin-us-east-02a/marin/datakit/sample_1t_733c8c5c \\
+          --sample-prefix s3://marin-us-east-02a/marin/datakit/sample_100b_8ae7a94f \\
           --model-dir     s3://marin-us-east-02a/marin/user/rav/quality/pooled_junkgate2 \\
-          --output-prefix s3://marin-us-east-02a/marin/user/rav/quality/scored_1t \\
-          --sources cp/arxiv_abstracts cp/wikiteam starcoder2/ir_python
+          --output-prefix s3://marin-us-east-02a/marin/user/rav/quality/scored_100b \\
+          --max-workers   512 --sources cp/arxiv_abstracts cp/wikiteam starcoder2/ir_python
 """
 
 import argparse
 import functools
 import json
 import logging
+import posixpath
 from collections.abc import Iterator
 
 import numpy as np
 from fray.cluster import ResourceConfig
-from marin.datakit import partition_filename
-from rigging.filesystem import StoragePath, open_url, prefix_join
+from marin.datakit.normalize import NormalizedData
+from marin.execution.artifact import read_artifact
+from rigging.filesystem import StoragePath, open_url
 from rigging.log_setup import configure_logging
 from zephyr import counters
 from zephyr.dataset import Dataset, ShardInfo
 from zephyr.execution import ZephyrContext
-from zephyr.readers import load_file
+from zephyr.readers import DEFAULT_FILE_PATH_COLUMN, load_file
 from zephyr.runners import InlineRunner
 from zephyr.writers import ThreadedBatchWriter, write_parquet_file
 
@@ -65,10 +77,13 @@ from experiments.datakit.cluster.quality.fast_transformer.scorer import (
 logger = logging.getLogger(__name__)
 
 BATCH_SIZE = 512
-WORKER_RESOURCES = ResourceConfig(cpu=2, ram="16g")
+# Scoring is I/O-bound (workers sit ~25% CPU streaming parquet) and holds ~1.1 GB
+# resident, so a small footprint packs many workers per node.
+WORKER_RESOURCES = ResourceConfig(cpu=2, ram="4g")
 MODEL_CALIB = "calib_bme.json"  # calibration json name in the model dir
 SAMPLE_TEXT_CHARS = 4_000  # text kept per sampled doc for the report spot-check
 DEFAULT_SAMPLE_PCT = 0.02  # fraction of each shard emitted (with text) as the samples side output
+_SHARD_FILE = "__shard_file"  # internal: input basename carried to the writer to name the output
 
 
 @functools.cache
@@ -81,25 +96,37 @@ def _load_scorer(model_dir: str, calib_file: str = MODEL_CALIB) -> tuple[PooledS
     return scorer, np.asarray(calib["xk"], dtype=np.float64), np.asarray(calib["yk"], dtype=np.float64)
 
 
-def _predict_batch(records: list[dict], *, model_dir: str, source: str, calib_file: str = MODEL_CALIB) -> Iterator[dict]:
-    """Score a batch of records with bme; carry source/id/score/quality_bucket + text.
-    ``text`` is dropped for the lean main output and kept for the samples side output."""
+def _source_of(file_path: str, sample_prefix: str) -> str:
+    """Recover the datakit source (e.g. ``cp/foodista``) from an input file path.
+
+    Input files live at ``<sample_prefix>/<source>/outputs/main/<name>.parquet``."""
+    return file_path.split(sample_prefix.rstrip("/") + "/", 1)[1].split("/outputs/main/", 1)[0]
+
+
+def _predict_batch(
+    records: list[dict], *, model_dir: str, sample_prefix: str, calib_file: str = MODEL_CALIB
+) -> Iterator[dict]:
+    """Score a batch of records with bme; carry source (from the file path)/id/score/
+    quality_bucket + text. ``text`` is dropped for the lean main output and kept for
+    the samples side output; ``_SHARD_FILE`` names the per-source output file."""
     scorer, xk, yk = _load_scorer(model_dir, calib_file)
     cal = np.interp(score_bme(scorer, [r.get("text") or "" for r in records]), xk, yk)
     buckets = np.digitize(cal, BUCKET_EDGES)
     for r, c, b in zip(records, cal, buckets, strict=True):
+        path = r[DEFAULT_FILE_PATH_COLUMN]
         yield {
-            "source": source,
+            "source": _source_of(path, sample_prefix),
             "id": r["id"],
             "score": float(c),
             "quality_bucket": int(b),
             "text": (r.get("text") or "")[:SAMPLE_TEXT_CHARS],
+            _SHARD_FILE: posixpath.basename(path),
         }
 
 
-def get_ft_batch_predict(*, model_dir: str, source: str, calib_file: str = MODEL_CALIB):
-    """Bind the model dir + source and return a ``flat_map`` batch-predict callable."""
-    return functools.partial(_predict_batch, model_dir=model_dir, source=source, calib_file=calib_file)
+def get_ft_batch_predict(*, model_dir: str, sample_prefix: str, calib_file: str = MODEL_CALIB):
+    """Bind the model dir + sample prefix and return a ``flat_map`` batch-predict callable."""
+    return functools.partial(_predict_batch, model_dir=model_dir, sample_prefix=sample_prefix, calib_file=calib_file)
 
 
 def _systematic_take(index: int, pct: float) -> bool:
@@ -111,21 +138,23 @@ def _systematic_take(index: int, pct: float) -> bool:
     return int((index + 1) * pct) > int(index * pct)
 
 
-def _make_scored_writer(output_path: str, sample_pct: float, skip_existing: bool):
-    """A ``map_shard`` split-writer that fans each shard to two Parquet outputs (like
-    normalize's main/dups): the lean scored records to ``outputs/main/`` and a
-    ~``sample_pct`` systematic sample *with text* to ``outputs/samples/`` for the report."""
-    out = output_path.rstrip("/")
+def _output_paths(output_prefix: str, source: str, shard_file: str) -> tuple[str, str]:
+    """(main, samples) output paths for one input file's scored records."""
+    out = output_prefix.rstrip("/")
+    return f"{out}/{source}/outputs/main/{shard_file}", f"{out}/{source}/outputs/samples/{shard_file}"
+
+
+def _make_corpus_writer(output_prefix: str, sample_pct: float):
+    """A ``map_shard`` split-writer. One input file per shard, so all its records share
+    a source + output name: fan them to ``<source>/outputs/main/`` (lean) and a
+    ~``sample_pct`` systematic sample *with text* to ``<source>/outputs/samples/``."""
 
     def scored_writer(records: Iterator[dict], shard: ShardInfo) -> Iterator[dict]:
-        shard_filename = partition_filename(shard.shard_idx, shard.total_shards)
-        main_path = prefix_join(out, f"outputs/main/{shard_filename}")
-        sample_path = prefix_join(out, f"outputs/samples/{shard_filename}")
-        # skip_existing: return without consuming `records`, so the upstream scoring is
-        # skipped too (the pipeline is pull-based), not just the write.
-        if skip_existing and StoragePath(main_path).exists() and StoragePath(sample_path).exists():
-            yield {"main": {"path": main_path, "skipped": True}, "samples": {"path": sample_path, "skipped": True}}
-            return
+        records = iter(records)
+        first = next(records, None)
+        if first is None:
+            return  # empty shard (e.g. all inputs skipped) -> nothing to write
+        main_path, sample_path = _output_paths(output_prefix, first["source"], first[_SHARD_FILE])
 
         results: dict[str, dict] = {}
 
@@ -139,44 +168,79 @@ def _make_scored_writer(output_path: str, sample_pct: float, skip_existing: bool
             ThreadedBatchWriter(write_to(main_path, "main")) as main_writer,
             ThreadedBatchWriter(write_to(sample_path, "samples")) as sample_writer,
         ):
-            for i, r in enumerate(records):
+            for i, r in enumerate((first, *records)):
                 main_writer.submit({k: r[k] for k in ("source", "id", "score", "quality_bucket")})
                 counters.pipeline.update_counter("ft_quality/scored", 1)
                 if _systematic_take(i, sample_pct):
-                    sample_writer.submit(r)  # full record incl. text
+                    sample_writer.submit({k: r[k] for k in ("source", "id", "score", "quality_bucket", "text")})
                     counters.pipeline.update_counter("ft_quality/sampled", 1)
         yield results
 
     return scored_writer
 
 
-def run_one_source(
+def _pending_input_files(sample_prefix: str, source: str, output_prefix: str, skip_existing: bool) -> list[str]:
+    """The input parquet files of ``source`` still to score.
+
+    The input dir comes from the source's persisted ``NormalizedData`` artifact
+    (``.main_output_dir``) rather than a hand-built ``outputs/main`` path. Both the
+    input list and the existing-output check are single-level ``*.parquet`` listings
+    (no ``**``): a recursive glob makes s3fs ``HeadObject`` the prefix, which the CW
+    object store answers with a 400. skip_existing drops files whose lean main output
+    (written last per shard, so its presence means fully scored) already exists."""
+    main_dir = read_artifact(f"{sample_prefix}/{source}", NormalizedData).main_output_dir.rstrip("/")
+    inputs = sorted(str(m) for m in StoragePath(f"{main_dir}/*.parquet").glob())
+    if not skip_existing:
+        return inputs
+    out_main = f"{output_prefix.rstrip('/')}/{source}/outputs/main"
+    done = {posixpath.basename(str(m)) for m in StoragePath(f"{out_main}/*.parquet").glob()}
+    return [f for f in inputs if posixpath.basename(f) not in done]
+
+
+def run_corpus(
     *,
-    input_dir: str,
-    output_path: str,
-    source_name: str,
+    sample_prefix: str,
+    sources: list[str],
+    output_prefix: str,
     model_dir: str,
     max_workers: int | None = None,
     calib_file: str = MODEL_CALIB,
     sample_pct: float = DEFAULT_SAMPLE_PCT,
     skip_existing: bool = True,
+    file_list: str | None = None,
 ):
-    """Score one source's normalized parquet shards on iris. Writes the lean scored
-    records to ``outputs/main/`` and a ~``sample_pct`` sample (with text) to
-    ``outputs/samples/`` for the debugging report."""
-    files = sorted(str(m) for m in StoragePath(f"{input_dir.rstrip('/')}/**/*.parquet").glob())
+    """Score every file of the given sources in one pipeline (one shard per file).
+
+    ``max_workers`` sets the concurrent fleet size; with N input files the run uses
+    ``min(N, max_workers)`` workers at a time. Writes lean scored records to
+    ``<source>/outputs/main/`` and a ~``sample_pct`` sample (with text) to
+    ``<source>/outputs/samples/`` for the debugging report.
+
+    ``file_list`` is a newline-delimited text file of the exact input paths to score
+    (see ``write_file_list``). Use it when the object store answers the driver's
+    ``HeadObject`` listing probes with a 400 (a known CW s3fs gotcha): the list is
+    built once where listing works, and the driver/workers then do only GET/PUT."""
+    sp = sample_prefix.rstrip("/")
+    if file_list:
+        with open_url(file_list, "r") as fh:
+            files = [ln.strip() for ln in fh if ln.strip()]
+        logger.info("scoring %d files from --file-list %s with max_workers=%s", len(files), file_list, max_workers)
+    else:
+        files = [f for src in sources for f in _pending_input_files(sp, src, output_prefix, skip_existing)]
+        logger.info("scoring %d files across %d sources with max_workers=%s", len(files), len(sources), max_workers)
     if not files:
-        raise FileNotFoundError(f"{source_name}: no .parquet under {input_dir}")
+        logger.info("nothing to score (all outputs exist, or no inputs)")
+        return None
     pipeline = (
         Dataset.from_list(files)
-        .flat_map(load_file)
+        .flat_map(functools.partial(load_file, include_file_paths=True))
         .window(BATCH_SIZE)
-        .flat_map(get_ft_batch_predict(model_dir=model_dir, source=source_name, calib_file=calib_file))
-        .map_shard(_make_scored_writer(output_path, sample_pct, skip_existing))
+        .flat_map(get_ft_batch_predict(model_dir=model_dir, sample_prefix=sp, calib_file=calib_file))
+        .map_shard(_make_corpus_writer(output_prefix, sample_pct))
     )
     # InlineRunner: keep the per-process cached model alive across shards in a worker.
     kwargs: dict = {
-        "name": f"ft-quality-{source_name.replace('/', '__')}",
+        "name": "ft-quality-corpus",
         "resources": WORKER_RESOURCES,
         "stage_runner_factory": InlineRunner,
     }
@@ -185,13 +249,32 @@ def run_one_source(
     return ZephyrContext(**kwargs).execute(pipeline)
 
 
+def write_file_list(
+    *, sample_prefix: str, sources: list[str], output_prefix: str, out: str, skip_existing: bool = True
+) -> int:
+    """Write the pending input paths (one per line) to ``out`` for ``--file-list``.
+
+    Run this where object-store listing works (e.g. a laptop) so the driver never
+    has to list. Returns the number of files written."""
+    sp = sample_prefix.rstrip("/")
+    files = [f for src in sources for f in _pending_input_files(sp, src, output_prefix, skip_existing)]
+    with StoragePath(out).open("w") as fh:
+        fh.write("\n".join(files) + "\n")
+    logger.info("wrote %d input paths -> %s", len(files), out)
+    return len(files)
+
+
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--sample-prefix", required=True, help="e.g. s3://.../datakit/sample_100b_<hash>")
     p.add_argument("--model-dir", required=True, help="dir with the scorer artifacts + calibration json")
     p.add_argument("--output-prefix", required=True, help="scored output prefix (per-source subdirs)")
-    p.add_argument("--sources", nargs="+", required=True)
-    p.add_argument("--max-workers", type=int, default=None)
+    p.add_argument("--sources", nargs="+", help="sources to score (omit when using --file-list)")
+    p.add_argument(
+        "--file-list",
+        help="text file of exact input paths to score, one per line (bypasses driver-side listing)",
+    )
+    p.add_argument("--max-workers", type=int, default=None, help="concurrent worker fleet size (one shard per file)")
     p.add_argument("--calib-file", default=MODEL_CALIB, help="calibration json name in --model-dir")
     p.add_argument(
         "--sample-pct",
@@ -200,21 +283,21 @@ def main() -> None:
         help="fraction of each shard written (with text) to outputs/samples for the report",
     )
     args = p.parse_args()
+    if not args.file_list and not args.sources:
+        p.error("one of --sources or --file-list is required")
     configure_logging(logging.INFO)
-    for src in args.sources:
-        input_dir = f"{args.sample_prefix.rstrip('/')}/{src}/outputs/main"
-        output_path = f"{args.output_prefix.rstrip('/')}/{src}"
-        logger.info("scoring %s -> %s", src, output_path)
-        outcome = run_one_source(
-            input_dir=input_dir,
-            output_path=output_path,
-            source_name=src,
-            model_dir=args.model_dir,
-            max_workers=args.max_workers,
-            calib_file=args.calib_file,
-            sample_pct=args.sample_pct,
-        )
-        logger.info("done %s: counters=%s", src, dict(outcome.counters))
+    outcome = run_corpus(
+        sample_prefix=args.sample_prefix,
+        sources=args.sources or [],
+        output_prefix=args.output_prefix,
+        model_dir=args.model_dir,
+        max_workers=args.max_workers,
+        calib_file=args.calib_file,
+        sample_pct=args.sample_pct,
+        file_list=args.file_list,
+    )
+    if outcome is not None:
+        logger.info("done: counters=%s", dict(outcome.counters))
 
 
 if __name__ == "__main__":
