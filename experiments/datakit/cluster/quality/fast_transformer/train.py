@@ -11,7 +11,11 @@ are directly comparable: AUC and Spearman of predicted quality vs the Claude
 oracle, plus accuracy / precision / recall / F1 at threshold 0.5.
 """
 
+import argparse
+import json
 import logging
+import os
+import tempfile
 import time
 from dataclasses import asdict, dataclass
 
@@ -20,9 +24,12 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import optax
+import pyarrow.parquet as pq
 from jax.sharding import Mesh, NamedSharding, PartitionSpec
+from rigging.filesystem import StoragePath
+from rigging.log_setup import configure_logging
 
-from experiments.datakit.cluster.quality.fast_transformer.data import PackedData
+from experiments.datakit.cluster.quality.fast_transformer.data import PackedData, build_remap, encode_texts, pack
 from experiments.datakit.cluster.quality.fast_transformer.model import (
     FastTransformer,
     FastTransformerConfig,
@@ -33,6 +40,20 @@ from experiments.datakit.cluster.quality.v0.ops.eval_holdout import auc, spearma
 logger = logging.getLogger(__name__)
 
 DEFAULT_THRESHOLD = 0.5
+
+# The deployed scorer's config + tokenizer (selected by the earlier architecture sweep).
+TOKENIZER = "intfloat/multilingual-e5-small"
+MAX_TOKENS = 512
+DEPLOY_CONFIG = {
+    "embed_dim": 256,
+    "hidden_dim": 256,
+    "num_layers": 2,
+    "num_heads": 4,
+    "pool_window": 64,
+    "pool_kind": "meanmaxmin",
+}
+DEFAULT_LABELS = "s3://marin-us-east-02a/marin/datakit/quality_labels_20260709.parquet"
+MODEL_STEM = "pooled_junkgate2"  # matches score.py's MODEL_EQX/REMAP/META
 
 
 @dataclass(frozen=True)
@@ -334,3 +355,83 @@ def train_one(config: FastTransformerConfig, data: PackedData, hp: TrainHParams)
         best_epoch=fitted.best_epoch,
         train_seconds=fitted.train_seconds,
     )
+
+
+def _save_scorer(model, remap: dict, vocab: int, tokenizer: str, max_tokens: int, out_dir: str, name: str) -> None:
+    """Serialise the model + vocab remap + meta in the format `scorer.py` loads."""
+    out_dir = out_dir.rstrip("/")
+    fd, local = tempfile.mkstemp(suffix=".eqx")
+    os.close(fd)
+    eqx.tree_serialise_leaves(local, model)  # eqx serialise needs a local path
+    with open(local, "rb") as src, StoragePath(f"{out_dir}/{name}.eqx").open("wb") as dst:
+        dst.write(src.read())
+    with StoragePath(f"{out_dir}/{name}_remap.json").open("w") as fh:
+        json.dump(remap, fh)
+    meta = {"vocab_size": vocab, "max_tokens": max_tokens, "tokenizer": tokenizer, "config": DEPLOY_CONFIG}
+    with StoragePath(f"{out_dir}/{name}_meta.json").open("w") as fh:
+        json.dump(meta, fh)
+    logger.info("saved scorer -> %s/%s.eqx (+ _remap.json, _meta.json)", out_dir, name)
+
+
+def train_from_labels(
+    *,
+    labels_path: str,
+    out_dir: str,
+    name: str = MODEL_STEM,
+    tokenizer: str = TOKENIZER,
+    max_tokens: int = MAX_TOKENS,
+    eval_frac: float = 1 / 7,
+    hp: TrainHParams | None = None,
+) -> FitResult:
+    """Train the deployed pooled scorer from the merged oracle-label parquet
+    (``source``/``text``/``score_normalized``) and save it in the scorer format."""
+    hp = hp or TrainHParams()
+    with StoragePath(labels_path).open("rb") as fh:
+        table = pq.read_table(fh, columns=["source", "text", "score_normalized"])
+    sources = [str(s) for s in table.column("source").to_pylist()]
+    texts = [t or "" for t in table.column("text").to_pylist()]
+    scores = np.array(table.column("score_normalized").to_pylist(), dtype=np.float32)
+
+    perm = np.random.default_rng(hp.seed).permutation(len(texts))
+    n_eval = max(1, int(len(texts) * eval_frac))
+    eval_idx, train_idx = perm[:n_eval], perm[n_eval:]
+
+    def _split(idx):
+        return [texts[i] for i in idx], scores[idx], [sources[i] for i in idx]
+
+    tr_texts, tr_scores, tr_src = _split(train_idx)
+    ev_texts, ev_scores, ev_src = _split(eval_idx)
+    tr_raw = encode_texts(tokenizer, tr_texts, max_tokens)
+    ev_raw = encode_texts(tokenizer, ev_texts, max_tokens)
+    remap = build_remap(tr_raw, min_count=2)
+    vocab = len(remap) + 2
+    data = PackedData(
+        train=pack(tr_raw, remap, tr_scores, tr_src, max_tokens),
+        eval=pack(ev_raw, remap, ev_scores, ev_src, max_tokens),
+        vocab_size=vocab,
+        tokenizer_name=tokenizer,
+        max_tokens=max_tokens,
+    )
+    config = FastTransformerConfig(
+        vocab_size=vocab, max_tokens=max_tokens, dropout=0.1, final_pool="mean", **DEPLOY_CONFIG
+    )
+    logger.info("training on %d labels (%d train / %d eval); vocab=%d", len(texts), len(train_idx), len(eval_idx), vocab)
+    fitted = fit(config, data, hp)
+    holdout = _metrics(_predict(fitted.model, data.eval.ids), data.eval.scores)
+    logger.info("HOLDOUT AUC=%.4f spearman=%.4f (best_epoch=%d)", holdout.auc, holdout.spearman_rho, fitted.best_epoch)
+    _save_scorer(fitted.model, remap, vocab, tokenizer, max_tokens, out_dir, name)
+    return fitted
+
+
+def main() -> None:
+    p = argparse.ArgumentParser(description="Train the pooled fast-transformer quality scorer on the oracle labels.")
+    p.add_argument("--labels", default=DEFAULT_LABELS, help="merged oracle-label parquet")
+    p.add_argument("--out-dir", required=True, help="dir to write <name>.eqx + _remap.json + _meta.json")
+    p.add_argument("--name", default=MODEL_STEM)
+    args = p.parse_args()
+    configure_logging(logging.INFO)
+    train_from_labels(labels_path=args.labels, out_dir=args.out_dir, name=args.name)
+
+
+if __name__ == "__main__":
+    main()

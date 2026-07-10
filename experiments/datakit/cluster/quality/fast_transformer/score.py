@@ -81,15 +81,21 @@ def _score_bme(scorer: PooledScorer, texts: list[str]) -> np.ndarray:
     return np.array([s[a:b].mean() for a, b in spans])
 
 
-@functools.cache
-def _load_scorer(model_dir: str, calib_file: str = MODEL_CALIB) -> tuple[PooledScorer, np.ndarray, np.ndarray]:
-    """Load the scorer + calibration once per worker process (streams the .eqx local)."""
+def load_pooled_scorer(model_dir: str) -> PooledScorer:
+    """Load just the `PooledScorer` from a model dir (streams the .eqx to a local path,
+    which eqx deserialisation requires). Used by scoring and by calibration fitting."""
     model_dir = model_dir.rstrip("/")
     fd, local_eqx = tempfile.mkstemp(suffix=".eqx")
     with os.fdopen(fd, "wb") as out, open_url(f"{model_dir}/{MODEL_EQX}", "rb") as fh:
         out.write(fh.read())
-    scorer = PooledScorer.load(local_eqx, f"{model_dir}/{MODEL_REMAP}", f"{model_dir}/{MODEL_META}")
-    with open_url(f"{model_dir}/{calib_file}", "r") as fh:
+    return PooledScorer.load(local_eqx, f"{model_dir}/{MODEL_REMAP}", f"{model_dir}/{MODEL_META}")
+
+
+@functools.cache
+def _load_scorer(model_dir: str, calib_file: str = MODEL_CALIB) -> tuple[PooledScorer, np.ndarray, np.ndarray]:
+    """Load the scorer + calibration once per worker process."""
+    scorer = load_pooled_scorer(model_dir)
+    with open_url(f"{model_dir.rstrip('/')}/{calib_file}", "r") as fh:
         calib = json.loads(fh.read())
     logger.info("loaded FT scorer + calibration (%s) from %s", calib_file, model_dir)
     return scorer, np.asarray(calib["xk"], dtype=np.float64), np.asarray(calib["yk"], dtype=np.float64)

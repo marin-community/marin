@@ -9,16 +9,10 @@ text with a HuggingFace tokenizer, builds a compact vocabulary from the
 training split (mirroring fasttext's ``minCount`` pruning so every embedding
 row is actually trained and the table stays small), and packs everything into
 dense padded arrays ready for JAX.
-
-The packed arrays are cached to ``cache_dir`` keyed by the tokenizer, sequence
-length, and ``min_count`` so an architecture sweep tokenizes once.
 """
 
-import hashlib
-import json
 import logging
 import math
-import os
 from collections import Counter
 from dataclasses import dataclass
 
@@ -134,11 +128,6 @@ def _pack(
     return PackedSplit(ids=ids, lengths=lengths, scores=scores, sources=sources)
 
 
-def _cache_key(train_path: str, eval_path: str, tokenizer_name: str, max_tokens: int, min_count: int) -> str:
-    blob = json.dumps([train_path, eval_path, tokenizer_name, max_tokens, min_count], sort_keys=True)
-    return hashlib.sha1(blob.encode()).hexdigest()[:16]
-
-
 def encode_corpus(
     tokenizer_name: str, parquet_path: str, max_tokens: int
 ) -> tuple[list[list[int]], np.ndarray, list[str]]:
@@ -162,68 +151,3 @@ def pack(
     raw_ids: list[list[int]], remap: dict[int, int], scores: np.ndarray, sources: list[str], max_tokens: int
 ) -> PackedSplit:
     return _pack(raw_ids, remap, scores, sources, max_tokens)
-
-
-def load_packed(
-    *,
-    train_path: str,
-    eval_path: str,
-    tokenizer_name: str,
-    max_tokens: int,
-    min_count: int,
-    cache_dir: str,
-) -> PackedData:
-    """Tokenize + pack both splits, caching the dense arrays under ``cache_dir``."""
-    os.makedirs(cache_dir, exist_ok=True)
-    key = _cache_key(train_path, eval_path, tokenizer_name, max_tokens, min_count)
-    cache_path = os.path.join(cache_dir, f"packed-{key}.npz")
-    if os.path.exists(cache_path):
-        logger.info("loading packed cache %s", cache_path)
-        z = np.load(cache_path, allow_pickle=True)
-        return PackedData(
-            train=PackedSplit(z["tr_ids"], z["tr_len"], z["tr_score"], list(z["tr_src"])),
-            eval=PackedSplit(z["ev_ids"], z["ev_len"], z["ev_score"], list(z["ev_src"])),
-            vocab_size=int(z["vocab_size"]),
-            tokenizer_name=tokenizer_name,
-            max_tokens=max_tokens,
-        )
-
-    tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
-    tr_texts, tr_scores, tr_src = _read_scored(train_path)
-    ev_texts, ev_scores, ev_src = _read_scored(eval_path)
-    logger.info("read %d train / %d eval scored rows", len(tr_texts), len(ev_texts))
-
-    tr_raw = _encode(tokenizer, tr_texts, max_tokens)
-    ev_raw = _encode(tokenizer, ev_texts, max_tokens)
-    remap = _build_vocab(tr_raw, min_count)
-    vocab_size = len(remap) + NUM_RESERVED
-
-    train = _pack(tr_raw, remap, tr_scores, tr_src, max_tokens)
-    eval_split = _pack(ev_raw, remap, ev_scores, ev_src, max_tokens)
-    logger.info(
-        "packed: train ids %s (median len %d), eval ids %s, vocab %d",
-        train.ids.shape,
-        int(np.median(train.lengths)),
-        eval_split.ids.shape,
-        vocab_size,
-    )
-
-    np.savez_compressed(
-        cache_path,
-        tr_ids=train.ids,
-        tr_len=train.lengths,
-        tr_score=train.scores,
-        tr_src=np.asarray(train.sources, dtype=object),
-        ev_ids=eval_split.ids,
-        ev_len=eval_split.lengths,
-        ev_score=eval_split.scores,
-        ev_src=np.asarray(eval_split.sources, dtype=object),
-        vocab_size=vocab_size,
-    )
-    return PackedData(
-        train=train,
-        eval=eval_split,
-        vocab_size=vocab_size,
-        tokenizer_name=tokenizer_name,
-        max_tokens=max_tokens,
-    )

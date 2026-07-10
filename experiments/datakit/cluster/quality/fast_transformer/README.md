@@ -1,73 +1,74 @@
 # Fast-transformer document-quality classifier
 
-A pooled transformer that scores a document's value as LLM-pretraining data,
-trained against the Sonnet 4.6 oracle ([`../v0/rubric.py`](../v0/rubric.py)). The
-goal was a higher-fidelity replacement for the fasttext quality filter under a
-<1M FLOPs/token budget.
+A pooled transformer that scores a document's value as LLM-pretraining data. It
+replaces the domain-biased fasttext quality filter: trained against a **type-aware,
+source-blind** oracle rubric ([`rubric.py`](rubric.py)) that scores each document
+*as an example of its own type*, so excellent code, math, multilingual, and prose
+all reach the top buckets instead of code/multilingual/wiki being dumped at ~0.
 
-**Result.** The pooled model reaches **AUC 0.875 / Spearman ρ 0.703 at 0.41M
-FLOPs/token**, vs the fasttext baseline's 0.846 / 0.641. That meets the goal. The
-score has not moved past ~0.87 across capacity, context, and pretraining sweeps;
-we think that is a label-quality ceiling of the 5.6k-doc oracle set rather than
-an architecture limit (see "Pretraining experiments" below).
+The deployed score is calibrated so its fixed 0.2-bucket quantization is
+quality-coherent: a bucket means the same quality level across content types.
+
+## Pipeline
+
+```
+rubric.py    type-aware oracle rubric — how docs are scored 1..5 (labeling itself is offline)
+   │  labels: gs → merged parquet (5,578 oracle labels: consensus + junk-gate)
+train.py     train the pooled FastTransformer on the labels → model.eqx + remap + meta
+calibrate.py fit the monotonic bme calibration on the labels → calib_bme.json
+score.py     production scoring (one iris/zephyr job per source) → source/id/score/quality_bucket
+ops/report.py render the standalone single-page debugging report from the scored output
+```
+
+Retrain + recalibrate the deployed model:
+
+```bash
+python -m experiments.datakit.cluster.quality.fast_transformer.train \
+    --labels s3://marin-us-east-02a/marin/datakit/quality_labels_20260709.parquet \
+    --out-dir s3://marin-us-east-02a/marin/user/rav/quality/pooled_junkgate2
+python -m experiments.datakit.cluster.quality.fast_transformer.calibrate \
+    --model-dir s3://marin-us-east-02a/marin/user/rav/quality/pooled_junkgate2 \
+    --out       s3://marin-us-east-02a/marin/user/rav/quality/pooled_junkgate2/calib_bme.json
+```
+
+## Scoring
+
+`score.py` scores **whole-doc (bme)**: the score is the mean over begin/middle/end
+~512-token windows, so a source whose docs share a long boilerplate prefix
+(agent/tool trajectories) is not scored blind by the first 512 tokens. Sources that
+are genuinely uniform in quality stay near-constant — the report flags those as
+`uninformative` (a variance gate) versus `homogeneous` (real spread, one bucket).
+
+Calibration is a monotonic remap, so it does not change document ranking; it only
+warps the bell-shaped raw score so the fixed cutpoints `[0.2, 0.4, 0.6, 0.8]` land
+on the oracle quality levels (labeled-set bucket-vs-level agreement: within-1 ≈0.98).
 
 ## Architecture
 
 `embed → pool over 64-token windows → input proj + positions → N transformer
-layers over the super-tokens → pool → scalar quality head`. Pooling at the
-window boundary amortizes the transformer cost by ~64×, which is what keeps it
-under the FLOPs budget while still running real self-attention. The winning
-config is `meanmaxmin` pooling, `pool_window=64`, `embed_dim=256`,
-`hidden_dim=512`, `num_layers=4`, `max_tokens=1024`.
+layers over the super-tokens → pool → scalar quality head`. Pooling at the window
+boundary amortizes the transformer cost by ~64×, keeping inference under a
+<1M FLOPs/token budget while still running real self-attention. Deployed config:
+`meanmaxmin` pooling, `pool_window=64`, `embed_dim=256`, `hidden_dim=256`,
+`num_layers=2`, `num_heads=4`, `max_tokens=512`, tokenizer `intfloat/multilingual-e5-small`.
 
 ## Files
 
 Core:
 
-- [`model.py`](model.py) — the pooled `FastTransformer` regressor (the deliverable).
-- [`data.py`](data.py) — tokenize the oracle-scored parquets and pack dense padded arrays + a compact vocab.
-- [`train.py`](train.py) — `fit` / `train_regressor` (MSE-on-sigmoid, early stopping, data-parallel across chips) and the holdout metrics.
+- [`rubric.py`](rubric.py) — the type-aware, source-blind oracle rubric (system prompt + content types).
+- [`model.py`](model.py) — the pooled `FastTransformer` regressor.
+- [`data.py`](data.py) — tokenize the oracle-scored text and pack dense padded arrays + a compact vocab.
+- [`train.py`](train.py) — `train_from_labels`: train the deployed scorer from the label parquet, plus `fit`/`train_regressor` and the holdout metrics.
+- [`calibrate.py`](calibrate.py) — fit the monotonic bme calibration (`calib_bme.json`).
 - [`scorer.py`](scorer.py) — `PooledScorer`: load a trained model + vocab remap and score arbitrary text.
-- [`score.py`](score.py) — production batch-scoring step (one iris/zephyr job per source): whole-doc bme scoring + calibration → `source`/`id`/`score`/`quality_bucket`.
+- [`score.py`](score.py) — production batch-scoring step (bme + calibration → buckets).
 
-Ops ([`ops/`](ops/)) — non-core tooling:
+Ops ([`ops/`](ops/)):
 
-- [`ops/report.py`](ops/report.py) — render the standalone single-page quality-score debugging report (fetches spot-check text from the sample).
-- [`ops/sweep.py`](ops/sweep.py) — architecture grid that selected the winning config.
-- [`ops/eval_best.py`](ops/eval_best.py) — train the winner and report holdout metrics, a val-calibrated operating point, and a per-source breakdown.
+- [`ops/report.py`](ops/report.py) — render the standalone single-page debugging report (fetches spot-check text from the sample).
 
-Pretraining experiments ([`pretrain/`](pretrain/)) — attempts to beat the plateau with more (cheaper) labels:
+## Artifacts
 
-- [`pretrain/transfer.py`](pretrain/transfer.py) — shared scratch → pretrain → finetune comparison used by the supervised-pretraining drivers.
-- [`pretrain/source_prior.py`](pretrain/source_prior.py) — pretrain on each doc's source-mean oracle score (source-of-origin prior).
-- [`pretrain/nemotron_bucket.py`](pretrain/nemotron_bucket.py) — pretrain on Nemotron-CC quality buckets.
-- [`pretrain/ntp.py`](pretrain/ntp.py) + [`pretrain/encoder.py`](pretrain/encoder.py) — token-level encoder pretrained with next-token prediction, then fine-tuned with a pooled head.
-- [`pretrain/nemotron_sample.py`](pretrain/nemotron_sample.py) — sample the Nemotron-bucket pretraining corpus.
-
-## Results
-
-AUC and Spearman ρ of predicted quality vs the oracle on the 961-doc holdout.
-FLOPs/token is forward inference cost; the 1M budget is the design constraint.
-
-| variant | AUC | ρ | FLOPs/tok | notes |
-|---|---|---|---|---|
-| fasttext baseline | 0.846 | 0.641 | — | bag-of-bigrams |
-| source-of-origin (label only, no text) | 0.852 | — | 0 | per-source mean oracle score; ceiling of the "which source" signal |
-| **pooled fast-transformer, from scratch** | **0.875** | **0.703** | **0.41M** | the deliverable |
-| pooled + source-prior pretrain → finetune | 0.858 | 0.691 | 0.41M | below scratch; representation collapsed to source identity |
-| pooled + nemotron-bucket pretrain → finetune | 0.814 | 0.599 | 0.41M | below scratch; Nvidia buckets misaligned with our rubric |
-| token encoder + NTP pretrain → finetune | 0.858–0.877 | 0.69–0.72 | 14.7M | over budget; the 0.877 run did not reproduce at larger scale |
-
-## Pretraining experiments: why they did not help
-
-Every free label source available is at or below the from-scratch pooled model:
-source-of-origin (0.852), our own fasttext (0.846), the dolma3 classifier. The
-two supervised-pretraining attempts (`source_prior`, `nemotron_bucket`) both
-landed below the from-scratch control — the pretrained representation collapses
-toward the weak signal and is a worse init than random for the within-source
-per-doc task. NTP helped the weaker token-level encoder but stays over budget and
-under the pooled plateau.
-
-The remaining lever above the current model is more *real* oracle labels (the
-[`../v0/`](../v0) scoring pipeline at larger scale). That is the only signal
-richer than what the model already learns from the 5.6k gold set.
+- Labels: `s3://marin-us-east-02a/marin/datakit/quality_labels_20260709.parquet` (5,578 oracle labels; `label_batch` marks `consensus_v3` / `junkgate_web_wiki` / `junkgate_code_math`).
+- Model: `s3://marin-us-east-02a/marin/user/rav/quality/pooled_junkgate2/` (`.eqx` + `_remap.json` + `_meta.json` + `calib_bme.json`).
