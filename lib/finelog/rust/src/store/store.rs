@@ -483,12 +483,12 @@ impl Store {
         Ok(self.require_engine(LOG_NAMESPACE_NAME)?.persisted_seq())
     }
 
-    /// The highest `log` seq this store has confirmed durable at `target`.
+    /// The `log` seq below which this store will never send to `target` again.
     pub fn forward_cursor(&self, target: &str) -> Result<Option<i64>, StatsError> {
         self.catalog.forward_cursor(target)
     }
 
-    /// Record `cursor` as forwarded to `target`.
+    /// Record `cursor` as settled for `target`.
     pub fn set_forward_cursor(&self, target: &str, cursor: i64) -> Result<(), StatsError> {
         self.catalog.set_forward_cursor(target, cursor)
     }

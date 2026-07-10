@@ -400,10 +400,10 @@ where
                 }
             }
             if batch.rows.is_empty() {
-                // Every row up to `persisted` was filtered out — rows already carrying
-                // a foreign origin cluster. Advance, or the loop rereads them forever.
-                // Safe against a concurrent writer: `persisted` is a captured bound,
-                // and later rows arrive with a later watermark.
+                // Every row up to `persisted` was filtered out by the scan: rows already
+                // carrying a foreign origin cluster, or rows with no key. Advance, or the
+                // loop rereads them forever. Safe against a concurrent writer: `persisted`
+                // is a captured bound, and later rows arrive with a later watermark.
                 cursor = persisted;
                 self.persist_cursor(persisted);
                 return cursor;
