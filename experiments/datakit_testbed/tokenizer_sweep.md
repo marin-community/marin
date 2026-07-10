@@ -88,3 +88,64 @@ it as the script config. The most important fields are:
 
 TokenMonster is intentionally not part of this default recipe; add it in a
 separate focused experiment if needed.
+
+## Matched Grug MoE comparison
+
+`tokenizer_moe_comparison.py` trains matched token-level Grug MoE controls from
+the completed tokenizer-sweep caches. It contains no chunked-MoE policies. The
+rung shapes and AdamH hyperparameters are frozen to the historical controls;
+the model implementation is the Grug MoE implementation on the checked-out
+revision. Tokenizer family and vocabulary size are the only differences within
+one invocation:
+
+| rung | layers | expert FFN | experts / top-k | batch x sequence | steps | tokens |
+|---|---:|---:|---:|---:|---:|---:|
+| d512 | 6 | 256 | 64 / 4 | 512 x 4096 | 399 | 836,763,648 |
+| d768 | 8 | 384 | 64 / 4 | 512 x 4096 | 1,292 | 2,709,520,384 |
+
+Rerun all eight place-digits cells (GPT-OSS and Llama, 8k and 32k, d512 and
+d768) against the existing Europe cache:
+
+```bash
+.venv/bin/iris --cluster marin job run --no-wait \
+  --job-name tokenizer-moe-place-digits-canonical-adamh-20260710 \
+  --priority interactive --region europe-west4 \
+  --tpu v6e-4 --enable-extra-resources --preemptible \
+  -- uv run python experiments/datakit_testbed/tokenizer_moe_comparison.py \
+    --cache_prefix gs://marin-eu-west4/data/datakit/tokenized/tokenizer-sweep-20260526 \
+    --output_prefix gs://marin-eu-west4 \
+    --tokenizer_run_id tokenizer-sweep-20260526 \
+    --region europe-west4 \
+    --tpu_type v6e-8 \
+    --version canonical-adamh-20260710 \
+    --families '[gpt-oss-place-digits,llama-place-digits]'
+```
+
+`--tpu_type` may select another TPU topology with at least four chips; it is not
+restricted to v6e-8. The launcher pins child compute to `--region` and rejects
+cache, output, and compute-region mismatches before submitting work. To rerun
+the complete vanilla-plus-digits comparison, use:
+
+```bash
+.venv/bin/iris --cluster marin job run --no-wait \
+  --job-name tokenizer-moe-all-canonical-adamh-20260710 \
+  --priority interactive --region europe-west4 \
+  --tpu v6e-4 --enable-extra-resources --preemptible \
+  -- uv run python experiments/datakit_testbed/tokenizer_moe_comparison.py \
+    --cache_prefix gs://marin-eu-west4/data/datakit/tokenized/tokenizer-sweep-20260526 \
+    --output_prefix gs://marin-eu-west4 \
+    --tokenizer_run_id tokenizer-sweep-20260526 \
+    --region europe-west4 \
+    --tpu_type v6e-8 \
+    --version canonical-adamh-all-20260710 \
+    --families '[gpt-oss,llama,gpt-oss-place-digits,llama-place-digits]'
+```
+
+Use the complete command for a comparison across a newer Grug code revision.
+The digits-only command is a repair command for controls produced from the same
+model-code revision.
+
+The command discovers only cache components with a completed
+`train/.stats.json`, requires exactly `--expected_sources` components for both
+training and holdout, weights training sources by recorded token count, and
+evaluates BPB on the separately tokenized holdout window every 1,000 steps.
