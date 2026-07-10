@@ -37,6 +37,9 @@ NUM_EXPERTS=256
 TOP_K=4
 VOCAB_SIZE=""
 MOE_IMPLEMENTATION="ring"
+ATTENTION_IMPLEMENTATION="${MAY_ATTENTION_IMPLEMENTATION:-}"
+RAGGED_DOT_IMPLEMENTATION="${RAGGED_DOT_IMPL:-}"
+RAGGED_DOT_NUM_WARPS="${HALIAX_RAGGED_DOT_TRITON_NUM_WARPS:-}"
 LOSS_IMPLEMENTATION=""
 CE_AUTOTUNE_ON_MISS="${LEVANTER_PALLAS_CE_AUTOTUNE_ON_MISS:-false}"
 JAXPP_CONSERVATIVE_LOOP_CLUSTERING="${JAXPP_CONSERVATIVE_LOOP_CLUSTERING:-true}"
@@ -81,6 +84,12 @@ Options:
   --batch N                 MAY_BATCH (default: 256).
   --seq-len N               MAY_SEQ_LEN (default: 4096).
   --moe-implementation NAME ring, ragged_all_to_all, deepep, scatter, or sonic (default: ring).
+  --attention-implementation NAME
+                            reference, gpu_fa4_cute, or gpu_fa4_thd.
+                            Omit to use the model default.
+  --ragged-dot-implementation NAME
+                            auto, triton, or xla. Omit to use auto.
+  --ragged-dot-num-warps N  Pallas-Triton grouped-GEMM warps: 4 or 8.
   --loss-implementation NAME
                             Cross-entropy implementation: batched_xla, xla, or reference.
                             Omit to use Levanter default.
@@ -123,6 +132,9 @@ while [ "$#" -gt 0 ]; do
         --batch) BATCH="$2"; shift 2 ;;
         --seq-len) SEQ_LEN="$2"; shift 2 ;;
         --moe-implementation) MOE_IMPLEMENTATION="$2"; shift 2 ;;
+        --attention-implementation) ATTENTION_IMPLEMENTATION="$2"; shift 2 ;;
+        --ragged-dot-implementation) RAGGED_DOT_IMPLEMENTATION="$2"; shift 2 ;;
+        --ragged-dot-num-warps) RAGGED_DOT_NUM_WARPS="$2"; shift 2 ;;
         --loss-implementation) LOSS_IMPLEMENTATION="$2"; shift 2 ;;
         --ce-autotune-on-miss) CE_AUTOTUNE_ON_MISS="$2"; shift 2 ;;
         --conservative-loop-clustering) JAXPP_CONSERVATIVE_LOOP_CLUSTERING="$2"; shift 2 ;;
@@ -165,6 +177,30 @@ case "$REMAT" in
     recompute_all|save_moe) ;;
     *)
         echo "ERROR: unsupported remat mode: $REMAT" >&2
+        exit 1
+        ;;
+esac
+
+case "$ATTENTION_IMPLEMENTATION" in
+    ""|reference|gpu_fa4_cute|gpu_fa4_thd) ;;
+    *)
+        echo "ERROR: unsupported attention implementation: $ATTENTION_IMPLEMENTATION" >&2
+        exit 1
+        ;;
+esac
+
+case "$RAGGED_DOT_IMPLEMENTATION" in
+    ""|auto|triton|xla) ;;
+    *)
+        echo "ERROR: unsupported ragged dot implementation: $RAGGED_DOT_IMPLEMENTATION" >&2
+        exit 1
+        ;;
+esac
+
+case "$RAGGED_DOT_NUM_WARPS" in
+    ""|4|8) ;;
+    *)
+        echo "ERROR: ragged dot num warps must be 4 or 8, got: $RAGGED_DOT_NUM_WARPS" >&2
         exit 1
         ;;
 esac
@@ -253,6 +289,18 @@ if [ -n "$LOSS_IMPLEMENTATION" ]; then
     ENV_ARGS+=(-e MAY_LOSS_IMPLEMENTATION "$LOSS_IMPLEMENTATION")
 fi
 
+if [ -n "$ATTENTION_IMPLEMENTATION" ]; then
+    ENV_ARGS+=(-e MAY_ATTENTION_IMPLEMENTATION "$ATTENTION_IMPLEMENTATION")
+fi
+
+if [ -n "$RAGGED_DOT_IMPLEMENTATION" ] && [ "$RAGGED_DOT_IMPLEMENTATION" != auto ]; then
+    ENV_ARGS+=(-e RAGGED_DOT_IMPL "$RAGGED_DOT_IMPLEMENTATION")
+fi
+
+if [ -n "$RAGGED_DOT_NUM_WARPS" ]; then
+    ENV_ARGS+=(-e HALIAX_RAGGED_DOT_TRITON_NUM_WARPS "$RAGGED_DOT_NUM_WARPS")
+fi
+
 if [ -n "$VOCAB_SIZE" ]; then
     ENV_ARGS+=(-e MAY_VOCAB_SIZE "$VOCAB_SIZE")
 fi
@@ -304,6 +352,9 @@ stage_layer_counts: ${STAGE_LAYER_COUNTS:-even}
 microbatches: $MICROBATCHES
 model: d2560 L${LAYERS} experts=${NUM_EXPERTS} top_k=${TOP_K} seq_len=${SEQ_LEN} vocab=${VOCAB_SIZE:-default}
 batch: $BATCH
+attention_implementation: ${ATTENTION_IMPLEMENTATION:-default}
+ragged_dot_implementation: ${RAGGED_DOT_IMPLEMENTATION:-auto}
+ragged_dot_num_warps: ${RAGGED_DOT_NUM_WARPS:-4}
 loss_implementation: ${LOSS_IMPLEMENTATION:-default}
 ce_autotune_on_miss: $CE_AUTOTUNE_ON_MISS
 conservative_loop_clustering: $JAXPP_CONSERVATIVE_LOOP_CLUSTERING

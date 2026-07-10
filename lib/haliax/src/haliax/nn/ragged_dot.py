@@ -42,6 +42,17 @@ _AUTO_FALLBACK_EXCEPTIONS = (NotImplementedError, RuntimeError)
 _HAS_WARNED_AUTO_FALLBACK = False
 _TRITON_DEFAULT_BLOCK_N = 128
 _TRITON_BLACKWELL_BLOCK_N = 256
+_TRITON_NUM_WARPS_ENV = "HALIAX_RAGGED_DOT_TRITON_NUM_WARPS"
+
+
+def _triton_num_warps() -> int:
+    raw = os.environ.get(_TRITON_NUM_WARPS_ENV, "")
+    if not raw:
+        return 4
+    num_warps = int(raw)
+    if num_warps not in (4, 8):
+        raise ValueError(f"{_TRITON_NUM_WARPS_ENV} must be 4 or 8, got {num_warps}")
+    return num_warps
 
 
 def _is_blackwell_gpu_backend() -> bool:
@@ -163,7 +174,7 @@ def _triton_default_pallas_call(lhs: jax.Array, rhs: jax.Array, group_sizes: jax
         ],
         out_specs=pl.BlockSpec((m, block_n), lambda _, j, __: (0, j)),
         grid=(pl.cdiv(m, block_m), pl.cdiv(n, block_n), num_groups),
-        compiler_params=plgpu.CompilerParams(num_warps=4, num_stages=4),
+        compiler_params=plgpu.CompilerParams(num_warps=_triton_num_warps(), num_stages=4),
     )(lhs, rhs, cum_rows[:-1], cum_rows[1:])
 
 
@@ -236,7 +247,7 @@ def _triton_ragged_contracting_dim_pallas_call(
             ],
             out_specs=pl.BlockSpec((block_m, block_n), lambda i, j: (i, j)),
             grid=(pl.cdiv(m, block_m), pl.cdiv(n, block_n)),
-            compiler_params=plgpu.CompilerParams(num_warps=4, num_stages=4),
+            compiler_params=plgpu.CompilerParams(num_warps=_triton_num_warps(), num_stages=4),
         )(lhs, rhs, lo, hi)
 
     return jax.vmap(one_group, in_axes=(None, None, 0, 0))(lhs, rhs, cum_rows[:-1], cum_rows[1:])
