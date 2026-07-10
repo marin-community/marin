@@ -3,23 +3,25 @@
 
 """Render a self-contained quality-score debugging report (single-page HTML app).
 
-Input is the parquet written by ``score.py --direct`` (columns ``source``, ``id``,
-``ft_score``, ``ft_bucket``, ``old_score``, ``old_bucket``, ``text``). The output is
-one standalone ``.html`` file -- all CSS/JS inlined and the data embedded as JSON, so
-it works offline and can be hosted anywhere -- showing:
+Reads the lean parquet written by ``score.py`` (columns ``source``, ``id``, ``score``,
+``quality_bucket``) and fetches the document text for the spot-check sample on demand
+from the normalized corpus (``--sample-prefix``). The output is one standalone ``.html``
+file -- all CSS/JS inlined and the data embedded as JSON, so it works offline and can be
+hosted anywhere -- showing:
 
-  - the score distribution (paired new-FT vs old-baseline histograms + bucket bars)
-  - how the old scorer's docs redistribute across the new buckets (confusion)
+  - the score distribution (histogram + fixed-0.2 bucket bars)
   - per-domain bucket mix + means
   - a sortable per-source table with anomaly flags (``uninformative`` = near-constant
     score, the variance-gate case; ``homogeneous`` = spread but one dominant bucket)
-  - an interactive spot-check drawer sampling docs per source x bucket (with text)
+  - an interactive spot-check drawer sampling docs per source x bucket (text fetched
+    from the sample)
 
 Usage::
 
     python -m experiments.datakit.cluster.quality.fast_transformer.report \\
-        --in scored.parquet --out report.html \\
-        --scorer "pooled_junkgate2 (calibrated, bme)" --sample "sample_1t"
+        --scored        s3://.../quality/scored_1t \\
+        --sample-prefix s3://.../datakit/sample_1t_733c8c5c \\
+        --out report.html --scorer "pooled_junkgate2 (bme)" --sample "sample_1t"
 """
 
 import argparse
@@ -36,7 +38,9 @@ _TEMPLATE = Path(__file__).with_name("report_template.html")
 
 NB = 5  # buckets 0..4
 HBINS = 25  # score histogram bins
-SAMPLE_PER_CELL = 5  # docs embedded per (source, ft_bucket) for spot-checking
+SAMPLE_PER_CELL = 5  # docs shown per (source, bucket) in the spot-check
+PER_SOURCE = 500  # scored rows read per source (bounds memory + gives representative stats)
+READ_BATCH = 4096
 TEXT_CHARS = 1600
 UNINFORMATIVE_STD = 0.03  # below this within-source std the FT can't discriminate (variance gate)
 HOMOGENEOUS_FRAC = 0.9  # one bucket holding >= this share = genuinely uniform source
@@ -112,32 +116,87 @@ def _anomaly_flags(n: int, ft_mix: list[int], ft_scores: np.ndarray) -> list[tup
     return []
 
 
-def build_report_data(table, *, scorer: str, baseline: str, sample: str) -> dict:
-    """Aggregate a scored table into the JSON payload embedded in the report."""
-    src = np.array(table.column("source").to_pylist())
+def read_scored(scored_prefix: str, per_source: int) -> dict[str, list]:
+    """Read the per-source scored parquets under ``scored_prefix``, keeping up to
+    ``per_source`` rows per source (source is the dir name, used to skip capped sources)."""
+    prefix = scored_prefix.rstrip("/")
+    out: dict[str, list] = {k: [] for k in ("source", "id", "score", "quality_bucket")}
+    per: dict[str, int] = defaultdict(int)
+    for f in sorted(str(m) for m in StoragePath(f"{prefix}/**/*.parquet").glob()):
+        src_dir = f.split(prefix + "/", 1)[1].rsplit("/data-", 1)[0]
+        if per[src_dir] >= per_source:
+            continue
+        with StoragePath(f).open("rb") as fh:
+            for batch in pq.ParquetFile(fh).iter_batches(
+                batch_size=READ_BATCH, columns=["source", "id", "score", "quality_bucket"]
+            ):
+                d = batch.to_pydict()
+                for s, i, sc, qb in zip(d["source"], d["id"], d["score"], d["quality_bucket"], strict=True):
+                    if per[s] >= per_source:
+                        continue
+                    per[s] += 1
+                    out["source"].append(s)
+                    out["id"].append(str(i))
+                    out["score"].append(float(sc))
+                    out["quality_bucket"].append(int(qb))
+    return out
+
+
+def fetch_text(sample_prefix: str, needed: dict[str, set[str]]) -> dict[tuple[str, str], str]:
+    """Fetch text for the given ids per source from the normalized sample."""
+    prefix = sample_prefix.rstrip("/")
+    text_by: dict[tuple[str, str], str] = {}
+    for src, ids in needed.items():
+        want = set(ids)
+        for f in sorted(str(m) for m in StoragePath(f"{prefix}/{src}/outputs/main/**/*.parquet").glob()):
+            if not want:
+                break
+            with StoragePath(f).open("rb") as fh:
+                for batch in pq.ParquetFile(fh).iter_batches(batch_size=READ_BATCH, columns=["id", "text"]):
+                    d = batch.to_pydict()
+                    for i, t in zip(d["id"], d["text"], strict=True):
+                        si = str(i)
+                        if si in want:
+                            text_by[(src, si)] = t or ""
+                            want.discard(si)
+                    if not want:
+                        break
+    return text_by
+
+
+def _select_spotcheck(src: np.ndarray, ftb: np.ndarray, fts: np.ndarray) -> list[int]:
+    """Pick up to SAMPLE_PER_CELL indices per (source, bucket), spread across the score range."""
+    by_cell = defaultdict(list)
+    for i in np.argsort(fts):
+        by_cell[(src[i], int(ftb[i]))].append(int(i))
+    picked: list[int] = []
+    for idxs in by_cell.values():
+        step = max(1, len(idxs) // SAMPLE_PER_CELL)
+        picked.extend(idxs[::step][:SAMPLE_PER_CELL])
+    return picked
+
+
+def build_report_data(scored: dict[str, list], text_by: dict[tuple[str, str], str], *, scorer: str, sample: str) -> dict:
+    """Aggregate scored rows (+ fetched text for the spot-check) into the report payload."""
+    src = np.array(scored["source"])
+    ids = scored["id"]
+    fts = np.array(scored["score"], float)
+    ftb = np.array(scored["quality_bucket"], int)
     dom = np.array([domain_of(s) for s in src])
-    fts = np.array(table.column("ft_score").to_pylist(), float)
-    ftb = np.array(table.column("ft_bucket").to_pylist(), int)
-    old = np.array(table.column("old_score").to_pylist(), float)
-    oldb = np.array(table.column("old_bucket").to_pylist(), int)
-    txt = table.column("text").to_pylist()
-    ids = table.column("id").to_pylist()
     n = len(src)
-    has_old = bool(np.isfinite(old).any()) and bool((oldb >= 0).any())
 
     overall = {
         "n": n,
-        "has_old": has_old,
+        "has_old": False,
         "ft_hist": _hist(fts),
-        "old_hist": _hist(old) if has_old else [],
+        "old_hist": [],
         "ft_buckets": _bucket_counts(ftb),
-        "old_buckets": _bucket_counts(oldb) if has_old else [],
+        "old_buckets": [],
         "ft_mean": float(fts.mean()),
-        "old_mean": float(old[np.isfinite(old)].mean()) if has_old else 0.0,
+        "old_mean": 0.0,
         "ft_std": float(fts.std()),
-        "old_std": float(old[np.isfinite(old)].std()) if has_old else 0.0,
+        "old_std": 0.0,
     }
-    conf = [[int(((oldb == r) & (ftb == c)).sum()) for c in range(NB)] for r in range(NB)] if has_old else []
 
     domains = {}
     for d in sorted(set(dom)):
@@ -145,9 +204,9 @@ def build_report_data(table, *, scorer: str, baseline: str, sample: str) -> dict
         domains[d] = {
             "n": int(m.sum()),
             "ft_mean": float(fts[m].mean()),
-            "old_mean": float(old[m].mean()) if has_old else 0.0,
+            "old_mean": 0.0,
             "ft_buckets": _bucket_counts(ftb[m]),
-            "old_buckets": _bucket_counts(oldb[m]) if has_old else [],
+            "old_buckets": [],
             "ft_hist": _hist(fts[m]),
         }
 
@@ -161,46 +220,40 @@ def build_report_data(table, *, scorer: str, baseline: str, sample: str) -> dict
                 "domain": domain_of(s),
                 "n": int(m.sum()),
                 "ft_mean": float(fts[m].mean()),
-                "old_mean": float(old[m].mean()) if has_old else 0.0,
+                "old_mean": 0.0,
                 "ft_buckets": mix,
                 "flags": _anomaly_flags(int(m.sum()), mix, fts[m]),
             }
         )
     sources.sort(key=lambda r: r["ft_mean"])
 
-    # spot-check: per (source, ft_bucket) keep SAMPLE_PER_CELL, spread across the score range
-    by_cell = defaultdict(list)
-    for i in np.argsort(fts):
-        by_cell[(src[i], ftb[i])].append(i)
     docs = []
-    for idxs in by_cell.values():
-        step = max(1, len(idxs) // SAMPLE_PER_CELL)
-        for i in idxs[::step][:SAMPLE_PER_CELL]:
-            docs.append(
-                {
-                    "source": src[i],
-                    "domain": dom[i],
-                    "ft_bucket": int(ftb[i]),
-                    "old_bucket": int(oldb[i]),
-                    "ft": round(float(fts[i]), 3),
-                    "old": round(float(old[i]), 3) if has_old else None,
-                    "id": str(ids[i]),
-                    "text": (txt[i] or "")[:TEXT_CHARS],
-                }
-            )
+    for i in _select_spotcheck(src, ftb, fts):
+        docs.append(
+            {
+                "source": src[i],
+                "domain": dom[i],
+                "ft_bucket": int(ftb[i]),
+                "old_bucket": -1,
+                "ft": round(float(fts[i]), 3),
+                "old": None,
+                "id": str(ids[i]),
+                "text": text_by.get((src[i], str(ids[i])), "")[:TEXT_CHARS],
+            }
+        )
 
     return {
         "meta": {
             "scorer": scorer,
-            "baseline": baseline,
+            "baseline": "",
             "sample": sample,
             "n": n,
             "nsrc": len(sources),
             "ndom": len(domains),
-            "has_old": has_old,
+            "has_old": False,
         },
         "overall": overall,
-        "conf": conf,
+        "conf": [],
         "domains": domains,
         "sources": sources,
         "docs": docs,
@@ -214,17 +267,25 @@ def render_html(data: dict, *, title: str) -> str:
 
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("--in", dest="inp", required=True, help="scored parquet from score.py --direct")
+    p.add_argument("--scored", required=True, help="score.py output prefix (per-source parquets)")
+    p.add_argument("--sample-prefix", required=True, help="normalized sample root, to fetch spot-check text")
     p.add_argument("--out", required=True, help="output .html path (local or storage url)")
+    p.add_argument("--per-source", type=int, default=PER_SOURCE, help="scored rows read per source")
     p.add_argument("--title", default="Quality-Score Debugging Report")
     p.add_argument("--scorer", default="pooled fast-transformer (calibrated)")
-    p.add_argument("--baseline", default="fasttext baseline · P(__label__1)")
     p.add_argument("--sample", default="")
     args = p.parse_args()
 
-    with StoragePath(args.inp).open("rb") as fh:
-        table = pq.read_table(fh)
-    data = build_report_data(table, scorer=args.scorer, baseline=args.baseline, sample=args.sample)
+    scored = read_scored(args.scored, args.per_source)
+    src = np.array(scored["source"])
+    fts = np.array(scored["score"], float)
+    ftb = np.array(scored["quality_bucket"], int)
+    needed: dict[str, set[str]] = defaultdict(set)
+    for i in _select_spotcheck(src, ftb, fts):
+        needed[src[i]].add(scored["id"][i])
+    text_by = fetch_text(args.sample_prefix, needed)
+
+    data = build_report_data(scored, text_by, scorer=args.scorer, sample=args.sample)
     doc = render_html(data, title=args.title)
     with StoragePath(args.out).open("w") as fh:
         fh.write(doc)
