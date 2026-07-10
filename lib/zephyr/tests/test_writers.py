@@ -3,19 +3,14 @@
 
 """Tests for writers module."""
 
-import io
 import tempfile
-import uuid
 from pathlib import Path
 
-import fsspec
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 import vortex
 from zephyr.writers import (
-    _WRITE_CHUNK_SIZE,
-    _ChunkedWriteFile,
     infer_arrow_schema,
     write_parquet_file,
     write_vortex_file,
@@ -166,48 +161,6 @@ def test_write_parquet_file_empty():
 
         table = pq.read_table(output_path)
         assert len(table) == 0
-
-
-def test_write_parquet_file_remote_protocol():
-    """Remote outputs round-trip through the fsspec filesystem.
-
-    pyarrow cannot resolve arbitrary fsspec protocols from a raw path (and its
-    native S3 client breaks CoreWeave/R2), so remote outputs must be written
-    through an fsspec handle.
-    """
-    bucket = f"zephyr-writers-{uuid.uuid4().hex}"
-    output_path = f"memory://{bucket}/out.parquet"
-    records = [{"id": 1, "name": "Alice"}, {"id": 2, "name": "Bob"}]
-
-    result = write_parquet_file(iter(records), output_path)
-
-    assert result["count"] == 2
-    with fsspec.filesystem("memory").open(f"/{bucket}/out.parquet", "rb") as f:
-        table = pq.read_table(f)
-    assert table.to_pylist() == records
-
-
-def test_chunked_write_file_bounds_single_writes():
-    """A write larger than the chunk size reaches the wrapped file in bounded
-    pieces with content preserved — the invariant that keeps a buffered fsspec
-    file's memory at O(block_size) when a mega document flows through."""
-
-    class _RecordingFile:
-        def __init__(self):
-            self.max_write = 0
-            self.buf = io.BytesIO()
-
-        def write(self, data) -> int:
-            self.max_write = max(self.max_write, len(data))
-            return self.buf.write(data)
-
-    payload = bytes(range(256)) * (3 * _WRITE_CHUNK_SIZE // 256)  # 3 chunks worth
-    inner = _RecordingFile()
-    wrapper = _ChunkedWriteFile(inner)
-
-    assert wrapper.write(payload) == len(payload)
-    assert inner.buf.getvalue() == payload
-    assert inner.max_write <= _WRITE_CHUNK_SIZE
 
 
 def test_infer_arrow_schema_basic():

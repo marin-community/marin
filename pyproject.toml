@@ -69,6 +69,12 @@ override-dependencies = [
     "wheel>=0.46.2",
     "datasets>=3.1.0,<5.0.0",
     "equinox>=0.11.10",  # Override vizier's pin for modern JAX compatibility
+    # Override tpu-inference's exact gcsfs pin: gcsfs < 2026.6.0 copies the whole
+    # write buffer on every flush (fixed by fsspec/gcsfs#907), which OOMs workers
+    # writing mega-document parquet shards. gcsfs 2026.7.0 needs fsspec>=2026.6.0,
+    # which datasets caps at <=2026.2.0 — override that cap as well.
+    "gcsfs>=2026.7.0",
+    "fsspec>=2026.6.0",
     "authlib>=1.7.2",
     "cbor2>=6.0.1",
     "click>=8.3.1",

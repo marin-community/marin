@@ -27,11 +27,6 @@ logger = logging.getLogger(__name__)
 # 64 MB write blocks — controls S3 multipart upload part size.
 _WRITE_BLOCK_SIZE = 64 * 1024 * 1024
 
-# Largest single write() passed through to a buffered fsspec file; bigger
-# payloads are split by _ChunkedWriteFile so the file's in-memory buffer stays
-# near _WRITE_BLOCK_SIZE instead of growing to the payload size.
-_WRITE_CHUNK_SIZE = 8 * 1024 * 1024
-
 # Default target buffer size for writer batching. Writers accumulate
 # micro-batches until accumulated nbytes reaches this threshold, then yield
 # a single concatenated table.
@@ -60,37 +55,6 @@ def ensure_parent_dir(path: str) -> None:
             os.makedirs(output_dir, exist_ok=True)
 
 
-class _ChunkedWriteFile:
-    """File wrapper that feeds oversized writes to a buffered file in bounded pieces.
-
-    fsspec's ``AbstractBufferedFile.write`` appends the whole payload to its
-    in-memory buffer before checking the flush threshold, so ``block_size``
-    bounds when the buffer flushes, not how large it grows: a single huge
-    write — e.g. a parquet data page holding one mega document — lands in the
-    buffer whole. Backend flush paths may then copy the buffer again (gcsfs
-    used ``getvalue()`` plus a chunk slice until its 2026.6.0 zero-copy write
-    path), for up to ~3x the payload in transient memory. Splitting writes
-    into ``_WRITE_CHUNK_SIZE`` pieces keeps the buffer near ``block_size``,
-    so transient memory is O(block_size) regardless of write size, on every
-    filesystem and pinned version.
-
-    Only ``write`` is intercepted; all other file methods delegate to the
-    wrapped file.
-    """
-
-    def __init__(self, f):
-        self._f = f
-
-    def __getattr__(self, name: str):
-        return getattr(self._f, name)
-
-    def write(self, data) -> int:
-        view = memoryview(data)
-        for start in range(0, len(view), _WRITE_CHUNK_SIZE):
-            self._f.write(view[start : start + _WRITE_CHUNK_SIZE])
-        return len(view)
-
-
 @contextmanager
 def _open_write_stream(fs, resolved_path: str, output_path: str):
     """Open a binary write stream with compression inferred from ``output_path``."""
@@ -103,10 +67,8 @@ def _open_write_stream(fs, resolved_path: str, output_path: str):
         with fs.open(resolved_path, "wb", block_size=_WRITE_BLOCK_SIZE, compression="gzip") as f:
             yield f
     else:
-        # No compressor between the caller and the buffered file, so a single
-        # mega record would land in the buffer whole — bound it.
         with fs.open(resolved_path, "wb", block_size=_WRITE_BLOCK_SIZE) as f:
-            yield _ChunkedWriteFile(f)
+            yield f
 
 
 def write_jsonl_file(records: Iterable, output_path: str) -> dict:
@@ -269,12 +231,11 @@ def write_parquet_file(
     with atomic_rename(output_path) as temp_path:
         fs, resolved_temp = url_to_fs(temp_path)
         with fs.open(resolved_temp, "wb", block_size=_WRITE_BLOCK_SIZE) as f:
-            sink = _ChunkedWriteFile(f)
             writer: pq.ParquetWriter | None = None
             try:
                 for table in _accumulate_tables(records, schema=schema, target_bytes=target_buffer_bytes):
                     if writer is None:
-                        writer = pq.ParquetWriter(sink, table.schema)
+                        writer = pq.ParquetWriter(f, table.schema)
                     writer.write_table(table)
                     count += len(table)
                     counters.pipeline.update_counter(counters.RECORDS_OUT, len(table))
@@ -284,7 +245,7 @@ def write_parquet_file(
 
             if writer is None:
                 actual_schema = schema or pa.schema([])
-                pq.write_table(pa.Table.from_pylist([], schema=actual_schema), sink)
+                pq.write_table(pa.Table.from_pylist([], schema=actual_schema), f)
 
     return {"path": output_path, "count": count}
 
@@ -430,8 +391,7 @@ def write_binary_file(records: Iterable[bytes], output_path: str) -> dict:
         # url_to_fs + fs.open so block_size reaches the file opener (AbstractBufferedFile),
         # not the S3 filesystem constructor (which rejects it) — see readers.open_file.
         fs, resolved_temp = url_to_fs(temp_path)
-        with fs.open(resolved_temp, "wb", block_size=_WRITE_BLOCK_SIZE) as raw_f:
-            f = _ChunkedWriteFile(raw_f)
+        with fs.open(resolved_temp, "wb", block_size=_WRITE_BLOCK_SIZE) as f:
             for record in records:
                 f.write(record)
                 count += 1
