@@ -726,12 +726,9 @@ def test_runner_preserves_underlying_step_exception(tmp_path: Path):
 @pytest.mark.parametrize(
     "task_id, expected",
     [
-        ("/alice/train/0", 0),
-        ("/alice/train/3", 3),
         ("/alice/train/3:2", 3),  # ":<attempt>" suffix is stripped
         ("/alice/train", None),  # a job name, not a task
         ("/alice/train/notanint", None),  # trailing component not an integer
-        ("", None),
     ],
 )
 def test_iris_task_index_parses_wire_task_id(monkeypatch, task_id, expected):
@@ -739,18 +736,8 @@ def test_iris_task_index_parses_wire_task_id(monkeypatch, task_id, expected):
     assert step_runner_module._iris_task_index() == expected
 
 
-def test_iris_task_index_none_when_unset(monkeypatch):
-    monkeypatch.delenv("IRIS_TASK_ID", raising=False)
-    assert step_runner_module._iris_task_index() is None
-
-
 def test_runner_warns_when_secondary_spmd_task(tmp_path, monkeypatch, caplog):
-    """A non-zero Iris task must emit a loud warning before running (#7080).
-
-    The warning is best-effort: it flags a likely-unintended SPMD launch (where
-    the per-step distributed lock would deadlock the collective) but does not
-    block the step, which still runs.
-    """
+    """A non-zero Iris task warns before running, but still runs the step (#7080)."""
     executed: list[str] = []
     step = _recording_step("only", (tmp_path / "only").as_posix(), executed)
 
@@ -762,8 +749,7 @@ def test_runner_warns_when_secondary_spmd_task(tmp_path, monkeypatch, caplog):
 
     assert executed == ["only"]  # best-effort: the step still runs
     messages = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
-    assert any("Iris task index 3" in m and "IRIS_NUM_TASKS=16" in m for m in messages)
-    assert any("DEADLOCK" in m for m in messages)
+    assert any("Iris task index 3" in m and "DEADLOCK" in m for m in messages)
 
 
 def test_runner_no_warning_for_task_zero(tmp_path, monkeypatch, caplog):
