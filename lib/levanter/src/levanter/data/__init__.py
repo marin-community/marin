@@ -1,35 +1,9 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
-from ._preprocessor import BatchProcessor
-from .dataset import (
-    AsyncDataset,
-    BlockShufflingDataset,
-    ListAsyncDataset,
-    MappedAsyncDataset,
-    PermutationDataset,
-    SyncDataset,
-)
-from .loader import DataLoader
-from .mixture import ConcatDataset, MixtureDataset, StopStrategy
-from .sharded_datasource import ShardedDataSource, datasource_from_hf, datasource_from_json, datasource_from_jsonl
-from .utils import batched
+"""Levanter data loading and dataset primitives.
 
-__all__ = [
-    "AsyncDataset",
-    "BatchProcessor",
-    "BlockShufflingDataset",
-    "DataLoader",
-    "ConcatDataset",
-    "ListAsyncDataset",
-    "MappedAsyncDataset",
-    "MixtureDataset",
-    "PermutationDataset",
-    "ShardedDataSource",
-    "StopStrategy",
-    "SyncDataset",
-    "batched",
-    "datasource_from_hf",
-    "datasource_from_json",
-    "datasource_from_jsonl",
-]
+Import from the defining submodule (``levanter.data.dataset``, ``levanter.data.loader``,
+``levanter.data.mixture``, ``levanter.data.sharded_datasource``, ...) rather than the package,
+so a change to one submodule does not select every test that touches ``levanter.data``.
+"""

@@ -53,7 +53,7 @@ import pyarrow.parquet as pq
 from datasets import Image as DatasetsImage
 from datasets import load_dataset
 from huggingface_hub import hf_hub_download
-from rigging.filesystem import url_to_fs
+from rigging.filesystem import StoragePath
 from rigging.log_setup import configure_logging
 
 from experiments.datakit.decontam.lmh_loader import (
@@ -239,14 +239,13 @@ def _write_parquet(path: str, records: Iterator[dict]) -> int:
     Compression: zstd. zephyr's parquet reader picks up the file regardless
     of the compression codec.
     """
-    fs_, resolved = url_to_fs(path)
-    parent = "/".join(resolved.split("/")[:-1])
-    if parent:
-        fs_.makedirs(parent, exist_ok=True)
+    parent = StoragePath(path).parent
+    if parent.key:
+        parent.mkdirs()
     n = 0
     batch_ids: list[str] = []
     batch_texts: list[str] = []
-    with fs_.open(resolved, "wb") as raw:
+    with StoragePath(path).open("wb") as raw:
         writer = pq.ParquetWriter(raw, _PARQUET_SCHEMA, compression="zstd")
         try:
             for rec in records:
@@ -308,8 +307,7 @@ def _iter_aa_rows(cfg: AAEvalConfig) -> Iterator[dict[str, Any]]:
 def _prepare_aa() -> None:
     for cfg in AA_EVALS:
         out_path = f"{OUTPUT_ROOT}/aa/{cfg.subdir}/{cfg.split}.parquet"
-        fs_, resolved = url_to_fs(out_path)
-        if fs_.exists(resolved):
+        if StoragePath(out_path).exists():
             logger.info("aa/%s: exists, skipping", cfg.subdir)
             continue
         try:
@@ -343,6 +341,36 @@ def _prepare_aa() -> None:
         logger.info("aa/%s: %d records -> %s", cfg.subdir, n, out_path)
 
 
+# Eval tasks excluded from the *decontamination* bloom (they remain valid
+# benchmarks for actual evaluation — this only affects what we treat as
+# "eval content to scrub from training data"). Each of these has test
+# "documents" that are ordinary, ubiquitous corpus material rather than a
+# secret answer key, so matching against them flags large volumes of
+# legitimate training data with no real test-answer leakage:
+#   - code2text_* (CodeXGLUE): documents are plain public GitHub functions;
+#     any code corpus containing those popular files matches verbatim.
+#   - jsonschema_bench_*: documents are public JSON schemas from GitHub.
+#   - swde: documents are raw scraped web pages (structured web extraction).
+#   - realtoxicityprompts: documents are random spans of open web text.
+# Confirmed empirically as dominant false-positive drivers on code/web
+# corpora (see marin#6852).
+DECON_EXCLUDED_EVAL_TASKS: frozenset[str] = frozenset(
+    {
+        "code2text_go",
+        "code2text_java",
+        "code2text_javascript",
+        "code2text_php",
+        "code2text_python",
+        "code2text_ruby",
+        "jsonschema_bench_easy",
+        "jsonschema_bench_medium",
+        "jsonschema_bench_hard",
+        "swde",
+        "realtoxicityprompts",
+    }
+)
+
+
 def _lmh_task_names() -> list[str]:
     bundles: tuple[Iterable, ...] = (
         CORE_TASKS,
@@ -370,7 +398,7 @@ def _lmh_task_names() -> list[str]:
     for bundle in bundles:
         for cfg in bundle:
             names.add(cfg.name)
-    return sorted(names)
+    return sorted(names - DECON_EXCLUDED_EVAL_TASKS)
 
 
 def _prepare_lmh() -> None:
@@ -401,8 +429,7 @@ def _prepare_lmh() -> None:
 
         for child_name, task in leaves:
             out_path = f"{OUTPUT_ROOT}/lmh/{child_name}/eval.parquet"
-            fs_, resolved = url_to_fs(out_path)
-            if fs_.exists(resolved):
+            if StoragePath(out_path).exists():
                 logger.info("lmh/%s: exists, skipping", child_name)
                 skipped_existing += 1
                 continue

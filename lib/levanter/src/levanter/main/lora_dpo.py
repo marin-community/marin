@@ -13,11 +13,11 @@ from typing import Optional
 
 from levanter.adaptor import LoraAdaptorConfig
 from levanter.compat.hf_checkpoints import HFCheckpointConverter
-from levanter.data.text import PreferenceLmDataConfig
+from levanter.data.text.preference import PreferenceLmDataConfig
 from levanter.dpo import ReferenceEvalCacheConfig
 from levanter.adaptor.lora import LoraConfig
 from levanter.main.train_dpo import AdapterBaseReferenceConfig, TrainDpoConfig, main as train_dpo_main
-from levanter.optim import AdamConfig, OptimizerConfig
+from levanter.optim.config import AdamConfig, OptimizerConfig
 from levanter.trainer import TrainerConfig
 
 
@@ -92,5 +92,6 @@ def main(config: LoraDpoConfig):
 
 if __name__ == "__main__":
     import levanter
+    import levanter.config
 
     levanter.config.main(main)()

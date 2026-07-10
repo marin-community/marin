@@ -41,16 +41,18 @@ from typing import Any
 
 import dupekit
 import pyarrow as pa
-from fray import ResourceConfig
+from fray.types import ResourceConfig
 from pydantic import BaseModel
-from rigging.filesystem import url_to_fs
-from zephyr import Dataset, ShardInfo, ZephyrContext, counters, write_parquet_file
+from rigging.filesystem import StoragePath, url_to_fs
+from zephyr import counters
+from zephyr.dataset import Dataset, ShardInfo
+from zephyr.execution import ZephyrContext
 from zephyr.readers import SUPPORTED_EXTENSIONS, load_file
+from zephyr.writers import write_parquet_file
 
 from marin.datakit.normalize import NormalizedData
 from marin.execution.artifact import read_artifact
 from marin.execution.step_spec import StepSpec
-from marin.utils import fsspec_glob
 
 logger = logging.getLogger(__name__)
 
@@ -208,19 +210,27 @@ def _is_hidden_dir(root: str, resolved: str) -> bool:
     return any(p.startswith(".") for p in rel.split(os.sep))
 
 
-def _discover_eval_files(eval_paths: list[str]) -> Iterator[str]:
+def _discover_eval_files(eval_paths: list[str], exclude_dir_names: frozenset[str] = frozenset()) -> Iterator[str]:
     """Walk all *eval_paths* recursively and yield zephyr-readable data files.
 
     Filters by ``zephyr.readers.SUPPORTED_EXTENSIONS`` so common sidecars
     (``README``, ``_SUCCESS``, ``provenance.json``, ``.executor_info``, …)
     that live alongside eval data don't kill the whole decon step when
     ``load_file`` later rejects their extension. Mirrors ``normalize._discover_files``.
+
+    *exclude_dir_names* skips any file whose immediate parent directory name is
+    in the set (the eval-corpus layout is ``<root>/<split>/<task>/<file>``, so the
+    task name is the parent dir). This lets a caller drop specific eval tasks from
+    the bloom *at read time*, so an already-materialized eval corpus that still
+    contains those task dirs is excluded without regenerating it.
     """
     for source in eval_paths:
         fs, resolved = url_to_fs(source)
         protocol = source.split("://")[0] if "://" in source else ""
         for root, _dirs, files in fs.walk(resolved):
             if _is_hidden_dir(root, resolved):
+                continue
+            if os.path.basename(root.rstrip("/")) in exclude_dir_names:
                 continue
             for fname in files:
                 if fname.startswith(".") or not fname.endswith(SUPPORTED_EXTENSIONS):
@@ -240,6 +250,7 @@ def _build_filter(
     ngram: NGramConfig | None,
     estimated_doc_count: int,
     false_positive_rate: float,
+    exclude_dir_names: frozenset[str] = frozenset(),
 ) -> int:
     """Build a bloom filter and a streaming hash → eval_id sidecar.
 
@@ -261,7 +272,7 @@ def _build_filter(
     stats = {"n_records": 0, "n_index_rows": 0}
 
     def emit_index_rows() -> Iterator[dict[str, Any]]:
-        for path in _discover_eval_files(eval_paths):
+        for path in _discover_eval_files(eval_paths, exclude_dir_names):
             for idx, record in enumerate(load_file(path)):
                 text = record.get(text_field)
                 if not text:
@@ -281,19 +292,16 @@ def _build_filter(
                 stats["n_records"] += 1
 
     # Stream the index parquet; this iteration also fills the bloom.
-    fs_idx, ip = url_to_fs(index_path)
-    idx_dir = os.path.dirname(ip)
+    idx_dir = os.path.dirname(index_path)
     if idx_dir:
-        fs_idx.makedirs(idx_dir, exist_ok=True)
+        StoragePath(idx_dir).mkdirs()
     write_parquet_file(emit_index_rows(), output_path=index_path, schema=_INDEX_SCHEMA)
 
     # Persist the populated bloom.
-    fs_bf, bp = url_to_fs(bloom_path)
-    bloom_dir = os.path.dirname(bp)
+    bloom_dir = os.path.dirname(bloom_path)
     if bloom_dir:
-        fs_bf.makedirs(bloom_dir, exist_ok=True)
-    with fs_bf.open(bp, "wb") as f:
-        f.write(bf.save_bytes())
+        StoragePath(bloom_dir).mkdirs()
+    StoragePath(bloom_path).write_bytes(bf.save_bytes())
 
     logger.info(
         "decon: built bloom + index from %d eval records (%d index rows) → bloom=%s, index=%s",
@@ -341,9 +349,7 @@ def _make_marker(
 
     def mark_shard(paths: Iterator[str], shard: ShardInfo) -> Iterator[dict[str, Any]]:
         # Load bloom once per shard.
-        fs, bp = url_to_fs(bloom_path)
-        with fs.open(bp, "rb") as f:
-            bf = dupekit.Bloom.load_bytes(f.read())
+        bf = dupekit.Bloom.load_bytes(StoragePath(bloom_path).read_bytes())
 
         for input_path in paths:
 
@@ -447,7 +453,7 @@ def decon_to_parquet(
         raise ValueError("provide exactly one of eval_data_sources or prebuilt_bloom_dir")
 
     input_path = normalized_data.main_output_dir
-    files = sorted(fsspec_glob(f"{input_path.rstrip('/')}/**/*.parquet"))
+    files = sorted(str(m) for m in StoragePath(f"{input_path.rstrip('/')}/**/*.parquet").glob())
     if not files:
         raise FileNotFoundError(f"No .parquet files found under {input_path}")
     num_partitions = len(files)
@@ -496,6 +502,7 @@ def build_eval_bloom(
     ngram: NGramConfig | None = None,
     estimated_doc_count: int = 1_000_000,
     false_positive_rate: float = 1e-9,
+    exclude_eval_dirs: frozenset[str] = frozenset(),
 ) -> EvalBloom:
     """Build a reusable bloom + hash-index sidecar from one or more eval sources.
 
@@ -520,6 +527,9 @@ def build_eval_bloom(
             blooms intended for :func:`merge_eval_blooms` MUST share both
             values across all per-eval builds — ``dupekit.Bloom.update``
             requires identical sizing.
+        exclude_eval_dirs: Eval task directory names to skip while walking
+            ``eval_data_sources`` (see :func:`_discover_eval_files`). Excludes
+            those tasks from the bloom without regenerating the eval corpus.
 
     Returns:
         :class:`EvalBloom` artifact pointing at the produced files.
@@ -537,6 +547,7 @@ def build_eval_bloom(
         ngram=ngram,
         estimated_doc_count=estimated_doc_count,
         false_positive_rate=false_positive_rate,
+        exclude_dir_names=exclude_eval_dirs,
     )
     return EvalBloom(
         bloom_dir=output_path,
@@ -573,25 +584,21 @@ def merge_eval_blooms(
         raise ValueError("per_eval_bloom_dirs must be non-empty")
 
     out_bloom_path, out_index_path = bloom_paths(output_path)
-    fs_bf, bp = url_to_fs(out_bloom_path)
-    out_dir = os.path.dirname(bp)
+    out_dir = os.path.dirname(out_bloom_path)
     if out_dir:
-        fs_bf.makedirs(out_dir, exist_ok=True)
+        StoragePath(out_dir).mkdirs()
 
     # Bit-OR merge of input blooms (dupekit raises on size mismatch).
     merged: dupekit.Bloom | None = None
     for d in per_eval_bloom_dirs:
         src_bloom, _ = bloom_paths(d)
-        fs, p = url_to_fs(src_bloom)
-        with fs.open(p, "rb") as f:
-            bf = dupekit.Bloom.load_bytes(f.read())
+        bf = dupekit.Bloom.load_bytes(StoragePath(src_bloom).read_bytes())
         if merged is None:
             merged = bf
         else:
             merged.update(bf)
     assert merged is not None  # non-empty list checked above
-    with fs_bf.open(bp, "wb") as f:
-        f.write(merged.save_bytes())
+    StoragePath(out_bloom_path).write_bytes(merged.save_bytes())
 
     # Concatenate per-eval hash-index parquets, streaming row-by-row.
     src_indexes = [bloom_paths(d)[1] for d in per_eval_bloom_dirs]
@@ -641,6 +648,7 @@ def build_eval_bloom_step(
     overlap_threshold: float = 0.5,
     estimated_doc_count: int = 1_000_000,
     false_positive_rate: float = 1e-9,
+    exclude_eval_dirs: frozenset[str] = frozenset(),
     output_path_prefix: str | None = None,
     override_output_path: str | None = None,
 ) -> StepSpec:
@@ -653,6 +661,9 @@ def build_eval_bloom_step(
             cache); StepSpec entries become DAG deps.
         text_field, ngram_length, overlap_threshold: ngram config.
         estimated_doc_count, false_positive_rate: bloom sizing.
+        exclude_eval_dirs: Eval task directory names to drop from the bloom
+            (see :func:`build_eval_bloom`). Folded into ``hash_attrs`` so
+            changing the exclusion set rebuilds the bloom at a fresh path.
         output_path_prefix, override_output_path: StepSpec routing.
     """
     raw_paths: list[str] = []
@@ -677,6 +688,7 @@ def build_eval_bloom_step(
         # Raw paths aren't deps — fingerprint them so swapping a path
         # invalidates the cache.
         "eval_data_sources": tuple(sorted(s for s in raw_paths if s not in (d.output_path for d in step_deps))),
+        "exclude_eval_dirs": tuple(sorted(exclude_eval_dirs)),
     }
 
     return StepSpec(
@@ -688,6 +700,7 @@ def build_eval_bloom_step(
             ngram=ngram,
             estimated_doc_count=estimated_doc_count,
             false_positive_rate=false_positive_rate,
+            exclude_eval_dirs=exclude_eval_dirs,
         ),
         deps=step_deps,
         hash_attrs=hash_attrs,

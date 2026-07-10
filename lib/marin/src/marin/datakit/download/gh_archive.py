@@ -15,10 +15,9 @@ from datetime import date, datetime, timedelta
 from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
-from rigging.filesystem import atomic_rename, open_url
+from rigging.filesystem import StoragePath, atomic_rename, open_url
 
 from marin.execution.step_spec import StepSpec
-from marin.utils import fsspec_exists, fsspec_mkdirs
 
 logger = logging.getLogger(__name__)
 
@@ -261,8 +260,9 @@ def _all_event_type_caps_reached(counts: dict[str, int], cap: int | None) -> boo
 
 def _write_metadata(path: str, payload: dict[str, Any]) -> None:
     with atomic_rename(path) as temp_path:
-        with open_url(temp_path, "w", encoding="utf-8") as handle:
-            json.dump(payload, handle, ensure_ascii=False, indent=2, sort_keys=True)
+        StoragePath(temp_path).write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8"
+        )
 
 
 def download_gh_archive_events(
@@ -295,10 +295,13 @@ def download_gh_archive_events(
     output_files = {event_type: _event_output_path(output_path, event_type) for event_type in resolved_event_types}
     metadata_path = posixpath.join(output_path, metadata_filename)
 
-    if skip_existing and all(fsspec_exists(path) for path in output_files.values()) and fsspec_exists(metadata_path):
+    if (
+        skip_existing
+        and all(StoragePath(path).exists() for path in output_files.values())
+        and StoragePath(metadata_path).exists()
+    ):
         logger.info("Skipping GH Archive download; output already exists at %s", output_path)
-        with open_url(metadata_path, "r", encoding="utf-8") as handle:
-            metadata = json.load(handle)
+        metadata = json.loads(StoragePath(metadata_path).read_text(encoding="utf-8"))
         return {
             "success": True,
             "skipped": True,
@@ -312,7 +315,7 @@ def download_gh_archive_events(
     with ExitStack() as stack:
         writers: dict[str, Any] = {}
         for event_type, output_file in output_files.items():
-            fsspec_mkdirs(posixpath.dirname(output_file), exist_ok=True)
+            StoragePath(posixpath.dirname(output_file)).mkdirs(exist_ok=True)
             temp_path = stack.enter_context(atomic_rename(output_file))
             writers[event_type] = stack.enter_context(open_url(temp_path, "wt", encoding="utf-8", compression="gzip"))
 

@@ -1,55 +1,12 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
-import importlib
+"""Levanter: a JAX library for training foundation models.
 
-__all__ = [
-    "analysis",
-    "callbacks",
-    "checkpoint",
-    "config",
-    "data",
-    "distributed",
-    "eval",
-    "eval_harness",
-    "model_cache",
-    "models",
-    "optim",
-    "tracker",
-    "trainer",
-    "grug",
-    "cache_to_prefix",
-    "cache_hf_model",
-    "current_tracker",
-    "initialize",
-]
-
-import levanter.analysis as analysis
-import levanter.callbacks as callbacks
-import levanter.checkpoint as checkpoint
-import levanter.config as config
-import levanter.data as data
-import levanter.distributed as distributed
-import levanter.model_cache as model_cache
-import levanter.models as models
-import levanter.optim as optim
-import levanter.tracker as tracker
-import levanter.trainer as trainer
-import levanter.grug as grug
-from levanter.model_cache import cache_hf_model, cache_to_prefix
-from levanter.tracker import current_tracker
-from levanter.trainer import initialize
-
-# eval and eval_harness are loaded lazily because they transitively import
-# transformers (via levanter.data.text), which unconditionally imports torch.
-# This fails on CPU-only workers that lack CUDA libs (see #2941).
-_LAZY_SUBMODULES = {"eval", "eval_harness"}
-
-
-def __getattr__(name: str):
-    if name in _LAZY_SUBMODULES:
-        return importlib.import_module(f"levanter.{name}")
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-
+Import from the defining submodule (``levanter.trainer``, ``levanter.models``,
+``levanter.optim``, ``levanter.data``, ``levanter.tracker``, ...) rather than the package. This
+module deliberately imports nothing: eagerly importing the submodules here made ``import
+levanter`` pull in the whole library, so a change to any one module selected nearly every test.
+"""
 
 __version__ = "1.2"

@@ -22,10 +22,6 @@ tasks are materialized, to keep one user's burst from OOMing the controller. A
 launcher job that admits tasks gradually stays under the cap as earlier tasks
 finish and free budget. Raise as controller capacity improves (#6411)."""
 
-DEFAULT_MAX_RETRIES_PREEMPTION = 100
-"""Default preemption retries. High because worker failures are typically transient."""
-
-
 # ---------------------------------------------------------------------------
 # Predicate sets
 # ---------------------------------------------------------------------------

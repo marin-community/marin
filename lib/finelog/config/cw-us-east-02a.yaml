@@ -11,7 +11,8 @@
 # `finelog-cw-use02a-env` Secret from the operator's R2 creds + object_storage_endpoint
 # and projects it into the pod via envFrom (see deploy/k8s/02-deployment).
 #
-# Deploy: export KUBECONFIG=~/.kube/coreweave-iris-gpu and the R2 creds, then
+# Deploy: kubectl operations bind to deployment.k8s.kubeconfig/kube_context below
+# (no KUBECONFIG export needed). Export the R2 creds, then
 #   export R2_ACCESS_KEY_ID=... R2_SECRET_ACCESS_KEY=...
 #   uv run finelog deploy up cw-us-east-02a
 name: finelog-cw-use02a
@@ -21,6 +22,8 @@ remote_log_dir: s3://marin-na/finelog/cw-us-east-02a
 deployment:
   k8s:
     namespace: iris
+    kubeconfig: ~/.kube/coreweave-iris
+    kube_context: marin-gpu_US-EAST-02A
     # storage_class omitted -> the cluster's default StorageClass (shared-vast,
     # VAST CSI) backs the PVC. Segments offload to R2, but size the local cache
     # generously to absorb ingest bursts + L0->L1 compaction before offload.

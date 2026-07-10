@@ -97,13 +97,6 @@ def find_free_port(start: int = -1) -> int:
     raise RuntimeError(f"No free port found in range {start}-{start + 1000}")
 
 
-def port_is_open(port: int, host: str = "localhost") -> bool:
-    """Check if a TCP port is accepting connections."""
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.settimeout(0.1)
-        return s.connect_ex((host, port)) == 0
-
-
 def probe_outbound_ip() -> str:
     """Return the routable IP of this host via the default route.
 

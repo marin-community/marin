@@ -205,19 +205,14 @@ class FakeProvider:
         # store over this same object), mirroring RpcTaskBackend.
         self.health: WorkerHealthTracker = WorkerHealthTracker()
         self.advertised: dict[str, set[str]] = {}
-        self.allowed_users: frozenset[str] = frozenset({"*"})
         # Workers this fake's reconcile fold reaped, awaiting run_teardown.
         self._pending_dead: list[WorkerId] = []
 
     def advertised_attributes(self) -> dict[str, set[str]]:
         return self.advertised
 
-    def admits(self, user: str) -> bool:
-        return "*" in self.allowed_users or user in self.allowed_users
-
-    def configure_routing(self, advertised: dict[str, set[str]], allowed_users: frozenset[str]) -> None:
+    def configure_routing(self, advertised: dict[str, set[str]]) -> None:
         self.advertised = advertised
-        self.allowed_users = allowed_users
 
     def schedule(self, request: ScheduleRequest) -> ScheduleResult:
         return run_worker_daemon_schedule(self._scheduler, self._store, request)

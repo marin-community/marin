@@ -1,6 +1,9 @@
 # Iris smoke-test configuration (GCP)
 # Usage: iris --cluster=ci-gcp-smoke cluster start-smoke --label-prefix my-test --url-file /tmp/url --wait-for-workers 1
 
+# This cluster's identity. Used for token minting and for authenticating to peers.
+name: ci-gcp-smoke
+
 platform:
   label_prefix: smoke-ci
   gcp:

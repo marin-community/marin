@@ -10,9 +10,11 @@ from dataclasses import dataclass
 from functools import cache
 
 import requests
-from fray import ResourceConfig
+from fray.types import ResourceConfig
 from rigging.filesystem import prefix_join
-from zephyr import Dataset, ZephyrContext, counters
+from zephyr import counters
+from zephyr.dataset import Dataset
+from zephyr.execution import ZephyrContext
 
 from marin.datakit.download.http_session import build_retrying_session
 from marin.datakit.download.zstd_jsonl import iter_jsonl_from_zstd_stream

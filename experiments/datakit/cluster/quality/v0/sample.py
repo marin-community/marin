@@ -32,7 +32,6 @@ Run from anywhere that can read ``gs://marin-eu-west4/datakit/...``:
 import argparse
 import logging
 import math
-import os
 import random
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -43,7 +42,7 @@ import pyarrow.parquet as pq
 from marin.datakit.normalize import NormalizedData
 from marin.datakit.sources import all_sources
 from marin.execution.artifact import read_artifact
-from rigging.filesystem import url_to_fs
+from rigging.filesystem import StoragePath
 from rigging.log_setup import configure_logging
 
 logger = logging.getLogger(__name__)
@@ -128,15 +127,12 @@ def compute_quotas(
 
 
 def _list_shards(input_dir: str) -> list[str]:
-    fs, resolved = url_to_fs(input_dir)
-    protocol = input_dir.split("://")[0] if "://" in input_dir else ""
     files: list[str] = []
-    for root, _dirs, entries in fs.walk(resolved):
+    for root, _dirs, entries in StoragePath(input_dir).walk():
         for fname in entries:
             if not fname.endswith(".parquet") or fname.startswith("."):
                 continue
-            full = os.path.join(root, fname)
-            files.append(f"{protocol}://{full}" if protocol else full)
+            files.append(str(root / fname))
     files.sort()
     return files
 
@@ -151,8 +147,7 @@ def _read_quota_from_shard(shard_url: str, quota: int) -> Iterator[dict[str, obj
     documents (both across and within shards), so the rows we see are
     still a uniform random subset of the source.
     """
-    fs, resolved = url_to_fs(shard_url)
-    with fs.open(resolved, "rb") as fh:
+    with StoragePath(shard_url).open("rb") as fh:
         pfile = pq.ParquetFile(fh)
         yielded = 0
         for rg_idx in range(pfile.num_row_groups):
@@ -244,11 +239,10 @@ def sample(
 
     logger.info("sampled %d docs across %d sources -> %s", len(rows), len(quotas), output_path)
     table = pa.Table.from_pylist(rows, schema=_OUTPUT_SCHEMA)
-    fs, resolved = url_to_fs(output_path)
-    parent = os.path.dirname(resolved)
-    if parent:
-        fs.mkdirs(parent, exist_ok=True)
-    with fs.open(resolved, "wb") as fh:
+    output = StoragePath(output_path)
+    if output.parent.segments:
+        output.parent.mkdirs()
+    with output.open("wb") as fh:
         pq.write_table(table, fh, compression="zstd")
 
 

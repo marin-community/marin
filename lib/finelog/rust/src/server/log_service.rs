@@ -15,8 +15,8 @@ use crate::query::fetch_log_rows;
 use crate::query::make_ctx;
 use crate::query::provider::NamespaceProvider;
 use crate::store::log_read::{
-    add_cluster_filter, add_common_filters, build_log_predicates, shape_log_read_result,
-    str_to_log_level, ShapedEntry,
+    add_cluster_filter, add_common_filters, add_seq_upper_bound, build_log_predicates,
+    shape_log_read_result, str_to_log_level, ShapedEntry,
 };
 use crate::store::namespace::DEFAULT_PERSIST_TIMEOUT;
 use crate::store::store::LOG_NAMESPACE_NAME;
@@ -155,6 +155,7 @@ impl LogService for LogServiceImpl {
         };
         let source = request.source.unwrap_or("");
         let cursor = request.cursor.unwrap_or(0);
+        let until_cursor = request.until_cursor.unwrap_or(0);
         let since_ms = request.since_ms.unwrap_or(0);
         let substring = request.substring.unwrap_or("");
         let tail = request.tail.unwrap_or(false);
@@ -170,6 +171,9 @@ impl LogService for LogServiceImpl {
         // Build predicates (pure). Empty PREFIX source -> invalid_argument.
         let mut predicates =
             build_log_predicates(source, cursor, scope).map_err(ConnectError::invalid_argument)?;
+        // Bracket the scope's `seq > cursor` from above so a reader can page
+        // backwards from a row it names (`until_cursor` + `tail`).
+        add_seq_upper_bound(&mut predicates.where_parts, until_cursor);
         add_common_filters(&mut predicates.where_parts, since_ms, substring, min_level);
         // Restrict to one origin cluster when the caller asks (the federated read
         // path filters `cluster = <peer>`); empty = unfiltered, so a local
@@ -230,6 +234,7 @@ impl LogService for LogServiceImpl {
 /// are populated per the scope's shaping rules.
 fn shaped_entry_to_proto(e: ShapedEntry) -> LogEntry {
     let mut entry = LogEntry::default()
+        .with_seq(e.seq)
         .with_source(e.source)
         .with_data(e.data)
         .with_attempt_id(e.attempt_id);

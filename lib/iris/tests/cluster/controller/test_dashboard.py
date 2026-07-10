@@ -1679,12 +1679,11 @@ def test_k8s_cluster_status_without_direct_provider(client):
 # =============================================================================
 
 
-def _backend_mock(name, capabilities, autoscaler=None, cluster_status=None, allowed_users=None, advertised=None):
+def _backend_mock(name, capabilities, autoscaler=None, cluster_status=None, advertised=None):
     backend = Mock(capabilities=capabilities)
     backend.name = name
     backend.autoscaler = autoscaler
     backend.advertised_attributes.return_value = advertised if advertised is not None else {}
-    backend.allowed_users = allowed_users if allowed_users is not None else frozenset({"*"})
     # status() authors the BackendStatus variant the backend's capability selects:
     # a cluster view returns ``kubernetes``; everything else returns ``worker``.
     if cluster_status is not None:

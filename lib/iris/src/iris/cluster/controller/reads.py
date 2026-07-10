@@ -547,6 +547,7 @@ def get_job_detail(tx: Tx, job_id: JobName):
             jobs_table.c.parent_job_id,
             jobs_table.c.backend_id,
             jobs_table.c.cluster,
+            jobs_table.c.submitting_user,
             job_config_table.c.res_cpu_millicores,
             job_config_table.c.res_memory_bytes,
             job_config_table.c.res_disk_bytes,
@@ -1901,6 +1902,23 @@ def federated_sent_job(tx: Tx, peer_id: str, job_id: JobName) -> JobName | None:
         )
     ).first()
     return row.job_id if row is not None else None
+
+
+def parent_mirror_seed(tx: Tx, parent_job_id: JobName):
+    """The ``submitting_user`` and ``root_submitted_at_ms`` of an existing parent row.
+
+    Seeds a mirrored child job — one born on a peer under a received root and
+    reported back over sync — from its already-present parent: the whole federated
+    subtree shares the root's submitter and root submit time. Returns the SA Row
+    (``.submitting_user``, ``.root_submitted_at_ms``) or ``None`` when the parent is
+    absent (a delta arrived out of order).
+    """
+    return tx.execute(
+        select(jobs_table.c.submitting_user, jobs_table.c.root_submitted_at_ms).where(
+            jobs_table.c.job_id == bindparam("job_id")
+        ),
+        {"job_id": parent_job_id},
+    ).first()
 
 
 def handoff_states(tx: Tx, job_ids: Sequence[JobName]) -> dict[JobName, int]:

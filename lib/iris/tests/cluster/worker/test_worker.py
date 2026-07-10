@@ -788,20 +788,6 @@ def test_attach_log_handler_uses_worker_log_key_before_register(mock_bundle_stor
         worker._detach_log_handler()
 
 
-def test_attach_log_handler_noop_without_worker_id(mock_bundle_store, mock_runtime, tmp_path):
-    """Before the worker_id is known, attach is a no-op."""
-    config = WorkerConfig(
-        port=0,
-        port_range=(50000, 50100),
-        cache_dir=tmp_path / "cache",
-        default_task_image="mock-image",
-    )
-    worker = _worker_with_mock_client(config, mock_bundle_store, mock_runtime)
-
-    worker._attach_log_handler()
-    assert worker._log_handler is None
-
-
 def test_attach_log_handler_idempotent_renames_key(mock_bundle_store, mock_runtime, tmp_path):
     """Re-attach under a new worker_id renames the handler's key in place."""
     config = WorkerConfig(

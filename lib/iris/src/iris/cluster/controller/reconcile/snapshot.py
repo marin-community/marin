@@ -7,6 +7,7 @@
 row shapes.
 """
 
+import re
 from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any
@@ -74,6 +75,36 @@ class TaskHistogramRow:
     finished_at: Timestamp | None = None
 
 
+# The controller stamps a coscheduled gang's siblings with a derived error when
+# the gang unwinds: ``Coscheduled sibling <id> failed`` / ``... bounced for
+# atomic re-scheduling`` (reconcile/peers.py). These only echo the one sibling
+# that actually crashed, so when a job's root cause is chosen they must not mask
+# it. Scoped deliberately to the coscheduled cascade: a scheduling timeout,
+# preemption, or cancellation is a standalone reason a task failed — often the
+# state-driving one — so demoting those would detach ``job.error`` from the
+# job's terminal state. Anchored so an application error that merely quotes the
+# phrase is not misread as derived.
+_DERIVED_ERROR_PATTERNS = (re.compile(r"^Coscheduled sibling\b"),)
+
+# COSCHED_FAILED is the cascade by construction: the task was torn down or
+# bounced because a sibling failed, not on its own merits. Caught by state even
+# if the recorded error text drifts from the pattern above.
+_DERIVED_ERROR_STATES = frozenset({job_pb2.TASK_STATE_COSCHED_FAILED})
+
+
+def is_derived_task_error(state: int, error: str) -> bool:
+    """Whether a terminal task's error only echoes a coscheduled sibling's
+    failure, carrying no root-cause signal of its own.
+
+    Used to keep a coscheduled gang's cascade — every sibling stamped
+    ``Coscheduled sibling ... bounced for atomic re-scheduling`` — from masking
+    the one real crash when a job's root cause is chosen.
+    """
+    if state in _DERIVED_ERROR_STATES:
+        return True
+    return any(pattern.search(error) for pattern in _DERIVED_ERROR_PATTERNS)
+
+
 def pick_earliest_task_error(candidates: Iterable[tuple[int, int, Timestamp | None, str | None]]) -> str | None:
     """Return the error of the failed task that finished first among ``candidates``.
 
@@ -85,9 +116,15 @@ def pick_earliest_task_error(candidates: Iterable[tuple[int, int, Timestamp | No
     it. Tasks still retrying (no ``finished_at``) and tasks that ultimately
     succeeded (a stale error preserved from an earlier failed attempt) are
     excluded.
+
+    Derived errors (``is_derived_task_error`` — a coscheduled sibling bounce or
+    teardown) are deprioritized against genuine failures: they only echo the
+    sibling that actually crashed, so a real application error is preferred even
+    when a derived one finished first. A derived error surfaces only when it is
+    the sole thing recorded — better than an empty error.
     """
     failed = [
-        (finished_at, task_index, error)
+        (finished_at, task_index, state, error)
         for task_index, state, finished_at, error in candidates
         if error is not None
         and finished_at is not None
@@ -96,7 +133,8 @@ def pick_earliest_task_error(candidates: Iterable[tuple[int, int, Timestamp | No
     ]
     if not failed:
         return None
-    return min(failed, key=lambda c: (c[0].epoch_ms(), c[1]))[2]
+    primary = [c for c in failed if not is_derived_task_error(c[2], c[3])]
+    return min(primary or failed, key=lambda c: (c[0].epoch_ms(), c[1]))[3]
 
 
 @dataclass(frozen=True)

@@ -10,7 +10,9 @@ import numpy as np
 import pytest
 from zephyr.execution import ZephyrWorkerError
 
-from levanter.data import BatchProcessor, ShardedDataSource, batched
+from levanter.data._preprocessor import BatchProcessor
+from levanter.data.sharded_datasource import ShardedDataSource
+from levanter.data.utils import batched
 from levanter.data.sharded_datasource import TextUrlDataSource
 from levanter.store.cache import (
     CACHE_LAYOUT_SHARDED,

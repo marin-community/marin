@@ -23,11 +23,12 @@ their producers (``LevanterCheckpoint`` in ``marin.training.training``, ``Tokeni
 import functools
 import json
 import logging
+import re
 from dataclasses import asdict, dataclass, is_dataclass
 from typing import Self, TypeVar, cast
 
 from pydantic import BaseModel, ConfigDict, Field
-from rigging.filesystem import marin_prefix, open_url, prefix_join, url_to_fs
+from rigging.filesystem import StoragePath, marin_prefix, prefix_join, url_to_fs
 from rigging.provenance import Provenance, launch_provenance
 
 from marin.execution.fingerprint import describe_drift
@@ -173,6 +174,12 @@ class ArtifactRecord(BaseModel):
     """Who/when/which-commit/which-argv produced this — ``None`` for a minimal manual write."""
 
 
+# The one canonical CalVer form (``YYYY.MM.DD`` with an optional ``.N`` for two immutable
+# revisions on the same day), shared by the lazy layer (``lazy._validate_version``) and
+# ``marin.publish``. Keep it here so callers agree on version identity without importing ``lazy``.
+CALVER_RE = re.compile(r"^\d{4}\.\d{2}\.\d{2}(\.\d+)?$")
+
+
 def is_mutable_version(version: str) -> bool:
     """A ``dev`` version is mutable: the drift check is skipped and it always rebuilds."""
     return version == "dev" or version.endswith("-dev")
@@ -192,8 +199,7 @@ def _read_text(output_path: str, filename: str) -> str | None:
     fs = url_to_fs(path, use_listings_cache=False)[0]
     if not fs.exists(path):
         return None
-    with open_url(path, "r") as f:
-        return f.read()
+    return StoragePath(path).read_text()
 
 
 def _record_from_executor_info(text: str) -> ArtifactRecord | None:
@@ -265,8 +271,7 @@ def read_record(output_path: str) -> ArtifactRecord | None:
 
 def write_record(record: ArtifactRecord) -> None:
     """Write ``record`` to ``{record.output_path}/.artifact.json``."""
-    with open_url(prefix_join(record.output_path, RECORD_FILENAME), "w") as f:
-        f.write(record.model_dump_json(indent=2))
+    StoragePath(prefix_join(record.output_path, RECORD_FILENAME)).write_text(record.model_dump_json(indent=2))
 
 
 def _payload_json(value: object) -> JSONValue:

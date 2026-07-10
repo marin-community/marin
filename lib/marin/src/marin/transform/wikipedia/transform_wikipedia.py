@@ -16,9 +16,11 @@ from dataclasses import dataclass
 import draccus
 from bs4 import BeautifulSoup
 from marin.schemas.web.convert import ExtractionConfig
-from marin.utils import fsspec_glob
 from marin.web.convert import convert_page
-from zephyr import Dataset, ZephyrContext, load_jsonl
+from rigging.filesystem import StoragePath
+from zephyr.dataset import Dataset
+from zephyr.execution import ZephyrContext
+from zephyr.readers import load_jsonl
 
 logger = logging.getLogger(__name__)
 
@@ -271,7 +273,7 @@ def process_record(
 def process_wiki_dump(cfg: WikiExtractionConfig) -> None:
     logger.info(f"Starting processing of Wikipedia dump in {cfg.input_path}")
 
-    files = fsspec_glob(f"{cfg.input_path}/*.ndjson")
+    files = [str(m) for m in StoragePath(f"{cfg.input_path}/*.ndjson").glob()]
     logger.info(f"Found {len(files)} files to process")
 
     if cfg.max_files:

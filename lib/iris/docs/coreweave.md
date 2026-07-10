@@ -9,10 +9,15 @@ the full operator runbook (RBAC, NodePools, Kueue, troubleshooting).
 
 Active clusters:
 
-| Iris cluster | CW cluster / region | Fleet | Kubeconfig |
-|--------------|---------------------|-------|------------|
-| `cw-us-east-02a` | `marin-gpu`, US-EAST-02A | 32× 8xH100 + 4× CPU Genoa, pinned warm | `~/.kube/coreweave-iris-gpu` |
-| `cw-rno2a` | `marin-rn02a`, RNO2A | 64× 8xH100 + 1× CPU Turin, pinned warm | `~/.kube/coreweave-iris-rno2a` |
+All clusters share one kubeconfig at `~/.kube/coreweave-iris`; each cluster
+config pins its own `kube_context` inside it, so iris/kubectl operations are
+context-bound per `--cluster` and never depend on the file's current-context
+or an exported `KUBECONFIG`.
+
+| Iris cluster | CW cluster / region | Fleet | Kube context |
+|--------------|---------------------|-------|--------------|
+| `cw-us-east-02a` | `marin-gpu`, US-EAST-02A | 32× 8xH100 + 4× CPU Genoa, pinned warm | `marin-gpu_US-EAST-02A` |
+| `cw-rno2a` | `marin-rn02a`, RNO2A | 64× 8xH100 + 1× CPU Turin, pinned warm | `marin-rn02a_RNO2A` |
 
 Console links:
 - Tokens (kubeconfig): https://console.coreweave.com/tokens
@@ -20,21 +25,27 @@ Console links:
 - Health dashboard: https://cks-grafana.coreweave.com/d/cluster-health/cluster-health?var-cluster-org=208261&var-cluster=marin-gpu&var-region=US-EAST-02
 
 **1. Make a token / kubeconfig.** In the [Tokens console](https://console.coreweave.com/tokens),
-create a token for the cluster and download its kubeconfig.
+create a token and download the kubeconfig — it carries a context per cluster
+(named `<cw-cluster>_<REGION>`).
 
-**2. Install the kubeconfig** at the path from the table above, plus controller
-extras and CoreWeave Object Storage credentials:
+**2. Install the kubeconfig** at `~/.kube/coreweave-iris`, plus controller
+extras:
 
 ```bash
 mkdir -p ~/.kube
-mv ~/Downloads/kubeconfig.yaml ~/.kube/coreweave-iris-gpu
-export KUBECONFIG=~/.kube/coreweave-iris-gpu
-kubectl cluster-info   # sanity check
+mv ~/Downloads/kubeconfig.yaml ~/.kube/coreweave-iris
+kubectl --kubeconfig ~/.kube/coreweave-iris config get-contexts   # sanity check
 
 uv pip install 'marin-iris[controller]'
-export CW_KEY_ID=<coreweave-access-key-id>
-export CW_KEY_SECRET=<coreweave-access-key-secret>
 ```
+
+No `KUBECONFIG` export is needed: the cluster configs pin `kubeconfig_path` and
+`kube_context`, and every operation binds to that context explicitly.
+
+That's all a job submitter needs. `CW_KEY_ID` / `CW_KEY_SECRET` (CoreWeave
+Object Storage access keys) are only required when running
+`iris cluster start` — they seed the in-cluster `iris-task-env` Secret (see
+"Storage defaults" below).
 
 **3. Check cluster status.** `--cluster=cw-us-east-02a` resolves the in-tree
 config and opens a `kubectl port-forward` to the controller for you:
@@ -62,6 +73,18 @@ uv run iris --cluster=cw-us-east-02a job run \
 
 Follow logs of a detached job with
 `uv run iris --cluster=cw-us-east-02a job logs <job-id> -f`.
+
+**Storage defaults.** CoreWeave clusters default to CoreWeave AI Object
+Storage — no per-job storage setup is needed:
+
+- `MARIN_PREFIX` is preset to `s3://marin-us-east-02a/marin` (via
+  `defaults.task_env` in the cluster config) on both clusters.
+- Task pods carry the CoreWeave Object Storage S3 configuration and
+  credentials (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`,
+  `AWS_ENDPOINT_URL`, `FSSPEC_S3`, ...) via the platform-managed
+  `iris-task-env` Secret, so `s3://` reads/writes work out of the box.
+- Task pods carry ONE endpoint/credential set. Data on other S3-compatible
+  stores is not reachable unless the job overrides `AWS_*`/`FSSPEC_S3` itself.
 
 ## 1. Overview
 
@@ -142,75 +165,117 @@ Key architectural properties:
 - **Public images**: All images on `ghcr.io/marin-community/` are public. No
   `imagePullSecrets` required.
 
-### Off-cluster endpoint access (exposing only `/proxy`)
+### CoreWeave controller networking (IP-locked to marin)
 
 The controller Service is `ClusterIP:10000` — reachable only in-cluster or via a
-`kubectl port-forward`. To let an off-cluster caller (e.g. a Daytona/Modal sandbox
-running an agent harness) reach a registered endpoint through the controller
-proxy, `start_controller` publishes only the `/proxy` path with an Ingress — it
-is part of controller setup, not a manual step. Unlike the GCP arm there is no
-IAP layer, so the controller's own per-endpoint auth is the sole gate: register
-the endpoint `PRIVATE` (a cluster identity / JWT) or `LINK` (a scoped capability
-URL — possession of the link is the credential) — the same access modes as the
-GCP path. Keep `auth.provider` set (never null-auth) so `PRIVATE`/`LINK` are
-actually enforced.
+`kubectl port-forward`. CoreWeave has no user surface of its own: end users reach
+Iris through `iris.oa.dev` (IAP) and the GCP `marin` controller federates jobs
+outward, so the only external caller of a CoreWeave controller is marin. Its one
+off-cluster ingress is therefore locked to marin's egress IP — there is no
+world-open route.
 
-CKS ships no ingress controller and no TLS issuer, so two cluster-wide,
-install-once prerequisites must be in place first — install them with
-`scripts/install_traefik_proxy.py` (operator-run; dry-run without `--apply`):
+`marin` federates whole jobs by dialing the CoreWeave RPC surface directly (the
+pull model — CoreWeave must be reachable *inbound*; a peer behind NAT with no
+ingress is out of scope). The auth surface is two factors, both required and
+neither alone sufficient:
+
+1. **IP allowlist** — a Traefik `ipAllowList` Middleware admits only the egress IPs
+   of the marin-side controllers that federate here (`FEDERATION_ALLOW_SOURCES` in
+   `install_cw_network.py`). The *network* factor.
+2. **The controller's own auth** — the `aud="federation"` verifier for the handoff
+   RPCs, the general auth chain for the rest. The *identity* factor.
+
+Because the controller is the identity gate, it **must be enforcing** — a
+permissive (null-auth) controller behind only an IP lock hands anonymous admin over
+its whole control plane to anything from the allowlisted IP. Both CoreWeave
+controllers enforce via `auth.trusted_cidrs`: in-cluster peers (RFC1918 pods/nodes,
+loopback for `kubectl port-forward`) authenticate by network location, while an
+off-cluster request arrives through Traefik with an appended `X-Forwarded-For`,
+never matches a CIDR, and must present a bearer.
+
+CKS ships no ingress controller and no TLS issuer, and the controller's own
+ServiceAccount can't install CRDs, so an operator runs `scripts/install_cw_network.py`
+once per cluster to set up everything the controller can't do itself — Traefik,
+cert-manager, the HTTP-01 Let's Encrypt issuers, and the single IP-locked ingress
+that publishes the whole controller host to marin. It is idempotent and warns if
+pointed at a still-permissive controller; dry-run without `--apply`:
 
 ```bash
-# Traefik (CoreWeave's blessed ingress controller) + cert-manager + HTTP-01 issuers.
-uv run lib/iris/scripts/install_traefik_proxy.py --cluster <name> install --acme-email you@oa.dev --apply
-# Tear it back down (releases, namespaces, CRDs/webhooks/RBAC/IngressClass), verified:
-uv run lib/iris/scripts/install_traefik_proxy.py --cluster <name> uninstall --apply
+# Traefik + cert-manager + HTTP-01 issuers + the IP-locked ingress, in one pass.
+uv run lib/iris/scripts/install_cw_network.py --cluster <name> \
+    install --acme-email you@oa.dev --allow-source <marin-egress-ip> --apply
+# Reconcile just the ingress on a cluster whose stack is already installed
+# (e.g. to flip staging->prod once the cert validates):
+uv run lib/iris/scripts/install_cw_network.py --cluster <name> install \
+    --allow-source <marin-egress-ip> --skip-traefik --skip-cert-manager --skip-issuers \
+    --cluster-issuer letsencrypt-http01-prod --apply
+# Tear it all back down (ingress, releases, namespaces, CRDs/webhooks/RBAC), verified:
+uv run lib/iris/scripts/install_cw_network.py --cluster <name> uninstall --apply
 ```
 
-Then configure the controller's `coreweave` block. `start_controller` reconciles
-(idempotently, on every start) a path-restricted `iris-controller-proxy` Ingress
-that keeps the dashboard and RPC surface cluster-internal and publishes just
-`/proxy`; cert-manager auto-issues the TLS cert into `tls_secret`:
+The ingress is a standalone object, so applying it does **not** restart the
+controller. If CoreWeave's LoadBalancer SNATs (Traefik sees the LB, not the real
+client), pass `--xff-depth 1` so the allowlist reads the client IP from
+`X-Forwarded-For`; confirm a request from a non-allowlisted host is refused.
 
-```yaml
-controller:
-  coreweave:
-    scale_group: cpu
-    # Publish only /proxy off-cluster. Empty host = ClusterIP only (no ingress).
-    public_proxy_host: iris-cw.oa.dev
-    ingress_class: traefik                    # CoreWeave's blessed controller
-    tls_secret: iris-controller-proxy-tls
-    cluster_issuer: letsencrypt-http01-prod   # cert-manager auto-issues into tls_secret
-```
+#### External address and DNS (`oa.dev` -> `coreweave.app`)
 
-`start_controller` warns (never fails) if the `IngressClass` is absent — the
-Ingress is applied anyway and starts serving once Traefik is present. A plain
-`type: LoadBalancer` Service on the controller port would be simpler but exposes
-the whole origin (RPC surface included, JWT-gated only); the path-restricted
-Ingress keeps only `/proxy` public.
-
-#### External address and DNS (`oa.dev` → `coreweave.app`)
-
-The external address is served by Traefik's LoadBalancer, not the controller
-Pod, and CoreWeave gives it a stable FQDN under `*.coreweave.app` — you never
-chase a churning IP. `install_traefik_proxy.py install --apply` prints the exact
-CNAME record to create (`<public_proxy_host>  CNAME  <that FQDN>`); `oa.dev` DNS
-is at Namecheap, Advanced DNS panel.
-
-Three values must agree: this CNAME, `public_proxy_host` (the Ingress `host` /
-Host header clients send), and the cluster's `dashboard_url` (so `marin-serve`'s
-printed off-cluster capability URLs are usable as-is). The
-`coreweave.app` name is only a stable CNAME target — all routing, Host matching,
-and TLS are on the `oa.dev` name.
+The external address is served by Traefik's LoadBalancer, not the controller Pod.
+CoreWeave publishes a wildcard record, `*.<tenant>.coreweave.app`, that resolves to
+that LoadBalancer. `install_cw_network.py install --apply` prints the exact CNAME
+record to create, substituting the ingress host's first label into the wildcard
+(`iris-cw-<cluster>.oa.dev  CNAME  iris-cw-<cluster>.<tenant>.coreweave.app`); `oa.dev`
+DNS is at Namecheap, Advanced DNS panel. Routing, Host matching, and TLS all key on
+the `oa.dev` name; `coreweave.app` is only the CNAME target.
 
 TLS terminates in-cluster (no IAP/edge layer; Namecheap doesn't proxy TLS).
-`install_traefik_proxy.py` creates HTTP-01 Let's Encrypt ClusterIssuers
+`install_cw_network.py` creates HTTP-01 Let's Encrypt ClusterIssuers
 (`letsencrypt-http01-staging`, `letsencrypt-http01-prod`) validated through
 Traefik — CoreWeave's bundled issuers only cover `*.coreweave.app` (DNS-01 via
-`acme.coreweave.com`), so a custom `oa.dev` host needs these. Note: HTTP-01 needs
-the CNAME live first (Let's Encrypt fetches `http://<host>/.well-known/...`);
-issue with `letsencrypt-http01-staging` first to avoid LE rate limits, then flip
-`cluster_issuer` to prod. Leave `tls_secret`/`cluster_issuer` empty for plain
-HTTP (dev only).
+`acme.coreweave.com`), so a custom `oa.dev` host needs these. HTTP-01 needs the
+CNAME live first (Let's Encrypt fetches `http://<host>/.well-known/...`); issue with
+the staging issuer first to avoid LE rate limits, then re-run with
+`--cluster-issuer letsencrypt-http01-prod`. cert-manager's HTTP-01 solver runs on
+its own unrestricted Ingress, so the IP allowlist does not block ACME validation.
+
+**Verify from the marin controller VM:**
+
+- `ListBackends` **with** the federation JWT from the allowlisted egress IP -> succeeds.
+- the same call **without** the JWT (controller enforcing) -> `UNAUTHENTICATED`.
+- the same call from a **non-allowlisted IP** -> refused (`403`).
+
+#### Stable egress IPs for the marin controllers
+
+The allowlist names each federating controller by address, so every one of them
+needs a **stable** egress IP: `iris-controller-marin` and `iris-controller-marin-dev`,
+reserved as `iris-marin-fed-egress` and `iris-marin-dev-fed-egress`. A controller's
+GCE VM (zone `us-central1-a`, project `hai-gcp-models`) is created with an
+*ephemeral* external IP, which changes on stop/start. Make it stable **without
+touching the VM** by promoting that in-use address to a reserved static IP — same
+address, no access-config change, no restart:
+
+```bash
+PROJECT=hai-gcp-models ZONE=us-central1-a REGION=us-central1 VM=iris-controller-marin
+# 1. Read the VM's current external IP.
+EGRESS_IP=$(gcloud compute instances describe "$VM" --project "$PROJECT" --zone "$ZONE" \
+  --format='get(networkInterfaces[0].accessConfigs[0].natIP)')
+echo "marin controller egress IP: $EGRESS_IP"
+# 2. Promote that exact IP to a reserved static address (idempotent; no VM change,
+#    no connectivity drop — the VM keeps the same address).
+gcloud compute addresses create iris-marin-fed-egress --project "$PROJECT" \
+  --region "$REGION" --addresses "$EGRESS_IP"
+```
+
+Add `$EGRESS_IP` to `FEDERATION_ALLOW_SOURCES`, which is what `--allow-source`
+defaults to. The Middleware's `sourceRange` is replaced wholesale on every install
+rather than merged, so an install naming a subset strands the omitted controller at
+a `403` the peer never logs. Reserving an in-use address is safe and reversible
+(`gcloud compute addresses delete iris-marin-fed-egress` releases it back to
+ephemeral). **Alternative** (only if the controller is later moved to
+IAP-only inbound with *no* external IP, so egress goes through Cloud NAT): reserve
+a regional static IP and pin Cloud NAT to it (`gcloud compute routers nats update
+… --nat-external-ip-pool=iris-marin-fed-egress`). Removing the VM's external IP is
+a larger change — do it only with explicit approval, never as a side effect here.
 
 ## 3. Tools
 
@@ -256,20 +321,32 @@ operator reference (any `--cluster=NAME`) and the lifecycle details behind it.
 - Images pushed to `ghcr.io/marin-community/`
 - Controller extras: `uv pip install 'marin-iris[controller]'`
 
-For S3 storage, export `CW_KEY_ID` / `CW_KEY_SECRET` (CoreWeave Object Storage
-access keys); `iris cluster start` folds them — plus the derived
+CoreWeave clusters default to CoreWeave AI Object Storage, and the cluster configs
+give two endpoints for it. `object_storage_endpoint: http://cwlota.com` is LOTA, the
+in-cluster cache, which pods use. `external_object_storage_endpoint:
+https://cwobject.com` reaches the same buckets from an operator's own machine, which
+`iris` uses for its own S3 calls — among them the rollout record that
+`iris cluster controller restart` reads. LOTA's name resolves to a private address,
+so both fields are needed on a cluster an operator drives from outside.
+
+Export `CW_KEY_ID` / `CW_KEY_SECRET` (CoreWeave Object Storage access keys) before
+`iris cluster start`; it folds them — plus the derived
 endpoint/region/`FSSPEC_S3` config — into the `iris-task-env` Secret, projected
-into the controller and task pods via `envFrom`.
+into the controller and task pods via `envFrom`. From then on every task has
+working S3 credentials embedded; job submitters never handle storage keys.
 
 > **Note**: CoreWeave AI Object Storage (`cwobject.com`, `cwlota.com`) uses
 > virtual-hosted-style S3 addressing, which is auto-detected and configured
-> (including JAX/tensorstore checkpointing). In-cluster consumers should use
-> `http://cwlota.com` — LOTA, the node-local cache endpoint; use
-> `https://cwobject.com` from outside CoreWeave.
+> (including JAX/tensorstore checkpointing).
 
 ### CoreWeave AI Object Storage access
 
-Use `s3://marin-us-east-02a` for CoreWeave-local object storage. The bucket is
+Use `s3://marin-us-east-02a` for CoreWeave-local object storage — it is the
+shared bucket for both clusters, and `MARIN_PREFIX` is preset to
+`s3://marin-us-east-02a/marin` in every task. **Inside the cluster none of the
+setup below is needed**: task pods already carry the endpoint, addressing
+style, and credentials (see "Storage defaults" in §0). The rest of this
+section is for access from *outside* CoreWeave (laptop, GCP). The bucket is
 browsable in the
 [CoreWeave console](https://console.coreweave.com/object-storage/buckets/marin-us-east-02a).
 Follow CoreWeave's
@@ -363,11 +440,11 @@ re-run the install after it is Ready.
 
 ### Bringing up a new cluster
 
-1. Download the kubeconfig (§0) to `~/.kube/coreweave-iris-<region>` and export
-   `KUBECONFIG`, `CW_KEY_ID`, `CW_KEY_SECRET`.
+1. Install the kubeconfig (§0) at `~/.kube/coreweave-iris` and export
+   `CW_KEY_ID`, `CW_KEY_SECRET`.
 2. Copy an existing cluster config pair — `lib/iris/config/cw-*.yaml` and
-   `lib/finelog/config/cw-*.yaml` — and adjust region, instance types, and
-   fleet sizes. The console capacity view's display label is NOT the k8s
+   `lib/finelog/config/cw-*.yaml` — and adjust region, `kube_context`,
+   instance types, and fleet sizes. The console capacity view's display label is NOT the k8s
    `spec.instanceType` (e.g. "turin-gp-l4" vs `turin-gp-l`); to probe a SKU,
    create a NodePool with `minNodes: 0, maxNodes: 0, targetNodes: 0` and read
    its `Validated` condition (server dry-run accepts any string).
@@ -410,7 +487,7 @@ auto-tunneled CoreWeave commands fail before connecting:
 Fallback: manual port-forward if you need a long-lived tunnel:
 
 ```bash
-kubectl --kubeconfig ~/.kube/coreweave-iris \
+kubectl --kubeconfig ~/.kube/coreweave-iris --context <kube_context> \
   port-forward -n <namespace> svc/<service_name> 10000:10000 &
 iris --controller-url=http://localhost:10000 ...
 ```
@@ -570,6 +647,7 @@ in `CoreweavePlatform`):
 | `region` | string | — | CoreWeave region (e.g. `RNO2A`) |
 | `namespace` | string | `iris` | Kubernetes namespace for all resources |
 | `kubeconfig_path` | string | — | Only needed when running CLI outside the cluster |
+| `kube_context` | string | — | Kubeconfig context to bind every operation to; empty uses the file's current-context |
 | `object_storage_endpoint` | string | — | S3-compatible endpoint URL |
 
 ### CoreweaveControllerConfig
@@ -715,7 +793,7 @@ The platform detects fatal errors before the full timeout expires:
 
 | Variable | Purpose |
 |----------|---------|
-| `KUBECONFIG` | Path to kubeconfig (alternative to `kubeconfig_path` in config) |
+| `KUBECONFIG` | Overrides the config's `kubeconfig_path` (file only — the config's `kube_context` still binds the context) |
 | `CW_KEY_ID` | S3/CoreWeave Object Storage access key (required if storage uses `s3://`) |
 | `CW_KEY_SECRET` | S3/CoreWeave Object Storage secret key |
 | `CW_ACCESS_KEY_ID` | CoreWeave Object Storage key ID |
@@ -735,6 +813,7 @@ The platform detects fatal errors before the full timeout expires:
 | `AWS_ENDPOINT_URL` | `envFrom` | From `iris-task-env`; derived from `object_storage_endpoint` |
 | `AWS_REGION` / `AWS_DEFAULT_REGION` | `envFrom` | From `iris-task-env`; `auto` for CoreWeave Object Storage endpoints |
 | `FSSPEC_S3` | `envFrom` | From `iris-task-env`; JSON-encoded fsspec S3 config (endpoint + addressing style) |
+| `MARIN_PREFIX` | `defaults.task_env` (cluster config) | Preset to `s3://marin-us-east-02a/marin` on both CoreWeave clusters |
 
 ## 11. Timeouts
 
@@ -896,9 +975,10 @@ by polling.
 | Kubeconfig file | Operator's kubectl access | Console > Tokens > Download Kubeconfig |
 | CoreWeave Object Storage access key | S3-compatible access to CoreWeave buckets | Console > Object Storage > Access Keys |
 
-The `kubeconfig_path` config field is only needed when running the CLI
-**outside** the cluster (e.g., `iris cluster start` from a laptop). Inside the
-cluster, Pods use in-cluster auth automatically.
+The `kubeconfig_path` / `kube_context` config fields are only needed when
+running the CLI **outside** the cluster (e.g., `iris cluster start` from a
+laptop). Inside the cluster, Pods use in-cluster auth automatically (both
+fields are stripped from the `iris-cluster-config` ConfigMap).
 
 ## 15. Open Questions / Known Limitations
 

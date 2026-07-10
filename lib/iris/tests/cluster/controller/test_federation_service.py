@@ -56,7 +56,7 @@ def _attach_peer(
     """Give the controller one reachable peer (already heartbeated once)."""
     peer = FederationPeer(
         "cw-east",
-        PeerConfig(controller_address="http://cw:10000", dashboard_url="https://cw.dev"),
+        PeerConfig(controller_address="http://cw:10000"),
         _StubPeerConnection(backends),
     )
     peer.probe()
@@ -71,7 +71,6 @@ def test_list_peers_forwards_the_peer_backends_from_its_heartbeat(controller_ser
     (peer,) = response.peers
     assert peer.peer_id == "cw-east"
     assert peer.reachable is True
-    assert peer.dashboard_url == "https://cw.dev"
     (backend,) = peer.backends
     assert backend.backend_id == "tpu-fleet"
     assert backend.kind == "worker-daemon"

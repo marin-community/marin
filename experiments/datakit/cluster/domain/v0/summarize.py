@@ -36,10 +36,9 @@ import time
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-import fsspec
 import numpy as np
 import pyarrow.parquet as pq
-from rigging.filesystem import open_url
+from rigging.filesystem import StoragePath, open_url
 
 from experiments.datakit.cluster.domain.v0.assign import AssignmentAttrData
 
@@ -61,7 +60,7 @@ def _checkpoint_uri(output_path: str) -> str:
 def _load_scan_checkpoint(output_path: str) -> dict | None:
     """Return prior pass-1 state if a checkpoint exists, else None."""
     try:
-        with open_url(_checkpoint_uri(output_path), "rb") as f:
+        with StoragePath(_checkpoint_uri(output_path)).open("rb") as f:
             state = pickle.load(f)
         logger.info(
             "Resuming pass 1 from checkpoint: %d sources already scanned",
@@ -82,11 +81,8 @@ def _save_scan_checkpoint(output_path: str, state: dict) -> None:
     target = _checkpoint_uri(output_path)
     tmp = f"{target}.tmp"
     payload = pickle.dumps(state, protocol=pickle.HIGHEST_PROTOCOL)
-    with open_url(tmp, "wb") as f:
-        f.write(payload)
-    fs, target_path = fsspec.url_to_fs(target)
-    _, tmp_path = fsspec.url_to_fs(tmp)
-    fs.mv(tmp_path, target_path)
+    StoragePath(tmp).write_bytes(payload)
+    StoragePath(tmp).rename(target)
 
 
 def _scan_assignments(

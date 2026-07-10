@@ -8,7 +8,7 @@ The DCLM baseline for the 7B/1x competition pool, Chinchilla-optimal for 7B para
 
 from fray.cluster import ResourceConfig
 from levanter.models.llama import LlamaConfig
-from levanter.optim import AdamConfig
+from levanter.optim.config import AdamConfig
 from marin.execution.lazy import ArtifactStep, lower
 from marin.execution.step_runner import StepRunner
 from marin.experiment.train import EvalSuite, train_lm

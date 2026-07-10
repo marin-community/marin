@@ -24,8 +24,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import click
-from finelog.deploy._gcp import _ssh_args, _wait_health_via_ssh
-from finelog.deploy.bootstrap import CONTAINER_NAME, render_bootstrap
+from finelog.deploy._gcp import _ssh_args, _wait_health_via_ssh, apply_bootstrap, render_bootstrap_for
+from finelog.deploy.bootstrap import CONTAINER_NAME
 from finelog.deploy.build import build_image as build_finelog_image
 from finelog.deploy.config import FinelogConfig, load_finelog_config
 from finelog.deploy.image import resolve_image_digest
@@ -88,18 +88,8 @@ def _require_gcp(cfg: FinelogConfig) -> None:
 
 
 def _bootstrap_with_image(cfg: FinelogConfig, image: str) -> bool:
-    """Re-render and re-run the bootstrap with an explicit image (no pinning).
-
-    Returns whether the remote bootstrap exited 0. The bootstrap script polls
-    ``/health`` itself and exits non-zero when the container never becomes
-    healthy (crash-loop or timeout), so a ``False`` return means the image
-    failed to come up. The caller decides what that means: for the new image it
-    triggers the auto-rollback; for the rollback target it is itself the
-    failure.
-    """
-    bootstrap = render_bootstrap(image=image, port=cfg.port, remote_log_dir=cfg.remote_log_dir)
-    result = subprocess.run(_ssh_args(cfg, "bash -s"), input=bootstrap, text=True)
-    return result.returncode == 0
+    """Bootstrap the VM onto ``image``. Returns whether it came up healthy."""
+    return apply_bootstrap(cfg, render_bootstrap_for(cfg, image))
 
 
 def _verify_health(cfg: FinelogConfig) -> bool:

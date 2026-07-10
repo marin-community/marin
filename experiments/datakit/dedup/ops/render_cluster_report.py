@@ -23,7 +23,7 @@ import logging
 import random
 
 import pyarrow.parquet as pq
-from rigging.filesystem import url_to_fs
+from rigging.filesystem import StoragePath
 from rigging.log_setup import configure_logging
 
 logger = logging.getLogger(__name__)
@@ -193,16 +193,16 @@ pre.text {
 
 def _read_examples(path: str) -> list[dict]:
     """Read examples from either a single parquet file or a directory of shards."""
-    fs, p = url_to_fs(path)
-    if fs.isdir(p):
-        files = sorted(f for f in fs.ls(p) if f.endswith(".parquet"))
+    location = StoragePath(path)
+    if location.isdir():
+        files = sorted((p for p in location.ls() if str(p).endswith(".parquet")), key=str)
         if not files:
             raise FileNotFoundError(f"no parquet files under {path}")
     else:
-        files = [p]
+        files = [location]
     rows: list[dict] = []
     for f in files:
-        with fs.open(f, "rb") as fh:
+        with f.open("rb") as fh:
             rows.extend(pq.read_table(fh).to_pylist())
     return rows
 
@@ -343,9 +343,7 @@ def main() -> None:
     logger.info("wrote %s (%d bytes)", args.output, len(body))
 
     if args.upload:
-        fs, p = url_to_fs(args.upload)
-        with fs.open(p, "wb") as fh:
-            fh.write(body.encode("utf-8"))
+        StoragePath(args.upload).write_bytes(body.encode("utf-8"))
         logger.info("uploaded to %s", args.upload)
 
 

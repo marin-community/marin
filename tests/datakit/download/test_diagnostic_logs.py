@@ -7,14 +7,19 @@ import zipfile
 from pathlib import Path
 
 import pyarrow.parquet as pq
+import pytest
+from marin.datakit.download import diagnostic_logs
 from marin.datakit.download.diagnostic_logs import (
     GHALOGS_ROUGH_TOKENS_B,
+    GHALOGS_STAGED_ARCHIVE_RELATIVE_PATH,
+    GHALOGS_STAGED_PREFIX,
     SOURCE_INVENTORY,
     DiagnosticPartition,
     ExtractedDiagnosticLogs,
     ExtractedPartitionedDiagnosticLogs,
     MaterializedDiagnosticLogParquet,
     assign_partition,
+    download_ghalogs_step,
     extract_diagnostic_logs,
     extract_ghalogs_step,
     ghalogs_member_to_record,
@@ -24,6 +29,7 @@ from marin.datakit.download.diagnostic_logs import (
     materialize_ghalogs_partition_to_parquet,
     materialize_ghalogs_to_parquet,
     sanitize_diagnostic_log_text,
+    stage_ghalogs_archive,
 )
 from marin.datakit.normalize import NormalizedData
 from marin.datakit.sources import all_sources
@@ -135,11 +141,15 @@ def test_all_sources_includes_normalized_ghalogs_public():
 
     assert source.rough_token_count_b == GHALOGS_ROUGH_TOKENS_B
     assert [step.name for step in source.normalize_steps] == [
+        "raw/diagnostic_logs/ghalogs_public_archive",
         "processed/diagnostic_logs/ghalogs_public_parquet",
         "processed/diagnostic_logs/ghalogs_public_train_parquet",
         "normalized/ghalogs/public",
     ]
-    assert source.normalized.deps == [source.normalize_steps[1]]
+    # normalize depends on the train partition; the parquet materialize depends
+    # on the archive download so the ~142 GB archive is auto-staged first.
+    assert source.normalized.deps == [source.normalize_steps[-2]]
+    assert source.normalize_steps[1].deps == [source.normalize_steps[0]]
 
 
 def test_ghalogs_dataset_reads_datakit_normalized_output():
@@ -376,7 +386,7 @@ def test_materialize_ghalogs_partition_to_parquet_filters_one_partition(tmp_path
     assert all(row["partition"] == DiagnosticPartition.TRAIN.value for row in train_rows)
 
 
-def test_ghalogs_public_normalize_steps_write_datakit_normalized_train_partition(tmp_path):
+def test_ghalogs_public_normalize_steps_write_datakit_normalized_train_partition(tmp_path, monkeypatch):
     input_dir = tmp_path / "input" / "ghalogs" / "zenodo-14796970"
     archive_dir = input_dir / "zenodo.org" / "records" / "14796970" / "files"
     archive_dir.mkdir(parents=True)
@@ -386,6 +396,10 @@ def test_ghalogs_public_normalize_steps_write_datakit_normalized_train_partition
     with zipfile.ZipFile(archive_dir / "github_run_logs.zip", "w") as archive:
         archive.writestr(train_member, "ERROR token=abc123456789 traceback")
         archive.writestr(dev_member, "FAILED validation-only log")
+
+    # The archive is already staged at ``source_path``; no-op the Zenodo stream
+    # so the download step doesn't try to fetch the real ~142 GB archive.
+    monkeypatch.setattr(diagnostic_logs, "stage_ghalogs_archive", lambda output_path: None)
 
     steps = ghalogs_public_normalize_steps(
         source_path=str(input_dir),
@@ -404,3 +418,117 @@ def test_ghalogs_public_normalize_steps_write_datakit_normalized_train_partition
     assert rows[0]["partition"] == DiagnosticPartition.TRAIN.value
     assert "abc123456789" not in rows[0]["text"]
     assert rows[0]["source_id"] != rows[0]["id"]
+
+
+def test_ghalogs_public_normalize_steps_read_where_download_wrote(tmp_path, monkeypatch):
+    # Regression: with a custom output_path_prefix and the default relative
+    # source_path, the download step resolves its output under output_path_prefix
+    # while materialize must read from that same location (not marin_prefix()).
+    steps_prefix = tmp_path / "steps"
+    download, materialized, _train, _normalized = ghalogs_public_normalize_steps(
+        max_members=1,
+        num_materialize_shards=1,
+        output_path_prefix=str(steps_prefix),
+    )
+
+    # Stage the fixture archive exactly where the download step resolves its
+    # output — a location distinct from marin_prefix(), which the misaligned
+    # version read from and would have missed.
+    staged_archive = Path(download.output_path) / GHALOGS_STAGED_ARCHIVE_RELATIVE_PATH
+    staged_archive.parent.mkdir(parents=True)
+    train_member = _member_path_for_partition(DiagnosticPartition.TRAIN)
+    with zipfile.ZipFile(staged_archive, "w") as archive:
+        archive.writestr(train_member, "ERROR token=abc123456789 traceback")
+
+    # Archive is pre-staged; no-op the Zenodo stream.
+    monkeypatch.setattr(diagnostic_logs, "stage_ghalogs_archive", lambda output_path: None)
+    StepRunner().run([download, materialized])
+
+    rows = _read_parquet_rows(Path(materialized.output_path))
+    assert [row["archive_path"] for row in rows] == [train_member]
+
+
+class _FakeStreamResponse:
+    """Minimal stand-in for a streamed ``requests`` response."""
+
+    def __init__(self, chunks: list[bytes]):
+        self._chunks = chunks
+
+    def __enter__(self) -> "_FakeStreamResponse":
+        return self
+
+    def __exit__(self, *exc: object) -> bool:
+        return False
+
+    def raise_for_status(self) -> None:
+        return None
+
+    def iter_content(self, chunk_size: int):
+        yield from self._chunks
+
+
+class _FakeSession:
+    def __init__(self, chunks: list[bytes]):
+        self._chunks = chunks
+        self.get_calls = 0
+
+    def get(self, url: str, *, stream: bool, timeout) -> _FakeStreamResponse:
+        self.get_calls += 1
+        return _FakeStreamResponse(self._chunks)
+
+
+def _patch_zenodo_stream(monkeypatch, payload: bytes, chunks: list[bytes]) -> _FakeSession:
+    session = _FakeSession(chunks)
+    monkeypatch.setattr(diagnostic_logs, "build_retrying_session", lambda: session)
+    monkeypatch.setattr(diagnostic_logs, "GHALOGS_ARCHIVE_BYTES", len(payload))
+    return session
+
+
+def test_stage_ghalogs_archive_streams_to_expected_path(tmp_path, monkeypatch):
+    payload = b"PK\x03\x04" + b"github-run-log-bytes" * 32
+    _patch_zenodo_stream(monkeypatch, payload, [payload[:40], payload[40:]])
+
+    stage_ghalogs_archive(str(tmp_path))
+
+    staged = tmp_path / GHALOGS_STAGED_ARCHIVE_RELATIVE_PATH
+    assert staged.read_bytes() == payload
+
+
+def test_stage_ghalogs_archive_skips_when_correctly_sized_copy_exists(tmp_path, monkeypatch):
+    payload = b"already-staged-archive-bytes"
+    session = _patch_zenodo_stream(monkeypatch, payload, [payload])
+
+    staged = tmp_path / GHALOGS_STAGED_ARCHIVE_RELATIVE_PATH
+    staged.parent.mkdir(parents=True)
+    staged.write_bytes(payload)
+
+    stage_ghalogs_archive(str(tmp_path))
+
+    # A correctly-sized copy short-circuits before any HTTP request.
+    assert session.get_calls == 0
+    assert staged.read_bytes() == payload
+
+
+def test_stage_ghalogs_archive_raises_on_size_mismatch(tmp_path, monkeypatch):
+    payload = b"the-full-expected-archive"
+    # Server truncates the stream: streamed bytes fall short of the expected size.
+    _patch_zenodo_stream(monkeypatch, payload, [payload[:10]])
+
+    with pytest.raises(RuntimeError, match="size mismatch"):
+        stage_ghalogs_archive(str(tmp_path))
+
+    # Failed staging must not publish a partial archive at the final path.
+    assert not (tmp_path / GHALOGS_STAGED_ARCHIVE_RELATIVE_PATH).exists()
+
+
+def test_download_ghalogs_step_targets_staged_prefix_and_streams_archive(tmp_path, monkeypatch):
+    payload = b"downloaded-archive-payload"
+    _patch_zenodo_stream(monkeypatch, payload, [payload])
+
+    step = download_ghalogs_step(output_path_prefix=str(tmp_path))
+    assert step.output_path == f"{tmp_path}/{GHALOGS_STAGED_PREFIX}"
+
+    StepRunner().run([step])
+
+    staged = Path(step.output_path) / GHALOGS_STAGED_ARCHIVE_RELATIVE_PATH
+    assert staged.read_bytes() == payload

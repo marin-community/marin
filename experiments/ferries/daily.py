@@ -20,7 +20,7 @@ import os
 from dataclasses import replace
 
 from fray.cluster import ResourceConfig
-from levanter.optim import AdamConfig
+from levanter.optim.config import AdamConfig
 from marin.execution.lazy import ArtifactStep
 from marin.execution.step_runner import StepRunner
 from marin.experiment.train import train_lm

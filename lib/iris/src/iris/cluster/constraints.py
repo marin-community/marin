@@ -40,7 +40,7 @@ from typing import Any, ClassVar
 
 from iris.cluster.config import ScaleGroupResources
 from iris.cluster.tpu_topology import TpuTopologyInfo, get_tpu_topology
-from iris.cluster.types import AcceleratorType, CapacityType, WellKnownAttribute
+from iris.cluster.types import AUTO_DEVICE_VARIANT, AcceleratorType, CapacityType, WellKnownAttribute
 from iris.rpc import job_pb2
 
 # ---------------------------------------------------------------------------
@@ -747,7 +747,7 @@ def constraints_from_resources(resources: job_pb2.ResourceSpecProto) -> list[Con
         constraints.append(Constraint.create(key=WellKnownAttribute.DEVICE_TYPE, op=ConstraintOp.EQ, value=device_type))
 
     variant = get_device_variant(resources.device)
-    if variant and variant != "auto":
+    if variant and variant != AUTO_DEVICE_VARIANT:
         constraints.append(Constraint.create(key=WellKnownAttribute.DEVICE_VARIANT, op=ConstraintOp.EQ, value=variant))
 
     return constraints
@@ -782,7 +782,7 @@ def validate_tpu_request(
         return None
 
     primary = resources.device.tpu.variant
-    if not primary or primary == "auto":
+    if not primary or primary == AUTO_DEVICE_VARIANT:
         return None
 
     chips_requested = resources.device.tpu.count

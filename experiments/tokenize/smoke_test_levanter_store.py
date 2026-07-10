@@ -20,7 +20,7 @@ Submit on iris (eu-west4):
 
 import logging
 
-from fray import ResourceConfig
+from fray.types import ResourceConfig
 from marin.datakit.sources import all_sources
 from marin.execution.step_runner import StepRunner
 from marin.execution.step_spec import StepSpec

@@ -15,9 +15,11 @@ from dataclasses import dataclass
 
 import draccus
 from marin.schemas.web.convert import ExtractionConfig
-from marin.utils import fsspec_glob
 from marin.web.convert import convert_page
-from zephyr import Dataset, ZephyrContext, load_jsonl
+from rigging.filesystem import StoragePath
+from zephyr.dataset import Dataset
+from zephyr.execution import ZephyrContext
+from zephyr.readers import load_jsonl
 
 logger = logging.getLogger(__name__)
 
@@ -123,7 +125,7 @@ def process_record(
 def process_stackexchange_dump(cfg: StackExchangeExtractionConfig) -> None:
     logger.info(f"Starting processing of StackExchange dump in {cfg.input_path}")
 
-    files = fsspec_glob(f"{cfg.input_path}/*.jsonl.gz")
+    files = [str(m) for m in StoragePath(f"{cfg.input_path}/*.jsonl.gz").glob()]
 
     # only keep file of the form <id>.json.gz and not <language>.<id>.json.gz
     files = [file for file in files if len(os.path.basename(file).split(".")) == 3]
