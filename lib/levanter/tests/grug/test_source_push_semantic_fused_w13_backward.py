@@ -11,8 +11,8 @@ from levanter.grug._moe.source_push_plan import build_source_push_semantic_plan_
 from levanter.grug._moe.source_push_semantic_fused_w13_backward import (
     SourcePushSemanticFusedW13BackwardConfig,
     source_push_semantic_fused_w13_backward,
-    source_push_semantic_fused_w13_backward_generation_accounting,
     source_push_semantic_fused_w13_backward_metadata_jax,
+    source_push_semantic_fused_w13_backward_schedule,
 )
 
 
@@ -78,15 +78,14 @@ def test_fused_w13_backward_metadata_inverts_chunk_rows_and_rotates_peers():
         row = int(metadata.route_row[source, token, route])
         assert token_ids[source, dst_ordinal, chunk, block, row] == token
 
-    np.testing.assert_array_equal(
-        np.asarray(metadata.recv_return_consumed_target[0, 1]),
-        np.asarray(metadata.send_return_consumed_target[1, 1]),
-    )
-    expected_return_tiles = np.sum(np.asarray(metadata.forward.send_valid_rows), axis=-1) * 2
-    np.testing.assert_array_equal(np.asarray(metadata.send_return_consumed_target), expected_return_tiles)
+    ready = np.asarray(metadata.combine_ready_generation)
+    for source, token, route in np.argwhere(route_valid):
+        destination_ordinal = int(metadata.route_dst_ordinal[source, token, route])
+        chunk = int(metadata.route_chunk[source, token, route])
+        assert ready[source, 0, destination_ordinal, chunk % CONFIG.inbox_slots] >= (chunk // CONFIG.inbox_slots + 1)
 
 
-def test_fused_w13_backward_metadata_maps_three_peer_source_ordinals_to_send_targets():
+def test_fused_w13_backward_metadata_tracks_three_peer_chunk_readiness():
     selected_experts = jnp.asarray(
         [
             [[0, 1], [0, 1], [0, 1]],
@@ -110,16 +109,12 @@ def test_fused_w13_backward_metadata_maps_three_peer_source_ordinals_to_send_tar
         rows_per_expert_capacity=256,
     )
 
-    send_targets = np.asarray(metadata.send_return_consumed_target)
-    recv_targets = np.asarray(metadata.recv_return_consumed_target)
-    for destination in range(3):
-        for source_ordinal in range(3):
-            source = (destination + source_ordinal) % 3
-            destination_ordinal = (-source_ordinal) % 3
-            np.testing.assert_array_equal(
-                recv_targets[destination, source_ordinal],
-                send_targets[source, destination_ordinal],
-            )
+    route_valid = np.asarray(metadata.route_valid)
+    ready = np.asarray(metadata.combine_ready_generation)
+    for source, token, route in np.argwhere(route_valid):
+        destination_ordinal = int(metadata.route_dst_ordinal[source, token, route])
+        chunk = int(metadata.route_chunk[source, token, route])
+        assert ready[source, 0, destination_ordinal, chunk % CONFIG.inbox_slots] == (chunk // CONFIG.inbox_slots + 1)
 
 
 def test_fused_w13_backward_metadata_invalidates_routes_clipped_from_forward_send():
@@ -156,28 +151,26 @@ def test_fused_w13_backward_metadata_invalidates_routes_clipped_from_forward_sen
         assert token_ids[source, dst_ordinal, chunk, block, row] == token
 
 
-def test_fused_w13_backward_generation_accounting_reuses_slots_and_counts_live_returns():
-    first = source_push_semantic_fused_w13_backward_generation_accounting(
-        0,
+def test_fused_w13_backward_schedule_uses_rolling_slots_and_fixed_compute_fan_in():
+    schedule = source_push_semantic_fused_w13_backward_schedule(
         ep_size=8,
         hidden_dim=2560,
-        valid_rows=177,
-    )
-    reused = source_push_semantic_fused_w13_backward_generation_accounting(
-        CONFIG.inbox_slots,
-        ep_size=8,
-        hidden_dim=2560,
-        valid_rows=31,
+        tokens_per_source=32768,
+        send_chunks_per_dst=25,
     )
 
-    assert (first.slot, first.generation, first.empty_generation, first.released_generation) == (0, 1, 1, 2)
-    assert reused.slot == first.slot
-    assert reused.generation == 2
-    assert reused.send_done_generation == 2 * first.send_done_generation
-    assert (first.dx_ready_generation, reused.dx_ready_generation) == (1, 2)
-    assert reused.compute_done_generation == 2 * first.compute_done_generation
-    assert first.returned_route_tiles == 177 * (2560 // CONFIG.block_hidden)
-    assert reused.returned_route_tiles == 31 * (2560 // CONFIG.block_hidden)
+    assert schedule.hidden_tiles == 20
+    assert schedule.helper_tiles == 80
+    assert schedule.hidden_tile_jobs == 10
+    assert schedule.compute_jobs_per_chunk == 40
+    assert schedule.token_blocks == 512
+    assert schedule.rounds == 3
+    assert schedule.producer_programs == 256
+    assert schedule.combine_programs == 32
+    assert schedule.active_combine_programs == 32
+    assert schedule.total_programs == 288
+    assert schedule.readiness_signals == 200
+    assert schedule.readiness_waits == 983040
 
 
 def test_fused_w13_backward_interpret_matches_independent_route_reference():

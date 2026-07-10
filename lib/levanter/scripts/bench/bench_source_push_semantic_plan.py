@@ -9460,7 +9460,13 @@ def _run_stage_mode(
         if (
             (
                 mode in SEMANTIC_FUSED_STAGE_MODES
-                and mode not in (MODE_SEMANTIC_FUSED_W2_BACKWARD_PALLAS, MODE_SEMANTIC_FUSED_W2_BACKWARD_COMPARE)
+                and mode
+                not in (
+                    MODE_SEMANTIC_FUSED_W2_BACKWARD_PALLAS,
+                    MODE_SEMANTIC_FUSED_W2_BACKWARD_COMPARE,
+                    MODE_SEMANTIC_FUSED_W13_BACKWARD_PALLAS,
+                    MODE_SEMANTIC_FUSED_W13_BACKWARD_COMPARE,
+                )
             )
             or mode in SEMANTIC_FUSED_MLP_MODES
             or mode

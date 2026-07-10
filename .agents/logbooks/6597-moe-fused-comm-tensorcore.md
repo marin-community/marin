@@ -1323,3 +1323,28 @@ This keeps B256 `send_m` independent of B64 `compute_m`, restores within-chunk
 gather parallelism, and preserves direct compact expert-major output. Five
 dedicated tests, target kernel construction, and scoped pre-commit including
 Pyrefly pass. Target H100 timing remains required.
+
+## 2026-07-10 FUSED-MOE-045 - Hierarchical W13 backward direct return
+
+W13 backward now uses 30 helper/compute CTAs to prepare the 80 B64-by-128
+source-X tiles inside each B256 chunk, while two owners retain empty/prepare/
+full/release generation coordination. dX WGMMA accumulator fragments store
+directly into local or peer source-owned compact `dx_return`; the local GMEM
+outbox and owner payload recopy are removed. dW13 remains an expert-local
+reduction side output, and source top-k combine uses semantic inverse-route
+readiness.
+
+The isolated stage harness now supplies source-sharded X and destination-sharded
+expert-major dZ13/W13 directly, avoiding the diagnostic pair scatter. Nine
+focused kernel/harness tests and scoped pre-commit including Pyrefly pass.
+Target H100 correctness and timing remain required.
+
+## 2026-07-10 FUSED-MOE-046 - Hierarchical semantic permute plus W13 target run
+
+Observation-only babysitting began for
+`/dlwh/bench-semantic-w13-hierarchical-20260710-1648` on `cw-rno2a` at commit
+`50667d88fe`. The target is `semantic_permute_w13_pallas`, three repeats, with
+two B256 slot owners plus 30 B64 helper/compute CTAs. Iris reported `running`,
+submitted at `2026-07-10 16:45:12 PDT`. No duplicate, resubmit, restart, stop,
+or cluster bounce is permitted. Monitoring state is recorded in
+`scratch/20260710-1648_bench_semantic_w13_hierarchical_monitoring_state.json`.
