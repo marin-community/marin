@@ -357,7 +357,10 @@ def source_push_semantic_fused_w2_backward(
             mesh=mesh,
         )
         source = jnp.arange(dy.shape[0], dtype=jnp.int32)[:, None, None, None, None]
-        d_route = jnp.zeros((*dy.shape[:2], plan.topk), dtype=jnp.float32)
+        d_route = jax.sharding.reshard(
+            jnp.zeros((*dy.shape[:2], plan.topk), dtype=jnp.float32),
+            NamedSharding(mesh, P(SOURCE_PUSH_MESH_AXIS, None, None)),
+        )
         d_route = d_route.at[source, metadata.token_ids, metadata.route_slots].add(
             jnp.where(metadata.row_valid, queue_d_route, jnp.zeros((), dtype=queue_d_route.dtype))
         )

@@ -526,11 +526,8 @@ def _make_source_push_semantic_fused_w2_return_kernel(
                                         ),
                                         mgpu.Layout.WGMMA,
                                     )
-                                    h_smem[:, :] = jnp.where(
-                                        row < valid_rows,
-                                        jax.nn.silu(gate) * up,
-                                        jnp.zeros((), dtype=jnp.float32),
-                                    ).astype(dtype)
+                                    row_valid = (row < valid_rows).astype(jnp.float32)
+                                    h_smem[:, :] = (jax.nn.silu(gate) * up * row_valid).astype(dtype)
                                     mgpu.barrier_wait(weight_barrier)
                                     mgpu.commit_smem()
                                     mgpu.wgmma(acc_ref, h_smem, w_smem)

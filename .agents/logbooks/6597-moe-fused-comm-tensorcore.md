@@ -437,3 +437,25 @@ The W2-backward reference-input construction also produced repeated failed
 meaningful negative compile gate: fix the two Mosaic layout errors and reduce
 or restructure the W2-backward reference-input memory requirement before
 resubmitting the same target shape.
+
+## 2026-07-10 FUSED-MOE-008 - Backward compile-first H100 follow-up
+
+Job `/dlwh/bench-semantic-fused-backward-compile2-20260710-1435` ran on
+`cw-rno2a` at commit `586a0b1ef0`. It was stopped after W13 produced no result
+row and task logs were silent for more than six minutes. Iris reached terminal
+`killed` (`Terminated by user`); task 0 exited 0 after 9 minutes 49.29 seconds,
+with zero failures and one preemption. No retry or duplicate was launched.
+
+No mode reported compile or timing values:
+
+| Mode | Result |
+| --- | --- |
+| `semantic_fused_w2_return_pallas` | `ValueError: Incompatible FragmentedArray layouts` during Mosaic GPU lowering; all timing fields null |
+| `semantic_fused_w2_backward_pallas` | `ValueError`: cannot broadcast `float32[8@expert,8,72,4,64]` to `float32[8,8,72,4,64]` at `source_push_semantic_fused_w2_backward.py:361` in the `d_route.at[...].add(...)`; all timing fields null |
+| `semantic_fused_w13_backward_pallas` | No result row; treated as a runtime hang after the final log at `21:30:13Z` and stopped at `21:37:15Z` |
+
+Repeated failed GPU allocator requests (mostly 12.50 GiB) preceded both W2
+error rows. Complete Iris output is in
+`scratch/6597-compile2/final-logs.txt`; terminal status and task summary are in
+`scratch/6597-compile2/final-status.txt` and
+`scratch/6597-compile2/final-summary.txt`.

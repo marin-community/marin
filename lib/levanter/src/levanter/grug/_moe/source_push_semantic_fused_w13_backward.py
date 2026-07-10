@@ -128,7 +128,6 @@ def source_push_semantic_fused_w13_backward_generation_accounting(
         raise ValueError(f"valid_rows must be in [0, {config.send_m}], got {valid_rows}")
     generation = chunk // config.inbox_slots + 1
     producer_tiles = config.compute_blocks_per_send * (hidden_dim // config.send_k)
-    compute_programs = ep_size * config.compute_programs_per_peer
     return SourcePushSemanticFusedW13BackwardGenerationAccounting(
         slot=chunk % config.inbox_slots,
         generation=generation,
@@ -136,7 +135,7 @@ def source_push_semantic_fused_w13_backward_generation_accounting(
         send_done_generation=generation * producer_tiles,
         full_generation=generation,
         dx_ready_generation=generation,
-        compute_done_generation=generation * compute_programs,
+        compute_done_generation=generation * config.compute_programs_per_peer,
         returned_route_tiles=valid_rows * (hidden_dim // config.block_hidden),
         released_generation=generation + 1,
     )
@@ -427,7 +426,8 @@ def _make_source_push_semantic_fused_w13_backward_kernel(
         compute_done_sem = pl.get_global(mgpu.SemaphoreType.REGULAR((ep_size, config.inbox_slots)))
         dx_full_sem = pl.get_global(mgpu.SemaphoreType.REGULAR((ep_size, config.inbox_slots, blocks, hidden_tiles)))
         return_consumed_sem = pl.get_global(mgpu.SemaphoreType.REGULAR((ep_size, config.inbox_slots)))
-        dx_init_done_sem = pl.get_global(mgpu.SemaphoreType.REGULAR(()))
+        dx_init_done_sem = pl.get_global(mgpu.SemaphoreType.REGULAR((tokens_per_source, hidden_tiles)))
+        dw_init_done_sem = pl.get_global(mgpu.SemaphoreType.REGULAR((dw_tiles,)))
         rank = lax.axis_index(SOURCE_PUSH_MESH_AXIS)
         peer_ordinal = pl.program_id(0)
         worker = pl.program_id(1)
@@ -517,12 +517,12 @@ def _make_source_push_semantic_fused_w13_backward_kernel(
         )
         def _compute() -> None:
             local_compute = worker - config.producer_programs_per_peer
-            compute_id = peer_ordinal * config.compute_programs_per_peer + local_compute
+            global_compute_id = peer_ordinal * config.compute_programs_per_peer + local_compute
 
-            # Every dW tile has exactly one persistent owner, which initializes and updates it.
+            # Every dW tile has one initializer; peer-local compute groups atomically add source partials.
             @pl.loop(0, math.ceil(dw_tiles / total_compute_programs))
             def _initialize_owned_dw(iteration) -> None:
-                tile = iteration * total_compute_programs + compute_id
+                tile = iteration * total_compute_programs + global_compute_id
 
                 @pl.when(tile < dw_tiles)
                 def _zero_tile() -> None:
@@ -535,6 +535,7 @@ def _make_source_push_semantic_fused_w13_backward_kernel(
                         pl.ds(hidden_tile * config.block_hidden, config.block_hidden),
                         pl.ds(output_tile * config.block_output, config.block_output),
                     ] = jnp.zeros((config.block_hidden, config.block_output), dtype=jnp.float32)
+                    pl.semaphore_signal(dw_init_done_sem.at[tile])
 
             @pl.when(local_compute == 0)
             def _initialize_empty_credit() -> None:
@@ -686,6 +687,7 @@ def _make_source_push_semantic_fused_w13_backward_kernel(
                             pl.ds(hidden_tile * config.block_hidden, config.block_hidden),
                             pl.ds(output_tile * config.block_output, config.block_output),
                         )
+                        pl.semaphore_wait(dw_init_done_sem.at[dw_tile], value=1, decrement=False)
                         mgpu.atomic_add(dw_ref.at[dw_index], acc_ref[...])
 
                     pl.run_scoped(
@@ -693,8 +695,7 @@ def _make_source_push_semantic_fused_w13_backward_kernel(
                         acc_ref=mgpu.ACC((config.block_hidden, config.block_output)),
                     )
 
-            # All compute owners visit generations in the same order. This prevents slot-cycle deadlock.
-            for static_src in range(ep_size):
+            def _compute_source(static_src: int) -> None:
 
                 @pl.loop(0, send_chunks_per_dst)
                 def _chunk_loop(chunk) -> None:
@@ -704,9 +705,9 @@ def _make_source_push_semantic_fused_w13_backward_kernel(
                         full_sem.at[(rank + static_src) % ep_size, slot], value=generation, decrement=False
                     )
 
-                    @pl.loop(0, math.ceil((blocks * hidden_tiles) / total_compute_programs))
+                    @pl.loop(0, math.ceil((blocks * hidden_tiles) / config.compute_programs_per_peer))
                     def _dx_loop(iteration) -> None:
-                        job = iteration * total_compute_programs + compute_id
+                        job = iteration * config.compute_programs_per_peer + local_compute
 
                         @pl.when(job < blocks * hidden_tiles)
                         def _owned_dx() -> None:
@@ -714,9 +715,9 @@ def _make_source_push_semantic_fused_w13_backward_kernel(
                             hidden_tile = job % hidden_tiles
                             _dx_job(static_src, chunk, slot, generation, block, hidden_tile)
 
-                    @pl.loop(0, math.ceil(dw_tiles / total_compute_programs))
+                    @pl.loop(0, math.ceil(dw_tiles / config.compute_programs_per_peer))
                     def _dw_loop(iteration) -> None:
-                        dw_tile = iteration * total_compute_programs + compute_id
+                        dw_tile = iteration * config.compute_programs_per_peer + local_compute
 
                         @pl.when(dw_tile < dw_tiles)
                         def _owned_dw() -> None:
@@ -725,12 +726,12 @@ def _make_source_push_semantic_fused_w13_backward_kernel(
 
                     pl.semaphore_signal(compute_done_sem.at[(rank + static_src) % ep_size, slot])
 
-                    @pl.when(compute_id == 0)
+                    @pl.when(local_compute == 0)
                     def _release() -> None:
                         src_rank = (rank + static_src) % ep_size
                         pl.semaphore_wait(
                             compute_done_sem.at[src_rank, slot],
-                            value=generation * total_compute_programs,
+                            value=generation * config.compute_programs_per_peer,
                             decrement=False,
                         )
                         return_target = recv_return_target_ref[static_src, chunk]
@@ -744,15 +745,21 @@ def _make_source_push_semantic_fused_w13_backward_kernel(
                         else:
                             _signal_remote(empty_sem, src_rank, (rank, slot))
 
+            branches = tuple(
+                (lambda source_ordinal: lambda _: _compute_source(source_ordinal))((-phase) % ep_size)
+                for phase in range(ep_size)
+            )
+            lax.switch(peer_ordinal, branches, None)
+
         @pl.when(worker >= config.producer_programs_per_peer + config.compute_programs_per_peer)
         def _combine() -> None:
             local_combine = worker - config.producer_programs_per_peer - config.compute_programs_per_peer
-            combine_id = peer_ordinal * config.combine_programs_per_peer + local_combine
+            global_combine_id = peer_ordinal * config.combine_programs_per_peer + local_combine
             initialize_jobs = tokens_per_source * hidden_tiles
 
             @pl.loop(0, math.ceil(initialize_jobs / total_combine_programs))
             def _initialize_dx_loop(iteration) -> None:
-                job = iteration * total_combine_programs + combine_id
+                job = iteration * total_combine_programs + global_combine_id
 
                 @pl.when(job < initialize_jobs)
                 def _zero_owned_dx() -> None:
@@ -762,12 +769,9 @@ def _make_source_push_semantic_fused_w13_backward_kernel(
                     dx_ref[token, pl.ds(hidden_start, config.block_hidden)] = jnp.zeros(
                         (config.block_hidden,), dtype=jnp.float32
                     )
+                    pl.semaphore_signal(dx_init_done_sem.at[token, hidden_tile])
 
-            pl.semaphore_signal(dx_init_done_sem)
-            pl.semaphore_wait(dx_init_done_sem, value=total_combine_programs, decrement=False)
-
-            # Consume each bounded slot in the same physical order that produces it.
-            for static_dst_ordinal in range(ep_size):
+            def _consume_destination(static_dst_ordinal: int) -> None:
                 dst = (rank + static_dst_ordinal) % ep_size
 
                 @pl.loop(0, send_chunks_per_dst)
@@ -775,9 +779,9 @@ def _make_source_push_semantic_fused_w13_backward_kernel(
                     slot = chunk % config.inbox_slots
                     generation = chunk // config.inbox_slots + 1
 
-                    @pl.loop(0, math.ceil((blocks * hidden_tiles) / total_combine_programs))
+                    @pl.loop(0, math.ceil((blocks * hidden_tiles) / config.combine_programs_per_peer))
                     def _physical_tile_loop(iteration) -> None:
-                        tile = iteration * total_combine_programs + combine_id
+                        tile = iteration * config.combine_programs_per_peer + local_combine
 
                         @pl.when(tile < blocks * hidden_tiles)
                         def _consume_owned_tile() -> None:
@@ -796,6 +800,11 @@ def _make_source_push_semantic_fused_w13_backward_kernel(
                                 @pl.when(row < valid_rows)
                                 def _scatter_live_row() -> None:
                                     token = token_ids_ref[static_dst_ordinal, chunk, block, row]
+                                    pl.semaphore_wait(
+                                        dx_init_done_sem.at[token, hidden_tile],
+                                        value=1,
+                                        decrement=False,
+                                    )
                                     dx_tile = dx_return_ref[
                                         dst,
                                         slot,
@@ -811,6 +820,9 @@ def _make_source_push_semantic_fused_w13_backward_kernel(
                                         pl.semaphore_signal(return_consumed_sem.at[rank, slot])
                                     else:
                                         _signal_remote(return_consumed_sem, dst, (rank, slot))
+
+            branches = tuple((lambda ordinal: lambda _: _consume_destination(ordinal))(i) for i in range(ep_size))
+            lax.switch(peer_ordinal, branches, None)
 
     scratch_shape = (ep_size, config.inbox_slots, config.send_m, hidden_dim)
     return mgpu.kernel(
