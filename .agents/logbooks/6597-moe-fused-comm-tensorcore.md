@@ -155,3 +155,70 @@ Decision: keep FUSED-MOE-001 running. Shorten each `in_specs` tuple by one axis
 to describe the global argument rank, rerun focused tests, then repeat this exact
 target benchmark. The non-fatal 12.50 GiB allocator warnings should be watched,
 but they were not the first failure and the control modes completed.
+
+## 2026-07-10 FUSED-MOE-002 - B256 shard-spec retry
+
+Job:
+
+```text
+cluster:  cw-rno2a
+job:      /dlwh/bench-semantic-fused-w13-b256-shardspec-20260710-1331
+commit:   867d1f6928
+Iris:     succeeded, exit 0, failures 0, preemptions 0
+task 0:   succeeded, exit 0, duration 1m55.31s
+submitted: 2026-07-10T20:30:52.722Z
+resources: H100x8, 16 CPU, 128 GiB memory, 16 GiB disk
+```
+
+The retry used the same target-shape benchmark command as FUSED-MOE-001, with
+the shard-spec fix at `867d1f6928` and a new JSONL destination:
+
+```bash
+timeout 3600s bash -lc 'set -euo pipefail; uv pip install --reinstall nvidia-cudnn-cu13==9.19.0.56; exec uv run --no-sync --package marin-levanter --extra gpu --group test python lib/levanter/scripts/bench/bench_source_push_semantic_plan.py --ep-size 8 --tokens-per-rank 32768 --hidden-dim 2560 --intermediate-dim 1280 --experts-per-rank 32 --topk 4 --capacity-factor 1.25 --rows-per-src-dst-capacity auto --routing random --routing-seed 0 --dtype bfloat16 --plan-builder jax --modes semantic_permute_w13_pallas,semantic_permute_w13_compare,w13_source_padded_inbox_pallas,source_padded_inbox_pack_pallas,w13_expert_major_prepacked_pallas --warmup 1 --steps 3 --repeat-runs 3 --separate-compile --debug-exceptions --git-sha 867d1f6928 --jsonl scratch/semantic_fused_w13_b256_shardspec_867d1f6928.jsonl'
+```
+
+The fused B256 path compiled and ran. Every fused timing row:
+
+| Repeat | Time (ms) | Useful TFLOP/s/rank | Rounded TFLOP/s/rank | Checksum |
+| ---: | ---: | ---: | ---: | ---: |
+| 0 | 29.998302 | 57.269471 | 71.586839 | 1305986465792.0 |
+| 1 | 30.034369 | 57.200699 | 71.500874 | 1305986465792.0 |
+| 2 | 29.959819 | 57.343034 | 71.678793 | 1305986465792.0 |
+
+Summary: median `29.998302 ms`, range `29.959819-30.034369 ms`, median
+`57.269471` useful and `71.586839` rounded TFLOP/s/rank. Compilation was
+`10.327229 s`; first run was `6.704749 s`. Every timing repeat reported:
+
+```text
+dropped_routes=0
+routing_dropped_routes=0
+metadata_overflow_routes=0
+queue_overflow_entry_error_count=0
+queue_overflow_route_error_count=0
+layout_overflow_row_error_count=0
+semantic_useful_rows=1048576
+semantic_rounded_rows=1310720
+semantic_row_efficiency=0.8
+```
+
+The compare mode also emitted all three repeats. It measures the full comparison
+path, not fused-kernel performance:
+
+| Repeat | Time (ms) | z max / mean abs diff | h max / mean abs diff | Valid errors | Overflow errors |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 0 | 791.713158 | 0.03125 / 0.000018104 | 25.965332 / 1.877868 | 0 | 0 |
+| 1 | 791.447083 | 0.03125 / 0.000018104 | 25.965332 / 1.877868 | 0 | 0 |
+| 2 | 793.388347 | 0.03125 / 0.000018104 | 25.965332 / 1.877868 | 0 | 0 |
+
+Compare summary: median `791.713158 ms`, range
+`791.447083-793.388347 ms`; `valid_error_count=0`, all observed and expected
+nonfinite counts were zero, and queue-entry, queue-route, layout-row, and
+layout-overflow-mismatch counts were zero. The sampled live counts were 3,776
+of 4,096 for both `z` and `h`.
+
+Correctness conclusion: `z` is within the established bf16 tolerance, but the
+post-SwiGLU `h` result is not correct (`max_abs_diff=25.965332`,
+`mean_abs_diff=1.877868`). Therefore this run establishes compilation and a
+stable approximately 30 ms fused timing, but not fused permute+W13 correctness.
+The next action is to isolate the `h` activation/output-placement mismatch before
+interpreting or tuning the 57.27 useful TFLOP/s/rank result.
