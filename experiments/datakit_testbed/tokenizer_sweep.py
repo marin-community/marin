@@ -34,7 +34,7 @@ from dataclasses import dataclass, field
 import draccus
 import fsspec
 import pyarrow.parquet as pq
-from fray import ResourceConfig
+from fray.cluster import ResourceConfig
 from huggingface_hub import __version__ as hf_hub_version
 from levanter.tokenizers import TokenizerBackend
 from marin.datakit.normalize import NormalizedData
@@ -42,8 +42,7 @@ from marin.execution.remote import remote
 from marin.execution.step_runner import StepRunner
 from marin.execution.step_spec import StepSpec
 from marin.processing.tokenize import TokenizeConfig, tokenize
-from marin.utils import fsspec_glob, fsspec_mkdirs
-from rigging.filesystem import open_url, url_to_fs
+from rigging.filesystem import StoragePath, open_url, url_to_fs
 from rigging.log_setup import configure_logging
 from tokenizers import Regex, pre_tokenizers
 from transformers import AutoTokenizer
@@ -218,6 +217,10 @@ def _part_name(idx: int, total: int) -> str:
     return f"part-{idx:05d}-of-{total:05d}.parquet"
 
 
+def _glob_paths(pattern: str) -> list[str]:
+    return [str(path) for path in StoragePath(pattern).glob()]
+
+
 def _load_normalized_data(path: str) -> NormalizedData:
     for name in (".artifact", ".artifact.json"):
         try:
@@ -231,9 +234,7 @@ def _load_normalized_data(path: str) -> NormalizedData:
 def _copy_shard(src: str, dst: str) -> int:
     src_fs, src_path = url_to_fs(src)
     _dst_fs, dst_path = url_to_fs(dst)
-    parent = os.path.dirname(dst_path)
-    if parent:
-        fsspec_mkdirs(parent, exist_ok=True)
+    StoragePath(dst).parent.mkdirs()
     src_fs.copy(src_path, dst_path)
     return int(src_fs.size(src_path) or 0)
 
@@ -245,9 +246,7 @@ def _write_row_range(src: str, dst: str, start_row: int, stop_row: int) -> tuple
 
     src_fs, src_path = url_to_fs(src)
     dst_fs, dst_path = url_to_fs(dst)
-    parent = os.path.dirname(dst_path)
-    if parent:
-        fsspec_mkdirs(parent, exist_ok=True)
+    StoragePath(dst).parent.mkdirs()
 
     with src_fs.open(src_path, "rb") as sf:
         pf = pq.ParquetFile(sf)
@@ -291,7 +290,7 @@ def sample_normalized_random_shards(
     if not 0.0 < sample_fraction <= 1.0:
         raise ValueError(f"sample_fraction must be in (0, 1]; got {sample_fraction}")
 
-    shards = sorted(fsspec_glob(f"{source.main_output_dir.rstrip('/')}/**/*.parquet"))
+    shards = sorted(_glob_paths(f"{source.main_output_dir.rstrip('/')}/**/*.parquet"))
     if not shards:
         raise ValueError(f"No parquet shards under {source.main_output_dir}")
 
@@ -385,7 +384,7 @@ def sample_normalized_window(
     if start_fraction + sample_fraction > 1.0:
         raise ValueError(f"window exceeds source: {start_fraction=} {sample_fraction=}")
 
-    shards = sorted(fsspec_glob(f"{source.main_output_dir.rstrip('/')}/**/*.parquet"))
+    shards = sorted(_glob_paths(f"{source.main_output_dir.rstrip('/')}/**/*.parquet"))
     if not shards:
         raise ValueError(f"No parquet shards under {source.main_output_dir}")
 
@@ -575,7 +574,7 @@ def _iter_limited_shuffled_text_batches(
     has_byte_limit = max_bytes > 0
     shards: list[str] = []
     for pattern in paths:
-        shards.extend(fsspec_glob(pattern))
+        shards.extend(_glob_paths(pattern))
     shards = sorted(
         set(shards),
         key=lambda shard: _stable_hash_int("hf-corpus-shard", seed, shard),
