@@ -336,7 +336,7 @@ def _source_push_semantic_fused_w13_sharded(
         recv_valid_local,
         weights_local,
     ):
-        _inbox, z_local = kernel(
+        _inbox, z_flat_local = kernel(
             x_local[0],
             token_ids_local[0],
             send_valid_local[0],
@@ -344,6 +344,11 @@ def _source_push_semantic_fused_w13_sharded(
             recv_row_local[0],
             recv_valid_local[0],
             weights_local[0],
+        )
+        z_local = z_flat_local.reshape(
+            w_gate_up.shape[1],
+            metadata.rows_per_expert_capacity,
+            w_gate_up.shape[-1],
         )
         return z_local[None, ...]
 
@@ -570,14 +575,13 @@ def _make_source_push_semantic_fused_w13_kernel(
                             barrier=mgpu.Barrier(num_arrivals=3),
                         )
                         row_start = recv_row_ref[static_peer_ordinal, chunk, block]
+                        flat_row_start = expert * rows_per_expert_capacity + row_start
                         z_ref[
-                            expert,
-                            pl.ds(row_start, config.compute_m),
+                            pl.ds(flat_row_start, config.compute_m),
                             pl.ds(n_tile * config.block_n, config.block_n),
                         ] = gate_acc[...].astype(dtype)
                         z_ref[
-                            expert,
-                            pl.ds(row_start, config.compute_m),
+                            pl.ds(flat_row_start, config.compute_m),
                             pl.ds((n_tile + n_tiles) * config.block_n, config.block_n),
                         ] = up_acc[...].astype(dtype)
 
@@ -630,7 +634,7 @@ def _make_source_push_semantic_fused_w13_kernel(
             lax.switch(peer_ordinal, branches, None)
 
     inbox_shape = (ep_size, config.inbox_slots, config.send_m, hidden_dim)
-    output_shape = (experts_per_rank, rows_per_expert_capacity, 2 * intermediate_dim)
+    output_shape = (experts_per_rank * rows_per_expert_capacity, 2 * intermediate_dim)
     return mgpu.kernel(
         body,
         out_shape=(
