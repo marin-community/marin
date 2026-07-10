@@ -41,6 +41,13 @@ from levanter.grug._moe.source_push_semantic_forward_pallas import (
     source_push_semantic_w13_from_x_expert_pallas_mgpu,
     source_push_semantic_x_to_expert_major_direct_pallas_mgpu,
 )
+from levanter.grug._moe.source_push_semantic_fused_w13 import (
+    SourcePushSemanticFusedW13Config,
+    source_push_semantic_fused_w13,
+)
+from levanter.grug._moe.source_push_semantic_fused_w13_backward import source_push_semantic_fused_w13_backward
+from levanter.grug._moe.source_push_semantic_fused_w2_backward import source_push_semantic_fused_w2_backward
+from levanter.grug._moe.source_push_semantic_fused_w2_return import source_push_semantic_fused_w2_return
 from levanter.grug._moe.source_push_semantic_w2_pallas import (
     SourcePushSemanticForwardReturnPallasBlockSizes,
     SourcePushSemanticW2ExpertMajorPallasBlockSizes,
@@ -64,6 +71,15 @@ class _SourcePushSemanticMlpResidual(NamedTuple):
     z: Float[Array, "Dst E C twoI"]
     h: Float[Array, "Dst E C I"]
     route_y: Float[Array, "Dst E C H"]
+    w13: Float[Array, "Dst E H twoI"]
+    w2: Float[Array, "Dst E I H"]
+
+
+class _SourcePushSemanticFusedMlpResidual(NamedTuple):
+    plan: SourcePushSemanticPlan
+    x: Float[Array, "S T H"]
+    z: Float[Array, "Dst E C twoI"]
+    return_y: Float[Array, "S DstOrd Q M H"]
     w13: Float[Array, "Dst E H twoI"]
     w2: Float[Array, "Dst E I H"]
 
@@ -101,6 +117,7 @@ _DX_GATHER_BLOCK_SIZES = SourcePushSemanticBackwardPallasBlockSizes(
     row_block=64,
     hidden_block=256,
 )
+_FUSED_CONFIG = SourcePushSemanticFusedW13Config()
 
 
 def source_push_moe_mlp_semantic_pallas_mgpu(
@@ -225,6 +242,246 @@ def _source_push_moe_mlp_semantic_pallas_mgpu(
 
     _custom_vjp.defvjp(_fwd, _bwd)
     return _custom_vjp(selected_experts, x, route_weights, w13, w2)
+
+
+def source_push_moe_mlp_semantic_fused_pallas_mgpu(
+    selected_experts: Int[Array, "S T K"],
+    x: Float[Array, "S T H"],
+    route_weights: Float[Array, "S T K"],
+    w13: Float[Array, "Dst E H twoI"],
+    w2: Float[Array, "Dst E I H"],
+    *,
+    capacity: SourcePushSemanticMlpCapacity,
+    capacity_factor: float,
+    mesh: Mesh,
+) -> tuple[Float[Array, "S T H"], Int[Array, ""]]:
+    """Run the fused semantic source-push MLP on an explicit GPU mesh."""
+
+    _validate_source_push_semantic_mlp_mesh(mesh, source_count=x.shape[0])
+    return _source_push_moe_mlp_semantic_fused_pallas_mgpu(
+        selected_experts,
+        x,
+        route_weights,
+        w13,
+        w2,
+        capacity=capacity,
+        capacity_factor=capacity_factor,
+        mesh=mesh,
+        interpret=False,
+    )
+
+
+def _source_push_moe_mlp_semantic_fused_pallas_mgpu(
+    selected_experts: Int[Array, "S T K"],
+    x: Float[Array, "S T H"],
+    route_weights: Float[Array, "S T K"],
+    w13: Float[Array, "Dst E H twoI"],
+    w2: Float[Array, "Dst E I H"],
+    *,
+    capacity: SourcePushSemanticMlpCapacity,
+    capacity_factor: float,
+    mesh: Mesh | None,
+    interpret: bool,
+) -> tuple[Float[Array, "S T H"], Int[Array, ""]]:
+    """Opt-in fused semantic MLP boundary used by Hopper and interpreted correctness tests."""
+
+    _validate_source_push_semantic_mlp_inputs(
+        selected_experts,
+        x,
+        route_weights,
+        w13,
+        w2,
+        capacity=capacity,
+        capacity_factor=capacity_factor,
+        validate_profile=False,
+    )
+    if not interpret:
+        if mesh is None:
+            raise ValueError("non-interpreted fused semantic source-push MLP requires an explicit mesh")
+        _validate_source_push_semantic_fused_mlp_profile(x, w13, w2, capacity)
+
+    send_chunks_per_dst, entries_per_dst = _source_push_semantic_fused_queue_geometry(
+        rows_per_src_dst=capacity.rows_per_src_dst,
+        experts_per_rank=w13.shape[1],
+    )
+
+    @jax.custom_vjp
+    def _custom_vjp(
+        selected_experts_arg: Int[Array, "S T K"],
+        x_arg: Float[Array, "S T H"],
+        route_weights_arg: Float[Array, "S T K"],
+        w13_arg: Float[Array, "Dst E H twoI"],
+        w2_arg: Float[Array, "Dst E I H"],
+    ) -> tuple[Float[Array, "S T H"], Int[Array, ""]]:
+        y, dropped, _residual = _source_push_semantic_fused_mlp_forward(
+            selected_experts_arg,
+            x_arg,
+            route_weights_arg,
+            w13_arg,
+            w2_arg,
+            capacity=capacity,
+            capacity_factor=capacity_factor,
+            send_chunks_per_dst=send_chunks_per_dst,
+            entries_per_dst=entries_per_dst,
+            mesh=mesh,
+            interpret=interpret,
+        )
+        return y, dropped
+
+    def _fwd(
+        selected_experts_arg: Int[Array, "S T K"],
+        x_arg: Float[Array, "S T H"],
+        route_weights_arg: Float[Array, "S T K"],
+        w13_arg: Float[Array, "Dst E H twoI"],
+        w2_arg: Float[Array, "Dst E I H"],
+    ):
+        y, dropped, residual = _source_push_semantic_fused_mlp_forward(
+            selected_experts_arg,
+            x_arg,
+            route_weights_arg,
+            w13_arg,
+            w2_arg,
+            capacity=capacity,
+            capacity_factor=capacity_factor,
+            send_chunks_per_dst=send_chunks_per_dst,
+            entries_per_dst=entries_per_dst,
+            mesh=mesh,
+            interpret=interpret,
+        )
+        return (y, dropped), residual
+
+    def _bwd(
+        residual: _SourcePushSemanticFusedMlpResidual,
+        cotangents: tuple[Float[Array, "S T H"], Array],
+    ):
+        dy, _dropped_cotangent = cotangents
+        if isinstance(dy, jax.custom_derivatives.SymbolicZero):
+            return None, *_source_push_semantic_fused_mlp_zero_gradients(residual)
+        gradients = _source_push_semantic_fused_mlp_backward(
+            residual,
+            dy,
+            send_chunks_per_dst=send_chunks_per_dst,
+            mesh=mesh,
+            interpret=interpret,
+        )
+        return None, *gradients
+
+    _custom_vjp.defvjp(_fwd, _bwd)
+    return _custom_vjp(selected_experts, x, route_weights, w13, w2)
+
+
+def _source_push_semantic_fused_mlp_forward(
+    selected_experts: Int[Array, "S T K"],
+    x: Float[Array, "S T H"],
+    route_weights: Float[Array, "S T K"],
+    w13: Float[Array, "Dst E H twoI"],
+    w2: Float[Array, "Dst E I H"],
+    *,
+    capacity: SourcePushSemanticMlpCapacity,
+    capacity_factor: float,
+    send_chunks_per_dst: int,
+    entries_per_dst: int,
+    mesh: Mesh | None,
+    interpret: bool,
+) -> tuple[Float[Array, "S T H"], Int[Array, ""], _SourcePushSemanticFusedMlpResidual]:
+    plan = _build_source_push_semantic_mlp_plan(
+        selected_experts,
+        route_weights,
+        experts_per_rank=w13.shape[1],
+        capacity=capacity,
+        capacity_factor=capacity_factor,
+    )
+    fused_w13 = source_push_semantic_fused_w13(
+        x,
+        w13,
+        plan,
+        send_chunks_per_dst=send_chunks_per_dst,
+        rows_per_expert_capacity=capacity.rows_per_expert,
+        mesh=mesh,
+        interpret=interpret,
+    )
+    fused_w2 = source_push_semantic_fused_w2_return(
+        fused_w13.z,
+        w2,
+        plan,
+        entries_per_dst=entries_per_dst,
+        mesh=mesh,
+        interpret=interpret,
+    )
+    queue_overflow_routes = jnp.maximum(fused_w13.queue_overflow_routes, fused_w2.queue_overflow_routes)
+    layout_overflow_rows = jnp.maximum(fused_w13.layout_overflow_rows, fused_w2.layout_overflow_rows)
+    dropped = plan.dropped_routes + queue_overflow_routes + layout_overflow_rows
+    residual = _SourcePushSemanticFusedMlpResidual(plan, x, fused_w13.z, fused_w2.return_y, w13, w2)
+    return fused_w2.y, dropped, residual
+
+
+def _source_push_semantic_fused_mlp_backward(
+    residual: _SourcePushSemanticFusedMlpResidual,
+    dy: Float[Array, "S T H"],
+    *,
+    send_chunks_per_dst: int,
+    mesh: Mesh | None,
+    interpret: bool,
+) -> tuple[
+    Float[Array, "S T H"],
+    Float[Array, "S T K"],
+    Float[Array, "Dst E H twoI"],
+    Float[Array, "Dst E I H"],
+]:
+    h = _source_push_semantic_fused_mlp_rematerialize_h(residual.z)
+    fused_w2_backward = source_push_semantic_fused_w2_backward(
+        dy.astype(jnp.bfloat16),
+        residual.return_y,
+        h,
+        residual.w2,
+        residual.plan,
+        send_chunks_per_dst=send_chunks_per_dst,
+        rows_per_expert_capacity=residual.z.shape[2],
+        mesh=mesh,
+        interpret=interpret,
+    )
+    dz = source_push_semantic_swiglu_backward_expert_major_jax(
+        fused_w2_backward.d_h,
+        residual.z,
+        fused_w2_backward.valid,
+    ).astype(residual.w13.dtype)
+    fused_w13_backward = source_push_semantic_fused_w13_backward(
+        residual.x,
+        dz,
+        residual.w13,
+        residual.plan,
+        send_chunks_per_dst=send_chunks_per_dst,
+        rows_per_expert_capacity=residual.z.shape[2],
+        mesh=mesh,
+        interpret=interpret,
+    )
+    return (
+        fused_w13_backward.dx.astype(residual.x.dtype),
+        fused_w2_backward.d_route_weight.astype(residual.plan.route_weights.dtype),
+        fused_w13_backward.dw13.astype(residual.w13.dtype),
+        fused_w2_backward.d_w2.astype(residual.w2.dtype),
+    )
+
+
+def _source_push_semantic_fused_mlp_rematerialize_h(
+    z: Float[Array, "Dst E C twoI"],
+) -> Float[Array, "Dst E C I"]:
+    gate, up = jnp.split(z.astype(jnp.float32), 2, axis=-1)
+    return (jax.nn.silu(gate) * up).astype(jnp.bfloat16)
+
+
+def _source_push_semantic_fused_queue_geometry(*, rows_per_src_dst: int, experts_per_rank: int) -> tuple[int, int]:
+    if rows_per_src_dst <= 0:
+        raise ValueError(f"rows_per_src_dst must be positive, got {rows_per_src_dst}")
+    if experts_per_rank <= 0:
+        raise ValueError(f"experts_per_rank must be positive, got {experts_per_rank}")
+    compute_blocks = (rows_per_src_dst + _FUSED_CONFIG.compute_m - 1) // _FUSED_CONFIG.compute_m
+    required_entries_per_dst = compute_blocks + experts_per_rank - 1
+    send_chunks_per_dst = (
+        required_entries_per_dst + _FUSED_CONFIG.compute_blocks_per_send - 1
+    ) // _FUSED_CONFIG.compute_blocks_per_send
+    entries_per_dst = send_chunks_per_dst * _FUSED_CONFIG.compute_blocks_per_send
+    return send_chunks_per_dst, entries_per_dst
 
 
 def _source_push_semantic_mlp_forward(
@@ -396,6 +653,14 @@ def _source_push_semantic_mlp_zero_gradients(
     return dx, d_route_weights, jnp.zeros_like(residual.w13), jnp.zeros_like(residual.w2)
 
 
+def _source_push_semantic_fused_mlp_zero_gradients(
+    residual: _SourcePushSemanticFusedMlpResidual,
+) -> tuple[Array, Array, Array, Array]:
+    plan = residual.plan
+    d_route_weights = jnp.zeros(plan.reverse_route.route_valid.shape, dtype=plan.route_weights.dtype)
+    return jnp.zeros_like(residual.x), d_route_weights, jnp.zeros_like(residual.w13), jnp.zeros_like(residual.w2)
+
+
 def _validate_source_push_semantic_mlp_inputs(
     selected_experts: Array,
     x: Array,
@@ -465,6 +730,31 @@ def _validate_source_push_semantic_mlp_profile(
         raise ValueError(
             f"intermediate dim {intermediate_dim} must be divisible by fixed profile intermediate block "
             f"{_W13_FORWARD_BLOCK_SIZES.intermediate_block}"
+        )
+
+
+def _validate_source_push_semantic_fused_mlp_profile(
+    x: Array,
+    w13: Array,
+    w2: Array,
+    capacity: SourcePushSemanticMlpCapacity,
+) -> None:
+    for name, value in (("x", x), ("w13", w13), ("w2", w2)):
+        if value.dtype != jnp.bfloat16:
+            raise ValueError(
+                f"non-interpreted fused semantic source-push MLP requires bfloat16 {name}, got {value.dtype}"
+            )
+    if capacity.rows_per_expert % _FUSED_CONFIG.compute_m:
+        raise ValueError(
+            f"capacity.rows_per_expert={capacity.rows_per_expert} must be divisible by fused compute row block "
+            f"{_FUSED_CONFIG.compute_m}"
+        )
+    if x.shape[-1] % _FUSED_CONFIG.send_k:
+        raise ValueError(f"hidden dim {x.shape[-1]} must be divisible by fused send block {_FUSED_CONFIG.send_k}")
+    intermediate_dim = w13.shape[-1] // 2
+    if intermediate_dim % _FUSED_CONFIG.block_n:
+        raise ValueError(
+            f"intermediate dim {intermediate_dim} must be divisible by fused output block {_FUSED_CONFIG.block_n}"
         )
 
 

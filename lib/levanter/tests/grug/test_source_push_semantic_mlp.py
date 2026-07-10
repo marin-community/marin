@@ -12,7 +12,9 @@ from levanter.grug._moe.source_push_semantic_mlp import (
     _build_source_push_semantic_mlp_plan,
     _constrain_destination_major,
     _constrain_replicated,
+    _source_push_moe_mlp_semantic_fused_pallas_mgpu,
     _source_push_moe_mlp_semantic_pallas_mgpu,
+    _source_push_semantic_fused_queue_geometry,
     source_push_moe_mlp_semantic_pallas_mgpu,
 )
 
@@ -183,6 +185,129 @@ def test_semantic_mlp_interpret_bfloat16_matches_dense_value():
             atol=0.08,
         )
     assert int(observed_dropped) == 0
+
+
+def test_fused_semantic_mlp_interpret_matches_dense_value_and_gradients_with_duplicate_topk_under_jit():
+    selected_experts = jnp.asarray(
+        [
+            [[0, 0], [1, 3]],
+            [[2, 3], [3, 3]],
+        ],
+        dtype=jnp.int32,
+    )
+    keys = jax.random.split(jax.random.key(17), 5)
+    x = jax.random.normal(keys[0], (2, 2, 256), dtype=jnp.bfloat16) / 8
+    route_weights = jax.random.normal(keys[1], selected_experts.shape, dtype=jnp.bfloat16) / 8
+    w13 = jax.random.normal(keys[2], (2, 2, 256, 256), dtype=jnp.bfloat16) / 16
+    w2 = jax.random.normal(keys[3], (2, 2, 128, 256), dtype=jnp.bfloat16) / 16
+    cotangent = jax.random.normal(keys[4], x.shape, dtype=jnp.bfloat16) / 8
+    capacity = SourcePushSemanticMlpCapacity(rows_per_src_dst=4, rows_per_expert=128)
+    plan = _build_source_push_semantic_mlp_plan(
+        selected_experts,
+        route_weights,
+        experts_per_rank=w13.shape[1],
+        capacity=capacity,
+        capacity_factor=10.0,
+    )
+
+    def observed_loss(x_arg, route_weights_arg, w13_arg, w2_arg):
+        y, dropped = _source_push_moe_mlp_semantic_fused_pallas_mgpu(
+            selected_experts,
+            x_arg,
+            route_weights_arg,
+            w13_arg,
+            w2_arg,
+            capacity=capacity,
+            capacity_factor=10.0,
+            mesh=None,
+            interpret=True,
+        )
+        return jnp.sum(y.astype(jnp.float32) * cotangent.astype(jnp.float32)), (y, dropped)
+
+    def reference_loss(x_arg, route_weights_arg, w13_arg, w2_arg):
+        y = _dense_moe_reference(
+            selected_experts,
+            x_arg,
+            route_weights_arg,
+            w13_arg,
+            w2_arg,
+            plan.reverse_route.route_valid,
+        )
+        return jnp.sum(y.astype(jnp.float32) * cotangent.astype(jnp.float32)), y
+
+    (observed_loss_value, (observed_y, observed_dropped)), observed_grads = jax.jit(
+        jax.value_and_grad(observed_loss, argnums=(0, 1, 2, 3), has_aux=True)
+    )(x, route_weights, w13, w2)
+    (expected_loss_value, expected_y), expected_grads = jax.jit(
+        jax.value_and_grad(reference_loss, argnums=(0, 1, 2, 3), has_aux=True)
+    )(x, route_weights, w13, w2)
+
+    np.testing.assert_allclose(
+        np.asarray(observed_y, dtype=np.float32), np.asarray(expected_y, dtype=np.float32), rtol=0.04, atol=0.04
+    )
+    np.testing.assert_allclose(observed_loss_value, expected_loss_value, rtol=0.04, atol=0.04)
+    for observed_grad, expected_grad in zip(observed_grads, expected_grads, strict=True):
+        np.testing.assert_allclose(
+            np.asarray(observed_grad, dtype=np.float32),
+            np.asarray(expected_grad, dtype=np.float32),
+            rtol=0.1,
+            atol=0.1,
+        )
+    assert int(observed_dropped) == 0
+
+
+def test_fused_semantic_mlp_queue_geometry_covers_expert_fragmentation():
+    send_chunks_per_dst, entries_per_dst = _source_push_semantic_fused_queue_geometry(
+        rows_per_src_dst=65,
+        experts_per_rank=8,
+    )
+
+    assert send_chunks_per_dst == 3
+    assert entries_per_dst == 4 * send_chunks_per_dst
+
+
+def test_fused_semantic_mlp_reports_layout_overflow_in_dropped_accounting():
+    selected_experts = jnp.zeros((2, 1, 1), dtype=jnp.int32)
+    x = jnp.zeros((2, 1, 256), dtype=jnp.bfloat16)
+    route_weights = jnp.ones(selected_experts.shape, dtype=jnp.bfloat16)
+    w13 = jnp.zeros((2, 1, 256, 256), dtype=jnp.bfloat16)
+    w2 = jnp.zeros((2, 1, 128, 256), dtype=jnp.bfloat16)
+    capacity = SourcePushSemanticMlpCapacity(rows_per_src_dst=1, rows_per_expert=64)
+
+    _y, dropped = jax.jit(
+        lambda x_arg, route_weights_arg, w13_arg, w2_arg: _source_push_moe_mlp_semantic_fused_pallas_mgpu(
+            selected_experts,
+            x_arg,
+            route_weights_arg,
+            w13_arg,
+            w2_arg,
+            capacity=capacity,
+            capacity_factor=2.0,
+            mesh=None,
+            interpret=True,
+        )
+    )(x, route_weights, w13, w2)
+
+    assert int(dropped) == 64
+
+
+def test_fused_semantic_mlp_non_interpreted_profile_requires_bfloat16():
+    selected_experts, x, route_weights, w13, w2, _cotangent = _tiny_inputs()
+    capacity = SourcePushSemanticMlpCapacity(rows_per_src_dst=4, rows_per_expert=128)
+    mesh = Mesh(np.asarray(jax.devices("cpu")[:1]), ("expert",), axis_types=(AxisType.Explicit,))
+
+    with pytest.raises(ValueError, match="requires bfloat16 x"):
+        _source_push_moe_mlp_semantic_fused_pallas_mgpu(
+            selected_experts,
+            x,
+            route_weights,
+            w13,
+            w2,
+            capacity=capacity,
+            capacity_factor=1.0,
+            mesh=mesh,
+            interpret=False,
+        )
 
 
 def test_semantic_mlp_reports_router_and_pair_overflow_separately():
