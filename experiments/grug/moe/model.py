@@ -113,7 +113,8 @@ class GrugFp8Config:
     Enabling this runs both expert GEMMs as FP8 grouped matmuls with delayed
     per-tensor scaling ([haliax.quantization.Fp8RaggedDotOp][], Hopper-only) and,
     unless ``wire`` is disabled, carries the EP dispatch/combine collectives as
-    FP8 over the wire with per-token scaling. Requires expert parallelism
+    FP8 over the wire with per-token scaling. Requires 128-divisible hidden and
+    intermediate dims (checked at config time) and expert parallelism
     (expert axis size > 1) with the ring or ragged_all_to_all MoE backend; other
     configurations raise on the first forward pass.
     """
@@ -180,6 +181,12 @@ class GrugModelConfig:
             raise ValueError("num_experts_per_token must be <= num_experts")
         if self.shared_expert_intermediate_dim < 0:
             raise ValueError("shared_expert_intermediate_dim must be non-negative")
+        if self.fp8 is not None and (self.hidden_dim % 128 != 0 or self.intermediate_dim % 128 != 0):
+            raise ValueError(
+                "fp8 requires hidden_dim and intermediate_dim to be multiples of 128 (the FP8 ragged-dot "
+                f"kernel's GEMM alignment contract); got hidden_dim={self.hidden_dim}, "
+                f"intermediate_dim={self.intermediate_dim}"
+            )
         resolve_moe_implementation(self.moe_implementation)
 
     @property

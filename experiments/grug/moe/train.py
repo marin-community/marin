@@ -34,6 +34,7 @@ from levanter.models.lm_model import LmExample
 from levanter.optim import AdamConfig, OptimizerConfig
 from levanter.schedule import BatchSchedule
 from levanter.trainer import TrainerConfig
+from levanter.trainer_state import init_optimizer_for_trainables
 from levanter.utils.flop_utils import lm_flops_per_token
 from levanter.utils.jax_utils import parameter_count
 from levanter.utils.logging import LoadingTimeTrackerIterator
@@ -269,16 +270,23 @@ def _apply_qb_betas(model: Transformer, qb_betas: jax.Array) -> Transformer:
     return eqx.tree_at(lambda t: t.blocks, model, tuple(new_blocks))
 
 
+def _is_overwrite(x) -> bool:
+    return isinstance(x, OverwriteWithGradient)
+
+
 def _ema_update(old: Transformer, new: Transformer, beta: float) -> Transformer:
     """EMA of trainable weights; FP8 op state carries the current step's values.
 
     Quantization statistics (amax histories, scales) are step-local state, not
-    parameters, so averaging them across steps is not meaningful.
+    parameters, so averaging them across steps is not meaningful. The carried
+    scales are calibrated on the raw training weights; EMA weights are assumed
+    close enough in magnitude that re-deriving scales from them is not worth
+    the machinery.
     """
     new_overwrites, new_plain = partition_for_grad_overwrite(new)
     _, old_plain = partition_for_grad_overwrite(old)
     ema_plain = jax.tree_util.tree_map(lambda o, n: beta * o + (1.0 - beta) * n, old_plain, new_plain)
-    return eqx.combine(new_overwrites, ema_plain, is_leaf=lambda x: isinstance(x, OverwriteWithGradient))
+    return eqx.combine(new_overwrites, ema_plain, is_leaf=_is_overwrite)
 
 
 def initial_state(
@@ -291,13 +299,11 @@ def initial_state(
 ) -> GrugTrainState:
     params = mp.cast_to_param(Transformer.init(model_config, key=key))
     num_moe_layers = sum(1 for b in params.blocks if b.mlp is not None)
-    # FP8 quantization state (OverwriteWithGradient) is overwritten each step,
-    # not optimized, so it gets no optimizer moments.
-    _, plain_params = partition_for_grad_overwrite(params)
     return GrugTrainState(
         step=jnp.array(0, dtype=jnp.int32),
         params=params,
-        opt_state=optimizer.init(plain_params),
+        # Excludes OverwriteWithGradient (FP8 op state) from optimizer moments.
+        opt_state=init_optimizer_for_trainables(optimizer, params),
         ema_params=params if ema_beta is not None else None,
         pending_qb_betas=jnp.zeros((num_moe_layers, model_config.num_experts)),
     )
@@ -332,7 +338,11 @@ def _make_train_step(
             qb_ema_params = None
 
         def loss_fn(params):
-            compute_params = mp.cast_to_compute(params)
+            # Cast only ordinary params to compute dtype: the FP8 ops' scales
+            # and amax histories must stay f32, or every step's state update
+            # rounds through bf16.
+            op_state, plain = partition_for_grad_overwrite(params)
+            compute_params = eqx.combine(op_state, mp.cast_to_compute(plain), is_leaf=_is_overwrite)
             return compute_params.next_token_loss(
                 batch.tokens,
                 batch.loss_weight,
@@ -349,6 +359,9 @@ def _make_train_step(
         overwrites, grads = partition_for_grad_overwrite(grads)
         _, plain_params = partition_for_grad_overwrite(qb_params)
         updates, opt_state = optimizer.update(grads, state.opt_state, plain_params)
+        # optax.apply_updates casts p + u back to the param dtype; haliax's
+        # overwrite-aware apply_updates does not, so keep that cast here.
+        updates = jax.tree_util.tree_map(lambda u, p: u.astype(p.dtype), updates, plain_params)
         params = apply_updates(qb_params, updates, overwrites)
 
         if ema_beta is None:
@@ -366,7 +379,7 @@ def _make_train_step(
                 include_per_parameter_norms=watch_config.include_per_parameter_norms,
                 include_histogram=watch_config.include_histograms,
                 split_scan_layers=watch_config.split_scan_layers,
-                params=qb_params,
+                params=plain_params,
                 grads=grads,
                 updates=updates,
                 opt_state=state.opt_state,
@@ -461,7 +474,8 @@ def _run_grug_local(config: GrugRunConfig) -> None:
             path_override=config.trainer.sharding_dump_path,
         )
 
-        levanter.tracker.log_summary({"parameter_count": parameter_count(state.params)})
+        _, plain_params = partition_for_grad_overwrite(state.params)
+        levanter.tracker.log_summary({"parameter_count": parameter_count(plain_params)})
 
         flops_per_example, flops_summary = _compute_flops(model_config=config.model)
         levanter.tracker.log_summary(flops_summary)
