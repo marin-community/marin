@@ -6,10 +6,10 @@
 //!
 //! A federated cluster keeps its own finelog and also relays every log line to one
 //! global store, so `iris --cluster=<hub> job logs` reads a job that ran anywhere.
-//! The relay lives here, in the server that already owns the segment layout and the
-//! durability watermark, rather than in a client tailing it over RPC: it ships a
-//! whole multi-key batch in one [`PushLogsBulk`] round trip, so throughput no longer
-//! scales with the number of distinct log keys in flight.
+//! The relay lives in the server, which already owns the segment layout and the
+//! durability watermark: it scans straight out of the segments and ships a whole
+//! multi-key batch in one [`PushLogsBulk`] round trip, so throughput is bounded by
+//! row volume rather than by the number of distinct log keys in flight.
 //!
 //! # Credential
 //!
@@ -394,16 +394,16 @@ where
             // The scan reported its oldest locally-readable row. Anything below it was
             // archived to remote storage while we lagged, and no scan here can reach
             // it — jump the cursor and say how much was skipped.
-            if let Some(evicted_to) = batch.evicted_below {
-                let skipped = evicted_to - cursor;
+            if let Some(resume_at) = batch.resume_at {
+                let skipped = resume_at - cursor;
                 progress.skipped_seqs += skipped;
                 tracing::warn!(
                     cursor,
                     skipped,
-                    resume_at = evicted_to,
+                    resume_at,
                     "finelog forwarder: rows evicted before they were forwarded; skipping ahead"
                 );
-                cursor = evicted_to;
+                cursor = resume_at;
                 if !self.persist_cursor(cursor) {
                     return cursor;
                 }
@@ -499,8 +499,8 @@ where
             .await
             .map_err(|e| StatsError::Internal(format!("log snapshot task panicked: {e}")))??;
 
-        let evicted_below = resume_after_eviction(cursor, snapshot.min_seq);
-        let read_from = evicted_below.unwrap_or(cursor);
+        let resume_at = resume_after_eviction(cursor, snapshot.min_seq);
+        let read_from = resume_at.unwrap_or(cursor);
 
         let provider = NamespaceProvider::build(snapshot.schema, &snapshot.paths)
             .map_err(|e| StatsError::Internal(format!("build log provider: {e}")))?;
@@ -532,10 +532,7 @@ where
         .await
         .map_err(|e| StatsError::Internal(format!("log read failed: {e}")))?;
 
-        Ok(Batch {
-            rows,
-            evicted_below,
-        })
+        Ok(Batch { rows, resume_at })
     }
 
     /// Ship one chunk and wait for the hub to durably ack it, retrying transient
@@ -630,7 +627,7 @@ async fn wait_or_stop(backoff: Duration, stop: &mut watch::Receiver<bool>) -> bo
 /// had fallen below the oldest local row — the seq to resume from instead.
 struct Batch {
     rows: Vec<LogRow>,
-    evicted_below: Option<i64>,
+    resume_at: Option<i64>,
 }
 
 /// The seq to resume from when the next row after `cursor` is already gone: `min_seq`

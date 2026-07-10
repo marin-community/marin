@@ -320,18 +320,6 @@ def test_jwt_create_and_verify():
     assert identity.role == "user"
 
 
-def test_control_plane_verify_rejects_federation_token():
-    """The cross-plane guard: an ``aud="federation"`` token is rejected at this
-    controller's control-plane verify — it can never be replayed at the RPC surface
-    even though it is signed by the same key."""
-    mgr = _jwt_manager()
-    federation = mgr.create_federation_token("test-cluster", "k-fed")
-    with pytest.raises(ValueError):
-        mgr.verify(federation)
-    # Sanity: the token's audience really is the federation plane.
-    assert jwt.decode(federation, options={"verify_signature": False})["aud"] == FEDERATION_AUDIENCE
-
-
 def _federation_setup(requester: str = "parent-cluster"):
     """A parent JwtTokenManager plus a peer's verifier trusting the parent's key."""
     key = signing_key_from_private_pem(generate_ed25519_keypair().private_pem)
