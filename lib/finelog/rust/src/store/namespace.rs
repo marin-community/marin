@@ -340,11 +340,6 @@ impl Namespace {
     /// compaction takes the write side before unlinking a file, so a query that
     /// captured the pre-compaction paths keeps scanning the files it snapshotted.
     ///
-    /// A reader resuming from a stored cursor needs both halves: the paths bound what
-    /// it can scan, and `min_seq` tells it whether rows below that bound were evicted
-    /// out from under it. Reading them separately would let an eviction land in
-    /// between and hide the gap.
-    ///
     /// Only SEALED segments appear: queries see flushed data, never the in-RAM buffer.
     pub fn query_snapshot(&self) -> SegmentSnapshot {
         let inner = self.inner.lock().unwrap();
