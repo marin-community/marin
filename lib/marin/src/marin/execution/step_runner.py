@@ -25,6 +25,7 @@ from fray.client import JobHandle, JobStatus
 from fray.current_client import _current_client_var, current_client, set_current_client
 from fray.local_backend import LocalJobHandle
 from fray.types import Entrypoint, JobRequest, ResourceConfig, create_environment
+from iris.runtime.multigpu import IRIS_MULTIGPU_PROCESS_COUNT_ENV, IRIS_MULTIGPU_PROCESS_INDEX_ENV
 from rigging.filesystem import StoragePath, url_to_fs
 from rigging.log_setup import configure_logging
 
@@ -62,11 +63,10 @@ logger = logging.getLogger(__name__)
 # instead shares the task's IRIS_TASK_ID and gets its own global rank in
 # IRIS_MULTIGPU_PROCESS_INDEX (= task_index * nproc + local_rank). StepRunner reads
 # these directly rather than through get_job_info(), which exposes only the
-# per-task identity and not the per-GPU rank the supervised path needs (#7080).
+# per-task identity and not the per-GPU rank the supervised path needs (#7080). The
+# IRIS_MULTIGPU_* names come from iris.runtime.multigpu, their canonical producer.
 IRIS_TASK_ID_ENV = "IRIS_TASK_ID"
 IRIS_NUM_TASKS_ENV = "IRIS_NUM_TASKS"
-IRIS_MULTIGPU_PROCESS_INDEX_ENV = "IRIS_MULTIGPU_PROCESS_INDEX"
-IRIS_MULTIGPU_PROCESS_COUNT_ENV = "IRIS_MULTIGPU_PROCESS_COUNT"
 
 
 # ---------------------------------------------------------------------------
