@@ -6,8 +6,8 @@ import dataclasses
 import pytest
 
 from experiments.datakit_testbed.tokenizer_moe_comparison import (
-    DIGITS_FAMILIES,
     GRUG_RUNGS,
+    TOKENIZER_FAMILIES,
     ComparisonCell,
     TokenizerMoeComparisonConfig,
     comparison_cells,
@@ -28,13 +28,13 @@ def _config(**overrides) -> TokenizerMoeComparisonConfig:
     return dataclasses.replace(config, **overrides)
 
 
-def test_digits_sweep_builds_all_matched_comparison_cells() -> None:
+def test_default_sweep_builds_complete_matched_comparison_matrix() -> None:
     cells = comparison_cells(_config())
 
-    assert len(cells) == 8
+    assert len(cells) == 16
     assert {(cell.family, cell.vocab_size, cell.rung.hidden_dim) for cell in cells} == {
         (family, vocab_size, hidden_dim)
-        for family in DIGITS_FAMILIES
+        for family in TOKENIZER_FAMILIES
         for vocab_size in (8_192, 32_768)
         for hidden_dim in (512, 768)
     }
@@ -51,7 +51,7 @@ def test_tokenizer_families_share_canonical_grug_architecture(
 ) -> None:
     models = [
         grug_model(ComparisonCell(family=family, vocab_size=vocab_size, rung=GRUG_RUNGS[hidden_dim]))
-        for family in DIGITS_FAMILIES
+        for family in TOKENIZER_FAMILIES
         for vocab_size in (8_192, 32_768)
     ]
 

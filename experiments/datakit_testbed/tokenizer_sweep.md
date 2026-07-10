@@ -103,28 +103,14 @@ one invocation:
 | d512 | 6 | 256 | 64 / 4 | 512 x 4096 | 399 | 836,763,648 |
 | d768 | 8 | 384 | 64 / 4 | 512 x 4096 | 1,292 | 2,709,520,384 |
 
-Rerun all eight place-digits cells (GPT-OSS and Llama, 8k and 32k, d512 and
-d768) against the existing Europe cache:
-
-```bash
-.venv/bin/iris --cluster marin job run --no-wait \
-  --job-name tokenizer-moe-place-digits-canonical-adamh-20260710 \
-  --priority interactive --region europe-west4 \
-  --tpu v6e-4 --enable-extra-resources --preemptible \
-  -- uv run python experiments/datakit_testbed/tokenizer_moe_comparison.py \
-    --cache_prefix gs://marin-eu-west4/data/datakit/tokenized/tokenizer-sweep-20260526 \
-    --output_prefix gs://marin-eu-west4 \
-    --tokenizer_run_id tokenizer-sweep-20260526 \
-    --region europe-west4 \
-    --tpu_type v6e-8 \
-    --version canonical-adamh-20260710 \
-    --families '[gpt-oss-place-digits,llama-place-digits]'
-```
-
 `--tpu_type` may select another TPU topology with at least four chips; it is not
 restricted to v6e-8. The launcher pins child compute to `--region` and rejects
-cache, output, and compute-region mismatches before submitting work. To rerun
-the complete vanilla-plus-digits comparison, use:
+cache, output, and compute-region mismatches before submitting work.
+
+The comparison must rerun the complete 16-cell matrix: GPT-OSS, Llama, and
+both place-digits variants, each at 8k and 32k vocabulary and at d512 and d768.
+Do not compare newly trained digits cells against vanilla controls from a
+different Grug code revision. Submit the complete matrix through Iris with:
 
 ```bash
 .venv/bin/iris --cluster marin job run --no-wait \
@@ -140,10 +126,6 @@ the complete vanilla-plus-digits comparison, use:
     --version canonical-adamh-all-20260710 \
     --families '[gpt-oss,llama,gpt-oss-place-digits,llama-place-digits]'
 ```
-
-Use the complete command for a comparison across a newer Grug code revision.
-The digits-only command is a repair command for controls produced from the same
-model-code revision.
 
 The command discovers only cache components with a completed
 `train/.stats.json`, requires exactly `--expected_sources` components for both

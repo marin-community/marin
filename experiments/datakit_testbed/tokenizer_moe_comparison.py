@@ -102,7 +102,7 @@ class TokenizerMoeComparisonConfig:
     region: str
     tpu_type: str
     version: str
-    families: list[str] = field(default_factory=lambda: list(DIGITS_FAMILIES))
+    families: list[str] = field(default_factory=lambda: list(TOKENIZER_FAMILIES))
     vocab_sizes: list[int] = field(default_factory=lambda: list(VOCAB_SIZES))
     hidden_dims: list[int] = field(default_factory=lambda: list(HIDDEN_DIMS))
     train_cache_label: str = "train50b"
