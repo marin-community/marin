@@ -1659,3 +1659,35 @@ author: dlwh
   - The checked-in VJP bridge is a correctness milestone, not the final performance implementation: forward uses QuACK, while backward still lowers through the existing Pallas-Triton ragged-dot kernels. Porting QuACK `gemm_dgated` and grouped weight-gradient kernels remains necessary if the bridge does not clear 20 MFU.
 - Next action:
   - Babysit parent `/dlwh/iris-run-job-20260710-204625`. On finite success, run the full 24-layer batch512/m16 target comparison with `expert_axis=1`; on failure, fix the first MPMD/FFI/sharding/memory error before any performance claim.
+
+### 2026-07-10 13:54 PDT - distributed no-EP gate and full target launch
+- Hypothesis: The no-EP QuACK/Sonic path remains finite under four-host explicit MPMD pipeline execution, so the 24-layer batch512/m16 target can measure whether eliminating ring expert dispatch offsets FSDP expert all-gather and the reference backward bridge.
+- Commit Hash: `6a413115d1` (`[docs] Record SonicMoE no-EP bring-up`).
+- Commands:
+  - Reduced gate: the distributed-smoke command in the preceding entry.
+  - Full comparison: `TF_GPU_ALLOCATOR=cuda_malloc_async experiments/grug/moe/run_cw_jaxpp_may_d2560.sh --submit --cluster cw-rno2a --kubeconfig "$HOME/.kube/coreweave-iris" --schedule std_1f1b --implementation explicit_mpmd --physical-stages 4 --logical-stages 4 --microbatches 16 --nodes 4 --gpus-per-replica 8 --expert-axis 1 --layers 24 --experts 64 --top-k 4 --batch 512 --seq-len 4096 --vocab-size 8192 --attention-implementation gpu_fa4_cute --ragged-dot-implementation triton --ragged-dot-num-warps 8 --moe-implementation sonic --loss-implementation xla --steps 8 --tracker wandb --xla-memory-fraction 0.65 --remat save_moe --run-id jaxpp-rno2a-sonicquack-l24-e64k4-b512-s4096-p4m16-20260710-2054`.
+- Results:
+  - Reduced parent `/dlwh/iris-run-job-20260710-204625` and its four-task child succeeded terminally. W&B: <https://wandb.ai/marin-community/marin_moe/runs/jaxpp-rno2a-sonicquack-smoke-l8-e64k4-b32-s4096-p4m4-20260710-1350>.
+  - The three-step gate finished with finite loss `8.940884590148926`. Its two throughput samples reported mean MFU `6.0980`, `405,321.78` tokens/s, and `0.32338s` duration; this deliberately underfilled eight-layer smoke is a correctness gate, not a full-model performance result.
+  - Full target parent `/dlwh/iris-run-job-20260710-205417` is submitted on `cw-rno2a`.
+- Interpretation:
+  - The distributed FFI registration, no-EP FSDP materialization, four-stage pipeline forward/backward, optimizer update, and W&B finalization all work across 32 H100s. This clears the integration gate for an exact-shape performance comparison.
+- Next action:
+  - Babysit the full parent to terminal state and compare its exact MFU distribution against the `16.2004883` ring-EP baseline. If it remains below `20`, capture a short profile before changing the backward implementation or expert weight layout.
+
+### 2026-07-10 14:10 PDT - no-EP full comparison and profile launch
+- Hypothesis: Eliminating ring expert dispatch will improve the exact 24-layer target despite FSDP expert materialization and the Pallas-Triton VJP bridge; if it does not, an exact-shape profile will identify whether weight collectives/layouts or backward grouped GEMMs dominate the regression.
+- Commit Hash: `6a413115d1` (`[docs] Record SonicMoE no-EP bring-up`).
+- Commands:
+  - Full comparison: the 24-layer batch512/m16 command in the preceding entry.
+  - Profile: the identical command with `--steps 14 --profiler-steps 4 --run-id jaxpp-rno2a-profile-sonicquack-l24-e64k4-b512-s4096-p4m16-20260710-2109`.
+- Results:
+  - Full parent `/dlwh/iris-run-job-20260710-205417` and all four child tasks succeeded. W&B: <https://wandb.ai/marin-community/marin_moe/runs/jaxpp-rno2a-sonicquack-l24-e64k4-b512-s4096-p4m16-20260710-2054>.
+  - Mean MFU was `14.8455`, with p10/p50/p90 `14.8356/14.8396/14.8842` over seven samples. The final sample reported `334,671.66` tokens/s, `6.26630s` duration, and finite loss `7.803744316101074`.
+  - The no-EP result is `1.3549` MFU points (`8.36%`) below the `16.2004883` ring-EP winner at the identical model, batch, sequence length, attention backend, schedule, and device count.
+  - Profile parent `/dlwh/iris-run-job-20260710-210953` is submitted on `cw-rno2a`.
+- Interpretation:
+  - Removing EP does not currently pay for the no-EP path's extra local work. The QuACK forward kernel is validated, so likely costs are FSDP materialization, expert weight layout transposes, and the Pallas-Triton reference VJP bridge.
+  - Capacity and schedule sweeps are lower-value until the profile attributes this regression. The same batch and microbatch count already saturate the ring baseline.
+- Next action:
+  - Download and summarize the profile artifact. Use the exact hotspots to choose between kernel-native expert storage/layout, QuACK backward kernels, or a collective/sharding correction; retain ring EP as the performance baseline until no-EP exceeds it.
