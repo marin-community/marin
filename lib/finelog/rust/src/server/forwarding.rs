@@ -324,6 +324,13 @@ where
                 .await;
             progress.report(cursor, persisted);
 
+            // `drain_to` waits on `stop` while backing off, and a `changed()` that
+            // returns marks the value seen. The select below would then wait for a
+            // second change that never comes, so read the value itself, which no
+            // `changed()` clears.
+            if *stop.borrow() {
+                break;
+            }
             tokio::select! {
                 _ = stop.changed() => break,
                 changed = persisted_rx.changed() => {
@@ -977,7 +984,10 @@ mod tests {
         /// fails the test rather than hanging it.
         async fn finish(self) {
             self.stop.send(true).unwrap();
-            let _ = tokio::time::timeout(Duration::from_secs(5), self.task).await;
+            tokio::time::timeout(Duration::from_secs(5), self.task)
+                .await
+                .expect("forwarder did not stop within 5s")
+                .expect("forwarder task panicked");
         }
     }
 

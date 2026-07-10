@@ -73,9 +73,9 @@ def log_client(embedded_log_server):
 def log_service(embedded_log_server) -> LogServiceClientSync:
     """A LogService RPC client against the per-test embedded server.
 
-    The native server makes pushed log entries immediately fetchable (RAM
-    buffer), so push→fetch is synchronously visible within a test without any
-    manual flush. The sync client exposes ``push_logs(request)`` /
+    ``push_logs`` returns only once the batch is sealed into a segment, which is
+    what a read scans, so push→fetch is synchronously visible within a test
+    without any manual flush. The sync client exposes ``push_logs(request)`` /
     ``fetch_logs(request)``.
     """
     return LogServiceClientSync(address=embedded_log_server.address)
