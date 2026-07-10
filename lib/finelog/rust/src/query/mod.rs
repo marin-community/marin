@@ -397,8 +397,8 @@ pub async fn fetch_log_rows(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::server::test_support::unique_dir;
     use crate::store::ipc::{decode_one_record_batch, encode_ipc};
+    use crate::test_support::unique_dir;
     use datafusion::arrow::array::Int64Array;
 
     #[test]

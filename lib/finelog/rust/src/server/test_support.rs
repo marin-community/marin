@@ -20,6 +20,7 @@ use crate::proto::finelog::logging::LogServiceClient;
 use crate::server::auth::AuthPolicy;
 use crate::server::{build_app_with_config, ServerConfig, MAX_MESSAGE_BYTES};
 use crate::store::Store;
+use crate::test_support::unique_dir;
 
 /// Fixed Ed25519 test keypairs (PKCS8 private + SPKI public PEM), generated once with
 /// `openssl genpkey -algorithm ed25519`. `A` is the keypair a verifier is configured to
@@ -34,19 +35,6 @@ pub const PRIV_UNTRUSTED: &str = "-----BEGIN PRIVATE KEY-----\nMC4CAQAwBQYDK2VwB
 /// A plaintext Connect transport. Production speaks TLS; everything above the
 /// transport is the same code.
 pub type TestTransport = ServiceTransport<HyperClient<HttpConnector, ClientBody>>;
-
-/// A fresh directory under the system temp dir, unique per call.
-pub fn unique_dir(tag: &str) -> std::path::PathBuf {
-    let dir = std::env::temp_dir().join(format!(
-        "finelog_{tag}_{}",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
-    std::fs::create_dir_all(&dir).unwrap();
-    dir
-}
 
 /// A disk-backed store with its flush/maintenance tasks running, so a push becomes
 /// query-visible exactly as it does in production.

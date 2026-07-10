@@ -245,8 +245,8 @@ pub struct Forwarder<T = HttpsTransport> {
     minter: TokenMinter,
     config: ForwardingConfig,
     /// How far behind the durability mark the cursor may fall before the forwarder
-    /// abandons the backlog and jumps to its freshest window. Defaults to
-    /// [`MAX_FORWARD_LAG_SEQS`]; a test shrinks it to reach that path.
+    /// abandons the backlog and jumps to its freshest window. [`MAX_FORWARD_LAG_SEQS`]
+    /// unless overridden.
     max_lag_seqs: i64,
 }
 
@@ -632,13 +632,14 @@ struct Batch {
     evicted_below: Option<i64>,
 }
 
-/// The seq to resume from when `cursor` sits below `min_seq`, the oldest row the
-/// local segments still hold. Those rows live only in the remote archive now, which
-/// no scan here reads, so a forwarder that waits for them waits forever.
+/// The seq to resume from when the next row after `cursor` is already gone: `min_seq`
+/// is the oldest row the local segments still hold, and anything below it lives only in
+/// the remote archive, which no scan here reads. A forwarder that waits for those rows
+/// waits forever.
 ///
-/// `None` means nothing was lost: the cursor is at or above the oldest local row, or
-/// there are no local segments at all (an empty store, whose watermark cannot be
-/// behind anything).
+/// `None` means nothing was lost — `cursor + 1` is still present, so the cursor may sit
+/// one below `min_seq` — or there are no local segments at all (an empty store, whose
+/// watermark cannot be behind anything).
 fn resume_after_eviction(cursor: i64, min_seq: Option<i64>) -> Option<i64> {
     min_seq
         .filter(|min_seq| cursor + 1 < *min_seq)
@@ -913,20 +914,32 @@ mod tests {
             .collect()
     }
 
-    /// Poll `store`'s watermark for `target` until it reaches `expected`. Reads local
-    /// state only, so a test can tell "the forwarder is done" without issuing an RPC
-    /// that would perturb the target's request count.
-    async fn wait_for_cursor(store: &Store, target: &str, expected: i64) {
+    /// Poll `condition` until it holds, or fail after five seconds with `describe()`, so
+    /// a wedged forwarder fails the test rather than hanging it.
+    async fn poll_until(mut condition: impl FnMut() -> bool, describe: impl Fn() -> String) {
         for _ in 0..200 {
-            if store.forward_cursor(target).unwrap() == Some(expected) {
+            if condition() {
                 return;
             }
             tokio::time::sleep(Duration::from_millis(25)).await;
         }
-        panic!(
-            "watermark never reached {expected} (stuck at {:?})",
-            store.forward_cursor(target).unwrap()
-        );
+        panic!("{}", describe());
+    }
+
+    /// Wait for `store`'s watermark for `target` to reach `expected`. Reads local state
+    /// only, so a test can tell "the forwarder is done" without issuing an RPC that
+    /// would perturb the target's request count.
+    async fn wait_for_cursor(store: &Store, target: &str, expected: i64) {
+        poll_until(
+            || store.forward_cursor(target).unwrap() == Some(expected),
+            || {
+                format!(
+                    "watermark never reached {expected} (stuck at {:?})",
+                    store.forward_cursor(target).unwrap()
+                )
+            },
+        )
+        .await;
     }
 
     /// Poll `counter` until the hub has served at least `expected` requests. Lets a
@@ -934,16 +947,16 @@ mod tests {
     /// would have produced it, so the assertion cannot pass merely because nothing has
     /// happened yet.
     async fn wait_for_requests(counter: &AtomicUsize, expected: usize) {
-        for _ in 0..200 {
-            if counter.load(Ordering::SeqCst) >= expected {
-                return;
-            }
-            tokio::time::sleep(Duration::from_millis(25)).await;
-        }
-        panic!(
-            "hub never served {expected} requests (saw {})",
-            counter.load(Ordering::SeqCst)
-        );
+        poll_until(
+            || counter.load(Ordering::SeqCst) >= expected,
+            || {
+                format!(
+                    "hub never served {expected} requests (saw {})",
+                    counter.load(Ordering::SeqCst)
+                )
+            },
+        )
+        .await;
     }
 
     /// A forwarder running on its own task, stopped and joined by [`Self::finish`].

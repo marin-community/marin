@@ -24,7 +24,7 @@ from rigging.timing import Duration, ExponentialBackoff, RateLimiter, Timestamp,
 from sqlalchemy import Row
 
 from iris.cluster.bundle import BundleStore
-from iris.cluster.config import BackendConfig, ClusterFinelogConfig, PeerConfig
+from iris.cluster.config import BackendConfig, PeerConfig
 from iris.cluster.controller import ops, reads, writes
 from iris.cluster.controller.audit_logging import log_event
 from iris.cluster.controller.auth import ControllerAuth, FederationTokenProvider, request_auth_policy
@@ -262,17 +262,12 @@ class ControllerConfig:
     cluster_id: str = ""
     """This cluster's real federation identity (from the cluster config ``name``).
 
-    Sent as the ``requester_id`` on each ``FederationSync`` and stamped on relayed
-    finelog batches so a shared hub namespaces this cluster's logs. Distinct from the
-    ``'local'`` sentinel the ``cluster`` column uses for this controller's own rows.
-    Required once this cluster hands jobs off; unused otherwise."""
+    Sent as the ``requester_id`` on each ``FederationSync``. Required once this cluster
+    hands jobs off; unused otherwise."""
 
     peers: dict[str, PeerConfig] = field(default_factory=dict)
     """Federation peers (peer id -> declaration). Empty leaves federation inert:
     no peer connections, no heartbeat, an empty ListPeers view."""
-
-    finelog: ClusterFinelogConfig = field(default_factory=ClusterFinelogConfig)
-    """This cluster's finelog config: the deployment that serves this cluster's logs."""
 
     federation_heartbeat_interval: Duration = field(default_factory=lambda: DEFAULT_HEARTBEAT_INTERVAL)
     """How often the federation capability heartbeat probes each peer."""
