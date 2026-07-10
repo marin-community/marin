@@ -203,7 +203,14 @@ def _accumulate_tables(
         yield pa.concat_tables(chunks, promote_options="permissive")
 
 
-def _s3_filesystem_kwargs() -> dict[str, Any]:
+# Finite network timeouts for the native S3FileSystem, matching the bounds
+# rigging's fsspec factory injects: an unbounded dead socket wedges a shard's
+# upload forever instead of failing it into a retry.
+_S3_NATIVE_CONNECT_TIMEOUT = 30
+_S3_NATIVE_REQUEST_TIMEOUT = 120
+
+
+def _s3_filesystem_kwargs() -> dict[str, str | bool | int]:
     """Translate the ambient fsspec S3 config into pyarrow S3FileSystem kwargs.
 
     Iris exports the store's connection settings for s3fs via ``FSSPEC_S3``
@@ -215,7 +222,10 @@ def _s3_filesystem_kwargs() -> dict[str, Any]:
     """
     conf = fsspec.config.conf.get("s3") or {}
     client_kwargs = conf.get("client_kwargs") or {}
-    kwargs: dict[str, Any] = {}
+    kwargs: dict[str, str | bool | int] = {
+        "connect_timeout": _S3_NATIVE_CONNECT_TIMEOUT,
+        "request_timeout": _S3_NATIVE_REQUEST_TIMEOUT,
+    }
     endpoint = conf.get("endpoint_url") or client_kwargs.get("endpoint_url") or os.environ.get("AWS_ENDPOINT_URL")
     if endpoint:
         kwargs["endpoint_override"] = endpoint
@@ -253,10 +263,9 @@ def _pyarrow_filesystem(path: str) -> tuple[pa_fs.FileSystem, str] | None:
 def _parquet_sink(temp_path: str):
     """Yield ``(where, filesystem)`` for ``pq.ParquetWriter``/``pq.write_table``.
 
-    Prefers a native pyarrow filesystem (flat-memory streaming; CoreWeave's
-    virtual-address requirement is satisfied via ``force_virtual_addressing``,
-    see :func:`_s3_filesystem_kwargs`). Falls back to a buffered fsspec handle
-    (``filesystem=None``) for protocols pyarrow cannot address.
+    Prefers a native pyarrow filesystem for flat-memory streaming; falls back
+    to a buffered fsspec handle (``filesystem=None``) for protocols pyarrow
+    cannot address.
     """
     native = _pyarrow_filesystem(temp_path)
     if native is not None:

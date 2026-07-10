@@ -199,10 +199,9 @@ def test_pyarrow_filesystem_selection():
 def test_s3_filesystem_kwargs_from_fsspec_conf(monkeypatch):
     """The iris-exported FSSPEC_S3 block maps onto native S3FileSystem kwargs.
 
-    CoreWeave object storage rejects path-style requests, so the virtual
-    addressing style configured for s3fs must translate to
-    ``force_virtual_addressing`` — losing it reintroduces the HTTP 400s that
-    #7027 originally worked around.
+    CoreWeave object storage rejects path-style requests with HTTP 400, so
+    the virtual addressing style configured for s3fs must translate to
+    ``force_virtual_addressing`` on the native filesystem.
     """
     monkeypatch.setitem(
         fsspec.config.conf,
@@ -214,11 +213,11 @@ def test_s3_filesystem_kwargs_from_fsspec_conf(monkeypatch):
         },
     )
     kwargs = _s3_filesystem_kwargs()
-    assert kwargs == {
-        "endpoint_override": "https://object.example.coreweave.com",
-        "region": "auto",
-        "force_virtual_addressing": True,
-    }
+    assert kwargs["endpoint_override"] == "https://object.example.coreweave.com"
+    assert kwargs["region"] == "auto"
+    assert kwargs["force_virtual_addressing"] is True
+    assert kwargs["connect_timeout"] > 0
+    assert kwargs["request_timeout"] > 0
 
     monkeypatch.setitem(fsspec.config.conf, "s3", {})
     monkeypatch.delenv("AWS_ENDPOINT_URL", raising=False)
