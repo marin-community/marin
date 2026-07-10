@@ -360,7 +360,7 @@ impl Namespace {
 
     /// Subscribe to the durability high-water mark. The current value is already
     /// marked seen, so a caller must read `borrow()` before awaiting `changed()`.
-    pub fn persisted_seq(&self) -> watch::Receiver<i64> {
+    pub fn watch_persisted_seq(&self) -> watch::Receiver<i64> {
         self.persisted_seq.subscribe()
     }
 

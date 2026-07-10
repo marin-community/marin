@@ -479,8 +479,10 @@ impl Store {
     /// with `seq <= value` has been sealed into a segment, so it is visible to a
     /// scan unless it has since been evicted. The current value counts as already
     /// seen, so read `borrow()` before awaiting `changed()`.
-    pub fn log_persisted_seq(&self) -> Result<tokio::sync::watch::Receiver<i64>, StatsError> {
-        Ok(self.require_engine(LOG_NAMESPACE_NAME)?.persisted_seq())
+    pub fn watch_log_persisted_seq(&self) -> Result<tokio::sync::watch::Receiver<i64>, StatsError> {
+        Ok(self
+            .require_engine(LOG_NAMESPACE_NAME)?
+            .watch_persisted_seq())
     }
 
     /// The `log` seq below which this store will never send to `target` again.

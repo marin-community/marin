@@ -222,13 +222,10 @@ fn build_client(target: &str) -> Result<LogServiceClient<HttpsTransport>, String
         .wrap_connector(http);
 
     let transport = ServiceTransport::new(HyperClient::builder(TokioExecutor::new()).build(https));
-    Ok(LogServiceClient::new(transport, client_config(uri)))
-}
-
-fn client_config(uri: http::Uri) -> ClientConfig {
-    ClientConfig::new(uri)
+    let config = ClientConfig::new(uri)
         .proto()
-        .with_default_max_message_size(MAX_MESSAGE_BYTES)
+        .with_default_max_message_size(MAX_MESSAGE_BYTES);
+    Ok(LogServiceClient::new(transport, config))
 }
 
 /// Everything the forward loop needs, resolved once at startup.
@@ -281,7 +278,7 @@ where
     /// Run until `stop` latches. Errors are logged and retried; this never returns
     /// an error, because a store whose relay is broken must keep serving.
     pub async fn run(&self, mut stop: watch::Receiver<bool>) {
-        let mut persisted_rx = match self.store.log_persisted_seq() {
+        let mut persisted_rx = match self.store.watch_log_persisted_seq() {
             Ok(rx) => rx,
             Err(e) => {
                 tracing::error!(error = %e, "finelog forwarder: no log namespace; not forwarding");
@@ -374,7 +371,10 @@ where
     }
 
     /// Forward everything in `(cursor, persisted]`, returning the new cursor.
-    /// A read or push failure returns the cursor it reached; the caller retries.
+    ///
+    /// Returns early on a read failure, on a push the hub could not take, or on `stop`,
+    /// leaving the cursor where it got to for the caller to retry from. A push the hub
+    /// *refused* is not such a failure: the chunk is skipped and the drain continues.
     async fn drain_to(
         &self,
         mut cursor: i64,
@@ -847,7 +847,7 @@ mod tests {
 
         /// The last seq the source has made durable.
         fn tip(&self) -> i64 {
-            *self.source.log_persisted_seq().unwrap().borrow()
+            *self.source.watch_log_persisted_seq().unwrap().borrow()
         }
 
         fn cursor(&self) -> Option<i64> {

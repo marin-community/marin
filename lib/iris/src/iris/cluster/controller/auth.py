@@ -21,9 +21,11 @@ edit-config-and-reload (rebuild the map) and takes effect on the next request.
 Per-plane audience discipline (RFC 8725) is the load-bearing security invariant:
 every minted token names exactly one ``aud`` (plane), and the control-plane
 verifier requires its ``aud`` to be one of :data:`CONTROL_PLANE_AUDIENCES`. A
-federation (``aud="federation"``) token — or any other foreign-plane audience —
-replayed at this controller's RPC surface is therefore rejected by the verifier
-before any policy runs.
+foreign-plane audience replayed at this controller's RPC surface therefore never
+becomes a control-plane identity. A federation (``aud="federation"``) token from a
+trusted peer does authenticate, via the separate
+:class:`FederationTokenVerifier` — as a ``federation-peer`` identity that
+:func:`~iris.rpc.auth.authorize_method` admits only on the federation RPC subset.
 """
 
 import dataclasses
