@@ -156,12 +156,16 @@ def test_fused_w2_backward_generation_accounting_tracks_source_owned_slot_reuse(
         0,
         hidden_dim=2560,
         intermediate_dim=1280,
+        experts_per_rank=8,
+        ep_size=8,
         send_chunks_per_dst=24,
     )
     reused = source_push_semantic_fused_w2_backward_generation_accounting(
         CONFIG.inbox_slots,
         hidden_dim=2560,
         intermediate_dim=1280,
+        experts_per_rank=8,
+        ep_size=8,
         send_chunks_per_dst=24,
     )
     assert (first.slot, first.generation, first.empty_generation, first.released_generation) == (0, 1, 1, 2)
@@ -169,6 +173,7 @@ def test_fused_w2_backward_generation_accounting_tracks_source_owned_slot_reuse(
     assert reused.generation == 2
     assert reused.send_done_generation == 2 * first.send_done_generation
     assert reused.consumer_done_generation == 2 * first.consumer_done_generation
+    assert first.consumer_done_generation == 4
     assert reused.empty_generation == first.released_generation
     assert CONFIG.consumer_programs_per_source(8) == 4
 
@@ -245,3 +250,6 @@ def test_fused_w2_backward_kernel_contract_uses_peer_lane_transport_and_explicit
     assert "all_gather" not in source
     assert "dy_expert" not in source
     assert "pl.dot" not in source
+    assert "_compute_window_dw2" in source
+    assert "dw2_jobs = dw2_output_tiles" in source
+    assert "dw2_turn" not in source

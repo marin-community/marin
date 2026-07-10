@@ -12,6 +12,7 @@ from levanter.grug._moe.source_push_semantic_fused_w2_return import (
     SourcePushSemanticFusedW2ReturnConfig,
     source_push_semantic_fused_w2_return,
     source_push_semantic_fused_w2_return_metadata_jax,
+    source_push_semantic_fused_w2_return_schedule,
 )
 
 
@@ -24,6 +25,22 @@ ROWS_PER_EXPERT = 128
 ENTRIES_PER_DST = 4
 INTERMEDIATE = 64
 HIDDEN = 128
+
+
+def test_fused_w2_return_target_schedule_is_persistent_and_coarse_grained():
+    schedule = source_push_semantic_fused_w2_return_schedule(
+        ep_size=8,
+        hidden_dim=2560,
+        tokens_per_source=32768,
+    )
+
+    assert schedule.hidden_tiles == 20
+    assert schedule.producer_programs == 160
+    assert schedule.combine_programs == 32
+    assert schedule.active_combine_programs == 32
+    assert schedule.total_programs == 192
+    assert schedule.readiness_signals == 160
+    assert schedule.readiness_waits == 256
 
 
 def _inputs(*, rows_per_expert: int = ROWS_PER_EXPERT):

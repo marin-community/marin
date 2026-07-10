@@ -127,6 +127,8 @@ def source_push_semantic_fused_w2_backward_generation_accounting(
     *,
     hidden_dim: int,
     intermediate_dim: int,
+    experts_per_rank: int,
+    ep_size: int,
     send_chunks_per_dst: int,
     config: SourcePushSemanticFusedW2BackwardConfig = SourcePushSemanticFusedW2BackwardConfig(),
 ) -> SourcePushSemanticFusedW2BackwardGenerationAccounting:
@@ -138,19 +140,13 @@ def source_push_semantic_fused_w2_backward_generation_accounting(
         raise ValueError(f"invalid chunk coordinate {chunk=} for {send_chunks_per_dst=}")
     generation = chunk // config.inbox_slots + 1
     producer_tiles = config.compute_blocks_per_send * (hidden_dim // config.send_hidden_block)
-    dh_jobs = config.compute_blocks_per_send * (intermediate_dim // config.intermediate_block)
-    dw2_jobs = (
-        config.compute_blocks_per_send
-        * (intermediate_dim // config.intermediate_block)
-        * (hidden_dim // config.hidden_block)
-    )
     return SourcePushSemanticFusedW2BackwardGenerationAccounting(
         slot=chunk % config.inbox_slots,
         generation=generation,
         empty_generation=generation,
         send_done_generation=generation * producer_tiles,
         full_generation=generation,
-        consumer_done_generation=generation * (dh_jobs + dw2_jobs),
+        consumer_done_generation=generation * config.consumer_programs_per_source(ep_size),
         released_generation=generation + 1,
     )
 
@@ -500,9 +496,9 @@ def _make_source_push_semantic_fused_w2_backward_kernel(
     ) // config.producer_programs_per_peer
     intermediate_tiles = intermediate_dim // config.intermediate_block
     hidden_tiles = hidden_dim // config.hidden_block
-    dh_jobs = blocks * intermediate_tiles
+    dh_jobs = config.inbox_slots * blocks * intermediate_tiles
     dw2_output_tiles = experts_per_rank * intermediate_tiles * hidden_tiles
-    dw2_jobs = blocks * intermediate_tiles * hidden_tiles
+    dw2_jobs = dw2_output_tiles
     consumer_jobs = dh_jobs + dw2_jobs
     consumer_programs_per_source = config.consumer_programs_per_source(ep_size)
     consumer_jobs_per_program = (consumer_jobs + consumer_programs_per_source - 1) // consumer_programs_per_source
@@ -676,10 +672,12 @@ def _make_source_push_semantic_fused_w2_backward_kernel(
             def _consume_source(static_source_ordinal: int) -> None:
                 src = (rank + static_source_ordinal) % ep_size
 
-                @pl.loop(0, send_chunks_per_dst)
-                def _chunk_loop(chunk) -> None:
-                    slot = chunk % config.inbox_slots
-                    generation = chunk // config.inbox_slots + 1
+                chunk_windows = (send_chunks_per_dst + config.inbox_slots - 1) // config.inbox_slots
+
+                @pl.loop(0, chunk_windows)
+                def _window_loop(window) -> None:
+                    window_start = window * config.inbox_slots
+                    generation = window + 1
 
                     @pl.loop(0, consumer_jobs_per_program)
                     def _job_loop(job_iteration) -> None:
@@ -687,116 +685,173 @@ def _make_source_push_semantic_fused_w2_backward_kernel(
 
                         @pl.when(job < consumer_jobs)
                         def _consume_job() -> None:
-                            pl.semaphore_wait(full_sem.at[src, slot], value=generation, decrement=False)
-
                             @pl.when(job < dh_jobs)
                             def _compute_dh() -> None:
-                                block = job // intermediate_tiles
-                                i_tile = job % intermediate_tiles
-                                valid_rows = recv_valid_ref[static_source_ordinal, chunk, block]
+                                chunk_offset = job // (blocks * intermediate_tiles)
+                                rem = job % (blocks * intermediate_tiles)
+                                block = rem // intermediate_tiles
+                                i_tile = rem % intermediate_tiles
+                                chunk = window_start + chunk_offset
 
-                                @pl.when(valid_rows > 0)
-                                def _compute_live() -> None:
-                                    expert = recv_expert_ref[static_source_ordinal, chunk, block]
+                                @pl.when(chunk < send_chunks_per_dst)
+                                def _compute_resident_dh() -> None:
+                                    pl.semaphore_wait(
+                                        full_sem.at[src, chunk_offset], value=generation, decrement=False
+                                    )
+                                    valid_rows = recv_valid_ref[static_source_ordinal, chunk, block]
 
-                                    def _acc_scope(acc_ref) -> None:
-                                        def _smem_scope(dy_smem, w_smem, barrier) -> None:
-                                            @pl.loop(0, hidden_tiles)
-                                            def _hidden_loop(h_tile) -> None:
-                                                h_start = h_tile * config.hidden_block
-                                                mgpu.copy_gmem_to_smem(
-                                                    inbox_ref.at[
-                                                        src,
-                                                        slot,
-                                                        pl.ds(block * config.compute_m, config.compute_m),
-                                                        pl.ds(h_start, config.hidden_block),
-                                                    ],
-                                                    dy_smem,
-                                                    barrier,
-                                                )
-                                                mgpu.copy_gmem_to_smem(
-                                                    w_ref.at[
-                                                        expert,
-                                                        pl.ds(
-                                                            i_tile * config.intermediate_block,
-                                                            config.intermediate_block,
-                                                        ),
-                                                        pl.ds(h_start, config.hidden_block),
-                                                    ],
-                                                    w_smem,
-                                                    barrier,
-                                                )
-                                                mgpu.barrier_wait(barrier)
-                                                mgpu.commit_smem()
-                                                mgpu.wgmma(acc_ref, dy_smem, mgpu.transpose_ref(w_smem, (1, 0)))
-                                                mgpu.wgmma_wait(0)
+                                    @pl.when(valid_rows > 0)
+                                    def _compute_live() -> None:
+                                        expert = recv_expert_ref[static_source_ordinal, chunk, block]
+
+                                        def _acc_scope(acc_ref) -> None:
+                                            def _smem_scope(dy_smem, w_smem, barrier) -> None:
+                                                @pl.loop(0, hidden_tiles)
+                                                def _hidden_loop(h_tile) -> None:
+                                                    h_start = h_tile * config.hidden_block
+                                                    mgpu.copy_gmem_to_smem(
+                                                        inbox_ref.at[
+                                                            src,
+                                                            chunk_offset,
+                                                            pl.ds(block * config.compute_m, config.compute_m),
+                                                            pl.ds(h_start, config.hidden_block),
+                                                        ],
+                                                        dy_smem,
+                                                        barrier,
+                                                    )
+                                                    mgpu.copy_gmem_to_smem(
+                                                        w_ref.at[
+                                                            expert,
+                                                            pl.ds(
+                                                                i_tile * config.intermediate_block,
+                                                                config.intermediate_block,
+                                                            ),
+                                                            pl.ds(h_start, config.hidden_block),
+                                                        ],
+                                                        w_smem,
+                                                        barrier,
+                                                    )
+                                                    mgpu.barrier_wait(barrier)
+                                                    mgpu.commit_smem()
+                                                    mgpu.wgmma(acc_ref, dy_smem, mgpu.transpose_ref(w_smem, (1, 0)))
+                                                    mgpu.wgmma_wait(0)
+
+                                            pl.run_scoped(
+                                                _smem_scope,
+                                                dy_smem=_wgmma_smem((config.compute_m, config.hidden_block), dtype),
+                                                w_smem=_wgmma_smem(
+                                                    (config.intermediate_block, config.hidden_block), dtype
+                                                ),
+                                                barrier=mgpu.Barrier(num_arrivals=2),
+                                            )
+                                            row_start = recv_row_ref[static_source_ordinal, chunk, block]
+                                            d_h_ref[
+                                                expert,
+                                                pl.ds(row_start, config.compute_m),
+                                                pl.ds(
+                                                    i_tile * config.intermediate_block,
+                                                    config.intermediate_block,
+                                                ),
+                                            ] = acc_ref[...]
 
                                         pl.run_scoped(
-                                            _smem_scope,
-                                            dy_smem=_wgmma_smem((config.compute_m, config.hidden_block), dtype),
-                                            w_smem=_wgmma_smem(
-                                                (config.intermediate_block, config.hidden_block), dtype
-                                            ),
-                                            barrier=mgpu.Barrier(num_arrivals=2),
+                                            _acc_scope,
+                                            acc_ref=mgpu.ACC((config.compute_m, config.intermediate_block)),
                                         )
-                                        row_start = recv_row_ref[static_source_ordinal, chunk, block]
-                                        d_h_ref[
-                                            expert,
-                                            pl.ds(row_start, config.compute_m),
-                                            pl.ds(i_tile * config.intermediate_block, config.intermediate_block),
-                                        ] = acc_ref[...]
-
-                                    pl.run_scoped(
-                                        _acc_scope,
-                                        acc_ref=mgpu.ACC((config.compute_m, config.intermediate_block)),
-                                    )
 
                             @pl.when(job >= dh_jobs)
                             def _compute_dw2() -> None:
                                 dw_job = job - dh_jobs
-                                block = dw_job // (intermediate_tiles * hidden_tiles)
+                                expert = dw_job // (intermediate_tiles * hidden_tiles)
                                 rem = dw_job % (intermediate_tiles * hidden_tiles)
                                 i_tile = rem // hidden_tiles
                                 h_tile = rem % hidden_tiles
-                                expert = recv_expert_ref[static_source_ordinal, chunk, block]
-                                valid_rows = recv_valid_ref[static_source_ordinal, chunk, block]
 
-                                @pl.when(valid_rows > 0)
-                                def _compute_block_dw2() -> None:
+                                owns_rows = jnp.asarray(False)
+                                for static_chunk_offset in range(config.inbox_slots):
+                                    chunk = window_start + static_chunk_offset
+                                    safe_chunk = jnp.minimum(chunk, send_chunks_per_dst - 1)
+                                    for static_block in range(blocks):
+                                        valid_rows = recv_valid_ref[static_source_ordinal, safe_chunk, static_block]
+                                        block_expert = recv_expert_ref[static_source_ordinal, safe_chunk, static_block]
+                                        owns_rows |= (
+                                            (chunk < send_chunks_per_dst) & (valid_rows > 0) & (block_expert == expert)
+                                        )
+
+                                @pl.when(owns_rows)
+                                def _compute_window_dw2() -> None:
 
                                     def _acc_scope(acc_ref) -> None:
                                         def _smem_scope(h_smem, dy_smem, barrier) -> None:
-                                            row_start = recv_row_ref[static_source_ordinal, chunk, block]
-                                            mgpu.copy_gmem_to_smem(
-                                                h_ref.at[
-                                                    expert,
-                                                    pl.ds(row_start, config.compute_m),
-                                                    pl.ds(
-                                                        i_tile * config.intermediate_block,
-                                                        config.intermediate_block,
-                                                    ),
-                                                ],
-                                                h_smem,
-                                                barrier,
-                                            )
-                                            mgpu.copy_gmem_to_smem(
-                                                inbox_ref.at[
-                                                    src,
-                                                    slot,
-                                                    pl.ds(block * config.compute_m, config.compute_m),
-                                                    pl.ds(h_tile * config.hidden_block, config.hidden_block),
-                                                ],
-                                                dy_smem,
-                                                barrier,
-                                            )
-                                            mgpu.barrier_wait(barrier)
-                                            mgpu.commit_smem()
-                                            mgpu.wgmma(
-                                                acc_ref,
-                                                mgpu.transpose_ref(h_smem, (1, 0)),
-                                                dy_smem,
-                                            )
-                                            mgpu.wgmma_wait(0)
+                                            for static_chunk_offset in range(config.inbox_slots):
+                                                chunk = window_start + static_chunk_offset
+                                                safe_chunk = jnp.minimum(chunk, send_chunks_per_dst - 1)
+                                                chunk_owns_rows = jnp.asarray(False)
+                                                for static_block in range(blocks):
+                                                    valid_rows = recv_valid_ref[
+                                                        static_source_ordinal, safe_chunk, static_block
+                                                    ]
+                                                    block_expert = recv_expert_ref[
+                                                        static_source_ordinal, safe_chunk, static_block
+                                                    ]
+                                                    chunk_owns_rows |= (valid_rows > 0) & (block_expert == expert)
+
+                                                @pl.when((chunk < send_chunks_per_dst) & chunk_owns_rows)
+                                                def _accumulate_chunk() -> None:
+                                                    pl.semaphore_wait(
+                                                        full_sem.at[src, static_chunk_offset],
+                                                        value=generation,
+                                                        decrement=False,
+                                                    )
+                                                    for static_block in range(blocks):
+                                                        valid_rows = recv_valid_ref[
+                                                            static_source_ordinal, safe_chunk, static_block
+                                                        ]
+                                                        block_expert = recv_expert_ref[
+                                                            static_source_ordinal, safe_chunk, static_block
+                                                        ]
+
+                                                        @pl.when((valid_rows > 0) & (block_expert == expert))
+                                                        def _accumulate_block() -> None:
+                                                            row_start = recv_row_ref[
+                                                                static_source_ordinal, safe_chunk, static_block
+                                                            ]
+                                                            mgpu.copy_gmem_to_smem(
+                                                                h_ref.at[
+                                                                    expert,
+                                                                    pl.ds(row_start, config.compute_m),
+                                                                    pl.ds(
+                                                                        i_tile * config.intermediate_block,
+                                                                        config.intermediate_block,
+                                                                    ),
+                                                                ],
+                                                                h_smem,
+                                                                barrier,
+                                                            )
+                                                            mgpu.copy_gmem_to_smem(
+                                                                inbox_ref.at[
+                                                                    src,
+                                                                    static_chunk_offset,
+                                                                    pl.ds(
+                                                                        static_block * config.compute_m,
+                                                                        config.compute_m,
+                                                                    ),
+                                                                    pl.ds(
+                                                                        h_tile * config.hidden_block,
+                                                                        config.hidden_block,
+                                                                    ),
+                                                                ],
+                                                                dy_smem,
+                                                                barrier,
+                                                            )
+                                                            mgpu.barrier_wait(barrier)
+                                                            mgpu.commit_smem()
+                                                            mgpu.wgmma(
+                                                                acc_ref,
+                                                                mgpu.transpose_ref(h_smem, (1, 0)),
+                                                                dy_smem,
+                                                            )
+                                                            mgpu.wgmma_wait(0)
 
                                         pl.run_scoped(
                                             _smem_scope,
@@ -821,19 +876,27 @@ def _make_source_push_semantic_fused_w2_backward_kernel(
                                         acc_ref=mgpu.ACC((config.intermediate_block, config.hidden_block)),
                                     )
 
-                            pl.semaphore_signal(consumer_done_sem.at[src, slot])
+                    for static_chunk_offset in range(config.inbox_slots):
 
-                    @pl.when((chunk % consumer_programs_per_source) == consumer)
-                    def _release_slot() -> None:
-                        pl.semaphore_wait(
-                            consumer_done_sem.at[src, slot],
-                            value=generation * consumer_jobs,
-                            decrement=False,
-                        )
-                        if static_source_ordinal == 0:
-                            pl.semaphore_signal(empty_sem.at[rank, slot])
-                        else:
-                            _signal_remote(empty_sem, src, rank, slot)
+                        @pl.when(window_start + static_chunk_offset < send_chunks_per_dst)
+                        def _mark_consumer_done() -> None:
+                            pl.semaphore_signal(consumer_done_sem.at[src, static_chunk_offset])
+
+                    @pl.when((window % consumer_programs_per_source) == consumer)
+                    def _release_window() -> None:
+                        for static_chunk_offset in range(config.inbox_slots):
+
+                            @pl.when(window_start + static_chunk_offset < send_chunks_per_dst)
+                            def _release_slot() -> None:
+                                pl.semaphore_wait(
+                                    consumer_done_sem.at[src, static_chunk_offset],
+                                    value=generation * consumer_programs_per_source,
+                                    decrement=False,
+                                )
+                                if static_source_ordinal == 0:
+                                    pl.semaphore_signal(empty_sem.at[rank, static_chunk_offset])
+                                else:
+                                    _signal_remote(empty_sem, src, rank, static_chunk_offset)
 
             branches = tuple(
                 (lambda ordinal: lambda _: _consume_source((-ordinal) % ep_size))(i) for i in range(ep_size)
