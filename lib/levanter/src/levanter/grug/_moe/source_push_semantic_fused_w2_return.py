@@ -418,7 +418,7 @@ def _source_push_semantic_fused_w2_return_sharded(
         route_valid_local,
         combine_ready_local,
     ):
-        return_y_local, y_local, _outbox_local = kernel(
+        return_y_local, y_local = kernel(
             z_local[0],
             w_local[0],
             recv_expert_local[0],
@@ -516,7 +516,6 @@ def _make_source_push_semantic_fused_w2_return_kernel(
         combine_ready_ref,
         return_y_ref,
         y_ref,
-        outbox_ref,
     ) -> None:
         empty_sem = pl.get_global(mgpu.SemaphoreType.REGULAR((ep_size, RETURN_INBOX_SLOTS)))
         start_sem = pl.get_global(mgpu.SemaphoreType.REGULAR((ep_size, RETURN_INBOX_SLOTS)))
@@ -590,38 +589,6 @@ def _make_source_push_semantic_fused_w2_return_kernel(
                                     done_sem.at[static_source_ordinal, slot],
                                     value=(round_index + 1) * schedule.hidden_tile_jobs,
                                     decrement=False,
-                                )
-
-                                def _copy_scope(output_smem, ready_barrier) -> None:
-                                    @pl.loop(0, hidden_tiles)
-                                    def _hidden_tile_loop(hidden_tile) -> None:
-                                        hidden_start = hidden_tile * config.block_n
-                                        mgpu.copy_gmem_to_smem(
-                                            outbox_ref.at[
-                                                static_source_ordinal,
-                                                slot,
-                                                pl.ds(0, config.compute_m),
-                                                pl.ds(hidden_start, config.block_n),
-                                            ],
-                                            output_smem,
-                                            ready_barrier,
-                                        )
-                                        mgpu.barrier_wait(ready_barrier)
-                                        mgpu.copy_smem_to_gmem(
-                                            output_smem,
-                                            destination_ref.at[
-                                                destination_ordinal,
-                                                entry,
-                                                pl.ds(0, config.compute_m),
-                                                pl.ds(hidden_start, config.block_n),
-                                            ],
-                                        )
-                                        mgpu.wait_smem_to_gmem(0, wait_read_only=False)
-
-                                pl.run_scoped(
-                                    _copy_scope,
-                                    output_smem=mgpu.SMEM((config.compute_m, config.block_n), dtype=jnp.bfloat16),
-                                    ready_barrier=mgpu.Barrier(num_arrivals=1),
                                 )
                                 if static_source_ordinal == 0:
                                     pl.semaphore_signal(ready_sem.at[destination_ordinal, slot])
@@ -754,9 +721,9 @@ def _make_source_push_semantic_fused_w2_return_kernel(
                                                         _acc_scope,
                                                         acc_ref=mgpu.ACC((config.compute_m, config.block_n)),
                                                     )
-                                                    outbox_ref[
-                                                        static_source_ordinal,
-                                                        slot,
+                                                    destination_ref[
+                                                        destination_ordinal,
+                                                        entry,
                                                         pl.ds(0, config.compute_m),
                                                         pl.ds(hidden_start, config.block_n),
                                                     ] = output
@@ -825,13 +792,11 @@ def _make_source_push_semantic_fused_w2_return_kernel(
 
     return_shape = (ep_size, entries_per_dst, config.compute_m, hidden_dim)
     y_shape = (tokens_per_source, hidden_dim)
-    outbox_shape = (ep_size, RETURN_INBOX_SLOTS, config.compute_m, hidden_dim)
     return mgpu.kernel(
         body,
         out_shape=(
             jax.ShapeDtypeStruct(return_shape, jnp.bfloat16),
             jax.ShapeDtypeStruct(y_shape, jnp.bfloat16),
-            jax.ShapeDtypeStruct(outbox_shape, jnp.bfloat16),
         ),
         grid=(worker_programs,),
         grid_names=("worker_program",),

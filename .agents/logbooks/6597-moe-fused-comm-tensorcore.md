@@ -1183,6 +1183,35 @@ attempts and CUDA VMM handle fallback warnings. Exact structured evidence,
 terminal status, closed monitor state, and a standalone report are in
 `scratch/6597-w13-fwd-bwd-inbox/`.
 
+## 2026-07-10 FUSED-MOE-038A - Target EP8 W2 return/backward benchmark
+
+Job `/dlwh/bench-semantic-fused-w2-target-20260710-1608` ran once on `cw-rno2a`
+at commit `5d78f1b010`. It reached terminal Iris state `killed` after `22m54s`:
+the job was stopped after the W2 backward stage emitted no progress or result
+for 20 minutes. There was no duplicate launch, resubmission, Iris restart, or
+cluster bounce.
+
+The target EP8 random-routing `semantic_fused_w2_return_pallas` mode completed
+all three repeats. Exact median/min/max steady-state time was
+`0.06503098636555175`/`0.06500880800498028`/`0.06515120734305431` seconds
+(`65.03098636555175`/`65.00880800498028`/`65.15120734305431` ms). Median
+useful/rounded throughput was `13.20898708765436`/`16.51123385956795`
+TFLOP/s/rank, and the output checksum was `3915118848.0`. The three repeat
+useful throughputs were `13.20898708765436`, `13.213493456674257`, and
+`13.184613059846484` TFLOP/s/rank; rounded throughputs were
+`16.51123385956795`, `16.51686682084282`, and `16.480766324808105`
+TFLOP/s/rank. Dropped routes, routing drops, metadata overflow, queue-route
+overflow, and layout-row overflow were all zero. The mode reported 64 live
+pairs, 1,048,576 useful rows, 1,310,720 rounded rows, and 0.8 row efficiency.
+
+`semantic_fused_w2_backward_pallas` was start-only. At
+`23:09:12.540967 UTC`, it logged a failed 12.50 GiB allocator request and then
+emitted no repeat, summary, structured error, or further progress before the
+stop threshold. Median/min/max steady-state time, useful/rounded throughput,
+checksum, and backward counters are unavailable. Raw logs, terminal status,
+task summary, closed monitor state, and a standalone report are in
+`scratch/6597-w2-target-20260710-1608/`.
+
 The forward result rejects a literal two-owner port for semantic raw-token
 gathers: it regressed from the previous `29.791293` ms / `57.667418` useful
 TFLOP/s/rank row to `55.011869` ms / `31.229386`. The old inbox topology was
@@ -1204,3 +1233,40 @@ This removes the previous all-entry readiness barrier while preserving distinct
 compact storage for every logical entry; outbox slot reuse cannot overwrite
 `return_y`. Five dedicated tests, target-shape kernel construction, and scoped
 pre-commit pass. Target H100 timing and correctness remain required.
+
+## 2026-07-10 FUSED-MOE-040 - Rolling B64 W2 return target result
+
+Job `/dlwh/bench-semantic-w2-return-rolling-20260710-1633` ran once on
+`cw-rno2a` at commit `e8b76742a5` and reached terminal Iris state `succeeded`.
+Its single H100x8 task exited 0 after 1 minute and 45.21 seconds, with zero
+failures and preemptions. No duplicate, stop, resubmit, Iris restart, or cluster
+bounce was issued.
+
+The target EP8 random-routing `semantic_fused_w2_return_pallas` mode completed
+all three repeats with the rolling B64 return outbox, two chunk owners plus 30
+W2 workers per source, and generation-aware source combine. Exact median/min/max
+steady-state time was `79.3795056718712`/`79.37796365392084`/
+`79.43745500718553` ms. Median useful/rounded throughput was
+`10.821350573166791`/`13.52668821645849` TFLOP/s/rank, and the output checksum
+was `4097386496.0`.
+
+Dropped routes, routing drops, metadata overflow, queue-route overflow, and
+layout-row overflow were all zero. The mode reported 64 live pairs, 1,048,576
+useful rows, 1,310,720 rounded rows, 0.8 row efficiency, and 0.2 masked-row
+fraction. Logs contained non-fatal failed 12.50 GiB allocator attempts and CUDA
+VMM handle fallback warnings before the successful rows. The closed monitor
+record is `scratch/20260710-1633_bench_semantic_w2_return_rolling_monitoring_state.json`.
+
+## 2026-07-10 FUSED-MOE-041 - Remove W2 return local outbox payload staging
+
+The 79.38 ms result localizes the rolling-return regression to payload staging,
+not semantic readiness. W2 compute workers wrote accumulator fragments to a
+local GMEM outbox, after which chunk owners copied the full B64-by-H payload to
+peer `return_y`. This repeated the local-GMEM tax that the direct-GMEM
+correctness work had already made unnecessary.
+
+Compute workers now store bf16 accumulator fragments directly into local or
+peer compact `return_y`. Chunk owners retain only start, fixed completion,
+ready, and release generation management; source combine readiness is
+unchanged. Five dedicated tests, target kernel construction, and scoped
+pre-commit including Pyrefly pass. Target H100 timing remains required.
