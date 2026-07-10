@@ -13,19 +13,22 @@ from __future__ import annotations
 import json
 import math
 import os
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from urllib.parse import urlparse
 
 import draccus
 import fsspec
+import wandb
 from fray.cluster import ResourceConfig
 from levanter.tracker.wandb import WandbConfig
+from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.execution.step_runner import StepRunner
 from marin.experiment.data import mixture
 from marin.experiment.namespacing import user_namespaced_name
 from marin.processing.tokenize.tokenize import TokenizedCache
 from marin.training.training import LevanterCheckpoint
+from rigging.filesystem import open_url
 
 from experiments.grug.moe.launch import GrugMoeLaunchConfig, run_grug_moe_trial
 from experiments.grug.moe.model import GrugModelConfig
@@ -43,6 +46,8 @@ VOCAB_SIZES = (8_192, 32_768)
 HIDDEN_DIMS = (512, 768)
 SEQ_LEN = 4_096
 BATCH_SIZE = 512
+BYTE_WEIGHTED_BPB_KEY = "eval/byte_weighted_bpb"
+BYTE_WEIGHTED_MACRO_BPB_KEY = "eval/byte_weighted_macro_bpb"
 
 _MARIN_BUCKET_REGIONS = {
     "marin-eu-west4": "europe-west4",
@@ -110,6 +115,8 @@ class TokenizerMoeComparisonConfig:
     max_concurrent: int = 8
     preemptible: bool = True
     dry_run: bool = False
+    wandb_entity: str = "marin-community"
+    wandb_project: str = "marin_moe"
 
     def validate(self) -> None:
         unknown_families = set(self.families) - set(TOKENIZER_FAMILIES)
@@ -135,6 +142,31 @@ class ComparisonCell:
     @property
     def name(self) -> str:
         return f"{self.family}-{self.vocab_size // 1024}k-d{self.rung.hidden_dim}"
+
+
+@dataclass(frozen=True)
+class ComparisonResult:
+    family: str
+    vocab_size: int
+    hidden_dim: int
+    final_step: int
+    parameter_count: int
+    byte_weighted_bpb: float
+    byte_weighted_macro_bpb: float
+    wandb_url: str
+
+    @property
+    def cell_key(self) -> tuple[str, int, int]:
+        return self.family, self.vocab_size, self.hidden_dim
+
+
+@dataclass(frozen=True)
+class ComparisonReportConfig:
+    output_path: str
+    version: str
+    wandb_entity: str
+    wandb_project: str
+    cells: list[ComparisonCell]
 
 
 def comparison_cells(config: TokenizerMoeComparisonConfig) -> list[ComparisonCell]:
@@ -185,6 +217,120 @@ def grug_optimizer(rung: GrugRung) -> GrugMoeAdamHConfig:
         lr_schedule="linear",
         decay=None,
     )
+
+
+def validate_comparison_results(cells: list[ComparisonCell], results: list[ComparisonResult]) -> None:
+    """Require one final, finite, architecture-matched result per requested cell."""
+    expected = {(cell.family, cell.vocab_size, cell.rung.hidden_dim): cell for cell in cells}
+    actual = {result.cell_key: result for result in results}
+    if len(actual) != len(results):
+        raise ValueError("comparison results contain duplicate cells")
+    if actual.keys() != expected.keys():
+        missing = sorted(expected.keys() - actual.keys())
+        unexpected = sorted(actual.keys() - expected.keys())
+        raise ValueError(f"comparison result matrix mismatch: {missing=} {unexpected=}")
+
+    for key, cell in expected.items():
+        result = actual[key]
+        if result.final_step != cell.rung.steps:
+            raise ValueError(
+                f"{cell.name} reported eval step {result.final_step}, expected final step {cell.rung.steps}"
+            )
+        if not math.isfinite(result.byte_weighted_bpb) or not math.isfinite(result.byte_weighted_macro_bpb):
+            raise ValueError(f"{cell.name} has non-finite byte-weighted BPB")
+
+    parameters_by_shape: dict[tuple[int, int], set[int]] = {}
+    for result in results:
+        shape = result.vocab_size, result.hidden_dim
+        parameters_by_shape.setdefault(shape, set()).add(result.parameter_count)
+    mismatches = {shape: counts for shape, counts in parameters_by_shape.items() if len(counts) != 1}
+    if mismatches:
+        raise ValueError(f"tokenizer families used mismatched parameter counts: {mismatches}")
+
+
+def render_results_table(results: list[ComparisonResult]) -> str:
+    """Render publication-audit-friendly Markdown for one complete comparison."""
+    rows = sorted(results, key=lambda result: (result.vocab_size, result.hidden_dim, result.family))
+    lines = [
+        "# Tokenizer MoE comparison",
+        "",
+        "BPB values are globally byte-weighted: total loss in bits divided by total evaluated decoded bytes.",
+        "",
+        "| tokenizer | vocab | rung | final step | parameters | BPB | macro BPB | W&B |",
+        "|---|---:|---:|---:|---:|---:|---:|---|",
+    ]
+    for result in rows:
+        lines.append(
+            f"| {result.family} | {result.vocab_size // 1024}k | d{result.hidden_dim} | "
+            f"{result.final_step} | {result.parameter_count:,} | {result.byte_weighted_bpb:.6f} | "
+            f"{result.byte_weighted_macro_bpb:.6f} | [run]({result.wandb_url}) |"
+        )
+    return "\n".join(lines) + "\n"
+
+
+def _result_from_wandb_run(run, cell: ComparisonCell) -> ComparisonResult:
+    metric_keys = ["_step", BYTE_WEIGHTED_BPB_KEY, BYTE_WEIGHTED_MACRO_BPB_KEY]
+    final_row = None
+    for row in run.scan_history(keys=metric_keys):
+        if row.get(BYTE_WEIGHTED_BPB_KEY) is None or row.get(BYTE_WEIGHTED_MACRO_BPB_KEY) is None:
+            continue
+        if final_row is None or int(row["_step"]) > int(final_row["_step"]):
+            final_row = row
+    if final_row is None:
+        raise ValueError(f"{cell.name} has no byte-weighted BPB history")
+
+    parameter_count = run.summary.get("parameter_count")
+    if parameter_count is None:
+        raise ValueError(f"{cell.name} has no parameter_count summary")
+    return ComparisonResult(
+        family=cell.family,
+        vocab_size=cell.vocab_size,
+        hidden_dim=cell.rung.hidden_dim,
+        final_step=int(final_row["_step"]),
+        parameter_count=int(parameter_count),
+        byte_weighted_bpb=float(final_row[BYTE_WEIGHTED_BPB_KEY]),
+        byte_weighted_macro_bpb=float(final_row[BYTE_WEIGHTED_MACRO_BPB_KEY]),
+        wandb_url=run.url,
+    )
+
+
+def collect_comparison_results(config: ComparisonReportConfig) -> list[ComparisonResult]:
+    """Collect exact finished W&B runs and reject partial or ambiguous cells."""
+    api = wandb.Api(timeout=120)
+    group = f"tokenizer-moe-{config.version}"
+    results = []
+    for cell in config.cells:
+        run_name = f"tokenizer-moe-{cell.name}-{config.version}"
+        runs = list(
+            api.runs(
+                f"{config.wandb_entity}/{config.wandb_project}",
+                filters={"state": "finished", "group": group, "display_name": run_name},
+                order="-created_at",
+            )
+        )
+        if len(runs) != 1:
+            raise ValueError(f"expected one finished W&B run for {run_name}, found {len(runs)}")
+        results.append(_result_from_wandb_run(runs[0], cell))
+    validate_comparison_results(config.cells, results)
+    return results
+
+
+def write_comparison_report(config: ComparisonReportConfig) -> None:
+    """Write validated Markdown and JSON result tables after all training dependencies finish."""
+    results = collect_comparison_results(config)
+    with open_url(f"{config.output_path.rstrip('/')}/results.md", "w") as output:
+        output.write(render_results_table(results))
+    with open_url(f"{config.output_path.rstrip('/')}/results.json", "w") as output:
+        json.dump(
+            {
+                "metric": BYTE_WEIGHTED_BPB_KEY,
+                "macro_metric": BYTE_WEIGHTED_MACRO_BPB_KEY,
+                "results": [asdict(result) for result in results],
+            },
+            output,
+            indent=2,
+            sort_keys=True,
+        )
 
 
 def validate_same_region(cache_prefix: str, output_prefix: str, region: str) -> None:
@@ -269,7 +415,7 @@ def _adopt_caches(
             config={
                 "tokenizer": tokenizer,
                 "format": {"text_key": "text"},
-                "tags": [label, source_name],
+                "tags": [f"{label}/{source_name}"],
             },
         )
         handles.append(handle)
@@ -347,12 +493,40 @@ def comparison_run(
     )
 
 
+def comparison_report(
+    config: TokenizerMoeComparisonConfig,
+    cells: list[ComparisonCell],
+    runs: list[ArtifactStep[LevanterCheckpoint]],
+) -> ArtifactStep[Artifact]:
+    """Build the table artifact that depends on every requested training cell."""
+
+    def build_config(ctx: StepContext) -> ComparisonReportConfig:
+        return ComparisonReportConfig(
+            output_path=ctx.output_path,
+            version=config.version,
+            wandb_entity=config.wandb_entity,
+            wandb_project=config.wandb_project,
+            cells=cells,
+        )
+
+    return ArtifactStep(
+        name=user_namespaced_name("tokenizer-comparison/results", config.version),
+        version=config.version,
+        artifact_type=Artifact,
+        run=write_comparison_report,
+        build_config=build_config,
+        deps=tuple(runs),
+    )
+
+
 def main() -> None:
     config = draccus.parse(TokenizerMoeComparisonConfig)
     config.validate()
     os.environ["MARIN_PREFIX"] = config.output_prefix
-    runs = [comparison_run(config, cell).lower() for cell in comparison_cells(config)]
-    StepRunner().run(runs, dry_run=config.dry_run, max_concurrent=config.max_concurrent)
+    cells = comparison_cells(config)
+    runs = [comparison_run(config, cell) for cell in cells]
+    report = comparison_report(config, cells, runs)
+    StepRunner().run([report.lower()], dry_run=config.dry_run, max_concurrent=config.max_concurrent)
 
 
 if __name__ == "__main__":

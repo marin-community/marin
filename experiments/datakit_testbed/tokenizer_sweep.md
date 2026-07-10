@@ -117,6 +117,7 @@ different Grug code revision. Submit the complete matrix through Iris with:
   --job-name tokenizer-moe-all-canonical-adamh-20260710 \
   --priority interactive --region europe-west4 \
   --tpu v6e-4 --enable-extra-resources --preemptible \
+  -e WANDB_API_KEY="$WANDB_API_KEY" \
   -- uv run python experiments/datakit_testbed/tokenizer_moe_comparison.py \
     --cache_prefix gs://marin-eu-west4/data/datakit/tokenized/tokenizer-sweep-20260526 \
     --output_prefix gs://marin-eu-west4 \
@@ -130,4 +131,22 @@ different Grug code revision. Submit the complete matrix through Iris with:
 The command discovers only cache components with a completed
 `train/.stats.json`, requires exactly `--expected_sources` components for both
 training and holdout, weights training sources by recorded token count, and
-evaluates BPB on the separately tokenized holdout window every 1,000 steps.
+evaluates BPB on the separately tokenized holdout window every 1,000 steps and
+at the final step.
+
+The same DAG has a report artifact that depends on all 16 checkpoints. It reads
+the final `eval/byte_weighted_bpb` and `eval/byte_weighted_macro_bpb` values from
+the exact W&B run names, verifies every final step, and requires equal parameter
+counts across tokenizer families for each `(vocab, rung)` pair. Missing,
+duplicate, partial, non-finite, or architecture-mismatched results fail the
+report instead of producing a partial comparison. Successful runs write:
+
+```text
+gs://marin-eu-west4/tokenizer-comparison/results/canonical-adamh-all-20260710/results.md
+gs://marin-eu-west4/tokenizer-comparison/results/canonical-adamh-all-20260710/results.json
+```
+
+The Markdown output is the authoritative 16-row results table. Its BPB is
+computed as total loss in bits divided by total evaluated decoded bytes; the
+historical token-weighted `eval/bpb` is retained for compatibility but is not
+used in this comparison.
