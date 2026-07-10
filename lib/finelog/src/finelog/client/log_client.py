@@ -722,7 +722,16 @@ class LogClient:
                 raise RuntimeError("LogClient is closed")
             if self._stats_client is not None:
                 return self._stats_client
-            address = self._resolve()
+        # Resolve outside the lock: the resolver may issue a blocking RPC (iris
+        # looks the endpoint up on the controller), and holding _lock across it
+        # stalls every other caller — including a shutdown-path log emit parked
+        # on the same lock in _get_log_table, which deadlocks teardown.
+        address = self._resolve()
+        with self._lock:
+            if self._closed:
+                raise RuntimeError("LogClient is closed")
+            if self._stats_client is not None:
+                return self._stats_client
             self._stats_client = StatsServiceClientSync(
                 address=address,
                 timeout_ms=self._timeout_ms,
@@ -739,7 +748,14 @@ class LogClient:
                 raise RuntimeError("LogClient is closed")
             if self._log_service_client is not None:
                 return self._log_service_client
-            address = self._resolve()
+        # Resolve outside the lock (see _get_stats_client): never hold _lock
+        # across the resolver's potentially blocking RPC.
+        address = self._resolve()
+        with self._lock:
+            if self._closed:
+                raise RuntimeError("LogClient is closed")
+            if self._log_service_client is not None:
+                return self._log_service_client
             self._log_service_client = LogServiceClientSync(
                 address=address,
                 timeout_ms=self._timeout_ms,
