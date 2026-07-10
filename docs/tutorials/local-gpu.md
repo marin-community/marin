@@ -2,7 +2,7 @@
 
 This guide will walk you through the steps to set up a local GPU environment for Marin.
 By "local", we mean a machine that you run jobs on directly, as opposed to dispatching them to a shared cluster via [Iris](https://github.com/marin-community/marin/blob/main/lib/iris/OPS.md).
-Similar steps will let you run Marin on a cloud GPU environment under Iris (the Marin team runs production GPU workloads on CoreWeave), but we defer that to a future guide.
+To dispatch a GPU job to Marin's shared H100 fleet instead, see [Training on Cloud GPUs](cloud-gpu.md).
 
 ## Prerequisites
 
@@ -81,5 +81,5 @@ Whereas `--device cpu` uses `ResourceConfig.with_cpu()` and a batch size of 4, `
 uses eight H100s with a larger batch. Adding a new device is one entry in the `DEVICES` dict —
 no separate file needed.
 
-To scale up, submit to Marin's shared [Iris](https://github.com/marin-community/marin/blob/main/lib/iris/OPS.md) cluster
-via `uv run iris --cluster=marin job run ...` (see `lib/iris/OPS.md` for the CLI reference).
+To scale up, submit the same script to Marin's shared H100 fleet — see [Training on Cloud
+GPUs](cloud-gpu.md), which covers the storage prefix, region, and cluster-pinning a GPU job needs.

@@ -80,6 +80,7 @@ Usage:
 """
 
 import dataclasses
+import functools
 import json
 import logging
 import os
@@ -91,6 +92,7 @@ from pathlib import Path
 
 import click
 import yaml
+from finelog.deploy.config import find_finelog_config, load_finelog_config
 
 logger = logging.getLogger("iap-gclb")
 
@@ -116,9 +118,8 @@ SHARED_FRONTEND = "marin"
 GOOGLE_LB_RANGES = "130.211.0.0/22,35.191.0.0/16"
 IAP_ACCESSOR_ROLE = "roles/iap.httpsResourceAccessor"
 
-# The finelog log server's port on its own VM, and the GCE label ``finelog deploy``
-# stamps on that VM.
-FINELOG_PORT = 10001
+# The GCE label ``finelog deploy`` stamps on the VM it creates. The port finelog serves
+# is read from that cluster's finelog deploy config, which is where it is declared.
 FINELOG_LABEL_KEY = "finelog-name"
 
 # Every subnet of the ``default`` network sits inside this range, including the
@@ -264,9 +265,13 @@ class FinelogBackend:
 
     ``finelog deploy`` creates the VM as ``finelog-<cluster>`` and labels it
     ``finelog-name=<vm>``.
+
+    ``port`` is the port finelog serves, and addresses the NEG endpoint, the health check
+    and the firewall rules alike.
     """
 
     cluster: str
+    port: int
     project: str = DEFAULT_PROJECT
     zone: str = DEFAULT_ZONE
     domain: str | None = None
@@ -307,7 +312,7 @@ class FinelogBackend:
 
     @property
     def deny_firewall(self) -> str:
-        return f"{self.vm}-deny-public-{FINELOG_PORT}"
+        return f"{self.vm}-deny-public-{self.port}"
 
     @property
     def cert(self) -> str:
@@ -1160,6 +1165,17 @@ def sender_source_ranges() -> list[str]:
     return ranges
 
 
+def _finelog_backend(*, cluster: str, project: str, zone: str, domain: str | None = None) -> FinelogBackend:
+    """Build a :class:`FinelogBackend`, reading the served port from the finelog config."""
+    return FinelogBackend(
+        cluster=cluster,
+        port=load_finelog_config(cluster).port,
+        project=project,
+        zone=zone,
+        domain=domain,
+    )
+
+
 def discover_finelog_ip(finelog: FinelogBackend) -> str:
     """Resolve the finelog VM's internal IP from the label ``finelog deploy`` set."""
     result = _run(
@@ -1204,7 +1220,7 @@ def ensure_finelog_allow_firewall(finelog: FinelogBackend, *, dry_run: bool) -> 
         project=finelog.project,
         name=finelog.allow_firewall,
         action="ALLOW",
-        port=FINELOG_PORT,
+        port=finelog.port,
         source_ranges=f"{VPC_PRIVATE_RANGE},{GOOGLE_LB_RANGES}",
         target_tag=finelog.tag,
         priority=FIREWALL_ALLOW_PRIORITY,
@@ -1224,7 +1240,7 @@ def ensure_finelog_deny_firewall(finelog: FinelogBackend, *, dry_run: bool) -> N
         project=finelog.project,
         name=finelog.deny_firewall,
         action="DENY",
-        port=FINELOG_PORT,
+        port=finelog.port,
         source_ranges="0.0.0.0/0",
         target_tag=finelog.tag,
         priority=FIREWALL_DENY_PRIORITY,
@@ -1746,7 +1762,7 @@ def finelog_cmd(
     and re-run; the allow rule is rewritten in place.
     """
     fe = Frontend(name=frontend_name, project=project)
-    finelog = FinelogBackend(cluster=cluster, project=project, zone=zone, domain=domain)
+    finelog = _finelog_backend(cluster=cluster, project=project, zone=zone, domain=domain)
     ranges = sender_source_ranges()
     vm_ip = finelog_ip or discover_finelog_ip(finelog)
 
@@ -1759,7 +1775,7 @@ def finelog_cmd(
         service=finelog.service,
         instance=finelog.vm,
         ip=vm_ip,
-        port=FINELOG_PORT,
+        port=finelog.port,
         dry_run=dry_run,
     )
     ensure_armor_policy(finelog, ranges, dry_run=dry_run)
@@ -1794,7 +1810,7 @@ def finelog_teardown_cmd(cluster: str, project: str, zone: str, dry_run: bool, f
     their path to it. Inverse of the ``finelog`` stage.
     """
     fe = Frontend(name=frontend_name, project=project)
-    finelog = FinelogBackend(cluster=cluster, project=project, zone=zone, domain=domain)
+    finelog = _finelog_backend(cluster=cluster, project=project, zone=zone, domain=domain)
     remove_finelog(fe, finelog, dry_run=dry_run)
     click.echo()
     click.echo(f"finelog {finelog.vm} is no longer reachable at https://{domain}.")
@@ -1808,20 +1824,13 @@ def status(cluster: str, project: str, zone: str, dry_run: bool, frontend_name: 
     """Report which resources exist for the shared frontend and the cluster's backend."""
     fe = Frontend(name=frontend_name, project=project)
     backend = Backend(cluster=cluster, project=project, zone=zone)
-    finelog = FinelogBackend(cluster=cluster, project=project, zone=zone)
+    # A cluster need not deploy a finelog; the ones that do not simply have no section to report.
+    finelog = _finelog_backend(cluster=cluster, project=project, zone=zone) if find_finelog_config(cluster) else None
     frontend_checks = [
         ("static IP", _compute(project, "addresses", "describe", fe.address, "--global")),
         ("URL map", _compute(project, "url-maps", "describe", fe.url_map, "--global")),
         ("HTTPS proxy", _compute(project, "target-https-proxies", "describe", fe.https_proxy, "--global")),
         ("forwarding rule", _compute(project, "forwarding-rules", "describe", fe.forwarding_rule, "--global")),
-    ]
-    finelog_checks = [
-        ("allow-LB firewall", _compute(project, "firewall-rules", "describe", finelog.allow_firewall)),
-        ("deny-public firewall", _compute(project, "firewall-rules", "describe", finelog.deny_firewall)),
-        ("NEG", _compute(project, "network-endpoint-groups", "describe", finelog.neg, f"--zone={zone}")),
-        ("health check", _compute(project, "health-checks", "describe", finelog.health_check, "--global")),
-        ("backend service", _compute(project, "backend-services", "describe", finelog.service, "--global")),
-        ("Cloud Armor policy", _compute(project, "security-policies", "describe", finelog.armor_policy)),
     ]
     backend_checks = [
         ("allow-LB firewall", _compute(project, "firewall-rules", "describe", backend.allow_firewall)),
@@ -1855,6 +1864,17 @@ def status(cluster: str, project: str, zone: str, dry_run: bool, frontend_name: 
     if audience:
         click.echo(f"  iap jwt aud : {audience}  (auth.iap.signed_header_audience)")
 
+    if finelog is None:
+        click.echo(f"finelog: no deploy config for {cluster}")
+        return
+    finelog_checks = [
+        ("allow-LB firewall", _compute(project, "firewall-rules", "describe", finelog.allow_firewall)),
+        ("deny-public firewall", _compute(project, "firewall-rules", "describe", finelog.deny_firewall)),
+        ("NEG", _compute(project, "network-endpoint-groups", "describe", finelog.neg, f"--zone={zone}")),
+        ("health check", _compute(project, "health-checks", "describe", finelog.health_check, "--global")),
+        ("backend service", _compute(project, "backend-services", "describe", finelog.service, "--global")),
+        ("Cloud Armor policy", _compute(project, "security-policies", "describe", finelog.armor_policy)),
+    ]
     click.echo(f"finelog {finelog.vm} (IAP-free; sender ingress):")
     for label, describe in finelog_checks:
         click.echo(f"  [{'OK ' if _exists(describe) else 'off '}] {label}")
@@ -1889,11 +1909,7 @@ def teardown(
     fe = Frontend(name=frontend_name, project=project)
     backend = Backend(cluster=cluster, project=project, zone=zone, domain=domain)
 
-    def _delete(label: str, cmd: Sequence[str]) -> None:
-        logger.info("→ deleting %s", label)
-        result = _run([*cmd, "--quiet"], dry_run=dry_run, check=False, capture=True)
-        if not dry_run and result.returncode != 0:
-            logger.info("  (skip: %s missing or already deleted)", label)
+    _delete = functools.partial(_delete_resource, dry_run=dry_run)
 
     # Drop this cluster's host route first so the URL map stops referencing it.
     if backend.cluster != frontend_name and _url_map_has_matcher(fe, backend.path_matcher):

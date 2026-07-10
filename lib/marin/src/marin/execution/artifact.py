@@ -23,6 +23,7 @@ their producers (``LevanterCheckpoint`` in ``marin.training.training``, ``Tokeni
 import functools
 import json
 import logging
+import re
 from dataclasses import asdict, dataclass, is_dataclass
 from typing import Self, TypeVar, cast
 
@@ -171,6 +172,12 @@ class ArtifactRecord(BaseModel):
     """The canonical config JSON the ``fingerprint`` hashes, kept for the drift diff."""
     provenance: Provenance | None = None
     """Who/when/which-commit/which-argv produced this — ``None`` for a minimal manual write."""
+
+
+# The one canonical CalVer form (``YYYY.MM.DD`` with an optional ``.N`` for two immutable
+# revisions on the same day), shared by the lazy layer (``lazy._validate_version``) and
+# ``marin.publish``. Keep it here so callers agree on version identity without importing ``lazy``.
+CALVER_RE = re.compile(r"^\d{4}\.\d{2}\.\d{2}(\.\d+)?$")
 
 
 def is_mutable_version(version: str) -> bool:

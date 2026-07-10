@@ -309,6 +309,32 @@ def test_enforcing_parent_refuses_to_federate_a_local_admin_submission(tmp_path,
         assert exc.value.code == Code.PERMISSION_DENIED
 
 
+def test_a_child_job_a_peer_could_host_is_refused_as_unfederatable(tmp_path, log_client):
+    """A sub-job dispatched from inside a running job never crosses to a peer.
+
+    Its submitter is the worker running the parent, which authenticates by network location
+    as local_admin. The refusal names the structural limit (INVALID_ARGUMENT), not the
+    identity gate (PERMISSION_DENIED) that gates a root submission, and reaches no peer.
+    """
+    with ExitStack() as stack:
+        parent_service, _ = _make_service(stack, "parent", tmp_path, log_client, auth=_ENFORCING_AUTH)
+        peer_service, _ = _make_service(stack, "peer", tmp_path, log_client)
+        connection = _InProcessPeerConnection(peer_service)
+        _attach_federation(parent_service, connection)
+
+        root = JobName.root(_USER, "root-job")
+        with identity_scope(VerifiedIdentity(_USER, "admin")):
+            parent_service.launch_job(make_direct_job_request("root-job"), None)
+
+        child = _cluster_pinned_request("gpu-child")
+        child.name = root.child("gpu-child").to_wire()
+        with pytest.raises(ConnectError) as exc:
+            parent_service.launch_job(child, None)
+
+        assert exc.value.code == Code.INVALID_ARGUMENT
+        assert connection.launch_calls == 0
+
+
 def test_inbound_handoff_rejects_a_local_admin_submitter(tmp_path, log_client):
     """A local_admin (CIDR/loopback) identity is never a valid federation submitter,
     even for a verified peer — rejected regardless of the allowlist."""

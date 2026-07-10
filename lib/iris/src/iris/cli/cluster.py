@@ -354,12 +354,6 @@ def _create_secret_if_absent(client, project: str, name: str) -> None:
         click.echo(f"No permission to create {name}; adding a version to the existing secret.")
 
 
-def _add_signing_key_version(client, resource: str, private_pem: str) -> str:
-    """Add `private_pem` as a new version of `resource`; return that version's name."""
-    version = client.add_secret_version(request={"parent": resource, "payload": {"data": private_pem.encode("utf-8")}})
-    return version.name
-
-
 def _grant_secret_accessor(client, resource: str, name: str, accessor: str) -> None:
     """Grant `accessor` roles/secretmanager.secretAccessor on `resource`."""
     from google.api_core.exceptions import PermissionDenied  # noqa: PLC0415  # optional dep
@@ -454,7 +448,9 @@ def cluster_init_keys(out_file: Path | None, gcp_secret: str | None, accessor: s
         project, name = _split_secret_resource(gcp_secret)
         if reference is None:
             _create_secret_if_absent(client, project, name)
-            reference = f"gcp-secret://{_add_signing_key_version(client, gcp_secret, key.private_pem)}"
+            payload = {"data": key.private_pem.encode("utf-8")}
+            version = client.add_secret_version(request={"parent": gcp_secret, "payload": payload})
+            reference = f"gcp-secret://{version.name}"
             click.echo(f"Stored PRIVATE key in Secret Manager ({gcp_secret}).")
         if accessor is not None:
             _grant_secret_accessor(client, gcp_secret, name, accessor)

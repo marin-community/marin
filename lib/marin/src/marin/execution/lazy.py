@@ -31,7 +31,6 @@ learn.
 
 import inspect
 import json
-import re
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from typing import Any, Final, Generic, TypeVar, cast
@@ -41,6 +40,7 @@ from rigging.filesystem import marin_prefix, marin_region, prefix_join, url_to_f
 from rigging.provenance import Provenance
 
 from marin.execution.artifact import (
+    CALVER_RE,
     EXPECTED_FINGERPRINT_KEY,
     FINGERPRINT_KEY,
     RESULT_TYPE_KEY,
@@ -57,9 +57,6 @@ from marin.execution.step_runner import StepRunner
 from marin.execution.step_spec import StepSpec, _is_relative_path
 
 T = TypeVar("T", bound=Artifact)
-
-# A calendar version: YYYY.MM.DD, optionally .N for two immutable revisions on the same day.
-_CALVER_RE = re.compile(r"^\d{4}\.\d{2}\.\d{2}(\.\d+)?$")
 
 
 def _validate_segment(label: str, value: str) -> None:
@@ -84,7 +81,7 @@ def _validate_version(version: str) -> None:
     _validate_segment("version", version)
     if is_mutable_version(version):
         return
-    if not _CALVER_RE.match(version):
+    if not CALVER_RE.match(version):
         raise ValueError(
             f"version {version!r} must be a calendar version YYYY.MM.DD (optionally YYYY.MM.DD.N) "
             "or a mutable 'dev'/'<label>-dev'"

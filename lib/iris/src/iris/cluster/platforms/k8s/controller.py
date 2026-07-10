@@ -13,6 +13,7 @@ import logging
 import os
 import threading
 import time
+from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import AbstractContextManager
 from urllib.parse import urlparse
@@ -175,7 +176,12 @@ def _controller_env(config: IrisClusterConfig) -> dict[str, str]:
             f"its key from the {CONTROLLER_ENV_SECRET_NAME} Secret, which this deploy populates by "
             f"resolving the remaining references in the operator's shell. Got {list(refs)}."
         )
-    return {SIGNING_KEY_ENV_VAR: resolve_secret_spec(refs).value}
+    # The env: reference addresses the pod, not this deploy, and resolve_secret_spec takes the
+    # first source that is present: an IRIS_SIGNING_KEY in the operator's shell must never
+    # outrank the pinned reference and become the cluster's identity. A spec that names no
+    # persistent source falls back to it, which is how an operator supplies the key directly.
+    persistent = tuple(ref for ref in refs if ref != env_ref)
+    return {SIGNING_KEY_ENV_VAR: resolve_secret_spec(persistent or refs).value}
 
 
 def _build_controller_deployment(
@@ -184,23 +190,22 @@ def _build_controller_deployment(
     image: str,
     port: int,
     node_selector: dict[str, str],
-    task_env_secret: bool = False,
-    controller_env_secret: bool = False,
+    env_from_secrets: Sequence[str] = (),
     fresh: bool = False,
     state_mount_path: str = _DEFAULT_STATE_MOUNT_PATH,
     local_state_hostpath: bool = False,
     checkpoint_interval_seconds: float = 0,
 ) -> dict:
-    """Build the controller Deployment manifest as a dict."""
+    """Build the controller Deployment manifest as a dict.
+
+    ``env_from_secrets`` names the Secrets the controller container sources its
+    environment from, in order.
+    """
     # The cluster default env (S3 storage auth + operator-injected vars) arrives via
     # the iris-task-env Secret, which task pods mount too; the controller's own
     # credentials arrive via iris-controller-env, which they do not. optional=true so
     # a controller-only restart that predates either Secret does not crash-loop.
-    env_from: list[dict] = []
-    if task_env_secret:
-        env_from.append({"secretRef": {"name": TASK_ENV_SECRET_NAME, "optional": True}})
-    if controller_env_secret:
-        env_from.append({"secretRef": {"name": CONTROLLER_ENV_SECRET_NAME, "optional": True}})
+    env_from = [{"secretRef": {"name": secret, "optional": True}} for secret in env_from_secrets]
     # Reserve controller CPU/memory so Kubernetes doesn't classify this Pod as
     # BestEffort. Only memory has a limit, so the Pod is Burstable (not
     # Guaranteed): the controller can burst onto spare node CPU during reconcile
@@ -446,13 +451,20 @@ class K8sControllerProvider:
             self._kubectl.apply_json(_build_controller_state_pvc(namespace=self._namespace))
             logger.info("PersistentVolumeClaim %s applied", _CONTROLLER_STATE_PVC_NAME)
 
+        env_from_secrets = [
+            secret
+            for secret, projected in (
+                (TASK_ENV_SECRET_NAME, projects_task_env_secret(config)),
+                (CONTROLLER_ENV_SECRET_NAME, _projects_controller_env_secret(config)),
+            )
+            if projected
+        ]
         deploy_kwargs = dict(
             namespace=self._namespace,
             image=config.controller.image,
             port=port,
             node_selector={self._iris_labels.iris_scale_group: cw.scale_group},
-            task_env_secret=projects_task_env_secret(config),
-            controller_env_secret=_projects_controller_env_secret(config),
+            env_from_secrets=env_from_secrets,
             state_mount_path=state_mount_path,
             local_state_hostpath=local_state_hostpath,
             checkpoint_interval_seconds=config.controller.checkpoint_interval_seconds,

@@ -231,7 +231,6 @@ class ControllerTarget:
             image=cfg.controller.image,
             port=port,
             node_selector=node_selector,
-            task_env_secret=False,
             fresh=False,
         )
         if local_image:

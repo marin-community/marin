@@ -179,8 +179,9 @@ pull model — CoreWeave must be reachable *inbound*; a peer behind NAT with no
 ingress is out of scope). The auth surface is two factors, both required and
 neither alone sufficient:
 
-1. **IP allowlist** — a Traefik `ipAllowList` Middleware admits only the marin
-   controller's egress IP. The *network* factor.
+1. **IP allowlist** — a Traefik `ipAllowList` Middleware admits only the egress IPs
+   of the marin-side controllers that federate here (`FEDERATION_ALLOW_SOURCES` in
+   `install_cw_network.py`). The *network* factor.
 2. **The controller's own auth** — the `aud="federation"` verifier for the handoff
    RPCs, the general auth chain for the rest. The *identity* factor.
 
@@ -243,14 +244,15 @@ its own unrestricted Ingress, so the IP allowlist does not block ACME validation
 - the same call **without** the JWT (controller enforcing) -> `UNAUTHENTICATED`.
 - the same call from a **non-allowlisted IP** -> refused (`403`).
 
-#### Stable egress IP for the marin controller
+#### Stable egress IPs for the marin controllers
 
-CoreWeave allowlists exactly one address, so the marin controller needs a
-**stable** egress IP. Its GCE VM (`iris-controller-marin`, zone `us-central1-a`,
-project `hai-gcp-models`) is created with an *ephemeral* external IP, which
-changes on stop/start. Make it stable **without touching the VM** by promoting
-that in-use address to a reserved static IP — same address, no access-config
-change, no restart:
+The allowlist names each federating controller by address, so every one of them
+needs a **stable** egress IP: `iris-controller-marin` and `iris-controller-marin-dev`,
+reserved as `iris-marin-fed-egress` and `iris-marin-dev-fed-egress`. A controller's
+GCE VM (zone `us-central1-a`, project `hai-gcp-models`) is created with an
+*ephemeral* external IP, which changes on stop/start. Make it stable **without
+touching the VM** by promoting that in-use address to a reserved static IP — same
+address, no access-config change, no restart:
 
 ```bash
 PROJECT=hai-gcp-models ZONE=us-central1-a REGION=us-central1 VM=iris-controller-marin
@@ -264,9 +266,12 @@ gcloud compute addresses create iris-marin-fed-egress --project "$PROJECT" \
   --region "$REGION" --addresses "$EGRESS_IP"
 ```
 
-Allowlist `$EGRESS_IP` in `--allow-source`. Reserving an in-use address is safe
-and reversible (`gcloud compute addresses delete iris-marin-fed-egress` releases
-it back to ephemeral). **Alternative** (only if the controller is later moved to
+Add `$EGRESS_IP` to `FEDERATION_ALLOW_SOURCES`, which is what `--allow-source`
+defaults to. The Middleware's `sourceRange` is replaced wholesale on every install
+rather than merged, so an install naming a subset strands the omitted controller at
+a `403` the peer never logs. Reserving an in-use address is safe and reversible
+(`gcloud compute addresses delete iris-marin-fed-egress` releases it back to
+ephemeral). **Alternative** (only if the controller is later moved to
 IAP-only inbound with *no* external IP, so egress goes through Cloud NAT): reserve
 a regional static IP and pin Cloud NAT to it (`gcloud compute routers nats update
 … --nat-external-ip-pool=iris-marin-fed-egress`). Removing the VM's external IP is

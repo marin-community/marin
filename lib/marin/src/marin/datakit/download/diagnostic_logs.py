@@ -21,11 +21,12 @@ import fsspec
 import requests
 from fray.types import ResourceConfig
 from pydantic import BaseModel, ConfigDict
-from rigging.filesystem import StoragePath, marin_prefix, open_url, prefix_join, url_to_fs
+from rigging.filesystem import StoragePath, atomic_rename, marin_prefix, open_url, prefix_join, url_to_fs
 from zephyr import counters
 from zephyr.dataset import Dataset
 from zephyr.execution import ZephyrContext
 
+from marin.datakit.download.http_session import build_retrying_session
 from marin.datakit.ingestion_manifest import (
     IdentityTreatment,
     IngestionPolicy,
@@ -46,6 +47,7 @@ logger = logging.getLogger(__name__)
 GHALOGS_RECORD_URL = "https://zenodo.org/records/14796970"
 LOGCHUNKS_RECORD_URL = "https://zenodo.org/records/3632351"
 LOGHUB_REPO_URL = "https://github.com/logpai/loghub"
+GHALOGS_DOWNLOAD_URL = "https://zenodo.org/records/14796970/files/github_run_logs.zip?download=1"
 LOGCHUNKS_DOWNLOAD_URL = "https://zenodo.org/records/3632351/files/LogChunks.zip?download=1"
 LOGHUB_SNAPSHOT_URL = "https://github.com/logpai/loghub/archive/refs/heads/master.zip"
 GHALOGS_ZIP_FILENAME = "github_run_logs.zip"
@@ -63,6 +65,10 @@ GHALOGS_STAGED_ARCHIVE_RELATIVE_PATH = os.path.join(
 )
 
 GHALOGS_TOTAL_BYTES = 143_425_404_506
+# Exact byte length of the published ``github_run_logs.zip`` on Zenodo. Used as
+# the skip-if-staged check; differs from ``GHALOGS_TOTAL_BYTES`` (the manifest's
+# advertised compressed size) because that figure is a rough catalog estimate.
+GHALOGS_ARCHIVE_BYTES = 142_292_965_496
 LOGCHUNKS_TOTAL_BYTES = 24_108_826
 LOGHUB_REPO_SIZE_BYTES = 7_513_088
 GHALOGS_ROUGH_TOKENS_B = 150.0
@@ -74,6 +80,12 @@ LONG_TAIL_PPL_EPIC_ISSUE = 5005
 PUBLIC_DIAGNOSTIC_LOGS_ISSUE = 5094
 _DOWNLOAD_CHUNK_BYTES = 1 << 20
 _DOWNLOAD_TIMEOUT = 300
+# GHALogs archive is ~142 GB; stream it in large chunks straight to the object
+# store without buffering the whole file locally.
+_GHALOGS_HTTP_CHUNK_BYTES = 64 * 1024 * 1024
+_GHALOGS_S3_BLOCK_BYTES = 256 * 1024 * 1024  # multipart part size (~558 parts)
+_GHALOGS_LOG_EVERY_BYTES = 4 * 1024 * 1024 * 1024  # progress line every ~4 GB
+_GHALOGS_DOWNLOAD_TIMEOUT = (30, 600)  # (connect, read) seconds
 
 _PARTITION_BUCKETS = 10_000
 _ISSUE_5093_HOLDOUT_BUCKETS = 100
@@ -981,17 +993,93 @@ def extract_ghalogs_step(
     )
 
 
+def stage_ghalogs_archive(output_path: str) -> None:
+    """Stream the ~142 GB GHALogs Zenodo archive under ``output_path`` (idempotent).
+
+    Idempotent: a correctly-sized copy is left untouched, so re-running is a
+    cheap no-op once staged; a partial or truncated download never becomes the
+    published archive. The archive is written to
+    ``{output_path}/{GHALOGS_STAGED_ARCHIVE_RELATIVE_PATH}`` — the path
+    :func:`materialize_ghalogs_to_parquet` reads from. Bytes stream straight to
+    the object store without buffering the whole file locally.
+    """
+    archive_path = prefix_join(output_path, GHALOGS_STAGED_ARCHIVE_RELATIVE_PATH)
+    fs, path = url_to_fs(archive_path)
+
+    if fs.exists(path) and fs.size(path) == GHALOGS_ARCHIVE_BYTES:
+        logger.info("GHALogs archive already staged (%d bytes): %s", GHALOGS_ARCHIVE_BYTES, archive_path)
+        return
+
+    StoragePath(os.path.dirname(archive_path)).mkdirs(exist_ok=True)
+    logger.info("Streaming %s -> %s (%d bytes expected)", GHALOGS_DOWNLOAD_URL, archive_path, GHALOGS_ARCHIVE_BYTES)
+    total = 0
+    next_log = _GHALOGS_LOG_EVERY_BYTES
+    session = build_retrying_session()
+    with session.get(GHALOGS_DOWNLOAD_URL, stream=True, timeout=_GHALOGS_DOWNLOAD_TIMEOUT) as response:
+        response.raise_for_status()
+        with atomic_rename(path, fs=fs) as tmp:
+            with fs.open(tmp, "wb", block_size=_GHALOGS_S3_BLOCK_BYTES) as out:
+                for chunk in response.iter_content(chunk_size=_GHALOGS_HTTP_CHUNK_BYTES):
+                    if not chunk:
+                        continue
+                    out.write(chunk)
+                    total += len(chunk)
+                    if total >= next_log:
+                        logger.info("staged %.1f / %.1f GB", total / 1e9, GHALOGS_ARCHIVE_BYTES / 1e9)
+                        next_log += _GHALOGS_LOG_EVERY_BYTES
+            # Verify before atomic_rename publishes: a truncated stream raises
+            # here and the temp key is cleaned up, so no partial archive lands
+            # at the final path.
+            if total != GHALOGS_ARCHIVE_BYTES:
+                raise RuntimeError(
+                    f"GHALogs archive size mismatch after staging: got {total}, expected {GHALOGS_ARCHIVE_BYTES}"
+                )
+    logger.info("Staged GHALogs archive: %d bytes -> %s", total, archive_path)
+
+
+def download_ghalogs_step(
+    *,
+    source_path: str = GHALOGS_STAGED_PREFIX,
+    output_path_prefix: str | None = None,
+) -> StepSpec:
+    """Return a StepSpec that stages the GHALogs Zenodo archive at ``source_path``.
+
+    The step's output path is pinned to ``source_path`` (via
+    ``override_output_path``) so the archive lands exactly where the paired
+    :func:`materialize_ghalogs_step` reads it. Idempotent: the step no-ops once
+    the ~142 GB archive is present.
+    """
+    source = SOURCE_MANIFESTS["ghalogs"]
+    return StepSpec(
+        name="raw/diagnostic_logs/ghalogs_public_archive",
+        output_path_prefix=output_path_prefix,
+        override_output_path=source_path,
+        fn=lambda output_path: stage_ghalogs_archive(output_path),
+        hash_attrs={
+            "version": "v1",
+            "download_url": GHALOGS_DOWNLOAD_URL,
+            "archive_bytes": GHALOGS_ARCHIVE_BYTES,
+            "archive_relative_path": GHALOGS_STAGED_ARCHIVE_RELATIVE_PATH,
+            "source_path": source_path,
+            "source_label": source.source_label,
+            "source_content_fingerprint": source.fingerprint(),
+        },
+    )
+
+
 def materialize_ghalogs_step(
     *,
     source_path: str = GHALOGS_STAGED_PREFIX,
     max_members: int | None = None,
     num_shards: int = DEFAULT_GHALOGS_MATERIALIZE_SHARDS,
+    deps: list[StepSpec] | None = None,
     output_path_prefix: str | None = None,
 ) -> StepSpec:
     """Return a StepSpec that materializes GHALogs into reusable parquet shards."""
     source = SOURCE_MANIFESTS["ghalogs"]
     return StepSpec(
         name="processed/diagnostic_logs/ghalogs_public_parquet",
+        deps=deps or [],
         output_path_prefix=output_path_prefix,
         fn=lambda output_path: materialize_ghalogs_to_parquet(
             source_path,
@@ -1045,12 +1133,22 @@ def ghalogs_public_normalize_steps(
     max_members: int | None = None,
     num_materialize_shards: int = DEFAULT_GHALOGS_MATERIALIZE_SHARDS,
     output_path_prefix: str | None = None,
-) -> tuple[StepSpec, StepSpec, StepSpec]:
-    """Return the Datakit ``(materialize, train-partition, normalize)`` chain for GHALogs."""
+) -> tuple[StepSpec, StepSpec, StepSpec, StepSpec]:
+    """Return the Datakit ``(download, materialize, train-partition, normalize)`` chain for GHALogs.
+
+    ``download`` streams the Zenodo archive to ``source_path`` and is wired as a
+    dependency of ``materialize`` so the ~142 GB archive is auto-staged before
+    materialization reads it (idempotent — a no-op when already staged).
+    ``materialize`` reads from the download step's resolved ``output_path`` so
+    the two always agree on the archive location, even when ``output_path_prefix``
+    differs from ``marin_prefix()``.
+    """
+    download = download_ghalogs_step(source_path=source_path, output_path_prefix=output_path_prefix)
     materialized = materialize_ghalogs_step(
-        source_path=source_path,
+        source_path=download.output_path,
         max_members=max_members,
         num_shards=num_materialize_shards,
+        deps=[download],
         output_path_prefix=output_path_prefix,
     )
     train_partition = materialize_ghalogs_partition_step(
@@ -1066,7 +1164,7 @@ def ghalogs_public_normalize_steps(
         file_extensions=(".parquet",),
         output_path_prefix=output_path_prefix,
     )
-    return (materialized, train_partition, normalized)
+    return (download, materialized, train_partition, normalized)
 
 
 def extract_logchunks_step(

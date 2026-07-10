@@ -168,6 +168,16 @@ _LOCAL_ADMIN_FEDERATION_DENIED = (
 )
 
 
+def _child_federation_refusal(job_id: JobName, peer_id: str) -> str:
+    """The message refusing to federate child ``job_id`` to ``peer_id``, naming the remedy."""
+    return (
+        f"Job {job_id} requests a shape no local backend provides, and peer {peer_id!r} advertises it, "
+        "but only whole root jobs are federated to a peer — a child job stays on the cluster that "
+        f"runs its parent. Submit the root job to {peer_id!r} instead, so its whole tree runs there: "
+        f"iris job run --target-cluster {peer_id} -- <command>"
+    )
+
+
 def _accumulate_routing_decision(merged: vm_pb2.RoutingDecision, sub: vm_pb2.RoutingDecision) -> None:
     """Fold one backend's routing decision into the merged decision.
 
@@ -1246,10 +1256,10 @@ class ControllerServiceImpl:
         peer_id: str,
         submitting_user: str,
     ) -> controller_pb2.Controller.LaunchJobResponse:
-        """Hand a job off to a federation peer and return the parent's job id.
+        """Hand a root job off to a federation peer and return the parent's job id.
 
-        Only a root job is ever handed off — the peer runs it under the same,
-        cluster-invariant job id, so handing off a non-root job would clash with the
+        The caller has established that ``job_id`` is a root: the peer runs it under the
+        same, cluster-invariant job id, so handing off a non-root job would clash with the
         job's own tree on the peer. The manager persists the federated handle in one
         local transaction, then synchronously delivers it to the peer. A transient
         delivery failure is not fatal — the sync loop re-drives the handle — so an
@@ -1257,11 +1267,7 @@ class ControllerServiceImpl:
         will repeat (its allowlist refuses the submitter, or it already runs that job)
         propagates to the caller, having terminalized the local handle.
         """
-        if not job_id.is_root:
-            raise ConnectError(
-                Code.INVALID_ARGUMENT,
-                f"Job {job_id} is not a root job; only whole root jobs may be federated to a peer.",
-            )
+        assert job_id.is_root, f"only whole root jobs may be federated to a peer; got {job_id}"
         self._controller.federation.submit_federated_handle(
             local_job_id=job_id,
             request=request,
@@ -1648,6 +1654,12 @@ class ControllerServiceImpl:
             )
 
         if not routing.is_local:
+            # Only a whole root job is ever handed off. A child's submitter is the worker
+            # running its parent, which authenticates by network location as local_admin, so
+            # the structural limit is checked ahead of the identity gate below: it is the
+            # reason every dispatched accelerator sub-job is refused.
+            if not job_id.is_root:
+                raise ConnectError(Code.INVALID_ARGUMENT, _child_federation_refusal(job_id, routing.peer_id))
             # With auth on, a local_admin (CIDR/loopback) submission is never federated:
             # the peer would reject it anyway, so fail here rather than after a round-trip.
             # Null-auth (dev/loopback) has no real identity to carry, so it federates.
