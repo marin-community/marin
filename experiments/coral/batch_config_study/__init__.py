@@ -30,9 +30,9 @@ from marin.training.training import LevanterCheckpoint
 from experiments.coral.batch_config import (
     BYTES_PER_GIB,
     adam_optimizer_bytes,
-    batch_config,
     batch_memory_bytes,
     dense_transformer_bytes,
+    tpu_batch_config,
     tpu_hbm_capacity_bytes,
 )
 from experiments.llama import llama3_tokenizer_vocab_size, llama_150m, llama_600m
@@ -43,7 +43,6 @@ DCLM_BASELINE_100M_CACHE = f"{REGION_PREFIX}/tokenized/dclm_baseline_100m_llama3
 DEFAULT_VERSION = "2026.07.09"
 DEFAULT_NUM_TRAIN_STEPS = 20
 DEFAULT_OVERHEAD_FACTOR = 1.0
-DEFAULT_HBM_UTILIZATION = 1.0
 STUDY_ID = "reps80g-nohf"
 WANDB_GROUP_PREFIX = "coral-batch-config-study"
 TPU_HOST_RAM = "80g"
@@ -137,7 +136,6 @@ def estimate_case(
     case: StudyCase,
     *,
     overhead_factor: float = DEFAULT_OVERHEAD_FACTOR,
-    hbm_utilization: float = DEFAULT_HBM_UTILIZATION,
 ) -> CaseEstimate:
     """Estimate memory and Levanter batch settings for one study case."""
     parameter_count = case.model.total_trainable_params(llama3_tokenizer_vocab_size)
@@ -156,14 +154,10 @@ def estimate_case(
         activation_bytes=activation_bytes,
         overhead_factor=overhead_factor,
     )
-    per_device_parallelism, gradient_accumulation = batch_config(
+    per_device_parallelism, gradient_accumulation = tpu_batch_config(
         case.tpu,
         case.batch_size,
-        param_bytes=param_bytes,
-        optimizer_bytes=optimizer_bytes,
-        activation_bytes=activation_bytes,
-        overhead_factor=overhead_factor,
-        hbm_utilization=hbm_utilization,
+        total_bytes,
     )
     return CaseEstimate(
         parameter_count=parameter_count,
@@ -171,7 +165,7 @@ def estimate_case(
         optimizer_bytes=optimizer_bytes,
         activation_bytes=activation_bytes,
         total_bytes=total_bytes,
-        hbm_capacity_bytes=tpu_hbm_capacity_bytes(case.tpu, hbm_utilization=hbm_utilization),
+        hbm_capacity_bytes=tpu_hbm_capacity_bytes(case.tpu),
         per_device_parallelism=per_device_parallelism,
         gradient_accumulation=gradient_accumulation,
     )
@@ -184,10 +178,9 @@ def build_case(
     num_train_steps: int = DEFAULT_NUM_TRAIN_STEPS,
     wandb_project: str = "marin",
     overhead_factor: float = DEFAULT_OVERHEAD_FACTOR,
-    hbm_utilization: float = DEFAULT_HBM_UTILIZATION,
 ) -> ArtifactStep[LevanterCheckpoint]:
     """Build one training artifact with estimated batch settings applied."""
-    estimate = estimate_case(case, overhead_factor=overhead_factor, hbm_utilization=hbm_utilization)
+    estimate = estimate_case(case, overhead_factor=overhead_factor)
     run_id = f"coral-batch-config-{STUDY_ID}-{case.name}-{version}"
     dataset = dclm_baseline_100m_europe_west4()
     base = train_lm(
@@ -230,7 +223,6 @@ def build(
     num_train_steps: int = DEFAULT_NUM_TRAIN_STEPS,
     wandb_project: str = "marin",
     overhead_factor: float = DEFAULT_OVERHEAD_FACTOR,
-    hbm_utilization: float = DEFAULT_HBM_UTILIZATION,
 ) -> list[ArtifactStep[LevanterCheckpoint]]:
     """Build the selected study cases."""
     return [
@@ -240,7 +232,6 @@ def build(
             num_train_steps=num_train_steps,
             wandb_project=wandb_project,
             overhead_factor=overhead_factor,
-            hbm_utilization=hbm_utilization,
         )
         for case in _selected_cases(case_names)
     ]
@@ -300,7 +291,6 @@ def _print_plan(
     case_names: Sequence[str],
     *,
     overhead_factor: float,
-    hbm_utilization: float,
     version: str,
     num_train_steps: int,
 ) -> None:
@@ -309,7 +299,6 @@ def _print_plan(
     print(f"data: {DCLM_BASELINE_100M_CACHE}")
     print(f"steps: {num_train_steps}")
     print(f"overhead_factor: {overhead_factor}")
-    print(f"hbm_utilization: {hbm_utilization}")
     print()
     print(
         "| case | tpu | model | batch | params | estimate GiB | capacity GiB | "
@@ -317,7 +306,7 @@ def _print_plan(
     )
     print("|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|")
     for case in _selected_cases(case_names):
-        estimate = estimate_case(case, overhead_factor=overhead_factor, hbm_utilization=hbm_utilization)
+        estimate = estimate_case(case, overhead_factor=overhead_factor)
         run_id = f"coral-batch-config-{STUDY_ID}-{case.name}-{version}"
         print(
             f"| {case.name} | {case.tpu} | {case.model_name} | {case.batch_size} | "
@@ -339,7 +328,6 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--num-train-steps", type=int, default=DEFAULT_NUM_TRAIN_STEPS)
     parser.add_argument("--wandb-project", default=os.environ.get("WANDB_PROJECT", "marin"))
     parser.add_argument("--overhead-factor", type=float, default=DEFAULT_OVERHEAD_FACTOR)
-    parser.add_argument("--hbm-utilization", type=float, default=DEFAULT_HBM_UTILIZATION)
     return parser.parse_args()
 
 
@@ -351,7 +339,6 @@ def main() -> None:
             version=args.version,
             num_train_steps=args.num_train_steps,
             overhead_factor=args.overhead_factor,
-            hbm_utilization=args.hbm_utilization,
         )
         return
 
@@ -364,7 +351,6 @@ def main() -> None:
                 num_train_steps=args.num_train_steps,
                 wandb_project=args.wandb_project,
                 overhead_factor=args.overhead_factor,
-                hbm_utilization=args.hbm_utilization,
             )
         ]
     )

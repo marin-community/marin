@@ -69,50 +69,44 @@ def batch_memory_bytes(
     activation_bytes: int,
     overhead_factor: float = 2.0,
 ) -> int:
-    """Combine caller-provided HBM byte buckets for one global training batch.
-
-    Pass ``param_bytes`` and ``optimizer_bytes`` on the same aggregate-slice
-    basis as ``tpu_hbm_capacity_bytes``. They stay fixed during gradient
-    accumulation. ``activation_bytes`` is the full-batch estimate and is the only
-    bucket scaled down when selecting a microbatch.
-    """
+    """Combine caller-provided HBM byte buckets for one global training batch."""
     return math.ceil((param_bytes + optimizer_bytes + activation_bytes) * overhead_factor)
 
 
-def batch_config(
+def tpu_batch_config(
     tpu: str,
     batch_size: int,
+    batch_bytes: int,
     *,
-    param_bytes: int,
-    optimizer_bytes: int,
-    activation_bytes: int,
-    overhead_factor: float = 2.0,
-    hbm_utilization: float = 1.0,
     data_axis_size: int | None = None,
 ) -> tuple[int, int]:
-    """Return ``(per_device_parallelism, gradient_accumulation)`` for a batch.
+    """Choose TPU batch fit settings for a global batch.
 
-    ``data_axis_size`` is the physical size of Levanter's batch/data axis. It
-    defaults to the TPU slice chip count, which is correct for pure data parallel
-    training. Pass a smaller value when some chips are assigned to non-batch axes:
-    for example, on ``v5p-32`` with 16 chips and tensor parallel size 4, pass
-    ``data_axis_size=4`` because each microbatch is spread over only 4 data shards.
+    Args:
+        tpu: TPU topology string accepted by Fray, such as `"v5litepod-8"`.
+        batch_size: Global training batch size.
+        batch_bytes: Aggregate HBM needed to place the full global batch. This
+            can come from `batch_memory_bytes` or from empirical measurements of
+            a similar run. When the full batch does not fit, this calculation
+            assumes the memory requirement scales linearly with microbatch size.
+        data_axis_size: Number of TPU chips on the batch/data axis. This defaults
+            to the TPU slice chip count for pure data parallel training. Pass a
+            smaller value when some chips are assigned to non-batch axes; for
+            example, on `"v5p-32"` with 16 chips and tensor parallel size 2, pass
+            `data_axis_size=8` because each microbatch is spread over 8 data
+            shards.
+
+    Returns:
+        A `(per_device_parallelism, gradient_accumulation)` tuple. The
+        `per_device_parallelism` value is `-1` when the full batch fits without
+        extra microbatching.
     """
     topology = get_tpu_topology(tpu)
     data_axis_size = _resolve_data_axis_size(topology.chip_count, data_axis_size)
     _validate_batch_divisible_by_data_axis(batch_size, data_axis_size)
-    _validate_hbm_utilization(hbm_utilization)
 
-    capacity_bytes = _slice_hbm_capacity_bytes(tpu, hbm_utilization=hbm_utilization)
-    if (
-        batch_memory_bytes(
-            param_bytes=param_bytes,
-            optimizer_bytes=optimizer_bytes,
-            activation_bytes=activation_bytes,
-            overhead_factor=overhead_factor,
-        )
-        <= capacity_bytes
-    ):
+    capacity_bytes = _slice_hbm_capacity_bytes(tpu)
+    if batch_bytes <= capacity_bytes:
         return -1, 1
 
     full_per_device_batch = batch_size // data_axis_size
@@ -120,24 +114,13 @@ def batch_config(
         if full_per_device_batch % pdp != 0:
             continue
         microbatch_size = pdp * data_axis_size
-        if (
-            _batch_memory_bytes_for_microbatch(
-                param_bytes=param_bytes,
-                optimizer_bytes=optimizer_bytes,
-                activation_bytes=activation_bytes,
-                overhead_factor=overhead_factor,
-                full_batch_size=batch_size,
-                microbatch_size=microbatch_size,
-            )
-            <= capacity_bytes
+        if _batch_bytes_for_microbatch(batch_bytes, full_batch_size=batch_size, microbatch_size=microbatch_size) <= (
+            capacity_bytes
         ):
             return pdp, batch_size // microbatch_size
 
-    minimum_microbatch_bytes = _batch_memory_bytes_for_microbatch(
-        param_bytes=param_bytes,
-        optimizer_bytes=optimizer_bytes,
-        activation_bytes=activation_bytes,
-        overhead_factor=overhead_factor,
+    minimum_microbatch_bytes = _batch_bytes_for_microbatch(
+        batch_bytes,
         full_batch_size=batch_size,
         microbatch_size=data_axis_size,
     )
@@ -149,27 +132,16 @@ def batch_config(
     )
 
 
-def tpu_hbm_capacity_bytes(tpu: str, *, hbm_utilization: float = 1.0) -> int:
-    """Return aggregate target HBM capacity for a TPU slice."""
-    _validate_hbm_utilization(hbm_utilization)
-    return _slice_hbm_capacity_bytes(tpu, hbm_utilization=hbm_utilization)
+def tpu_hbm_capacity_bytes(tpu: str) -> int:
+    """Return aggregate HBM capacity for a TPU slice."""
+    return _slice_hbm_capacity_bytes(tpu)
 
 
-def _batch_memory_bytes_for_microbatch(
-    *,
-    param_bytes: int,
-    optimizer_bytes: int,
-    activation_bytes: int,
-    overhead_factor: float,
-    full_batch_size: int,
-    microbatch_size: int,
-) -> int:
-    microbatch_activation_bytes = math.ceil(activation_bytes * microbatch_size / full_batch_size)
-    subtotal_bytes = param_bytes + optimizer_bytes + microbatch_activation_bytes
-    return math.ceil(subtotal_bytes * overhead_factor)
+def _batch_bytes_for_microbatch(batch_bytes: int, *, full_batch_size: int, microbatch_size: int) -> int:
+    return math.ceil(batch_bytes * microbatch_size / full_batch_size)
 
 
-def _slice_hbm_capacity_bytes(tpu: str, *, hbm_utilization: float) -> int:
+def _slice_hbm_capacity_bytes(tpu: str) -> int:
     topology = get_tpu_topology(tpu)
     family = tpu_family(tpu)
     generation_memory = TPU_GENERATION_MEMORY.get(family)
@@ -177,7 +149,7 @@ def _slice_hbm_capacity_bytes(tpu: str, *, hbm_utilization: float) -> int:
         raise ValueError(
             f"No HBM memory spec for TPU family {family!r}. Known families: {sorted(TPU_GENERATION_MEMORY)}"
         )
-    return math.floor(topology.chip_count * generation_memory * hbm_utilization)
+    return topology.chip_count * generation_memory
 
 
 def _resolve_data_axis_size(chip_count: int, data_axis_size: int | None) -> int:
@@ -203,11 +175,6 @@ def _validate_batch_divisible_by_data_axis(batch_size: int, data_axis_size: int)
         f"batch_size ({batch_size}) must be divisible by data_axis_size ({data_axis_size}) for Levanter "
         f"microbatching. Use batch_size={next_valid}, choose another batch size, or pass the correct data_axis_size."
     )
-
-
-def _validate_hbm_utilization(hbm_utilization: float) -> None:
-    if not (0.0 < hbm_utilization <= 1.0):
-        raise ValueError(f"hbm_utilization must be in the interval (0.0, 1.0], got {hbm_utilization}")
 
 
 def _validate_activation_layer_fraction(activation_layer_fraction: float) -> None:
