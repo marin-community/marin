@@ -34,6 +34,7 @@ class _GatedVarlenFfi:
             _CLUSTER_SHAPE,
             pingpong=True,
             is_persistent=True,
+            concat_layout=("B",),
         )
         self.max_active_clusters = get_max_active_clusters(_CLUSTER_SHAPE[0] * _CLUSTER_SHAPE[1])
 
