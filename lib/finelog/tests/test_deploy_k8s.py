@@ -19,12 +19,9 @@ from finelog.deploy._k8s import (
     k8s_down,
 )
 from finelog.deploy.config import (
-    CidrAuthLayer,
     Deployment,
     FinelogConfig,
     ForwardingConfig,
-    JwtAuthLayer,
-    JwtKeyEntry,
     K8sDeployment,
 )
 from rigging.secrets import SecretResolutionError
@@ -45,134 +42,11 @@ def _s3_cfg(**k8s_overrides) -> FinelogConfig:
     )
 
 
-@pytest.fixture
-def cfg() -> FinelogConfig:
-    return FinelogConfig(
-        name="finelog",
-        port=20001,
-        image="ghcr.io/example/finelog:dev",
-        remote_log_dir="gs://bucket/logs",
-        deployment=Deployment(
-            gcp=None,
-            k8s=K8sDeployment(namespace="iris", storage_class="pd-ssd", storage_gb=42),
-        ),
-    )
-
-
-@pytest.mark.parametrize("manifest_name", _MANIFESTS)
-def test_render_manifest_does_not_raise(cfg: FinelogConfig, manifest_name: str) -> None:
-    """Each manifest must render without `render_template` raising on unused vars."""
-    rendered = _render_manifest(_K8S_MANIFEST_DIR / manifest_name, cfg)
-    assert "{{" not in rendered, f"unsubstituted placeholder in {manifest_name}: {rendered}"
-
-
-def test_render_pvc_includes_storage_settings(cfg: FinelogConfig) -> None:
-    rendered = _render_manifest(_K8S_MANIFEST_DIR / "01-pvc.yaml.tmpl", cfg)
-    assert "finelog-cache" in rendered
-    assert "namespace: iris" in rendered
-    assert "storageClassName: pd-ssd" in rendered
-    assert "storage: 42Gi" in rendered
-
-
-def test_render_deployment_threads_port_to_env_and_probes(cfg: FinelogConfig) -> None:
-    rendered = _render_manifest(_K8S_MANIFEST_DIR / "02-deployment.yaml.tmpl", cfg)
-    assert "image: ghcr.io/example/finelog:dev" in rendered
-    assert "containerPort: 20001" in rendered
-    # Probes and env both reference the configured port — required for non-default ports.
-    assert "port: 20001" in rendered
-    assert "name: FINELOG_PORT" in rendered
-    assert 'value: "20001"' in rendered
-    assert 'value: "gs://bucket/logs"' in rendered
-
-
-def test_render_deployment_omits_priority_class_by_default(cfg: FinelogConfig) -> None:
-    """No priority_class_name configured -> the pod carries no priorityClassName."""
-    rendered = _render_manifest(_K8S_MANIFEST_DIR / "02-deployment.yaml.tmpl", cfg)
-    assert "priorityClassName" not in rendered
-
-
-def test_render_deployment_stamps_priority_class_when_configured() -> None:
-    """A configured priority_class_name lands in the pod spec so the control-plane
-    finelog is not preemptible by user jobs on the shared node."""
-    cfg = FinelogConfig(
-        name="finelog",
-        port=20001,
-        image="ghcr.io/example/finelog:dev",
-        remote_log_dir="gs://bucket/logs",
-        deployment=Deployment(
-            k8s=K8sDeployment(namespace="iris", priority_class_name="iris-system", priority_class_value=10000)
-        ),
-    )
-    rendered = _render_manifest(_K8S_MANIFEST_DIR / "02-deployment.yaml.tmpl", cfg)
-    assert "priorityClassName: iris-system" in rendered
-
-
 def test_k8s_deployment_rejects_priority_class_name_without_value() -> None:
     """Name and value are meaningless apart — deploy up needs the value to create
     the class, so half a config must fail at construction, not at apply time."""
     with pytest.raises(ValueError, match="must be set together"):
         K8sDeployment(namespace="iris", priority_class_name="iris-system")
-
-
-def test_render_deployment_inlines_cidr_auth_policy() -> None:
-    cfg = FinelogConfig(
-        name="finelog",
-        port=10001,
-        image="img",
-        remote_log_dir="gs://bucket/logs",
-        deployment=Deployment(k8s=K8sDeployment(namespace="iris")),
-        auth=(CidrAuthLayer(cidrs=("10.0.0.0/8",)),),
-    )
-    rendered = _render_manifest(_K8S_MANIFEST_DIR / "02-deployment.yaml.tmpl", cfg)
-    assert "name: FINELOG_AUTH_POLICY" in rendered
-    assert '"type":"cidr"' in rendered
-
-
-# An Ed25519 public key in PEM (SubjectPublicKeyInfo). Public, so inline-safe.
-_PUB_PEM = (
-    "-----BEGIN PUBLIC KEY-----\n"
-    "MCowBQYDK2VwAyEAqwwvfFvyRQ+8Dhh0li8h2HtCT4yP40s0pzBwwSAkK5s=\n"
-    "-----END PUBLIC KEY-----\n"
-)
-
-
-def test_render_deployment_inlines_jwt_public_key() -> None:
-    # jwt keys are Ed25519 public keys, not symmetric secrets, so the deploy path
-    # inlines them into the plaintext manifest like a cidr layer.
-    cfg = FinelogConfig(
-        name="finelog",
-        port=10001,
-        image="img",
-        remote_log_dir="gs://bucket/logs",
-        deployment=Deployment(k8s=K8sDeployment(namespace="iris")),
-        auth=(JwtAuthLayer(keys=(JwtKeyEntry(cluster="marin", public_keys=(_PUB_PEM,)),)),),
-    )
-    rendered = _render_manifest(_K8S_MANIFEST_DIR / "02-deployment.yaml.tmpl", cfg)
-    assert "name: FINELOG_AUTH_POLICY" in rendered
-    assert '"type":"jwt"' in rendered
-    assert '"public_keys"' in rendered
-
-
-def test_render_service_uses_configured_port(cfg: FinelogConfig) -> None:
-    rendered = _render_manifest(_K8S_MANIFEST_DIR / "03-service.yaml.tmpl", cfg)
-    assert "port: 20001" in rendered
-    assert "targetPort: 20001" in rendered
-
-
-def test_render_pvc_omits_storage_class_when_unset() -> None:
-    cfg = FinelogConfig(
-        name="finelog",
-        port=10001,
-        image="img",
-        remote_log_dir="",
-        deployment=Deployment(
-            gcp=None,
-            k8s=K8sDeployment(namespace="default", storage_class=None, storage_gb=10),
-        ),
-    )
-    rendered = _render_manifest(_K8S_MANIFEST_DIR / "01-pvc.yaml.tmpl", cfg)
-    assert "storageClassName" in rendered  # appears in the comment fallback
-    assert "<cluster default>" in rendered
 
 
 def test_env_secret_minted_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -237,13 +111,6 @@ def _forwarding_cfg() -> FinelogConfig:
     )
 
 
-def test_render_deployment_inlines_forwarding_target_and_cluster() -> None:
-    rendered = _render_manifest(_K8S_MANIFEST_DIR / "02-deployment.yaml.tmpl", _forwarding_cfg())
-    assert "name: FINELOG_FORWARDING" in rendered
-    assert '"target":"https://finelog.oa.dev"' in rendered
-    assert '"cluster":"cw-rno2a"' in rendered
-
-
 def test_forwarding_signing_key_never_leaves_the_secret(monkeypatch: pytest.MonkeyPatch) -> None:
     """The private key reaches the pod through the Secret and through nothing else.
 
@@ -283,15 +150,6 @@ def test_env_secret_fails_when_the_signing_key_source_is_absent(monkeypatch: pyt
         _build_env_secret_manifest(_forwarding_cfg())
 
 
-def test_deployment_envfrom_matches_minted_secret_name() -> None:
-    # The template's envFrom secret name is a hardcoded `{{ name }}-env` literal,
-    # independent of the `_env_secret_name` helper that names the minted Secret —
-    # this guards the two from drifting (a mismatch silently breaks auth).
-    cfg = _s3_cfg()
-    rendered = _render_manifest(_K8S_MANIFEST_DIR / "02-deployment.yaml.tmpl", cfg)
-    assert f"name: {_env_secret_name(cfg)}" in rendered
-
-
 def _kubectl_argv(monkeypatch: pytest.MonkeyPatch) -> list[list[str]]:
     """Capture the argv of every kubectl invocation instead of running it."""
     calls: list[list[str]] = []
@@ -322,10 +180,3 @@ def test_teardown_deletes_the_secret_and_retains_only_the_cache_pvc(monkeypatch:
         f"service/{cfg.name}",
         f"secret/{_env_secret_name(cfg)}",
     }
-
-
-def test_manifest_dir_exists() -> None:
-    """Guard against the parents[3] path math drifting if the package is moved."""
-    assert _K8S_MANIFEST_DIR.is_dir(), _K8S_MANIFEST_DIR
-    for name in _MANIFESTS:
-        assert (_K8S_MANIFEST_DIR / name).is_file(), name

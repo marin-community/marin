@@ -29,12 +29,8 @@ name: cw-us-east-02a
 # External finelog log server (in-cluster k8s Deployment, namespace `iris`).
 # Resolves to k8s://finelog-cw-use02a.iris; see lib/finelog/config/cw-us-east-02a.yaml.
 # Without this the controller falls back to an in-process MemStore (logs lost on
-# restart). Deploy the server first: `uv run finelog deploy up cw-us-east-02a`.
-#
-# That server ships this cluster's logs on to marin's finelog, the federation's global
-# log sink, so a job federated here reads back from marin. Its `forwarding:` block
-# (lib/finelog/config/cw-us-east-02a.yaml) holds the target and the key it signs with; iris
-# neither forwards nor holds a credential for it.
+# restart). Deploy the server first: `uv run finelog deploy up cw-us-east-02a`. Forwarding
+# to the hub is that server's own `forwarding:` block, not configured here.
 finelog:
   config: cw-us-east-02a
 
@@ -68,14 +64,11 @@ storage:
 # present a bearer. This is the identity gate behind the IP-restricted federation
 # ingress (scripts/install_cw_network.py).
 #
-# `signing_key` signs this controller's own worker and /proxy tokens, which only this
-# controller verifies. No external party pins its public key — this cluster hands off no
-# jobs (no `peers`), and its logs are forwarded by its finelog server under that
-# server's separate key — so a rotation costs at most the outstanding proxy share-links.
-# Persisting it anyway keeps those alive across a restart. The controller pod has no GCP
-# credentials, so `iris cluster up` resolves the Secret Manager reference in the
-# operator's shell and projects it as IRIS_SIGNING_KEY through the iris-controller-env
-# Secret, which task pods do not mount. Rotate with `iris cluster init-keys --rotate`.
+# `signing_key` signs this controller's worker and /proxy tokens. The controller pod
+# has no GCP credentials, so `iris cluster up` resolves the Secret Manager reference in
+# the operator's shell and projects it as IRIS_SIGNING_KEY through the
+# iris-controller-env Secret, which task pods do not mount. Rotate with
+# `iris cluster init-keys --rotate`.
 auth:
   signing_key:
     - env:IRIS_SIGNING_KEY

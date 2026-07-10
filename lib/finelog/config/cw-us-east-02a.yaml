@@ -1,22 +1,5 @@
-# finelog log server for the CoreWeave US-EAST-02A cluster (cw-us-east-02a).
-#
-# Deployed as an in-cluster k8s Deployment + ClusterIP Service in the `iris`
-# namespace, the same namespace as the iris controller. iris references it from
-# its cluster config via `finelog.config: cw-us-east-02a`, which resolves to
-# the endpoint `k8s://finelog-cw-use02a.iris` ->
-# finelog-cw-use02a.iris.svc.cluster.local:10001.
-#
-# Archive: segments offload to Cloudflare R2 (s3://), the same object store the
-# cluster uses for controller state. `finelog deploy up` mints the
-# `finelog-cw-use02a-env` Secret from the operator's R2 creds + object_storage_endpoint
-# and projects it into the pod via envFrom (see deploy/k8s/02-deployment).
-#
-# Deploy: kubectl operations bind to deployment.k8s.kubeconfig/kube_context below
-# (no KUBECONFIG export needed). Export the R2 creds, then
-#   export R2_ACCESS_KEY_ID=... R2_SECRET_ACCESS_KEY=...
-#   uv run finelog deploy up cw-us-east-02a
-# `deploy up` also resolves forwarding.signing_key below out of GCP Secret Manager, so
-# the operator needs roles/secretmanager.secretAccessor on that secret.
+# finelog log server for the CoreWeave US-EAST-02A cluster (cw-us-east-02a): k8s
+# Deployment in the `iris` namespace, archiving to Cloudflare R2. See OPS.md to deploy.
 name: finelog-cw-use02a
 port: 10001
 image: ghcr.io/marin-community/finelog:latest
@@ -26,44 +9,21 @@ deployment:
     namespace: iris
     kubeconfig: ~/.kube/coreweave-iris
     kube_context: marin-gpu_US-EAST-02A
-    # storage_class omitted -> the cluster's default StorageClass (shared-vast,
-    # VAST CSI) backs the PVC. Segments offload to R2, but size the local cache
-    # generously to absorb ingest bursts + L0->L1 compaction before offload.
+    # storage_class omitted -> cluster default (shared-vast, VAST CSI); sized
+    # generously to absorb ingest bursts before offload to R2.
     storage_gb: 250
-    # R2 endpoint for the s3:// archive; folded into the minted creds Secret.
+    # R2 endpoint for the s3:// archive.
     object_storage_endpoint: https://74981a43be0de7712369306c7b19133d.r2.cloudflarestorage.com
-    # Run at control-plane priority so a user job cannot preempt the log backend
-    # off the shared control node. `deploy up` creates iris-system (10000) if
-    # absent; keep the value in sync with iris's IRIS_PRIORITY_CLASSES (Iris is
-    # the canonical owner — see the iris controller's ensure_priority_classes).
+    # Control-plane priority, shared with the iris controller; keep in sync
+    # with iris's IRIS_PRIORITY_CLASSES.
     priority_class_name: iris-system
     priority_class_value: 10000
-# Authenticated-ingress policy: default-deny, admitting this cluster's private network
-# (CoreWeave pods are 10.x) and loopback (port-forward) by cidr, never the public
-# internet. No jwt layer: this server sends to the hub and accepts no pushes from it.
+# cidr admits this cluster's private network and loopback; no jwt layer, since this
+# server only sends to the hub and accepts no pushes.
 auth:
   - type: cidr
     cidrs: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 127.0.0.0/8, "::1/128"]
-# Ship this cluster's rows on to marin's finelog, the federation's global log sink, so a
-# job federated here reads back from marin. The server tails its own durable rows and
-# pushes them in bulk, signing an aud="finelog" bearer with the key below; marin admits
-# it by the matching public key under `cluster: cw-us-east-02a` in its own `jwt` layer,
-# and stamps every row it receives with that cluster — the sender cannot name another
-# one. Cloud Armor narrows the edge to CoreWeave's egress prefixes first
-# (lib/iris/scripts/iap_gclb.py).
-#
-# Forwarding is best-effort: the hub holds a convenience copy, this store holds the
-# record. A sender that falls far behind (hub down, edge partitioned) skips ahead to its
-# freshest window rather than growing without bound; the rows it skipped stay queryable
-# here for the local retention window.
-#
-# `cluster` is the iris cluster id (cw-us-east-02a), not this deployment's shortened
-# name: it is the name a reader queries the hub by.
-#
-# signing_key is a reference, never the key itself: `finelog deploy up` resolves it and
-# projects it into the pod through the finelog-cw-use02a-env Secret. To rotate, add a
-# Secret Manager version, pin it here, and carry both public keys in marin's jwt entry
-# across the overlap.
+# Forwards this cluster's rows to marin, the federation hub, as cluster id cw-us-east-02a.
 forwarding:
   target: https://finelog.oa.dev
   cluster: cw-us-east-02a
