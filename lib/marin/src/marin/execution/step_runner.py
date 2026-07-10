@@ -25,7 +25,7 @@ from fray.client import JobHandle, JobStatus
 from fray.current_client import _current_client_var, current_client, set_current_client
 from fray.local_backend import LocalJobHandle
 from fray.types import Entrypoint, JobRequest, ResourceConfig, create_environment
-from iris.runtime.multigpu import IRIS_MULTIGPU_PROCESS_COUNT_ENV, IRIS_MULTIGPU_PROCESS_INDEX_ENV
+from iris.cluster.client.job_info import get_job_info
 from rigging.filesystem import StoragePath, url_to_fs
 from rigging.log_setup import configure_logging
 
@@ -57,83 +57,32 @@ from marin.utilities.json_encoder import CustomJsonEncoder
 
 logger = logging.getLogger(__name__)
 
-# Iris identifies this process's place in a multi-process launch through its
-# environment. A one-process-per-task job carries the rank in IRIS_TASK_ID. Under
-# iris.runtime.multigpu (one JAX process per GPU inside a single task) every child
-# instead shares the task's IRIS_TASK_ID and gets its own global rank in
-# IRIS_MULTIGPU_PROCESS_INDEX (= task_index * nproc + local_rank). StepRunner reads
-# these directly rather than through get_job_info(), which exposes only the
-# per-task identity and not the per-GPU rank the supervised path needs (#7080). The
-# IRIS_MULTIGPU_* names come from iris.runtime.multigpu, their canonical producer.
-IRIS_TASK_ID_ENV = "IRIS_TASK_ID"
-IRIS_NUM_TASKS_ENV = "IRIS_NUM_TASKS"
-
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
 
-def _iris_task_index() -> int | None:
-    """This process's 0-based Iris task index, or ``None`` when not an Iris task.
+def _warn_if_secondary_task() -> None:
+    """Warn when StepRunner starts on a non-primary task of a multi-task Iris job.
 
-    ``IRIS_TASK_ID`` is a wire task id ``/user/job/<index>`` with an optional
-    ``:<attempt>`` suffix (e.g. ``/alice/train/3:2`` -> index 3).
-    """
-    raw = os.environ.get(IRIS_TASK_ID_ENV)
-    if not raw:
-        return None
-    last = raw.rsplit(":", 1)[0].rsplit("/", 1)[-1]
-    try:
-        return int(last)
-    except ValueError:
-        return None
-
-
-def _spmd_rank() -> tuple[int, int] | None:
-    """This process's ``(global_rank, world_size)`` in a multi-process launch, else ``None``.
-
-    Prefers the per-GPU global rank stamped by ``iris.runtime.multigpu``; falls
-    back to the one-process-per-task ``IRIS_TASK_ID`` index. ``None`` when neither
-    is set (not an Iris task) or the values do not parse.
-    """
-    proc_index = os.environ.get(IRIS_MULTIGPU_PROCESS_INDEX_ENV)
-    if proc_index is not None:
-        try:
-            return int(proc_index), int(os.environ.get(IRIS_MULTIGPU_PROCESS_COUNT_ENV, "1"))
-        except ValueError:
-            return None
-    task_index = _iris_task_index()
-    if task_index is None:
-        return None
-    try:
-        world = int(os.environ.get(IRIS_NUM_TASKS_ENV, "1"))
-    except ValueError:
-        world = 1
-    return task_index, world
-
-
-def _warn_if_secondary_spmd_rank() -> None:
-    """Warn when StepRunner starts as a non-zero rank of a multi-process launch.
-
-    The per-step distributed lock is won by exactly one rank; the others lose the
-    race and spin without ever entering the step body. If every rank was launched
-    to run the same step (an SPMD run), those ranks never join the step's
+    The per-step distributed lock is won by exactly one task; the others lose the
+    race and spin without ever entering the step body. If every task was launched
+    to run the same step (an SPMD run), those tasks never join the step's
     collective and the job deadlocks. Flags that launch mode without blocking the
     run (#7080).
     """
-    rank = _spmd_rank()
-    if rank is None or rank[0] == 0:
+    info = get_job_info()
+    if info is None or info.task_index == 0:
         return
-    global_rank, world_size = rank
     logger.warning(
-        "StepRunner is starting as rank %d of %d in a multi-process (SPMD) launch. The per-step "
-        "distributed lock lets only one rank run each step, so this rank will lose the lock race "
-        "and spin without ever entering the step body. If every rank was launched to run the same "
-        "step, the ranks that never enter the step cannot join its collective and the job will "
-        "DEADLOCK (marin-community/marin#7080); run the executor on a single rank instead.",
-        global_rank,
-        world_size,
+        "StepRunner is starting on Iris task %d of %d. The per-step distributed lock lets only one "
+        "task run each step, so this task will lose the lock race and spin without ever entering the "
+        "step body. If every task was launched to run the same step, the tasks that never enter it "
+        "cannot join its collective and the job will DEADLOCK (marin-community/marin#7080); run the "
+        "executor on a single task instead.",
+        info.task_index,
+        info.num_tasks,
     )
 
 
@@ -260,9 +209,9 @@ class StepRunner:
         if not logging.getLogger().handlers:
             configure_logging(level=logging.INFO)
 
-        # A non-zero SPMD rank loses the per-step lock race and never enters the
+        # A non-primary Iris task loses the per-step lock race and never enters the
         # step; warn before doing any work in case an SPMD launch was intended (#7080).
-        _warn_if_secondary_spmd_rank()
+        _warn_if_secondary_task()
 
         max_workers = max_concurrent or 8
         if max_workers < 1:

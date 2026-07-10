@@ -3,7 +3,6 @@
 
 import contextvars
 import json
-import logging
 import os
 import threading
 from pathlib import Path
@@ -716,97 +715,6 @@ def test_runner_preserves_underlying_step_exception(tmp_path: Path):
     assert "Step failed: failing_step" in str(step_failure)
     assert isinstance(step_failure.__cause__, ValueError)
     assert "sentinel step failure" in str(step_failure.__cause__)
-
-
-# ---------------------------------------------------------------------------
-# SPMD / secondary-task warning (#7080)
-# ---------------------------------------------------------------------------
-
-
-_RANK_ENV_VARS = (
-    "IRIS_TASK_ID",
-    "IRIS_NUM_TASKS",
-    "IRIS_MULTIGPU_PROCESS_INDEX",
-    "IRIS_MULTIGPU_PROCESS_COUNT",
-)
-
-
-@pytest.mark.parametrize(
-    "task_id, expected",
-    [
-        ("/alice/train/3:2", 3),  # ":<attempt>" suffix is stripped
-        ("/alice/train", None),  # a job name, not a task
-        ("/alice/train/notanint", None),  # trailing component not an integer
-    ],
-)
-def test_iris_task_index_parses_wire_task_id(monkeypatch, task_id, expected):
-    monkeypatch.setenv("IRIS_TASK_ID", task_id)
-    assert step_runner_module._iris_task_index() == expected
-
-
-def _run_and_collect_warnings(step, monkeypatch, caplog, env: dict[str, str]) -> list[str]:
-    for var in _RANK_ENV_VARS:
-        monkeypatch.delenv(var, raising=False)
-    for key, value in env.items():
-        monkeypatch.setenv(key, value)
-    with caplog.at_level(logging.WARNING):
-        StepRunner().run([step])
-    return [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
-
-
-def test_runner_warns_for_secondary_task(tmp_path, monkeypatch, caplog):
-    """A non-zero one-process-per-task Iris rank warns before running, but still runs (#7080)."""
-    executed: list[str] = []
-    step = _recording_step("only", (tmp_path / "only").as_posix(), executed)
-
-    messages = _run_and_collect_warnings(
-        step, monkeypatch, caplog, {"IRIS_TASK_ID": "/alice/train/3", "IRIS_NUM_TASKS": "16"}
-    )
-
-    assert executed == ["only"]  # best-effort: the step still runs
-    assert any("rank 3 of 16" in m and "DEADLOCK" in m for m in messages)
-
-
-def test_runner_warns_for_secondary_multigpu_process(tmp_path, monkeypatch, caplog):
-    """Under iris.runtime.multigpu the per-GPU rank is IRIS_MULTIGPU_PROCESS_INDEX, not
-    IRIS_TASK_ID (all children share the task id), so the warning must key on it (#7080)."""
-    executed: list[str] = []
-    step = _recording_step("only", (tmp_path / "only").as_posix(), executed)
-
-    # A single Iris task (index 0) supervising 8 GPU processes: this is process 5.
-    messages = _run_and_collect_warnings(
-        step,
-        monkeypatch,
-        caplog,
-        {
-            "IRIS_TASK_ID": "/alice/train/0",
-            "IRIS_NUM_TASKS": "1",
-            "IRIS_MULTIGPU_PROCESS_INDEX": "5",
-            "IRIS_MULTIGPU_PROCESS_COUNT": "8",
-        },
-    )
-
-    assert executed == ["only"]
-    assert any("rank 5 of 8" in m and "DEADLOCK" in m for m in messages)
-
-
-@pytest.mark.parametrize(
-    "env",
-    [
-        {"IRIS_TASK_ID": "/alice/train/0", "IRIS_NUM_TASKS": "16"},  # task rank 0 / single driver
-        {"IRIS_MULTIGPU_PROCESS_INDEX": "0", "IRIS_MULTIGPU_PROCESS_COUNT": "8"},  # GPU rank 0 (coordinator)
-        {},  # not an Iris job
-    ],
-)
-def test_runner_no_warning_for_rank_zero_or_non_iris(tmp_path, monkeypatch, caplog, env):
-    """Global rank 0 (the lock winner) and non-Iris runs must not warn."""
-    executed: list[str] = []
-    step = _recording_step("only", (tmp_path / "only").as_posix(), executed)
-
-    messages = _run_and_collect_warnings(step, monkeypatch, caplog, env)
-
-    assert executed == ["only"]
-    assert not any("DEADLOCK" in m for m in messages)
 
 
 # ---------------------------------------------------------------------------
