@@ -1016,9 +1016,10 @@ def _stream_archive_resumable(session: requests.Session, out: IO[bytes], expecte
     total = 0
     next_log = _GHALOGS_LOG_EVERY_BYTES
     stalls = 0
-    progress_at_last_stall = 0
     while total < expected_bytes:
+        start = total
         headers = {"Range": f"bytes={total}-"} if total else {}
+        error: Exception | None = None
         try:
             with session.get(
                 GHALOGS_DOWNLOAD_URL, stream=True, headers=headers, timeout=_GHALOGS_DOWNLOAD_TIMEOUT
@@ -1046,28 +1047,32 @@ def _stream_archive_resumable(session: requests.Session, out: IO[bytes], expecte
                         logger.info("staged %.1f / %.1f GB", total / 1e9, expected_bytes / 1e9)
                         next_log += _GHALOGS_LOG_EVERY_BYTES
         except (requests.exceptions.RequestException, http.client.IncompleteRead) as e:
-            if total >= expected_bytes:
-                break
-            if total > progress_at_last_stall:
-                stalls = 0
-                progress_at_last_stall = total
-            stalls += 1
-            if stalls > _GHALOGS_MAX_RESUME_STALLS:
-                raise RuntimeError(
-                    f"GHALogs download stalled at {total}/{expected_bytes} bytes after "
-                    f"{stalls} consecutive reconnects without progress"
-                ) from e
-            backoff = min(_GHALOGS_RESUME_BACKOFF_CAP, _GHALOGS_RESUME_BACKOFF_BASE * 2 ** (stalls - 1))
-            logger.warning(
-                "GHALogs stream broke at %.1f / %.1f GB (stall %d/%d), resuming in %.0fs: %s",
-                total / 1e9,
-                expected_bytes / 1e9,
-                stalls,
-                _GHALOGS_MAX_RESUME_STALLS,
-                backoff,
-                e,
-            )
-            time.sleep(backoff)
+            error = e
+
+        # Gate on bytes written this attempt, not on whether an exception fired:
+        # a clean response that yields zero bytes at the current offset (empty
+        # body, early close) makes no progress either and must route through the
+        # stall budget, or the outer loop would re-request the same offset forever.
+        if total > start:
+            stalls = 0
+            continue
+        stalls += 1
+        if stalls > _GHALOGS_MAX_RESUME_STALLS:
+            raise RuntimeError(
+                f"GHALogs download stalled at {total}/{expected_bytes} bytes after "
+                f"{stalls} consecutive attempts without progress"
+            ) from error
+        backoff = min(_GHALOGS_RESUME_BACKOFF_CAP, _GHALOGS_RESUME_BACKOFF_BASE * 2 ** (stalls - 1))
+        logger.warning(
+            "GHALogs stream made no progress at %.1f / %.1f GB (stall %d/%d), retrying in %.0fs: %s",
+            total / 1e9,
+            expected_bytes / 1e9,
+            stalls,
+            _GHALOGS_MAX_RESUME_STALLS,
+            backoff,
+            error,
+        )
+        time.sleep(backoff)
     return total
 
 

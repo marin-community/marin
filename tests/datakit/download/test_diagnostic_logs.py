@@ -526,7 +526,24 @@ class _FakeZenodoServer:
         return _FakeStreamResponse(status, chunks)
 
 
-def _patch_zenodo(monkeypatch, server: _FakeZenodoServer, declared_bytes: int) -> _FakeZenodoServer:
+class _EmptyBodyServer:
+    """Always replies successfully with an empty body and a clean close.
+
+    Models a proxy/CDN that keeps acknowledging the (ranged) request but never
+    delivers bytes — no exception is raised, so the caller must detect the lack
+    of progress itself rather than re-request the same offset forever.
+    """
+
+    def __init__(self):
+        self.get_calls = 0
+
+    def get(self, url: str, *, stream: bool, timeout, headers=None) -> _FakeStreamResponse:
+        self.get_calls += 1
+        status = http.client.PARTIAL_CONTENT if (headers and "Range" in headers) else http.client.OK
+        return _FakeStreamResponse(status, [])
+
+
+def _patch_zenodo(monkeypatch, server, declared_bytes: int):
     monkeypatch.setattr(diagnostic_logs, "build_retrying_session", lambda: server)
     monkeypatch.setattr(diagnostic_logs, "GHALOGS_ARCHIVE_BYTES", declared_bytes)
     monkeypatch.setattr(diagnostic_logs.time, "sleep", lambda _s: None)
@@ -581,6 +598,20 @@ def test_stage_ghalogs_archive_gives_up_after_stalls_without_progress(tmp_path, 
     with pytest.raises(RuntimeError, match="stalled"):
         stage_ghalogs_archive(str(tmp_path))
 
+    assert not (tmp_path / GHALOGS_STAGED_ARCHIVE_RELATIVE_PATH).exists()
+
+
+def test_stage_ghalogs_archive_gives_up_on_clean_empty_responses(tmp_path, monkeypatch):
+    # A server that keeps returning a successful but empty body makes no forward
+    # progress and raises no exception; the loop must still give up via the stall
+    # budget instead of re-requesting the same offset forever.
+    server = _patch_zenodo(monkeypatch, _EmptyBodyServer(), declared_bytes=64)
+
+    with pytest.raises(RuntimeError, match="stalled"):
+        stage_ghalogs_archive(str(tmp_path))
+
+    # Bounded by the stall budget rather than looping unboundedly.
+    assert server.get_calls <= diagnostic_logs._GHALOGS_MAX_RESUME_STALLS + 1
     assert not (tmp_path / GHALOGS_STAGED_ARCHIVE_RELATIVE_PATH).exists()
 
 
