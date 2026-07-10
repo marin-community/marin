@@ -4,11 +4,13 @@
 """Public diagnostic-log source inventory and GHALogs extraction helpers."""
 
 import hashlib
+import http.client
 import json
 import logging
 import os.path
 import re
 import shutil
+import time
 import xml.etree.ElementTree as ET
 import zipfile
 from collections.abc import Iterable, Iterator
@@ -86,6 +88,13 @@ _GHALOGS_HTTP_CHUNK_BYTES = 64 * 1024 * 1024
 _GHALOGS_S3_BLOCK_BYTES = 256 * 1024 * 1024  # multipart part size (~558 parts)
 _GHALOGS_LOG_EVERY_BYTES = 4 * 1024 * 1024 * 1024  # progress line every ~4 GB
 _GHALOGS_DOWNLOAD_TIMEOUT = (30, 600)  # (connect, read) seconds
+# A single 142 GB stream reliably breaks mid-body (server-side idle/connection
+# resets); Zenodo serves the archive with Accept-Ranges: bytes, so we resume
+# from the last written offset instead of restarting from zero. Give up only
+# after this many *consecutive* reconnects that make no forward progress.
+_GHALOGS_MAX_RESUME_STALLS = 8
+_GHALOGS_RESUME_BACKOFF_BASE = 5.0  # seconds; doubles per consecutive stall
+_GHALOGS_RESUME_BACKOFF_CAP = 120.0
 
 _PARTITION_BUCKETS = 10_000
 _ISSUE_5093_HOLDOUT_BUCKETS = 100
@@ -993,6 +1002,84 @@ def extract_ghalogs_step(
     )
 
 
+def _stream_archive_resumable(session: requests.Session, out, expected_bytes: int) -> int:
+    """Stream ``GHALOGS_DOWNLOAD_URL`` into the open file ``out``, resuming across
+    mid-stream connection drops via HTTP Range. Return the total bytes written.
+
+    A single GET over a 142 GB body reliably fails partway with
+    ``ChunkedEncodingError``/``IncompleteRead`` (the urllib3 ``Retry`` on the
+    session only covers connection setup and the initial response, not the
+    streamed body). Zenodo advertises ``Accept-Ranges: bytes``, so on any
+    mid-body failure — or a clean-but-early EOF — we re-request
+    ``Range: bytes={total}-`` and keep appending to the *same* object-store
+    multipart upload, rather than restarting from zero.
+
+    The failure budget resets whenever a reconnect makes forward progress, so an
+    arbitrarily long download survives many drops as long as it keeps advancing;
+    it aborts only after ``_GHALOGS_MAX_RESUME_STALLS`` consecutive reconnects
+    that write nothing.
+
+    Note: resume is in-process only — the multipart upload lives in ``out``. If
+    the whole task/pod dies, a fresh run restarts from zero.
+    """
+    total = 0
+    next_log = _GHALOGS_LOG_EVERY_BYTES
+    stalls = 0
+    progress_at_last_stall = 0
+    while total < expected_bytes:
+        headers = {"Range": f"bytes={total}-"} if total else {}
+        try:
+            with session.get(
+                GHALOGS_DOWNLOAD_URL, stream=True, headers=headers, timeout=_GHALOGS_DOWNLOAD_TIMEOUT
+            ) as response:
+                # A ranged request past the last byte returns 416: the server has
+                # nothing more to send. Stop and let the caller's size check flag
+                # any shortfall against the declared archive size.
+                if total and response.status_code == http.client.REQUESTED_RANGE_NOT_SATISFIABLE:
+                    break
+                response.raise_for_status()
+                # If we asked to resume but the server ignored Range (200 instead
+                # of 206), the body restarts at byte 0; appending it would corrupt
+                # the archive, so refuse rather than silently double-write.
+                if total and response.status_code != http.client.PARTIAL_CONTENT:
+                    raise RuntimeError(
+                        f"GHALogs resume from byte {total} expected HTTP 206, got {response.status_code}; "
+                        "server ignored Range — aborting to avoid corrupting the archive"
+                    )
+                for chunk in response.iter_content(chunk_size=_GHALOGS_HTTP_CHUNK_BYTES):
+                    if not chunk:
+                        continue
+                    out.write(chunk)
+                    total += len(chunk)
+                    if total >= next_log:
+                        logger.info("staged %.1f / %.1f GB", total / 1e9, expected_bytes / 1e9)
+                        next_log += _GHALOGS_LOG_EVERY_BYTES
+        except (requests.exceptions.RequestException, http.client.IncompleteRead) as e:
+            if total >= expected_bytes:
+                break
+            if total > progress_at_last_stall:
+                stalls = 0
+                progress_at_last_stall = total
+            stalls += 1
+            if stalls > _GHALOGS_MAX_RESUME_STALLS:
+                raise RuntimeError(
+                    f"GHALogs download stalled at {total}/{expected_bytes} bytes after "
+                    f"{stalls} consecutive reconnects without progress"
+                ) from e
+            backoff = min(_GHALOGS_RESUME_BACKOFF_CAP, _GHALOGS_RESUME_BACKOFF_BASE * 2 ** (stalls - 1))
+            logger.warning(
+                "GHALogs stream broke at %.1f / %.1f GB (stall %d/%d), resuming in %.0fs: %s",
+                total / 1e9,
+                expected_bytes / 1e9,
+                stalls,
+                _GHALOGS_MAX_RESUME_STALLS,
+                backoff,
+                e,
+            )
+            time.sleep(backoff)
+    return total
+
+
 def stage_ghalogs_archive(output_path: str) -> None:
     """Stream the ~142 GB GHALogs Zenodo archive under ``output_path`` (idempotent).
 
@@ -1001,7 +1088,8 @@ def stage_ghalogs_archive(output_path: str) -> None:
     published archive. The archive is written to
     ``{output_path}/{GHALOGS_STAGED_ARCHIVE_RELATIVE_PATH}`` — the path
     :func:`materialize_ghalogs_to_parquet` reads from. Bytes stream straight to
-    the object store without buffering the whole file locally.
+    the object store without buffering the whole file locally, resuming across
+    mid-stream connection drops (see :func:`_stream_archive_resumable`).
     """
     archive_path = prefix_join(output_path, GHALOGS_STAGED_ARCHIVE_RELATIVE_PATH)
     fs, path = url_to_fs(archive_path)
@@ -1012,28 +1100,16 @@ def stage_ghalogs_archive(output_path: str) -> None:
 
     StoragePath(os.path.dirname(archive_path)).mkdirs(exist_ok=True)
     logger.info("Streaming %s -> %s (%d bytes expected)", GHALOGS_DOWNLOAD_URL, archive_path, GHALOGS_ARCHIVE_BYTES)
-    total = 0
-    next_log = _GHALOGS_LOG_EVERY_BYTES
     session = build_retrying_session()
-    with session.get(GHALOGS_DOWNLOAD_URL, stream=True, timeout=_GHALOGS_DOWNLOAD_TIMEOUT) as response:
-        response.raise_for_status()
-        with atomic_rename(path, fs=fs) as tmp:
-            with fs.open(tmp, "wb", block_size=_GHALOGS_S3_BLOCK_BYTES) as out:
-                for chunk in response.iter_content(chunk_size=_GHALOGS_HTTP_CHUNK_BYTES):
-                    if not chunk:
-                        continue
-                    out.write(chunk)
-                    total += len(chunk)
-                    if total >= next_log:
-                        logger.info("staged %.1f / %.1f GB", total / 1e9, GHALOGS_ARCHIVE_BYTES / 1e9)
-                        next_log += _GHALOGS_LOG_EVERY_BYTES
-            # Verify before atomic_rename publishes: a truncated stream raises
-            # here and the temp key is cleaned up, so no partial archive lands
-            # at the final path.
-            if total != GHALOGS_ARCHIVE_BYTES:
-                raise RuntimeError(
-                    f"GHALogs archive size mismatch after staging: got {total}, expected {GHALOGS_ARCHIVE_BYTES}"
-                )
+    with atomic_rename(path, fs=fs) as tmp:
+        with fs.open(tmp, "wb", block_size=_GHALOGS_S3_BLOCK_BYTES) as out:
+            total = _stream_archive_resumable(session, out, GHALOGS_ARCHIVE_BYTES)
+        # Verify before atomic_rename publishes: a short download raises here and
+        # the temp key is cleaned up, so no partial archive lands at the final path.
+        if total != GHALOGS_ARCHIVE_BYTES:
+            raise RuntimeError(
+                f"GHALogs archive size mismatch after staging: got {total}, expected {GHALOGS_ARCHIVE_BYTES}"
+            )
     logger.info("Staged GHALogs archive: %d bytes -> %s", total, archive_path)
 
 

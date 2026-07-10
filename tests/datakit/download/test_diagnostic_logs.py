@@ -1,6 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import http.client
 import json
 import xml.etree.ElementTree as ET
 import zipfile
@@ -8,6 +9,7 @@ from pathlib import Path
 
 import pyarrow.parquet as pq
 import pytest
+import requests
 from marin.datakit.download import diagnostic_logs
 from marin.datakit.download.diagnostic_logs import (
     GHALOGS_ROUGH_TOKENS_B,
@@ -451,8 +453,10 @@ def test_ghalogs_public_normalize_steps_read_where_download_wrote(tmp_path, monk
 class _FakeStreamResponse:
     """Minimal stand-in for a streamed ``requests`` response."""
 
-    def __init__(self, chunks: list[bytes]):
+    def __init__(self, status_code: int, chunks: list[bytes], break_exc: Exception | None = None):
+        self.status_code = status_code
         self._chunks = chunks
+        self._break_exc = break_exc
 
     def __enter__(self) -> "_FakeStreamResponse":
         return self
@@ -461,42 +465,128 @@ class _FakeStreamResponse:
         return False
 
     def raise_for_status(self) -> None:
-        return None
+        if self.status_code >= 400:
+            raise requests.exceptions.HTTPError(f"status {self.status_code}")
 
     def iter_content(self, chunk_size: int):
         yield from self._chunks
+        if self._break_exc is not None:
+            raise self._break_exc
 
 
-class _FakeSession:
-    def __init__(self, chunks: list[bytes]):
-        self._chunks = chunks
+class _FakeZenodoServer:
+    """Range-aware fake of the Zenodo archive endpoint.
+
+    Serves ``available`` bytes. ``breaks`` is a per-GET plan: the i-th GET yields
+    at most ``breaks[i]`` bytes of its requested range and then raises
+    ``ChunkedEncodingError`` (``None`` = serve the range to completion),
+    simulating a mid-stream drop. A ``Range`` request at/beyond ``available``
+    returns 416 so the caller sees "no more data". ``ignore_range`` forces a 200
+    (full-body) reply even to a ``Range`` request, modeling a server that drops
+    resume support. Records every requested start offset in ``ranges``.
+    """
+
+    def __init__(
+        self,
+        available: bytes,
+        *,
+        breaks: list[int | None] | None = None,
+        ignore_range: bool = False,
+        out_chunk: int = 40,
+    ):
+        self.available = available
+        self.breaks = list(breaks or [])
+        self.ignore_range = ignore_range
+        self.out_chunk = out_chunk
         self.get_calls = 0
+        self.ranges: list[int] = []
 
-    def get(self, url: str, *, stream: bool, timeout) -> _FakeStreamResponse:
+    def get(self, url: str, *, stream: bool, timeout, headers=None) -> _FakeStreamResponse:
+        headers = headers or {}
+        ranged = "Range" in headers
+        start = int(headers["Range"].split("=")[1].split("-")[0]) if ranged else 0
         self.get_calls += 1
-        return _FakeStreamResponse(self._chunks)
+        self.ranges.append(start)
+
+        if ranged and start >= len(self.available):
+            return _FakeStreamResponse(http.client.REQUESTED_RANGE_NOT_SATISFIABLE, [])
+
+        if ranged and self.ignore_range:
+            body, status, start = self.available, http.client.OK, 0
+        else:
+            body = self.available[start:]
+            status = http.client.PARTIAL_CONTENT if ranged else http.client.OK
+
+        brk = self.breaks.pop(0) if self.breaks else None
+        if brk is not None:
+            return _FakeStreamResponse(
+                status, [body[:brk]], break_exc=requests.exceptions.ChunkedEncodingError("connection broken")
+            )
+        chunks = [body[i : i + self.out_chunk] for i in range(0, len(body), self.out_chunk)] or [b""]
+        return _FakeStreamResponse(status, chunks)
 
 
-def _patch_zenodo_stream(monkeypatch, payload: bytes, chunks: list[bytes]) -> _FakeSession:
-    session = _FakeSession(chunks)
-    monkeypatch.setattr(diagnostic_logs, "build_retrying_session", lambda: session)
-    monkeypatch.setattr(diagnostic_logs, "GHALOGS_ARCHIVE_BYTES", len(payload))
-    return session
+def _patch_zenodo(monkeypatch, server: _FakeZenodoServer, declared_bytes: int) -> _FakeZenodoServer:
+    monkeypatch.setattr(diagnostic_logs, "build_retrying_session", lambda: server)
+    monkeypatch.setattr(diagnostic_logs, "GHALOGS_ARCHIVE_BYTES", declared_bytes)
+    monkeypatch.setattr(diagnostic_logs.time, "sleep", lambda _s: None)
+    return server
 
 
 def test_stage_ghalogs_archive_streams_to_expected_path(tmp_path, monkeypatch):
     payload = b"PK\x03\x04" + b"github-run-log-bytes" * 32
-    _patch_zenodo_stream(monkeypatch, payload, [payload[:40], payload[40:]])
+    server = _patch_zenodo(monkeypatch, _FakeZenodoServer(payload), len(payload))
 
     stage_ghalogs_archive(str(tmp_path))
 
     staged = tmp_path / GHALOGS_STAGED_ARCHIVE_RELATIVE_PATH
     assert staged.read_bytes() == payload
+    # A clean stream needs exactly one request — no Range resume.
+    assert server.ranges == [0]
+
+
+def test_stage_ghalogs_archive_resumes_after_midstream_break(tmp_path, monkeypatch):
+    payload = b"PK\x03\x04" + b"github-run-log-bytes" * 64  # 1284 bytes
+    # First GET yields 500 bytes then drops; second drops again at 900; third completes.
+    server = _patch_zenodo(monkeypatch, _FakeZenodoServer(payload, breaks=[500, 400]), len(payload))
+
+    stage_ghalogs_archive(str(tmp_path))
+
+    staged = tmp_path / GHALOGS_STAGED_ARCHIVE_RELATIVE_PATH
+    assert staged.read_bytes() == payload
+    # Resumed from the last written offset each time (Range: bytes=500-, then 900-),
+    # never restarting from zero.
+    assert server.ranges == [0, 500, 900]
+
+
+def test_stage_ghalogs_archive_aborts_if_server_ignores_range(tmp_path, monkeypatch):
+    payload = b"resume-must-not-corrupt" * 16
+    # Break once, then reply 200 (full body) to the ranged resume — appending it
+    # would duplicate the prefix, so staging must refuse rather than corrupt.
+    server = _patch_zenodo(monkeypatch, _FakeZenodoServer(payload, breaks=[80], ignore_range=True), len(payload))
+
+    with pytest.raises(RuntimeError, match="ignored Range"):
+        stage_ghalogs_archive(str(tmp_path))
+
+    assert not (tmp_path / GHALOGS_STAGED_ARCHIVE_RELATIVE_PATH).exists()
+    assert server.ranges == [0, 80]
+
+
+def test_stage_ghalogs_archive_gives_up_after_stalls_without_progress(tmp_path, monkeypatch):
+    payload = b"never-fully-delivered" * 8
+    # Every ranged resume yields zero bytes then drops: no forward progress, so
+    # the stall budget must be exhausted and staging must fail (not loop forever).
+    _patch_zenodo(monkeypatch, _FakeZenodoServer(payload, breaks=[50] + [0] * 20), len(payload))
+
+    with pytest.raises(RuntimeError, match="stalled"):
+        stage_ghalogs_archive(str(tmp_path))
+
+    assert not (tmp_path / GHALOGS_STAGED_ARCHIVE_RELATIVE_PATH).exists()
 
 
 def test_stage_ghalogs_archive_skips_when_correctly_sized_copy_exists(tmp_path, monkeypatch):
     payload = b"already-staged-archive-bytes"
-    session = _patch_zenodo_stream(monkeypatch, payload, [payload])
+    server = _patch_zenodo(monkeypatch, _FakeZenodoServer(payload), len(payload))
 
     staged = tmp_path / GHALOGS_STAGED_ARCHIVE_RELATIVE_PATH
     staged.parent.mkdir(parents=True)
@@ -505,14 +595,15 @@ def test_stage_ghalogs_archive_skips_when_correctly_sized_copy_exists(tmp_path, 
     stage_ghalogs_archive(str(tmp_path))
 
     # A correctly-sized copy short-circuits before any HTTP request.
-    assert session.get_calls == 0
+    assert server.get_calls == 0
     assert staged.read_bytes() == payload
 
 
 def test_stage_ghalogs_archive_raises_on_size_mismatch(tmp_path, monkeypatch):
-    payload = b"the-full-expected-archive"
-    # Server truncates the stream: streamed bytes fall short of the expected size.
-    _patch_zenodo_stream(monkeypatch, payload, [payload[:10]])
+    # Server only ever has 10 bytes but the manifest declares 25; the ranged
+    # resume past EOF returns 416, so staging stops short and flags the shortfall.
+    available = b"only-ten!!"
+    _patch_zenodo(monkeypatch, _FakeZenodoServer(available), declared_bytes=25)
 
     with pytest.raises(RuntimeError, match="size mismatch"):
         stage_ghalogs_archive(str(tmp_path))
@@ -523,7 +614,7 @@ def test_stage_ghalogs_archive_raises_on_size_mismatch(tmp_path, monkeypatch):
 
 def test_download_ghalogs_step_targets_staged_prefix_and_streams_archive(tmp_path, monkeypatch):
     payload = b"downloaded-archive-payload"
-    _patch_zenodo_stream(monkeypatch, payload, [payload])
+    _patch_zenodo(monkeypatch, _FakeZenodoServer(payload), len(payload))
 
     step = download_ghalogs_step(output_path_prefix=str(tmp_path))
     assert step.output_path == f"{tmp_path}/{GHALOGS_STAGED_PREFIX}"
