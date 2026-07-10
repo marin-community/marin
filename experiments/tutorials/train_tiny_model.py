@@ -14,7 +14,7 @@ mesh, the resumption checkpointer, the Fray dispatch); the same script runs on e
 
 import argparse
 
-from fray import ResourceConfig
+from fray import ANY_REGION, ResourceConfig
 from levanter.optim import AdamConfig
 from marin.execution.lazy import ArtifactStep, lower
 from marin.execution.step_runner import StepRunner
@@ -28,9 +28,18 @@ from experiments.marin_tokenizer import marin_tokenizer
 
 # Each device is one accelerator the same recipe runs on: its resources and a batch size
 # that fits. Adding a device is one entry here, not a new file.
+#
+# The H100 entries pass ``regions=[ANY_REGION]``. A training job inherits the region of the
+# worker that submitted it, which keeps it near its data; the GPU fleet lives in a federated
+# CoreWeave cluster that advertises no region, so an inherited region would exclude every
+# host that has an H100 and the job would be unschedulable.
 DEVICES = {
     "cpu": (ResourceConfig.with_cpu(), 4),
-    "h100x8": (ResourceConfig.with_gpu("H100", count=8, cpu=32, disk="128G", ram="128G"), 256),
+    "h100x1": (ResourceConfig.with_gpu("H100", count=1, cpu=8, disk="128G", ram="64G", regions=[ANY_REGION]), 32),
+    "h100x8": (
+        ResourceConfig.with_gpu("H100", count=8, cpu=32, disk="128G", ram="128G", regions=[ANY_REGION]),
+        256,
+    ),
     "v5litepod-16": (ResourceConfig.with_tpu("v5litepod-16", slice_count=1, cpu=32, ram="128g", disk="50g"), 128),
     "v6e-4": (ResourceConfig.with_tpu("v6e-4", slice_count=1, cpu=32, ram="128g", disk="50g"), 32),
 }
