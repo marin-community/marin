@@ -963,3 +963,16 @@ type=float32[2@expert,2,4,4,64] and requested type=float32[2,2,4,4,64]` at
 The summary reported one error row, zero repeat rows, and `all repeats failed`.
 Twelve non-fatal `CUDA_ERROR_NOT_PERMITTED` VMM fallback warnings preceded the
 results.
+
+## 2026-07-10 FUSED-MOE-028 - W2 backward source-sharded scatter follow-up
+
+Job `/dlwh/bench-semantic-fused-w2b-tiny-compare4-20260710-1555` ran once on
+`cw-rno2a` at commit `41d400db5b` and reached terminal Iris state `succeeded`.
+The kernel comparison did not lower because the final reference-only
+`d_route_weight` scatter attempted to broadcast a source-sharded
+`float32[2@expert,2,4,4,64]` update to an unsharded
+`float32[2,2,4,4,64]` slice. No kernel timing or gradient comparison metrics
+were emitted. This follows successful lowering of the preceding expert-space
+reference gathers, scatter, and reductions. The follow-up replaces the
+three-index scatter with independent per-source `[T,K]` scatters under
+`jax.vmap`. The job had no duplicate launch or Iris restart.
