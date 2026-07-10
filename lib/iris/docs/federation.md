@@ -37,11 +37,11 @@ Two consequences catch people out:
   advertise only `device-type` and `device-variant`, so any job carrying a region or zone
   constraint stays local.
 
-That second point bites sub-jobs specifically. `IrisClient.submit` gives a child job its
-parent worker's region unless the child names a region itself (`cluster/client/client.py`),
-which keeps a child near its data. A GPU sub-job must opt out with fray's `ANY_REGION`
-sentinel — `ResourceConfig(..., regions=[ANY_REGION])` — a region-EXISTS marker that
-suppresses the inheritance and is then dropped before the wire.
+That second point bites sub-jobs specifically. `IrisClient.submit` (`iris/client/client.py`)
+gives a child job its parent worker's region unless the child names a region itself, which
+keeps a child near its data. A GPU sub-job must opt out with fray's `ANY_REGION` sentinel —
+`ResourceConfig(..., regions=[ANY_REGION])` — a region-EXISTS marker that suppresses the
+inheritance and is then dropped before the wire.
 
 ## Only whole root jobs are federated
 

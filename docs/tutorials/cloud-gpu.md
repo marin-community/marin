@@ -27,7 +27,7 @@ endpoint — you never submit to CoreWeave directly, and `--cluster` always stay
 
 ```bash
 uv run iris --cluster=marin job run \
-  --target-cluster cw-us-east-02a \
+  --target-cluster cw-rno2a \
   --cpu=1 --memory=2G --extra=cpu \
   -e WANDB_API_KEY "$WANDB_API_KEY" \
   -- python -m experiments.tutorials.train_tiny_model --device h100x8 --dataset wikitext
@@ -117,12 +117,17 @@ independently of logs, so it is the reliable answer to "is it still running".
 
 ## Verifying the run used the GPUs
 
-`train_lm` mirrors its metrics next to the run's output. The device kind and count come
-straight from JAX:
+`train_lm` mirrors its metrics next to the run's output, under `${MARIN_PREFIX}/<name>/<version>/`.
+`tracker_metrics.jsonl` carries the device facts straight from JAX, and
+`checkpoints/eval_metrics.jsonl` the losses:
 
-```bash
-# throughput/device_kind: NVIDIA H100 80GB HBM3
-# throughput/theoretical_flops / throughput/theoretical_flops_per_device == number of GPUs
-${MARIN_PREFIX}/<name>/<version>/tracker_metrics.jsonl
-${MARIN_PREFIX}/<name>/<version>/checkpoints/eval_metrics.jsonl
-```
+| Field | Meaning |
+| --- | --- |
+| `throughput/device_kind` | `NVIDIA H100 80GB HBM3` |
+| `throughput/theoretical_flops_per_device` | 9.895e14 for one H100 |
+| `throughput/theoretical_flops` | that times the number of GPUs JAX saw |
+| `throughput/total_tokens` | `batch_size × seq_len × num_train_steps` |
+
+Pass an explicit `run_id` to `train_lm`. A run that omits it takes the last segment of its
+output path — the *version* — as its W&B run id, so every `version="dev"` run in the project
+reports into one W&B run and its mirrored summary is another run's metrics.
