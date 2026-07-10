@@ -6,10 +6,13 @@ from __future__ import annotations
 import jax
 import jax.numpy as jnp
 import numpy as np
+from jax.sharding import AxisType, Mesh
 
+from levanter.grug._moe import source_push_semantic_fused_w13 as fused_w13
 from levanter.grug._moe.source_push_plan import build_source_push_semantic_plan_jax
 from levanter.grug._moe.source_push_semantic_fused_w13 import (
     SourcePushSemanticFusedW13Config,
+    SourcePushSemanticFusedW13Metadata,
     source_push_semantic_fused_w13,
     source_push_semantic_fused_w13_generation_accounting,
     source_push_semantic_fused_w13_metadata_jax,
@@ -154,3 +157,49 @@ def test_fused_w13_interpret_matches_independent_semantic_scatter_reference():
     np.testing.assert_array_equal(np.asarray(result.valid), expected_valid)
     assert int(result.queue_overflow_routes) == 0
     assert int(result.layout_overflow_rows) == 0
+
+
+def test_fused_w13_sharded_wrapper_specs_match_input_ranks(monkeypatch):
+    mesh = Mesh(np.asarray(jax.devices()[:1]), ("expert",), axis_types=(AxisType.Explicit,))
+    x = jnp.zeros((1, 1, 256), dtype=jnp.bfloat16)
+    weights = jnp.zeros((1, 1, 256, 256), dtype=jnp.bfloat16)
+    metadata = SourcePushSemanticFusedW13Metadata(
+        token_ids=jnp.zeros((1, 1, 1, 4, 64), dtype=jnp.int32),
+        send_expert=jnp.zeros((1, 1, 1, 4), dtype=jnp.int32),
+        send_row_start=jnp.zeros((1, 1, 1, 4), dtype=jnp.int32),
+        send_valid_rows=jnp.zeros((1, 1, 1, 4), dtype=jnp.int32),
+        recv_expert=jnp.zeros((1, 1, 1, 4), dtype=jnp.int32),
+        recv_row_start=jnp.zeros((1, 1, 1, 4), dtype=jnp.int32),
+        recv_valid_rows=jnp.zeros((1, 1, 1, 4), dtype=jnp.int32),
+        valid=jnp.zeros((1, 1, 256), dtype=jnp.bool_),
+        queue_overflow_routes=jnp.asarray(0, dtype=jnp.int32),
+        layout_overflow_rows=jnp.asarray(0, dtype=jnp.int32),
+        rows_per_expert_capacity=256,
+        send_chunks_per_dst=1,
+    )
+    captured_specs = None
+
+    def fake_shard_map(_fn, *, in_specs, **_kwargs):
+        nonlocal captured_specs
+        captured_specs = in_specs
+
+        def run(*args):
+            for spec, arg in zip(in_specs, args, strict=True):
+                assert len(spec) <= arg.ndim
+            return jnp.zeros((1, 1, 256, 256), dtype=jnp.bfloat16)
+
+        return run
+
+    monkeypatch.setattr(fused_w13, "shard_map", fake_shard_map)
+    monkeypatch.setattr(fused_w13, "_make_source_push_semantic_fused_w13_kernel", lambda **_kwargs: None)
+
+    result = fused_w13._source_push_semantic_fused_w13_sharded(
+        x,
+        weights,
+        metadata,
+        config=CONFIG,
+        mesh=mesh,
+    )
+
+    assert result.shape == (1, 1, 256, 256)
+    assert captured_specs is not None
