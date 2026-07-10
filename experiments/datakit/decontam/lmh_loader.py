@@ -62,7 +62,7 @@ def trust_remote_code_for_hf() -> None:
     # fork still does ``from transformers import AutoModelForVision2Seq`` at module
     # load. We only use lm-eval's task loading (not its model classes), so alias a
     # placeholder so the import resolves — it is imported but never instantiated.
-    import transformers
+    import transformers  # noqa: PLC0415
 
     if not hasattr(transformers, "AutoModelForVision2Seq"):
         transformers.AutoModelForVision2Seq = transformers.AutoModel  # type: ignore[attr-defined]

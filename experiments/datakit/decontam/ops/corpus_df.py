@@ -120,9 +120,6 @@ def main() -> None:
                 logger.info("files %d/%d  distinct_hashes=%d  probe_DF=%s", n_docs_files, len(files), len(total), probes)
 
     logger.info("FINAL probe DF: %s", {k: total.get(h, 0) for k, h in probe_hashes.items()})
-    hist = Counter()
-    for df in total.values():
-        hist[min(df, 1000)] += 1
     for thr in (1, 2, 5, 10, 50, 100, 500):
         logger.info("eval n-grams with DF >= %d: %d", thr, sum(1 for v in total.values() if v >= thr))
 

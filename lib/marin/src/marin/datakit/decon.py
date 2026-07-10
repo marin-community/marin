@@ -965,10 +965,9 @@ def build_all_source_drop_sets(
 ) -> AllSourceDropSets:
     """Distributed per-source drop-set build — one zephyr shard per source.
 
-    *sources* is a list of ``(source_name, df_sample_dir)``. Each shard loads the
-    bloom once and writes ``<output_path>/<source_name>/drop.parquet``. Bypasses
-    the GIL that serializes an inline per-source loop, so the whole set builds in
-    the time of the slowest single source rather than their sum.
+    *sources* is a list of ``(source_name, df_sample_dir)``. Each shard writes
+    ``<output_path>/<source_name>/drop.parquet``; consume with
+    ``decon_step(drop_sets=..., drop_set_source=<source_name>)``.
     """
     bloom_path, _ = bloom_paths(prebuilt_bloom_dir)
 

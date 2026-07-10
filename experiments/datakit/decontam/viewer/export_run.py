@@ -28,15 +28,13 @@ import pyarrow.parquet as pq
 from marin.datakit.decon import _bloom_hash, _extract_ngrams, bloom_paths
 from rigging.filesystem import marin_prefix, prefix_join, url_to_fs
 
-from experiments.datakit.testbed.decon_arm import PARAGRAPH_DELIMITER, build_testbed_decon_steps
+from experiments.datakit.testbed.decon_arm import NGRAM_LENGTH, PARAGRAPH_DELIMITER, build_testbed_decon_steps
 
 logger = logging.getLogger(__name__)
 
 _SPLIT_RE = re.compile(r"^(.*)-(validation|test|training|train|dev|eval)-\d+$")
 _SAMPLES_PER_SOURCE = 60
 _MAX_MATCHED_EVALS = 5
-# Must match the decon run's NGramConfig (decon_arm uses the ngram_length=13 default).
-_NGRAM_LENGTH = 13
 _MAX_MATCHED_NGRAMS = 12
 # Chars of context kept on each side of the overlapping span when windowing the
 # doc / eval text, so the highlighted overlap is always visible (the overlap can
@@ -77,7 +75,7 @@ def _overlapping_ngrams(text: str, matched_hashes: set[int]) -> list[str]:
     seen: set[str] = set()
     out: list[str] = []
     for para in text.split(PARAGRAPH_DELIMITER):
-        for ng in _extract_ngrams(para, _NGRAM_LENGTH, 0):
+        for ng in _extract_ngrams(para, NGRAM_LENGTH, 0):
             if ng not in seen and _bloom_hash(ng) in matched_hashes:
                 seen.add(ng)
                 out.append(ng)
