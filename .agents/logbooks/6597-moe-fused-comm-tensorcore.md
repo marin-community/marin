@@ -320,3 +320,43 @@ The allocator logged two failed 12.50 GiB allocation attempts before execution
 and then recovered; Iris and the benchmark both completed successfully. The
 direct indexing change therefore removes scheduler arithmetic without moving
 the approximately 30 ms fused bottleneck. Do not tune this factor further.
+
+## 2026-07-10 FUSED-MOE-005 - Flat fused-W13 output-store rerun
+
+Job `/dlwh/bench-semantic-fused-w13-flat-output-20260710-1353` ran on
+`cw-rno2a` at commit `422c95f9bb` and reached terminal
+`JOB_STATE_SUCCEEDED`. Its single task exited 0 after 1 minute 33.52 seconds,
+with no failures or preemptions. No retry was launched.
+
+Exact launch command reconstructed from the controller's `submit_argv`:
+
+```bash
+uv run --project /Users/dlwh/src/marin iris --cluster=cw-rno2a job run --no-wait --job-name bench-semantic-fused-w13-flat-output-20260710-1353 --cpu 16 --memory 128GB --disk 16GB --gpu H100x8 --reserve H100x8 --enable-extra-resources --extra gpu -- timeout 3600s bash -lc 'set -euo pipefail; uv pip install --reinstall nvidia-cudnn-cu13==9.19.0.56; exec uv run --no-sync --package marin-levanter --extra gpu --group test python lib/levanter/scripts/bench/bench_source_push_semantic_plan.py --ep-size 8 --tokens-per-rank 32768 --hidden-dim 2560 --intermediate-dim 1280 --experts-per-rank 32 --topk 4 --capacity-factor 1.25 --rows-per-src-dst-capacity auto --routing random --routing-seed 0 --dtype bfloat16 --plan-builder jax --modes semantic_permute_w13_pallas --warmup 1 --steps 3 --repeat-runs 3 --separate-compile --debug-exceptions --git-sha 422c95f9bb --jsonl scratch/semantic_fused_w13_flat_output_422c95f9bb.jsonl'
+```
+
+Every fused timing and drop/overflow row:
+
+| Repeat | Time (ms) | Useful TFLOP/s/rank | Rounded TFLOP/s/rank | Dropped routes | Routing drops | Metadata overflow | Queue entry overflow | Queue route overflow | Layout row overflow | Checksum |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 0 | 29.923961 | 57.411748 | 71.764685 | 0 | 0 | 0 | 0 | 0 | 0 | 1305986465792.0 |
+| 1 | 29.749349 | 57.748722 | 72.185903 | 0 | 0 | 0 | 0 | 0 | 0 | 1305986465792.0 |
+| 2 | 29.791293 | 57.667418 | 72.084272 | 0 | 0 | 0 | 0 | 0 | 0 | 1305986465792.0 |
+
+Summary: median `29.791293 ms`, range `29.749349-29.923961 ms`, median
+`57.667418` useful and `72.084272` rounded TFLOP/s/rank. The summary row
+reported three repeat rows, zero error rows, zero dropped/routing-dropped
+routes, zero metadata overflow routes, and median queue-entry, queue-route, and
+layout-row overflow counts of zero. Compilation was `10.760242 s`; first run
+was `6.599283 s`. Semantic row efficiency remained `0.8` with 1,048,576 useful
+and 1,310,720 rounded rows.
+
+Compared with FUSED-MOE-004's direct-job median of `29.942560 ms`, flattening
+the fused output store is `0.151267 ms` (`0.51%`) faster. This is small and
+needs more repeats before treating it as a real improvement. The checksum is
+unchanged. This timing-only run did not execute the compare mode, so it adds no
+new correctness evidence and does not supersede the known fair-precision
+comparison requirement for `h`.
+
+As in the direct-job run, the allocator logged two failed 12.50 GiB allocation
+attempts before execution and recovered. Iris and all three measured repeats
+completed successfully.
