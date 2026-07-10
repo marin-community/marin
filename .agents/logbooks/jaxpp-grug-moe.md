@@ -22,6 +22,7 @@ author: dlwh
 - Follow-up explicit MPMD `std_1f1b` profile at the same 24L/256E/seq4096/batch96 shape also remains communication dominated. W&B run: <https://wandb.ai/marin-community/marin_moe/runs/jaxpp-explicit-profile-l24-e256-b96-s4096-std1f1b-xla070-artifact-20260709-0506>. It reported mean MFU `7.2713`; profile breakdown was `47.40%` communication, `46.91%` compute, and `5.69%` stall. `SendRecv` remained the top op, with average exclusive duration `64.5ms` versus `70.7ms` in the GPipe profile. The raw trace totals are not directly comparable because the `std_1f1b` trace captured a longer wall window than the GPipe trace.
 - A fresh RNO2A batch256/m8 `std_1f1b` profile reported mean MFU `9.7654`, `226,714.36` tokens/s, and `3,199,065.76` GFLOP/s. The exclusive breakdown moved to `55.92%` compute, `38.96%` communication, and `5.12%` stall; `SendRecv` remained the top collective at `59.99ms` average. W&B: <https://wandb.ai/marin-community/marin_moe/runs/jaxpp-rno2a-profile-std1f1b-l24-e256-b256-s4096-p4m8-20260710-0238>. Artifact: `marin-community/marin_moe/jaxpp-rno2a-profile-std1f1b-l24-e256-b256-s4096-p4m8-20260710-0238-profiler:v0`.
 - Explicit `interleaved_gpipe` now supports more logical stages than physical ranks and follows the pinned JaxPP per-rank task queues. At 8 logical/4 physical stages, batch128/m4 reached mean MFU `9.2547` and batch192/m6 reached `10.2190`; batch224/m7 hit a compile-complexity cliff. The standard 4-stage batch384/m12 result remains the overall best at `10.6043` MFU.
+- Unequal 24-layer splits, a narrower expert axis, ragged all-to-all, and DeepEP did not beat the ring baseline. Splits with a 7-layer stage either OOMed or failed to reach execution; expert-axis 4 stopped in compilation; ragged all-to-all reached only `3.6743` MFU at batch256/m8. DeepEP now builds and executes its SM90 transport on RNO2A, but training is numerically unstable: the non-pipelined control has finite step-0 loss `9.0462` and finite logged gradients, then NaN on step 1, while explicit JaxPP is NaN on step 0.
 - Automatic JaxPP schedules remain blocked. Moving batch reshaping outside the JaxPP trace fixed the earlier after-loop batch placement assertion, and the opt-in const-sharding patch gets reduced `std_1f1b` past JaxPP explicit sharding inference. The current blocker is later input placement: JaxPP attempts to `device_put` a stage-local expert weight with a global `NamedSharding` whose mesh still includes the non-addressable `pipeline` axis. Automatic `eager_1f1b` at the full 61B shape also failed during full-state init before training.
 
 ## Hypothesis Queue
@@ -29,14 +30,17 @@ author: dlwh
 ### Active
 - `GRUG-JAXPP-002`: Router histograms need a dedicated cross-microbatch reducer before full metric parity is safe. Evidence: [2026-07-07 22:45 PDT - initial implementation](#2026-07-07-2245-pdt---initial-implementation). Next test: implement/validate a `SummaryStats` merge or compute summary metrics outside the pipeline loop.
 - `GRUG-JAXPP-006`: The seq4096 batch-96/batch-128 performance boundary is communication dominated. Evidence: [2026-07-08 17:35 PDT - profile and artifact checkpoint](#2026-07-08-1735-pdt---profile-and-artifact-checkpoint). Next test: reduce pipeline send/recv pressure or increase useful compute per transfer, then re-profile the same shape.
-- `GRUG-JAXPP-007`: Queue-correct virtual pipeline stages reduce bubbles at moderate microbatch counts, but compile complexity limits the useful range. Evidence: batch128/m4 improved from `7.5946` to `9.2547` MFU and batch192/m6 reached `10.2190`, while m7/m8 stalled during compilation. Next test: rebalance the contiguous layer split so the final stage has less output/loss work, then repeat the standard batch384/m12 point.
+- `GRUG-JAXPP-008`: Core MoE compute efficiency is now the main route to 20 MFU. Evidence: the batch256/m8 profile spends `55.92%` of its exclusive timeline in compute, and its `9.7654` MFU implies only about `17.5%` of peak while compute-active. Next test: improve the expert GEMM/ragged-dot backend before another pipeline schedule sweep.
 
 ### Blocked
 - `GRUG-JAXPP-005`: Automatic JaxPP schedule sweep over `gpipe`, `std_1f1b`, `eager_1f1b`, `zero_bubble`, and interleaved schedules. Blocker: automatic `std_1f1b` reaches tracing and clears the prior sharding-inference assertion with the const-sharding patch, but JaxPP input placement now tries to `device_put` stage-local arrays with a non-addressable global `pipeline` mesh sharding. Resume when automatic JaxPP can call compiled functions with addressable stage-local input shardings.
+- `GRUG-JAXPP-009`: DeepEP transport as a replacement for ring EP. Blocker: the pinned DeepEP FFI now builds and launches on RNO2A after adding CUDA runtime linkage, attention-only remat, and a 512-thread dispatch kernel, but the non-pipelined control becomes NaN after one finite update and the explicit pipeline is NaN on its first step. Resume after a DeepEP dispatch/combine VJP or runtime-state correctness fix.
 
 ### Falsified / Dead End
 - Delaying data-parallel gradient reduction until after microbatch accumulation is performance-neutral at batch128/m4: mean MFU `7.5648` versus `7.5946` baseline.
 - Reusing opaque VJP residuals removes explicit backward recompute in a tiny smoke but does not fit the 61B shape. `save_moe` exhausts memory in forward residual storage; `recompute_all` moves the failure to backward scratch, including at 8 microbatches and with XLA preallocation disabled.
+- Unequal stage splits do not expand the batch384/m12 capacity point. `7/5/7/5` OOMed stage 2 backward on a `19.65 GiB` request; `7/6/6/5` OOMed stage 0 forward or failed to reach execution at higher preallocation. Six layers per physical stage remains the practical limit.
+- Reducing expert parallelism from 8 to 4 GPUs per stage did not reach execution after 8m51s of compilation. Ragged all-to-all was functional but regressed batch256/m8 to `3.6743` MFU and `73,425.13` tokens/s.
 
 ### Promoted
 - `GRUG-JAXPP-001`: Explicit MPMD stage-local weights/optimizer state are the working pipeline implementation. Evidence: milestone commit `abd979b82a`, issue update <https://github.com/marin-community/marin/issues/7024#issuecomment-4919647823>, and the seq4096 perf/profile results.
@@ -1451,3 +1455,45 @@ author: dlwh
 - Next action:
   - Commit and push the queue-correct interleaved implementation and launcher changes.
   - Add explicit configurable stage layer counts, validate stage-local weight placement for an unequal split, and rerun batch384/m12 before spending more H100 time on higher microbatch-count schedules.
+
+### 2026-07-10 05:30 PDT - unequal splits and alternate expert collectives
+- Hypothesis: A lighter final stage or less expert-parallel communication can move the batch384/m12 point above `10.6043` MFU.
+- Commit Hash: stage-count and backend harness checkpoint `e0b4d7c2d6`.
+- Commands:
+  - Unequal splits used the standard RNO2A command with `--stage-layer-counts 7,5,7,5` and `--stage-layer-counts 7,6,6,5` at 24 layers, 256 experts, batch384/m12, seq4096, ring MoE, and preallocation `0.70` or `0.85`.
+  - Expert-axis probe used the same full model with `--expert-axis 4 --batch 128 --microbatches 8 --xla-memory-fraction 0.85`.
+  - Ragged comparison used `--moe-implementation ragged_all_to_all --batch 256 --microbatches 8 --steps 8`.
+- Results:
+  - A reduced 8-layer `3/2/2/1` split smoke succeeded with finite loss, validating stage-local weight and optimizer-state partitioning for unequal counts.
+  - Full `7/5/7/5` OOMed stage 2 backward on a `19.65 GiB` allocation. `7/6/6/5` OOMed stage 0 forward on an `8.97 GiB` request at `0.70`; at `0.85`, all leaf tasks compiled but execution did not start in 10m12s. Both jobs were stopped.
+  - Expert axis 4 compiled for 8m51s without reaching execution and was stopped. The larger per-rank expert state makes this topology operationally worse.
+  - Ragged all-to-all succeeded but reached only `73,425.13` tokens/s, `1,036,069.40` GFLOP/s, and mean MFU `3.6743` at batch256/m8. W&B: <https://wandb.ai/marin-community/marin_moe/runs/jaxpp-rno2a-ragged-std1f1b-l24-e256-b256-s4096-p4m8-20260710-110607>.
+- Interpretation:
+  - Any seven-layer physical stage exceeds the current memory/compile envelope; the equal `6/6/6/6` split is the practical full-model layout.
+  - Ring remains the only performant expert transport among the working backends tested here.
+- Next action:
+  - Test DeepEP because each physical pipeline rank is exactly one 8-GPU NVLink node, but require finite multi-step correctness before collecting performance numbers.
+
+### 2026-07-10 06:59 PDT - DeepEP bring-up and numerical blocker
+- Hypothesis: Replacing ring EP with DeepEP intranode dispatch/combine will reduce the `38.96%` communication share in the batch256/m8 profile.
+- Commit Hashes:
+  - `f8d5e029d3`: CUDA runtime linkage.
+  - `f7015afd06`: attention-only remat around effectful DeepEP FFI calls.
+  - `e9a60bafdd`: 512-thread SM90 dispatch to fit H100 dynamic shared memory.
+  - `951d566085`: non-pipelined backend isolation mode.
+- Commands:
+  - Reduced pipeline smokes used `TF_GPU_ALLOCATOR=cuda_malloc_async experiments/grug/moe/run_cw_jaxpp_may_d2560.sh --submit --cluster cw-rno2a --implementation explicit_mpmd --schedule std_1f1b --physical-stages 4 --logical-stages 4 --microbatches 4 --nodes 4 --gpus-per-replica 8 --expert-axis 8 --layers 8 --experts 8 --top-k 4 --batch 32 --seq-len 128 --vocab-size 8192 --moe-implementation deepep --loss-implementation xla --steps 3 --xla-memory-fraction 0.70 --remat save_moe ...`.
+  - The control added `--no-pipeline --nodes 1` with the same model, batch, DeepEP backend, and CUDA settings.
+- Results:
+  - DeepEP setup progressed through missing source, `nvcc`, CUDA headers, CCCL, and `libcudart` linkage. The pinned source is `7febc6e25660af0f54d95dd781ecdcd62265ecca`; worker setup installs CUDA NVCC/NVVM `13.2.78`, CCCL `13.3.3.4.1`, and runtime `13.2.75`.
+  - Whole-block remat failed during tracing because JAX checkpoint partial evaluation does not support `FfiEffect`. Splitting each block into rematerialized attention and non-rematerialized MoE cleared tracing and backward compilation.
+  - Upstream's 768-thread SM90 dispatch requested 192 KiB dynamic shared memory and failed `cudaFuncSetAttribute` on RNO2A H100. `DEEPEP_DISPATCH_NUM_THREADS=512` reduced the request to 128 KiB and reached execution.
+  - Explicit JaxPP run `/dlwh/iris-run-job-20260710-134537/grug-train-jaxpp-rno2a-deepep-t512-smoke-l8-e8-b32-s128-p4m4-20260710-0646` executed forward/backward but reported NaN loss on step 0. W&B: <https://wandb.ai/marin-community/marin_moe/runs/jaxpp-rno2a-deepep-t512-smoke-l8-e8-b32-s128-p4m4-20260710-0646>.
+  - Non-pipelined control `/dlwh/iris-run-job-20260710-135240/grug-train-deepep-rno2a-nopipe-t512-l8-e8-b32-s128-20260710-0654` had finite loss `9.0462` on its first step and all 161 logged gradient norms were finite (maximum `0.71385`), then its next forward produced NaN. W&B: <https://wandb.ai/marin-community/marin_moe/runs/deepep-rno2a-nopipe-t512-l8-e8-b32-s128-20260710-0654>.
+  - Distributed jobs that remained alive after fatal/NaN exits were explicitly stopped; the non-pipelined parent and child completed terminally.
+- Interpretation:
+  - The CUDA build, FFI registration, SM90 dispatch launch, forward, and backward all execute. The remaining blocker is numerical/runtime-state correctness, not environment setup.
+  - A finite non-pipelined first forward followed by NaN after one finite-gradient update points at DeepEP dispatch/combine VJP or cached runtime state. JaxPP makes the corruption visible on the first pipeline step.
+  - No DeepEP MFU comparison is valid yet. Do not run the 24-layer performance shape until a reduced multi-step test stays finite.
+- Next action:
+  - Return performance work to ring EP and target expert GEMM/ragged-dot compute efficiency. Resume DeepEP only with a focused transport/VJP correctness test.
