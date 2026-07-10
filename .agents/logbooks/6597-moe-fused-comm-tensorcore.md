@@ -63,3 +63,95 @@ scoped pre-commit:                     passed
 No GPU claim is attached to this snapshot. Next run: one H100x8 target-shape
 compile/correctness/decomposition comparison of the optimized parallel producer,
 the older raw-token fused adapter, and the split copy/compute baselines.
+
+## 2026-07-10 FUSED-MOE-001 - First B256 target H100 run
+
+Job:
+
+```text
+cluster:  cw-rno2a
+job:      /dlwh/bench-semantic-fused-w13-b256-target-20260710-1325
+commit:   3b334d7510
+Iris:     JOB_STATE_SUCCEEDED, exit 0, failures 0, preemptions 0
+task 0:   succeeded, exit 0
+submitted: 2026-07-10T20:24:02.801Z
+started:   2026-07-10T20:24:05.360Z
+finished:  2026-07-10T20:26:09.273Z
+resources: H100x8, 16 CPU, 128 GiB memory, 16 GiB disk
+```
+
+Exact task command recorded by Iris `GetJobStatus`:
+
+```bash
+timeout 3600s bash -lc 'set -euo pipefail; uv pip install --reinstall nvidia-cudnn-cu13==9.19.0.56; exec uv run --no-sync --package marin-levanter --extra gpu --group test python lib/levanter/scripts/bench/bench_source_push_semantic_plan.py --ep-size 8 --tokens-per-rank 32768 --hidden-dim 2560 --intermediate-dim 1280 --experts-per-rank 32 --topk 4 --capacity-factor 1.25 --rows-per-src-dst-capacity auto --routing random --routing-seed 0 --dtype bfloat16 --plan-builder jax --modes semantic_permute_w13_pallas,semantic_permute_w13_compare,w13_source_padded_inbox_pallas,source_padded_inbox_pack_pallas,w13_expert_major_prepacked_pallas --warmup 1 --steps 3 --repeat-runs 3 --separate-compile --debug-exceptions --git-sha 3b334d7510 --jsonl scratch/semantic_fused_w13_b256_target_3b334d7510.jsonl'
+```
+
+The Iris job succeeded because the harness records mode failures as JSON rows
+and continues. The new fused target and its correctness comparison both failed
+before kernel compilation, so this run does not establish fused correctness or
+performance:
+
+```text
+mode: semantic_permute_w13_pallas
+rows: 0 repeats, 1 error; summary = all repeats failed
+
+mode: semantic_permute_w13_compare
+rows: 0 repeats, 1 error; summary = all repeats failed
+```
+
+First actionable failure: `_source_push_semantic_fused_w13_sharded` supplies
+`shard_map` input partition specs one rank longer than the corresponding global
+arrays. In particular, `token_ids_local` is rank 5 but receives a rank-6 spec;
+`send_valid_local`, `recv_expert_local`, `recv_row_local`, `recv_valid_local`,
+and `weights_local` are rank 4 but receive rank-5 specs. JAX raises:
+
+```text
+ValueError: shard_map ... in_specs entry ... is too long to be compatible with
+the corresponding input value
+```
+
+Routing metadata was otherwise healthy in both error rows:
+
+```text
+dropped_routes=0
+routing_dropped_routes=0
+metadata_overflow_routes=0
+semantic_live_pairs=64
+semantic_useful_rows=1048576
+semantic_rounded_rows=1310720
+semantic_row_efficiency=0.8
+semantic_masked_row_fraction=0.2
+```
+
+Every numeric timing row emitted by the successful controls:
+
+| Mode | Repeat | Time (ms) | Useful TFLOP/s/rank | Rounded TFLOP/s/rank | Checksum |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `w13_source_padded_inbox_pallas` | 0 | 22.814061 | 75.303864 | 94.129830 | 1305986465792.0 |
+| `w13_source_padded_inbox_pallas` | 1 | 22.845354 | 75.200715 | 94.000893 | 1305986465792.0 |
+| `w13_source_padded_inbox_pallas` | 2 | 22.813910 | 75.304361 | 94.130451 | 1305986465792.0 |
+| `source_padded_inbox_pack_pallas` | 0 | 4.888674 | n/a | n/a | 3337592.75 |
+| `source_padded_inbox_pack_pallas` | 1 | 4.865558 | n/a | n/a | 3337592.75 |
+| `source_padded_inbox_pack_pallas` | 2 | 4.865371 | n/a | n/a | 3337592.75 |
+| `w13_expert_major_prepacked_pallas` | 0 | 6.307397 | 272.376518 | 340.470648 | 478198136832.0 |
+| `w13_expert_major_prepacked_pallas` | 1 | 6.319413 | 271.858637 | 339.823296 | 478198136832.0 |
+| `w13_expert_major_prepacked_pallas` | 2 | 6.299846 | 272.703016 | 340.878770 | 478198136832.0 |
+
+Repeat medians and ranges:
+
+| Mode | Median (ms) | Min-max (ms) | Median useful TFLOP/s/rank | Median rounded TFLOP/s/rank | Compile / first run (s) |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `w13_source_padded_inbox_pallas` | 22.814061 | 22.813910-22.845354 | 75.303864 | 94.129830 | 10.392467 / 6.656227 |
+| `source_padded_inbox_pack_pallas` | 4.865558 | 4.865371-4.888674 | n/a | n/a | 0.515017 / 0.022169 |
+| `w13_expert_major_prepacked_pallas` | 6.307397 | 6.299846-6.319413 | 272.376518 | 340.470648 | 0.374055 / 0.008236 |
+
+All three successful control modes reported `dropped_routes=0`,
+`routing_dropped_routes=0`, and `metadata_overflow_routes=0`. The inbox and
+pack modes additionally reported zero queue-entry, queue-route, and layout-row
+overflow errors in every repeat. No fused comparison error metric exists because
+the compare mode failed at `shard_map` validation.
+
+Decision: keep FUSED-MOE-001 running. Shorten each `in_specs` tuple by one axis
+to describe the global argument rank, rerun focused tests, then repeat this exact
+target benchmark. The non-fatal 12.50 GiB allocator warnings should be watched,
+but they were not the first failure and the control modes completed.
