@@ -1156,3 +1156,51 @@ directly with `jax.make_array_from_callback` at target shape. This makes the
 isolated row measure the kernel rather than a diagnostic pair-layout
 conversion. Three focused benchmark tests and scoped pre-commit pass. Target
 H100 timing remains required.
+
+## 2026-07-10 FUSED-MOE-038 - Target W13 forward/backward inbox benchmark
+
+Job `/dlwh/bench-semantic-w13-fwd-bwd-inbox-20260710-1626` ran once on
+`cw-rno2a` at commit `c59a39e299` and reached terminal Iris state `succeeded`.
+Its single H100x8 task exited 0 after 1 minute and 52.92 seconds, with zero
+failures and preemptions. No duplicate, stop, resubmit, code edit, Iris restart,
+or cluster bounce was issued.
+
+The old-inbox 2-send-worker plus 30-compute-worker B256-to-B64
+`semantic_permute_w13_pallas` topology completed all three repeats. Exact
+median/min/max steady-state time was `55.011869000736624`/
+`54.9034156720154`/`55.28170434990898` ms. Median useful/rounded throughput was
+`31.229386487068737`/`39.036733108835925` TFLOP/s/rank. The output checksum was
+`1305986465792.0`. Dropped routes, routing drops, metadata overflow, queue entry
+overflow, queue route overflow, and layout row overflow were all zero.
+
+The direct expert-major-dz `semantic_fused_w13_backward_pallas` mode produced
+zero repeats and one error row. The first actionable failure was
+`AttributeError: 'SemanticFusedW13BackwardBenchInputs' object has no attribute
+'dy'`; median/min/max steady-state time and useful/rounded throughput are
+therefore unavailable. Dropped-route, routing-drop, and metadata-overflow
+counters were zero. Non-fatal logs also contained failed 12.50 GiB allocation
+attempts and CUDA VMM handle fallback warnings. Exact structured evidence,
+terminal status, closed monitor state, and a standalone report are in
+`scratch/6597-w13-fwd-bwd-inbox/`.
+
+The forward result rejects a literal two-owner port for semantic raw-token
+gathers: it regressed from the previous `29.791293` ms / `57.667418` useful
+TFLOP/s/rank row to `55.011869` ms / `31.229386`. The old inbox topology was
+fast because its senders read prepacked contiguous rows. Semantic producers
+must retain enough within-chunk gather parallelism while keeping the old
+rolling-slot and fixed-wait protocol.
+
+## 2026-07-10 FUSED-MOE-039 - W2 return as compute plus rolling return/combine
+
+The W2 return stage now uses the shared compute-plus-return/combine template.
+For each source peer it has two return-chunk owners, 30 fixed W2 workers, 12
+rolling B64 outbox slots, grouped hidden-tile jobs, and cumulative start/done/
+ready generations. The source combine derives the maximum required generation
+for each `(token block, destination ordinal, slot)` from semantic inverse-route
+metadata, waits only for those generations, then performs fp32 top-k accumulation
+from compact bf16 `return_y`.
+
+This removes the previous all-entry readiness barrier while preserving distinct
+compact storage for every logical entry; outbox slot reuse cannot overwrite
+`return_y`. Five dedicated tests, target-shape kernel construction, and scoped
+pre-commit pass. Target H100 timing and correctness remain required.

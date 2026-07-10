@@ -27,6 +27,10 @@ from levanter.grug._moe.source_push_semantic_inbox_pallas import source_push_sem
 WGMMA_SWIZZLE_BYTES = 128
 WGMMA_TILE_M = 8
 PERSISTENT_COMBINE_PROGRAMS = 32
+RETURN_INBOX_SLOTS = 12
+RETURN_CHUNK_OWNER_PROGRAMS_PER_PEER = 2
+RETURN_WORKER_PROGRAMS_PER_PEER = 32
+RETURN_HIDDEN_TILES_PER_JOB = 2
 
 
 @dataclass(frozen=True, slots=True)
@@ -67,6 +71,7 @@ class SourcePushSemanticFusedW2ReturnMetadata:
     queue_row: Int[Array, "S T K"]
     route_weight: Float[Array, "S T K"]
     route_valid: Bool[Array, "S T K"]
+    combine_ready_generation: Int[Array, "S TokenBlock DstOrd Slot"]
     expert_valid: Bool[Array, "Dst E C"]
     queue_overflow_routes: Int[Array, ""]
     layout_overflow_rows: Int[Array, ""]
@@ -89,7 +94,11 @@ class SourcePushSemanticFusedW2ReturnSchedule:
     """Persistent CTA and coarse-readiness counts for one rank."""
 
     hidden_tiles: int
+    hidden_tile_jobs: int
     token_blocks: int
+    rounds: int
+    chunk_owner_programs: int
+    compute_programs: int
     producer_programs: int
     combine_programs: int
     active_combine_programs: int
@@ -106,15 +115,16 @@ def source_push_semantic_fused_w2_return_schedule(
     ep_size: int,
     hidden_dim: int,
     tokens_per_source: int,
+    entries_per_dst: int,
     config: SourcePushSemanticFusedW2ReturnConfig = SourcePushSemanticFusedW2ReturnConfig(),
 ) -> SourcePushSemanticFusedW2ReturnSchedule:
     """Return the fixed persistent schedule and its readiness traffic."""
 
     config.validate()
-    if ep_size <= 0 or hidden_dim <= 0 or tokens_per_source <= 0:
+    if ep_size <= 0 or hidden_dim <= 0 or tokens_per_source <= 0 or entries_per_dst <= 0:
         raise ValueError(
-            "ep_size, hidden_dim, and tokens_per_source must be positive, "
-            f"got {ep_size}, {hidden_dim}, and {tokens_per_source}"
+            "ep_size, hidden_dim, tokens_per_source, and entries_per_dst must be positive, "
+            f"got {ep_size}, {hidden_dim}, {tokens_per_source}, and {entries_per_dst}"
         )
     if hidden_dim % config.block_n:
         raise ValueError(f"hidden dim {hidden_dim} must be divisible by block_n={config.block_n}")
@@ -126,15 +136,23 @@ def source_push_semantic_fused_w2_return_schedule(
         min(token_blocks, (combine_programs + hidden_tiles - 1 - hidden_tile) // hidden_tiles)
         for hidden_tile in range(hidden_tiles)
     )
-    producer_programs = ep_size * hidden_tiles
+    hidden_tile_jobs = (hidden_tiles + RETURN_HIDDEN_TILES_PER_JOB - 1) // RETURN_HIDDEN_TILES_PER_JOB
+    rounds = (entries_per_dst + RETURN_INBOX_SLOTS - 1) // RETURN_INBOX_SLOTS
+    chunk_owner_programs = ep_size * RETURN_CHUNK_OWNER_PROGRAMS_PER_PEER
+    compute_programs = ep_size * (RETURN_WORKER_PROGRAMS_PER_PEER - RETURN_CHUNK_OWNER_PROGRAMS_PER_PEER)
+    producer_programs = ep_size * RETURN_WORKER_PROGRAMS_PER_PEER
     return SourcePushSemanticFusedW2ReturnSchedule(
         hidden_tiles=hidden_tiles,
+        hidden_tile_jobs=hidden_tile_jobs,
         token_blocks=token_blocks,
+        rounds=rounds,
+        chunk_owner_programs=chunk_owner_programs,
+        compute_programs=compute_programs,
         producer_programs=producer_programs,
         combine_programs=combine_programs,
         active_combine_programs=active_combine_programs,
-        readiness_signals=producer_programs,
-        readiness_waits=active_combine_programs * ep_size,
+        readiness_signals=ep_size * entries_per_dst,
+        readiness_waits=token_blocks * hidden_tiles * ep_size * RETURN_INBOX_SLOTS,
     )
 
 
@@ -214,6 +232,29 @@ def source_push_semantic_fused_w2_return_metadata_jax(
     ].get(mode="clip")
     route_valid = queue.route_valid & (queue.route_queue_row < route_queue_valid_rows)
     route_weight = jnp.where(route_valid, route_weight, jnp.zeros((), dtype=route_weight.dtype))
+    token_blocks = (plan.tokens_per_source + config.combine_token_block - 1) // config.combine_token_block
+    source_for_route = jnp.arange(source_count, dtype=jnp.int32)[:, None, None]
+    token_block_for_route = (
+        jnp.arange(plan.tokens_per_source, dtype=jnp.int32)[None, :, None] // config.combine_token_block
+    )
+    route_generation = jnp.where(
+        route_valid,
+        queue.route_entry // RETURN_INBOX_SLOTS + 1,
+        0,
+    )
+    combine_ready_generation = (
+        jnp.zeros(
+            (source_count, token_blocks, destination_count, RETURN_INBOX_SLOTS),
+            dtype=jnp.int32,
+        )
+        .at[
+            source_for_route,
+            token_block_for_route,
+            queue.route_dst_ordinal,
+            queue.route_entry % RETURN_INBOX_SLOTS,
+        ]
+        .max(route_generation, mode="drop")
+    )
 
     return SourcePushSemanticFusedW2ReturnMetadata(
         queue_local_expert=queue.local_expert,
@@ -227,6 +268,7 @@ def source_push_semantic_fused_w2_return_metadata_jax(
         queue_row=queue.route_queue_row,
         route_weight=route_weight,
         route_valid=route_valid,
+        combine_ready_generation=combine_ready_generation,
         expert_valid=layout.valid,
         queue_overflow_routes=queue.overflow_routes,
         layout_overflow_rows=layout.overflow_rows,
@@ -374,8 +416,9 @@ def _source_push_semantic_fused_w2_return_sharded(
         queue_row_local,
         route_weight_local,
         route_valid_local,
+        combine_ready_local,
     ):
-        return_y_local, y_local = kernel(
+        return_y_local, y_local, _outbox_local = kernel(
             z_local[0],
             w_local[0],
             recv_expert_local[0],
@@ -386,12 +429,14 @@ def _source_push_semantic_fused_w2_return_sharded(
             queue_row_local[0],
             route_weight_local[0],
             route_valid_local[0].astype(jnp.int32),
+            combine_ready_local[0],
         )
         return y_local[None, ...], return_y_local[None, ...]
 
     destination_4d = NamedSharding(mesh, P(SOURCE_PUSH_MESH_AXIS, None, None, None))
     destination_3d = NamedSharding(mesh, P(SOURCE_PUSH_MESH_AXIS, None, None))
     source_3d = NamedSharding(mesh, P(SOURCE_PUSH_MESH_AXIS, None, None))
+    source_4d = NamedSharding(mesh, P(SOURCE_PUSH_MESH_AXIS, None, None, None))
     y, return_y = shard_map(
         local_fn,
         mesh=mesh,
@@ -406,6 +451,7 @@ def _source_push_semantic_fused_w2_return_sharded(
             P(SOURCE_PUSH_MESH_AXIS, None, None),
             P(SOURCE_PUSH_MESH_AXIS, None, None),
             P(SOURCE_PUSH_MESH_AXIS, None, None),
+            P(SOURCE_PUSH_MESH_AXIS, None, None, None),
         ),
         out_specs=(
             P(SOURCE_PUSH_MESH_AXIS, None, None),
@@ -423,6 +469,7 @@ def _source_push_semantic_fused_w2_return_sharded(
         jax.sharding.reshard(metadata.queue_row, source_3d),
         jax.sharding.reshard(metadata.route_weight, source_3d),
         jax.sharding.reshard(metadata.route_valid, source_3d),
+        jax.sharding.reshard(metadata.combine_ready_generation, source_4d),
     )
     return y, return_y
 
@@ -446,6 +493,7 @@ def _make_source_push_semantic_fused_w2_return_kernel(
         ep_size=ep_size,
         hidden_dim=hidden_dim,
         tokens_per_source=tokens_per_source,
+        entries_per_dst=entries_per_dst,
         config=config,
     )
     hidden_tiles = schedule.hidden_tiles
@@ -465,23 +513,262 @@ def _make_source_push_semantic_fused_w2_return_kernel(
         queue_row_ref,
         route_weight_ref,
         route_valid_ref,
+        combine_ready_ref,
         return_y_ref,
         y_ref,
+        outbox_ref,
     ) -> None:
-        ready_sem = pl.get_global(mgpu.SemaphoreType.REGULAR((ep_size, hidden_tiles)))
+        empty_sem = pl.get_global(mgpu.SemaphoreType.REGULAR((ep_size, RETURN_INBOX_SLOTS)))
+        start_sem = pl.get_global(mgpu.SemaphoreType.REGULAR((ep_size, RETURN_INBOX_SLOTS)))
+        ready_sem = pl.get_global(mgpu.SemaphoreType.REGULAR((ep_size, RETURN_INBOX_SLOTS)))
+        done_sem = pl.get_global(mgpu.SemaphoreType.REGULAR((ep_size, RETURN_INBOX_SLOTS)))
         rank = lax.axis_index(SOURCE_PUSH_MESH_AXIS)
         worker = pl.program_id(0)
 
-        def _signal_ready(peer, destination_ordinal, hidden_tile) -> None:
+        def _signal_ready(peer, destination_ordinal, slot) -> None:
             pl.semaphore_signal(
-                ready_sem.at[destination_ordinal, hidden_tile],
+                ready_sem.at[destination_ordinal, slot],
                 device_id=peer,
                 device_id_type=pl.DeviceIdType.LOGICAL,
             )
 
-        @pl.when(worker < combine_programs)
+        @pl.when(worker < schedule.producer_programs)
+        def _producer() -> None:
+            source_ordinal = worker // RETURN_WORKER_PROGRAMS_PER_PEER
+            peer_worker = worker % RETURN_WORKER_PROGRAMS_PER_PEER
+
+            def _produce_for_source(static_source_ordinal: int) -> None:
+                source = (rank + static_source_ordinal) % ep_size
+                destination_ordinal = (-static_source_ordinal) % ep_size
+                if static_source_ordinal == 0:
+                    destination_ref = return_y_ref
+                else:
+                    destination_ref = mgpu.remote_ref(
+                        return_y_ref,
+                        source,
+                        device_id_type=pl.DeviceIdType.LOGICAL,
+                    )
+
+                @pl.when(peer_worker < RETURN_CHUNK_OWNER_PROGRAMS_PER_PEER)
+                def _chunk_owner() -> None:
+                    owner = peer_worker
+
+                    @pl.loop(0, RETURN_INBOX_SLOTS)
+                    def _initialize_owned_slot(slot) -> None:
+                        send_task = static_source_ordinal * RETURN_INBOX_SLOTS + slot
+
+                        @pl.when((send_task % RETURN_CHUNK_OWNER_PROGRAMS_PER_PEER) == owner)
+                        def _initialize_slot() -> None:
+                            pl.semaphore_signal(empty_sem.at[static_source_ordinal, slot])
+
+                    @pl.loop(0, schedule.rounds)
+                    def _round_loop(round_index) -> None:
+                        @pl.loop(0, RETURN_INBOX_SLOTS)
+                        def _start_slot_loop(slot) -> None:
+                            send_task = static_source_ordinal * RETURN_INBOX_SLOTS + slot
+                            entry = round_index * RETURN_INBOX_SLOTS + slot
+
+                            @pl.when(
+                                (entry < entries_per_dst)
+                                & ((send_task % RETURN_CHUNK_OWNER_PROGRAMS_PER_PEER) == owner)
+                            )
+                            def _start_owned_entry() -> None:
+                                pl.semaphore_wait(empty_sem.at[static_source_ordinal, slot])
+                                pl.semaphore_signal(start_sem.at[static_source_ordinal, slot])
+
+                        @pl.loop(0, RETURN_INBOX_SLOTS)
+                        def _send_slot_loop(slot) -> None:
+                            send_task = static_source_ordinal * RETURN_INBOX_SLOTS + slot
+                            entry = round_index * RETURN_INBOX_SLOTS + slot
+
+                            @pl.when(
+                                (entry < entries_per_dst)
+                                & ((send_task % RETURN_CHUNK_OWNER_PROGRAMS_PER_PEER) == owner)
+                            )
+                            def _send_owned_entry() -> None:
+                                pl.semaphore_wait(
+                                    done_sem.at[static_source_ordinal, slot],
+                                    value=(round_index + 1) * schedule.hidden_tile_jobs,
+                                    decrement=False,
+                                )
+
+                                def _copy_scope(output_smem, ready_barrier) -> None:
+                                    @pl.loop(0, hidden_tiles)
+                                    def _hidden_tile_loop(hidden_tile) -> None:
+                                        hidden_start = hidden_tile * config.block_n
+                                        mgpu.copy_gmem_to_smem(
+                                            outbox_ref.at[
+                                                static_source_ordinal,
+                                                slot,
+                                                pl.ds(0, config.compute_m),
+                                                pl.ds(hidden_start, config.block_n),
+                                            ],
+                                            output_smem,
+                                            ready_barrier,
+                                        )
+                                        mgpu.barrier_wait(ready_barrier)
+                                        mgpu.copy_smem_to_gmem(
+                                            output_smem,
+                                            destination_ref.at[
+                                                destination_ordinal,
+                                                entry,
+                                                pl.ds(0, config.compute_m),
+                                                pl.ds(hidden_start, config.block_n),
+                                            ],
+                                        )
+                                        mgpu.wait_smem_to_gmem(0, wait_read_only=False)
+
+                                pl.run_scoped(
+                                    _copy_scope,
+                                    output_smem=mgpu.SMEM((config.compute_m, config.block_n), dtype=jnp.bfloat16),
+                                    ready_barrier=mgpu.Barrier(num_arrivals=1),
+                                )
+                                if static_source_ordinal == 0:
+                                    pl.semaphore_signal(ready_sem.at[destination_ordinal, slot])
+                                else:
+                                    _signal_ready(source, destination_ordinal, slot)
+                                pl.semaphore_signal(empty_sem.at[static_source_ordinal, slot])
+
+                @pl.when(peer_worker >= RETURN_CHUNK_OWNER_PROGRAMS_PER_PEER)
+                def _compute_worker() -> None:
+                    compute_worker = peer_worker - RETURN_CHUNK_OWNER_PROGRAMS_PER_PEER
+                    compute_programs_per_peer = RETURN_WORKER_PROGRAMS_PER_PEER - RETURN_CHUNK_OWNER_PROGRAMS_PER_PEER
+
+                    @pl.loop(0, schedule.rounds)
+                    def _round_loop(round_index) -> None:
+                        @pl.loop(0, RETURN_INBOX_SLOTS)
+                        def _slot_loop(slot) -> None:
+                            entry = round_index * RETURN_INBOX_SLOTS + slot
+
+                            @pl.when(entry < entries_per_dst)
+                            def _entry() -> None:
+                                valid_rows = recv_valid_ref[static_source_ordinal, entry]
+
+                                @pl.loop(0, schedule.hidden_tile_jobs)
+                                def _job_loop(job) -> None:
+                                    work_group = (
+                                        static_source_ordinal * RETURN_INBOX_SLOTS + slot
+                                    ) * schedule.hidden_tile_jobs + job
+
+                                    @pl.when((work_group % compute_programs_per_peer) == compute_worker)
+                                    def _owned_job() -> None:
+                                        pl.semaphore_wait(
+                                            start_sem.at[static_source_ordinal, slot],
+                                            value=round_index + 1,
+                                            decrement=False,
+                                        )
+
+                                        @pl.when(valid_rows > 0)
+                                        def _compute_live_entry() -> None:
+                                            expert = recv_expert_ref[static_source_ordinal, entry]
+                                            expert_row_start = recv_row_ref[static_source_ordinal, entry]
+
+                                            @pl.loop(0, RETURN_HIDDEN_TILES_PER_JOB)
+                                            def _hidden_tile_loop(hidden_offset) -> None:
+                                                hidden_tile = job * RETURN_HIDDEN_TILES_PER_JOB + hidden_offset
+
+                                                @pl.when(hidden_tile < hidden_tiles)
+                                                def _compute_hidden_tile() -> None:
+                                                    hidden_start = hidden_tile * config.block_n
+
+                                                    def _acc_scope(acc_ref) -> Array:
+                                                        def _smem_scope(
+                                                            gate_smem,
+                                                            up_smem,
+                                                            h_smem,
+                                                            w_smem,
+                                                            ready_barrier,
+                                                        ) -> None:
+                                                            row = mgpu.layout_cast(
+                                                                lax.broadcasted_iota(
+                                                                    jnp.int32,
+                                                                    (config.compute_m, config.block_k),
+                                                                    0,
+                                                                ),
+                                                                mgpu.Layout.WGMMA,
+                                                            )
+                                                            row_valid = (row < valid_rows).astype(jnp.float32)
+
+                                                            @pl.loop(0, intermediate_tiles)
+                                                            def _intermediate_loop(intermediate_tile) -> None:
+                                                                intermediate_start = intermediate_tile * config.block_k
+                                                                mgpu.copy_gmem_to_smem(
+                                                                    w_ref.at[
+                                                                        expert,
+                                                                        pl.ds(intermediate_start, config.block_k),
+                                                                        pl.ds(hidden_start, config.block_n),
+                                                                    ],
+                                                                    w_smem,
+                                                                    ready_barrier,
+                                                                )
+                                                                mgpu.copy_gmem_to_smem(
+                                                                    z_ref.at[
+                                                                        expert,
+                                                                        pl.ds(expert_row_start, config.compute_m),
+                                                                        pl.ds(intermediate_start, config.block_k),
+                                                                    ],
+                                                                    gate_smem,
+                                                                    ready_barrier,
+                                                                )
+                                                                mgpu.copy_gmem_to_smem(
+                                                                    z_ref.at[
+                                                                        expert,
+                                                                        pl.ds(expert_row_start, config.compute_m),
+                                                                        pl.ds(
+                                                                            intermediate_dim + intermediate_start,
+                                                                            config.block_k,
+                                                                        ),
+                                                                    ],
+                                                                    up_smem,
+                                                                    ready_barrier,
+                                                                )
+                                                                mgpu.barrier_wait(ready_barrier)
+                                                                gate = gate_smem[...].astype(jnp.float32)
+                                                                up = up_smem[...].astype(jnp.float32)
+                                                                h_smem[:, :] = (
+                                                                    jax.nn.silu(gate) * up * row_valid
+                                                                ).astype(dtype)
+                                                                mgpu.commit_smem()
+                                                                mgpu.wgmma(acc_ref, h_smem, w_smem)
+                                                                mgpu.wgmma_wait(0)
+
+                                                        pl.run_scoped(
+                                                            _smem_scope,
+                                                            gate_smem=_wgmma_smem(
+                                                                (config.compute_m, config.block_k), dtype
+                                                            ),
+                                                            up_smem=_wgmma_smem(
+                                                                (config.compute_m, config.block_k), dtype
+                                                            ),
+                                                            h_smem=_wgmma_smem(
+                                                                (config.compute_m, config.block_k), dtype
+                                                            ),
+                                                            w_smem=_wgmma_smem(
+                                                                (config.block_k, config.block_n), dtype
+                                                            ),
+                                                            ready_barrier=mgpu.Barrier(num_arrivals=3),
+                                                        )
+                                                        return acc_ref[...].astype(jnp.bfloat16)
+
+                                                    output = pl.run_scoped(
+                                                        _acc_scope,
+                                                        acc_ref=mgpu.ACC((config.compute_m, config.block_n)),
+                                                    )
+                                                    outbox_ref[
+                                                        static_source_ordinal,
+                                                        slot,
+                                                        pl.ds(0, config.compute_m),
+                                                        pl.ds(hidden_start, config.block_n),
+                                                    ] = output
+
+                                        pl.semaphore_signal(done_sem.at[static_source_ordinal, slot])
+
+            branches = tuple((lambda ordinal: lambda _: _produce_for_source(ordinal))(i) for i in range(ep_size))
+            lax.switch(source_ordinal, branches, None)
+
+        @pl.when(worker >= schedule.producer_programs)
         def _combine() -> None:
-            consumer = worker
+            consumer = worker - schedule.producer_programs
             hidden_tile = consumer % hidden_tiles
             consumer_lane = consumer // hidden_tiles
             consumers_for_tile = (combine_programs + hidden_tiles - 1 - hidden_tile) // hidden_tiles
@@ -489,19 +776,24 @@ def _make_source_push_semantic_fused_w2_return_kernel(
 
             @pl.when(consumer_lane < token_blocks)
             def _active_consumer() -> None:
-                for destination_ordinal in range(ep_size):
-                    pl.semaphore_wait(
-                        ready_sem.at[destination_ordinal, hidden_tile],
-                        value=1,
-                        decrement=False,
-                    )
-
                 @pl.loop(0, token_blocks)
                 def _token_block_loop(iteration) -> None:
                     token_block = consumer_lane + iteration * consumers_for_tile
 
                     @pl.when(token_block < token_blocks)
                     def _combine_token_block() -> None:
+                        for destination_ordinal in range(ep_size):
+                            for slot in range(RETURN_INBOX_SLOTS):
+                                required_generation = combine_ready_ref[token_block, destination_ordinal, slot]
+
+                                @pl.when(required_generation > 0)
+                                def _wait_for_required_round() -> None:
+                                    pl.semaphore_wait(
+                                        ready_sem.at[destination_ordinal, slot],
+                                        value=required_generation,
+                                        decrement=False,
+                                    )
+
                         token_start = token_block * config.combine_token_block
 
                         @pl.loop(0, config.combine_token_block)
@@ -531,117 +823,15 @@ def _make_source_push_semantic_fused_w2_return_kernel(
 
                                 y_ref[token, pl.ds(hidden_start, config.block_n)] = acc.astype(jnp.bfloat16)
 
-        @pl.when(worker >= combine_programs)
-        def _producer() -> None:
-            producer = worker - combine_programs
-            source_ordinal = producer // hidden_tiles
-            hidden_tile = producer % hidden_tiles
-            hidden_start = hidden_tile * config.block_n
-
-            def _produce_for_source(static_source_ordinal: int) -> None:
-                source = (rank + static_source_ordinal) % ep_size
-                destination_ordinal = (-static_source_ordinal) % ep_size
-                if static_source_ordinal == 0:
-                    destination_ref = return_y_ref
-                else:
-                    destination_ref = mgpu.remote_ref(
-                        return_y_ref,
-                        source,
-                        device_id_type=pl.DeviceIdType.LOGICAL,
-                    )
-
-                @pl.loop(0, entries_per_dst)
-                def _entry_loop(entry) -> None:
-                    valid_rows = recv_valid_ref[static_source_ordinal, entry]
-
-                    @pl.when(valid_rows > 0)
-                    def _produce_entry() -> None:
-                        expert = recv_expert_ref[static_source_ordinal, entry]
-                        expert_row_start = recv_row_ref[static_source_ordinal, entry]
-
-                        def _acc_scope(acc_ref) -> Array:
-                            def _smem_scope(gate_smem, up_smem, h_smem, w_smem, ready_barrier) -> None:
-                                row = mgpu.layout_cast(
-                                    lax.broadcasted_iota(jnp.int32, (config.compute_m, config.block_k), 0),
-                                    mgpu.Layout.WGMMA,
-                                )
-                                row_valid = (row < valid_rows).astype(jnp.float32)
-
-                                @pl.loop(0, intermediate_tiles)
-                                def _intermediate_loop(intermediate_tile) -> None:
-                                    intermediate_start = intermediate_tile * config.block_k
-                                    mgpu.copy_gmem_to_smem(
-                                        w_ref.at[
-                                            expert,
-                                            pl.ds(intermediate_start, config.block_k),
-                                            pl.ds(hidden_start, config.block_n),
-                                        ],
-                                        w_smem,
-                                        ready_barrier,
-                                    )
-                                    mgpu.copy_gmem_to_smem(
-                                        z_ref.at[
-                                            expert,
-                                            pl.ds(expert_row_start, config.compute_m),
-                                            pl.ds(intermediate_start, config.block_k),
-                                        ],
-                                        gate_smem,
-                                        ready_barrier,
-                                    )
-                                    mgpu.copy_gmem_to_smem(
-                                        z_ref.at[
-                                            expert,
-                                            pl.ds(expert_row_start, config.compute_m),
-                                            pl.ds(intermediate_dim + intermediate_start, config.block_k),
-                                        ],
-                                        up_smem,
-                                        ready_barrier,
-                                    )
-                                    mgpu.barrier_wait(ready_barrier)
-                                    gate = gate_smem[...].astype(jnp.float32)
-                                    up = up_smem[...].astype(jnp.float32)
-                                    h_smem[:, :] = (jax.nn.silu(gate) * up * row_valid).astype(dtype)
-                                    mgpu.commit_smem()
-                                    mgpu.wgmma(acc_ref, h_smem, w_smem)
-                                    mgpu.wgmma_wait(0)
-
-                            pl.run_scoped(
-                                _smem_scope,
-                                gate_smem=_wgmma_smem((config.compute_m, config.block_k), dtype),
-                                up_smem=_wgmma_smem((config.compute_m, config.block_k), dtype),
-                                h_smem=_wgmma_smem((config.compute_m, config.block_k), dtype),
-                                w_smem=_wgmma_smem((config.block_k, config.block_n), dtype),
-                                ready_barrier=mgpu.Barrier(num_arrivals=3),
-                            )
-                            return acc_ref[...].astype(jnp.bfloat16)
-
-                        output = pl.run_scoped(
-                            _acc_scope,
-                            acc_ref=mgpu.ACC((config.compute_m, config.block_n)),
-                        )
-
-                        destination_ref[
-                            destination_ordinal,
-                            entry,
-                            pl.ds(0, config.compute_m),
-                            pl.ds(hidden_start, config.block_n),
-                        ] = output
-
-                if static_source_ordinal == 0:
-                    pl.semaphore_signal(ready_sem.at[destination_ordinal, hidden_tile])
-                else:
-                    _signal_ready(source, destination_ordinal, hidden_tile)
-
-            branches = tuple((lambda ordinal: lambda _: _produce_for_source(ordinal))(i) for i in range(ep_size))
-            lax.switch(source_ordinal, branches, None)
-
     return_shape = (ep_size, entries_per_dst, config.compute_m, hidden_dim)
     y_shape = (tokens_per_source, hidden_dim)
+    outbox_shape = (ep_size, RETURN_INBOX_SLOTS, config.compute_m, hidden_dim)
     return mgpu.kernel(
         body,
         out_shape=(
             jax.ShapeDtypeStruct(return_shape, jnp.bfloat16),
             jax.ShapeDtypeStruct(y_shape, jnp.bfloat16),
+            jax.ShapeDtypeStruct(outbox_shape, jnp.bfloat16),
         ),
         grid=(worker_programs,),
         grid_names=("worker_program",),

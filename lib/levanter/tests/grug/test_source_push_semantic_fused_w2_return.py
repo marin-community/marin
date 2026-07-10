@@ -27,20 +27,25 @@ INTERMEDIATE = 64
 HIDDEN = 128
 
 
-def test_fused_w2_return_target_schedule_is_persistent_and_coarse_grained():
+def test_fused_w2_return_target_schedule_matches_stable_inbox_worker_topology():
     schedule = source_push_semantic_fused_w2_return_schedule(
         ep_size=8,
         hidden_dim=2560,
         tokens_per_source=32768,
+        entries_per_dst=288,
     )
 
     assert schedule.hidden_tiles == 20
-    assert schedule.producer_programs == 160
+    assert schedule.hidden_tile_jobs == 10
+    assert schedule.rounds == 24
+    assert schedule.chunk_owner_programs == 16
+    assert schedule.compute_programs == 240
+    assert schedule.producer_programs == 256
     assert schedule.combine_programs == 32
     assert schedule.active_combine_programs == 32
-    assert schedule.total_programs == 192
-    assert schedule.readiness_signals == 160
-    assert schedule.readiness_waits == 256
+    assert schedule.total_programs == 288
+    assert schedule.readiness_signals == 2304
+    assert schedule.readiness_waits == 983040
 
 
 def _inputs(*, rows_per_expert: int = ROWS_PER_EXPERT):
@@ -167,6 +172,35 @@ def test_fused_w2_return_metadata_maps_source_queue_to_destination_rows():
                 assert recv_row_start[dst, source_ordinal, entry] == (
                     source_bases[src, dst, expert] + queue_row_start[src, dst_ordinal, entry]
                 )
+
+
+def test_fused_w2_return_metadata_tracks_required_rolling_slot_generations():
+    z, _w_down, plan = _inputs()
+    metadata = source_push_semantic_fused_w2_return_metadata_jax(
+        plan,
+        rows_per_expert_capacity=z.shape[2],
+        entries_per_dst=ENTRIES_PER_DST,
+    )
+    expected = np.zeros_like(np.asarray(metadata.combine_ready_generation))
+    queue_dst = np.asarray(metadata.queue_dst_ordinal)
+    queue_entry = np.asarray(metadata.queue_entry)
+    route_valid = np.asarray(metadata.route_valid)
+
+    for source in range(SOURCE_COUNT):
+        for token in range(TOKENS):
+            token_block = token // CONFIG.combine_token_block
+            for route_slot in range(TOPK):
+                if not route_valid[source, token, route_slot]:
+                    continue
+                destination = queue_dst[source, token, route_slot]
+                entry = queue_entry[source, token, route_slot]
+                slot = entry % 12
+                expected[source, token_block, destination, slot] = max(
+                    expected[source, token_block, destination, slot],
+                    entry // 12 + 1,
+                )
+
+    np.testing.assert_array_equal(np.asarray(metadata.combine_ready_generation), expected)
 
 
 def test_fused_w2_return_interpret_matches_independent_route_reference():
