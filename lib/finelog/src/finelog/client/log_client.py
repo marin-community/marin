@@ -14,7 +14,7 @@ from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
-from typing import Any
+from typing import Any, TypeVar
 
 import pyarrow as pa
 import pyarrow.ipc as paipc
@@ -452,6 +452,9 @@ class Table:
         self._registered = True
 
 
+_ClientT = TypeVar("_ClientT")
+
+
 class LogClient:
     """Domain client for the finelog process.
 
@@ -716,22 +719,41 @@ class LogClient:
             self._tables[LOG_NAMESPACE] = tbl
             return tbl
 
-    def _get_stats_client(self) -> StatsServiceClientSync:
+    def _get_or_resolve_client(
+        self,
+        cached: Callable[[], _ClientT | None],
+        create: Callable[[str], _ClientT],
+        label: str,
+    ) -> _ClientT:
+        """Return the cached RPC client, resolving and building it once if absent.
+
+        The endpoint is resolved *outside* ``self._lock``: the resolver may block
+        on a network RPC (iris resolves it via the controller), and holding the
+        lock across that call stalls every other caller — notably a
+        shutdown-path log emit parked on the same lock in :meth:`_get_log_table`,
+        which deadlocks teardown. Double-checked so a caller that loses the
+        resolve race reuses the winner's client instead of building a second one.
+
+        ``create`` builds the client and installs it in its cache slot; it runs
+        under the lock so the install is atomic with the double-check.
+        """
         with self._lock:
             if self._closed:
                 raise RuntimeError("LogClient is closed")
-            if self._stats_client is not None:
-                return self._stats_client
-        # Resolve outside the lock: the resolver may issue a blocking RPC (iris
-        # looks the endpoint up on the controller), and holding _lock across it
-        # stalls every other caller — including a shutdown-path log emit parked
-        # on the same lock in _get_log_table, which deadlocks teardown.
+            if (client := cached()) is not None:
+                return client
         address = self._resolve()
         with self._lock:
             if self._closed:
                 raise RuntimeError("LogClient is closed")
-            if self._stats_client is not None:
-                return self._stats_client
+            if (client := cached()) is not None:
+                return client
+            client = create(address)
+            logger.info("LogClient resolved %s -> %s (%s)", self._server_url, address, label)
+            return client
+
+    def _get_stats_client(self) -> StatsServiceClientSync:
+        def create(address: str) -> StatsServiceClientSync:
             self._stats_client = StatsServiceClientSync(
                 address=address,
                 timeout_ms=self._timeout_ms,
@@ -739,23 +761,12 @@ class LogClient:
                 send_compression=_SEND_COMPRESSION,
                 accept_compression=_ACCEPT_COMPRESSIONS,
             )
-            logger.info("LogClient resolved %s -> %s (stats)", self._server_url, address)
             return self._stats_client
 
+        return self._get_or_resolve_client(lambda: self._stats_client, create, "stats")
+
     def _get_log_service_client(self) -> LogServiceClientSync:
-        with self._lock:
-            if self._closed:
-                raise RuntimeError("LogClient is closed")
-            if self._log_service_client is not None:
-                return self._log_service_client
-        # Resolve outside the lock (see _get_stats_client): never hold _lock
-        # across the resolver's potentially blocking RPC.
-        address = self._resolve()
-        with self._lock:
-            if self._closed:
-                raise RuntimeError("LogClient is closed")
-            if self._log_service_client is not None:
-                return self._log_service_client
+        def create(address: str) -> LogServiceClientSync:
             self._log_service_client = LogServiceClientSync(
                 address=address,
                 timeout_ms=self._timeout_ms,
@@ -763,8 +774,9 @@ class LogClient:
                 send_compression=_SEND_COMPRESSION,
                 accept_compression=_ACCEPT_COMPRESSIONS,
             )
-            logger.info("LogClient resolved %s -> %s (log)", self._server_url, address)
             return self._log_service_client
+
+        return self._get_or_resolve_client(lambda: self._log_service_client, create, "log")
 
     def _resolve(self) -> str:
         address = self._resolver(self._server_url)
