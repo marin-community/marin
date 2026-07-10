@@ -417,6 +417,76 @@ def test_moe_mlp_sonic_matches_jax_gather_reference_on_gpu():
     assert float(max_abs) <= 64.0
 
 
+def test_moe_mlp_sonic_gradients_match_jax_reference_on_gpu():
+    _skip_without_sonic_gpu_runtime()
+    tokens = 64
+    hidden_dim = 128
+    intermediate_dim = 128
+    num_experts = 8
+    topk = 2
+    k_x, k_logits, k_w13, k_w2 = jax.random.split(jax.random.key(33), 4)
+    dtype = jnp.bfloat16
+    x = jax.random.normal(k_x, (tokens, hidden_dim), dtype=dtype)
+    selected_experts = _make_unique_topk_experts(tokens=tokens, topk=topk, num_experts=num_experts)
+    combine_weights = jax.nn.softmax(
+        jax.random.normal(k_logits, (tokens, topk), dtype=jnp.float32),
+        axis=-1,
+    )
+    w_up_gate = 0.02 * jax.random.normal(
+        k_w13,
+        (num_experts, hidden_dim, 2 * intermediate_dim),
+        dtype=dtype,
+    )
+    w_down = 0.02 * jax.random.normal(
+        k_w2,
+        (num_experts, intermediate_dim, hidden_dim),
+        dtype=dtype,
+    )
+
+    def loss(x, combine_weights, w_up_gate, w_down, implementation):
+        if implementation == "sonic":
+            out = moe_mlp(
+                x,
+                selected_experts,
+                combine_weights,
+                w_up_gate,
+                w_down,
+                activation=ActivationFunctionEnum.silu,
+                implementation="sonic",
+                mesh=None,
+            )
+        else:
+            token_ids, dispatch_positions, group_sizes, _assignment_ids = (
+                _prepare_moe_dispatch_indices_with_assignment_ids(
+                    selected_experts,
+                    num_experts=num_experts,
+                )
+            )
+            x_dispatch = x[token_ids]
+            w13_dispatch = ragged_dot(x_dispatch, w_up_gate, group_sizes)
+            gate_dispatch, up_dispatch = grug_moe.split_moe_w13_output(
+                w13_dispatch,
+                intermediate_dim=intermediate_dim,
+                interleaved=False,
+            )
+            dispatch_out = ragged_dot(jax.nn.silu(gate_dispatch) * up_dispatch, w_down, group_sizes)
+            out = _gather_sum_reference(dispatch_out, dispatch_positions, combine_weights)
+        return jnp.mean(out.astype(jnp.float32).square())
+
+    grad_fn = jax.jit(jax.grad(loss, argnums=(0, 1, 2, 3)), static_argnums=4)
+    sonic_grads = grad_fn(x, combine_weights, w_up_gate, w_down, "sonic")
+    reference_grads = grad_fn(x, combine_weights, w_up_gate, w_down, "reference")
+    jax.block_until_ready((sonic_grads, reference_grads))
+
+    for sonic_grad, reference_grad in zip(sonic_grads, reference_grads):
+        np.testing.assert_allclose(
+            np.asarray(sonic_grad, dtype=np.float32),
+            np.asarray(reference_grad, dtype=np.float32),
+            rtol=0.1,
+            atol=2e-4,
+        )
+
+
 def test_moe_expert_mlp_init_uses_logical_weight_pspecs():
     mesh = _make_dense_mesh()
     pspecs = MoEExpertMlpPspecs(expert=None, hidden="data", intermediate="model")
