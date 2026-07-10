@@ -136,7 +136,7 @@ VPC_PRIVATE_RANGE = "10.0.0.0/8"
 # rule would strand the sender behind a 403 that reads like an auth failure. The token,
 # not the prefix, is what authenticates a push. Add a cluster here when it starts
 # forwarding, then re-run the ``finelog`` stage to widen the policy.
-FINELOG_RELAY_SOURCE_RANGES: dict[str, tuple[str, ...]] = {
+FINELOG_SENDER_SOURCE_RANGES: dict[str, tuple[str, ...]] = {
     "cw-rno2a": ("192.112.160.0/20",),
     "cw-us-east-02a": ("166.19.0.0/16",),
 }
@@ -259,7 +259,7 @@ class FinelogBackend:
     IAP is never enabled here: finelog authenticates every RPC itself against a
     default-deny stack, and a forwarding finelog holds no Google identity to
     present. The load balancer supplies TLS, Cloud Armor narrows the edge to the
-    relay source ranges, and the firewall admits only the Google LB ranges plus the
+    sender source ranges, and the firewall admits only the Google LB ranges plus the
     VPC — so the VM's own address is never a way in.
 
     ``finelog deploy`` creates the VM as ``finelog-<cluster>`` and labels it
@@ -1148,13 +1148,13 @@ def remove_token_proxy_route(frontend: Frontend, backend: Backend, *, dry_run: b
 # IAP is never enabled on this backend -- a forwarding finelog has no Google
 # identity. Authentication is finelog's: a default-deny stack whose `jwt` layer
 # verifies the bearer against the sending finelog's Ed25519 public key. Cloud
-# Armor narrows the edge to the relay source ranges ahead of it.
+# Armor narrows the edge to the sender source ranges ahead of it.
 # --------------------------------------------------------------------------- #
 
 
-def relay_source_ranges() -> list[str]:
-    """Flatten :data:`FINELOG_RELAY_SOURCE_RANGES` into Cloud Armor's allow list."""
-    ranges = [r for cluster_ranges in FINELOG_RELAY_SOURCE_RANGES.values() for r in cluster_ranges]
+def sender_source_ranges() -> list[str]:
+    """Flatten :data:`FINELOG_SENDER_SOURCE_RANGES` into Cloud Armor's allow list."""
+    ranges = [r for cluster_ranges in FINELOG_SENDER_SOURCE_RANGES.values() for r in cluster_ranges]
     if len(ranges) > 10:
         raise click.ClickException(f"a Cloud Armor rule admits at most 10 source ranges, got {len(ranges)}")
     return ranges
@@ -1198,7 +1198,7 @@ def ensure_finelog_allow_firewall(finelog: FinelogBackend, *, dry_run: bool) -> 
 
     Every in-VPC caller — the controller, every GCP worker — reaches finelog directly
     on its internal address, bypassing the load balancer and Cloud Armor entirely.
-    The LB ranges carry the health check and the off-VPC relay pushes.
+    The LB ranges carry the health check and the off-VPC forwarded pushes.
     """
     _ensure_firewall_rule(
         project=finelog.project,
@@ -1236,7 +1236,7 @@ def ensure_armor_policy(finelog: FinelogBackend, source_ranges: Sequence[str], *
     """Admit only *source_ranges* at the edge of the finelog backend, denying the rest.
 
     Reconciling: re-running with a wider (or narrower) set rewrites the allow rule in
-    place, so adding a relaying cluster to :data:`FINELOG_RELAY_SOURCE_RANGES` and
+    place, so adding a sending cluster to :data:`FINELOG_SENDER_SOURCE_RANGES` and
     re-running this stage is the whole update. The policy's default rule is flipped
     from its allow-all default to deny, making the allow rule exhaustive.
 
@@ -1244,7 +1244,9 @@ def ensure_armor_policy(finelog: FinelogBackend, source_ranges: Sequence[str], *
     VM directly and are unaffected.
     """
     if not source_ranges:
-        raise click.ClickException("no relay source ranges; a policy denying everything would strand the relay")
+        raise click.ClickException(
+            "no sender source ranges; a policy denying everything would strand every sending finelog"
+        )
 
     _ensure(
         f"Cloud Armor policy {finelog.armor_policy}",
@@ -1254,7 +1256,7 @@ def ensure_armor_policy(finelog: FinelogBackend, source_ranges: Sequence[str], *
             "security-policies",
             "create",
             finelog.armor_policy,
-            f"--description=relay sources admitted to {finelog.vm}",
+            f"--description=sender sources admitted to {finelog.vm}",
         ),
         dry_run=dry_run,
     )
@@ -1730,7 +1732,7 @@ def finelog_cmd(
 
     Gives a federated cluster's finelog a TLS endpoint to forward its logs to, without
     exposing the hub's finelog VM: an IAP-free backend on the shared frontend, a Cloud
-    Armor policy admitting only the relay source ranges, and firewall rules leaving
+    Armor policy admitting only the sender source ranges, and firewall rules leaving
     the private range and the Google LB ranges as the sole paths to the port.
 
     In-VPC callers are untouched: the controller and every GCP worker keep reaching
@@ -1740,12 +1742,12 @@ def finelog_cmd(
     authenticates each push itself against its `jwt` auth layer, keyed on the sending
     finelog's public key.
 
-    To admit another cluster, add its egress prefixes to FINELOG_RELAY_SOURCE_RANGES
+    To admit another cluster, add its egress prefixes to FINELOG_SENDER_SOURCE_RANGES
     and re-run; the allow rule is rewritten in place.
     """
     fe = Frontend(name=frontend_name, project=project)
     finelog = FinelogBackend(cluster=cluster, project=project, zone=zone, domain=domain)
-    ranges = relay_source_ranges()
+    ranges = sender_source_ranges()
     vm_ip = finelog_ip or discover_finelog_ip(finelog)
 
     _ensure_managed_cert(finelog.project, finelog.cert, domain, dry_run=dry_run)
@@ -1788,7 +1790,7 @@ def finelog_cmd(
 def finelog_teardown_cmd(cluster: str, project: str, zone: str, dry_run: bool, frontend_name: str, domain: str) -> None:
     """Withdraw a finelog's route off-VPC: its host rule, cert, backend, armor policy and firewall.
 
-    The finelog VM keeps running and stays reachable in-VPC; only relaying clusters lose
+    The finelog VM keeps running and stays reachable in-VPC; only sending clusters lose
     their path to it. Inverse of the ``finelog`` stage.
     """
     fe = Frontend(name=frontend_name, project=project)
@@ -1853,13 +1855,13 @@ def status(cluster: str, project: str, zone: str, dry_run: bool, frontend_name: 
     if audience:
         click.echo(f"  iap jwt aud : {audience}  (auth.iap.signed_header_audience)")
 
-    click.echo(f"finelog {finelog.vm} (IAP-free; relay ingress):")
+    click.echo(f"finelog {finelog.vm} (IAP-free; sender ingress):")
     for label, describe in finelog_checks:
         click.echo(f"  [{'OK ' if _exists(describe) else 'off '}] {label}")
     has_finelog_route = _url_map_has_matcher(fe, finelog.path_matcher)
     click.echo(f"  [{'OK ' if has_finelog_route else 'off '}] host route in {fe.url_map}")
     if has_finelog_route:
-        click.echo(f"  relay sources : {', '.join(relay_source_ranges())}")
+        click.echo(f"  sender sources : {', '.join(sender_source_ranges())}")
 
 
 @cli.command()

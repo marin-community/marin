@@ -79,11 +79,7 @@ DEFAULT_BATCH_ROWS = 10_000
 # Per-Table queue cap in bytes. Matches WriteRows max body size.
 DEFAULT_MAX_BUFFER_BYTES = 16 * 1024 * 1024
 
-# Compression policy: zstd for both directions; gzip kept only as a fallback
-# the server still accepts. Every deployed finelog server has accepted zstd
-# since #5457 (2026-05-05), so the send-side gzip workaround is no longer
-# needed — gzip.decompress was the dominant CPU cost on the server when
-# clients sent gzip bodies.
+# Send zstd; accept both zstd and gzip. gzip is kept only as a fallback.
 _SEND_COMPRESSION = ZstdCompression()
 _ACCEPT_COMPRESSIONS = (ZstdCompression(), GzipCompression())
 
