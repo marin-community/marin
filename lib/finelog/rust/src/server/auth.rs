@@ -56,10 +56,11 @@ use connectrpc::{
 use jsonwebtoken::{decode, Algorithm, DecodingKey, Validation};
 use serde::Deserialize;
 
-/// The one audience this delegation plane accepts. A token minted for any other
-/// plane (e.g. control-plane `aud="iris"`), even under the same signing key, is
-/// rejected — the load-bearing cross-plane guard (RFC 8725).
-const FINELOG_AUDIENCE: &str = "finelog";
+/// The one audience this delegation plane accepts, and the one the forwarder mints
+/// under. A token minted for any other plane (e.g. control-plane `aud="iris"`), even
+/// under the same signing key, is rejected — the load-bearing cross-plane guard
+/// (RFC 8725).
+pub(crate) const FINELOG_AUDIENCE: &str = "finelog";
 
 /// Accept a token whose `exp` is at most this far in the past, to tolerate small
 /// clock skew between a minting controller and the store.

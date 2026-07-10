@@ -450,7 +450,7 @@ impl Store {
                 None => continue,
             };
             let arrow_schema = Arc::clone(engine.arrow_schema());
-            let paths = engine.query_snapshot();
+            let paths = engine.query_snapshot().paths;
             let provider = NamespaceProvider::build(arrow_schema, &paths)
                 .map_err(|e| StatsError::Internal(format!("build provider {:?}: {e}", ns.name)))?;
             out.push(RegisteredProvider {
@@ -461,15 +461,17 @@ impl Store {
         Ok(out)
     }
 
-    /// Snapshot the reserved `log` namespace's arrow schema + sealed-segment
-    /// paths for a FetchLogs read.
+    /// Snapshot the reserved `log` namespace's arrow schema alongside one consistent
+    /// observation of its sealed segments: the paths a scan may read, and the lowest
+    /// `seq` they hold. `FetchLogs` needs the first two; the forwarder also reads
+    /// `min_seq` to tell whether eviction moved rows out from under its cursor.
     pub fn log_query_snapshot(&self) -> Result<LogSnapshot, StatsError> {
         let engine = self.require_engine(LOG_NAMESPACE_NAME)?;
-        let (paths, min_seq) = engine.query_snapshot_with_min_seq();
+        let segments = engine.query_snapshot();
         Ok(LogSnapshot {
             schema: Arc::clone(engine.arrow_schema()),
-            paths,
-            min_seq,
+            paths: segments.paths,
+            min_seq: segments.min_seq,
         })
     }
 

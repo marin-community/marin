@@ -397,6 +397,7 @@ pub async fn fetch_log_rows(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::server::test_support::unique_dir;
     use crate::store::ipc::{decode_one_record_batch, encode_ipc};
     use datafusion::arrow::array::Int64Array;
 
@@ -545,18 +546,6 @@ mod tests {
         assert_eq!(got, vec!["/a/1".to_string(), "/a/2".to_string()]);
 
         std::fs::remove_dir_all(&dir).ok();
-    }
-
-    fn unique_dir(tag: &str) -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "finelog_{tag}_{}",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
     }
 
     /// The real store-form `log` arrow schema (single source of truth), so these

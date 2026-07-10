@@ -55,6 +55,7 @@ use crate::errors::StatsError;
 use crate::proto::finelog::logging::{LogEntry, LogServiceClient, PushLogsBulkRequest, Timestamp};
 use crate::query::provider::NamespaceProvider;
 use crate::query::{fetch_log_rows, make_ctx};
+use crate::server::auth::FINELOG_AUDIENCE;
 use crate::server::MAX_MESSAGE_BYTES;
 use crate::store::log_read::LogRow;
 use crate::store::Store;
@@ -89,10 +90,6 @@ const BACKOFF_MAX: Duration = Duration::from_secs(60);
 /// Emit a progress line at most this often, so a healthy forwarder is observable
 /// without flooding the log it is forwarding.
 const PROGRESS_INTERVAL: Duration = Duration::from_secs(300);
-
-/// The `aud` every finelog delegation bearer carries. A token minted for another
-/// plane, even under the same key, is rejected at the hub (RFC 8725).
-const FINELOG_AUDIENCE: &str = "finelog";
 
 /// Where this store forwards, and as whom. Parsed from the `FINELOG_FORWARDING`
 /// JSON; the Ed25519 private key arrives separately (`FINELOG_SIGNING_KEY`) so it
@@ -244,10 +241,9 @@ pub struct Forwarder<T = HttpsTransport> {
     client: LogServiceClient<T>,
     minter: TokenMinter,
     config: ForwardingConfig,
-    /// Rows read per batch and bytes per request. Fields rather than constants so a
-    /// test can shrink them; production uses the module constants.
-    batch_rows: i32,
-    batch_bytes: usize,
+    /// How far behind the durability mark the cursor may fall before skipping ahead.
+    /// A field rather than a constant because the skip-ahead path is untestable at the
+    /// production value: a test would have to append two million rows to reach it.
     max_lag_seqs: i64,
 }
 
@@ -279,8 +275,6 @@ where
             client,
             minter,
             config,
-            batch_rows: FORWARD_BATCH_ROWS,
-            batch_bytes: FORWARD_BATCH_BYTES,
             max_lag_seqs: MAX_FORWARD_LAG_SEQS,
         }
     }
@@ -418,7 +412,7 @@ where
                 return cursor;
             }
 
-            for chunk in split_by_bytes(batch.rows, self.batch_bytes) {
+            for chunk in split_by_bytes(batch.rows, FORWARD_BATCH_BYTES) {
                 let last_seq = chunk
                     .last()
                     .expect("split_by_bytes yields no empty chunk")
@@ -460,7 +454,7 @@ where
         resume_at
     }
 
-    /// Read up to `batch_rows` locally-written rows in `(cursor, persisted]`.
+    /// Read up to [`FORWARD_BATCH_ROWS`] locally-written rows in `(cursor, persisted]`.
     ///
     /// Holds the query-visibility read guard across BOTH the segment snapshot and the
     /// scan, so eviction (which takes the write side before unlinking) cannot remove a
@@ -494,7 +488,7 @@ where
             &where_parts,
             /* include_key */ true,
             /* tail */ false,
-            self.batch_rows,
+            FORWARD_BATCH_ROWS,
         )
         .await
         .map_err(|e| StatsError::Internal(format!("log read failed: {e}")))?;
@@ -655,7 +649,7 @@ where
 #[cfg(test)]
 mod tests {
     use std::net::SocketAddr;
-    use std::sync::atomic::Ordering;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     use crate::proto::finelog::logging::{FetchLogsRequest, MatchScope, PushLogsRequest};
     use crate::server::auth::AuthPolicy;
@@ -725,8 +719,8 @@ mod tests {
         client.push_logs(request).await.unwrap();
     }
 
-    /// Every row in `store`, newest last, as `(key, data, cluster)` — read back over
-    /// the wire so the assertion sees exactly what a log reader would.
+    /// Every row the server behind `client` holds, newest last, as `(key, data)` —
+    /// read back over the wire so the assertion sees exactly what a log reader would.
     async fn read_all(client: &LogServiceClient<TestTransport>) -> Vec<(String, String)> {
         let response = client
             .fetch_logs(
@@ -765,6 +759,23 @@ mod tests {
         panic!(
             "watermark never reached {expected} (stuck at {:?})",
             store.forward_cursor(target).unwrap()
+        );
+    }
+
+    /// Poll `counter` until the hub has served at least `expected` requests. Lets a
+    /// test that asserts on the *absence* of an effect first wait for the attempt that
+    /// would have produced it, so the assertion cannot pass merely because nothing has
+    /// happened yet.
+    async fn wait_for_requests(counter: &AtomicUsize, expected: usize) {
+        for _ in 0..200 {
+            if counter.load(Ordering::SeqCst) >= expected {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+        panic!(
+            "hub never served {expected} requests (saw {})",
+            counter.load(Ordering::SeqCst)
         );
     }
 
@@ -809,15 +820,8 @@ mod tests {
         // bearer, so the bearer must authenticate as this store's cluster.
         let minter = TokenMinter::new(PRIVATE_PEM, "cw-rno2a".to_string()).unwrap();
         let bearer = minter.bearer().unwrap();
-        let policy = AuthPolicy::parse(
-            &serde_json::json!([
-                {"type": "jwt", "keys": [{"cluster": "cw-rno2a", "public_keys": [PUBLIC_PEM]}]}
-            ])
-            .to_string(),
-        )
-        .unwrap();
         assert_eq!(
-            policy.admits(Some(&bearer), None),
+            jwt_policy("cw-rno2a").admits(Some(&bearer), None),
             Some(crate::server::auth::AuthIdentity::Jwt {
                 cluster: "cw-rno2a".to_string()
             })
@@ -877,11 +881,11 @@ mod tests {
         //    current value counts as already seen, so a loop that awaited a change
         //    before reading would sit idle until the next flush -- for a quiet cluster,
         //    forever.
-        // 2. A batch spanning many keys costs ONE request. That is the whole point of
-        //    PushLogsBulk: the old per-key relay paid one round trip per key, so a job
-        //    fanned out over 140 workers forwarded 140x slower than one that wasn't.
-        //    The count is taken at the hub's HTTP boundary, which is where the contract
-        //    lives.
+        // 2. A batch spanning many keys costs ONE request. That is what PushLogsBulk
+        //    buys: forwarding throughput is independent of how many distinct log keys
+        //    are in flight, so a job fanned out over 140 workers ships as fast as one
+        //    that is not. The count is taken at the hub's HTTP boundary, which is where
+        //    the contract lives.
         let source = disk_store("bulk_source");
         let target = disk_store("bulk_target");
         let (source_addr, _) = serve(Arc::clone(&source), AuthPolicy::allow_localhost()).await;
@@ -972,7 +976,8 @@ mod tests {
         let source = disk_store("reject_source");
         let target = disk_store("reject_target");
         let (source_addr, _) = serve(Arc::clone(&source), AuthPolicy::allow_localhost()).await;
-        let (target_addr, _) = serve(Arc::clone(&target), hub_policy(SOURCE_CLUSTER)).await;
+        let (target_addr, target_requests) =
+            serve(Arc::clone(&target), hub_policy(SOURCE_CLUSTER)).await;
         push(&client(source_addr), "/user/job/t", &["hello"]).await;
 
         let target_url = format!("http://{target_addr}");
@@ -984,7 +989,9 @@ mod tests {
             forwarder(Arc::clone(&source), &target_addr, OTHER_PRIVATE_PEM),
             stop_rx,
         );
-        tokio::time::sleep(Duration::from_millis(300)).await;
+        // Wait for the push to REACH the hub. Stopping on a timer instead would let a
+        // forwarder that never pushed at all satisfy both assertions below.
+        wait_for_requests(&target_requests, 1).await;
         stop_tx.send(true).unwrap();
         let _ = tokio::time::timeout(Duration::from_secs(5), task).await;
 

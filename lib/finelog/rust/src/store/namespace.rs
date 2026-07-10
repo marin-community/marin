@@ -166,6 +166,13 @@ pub struct Namespace {
     task_handles: Mutex<Vec<tokio::task::JoinHandle<()>>>,
 }
 
+/// A namespace's sealed local segments as one consistent observation: the files a
+/// scan may read, and the lowest `seq` any of them holds.
+pub struct SegmentSnapshot {
+    pub paths: Vec<String>,
+    pub min_seq: Option<i64>,
+}
+
 impl Namespace {
     /// Build a namespace over `data_dir` (disk-backed when `Some`).
     ///
@@ -327,37 +334,29 @@ impl Namespace {
     /// Snapshot the SEALED local segment file paths under the insertion lock.
     ///
     /// Queries see only flushed data; the in-RAM buffer is NOT exposed.
-    /// Snapshotting the paths under the lock is the read side of the
-    /// query-visibility seam — compaction takes the write side before unlinking
-    /// a file, so a query that captured the pre-compaction paths keeps scanning
-    /// the files it snapshotted.
-    pub fn query_snapshot(&self) -> Vec<String> {
-        let inner = self.inner.lock().unwrap();
-        inner
-            .local_segments
-            .iter()
-            .map(|s| s.path.clone())
-            .collect()
-    }
-
-    /// Snapshot the sealed local segment paths AND the lowest `seq` they hold,
-    /// under one hold of the insertion lock, so the two describe the same segment
-    /// set. `None` when no local segment exists (an empty namespace, or one whose
-    /// segments have all been evicted to remote).
+    /// Snapshot the sealed local segment paths and the lowest `seq` they hold, under
+    /// one hold of the insertion lock so the two describe the same segment set.
+    /// `min_seq` is `None` when no local segment exists (an empty namespace, or one
+    /// whose segments have all been evicted to remote).
     ///
-    /// A reader that resumes from a stored cursor needs both: the paths bound what
-    /// it can scan, and the min seq tells it whether rows below that bound were
-    /// evicted out from under it. Reading them separately would let an eviction
-    /// land in between and hide the gap.
-    pub fn query_snapshot_with_min_seq(&self) -> (Vec<String>, Option<i64>) {
+    /// Snapshotting under the lock is the read side of the query-visibility seam —
+    /// compaction takes the write side before unlinking a file, so a query that
+    /// captured the pre-compaction paths keeps scanning the files it snapshotted.
+    ///
+    /// A reader resuming from a stored cursor needs both halves: the paths bound what
+    /// it can scan, and `min_seq` tells it whether rows below that bound were evicted
+    /// out from under it. Reading them separately would let an eviction land in
+    /// between and hide the gap.
+    pub fn query_snapshot(&self) -> SegmentSnapshot {
         let inner = self.inner.lock().unwrap();
-        let paths = inner
-            .local_segments
-            .iter()
-            .map(|s| s.path.clone())
-            .collect();
-        let min_seq = inner.local_segments.iter().map(|s| s.min_seq).min();
-        (paths, min_seq)
+        SegmentSnapshot {
+            paths: inner
+                .local_segments
+                .iter()
+                .map(|s| s.path.clone())
+                .collect(),
+            min_seq: inner.local_segments.iter().map(|s| s.min_seq).min(),
+        }
     }
 
     /// Subscribe to the durability high-water mark. The current value is already
