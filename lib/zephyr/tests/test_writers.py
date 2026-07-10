@@ -4,8 +4,10 @@
 """Tests for writers module."""
 
 import tempfile
+import uuid
 from pathlib import Path
 
+import fsspec
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
@@ -161,6 +163,26 @@ def test_write_parquet_file_empty():
 
         table = pq.read_table(output_path)
         assert len(table) == 0
+
+
+def test_write_parquet_file_non_gcs_remote_protocol():
+    """Non-GCS remote outputs round-trip through the fsspec filesystem.
+
+    pyarrow cannot resolve arbitrary fsspec protocols from a raw path (and its
+    native S3 client breaks CoreWeave/R2), so anything that isn't gs:// or
+    local must be written through an fsspec handle. Regression guard for the
+    routing in ``_parquet_sink``.
+    """
+    bucket = f"zephyr-writers-{uuid.uuid4().hex}"
+    output_path = f"memory://{bucket}/out.parquet"
+    records = [{"id": 1, "name": "Alice"}, {"id": 2, "name": "Bob"}]
+
+    result = write_parquet_file(iter(records), output_path)
+
+    assert result["count"] == 2
+    with fsspec.filesystem("memory").open(f"/{bucket}/out.parquet", "rb") as f:
+        table = pq.read_table(f)
+    assert table.to_pylist() == records
 
 
 def test_infer_arrow_schema_basic():

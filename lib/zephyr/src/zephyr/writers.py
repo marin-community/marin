@@ -201,6 +201,29 @@ def _accumulate_tables(
         yield pa.concat_tables(chunks, promote_options="permissive")
 
 
+@contextmanager
+def _parquet_sink(temp_path: str):
+    """Yield the sink pyarrow should write ``temp_path`` through.
+
+    GCS and local paths are handed to pyarrow raw so it streams through its
+    native client with flat memory. Routing them through a buffered fsspec
+    handle instead holds ~2-3 transient copies of the largest single write
+    (``buffer.getvalue()`` plus a chunk slice per flush), which OOM-killed
+    consolidate workers on mega-doc shards (#7053).
+
+    Everything else goes through fsspec: pyarrow's native S3 client uses
+    path-style addressing (CoreWeave object storage rejects it with HTTP 400)
+    and bypasses R2's ``fixed_upload_size`` multipart config, and pyarrow
+    cannot resolve non-standard fsspec protocols at all.
+    """
+    if temp_path.startswith("gs://") or "://" not in temp_path:
+        yield temp_path
+        return
+    fs, resolved_temp = url_to_fs(temp_path)
+    with fs.open(resolved_temp, "wb", block_size=_WRITE_BLOCK_SIZE) as f:
+        yield f
+
+
 def write_parquet_file(
     records: Iterable,
     output_path: str,
@@ -223,19 +246,13 @@ def write_parquet_file(
     ensure_parent_dir(output_path)
     count = 0
 
-    # Route the write through fsspec (rather than handing pyarrow a raw path,
-    # which it resolves via its native S3 client) so the filesystem's configured
-    # options apply: CoreWeave object storage rejects pyarrow's path-style S3
-    # addressing with HTTP 400, and R2 relies on fsspec's ``fixed_upload_size``
-    # to keep multipart parts uniform. Mirrors write_jsonl_file and SpillWriter.
     with atomic_rename(output_path) as temp_path:
-        fs, resolved_temp = url_to_fs(temp_path)
-        with fs.open(resolved_temp, "wb", block_size=_WRITE_BLOCK_SIZE) as f:
+        with _parquet_sink(temp_path) as sink:
             writer: pq.ParquetWriter | None = None
             try:
                 for table in _accumulate_tables(records, schema=schema, target_bytes=target_buffer_bytes):
                     if writer is None:
-                        writer = pq.ParquetWriter(f, table.schema)
+                        writer = pq.ParquetWriter(sink, table.schema)
                     writer.write_table(table)
                     count += len(table)
                     counters.pipeline.update_counter(counters.RECORDS_OUT, len(table))
@@ -245,7 +262,7 @@ def write_parquet_file(
 
             if writer is None:
                 actual_schema = schema or pa.schema([])
-                pq.write_table(pa.Table.from_pylist([], schema=actual_schema), f)
+                pq.write_table(pa.Table.from_pylist([], schema=actual_schema), sink)
 
     return {"path": output_path, "count": count}
 
