@@ -1098,3 +1098,61 @@ mode reports y, dX, route-weight, dW13, and dW2 errors and nonfinite counts.
 The two focused benchmark tests pass and scoped pre-commit passes. No H100
 claim is attached yet; the next integrated run follows isolated target-stage
 validation.
+
+## 2026-07-10 FUSED-MOE-035 - Port stable inbox producer topology to semantic W13
+
+The semantic fused W13 producer schedule is aligned with the stable source-push
+inbox profile from open PR #6840 and its cleaned successor in #6841. The old
+`num_sms=32` knob represented the total peer-local worker grid; the current
+profile names this `worker_programs_per_peer=32`, partitioned into two send
+workers and 30 compute workers.
+
+Previously the semantic kernel used 16 tile-fragment producers plus 32
+consumers. A B256 chunk was split across 40 copy tiles, paying repeated empty
+waits, 40 `send_done` signals, and one fan-in wait before publication. The new
+schedule alternates complete chunks between two producers: the owner waits once,
+copies all four B64 blocks and K tiles, then publishes `full` directly. The
+12-slot cumulative generation protocol and concurrent consumers are unchanged.
+At the target geometry this removes about 46,080 regular semaphore operations
+per rank and reduces the grid from 384 to 256 CTAs/rank.
+
+Five dedicated tests, target-shape kernel construction, and scoped pre-commit
+pass. Target H100 timing is required before accepting the expected speedup.
+
+## 2026-07-10 FUSED-MOE-036 - Target EP8 W13 backward bulk-mask validation
+
+Job `/dlwh/bench-semantic-w13b-target-bulkmask-20260710-1615` ran once on
+`cw-rno2a` at commit `ac5a885bc5` and reached terminal Iris state `succeeded`.
+Its H100x8 task exited 0 after 2 minutes and 53.46 seconds, with zero Iris
+failures or preemptions. No duplicate, stop, resubmit, code edit, Iris restart,
+or cluster bounce was issued.
+
+The target EP8 random-routing `semantic_fused_w13_backward_pallas` benchmark
+produced zero of the three requested repeats and one error row. The first
+actionable failure was `RESOURCE_EXHAUSTED: Out of memory while trying to
+allocate 12.50GiB` in `jit_semantic_fused_w13_backward_pallas`. The allocator
+logged two failed 13,421,772,800-byte requests before the structured error.
+Median/min/max steady-state time, useful and rounded TFLOP/s/rank, and output
+checksum are unavailable because all repeats failed.
+
+The error row reported 64 live pairs, 1,048,576 useful rows, 1,310,720 rounded
+rows, 0.8 row efficiency, 0.19999999999999996 masked-row fraction, and zero
+dropped routes, routing-dropped routes, and metadata-overflow routes. Queue-
+and layout-overflow counters were not emitted. Structured rows, terminal
+status, task summary, closed monitor state, and a standalone report are in
+`scratch/6597-w13b-target-bulkmask/`.
+
+## 2026-07-10 FUSED-MOE-037 - Isolate W13 backward from pair scatter
+
+The repeated 12.50 GiB request was outside the persistent W13 backward kernel.
+The isolated benchmark first scattered pair-flat `dz_pair` into a 6.25 GiB
+bf16 expert-major tensor; XLA required another full-capacity buffer for that
+scatter. The production fused custom VJP already computes dSwiGLU in
+expert-major form and does not use this conversion.
+
+The W13 backward stage modes now receive a dedicated input bundle with
+source-sharded `x` and destination-sharded expert-major `dz13` and `w13`, built
+directly with `jax.make_array_from_callback` at target shape. This makes the
+isolated row measure the kernel rather than a diagnostic pair-layout
+conversion. Three focused benchmark tests and scoped pre-commit pass. Target
+H100 timing remains required.

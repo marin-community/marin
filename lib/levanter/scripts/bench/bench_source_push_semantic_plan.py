@@ -886,6 +886,14 @@ class SemanticFusedW2BackwardBenchInputs:
 
 @jax.tree_util.register_dataclass
 @dataclass(frozen=True)
+class SemanticFusedW13BackwardBenchInputs:
+    x: Float[Array, "S T H"]
+    dz13: Float[Array, "Dst E C twoI"]
+    w_gate_up: Float[Array, "Dst E H twoI"]
+
+
+@jax.tree_util.register_dataclass
+@dataclass(frozen=True)
 class SemanticW13ExpertBenchInputs:
     w_gate_up: Float[Array, "Dst E H twoI"]
     x_expert: Float[Array, "Dst E C H"]
@@ -1157,6 +1165,44 @@ def _make_semantic_fused_w2_backward_inputs(
     )
 
 
+def _make_semantic_fused_w13_backward_inputs(
+    args: argparse.Namespace,
+    plan: SourcePushSemanticPlan,
+    mesh: Mesh | None,
+) -> SemanticFusedW13BackwardBenchInputs:
+    _send_chunks_per_dst, _entries_per_dst, rows_per_expert_capacity = _semantic_fused_queue_shape(args, plan)
+
+    def full(shape: tuple[int, ...], value: float, sharding: NamedSharding | None) -> Array:
+        if sharding is None:
+            return jnp.full(shape, value, dtype=jnp.bfloat16)
+
+        def local_value(index: tuple[slice, ...]) -> np.ndarray:
+            local_shape = tuple(
+                math.ceil((stop - start) / step)
+                for part, dim in zip(index, shape, strict=True)
+                for start, stop, step in (part.indices(dim),)
+            )
+            return np.full(local_shape, value, dtype=np.dtype(jnp.bfloat16))
+
+        return jax.make_array_from_callback(shape, sharding, local_value)
+
+    source_3d = None if mesh is None else NamedSharding(mesh, P(SOURCE_PUSH_MESH_AXIS, None, None))
+    destination_4d = None if mesh is None else NamedSharding(mesh, P(SOURCE_PUSH_MESH_AXIS, None, None, None))
+    return SemanticFusedW13BackwardBenchInputs(
+        x=full((args.ep_size, args.tokens_per_rank, args.hidden_dim), 0.03125, source_3d),
+        dz13=full(
+            (args.ep_size, args.experts_per_rank, rows_per_expert_capacity, args.intermediate_dim * 2),
+            0.0625,
+            destination_4d,
+        ),
+        w_gate_up=full(
+            (args.ep_size, args.experts_per_rank, args.hidden_dim, args.intermediate_dim * 2),
+            0.015625,
+            destination_4d,
+        ),
+    )
+
+
 def _make_w2_expert_inputs(args: argparse.Namespace, plan: SourcePushSemanticPlan) -> SemanticW2ExpertBenchInputs:
     dtype = jnp.dtype(args.dtype)
     rows_per_expert_capacity = _rows_per_expert_capacity(
@@ -1399,6 +1445,19 @@ def _shard_semantic_fused_w2_backward_inputs(
         return_y=jax.device_put(inputs.return_y, source_5d),
         h_expert=jax.device_put(inputs.h_expert, destination_4d),
         w_down=jax.device_put(inputs.w_down, destination_4d),
+    )
+
+
+def _shard_semantic_fused_w13_backward_inputs(
+    inputs: SemanticFusedW13BackwardBenchInputs,
+    mesh: Mesh,
+) -> SemanticFusedW13BackwardBenchInputs:
+    source_3d = NamedSharding(mesh, P(SOURCE_PUSH_MESH_AXIS, None, None))
+    destination_4d = NamedSharding(mesh, P(SOURCE_PUSH_MESH_AXIS, None, None, None))
+    return SemanticFusedW13BackwardBenchInputs(
+        x=jax.device_put(inputs.x, source_3d),
+        dz13=jax.device_put(inputs.dz13, destination_4d),
+        w_gate_up=jax.device_put(inputs.w_gate_up, destination_4d),
     )
 
 
@@ -4056,16 +4115,11 @@ def _mode_callable(mode: str, plan: SourcePushSemanticPlan, args: argparse.Names
             "layout_overflow_row_error_count": observed.layout_overflow_rows,
         }
 
-    def semantic_fused_w13_backward(inputs: SemanticBenchInputs, *, interpret: bool):
+    def semantic_fused_w13_backward(inputs: SemanticFusedW13BackwardBenchInputs, *, interpret: bool):
         send_chunks_per_dst, _entries_per_dst, fused_rows_per_expert = semantic_fused_queue_shape()
-        dz13, _valid = source_push_semantic_pair_to_expert_major_jax(
-            inputs.dz_pair,
-            plan,
-            rows_per_expert_capacity=fused_rows_per_expert,
-        )
         return source_push_semantic_fused_w13_backward.source_push_semantic_fused_w13_backward(
             inputs.x.astype(jnp.bfloat16),
-            dz13.astype(jnp.bfloat16),
+            inputs.dz13.astype(jnp.bfloat16),
             inputs.w_gate_up.astype(jnp.bfloat16),
             plan,
             send_chunks_per_dst=send_chunks_per_dst,
@@ -4074,7 +4128,7 @@ def _mode_callable(mode: str, plan: SourcePushSemanticPlan, args: argparse.Names
             interpret=interpret,
         )
 
-    def semantic_fused_w13_backward_pallas(inputs: SemanticBenchInputs):
+    def semantic_fused_w13_backward_pallas(inputs: SemanticFusedW13BackwardBenchInputs):
         result = semantic_fused_w13_backward(inputs, interpret=args.pallas_interpret)
         return {
             "dx": result.dx,
@@ -4083,7 +4137,7 @@ def _mode_callable(mode: str, plan: SourcePushSemanticPlan, args: argparse.Names
             "layout_overflow_row_error_count": result.layout_overflow_rows,
         }
 
-    def semantic_fused_w13_backward_compare(inputs: SemanticBenchInputs):
+    def semantic_fused_w13_backward_compare(inputs: SemanticFusedW13BackwardBenchInputs):
         expected = semantic_fused_w13_backward(inputs, interpret=True)
         observed = semantic_fused_w13_backward(inputs, interpret=args.pallas_interpret)
         return {
@@ -9391,6 +9445,8 @@ def _run_stage_mode(
         )
         if mode in (MODE_SEMANTIC_FUSED_W2_BACKWARD_PALLAS, MODE_SEMANTIC_FUSED_W2_BACKWARD_COMPARE):
             inputs = _make_semantic_fused_w2_backward_inputs(args, plan, expert_mesh)
+        if mode in (MODE_SEMANTIC_FUSED_W13_BACKWARD_PALLAS, MODE_SEMANTIC_FUSED_W13_BACKWARD_COMPARE):
+            inputs = _make_semantic_fused_w13_backward_inputs(args, plan, expert_mesh)
         if (
             mode
             in (
@@ -9475,6 +9531,11 @@ def _run_stage_mode(
             and expert_mesh is not None
         ):
             inputs = _shard_semantic_fused_w2_backward_inputs(inputs, expert_mesh)
+        if (
+            mode in (MODE_SEMANTIC_FUSED_W13_BACKWARD_PALLAS, MODE_SEMANTIC_FUSED_W13_BACKWARD_COMPARE)
+            and expert_mesh is not None
+        ):
+            inputs = _shard_semantic_fused_w13_backward_inputs(inputs, expert_mesh)
         if (
             mode
             in (

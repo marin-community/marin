@@ -39,8 +39,8 @@ class SourcePushSemanticFusedW13Config:
     block_k: int = 128
     send_k: int = 256
     inbox_slots: int = 12
-    producer_programs_per_peer: int = 16
-    consumer_programs_per_peer: int = 32
+    producer_programs_per_peer: int = 2
+    consumer_programs_per_peer: int = 30
     n_groups_per_job: int = 2
 
     def validate(self) -> None:
@@ -69,11 +69,13 @@ class SourcePushSemanticFusedW13Config:
             raise ValueError(f"the initial Hopper lowering requires send_k=256, got {self.send_k}")
         if self.inbox_slots != 12:
             raise ValueError(f"the initial Hopper lowering requires inbox_slots=12, got {self.inbox_slots}")
-        if self.consumer_programs_per_peer != 32:
+        if self.producer_programs_per_peer != 2:
             raise ValueError(
-                "the initial Hopper lowering requires 32 consumer programs per peer, "
-                f"got {self.consumer_programs_per_peer}"
+                "the Hopper lowering requires two chunk-owning producer programs per peer, "
+                f"got {self.producer_programs_per_peer}"
             )
+        if self.consumer_programs_per_peer != 30:
+            raise ValueError(f"consumer_programs_per_peer must be 30, got {self.consumer_programs_per_peer}")
         if self.n_groups_per_job != 2:
             raise ValueError(f"the initial Hopper lowering requires n_groups_per_job=2, got {self.n_groups_per_job}")
 
@@ -116,8 +118,9 @@ class SourcePushSemanticFusedW13GenerationAccounting:
 
     slot: int
     generation: int
+    producer: int
+    producer_copy_tiles: int
     empty_generation: int
-    send_done_generation: int
     full_generation: int
     consumer_done_generation: int
     released_generation: int
@@ -143,8 +146,9 @@ def source_push_semantic_fused_w13_generation_accounting(
     return SourcePushSemanticFusedW13GenerationAccounting(
         slot=chunk % config.inbox_slots,
         generation=generation,
+        producer=chunk % config.producer_programs_per_peer,
+        producer_copy_tiles=producer_tiles,
         empty_generation=generation,
-        send_done_generation=generation * producer_tiles,
         full_generation=generation,
         consumer_done_generation=generation * consumer_jobs,
         released_generation=generation + 1,
@@ -397,7 +401,6 @@ def _make_source_push_semantic_fused_w13_kernel(
     _validate_kernel_dimensions(hidden_dim, intermediate_dim, config)
     blocks_per_send = config.compute_blocks_per_send
     producer_tiles = blocks_per_send * (hidden_dim // config.send_k)
-    producer_tiles_per_program = math.ceil(producer_tiles / config.producer_programs_per_peer)
     n_tiles = intermediate_dim // config.block_n
     n_jobs = math.ceil(n_tiles / config.n_groups_per_job)
     consumer_jobs = blocks_per_send * n_jobs
@@ -415,7 +418,6 @@ def _make_source_push_semantic_fused_w13_kernel(
         z_ref,
     ) -> None:
         empty_sem = pl.get_global(mgpu.SemaphoreType.REGULAR((ep_size, config.inbox_slots)))
-        send_done_sem = pl.get_global(mgpu.SemaphoreType.REGULAR((ep_size, config.inbox_slots)))
         full_sem = pl.get_global(mgpu.SemaphoreType.REGULAR((ep_size, config.inbox_slots)))
         consumer_done_sem = pl.get_global(mgpu.SemaphoreType.REGULAR((ep_size, config.inbox_slots)))
         rank = lax.axis_index(SOURCE_PUSH_MESH_AXIS)
@@ -444,59 +446,51 @@ def _make_source_push_semantic_fused_w13_kernel(
                     slot = chunk % config.inbox_slots
                     generation = chunk // config.inbox_slots + 1
 
-                    @pl.loop(0, producer_tiles_per_program)
-                    def _producer_tile_loop(tile_iteration) -> None:
-                        tile = producer + tile_iteration * config.producer_programs_per_peer
+                    @pl.when((chunk % config.producer_programs_per_peer) == producer)
+                    def _send_chunk() -> None:
+                        pl.semaphore_wait(empty_sem.at[dst, slot], value=generation, decrement=False)
 
-                        @pl.when(tile < producer_tiles)
-                        def _send_tile() -> None:
+                        @pl.loop(0, producer_tiles)
+                        def _producer_tile_loop(tile) -> None:
                             block = tile // (hidden_dim // config.send_k)
                             k_tile = tile % (hidden_dim // config.send_k)
                             k_start = k_tile * config.send_k
-                            pl.semaphore_wait(empty_sem.at[dst, slot], value=generation, decrement=False)
+                            valid_rows = send_valid_ref[static_peer_ordinal, chunk, block]
 
-                            def _copy_scope(tile_smem) -> None:
-                                valid_rows = send_valid_ref[static_peer_ordinal, chunk, block]
+                            @pl.when(valid_rows > 0)
+                            def _copy_live_tile() -> None:
+                                def _copy_scope(tile_smem) -> None:
 
-                                @pl.loop(0, config.compute_m)
-                                def _row_loop(row) -> None:
-                                    token = token_ids_ref[static_peer_ordinal, chunk, block, row]
-                                    tile_smem[row, :] = jnp.where(
-                                        row < valid_rows,
-                                        x_ref[token, pl.ds(k_start, config.send_k)],
-                                        jnp.zeros((config.send_k,), dtype=dtype),
+                                    @pl.loop(0, config.compute_m)
+                                    def _row_loop(row) -> None:
+                                        token = token_ids_ref[static_peer_ordinal, chunk, block, row]
+                                        tile_smem[row, :] = jnp.where(
+                                            row < valid_rows,
+                                            x_ref[token, pl.ds(k_start, config.send_k)],
+                                            jnp.zeros((config.send_k,), dtype=dtype),
+                                        )
+
+                                    mgpu.commit_smem()
+                                    if static_peer_ordinal == 0:
+                                        destination_ref = inbox_ref
+                                    else:
+                                        destination_ref = remote_inbox
+                                    mgpu.copy_smem_to_gmem(
+                                        tile_smem,
+                                        destination_ref.at[
+                                            rank,
+                                            slot,
+                                            pl.ds(block * config.compute_m, config.compute_m),
+                                            pl.ds(k_start, config.send_k),
+                                        ],
                                     )
+                                    mgpu.wait_smem_to_gmem(0, wait_read_only=False)
 
-                                mgpu.commit_smem()
-                                if static_peer_ordinal == 0:
-                                    destination_ref = inbox_ref
-                                else:
-                                    destination_ref = remote_inbox
-                                mgpu.copy_smem_to_gmem(
-                                    tile_smem,
-                                    destination_ref.at[
-                                        rank,
-                                        slot,
-                                        pl.ds(block * config.compute_m, config.compute_m),
-                                        pl.ds(k_start, config.send_k),
-                                    ],
+                                pl.run_scoped(
+                                    _copy_scope,
+                                    tile_smem=mgpu.SMEM((config.compute_m, config.send_k), dtype=dtype),
                                 )
-                                mgpu.wait_smem_to_gmem(0, wait_read_only=False)
 
-                            pl.run_scoped(
-                                _copy_scope,
-                                tile_smem=mgpu.SMEM((config.compute_m, config.send_k), dtype=dtype),
-                            )
-                            pl.semaphore_signal(send_done_sem.at[dst, slot])
-
-                    @pl.when(producer == 0)
-                    def _publish_full() -> None:
-                        # Every producer has made its GMEM tile visible before incrementing send_done.
-                        pl.semaphore_wait(
-                            send_done_sem.at[dst, slot],
-                            value=generation * producer_tiles,
-                            decrement=False,
-                        )
                         if static_peer_ordinal == 0:
                             pl.semaphore_signal(full_sem.at[rank, slot])
                         else:
@@ -596,28 +590,34 @@ def _make_source_push_semantic_fused_w13_kernel(
                     slot = chunk % config.inbox_slots
                     generation = chunk // config.inbox_slots + 1
 
-                    @pl.when(consumer < consumer_jobs)
-                    def _consume_job() -> None:
-                        pl.semaphore_wait(full_sem.at[src, slot], value=generation, decrement=False)
-                        block = consumer // n_jobs
-                        n_job = consumer % n_jobs
-                        valid_rows = recv_valid_ref[static_peer_ordinal, chunk, block]
+                    @pl.loop(0, consumer_jobs)
+                    def _job_loop(job) -> None:
+                        work_group = (static_peer_ordinal * config.inbox_slots + slot) * consumer_jobs + job
 
-                        @pl.when(valid_rows > 0)
-                        def _compute_live_block() -> None:
-                            expert = recv_expert_ref[static_peer_ordinal, chunk, block]
+                        @pl.when((work_group % config.consumer_programs_per_peer) == consumer)
+                        def _consume_job() -> None:
+                            pl.semaphore_wait(full_sem.at[src, slot], value=generation, decrement=False)
+                            block = job // n_jobs
+                            n_job = job % n_jobs
+                            valid_rows = recv_valid_ref[static_peer_ordinal, chunk, block]
 
-                            @pl.loop(0, config.n_groups_per_job)
-                            def _n_group_loop(n_offset) -> None:
-                                n_tile = n_job * config.n_groups_per_job + n_offset
+                            @pl.when(valid_rows > 0)
+                            def _compute_live_block() -> None:
+                                expert = recv_expert_ref[static_peer_ordinal, chunk, block]
 
-                                @pl.when(n_tile < n_tiles)
-                                def _compute_n_tile() -> None:
-                                    _compute(block, chunk, slot, expert, n_tile)
+                                @pl.loop(0, config.n_groups_per_job)
+                                def _n_group_loop(n_offset) -> None:
+                                    n_tile = n_job * config.n_groups_per_job + n_offset
 
-                        pl.semaphore_signal(consumer_done_sem.at[src, slot])
+                                    @pl.when(n_tile < n_tiles)
+                                    def _compute_n_tile() -> None:
+                                        _compute(block, chunk, slot, expert, n_tile)
 
-                    @pl.when((chunk % config.consumer_programs_per_peer) == consumer)
+                            pl.semaphore_signal(consumer_done_sem.at[src, slot])
+
+                    release_group = static_peer_ordinal * config.inbox_slots + slot
+
+                    @pl.when((release_group % config.consumer_programs_per_peer) == consumer)
                     def _release_slot() -> None:
                         # Fixed job accounting includes masked subblocks, so release cannot race a live reader.
                         pl.semaphore_wait(

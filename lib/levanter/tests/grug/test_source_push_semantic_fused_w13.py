@@ -91,14 +91,18 @@ def test_fused_w13_metadata_aggregates_four_semantic_blocks_and_rotates_peers():
 
 def test_fused_w13_generation_accounting_reuses_slots_with_cumulative_targets():
     first = source_push_semantic_fused_w13_generation_accounting(0, hidden_dim=2560, intermediate_dim=1280)
+    next_chunk = source_push_semantic_fused_w13_generation_accounting(1, hidden_dim=2560, intermediate_dim=1280)
     reused = source_push_semantic_fused_w13_generation_accounting(
         CONFIG.inbox_slots, hidden_dim=2560, intermediate_dim=1280
     )
 
     assert (first.slot, first.generation, first.empty_generation, first.released_generation) == (0, 1, 1, 2)
+    assert (first.producer, next_chunk.producer) == (0, 1)
+    assert first.producer_copy_tiles == CONFIG.compute_blocks_per_send * (2560 // CONFIG.send_k)
     assert reused.slot == first.slot
     assert reused.generation == 2
-    assert reused.send_done_generation == 2 * first.send_done_generation
+    assert reused.producer == first.producer
+    assert reused.producer_copy_tiles == first.producer_copy_tiles
     assert reused.consumer_done_generation == 2 * first.consumer_done_generation
     assert reused.empty_generation == first.released_generation
 
