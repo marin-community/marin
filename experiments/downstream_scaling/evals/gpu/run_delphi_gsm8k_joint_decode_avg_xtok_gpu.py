@@ -46,18 +46,18 @@ FEWSHOT_SEED = 1234
 
 MAX_TOKENS = 512
 ADVISOR_MAX_TOKENS = 2 * MAX_TOKENS
-MAX_MODEL_LEN = 8192
+MAX_MODEL_LEN = 2048
 SEED = 42
 STOP_TOKENS: tuple[str, ...] = ("Question:", "</s>", "<|im_end|>")
 
 TEMPERATURE = 0.4
 TOP_K_A = 16
 TOP_K_B = 64
-PREFIX_CREDIT = 1.0
+PREFIX_CREDIT = 0.1
 ADVISOR_WEIGHTS: tuple[float, ...] = tuple(i / 10.0 for i in range(11))
 
 CHUNK_SIZE = 512
-MAX_MICROBATCH_SIZE = 8
+MAX_MICROBATCH_SIZE = 512
 BARRIER_TIMEOUT_S = 1200.0
 GPU_MEMORY_UTILIZATION = 0.9
 
@@ -267,7 +267,7 @@ def build_steps(slugs: list[str], *, skip_grades: bool) -> list[ExecutorStep]:
         seed=SEED,
         stop=STOP_TOKENS,
         max_microbatch_size=MAX_MICROBATCH_SIZE,
-        max_num_batched_tokens=MAX_MODEL_LEN + MAX_MICROBATCH_SIZE,
+        max_num_batched_tokens=MAX_MICROBATCH_SIZE + 8 * MAX_MODEL_LEN,
     )
     return [
         make_eval_step(
