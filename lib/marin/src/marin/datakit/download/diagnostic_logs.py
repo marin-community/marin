@@ -18,6 +18,7 @@ from contextlib import ExitStack
 from dataclasses import dataclass
 from enum import StrEnum, auto
 from io import BytesIO
+from typing import IO
 
 import fsspec
 import requests
@@ -1002,25 +1003,15 @@ def extract_ghalogs_step(
     )
 
 
-def _stream_archive_resumable(session: requests.Session, out, expected_bytes: int) -> int:
-    """Stream ``GHALOGS_DOWNLOAD_URL`` into the open file ``out``, resuming across
-    mid-stream connection drops via HTTP Range. Return the total bytes written.
+def _stream_archive_resumable(session: requests.Session, out: IO[bytes], expected_bytes: int) -> int:
+    """Stream ``GHALOGS_DOWNLOAD_URL`` into ``out`` and return the bytes written.
 
-    A single GET over a 142 GB body reliably fails partway with
-    ``ChunkedEncodingError``/``IncompleteRead`` (the urllib3 ``Retry`` on the
-    session only covers connection setup and the initial response, not the
-    streamed body). Zenodo advertises ``Accept-Ranges: bytes``, so on any
-    mid-body failure — or a clean-but-early EOF — we re-request
-    ``Range: bytes={total}-`` and keep appending to the *same* object-store
-    multipart upload, rather than restarting from zero.
-
-    The failure budget resets whenever a reconnect makes forward progress, so an
-    arbitrarily long download survives many drops as long as it keeps advancing;
-    it aborts only after ``_GHALOGS_MAX_RESUME_STALLS`` consecutive reconnects
-    that write nothing.
-
-    Note: resume is in-process only — the multipart upload lives in ``out``. If
-    the whole task/pod dies, a fresh run restarts from zero.
+    Resumes across mid-stream drops via HTTP Range: on any mid-body failure or
+    early EOF it re-requests ``Range: bytes={written}-`` and keeps appending to
+    ``out`` rather than restarting. Raises if the download stalls without
+    progress, if a resume reply ignores Range, or (via the caller) if the final
+    size is short. Resume is in-process only — ``out`` holds the multipart
+    upload, so a task/pod death restarts from zero.
     """
     total = 0
     next_log = _GHALOGS_LOG_EVERY_BYTES
