@@ -127,9 +127,11 @@ _HARD_NEGATIVES = {
         "Recall the factoring identity x^3 + y^3 + z^3 - 3xyz = "
         "(x + y + z)(x^2 + y^2 + z^2 - xy - yz - zx), which shows up in many contest problems."
     ),
-    "tan_addition_identity": (
-        "Using the tangent addition formula tan(A + B) = "
-        "(tan A + tan B) / (1 - tan A tan B), we can rewrite the expression before differentiating."
+    # Verbatim recurring formula from hendrycks/minerva math evals (~20 items),
+    # so it is guaranteed in the bloom yet non-distinctive across problems.
+    "arithmetic_series_formula": (
+        "The sum of an arithmetic series is equal to the average of the first and "
+        "last term, multiplied by the number of terms, a fact worth memorizing before the exam."
     ),
 }
 
