@@ -543,3 +543,30 @@ emitted because execution did not reach the fused kernel. Complete output and
 exact result rows are in `scratch/6597-w13b-tiny-compare/raw.log` and
 `scratch/6597-w13b-tiny-compare/result-rows.jsonl`; terminal status and task
 summary are alongside them.
+
+## 2026-07-10 FUSED-MOE-013 - W2 compile-first H100 follow-up
+
+Job `/dlwh/bench-semantic-fused-w2-compile5-20260710-1510` ran once on
+`cw-rno2a` at commit `d6749066bd` and reached terminal `JOB_STATE_SUCCEEDED`.
+Its single task exited 0 after 2 minutes 56.47 seconds, with zero failures or
+preemptions. No stop, retry, restart, or duplicate was issued.
+
+`semantic_fused_w2_return_pallas` completed successfully: compile/first-call
+5.1131718170 s, lowering/compile 3.0800009021 s, first run 2.0331709150 s,
+steady state 102.5259479648 ms, 10.4728787718 rounded and 8.3783030175 useful
+TFLOP/s/rank, and checksum 4,300,405,760. It reported one repeat row, zero
+error rows, 0.8 row efficiency, and no queue, layout, metadata, routing, or
+dropped-route errors.
+
+`semantic_fused_w2_backward_pallas` returned one `JaxRuntimeError` row and no
+repeat row. Its exact error was `RESOURCE_EXHAUSTED: Out of memory while trying
+to allocate 12.50GiB. [executable_name='jit_semantic_fused_w2_backward_pallas']
+[tf-allocator-allocation-error='']`; all timing, checksum, and throughput fields
+were null, and its summary reported `all repeats failed`. Logs contained nine
+failed 12.50 GiB allocation warnings, one failed 6.25 GiB allocation warning,
+and 32 non-fatal `CUDA_ERROR_NOT_PERMITTED` VMM fallback warnings. Complete Iris
+output is in `scratch/6597-compile5/final-logs.txt`; compact exact rows are in
+`scratch/6597-compile5/result-rows.compact.jsonl`; terminal status, task summary,
+and monitor cadence are in `scratch/6597-compile5/final-status.txt`,
+`scratch/6597-compile5/final-summary.txt`, and
+`scratch/6597-compile5/monitor-status.txt`.

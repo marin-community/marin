@@ -1086,16 +1086,29 @@ def _semantic_fused_queue_shape(
 def _make_semantic_fused_w2_backward_inputs(
     args: argparse.Namespace,
     plan: SourcePushSemanticPlan,
+    mesh: Mesh | None,
 ) -> SemanticFusedW2BackwardBenchInputs:
-    inputs = _make_inputs(args, plan)
     _send_chunks_per_dst, entries_per_dst, rows_per_expert_capacity = _semantic_fused_queue_shape(args, plan)
-    z_expert, _valid = source_push_semantic_pair_to_expert_major_jax(
-        inputs.z_pair,
-        plan,
-        rows_per_expert_capacity=rows_per_expert_capacity,
-    )
-    h_expert = z_expert[..., : inputs.w_down.shape[-2]].astype(jnp.bfloat16)
-    return_y = jnp.full(
+
+    def full(shape: tuple[int, ...], value: float, sharding: NamedSharding | None) -> Array:
+        if sharding is None:
+            return jnp.full(shape, value, dtype=jnp.bfloat16)
+
+        def local_value(index: tuple[slice, ...]) -> np.ndarray:
+            local_shape = tuple(
+                math.ceil((stop - start) / step)
+                for part, dim in zip(index, shape, strict=True)
+                for start, stop, step in (part.indices(dim),)
+            )
+            return np.full(local_shape, value, dtype=np.dtype(jnp.bfloat16))
+
+        return jax.make_array_from_callback(shape, sharding, local_value)
+
+    source_3d = None if mesh is None else NamedSharding(mesh, P(SOURCE_PUSH_MESH_AXIS, None, None))
+    source_5d = None if mesh is None else NamedSharding(mesh, P(SOURCE_PUSH_MESH_AXIS, None, None, None, None))
+    destination_4d = None if mesh is None else NamedSharding(mesh, P(SOURCE_PUSH_MESH_AXIS, None, None, None))
+    dy = full((args.ep_size, args.tokens_per_rank, args.hidden_dim), 0.125, source_3d)
+    return_y = full(
         (
             args.ep_size,
             args.ep_size,
@@ -1103,14 +1116,24 @@ def _make_semantic_fused_w2_backward_inputs(
             source_push_semantic_fused_w2_backward.SourcePushSemanticFusedW2BackwardConfig().compute_m,
             args.hidden_dim,
         ),
-        0.125,
-        dtype=jnp.bfloat16,
+        0.0625,
+        source_5d,
+    )
+    h_expert = full(
+        (args.ep_size, args.experts_per_rank, rows_per_expert_capacity, args.intermediate_dim),
+        0.03125,
+        destination_4d,
+    )
+    w_down = full(
+        (args.ep_size, args.experts_per_rank, args.intermediate_dim, args.hidden_dim),
+        0.015625,
+        destination_4d,
     )
     return SemanticFusedW2BackwardBenchInputs(
-        dy=inputs.dy.astype(jnp.bfloat16),
+        dy=dy,
         return_y=return_y,
         h_expert=h_expert,
-        w_down=inputs.w_down.astype(jnp.bfloat16),
+        w_down=w_down,
     )
 
 
@@ -9205,7 +9228,7 @@ def _run_stage_mode(
             )
         )
         if mode in (MODE_SEMANTIC_FUSED_W2_BACKWARD_PALLAS, MODE_SEMANTIC_FUSED_W2_BACKWARD_COMPARE):
-            inputs = _make_semantic_fused_w2_backward_inputs(args, plan)
+            inputs = _make_semantic_fused_w2_backward_inputs(args, plan, expert_mesh)
         if (
             mode
             in (

@@ -174,6 +174,38 @@ def test_source_push_semantic_plan_semantic_fused_stage_alias_includes_queue_sha
     )
 
 
+def test_source_push_semantic_plan_builds_fused_w2_backward_inputs_directly_sharded():
+    bench = _bench_module()
+    selected = jnp.asarray([[[0], [0]]], dtype=jnp.int32)
+    weights = jnp.ones(selected.shape, dtype=jnp.float32)
+    plan = bench.build_source_push_semantic_plan_jax(
+        selected,
+        weights,
+        ep_size=1,
+        experts_per_rank=1,
+        rows_per_src_dst_capacity=2,
+        capacity_factor=1.0,
+    )
+    args = SimpleNamespace(
+        ep_size=1,
+        tokens_per_rank=2,
+        hidden_dim=256,
+        intermediate_dim=128,
+        experts_per_rank=1,
+    )
+    mesh = bench._make_mesh(1)
+
+    inputs = bench._make_semantic_fused_w2_backward_inputs(args, plan, mesh)
+
+    assert inputs.dy.shape == (1, 2, 256)
+    assert inputs.return_y.shape[-2:] == (64, 256)
+    assert inputs.h_expert.shape == (1, 1, 256, 128)
+    assert inputs.w_down.shape == (1, 1, 128, 256)
+    assert inputs.dy.sharding.spec == bench.P(bench.SOURCE_PUSH_MESH_AXIS, None, None)
+    assert inputs.return_y.sharding.spec == bench.P(bench.SOURCE_PUSH_MESH_AXIS, None, None, None, None)
+    assert inputs.h_expert.sharding.spec == bench.P(bench.SOURCE_PUSH_MESH_AXIS, None, None, None)
+
+
 def test_source_push_semantic_plan_source_padded_h_reference_uses_stored_bf16_z():
     bench_source_push_semantic_plan = _bench_module()
     x = jnp.asarray([[[1.1, 0.0]]], dtype=jnp.bfloat16)
