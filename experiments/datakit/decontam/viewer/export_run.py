@@ -28,18 +28,41 @@ import pyarrow.parquet as pq
 from marin.datakit.decon import _bloom_hash, _extract_ngrams, bloom_paths
 from rigging.filesystem import marin_prefix, prefix_join, url_to_fs
 
-from experiments.datakit.testbed.decon_arm import build_testbed_decon_steps
+from experiments.datakit.testbed.decon_arm import PARAGRAPH_DELIMITER, build_testbed_decon_steps
 
 logger = logging.getLogger(__name__)
 
 _SPLIT_RE = re.compile(r"^(.*)-(validation|test|training|train|dev|eval)-\d+$")
 _SAMPLES_PER_SOURCE = 60
-_TEXT_CLIP = 4000
-_EVAL_TEXT_CLIP = 1200
 _MAX_MATCHED_EVALS = 5
 # Must match the decon run's NGramConfig (decon_arm uses the ngram_length=13 default).
 _NGRAM_LENGTH = 13
-_MAX_MATCHED_NGRAMS = 8
+_MAX_MATCHED_NGRAMS = 12
+# Chars of context kept on each side of the overlapping span when windowing the
+# doc / eval text, so the highlighted overlap is always visible (the overlap can
+# sit thousands of chars into a long eval passage or doc).
+_CONTEXT_CHARS = 700
+
+_WORD_RE = re.compile(r"\S+")
+
+
+def _window(text: str, ngrams: list[str], ctx: int = _CONTEXT_CHARS) -> str:
+    """Return a slice of *text* centered on the first of *ngrams* it contains.
+
+    Keeps the original whitespace/newlines within the window (readability) and
+    guarantees the overlapping span is present so the viewer can highlight it in
+    both columns. Falls back to the head when no n-gram is located."""
+    matches = list(_WORD_RE.finditer(text))
+    words = [m.group(0) for m in matches]
+    for ng in ngrams:
+        toks = ng.split()
+        n = len(toks)
+        for i in range(len(words) - n + 1):
+            if words[i : i + n] == toks:
+                a = max(0, matches[i].start() - ctx)
+                b = min(len(text), matches[i + n - 1].end() + ctx)
+                return ("…" if a > 0 else "") + text[a:b] + ("…" if b < len(text) else "")
+    return text[: 2 * ctx] + ("…" if len(text) > 2 * ctx else "")
 
 
 def _overlapping_ngrams(text: str, matched_hashes: set[int]) -> list[str]:
@@ -53,7 +76,7 @@ def _overlapping_ngrams(text: str, matched_hashes: set[int]) -> list[str]:
     """
     seen: set[str] = set()
     out: list[str] = []
-    for para in text.split("\n"):
+    for para in text.split(PARAGRAPH_DELIMITER):
         for ng in _extract_ngrams(para, _NGRAM_LENGTH, 0):
             if ng not in seen and _bloom_hash(ng) in matched_hashes:
                 seen.add(ng)
@@ -102,11 +125,55 @@ def _read_parquet(path: str, columns: list[str] | None = None):
             yield from pq.ParquetFile(fh).iter_batches(batch_size=_READ_BATCH_ROWS, columns=columns)
 
 
-def _source_rows(decon_out: str, k: int, rng: random.Random) -> tuple[int, int, list[dict]]:
-    """Return (n_docs, n_flagged, reservoir[{id, max_overlap, matched_hashes}]).
+def _counts_from_artifact(output_dir: str) -> tuple[int, int] | None:
+    """(n_docs, n_flagged) from the decon step's artifact counters — no doc scan.
 
-    Reservoir-samples ``k`` flagged rows in one streaming pass so a precision-poor
-    source with millions of flags doesn't materialize them all in memory.
+    Scales to any corpus size: the mark already tallied ``decon/contaminated`` and
+    ``decon/clean``, so counting never needs to re-read the (billions of) rows."""
+    fs, resolved = url_to_fs(f"{output_dir.rstrip('/')}/.artifact.json")
+    if not fs.exists(resolved):
+        return None
+    with fs.open(resolved) as fh:
+        c = json.load(fh).get("result", {}).get("counters", {})
+    flag, clean = int(c.get("decon/contaminated", 0)), int(c.get("decon/clean", 0))
+    return flag + clean, flag
+
+
+def _flagged_from_sidecar(output_dir: str, k: int, rng: random.Random) -> list[dict] | None:
+    """Reservoir of ``k`` flagged docs (with text) from the mark-time ``_flagged``
+    sidecar, or None if the run didn't write one. O(sample), not O(corpus)."""
+    fs, root = url_to_fs(f"{output_dir.rstrip('/')}/_flagged")
+    files = sorted(f for f in fs.find(root) if f.endswith(".parquet")) if fs.exists(root) else []
+    if not files:
+        return None
+    rows: list[dict] = []
+    seen = 0
+    for f in files:
+        with fs.open(f, "rb") as fh:
+            tbl = pq.read_table(fh, columns=["id", "text", "max_overlap", "matched_hashes"])
+        for did, text, ov, mh in zip(
+            tbl.column("id").to_pylist(),
+            tbl.column("text").to_pylist(),
+            tbl.column("max_overlap").to_pylist(),
+            tbl.column("matched_hashes").to_pylist(),
+            strict=True,
+        ):
+            seen += 1
+            row = {"id": did, "text": text, "max_overlap": ov, "matched_hashes": mh or []}
+            if len(rows) < k:
+                rows.append(row)
+            elif (j := rng.randint(0, seen - 1)) < k:
+                rows[j] = row
+    return rows
+
+
+def _source_rows(decon_out: str, k: int, rng: random.Random) -> tuple[int, int, list[dict]]:
+    """Fallback for runs without a ``_flagged`` sidecar: (n_docs, n_flagged,
+    reservoir[{id, max_overlap, matched_hashes}]) by streaming the full attributes.
+
+    Reservoir-samples ``k`` flagged rows in one pass so a precision-poor source
+    with millions of flags doesn't materialize them all — but it still reads every
+    row, so prefer the sidecar (see :func:`_flagged_from_sidecar`) at scale.
     """
     n_docs = n_flagged = 0
     reservoir: list[dict] = []
@@ -137,6 +204,7 @@ def main() -> None:
     ap.add_argument("--out", required=True, help="output dir (JSON written to <out>/<label>.json)")
     ap.add_argument("--only", nargs="*", default=None, help="restrict export to these sources")
     ap.add_argument("--samples", type=int, default=_SAMPLES_PER_SOURCE)
+    ap.add_argument("--sample-root", default=None, help="match the decon run's --sample-root (pre-materialized root)")
     args = ap.parse_args()
     rng = random.Random(0)
 
@@ -144,6 +212,7 @@ def main() -> None:
         target_total_tokens_b=args.target_tokens_b,
         only_sources=args.only,  # validates against the source set (raises on typos)
         exclude_sources=frozenset(args.exclude or ()),
+        sample_root=args.sample_root,
     )
     bloom_step = next(s for s in steps if s.name.startswith("datakit/bloom/"))
     decon_steps = [s for s in steps if s.name.startswith("datakit/testbed_decon/")]
@@ -154,8 +223,25 @@ def main() -> None:
     needed_hashes: set[int] = set()
     for ds in decon_steps:
         source = ds.name.removeprefix("datakit/testbed_decon/")
-        sample_step = next(d for d in ds.deps if d.name.startswith("data/datakit/normalized/"))
-        n_docs, n_flagged, sampled = _source_rows(ds.output_path, args.samples, rng)
+        # Doc text lives at the mark input: a pre-materialized root (input_dir) or
+        # the normalized sample-step output.
+        sample_path = (
+            ds.hash_attrs.get("input_dir")
+            or next(d for d in ds.deps if d.name.startswith("data/datakit/normalized/")).output_path
+        )
+        # Scale to any corpus size: counts from the artifact, flagged examples from
+        # the mark-time sidecar. Only fall back to a full-attributes scan when a run
+        # predates those (no sidecar); then counts come from the scan too.
+        counts = _counts_from_artifact(ds.output_path)
+        sampled = _flagged_from_sidecar(ds.output_path, args.samples, rng)
+        if sampled is None or counts is None:
+            n_docs, n_flagged, scan_sampled = _source_rows(ds.output_path, args.samples, rng)
+            if sampled is None:
+                sampled = scan_sampled  # from scan: no text yet, filled in second pass
+            if counts is not None:
+                n_docs, n_flagged = counts
+        else:
+            n_docs, n_flagged = counts
         for row in sampled:
             needed_hashes.update(row["matched_hashes"])
         per_source.append(
@@ -164,7 +250,7 @@ def main() -> None:
                 "docs": n_docs,
                 "flagged": n_flagged,
                 "rate": (n_flagged / n_docs) if n_docs else 0.0,
-                "sample_path": sample_step.output_path,
+                "sample_path": sample_path,
                 "sampled": sampled,
             }
         )
@@ -188,14 +274,16 @@ def main() -> None:
     # Second pass: attach doc text + eval attribution (family counts + matched eval records w/ text).
     for src in per_source:
         sampled = src.pop("sampled")
-        want_ids = {r["id"] for r in sampled}
+        # Sidecar rows already carry text; only the scan fallback needs a text lookup.
+        want_ids = {r["id"] for r in sampled if not r.get("text")}
         id_to_text: dict[str, str] = {}
-        for tbl in _read_parquet(src["sample_path"], columns=["id", "text"]):
-            ids = tbl.column("id").to_pylist()
-            txt = tbl.column("text").to_pylist()
-            for did, t in zip(ids, txt, strict=True):
-                if did in want_ids:
-                    id_to_text[did] = t
+        if want_ids:
+            for tbl in _read_parquet(src["sample_path"], columns=["id", "text"]):
+                ids = tbl.column("id").to_pylist()
+                txt = tbl.column("text").to_pylist()
+                for did, t in zip(ids, txt, strict=True):
+                    if did in want_ids:
+                        id_to_text[did] = t
         fam_counter: Counter = Counter()
         docs = []
         for r in sampled:
@@ -206,25 +294,28 @@ def main() -> None:
                     fams[eval_id_to_family(eid)] += 1
                     eval_hits[eid] += 1
             fam_counter.update(fams.keys())
+            full_text = r.get("text") or id_to_text.get(r["id"], "") or ""
+            matched_ngrams = _overlapping_ngrams(full_text, set(r["matched_hashes"]))
+            # Window doc + eval text around the shared span so the overlap is
+            # visible (and highlightable) in both columns of the report.
             matched_evals = [
                 {
                     "eval_id": eid,
                     "family": eval_id_to_family(eid),
                     "hits": hits,
-                    "text": (eval_texts.get(eid, "") or "")[:_EVAL_TEXT_CLIP],
+                    "text": _window(eval_texts.get(eid, "") or "", matched_ngrams),
                 }
                 for eid, hits in eval_hits.most_common(_MAX_MATCHED_EVALS)
             ]
-            full_text = id_to_text.get(r["id"], "") or ""
             docs.append(
                 {
                     "id": r["id"],
                     "max_overlap": r["max_overlap"],
                     "n_matched": len(r["matched_hashes"]),
                     "families": fams.most_common(8),
-                    "matched_ngrams": _overlapping_ngrams(full_text, set(r["matched_hashes"])),
+                    "matched_ngrams": matched_ngrams,
                     "matched_evals": matched_evals,
-                    "text": full_text[:_TEXT_CLIP],
+                    "text": _window(full_text, matched_ngrams),
                 }
             )
         src["top_families"] = fam_counter.most_common(12)
