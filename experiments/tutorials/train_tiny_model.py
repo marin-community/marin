@@ -14,8 +14,8 @@ mesh, the resumption checkpointer, the Fray dispatch); the same script runs on e
 
 import argparse
 
-from fray import ResourceConfig
-from levanter.optim import AdamConfig
+from fray.types import ResourceConfig
+from levanter.optim.config import AdamConfig
 from marin.execution.lazy import ArtifactStep, lower
 from marin.execution.step_runner import StepRunner
 from marin.experiment.data import pretokenized, tokenized
@@ -32,6 +32,7 @@ DEVICES = {
     "cpu": (ResourceConfig.with_cpu(), 4),
     "h100x8": (ResourceConfig.with_gpu("H100", count=8, cpu=32, disk="128G", ram="128G"), 256),
     "v5litepod-16": (ResourceConfig.with_tpu("v5litepod-16", slice_count=1, cpu=32, ram="128g", disk="50g"), 128),
+    "v6e-4": (ResourceConfig.with_tpu("v6e-4", slice_count=1, cpu=32, ram="128g", disk="50g"), 32),
 }
 
 # Raw HuggingFace text datasets tokenized inline (a small sample for a quick run).

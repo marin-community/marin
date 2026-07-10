@@ -86,7 +86,7 @@ import argparse
 import logging
 from dataclasses import dataclass, field
 
-from fray import ResourceConfig
+from fray.types import ResourceConfig
 from levanter.tokenizers import TokenizerBackend
 from marin.datakit.decon import (
     DeconAttributes,

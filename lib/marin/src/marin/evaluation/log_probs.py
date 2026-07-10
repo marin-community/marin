@@ -8,10 +8,10 @@ This file uses Levanter to compute validation losses and entropies.
 import os
 from dataclasses import dataclass
 
-from fray import current_client
+from fray.current_client import current_client
 from fray.types import Entrypoint, JobRequest, ResourceConfig, TpuConfig, create_environment
 from levanter.compat.hf_checkpoints import RepoRef
-from levanter.data.text import LMMixtureDatasetConfig
+from levanter.data.text.datasets import LMMixtureDatasetConfig
 from levanter.main.eval_lm import EvalLmConfig as LevanterEvalLmConfig
 from levanter.main.eval_lm import main as eval_lm_main
 from levanter.models.lm_model import LmConfig

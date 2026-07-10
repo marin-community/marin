@@ -9,7 +9,8 @@ from pathlib import Path
 
 import pyarrow.parquet as pq
 import pytest
-from fray import LocalClient, set_current_client
+from fray.current_client import set_current_client
+from fray.local_backend import LocalClient
 from marin.datakit.normalize import generate_id, normalize_to_parquet
 
 

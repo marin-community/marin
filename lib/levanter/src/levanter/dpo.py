@@ -21,7 +21,7 @@ from rigging.filesystem import StoragePath, prefix_join
 
 from levanter.data.dataset import AsyncDataset
 from levanter.data.loader import DataLoader
-from levanter.data.text import DpoExample
+from levanter.data.text.preference import DpoExample
 from levanter.metrics import Metric, ReductionType
 from levanter.models.lm_model import LmHeadModel
 from levanter.store.cache import CacheLedger, CacheMetadata, SerialCacheWriter, TreeCache

@@ -12,21 +12,31 @@ deployment:
     service_account: iris-controller@hai-gcp-models.iam.gserviceaccount.com
 # Authenticated-ingress policy: default-deny, admitting this cluster's private network
 # (VPC + pod ranges) and loopback (SSH tunnel / controller proxy) by cidr, never the
-# public internet. No jwt layer here — cross-cluster relay pushes are the global
-# finelog's job.
+# public internet. The cidr layer matches the transport peer address only, never an
+# X-Forwarded-For header, so a request arriving through the load balancer falls past it
+# into the jwt layer. Never add the Google LB ranges here: that would admit the edge
+# itself, and with it anything Cloud Armor let through.
+#
+# The jwt layer admits the federated iris controllers that relay their logs here, each
+# by its own Ed25519 public key, verifying the aud="finelog" delegation token their
+# controller mints hourly. Only clusters that arrive over the load balancer need an
+# entry; marin's own controller and its GCP workers are admitted by cidr above. Cloud
+# Armor narrows the edge to those clusters' egress prefixes first
+# (lib/iris/scripts/iap_gclb.py).
 auth:
   - type: cidr
     cidrs: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 127.0.0.0/8, "::1/128"]
-  # A global finelog also trusts each federated iris controller by its public key, to
-  # verify aud="finelog" relay-delegation tokens. This local finelog takes no
-  # cross-cluster pushes, so the jwt layer stays commented. A marin admin script will
-  # generate it from each controller's public key — see issue #6961. Shape, one entry
-  # per federated cluster:
-  # - type: jwt
-  #   keys:
-  #     - cluster: <iris-cluster-name>
-  #       public_keys:
-  #         - |
-  #             -----BEGIN PUBLIC KEY-----
-  #             <iris-controller-ed25519-public-key-pem>
-  #             -----END PUBLIC KEY-----
+  - type: jwt
+    keys:
+      - cluster: cw-rno2a
+        public_keys:
+          - |
+              -----BEGIN PUBLIC KEY-----
+              MCowBQYDK2VwAyEAB7J7n1A0ASyT+ogJqAFbO3kf8FPL2RAVQGHbdSQoLTE=
+              -----END PUBLIC KEY-----
+      - cluster: cw-us-east-02a
+        public_keys:
+          - |
+              -----BEGIN PUBLIC KEY-----
+              MCowBQYDK2VwAyEAz5BsprppPXXhN9PJajXqK6EFn57rItrdI/dqYRO5/4I=
+              -----END PUBLIC KEY-----

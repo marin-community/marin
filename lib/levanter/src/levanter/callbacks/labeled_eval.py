@@ -17,11 +17,10 @@ from rigging.filesystem import prefix_join
 
 import levanter.tracker
 from levanter.callbacks._core import StepInfo
-from levanter.data import AsyncDataset
+from levanter.data.dataset import AsyncDataset
 from levanter.data.sharded_datasource import FirstRowsShardedDataSource, ShardedDataSource
-from levanter.data.text import (
-    LmDataConfig,
-    LmDatasetSourceConfigBase,
+from levanter.data.text.datasets import LmDataConfig, LmDatasetSourceConfigBase
+from levanter.data.text.trace_chat import (
     TraceChatEvaluationFormat,
     build_trace_chat_dataset_cache,
     dataset_for_trace_chat_format,

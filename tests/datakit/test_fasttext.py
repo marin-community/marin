@@ -6,7 +6,8 @@
 from typing import Any
 
 import pytest
-from fray import LocalClient, set_current_client
+from fray.current_client import set_current_client
+from fray.local_backend import LocalClient
 
 from experiments.datakit.fasttext import (
     _value_from_prediction,

@@ -17,6 +17,9 @@ selection cannot fold into that index. The decision, in order:
 4. Otherwise stay local so the caller fails the job as unschedulable — never
    wedge it. The chosen peer may still reject at handoff (its live capacity moved
    between the heartbeat snapshot and delivery); the manager tolerates that.
+
+Routing decides only *where* a job can run. *Who* may run it there is the peer's own
+``auth.allowed_submitters``, enforced where the job lands and surfaced from the handoff.
 """
 
 from collections.abc import Mapping, Sequence
@@ -34,19 +37,6 @@ from iris.cluster.constraints import (
 from iris.cluster.federation.peer import FederationPeer
 
 
-class PeerAdmissionDenied(Exception):
-    """An explicit ``cluster=<peer>`` pin whose peer allow policy rejects the submitter.
-
-    Raised only for an explicit pin — an auto-match silently skips a peer that does
-    not admit the submitter. The controller maps this to ``PERMISSION_DENIED``.
-    """
-
-    def __init__(self, peer_id: str, submitting_user: str):
-        super().__init__(f"peer {peer_id!r} does not permit submitter {submitting_user!r}")
-        self.peer_id = peer_id
-        self.submitting_user = submitting_user
-
-
 @dataclass(frozen=True)
 class RoutingRequest:
     """The submit-time context the router decides on."""
@@ -58,9 +48,6 @@ class RoutingRequest:
     # An explicit ``cluster=<peer>`` pin, or "" for none. The caller validates the
     # peer exists and that no local ``backend`` pin was also set.
     cluster_pin: str = ""
-    # The authenticated principal behind the submission; a peer's allow policy gates
-    # on it. Empty only for direct/loopback submits, admitted only by a "*" policy.
-    submitting_user: str = ""
 
 
 @dataclass(frozen=True)
@@ -126,19 +113,16 @@ class PeerRouter:
     def decide(self, request: RoutingRequest) -> SubmitRouting:
         """Select where ``request``'s job executes (see the module docstring).
 
-        Raises :class:`PeerAdmissionDenied` when an explicit pin names a peer whose
-        allow policy rejects the submitter — a pin the user asked for and cannot be
-        silently rerouted. An auto-match instead skips a non-admitting peer.
+        Routing answers *where the job can run*, never *who may run it there*: a peer
+        admits or refuses a submitter under its own ``auth.allowed_submitters``, and a
+        refusal surfaces from the handoff itself.
         """
         if request.cluster_pin:
             # Validated to exist by the caller; force it even if locally feasible.
-            peer = self._peers[request.cluster_pin]
-            if not peer.admits(request.submitting_user):
-                raise PeerAdmissionDenied(request.cluster_pin, request.submitting_user)
             return SubmitRouting(peer_id=request.cluster_pin)
         if request.local_feasible:
             return _LOCAL
         for peer_id, peer in sorted(self._peers.items()):
-            if peer.admits(request.submitting_user) and _peer_can_host(peer, request.constraints):
+            if _peer_can_host(peer, request.constraints):
                 return SubmitRouting(peer_id=peer_id)
         return _LOCAL

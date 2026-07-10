@@ -15,10 +15,11 @@ from haliax import Axis
 from haliax.partitioning import round_axis_for_partitioning
 
 import levanter
+import levanter.config
 from levanter.checkpoint import latest_checkpoint_path, load_checkpoint
 from levanter.compat.hf_checkpoints import HFCheckpointConverter
-from levanter.data import DataLoader
-from levanter.data.text import LmDataConfig
+from levanter.data.loader import DataLoader
+from levanter.data.text.datasets import LmDataConfig
 from levanter.models.llama import LlamaConfig
 from levanter.models.lm_model import LmConfig, LmExample, LmHeadModel
 from levanter.models.loss import next_token_loss
@@ -52,7 +53,7 @@ class VizLmConfig:
 
 
 def main(config: VizLmConfig):
-    levanter.initialize(config)
+    levanter.trainer.initialize(config)
     tokenizer = config.data.the_tokenizer
 
     # some axes we use outside the model proper

@@ -95,11 +95,16 @@ FINELOG_AUDIENCE = "finelog"
 # ``endpoint`` claim; this set still rejects a replayed finelog / peer token.
 CONTROL_PLANE_AUDIENCES = frozenset({CONTROL_PLANE_AUDIENCE, PROXY_PLANE_AUDIENCE})
 
-# Issuer used when a cluster carries no ``name``. The issuer only needs to agree
-# between this controller's own signer and verifier (control-plane tokens are
-# verified only by the issuing controller), so an unnamed dev/local cluster is
-# internally consistent under this fallback.
-_DEFAULT_ISSUER = "iris"
+# The control-plane issuer every cluster minted under before ``name`` existed.
+#
+# A control-plane token is verified only by the controller that minted it, so this
+# string carries no information and an unnamed dev/local cluster stays internally
+# consistent under it. It is also accepted, transitionally, by a *named* cluster's
+# control-plane verifier: a worker token minted before that cluster gained its name
+# carries this issuer and stays valid for WORKER_TOKEN_TTL_SECONDS. Both issuers
+# resolve to this controller's own key, so accepting it admits exactly the tokens
+# this controller itself minted — no widening.
+_LEGACY_ISSUER = "iris"
 
 # Role carried by an endpoint-scoped proxy token. It has zero RPC authority
 # (authorize_method denies any audience-bearing identity); it exists only so the
@@ -446,11 +451,13 @@ def _build_jwt_token_manager(
 
     Loads the Ed25519 signing key from ``signing_key_pem``; when it is ``None``
     (no key configured — dev / null-auth), mints an EPHEMERAL in-process keypair,
-    warning that tokens will not survive a restart. The verifier trusts exactly
-    this controller's own public key under its own issuer, with the fixed
-    control-plane audience set (the cross-plane replay guard).
+    warning that tokens will not survive a restart. Every token this controller mints
+    is issued under ``cluster_name`` — the cluster's identity, which a federation peer
+    keys its trust on. The verifier trusts this controller's own public key under that
+    issuer and under :data:`_LEGACY_ISSUER`, with the fixed control-plane audience set
+    (the cross-plane replay guard).
     """
-    issuer = cluster_name or _DEFAULT_ISSUER
+    issuer = cluster_name or _LEGACY_ISSUER
     if signing_key_pem is not None:
         key = signing_key_from_private_pem(signing_key_pem)
     else:
@@ -466,8 +473,14 @@ def _build_jwt_token_manager(
     # tokens minted under the prior key still verify during a rotation overlap (the
     # same set served on JWKS). Accepting an old key is fail-closed: it cannot mint,
     # only verify, and the overlap window is bounded by the token TTL.
+    #
+    # Both issuers map to the same key set. _LEGACY_ISSUER covers the worker tokens a
+    # cluster minted before it carried a `name`, which outlive a restart by up to
+    # WORKER_TOKEN_TTL_SECONDS; it never reaches the federation plane, whose verifier
+    # keys each peer's own name. Drop it once no such token can still be unexpired.
+    trusted_keys = [key.public_pem, *previous_public_keys]
     verifier = JwksVerifier(
-        issuers={issuer: [key.public_pem, *previous_public_keys]},
+        issuers={candidate: trusted_keys for candidate in (issuer, _LEGACY_ISSUER)},
         expected_audiences=CONTROL_PLANE_AUDIENCES,
     )
     return JwtTokenManager(signer, verifier, previous_public_keys=previous_public_keys)

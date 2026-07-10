@@ -39,7 +39,7 @@ import os
 DATA_REGION = "europe-west4"
 os.environ.setdefault("MARIN_PREFIX", "gs://marin-eu-west4")
 
-from fray import ResourceConfig  # noqa: E402
+from fray.types import ResourceConfig  # noqa: E402
 from marin.datakit.normalize import NormalizedData  # noqa: E402
 from marin.datakit.sources import all_sources  # noqa: E402
 from marin.execution.artifact import read_artifact  # noqa: E402

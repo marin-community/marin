@@ -6,7 +6,7 @@ Specifies a sequence of Llama 3 models from small to large.
 """
 
 from fray.cluster import ResourceConfig
-from levanter.data.text import ChatLmDatasetFormat
+from levanter.data.text.formats import ChatLmDatasetFormat
 from levanter.layers.rotary import Llama3RotaryEmbeddingsConfig
 from levanter.models.llama import LlamaConfig
 from levanter.utils.activation import ActivationFunctionEnum

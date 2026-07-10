@@ -677,6 +677,15 @@ def _library_function(name: str):
     return getattr(library, name)
 
 
+def _read_last_error(default: str = "") -> str:
+    """Return the message recorded by the most recent failed DeepEP host call."""
+    last_error = _library_function(_LAST_ERROR_SYMBOL)
+    last_error.argtypes = []
+    last_error.restype = ctypes.c_char_p
+    message = last_error()
+    return message.decode("utf-8") if message else default
+
+
 def _materialize_cotangent(
     cotangent: jax.Array | jax.custom_derivatives.SymbolicZero,
     *,
@@ -763,11 +772,7 @@ def ensure_intranode_runtime(
         combine.num_max_recv_tokens,
     )
     if status != 0:
-        last_error = _library_function(_LAST_ERROR_SYMBOL)
-        last_error.argtypes = []
-        last_error.restype = ctypes.c_char_p
-        message = last_error()
-        text = message.decode("utf-8") if message else "unknown error"
+        text = _read_last_error("unknown error")
         raise RuntimeError(f"Failed to initialize DeepEP intranode JAX runtime: {text}")
     ensure_intranode_runtime._signature = signature
 
@@ -780,11 +785,7 @@ def probe_dispatch_kernel_attributes() -> dict[str, int | str]:
 
     status = probe()
     result: dict[str, int | str] = {"probe_status_code": int(status)}
-    last_error = _library_function(_LAST_ERROR_SYMBOL)
-    last_error.argtypes = []
-    last_error.restype = ctypes.c_char_p
-    message = last_error()
-    text = message.decode("utf-8") if message else ""
+    text = _read_last_error()
     result["last_error"] = text
     if status != 0:
         raise RuntimeError(f"Failed to probe DeepEP dispatch kernel attributes: {text}")
@@ -811,11 +812,7 @@ def run_host_dispatch_round(
         "num_experts": int(num_experts),
         "num_topk": int(num_topk),
     }
-    last_error = _library_function(_LAST_ERROR_SYMBOL)
-    last_error.argtypes = []
-    last_error.restype = ctypes.c_char_p
-    message = last_error()
-    text = message.decode("utf-8") if message else ""
+    text = _read_last_error()
     result["last_error"] = text
     if status != 0:
         raise RuntimeError(f"Failed to run DeepEP host dispatch round: {text}")

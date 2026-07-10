@@ -18,6 +18,7 @@ from pathlib import Path
 
 import uvicorn
 from finelog.client import RemoteLogHandler
+from rigging.filesystem import prefix_join
 from rigging.server_auth import TokenVerifier
 from rigging.timing import Duration, ExponentialBackoff, RateLimiter, Timestamp, TokenBucket
 from sqlalchemy import Row
@@ -353,8 +354,7 @@ class Controller:
         # The meta-scheduler routes against what each backend advertises, not the
         # config. Attributes are immutable, so the routing index is built once.
         self._backend_routing = {
-            bid: BackendRouting(advertised=backend.advertised_attributes(), admits=backend.admits)
-            for bid, backend in self._backends.items()
+            bid: BackendRouting(advertised=backend.advertised_attributes()) for bid, backend in self._backends.items()
         }
         self._backend_index = build_backend_index(self._backend_routing)
         # Worker→backend ownership by scale group, used to wire each backend's
@@ -397,12 +397,14 @@ class Controller:
             if config.peers and config.auth and config.auth.jwt_manager
             else None
         )
+        self._bundle_store = BundleStore(storage_dir=prefix_join(config.remote_state_dir, "bundles"))
         self._federation = FederationManager(
             build_peers(config.peers, federation_token_provider=federation_token_provider),
             threads=self._threads,
             store=ControllerFederationStore(
                 self._db,
             ),
+            bundles=self._bundle_store,
             cluster_id=config.cluster_id,
             heartbeat_interval=config.federation_heartbeat_interval,
         )
@@ -452,8 +454,6 @@ class Controller:
         # ``find_prunable`` relies on this to keep every ``workers`` row tracked.
         self._seed_backend_liveness()
         self._db.register_reopen_hook(self._seed_backend_liveness)
-
-        self._bundle_store = BundleStore(storage_dir=f"{config.remote_state_dir.rstrip('/')}/bundles")
 
         self._endpoint_service = EndpointServiceImpl(
             db=self._db,
@@ -1073,7 +1073,6 @@ class Controller:
             if task.backend_id == "" and task.job_id not in unpinned:
                 unpinned[task.job_id] = RoutableJob(
                     job_id=task.job_id,
-                    user=task.job_id.user,
                     constraints=constraints_from_json(task.constraints_json),
                 )
         if not unpinned:

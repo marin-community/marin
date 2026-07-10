@@ -113,11 +113,6 @@ function healthLabel(b: BackendSummary): string {
   return `${healthy}/${total} pools · ${parts.join(' · ')}`
 }
 
-function usersLabel(b: BackendSummary): string {
-  if (!b.restricted) return 'all (*)'
-  return `restricted (${b.allowedUserCount})`
-}
-
 /** Flatten advertised_attributes into an array of chip strings. */
 function deviceChips(b: BackendSummary): string[] {
   const attrs = b.advertisedAttributes ?? {}
@@ -382,7 +377,6 @@ function peerLastContact(p: PeerSummary): string {
 
         <div class="px-4 pb-4 space-y-2">
           <InfoRow label="kind">{{ b.kind || '—' }}</InfoRow>
-          <InfoRow label="users">{{ usersLabel(b) }}</InfoRow>
 
           <!-- Advertised device chips -->
           <div v-if="deviceChips(b).length > 0" class="flex items-start gap-2 text-sm">

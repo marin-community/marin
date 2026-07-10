@@ -16,7 +16,7 @@ Subsets available on HuggingFace:
 - sample/350BT   — 350B token sample
 """
 
-from fray import ResourceConfig
+from fray.types import ResourceConfig
 
 from marin.datakit.download.huggingface import download_hf_step
 from marin.execution.step_spec import StepSpec

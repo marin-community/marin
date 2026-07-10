@@ -16,10 +16,13 @@ from haliax import Axis
 from haliax.partitioning import round_axis_for_partitioning
 
 import levanter
+import levanter.analysis
+import levanter.config
+import levanter.tracker
 from levanter.checkpoint import latest_checkpoint_path, load_checkpoint
 from levanter.compat.hf_checkpoints import HFCheckpointConverter, RepoRef
-from levanter.data import DataLoader
-from levanter.data.text import LmDataConfig
+from levanter.data.loader import DataLoader
+from levanter.data.text.datasets import LmDataConfig
 from levanter.eval import LossFnOutput, TaggedEvaluator, eval_model
 from levanter.models.llama import LlamaConfig
 from levanter.models.lm_model import LmConfig, LmExample, LmHeadModel
@@ -49,7 +52,7 @@ class EvalLmConfig:
 
 
 def main(config: EvalLmConfig):
-    levanter.initialize(config)
+    levanter.trainer.initialize(config)
     tokenizer = config.data.the_tokenizer
 
     Batch = config.trainer.EvalBatch

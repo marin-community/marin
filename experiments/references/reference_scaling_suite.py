@@ -34,7 +34,7 @@ import jmp
 from fray.cluster import ResourceConfig
 from haliax.partitioning import ResourceAxis
 from levanter.checkpoint import CheckpointerConfig
-from levanter.data.text import LmDataConfig
+from levanter.data.text.datasets import LmDataConfig
 from levanter.main import train_lm
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig

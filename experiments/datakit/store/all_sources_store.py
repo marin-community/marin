@@ -34,7 +34,7 @@ import os
 import re
 from concurrent.futures import ThreadPoolExecutor
 
-from fray import ResourceConfig
+from fray.types import ResourceConfig
 from marin.datakit.decon import DeconAttributes
 from marin.datakit.sources import all_sources
 from marin.execution.artifact import read_artifact

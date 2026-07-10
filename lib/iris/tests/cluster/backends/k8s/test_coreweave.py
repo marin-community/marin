@@ -11,6 +11,7 @@ K8sControllerProvider).
 
 import base64
 import json
+import os
 import threading
 import time
 
@@ -33,6 +34,7 @@ from iris.cluster.platforms.k8s.controller import (
     _CONTROLLER_STATE_PVC_NAME,
     _CONTROLLER_STATE_PVC_SIZE,
     K8sControllerProvider,
+    configure_client_s3,
 )
 from iris.cluster.platforms.k8s.fake import InMemoryK8sService
 from iris.cluster.platforms.k8s.types import (
@@ -282,6 +284,48 @@ def test_start_controller_s3_storage_creates_task_env_secret():
 
     t.join(timeout=5)
     provider.shutdown()
+
+
+def _s3_cluster_config(endpoint: str, external: str = "") -> IrisClusterConfig:
+    return IrisClusterConfig(
+        platform=PlatformConfig(
+            coreweave=CoreweavePlatformConfig(
+                object_storage_endpoint=endpoint,
+                external_object_storage_endpoint=external,
+            )
+        )
+    )
+
+
+@pytest.mark.parametrize(
+    "endpoint, external, expected",
+    [
+        # The operator's machine cannot resolve LOTA's private address, so the public
+        # endpoint wins whenever the config supplies one.
+        ("http://cwlota.com", "https://cwobject.com", "https://cwobject.com"),
+        # An endpoint reachable from both sides (R2) needs no second address.
+        ("https://acct.r2.cloudflarestorage.com", "", "https://acct.r2.cloudflarestorage.com"),
+        # Either field alone is enough to configure the operator's client.
+        ("", "https://cwobject.com", "https://cwobject.com"),
+    ],
+)
+def test_operator_client_signs_against_the_externally_reachable_endpoint(endpoint, external, expected, monkeypatch):
+    for var in ("AWS_ENDPOINT_URL", "AWS_REGION", "AWS_DEFAULT_REGION", "FSSPEC_S3"):
+        monkeypatch.delenv(var, raising=False)
+
+    configure_client_s3(_s3_cluster_config(endpoint, external))
+
+    assert os.environ["AWS_ENDPOINT_URL"] == expected
+    assert json.loads(os.environ["FSSPEC_S3"])["endpoint_url"] == expected
+
+
+def test_operator_client_leaves_a_caller_supplied_endpoint_alone(monkeypatch):
+    monkeypatch.setenv("AWS_ENDPOINT_URL", "http://localhost:9000")
+    monkeypatch.delenv("FSSPEC_S3", raising=False)
+
+    configure_client_s3(_s3_cluster_config("http://cwlota.com", "https://cwobject.com"))
+
+    assert os.environ["AWS_ENDPOINT_URL"] == "http://localhost:9000"
 
 
 def test_start_controller_reconciles_when_already_available():

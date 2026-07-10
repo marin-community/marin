@@ -25,7 +25,6 @@ from typing import ClassVar
 from finelog.client.log_client import Table
 from rigging.timing import Timestamp
 
-from iris.cluster.config import user_admitted
 from iris.cluster.controller.autoscaler import Autoscaler
 from iris.cluster.controller.backend import (
     AutoscaleRequest,
@@ -1449,7 +1448,6 @@ class K8sTaskProvider:
     name: str = "kubernetes"
     # Routing metadata the meta-scheduler reads, set by the composer via configure_routing.
     advertised: dict[str, set[str]] = field(default_factory=dict)
-    allowed_users: frozenset[str] = frozenset({"*"})
     # K8s provisions its own capacity (cluster autoscaler + Kueue); no Iris autoscaler.
     autoscaler: Autoscaler | None = field(default=None, init=False, repr=False)
     # A cluster backend tracks no Iris worker liveness; the controller's union read
@@ -1482,12 +1480,8 @@ class K8sTaskProvider:
     def advertised_attributes(self) -> dict[str, set[str]]:
         return self.advertised
 
-    def admits(self, user: str) -> bool:
-        return user_admitted(self.allowed_users, user)
-
-    def configure_routing(self, advertised: dict[str, set[str]], allowed_users: frozenset[str]) -> None:
+    def configure_routing(self, advertised: dict[str, set[str]]) -> None:
         self.advertised = advertised
-        self.allowed_users = allowed_users
 
     def schedule(self, request: ScheduleRequest) -> ScheduleResult:
         """No-op: Kueue owns placement, so Iris makes no scheduling decisions."""

@@ -22,12 +22,23 @@
 #        uv run iris --cluster=cw-rno2a cluster start
 #        uv run iris --cluster=cw-rno2a cluster status
 
+# This cluster's identity. Used for token minting and for authenticating to peers.
+name: cw-rno2a
+
 # External finelog log server (in-cluster k8s Deployment, namespace `iris`).
 # Resolves to k8s://finelog-cw-rno2a.iris; see lib/finelog/config/cw-rno2a.yaml.
 # Without this the controller falls back to an in-process MemStore (logs lost on
 # restart). Deploy the server first: `uv run finelog deploy up cw-rno2a`.
+#
+# `relay_address` forwards this cluster's logs to marin's finelog, the federation's
+# global log sink, so a job federated here reads back from marin. The relay
+# authenticates with a short-lived aud="finelog" token signed by this cluster's key
+# below; marin's finelog admits it by the matching public key in its own `jwt` auth
+# layer, and Cloud Armor admits only CoreWeave's egress prefixes
+# (lib/iris/scripts/iap_gclb.py).
 finelog:
   config: cw-rno2a
+  relay_address: https://finelog.oa.dev
 
 platform:
   label_prefix: cw-rno2a
@@ -36,11 +47,11 @@ platform:
     namespace: iris
     kubeconfig_path: ~/.kube/coreweave-iris
     kube_context: marin-rn02a_RNO2A
-    # CoreWeave AI Object Storage via LOTA, the in-cluster local cache
-    # endpoint (use https://cwobject.com from outside CoreWeave). Bare
-    # endpoint only: buckets use virtual-hosted addressing
-    # (http://<bucket>.cwlota.com), which iris detects from this domain.
+    # CoreWeave AI Object Storage: LOTA is the in-cluster cache, cwobject.com the
+    # endpoint an operator's own machine reaches. Bare endpoints only; buckets use
+    # virtual-hosted addressing (http://<bucket>.cwlota.com), detected from these domains.
     object_storage_endpoint: http://cwlota.com
+    external_object_storage_endpoint: https://cwobject.com
 
 storage:
   remote_state_dir: s3://marin-us-east-02a/iris/cw-rno2a/state
@@ -53,11 +64,28 @@ storage:
 # trusted_cidrs makes the controller enforcing — an off-cluster request arrives
 # through Traefik with an appended X-Forwarded-For, never matches a CIDR, and must
 # present a bearer. This is the identity gate behind the IP-restricted federation
-# ingress (scripts/install_cw_network.py). No signing_key is needed: this cluster
-# runs no finelog relay, so an ephemeral key is fine
-# (require_persistent_signing_key only fires with finelog.relay_address set).
+# ingress (scripts/install_cw_network.py).
+#
+# `signing_key` must persist across restarts: the finelog relay signs every push with
+# it, and marin's finelog trusts the matching public key. The controller pod has no
+# GCP credentials, so `iris cluster up` resolves the Secret Manager reference in the
+# operator's shell and projects it as IRIS_SIGNING_KEY through the iris-controller-env
+# Secret, which task pods do not mount. Rotate with `iris cluster init-keys --rotate`.
 auth:
+  signing_key:
+    - env:IRIS_SIGNING_KEY
+    - gcp-secret://projects/748532799086/secrets/iris-cw-rno2a-signing-key/versions/1
   trusted_cidrs: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 127.0.0.0/8, "::1/128"]
+  federation_peers:
+    marin: |
+      -----BEGIN PUBLIC KEY-----
+      MCowBQYDK2VwAyEAubVBH+W56J9tNAcffmYkWLLHNgFy1cKYGNNEGwrexMs=
+      -----END PUBLIC KEY-----
+    marin-dev: |
+      -----BEGIN PUBLIC KEY-----
+      MCowBQYDK2VwAyEA42ziFTlGKgaA/fQ1wJCONKOml7rx5Y8UAQqVLTCtrCo=
+      -----END PUBLIC KEY-----
+  allowed_submitters: ["*@openathena.ai"]
 
 kubernetes_provider:
   namespace: iris

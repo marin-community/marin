@@ -41,11 +41,14 @@ from typing import Any
 
 import dupekit
 import pyarrow as pa
-from fray import ResourceConfig
+from fray.types import ResourceConfig
 from pydantic import BaseModel
 from rigging.filesystem import StoragePath, url_to_fs
-from zephyr import Dataset, ShardInfo, ZephyrContext, counters, write_parquet_file
+from zephyr import counters
+from zephyr.dataset import Dataset, ShardInfo
+from zephyr.execution import ZephyrContext
 from zephyr.readers import SUPPORTED_EXTENSIONS, load_file
+from zephyr.writers import write_parquet_file
 
 from marin.datakit.normalize import NormalizedData
 from marin.execution.artifact import read_artifact

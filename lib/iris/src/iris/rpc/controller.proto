@@ -664,8 +664,7 @@ message Controller {
     string kind = 3;
     repeated string capabilities = 4;
     map<string, StringList> advertised_attributes = 5;
-    bool restricted = 6;
-    int32 allowed_user_count = 7;
+    reserved 6, 7;  // was: bool restricted, int32 allowed_user_count
     repeated string scale_groups = 8;
     int32 worker_count = 9;
     int32 pending_task_count = 10;
@@ -694,9 +693,9 @@ message Controller {
   // execution substrate this controller drives and folds into its own DAG; a
   // peer owns its own DAG and is handed whole jobs.
   message PeerSummary {
+    reserved 3;  // was dashboard_url (a peer's jobs and tasks are mirrored into the local dashboard)
     string peer_id = 1;
     string controller_address = 2;
-    string dashboard_url = 3;
     bool reachable = 4;               // last capability heartbeat succeeded
     int64 last_contact_ms = 5;        // last successful capability heartbeat, ms since epoch
     int32 active_federated_jobs = 6;

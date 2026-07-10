@@ -21,14 +21,15 @@ import haliax as hax
 import jax
 import jmp
 import levanter
+import levanter.tracker
 import numpy as np
-from fray import current_client
+from fray.current_client import current_client
 from fray.types import Entrypoint, JobRequest, ResourceConfig, TpuConfig, create_environment
 from haliax import Axis
 from haliax.partitioning import round_axis_for_partitioning
 from jax.experimental import multihost_utils
-from levanter.data import DataLoader
-from levanter.data.text import LmDataConfig
+from levanter.data.loader import DataLoader
+from levanter.data.text.datasets import LmDataConfig
 from levanter.models.llama import LlamaConfig
 from levanter.models.lm_model import LmConfig, LmExample, LmHeadModel
 from levanter.models.loss import next_token_loss
@@ -70,7 +71,7 @@ def _force_pack_data(data: LmDataConfig) -> LmDataConfig:
 
 def save_logprobs(config: SaveLogprobsConfig) -> None:
     """Compute and save per-token logprobs."""
-    levanter.initialize(config)
+    levanter.trainer.initialize(config)
     tokenizer = config.data.the_tokenizer
 
     if config.checkpoint_path is None:

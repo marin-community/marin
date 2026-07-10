@@ -24,7 +24,7 @@ from finelog.deploy.cli import down_cmd, logs_cmd, restart_cmd, status_cmd, up_c
 from rigging.config_discovery import list_cluster_configs
 from rigging.filesystem import marin_temp_bucket
 from rigging.timing import Duration, ExponentialBackoff, Timestamp
-from rigging.token_authority import generate_ed25519_keypair
+from rigging.token_authority import SigningKey, generate_ed25519_keypair, signing_key_from_private_pem
 
 from iris.cli.build import (
     build_image,
@@ -280,29 +280,65 @@ def cluster_list():
         click.echo(f"  {name:30s} {path}")
 
 
-def _upload_private_key_to_secret_manager(resource: str, private_pem: str, accessor: str | None) -> str:
-    """Add `private_pem` as a new version of the Secret Manager secret `resource`.
-
-    `resource` is `projects/<project>/secrets/<name>`. Creates the secret container
-    first when the caller has permission; otherwise adds a version to a container an
-    admin pre-created. When `accessor` is set, also grants it
-    roles/secretmanager.secretAccessor on the secret (e.g. the controller service
-    account, so it can read the key at startup). Returns the pinned
-    `gcp-secret://…/versions/<n>` reference to put in auth.signing_key.
-    """
+def _secret_manager_client():
+    """A Secret Manager client, or a ClickException naming the optional dependency."""
     try:
         from google.cloud import secretmanager  # noqa: PLC0415  # optional dep
     except ImportError as exc:
         raise click.ClickException(
             "storing a key in Secret Manager needs the optional dependency; install marin-rigging[secrets]"
         ) from exc
-    from google.api_core.exceptions import AlreadyExists, PermissionDenied  # noqa: PLC0415  # optional dep
+    return secretmanager.SecretManagerServiceClient()
 
+
+def _split_secret_resource(resource: str) -> tuple[str, str]:
+    """Split `projects/<project>/secrets/<name>` into its project and secret name."""
     project, _, name = resource.removeprefix("projects/").partition("/secrets/")
     if not project or not name:
         raise click.ClickException(f"--gcp-secret must be projects/<p>/secrets/<name>, got {resource!r}")
+    return project, name
 
-    client = secretmanager.SecretManagerServiceClient()
+
+def _latest_signing_key(client, resource: str) -> tuple[SigningKey, str] | None:
+    """The key held by `resource`'s latest enabled version, with that version's name.
+
+    None only when the secret does not exist, which is the one case where minting is
+    safe. Every other failure to read it is an error: a payload that is not an Ed25519
+    private key means `resource` is not a signing key secret, and a latest version that
+    is disabled or destroyed means the key is there but unreadable. Minting in either
+    case would rotate the cluster's identity behind the operator's back.
+    """
+    from google.api_core.exceptions import (  # noqa: PLC0415  # optional dep
+        FailedPrecondition,
+        NotFound,
+        PermissionDenied,
+    )
+
+    rotation_warning = (
+        "Minting a new key would rotate the cluster's identity and invalidate every token it has "
+        "issued; pass --rotate only if that is what you want."
+    )
+    try:
+        version = client.access_secret_version(request={"name": f"{resource}/versions/latest"})
+    except NotFound:
+        return None
+    except FailedPrecondition as exc:
+        raise click.ClickException(
+            f"{resource}'s latest version is disabled or destroyed. Re-enable it, or {rotation_warning}"
+        ) from exc
+    except PermissionDenied as exc:
+        raise click.ClickException(f"No permission to read {resource}. {rotation_warning}") from exc
+
+    try:
+        key = signing_key_from_private_pem(version.payload.data.decode("utf-8"))
+    except ValueError as exc:
+        raise click.ClickException(f"{version.name} does not hold an Ed25519 private key: {exc}") from exc
+    return key, version.name
+
+
+def _create_secret_if_absent(client, project: str, name: str) -> None:
+    from google.api_core.exceptions import AlreadyExists, PermissionDenied  # noqa: PLC0415  # optional dep
+
     try:
         client.create_secret(
             request={
@@ -317,27 +353,33 @@ def _upload_private_key_to_secret_manager(resource: str, private_pem: str, acces
     except PermissionDenied:
         click.echo(f"No permission to create {name}; adding a version to the existing secret.")
 
+
+def _add_signing_key_version(client, resource: str, private_pem: str) -> str:
+    """Add `private_pem` as a new version of `resource`; return that version's name."""
     version = client.add_secret_version(request={"parent": resource, "payload": {"data": private_pem.encode("utf-8")}})
+    return version.name
 
-    if accessor is not None:
-        member = accessor if ":" in accessor else f"serviceAccount:{accessor}"
-        role = "roles/secretmanager.secretAccessor"
-        try:
-            policy = client.get_iam_policy(request={"resource": resource})
-            binding = next((b for b in policy.bindings if b.role == role), None)
-            if binding is not None and member in binding.members:
-                click.echo(f"{member} already has {role} on {name}.")
-            else:
-                if binding is None:
-                    policy.bindings.add(role=role, members=[member])
-                else:
-                    binding.members.append(member)
-                client.set_iam_policy(request={"resource": resource, "policy": policy})
-                click.echo(f"Granted {role} on {name} to {member}.")
-        except PermissionDenied:
-            click.echo(f"No permission to set IAM on {name}; grant {role} to {member} manually.")
 
-    return f"gcp-secret://{version.name}"
+def _grant_secret_accessor(client, resource: str, name: str, accessor: str) -> None:
+    """Grant `accessor` roles/secretmanager.secretAccessor on `resource`."""
+    from google.api_core.exceptions import PermissionDenied  # noqa: PLC0415  # optional dep
+
+    member = accessor if ":" in accessor else f"serviceAccount:{accessor}"
+    role = "roles/secretmanager.secretAccessor"
+    try:
+        policy = client.get_iam_policy(request={"resource": resource})
+        binding = next((b for b in policy.bindings if b.role == role), None)
+        if binding is not None and member in binding.members:
+            click.echo(f"{member} already has {role} on {name}.")
+            return
+        if binding is None:
+            policy.bindings.add(role=role, members=[member])
+        else:
+            binding.members.append(member)
+        client.set_iam_policy(request={"resource": resource, "policy": policy})
+        click.echo(f"Granted {role} on {name} to {member}.")
+    except PermissionDenied:
+        click.echo(f"No permission to set IAM on {name}; grant {role} to {member} manually.")
 
 
 @cluster.command("init-keys")
@@ -362,39 +404,69 @@ def _upload_private_key_to_secret_manager(resource: str, private_pem: str, acces
     help="With --gcp-secret, also grant this principal roles/secretmanager.secretAccessor on the "
     "secret (e.g. the controller service account, so it can read the key at startup).",
 )
-def cluster_init_keys(out_file: Path | None, gcp_secret: str | None, accessor: str | None):
-    """Generate a per-cluster Ed25519 signing keypair for controller auth.
+@click.option(
+    "--rotate",
+    is_flag=True,
+    help="Mint a new key and store it as a new version, retiring the one --gcp-secret already holds. "
+    "Every token signed by the old key stops verifying unless it is kept in auth.previous_public_keys.",
+)
+def cluster_init_keys(out_file: Path | None, gcp_secret: str | None, accessor: str | None, rotate: bool):
+    """Provision a cluster's Ed25519 signing keypair, and print its public half.
 
-    Writes the PRIVATE key to a SecretSpec destination (a file, and/or a new
-    Secret Manager version) and prints the PUBLIC key + kid for the trust config.
-    The private half is a crown-jewel secret: never commit it, never inline it into
-    a cluster config — reference it from auth.signing_key via file: / gcp-secret://.
-    The public key is inline-safe (JWKS, peer/finelog allowlists, previous_public_keys
-    during a rotation overlap).
+    A cluster's signing key is its identity: it signs every token the controller
+    mints, and peers trust the cluster by the matching public key. A secret that
+    already holds one is therefore read back rather than overwritten, so this is
+    the way to recover a cluster's public key and kid for a peer's trust config.
+    Pass --rotate to deliberately replace the key.
+
+    Writes the PRIVATE key to a SecretSpec destination (a file, and/or a Secret
+    Manager version). The private half is a crown-jewel secret: never commit it,
+    never inline it into a cluster config — reference it from auth.signing_key via
+    file: / gcp-secret://. The public key is inline-safe (JWKS, peer/finelog
+    allowlists, previous_public_keys during a rotation overlap).
     """
     if accessor is not None and gcp_secret is None:
         raise click.UsageError("--accessor only applies with --gcp-secret")
+    if rotate and gcp_secret is None:
+        raise click.UsageError("--rotate only applies with --gcp-secret")
 
-    keypair = generate_ed25519_keypair()
+    client = _secret_manager_client() if gcp_secret is not None else None
+    key: SigningKey | None = None
+    reference: str | None = None
+
+    if gcp_secret is not None and not rotate:
+        existing = _latest_signing_key(client, gcp_secret)
+        if existing is not None:
+            key, version_name = existing
+            reference = f"gcp-secret://{version_name}"
+            click.echo(f"Reusing the key already in Secret Manager ({version_name}).")
+
+    if key is None:
+        key = signing_key_from_private_pem(generate_ed25519_keypair().private_pem)
 
     if out_file is not None:
-        out_file.write_text(keypair.private_pem)
+        out_file.write_text(key.private_pem)
         out_file.chmod(0o600)
         click.echo(f"Wrote PRIVATE key to {out_file} (mode 0600).")
         click.echo(f"  Reference it as: auth.signing_key: file:{out_file.resolve()}")
 
     if gcp_secret is not None:
-        reference = _upload_private_key_to_secret_manager(gcp_secret, keypair.private_pem, accessor)
-        click.echo(f"Stored PRIVATE key in Secret Manager ({gcp_secret}).")
+        project, name = _split_secret_resource(gcp_secret)
+        if reference is None:
+            _create_secret_if_absent(client, project, name)
+            reference = f"gcp-secret://{_add_signing_key_version(client, gcp_secret, key.private_pem)}"
+            click.echo(f"Stored PRIVATE key in Secret Manager ({gcp_secret}).")
+        if accessor is not None:
+            _grant_secret_accessor(client, gcp_secret, name, accessor)
         click.echo(f"  Reference it as: auth.signing_key: {reference}")
 
     if out_file is None and gcp_secret is None:
         click.echo("# PRIVATE KEY (store securely; do NOT commit or inline into a cluster config):")
-        click.echo(keypair.private_pem.rstrip("\n"))
+        click.echo(key.private_pem.rstrip("\n"))
 
-    click.echo(f"\nkid: {keypair.kid}")
+    click.echo(f"\nkid: {key.kid}")
     click.echo("# PUBLIC KEY (inline-safe — trust config / peer & finelog allowlists / previous_public_keys):")
-    click.echo(keypair.public_pem.rstrip("\n"))
+    click.echo(key.public_pem.rstrip("\n"))
 
 
 @cluster.command("start")

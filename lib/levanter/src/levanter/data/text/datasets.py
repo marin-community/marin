@@ -22,7 +22,8 @@ from rigging.filesystem import StoragePath, prefix_join
 from rigging.timing import log_time
 
 import levanter
-from levanter.data import AsyncDataset
+import levanter.config
+from levanter.data.dataset import AsyncDataset
 from levanter.data.dataset import MappedAsyncDataset
 from levanter.data.mixture import (
     ConcatDataset,

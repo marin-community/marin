@@ -99,20 +99,22 @@ The rest of the plan assumes **(a) string column** and **(b) signed-submitter Mo
    dashboard). Regenerate protos; update the Vue/TS dashboard.
 
 ### WS-2 — Per-cluster user authorization (the allowlist)
-*`config.py` (`PeerConfig`, `AllowPolicy`, `AuthConfig`), `controller/backend.py:289`,
-`federation/router.py`, `federation/manager.py`, `controller/service.py:1237` (handoff admission).*
+*`config.py` (`PeerConfig`, `AuthConfig`), `federation/router.py`, `federation/manager.py`,
+`controller/service.py:1237` (handoff admission).*
 
 1. Domain matching in `user_admitted`: extend exact/`*` to also match a domain entry
-   `"*@openathena.ai"` (suffix match on the email's domain). One helper, reused by backend and
-   peer policy. (Confirm pattern is on the **email**: `user@openathena.ai`.)
-2. Add `allow_policy: AllowPolicy` to `PeerConfig` (mirror `BackendConfig.allow_policy`; default
-   `["*"]`).
-3. Enforce at the **root**, keyed on `submitting_user`: thread it into `RoutingRequest`; a
-   `cluster=<peer>` pin whose policy rejects the submitter → `PERMISSION_DENIED`; auto-match
-   skips non-admitting peers. (Gate on `submitting_user`, **not** `owner_principal` — on `marin`,
-   `unprovisioned_role: admin` makes every IAP user admin, so the friendly owner is attacker-
-   chosen; only the authenticated principal is trustworthy — codex confirmed.)
-4. Enforce at the **CW peer** (independent boundary): on `request.HasField("federation")`, the
+   `"*@openathena.ai"` (suffix match on the email's domain). (Confirm pattern is on the
+   **email**: `user@openathena.ai`.)
+2. ~~Add `allow_policy` to `PeerConfig`.~~ **Superseded.** A parent holding its own copy of
+   who a peer admits can only disagree with the peer's `auth.allowed_submitters`, which is
+   enforced where the job lands. Routing decides only *where* a job can run; the peer answers
+   *who* may run it there, and its refusal surfaces from the handoff. `BackendConfig.allow_policy`
+   went the same way — it was a vestige of modelling federation as a backend.
+3. Enforce **only at the peer** (step 4). The parent does not pre-filter on `submitting_user`;
+   it asserts it. (What it asserts is the authenticated principal, **not** `owner_principal` — on
+   `marin`, `unprovisioned_role: admin` makes every IAP user admin, so the friendly owner is
+   attacker-chosen; only the authenticated principal is trustworthy — codex confirmed.)
+4. Enforce at the **CW peer** (the boundary): on `request.HasField("federation")`, the
    federation token proves the requester (its verified issuer == `federation.requester_id`), and the
    handoff's asserted `submitting_user` (proto) is checked against `auth.allowed_submitters:
    ["*@openathena.ai"]`, with `local_admin` rejected outright. **Implemented (WS-4):** we trust a
@@ -147,8 +149,10 @@ The rest of the plan assumes **(a) string column** and **(b) signed-submitter Mo
 *`config.py` (`AuthConfig`), `controller/auth.py:95,200,339-373`, `federation/peer.py:96`,
 `iris/rpc/auth.py:85`, `cli/cluster.py` (`init-keys`), `controller/service.py:3141` (`FederationSync`).*
 
-1. Persistent signing keys on **both** CW controllers (`iris cluster init-keys`) — required
-   anyway because CW relays logs to the shared finelog (`require_persistent_signing_key`).
+1. ~~Persistent signing keys on both CW controllers.~~ **Not needed.** A receiver verifies an
+   inbound handoff with the *sender's* public key from `federation_peers`; it signs nothing
+   cross-cluster. Neither CW cluster sets `finelog.relay_address`, so
+   `require_persistent_signing_key` never fires and an ephemeral per-restart key is fine.
 2. Distribute the GCP root's **public key** to each CW controller: new `AuthConfig` surface
    `federation_peers: {marin: {public_key: "<PEM>", ...}}`, wired into a **separate federation
    verifier** (see 4). PEM is copied statically from `init-keys` output (CW can't dial GCP in the
@@ -190,11 +194,11 @@ The rest of the plan assumes **(a) string column** and **(b) signed-submitter Mo
   JWT issuer (`iss`) and the federation `cluster_id`/`requester_id` (`controller/main.py`). None of the
   current YAMLs declare `name`, so as-is they mint under the fallback issuer and send an empty requester
   id — the `federation_peers` trust and the requester binding would both fail. Set `name: marin`,
-  `name: cw-rno2a`, `name: cw-us-east-02a` as part of this step; the peer id keys and `allow_policy`
-  targets must match these exactly.
+  `name: cw-rno2a`, `name: cw-us-east-02a` as part of this step; the peer id keys must match these
+  exactly.
 - `marin.yaml`: add `peers:` for `cw-rno2a` and `cw-us-east-02a` (`controller_address` = the federation
-  ingress URL, `cluster` = the peer manifest name for credential resolution, `dashboard_url`,
-  `allow_policy: {users: ["*@openathena.ai"]}`).
+  ingress URL, `cluster` = the peer manifest name for credential resolution). Admission is the
+  receiving peer's own `auth.allowed_submitters`.
 - CW configs: persistent `auth.signing_key`; trust anchor `auth.federation_peers: {marin: "<PEM>"}`;
   inbound allowlist `auth.allowed_submitters: ["*@openathena.ai"]`; the federation ingress.
   `cw-rno2a.yaml` is null-auth today and must gain the enforcing federation verifier config. Backend
@@ -238,8 +242,8 @@ controller without explicit user approval** (AGENTS.md).
 
 - **P0 land code dark.** Merge WS-1..WS-4 + migration `0041`. Config strictness (pydantic forbids
   unknown keys, `config.py:156`) means **config must land after code**, never before. Full test pass.
-- **P1 CW keys + trust anchor.** `init-keys` on both CW controllers; copy the GCP root public key into
-  each CW `federation_peers`. (Config staged, not applied.)
+- **P1 CW trust anchor.** Copy the GCP root's public key into each CW `federation_peers`. No CW
+  signing key: a receiver verifies with the sender's key. (Config staged, not applied.)
 - **P2 CW networking.** Stand up the IP-restricted, enforcing federation ingress (federation RPC
   subset only). Reserve + allowlist the marin static egress IP. Verify from the marin VM: `ListBackends`
   succeeds **with** the federation JWT, refused **without** it / from a non-allowlisted IP.

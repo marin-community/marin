@@ -57,7 +57,7 @@ import numpy as np
 import pyarrow as pa
 import pyarrow.compute as pc
 import pyarrow.parquet as pq
-from fray import ResourceConfig
+from fray.types import ResourceConfig
 from levanter.store.cache import (
     CacheLedger,
     CacheMetadata,
@@ -70,8 +70,9 @@ from marin.processing.classification.deduplication.fuzzy_dups import FuzzyDupsAt
 from marin.processing.tokenize.attributes import TokenizedAttrData
 from pydantic import BaseModel
 from rigging.filesystem import StoragePath
-from zephyr import Dataset, ZephyrContext, counters
-from zephyr.dataset import ShardInfo, format_shard_path
+from zephyr import counters
+from zephyr.dataset import Dataset, ShardInfo, format_shard_path
+from zephyr.execution import ZephyrContext
 from zephyr.writers import atomic_rename
 
 from experiments.datakit.cluster.domain.v0.assign import AssignmentAttrData

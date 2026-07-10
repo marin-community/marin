@@ -14,7 +14,7 @@ from dataclasses import dataclass
 
 from fray.types import ResourceConfig
 from levanter.compat.hf_checkpoints import HFCheckpointConverter
-from levanter.data.text import LMMixtureDatasetConfig
+from levanter.data.text.datasets import LMMixtureDatasetConfig
 from marin.evaluation.log_probs import EvalLmConfig, evaluate_lm_log_probs
 from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep, StepContext

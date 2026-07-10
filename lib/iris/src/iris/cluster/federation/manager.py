@@ -24,6 +24,7 @@ from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from rigging.timing import Duration, Timestamp
 
+from iris.cluster.bundle import BundleStore
 from iris.cluster.constraints import BACKEND_CONSTRAINT_KEY, CLUSTER_CONSTRAINT_KEY
 from iris.cluster.federation.peer import FederationPeer
 from iris.cluster.federation.router import PeerRouter, RoutingRequest, SubmitRouting
@@ -45,6 +46,13 @@ _JOIN_TIMEOUT = Duration.from_seconds(5.0)
 
 _PEER_RPC_ERRORS = (ConnectError, ConnectionError, OSError)
 
+# A peer's verdict on the handoff itself, which it will repeat on every retry: the job
+# id already exists there (ALREADY_EXISTS), its allowlist refuses the submitter
+# (PERMISSION_DENIED), or the request is malformed (INVALID_ARGUMENT). Transport and
+# auth failures are excluded — a federation bearer is minted per request, so
+# UNAUTHENTICATED is a key/clock/rollout transient that a later attempt can clear.
+_TERMINAL_HANDOFF_CODES = frozenset({Code.ALREADY_EXISTS, Code.PERMISSION_DENIED, Code.INVALID_ARGUMENT})
+
 
 class FederationManager:
     """Owns the federation peer registry, handoff, delta-sync, and cancel."""
@@ -55,6 +63,7 @@ class FederationManager:
         *,
         threads: ThreadContainer,
         store: FederationStore | None = None,
+        bundles: BundleStore | None = None,
         cluster_id: str = "",
         heartbeat_interval: Duration = DEFAULT_HEARTBEAT_INTERVAL,
         sync_interval: Duration = DEFAULT_SYNC_INTERVAL,
@@ -62,6 +71,7 @@ class FederationManager:
         self._peers = {peer.peer_id: peer for peer in peers}
         self._threads = threads
         self._store = store
+        self._bundles = bundles
         self._cluster_id = cluster_id
         self._heartbeat_interval = heartbeat_interval
         self._sync_interval = sync_interval
@@ -126,8 +136,11 @@ class FederationManager:
         ``PENDING_HANDOFF``. When freshly admitted it then calls the peer's
         ``LaunchJob`` — the peer runs the job under the same, cluster-invariant
         ``local_job_id`` — and flips the handle to ``HANDED_OFF``; an idempotent
-        resubmit skips delivery. A failed delivery is not fatal — the handle
-        persists and the sync loop re-drives it.
+        resubmit skips delivery. A transient delivery failure is not fatal — the handle
+        persists and the sync loop re-drives it. A rejection the peer will repeat (it
+        refuses the submitter, or already runs that job) terminalizes the handle and
+        raises, so the submitter sees the peer's own answer rather than a job that
+        silently never lands.
         """
         if self._store is None:
             raise RuntimeError("federation handoff requires a store")
@@ -141,7 +154,9 @@ class FederationManager:
             request=request,
         )
         if self._store.admit_and_persist_handoff(spec) is HandoffAdmission.ADMITTED:
-            self._deliver_handoff(spec)
+            rejection = self._deliver_handoff(spec)
+            if rejection is not None:
+                raise rejection
 
     # -- cancel (parent side) ------------------------------------------------
 
@@ -278,33 +293,46 @@ class FederationManager:
         for target in self._store.pending_cancels():
             self._deliver_cancel(target)
 
-    def _deliver_handoff(self, spec: HandoffSpec) -> None:
+    def _deliver_handoff(self, spec: HandoffSpec) -> ConnectError | None:
+        """Deliver one handle to its peer, terminalizing a rejection the peer will repeat.
+
+        Returns that rejection — the handle already marked ``HANDOFF_REJECTED`` — so the
+        submit path can answer its caller with the peer's own verdict. Returns ``None``
+        when the handle landed or is still worth re-driving. It never raises on a peer's
+        answer: the re-drive loop calls this on the sync thread, which dies on an
+        uncaught exception.
+        """
         assert self._store is not None
         peer = self._peers.get(spec.peer_id)
         if peer is None:
             logger.warning("Cannot hand off %s: peer %s is not configured", spec.local_job_id, spec.peer_id)
-            return
-        handoff = self._build_handoff_request(
-            spec.request, spec.local_job_id, spec.owner_principal, spec.submitting_user
-        )
+            return None
         try:
+            handoff = self._build_handoff_request(
+                spec.request, spec.local_job_id, spec.owner_principal, spec.submitting_user
+            )
             peer.launch_job(handoff)
         except ConnectError as exc:
-            # A genuine name collision on the peer (a local job, or a job it received
-            # from a different requester) is terminal, not transient — terminalize the
-            # handle so the re-drive stops rather than re-delivering forever.
-            if exc.code == Code.ALREADY_EXISTS:
-                self._store.mark_handoff_rejected(
-                    spec.local_job_id,
-                    reason=f"Peer {spec.peer_id} rejected the handoff: job {spec.local_job_id} already exists there",
-                )
-                return
-            logger.warning("Handoff of %s to peer %s failed (will retry): %s", spec.local_job_id, spec.peer_id, exc)
-            return
+            # The peer answers a rejected handoff the same way every time — a name
+            # collision there, a submitter its allowlist refuses, a malformed request.
+            # Terminalize the handle so the re-drive stops rather than re-delivering
+            # forever. Everything else (unreachable, unauthenticated, timed out) can
+            # succeed on a later attempt and stays pending.
+            if exc.code not in _TERMINAL_HANDOFF_CODES:
+                logger.warning("Handoff of %s to peer %s failed (will retry): %s", spec.local_job_id, spec.peer_id, exc)
+                return None
+            self._store.mark_handoff_rejected(
+                spec.local_job_id,
+                reason=f"Peer {spec.peer_id} rejected the handoff: {exc.message}",
+            )
+            return exc
         except (ConnectionError, OSError) as exc:
+            # Also covers a blob this cluster's bundle store could not read back for
+            # the handoff; a later attempt can still succeed.
             logger.warning("Handoff of %s to peer %s failed (will retry): %s", spec.local_job_id, spec.peer_id, exc)
-            return
+            return None
         self._store.mark_handed_off(spec.local_job_id)
+        return None
 
     def _sync_peer(self, peer: FederationPeer) -> None:
         assert self._store is not None
@@ -349,7 +377,28 @@ class FederationManager:
                 submitting_user=submitting_user,
             )
         )
+        self._inline_blobs(handoff)
         return handoff
+
+    def _inline_blobs(self, handoff: controller_pb2.Controller.LaunchJobRequest) -> None:
+        """Carry the bytes behind every content id, which only this cluster can resolve.
+
+        ``launch_job`` replaces the submitted workspace bundle and any large workdir
+        file with a content id in this cluster's bundle store, and a task fetches its
+        bundle from the controller that runs it. A peer reads its own store, so the
+        handoff carries the bytes; the peer re-externalizes them under the same
+        content ids on the way in.
+        """
+        refs = dict(handoff.entrypoint.workdir_file_refs)
+        if not handoff.bundle_id and not refs:
+            return
+        assert self._bundles is not None, "federating a job that references blobs needs a bundle store"
+        if handoff.bundle_id:
+            handoff.bundle_blob = self._bundles.get(handoff.bundle_id)
+            handoff.ClearField("bundle_id")
+        for name, blob_id in refs.items():
+            handoff.entrypoint.workdir_files[name] = self._bundles.get(blob_id)
+        handoff.entrypoint.ClearField("workdir_file_refs")
 
     def _build_summary(self, peer: FederationPeer) -> controller_pb2.Controller.PeerSummary:
         heartbeat = peer.heartbeat()
@@ -357,7 +406,6 @@ class FederationManager:
         return controller_pb2.Controller.PeerSummary(
             peer_id=peer.peer_id,
             controller_address=peer.controller_address,
-            dashboard_url=peer.dashboard_url,
             reachable=heartbeat.reachable,
             last_contact_ms=heartbeat.last_contact_ms,
             active_federated_jobs=active,
