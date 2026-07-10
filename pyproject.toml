@@ -15,7 +15,10 @@ dependencies = [
     "marin-haliax",
     "marin-levanter",
     "marin-core",
-    "marin-rigging",
+    # [secrets] so `iris cluster up` on a Kubernetes cluster can resolve the
+    # `gcp-secret://` signing key in the operator's shell: the controller pod holds no
+    # cloud credentials and reads the key from a projected Secret instead.
+    "marin-rigging[secrets]",
     "marin-zephyr",
     # marin-finelog is the pure-Python finelog client + deploy/CLI tooling, a
     # workspace member (editable source) so deploy/CLI fixes land without a wheel
@@ -28,10 +31,6 @@ dependencies = [
     # marin-ducky is the ad-hoc DuckDB SQL service (dashboard + runner + deploy),
     # a workspace member so service fixes land without a wheel republish.
     "marin-ducky",
-    # Snapshot of the pre-ArtifactStep executor (marin.execution at its last
-    # executor revision, as thalas.execution). Executor-era experiments import
-    # it instead of marin.execution; see the pin below.
-    "thalas",
     # top level deps. try to keep these small.
     "watchdog",
     # marin-dupekit is a native (maturin) package shipped as pre-built platform
@@ -167,25 +166,17 @@ nvidia-cutlass-dsl-libs-cu13 = { index = "nvidia" }
 # NOTE: harbor is a pinned git dependency (not a workspace member).
 # harbor lives in marin-community/harbor as a pinned git dependency.
 harbor = { git = "https://github.com/marin-community/harbor.git", rev = "354692d9c0eab497b05f266aa0dff30e2a238d2e" }
-# Frozen executor snapshot; bridge until executor-era experiments migrate to
-# ArtifactSteps. Its marin-rigging/marin-fray deps resolve to the workspace.
-thalas = { git = "https://github.com/marin-community/thalas.git", rev = "5a7b66dde13fe8b8e5fa47a2b311d8f747a96383" }
 # Changes to TPU-vLLM fork SHAs must follow one of these protocols: if this is a
 # release/LKG refresh, then follow .agents/skills/refresh-tpu-vllm-forks/SKILL.md;
 # if this is a fixed-base overlay PR, then follow
 # .agents/skills/refresh-tpu-vllm-forks/docs/overlay-only-pr.md. PR-head SHAs are
 # temporary and must be replaced by the landed fork main SHA.
-# https://github.com/marin-community/vllm/compare/a30addc7548a9a8b9b3323a7bc3eb7d7c4895d1c...04f7da7e26eacb4e8d7e7d2dce6347d2ff90af4d
-# held_request_ids scheduler patch (327a10590) cherry-picked onto the
-# marin-community rev above (04f7da7e2); joint decode's hold machinery needs it.
-# https://github.com/RohithKuditipudi/vllm/compare/04f7da7e26eacb4e8d7e7d2dce6347d2ff90af4d...e0ce7b17fcce3c6426162a9763cf12f394fe1db8
-vllm = { git = "https://github.com/RohithKuditipudi/vllm.git", rev = "e0ce7b17fcce3c6426162a9763cf12f394fe1db8" }
-# Joint-decode token-decision callback overlay: one commit on top of the
-# marin-community rev main pins (808415f45).
-# https://github.com/RohithKuditipudi/tpu-inference/compare/808415f45bbfcb512e9c593c4a3330aed115917e...d00748dbe8db8460640d88fb9631dbee9b5185b5
-tpu-inference = { git = "https://github.com/RohithKuditipudi/tpu-inference.git", rev = "d00748dbe8db8460640d88fb9631dbee9b5185b5" }
-# Backend-neutral joint decoding (coordinator, worker loop, gpu/tpu backends).
-joint-decode = { git = "https://github.com/RohithKuditipudi/joint-decode.git", rev = "4ef8c2831f48186b609a11b74e4adf75e532fd6a" }
+# https://github.com/marin-community/vllm/compare/a30addc7548a9a8b9b3323a7bc3eb7d7c4895d1c...912fb118c18c2eb8143a188ddb31838202bd8521
+vllm = { git = "https://github.com/marin-community/vllm.git", rev = "912fb118c18c2eb8143a188ddb31838202bd8521" }
+# https://github.com/marin-community/tpu-inference/compare/23d17a8120d9cc34890135599f42e1db4f947c10...734d2842aa883c8f7bcff87a4b437a366f3adbc0
+tpu-inference = { git = "https://github.com/marin-community/tpu-inference.git", rev = "734d2842aa883c8f7bcff87a4b437a366f3adbc0" }
+thalas = { git = "https://github.com/marin-community/thalas.git", rev = "5a7b66dde13fe8b8e5fa47a2b311d8f747a96383" }
+joint-decode = { git = "https://github.com/RohithKuditipudi/joint-decode.git", rev = "c3ab40cfcd51c628df84c53e5442dc4e18195473" }
 # ### BEGIN RUST-DEV SOURCES ###
 # ### END RUST-DEV SOURCES ###
 

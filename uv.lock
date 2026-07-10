@@ -3631,7 +3631,7 @@ wheels = [
 [[package]]
 name = "joint-decode"
 version = "0.1.0"
-source = { git = "https://github.com/RohithKuditipudi/joint-decode.git?rev=4ef8c2831f48186b609a11b74e4adf75e532fd6a#4ef8c2831f48186b609a11b74e4adf75e532fd6a" }
+source = { git = "https://github.com/RohithKuditipudi/joint-decode.git?rev=c3ab40cfcd51c628df84c53e5442dc4e18195473#c3ab40cfcd51c628df84c53e5442dc4e18195473" }
 dependencies = [
     { name = "fsspec" },
 ]
@@ -4651,7 +4651,7 @@ requires-dist = [
     { name = "jaxlib", marker = "extra == 'tpu'", specifier = "==0.10.1" },
     { name = "jaxlib", marker = "extra == 'vllm'", specifier = "==0.10.1" },
     { name = "jaxopt", specifier = ">=0.8.3" },
-    { name = "joint-decode", marker = "extra == 'vllm'", git = "https://github.com/RohithKuditipudi/joint-decode.git?rev=4ef8c2831f48186b609a11b74e4adf75e532fd6a" },
+    { name = "joint-decode", marker = "extra == 'vllm'", git = "https://github.com/RohithKuditipudi/joint-decode.git?rev=c3ab40cfcd51c628df84c53e5442dc4e18195473" },
     { name = "libtpu", marker = "extra == 'tpu'", specifier = "==0.0.41" },
     { name = "libtpu", marker = "extra == 'vllm'", specifier = "==0.0.41" },
     { name = "lm-eval", extras = ["math"], marker = "extra == 'evalchemy'", git = "https://github.com/stanford-crfm/lm-evaluation-harness?rev=d5e3391f22cde186c827674d5c3ec7c5f4fe0cab" },
@@ -4702,13 +4702,13 @@ requires-dist = [
     { name = "torchvision", marker = "platform_machine == 'AMD64' and sys_platform == 'win32' and extra == 'cpu'", specifier = "==0.26.0+cpu", index = "https://download.pytorch.org/whl/cpu", conflict = { package = "marin-core", extra = "cpu" } },
     { name = "torchvision", marker = "platform_machine == 'AMD64' and sys_platform == 'win32' and extra == 'tpu'", specifier = "==0.26.0+cpu", index = "https://download.pytorch.org/whl/cpu", conflict = { package = "marin-core", extra = "tpu" } },
     { name = "torchvision", marker = "platform_machine == 'AMD64' and sys_platform == 'win32' and extra == 'vllm'", specifier = "==0.26.0+cpu", index = "https://download.pytorch.org/whl/cpu", conflict = { package = "marin-core", extra = "vllm" } },
-    { name = "tpu-inference", marker = "extra == 'vllm'", git = "https://github.com/RohithKuditipudi/tpu-inference.git?rev=d00748dbe8db8460640d88fb9631dbee9b5185b5" },
+    { name = "tpu-inference", marker = "extra == 'vllm'", git = "https://github.com/marin-community/tpu-inference.git?rev=734d2842aa883c8f7bcff87a4b437a366f3adbc0" },
     { name = "tqdm" },
     { name = "tqdm-loggable" },
     { name = "transformers", specifier = ">=5.5.3,<6.0" },
     { name = "triton", marker = "sys_platform == 'linux' and extra == 'gpu'", specifier = ">=3.6.0,<3.7" },
     { name = "verifiers", marker = "extra == 'rl'", specifier = "==0.1.5" },
-    { name = "vllm", marker = "extra == 'vllm'", git = "https://github.com/RohithKuditipudi/vllm.git?rev=e0ce7b17fcce3c6426162a9763cf12f394fe1db8" },
+    { name = "vllm", marker = "extra == 'vllm'", git = "https://github.com/marin-community/vllm.git?rev=912fb118c18c2eb8143a188ddb31838202bd8521" },
     { name = "wandb", specifier = ">0.24.0" },
 ]
 provides-extras = ["gpu", "tpu", "cpu", "rl", "eval", "evalchemy", "vizier", "vllm", "harbor", "dedup", "datakit", "math"]
@@ -4883,14 +4883,14 @@ test = [
 
 [[package]]
 name = "marin-finelog-server"
-version = "0.2.12.dev202607040833"
+version = "0.2.12.dev202607090934"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/62/d1/f14370ea0b88d2cf0232723f90509619439b4e7e2ada6786175370f13d32/marin_finelog_server-0.2.12.dev202607040833.tar.gz", hash = "sha256:211a004163f41ab0b602066a278b521540ffef94022246b4c56c27858077484d", size = 218973, upload-time = "2026-07-04T09:03:26.257Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/51/b1/f6691e5c0c00260b7cb386a3ca075d6b38e60822e8f82c3e6e73c352ad68/marin_finelog_server-0.2.12.dev202607090934.tar.gz", hash = "sha256:de52360f17371a88404d440cdd6211c3e4716fac7183f0805e9db80245d2d345", size = 223389, upload-time = "2026-07-09T10:09:22.627Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/6a/1f/7beaf16931b0b08747679bc23e5fbfb230c0a32481b748cb2a15cf454877/marin_finelog_server-0.2.12.dev202607040833-cp312-abi3-macosx_10_12_x86_64.whl", hash = "sha256:004f35272ba8cecb97f1eb73070d70235143181c3a1ff81230246037d09b9697", size = 41783290, upload-time = "2026-07-04T09:03:13.992Z" },
-    { url = "https://files.pythonhosted.org/packages/e0/ef/e648579b0b51f390cc353b7e9eb3db23ab26176f10aa3db88d90a3241c13/marin_finelog_server-0.2.12.dev202607040833-cp312-abi3-macosx_11_0_arm64.whl", hash = "sha256:c8937afc6fa72070de90d81150716860d84d53a9312df4bc0952a89968393c6e", size = 39342790, upload-time = "2026-07-04T09:03:17.243Z" },
-    { url = "https://files.pythonhosted.org/packages/29/79/e390376d005b06f2257001262b433b58ce743e0dc744f0ade6ec032f94e6/marin_finelog_server-0.2.12.dev202607040833-cp312-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:81aca89bb825a6165ea0fc3f952e5a5c5e02d219c68388c852dab654a0d6c853", size = 40789253, upload-time = "2026-07-04T09:03:20.027Z" },
-    { url = "https://files.pythonhosted.org/packages/11/b5/5385247529c60369d4d7706c5e64fb35a4c9cca2c06e589254999c5fae24/marin_finelog_server-0.2.12.dev202607040833-cp312-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:77f6f4e881e0de27d145636b46466517f75a3ff4ad8f85d70284e672ede774f7", size = 43343003, upload-time = "2026-07-04T09:03:23.052Z" },
+    { url = "https://files.pythonhosted.org/packages/86/d9/6b07c81bbd9f9a2e0f5da7437d556e40a8e72a544adccd61119b0c7cbbe6/marin_finelog_server-0.2.12.dev202607090934-cp312-abi3-macosx_10_12_x86_64.whl", hash = "sha256:c6a3e396a7801591e93a6e56525babcae3f1e34ecef2070c854b551b15417feb", size = 42268254, upload-time = "2026-07-09T10:09:07.736Z" },
+    { url = "https://files.pythonhosted.org/packages/8b/bf/e0254ffea5cedf3912bda03820aacd7299530811d49a08cce48bf38b6823/marin_finelog_server-0.2.12.dev202607090934-cp312-abi3-macosx_11_0_arm64.whl", hash = "sha256:a2cee80d1366df9454fa1de3f309544f07c62001fcf93af98c144cacd45dd60a", size = 39767175, upload-time = "2026-07-09T10:09:11.27Z" },
+    { url = "https://files.pythonhosted.org/packages/77/19/aeda9deb1fc7689fec120a461980dc25c3bf83dbd742375e6a41fa28fef9/marin_finelog_server-0.2.12.dev202607090934-cp312-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:73304b41560c81a24ea51452e1030862690b78cfe6f289524cdf361459de32a2", size = 41222043, upload-time = "2026-07-09T10:09:15.255Z" },
+    { url = "https://files.pythonhosted.org/packages/55/17/e22b91a595dd03b1ec65c71ab2af93ee5b963ccb20834cd04b823a12cfb6/marin_finelog_server-0.2.12.dev202607090934-cp312-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:81b593d4fd146bcc8266c1f661e51b5e5eeb76aa9ac58f5c941bcdbea9eb20b3", size = 43789685, upload-time = "2026-07-09T10:09:19.177Z" },
 ]
 
 [[package]]
@@ -5454,9 +5454,8 @@ dependencies = [
     { name = "marin-haliax" },
     { name = "marin-iris" },
     { name = "marin-levanter" },
-    { name = "marin-rigging" },
+    { name = "marin-rigging", extra = ["secrets"] },
     { name = "marin-zephyr" },
-    { name = "thalas" },
     { name = "watchdog" },
 ]
 
@@ -5470,9 +5469,8 @@ requires-dist = [
     { name = "marin-haliax", editable = "lib/haliax" },
     { name = "marin-iris", editable = "lib/iris" },
     { name = "marin-levanter", editable = "lib/levanter" },
-    { name = "marin-rigging", editable = "lib/rigging" },
+    { name = "marin-rigging", extras = ["secrets"], editable = "lib/rigging" },
     { name = "marin-zephyr", editable = "lib/zephyr" },
-    { name = "thalas", git = "https://github.com/marin-community/thalas.git?rev=5a7b66dde13fe8b8e5fa47a2b311d8f747a96383" },
     { name = "watchdog" },
 ]
 
@@ -10360,18 +10358,6 @@ jax = [
 ]
 
 [[package]]
-name = "thalas"
-version = "0.1.0"
-source = { git = "https://github.com/marin-community/thalas.git?rev=5a7b66dde13fe8b8e5fa47a2b311d8f747a96383#5a7b66dde13fe8b8e5fa47a2b311d8f747a96383" }
-dependencies = [
-    { name = "draccus" },
-    { name = "fsspec" },
-    { name = "marin-fray" },
-    { name = "marin-rigging" },
-    { name = "pydantic" },
-]
-
-[[package]]
 name = "threadpoolctl"
 version = "3.6.0"
 source = { registry = "https://pypi.org/simple" }
@@ -10879,7 +10865,7 @@ wheels = [
 [[package]]
 name = "tpu-inference"
 version = "0.23.0"
-source = { git = "https://github.com/RohithKuditipudi/tpu-inference.git?rev=d00748dbe8db8460640d88fb9631dbee9b5185b5#d00748dbe8db8460640d88fb9631dbee9b5185b5" }
+source = { git = "https://github.com/marin-community/tpu-inference.git?rev=734d2842aa883c8f7bcff87a4b437a366f3adbc0#734d2842aa883c8f7bcff87a4b437a366f3adbc0" }
 dependencies = [
     { name = "absl-py" },
     { name = "fastapi", extra = ["standard"], marker = "extra == 'extra-10-marin-core-vllm' or (extra == 'extra-10-marin-core-cpu' and extra == 'extra-10-marin-core-gpu') or (extra == 'extra-10-marin-core-cpu' and extra == 'extra-14-marin-levanter-gpu') or (extra == 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu') or (extra == 'extra-10-marin-core-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra == 'extra-10-marin-core-gpu' and extra == 'group-10-marin-fray-fray-tpu-test') or (extra == 'extra-10-marin-core-tpu' and extra == 'extra-14-marin-levanter-gpu') or (extra == 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra == 'extra-14-marin-levanter-gpu' and extra == 'group-10-marin-fray-fray-tpu-test')" },
@@ -11308,8 +11294,8 @@ wheels = [
 
 [[package]]
 name = "vllm"
-version = "0.19.2rc1.dev1688+ge0ce7b17f.tpu"
-source = { git = "https://github.com/RohithKuditipudi/vllm.git?rev=e0ce7b17fcce3c6426162a9763cf12f394fe1db8#e0ce7b17fcce3c6426162a9763cf12f394fe1db8" }
+version = "0.20.1rc1.dev1460+g912fb118c.tpu"
+source = { git = "https://github.com/marin-community/vllm.git?rev=912fb118c18c2eb8143a188ddb31838202bd8521#912fb118c18c2eb8143a188ddb31838202bd8521" }
 dependencies = [
     { name = "aiohttp" },
     { name = "anthropic" },
