@@ -256,8 +256,11 @@ def moe_mlp(
     x_spec = _value_spec_or_default(x, batch_spec, replace_replicated=True)
     selected_experts_spec = _value_spec_or_default(selected_experts, batch_spec, replace_replicated=True)
     combine_weights_spec = _value_spec_or_default(combine_weights, batch_spec, replace_replicated=True)
-    w_up_gate_spec = _value_spec_or_default(w_up_gate, P(*(None for _ in range(w_up_gate.ndim))))
-    w_down_spec = _value_spec_or_default(w_down, P(*(None for _ in range(w_down.ndim))))
+    # No-EP kernels need every expert's complete feature dimensions. Parameters
+    # remain FSDP-sharded outside this boundary; reshard materializes the full
+    # weights for local compute and reverse mode reduces gradients back.
+    w_up_gate_spec = P(*(None for _ in range(w_up_gate.ndim)))
+    w_down_spec = P(*(None for _ in range(w_down.ndim)))
 
     x = _reshard_for_shard_map(x, mesh, x_spec)
     selected_experts = _reshard_for_shard_map(selected_experts, mesh, selected_experts_spec)

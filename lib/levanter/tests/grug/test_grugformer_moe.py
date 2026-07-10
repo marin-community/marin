@@ -437,6 +437,56 @@ def test_moe_expert_mlp_init_uses_logical_weight_pspecs():
     assert mlp.w_down.sharding.spec == P(None, "model", "data")
 
 
+def test_moe_no_ep_fsdp_weights_match_unsharded_reference():
+    x, selected_experts, combine_weights, w_up_gate, w_down = _make_inputs(
+        key=jax.random.key(32),
+        tokens=16 * len(jax.devices()),
+        hidden_dim=16,
+        intermediate_dim=24,
+        num_experts=4,
+        topk=2,
+    )
+
+    def run(x, selected_experts, combine_weights, w_up_gate, w_down, mesh):
+        return moe_mlp(
+            x,
+            selected_experts,
+            combine_weights,
+            w_up_gate,
+            w_down,
+            activation=ActivationFunctionEnum.silu,
+            implementation="scatter",
+            mesh=mesh,
+        )
+
+    reference = jax.jit(
+        lambda x, selected_experts, combine_weights, w_up_gate, w_down: run(
+            x, selected_experts, combine_weights, w_up_gate, w_down, None
+        )
+    )(x, selected_experts, combine_weights, w_up_gate, w_down)
+
+    mesh = _make_dense_mesh()
+    with jax.set_mesh(mesh):
+        sharded_x = jax.device_put(x, NamedSharding(mesh, P("data", None)))
+        sharded_selected_experts = jax.device_put(selected_experts, NamedSharding(mesh, P("data", None)))
+        sharded_combine_weights = jax.device_put(combine_weights, NamedSharding(mesh, P("data", None)))
+        sharded_w_up_gate = jax.device_put(w_up_gate, NamedSharding(mesh, P(None, "data", None)))
+        sharded_w_down = jax.device_put(w_down, NamedSharding(mesh, P(None, None, "data")))
+        actual = jax.jit(
+            lambda x, selected_experts, combine_weights, w_up_gate, w_down: run(
+                x, selected_experts, combine_weights, w_up_gate, w_down, mesh
+            )
+        )(
+            sharded_x,
+            sharded_selected_experts,
+            sharded_combine_weights,
+            sharded_w_up_gate,
+            sharded_w_down,
+        )
+
+    np.testing.assert_allclose(np.asarray(actual), np.asarray(reference), rtol=1e-5, atol=1e-5)
+
+
 @pytest.mark.parametrize("implementation", ["ring", "ragged_all_to_all"])
 def test_moe_ep_path_lowers_on_abstract_mesh(implementation: MoeImplementation):
     mesh = _make_abstract_moe_mesh(data=2, expert=2, model=1)
