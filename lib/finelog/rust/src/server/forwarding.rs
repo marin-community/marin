@@ -764,10 +764,13 @@ mod tests {
         .unwrap()
     }
 
-    /// What a hub finelog runs: a bearer is verified against the sender's public key,
-    /// and a bearerless local client (this test, reading the result back) falls through
-    /// to the loopback rule. Jwt sits first so a token is never bypassed by the network
-    /// rule -- in production the sender is off-VPC and only the token admits it.
+    /// A hub that verifies a bearer against the sending cluster's public key, and lets a
+    /// bearerless local client (this test, reading the result back) fall through to the
+    /// loopback rule.
+    ///
+    /// Jwt sits first, inverting the cidr-first order deployed hubs use. Both ends are on
+    /// loopback here, so a cidr-first hub would admit every push on the network rule and
+    /// never reach the bearer that names the sending cluster.
     fn hub_policy(cluster: &str) -> AuthPolicy {
         AuthPolicy::parse(
             &serde_json::json!([
@@ -779,11 +782,8 @@ mod tests {
         .unwrap()
     }
 
-    /// A source store and the hub it forwards to, each served over a real socket.
-    ///
-    /// The hub checks jwt before cidr, inverting the order a deployed hub uses. Both ends
-    /// sit on loopback here, so a cidr-first hub would admit every push on the network
-    /// layer and never reach the bearer that names the sending cluster.
+    /// A source store and the hub it forwards to, each served over a real socket: the hub
+    /// under [`hub_policy`], the source open to loopback.
     struct Fixture {
         source: Arc<Store>,
         source_client: LogServiceClient<TestTransport>,
