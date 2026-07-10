@@ -1,4 +1,15 @@
+---
+topic: Hopper source-push MGPU MoE forward and semantic fusion
+issue: https://github.com/marin-community/marin/issues/6597
+description: Experiments, failures, benchmarks, and decisions for the Hopper expert-parallel MoE MLP path.
+author: David Hall
+---
+
 # 6597 MoE MGPU Forward Logbook
+
+Coordinating issue: https://github.com/marin-community/marin/issues/6597
+
+Prior logbook: `.agents/logbooks/6597-moe-mgpu.md`
 
 ## 2026-07-09 15:50 PDT - rno2a blockstore-iota benchmark reached direct-return iota layout blocker
 
