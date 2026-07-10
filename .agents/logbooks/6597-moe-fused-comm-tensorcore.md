@@ -1339,6 +1339,19 @@ expert-major dZ13/W13 directly, avoiding the diagnostic pair scatter. Nine
 focused kernel/harness tests and scoped pre-commit including Pyrefly pass.
 Target H100 correctness and timing remain required.
 
+## 2026-07-10 FUSED-MOE-047 - Producer-first coarse W2 return experiment
+
+The rolling W2-return protocol is replaced with the earlier coarse-readiness
+shape to isolate residency ordering. Program IDs 0 through 159 are direct-peer
+W2 producers indexed by `(source ordinal, hidden tile)`; IDs 160 through 191
+are source combine consumers. Producers scan live entries, write accumulator
+fragments directly to compact peer `return_y`, and emit one readiness signal.
+Combine performs only 256 coarse waits before fp32 top-k accumulation.
+
+This removes rolling outbox/generation metadata and ensures blocked combine
+CTAs cannot occupy the first residency wave. Four dedicated tests and scoped
+pre-commit including Pyrefly pass. Target H100 timing remains required.
+
 ## 2026-07-10 FUSED-MOE-046 - Hierarchical semantic permute plus W13 target run
 
 Observation-only babysitting began for
