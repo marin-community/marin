@@ -430,8 +430,6 @@ def _source_push_backward_return_compact_pallas_mgpu(
     d_route_block: Float[Array, "Dst E C"],
     route_indices: SourcePushBackwardCompactRouteIndices | None,
     *,
-    route_rows: _RouteRows | None = None,
-    route_shape: tuple[int, int, int] | None = None,
     block_sizes: SourcePushBackwardReturnPallasBlockSizes | None = None,
     interpret: bool = False,
     mesh: Mesh | None = None,

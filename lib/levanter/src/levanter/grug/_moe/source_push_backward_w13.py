@@ -247,14 +247,10 @@ def source_push_w13_backward_diagnostic_component(implementation: str) -> str | 
 
 
 def source_push_w13_backward_is_diagnostic_only(implementation: str) -> bool:
-    """Return whether an implementation is a benchmark-only partial W13 diagnostic."""
-
     return source_push_w13_backward_diagnostic_component(implementation) is not None
 
 
 def source_push_w13_backward_uses_local_dw13_default_block_sizes(implementation: str) -> bool:
-    """Return whether a diagnostic should use the local DW13 default tile."""
-
     return implementation in SOURCE_PUSH_W13_BACKWARD_LOCAL_DW13_TILE_DIAGNOSTICS
 
 

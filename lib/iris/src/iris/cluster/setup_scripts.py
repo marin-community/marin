@@ -142,8 +142,9 @@ def cuda_toolchain_setup_script() -> str:
 
     Appended to a GPU job's setup so Mosaic GPU kernels compile: it puts the
     ``jax[cuda13]`` toolchain (``ptxas``/``nvlink``) on ``PATH`` by symlinking it
-    into the venv's ``bin``, and stages ``libdevice.10.bc`` where XLA looks, with no
-    run-phase changes. A no-op when the venv carries no CUDA toolchain.
+    into the venv's ``bin``, stages ``libdevice.10.bc`` where XLA looks, and
+    restores the CUDA 13 cuDNN package after CUDA toolchain staging. A no-op
+    when the venv carries no CUDA toolchain.
     """
     return rf"""set -e
 cuda_bin=""

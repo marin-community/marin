@@ -863,7 +863,6 @@ def _source_push_backward_dy_to_expert_major_source_push_pallas_local_call(
     output_shape = jax.ShapeDtypeStruct(zero.shape, zero.dtype)
     kernel = _make_source_push_backward_dy_route_expert_major_source_push_kernel(
         ep_size=ep_size,
-        block_m=block_m,
         row_block=row_block,
         hidden_block=hidden_block,
     )
@@ -871,8 +870,6 @@ def _source_push_backward_dy_to_expert_major_source_push_pallas_local_call(
         token_ids,
         send_meta,
         output_shape,
-        hidden_block=hidden_block,
-        row_block=row_block,
     )
     compiler_params = mgpu.CompilerParams(lowering_semantics=mgpu.LoweringSemantics.Lane)
     gmem_spec = pl.BlockSpec(memory_space=mgpu.GMEM)
@@ -905,7 +902,6 @@ def _source_push_backward_dy_to_h_rows_source_push_pallas_local_call(
     output_shape = jax.ShapeDtypeStruct(zero.shape, zero.dtype)
     kernel = _make_source_push_backward_dy_route_source_push_kernel(
         ep_size=ep_size,
-        block_m=block_m,
         row_block=row_block,
         hidden_block=hidden_block,
     )
@@ -913,8 +909,6 @@ def _source_push_backward_dy_to_h_rows_source_push_pallas_local_call(
         token_ids,
         send_meta,
         output_shape,
-        hidden_block=hidden_block,
-        row_block=row_block,
     )
     compiler_params = mgpu.CompilerParams(lowering_semantics=mgpu.LoweringSemantics.Lane)
     return pl.pallas_call(
@@ -931,7 +925,6 @@ def _source_push_backward_dy_to_h_rows_source_push_pallas_local_call(
 def _make_source_push_backward_dy_route_source_push_kernel(
     *,
     ep_size: int,
-    block_m: int,
     row_block: int,
     hidden_block: int,
 ):
@@ -997,7 +990,6 @@ def _make_source_push_backward_dy_route_source_push_kernel(
 def _make_source_push_backward_dy_route_expert_major_source_push_kernel(
     *,
     ep_size: int,
-    block_m: int,
     row_block: int,
     hidden_block: int,
 ):
@@ -1109,9 +1101,6 @@ def _source_push_backward_dy_source_push_pallas_cost_estimate(
     token_ids: Array,
     send_meta: Array,
     output_shape: jax.ShapeDtypeStruct,
-    *,
-    hidden_block: int,
-    row_block: int,
 ) -> pl.CostEstimate:
     written_bytes = int(np.prod(output_shape.shape)) * jnp.dtype(output_shape.dtype).itemsize
     token_bytes = int(np.prod(token_ids.shape)) * token_ids.dtype.itemsize

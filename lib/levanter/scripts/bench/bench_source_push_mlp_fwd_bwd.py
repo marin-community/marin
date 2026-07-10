@@ -1761,7 +1761,6 @@ def _run_source_push_forward_compact_h_raw_token_decomposed(
         use_exact_expert_major=host_inputs.use_exact_expert_major,
     )
     prepare_timing = _time_source_push_raw_token_compact_h_input_prepare(
-        config,
         mesh=mesh,
         host_inputs=host_inputs,
         route_table=route_table,
@@ -5606,7 +5605,6 @@ def _time_source_push_raw_token_input_prepare(
 
 
 def _time_source_push_raw_token_compact_h_input_prepare(
-    config: PushInboxConfig,
     *,
     mesh: Mesh,
     host_inputs,
