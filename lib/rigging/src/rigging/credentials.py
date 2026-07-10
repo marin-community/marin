@@ -14,7 +14,7 @@ nothing for ordinary user / CLI traffic. A client may set ``$MARIN_CLUSTER_TOKEN
 to inject an explicit bearer (e.g. a worker JWT) for CI / headless runs.
 
 IAP edge-token resolution (the ``Proxy-Authorization`` bearer, IAP clusters only)
-is the sole per-request auth. Precedence (see :func:`_edge_provider`): the cached
+is the sole per-request auth. Precedence (see :func:`edge_provider`): the cached
 desktop-OAuth refresh token (the human path), otherwise an ambient service-account
 ID token — a key, GCE metadata, or an impersonated ADC (the in-cluster / CI path).
 The machine path mints for a dedicated programmatic audience if one is configured,
@@ -105,10 +105,13 @@ def _desktop_client(auth: ClusterAuth) -> OAuthClient:
     return MARIN_DESKTOP_OAUTH_CLIENT
 
 
-def _edge_provider(cluster: str, auth: ClusterAuth) -> TokenProvider | None:
-    """Resolve the IAP edge provider.
+def edge_provider(cluster: str, auth: ClusterAuth) -> TokenProvider | None:
+    """Resolve the IAP edge provider (construction only; no network).
 
     Precedence: a cached human login, then ambient service-account credentials.
+    Returns None for a non-IAP cluster. The provider only touches the network when
+    its ``get_token`` is called, so callers wanting the caller's live identity
+    (e.g. a login-status dump) mint through the very provider a real RPC uses.
     """
     if auth.provider is not AuthProvider.IAP or auth.iap is None:
         return None
@@ -143,5 +146,5 @@ def credentials_for(
     override = os.environ.get(token_env)
     return ClientCredentials(
         token_provider=StaticTokenProvider(override) if override else None,
-        iap_provider=_edge_provider(cluster, auth),
+        iap_provider=edge_provider(cluster, auth),
     )

@@ -14,6 +14,7 @@ from rigging.auth import MARIN_DESKTOP_OAUTH_CLIENT, IapCredentialsUnavailable, 
 from rigging.config_discovery import resolve_cluster_config
 from rigging.credential_store import CredentialRecord, save_credentials
 from rigging.log_setup import configure_logging
+from rigging.login_status import EMAIL_METADATA_KEY, email_from_id_token
 
 from iris.cli.connect import (
     IRIS_CLUSTER_CONFIG_DIRS,
@@ -159,7 +160,7 @@ def login(ctx, headless):
     else:
         click.echo("Opening browser to authenticate with Google IAP...")
     try:
-        _id_token, refresh_token = run_iap_desktop_login(client_id, client_secret, headless=headless)
+        id_token, refresh_token = run_iap_desktop_login(client_id, client_secret, headless=headless)
     except Exception as e:
         raise click.ClickException(
             f"IAP authentication failed: {e}\n"
@@ -169,14 +170,21 @@ def login(ctx, headless):
             "See lib/iris/docs/iap-gclb.md."
         ) from e
 
+    # Stash the signed-in email so `iris whoami` can name the login even when its
+    # offline fallback can't re-mint a token. The refresh token, not this, is the
+    # credential; the email is a non-secret annotation for display.
+    email = email_from_id_token(id_token)
+    metadata = {EMAIL_METADATA_KEY: email} if email else {}
     save_credentials(
         CredentialRecord(
             cluster=cluster_name,
             endpoint=controller_url,
             edge_refresh_token=refresh_token,
+            metadata=metadata,
         )
     )
-    click.echo(f"IAP edge credentials cached for cluster '{cluster_name}'.")
+    signed_in_as = f" (signed in as {email})" if email else ""
+    click.echo(f"IAP edge credentials cached for cluster '{cluster_name}'{signed_in_as}.")
     click.echo("The controller authenticates each request via IAP; no cluster token is minted.")
 
 
@@ -264,6 +272,7 @@ from iris.cli.process_status import register_process_status_commands  # noqa: E4
 from iris.cli.query import query_cmd  # noqa: E402
 from iris.cli.rpc import register_rpc_commands  # noqa: E402
 from iris.cli.task import task  # noqa: E402
+from iris.cli.whoami import whoami  # noqa: E402
 
 iris.add_command(actor_cmd)
 iris.add_command(cluster)
@@ -272,6 +281,7 @@ iris.add_command(endpoints)
 iris.add_command(job)
 iris.add_command(task)
 iris.add_command(query_cmd)
+iris.add_command(whoami)
 register_rpc_commands(iris)
 register_process_status_commands(iris)
 

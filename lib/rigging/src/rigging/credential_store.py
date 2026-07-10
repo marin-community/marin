@@ -66,6 +66,18 @@ def credential_path(cluster: str) -> Path:
     return _CREDENTIALS_DIR / f"{cluster}.json"
 
 
+def list_cached_clusters() -> list[str]:
+    """Names of every cluster with a cached credential file, sorted.
+
+    Reads only filenames (never the secrets), so a login-status dump can enumerate
+    clusters the user has authenticated to even when no config for them is on disk.
+    Skips the dotfile temp files ``save_credentials`` writes mid-flight.
+    """
+    if not _CREDENTIALS_DIR.is_dir():
+        return []
+    return sorted(p.stem for p in _CREDENTIALS_DIR.glob("*.json") if not p.name.startswith("."))
+
+
 def load_credentials(cluster: str) -> CredentialRecord | None:
     """Load ``cluster``'s credentials, or None if the user has not logged in."""
     path = credential_path(cluster)
