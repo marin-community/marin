@@ -22,16 +22,19 @@ config is `meanmaxmin` pooling, `pool_window=64`, `embed_dim=256`,
 
 ## Files
 
-Core library:
+Core:
 
-- [`data.py`](data.py) — tokenize the oracle-scored parquets and pack dense padded arrays + a compact vocab.
 - [`model.py`](model.py) — the pooled `FastTransformer` regressor (the deliverable).
+- [`data.py`](data.py) — tokenize the oracle-scored parquets and pack dense padded arrays + a compact vocab.
 - [`train.py`](train.py) — `fit` / `train_regressor` (MSE-on-sigmoid, early stopping, data-parallel across chips) and the holdout metrics.
+- [`scorer.py`](scorer.py) — `PooledScorer`: load a trained model + vocab remap and score arbitrary text.
+- [`score.py`](score.py) — production batch-scoring step (one iris/zephyr job per source): whole-doc bme scoring + calibration → `source`/`id`/`score`/`quality_bucket`.
 
-Deliverable drivers:
+Ops ([`ops/`](ops/)) — non-core tooling:
 
-- [`sweep.py`](sweep.py) — architecture grid that selected the winning config.
-- [`eval_best.py`](eval_best.py) — train the winner and report holdout metrics, a val-calibrated operating point, and a per-source breakdown.
+- [`ops/report.py`](ops/report.py) — render the standalone single-page quality-score debugging report (fetches spot-check text from the sample).
+- [`ops/sweep.py`](ops/sweep.py) — architecture grid that selected the winning config.
+- [`ops/eval_best.py`](ops/eval_best.py) — train the winner and report holdout metrics, a val-calibrated operating point, and a per-source breakdown.
 
 Pretraining experiments ([`pretrain/`](pretrain/)) — attempts to beat the plateau with more (cheaper) labels:
 

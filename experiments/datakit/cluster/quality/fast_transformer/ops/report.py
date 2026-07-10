@@ -18,7 +18,7 @@ hosted anywhere -- showing:
 
 Usage::
 
-    python -m experiments.datakit.cluster.quality.fast_transformer.report \\
+    python -m experiments.datakit.cluster.quality.fast_transformer.ops.report \\
         --scored        s3://.../quality/scored_1t \\
         --sample-prefix s3://.../datakit/sample_1t_733c8c5c \\
         --out report.html --scorer "pooled_junkgate2 (bme)" --sample "sample_1t"
