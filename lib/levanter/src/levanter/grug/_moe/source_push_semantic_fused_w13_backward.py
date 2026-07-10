@@ -686,7 +686,7 @@ def _make_source_push_semantic_fused_w13_backward_kernel(
                             pl.ds(hidden_tile * config.block_hidden, config.block_hidden),
                             pl.ds(output_tile * config.block_output, config.block_output),
                         )
-                        dw_ref[dw_index] = dw_ref[dw_index] + acc_ref[...]
+                        mgpu.atomic_add(dw_ref.at[dw_index], acc_ref[...])
 
                     pl.run_scoped(
                         _acc_scope,

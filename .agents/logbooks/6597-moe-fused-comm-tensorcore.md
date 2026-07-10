@@ -392,3 +392,48 @@ scoped pre-commit: passed (Ruff, Black, license, pyrefly, AST, whitespace)
 This is a local correctness milestone, not H100 correctness or performance
 evidence. The next gate is one compile-first H100 target run for W2 return, W2
 backward, and W13 backward before custom-VJP integration.
+
+## 2026-07-10 FUSED-MOE-007 - Backward compile-first H100 gate
+
+Job `/dlwh/bench-semantic-fused-backward-compile-20260710-1425` ran on
+`cw-rno2a` at commit `8e3dd211f3` and reached terminal `JOB_STATE_SUCCEEDED`.
+Its single task exited 0 after 2 minutes 51.06 seconds, with no Iris failures or
+preemptions. No retry was launched. The successful job state means the benchmark
+driver completed; every requested benchmark mode itself returned an error row.
+
+No mode reached compilation or timing. The per-mode result is:
+
+| Mode | Result | First actionable source location |
+| --- | --- | --- |
+| `semantic_fused_w2_return_pallas` | Mosaic GPU could not infer the output layout of an iota | `source_push_semantic_fused_w2_return.py:521`, `jnp.arange(config.compute_m, dtype=jnp.int32)[:, None]`; apply an immediate `plgpu.layout_cast` |
+| `semantic_fused_w2_backward_pallas` | XLA GEMM autotuning exhausted memory while allocating 3.14 GiB | `bench_source_push_semantic_plan.py:1106` calls the reference path, which reaches `source_push_semantic_fused_w2_return.py:238` `jnp.einsum` |
+| `semantic_fused_w13_backward_pallas` | `Incompatible FragmentedArray layouts` | `source_push_semantic_fused_w13_backward.py:689`, adding `dw_ref[dw_index]` and `acc_ref[...]` |
+
+The complete unmodified Iris output is captured in
+`scratch/20260710-1425_bench-semantic-fused-backward-compile.raw.log`. The six
+benchmark JSON lines total 32,719 bytes because each error row embeds its full
+traceback. This compact projection preserves the timing and error fields in the
+logbook:
+
+```jsonl
+{"row_type":"error","mode":"semantic_fused_w2_return_pallas","compile_time":null,"lower_compile_time":null,"first_call_time":null,"first_run_time":null,"steady_state_time":null,"error_type":"RuntimeError","error_message":"Failed to infer the output layout of the iota. Please apply plgpu.layout_cast to its output right after its creation.","repeat_rows":null,"error_rows":null,"output_checksum":null,"rounded_tflops_per_rank":null}
+{"row_type":"summary","mode":"semantic_fused_w2_return_pallas","compile_time":null,"lower_compile_time":null,"first_call_time":null,"first_run_time":null,"steady_state_time":null,"error_type":null,"error_message":null,"error":"all repeats failed","repeat_rows":0,"error_rows":1,"output_checksum":null,"rounded_tflops_per_rank":null}
+{"row_type":"error","mode":"semantic_fused_w2_backward_pallas","compile_time":null,"lower_compile_time":null,"first_call_time":null,"first_run_time":null,"steady_state_time":null,"error_type":"JaxRuntimeError","error_message":"RESOURCE_EXHAUSTED: Autotuning failed for the f32[256,4608,2560] Triton GEMM fusion: out of memory while trying to allocate 3.14GiB.","repeat_rows":null,"error_rows":null,"output_checksum":null,"rounded_tflops_per_rank":null}
+{"row_type":"summary","mode":"semantic_fused_w2_backward_pallas","compile_time":null,"lower_compile_time":null,"first_call_time":null,"first_run_time":null,"steady_state_time":null,"error_type":null,"error_message":null,"error":"all repeats failed","repeat_rows":0,"error_rows":1,"output_checksum":null,"rounded_tflops_per_rank":null}
+{"row_type":"error","mode":"semantic_fused_w13_backward_pallas","compile_time":null,"lower_compile_time":null,"first_call_time":null,"first_run_time":null,"steady_state_time":null,"error_type":"ValueError","error_message":"Incompatible FragmentedArray layouts","repeat_rows":null,"error_rows":null,"output_checksum":null,"rounded_tflops_per_rank":null}
+{"row_type":"summary","mode":"semantic_fused_w13_backward_pallas","compile_time":null,"lower_compile_time":null,"first_call_time":null,"first_run_time":null,"steady_state_time":null,"error_type":null,"error_message":null,"error":"all repeats failed","repeat_rows":0,"error_rows":1,"output_checksum":null,"rounded_tflops_per_rank":null}
+```
+
+The first actionable traceback begins:
+
+```text
+File "/app/lib/levanter/src/levanter/grug/_moe/source_push_semantic_fused_w2_return.py", line 521, in _intermediate_loop
+  row = jnp.arange(config.compute_m, dtype=jnp.int32)[:, None]
+RuntimeError: Failed to infer the output layout of the iota. Please apply plgpu.layout_cast to its output right after its creation.
+```
+
+The W2-backward reference-input construction also produced repeated failed
+12.50 GiB allocator attempts before GEMM autotuning failed. This run is a
+meaningful negative compile gate: fix the two Mosaic layout errors and reduce
+or restructure the W2-backward reference-input memory requirement before
+resubmitting the same target shape.

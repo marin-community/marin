@@ -1094,19 +1094,17 @@ def _make_semantic_fused_w2_backward_inputs(
         plan,
         rows_per_expert_capacity=rows_per_expert_capacity,
     )
-    intermediate_dim = inputs.w_down.shape[-2]
-    gate = z_expert[..., :intermediate_dim].astype(jnp.float32)
-    up = z_expert[..., intermediate_dim:].astype(jnp.float32)
-    h_expert = (jax.nn.silu(gate) * up).astype(jnp.bfloat16)
-    metadata = source_push_semantic_fused_w2_return.source_push_semantic_fused_w2_return_metadata_jax(
-        plan,
-        rows_per_expert_capacity=rows_per_expert_capacity,
-        entries_per_dst=entries_per_dst,
-    )
-    _y, return_y = source_push_semantic_fused_w2_return.source_push_semantic_fused_w2_return_reference_jax(
-        z_expert.astype(jnp.bfloat16),
-        inputs.w_down.astype(jnp.bfloat16),
-        metadata,
+    h_expert = z_expert[..., : inputs.w_down.shape[-2]].astype(jnp.bfloat16)
+    return_y = jnp.full(
+        (
+            args.ep_size,
+            args.ep_size,
+            entries_per_dst,
+            source_push_semantic_fused_w2_backward.SourcePushSemanticFusedW2BackwardConfig().compute_m,
+            args.hidden_dim,
+        ),
+        0.125,
+        dtype=jnp.bfloat16,
     )
     return SemanticFusedW2BackwardBenchInputs(
         dy=inputs.dy.astype(jnp.bfloat16),

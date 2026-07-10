@@ -518,7 +518,14 @@ def _make_source_push_semantic_fused_w2_return_kernel(
                                         pl.ds(expert_row_start, config.compute_m),
                                         pl.ds(intermediate_dim + intermediate_start, config.block_k),
                                     ].astype(jnp.float32)
-                                    row = jnp.arange(config.compute_m, dtype=jnp.int32)[:, None]
+                                    row = mgpu.layout_cast(
+                                        lax.broadcasted_iota(
+                                            jnp.int32,
+                                            (config.compute_m, config.block_k),
+                                            0,
+                                        ),
+                                        mgpu.Layout.WGMMA,
+                                    )
                                     h_smem[:, :] = jnp.where(
                                         row < valid_rows,
                                         jax.nn.silu(gate) * up,
