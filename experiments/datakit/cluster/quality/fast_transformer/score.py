@@ -39,10 +39,11 @@ import tempfile
 from collections.abc import Iterator
 
 import numpy as np
-from fray import ResourceConfig
+from fray.cluster import ResourceConfig
 from rigging.filesystem import StoragePath, open_url
 from rigging.log_setup import configure_logging
-from zephyr import Dataset, ZephyrContext
+from zephyr.dataset import Dataset
+from zephyr.execution import ZephyrContext
 from zephyr.readers import load_file
 from zephyr.runners import InlineRunner
 
