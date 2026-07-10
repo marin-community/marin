@@ -61,10 +61,11 @@ def make_hold_selector(period: int) -> SelectTokens:
         b_topk: list[dict[str, Any]],
         *,
         rng: random.Random,
+        request_index: int,
     ) -> int | tuple[list[int], list[int]]:
         nonlocal calls
         calls += 1
-        token = select_top_rank(a_topk, b_topk, rng=rng)
+        token = select_top_rank(a_topk, b_topk, rng=rng, request_index=request_index)
         if calls % period:
             return token
         return [token, token], [token, token]

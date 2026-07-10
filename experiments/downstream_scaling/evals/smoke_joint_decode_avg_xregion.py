@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Smoke test for IID cross-region Zephyr completion on a small GSM8K slice."""
+"""Smoke test for joint-decode-avg cross-region Zephyr completion on GSM8K."""
 
 from __future__ import annotations
 
@@ -13,17 +13,18 @@ from dataclasses import dataclass, replace
 
 import fsspec
 from fray.cluster import ANY_REGION, ResourceConfig, get_tpu_topology
-from rigging.filesystem import REGION_TO_DATA_BUCKET
+from rigging.filesystem import data_config
 from rigging.log_setup import configure_logging
 from thalas.execution.executor import ExecutorStep, executor_main, output_path_of
 from thalas.execution.remote import remote
 from thalas.execution.types import this_output_path, versioned
 
-from experiments.downstream_scaling.evals.algorithms.iid_xregion import (
-    IIDCompletionAlgorithm,
-    IIDConfig,
-    IIDExecutionConfig,
-    IIDSamplingConfig,
+from experiments.downstream_scaling.evals.algorithms.joint_decode_avg_xregion import (
+    JointDecodeCompletionAlgorithm,
+    JointDecodeConfig,
+    JointDecodeExecutionConfig,
+    JointDecodeModelConfig,
+    JointDecodeSamplingConfig,
 )
 from experiments.downstream_scaling.evals.framework.core import make_eval_step
 from experiments.downstream_scaling.evals.framework.schema import COMPLETIONS_FILENAME, read_completion_rows
@@ -34,24 +35,28 @@ from experiments.downstream_scaling.models.delphi import DELPHI_HF_DOWNLOADS
 
 logger = logging.getLogger(__name__)
 
-MODEL_KEY = "3e20"
-N_PROBLEMS = 128
-N_SAMPLES = 8
+MODEL_KEY = "3e18"
+N_PROBLEMS = 64
+N_SAMPLES = 4
 NUM_WORKERS = 2
-CHUNK_SIZE = 32
-TENSOR_PARALLEL_SIZE = 1
+CHUNK_SIZE = 16
 TPU_TYPES: tuple[str, ...] = ("v4-8", "v5p-8", "v6e-4", "v5litepod-4", "v6e-8", "v5litepod-8")
 
-TEMPERATURE = 0.6
-TOP_P = 1.0
-TOP_K = 1000
+BARRIER_TIMEOUT_S = 1200.0
+HEARTBEAT_TIMEOUT = 120.0
+POLL_BACKOFF = 10.0
+
 MAX_TOKENS = 512
 SEED = 42
 STOP_TOKENS = ("Question:", "</s>", "<|im_end|>")
-HEARTBEAT_TIMEOUT = 120.0
 
 NUM_FEWSHOT = 5
 FEWSHOT_SEED = 1234
+
+TEMPERATURE = 0.4
+TOP_K_A = 16
+TOP_K_B = 16
+ADVISOR_WEIGHT = 0.5
 
 DEFAULT_PRESEED_REGIONS: tuple[str, ...] = ("us-central1",)
 WORKER_REGIONS_ANY = "any"
@@ -81,24 +86,31 @@ def make_algorithm(
     chunk_size: int,
     n_samples: int,
     heartbeat_timeout: float,
-    tensor_parallel_size: int,
-) -> IIDCompletionAlgorithm:
-    return IIDCompletionAlgorithm(
-        config=IIDConfig(
-            sampling=IIDSamplingConfig(
+    poll_backoff: float,
+    advisor_model_path,
+) -> JointDecodeCompletionAlgorithm:
+    return JointDecodeCompletionAlgorithm(
+        config=JointDecodeConfig(
+            sampling=JointDecodeSamplingConfig(
                 n_samples=n_samples,
-                temperature=TEMPERATURE,
-                top_p=TOP_P,
-                top_k=TOP_K,
                 max_tokens=MAX_TOKENS,
+                top_k_a=TOP_K_A,
+                top_k_b=TOP_K_B,
                 seed=SEED,
+                temperature=TEMPERATURE,
+                advisor_weight=ADVISOR_WEIGHT,
                 stop=STOP_TOKENS,
             ),
-            execution=IIDExecutionConfig(
+            advisor_model_path=advisor_model_path,
+            decoder_model=JointDecodeModelConfig(apply_rpa_block_size_patch=True),
+            advisor_model=JointDecodeModelConfig(apply_rpa_block_size_patch=True),
+            execution=JointDecodeExecutionConfig(
                 worker_pools=worker_pools,
                 chunk_size=chunk_size,
+                microbatch_size=None,
                 heartbeat_timeout=heartbeat_timeout,
-                tensor_parallel_size=tensor_parallel_size,
+                poll_backoff=poll_backoff,
+                barrier_timeout_s=BARRIER_TIMEOUT_S,
             ),
         )
     )
@@ -119,7 +131,7 @@ def validate_completions(config: ValidateCompletionsConfig) -> None:
         completions = row["completions"]
         if len(completions) != config.expected_completions_per_row:
             raise ValueError(
-                f"Expected {config.expected_completions_per_row} completions for {row_id!r}, " f"got {len(completions)}"
+                f"Expected {config.expected_completions_per_row} completions for {row_id!r}, got {len(completions)}"
             )
 
     path = os.path.join(config.output_path, "validation.SUCCESS")
@@ -155,37 +167,48 @@ def build_run_steps(
     n_problems: int,
     n_samples: int,
     heartbeat_timeout: float,
-    tensor_parallel_size: int,
+    poll_backoff: float,
 ) -> list[ExecutorStep]:
     if model_key not in DELPHI_HF_DOWNLOADS:
         raise ValueError(f"Unknown Delphi model key {model_key!r}; known: {sorted(DELPHI_HF_DOWNLOADS)}")
 
     pool_slug = "_".join(pool.pool_id for pool in worker_pools)
+    model_path = output_path_of(DELPHI_HF_DOWNLOADS[model_key])
     completions = make_eval_step(
         name=(
-            f"downstream_scaling/evals/smoke/iid_xregion_per_chip/" f"{model_key}/tp={tensor_parallel_size}/{pool_slug}"
+            f"downstream_scaling/evals/smoke/joint_decode_avg_xregion_per_pair/"
+            f"advisor_weight{round(ADVISOR_WEIGHT * 100):03d}/{model_key}/{pool_slug}"
         ),
-        model_path=output_path_of(DELPHI_HF_DOWNLOADS[model_key]),
+        model_path=model_path,
         task=make_task(n_problems),
         alg=make_algorithm(
             worker_pools=worker_pools,
             chunk_size=chunk_size,
             n_samples=n_samples,
             heartbeat_timeout=heartbeat_timeout,
-            tensor_parallel_size=tensor_parallel_size,
+            poll_backoff=poll_backoff,
+            advisor_model_path=model_path,
         ),
         skip_grades=True,
     )
     validation = make_validation_step(
         name=(
-            f"downstream_scaling/evals/smoke/iid_xregion_per_chip/"
-            f"{model_key}/tp={tensor_parallel_size}/{pool_slug}/validate"
+            f"downstream_scaling/evals/smoke/joint_decode_avg_xregion_per_pair/"
+            f"advisor_weight{round(ADVISOR_WEIGHT * 100):03d}/{model_key}/{pool_slug}/validate"
         ),
         completions_path=output_path_of(completions) / COMPLETIONS_FILENAME,
         n_problems=n_problems,
         n_samples=n_samples,
     )
     return [validation]
+
+
+def _regional_download_step(base_step: ExecutorStep, *, name: str, region: str) -> ExecutorStep:
+    if base_step.override_output_path is None:
+        raise ValueError(f"Download step {base_step.name!r} does not define a stable relative output path")
+    bucket = data_config().region_buckets[region]
+    regional_step = replace(base_step, name=name)
+    return regional_step.with_output_path(f"gs://{bucket.name}/{base_step.override_output_path}")
 
 
 def build_preseed_steps(
@@ -197,25 +220,22 @@ def build_preseed_steps(
         raise ValueError(f"Unknown Delphi model key {model_key!r}; known: {sorted(DELPHI_HF_DOWNLOADS)}")
     _validate_regions(regions, name="preseed regions")
 
-    base_step = DELPHI_HF_DOWNLOADS[model_key]
-    if base_step.override_output_path is None:
-        raise ValueError(f"Delphi download step for {model_key!r} does not define a stable relative output path")
-
     steps = []
     for region in regions:
-        bucket = REGION_TO_DATA_BUCKET[region]
-        regional_step = replace(
-            base_step,
-            name=f"downstream_scaling/evals/smoke/iid_xregion/preseed/{model_key}/{region}",
+        steps.append(
+            _regional_download_step(
+                DELPHI_HF_DOWNLOADS[model_key],
+                name=f"downstream_scaling/evals/smoke/joint_decode_avg_xregion/preseed/{model_key}/{region}",
+                region=region,
+            )
         )
-        steps.append(regional_step.with_output_path(f"gs://{bucket.name}/{base_step.override_output_path}"))
     return steps
 
 
 def _validate_regions(regions: list[str], *, name: str) -> None:
-    unknown_regions = sorted(set(regions) - set(REGION_TO_DATA_BUCKET))
+    unknown_regions = sorted(set(regions) - set(data_config().region_buckets))
     if unknown_regions:
-        raise ValueError(f"Unknown {name} {unknown_regions}; known: {sorted(REGION_TO_DATA_BUCKET)}")
+        raise ValueError(f"Unknown {name} {unknown_regions}; known: {sorted(data_config().region_buckets)}")
 
 
 def resolve_worker_regions(worker_regions: list[str] | None, preseed_regions: list[str]) -> list[str]:
@@ -252,6 +272,10 @@ def make_worker_pools(
     pools = []
     for tpu_type in tpu_types:
         topology = get_tpu_topology(tpu_type)
+        if topology.vm_count != 1:
+            raise ValueError(f"joint decode xregion supports only single-VM TPU types, got {tpu_type}")
+        if topology.chips_per_vm % 2 != 0:
+            raise ValueError(f"joint decode xregion needs even chips_per_vm, got {tpu_type}")
         pools.append(
             WorkerPoolConfig(
                 pool_id=tpu_type,
@@ -284,7 +308,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--n-problems", type=int, default=N_PROBLEMS)
     parser.add_argument("--n-samples", type=int, default=N_SAMPLES)
     parser.add_argument("--heartbeat-timeout", type=float, default=HEARTBEAT_TIMEOUT)
-    parser.add_argument("--tensor-parallel-size", type=int, default=TENSOR_PARALLEL_SIZE)
+    parser.add_argument("--poll-backoff", type=float, default=POLL_BACKOFF)
 
     args, remaining_args = parser.parse_known_args()
     sys.argv = [sys.argv[0], *remaining_args]
@@ -298,7 +322,7 @@ def main() -> None:
             model_key=args.model_key,
             regions=args.preseed_regions,
         )
-        description = f"IID xregion smoke preseed for {args.model_key}."
+        description = f"Joint-decode-avg xregion smoke preseed for {args.model_key}."
     else:
         worker_regions = resolve_worker_regions(args.worker_regions, args.preseed_regions)
         worker_pools = make_worker_pools(
@@ -313,9 +337,9 @@ def main() -> None:
             n_problems=args.n_problems,
             n_samples=args.n_samples,
             heartbeat_timeout=args.heartbeat_timeout,
-            tensor_parallel_size=args.tensor_parallel_size,
+            poll_backoff=args.poll_backoff,
         )
-        description = "IID xregion smoke on a small GSM8K slice."
+        description = "Joint-decode-avg xregion smoke on a small GSM8K slice."
 
     executor_main(
         steps=steps,

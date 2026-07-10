@@ -107,6 +107,9 @@ def open_joint_decoder(
     decoder: EngineModelParams,
     advisor: EngineModelParams,
     max_tokens: int,
+    # None -> same cap as the decoder side; set for cross-tokenizer pairs
+    # where the advisor needs fertility headroom on the same text.
+    advisor_max_tokens: int | None = None,
     top_k_a: int,
     top_k_b: int,
     seed: int,
@@ -130,7 +133,7 @@ def open_joint_decoder(
             model_b=_package_model_config(advisor, chip_b, _resolve_model_path(advisor.model_path)),
             sampling=PackageSamplingConfig(
                 max_tokens_a=max_tokens,
-                max_tokens_b=max_tokens,
+                max_tokens_b=advisor_max_tokens if advisor_max_tokens is not None else max_tokens,
                 top_k_a=top_k_a,
                 top_k_b=top_k_b,
                 barrier_timeout_s=barrier_timeout_s,
@@ -191,6 +194,7 @@ def run_completion_chunks(
     advisor: EngineModelParams,
     n_samples: int,
     max_tokens: int,
+    advisor_max_tokens: int | None = None,
     top_k_a: int,
     top_k_b: int,
     seed: int,
@@ -220,6 +224,7 @@ def run_completion_chunks(
         decoder=decoder,
         advisor=advisor,
         max_tokens=max_tokens,
+        advisor_max_tokens=advisor_max_tokens,
         top_k_a=top_k_a,
         top_k_b=top_k_b,
         seed=seed,
