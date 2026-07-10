@@ -1056,3 +1056,30 @@ The dedicated W13 backward tests pass (`6 passed`), the combined semantic MLP
 and fused backward test selection passes (`24 passed`), scoped pre-commit and
 Pyrefly pass, and `git diff --check` is clean. Target H100 validation remains
 required.
+
+## 2026-07-10 FUSED-MOE-033 - Target EP8 W13 backward SMEM-mask validation
+
+Job `/dlwh/bench-semantic-w13b-target-masktile-20260710-1610` ran once on
+`cw-rno2a` at commit `c5db9262e1` and reached terminal Iris state `succeeded`.
+Its H100x8 task exited 0 after 1 minute and 29.63 seconds, with zero Iris
+failures or preemptions. No duplicate, stop, resubmit, code edit, Iris restart,
+or cluster bounce was issued.
+
+The target EP8 random-routing `semantic_fused_w13_backward_pallas` benchmark
+produced zero of the three requested repeats and one error row. The first
+actionable failure was `TypeError: Unsupported index type:
+<class 'jax._src.interpreters.partial_eval.DynamicJaxprTracer'>`. It localizes
+to the new padding loop's `dz_smem[row, :]` assignment at
+`source_push_semantic_fused_w13_backward.py:670`; the Pallas loop index is a
+dynamic tracer that this SMEM ref indexing path rejects. Median/min/max
+steady-state time and useful/rounded TFLOP/s/rank are unavailable because all
+repeats failed.
+
+The error row reported 64 live pairs, 1,048,576 useful rows, 1,310,720 rounded
+rows, 0.8 row efficiency, 0.2 masked-row fraction, and zero dropped routes,
+routing-dropped routes, and metadata-overflow routes. The allocator also twice
+attempted and failed to allocate 12.50 GiB (13,421,772,800 bytes) before the
+TypeError, so the target-size dense-allocation symptom remained observable in
+this run. Raw logs, structured rows, terminal status, task summary, closed
+monitor state, and a standalone report are in
+`scratch/6597-w13b-target-masktile/`.

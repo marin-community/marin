@@ -663,11 +663,12 @@ def _make_source_push_semantic_fused_w13_backward_kernel(
                             )
                             mgpu.barrier_wait(barrier)
 
-                            @pl.loop(0, config.compute_m)
-                            def _mask_padding(row) -> None:
-                                @pl.when(row >= valid_rows)
-                                def _zero_padding_row() -> None:
-                                    dz_smem[row, :] = jnp.zeros((config.block_output,), dtype=dtype)
+                            row = mgpu.layout_cast(
+                                lax.broadcasted_iota(jnp.int32, (config.compute_m, config.block_output), 0),
+                                mgpu.Layout.WGMMA,
+                            )
+                            row_valid = (row < valid_rows).astype(jnp.float32)
+                            dz_smem[:, :] = (dz_smem[...].astype(jnp.float32) * row_valid).astype(dtype)
 
                             mgpu.commit_smem()
                             mgpu.wgmma(acc_ref, mgpu.transpose_ref(x_smem, (1, 0)), dz_smem)
