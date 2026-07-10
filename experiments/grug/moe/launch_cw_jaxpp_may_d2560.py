@@ -27,7 +27,7 @@ from marin.experiment.namespacing import user_namespaced_name
 from marin.training.training import LevanterCheckpoint
 
 from experiments.grug.moe.heuristic import MoeHeuristic
-from experiments.grug.moe.launch import GrugMoeLaunchConfig, env_int, run_grug_moe_trial
+from experiments.grug.moe.launch import GrugMoeLaunchConfig, env_bool, env_int, run_grug_moe_trial
 from experiments.grug.moe.model import GrugModelConfig, RematMode
 from experiments.grug.moe.train import (
     GrugJaxPPConfig,
@@ -249,13 +249,19 @@ def build_jaxpp_may_checkpoint(*, version: str = "dev") -> ArtifactStep[Levanter
     batch_size = env_int("MAY_BATCH", DEFAULT_BATCH)
     steps = env_int("MAY_STEPS", DEFAULT_STEPS)
     model = build_model()
-    pipeline = build_pipeline_config()
-    if pipeline.stage_layer_counts is not None and sum(pipeline.stage_layer_counts) != model.num_layers:
+    pipeline = build_pipeline_config() if env_bool("MAY_PIPELINE", True) else None
+    if (
+        pipeline is not None
+        and pipeline.stage_layer_counts is not None
+        and sum(pipeline.stage_layer_counts) != model.num_layers
+    ):
         raise ValueError(
             f"PP_STAGE_LAYER_COUNTS must sum to MAY_NUM_LAYERS={model.num_layers}; "
             f"got {pipeline.stage_layer_counts} (sum={sum(pipeline.stage_layer_counts)})"
         )
-    post_setup_scripts = jaxpp_setup_scripts(revision=os.environ.get("JAXPP_REVISION", DEFAULT_JAXPP_REVISION))
+    post_setup_scripts = ()
+    if pipeline is not None:
+        post_setup_scripts = jaxpp_setup_scripts(revision=os.environ.get("JAXPP_REVISION", DEFAULT_JAXPP_REVISION))
     if model.moe_implementation == "deepep":
         source_root = os.environ.get("DEEPEP_SRC_ROOT")
         if not source_root:
@@ -265,7 +271,7 @@ def build_jaxpp_may_checkpoint(*, version: str = "dev") -> ArtifactStep[Levanter
             revision=os.environ.get("DEEPEP_REVISION", DEFAULT_DEEPEP_REVISION),
         )
 
-    mpmd_dim = pipeline.mpmd_dim or pipeline.stages
+    mpmd_dim = 1 if pipeline is None else pipeline.mpmd_dim or pipeline.stages
     global_devices = replicas * gpus_per_replica
     fixed_axes = mpmd_dim * replica_axis * expert_axis
     if global_devices % fixed_axes != 0:
@@ -277,14 +283,15 @@ def build_jaxpp_may_checkpoint(*, version: str = "dev") -> ArtifactStep[Levanter
     batch_shards = replica_axis * data_axis * expert_axis
     if batch_size % batch_shards != 0:
         raise ValueError(f"MAY_BATCH={batch_size} must be divisible by batch shards={batch_shards}")
-    if batch_size % pipeline.microbatches != 0:
-        raise ValueError(f"MAY_BATCH={batch_size} must be divisible by PP_MICROBATCHES={pipeline.microbatches}")
-    microbatch_size = batch_size // pipeline.microbatches
-    if microbatch_size % batch_shards != 0:
-        raise ValueError(
-            f"microbatch size={microbatch_size} must be divisible by batch shards={batch_shards}; "
-            f"got MAY_BATCH={batch_size} and PP_MICROBATCHES={pipeline.microbatches}"
-        )
+    if pipeline is not None:
+        if batch_size % pipeline.microbatches != 0:
+            raise ValueError(f"MAY_BATCH={batch_size} must be divisible by PP_MICROBATCHES={pipeline.microbatches}")
+        microbatch_size = batch_size // pipeline.microbatches
+        if microbatch_size % batch_shards != 0:
+            raise ValueError(
+                f"microbatch size={microbatch_size} must be divisible by batch shards={batch_shards}; "
+                f"got MAY_BATCH={batch_size} and PP_MICROBATCHES={pipeline.microbatches}"
+            )
     if model.num_experts % expert_axis != 0:
         raise ValueError(f"num_experts={model.num_experts} must be divisible by MAY_EXPERT_AXIS={expert_axis}")
 
@@ -310,10 +317,13 @@ def build_jaxpp_may_checkpoint(*, version: str = "dev") -> ArtifactStep[Levanter
         ema_beta=None,
         log_every=env_int("MAY_LOG_EVERY", 1),
     )
-    name = (
-        f"grug-moe-jaxpp-may-d{model.hidden_dim}-L{model.num_layers}-e{model.num_experts}-"
-        f"n{replicas}-{pipeline.schedule}-s{pipeline.stages}-m{pipeline.microbatches}"
-    )
+    if pipeline is None:
+        name = f"grug-moe-may-d{model.hidden_dim}-L{model.num_layers}-e{model.num_experts}-n{replicas}-no-pipeline"
+    else:
+        name = (
+            f"grug-moe-jaxpp-may-d{model.hidden_dim}-L{model.num_layers}-e{model.num_experts}-"
+            f"n{replicas}-{pipeline.schedule}-s{pipeline.stages}-m{pipeline.microbatches}"
+        )
 
     def build_config(ctx: StepContext) -> GrugMoeLaunchConfig:
         return GrugMoeLaunchConfig(

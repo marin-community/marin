@@ -21,6 +21,7 @@ SUBMIT=false
 RUN_ID=""
 SCHEDULE="std_1f1b"
 IMPLEMENTATION="auto"
+PIPELINE="true"
 PHYSICAL_STAGES=4
 LOGICAL_STAGES=""
 STAGE_LAYER_COUNTS=""
@@ -65,6 +66,7 @@ Options:
   --schedule NAME           gpipe, std_1f1b, eager_1f1b, zero_bubble, interleaved_gpipe,
                             interleaved_1f1b, dualpipe_v, or kimi_k2 (default: std_1f1b).
   --implementation NAME     PP_IMPLEMENTATION: auto or explicit_mpmd (default: auto).
+  --no-pipeline             Run the same model/backend without JaxPP for isolation.
   --physical-stages N       PP_MPMD_DIM / physical pipeline ranks (default: 4).
   --logical-stages N        PP_STAGES / logical pipeline stage cuts. Omit to infer per schedule.
   --stage-layer-counts CSV  Layers per logical stage, e.g. 7,6,6,5. Omit for an even split.
@@ -106,6 +108,7 @@ while [ "$#" -gt 0 ]; do
         --run-id) RUN_ID="$2"; shift 2 ;;
         --schedule) SCHEDULE="$2"; shift 2 ;;
         --implementation) IMPLEMENTATION="$2"; shift 2 ;;
+        --no-pipeline) PIPELINE="false"; shift ;;
         --physical-stages) PHYSICAL_STAGES="$2"; shift 2 ;;
         --logical-stages) LOGICAL_STAGES="$2"; shift 2 ;;
         --stage-layer-counts) STAGE_LAYER_COUNTS="$2"; shift 2 ;;
@@ -208,6 +211,7 @@ ENV_ARGS=(
     -e MAY_NUM_EXPERTS "$NUM_EXPERTS"
     -e MAY_TOP_K "$TOP_K"
     -e MAY_MOE_IMPLEMENTATION "$MOE_IMPLEMENTATION"
+    -e MAY_PIPELINE "$PIPELINE"
     -e MAY_STEPS "$STEPS"
     -e MAY_DATA "$DATA"
     -e MAY_TRACKER "$TRACKER"
@@ -293,6 +297,7 @@ nodes: $NODES
 gpus_per_replica: $GPUS_PER_REPLICA
 schedule: $SCHEDULE
 implementation: $IMPLEMENTATION
+pipeline: $PIPELINE
 physical_stages: $PHYSICAL_STAGES
 logical_stages: ${LOGICAL_STAGES:-inferred}
 stage_layer_counts: ${STAGE_LAYER_COUNTS:-even}
