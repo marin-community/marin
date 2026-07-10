@@ -1270,3 +1270,17 @@ peer compact `return_y`. Chunk owners retain only start, fixed completion,
 ready, and release generation management; source combine readiness is
 unchanged. Five dedicated tests, target kernel construction, and scoped
 pre-commit including Pyrefly pass. Target H100 timing remains required.
+
+## 2026-07-10 FUSED-MOE-042 - Hierarchical W2 backward send plus compute
+
+W2 backward now uses two chunk lifecycle owners without forcing those two CTAs
+to perform all semantic gather/preparation. The existing 30 fixed compute CTAs
+also prepare the 40 independent B64-by-256 `dy_route` tiles inside each B256
+send. Owners wait for fixed cumulative helper completion before publishing the
+slot; helpers then consume B64 WGMMA jobs. Preparation and consumption
+interleave per chunk across the 12 rolling slots.
+
+This retains independent B256 `send_m` and B64 `compute_m`, removes the old
+16-fragment sender pool and 40-way ad hoc publication path, and keeps dW2 as an
+expert-local atomic reduction side output. Six dedicated tests and scoped
+pre-commit pass. Target H100 correctness and timing remain required.

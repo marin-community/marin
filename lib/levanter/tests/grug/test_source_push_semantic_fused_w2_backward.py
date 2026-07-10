@@ -8,7 +8,6 @@ import inspect
 import jax
 import jax.numpy as jnp
 import numpy as np
-import pytest
 
 from levanter.grug._moe.source_push_plan import (
     build_source_push_semantic_plan_jax,
@@ -156,31 +155,41 @@ def test_fused_w2_backward_generation_accounting_tracks_source_owned_slot_reuse(
         0,
         hidden_dim=2560,
         intermediate_dim=1280,
-        experts_per_rank=8,
-        ep_size=8,
         send_chunks_per_dst=24,
     )
     reused = source_push_semantic_fused_w2_backward_generation_accounting(
         CONFIG.inbox_slots,
         hidden_dim=2560,
         intermediate_dim=1280,
-        experts_per_rank=8,
-        ep_size=8,
+        send_chunks_per_dst=24,
+    )
+    next_chunk = source_push_semantic_fused_w2_backward_generation_accounting(
+        1,
+        hidden_dim=2560,
+        intermediate_dim=1280,
         send_chunks_per_dst=24,
     )
     assert (first.slot, first.generation, first.empty_generation, first.released_generation) == (0, 1, 1, 2)
+    assert first.owner == 0
+    assert next_chunk.owner == 1
+    assert first.helper_tiles == CONFIG.compute_blocks_per_send * (2560 // CONFIG.send_hidden_block)
+    assert first.prepare_generation == 1
+    assert first.helper_done_generation == first.helper_tiles
     assert reused.slot == first.slot
     assert reused.generation == 2
-    assert reused.send_done_generation == 2 * first.send_done_generation
+    assert reused.owner == 0
+    assert reused.helper_tiles == first.helper_tiles
+    assert reused.prepare_generation == 2
+    assert reused.helper_done_generation == 2 * first.helper_done_generation
     assert reused.consumer_done_generation == 2 * first.consumer_done_generation
-    assert first.consumer_done_generation == 4
+    assert first.consumer_done_generation == CONFIG.compute_blocks_per_send * (1280 // 128) * (1 + 2560 // 128)
     assert reused.empty_generation == first.released_generation
-    assert CONFIG.consumer_programs_per_source(8) == 4
 
 
-def test_fused_w2_backward_config_rejects_uneven_source_consumer_partition():
-    with pytest.raises(ValueError, match="must be divisible by source_count=3"):
-        CONFIG.consumer_programs_per_source(3)
+def test_fused_w2_backward_config_uses_forward_send_and_compute_worker_split():
+    assert CONFIG.chunk_owner_programs_per_peer == 2
+    assert CONFIG.consumer_programs_per_peer == 30
+    assert CONFIG.chunk_owner_programs_per_peer + CONFIG.consumer_programs_per_peer == 32
 
 
 def test_fused_w2_backward_interpret_matches_independent_rough_route_reference():
@@ -240,7 +249,7 @@ def test_fused_w2_backward_reports_queue_and_layout_overflow_and_masks_outputs()
     np.testing.assert_array_equal(np.asarray(metadata.route_weights)[~np.asarray(metadata.row_valid)], 0)
 
 
-def test_fused_w2_backward_kernel_contract_uses_peer_lane_transport_and_explicit_wgmma():
+def test_fused_w2_backward_kernel_contract_uses_hierarchical_preparation_and_fixed_consumers():
     source = inspect.getsource(_make_source_push_semantic_fused_w2_backward_kernel)
 
     assert "mgpu.remote_ref" in source
@@ -250,6 +259,16 @@ def test_fused_w2_backward_kernel_contract_uses_peer_lane_transport_and_explicit
     assert "all_gather" not in source
     assert "dy_expert" not in source
     assert "pl.dot" not in source
-    assert "_compute_window_dw2" in source
-    assert "dw2_jobs = dw2_output_tiles" in source
+    assert "(chunk % config.chunk_owner_programs_per_peer) == owner" in source
+    assert "prepare_sem.at[dst, slot]" in source
+    assert "value=generation * helper_tiles" in source
+    assert "tile = consumer + helper_iteration * config.consumer_programs_per_peer" in source
+    assert "pl.semaphore_signal(helper_done_sem.at[peer, slot])" in source
+    assert "value=generation * consumer_jobs" in source
+    assert "mgpu.atomic_add" in source
+    assert "@pl.when(worker >= config.chunk_owner_programs_per_peer)" in source
+    assert "producer_tiles_per_program" not in source
+    assert "_compute_window_dw2" not in source
+    assert "chunk_windows" not in source
+    assert "consumer_programs_per_source" not in source
     assert "dw2_turn" not in source
