@@ -18,6 +18,7 @@ import jax.scipy as jsp
 from einops import rearrange
 from haliax import Axis
 from haliax.jax_utils import named_call
+from haliax.quantization import Fp8RaggedDotOp
 from jax import core, random
 from jax.sharding import NamedSharding, get_abstract_mesh, reshard
 from jax.sharding import PartitionSpec as P
@@ -41,6 +42,7 @@ from levanter.grug.grug_moe import (
     MoeActivation,
     MoEExpertMlp,
     MoeImplementation,
+    MoeRaggedDotOps,
     resolve_moe_implementation,
 )
 from levanter.grug.loss import fused_linear_softmax_cross_entropy_loss
@@ -105,6 +107,22 @@ def _hf_config_attr(config: HfConfig, names: tuple[str, ...], default: Any = Non
 
 
 @dataclass(frozen=True)
+class GrugFp8Config:
+    """FP8 for the routed expert path.
+
+    Enabling this runs both expert GEMMs as FP8 grouped matmuls with delayed
+    per-tensor scaling ([haliax.quantization.Fp8RaggedDotOp][], Hopper-only) and,
+    unless ``wire`` is disabled, carries the EP dispatch/combine collectives as
+    FP8 over the wire with per-token scaling. Requires expert parallelism
+    (expert axis size > 1) with the ring or ragged_all_to_all MoE backend; other
+    configurations raise on the first forward pass.
+    """
+
+    wire: bool = True
+    amax_history_length: int = 1024
+
+
+@dataclass(frozen=True)
 class GrugModelConfig:
     """Hyperparameters for the grug MoE transformer.
 
@@ -138,6 +156,8 @@ class GrugModelConfig:
     still apply half-RoPE. Set to False to keep RoPE on long layers."""
     attention_implementation: GrugAttentionImplementation | None = None
     moe_implementation: MoeImplementation | None = None
+    fp8: GrugFp8Config | None = None
+    """FP8 expert GEMMs + EP collectives (see [GrugFp8Config][]); None keeps bf16."""
     remat_mode: RematMode = "recompute_all"
     """Per-block gradient checkpointing. "recompute_all" reruns the whole block in
     backward (lowest memory); "save_moe" keeps the tagged MoE dispatch tensors so
@@ -553,6 +573,13 @@ class MoEMLP(eqx.Module):
         if cfg.num_experts % expert_axis_size != 0:
             raise ValueError(f"num_experts={cfg.num_experts} must be divisible by expert axis size={expert_axis_size}")
 
+        ragged_dot_ops = None
+        if cfg.fp8 is not None:
+            ragged_dot_ops = MoeRaggedDotOps(
+                w13=Fp8RaggedDotOp.init(cfg.fp8.amax_history_length),
+                w2=Fp8RaggedDotOp.init(cfg.fp8.amax_history_length),
+            )
+
         d, e = cfg.hidden_dim, cfg.num_experts
         return MoEMLP(
             router=reshard(_init_weight(k_router, (d, e), cfg.initializer_std), P(None, None)),
@@ -566,6 +593,8 @@ class MoEMLP(eqx.Module):
                 implementation=cfg.moe_implementation,
                 activation=ActivationFunctionEnum.silu,
                 capacity_factor=_DEFAULT_EP_CAPACITY_FACTOR,
+                ragged_dot_ops=ragged_dot_ops,
+                fp8_wire=cfg.fp8.wire if cfg.fp8 is not None else False,
             ),
             cfg=cfg,
         )
@@ -916,6 +945,7 @@ __all__ = [
     "CausalSelfAttention",
     "DenseMLP",
     "GatedNorm",
+    "GrugFp8Config",
     "GrugModelConfig",
     "GrugMoeHfConfig",
     "MoEMLP",
