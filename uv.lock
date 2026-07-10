@@ -5456,6 +5456,7 @@ dependencies = [
     { name = "marin-levanter" },
     { name = "marin-rigging", extra = ["secrets"] },
     { name = "marin-zephyr" },
+    { name = "thalas" },
     { name = "watchdog" },
 ]
 
@@ -5471,6 +5472,7 @@ requires-dist = [
     { name = "marin-levanter", editable = "lib/levanter" },
     { name = "marin-rigging", extras = ["secrets"], editable = "lib/rigging" },
     { name = "marin-zephyr", editable = "lib/zephyr" },
+    { name = "thalas", git = "https://github.com/marin-community/thalas.git?rev=5a7b66dde13fe8b8e5fa47a2b311d8f747a96383" },
     { name = "watchdog" },
 ]
 
@@ -10355,6 +10357,18 @@ wheels = [
 jax = [
     { name = "jax" },
     { name = "jaxlib" },
+]
+
+[[package]]
+name = "thalas"
+version = "0.1.0"
+source = { git = "https://github.com/marin-community/thalas.git?rev=5a7b66dde13fe8b8e5fa47a2b311d8f747a96383#5a7b66dde13fe8b8e5fa47a2b311d8f747a96383" }
+dependencies = [
+    { name = "draccus" },
+    { name = "fsspec" },
+    { name = "marin-fray" },
+    { name = "marin-rigging" },
+    { name = "pydantic" },
 ]
 
 [[package]]

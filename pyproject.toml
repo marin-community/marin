@@ -31,6 +31,7 @@ dependencies = [
     # marin-ducky is the ad-hoc DuckDB SQL service (dashboard + runner + deploy),
     # a workspace member so service fixes land without a wheel republish.
     "marin-ducky",
+    "thalas",
     # top level deps. try to keep these small.
     "watchdog",
     # marin-dupekit is a native (maturin) package shipped as pre-built platform
