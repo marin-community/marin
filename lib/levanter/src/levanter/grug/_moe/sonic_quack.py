@@ -9,7 +9,6 @@ from typing import Any
 
 import jax
 import jax.numpy as jnp
-from haliax.nn.ragged_dot import ragged_dot
 from jaxtyping import Array, Float, Int
 
 try:
@@ -55,6 +54,26 @@ def _weight_view(weight_storage: Any) -> Any:
                 1,
                 weight_storage.shape[1] * weight_storage.shape[2],
             ),
+        ),
+    )
+
+
+def _transposed_matrix_view(storage: Any) -> Any:
+    return cute.make_tensor(
+        storage.iterator,
+        cute.make_layout(
+            (storage.shape[1], storage.shape[0]),
+            stride=(1, storage.shape[1]),
+        ),
+    )
+
+
+def _weight_grad_view(storage: Any) -> Any:
+    return cute.make_tensor(
+        storage.iterator,
+        cute.make_layout(
+            (storage.shape[1], storage.shape[2], storage.shape[0]),
+            stride=(storage.shape[2], 1, storage.shape[1] * storage.shape[2]),
         ),
     )
 
@@ -120,6 +139,44 @@ if cute is not None:
             )
             varlen = VarlenArguments(mCuSeqlensM=offsets)
             self.gemm(x, _weight_view(weight_storage), output, None, epilogue, scheduler, varlen, stream)
+
+    class _GroupedVarlenWeightGradFfi:
+        def __init__(self) -> None:
+            self.gemm = GemmDefaultSm90(
+                Float32,
+                BFloat16,
+                _TILE_SHAPE,
+                _CLUSTER_SHAPE,
+                pingpong=True,
+                is_persistent=True,
+            )
+            self.max_active_clusters = get_max_active_clusters(_CLUSTER_SHAPE[0] * _CLUSTER_SHAPE[1])
+
+        @cute.jit
+        def __call__(
+            self,
+            x: cute.Tensor,
+            dout: cute.Tensor,
+            offsets: cute.Tensor,
+            dweights: cute.Tensor,
+            stream: cuda.CUstream,
+        ) -> None:
+            epilogue = GemmDefaultEpiMixin.EpilogueArguments()
+            scheduler = TileSchedulerOptions(
+                max_active_clusters=Int32(self.max_active_clusters),
+                max_swizzle_size=Int32(8),
+            )
+            varlen = VarlenArguments(mCuSeqlensK=offsets)
+            self.gemm(
+                _transposed_matrix_view(x),
+                _transposed_matrix_view(dout),
+                _weight_grad_view(dweights),
+                None,
+                epilogue,
+                scheduler,
+                varlen,
+                stream,
+            )
 
     def _compile_gated_varlen() -> Any:
         total_tokens = cute.sym_int()
@@ -189,6 +246,31 @@ if cute is not None:
             options="--enable-tvm-ffi",
         )
 
+    def _compile_grouped_varlen_weight_grad() -> Any:
+        total_tokens = cute.sym_int()
+        input_dim = cute.sym_int()
+        output_dim = cute.sym_int()
+        num_experts = cute.sym_int()
+        num_offsets = cute.sym_int()
+        x = make_fake_tensor(BFloat16, (total_tokens, input_dim), leading_dim=1, divisibility=_ALIGNMENT)
+        dout = make_fake_tensor(BFloat16, (total_tokens, output_dim), leading_dim=1, divisibility=_ALIGNMENT)
+        offsets = make_fake_tensor(Int32, (num_offsets,), leading_dim=0, divisibility=4)
+        dweights = make_fake_tensor(
+            BFloat16,
+            (num_experts, input_dim, output_dim),
+            leading_dim=2,
+            divisibility=_ALIGNMENT,
+        )
+        return cute.compile(
+            _GroupedVarlenWeightGradFfi(),
+            x,
+            dout,
+            offsets,
+            dweights,
+            cute.runtime.make_fake_stream(use_tvm_ffi_env_stream=True),
+            options="--enable-tvm-ffi",
+        )
+
     _GATED_VARLEN = TvmFfiKernel(
         "levanter_sonic_quack_gated_varlen_fwd",
         _compile_gated_varlen,
@@ -199,13 +281,19 @@ if cute is not None:
         _compile_grouped_varlen,
         allow_cuda_graph=True,
     )
+    _GROUPED_VARLEN_WEIGHT_GRAD = TvmFfiKernel(
+        "levanter_sonic_quack_grouped_varlen_weight_grad",
+        _compile_grouped_varlen_weight_grad,
+        allow_cuda_graph=True,
+    )
 else:
     _GATED_VARLEN = None
     _GROUPED_VARLEN = None
+    _GROUPED_VARLEN_WEIGHT_GRAD = None
 
 
 def _require_quack() -> None:
-    if _GATED_VARLEN is None or _GROUPED_VARLEN is None:
+    if _GATED_VARLEN is None or _GROUPED_VARLEN is None or _GROUPED_VARLEN_WEIGHT_GRAD is None:
         raise ImportError(
             "implementation='sonic' requires quack-kernels, jax-tvm-ffi, and the NVIDIA Cutlass DSL; "
             "install the gpu extra for marin-levanter or marin."
@@ -276,6 +364,25 @@ def _quack_grouped_input_grad_impl(
     )
 
 
+def _quack_grouped_weight_grad_impl(
+    x: Float[Array, "M I"],
+    dout: Float[Array, "M O"],
+    group_sizes: Int[Array, "E"],
+) -> Float[Array, "E I O"]:
+    _require_quack()
+    assert _GROUPED_VARLEN_WEIGHT_GRAD is not None
+    if x.dtype != jnp.bfloat16 or dout.dtype != jnp.bfloat16:
+        raise TypeError("SonicMoE QuACK kernels require bfloat16 activations and weights")
+    output_shape = jax.ShapeDtypeStruct((group_sizes.shape[0], x.shape[1], dout.shape[1]), x.dtype)
+    return _GROUPED_VARLEN_WEIGHT_GRAD(
+        x,
+        dout,
+        _expert_offsets(group_sizes),
+        key=(),
+        output_shape_dtype=output_shape,
+    )
+
+
 @jax.custom_vjp
 def quack_gated_varlen(
     x: Float[Array, "M H"],
@@ -301,8 +408,7 @@ def _quack_gated_bwd(residuals: tuple[jax.Array, jax.Array, jax.Array, jax.Array
     _, activation_pullback = jax.vjp(activation, preact)
     (dpreact,) = activation_pullback(dpostact)
     dx = _quack_grouped_input_grad_impl(dpreact, weights, group_sizes)
-    _, weight_pullback = jax.vjp(lambda w: ragged_dot(x, w, group_sizes), weights)
-    (dweights,) = weight_pullback(dpreact)
+    dweights = _quack_grouped_weight_grad_impl(x, dpreact, group_sizes)
     return dx, dweights, None
 
 
@@ -327,8 +433,7 @@ def _quack_grouped_fwd(x: jax.Array, weights: jax.Array, group_sizes: jax.Array)
 def _quack_grouped_bwd(residuals: tuple[jax.Array, jax.Array, jax.Array], doutput: jax.Array):
     x, weights, group_sizes = residuals
     dx = _quack_grouped_input_grad_impl(doutput, weights, group_sizes)
-    _, weight_pullback = jax.vjp(lambda w: ragged_dot(x, w, group_sizes), weights)
-    (dweights,) = weight_pullback(doutput)
+    dweights = _quack_grouped_weight_grad_impl(x, doutput, group_sizes)
     return dx, dweights, None
 
 
