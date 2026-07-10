@@ -347,10 +347,6 @@ class ControllerDB:
         return self._caches.commit_seq
 
     @property
-    def db_dir(self) -> Path:
-        return self._db_dir
-
-    @property
     def db_path(self) -> Path:
         return self._db_path
 

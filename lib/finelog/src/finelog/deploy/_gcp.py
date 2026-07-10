@@ -102,7 +102,18 @@ def render_bootstrap_for(cfg: FinelogConfig, image: str) -> str:
 
     ``image`` is separate from ``cfg.image`` so callers can supply an
     already-pinned digest.
+
+    Raises if the config forwards: the rendered script becomes the instance's
+    startup-script metadata, readable by anyone with `compute.instances.get` and by
+    every process on the VM through the metadata server, so this backend has nowhere
+    to put a private signing key. A forwarding finelog belongs on the k8s backend,
+    which projects the key through a Secret.
     """
+    if cfg.forwarding is not None:
+        raise click.ClickException(
+            f"finelog config {cfg.name!r}: forwarding is not supported on the gcp backend — "
+            "its signing key would land in world-readable instance metadata"
+        )
     return render_bootstrap(
         image=image,
         port=cfg.port,

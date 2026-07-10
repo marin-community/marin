@@ -79,11 +79,7 @@ DEFAULT_BATCH_ROWS = 10_000
 # Per-Table queue cap in bytes. Matches WriteRows max body size.
 DEFAULT_MAX_BUFFER_BYTES = 16 * 1024 * 1024
 
-# Compression policy: zstd for both directions; gzip kept only as a fallback
-# the server still accepts. Every deployed finelog server has accepted zstd
-# since #5457 (2026-05-05), so the send-side gzip workaround is no longer
-# needed — gzip.decompress was the dominant CPU cost on the server when
-# clients sent gzip bodies.
+# Send zstd; accept both zstd and gzip. gzip is kept only as a fallback.
 _SEND_COMPRESSION = ZstdCompression()
 _ACCEPT_COMPRESSIONS = (ZstdCompression(), GzipCompression())
 
@@ -539,33 +535,6 @@ class LogClient:
             return
         table = self._get_log_table()
         table.write(_log_entries_to_rows(key, messages))
-
-    def push_batch(self, key: str, entries: Sequence[logging_pb2.LogEntry], *, cluster: str = "") -> None:
-        """Append ``entries`` under ``key`` via ``LogService.PushLogs``, synchronously.
-
-        Unlike :meth:`write_batch` (which enqueues to a lossy in-memory Table and
-        acks nothing), this awaits the server's response, which the store returns
-        only after the batch is durably persisted. It therefore raises on any
-        failure and a successful return means the batch landed — the ack the
-        durable log relay needs to advance its watermark.
-
-        ``cluster`` is the origin cluster the server stamps onto each row's
-        ``cluster`` column so a global finelog can namespace logs from many
-        federated clusters. Empty (the default) is a local single-cluster push;
-        a relay sets it to the cluster it forwards for.
-        """
-        if not entries:
-            return
-        client = self._get_log_service_client()
-        try:
-            client.push_logs(logging_pb2.PushLogsRequest(key=key, entries=list(entries), cluster=cluster))
-        except ConnectError as exc:
-            if is_retryable_error(exc):
-                self._invalidate(_format_exc_summary(exc))
-            raise _translate_connect_error(exc) from exc
-        except (ConnectionError, OSError, TimeoutError) as exc:
-            self._invalidate(_format_exc_summary(exc))
-            raise
 
     def fetch_logs(self, request: logging_pb2.FetchLogsRequest) -> logging_pb2.FetchLogsResponse:
         """Read from the ``log`` namespace via ``LogService.FetchLogs``.

@@ -42,7 +42,9 @@ message LogEntry {
   Timestamp timestamp = 1;
   string source = 2;      // Free-form: "stdout", "stderr", "build", "process", ...
   string data = 3;        // Log line content
-  int32 attempt_id = 4;   // Caller-defined; finelog stores and echoes it back
+  // Parsed from the key's `:<attempt>` suffix on read. Never stored, and ignored
+  // on write — a pushed value does not round-trip.
+  int32 attempt_id = 4;
   LogLevel level = 5;     // Best-effort parsed level (UNKNOWN if unparseable)
   string key = 6;         // Log store key. Populated on multi-key (regex) queries.
   // Store-assigned row id: a single counter shared by every key in the store,
@@ -67,8 +69,9 @@ message PushLogsRequest {
   repeated LogEntry entries = 2;
   // Origin cluster for these entries, stored on the log row's `cluster` column so
   // a global finelog can namespace logs it collects from many federated clusters.
-  // Writer-supplied and trusted (every writer is authenticated); a relay sets it
-  // to the cluster it forwards for. Empty for a local single-cluster push.
+  // A token-authenticated writer may only claim the cluster its key is trusted for
+  // (or leave this empty and have the server stamp it); a writer admitted by a
+  // trusted network supplies it freely. Empty for a local single-cluster push.
   string cluster = 3;
 }
 

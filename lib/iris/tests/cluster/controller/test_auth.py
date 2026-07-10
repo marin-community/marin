@@ -12,13 +12,12 @@ import sqlalchemy.exc
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from iris.cluster.bundle import BundleStore
-from iris.cluster.config import AuthConfig, IapAuthConfig
+from iris.cluster.config import AuthConfig, IapAuthConfig, PeerConfig
 from iris.cluster.controller.auth import (
     _LEGACY_ISSUER,
     CONTROL_PLANE_AUDIENCES,
     FEDERATION_AUDIENCE,
     FEDERATION_PEER_ROLE,
-    FINELOG_AUDIENCE,
     SESSION_TOKEN_TTL_SECONDS,
     WORKER_TOKEN_TTL_SECONDS,
     WORKER_USER,
@@ -321,18 +320,6 @@ def test_jwt_create_and_verify():
     assert identity.role == "user"
 
 
-def test_control_plane_verify_rejects_delegation_token():
-    """The cross-plane guard: an ``aud="finelog"`` delegation token is rejected at
-    this controller's control-plane verify — it can never be replayed at the RPC
-    surface even though it is signed by the same key."""
-    mgr = _jwt_manager()
-    delegation = mgr.create_delegation_token("test-cluster", "k-deleg", ttl_seconds=60)
-    with pytest.raises(ValueError):
-        mgr.verify(delegation)
-    # Sanity: the token's audience really is the finelog plane.
-    assert jwt.decode(delegation, options={"verify_signature": False})["aud"] == FINELOG_AUDIENCE
-
-
 def _federation_setup(requester: str = "parent-cluster"):
     """A parent JwtTokenManager plus a peer's verifier trusting the parent's key."""
     key = signing_key_from_private_pem(generate_ed25519_keypair().private_pem)
@@ -393,7 +380,6 @@ def test_federation_verifier_rejects_an_untrusted_issuer():
     [
         ("control-plane", lambda mgr: mgr.create_token("alice", "admin", "k", ttl_seconds=60)),
         ("proxy", lambda mgr: mgr.create_endpoint_token("ep", "k")),
-        ("finelog", lambda mgr: mgr.create_delegation_token("named", "k", ttl_seconds=60)),
         ("federation", lambda mgr: mgr.create_federation_token("named", "k")),
     ],
 )
@@ -800,17 +786,17 @@ def test_iap_assertion_resolver_is_the_role_policy():
 
 
 def test_require_persistent_signing_key():
-    # A relay controller signs delegation tokens the shared finelog pins to its public
-    # key, so an empty signing key is a silent trust-anchor break: fail fast.
-    relay = "iris+https://global-finelog/proxy/system.log-server"
+    # A controller with peers signs federation tokens each peer pins to its public key,
+    # so an empty signing key is a silent trust-anchor break: fail fast.
+    peers = {"cw-rno2a": PeerConfig(controller_address="https://peer:8080", cluster="cw-rno2a")}
     with pytest.raises(ValueError, match="requires a persistent"):
-        require_persistent_signing_key(relay, None)
-    require_persistent_signing_key(relay, _SIGNING_KEY)  # a key present: fine
+        require_persistent_signing_key(peers, None)
+    require_persistent_signing_key(peers, _SIGNING_KEY)  # a key present: fine
 
-    # No relay endpoint: nothing external pins this controller's key, so an ephemeral
-    # key is fine and must NOT be rejected.
-    require_persistent_signing_key("", None)
-    require_persistent_signing_key(None, None)
+    # No peers: nothing external pins this controller's key, so an ephemeral key is fine
+    # and must NOT be rejected. A cluster that only *receives* federated calls verifies
+    # with its peers' published keys and signs nothing anyone else pins.
+    require_persistent_signing_key({}, None)
 
 
 # -- Controller auth setup -----------------------------------------------------

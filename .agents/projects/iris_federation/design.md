@@ -399,6 +399,15 @@ hold.
 
 ## 6. Q3 — Logs: one shared global finelog, fed by peer-controller relays
 
+> **⚠️ The relay's *placement* is superseded (2026-07-10).** The hub-and-spoke shape below stands, but
+> the spoke is the **per-cluster finelog server**, not the child controller. The controller-hosted
+> Python relay was bounded by `(distinct log keys) × RTT` — one `PushLogs` per key per tick — so a
+> busy cluster fell steadily behind while loading the controller. The finelog server now polls its own
+> durable rows and ships every table — logs and `iris.*` stats alike — through the generic `WriteRows`
+> path, authenticating with its own Ed25519 keypair (`forwarding:` in its deploy config; `auth: jwt` at
+> the hub). Forwarding is best-effort: the spoke holds the record, the hub a convenience copy. §6.1's
+> "the child controller runs a new durable relay" and §6.2's spool design are historical.
+
 **Decision (per review): a single *global* finelog service, not per-cluster logs behind a query
 proxy.** Every cluster's logs land in one store, so reads are uniform — from the parent, a peer, or a
 laptop — and work even when a peer controller is down or slow. The enabling fact is the same as

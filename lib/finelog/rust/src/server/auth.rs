@@ -3,10 +3,10 @@
 
 //! Authenticated ingress front for the finelog server.
 //!
-//! A globally shared finelog receives pushes from many controllers across the
-//! internet, so it cannot rely on being private behind one controller's proxy. This
-//! module gates every RPC with an ordered stack of auth layers, each of which allows,
-//! falls through, or rejects a request (the same shape as rigging's `server_auth`).
+//! A hub finelog receives pushes from many per-cluster finelogs across the internet,
+//! so it cannot rely on being private behind one controller's proxy. This module gates
+//! every RPC with an ordered stack of auth layers, each of which allows, falls through,
+//! or rejects a request (the same shape as rigging's `server_auth`).
 //!
 //! The policy is default-deny: a request no layer allows is rejected
 //! `Unauthenticated`. Auth is a stack of allow-layers on top of that deny — there is
@@ -17,18 +17,18 @@
 //! compose:
 //! - [`AuthLayer::Jwt`] — a bearer whose EdDSA (Ed25519) signature verifies against
 //!   one of a set of trusted per-cluster public keys, whose audience is exactly
-//!   `finelog`, and which has not expired, admits the request. Each relaying controller
-//!   mints a short-lived finelog-delegation JWT (`aud="finelog"`) with its per-cluster
-//!   private key and the store verifies it against that cluster's public key — the same
-//!   JWT mechanism the control plane uses, so the log plane adds no second credential
-//!   system. The store holds only public keys (which grant no minting power), verified
-//!   via `jsonwebtoken`, and checks signature + `aud="finelog"` + `exp` only (it cannot
-//!   reach a controller's revocation table, so exposure is TTL-bounded). Requiring
-//!   `aud="finelog"` is the load-bearing cross-plane guard (RFC 8725): a control-plane
-//!   `aud="iris"` token, though signed by the same key, is rejected here. Each cluster
-//!   may carry multiple public keys so a key rotation overlaps (old + new both verify).
-//!   Every configured cluster admits equally — federation members are mutually trusted
-//!   for the log plane.
+//!   `finelog`, and which has not expired, admits the request. Each sending finelog
+//!   mints a short-lived `aud="finelog"` JWT with its per-cluster private key and the
+//!   hub verifies it against that cluster's public key — the same JWT mechanism the
+//!   control plane uses, so the log plane adds no second credential system. The hub
+//!   holds only public keys (which grant no minting power), verified via
+//!   `jsonwebtoken`, and checks signature + `aud="finelog"` + `exp` only (it cannot
+//!   reach a revocation table, so exposure is TTL-bounded). Requiring `aud="finelog"`
+//!   is the load-bearing cross-plane guard (RFC 8725): a control-plane `aud="iris"`
+//!   token, though signed by the same key, is rejected here. Each cluster may carry
+//!   multiple public keys so a key rotation overlaps (old + new both verify). The
+//!   matched key names the caller: see [`AuthIdentity`], which the ingest handlers use
+//!   to stamp a pushed row's origin cluster.
 //! - [`AuthLayer::Cidr`] — a request whose transport peer is in a trusted network is
 //!   admitted without a token, so a finelog that also serves its own cluster lists that
 //!   cluster's loopback/VPC ranges (e.g. `127.0.0.0/8`, `10.0.0.0/8`) and local clients
@@ -39,8 +39,8 @@
 //! denies, and a request no layer claims is denied. Order matters — the CIDR
 //! layer is placed first so a trusted-network client is admitted before the JWT
 //! layer would reject a token it cannot verify (e.g. the home controller's
-//! control-plane `worker_token`, which a global finelog holding only delegation
-//! keys cannot check).
+//! control-plane `worker_token`, which a hub finelog holding only log-plane keys
+//! cannot check).
 
 use std::fmt;
 use std::net::{IpAddr, SocketAddr};
@@ -56,21 +56,36 @@ use connectrpc::{
 use jsonwebtoken::{decode, Algorithm, DecodingKey, Validation};
 use serde::Deserialize;
 
-/// The one audience this delegation plane accepts. A token minted for any other
-/// plane (e.g. control-plane `aud="iris"`), even under the same signing key, is
-/// rejected — the load-bearing cross-plane guard (RFC 8725).
-const FINELOG_AUDIENCE: &str = "finelog";
+/// The one audience this delegation plane accepts, and the one the forwarder mints
+/// under. A token minted for any other plane (e.g. control-plane `aud="iris"`), even
+/// under the same signing key, is rejected — the load-bearing cross-plane guard
+/// (RFC 8725).
+pub(crate) const FINELOG_AUDIENCE: &str = "finelog";
 
 /// Accept a token whose `exp` is at most this far in the past, to tolerate small
-/// clock skew between a minting controller and the store.
+/// clock skew between a minting server and the hub.
 const EXP_LEEWAY_SECONDS: u64 = 60;
+
+/// Who a layer decided the request is. Placed in the request extensions by
+/// [`AuthInterceptor`] and read by the ingest handlers to bind a pushed row's
+/// origin `cluster` to the credential that carried it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AuthIdentity {
+    /// Admitted by a token: this cluster's public key verified the bearer, so the
+    /// writer may only claim this cluster as a row's origin.
+    Jwt { cluster: String },
+    /// Admitted by transport peer address. A trusted network carries no per-writer
+    /// identity, so such a writer names its own origin cluster (typically empty —
+    /// it is the store's own cluster writing locally).
+    Network,
+}
 
 /// One rule's verdict over a request, mirroring rigging's
 /// AUTHENTICATED / ABSENT / REJECTED.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum Verdict {
-    /// This rule admits the request; stop and admit.
-    Allow,
+    /// This rule admits the request as `identity`; stop and admit.
+    Allow(AuthIdentity),
     /// This rule does not claim the request; try the next.
     Fallthrough,
     /// A credential was presented but is invalid; stop and deny.
@@ -315,7 +330,9 @@ impl AuthLayer {
     fn check(&self, bearer: Option<&str>, peer_ip: Option<IpAddr>) -> Verdict {
         match self {
             AuthLayer::Cidr(nets) => match peer_ip {
-                Some(ip) if nets.iter().any(|n| n.contains(ip)) => Verdict::Allow,
+                Some(ip) if nets.iter().any(|n| n.contains(ip)) => {
+                    Verdict::Allow(AuthIdentity::Network)
+                }
                 _ => Verdict::Fallthrough,
             },
             // rigging JwtAuthenticator parity: no bearer → fall through (a later
@@ -326,7 +343,9 @@ impl AuthLayer {
                 Some(tok) => match verifier.verify(tok) {
                     Some(cluster) => {
                         tracing::trace!(cluster, "finelog: admitted jwt-authenticated request");
-                        Verdict::Allow
+                        Verdict::Allow(AuthIdentity::Jwt {
+                            cluster: cluster.to_string(),
+                        })
                     }
                     None => Verdict::Reject,
                 },
@@ -410,29 +429,30 @@ impl AuthPolicy {
     }
 
     /// The core decision over already-extracted request facts: the bearer token
-    /// (no `Bearer ` prefix) and the transport peer IP. `true` = admit. Walks the
-    /// stack: first `Allow` admits, first `Reject` denies, an unclaimed request is
-    /// denied (default-deny). Shared by the Connect interceptor and the axum
-    /// [`auth_gate`] middleware so both surfaces enforce the identical policy.
-    fn admits(&self, bearer: Option<&str>, peer_ip: Option<IpAddr>) -> bool {
+    /// (no `Bearer ` prefix) and the transport peer IP. `Some(identity)` = admit.
+    /// Walks the stack: first `Allow` admits, first `Reject` denies, an unclaimed
+    /// request is denied (default-deny). Shared by the Connect interceptor and the
+    /// axum [`auth_gate`] middleware so both surfaces enforce the identical policy.
+    pub(crate) fn admits(
+        &self,
+        bearer: Option<&str>,
+        peer_ip: Option<IpAddr>,
+    ) -> Option<AuthIdentity> {
         for layer in &self.layers {
             match layer.check(bearer, peer_ip) {
-                Verdict::Allow => return true,
-                Verdict::Reject => return false,
+                Verdict::Allow(identity) => return Some(identity),
+                Verdict::Reject => return None,
                 Verdict::Fallthrough => {}
             }
         }
-        false
+        None
     }
 
     /// Connect-interceptor entry point: extract the bearer + peer IP from the RPC
-    /// context and apply the policy.
-    fn authorize(&self, ctx: &RequestContext) -> Result<(), ConnectError> {
-        if self.admits(bearer_token(ctx), peer_ip(ctx)) {
-            Ok(())
-        } else {
-            Err(unauthenticated())
-        }
+    /// context and apply the policy, returning who the request authenticated as.
+    fn authorize(&self, ctx: &RequestContext) -> Result<AuthIdentity, ConnectError> {
+        self.admits(bearer_token(ctx), peer_ip(ctx))
+            .ok_or_else(unauthenticated)
     }
 }
 
@@ -468,6 +488,10 @@ fn peer_ip(ctx: &RequestContext) -> Option<IpAddr> {
 /// Always installed (see `build_connect_service`); the private default policy is
 /// [`AuthPolicy::allow_localhost`]. Gates every method on both services — ingest
 /// (`PushLogs`/`WriteRows`/`RegisterTable`) and reads (`FetchLogs`/`Query`) alike.
+///
+/// It also records the admitting [`AuthIdentity`] in the request extensions, which
+/// connect carries through to the handler. `PushLogs` reads it to bind a pushed row's
+/// origin `cluster` to the credential that carried it.
 pub struct AuthInterceptor {
     policy: Arc<AuthPolicy>,
 }
@@ -482,12 +506,24 @@ impl AuthInterceptor {
 impl Interceptor for AuthInterceptor {
     async fn intercept_unary(
         &self,
-        req: UnaryRequest,
+        mut req: UnaryRequest,
         next: Next<'_>,
     ) -> Result<UnaryResponse, ConnectError> {
-        self.policy.authorize(&req.ctx)?;
+        let identity = self.policy.authorize(&req.ctx)?;
+        req.ctx.extensions_mut().insert(identity);
         next.run(req).await
     }
+}
+
+/// The identity the interceptor admitted this request as.
+///
+/// Absent only if the request reached a handler without traversing
+/// [`AuthInterceptor`], which cannot happen for a registered RPC — every method on
+/// both services sits behind it. A handler that needs the identity to make an
+/// authorization decision must therefore treat `None` as a failure, not as a
+/// permissive default.
+pub fn request_identity(ctx: &RequestContext) -> Option<&AuthIdentity> {
+    ctx.extensions().get::<AuthIdentity>()
 }
 
 /// axum middleware enforcing the same [`AuthPolicy`] over a route group that does
@@ -512,7 +548,7 @@ pub async fn auth_gate(
         .extensions()
         .get::<ConnectInfo<SocketAddr>>()
         .map(|c| c.0.ip());
-    if policy.admits(bearer, peer_ip) {
+    if policy.admits(bearer, peer_ip).is_some() {
         next.run(request).await
     } else {
         (StatusCode::UNAUTHORIZED, "finelog: unauthorized").into_response()
@@ -595,17 +631,11 @@ mod tests {
             .with_extensions(extensions)
     }
 
-    // Fixed Ed25519 test keypairs (PKCS8 private + SPKI public PEM), generated once
-    // with `openssl genpkey -algorithm ed25519`. Cluster `alpha` verifies against
-    // PUB_A, `bravo` against PUB_B; PRIV_UNTRUSTED is a keypair no verifier trusts.
-    // A `mint(PRIV, ..)`-signed token is a Rust-self-signed vector; the authoritative
-    // Python(PyJWT-EdDSA)↔Rust cross-language vector lives in the shared conformance
-    // suite (rigging.auth_vectors) — a self-signed vector suffices for these units.
-    const PRIV_A: &str = "-----BEGIN PRIVATE KEY-----\nMC4CAQAwBQYDK2VwBCIEIMD3AX82bVpf0SoIIVssOXbemV9PNWzwtiJhuA61/AeG\n-----END PRIVATE KEY-----\n";
-    const PUB_A: &str = "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAqwwvfFvyRQ+8Dhh0li8h2HtCT4yP40s0pzBwwSAkK5s=\n-----END PUBLIC KEY-----\n";
-    const PRIV_B: &str = "-----BEGIN PRIVATE KEY-----\nMC4CAQAwBQYDK2VwBCIEIBmJ8qWzlhzFbTWMHs8snOv+rGewn4IUj+ZNPMKTdCtn\n-----END PRIVATE KEY-----\n";
-    const PUB_B: &str = "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEANlmOBl+nfp+EBodU+vEmzW1UBGhLsN2MC2YjSBjnBGg=\n-----END PUBLIC KEY-----\n";
-    const PRIV_UNTRUSTED: &str = "-----BEGIN PRIVATE KEY-----\nMC4CAQAwBQYDK2VwBCIEIILe2LqkmmgNBtRgBZNAy/OdPM1jlvKsAkD2/0PkHTty\n-----END PRIVATE KEY-----\n";
+    // The shared Ed25519 test keypairs. A `mint(PRIV, ..)`-signed token is a
+    // Rust-self-signed vector; the authoritative Python(PyJWT-EdDSA)↔Rust
+    // cross-language vector lives in the shared conformance suite
+    // (rigging.auth_vectors) — a self-signed vector suffices for these units.
+    use crate::server::test_support::{PRIV_A, PRIV_B, PRIV_UNTRUSTED, PUB_A, PUB_B};
 
     // Year 2286 / 1970+100s — fixed so exp checks never flake on wall-clock
     // (jsonwebtoken validates `exp` against the real clock).
@@ -840,6 +870,26 @@ mod tests {
     }
 
     #[test]
+    fn admitting_layer_names_the_identity_it_admitted() {
+        // The ingest handlers bind a pushed row's origin cluster to this identity,
+        // so which layer admitted -- and under which cluster -- is contract, not a
+        // detail. A token identifies its cluster; a trusted network does not.
+        let p = AuthPolicy::parse(&stacked_policy_json("10.0.0.0/8", "alpha", PUB_A)).unwrap();
+        assert_eq!(
+            p.authorize(&ctx(Some(&bearer(&mint_finelog(PRIV_A, FUTURE))), None))
+                .unwrap(),
+            AuthIdentity::Jwt {
+                cluster: "alpha".to_string()
+            }
+        );
+        assert_eq!(
+            p.authorize(&ctx(None, Some("10.1.2.3:5555".parse().unwrap())))
+                .unwrap(),
+            AuthIdentity::Network
+        );
+    }
+
+    #[test]
     fn cidr_first_admits_trusted_peer_over_unverifiable_token() {
         // Order (cidr before jwt) is load-bearing: a trusted-network client whose
         // token the jwt layer cannot verify is still admitted by CIDR, because the
@@ -978,7 +1028,7 @@ mod tests {
             };
             let peer: SocketAddr = request["peer"].as_str().unwrap().parse().unwrap();
 
-            let admitted = policy.admits(bearer.as_deref(), Some(peer.ip()));
+            let admitted = policy.admits(bearer.as_deref(), Some(peer.ip())).is_some();
             let expected = vector["expect"]["verdict"].as_str().unwrap() == "allow";
             assert_eq!(
                 admitted,

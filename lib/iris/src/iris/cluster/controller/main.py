@@ -245,10 +245,10 @@ def run_controller_serve(
         cluster_config.auth.signing_key if (cluster_config.auth and cluster_config.auth.signing_key) else None
     )
 
-    # Only a controller that forwards logs to a shared finelog (finelog.relay_address)
-    # needs a persistent signing key: the shared finelog pins this controller's public
-    # key to verify its delegation tokens. Everything else runs on the ephemeral fallback.
-    require_persistent_signing_key(cluster_config.finelog.relay_address, signing_key_pem)
+    # Only a controller that calls federation peers needs a persistent signing key: each
+    # peer pins this controller's public key to verify its federation tokens. Everything
+    # else runs on the ephemeral fallback.
+    require_persistent_signing_key(cluster_config.peers, signing_key_pem)
 
     auth = create_controller_auth(
         cluster_config.auth,
@@ -279,7 +279,6 @@ def run_controller_serve(
         autoscaler_evaluation_interval=cluster_config.defaults.autoscaler.evaluation_interval,
         cluster_id=cluster_config.name,
         peers=cluster_config.peers,
-        finelog=cluster_config.finelog,
     )
 
     # Each worker-daemon backend constructs and owns its liveness tracker, sized by

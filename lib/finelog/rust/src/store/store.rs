@@ -67,6 +67,16 @@ pub(crate) fn log_registered_schema() -> Schema {
     )
 }
 
+/// One consistent view of a namespace's sealed local segments: the arrow schema to
+/// read them with, their paths, and the lowest `seq` they hold (`None` when there is
+/// no local segment). Captured under a single hold of the engine's insertion lock, so
+/// `min_seq` always describes exactly the segments in `paths`.
+pub struct NamespaceSnapshot {
+    pub schema: SchemaRef,
+    pub paths: Vec<String>,
+    pub min_seq: Option<i64>,
+}
+
 /// Store backed by the Rust catalog plus per-namespace durability engines.
 ///
 /// The catalog owns the persistent registry + segments table; the `engines`
@@ -440,7 +450,7 @@ impl Store {
                 None => continue,
             };
             let arrow_schema = Arc::clone(engine.arrow_schema());
-            let paths = engine.query_snapshot();
+            let paths = engine.query_snapshot().paths;
             let provider = NamespaceProvider::build(arrow_schema, &paths)
                 .map_err(|e| StatsError::Internal(format!("build provider {:?}: {e}", ns.name)))?;
             out.push(RegisteredProvider {
@@ -451,11 +461,39 @@ impl Store {
         Ok(out)
     }
 
-    /// Snapshot the reserved `log` namespace's arrow schema + sealed-segment
-    /// paths for a FetchLogs read.
-    pub fn log_query_snapshot(&self) -> Result<(SchemaRef, Vec<String>), StatsError> {
-        let engine = self.require_engine(LOG_NAMESPACE_NAME)?;
-        Ok((Arc::clone(engine.arrow_schema()), engine.query_snapshot()))
+    /// Snapshot `name`'s arrow schema alongside one consistent observation of its sealed
+    /// segments: the paths a scan may read, and the lowest `seq` those paths hold. Both
+    /// describe the same segment set, so a reader can tell a `seq` it simply has not
+    /// reached from one that eviction put out of reach.
+    pub fn query_snapshot(&self, name: &str) -> Result<NamespaceSnapshot, StatsError> {
+        let engine = self.require_engine(name)?;
+        let segments = engine.query_snapshot();
+        Ok(NamespaceSnapshot {
+            schema: Arc::clone(engine.arrow_schema()),
+            paths: segments.paths,
+            min_seq: segments.min_seq,
+        })
+    }
+
+    /// `name`'s durability high-water mark: every row with `seq <= value` has been sealed
+    /// into a segment, so it is visible to a scan unless it has since been evicted.
+    pub fn namespace_persisted_seq(&self, name: &str) -> Result<i64, StatsError> {
+        Ok(*self.require_engine(name)?.watch_persisted_seq().borrow())
+    }
+
+    /// The seq in `namespace` below which this store will never send to `target` again.
+    pub fn forward_cursor(&self, target: &str, namespace: &str) -> Result<Option<i64>, StatsError> {
+        self.catalog.forward_cursor(target, namespace)
+    }
+
+    /// Record `cursor` as settled for `(target, namespace)`.
+    pub fn set_forward_cursor(
+        &self,
+        target: &str,
+        namespace: &str,
+        cursor: i64,
+    ) -> Result<(), StatsError> {
+        self.catalog.set_forward_cursor(target, namespace, cursor)
     }
 
     /// Return `(name, schema, stats, policy)` for every live namespace in

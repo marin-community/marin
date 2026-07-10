@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-from finelog.rpc.logging_connect import LogServiceClientSync
 from iris.cluster.backends.k8s.tasks import (
     _LABEL_MANAGED,
     _LABEL_RUNTIME,
@@ -30,11 +29,6 @@ class FakeStatsTable:
 @pytest.fixture
 def k8s() -> InMemoryK8sService:
     return InMemoryK8sService(namespace="iris")
-
-
-@pytest.fixture
-def log_service(embedded_log_server) -> LogServiceClientSync:
-    return LogServiceClientSync(address=embedded_log_server.address)
 
 
 @pytest.fixture

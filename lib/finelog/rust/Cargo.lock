@@ -1886,13 +1886,18 @@ dependencies = [
  "datafusion-datasource",
  "datafusion-datasource-parquet",
  "futures",
+ "http",
  "http-body",
+ "hyper",
+ "hyper-rustls",
+ "hyper-util",
  "jsonwebtoken",
  "object_store",
  "parquet",
  "protoc-bin-vendored",
  "regex",
  "rusqlite",
+ "rustls",
  "serde",
  "serde_json",
  "tikv-jemallocator",
@@ -1902,6 +1907,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "url",
+ "webpki-roots",
 ]
 
 [[package]]
@@ -3701,6 +3707,7 @@ version = "0.23.40"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ef86cd5876211988985292b91c96a8f2d298df24e75989a43a3c73f2d4d8168b"
 dependencies = [
+ "log",
  "once_cell",
  "ring",
  "rustls-pki-types",
@@ -4694,6 +4701,15 @@ checksum = "5a6580f308b1fad9207618087a65c04e7a10bc77e02c8e84e9b00dd4b12fa0bb"
 dependencies = [
  "js-sys",
  "wasm-bindgen",
+]
+
+[[package]]
+name = "webpki-roots"
+version = "1.0.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bf85cb06032201fa7c6f829d7db5a7e5aa45bcc0655327713065f6f0576731bf"
+dependencies = [
+ "rustls-pki-types",
 ]
 
 [[package]]
