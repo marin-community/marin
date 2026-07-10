@@ -402,7 +402,6 @@ def _make_source_push_semantic_fused_w13_backward_kernel(
     producer_tiles = blocks * (hidden_dim // config.send_k)
     producer_tiles_per_program = math.ceil(producer_tiles / config.producer_programs_per_peer)
     total_compute_programs = ep_size * config.compute_programs_per_peer
-    total_combine_programs = ep_size * config.combine_programs_per_peer
     dw_tiles = experts_per_rank * hidden_tiles * output_tiles
     worker_programs = (
         config.producer_programs_per_peer + config.compute_programs_per_peer + config.combine_programs_per_peer
@@ -429,7 +428,8 @@ def _make_source_push_semantic_fused_w13_backward_kernel(
         compute_done_sem = pl.get_global(mgpu.SemaphoreType.REGULAR((ep_size, config.inbox_slots)))
         dx_full_sem = pl.get_global(mgpu.SemaphoreType.REGULAR((ep_size, config.inbox_slots, blocks, hidden_tiles)))
         return_consumed_sem = pl.get_global(mgpu.SemaphoreType.REGULAR((ep_size, config.inbox_slots)))
-        dx_init_done_sem = pl.get_global(mgpu.SemaphoreType.REGULAR((tokens_per_source, hidden_tiles)))
+        dx_init_done_sem = pl.get_global(mgpu.SemaphoreType.REGULAR(()))
+        dx_init_ready_sem = pl.get_global(mgpu.SemaphoreType.REGULAR(()))
         dw_init_done_sem = pl.get_global(mgpu.SemaphoreType.REGULAR((dw_tiles,)))
         rank = lax.axis_index(SOURCE_PUSH_MESH_AXIS)
         peer_ordinal = pl.program_id(0)
@@ -757,22 +757,38 @@ def _make_source_push_semantic_fused_w13_backward_kernel(
         @pl.when(worker >= config.producer_programs_per_peer + config.compute_programs_per_peer)
         def _combine() -> None:
             local_combine = worker - config.producer_programs_per_peer - config.compute_programs_per_peer
-            global_combine_id = peer_ordinal * config.combine_programs_per_peer + local_combine
             initialize_jobs = tokens_per_source * hidden_tiles
 
-            @pl.loop(0, math.ceil(initialize_jobs / total_combine_programs))
-            def _initialize_dx_loop(iteration) -> None:
-                job = iteration * total_combine_programs + global_combine_id
+            # One peer-local resident group initializes dX before any route
+            # accumulation. A rank-wide CTA barrier would exceed Hopper
+            # residency at the target EP size.
+            @pl.when(peer_ordinal == 0)
+            def _initialize_dx() -> None:
+                @pl.loop(0, math.ceil(initialize_jobs / config.combine_programs_per_peer))
+                def _initialize_dx_loop(iteration) -> None:
+                    job = iteration * config.combine_programs_per_peer + local_combine
 
-                @pl.when(job < initialize_jobs)
-                def _zero_owned_dx() -> None:
-                    token = job // hidden_tiles
-                    hidden_tile = job % hidden_tiles
-                    hidden_start = hidden_tile * config.block_hidden
-                    dx_ref[token, pl.ds(hidden_start, config.block_hidden)] = jnp.zeros(
-                        (config.block_hidden,), dtype=jnp.float32
+                    @pl.when(job < initialize_jobs)
+                    def _zero_owned_dx() -> None:
+                        token = job // hidden_tiles
+                        hidden_tile = job % hidden_tiles
+                        hidden_start = hidden_tile * config.block_hidden
+                        dx_ref[token, pl.ds(hidden_start, config.block_hidden)] = jnp.zeros(
+                            (config.block_hidden,), dtype=jnp.float32
+                        )
+
+                pl.semaphore_signal(dx_init_done_sem)
+
+                @pl.when(local_combine == 0)
+                def _publish_dx_initialized() -> None:
+                    pl.semaphore_wait(
+                        dx_init_done_sem,
+                        value=config.combine_programs_per_peer,
+                        decrement=False,
                     )
-                    pl.semaphore_signal(dx_init_done_sem.at[token, hidden_tile])
+                    pl.semaphore_signal(dx_init_ready_sem)
+
+            pl.semaphore_wait(dx_init_ready_sem, value=1, decrement=False)
 
             def _consume_destination(static_dst_ordinal: int) -> None:
                 dst = (rank + static_dst_ordinal) % ep_size
@@ -803,11 +819,6 @@ def _make_source_push_semantic_fused_w13_backward_kernel(
                                 @pl.when(row < valid_rows)
                                 def _scatter_live_row() -> None:
                                     token = token_ids_ref[static_dst_ordinal, chunk, block, row]
-                                    pl.semaphore_wait(
-                                        dx_init_done_sem.at[token, hidden_tile],
-                                        value=1,
-                                        decrement=False,
-                                    )
                                     # Keep the row axis so lane lowering distributes the atomic value as a
                                     # matrix tile. A rank-1 GMEM value is replicated across lanes here.
                                     dx_tile = dx_return_ref[

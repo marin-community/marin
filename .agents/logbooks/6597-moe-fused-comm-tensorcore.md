@@ -756,3 +756,34 @@ drops, and dropped routes were all zero. Twelve non-fatal
 `CUDA_ERROR_NOT_PERMITTED` VMM fallback warnings occurred. Complete raw output,
 terminal status, task summary, and monitor state are in
 `scratch/6597-w13b-topk1/`.
+
+## 2026-07-10 FUSED-MOE-021 - Nonfinite-safe top-k=1 W13 backward diagnostic
+
+Job `/dlwh/bench-semantic-w13b-topk1-finite-20260710-1535` ran once on
+`cw-rno2a` at commit `0404bd5f12` and reached terminal
+`JOB_STATE_SUCCEEDED`. Its single task exited 0 after 40.91 seconds, with zero
+failures and preemptions. No duplicate, stop, resubmit, code edit, or Iris
+restart was issued.
+
+After excluding the two observed nonfinite `dX` entries, the finite-masked
+expected absolute sum was `10,787,750`, but the finite-masked observed absolute
+sum still overflowed the float32 reduction to `Infinity`. The least-squares
+scale and cosine similarity remained `NaN`; the unmasked max and mean absolute
+differences were also `NaN`. Expected `dX` had zero nonfinite entries; observed
+`dX` had two.
+`dW13` remained close, with max and mean absolute differences of
+`3.814697265625e-06` and `3.3054845971491886e-08`, and zero expected or
+observed nonfinite entries. The nonfinite mask alone is thus insufficient: the
+remaining finite observed `dX` values still overflow float32 aggregate metrics.
+
+Compile/first-call time was `8.013033227995038` seconds, lowering/compile time
+was `7.178556734928861` seconds, first-run time was `0.8344764930661768`
+seconds, and steady-state time was `1.7895640339702368` ms. The row reported
+four live pairs, 1,024 useful rows, 1,280 rounded rows, 0.8 row efficiency,
+`0.07500023774071458` useful and `0.09375029717589324` rounded TFLOP/s/rank.
+Queue and layout overflow error counts, metadata overflow routes, routing
+drops, and dropped routes were all zero. Twelve non-fatal
+`CUDA_ERROR_NOT_PERMITTED` VMM fallback warnings occurred; there was no
+traceback or actionable runtime failure. Complete raw output, exact result
+rows, terminal status, task summary, and monitor state are in
+`scratch/6597-w13b-topk1-finite/`.
