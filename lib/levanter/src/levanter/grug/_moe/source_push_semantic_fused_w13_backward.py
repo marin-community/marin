@@ -808,14 +808,19 @@ def _make_source_push_semantic_fused_w13_backward_kernel(
                                         value=1,
                                         decrement=False,
                                     )
+                                    # Keep the row axis so lane lowering distributes the atomic value as a
+                                    # matrix tile. A rank-1 GMEM value is replicated across lanes here.
                                     dx_tile = dx_return_ref[
                                         dst,
                                         slot,
-                                        block * config.compute_m + row,
+                                        pl.ds(block * config.compute_m + row, 1),
                                         pl.ds(hidden_start, config.block_hidden),
                                     ].astype(jnp.float32)
                                     mgpu.atomic_add(
-                                        dx_ref.at[token, pl.ds(hidden_start, config.block_hidden)],
+                                        dx_ref.at[
+                                            pl.ds(token, 1),
+                                            pl.ds(hidden_start, config.block_hidden),
+                                        ],
                                         dx_tile,
                                     )
 

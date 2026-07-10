@@ -61,6 +61,15 @@ class SourcePushSemanticFusedW2BackwardConfig:
     def compute_blocks_per_send(self) -> int:
         return self.send_m // self.compute_m
 
+    def consumer_programs_per_source(self, source_count: int) -> int:
+        """Partition the fixed consumer pool across source-owned work queues."""
+
+        if source_count <= 0 or self.consumer_programs % source_count:
+            raise ValueError(
+                f"consumer_programs={self.consumer_programs} must be divisible by source_count={source_count}"
+            )
+        return self.consumer_programs // source_count
+
 
 @jax.tree_util.register_dataclass
 @dataclass(frozen=True)
@@ -111,11 +120,9 @@ class SourcePushSemanticFusedW2BackwardGenerationAccounting:
     full_generation: int
     consumer_done_generation: int
     released_generation: int
-    dw2_turn: int
 
 
 def source_push_semantic_fused_w2_backward_generation_accounting(
-    phase: int,
     chunk: int,
     *,
     hidden_dim: int,
@@ -123,12 +130,12 @@ def source_push_semantic_fused_w2_backward_generation_accounting(
     send_chunks_per_dst: int,
     config: SourcePushSemanticFusedW2BackwardConfig = SourcePushSemanticFusedW2BackwardConfig(),
 ) -> SourcePushSemanticFusedW2BackwardGenerationAccounting:
-    """Return the slot generations and serialized dW2 turn for one chunk."""
+    """Return the slot semaphore generations for one source-owned chunk."""
 
     config.validate()
     _validate_kernel_dimensions(hidden_dim, intermediate_dim, config)
-    if phase < 0 or chunk < 0 or chunk >= send_chunks_per_dst:
-        raise ValueError(f"invalid phase/chunk coordinates {phase=} {chunk=} for {send_chunks_per_dst=}")
+    if chunk < 0 or chunk >= send_chunks_per_dst:
+        raise ValueError(f"invalid chunk coordinate {chunk=} for {send_chunks_per_dst=}")
     generation = chunk // config.inbox_slots + 1
     producer_tiles = config.compute_blocks_per_send * (hidden_dim // config.send_hidden_block)
     dh_jobs = config.compute_blocks_per_send * (intermediate_dim // config.intermediate_block)
@@ -145,7 +152,6 @@ def source_push_semantic_fused_w2_backward_generation_accounting(
         full_generation=generation,
         consumer_done_generation=generation * (dh_jobs + dw2_jobs),
         released_generation=generation + 1,
-        dw2_turn=phase * send_chunks_per_dst + chunk + 1,
     )
 
 
@@ -498,9 +504,10 @@ def _make_source_push_semantic_fused_w2_backward_kernel(
     dw2_output_tiles = experts_per_rank * intermediate_tiles * hidden_tiles
     dw2_jobs = blocks * intermediate_tiles * hidden_tiles
     consumer_jobs = dh_jobs + dw2_jobs
-    consumer_jobs_per_program = (consumer_jobs + config.consumer_programs - 1) // config.consumer_programs
-    zero_jobs_per_program = (dw2_output_tiles + config.consumer_programs - 1) // config.consumer_programs
-    worker_programs = config.producer_programs_per_peer + config.consumer_programs
+    consumer_programs_per_source = config.consumer_programs_per_source(ep_size)
+    consumer_jobs_per_program = (consumer_jobs + consumer_programs_per_source - 1) // consumer_programs_per_source
+    zero_jobs_per_program = (dw2_output_tiles + consumer_programs_per_source - 1) // consumer_programs_per_source
+    worker_programs = config.producer_programs_per_peer + consumer_programs_per_source
 
     def body(
         dy_ref,
@@ -524,8 +531,6 @@ def _make_source_push_semantic_fused_w2_backward_kernel(
         consumer_done_sem = pl.get_global(mgpu.SemaphoreType.REGULAR((ep_size, config.inbox_slots)))
         init_done_sem = pl.get_global(mgpu.SemaphoreType.REGULAR(()))
         init_ready_sem = pl.get_global(mgpu.SemaphoreType.REGULAR(()))
-        dw2_turn_sem = pl.get_global(mgpu.SemaphoreType.REGULAR(()))
-        dw2_done_sem = pl.get_global(mgpu.SemaphoreType.REGULAR(()))
         rank = lax.axis_index(SOURCE_PUSH_MESH_AXIS)
         peer_ordinal = pl.program_id(0)
         worker = pl.program_id(1)
@@ -539,7 +544,7 @@ def _make_source_push_semantic_fused_w2_backward_kernel(
 
             @pl.loop(0, zero_jobs_per_program)
             def _zero_dw2(job_iteration) -> None:
-                job = consumer + job_iteration * config.consumer_programs
+                job = consumer + job_iteration * consumer_programs_per_source
 
                 @pl.when(job < dw2_output_tiles)
                 def _zero_owned_tile() -> None:
@@ -557,8 +562,7 @@ def _make_source_push_semantic_fused_w2_backward_kernel(
 
             @pl.when(consumer == 0)
             def _publish_initial_state() -> None:
-                pl.semaphore_wait(init_done_sem, value=config.consumer_programs, decrement=False)
-                pl.semaphore_signal(dw2_turn_sem)
+                pl.semaphore_wait(init_done_sem, value=consumer_programs_per_source, decrement=False)
                 for static_source_ordinal in range(ep_size):
                     src = (rank + static_source_ordinal) % ep_size
 
@@ -664,24 +668,22 @@ def _make_source_push_semantic_fused_w2_backward_kernel(
             branches = tuple((lambda ordinal: lambda _: _send_peer(ordinal))(i) for i in range(ep_size))
             lax.switch(peer_ordinal, branches, None)
 
-        @pl.when((peer_ordinal == 0) & (worker >= config.producer_programs_per_peer))
+        @pl.when(worker >= config.producer_programs_per_peer)
         def _consumer() -> None:
             consumer = worker - config.producer_programs_per_peer
             pl.semaphore_wait(init_ready_sem, value=1, decrement=False)
 
-            for phase in range(ep_size):
-                static_source_ordinal = (-phase) % ep_size
+            def _consume_source(static_source_ordinal: int) -> None:
                 src = (rank + static_source_ordinal) % ep_size
 
                 @pl.loop(0, send_chunks_per_dst)
                 def _chunk_loop(chunk) -> None:
                     slot = chunk % config.inbox_slots
                     generation = chunk // config.inbox_slots + 1
-                    global_turn = phase * send_chunks_per_dst + chunk + 1
 
                     @pl.loop(0, consumer_jobs_per_program)
                     def _job_loop(job_iteration) -> None:
-                        job = consumer + job_iteration * config.consumer_programs
+                        job = consumer + job_iteration * consumer_programs_per_source
 
                         @pl.when(job < consumer_jobs)
                         def _consume_job() -> None:
@@ -752,65 +754,49 @@ def _make_source_push_semantic_fused_w2_backward_kernel(
                             @pl.when(job >= dh_jobs)
                             def _compute_dw2() -> None:
                                 dw_job = job - dh_jobs
-                                owner_block = dw_job // (intermediate_tiles * hidden_tiles)
+                                block = dw_job // (intermediate_tiles * hidden_tiles)
                                 rem = dw_job % (intermediate_tiles * hidden_tiles)
                                 i_tile = rem // hidden_tiles
                                 h_tile = rem % hidden_tiles
-                                expert = recv_expert_ref[static_source_ordinal, chunk, owner_block]
-                                owner_valid_rows = recv_valid_ref[static_source_ordinal, chunk, owner_block]
-                                owns_expert = owner_valid_rows > 0
-                                for prior_block in range(blocks):
-                                    prior_expert = recv_expert_ref[static_source_ordinal, chunk, prior_block]
-                                    prior_valid_rows = recv_valid_ref[static_source_ordinal, chunk, prior_block]
-                                    owns_expert &= (
-                                        (prior_block >= owner_block)
-                                        | (prior_valid_rows <= 0)
-                                        | (prior_expert != expert)
-                                    )
+                                expert = recv_expert_ref[static_source_ordinal, chunk, block]
+                                valid_rows = recv_valid_ref[static_source_ordinal, chunk, block]
 
-                                @pl.when(owns_expert)
-                                def _compute_owned_expert_dw2() -> None:
-                                    pl.semaphore_wait(dw2_turn_sem, value=global_turn, decrement=False)
+                                @pl.when(valid_rows > 0)
+                                def _compute_block_dw2() -> None:
 
                                     def _acc_scope(acc_ref) -> None:
                                         def _smem_scope(h_smem, dy_smem, barrier) -> None:
-                                            for block in range(blocks):
-                                                valid_rows = recv_valid_ref[static_source_ordinal, chunk, block]
-                                                block_expert = recv_expert_ref[static_source_ordinal, chunk, block]
-
-                                                @pl.when((valid_rows > 0) & (block_expert == expert))
-                                                def _accumulate_block() -> None:
-                                                    row_start = recv_row_ref[static_source_ordinal, chunk, block]
-                                                    mgpu.copy_gmem_to_smem(
-                                                        h_ref.at[
-                                                            expert,
-                                                            pl.ds(row_start, config.compute_m),
-                                                            pl.ds(
-                                                                i_tile * config.intermediate_block,
-                                                                config.intermediate_block,
-                                                            ),
-                                                        ],
-                                                        h_smem,
-                                                        barrier,
-                                                    )
-                                                    mgpu.copy_gmem_to_smem(
-                                                        inbox_ref.at[
-                                                            src,
-                                                            slot,
-                                                            pl.ds(block * config.compute_m, config.compute_m),
-                                                            pl.ds(h_tile * config.hidden_block, config.hidden_block),
-                                                        ],
-                                                        dy_smem,
-                                                        barrier,
-                                                    )
-                                                    mgpu.barrier_wait(barrier)
-                                                    mgpu.commit_smem()
-                                                    mgpu.wgmma(
-                                                        acc_ref,
-                                                        mgpu.transpose_ref(h_smem, (1, 0)),
-                                                        dy_smem,
-                                                    )
-                                                    mgpu.wgmma_wait(0)
+                                            row_start = recv_row_ref[static_source_ordinal, chunk, block]
+                                            mgpu.copy_gmem_to_smem(
+                                                h_ref.at[
+                                                    expert,
+                                                    pl.ds(row_start, config.compute_m),
+                                                    pl.ds(
+                                                        i_tile * config.intermediate_block,
+                                                        config.intermediate_block,
+                                                    ),
+                                                ],
+                                                h_smem,
+                                                barrier,
+                                            )
+                                            mgpu.copy_gmem_to_smem(
+                                                inbox_ref.at[
+                                                    src,
+                                                    slot,
+                                                    pl.ds(block * config.compute_m, config.compute_m),
+                                                    pl.ds(h_tile * config.hidden_block, config.hidden_block),
+                                                ],
+                                                dy_smem,
+                                                barrier,
+                                            )
+                                            mgpu.barrier_wait(barrier)
+                                            mgpu.commit_smem()
+                                            mgpu.wgmma(
+                                                acc_ref,
+                                                mgpu.transpose_ref(h_smem, (1, 0)),
+                                                dy_smem,
+                                            )
+                                            mgpu.wgmma_wait(0)
 
                                         pl.run_scoped(
                                             _smem_scope,
@@ -835,20 +821,9 @@ def _make_source_push_semantic_fused_w2_backward_kernel(
                                         acc_ref=mgpu.ACC((config.intermediate_block, config.hidden_block)),
                                     )
 
-                                pl.semaphore_signal(dw2_done_sem)
-
                             pl.semaphore_signal(consumer_done_sem.at[src, slot])
 
-                    @pl.when((global_turn % config.consumer_programs) == consumer)
-                    def _advance_dw2_turn() -> None:
-                        pl.semaphore_wait(
-                            dw2_done_sem,
-                            value=global_turn * dw2_jobs,
-                            decrement=False,
-                        )
-                        pl.semaphore_signal(dw2_turn_sem)
-
-                    @pl.when((chunk % config.consumer_programs) == consumer)
+                    @pl.when((chunk % consumer_programs_per_source) == consumer)
                     def _release_slot() -> None:
                         pl.semaphore_wait(
                             consumer_done_sem.at[src, slot],
@@ -859,6 +834,11 @@ def _make_source_push_semantic_fused_w2_backward_kernel(
                             pl.semaphore_signal(empty_sem.at[rank, slot])
                         else:
                             _signal_remote(empty_sem, src, rank, slot)
+
+            branches = tuple(
+                (lambda ordinal: lambda _: _consume_source((-ordinal) % ep_size))(i) for i in range(ep_size)
+            )
+            lax.switch(peer_ordinal, branches, None)
 
     return mgpu.kernel(
         body,

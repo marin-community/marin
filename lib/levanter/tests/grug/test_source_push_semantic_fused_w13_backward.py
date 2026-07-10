@@ -87,6 +87,42 @@ def test_fused_w13_backward_metadata_inverts_chunk_rows_and_rotates_peers():
     np.testing.assert_array_equal(np.asarray(metadata.send_return_consumed_target), expected_return_tiles)
 
 
+def test_fused_w13_backward_metadata_maps_three_peer_source_ordinals_to_send_targets():
+    selected_experts = jnp.asarray(
+        [
+            [[0, 1], [0, 1], [0, 1]],
+            [[2, 0], [2, 0], [2, 0]],
+            [[2, 1], [2, 1], [2, 1]],
+        ],
+        dtype=jnp.int32,
+    )
+    plan = build_source_push_semantic_plan_jax(
+        selected_experts,
+        jnp.ones(selected_experts.shape, dtype=jnp.float32),
+        ep_size=3,
+        experts_per_rank=1,
+        rows_per_src_dst_capacity=6,
+        capacity_factor=4.0,
+    )
+    metadata = source_push_semantic_fused_w13_backward_metadata_jax(
+        jnp.zeros((3, 3, 256), dtype=jnp.bfloat16),
+        plan,
+        send_chunks_per_dst=1,
+        rows_per_expert_capacity=256,
+    )
+
+    send_targets = np.asarray(metadata.send_return_consumed_target)
+    recv_targets = np.asarray(metadata.recv_return_consumed_target)
+    for destination in range(3):
+        for source_ordinal in range(3):
+            source = (destination + source_ordinal) % 3
+            destination_ordinal = (-source_ordinal) % 3
+            np.testing.assert_array_equal(
+                recv_targets[destination, source_ordinal],
+                send_targets[source, destination_ordinal],
+            )
+
+
 def test_fused_w13_backward_metadata_invalidates_routes_clipped_from_forward_send():
     selected_experts = jnp.zeros((2, 40, 2), dtype=jnp.int32)
     plan = build_source_push_semantic_plan_jax(

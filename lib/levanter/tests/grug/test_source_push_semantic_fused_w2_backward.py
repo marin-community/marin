@@ -8,6 +8,7 @@ import inspect
 import jax
 import jax.numpy as jnp
 import numpy as np
+import pytest
 
 from levanter.grug._moe.source_push_plan import (
     build_source_push_semantic_plan_jax,
@@ -150,36 +151,31 @@ def test_fused_w2_backward_metadata_is_jittable_and_preserves_source_routes():
                 assert pair_start >= 0
 
 
-def test_fused_w2_backward_generation_accounting_tracks_slot_reuse_and_dw2_order():
+def test_fused_w2_backward_generation_accounting_tracks_source_owned_slot_reuse():
     first = source_push_semantic_fused_w2_backward_generation_accounting(
-        0,
         0,
         hidden_dim=2560,
         intermediate_dim=1280,
         send_chunks_per_dst=24,
     )
     reused = source_push_semantic_fused_w2_backward_generation_accounting(
-        0,
         CONFIG.inbox_slots,
         hidden_dim=2560,
         intermediate_dim=1280,
         send_chunks_per_dst=24,
     )
-    next_source = source_push_semantic_fused_w2_backward_generation_accounting(
-        1,
-        0,
-        hidden_dim=2560,
-        intermediate_dim=1280,
-        send_chunks_per_dst=24,
-    )
-
     assert (first.slot, first.generation, first.empty_generation, first.released_generation) == (0, 1, 1, 2)
     assert reused.slot == first.slot
     assert reused.generation == 2
     assert reused.send_done_generation == 2 * first.send_done_generation
     assert reused.consumer_done_generation == 2 * first.consumer_done_generation
     assert reused.empty_generation == first.released_generation
-    assert next_source.dw2_turn == 25
+    assert CONFIG.consumer_programs_per_source(8) == 4
+
+
+def test_fused_w2_backward_config_rejects_uneven_source_consumer_partition():
+    with pytest.raises(ValueError, match="must be divisible by source_count=3"):
+        CONFIG.consumer_programs_per_source(3)
 
 
 def test_fused_w2_backward_interpret_matches_independent_rough_route_reference():
