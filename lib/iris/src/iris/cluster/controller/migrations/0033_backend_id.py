@@ -10,9 +10,7 @@ ACTIVE). The same literal is used by the runtime config synthesis
 (``iris.cluster.config.resolve_backends``), so upgraded rows match what the
 controller resolves at startup.
 
-Idempotent: re-run from scratch if the controller crashes mid-migration. On a
-fresh DB the columns/table already exist from the baseline schema, so the adds
-and creates no-op while the default ``backends`` row is still inserted.
+Idempotent: re-run from scratch if the controller crashes mid-migration.
 """
 
 from iris.cluster.types import DEFAULT_BACKEND_ID, BackendStatus

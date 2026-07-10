@@ -59,7 +59,8 @@ class HandoffSpec:
 
     local_job_id: JobName  # this cluster's local (root) job id; the peer runs the same id
     peer_id: str
-    owner_principal: str  # end-user identity asserted to the peer
+    owner_principal: str  # end-user friendly owner asserted to the peer (attribution)
+    submitting_user: str  # authenticated principal the peer's allowlist gates on
     request: controller_pb2.Controller.LaunchJobRequest  # normalized request, for job_config
 
 
@@ -87,11 +88,11 @@ class FederationStore(Protocol):
         ...
 
     def mark_handoff_rejected(self, local_job_id: JobName, *, reason: str) -> None:
-        """Terminalize a handoff the peer rejected with ``ALREADY_EXISTS``.
+        """Terminalize a handoff the peer refused and will keep refusing.
 
         Flips the handle to ``HANDOFF_REJECTED`` (so it drops from
         :meth:`pending_handoffs` and the re-drive stops) and marks the local job
-        failed/killed with ``reason`` so the user sees the collision."""
+        failed/killed with ``reason`` so the user sees the peer's answer."""
         ...
 
     def pending_handoffs(self) -> list[HandoffSpec]:

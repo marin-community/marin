@@ -161,3 +161,45 @@ ledger = os.path.join(cache_path, "shard_ledger.json")     # cache_path may be g
 record = f"{output_path}/.artifact.json"                   # doubles the slash on a trailing-/ prefix
 shard = path[len(output_path.rstrip("/")) + 1 :]           # string-prefix containment; use relative_to
 ```
+
+### `ml-raw-fsspec-io` — Raw fsspec handle for I/O that a `StoragePath` verb covers
+
+**Why it's bad:** `fsspec.open`, `fsspec.core.url_to_fs`, and `fsspec.filesystem`
+bypass the guarded factory in `rigging.filesystem`, so the read never charges the
+cross-region transfer budget, `mirror://` is not resolved, and S3/R2 filesystems
+build without the finite timeouts that stop a dead socket from wedging a shard
+(#6487). Each `fs, path = url_to_fs(url); fs.<op>(path)` also re-derives the
+protocol split by hand and drifts. `StoragePath` carries the guarded verbs — `exists`,
+`isfile`, `isdir`, `size`, `mtime`, `ls`, `walk`, `glob`, `expand_glob`, `mkdirs`, `rm`,
+`rmtree`, `rename`, `open`, `read_text`/`write_text`/`read_bytes`/`write_bytes`, and
+`download_to`/`upload_from` — so a path opens, lists, and stats through one type.
+(`glob` matches patterns and drops non-matches; `expand_glob` resolves a shard spec,
+keeping an explicitly named literal even when it is absent.)
+
+**When allowed:** Byte-range reads (`fs.cat_file(path, start, end)`); bulk detail
+listing (`fs.ls(path, detail=True)` for a browser/report); an `fs` built with a
+cache-control or backend kwarg the verbs cannot forward — `use_listings_cache=False`
+for a polled read that must defeat the listing cache, `block_size`/`cache_type` that
+must reach the file opener rather than the S3 constructor, or a passthrough like
+`revision=`/`recursive=` on `glob`/`find`/`info`; handing a live `fs` to a library that
+needs the handle (pyarrow, a streaming writer); the guarded
+`rigging.filesystem.url_to_fs`/`open_url`/`filesystem` and `atomic_rename` themselves,
+which are the intended low-level seam; and modules that `rigging.filesystem` itself
+imports (e.g. `rigging.distributed_lock`), which sit below it in the DAG and so use raw
+`fsspec` rather than depend back on `StoragePath`.
+
+**Bad example:**
+```python
+fs, path = url_to_fs(output_dir); fs.makedirs(path, exist_ok=True)   # StoragePath(output_dir).mkdirs()
+with fsspec.open(summary_path, "w") as f: json.dump(summary, f)      # StoragePath(summary_path).write_text(json.dumps(summary))
+paths = [p for p in fs.ls(prefix) if p.endswith(".parquet")]         # ...StoragePath(prefix).ls() if str(p).endswith(".parquet")
+fs.get(remote, local, recursive=True)                               # StoragePath(remote).download_to(local, recursive=True)
+```
+
+**Good example:**
+```python
+StoragePath(output_dir).mkdirs()
+StoragePath(summary_path).write_text(json.dumps(summary, indent=2, sort_keys=True))
+parquet = [p for p in StoragePath(prefix).ls() if str(p).endswith(".parquet")]
+StoragePath(remote).download_to(local, recursive=True)
+```

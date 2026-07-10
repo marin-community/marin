@@ -10,7 +10,8 @@ import pytest
 
 import haliax as hax
 
-from levanter.optim import NamoConfig, NamoDConfig, OptimizerConfig
+from levanter.optim.config import OptimizerConfig
+from levanter.optim.namo import NamoConfig, NamoDConfig
 from levanter.optim.namo import _clamp_to_mean, _create_namo_mask, scale_with_namo, scale_with_namod
 from levanter.optim.util import flatten_linear_layers
 

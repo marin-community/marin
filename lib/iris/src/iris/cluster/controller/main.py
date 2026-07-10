@@ -14,6 +14,7 @@ import logging
 import shutil
 import signal
 import threading
+import time
 from pathlib import Path
 
 import click
@@ -29,6 +30,7 @@ from iris.cluster.controller.checkpoint import download_checkpoint_to_local, lat
 from iris.cluster.controller.controller import Controller, ControllerConfig
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.log_stack import build_log_stack
+from iris.cluster.controller.rollout import RolloutPhase, read_rollout_record, write_rollout_record
 from iris.cluster.endpoints import LOG_SERVER_ENDPOINT_NAME, resolve_endpoint_uri
 from iris.cluster.provenance import provenance_from_env
 
@@ -58,6 +60,97 @@ def _local_db_epoch_ms(db_dir: Path) -> int | None:
         *db_dir.glob(f"{ControllerDB.AUTH_DB_FILENAME}-*"),
     ]
     return int(max(p.stat().st_mtime for p in candidates) * 1000)
+
+
+def _apply_requested_rollback(db_dir: Path, remote_state_dir: str) -> bool:
+    """Restore a requested rollback's checkpoint over the local DB, exactly once.
+
+    Reads the rollout record; when it is ``ROLLBACK_REQUESTED`` with a checkpoint,
+    replaces ``db_dir`` with that checkpoint and rewrites the record ``ROLLED_BACK``
+    so a later restart reuses the restored DB instead of rewinding again. Returns
+    whether a rollback was applied.
+    """
+    record = read_rollout_record(remote_state_dir)
+    if record is None or record.phase is not RolloutPhase.ROLLBACK_REQUESTED:
+        return False
+    checkpoint = record.rollback_checkpoint
+    if not checkpoint:
+        logger.warning("Rollback requested but no checkpoint recorded; starting from local DB")
+        return False
+
+    logger.info("Rollback requested: restoring pre-deploy checkpoint %s over local DB %s", checkpoint, db_dir)
+    if db_dir.exists():
+        shutil.rmtree(db_dir)
+    db_dir.mkdir(parents=True, exist_ok=True)
+    if not download_checkpoint_to_local(remote_state_dir, db_dir, checkpoint_dir=checkpoint):
+        raise ValueError(f"Rollback checkpoint not found: {checkpoint}")
+
+    write_rollout_record(
+        remote_state_dir,
+        record.model_copy(
+            update={
+                "phase": RolloutPhase.ROLLED_BACK,
+                "previous_image": None,
+                "rollback_checkpoint": None,
+                "updated_at_ms": int(time.time() * 1000),
+            }
+        ),
+    )
+    logger.info("Rollback applied; marked rollout record ROLLED_BACK")
+    return True
+
+
+def _prepare_local_db_dir(
+    db_dir: Path,
+    remote_state_dir: str,
+    *,
+    fresh: bool,
+    checkpoint_path: str | None,
+) -> None:
+    """Prepare ``db_dir`` so ControllerDB can open it: restore a checkpoint or reuse local.
+
+    - ``fresh``: wipe ``db_dir`` and start empty (no restore).
+    - a requested rollback (rollout record in ``ROLLBACK_REQUESTED``): restore the
+      recorded pre-deploy checkpoint over the local DB, then self-clear the record.
+    - ``checkpoint_path`` set: restore that checkpoint when the local DB is absent or
+      staler than the latest remote checkpoint.
+    - otherwise: reuse the local DB when it is at least as fresh as the latest remote
+      checkpoint; else restore the latest remote checkpoint.
+    """
+    if fresh:
+        # Wipe any pre-existing db_dir so we're guaranteed to start with an empty
+        # database. Otherwise a stale or corrupt local SQLite file would be
+        # silently reused, defeating the purpose of --fresh.
+        if db_dir.exists():
+            logger.info("--fresh: removing existing db_dir %s", db_dir)
+            shutil.rmtree(db_dir)
+        logger.info("--fresh: starting with empty database, skipping checkpoint restore")
+        db_dir.mkdir(parents=True, exist_ok=True)
+        return
+
+    if _apply_requested_rollback(db_dir, remote_state_dir):
+        return
+
+    # Trust local only when both files are present AND at least as fresh as the
+    # latest remote checkpoint. This also covers a node-local volume that isn't
+    # guaranteed to be the same disk across restarts (e.g. one backed by a
+    # multi-node scale group): leftover files from an earlier stint on this same
+    # node are only trusted if nothing more recent has been checkpointed
+    # elsewhere since. This compares wall-clock mtimes across whichever nodes
+    # wrote each side, so it relies on nodes being NTP-synced to within the
+    # checkpoint interval (minutes) — true of every platform this runs on.
+    local_ms = _local_db_epoch_ms(db_dir)
+    remote_ms = latest_checkpoint_epoch_ms(remote_state_dir)
+    if local_ms is not None and (remote_ms is None or local_ms >= remote_ms):
+        logger.info("Local DB at %s is at least as fresh as the latest remote checkpoint, skipping restore", db_dir)
+        return
+    db_path = db_dir / ControllerDB.DB_FILENAME
+    auth_db_path = db_dir / ControllerDB.AUTH_DB_FILENAME
+    if db_path.exists() and not auth_db_path.exists():
+        logger.warning("Main DB exists at %s but auth DB is missing — fetching from remote", db_path)
+    restored = download_checkpoint_to_local(remote_state_dir, db_dir, checkpoint_dir=checkpoint_path)
+    if checkpoint_path and not restored:
+        raise ValueError(f"Checkpoint not found: {checkpoint_path}")
 
 
 def _resolve_cluster_endpoints(cluster_config: IrisClusterConfig) -> dict[str, str]:
@@ -140,40 +233,7 @@ def run_controller_serve(
     # --- Restore or reuse local DB ---
     local_state_dir.mkdir(parents=True, exist_ok=True)
     db_dir = local_state_dir / "db"
-    db_path = db_dir / ControllerDB.DB_FILENAME
-    auth_db_path = db_dir / ControllerDB.AUTH_DB_FILENAME
-    if fresh:
-        # Wipe any pre-existing db_dir so we're guaranteed to start with an
-        # empty database. Otherwise a stale or corrupt local SQLite file would
-        # be silently reused, defeating the purpose of --fresh.
-        if db_dir.exists():
-            logger.info("--fresh: removing existing db_dir %s", db_dir)
-            shutil.rmtree(db_dir)
-        logger.info("--fresh: starting with empty database, skipping checkpoint restore")
-        db_dir.mkdir(parents=True, exist_ok=True)
-    else:
-        # Trust local only when both files are present AND at least as fresh as
-        # the latest remote checkpoint. This also covers a node-local volume
-        # that isn't guaranteed to be the same disk across restarts (e.g. one
-        # backed by a multi-node scale group): leftover files from an earlier
-        # stint on this same node are only trusted if nothing more recent has
-        # been checkpointed elsewhere since. This compares wall-clock mtimes
-        # across whichever nodes wrote each side, so it relies on nodes being
-        # NTP-synced to within the checkpoint interval (minutes) — true of
-        # every platform this runs on.
-        local_ms = _local_db_epoch_ms(db_dir)
-        remote_ms = latest_checkpoint_epoch_ms(remote_state_dir)
-        if local_ms is not None and (remote_ms is None or local_ms >= remote_ms):
-            logger.info("Local DB at %s is at least as fresh as the latest remote checkpoint, skipping restore", db_dir)
-        else:
-            if db_path.exists() and not auth_db_path.exists():
-                logger.warning(
-                    "Main DB exists at %s but auth DB is missing — fetching from remote",
-                    db_path,
-                )
-            restored = download_checkpoint_to_local(remote_state_dir, db_dir, checkpoint_dir=checkpoint_path)
-            if checkpoint_path and not restored:
-                raise ValueError(f"Checkpoint not found: {checkpoint_path}")
+    _prepare_local_db_dir(db_dir, remote_state_dir, fresh=fresh, checkpoint_path=checkpoint_path)
 
     db = ControllerDB(db_dir=db_dir)
 

@@ -16,13 +16,14 @@ import fsspec
 import jax
 import jmp
 import levanter
-from fray import current_client
+import levanter.tracker
+from fray.current_client import current_client
 from fray.types import Entrypoint, JobRequest, ResourceConfig, TpuConfig, create_environment
 from haliax import Axis
 from haliax.partitioning import round_axis_for_partitioning
 from levanter.data.sharded_datasource import FirstRowsShardedDataSource, ShardedDataSource
-from levanter.data.text import (
-    LmDatasetSourceConfigBase,
+from levanter.data.text.datasets import LmDatasetSourceConfigBase
+from levanter.data.text.trace_chat import (
     TraceChatEvaluationFormat,
     build_trace_chat_dataset_cache,
     dataset_for_trace_chat_format,
@@ -521,7 +522,7 @@ def trace_labeled_eval(config: TraceLabeledEvalConfig) -> None:
 
     _validate_eval_config(config)
 
-    levanter.initialize(config)
+    levanter.trainer.initialize(config)
     try:
         tokenizer = load_marin_tokenizer(config.tokenizer)
 

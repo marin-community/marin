@@ -37,7 +37,27 @@ function toggleDark() {
 }
 
 const DUCKY_POLL_MS = 20_000
+const SUMMARY_POLL_MS = 3_000
 let duckyTimer: ReturnType<typeof setInterval> | undefined
+let summaryTimer: ReturnType<typeof setInterval> | undefined
+
+// The app counts per-source sizes in the background; poll until it's done,
+// folding each partial result into `ov` so the leaderboard fills in live.
+async function pollSourceSummary() {
+  if (!ov.value) return
+  try {
+    const resp = await fetch('api/source-summary')
+    const data = await resp.json()
+    if (!resp.ok) return
+    ov.value = { ...ov.value, source_summary: data.rows, source_summary_ready: data.ready }
+    if (data.ready) {
+      clearInterval(summaryTimer)
+      summaryTimer = undefined
+    }
+  } catch (e) {
+    /* transient; keep polling */
+  }
+}
 
 onMounted(async () => {
   try {
@@ -48,11 +68,17 @@ onMounted(async () => {
   } catch (e) {
     loadError.value = e instanceof Error ? e.message : String(e)
   }
+  if (ov.value && !ov.value.source_summary_ready) {
+    summaryTimer = setInterval(pollSourceSummary, SUMMARY_POLL_MS)
+  }
   void checkDuckyStatus()
   duckyTimer = setInterval(checkDuckyStatus, DUCKY_POLL_MS)
 })
 
-onUnmounted(() => clearInterval(duckyTimer))
+onUnmounted(() => {
+  clearInterval(duckyTimer)
+  clearInterval(summaryTimer)
+})
 </script>
 
 <template>

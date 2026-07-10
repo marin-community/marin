@@ -3,6 +3,9 @@
 # Usage with zephyr: --backend=iris --cluster=lib/iris/config/examples/local.yaml
 # Will be converted to local mode by iris cluster start --local
 
+# This cluster's identity. Used for token minting and for authenticating to peers.
+name: local-dev
+
 platform:
   local:
 

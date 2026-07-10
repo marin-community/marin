@@ -161,12 +161,30 @@ def _build_s3_secret_manifest(cfg: FinelogConfig) -> str | None:
     return json.dumps(manifest)
 
 
-def _kubectl(*args: str, stdin: str | None = None, check: bool = True) -> subprocess.CompletedProcess:
-    return subprocess.run(["kubectl", *args], input=stdin, text=True, check=check)
+def _kube_flags(cfg: FinelogConfig) -> list[str]:
+    """Global kubectl flags binding this deploy to its configured kubeconfig/context.
+
+    Empty when the config sets neither — kubectl then falls back to its own
+    resolution (KUBECONFIG env var or ~/.kube/config, current-context).
+    """
+    assert cfg.deployment.k8s is not None
+    k8s = cfg.deployment.k8s
+    flags: list[str] = []
+    if k8s.kubeconfig:
+        flags.extend(["--kubeconfig", str(Path(k8s.kubeconfig).expanduser())])
+    if k8s.kube_context:
+        flags.extend(["--context", k8s.kube_context])
+    return flags
 
 
-def _kubectl_apply(manifest: str) -> None:
-    _kubectl("apply", "-f", "-", stdin=manifest)
+def _kubectl(
+    cfg: FinelogConfig, *args: str, stdin: str | None = None, check: bool = True
+) -> subprocess.CompletedProcess:
+    return subprocess.run(["kubectl", *_kube_flags(cfg), *args], input=stdin, text=True, check=check)
+
+
+def _kubectl_apply(cfg: FinelogConfig, manifest: str) -> None:
+    _kubectl(cfg, "apply", "-f", "-", stdin=manifest)
 
 
 def _ensure_priority_class(cfg: FinelogConfig) -> None:
@@ -193,7 +211,7 @@ def _ensure_priority_class(cfg: FinelogConfig) -> None:
         "globalDefault": False,
     }
     click.echo(f"Ensuring PriorityClass {k8s.priority_class_name} (value {k8s.priority_class_value})...")
-    _kubectl_apply(json.dumps(manifest))
+    _kubectl_apply(cfg, json.dumps(manifest))
 
 
 def k8s_up(cfg: FinelogConfig) -> None:
@@ -210,13 +228,13 @@ def k8s_up(cfg: FinelogConfig) -> None:
     secret_manifest = _build_s3_secret_manifest(cfg)
     if secret_manifest is not None:
         click.echo(f"Applying Secret {_s3_secret_name(cfg)} (S3 credentials)...")
-        _kubectl_apply(secret_manifest)
+        _kubectl_apply(cfg, secret_manifest)
     for manifest_name in _MANIFESTS:
         rendered = _render_manifest(_K8S_MANIFEST_DIR / manifest_name, cfg)
         click.echo(f"Applying {manifest_name}...")
-        _kubectl_apply(rendered)
+        _kubectl_apply(cfg, rendered)
     click.echo(f"Waiting for deployment/{cfg.name} to become Ready...")
-    _kubectl("rollout", "status", f"deployment/{cfg.name}", "-n", k8s.namespace)
+    _kubectl(cfg, "rollout", "status", f"deployment/{cfg.name}", "-n", k8s.namespace)
     click.echo("finelog is healthy.")
 
 
@@ -225,6 +243,7 @@ def k8s_down(cfg: FinelogConfig, *, yes: bool) -> None:
     assert cfg.deployment.k8s is not None
     k8s = cfg.deployment.k8s
     _kubectl(
+        cfg,
         "delete",
         f"deployment/{cfg.name}",
         f"service/{cfg.name}",
@@ -234,6 +253,7 @@ def k8s_down(cfg: FinelogConfig, *, yes: bool) -> None:
     )
     if yes:
         _kubectl(
+            cfg,
             "delete",
             f"pvc/{cfg.name}-cache",
             "-n",
@@ -253,6 +273,7 @@ def k8s_restart(cfg: FinelogConfig) -> None:
     assert cfg.deployment.k8s is not None
     k8s = cfg.deployment.k8s
     _kubectl(
+        cfg,
         "set",
         "image",
         f"deployment/{cfg.name}",
@@ -260,7 +281,7 @@ def k8s_restart(cfg: FinelogConfig) -> None:
         "-n",
         k8s.namespace,
     )
-    _kubectl("rollout", "status", f"deployment/{cfg.name}", "-n", k8s.namespace)
+    _kubectl(cfg, "rollout", "status", f"deployment/{cfg.name}", "-n", k8s.namespace)
     click.echo("finelog is healthy.")
 
 
@@ -269,6 +290,7 @@ def k8s_status(cfg: FinelogConfig) -> None:
     assert cfg.deployment.k8s is not None
     k8s = cfg.deployment.k8s
     _kubectl(
+        cfg,
         "get",
         f"deployment/{cfg.name}",
         f"service/{cfg.name}",
@@ -291,4 +313,4 @@ def k8s_logs(cfg: FinelogConfig, *, tail: int, follow: bool) -> None:
     ]
     if follow:
         args.append("-f")
-    _kubectl(*args)
+    _kubectl(cfg, *args)

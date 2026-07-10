@@ -8,7 +8,7 @@ import tempfile
 from collections.abc import Iterator
 from contextlib import contextmanager
 
-from rigging.filesystem import is_remote_path, open_url, prefix_join, url_to_fs
+from rigging.filesystem import StoragePath, is_remote_path, prefix_join
 
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.evaluation.evaluators.evaluator import Evaluator, ModelConfig
@@ -46,12 +46,10 @@ class LMEvaluationHarnessEvaluator(Evaluator):
                 remote_path = prefix_join(remote_dir, filename)
                 if not is_remote_path(remote_path):
                     continue
-                fs, fs_path = url_to_fs(remote_path)
-                if not fs.exists(fs_path):
+                if not StoragePath(remote_path).exists():
                     continue
                 local_path = os.path.join(local_dir, filename)
-                with open_url(remote_path, "rb") as src:
-                    data = src.read()
+                data = StoragePath(remote_path).read_bytes()
                 with open(local_path, "wb") as dst:
                     dst.write(data)
                 copied_any = True

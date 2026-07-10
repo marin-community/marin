@@ -33,12 +33,13 @@ from haliax.jax_utils import broadcast_one_to_all, is_in_jit, is_jax_array_like
 from jax.experimental.array_serialization.serialization import GlobalAsyncCheckpointManager
 from jaxtyping import PyTree
 
+from rigging.filesystem import StoragePath
+
 from levanter._debug_logging import flush_debug_output
 from levanter.tensorstore_serialization import (
     tree_deserialize_leaves_tensorstore,
     tree_serialize_leaves_tensorstore,
 )
-from levanter.utils import fsspec_utils
 from levanter.utils.types import FilterSpec
 
 logger = logging.getLogger(__name__)
@@ -855,7 +856,7 @@ def load_checkpoint(
     if is_in_jit():
         logger.warning("Loading checkpoint in jit. This is not recommended and probably won't work.")
 
-    if not fsspec_utils.exists(checkpoint_path):
+    if not StoragePath(checkpoint_path).exists():
         raise FileNotFoundError(f"Could not find checkpoint at {checkpoint_path}")
 
     logger.info(f"Loading checkpoint from {checkpoint_path}")
@@ -1201,7 +1202,7 @@ def is_checkpoint_path(path: str) -> bool:
     Check if a given path is a checkpoint path.
     """
     try:
-        if not fsspec_utils.exists(path):
+        if not StoragePath(path).exists():
             return False
         # Sometimes we have incomplete checkpoints due to preemption or other issues.
         # try to find a metadata file in the path

@@ -373,6 +373,10 @@ class LocalFileLease(DistributedLease):
 class FsspecLease(DistributedLease):
     """Best-effort lease for arbitrary fsspec filesystems."""
 
+    # Uses raw fsspec, not the rigging.filesystem StoragePath verbs: filesystem imports
+    # this module (create_lock/default_worker_id for MirrorFileSystem), so this module
+    # sits below it in rigging's DAG and cannot depend back on it. Lock files are tiny
+    # JSON, so the cross-region budget guard buys nothing here.
     def _get_fs(self) -> tuple[fsspec.AbstractFileSystem, str]:
         """Return ``(fs, path)`` for the lock path via fsspec."""
         return fsspec.core.url_to_fs(self.lock_path)
@@ -392,12 +396,11 @@ class FsspecLease(DistributedLease):
     def _write(self, lease: Lease, if_generation_match: int) -> None:
         """Best-effort lock: write lease, then read back to check if we won."""
         fs, path = self._get_fs()
-        data = json.dumps(asdict(lease))
         parent = path.rsplit("/", 1)[0] if "/" in path else ""
         if parent:
             fs.makedirs(parent, exist_ok=True)
         with fs.open(path, "w") as f:
-            f.write(data)
+            f.write(json.dumps(asdict(lease)))
         # Read back and check if our write stuck (best-effort race detection)
         time.sleep(0.1)
         try:

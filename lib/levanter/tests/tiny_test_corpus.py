@@ -7,7 +7,7 @@ import os
 import numpy as np
 
 from levanter.data.audio import AudioIODatasetConfig
-from levanter.data.text import DatasetComponent, LmDataConfig, UrlDatasetSourceConfig
+from levanter.data.text.datasets import DatasetComponent, LmDataConfig, UrlDatasetSourceConfig
 from levanter.store.cache import SerialCacheWriter, TreeCache
 
 

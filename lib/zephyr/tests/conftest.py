@@ -14,17 +14,17 @@ from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
-from fray import ResourceConfig
 from fray.actor import ActorContext, _reset_current_actor, _set_current_actor
 from fray.iris_backend import FrayIrisClient
 from fray.local_backend import LocalClient
+from fray.types import ResourceConfig
 from iris.client.client import IrisClient, IrisContext, iris_ctx_scope
 from iris.cluster.config import load_config, make_local_config
 from iris.cluster.lifecycle import connect_cluster
 from iris.cluster.types import Entrypoint, ResourceSpec
 from rigging.timing import ExponentialBackoff
-from zephyr import load_file
 from zephyr.execution import ZephyrContext, ZephyrCoordinator
+from zephyr.readers import load_file
 from zephyr.stage_io import ZephyrTaskResources
 
 # Path to zephyr root (from tests/conftest.py -> tests -> lib/zephyr)

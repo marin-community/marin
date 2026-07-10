@@ -11,7 +11,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 from levanter.data.mixture import MixtureDataset
-from levanter.data.text import TextLmDatasetFormat
+from levanter.data.text.formats import TextLmDatasetFormat
 from levanter.store.cache import CacheLedger, TreeCache
 from marin.processing.tokenize.tokenize import (
     MIN_GROUP_BYTES,

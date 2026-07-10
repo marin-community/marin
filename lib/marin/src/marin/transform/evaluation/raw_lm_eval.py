@@ -18,8 +18,7 @@ from marin.datakit.ingestion_manifest import (
     write_ingestion_metadata_json,
 )
 from marin.transform.hf_parquet_splits import load_hf_split_iterable
-from marin.utils import fsspec_mkdirs
-from rigging.filesystem import atomic_rename, open_url, url_to_fs
+from rigging.filesystem import StoragePath, atomic_rename, open_url
 
 
 class LmEvalRawRenderer(StrEnum):
@@ -236,7 +235,7 @@ def stage_lm_eval_source(cfg: LmEvalRawStagingConfig) -> dict[str, int | str]:
     if cfg.renderer_name is LmEvalRawRenderer.MMLU:
         _validate_mmlu_fewshot_config(cfg)
 
-    fsspec_mkdirs(cfg.output_path, exist_ok=True)
+    StoragePath(cfg.output_path).mkdirs(exist_ok=True)
     out_file = posixpath.join(cfg.output_path, cfg.output_filename)
     compression = "gzip" if out_file.endswith(".gz") else None
 
@@ -288,8 +287,7 @@ def stage_lm_eval_source(cfg: LmEvalRawStagingConfig) -> dict[str, int | str]:
                 if cfg.max_examples is not None and record_count >= cfg.max_examples:
                     break
 
-    fs, _ = url_to_fs(out_file)
-    output_size = int(fs.info(out_file)["size"])
+    output_size = StoragePath(out_file).size()
     result: dict[str, int | str] = {
         "record_count": record_count,
         "bytes_written": output_size,

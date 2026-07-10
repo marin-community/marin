@@ -15,7 +15,7 @@ real run materializes the datasets first, as build dependencies) before assembli
 
 from fray.cluster import ResourceConfig
 from levanter.models.llama import LlamaConfig
-from levanter.optim import AdamConfig
+from levanter.optim.config import AdamConfig
 from marin.execution.artifact import ArtifactRecord, write_record
 from marin.execution.lazy import ArtifactStep, materialized_config
 from marin.experiment.data import tokenized

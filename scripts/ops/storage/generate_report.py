@@ -47,13 +47,14 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import click
-import fsspec
-from fray import ResourceConfig
+from fray.types import ResourceConfig
 from iris.cli.connect import open_iris_client
 from iris.client import IrisClient
 from iris.cluster.constraints import Constraint, preemptible_constraint
 from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec
-from zephyr import Dataset, ZephyrContext
+from rigging.filesystem import StoragePath
+from zephyr.dataset import Dataset
+from zephyr.execution import ZephyrContext
 
 from scripts.ops.storage.constants import MARIN_BUCKETS
 from scripts.ops.storage.render_report import (
@@ -160,8 +161,7 @@ def _report_stage(deduped_dir: str, report_path: str, history_dir: str, today: s
         )
 
     report = generate_report(conn, changes_section=changes_section)
-    with fsspec.open(report_path, "w") as f:
-        f.write(report)
+    StoragePath(report_path).write_text(report)
 
     write_snapshot(current, snapshot_path(history_dir, today))
     print(f"Report written to {report_path}; snapshot archived for {today}", file=sys.stderr)

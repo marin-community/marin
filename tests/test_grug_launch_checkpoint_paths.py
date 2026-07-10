@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 import pytest
 from fray.cluster import ResourceConfig
-from levanter.optim import AdamConfig
+from levanter.optim.config import AdamConfig
 from levanter.tracker import NoopConfig
 
 from experiments.grug.base.launch import GRUG_130M_MODEL, GrugBaseLaunchConfig, build_grug_run_config

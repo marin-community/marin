@@ -35,6 +35,7 @@ import contextlib
 import contextvars
 import dataclasses
 import functools
+import glob
 import logging
 import os
 import pathlib
@@ -44,11 +45,13 @@ import urllib.error
 import urllib.request
 import uuid
 from collections.abc import Callable, Generator, Mapping, Sequence
+from datetime import datetime
 from enum import StrEnum
 from pathlib import PurePath
 from types import MappingProxyType
 from typing import Any, cast
 
+import braceexpand
 import fsspec
 import yaml
 from fsspec.callbacks import DEFAULT_CALLBACK, Callback
@@ -75,6 +78,14 @@ def _bundled_cluster_config_dir() -> str | None:
     return str(bundled) if bundled.is_dir() else None
 
 
+# A per-user override dir for connecting to a live cluster (e.g. on a dev VM).
+# Named so tests can filter it out of MARIN_CLUSTER_CONFIG_DIRS by identity
+# rather than re-hardcoding the path, since it makes cluster-config resolution
+# host-dependent: a document there may lack a `data:` block, silently swapping
+# the loaded DataConfig out from under a test that expects the committed
+# config/marin.yaml layout.
+PER_USER_CLUSTER_CONFIG_DIR = "~/.config/marin/clusters"
+
 # Cluster config search dirs, highest priority first: a per-user override, the
 # repo-root ``config/`` directory (in-tree checkout), then the bundled copy for
 # installed wheels. Relative paths resolve against the marin workspace root via
@@ -82,7 +93,7 @@ def _bundled_cluster_config_dir() -> str | None:
 MARIN_CLUSTER_CONFIG_DIRS: tuple[str, ...] = tuple(
     p
     for p in (
-        "~/.config/marin/clusters",
+        PER_USER_CLUSTER_CONFIG_DIR,
         "config",
         _bundled_cluster_config_dir(),
     )
@@ -337,19 +348,55 @@ def _key_segments(key: str) -> tuple[str, ...]:
     return tuple(part for part in key.split("/") if part)
 
 
-@dataclasses.dataclass(frozen=True)
+# Schemes whose ``scheme://`` prefix carries no authority: the entire remainder is the
+# key, not ``authority/key``. The ``mirror://`` filesystem strips its protocol and
+# treats what follows as a path relative to the local prefix, so ``mirror://a/b`` must
+# parse to an empty authority with key ``a/b`` — matching ``parse("mirror://") / "a/b"``.
+_EMPTY_AUTHORITY_SCHEMES: frozenset[str] = frozenset({"mirror"})
+
+
+def _parse_parts(value: str) -> tuple[str | None, str, tuple[str, ...], bool]:
+    """Split a storage URL / path into ``(scheme, netloc, segments, rooted)``."""
+    if "://" in value:
+        scheme, rest = value.split("://", 1)
+        if scheme in _EMPTY_AUTHORITY_SCHEMES:
+            # Empty-authority scheme: no netloc to split off; the whole remainder is the
+            # key. ``rooted=False`` keeps the join convention (``mirror://`` + ``a/b`` ->
+            # ``mirror://a/b``, no third slash).
+            return scheme, "", _key_segments(rest), False
+        netloc, sep, key = rest.partition("/")
+        # With an authority the key is always /-separated, so rooted is pinned True
+        # to keep value equality and relative_to independent of a trailing slash.
+        return scheme, netloc, _key_segments(key), bool(netloc) or bool(sep)
+    return None, "", _key_segments(value), value.startswith("/")
+
+
+@dataclasses.dataclass(frozen=True, init=False)
 class StoragePath:
-    """A parsed storage location: URL scheme, authority, and key segments.
+    """A parsed storage location with a bounded set of I/O verbs.
 
-    Object-store keys are not normalized — a doubled ``/`` addresses a *different* key —
-    so joins here are structural: a segment never contains a separator, which makes a
-    doubled or trailing separator unrepresentable. ``parse`` -> ``str`` is
-    therefore canonicalizing (interior ``//`` collapsed, trailing ``/`` stripped), not
-    byte-preserving.
+    A frozen value type: URL scheme, authority, and key segments. Object-store keys are
+    normalized on round-trip — joins are structural (a segment never contains a
+    separator), so a doubled or trailing separator is unrepresentable and ``parse`` ->
+    ``str`` collapses interior ``//`` and strips a trailing ``/``.
 
-    Paths at rest (configs, artifact records, CLI args) stay ``str``: parse at a
-    boundary, manipulate, and ``str()`` back out. See :func:`prefix_join` for the
-    single-join convenience.
+    Construct by parsing a string (``StoragePath("gs://b/k")``); the legacy
+    :meth:`parse` is a thin alias. Paths at rest (configs, artifact records, CLI args)
+    stay ``str``: parse at a boundary, manipulate, and ``str()`` back out. See
+    :func:`prefix_join` for the single-join convenience.
+
+    The I/O verbs are stateless: each resolves through the guarded
+    :func:`url_to_fs`/:func:`open_url` factory (cross-region budget, ``mirror://``, finite
+    S3 timeouts), never memoizing a filesystem handle on the frozen instance. They cover
+    the common surface: stat (:meth:`exists`, :meth:`isfile`, :meth:`isdir`, :meth:`size`,
+    :meth:`mtime`), listing (:meth:`ls`, :meth:`walk`, :meth:`glob`), mutation
+    (:meth:`mkdirs`, :meth:`rm`, :meth:`rmtree`, :meth:`rename`), transfer between local
+    disk and this path (:meth:`download_to`, :meth:`upload_from`), and whole-file access
+    (:meth:`open`, :meth:`read_text`, :meth:`write_text`, :meth:`read_bytes`,
+    :meth:`write_bytes`). :meth:`ls`, :meth:`walk`, and :meth:`glob` return reopenable
+    :class:`StoragePath` values; the read/write verbs forward ``**kwargs`` (e.g.
+    ``compression=``, ``encoding=``) to :func:`open_url` and the ``write_*`` pair truncates.
+    Byte-range reads and detail listings stay on the raw ``fs`` handle.
     """
 
     scheme: str | None
@@ -363,22 +410,40 @@ class StoragePath:
     ``rel/x``), or the empty-authority join convention (``file:///x`` vs ``mirror://x``).
     Irrelevant when ``netloc`` is non-empty."""
 
-    @staticmethod
-    def parse(value: str) -> "StoragePath":
-        if "://" in value:
-            scheme, rest = value.split("://", 1)
-            netloc, sep, key = rest.partition("/")
-            # With an authority the key is always /-separated, so rooted is pinned True
-            # to keep value equality and relative_to independent of a trailing slash.
-            return StoragePath(
-                scheme=scheme, netloc=netloc, segments=_key_segments(key), rooted=bool(netloc) or bool(sep)
-            )
-        return StoragePath(scheme=None, netloc="", segments=_key_segments(value), rooted=value.startswith("/"))
+    def __init__(
+        self,
+        value: "str | StoragePath | None" = None,
+        *,
+        scheme: str | None = None,
+        netloc: str = "",
+        segments: tuple[str, ...] = (),
+        rooted: bool = True,
+    ):
+        """Parse *value* (a URL/path string, or another :class:`StoragePath`); when
+        *value* is omitted, build directly from the keyword parts.
+        """
+        # A positional value parses; the keyword parts build structurally. dataclasses
+        # .replace passes only the fields (never value), so it takes the keyword branch —
+        # keeping replace, __truediv__, and parent working under init=False.
+        if value is not None:
+            if isinstance(value, StoragePath):
+                scheme, netloc, segments, rooted = value.scheme, value.netloc, value.segments, value.rooted
+            else:
+                scheme, netloc, segments, rooted = _parse_parts(value)
+        object.__setattr__(self, "scheme", scheme)
+        object.__setattr__(self, "netloc", netloc)
+        object.__setattr__(self, "segments", tuple(segments))
+        object.__setattr__(self, "rooted", rooted)
+
+    @classmethod
+    def parse(cls, value: str) -> "StoragePath":
+        """Alias for ``StoragePath(value)``, kept for existing call sites."""
+        return cls(value)
 
     @staticmethod
     def normalize(value: str) -> str:
-        """``value`` in canonical single-separator form (``str(StoragePath.parse(value))``)."""
-        return str(StoragePath.parse(value))
+        """``value`` in canonical single-separator form (``str(StoragePath(value))``)."""
+        return str(StoragePath(value))
 
     def __truediv__(self, relative: str) -> "StoragePath":
         if "://" in relative or relative.startswith("/"):
@@ -428,6 +493,165 @@ class StoragePath:
         if self.netloc or self.rooted:
             return f"{root}/{key}"
         return f"{root}{key}"
+
+    # -- scheme predicates ---------------------------------------------------
+
+    @property
+    def is_local(self) -> bool:
+        """True for a local-disk path (no scheme, or the ``file`` scheme)."""
+        return self.scheme in (None, "file")
+
+    @property
+    def is_remote(self) -> bool:
+        """True for a remote object store (``gs``, ``s3``, ``mirror``, …)."""
+        return not self.is_local
+
+    # -- I/O verbs -----------------------------------------------------------
+    #
+    # Stateless: each resolves through the guarded url_to_fs/open_url factory so it
+    # inherits the cross-region budget, mirror:// protocol, and S3 timeouts.
+
+    def exists(self) -> bool:
+        fs, path = url_to_fs(str(self))
+        return fs.exists(path)
+
+    def isdir(self) -> bool:
+        fs, path = url_to_fs(str(self))
+        return fs.isdir(path)
+
+    def size(self) -> int:
+        fs, path = url_to_fs(str(self))
+        return fs.size(path)
+
+    def mtime(self) -> datetime:
+        fs, path = url_to_fs(str(self))
+        return fs.modified(path)
+
+    def mkdirs(self, *, exist_ok: bool = True) -> None:
+        fs, path = url_to_fs(str(self))
+        fs.makedirs(path, exist_ok=exist_ok)
+
+    def glob(self) -> list["StoragePath"]:
+        """Match this glob pattern against the filesystem.
+
+        Brace-expands first (``{a,b}``), then globs each member and reattaches the
+        filesystem's protocol so every result is a reopenable :class:`StoragePath`.
+        Every member is treated as a pattern, so one that matches nothing — a magic
+        pattern with no hits or a plain literal that is absent — contributes nothing
+        and an all-missing input yields an empty list. Local matches stay scheme-less.
+        Use :meth:`expand_glob` instead when a named-but-absent shard must be kept.
+        """
+        out: list[StoragePath] = []
+        for pattern in braceexpand.braceexpand(str(self)):
+            fs, path = url_to_fs(pattern)
+            out.extend(StoragePath(_reattach_protocol(fs, match)) for match in fs.glob(path))
+        return out
+
+    def expand_glob(self) -> list["StoragePath"]:
+        """Resolve this shard specification into concrete paths, keeping named literals.
+
+        Brace-expands first (``{a,b}``, ``{1..8}``); a member carrying glob magic
+        (``*``, ``?``, ``[``) is matched against the filesystem, while a plain literal
+        is kept as-is whether or not it exists. This is the difference from :meth:`glob`:
+        an explicitly named but missing shard is preserved — so the caller can surface it
+        — rather than silently dropped. A magic member that matches nothing still yields
+        nothing.
+        """
+        out: list[StoragePath] = []
+        for member in braceexpand.braceexpand(str(self)):
+            fs, path = url_to_fs(member)
+            if glob.has_magic(path):
+                out.extend(StoragePath(_reattach_protocol(fs, match)) for match in fs.glob(path))
+            else:
+                out.append(StoragePath(member))
+        return out
+
+    def open(self, mode: str = "rb", **kwargs: Any) -> "fsspec.core.OpenFile":
+        """Open this path, returning a lazy ``fsspec`` ``OpenFile``.
+
+        Delegates to :func:`open_url`, so it charges the cross-region budget for GCS
+        reads and forwards ``compression=``/``encoding=``/``block_size=`` to ``fsspec``.
+        """
+        return open_url(str(self), mode, **kwargs)
+
+    def read_text(self, **kwargs: Any) -> str:
+        with self.open("r", **kwargs) as f:
+            return f.read()
+
+    def read_bytes(self, **kwargs: Any) -> bytes:
+        with self.open("rb", **kwargs) as f:
+            return f.read()
+
+    def write_text(self, data: str, **kwargs: Any) -> None:
+        with self.open("w", **kwargs) as f:
+            f.write(data)
+
+    def write_bytes(self, data: bytes, **kwargs: Any) -> None:
+        with self.open("wb", **kwargs) as f:
+            f.write(data)
+
+    def isfile(self) -> bool:
+        fs, path = url_to_fs(str(self))
+        return fs.isfile(path)
+
+    def ls(self) -> list["StoragePath"]:
+        """List this directory's immediate children as reopenable paths.
+
+        Non-recursive; each child carries its filesystem's protocol so it round-trips
+        back through the verbs. For per-entry metadata (size/mtime) call
+        :meth:`size`/:meth:`mtime` on a child, or drop to raw ``fs.ls(detail=True)``.
+        """
+        fs, path = url_to_fs(str(self))
+        return [StoragePath(_reattach_protocol(fs, child)) for child in fs.ls(path, detail=False)]
+
+    def walk(self) -> "Generator[tuple[StoragePath, list[str], list[str]], None, None]":
+        """Walk this tree top-down, yielding ``(dir, subdir_names, file_names)`` like ``os.walk``.
+
+        ``dir`` is a reopenable :class:`StoragePath`; the name lists are plain strings, so
+        a file is reached as ``dir / name``.
+        """
+        fs, path = url_to_fs(str(self))
+        for dirpath, dirnames, filenames in fs.walk(path):
+            yield StoragePath(_reattach_protocol(fs, dirpath)), list(dirnames), list(filenames)
+
+    def rm(self) -> None:
+        fs, path = url_to_fs(str(self))
+        fs.rm(path)
+
+    def rmtree(self) -> None:
+        fs, path = url_to_fs(str(self))
+        fs.rm(path, recursive=True)
+
+    def rename(self, target: "str | StoragePath") -> None:
+        fs, path = url_to_fs(str(self))
+        fs.mv(path, str(target))
+
+    def download_to(self, local_path: str, *, recursive: bool = False) -> None:
+        """Copy this (remote) path down to ``local_path`` on the local disk."""
+        fs, path = url_to_fs(str(self))
+        fs.get(path, local_path, recursive=recursive)
+
+    def upload_from(self, local_path: str, *, recursive: bool = False) -> None:
+        """Copy ``local_path`` from the local disk up to this (remote) path."""
+        fs, path = url_to_fs(str(self))
+        fs.put(local_path, path, recursive=recursive)
+
+
+def _reattach_protocol(fs: fsspec.AbstractFileSystem, path: str) -> str:
+    """Re-attach ``fs``'s protocol to a bare ``path`` so it round-trips through ``url_to_fs``.
+
+    ``fsspec`` glob/find results drop the protocol prefix (e.g. ``gs://``), which makes
+    them ambiguous to reopen on a non-local filesystem. Local (``file``/protocol-less)
+    paths and already-qualified paths are returned unchanged.
+    """
+    protocol = fs.protocol
+    if isinstance(protocol, (list, tuple)):
+        protocol = protocol[0]
+    if protocol in (None, "file"):
+        return path
+    if path.startswith(f"{protocol}://"):
+        return path
+    return f"{protocol}://{path}"
 
 
 def prefix_join(prefix: str, relative: str) -> str:

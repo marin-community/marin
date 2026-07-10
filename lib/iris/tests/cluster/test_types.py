@@ -20,6 +20,7 @@ from iris.cluster.constraints import (
 from iris.cluster.types import (
     LOCAL_CLUSTER,
     Entrypoint,
+    EnvironmentSpec,
     JobName,
     TaskAttempt,
     adjust_tpu_replicas,
@@ -28,10 +29,41 @@ from iris.cluster.types import (
     tpu_device,
 )
 from iris.rpc import job_pb2
+from rigging.provenance import LAUNCH_PROVENANCE_ENV, Provenance, _capture_once
 
 
 def _add(a, b):
     return a + b
+
+
+@pytest.fixture
+def fresh_launch_provenance():
+    """Reset the per-process capture cache around a test that manipulates MARIN_PROVENANCE."""
+    _capture_once.cache_clear()
+    yield
+    _capture_once.cache_clear()
+
+
+def test_environment_to_proto_stamps_launch_provenance(monkeypatch, fresh_launch_provenance):
+    """Every submission's env carries the launch provenance so a git-less task can stamp
+    records with the submitter's identity. Re-submitting from inside a task forwards the
+    inherited value verbatim; an explicit caller value wins over the default."""
+    submitted = Provenance(tree_hash="feed", base_commit="beef", dirty=False, branch="rav/pipeline", built_by="rav")
+    monkeypatch.setenv(LAUNCH_PROVENANCE_ENV, submitted.to_json())
+
+    stamped = EnvironmentSpec().to_proto().env_vars[LAUNCH_PROVENANCE_ENV]
+    assert Provenance.from_json(stamped) == submitted
+
+    explicit = EnvironmentSpec(env_vars={LAUNCH_PROVENANCE_ENV: "caller-value"}).to_proto()
+    assert explicit.env_vars[LAUNCH_PROVENANCE_ENV] == "caller-value"
+
+
+def test_environment_to_proto_captures_local_checkout(monkeypatch, fresh_launch_provenance):
+    """A local submission (no env var) stamps provenance captured from the checkout."""
+    monkeypatch.delenv(LAUNCH_PROVENANCE_ENV, raising=False)
+
+    stamped = Provenance.from_json(EnvironmentSpec().to_proto().env_vars[LAUNCH_PROVENANCE_ENV])
+    assert stamped.created_at  # launch context always captured; git fields best-effort
 
 
 def test_entrypoint_from_callable_resolve_roundtrip():

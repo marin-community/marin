@@ -26,12 +26,14 @@ from typing import Any
 
 import numpy as np
 import pyarrow as pa
-from fray import ResourceConfig
+from fray.types import ResourceConfig
 from marin.execution.artifact import write_artifact
-from marin.utils import fsspec_glob
 from pydantic import BaseModel
-from rigging.filesystem import open_url
-from zephyr import Dataset, InputFileSpec, ShardInfo, ZephyrContext, counters, load_file
+from rigging.filesystem import StoragePath, open_url
+from zephyr import counters
+from zephyr.dataset import Dataset, ShardInfo
+from zephyr.execution import ZephyrContext
+from zephyr.readers import InputFileSpec, load_file
 from zephyr.runners import InlineRunner
 
 from experiments.datakit.embeddings.luxical.pipeline import EmbeddingAttrData, dequantize_to_fp32
@@ -51,7 +53,7 @@ class AssignmentAttrData(BaseModel):
     counters: dict[str, int | float] = {}
 
     def shard_paths(self) -> list[str]:
-        return sorted(fsspec_glob(f"{self.output_dir.rstrip('/')}/*.parquet"))
+        return sorted(str(m) for m in StoragePath(f"{self.output_dir.rstrip('/')}/*.parquet").glob())
 
 
 def _read_npy(uri: str) -> np.ndarray:

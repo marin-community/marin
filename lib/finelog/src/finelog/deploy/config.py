@@ -54,6 +54,12 @@ class K8sDeployment:
     """Kubernetes deployment knobs."""
 
     namespace: str
+    # Kubeconfig file and context every kubectl operation binds to. Unset falls
+    # back to kubectl's own resolution (KUBECONFIG env var or ~/.kube/config);
+    # setting both makes deploys independent of the operator's environment and
+    # of the file's current-context.
+    kubeconfig: str | None = None
+    kube_context: str | None = None
     storage_class: str | None = None
     storage_gb: int = 200
     # S3-compatible endpoint (e.g. Cloudflare R2) for an `s3://` remote_log_dir.
@@ -191,6 +197,11 @@ def _config_search_paths(name_or_path: str) -> list[Path]:
     ]
 
 
+def find_finelog_config(name_or_path: str) -> Path | None:
+    """Return the path `name_or_path` resolves to, or None when no such config exists."""
+    return next((path for path in _config_search_paths(name_or_path) if path.is_file()), None)
+
+
 def _build_gcp(raw: dict) -> GcpDeployment:
     tags = raw.get("network_tags") or ()
     return GcpDeployment(
@@ -227,6 +238,8 @@ def _build_k8s(raw: dict) -> K8sDeployment:
     priority_class_value = raw.get("priority_class_value")
     return K8sDeployment(
         namespace=raw["namespace"],
+        kubeconfig=raw.get("kubeconfig"),
+        kube_context=raw.get("kube_context"),
         storage_class=raw.get("storage_class"),
         storage_gb=int(raw.get("storage_gb", 200)),
         object_storage_endpoint=raw.get("object_storage_endpoint"),
@@ -243,11 +256,10 @@ def load_finelog_config(name_or_path: str) -> FinelogConfig:
       2. `~/.config/marin/finelog/<name>.yaml`.
       3. Repo-bundled `lib/finelog/config/<name>.yaml`.
     """
-    candidates = _config_search_paths(name_or_path)
-    for path in candidates:
-        if path.is_file():
-            return _load_from_path(path)
-    searched = "\n  ".join(str(p) for p in candidates)
+    path = find_finelog_config(name_or_path)
+    if path is not None:
+        return _load_from_path(path)
+    searched = "\n  ".join(str(p) for p in _config_search_paths(name_or_path))
     raise FileNotFoundError(f"finelog config '{name_or_path}' not found; searched:\n  {searched}")
 
 
@@ -318,4 +330,10 @@ def tunnel_target_for(cfg: FinelogConfig) -> TunnelTarget:
         )
     assert cfg.deployment.k8s is not None  # guaranteed by Deployment.__post_init__
     k8s = cfg.deployment.k8s
-    return K8sPortForwardTarget(namespace=k8s.namespace, service=cfg.name, port=cfg.port)
+    return K8sPortForwardTarget(
+        namespace=k8s.namespace,
+        service=cfg.name,
+        port=cfg.port,
+        kubeconfig=str(Path(k8s.kubeconfig).expanduser()) if k8s.kubeconfig else None,
+        context=k8s.kube_context,
+    )

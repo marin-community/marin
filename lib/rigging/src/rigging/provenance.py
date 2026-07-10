@@ -17,14 +17,28 @@ outside a checkout — for stamping an artifact built by an arbitrary launch.
 """
 
 import dataclasses
+import functools
 import getpass
 import json
+import logging
+import os
 import re
 import subprocess
 import sys
+import threading
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
+
+LAUNCH_PROVENANCE_ENV = "MARIN_PROVENANCE"
+"""Env var carrying the launch's :class:`Provenance` as JSON.
+
+A submitting client stamps it into a job's environment (see iris
+``EnvironmentSpec.to_proto``), so a process running from a ``.git``-less bundle inherits the
+submission's provenance — :meth:`Provenance.capture` prefers it over shelling out to git.
+"""
 
 
 @dataclass(frozen=True)
@@ -79,13 +93,29 @@ class Provenance:
         """Best-effort provenance of the current launch: git context plus the origin
         remote, capture time, and argv.
 
-        Tolerant: every git field degrades to empty/``None`` outside a checkout, so
-        it never raises. Use to stamp an artifact built by an arbitrary run.
+        Prefers the provenance published in ``MARIN_PROVENANCE`` (stamped by the submitting
+        client) — returned verbatim, so a remote process reports the launch that produced it,
+        not itself. Otherwise tolerant git capture: every git field degrades to empty/``None``
+        outside a checkout or when the ``git`` binary is absent, so it never raises. Use to
+        stamp an artifact built by an arbitrary run.
         """
+        raw = os.environ.get(LAUNCH_PROVENANCE_ENV)
+        if raw:
+            # A malformed value must not break stamping; fall through to the git path.
+            try:
+                return cls.from_json(raw)
+            except (json.JSONDecodeError, KeyError, TypeError):
+                logger.warning("Ignoring malformed %s value: %r", LAUNCH_PROVENANCE_ENV, raw)
+
         cwd = str(repo_dir) if repo_dir is not None else None
 
         def g(*args: str) -> str:
-            return _git(list(args), cwd, check=False)
+            # A missing `git` binary (bundle image without git) degrades like being outside
+            # a checkout: git fields empty, launch context still captured.
+            try:
+                return _git(list(args), cwd, check=False)
+            except FileNotFoundError:
+                return ""
 
         stash = g("stash", "create")
         ref = stash or "HEAD"
@@ -131,6 +161,23 @@ class Provenance:
         if self.dirty:
             return f"{self.tree_hash} (off of {self.base_commit}){suffix}"
         return f"{self.base_commit}{suffix}"
+
+
+@functools.cache
+def _capture_once() -> Provenance:
+    return Provenance.capture()
+
+
+# functools.cache does not serialize concurrent first calls, and two concurrent
+# `git stash create` runs race on the repo's index.lock — the loser silently stamps
+# a dirty tree as clean HEAD. The lock makes the cache-filling capture exclusive.
+_capture_lock = threading.Lock()
+
+
+def launch_provenance() -> Provenance:
+    """The current launch's provenance, captured once per process (thread-safe)."""
+    with _capture_lock:
+        return _capture_once()
 
 
 def _git(args: list[str], cwd: str | None, check: bool = True) -> str:

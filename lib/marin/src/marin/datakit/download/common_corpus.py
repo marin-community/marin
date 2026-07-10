@@ -4,9 +4,11 @@
 """Download, filter, and normalize PleIAs/common_corpus from HuggingFace."""
 
 
-from fray import ResourceConfig
+from fray.types import ResourceConfig
 from rigging.filesystem import prefix_join
-from zephyr import Dataset, ZephyrContext, counters
+from zephyr import counters
+from zephyr.dataset import Dataset
+from zephyr.execution import ZephyrContext
 
 from marin.datakit.download.huggingface import download_hf_step
 from marin.datakit.normalize import normalize_step

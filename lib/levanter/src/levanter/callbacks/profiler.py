@@ -10,8 +10,9 @@ from typing import Callable
 
 import jax
 
+from rigging.filesystem import StoragePath
+
 from levanter.callbacks._core import StepInfo
-from levanter.utils.fsspec_utils import mkdirs
 from levanter.utils.jax_utils import barrier_sync
 
 logger = logging.getLogger(__name__)
@@ -100,7 +101,7 @@ def profile(
     profiler_options: jax.profiler.ProfileOptions | None = None,
 ) -> Callable[[StepInfo], None]:
     trace_started = False
-    mkdirs(path)
+    StoragePath(path).mkdirs()
 
     def profiler_callback_fn(step: StepInfo, *, force: bool = False):
         nonlocal trace_started

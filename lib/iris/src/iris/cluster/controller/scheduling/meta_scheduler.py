@@ -19,14 +19,22 @@ without any change to ``evaluate_constraint``.
 A backend with no advertised attributes matches every job (it is a catch-all):
 only constraint keys that *some* backend advertises participate in routing;
 all other constraints are left to the per-backend scheduler. This makes the
-implicit single backend an identity router.
+implicit single backend an identity router. A ``device-type=cpu`` constraint
+never participates either — CPU is fungible across every backend, so like the
+federation and scaling-group routers this one drops it before matching.
 """
 
 import logging
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 
-from iris.cluster.constraints import AttributeValue, Constraint, ConstraintIndex, backend_directive
+from iris.cluster.constraints import (
+    AttributeValue,
+    Constraint,
+    ConstraintIndex,
+    backend_directive,
+    is_cpu_device_type_constraint,
+)
 from iris.cluster.types import JobName
 
 logger = logging.getLogger(__name__)
@@ -37,12 +45,10 @@ class BackendRouting:
     """A backend's routing metadata, as the backend advertises it.
 
     The meta-scheduler routes against this rather than reading backend config:
-    ``advertised`` is the backend's attribute sets (already comma-expanded) and
-    ``admits`` is its allow-policy predicate.
+    ``advertised`` is the backend's attribute sets (already comma-expanded).
     """
 
     advertised: dict[str, set[str]]
-    admits: Callable[[str], bool]
 
 
 @dataclass(frozen=True)
@@ -50,7 +56,6 @@ class RoutableJob:
     """An unpinned job the meta-scheduler must route to a backend."""
 
     job_id: JobName
-    user: str
     constraints: list[Constraint]
 
 
@@ -60,7 +65,7 @@ class RoutingResult:
 
     ``pins`` maps each routed job to its chosen backend id. ``unschedulable``
     maps each unroutable job to a human-readable reason (no backend matches, or
-    an explicit ``--backend`` directive named a missing/forbidden backend).
+    an explicit ``--backend`` directive named a backend that does not exist).
     """
 
     pins: dict[JobName, str] = field(default_factory=dict)
@@ -99,37 +104,31 @@ def route_jobs_to_backends(
 ) -> RoutingResult:
     """Route each unpinned job to a backend (or mark it unschedulable).
 
-    For each job: filter to backends whose allow policy admits the job's user;
-    honor an explicit ``--backend`` directive if present (iff allowed and
-    existing); otherwise match the job's routing constraints against the index
-    and intersect with the allowed set. A single match pins it; multiple matches
-    break ties deterministically via ``pick`` (default: lexicographic backend
-    id). No static match finalizes the job UNSCHEDULABLE.
+    For each job: honor an explicit ``--backend`` directive if present (iff it
+    names an existing backend); otherwise match the job's routing constraints
+    against the index. A single match pins it; multiple matches break ties
+    deterministically via ``pick`` (default: lexicographic backend id). No
+    static match finalizes the job UNSCHEDULABLE.
 
     Only constraint keys some backend advertises participate in matching; the
-    rest are left to the per-backend scheduler. The unschedulable reason never
-    names a backend the user may not see.
+    rest are left to the per-backend scheduler, and a ``device-type=cpu``
+    constraint is dropped because CPU is fungible across all backends.
     """
     routing_keys = {key for route in routing.values() for key in route.advertised}
     result = RoutingResult()
     for job in jobs:
-        allowed = {bid for bid, route in routing.items() if route.admits(job.user)}
-        if not allowed:
-            result.unschedulable[job.job_id] = "no backend permits this user"
-            continue
-
         directive = backend_directive(job.constraints)
         if directive is not None:
-            if directive in allowed:
+            if directive in routing:
                 result.pins[job.job_id] = directive
-            elif directive in routing:
-                result.unschedulable[job.job_id] = f"backend '{directive}' does not permit this user"
             else:
                 result.unschedulable[job.job_id] = f"backend '{directive}' does not exist"
             continue
 
-        routing_constraints = [c for c in job.constraints if c.key in routing_keys]
-        matched = index.matching_entities(routing_constraints) & allowed
+        routing_constraints = [
+            c for c in job.constraints if c.key in routing_keys and not is_cpu_device_type_constraint(c)
+        ]
+        matched = index.matching_entities(routing_constraints)
         if not matched:
             result.unschedulable[job.job_id] = "no backend matches the job's constraints"
             continue

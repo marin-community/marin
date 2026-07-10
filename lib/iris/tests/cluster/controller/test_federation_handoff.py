@@ -17,19 +17,21 @@ from contextlib import ExitStack
 import pytest
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
-from iris.cluster.bundle import BundleStore
+from iris.cluster.bundle import BundleStore, content_id
 from iris.cluster.config import PeerConfig
 from iris.cluster.constraints import CLUSTER_CONSTRAINT_KEY, Constraint, ConstraintOp
 from iris.cluster.controller import reads, writes
+from iris.cluster.controller.auth import ControllerAuth
 from iris.cluster.controller.endpoint_service import EndpointServiceImpl
 from iris.cluster.controller.federation_store import ControllerFederationStore
-from iris.cluster.controller.service import ControllerServiceImpl, _peer_status
+from iris.cluster.controller.service import WORKDIR_FILE_OFFLOAD_THRESHOLD, ControllerServiceImpl, _peer_status
 from iris.cluster.federation.manager import FederationManager
 from iris.cluster.federation.peer import FederationPeer
 from iris.cluster.federation.store import HandoffAdmission, HandoffSpec, HandoffState
-from iris.cluster.types import LOCAL_CLUSTER, AttemptUid, JobName
+from iris.cluster.types import LOCAL_ADMIN_SUBMITTER, LOCAL_CLUSTER, AttemptUid, JobName
 from iris.managed_thread import get_thread_container
 from iris.rpc import controller_pb2, job_pb2
+from iris.rpc.auth import FEDERATION_PEER_ROLE
 from rigging.server_auth import VerifiedIdentity, identity_scope
 
 from ._test_support import ControllerTestState
@@ -101,8 +103,26 @@ class _UnreachablePeerConnection(_InProcessPeerConnection):
         raise ConnectError(Code.NOT_FOUND, "no such job")
 
 
+class _RefusingPeerConnection(_InProcessPeerConnection):
+    """A connection whose LaunchJob answers with ``code`` (mutable between attempts).
+
+    Models a peer that answers the handoff itself rather than dropping it: a
+    terminal code is its verdict and repeats on every retry; a transient one may
+    clear on a later attempt.
+    """
+
+    def __init__(self, service: ControllerServiceImpl, code: Code, message: str = "peer says no"):
+        super().__init__(service)
+        self.code = code
+        self.message = message
+
+    def launch_job(self, request):
+        self.launch_calls += 1
+        raise ConnectError(self.code, self.message)
+
+
 def _make_service(
-    stack: ExitStack, subdir: str, tmp_path, log_client
+    stack: ExitStack, subdir: str, tmp_path, log_client, auth: ControllerAuth | None = None
 ) -> tuple[ControllerServiceImpl, ControllerTestState]:
     state = stack.enter_context(make_controller_state())
     mock = MockController()
@@ -113,6 +133,7 @@ def _make_service(
         log_client=log_client,
         db=state._db,
         endpoint_service=EndpointServiceImpl(db=state._db),
+        auth=auth,
     )
     return service, state
 
@@ -122,14 +143,18 @@ def _attach_federation(
     connection: _InProcessPeerConnection,
 ) -> FederationManager:
     """Give ``parent_service`` a one-peer federation manager delegating to ``connection``."""
-    peer = FederationPeer(
-        "cw", PeerConfig(controller_address="http://peer:10000", dashboard_url="https://cw.dev"), connection
-    )
+    peer = FederationPeer("cw", PeerConfig(controller_address="http://peer:10000"), connection)
     peer.probe()
     store = ControllerFederationStore(
         parent_service._db,
     )
-    manager = FederationManager([peer], threads=get_thread_container(), store=store, cluster_id="parent")
+    manager = FederationManager(
+        [peer],
+        threads=get_thread_container(),
+        store=store,
+        bundles=parent_service._bundle_store,
+        cluster_id="parent",
+    )
     parent_service._controller.federation = manager
     return manager
 
@@ -171,6 +196,185 @@ def _run_peer_task_to_success(peer_state: ControllerTestState, job_id: JobName) 
     (task,) = query_tasks_for_job(peer_state, job_id)
     dispatch_task(peer_state, task, worker)
     transition_task(peer_state, task.task_id, job_pb2.TASK_STATE_SUCCEEDED)
+
+
+# ---------------------------------------------------------------------------
+# blobs: a content id resolves only against the store that minted it
+# ---------------------------------------------------------------------------
+
+
+def test_a_federated_job_carries_its_workspace_bundle_to_the_peer(tmp_path, log_client):
+    """The peer's tasks fetch the bundle from the peer's own store, so the handoff
+    carries the bytes rather than the parent's content id."""
+    blob = b"PK\x03\x04 pretend workspace zip"
+    with ExitStack() as stack:
+        parent_service, _ = _make_service(stack, "parent", tmp_path, log_client)
+        peer_service, _ = _make_service(stack, "peer", tmp_path, log_client)
+        _attach_federation(parent_service, _InProcessPeerConnection(peer_service))
+
+        request = _cluster_pinned_request("fed-bundle")
+        request.bundle_blob = blob
+        parent_service.launch_job(request, None)
+
+        assert peer_service._bundle_store.get(content_id(blob)) == blob
+
+
+def test_a_federated_job_carries_its_externalized_workdir_files_to_the_peer(tmp_path, log_client):
+    """A workdir file large enough to be externalized becomes a content id in the
+    parent's store; the peer must receive the bytes, not that id."""
+    big = b"x" * (WORKDIR_FILE_OFFLOAD_THRESHOLD + 1)
+    with ExitStack() as stack:
+        parent_service, _ = _make_service(stack, "parent", tmp_path, log_client)
+        peer_service, _ = _make_service(stack, "peer", tmp_path, log_client)
+        _attach_federation(parent_service, _InProcessPeerConnection(peer_service))
+
+        request = _cluster_pinned_request("fed-workdir")
+        request.entrypoint.workdir_files["big.bin"] = big
+        parent_service.launch_job(request, None)
+
+        assert peer_service._bundle_store.get(content_id(big)) == big
+
+
+# ---------------------------------------------------------------------------
+# inbound admission: an enforcing peer gates who may hand off
+# ---------------------------------------------------------------------------
+
+# An enforcing peer (a provider is configured) that admits only openathena submitters.
+_ENFORCING_AUTH = ControllerAuth(provider="cidr", allowed_submitters=("*@openathena.ai",))
+
+
+def _peer_handoff_request(name: str, requester_id: str, submitting_user: str):
+    """A handoff request carrying the peer-verified requester and the asserted submitter."""
+    request = _received_handoff_request(name, requester_id)
+    request.federation.submitting_user = submitting_user
+    return request
+
+
+def test_inbound_handoff_admits_a_verified_peer_for_an_allowed_submitter(tmp_path, log_client):
+    """An enforcing peer admits a handoff whose federation-peer identity matches the
+    asserted requester and whose submitter the allowlist permits."""
+    with ExitStack() as stack:
+        peer_service, _ = _make_service(stack, "peer", tmp_path, log_client, auth=_ENFORCING_AUTH)
+        request = _peer_handoff_request("fed-job", "parent-cluster", "alice@openathena.ai")
+        with identity_scope(VerifiedIdentity("parent-cluster", FEDERATION_PEER_ROLE)):
+            response = peer_service.launch_job(request, None)
+        assert JobName.from_wire(response.job_id).name == "fed-job"
+
+
+def test_inbound_handoff_rejects_a_submitter_outside_the_allowlist(tmp_path, log_client):
+    """A verified peer cannot federate a submitter the receiving cluster does not admit."""
+    with ExitStack() as stack:
+        peer_service, _ = _make_service(stack, "peer", tmp_path, log_client, auth=_ENFORCING_AUTH)
+        request = _peer_handoff_request("fed-job", "parent-cluster", "eve@gmail.com")
+        with identity_scope(VerifiedIdentity("parent-cluster", FEDERATION_PEER_ROLE)):
+            with pytest.raises(ConnectError) as exc:
+                peer_service.launch_job(request, None)
+        assert exc.value.code == Code.PERMISSION_DENIED
+
+
+def test_inbound_handoff_rejects_a_requester_that_mismatches_the_peer(tmp_path, log_client):
+    """The asserted requester must equal the authenticated peer — a peer cannot relay a
+    handoff under another cluster's requester id."""
+    with ExitStack() as stack:
+        peer_service, _ = _make_service(stack, "peer", tmp_path, log_client, auth=_ENFORCING_AUTH)
+        request = _peer_handoff_request("fed-job", "other-cluster", "alice@openathena.ai")
+        with identity_scope(VerifiedIdentity("parent-cluster", FEDERATION_PEER_ROLE)):
+            with pytest.raises(ConnectError) as exc:
+                peer_service.launch_job(request, None)
+        assert exc.value.code == Code.PERMISSION_DENIED
+
+
+def test_inbound_handoff_rejects_a_non_peer_identity(tmp_path, log_client):
+    """An ordinary authenticated user cannot forge a handoff by setting the field."""
+    with ExitStack() as stack:
+        peer_service, _ = _make_service(stack, "peer", tmp_path, log_client, auth=_ENFORCING_AUTH)
+        request = _peer_handoff_request("fed-job", "parent-cluster", "alice@openathena.ai")
+        with identity_scope(VerifiedIdentity("alice@openathena.ai", "user")):
+            with pytest.raises(ConnectError) as exc:
+                peer_service.launch_job(request, None)
+        assert exc.value.code == Code.PERMISSION_DENIED
+
+
+def test_enforcing_parent_refuses_to_federate_a_local_admin_submission(tmp_path, log_client):
+    """With auth on, a local_admin (CIDR/loopback) submission is refused before handoff
+    with a clear message — even to a peer whose policy would admit it — because a
+    federated job must carry an authenticated user."""
+    with ExitStack() as stack:
+        parent_service, _ = _make_service(stack, "parent", tmp_path, log_client, auth=_ENFORCING_AUTH)
+        peer_service, _ = _make_service(stack, "peer", tmp_path, log_client)
+        _attach_federation(parent_service, _InProcessPeerConnection(peer_service))
+        # No identity scope: an unauthenticated (CIDR/loopback) caller resolves to local_admin.
+        with pytest.raises(ConnectError) as exc:
+            parent_service.launch_job(_cluster_pinned_request("fed-job"), None)
+        assert exc.value.code == Code.PERMISSION_DENIED
+
+
+def test_a_child_job_a_peer_could_host_is_refused_as_unfederatable(tmp_path, log_client):
+    """A sub-job dispatched from inside a running job never crosses to a peer.
+
+    Its submitter is the worker running the parent, which authenticates by network location
+    as local_admin. The refusal names the structural limit (INVALID_ARGUMENT), not the
+    identity gate (PERMISSION_DENIED) that gates a root submission, and reaches no peer.
+    """
+    with ExitStack() as stack:
+        parent_service, _ = _make_service(stack, "parent", tmp_path, log_client, auth=_ENFORCING_AUTH)
+        peer_service, _ = _make_service(stack, "peer", tmp_path, log_client)
+        connection = _InProcessPeerConnection(peer_service)
+        _attach_federation(parent_service, connection)
+
+        root = JobName.root(_USER, "root-job")
+        with identity_scope(VerifiedIdentity(_USER, "admin")):
+            parent_service.launch_job(make_direct_job_request("root-job"), None)
+
+        child = _cluster_pinned_request("gpu-child")
+        child.name = root.child("gpu-child").to_wire()
+        with pytest.raises(ConnectError) as exc:
+            parent_service.launch_job(child, None)
+
+        assert exc.value.code == Code.INVALID_ARGUMENT
+        assert connection.launch_calls == 0
+
+
+def test_inbound_handoff_rejects_a_local_admin_submitter(tmp_path, log_client):
+    """A local_admin (CIDR/loopback) identity is never a valid federation submitter,
+    even for a verified peer — rejected regardless of the allowlist."""
+    with ExitStack() as stack:
+        peer_service, _ = _make_service(stack, "peer", tmp_path, log_client, auth=_ENFORCING_AUTH)
+        request = _peer_handoff_request("fed-job", "parent-cluster", LOCAL_ADMIN_SUBMITTER)
+        with identity_scope(VerifiedIdentity("parent-cluster", FEDERATION_PEER_ROLE)):
+            with pytest.raises(ConnectError) as exc:
+                peer_service.launch_job(request, None)
+        assert exc.value.code == Code.PERMISSION_DENIED
+
+
+def test_federation_sync_binds_the_requester_to_the_authenticated_peer(tmp_path, log_client):
+    """A peer may sync only its own requester set; another requester's is denied and its
+    own is authorized."""
+    with ExitStack() as stack:
+        peer_service, _ = _make_service(stack, "peer", tmp_path, log_client, auth=_ENFORCING_AUTH)
+        with identity_scope(VerifiedIdentity("parent-cluster", FEDERATION_PEER_ROLE)):
+            with pytest.raises(ConnectError) as exc:
+                peer_service.federation_sync(
+                    controller_pb2.Controller.FederationSyncRequest(requester_id="other-cluster"), None
+                )
+            assert exc.value.code == Code.PERMISSION_DENIED
+            # Its own requester is authorized (an empty set, but not denied).
+            peer_service.federation_sync(
+                controller_pb2.Controller.FederationSyncRequest(requester_id="parent-cluster"), None
+            )
+
+
+def test_federation_sync_rejects_an_ordinary_user(tmp_path, log_client):
+    """Only a federation peer (or admin) may sync — an ordinary user cannot read another
+    requester's federated set."""
+    with ExitStack() as stack:
+        peer_service, _ = _make_service(stack, "peer", tmp_path, log_client, auth=_ENFORCING_AUTH)
+        with identity_scope(VerifiedIdentity("alice", "user")):
+            with pytest.raises(ConnectError) as exc:
+                peer_service.federation_sync(
+                    controller_pb2.Controller.FederationSyncRequest(requester_id="parent-cluster"), None
+                )
+        assert exc.value.code == Code.PERMISSION_DENIED
 
 
 # ---------------------------------------------------------------------------
@@ -505,6 +709,72 @@ def test_redrive_of_a_handle_the_peer_already_has_is_idempotent(tmp_path, log_cl
         assert len(query_tasks_for_job(peer_state, parent_job_id)) == 1  # idempotent re-drive — no duplicate
 
 
+@pytest.mark.parametrize("code", [Code.PERMISSION_DENIED, Code.INVALID_ARGUMENT])
+def test_a_handoff_the_peer_refuses_fails_the_submission_and_stops_the_redrive(code, tmp_path, log_client):
+    with ExitStack() as stack:
+        parent_service, parent_state = _make_service(stack, "parent", tmp_path, log_client)
+        peer_service, _peer_state = _make_service(stack, "peer", tmp_path, log_client)
+        connection = _RefusingPeerConnection(peer_service, code, "submitter not in allowlist")
+        manager = _attach_federation(parent_service, connection)
+
+        # The peer's verdict is the submitter's answer, not a job that silently never lands.
+        with pytest.raises(ConnectError) as exc:
+            parent_service.launch_job(_cluster_pinned_request("fed-job"), None)
+        assert exc.value.code == code
+        assert "submitter not in allowlist" in exc.value.message
+
+        parent_job_id = JobName.root(_USER, "fed-job")
+        handle = _handle(parent_state, parent_job_id)
+        assert handle.handoff_state == int(HandoffState.HANDOFF_REJECTED)
+        job = query_job(parent_state, parent_job_id)
+        assert job.state == job_pb2.JOB_STATE_KILLED
+        assert "submitter not in allowlist" in job.error
+
+        # Terminalized, so the sync loop has nothing left to re-drive.
+        manager.sync_once()
+        assert connection.launch_calls == 1
+
+
+def test_a_refused_handoff_does_not_propagate_out_of_the_redrive(tmp_path, log_client):
+    # _deliver_handoff runs on the sync thread too, which dies on an uncaught
+    # exception. A peer that starts refusing between delivery attempts must
+    # terminalize the handle there, not take the whole sync loop down with it.
+    with ExitStack() as stack:
+        parent_service, parent_state = _make_service(stack, "parent", tmp_path, log_client)
+        peer_service, _peer_state = _make_service(stack, "peer", tmp_path, log_client)
+        connection = _RefusingPeerConnection(peer_service, Code.UNAVAILABLE, "peer is booting")
+        manager = _attach_federation(parent_service, connection)
+
+        response = parent_service.launch_job(_cluster_pinned_request("fed-job"), None)
+        parent_job_id = JobName.from_wire(response.job_id)
+        assert _handle(parent_state, parent_job_id).handoff_state == int(HandoffState.PENDING_HANDOFF)
+
+        connection.code = Code.PERMISSION_DENIED
+        manager.sync_once()
+
+        assert _handle(parent_state, parent_job_id).handoff_state == int(HandoffState.HANDOFF_REJECTED)
+        assert query_job(parent_state, parent_job_id).state == job_pb2.JOB_STATE_KILLED
+
+
+def test_a_handoff_the_peer_could_not_authenticate_stays_pending(tmp_path, log_client):
+    # UNAUTHENTICATED is a key/clock/rollout transient — the federation bearer is
+    # minted per request, so a later attempt can clear it. The handle stays pending
+    # and the submission succeeds.
+    with ExitStack() as stack:
+        parent_service, parent_state = _make_service(stack, "parent", tmp_path, log_client)
+        peer_service, _peer_state = _make_service(stack, "peer", tmp_path, log_client)
+        connection = _RefusingPeerConnection(peer_service, Code.UNAUTHENTICATED, "bad token")
+        manager = _attach_federation(parent_service, connection)
+
+        response = parent_service.launch_job(_cluster_pinned_request("fed-job"), None)
+        parent_job_id = JobName.from_wire(response.job_id)
+        assert _handle(parent_state, parent_job_id).handoff_state == int(HandoffState.PENDING_HANDOFF)
+
+        manager.sync_once()
+        assert connection.launch_calls == 2  # re-driven, still pending
+        assert _handle(parent_state, parent_job_id).handoff_state == int(HandoffState.PENDING_HANDOFF)
+
+
 # ---------------------------------------------------------------------------
 # admission + incremental tombstone
 # ---------------------------------------------------------------------------
@@ -519,6 +789,7 @@ def test_admit_persists_a_pending_handle_and_is_idempotent(tmp_path, log_client)
             local_job_id=parent_job_id,
             peer_id="cw",
             owner_principal=_USER,
+            submitting_user=_USER,
             request=make_direct_job_request("fed-job", replicas=1),
         )
 

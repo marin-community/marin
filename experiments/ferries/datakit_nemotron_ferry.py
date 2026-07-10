@@ -16,7 +16,7 @@ import json
 import logging
 import os
 
-from fray import ResourceConfig
+from fray.types import ResourceConfig
 from marin.datakit.normalize import NormalizedData, normalize_step
 from marin.execution.artifact import read_artifact
 from marin.execution.step_runner import StepRunner
@@ -36,6 +36,7 @@ from marin.processing.classification.deduplication.fuzzy_minhash import (
 )
 from marin.processing.tokenize.tokenize import TokenizeConfig, tokenize
 from rigging.filesystem import (
+    StoragePath,
     check_path_in_region,
     marin_temp_bucket,
     region_from_metadata,
@@ -181,9 +182,7 @@ def _write_status(status: str, marin_prefix: str) -> None:
     if not status_path:
         return
     payload = json.dumps({"status": status, "marin_prefix": marin_prefix})
-    fs, _ = url_to_fs(status_path)
-    with fs.open(status_path, "w") as f:
-        f.write(payload)
+    StoragePath(status_path).write_text(payload)
     logger.info("Wrote ferry status to %s", status_path)
 
 

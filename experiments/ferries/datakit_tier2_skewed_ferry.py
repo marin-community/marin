@@ -41,7 +41,7 @@ from marin.processing.classification.deduplication.fuzzy_minhash import (
     compute_minhash_attrs,
 )
 from marin.processing.tokenize.tokenize import TokenizeConfig, tokenize
-from rigging.filesystem import marin_prefix, marin_temp_bucket, url_to_fs
+from rigging.filesystem import StoragePath, marin_prefix, marin_temp_bucket
 from rigging.log_setup import configure_logging
 from rigging.timing import log_time
 
@@ -145,9 +145,7 @@ def _write_status(status: str, prefix: str) -> None:
     if not status_path:
         return
     payload = json.dumps({"status": status, "marin_prefix": prefix})
-    fs, _ = url_to_fs(status_path)
-    with fs.open(status_path, "w") as f:
-        f.write(payload)
+    StoragePath(status_path).write_text(payload)
     logger.info("Wrote ferry status to %s", status_path)
 
 

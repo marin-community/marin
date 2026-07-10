@@ -17,6 +17,9 @@ selection cannot fold into that index. The decision, in order:
 4. Otherwise stay local so the caller fails the job as unschedulable — never
    wedge it. The chosen peer may still reject at handoff (its live capacity moved
    between the heartbeat snapshot and delivery); the manager tolerates that.
+
+Routing decides only *where* a job can run. *Who* may run it there is the peer's own
+``auth.allowed_submitters``, enforced where the job lands and surfaced from the handoff.
 """
 
 from collections.abc import Mapping, Sequence
@@ -108,7 +111,12 @@ class PeerRouter:
         self._peers = {peer.peer_id: peer for peer in peers}
 
     def decide(self, request: RoutingRequest) -> SubmitRouting:
-        """Select where ``request``'s job executes (see the module docstring)."""
+        """Select where ``request``'s job executes (see the module docstring).
+
+        Routing answers *where the job can run*, never *who may run it there*: a peer
+        admits or refuses a submitter under its own ``auth.allowed_submitters``, and a
+        refusal surfaces from the handoff itself.
+        """
         if request.cluster_pin:
             # Validated to exist by the caller; force it even if locally feasible.
             return SubmitRouting(peer_id=request.cluster_pin)

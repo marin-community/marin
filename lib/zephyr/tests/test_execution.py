@@ -16,9 +16,9 @@ from unittest.mock import MagicMock
 import cloudpickle
 import pytest
 from conftest import _TEST_TASK_COST, _TEST_WORKER_AVAILABLE
-from fray import ResourceConfig
 from fray.actor import ActorContext
 from fray.local_backend import LocalClient
+from fray.types import ResourceConfig
 from zephyr import counters
 from zephyr.dataset import Dataset
 from zephyr.execution import (

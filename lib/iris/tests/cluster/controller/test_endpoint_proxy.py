@@ -90,6 +90,14 @@ def _build_upstream_app(handle: UpstreamHandle) -> Starlette:
         await _record(request)
         return PlainTextResponse("upstream blew up", status_code=500)
 
+    async def unauthorized(request: Request) -> Response:
+        await _record(request)
+        return PlainTextResponse(
+            "finelog rejected the controller",
+            status_code=401,
+            headers={"www-authenticate": 'Bearer realm="upstream"'},
+        )
+
     async def slow(request: Request) -> Response:
         await _record(request)
         # Just-long-enough to outlast the proxy's 0.5s timeout. Keeping this
@@ -149,6 +157,7 @@ def _build_upstream_app(handle: UpstreamHandle) -> Starlette:
     routes = [
         Route("/echo", echo, methods=list(ALLOWED_METHODS)),
         Route("/500", upstream_500),
+        Route("/401", unauthorized),
         Route("/slow", slow),
         Route("/large", large),
         Route("/cookie", cookie_setter),
@@ -345,6 +354,26 @@ def test_upstream_5xx_passes_through(proxy: ProxyHandle) -> None:
         resp = client.get(f"{proxy.base_url}/proxy/{ENDPOINT_URL_NAME}/500")
     assert resp.status_code == 500
     assert resp.text == "upstream blew up"
+
+
+def test_upstream_401_translated_to_502(proxy: ProxyHandle) -> None:
+    """An upstream 401 must not reach the browser as a 401.
+
+    The dashboard treats any 401 as an iris auth challenge and pops its login
+    modal. A 401 from a proxied upstream (e.g. finelog refusing the controller)
+    is not a browser auth challenge — the browser never authenticated to the
+    upstream — so the proxy rewrites it to 502, folding the upstream body into
+    the error the client reads and dropping the upstream's challenge header.
+    """
+    with httpx.Client() as client:
+        resp = client.get(f"{proxy.base_url}/proxy/{ENDPOINT_URL_NAME}/401")
+    assert resp.status_code == 502
+    error = resp.json()["error"]
+    # Names the refusing upstream and carries its body, so the real cause is visible.
+    assert ENDPOINT_URL_NAME in error
+    assert "finelog rejected the controller" in error
+    # The upstream's challenge must not reach the client alongside the translated status.
+    assert "www-authenticate" not in {k.lower() for k in resp.headers}
 
 
 def test_upstream_connection_refused_returns_502(threads: ThreadContainer) -> None:

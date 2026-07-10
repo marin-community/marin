@@ -8,7 +8,9 @@ Distributed execution abstraction layer. Start with the shared instructions in `
 
 ## Source Layout
 
-- `src/fray/__init__.py` — public API exports (recommended interface)
+- `src/fray/__init__.py` — docstring only. Import from the defining submodule
+  (`from fray.client import Client`, `from fray.types import ResourceConfig`); a
+  re-export hub here over-selects CI tests, so do not add re-exports to it.
 - `src/fray/client.py` — `Client` protocol, `current_client()`, auto-detection
 - `src/fray/types.py` — `JobRequest`, `ResourceConfig`, `DeviceConfig` (CPU/GPU/TPU)
 - `src/fray/actor.py` — `ActorHandle`, `ActorGroup`, actor hosting

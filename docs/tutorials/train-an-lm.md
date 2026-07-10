@@ -159,13 +159,16 @@ the training job. None of those are experiment decisions.
 
 ### GPU variant
 
-Swap `ResourceConfig.with_tpu(...)` for `ResourceConfig.with_gpu("H100", count=8)` (or
-any other GPU spec). Everything else stays the same.
+Swap `ResourceConfig.with_tpu(...)` for
+`ResourceConfig.with_gpu("H100", count=8, regions=[ANY_REGION])` (or any other GPU spec).
+Marin's H100s live in a federated CoreWeave cluster, so a GPU run also needs an `s3://`
+storage prefix and a `--target-cluster` pin on the submission — see [Training on Cloud
+GPUs](cloud-gpu.md). Everything else about the script stays the same.
 
 ## Running the experiment
 
 Submit the script as a CPU-only Iris job. `StepRunner` inside the script dispatches the
-TPU or GPU training sub-job via Fray:
+TPU training sub-job via Fray:
 
 ```bash
 uv run iris --cluster=marin job run \

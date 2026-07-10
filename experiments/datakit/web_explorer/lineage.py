@@ -28,19 +28,32 @@ actually holds the data.
 
 from __future__ import annotations
 
-import dataclasses
 import json
 import logging
 from dataclasses import dataclass, field
 
-from ducky.client import DuckyClient
-from marin.execution.artifact import read_artifact, read_record
-from rigging.filesystem import marin_prefix, open_url
+from ducky.client import DuckyClient, DuckyError
+from rigging.filesystem import marin_prefix
 
 from experiments.datakit.reference_pipeline import DEFAULT_SCALE, reference_datakit_steps, select_sources
 from experiments.datakit.store.datakit_store import ClusteredStoreData
 
 logger = logging.getLogger(__name__)
+
+
+def read_text(ducky: DuckyClient, path: str) -> str | None:
+    """Fetch a file's raw content via ducky (DuckDB ``read_text``), or None if absent.
+
+    Keeps the explorer a pure ducky client: every read — store artifact, lineage
+    cache, dedup record — goes through ducky rather than the object store directly,
+    so the dashboard needs no storage credentials of its own.
+    """
+    try:
+        rows = ducky.run(f"SELECT content FROM read_text('{path}')").dicts()
+    except DuckyError:
+        return None
+    return rows[0]["content"] if rows else None
+
 
 # Placeholder inputs let us reconstruct the model-independent stages
 # (normalize/tokenize/decontam/dedup) even when the caller has no centroids /
@@ -48,9 +61,11 @@ logger = logging.getLogger(__name__)
 _PLACEHOLDER_CENTROIDS = "gs://placeholder/centroids"
 _PLACEHOLDER_QUALITY_MODEL = "gs://placeholder/model.bin"
 
-# Buckets to probe for the physical copy of a reconstructed dataset, tried in
-# order. The store's own bucket first, then known replicas.
-_FALLBACK_PREFIXES = ("gs://marin-us-central2", "gs://marin-us-east5")
+# Known replicas of the stage tree, probed in order when the store's own prefix
+# doesn't hold it. The R2 (``marin-na``) mirror is preferred — zero-egress and
+# co-located with the CoreWeave ducky — and nests under ``/marin``; the GCS mirrors
+# sit at the bucket root and come after.
+_FALLBACK_PREFIXES = ("s3://marin-na/marin", "gs://marin-us-central2", "gs://marin-us-east5")
 
 
 @dataclass(frozen=True)
@@ -78,16 +93,16 @@ class StoreLineage:
     verified: bool = False
 
 
-def save_lineage(lineage: StoreLineage, path: str) -> None:
-    """Cache a resolved lineage as JSON (resolution costs ~2 min of ducky globs)."""
-    with open_url(path, "w") as f:
-        json.dump(dataclasses.asdict(lineage), f, indent=2)
+def load_lineage(ducky: DuckyClient, path: str) -> StoreLineage:
+    """Load a pre-resolved lineage cache JSON, read via ducky (no direct storage).
 
-
-def load_lineage(path: str) -> StoreLineage:
-    """Load a cached lineage written by :func:`save_lineage`."""
-    with open_url(path, "r") as f:
-        return StoreLineage(**json.load(f))
+    The explorer never *writes* the cache (ducky is read-only); a cache is an
+    optional pre-baked optimization — absent one, resolution runs at startup.
+    """
+    content = read_text(ducky, path)
+    if content is None:
+        raise FileNotFoundError(f"no lineage cache at {path}")
+    return StoreLineage(**json.loads(content))
 
 
 def _hash_suffix(path: str) -> str:
@@ -110,22 +125,28 @@ def _stem(relative_path: str) -> str:
     return relative_path.rstrip("/").rsplit("_", 1)[0]
 
 
-def _discover_hashes(ducky: DuckyClient, data_prefix: str, stage_root: str) -> dict[str, list[str]]:
+def _discover_hashes(ducky: DuckyClient, data_prefix: str, stage_root: str, sources: list[str]) -> dict[str, list[str]]:
     """Map ``stem -> [relative dataset paths]`` for one stage subtree, via ducky glob.
 
     Datasets sit at ``<stage_root>/<name>_<hash>`` (flat source) or
-    ``<stage_root>/<group>/<name>_<hash>`` (grouped source), so we glob both
-    depths and index by the hash-stripped stem to disambiguate later.
+    ``<stage_root>/<group>/<name>_<hash>`` (grouped source), 1-3 levels deep, indexed
+    by the hash-stripped stem to disambiguate later. Depths 1-2 are cheap broad globs;
+    a broad depth-3 ``*/*/*`` glob is pathologically slow on R2 (~100s to enumerate the
+    tree), so target only the known 3-level source prefixes (a handful, each instant).
     """
     out: dict[str, list[str]] = {}
-    # Source names have 1-3 slash-separated parts (nsf_awards / cp/foodista /
-    # safety_pt/moral_education/score_5_morals), so datasets sit 1-3 levels under
-    # the stage root — glob all three depths.
-    for depth in ("*", "*/*", "*/*/*"):
-        sql = f"SELECT file FROM glob('{data_prefix}/{stage_root}/{depth}/.artifact.json')"
+
+    def _add(sql: str) -> None:
         for row in ducky.run(sql).rows:
             rel = _relativize(row[0].rsplit("/.artifact.json", 1)[0], data_prefix)
             out.setdefault(_stem(rel), []).append(rel)
+
+    for depth in ("*", "*/*"):
+        _add(f"SELECT file FROM glob('{data_prefix}/{stage_root}/{depth}/.artifact.json')")
+    # 3-level sources (e.g. ``safety_pt/moral_education/score_5_morals``): glob each
+    # distinct 2-level prefix + leaf rather than a broad, slow ``*/*/*``.
+    for prefix in sorted({s.rsplit("/", 1)[0] for s in sources if s.count("/") == 2}):
+        _add(f"SELECT file FROM glob('{data_prefix}/{stage_root}/{prefix}/*/.artifact.json')")
     return out
 
 
@@ -163,8 +184,13 @@ def _pick_data_prefix(store_path: str, ducky: DuckyClient) -> str:
     or not at all). Pick the candidate with the highest tokenize-discovery yield;
     ties favor the store's own bucket.
     """
-    store_prefix = "gs://" + store_path.split("://", 1)[-1].split("/", 1)[0]
-    candidates = [store_prefix, *(p for p in _FALLBACK_PREFIXES if p != store_prefix)]
+    # The stage tree sits beside the store under the same prefix: strip the trailing
+    # "/datakit/store_<hash>" to get "<scheme>://<bucket>[/<path>]" holding ``datakit/``
+    # + ``normalized/``. Only probe same-scheme replicas — a gs:// fallback from an
+    # s3:// (CoreWeave/R2) store would be a wrong-scheme, cross-region read.
+    store_prefix = store_path.rsplit("/datakit/", 1)[0]
+    scheme = f"{store_path.split('://', 1)[0]}://"
+    candidates = [store_prefix, *(p for p in _FALLBACK_PREFIXES if p.startswith(scheme) and p != store_prefix)]
     best, best_yield = store_prefix, -1
     for prefix in candidates:
         y = _discovery_yield(ducky, prefix, _STAGE_ROOTS["tokenize"])
@@ -176,25 +202,22 @@ def _pick_data_prefix(store_path: str, ducky: DuckyClient) -> str:
     return best
 
 
-def read_store_payload(store_path: str) -> ClusteredStoreData:
-    """Load the store's :class:`ClusteredStoreData`, tolerating both artifact formats.
+def read_store_payload(ducky: DuckyClient, store_path: str) -> ClusteredStoreData:
+    """Load the store's :class:`ClusteredStoreData` via ducky, tolerating both formats.
 
-    New stores wrap the payload in an ``ArtifactRecord.result`` (``read_artifact``).
-    Legacy stores (e.g. ``store_8ac06c74``) wrote the raw payload directly to
-    ``.artifact.json`` — which the current ``read_artifact`` no longer reads (it
-    now expects a record), so fall back to parsing that file as the payload.
+    New stores wrap the payload in an ``ArtifactRecord`` (``result`` holds the
+    payload); legacy stores (e.g. ``store_8ac06c74``) wrote the raw payload directly
+    to ``.artifact.json``. Read the file's text via ducky and parse either shape.
     """
-    try:
-        return read_artifact(store_path, ClusteredStoreData)
-    except (FileNotFoundError, ValueError):
-        pass
     base = store_path.rstrip("/")
-    for name in (".artifact.json", "artifact.json"):
-        try:
-            with open_url(f"{base}/{name}", "r") as f:
-                return ClusteredStoreData.model_validate_json(f.read())
-        except FileNotFoundError:
+    for name in ("artifact.json", ".artifact.json"):
+        content = read_text(ducky, f"{base}/{name}")
+        if content is None:
             continue
+        doc = json.loads(content)
+        # new-format ArtifactRecord nests the payload under "result"; legacy is bare.
+        payload = doc["result"] if isinstance(doc, dict) and "result" in doc else doc
+        return ClusteredStoreData.model_validate(payload)
     raise FileNotFoundError(f"no ClusteredStoreData payload at {store_path}")
 
 
@@ -218,9 +241,13 @@ def resolve_lineage(
 ) -> StoreLineage:
     """Resolve ``store_path`` to its upstream stage datasets. See module docstring."""
     store_path = store_path.rstrip("/")
-    record = read_record(store_path)
-    if record is not None and record.deps:
-        return _resolve_from_record(store_path, record)
+    # New-format stores write ``artifact.json`` as an ``ArtifactRecord`` carrying
+    # ``deps``; legacy stores write a bare payload to ``.artifact.json``.
+    content = read_text(ducky, f"{store_path}/artifact.json")
+    if content is not None:
+        doc = json.loads(content)
+        if isinstance(doc, dict) and doc.get("deps"):
+            return _resolve_from_record(store_path, doc)
     return _resolve_legacy(store_path, ducky, domain_centroids=domain_centroids, quality_model=quality_model)
 
 
@@ -231,7 +258,7 @@ def _resolve_legacy(
     domain_centroids: str | None,
     quality_model: str | None,
 ) -> StoreLineage:
-    payload = read_store_payload(store_path)
+    payload = read_store_payload(ducky, store_path)
     known = set(select_sources(None))
     sources = [s for s in payload.source_names if s in known]
     dropped = sorted(set(payload.source_names) - known)
@@ -274,7 +301,7 @@ def _resolve_legacy(
     # to its real dataset (reconstructed hash if present, else sole candidate).
     resolved: dict[str, dict[str, str]] = {}
     for stage, root in _STAGE_ROOTS.items():
-        discovered = _discover_hashes(ducky, data_prefix, root)
+        discovered = _discover_hashes(ducky, data_prefix, root, sources)
         picked = {name: _pick(rel, discovered) for name, rel in recon[stage].items()}
         missing = sorted(n for n, p in picked.items() if p is None)
         if missing:
@@ -308,8 +335,8 @@ def _resolve_legacy(
     )
 
 
-def _resolve_from_record(store_path: str, record) -> StoreLineage:
-    """Resolve lineage from a new-format ``ArtifactRecord`` (walks ``deps``).
+def _resolve_from_record(store_path: str, record: dict) -> StoreLineage:
+    """Resolve lineage from a new-format ``ArtifactRecord`` dict (walks ``deps``).
 
     ``deps`` are ``name@version`` refs whose recorded steps live at sibling
     output paths; we classify each by its step name. Kept minimal until a

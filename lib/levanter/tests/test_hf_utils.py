@@ -3,9 +3,8 @@
 
 import os
 
-import fsspec
 import huggingface_hub
-from fsspec import AbstractFileSystem
+from rigging.filesystem import StoragePath
 from test_utils import skip_if_hf_model_not_accessible
 
 from levanter.compat.hf_checkpoints import _patch_hf_hub_download, load_tokenizer
@@ -14,18 +13,18 @@ from levanter.utils.hf_utils import byte_length_of_token
 
 def test_load_tokenizer_in_memory_fs():
     # sort of like a gs:// path insasmuch as it uses fsspec machinery
-    fs: AbstractFileSystem = fsspec.filesystem("memory")
     directory_of_this_test = os.path.dirname(os.path.abspath(__file__))
-    fs.put(f"{directory_of_this_test}/gpt2_tokenizer.json", "memory://foo/tokenizer.json")
-    fs.put(f"{directory_of_this_test}/gpt2_tokenizer_config.json", "memory://foo/tokenizer_config.json")
+    StoragePath("memory://foo/tokenizer.json").upload_from(f"{directory_of_this_test}/gpt2_tokenizer.json")
+    StoragePath("memory://foo/tokenizer_config.json").upload_from(
+        f"{directory_of_this_test}/gpt2_tokenizer_config.json"
+    )
 
-    with fsspec.open("memory://foo/config.json", "w") as f:
-        f.write(
-            """{
-         "model_type": "gpt2",
-         "vocab_size": 5027
-         }"""
-        )
+    StoragePath("memory://foo/config.json").write_text(
+        """{
+     "model_type": "gpt2",
+     "vocab_size": 5027
+     }"""
+    )
     tokenizer = load_tokenizer("memory://foo/")
     assert len(tokenizer) == 5027
 

@@ -38,15 +38,15 @@ from collections import Counter, defaultdict
 from collections.abc import Iterator
 
 import pyarrow.compute as pc
-from fray import ResourceConfig
+from fray.types import ResourceConfig
 from levanter.store.cache import CacheLedger, CacheMetadata
 from marin.datakit.decon import DeconAttributes
 from marin.execution.artifact import read_artifact
 from marin.processing.classification.deduplication.fuzzy_dups import FuzzyDupsAttrData
 from marin.processing.tokenize.attributes import TokenizedAttrData
 from rigging.log_setup import configure_logging
-from zephyr import Dataset, ZephyrContext
-from zephyr.dataset import ShardInfo
+from zephyr.dataset import Dataset, ShardInfo
+from zephyr.execution import ZephyrContext
 
 from experiments.datakit.cluster.domain.v0.assign import AssignmentAttrData
 from experiments.datakit.cluster.quality.v0.all_sources_quality_llm import LlmQualityOutput

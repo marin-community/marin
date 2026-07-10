@@ -1,6 +1,9 @@
 # Iris test configuration
 # Multiple scale groups for realistic testing with diverse scenarios
 
+# This cluster's identity. Used for token minting and for authenticating to peers.
+name: ci-test
+
 platform:
   label_prefix: iris
   gcp:

@@ -9,9 +9,9 @@ import dataclasses
 import logging
 from dataclasses import dataclass
 
-from fray import current_client
+from fray.current_client import current_client
 from fray.types import Entrypoint, JobRequest, ResourceConfig, TpuConfig, create_environment
-from levanter.data.text import LMMixtureDatasetConfig
+from levanter.data.text.datasets import LMMixtureDatasetConfig
 from levanter.main.viz_logprobs import VizLmConfig as LevanterVizLmConfig
 from levanter.main.viz_logprobs import main as viz_lm_main
 from levanter.models.lm_model import LmConfig
