@@ -165,10 +165,9 @@ def _s3_env(cfg: FinelogConfig) -> dict[str, str]:
 def _forwarding_env(cfg: FinelogConfig) -> dict[str, str]:
     """The forwarding private key, resolved from its secret reference, or ``{}``.
 
-    This is the only place a finelog deploy handles key material. It reaches the pod
-    through the `<name>-env` Secret and never through a rendered manifest, so the
-    plaintext yaml an operator reviews (and `kubectl get deployment -o yaml` echoes
-    back) carries the hub's url but not the credential that reaches it.
+    Raises `SecretResolutionError` if no configured source yields the key: a server
+    that cannot authenticate to its hub forwards nothing, and looks exactly like a
+    quiet cluster.
     """
     if cfg.forwarding is None:
         return {}

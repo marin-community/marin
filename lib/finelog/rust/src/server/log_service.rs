@@ -115,8 +115,8 @@ fn array_buffer_size(arr: &ArrayRef) -> i64 {
     arr.to_data().buffers().iter().map(|b| b.len() as i64).sum()
 }
 
-/// One pushed row, borrowed from the request view.
-struct EntryColumns<'a> {
+/// One pushed row's fields, borrowed from the request view.
+struct EntryFields<'a> {
     key: &'a str,
     source: &'a str,
     data: &'a str,
@@ -126,8 +126,8 @@ struct EntryColumns<'a> {
 
 /// Project a wire entry onto the stored columns under `key`. `attempt_id` is not
 /// among them: it is parsed back out of the key on read, never stored.
-fn entry_columns<'a>(entry: &LogEntryView<'a>, key: &'a str) -> EntryColumns<'a> {
-    EntryColumns {
+fn entry_fields<'a>(entry: &LogEntryView<'a>, key: &'a str) -> EntryFields<'a> {
+    EntryFields {
         key,
         source: entry.source.unwrap_or(""),
         data: entry.data.unwrap_or(""),
@@ -143,7 +143,7 @@ fn entry_columns<'a>(entry: &LogEntryView<'a>, key: &'a str) -> EntryColumns<'a>
 /// Assemble the store's six log columns from `rows`, stamping every row with
 /// `cluster` (one value for the whole push: it is the writer's identity, not a
 /// per-entry field).
-fn build_log_columns(rows: Vec<EntryColumns<'_>>, cluster: &str) -> LogColumns {
+fn build_log_columns(rows: Vec<EntryFields<'_>>, cluster: &str) -> LogColumns {
     let num_rows = rows.len();
     let mut keys: Vec<&str> = Vec::with_capacity(num_rows);
     let mut sources: Vec<&str> = Vec::with_capacity(num_rows);
@@ -196,7 +196,7 @@ impl LogService for LogServiceImpl {
         let rows = request
             .entries
             .iter()
-            .map(|entry| entry_columns(entry, key))
+            .map(|entry| entry_fields(entry, key))
             .collect();
         let log_columns = build_log_columns(rows, cluster);
         self.append_and_persist(log_columns, &ctx).await?;
@@ -226,7 +226,7 @@ impl LogService for LogServiceImpl {
                     "finelog: PushLogsBulk entry has an empty key",
                 ));
             }
-            rows.push(entry_columns(entry, key));
+            rows.push(entry_fields(entry, key));
         }
         let log_columns = build_log_columns(rows, cluster);
         // One append for every key in the batch: the store's log columns are

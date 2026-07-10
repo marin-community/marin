@@ -63,9 +63,12 @@ storage:
 # present a bearer. This is the identity gate behind the IP-restricted federation
 # ingress (scripts/install_cw_network.py).
 #
-# `signing_key` must persist across restarts: the finelog relay signs every push with
-# it, and marin's finelog trusts the matching public key. The controller pod has no
-# GCP credentials, so `iris cluster up` resolves the Secret Manager reference in the
+# `signing_key` signs this controller's own worker and /proxy tokens, which only this
+# controller verifies. No external party pins its public key — this cluster hands off no
+# jobs (no `peers`), and its logs are forwarded by its finelog server under that
+# server's separate key — so a rotation costs at most the outstanding proxy share-links.
+# Persisting it anyway keeps those alive across a restart. The controller pod has no GCP
+# credentials, so `iris cluster up` resolves the Secret Manager reference in the
 # operator's shell and projects it as IRIS_SIGNING_KEY through the iris-controller-env
 # Secret, which task pods do not mount. Rotate with `iris cluster init-keys --rotate`.
 auth:

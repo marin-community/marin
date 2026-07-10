@@ -504,6 +504,14 @@ where
             // an origin cluster arrived here by forwarding, and re-forwarding it would
             // loop. Segments predating the column store NULL, which is a local row.
             "(cluster IS NULL OR cluster = '')".to_string(),
+            // `PushLogs` files a keyless push under the empty key, where no reader
+            // looks. `PushLogsBulk` has no request-level key to fall back on and refuses
+            // such an entry, so one unkeyed row would make the hub reject every row
+            // batched with it. Excluding them here keeps the filter in SQL, where an
+            // empty result still means "no forwardable rows in range" — the row limit
+            // applies after the predicate, so the cursor never jumps a row it did not
+            // consider.
+            "key != ''".to_string(),
         ];
         let rows = fetch_log_rows(
             &make_ctx(),
@@ -1113,6 +1121,38 @@ mod tests {
             "a refused push leaves the watermark where it was, so the rows are retried"
         );
         assert!(read_all(&client(target_addr)).await.is_empty());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn an_unkeyed_local_row_never_poisons_the_batch_it_would_ship_in() {
+        // `PushLogs` files a keyless push under the empty key. The hub refuses such an
+        // entry, and refuses the whole bulk request carrying it, so a forwarder that
+        // shipped one would lose every row batched alongside it. It must never build
+        // that request.
+        let source = disk_store("unkeyed_source");
+        let target = disk_store("unkeyed_target");
+        let (source_addr, _) = serve(Arc::clone(&source), AuthPolicy::allow_localhost()).await;
+        let (target_addr, _) = serve(Arc::clone(&target), hub_policy(SOURCE_CLUSTER)).await;
+        let source_client = client(source_addr);
+
+        push(&source_client, "", &["unkeyed"]).await;
+        push(&source_client, "/user/job/t", &["keyed"]).await;
+
+        let target_url = format!("http://{target_addr}");
+        source.set_forward_cursor(&target_url, 0).unwrap();
+        forward_until(
+            forwarder(Arc::clone(&source), &target_addr, PRIV_A),
+            &source,
+            &target_url,
+            tip(&source),
+        )
+        .await;
+
+        assert_eq!(
+            read_all(&client(target_addr)).await,
+            vec![("/user/job/t".to_string(), "keyed".to_string())],
+            "the keyed row ships; the unkeyed one is left behind rather than poisoning it"
+        );
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
