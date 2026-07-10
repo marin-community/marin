@@ -42,6 +42,7 @@ _AUTO_FALLBACK_EXCEPTIONS = (NotImplementedError, RuntimeError)
 _HAS_WARNED_AUTO_FALLBACK = False
 _TRITON_DEFAULT_BLOCK_N = 128
 _TRITON_BLACKWELL_BLOCK_N = 256
+_TRITON_BLOCK_K_ENV = "HALIAX_RAGGED_DOT_TRITON_BLOCK_K"
 _TRITON_NUM_WARPS_ENV = "HALIAX_RAGGED_DOT_TRITON_NUM_WARPS"
 
 
@@ -53,6 +54,14 @@ def _triton_num_warps() -> int:
     if num_warps not in (4, 8):
         raise ValueError(f"{_TRITON_NUM_WARPS_ENV} must be 4 or 8, got {num_warps}")
     return num_warps
+
+
+def _triton_block_k(k: int) -> int:
+    raw = os.environ.get(_TRITON_BLOCK_K_ENV, "")
+    block_k = int(raw) if raw else 32
+    if block_k not in (32, 64, 128):
+        raise ValueError(f"{_TRITON_BLOCK_K_ENV} must be 32, 64, or 128, got {block_k}")
+    return min(block_k, int(pl.next_power_of_2(k)))
 
 
 def _is_blackwell_gpu_backend() -> bool:
@@ -150,7 +159,7 @@ def _triton_default_block_sizes(m: int, k: int, n: int) -> tuple[int, int, int]:
     block_m = min(128, int(pl.next_power_of_2(m)))
     max_block_n = _TRITON_BLACKWELL_BLOCK_N if _is_blackwell_gpu_backend() else _TRITON_DEFAULT_BLOCK_N
     block_n = min(max_block_n, int(pl.next_power_of_2(n)))
-    block_k = min(32, int(pl.next_power_of_2(k)))
+    block_k = _triton_block_k(k)
     return block_m, block_n, block_k
 
 
@@ -223,7 +232,7 @@ def _triton_ragged_contracting_dim_pallas_call(
 
     block_m = min(128, int(pl.next_power_of_2(m)))
     block_n = min(128, int(pl.next_power_of_2(n)))
-    block_k = min(32, int(pl.next_power_of_2(k)))
+    block_k = _triton_block_k(k)
 
     cum_rows = jnp.cumulative_sum(group_sizes, include_initial=True)
 

@@ -85,6 +85,20 @@ def test_triton_default_block_sizes_keep_non_blackwell_n_tile(monkeypatch):
     assert ragged_dot_module._triton_default_block_sizes(32768, 5120, 5120) == (128, 128, 32)
 
 
+def test_triton_block_k_override(monkeypatch):
+    monkeypatch.setenv("HALIAX_RAGGED_DOT_TRITON_BLOCK_K", "64")
+
+    assert ragged_dot_module._triton_default_block_sizes(32768, 5120, 5120) == (128, 128, 64)
+    assert ragged_dot_module._triton_block_k(16) == 16
+
+
+def test_triton_block_k_rejects_unsupported_value(monkeypatch):
+    monkeypatch.setenv("HALIAX_RAGGED_DOT_TRITON_BLOCK_K", "48")
+
+    with pytest.raises(ValueError, match="must be 32, 64, or 128"):
+        ragged_dot_module._triton_block_k(5120)
+
+
 def test_triton_custom_vjp_routes_backward_through_triton_layouts(monkeypatch):
     lhs, rhs, group_sizes = _inputs()
     calls = []

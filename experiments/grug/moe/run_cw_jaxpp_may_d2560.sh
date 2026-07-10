@@ -39,6 +39,7 @@ VOCAB_SIZE=""
 MOE_IMPLEMENTATION="ring"
 ATTENTION_IMPLEMENTATION="${MAY_ATTENTION_IMPLEMENTATION:-}"
 RAGGED_DOT_IMPLEMENTATION="${RAGGED_DOT_IMPL:-}"
+RAGGED_DOT_BLOCK_K="${HALIAX_RAGGED_DOT_TRITON_BLOCK_K:-}"
 RAGGED_DOT_NUM_WARPS="${HALIAX_RAGGED_DOT_TRITON_NUM_WARPS:-}"
 LOSS_IMPLEMENTATION=""
 CE_AUTOTUNE_ON_MISS="${LEVANTER_PALLAS_CE_AUTOTUNE_ON_MISS:-false}"
@@ -89,6 +90,7 @@ Options:
                             Omit to use the model default.
   --ragged-dot-implementation NAME
                             auto, triton, or xla. Omit to use auto.
+  --ragged-dot-block-k N     Pallas-Triton grouped-GEMM K tile: 32, 64, or 128.
   --ragged-dot-num-warps N  Pallas-Triton grouped-GEMM warps: 4 or 8.
   --loss-implementation NAME
                             Cross-entropy implementation: batched_xla, xla, or reference.
@@ -134,6 +136,7 @@ while [ "$#" -gt 0 ]; do
         --moe-implementation) MOE_IMPLEMENTATION="$2"; shift 2 ;;
         --attention-implementation) ATTENTION_IMPLEMENTATION="$2"; shift 2 ;;
         --ragged-dot-implementation) RAGGED_DOT_IMPLEMENTATION="$2"; shift 2 ;;
+        --ragged-dot-block-k) RAGGED_DOT_BLOCK_K="$2"; shift 2 ;;
         --ragged-dot-num-warps) RAGGED_DOT_NUM_WARPS="$2"; shift 2 ;;
         --loss-implementation) LOSS_IMPLEMENTATION="$2"; shift 2 ;;
         --ce-autotune-on-miss) CE_AUTOTUNE_ON_MISS="$2"; shift 2 ;;
@@ -201,6 +204,14 @@ case "$RAGGED_DOT_NUM_WARPS" in
     ""|4|8) ;;
     *)
         echo "ERROR: ragged dot num warps must be 4 or 8, got: $RAGGED_DOT_NUM_WARPS" >&2
+        exit 1
+        ;;
+esac
+
+case "$RAGGED_DOT_BLOCK_K" in
+    ""|32|64|128) ;;
+    *)
+        echo "ERROR: ragged dot block K must be 32, 64, or 128, got: $RAGGED_DOT_BLOCK_K" >&2
         exit 1
         ;;
 esac
@@ -301,6 +312,10 @@ if [ -n "$RAGGED_DOT_NUM_WARPS" ]; then
     ENV_ARGS+=(-e HALIAX_RAGGED_DOT_TRITON_NUM_WARPS "$RAGGED_DOT_NUM_WARPS")
 fi
 
+if [ -n "$RAGGED_DOT_BLOCK_K" ]; then
+    ENV_ARGS+=(-e HALIAX_RAGGED_DOT_TRITON_BLOCK_K "$RAGGED_DOT_BLOCK_K")
+fi
+
 if [ -n "$VOCAB_SIZE" ]; then
     ENV_ARGS+=(-e MAY_VOCAB_SIZE "$VOCAB_SIZE")
 fi
@@ -354,6 +369,7 @@ model: d2560 L${LAYERS} experts=${NUM_EXPERTS} top_k=${TOP_K} seq_len=${SEQ_LEN}
 batch: $BATCH
 attention_implementation: ${ATTENTION_IMPLEMENTATION:-default}
 ragged_dot_implementation: ${RAGGED_DOT_IMPLEMENTATION:-auto}
+ragged_dot_block_k: ${RAGGED_DOT_BLOCK_K:-32}
 ragged_dot_num_warps: ${RAGGED_DOT_NUM_WARPS:-4}
 loss_implementation: ${LOSS_IMPLEMENTATION:-default}
 ce_autotune_on_miss: $CE_AUTOTUNE_ON_MISS
