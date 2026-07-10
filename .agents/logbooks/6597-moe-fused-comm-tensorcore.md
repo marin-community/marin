@@ -1284,3 +1284,42 @@ This retains independent B256 `send_m` and B64 `compute_m`, removes the old
 16-fragment sender pool and 40-way ad hoc publication path, and keeps dW2 as an
 expert-local atomic reduction side output. Six dedicated tests and scoped
 pre-commit pass. Target H100 correctness and timing remain required.
+
+## 2026-07-10 FUSED-MOE-043 - Direct-generation W2 return target result
+
+Job `/dlwh/bench-semantic-w2-return-directgen-20260710-1638` ran once on
+`cw-rno2a` at commit `1048f62b64` and reached terminal Iris state `succeeded`.
+Its single H100x8 task exited 0 after 1 minute and 42.92 seconds, with zero
+failures and preemptions. No duplicate, stop, resubmit, Iris restart, or cluster
+bounce was issued.
+
+The target EP8 random-routing `semantic_fused_w2_return_pallas` mode completed
+all three repeats after removing local outbox payload staging and storing WGMMA
+fragments directly to local or peer compact `return_y`. Exact median/min/max
+steady-state time was `79.7906296599346`/`79.65751533629373`/
+`80.16991099187483` ms. Median useful/rounded throughput was
+`10.765593188836908`/`13.456991486046135` TFLOP/s/rank, and the output checksum
+was `3915118848.0`.
+
+Dropped routes, routing drops, metadata overflow, queue-route overflow, and
+layout-row overflow were all zero. The mode reported 64 live pairs, 1,048,576
+useful rows, 1,310,720 rounded rows, 0.8 row efficiency, and
+0.19999999999999996 masked-row fraction. No structured benchmark error was
+emitted. Logs contained non-fatal failed 12.50 GiB allocator attempts and CUDA
+VMM handle fallback warnings before the successful rows. Exact repeat metrics,
+counters, terminal evidence, and the closed monitor state are in
+`scratch/20260710-1640_bench_semantic_w2_return_directgen_report.md` and
+`scratch/20260710-1640_bench_semantic_w2_return_directgen_monitoring_state.json`.
+
+## 2026-07-10 FUSED-MOE-044 - Hierarchical semantic permute plus W13
+
+The literal two-CTA raw-token gather is replaced by hierarchical preparation.
+Two chunk owners retain B256 slot lifecycle and publication, while all 30 WGMMA
+consumer CTAs also prepare independent B64-by-256 source tiles. Owners wait for
+fixed cumulative helper completion before publishing `full`; consumers then
+run their fixed B64 jobs and release through the existing cumulative fan-in.
+
+This keeps B256 `send_m` independent of B64 `compute_m`, restores within-chunk
+gather parallelism, and preserves direct compact expert-major output. Five
+dedicated tests, target kernel construction, and scoped pre-commit including
+Pyrefly pass. Target H100 timing remains required.

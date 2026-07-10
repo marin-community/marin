@@ -97,12 +97,15 @@ def test_fused_w13_generation_accounting_reuses_slots_with_cumulative_targets():
     )
 
     assert (first.slot, first.generation, first.empty_generation, first.released_generation) == (0, 1, 1, 2)
-    assert (first.producer, next_chunk.producer) == (0, 1)
-    assert first.producer_copy_tiles == CONFIG.compute_blocks_per_send * (2560 // CONFIG.send_k)
+    assert (first.owner, next_chunk.owner) == (0, 1)
+    assert first.helper_tiles == CONFIG.compute_blocks_per_send * (2560 // CONFIG.send_k)
+    assert first.prepare_generation == first.generation
+    assert first.helper_done_generation == first.helper_tiles
     assert reused.slot == first.slot
     assert reused.generation == 2
-    assert reused.producer == first.producer
-    assert reused.producer_copy_tiles == first.producer_copy_tiles
+    assert reused.owner == first.owner
+    assert reused.helper_tiles == first.helper_tiles
+    assert reused.helper_done_generation == 2 * first.helper_done_generation
     assert reused.consumer_done_generation == 2 * first.consumer_done_generation
     assert reused.empty_generation == first.released_generation
 
