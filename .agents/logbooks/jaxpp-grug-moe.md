@@ -1752,3 +1752,18 @@ author: dlwh
   - The whole-MLP boundary keeps XLA's backward graph to opaque custom calls and trades one extra grouped up-projection GEMM for lower saved-activation memory and a fused dSwiGLU path.
 - Next action:
   - Babysit the exact full parent and compare compile time and MFU against `14.8455495` old no-EP Sonic and `16.2004883` ring EP. If it remains below `20`, profile this exact recompute implementation before changing FSDP scheduling again.
+
+### 2026-07-10 17:00 PDT - whole-MLP recompute exact-shape compile negative
+- Hypothesis: The H100-validated whole-MLP custom VJP will keep XLA's exact 24-layer JAXPP compile within the old no-EP Sonic run's practical window and expose the QuACK backward runtime improvement.
+- Commit Hash: `7952c5e5fd` (`[grug] Match Sonic recompute backward`).
+- Command: the full recompute comparison in the preceding entry.
+- Results:
+  - Parent `/dlwh/iris-run-job-20260710-230029` was intentionally stopped after `55m 42s`; its four-task child was stopped after `55m 29s`. All tasks terminated with exit `0` and zero failures, and no live failed job remains.
+  - The run reached stage 3 loss/backward compilation by `23:05:32 UTC` but never reached `grug_1f1b_keep_step`, an executable, loss, or MFU. During the quiet interval all four Python processes continued consuming roughly 20-45 CPU cores; two stages also held all eight GPUs at 100%, while two stages had idle GPUs. This rules out a dead process but not pathological compiler/autotuner work.
+  - The old no-EP Sonic baseline reached `grug_1f1b_keep_step` and began reporting W&B throughput within the same run; the new run's failure to reach keep-step after 55 minutes is a material compile regression, not normal exact-shape startup cost.
+  - H100 behavior remains valid at small scale: the whole-MLP recompute path passed forward and full-gradient parity before this distributed launch.
+- Interpretation:
+  - Moving the differentiation boundary and eliminating saved preactivation fixed the upstream kernel/layout contract but did not make the exact JAXPP executable compile operationally viable. The additional recompute, DGated, and variable-K custom calls appear to trigger pathological stage-backward compilation or autotuning at full shape.
+  - No MFU comparison is available, so the measured winner remains ring EP at `16.2004883`; old forward-QuACK/reference-backward no-EP remains `14.8455495`.
+- Next action:
+  - Do not relaunch the exact whole-MLP path unchanged. Capture a bounded reduced-stage XLA dump or compile profile to isolate the pass/custom call responsible, or retain ring EP while pursuing schedule overlap; require a practical compile gate before another 32-H100 full run.
