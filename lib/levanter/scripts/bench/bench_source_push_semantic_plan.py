@@ -80,7 +80,9 @@ from levanter.grug._moe.source_push_semantic_metadata_pallas import (
 )
 from levanter.grug._moe.source_push_semantic_mlp import (
     SourcePushSemanticMlpCapacity,
+    _source_push_moe_mlp_semantic_fused_pallas_mgpu,
     _source_push_moe_mlp_semantic_pallas_mgpu,
+    source_push_moe_mlp_semantic_fused_pallas_mgpu,
     source_push_moe_mlp_semantic_pallas_mgpu,
 )
 from levanter.grug._moe.source_push_semantic_backward_pallas import (
@@ -206,6 +208,10 @@ MODE_SEMANTIC_FUSED_W2_BACKWARD_PALLAS = "semantic_fused_w2_backward_pallas"
 MODE_SEMANTIC_FUSED_W2_BACKWARD_COMPARE = "semantic_fused_w2_backward_compare"
 MODE_SEMANTIC_FUSED_W13_BACKWARD_PALLAS = "semantic_fused_w13_backward_pallas"
 MODE_SEMANTIC_FUSED_W13_BACKWARD_COMPARE = "semantic_fused_w13_backward_compare"
+MODE_SEMANTIC_FUSED_MLP_FORWARD_PALLAS = "semantic_fused_mlp_forward_pallas"
+MODE_SEMANTIC_FUSED_MLP_FORWARD_COMPARE = "semantic_fused_mlp_forward_compare"
+MODE_SEMANTIC_FUSED_MLP_FORWARD_BACKWARD_PALLAS = "semantic_fused_mlp_forward_backward_pallas"
+MODE_SEMANTIC_FUSED_MLP_FORWARD_BACKWARD_COMPARE = "semantic_fused_mlp_forward_backward_compare"
 SEMANTIC_FUSED_STAGE_MODES = (
     MODE_SEMANTIC_FUSED_W2_RETURN_PALLAS,
     MODE_SEMANTIC_FUSED_W2_RETURN_COMPARE,
@@ -213,6 +219,12 @@ SEMANTIC_FUSED_STAGE_MODES = (
     MODE_SEMANTIC_FUSED_W2_BACKWARD_COMPARE,
     MODE_SEMANTIC_FUSED_W13_BACKWARD_PALLAS,
     MODE_SEMANTIC_FUSED_W13_BACKWARD_COMPARE,
+)
+SEMANTIC_FUSED_MLP_MODES = (
+    MODE_SEMANTIC_FUSED_MLP_FORWARD_PALLAS,
+    MODE_SEMANTIC_FUSED_MLP_FORWARD_COMPARE,
+    MODE_SEMANTIC_FUSED_MLP_FORWARD_BACKWARD_PALLAS,
+    MODE_SEMANTIC_FUSED_MLP_FORWARD_BACKWARD_COMPARE,
 )
 MODE_W13_SOURCE_PADDED_DIRECT_PACK_PALLAS = "w13_source_padded_direct_pack_pallas"
 MODE_W13_SOURCE_PADDED_DIRECT_PACK_COMPARE = "w13_source_padded_direct_pack_compare"
@@ -553,6 +565,10 @@ MODES = (
     MODE_SEMANTIC_FUSED_W2_BACKWARD_COMPARE,
     MODE_SEMANTIC_FUSED_W13_BACKWARD_PALLAS,
     MODE_SEMANTIC_FUSED_W13_BACKWARD_COMPARE,
+    MODE_SEMANTIC_FUSED_MLP_FORWARD_PALLAS,
+    MODE_SEMANTIC_FUSED_MLP_FORWARD_COMPARE,
+    MODE_SEMANTIC_FUSED_MLP_FORWARD_BACKWARD_PALLAS,
+    MODE_SEMANTIC_FUSED_MLP_FORWARD_BACKWARD_COMPARE,
     MODE_W13_SOURCE_PADDED_DIRECT_PACK_PALLAS,
     MODE_W13_SOURCE_PADDED_DIRECT_PACK_COMPARE,
     MODE_W2,
@@ -737,6 +753,10 @@ SOURCE_DRIVEN_EXPLICIT_MODES = (
 
 DEFAULT_ALL_MODES = tuple(mode for mode in MODES if mode not in SOURCE_DRIVEN_EXPLICIT_MODES)
 MODE_ALIASES = {
+    "semantic_fused_mlp": (
+        MODE_SEMANTIC_FUSED_MLP_FORWARD_PALLAS,
+        MODE_SEMANTIC_FUSED_MLP_FORWARD_BACKWARD_PALLAS,
+    ),
     "semantic_fused_stages": (
         MODE_SEMANTIC_FUSED_W2_RETURN_PALLAS,
         MODE_SEMANTIC_FUSED_W2_BACKWARD_PALLAS,
@@ -1615,6 +1635,8 @@ def _mode_flops_per_rank(
         MODE_FORWARD_EXPERT_MAJOR_DIRECT_PACK_REMOTE_Y_STOP_PALLAS,
         MODE_FORWARD_SOURCE_EXPAND_DIRECT_PACK_OWNER_SHARDED_Y_PALLAS,
         MODE_FORWARD_SOURCE_EXPAND_DIRECT_PACK_REMOTE_Y_PALLAS,
+        MODE_SEMANTIC_FUSED_MLP_FORWARD_PALLAS,
+        MODE_SEMANTIC_FUSED_MLP_FORWARD_COMPARE,
     ):
         useful = useful_rows_total * (w13_per_row + w2_per_row + swiglu_per_row)
         rounded = rounded_rows_total * (w13_per_row + w2_per_row + swiglu_per_row)
@@ -1735,6 +1757,8 @@ def _mode_flops_per_rank(
         MODE_FORWARD_BACKWARD_SOURCE_PADDED_DIRECT_PACK_DIRECT_QUEUE_PALLAS,
         MODE_FORWARD_BACKWARD_SOURCE_PADDED_DIRECT_PACK_DIRECT_QUEUE_COMPARE,
         MODE_FORWARD_BACKWARD_SOURCE_PADDED_DIRECT_PACK_DIRECT_QUEUE_WITH_METADATA_PALLAS,
+        MODE_SEMANTIC_FUSED_MLP_FORWARD_BACKWARD_PALLAS,
+        MODE_SEMANTIC_FUSED_MLP_FORWARD_BACKWARD_COMPARE,
     ):
         useful = useful_rows_total * (3.0 * w13_per_row + 3.0 * w2_per_row + 3.0 * swiglu_per_row)
         rounded = rounded_rows_total * (3.0 * w13_per_row + 3.0 * w2_per_row + 3.0 * swiglu_per_row)
@@ -2800,6 +2824,10 @@ def _make_mesh(ep_size: int) -> Mesh:
 
 def _is_pallas_mode(mode: str) -> bool:
     return mode in SEMANTIC_FUSED_STAGE_MODES or mode in (
+        MODE_SEMANTIC_FUSED_MLP_FORWARD_PALLAS,
+        MODE_SEMANTIC_FUSED_MLP_FORWARD_COMPARE,
+        MODE_SEMANTIC_FUSED_MLP_FORWARD_BACKWARD_PALLAS,
+        MODE_SEMANTIC_FUSED_MLP_FORWARD_BACKWARD_COMPARE,
         MODE_METADATA_PALLAS,
         MODE_METADATA_TILE_PALLAS,
         MODE_GATHER_X_PALLAS,
@@ -3455,6 +3483,7 @@ def _mode_callable(mode: str, plan: SourcePushSemanticPlan, args: argparse.Names
         _make_mesh(args.ep_size)
         if (
             mode in SEMANTIC_FUSED_STAGE_MODES
+            or mode in SEMANTIC_FUSED_MLP_MODES
             or mode
             in (
                 MODE_W13_EXPERT_MAJOR_PREPACKED,
@@ -4063,6 +4092,105 @@ def _mode_callable(mode: str, plan: SourcePushSemanticPlan, args: argparse.Names
             **_comparison_metrics("dw13", observed.dw13, expected.dw13),
             "queue_overflow_route_error_count": observed.queue_overflow_routes,
             "layout_overflow_row_error_count": observed.layout_overflow_rows,
+        }
+
+    def semantic_fused_mlp_forward(
+        inputs: SemanticBenchInputs,
+        *,
+        interpret: bool,
+    ) -> tuple[Array, Array]:
+        _send_chunks_per_dst, _entries_per_dst, fused_rows_per_expert = semantic_fused_queue_shape()
+        capacity = SourcePushSemanticMlpCapacity(
+            rows_per_src_dst=plan.assignment_ids.shape[-1],
+            rows_per_expert=fused_rows_per_expert,
+        )
+        if interpret:
+            return _source_push_moe_mlp_semantic_fused_pallas_mgpu(
+                inputs.selected_experts,
+                inputs.x,
+                inputs.route_weights,
+                inputs.w_gate_up,
+                inputs.w_down,
+                capacity=capacity,
+                capacity_factor=args.capacity_factor,
+                mesh=expert_mesh,
+                interpret=True,
+            )
+        assert expert_mesh is not None
+        return source_push_moe_mlp_semantic_fused_pallas_mgpu(
+            inputs.selected_experts,
+            inputs.x,
+            inputs.route_weights,
+            inputs.w_gate_up,
+            inputs.w_down,
+            capacity=capacity,
+            capacity_factor=args.capacity_factor,
+            mesh=expert_mesh,
+        )
+
+    def semantic_fused_mlp_forward_pallas(inputs: SemanticBenchInputs):
+        y, dropped_routes = semantic_fused_mlp_forward(inputs, interpret=args.pallas_interpret)
+        return {"y": y, "dropped_routes": dropped_routes}
+
+    def semantic_fused_mlp_forward_compare(inputs: SemanticBenchInputs):
+        expected_y, expected_dropped = semantic_fused_mlp_forward(inputs, interpret=True)
+        observed_y, observed_dropped = semantic_fused_mlp_forward(inputs, interpret=args.pallas_interpret)
+        return {
+            **_comparison_metrics("y", observed_y, expected_y),
+            "dropped_routes_error_count": jnp.abs(observed_dropped - expected_dropped),
+        }
+
+    def semantic_fused_mlp_forward_backward(inputs: SemanticBenchInputs, *, interpret: bool):
+        def loss(x_arg, route_weights_arg, w13_arg, w2_arg):
+            boundary_inputs = replace(
+                inputs,
+                x=x_arg,
+                route_weights=route_weights_arg,
+                w_gate_up=w13_arg,
+                w_down=w2_arg,
+            )
+            y, dropped_routes = semantic_fused_mlp_forward(boundary_inputs, interpret=interpret)
+            loss_value = jnp.sum(y.astype(jnp.float32) * inputs.dy.astype(jnp.float32))
+            return loss_value, (y, dropped_routes)
+
+        (_loss, (y, dropped_routes)), (dx, d_route_weights, dw13, dw2) = jax.value_and_grad(
+            loss,
+            argnums=(0, 1, 2, 3),
+            has_aux=True,
+        )(
+            inputs.x,
+            inputs.route_weights,
+            inputs.w_gate_up,
+            inputs.w_down,
+        )
+        return y, dropped_routes, dx, d_route_weights, dw13, dw2
+
+    def semantic_fused_mlp_forward_backward_pallas(inputs: SemanticBenchInputs):
+        y, dropped_routes, dx, d_route_weights, dw13, dw2 = semantic_fused_mlp_forward_backward(
+            inputs,
+            interpret=args.pallas_interpret,
+        )
+        return {
+            "y": y,
+            "dropped_routes": dropped_routes,
+            "dx": dx,
+            "d_route_weights": d_route_weights,
+            "dw13": dw13,
+            "dw2": dw2,
+        }
+
+    def semantic_fused_mlp_forward_backward_compare(inputs: SemanticBenchInputs):
+        expected = semantic_fused_mlp_forward_backward(inputs, interpret=True)
+        observed = semantic_fused_mlp_forward_backward(inputs, interpret=args.pallas_interpret)
+        expected_y, expected_dropped, expected_dx, expected_d_route_weights, expected_dw13, expected_dw2 = expected
+        observed_y, observed_dropped, observed_dx, observed_d_route_weights, observed_dw13, observed_dw2 = observed
+        return {
+            **_comparison_metrics("y", observed_y, expected_y),
+            **_comparison_metrics("dx", observed_dx, expected_dx),
+            **_comparison_metrics("d_route_weights", observed_d_route_weights, expected_d_route_weights),
+            **_comparison_metrics("dw13", observed_dw13, expected_dw13),
+            **_comparison_metrics("dw2", observed_dw2, expected_dw2),
+            "dropped_routes_error_count": jnp.abs(observed_dropped - expected_dropped),
         }
 
     def forward_source_padded_components(inputs: SemanticBenchInputs, *, output_dtype: jnp.dtype):
@@ -8180,6 +8308,10 @@ def _mode_callable(mode: str, plan: SourcePushSemanticPlan, args: argparse.Names
         MODE_SEMANTIC_FUSED_W2_BACKWARD_COMPARE: semantic_fused_w2_backward_compare,
         MODE_SEMANTIC_FUSED_W13_BACKWARD_PALLAS: semantic_fused_w13_backward_pallas,
         MODE_SEMANTIC_FUSED_W13_BACKWARD_COMPARE: semantic_fused_w13_backward_compare,
+        MODE_SEMANTIC_FUSED_MLP_FORWARD_PALLAS: semantic_fused_mlp_forward_pallas,
+        MODE_SEMANTIC_FUSED_MLP_FORWARD_COMPARE: semantic_fused_mlp_forward_compare,
+        MODE_SEMANTIC_FUSED_MLP_FORWARD_BACKWARD_PALLAS: semantic_fused_mlp_forward_backward_pallas,
+        MODE_SEMANTIC_FUSED_MLP_FORWARD_BACKWARD_COMPARE: semantic_fused_mlp_forward_backward_compare,
         MODE_W13_SOURCE_PADDED_DIRECT_PACK_PALLAS: w13_source_padded_direct_pack_pallas,
         MODE_W13_SOURCE_PADDED_DIRECT_PACK_COMPARE: w13_source_padded_direct_pack_compare,
         MODE_W2: w2,
@@ -8973,6 +9105,7 @@ def _run_stage_mode(
             _make_mesh(args.ep_size)
             if (
                 mode in SEMANTIC_FUSED_STAGE_MODES
+                or mode in SEMANTIC_FUSED_MLP_MODES
                 or mode
                 in (
                     MODE_W13_EXPERT_MAJOR_PREPACKED,
@@ -9273,6 +9406,7 @@ def _run_stage_mode(
                 mode in SEMANTIC_FUSED_STAGE_MODES
                 and mode not in (MODE_SEMANTIC_FUSED_W2_BACKWARD_PALLAS, MODE_SEMANTIC_FUSED_W2_BACKWARD_COMPARE)
             )
+            or mode in SEMANTIC_FUSED_MLP_MODES
             or mode
             in (
                 MODE_W13_EXPERT_MAJOR_PALLAS,

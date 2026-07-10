@@ -2195,3 +2195,105 @@ def test_source_push_semantic_plan_bench_emits_fused_stage_rows(tmp_path):
     w13_backward_compare = repeats["semantic_fused_w13_backward_compare"]
     assert w13_backward_compare["dx_max_abs_diff"] == 0.0
     assert w13_backward_compare["dw13_max_abs_diff"] == 0.0
+
+
+def test_source_push_semantic_plan_fused_mlp_modes_use_target_shape_flops():
+    bench_source_push_semantic_plan = _bench_module()
+    hidden_dim = 256
+    intermediate_dim = 128
+    useful_rows = 7
+    rounded_rows = 11
+    ep_size = 2
+    forward_per_row = (
+        2.0 * hidden_dim * intermediate_dim * 2.0 + 2.0 * intermediate_dim * hidden_dim + 8.0 * intermediate_dim
+    )
+
+    forward = bench_source_push_semantic_plan._mode_flops_per_rank(
+        bench_source_push_semantic_plan.MODE_SEMANTIC_FUSED_MLP_FORWARD_PALLAS,
+        useful_rows_total=useful_rows,
+        rounded_rows_total=rounded_rows,
+        hidden_dim=hidden_dim,
+        intermediate_dim=intermediate_dim,
+        ep_size=ep_size,
+    )
+    forward_backward = bench_source_push_semantic_plan._mode_flops_per_rank(
+        bench_source_push_semantic_plan.MODE_SEMANTIC_FUSED_MLP_FORWARD_BACKWARD_PALLAS,
+        useful_rows_total=useful_rows,
+        rounded_rows_total=rounded_rows,
+        hidden_dim=hidden_dim,
+        intermediate_dim=intermediate_dim,
+        ep_size=ep_size,
+    )
+
+    assert forward == (useful_rows * forward_per_row / ep_size, rounded_rows * forward_per_row / ep_size)
+    assert forward_backward == (
+        useful_rows * 3.0 * forward_per_row / ep_size,
+        rounded_rows * 3.0 * forward_per_row / ep_size,
+    )
+
+
+def test_source_push_semantic_plan_bench_emits_full_fused_mlp_rows(tmp_path):
+    jsonl = tmp_path / "semantic_fused_mlp.jsonl"
+    bench_source_push_semantic_plan = _bench_module()
+    modes = (
+        "semantic_fused_mlp_forward_pallas,semantic_fused_mlp_forward_compare,"
+        "semantic_fused_mlp_forward_backward_pallas,semantic_fused_mlp_forward_backward_compare"
+    )
+
+    bench_source_push_semantic_plan.main(
+        [
+            "--ep-size",
+            "1",
+            "--tokens-per-rank",
+            "2",
+            "--topk",
+            "1",
+            "--experts-per-rank",
+            "1",
+            "--hidden-dim",
+            "256",
+            "--intermediate-dim",
+            "128",
+            "--capacity-factor",
+            "1.0",
+            "--routing",
+            "balanced",
+            "--modes",
+            modes,
+            "--pallas-interpret",
+            "--warmup",
+            "0",
+            "--steps",
+            "1",
+            "--repeat-runs",
+            "1",
+            "--jsonl",
+            str(jsonl),
+        ]
+    )
+
+    rows = [json.loads(line) for line in jsonl.read_text().splitlines()]
+    repeats = {row["mode"]: row for row in rows if row["row_type"] == "repeat"}
+    summaries = {row["mode"]: row for row in rows if row["row_type"] == "summary"}
+    assert set(summaries) == set(modes.split(","))
+    for summary in summaries.values():
+        assert summary["implementation"] == "pallas_mgpu"
+        assert summary["error_rows"] == 0
+        assert summary["median_steady_state_time"] > 0
+        assert summary["median_useful_tflops_per_rank"] > 0
+        assert summary["median_rounded_tflops_per_rank"] > 0
+
+    forward = repeats["semantic_fused_mlp_forward_pallas"]
+    assert forward["dropped_routes"] == 0.0
+    forward_compare = repeats["semantic_fused_mlp_forward_compare"]
+    assert forward_compare["y_max_abs_diff"] == 0.0
+    assert forward_compare["dropped_routes_error_count"] == 0.0
+
+    forward_backward = repeats["semantic_fused_mlp_forward_backward_pallas"]
+    assert forward_backward["dropped_routes"] == 0.0
+    forward_backward_compare = repeats["semantic_fused_mlp_forward_backward_compare"]
+    for output in ("y", "dx", "d_route_weights", "dw13", "dw2"):
+        assert forward_backward_compare[f"{output}_max_abs_diff"] == 0.0
+        assert forward_backward_compare[f"expected_{output}_nonfinite_error_count"] == 0.0
+        assert forward_backward_compare[f"observed_{output}_nonfinite_error_count"] == 0.0
+    assert forward_backward_compare["dropped_routes_error_count"] == 0.0

@@ -1083,3 +1083,18 @@ TypeError, so the target-size dense-allocation symptom remained observable in
 this run. Raw logs, structured rows, terminal status, task summary, closed
 monitor state, and a standalone report are in
 `scratch/6597-w13b-target-masktile/`.
+
+## 2026-07-10 FUSED-MOE-034 - Integrated fused MLP benchmark boundary
+
+The semantic benchmark harness now exposes the actual fused custom-VJP
+boundary instead of requiring stage-time arithmetic. New modes are
+`semantic_fused_mlp_forward_pallas`, `semantic_fused_mlp_forward_compare`,
+`semantic_fused_mlp_forward_backward_pallas`, and
+`semantic_fused_mlp_forward_backward_compare`; alias `semantic_fused_mlp`
+runs the two performance modes. Forward accounting includes W13, SwiGLU, and
+W2; forward-plus-backward accounting uses three times that math. The compare
+mode reports y, dX, route-weight, dW13, and dW2 errors and nonfinite counts.
+
+The two focused benchmark tests pass and scoped pre-commit passes. No H100
+claim is attached yet; the next integrated run follows isolated target-stage
+validation.
