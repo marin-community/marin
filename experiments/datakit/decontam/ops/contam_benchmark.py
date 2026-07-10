@@ -6,6 +6,15 @@
 A self-contained pipeline: generate a labeled corpus → run the *real* decon
 (`decon_to_parquet`) → score precision / recall / F1 against the ground truth.
 
+Runs two arms on the same corpus and reports them side by side:
+
+* A — core decon, no common-ngram filter (the baseline precision/recall).
+* B — with the DF filter: a drop-set built from the benchmark corpus itself
+  (`build_source_drop_set`) excludes ngrams common across the corpus. Boilerplate
+  hard negatives (a famous quote, an instruction template) appear in enough docs
+  to clear the DF cutoff and get dropped → precision rises; distinctive injected
+  eval items appear too rarely to be dropped → recall is unchanged.
+
 Doc families (each labeled contaminated or clean):
 
 * POSITIVE — a real eval item injected into filler in four forms (verbatim,
@@ -44,6 +53,7 @@ from marin.datakit.decon import (
     _extract_features,
     bloom_paths,
     build_eval_bloom,
+    build_source_drop_set,
     decon_to_parquet,
 )
 from marin.datakit.normalize import NormalizedData
@@ -51,7 +61,13 @@ from rigging.filesystem import StoragePath, marin_prefix, url_to_fs
 from zephyr.readers import load_file
 
 from experiments.datakit.decontam.prepare_eval_corpus import DECON_EXCLUDED_EVAL_TASKS
-from experiments.datakit.testbed.decon_arm import NGRAM_LENGTH, OVERLAP_THRESHOLD, PARAGRAPH_DELIMITER
+from experiments.datakit.testbed.decon_arm import (
+    DF_COMMON_FRAC,
+    DF_COMMON_MIN_ABS,
+    NGRAM_LENGTH,
+    OVERLAP_THRESHOLD,
+    PARAGRAPH_DELIMITER,
+)
 
 logger = logging.getLogger(__name__)
 _EVALS_RELATIVE = "datakit/decontam/evals"
@@ -253,6 +269,29 @@ def _score(labels: list[dict], preds: dict[str, float], threshold: float) -> dic
     return {"overall": _prf(tp, fp, fn), "threshold": threshold, "by_mechanism": mech_report, "pr_curve": curve}
 
 
+def _log_comparison(a: dict, b: dict, n_dropped: int) -> None:
+    """Print arm A (no filter) vs arm B (DF filter) side by side."""
+    logger.info("=== decon contamination benchmark (delimiter=%r) ===", PARAGRAPH_DELIMITER)
+    logger.info("DF filter dropped %d common ngrams (built from the benchmark corpus)", n_dropped)
+    oa, ob = a["overall"], b["overall"]
+    logger.info(
+        "OVERALL @%.2f   A(no filter): P=%.3f R=%.3f F1=%.3f (fp=%d)   B(DF filter): P=%.3f R=%.3f F1=%.3f (fp=%d)",
+        OVERLAP_THRESHOLD,
+        oa["precision"],
+        oa["recall"],
+        oa["f1"],
+        oa["fp"],
+        ob["precision"],
+        ob["recall"],
+        ob["f1"],
+        ob["fp"],
+    )
+    logger.info("%-28s %13s %13s", "mechanism", "A flagged", "B flagged")
+    for mech in a["by_mechanism"]:
+        ra, rb = a["by_mechanism"][mech], b["by_mechanism"][mech]
+        logger.info("  %-26s n=%-5d %6d %13d", mech, ra["n"], ra["flagged"], rb["flagged"])
+
+
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
     ap = argparse.ArgumentParser()
@@ -284,37 +323,51 @@ def main() -> None:
 
     docs, labels = _generate(eval_files, bf, ngram, args.n_positive, args.n_hard, args.n_easy, args.seed)
     docs_dir = _write_docs(docs, args.work)
+    norm = NormalizedData(main_output_dir=docs_dir, dup_output_dir="", counters={})
 
-    decon_out = f"{args.work.rstrip('/')}/decon"
+    # Arm A: core decon, no common-ngram filter.
     decon_to_parquet(
-        normalized_data=NormalizedData(main_output_dir=docs_dir, dup_output_dir="", counters={}),
-        prebuilt_bloom_dir=bloom_dir,
-        output_path=decon_out,
-        ngram=ngram,
+        normalized_data=norm, prebuilt_bloom_dir=bloom_dir, output_path=f"{args.work.rstrip('/')}/decon_a", ngram=ngram
     )
+    metrics_a = _score(labels, _read_predictions(f"{args.work.rstrip('/')}/decon_a"), OVERLAP_THRESHOLD)
 
-    preds = _read_predictions(decon_out)
-    metrics = _score(labels, preds, OVERLAP_THRESHOLD)
-    metrics["config"] = {"paragraph_delimiter": PARAGRAPH_DELIMITER, "ngram_length": NGRAM_LENGTH, "n_docs": len(docs)}
+    # Arm B: DF filter. Build a drop-set from the benchmark corpus itself (the
+    # "source"), then decon with the common ngrams excluded from every overlap.
+    drop_dir = f"{args.work.rstrip('/')}/drop"
+    dropped = build_source_drop_set(
+        df_sample_dir=docs_dir,
+        prebuilt_bloom_dir=bloom_dir,
+        output_path=drop_dir,
+        ngram=ngram,
+        sample_docs=len(docs),
+        common_frac=DF_COMMON_FRAC,
+        common_min_abs=DF_COMMON_MIN_ABS,
+    )
+    decon_to_parquet(
+        normalized_data=norm,
+        prebuilt_bloom_dir=bloom_dir,
+        output_path=f"{args.work.rstrip('/')}/decon_b",
+        ngram=ngram,
+        drop_set_dir=drop_dir,
+    )
+    metrics_b = _score(labels, _read_predictions(f"{args.work.rstrip('/')}/decon_b"), OVERLAP_THRESHOLD)
 
+    metrics = {
+        "arm_a_no_filter": metrics_a,
+        "arm_b_df_filter": metrics_b,
+        "config": {
+            "paragraph_delimiter": PARAGRAPH_DELIMITER,
+            "ngram_length": NGRAM_LENGTH,
+            "n_docs": len(docs),
+            "df_common_frac": DF_COMMON_FRAC,
+            "df_common_min_abs": DF_COMMON_MIN_ABS,
+            "df_ngrams_dropped": dropped.n_dropped,
+        },
+    }
     ofs, opath = url_to_fs(args.out)
     with ofs.open(opath, "w") as fh:
         json.dump(metrics, fh, indent=2)
-    logger.info("=== decon contamination benchmark (delimiter=%r) ===", PARAGRAPH_DELIMITER)
-    o = metrics["overall"]
-    logger.info(
-        "OVERALL @%.2f  P=%.3f R=%.3f F1=%.3f  (tp=%d fp=%d fn=%d)",
-        OVERLAP_THRESHOLD,
-        o["precision"],
-        o["recall"],
-        o["f1"],
-        o["tp"],
-        o["fp"],
-        o["fn"],
-    )
-    for mech, r in metrics["by_mechanism"].items():
-        key = "recall" if "recall" in r else "false_positive_rate"
-        logger.info("  %-28s n=%-5d flagged=%-5d %s=%.3f", mech, r["n"], r["flagged"], key, r[key])
+    _log_comparison(metrics_a, metrics_b, dropped.n_dropped)
     logger.info("wrote %s", args.out)
 
 
