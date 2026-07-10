@@ -50,6 +50,7 @@ DEFAULT_JAXPP_REVISION = "7091a9b5ce02cd1a6bdc905f6a36e89370a5fba9"
 DEFAULT_DEEPEP_REVISION = "7febc6e25660af0f54d95dd781ecdcd62265ecca"
 DEEPEP_CUDA_TOOLCHAIN_VERSION = "13.2.78"
 DEEPEP_CUDA_CCCL_VERSION = "13.3.3.4.1"
+DEEPEP_CUDA_RUNTIME_VERSION = "13.2.75"
 
 
 def env_float(key: str, default: float) -> float:
@@ -82,10 +83,12 @@ def deepep_setup_scripts(*, source_root: str, revision: str) -> tuple[str, ...]:
                 "uv pip install --link-mode symlink "
                 f"nvidia-cuda-nvcc=={DEEPEP_CUDA_TOOLCHAIN_VERSION} "
                 f"nvidia-nvvm=={DEEPEP_CUDA_TOOLCHAIN_VERSION} "
-                f"nvidia-cuda-cccl=={DEEPEP_CUDA_CCCL_VERSION}",
+                f"nvidia-cuda-cccl=={DEEPEP_CUDA_CCCL_VERSION} "
+                f"nvidia-cuda-runtime=={DEEPEP_CUDA_RUNTIME_VERSION}",
                 'cuda_bin="$(find "$IRIS_VENV"/lib/python*/site-packages/nvidia/cu*/bin ' '-name nvcc -print -quit)"',
                 'test -n "$cuda_bin" || { echo "nvcc not found after CUDA toolchain install" >&2; exit 1; }',
                 'cuda_root="$(dirname "$(dirname "$cuda_bin")")"',
+                'ln -sf libcudart.so.13 "$cuda_root/lib/libcudart.so"',
                 'ln -sf "$(dirname "$cuda_bin")"/* "$IRIS_VENV/bin/"',
                 'rm -f "$IRIS_VENV/bin/nvcc"',
                 "printf '%s\\n' '#!/usr/bin/env bash' "
