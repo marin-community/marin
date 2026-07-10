@@ -1,7 +1,8 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for filesystem helpers."""
+"""Tests for the StoragePath value type and its string helpers (prefix_join,
+split_gcs_path, rebase_file_path)."""
 
 import dataclasses
 import pickle
@@ -9,14 +10,11 @@ from datetime import datetime
 from pathlib import Path
 
 import pytest
-from rigging.filesystem import (
+from rigging.filesystem.storage_path import (
     StoragePath,
-    _bucket_from_gcs_url,
-    atomic_rename,
     prefix_join,
     rebase_file_path,
     split_gcs_path,
-    unique_temp_path,
 )
 
 
@@ -122,20 +120,6 @@ def test_split_gcs_path_rejects_non_gcs():
 
 
 @pytest.mark.parametrize(
-    ("url", "bucket"),
-    [
-        ("gs://bucket/path", "bucket"),
-        ("gcs://bucket/path", "bucket"),
-        ("gs://bucket", "bucket"),
-        ("s3://bucket/path", None),
-        ("/local/path", None),
-    ],
-)
-def test_bucket_from_gcs_url(url, bucket):
-    assert _bucket_from_gcs_url(url) == bucket
-
-
-@pytest.mark.parametrize(
     ("base_in", "file_path", "base_out", "new_ext", "old_ext", "expected"),
     [
         # Extension swap under a trailing-slash output base (a common caller pattern).
@@ -176,42 +160,6 @@ def test_rebase_file_path_wrong_old_extension():
 def test_rebase_file_path_old_extension_requires_new():
     with pytest.raises(ValueError, match="requires new_extension"):
         rebase_file_path("gs://b/in", "gs://b/in/doc.jsonl", "gs://b/out", old_extension=".jsonl")
-
-
-def test_unique_temp_path_produces_distinct_paths():
-    """Each call to unique_temp_path returns a different path."""
-    paths = {unique_temp_path("/some/output.txt") for _ in range(10)}
-    assert len(paths) == 10
-    for p in paths:
-        assert p.startswith("/some/output.txt.tmp.")
-
-
-def test_atomic_rename_uses_unique_temp_paths(tmp_path):
-    """Concurrent atomic_rename calls use distinct temp paths (UUID collision avoidance)."""
-    output = str(tmp_path / "out.txt")
-    observed_temps = []
-
-    for _ in range(5):
-        with atomic_rename(output) as temp_path:
-            observed_temps.append(temp_path)
-            Path(temp_path).write_text("data")
-
-    assert len(set(observed_temps)) == 5, "Each call should produce a unique temp path"
-    for tp in observed_temps:
-        assert ".tmp." in tp
-
-
-def test_atomic_rename_cleans_up_on_error(tmp_path):
-    """Temp file is removed when the context raises an exception."""
-    output = str(tmp_path / "out.txt")
-
-    with pytest.raises(RuntimeError, match="boom"):
-        with atomic_rename(output) as temp_path:
-            Path(temp_path).write_text("bad")
-            raise RuntimeError("boom")
-
-    assert not Path(temp_path).exists()
-    assert not Path(output).exists()
 
 
 # ---------------------------------------------------------------------------

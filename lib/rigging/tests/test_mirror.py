@@ -5,13 +5,9 @@ import os
 
 import fsspec
 import pytest
-from rigging.filesystem import (
-    MirrorFileSystem,
-    TransferBudget,
-    TransferBudgetExceeded,
-    _mirror_remote_prefixes,
-    mirror_budget,
-)
+from rigging.filesystem.cluster_config import BucketSpec, DataConfig, StoreType, use_data_config
+from rigging.filesystem.cross_region import TransferBudget, TransferBudgetExceeded, mirror_budget
+from rigging.filesystem.mirror import MirrorFileSystem, _mirror_remote_prefixes
 
 
 @pytest.fixture()
@@ -213,7 +209,18 @@ def test_mirror_remote_prefixes_empty_for_local_path():
 
 
 def test_mirror_remote_prefixes_populated_for_gcs():
-    prefixes = _mirror_remote_prefixes("gs://marin-us-central1")
+    # Bind an explicit multi-region GCS mirror set so the filtering logic is
+    # tested independent of the ambient cluster config (and of config-discovery
+    # global cache state, which other tests in the suite may have populated).
+    config = DataConfig(
+        region_buckets={
+            "us-central1": BucketSpec("marin-us-central1", StoreType.GCS),
+            "us-central2": BucketSpec("marin-us-central2", StoreType.GCS),
+            "eu-west4": BucketSpec("marin-eu-west4", StoreType.GCS),
+        }
+    )
+    with use_data_config(config):
+        prefixes = _mirror_remote_prefixes("gs://marin-us-central1")
     assert prefixes
     assert all(p.startswith("gs://") for p in prefixes)
     # The local prefix itself must not appear in the remote list.

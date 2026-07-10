@@ -62,8 +62,8 @@ class MockNestedConfig:
 def test_lm_config_with_train_urls_allowed_out_of_region(trainer_config):
     """train/validation source URLs are exempt from region checks."""
     with (
-        patch("rigging.filesystem.marin_region", return_value="us-central1"),
-        patch("rigging.filesystem.get_bucket_location", return_value="us-east1"),
+        patch("rigging.filesystem.cluster_config.marin_region", return_value="us-central1"),
+        patch("rigging.filesystem.cluster_config.get_bucket_location", return_value="us-east1"),
     ):
         config = TrainLmOnPodConfig(
             train_config=train_lm.TrainLmConfig(
@@ -77,7 +77,7 @@ def test_lm_config_with_train_urls_allowed_out_of_region(trainer_config):
 
 def test_temporary_checkpoint_base_path_follows_output_path_region():
     with (
-        patch("rigging.filesystem.urllib.request.urlopen", side_effect=OSError("not on GCP")),
+        patch("rigging.filesystem.cluster_config.urllib.request.urlopen", side_effect=OSError("not on GCP")),
         patch.dict(os.environ, {"MARIN_PREFIX": "gs://marin-us-central1/scratch"}),
     ):
         assert temporary_checkpoint_base_path("gs://marin-us-east5/experiments/grug/base-trial") == (
@@ -87,7 +87,7 @@ def test_temporary_checkpoint_base_path_follows_output_path_region():
 
 def test_apply_output_path_sets_run_specific_temp_checkpoints(trainer_config):
     with (
-        patch("rigging.filesystem.urllib.request.urlopen", side_effect=OSError("not on GCP")),
+        patch("rigging.filesystem.cluster_config.urllib.request.urlopen", side_effect=OSError("not on GCP")),
         patch.dict(os.environ, {"MARIN_PREFIX": "gs://marin-us-central1/scratch"}),
     ):
         updated = apply_output_path(
@@ -142,8 +142,8 @@ def test_apply_output_path_routes_adapter_hf_export_to_peft(trainer_config):
 def test_recursive_path_checking(trainer_config):
     """Paths are checked recursively in nested structures."""
     with (
-        patch("rigging.filesystem.marin_region", return_value="us-central1"),
-        patch("rigging.filesystem.get_bucket_location", return_value="us-east1"),
+        patch("rigging.filesystem.cluster_config.marin_region", return_value="us-central1"),
+        patch("rigging.filesystem.cluster_config.get_bucket_location", return_value="us-east1"),
     ):
         nested_data = MockNestedDataConfig(
             cache_dir="gs://bucket/path", subdir={"file": "gs://bucket/other/path", "list": ["gs://bucket/another/path"]}
@@ -162,8 +162,8 @@ def test_recursive_path_checking(trainer_config):
 def test_dataclass_recursive_checking(trainer_config):
     """Paths are checked recursively in dataclass objects."""
     with (
-        patch("rigging.filesystem.marin_region", return_value="us-central1"),
-        patch("rigging.filesystem.get_bucket_location", return_value="us-east1"),
+        patch("rigging.filesystem.cluster_config.marin_region", return_value="us-central1"),
+        patch("rigging.filesystem.cluster_config.get_bucket_location", return_value="us-east1"),
     ):
         config = TrainLmOnPodConfig(
             train_config=train_lm.TrainLmConfig(
@@ -179,8 +179,8 @@ def test_dataclass_recursive_checking(trainer_config):
 def test_pathlib_path_handling(trainer_config):
     """pathlib.Path objects that represent GCS URIs are handled correctly."""
     with (
-        patch("rigging.filesystem.marin_region", return_value="us-central1"),
-        patch("rigging.filesystem.get_bucket_location", return_value="us-east1"),
+        patch("rigging.filesystem.cluster_config.marin_region", return_value="us-central1"),
+        patch("rigging.filesystem.cluster_config.get_bucket_location", return_value="us-east1"),
     ):
         config = TrainLmOnPodConfig(
             train_config=train_lm.TrainLmConfig(
