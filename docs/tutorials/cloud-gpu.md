@@ -77,7 +77,7 @@ its data. CoreWeave's peers advertise no region, so an inherited GCP region excl
 host that has an H100. GPU resources must opt out with `regions=[ANY_REGION]`:
 
 ```python
-from fray import ANY_REGION, ResourceConfig
+from fray.types import ANY_REGION, ResourceConfig
 
 ResourceConfig.with_gpu("H100", count=8, cpu=32, disk="128G", ram="128G", regions=[ANY_REGION])
 ```
