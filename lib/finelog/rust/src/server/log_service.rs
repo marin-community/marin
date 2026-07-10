@@ -103,8 +103,7 @@ impl LogServiceImpl {
 }
 
 /// The six non-seq log columns built from pushed entries, plus their byte size.
-/// Built outside the namespace insertion lock (the prepared-outside-lock pattern
-/// from `append_log_batch`).
+/// Prepared before the namespace insertion lock is taken.
 struct LogColumns {
     columns: Vec<ArrayRef>,
     num_rows: usize,

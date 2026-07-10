@@ -280,6 +280,9 @@ where
     pub async fn run(&self, mut stop: watch::Receiver<bool>) {
         let mut persisted_rx = match self.store.watch_log_persisted_seq() {
             Ok(rx) => rx,
+            // Unlike the catalog read below, this cannot come right on a retry: the
+            // `log` engine is registered when the store opens, so its absence is
+            // structural.
             Err(e) => {
                 tracing::error!(error = %e, "finelog forwarder: no log namespace; not forwarding");
                 return;
@@ -375,9 +378,10 @@ where
 
     /// Forward everything in `(cursor, persisted]`, returning the new cursor.
     ///
-    /// Returns early on a read failure, on a push the hub could not take, or on `stop`,
-    /// leaving the cursor where it got to for the caller to retry from. A push the hub
-    /// *refused* is not such a failure: the chunk is skipped and the drain continues.
+    /// Returns early on `stop`, or on a failure to read the store or persist the cursor,
+    /// leaving the cursor where it got to for the caller to resume from. Neither hub
+    /// failure ends the drain: a refused chunk is skipped, and an unreachable hub is
+    /// retried until `stop`.
     async fn drain_to(
         &self,
         mut cursor: i64,
@@ -1013,17 +1017,22 @@ mod tests {
     }
 
     #[test]
-    fn minted_bearer_names_the_cluster_it_forwards_for() {
+    fn the_key_names_the_forwarding_cluster_not_the_bearer() {
         // The hub binds a pushed row's origin cluster to the key that verified the
-        // bearer, so the bearer must authenticate as this store's cluster.
-        let minter = TokenMinter::new(PRIV_A, "cw-rno2a".to_string()).unwrap();
-        let bearer = minter.bearer().unwrap();
-        assert_eq!(
-            jwt_policy("cw-rno2a").admits(Some(&bearer), None),
-            Some(crate::server::auth::AuthIdentity::Jwt {
-                cluster: "cw-rno2a".to_string()
-            })
-        );
+        // bearer. A sender that mints under someone else's name still lands under the
+        // cluster the hub configured for its key, so it cannot write as another cluster.
+        let hub = jwt_policy("cw-rno2a");
+        let admitted = Some(crate::server::auth::AuthIdentity::Jwt {
+            cluster: "cw-rno2a".to_string(),
+        });
+
+        let honest = TokenMinter::new(PRIV_A, "cw-rno2a".to_string()).unwrap();
+        assert_eq!(hub.admits(Some(&honest.bearer().unwrap()), None), admitted);
+
+        // Same key, a bearer whose `iss`/`sub` claim another cluster entirely.
+        let liar = TokenMinter::new(PRIV_A, "us-central2".to_string()).unwrap();
+        assert_ne!(liar.bearer().unwrap(), honest.bearer().unwrap());
+        assert_eq!(hub.admits(Some(&liar.bearer().unwrap()), None), admitted);
     }
 
     #[test]
