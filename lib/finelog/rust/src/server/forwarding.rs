@@ -29,14 +29,17 @@
 //!
 //! - It seeds at the current tip, so enabling it ships new logs rather than
 //!   backfilling a retention window.
-//! - It materializes at most [`FORWARD_BATCH_ROWS`] rows and sends at most
-//!   [`FORWARD_BATCH_BYTES`] per request.
-//! - It advances its watermark only after the hub durably acks, so a crash
-//!   re-forwards the in-flight chunk (at-least-once; duplicate lines are bounded to
-//!   the failure boundary and tolerable for logs).
-//! - When it falls further behind than [`MAX_FORWARD_LAG_SEQS`], or when eviction has
-//!   already archived the segments its cursor points at, it skips forward and logs
-//!   what it dropped. A counted, visible gap beats an unbounded queue.
+//! - It materializes at most [`FORWARD_BATCH_ROWS`] rows, and packs them into requests
+//!   of at most [`FORWARD_BATCH_BYTES`]. A single row larger than that budget ships
+//!   alone, in a request that exceeds it — splitting a log line is not an option.
+//! - It advances its cursor past a batch only once that batch can never be sent again:
+//!   the hub acked it, or the forwarder gave it up. A crash mid-batch re-forwards it
+//!   (at-least-once; duplicate lines are bounded to the failure boundary and tolerable
+//!   for logs).
+//! - When it falls further behind than [`MAX_FORWARD_LAG_SEQS`], when eviction has
+//!   already archived the segments its cursor points at, or when the hub refuses a
+//!   batch outright, it skips forward and logs what it dropped. A counted, visible gap
+//!   beats an unbounded queue.
 //!
 //! A push failure backs off and retries; nothing here can take the store down.
 
@@ -241,9 +244,9 @@ pub struct Forwarder<T = HttpsTransport> {
     client: LogServiceClient<T>,
     minter: TokenMinter,
     config: ForwardingConfig,
-    /// How far behind the durability mark the cursor may fall before skipping ahead.
-    /// A field rather than a constant because the skip-ahead path is untestable at the
-    /// production value: a test would have to append two million rows to reach it.
+    /// How far behind the durability mark the cursor may fall before the forwarder
+    /// abandons the backlog and jumps to its freshest window. Defaults to
+    /// [`MAX_FORWARD_LAG_SEQS`]; a test shrinks it to reach that path.
     max_lag_seqs: i64,
 }
 
@@ -786,6 +789,88 @@ mod tests {
         Forwarder::with_client(store, config, minter, client(*target))
     }
 
+    /// A source store and the hub it forwards to, each served over a real socket under
+    /// the auth policy it runs in production.
+    struct Fixture {
+        source: Arc<Store>,
+        source_client: LogServiceClient<TestTransport>,
+        target_addr: SocketAddr,
+        target_url: String,
+        target_requests: Arc<AtomicUsize>,
+    }
+
+    impl Fixture {
+        /// A hub that trusts [`SOURCE_CLUSTER`]'s public key, and a source that writes
+        /// under it. The source's watermark is unset: a forwarder started now seeds at
+        /// the tip. Call [`Self::forward_from_start`] to drain what is already written.
+        async fn new(tag: &str) -> Self {
+            let source = disk_store(&format!("{tag}_source"));
+            let target = disk_store(&format!("{tag}_target"));
+            let (source_addr, _) = serve(Arc::clone(&source), AuthPolicy::allow_localhost()).await;
+            let (target_addr, target_requests) = serve(target, hub_policy(SOURCE_CLUSTER)).await;
+            Self {
+                source,
+                source_client: client(source_addr),
+                target_addr,
+                target_url: format!("http://{target_addr}"),
+                target_requests,
+            }
+        }
+
+        /// As [`Self::new`], but the hub refuses every request with `invalid_argument`.
+        /// It keeps no store, so only the source and the request count are observable.
+        async fn with_rejecting_hub(tag: &str) -> Self {
+            let source = disk_store(&format!("{tag}_source"));
+            let (source_addr, _) = serve(Arc::clone(&source), AuthPolicy::allow_localhost()).await;
+            let (target_addr, target_requests) = serve_rejecting().await;
+            Self {
+                source,
+                source_client: client(source_addr),
+                target_addr,
+                target_url: format!("http://{target_addr}"),
+                target_requests,
+            }
+        }
+
+        /// Point the watermark below every row, so a forward drains the whole store.
+        fn forward_from_start(&self) {
+            self.source.set_forward_cursor(&self.target_url, 0).unwrap();
+        }
+
+        fn forwarder(&self, private_pem: &str) -> Forwarder<TestTransport> {
+            forwarder(Arc::clone(&self.source), &self.target_addr, private_pem)
+        }
+
+        /// The last seq the source has made durable.
+        fn tip(&self) -> i64 {
+            *self.source.log_persisted_seq().unwrap().borrow()
+        }
+
+        fn cursor(&self) -> Option<i64> {
+            self.source.forward_cursor(&self.target_url).unwrap()
+        }
+
+        fn requests(&self) -> usize {
+            self.target_requests.load(Ordering::SeqCst)
+        }
+
+        /// Forward until the watermark settles at the source's current tip, then stop.
+        async fn drain(&self, private_pem: &str) {
+            forward_until(
+                self.forwarder(private_pem),
+                &self.source,
+                &self.target_url,
+                self.tip(),
+            )
+            .await;
+        }
+
+        /// Every row the hub holds, as `(key, data)`.
+        async fn hub_rows(&self) -> Vec<(String, String)> {
+            read_all(&client(self.target_addr)).await
+        }
+    }
+
     /// Write `entries` under `key` into `store` through its own RPC surface, which
     /// returns only once the rows are durable and therefore visible to a scan.
     async fn push(client: &LogServiceClient<TestTransport>, key: &str, lines: &[&str]) {
@@ -894,11 +979,6 @@ mod tests {
         let running = RunningForwarder::start(forwarder);
         wait_for_cursor(store, target, expected).await;
         running.finish().await;
-    }
-
-    /// The last seq the source store has made durable.
-    fn tip(store: &Store) -> i64 {
-        *store.log_persisted_seq().unwrap().borrow()
     }
 
     #[test]
@@ -1010,35 +1090,22 @@ mod tests {
         //    are in flight, so a job fanned out over 140 workers ships as fast as one
         //    that is not. The count is taken at the hub's HTTP boundary, which is where
         //    the contract lives.
-        let source = disk_store("bulk_source");
-        let target = disk_store("bulk_target");
-        let (source_addr, _) = serve(Arc::clone(&source), AuthPolicy::allow_localhost()).await;
-        let (target_addr, target_requests) =
-            serve(Arc::clone(&target), hub_policy(SOURCE_CLUSTER)).await;
-        let source_client = client(source_addr);
-
+        let fx = Fixture::new("bulk").await;
         for key in ["/user/job/task-a", "/user/job/task-b", "/system/worker/1"] {
-            push(&source_client, key, &["first", "second"]).await;
+            push(&fx.source_client, key, &["first", "second"]).await;
         }
-        let target_url = format!("http://{target_addr}");
-        source.set_forward_cursor(&target_url, 0).unwrap();
-        let requests_before = target_requests.load(Ordering::SeqCst);
+        fx.forward_from_start();
+        let requests_before = fx.requests();
 
-        forward_until(
-            forwarder(Arc::clone(&source), &target_addr, PRIV_A),
-            &source,
-            &target_url,
-            tip(&source),
-        )
-        .await;
+        fx.drain(PRIV_A).await;
 
         assert_eq!(
-            target_requests.load(Ordering::SeqCst) - requests_before,
+            fx.requests() - requests_before,
             1,
             "six rows across three keys must ship in a single bulk request"
         );
 
-        let mut forwarded = read_all(&client(target_addr)).await;
+        let mut forwarded = fx.hub_rows().await;
         forwarded.sort();
         assert_eq!(
             forwarded,
@@ -1058,25 +1125,14 @@ mod tests {
     async fn forwarded_rows_carry_the_origin_cluster_of_the_store_that_sent_them() {
         // The hub namespaces logs by origin, and it takes that origin from the bearer's
         // cluster rather than the sender's word for it.
-        let source = disk_store("stamp_source");
-        let target = disk_store("stamp_target");
-        let (source_addr, _) = serve(Arc::clone(&source), AuthPolicy::allow_localhost()).await;
-        let (target_addr, _) = serve(Arc::clone(&target), hub_policy(SOURCE_CLUSTER)).await;
-        push(&client(source_addr), "/user/job/t", &["hello"]).await;
-
-        let target_url = format!("http://{target_addr}");
-        source.set_forward_cursor(&target_url, 0).unwrap();
-        forward_until(
-            forwarder(Arc::clone(&source), &target_addr, PRIV_A),
-            &source,
-            &target_url,
-            tip(&source),
-        )
-        .await;
+        let fx = Fixture::new("stamp").await;
+        push(&fx.source_client, "/user/job/t", &["hello"]).await;
+        fx.forward_from_start();
+        fx.drain(PRIV_A).await;
 
         // Reading the hub restricted to this origin returns the row, which it can only
         // do if the `cluster` column was stamped.
-        let entries = client(target_addr)
+        let entries = client(fx.target_addr)
             .fetch_logs(
                 FetchLogsRequest {
                     ..Default::default()
@@ -1097,30 +1153,23 @@ mod tests {
     async fn a_bearer_the_hub_does_not_trust_forwards_nothing_and_loses_nothing() {
         // The hub rejects the push, so the watermark must not advance: the rows are
         // still owed, and the local store still serves them.
-        let source = disk_store("reject_source");
-        let target = disk_store("reject_target");
-        let (source_addr, _) = serve(Arc::clone(&source), AuthPolicy::allow_localhost()).await;
-        let (target_addr, target_requests) =
-            serve(Arc::clone(&target), hub_policy(SOURCE_CLUSTER)).await;
-        push(&client(source_addr), "/user/job/t", &["hello"]).await;
-
-        let target_url = format!("http://{target_addr}");
-        source.set_forward_cursor(&target_url, 0).unwrap();
+        let fx = Fixture::new("reject").await;
+        push(&fx.source_client, "/user/job/t", &["hello"]).await;
+        fx.forward_from_start();
 
         // PRIV_UNTRUSTED is not the key the hub trusts.
-        let running =
-            RunningForwarder::start(forwarder(Arc::clone(&source), &target_addr, PRIV_UNTRUSTED));
+        let running = RunningForwarder::start(fx.forwarder(PRIV_UNTRUSTED));
         // Wait for the push to REACH the hub. Stopping on a timer instead would let a
         // forwarder that never pushed at all satisfy both assertions below.
-        wait_for_requests(&target_requests, 1).await;
+        wait_for_requests(&fx.target_requests, 1).await;
         running.finish().await;
 
         assert_eq!(
-            source.forward_cursor(&target_url).unwrap(),
+            fx.cursor(),
             Some(0),
             "a refused push leaves the watermark where it was, so the rows are retried"
         );
-        assert!(read_all(&client(target_addr)).await.is_empty());
+        assert!(fx.hub_rows().await.is_empty());
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -1129,27 +1178,14 @@ mod tests {
         // entry, and refuses the whole bulk request carrying it, so a forwarder that
         // shipped one would lose every row batched alongside it. It must never build
         // that request.
-        let source = disk_store("unkeyed_source");
-        let target = disk_store("unkeyed_target");
-        let (source_addr, _) = serve(Arc::clone(&source), AuthPolicy::allow_localhost()).await;
-        let (target_addr, _) = serve(Arc::clone(&target), hub_policy(SOURCE_CLUSTER)).await;
-        let source_client = client(source_addr);
-
-        push(&source_client, "", &["unkeyed"]).await;
-        push(&source_client, "/user/job/t", &["keyed"]).await;
-
-        let target_url = format!("http://{target_addr}");
-        source.set_forward_cursor(&target_url, 0).unwrap();
-        forward_until(
-            forwarder(Arc::clone(&source), &target_addr, PRIV_A),
-            &source,
-            &target_url,
-            tip(&source),
-        )
-        .await;
+        let fx = Fixture::new("unkeyed").await;
+        push(&fx.source_client, "", &["unkeyed"]).await;
+        push(&fx.source_client, "/user/job/t", &["keyed"]).await;
+        fx.forward_from_start();
+        fx.drain(PRIV_A).await;
 
         assert_eq!(
-            read_all(&client(target_addr)).await,
+            fx.hub_rows().await,
             vec![("/user/job/t".to_string(), "keyed".to_string())],
             "the keyed row ships; the unkeyed one is left behind rather than poisoning it"
         );
@@ -1160,29 +1196,19 @@ mod tests {
         // invalid_argument means the hub refuses these bytes and always will. Retrying
         // would strand every row behind them, so the forwarder counts the batch as
         // skipped and moves its cursor past it. The rows are still in the local store.
-        let source = disk_store("poison_source");
-        let (source_addr, _) = serve(Arc::clone(&source), AuthPolicy::allow_localhost()).await;
-        let (target_addr, target_requests) = serve_rejecting().await;
-        push(&client(source_addr), "/user/job/t", &["hello"]).await;
-
-        let target_url = format!("http://{target_addr}");
-        source.set_forward_cursor(&target_url, 0).unwrap();
-        let tip = tip(&source);
-        forward_until(
-            forwarder(Arc::clone(&source), &target_addr, PRIV_A),
-            &source,
-            &target_url,
-            tip,
-        )
-        .await;
+        let fx = Fixture::with_rejecting_hub("poison").await;
+        push(&fx.source_client, "/user/job/t", &["hello"]).await;
+        fx.forward_from_start();
+        let tip = fx.tip();
+        fx.drain(PRIV_A).await;
 
         assert_eq!(
-            source.forward_cursor(&target_url).unwrap(),
+            fx.cursor(),
             Some(tip),
             "the cursor must advance past a batch the hub will never accept"
         );
         assert_eq!(
-            target_requests.load(Ordering::SeqCst),
+            fx.requests(),
             1,
             "a permanently rejected batch is sent once, not retried"
         );
@@ -1190,24 +1216,19 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn seeding_at_the_tip_ships_new_logs_and_never_backfills() {
-        let source = disk_store("seed_source");
-        let target = disk_store("seed_target");
-        let (source_addr, _) = serve(Arc::clone(&source), AuthPolicy::allow_localhost()).await;
-        let (target_addr, _) = serve(Arc::clone(&target), hub_policy(SOURCE_CLUSTER)).await;
-        let source_client = client(source_addr);
-        push(&source_client, "/user/job/t", &["before"]).await;
+        let fx = Fixture::new("seed").await;
+        push(&fx.source_client, "/user/job/t", &["before"]).await;
 
         // No watermark for this target: seed at the tip, so "before" is never shipped.
-        let target_url = format!("http://{target_addr}");
-        let running = RunningForwarder::start(forwarder(Arc::clone(&source), &target_addr, PRIV_A));
-        wait_for_cursor(&source, &target_url, tip(&source)).await;
+        let running = RunningForwarder::start(fx.forwarder(PRIV_A));
+        wait_for_cursor(&fx.source, &fx.target_url, fx.tip()).await;
 
-        push(&source_client, "/user/job/t", &["after"]).await;
-        wait_for_cursor(&source, &target_url, tip(&source)).await;
+        push(&fx.source_client, "/user/job/t", &["after"]).await;
+        wait_for_cursor(&fx.source, &fx.target_url, fx.tip()).await;
         running.finish().await;
 
         assert_eq!(
-            read_all(&client(target_addr)).await,
+            fx.hub_rows().await,
             vec![("/user/job/t".to_string(), "after".to_string())]
         );
     }
@@ -1216,14 +1237,10 @@ mod tests {
     async fn rows_that_already_carry_an_origin_cluster_are_never_re_forwarded() {
         // A hub's own rows arrived by forwarding. Relaying them onward would loop, so
         // only rows this store's writers produced are eligible.
-        let source = disk_store("loop_source");
-        let target = disk_store("loop_target");
-        let (source_addr, _) = serve(Arc::clone(&source), AuthPolicy::allow_localhost()).await;
-        let (target_addr, _) = serve(Arc::clone(&target), hub_policy(SOURCE_CLUSTER)).await;
-        let source_client = client(source_addr);
+        let fx = Fixture::new("loop").await;
 
         // A relayed row (origin elsewhere) and a locally-written one.
-        source_client
+        fx.source_client
             .push_logs(
                 PushLogsRequest {
                     entries: vec![LogEntry::default().with_data("relayed")],
@@ -1234,20 +1251,12 @@ mod tests {
             )
             .await
             .unwrap();
-        push(&source_client, "/user/job/t", &["local"]).await;
-
-        let target_url = format!("http://{target_addr}");
-        source.set_forward_cursor(&target_url, 0).unwrap();
-        forward_until(
-            forwarder(Arc::clone(&source), &target_addr, PRIV_A),
-            &source,
-            &target_url,
-            tip(&source),
-        )
-        .await;
+        push(&fx.source_client, "/user/job/t", &["local"]).await;
+        fx.forward_from_start();
+        fx.drain(PRIV_A).await;
 
         assert_eq!(
-            read_all(&client(target_addr)).await,
+            fx.hub_rows().await,
             vec![("/user/job/t".to_string(), "local".to_string())]
         );
     }
@@ -1256,25 +1265,15 @@ mod tests {
     async fn a_watermark_ahead_of_the_store_reseeds_at_the_tip() {
         // The volume was recreated: the stored cursor names a seq space that no longer
         // exists. Forwarding from it would mean forwarding nothing, forever.
-        let source = disk_store("ahead_source");
-        let target = disk_store("ahead_target");
-        let (source_addr, _) = serve(Arc::clone(&source), AuthPolicy::allow_localhost()).await;
-        let (target_addr, _) = serve(Arc::clone(&target), hub_policy(SOURCE_CLUSTER)).await;
-        push(&client(source_addr), "/user/job/t", &["one"]).await;
+        let fx = Fixture::new("ahead").await;
+        push(&fx.source_client, "/user/job/t", &["one"]).await;
+        fx.source
+            .set_forward_cursor(&fx.target_url, 10_000)
+            .unwrap();
 
-        let target_url = format!("http://{target_addr}");
-        source.set_forward_cursor(&target_url, 10_000).unwrap();
-        let expected_tip = tip(&source);
+        fx.drain(PRIV_A).await;
 
-        forward_until(
-            forwarder(Arc::clone(&source), &target_addr, PRIV_A),
-            &source,
-            &target_url,
-            expected_tip,
-        )
-        .await;
-
-        assert!(read_all(&client(target_addr)).await.is_empty());
+        assert!(fx.hub_rows().await.is_empty());
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -1282,25 +1281,21 @@ mod tests {
         // The store keeps every row; the hub copy is best effort. A forwarder too far
         // behind abandons the oldest part of the backlog instead of queueing without
         // bound, and keeps the freshest `max_lag_seqs` of it.
-        let source = disk_store("cap_source");
-        let target = disk_store("cap_target");
-        let (source_addr, _) = serve(Arc::clone(&source), AuthPolicy::allow_localhost()).await;
-        let (target_addr, _) = serve(Arc::clone(&target), hub_policy(SOURCE_CLUSTER)).await;
+        let fx = Fixture::new("cap").await;
         push(
-            &client(source_addr),
+            &fx.source_client,
             "/user/job/t",
             &["one", "two", "three", "four"],
         )
         .await;
+        fx.forward_from_start();
 
-        let target_url = format!("http://{target_addr}");
-        source.set_forward_cursor(&target_url, 0).unwrap();
-        let mut forwarder = forwarder(Arc::clone(&source), &target_addr, PRIV_A);
+        let mut forwarder = fx.forwarder(PRIV_A);
         forwarder.max_lag_seqs = 2;
-        forward_until(forwarder, &source, &target_url, tip(&source)).await;
+        forward_until(forwarder, &fx.source, &fx.target_url, fx.tip()).await;
 
         assert_eq!(
-            read_all(&client(target_addr)).await,
+            fx.hub_rows().await,
             vec![
                 ("/user/job/t".to_string(), "three".to_string()),
                 ("/user/job/t".to_string(), "four".to_string()),
