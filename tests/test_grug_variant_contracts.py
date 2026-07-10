@@ -20,6 +20,7 @@ import equinox as eqx
 import jax
 import jax.numpy as jnp
 import jmp
+import numpy as np
 import optax
 import pytest
 from fray.cluster import ResourceConfig
@@ -151,6 +152,42 @@ def test_grug_moe_layer_masks_preserve_thd_segment_metadata():
     assert long_mask.thd_segment_metadata is mask.thd_segment_metadata
     assert short_mask.segment_ids is mask.segment_ids
     assert long_mask.segment_ids is mask.segment_ids
+
+
+def test_grug_moe_pipeline_split_accepts_unequal_layer_counts():
+    model_module = importlib.import_module("experiments.grug.moe.model")
+    cfg = _small_model_config(model_module.GrugModelConfig, vocab_size=32, seq_len=8)
+    cfg = dataclasses.replace(cfg, num_layers=6)
+    mesh = jax.sharding.Mesh(
+        np.array(jax.devices()[:1], dtype=object).reshape((1, 1, 1, 1)),
+        ("replica_dcn", "data", "expert", "model"),
+        axis_types=(jax.sharding.AxisType.Explicit,) * 4,
+    )
+    key = jax.random.PRNGKey(0)
+    with _reset_abstract_mesh(), jax.set_mesh(mesh):
+        model = model_module.Transformer.init(cfg, key=key)
+
+    stages = model.split_for_pipeline(3, stage_layer_counts=(3, 2, 1))
+
+    assert tuple(len(stage.blocks) for stage in stages) == (3, 2, 1)
+    assert tuple((stage.start_layer, stage.end_layer) for stage in stages) == ((0, 3), (3, 5), (5, 6))
+    assert len(model_module.Transformer.merge_pipeline_stages(stages).blocks) == len(model.blocks)
+
+
+def test_grug_moe_pipeline_split_rejects_incomplete_layer_counts():
+    model_module = importlib.import_module("experiments.grug.moe.model")
+    cfg = _small_model_config(model_module.GrugModelConfig, vocab_size=32, seq_len=8)
+    mesh = jax.sharding.Mesh(
+        np.array(jax.devices()[:1], dtype=object).reshape((1, 1, 1, 1)),
+        ("replica_dcn", "data", "expert", "model"),
+        axis_types=(jax.sharding.AxisType.Explicit,) * 4,
+    )
+    key = jax.random.PRNGKey(0)
+    with _reset_abstract_mesh(), jax.set_mesh(mesh):
+        model = model_module.Transformer.init(cfg, key=key)
+
+    with pytest.raises(ValueError, match="must sum to num_layers"):
+        model.split_for_pipeline(2, stage_layer_counts=(1, 2))
 
 
 def test_grug_moe_xsa_forward_lowers_with_gpu_fa4_thd_gqa_sharding():

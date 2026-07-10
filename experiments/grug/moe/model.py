@@ -98,27 +98,51 @@ def _layer_attention_masks(mask: AttentionMask, *, sliding_window: int) -> tuple
     return mask.with_sliding_window(sliding_window // 2), mask.with_sliding_window(sliding_window)
 
 
-def _pipeline_stage_end_layers(num_blocks: int, pipeline_stages: int | None) -> tuple[int, ...]:
+def _pipeline_stage_end_layers(
+    num_blocks: int,
+    pipeline_stages: int | None,
+    stage_layer_counts: tuple[int, ...] | None = None,
+) -> tuple[int, ...]:
     if pipeline_stages is None:
+        if stage_layer_counts is not None:
+            raise ValueError("stage_layer_counts requires pipeline_stages")
         return ()
     if pipeline_stages <= 0:
         raise ValueError(f"pipeline_stages must be positive, got {pipeline_stages}")
     if pipeline_stages > num_blocks:
         raise ValueError(f"pipeline_stages ({pipeline_stages}) must be <= num_layers ({num_blocks})")
-    base_layers_per_stage, extra_layers = divmod(num_blocks, pipeline_stages)
-    stage_sizes = tuple(
-        base_layers_per_stage + (1 if stage_index < extra_layers else 0) for stage_index in range(pipeline_stages)
-    )
+    if stage_layer_counts is None:
+        base_layers_per_stage, extra_layers = divmod(num_blocks, pipeline_stages)
+        stage_layer_counts = tuple(
+            base_layers_per_stage + (1 if stage_index < extra_layers else 0) for stage_index in range(pipeline_stages)
+        )
+    else:
+        if len(stage_layer_counts) != pipeline_stages:
+            raise ValueError(
+                f"stage_layer_counts must have one entry per pipeline stage; "
+                f"got {len(stage_layer_counts)} counts for {pipeline_stages} stages"
+            )
+        if any(layer_count <= 0 for layer_count in stage_layer_counts):
+            raise ValueError(f"stage_layer_counts must be positive, got {stage_layer_counts}")
+        if sum(stage_layer_counts) != num_blocks:
+            raise ValueError(
+                f"stage_layer_counts must sum to num_layers={num_blocks}, "
+                f"got {stage_layer_counts} (sum={sum(stage_layer_counts)})"
+            )
     stage_end_layers = []
     layer_count = 0
-    for stage_size in stage_sizes:
+    for stage_size in stage_layer_counts:
         layer_count += stage_size
         stage_end_layers.append(layer_count - 1)
     return tuple(stage_end_layers)
 
 
-def _pipeline_stage_bounds(num_blocks: int, pipeline_stages: int) -> tuple[tuple[int, int], ...]:
-    stage_end_layers = _pipeline_stage_end_layers(num_blocks, pipeline_stages)
+def _pipeline_stage_bounds(
+    num_blocks: int,
+    pipeline_stages: int,
+    stage_layer_counts: tuple[int, ...] | None = None,
+) -> tuple[tuple[int, int], ...]:
+    stage_end_layers = _pipeline_stage_end_layers(num_blocks, pipeline_stages, stage_layer_counts)
     start = 0
     bounds = []
     for end_layer in stage_end_layers:
@@ -905,9 +929,13 @@ class Transformer(eqx.Module):
     def Vocab(self) -> Axis:
         return Axis("vocab", self.config.vocab_size)
 
-    def split_for_pipeline(self, pipeline_stages: int) -> tuple[TransformerPipelineStage, ...]:
+    def split_for_pipeline(
+        self,
+        pipeline_stages: int,
+        stage_layer_counts: tuple[int, ...] | None = None,
+    ) -> tuple[TransformerPipelineStage, ...]:
         """Partition Transformer weights into contiguous pipeline-stage pytrees."""
-        bounds = _pipeline_stage_bounds(len(self.blocks), pipeline_stages)
+        bounds = _pipeline_stage_bounds(len(self.blocks), pipeline_stages, stage_layer_counts)
         stages = []
         for stage_index, (start_layer, end_layer) in enumerate(bounds):
             is_first = stage_index == 0
@@ -1025,6 +1053,7 @@ class Transformer(eqx.Module):
         mask: AttentionMask | jax.Array | None = None,
         *,
         pipeline_stages: int | None = None,
+        pipeline_stage_layer_counts: tuple[int, ...] | None = None,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
         num_blocks = len(self.blocks)
         hidden = self.embed_tokens(token_ids)
@@ -1033,7 +1062,11 @@ class Transformer(eqx.Module):
             mask=mask,
             start_layer=0,
             end_layer=num_blocks,
-            pipeline_stage_end_layers=_pipeline_stage_end_layers(num_blocks, pipeline_stages),
+            pipeline_stage_end_layers=_pipeline_stage_end_layers(
+                num_blocks,
+                pipeline_stages,
+                pipeline_stage_layer_counts,
+            ),
         )
         hidden = self.finalize_hidden(hidden)
         return hidden, router_metrics
@@ -1045,9 +1078,15 @@ class Transformer(eqx.Module):
         mask: AttentionMask | jax.Array | None = None,
         *,
         pipeline_stages: int | None = None,
+        pipeline_stage_layer_counts: tuple[int, ...] | None = None,
     ) -> Float[Array, "B S V"]:
         batch_spec = _batch_spec()
-        hidden, _ = self(token_ids, mask=mask, pipeline_stages=pipeline_stages)
+        hidden, _ = self(
+            token_ids,
+            mask=mask,
+            pipeline_stages=pipeline_stages,
+            pipeline_stage_layer_counts=pipeline_stage_layer_counts,
+        )
         return jnp.einsum("bsh,hd->bsd", hidden, self.output_proj, out_sharding=batch_spec)
 
     def to_state_dict(self, prefix: str | None = None) -> dict[str, jax.Array]:
@@ -1064,8 +1103,14 @@ class Transformer(eqx.Module):
         loss_dtype: jnp.dtype = jnp.float32,
         return_router_metrics: bool = False,
         pipeline_stages: int | None = None,
+        pipeline_stage_layer_counts: tuple[int, ...] | None = None,
     ) -> jax.Array | tuple[jax.Array, dict[str, jax.Array | SummaryStats]]:
-        hidden, router_metrics = self(token_ids, mask=mask, pipeline_stages=pipeline_stages)
+        hidden, router_metrics = self(
+            token_ids,
+            mask=mask,
+            pipeline_stages=pipeline_stages,
+            pipeline_stage_layer_counts=pipeline_stage_layer_counts,
+        )
         return self.hidden_next_token_loss(
             hidden,
             token_ids,

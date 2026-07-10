@@ -47,6 +47,9 @@ DEFAULT_BATCH = 256
 DEFAULT_STEPS = 20
 DEFAULT_TOTAL_TOKENS = 1.0e13
 DEFAULT_JAXPP_REVISION = "7091a9b5ce02cd1a6bdc905f6a36e89370a5fba9"
+DEFAULT_DEEPEP_REVISION = "7febc6e25660af0f54d95dd781ecdcd62265ecca"
+DEEPEP_CUDA_TOOLCHAIN_VERSION = "13.2.78"
+DEEPEP_CUDA_CCCL_VERSION = "13.3.3.4.1"
 
 
 def env_float(key: str, default: float) -> float:
@@ -57,6 +60,48 @@ def env_float(key: str, default: float) -> float:
 def env_optional_int(key: str) -> int | None:
     raw = os.environ.get(key, "")
     return int(raw) if raw else None
+
+
+def env_optional_int_tuple(key: str) -> tuple[int, ...] | None:
+    raw = os.environ.get(key, "").strip()
+    if not raw:
+        return None
+    parts = tuple(part.strip() for part in raw.split(","))
+    if any(not part for part in parts):
+        raise ValueError(f"{key} must be a comma-separated list of integers, got {raw!r}")
+    return tuple(int(part) for part in parts)
+
+
+def deepep_setup_scripts(*, source_root: str, revision: str) -> tuple[str, ...]:
+    """Check out the DeepEP sources required by Levanter's JAX FFI backend."""
+    return (
+        "\n".join(
+            [
+                'cd "$IRIS_WORKDIR"',
+                "echo 'installing DeepEP source runtime'",
+                "uv pip install --link-mode symlink "
+                f"nvidia-cuda-nvcc=={DEEPEP_CUDA_TOOLCHAIN_VERSION} "
+                f"nvidia-nvvm=={DEEPEP_CUDA_TOOLCHAIN_VERSION} "
+                f"nvidia-cuda-cccl=={DEEPEP_CUDA_CCCL_VERSION}",
+                'cuda_bin="$(find "$IRIS_VENV"/lib/python*/site-packages/nvidia/cu*/bin ' '-name nvcc -print -quit)"',
+                'test -n "$cuda_bin" || { echo "nvcc not found after CUDA toolchain install" >&2; exit 1; }',
+                'cuda_root="$(dirname "$(dirname "$cuda_bin")")"',
+                'ln -sf "$(dirname "$cuda_bin")"/* "$IRIS_VENV/bin/"',
+                'rm -f "$IRIS_VENV/bin/nvcc"',
+                "printf '%s\\n' '#!/usr/bin/env bash' "
+                '"export LIBRARY_PATH=\\"$cuda_root/lib:\\${LIBRARY_PATH:-}\\"" '
+                '"export LD_LIBRARY_PATH=\\"$cuda_root/lib:\\${LD_LIBRARY_PATH:-}\\"" '
+                '"exec \\"$cuda_bin\\" \\"\\$@\\"" > "$IRIS_VENV/bin/nvcc"',
+                'chmod +x "$IRIS_VENV/bin/nvcc"',
+                f"test -d {source_root!r}/.git || git clone --filter=blob:none --no-checkout "
+                f"https://github.com/deepseek-ai/DeepEP.git {source_root!r}",
+                f"git -C {source_root!r} fetch --depth 1 origin {revision!r}",
+                f"git -C {source_root!r} checkout --detach FETCH_HEAD",
+                "uv run python -m levanter.kernels.deepep.preflight --component transport",
+            ]
+        )
+        + "\n",
+    )
 
 
 @dataclass(frozen=True)
@@ -188,6 +233,7 @@ def build_pipeline_config() -> GrugJaxPPConfig:
         schedule=schedule,
         implementation=implementation,
         mpmd_dim=mpmd_dim,
+        stage_layer_counts=env_optional_int_tuple("PP_STAGE_LAYER_COUNTS"),
     )
 
 
@@ -201,6 +247,20 @@ def build_jaxpp_may_checkpoint(*, version: str = "dev") -> ArtifactStep[Levanter
     steps = env_int("MAY_STEPS", DEFAULT_STEPS)
     model = build_model()
     pipeline = build_pipeline_config()
+    if pipeline.stage_layer_counts is not None and sum(pipeline.stage_layer_counts) != model.num_layers:
+        raise ValueError(
+            f"PP_STAGE_LAYER_COUNTS must sum to MAY_NUM_LAYERS={model.num_layers}; "
+            f"got {pipeline.stage_layer_counts} (sum={sum(pipeline.stage_layer_counts)})"
+        )
+    post_setup_scripts = jaxpp_setup_scripts(revision=os.environ.get("JAXPP_REVISION", DEFAULT_JAXPP_REVISION))
+    if model.moe_implementation == "deepep":
+        source_root = os.environ.get("DEEPEP_SRC_ROOT")
+        if not source_root:
+            raise ValueError("DEEPEP_SRC_ROOT must be set when MAY_MOE_IMPLEMENTATION=deepep")
+        post_setup_scripts += deepep_setup_scripts(
+            source_root=source_root,
+            revision=os.environ.get("DEEPEP_REVISION", DEFAULT_DEEPEP_REVISION),
+        )
 
     mpmd_dim = pipeline.mpmd_dim or pipeline.stages
     global_devices = replicas * gpus_per_replica
@@ -273,7 +333,7 @@ def build_jaxpp_may_checkpoint(*, version: str = "dev") -> ArtifactStep[Levanter
                 num_steps=env_int("MAY_PROFILER_STEPS", 0),
             ),
             processes_per_task=env_int("MAY_PROCESSES_PER_TASK", 1),
-            post_setup_scripts=jaxpp_setup_scripts(revision=os.environ.get("JAXPP_REVISION", DEFAULT_JAXPP_REVISION)),
+            post_setup_scripts=post_setup_scripts,
             checkpointer=CheckpointerConfig(
                 base_path=f"/tmp/grug-jaxpp-may-d2560-ckpt/{run_id}",
                 append_run_id_to_base_path=False,

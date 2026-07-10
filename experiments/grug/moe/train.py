@@ -87,6 +87,7 @@ class GrugJaxPPConfig:
     implementation: JaxPPImplementation = "auto"
     mpmd_dim: int | None = None
     stage_axis_name: str = "pipeline"
+    stage_layer_counts: tuple[int, ...] | None = None
 
     def __post_init__(self) -> None:
         if self.stages <= 0:
@@ -95,6 +96,14 @@ class GrugJaxPPConfig:
             raise ValueError(f"microbatches must be positive, got {self.microbatches}")
         if self.mpmd_dim is not None and self.mpmd_dim <= 0:
             raise ValueError(f"mpmd_dim must be positive when set, got {self.mpmd_dim}")
+        if self.stage_layer_counts is not None:
+            if len(self.stage_layer_counts) != self.stages:
+                raise ValueError(
+                    "stage_layer_counts must have one entry per pipeline stage; "
+                    f"got {len(self.stage_layer_counts)} counts for {self.stages} stages"
+                )
+            if any(layer_count <= 0 for layer_count in self.stage_layer_counts):
+                raise ValueError(f"stage_layer_counts must be positive, got {self.stage_layer_counts}")
         if self.implementation == "explicit_mpmd":
             if self.stages < 2:
                 raise ValueError("explicit_mpmd requires at least 2 pipeline stages")
@@ -577,8 +586,12 @@ def _split_state_for_pipeline(
     pipeline: GrugJaxPPConfig,
     optimizer: optax.GradientTransformation,
 ) -> GrugPipelineTrainState:
-    params = state.params.split_for_pipeline(pipeline.stages)
-    ema_params = None if state.ema_params is None else state.ema_params.split_for_pipeline(pipeline.stages)
+    params = state.params.split_for_pipeline(pipeline.stages, pipeline.stage_layer_counts)
+    ema_params = (
+        None
+        if state.ema_params is None
+        else state.ema_params.split_for_pipeline(pipeline.stages, pipeline.stage_layer_counts)
+    )
     if state.pending_qb_betas is None:
         raise ValueError("explicit pipeline state splitting requires pending_qb_betas")
     pending_qb_betas = tuple(state.pending_qb_betas[stage.start_layer : stage.end_layer] for stage in params)
@@ -1721,7 +1734,7 @@ def initial_pipeline_state(
 ) -> GrugPipelineTrainState:
     """Initialize explicit MPMD pipeline state without materializing full optimizer state."""
     params = mp.cast_to_param(Transformer.init(model_config, key=key))
-    stage_params = params.split_for_pipeline(pipeline.stages)
+    stage_params = params.split_for_pipeline(pipeline.stages, pipeline.stage_layer_counts)
     stage_mpmd_indices = _pipeline_stage_mpmd_indices(pipeline)
     stage_params = _reshard_to_mpmd(
         mpmd_mesh,
@@ -1842,6 +1855,7 @@ def _make_train_step(
                     logsumexp_weight=z_loss,
                     return_router_metrics=False,
                     pipeline_stages=pipeline.stages,
+                    pipeline_stage_layer_counts=pipeline.stage_layer_counts,
                 )
                 return this_loss
 

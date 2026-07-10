@@ -23,6 +23,7 @@ SCHEDULE="std_1f1b"
 IMPLEMENTATION="auto"
 PHYSICAL_STAGES=4
 LOGICAL_STAGES=""
+STAGE_LAYER_COUNTS=""
 MICROBATCHES=8
 NODES=4
 GPUS_PER_REPLICA=8
@@ -49,6 +50,7 @@ WORKER_DISK="256g"
 REMAT="save_moe"
 MP="params=float32,compute=bfloat16,output=bfloat16"
 JAXPP_REVISION="7091a9b5ce02cd1a6bdc905f6a36e89370a5fba9"
+DEEPEP_REVISION="7febc6e25660af0f54d95dd781ecdcd62265ecca"
 XLA_MEMORY_FRACTION="${XLA_PYTHON_CLIENT_MEM_FRACTION:-0.70}"
 
 usage() {
@@ -64,6 +66,7 @@ Options:
   --implementation NAME     PP_IMPLEMENTATION: auto or explicit_mpmd (default: auto).
   --physical-stages N       PP_MPMD_DIM / physical pipeline ranks (default: 4).
   --logical-stages N        PP_STAGES / logical pipeline stage cuts. Omit to infer per schedule.
+  --stage-layer-counts CSV  Layers per logical stage, e.g. 7,6,6,5. Omit for an even split.
   --microbatches N          PP_MICROBATCHES (default: 8).
   --nodes N                 H100 node count / MAY_GPU_REPLICAS (default: 4).
   --gpus-per-replica N      H100 GPUs per Iris replica / MAY_GPUS_PER_REPLICA (default: 8).
@@ -104,6 +107,7 @@ while [ "$#" -gt 0 ]; do
         --implementation) IMPLEMENTATION="$2"; shift 2 ;;
         --physical-stages) PHYSICAL_STAGES="$2"; shift 2 ;;
         --logical-stages) LOGICAL_STAGES="$2"; shift 2 ;;
+        --stage-layer-counts) STAGE_LAYER_COUNTS="$2"; shift 2 ;;
         --microbatches) MICROBATCHES="$2"; shift 2 ;;
         --nodes) NODES="$2"; shift 2 ;;
         --gpus-per-replica) GPUS_PER_REPLICA="$2"; shift 2 ;;
@@ -236,12 +240,25 @@ if [ -n "$LOGICAL_STAGES" ]; then
     ENV_ARGS+=(-e PP_STAGES "$LOGICAL_STAGES")
 fi
 
+if [ -n "$STAGE_LAYER_COUNTS" ]; then
+    ENV_ARGS+=(-e PP_STAGE_LAYER_COUNTS "$STAGE_LAYER_COUNTS")
+fi
+
 if [ -n "$LOSS_IMPLEMENTATION" ]; then
     ENV_ARGS+=(-e MAY_LOSS_IMPLEMENTATION "$LOSS_IMPLEMENTATION")
 fi
 
 if [ -n "$VOCAB_SIZE" ]; then
     ENV_ARGS+=(-e MAY_VOCAB_SIZE "$VOCAB_SIZE")
+fi
+
+if [ "$MOE_IMPLEMENTATION" = deepep ]; then
+    ENV_ARGS+=(
+        -e DEEPEP_SRC_ROOT "/tmp/DeepEP"
+        -e DEEPEP_REVISION "$DEEPEP_REVISION"
+        -e DEEPEP_CUDA_ARCH "sm_90"
+        -e MARIN_DEEPEP_CACHE_DIR "/tmp/marin-deepep-cache"
+    )
 fi
 
 for maybe_env in \
@@ -276,6 +293,7 @@ schedule: $SCHEDULE
 implementation: $IMPLEMENTATION
 physical_stages: $PHYSICAL_STAGES
 logical_stages: ${LOGICAL_STAGES:-inferred}
+stage_layer_counts: ${STAGE_LAYER_COUNTS:-even}
 microbatches: $MICROBATCHES
 model: d2560 L${LAYERS} experts=${NUM_EXPERTS} top_k=${TOP_K} seq_len=${SEQ_LEN} vocab=${VOCAB_SIZE:-default}
 batch: $BATCH
