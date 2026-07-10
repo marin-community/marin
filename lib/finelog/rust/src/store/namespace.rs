@@ -331,9 +331,6 @@ impl Namespace {
         &self.arrow_schema
     }
 
-    /// Snapshot the SEALED local segment file paths under the insertion lock.
-    ///
-    /// Queries see only flushed data; the in-RAM buffer is NOT exposed.
     /// Snapshot the sealed local segment paths and the lowest `seq` they hold, under
     /// one hold of the insertion lock so the two describe the same segment set.
     /// `min_seq` is `None` when no local segment exists (an empty namespace, or one
@@ -347,6 +344,8 @@ impl Namespace {
     /// it can scan, and `min_seq` tells it whether rows below that bound were evicted
     /// out from under it. Reading them separately would let an eviction land in
     /// between and hide the gap.
+    ///
+    /// Only SEALED segments appear: queries see flushed data, never the in-RAM buffer.
     pub fn query_snapshot(&self) -> SegmentSnapshot {
         let inner = self.inner.lock().unwrap();
         SegmentSnapshot {

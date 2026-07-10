@@ -21,6 +21,16 @@ use crate::server::auth::AuthPolicy;
 use crate::server::{build_app_with_config, ServerConfig, MAX_MESSAGE_BYTES};
 use crate::store::Store;
 
+/// Fixed Ed25519 test keypairs (PKCS8 private + SPKI public PEM), generated once with
+/// `openssl genpkey -algorithm ed25519`. `A` is the keypair a verifier is configured to
+/// trust; `B` is a second trusted one, for tests that must tell two clusters apart;
+/// `UNTRUSTED` is a keypair no verifier holds the public half of.
+pub const PRIV_A: &str = "-----BEGIN PRIVATE KEY-----\nMC4CAQAwBQYDK2VwBCIEIMD3AX82bVpf0SoIIVssOXbemV9PNWzwtiJhuA61/AeG\n-----END PRIVATE KEY-----\n";
+pub const PUB_A: &str = "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAqwwvfFvyRQ+8Dhh0li8h2HtCT4yP40s0pzBwwSAkK5s=\n-----END PUBLIC KEY-----\n";
+pub const PRIV_B: &str = "-----BEGIN PRIVATE KEY-----\nMC4CAQAwBQYDK2VwBCIEIBmJ8qWzlhzFbTWMHs8snOv+rGewn4IUj+ZNPMKTdCtn\n-----END PRIVATE KEY-----\n";
+pub const PUB_B: &str = "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEANlmOBl+nfp+EBodU+vEmzW1UBGhLsN2MC2YjSBjnBGg=\n-----END PUBLIC KEY-----\n";
+pub const PRIV_UNTRUSTED: &str = "-----BEGIN PRIVATE KEY-----\nMC4CAQAwBQYDK2VwBCIEIILe2LqkmmgNBtRgBZNAy/OdPM1jlvKsAkD2/0PkHTty\n-----END PRIVATE KEY-----\n";
+
 /// A plaintext Connect transport. Production speaks TLS; everything above the
 /// transport is the same code.
 pub type TestTransport = ServiceTransport<HyperClient<HttpConnector, ClientBody>>;
@@ -86,6 +96,34 @@ pub async fn serve(store: Arc<Store>, policy: AuthPolicy) -> (SocketAddr, Arc<At
         )
         .await
         .unwrap();
+    });
+    (addr, requests)
+}
+
+/// A hub that answers every RPC with `invalid_argument`, as the real one does for a
+/// structurally malformed entry (an empty key). Retrying such a request can never
+/// succeed, so this fixture lets a test prove the forwarder skips the batch instead of
+/// livelocking on it. Returns the address and a count of the requests it served.
+pub async fn serve_rejecting() -> (SocketAddr, Arc<AtomicUsize>) {
+    let requests = Arc::new(AtomicUsize::new(0));
+    let counted = Arc::clone(&requests);
+    let app = axum::Router::new().fallback(axum::routing::any(move || {
+        let counted = Arc::clone(&counted);
+        async move {
+            counted.fetch_add(1, Ordering::SeqCst);
+            let error =
+                connectrpc::ConnectError::new(connectrpc::ErrorCode::InvalidArgument, "empty key");
+            (
+                axum::http::StatusCode::BAD_REQUEST,
+                [(axum::http::header::CONTENT_TYPE, "application/json")],
+                error.to_json(),
+            )
+        }
+    }));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
     });
     (addr, requests)
 }

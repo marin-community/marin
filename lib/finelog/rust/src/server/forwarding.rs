@@ -395,8 +395,7 @@ where
                     "finelog forwarder: rows evicted before they were forwarded; skipping ahead"
                 );
                 cursor = evicted_to;
-                if let Err(e) = self.persist(cursor) {
-                    tracing::warn!(error = %e, "finelog forwarder: persisting the watermark failed");
+                if !self.persist_cursor(cursor) {
                     return cursor;
                 }
             }
@@ -406,9 +405,7 @@ where
                 // Safe against a concurrent writer: `persisted` is a captured bound,
                 // and later rows arrive with a later watermark.
                 cursor = persisted;
-                if let Err(e) = self.persist(cursor) {
-                    tracing::warn!(error = %e, "finelog forwarder: persisting the watermark failed");
-                }
+                self.persist_cursor(persisted);
                 return cursor;
             }
 
@@ -417,19 +414,47 @@ where
                     .last()
                     .expect("split_by_bytes yields no empty chunk")
                     .seq;
-                if let Err(e) = self.push(chunk, stop).await {
-                    tracing::warn!(cursor, error = %e, "finelog forwarder: push failed; retrying");
-                    return cursor;
+                let rows = chunk.len() as i64;
+                match self.push(chunk, stop).await {
+                    Ok(()) => progress.forwarded += 1,
+                    Err(PushError::Stopping(e)) => {
+                        tracing::warn!(cursor, error = %e, "finelog forwarder: push interrupted");
+                        return cursor;
+                    }
+                    // The hub refused these bytes and always will, so retrying is a
+                    // livelock that strands every later row too. Skip past them and
+                    // count the gap: the rows remain queryable in this store.
+                    Err(PushError::Rejected(e)) => {
+                        progress.skipped += rows;
+                        tracing::warn!(
+                            cursor,
+                            skipped = rows,
+                            resume_at = last_seq,
+                            error = %e,
+                            "finelog forwarder: the hub rejected this batch as malformed; skipping it"
+                        );
+                    }
                 }
                 cursor = last_seq;
-                progress.forwarded += 1;
-                if let Err(e) = self.persist(cursor) {
-                    tracing::warn!(error = %e, "finelog forwarder: persisting the watermark failed");
+                if !self.persist_cursor(cursor) {
                     return cursor;
                 }
             }
         }
         cursor
+    }
+
+    /// Record `cursor` as the durable watermark, reporting whether the write stuck.
+    ///
+    /// A failure is not data loss — the rows are already at the hub — but the caller
+    /// stops draining, so the next round resumes from a cursor the catalog agrees
+    /// with rather than racing further ahead of it.
+    fn persist_cursor(&self, cursor: i64) -> bool {
+        if let Err(e) = self.persist(cursor) {
+            tracing::warn!(cursor, error = %e, "finelog forwarder: persisting the watermark failed");
+            return false;
+        }
+        true
     }
 
     /// Abandon a backlog too large to be worth draining, keeping the freshest
@@ -448,9 +473,7 @@ where
             resume_at,
             "finelog forwarder: backlog exceeds the lag cap; skipping ahead"
         );
-        if let Err(e) = self.persist(resume_at) {
-            tracing::warn!(error = %e, "finelog forwarder: persisting the watermark failed");
-        }
+        self.persist_cursor(resume_at);
         resume_at
     }
 
@@ -502,11 +525,19 @@ where
     /// Ship one chunk and wait for the hub to durably ack it. Retries on failure with
     /// an exponential backoff, and gives up (returning the error) once `stop` latches,
     /// so a SIGTERM never waits out a full backoff.
+    /// Push one chunk, retrying transient failures until it lands, the hub rejects it
+    /// outright, or `stop` latches.
+    ///
+    /// A fresh bearer is minted per attempt, so an expired token — or a hub whose trust
+    /// config an operator has just repaired — recovers on the next try without the
+    /// forwarder restarting. Auth failures are therefore retried, not skipped: the rows
+    /// are safe in the local store, and dropping a cluster's whole log stream over a
+    /// fixable typo in the hub's `jwt` layer would be far worse than stalling visibly.
     async fn push(
         &self,
         chunk: Vec<LogRow>,
         stop: &mut watch::Receiver<bool>,
-    ) -> Result<(), String> {
+    ) -> Result<(), PushError> {
         let request = PushLogsBulkRequest {
             entries: chunk.into_iter().map(log_row_to_entry).collect(),
             ..Default::default()
@@ -515,7 +546,19 @@ where
 
         let mut backoff = BACKOFF_MIN;
         loop {
-            let bearer = self.minter.bearer()?;
+            let bearer = match self.minter.bearer() {
+                Ok(bearer) => bearer,
+                // The key parsed at startup, so this is not a config error we can
+                // resolve by skipping the batch. Back off and try again.
+                Err(e) => {
+                    tracing::warn!(error = %e, "finelog forwarder: minting a bearer failed");
+                    if wait_or_stop(backoff, stop).await {
+                        return Err(PushError::Stopping(e));
+                    }
+                    backoff = (backoff * 2).min(BACKOFF_MAX);
+                    continue;
+                }
+            };
             let options = CallOptions::default()
                 .with_timeout(PUSH_TIMEOUT)
                 .with_header("authorization", format!("Bearer {bearer}"));
@@ -525,17 +568,50 @@ where
                 .await
             {
                 Ok(_) => return Ok(()),
-                Err(e) if *stop.borrow() => return Err(format!("{e} (shutting down)")),
+                Err(e) if is_permanent_rejection(&e) => {
+                    return Err(PushError::Rejected(e.to_string()))
+                }
+                Err(e) if *stop.borrow() => return Err(PushError::Stopping(e.to_string())),
                 Err(e) => {
                     tracing::warn!(error = %e, backoff_seconds = backoff.as_secs(), "finelog forwarder: push failed");
-                    tokio::select! {
-                        _ = stop.changed() => return Err(format!("{e} (shutting down)")),
-                        _ = tokio::time::sleep(backoff) => {}
+                    if wait_or_stop(backoff, stop).await {
+                        return Err(PushError::Stopping(e.to_string()));
                     }
                     backoff = (backoff * 2).min(BACKOFF_MAX);
                 }
             }
         }
+    }
+}
+
+/// Why a push gave up.
+#[derive(Debug)]
+enum PushError {
+    /// The forwarder is shutting down mid-retry. The chunk is still owed; the cursor
+    /// stays where it is and the next process re-reads it.
+    Stopping(String),
+    /// The hub refused the chunk's *content*, so no retry of the same bytes can
+    /// succeed. The caller skips past it rather than stalling the whole stream.
+    Rejected(String),
+}
+
+/// Whether the hub's answer means "these bytes are unacceptable" rather than "not
+/// right now".
+///
+/// Only `invalid_argument` qualifies: the hub returns it for a structurally bad entry
+/// (e.g. one with an empty key), which is a poison pill — re-sending it forever would
+/// strand every row behind it. Everything else, auth failures included, describes a
+/// condition that can change without the chunk changing.
+fn is_permanent_rejection(error: &connectrpc::ConnectError) -> bool {
+    error.code == connectrpc::error::ErrorCode::InvalidArgument
+}
+
+/// Sleep for `backoff`, or wake early if `stop` latches. Returns whether it latched,
+/// so shutdown never waits out a full backoff.
+async fn wait_or_stop(backoff: Duration, stop: &mut watch::Receiver<bool>) -> bool {
+    tokio::select! {
+        _ = stop.changed() => true,
+        _ = tokio::time::sleep(backoff) => false,
     }
 }
 
@@ -653,23 +729,18 @@ mod tests {
 
     use crate::proto::finelog::logging::{FetchLogsRequest, MatchScope, PushLogsRequest};
     use crate::server::auth::AuthPolicy;
-    use crate::server::test_support::{client, disk_store, serve, TestTransport};
+    use crate::server::test_support::{
+        client, disk_store, serve, serve_rejecting, TestTransport, PRIV_A, PRIV_UNTRUSTED, PUB_A,
+    };
 
     use super::*;
-
-    // A fixed Ed25519 keypair (PKCS8 private + SPKI public PEM). Same vector as
-    // `server::auth`'s unit tests, repeated rather than shared so each module's
-    // fixtures stand alone.
-    const PRIVATE_PEM: &str = "-----BEGIN PRIVATE KEY-----\nMC4CAQAwBQYDK2VwBCIEIMD3AX82bVpf0SoIIVssOXbemV9PNWzwtiJhuA61/AeG\n-----END PRIVATE KEY-----\n";
-    const PUBLIC_PEM: &str = "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAqwwvfFvyRQ+8Dhh0li8h2HtCT4yP40s0pzBwwSAkK5s=\n-----END PUBLIC KEY-----\n";
-    const OTHER_PRIVATE_PEM: &str = "-----BEGIN PRIVATE KEY-----\nMC4CAQAwBQYDK2VwBCIEIILe2LqkmmgNBtRgBZNAy/OdPM1jlvKsAkD2/0PkHTty\n-----END PRIVATE KEY-----\n";
 
     const SOURCE_CLUSTER: &str = "cw-test";
 
     fn jwt_policy(cluster: &str) -> AuthPolicy {
         AuthPolicy::parse(
             &serde_json::json!([
-                {"type": "jwt", "keys": [{"cluster": cluster, "public_keys": [PUBLIC_PEM]}]}
+                {"type": "jwt", "keys": [{"cluster": cluster, "public_keys": [PUB_A]}]}
             ])
             .to_string(),
         )
@@ -683,7 +754,7 @@ mod tests {
     fn hub_policy(cluster: &str) -> AuthPolicy {
         AuthPolicy::parse(
             &serde_json::json!([
-                {"type": "jwt", "keys": [{"cluster": cluster, "public_keys": [PUBLIC_PEM]}]},
+                {"type": "jwt", "keys": [{"cluster": cluster, "public_keys": [PUB_A]}]},
                 {"type": "cidr", "cidrs": ["127.0.0.0/8", "::1/128"]}
             ])
             .to_string(),
@@ -802,13 +873,13 @@ mod tests {
     fn minted_bearer_is_accepted_by_a_hub_trusting_the_matching_public_key() {
         // The two halves of the trust config -- this server's private key and the
         // public key an operator pastes into the hub's `jwt` auth layer -- must agree.
-        let minter = TokenMinter::new(PRIVATE_PEM, SOURCE_CLUSTER.to_string()).unwrap();
+        let minter = TokenMinter::new(PRIV_A, SOURCE_CLUSTER.to_string()).unwrap();
         let bearer = minter.bearer().unwrap();
         assert!(jwt_policy(SOURCE_CLUSTER)
             .admits(Some(&bearer), None)
             .is_some());
         // A hub that trusts some other cluster's key rejects it.
-        let minter = TokenMinter::new(OTHER_PRIVATE_PEM, SOURCE_CLUSTER.to_string()).unwrap();
+        let minter = TokenMinter::new(PRIV_UNTRUSTED, SOURCE_CLUSTER.to_string()).unwrap();
         assert!(jwt_policy(SOURCE_CLUSTER)
             .admits(Some(&minter.bearer().unwrap()), None)
             .is_none());
@@ -818,7 +889,7 @@ mod tests {
     fn minted_bearer_names_the_cluster_it_forwards_for() {
         // The hub binds a pushed row's origin cluster to the key that verified the
         // bearer, so the bearer must authenticate as this store's cluster.
-        let minter = TokenMinter::new(PRIVATE_PEM, "cw-rno2a".to_string()).unwrap();
+        let minter = TokenMinter::new(PRIV_A, "cw-rno2a".to_string()).unwrap();
         let bearer = minter.bearer().unwrap();
         assert_eq!(
             jwt_policy("cw-rno2a").admits(Some(&bearer), None),
@@ -830,8 +901,29 @@ mod tests {
 
     #[test]
     fn a_cached_bearer_is_reused_until_it_nears_expiry() {
-        let minter = TokenMinter::new(PRIVATE_PEM, SOURCE_CLUSTER.to_string()).unwrap();
-        assert_eq!(minter.bearer().unwrap(), minter.bearer().unwrap());
+        // Asserting that two successive mints are equal would prove nothing: EdDSA is
+        // deterministic and `iat`/`exp` are second-granular, so a cache-less minter
+        // returns identical bytes too. Drive the cache directly instead.
+        let minter = TokenMinter::new(PRIV_A, SOURCE_CLUSTER.to_string()).unwrap();
+
+        // A live cache entry is handed back untouched — the minter does not re-sign
+        // once per push.
+        let usable = Instant::now() + Duration::from_secs(600);
+        *minter.cached.lock().unwrap() = Some(("cached-bearer".to_string(), usable));
+        assert_eq!(minter.bearer().unwrap(), "cached-bearer");
+
+        // Once the entry is inside the refresh margin, it is replaced rather than
+        // handed to the hub, which would reject a token expiring mid-flight.
+        *minter.cached.lock().unwrap() = Some(("stale-bearer".to_string(), Instant::now()));
+        let fresh = minter.bearer().unwrap();
+        assert_ne!(fresh, "stale-bearer");
+        assert_eq!(
+            jwt_policy(SOURCE_CLUSTER).admits(Some(&fresh), None),
+            Some(crate::server::auth::AuthIdentity::Jwt {
+                cluster: SOURCE_CLUSTER.to_string()
+            }),
+            "the re-minted bearer must still verify at the hub"
+        );
     }
 
     #[test]
@@ -901,7 +993,7 @@ mod tests {
         let requests_before = target_requests.load(Ordering::SeqCst);
 
         forward_until(
-            forwarder(Arc::clone(&source), &target_addr, PRIVATE_PEM),
+            forwarder(Arc::clone(&source), &target_addr, PRIV_A),
             &source,
             &target_url,
             tip(&source),
@@ -943,7 +1035,7 @@ mod tests {
         let target_url = format!("http://{target_addr}");
         source.set_forward_cursor(&target_url, 0).unwrap();
         forward_until(
-            forwarder(Arc::clone(&source), &target_addr, PRIVATE_PEM),
+            forwarder(Arc::clone(&source), &target_addr, PRIV_A),
             &source,
             &target_url,
             tip(&source),
@@ -983,10 +1075,10 @@ mod tests {
         let target_url = format!("http://{target_addr}");
         source.set_forward_cursor(&target_url, 0).unwrap();
 
-        // OTHER_PRIVATE_PEM is not the key the hub trusts.
+        // PRIV_UNTRUSTED is not the key the hub trusts.
         let (stop_tx, stop_rx) = watch::channel(false);
         let task = spawn(
-            forwarder(Arc::clone(&source), &target_addr, OTHER_PRIVATE_PEM),
+            forwarder(Arc::clone(&source), &target_addr, PRIV_UNTRUSTED),
             stop_rx,
         );
         // Wait for the push to REACH the hub. Stopping on a timer instead would let a
@@ -1004,6 +1096,39 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn a_batch_the_hub_calls_malformed_is_skipped_rather_than_retried_forever() {
+        // invalid_argument means the hub refuses these bytes and always will. Retrying
+        // would strand every row behind them, so the forwarder counts the batch as
+        // skipped and moves its cursor past it. The rows are still in the local store.
+        let source = disk_store("poison_source");
+        let (source_addr, _) = serve(Arc::clone(&source), AuthPolicy::allow_localhost()).await;
+        let (target_addr, target_requests) = serve_rejecting().await;
+        push(&client(source_addr), "/user/job/t", &["hello"]).await;
+
+        let target_url = format!("http://{target_addr}");
+        source.set_forward_cursor(&target_url, 0).unwrap();
+        let tip = tip(&source);
+        forward_until(
+            forwarder(Arc::clone(&source), &target_addr, PRIV_A),
+            &source,
+            &target_url,
+            tip,
+        )
+        .await;
+
+        assert_eq!(
+            source.forward_cursor(&target_url).unwrap(),
+            Some(tip),
+            "the cursor must advance past a batch the hub will never accept"
+        );
+        assert_eq!(
+            target_requests.load(Ordering::SeqCst),
+            1,
+            "a permanently rejected batch is sent once, not retried"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn seeding_at_the_tip_ships_new_logs_and_never_backfills() {
         let source = disk_store("seed_source");
         let target = disk_store("seed_target");
@@ -1016,7 +1141,7 @@ mod tests {
         let target_url = format!("http://{target_addr}");
         let (stop_tx, stop_rx) = watch::channel(false);
         let task = spawn(
-            forwarder(Arc::clone(&source), &target_addr, PRIVATE_PEM),
+            forwarder(Arc::clone(&source), &target_addr, PRIV_A),
             stop_rx,
         );
         wait_for_cursor(&source, &target_url, tip(&source)).await;
@@ -1059,7 +1184,7 @@ mod tests {
         let target_url = format!("http://{target_addr}");
         source.set_forward_cursor(&target_url, 0).unwrap();
         forward_until(
-            forwarder(Arc::clone(&source), &target_addr, PRIVATE_PEM),
+            forwarder(Arc::clone(&source), &target_addr, PRIV_A),
             &source,
             &target_url,
             tip(&source),
@@ -1088,7 +1213,7 @@ mod tests {
 
         let (stop_tx, stop_rx) = watch::channel(false);
         let task = spawn(
-            forwarder(Arc::clone(&source), &target_addr, PRIVATE_PEM),
+            forwarder(Arc::clone(&source), &target_addr, PRIV_A),
             stop_rx,
         );
         wait_for_cursor(&source, &target_url, expected_tip).await;
@@ -1116,7 +1241,7 @@ mod tests {
 
         let target_url = format!("http://{target_addr}");
         source.set_forward_cursor(&target_url, 0).unwrap();
-        let mut forwarder = forwarder(Arc::clone(&source), &target_addr, PRIVATE_PEM);
+        let mut forwarder = forwarder(Arc::clone(&source), &target_addr, PRIV_A);
         forwarder.max_lag_seqs = 2;
         forward_until(forwarder, &source, &target_url, tip(&source)).await;
 
