@@ -222,3 +222,54 @@ post-SwiGLU `h` result is not correct (`max_abs_diff=25.965332`,
 stable approximately 30 ms fused timing, but not fused permute+W13 correctness.
 The next action is to isolate the `h` activation/output-placement mismatch before
 interpreting or tuning the 57.27 useful TFLOP/s/rank result.
+
+## 2026-07-10 FUSED-MOE-003 - Full fused-stage scaffold checkpoint
+
+Added package-private persistent-kernel scaffolds for the remaining three fused
+stages in the architecture spec:
+
+```text
+source_push_semantic_fused_w2_return.py
+source_push_semantic_fused_w2_backward.py
+source_push_semantic_fused_w13_backward.py
+```
+
+Each stage has a JAX semantic reference/interpret path and a Lane-lowered Mosaic
+GPU path using explicit `mgpu.wgmma`. The forward W2 stage writes bf16 route
+values directly into source-owned storage and combines top-k on source. The W2
+backward stage consumes source-sharded `dy`, computes route-weight gradients,
+and sends weighted dy chunks without an all-gather. The W13 backward stage
+rematerializes source x, returns dX into bounded source-owned slots, and combines
+top-k on source.
+
+Before sealing the checkpoint, removed rectangular selector scans from the
+forward W13 and W2-return schedules. For W2 backward, changed dW2 ownership from
+all 32 expert tiles per chunk to the at-most-four B64 expert blocks represented
+by a B256 chunk; the first block for a repeated expert accumulates every matching
+block. This reduces per-chunk dW2 jobs at the target shape from 6,400 to 800.
+W13 backward already assigns one persistent owner per dW13 tile, so its
+unnecessary fp32 GMEM atomic was replaced with owner-local read/add/store.
+Sharded-wrapper partition specs were corrected to match global argument ranks.
+
+Local verification after these changes:
+
+```text
+fused W13 forward:       5 passed
+fused W2 return/combine: 4 passed
+fused W2 backward:       5 passed
+fused W13 backward:      4 passed
+combined:               18 passed
+scoped pre-commit:      passed
+```
+
+The FUSED-MOE-002 `h` comparison needs a precision-contract check before being
+classified as output-placement corruption: observed `h` is recomputed from the
+bf16 stored `z`, while the sampled reference may apply SwiGLU before the same
+bf16 boundary. The `z` mean/max differences were `1.81e-5`/`0.03125`, validity
+and placement counters were exact, and both sides were finite. A fair compare
+must quantize the reference at the production boundary or compare the kernel's
+intended direct-H output.
+
+No H100 claim is attached to the three new stages. Next experiment: compile-only
+target runs for W2-return, W2-backward, and W13-backward, followed by timing only
+for stages that compile and pass correctness.

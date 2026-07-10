@@ -392,6 +392,7 @@ def _make_source_push_semantic_fused_w13_kernel(
     _validate_kernel_dimensions(hidden_dim, intermediate_dim, config)
     blocks_per_send = config.compute_blocks_per_send
     producer_tiles = blocks_per_send * (hidden_dim // config.send_k)
+    producer_tiles_per_program = math.ceil(producer_tiles / config.producer_programs_per_peer)
     n_tiles = intermediate_dim // config.block_n
     n_jobs = math.ceil(n_tiles / config.n_groups_per_job)
     consumer_jobs = blocks_per_send * n_jobs
@@ -438,9 +439,11 @@ def _make_source_push_semantic_fused_w13_kernel(
                     slot = chunk % config.inbox_slots
                     generation = chunk // config.inbox_slots + 1
 
-                    @pl.loop(0, producer_tiles)
-                    def _producer_tile_loop(tile) -> None:
-                        @pl.when((tile % config.producer_programs_per_peer) == producer)
+                    @pl.loop(0, producer_tiles_per_program)
+                    def _producer_tile_loop(tile_iteration) -> None:
+                        tile = producer + tile_iteration * config.producer_programs_per_peer
+
+                        @pl.when(tile < producer_tiles)
                         def _send_tile() -> None:
                             block = tile // (hidden_dim // config.send_k)
                             k_tile = tile % (hidden_dim // config.send_k)
@@ -589,28 +592,26 @@ def _make_source_push_semantic_fused_w13_kernel(
                     slot = chunk % config.inbox_slots
                     generation = chunk // config.inbox_slots + 1
 
-                    @pl.loop(0, consumer_jobs)
-                    def _job_loop(job) -> None:
-                        @pl.when((job % config.consumer_programs_per_peer) == consumer)
-                        def _consume_job() -> None:
-                            pl.semaphore_wait(full_sem.at[src, slot], value=generation, decrement=False)
-                            block = job // n_jobs
-                            n_job = job % n_jobs
-                            valid_rows = recv_valid_ref[static_peer_ordinal, chunk, block]
+                    @pl.when(consumer < consumer_jobs)
+                    def _consume_job() -> None:
+                        pl.semaphore_wait(full_sem.at[src, slot], value=generation, decrement=False)
+                        block = consumer // n_jobs
+                        n_job = consumer % n_jobs
+                        valid_rows = recv_valid_ref[static_peer_ordinal, chunk, block]
 
-                            @pl.when(valid_rows > 0)
-                            def _compute_live_block() -> None:
-                                expert = recv_expert_ref[static_peer_ordinal, chunk, block]
+                        @pl.when(valid_rows > 0)
+                        def _compute_live_block() -> None:
+                            expert = recv_expert_ref[static_peer_ordinal, chunk, block]
 
-                                @pl.loop(0, config.n_groups_per_job)
-                                def _n_group_loop(n_offset) -> None:
-                                    n_tile = n_job * config.n_groups_per_job + n_offset
+                            @pl.loop(0, config.n_groups_per_job)
+                            def _n_group_loop(n_offset) -> None:
+                                n_tile = n_job * config.n_groups_per_job + n_offset
 
-                                    @pl.when(n_tile < n_tiles)
-                                    def _compute_n_tile() -> None:
-                                        _compute(block, chunk, slot, expert, n_tile)
+                                @pl.when(n_tile < n_tiles)
+                                def _compute_n_tile() -> None:
+                                    _compute(block, chunk, slot, expert, n_tile)
 
-                            pl.semaphore_signal(consumer_done_sem.at[src, slot])
+                        pl.semaphore_signal(consumer_done_sem.at[src, slot])
 
                     @pl.when((chunk % config.consumer_programs_per_peer) == consumer)
                     def _release_slot() -> None:

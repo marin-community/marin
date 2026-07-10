@@ -1,0 +1,241 @@
+# Copyright The Levanter Authors
+# SPDX-License-Identifier: Apache-2.0
+
+from __future__ import annotations
+
+import inspect
+
+import jax
+import jax.numpy as jnp
+import numpy as np
+
+from levanter.grug._moe.source_push_plan import build_source_push_semantic_plan_jax
+from levanter.grug._moe.source_push_semantic_fused_w2_backward import (
+    SourcePushSemanticFusedW2BackwardConfig,
+    _make_source_push_semantic_fused_w2_backward_kernel,
+    source_push_semantic_fused_w2_backward,
+    source_push_semantic_fused_w2_backward_generation_accounting,
+    source_push_semantic_fused_w2_backward_metadata_jax,
+)
+
+
+CONFIG = SourcePushSemanticFusedW2BackwardConfig()
+
+
+def _plan(*, rows_per_pair: int = 12, rows_per_rank: int = 6):
+    selected_experts = jnp.asarray(
+        [
+            [[0, 2], [0, 3], [1, 2], [0, 3], [1, 2], [0, 3]],
+            [[3, 1], [2, 0], [3, 0], [2, 1], [3, 1], [2, 0]],
+        ],
+        dtype=jnp.int32,
+    )[:, :rows_per_rank]
+    route_weights = (jnp.arange(selected_experts.size, dtype=jnp.float32).reshape(selected_experts.shape) % 7 + 1) / 8
+    return build_source_push_semantic_plan_jax(
+        selected_experts,
+        route_weights,
+        ep_size=2,
+        experts_per_rank=2,
+        rows_per_src_dst_capacity=rows_per_pair,
+        capacity_factor=4.0,
+    )
+
+
+def _inputs(*, rows_per_expert_capacity: int = 256):
+    plan = _plan()
+    dy = ((jnp.arange(2 * 6 * 256, dtype=jnp.float32).reshape(2, 6, 256) % 17 - 8) / 16).astype(jnp.bfloat16)
+    route_y = ((jnp.arange(2 * 6 * 2 * 256, dtype=jnp.float32).reshape(2, 6, 2, 256) % 13 - 6) / 32).astype(
+        jnp.bfloat16
+    )
+    h_expert = (
+        (
+            jnp.arange(2 * 2 * rows_per_expert_capacity * 128, dtype=jnp.float32).reshape(
+                2, 2, rows_per_expert_capacity, 128
+            )
+            % 11
+            - 5
+        )
+        / 32
+    ).astype(jnp.bfloat16)
+    w_down = ((jnp.arange(2 * 2 * 128 * 256, dtype=jnp.float32).reshape(2, 2, 128, 256) % 7 - 3) / 64).astype(
+        jnp.bfloat16
+    )
+    return dy, route_y, h_expert, w_down, plan
+
+
+def _independent_reference(dy, route_y, h_expert, w_down, plan, *, capacity: int):
+    dy_host = np.asarray(dy, dtype=np.float32)
+    route_y_host = np.asarray(route_y, dtype=np.float32)
+    h_host = np.asarray(h_expert, dtype=np.float32)
+    w_host = np.asarray(w_down, dtype=np.float32)
+    assignment_ids = np.asarray(plan.assignment_ids)
+    pair_valid = np.asarray(plan.valid_mask)
+    pair_bases = np.asarray(plan.pair_expert_base)
+    counts = np.asarray(plan.xcounts)
+    weights = np.asarray(plan.route_weights, dtype=np.float32)
+    rounded_counts = ((counts + CONFIG.compute_m - 1) // CONFIG.compute_m) * CONFIG.compute_m
+    source_bases = np.zeros((2, 2, 2), dtype=np.int32)
+    source_bases[:, 1, :] = rounded_counts[0]
+
+    d_h = np.zeros((2, 2, capacity, 128), dtype=np.float32)
+    d_w2 = np.zeros((2, 2, 128, 256), dtype=np.float32)
+    d_route = np.zeros((2, 6, 2), dtype=np.float32)
+    valid = np.zeros((2, 2, capacity), dtype=np.bool_)
+    for src in range(2):
+        for dst in range(2):
+            for expert in range(2):
+                for local_row in range(int(counts[src, dst, expert])):
+                    pair_row = int(pair_bases[src, dst, expert]) + local_row
+                    if not pair_valid[src, dst, pair_row]:
+                        continue
+                    expert_row = int(source_bases[dst, src, expert]) + local_row
+                    if expert_row >= capacity:
+                        continue
+                    assignment = int(assignment_ids[src, dst, pair_row])
+                    token = assignment // plan.topk
+                    slot = assignment % plan.topk
+                    dy_token = dy_host[src, token]
+                    dy_route = dy_token * weights[src, dst, pair_row]
+                    d_h[dst, expert, expert_row] = dy_route @ w_host[dst, expert].T
+                    d_w2[dst, expert] += np.outer(h_host[dst, expert, expert_row], dy_route)
+                    d_route[src, token, slot] += np.dot(dy_token, route_y_host[src, token, slot])
+                    valid[dst, expert, expert_row] = True
+    return d_h, d_w2, d_route, valid
+
+
+def test_fused_w2_backward_metadata_is_jittable_and_preserves_source_routes():
+    dy, _route_y, _h, _w, plan = _inputs()
+    metadata = jax.jit(
+        lambda dy_arg, plan_arg: source_push_semantic_fused_w2_backward_metadata_jax(
+            dy_arg,
+            plan_arg,
+            send_chunks_per_dst=1,
+            rows_per_expert_capacity=256,
+        )
+    )(dy, plan)
+
+    assert metadata.token_ids.shape == (2, 2, 1, 4, 64)
+    assert metadata.route_slots.shape == metadata.token_ids.shape
+    assert int(metadata.live_send_blocks + metadata.masked_send_blocks) == 2 * 2 * 1 * 4
+    assert int(metadata.live_send_blocks) > 0
+    assert int(metadata.masked_send_blocks) > 0
+    np.testing.assert_array_equal(np.asarray(metadata.route_slots)[~np.asarray(metadata.row_valid)], 0)
+    np.testing.assert_array_equal(np.asarray(metadata.route_weights)[~np.asarray(metadata.row_valid)], 0)
+
+    for src in range(2):
+        for dst_ordinal in range(2):
+            dst = (src + dst_ordinal) % 2
+            for block in range(4):
+                expert = int(metadata.send_expert[src, dst_ordinal, 0, block])
+                count = int(metadata.send_valid_rows[src, dst_ordinal, 0, block])
+                if expert < 0:
+                    assert count == 0
+                    continue
+                pair_start = int(plan.pair_expert_base[src, dst, expert]) + block * 0
+                # Queue blocks are expert-local; token/slot identity must come from the semantic assignment id.
+                for row in range(count):
+                    token = int(metadata.token_ids[src, dst_ordinal, 0, block, row])
+                    slot = int(metadata.route_slots[src, dst_ordinal, 0, block, row])
+                    assert token * plan.topk + slot in np.asarray(plan.assignment_ids[src, dst])
+                assert pair_start >= 0
+
+
+def test_fused_w2_backward_generation_accounting_tracks_slot_reuse_and_dw2_order():
+    first = source_push_semantic_fused_w2_backward_generation_accounting(
+        0,
+        0,
+        hidden_dim=2560,
+        intermediate_dim=1280,
+        send_chunks_per_dst=24,
+    )
+    reused = source_push_semantic_fused_w2_backward_generation_accounting(
+        0,
+        CONFIG.inbox_slots,
+        hidden_dim=2560,
+        intermediate_dim=1280,
+        send_chunks_per_dst=24,
+    )
+    next_source = source_push_semantic_fused_w2_backward_generation_accounting(
+        1,
+        0,
+        hidden_dim=2560,
+        intermediate_dim=1280,
+        send_chunks_per_dst=24,
+    )
+
+    assert (first.slot, first.generation, first.empty_generation, first.released_generation) == (0, 1, 1, 2)
+    assert reused.slot == first.slot
+    assert reused.generation == 2
+    assert reused.send_done_generation == 2 * first.send_done_generation
+    assert reused.consumer_done_generation == 2 * first.consumer_done_generation
+    assert reused.empty_generation == first.released_generation
+    assert next_source.dw2_turn == 25
+
+
+def test_fused_w2_backward_interpret_matches_independent_rough_route_reference():
+    dy, route_y, h_expert, w_down, plan = _inputs()
+    observed = jax.jit(
+        lambda dy_arg, route_y_arg, h_arg, w_arg, plan_arg: source_push_semantic_fused_w2_backward(
+            dy_arg,
+            route_y_arg,
+            h_arg,
+            w_arg,
+            plan_arg,
+            send_chunks_per_dst=1,
+            rows_per_expert_capacity=256,
+            interpret=True,
+        )
+    )(dy, route_y, h_expert, w_down, plan)
+    expected_dh, expected_dw2, expected_droute, expected_valid = _independent_reference(
+        dy, route_y, h_expert, w_down, plan, capacity=256
+    )
+
+    np.testing.assert_allclose(np.asarray(observed.d_h), expected_dh, rtol=2e-4, atol=2e-4)
+    np.testing.assert_allclose(np.asarray(observed.d_w2), expected_dw2, rtol=2e-4, atol=2e-4)
+    np.testing.assert_allclose(np.asarray(observed.d_route_weight), expected_droute, rtol=2e-4, atol=2e-4)
+    np.testing.assert_array_equal(np.asarray(observed.valid), expected_valid)
+    np.testing.assert_array_equal(np.asarray(observed.d_h)[~expected_valid], 0)
+    assert int(observed.queue_overflow_routes) == 0
+    assert int(observed.layout_overflow_rows) == 0
+
+
+def test_fused_w2_backward_reports_queue_and_layout_overflow_and_masks_outputs():
+    selected = jnp.asarray(
+        [
+            [[0, 8], [1, 9], [2, 10], [3, 11], [4, 12], [0, 8]],
+            [[0, 8], [1, 9], [2, 10], [3, 11], [4, 12], [0, 8]],
+        ],
+        dtype=jnp.int32,
+    )
+    plan = build_source_push_semantic_plan_jax(
+        selected,
+        jnp.ones(selected.shape, dtype=jnp.float32),
+        ep_size=2,
+        experts_per_rank=8,
+        rows_per_src_dst_capacity=12,
+        capacity_factor=4.0,
+    )
+    dy = jnp.ones((2, 6, 256), dtype=jnp.bfloat16)
+    metadata = source_push_semantic_fused_w2_backward_metadata_jax(
+        dy,
+        plan,
+        send_chunks_per_dst=1,
+        rows_per_expert_capacity=64,
+    )
+
+    assert int(metadata.queue_overflow_routes) > 0
+    assert int(metadata.layout_overflow_rows) > 0
+    assert int(metadata.masked_send_blocks) > 0
+    np.testing.assert_array_equal(np.asarray(metadata.route_weights)[~np.asarray(metadata.row_valid)], 0)
+
+
+def test_fused_w2_backward_kernel_contract_uses_peer_lane_transport_and_explicit_wgmma():
+    source = inspect.getsource(_make_source_push_semantic_fused_w2_backward_kernel)
+
+    assert "mgpu.remote_ref" in source
+    assert "mgpu.wgmma" in source
+    assert "mgpu.transpose_ref" in source
+    assert "lowering_semantics=mgpu.LoweringSemantics.Lane" in source
+    assert "all_gather" not in source
+    assert "dy_expert" not in source
+    assert "pl.dot" not in source
