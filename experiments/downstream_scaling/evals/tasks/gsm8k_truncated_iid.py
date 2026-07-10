@@ -23,7 +23,7 @@ from experiments.downstream_scaling.evals.framework.schema import (
     prompts_file,
     read_prompt_rows,
 )
-from experiments.downstream_scaling.evals.tasks.gsm8k import GSM8KGradeConfig, _grade_gsm8k_shard
+from experiments.downstream_scaling.evals.tasks.gsm8k import GSM8KGradeConfig, _grade_gsm8k_shard, _load_gsm8k_task
 from experiments.downstream_scaling.evals.tasks.gsm8k_truncated import ANSWER_PATTERN, _truncate_solution
 from experiments.downstream_scaling.evals.utils import version_path
 
@@ -92,11 +92,9 @@ class TruncatedGSM8KIIDTask:
 
 
 def write_truncated_gsm8k_iid_prompts(config: TruncatedGSM8KIIDPromptsConfig) -> None:
-    import lm_eval.tasks
-
     logger.info("Loading tokenizer from %s", config.tokenizer_path)
     tokenizer = load_tokenizer(config.tokenizer_path)
-    task = lm_eval.tasks.get_task_dict(["gsm8k"])["gsm8k"]
+    task = _load_gsm8k_task()
     task.set_fewshot_seed(config.fewshot_seed)
     docs = list(task.test_docs())
     if config.n_problems is not None:

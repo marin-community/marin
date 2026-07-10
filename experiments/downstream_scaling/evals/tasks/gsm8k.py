@@ -28,6 +28,16 @@ from experiments.downstream_scaling.evals.utils import version_path
 logger = logging.getLogger(__name__)
 
 
+def _load_gsm8k_task():
+    import lm_eval.tasks
+    from lm_eval.tasks import TaskManager
+
+    return lm_eval.tasks.get_task_dict(
+        [{"task": "gsm8k", "dataset_path": "openai/gsm8k"}],
+        task_manager=TaskManager(),
+    )["gsm8k"]
+
+
 @dataclass(frozen=True)
 class GSM8KTaskConfig:
     num_fewshot: int = 5
@@ -88,9 +98,7 @@ class GSM8KTask:
 
 
 def write_gsm8k_prompts(config: GSM8KPromptsConfig) -> None:
-    import lm_eval.tasks
-
-    task = lm_eval.tasks.get_task_dict(["gsm8k"])["gsm8k"]
+    task = _load_gsm8k_task()
     task.set_fewshot_seed(config.fewshot_seed)
     docs = list(task.test_docs())
     if config.n_problems is not None:
@@ -125,10 +133,9 @@ def write_gsm8k_prompts(config: GSM8KPromptsConfig) -> None:
 
 
 def _grade_gsm8k_shard(items, shard_info):
-    import lm_eval.tasks
     from lm_eval.api.instance import Instance
 
-    task = lm_eval.tasks.get_task_dict(["gsm8k"])["gsm8k"]
+    task = _load_gsm8k_task()
     filter_names = [f.name for f in task._filters]
 
     for item in items:

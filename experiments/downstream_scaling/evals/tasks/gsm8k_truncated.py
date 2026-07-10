@@ -18,7 +18,7 @@ from thalas.execution.remote import remote
 from thalas.execution.types import this_output_path, versioned
 
 from experiments.downstream_scaling.evals.framework.schema import prompts_file
-from experiments.downstream_scaling.evals.tasks.gsm8k import GSM8KTask
+from experiments.downstream_scaling.evals.tasks.gsm8k import GSM8KTask, _load_gsm8k_task
 from experiments.downstream_scaling.evals.utils import version_path
 
 logger = logging.getLogger(__name__)
@@ -81,11 +81,9 @@ def _truncate_solution(tokenizer, text: str, truncate_fraction: float) -> str:
 
 
 def write_truncated_gsm8k_prompts(config: TruncatedGSM8KPromptsConfig) -> None:
-    import lm_eval.tasks
-
     logger.info("Loading tokenizer from %s", config.tokenizer_path)
     tokenizer = load_tokenizer(config.tokenizer_path)
-    task = lm_eval.tasks.get_task_dict(["gsm8k"])["gsm8k"]
+    task = _load_gsm8k_task()
     task.set_fewshot_seed(config.fewshot_seed)
     docs = list(task.test_docs())
     if config.n_problems is not None:
