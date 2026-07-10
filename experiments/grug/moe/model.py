@@ -743,6 +743,26 @@ class Block(eqx.Module):
         )
 
     @named_call
+    def attention_residual(
+        self,
+        x: Float[Array, "B S D"],
+        mask: AttentionMask | jax.Array,
+        use_pko: bool = False,
+        disable_rope: bool = False,
+    ) -> Float[Array, "B S D"]:
+        attn_in = self.attn_gated_norm(self.rms_attn(x))
+        return x + self.attn(attn_in, mask, use_pko=use_pko, disable_rope=disable_rope)
+
+    @named_call
+    def moe_residual(self, x: Float[Array, "B S D"]) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
+        mlp_in = self.mlp_gated_norm(self.rms_mlp(x))
+        mlp_out, router_stats = self.mlp(mlp_in)
+        if self.shared is not None:
+            mlp_out = mlp_out + self.shared(mlp_in, activation=ActivationFunctionEnum.silu)
+        x = x + mlp_out
+        return x, router_stats
+
+    @named_call
     def __call__(
         self,
         x: Float[Array, "B S D"],
@@ -750,14 +770,34 @@ class Block(eqx.Module):
         use_pko: bool = False,
         disable_rope: bool = False,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
-        attn_in = self.attn_gated_norm(self.rms_attn(x))
-        x = x + self.attn(attn_in, mask, use_pko=use_pko, disable_rope=disable_rope)
-        mlp_in = self.mlp_gated_norm(self.rms_mlp(x))
-        mlp_out, router_stats = self.mlp(mlp_in)
-        if self.shared is not None:
-            mlp_out = mlp_out + self.shared(mlp_in, activation=ActivationFunctionEnum.silu)
-        x = x + mlp_out
-        return x, router_stats
+        x = self.attention_residual(x, mask, use_pko=use_pko, disable_rope=disable_rope)
+        return self.moe_residual(x)
+
+
+def _run_block_with_remat(
+    block: Block,
+    hidden: Float[Array, "B S D"],
+    mask: AttentionMask | jax.Array,
+    *,
+    use_pko: bool,
+    disable_rope: bool,
+    remat_mode: RematMode,
+    effectful_moe: bool,
+) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
+    if effectful_moe:
+        hidden = eqx.filter_checkpoint(Block.attention_residual)(
+            block,
+            hidden,
+            mask,
+            use_pko,
+            disable_rope,
+        )
+        return block.moe_residual(hidden)
+
+    remat_policy = None
+    if remat_mode == "save_moe":
+        remat_policy = jax.checkpoint_policies.save_only_these_names(*MOE_REMAT_SAVE_NAMES)
+    return eqx.filter_checkpoint(block, policy=remat_policy)(hidden, mask, use_pko, disable_rope)
 
 
 class TransformerPipelineStage(eqx.Module):
@@ -810,11 +850,6 @@ class TransformerPipelineStage(eqx.Module):
         segment_ids = mask.segment_ids if isinstance(mask, AttentionMask) else None
         short_mask = AttentionMask(is_causal=True, sliding_window=cfg.sliding_window, segment_ids=segment_ids)
         long_mask = AttentionMask(is_causal=True, sliding_window=None, segment_ids=segment_ids)
-        if cfg.remat_mode == "save_moe":
-            remat_policy = jax.checkpoint_policies.save_only_these_names(*MOE_REMAT_SAVE_NAMES)
-        else:
-            remat_policy = None
-
         moe_router_stats: list[dict[str, jax.Array]] = []
         for local_index, block in enumerate(self.blocks):
             layer_index = self.start_layer + local_index
@@ -823,8 +858,14 @@ class TransformerPipelineStage(eqx.Module):
             layer_mask = long_mask if is_long else short_mask
             use_pko = is_long and not cfg.disable_pko
             disable_rope = is_long and cfg.disable_long_rope
-            hidden, router_stats = eqx.filter_checkpoint(block, policy=remat_policy)(
-                hidden, layer_mask, use_pko, disable_rope
+            hidden, router_stats = _run_block_with_remat(
+                block,
+                hidden,
+                layer_mask,
+                use_pko=use_pko,
+                disable_rope=disable_rope,
+                remat_mode=cfg.remat_mode,
+                effectful_moe=cfg.moe_implementation == "deepep",
             )
             moe_router_stats.append(router_stats)
 
@@ -1021,11 +1062,6 @@ class Transformer(eqx.Module):
         short_mask = AttentionMask(is_causal=True, sliding_window=cfg.sliding_window, segment_ids=segment_ids)
         long_mask = AttentionMask(is_causal=True, sliding_window=None, segment_ids=segment_ids)
 
-        if cfg.remat_mode == "save_moe":
-            remat_policy = jax.checkpoint_policies.save_only_these_names(*MOE_REMAT_SAVE_NAMES)
-        else:
-            remat_policy = None
-
         moe_router_stats: list[dict[str, jax.Array]] = []
         for i, block in enumerate(self.blocks[start_layer:end_layer], start=start_layer):
             is_last = i == num_blocks - 1
@@ -1033,8 +1069,14 @@ class Transformer(eqx.Module):
             layer_mask = long_mask if is_long else short_mask
             use_pko = is_long and not cfg.disable_pko
             disable_rope = is_long and cfg.disable_long_rope
-            hidden, router_stats = eqx.filter_checkpoint(block, policy=remat_policy)(
-                hidden, layer_mask, use_pko, disable_rope
+            hidden, router_stats = _run_block_with_remat(
+                block,
+                hidden,
+                layer_mask,
+                use_pko=use_pko,
+                disable_rope=disable_rope,
+                remat_mode=cfg.remat_mode,
+                effectful_moe=cfg.moe_implementation == "deepep",
             )
             if i in pipeline_stage_end_layers:
                 hidden = _mark_pipeline_stage_end(hidden, layer_index=i)
