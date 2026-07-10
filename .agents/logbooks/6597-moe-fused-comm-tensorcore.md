@@ -674,3 +674,85 @@ non-fatal `CUDA_ERROR_NOT_PERMITTED` VMM fallback warnings; there was no
 traceback or actionable failure. Complete raw Iris routine output and terminal
 monitor state are in `scratch/6597-w2b-parallel/raw-routine-output.txt` and
 `scratch/6597-w2b-parallel/monitoring-state.json`.
+
+## 2026-07-10 FUSED-MOE-018 - Split W2 direct-return floor
+
+Job `/dlwh/bench-semantic-w2-return-split-floor-20260710-1524` ran once on
+`cw-rno2a` at commit `6ce3554953` and reached terminal `JOB_STATE_SUCCEEDED`.
+Its single task exited 0 after 1 minute 34.42 seconds, with zero failures or
+preemptions. No duplicate, stop, resubmit, kernel edit, or Iris restart was
+issued.
+
+`semantic_fused_w2_return_pallas` emitted three successful repeat rows and zero
+error rows. Steady-state time had median `36.978593988654516` ms, min
+`36.89697233494371` ms, and max `37.02089935541153` ms. Useful TFLOP/s/rank
+had median `23.229478640089713`, min `23.20293332026891`, and max
+`23.2808657415633`; rounded TFLOP/s/rank had median `29.036848300112144`, min
+`29.003666650336136`, and max `29.10108217695413`.
+
+All three repeats produced checksum `3915118848.0`. Semantic row efficiency
+was 0.8, with 1,048,576 useful rows, 1,310,720 rounded rows, and 64 live pairs.
+Queue and layout overflow error counts, metadata overflow routes, routing
+dropped routes, and dropped routes were all zero. Compile/first-call,
+lowering/compile, and first-run times were `5.083134362939745`,
+`3.0745417720172554`, and `2.0085925909224898` seconds. Logs contained two
+non-fatal 12.50 GiB allocator warnings and 48 non-fatal
+`CUDA_ERROR_NOT_PERMITTED` VMM fallback warnings; there was no traceback or
+actionable failure. Complete Iris output and exact result rows are in
+`scratch/6597-w2-return-split-floor/raw.log` and
+`scratch/6597-w2-return-split-floor/result-rows.jsonl`; terminal status and task
+summary are alongside them.
+
+## 2026-07-10 FUSED-MOE-019 - Tiny W13 backward dX scale diagnostics
+
+Job `/dlwh/bench-semantic-w13b-dxscale-20260710-1527` ran once on `cw-rno2a`
+at commit `afc18931a9` and reached terminal `JOB_STATE_SUCCEEDED`. Its single
+task exited 0 after 49.58 seconds, with zero failures and preemptions. No
+duplicate, stop, resubmit, kernel edit, or Iris restart was issued.
+
+The expected and observed `dX` absolute sums were 17,072,636 and 16,742,244,
+respectively, while the least-squares scale was 0.5872155428 and cosine
+similarity was 0.5925955176. Thus the discrepancy is not a simple global scale
+mismatch despite the similar absolute sums. `dX` max and mean absolute
+differences were 419.6332397461 and 34.6273040771. `dW13` remained close, with
+max and mean absolute differences of 1.52587890625e-05 and
+5.010289214624208e-07. Expected and observed nonfinite counts were zero for
+both tensors.
+
+Compile/first-call time was 10.5734108520 seconds, lowering/compile time was
+9.6598809430 seconds, first-run time was 0.9135299090 seconds, and steady-state
+time was 2.1707150154 ms. The row reported 4 live pairs, 2,048 useful rows,
+2,560 rounded rows, 0.8 row efficiency, 0.1236622284 useful and 0.1545777855
+rounded TFLOP/s/rank, and checksum 33,815,336. Queue and layout overflow error
+counts, metadata overflow routes, routing drops, and dropped routes were all
+zero. Twelve non-fatal `CUDA_ERROR_NOT_PERMITTED` VMM fallback warnings
+occurred. Complete raw output, exact rows, terminal status, and task summary are
+in `scratch/6597-w13b-dxscale/`.
+
+## 2026-07-10 FUSED-MOE-020 - Top-k=1 W13 backward route diagnostic
+
+Job `/dlwh/bench-semantic-w13b-topk1-20260710-1531` ran once on `cw-rno2a`
+at commit `afc18931a9` and reached terminal `JOB_STATE_SUCCEEDED`. Its single
+task exited 0 after 40.76 seconds, with zero failures and preemptions. No
+duplicate, stop, resubmit, kernel edit, or Iris restart was issued.
+
+With EP2 and top-k=1, expected `dX` had absolute sum `10,787,750`, while
+observed `dX` contained two nonfinite values versus zero expected. Consequently
+the observed absolute sum, least-squares scale, cosine similarity, max absolute
+difference, and mean absolute difference were all `NaN`. `dW13` remained close:
+max absolute difference was `3.814697265625e-06` and mean absolute difference
+was `3.316472430014983e-08`, with zero expected or observed nonfinite values.
+The failure therefore does not require multi-route top-k accumulation; this
+run leaves the route-mapped `dX` path implicated but does not alone prove the
+specific mapping fault.
+
+Compile/first-call time was `7.9865564740030095` seconds, lowering/compile time
+was `7.144973514019512` seconds, first-run time was `0.8415829599834979`
+seconds, and steady-state time was `1.9043060019612312` ms. The row reported
+four live pairs, 1,024 useful rows, 1,280 rounded rows, 0.8 row efficiency,
+`0.07048117679709569` useful and `0.08810147099636961` rounded TFLOP/s/rank.
+Queue and layout overflow error counts, metadata overflow routes, routing
+drops, and dropped routes were all zero. Twelve non-fatal
+`CUDA_ERROR_NOT_PERMITTED` VMM fallback warnings occurred. Complete raw output,
+terminal status, task summary, and monitor state are in
+`scratch/6597-w13b-topk1/`.

@@ -1788,12 +1788,15 @@ def _comparison_metrics(prefix: str, observed: Array, expected: Array) -> dict[s
 def _scale_comparison_metrics(prefix: str, observed: Array, expected: Array) -> dict[str, Array]:
     observed_f32 = observed.astype(jnp.float32)
     expected_f32 = expected.astype(jnp.float32)
-    dot = jnp.sum(observed_f32 * expected_f32)
-    observed_norm_sq = jnp.sum(jnp.square(observed_f32))
-    expected_norm_sq = jnp.sum(jnp.square(expected_f32))
+    finite = jnp.isfinite(observed_f32) & jnp.isfinite(expected_f32)
+    observed_finite = jnp.where(finite, observed_f32, 0.0)
+    expected_finite = jnp.where(finite, expected_f32, 0.0)
+    dot = jnp.sum(observed_finite * expected_finite)
+    observed_norm_sq = jnp.sum(jnp.square(observed_finite))
+    expected_norm_sq = jnp.sum(jnp.square(expected_finite))
     return {
-        f"{prefix}_expected_abs_sum": jnp.sum(jnp.abs(expected_f32)),
-        f"{prefix}_observed_abs_sum": jnp.sum(jnp.abs(observed_f32)),
+        f"{prefix}_expected_abs_sum": jnp.sum(jnp.abs(expected_finite)),
+        f"{prefix}_observed_abs_sum": jnp.sum(jnp.abs(observed_finite)),
         f"{prefix}_least_squares_scale": dot / jnp.maximum(expected_norm_sq, 1.0e-30),
         f"{prefix}_cosine_similarity": dot / jnp.sqrt(jnp.maximum(observed_norm_sq * expected_norm_sq, 1.0e-30)),
     }
