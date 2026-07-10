@@ -22,8 +22,7 @@ from experiments.datakit.cluster.quality.fast_transformer.calibrate import (
     calibration_knots,
     fit_cutpoints,
 )
-from experiments.datakit.cluster.quality.fast_transformer.score import CHUNK_CHARS, _score_bme
-from experiments.datakit.cluster.quality.fast_transformer.scorer import PooledScorer
+from experiments.datakit.cluster.quality.fast_transformer.scorer import CHUNK_CHARS, PooledScorer, score_bme
 
 
 class _FakeScorer:
@@ -51,7 +50,7 @@ def _as_scorer(fake: _FakeScorer) -> PooledScorer:
 def test_bme_short_doc_scores_as_single_window():
     fake = _FakeScorer({"x": 0.3})
     doc = "x" * 100  # <= CHUNK_CHARS
-    out = _score_bme(_as_scorer(fake), [doc])
+    out = score_bme(_as_scorer(fake), [doc])
     assert fake.calls == [[doc]]  # exactly one chunk = the whole doc
     assert out.tolist() == pytest.approx([0.3])
 
@@ -60,7 +59,7 @@ def test_bme_long_doc_covers_begin_middle_end_and_mean_pools():
     fake = _FakeScorer({"A": 0.0, "B": 0.6, "C": 0.9})
     # begin -> A block, middle -> B block, end -> C block (each exactly one chunk)
     doc = "A" * CHUNK_CHARS + "B" * CHUNK_CHARS + "C" * CHUNK_CHARS
-    out = _score_bme(_as_scorer(fake), [doc])
+    out = score_bme(_as_scorer(fake), [doc])
 
     chunks = fake.calls[0]
     assert len(chunks) == 3
@@ -74,7 +73,7 @@ def test_bme_batch_pools_each_doc_independently():
     fake = _FakeScorer({"x": 0.3, "A": 0.0, "B": 0.6, "C": 0.9})
     short = "x" * 100
     long = "A" * CHUNK_CHARS + "B" * CHUNK_CHARS + "C" * CHUNK_CHARS
-    out = _score_bme(_as_scorer(fake), [short, long])
+    out = score_bme(_as_scorer(fake), [short, long])
     # all 1 + 3 chunks scored in a single batched call; spans map back per doc
     assert len(fake.calls) == 1 and len(fake.calls[0]) == 4
     assert out.tolist() == pytest.approx([0.3, (0.0 + 0.6 + 0.9) / 3])
@@ -82,8 +81,8 @@ def test_bme_batch_pools_each_doc_independently():
 
 def test_bme_window_count_switches_at_chunk_boundary():
     fake = _FakeScorer(default=0.5)
-    _score_bme(_as_scorer(fake), ["y" * CHUNK_CHARS])  # == threshold
-    _score_bme(_as_scorer(fake), ["y" * (CHUNK_CHARS + 1)])  # one char over
+    score_bme(_as_scorer(fake), ["y" * CHUNK_CHARS])  # == threshold
+    score_bme(_as_scorer(fake), ["y" * (CHUNK_CHARS + 1)])  # one char over
     assert len(fake.calls[0]) == 1  # <= CHUNK_CHARS -> single window
     assert len(fake.calls[1]) == 3  # > CHUNK_CHARS  -> begin/middle/end
 

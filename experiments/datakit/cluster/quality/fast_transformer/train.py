@@ -17,7 +17,7 @@ import logging
 import os
 import tempfile
 import time
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 
 import equinox as eqx
 import jax
@@ -25,16 +25,17 @@ import jax.numpy as jnp
 import numpy as np
 import optax
 import pyarrow.parquet as pq
-from jax.sharding import Mesh, NamedSharding, PartitionSpec
 from rigging.filesystem import StoragePath
 from rigging.log_setup import configure_logging
 
 from experiments.datakit.cluster.quality.fast_transformer.data import PackedData, build_remap, encode_texts, pack
+from experiments.datakit.cluster.quality.fast_transformer.inference import data_parallel_shardings, predict
 from experiments.datakit.cluster.quality.fast_transformer.model import (
     FastTransformer,
     FastTransformerConfig,
     count_params,
 )
+from experiments.datakit.cluster.quality.fast_transformer.scorer import MODEL_STEM, artifact_names
 from experiments.datakit.cluster.quality.v0.ops.eval_holdout import auc, spearman_rho
 
 logger = logging.getLogger(__name__)
@@ -53,7 +54,6 @@ DEPLOY_CONFIG = {
     "pool_kind": "meanmaxmin",
 }
 DEFAULT_LABELS = "s3://marin-us-east-02a/marin/datakit/quality_labels_20260709.parquet"
-MODEL_STEM = "pooled_junkgate2"  # matches score.py's MODEL_EQX/REMAP/META
 
 
 @dataclass(frozen=True)
@@ -123,57 +123,6 @@ def _forward(model, ids, key):
     return model(ids, key=key, inference=False)
 
 
-@eqx.filter_jit
-def _predict_batch(model: FastTransformer, ids):
-    """Sigmoid quality score for a fixed-shape batch (jitted, inference mode)."""
-    return jax.nn.sigmoid(model(ids, key=None, inference=True))
-
-
-# Tokens per inference batch; bounds the [B, T, E] embedding activation so long
-# context (T up to 16k) auto-shrinks the batch instead of OOMing one v6e chip.
-_PREDICT_TOKEN_BUDGET = 262_144
-
-
-def _predict(model: FastTransformer, ids: np.ndarray, batch_size: int | None = None) -> np.ndarray:
-    """Sigmoid quality score for every row in ``ids``.
-
-    Chunks are padded to a constant ``batch_size`` so ``_predict_batch`` compiles
-    once per sequence length and is reused across all epochs and configs (the
-    per-epoch val eval would otherwise dominate the sweep with recompiles). When
-    ``batch_size`` is not given it is sized from the sequence length to keep the
-    activation footprint bounded.
-    """
-    if batch_size is None:
-        batch_size = max(8, _PREDICT_TOKEN_BUDGET // ids.shape[1])
-    # Inference is data-parallel too: callers pass the global batch (sized for the
-    # whole slice), so shard each chunk across chips -- otherwise a single device
-    # would try to hold the full global-batch attention tensor and OOM/segfault.
-    ndev, _, batch_shard = data_parallel_shardings()
-    batch_size = max(ndev, (batch_size // ndev) * ndev)
-    out: list[np.ndarray] = []
-    n = ids.shape[0]
-    for start in range(0, n, batch_size):
-        chunk = ids[start : start + batch_size]
-        pad = batch_size - chunk.shape[0]
-        if pad:
-            chunk = np.concatenate([chunk, np.zeros((pad, ids.shape[1]), dtype=ids.dtype)], axis=0)
-        preds = np.asarray(_predict_batch(model, jax.device_put(jnp.asarray(chunk), batch_shard)))
-        out.append(preds[: batch_size - pad] if pad else preds)
-    return np.concatenate(out)
-
-
-@dataclass
-class RunResult:
-    config: dict
-    hparams: dict
-    params: int
-    flops_per_token: float
-    val: EvalMetrics
-    holdout: EvalMetrics
-    best_epoch: int
-    train_seconds: float
-
-
 @dataclass
 class FitResult:
     model: FastTransformer
@@ -183,18 +132,6 @@ class FitResult:
     train_seconds: float
     params: int
     flops_per_token: float
-
-
-def data_parallel_shardings():
-    """(num_devices, replicated, batch-sharded) shardings over all chips.
-
-    Data parallelism: the model + optimizer state are replicated on every chip and
-    the batch is split across them, so all of a v6e slice's chips are used instead
-    of one. With one device this is a no-op.
-    """
-    devices = jax.devices()
-    mesh = Mesh(np.asarray(devices), ("dp",))
-    return len(devices), NamedSharding(mesh, PartitionSpec()), NamedSharding(mesh, PartitionSpec("dp"))
 
 
 def train_regressor(
@@ -261,7 +198,7 @@ def train_regressor(
             continue
         # Reuse the (memory-sized) training batch for eval -- token-level encoders
         # at long context can't fit the default inference batch's O(T^2) attention.
-        val_rho = spearman_rho(_predict(model, val_ids, batch_size=batch_size).tolist(), val_scores.tolist())
+        val_rho = spearman_rho(predict(model, val_ids, batch_size=batch_size).tolist(), val_scores.tolist())
         improved = bool(np.isfinite(val_rho) and val_rho > best_val_rho)
         if improved:
             best_val_rho, best_model, best_epoch, no_improve = val_rho, model, epoch, 0
@@ -330,47 +267,21 @@ def fit(
     )
 
 
-def train_one(config: FastTransformerConfig, data: PackedData, hp: TrainHParams) -> RunResult:
-    fitted = fit(config, data, hp)
-    val_pred = _predict(fitted.model, fitted.val_ids)
-    holdout_pred = _predict(fitted.model, data.eval.ids)
-    val_metrics = _metrics(val_pred, fitted.val_scores)
-    holdout_metrics = _metrics(holdout_pred, data.eval.scores)
-    logger.info(
-        "HOLDOUT: AUC=%.4f spearman=%.4f acc=%.4f F1=%.4f (params=%.2fM flops/tok=%.0fK)",
-        holdout_metrics.auc,
-        holdout_metrics.spearman_rho,
-        holdout_metrics.accuracy,
-        holdout_metrics.f1,
-        fitted.params / 1e6,
-        fitted.flops_per_token / 1e3,
-    )
-    return RunResult(
-        config={k: v for k, v in asdict(config).items()},
-        hparams=asdict(hp),
-        params=fitted.params,
-        flops_per_token=fitted.flops_per_token,
-        val=val_metrics,
-        holdout=holdout_metrics,
-        best_epoch=fitted.best_epoch,
-        train_seconds=fitted.train_seconds,
-    )
-
-
 def _save_scorer(model, remap: dict, vocab: int, tokenizer: str, max_tokens: int, out_dir: str, name: str) -> None:
     """Serialise the model + vocab remap + meta in the format `scorer.py` loads."""
     out_dir = out_dir.rstrip("/")
+    eqx_name, remap_name, meta_name = artifact_names(name)
     fd, local = tempfile.mkstemp(suffix=".eqx")
     os.close(fd)
     eqx.tree_serialise_leaves(local, model)  # eqx serialise needs a local path
-    with open(local, "rb") as src, StoragePath(f"{out_dir}/{name}.eqx").open("wb") as dst:
+    with open(local, "rb") as src, StoragePath(f"{out_dir}/{eqx_name}").open("wb") as dst:
         dst.write(src.read())
-    with StoragePath(f"{out_dir}/{name}_remap.json").open("w") as fh:
+    with StoragePath(f"{out_dir}/{remap_name}").open("w") as fh:
         json.dump(remap, fh)
     meta = {"vocab_size": vocab, "max_tokens": max_tokens, "tokenizer": tokenizer, "config": DEPLOY_CONFIG}
-    with StoragePath(f"{out_dir}/{name}_meta.json").open("w") as fh:
+    with StoragePath(f"{out_dir}/{meta_name}").open("w") as fh:
         json.dump(meta, fh)
-    logger.info("saved scorer -> %s/%s.eqx (+ _remap.json, _meta.json)", out_dir, name)
+    logger.info("saved scorer -> %s/%s (+ %s, %s)", out_dir, eqx_name, remap_name, meta_name)
 
 
 def train_from_labels(
@@ -387,8 +298,7 @@ def train_from_labels(
     (``source``/``text``/``score_normalized``) and save it in the scorer format."""
     hp = hp or TrainHParams()
     with StoragePath(labels_path).open("rb") as fh:
-        table = pq.read_table(fh, columns=["source", "text", "score_normalized"])
-    sources = [str(s) for s in table.column("source").to_pylist()]
+        table = pq.read_table(fh, columns=["text", "score_normalized"])
     texts = [t or "" for t in table.column("text").to_pylist()]
     scores = np.array(table.column("score_normalized").to_pylist(), dtype=np.float32)
 
@@ -397,17 +307,17 @@ def train_from_labels(
     eval_idx, train_idx = perm[:n_eval], perm[n_eval:]
 
     def _split(idx):
-        return [texts[i] for i in idx], scores[idx], [sources[i] for i in idx]
+        return [texts[i] for i in idx], scores[idx]
 
-    tr_texts, tr_scores, tr_src = _split(train_idx)
-    ev_texts, ev_scores, ev_src = _split(eval_idx)
+    tr_texts, tr_scores = _split(train_idx)
+    ev_texts, ev_scores = _split(eval_idx)
     tr_raw = encode_texts(tokenizer, tr_texts, max_tokens)
     ev_raw = encode_texts(tokenizer, ev_texts, max_tokens)
     remap = build_remap(tr_raw, min_count=2)
     vocab = len(remap) + 2
     data = PackedData(
-        train=pack(tr_raw, remap, tr_scores, tr_src, max_tokens),
-        eval=pack(ev_raw, remap, ev_scores, ev_src, max_tokens),
+        train=pack(tr_raw, remap, tr_scores, max_tokens),
+        eval=pack(ev_raw, remap, ev_scores, max_tokens),
         vocab_size=vocab,
         tokenizer_name=tokenizer,
         max_tokens=max_tokens,
@@ -417,7 +327,7 @@ def train_from_labels(
     )
     logger.info("training on %d labels (%d train / %d eval); vocab=%d", len(texts), len(train_idx), len(eval_idx), vocab)
     fitted = fit(config, data, hp)
-    holdout = _metrics(_predict(fitted.model, data.eval.ids), data.eval.scores)
+    holdout = _metrics(predict(fitted.model, data.eval.ids), data.eval.scores)
     logger.info("HOLDOUT AUC=%.4f spearman=%.4f (best_epoch=%d)", holdout.auc, holdout.spearman_rho, fitted.best_epoch)
     _save_scorer(fitted.model, remap, vocab, tokenizer, max_tokens, out_dir, name)
     return fitted

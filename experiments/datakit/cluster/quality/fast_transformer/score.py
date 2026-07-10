@@ -34,8 +34,6 @@ import argparse
 import functools
 import json
 import logging
-import os
-import tempfile
 from collections.abc import Iterator
 
 import numpy as np
@@ -47,49 +45,18 @@ from zephyr.execution import ZephyrContext
 from zephyr.readers import load_file
 from zephyr.runners import InlineRunner
 
-from experiments.datakit.cluster.quality.fast_transformer.scorer import PooledScorer
+from experiments.datakit.cluster.quality.fast_transformer.scorer import (
+    BUCKET_EDGES,
+    PooledScorer,
+    load_pooled_scorer,
+    score_bme,
+)
 
 logger = logging.getLogger(__name__)
 
-BUCKET_EDGES = (0.2, 0.4, 0.6, 0.8)
 BATCH_SIZE = 512
-# bme scores begin/middle/end ~512-token (~2000-char) windows of the whole doc and
-# mean-pools them, so a shared boilerplate prefix no longer dominates the score.
-CHUNK_CHARS = 2_000
 WORKER_RESOURCES = ResourceConfig(cpu=2, ram="16g")
-
-# Model-dir file names (the junk-gate deployable + bme calibration).
-MODEL_EQX = "pooled_junkgate2.eqx"
-MODEL_REMAP = "pooled_junkgate2_remap.json"
-MODEL_META = "pooled_junkgate2_meta.json"
-MODEL_CALIB = "calib_bme.json"
-
-
-def _score_bme(scorer: PooledScorer, texts: list[str]) -> np.ndarray:
-    """Mean-pool the FT score over begin/middle/end ~512-token windows of each doc.
-    Short docs (<= one chunk) reduce to a single scored window."""
-    flat: list[str] = []
-    spans: list[tuple[int, int]] = []
-    for t in texts:
-        if len(t) <= CHUNK_CHARS:
-            cs = [t]
-        else:
-            m = len(t) // 2
-            cs = [t[:CHUNK_CHARS], t[max(0, m - CHUNK_CHARS // 2) : m + CHUNK_CHARS // 2], t[-CHUNK_CHARS:]]
-        spans.append((len(flat), len(flat) + len(cs)))
-        flat.extend(cs)
-    s = scorer.score(flat)
-    return np.array([s[a:b].mean() for a, b in spans])
-
-
-def load_pooled_scorer(model_dir: str) -> PooledScorer:
-    """Load just the `PooledScorer` from a model dir (streams the .eqx to a local path,
-    which eqx deserialisation requires). Used by scoring and by calibration fitting."""
-    model_dir = model_dir.rstrip("/")
-    fd, local_eqx = tempfile.mkstemp(suffix=".eqx")
-    with os.fdopen(fd, "wb") as out, open_url(f"{model_dir}/{MODEL_EQX}", "rb") as fh:
-        out.write(fh.read())
-    return PooledScorer.load(local_eqx, f"{model_dir}/{MODEL_REMAP}", f"{model_dir}/{MODEL_META}")
+MODEL_CALIB = "calib_bme.json"  # calibration json name in the model dir
 
 
 @functools.cache
@@ -105,7 +72,7 @@ def _load_scorer(model_dir: str, calib_file: str = MODEL_CALIB) -> tuple[PooledS
 def _predict_batch(records: list[dict], *, model_dir: str, source: str, calib_file: str = MODEL_CALIB) -> Iterator[dict]:
     """Score a batch of records with bme; emit source/id/score/quality_bucket."""
     scorer, xk, yk = _load_scorer(model_dir, calib_file)
-    cal = np.interp(_score_bme(scorer, [r.get("text") or "" for r in records]), xk, yk)
+    cal = np.interp(score_bme(scorer, [r.get("text") or "" for r in records]), xk, yk)
     buckets = np.digitize(cal, BUCKET_EDGES)
     for r, c, b in zip(records, cal, buckets, strict=True):
         yield {"source": source, "id": r["id"], "score": float(c), "quality_bucket": int(b)}

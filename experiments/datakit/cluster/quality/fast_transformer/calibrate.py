@@ -29,20 +29,24 @@ import pyarrow.parquet as pq
 from rigging.filesystem import StoragePath
 from rigging.log_setup import configure_logging
 
-from experiments.datakit.cluster.quality.fast_transformer.score import _score_bme, load_pooled_scorer
+from experiments.datakit.cluster.quality.fast_transformer.scorer import BUCKET_EDGES, load_pooled_scorer, score_bme
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_LABELS = "s3://marin-us-east-02a/marin/datakit/quality_labels_20260709.parquet"
-YK = [0.0, 0.2, 0.4, 0.6, 0.8, 1.0]
-BUCKET_EDGES = (0.2, 0.4, 0.6, 0.8)
+YK = [0.0, *BUCKET_EDGES, 1.0]  # the interior IS BUCKET_EDGES, so the two can't drift
 
 
 def fit_cutpoints(raw: np.ndarray, levels: np.ndarray) -> tuple[dict[int, float], list[float]]:
     """Return (per-level medians, cutpoints). The cutpoint between level k and k+1 is
-    the midpoint of the two level medians (robust to the rare tails); the cutpoints are
-    enforced strictly non-decreasing."""
-    med = {level: float(np.median(raw[levels == level])) for level in (1, 2, 3, 4, 5) if np.any(levels == level)}
+    the midpoint of the two level medians; the cutpoints are enforced non-decreasing.
+    All five oracle levels must be present -- a missing level would make the bucket
+    boundaries ambiguous, so fail loudly rather than KeyError."""
+    present = {int(v) for v in np.unique(levels)}
+    missing = {1, 2, 3, 4, 5} - present
+    if missing:
+        raise ValueError(f"calibration labels missing oracle level(s) {sorted(missing)}; all of 1..5 required")
+    med = {level: float(np.median(raw[levels == level])) for level in (1, 2, 3, 4, 5)}
     cuts = [(med[k] + med[k + 1]) / 2 for k in (1, 2, 3, 4)]
     return med, [float(c) for c in np.maximum.accumulate(cuts)]
 
@@ -67,7 +71,7 @@ def main() -> None:
     levels = np.array(table.column("quality").to_pylist(), dtype=float)
 
     scorer = load_pooled_scorer(args.model_dir)
-    raw = _score_bme(scorer, texts)
+    raw = score_bme(scorer, texts)
     knots = calibration_knots(raw, levels)
 
     cal = np.interp(raw, knots["xk"], knots["yk"])

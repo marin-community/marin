@@ -1,24 +1,18 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tokenize and pack the LLM-scored quality parquets for the fast-transformer.
+"""Tokenize and pack oracle-scored text for the fast-transformer.
 
-Reads the same scored parquets the fasttext baseline uses
-(:mod:`experiments.datakit.cluster.quality.v0.score` output), tokenizes the
-text with a HuggingFace tokenizer, builds a compact vocabulary from the
-training split (mirroring fasttext's ``minCount`` pruning so every embedding
-row is actually trained and the table stays small), and packs everything into
-dense padded arrays ready for JAX.
+Tokenizes text with a HuggingFace tokenizer, builds a compact vocabulary from the
+training split (mirroring fasttext's ``minCount`` pruning so every embedding row is
+actually trained and the table stays small), and packs into dense padded arrays.
 """
 
 import logging
-import math
 from collections import Counter
 from dataclasses import dataclass
 
 import numpy as np
-import pyarrow.parquet as pq
-from rigging.filesystem import url_to_fs
 from transformers import AutoTokenizer
 
 logger = logging.getLogger(__name__)
@@ -34,9 +28,7 @@ class PackedSplit:
     """Dense padded token ids + regression targets for one split."""
 
     ids: np.ndarray  # [N, T] int32, PAD_ID padded on the right
-    lengths: np.ndarray  # [N] int32, real (pre-pad) token count, clipped to T
     scores: np.ndarray  # [N] float32, normalized quality in [0, 1]
-    sources: list[str]
 
     @property
     def n(self) -> int:
@@ -50,34 +42,6 @@ class PackedData:
     vocab_size: int  # compact vocab size, including PAD + UNK
     tokenizer_name: str
     max_tokens: int
-
-
-def _read_scored(path: str) -> tuple[list[str], np.ndarray, list[str]]:
-    """Return (texts, normalized_scores, sources), filtered like the baseline.
-
-    Drops rows the fasttext pipeline also drops: refused/invalid oracle scores
-    (``score_raw < 0``), missing/NaN normalized scores, and empty text.
-    """
-    fs, resolved = url_to_fs(path)
-    with fs.open(resolved, "rb") as fh:
-        table = pq.read_table(fh)
-    cols = {n: table.column(n).to_pylist() for n in ("source", "text", "score_raw", "score_normalized")}
-    texts: list[str] = []
-    scores: list[float] = []
-    sources: list[str] = []
-    for src, text, raw, norm in zip(
-        cols["source"], cols["text"], cols["score_raw"], cols["score_normalized"], strict=True
-    ):
-        if raw is None or int(raw) < 0:
-            continue
-        if norm is None or (isinstance(norm, float) and math.isnan(norm)):
-            continue
-        if not text:
-            continue
-        texts.append(str(text))
-        scores.append(float(norm))
-        sources.append(str(src))
-    return texts, np.asarray(scores, dtype=np.float32), sources
 
 
 def _encode(tokenizer, texts: list[str], max_tokens: int) -> list[list[int]]:
@@ -115,26 +79,13 @@ def _build_vocab(train_ids: list[list[int]], min_count: int, max_vocab: int | No
     return remap
 
 
-def _pack(
-    raw_ids: list[list[int]], remap: dict[int, int], scores: np.ndarray, sources: list[str], max_tokens: int
-) -> PackedSplit:
+def _pack(raw_ids: list[list[int]], remap: dict[int, int], scores: np.ndarray, max_tokens: int) -> PackedSplit:
     n = len(raw_ids)
     ids = np.full((n, max_tokens), PAD_ID, dtype=np.int32)
-    lengths = np.zeros(n, dtype=np.int32)
     for i, row in enumerate(raw_ids):
         mapped = [remap.get(t, UNK_ID) for t in row[:max_tokens]]
         ids[i, : len(mapped)] = mapped
-        lengths[i] = len(mapped)
-    return PackedSplit(ids=ids, lengths=lengths, scores=scores, sources=sources)
-
-
-def encode_corpus(
-    tokenizer_name: str, parquet_path: str, max_tokens: int
-) -> tuple[list[list[int]], np.ndarray, list[str]]:
-    """Read + tokenize one oracle-schema parquet (no vocab remap yet)."""
-    tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
-    texts, scores, sources = _read_scored(parquet_path)
-    return _encode(tokenizer, texts, max_tokens), scores, sources
+    return PackedSplit(ids=ids, scores=scores)
 
 
 def encode_texts(tokenizer_name: str, texts: list[str], max_tokens: int) -> list[list[int]]:
@@ -147,7 +98,5 @@ def build_remap(raw_ids: list[list[int]], min_count: int, max_vocab: int | None 
     return _build_vocab(raw_ids, min_count, max_vocab)
 
 
-def pack(
-    raw_ids: list[list[int]], remap: dict[int, int], scores: np.ndarray, sources: list[str], max_tokens: int
-) -> PackedSplit:
-    return _pack(raw_ids, remap, scores, sources, max_tokens)
+def pack(raw_ids: list[list[int]], remap: dict[int, int], scores: np.ndarray, max_tokens: int) -> PackedSplit:
+    return _pack(raw_ids, remap, scores, max_tokens)
