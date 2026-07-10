@@ -37,9 +37,10 @@ Submit on iris (us-central2 pinned by the worker's MARIN_PREFIX):
 import logging
 
 import pyarrow as pa
-from fray import ResourceConfig
+from fray.types import ResourceConfig
 from rigging.log_setup import configure_logging
-from zephyr import Dataset, ZephyrContext
+from zephyr.dataset import Dataset
+from zephyr.execution import ZephyrContext
 
 logger = logging.getLogger(__name__)
 

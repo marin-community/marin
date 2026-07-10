@@ -10,13 +10,13 @@ from pathlib import Path
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
-from fray import ResourceConfig
 from fray.local_backend import LocalClient
-from zephyr import Dataset, col, load_file, load_parquet
+from fray.types import ResourceConfig
 from zephyr._test_helpers import SampleDataclass
-from zephyr.dataset import FilterOp, GlobSource, MapOp, WindowOp, resolve_glob
+from zephyr.dataset import Dataset, FilterOp, GlobSource, MapOp, WindowOp, resolve_glob
 from zephyr.execution import ZephyrContext, ZephyrWorkerError
-from zephyr.readers import DEFAULT_FILE_PATH_COLUMN, InputFileSpec
+from zephyr.expr import col
+from zephyr.readers import DEFAULT_FILE_PATH_COLUMN, InputFileSpec, load_file, load_parquet
 from zephyr.writers import write_parquet_file
 
 

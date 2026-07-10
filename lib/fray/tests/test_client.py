@@ -7,15 +7,9 @@ import threading
 import time
 
 import pytest
-from fray import (
-    Entrypoint,
-    JobFailed,
-    JobRequest,
-    JobStatus,
-    LocalClient,
-    wait_all,
-)
-from fray.client import JobAlreadyExists
+from fray.client import JobAlreadyExists, JobFailed, wait_all
+from fray.local_backend import LocalClient
+from fray.types import Entrypoint, JobRequest, JobStatus
 
 
 @pytest.fixture

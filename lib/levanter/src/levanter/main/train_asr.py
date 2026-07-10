@@ -15,12 +15,14 @@ from haliax import Axis
 from haliax.partitioning import named_jit, round_axis_for_partitioning
 
 import levanter
+import levanter.config
+import levanter.tracker
 from levanter import callbacks
 from levanter.compat.hf_checkpoints import HFCompatConfig, ModelWithHfSerializationMixin, save_hf_checkpoint_callback
 from levanter.data.audio import AudioIODatasetConfig, AudioMixtureDatasetConfig, AudioTextDataset
 from levanter.models.asr_model import ASRConfig, AudioTextExample
 from levanter.models.whisper import WhisperConfig
-from levanter.optim import AdamConfig, OptimizerConfig
+from levanter.optim.config import AdamConfig, OptimizerConfig
 from levanter.trainer import Trainer, TrainerConfig
 from levanter.utils.jax_utils import parameter_count
 
@@ -83,7 +85,7 @@ def main(config: TrainASRConfig):
     else:
         converter = None
 
-    levanter.initialize(config)
+    levanter.trainer.initialize(config)
     optimizer = config.optimizer.build(config.trainer.num_train_steps)
 
     def compute_loss(

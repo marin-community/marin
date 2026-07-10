@@ -227,6 +227,46 @@ def test_resolver_runs_per_resolve(tracked_clients):
     assert resolver_calls == ["/system/log-server"]
 
 
+def test_write_batch_not_blocked_by_in_progress_resolve(tracked_clients):
+    """A blocked resolver must not wedge concurrent log writes.
+
+    The background flush thread resolves the stats endpoint under the client
+    lock, and in iris that resolver issues a blocking controller RPC. A
+    foreground log emit (``write_batch`` -> ``_get_log_table``) must not wait on
+    that same lock, or a shutdown-path ``logger.warning`` deadlocks teardown
+    against a hung resolve (observed as an iris smoke teardown timeout).
+    """
+    resolving = threading.Event()
+    release = threading.Event()
+
+    def resolver(url: str) -> str:
+        resolving.set()
+        assert release.wait(timeout=10.0), "resolver was never released"
+        return url
+
+    wrote = threading.Event()
+
+    def do_second_write():
+        client.write_batch("k", [logging_pb2.LogEntry(source="t", data="second")])
+        wrote.set()
+
+    client = LogClient.connect("http://h:1", resolver=resolver)
+    second_write = threading.Thread(target=do_second_write)
+    try:
+        # First write spins up the log Table; its flush thread enters the
+        # resolver and (pre-fix) parks there holding the client lock.
+        client.write_batch("k", [logging_pb2.LogEntry(source="t", data="first")])
+        assert resolving.wait(timeout=5.0), "flush thread never reached the resolver"
+
+        # A second write must not block on the lock held during the resolve.
+        second_write.start()
+        assert wrote.wait(timeout=2.0), "write_batch blocked behind an in-progress resolve"
+    finally:
+        release.set()
+        second_write.join(timeout=5.0)
+        client.close()
+
+
 def test_invalidates_on_connection_refused(tracked_clients, monkeypatch):
     """Retryable failure invalidates the cached client; the next send re-resolves.
 

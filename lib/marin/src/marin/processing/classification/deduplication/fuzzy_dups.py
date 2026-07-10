@@ -36,10 +36,14 @@ import os
 from collections.abc import Iterator
 from typing import Any
 
-from fray import ResourceConfig
+from fray.types import ResourceConfig
 from pydantic import BaseModel
 from rigging.filesystem import StoragePath
-from zephyr import Dataset, ZephyrContext, counters, write_parquet_file, zephyr_worker_ctx
+from zephyr import counters
+from zephyr.dataset import Dataset
+from zephyr.execution import ZephyrContext
+from zephyr.worker_context import zephyr_worker_ctx
+from zephyr.writers import write_parquet_file
 
 from marin.execution.artifact import read_artifact
 from marin.execution.step_spec import StepSpec

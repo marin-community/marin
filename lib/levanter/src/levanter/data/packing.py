@@ -22,7 +22,7 @@ import numpy as np
 import tensorstore as ts
 from jaxtyping import PyTree
 
-from levanter.data import AsyncDataset
+from levanter.data.dataset import AsyncDataset
 from levanter.layers.attention import AttentionMask
 from levanter.models.lm_model import LmExample
 from levanter.store.jagged_array import JaggedArrayStore

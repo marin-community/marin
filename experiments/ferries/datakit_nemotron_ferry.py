@@ -16,7 +16,7 @@ import json
 import logging
 import os
 
-from fray import ResourceConfig
+from fray.types import ResourceConfig
 from marin.datakit.normalize import NormalizedData, normalize_step
 from marin.execution.artifact import read_artifact
 from marin.execution.step_runner import StepRunner

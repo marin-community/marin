@@ -8,10 +8,13 @@ from typing import Any, TypeVar
 import dupekit
 import humanfriendly
 import pyarrow as pa
-from fray import ResourceConfig
+from fray.types import ResourceConfig
 from rigging.filesystem import rebase_file_path
-from zephyr import DEFAULT_FILE_PATH_COLUMN, ZephyrContext, counters, write_parquet_file
+from zephyr import counters
 from zephyr.dataset import Dataset
+from zephyr.execution import ZephyrContext
+from zephyr.readers import DEFAULT_FILE_PATH_COLUMN
+from zephyr.writers import write_parquet_file
 
 from marin.processing.classification.deduplication.dedup_commons import (
     DEFAULT_FILETYPES,

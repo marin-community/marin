@@ -23,12 +23,13 @@ import braceexpand
 import fsspec
 import pyarrow.parquet as pq
 from levanter.data._preprocessor import BatchProcessor
-from levanter.data.text import LmDatasetFormatBase, preprocessor_for_format
+from levanter.data.text.formats import LmDatasetFormatBase, preprocessor_for_format
 from levanter.tokenizers import MarinTokenizer, load_tokenizer
 from rigging.filesystem import StoragePath, url_to_fs
-from zephyr import Dataset, counters, zephyr_worker_ctx
-from zephyr.dataset import FileEntry
+from zephyr import counters
+from zephyr.dataset import Dataset, FileEntry
 from zephyr.readers import InputFileSpec
+from zephyr.worker_context import zephyr_worker_ctx
 
 from marin.datakit.normalize import generate_id
 

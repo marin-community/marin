@@ -152,7 +152,10 @@ class PowerLrSchedule(LrSchedule):
 
 
 @dataclass(frozen=True)
-class OptimizerConfig(draccus.ChoiceRegistry, abc.ABC):
+class OptimizerConfig(draccus.PluginRegistry, abc.ABC, discover_packages_path="levanter.optim"):
+    # PluginRegistry (not ChoiceRegistry) so the optimizer subclasses spread across this
+    # package register lazily on first parse: levanter/optim/__init__.py is a docstring, so
+    # nothing eagerly imports muon/soap/... — draccus discovers them under the package path.
     learning_rate: float = 6e-4
     weight_decay: float = 0.1
 

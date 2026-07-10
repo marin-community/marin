@@ -1,80 +1,9 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Fray: minimal job and actor scheduling interface."""
+"""Fray: minimal job and actor scheduling interface.
 
-from iris.cluster.setup_scripts import default_setup_script, iris_runtime_setup_script
-
-from fray.actor import (
-    ActorContext,
-    ActorFuture,
-    ActorGroup,
-    ActorHandle,
-    ActorMethod,
-    current_actor,
-)
-from fray.client import Client, JobAlreadyExists, JobFailed, JobHandle, wait_all
-from fray.current_client import current_client, set_current_client
-from fray.local_backend import LocalActorHandle, LocalActorMethod, LocalClient, LocalJobHandle
-from fray.types import (
-    ANY_REGION,
-    ActorConfig,
-    BinaryEntrypoint,
-    CallableEntrypoint,
-    CpuConfig,
-    DeviceConfig,
-    DeviceKind,
-    Entrypoint,
-    EnvironmentConfig,
-    GpuConfig,
-    GpuType,
-    JobRequest,
-    JobStatus,
-    ResourceConfig,
-    TpuConfig,
-    TpuTopologyInfo,
-    TpuType,
-    create_environment,
-    get_tpu_topology,
-)
-
-__all__ = [
-    "ANY_REGION",
-    "ActorConfig",
-    "ActorContext",
-    "ActorFuture",
-    "ActorGroup",
-    "ActorHandle",
-    "ActorMethod",
-    "BinaryEntrypoint",
-    "CallableEntrypoint",
-    "Client",
-    "CpuConfig",
-    "DeviceConfig",
-    "DeviceKind",
-    "Entrypoint",
-    "EnvironmentConfig",
-    "GpuConfig",
-    "GpuType",
-    "JobAlreadyExists",
-    "JobFailed",
-    "JobHandle",
-    "JobRequest",
-    "JobStatus",
-    "LocalActorHandle",
-    "LocalActorMethod",
-    "LocalClient",
-    "LocalJobHandle",
-    "ResourceConfig",
-    "TpuConfig",
-    "TpuTopologyInfo",
-    "TpuType",
-    "create_environment",
-    "current_actor",
-    "current_client",
-    "default_setup_script",
-    "get_tpu_topology",
-    "iris_runtime_setup_script",
-    "set_current_client",
-    "wait_all",
-]
+Import from the defining submodule (``fray.client``, ``fray.actor``, ``fray.types``,
+``fray.local_backend``, ``fray.current_client``) rather than the package: a re-export hub
+here ties every importer of any submodule to all of them, which over-selects CI tests.
+"""

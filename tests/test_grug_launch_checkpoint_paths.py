@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 import pytest
 from fray.cluster import ResourceConfig
-from levanter.optim import AdamConfig
+from levanter.optim.config import AdamConfig
 from levanter.tracker import NoopConfig
 
 from experiments.grug.base.launch import GRUG_130M_MODEL, GrugBaseLaunchConfig, build_grug_run_config
@@ -29,7 +29,7 @@ def test_build_grug_run_config_sets_temporary_checkpoint_base_path():
     """
     output_path = "gs://marin-us-east5/experiments/grug/base-trial"
     with (
-        patch("rigging.filesystem.urllib.request.urlopen", side_effect=OSError("not on GCP")),
+        patch("rigging.filesystem.cluster_config.urllib.request.urlopen", side_effect=OSError("not on GCP")),
         patch.dict(os.environ, {"MARIN_PREFIX": "gs://marin-us-central1/scratch"}),
     ):
         run_config = build_grug_run_config(

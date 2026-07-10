@@ -28,6 +28,9 @@
 #   Set platform.coreweave.kubeconfig_path below, or:
 #   export KUBECONFIG=~/.kube/coreweave-iris
 
+# This cluster's identity. Used for token minting and for authenticating to peers.
+name: example-coreweave
+
 platform:
   label_prefix: coreweave
   coreweave:

@@ -16,6 +16,7 @@ from jax.experimental.array_serialization.serialization import GlobalAsyncCheckp
 from rigging.filesystem import StoragePath
 
 import levanter
+import levanter.config
 from levanter.checkpoint import save_checkpoint
 from levanter.compat.hf_checkpoints import RepoRef, load_tokenizer
 from levanter.models.llama import LlamaConfig

@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from typing import Any, Literal, TypedDict
 
 import numpy as np
-from draccus import ChoiceRegistry
+from draccus import PluginRegistry
 
 from levanter.data._preprocessor import BatchProcessor
 from levanter.tokenizers import MarinTokenizer
@@ -15,7 +15,10 @@ from levanter.tokenizers import MarinTokenizer
 from ._batch_tokenizer import BatchTokenizer
 
 
-class LmDatasetFormatBase(ChoiceRegistry):
+class LmDatasetFormatBase(PluginRegistry, discover_packages_path="levanter.data.text"):
+    # PluginRegistry so the format subclasses split across formats.py, preference.py, and
+    # trace_chat.py register lazily on first parse -- levanter/data/text/__init__.py no longer
+    # imports them eagerly, so draccus discovers them under the package path instead.
     @classmethod
     def default_choice_name(cls) -> str | None:
         return "text"

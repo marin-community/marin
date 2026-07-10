@@ -113,9 +113,7 @@ def _make_service(
 
 
 def _attach_federation(parent_service: ControllerServiceImpl, connection: _ProxyPeerConnection) -> FederationManager:
-    peer = FederationPeer(
-        "cw", PeerConfig(controller_address="http://peer:10000", dashboard_url="https://cw.dev"), connection
-    )
+    peer = FederationPeer("cw", PeerConfig(controller_address="http://peer:10000"), connection)
     peer.probe()
     store = ControllerFederationStore(parent_service._db)
     manager = FederationManager([peer], threads=get_thread_container(), store=store, cluster_id="parent")

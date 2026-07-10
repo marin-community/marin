@@ -20,10 +20,12 @@ from collections.abc import Iterator
 
 import dupekit
 import pyarrow as pa
-from fray import ResourceConfig
+from fray.types import ResourceConfig
 from pydantic import BaseModel
 from rigging.filesystem import StoragePath, prefix_join
-from zephyr import Dataset, ZephyrContext, counters
+from zephyr import counters
+from zephyr.dataset import Dataset
+from zephyr.execution import ZephyrContext
 
 from marin.datakit.normalize import NormalizedData
 from marin.execution.artifact import read_artifact

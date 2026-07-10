@@ -26,7 +26,7 @@ from levanter.compat.hf_checkpoints import HFCheckpointConverter, RepoRef
 from levanter.layers.attention import AttentionMask
 from levanter.models.gpt2 import Gpt2Config, Gpt2LMHeadModel
 from levanter.models.lm_model import LmExample, LmHeadModel
-from levanter.optim import AdamConfig
+from levanter.optim.config import AdamConfig
 from levanter.utils.tree_utils import inference_mode
 from test_utils import use_test_mesh
 

@@ -80,7 +80,7 @@ from tqdm_loggable.auto import tqdm
 import levanter.config
 from levanter.callbacks import StepInfo
 from levanter.checkpoint import latest_checkpoint_path, load_checkpoint
-from levanter.data import batched
+from levanter.data.utils import batched
 from levanter.data.loader import stack_batches
 from levanter.models.lm_model import LmConfig, LmExample, LmHeadModel
 from levanter.trainer import TrainerConfig

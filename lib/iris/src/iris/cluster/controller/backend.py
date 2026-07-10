@@ -477,11 +477,6 @@ class TaskBackend(Protocol):
         prune readers and to seed/register a worker into its owning backend."""
         ...
 
-    allowed_users: frozenset[str]
-    """The allow policy: user ids permitted to route here (``"*"`` matches any).
-    Set by the composer via :meth:`configure_routing`; read for the dashboard's
-    restricted / allowed-user-count summary."""
-
     def advertised_attributes(self) -> dict[str, set[str]]:
         """Backend-global attributes the meta-scheduler routes against.
 
@@ -490,16 +485,11 @@ class TaskBackend(Protocol):
         that matches every job. Read once at startup (attributes are static)."""
         ...
 
-    def admits(self, user: str) -> bool:
-        """Whether this backend's allow policy permits ``user`` to route here."""
-        ...
-
-    def configure_routing(self, advertised: dict[str, set[str]], allowed_users: frozenset[str]) -> None:
+    def configure_routing(self, advertised: dict[str, set[str]]) -> None:
         """Set the routing metadata the meta-scheduler reads.
 
         Called once by the composer from the backend's config. ``advertised`` is
-        the (comma-expanded) attribute sets; ``allowed_users`` is the allow policy
-        (``"*"`` matches any user)."""
+        the (comma-expanded) attribute sets."""
         ...
 
     def status(self) -> controller_pb2.Controller.BackendStatus:

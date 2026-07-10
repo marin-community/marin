@@ -8,17 +8,12 @@ from dataclasses import dataclass
 from typing import Any
 
 import wandb
-from fray import current_client
+from fray.current_client import current_client
 from fray.types import Entrypoint, JobRequest, ResourceConfig, TpuConfig, create_environment
 from levanter.analysis.model_perplexity import add_prefixed_runtime_metric_scalars, compare_scored_outputs
 from levanter.analysis.perplexity_gap import write_report_files
-from levanter.data.text import (
-    DatasetComponent,
-    HfDatasetSourceConfig,
-    SupervisedLmDatasetFormat,
-    TextLmDatasetFormat,
-    UrlDatasetSourceConfig,
-)
+from levanter.data.text.datasets import DatasetComponent, HfDatasetSourceConfig, UrlDatasetSourceConfig
+from levanter.data.text.formats import SupervisedLmDatasetFormat, TextLmDatasetFormat
 from levanter.main.perplexity_gap import (
     GapFinderModelConfig as LevanterGapFinderModelConfig,
 )

@@ -24,8 +24,8 @@ import jmp
 from fray.cluster import ResourceConfig
 from levanter.callbacks.profiler import ProfilerConfig
 from levanter.checkpoint import CheckpointerConfig, latest_checkpoint_path
-from levanter.data.text import LmDataConfig
-from levanter.optim import OptimizerConfig
+from levanter.data.text.datasets import LmDataConfig
+from levanter.optim.config import OptimizerConfig
 from levanter.tracker import TrackerConfig
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig

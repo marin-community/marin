@@ -697,7 +697,6 @@ def test_dashboard_backends_tab_with_peer(smoke_cluster, smoke_page, smoke_scree
                 {
                     "peerId": "cw-smoke-peer",
                     "controllerAddress": "https://cw.example:8443",
-                    "dashboardUrl": "https://cw.example",
                     "reachable": True,
                     "lastContactMs": "1720000000000",
                     "activeFederatedJobs": 2,
@@ -708,8 +707,6 @@ def test_dashboard_backends_tab_with_peer(smoke_cluster, smoke_page, smoke_scree
                             "kind": "kubernetes",
                             "capabilities": ["gpu"],
                             "advertisedAttributes": {"accelerator": {"values": ["H100"]}},
-                            "restricted": False,
-                            "allowedUserCount": 0,
                             "scaleGroups": [],
                             "workerCount": 4,
                             "pendingTaskCount": 1,

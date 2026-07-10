@@ -19,7 +19,7 @@ Submit on iris (eu-west4)::
 
 import logging
 
-from fray import ResourceConfig
+from fray.types import ResourceConfig
 from marin.datakit.decon import DeconAttributes
 from marin.execution.artifact import read_artifact
 from marin.processing.classification.deduplication.fuzzy_dups import FuzzyDupsAttrData

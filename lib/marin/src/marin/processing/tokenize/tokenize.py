@@ -22,20 +22,19 @@ import time
 from collections.abc import Sequence
 
 from datasets import load_dataset_builder
-from fray import ResourceConfig
-from levanter.data.text import (
+from fray.types import ResourceConfig
+from levanter.data.text.datasets import (
     DatasetComponent,
     HfDatasetSourceConfig,
-    LmDatasetFormatBase,
     LmDatasetSourceConfigBase,
-    TextLmDatasetFormat,
     UrlDatasetSourceConfig,
 )
+from levanter.data.text.formats import LmDatasetFormatBase, TextLmDatasetFormat
 from levanter.store.cache import ShardedCacheLayout
 from levanter.tokenizers import TokenizerBackend
 from rigging.filesystem import StoragePath, prefix_join
-from zephyr import Dataset, ZephyrContext
-from zephyr.dataset import FileEntry
+from zephyr.dataset import Dataset, FileEntry
+from zephyr.execution import ZephyrContext
 from zephyr.readers import load_file
 
 from marin.execution.artifact import Artifact

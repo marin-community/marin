@@ -27,12 +27,13 @@ import logging
 import os
 
 import pyarrow as pa
-from fray import ResourceConfig
-from levanter.data.text import LmDatasetFormatBase, TextLmDatasetFormat
+from fray.types import ResourceConfig
+from levanter.data.text.formats import LmDatasetFormatBase, TextLmDatasetFormat
 from levanter.tokenizers import TokenizerBackend
 from pydantic import BaseModel
 from rigging.filesystem import StoragePath, prefix_join
-from zephyr import Dataset, ZephyrContext
+from zephyr.dataset import Dataset
+from zephyr.execution import ZephyrContext
 from zephyr.readers import load_file
 
 from marin.datakit.normalize import NormalizedData

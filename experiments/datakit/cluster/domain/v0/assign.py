@@ -26,11 +26,14 @@ from typing import Any
 
 import numpy as np
 import pyarrow as pa
-from fray import ResourceConfig
+from fray.types import ResourceConfig
 from marin.execution.artifact import write_artifact
 from pydantic import BaseModel
 from rigging.filesystem import StoragePath, open_url
-from zephyr import Dataset, InputFileSpec, ShardInfo, ZephyrContext, counters, load_file
+from zephyr import counters
+from zephyr.dataset import Dataset, ShardInfo
+from zephyr.execution import ZephyrContext
+from zephyr.readers import InputFileSpec, load_file
 from zephyr.runners import InlineRunner
 
 from experiments.datakit.embeddings.luxical.pipeline import EmbeddingAttrData, dequantize_to_fp32

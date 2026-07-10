@@ -18,12 +18,13 @@ from pathlib import Path
 
 import uvicorn
 from finelog.client import RemoteLogHandler
+from rigging.filesystem import prefix_join
 from rigging.server_auth import TokenVerifier
 from rigging.timing import Duration, ExponentialBackoff, RateLimiter, Timestamp, TokenBucket
 from sqlalchemy import Row
 
 from iris.cluster.bundle import BundleStore
-from iris.cluster.config import BackendConfig, ClusterFinelogConfig, PeerConfig
+from iris.cluster.config import BackendConfig, PeerConfig
 from iris.cluster.controller import ops, reads, writes
 from iris.cluster.controller.audit_logging import log_event
 from iris.cluster.controller.auth import ControllerAuth, FederationTokenProvider, request_auth_policy
@@ -51,7 +52,6 @@ from iris.cluster.controller.dashboard import ControllerDashboard
 from iris.cluster.controller.db import ControllerDB, Tx
 from iris.cluster.controller.endpoint_service import EndpointServiceImpl
 from iris.cluster.controller.federation_store import ControllerFederationStore
-from iris.cluster.controller.finelog_relay import build_log_forwarder
 from iris.cluster.controller.log_stack import LogStack
 from iris.cluster.controller.ops.task import (
     Assignment,
@@ -262,18 +262,12 @@ class ControllerConfig:
     cluster_id: str = ""
     """This cluster's real federation identity (from the cluster config ``name``).
 
-    Sent as the ``requester_id`` on each ``FederationSync`` and stamped on relayed
-    finelog batches so a shared hub namespaces this cluster's logs. Distinct from the
-    ``'local'`` sentinel the ``cluster`` column uses for this controller's own rows.
-    Required once this cluster hands jobs off; unused otherwise."""
+    Sent as the ``requester_id`` on each ``FederationSync``. Required once this cluster
+    hands jobs off; unused otherwise."""
 
     peers: dict[str, PeerConfig] = field(default_factory=dict)
     """Federation peers (peer id -> declaration). Empty leaves federation inert:
     no peer connections, no heartbeat, an empty ListPeers view."""
-
-    finelog: ClusterFinelogConfig = field(default_factory=ClusterFinelogConfig)
-    """This cluster's finelog config. An empty ``relay_address`` leaves the log plane
-    single-cluster: no relay, local reads. Set it to forward logs to a shared store."""
 
     federation_heartbeat_interval: Duration = field(default_factory=lambda: DEFAULT_HEARTBEAT_INTERVAL)
     """How often the federation capability heartbeat probes each peer."""
@@ -353,8 +347,7 @@ class Controller:
         # The meta-scheduler routes against what each backend advertises, not the
         # config. Attributes are immutable, so the routing index is built once.
         self._backend_routing = {
-            bid: BackendRouting(advertised=backend.advertised_attributes(), admits=backend.admits)
-            for bid, backend in self._backends.items()
+            bid: BackendRouting(advertised=backend.advertised_attributes()) for bid, backend in self._backends.items()
         }
         self._backend_index = build_backend_index(self._backend_routing)
         # Worker→backend ownership by scale group, used to wire each backend's
@@ -397,12 +390,14 @@ class Controller:
             if config.peers and config.auth and config.auth.jwt_manager
             else None
         )
+        self._bundle_store = BundleStore(storage_dir=prefix_join(config.remote_state_dir, "bundles"))
         self._federation = FederationManager(
             build_peers(config.peers, federation_token_provider=federation_token_provider),
             threads=self._threads,
             store=ControllerFederationStore(
                 self._db,
             ),
+            bundles=self._bundle_store,
             cluster_id=config.cluster_id,
             heartbeat_interval=config.federation_heartbeat_interval,
         )
@@ -418,23 +413,6 @@ class Controller:
         self._log_handler.setLevel(logging.DEBUG)
         self._log_handler.setFormatter(logging.Formatter("%(asctime)s %(name)s %(message)s"))
         logging.getLogger("iris").addHandler(self._log_handler)
-
-        # Finelog relay: when a relay target is configured, durably forwards this cluster's
-        # local finelog to the shared global store. The forwarding mechanism lives in
-        # finelog; this only supplies the local client, the cluster credential, and a state
-        # path. An empty relay_address leaves the log plane single-cluster — no forwarder
-        # thread, no egress, byte-identical behavior.
-        self._log_forwarder = (
-            build_log_forwarder(
-                config=config.finelog,
-                cluster_id=config.cluster_id,
-                source_client=self._log_client,
-                state_dir=self._db.db_dir,
-                jwt_manager=config.auth.jwt_manager if config.auth else None,
-            )
-            if config.finelog.relay_address
-            else None
-        )
 
         # Give each worker-daemon backend its own scale-group-scoped view of the DB
         # so it sources its own workers (the controller never partitions a worker
@@ -452,8 +430,6 @@ class Controller:
         # ``find_prunable`` relies on this to keep every ``workers`` row tracked.
         self._seed_backend_liveness()
         self._db.register_reopen_hook(self._seed_backend_liveness)
-
-        self._bundle_store = BundleStore(storage_dir=f"{config.remote_state_dir.rstrip('/')}/bundles")
 
         self._endpoint_service = EndpointServiceImpl(
             db=self._db,
@@ -678,10 +654,6 @@ class Controller:
         # Start the federation capability heartbeat (a no-op with no peers).
         self._federation.start()
 
-        # Start the global-finelog log forwarder (only when a relay target is configured).
-        if self._log_forwarder is not None:
-            self._log_forwarder.start()
-
         # Register atexit hook to capture final state for post-mortem analysis.
         # Unregistered in stop() so it doesn't fire against a closed DB.
         self._atexit_registered = True
@@ -721,11 +693,6 @@ class Controller:
             self._checkpoint_thread.stop()
             self._checkpoint_thread.join(timeout=join_timeout)
         self._federation.stop()
-
-        # Stop the forwarder (joins its thread, closes its egress client) before
-        # log_stack.close() below tears down the local client it reads from.
-        if self._log_forwarder is not None:
-            self._log_forwarder.stop()
 
         self._threads.stop()
         # Each backend owns its autoscaler; close() shuts it down (terminates VMs,
@@ -1073,7 +1040,6 @@ class Controller:
             if task.backend_id == "" and task.job_id not in unpinned:
                 unpinned[task.job_id] = RoutableJob(
                     job_id=task.job_id,
-                    user=task.job_id.user,
                     constraints=constraints_from_json(task.constraints_json),
                 )
         if not unpinned:

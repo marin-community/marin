@@ -4,9 +4,9 @@
 """Tests for vortex file format support."""
 
 import pytest
-from fray import ResourceConfig
 from fray.local_backend import LocalClient
-from zephyr import Dataset
+from fray.types import ResourceConfig
+from zephyr.dataset import Dataset
 from zephyr.execution import ZephyrContext
 from zephyr.expr import col
 from zephyr.readers import InputFileSpec, load_parquet, load_vortex

@@ -19,7 +19,8 @@ import levanter.main.train_lm as train_lm
 import tiny_test_corpus
 from levanter.adaptor import LoraAdaptorConfig
 from levanter.data.dataset import ListAsyncDataset
-from levanter.data.text import DirectDatasetComponent, GrugLmExample, LmDataConfig
+from levanter.data.text.datasets import DirectDatasetComponent, LmDataConfig
+from levanter.data.text.examples import GrugLmExample
 from levanter.distributed import DistributedConfig
 from levanter.tracker.json_file import JsonFileTrackerConfig
 from levanter.trainer_state import trainables_only

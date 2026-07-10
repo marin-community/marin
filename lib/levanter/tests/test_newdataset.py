@@ -4,7 +4,7 @@
 import jax.random
 import pytest
 
-from levanter.data import BlockShufflingDataset, PermutationDataset
+from levanter.data.dataset import BlockShufflingDataset, PermutationDataset
 from levanter.data.dataset import ListAsyncDataset
 
 

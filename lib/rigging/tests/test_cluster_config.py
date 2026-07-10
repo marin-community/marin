@@ -5,8 +5,8 @@
 field-default parsing, and prefix resolution."""
 
 import pytest
-import rigging.filesystem as fs
-from rigging.filesystem import (
+import rigging.filesystem.cluster_config as fs
+from rigging.filesystem.cluster_config import (
     BucketSpec,
     DataConfig,
     StoreType,

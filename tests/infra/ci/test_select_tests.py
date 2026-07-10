@@ -7,7 +7,9 @@ import textwrap
 from pathlib import Path
 
 from infra.ci.select_tests import (
+    MIN_FILES_PER_SHARD,
     SCOPES,
+    SHARD_COUNT,
     UV_PACKAGE,
     classify,
     compute_matrix,
@@ -16,6 +18,8 @@ from infra.ci.select_tests import (
     full_matrix,
     is_test_module,
     matrix_leg,
+    scope_legs,
+    shard_files,
 )
 
 
@@ -23,7 +27,7 @@ def select_matrix(changed_files: list[str], repo_root: Path) -> list[dict[str, s
     """Mirror the diff-driven branch of select_tests.main without git."""
     classification = classify(changed_files, repo_root)
     if classification.broad:
-        return full_matrix()
+        return full_matrix(repo_root)
     return compute_matrix(
         classification.src_modules,
         classification.direct_tests,
@@ -237,10 +241,91 @@ def test_is_test_module_matches_pytest_defaults() -> None:
     assert not is_test_module("test_data.json")
 
 
+def test_shard_files_splits_into_balanced_contiguous_chunks() -> None:
+    assert shard_files(list(range(10)), 4) == [[0, 1, 2], [3, 4, 5], [6, 7], [8, 9]]
+    assert shard_files(list(range(4)), 4) == [[0], [1], [2], [3]]
+    # No file is dropped or duplicated, and order is preserved.
+    files = [f"t{i}" for i in range(23)]
+    chunks = shard_files(files, 4)
+    assert [f for chunk in chunks for f in chunk] == files
+
+
+def _levanter_suite(repo_root: Path, count: int) -> list[str]:
+    write(repo_root, "lib/levanter/src/levanter/__init__.py", '"""levanter."""\n')
+    write(repo_root, "lib/levanter/src/levanter/core.py", "X = 1\n")
+    files = []
+    for i in range(count):
+        path = f"lib/levanter/tests/test_mod_{i:03d}.py"
+        write(repo_root, path, "from levanter.core import X\n")
+        files.append(path)
+    return sorted(files)
+
+
+def test_scope_legs_shards_a_large_levanter_selection(tmp_path: Path) -> None:
+    files = _levanter_suite(tmp_path, 60)
+
+    legs = scope_legs("levanter", files, tmp_path)
+
+    assert len(legs) == SHARD_COUNT["levanter"]
+    assert [leg["label"] for leg in legs] == ["levanter 1/4", "levanter 2/4", "levanter 3/4", "levanter 4/4"]
+    # Every selected file runs exactly once across the shards.
+    covered = [path for leg in legs for path in leg["test_paths"].split()]
+    assert sorted(covered) == files
+    assert len(covered) == len(set(covered))
+
+
+def test_scope_legs_keeps_a_small_selection_in_one_leg(tmp_path: Path) -> None:
+    files = _levanter_suite(tmp_path, MIN_FILES_PER_SHARD)
+
+    legs = scope_legs("levanter", files, tmp_path)
+
+    assert len(legs) == 1
+    assert legs[0]["label"] == "levanter"
+
+
+def test_scope_legs_never_shards_below_the_minimum(tmp_path: Path) -> None:
+    """A medium selection stays one leg rather than splitting into sub-minimum runners."""
+    # Just over the threshold and just under two full shards both stay a single leg...
+    for count in (MIN_FILES_PER_SHARD + 1, 2 * MIN_FILES_PER_SHARD - 1):
+        legs = scope_legs("levanter", _levanter_suite(tmp_path, count), tmp_path)
+        assert [leg["label"] for leg in legs] == ["levanter"], count
+
+    # ...and two full shards' worth is the first size that fans out, each at/above the minimum.
+    legs = scope_legs("levanter", _levanter_suite(tmp_path, 2 * MIN_FILES_PER_SHARD), tmp_path)
+    assert len(legs) == 2
+    assert all(len(leg["test_paths"].split()) >= MIN_FILES_PER_SHARD for leg in legs)
+
+
+def test_scope_legs_shards_the_full_levanter_suite(tmp_path: Path) -> None:
+    """A full-suite (tests=None) sharded scope expands its directory to the file list."""
+    files = _levanter_suite(tmp_path, 60)
+
+    legs = scope_legs("levanter", None, tmp_path)
+
+    assert len(legs) == SHARD_COUNT["levanter"]
+    covered = sorted(path for leg in legs for path in leg["test_paths"].split())
+    assert covered == files
+
+
+def test_scope_legs_does_not_shard_other_scopes(tmp_path: Path) -> None:
+    write(tmp_path, "lib/iris/src/iris/__init__.py", '"""iris."""\n')
+    write(tmp_path, "lib/iris/src/iris/core.py", "X = 1\n")
+    files = [f"lib/iris/tests/test_{i:03d}.py" for i in range(60)]
+    for path in files:
+        write(tmp_path, path, "from iris.core import X\n")
+
+    legs = scope_legs("iris", sorted(files), tmp_path)
+
+    assert len(legs) == 1
+    assert legs[0]["label"] == "iris"
+    assert legs[0]["test_paths"].split() == sorted(files)
+
+
 def test_broad_trigger_runs_every_scope() -> None:
     assert matrix_leg("marin", []) == {
+        "label": "marin",
         "package": "marin-core",
         "extras": "--extra cpu --extra dedup",
         "test_paths": "tests",
     }
-    assert select_matrix(["uv.lock"], Path("/unused")) == full_matrix()
+    assert select_matrix(["uv.lock"], Path("/unused")) == full_matrix(Path("/unused"))

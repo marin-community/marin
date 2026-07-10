@@ -40,11 +40,10 @@ import time
 from collections.abc import Iterator
 
 import click
-from fray import ResourceConfig
+from fray.types import ResourceConfig
 from rigging.filesystem import StoragePath
 from rigging.log_setup import configure_logging
-from zephyr import Dataset
-from zephyr.dataset import ShardInfo
+from zephyr.dataset import Dataset, ShardInfo
 from zephyr.execution import ZephyrContext
 from zephyr.shard_keys import deterministic_hash
 

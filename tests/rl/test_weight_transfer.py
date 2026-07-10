@@ -10,7 +10,8 @@ import haliax as hax
 import jax
 import numpy as np
 import pytest
-from fray import LocalClient, current_client, set_current_client
+from fray.current_client import current_client, set_current_client
+from fray.local_backend import LocalClient
 from jax.sharding import Mesh
 from marin.rl.weight_transfer import (
     WeightTransferConfig,

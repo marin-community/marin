@@ -24,9 +24,9 @@ import tempfile
 import uuid
 from pathlib import Path
 
-from fray import ResourceConfig, set_current_client
+from fray.current_client import set_current_client
 from fray.iris_backend import FrayIrisClient
-from fray.types import Entrypoint, JobRequest, create_environment
+from fray.types import Entrypoint, JobRequest, ResourceConfig, create_environment
 from levanter.main.train_lm import TrainLmConfig
 from levanter.models.gpt2 import Gpt2Config
 from levanter.trainer import TrainerConfig

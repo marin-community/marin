@@ -8,8 +8,10 @@ multi-turn conversation between a user and an AI assistant solving Linux
 CLI tasks, with thinking traces.
 """
 
-from fray import ResourceConfig
-from zephyr import Dataset, ZephyrContext, counters
+from fray.types import ResourceConfig
+from zephyr import counters
+from zephyr.dataset import Dataset
+from zephyr.execution import ZephyrContext
 
 from marin.datakit.download.huggingface import download_hf_step
 from marin.datakit.download.rollout_transforms import load_parquet_batched, render_role_message, text_document

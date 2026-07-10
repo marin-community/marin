@@ -52,6 +52,7 @@ jobs:
   unit:
     needs: select
     if: ${{ needs.select.outputs.matrix != '[]' }}
+    name: unit (${{ matrix.label }})
     strategy:
       fail-fast: false
       matrix:
