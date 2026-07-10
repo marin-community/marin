@@ -83,6 +83,7 @@ Options:
   --conservative-loop-clustering BOOL
                             JAXPP_CONSERVATIVE_LOOP_CLUSTERING (default: true).
   --xla-memory-fraction N   XLA_PYTHON_CLIENT_MEM_FRACTION (default: 0.70).
+  --remat NAME              recompute_all or save_moe (default: save_moe).
   --steps N                 MAY_STEPS (default: 20).
   --tracker NAME            MAY_TRACKER: wandb or json_logger (default: wandb).
   --data NAME               MAY_DATA: synthetic (default: synthetic).
@@ -118,6 +119,7 @@ while [ "$#" -gt 0 ]; do
         --ce-autotune-on-miss) CE_AUTOTUNE_ON_MISS="$2"; shift 2 ;;
         --conservative-loop-clustering) JAXPP_CONSERVATIVE_LOOP_CLUSTERING="$2"; shift 2 ;;
         --xla-memory-fraction) XLA_MEMORY_FRACTION="$2"; shift 2 ;;
+        --remat) REMAT="$2"; shift 2 ;;
         --steps) STEPS="$2"; shift 2 ;;
         --tracker) TRACKER="$2"; shift 2 ;;
         --data) DATA="$2"; shift 2 ;;
@@ -147,6 +149,14 @@ case "$IMPLEMENTATION" in
     auto|explicit_mpmd) ;;
     *)
         echo "ERROR: unsupported implementation: $IMPLEMENTATION" >&2
+        exit 1
+        ;;
+esac
+
+case "$REMAT" in
+    recompute_all|save_moe) ;;
+    *)
+        echo "ERROR: unsupported remat mode: $REMAT" >&2
         exit 1
         ;;
 esac
@@ -238,6 +248,7 @@ for maybe_env in \
     WANDB_API_KEY WANDB_ENTITY WANDB_PROJECT MAY_WANDB_GROUP \
     IRIS_DEBUG_UV_SYNC GRUG_JAXPP_LOWER_EXPLICIT \
     GRUG_JAXPP_AUTO_EXPLICIT_IN_SHARDINGS GRUG_JAXPP_PATCH_CONST_SHARDINGS \
+    NCCL_DEBUG NCCL_DEBUG_SUBSYS NCCL_IB_HCA \
     TF_GPU_ALLOCATOR XLA_PYTHON_CLIENT_PREALLOCATE; do
     if [ -n "${!maybe_env:-}" ]; then
         ENV_ARGS+=(-e "$maybe_env" "${!maybe_env}")
@@ -272,6 +283,7 @@ loss_implementation: ${LOSS_IMPLEMENTATION:-default}
 ce_autotune_on_miss: $CE_AUTOTUNE_ON_MISS
 conservative_loop_clustering: $JAXPP_CONSERVATIVE_LOOP_CLUSTERING
 xla_memory_fraction: $XLA_MEMORY_FRACTION
+remat: $REMAT
 steps: $STEPS
 tracker: $TRACKER
 data: $DATA

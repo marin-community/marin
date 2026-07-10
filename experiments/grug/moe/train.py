@@ -4,6 +4,7 @@
 import dataclasses
 import functools
 import logging
+import math
 import os
 import time
 from dataclasses import dataclass, field
@@ -92,19 +93,25 @@ class GrugJaxPPConfig:
             raise ValueError(f"stages must be positive, got {self.stages}")
         if self.microbatches <= 0:
             raise ValueError(f"microbatches must be positive, got {self.microbatches}")
+        if self.mpmd_dim is not None and self.mpmd_dim <= 0:
+            raise ValueError(f"mpmd_dim must be positive when set, got {self.mpmd_dim}")
         if self.implementation == "explicit_mpmd":
             if self.stages < 2:
                 raise ValueError("explicit_mpmd requires at least 2 pipeline stages")
-            explicit_microbatch_schedules = ("gpipe", "std_1f1b")
+            explicit_microbatch_schedules = ("gpipe", "std_1f1b", "interleaved_gpipe")
             if self.microbatches != 1 and self.schedule not in explicit_microbatch_schedules:
                 raise ValueError(
                     "explicit_mpmd currently supports microbatches > 1 only for "
                     f"schedule in {explicit_microbatch_schedules}"
                 )
-            if self.mpmd_dim is not None and self.mpmd_dim != self.stages:
+            mpmd_dim = _pipeline_mpmd_dim(self)
+            if self.schedule == "interleaved_gpipe" and self.stages % mpmd_dim != 0:
+                raise ValueError(
+                    "explicit interleaved_gpipe requires stages to be divisible by mpmd_dim; "
+                    f"got stages={self.stages}, mpmd_dim={mpmd_dim}"
+                )
+            if self.schedule != "interleaved_gpipe" and mpmd_dim != self.stages:
                 raise ValueError("explicit_mpmd requires PP_MPMD_DIM to match PP_STAGES")
-        if self.mpmd_dim is not None and self.mpmd_dim <= 0:
-            raise ValueError(f"mpmd_dim must be positive when set, got {self.mpmd_dim}")
         if self.schedule in ("zero_bubble", "dualpipe_v") and self.microbatches < self.stages:
             raise ValueError(
                 f"{self.schedule} requires microbatches >= stages; got "
@@ -325,6 +332,61 @@ def jaxpp_setup_scripts(*, revision: str = "7091a9b5ce02cd1a6bdc905f6a36e89370a5
 
 def _pipeline_mpmd_dim(pipeline: GrugJaxPPConfig) -> int:
     return pipeline.mpmd_dim or pipeline.stages
+
+
+def _pipeline_stage_mpmd_indices(pipeline: GrugJaxPPConfig) -> tuple[int, ...]:
+    schedule = _pipeline_schedule(pipeline)
+    return tuple(int(schedule.get_mpmd_idx(stage_index)) for stage_index in range(pipeline.stages))
+
+
+def _interleaved_gpipe_task_order(pipeline: GrugJaxPPConfig) -> tuple[tuple[str, int, int], ...]:
+    schedule = _pipeline_schedule(pipeline)
+    rank_tasks = schedule.tasks(pipeline.microbatches)
+    queue_heads = [0] * len(rank_tasks)
+    completed_forwards: set[tuple[int, int]] = set()
+    completed_backwards: set[tuple[int, int]] = set()
+    task_order = []
+
+    def task_ready(direction: str, stage_index: int, microbatch_index: int) -> bool:
+        key = (stage_index, microbatch_index)
+        if direction == "fwd":
+            return stage_index == 0 or (stage_index - 1, microbatch_index) in completed_forwards
+        if key not in completed_forwards:
+            return False
+        return stage_index == pipeline.stages - 1 or (stage_index + 1, microbatch_index) in completed_backwards
+
+    while any(head < len(tasks) for head, tasks in zip(queue_heads, rank_tasks, strict=True)):
+        made_progress = False
+        for mpmd_index, tasks in enumerate(rank_tasks):
+            head = queue_heads[mpmd_index]
+            if head == len(tasks):
+                continue
+            task = tasks[head]
+            if task is None or not hasattr(task, "stage_id"):
+                raise ValueError("explicit interleaved_gpipe requires unfused forward/backward schedule tasks")
+            direction = task.fwd_or_bwd.name.lower()
+            if direction not in ("fwd", "bwd"):
+                raise ValueError(f"explicit interleaved_gpipe does not support task type {task.fwd_or_bwd}")
+            stage_index = int(task.stage_id)
+            microbatch_index = int(task.mubatch_idx)
+            if int(schedule.get_mpmd_idx(stage_index)) != mpmd_index:
+                raise ValueError(f"schedule placed logical stage {stage_index} on unexpected MPMD rank {mpmd_index}")
+            if not task_ready(direction, stage_index, microbatch_index):
+                continue
+
+            task_order.append((direction, stage_index, microbatch_index))
+            queue_heads[mpmd_index] += 1
+            if direction == "fwd":
+                completed_forwards.add((stage_index, microbatch_index))
+            else:
+                completed_backwards.add((stage_index, microbatch_index))
+            made_progress = True
+
+        if not made_progress:
+            blocked = [tasks[head] for head, tasks in zip(queue_heads, rank_tasks, strict=True) if head < len(tasks)]
+            raise ValueError(f"interleaved_gpipe schedule has no dependency-ready queue head: {blocked}")
+
+    return tuple(task_order)
 
 
 def _reshape_batch_for_pipeline(batch: GrugLmExample, microbatches: int) -> GrugLmExample:
@@ -598,40 +660,48 @@ def _tree_mpmd_shardings_on_stage(mpmd_mesh, stage_index: int, tree):
     return jax.tree.map(leaf_sharding, tree)
 
 
-def _pipeline_state_shardings(mpmd_mesh, state: GrugPipelineTrainState) -> GrugPipelineTrainState:
+def _pipeline_state_shardings(
+    mpmd_mesh,
+    state: GrugPipelineTrainState,
+    stage_mpmd_indices: tuple[int, ...],
+) -> GrugPipelineTrainState:
     return dataclasses.replace(
         state,
         step=_require_jaxpp().MpmdSharding(mpmd_mesh, mesh_ids={0}, spec=P()),
         params=tuple(
-            _tree_mpmd_shardings_on_stage(mpmd_mesh, stage_index, params)
-            for stage_index, params in enumerate(state.params)
+            _tree_mpmd_shardings_on_stage(mpmd_mesh, mpmd_index, params)
+            for mpmd_index, params in zip(stage_mpmd_indices, state.params, strict=True)
         ),
         opt_state=tuple(
-            _tree_mpmd_shardings_on_stage(mpmd_mesh, stage_index, opt_state)
-            for stage_index, opt_state in enumerate(state.opt_state)
+            _tree_mpmd_shardings_on_stage(mpmd_mesh, mpmd_index, opt_state)
+            for mpmd_index, opt_state in zip(stage_mpmd_indices, state.opt_state, strict=True)
         ),
         pending_qb_betas=tuple(
-            _tree_mpmd_shardings_on_stage(mpmd_mesh, stage_index, qb_betas)
-            for stage_index, qb_betas in enumerate(state.pending_qb_betas)
+            _tree_mpmd_shardings_on_stage(mpmd_mesh, mpmd_index, qb_betas)
+            for mpmd_index, qb_betas in zip(stage_mpmd_indices, state.pending_qb_betas, strict=True)
         ),
     )
 
 
-def _pipeline_state_named_shardings(mpmd_mesh, state: GrugPipelineTrainState) -> GrugPipelineTrainState:
+def _pipeline_state_named_shardings(
+    mpmd_mesh,
+    state: GrugPipelineTrainState,
+    stage_mpmd_indices: tuple[int, ...],
+) -> GrugPipelineTrainState:
     return dataclasses.replace(
         state,
         step=NamedSharding(mpmd_mesh.unstack[0], P()),
         params=tuple(
-            _tree_named_shardings_on_stage(mpmd_mesh, stage_index, params)
-            for stage_index, params in enumerate(state.params)
+            _tree_named_shardings_on_stage(mpmd_mesh, mpmd_index, params)
+            for mpmd_index, params in zip(stage_mpmd_indices, state.params, strict=True)
         ),
         opt_state=tuple(
-            _tree_named_shardings_on_stage(mpmd_mesh, stage_index, opt_state)
-            for stage_index, opt_state in enumerate(state.opt_state)
+            _tree_named_shardings_on_stage(mpmd_mesh, mpmd_index, opt_state)
+            for mpmd_index, opt_state in zip(stage_mpmd_indices, state.opt_state, strict=True)
         ),
         pending_qb_betas=tuple(
-            _tree_named_shardings_on_stage(mpmd_mesh, stage_index, qb_betas)
-            for stage_index, qb_betas in enumerate(state.pending_qb_betas)
+            _tree_named_shardings_on_stage(mpmd_mesh, mpmd_index, qb_betas)
+            for mpmd_index, qb_betas in zip(stage_mpmd_indices, state.pending_qb_betas, strict=True)
         ),
     )
 
@@ -652,7 +722,12 @@ def _split_state_for_explicit_mpmd(
     stage_state = _split_state_for_pipeline(state, pipeline=pipeline, optimizer=optimizer)
     if stage_state.ema_params is not None:
         raise ValueError("explicit_mpmd does not yet support EMA")
-    return _reshard_to_mpmd(mpmd_mesh, stage_state, _pipeline_state_shardings(mpmd_mesh, stage_state))
+    stage_mpmd_indices = _pipeline_stage_mpmd_indices(pipeline)
+    return _reshard_to_mpmd(
+        mpmd_mesh,
+        stage_state,
+        _pipeline_state_shardings(mpmd_mesh, stage_state, stage_mpmd_indices),
+    )
 
 
 def _put_batch_on_stage(mpmd_mesh, stage_index: int, batch: GrugLmExample) -> GrugLmExample:
@@ -717,7 +792,7 @@ class _LocalLoweredExplicitMpmdStep:
         self,
         state: GrugPipelineTrainState,
         batches: tuple[GrugLmExample, ...],
-    ) -> tuple[GrugPipelineTrainState, dict[str, jax.Array], None]:
+    ) -> tuple[GrugPipelineTrainState, dict[str, Any], None]:
         flat_args, args_tree = jax.tree_util.tree_flatten((state, batches))
         in_tree = jax.tree_util.tree_structure(self.lowered.in_shardings)
         if args_tree != in_tree:
@@ -788,6 +863,9 @@ def _make_explicit_mpmd_train_step(
     num_stages = len(sample_state.params)
     if num_stages < 2:
         raise ValueError("explicit MPMD requires at least 2 pipeline stages")
+    stage_mpmd_indices = _pipeline_stage_mpmd_indices(pipeline)
+    if len(stage_mpmd_indices) != num_stages:
+        raise ValueError(f"expected {num_stages} schedule stage placements, got {len(stage_mpmd_indices)}")
     if pipeline.microbatches == 1:
         if len(sample_batches) != num_stages:
             raise ValueError(f"expected {num_stages} stage-local batches, got {len(sample_batches)}")
@@ -800,33 +878,33 @@ def _make_explicit_mpmd_train_step(
                     f"expected {num_stages} stage-local batches for microbatch {microbatch_index}, "
                     f"got {len(microbatch_batches)}"
                 )
-    explicit_microbatch_schedules = ("gpipe", "std_1f1b")
+    explicit_microbatch_schedules = ("gpipe", "std_1f1b", "interleaved_gpipe")
     if pipeline.microbatches != 1 and pipeline.schedule not in explicit_microbatch_schedules:
         raise ValueError(f"explicit MPMD microbatching supports only schedule in {explicit_microbatch_schedules}")
     activation_pspec = P(_BATCH_AXES, None, None)
     qb_pspec = P(None, None)
 
     activation_shardings = tuple(
-        NamedSharding(mpmd_mesh.unstack[stage_index], activation_pspec) for stage_index in range(num_stages)
+        NamedSharding(mpmd_mesh.unstack[mpmd_index], activation_pspec) for mpmd_index in stage_mpmd_indices
     )
-    qb_shardings = tuple(NamedSharding(mpmd_mesh.unstack[stage_index], qb_pspec) for stage_index in range(num_stages))
+    qb_shardings = tuple(NamedSharding(mpmd_mesh.unstack[mpmd_index], qb_pspec) for mpmd_index in stage_mpmd_indices)
     stage0_loss_sharding = NamedSharding(mpmd_mesh.unstack[0], P())
-    last_loss_sharding = NamedSharding(mpmd_mesh.unstack[num_stages - 1], P())
+    last_loss_sharding = NamedSharding(mpmd_mesh.unstack[stage_mpmd_indices[-1]], P())
     stage0_step_sharding = NamedSharding(mpmd_mesh.unstack[0], P())
 
     param_shardings = tuple(
-        _tree_named_shardings_on_stage(mpmd_mesh, stage_index, params)
-        for stage_index, params in enumerate(sample_state.params)
+        _tree_named_shardings_on_stage(mpmd_mesh, mpmd_index, params)
+        for mpmd_index, params in zip(stage_mpmd_indices, sample_state.params, strict=True)
     )
     opt_state_shardings = tuple(
-        _tree_named_shardings_on_stage(mpmd_mesh, stage_index, opt_state)
-        for stage_index, opt_state in enumerate(sample_state.opt_state)
+        _tree_named_shardings_on_stage(mpmd_mesh, mpmd_index, opt_state)
+        for mpmd_index, opt_state in zip(stage_mpmd_indices, sample_state.opt_state, strict=True)
     )
 
     def stage_batch_shardings(stage_batches):
         return tuple(
-            _tree_named_shardings_on_stage(mpmd_mesh, stage_index, sample_batch)
-            for stage_index, sample_batch in enumerate(stage_batches)
+            _tree_named_shardings_on_stage(mpmd_mesh, mpmd_index, sample_batch)
+            for mpmd_index, sample_batch in zip(stage_mpmd_indices, stage_batches, strict=True)
         )
 
     if pipeline.microbatches == 1:
@@ -834,7 +912,10 @@ def _make_explicit_mpmd_train_step(
     else:
         batch_in_shardings = tuple(stage_batch_shardings(microbatch_batches) for microbatch_batches in sample_batches)
 
-    in_shardings = (_pipeline_state_named_shardings(mpmd_mesh, sample_state), batch_in_shardings)
+    in_shardings = (
+        _pipeline_state_named_shardings(mpmd_mesh, sample_state, stage_mpmd_indices),
+        batch_in_shardings,
+    )
 
     def apply_stage_updates(params, updates):
         def apply_one(param, update):
@@ -875,6 +956,26 @@ def _make_explicit_mpmd_train_step(
 
         return jax.grad(activation_projection, argnums=(0, 1))(params, hidden)
 
+    def last_stage_loss(
+        params: TransformerPipelineStage,
+        qb_betas: jax.Array,
+        hidden,
+        batch: GrugLmExample,
+    ):
+        compute_params = mp.cast_to_compute(_apply_stage_qb_betas(params, qb_betas))
+        hidden, router_metrics = compute_params.block_range(hidden, mask=batch.attn_mask)
+        hidden = compute_params.finalize_hidden(hidden)
+        loss, metrics = compute_params.hidden_next_token_loss(
+            hidden,
+            batch.tokens,
+            batch.loss_weight,
+            router_metrics,
+            reduction="mean",
+            logsumexp_weight=z_loss,
+            return_router_metrics=True,
+        )
+        return loss, metrics["qb_beta_per_layer"]
+
     def last_stage_loss_and_grads(
         params: TransformerPipelineStage,
         qb_betas: jax.Array,
@@ -882,24 +983,24 @@ def _make_explicit_mpmd_train_step(
         batch: GrugLmExample,
     ):
         def loss_fn(stage_params, stage_hidden):
-            compute_params = mp.cast_to_compute(_apply_stage_qb_betas(stage_params, qb_betas))
-            stage_hidden, router_metrics = compute_params.block_range(stage_hidden, mask=batch.attn_mask)
-            stage_hidden = compute_params.finalize_hidden(stage_hidden)
-            loss, metrics = compute_params.hidden_next_token_loss(
-                stage_hidden,
-                batch.tokens,
-                batch.loss_weight,
-                router_metrics,
-                reduction="mean",
-                logsumexp_weight=z_loss,
-                return_router_metrics=True,
-            )
-            return loss, metrics["qb_beta_per_layer"]
+            return last_stage_loss(stage_params, qb_betas, stage_hidden, batch)
 
         (loss, qb_betas_next), (grads, d_hidden) = jax.value_and_grad(loss_fn, argnums=(0, 1), has_aux=True)(
             params, hidden
         )
         return loss, qb_betas_next, grads, d_hidden
+
+    def last_stage_backward(
+        params: TransformerPipelineStage,
+        qb_betas: jax.Array,
+        hidden,
+        batch: GrugLmExample,
+    ):
+        def loss_fn(stage_params, stage_hidden):
+            loss, _ = last_stage_loss(stage_params, qb_betas, stage_hidden, batch)
+            return loss
+
+        return jax.grad(loss_fn, argnums=(0, 1))(params, hidden)
 
     def update_stage(params: TransformerPipelineStage, opt_state: optax.OptState, grads):
         updates, opt_state = optimizer.update(grads, opt_state, params)
@@ -923,11 +1024,26 @@ def _make_explicit_mpmd_train_step(
             return value
         return mpmd.task(add_trees, name=name, out_shardings=out_shardings)(accumulated, value)
 
+    def transfer_between_stages(value, source_stage_index: int, target_stage_index: int, out_shardings):
+        if stage_mpmd_indices[source_stage_index] == stage_mpmd_indices[target_stage_index]:
+            return value
+        return mpmd.transfer(value, out_shardings=out_shardings).done()
+
+    def send_between_stages(value, source_stage_index: int, target_stage_index: int, out_shardings):
+        if stage_mpmd_indices[source_stage_index] == stage_mpmd_indices[target_stage_index]:
+            return value
+        return mpmd.transfer(value, out_shardings=out_shardings)
+
+    def receive_between_stages(value_or_future, source_stage_index: int, target_stage_index: int):
+        if stage_mpmd_indices[source_stage_index] == stage_mpmd_indices[target_stage_index]:
+            return value_or_future
+        return value_or_future.done()
+
     @mpmd.mpmd(mpmd_mesh, in_shardings=in_shardings, infer_donation=True)
     def explicit_pipeline_step(
         state: GrugPipelineTrainState,
         batches: tuple[GrugLmExample, ...],
-    ) -> tuple[GrugPipelineTrainState, dict[str, jax.Array], None]:
+    ) -> tuple[GrugPipelineTrainState, dict[str, Any], None]:
         params = list(state.params)
         opt_state = list(state.opt_state)
         qb_betas = state.pending_qb_betas
@@ -942,7 +1058,12 @@ def _make_explicit_mpmd_train_step(
 
         stage_inputs = [hidden]
         for stage_index in range(1, num_stages - 1):
-            hidden = mpmd.transfer(hidden, out_shardings=activation_shardings[stage_index]).done()
+            hidden = transfer_between_stages(
+                hidden,
+                stage_index - 1,
+                stage_index,
+                activation_shardings[stage_index],
+            )
             stage_inputs.append(hidden)
             hidden, qb_betas_next[stage_index] = mpmd.task(
                 stage_forward,
@@ -950,7 +1071,12 @@ def _make_explicit_mpmd_train_step(
                 out_shardings=(activation_shardings[stage_index], qb_shardings[stage_index]),
             )(params[stage_index], qb_betas[stage_index], hidden, batches[stage_index])
 
-        hidden = mpmd.transfer(hidden, out_shardings=activation_shardings[num_stages - 1]).done()
+        hidden = transfer_between_stages(
+            hidden,
+            num_stages - 2,
+            num_stages - 1,
+            activation_shardings[num_stages - 1],
+        )
         stage_inputs.append(hidden)
         loss, qb_betas_next[num_stages - 1], grads[num_stages - 1], d_hidden = mpmd.task(
             last_stage_loss_and_grads,
@@ -964,14 +1090,19 @@ def _make_explicit_mpmd_train_step(
         )(params[num_stages - 1], qb_betas[num_stages - 1], hidden, batches[num_stages - 1])
 
         for stage_index in range(num_stages - 2, 0, -1):
-            d_hidden = mpmd.transfer(d_hidden, out_shardings=activation_shardings[stage_index]).done()
+            d_hidden = transfer_between_stages(
+                d_hidden,
+                stage_index + 1,
+                stage_index,
+                activation_shardings[stage_index],
+            )
             grads[stage_index], d_hidden = mpmd.task(
                 stage_backward,
                 name=f"grug_stage{stage_index}_backward",
                 out_shardings=(param_shardings[stage_index], activation_shardings[stage_index]),
             )(params[stage_index], qb_betas[stage_index], stage_inputs[stage_index], batches[stage_index], d_hidden)
 
-        d_hidden = mpmd.transfer(d_hidden, out_shardings=activation_shardings[0]).done()
+        d_hidden = transfer_between_stages(d_hidden, 1, 0, activation_shardings[0])
         grads[0] = mpmd.task(
             stage0_backward,
             name="grug_stage0_backward",
@@ -989,7 +1120,7 @@ def _make_explicit_mpmd_train_step(
             name="grug_keep_step",
             out_shardings=stage0_step_sharding,
         )(state.step)
-        loss_for_metrics = mpmd.transfer(loss, out_shardings=stage0_loss_sharding).done()
+        loss_for_metrics = transfer_between_stages(loss, num_stages - 1, 0, stage0_loss_sharding)
 
         next_state = dataclasses.replace(
             state,
@@ -1005,7 +1136,7 @@ def _make_explicit_mpmd_train_step(
     def explicit_gpipe_step(
         state: GrugPipelineTrainState,
         batches_by_microbatch,
-    ) -> tuple[GrugPipelineTrainState, dict[str, jax.Array], None]:
+    ) -> tuple[GrugPipelineTrainState, dict[str, Any], None]:
         params = list(state.params)
         opt_state = list(state.opt_state)
         qb_betas = state.pending_qb_betas
@@ -1030,7 +1161,12 @@ def _make_explicit_mpmd_train_step(
 
             stage_inputs = [hidden]
             for stage_index in range(1, num_stages - 1):
-                hidden = mpmd.transfer(hidden, out_shardings=activation_shardings[stage_index]).done()
+                hidden = transfer_between_stages(
+                    hidden,
+                    stage_index - 1,
+                    stage_index,
+                    activation_shardings[stage_index],
+                )
                 stage_inputs.append(hidden)
                 hidden, stage_qb_betas = mpmd.task(
                     stage_forward,
@@ -1044,7 +1180,12 @@ def _make_explicit_mpmd_train_step(
                     out_shardings=qb_shardings[stage_index],
                 )
 
-            hidden = mpmd.transfer(hidden, out_shardings=activation_shardings[num_stages - 1]).done()
+            hidden = transfer_between_stages(
+                hidden,
+                num_stages - 2,
+                num_stages - 1,
+                activation_shardings[num_stages - 1],
+            )
             stage_inputs.append(hidden)
             stage_inputs_by_microbatch.append(tuple(stage_inputs))
 
@@ -1086,7 +1227,12 @@ def _make_explicit_mpmd_train_step(
             )
 
             for stage_index in range(num_stages - 2, 0, -1):
-                d_hidden = mpmd.transfer(d_hidden, out_shardings=activation_shardings[stage_index]).done()
+                d_hidden = transfer_between_stages(
+                    d_hidden,
+                    stage_index + 1,
+                    stage_index,
+                    activation_shardings[stage_index],
+                )
                 stage_grads, d_hidden = mpmd.task(
                     stage_backward,
                     name=f"grug_gpipe_mb{microbatch_index}_stage{stage_index}_backward",
@@ -1105,7 +1251,7 @@ def _make_explicit_mpmd_train_step(
                     out_shardings=param_shardings[stage_index],
                 )
 
-            d_hidden = mpmd.transfer(d_hidden, out_shardings=activation_shardings[0]).done()
+            d_hidden = transfer_between_stages(d_hidden, 1, 0, activation_shardings[0])
             stage_grads = mpmd.task(
                 stage0_backward,
                 name=f"grug_gpipe_mb{microbatch_index}_stage0_backward",
@@ -1149,7 +1295,165 @@ def _make_explicit_mpmd_train_step(
             name="grug_gpipe_keep_step",
             out_shardings=stage0_step_sharding,
         )(state.step)
-        loss_for_metrics = mpmd.transfer(loss, out_shardings=stage0_loss_sharding).done()
+        loss_for_metrics = transfer_between_stages(loss, num_stages - 1, 0, stage0_loss_sharding)
+
+        next_state = dataclasses.replace(
+            state,
+            step=step,
+            params=tuple(params),
+            opt_state=tuple(opt_state),
+            pending_qb_betas=tuple(qb_betas_next),
+        )
+        metrics = {"train/loss": loss_for_metrics, "qb_beta_per_layer": tuple(qb_betas_next)}
+        return next_state, metrics, None
+
+    interleaved_task_order = _interleaved_gpipe_task_order(pipeline) if pipeline.schedule == "interleaved_gpipe" else ()
+
+    @mpmd.mpmd(mpmd_mesh, in_shardings=in_shardings, infer_donation=True)
+    def explicit_interleaved_gpipe_step(
+        state: GrugPipelineTrainState,
+        batches_by_microbatch,
+    ) -> tuple[GrugPipelineTrainState, dict[str, Any], None]:
+        interleaved_batches = (batches_by_microbatch,) if pipeline.microbatches == 1 else batches_by_microbatch
+        params = list(state.params)
+        opt_state = list(state.opt_state)
+        qb_betas = state.pending_qb_betas
+        qb_betas_next = [None] * num_stages
+        grads = [None] * num_stages
+        stage_inputs = {}
+        forward_edges = {}
+        backward_edges = {}
+        loss_sum = None
+
+        for direction, stage_index, microbatch_index in interleaved_task_order:
+            microbatches = interleaved_batches[microbatch_index]
+            key = (stage_index, microbatch_index)
+            if direction == "fwd":
+                if stage_index == 0:
+                    hidden, stage_qb_betas = mpmd.task(
+                        stage0_forward,
+                        name=f"grug_interleaved_mb{microbatch_index}_stage0_forward",
+                        out_shardings=(activation_shardings[0], qb_shardings[0]),
+                    )(params[0], qb_betas[0], microbatches[0])
+                else:
+                    hidden = receive_between_stages(forward_edges[key], stage_index - 1, stage_index)
+                    stage_inputs[key] = hidden
+                    if stage_index == num_stages - 1:
+                        loss, stage_qb_betas = mpmd.task(
+                            last_stage_loss,
+                            name=f"grug_interleaved_mb{microbatch_index}_stage{stage_index}_loss_forward",
+                            out_shardings=(last_loss_sharding, qb_shardings[stage_index]),
+                        )(params[stage_index], qb_betas[stage_index], hidden, microbatches[stage_index])
+                        loss_sum = accumulate_or_set(
+                            loss_sum,
+                            loss,
+                            name=f"grug_interleaved_mb{microbatch_index}_accumulate_loss",
+                            out_shardings=last_loss_sharding,
+                        )
+                    else:
+                        hidden, stage_qb_betas = mpmd.task(
+                            stage_forward,
+                            name=f"grug_interleaved_mb{microbatch_index}_stage{stage_index}_forward",
+                            out_shardings=(activation_shardings[stage_index], qb_shardings[stage_index]),
+                        )(params[stage_index], qb_betas[stage_index], hidden, microbatches[stage_index])
+
+                qb_betas_next[stage_index] = accumulate_or_set(
+                    qb_betas_next[stage_index],
+                    stage_qb_betas,
+                    name=f"grug_interleaved_mb{microbatch_index}_stage{stage_index}_accumulate_qb",
+                    out_shardings=qb_shardings[stage_index],
+                )
+                if stage_index < num_stages - 1:
+                    forward_edges[(stage_index + 1, microbatch_index)] = send_between_stages(
+                        hidden,
+                        stage_index,
+                        stage_index + 1,
+                        activation_shardings[stage_index + 1],
+                    )
+                continue
+
+            if stage_index == num_stages - 1:
+                stage_grads, d_hidden = mpmd.task(
+                    last_stage_backward,
+                    name=f"grug_interleaved_mb{microbatch_index}_stage{stage_index}_backward",
+                    out_shardings=(param_shardings[stage_index], activation_shardings[stage_index]),
+                )(
+                    params[stage_index],
+                    qb_betas[stage_index],
+                    stage_inputs[key],
+                    microbatches[stage_index],
+                )
+            else:
+                d_hidden = receive_between_stages(backward_edges[key], stage_index + 1, stage_index)
+                if stage_index == 0:
+                    stage_grads = mpmd.task(
+                        stage0_backward,
+                        name=f"grug_interleaved_mb{microbatch_index}_stage0_backward",
+                        out_shardings=param_shardings[0],
+                    )(params[0], qb_betas[0], microbatches[0], d_hidden)
+                else:
+                    stage_grads, d_hidden = mpmd.task(
+                        stage_backward,
+                        name=f"grug_interleaved_mb{microbatch_index}_stage{stage_index}_backward",
+                        out_shardings=(param_shardings[stage_index], activation_shardings[stage_index]),
+                    )(
+                        params[stage_index],
+                        qb_betas[stage_index],
+                        stage_inputs[key],
+                        microbatches[stage_index],
+                        d_hidden,
+                    )
+
+            grads[stage_index] = accumulate_or_set(
+                grads[stage_index],
+                stage_grads,
+                name=f"grug_interleaved_mb{microbatch_index}_stage{stage_index}_accumulate_grads",
+                out_shardings=param_shardings[stage_index],
+            )
+            if stage_index > 0:
+                backward_edges[(stage_index - 1, microbatch_index)] = send_between_stages(
+                    d_hidden,
+                    stage_index,
+                    stage_index - 1,
+                    activation_shardings[stage_index - 1],
+                )
+
+        if loss_sum is None:
+            raise ValueError("explicit interleaved GPipe did not accumulate any microbatch losses")
+        loss = mpmd.task(
+            average_loss,
+            name="grug_interleaved_average_loss",
+            out_shardings=last_loss_sharding,
+        )(loss_sum)
+        qb_betas_next = [
+            mpmd.task(
+                average_tree,
+                name=f"grug_interleaved_stage{stage_index}_average_qb",
+                out_shardings=qb_shardings[stage_index],
+            )(stage_qb_betas)
+            for stage_index, stage_qb_betas in enumerate(qb_betas_next)
+        ]
+        grads = [
+            mpmd.task(
+                average_tree,
+                name=f"grug_interleaved_stage{stage_index}_average_grads",
+                out_shardings=param_shardings[stage_index],
+            )(stage_grads)
+            for stage_index, stage_grads in enumerate(grads)
+        ]
+
+        for stage_index in range(num_stages):
+            params[stage_index], opt_state[stage_index] = mpmd.task(
+                update_stage,
+                name=f"grug_interleaved_stage{stage_index}_update",
+                out_shardings=(param_shardings[stage_index], opt_state_shardings[stage_index]),
+            )(params[stage_index], opt_state[stage_index], grads[stage_index])
+        step = mpmd.task(
+            keep_step,
+            name="grug_interleaved_keep_step",
+            out_shardings=stage0_step_sharding,
+        )(state.step)
+        loss_for_metrics = transfer_between_stages(loss, num_stages - 1, 0, stage0_loss_sharding)
 
         next_state = dataclasses.replace(
             state,
@@ -1177,7 +1481,7 @@ def _make_explicit_mpmd_train_step(
     def explicit_std_1f1b_step(
         state: GrugPipelineTrainState,
         batches_by_microbatch,
-    ) -> tuple[GrugPipelineTrainState, dict[str, jax.Array], None]:
+    ) -> tuple[GrugPipelineTrainState, dict[str, Any], None]:
         params = list(state.params)
         opt_state = list(state.opt_state)
         qb_betas = state.pending_qb_betas
@@ -1376,6 +1680,8 @@ def _make_explicit_mpmd_train_step(
         metrics = {"train/loss": loss_for_metrics, "qb_beta_per_layer": tuple(qb_betas_next)}
         return next_state, metrics, None
 
+    if pipeline.schedule == "interleaved_gpipe":
+        return explicit_interleaved_gpipe_step
     if pipeline.microbatches == 1:
         return explicit_pipeline_step
     if pipeline.schedule == "gpipe":
@@ -1416,12 +1722,13 @@ def initial_pipeline_state(
     """Initialize explicit MPMD pipeline state without materializing full optimizer state."""
     params = mp.cast_to_param(Transformer.init(model_config, key=key))
     stage_params = params.split_for_pipeline(pipeline.stages)
+    stage_mpmd_indices = _pipeline_stage_mpmd_indices(pipeline)
     stage_params = _reshard_to_mpmd(
         mpmd_mesh,
         stage_params,
         tuple(
-            _tree_mpmd_shardings_on_stage(mpmd_mesh, stage_index, params)
-            for stage_index, params in enumerate(stage_params)
+            _tree_mpmd_shardings_on_stage(mpmd_mesh, mpmd_index, params)
+            for mpmd_index, params in zip(stage_mpmd_indices, stage_params, strict=True)
         ),
     )
     pending_qb_betas = tuple(
@@ -1432,8 +1739,8 @@ def initial_pipeline_state(
         mpmd_mesh,
         pending_qb_betas,
         tuple(
-            _tree_mpmd_shardings_on_stage(mpmd_mesh, stage_index, qb_betas)
-            for stage_index, qb_betas in enumerate(pending_qb_betas)
+            _tree_mpmd_shardings_on_stage(mpmd_mesh, mpmd_index, qb_betas)
+            for mpmd_index, qb_betas in zip(stage_mpmd_indices, pending_qb_betas, strict=True)
         ),
     )
     step = _stage_local_scalar(jnp.array(0, dtype=jnp.int32), NamedSharding(mpmd_mesh.unstack[0], P()))
@@ -1441,8 +1748,8 @@ def initial_pipeline_state(
         step=step,
         params=stage_params,
         opt_state=tuple(
-            _localize_stage_optimizer_state(mpmd_mesh, stage_index, optimizer.init(params))
-            for stage_index, params in enumerate(stage_params)
+            _localize_stage_optimizer_state(mpmd_mesh, mpmd_index, optimizer.init(params))
+            for mpmd_index, params in zip(stage_mpmd_indices, stage_params, strict=True)
         ),
         ema_params=None,
         pending_qb_betas=pending_qb_betas,
@@ -1798,6 +2105,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                 if not isinstance(state, GrugPipelineTrainState):
                     raise TypeError("explicit_mpmd expects GrugPipelineTrainState")
                 compute_watch = False
+                stage_mpmd_indices = _pipeline_stage_mpmd_indices(config.trainer.pipeline)
                 if config.trainer.pipeline.microbatches > 1:
                     with set_mesh(mesh):
                         explicit_batch = _reshape_batch_for_pipeline(batch, config.trainer.pipeline.microbatches)
@@ -1824,8 +2132,8 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                     )
                     stage_batches = tuple(
                         tuple(
-                            _put_batch_on_stage(mpmd_mesh, stage_index, host_stage_batch)
-                            for stage_index, host_stage_batch in enumerate(microbatch_batches)
+                            _put_batch_on_stage(mpmd_mesh, mpmd_index, host_stage_batch)
+                            for mpmd_index, host_stage_batch in zip(stage_mpmd_indices, microbatch_batches, strict=True)
                         )
                         for microbatch_batches in host_stage_batches
                     )
@@ -1835,8 +2143,8 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                         for stage_index in range(config.trainer.pipeline.stages)
                     )
                     stage_batches = tuple(
-                        _put_batch_on_stage(mpmd_mesh, stage_index, host_stage_batch)
-                        for stage_index, host_stage_batch in enumerate(host_stage_batches)
+                        _put_batch_on_stage(mpmd_mesh, mpmd_index, host_stage_batch)
+                        for mpmd_index, host_stage_batch in zip(stage_mpmd_indices, host_stage_batches, strict=True)
                     )
                 if explicit_mpmd_train_step is None:
                     explicit_mpmd_train_step = _make_explicit_mpmd_train_step(
@@ -1909,7 +2217,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
 
             jax.block_until_ready(metrics["train/loss"])
 
-            if jnp.isnan(metrics["train/loss"]):
+            if math.isnan(float(metrics["train/loss"])):
                 logger.error(f"NaN loss at step {current_step}. Stopping training.")
                 break
             duration = time.perf_counter() - step_start

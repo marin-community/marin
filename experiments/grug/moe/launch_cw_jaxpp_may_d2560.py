@@ -15,8 +15,9 @@ import numpy as np
 from fray.cluster import ResourceConfig
 from levanter.callbacks.profiler import ProfilerConfig
 from levanter.checkpoint import CheckpointerConfig
-from levanter.data import AsyncDataset
-from levanter.data.text import DirectDatasetComponent, GrugLmExample, LmDataConfig
+from levanter.data.dataset import AsyncDataset
+from levanter.data.text.datasets import DirectDatasetComponent, LmDataConfig
+from levanter.data.text.examples import GrugLmExample
 from levanter.grug.attention import AttentionMask
 from levanter.tracker.json_logger import JsonLoggerConfig
 from levanter.tracker.wandb import WandbConfig
@@ -215,6 +216,12 @@ def build_jaxpp_may_checkpoint(*, version: str = "dev") -> ArtifactStep[Levanter
         raise ValueError(f"MAY_BATCH={batch_size} must be divisible by batch shards={batch_shards}")
     if batch_size % pipeline.microbatches != 0:
         raise ValueError(f"MAY_BATCH={batch_size} must be divisible by PP_MICROBATCHES={pipeline.microbatches}")
+    microbatch_size = batch_size // pipeline.microbatches
+    if microbatch_size % batch_shards != 0:
+        raise ValueError(
+            f"microbatch size={microbatch_size} must be divisible by batch shards={batch_shards}; "
+            f"got MAY_BATCH={batch_size} and PP_MICROBATCHES={pipeline.microbatches}"
+        )
     if model.num_experts % expert_axis != 0:
         raise ValueError(f"num_experts={model.num_experts} must be divisible by MAY_EXPERT_AXIS={expert_axis}")
 

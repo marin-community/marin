@@ -7,7 +7,7 @@ author: dlwh
 # JaxPP Grug MoE: Task Logbook
 
 ## Scope
-- Goal: Implement and debug an NVIDIA/JaxPP-based pipeline-parallel training path for `experiments/grug/moe/train.py`, then test it on 4x 8xH100 CoreWeave east02 nodes with the May d=2560 shape.
+- Goal: Implement and debug an NVIDIA/JaxPP-based pipeline-parallel training path for `experiments/grug/moe/train.py`, then test it on 4x 8xH100 CoreWeave nodes with the May d=2560 shape.
 - Primary metric(s): A pipelined train step can compile/run on the intended NVIDIA GPU environment; optimizer/loss semantics match the non-pipelined path for equivalent global batches; MFU is captured for relevant JaxPP schedules.
 - Constraints: Keep default Grug MoE behavior unchanged when pipeline config is unset; do not add broad dependency churn until the runtime environment decision is explicit.
 - Coordinating issue/PR: https://github.com/marin-community/marin/issues/7024
@@ -15,11 +15,13 @@ author: dlwh
 ## Current TL;DR
 - `GRUG-JAXPP-001`: Explicit JaxPP MPMD training is implemented behind `GrugTrainerConfig.pipeline.implementation="explicit_mpmd"` with stage-local model/optimizer state, contiguous layer splits, explicit GPipe and explicit `std_1f1b` schedules. Milestone implementation commit: `abd979b82a` (`[grug] Add explicit JaxPP pipeline training`).
 - The requested 24-layer, d2560, 256-expert, top-k 4 shape now fits and executes on 4x 8xH100 CoreWeave east02 after optimizer state is initialized from stage-local pipeline weights instead of from the full 61B-param model.
-- Best completed throughput point so far: explicit MPMD GPipe, 24 layers, 256 experts, top-k 4, seq 4096, batch 128, four physical/logical stages, 4 microbatches, `XLA_PYTHON_CLIENT_MEM_FRACTION=0.70`. Run `/dlwh/iris-run-job-20260708-225414/grug-train-jaxpp-explicit-perf-l24-e256-b128-s4096-gpipe-xla070-20260708-1555` reported `170,567.57` tokens/s, `2,406,803.30` GFLOP/s, and mean MFU `7.5981`.
-- Best completed `std_1f1b` seq4096 point: explicit MPMD, 24 layers, 256 experts, top-k 4, batch 96, four stages, 4 microbatches, `0.70` prealloc. Run `/dlwh/iris-run-job-20260708-224507/grug-train-jaxpp-explicit-perf-l24-e256-b96-s4096-xla070-20260708-1545` reported `167,681.85` tokens/s, `2,366,084.23` GFLOP/s, and mean MFU `7.4980`.
+- Best completed throughput point: explicit MPMD `std_1f1b`, 24 layers, 256 experts, top-k 4, seq 4096, batch 384, four physical/logical stages, 12 microbatches, and `0.70` prealloc on RNO2A. Run `/dlwh/iris-run-job-20260710-090806/grug-train-jaxpp-rno2a-recompute-std1f1b-l24-e256-b384-s4096-p4m12-20260710-0208` reported `240,651.18` tokens/s, `3,395,722.01` GFLOP/s, and mean MFU `10.6043`.
+- RNO2A is healthy and performance-equivalent to east02 for this workload. The exact batch128/m4 baseline reported mean MFU `7.5946` and `170,329.97` tokens/s, within noise of the east02 `7.5981` result. NCCL debug logs confirmed `NET/IB/.../GDRDMA`, ruling out socket fallback.
 - Profile captured for explicit MPMD GPipe at the stable batch-96 seq4096 point after commit `a0f8130985` (`[grug] Upload explicit MPMD profile artifacts`). W&B run: <https://wandb.ai/marin-community/marin_moe/runs/jaxpp-explicit-profile-l24-e256-b96-s4096-gpipe-xla070-artifact-20260709-0018>. Artifact: `marin-community/marin_moe/jaxpp-explicit-profile-l24-e256-b96-s4096-gpipe-xla070-artifact-20260709-0018-profiler:v0`.
 - Profile readout: communication-dominated exclusive timeline, with `48.75%` communication, `45.10%` compute, and `6.15%` stall. Largest exclusive kernel is `ncclDevKernel_SendRecv` (`104` calls, about `7.35s` total exclusive in the profile window), followed by all-gather and reduce-scatter collectives.
 - Follow-up explicit MPMD `std_1f1b` profile at the same 24L/256E/seq4096/batch96 shape also remains communication dominated. W&B run: <https://wandb.ai/marin-community/marin_moe/runs/jaxpp-explicit-profile-l24-e256-b96-s4096-std1f1b-xla070-artifact-20260709-0506>. It reported mean MFU `7.2713`; profile breakdown was `47.40%` communication, `46.91%` compute, and `5.69%` stall. `SendRecv` remained the top op, with average exclusive duration `64.5ms` versus `70.7ms` in the GPipe profile. The raw trace totals are not directly comparable because the `std_1f1b` trace captured a longer wall window than the GPipe trace.
+- A fresh RNO2A batch256/m8 `std_1f1b` profile reported mean MFU `9.7654`, `226,714.36` tokens/s, and `3,199,065.76` GFLOP/s. The exclusive breakdown moved to `55.92%` compute, `38.96%` communication, and `5.12%` stall; `SendRecv` remained the top collective at `59.99ms` average. W&B: <https://wandb.ai/marin-community/marin_moe/runs/jaxpp-rno2a-profile-std1f1b-l24-e256-b256-s4096-p4m8-20260710-0238>. Artifact: `marin-community/marin_moe/jaxpp-rno2a-profile-std1f1b-l24-e256-b256-s4096-p4m8-20260710-0238-profiler:v0`.
+- Explicit `interleaved_gpipe` now supports more logical stages than physical ranks and follows the pinned JaxPP per-rank task queues. At 8 logical/4 physical stages, batch128/m4 reached mean MFU `9.2547` and batch192/m6 reached `10.2190`; batch224/m7 hit a compile-complexity cliff. The standard 4-stage batch384/m12 result remains the overall best at `10.6043` MFU.
 - Automatic JaxPP schedules remain blocked. Moving batch reshaping outside the JaxPP trace fixed the earlier after-loop batch placement assertion, and the opt-in const-sharding patch gets reduced `std_1f1b` past JaxPP explicit sharding inference. The current blocker is later input placement: JaxPP attempts to `device_put` a stage-local expert weight with a global `NamedSharding` whose mesh still includes the non-addressable `pipeline` axis. Automatic `eager_1f1b` at the full 61B shape also failed during full-state init before training.
 
 ## Hypothesis Queue
@@ -27,17 +29,19 @@ author: dlwh
 ### Active
 - `GRUG-JAXPP-002`: Router histograms need a dedicated cross-microbatch reducer before full metric parity is safe. Evidence: [2026-07-07 22:45 PDT - initial implementation](#2026-07-07-2245-pdt---initial-implementation). Next test: implement/validate a `SummaryStats` merge or compute summary metrics outside the pipeline loop.
 - `GRUG-JAXPP-006`: The seq4096 batch-96/batch-128 performance boundary is communication dominated. Evidence: [2026-07-08 17:35 PDT - profile and artifact checkpoint](#2026-07-08-1735-pdt---profile-and-artifact-checkpoint). Next test: reduce pipeline send/recv pressure or increase useful compute per transfer, then re-profile the same shape.
+- `GRUG-JAXPP-007`: Queue-correct virtual pipeline stages reduce bubbles at moderate microbatch counts, but compile complexity limits the useful range. Evidence: batch128/m4 improved from `7.5946` to `9.2547` MFU and batch192/m6 reached `10.2190`, while m7/m8 stalled during compilation. Next test: rebalance the contiguous layer split so the final stage has less output/loss work, then repeat the standard batch384/m12 point.
 
 ### Blocked
 - `GRUG-JAXPP-005`: Automatic JaxPP schedule sweep over `gpipe`, `std_1f1b`, `eager_1f1b`, `zero_bubble`, and interleaved schedules. Blocker: automatic `std_1f1b` reaches tracing and clears the prior sharding-inference assertion with the const-sharding patch, but JaxPP input placement now tries to `device_put` stage-local arrays with a non-addressable global `pipeline` mesh sharding. Resume when automatic JaxPP can call compiled functions with addressable stage-local input shardings.
 
 ### Falsified / Dead End
-- None yet.
+- Delaying data-parallel gradient reduction until after microbatch accumulation is performance-neutral at batch128/m4: mean MFU `7.5648` versus `7.5946` baseline.
+- Reusing opaque VJP residuals removes explicit backward recompute in a tiny smoke but does not fit the 61B shape. `save_moe` exhausts memory in forward residual storage; `recompute_all` moves the failure to backward scratch, including at 8 microbatches and with XLA preallocation disabled.
 
 ### Promoted
 - `GRUG-JAXPP-001`: Explicit MPMD stage-local weights/optimizer state are the working pipeline implementation. Evidence: milestone commit `abd979b82a`, issue update <https://github.com/marin-community/marin/issues/7024#issuecomment-4919647823>, and the seq4096 perf/profile results.
 - `GRUG-JAXPP-003`: GPU runtime availability is no longer blocked; CoreWeave east02 4x8 H100 jobs validated the implementation path.
-- `GRUG-JAXPP-004`: The May d=2560 family runs with measurable MFU on 4x 8xH100. Best measured point so far is explicit GPipe seq4096 batch128 with mean MFU `7.5981`; profiled stable point is explicit GPipe seq4096 batch96 with mean MFU `7.2239`.
+- `GRUG-JAXPP-004`: The May d=2560 family runs with measurable MFU on 4x 8xH100. Best measured point is explicit `std_1f1b` seq4096 batch384/m12 with mean MFU `10.6043`; the fresh profiled point is batch256/m8 with mean MFU `9.7654`.
 
 ## Entry Log
 
@@ -1377,3 +1381,73 @@ author: dlwh
   - After merging `origin/main`, the CoreWeave Iris configs expect consolidated kubeconfig contexts under `~/.kube/coreweave-iris`. This machine still has split/older kubeconfigs; direct rno2a/usw09b API hostnames from `~/.kube/cw-rno2a.yaml` and `~/.kube/cw-usw09b.yaml` currently fail DNS resolution from the local environment.
 - Next action:
   - Do not treat `std_1f1b` alone as the communication fix. The next optimization target remains reducing pipeline boundary transfer/wait: smaller activation payloads, different layer/stage partitioning, more useful compute per transfer, or explicit overlap improvements.
+
+### 2026-07-10 02:50 PDT - RNO2A parity, occupancy sweep, and current profile
+- Hypothesis: The `7.6` MFU ceiling is caused by pipeline occupancy and stage rendezvous rather than an east02 fabric fault; increasing microbatches and global batch on RNO2A should improve utilization, while delayed reductions or saved VJP residuals should isolate secondary costs.
+- Commit Hash:
+  - Merged `origin/main` through `b09baa125a` in merge commit `2514456540`.
+  - Experiment code after that merge was still uncommitted while the sweep ran.
+- Commands:
+  - Baseline/sweeps used `TF_GPU_ALLOCATOR=cuda_malloc_async experiments/grug/moe/run_cw_jaxpp_may_d2560.sh --submit --cluster cw-rno2a --kubeconfig "$HOME/.kube/coreweave-iris" --schedule std_1f1b --implementation explicit_mpmd --physical-stages 4 --logical-stages 4 --nodes 4 --gpus-per-replica 8 --expert-axis 8 --layers 24 --experts 256 --top-k 4 --seq-len 4096 --vocab-size 8192 --moe-implementation ring --loss-implementation xla --xla-memory-fraction 0.70 --remat save_moe ...`.
+  - The occupancy sweep varied `(batch, microbatches)` over `(128, 4)`, `(128, 8)`, `(128, 16)`, `(256, 8)`, `(256, 16)`, and `(384, 12)`.
+  - Profile: the same command at batch256/m8 with `--steps 14 --profiler-steps 4`.
+  - Summary/report: `uv run python lib/marin/tools/profile_summary.py summarize --profile-dir scratch/profiles/jaxpp_rno2a_profile_b256_m8 --breakdown-mode exclusive_global --output scratch/jaxpp_rno2a_profile_b256_m8_summary.json`, then `profile_summary.py report`.
+- Config:
+  - d2560, 24 layers, 256 experts, top-k 4, seq4096, vocab8192, ring MoE, XLA loss, explicit JaxPP MPMD, 4 physical/logical stages, 4x 8xH100 RNO2A, prealloc `0.70`.
+- Results:
+
+| Batch | Microbatches | Status | Tokens/s | GFLOP/s | Mean MFU | Duration |
+| ---: | ---: | --- | ---: | ---: | ---: | ---: |
+| 128 | 4 | succeeded | `170,329.97` | `2,403,450.60` | `7.5946` | `3.0781` |
+| 128 | 8 | succeeded | `191,925.72` | `2,708,178.64` | `8.0597` | `2.7317` |
+| 256 | 8 | succeeded | `221,450.39` | `3,124,788.13` | `9.7635` | `4.7350` |
+| 384 | 12 | succeeded | `240,651.18` | `3,395,722.01` | `10.6043` | `6.5359` |
+
+  - Exact RNO2A baseline: `/dlwh/iris-run-job-20260710-074857/grug-train-jaxpp-rno2a-baseline-gpipe-l24-e256-b128-s4096-m4-20260710-0053`; W&B: <https://wandb.ai/marin-community/marin_moe/runs/jaxpp-rno2a-baseline-gpipe-l24-e256-b128-s4096-m4-20260710-0053>.
+  - Batch128/m8: `/dlwh/iris-run-job-20260710-085631/grug-train-jaxpp-rno2a-recompute-std1f1b-l24-e256-b128-s4096-p4m8-20260710-0157`; W&B: <https://wandb.ai/marin-community/marin_moe/runs/jaxpp-rno2a-recompute-std1f1b-l24-e256-b128-s4096-p4m8-20260710-0157>.
+  - Batch256/m8: `/dlwh/iris-run-job-20260710-090212/grug-train-jaxpp-rno2a-recompute-std1f1b-l24-e256-b256-s4096-p4m8-20260710-0202`; W&B: <https://wandb.ai/marin-community/marin_moe/runs/jaxpp-rno2a-recompute-std1f1b-l24-e256-b256-s4096-p4m8-20260710-0202>.
+  - Batch384/m12: `/dlwh/iris-run-job-20260710-090806/grug-train-jaxpp-rno2a-recompute-std1f1b-l24-e256-b384-s4096-p4m12-20260710-0208`; W&B: <https://wandb.ai/marin-community/marin_moe/runs/jaxpp-rno2a-recompute-std1f1b-l24-e256-b384-s4096-p4m12-20260710-0208>.
+  - Batch128/m16 and batch256/m16 compiled all reusable leaf tasks but made no further progress for 8-12 minutes. Both were stopped; this is a compile-complexity cliff, not an execution OOM.
+  - A 2-physical-stage/m4 run remained in active XLA compilation for one hour and was stopped. Larger per-stage graphs are operationally intractable without virtual chunks.
+  - NCCL debug from a 2-stage probe showed `NET/IB/.../GDRDMA`. The low apparent TensorBoard `SendRecv` bandwidth is therefore mostly rendezvous wait, not socket transport.
+  - Delayed gradient reduction run `/dlwh/iris-run-job-20260710-081419/grug-train-jaxpp-rno2a-delayedgrad-gpipe-l24-e256-b128-s4096-p4m4-20260710-0114` was performance-neutral: mean MFU `7.5648`, tokens/s `169,742.99`, duration `3.0887`.
+  - Opaque VJP residual reuse passed a tiny 4-stage correctness smoke, but every full-shape memory strategy failed. `save_moe` needed another `8.13 GiB` in forward even at `0.90` prealloc; `recompute_all` moved failures to `14.02-16.91 GiB` backward allocations. At m8 and disabled preallocation, stage 0 still failed requesting `4.17 GiB`.
+  - Batch256/m8 profile W&B: <https://wandb.ai/marin-community/marin_moe/runs/jaxpp-rno2a-profile-std1f1b-l24-e256-b256-s4096-p4m8-20260710-0238>. Artifact: `marin-community/marin_moe/jaxpp-rno2a-profile-std1f1b-l24-e256-b256-s4096-p4m8-20260710-0238-profiler:v0`.
+  - Profile metrics: mean MFU `9.7654`, tokens/s `226,714.36`, GFLOP/s `3,199,065.76`; exclusive breakdown `55.92%` compute, `38.96%` communication, `5.12%` stall. `SendRecv` averaged `59.99ms`; the prior GPipe profile averaged `70.7ms`.
+  - Local profile files: `scratch/profiles/jaxpp_rno2a_profile_b256_m8`, `scratch/jaxpp_rno2a_profile_b256_m8_summary.json`, `scratch/jaxpp_rno2a_profile_b256_m8_report.md`, and `scratch/jaxpp_profile_b96_gpipe_vs_rno2a_b256_m8_compare.md`.
+- Interpretation:
+  - RNO2A and east02 produce the same baseline, and IB/GDRDMA is active. The cluster and transport are not the reason MFU is low.
+  - More useful work per pipeline flush raises MFU materially: batch384/m12 is `39.6%` above the batch128/m4 baseline, but still far below the `20` target.
+  - The fresh profile is compute-major rather than communication-major by share, but send/recv remains the largest individual operation and has large upstream gaps. Pipeline occupancy and stage dependency remain primary constraints.
+  - Delayed gradient reduction and opaque VJP residual caching are closed branches for this shape. The former does not move throughput; the latter does not fit.
+- Next action:
+  - Finish queue-correct explicit `interleaved_gpipe` at 8 logical/4 physical stages and test the full batch256/m8 shape.
+  - If virtual stages do not compile or do not beat batch384/m12, profile stage latency and rebalance the contiguous layer split, especially the final stage with output/loss work.
+
+### 2026-07-10 03:08 PDT - queue-correct interleaved GPipe sweep
+- Hypothesis: Mapping eight logical pipeline stages onto four physical JaxPP ranks and executing the pinned `InterleavedGPipe.tasks()` queues should reduce exposed bubbles without compiling two oversized 12-layer physical stages.
+- Commit Hash: uncommitted experiment code on merge baseline `2514456540`; the implementation was committed after this entry.
+- Commands:
+  - Queue-correct smoke and full runs used `--schedule interleaved_gpipe --implementation explicit_mpmd --physical-stages 4 --logical-stages 8` on `cw-rno2a`, with the same d2560/24-layer/256-expert/top-k-4/seq4096 model as the standard schedule sweep.
+  - Performance points varied `(batch, microbatches)` over `(128, 4)`, `(192, 6)`, `(224, 7)`, and `(256, 8)`.
+- Results:
+
+| Batch | Microbatches | Status | Tokens/s | GFLOP/s | Mean MFU | Duration |
+| ---: | ---: | --- | ---: | ---: | ---: | ---: |
+| 128 | 4 | succeeded | `207,521.71` | `2,928,246.73` | `9.2547` | `2.5264` |
+| 192 | 6 | succeeded | `229,314.55` | `3,235,755.81` | `10.2190` | `3.4295` |
+| 224 | 7 | stopped in compile | - | - | - | - |
+| 256 | 8 | stopped in compile | - | - | - | - |
+
+  - The reduced 8-logical/4-physical GPU smoke `/dlwh/iris-run-job-20260710-093718/grug-train-jaxpp-rno2a-interleaved-queued-smoke-l8-e8-b32-s128-p4l8m4-20260710-0235` succeeded with finite loss.
+  - Batch128/m4: `/dlwh/iris-run-job-20260710-095204/grug-train-jaxpp-rno2a-interleaved-queued-l24-e256-b128-s4096-p4l8m4-20260710-0251`; W&B: <https://wandb.ai/marin-community/marin_moe/runs/jaxpp-rno2a-interleaved-queued-l24-e256-b128-s4096-p4l8m4-20260710-0251>.
+  - Batch192/m6: `/dlwh/iris-run-job-20260710-095726/grug-train-jaxpp-rno2a-interleaved-queued-l24-e256-b192-s4096-p4l8m6-20260710-0257`; W&B: <https://wandb.ai/marin-community/marin_moe/runs/jaxpp-rno2a-interleaved-queued-l24-e256-b192-s4096-p4l8m6-20260710-0257>.
+  - Batch224/m7 `/dlwh/iris-run-job-20260710-095736` emitted no progress for 7.5 minutes after reaching stage-4 forward compilation and was stopped with its child. Batch256/m8 showed the same compile-complexity cliff and was also stopped.
+  - A standard 4-stage batch480/m12 probe `/dlwh/iris-run-job-20260710-095255` failed at stage-3 loss backward with a `22.63 GiB` allocation OOM; its parent was stopped. This bounds the equal 6/6/6/6 layer split above the successful batch384/m12 point.
+- Interpretation:
+  - Interleaving is a real schedule improvement at fixed batch128/m4: `9.2547` versus the standard schedule's `7.5946` mean MFU, a `21.9%` gain.
+  - Increasing to batch192/m6 raises interleaved MFU to `10.2190`, but it does not beat standard batch384/m12 at `10.6043`. Above m6, graph compilation becomes the practical limit before execution.
+  - The equal layer split leaves the output head and loss backward on the same final stage as six transformer layers. The batch480 OOM and current profile make a lighter final-stage split, such as `7/6/6/5`, the highest-value next performance test.
+- Next action:
+  - Commit and push the queue-correct interleaved implementation and launcher changes.
+  - Add explicit configurable stage layer counts, validate stage-local weight placement for an unequal split, and rerun batch384/m12 before spending more H100 time on higher microbatch-count schedules.
