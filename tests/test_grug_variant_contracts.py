@@ -23,6 +23,7 @@ import jmp
 import optax
 import pytest
 from fray.cluster import ResourceConfig
+from haliax.partitioning import set_mesh
 from haliax.quantization import Fp8RaggedDotOp
 from jax._src import config as jax_config
 from jax.sharding import use_abstract_mesh
@@ -32,7 +33,7 @@ from levanter.data.text.datasets import DatasetComponent, DirectDatasetComponent
 from levanter.data.text.examples import GrugLmExample
 from levanter.distributed import DistributedConfig
 from levanter.grug.attention import AttentionMask as GrugAttentionMask
-from levanter.grug.sharding import _compact_grug_mesh_shape
+from levanter.grug.sharding import _compact_grug_mesh_shape, compact_grug_mesh
 from levanter.schedule import BatchSchedule
 from levanter.tracker.json_logger import JsonLoggerConfig
 from levanter.trainer import TrainerConfig
@@ -305,13 +306,21 @@ def test_grug_moe_variant_threads_moe_implementation_to_kernel():
     assert "ragged_all_to_all" in str(closed_jaxpr)
 
 
+def test_grug_moe_fp8_config_rejects_non_tile_aligned_dims():
+    model_module = importlib.import_module("experiments.grug.moe.model")
+    cfg = _small_model_config(model_module.GrugModelConfig, vocab_size=1024, seq_len=4)
+    assert cfg.hidden_dim % 128 != 0, "fixture must violate the fp8 kernel's alignment contract"
+    with pytest.raises(ValueError, match="multiples of 128"):
+        dataclasses.replace(cfg, fp8=model_module.GrugFp8Config())
+
+
 def test_grug_moe_fp8_config_threads_ops_into_expert_mlp():
     model_module = importlib.import_module("experiments.grug.moe.model")
     mesh, _ = model_module.debug_mesh_and_token_pspec(num_devices=4)
 
     def build(fp8):
         cfg = _small_model_config(model_module.GrugModelConfig, vocab_size=1024, seq_len=4)
-        cfg = dataclasses.replace(cfg, fp8=fp8)
+        cfg = dataclasses.replace(cfg, fp8=fp8, hidden_dim=128, intermediate_dim=128)
         return model_module.Transformer.init(cfg, key=jax.random.PRNGKey(0))
 
     with _reset_abstract_mesh(), use_abstract_mesh(mesh):
@@ -343,7 +352,7 @@ def test_grug_moe_fp8_state_gets_no_optimizer_moments():
 
     def build(fp8):
         cfg = _small_model_config(model_module.GrugModelConfig, vocab_size=1024, seq_len=4)
-        cfg = dataclasses.replace(cfg, fp8=fp8)
+        cfg = dataclasses.replace(cfg, fp8=fp8, hidden_dim=128, intermediate_dim=128)
         return train_module.initial_state(cfg, optimizer=optimizer, mp=mp, key=jax.random.PRNGKey(0), ema_beta=None)
 
     with _reset_abstract_mesh(), use_abstract_mesh(mesh):
@@ -359,11 +368,11 @@ def test_grug_moe_fp8_state_gets_no_optimizer_moments():
 def test_grug_moe_ema_update_carries_current_fp8_state():
     train_module = importlib.import_module("experiments.grug.moe.train")
     model_module = importlib.import_module("experiments.grug.moe.model")
-    compact_grug_mesh = importlib.import_module("levanter.grug.sharding").compact_grug_mesh
-    set_mesh = importlib.import_module("haliax.partitioning").set_mesh
 
     cfg = _small_model_config(model_module.GrugModelConfig, vocab_size=64, seq_len=4)
-    cfg = dataclasses.replace(cfg, fp8=model_module.GrugFp8Config(amax_history_length=4))
+    cfg = dataclasses.replace(
+        cfg, fp8=model_module.GrugFp8Config(amax_history_length=4), hidden_dim=128, intermediate_dim=128
+    )
 
     with set_mesh(compact_grug_mesh(expert_axis_size=1, replica_axis_size=1)):
         old = jax.jit(lambda: model_module.Transformer.init(cfg, key=jax.random.PRNGKey(0)))()
