@@ -334,6 +334,59 @@ def test_grug_moe_fp8_config_threads_ops_into_expert_mlp():
     assert not bf16_mlp.fp8_wire
 
 
+def test_grug_moe_fp8_state_gets_no_optimizer_moments():
+    train_module = importlib.import_module("experiments.grug.moe.train")
+    model_module = importlib.import_module("experiments.grug.moe.model")
+    mesh, _ = model_module.debug_mesh_and_token_pspec(num_devices=4)
+    optimizer = optax.adam(1e-2)
+    mp = jmp.get_policy("f32")
+
+    def build(fp8):
+        cfg = _small_model_config(model_module.GrugModelConfig, vocab_size=1024, seq_len=4)
+        cfg = dataclasses.replace(cfg, fp8=fp8)
+        return train_module.initial_state(cfg, optimizer=optimizer, mp=mp, key=jax.random.PRNGKey(0), ema_beta=None)
+
+    with _reset_abstract_mesh(), use_abstract_mesh(mesh):
+        fp8_state = eqx.filter_eval_shape(build, model_module.GrugFp8Config())
+        bf16_state = eqx.filter_eval_shape(build, None)
+
+    # The fp8 model carries extra quantization-state leaves in params, but none
+    # of them may get optimizer moments.
+    assert len(jax.tree.leaves(fp8_state.params)) > len(jax.tree.leaves(bf16_state.params))
+    assert len(jax.tree.leaves(fp8_state.opt_state)) == len(jax.tree.leaves(bf16_state.opt_state))
+
+
+def test_grug_moe_ema_update_carries_current_fp8_state():
+    train_module = importlib.import_module("experiments.grug.moe.train")
+    model_module = importlib.import_module("experiments.grug.moe.model")
+    compact_grug_mesh = importlib.import_module("levanter.grug.sharding").compact_grug_mesh
+    set_mesh = importlib.import_module("haliax.partitioning").set_mesh
+
+    cfg = _small_model_config(model_module.GrugModelConfig, vocab_size=64, seq_len=4)
+    cfg = dataclasses.replace(cfg, fp8=model_module.GrugFp8Config(amax_history_length=4))
+
+    with set_mesh(compact_grug_mesh(expert_axis_size=1, replica_axis_size=1)):
+        old = jax.jit(lambda: model_module.Transformer.init(cfg, key=jax.random.PRNGKey(0)))()
+        new = jax.jit(lambda: model_module.Transformer.init(cfg, key=jax.random.PRNGKey(1)))()
+
+    ops_path = lambda t: t.blocks[0].mlp.expert_mlp.ragged_dot_ops.w13.input_scale  # noqa: E731
+    new = eqx.tree_at(ops_path, new, jnp.full((1,), 7.0))
+
+    ema = train_module._ema_update(old, new, 0.75)
+
+    # Plain weights blend; fp8 op state is the current step's, not an average
+    # (a blend with old's scale of 1.0 would give 2.5).
+    expected_router = 0.75 * old.blocks[0].mlp.router + 0.25 * new.blocks[0].mlp.router
+    assert jnp.allclose(ema.blocks[0].mlp.router, expected_router)
+    assert ops_path(ema) == 7.0
+    same_state = jax.tree.map(
+        jnp.array_equal,
+        ema.blocks[0].mlp.expert_mlp.ragged_dot_ops,
+        new.blocks[0].mlp.expert_mlp.ragged_dot_ops,
+    )
+    assert all(jax.tree.leaves(same_state))
+
+
 def test_grug_moe_data_loaders_build_against_single_expert_mesh():
     """Regression: build_train_loader / build_tagged_evaluator must work when the
     compact mesh's expert axis has size 1 (canary configuration).

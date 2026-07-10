@@ -17,6 +17,7 @@ import optax
 from fray.cluster import ResourceConfig
 from haliax import Axis
 from haliax.partitioning import set_mesh
+from haliax.quantization import OverwriteWithGradient, apply_updates, partition_for_grad_overwrite
 from jax.sharding import Mesh, NamedSharding
 from jax.sharding import PartitionSpec as P
 from jax.tree_util import register_dataclass
@@ -269,6 +270,18 @@ def _apply_qb_betas(model: Transformer, qb_betas: jax.Array) -> Transformer:
     return eqx.tree_at(lambda t: t.blocks, model, tuple(new_blocks))
 
 
+def _ema_update(old: Transformer, new: Transformer, beta: float) -> Transformer:
+    """EMA of trainable weights; FP8 op state carries the current step's values.
+
+    Quantization statistics (amax histories, scales) are step-local state, not
+    parameters, so averaging them across steps is not meaningful.
+    """
+    new_overwrites, new_plain = partition_for_grad_overwrite(new)
+    _, old_plain = partition_for_grad_overwrite(old)
+    ema_plain = jax.tree_util.tree_map(lambda o, n: beta * o + (1.0 - beta) * n, old_plain, new_plain)
+    return eqx.combine(new_overwrites, ema_plain, is_leaf=lambda x: isinstance(x, OverwriteWithGradient))
+
+
 def initial_state(
     model_config: GrugModelConfig,
     *,
@@ -279,10 +292,13 @@ def initial_state(
 ) -> GrugTrainState:
     params = mp.cast_to_param(Transformer.init(model_config, key=key))
     num_moe_layers = sum(1 for b in params.blocks if b.mlp is not None)
+    # FP8 quantization state (OverwriteWithGradient) is overwritten each step,
+    # not optimized, so it gets no optimizer moments.
+    _, plain_params = partition_for_grad_overwrite(params)
     return GrugTrainState(
         step=jnp.array(0, dtype=jnp.int32),
         params=params,
-        opt_state=optimizer.init(params),
+        opt_state=optimizer.init(plain_params),
         ema_params=params if ema_beta is not None else None,
         pending_qb_betas=jnp.zeros((num_moe_layers, model_config.num_experts)),
     )
@@ -329,19 +345,19 @@ def _make_train_step(
 
         (loss, summarized_metrics), grads = jax.value_and_grad(loss_fn, has_aux=True)(qb_params)
         metrics = {"train/loss": loss, **summarized_metrics}
-        updates, opt_state = optimizer.update(grads, state.opt_state, qb_params)
-        params = optax.apply_updates(qb_params, updates)
+        # FP8 op state arrives as fake gradients: overwrite it in the params
+        # instead of feeding it to the optimizer.
+        overwrites, grads = partition_for_grad_overwrite(grads)
+        _, plain_params = partition_for_grad_overwrite(qb_params)
+        updates, opt_state = optimizer.update(grads, state.opt_state, plain_params)
+        params = apply_updates(qb_params, updates, overwrites)
 
         if ema_beta is None:
             ema_params = None
         else:
             if qb_ema_params is None:
                 raise ValueError("ema_params must be initialized when ema_beta is set.")
-            ema_params = jax.tree_util.tree_map(
-                lambda old, new: ema_beta * old + (1.0 - ema_beta) * new,
-                qb_ema_params,
-                params,
-            )
+            ema_params = _ema_update(qb_ema_params, params, ema_beta)
 
         watch_stats = None
         if watch_config is not None and compute_watch:
