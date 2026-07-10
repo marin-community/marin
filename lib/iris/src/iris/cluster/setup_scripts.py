@@ -104,6 +104,7 @@ def default_setup_script(
     )
 
     lines = [
+        "set -e",
         'cd "$IRIS_WORKDIR"',
         "echo 'syncing deps'",
         sync_cmd,
