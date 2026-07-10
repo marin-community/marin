@@ -33,10 +33,10 @@ from rigging.log_setup import configure_logging
 from zephyr.runners import (
     SUBPROCESS_STATS_INTERVAL,
     _InProcessWorkerContext,
+    _periodic_sampler,
     _run_stage_with_ctx,
     _sample_process_stats,
     _set_counter_aggregations,
-    _start_stats_sampler,
 )
 from zephyr.stage_io import _ensure_picklable_exception, _stage_throughput
 from zephyr.stats import StatsWriter, ZephyrWorkerStatStatus
@@ -162,17 +162,23 @@ def _execute_shard_subprocess(task_file: str, result_file: str) -> None:
         )
         status_logger.start()
 
-        sampler = _start_stats_sampler(
-            stop_event=stop_event,
-            ctx=ctx,
-            stats_writer=stats_writer,
-            task=task,
-            execution_id=execution_id,
-            cpu_s_at_start=cpu_s_at_start,
-            start_time=start_time,
-            proc=proc,
-            thread_name="zephyr-subprocess-stats-sampler",
+        sampler = threading.Thread(
+            target=_periodic_sampler,
+            kwargs={
+                "stop_event": stop_event,
+                "ctx": ctx,
+                "interval": SUBPROCESS_STATS_INTERVAL,
+                "cpu_s_at_start": cpu_s_at_start,
+                "stats_writer": stats_writer,
+                "task": task,
+                "execution_id": execution_id,
+                "start_time": start_time,
+                "proc": proc,
+            },
+            daemon=True,
+            name="zephyr-subprocess-stats-sampler",
         )
+        sampler.start()
 
         result_or_error = _run_stage_with_ctx(task, chunk_prefix, execution_id)
         _task_failed = False
