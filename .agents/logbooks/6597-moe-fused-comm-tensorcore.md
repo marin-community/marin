@@ -976,3 +976,18 @@ were emitted. This follows successful lowering of the preceding expert-space
 reference gathers, scatter, and reductions. The follow-up replaces the
 three-index scatter with independent per-source `[T,K]` scatters under
 `jax.vmap`. The job had no duplicate launch or Iris restart.
+
+## 2026-07-10 FUSED-MOE-029 - W2 backward per-source scatter vmap
+
+Job `/dlwh/bench-semantic-fused-w2b-tiny-compare5-20260710-1600` ran once on
+`cw-rno2a` at commit `c9057744c3` and reached terminal Iris state `succeeded`;
+its single task exited 0 after 31 seconds with zero failures or preemptions.
+The benchmark emitted zero repeat rows and one error row: lowering failed at
+`source_push_semantic_fused_w2_backward.py:326` in
+`jax.vmap(_scatter_source_route_gradient)` with `ValueError: Mapped away
+dimension of inputs passed to vmap should be sharded the same. Got inconsistent
+axis specs: None vs expert`. No `d_h`, `d_w2`, or `d_route` correctness or
+nonfinite metrics were emitted, and compile, lower-compile, first-call,
+first-run, steady-state, and throughput fields were null. Route-drop and
+overflow counters were zero. No duplicate, stop, resubmit, code edit, or Iris
+restart was issued.
