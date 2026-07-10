@@ -454,9 +454,11 @@ where
 
     /// Record `cursor` as the durable watermark, reporting whether the write stuck.
     ///
-    /// A failure is not data loss — the rows are already at the hub — but the caller
-    /// stops draining, so the next round resumes from a cursor the catalog agrees
-    /// with rather than racing further ahead of it.
+    /// A failure loses nothing: callers advance the cursor only past rows that will never
+    /// be sent again — the hub took them, or the forwarder gave them up — and every row
+    /// stays queryable in this store either way. It leaves the catalog naming an older
+    /// cursor, so a caller mid-drain stops there rather than racing further ahead of it,
+    /// and the next round resumes from the seq the catalog agrees with.
     fn persist_cursor(&self, cursor: i64) -> bool {
         if let Err(e) = self.persist(cursor) {
             tracing::warn!(cursor, error = %e, "finelog forwarder: persisting the watermark failed");
@@ -777,19 +779,6 @@ mod tests {
         .unwrap()
     }
 
-    fn forwarder(
-        store: Arc<Store>,
-        target: &SocketAddr,
-        private_pem: &str,
-    ) -> Forwarder<TestTransport> {
-        let config = ForwardingConfig {
-            target: format!("http://{target}"),
-            cluster: SOURCE_CLUSTER.to_string(),
-        };
-        let minter = TokenMinter::new(private_pem, config.cluster.clone()).unwrap();
-        Forwarder::with_client(store, config, minter, client(*target))
-    }
-
     /// A source store and the hub it forwards to, each served over a real socket.
     ///
     /// The hub checks jwt before cidr, inverting the order a deployed hub uses. Both ends
@@ -841,8 +830,19 @@ mod tests {
             self.source.set_forward_cursor(&self.target_url, 0).unwrap();
         }
 
+        /// A forwarder from this source to this hub, signing with `private_pem`.
         fn forwarder(&self, private_pem: &str) -> Forwarder<TestTransport> {
-            forwarder(Arc::clone(&self.source), &self.target_addr, private_pem)
+            let config = ForwardingConfig {
+                target: self.target_url.clone(),
+                cluster: SOURCE_CLUSTER.to_string(),
+            };
+            let minter = TokenMinter::new(private_pem, config.cluster.clone()).unwrap();
+            Forwarder::with_client(
+                Arc::clone(&self.source),
+                config,
+                minter,
+                client(self.target_addr),
+            )
         }
 
         /// The last seq the source has made durable.
@@ -1057,6 +1057,11 @@ mod tests {
     #[test]
     fn forwarding_config_rejects_a_target_that_would_expose_the_bearer() {
         assert!(ForwardingConfig::parse(r#"{"target":"http://hub","cluster":"a"}"#).is_err());
+        assert!(ForwardingConfig::parse(r#"{"target":"https://hub","cluster":"a"}"#).is_ok());
+    }
+
+    #[test]
+    fn forwarding_config_rejects_an_empty_cluster() {
         assert!(ForwardingConfig::parse(r#"{"target":"https://hub","cluster":""}"#).is_err());
         assert!(ForwardingConfig::parse(r#"{"target":"https://hub","cluster":"a"}"#).is_ok());
     }
