@@ -40,7 +40,7 @@ Submit on iris (eu-west4 pinned by the worker's ``MARIN_PREFIX``):
 import logging
 from typing import Any
 
-from fray import ResourceConfig
+from fray.types import ResourceConfig
 from marin.datakit.normalize import NormalizedData
 from marin.datakit.sources import all_sources
 from marin.execution.artifact import read_artifact
@@ -49,7 +49,8 @@ from marin.execution.step_spec import StepSpec
 from pydantic import BaseModel
 from rigging.filesystem import StoragePath
 from rigging.log_setup import configure_logging
-from zephyr import Dataset, ZephyrContext
+from zephyr.dataset import Dataset
+from zephyr.execution import ZephyrContext
 from zephyr.readers import load_file
 from zephyr.runners import InlineRunner
 

@@ -11,13 +11,8 @@ normalized below and used as a two-stage schedule.
 import math
 
 from fray.cluster import ResourceConfig
-from levanter.data.text import (
-    ConcatDatasetComponent,
-    DatasetComponent,
-    LmDataConfig,
-    TextLmDatasetFormat,
-    UrlDatasetSourceConfig,
-)
+from levanter.data.text.datasets import ConcatDatasetComponent, DatasetComponent, LmDataConfig, UrlDatasetSourceConfig
+from levanter.data.text.formats import TextLmDatasetFormat
 from levanter.tracker.wandb import WandbConfig
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.execution.step_runner import StepRunner

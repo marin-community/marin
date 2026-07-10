@@ -27,7 +27,7 @@ from jax._src import config as jax_config
 from jax.sharding import use_abstract_mesh
 from levanter.checkpoint import CheckpointerConfig
 from levanter.data.dataset import ListAsyncDataset
-from levanter.data.text import DatasetComponent, DirectDatasetComponent, LmDataConfig
+from levanter.data.text.datasets import DatasetComponent, DirectDatasetComponent, LmDataConfig
 from levanter.data.text.examples import GrugLmExample
 from levanter.distributed import DistributedConfig
 from levanter.grug.attention import AttentionMask as GrugAttentionMask

@@ -8,10 +8,11 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
-from fray import ResourceConfig
+from fray.types import ResourceConfig
 from levanter.adaptor import LoraAdaptorConfig
 from levanter.checkpoint import CheckpointerConfig
-from levanter.data.text import DatasetComponent, PreferenceChatLmDatasetFormat, PreferenceLmDataConfig
+from levanter.data.text.datasets import DatasetComponent
+from levanter.data.text.preference import PreferenceChatLmDatasetFormat, PreferenceLmDataConfig
 from levanter.main import train_lm
 from levanter.main.train_dpo import TrainDpoConfig
 from levanter.trainer import TrainerConfig

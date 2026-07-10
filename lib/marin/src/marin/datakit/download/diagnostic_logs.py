@@ -19,10 +19,12 @@ from io import BytesIO
 
 import fsspec
 import requests
-from fray import ResourceConfig
+from fray.types import ResourceConfig
 from pydantic import BaseModel, ConfigDict
 from rigging.filesystem import StoragePath, marin_prefix, open_url, prefix_join, url_to_fs
-from zephyr import Dataset, ZephyrContext, counters
+from zephyr import counters
+from zephyr.dataset import Dataset
+from zephyr.execution import ZephyrContext
 
 from marin.datakit.ingestion_manifest import (
     IdentityTreatment,

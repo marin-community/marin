@@ -7,7 +7,7 @@ import jax.random as jrandom
 import haliax as hax
 
 from levanter.models.gpt2 import Gpt2Config
-from levanter.optim import AdamConfig
+from levanter.optim.config import AdamConfig
 
 
 def _small_gpt2_config() -> Gpt2Config:

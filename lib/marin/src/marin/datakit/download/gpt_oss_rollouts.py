@@ -10,8 +10,10 @@ Each row has a user prompt, the model's internal thinking, and the final
 assistant response. We render these into a single document.
 """
 
-from fray import ResourceConfig
-from zephyr import Dataset, ZephyrContext, counters
+from fray.types import ResourceConfig
+from zephyr import counters
+from zephyr.dataset import Dataset
+from zephyr.execution import ZephyrContext
 from zephyr.readers import load_jsonl
 
 from marin.datakit.download.huggingface import download_hf_step

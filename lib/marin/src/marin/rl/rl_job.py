@@ -14,7 +14,7 @@ that submits a job through :mod:`marin.rl.orchestration`.
 
 import logging
 
-from fray import JobHandle
+from fray.client import JobHandle
 from marin.rl.job_config import (
     RLJobConfig,
     RunConfig,

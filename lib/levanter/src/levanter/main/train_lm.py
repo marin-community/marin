@@ -16,6 +16,9 @@ from haliax import Axis
 from haliax.partitioning import named_jit, round_axis_for_partitioning
 
 import levanter
+import levanter.analysis
+import levanter.config
+import levanter.tracker
 import levanter.callbacks
 import levanter.eval
 import levanter.eval_harness
@@ -26,11 +29,11 @@ from levanter.callbacks.tensorstore_callbacks import install_tensorstore_metrics
 from levanter.checkpoint import latest_checkpoint_path, load_checkpoint
 from levanter.compat.hf_checkpoints import HFCompatConfig, build_generation_config
 from levanter.data.mixture import MixtureDataset
-from levanter.data.text import LmDataConfig
+from levanter.data.text.datasets import LmDataConfig
 from levanter.eval_harness import LmEvalHarnessConfig
 from levanter.models.llama import LlamaConfig
 from levanter.models.lm_model import LmConfig, LmExample, LmHeadModel
-from levanter.optim import AdamConfig, OptimizerConfig
+from levanter.optim.config import AdamConfig, OptimizerConfig
 from levanter.trainer import Trainer, TrainerConfig
 from levanter.trainer_state import trainables_only
 from levanter.utils.jax_utils import parameter_count
@@ -162,7 +165,7 @@ def main(config: TrainLmConfig):
     else:
         converter = None
 
-    levanter.initialize(config)
+    levanter.trainer.initialize(config)
     optimizer = config.optimizer.build(config.trainer.num_train_steps)
 
     def loss_function(model: LmHeadModel, example: LmExample, *, key=None):

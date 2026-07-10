@@ -15,7 +15,7 @@ import numpy as np
 from jax.experimental import multihost_utils
 
 from levanter.callbacks import StepInfo
-from levanter.data import DataLoader
+from levanter.data.loader import DataLoader
 from levanter.tokenizers import MarinTokenizer
 
 

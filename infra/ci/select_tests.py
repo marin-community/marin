@@ -87,6 +87,15 @@ TEST_DIR: dict[str, str] = {
     "marin": "tests",
 }
 
+# Levanter's suite is the only unit leg that runs long enough to be worth spreading over
+# extra runners; every other scope finishes well under the workflow's per-leg budget. A
+# sharded scope splits its selected files across this many parallel matrix legs.
+SHARD_COUNT: dict[str, int] = {"levanter": 4}
+
+# A shard carries fixed environment-setup overhead, so stop adding runners once each would
+# hold fewer than this many files: a small selection runs faster in one leg than spread thin.
+MIN_FILES_PER_SHARD = 15
+
 # Suites that cannot be import-selected: each drives a whole subsystem (accelerator
 # kernels, a browser-driven smoke test) rather than a set of importable modules, so
 # path prefixes gate them. A locked dependency change moves the accelerator runtime
@@ -186,11 +195,18 @@ def workspace_modules(repo_root: Path) -> dict[str, Path]:
     return modules
 
 
-def build_importers(modules: dict[str, Path]) -> dict[str, set[str]]:
-    """importers[M] = modules whose top-level imports execute M."""
+def build_importers(modules: dict[str, Path], emptied: frozenset[str] = frozenset()) -> dict[str, set[str]]:
+    """importers[M] = modules whose top-level imports execute M.
+
+    ``emptied`` names modules whose own imports are ignored, as if their body were
+    reduced to a docstring. The import-graph analyzer uses it to simulate deleting a
+    re-export hub; production selection passes the default empty set.
+    """
     known = set(modules)
     importers: dict[str, set[str]] = defaultdict(set)
     for module, py in modules.items():
+        if module in emptied:
+            continue
         for dependency in resolve(imported_names(py, module), known):
             if dependency != module:
                 importers[dependency].add(module)
@@ -376,13 +392,59 @@ def extra_suites(changed_files: list[str]) -> list[str]:
 # ---------------------------------------------------------------------------
 
 
-def matrix_leg(scope: str, tests: list[str]) -> dict[str, str]:
-    """Build one unified-unit matrix leg with uv/pytest arguments."""
+def matrix_leg(scope: str, tests: list[str], shard: tuple[int, int] | None = None) -> dict[str, str]:
+    """Build one unified-unit matrix leg with uv/pytest arguments.
+
+    ``shard`` is a ``(index, total)`` pair when the scope's suite is split across several
+    runners; it rides in the label so each shard surfaces as its own workflow job.
+    """
     return {
+        "label": scope if shard is None else f"{scope} {shard[0]}/{shard[1]}",
         "package": UV_PACKAGE[scope],
         "extras": " ".join(f"--extra {extra}" for extra in UV_EXTRAS.get(scope, [])),
         "test_paths": " ".join(tests) if tests else TEST_DIR[scope],
     }
+
+
+def all_test_files(scope: str, repo_root: Path) -> list[str]:
+    """Every collectable test file in a scope's suite, repo-relative and sorted."""
+    return sorted(
+        str(py.relative_to(repo_root)) for py in _test_tree(scope, repo_root).values() if is_test_module(py.name)
+    )
+
+
+def shard_files(tests: list[str], count: int) -> list[list[str]]:
+    """Split ``tests`` into ``count`` contiguous, size-balanced chunks."""
+    base, extra = divmod(len(tests), count)
+    chunks: list[list[str]] = []
+    start = 0
+    for index in range(count):
+        size = base + (1 if index < extra else 0)
+        chunks.append(tests[start : start + size])
+        start += size
+    return chunks
+
+
+def scope_legs(scope: str, tests: list[str] | None, repo_root: Path) -> list[dict[str, str]]:
+    """Matrix legs for one scope: one leg, or several when the scope is sharded.
+
+    ``tests is None`` runs the full suite. A sharded scope expands that to its file list so
+    full and diff-driven runs spread across the same runners; below MIN_FILES_PER_SHARD it
+    stays a single leg.
+    """
+    cap = SHARD_COUNT.get(scope, 1)
+    files = tests if tests is not None else (all_test_files(scope, repo_root) if cap > 1 else None)
+    if cap <= 1 or files is None or len(files) <= MIN_FILES_PER_SHARD:
+        return [matrix_leg(scope, files or [])]
+
+    # Floor, not ceil: pick the largest shard count that still leaves every shard at least
+    # MIN_FILES_PER_SHARD files, so a medium selection is not split into runners so small that
+    # setup overhead dominates (16 files stays one leg, not two 8-file legs).
+    count = min(cap, len(files) // MIN_FILES_PER_SHARD)
+    if count <= 1:
+        return [matrix_leg(scope, sorted(files))]
+    chunks = shard_files(sorted(files), count)
+    return [matrix_leg(scope, chunk, shard=(index + 1, count)) for index, chunk in enumerate(chunks)]
 
 
 def compute_matrix(
@@ -393,8 +455,9 @@ def compute_matrix(
 ) -> list[dict[str, str]]:
     """Compute the test matrix.
 
-    Returns a list of matrix legs. Each leg has package (uv name), extras, and
-    test_paths. An empty tests list means run the full suite directory.
+    Returns a list of matrix legs. Each leg has a label, package (uv name), extras, and
+    test_paths. An empty tests list means run the full suite directory; a scope may fan out
+    into several sharded legs.
     """
     if not (src_modules or direct_tests or forced_scopes):
         return []
@@ -406,7 +469,7 @@ def compute_matrix(
     matrix: list[dict[str, str]] = []
     for scope in SCOPES:
         if scope in forced_scopes:
-            matrix.append(matrix_leg(scope, []))
+            matrix.extend(scope_legs(scope, None, repo_root))
             continue
 
         selected = list(direct_tests.get(scope, []))
@@ -416,14 +479,17 @@ def compute_matrix(
                     selected.append(test_file)
 
         if selected:
-            matrix.append(matrix_leg(scope, sorted(selected)))
+            matrix.extend(scope_legs(scope, sorted(selected), repo_root))
 
     return matrix
 
 
-def full_matrix() -> list[dict[str, str]]:
-    """Every scope, each running its full suite directory."""
-    return [matrix_leg(scope, []) for scope in SCOPES]
+def full_matrix(repo_root: Path) -> list[dict[str, str]]:
+    """Every scope, each running its full suite (sharded where configured)."""
+    legs: list[dict[str, str]] = []
+    for scope in SCOPES:
+        legs.extend(scope_legs(scope, None, repo_root))
+    return legs
 
 
 # ---------------------------------------------------------------------------
@@ -447,7 +513,7 @@ def main() -> None:
 
     # Without a base ref there is nothing to gate the out-of-band suites on, so run them all.
     if args.base_ref is None:
-        result = {"reason": "run-all-tests", "matrix": full_matrix(), "suites": sorted(EXTRA_SUITE_TRIGGERS)}
+        result = {"reason": "run-all-tests", "matrix": full_matrix(repo_root), "suites": sorted(EXTRA_SUITE_TRIGGERS)}
         print(json.dumps(result, indent=2))
         return
 
@@ -456,9 +522,9 @@ def main() -> None:
     suites = extra_suites(changed)
 
     if args.run_all_tests:
-        reason, matrix = "run-all-tests", full_matrix()
+        reason, matrix = "run-all-tests", full_matrix(repo_root)
     elif classification.broad:
-        reason, matrix = "broad-trigger", full_matrix()
+        reason, matrix = "broad-trigger", full_matrix(repo_root)
     else:
         reason = "diff-driven"
         matrix = compute_matrix(

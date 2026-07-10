@@ -36,14 +36,18 @@ from typing import Any
 
 import numpy as np
 import pyarrow as pa
-from fray import ResourceConfig
+from fray.types import ResourceConfig
 from huggingface_hub import hf_hub_download
 from marin.datakit.normalize import NormalizedData
 from marin.execution.artifact import write_artifact
 from pydantic import BaseModel
 from rigging.filesystem import StoragePath, marin_temp_bucket
-from zephyr import Dataset, InputFileSpec, ShardInfo, ZephyrContext, counters, load_file, zephyr_worker_ctx
+from zephyr import counters
+from zephyr.dataset import Dataset, ShardInfo
+from zephyr.execution import ZephyrContext
+from zephyr.readers import InputFileSpec, load_file
 from zephyr.runners import InlineRunner
+from zephyr.worker_context import zephyr_worker_ctx
 
 logger = logging.getLogger(__name__)
 

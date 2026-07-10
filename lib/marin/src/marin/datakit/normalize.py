@@ -23,12 +23,14 @@ from enum import StrEnum
 from typing import Any
 
 import dupekit
-from fray import ResourceConfig
+from fray.types import ResourceConfig
 from pydantic import BaseModel
 from rigging.filesystem import StoragePath, prefix_join, url_to_fs
-from zephyr import Dataset, ShardInfo, ZephyrContext, counters, write_parquet_file
+from zephyr import counters
+from zephyr.dataset import Dataset, ShardInfo
+from zephyr.execution import ZephyrContext
 from zephyr.readers import SUPPORTED_EXTENSIONS, load_file
-from zephyr.writers import ThreadedBatchWriter
+from zephyr.writers import ThreadedBatchWriter, write_parquet_file
 
 from marin.datakit import partition_filename
 from marin.execution.step_spec import StepSpec
