@@ -3962,11 +3962,22 @@ def _mode_callable(mode: str, plan: SourcePushSemanticPlan, args: argparse.Names
         }
 
     def semantic_fused_w2_return_compare(inputs: SemanticBenchInputs):
+        _send_chunks_per_dst, entries_per_dst, fused_rows_per_expert = semantic_fused_queue_shape()
+        metadata = source_push_semantic_fused_w2_return.source_push_semantic_fused_w2_return_metadata_jax(
+            plan,
+            rows_per_expert_capacity=fused_rows_per_expert,
+            entries_per_dst=entries_per_dst,
+        )
+        queue_row = jnp.arange(
+            source_push_semantic_fused_w2_return.SourcePushSemanticFusedW2ReturnConfig().compute_m,
+            dtype=jnp.int32,
+        )
+        return_y_live = queue_row < metadata.queue_valid_rows[..., None]
         expected = semantic_fused_w2_return(inputs, interpret=True)
         observed = semantic_fused_w2_return(inputs, interpret=args.pallas_interpret)
         return {
             **_comparison_metrics("y", observed.y, expected.y),
-            **_comparison_metrics("return_y", observed.return_y, expected.return_y),
+            **_masked_comparison_metrics("return_y", observed.return_y, expected.return_y, return_y_live),
             "valid_error_count": jnp.sum(observed.expert_valid != expected.expert_valid, dtype=jnp.int32),
             "queue_overflow_route_error_count": observed.queue_overflow_routes,
             "layout_overflow_row_error_count": observed.layout_overflow_rows,

@@ -848,3 +848,67 @@ sharding for operand `bfloat16[2@expert,512,256]` and indices
 fallback warnings preceded the results. Complete raw output, exact JSON rows,
 terminal status, task summary, and monitor state are in
 `scratch/6597-w2-persistent-tiny-compare/`.
+
+## 2026-07-10 FUSED-MOE-025 - Direct-store W2 fragment and backward sharding tiny compare
+
+Job `/dlwh/bench-semantic-fused-w2-tiny-compare2-20260710-1548` ran once on
+`cw-rno2a` at commit `e05a3aa826` and reached terminal Iris state `succeeded`.
+Its single task exited 0 after 35.52 seconds, with zero failures and
+preemptions. No duplicate, stop, resubmit, code edit, or Iris restart was
+issued.
+
+The direct-store W2 WGMMA fragment materially improved source-visible `y` but
+did not fix persistent `return_y`. `y` max and mean absolute differences were
+`0.125` and `0.00547508429735899`, down from `31.21875` and
+`2.2772815227508545` in FUSED-MOE-023; expected and observed `y` nonfinite
+counts were both zero. `return_y` max and mean absolute differences remained
+`NaN` because all `196608` observed elements were nonfinite, versus zero
+expected. The output checksum was `NaN`. Valid, queue-overflow, and
+layout-overflow error counters were zero; metadata-overflow routes,
+routing-dropped routes, and dropped routes were also zero.
+
+Return compile/first-call time was `2.6340669308556244` seconds,
+lowering/compile time was `1.7945377879077569` seconds, first-run time was
+`0.8395291429478675` seconds, and steady-state time was
+`0.0012683930108323693` seconds. Useful and rounded throughput were
+`0.05290857283734206` and `0.06613571604667756` TFLOP/s/rank.
+
+The backward reference-sharding fix advanced past the previous `dy` gather,
+but the comparison still failed during lowering before producing any `d_h`,
+`d_w2`, or `d_route_weight` comparison, nonfinite, counter, or timing metrics.
+The first failure was `ValueError: Incompatible types for broadcasting: input
+type=float32[2@expert,2,4,4,64,128] and requested
+type=float32[2,2,4,4,64,128]` at
+`source_push_semantic_fused_w2_backward.py:278`, in the reference
+`d_h.at[scatter_destination, scatter_expert, scatter_row].set(...)`. Twelve
+non-fatal `CUDA_ERROR_NOT_PERMITTED` VMM fallback warnings preceded the
+results. Structured rows, relevant raw output, terminal status, task summary,
+and monitor state are in `scratch/6597-w2-direct-stores-tiny-compare2/`.
+
+## 2026-07-10 FUSED-MOE-024 - W13 backward direct dX fragment-to-peer-GMEM
+
+Job `/dlwh/bench-semantic-w13b-direct-gmem-20260710-1548` ran once on
+`cw-rno2a` at commit `e05a3aa826` and reached terminal Iris state `succeeded`.
+Its single task exited 0 after 41.5 seconds, with zero failures and
+preemptions. No duplicate, stop, resubmit, code edit, or Iris restart was
+issued.
+
+Storing each WGMMA dX fragment directly to peer GMEM removed the prior severe
+dX corruption. Expected and observed dX absolute sums were `10787750.0` and
+`10787916.0`; least-squares scale was `0.999991774559021` and cosine similarity
+was `0.9999985098838806`. dX max and mean absolute differences were
+`0.4999237060546875` and `0.06049002707004547`. dW13 remained close, with max
+and mean absolute differences of `3.814697265625e-06` and
+`3.301985884718306e-08`. Expected and observed nonfinite counts were zero for
+both dX and dW13.
+
+Compile/first-call time was `8.22770067199599` seconds, lowering/compile time
+was `7.354656650917605` seconds, first-run time was `0.8730440210783854`
+seconds, and steady-state time was `0.001655775005929172` seconds. Useful and
+rounded throughput were `0.0810603660034601` and `0.10132545750432512`
+TFLOP/s/rank. The row reported four live pairs, 1,024 useful rows, 1,280 rounded
+rows, 0.8 row efficiency, and checksum `21575668.0`. Queue and layout overflow
+error counts, metadata overflow routes, routing drops, and dropped routes were
+all zero. Twelve non-fatal `CUDA_ERROR_NOT_PERMITTED` VMM handle fallback
+warnings occurred. Exact repeat and summary rows, terminal evidence, and
+monitor state are in `scratch/6597-w13b-direct-gmem/`.

@@ -270,6 +270,16 @@ def source_push_semantic_fused_w2_backward_reference_jax(
     scatter_expert = jnp.broadcast_to(safe_expert[..., None], row_valid.shape)
     scatter_row = metadata.send_row_start[..., None] + row
     scatter_row = jnp.where(row_valid, scatter_row, metadata.rows_per_expert_capacity)
+    dy_route_for_expert = dy_route
+    if gathered_sharding is not None:
+        replicated_rows = P(None, None, None, None, None)
+        replicated_values = P(None, None, None, None, None, None)
+        queue_dh = jax.sharding.reshard(queue_dh, replicated_values)
+        row_valid = jax.sharding.reshard(row_valid, replicated_rows)
+        scatter_destination = jax.sharding.reshard(scatter_destination, replicated_rows)
+        scatter_expert = jax.sharding.reshard(scatter_expert, replicated_rows)
+        scatter_row = jax.sharding.reshard(scatter_row, replicated_rows)
+        dy_route_for_expert = jax.sharding.reshard(dy_route, replicated_values)
     d_h = jnp.zeros(
         (*h_expert.shape[:3], h_expert.shape[-1]),
         dtype=jnp.float32,
@@ -281,18 +291,18 @@ def source_push_semantic_fused_w2_backward_reference_jax(
     d_h = d_h[..., : metadata.rows_per_expert_capacity, :]
 
     safe_row = jnp.minimum(metadata.send_row_start[..., None] + row, h_expert.shape[2] - 1)
-    h_rows = (
-        h_expert.at[scatter_destination, scatter_expert, safe_row]
-        .get(out_sharding=gathered_sharding)
-        .astype(jnp.float32)
-    )
+    if gathered_sharding is not None:
+        safe_row = jax.sharding.reshard(safe_row, P(None, None, None, None, None))
+    h_rows_sharding = None if gathered_sharding is None else P(None, None, None, None, None, None)
+    h_rows = h_expert.at[scatter_destination, scatter_expert, safe_row].get(out_sharding=h_rows_sharding)
+    h_rows = h_rows.astype(jnp.float32)
     h_rows = jnp.where(row_valid[..., None], h_rows, jnp.zeros((), dtype=jnp.float32))
     dw2 = jnp.zeros(w_down.shape, dtype=jnp.float32)
     for dst in range(w_down.shape[0]):
         for expert in range(w_down.shape[1]):
-            mask = row_valid & (destination[..., None] == dst) & (safe_expert[..., None] == expert)
+            mask = row_valid & (scatter_destination == dst) & (scatter_expert == expert)
             h_masked = jnp.where(mask[..., None], h_rows, jnp.zeros((), dtype=jnp.float32))
-            dy_masked = jnp.where(mask[..., None], dy_route, jnp.zeros((), dtype=jnp.float32))
+            dy_masked = jnp.where(mask[..., None], dy_route_for_expert, jnp.zeros((), dtype=jnp.float32))
             part = jnp.einsum("sdcbmi,sdcbmh->ih", h_masked, dy_masked, preferred_element_type=jnp.float32)
             dw2 = dw2.at[dst, expert].set(part)
 
@@ -301,7 +311,11 @@ def source_push_semantic_fused_w2_backward_reference_jax(
         + jnp.arange(_blocks, dtype=jnp.int32)[None, None, None, :, None]
     )
     queue_row = jnp.arange(compute_m, dtype=jnp.int32)[None, None, None, None, :]
-    route_y = return_y.at[source, dst_ordinal[..., None], entry, queue_row].get().astype(jnp.float32)
+    route_y = (
+        return_y.at[source, dst_ordinal[..., None], entry, queue_row]
+        .get(out_sharding=gathered_sharding)
+        .astype(jnp.float32)
+    )
     queue_d_route = jnp.sum(dy_rows * route_y, axis=-1)
     queue_d_route = jnp.where(row_valid, queue_d_route, jnp.zeros((), dtype=jnp.float32))
     d_route = jnp.zeros((*dy.shape[:2], metadata.topk), dtype=jnp.float32)
