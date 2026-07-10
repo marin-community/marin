@@ -348,8 +348,8 @@ def _source_push_semantic_fused_w13_sharded(
         return z_local[None, ...]
 
     source_3d = NamedSharding(mesh, P(SOURCE_PUSH_MESH_AXIS, None, None))
-    source_5d = NamedSharding(mesh, P(SOURCE_PUSH_MESH_AXIS, None, None, None, None))
-    source_6d = NamedSharding(mesh, P(SOURCE_PUSH_MESH_AXIS, None, None, None, None, None))
+    source_token_sharding = NamedSharding(mesh, P(SOURCE_PUSH_MESH_AXIS, None, None, None, None))
+    source_metadata_sharding = NamedSharding(mesh, P(SOURCE_PUSH_MESH_AXIS, None, None, None))
     destination_4d = NamedSharding(mesh, P(SOURCE_PUSH_MESH_AXIS, None, None, None))
     weights_sharding = NamedSharding(mesh, P(SOURCE_PUSH_MESH_AXIS, None, None, None))
     return shard_map(
@@ -357,19 +357,19 @@ def _source_push_semantic_fused_w13_sharded(
         mesh=mesh,
         in_specs=(
             P(SOURCE_PUSH_MESH_AXIS, None, None),
-            P(SOURCE_PUSH_MESH_AXIS, None, None, None, None, None),
             P(SOURCE_PUSH_MESH_AXIS, None, None, None, None),
-            P(SOURCE_PUSH_MESH_AXIS, None, None, None, None),
-            P(SOURCE_PUSH_MESH_AXIS, None, None, None, None),
-            P(SOURCE_PUSH_MESH_AXIS, None, None, None, None),
-            P(SOURCE_PUSH_MESH_AXIS, None, None, None, None),
+            P(SOURCE_PUSH_MESH_AXIS, None, None, None),
+            P(SOURCE_PUSH_MESH_AXIS, None, None, None),
+            P(SOURCE_PUSH_MESH_AXIS, None, None, None),
+            P(SOURCE_PUSH_MESH_AXIS, None, None, None),
+            P(SOURCE_PUSH_MESH_AXIS, None, None, None),
         ),
         out_specs=P(SOURCE_PUSH_MESH_AXIS, None, None, None),
         check_vma=False,
     )(
         jax.sharding.reshard(x, source_3d),
-        jax.sharding.reshard(metadata.token_ids, source_6d),
-        jax.sharding.reshard(metadata.send_valid_rows, source_5d),
+        jax.sharding.reshard(metadata.token_ids, source_token_sharding),
+        jax.sharding.reshard(metadata.send_valid_rows, source_metadata_sharding),
         jax.sharding.reshard(metadata.recv_expert, destination_4d),
         jax.sharding.reshard(metadata.recv_row_start, destination_4d),
         jax.sharding.reshard(metadata.recv_valid_rows, destination_4d),
