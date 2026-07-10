@@ -129,13 +129,12 @@ def _content_type(relpath: str) -> str:
 def _write_object(uri: str, data: bytes, content_type: str) -> None:
     """Write ``data`` to ``uri`` with an explicit ``Content-Type`` on the stored object.
 
-    Writes through ``fs.open`` rather than ``open_url``/``fsspec.open``, which forward extra
-    kwargs to the filesystem constructor and silently drop the content type. gcsfs honors
-    ``content_type`` on the file handle; filesystems without content-type support (local
-    test roots) ignore it.
+    Filesystems without content-type support (local test roots) ignore it.
     """
     fs, path = url_to_fs(uri)
     fs.makedirs(fs._parent(path), exist_ok=True)
+    # Must go through fs.open: open_url/fsspec.open forward extra kwargs to the filesystem
+    # constructor, silently dropping the content type; gcsfs honors it on the file handle.
     with fs.open(path, "wb", content_type=content_type) as f:
         f.write(data)
 
