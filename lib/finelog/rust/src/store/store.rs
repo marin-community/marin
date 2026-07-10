@@ -67,6 +67,16 @@ pub(crate) fn log_registered_schema() -> Schema {
     )
 }
 
+/// One consistent view of the `log` namespace's sealed local segments: the arrow
+/// schema to read them with, their paths, and the lowest `seq` they hold (`None`
+/// when there is no local segment). Captured under a single hold of the engine's
+/// insertion lock, so `min_seq` always describes exactly the segments in `paths`.
+pub struct LogSnapshot {
+    pub schema: SchemaRef,
+    pub paths: Vec<String>,
+    pub min_seq: Option<i64>,
+}
+
 /// Store backed by the Rust catalog plus per-namespace durability engines.
 ///
 /// The catalog owns the persistent registry + segments table; the `engines`
@@ -453,9 +463,32 @@ impl Store {
 
     /// Snapshot the reserved `log` namespace's arrow schema + sealed-segment
     /// paths for a FetchLogs read.
-    pub fn log_query_snapshot(&self) -> Result<(SchemaRef, Vec<String>), StatsError> {
+    pub fn log_query_snapshot(&self) -> Result<LogSnapshot, StatsError> {
         let engine = self.require_engine(LOG_NAMESPACE_NAME)?;
-        Ok((Arc::clone(engine.arrow_schema()), engine.query_snapshot()))
+        let (paths, min_seq) = engine.query_snapshot_with_min_seq();
+        Ok(LogSnapshot {
+            schema: Arc::clone(engine.arrow_schema()),
+            paths,
+            min_seq,
+        })
+    }
+
+    /// Subscribe to the `log` namespace's durability high-water mark: every row
+    /// with `seq <= value` has been sealed into a segment, so it is visible to a
+    /// scan unless it has since been evicted. The current value counts as already
+    /// seen, so read `borrow()` before awaiting `changed()`.
+    pub fn log_persisted_seq(&self) -> Result<tokio::sync::watch::Receiver<i64>, StatsError> {
+        Ok(self.require_engine(LOG_NAMESPACE_NAME)?.persisted_seq())
+    }
+
+    /// The highest `log` seq this store has confirmed durable at `target`.
+    pub fn forward_cursor(&self, target: &str) -> Result<Option<i64>, StatsError> {
+        self.catalog.forward_cursor(target)
+    }
+
+    /// Record `cursor` as forwarded to `target`.
+    pub fn set_forward_cursor(&self, target: &str, cursor: i64) -> Result<(), StatsError> {
+        self.catalog.set_forward_cursor(target, cursor)
     }
 
     /// Return `(name, schema, stats, policy)` for every live namespace in

@@ -15,6 +15,8 @@
 # (no KUBECONFIG export needed). Export the R2 creds, then
 #   export R2_ACCESS_KEY_ID=... R2_SECRET_ACCESS_KEY=...
 #   uv run finelog deploy up cw-us-east-02a
+# `deploy up` also resolves forwarding.signing_key below out of GCP Secret Manager, so
+# the operator needs roles/secretmanager.secretAccessor on that secret.
 name: finelog-cw-use02a
 port: 10001
 image: ghcr.io/marin-community/finelog:latest
@@ -38,20 +40,31 @@ deployment:
     priority_class_value: 10000
 # Authenticated-ingress policy: default-deny, admitting this cluster's private network
 # (CoreWeave pods are 10.x) and loopback (port-forward) by cidr, never the public
-# internet. No jwt layer here — cross-cluster relay pushes are the global finelog's job.
+# internet. No jwt layer: this server sends to the hub and accepts no pushes from it.
 auth:
   - type: cidr
     cidrs: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 127.0.0.0/8, "::1/128"]
-  # A global finelog also trusts each federated iris controller by its public key, to
-  # verify aud="finelog" relay-delegation tokens. This local finelog takes no
-  # cross-cluster pushes, so the jwt layer stays commented. A marin admin script will
-  # generate it from each controller's public key — see issue #6961. Shape, one entry
-  # per federated cluster:
-  # - type: jwt
-  #   keys:
-  #     - cluster: <iris-cluster-name>
-  #       public_keys:
-  #         - |
-  #             -----BEGIN PUBLIC KEY-----
-  #             <iris-controller-ed25519-public-key-pem>
-  #             -----END PUBLIC KEY-----
+# Ship this cluster's rows on to marin's finelog, the federation's global log sink, so a
+# job federated here reads back from marin. The server tails its own durable rows and
+# pushes them in bulk, signing an aud="finelog" bearer with the key below; marin admits
+# it by the matching public key under `cluster: cw-us-east-02a` in its own `jwt` layer,
+# and stamps every row it receives with that cluster — the sender cannot name another
+# one. Cloud Armor narrows the edge to CoreWeave's egress prefixes first
+# (lib/iris/scripts/iap_gclb.py).
+#
+# Forwarding is best-effort: the hub holds a convenience copy, this store holds the
+# record. A sender that falls far behind (hub down, edge partitioned) skips ahead to its
+# freshest window rather than growing without bound; the rows it skipped stay queryable
+# here for the local retention window.
+#
+# `cluster` is the iris cluster id (cw-us-east-02a), not this deployment's shortened
+# name: it is the name a reader queries the hub by.
+#
+# signing_key is a reference, never the key itself: `finelog deploy up` resolves it and
+# projects it into the pod through the finelog-cw-use02a-env Secret. To rotate, add a
+# Secret Manager version, pin it here, and carry both public keys in marin's jwt entry
+# across the overlap.
+forwarding:
+  target: https://finelog.oa.dev
+  cluster: cw-us-east-02a
+  signing_key: gcp-secret://projects/748532799086/secrets/finelog-cw-us-east-02a-signing-key/versions/1

@@ -5,24 +5,27 @@
 
 import base64
 import json
+from dataclasses import replace
 
 import click
 import pytest
 from finelog.deploy._k8s import (
     _K8S_MANIFEST_DIR,
     _MANIFESTS,
-    _build_s3_secret_manifest,
+    _build_env_secret_manifest,
+    _env_secret_name,
     _render_manifest,
-    _s3_secret_name,
 )
 from finelog.deploy.config import (
     CidrAuthLayer,
     Deployment,
     FinelogConfig,
+    ForwardingConfig,
     JwtAuthLayer,
     JwtKeyEntry,
     K8sDeployment,
 )
+from rigging.secrets import SecretResolutionError
 
 
 def _s3_cfg(**k8s_overrides) -> FinelogConfig:
@@ -170,11 +173,11 @@ def test_render_pvc_omits_storage_class_when_unset() -> None:
     assert "<cluster default>" in rendered
 
 
-def test_s3_secret_minted_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_env_secret_minted_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("R2_ACCESS_KEY_ID", "AKID")
     monkeypatch.setenv("R2_SECRET_ACCESS_KEY", "SEKRIT")
     cfg = _s3_cfg()
-    manifest = json.loads(_build_s3_secret_manifest(cfg))
+    manifest = json.loads(_build_env_secret_manifest(cfg))
     data = {k: base64.b64decode(v).decode() for k, v in manifest["data"].items()}
     # The R2->AWS name mapping + injected region are the actual logic the Rust
     # server's from_env() depends on; the rest of the manifest is boilerplate.
@@ -197,30 +200,94 @@ def test_no_secret_for_non_s3_archive(monkeypatch: pytest.MonkeyPatch) -> None:
         remote_log_dir="gs://bucket/logs",
         deployment=Deployment(gcp=None, k8s=K8sDeployment(namespace="iris")),
     )
-    assert _build_s3_secret_manifest(cfg) is None
+    assert _build_env_secret_manifest(cfg) is None
 
 
-def test_s3_secret_requires_endpoint(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_env_secret_requires_endpoint(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("R2_ACCESS_KEY_ID", "AKID")
     monkeypatch.setenv("R2_SECRET_ACCESS_KEY", "SEKRIT")
     with pytest.raises(click.ClickException, match="object_storage_endpoint"):
-        _build_s3_secret_manifest(_s3_cfg(object_storage_endpoint=None))
+        _build_env_secret_manifest(_s3_cfg(object_storage_endpoint=None))
 
 
-def test_s3_secret_requires_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_env_secret_requires_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("R2_ACCESS_KEY_ID", raising=False)
     monkeypatch.delenv("R2_SECRET_ACCESS_KEY", raising=False)
     with pytest.raises(click.ClickException, match="R2_ACCESS_KEY_ID"):
-        _build_s3_secret_manifest(_s3_cfg())
+        _build_env_secret_manifest(_s3_cfg())
+
+
+_FORWARDING = ForwardingConfig(
+    target="https://finelog.oa.dev",
+    cluster="cw-rno2a",
+    signing_key=("env:TEST_FINELOG_SIGNING_KEY",),
+)
+
+
+def _forwarding_cfg() -> FinelogConfig:
+    return FinelogConfig(
+        name="finelog-cw",
+        port=10001,
+        image="img",
+        remote_log_dir="gs://bucket/logs",
+        deployment=Deployment(k8s=K8sDeployment(namespace="iris")),
+        forwarding=_FORWARDING,
+    )
+
+
+def test_render_deployment_inlines_forwarding_target_and_cluster() -> None:
+    rendered = _render_manifest(_K8S_MANIFEST_DIR / "02-deployment.yaml.tmpl", _forwarding_cfg())
+    assert "name: FINELOG_FORWARDING" in rendered
+    assert '"target":"https://finelog.oa.dev"' in rendered
+    assert '"cluster":"cw-rno2a"' in rendered
+
+
+def test_forwarding_signing_key_never_leaves_the_secret(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The private key reaches the pod through the Secret and through nothing else.
+
+    A rendered manifest is plaintext — `kubectl get deployment -o yaml` echoes it back to
+    anyone with read access on the namespace — so a key that lands there is a key that
+    leaks.
+    """
+    key_pem = "-----BEGIN PRIVATE KEY-----\nSEKRIT\n-----END PRIVATE KEY-----"
+    monkeypatch.setenv("TEST_FINELOG_SIGNING_KEY", key_pem)
+    cfg = _forwarding_cfg()
+
+    manifest = json.loads(_build_env_secret_manifest(cfg))
+    data = {k: base64.b64decode(v).decode() for k, v in manifest["data"].items()}
+    assert data == {"FINELOG_SIGNING_KEY": key_pem}
+
+    for manifest_name in _MANIFESTS:
+        assert "SEKRIT" not in _render_manifest(_K8S_MANIFEST_DIR / manifest_name, cfg)
+
+
+def test_env_secret_carries_both_s3_credentials_and_signing_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A forwarding server with an s3:// archive needs both, in the one Secret."""
+    monkeypatch.setenv("R2_ACCESS_KEY_ID", "AKID")
+    monkeypatch.setenv("R2_SECRET_ACCESS_KEY", "R2SEKRIT")
+    monkeypatch.setenv("TEST_FINELOG_SIGNING_KEY", "PRIVKEY")
+    cfg = replace(_s3_cfg(), forwarding=_FORWARDING)
+    manifest = json.loads(_build_env_secret_manifest(cfg))
+    data = {k: base64.b64decode(v).decode() for k, v in manifest["data"].items()}
+    assert data["AWS_ACCESS_KEY_ID"] == "AKID"
+    assert data["FINELOG_SIGNING_KEY"] == "PRIVKEY"
+
+
+def test_env_secret_fails_when_the_signing_key_source_is_absent(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An unresolvable key fails the deploy. Starting a server that can never
+    authenticate to its hub looks exactly like a quiet cluster."""
+    monkeypatch.delenv("TEST_FINELOG_SIGNING_KEY", raising=False)
+    with pytest.raises(SecretResolutionError):
+        _build_env_secret_manifest(_forwarding_cfg())
 
 
 def test_deployment_envfrom_matches_minted_secret_name() -> None:
     # The template's envFrom secret name is a hardcoded `{{ name }}-env` literal,
-    # independent of the `_s3_secret_name` helper that names the minted Secret —
+    # independent of the `_env_secret_name` helper that names the minted Secret —
     # this guards the two from drifting (a mismatch silently breaks auth).
     cfg = _s3_cfg()
     rendered = _render_manifest(_K8S_MANIFEST_DIR / "02-deployment.yaml.tmpl", cfg)
-    assert f"name: {_s3_secret_name(cfg)}" in rendered
+    assert f"name: {_env_secret_name(cfg)}" in rendered
 
 
 def test_manifest_dir_exists() -> None:

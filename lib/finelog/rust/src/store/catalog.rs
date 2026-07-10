@@ -169,9 +169,48 @@ impl Catalog {
                 PRIMARY KEY (namespace, path)
             );
             CREATE INDEX IF NOT EXISTS segments_ns_level_minseq ON segments (namespace, level, min_seq);
+            CREATE TABLE IF NOT EXISTS forward_state (
+                target TEXT PRIMARY KEY,
+                cursor INTEGER NOT NULL
+            );
             "#,
         )
         .map_err(sqlite_err)
+    }
+
+    // ----- forward watermark ---------------------------------------------
+
+    /// The highest `log` seq confirmed durable at `target`, or `None` if this
+    /// store has never forwarded there.
+    ///
+    /// Keyed by target so repointing a forwarder reseeds instead of replaying one
+    /// store's seq space into another's.
+    pub fn forward_cursor(&self, target: &str) -> Result<Option<i64>, StatsError> {
+        let inner = self.inner.lock().unwrap();
+        inner
+            .conn
+            .query_row(
+                "SELECT cursor FROM forward_state WHERE target = ?1",
+                [target],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(sqlite_err)
+    }
+
+    /// Record `cursor` as forwarded to `target`. Called after the target durably
+    /// acks, so a crash re-forwards the in-flight batch rather than losing it.
+    pub fn set_forward_cursor(&self, target: &str, cursor: i64) -> Result<(), StatsError> {
+        let inner = self.inner.lock().unwrap();
+        inner
+            .conn
+            .execute(
+                "INSERT INTO forward_state (target, cursor) VALUES (?1, ?2)
+                 ON CONFLICT(target) DO UPDATE SET cursor = excluded.cursor",
+                rusqlite::params![target, cursor],
+            )
+            .map_err(sqlite_err)?;
+        Ok(())
     }
 
     // ----- live namespace registry --------------------------------------

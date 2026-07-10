@@ -710,25 +710,15 @@ class PeerConfig(_Config):
 
 
 class ClusterFinelogConfig(_Config):
-    """This cluster's finelog: the local log store, and optionally a relay to a shared one.
+    """This cluster's finelog: the log store that serves it.
 
-    ``config`` names the finelog deployment that serves this cluster (iris derives
-    ``/system/log-server`` from it). Set ``relay_address`` to also run a durable relay
-    that forwards this cluster's logs to a shared global finelog; leave it empty and the
-    log plane stays single-cluster (no relay, local reads, byte-identical behavior).
-
-    The relay authenticates its pushes with a short-lived ``aud="finelog"`` delegation
-    JWT minted by THIS controller's signer (its per-cluster EdDSA key), under this
-    cluster's name. The shared finelog verifies it against this controller's public
-    key — no shared symmetric secret. The ``aud="finelog"`` binding means the same token
-    is rejected by this controller's own control-plane verifier, so it can never be
-    replayed at the RPC surface. With no signer (null-auth), no bearer is sent and the
-    global finelog must admit this controller by a ``cidr`` layer (a same-VPC/loopback
-    dev store).
+    ``config`` names the finelog deployment (iris derives ``/system/log-server`` from
+    it). Shipping this cluster's logs on to a shared hub finelog is the log server's
+    own job, configured in its deploy config's ``forwarding:`` block — iris neither
+    forwards nor holds a credential for it.
     """
 
     config: str = ""  # finelog deploy-config name; iris derives /system/log-server from it
-    relay_address: str = ""  # shared global finelog to forward logs to (empty = single-cluster)
 
 
 # ---------------------------------------------------------------------------
@@ -761,9 +751,8 @@ class IrisClusterConfig(_OneofConfig):
     # cluster may delegate whole jobs to. Absent/empty leaves federation inert —
     # a single-cluster deployment is unchanged.
     peers: dict[str, PeerConfig] = Field(default_factory=dict)
-    # This cluster's finelog: the local log store (`finelog.config` names the deploy
-    # config iris derives /system/log-server from) and an optional `finelog.relay_address`
-    # for a shared global finelog. Setting `finelog.relay_address` turns on the forwarder.
+    # This cluster's finelog: `finelog.config` names the deploy config iris derives
+    # /system/log-server from.
     finelog: ClusterFinelogConfig = Field(default_factory=ClusterFinelogConfig)
     # Public dashboard origin (e.g. "https://iris.oa.dev"); enables clickable job URLs.
     dashboard_url: str = ""

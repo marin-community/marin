@@ -340,6 +340,32 @@ impl Namespace {
             .collect()
     }
 
+    /// Snapshot the sealed local segment paths AND the lowest `seq` they hold,
+    /// under one hold of the insertion lock, so the two describe the same segment
+    /// set. `None` when no local segment exists (an empty namespace, or one whose
+    /// segments have all been evicted to remote).
+    ///
+    /// A reader that resumes from a stored cursor needs both: the paths bound what
+    /// it can scan, and the min seq tells it whether rows below that bound were
+    /// evicted out from under it. Reading them separately would let an eviction
+    /// land in between and hide the gap.
+    pub fn query_snapshot_with_min_seq(&self) -> (Vec<String>, Option<i64>) {
+        let inner = self.inner.lock().unwrap();
+        let paths = inner
+            .local_segments
+            .iter()
+            .map(|s| s.path.clone())
+            .collect();
+        let min_seq = inner.local_segments.iter().map(|s| s.min_seq).min();
+        (paths, min_seq)
+    }
+
+    /// Subscribe to the durability high-water mark. The current value is already
+    /// marked seen, so a caller must read `borrow()` before awaiting `changed()`.
+    pub fn persisted_seq(&self) -> watch::Receiver<i64> {
+        self.persisted_seq.subscribe()
+    }
+
     /// Wake the flush task after an append. Nudges the rate-limited flush loop;
     /// a buffer that already holds a full segment (`>= SEGMENT_TARGET_BYTES`)
     /// also trips `force_flush` to bypass the cooldown and bound RAM / L0 size.

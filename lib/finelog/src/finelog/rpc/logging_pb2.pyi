@@ -77,6 +77,18 @@ class PushLogsResponse(_message.Message):
     __slots__ = ()
     def __init__(self) -> None: ...
 
+class PushLogsBulkRequest(_message.Message):
+    __slots__ = ("entries", "cluster")
+    ENTRIES_FIELD_NUMBER: _ClassVar[int]
+    CLUSTER_FIELD_NUMBER: _ClassVar[int]
+    entries: _containers.RepeatedCompositeFieldContainer[LogEntry]
+    cluster: str
+    def __init__(self, entries: _Optional[_Iterable[_Union[LogEntry, _Mapping]]] = ..., cluster: _Optional[str] = ...) -> None: ...
+
+class PushLogsBulkResponse(_message.Message):
+    __slots__ = ()
+    def __init__(self) -> None: ...
+
 class FetchLogsRequest(_message.Message):
     __slots__ = ("source", "since_ms", "cursor", "substring", "max_lines", "tail", "min_level", "match_scope", "cluster", "until_cursor")
     SOURCE_FIELD_NUMBER: _ClassVar[int]

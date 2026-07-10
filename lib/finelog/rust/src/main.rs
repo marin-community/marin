@@ -11,7 +11,9 @@ use std::time::Duration;
 
 use clap::Parser;
 use finelog::server::diagnostics::spawn_pool_diagnostics;
-use finelog::server::{build_app_with_config, AuthPolicy, ServerConfig};
+use finelog::server::{
+    build_app_with_config, spawn_forwarder, AuthPolicy, Forwarder, ForwardingConfig, ServerConfig,
+};
 use finelog::store::Store;
 use tokio::sync::Notify;
 
@@ -62,6 +64,19 @@ struct Args {
     /// network. A shared global finelog sets a `cidr`+`jwt` stack.
     #[arg(long = "auth-policy", env = "FINELOG_AUTH_POLICY", default_value = "")]
     auth_policy: String,
+
+    /// Relay this store's logs to a shared hub finelog, as JSON (env
+    /// `FINELOG_FORWARDING`): `{"target":"https://<hub>","cluster":"<this-cluster>"}`.
+    /// Empty (the default) forwards nothing. Requires `--signing-key`.
+    #[arg(long = "forwarding", env = "FINELOG_FORWARDING", default_value = "")]
+    forwarding: String,
+
+    /// This server's Ed25519 private key (PKCS#8 PEM, env `FINELOG_SIGNING_KEY`),
+    /// which signs the `aud="finelog"` bearer the hub verifies against the matching
+    /// public key in its `jwt` auth layer. Only the forwarder uses it. Deliver it
+    /// through a secret; never inline it into a deploy manifest.
+    #[arg(long = "signing-key", env = "FINELOG_SIGNING_KEY", default_value = "")]
+    signing_key: String,
 }
 
 #[tokio::main]
@@ -104,6 +119,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let config = ServerConfig::with_debug_admin(args.debug_admin).with_auth(auth);
     let app = build_app_with_config(Arc::clone(&store), config);
 
+    // Cross-cluster forwarding, when configured. Spawned before the listener binds
+    // so a store with a backlog starts draining immediately, and latched off in the
+    // shutdown block below.
+    let (forward_stop, forward_task) = match build_forwarder(&args, Arc::clone(&store))? {
+        Some(forwarder) => {
+            let (tx, rx) = tokio::sync::watch::channel(false);
+            (Some(tx), Some(spawn_forwarder(forwarder, rx)))
+        }
+        None => (None, None),
+    };
+
     // Periodic pool/RSS diagnostics task; cancelled on shutdown via a latched
     // stop flag (set before the Notify, so a notify that races the task's emit
     // cannot be lost) plus the Notify for a prompt wakeup.
@@ -130,6 +156,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     .await?;
     tracing::info!("finelog-server draining background tasks");
 
+    // Stop the forwarder first: it reads the store, so it must be off the segments
+    // before the namespaces drain. It latches on the watch and interrupts its own
+    // retry backoff, so the join is prompt; the bound is defense in depth.
+    if let (Some(stop), Some(task)) = (forward_stop, forward_task) {
+        let _ = stop.send(true);
+        let _ = tokio::time::timeout(Duration::from_secs(10), task).await;
+    }
+
     // Stop the diagnostics task, then cooperatively cancel + join the
     // per-namespace flush/maintenance tasks. The per-namespace join is bounded;
     // an OUTER timeout here guarantees the process still exits promptly even if
@@ -147,6 +181,39 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     .await;
     tracing::info!("finelog-server stopped");
     Ok(())
+}
+
+/// Build the cross-cluster forwarder, or `None` when forwarding is unconfigured.
+///
+/// Every way the configuration can be wrong is an error here rather than a silent
+/// no-op at the first push: a forwarder that never ships is invisible, and a store
+/// whose logs stop reaching the hub looks exactly like a quiet cluster.
+///
+/// Forwarding needs a disk store. A memory-mode namespace publishes a durability
+/// watermark but exposes no segments to a scan, so the forwarder would tail rows it
+/// can never read.
+fn build_forwarder(args: &Args, store: Arc<Store>) -> Result<Option<Forwarder>, String> {
+    if args.forwarding.trim().is_empty() {
+        return Ok(None);
+    }
+    if args.log_dir.is_none() {
+        return Err(
+            "forwarding needs a --log-dir: a memory-mode store has no segments to read".into(),
+        );
+    }
+    if args.signing_key.trim().is_empty() {
+        return Err(
+            "forwarding needs --signing-key (env FINELOG_SIGNING_KEY) to mint its bearer".into(),
+        );
+    }
+    let config = ForwardingConfig::parse(&args.forwarding)
+        .map_err(|e| format!("invalid FINELOG_FORWARDING: {e}"))?;
+    tracing::info!(
+        target = %config.target,
+        cluster = %config.cluster,
+        "finelog-server: forwarding configured"
+    );
+    Ok(Some(Forwarder::new(store, config, &args.signing_key)?))
 }
 
 /// Resolve when the first SIGTERM or SIGINT (Ctrl-C) arrives.

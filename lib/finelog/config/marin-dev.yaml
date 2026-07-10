@@ -15,21 +15,11 @@ deployment:
 # worker reach finelog directly on its internal address — and loopback for an SSH
 # tunnel. It matches the transport peer, never X-Forwarded-For, so a request arriving
 # through the load balancer carries a Google front-end source address, falls past this
-# layer, and must present a token.
+# layer, and is denied.
 #
-# The jwt layer admits the federated iris controllers that relay their logs here, each
-# by its own Ed25519 public key, verifying the aud="finelog" delegation token their
-# controller mints hourly. Only clusters that arrive over the load balancer need an
-# entry; marin-dev's own controller is admitted by cidr above. Cloud Armor narrows the
-# edge to those clusters' egress prefixes first (lib/iris/scripts/iap_gclb.py).
+# No jwt layer: marin-dev is nobody's forwarding hub. A finelog that receives another
+# cluster's rows adds one jwt entry per sender, naming that sender's public key (see
+# marin.yaml).
 auth:
   - type: cidr
     cidrs: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 127.0.0.0/8, "::1/128"]
-  - type: jwt
-    keys:
-      - cluster: cw-rno2a
-        public_keys:
-          - |
-              -----BEGIN PUBLIC KEY-----
-              MCowBQYDK2VwAyEAB7J7n1A0ASyT+ogJqAFbO3kf8FPL2RAVQGHbdSQoLTE=
-              -----END PUBLIC KEY-----

@@ -1773,11 +1773,11 @@ def finelog_cmd(
     click.echo(f"finelog {finelog.vm} fronted by {frontend_name}'s load balancer.")
     click.echo(f"  Shared IP     : {reserved_ip}")
     click.echo(f"  Domain        : {domain}  (ensure a DNS A record -> {reserved_ip})")
-    click.echo(f"  Relay address : https://{domain}")
+    click.echo(f"  Forward target: https://{domain}")
     click.echo(f"  Admitted      : {', '.join(ranges)}  (Cloud Armor {finelog.armor_policy}; everything else 403)")
     click.echo()
     click.echo(f"The managed cert {finelog.cert} stays PROVISIONING until that A record resolves.")
-    click.echo(f"Set `finelog.relay_address: https://{domain}` on each relaying cluster's iris config,")
+    click.echo(f"Set `forwarding.target: https://{domain}` in each sending finelog's deploy config,")
     click.echo(f"and add its public key to a `jwt` auth layer in lib/finelog/config/{cluster}.yaml.")
 
 

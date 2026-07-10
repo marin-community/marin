@@ -31,15 +31,12 @@ name: cw-us-east-02a
 # Without this the controller falls back to an in-process MemStore (logs lost on
 # restart). Deploy the server first: `uv run finelog deploy up cw-us-east-02a`.
 #
-# `relay_address` forwards this cluster's logs to marin's finelog, the federation's
-# global log sink, so a job federated here reads back from marin. The relay
-# authenticates with a short-lived aud="finelog" token signed by this cluster's key
-# below; marin's finelog admits it by the matching public key in its own `jwt` auth
-# layer, and Cloud Armor admits only CoreWeave's egress prefixes
-# (lib/iris/scripts/iap_gclb.py).
+# That server ships this cluster's logs on to marin's finelog, the federation's global
+# log sink, so a job federated here reads back from marin. Its `forwarding:` block
+# (lib/finelog/config/cw-us-east-02a.yaml) holds the target and the key it signs with; iris
+# neither forwards nor holds a credential for it.
 finelog:
   config: cw-us-east-02a
-  relay_address: https://finelog.oa.dev
 
 # Public host of this controller. The whole surface is IP-locked to the marin
 # egress (scripts/install_cw_network.py); there is no off-cluster user surface.

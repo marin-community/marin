@@ -57,6 +57,37 @@ serde_json = "1"
 # does not add it — nor, now, remove it.
 jsonwebtoken = { version = "10", default-features = false, features = ["use_pem", "rust_crypto"] }
 axum = "0.7"
+# HTTPS transport for the forwarder's outbound client. connectrpc's generated
+# `LogServiceClient` is generic over `ClientTransport`, and `ServiceTransport`
+# adapts any tower service -- including hyper-util's pooled client -- so we supply
+# our own connector instead of enabling connectrpc's `client-tls` feature. That
+# feature depends on `rustls` with DEFAULT features, which selects the `aws_lc_rs`
+# provider and its C/cmake build; every crate below is pinned to `ring` so the
+# tree keeps exactly one rustls provider and the Dockerfile needs no new toolchain.
+# `webpki-roots` ships the trust anchors in the binary, so the container's CA
+# bundle is not a deploy-time dependency.
+http = "1"
+hyper = { version = "1", features = ["client", "http1", "http2"] }
+hyper-util = { version = "0.1", features = [
+    "client",
+    "client-legacy",
+    "http1",
+    "http2",
+    "tokio",
+] }
+hyper-rustls = { version = "0.27", default-features = false, features = [
+    "http1",
+    "http2",
+    "tls12",
+    "ring",
+] }
+rustls = { version = "0.23", default-features = false, features = [
+    "ring",
+    "std",
+    "tls12",
+    "logging",
+] }
+webpki-roots = "1"
 # Phase 5d: ServeDir static-file service for the Vue SPA `/static` mount. The
 # `fs` feature is the only one needed; tower-http 0.6 is compatible with the
 # crate's axum 0.7 tower::Service contract. `tower` (already in the lock via

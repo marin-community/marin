@@ -17,12 +17,19 @@ deployment:
 # into the jwt layer. Never add the Google LB ranges here: that would admit the edge
 # itself, and with it anything Cloud Armor let through.
 #
-# The jwt layer admits the federated iris controllers that relay their logs here, each
-# by its own Ed25519 public key, verifying the aud="finelog" delegation token their
-# controller mints hourly. Only clusters that arrive over the load balancer need an
-# entry; marin's own controller and its GCP workers are admitted by cidr above. Cloud
-# Armor narrows the edge to those clusters' egress prefixes first
+# This is the federation's hub: each per-cluster finelog forwards its rows here, so a job
+# federated to CoreWeave reads back from marin. The jwt layer admits each sending finelog
+# by its own Ed25519 public key, verifying the aud="finelog" bearer that server mints
+# hourly from the private half (its deploy config's `forwarding.signing_key`). The match
+# is what names the origin: every row a sender pushes is stamped with the `cluster` its
+# key authenticates, never a value the sender asserts. Only senders that arrive over the
+# load balancer need an entry; marin's own controller and its GCP workers are admitted by
+# cidr above. Cloud Armor narrows the edge to those clusters' egress prefixes first
 # (lib/iris/scripts/iap_gclb.py).
+#
+# `public_keys` is a list so a rotation can carry the old and new key together: add the
+# new one here, roll this server, then re-pin the sender's `forwarding.signing_key` to the
+# new Secret Manager version and drop the old key.
 auth:
   - type: cidr
     cidrs: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 127.0.0.0/8, "::1/128"]
@@ -32,11 +39,11 @@ auth:
         public_keys:
           - |
               -----BEGIN PUBLIC KEY-----
-              MCowBQYDK2VwAyEAB7J7n1A0ASyT+ogJqAFbO3kf8FPL2RAVQGHbdSQoLTE=
+              MCowBQYDK2VwAyEAy1h0qFGWhuXow28GRDSLdXmb7jTZPo4L+RS/G5zlmhs=
               -----END PUBLIC KEY-----
       - cluster: cw-us-east-02a
         public_keys:
           - |
               -----BEGIN PUBLIC KEY-----
-              MCowBQYDK2VwAyEAz5BsprppPXXhN9PJajXqK6EFn57rItrdI/dqYRO5/4I=
+              MCowBQYDK2VwAyEAJYrTAboQmQmVnSRcsxusCfosRTUl7t2L3q2yRzW5Kwk=
               -----END PUBLIC KEY-----

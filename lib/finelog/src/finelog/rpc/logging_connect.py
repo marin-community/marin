@@ -20,6 +20,9 @@ class LogService(Protocol):
     async def push_logs(self, request: logging__pb2.PushLogsRequest, ctx: RequestContext) -> logging__pb2.PushLogsResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
+    async def push_logs_bulk(self, request: logging__pb2.PushLogsBulkRequest, ctx: RequestContext) -> logging__pb2.PushLogsBulkResponse:
+        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
+
     async def fetch_logs(self, request: logging__pb2.FetchLogsRequest, ctx: RequestContext) -> logging__pb2.FetchLogsResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
@@ -38,6 +41,16 @@ class LogServiceASGIApplication(ConnectASGIApplication[LogService]):
                         idempotency_level=IdempotencyLevel.UNKNOWN,
                     ),
                     function=svc.push_logs,
+                ),
+                "/finelog.logging.LogService/PushLogsBulk": Endpoint.unary(
+                    method=MethodInfo(
+                        name="PushLogsBulk",
+                        service_name="finelog.logging.LogService",
+                        input=logging__pb2.PushLogsBulkRequest,
+                        output=logging__pb2.PushLogsBulkResponse,
+                        idempotency_level=IdempotencyLevel.UNKNOWN,
+                    ),
+                    function=svc.push_logs_bulk,
                 ),
                 "/finelog.logging.LogService/FetchLogs": Endpoint.unary(
                     method=MethodInfo(
@@ -82,6 +95,26 @@ class LogServiceClient(ConnectClient):
             timeout_ms=timeout_ms,
         )
 
+    async def push_logs_bulk(
+        self,
+        request: logging__pb2.PushLogsBulkRequest,
+        *,
+        headers: Headers | Mapping[str, str] | None = None,
+        timeout_ms: int | None = None,
+    ) -> logging__pb2.PushLogsBulkResponse:
+        return await self.execute_unary(
+            request=request,
+            method=MethodInfo(
+                name="PushLogsBulk",
+                service_name="finelog.logging.LogService",
+                input=logging__pb2.PushLogsBulkRequest,
+                output=logging__pb2.PushLogsBulkResponse,
+                idempotency_level=IdempotencyLevel.UNKNOWN,
+            ),
+            headers=headers,
+            timeout_ms=timeout_ms,
+        )
+
     async def fetch_logs(
         self,
         request: logging__pb2.FetchLogsRequest,
@@ -106,6 +139,8 @@ class LogServiceClient(ConnectClient):
 class LogServiceSync(Protocol):
     def push_logs(self, request: logging__pb2.PushLogsRequest, ctx: RequestContext) -> logging__pb2.PushLogsResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
+    def push_logs_bulk(self, request: logging__pb2.PushLogsBulkRequest, ctx: RequestContext) -> logging__pb2.PushLogsBulkResponse:
+        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
     def fetch_logs(self, request: logging__pb2.FetchLogsRequest, ctx: RequestContext) -> logging__pb2.FetchLogsResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
@@ -123,6 +158,16 @@ class LogServiceWSGIApplication(ConnectWSGIApplication):
                         idempotency_level=IdempotencyLevel.UNKNOWN,
                     ),
                     function=service.push_logs,
+                ),
+                "/finelog.logging.LogService/PushLogsBulk": EndpointSync.unary(
+                    method=MethodInfo(
+                        name="PushLogsBulk",
+                        service_name="finelog.logging.LogService",
+                        input=logging__pb2.PushLogsBulkRequest,
+                        output=logging__pb2.PushLogsBulkResponse,
+                        idempotency_level=IdempotencyLevel.UNKNOWN,
+                    ),
+                    function=service.push_logs_bulk,
                 ),
                 "/finelog.logging.LogService/FetchLogs": EndpointSync.unary(
                     method=MethodInfo(
@@ -161,6 +206,26 @@ class LogServiceClientSync(ConnectClientSync):
                 service_name="finelog.logging.LogService",
                 input=logging__pb2.PushLogsRequest,
                 output=logging__pb2.PushLogsResponse,
+                idempotency_level=IdempotencyLevel.UNKNOWN,
+            ),
+            headers=headers,
+            timeout_ms=timeout_ms,
+        )
+
+    def push_logs_bulk(
+        self,
+        request: logging__pb2.PushLogsBulkRequest,
+        *,
+        headers: Headers | Mapping[str, str] | None = None,
+        timeout_ms: int | None = None,
+    ) -> logging__pb2.PushLogsBulkResponse:
+        return self.execute_unary(
+            request=request,
+            method=MethodInfo(
+                name="PushLogsBulk",
+                service_name="finelog.logging.LogService",
+                input=logging__pb2.PushLogsBulkRequest,
+                output=logging__pb2.PushLogsBulkResponse,
                 idempotency_level=IdempotencyLevel.UNKNOWN,
             ),
             headers=headers,
