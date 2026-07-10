@@ -1691,3 +1691,24 @@ author: dlwh
   - Capacity and schedule sweeps are lower-value until the profile attributes this regression. The same batch and microbatch count already saturate the ring baseline.
 - Next action:
   - Download and summarize the profile artifact. Use the exact hotspots to choose between kernel-native expert storage/layout, QuACK backward kernels, or a collective/sharding correction; retain ring EP as the performance baseline until no-EP exceeds it.
+
+### 2026-07-10 14:40 PDT - no-EP profile attribution and FSDP materialization hoist
+- Hypothesis: The no-EP regression comes primarily from materializing FSDP expert weights inside every microbatch task; materializing a replicated compute view once per stage and optimizer step should preserve sharded storage and gradient outputs while amortizing the expert all-gather across all microbatches.
+- Commit Hash: uncommitted schedule change at baseline `67400e6ec9`.
+- Commands:
+  - Profile: the command in the preceding entry. Download W&B artifact `marin-community/marin_moe/jaxpp-rno2a-profile-sonicquack-l24-e64k4-b512-s4096-p4m16-20260710-2109-profiler:v0` and summarize its XPlane with `uv run --with xprof --with protobuf python lib/marin/tools/profile_summary.py summarize --xplane-file .../g5303b8.xplane.pb --xplane-output-dir scratch/profiles/jaxpp_rno2a_profile_sonicquack_b512_m16_xprof --xplane-count-trace-events --breakdown-mode exclusive_global --output scratch/jaxpp_rno2a_profile_sonicquack_b512_m16_summary.json`.
+  - Reduced hoist gate: the preceding eight-layer distributed Sonic smoke with run id `jaxpp-rno2a-sonicquack-hoist-smoke-l8-e64k4-b32-s4096-p4m4-20260710-1433`.
+  - Full hoist comparison: the same exact 24-layer batch512/m16 command as the unhoisted run, with run id `jaxpp-rno2a-sonicquack-hoist-l24-e64k4-b512-s4096-p4m16-20260710-1439`.
+- Results:
+  - Profile parent `/dlwh/iris-run-job-20260710-210953` succeeded. W&B: <https://wandb.ai/marin-community/marin_moe/runs/jaxpp-rno2a-profile-sonicquack-l24-e64k4-b512-s4096-p4m16-20260710-2109>. Mean MFU was `14.5961`; p10/p50/p90 were `14.0390/14.7763/14.8247`; final throughput was `334,283.9` tokens/s with finite loss `6.96628`.
+  - The four-step profile attributes `49.95%` to communication, `42.95%` to compute, and `7.10%` to uncovered stall. NCCL AllGather is the largest operation, followed by pipeline SendRecv and reduce-scatter. FA4, a generated ragged-dot backward kernel, and the QuACK down/up kernels lead compute.
+  - Against the matching ring profile, AllGather exclusive duration rises from `20.20M` to `48.13M` microseconds and total collective duration rises `38.4%`. The no-EP path therefore replaced expert dispatch communication with repeated FSDP parameter gathers rather than removing communication.
+  - A direct N-major QuACK view intended to avoid `swapaxes` failed GPU forward parity with maximum absolute error `9024`; the known-good K-major path was restored. Avoiding those transposes requires kernel-native stored weights or a separately validated QuACK layout configuration.
+  - Hoist smoke parent `/dlwh/iris-run-job-20260710-213235` and all four child tasks succeeded with finite loss `8.9409246`. W&B: <https://wandb.ai/marin-community/marin_moe/runs/jaxpp-rno2a-sonicquack-hoist-smoke-l8-e64k4-b32-s4096-p4m4-20260710-1433>.
+  - Full hoist parent `/dlwh/iris-run-job-20260710-213940` is submitted on `cw-rno2a`.
+- Interpretation:
+  - QuACK forward is not the primary regression. The schedule currently passes FSDP storage parameters independently to every microbatch executable, so no-EP forces each expert layer to all-gather complete weights repeatedly.
+  - The schedule change preserves original FSDP parameters and optimizer state, creates a replicated Sonic-only compute view once per stage/step, reuses it across forward/backward microbatches, and constrains each microbatch gradient back to the original sharded layout before accumulation and update.
+  - The reduced m4 smoke is not a performance discriminator because one-time materialization is poorly amortized; only the exact m16 comparison can validate the expected gain.
+- Next action:
+  - Babysit the full hoist parent and compare against `14.8455495` unhoisted no-EP and `16.2004883` ring EP. If the gather hoist is visible but remains below `20`, profile or port QuACK backward next rather than revisiting the invalid N-major shortcut.
