@@ -343,13 +343,9 @@ where
         tracing::info!(cursor, "finelog forwarder: stopped");
     }
 
-    /// The cursor to start from: the stored watermark when it still names this
-    /// target and points inside the store's seq space, otherwise the current tip.
-    ///
-    /// Reseeding rather than replaying is deliberate. A watermark for another target
-    /// belongs to a foreign seq space, and one beyond `persisted` belongs to a store
-    /// that no longer exists (a recreated volume). Both make forwarding *from* that
-    /// cursor meaningless; forwarding from now on is what a log relay owes.
+    /// The cursor to start from: this target's stored watermark, or the current tip when
+    /// there is none, or when the watermark sits beyond `persisted` and so names a seq
+    /// space this store no longer has (a recreated volume).
     fn seed(&self, persisted: i64) -> Result<i64, StatsError> {
         match self.store.forward_cursor(&self.config.target)? {
             Some(cursor) if cursor <= persisted => Ok(cursor),
@@ -461,11 +457,8 @@ where
 
     /// Record `cursor` as the durable watermark, reporting whether the write stuck.
     ///
-    /// A failure loses nothing: callers advance the cursor only past rows that will never
-    /// be sent again — the hub took them, or the forwarder gave them up — and every row
-    /// stays queryable in this store either way. It leaves the catalog naming an older
-    /// cursor, so a caller mid-drain stops there rather than racing further ahead of it,
-    /// and the next round resumes from the seq the catalog agrees with.
+    /// `false` is not data loss: every row stays queryable in this store, and the catalog
+    /// still names an older cursor for the next round to resume from.
     fn persist_cursor(&self, cursor: i64) -> bool {
         if let Err(e) = self.persist(cursor) {
             tracing::warn!(cursor, error = %e, "finelog forwarder: persisting the watermark failed");
