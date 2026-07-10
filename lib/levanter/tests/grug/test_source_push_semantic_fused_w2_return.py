@@ -12,7 +12,6 @@ from levanter.grug._moe.source_push_semantic_fused_w2_return import (
     SourcePushSemanticFusedW2ReturnConfig,
     source_push_semantic_fused_w2_return,
     source_push_semantic_fused_w2_return_metadata_jax,
-    source_push_semantic_fused_w2_return_semaphore_accounting,
 )
 
 
@@ -151,13 +150,6 @@ def test_fused_w2_return_metadata_maps_source_queue_to_destination_rows():
                 assert recv_row_start[dst, source_ordinal, entry] == (
                     source_bases[src, dst, expert] + queue_row_start[src, dst_ordinal, entry]
                 )
-
-
-def test_fused_w2_return_semaphore_generation_orders_publish_before_combine():
-    accounting = source_push_semantic_fused_w2_return_semaphore_accounting(1, 3, 7)
-
-    assert (accounting.destination_ordinal, accounting.entry, accounting.hidden_tile) == (1, 3, 7)
-    assert accounting.producer_signal_generation == accounting.combine_wait_generation == 1
 
 
 def test_fused_w2_return_interpret_matches_independent_route_reference():
