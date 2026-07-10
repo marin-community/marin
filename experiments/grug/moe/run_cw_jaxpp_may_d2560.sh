@@ -51,6 +51,7 @@ REMAT="save_moe"
 MP="params=float32,compute=bfloat16,output=bfloat16"
 JAXPP_REVISION="7091a9b5ce02cd1a6bdc905f6a36e89370a5fba9"
 DEEPEP_REVISION="7febc6e25660af0f54d95dd781ecdcd62265ecca"
+DEEPEP_DISPATCH_NUM_THREADS="${DEEPEP_DISPATCH_NUM_THREADS:-512}"
 XLA_MEMORY_FRACTION="${XLA_PYTHON_CLIENT_MEM_FRACTION:-0.70}"
 
 usage() {
@@ -257,6 +258,7 @@ if [ "$MOE_IMPLEMENTATION" = deepep ]; then
         -e DEEPEP_SRC_ROOT "/tmp/DeepEP"
         -e DEEPEP_REVISION "$DEEPEP_REVISION"
         -e DEEPEP_CUDA_ARCH "sm_90"
+        -e DEEPEP_DISPATCH_NUM_THREADS "$DEEPEP_DISPATCH_NUM_THREADS"
         -e MARIN_DEEPEP_CACHE_DIR "/tmp/marin-deepep-cache"
     )
 fi
