@@ -1712,3 +1712,24 @@ author: dlwh
   - The reduced m4 smoke is not a performance discriminator because one-time materialization is poorly amortized; only the exact m16 comparison can validate the expected gain.
 - Next action:
   - Babysit the full hoist parent and compare against `14.8455495` unhoisted no-EP and `16.2004883` ring EP. If the gather hoist is visible but remains below `20`, profile or port QuACK backward next rather than revisiting the invalid N-major shortcut.
+
+### 2026-07-10 14:53 PDT - FSDP hoist negative and QuACK input-gradient launch
+- Hypothesis: If serialized stage-level expert materialization does not improve wall time, restore the original FSDP schedule and replace only the two expert input-gradient products with QuACK grouped GEMMs, while retaining Pallas grouped weight gradients for a controlled backward A/B.
+- Commit Hashes:
+  - `f9fefc2cbe`: stage-level Sonic FSDP materialization hoist.
+  - `6ec633a692`: QuACK grouped input-gradient VJP bridge.
+- Commands:
+  - Hoist comparison: the full command in the preceding entry.
+  - GPU behavior gate: one RNO2A H100 running the Sonic forward and full-gradient parity tests under job `/dlwh/sonic-quack-inputgrad-parity-20260710-1443`.
+  - Input-gradient comparison: the exact 24-layer batch512/m16 command with the hoist removed and run id `jaxpp-rno2a-sonicquack-inputgrad-l24-e64k4-b512-s4096-p4m16-20260710-1452`.
+- Results:
+  - Hoist parent `/dlwh/iris-run-job-20260710-213940` and all four child tasks succeeded. W&B: <https://wandb.ai/marin-community/marin_moe/runs/jaxpp-rno2a-sonicquack-hoist-l24-e64k4-b512-s4096-p4m16-20260710-1439>.
+  - Mean MFU was `14.6531`, with p10/p50/p90 `14.6254/14.6614/14.6674`, `330,658.9` tokens/s, `6.34234s` final duration, and finite loss `7.80430` over seven samples.
+  - The hoist regressed the unhoisted no-EP result by `0.1925` MFU points (`1.30%`) and remains `1.5474` points below ring EP. It is removed from the active implementation; commit `f9fefc2cbe` remains the reproducible negative snapshot.
+  - The QuACK input-gradient bridge passed integrated forward and gradients for activations, combine weights, W13, and W2 on H100. It saves the fused-gated preactivation, computes the local SwiGLU pullback, uses QuACK for both grouped input-gradient GEMMs, and leaves only grouped weight gradients on Pallas.
+  - Input-gradient parent `/dlwh/iris-run-job-20260710-215310` is submitted on `cw-rno2a`.
+- Interpretation:
+  - Stage-level materialization moved the all-gather onto the critical path and removed overlap; aggregate collective duration alone did not imply an equivalent wall-time saving. Keep FSDP's current task-local scheduling until a mechanism can prefetch rather than serialize weights.
+  - QuACK input gradients are a narrower compute-only experiment and preserve the existing communication schedule, making their full-run delta directly attributable.
+- Next action:
+  - Babysit the input-gradient parent. If it improves but remains below `20`, port QuACK's variable-K grouped weight-gradient GEMM; if it regresses, restore the prior VJP and retain ring as the measured winner.

@@ -914,31 +914,6 @@ def _make_explicit_mpmd_train_step(
         for mpmd_index, opt_state in zip(stage_mpmd_indices, sample_state.opt_state, strict=True)
     )
 
-    materialize_sonic_weights = []
-    compute_param_shardings = []
-    for mpmd_index, stage_params, stage_shardings in zip(
-        stage_mpmd_indices, sample_state.params, param_shardings, strict=True
-    ):
-        stage_mesh = mpmd_mesh.unstack[mpmd_index]
-        should_materialize = False
-        for block_index, block in enumerate(stage_params.blocks):
-            if block.mlp is None or block.mlp.expert_mlp.implementation != "sonic":
-                continue
-            should_materialize = True
-            expert_sharding = NamedSharding(stage_mesh, P())
-            for weight_name in ("w_gate", "w_up", "w_down"):
-                stage_shardings = eqx.tree_at(
-                    lambda tree, block_index=block_index, weight_name=weight_name: getattr(
-                        tree.blocks[block_index].mlp.expert_mlp, weight_name
-                    ),
-                    stage_shardings,
-                    expert_sharding,
-                )
-        materialize_sonic_weights.append(should_materialize)
-        compute_param_shardings.append(stage_shardings)
-    materialize_sonic_weights = tuple(materialize_sonic_weights)
-    compute_param_shardings = tuple(compute_param_shardings)
-
     def stage_batch_shardings(stage_batches):
         return tuple(
             _tree_named_shardings_on_stage(mpmd_mesh, mpmd_index, sample_batch)
@@ -1047,23 +1022,6 @@ def _make_explicit_mpmd_train_step(
     def keep_step(step: jax.Array):
         return step
 
-    def keep_params(params: TransformerPipelineStage):
-        return params
-
-    def materialize_compute_params(params: list[TransformerPipelineStage]) -> list[TransformerPipelineStage]:
-        return [
-            (
-                mpmd.task(
-                    keep_params,
-                    name=f"grug_stage{stage_index}_materialize_sonic_weights",
-                    out_shardings=compute_param_shardings[stage_index],
-                )(stage_params)
-                if materialize_sonic_weights[stage_index]
-                else stage_params
-            )
-            for stage_index, stage_params in enumerate(params)
-        ]
-
     def add_trees(left, right):
         return jax.tree.map(lambda x, y: x + y, left, right)
 
@@ -1100,7 +1058,6 @@ def _make_explicit_mpmd_train_step(
         batches: tuple[GrugLmExample, ...],
     ) -> tuple[GrugPipelineTrainState, dict[str, Any], None]:
         params = list(state.params)
-        compute_params = materialize_compute_params(params)
         opt_state = list(state.opt_state)
         qb_betas = state.pending_qb_betas
         qb_betas_next = [None] * num_stages
@@ -1110,7 +1067,7 @@ def _make_explicit_mpmd_train_step(
             stage0_forward,
             name="grug_stage0_forward",
             out_shardings=(activation_shardings[0], qb_shardings[0]),
-        )(compute_params[0], qb_betas[0], batches[0])
+        )(params[0], qb_betas[0], batches[0])
 
         stage_inputs = [hidden]
         for stage_index in range(1, num_stages - 1):
@@ -1125,7 +1082,7 @@ def _make_explicit_mpmd_train_step(
                 stage_forward,
                 name=f"grug_stage{stage_index}_forward",
                 out_shardings=(activation_shardings[stage_index], qb_shardings[stage_index]),
-            )(compute_params[stage_index], qb_betas[stage_index], hidden, batches[stage_index])
+            )(params[stage_index], qb_betas[stage_index], hidden, batches[stage_index])
 
         hidden = transfer_between_stages(
             hidden,
@@ -1143,7 +1100,7 @@ def _make_explicit_mpmd_train_step(
                 param_shardings[num_stages - 1],
                 activation_shardings[num_stages - 1],
             ),
-        )(compute_params[num_stages - 1], qb_betas[num_stages - 1], hidden, batches[num_stages - 1])
+        )(params[num_stages - 1], qb_betas[num_stages - 1], hidden, batches[num_stages - 1])
 
         for stage_index in range(num_stages - 2, 0, -1):
             d_hidden = transfer_between_stages(
@@ -1156,20 +1113,14 @@ def _make_explicit_mpmd_train_step(
                 stage_backward,
                 name=f"grug_stage{stage_index}_backward",
                 out_shardings=(param_shardings[stage_index], activation_shardings[stage_index]),
-            )(
-                compute_params[stage_index],
-                qb_betas[stage_index],
-                stage_inputs[stage_index],
-                batches[stage_index],
-                d_hidden,
-            )
+            )(params[stage_index], qb_betas[stage_index], stage_inputs[stage_index], batches[stage_index], d_hidden)
 
         d_hidden = transfer_between_stages(d_hidden, 1, 0, activation_shardings[0])
         grads[0] = mpmd.task(
             stage0_backward,
             name="grug_stage0_backward",
             out_shardings=param_shardings[0],
-        )(compute_params[0], qb_betas[0], batches[0], d_hidden)
+        )(params[0], qb_betas[0], batches[0], d_hidden)
 
         for stage_index in range(num_stages):
             params[stage_index], opt_state[stage_index] = mpmd.task(
@@ -1200,7 +1151,6 @@ def _make_explicit_mpmd_train_step(
         batches_by_microbatch,
     ) -> tuple[GrugPipelineTrainState, dict[str, Any], None]:
         params = list(state.params)
-        compute_params = materialize_compute_params(params)
         opt_state = list(state.opt_state)
         qb_betas = state.pending_qb_betas
         qb_betas_next = [None] * num_stages
@@ -1214,7 +1164,7 @@ def _make_explicit_mpmd_train_step(
                 stage0_forward,
                 name=f"grug_gpipe_mb{microbatch_index}_stage0_forward",
                 out_shardings=(activation_shardings[0], qb_shardings[0]),
-            )(compute_params[0], qb_betas[0], microbatches[0])
+            )(params[0], qb_betas[0], microbatches[0])
             qb_betas_next[0] = accumulate_or_set(
                 qb_betas_next[0],
                 stage_qb_betas,
@@ -1235,7 +1185,7 @@ def _make_explicit_mpmd_train_step(
                     stage_forward,
                     name=f"grug_gpipe_mb{microbatch_index}_stage{stage_index}_forward",
                     out_shardings=(activation_shardings[stage_index], qb_shardings[stage_index]),
-                )(compute_params[stage_index], qb_betas[stage_index], hidden, microbatches[stage_index])
+                )(params[stage_index], qb_betas[stage_index], hidden, microbatches[stage_index])
                 qb_betas_next[stage_index] = accumulate_or_set(
                     qb_betas_next[stage_index],
                     stage_qb_betas,
@@ -1265,7 +1215,7 @@ def _make_explicit_mpmd_train_step(
                     activation_shardings[num_stages - 1],
                 ),
             )(
-                compute_params[num_stages - 1],
+                params[num_stages - 1],
                 qb_betas[num_stages - 1],
                 stage_inputs[num_stages - 1],
                 microbatches[num_stages - 1],
@@ -1301,7 +1251,7 @@ def _make_explicit_mpmd_train_step(
                     name=f"grug_gpipe_mb{microbatch_index}_stage{stage_index}_backward",
                     out_shardings=(param_shardings[stage_index], activation_shardings[stage_index]),
                 )(
-                    compute_params[stage_index],
+                    params[stage_index],
                     qb_betas[stage_index],
                     stage_inputs[stage_index],
                     microbatches[stage_index],
@@ -1319,7 +1269,7 @@ def _make_explicit_mpmd_train_step(
                 stage0_backward,
                 name=f"grug_gpipe_mb{microbatch_index}_stage0_backward",
                 out_shardings=param_shardings[0],
-            )(compute_params[0], qb_betas[0], microbatches[0], d_hidden)
+            )(params[0], qb_betas[0], microbatches[0], d_hidden)
             grads[0] = accumulate_or_set(
                 grads[0],
                 stage_grads,
@@ -1379,7 +1329,6 @@ def _make_explicit_mpmd_train_step(
     ) -> tuple[GrugPipelineTrainState, dict[str, Any], None]:
         interleaved_batches = (batches_by_microbatch,) if pipeline.microbatches == 1 else batches_by_microbatch
         params = list(state.params)
-        compute_params = materialize_compute_params(params)
         opt_state = list(state.opt_state)
         qb_betas = state.pending_qb_betas
         qb_betas_next = [None] * num_stages
@@ -1398,7 +1347,7 @@ def _make_explicit_mpmd_train_step(
                         stage0_forward,
                         name=f"grug_interleaved_mb{microbatch_index}_stage0_forward",
                         out_shardings=(activation_shardings[0], qb_shardings[0]),
-                    )(compute_params[0], qb_betas[0], microbatches[0])
+                    )(params[0], qb_betas[0], microbatches[0])
                 else:
                     hidden = receive_between_stages(forward_edges[key], stage_index - 1, stage_index)
                     stage_inputs[key] = hidden
@@ -1407,7 +1356,7 @@ def _make_explicit_mpmd_train_step(
                             last_stage_loss,
                             name=f"grug_interleaved_mb{microbatch_index}_stage{stage_index}_loss_forward",
                             out_shardings=(last_loss_sharding, qb_shardings[stage_index]),
-                        )(compute_params[stage_index], qb_betas[stage_index], hidden, microbatches[stage_index])
+                        )(params[stage_index], qb_betas[stage_index], hidden, microbatches[stage_index])
                         loss_sum = accumulate_or_set(
                             loss_sum,
                             loss,
@@ -1419,7 +1368,7 @@ def _make_explicit_mpmd_train_step(
                             stage_forward,
                             name=f"grug_interleaved_mb{microbatch_index}_stage{stage_index}_forward",
                             out_shardings=(activation_shardings[stage_index], qb_shardings[stage_index]),
-                        )(compute_params[stage_index], qb_betas[stage_index], hidden, microbatches[stage_index])
+                        )(params[stage_index], qb_betas[stage_index], hidden, microbatches[stage_index])
 
                 qb_betas_next[stage_index] = accumulate_or_set(
                     qb_betas_next[stage_index],
@@ -1441,12 +1390,7 @@ def _make_explicit_mpmd_train_step(
                     last_stage_backward,
                     name=f"grug_interleaved_mb{microbatch_index}_stage{stage_index}_backward",
                     out_shardings=(param_shardings[stage_index], activation_shardings[stage_index]),
-                )(
-                    compute_params[stage_index],
-                    qb_betas[stage_index],
-                    stage_inputs[key],
-                    microbatches[stage_index],
-                )
+                )(params[stage_index], qb_betas[stage_index], stage_inputs[key], microbatches[stage_index])
             else:
                 d_hidden = receive_between_stages(backward_edges[key], stage_index + 1, stage_index)
                 if stage_index == 0:
@@ -1454,14 +1398,14 @@ def _make_explicit_mpmd_train_step(
                         stage0_backward,
                         name=f"grug_interleaved_mb{microbatch_index}_stage0_backward",
                         out_shardings=param_shardings[0],
-                    )(compute_params[0], qb_betas[0], microbatches[0], d_hidden)
+                    )(params[0], qb_betas[0], microbatches[0], d_hidden)
                 else:
                     stage_grads, d_hidden = mpmd.task(
                         stage_backward,
                         name=f"grug_interleaved_mb{microbatch_index}_stage{stage_index}_backward",
                         out_shardings=(param_shardings[stage_index], activation_shardings[stage_index]),
                     )(
-                        compute_params[stage_index],
+                        params[stage_index],
                         qb_betas[stage_index],
                         stage_inputs[key],
                         microbatches[stage_index],
@@ -1547,7 +1491,6 @@ def _make_explicit_mpmd_train_step(
         batches_by_microbatch,
     ) -> tuple[GrugPipelineTrainState, dict[str, Any], None]:
         params = list(state.params)
-        compute_params = materialize_compute_params(params)
         opt_state = list(state.opt_state)
         qb_betas = state.pending_qb_betas
         qb_betas_next = [None] * num_stages
@@ -1570,7 +1513,7 @@ def _make_explicit_mpmd_train_step(
                     stage0_forward,
                     name=f"grug_1f1b_mb{microbatch_index}_stage0_forward",
                     out_shardings=(activation_shardings[0], qb_shardings[0]),
-                )(compute_params[0], qb_betas[0], microbatches[0])
+                )(params[0], qb_betas[0], microbatches[0])
                 qb_betas_next[0] = accumulate_or_set(
                     qb_betas_next[0],
                     stage_qb_betas,
@@ -1595,7 +1538,7 @@ def _make_explicit_mpmd_train_step(
                 stage_forward,
                 name=f"grug_1f1b_mb{microbatch_index}_stage{stage_index}_forward",
                 out_shardings=(activation_shardings[stage_index], qb_shardings[stage_index]),
-            )(compute_params[stage_index], qb_betas[stage_index], hidden, microbatches[stage_index])
+            )(params[stage_index], qb_betas[stage_index], hidden, microbatches[stage_index])
             qb_betas_next[stage_index] = accumulate_or_set(
                 qb_betas_next[stage_index],
                 stage_qb_betas,
@@ -1627,7 +1570,7 @@ def _make_explicit_mpmd_train_step(
                         activation_shardings[stage_index],
                     ),
                 )(
-                    compute_params[stage_index],
+                    params[stage_index],
                     qb_betas[stage_index],
                     stage_inputs[key],
                     microbatches[stage_index],
@@ -1664,7 +1607,7 @@ def _make_explicit_mpmd_train_step(
                     stage0_backward,
                     name=f"grug_1f1b_mb{microbatch_index}_stage0_backward",
                     out_shardings=param_shardings[0],
-                )(compute_params[0], qb_betas[0], microbatches[0], d_hidden)
+                )(params[0], qb_betas[0], microbatches[0], d_hidden)
                 grads[0] = accumulate_or_set(
                     grads[0],
                     stage_grads,
@@ -1680,7 +1623,7 @@ def _make_explicit_mpmd_train_step(
                 name=f"grug_1f1b_mb{microbatch_index}_stage{stage_index}_backward",
                 out_shardings=(param_shardings[stage_index], activation_shardings[stage_index]),
             )(
-                compute_params[stage_index],
+                params[stage_index],
                 qb_betas[stage_index],
                 stage_inputs[key],
                 microbatches[stage_index],
