@@ -23,6 +23,7 @@ from jax.experimental.pallas import mosaic_gpu as mgpu
 from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P
 from jaxtyping import Array, Bool, Float, Int
 
+from levanter.grug._moe import source_push_semantic_fused_w13
 from levanter.grug._moe.source_push_plan import (
     SOURCE_PUSH_MESH_AXIS,
     SourcePushSemanticPlan,
@@ -194,6 +195,8 @@ MODE_W13_EXPERT_MAJOR_COMPARE = "w13_expert_major_compare"
 MODE_SOURCE_PADDED_INBOX_PACK_PALLAS = "source_padded_inbox_pack_pallas"
 MODE_W13_SOURCE_PADDED_INBOX_PALLAS = "w13_source_padded_inbox_pallas"
 MODE_W13_SOURCE_PADDED_INBOX_COMPARE = "w13_source_padded_inbox_compare"
+MODE_SEMANTIC_PERMUTE_W13_PALLAS = "semantic_permute_w13_pallas"
+MODE_SEMANTIC_PERMUTE_W13_COMPARE = "semantic_permute_w13_compare"
 MODE_W13_SOURCE_PADDED_DIRECT_PACK_PALLAS = "w13_source_padded_direct_pack_pallas"
 MODE_W13_SOURCE_PADDED_DIRECT_PACK_COMPARE = "w13_source_padded_direct_pack_compare"
 MODE_W2 = "w2"
@@ -525,6 +528,8 @@ MODES = (
     MODE_SOURCE_PADDED_INBOX_PACK_PALLAS,
     MODE_W13_SOURCE_PADDED_INBOX_PALLAS,
     MODE_W13_SOURCE_PADDED_INBOX_COMPARE,
+    MODE_SEMANTIC_PERMUTE_W13_PALLAS,
+    MODE_SEMANTIC_PERMUTE_W13_COMPARE,
     MODE_W13_SOURCE_PADDED_DIRECT_PACK_PALLAS,
     MODE_W13_SOURCE_PADDED_DIRECT_PACK_COMPARE,
     MODE_W2,
@@ -709,6 +714,12 @@ SOURCE_DRIVEN_EXPLICIT_MODES = (
 
 DEFAULT_ALL_MODES = tuple(mode for mode in MODES if mode not in SOURCE_DRIVEN_EXPLICIT_MODES)
 MODE_ALIASES = {
+    "semantic_permute_w13": (
+        MODE_SEMANTIC_PERMUTE_W13_PALLAS,
+        MODE_W13_SOURCE_PADDED_INBOX_PALLAS,
+        MODE_SOURCE_PADDED_INBOX_PACK_PALLAS,
+        MODE_W13_EXPERT_MAJOR_PREPACKED_PALLAS,
+    ),
     "source_padded_pack": (MODE_SOURCE_PADDED_INBOX_PACK_PALLAS,),
     "source_padded_w13": (MODE_W13_SOURCE_PADDED_INBOX_PALLAS,),
     "source_padded_w13_compare": (MODE_W13_SOURCE_PADDED_INBOX_COMPARE,),
@@ -751,6 +762,8 @@ SOURCE_PADDED_MODES = (
     MODE_SOURCE_PADDED_INBOX_PACK_PALLAS,
     MODE_W13_SOURCE_PADDED_INBOX_PALLAS,
     MODE_W13_SOURCE_PADDED_INBOX_COMPARE,
+    MODE_SEMANTIC_PERMUTE_W13_PALLAS,
+    MODE_SEMANTIC_PERMUTE_W13_COMPARE,
     MODE_FORWARD_SOURCE_PADDED_INBOX_DIRECT_RETURN_COMBINE_PALLAS,
     MODE_FORWARD_SOURCE_PADDED_INBOX_DIRECT_RETURN_COMBINE_COMPARE,
     MODE_FORWARD_BACKWARD_SOURCE_PADDED_INBOX_DIRECT_QUEUE_PALLAS,
@@ -1431,6 +1444,8 @@ def _mode_flops_per_rank(
         MODE_W13_EXPERT_MAJOR_COMPARE,
         MODE_W13_SOURCE_PADDED_INBOX_PALLAS,
         MODE_W13_SOURCE_PADDED_INBOX_COMPARE,
+        MODE_SEMANTIC_PERMUTE_W13_PALLAS,
+        MODE_SEMANTIC_PERMUTE_W13_COMPARE,
         MODE_W13_SOURCE_PADDED_DIRECT_PACK_PALLAS,
         MODE_W13_SOURCE_PADDED_DIRECT_PACK_COMPARE,
     ):
@@ -2823,6 +2838,8 @@ def _block_sizes_for_mode(args: argparse.Namespace, mode: str) -> dict[str, Any]
         MODE_SOURCE_PADDED_INBOX_PACK_PALLAS,
         MODE_W13_SOURCE_PADDED_INBOX_PALLAS,
         MODE_W13_SOURCE_PADDED_INBOX_COMPARE,
+        MODE_SEMANTIC_PERMUTE_W13_PALLAS,
+        MODE_SEMANTIC_PERMUTE_W13_COMPARE,
     ):
         return {
             "source_push_profile": SOURCE_PUSH_PROFILE_STABLE_216,
@@ -3314,6 +3331,8 @@ def _mode_callable(mode: str, plan: SourcePushSemanticPlan, args: argparse.Names
             MODE_SOURCE_PADDED_INBOX_PACK_PALLAS,
             MODE_W13_SOURCE_PADDED_INBOX_PALLAS,
             MODE_W13_SOURCE_PADDED_INBOX_COMPARE,
+            MODE_SEMANTIC_PERMUTE_W13_PALLAS,
+            MODE_SEMANTIC_PERMUTE_W13_COMPARE,
             MODE_W13_SOURCE_PADDED_DIRECT_PACK_PALLAS,
             MODE_W13_SOURCE_PADDED_DIRECT_PACK_COMPARE,
             MODE_FORWARD_SOURCE_PADDED_INBOX_DIRECT_RETURN_COMBINE_PALLAS,
@@ -3662,6 +3681,76 @@ def _mode_callable(mode: str, plan: SourcePushSemanticPlan, args: argparse.Names
             "layout_overflow_mismatch_error_count": jnp.abs(result.layout.overflow_rows - expected_overflow),
         }
         metrics.update(source_padded_overflow_metrics(result, queue))
+        return metrics
+
+    def semantic_permute_w13(inputs: SemanticBenchInputs):
+        assert source_padded_config is not None
+        fused_config = source_push_semantic_fused_w13.SourcePushSemanticFusedW13Config()
+        send_chunks_per_dst = (
+            source_padded_config.entries_per_rank + fused_config.compute_blocks_per_send - 1
+        ) // fused_config.compute_blocks_per_send
+        rows_per_expert_capacity = args.ep_size * send_chunks_per_dst * fused_config.send_m // args.experts_per_rank
+        result = source_push_semantic_fused_w13.source_push_semantic_fused_w13(
+            inputs.x,
+            inputs.w_gate_up,
+            plan,
+            send_chunks_per_dst=send_chunks_per_dst,
+            rows_per_expert_capacity=rows_per_expert_capacity,
+            config=fused_config,
+            mesh=expert_mesh,
+            interpret=args.pallas_interpret,
+        )
+        gate, up = jnp.split(result.z.astype(jnp.float32), 2, axis=-1)
+        h = jnp.where(result.valid[..., None], jax.nn.silu(gate) * up, 0)
+        queue = source_push_semantic_queue_metadata_jax(
+            plan,
+            return_row_block=SOURCE_PADDED_ROW_BLOCK,
+            entries_per_dst=send_chunks_per_dst * fused_config.compute_blocks_per_send,
+        )
+        return result, h, queue
+
+    def semantic_permute_overflow_metrics(result, queue) -> dict[str, Array]:
+        return {
+            "queue_overflow_entry_error_count": queue.overflow_entries,
+            "queue_overflow_route_error_count": result.queue_overflow_routes,
+            "layout_overflow_row_error_count": result.layout_overflow_rows,
+            "queue_entries_per_rank": queue.entries_per_dst,
+        }
+
+    def semantic_permute_w13_pallas(inputs: SemanticBenchInputs):
+        result, h, queue = semantic_permute_w13(inputs)
+        return {
+            "z": result.z,
+            "h": h,
+            "valid": result.valid,
+            **semantic_permute_overflow_metrics(result, queue),
+        }
+
+    def semantic_permute_w13_compare(inputs: SemanticBenchInputs):
+        result, h, queue = semantic_permute_w13(inputs)
+        expected_source_bases, expected_overflow = _source_padded_layout_metadata_jax(
+            plan,
+            rows_per_expert_capacity=result.valid.shape[-1],
+        )
+        source_lookup, token_lookup, expected_valid = _source_padded_expert_lookup_metadata_jax(
+            plan,
+            expected_source_bases,
+            rows_per_expert_capacity=result.valid.shape[-1],
+        )
+        metrics = {
+            **_source_padded_expert_sample_metrics(
+                inputs.x,
+                inputs.w_gate_up,
+                result.z,
+                h,
+                result.valid,
+                source_lookup,
+                token_lookup,
+                expected_valid,
+            ),
+            "layout_overflow_mismatch_error_count": jnp.abs(result.layout_overflow_rows - expected_overflow),
+        }
+        metrics.update(semantic_permute_overflow_metrics(result, queue))
         return metrics
 
     def forward_source_padded_components(inputs: SemanticBenchInputs, *, output_dtype: jnp.dtype):
@@ -7771,6 +7860,8 @@ def _mode_callable(mode: str, plan: SourcePushSemanticPlan, args: argparse.Names
         MODE_SOURCE_PADDED_INBOX_PACK_PALLAS: source_padded_inbox_pack_pallas,
         MODE_W13_SOURCE_PADDED_INBOX_PALLAS: w13_source_padded_inbox_pallas,
         MODE_W13_SOURCE_PADDED_INBOX_COMPARE: w13_source_padded_inbox_compare,
+        MODE_SEMANTIC_PERMUTE_W13_PALLAS: semantic_permute_w13_pallas,
+        MODE_SEMANTIC_PERMUTE_W13_COMPARE: semantic_permute_w13_compare,
         MODE_W13_SOURCE_PADDED_DIRECT_PACK_PALLAS: w13_source_padded_direct_pack_pallas,
         MODE_W13_SOURCE_PADDED_DIRECT_PACK_COMPARE: w13_source_padded_direct_pack_compare,
         MODE_W2: w2,
@@ -8574,6 +8665,8 @@ def _run_stage_mode(
                 MODE_W13_SOURCE_PADDED_DIRECT_PACK_COMPARE,
                 MODE_W13_SOURCE_PADDED_INBOX_PALLAS,
                 MODE_W13_SOURCE_PADDED_INBOX_COMPARE,
+                MODE_SEMANTIC_PERMUTE_W13_PALLAS,
+                MODE_SEMANTIC_PERMUTE_W13_COMPARE,
                 MODE_W2_EXPERT_MAJOR_PREPACKED_PALLAS,
                 MODE_W2_EXPERT_MAJOR_PREPACKED_COMPARE,
                 MODE_W2_EXPERT_MAJOR_PREPACKED_PALLAS_ASSUME_ZERO_INVALID,

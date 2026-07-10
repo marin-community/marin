@@ -17,11 +17,13 @@ from levanter.grug._moe.source_push_plan import (
 )
 from levanter.grug._moe.source_push_semantic_inbox_pallas import (
     SourcePushSemanticInboxLayout,
+    SourcePushSemanticPermuteW13Result,
     source_push_semantic_inbox_kernel_inputs_jax,
     source_push_semantic_inbox_layout_jax,
     source_push_semantic_inbox_metadata_jax,
     source_push_semantic_inbox_pack_pallas_mgpu,
     source_push_semantic_inbox_w13_pallas_mgpu,
+    source_push_semantic_permute_w13_pallas_mgpu,
 )
 
 
@@ -390,5 +392,103 @@ def test_source_push_semantic_inbox_w13_interpret_matches_independent_expert_maj
     assert int(observed.layout.overflow_rows) == 0
     assert np.any(np.asarray(queue.valid_rows) < row_block)
     assert np.any(~np.asarray(observed.valid))
+    assert not np.any(np.asarray(observed.z)[~np.asarray(observed.valid)])
+    assert not np.any(np.asarray(observed.h)[~np.asarray(observed.valid)])
+
+
+def test_source_push_semantic_permute_w13_jit_matches_rough_reference_with_queue_slot_reuse():
+    selected_experts = jnp.asarray(
+        [
+            [[0, 1], [0, 2], [0, 3], [1, 2], [0, 2], [1, 3], [0, 1], [2, 3], [0, 3]],
+            [[3, 2], [3, 1], [2, 0], [3, 0], [2, 1], [3, 1], [2, 0], [1, 0], [3, 2]],
+        ],
+        dtype=jnp.int32,
+    )
+    plan = build_source_push_semantic_plan_jax(
+        selected_experts,
+        jnp.ones(selected_experts.shape, dtype=jnp.float32),
+        ep_size=2,
+        experts_per_rank=2,
+        rows_per_src_dst_capacity=18,
+        capacity_factor=4.0,
+    )
+    config = _inbox_config(row_block=2, entries_per_dst=6)
+    x = jnp.arange(2 * 9 * 64, dtype=jnp.float32).reshape(2, 9, 64).astype(jnp.bfloat16) / 128
+    w_gate_up = jnp.arange(2 * 2 * 64 * 128, dtype=jnp.float32).reshape(2, 2, 64, 128).astype(jnp.bfloat16) / 4096
+
+    observed = jax.jit(
+        lambda x_arg, w_arg, semantic_plan: source_push_semantic_permute_w13_pallas_mgpu(
+            x_arg,
+            w_arg,
+            semantic_plan,
+            config=config,
+            interpret=True,
+        )
+    )(x, w_gate_up, plan)
+    expected_z, expected_h, expected_valid = _source_padded_w13_reference_jax(
+        x,
+        w_gate_up,
+        plan,
+        observed.layout,
+    )
+
+    required_entries = np.sum((np.asarray(plan.xcounts) + config.block_m - 1) // config.block_m, axis=2)
+    assert np.max(required_entries) > config.inbox_slots
+    assert np.unique(np.asarray(plan.xcounts)[np.asarray(plan.xcounts) > 0]).size > 1
+    assert SourcePushSemanticPermuteW13Result._fields == (
+        "z",
+        "h",
+        "valid",
+        "layout",
+        "queue_overflow_routes",
+        "layout_overflow_rows",
+    )
+    np.testing.assert_array_equal(np.asarray(observed.valid), np.asarray(expected_valid))
+    np.testing.assert_allclose(np.asarray(observed.z, dtype=np.float32), np.asarray(expected_z), rtol=1e-5, atol=1e-5)
+    np.testing.assert_allclose(np.asarray(observed.h), np.asarray(expected_h), rtol=1e-5, atol=1e-5)
+    assert int(observed.queue_overflow_routes) == 0
+    assert int(observed.layout_overflow_rows) == 0
+    assert not np.any(np.asarray(observed.z)[~np.asarray(observed.valid)])
+    assert not np.any(np.asarray(observed.h)[~np.asarray(observed.valid)])
+
+
+def test_source_push_semantic_permute_w13_reports_queue_and_layout_overflow():
+    selected_experts = jnp.zeros((2, 10, 1), dtype=jnp.int32)
+    plan = build_source_push_semantic_plan_jax(
+        selected_experts,
+        jnp.ones(selected_experts.shape, dtype=jnp.float32),
+        ep_size=2,
+        experts_per_rank=2,
+        rows_per_src_dst_capacity=10,
+        capacity_factor=4.0,
+    )
+    config = _inbox_config(row_block=4, entries_per_dst=1)
+    x = jnp.zeros((2, 10, 64), dtype=jnp.bfloat16)
+    x = x.at[:, :, 0].set(jnp.arange(1, 21, dtype=jnp.float32).reshape(2, 10).astype(jnp.bfloat16))
+    w_gate_up = jnp.zeros((2, 2, 64, 128), dtype=jnp.bfloat16)
+    w_gate_up = w_gate_up.at[0, 0, 0, :].set(jnp.asarray(0.5, dtype=jnp.bfloat16))
+
+    observed = jax.jit(
+        lambda x_arg, w_arg, semantic_plan: source_push_semantic_permute_w13_pallas_mgpu(
+            x_arg,
+            w_arg,
+            semantic_plan,
+            config=config,
+            interpret=True,
+        )
+    )(x, w_gate_up, plan)
+    expected_z, expected_h, expected_valid = _source_padded_w13_reference_jax(
+        x,
+        w_gate_up,
+        plan,
+        observed.layout,
+    )
+
+    assert int(observed.queue_overflow_routes) == 12
+    assert int(observed.layout_overflow_rows) == 20
+    np.testing.assert_array_equal(np.asarray(observed.valid), np.asarray(expected_valid))
+    np.testing.assert_allclose(np.asarray(observed.z, dtype=np.float32), np.asarray(expected_z), rtol=1e-5, atol=1e-5)
+    np.testing.assert_allclose(np.asarray(observed.h), np.asarray(expected_h), rtol=1e-5, atol=1e-5)
+    assert np.count_nonzero(np.asarray(observed.valid)) == 4
     assert not np.any(np.asarray(observed.z)[~np.asarray(observed.valid)])
     assert not np.any(np.asarray(observed.h)[~np.asarray(observed.valid)])

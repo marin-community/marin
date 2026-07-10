@@ -23,6 +23,7 @@ from levanter.grug._moe.source_push_plan import (
     SourcePushSemanticPlan,
     SourcePushSemanticQueueMetadata,
     _exclusive_cumsum_jax,
+    source_push_semantic_queue_metadata_jax,
 )
 
 
@@ -72,6 +73,17 @@ class SourcePushSemanticInboxW13Result(NamedTuple):
     layout: SourcePushSemanticInboxLayout
     packed_x: Float[Array, "S DstOrd Q M H"]
     recv_x: Float[Array, "Dst S Slots M H"]
+
+
+class SourcePushSemanticPermuteW13Result(NamedTuple):
+    """Fused semantic raw-token permute and destination expert-major W13 outputs."""
+
+    z: Float[Array, "Dst E C twoI"]
+    h: Float[Array, "Dst E C I"]
+    valid: Bool[Array, "Dst E C"]
+    layout: SourcePushSemanticInboxLayout
+    queue_overflow_routes: Int[Array, ""]
+    layout_overflow_rows: Int[Array, ""]
 
 
 def source_push_semantic_inbox_layout_jax(
@@ -580,6 +592,105 @@ def source_push_semantic_inbox_w13_pallas_mgpu(
         layout=metadata.layout,
         packed_x=packed_x,
         recv_x=recv_x,
+    )
+
+
+def source_push_semantic_permute_w13_pallas_mgpu(
+    x: Float[Array, "S T H"],
+    w_gate_up: Float[Array, "Dst E H twoI"],
+    plan: SourcePushSemanticPlan,
+    *,
+    config: source_push_inbox.PushInboxConfig,
+    mesh: Mesh | None = None,
+    interpret: bool = False,
+) -> SourcePushSemanticPermuteW13Result:
+    """Fuse semantic raw-token permutation with source-padded expert W13.
+
+    Queue and inbox metadata are derived inside the API so callers retain only
+    the semantic plan. The MGPU path gathers raw source tokens directly into
+    the rolling transport inbox and writes compact destination expert-major
+    preactivations; it does not materialize a packed queue payload.
+
+    ``interpret=True`` uses the independent padded JAX transport/W13 simulation
+    because the production kernel contains Mosaic GPU communication and WGMMA.
+    """
+
+    queue = source_push_semantic_queue_metadata_jax(
+        plan,
+        return_row_block=config.block_m,
+        entries_per_dst=config.entries_per_rank,
+    )
+    _validate_semantic_inbox_request(x, w_gate_up, plan, queue, config)
+    rows_per_expert_capacity = config.hidden_rows_per_rank // config.experts_per_rank
+    metadata = source_push_semantic_inbox_metadata_jax(
+        x,
+        plan,
+        queue,
+        rows_per_expert_capacity=rows_per_expert_capacity,
+    )
+
+    if interpret:
+        source_index = jnp.arange(x.shape[0], dtype=jnp.int32)[:, None, None, None]
+        packed_x = x.at[source_index, metadata.token_ids].get()
+        packed_x = jnp.where(metadata.valid_mask[..., None], packed_x, jnp.zeros((), dtype=x.dtype))
+        kernel_inputs = SourcePushSemanticInboxKernelInputs(
+            packed_x=packed_x,
+            send_meta=metadata.send_meta,
+            recv_meta=metadata.recv_meta,
+            layout=metadata.layout,
+        )
+        _, z = _source_push_semantic_inbox_padded_w13_reference_jax(
+            kernel_inputs,
+            w_gate_up,
+            queue,
+            padded_rows=config.hidden_rows_per_rank,
+            inbox_slots=config.inbox_slots,
+        )
+        z = z.reshape(
+            plan.xcounts.shape[1],
+            plan.xcounts.shape[2],
+            rows_per_expert_capacity,
+            z.shape[-1],
+        )
+    else:
+        if mesh is None:
+            raise ValueError("mesh is required for source-push semantic permute/W13 MGPU execution")
+        kernel = source_push_inbox._sharded_raw_token_w13_h_compact_kernel(
+            mesh,
+            config,
+            compact_expert_capacity=rows_per_expert_capacity,
+            use_exact_expert_major=False,
+        )
+        source_x_sharding = NamedSharding(mesh, P(source_push_inbox.AXIS, None, None))
+        source_token_sharding = NamedSharding(mesh, P(source_push_inbox.AXIS, None, None, None))
+        rank_metadata_sharding = NamedSharding(mesh, P(source_push_inbox.AXIS, None, None, None))
+        destination_layout_2d_sharding = NamedSharding(mesh, P(source_push_inbox.AXIS, None))
+        destination_layout_3d_sharding = NamedSharding(mesh, P(source_push_inbox.AXIS, None, None))
+        destination_weights_sharding = NamedSharding(mesh, P(source_push_inbox.AXIS, None, None, None))
+        _, z = kernel(
+            jax.sharding.reshard(x, source_x_sharding),
+            jax.sharding.reshard(metadata.token_ids, source_token_sharding),
+            jax.sharding.reshard(metadata.send_meta, rank_metadata_sharding),
+            jax.sharding.reshard(metadata.recv_meta, rank_metadata_sharding),
+            jax.sharding.reshard(metadata.layout.expert_base, destination_layout_2d_sharding),
+            jax.sharding.reshard(metadata.layout.src_base_by_expert, destination_layout_3d_sharding),
+            jax.sharding.reshard(w_gate_up, destination_weights_sharding),
+        )
+
+    valid = metadata.layout.valid
+    z = jnp.where(valid[..., None], z, jnp.zeros((), dtype=z.dtype))
+    intermediate_dim = z.shape[-1] // 2
+    gate = z[..., :intermediate_dim].astype(jnp.float32)
+    up = z[..., intermediate_dim:].astype(jnp.float32)
+    h = jax.nn.silu(gate) * up
+    h = jnp.where(valid[..., None], h, jnp.zeros((), dtype=h.dtype))
+    return SourcePushSemanticPermuteW13Result(
+        z=z,
+        h=h,
+        valid=valid,
+        layout=metadata.layout,
+        queue_overflow_routes=queue.overflow_routes,
+        layout_overflow_rows=metadata.layout.overflow_rows,
     )
 
 

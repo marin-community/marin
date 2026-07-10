@@ -143,6 +143,23 @@ def test_source_push_semantic_plan_source_padded_direct_aliases_are_distinct_fro
     )
 
 
+def test_source_push_semantic_plan_semantic_permute_w13_alias_and_cli_help(capsys):
+    bench_source_push_semantic_plan = _bench_module()
+
+    assert bench_source_push_semantic_plan._parse_modes("semantic_permute_w13") == (
+        bench_source_push_semantic_plan.MODE_SEMANTIC_PERMUTE_W13_PALLAS,
+        bench_source_push_semantic_plan.MODE_W13_SOURCE_PADDED_INBOX_PALLAS,
+        bench_source_push_semantic_plan.MODE_SOURCE_PADDED_INBOX_PACK_PALLAS,
+        bench_source_push_semantic_plan.MODE_W13_EXPERT_MAJOR_PREPACKED_PALLAS,
+    )
+
+    with pytest.raises(SystemExit) as exc_info:
+        bench_source_push_semantic_plan.parse_args(["--help"])
+
+    assert exc_info.value.code == 0
+    assert "semantic_permute_w13" in capsys.readouterr().out
+
+
 def test_source_push_semantic_plan_only_reserves_tail_guard_when_requested():
     bench_source_push_semantic_plan = _bench_module()
     plan = SimpleNamespace(rows_per_local_expert=jnp.asarray([[4096, 4249]], dtype=jnp.int32))
@@ -483,6 +500,67 @@ def test_source_push_semantic_plan_source_padded_modes_match_references(tmp_path
     assert direct_fwd_bwd["block_sizes"]["source_expand_row_block"] == 64
     assert direct_fwd_bwd["block_sizes"]["w13_backward_row_block"] == 64
     assert direct_fwd_bwd["block_sizes"]["dx_return_row_block"] == 64
+
+
+def test_source_push_semantic_plan_fused_permute_w13_modes_emit_jsonl_metrics(tmp_path):
+    jsonl = tmp_path / "semantic_permute_w13.jsonl"
+    bench_source_push_semantic_plan = _bench_module()
+
+    bench_source_push_semantic_plan.main(
+        [
+            "--ep-size",
+            "2",
+            "--tokens-per-rank",
+            "64",
+            "--topk",
+            "2",
+            "--experts-per-rank",
+            "2",
+            "--hidden-dim",
+            "256",
+            "--intermediate-dim",
+            "128",
+            "--rows-per-src-dst-capacity",
+            "exact",
+            "--routing",
+            "random",
+            "--modes",
+            "semantic_permute_w13_pallas,semantic_permute_w13_compare",
+            "--pallas-interpret",
+            "--warmup",
+            "0",
+            "--steps",
+            "1",
+            "--repeat-runs",
+            "1",
+            "--jsonl",
+            str(jsonl),
+        ]
+    )
+
+    rows = [json.loads(line) for line in jsonl.read_text().splitlines()]
+    summaries = {row["mode"]: row for row in rows if row["row_type"] == "summary"}
+    assert set(summaries) == {"semantic_permute_w13_pallas", "semantic_permute_w13_compare"}
+    for summary in summaries.values():
+        assert summary["error_rows"] == 0
+        assert summary["median_compile_time"] > 0
+        assert summary["median_steady_state_time"] > 0
+        assert summary["median_useful_tflops_per_rank"] > 0
+        assert summary["median_rounded_tflops_per_rank"] > 0
+        assert summary["median_queue_overflow_entry_error_count"] == 0.0
+        assert summary["median_queue_overflow_route_error_count"] == 0.0
+        assert summary["median_layout_overflow_row_error_count"] == 0.0
+        assert (
+            summary["block_sizes"]["source_push_profile"]
+            == bench_source_push_semantic_plan.SOURCE_PUSH_PROFILE_STABLE_216
+        )
+        assert summary["block_sizes"]["block_m"] == bench_source_push_semantic_plan.SOURCE_PADDED_ROW_BLOCK
+
+    compare = summaries["semantic_permute_w13_compare"]
+    assert compare["median_z_max_abs_diff"] == 0.0
+    assert compare["median_h_max_abs_diff"] == 0.0
+    assert compare["median_valid_error_count"] == 0.0
+    assert compare["median_layout_overflow_mismatch_error_count"] == 0.0
 
 
 def test_source_push_semantic_plan_pallas_metadata_current_best_emits_block_size_summary(tmp_path):

@@ -1,5 +1,7 @@
 # Fused Communication and Tensor-Core MoE
 
+Logbook: `.agents/logbooks/6597-moe-fused-comm-tensorcore.md`
+
 ## TL;DR
 
 Build the Hopper expert-parallel MoE MLP around persistent producer/consumer
@@ -500,4 +502,3 @@ compute, semaphore, occupancy, and masking taxes measured separately.
   per-stage and integrated correctness/performance harness.
 - PR #6841 and issue #6597 contain the current implementation and benchmark
   record.
-
