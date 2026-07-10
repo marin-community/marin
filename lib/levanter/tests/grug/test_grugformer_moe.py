@@ -110,7 +110,7 @@ def _gather_sum_reference(
 
 
 def _skip_without_sonic_gpu_runtime() -> None:
-    optional_modules = ("jax_triton", "triton")
+    optional_modules = ("jax_triton", "triton", "quack", "jax_tvm_ffi")
     if not all(importlib.util.find_spec(module) is not None for module in optional_modules):
         pytest.skip("raw Sonic optional dependencies are not installed")
     if not any(device.platform == "gpu" for device in jax.devices()):
@@ -308,7 +308,7 @@ def test_moe_expert_mlp_init_matches_across_backends():
 
 
 def test_moe_mlp_sonic_backend_reports_missing_optional_dependencies():
-    optional_modules = ("jax_triton", "triton")
+    optional_modules = ("jax_triton", "triton", "quack", "jax_tvm_ffi")
     if all(importlib.util.find_spec(module) is not None for module in optional_modules):
         pytest.skip("raw Sonic optional dependencies are installed in this environment")
 
@@ -321,7 +321,7 @@ def test_moe_mlp_sonic_backend_reports_missing_optional_dependencies():
         topk=2,
     )
 
-    with pytest.raises(ImportError, match="implementation='sonic' requires jax-triton and triton"):
+    with pytest.raises(ImportError, match="implementation='sonic' requires"):
         moe_mlp(
             x,
             selected_experts,

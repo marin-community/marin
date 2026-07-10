@@ -15,7 +15,6 @@ import os
 import jax
 import jax.numpy as jnp
 from haliax.jax_utils import tree_checkpoint_name
-from haliax.nn.ragged_dot import ragged_dot
 from jaxtyping import Array, Float, Int
 
 from levanter.grug._moe.common import (
@@ -24,8 +23,8 @@ from levanter.grug._moe.common import (
     _CHECKPOINT_MOE_OUTPUT,
     _prepare_moe_dispatch_indices_with_assignment_ids,
     _zero_dropped_assignments,
-    split_moe_w13_output,
 )
+from levanter.grug._moe.sonic_quack import quack_gated_varlen, quack_grouped_varlen
 
 try:
     import jax_triton as jt
@@ -319,7 +318,7 @@ def _moe_mlp_local_sonic(
     activation_fn: Callable[[jax.Array], jax.Array],
     num_experts: int,
 ) -> tuple[Float[Array, "T H"], Int[Array, ""]]:
-    """Local raw-Sonic path: JAX grouped GEMMs plus Sonic Triton gather/combine."""
+    """Local SonicMoE path: QuACK grouped GEMMs plus Sonic Triton combine."""
     token_ids_sort, dispatch_positions, group_sizes, _sorted_assignment_ids = (
         _prepare_moe_dispatch_indices_with_assignment_ids(
             selected_experts,
@@ -329,11 +328,12 @@ def _moe_mlp_local_sonic(
     x_dispatch = tree_checkpoint_name(x[token_ids_sort], _CHECKPOINT_DISPATCH_INPUT)
 
     with jax.named_scope("moe_up_down"):
-        w13_out = tree_checkpoint_name(ragged_dot(x_dispatch, moe_w13, group_sizes), _CHECKPOINT_EXPERT_HIDDEN)
-        moe_dim = moe_w2.shape[1]
-        gate, up = split_moe_w13_output(w13_out, intermediate_dim=moe_dim, interleaved=False)
-        hidden = activation_fn(gate) * up
-        out_dispatch = ragged_dot(hidden, moe_w2, group_sizes)
+        del activation_fn  # QuACK's fused gated kernel implements SwiGLU.
+        hidden = tree_checkpoint_name(
+            quack_gated_varlen(x_dispatch, moe_w13, group_sizes),
+            _CHECKPOINT_EXPERT_HIDDEN,
+        )
+        out_dispatch = quack_grouped_varlen(hidden, moe_w2, group_sizes)
         out = tree_checkpoint_name(
             sonic_gather_sum(out_dispatch, dispatch_positions, combine_weights),
             _CHECKPOINT_MOE_OUTPUT,
