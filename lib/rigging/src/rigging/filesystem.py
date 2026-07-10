@@ -1441,7 +1441,10 @@ def open_url(url: str, mode: str = "rb", content_type: str | None = None, **kwar
     transfer budget.  Then delegates to ``fsspec.open`` for the actual I/O.
 
     ``content_type`` sets the served ``Content-Type`` of a written object on
-    filesystems that support it (GCS); others ignore it.
+    filesystems that support it (GCS); others ignore it. It is an explicit
+    parameter because it must be routed to ``fs.open`` — ``fsspec.open``
+    forwards extra ``**kwargs`` to the filesystem constructor, where a content
+    type would be silently dropped.
     """
     if "r" in mode and _is_gcs_url(url):
         fs, path = fsspec.core.url_to_fs(url)
@@ -1450,8 +1453,6 @@ def open_url(url: str, mode: str = "rb", content_type: str | None = None, **kwar
     if url.startswith("s3://"):
         kwargs = _with_s3_timeout_defaults(kwargs)
     if content_type is not None:
-        # Must go through fs.open: fsspec.open forwards extra **kwargs to the
-        # filesystem constructor, where a content type would be silently dropped.
         fs, path = url_to_fs(url, **kwargs)
         if "r" not in mode:
             # fsspec.open auto-creates parent directories for write modes; match it.
