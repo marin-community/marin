@@ -912,3 +912,54 @@ error counts, metadata overflow routes, routing drops, and dropped routes were
 all zero. Twelve non-fatal `CUDA_ERROR_NOT_PERMITTED` VMM handle fallback
 warnings occurred. Exact repeat and summary rows, terminal evidence, and
 monitor state are in `scratch/6597-w13b-direct-gmem/`.
+
+## 2026-07-10 FUSED-MOE-027 - Top-k=2 W13 backward direct dX to peer GMEM
+
+Job `/dlwh/bench-semantic-w13b-topk2-direct-gmem-20260710-1551` ran once on
+`cw-rno2a` at commit `b59fbd6cab` and succeeded. Its task exited 0 after 1
+minute and 3.66 seconds, with zero failures and preemptions. No duplicate,
+stop, resubmit, code edit, or Iris restart was issued.
+
+Expected and observed dX absolute sums were `17072636.0` and `17072528.0`;
+least-squares scale was `0.9999837279319763`, cosine similarity was
+`0.9999985098838806`, and max/mean absolute differences were
+`0.927032470703125`/`0.10450340807437897`. dW13 max/mean absolute differences
+were `1.52587890625e-05`/`4.983673989045201e-07`. Expected and observed
+nonfinite counts were zero for both dX and dW13.
+
+Compile/first-call, lowering/compile, first-run, and steady-state times were
+`8.548144964996027`, `7.701112067996291`, `0.8470328969997354`, and
+`0.0018552929977886379` seconds. Useful/rounded throughput was
+`0.14468628745969167`/`0.18085785932461462` TFLOP/s/rank. All overflow and
+dropped-route counters were zero. Twelve non-fatal `CUDA_ERROR_NOT_PERMITTED`
+VMM fallback warnings occurred; there was no traceback or runtime failure.
+
+## 2026-07-10 FUSED-MOE-026 - Masked W2 return and replicated backward reference
+
+Job `/dlwh/bench-semantic-fused-w2-tiny-compare3-20260710-1551` ran once on
+`cw-rno2a` at commit `b59fbd6cab` and reached terminal Iris state `succeeded`.
+Its single task exited 0 after 34.62 seconds, with zero failures and
+preemptions. No duplicate, stop, resubmit, code edit, or Iris restart was
+issued.
+
+The masked return comparison was finite: `y` max/mean absolute differences
+were `0.125`/`0.00547508429735899`, and `return_y` max/mean absolute
+differences were `0.06487846374511719`/`0.008156927302479744` across `524288`
+live elements. Expected and observed nonfinite counts were zero for both
+outputs; checksum was `524288.1875`. Valid, queue-overflow, layout-overflow,
+metadata-overflow, routing-drop, and dropped-route counters were all zero.
+Compile/first-call, lowering, first-run, and steady-state times were
+`2.7683367299905512`, `1.8655651479930384`, `0.9027715819975128`, and
+`0.0015391109918709844` seconds. Useful/rounded throughput was
+`0.04360235509618489`/`0.05450294387023111` TFLOP/s/rank; row efficiency was
+0.8 (`2048` useful, `2560` rounded, four live pairs).
+
+The replicated backward reference advanced to the `d_route` scatter but failed
+during lowering before producing backward correctness or timing metrics:
+`ValueError: Incompatible types for broadcasting: input
+type=float32[2@expert,2,4,4,64] and requested type=float32[2,2,4,4,64]` at
+`source_push_semantic_fused_w2_backward.py:322`, in
+`d_route.at[source, metadata.token_ids, metadata.route_slots].add(queue_d_route)`.
+The summary reported one error row, zero repeat rows, and `all repeats failed`.
+Twelve non-fatal `CUDA_ERROR_NOT_PERMITTED` VMM fallback warnings preceded the
+results.

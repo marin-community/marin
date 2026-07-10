@@ -319,6 +319,8 @@ def source_push_semantic_fused_w2_backward_reference_jax(
     queue_d_route = jnp.sum(dy_rows * route_y, axis=-1)
     queue_d_route = jnp.where(row_valid, queue_d_route, jnp.zeros((), dtype=jnp.float32))
     d_route = jnp.zeros((*dy.shape[:2], metadata.topk), dtype=jnp.float32)
+    if gathered_sharding is not None:
+        d_route = jax.sharding.reshard(d_route, P(SOURCE_PUSH_MESH_AXIS, None, None))
     d_route = d_route.at[source, metadata.token_ids, metadata.route_slots].add(queue_d_route)
     return (
         jnp.where(metadata.valid[..., None], d_h, jnp.zeros((), dtype=d_h.dtype)),
