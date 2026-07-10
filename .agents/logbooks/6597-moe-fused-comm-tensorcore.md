@@ -1361,3 +1361,64 @@ two B256 slot owners plus 30 B64 helper/compute CTAs. Iris reported `running`,
 submitted at `2026-07-10 16:45:12 PDT`. No duplicate, resubmit, restart, stop,
 or cluster bounce is permitted. Monitoring state is recorded in
 `scratch/20260710-1648_bench_semantic_w13_hierarchical_monitoring_state.json`.
+
+Iris reached terminal state `succeeded`; the single H100x8 task exited 0 after
+2 minutes and 1.2 seconds with zero failures and preemptions. All three repeats
+completed. Exact median/min/max steady-state time was
+`27.372991006510954`/`27.038667001761496`/`27.54601902173211` ms. Median
+useful/rounded throughput was `62.76211898039782`/`78.45264872549728`
+TFLOP/s/rank, and the output checksum was `1305986465792.0`.
+
+Dropped routes, routing drops, metadata overflow, queue-entry overflow,
+queue-route overflow, and layout-row overflow were all zero. The mode reported
+64 live pairs, 1,048,576 useful rows, 1,310,720 rounded rows, 0.8 row
+efficiency, 0.19999999999999996 masked-row fraction, and 288 queue entries per
+rank. There were three repeat rows and zero error rows. Logs contained
+non-fatal failed 12.50 GiB allocator attempts and CUDA VMM handle fallback
+warnings before successful output. Exact repeat metrics, counters, terminal
+evidence, and the closed monitor state are in
+`scratch/20260710-1648_bench_semantic_w13_hierarchical_results.json`,
+`scratch/20260710-1648_bench_semantic_w13_hierarchical_report.md`,
+`scratch/20260710-1648_bench_semantic_w13_hierarchical_terminal.txt`, and the
+monitoring state linked above.
+
+## 2026-07-10 FUSED-MOE-048 - Hierarchical W2 backward target hang
+
+Job `/dlwh/bench-semantic-w2b-hierarchical-20260710-1644` ran once on
+`cw-rno2a` at commit `5fe60e67f0`. It targeted three repeats of
+`semantic_fused_w2_backward_pallas` with two B256 chunk lifecycle owners, 30
+B64 helper/compute CTAs, and the expert-local dW2 side reduction.
+
+The first failed 12.50 GiB allocator request was logged at
+`2026-07-10T23:44:05.020516Z`, followed by a second at
+`2026-07-10T23:44:15.022004Z`. No repeat, summary, structured error, or other
+benchmark progress appeared by the 10-minute deadline at
+`2026-07-10T23:54:05.020516Z`, so the job was stopped under the requested hang
+policy. Iris reached terminal state `killed`; its single H100x8 task exited 0
+after 11 minutes and 44.5 seconds with zero failures and one preemption. No
+duplicate, resubmit, task kick, Iris restart, or cluster bounce was issued.
+
+The run produced zero structured repeat rows, zero structured summary rows,
+and zero structured error rows. Timing, throughput, checksum, semantic row
+counts, and all backward/drop/overflow counters are therefore unavailable.
+Exact timestamps, terminal evidence, and the closed monitor state are in
+`scratch/20260710-1644_bench_semantic_w2b_hierarchical_report.md`,
+`scratch/20260710-1644_bench_semantic_w2b_hierarchical_results.json`,
+`scratch/20260710-1644_bench_semantic_w2b_hierarchical_terminal.txt`, and
+`scratch/20260710-1644_bench_semantic_w2b_hierarchical_monitoring_state.json`.
+
+## 2026-07-10 FUSED-MOE-049 - Independent send and compute row readiness
+
+The semantic lowering now treats `send_m` and `compute_m` as distinct physical
+units. The initial Hopper profile retains B256 slot allocation and reuse to
+amortize queue and semaphore overhead, while four B64 row blocks become ready
+for WGMMA independently. A B64 consumer waits only for the K-copy tiles that
+populate its own rows; it does not wait for the remaining rows in the B256
+slot. Slot release still waits for all compute jobs across all four blocks.
+
+This refines the previous hierarchical implementations, which exposed separate
+B256/B64 configuration but still used one full-slot readiness event. Forward
+W13, W2 backward, and W13 backward workers were redirected to implement
+block-local readiness with distinct helper and WGMMA CTA roles. The intended
+partial order is now copy tiles for B64 block `b` before WGMMA jobs for `b`,
+with all jobs in the B256 slot before slot reuse.

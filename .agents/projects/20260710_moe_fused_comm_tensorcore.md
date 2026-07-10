@@ -82,6 +82,13 @@ each send chunk to its contiguous expert-local compute blocks. The initial
 Hopper profile uses B256 sends feeding four B64 compute blocks, but that ratio
 is a physical tuning choice rather than part of route semantics.
 
+Allocation and reuse happen at `send_m` granularity; readiness happens at
+`compute_m` granularity. A producer may therefore reserve one B256 slot and
+fill its four B64 row blocks independently. Each B64 block is released to
+tensor-core consumers as soon as all K-copy tiles for that block are visible.
+Consumers do not wait for the other three B64 blocks. The B256 slot may be
+reused only after every compute job for all four blocks has completed.
+
 ## Two Physical Templates
 
 The old source-push inbox kernel established a useful physical baseline: two
@@ -188,9 +195,11 @@ FSend(s, d, e_group, send_chunk, k_copy_tile)
 FW13(d, s, e, compute_chunk, n_tile)
 ```
 
-`FSend` gathers source tokens from semantic pair rows and copies a large
-`[send_m, hidden_dim]` chunk into destination-visible staging. Physical copy
-tiles may subdivide the hidden dimension.
+`FSend` gathers source tokens from semantic pair rows and copies one
+`[compute_m, hidden_dim]` row block within a larger destination-visible
+`send_m` slot. Physical copy tiles may subdivide the hidden dimension. The
+slot allocation, metadata publication, and eventual reuse are amortized over
+all `send_m / compute_m` row blocks.
 
 `FW13` consumes one `[compute_m, hidden_dim]` subtile, loops over WGMMA K tiles,
 and writes gate/up preactivation directly to destination expert-major rows.
@@ -198,12 +207,17 @@ and writes gate/up preactivation directly to destination expert-major rows.
 Semantic dependency:
 
 ```text
-all FSend(..., k_copy_tile) for a send chunk
-  < every FW13(...) whose compute rows are inside that send chunk
+all FSend(..., compute_block=b, k_copy_tile) for one compute block b
+  < every FW13(..., compute_block=b, n_tile)
+
+all FW13 jobs for every compute block in send chunk q
+  < reuse(send_slot(q))
 ```
 
-There is no dependency between compute from chunk `q` and sends for chunk
-`q+1`.
+There is no dependency between compute block `b` and copying another block in
+the same chunk once both have a reserved slot. There is also no dependency
+between compute from chunk `q` and sends for chunk `q+1` when they occupy
+different rolling slots.
 
 ### Forward W2 + Return/Combine
 
