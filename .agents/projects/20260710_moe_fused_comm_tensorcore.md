@@ -75,6 +75,37 @@ amortize queue, semaphore, and peer-memory overhead. A send chunk may cover an
 expert group, but each compute work item must resolve to one local expert and a
 contiguous expert-major row interval.
 
+The semantic plan deliberately does not require send and compute row blocks to
+have the same size. Transport owns `send_m`; tensor-core work owns `compute_m`.
+The lowering only requires `send_m % compute_m == 0` and a stable mapping from
+each send chunk to its contiguous expert-local compute blocks. The initial
+Hopper profile uses B256 sends feeding four B64 compute blocks, but that ratio
+is a physical tuning choice rather than part of route semantics.
+
+## Two Physical Templates
+
+The old source-push inbox kernel established a useful physical baseline: two
+whole-chunk transfer owners, a fixed 32-program peer-local worker grid, 12
+rolling slots, one publication per ready unit, fixed consumer completion
+fan-in, and one release. The semantic design replaces its host/Python queue
+construction and queue-ordered output layout; it does not replace this proven
+producer/consumer discipline without measured evidence.
+
+The four fused stages should be implemented as two reusable physical shapes:
+
+1. **send + compute**: forward permute/W13 and backward dcombine/dy-route/W2.
+   Source producers send semantic expert-grouped chunks; destination consumers
+   run WGMMA on `compute_m` subtiles. W2 backward additionally accumulates dW2
+   as an expert-local reduction side output.
+2. **compute + return/combine**: forward W2 and backward W13. Destination
+   consumers run WGMMA and return route-local tiles to source-owned storage;
+   source consumers combine top-k routes. W13 backward additionally accumulates
+   dW13 as an expert-local reduction side output.
+
+Do not maintain unrelated queue/semaphore protocols for the four stages. Any
+stage-specific divergence from these templates needs a concrete data dependency
+or measured performance justification.
+
 ## Non-Goals
 
 - Do not optimize split x-pack, source-expand, or return kernels as though they
