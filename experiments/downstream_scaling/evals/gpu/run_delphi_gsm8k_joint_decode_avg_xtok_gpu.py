@@ -46,7 +46,7 @@ FEWSHOT_SEED = 1234
 
 MAX_TOKENS = 512
 ADVISOR_MAX_TOKENS = 2 * MAX_TOKENS
-MAX_MODEL_LEN = 2048
+MAX_MODEL_LEN = 4096
 SEED = 42
 STOP_TOKENS: tuple[str, ...] = ("Question:", "</s>", "<|im_end|>")
 
