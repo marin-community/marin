@@ -15,7 +15,6 @@ from unittest.mock import MagicMock, Mock
 
 import pytest
 from finelog.client.log_client import Table
-from finelog.rpc.logging_connect import LogServiceClientSync
 from iris.cluster.backends.rpc.backend import WORKER_RECONCILE_TEARDOWN_REASON
 from iris.cluster.bundle import BundleStore
 from iris.cluster.config import (
@@ -341,18 +340,6 @@ class MockController:
 @pytest.fixture
 def mock_controller() -> MockController:
     return MockController()
-
-
-@pytest.fixture
-def log_service(embedded_log_server) -> LogServiceClientSync:
-    """A LogService RPC client against a fresh in-process finelog server.
-
-    The native server makes pushed log entries immediately fetchable (RAM
-    buffer), so push→fetch is synchronously visible within a test without any
-    manual flush. The sync client exposes ``push_logs(request)`` /
-    ``fetch_logs(request)``.
-    """
-    return LogServiceClientSync(address=embedded_log_server.address)
 
 
 @pytest.fixture

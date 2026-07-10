@@ -309,20 +309,11 @@ def _deleted_resources(calls: list[list[str]]) -> set[str]:
     return {arg for argv in calls if "delete" in argv for arg in argv if "/" in arg}
 
 
-def test_teardown_deletes_the_secret_holding_the_signing_key(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_teardown_deletes_the_secret_and_retains_only_the_cache_pvc(monkeypatch: pytest.MonkeyPatch) -> None:
     # The env Secret carries the forwarding private key. Leaving it behind after a
     # teardown strands key material in a namespace with nothing left to use it.
     calls = _kubectl_argv(monkeypatch)
     cfg = _forwarding_cfg()
-
-    k8s_down(cfg, yes=False)
-
-    assert f"secret/{_env_secret_name(cfg)}" in _deleted_resources(calls)
-
-
-def test_teardown_without_yes_retains_only_the_cache_pvc(monkeypatch: pytest.MonkeyPatch) -> None:
-    calls = _kubectl_argv(monkeypatch)
-    cfg = _s3_cfg()
 
     k8s_down(cfg, yes=False)
 

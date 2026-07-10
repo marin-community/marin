@@ -793,8 +793,11 @@ mod tests {
         Forwarder::with_client(store, config, minter, client(*target))
     }
 
-    /// A source store and the hub it forwards to, each served over a real socket under
-    /// the auth policy it runs in production.
+    /// A source store and the hub it forwards to, each served over a real socket.
+    ///
+    /// The hub checks jwt before cidr, inverting the order a deployed hub uses. Both ends
+    /// sit on loopback here, so a cidr-first hub would admit every push on the network
+    /// layer and never reach the bearer that names the sending cluster.
     struct Fixture {
         source: Arc<Store>,
         source_client: LogServiceClient<TestTransport>,
