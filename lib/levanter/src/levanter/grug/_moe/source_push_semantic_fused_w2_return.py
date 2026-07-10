@@ -489,7 +489,7 @@ def _make_source_push_semantic_fused_w2_return_kernel(
                         expert_row_start = recv_row_ref[static_source_ordinal, entry]
 
                         def _acc_scope(acc_ref) -> Array:
-                            def _smem_scope(h_smem, w_smem, weight_barrier) -> None:
+                            def _smem_scope(gate_smem, up_smem, h_smem, w_smem, ready_barrier) -> None:
                                 @pl.loop(0, intermediate_tiles)
                                 def _intermediate_loop(intermediate_tile) -> None:
                                     intermediate_start = intermediate_tile * config.block_k
@@ -500,29 +500,41 @@ def _make_source_push_semantic_fused_w2_return_kernel(
                                             pl.ds(hidden_start, config.block_n),
                                         ],
                                         w_smem,
-                                        weight_barrier,
+                                        ready_barrier,
                                     )
-                                    gate = z_ref[
-                                        expert,
-                                        pl.ds(expert_row_start, config.compute_m),
-                                        pl.ds(intermediate_start, config.block_k),
-                                    ].astype(jnp.float32)
-                                    up = z_ref[
-                                        expert,
-                                        pl.ds(expert_row_start, config.compute_m),
-                                        pl.ds(intermediate_dim + intermediate_start, config.block_k),
-                                    ].astype(jnp.float32)
+                                    mgpu.copy_gmem_to_smem(
+                                        z_ref.at[
+                                            expert,
+                                            pl.ds(expert_row_start, config.compute_m),
+                                            pl.ds(intermediate_start, config.block_k),
+                                        ],
+                                        gate_smem,
+                                        ready_barrier,
+                                    )
+                                    mgpu.copy_gmem_to_smem(
+                                        z_ref.at[
+                                            expert,
+                                            pl.ds(expert_row_start, config.compute_m),
+                                            pl.ds(intermediate_dim + intermediate_start, config.block_k),
+                                        ],
+                                        up_smem,
+                                        ready_barrier,
+                                    )
+                                    mgpu.barrier_wait(ready_barrier)
+                                    gate = gate_smem[...].astype(jnp.float32)
+                                    up = up_smem[...].astype(jnp.float32)
                                     h_smem[:, :] = (jax.nn.silu(gate) * up).astype(dtype)
-                                    mgpu.barrier_wait(weight_barrier)
                                     mgpu.commit_smem()
                                     mgpu.wgmma(acc_ref, h_smem, w_smem)
                                     mgpu.wgmma_wait(0)
 
                             pl.run_scoped(
                                 _smem_scope,
+                                gate_smem=_wgmma_smem((config.compute_m, config.block_k), dtype),
+                                up_smem=_wgmma_smem((config.compute_m, config.block_k), dtype),
                                 h_smem=_wgmma_smem((config.compute_m, config.block_k), dtype),
                                 w_smem=_wgmma_smem((config.block_k, config.block_n), dtype),
-                                weight_barrier=mgpu.Barrier(num_arrivals=1),
+                                ready_barrier=mgpu.Barrier(num_arrivals=3),
                             )
                             return acc_ref[...].astype(jnp.bfloat16)
 

@@ -482,3 +482,44 @@ and one error row. Repeated failed allocator requests, mostly 12.50 GiB and one
 `scratch/6597-compile3/final-logs.txt`; terminal status and task summary are in
 `scratch/6597-compile3/final-status.txt` and
 `scratch/6597-compile3/final-summary.txt`.
+
+## 2026-07-10 FUSED-MOE-010 - Reduced W13 backward H100 timing
+
+Job `/dlwh/bench-semantic-fused-w13b-reduced-20260710-1500` ran once on
+`cw-rno2a` at commit `753445d04f` and reached terminal `JOB_STATE_SUCCEEDED`.
+Its single task exited 0 after 2 minutes 22.83 seconds, with zero failures or
+preemptions. No stop, retry, or duplicate was needed.
+
+`semantic_fused_w13_backward_pallas` completed without an error or hang:
+compile/first-call 69.6007 s, lowering/compile 67.5735 s, first run 2.0272 s,
+and steady state 69.1662 ms. It reported 7.7620 rounded and 6.2096 useful
+TFLOP/s/rank, checksum 27,812,178, 0.8 row efficiency, and no queue, layout,
+metadata, routing, or dropped-route errors. CUDA VMM emitted non-fatal
+`CUDA_ERROR_NOT_PERMITTED` warnings before retrying with simpler handle types.
+Complete Iris output is in `scratch/6597-w13b-reduced/raw.log`; terminal status
+and task summary are in `scratch/6597-w13b-reduced/final-status.txt` and
+`scratch/6597-w13b-reduced/final-summary.txt`.
+
+## 2026-07-10 FUSED-MOE-011 - W2 compile-first H100 follow-up
+
+Job `/dlwh/bench-semantic-fused-w2-compile4-20260710-1500` ran once on
+`cw-rno2a` at commit `753445d04f` and reached terminal `JOB_STATE_SUCCEEDED`.
+Its single task exited 0 after 2 minutes 39.03 seconds, with zero failures and
+preemptions. No stop, retry, restart, or duplicate was issued.
+
+Both requested modes returned error rows with `compile_time`,
+`lower_compile_time`, `first_call_time`, `first_run_time`,
+`steady_state_time`, `output_checksum`, and `rounded_tflops_per_rank` all null:
+
+| Mode | Exact error |
+| --- | --- |
+| `semantic_fused_w2_return_pallas` | `NotImplementedError: WGStridedFragLayout(shape=(64, 64), vec_size=4)` at `source_push_semantic_fused_w2_return.py:515`, assigning `(jax.nn.silu(gate) * up).astype(dtype)` to `h_smem[:, :]` |
+| `semantic_fused_w2_backward_pallas` | `ValueError: Incompatible FragmentedArray layouts` at `source_push_semantic_fused_w2_backward.py:831`, adding `old + acc_ref[...]` |
+
+Each summary row reported `all repeats failed`, with zero repeat rows and one
+error row. Repeated failed allocator requests of 12.50 GiB, plus one 6.25 GiB
+request, preceded the rows. Complete Iris output is in
+`scratch/6597-compile4/final-logs.txt`; compact exact rows are in
+`scratch/6597-compile4/result-rows.compact.jsonl`; terminal status and task
+summary are in `scratch/6597-compile4/final-status.txt` and
+`scratch/6597-compile4/final-summary.txt`.

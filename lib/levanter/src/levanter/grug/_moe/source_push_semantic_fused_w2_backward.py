@@ -818,17 +818,16 @@ def _make_source_push_semantic_fused_w2_backward_kernel(
                                             dy_smem=_wgmma_smem((config.compute_m, config.hidden_block), dtype),
                                             barrier=mgpu.Barrier(num_arrivals=2),
                                         )
-                                        old = d_w2_ref[
-                                            expert,
-                                            pl.ds(i_tile * config.intermediate_block, config.intermediate_block),
-                                            pl.ds(h_tile * config.hidden_block, config.hidden_block),
-                                        ]
-                                        d_w2_ref[
-                                            expert,
-                                            pl.ds(i_tile * config.intermediate_block, config.intermediate_block),
-                                            pl.ds(h_tile * config.hidden_block, config.hidden_block),
-                                        ] = (
-                                            old + acc_ref[...]
+                                        mgpu.atomic_add(
+                                            d_w2_ref.at[
+                                                expert,
+                                                pl.ds(
+                                                    i_tile * config.intermediate_block,
+                                                    config.intermediate_block,
+                                                ),
+                                                pl.ds(h_tile * config.hidden_block, config.hidden_block),
+                                            ],
+                                            acc_ref[...],
                                         )
 
                                     pl.run_scoped(
