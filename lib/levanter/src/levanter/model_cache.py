@@ -32,7 +32,7 @@ from collections.abc import Callable, Generator
 
 import fsspec
 from huggingface_hub import hf_hub_download, list_repo_files
-from rigging.distributed_lock import HEARTBEAT_INTERVAL, DistributedLease, LeaseLostError, create_lock
+from rigging.filesystem.distributed_lock import HEARTBEAT_INTERVAL, DistributedLease, LeaseLostError, create_lock
 from rigging.filesystem import marin_temp_bucket, url_to_fs
 
 logger = logging.getLogger(__name__)

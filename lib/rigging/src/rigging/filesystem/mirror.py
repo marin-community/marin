@@ -8,13 +8,11 @@ buckets and copy on first access under a distributed lock. Writes always target
 the local prefix. Cross-region copies are charged against the shared
 :class:`TransferBudget`.
 
-This is the only module in the :mod:`rigging.filesystem` package that imports
-:mod:`rigging.distributed_lock`. To keep ``distributed_lock`` out from under the
-package (so it may depend on the value/config modules — e.g. :class:`StoragePath`
-— without an import cycle), :mod:`rigging.filesystem` registers the ``mirror://``
-protocol *lazily* by class path: importing the package does not import this
-module. fsspec imports it on demand the first time a ``mirror://`` filesystem is
-constructed.
+This module and :mod:`~rigging.filesystem.distributed_lock` are the only ones in
+the package that import ``botocore`` (for the S3 lock backend), so
+:mod:`rigging.filesystem` registers the ``mirror://`` protocol lazily (by class
+path) to keep it off a plain ``import rigging.filesystem``. fsspec imports this
+module on demand the first time a ``mirror://`` filesystem is constructed.
 """
 
 import logging
@@ -24,9 +22,9 @@ from typing import Any, cast
 import fsspec
 from fsspec.callbacks import DEFAULT_CALLBACK, Callback
 
-from rigging.distributed_lock import create_lock, default_worker_id
 from rigging.filesystem.cluster_config import StoreType, data_config, marin_prefix
 from rigging.filesystem.cross_region import TransferBudget, _global_transfer_budget, _mirror_budget_ctx
+from rigging.filesystem.distributed_lock import create_lock, default_worker_id
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 
 logger = logging.getLogger(__name__)
@@ -330,9 +328,6 @@ class MirrorFileSystem(fsspec.AbstractFileSystem):
         return self._budget.bytes_used
 
 
-# Register the mirror:// protocol with fsspec once this module is imported.
-# The package __init__ registers the same protocol lazily (by class path) so
-# that ``import rigging.filesystem`` does not pull in distributed_lock; this
-# eager registration simply upgrades the lazy entry to the concrete class the
-# moment the module is actually loaded.
+# Upgrade the package's lazy class-path registration to the concrete class now
+# that this module is actually loaded.
 fsspec.register_implementation("mirror", MirrorFileSystem, clobber=True)

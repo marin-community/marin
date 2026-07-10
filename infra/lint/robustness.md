@@ -182,11 +182,9 @@ cache-control or backend kwarg the verbs cannot forward — `use_listings_cache=
 for a polled read that must defeat the listing cache, `block_size`/`cache_type` that
 must reach the file opener rather than the S3 constructor, or a passthrough like
 `revision=`/`recursive=` on `glob`/`find`/`info`; handing a live `fs` to a library that
-needs the handle (pyarrow, a streaming writer); the guarded
+needs the handle (pyarrow, a streaming writer); and the guarded
 `rigging.filesystem.url_to_fs`/`open_url`/`filesystem` and `atomic_rename` themselves,
-which are the intended low-level seam; and modules that `rigging.filesystem` itself
-imports (e.g. `rigging.distributed_lock`), which sit below it in the DAG and so use raw
-`fsspec` rather than depend back on `StoragePath`.
+which are the intended low-level seam.
 
 **Bad example:**
 ```python

@@ -17,11 +17,6 @@ def _hermetic_cluster_config(monkeypatch):
     from under any test that expects the committed cluster layout — the same
     class of host-dependent flake as an unmocked GCE metadata lookup. Tests see
     only the repo-committed and bundled config dirs.
-
-    Patch the ``cluster_config`` submodule, not the ``rigging.filesystem``
-    package: ``load_cluster_config`` reads ``MARIN_CLUSTER_CONFIG_DIRS`` as a
-    module global there, so patching the package re-export would leave the real
-    read untouched.
     """
     monkeypatch.setattr(
         cluster_config,

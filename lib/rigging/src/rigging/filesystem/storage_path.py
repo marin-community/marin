@@ -4,14 +4,10 @@
 """The :class:`StoragePath` value type and its string helpers.
 
 ``StoragePath`` is a frozen, parsed storage location (scheme, authority, key
-segments) with a bounded set of I/O verbs. Its verbs resolve through the guarded
-``url_to_fs``/``open_url`` factory in :mod:`rigging.filesystem.factory`, but the
-factory — and the cluster-config/cross-region modules it builds on — parse paths
-via ``StoragePath``. A module-level import of the factory here would therefore
-form a cycle, so the verbs import it *at call time* (see :func:`_url_to_fs` /
-:func:`_open_url`). This keeps ``storage_path`` a leaf module: it imports nothing
-from the rest of the package, so the value type sits below everything else —
-including :mod:`rigging.distributed_lock`, which may depend on it without a cycle.
+segments) with a bounded set of I/O verbs. The verbs resolve through the guarded
+factory in :mod:`rigging.filesystem.factory`, which itself parses paths via
+``StoragePath`` — so the verbs import the factory at call time (see
+:func:`_url_to_fs`) to break that cycle, keeping this a leaf module.
 """
 
 import dataclasses
@@ -26,11 +22,7 @@ import fsspec
 
 
 def _url_to_fs(url: str) -> tuple[Any, str]:
-    """Resolve ``(fs, path)`` through the guarded factory.
-
-    Deferred import: ``StoragePath``'s verbs need the guarded factory, but the
-    factory parses paths via ``StoragePath`` — a module-level import would cycle.
-    """
+    """Resolve ``(fs, path)`` through the guarded factory (deferred import; see module docstring)."""
     from rigging.filesystem.factory import url_to_fs  # noqa: PLC0415  (deferred: breaks storage_path<->factory cycle)
 
     return url_to_fs(url)
@@ -79,23 +71,13 @@ class StoragePath:
     separator), so a doubled or trailing separator is unrepresentable and ``parse`` ->
     ``str`` collapses interior ``//`` and strips a trailing ``/``.
 
-    Construct by parsing a string (``StoragePath("gs://b/k")``); the legacy
-    :meth:`parse` is a thin alias. Paths at rest (configs, artifact records, CLI args)
-    stay ``str``: parse at a boundary, manipulate, and ``str()`` back out. See
-    :func:`prefix_join` for the single-join convenience.
-
-    The I/O verbs are stateless: each resolves through the guarded
-    :func:`url_to_fs`/:func:`open_url` factory (cross-region budget, ``mirror://``, finite
-    S3 timeouts), never memoizing a filesystem handle on the frozen instance. They cover
-    the common surface: stat (:meth:`exists`, :meth:`isfile`, :meth:`isdir`, :meth:`size`,
-    :meth:`mtime`), listing (:meth:`ls`, :meth:`walk`, :meth:`glob`), mutation
-    (:meth:`mkdirs`, :meth:`rm`, :meth:`rmtree`, :meth:`rename`), transfer between local
-    disk and this path (:meth:`download_to`, :meth:`upload_from`), and whole-file access
-    (:meth:`open`, :meth:`read_text`, :meth:`write_text`, :meth:`read_bytes`,
-    :meth:`write_bytes`). :meth:`ls`, :meth:`walk`, and :meth:`glob` return reopenable
-    :class:`StoragePath` values; the read/write verbs forward ``**kwargs`` (e.g.
-    ``compression=``, ``encoding=``) to :func:`open_url` and the ``write_*`` pair truncates.
-    Byte-range reads and detail listings stay on the raw ``fs`` handle.
+    Construct by parsing a string (``StoragePath("gs://b/k")``); :meth:`parse` is a thin
+    alias. Paths at rest (configs, artifact records, CLI args) stay ``str``: parse at a
+    boundary, manipulate, and ``str()`` back out. The I/O verbs are stateless — each
+    resolves through the guarded :func:`url_to_fs`/:func:`open_url` factory (cross-region
+    budget, ``mirror://``, finite S3 timeouts) rather than memoizing a filesystem handle
+    on the frozen instance. The listing verbs (:meth:`ls`, :meth:`walk`, :meth:`glob`)
+    return reopenable :class:`StoragePath` values.
     """
 
     scheme: str | None

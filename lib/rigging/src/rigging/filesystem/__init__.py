@@ -1,32 +1,25 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Marin filesystem: the :class:`StoragePath` value type, cluster data config,
-storage-prefix/region resolution, region-local temp storage, cross-region read
-guards, guarded fsspec entry points, and the cross-region mirror filesystem.
+"""Marin filesystem: storage paths, cluster data config, and cross-region I/O.
 
-The package is split into focused modules whose cross-imports run one direction:
+Focused submodules with one-directional imports:
 
-- :mod:`rigging.filesystem.storage_path` — the :class:`StoragePath` value type and
-  its verbs, plus ``prefix_join``, ``rebase_file_path``, ``split_gcs_path``. A leaf
-  module: its verbs import the factory at call time, so it depends on nothing else
-  in the package.
-- :mod:`rigging.filesystem.cluster_config` — the cluster :class:`DataConfig`,
-  region/prefix resolution, region-local temp storage, and GCS-location utils.
-- :mod:`rigging.filesystem.cross_region` — the :class:`TransferBudget` and the
-  :class:`CrossRegionGuardedFS` read guard, plus ``record_transfer``.
-- :mod:`rigging.filesystem.factory` — the guarded ``url_to_fs`` / ``open_url`` /
-  ``filesystem`` entry points and ``atomic_rename``.
-- :mod:`rigging.filesystem.mirror` — the ``mirror://`` :class:`MirrorFileSystem`.
+- ``storage_path`` — the :class:`StoragePath` value type and its verbs, plus
+  ``prefix_join``, ``rebase_file_path``, ``split_gcs_path``.
+- ``cluster_config`` — the cluster :class:`DataConfig`, region/prefix resolution,
+  region-local temp storage, and GCS-location utils.
+- ``cross_region`` — the :class:`TransferBudget` and :class:`CrossRegionGuardedFS`.
+- ``factory`` — the guarded ``url_to_fs`` / ``open_url`` / ``filesystem`` entry
+  points and ``atomic_rename``.
+- ``mirror`` — the ``mirror://`` :class:`MirrorFileSystem`.
+- ``distributed_lock`` — lease-based distributed locks (used by ``mirror``).
 
-This module re-exports the public API of the first four, so
-``from rigging.filesystem import …`` keeps working. ``MirrorFileSystem`` is the
-one component that imports :mod:`rigging.distributed_lock`; the ``mirror://``
-protocol is registered *lazily* (by class path) so importing this package does
-not import ``mirror`` — and therefore does not pull ``distributed_lock`` under
-the package, leaving it free to depend on :class:`StoragePath` (and the other
-value/config modules) without an import cycle. Access the class directly via
-``rigging.filesystem.mirror`` when you need it by name.
+This module re-exports the public API of the first four so
+``from rigging.filesystem import …`` keeps working. ``mirror`` and
+``distributed_lock`` are reached by their submodule path; the lazy ``mirror://``
+registration below keeps them — and the ``botocore`` import they pull in for the
+S3 lock backend — off a plain ``import rigging.filesystem``.
 """
 
 import fsspec
@@ -81,7 +74,6 @@ from rigging.filesystem.storage_path import (
     split_gcs_path,
 )
 
-# Register the mirror:// protocol lazily by class path. fsspec imports
-# rigging.filesystem.mirror on demand the first time a mirror filesystem is
-# constructed; until then, distributed_lock stays out from under this package.
+# Register mirror:// by class path so fsspec imports rigging.filesystem.mirror
+# (and the botocore its lock backend pulls in) only on first use, not on import.
 fsspec.register_implementation("mirror", "rigging.filesystem.mirror.MirrorFileSystem")

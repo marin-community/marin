@@ -13,13 +13,6 @@ answer flows through it: :func:`marin_prefix` is ``data_config().resolved_root()
 and :func:`marin_temp_bucket` and the region helpers all read its fields.
 Lifecycle rules on the ``marin-{region}`` buckets are managed by
 ``infra/configure_buckets.py``.
-
-Prefix resolution chain (:meth:`DataConfig.resolved_root`):
-  1. ``MARIN_PREFIX`` environment variable
-  2. an explicit ``root`` (single-prefix clusters, e.g. R2)
-  3. the region-local bucket ``region_buckets[<gcs metadata region>]``
-  4. ``gs://marin-{region}`` for a detected-but-unmapped region
-  5. ``/tmp/marin`` (local fallback)
 """
 
 import contextlib
