@@ -77,20 +77,6 @@ message PushLogsRequest {
 
 message PushLogsResponse {}
 
-// A push spanning many keys. One request carries a whole batch of rows, each
-// naming its own destination key, so a forwarder relaying N keys pays one round
-// trip and one durability wait rather than N of each. `PushLogs` remains the
-// single-key ingest path a log-producing client uses.
-message PushLogsBulkRequest {
-  // Each entry's `key` names its destination. An entry with an empty key is
-  // rejected: there is no request-level key to fall back on.
-  repeated LogEntry entries = 1;
-  // Origin cluster for every entry, as in PushLogsRequest.cluster.
-  string cluster = 2;
-}
-
-message PushLogsBulkResponse {}
-
 // How the server should interpret FetchLogsRequest.source. EXACT and
 // PREFIX treat `source` as a literal string; `+`, `.`, `[` etc. match
 // themselves. UNSPECIFIED falls back to REGEX so clients that encode
@@ -138,6 +124,5 @@ message FetchLogsResponse {
 
 service LogService {
   rpc PushLogs(PushLogsRequest) returns (PushLogsResponse);
-  rpc PushLogsBulk(PushLogsBulkRequest) returns (PushLogsBulkResponse);
   rpc FetchLogs(FetchLogsRequest) returns (FetchLogsResponse);
 }

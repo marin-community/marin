@@ -170,8 +170,10 @@ impl Catalog {
             );
             CREATE INDEX IF NOT EXISTS segments_ns_level_minseq ON segments (namespace, level, min_seq);
             CREATE TABLE IF NOT EXISTS forward_state (
-                target TEXT PRIMARY KEY,
-                cursor INTEGER NOT NULL
+                target    TEXT    NOT NULL,
+                namespace TEXT    NOT NULL,
+                cursor    INTEGER NOT NULL,
+                PRIMARY KEY (target, namespace)
             );
             "#,
         )
@@ -180,37 +182,42 @@ impl Catalog {
 
     // ----- forward watermark ---------------------------------------------
 
-    /// The `log` seq below which nothing will be sent to `target` again, or `None` if
-    /// this store has never forwarded there. A high-water mark of what is settled, which
-    /// is not the same as what `target` holds: a sender may give a row up rather than
-    /// deliver it.
+    /// The seq in `namespace` below which nothing will be sent to `target` again, or
+    /// `None` if this store has never forwarded that namespace there. A high-water mark
+    /// of what is settled, which is not the same as what `target` holds: a sender may
+    /// give a row up rather than deliver it.
     ///
-    /// Keyed by target so repointing a forwarder reseeds instead of replaying one
-    /// store's seq space into another's.
-    pub fn forward_cursor(&self, target: &str) -> Result<Option<i64>, StatsError> {
+    /// Keyed by `(target, namespace)` so each table advances independently and repointing
+    /// a forwarder reseeds instead of replaying one store's seq space into another's.
+    pub fn forward_cursor(&self, target: &str, namespace: &str) -> Result<Option<i64>, StatsError> {
         let inner = self.inner.lock().unwrap();
         inner
             .conn
             .query_row(
-                "SELECT cursor FROM forward_state WHERE target = ?1",
-                [target],
+                "SELECT cursor FROM forward_state WHERE target = ?1 AND namespace = ?2",
+                [target, namespace],
                 |row| row.get(0),
             )
             .optional()
             .map_err(sqlite_err)
     }
 
-    /// Record `cursor` as settled for `target`. Callers write it only once the rows below
-    /// it can never be sent again, so a crash mid-batch re-forwards that batch rather
-    /// than losing it.
-    pub fn set_forward_cursor(&self, target: &str, cursor: i64) -> Result<(), StatsError> {
+    /// Record `cursor` as settled for `(target, namespace)`. Callers write it only once
+    /// the rows below it can never be sent again, so a crash mid-batch re-forwards that
+    /// batch rather than losing it.
+    pub fn set_forward_cursor(
+        &self,
+        target: &str,
+        namespace: &str,
+        cursor: i64,
+    ) -> Result<(), StatsError> {
         let inner = self.inner.lock().unwrap();
         inner
             .conn
             .execute(
-                "INSERT INTO forward_state (target, cursor) VALUES (?1, ?2)
-                 ON CONFLICT(target) DO UPDATE SET cursor = excluded.cursor",
-                rusqlite::params![target, cursor],
+                "INSERT INTO forward_state (target, namespace, cursor) VALUES (?1, ?2, ?3)
+                 ON CONFLICT(target, namespace) DO UPDATE SET cursor = excluded.cursor",
+                rusqlite::params![target, namespace, cursor],
             )
             .map_err(sqlite_err)?;
         Ok(())

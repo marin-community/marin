@@ -72,9 +72,10 @@ forwarding:
   signing_key: gcp-secret://projects/748532799086/secrets/finelog-cw-rno2a-signing-key/versions/1
 ```
 
-`forwarding.cluster` must equal the hub's `keys[].cluster` exactly — the hub
-stamps rows with the cluster its trusted key maps to and rejects a push naming any
-other, so a typo is a total, silent forwarding outage.
+The public key in `marin.yaml` must be the public half of `forwarding.signing_key` —
+that pairing is what authenticates the sender, and a wrong key is a 401 on every
+push. `forwarding.cluster` is the origin name the sender stamps on every forwarded
+row; keep it equal to the hub key entry's `cluster` label so reads line up.
 
 Roll the **hub first** (a sender whose key the hub does not yet trust gets 401),
 then the sender. `deploy up` resolves `signing_key` from Secret Manager on the
@@ -90,11 +91,11 @@ uv run finelog deploy up "$CLUSTER" --no-build   # sender: k8s, applies Secret +
 Forwarding starts at the sender's current watermark: rows already in its store
 stay there and stay queryable, but they do not backfill into the hub.
 
-Confirm the hub is receiving. The `cluster` column is server-stamped, so a row
-carrying the sender's name is proof its token verified. Bound the scan by time —
-an unbounded `GROUP BY` over the whole `log` namespace will time out. An empty
-`cluster` is the hub's own rows; a sender missing from this list is a sender whose
-rows are not arriving.
+Confirm the hub is receiving. The sender stamps the `cluster` column, and a row
+only lands once its token verified, so a row carrying the sender's name is proof
+forwarding reached the hub. Bound the scan by time — an unbounded `GROUP BY` over
+the whole `log` namespace will time out. An empty `cluster` is the hub's own rows;
+a sender missing from this list is a sender whose rows are not arriving.
 
 ```bash
 uv run finelog query marin --format table \

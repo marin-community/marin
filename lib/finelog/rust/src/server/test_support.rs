@@ -17,6 +17,7 @@ use hyper_util::client::legacy::Client as HyperClient;
 use hyper_util::rt::TokioExecutor;
 
 use crate::proto::finelog::logging::LogServiceClient;
+use crate::proto::finelog::stats::StatsServiceClient;
 use crate::server::auth::AuthPolicy;
 use crate::server::{build_app_with_config, ServerConfig, MAX_MESSAGE_BYTES};
 use crate::store::Store;
@@ -44,17 +45,25 @@ pub fn disk_store(tag: &str) -> Arc<Store> {
     store
 }
 
-pub fn client(addr: SocketAddr) -> LogServiceClient<TestTransport> {
+fn client_config(addr: SocketAddr) -> (TestTransport, ClientConfig) {
     let uri: http::Uri = format!("http://{addr}").parse().unwrap();
     let transport = ServiceTransport::new(
         HyperClient::builder(TokioExecutor::new()).build(HttpConnector::new()),
     );
-    LogServiceClient::new(
-        transport,
-        ClientConfig::new(uri)
-            .proto()
-            .with_default_max_message_size(MAX_MESSAGE_BYTES),
-    )
+    let config = ClientConfig::new(uri)
+        .proto()
+        .with_default_max_message_size(MAX_MESSAGE_BYTES);
+    (transport, config)
+}
+
+pub fn client(addr: SocketAddr) -> LogServiceClient<TestTransport> {
+    let (transport, config) = client_config(addr);
+    LogServiceClient::new(transport, config)
+}
+
+pub fn stats_client(addr: SocketAddr) -> StatsServiceClient<TestTransport> {
+    let (transport, config) = client_config(addr);
+    StatsServiceClient::new(transport, config)
 }
 
 /// Serve `store` on an ephemeral loopback port under `policy`, counting the RPC

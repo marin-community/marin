@@ -9,8 +9,7 @@ use connectrpc::{ConnectError, RequestContext, ServiceResult};
 use crate::errors::StatsError;
 use crate::proto::finelog::logging::{
     FetchLogsResponse, LogEntry, LogEntryView, LogLevel, LogService, MatchScope,
-    OwnedFetchLogsRequestView, OwnedPushLogsBulkRequestView, OwnedPushLogsRequestView,
-    PushLogsBulkResponse, PushLogsResponse, Timestamp,
+    OwnedFetchLogsRequestView, OwnedPushLogsRequestView, PushLogsResponse, Timestamp,
 };
 use crate::query::fetch_log_rows;
 use crate::query::make_ctx;
@@ -203,39 +202,6 @@ impl LogService for LogServiceImpl {
         connectrpc::Response::ok(PushLogsResponse::default())
     }
 
-    async fn push_logs_bulk(
-        &self,
-        ctx: RequestContext,
-        request: OwnedPushLogsBulkRequestView,
-    ) -> ServiceResult<PushLogsBulkResponse> {
-        if request.entries.is_empty() {
-            return connectrpc::Response::ok(PushLogsBulkResponse::default());
-        }
-
-        let cluster = authorized_cluster(&ctx, request.cluster.unwrap_or(""))?;
-
-        let mut rows = Vec::with_capacity(request.entries.len());
-        for entry in request.entries.iter() {
-            // Unlike PushLogs there is no request-level key to fall back on, so an
-            // unkeyed entry has no destination and the whole batch is refused
-            // rather than silently filed under "".
-            let key = entry.key.unwrap_or("");
-            if key.is_empty() {
-                return Err(ConnectError::invalid_argument(
-                    "finelog: PushLogsBulk entry has an empty key",
-                ));
-            }
-            rows.push(entry_fields(entry, key));
-        }
-        let log_columns = build_log_columns(rows, cluster);
-        // One append for every key in the batch: the store's log columns are
-        // per-row, so a multi-key push costs one insertion and one durability wait,
-        // not one per key.
-        self.append_and_persist(log_columns, &ctx).await?;
-
-        connectrpc::Response::ok(PushLogsBulkResponse::default())
-    }
-
     async fn fetch_logs(
         &self,
         _ctx: RequestContext,
@@ -284,7 +250,7 @@ impl LogService for LogServiceImpl {
         // Snapshot the sealed `log` segments (under the engine lock) on the
         // blocking pool, then build the provider over them.
         let store = Arc::clone(&self.store);
-        let snapshot = run_blocking(move || store.log_query_snapshot()).await?;
+        let snapshot = run_blocking(move || store.query_snapshot(LOG_NAMESPACE_NAME)).await?;
         let provider = NamespaceProvider::build(snapshot.schema, &snapshot.paths)
             .map_err(|e| ConnectError::internal(format!("build log provider: {e}")))?;
 
@@ -355,10 +321,6 @@ fn shaped_entry_to_proto(e: ShapedEntry) -> LogEntry {
 mod tests {
     use axum::http::{Extensions, HeaderMap};
 
-    use crate::proto::finelog::logging::{FetchLogsRequest, PushLogsBulkRequest};
-    use crate::server::auth::AuthPolicy;
-    use crate::server::test_support::{client, disk_store, serve};
-
     use super::*;
 
     fn ctx_with(identity: Option<AuthIdentity>) -> RequestContext {
@@ -412,88 +374,5 @@ mod tests {
         // Unreachable through the interceptor, which admits nothing without recording
         // an identity. Refusing rather than defaulting keeps it that way.
         assert!(authorized_cluster(&ctx_with(None), "").is_err());
-    }
-
-    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    async fn push_logs_bulk_files_every_entry_under_its_own_key() {
-        // The bulk path has no request-level key. Each entry names its own, and the
-        // whole request becomes one append -- which is why the resulting seqs are
-        // contiguous.
-        let store = disk_store("bulk_keys");
-        let (addr, _) = serve(Arc::clone(&store), AuthPolicy::allow_localhost()).await;
-        let client = client(addr);
-
-        client
-            .push_logs_bulk(PushLogsBulkRequest {
-                entries: vec![
-                    LogEntry::default().with_key("/a").with_data("one"),
-                    LogEntry::default().with_key("/b").with_data("two"),
-                    LogEntry::default().with_key("/a").with_data("three"),
-                ],
-                ..Default::default()
-            })
-            .await
-            .unwrap();
-
-        let response = client
-            .fetch_logs(
-                FetchLogsRequest {
-                    ..Default::default()
-                }
-                .with_source("/")
-                .with_match_scope(MatchScope::MATCH_SCOPE_PREFIX),
-            )
-            .await
-            .unwrap();
-        let view = response.into_view();
-        let rows: Vec<(&str, &str)> = view
-            .entries
-            .iter()
-            .map(|e| (e.key.unwrap_or(""), e.data.unwrap_or("")))
-            .collect();
-        assert_eq!(rows, vec![("/a", "one"), ("/b", "two"), ("/a", "three")]);
-
-        let seqs: Vec<i64> = view.entries.iter().map(|e| e.seq.unwrap_or(0)).collect();
-        assert_eq!(
-            seqs,
-            vec![seqs[0], seqs[0] + 1, seqs[0] + 2],
-            "a bulk push is one append, so its rows take consecutive seqs"
-        );
-    }
-
-    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    async fn push_logs_bulk_refuses_an_entry_with_no_key() {
-        // Nothing to fall back on, so the whole batch is refused rather than filed
-        // under the empty key, where no reader would ever look for it.
-        let store = disk_store("bulk_nokey");
-        let (addr, _) = serve(Arc::clone(&store), AuthPolicy::allow_localhost()).await;
-        let client = client(addr);
-
-        let error = client
-            .push_logs_bulk(PushLogsBulkRequest {
-                entries: vec![
-                    LogEntry::default().with_key("/a").with_data("one"),
-                    LogEntry::default().with_data("orphan"),
-                ],
-                ..Default::default()
-            })
-            .await
-            .unwrap_err();
-        assert_eq!(error.code, connectrpc::ErrorCode::InvalidArgument);
-
-        let response = client
-            .fetch_logs(
-                FetchLogsRequest {
-                    ..Default::default()
-                }
-                .with_source("/")
-                .with_match_scope(MatchScope::MATCH_SCOPE_PREFIX),
-            )
-            .await
-            .unwrap();
-        assert!(
-            response.into_view().entries.is_empty(),
-            "a refused batch stores none of its rows"
-        );
     }
 }

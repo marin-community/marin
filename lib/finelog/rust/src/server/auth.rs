@@ -487,13 +487,11 @@ fn peer_ip(ctx: &RequestContext) -> Option<IpAddr> {
 ///
 /// Always installed (see `build_connect_service`); the private default policy is
 /// [`AuthPolicy::allow_localhost`]. Gates every method on both services — ingest
-/// (`PushLogs`/`PushLogsBulk`/`WriteRows`/`RegisterTable`) and reads
-/// (`FetchLogs`/`Query`) alike.
+/// (`PushLogs`/`WriteRows`/`RegisterTable`) and reads (`FetchLogs`/`Query`) alike.
 ///
 /// It also records the admitting [`AuthIdentity`] in the request extensions, which
-/// connect carries through to the handler. The ingest handlers read it to bind a
-/// pushed row's origin `cluster` to the credential that carried it, so a trusted
-/// key can write logs only under the cluster it authenticates.
+/// connect carries through to the handler. `PushLogs` reads it to bind a pushed row's
+/// origin `cluster` to the credential that carried it.
 pub struct AuthInterceptor {
     policy: Arc<AuthPolicy>,
 }
