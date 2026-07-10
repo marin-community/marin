@@ -416,7 +416,7 @@ where
                     .seq;
                 let rows = chunk.len() as i64;
                 match self.push(chunk, stop).await {
-                    Ok(()) => progress.forwarded += 1,
+                    Ok(()) => progress.batches += 1,
                     Err(PushError::Stopping(e)) => {
                         tracing::warn!(cursor, error = %e, "finelog forwarder: push interrupted");
                         return cursor;
@@ -522,17 +522,16 @@ where
         })
     }
 
-    /// Ship one chunk and wait for the hub to durably ack it. Retries on failure with
-    /// an exponential backoff, and gives up (returning the error) once `stop` latches,
-    /// so a SIGTERM never waits out a full backoff.
-    /// Push one chunk, retrying transient failures until it lands, the hub rejects it
-    /// outright, or `stop` latches.
+    /// Ship one chunk and wait for the hub to durably ack it. Retries transient failures
+    /// with an exponential backoff, returning only when the chunk lands, the hub rejects
+    /// it outright, or `stop` latches — which interrupts the backoff, so a SIGTERM never
+    /// waits one out.
     ///
-    /// A fresh bearer is minted per attempt, so an expired token — or a hub whose trust
-    /// config an operator has just repaired — recovers on the next try without the
-    /// forwarder restarting. Auth failures are therefore retried, not skipped: the rows
-    /// are safe in the local store, and dropping a cluster's whole log stream over a
-    /// fixable typo in the hub's `jwt` layer would be far worse than stalling visibly.
+    /// Every attempt takes the bearer afresh, and [`TokenMinter`] re-mints it once it
+    /// nears expiry, so a chunk retried across a long backoff never presents a stale
+    /// token. Auth failures are retried rather than skipped: the rows are safe in the
+    /// local store, and dropping a cluster's whole log stream over a fixable typo in the
+    /// hub's `jwt` layer would be far worse than stalling visibly until it is repaired.
     async fn push(
         &self,
         chunk: Vec<LogRow>,
@@ -637,7 +636,11 @@ fn resume_after_eviction(cursor: i64, min_seq: Option<i64>) -> Option<i64> {
 
 /// Cumulative forwarding counters, reported on a slow timer.
 struct Progress {
-    forwarded: u64,
+    /// Requests the hub accepted. Counted in batches, not rows: one bulk request is
+    /// the unit of forwarding work.
+    batches: u64,
+    /// Rows that will never reach the hub — evicted before they shipped, dropped by the
+    /// lag cap, or in a batch the hub permanently refused.
     skipped: i64,
     last_report: Instant,
 }
@@ -645,7 +648,7 @@ struct Progress {
 impl Progress {
     fn new() -> Self {
         Self {
-            forwarded: 0,
+            batches: 0,
             skipped: 0,
             last_report: Instant::now(),
         }
@@ -659,7 +662,7 @@ impl Progress {
         tracing::info!(
             cursor,
             lag = persisted - cursor,
-            batches = self.forwarded,
+            batches = self.batches,
             skipped = self.skipped,
             "finelog forwarder: progress"
         );
@@ -850,6 +853,29 @@ mod tests {
         );
     }
 
+    /// A forwarder running on its own task, stopped and joined by [`Self::finish`].
+    struct RunningForwarder {
+        stop: watch::Sender<bool>,
+        task: JoinHandle<()>,
+    }
+
+    impl RunningForwarder {
+        fn start(forwarder: Forwarder<TestTransport>) -> Self {
+            let (stop, stop_rx) = watch::channel(false);
+            Self {
+                stop,
+                task: spawn(forwarder, stop_rx),
+            }
+        }
+
+        /// Latch the stop signal and join. Bounded, so a forwarder wedged in a backoff
+        /// fails the test rather than hanging it.
+        async fn finish(self) {
+            self.stop.send(true).unwrap();
+            let _ = tokio::time::timeout(Duration::from_secs(5), self.task).await;
+        }
+    }
+
     /// Run `forwarder` until `store`'s watermark reaches `expected`, then stop it.
     async fn forward_until(
         forwarder: Forwarder<TestTransport>,
@@ -857,11 +883,9 @@ mod tests {
         target: &str,
         expected: i64,
     ) {
-        let (stop_tx, stop_rx) = watch::channel(false);
-        let task = spawn(forwarder, stop_rx);
+        let running = RunningForwarder::start(forwarder);
         wait_for_cursor(store, target, expected).await;
-        stop_tx.send(true).unwrap();
-        let _ = tokio::time::timeout(Duration::from_secs(5), task).await;
+        running.finish().await;
     }
 
     /// The last seq the source store has made durable.
@@ -1076,16 +1100,12 @@ mod tests {
         source.set_forward_cursor(&target_url, 0).unwrap();
 
         // PRIV_UNTRUSTED is not the key the hub trusts.
-        let (stop_tx, stop_rx) = watch::channel(false);
-        let task = spawn(
-            forwarder(Arc::clone(&source), &target_addr, PRIV_UNTRUSTED),
-            stop_rx,
-        );
+        let running =
+            RunningForwarder::start(forwarder(Arc::clone(&source), &target_addr, PRIV_UNTRUSTED));
         // Wait for the push to REACH the hub. Stopping on a timer instead would let a
         // forwarder that never pushed at all satisfy both assertions below.
         wait_for_requests(&target_requests, 1).await;
-        stop_tx.send(true).unwrap();
-        let _ = tokio::time::timeout(Duration::from_secs(5), task).await;
+        running.finish().await;
 
         assert_eq!(
             source.forward_cursor(&target_url).unwrap(),
@@ -1139,17 +1159,12 @@ mod tests {
 
         // No watermark for this target: seed at the tip, so "before" is never shipped.
         let target_url = format!("http://{target_addr}");
-        let (stop_tx, stop_rx) = watch::channel(false);
-        let task = spawn(
-            forwarder(Arc::clone(&source), &target_addr, PRIV_A),
-            stop_rx,
-        );
+        let running = RunningForwarder::start(forwarder(Arc::clone(&source), &target_addr, PRIV_A));
         wait_for_cursor(&source, &target_url, tip(&source)).await;
 
         push(&source_client, "/user/job/t", &["after"]).await;
         wait_for_cursor(&source, &target_url, tip(&source)).await;
-        stop_tx.send(true).unwrap();
-        let _ = tokio::time::timeout(Duration::from_secs(5), task).await;
+        running.finish().await;
 
         assert_eq!(
             read_all(&client(target_addr)).await,
@@ -1211,14 +1226,13 @@ mod tests {
         source.set_forward_cursor(&target_url, 10_000).unwrap();
         let expected_tip = tip(&source);
 
-        let (stop_tx, stop_rx) = watch::channel(false);
-        let task = spawn(
+        forward_until(
             forwarder(Arc::clone(&source), &target_addr, PRIV_A),
-            stop_rx,
-        );
-        wait_for_cursor(&source, &target_url, expected_tip).await;
-        stop_tx.send(true).unwrap();
-        let _ = tokio::time::timeout(Duration::from_secs(5), task).await;
+            &source,
+            &target_url,
+            expected_tip,
+        )
+        .await;
 
         assert!(read_all(&client(target_addr)).await.is_empty());
     }

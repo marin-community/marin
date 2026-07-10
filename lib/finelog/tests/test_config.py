@@ -15,6 +15,7 @@ from finelog.deploy.config import (
     GcpDeployment,
     JwtAuthLayer,
     K8sDeployment,
+    _bundled_config_dir,
     auth_policy_json,
     derive_endpoint_uri,
     load_finelog_config,
@@ -266,7 +267,15 @@ def test_forwarding_cluster_must_be_named() -> None:
         ForwardingConfig(target="https://finelog.oa.dev", cluster="", signing_key=("env:K",))
 
 
-_BUNDLED = ("marin", "marin-dev", "cw-rno2a", "cw-us-east-02a")
+def _bundled_configs() -> dict[str, FinelogConfig]:
+    """Every config shipped in `lib/finelog/config/`, keyed by name.
+
+    Discovered rather than listed, so a config added without a matching hub entry fails
+    the checks below instead of being silently skipped.
+    """
+    names = sorted(p.stem for p in _bundled_config_dir().glob("*.yaml"))
+    assert names, "no bundled finelog configs found"
+    return {name: load_finelog_config(name) for name in names}
 
 
 def test_every_bundled_sender_names_a_cluster_some_bundled_hub_trusts() -> None:
@@ -278,7 +287,7 @@ def test_every_bundled_sender_names_a_cluster_some_bundled_hub_trusts() -> None:
     across the bundled configs; it cannot check that the key halves match (the private
     half lives in Secret Manager) nor that the sender points at that particular hub.
     """
-    configs = {name: load_finelog_config(name) for name in _BUNDLED}
+    configs = _bundled_configs()
     trusted = {
         entry.cluster
         for cfg in configs.values()
@@ -295,7 +304,6 @@ def test_every_bundled_sender_names_a_cluster_some_bundled_hub_trusts() -> None:
 def test_bundled_forwarding_configs_deploy_on_k8s() -> None:
     """The gcp backend refuses forwarding — it can only reach the server through
     world-readable startup-script metadata, which is no place for a signing key."""
-    for name in _BUNDLED:
-        cfg = load_finelog_config(name)
+    for name, cfg in _bundled_configs().items():
         if cfg.forwarding is not None:
             assert cfg.deployment.k8s is not None, f"{name}: forwards but deploys on gcp"
