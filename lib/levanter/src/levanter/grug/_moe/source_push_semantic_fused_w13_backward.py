@@ -236,7 +236,10 @@ def source_push_semantic_fused_w13_backward_reference_jax(
         .astype(jnp.float32)
     )
     gathered_dz = jnp.where(row_valid[..., None], gathered_dz, 0.0)
-    gathered_w = w13.at[destination, safe_expert].get().astype(jnp.float32)
+    gathered_w_sharding = None
+    if jax.sharding.get_abstract_mesh().are_all_axes_explicit:
+        gathered_w_sharding = P(SOURCE_PUSH_MESH_AXIS, None, None, None, None, None)
+    gathered_w = w13.at[destination, safe_expert].get(out_sharding=gathered_w_sharding).astype(jnp.float32)
 
     dx_routes = jnp.einsum("sdcbmo,sdcbho->sdcbmh", gathered_dz, gathered_w)
     dx = jnp.zeros((source_count, x.shape[1], x.shape[2]), dtype=jnp.float32)

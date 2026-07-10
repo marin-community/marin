@@ -523,3 +523,23 @@ request, preceded the rows. Complete Iris output is in
 `scratch/6597-compile4/result-rows.compact.jsonl`; terminal status and task
 summary are in `scratch/6597-compile4/final-status.txt` and
 `scratch/6597-compile4/final-summary.txt`.
+
+## 2026-07-10 FUSED-MOE-012 - Tiny W13 backward compare gate
+
+Job `/dlwh/bench-semantic-fused-w13b-tiny-compare-20260710-1510` ran once on
+`cw-rno2a` at commit `d6749066bd` and reached terminal `JOB_STATE_SUCCEEDED`.
+Its single task exited 0 after 27.48 seconds, with zero failures or preemptions.
+No stop, retry, restart, or duplicate was issued.
+
+`semantic_fused_w13_backward_compare` failed before compilation in the JAX
+reference path with `ShardingTypeError`: the gather at
+`source_push_semantic_fused_w13_backward.py:239` requires an explicit
+`.at[...].get(out_sharding=...)`. The summary reported zero repeat rows and one
+error row. Consequently, no `dx`/`dw13` comparison metrics, checksums, or timing
+values were emitted; compile, first-call, first-run, and steady-state timing
+fields are all null. Reported `dropped_routes`, `routing_dropped_routes`, and
+`metadata_overflow_routes` were zero. Queue/layout overflow counters were not
+emitted because execution did not reach the fused kernel. Complete output and
+exact result rows are in `scratch/6597-w13b-tiny-compare/raw.log` and
+`scratch/6597-w13b-tiny-compare/result-rows.jsonl`; terminal status and task
+summary are alongside them.
