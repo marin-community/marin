@@ -1635,3 +1635,27 @@ author: dlwh
   - Do not expand the block geometry sweep without a per-shape forward/dLHS/dRHS benchmark or restored autotuning machinery. The full-step profile and the diminishing response to kernel controls now make pipeline communication/dependency overlap the higher-value target.
 - Next action:
   - Keep `block_k=32`, eight warps, CuTe FA4, batch512/m16 as the best measured configuration. Investigate the exposed SendRecv pre-op gap and schedule-level overlap instead of another blind tile point.
+
+### 2026-07-10 13:47 PDT - no-EP FSDP boundary and proper SonicMoE bring-up
+- Hypothesis: Removing expert parallelism eliminates the exposed ring SendRecv dependency, while FSDP storage keeps the 64-expert parameters and Muon state resident; upstream SonicMoE's QuACK grouped GEMMs can recover local expert compute efficiency after materializing complete weights at the kernel boundary.
+- Commit Hashes:
+  - `e917a4924b`: explicit no-EP/FSDP materialization boundary and upstream benchmark.
+  - `6140388738`, `412b167dea`, `36f605b8c9`: JAX TVM-FFI QuACK gated-GEMM proof and concatenated/interleaved layout corrections.
+  - `23fbf07065`: end-to-end Levanter Sonic path using QuACK fused gated and grouped down-projection forward kernels with reference ragged-dot VJPs.
+  - `9101a3e741`, `373139550a`: GPU gradient-parity test and direct pinned GPU dependencies.
+- Commands:
+  - Upstream exact-shape probe: one RNO2A H100, install `Dao-AILab/sonic-moe@0349404acd7952592f73d180ff0c1510f6d112c2` without dependency replacement, then `uv run python experiments/grug/moe/benchmark_upstream_sonic_moe.py`.
+  - JAX exact routed-assignment probe: one RNO2A H100, then `uv run python experiments/grug/moe/benchmark_quack_jax_gated.py --tokens 65536 --hidden-dim 2560 --intermediate-dim 1280 --experts 64 --warmup 2 --iterations 5`.
+  - GPU behavior gates: `uv run pytest -n 0 lib/levanter/tests/grug/test_grugformer_moe.py -q -k 'moe_mlp_sonic_matches_jax_gather_reference_on_gpu'` and the corresponding `moe_mlp_sonic_gradients_match_jax_reference_on_gpu` test.
+  - Distributed smoke: `TF_GPU_ALLOCATOR=cuda_malloc_async experiments/grug/moe/run_cw_jaxpp_may_d2560.sh --submit --cluster cw-rno2a --schedule std_1f1b --implementation explicit_mpmd --physical-stages 4 --logical-stages 4 --microbatches 4 --nodes 4 --gpus-per-replica 8 --expert-axis 1 --layers 8 --experts 64 --top-k 4 --batch 32 --seq-len 4096 --vocab-size 8192 --attention-implementation gpu_fa4_cute --ragged-dot-implementation triton --ragged-dot-num-warps 8 --moe-implementation sonic --loss-implementation xla --steps 3 --tracker wandb --xla-memory-fraction 0.65 --remat save_moe --run-id jaxpp-rno2a-sonicquack-smoke-l8-e64k4-b32-s4096-p4m4-20260710-1350`.
+- Results:
+  - Upstream SonicMoE on H100 at 16,384 tokens, d2560/i1280, 64 experts, top-k 4 completed forward and backward in `8.4459ms` mean (`8.4296ms` median, `8.3800ms` minimum) with `8.8182GiB` peak allocated memory. Parent `/dlwh/sonicmoe-upstream-e64k4-t16384-smoke-20260710-1325` succeeded.
+  - The JAX TVM-FFI fused gated forward at the corresponding 65,536 routed assignments completed in `1.2454ms` mean (`1.2451ms` median, `1.2404ms` minimum). Interleaved preactivation was bit-identical to the independent reference; worst-case BF16 postactivation error was `0.125` under unit-variance inputs.
+  - The integrated QuACK gated and down-projection forward path passed the end-to-end Sonic-vs-ragged-dot GPU test. Its custom VJP bridge passed independent gradients for activations, routing weights, W13, and W2 at `rtol=0.1`, `atol=2e-4`.
+  - Parameters remain data-axis FSDP-sharded at rest. The no-EP `shard_map` boundary explicitly replicates complete expert matrices for each local kernel call; a two-CPU-device numerical regression matches the unsharded reference at `rtol=atol=1e-5`.
+  - NVIDIA JAX 26.05 added XLA-cuDNN ragged-dot fusion and NCCL 2.28 copy-engine support for all-gather/all-to-all. The 26.06 container is JAX `0.10.1`, CUDA `13.3`, XLA `9b63591`; its release notes do not identify a new ragged-all-to-all primitive. Marin already uses JAX `0.10.1`, CUDA 13, and NCCL `>=2.28.3`, but not NVIDIA's downstream XLA build, so ring remains the validated EP fallback.
+- Interpretation:
+  - The proper upstream kernel is intrinsically fast enough to justify no-EP. The remaining risk is distributed integration and the cost of FSDP all-gather plus the current weight-layout transposes, not QuACK compute.
+  - The checked-in VJP bridge is a correctness milestone, not the final performance implementation: forward uses QuACK, while backward still lowers through the existing Pallas-Triton ragged-dot kernels. Porting QuACK `gemm_dgated` and grouped weight-gradient kernels remains necessary if the bridge does not clear 20 MFU.
+- Next action:
+  - Babysit parent `/dlwh/iris-run-job-20260710-204625`. On finite success, run the full 24-layer batch512/m16 target comparison with `expert_axis=1`; on failure, fix the first MPMD/FFI/sharding/memory error before any performance claim.
