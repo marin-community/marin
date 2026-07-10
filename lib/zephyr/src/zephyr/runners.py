@@ -249,9 +249,7 @@ def _start_stats_sampler(
 ) -> threading.Thread:
     """Create and start the periodic stats-sampler thread.
 
-    Shared by ``InlineRunner`` and the subprocess child so the sampler's
-    argument list lives in one place — the two call sites only differ in
-    ``thread_name``. Returns the started daemon thread; the caller owns
+    Returns the started daemon thread; the caller owns
     ``stop_event`` and joins the thread on teardown.
     """
     sampler = threading.Thread(
