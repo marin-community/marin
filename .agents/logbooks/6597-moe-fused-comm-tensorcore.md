@@ -459,3 +459,26 @@ error rows. Complete Iris output is in
 `scratch/6597-compile2/final-logs.txt`; terminal status and task summary are in
 `scratch/6597-compile2/final-status.txt` and
 `scratch/6597-compile2/final-summary.txt`.
+
+## 2026-07-10 FUSED-MOE-009 - W2 compile-first H100 follow-up
+
+Job `/dlwh/bench-semantic-fused-w2-compile3-20260710-1450` ran once on
+`cw-rno2a` at commit `8460737417` and reached terminal `JOB_STATE_SUCCEEDED`.
+Its single task exited 0 after 2 minutes 34.22 seconds, with zero failures and
+preemptions. No stop, retry, or duplicate launch was needed.
+
+Both requested modes returned error rows with `compile_time`,
+`lower_compile_time`, `first_call_time`, `first_run_time`,
+`steady_state_time`, `output_checksum`, and `rounded_tflops_per_rank` all null:
+
+| Mode | First actionable error |
+| --- | --- |
+| `semantic_fused_w2_return_pallas` | `ValueError: Incompatible FragmentedArray layouts` at `source_push_semantic_fused_w2_return.py:530`, while evaluating `(jax.nn.silu(gate) * up * row_valid).astype(dtype)` |
+| `semantic_fused_w2_backward_pallas` | `ValueError: Incompatible types for broadcasting: input type=float32[8@expert,8,72,4,64] and requested type=float32[8,8,72,4,64]` at `source_push_semantic_fused_w2_backward.py:364`, in the `d_route.at[...].add(...)` |
+
+Each mode's summary row reported `all repeats failed`, with zero repeat rows
+and one error row. Repeated failed allocator requests, mostly 12.50 GiB and one
+6.25 GiB request, preceded the rows. Complete Iris output is in
+`scratch/6597-compile3/final-logs.txt`; terminal status and task summary are in
+`scratch/6597-compile3/final-status.txt` and
+`scratch/6597-compile3/final-summary.txt`.

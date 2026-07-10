@@ -347,7 +347,7 @@ def source_push_semantic_fused_w2_backward(
             mesh = jax.sharding.get_abstract_mesh()
             if mesh.empty:
                 raise ValueError("mesh is required for persistent semantic fused W2 backward")
-        d_h, d_w2, queue_d_route = _source_push_semantic_fused_w2_backward_sharded(
+        d_h, d_w2, d_route = _source_push_semantic_fused_w2_backward_sharded(
             dy,
             return_y,
             h_expert,
@@ -355,14 +355,6 @@ def source_push_semantic_fused_w2_backward(
             metadata,
             config=config,
             mesh=mesh,
-        )
-        source = jnp.arange(dy.shape[0], dtype=jnp.int32)[:, None, None, None, None]
-        d_route = jax.sharding.reshard(
-            jnp.zeros((*dy.shape[:2], plan.topk), dtype=jnp.float32),
-            NamedSharding(mesh, P(SOURCE_PUSH_MESH_AXIS, None, None)),
-        )
-        d_route = d_route.at[source, metadata.token_ids, metadata.route_slots].add(
-            jnp.where(metadata.row_valid, queue_d_route, jnp.zeros((), dtype=queue_d_route.dtype))
         )
     d_h = jnp.where(metadata.valid[..., None], d_h, jnp.zeros((), dtype=d_h.dtype))
     return SourcePushSemanticFusedW2BackwardResult(
@@ -407,6 +399,7 @@ def _source_push_semantic_fused_w2_backward_sharded(
         dy_local,
         route_y_local,
         token_local,
+        slot_local,
         weight_local,
         send_valid_local,
         recv_expert_local,
@@ -427,7 +420,14 @@ def _source_push_semantic_fused_w2_backward_sharded(
             h_local[0],
             w_local[0],
         )
-        return d_h_local[None], d_w2_local[None], queue_d_route_local[None]
+        compute_m = token_local.shape[-1]
+        row = jnp.arange(compute_m, dtype=jnp.int32)
+        row_valid = row < send_valid_local[0, ..., None]
+        d_route_local = jnp.zeros((dy_local.shape[1], metadata.topk), dtype=jnp.float32)
+        d_route_local = d_route_local.at[token_local[0], slot_local[0]].add(
+            jnp.where(row_valid, queue_d_route_local, jnp.zeros((), dtype=queue_d_route_local.dtype))
+        )
+        return d_h_local[None], d_w2_local[None], d_route_local[None]
 
     source_3d = NamedSharding(mesh, P(SOURCE_PUSH_MESH_AXIS, None, None))
     source_4d = NamedSharding(mesh, P(SOURCE_PUSH_MESH_AXIS, None, None, None))
@@ -442,6 +442,7 @@ def _source_push_semantic_fused_w2_backward_sharded(
             P(SOURCE_PUSH_MESH_AXIS, None, None, None, None),
             P(SOURCE_PUSH_MESH_AXIS, None, None, None, None),
             P(SOURCE_PUSH_MESH_AXIS, None, None, None, None),
+            P(SOURCE_PUSH_MESH_AXIS, None, None, None, None),
             P(SOURCE_PUSH_MESH_AXIS, None, None, None),
             P(SOURCE_PUSH_MESH_AXIS, None, None, None),
             P(SOURCE_PUSH_MESH_AXIS, None, None, None),
@@ -452,13 +453,14 @@ def _source_push_semantic_fused_w2_backward_sharded(
         out_specs=(
             P(SOURCE_PUSH_MESH_AXIS, None, None, None),
             P(SOURCE_PUSH_MESH_AXIS, None, None, None),
-            P(SOURCE_PUSH_MESH_AXIS, None, None, None, None),
+            P(SOURCE_PUSH_MESH_AXIS, None, None),
         ),
         check_vma=False,
     )(
         jax.sharding.reshard(dy, source_3d),
         jax.sharding.reshard(return_y, source_5d),
         jax.sharding.reshard(metadata.token_ids, source_route_sharding),
+        jax.sharding.reshard(metadata.route_slots, source_route_sharding),
         jax.sharding.reshard(metadata.route_weights, source_route_sharding),
         jax.sharding.reshard(metadata.send_valid_rows, source_4d),
         jax.sharding.reshard(metadata.recv_expert, destination_4d),

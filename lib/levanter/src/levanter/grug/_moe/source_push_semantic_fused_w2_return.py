@@ -356,7 +356,6 @@ def _source_push_semantic_fused_w2_return_sharded(
         w_local,
         recv_expert_local,
         recv_row_local,
-        recv_valid_local,
         queue_dst_local,
         queue_entry_local,
         queue_row_local,
@@ -368,7 +367,6 @@ def _source_push_semantic_fused_w2_return_sharded(
             w_local[0],
             recv_expert_local[0],
             recv_row_local[0],
-            recv_valid_local[0],
             queue_dst_local[0],
             queue_entry_local[0],
             queue_row_local[0],
@@ -393,7 +391,6 @@ def _source_push_semantic_fused_w2_return_sharded(
             P(SOURCE_PUSH_MESH_AXIS, None, None),
             P(SOURCE_PUSH_MESH_AXIS, None, None),
             P(SOURCE_PUSH_MESH_AXIS, None, None),
-            P(SOURCE_PUSH_MESH_AXIS, None, None),
         ),
         out_specs=(
             P(SOURCE_PUSH_MESH_AXIS, None, None),
@@ -405,7 +402,6 @@ def _source_push_semantic_fused_w2_return_sharded(
         jax.sharding.reshard(w_down, destination_4d),
         jax.sharding.reshard(metadata.recv_local_expert, destination_3d),
         jax.sharding.reshard(metadata.recv_expert_row_start, destination_3d),
-        jax.sharding.reshard(metadata.recv_valid_rows, destination_3d),
         jax.sharding.reshard(metadata.queue_dst_ordinal, source_3d),
         jax.sharding.reshard(metadata.queue_entry, source_3d),
         jax.sharding.reshard(metadata.queue_row, source_3d),
@@ -444,7 +440,6 @@ def _make_source_push_semantic_fused_w2_return_kernel(
         w_ref,
         recv_expert_ref,
         recv_row_ref,
-        recv_valid_ref,
         queue_dst_ref,
         queue_entry_ref,
         queue_row_ref,
@@ -490,7 +485,6 @@ def _make_source_push_semantic_fused_w2_return_kernel(
                         entry = job // hidden_tiles
                         hidden_tile = job % hidden_tiles
                         hidden_start = hidden_tile * config.block_n
-                        valid_rows = recv_valid_ref[static_source_ordinal, entry]
                         expert = jnp.maximum(recv_expert_ref[static_source_ordinal, entry], 0)
                         expert_row_start = recv_row_ref[static_source_ordinal, entry]
 
@@ -518,16 +512,7 @@ def _make_source_push_semantic_fused_w2_return_kernel(
                                         pl.ds(expert_row_start, config.compute_m),
                                         pl.ds(intermediate_dim + intermediate_start, config.block_k),
                                     ].astype(jnp.float32)
-                                    row = mgpu.layout_cast(
-                                        lax.broadcasted_iota(
-                                            jnp.int32,
-                                            (config.compute_m, config.block_k),
-                                            0,
-                                        ),
-                                        mgpu.Layout.WGMMA,
-                                    )
-                                    row_valid = (row < valid_rows).astype(jnp.float32)
-                                    h_smem[:, :] = (jax.nn.silu(gate) * up * row_valid).astype(dtype)
+                                    h_smem[:, :] = (jax.nn.silu(gate) * up).astype(dtype)
                                     mgpu.barrier_wait(weight_barrier)
                                     mgpu.commit_smem()
                                     mgpu.wgmma(acc_ref, h_smem, w_smem)
