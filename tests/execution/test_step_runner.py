@@ -723,6 +723,14 @@ def test_runner_preserves_underlying_step_exception(tmp_path: Path):
 # ---------------------------------------------------------------------------
 
 
+_RANK_ENV_VARS = (
+    "IRIS_TASK_ID",
+    "IRIS_NUM_TASKS",
+    "IRIS_MULTIGPU_PROCESS_INDEX",
+    "IRIS_MULTIGPU_PROCESS_COUNT",
+)
+
+
 @pytest.mark.parametrize(
     "task_id, expected",
     [
@@ -736,49 +744,69 @@ def test_iris_task_index_parses_wire_task_id(monkeypatch, task_id, expected):
     assert step_runner_module._iris_task_index() == expected
 
 
-def test_runner_warns_when_secondary_spmd_task(tmp_path, monkeypatch, caplog):
-    """A non-zero Iris task warns before running, but still runs the step (#7080)."""
+def _run_and_collect_warnings(step, monkeypatch, caplog, env: dict[str, str]) -> list[str]:
+    for var in _RANK_ENV_VARS:
+        monkeypatch.delenv(var, raising=False)
+    for key, value in env.items():
+        monkeypatch.setenv(key, value)
+    with caplog.at_level(logging.WARNING):
+        StepRunner().run([step])
+    return [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+
+
+def test_runner_warns_for_secondary_task(tmp_path, monkeypatch, caplog):
+    """A non-zero one-process-per-task Iris rank warns before running, but still runs (#7080)."""
     executed: list[str] = []
     step = _recording_step("only", (tmp_path / "only").as_posix(), executed)
 
-    monkeypatch.setenv("IRIS_TASK_ID", "/alice/train/3")
-    monkeypatch.setenv("IRIS_NUM_TASKS", "16")
-
-    with caplog.at_level(logging.WARNING):
-        StepRunner().run([step])
+    messages = _run_and_collect_warnings(
+        step, monkeypatch, caplog, {"IRIS_TASK_ID": "/alice/train/3", "IRIS_NUM_TASKS": "16"}
+    )
 
     assert executed == ["only"]  # best-effort: the step still runs
-    messages = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
-    assert any("Iris task index 3" in m and "DEADLOCK" in m for m in messages)
+    assert any("rank 3 of 16" in m and "DEADLOCK" in m for m in messages)
 
 
-def test_runner_no_warning_for_task_zero(tmp_path, monkeypatch, caplog):
-    """Task index 0 (the lock winner / single driver) must not warn."""
+def test_runner_warns_for_secondary_multigpu_process(tmp_path, monkeypatch, caplog):
+    """Under iris.runtime.multigpu the per-GPU rank is IRIS_MULTIGPU_PROCESS_INDEX, not
+    IRIS_TASK_ID (all children share the task id), so the warning must key on it (#7080)."""
     executed: list[str] = []
     step = _recording_step("only", (tmp_path / "only").as_posix(), executed)
 
-    monkeypatch.setenv("IRIS_TASK_ID", "/alice/train/0")
-    monkeypatch.setenv("IRIS_NUM_TASKS", "16")
-
-    with caplog.at_level(logging.WARNING):
-        StepRunner().run([step])
+    # A single Iris task (index 0) supervising 8 GPU processes: this is process 5.
+    messages = _run_and_collect_warnings(
+        step,
+        monkeypatch,
+        caplog,
+        {
+            "IRIS_TASK_ID": "/alice/train/0",
+            "IRIS_NUM_TASKS": "1",
+            "IRIS_MULTIGPU_PROCESS_INDEX": "5",
+            "IRIS_MULTIGPU_PROCESS_COUNT": "8",
+        },
+    )
 
     assert executed == ["only"]
-    assert not any("Iris task index" in r.getMessage() for r in caplog.records)
+    assert any("rank 5 of 8" in m and "DEADLOCK" in m for m in messages)
 
 
-def test_runner_no_warning_outside_iris(tmp_path, monkeypatch, caplog):
-    """A plain (non-Iris) run has no task-id env var and must not warn."""
+@pytest.mark.parametrize(
+    "env",
+    [
+        {"IRIS_TASK_ID": "/alice/train/0", "IRIS_NUM_TASKS": "16"},  # task rank 0 / single driver
+        {"IRIS_MULTIGPU_PROCESS_INDEX": "0", "IRIS_MULTIGPU_PROCESS_COUNT": "8"},  # GPU rank 0 (coordinator)
+        {},  # not an Iris job
+    ],
+)
+def test_runner_no_warning_for_rank_zero_or_non_iris(tmp_path, monkeypatch, caplog, env):
+    """Global rank 0 (the lock winner) and non-Iris runs must not warn."""
     executed: list[str] = []
     step = _recording_step("only", (tmp_path / "only").as_posix(), executed)
 
-    monkeypatch.delenv("IRIS_TASK_ID", raising=False)
-
-    with caplog.at_level(logging.WARNING):
-        StepRunner().run([step])
+    messages = _run_and_collect_warnings(step, monkeypatch, caplog, env)
 
     assert executed == ["only"]
-    assert not any("Iris task index" in r.getMessage() for r in caplog.records)
+    assert not any("DEADLOCK" in m for m in messages)
 
 
 # ---------------------------------------------------------------------------
