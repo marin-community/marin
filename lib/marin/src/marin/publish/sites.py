@@ -126,6 +126,20 @@ def _content_type(relpath: str) -> str:
     return CONTENT_TYPES.get(Path(relpath).suffix.lower(), DEFAULT_CONTENT_TYPE)
 
 
+def _write_object(uri: str, data: bytes, content_type: str) -> None:
+    """Write ``data`` to ``uri`` with an explicit ``Content-Type`` on the stored object.
+
+    Writes through ``fs.open`` rather than ``open_url``/``fsspec.open``, which forward extra
+    kwargs to the filesystem constructor and silently drop the content type. gcsfs honors
+    ``content_type`` on the file handle; filesystems without content-type support (local
+    test roots) ignore it.
+    """
+    fs, path = url_to_fs(uri)
+    fs.makedirs(fs._parent(path), exist_ok=True)
+    with fs.open(path, "wb", content_type=content_type) as f:
+        f.write(data)
+
+
 def _collect_files(source: Path) -> list[tuple[str, Path]]:
     """Return ``(relpath, local_path)`` pairs to upload, ``relpath`` using ``/`` separators.
 
@@ -177,8 +191,7 @@ def _upsert_index(entry: dict) -> None:
     entries = [e for e in _read_index() if (e.get("name"), e.get("version")) != (entry["name"], entry["version"])]
     entries.append(entry)
     entries.sort(key=lambda e: (e["name"], e["version"]))
-    with open_url(_index_uri(), "w", content_type="application/json") as f:
-        json.dump(entries, f, indent=2)
+    _write_object(_index_uri(), json.dumps(entries, indent=2).encode("utf-8"), "application/json")
 
 
 def publish_site(
@@ -223,8 +236,7 @@ def publish_site(
     uri = site_uri(user, slug, version)
     url = site_url(user, slug, version)
     for relpath, local_path in files:
-        with open_url(f"{uri}{relpath}", "wb", content_type=_content_type(relpath)) as dst:
-            dst.write(local_path.read_bytes())
+        _write_object(f"{uri}{relpath}", local_path.read_bytes(), _content_type(relpath))
 
     config = {"user": user, "slug": slug, "version": version, "url": url, "title": title, "summary": summary}
     write_record(

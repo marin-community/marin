@@ -5,8 +5,11 @@
 
 import json
 import os
+from typing import ClassVar
 
+import fsspec
 import pytest
+from fsspec.implementations.memory import MemoryFileSystem
 from marin.execution.artifact import RECORD_FILENAME, Artifact
 from marin.publish import sites
 from marin.publish.sites import InvalidSiteError, publish_site, site_uri
@@ -147,3 +150,31 @@ def test_invalid_metadata_rejected(public_root, tmp_path, user, slug, version, t
     src.write_text("<h1>hi</h1>")
     with pytest.raises(InvalidSiteError):
         publish_site(src, user=user, slug=slug, version=version, title=title)
+
+
+class _ContentTypeRecordingFS(MemoryFileSystem):
+    """Memory FS that records the ``content_type`` passed to ``_open``, as gcsfs would honor it."""
+
+    protocol = "ctrec"
+    recorded: ClassVar[dict[str, str | None]] = {}
+
+    def _open(self, path, mode="rb", content_type=None, **kwargs):
+        if "w" in mode:
+            type(self).recorded[path] = content_type
+        return super()._open(path, mode, **kwargs)
+
+
+def test_publish_pins_content_type_on_stored_objects(tmp_path, monkeypatch):
+    """The pinned Content-Type must reach fs.open — without it GCS guesses from the extension and
+    drops charset=utf-8, so browsers decode UTF-8 pages as Windows-1252 (mojibake)."""
+    fsspec.register_implementation("ctrec", _ContentTypeRecordingFS, clobber=True)
+    _ContentTypeRecordingFS.recorded.clear()
+    monkeypatch.setattr(sites, "PUBLIC_ROOT", "ctrec://marin-public")
+
+    src = tmp_path / "report.html"
+    src.write_text("<h1>héllo</h1>")
+    publish_site(src, user="held", slug="ex", version="2026.07.01", title="t")
+
+    recorded = _ContentTypeRecordingFS.recorded
+    assert recorded["ctrec://marin-public/held/ex/2026.07.01/index.html"] == "text/html; charset=utf-8"
+    assert recorded["ctrec://marin-public/index.json"] == "application/json"
