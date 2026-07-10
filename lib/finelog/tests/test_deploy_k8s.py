@@ -5,6 +5,7 @@
 
 import base64
 import json
+import subprocess
 from dataclasses import replace
 
 import click
@@ -15,6 +16,7 @@ from finelog.deploy._k8s import (
     _build_env_secret_manifest,
     _env_secret_name,
     _render_manifest,
+    k8s_down,
 )
 from finelog.deploy.config import (
     CidrAuthLayer,
@@ -288,6 +290,47 @@ def test_deployment_envfrom_matches_minted_secret_name() -> None:
     cfg = _s3_cfg()
     rendered = _render_manifest(_K8S_MANIFEST_DIR / "02-deployment.yaml.tmpl", cfg)
     assert f"name: {_env_secret_name(cfg)}" in rendered
+
+
+def _kubectl_argv(monkeypatch: pytest.MonkeyPatch) -> list[list[str]]:
+    """Capture the argv of every kubectl invocation instead of running it."""
+    calls: list[list[str]] = []
+
+    def fake_run(argv, **kwargs):
+        calls.append(list(argv))
+        return subprocess.CompletedProcess(argv, 0)
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    return calls
+
+
+def _deleted_resources(calls: list[list[str]]) -> set[str]:
+    """The `kind/name` resources named across every `kubectl delete` in `calls`."""
+    return {arg for argv in calls if "delete" in argv for arg in argv if "/" in arg}
+
+
+def test_teardown_deletes_the_secret_holding_the_signing_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The env Secret carries the forwarding private key. Leaving it behind after a
+    # teardown strands key material in a namespace with nothing left to use it.
+    calls = _kubectl_argv(monkeypatch)
+    cfg = _forwarding_cfg()
+
+    k8s_down(cfg, yes=False)
+
+    assert f"secret/{_env_secret_name(cfg)}" in _deleted_resources(calls)
+
+
+def test_teardown_without_yes_retains_only_the_cache_pvc(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = _kubectl_argv(monkeypatch)
+    cfg = _s3_cfg()
+
+    k8s_down(cfg, yes=False)
+
+    assert _deleted_resources(calls) == {
+        f"deployment/{cfg.name}",
+        f"service/{cfg.name}",
+        f"secret/{_env_secret_name(cfg)}",
+    }
 
 
 def test_manifest_dir_exists() -> None:

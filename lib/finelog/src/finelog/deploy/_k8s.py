@@ -270,7 +270,12 @@ def k8s_up(cfg: FinelogConfig) -> None:
 
 
 def k8s_down(cfg: FinelogConfig, *, yes: bool) -> None:
-    """Delete deployment + service. Delete the PVC only when `yes=True`."""
+    """Delete deployment, service, and the env Secret. Delete the PVC only when `yes=True`.
+
+    The Secret goes with them: it holds the archive credentials and the forwarding
+    signing key, and a torn-down deployment has no use for either. `deploy up` mints it
+    again from the operator's environment and the config's secret references.
+    """
     assert cfg.deployment.k8s is not None
     k8s = cfg.deployment.k8s
     _kubectl(
@@ -278,6 +283,7 @@ def k8s_down(cfg: FinelogConfig, *, yes: bool) -> None:
         "delete",
         f"deployment/{cfg.name}",
         f"service/{cfg.name}",
+        f"secret/{_env_secret_name(cfg)}",
         "-n",
         k8s.namespace,
         "--ignore-not-found",
@@ -291,10 +297,10 @@ def k8s_down(cfg: FinelogConfig, *, yes: bool) -> None:
             k8s.namespace,
             "--ignore-not-found",
         )
-        click.echo(f"Deleted {cfg.name} (deployment, service, pvc).")
+        click.echo(f"Deleted {cfg.name} (deployment, service, secret, pvc).")
     else:
         click.echo(
-            f"Deleted {cfg.name} (deployment, service). "
+            f"Deleted {cfg.name} (deployment, service, secret). "
             f"PVC {cfg.name}-cache retained — pass -y to delete it as well."
         )
 

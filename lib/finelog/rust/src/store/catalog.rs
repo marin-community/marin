@@ -181,11 +181,9 @@ impl Catalog {
     // ----- forward watermark ---------------------------------------------
 
     /// The `log` seq below which nothing will be sent to `target` again, or `None` if
-    /// this store has never forwarded there.
-    ///
-    /// A high-water mark of what is *settled*, not of what `target` holds: the forwarder
-    /// also advances it past rows it seeded over, evicted before sending, dropped at the
-    /// lag cap, or saw the target refuse outright.
+    /// this store has never forwarded there. A high-water mark of what is settled, which
+    /// is not the same as what `target` holds: a sender may give a row up rather than
+    /// deliver it.
     ///
     /// Keyed by target so repointing a forwarder reseeds instead of replaying one
     /// store's seq space into another's.
@@ -202,9 +200,9 @@ impl Catalog {
             .map_err(sqlite_err)
     }
 
-    /// Record `cursor` as settled for `target`. Written only once the rows below it can
-    /// never be sent again — the target acked them, or the forwarder gave them up — so a
-    /// crash mid-batch re-forwards that batch rather than losing it.
+    /// Record `cursor` as settled for `target`. Callers write it only once the rows below
+    /// it can never be sent again, so a crash mid-batch re-forwards that batch rather
+    /// than losing it.
     pub fn set_forward_cursor(&self, target: &str, cursor: i64) -> Result<(), StatsError> {
         let inner = self.inner.lock().unwrap();
         inner

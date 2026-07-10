@@ -485,13 +485,13 @@ where
         resume_at
     }
 
-    /// Read up to [`FORWARD_BATCH_ROWS`] locally-written rows in `(cursor, persisted]`.
-    ///
-    /// Holds the query-visibility read guard across BOTH the segment snapshot and the
-    /// scan, so eviction (which takes the write side before unlinking) cannot remove a
-    /// segment between the two. That is what lets `evicted_below` be trusted: it is
-    /// computed from the very segment set the scan then reads.
+    /// Up to [`FORWARD_BATCH_ROWS`] locally-written, keyed rows in `(cursor, persisted]`,
+    /// and — when eviction has already archived the rows just above `cursor` — the seq to
+    /// resume from instead. Both describe one segment set, so the gap the caller skips is
+    /// exactly the gap the scan could not read.
     async fn read_batch(&self, cursor: i64, persisted: i64) -> Result<Batch, StatsError> {
+        // One guard across both the snapshot and the scan: eviction takes the write side
+        // before unlinking, so no segment can vanish between the two.
         let _read_guard = self.store.query_visibility().read().await;
 
         let store = Arc::clone(&self.store);
