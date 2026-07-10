@@ -1733,3 +1733,22 @@ author: dlwh
   - QuACK input gradients are a narrower compute-only experiment and preserve the existing communication schedule, making their full-run delta directly attributable.
 - Next action:
   - Babysit the input-gradient parent. If it improves but remains below `20`, port QuACK's variable-K grouped weight-gradient GEMM; if it regresses, restore the prior VJP and retain ring as the measured winner.
+
+### 2026-07-10 16:01 PDT - proper QuACK recompute backward and full launch
+- Hypothesis: The split input-gradient VJP retained a full gated preactivation across the pipeline and expanded XLA's differentiated graph. Matching QuACK's memory-efficient whole-MLP recompute boundary should restore practical compilation while moving all expert GEMMs, dSwiGLU, and grouped weight gradients onto upstream QuACK CuTe kernels.
+- Commit Hash: `7952c5e5fd` (`[grug] Match Sonic recompute backward`).
+- Commands:
+  - Failed input-gradient comparison: the exact 24-layer batch512/m16 command from the preceding entry, parent `/dlwh/iris-run-job-20260710-215310`.
+  - GPU behavior gate: one RNO2A H100 running the Sonic forward and full-gradient parity tests under `/dlwh/sonic-quack-recompute-parity-20260710-1604`.
+  - Full recompute comparison: `TF_GPU_ALLOCATOR=cuda_malloc_async experiments/grug/moe/run_cw_jaxpp_may_d2560.sh --submit --cluster cw-rno2a --kubeconfig "$HOME/.kube/coreweave-iris" --schedule std_1f1b --implementation explicit_mpmd --physical-stages 4 --logical-stages 4 --microbatches 16 --nodes 4 --gpus-per-replica 8 --expert-axis 1 --layers 24 --experts 64 --top-k 4 --batch 512 --seq-len 4096 --vocab-size 8192 --attention-implementation gpu_fa4_cute --ragged-dot-implementation triton --ragged-dot-num-warps 8 --moe-implementation sonic --loss-implementation xla --steps 8 --tracker wandb --xla-memory-fraction 0.65 --remat save_moe --run-id jaxpp-rno2a-sonicquack-recompute-l24-e64k4-b512-s4096-p4m16-20260710-1605`.
+- Results:
+  - The input-gradient-only parent was intentionally stopped after `57m 7s`; all four tasks terminated cleanly with no runtime failure, but XLA had spent roughly 52 minutes actively compiling after its last compiler log and produced no executable or training metric. Sampled compiler activity was initially about 43 CPU cores and later about nine cores, while GPUs remained idle at roughly 56.9 GiB resident.
+  - The replacement uses one whole-MLP custom VJP and saves only dispatched input, W13, W2, and expert group sizes. Backward recomputes interleaved W13 preactivation, fuses `dout @ W2` with dSwiGLU and postactivation regeneration through `GemmDGatedSm90`, then uses QuACK variable-M/variable-K grouped GEMMs for `dx`, `dW13`, and `dW2`.
+  - QuACK's `concat_layout=("B",)` and `concat_layout=("out",)` preserve Marin's concatenated W13 storage while the fused gated kernels consume and produce interleaved gate/up values.
+  - The H100 forward and full-gradient gates passed: `2 passed, 19 deselected` in `25.38s`; Iris task duration was `52.16s` with exit `0`.
+  - Exact full parent `/dlwh/iris-run-job-20260710-230029` is submitted on `cw-rno2a` from pushed commit `7952c5e5fd`.
+- Interpretation:
+  - The split VJP is a compile-time dead end and should not be benchmarked further. It contradicted upstream QuACK's recompute design by retaining the largest expert activation across the pipeline interval.
+  - The whole-MLP boundary keeps XLA's backward graph to opaque custom calls and trades one extra grouped up-projection GEMM for lower saved-activation memory and a fused dSwiGLU path.
+- Next action:
+  - Babysit the exact full parent and compare compile time and MFU against `14.8455495` old no-EP Sonic and `16.2004883` ring EP. If it remains below `20`, profile this exact recompute implementation before changing FSDP scheduling again.
