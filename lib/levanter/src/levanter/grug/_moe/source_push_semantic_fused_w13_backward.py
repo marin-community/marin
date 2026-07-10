@@ -827,13 +827,10 @@ def _make_source_push_semantic_fused_w13_backward_kernel(
                                         pl.ds(block * config.compute_m + row, 1),
                                         pl.ds(hidden_start, config.block_hidden),
                                     ].astype(jnp.float32)
-                                    mgpu.atomic_add(
-                                        dx_ref.at[
-                                            pl.ds(token, 1),
-                                            pl.ds(hidden_start, config.block_hidden),
-                                        ],
-                                        dx_tile,
-                                    )
+                                    dx_ref[
+                                        pl.ds(token, 1),
+                                        pl.ds(hidden_start, config.block_hidden),
+                                    ] = dx_tile
 
                                     if static_dst_ordinal == 0:
                                         pl.semaphore_signal(return_consumed_sem.at[rank, slot])
