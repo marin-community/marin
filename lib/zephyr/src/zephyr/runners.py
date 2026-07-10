@@ -234,6 +234,46 @@ def _periodic_sampler(
             logger.warning("Failed to sample/emit process stats", exc_info=True)
 
 
+def _start_stats_sampler(
+    *,
+    stop_event: threading.Event,
+    ctx: _InProcessWorkerContext,
+    stats_writer: StatsWriter,
+    task: ShardTask,
+    execution_id: str,
+    cpu_s_at_start: float,
+    start_time: float,
+    proc: psutil.Process,
+    thread_name: str,
+    interval: float = SUBPROCESS_STATS_INTERVAL,
+) -> threading.Thread:
+    """Create and start the periodic stats-sampler thread.
+
+    Shared by ``InlineRunner`` and the subprocess child so the sampler's
+    argument list lives in one place — the two call sites only differ in
+    ``thread_name``. Returns the started daemon thread; the caller owns
+    ``stop_event`` and joins the thread on teardown.
+    """
+    sampler = threading.Thread(
+        target=_periodic_sampler,
+        kwargs={
+            "stop_event": stop_event,
+            "ctx": ctx,
+            "interval": interval,
+            "cpu_s_at_start": cpu_s_at_start,
+            "stats_writer": stats_writer,
+            "task": task,
+            "execution_id": execution_id,
+            "start_time": start_time,
+            "proc": proc,
+        },
+        daemon=True,
+        name=thread_name,
+    )
+    sampler.start()
+    return sampler
+
+
 def _run_stage_with_ctx(
     task: ShardTask,
     chunk_prefix: str,
@@ -303,23 +343,17 @@ class InlineRunner:
         stats_writer.emit_worker_stat(
             task.stage_name, task.shard_idx, execution_id, ZephyrWorkerStatStatus.START, start_time, ctx.get_counters()
         )
-        sampler = threading.Thread(
-            target=_periodic_sampler,
-            kwargs={
-                "stop_event": stop_event,
-                "ctx": ctx,
-                "interval": SUBPROCESS_STATS_INTERVAL,
-                "cpu_s_at_start": cpu_s_at_start,
-                "stats_writer": stats_writer,
-                "task": task,
-                "execution_id": execution_id,
-                "start_time": start_time,
-                "proc": proc,
-            },
-            daemon=True,
-            name="zephyr-inline-stats-sampler",
+        sampler = _start_stats_sampler(
+            stop_event=stop_event,
+            ctx=ctx,
+            stats_writer=stats_writer,
+            task=task,
+            execution_id=execution_id,
+            cpu_s_at_start=cpu_s_at_start,
+            start_time=start_time,
+            proc=proc,
+            thread_name="zephyr-inline-stats-sampler",
         )
-        sampler.start()
         _task_failed = False
         try:
             result = _run_stage_with_ctx(task, chunk_prefix, execution_id)
