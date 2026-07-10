@@ -991,3 +991,68 @@ nonfinite metrics were emitted, and compile, lower-compile, first-call,
 first-run, steady-state, and throughput fields were null. Route-drop and
 overflow counters were zero. No duplicate, stop, resubmit, code edit, or Iris
 restart was issued.
+
+## 2026-07-10 FUSED-MOE-030 - Target EP8 W13 backward direct-GMEM benchmark
+
+Job `/dlwh/bench-semantic-w13b-target-direct-gmem-20260710-1602` ran on
+`cw-rno2a` at commit `c9057744c3` and reached terminal Iris state `succeeded`.
+Its H100x8 task exited 0 after 2 minutes and 39.49 seconds, with zero Iris
+failures or preemptions. Setup began six seconds after submission, so the
+eight-minute start-only stop condition did not apply. No duplicate, stop,
+resubmit, code edit, or Iris restart was issued.
+
+The target EP8 W13 backward Pallas mode failed before producing any of the
+three requested repeats. JAX raised `RESOURCE_EXHAUSTED` from
+`jit_semantic_fused_w13_backward_pallas` while trying to allocate 12.50 GiB.
+The harness emitted one error row, zero repeat rows, and an `all repeats failed`
+summary. Median/min/max steady-state time, useful and rounded TFLOP/s/rank, and
+output checksum are therefore unavailable. This was an allocation failure, not
+a deadlock.
+
+The error row reported 64 live pairs, 1,048,576 useful rows, 1,310,720 rounded
+rows, 0.8 row efficiency, and 0.2 masked-row fraction. Dropped routes,
+routing-dropped routes, and metadata-overflow routes were all zero. Terminal
+evidence, structured result rows, and closed monitoring state are in
+`scratch/6597-w13b-target-direct-gmem/`.
+
+## 2026-07-10 FUSED-MOE-031 - W2 backward aligned vmap input shardings
+
+Job `/dlwh/bench-semantic-fused-w2b-tiny-compare6-20260710-1604` ran once on
+`cw-rno2a` at commit `5d78f1b010` and reached terminal Iris state `succeeded`;
+its single task exited 0 after 43.35 seconds with zero failures or preemptions.
+The benchmark emitted one repeat row and one summary row with zero error rows.
+
+The aligned vmap input shardings fixed the reference lowering failure and the
+kernel matched exactly. Max and mean absolute differences were both `0.0` for
+`d_h`, `d_w2`, and `d_route_weight`. Expected and observed nonfinite counts
+were all `0.0`. Valid, queue-overflow-route, and layout-overflow-row error
+counts were `0.0`; metadata-overflow routes, routing drops, and dropped routes
+were all zero.
+
+Compile/first-call, lowering/compile, first-run, and steady-state times were
+`7.38956371700624`, `6.424557343008928`, `0.965006373997312`, and
+`0.0015471859951503575` seconds. Useful/rounded throughput was
+`0.08674957530685026`/`0.10843696913356282` TFLOP/s/rank. The random-routing
+tiny shape had 2,048 useful and 2,560 rounded rows (0.8 efficiency), four live
+pairs, and zero masked-data correctness failures. Sixteen non-fatal
+`CUDA_ERROR_NOT_PERMITTED` VMM fallback warnings occurred; `uv` also fell back
+from hardlinks to copies. There was no traceback or actionable runtime error.
+Complete raw logs, exact JSON rows, terminal status, task summary, monitor
+state, and a standalone report are in `scratch/6597-w2b-tiny-compare6/`. No
+duplicate, stop, resubmit, code edit, or Iris restart was issued.
+
+## 2026-07-10 FUSED-MOE-032 - Remove W13 backward capacity-sized fp32 mask
+
+The target W13 backward failure in FUSED-MOE-030 was traced to the API-boundary
+padding mask `jnp.where(valid[..., None], dz13, 0)`. Type promotion caused it
+to materialize a per-rank fp32 tensor with shape `[32, 40960, 2560]`, exactly
+12.50 GiB. This allocation was not part of the persistent queue or direct-GMEM
+dX path.
+
+The dense mask is removed. The dW13 consumer now zeros only invalid rows in
+each 64-by-128 `dz` SMEM tile before issuing WGMMA. Invalid dX route rows are
+not consumed, so the direct accumulator-to-GMEM dX implementation is unchanged.
+The dedicated W13 backward tests pass (`6 passed`), the combined semantic MLP
+and fused backward test selection passes (`24 passed`), scoped pre-commit and
+Pyrefly pass, and `git diff --check` is clean. Target H100 validation remains
+required.

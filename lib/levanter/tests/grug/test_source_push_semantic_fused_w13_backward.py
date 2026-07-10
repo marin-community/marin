@@ -13,7 +13,6 @@ from levanter.grug._moe.source_push_semantic_fused_w13_backward import (
     source_push_semantic_fused_w13_backward,
     source_push_semantic_fused_w13_backward_generation_accounting,
     source_push_semantic_fused_w13_backward_metadata_jax,
-    source_push_semantic_fused_w13_backward_reference_jax,
 )
 
 
@@ -214,8 +213,26 @@ def test_fused_w13_backward_reference_masks_padding_and_reports_independent_over
     clean_dz = jnp.where(metadata.forward.valid[..., None], dz13[:, :, :64], 0)
     dirty_dz = jnp.where(metadata.forward.valid[..., None], clean_dz, jnp.full_like(clean_dz, 1.0e4))
 
-    clean_dx, clean_dw = source_push_semantic_fused_w13_backward_reference_jax(x, clean_dz, w13, metadata)
-    dirty_dx, dirty_dw = source_push_semantic_fused_w13_backward_reference_jax(x, dirty_dz, w13, metadata)
+    clean = source_push_semantic_fused_w13_backward(
+        x,
+        clean_dz,
+        w13,
+        overflow_plan,
+        send_chunks_per_dst=1,
+        rows_per_expert_capacity=64,
+        interpret=True,
+    )
+    dirty = source_push_semantic_fused_w13_backward(
+        x,
+        dirty_dz,
+        w13,
+        overflow_plan,
+        send_chunks_per_dst=1,
+        rows_per_expert_capacity=64,
+        interpret=True,
+    )
+    clean_dx, clean_dw = clean.dx, clean.dw13
+    dirty_dx, dirty_dw = dirty.dx, dirty.dw13
     np.testing.assert_array_equal(np.asarray(dirty_dx), np.asarray(clean_dx))
     np.testing.assert_array_equal(np.asarray(dirty_dw), np.asarray(clean_dw))
     assert int(overflow_plan.metadata_overflow_routes) > 0

@@ -274,7 +274,6 @@ def source_push_semantic_fused_w13_backward(
         rows_per_expert_capacity=rows_per_expert_capacity,
         config=config,
     )
-    dz13 = jnp.where(metadata.forward.valid[..., None], dz13, jnp.zeros((), dtype=dz13.dtype))
     if interpret:
         dx, dw13 = source_push_semantic_fused_w13_backward_reference_jax(x, dz13, w13, metadata)
     else:
@@ -663,6 +662,13 @@ def _make_source_push_semantic_fused_w13_backward_kernel(
                                 barrier,
                             )
                             mgpu.barrier_wait(barrier)
+
+                            @pl.loop(0, config.compute_m)
+                            def _mask_padding(row) -> None:
+                                @pl.when(row >= valid_rows)
+                                def _zero_padding_row() -> None:
+                                    dz_smem[row, :] = jnp.zeros((config.block_output,), dtype=dtype)
+
                             mgpu.commit_smem()
                             mgpu.wgmma(acc_ref, mgpu.transpose_ref(x_smem, (1, 0)), dz_smem)
                             mgpu.wgmma_wait(0)
