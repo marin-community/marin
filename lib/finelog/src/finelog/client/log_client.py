@@ -540,25 +540,22 @@ class LogClient:
         table = self._get_log_table()
         table.write(_log_entries_to_rows(key, messages))
 
-    def push_batch(self, key: str, entries: Sequence[logging_pb2.LogEntry], *, cluster: str = "") -> None:
+    def push_batch(self, key: str, entries: Sequence[logging_pb2.LogEntry]) -> None:
         """Append ``entries`` under ``key`` via ``LogService.PushLogs``, synchronously.
 
         Unlike :meth:`write_batch` (which enqueues to a lossy in-memory Table and
         acks nothing), this awaits the server's response, which the store returns
         only after the batch is durably persisted. It therefore raises on any
-        failure and a successful return means the batch landed — the ack the
-        durable log relay needs to advance its watermark.
+        failure, and a successful return means the batch landed.
 
-        ``cluster`` is the origin cluster the server stamps onto each row's
-        ``cluster`` column so a global finelog can namespace logs from many
-        federated clusters. Empty (the default) is a local single-cluster push;
-        a relay sets it to the cluster it forwards for.
+        Rows land under this server's own cluster. Writing on behalf of another one is
+        the cross-cluster forwarding path, which lives in the server itself.
         """
         if not entries:
             return
         client = self._get_log_service_client()
         try:
-            client.push_logs(logging_pb2.PushLogsRequest(key=key, entries=list(entries), cluster=cluster))
+            client.push_logs(logging_pb2.PushLogsRequest(key=key, entries=list(entries)))
         except ConnectError as exc:
             if is_retryable_error(exc):
                 self._invalidate(_format_exc_summary(exc))

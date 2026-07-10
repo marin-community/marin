@@ -194,11 +194,7 @@ type HttpsConnector =
 /// The forwarder's production transport: pooled HTTPS over hyper + rustls.
 pub type HttpsTransport = ServiceTransport<HyperClient<HttpsConnector, ClientBody>>;
 
-/// An HTTPS Connect client for the hub's `LogService`.
-///
-/// The trust anchors are compiled in (`webpki-roots`), so the container needs no CA
-/// bundle, and the rustls crypto provider is passed explicitly rather than installed
-/// process-wide — the store's other TLS users keep their own.
+/// An HTTPS Connect client for the hub's `LogService`. Errors if `target` is not a URI.
 fn build_client(target: &str) -> Result<LogServiceClient<HttpsTransport>, String> {
     let uri: http::Uri = target
         .parse()
@@ -293,11 +289,21 @@ where
             }
         };
 
-        let mut cursor = match self.seed(*persisted_rx.borrow()) {
-            Ok(cursor) => cursor,
-            Err(e) => {
-                tracing::error!(error = %e, "finelog forwarder: cannot read its watermark; not forwarding");
-                return;
+        // Retry rather than bail: a transient catalog error here would otherwise leave
+        // the forwarder a silent no-op for the process's lifetime, indistinguishable
+        // from a cluster with nothing to say.
+        let mut cursor = loop {
+            // Bind before matching: the watch guard is not Send, so it must not live
+            // across the await below.
+            let seeded = self.seed(*persisted_rx.borrow());
+            match seeded {
+                Ok(cursor) => break cursor,
+                Err(e) => {
+                    tracing::warn!(error = %e, "finelog forwarder: cannot read its watermark; retrying");
+                    if wait_or_stop(BACKOFF_MAX, &mut stop).await {
+                        return;
+                    }
+                }
             }
         };
         tracing::info!(
@@ -390,7 +396,7 @@ where
             // it — jump the cursor and say how much was skipped.
             if let Some(evicted_to) = batch.evicted_below {
                 let skipped = evicted_to - cursor;
-                progress.skipped += skipped;
+                progress.skipped_seqs += skipped;
                 tracing::warn!(
                     cursor,
                     skipped,
@@ -417,7 +423,6 @@ where
                     .last()
                     .expect("split_by_bytes yields no empty chunk")
                     .seq;
-                let rows = chunk.len() as i64;
                 match self.push(chunk, stop).await {
                     Ok(()) => progress.batches += 1,
                     Err(PushError::Stopping(e)) => {
@@ -428,10 +433,10 @@ where
                     // livelock that strands every later row too. Skip past them and
                     // count the gap: the rows remain queryable in this store.
                     Err(PushError::Rejected(e)) => {
-                        progress.skipped += rows;
+                        progress.skipped_seqs += last_seq - cursor;
                         tracing::warn!(
                             cursor,
-                            skipped = rows,
+                            skipped = last_seq - cursor,
                             resume_at = last_seq,
                             error = %e,
                             "finelog forwarder: the hub rejected this batch as malformed; skipping it"
@@ -468,7 +473,7 @@ where
         }
         let resume_at = persisted - self.max_lag_seqs;
         let skipped = resume_at - cursor;
-        progress.skipped += skipped;
+        progress.skipped_seqs += skipped;
         tracing::warn!(
             cursor,
             persisted,
@@ -533,16 +538,12 @@ where
         })
     }
 
-    /// Ship one chunk and wait for the hub to durably ack it. Retries transient failures
-    /// with an exponential backoff, returning only when the chunk lands, the hub rejects
-    /// it outright, or `stop` latches — which interrupts the backoff, so a SIGTERM never
-    /// waits one out.
+    /// Ship one chunk and wait for the hub to durably ack it, retrying transient
+    /// failures — auth failures among them — with an exponential backoff.
     ///
-    /// Every attempt takes the bearer afresh, and [`TokenMinter`] re-mints it once it
-    /// nears expiry, so a chunk retried across a long backoff never presents a stale
-    /// token. Auth failures are retried rather than skipped: the rows are safe in the
-    /// local store, and dropping a cluster's whole log stream over a fixable typo in the
-    /// hub's `jwt` layer would be far worse than stalling visibly until it is repaired.
+    /// Returns [`PushError::Rejected`] only when the hub refuses the chunk's content, and
+    /// [`PushError::Stopping`] when `stop` latches, which also interrupts the backoff so a
+    /// SIGTERM never waits one out.
     async fn push(
         &self,
         chunk: Vec<LogRow>,
@@ -651,9 +652,11 @@ struct Progress {
     /// Requests the hub accepted. Counted in batches, not rows: one bulk request is
     /// the unit of forwarding work.
     batches: u64,
-    /// Rows that will never reach the hub — evicted before they shipped, dropped by the
-    /// lag cap, or in a batch the hub permanently refused.
-    skipped: i64,
+    /// `seq` positions the forwarder passed over and will never send — evicted before
+    /// they shipped, dropped by the lag cap, or in a batch the hub permanently refused.
+    /// An upper bound on rows lost: some positions held rows the scan would have
+    /// filtered out anyway (see [`MAX_FORWARD_LAG_SEQS`] on seq vs rows).
+    skipped_seqs: i64,
     last_report: Instant,
 }
 
@@ -661,7 +664,7 @@ impl Progress {
     fn new() -> Self {
         Self {
             batches: 0,
-            skipped: 0,
+            skipped_seqs: 0,
             last_report: Instant::now(),
         }
     }
@@ -675,7 +678,7 @@ impl Progress {
             cursor,
             lag = persisted - cursor,
             batches = self.batches,
-            skipped = self.skipped,
+            skipped_seqs = self.skipped_seqs,
             "finelog forwarder: progress"
         );
     }
