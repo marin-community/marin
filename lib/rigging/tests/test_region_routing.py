@@ -9,12 +9,9 @@ import concurrent.futures
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import ClassVar
 from unittest.mock import MagicMock, patch
 
-import fsspec
 import pytest
-from fsspec.implementations.memory import MemoryFileSystem
 from rigging.filesystem import (
     MARIN_CROSS_REGION_OVERRIDE_ENV,
     CrossRegionGuardedFS,
@@ -527,38 +524,6 @@ def test_open_url_local_file(tmp_path):
     result = open_url(str(test_file), "r")
     with result as f:
         assert f.read() == "hello"
-
-
-class _ContentTypeRecordingFS(MemoryFileSystem):
-    """Memory FS that records the ``content_type`` passed to ``_open`` (as GCS would honor it)."""
-
-    protocol = "ctrec"
-    recorded_content_types: ClassVar[dict[str, str | None]] = {}
-
-    def _open(self, path, mode="rb", content_type=None, **kwargs):
-        type(self).recorded_content_types[path] = content_type
-        return super()._open(path, mode, **kwargs)
-
-
-def test_open_url_routes_content_type_to_fs_open():
-    """content_type must reach fs.open — fsspec.open would misroute it to the FS constructor."""
-    fsspec.register_implementation("ctrec", _ContentTypeRecordingFS, clobber=True)
-
-    with open_url("ctrec://bucket/page.html", "wb", content_type="text/html; charset=utf-8") as f:
-        f.write(b"<!doctype html>")
-
-    (recorded,) = _ContentTypeRecordingFS.recorded_content_types.values()
-    assert recorded == "text/html; charset=utf-8"
-    with open_url("ctrec://bucket/page.html", "rb") as f:
-        assert f.read() == b"<!doctype html>"
-
-
-def test_open_url_content_type_ignored_by_local_fs(tmp_path):
-    """Filesystems without content-type support (local) still write normally."""
-    target = tmp_path / "page.html"
-    with open_url(str(target), "wb", content_type="text/html; charset=utf-8") as f:
-        f.write(b"<!doctype html>")
-    assert target.read_bytes() == b"<!doctype html>"
 
 
 def test_filesystem_local():

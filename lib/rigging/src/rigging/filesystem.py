@@ -1434,17 +1434,11 @@ def is_remote_path(path: str) -> bool:
     return not isinstance(fs, LocalFileSystem)
 
 
-def open_url(url: str, mode: str = "rb", content_type: str | None = None, **kwargs: Any) -> fsspec.core.OpenFile:
+def open_url(url: str, mode: str = "rb", **kwargs: Any) -> fsspec.core.OpenFile:
     """Like ``fsspec.open`` but checks the cross-region budget for GCS reads.
 
     For read modes on GCS URLs, eagerly stats the file and charges the
     transfer budget.  Then delegates to ``fsspec.open`` for the actual I/O.
-
-    ``content_type`` sets the served ``Content-Type`` of a written object on
-    filesystems that support it (GCS); others ignore it. It is an explicit
-    parameter because it must be routed to ``fs.open`` — ``fsspec.open``
-    forwards extra ``**kwargs`` to the filesystem constructor, where a content
-    type would be silently dropped.
     """
     if "r" in mode and _is_gcs_url(url):
         fs, path = fsspec.core.url_to_fs(url)
@@ -1452,12 +1446,6 @@ def open_url(url: str, mode: str = "rb", content_type: str | None = None, **kwar
         guarded._guard_read(path)
     if url.startswith("s3://"):
         kwargs = _with_s3_timeout_defaults(kwargs)
-    if content_type is not None:
-        fs, path = url_to_fs(url, **kwargs)
-        if "r" not in mode:
-            # fsspec.open auto-creates parent directories for write modes; match it.
-            fs.makedirs(fs._parent(path), exist_ok=True)
-        return cast(fsspec.core.OpenFile, fs.open(path, mode, content_type=content_type))
     return cast(fsspec.core.OpenFile, fsspec.open(url, mode, **kwargs))
 
 
