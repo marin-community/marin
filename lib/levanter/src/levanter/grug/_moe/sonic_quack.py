@@ -257,14 +257,23 @@ def _quack_grouped_impl(
     )
 
 
-def _gated_reference(
-    x: Float[Array, "M H"],
-    weights: Float[Array, "E H I2"],
+def _quack_grouped_input_grad_impl(
+    dout: Float[Array, "M O"],
+    weights: Float[Array, "E N O"],
     group_sizes: Int[Array, "E"],
-) -> Float[Array, "M I"]:
-    preact = ragged_dot(x, weights, group_sizes)
-    gate, up = jnp.split(preact, 2, axis=1)
-    return jax.nn.silu(gate) * up
+) -> Float[Array, "M N"]:
+    _require_quack()
+    assert _GROUPED_VARLEN is not None
+    if dout.dtype != jnp.bfloat16 or weights.dtype != jnp.bfloat16:
+        raise TypeError("SonicMoE QuACK kernels require bfloat16 activations and weights")
+    output_shape = jax.ShapeDtypeStruct((dout.shape[0], weights.shape[1]), dout.dtype)
+    return _GROUPED_VARLEN(
+        dout,
+        weights,
+        _expert_offsets(group_sizes),
+        key=(),
+        output_shape_dtype=output_shape,
+    )
 
 
 @jax.custom_vjp
@@ -278,14 +287,22 @@ def quack_gated_varlen(
 
 
 def _quack_gated_fwd(x: jax.Array, weights: jax.Array, group_sizes: jax.Array):
-    _preact, postact = _quack_gated_impl(x, weights, group_sizes)
-    return postact, (x, weights, group_sizes)
+    preact, postact = _quack_gated_impl(x, weights, group_sizes)
+    return postact, (x, weights, group_sizes, preact)
 
 
-def _quack_gated_bwd(residuals: tuple[jax.Array, jax.Array, jax.Array], dpostact: jax.Array):
-    x, weights, group_sizes = residuals
-    _, pullback = jax.vjp(lambda x, weights: _gated_reference(x, weights, group_sizes), x, weights)
-    dx, dweights = pullback(dpostact)
+def _quack_gated_bwd(residuals: tuple[jax.Array, jax.Array, jax.Array, jax.Array], dpostact: jax.Array):
+    x, weights, group_sizes, preact = residuals
+
+    def activation(preactivation):
+        gate, up = jnp.split(preactivation, 2, axis=1)
+        return jax.nn.silu(gate) * up
+
+    _, activation_pullback = jax.vjp(activation, preact)
+    (dpreact,) = activation_pullback(dpostact)
+    dx = _quack_grouped_input_grad_impl(dpreact, weights, group_sizes)
+    _, weight_pullback = jax.vjp(lambda w: ragged_dot(x, w, group_sizes), weights)
+    (dweights,) = weight_pullback(dpreact)
     return dx, dweights, None
 
 
@@ -309,8 +326,9 @@ def _quack_grouped_fwd(x: jax.Array, weights: jax.Array, group_sizes: jax.Array)
 
 def _quack_grouped_bwd(residuals: tuple[jax.Array, jax.Array, jax.Array], doutput: jax.Array):
     x, weights, group_sizes = residuals
-    _, pullback = jax.vjp(lambda x, weights: ragged_dot(x, weights, group_sizes), x, weights)
-    dx, dweights = pullback(doutput)
+    dx = _quack_grouped_input_grad_impl(doutput, weights, group_sizes)
+    _, weight_pullback = jax.vjp(lambda w: ragged_dot(x, w, group_sizes), weights)
+    (dweights,) = weight_pullback(doutput)
     return dx, dweights, None
 
 
