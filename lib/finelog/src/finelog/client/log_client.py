@@ -727,21 +727,20 @@ class LogClient:
     ) -> _ClientT:
         """Return the cached RPC client, resolving and building it once if absent.
 
-        The endpoint is resolved *outside* ``self._lock``: the resolver may block
-        on a network RPC (iris resolves it via the controller), and holding the
-        lock across that call stalls every other caller — notably a
-        shutdown-path log emit parked on the same lock in :meth:`_get_log_table`,
-        which deadlocks teardown. Double-checked so a caller that loses the
-        resolve race reuses the winner's client instead of building a second one.
-
         ``create`` builds the client and installs it in its cache slot; it runs
-        under the lock so the install is atomic with the double-check.
+        under the lock so the install is atomic with the ``cached`` re-check.
         """
         with self._lock:
             if self._closed:
                 raise RuntimeError("LogClient is closed")
             if (client := cached()) is not None:
                 return client
+        # Resolve outside the lock: the resolver may block on a network RPC (iris
+        # resolves the endpoint via the controller), and holding _lock across it
+        # stalls every other caller — notably a shutdown-path log emit parked on
+        # the same lock in _get_log_table, which deadlocks teardown. Re-check
+        # under the lock afterward so a caller that loses the resolve race reuses
+        # the winner's client instead of building a second one.
         address = self._resolve()
         with self._lock:
             if self._closed:
