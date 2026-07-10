@@ -3482,6 +3482,21 @@ wheels = [
 ]
 
 [[package]]
+name = "jax-tvm-ffi"
+version = "0.1.3"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "apache-tvm-ffi" },
+    { name = "jax" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/d7/00/fb376997f2a8eedc9a16be2ceecbff71ae7ed7dcf3de8db1763afb6dd17d/jax_tvm_ffi-0.1.3.tar.gz", hash = "sha256:e85813d8936f0932b429e01535cc31d5ef20a3a4e66e3cca7cada1d25804fed1", size = 43663, upload-time = "2026-04-13T18:50:54.414Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/c0/cd/786db3dfeb576f572eaf95ba4a53714582625042e7467b4211837484c163/jax_tvm_ffi-0.1.3-py3-none-macosx_11_0_arm64.whl", hash = "sha256:76c6930552e87c81f2c0b3a3e29f78c75a1a86cbe861b921ccce3d76d7ae0047", size = 83055, upload-time = "2026-04-13T18:50:50.794Z" },
+    { url = "https://files.pythonhosted.org/packages/3c/79/2fa9383f7661a488d1b48e1fece1d1c269fd67bb3714a6a38f1ca78602ee/jax_tvm_ffi-0.1.3-py3-none-manylinux_2_24_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:1be7ae9835d8af983d530a588ed827fa9ad51e6585cd18939ba22ff81bcb8e11", size = 94413, upload-time = "2026-04-13T18:50:51.943Z" },
+    { url = "https://files.pythonhosted.org/packages/a6/6e/87f2cd87be34184c26c3b23c6ce55d9110761e523b5a8a712d115d871514/jax_tvm_ffi-0.1.3-py3-none-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:96d339979da2eb3cd82fb7d4bea93aa513783d2ebedf59ce356b617eb7e8481e", size = 102684, upload-time = "2026-04-13T18:50:53.017Z" },
+]
+
+[[package]]
 name = "jaxlib"
 version = "0.10.1"
 source = { registry = "https://pypi.org/simple" }
@@ -4508,10 +4523,12 @@ evalchemy = [
 gpu = [
     { name = "flash-attn-4", extra = ["cu13"], marker = "(sys_platform == 'linux' and extra == 'extra-10-marin-core-gpu') or (extra == 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu') or (extra == 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-vllm') or (extra == 'extra-10-marin-core-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra == 'extra-10-marin-core-gpu' and extra == 'group-10-marin-fray-fray-tpu-test') or (extra == 'extra-10-marin-core-cpu' and extra == 'extra-10-marin-core-gpu') or (extra == 'extra-10-marin-core-cpu' and extra == 'extra-14-marin-levanter-gpu') or (extra == 'extra-10-marin-core-tpu' and extra == 'extra-14-marin-levanter-gpu') or (extra == 'extra-10-marin-core-vllm' and extra == 'extra-14-marin-levanter-gpu') or (extra == 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra == 'extra-14-marin-levanter-gpu' and extra == 'group-10-marin-fray-fray-tpu-test')" },
     { name = "jax", extra = ["cuda13"], marker = "extra == 'extra-10-marin-core-gpu' or (extra == 'extra-10-marin-core-cpu' and extra == 'extra-14-marin-levanter-gpu') or (extra == 'extra-10-marin-core-tpu' and extra == 'extra-14-marin-levanter-gpu') or (extra == 'extra-10-marin-core-vllm' and extra == 'extra-14-marin-levanter-gpu') or (extra == 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra == 'extra-14-marin-levanter-gpu' and extra == 'group-10-marin-fray-fray-tpu-test')" },
+    { name = "jax-tvm-ffi", marker = "sys_platform == 'linux'" },
     { name = "jax-triton", marker = "sys_platform == 'linux'" },
     { name = "nvidia-cublas", version = "13.4.1.1", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform == 'linux'" },
     { name = "nvidia-cutlass-dsl", extra = ["cu13"], marker = "(sys_platform == 'linux' and extra == 'extra-10-marin-core-gpu') or (extra == 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu') or (extra == 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-vllm') or (extra == 'extra-10-marin-core-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra == 'extra-10-marin-core-gpu' and extra == 'group-10-marin-fray-fray-tpu-test') or (extra == 'extra-10-marin-core-cpu' and extra == 'extra-10-marin-core-gpu') or (extra == 'extra-10-marin-core-cpu' and extra == 'extra-14-marin-levanter-gpu') or (extra == 'extra-10-marin-core-tpu' and extra == 'extra-14-marin-levanter-gpu') or (extra == 'extra-10-marin-core-vllm' and extra == 'extra-14-marin-levanter-gpu') or (extra == 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra == 'extra-14-marin-levanter-gpu' and extra == 'group-10-marin-fray-fray-tpu-test')" },
     { name = "nvidia-nccl-cu13", marker = "sys_platform == 'linux'" },
+    { name = "quack-kernels", marker = "sys_platform == 'linux'" },
     { name = "torch", version = "2.11.0", source = { registry = "https://pypi.org/simple" }, marker = "(sys_platform != 'linux' and extra == 'extra-10-marin-core-gpu') or (extra == 'extra-10-marin-core-cpu' and extra == 'extra-10-marin-core-gpu') or (extra == 'extra-10-marin-core-cpu' and extra == 'extra-14-marin-levanter-gpu') or (extra == 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu') or (extra == 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-vllm') or (extra == 'extra-10-marin-core-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra == 'extra-10-marin-core-gpu' and extra == 'group-10-marin-fray-fray-tpu-test') or (extra == 'extra-10-marin-core-tpu' and extra == 'extra-14-marin-levanter-gpu') or (extra == 'extra-10-marin-core-vllm' and extra == 'extra-14-marin-levanter-gpu') or (extra == 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra == 'extra-14-marin-levanter-gpu' and extra == 'group-10-marin-fray-fray-tpu-test')" },
     { name = "torch", version = "2.11.0+cu128", source = { registry = "https://download.pytorch.org/whl/cu128" }, marker = "(sys_platform == 'linux' and extra == 'extra-10-marin-core-gpu') or (extra == 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu') or (extra == 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-vllm') or (extra == 'extra-10-marin-core-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra == 'extra-10-marin-core-gpu' and extra == 'group-10-marin-fray-fray-tpu-test') or (extra == 'extra-10-marin-core-cpu' and extra == 'extra-10-marin-core-gpu') or (extra == 'extra-10-marin-core-cpu' and extra == 'extra-14-marin-levanter-gpu') or (extra == 'extra-10-marin-core-tpu' and extra == 'extra-14-marin-levanter-gpu') or (extra == 'extra-10-marin-core-vllm' and extra == 'extra-14-marin-levanter-gpu') or (extra == 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra == 'extra-14-marin-levanter-gpu' and extra == 'group-10-marin-fray-fray-tpu-test')" },
     { name = "torchvision", version = "0.26.0", source = { registry = "https://pypi.org/simple" }, marker = "(sys_platform != 'linux' and extra == 'extra-10-marin-core-gpu') or (extra == 'extra-10-marin-core-cpu' and extra == 'extra-10-marin-core-gpu') or (extra == 'extra-10-marin-core-cpu' and extra == 'extra-14-marin-levanter-gpu') or (extra == 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu') or (extra == 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-vllm') or (extra == 'extra-10-marin-core-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra == 'extra-10-marin-core-gpu' and extra == 'group-10-marin-fray-fray-tpu-test') or (extra == 'extra-10-marin-core-tpu' and extra == 'extra-14-marin-levanter-gpu') or (extra == 'extra-10-marin-core-vllm' and extra == 'extra-14-marin-levanter-gpu') or (extra == 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra == 'extra-14-marin-levanter-gpu' and extra == 'group-10-marin-fray-fray-tpu-test')" },
@@ -4638,6 +4655,7 @@ requires-dist = [
     { name = "jax", marker = "extra == 'tpu'", specifier = "==0.10.1" },
     { name = "jax", marker = "extra == 'vllm'", specifier = "==0.10.1" },
     { name = "jax", extras = ["cuda13"], marker = "extra == 'gpu'", specifier = "==0.10.1" },
+    { name = "jax-tvm-ffi", marker = "sys_platform == 'linux' and extra == 'gpu'", specifier = "==0.1.3" },
     { name = "jax-triton", marker = "sys_platform == 'linux' and extra == 'gpu'", specifier = "==0.3.1" },
     { name = "jaxlib", marker = "extra == 'tpu'", specifier = "==0.10.1" },
     { name = "jaxlib", marker = "extra == 'vllm'", specifier = "==0.10.1" },
@@ -4660,6 +4678,7 @@ requires-dist = [
     { name = "nvidia-cublas", marker = "sys_platform == 'linux' and extra == 'gpu'", specifier = ">=13.2.0.9" },
     { name = "nvidia-cutlass-dsl", extras = ["cu13"], marker = "sys_platform == 'linux' and extra == 'gpu'", specifier = ">=4.5.2,<4.6", index = "https://pypi.nvidia.com/" },
     { name = "nvidia-nccl-cu13", marker = "sys_platform == 'linux' and extra == 'gpu'", specifier = ">=2.28.3" },
+    { name = "quack-kernels", marker = "sys_platform == 'linux' and extra == 'gpu'", specifier = "==0.5.0" },
     { name = "openai" },
     { name = "pandas", specifier = ">=2.0" },
     { name = "plotly" },
@@ -5200,10 +5219,12 @@ gcp = [
 gpu = [
     { name = "flash-attn-4", extra = ["cu13"], marker = "(sys_platform == 'linux' and extra == 'extra-14-marin-levanter-gpu') or (sys_platform != 'linux' and extra == 'extra-10-marin-core-gpu' and extra == 'extra-14-marin-levanter-tpu') or (sys_platform != 'linux' and extra == 'extra-10-marin-core-gpu' and extra == 'group-10-marin-fray-fray-tpu-test') or (extra == 'extra-10-marin-core-tpu' and extra == 'extra-14-marin-levanter-gpu') or (extra == 'extra-10-marin-core-vllm' and extra == 'extra-14-marin-levanter-gpu') or (extra == 'extra-10-marin-core-cpu' and extra == 'extra-10-marin-core-gpu') or (extra == 'extra-10-marin-core-cpu' and extra == 'extra-14-marin-levanter-gpu') or (extra == 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu') or (extra == 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-vllm') or (extra != 'extra-10-marin-core-gpu' and extra == 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra != 'extra-10-marin-core-gpu' and extra == 'extra-14-marin-levanter-gpu' and extra == 'group-10-marin-fray-fray-tpu-test') or (extra == 'extra-10-marin-core-gpu' and extra != 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra == 'extra-10-marin-core-gpu' and extra != 'extra-14-marin-levanter-gpu' and extra == 'group-10-marin-fray-fray-tpu-test')" },
     { name = "jax", extra = ["cuda13"], marker = "(extra == 'extra-10-marin-core-cpu' and extra == 'extra-10-marin-core-gpu') or (extra == 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu') or (extra == 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-vllm') or (extra != 'extra-10-marin-core-gpu' and extra == 'extra-14-marin-levanter-gpu') or (extra != 'extra-10-marin-core-tpu' and extra != 'extra-10-marin-core-vllm' and extra == 'extra-14-marin-levanter-gpu') or (extra == 'extra-10-marin-core-gpu' and extra != 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra == 'extra-10-marin-core-gpu' and extra != 'extra-14-marin-levanter-gpu' and extra == 'group-10-marin-fray-fray-tpu-test')" },
+    { name = "jax-tvm-ffi", marker = "sys_platform == 'linux'" },
     { name = "jax-triton", marker = "sys_platform == 'linux'" },
     { name = "nvidia-cublas", version = "13.4.1.1", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform == 'linux'" },
     { name = "nvidia-cutlass-dsl", extra = ["cu13"], marker = "(sys_platform == 'linux' and extra == 'extra-14-marin-levanter-gpu') or (sys_platform != 'linux' and extra == 'extra-10-marin-core-gpu' and extra == 'extra-14-marin-levanter-tpu') or (sys_platform != 'linux' and extra == 'extra-10-marin-core-gpu' and extra == 'group-10-marin-fray-fray-tpu-test') or (extra == 'extra-10-marin-core-tpu' and extra == 'extra-14-marin-levanter-gpu') or (extra == 'extra-10-marin-core-vllm' and extra == 'extra-14-marin-levanter-gpu') or (extra == 'extra-10-marin-core-cpu' and extra == 'extra-10-marin-core-gpu') or (extra == 'extra-10-marin-core-cpu' and extra == 'extra-14-marin-levanter-gpu') or (extra == 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu') or (extra == 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-vllm') or (extra != 'extra-10-marin-core-gpu' and extra == 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra != 'extra-10-marin-core-gpu' and extra == 'extra-14-marin-levanter-gpu' and extra == 'group-10-marin-fray-fray-tpu-test') or (extra == 'extra-10-marin-core-gpu' and extra != 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra == 'extra-10-marin-core-gpu' and extra != 'extra-14-marin-levanter-gpu' and extra == 'group-10-marin-fray-fray-tpu-test')" },
     { name = "nvidia-nccl-cu13", marker = "sys_platform == 'linux'" },
+    { name = "quack-kernels", marker = "sys_platform == 'linux'" },
     { name = "triton", marker = "sys_platform == 'linux'" },
 ]
 kernels = [
@@ -5296,6 +5317,7 @@ requires-dist = [
     { name = "jax", specifier = ">=0.9.2,<0.11" },
     { name = "jax", marker = "extra == 'tpu'", specifier = "==0.10.1" },
     { name = "jax", extras = ["cuda13"], marker = "extra == 'gpu'", specifier = "==0.10.1" },
+    { name = "jax-tvm-ffi", marker = "sys_platform == 'linux' and extra == 'gpu'", specifier = "==0.1.3" },
     { name = "jax-triton", marker = "sys_platform == 'linux' and extra == 'gpu'", specifier = "==0.3.1" },
     { name = "jaxlib", marker = "extra == 'tpu'", specifier = "==0.10.1" },
     { name = "jaxtyping", specifier = ">=0.2.34" },
@@ -5312,6 +5334,7 @@ requires-dist = [
     { name = "nvidia-cublas", marker = "sys_platform == 'linux' and extra == 'gpu'", specifier = ">=13.2.0.9" },
     { name = "nvidia-cutlass-dsl", extras = ["cu13"], marker = "sys_platform == 'linux' and extra == 'gpu'", specifier = ">=4.5.2,<4.6", index = "https://pypi.nvidia.com/" },
     { name = "nvidia-nccl-cu13", marker = "sys_platform == 'linux' and extra == 'gpu'", specifier = ">=2.28.3" },
+    { name = "quack-kernels", marker = "sys_platform == 'linux' and extra == 'gpu'", specifier = "==0.5.0" },
     { name = "openai", marker = "extra == 'serve'", specifier = ">=1.0.0" },
     { name = "optax", specifier = ">=0.1.9,<0.2.7" },
     { name = "peft", marker = "extra == 'torch-test'", specifier = ">=0.12.0" },

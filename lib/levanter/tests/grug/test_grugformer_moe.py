@@ -471,7 +471,7 @@ def test_moe_mlp_sonic_gradients_match_jax_reference_on_gpu():
             )
             dispatch_out = ragged_dot(jax.nn.silu(gate_dispatch) * up_dispatch, w_down, group_sizes)
             out = _gather_sum_reference(dispatch_out, dispatch_positions, combine_weights)
-        return jnp.mean(out.astype(jnp.float32).square())
+        return jnp.mean(jnp.square(out.astype(jnp.float32)))
 
     grad_fn = jax.jit(jax.grad(loss, argnums=(0, 1, 2, 3)), static_argnums=4)
     sonic_grads = grad_fn(x, combine_weights, w_up_gate, w_down, "sonic")
