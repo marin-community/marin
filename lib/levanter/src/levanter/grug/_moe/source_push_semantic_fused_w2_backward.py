@@ -250,7 +250,10 @@ def source_push_semantic_fused_w2_backward_reference_jax(
 
     source_count, destination_count, _chunks, _blocks, compute_m = metadata.token_ids.shape
     source = jnp.arange(source_count, dtype=jnp.int32)[:, None, None, None, None]
-    dy_rows = dy.at[source, metadata.token_ids].get().astype(jnp.float32)
+    gathered_sharding = None
+    if jax.sharding.get_abstract_mesh().are_all_axes_explicit:
+        gathered_sharding = P(SOURCE_PUSH_MESH_AXIS, None, None, None, None, None)
+    dy_rows = dy.at[source, metadata.token_ids].get(out_sharding=gathered_sharding).astype(jnp.float32)
     dy_rows = jnp.where(metadata.row_valid[..., None], dy_rows, jnp.zeros((), dtype=jnp.float32))
     dy_route = dy_rows * metadata.route_weights[..., None].astype(jnp.float32)
 
@@ -258,7 +261,7 @@ def source_push_semantic_fused_w2_backward_reference_jax(
     destination = jnp.arange(source_count, dtype=jnp.int32)[:, None, None, None] + dst_ordinal
     destination %= destination_count
     safe_expert = jnp.maximum(metadata.send_expert, 0)
-    weights = w_down.at[destination, safe_expert].get().astype(jnp.float32)
+    weights = w_down.at[destination, safe_expert].get(out_sharding=gathered_sharding).astype(jnp.float32)
     queue_dh = jnp.einsum("sdcbmh,sdcbih->sdcbmi", dy_route, weights, preferred_element_type=jnp.float32)
 
     row = jnp.arange(compute_m, dtype=jnp.int32)[None, None, None, None, :]
@@ -278,7 +281,11 @@ def source_push_semantic_fused_w2_backward_reference_jax(
     d_h = d_h[..., : metadata.rows_per_expert_capacity, :]
 
     safe_row = jnp.minimum(metadata.send_row_start[..., None] + row, h_expert.shape[2] - 1)
-    h_rows = h_expert.at[scatter_destination, scatter_expert, safe_row].get().astype(jnp.float32)
+    h_rows = (
+        h_expert.at[scatter_destination, scatter_expert, safe_row]
+        .get(out_sharding=gathered_sharding)
+        .astype(jnp.float32)
+    )
     h_rows = jnp.where(row_valid[..., None], h_rows, jnp.zeros((), dtype=jnp.float32))
     dw2 = jnp.zeros(w_down.shape, dtype=jnp.float32)
     for dst in range(w_down.shape[0]):

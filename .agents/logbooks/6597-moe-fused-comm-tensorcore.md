@@ -787,3 +787,64 @@ drops, and dropped routes were all zero. Twelve non-fatal
 traceback or actionable runtime failure. Complete raw output, exact result
 rows, terminal status, task summary, and monitor state are in
 `scratch/6597-w13b-topk1-finite/`.
+
+## 2026-07-10 FUSED-MOE-022 - Resident peer-local global dX init barrier
+
+Job `/dlwh/bench-semantic-w13b-initbarrier-20260710-1538` ran once on
+`cw-rno2a` at commit `38a77112f8` and reached terminal
+`JOB_STATE_SUCCEEDED`. Its single task exited 0 after 41.52 seconds, with zero
+failures and preemptions. No duplicate, stop, resubmit, code edit, or Iris
+restart was issued.
+
+Replacing the per-token init waits with a resident peer-local global `dX` init
+barrier did not fix correctness. The finite-masked expected and observed `dX`
+absolute sums were `10787750.0` and `Infinity`; least-squares scale and cosine
+similarity were both `NaN`, as were max and mean absolute differences. Expected
+`dX` had zero nonfinite entries and observed `dX` had two. `dW13` remained
+close: max and mean absolute differences were `3.814697265625e-06` and
+`3.263437520217849e-08`, with zero expected and observed nonfinite entries.
+
+Compile/first-call time was `8.154060366912745` seconds, lowering/compile time
+was `7.291952597908676` seconds, first-run time was `0.8621077690040693`
+seconds, and steady-state time was `0.0018587580416351557` seconds. Useful and
+rounded throughput were `0.07220828369997431` and `0.0902603546249679`
+TFLOP/s/rank. The row reported four live pairs, 1,024 useful rows, 1,280 rounded
+rows, 0.8 row efficiency, and `0.19999999999999996` masked-row fraction. Queue
+overflow routes,
+layout overflow rows, metadata overflow routes, routing drops, and dropped
+routes were all zero. There was no deadlock or runtime exception; this is a
+terminal correctness failure. Exact rows, raw logs, terminal status, task
+summary, and monitor state are in `scratch/6597-w13b-initbarrier/`.
+
+## 2026-07-10 FUSED-MOE-023 - Persistent W2 return and aggregated W2 backward tiny compare
+
+Job `/dlwh/bench-semantic-fused-w2-tiny-compare-20260710-1542` ran once on
+`cw-rno2a` at commit `f63a684742` and reached terminal Iris state `succeeded`.
+Its single task exited 0 after 41.95 seconds, with zero failures and
+preemptions. No duplicate, stop, resubmit, code edit, or Iris restart was
+issued.
+
+The persistent W2 return completed but failed correctness. `y` max and mean
+absolute differences were `31.21875` and `2.2772815227508545`; expected and
+observed `y` nonfinite counts were both zero. `return_y` max and mean absolute
+differences were `NaN` because all `196608` observed elements were nonfinite,
+versus zero expected. The output checksum was `NaN`. Valid, queue-overflow,
+and layout-overflow error counters were zero; metadata-overflow routes,
+routing-dropped routes, and dropped routes were also zero.
+
+Return compile/first-call time was `2.65317596308887` seconds, lowering/compile
+time was `1.814075340051204` seconds, first-run time was
+`0.8391006230376661` seconds, and steady-state time was
+`0.0012550349347293377` seconds. Useful and rounded throughput were
+`0.05347170994445089` and `0.06683963743056362` TFLOP/s/rank.
+
+The aggregated W2 backward comparison failed during lowering before producing
+any `d_h`, `d_w2`, or `d_route_weight` comparison, nonfinite, counter, or
+timing metrics. The first failure was `jax._src.core.ShardingTypeError` at
+`source_push_semantic_fused_w2_backward.py:253`: the gather
+`dy.at[source, metadata.token_ids].get()` lacked an unambiguous output
+sharding for operand `bfloat16[2@expert,512,256]` and indices
+`int32[2,2,4,4,64,2]`. Twelve non-fatal `CUDA_ERROR_NOT_PERMITTED` VMM
+fallback warnings preceded the results. Complete raw output, exact JSON rows,
+terminal status, task summary, and monitor state are in
+`scratch/6597-w2-persistent-tiny-compare/`.

@@ -620,24 +620,12 @@ def _make_source_push_semantic_fused_w2_return_kernel(
                             acc_ref=mgpu.ACC((config.compute_m, config.block_n)),
                         )
 
-                        def _store_scope(output_smem) -> None:
-                            output_smem[:, :] = output
-                            mgpu.commit_smem()
-                            mgpu.copy_smem_to_gmem(
-                                output_smem,
-                                destination_ref.at[
-                                    destination_ordinal,
-                                    entry,
-                                    pl.ds(0, config.compute_m),
-                                    pl.ds(hidden_start, config.block_n),
-                                ],
-                            )
-                            mgpu.wait_smem_to_gmem(0, wait_read_only=False)
-
-                        pl.run_scoped(
-                            _store_scope,
-                            output_smem=mgpu.SMEM((config.compute_m, config.block_n), dtype=jnp.bfloat16),
-                        )
+                        destination_ref[
+                            destination_ordinal,
+                            entry,
+                            pl.ds(0, config.compute_m),
+                            pl.ds(hidden_start, config.block_n),
+                        ] = output
 
                 if static_source_ordinal == 0:
                     pl.semaphore_signal(ready_sem.at[destination_ordinal, hidden_tile])

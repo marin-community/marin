@@ -598,32 +598,20 @@ def _make_source_push_semantic_fused_w13_backward_kernel(
                             barrier=mgpu.Barrier(num_arrivals=2),
                         )
 
-                        def _return_scope(dx_smem) -> None:
-                            dx_smem[:, :] = acc_ref[...].astype(dtype)
-                            mgpu.commit_smem()
-                            source_rank = (rank + src) % ep_size
-                            destination_ref = dx_return_ref
-                            if src != 0:
-                                destination_ref = mgpu.remote_ref(
-                                    dx_return_ref,
-                                    source_rank,
-                                    device_id_type=pl.DeviceIdType.LOGICAL,
-                                )
-                            mgpu.copy_smem_to_gmem(
-                                dx_smem,
-                                destination_ref.at[
-                                    rank,
-                                    slot,
-                                    pl.ds(block * config.compute_m, config.compute_m),
-                                    pl.ds(hidden_tile * config.block_hidden, config.block_hidden),
-                                ],
+                        source_rank = (rank + src) % ep_size
+                        destination_ref = dx_return_ref
+                        if src != 0:
+                            destination_ref = mgpu.remote_ref(
+                                dx_return_ref,
+                                source_rank,
+                                device_id_type=pl.DeviceIdType.LOGICAL,
                             )
-                            mgpu.wait_smem_to_gmem(0, wait_read_only=False)
-
-                        pl.run_scoped(
-                            _return_scope,
-                            dx_smem=mgpu.SMEM((config.compute_m, config.block_hidden), dtype=dtype),
-                        )
+                        destination_ref[
+                            rank,
+                            slot,
+                            pl.ds(block * config.compute_m, config.compute_m),
+                            pl.ds(hidden_tile * config.block_hidden, config.block_hidden),
+                        ] = acc_ref[...].astype(dtype)
 
                     pl.run_scoped(
                         _acc_scope,
