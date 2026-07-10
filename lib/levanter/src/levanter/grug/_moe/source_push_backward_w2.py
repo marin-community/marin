@@ -16,12 +16,13 @@ from typing import Literal, NamedTuple, TypeAlias
 
 import jax
 import jax.numpy as jnp
-from jax import shard_map
+from jax import lax, shard_map
 from jax.experimental import pallas as pl
 from jax.experimental.pallas import mosaic_gpu as mgpu
 from jax.sharding import Mesh, NamedSharding, PartitionSpec as P
 from jaxtyping import Array, Bool, Float, Int
 
+from levanter.grug._moe.source_push_backward_dy_route import _source_push_backward_dy_to_expert_major_reference
 from levanter.grug._moe.source_push_plan import (
     SOURCE_PUSH_MESH_AXIS,
     _source_push_out_sharding,
@@ -87,6 +88,7 @@ class _SourcePushW2BackwardOutput(NamedTuple):
     """Gradients produced by backward steps 2-5 from saved H."""
 
     d_h: Float[Array, "... twoI"]
+    d_activation: Float[Array, "... I"] | None
     d_route_weight: Float[Array, "..."]
     dw2: Float[Array, "Dst E I D"]
 
@@ -102,6 +104,7 @@ class _SourcePushW2SwiGLUBackwardOutput(NamedTuple):
     """SwiGLU and route-weight derivatives from ``d_weighted_activation``."""
 
     d_h: Float[Array, "Dst E C twoI"]
+    d_activation: Float[Array, "Dst E C I"]
     d_route_weight: Float[Array, "Dst E C"]
 
 
@@ -171,9 +174,34 @@ def _source_push_w2_backward_expert_blocks_reference(
     )
     return _SourcePushW2BackwardOutput(
         d_h=swiglu_output.d_h,
+        d_activation=swiglu_output.d_activation,
         d_route_weight=swiglu_output.d_route_weight,
         dw2=matmul_output.dw2,
     )
+
+
+def _source_push_w2_backward_expert_blocks_from_source_dy_reference(
+    h: Float[Array, "Dst E C twoI"],
+    route_weight: Float[Array, "Dst E C"],
+    dy_source: Float[Array, "S T D"],
+    w2: Float[Array, "Dst E I D"],
+    valid: Bool[Array, "Dst E C"] | Float[Array, "Dst E C"],
+    source_rank_by_expert: Int[Array, "Dst E C"],
+    token_id_by_expert: Int[Array, "Dst E C"],
+) -> _SourcePushW2BackwardOutput:
+    """Reference fusion point for W2 backward fed by source-owned ``dy``.
+
+    This exists as an integration target for the MLP path to avoid materializing
+    a separate compact ``dy_blocks`` stage. It is not a new production selector.
+    """
+
+    dy_blocks = _source_push_backward_dy_to_expert_major_reference(
+        dy_source,
+        source_rank_by_expert,
+        token_id_by_expert,
+        valid,
+    )
+    return _source_push_w2_backward_expert_blocks_reference(h, route_weight, dy_blocks, w2, valid)
 
 
 def _source_push_w2_backward_expert_blocks_pallas_mgpu_fused(
@@ -234,6 +262,7 @@ def _source_push_w2_backward_expert_blocks_pallas_mgpu_fused(
     )
     return _SourcePushW2BackwardOutput(
         d_h=d_h[:, :, :original_rows, :],
+        d_activation=None,
         d_route_weight=d_route_weight[:, :, :original_rows],
         dw2=dw2,
     )
@@ -379,6 +408,7 @@ def _source_push_w2_backward_expert_blocks_staged(
     )
     return _SourcePushW2BackwardOutput(
         d_h=swiglu_output.d_h,
+        d_activation=swiglu_output.d_activation,
         d_route_weight=swiglu_output.d_route_weight,
         dw2=matmul_output.dw2,
     )
@@ -457,16 +487,35 @@ def _source_push_w2_backward_from_flat_h(
     flat_rows = _expert_flat_rows(expert_base, valid.shape[-1])
     dst_index = _dst_indices(expert_base.shape[0], expert_base.shape[1], valid.shape[-1])
     d_h = jnp.zeros(h.shape, dtype=block_output.d_h.dtype)
+    block_d_activation = block_output.d_activation
+    d_activation = (
+        None
+        if block_d_activation is None
+        else jnp.zeros(
+            route_weight.shape + (block_d_activation.shape[-1],),
+            dtype=block_d_activation.dtype,
+        )
+    )
     d_route_weight = jnp.zeros(route_weight.shape, dtype=block_output.d_route_weight.dtype)
     d_h = d_h.at[dst_index, flat_rows].add(
         block_output.d_h * valid_f[..., None],
         out_sharding=_source_push_out_sharding(SOURCE_PUSH_MESH_AXIS, None, None),
     )
+    if d_activation is not None and block_d_activation is not None:
+        d_activation = d_activation.at[dst_index, flat_rows].add(
+            block_d_activation * valid_f[..., None],
+            out_sharding=_source_push_out_sharding(SOURCE_PUSH_MESH_AXIS, None, None),
+        )
     d_route_weight = d_route_weight.at[dst_index, flat_rows].add(
         block_output.d_route_weight * valid_f,
         out_sharding=_source_push_out_sharding(SOURCE_PUSH_MESH_AXIS, None),
     )
-    return _SourcePushW2BackwardOutput(d_h=d_h, d_route_weight=d_route_weight, dw2=block_output.dw2)
+    return _SourcePushW2BackwardOutput(
+        d_h=d_h,
+        d_activation=d_activation,
+        d_route_weight=d_route_weight,
+        dw2=block_output.dw2,
+    )
 
 
 def _source_push_w2_valid_blocks_sharded(
@@ -489,6 +538,16 @@ def _source_push_destination_named_sharding(value: Array, ndim: int) -> NamedSha
     if SOURCE_PUSH_MESH_AXIS not in sharding.mesh.axis_names:
         return None
     return NamedSharding(sharding.mesh, P(SOURCE_PUSH_MESH_AXIS, *(None for _ in range(ndim - 1))))
+
+
+def _source_push_destination_or_replicated_spec(value: Array, ndim: int) -> P:
+    """Return a shard_map spec matching destination-sharded or replicated input."""
+
+    destination_spec = P(SOURCE_PUSH_MESH_AXIS, *(None for _ in range(ndim - 1)))
+    sharding = getattr(value, "sharding", None)
+    if isinstance(sharding, NamedSharding) and sharding.spec == destination_spec:
+        return destination_spec
+    return P(*(None for _ in range(ndim)))
 
 
 def _with_source_push_destination_sharding(value: Array, like: Array | None = None) -> Array:
@@ -514,6 +573,19 @@ def _source_push_w2_activation_and_weighted_activation_reference(
     activation = jax.nn.silu(gate) * up
     weighted_activation = activation * route_weight[..., None]
     return activation, weighted_activation
+
+
+def _source_push_w2_d_activation_from_d_weighted_activation(
+    route_weight: Float[Array, "..."],
+    d_weighted_activation: Float[Array, "... I"],
+    valid: Bool[Array, "..."] | Float[Array, "..."],
+) -> Float[Array, "... I"]:
+    """Apply route-weight scaling to expose the pre-SwiGLU activation gradient."""
+
+    valid_f = valid.astype(jnp.float32)
+    route_weight = route_weight.astype(jnp.float32) * valid_f
+    d_weighted_activation = d_weighted_activation.astype(jnp.float32) * valid_f[..., None]
+    return d_weighted_activation * route_weight[..., None]
 
 
 def _source_push_w2_matmul_backward_reference(
@@ -591,6 +663,14 @@ def _source_push_w2_matmul_backward_pallas_mgpu(
     _validate_w2_matmul_backward_shapes(weighted_activation, dy, w2, valid)
     if interpret:
         return _source_push_w2_matmul_backward_reference(weighted_activation, dy, w2, valid)
+    if mesh is None:
+        weighted_activation = jnp.where(
+            valid[..., None],
+            weighted_activation,
+            jnp.zeros((), dtype=weighted_activation.dtype),
+        )
+        dy = jnp.where(valid[..., None], dy, jnp.zeros((), dtype=dy.dtype))
+    valid = _source_push_w2_valid_blocks_sharded(valid)
     original_rows = weighted_activation.shape[2]
     row_multiple = block_sizes.row_block if block_sizes is not None else MIN_SOURCE_PUSH_W2_MATMUL_ROW_BLOCK
     weighted_activation, dy, valid = _pad_w2_matmul_rows_for_pallas(
@@ -599,6 +679,7 @@ def _source_push_w2_matmul_backward_pallas_mgpu(
         valid,
         row_multiple=row_multiple,
     )
+    valid = valid.astype(jnp.float32)
     block_sizes = (
         _source_push_w2_matmul_backward_inferred_block_sizes(weighted_activation, dy, w2)
         if block_sizes is None
@@ -787,7 +868,7 @@ def _source_push_w2_d_weighted_activation_sharded_pallas_call(
     def local_fn(
         dy_local: Float[Array, "1 E C D"],
         w2_local: Float[Array, "1 E I D"],
-        valid_local: Bool[Array, "1 E C"],
+        valid_local: Float[Array, "1 E C"],
     ) -> Float[Array, "1 E C I"]:
         return kernel(dy_local[0], w2_local[0], valid_local[0])[None, ...]
 
@@ -827,7 +908,7 @@ def _source_push_w2_dw2_sharded_pallas_call(
     def local_fn(
         weighted_activation_local: Float[Array, "1 E C I"],
         dy_local: Float[Array, "1 E C D"],
-        valid_local: Bool[Array, "1 E C"],
+        valid_local: Float[Array, "1 E C"],
     ) -> Float[Array, "1 E I D"]:
         return kernel(weighted_activation_local[0], dy_local[0], valid_local[0])[None, ...]
 
@@ -861,7 +942,7 @@ def _make_source_push_w2_d_weighted_activation_mgpu_kernel(
     def body(
         dy_ref: Float[pl.Ref, "E C D"],
         w2_ref: Float[pl.Ref, "E I D"],
-        _valid_ref: Bool[pl.Ref, "E C"],
+        valid_ref: Float[pl.Ref, "E C"],
         d_weighted_activation_ref: Float[pl.Ref, "E C I"],
     ) -> None:
         expert = pl.program_id(0)
@@ -871,7 +952,21 @@ def _make_source_push_w2_d_weighted_activation_mgpu_kernel(
         intermediate_start = intermediate_tile * intermediate_block
 
         def acc_scope(acc_ref) -> jax.Array:
-            def smem_scope(dy_smem, w2_smem, ready_barrier) -> None:
+            def smem_scope(dy_smem, w2_smem, valid_smem, ready_barrier, valid_ready_barrier) -> None:
+                zero_row_slice = pl.ds(0, row_block)
+                mgpu.copy_gmem_to_smem(
+                    valid_ref.at[expert, pl.ds(row_start, row_block)],
+                    valid_smem,
+                    valid_ready_barrier,
+                )
+                mgpu.barrier_wait(valid_ready_barrier)
+                valid_vec = mgpu.load(
+                    valid_smem,
+                    (zero_row_slice,),
+                    layout=mgpu.Layout.WGMMA.reduce(1),
+                ).astype(jnp.float32)
+                valid_f = jax.lax.broadcast_in_dim(valid_vec, (row_block, hidden_block), (0,))
+
                 @pl.loop(0, hidden_tiles)
                 def _hidden_loop(hidden_tile) -> None:
                     hidden_start = hidden_tile * hidden_block
@@ -894,6 +989,7 @@ def _make_source_push_w2_d_weighted_activation_mgpu_kernel(
                         ready_barrier,
                     )
                     mgpu.barrier_wait(ready_barrier)
+                    dy_smem[:, :] = (dy_smem[:, :].astype(jnp.float32) * valid_f).astype(dy_smem.dtype)
                     mgpu.commit_smem()
                     mgpu.wgmma(acc_ref, dy_smem, mgpu.transpose_ref(w2_smem, (1, 0)))
                     mgpu.wgmma_wait(0)
@@ -902,7 +998,9 @@ def _make_source_push_w2_d_weighted_activation_mgpu_kernel(
                 smem_scope,
                 dy_smem=_w2_wgmma_smem((row_block, hidden_block), dy_ref.dtype),
                 w2_smem=_w2_wgmma_smem((intermediate_block, hidden_block), w2_ref.dtype),
+                valid_smem=mgpu.SMEM((row_block,), dtype=valid_ref.dtype),
                 ready_barrier=mgpu.Barrier(num_arrivals=2),
+                valid_ready_barrier=mgpu.Barrier(num_arrivals=1),
             )
             return acc_ref[...]
 
@@ -944,7 +1042,7 @@ def _make_source_push_w2_dw2_mgpu_kernel(
     def body(
         weighted_activation_ref: Float[pl.Ref, "E C I"],
         dy_ref: Float[pl.Ref, "E C D"],
-        _valid_ref: Bool[pl.Ref, "E C"],
+        valid_ref: Float[pl.Ref, "E C"],
         dw2_ref: Float[pl.Ref, "E I D"],
     ) -> None:
         expert = pl.program_id(0)
@@ -954,10 +1052,11 @@ def _make_source_push_w2_dw2_mgpu_kernel(
         hidden_start = hidden_tile * hidden_block
 
         def acc_scope(acc_ref) -> jax.Array:
-            def smem_scope(weighted_activation_smem, dy_smem, ready_barrier) -> None:
+            def smem_scope(weighted_activation_smem, dy_smem, valid_smem, ready_barrier, valid_ready_barrier) -> None:
                 @pl.loop(0, row_tiles)
                 def _row_loop(row_tile) -> None:
                     row_start = row_tile * row_block
+                    zero_row_slice = pl.ds(0, row_block)
                     mgpu.copy_gmem_to_smem(
                         weighted_activation_ref.at[
                             expert,
@@ -976,7 +1075,22 @@ def _make_source_push_w2_dw2_mgpu_kernel(
                         dy_smem,
                         ready_barrier,
                     )
+                    mgpu.copy_gmem_to_smem(
+                        valid_ref.at[expert, pl.ds(row_start, row_block)],
+                        valid_smem,
+                        valid_ready_barrier,
+                    )
                     mgpu.barrier_wait(ready_barrier)
+                    mgpu.barrier_wait(valid_ready_barrier)
+                    valid_vec = mgpu.load(
+                        valid_smem,
+                        (zero_row_slice,),
+                        layout=mgpu.Layout.WGMMA.reduce(1),
+                    ).astype(jnp.float32)
+                    valid_f = jax.lax.broadcast_in_dim(valid_vec, (row_block, intermediate_block), (0,))
+                    weighted_activation_smem[:, :] = (
+                        weighted_activation_smem[:, :].astype(jnp.float32) * valid_f
+                    ).astype(weighted_activation_smem.dtype)
                     mgpu.commit_smem()
                     mgpu.wgmma(acc_ref, mgpu.transpose_ref(weighted_activation_smem, (1, 0)), dy_smem)
                     mgpu.wgmma_wait(0)
@@ -987,7 +1101,9 @@ def _make_source_push_w2_dw2_mgpu_kernel(
                     (row_block, intermediate_block), weighted_activation_ref.dtype
                 ),
                 dy_smem=_w2_wgmma_smem((row_block, hidden_block), dy_ref.dtype),
+                valid_smem=mgpu.SMEM((row_block,), dtype=valid_ref.dtype),
                 ready_barrier=mgpu.Barrier(num_arrivals=2),
+                valid_ready_barrier=mgpu.Barrier(num_arrivals=1),
             )
             return acc_ref[...]
 
@@ -1684,13 +1800,21 @@ def _source_push_w2_swiglu_backward_reference(
     silu_gate = jax.nn.silu(gate)
     d_route_weight = jnp.sum(d_weighted_activation * activation, axis=-1) * valid_f
 
-    d_activation = d_weighted_activation * route_weight[..., None]
+    d_activation = _source_push_w2_d_activation_from_d_weighted_activation(
+        route_weight,
+        d_weighted_activation,
+        valid,
+    )
     sigmoid_gate = jax.nn.sigmoid(gate)
     d_silu_gate = sigmoid_gate * (1.0 + gate * (1.0 - sigmoid_gate))
     d_gate = d_activation * up * d_silu_gate
     d_up = d_activation * silu_gate
     d_h = jnp.concatenate([d_gate, d_up], axis=-1) * valid_f[..., None]
-    return _SourcePushW2SwiGLUBackwardOutput(d_h=d_h, d_route_weight=d_route_weight)
+    return _SourcePushW2SwiGLUBackwardOutput(
+        d_h=d_h,
+        d_activation=d_activation,
+        d_route_weight=d_route_weight,
+    )
 
 
 def _source_push_w2_swiglu_backward(
@@ -1756,7 +1880,16 @@ def _source_push_w2_swiglu_backward_pallas_mgpu(
             row_block=matmul_block_sizes.row_block,
             intermediate_block=matmul_block_sizes.intermediate_block,
         )
-        return _SourcePushW2SwiGLUBackwardOutput(d_h=d_h, d_route_weight=d_route_weight)
+        d_activation = _source_push_w2_d_activation_from_d_weighted_activation(
+            route_weight,
+            d_weighted_activation,
+            valid,
+        )
+        return _SourcePushW2SwiGLUBackwardOutput(
+            d_h=d_h,
+            d_activation=d_activation,
+            d_route_weight=d_route_weight,
+        )
     d_h, d_route_weight = _source_push_w2_swiglu_backward_pallas_call(
         h,
         route_weight,
@@ -1766,7 +1899,16 @@ def _source_push_w2_swiglu_backward_pallas_mgpu(
         interpret=interpret,
         mesh=mesh,
     )
-    return _SourcePushW2SwiGLUBackwardOutput(d_h=d_h, d_route_weight=d_route_weight)
+    d_activation = _source_push_w2_d_activation_from_d_weighted_activation(
+        route_weight,
+        d_weighted_activation,
+        valid,
+    )
+    return _SourcePushW2SwiGLUBackwardOutput(
+        d_h=d_h,
+        d_activation=d_activation,
+        d_route_weight=d_route_weight,
+    )
 
 
 def _source_push_w2_swiglu_backward_pallas_call(
@@ -2372,9 +2514,15 @@ def _gather_flat_rows_by_expert_slice_shard_map(
     slice_sizes = (rows_per_expert,) + rows.shape[2:]
     trailing_starts = (0,) * (rows.ndim - 2)
 
+    expert_base_spec = _source_push_destination_or_replicated_spec(expert_base, 2)
+
     def local_gather(rows_local, expert_base_local):
+        dst = lax.axis_index(SOURCE_PUSH_MESH_AXIS)
         rows_dst = rows_local[0]
-        base_dst = expert_base_local[0]
+        if expert_base_spec == P(SOURCE_PUSH_MESH_AXIS, None):
+            base_dst = expert_base_local[0]
+        else:
+            base_dst = lax.dynamic_slice_in_dim(expert_base_local, dst, 1, axis=0)[0]
 
         def gather_expert(base):
             return jax.lax.dynamic_slice(rows_dst, (base, *trailing_starts), slice_sizes)
@@ -2386,7 +2534,7 @@ def _gather_flat_rows_by_expert_slice_shard_map(
     return shard_map(
         local_gather,
         mesh=mesh,
-        in_specs=(rows_spec, P(SOURCE_PUSH_MESH_AXIS, None)),
+        in_specs=(rows_spec, expert_base_spec),
         out_specs=out_spec,
         check_vma=False,
     )(rows, expert_base)

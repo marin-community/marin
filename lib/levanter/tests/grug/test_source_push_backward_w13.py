@@ -1,9 +1,12 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
+from jax.experimental.pallas import mosaic_gpu as mgpu
+from jax.sharding import Mesh, NamedSharding, PartitionSpec as P
 
 from levanter.grug._moe import source_push_forward
 from levanter.grug._moe import source_push_mlp
@@ -15,15 +18,34 @@ from levanter.grug._moe.source_push_backward_w13 import (
     SourcePushW13BackwardTiledBlockSizes,
     SourcePushXToW13RowsPallasBlockSizes,
     _pad_w13_compact_dh_for_row_block,
+    _source_push_w13_backward_expert_blocks_compact_dx_source_gather_dw13,
+    _source_push_w13_backward_expert_blocks_dw13_only_exact_flat_pallas_mgpu,
+    _source_push_w13_backward_expert_blocks_dw13_only_pallas_mgpu,
     _source_push_w13_backward_expert_blocks_dx_only_pallas_mgpu,
+    _source_push_w13_backward_expert_blocks_local_linear_dw13_only_pallas_mgpu,
+    _source_push_w13_backward_expert_blocks_local_swiglu_gate_dw13_only_pallas_mgpu,
+    _source_push_w13_backward_expert_blocks_local_swiglu_dw13_only_pallas_mgpu,
+    _source_push_w13_backward_expert_blocks_local_swiglu_persistent_dw13_only_pallas_mgpu,
+    _source_push_w13_backward_expert_blocks_local_swiglu_split_dw13_only_pallas_mgpu,
+    _source_push_w13_backward_expert_blocks_local_swiglu_up_dw13_only_pallas_mgpu,
     _source_push_w13_backward_expert_blocks_pallas_mgpu,
+    _source_push_w13_backward_expert_blocks_prefilled_x_dw13_only_pallas_mgpu,
     _source_push_w13_backward_pallas_mgpu,
+    _source_push_x_to_w13_rows_block_specs,
+    _source_push_w13_dw13_source_padded_partials_pallas_mgpu,
+    _source_push_w13_dw13_expert_blocks_source_gather_pallas_mgpu,
     estimate_source_push_w13_backward_cost,
     source_push_w13_backward,
+    source_push_w13_backward_expert_blocks_dw13_only_xla,
+    source_push_w13_backward_expert_blocks_local_swiglu_dw13_only_xla,
     source_push_w13_backward_expert_blocks_source_gather_dw13_only,
+    source_push_w13_backward_expert_blocks_source_padded_dw13_only_xla,
     source_push_w13_backward_expert_blocks_reference,
     source_push_w13_backward_expert_blocks_tiled_reference,
     source_push_w13_backward_reference,
+    source_push_w13_dw13_local_linear_reference,
+    source_push_w13_dw13_local_swiglu_branch_reference,
+    source_push_w13_dw13_local_swiglu_reference,
     source_push_w13_dw13_expert_blocks_source_gather_tiled_reference,
     source_push_w13_dx_expert_blocks_reference,
     source_push_x_to_w13_rows,
@@ -132,6 +154,35 @@ def _dirty_dh(config, host_inputs):
     ).reshape(config.ep_size, config.hidden_rows_per_rank, 2 * config.intermediate_dim)
     invalid = jnp.asarray(~_flat_live_row_mask(config, host_inputs), dtype=jnp.float32)
     return d_h + invalid[..., None] * jnp.asarray(100.0, dtype=jnp.float32)
+
+
+def _compact_x_from_route_table(x, route_table):
+    safe_src = jnp.where(route_table.valid_by_expert, route_table.source_rank_by_expert, 0)
+    safe_token = jnp.where(route_table.valid_by_expert, route_table.token_id_by_expert, 0)
+    x_expert_major = x.at[safe_src, safe_token].get()
+    return x_expert_major * route_table.valid_by_expert[..., None].astype(jnp.float32)
+
+
+def _compact_swiglu_inputs(config, route_table):
+    d_activation = jnp.linspace(
+        -0.25,
+        0.35,
+        config.ep_size * config.experts_per_rank * route_table.valid_by_expert.shape[-1] * config.intermediate_dim,
+        dtype=jnp.float32,
+    ).reshape(config.ep_size, config.experts_per_rank, route_table.valid_by_expert.shape[-1], config.intermediate_dim)
+    z = jnp.linspace(
+        -0.45,
+        0.55,
+        config.ep_size * config.experts_per_rank * route_table.valid_by_expert.shape[-1] * 2 * config.intermediate_dim,
+        dtype=jnp.float32,
+    ).reshape(
+        config.ep_size,
+        config.experts_per_rank,
+        route_table.valid_by_expert.shape[-1],
+        2 * config.intermediate_dim,
+    )
+    invalid = (~route_table.valid_by_expert)[..., None].astype(jnp.float32)
+    return d_activation + invalid * 100.0, z + invalid * 100.0
 
 
 def test_source_push_w13_backward_reference_matches_existing_per_expert_helpers():
@@ -315,6 +366,35 @@ def test_source_push_w13_backward_compact_tiled_matches_compact_reference_withou
     np.testing.assert_allclose(np.asarray(observed.dw13), np.asarray(expected.dw13), atol=1e-6, rtol=1e-6)
 
 
+def test_source_push_w13_backward_compact_tiled_preserves_destination_sharding():
+    config, host_inputs, route_table, x, w13 = _small_source_push_w13_case(block_m=1, use_exact_expert_major=True)
+    expert_base = jnp.asarray(host_inputs.expert_base, dtype=jnp.int32)
+    d_h_flat = _dirty_dh(config, host_inputs)
+    d_h_blocks = jnp.zeros(
+        (EP_SIZE, EXPERTS_PER_RANK, route_table.expert_capacity, 2 * INTERMEDIATE_DIM),
+        dtype=d_h_flat.dtype,
+    )
+    for expert in range(EXPERTS_PER_RANK):
+        d_h_blocks = d_h_blocks.at[:, expert].set(
+            source_push_mlp._source_push_mlp_h_flat_for_expert(route_table, expert_base, d_h_flat, expert)
+        )
+    mesh = Mesh(np.asarray(jax.devices()[:1]), ("expert",))
+    d_h_blocks = jax.device_put(d_h_blocks, NamedSharding(mesh, P("expert", None, None, None)))
+
+    observed = source_push_w13_backward_expert_blocks_tiled_reference(
+        x,
+        d_h_blocks,
+        w13,
+        route_table.source_rank_by_expert,
+        route_table.token_id_by_expert,
+        route_table.valid_by_expert,
+        block_sizes=SourcePushW13BackwardTiledBlockSizes(row_block=2, hidden_block=2, output_block=3),
+    )
+
+    assert isinstance(observed.dx_expert_major.sharding, NamedSharding)
+    assert observed.dx_expert_major.sharding.spec == P("expert", None, None, None)
+
+
 def test_source_push_w13_backward_decomposition_helpers_match_compact_reference():
     config, host_inputs, route_table, x, w13 = _small_source_push_w13_case(block_m=1, use_exact_expert_major=True)
     expert_base = jnp.asarray(host_inputs.expert_base, dtype=jnp.int32)
@@ -405,6 +485,64 @@ def test_source_push_w13_backward_source_gather_dw13_only_avoids_x_output():
     )
 
 
+def test_source_push_w13_backward_source_gather_dw13_pallas_interpreter_matches_reference():
+    config, host_inputs, route_table, x, w13 = _small_source_push_w13_case(block_m=1, use_exact_expert_major=True)
+    expert_base = jnp.asarray(host_inputs.expert_base, dtype=jnp.int32)
+    d_h_flat = _dirty_dh(config, host_inputs)
+    d_h_blocks = jnp.zeros(
+        (EP_SIZE, EXPERTS_PER_RANK, route_table.expert_capacity, 2 * INTERMEDIATE_DIM),
+        dtype=d_h_flat.dtype,
+    )
+    for expert in range(EXPERTS_PER_RANK):
+        d_h_blocks = d_h_blocks.at[:, expert].set(
+            source_push_mlp._source_push_mlp_h_flat_for_expert(route_table, expert_base, d_h_flat, expert)
+        )
+    block_sizes = SourcePushW13BackwardTiledBlockSizes(row_block=2, hidden_block=2, output_block=3)
+
+    expected = source_push_w13_backward_expert_blocks_reference(
+        x,
+        d_h_blocks,
+        w13,
+        host_inputs.plan,
+        jnp.asarray(host_inputs.send_meta, dtype=jnp.int32),
+        expert_base,
+        jnp.asarray(host_inputs.src_base_by_expert, dtype=jnp.int32),
+        use_exact_expert_major=True,
+    )
+    observed_dw13 = _source_push_w13_dw13_expert_blocks_source_gather_pallas_mgpu(
+        x,
+        d_h_blocks,
+        route_table.source_rank_by_expert,
+        route_table.token_id_by_expert,
+        route_table.valid_by_expert,
+        block_sizes=block_sizes,
+        interpret=True,
+    )
+
+    np.testing.assert_allclose(np.asarray(observed_dw13), np.asarray(expected.dw13), atol=1e-6, rtol=1e-6)
+
+
+def test_source_push_w13_backward_source_gather_dw13_pallas_requires_gpu_lowering_on_cpu():
+    _config, _host_inputs, route_table, x, _w13 = _small_source_push_w13_case(
+        block_m=1,
+        use_exact_expert_major=True,
+    )
+    d_h_blocks = jnp.zeros(
+        (EP_SIZE, EXPERTS_PER_RANK, route_table.expert_capacity, 2 * INTERMEDIATE_DIM),
+        dtype=jnp.float32,
+    )
+
+    with pytest.raises(NotImplementedError, match="requires a GPU backend"):
+        _source_push_w13_dw13_expert_blocks_source_gather_pallas_mgpu(
+            x,
+            d_h_blocks,
+            route_table.source_rank_by_expert,
+            route_table.token_id_by_expert,
+            route_table.valid_by_expert,
+            block_sizes=SourcePushW13BackwardTiledBlockSizes(row_block=2, hidden_block=2, output_block=3),
+        )
+
+
 def test_source_push_w13_backward_dx_only_pallas_interpreter_matches_compact_reference():
     config, host_inputs, route_table, _x, w13 = _small_source_push_w13_case(block_m=1, use_exact_expert_major=True)
     expert_base = jnp.asarray(host_inputs.expert_base, dtype=jnp.int32)
@@ -434,6 +572,491 @@ def test_source_push_w13_backward_dx_only_pallas_interpreter_matches_compact_ref
     assert observed.x_expert_major.shape == (0,)
     np.testing.assert_allclose(np.asarray(observed.dx_expert_major), np.asarray(expected_dx), atol=1e-6, rtol=1e-6)
     np.testing.assert_allclose(np.asarray(observed.dw13), np.zeros_like(np.asarray(w13)), atol=0, rtol=0)
+
+
+def test_source_push_w13_backward_dw13_only_pallas_interpreter_matches_compact_reference():
+    config, host_inputs, route_table, x, w13 = _small_source_push_w13_case(block_m=1, use_exact_expert_major=True)
+    expert_base = jnp.asarray(host_inputs.expert_base, dtype=jnp.int32)
+    d_h_flat = _dirty_dh(config, host_inputs)
+    d_h_blocks = jnp.zeros(
+        (EP_SIZE, EXPERTS_PER_RANK, route_table.expert_capacity, 2 * INTERMEDIATE_DIM),
+        dtype=d_h_flat.dtype,
+    )
+    for expert in range(EXPERTS_PER_RANK):
+        d_h_blocks = d_h_blocks.at[:, expert].set(
+            source_push_mlp._source_push_mlp_h_flat_for_expert(route_table, expert_base, d_h_flat, expert)
+        )
+    expected = source_push_w13_backward_expert_blocks_reference(
+        x,
+        d_h_blocks,
+        w13,
+        host_inputs.plan,
+        jnp.asarray(host_inputs.send_meta, dtype=jnp.int32),
+        expert_base,
+        jnp.asarray(host_inputs.src_base_by_expert, dtype=jnp.int32),
+        use_exact_expert_major=True,
+    )
+
+    observed = _source_push_w13_backward_expert_blocks_dw13_only_pallas_mgpu(
+        x,
+        d_h_blocks,
+        w13,
+        route_table.source_rank_by_expert,
+        route_table.token_id_by_expert,
+        route_table.valid_by_expert,
+        block_sizes=SourcePushW13BackwardTiledBlockSizes(row_block=2, hidden_block=2, output_block=3),
+        interpret=True,
+    )
+
+    assert observed.x_expert_major.shape == (0,)
+    assert observed.dx_expert_major.shape == (0,)
+    np.testing.assert_allclose(np.asarray(observed.dw13), np.asarray(expected.dw13), atol=1e-6, rtol=1e-6)
+
+
+def test_source_push_w13_backward_prefilled_x_dw13_only_pallas_interpreter_matches_compact_reference():
+    config, host_inputs, route_table, x, w13 = _small_source_push_w13_case(block_m=1, use_exact_expert_major=True)
+    expert_base = jnp.asarray(host_inputs.expert_base, dtype=jnp.int32)
+    d_h_flat = _dirty_dh(config, host_inputs)
+    d_h_blocks = jnp.zeros(
+        (EP_SIZE, EXPERTS_PER_RANK, route_table.expert_capacity, 2 * INTERMEDIATE_DIM),
+        dtype=d_h_flat.dtype,
+    )
+    for expert in range(EXPERTS_PER_RANK):
+        d_h_blocks = d_h_blocks.at[:, expert].set(
+            source_push_mlp._source_push_mlp_h_flat_for_expert(route_table, expert_base, d_h_flat, expert)
+        )
+    expected = source_push_w13_backward_expert_blocks_reference(
+        x,
+        d_h_blocks,
+        w13,
+        host_inputs.plan,
+        jnp.asarray(host_inputs.send_meta, dtype=jnp.int32),
+        expert_base,
+        jnp.asarray(host_inputs.src_base_by_expert, dtype=jnp.int32),
+        use_exact_expert_major=True,
+    )
+    x_expert_major = _compact_x_from_route_table(x, route_table)
+
+    observed = _source_push_w13_backward_expert_blocks_prefilled_x_dw13_only_pallas_mgpu(
+        x_expert_major,
+        d_h_blocks,
+        w13,
+        route_table.valid_by_expert,
+        block_sizes=SourcePushW13BackwardTiledBlockSizes(row_block=2, hidden_block=2, output_block=3),
+        interpret=True,
+    )
+
+    assert observed.x_expert_major.shape == (0,)
+    assert observed.dx_expert_major.shape == (0,)
+    np.testing.assert_allclose(np.asarray(observed.dw13), np.asarray(expected.dw13), atol=1e-6, rtol=1e-6)
+
+
+def test_source_push_w13_backward_dw13_only_exact_flat_pallas_interpreter_matches_compact_reference():
+    config, host_inputs, route_table, x, w13 = _small_source_push_w13_case(block_m=1, use_exact_expert_major=True)
+    expert_base = jnp.asarray(host_inputs.expert_base, dtype=jnp.int32)
+    d_h_flat = _dirty_dh(config, host_inputs)
+    d_h_blocks = jnp.zeros(
+        (EP_SIZE, EXPERTS_PER_RANK, route_table.expert_capacity, 2 * INTERMEDIATE_DIM),
+        dtype=d_h_flat.dtype,
+    )
+    for expert in range(EXPERTS_PER_RANK):
+        d_h_blocks = d_h_blocks.at[:, expert].set(
+            source_push_mlp._source_push_mlp_h_flat_for_expert(route_table, expert_base, d_h_flat, expert)
+        )
+    expected = source_push_w13_backward_expert_blocks_reference(
+        x,
+        d_h_blocks,
+        w13,
+        host_inputs.plan,
+        jnp.asarray(host_inputs.send_meta, dtype=jnp.int32),
+        expert_base,
+        jnp.asarray(host_inputs.src_base_by_expert, dtype=jnp.int32),
+        use_exact_expert_major=True,
+    )
+
+    observed = _source_push_w13_backward_expert_blocks_dw13_only_exact_flat_pallas_mgpu(
+        x,
+        d_h_blocks,
+        w13,
+        route_table.source_rank_by_expert,
+        route_table.token_id_by_expert,
+        route_table.valid_by_expert,
+        block_sizes=SourcePushW13BackwardTiledBlockSizes(row_block=2, hidden_block=2, output_block=3),
+        interpret=True,
+    )
+
+    assert observed.x_expert_major.shape == (0,)
+    assert observed.dx_expert_major.shape == (0,)
+    np.testing.assert_allclose(np.asarray(observed.dw13), np.asarray(expected.dw13), atol=1e-6, rtol=1e-6)
+
+
+def test_source_push_w13_backward_dw13_only_xla_matches_compact_reference():
+    config, host_inputs, route_table, x, w13 = _small_source_push_w13_case(block_m=1, use_exact_expert_major=True)
+    expert_base = jnp.asarray(host_inputs.expert_base, dtype=jnp.int32)
+    d_h_flat = _dirty_dh(config, host_inputs)
+    d_h_blocks = jnp.zeros(
+        (EP_SIZE, EXPERTS_PER_RANK, route_table.expert_capacity, 2 * INTERMEDIATE_DIM),
+        dtype=d_h_flat.dtype,
+    )
+    for expert in range(EXPERTS_PER_RANK):
+        d_h_blocks = d_h_blocks.at[:, expert].set(
+            source_push_mlp._source_push_mlp_h_flat_for_expert(route_table, expert_base, d_h_flat, expert)
+        )
+    expected = source_push_w13_backward_expert_blocks_reference(
+        x,
+        d_h_blocks,
+        w13,
+        host_inputs.plan,
+        jnp.asarray(host_inputs.send_meta, dtype=jnp.int32),
+        expert_base,
+        jnp.asarray(host_inputs.src_base_by_expert, dtype=jnp.int32),
+        use_exact_expert_major=True,
+    )
+
+    observed = source_push_w13_backward_expert_blocks_dw13_only_xla(
+        x,
+        d_h_blocks,
+        w13,
+        route_table.source_rank_by_expert,
+        route_table.token_id_by_expert,
+        route_table.valid_by_expert,
+        block_sizes=SourcePushW13BackwardTiledBlockSizes(row_block=2, hidden_block=2, output_block=3),
+    )
+
+    assert observed.x_expert_major.shape == (0,)
+    assert observed.dx_expert_major.shape == (0,)
+    np.testing.assert_allclose(np.asarray(observed.dw13), np.asarray(expected.dw13), atol=1e-6, rtol=1e-6)
+
+
+def test_source_push_w13_local_swiglu_dw13_reference_matches_materialized_dz():
+    config, _host_inputs, route_table, x, _w13 = _small_source_push_w13_case(block_m=1, use_exact_expert_major=True)
+    x_expert_major = _compact_x_from_route_table(x, route_table)
+    d_activation, z = _compact_swiglu_inputs(config, route_table)
+    valid_f = route_table.valid_by_expert.astype(jnp.float32)
+
+    gate, up = jnp.split(z.astype(jnp.float32) * valid_f[..., None], 2, axis=-1)
+    d_activation_clean = d_activation.astype(jnp.float32) * valid_f[..., None]
+    silu_gate = jax.nn.silu(gate)
+    sigmoid_gate = jax.nn.sigmoid(gate)
+    d_silu_gate = sigmoid_gate * (1.0 + gate * (1.0 - sigmoid_gate))
+    d_z = jnp.concatenate([d_activation_clean * up * d_silu_gate, d_activation_clean * silu_gate], axis=-1)
+    expected = jnp.einsum("dech,deco->deho", x_expert_major.astype(jnp.float32), d_z)
+
+    observed = source_push_w13_dw13_local_swiglu_reference(
+        x_expert_major + (~route_table.valid_by_expert)[..., None].astype(jnp.float32) * 50.0,
+        d_activation,
+        z,
+        route_table.valid_by_expert,
+    )
+
+    np.testing.assert_allclose(np.asarray(observed), np.asarray(expected), atol=1e-6, rtol=1e-6)
+
+
+def test_source_push_w13_local_linear_dw13_reference_matches_materialized_diagnostic_dz():
+    config, _host_inputs, route_table, x, _w13 = _small_source_push_w13_case(block_m=1, use_exact_expert_major=True)
+    x_expert_major = _compact_x_from_route_table(x, route_table)
+    d_activation, z = _compact_swiglu_inputs(config, route_table)
+    valid_f = route_table.valid_by_expert.astype(jnp.float32)
+
+    gate, up = jnp.split(z.astype(jnp.float32) * valid_f[..., None], 2, axis=-1)
+    d_activation_clean = d_activation.astype(jnp.float32) * valid_f[..., None]
+    d_z = jnp.concatenate([d_activation_clean * up, d_activation_clean * gate], axis=-1)
+    expected = jnp.einsum("dech,deco->deho", x_expert_major.astype(jnp.float32), d_z)
+
+    observed = source_push_w13_dw13_local_linear_reference(
+        x_expert_major + (~route_table.valid_by_expert)[..., None].astype(jnp.float32) * 50.0,
+        d_activation,
+        z,
+        route_table.valid_by_expert,
+    )
+
+    np.testing.assert_allclose(np.asarray(observed), np.asarray(expected), atol=1e-6, rtol=1e-6)
+
+
+def test_source_push_w13_local_swiglu_dw13_masks_invalid_rows_before_derivative():
+    config, _host_inputs, route_table, x, _w13 = _small_source_push_w13_case(block_m=1, use_exact_expert_major=True)
+    x_expert_major = _compact_x_from_route_table(x, route_table)
+    d_activation, z = _compact_swiglu_inputs(config, route_table)
+    valid = route_table.valid_by_expert
+    invalid = ~valid
+    expected = source_push_w13_dw13_local_swiglu_reference(x_expert_major, d_activation, z, valid)
+    dirty_x = jnp.where(invalid[..., None], jnp.full_like(x_expert_major, jnp.nan), x_expert_major)
+    dirty_d_activation = jnp.where(invalid[..., None], jnp.full_like(d_activation, jnp.nan), d_activation)
+    dirty_z = jnp.where(invalid[..., None], jnp.full_like(z, jnp.nan), z)
+
+    observed = _source_push_w13_backward_expert_blocks_local_swiglu_dw13_only_pallas_mgpu(
+        dirty_x,
+        dirty_d_activation,
+        dirty_z,
+        valid,
+        block_sizes=SourcePushW13BackwardTiledBlockSizes(row_block=2, hidden_block=2, output_block=3),
+        interpret=True,
+    )
+
+    assert observed.x_expert_major.shape == (0,)
+    assert observed.dx_expert_major.shape == (0,)
+    assert not np.isnan(np.asarray(observed.dw13)).any()
+    np.testing.assert_allclose(np.asarray(observed.dw13), np.asarray(expected), atol=1e-6, rtol=1e-6)
+
+
+def test_source_push_w13_local_linear_dw13_pallas_interpreter_matches_reference():
+    config, _host_inputs, route_table, x, _w13 = _small_source_push_w13_case(block_m=1, use_exact_expert_major=True)
+    x_expert_major = _compact_x_from_route_table(x, route_table)
+    d_activation, z = _compact_swiglu_inputs(config, route_table)
+    expected = source_push_w13_dw13_local_linear_reference(
+        x_expert_major,
+        d_activation,
+        z,
+        route_table.valid_by_expert,
+    )
+
+    observed = _source_push_w13_backward_expert_blocks_local_linear_dw13_only_pallas_mgpu(
+        x_expert_major,
+        d_activation,
+        z,
+        route_table.valid_by_expert,
+        block_sizes=SourcePushW13BackwardTiledBlockSizes(row_block=2, hidden_block=2, output_block=3),
+        interpret=True,
+    )
+
+    assert observed.x_expert_major.shape == (0,)
+    assert observed.dx_expert_major.shape == (0,)
+    np.testing.assert_allclose(np.asarray(observed.dw13), np.asarray(expected), atol=1e-6, rtol=1e-6)
+
+
+@pytest.mark.parametrize(
+    ("branch", "wrapper"),
+    [
+        ("gate", _source_push_w13_backward_expert_blocks_local_swiglu_gate_dw13_only_pallas_mgpu),
+        ("up", _source_push_w13_backward_expert_blocks_local_swiglu_up_dw13_only_pallas_mgpu),
+    ],
+)
+def test_source_push_w13_local_swiglu_branch_dw13_pallas_interpreter_matches_reference(branch, wrapper):
+    config, _host_inputs, route_table, x, _w13 = _small_source_push_w13_case(block_m=1, use_exact_expert_major=True)
+    x_expert_major = _compact_x_from_route_table(x, route_table)
+    d_activation, z = _compact_swiglu_inputs(config, route_table)
+    expected = source_push_w13_dw13_local_swiglu_branch_reference(
+        x_expert_major,
+        d_activation,
+        z,
+        route_table.valid_by_expert,
+        branch=branch,
+    )
+    full_expected = source_push_w13_dw13_local_swiglu_reference(
+        x_expert_major,
+        d_activation,
+        z,
+        route_table.valid_by_expert,
+    )
+    if branch == "gate":
+        expected_slice = full_expected[..., :INTERMEDIATE_DIM]
+    else:
+        expected_slice = full_expected[..., INTERMEDIATE_DIM:]
+
+    observed = wrapper(
+        x_expert_major,
+        d_activation,
+        z,
+        route_table.valid_by_expert,
+        block_sizes=SourcePushW13BackwardTiledBlockSizes(row_block=2, hidden_block=2, output_block=3),
+        interpret=True,
+    )
+
+    assert observed.x_expert_major.shape == (0,)
+    assert observed.dx_expert_major.shape == (0,)
+    assert observed.dw13.shape[-1] == INTERMEDIATE_DIM
+    np.testing.assert_allclose(np.asarray(expected), np.asarray(expected_slice), atol=1e-6, rtol=1e-6)
+    np.testing.assert_allclose(np.asarray(observed.dw13), np.asarray(expected), atol=1e-6, rtol=1e-6)
+
+
+def test_source_push_w13_local_swiglu_dw13_api_rejects_full_dz_input():
+    config, _host_inputs, route_table, x, _w13 = _small_source_push_w13_case(block_m=1, use_exact_expert_major=True)
+    x_expert_major = _compact_x_from_route_table(x, route_table)
+    _d_activation, z = _compact_swiglu_inputs(config, route_table)
+    full_dz = jnp.zeros_like(z)
+
+    with pytest.raises(ValueError, match=r"z output dim .* must be 2 \* d_activation dim"):
+        source_push_w13_dw13_local_swiglu_reference(
+            x_expert_major,
+            full_dz,
+            z,
+            route_table.valid_by_expert,
+        )
+
+
+def test_source_push_w13_local_swiglu_dw13_pallas_interpreter_matches_reference():
+    config, _host_inputs, route_table, x, _w13 = _small_source_push_w13_case(block_m=1, use_exact_expert_major=True)
+    x_expert_major = _compact_x_from_route_table(x, route_table)
+    d_activation, z = _compact_swiglu_inputs(config, route_table)
+    expected = source_push_w13_dw13_local_swiglu_reference(
+        x_expert_major,
+        d_activation,
+        z,
+        route_table.valid_by_expert,
+    )
+
+    observed = _source_push_w13_backward_expert_blocks_local_swiglu_dw13_only_pallas_mgpu(
+        x_expert_major,
+        d_activation,
+        z,
+        route_table.valid_by_expert,
+        block_sizes=SourcePushW13BackwardTiledBlockSizes(row_block=2, hidden_block=2, output_block=3),
+        interpret=True,
+    )
+
+    assert observed.x_expert_major.shape == (0,)
+    assert observed.dx_expert_major.shape == (0,)
+    np.testing.assert_allclose(np.asarray(observed.dw13), np.asarray(expected), atol=1e-6, rtol=1e-6)
+
+
+def test_source_push_w13_local_swiglu_split_dw13_pallas_interpreter_matches_reference():
+    config, _host_inputs, route_table, x, _w13 = _small_source_push_w13_case(block_m=1, use_exact_expert_major=True)
+    x_expert_major = _compact_x_from_route_table(x, route_table)
+    d_activation, z = _compact_swiglu_inputs(config, route_table)
+    expected = source_push_w13_dw13_local_swiglu_reference(
+        x_expert_major,
+        d_activation,
+        z,
+        route_table.valid_by_expert,
+    )
+
+    observed = _source_push_w13_backward_expert_blocks_local_swiglu_split_dw13_only_pallas_mgpu(
+        x_expert_major,
+        d_activation,
+        z,
+        route_table.valid_by_expert,
+        block_sizes=SourcePushW13BackwardTiledBlockSizes(row_block=2, hidden_block=2, output_block=3),
+        interpret=True,
+    )
+
+    assert observed.x_expert_major.shape == (0,)
+    assert observed.dx_expert_major.shape == (0,)
+    np.testing.assert_allclose(np.asarray(observed.dw13), np.asarray(expected), atol=1e-6, rtol=1e-6)
+
+
+def test_source_push_w13_local_swiglu_dw13_xla_matches_reference():
+    config, _host_inputs, route_table, x, _w13 = _small_source_push_w13_case(block_m=1, use_exact_expert_major=True)
+    x_expert_major = _compact_x_from_route_table(x, route_table)
+    d_activation, z = _compact_swiglu_inputs(config, route_table)
+    expected = source_push_w13_dw13_local_swiglu_reference(
+        x_expert_major,
+        d_activation,
+        z,
+        route_table.valid_by_expert,
+    )
+
+    observed = source_push_w13_backward_expert_blocks_local_swiglu_dw13_only_xla(
+        x_expert_major,
+        d_activation,
+        z,
+        route_table.valid_by_expert,
+    )
+
+    assert observed.x_expert_major.shape == (0,)
+    assert observed.dx_expert_major.shape == (0,)
+    np.testing.assert_allclose(np.asarray(observed.dw13), np.asarray(expected), atol=1e-6, rtol=1e-6)
+
+
+def test_source_push_w13_local_swiglu_persistent_dw13_interpreter_matches_reference_with_finite_invalid_rows():
+    config, _host_inputs, route_table, x, _w13 = _small_source_push_w13_case(block_m=1, use_exact_expert_major=True)
+    x_expert_major = _compact_x_from_route_table(x, route_table)
+    d_activation, z = _compact_swiglu_inputs(config, route_table)
+    valid = route_table.valid_by_expert
+    invalid = ~valid
+    expected = source_push_w13_dw13_local_swiglu_reference(x_expert_major, d_activation, z, valid)
+    dirty_x = jnp.where(invalid[..., None], jnp.zeros_like(x_expert_major), x_expert_major)
+    dirty_d_activation = jnp.where(invalid[..., None], d_activation + 50.0, d_activation)
+    dirty_z = jnp.where(invalid[..., None], z + 50.0, z)
+
+    observed = _source_push_w13_backward_expert_blocks_local_swiglu_persistent_dw13_only_pallas_mgpu(
+        dirty_x,
+        dirty_d_activation,
+        dirty_z,
+        valid,
+        block_sizes=SourcePushW13BackwardTiledBlockSizes(row_block=2, hidden_block=2, output_block=3),
+        interpret=True,
+    )
+
+    assert observed.x_expert_major.shape == (0,)
+    assert observed.dx_expert_major.shape == (0,)
+    assert not np.isnan(np.asarray(observed.dw13)).any()
+    np.testing.assert_allclose(np.asarray(observed.dw13), np.asarray(expected), atol=1e-6, rtol=1e-6)
+
+
+def test_source_push_w13_backward_source_padded_dw13_only_xla_matches_compact_reference():
+    config, host_inputs, route_table, x, w13 = _small_source_push_w13_case(block_m=2, use_exact_expert_major=False)
+    expert_base = jnp.asarray(host_inputs.expert_base, dtype=jnp.int32)
+    d_h_flat = _dirty_dh(config, host_inputs)
+    d_h_blocks = jnp.zeros(
+        (EP_SIZE, EXPERTS_PER_RANK, route_table.expert_capacity, 2 * INTERMEDIATE_DIM),
+        dtype=d_h_flat.dtype,
+    )
+    for expert in range(EXPERTS_PER_RANK):
+        d_h_blocks = d_h_blocks.at[:, expert].set(
+            source_push_mlp._source_push_mlp_h_flat_for_expert(route_table, expert_base, d_h_flat, expert)
+        )
+    expected = source_push_w13_backward_expert_blocks_reference(
+        x,
+        d_h_blocks,
+        w13,
+        host_inputs.plan,
+        jnp.asarray(host_inputs.send_meta, dtype=jnp.int32),
+        expert_base,
+        jnp.asarray(host_inputs.src_base_by_expert, dtype=jnp.int32),
+    )
+
+    observed = source_push_w13_backward_expert_blocks_source_padded_dw13_only_xla(
+        x,
+        d_h_blocks,
+        route_table.source_rank_by_expert,
+        route_table.token_id_by_expert,
+        route_table.valid_by_expert,
+        host_inputs.src_base_by_expert,
+        block_sizes=SourcePushW13BackwardTiledBlockSizes(row_block=2, hidden_block=2, output_block=3),
+    )
+
+    assert observed.x_expert_major.shape == (0,)
+    assert observed.dx_expert_major.shape == (0,)
+    np.testing.assert_allclose(np.asarray(observed.dw13), np.asarray(expected.dw13), atol=1e-6, rtol=1e-6)
+
+
+def test_source_push_w13_backward_source_padded_dw13_pallas_interpreter_matches_xla_reference():
+    config, host_inputs, route_table, x, _w13 = _small_source_push_w13_case(block_m=2, use_exact_expert_major=False)
+    expert_base = jnp.asarray(host_inputs.expert_base, dtype=jnp.int32)
+    d_h_flat = _dirty_dh(config, host_inputs)
+    d_h_blocks = jnp.zeros(
+        (EP_SIZE, EXPERTS_PER_RANK, route_table.expert_capacity, 2 * INTERMEDIATE_DIM),
+        dtype=d_h_flat.dtype,
+    )
+    for expert in range(EXPERTS_PER_RANK):
+        d_h_blocks = d_h_blocks.at[:, expert].set(
+            source_push_mlp._source_push_mlp_h_flat_for_expert(route_table, expert_base, d_h_flat, expert)
+        )
+    block_sizes = SourcePushW13BackwardTiledBlockSizes(row_block=2, hidden_block=2, output_block=3)
+
+    expected = source_push_w13_backward_expert_blocks_source_padded_dw13_only_xla(
+        x,
+        d_h_blocks,
+        route_table.source_rank_by_expert,
+        route_table.token_id_by_expert,
+        route_table.valid_by_expert,
+        host_inputs.src_base_by_expert,
+        block_sizes=block_sizes,
+    )
+    partials = _source_push_w13_dw13_source_padded_partials_pallas_mgpu(
+        x,
+        d_h_blocks,
+        route_table.source_rank_by_expert,
+        route_table.token_id_by_expert,
+        route_table.valid_by_expert,
+        host_inputs.src_base_by_expert,
+        block_sizes=block_sizes,
+        interpret=True,
+    )
+    observed_dw13 = jnp.sum(partials, axis=0)
+
+    assert partials.shape == (EP_SIZE, EP_SIZE, EXPERTS_PER_RANK, HIDDEN_DIM, 2 * INTERMEDIATE_DIM)
+    np.testing.assert_allclose(np.asarray(observed_dw13), np.asarray(expected.dw13), atol=1e-6, rtol=1e-6)
 
 
 def test_source_push_w13_backward_dx_only_pads_unaligned_capacity():
@@ -482,6 +1105,7 @@ def test_source_push_w13_backward_compact_pallas_interpreter_matches_compact_ref
         route_table.valid_by_expert,
         block_sizes=block_sizes,
         interpret=True,
+        return_x_expert_major=True,
     )
 
     np.testing.assert_allclose(
@@ -490,6 +1114,96 @@ def test_source_push_w13_backward_compact_pallas_interpreter_matches_compact_ref
         atol=0,
         rtol=0,
     )
+    np.testing.assert_allclose(
+        np.asarray(observed.dx_expert_major),
+        np.asarray(expected.dx_expert_major),
+        atol=1e-6,
+        rtol=1e-6,
+    )
+    np.testing.assert_allclose(np.asarray(observed.dw13), np.asarray(expected.dw13), atol=1e-6, rtol=1e-6)
+
+
+def test_source_push_w13_backward_compact_pallas_default_avoids_x_output():
+    config, host_inputs, route_table, x, w13 = _small_source_push_w13_case(block_m=1, use_exact_expert_major=True)
+    expert_base = jnp.asarray(host_inputs.expert_base, dtype=jnp.int32)
+    d_h_flat = _dirty_dh(config, host_inputs)
+    d_h_blocks = jnp.zeros(
+        (EP_SIZE, EXPERTS_PER_RANK, route_table.expert_capacity, 2 * INTERMEDIATE_DIM),
+        dtype=d_h_flat.dtype,
+    )
+    for expert in range(EXPERTS_PER_RANK):
+        d_h_blocks = d_h_blocks.at[:, expert].set(
+            source_push_mlp._source_push_mlp_h_flat_for_expert(route_table, expert_base, d_h_flat, expert)
+        )
+    block_sizes = SourcePushW13BackwardTiledBlockSizes(row_block=2, hidden_block=2, output_block=3)
+
+    expected = source_push_w13_backward_expert_blocks_reference(
+        x,
+        d_h_blocks,
+        w13,
+        host_inputs.plan,
+        jnp.asarray(host_inputs.send_meta, dtype=jnp.int32),
+        expert_base,
+        jnp.asarray(host_inputs.src_base_by_expert, dtype=jnp.int32),
+        use_exact_expert_major=True,
+    )
+    observed = _source_push_w13_backward_expert_blocks_pallas_mgpu(
+        x,
+        d_h_blocks,
+        w13,
+        route_table.source_rank_by_expert,
+        route_table.token_id_by_expert,
+        route_table.valid_by_expert,
+        block_sizes=block_sizes,
+        interpret=True,
+    )
+
+    assert observed.x_expert_major.shape == (0,)
+    np.testing.assert_allclose(
+        np.asarray(observed.dx_expert_major),
+        np.asarray(expected.dx_expert_major),
+        atol=1e-6,
+        rtol=1e-6,
+    )
+    np.testing.assert_allclose(np.asarray(observed.dw13), np.asarray(expected.dw13), atol=1e-6, rtol=1e-6)
+
+
+def test_source_push_w13_backward_compact_dx_source_gather_dw13_matches_reference_without_x_materialization():
+    config, host_inputs, route_table, x, w13 = _small_source_push_w13_case(block_m=1, use_exact_expert_major=True)
+    expert_base = jnp.asarray(host_inputs.expert_base, dtype=jnp.int32)
+    d_h_flat = _dirty_dh(config, host_inputs)
+    d_h_blocks = jnp.zeros(
+        (EP_SIZE, EXPERTS_PER_RANK, route_table.expert_capacity, 2 * INTERMEDIATE_DIM),
+        dtype=d_h_flat.dtype,
+    )
+    for expert in range(EXPERTS_PER_RANK):
+        d_h_blocks = d_h_blocks.at[:, expert].set(
+            source_push_mlp._source_push_mlp_h_flat_for_expert(route_table, expert_base, d_h_flat, expert)
+        )
+    block_sizes = SourcePushW13BackwardTiledBlockSizes(row_block=2, hidden_block=2, output_block=3)
+
+    expected = source_push_w13_backward_expert_blocks_reference(
+        x,
+        d_h_blocks,
+        w13,
+        host_inputs.plan,
+        jnp.asarray(host_inputs.send_meta, dtype=jnp.int32),
+        expert_base,
+        jnp.asarray(host_inputs.src_base_by_expert, dtype=jnp.int32),
+        use_exact_expert_major=True,
+    )
+    observed = _source_push_w13_backward_expert_blocks_compact_dx_source_gather_dw13(
+        x,
+        d_h_blocks,
+        w13,
+        route_table.source_rank_by_expert,
+        route_table.token_id_by_expert,
+        route_table.valid_by_expert,
+        block_sizes=block_sizes,
+        interpret=True,
+    )
+
+    assert observed.x_expert_major.shape == (0,)
     np.testing.assert_allclose(
         np.asarray(observed.dx_expert_major),
         np.asarray(expected.dx_expert_major),
@@ -712,7 +1426,7 @@ def test_source_push_w13_backward_pallas_interpreter_matches_reference(
         jnp.asarray(host_inputs.expert_base, dtype=jnp.int32),
         jnp.asarray(host_inputs.src_base_by_expert, dtype=jnp.int32),
         use_exact_expert_major=use_exact_expert_major,
-        block_sizes=SourcePushXToW13RowsPallasBlockSizes(hidden_block=1),
+        block_sizes=SourcePushXToW13RowsPallasBlockSizes(row_block=1, hidden_block=1),
         interpret=True,
     )
 
@@ -788,6 +1502,14 @@ def test_source_push_x_to_w13_rows_reference_uses_forward_flat_row_layout():
         )
 
 
+def test_source_push_x_to_w13_rows_pallas_inputs_are_gmem_refs():
+    in_specs, out_spec = _source_push_x_to_w13_rows_block_specs(row_block=128, hidden_block=8)
+
+    assert all(spec.memory_space == mgpu.GMEM for spec in in_specs)
+    assert out_spec.memory_space is None
+    assert out_spec.block_shape == (None, 128, 8)
+
+
 @pytest.mark.parametrize(
     ("block_m", "use_exact_expert_major"),
     [
@@ -822,7 +1544,7 @@ def test_source_push_x_to_w13_rows_pallas_interpreter_matches_reference(
         hidden_rows_per_rank=config.hidden_rows_per_rank,
         use_exact_expert_major=use_exact_expert_major,
         implementation=SOURCE_PUSH_X_TO_W13_ROWS_IMPLEMENTATION_PALLAS_MGPU,
-        block_sizes=SourcePushXToW13RowsPallasBlockSizes(hidden_block=1),
+        block_sizes=SourcePushXToW13RowsPallasBlockSizes(row_block=1, hidden_block=1),
         interpret=True,
     )
     live_mask = _flat_live_row_mask(config, host_inputs)

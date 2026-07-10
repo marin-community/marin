@@ -16,19 +16,25 @@ from jaxtyping import Array, Bool, Float, Int
 
 from levanter.grug._moe.source_push_backward_dy_route import (
     SOURCE_PUSH_DY_ROUTE_IMPLEMENTATION_REFERENCE,
+    SOURCE_PUSH_DY_ROUTE_IMPLEMENTATION_SOURCE_PUSH_JAX,
     _source_push_backward_dy_to_expert_major,
+    _source_push_backward_dy_to_expert_major_from_plan_source_push_jax,
     _source_push_backward_dy_to_h_rows,
 )
 from levanter.grug._moe.source_push_backward_return import (
     SOURCE_PUSH_BACKWARD_RETURN_IMPLEMENTATION_JAX,
     SOURCE_PUSH_BACKWARD_RETURN_IMPLEMENTATION_PALLAS_MGPU,
+    SourcePushBackwardCompactRouteIndices,
     SourcePushBackwardFlatRouteIndices,
     source_push_backward_return,
     source_push_backward_return_flat,
+    source_push_backward_return_route_indices_jax,
 )
 from levanter.grug._moe.source_push_backward_w13 import (
+    SOURCE_PUSH_W13_BACKWARD_IMPLEMENTATION_PALLAS_MGPU_COMPACT,
     SOURCE_PUSH_W13_BACKWARD_IMPLEMENTATION_REFERENCE,
     SOURCE_PUSH_W13_BACKWARD_IMPLEMENTATION_TILED,
+    _source_push_w13_backward_expert_blocks_pallas_mgpu,
     source_push_w13_backward,
     source_push_w13_backward_expert_blocks_reference,
     source_push_w13_backward_expert_blocks_tiled_reference,
@@ -38,7 +44,9 @@ from levanter.grug._moe.source_push_backward_w2 import (
     SOURCE_PUSH_W2_MATMUL_BACKWARD_IMPLEMENTATION_PALLAS_MGPU,
     SOURCE_PUSH_W2_SWIGLU_BACKWARD_IMPLEMENTATION_REFERENCE,
     _source_push_w2_backward_expert_blocks,
+    _source_push_w2_backward_expert_blocks_from_source_dy_reference,
     _source_push_w2_backward_from_flat_h,
+    _source_push_w2_valid_blocks_sharded,
 )
 from levanter.grug._moe.source_push_combine import _make_route_inverse
 from levanter.grug._moe.source_push_forward import (
@@ -60,7 +68,9 @@ from levanter.grug._moe.source_push_plan import (
     SOURCE_PUSH_META_VALID_ROWS,
     SourcePushPlan,
     _source_push_out_sharding,
+    _with_source_push_sharding,
     build_source_push_plan,
+    source_push_route_rows_host_from_plan,
     source_push_source_padded_row_bases,
 )
 
@@ -118,6 +128,9 @@ class _SourcePushMlpRouteTableHostData(NamedTuple):
     source_rank_by_expert: np.ndarray
     token_id_by_expert: np.ndarray
     route_slot_by_expert: np.ndarray
+    dst_ordinal_by_expert: np.ndarray
+    entry_by_expert: np.ndarray
+    row_in_entry_by_expert: np.ndarray
     valid_by_expert: np.ndarray
     ep_size: int
     experts_per_rank: int
@@ -193,6 +206,9 @@ class SourcePushMlpRouteTable:
     source_rank_by_expert: Int[Array, "Dst E C"]
     token_id_by_expert: Int[Array, "Dst E C"]
     route_slot_by_expert: Int[Array, "Dst E C"]
+    dst_ordinal_by_expert: Int[Array, "Dst E C"]
+    entry_by_expert: Int[Array, "Dst E C"]
+    row_in_entry_by_expert: Int[Array, "Dst E C"]
     valid_by_expert: Bool[Array, "Dst E C"]
     ep_size: int = field(metadata={"static": True})
     experts_per_rank: int = field(metadata={"static": True})
@@ -251,6 +267,9 @@ def source_push_mlp_route_table_from_plan(
         source_rank_by_expert=jnp.asarray(host_data.source_rank_by_expert, dtype=jnp.int32),
         token_id_by_expert=jnp.asarray(host_data.token_id_by_expert, dtype=jnp.int32),
         route_slot_by_expert=jnp.asarray(host_data.route_slot_by_expert, dtype=jnp.int32),
+        dst_ordinal_by_expert=jnp.asarray(host_data.dst_ordinal_by_expert, dtype=jnp.int32),
+        entry_by_expert=jnp.asarray(host_data.entry_by_expert, dtype=jnp.int32),
+        row_in_entry_by_expert=jnp.asarray(host_data.row_in_entry_by_expert, dtype=jnp.int32),
         valid_by_expert=jnp.asarray(host_data.valid_by_expert, dtype=jnp.bool_),
         ep_size=host_data.ep_size,
         experts_per_rank=host_data.experts_per_rank,
@@ -265,55 +284,39 @@ def _source_push_mlp_route_table_host_data_from_plan(
     *,
     src_base_by_expert: Int[Array, "Dst S E"] | np.ndarray | None = None,
 ) -> _SourcePushMlpRouteTableHostData:
-    assignment_ids = np.asarray(jax.device_get(plan.assignment_ids), dtype=np.int32)
-    valid_mask = np.asarray(jax.device_get(plan.valid_mask), dtype=np.bool_)
-    token_ids = np.asarray(jax.device_get(plan.token_ids), dtype=np.int32)
-    route_slots = np.asarray(jax.device_get(plan.route_slots), dtype=np.int32)
-    local_experts = np.asarray(jax.device_get(plan.local_experts), dtype=np.int32)
-    local_row_starts = np.asarray(jax.device_get(plan.local_row_starts), dtype=np.int32)
+    route_rows = source_push_route_rows_host_from_plan(plan, src_base_by_expert=src_base_by_expert)
     if src_base_by_expert is None:
         src_base_host = np.asarray(jax.device_get(plan.src_base_by_expert), dtype=np.int32)
     else:
         src_base_host = np.asarray(jax.device_get(src_base_by_expert), dtype=np.int32)
 
-    source_ranks = []
-    token_list = []
-    slot_list = []
-    destination_ranks = []
-    expert_list = []
-    row_list = []
-    ep_size = assignment_ids.shape[0]
+    valid_mask = route_rows.valid
+    source_ranks = route_rows.src[valid_mask]
+    token_list = route_rows.token_id[valid_mask]
+    slot_list = route_rows.route_slot[valid_mask]
+    destination_ranks = route_rows.dst[valid_mask]
+    expert_list = route_rows.local_expert[valid_mask]
+    row_list = route_rows.expert_row[valid_mask]
+    ep_size = valid_mask.shape[0]
     experts_per_rank = src_base_host.shape[-1]
-    for src in range(ep_size):
-        for dst_ordinal in range(assignment_ids.shape[1]):
-            dst = (src + dst_ordinal) % ep_size
-            for entry in range(assignment_ids.shape[2]):
-                expert = int(local_experts[src, dst_ordinal, entry])
-                if expert < 0:
-                    continue
-                base_row = int(src_base_host[dst, src, expert]) + int(local_row_starts[src, dst_ordinal, entry])
-                for row in range(assignment_ids.shape[3]):
-                    if not valid_mask[src, dst_ordinal, entry, row]:
-                        continue
-                    source_ranks.append(src)
-                    token_list.append(int(token_ids[src, dst_ordinal, entry, row]))
-                    slot_list.append(int(route_slots[src, dst_ordinal, entry, row]))
-                    destination_ranks.append(dst)
-                    expert_list.append(expert)
-                    row_list.append(base_row + row)
-
-    expert_capacity = max(row_list) + 1 if row_list else 0
+    expert_capacity = int(np.max(row_list)) + 1 if row_list.size else 0
     source_rank_by_expert = np.full((ep_size, experts_per_rank, expert_capacity), -1, dtype=np.int32)
     token_id_by_expert = np.full_like(source_rank_by_expert, -1)
     route_slot_by_expert = np.full_like(source_rank_by_expert, -1)
+    dst_ordinal_by_expert = np.full_like(source_rank_by_expert, -1)
+    entry_by_expert = np.full_like(source_rank_by_expert, -1)
+    row_in_entry_by_expert = np.full_like(source_rank_by_expert, -1)
     valid_by_expert = np.zeros_like(source_rank_by_expert, dtype=np.bool_)
-    for route in range(len(source_ranks)):
-        dst = destination_ranks[route]
-        expert = expert_list[route]
-        row = row_list[route]
-        source_rank_by_expert[dst, expert, row] = source_ranks[route]
-        token_id_by_expert[dst, expert, row] = token_list[route]
-        route_slot_by_expert[dst, expert, row] = slot_list[route]
+    for src, dst_ord, entry, row_in_entry in np.argwhere(valid_mask):
+        dst = int(route_rows.dst[src, dst_ord, entry, row_in_entry])
+        expert = int(route_rows.local_expert[src, dst_ord, entry, row_in_entry])
+        row = int(route_rows.expert_row[src, dst_ord, entry, row_in_entry])
+        source_rank_by_expert[dst, expert, row] = int(route_rows.src[src, dst_ord, entry, row_in_entry])
+        token_id_by_expert[dst, expert, row] = int(route_rows.token_id[src, dst_ord, entry, row_in_entry])
+        route_slot_by_expert[dst, expert, row] = int(route_rows.route_slot[src, dst_ord, entry, row_in_entry])
+        dst_ordinal_by_expert[dst, expert, row] = int(dst_ord)
+        entry_by_expert[dst, expert, row] = int(entry)
+        row_in_entry_by_expert[dst, expert, row] = int(row_in_entry)
         valid_by_expert[dst, expert, row] = True
 
     return _SourcePushMlpRouteTableHostData(
@@ -326,6 +329,9 @@ def _source_push_mlp_route_table_host_data_from_plan(
         source_rank_by_expert=source_rank_by_expert,
         token_id_by_expert=token_id_by_expert,
         route_slot_by_expert=route_slot_by_expert,
+        dst_ordinal_by_expert=dst_ordinal_by_expert,
+        entry_by_expert=entry_by_expert,
+        row_in_entry_by_expert=row_in_entry_by_expert,
         valid_by_expert=valid_by_expert,
         ep_size=ep_size,
         experts_per_rank=experts_per_rank,
@@ -509,6 +515,13 @@ def source_push_moe_mlp_from_plan(
     *,
     implementation: SourcePushMlpImplementation = SOURCE_PUSH_MLP_IMPLEMENTATION_PALLAS_MGPU,
     execution_mode: str = FORWARD_EXECUTION_STAGED_HOST_SYNC,
+    backward_dy_route_implementation: str | None = None,
+    backward_w2_implementation: str | None = None,
+    backward_w2_matmul_implementation: str | None = None,
+    backward_w2_swiglu_implementation: str | None = None,
+    backward_w13_implementation: str | None = None,
+    backward_return_implementation: str | None = None,
+    return_route_indices: SourcePushBackwardCompactRouteIndices | None = None,
     mesh: Mesh | None = None,
 ) -> tuple[Float[Array, "S T D"], Int[Array, ""]]:
     """Run the preplanned source-push MLP with a compact-H custom VJP residual.
@@ -526,8 +539,17 @@ def source_push_moe_mlp_from_plan(
     _validate_source_push_mlp_mesh(config, mesh, implementation)
     _validate_source_push_mlp_from_plan_shapes(config, route_table, x, route_weights, w13, w2)
     _validate_source_push_mlp_from_plan_metadata(config, host_inputs, route_table)
-    expert_base = jnp.asarray(host_inputs.expert_base, dtype=jnp.int32)
-    h_rows_per_rank = config.hidden_rows_per_rank
+    resolved_backward_return_implementation = (
+        backward_return_implementation or _source_push_mlp_backward_return_implementation(implementation)
+    )
+    if (
+        return_route_indices is None
+        and resolved_backward_return_implementation == SOURCE_PUSH_BACKWARD_RETURN_IMPLEMENTATION_PALLAS_MGPU
+    ):
+        return_route_indices = source_push_backward_return_route_indices_jax(
+            host_inputs.plan,
+            src_base_by_expert=host_inputs.src_base_by_expert,
+        )
 
     @jax.custom_vjp
     def _custom_vjp(
@@ -540,8 +562,6 @@ def source_push_moe_mlp_from_plan(
             config,
             host_inputs,
             route_table,
-            expert_base,
-            h_rows_per_rank,
             x_arg,
             route_weights_arg,
             w13_arg,
@@ -562,8 +582,6 @@ def source_push_moe_mlp_from_plan(
             config,
             host_inputs,
             route_table,
-            expert_base,
-            h_rows_per_rank,
             x_arg,
             route_weights_arg,
             w13_arg,
@@ -599,12 +617,24 @@ def source_push_moe_mlp_from_plan(
             residuals.w2,
             residuals.h,
             dy,
-            return_implementation=_source_push_mlp_backward_return_implementation(implementation),
-            dy_route_implementation=_source_push_mlp_backward_dy_route_implementation(implementation),
-            w2_implementation=_source_push_mlp_backward_w2_implementation(implementation),
-            w2_matmul_implementation=_source_push_mlp_backward_w2_matmul_implementation(implementation),
-            w2_swiglu_implementation=_source_push_mlp_backward_w2_swiglu_implementation(implementation),
-            w13_implementation=_source_push_mlp_backward_w13_implementation(implementation),
+            return_implementation=resolved_backward_return_implementation,
+            return_route_indices=return_route_indices,
+            dy_route_implementation=backward_dy_route_implementation
+            or _source_push_mlp_backward_dy_route_implementation(implementation),
+            w2_implementation=backward_w2_implementation
+            or _source_push_mlp_backward_w2_implementation(implementation),
+            w2_matmul_implementation=(
+                backward_w2_matmul_implementation
+                if backward_w2_matmul_implementation is not None
+                else _source_push_mlp_backward_w2_matmul_implementation(implementation)
+            ),
+            w2_swiglu_implementation=(
+                backward_w2_swiglu_implementation
+                if backward_w2_swiglu_implementation is not None
+                else _source_push_mlp_backward_w2_swiglu_implementation(implementation)
+            ),
+            w13_implementation=backward_w13_implementation
+            or _source_push_mlp_backward_w13_implementation(implementation),
             mesh=mesh,
         )
         return gradients.dx, gradients.d_route_weights, gradients.dw13, gradients.dw2
@@ -808,6 +838,9 @@ def _validate_source_push_mlp_from_plan_metadata(
         "source_rank_by_expert",
         "token_id_by_expert",
         "route_slot_by_expert",
+        "dst_ordinal_by_expert",
+        "entry_by_expert",
+        "row_in_entry_by_expert",
         "valid_by_expert",
     ):
         observed_value = np.asarray(jax.device_get(getattr(route_table, field_name)))
@@ -960,8 +993,6 @@ def source_push_moe_mlp_forward_with_compact_h_from_plan(
     config: PushInboxConfig,
     host_inputs: SourcePushForwardHostInputs,
     route_table: SourcePushMlpRouteTable,
-    expert_base: Int[Array, "Dst E"],
-    h_rows_per_rank: int,
     x: Float[Array, "S T D"],
     route_weights: Float[Array, "S T K"],
     w13: Float[Array, "S E D twoI"],
@@ -1223,6 +1254,7 @@ def _source_push_moe_mlp_backward_from_plan_h_compact(
     h: Float[Array, "Dst E C twoI"],
     dy: Float[Array, "S T D"],
     return_implementation: str = SOURCE_PUSH_BACKWARD_RETURN_IMPLEMENTATION_JAX,
+    return_route_indices: SourcePushBackwardCompactRouteIndices | None = None,
     dy_route_implementation: str = SOURCE_PUSH_DY_ROUTE_IMPLEMENTATION_REFERENCE,
     w2_implementation: str = SOURCE_PUSH_W2_BACKWARD_IMPLEMENTATION_REFERENCE,
     w2_matmul_implementation: str | None = None,
@@ -1241,25 +1273,55 @@ def _source_push_moe_mlp_backward_from_plan_h_compact(
     """
 
     valid = route_table.valid_by_expert
-    dy_blocks = _source_push_backward_dy_to_expert_major(
-        dy,
-        route_table.source_rank_by_expert,
-        route_table.token_id_by_expert,
-        valid,
-        implementation=dy_route_implementation,
-        mesh=mesh,
+    use_source_dy_w2_reference = (
+        dy_route_implementation == SOURCE_PUSH_DY_ROUTE_IMPLEMENTATION_REFERENCE
+        and w2_implementation == SOURCE_PUSH_W2_BACKWARD_IMPLEMENTATION_REFERENCE
+        and w2_matmul_implementation is None
+        and w2_swiglu_implementation is None
     )
-    w2_grads = _source_push_w2_backward_expert_blocks(
-        h,
-        expert_route_weights,
-        dy_blocks,
-        w2,
-        valid,
-        implementation=w2_implementation,
-        matmul_implementation=w2_matmul_implementation,
-        swiglu_implementation=w2_swiglu_implementation,
-        mesh=mesh,
-    )
+    if use_source_dy_w2_reference:
+        w2_grads = _source_push_w2_backward_expert_blocks_from_source_dy_reference(
+            h,
+            expert_route_weights,
+            dy,
+            w2,
+            valid,
+            route_table.source_rank_by_expert,
+            route_table.token_id_by_expert,
+        )
+    elif dy_route_implementation == SOURCE_PUSH_DY_ROUTE_IMPLEMENTATION_SOURCE_PUSH_JAX:
+        dy_blocks = _source_push_backward_dy_to_expert_major_from_plan_source_push_jax(
+            dy,
+            host_inputs.plan,
+            host_inputs.send_meta,
+            host_inputs.expert_base,
+            host_inputs.src_base_by_expert,
+            experts_per_rank=config.experts_per_rank,
+            expert_capacity=route_table.valid_by_expert.shape[-1],
+            use_exact_expert_major=host_inputs.use_exact_expert_major,
+        )
+    else:
+        dy_blocks = _source_push_backward_dy_to_expert_major(
+            dy,
+            route_table.source_rank_by_expert,
+            route_table.token_id_by_expert,
+            valid,
+            implementation=dy_route_implementation,
+            mesh=mesh,
+        )
+    if not use_source_dy_w2_reference:
+        valid = _source_push_w2_valid_blocks_sharded(valid)
+        w2_grads = _source_push_w2_backward_expert_blocks(
+            h,
+            expert_route_weights,
+            dy_blocks,
+            w2,
+            valid,
+            implementation=w2_implementation,
+            matmul_implementation=w2_matmul_implementation,
+            swiglu_implementation=w2_swiglu_implementation,
+            mesh=mesh,
+        )
     if w13_implementation == SOURCE_PUSH_W13_BACKWARD_IMPLEMENTATION_TILED:
         w13_grads = source_push_w13_backward_expert_blocks_tiled_reference(
             x,
@@ -1268,6 +1330,16 @@ def _source_push_moe_mlp_backward_from_plan_h_compact(
             route_table.source_rank_by_expert,
             route_table.token_id_by_expert,
             valid,
+        )
+    elif w13_implementation == SOURCE_PUSH_W13_BACKWARD_IMPLEMENTATION_PALLAS_MGPU_COMPACT:
+        w13_grads = _source_push_w13_backward_expert_blocks_pallas_mgpu(
+            x,
+            w2_grads.d_h,
+            w13,
+            route_table.source_rank_by_expert,
+            route_table.token_id_by_expert,
+            valid,
+            mesh=mesh,
         )
     elif w13_implementation == SOURCE_PUSH_W13_BACKWARD_IMPLEMENTATION_REFERENCE:
         w13_grads = source_push_w13_backward_expert_blocks_reference(
@@ -1283,7 +1355,7 @@ def _source_push_moe_mlp_backward_from_plan_h_compact(
     else:
         raise ValueError(
             "compact-H from-plan MLP backward supports W13 implementations "
-            f"{(SOURCE_PUSH_W13_BACKWARD_IMPLEMENTATION_REFERENCE, SOURCE_PUSH_W13_BACKWARD_IMPLEMENTATION_TILED)}, "
+            f"{(SOURCE_PUSH_W13_BACKWARD_IMPLEMENTATION_REFERENCE, SOURCE_PUSH_W13_BACKWARD_IMPLEMENTATION_TILED, SOURCE_PUSH_W13_BACKWARD_IMPLEMENTATION_PALLAS_MGPU_COMPACT)}, "
             f"got {w13_implementation!r}"
         )
     returned = source_push_backward_return(
@@ -1291,14 +1363,20 @@ def _source_push_moe_mlp_backward_from_plan_h_compact(
         w2_grads.d_route_weight,
         host_inputs.plan,
         src_base_by_expert=host_inputs.src_base_by_expert,
+        route_indices=return_route_indices,
         implementation=return_implementation,
         mesh=mesh,
     )
     return _SourcePushMlpGradients(
-        dx=returned.dx.astype(x.dtype),
-        d_route_weights=returned.d_route_weights.astype(expert_route_weights.dtype),
-        dw13=w13_grads.dw13.astype(w13.dtype),
-        dw2=w2_grads.dw2.astype(w2.dtype),
+        dx=_with_source_push_sharding(returned.dx.astype(x.dtype), SOURCE_PUSH_MESH_AXIS, None, None),
+        d_route_weights=_with_source_push_sharding(
+            returned.d_route_weights.astype(expert_route_weights.dtype),
+            SOURCE_PUSH_MESH_AXIS,
+            None,
+            None,
+        ),
+        dw13=_with_source_push_sharding(w13_grads.dw13.astype(w13.dtype), SOURCE_PUSH_MESH_AXIS, None, None, None),
+        dw2=_with_source_push_sharding(w2_grads.dw2.astype(w2.dtype), SOURCE_PUSH_MESH_AXIS, None, None, None),
     )
 
 
@@ -1367,18 +1445,26 @@ def _source_push_moe_mlp_backward_from_plan_h_flat(
         mesh=mesh,
     )
     return _SourcePushMlpGradients(
-        dx=returned.dx.astype(x.dtype),
-        d_route_weights=returned.d_route_weights.astype(h_route_weights.dtype),
-        dw13=w13_grads.dw13.astype(w13.dtype),
-        dw2=w2_grads.dw2.astype(w2.dtype),
+        dx=_with_source_push_sharding(returned.dx.astype(x.dtype), SOURCE_PUSH_MESH_AXIS, None, None),
+        d_route_weights=_with_source_push_sharding(
+            returned.d_route_weights.astype(h_route_weights.dtype),
+            SOURCE_PUSH_MESH_AXIS,
+            None,
+            None,
+        ),
+        dw13=_with_source_push_sharding(w13_grads.dw13.astype(w13.dtype), SOURCE_PUSH_MESH_AXIS, None, None, None),
+        dw2=_with_source_push_sharding(w2_grads.dw2.astype(w2.dtype), SOURCE_PUSH_MESH_AXIS, None, None, None),
     )
 
 
 def _source_push_mlp_backward_return_implementation(
     mlp_implementation: SourcePushMlpImplementation,
 ) -> str:
-    if mlp_implementation == SOURCE_PUSH_MLP_IMPLEMENTATION_PALLAS_MGPU and jax.default_backend() == "gpu":
-        return SOURCE_PUSH_BACKWARD_RETURN_IMPLEMENTATION_PALLAS_MGPU
+    # The compact remote-write Pallas return kernel still exposes a full
+    # source-route buffer as a Mosaic output and exceeds H100 shared-memory
+    # limits at target shape. Keep it explicit-only until the return boundary is
+    # rewritten around a tiled output contract.
+    _ = mlp_implementation
     return SOURCE_PUSH_BACKWARD_RETURN_IMPLEMENTATION_JAX
 
 

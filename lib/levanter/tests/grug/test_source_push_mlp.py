@@ -9,7 +9,8 @@ import numpy as np
 import pytest
 from jax.sharding import Mesh
 
-from levanter.grug._moe import source_push_forward
+from levanter.grug._moe import source_push_backward_return, source_push_forward, source_push_plan
+from levanter.grug._moe.source_push_backward_w13 import SourcePushW13CompactBackwardOutput
 from levanter.grug._moe.source_push_inbox import AXIS, PushInboxConfig
 import levanter.grug._moe.source_push_mlp as source_push_mlp
 from levanter.grug._moe.source_push_mlp import (
@@ -127,6 +128,49 @@ def _small_forward_plan_inputs(*, use_exact_expert_major=False):
     return config, host_inputs, route_table, x, route_weights, w13, w2
 
 
+def test_source_push_mlp_route_table_expanded_metadata_is_derived_from_plan_route_rows():
+    _config, host_inputs, route_table, _x, _route_weights, _w13, _w2 = _small_forward_plan_inputs()
+    route_rows = source_push_plan.source_push_route_rows_host_from_plan(
+        host_inputs.plan,
+        src_base_by_expert=host_inputs.src_base_by_expert,
+    )
+    valid = route_rows.valid
+
+    np.testing.assert_array_equal(np.asarray(route_table.source_rank), route_rows.src[valid])
+    np.testing.assert_array_equal(np.asarray(route_table.token_id), route_rows.token_id[valid])
+    np.testing.assert_array_equal(np.asarray(route_table.route_slot), route_rows.route_slot[valid])
+    np.testing.assert_array_equal(np.asarray(route_table.destination_rank), route_rows.dst[valid])
+    np.testing.assert_array_equal(np.asarray(route_table.local_expert), route_rows.local_expert[valid])
+    np.testing.assert_array_equal(np.asarray(route_table.expert_row), route_rows.expert_row[valid])
+
+    expected_source_by_expert = np.full_like(np.asarray(route_table.source_rank_by_expert), -1)
+    expected_token_by_expert = np.full_like(expected_source_by_expert, -1)
+    expected_slot_by_expert = np.full_like(expected_source_by_expert, -1)
+    expected_dst_ordinal_by_expert = np.full_like(expected_source_by_expert, -1)
+    expected_entry_by_expert = np.full_like(expected_source_by_expert, -1)
+    expected_row_in_entry_by_expert = np.full_like(expected_source_by_expert, -1)
+    expected_valid_by_expert = np.zeros_like(np.asarray(route_table.valid_by_expert), dtype=np.bool_)
+    for src, dst_ord, entry, row in np.argwhere(valid):
+        dst = route_rows.dst[src, dst_ord, entry, row]
+        expert = route_rows.local_expert[src, dst_ord, entry, row]
+        expert_row = route_rows.expert_row[src, dst_ord, entry, row]
+        expected_source_by_expert[dst, expert, expert_row] = route_rows.src[src, dst_ord, entry, row]
+        expected_token_by_expert[dst, expert, expert_row] = route_rows.token_id[src, dst_ord, entry, row]
+        expected_slot_by_expert[dst, expert, expert_row] = route_rows.route_slot[src, dst_ord, entry, row]
+        expected_dst_ordinal_by_expert[dst, expert, expert_row] = dst_ord
+        expected_entry_by_expert[dst, expert, expert_row] = entry
+        expected_row_in_entry_by_expert[dst, expert, expert_row] = row
+        expected_valid_by_expert[dst, expert, expert_row] = True
+
+    np.testing.assert_array_equal(np.asarray(route_table.source_rank_by_expert), expected_source_by_expert)
+    np.testing.assert_array_equal(np.asarray(route_table.token_id_by_expert), expected_token_by_expert)
+    np.testing.assert_array_equal(np.asarray(route_table.route_slot_by_expert), expected_slot_by_expert)
+    np.testing.assert_array_equal(np.asarray(route_table.dst_ordinal_by_expert), expected_dst_ordinal_by_expert)
+    np.testing.assert_array_equal(np.asarray(route_table.entry_by_expert), expected_entry_by_expert)
+    np.testing.assert_array_equal(np.asarray(route_table.row_in_entry_by_expert), expected_row_in_entry_by_expert)
+    np.testing.assert_array_equal(np.asarray(route_table.valid_by_expert), expected_valid_by_expert)
+
+
 def test_source_push_moe_mlp_reference_saves_w13_preactivation_h():
     x, route_assignments, route_weights, w13, w2 = _small_mlp_inputs()
     route_table = _route_table(route_assignments, route_weights)
@@ -181,6 +225,110 @@ def test_source_push_w13_h_expert_major_from_plan_returns_trimmed_layout(monkeyp
     assert calls[0]["compact_expert_capacity"] >= route_table.expert_capacity
     assert observed_h.shape == (EP_SIZE, EXPERTS_PER_RANK, route_table.expert_capacity, 2 * INTERMEDIATE_DIM)
     np.testing.assert_allclose(np.asarray(observed_h, dtype=np.float32), np.asarray(expected_h, dtype=np.float32))
+
+
+def test_source_push_moe_mlp_forward_direct_h_trims_source_padded_tail_rows(monkeypatch):
+    config = PushInboxConfig(
+        ep_size=2,
+        entries_per_rank=2,
+        inbox_slots=1,
+        hidden_dim=2,
+        intermediate_dim=1,
+        block_m=2,
+        block_k=1,
+        block_n=1,
+        experts_per_rank=1,
+        send_worker_programs_per_peer=1,
+        worker_programs_per_peer=4,
+        send_pipeline_depth=1,
+        n_groups_per_job=1,
+        routing="balanced",
+        tokens_per_rank=3,
+        topk=1,
+        capacity_factor=2.0,
+    )
+    x = jnp.arange(12, dtype=jnp.float32).reshape(2, 3, 2) * 0.01
+    route_assignments = jnp.zeros((2, 3, 1), dtype=jnp.int32)
+    route_weights = jnp.ones((2, 3, 1), dtype=jnp.float32)
+    w13 = jnp.arange(8, dtype=jnp.float32).reshape(2, 1, 2, 2) * 0.01
+    w2 = jnp.arange(4, dtype=jnp.float32).reshape(2, 1, 1, 2) * 0.01
+    host_inputs = source_push_forward.make_source_push_forward_inputs(
+        config,
+        x,
+        route_assignments,
+        route_weights,
+        w13,
+        w2,
+        input_mode="source_push_plan",
+        use_exact_expert_major=False,
+    )
+    route_table = source_push_mlp_route_table_from_plan(
+        host_inputs.plan,
+        src_base_by_expert=host_inputs.src_base_by_expert,
+    )
+    _expected_y, expected_h = source_push_moe_mlp_reference_with_h(route_table, x, route_weights, w13, w2)
+    store_capacity = source_push_mlp._compact_h_expert_capacity_from_metadata(
+        config,
+        host_inputs.send_meta,
+        host_inputs.expert_base,
+        host_inputs.src_base_by_expert,
+        use_exact_expert_major=False,
+    )
+    assert store_capacity > route_table.expert_capacity
+
+    def fail_flat_h_conversion(*_args, **_kwargs):
+        raise AssertionError("direct source-push H boundary must not use flat-H conversion")
+
+    monkeypatch.setattr(source_push_mlp, "_source_push_mlp_flat_h_to_compact", fail_flat_h_conversion)
+    monkeypatch.setattr(source_push_mlp, "_source_push_mlp_compact_h_to_flat", fail_flat_h_conversion)
+
+    def fake_source_push_forward_with_compact_h_from_plan(
+        _config,
+        host_inputs_arg,
+        _x,
+        _h_route_weights,
+        _w13,
+        _w2,
+        *,
+        compact_expert_capacity,
+        mesh,
+    ):
+        assert host_inputs_arg is host_inputs
+        assert mesh is None
+        assert compact_expert_capacity == store_capacity
+        padded_h = jnp.pad(
+            expected_h,
+            ((0, 0), (0, 0), (0, store_capacity - route_table.expert_capacity), (0, 0)),
+            constant_values=17,
+        )
+        return jnp.zeros_like(x), padded_h, host_inputs_arg.plan.dropped_routes
+
+    monkeypatch.setattr(
+        source_push_mlp,
+        "source_push_forward_with_compact_h_from_plan",
+        fake_source_push_forward_with_compact_h_from_plan,
+    )
+
+    _y, observed_h = source_push_mlp.source_push_moe_mlp_forward_with_compact_h_from_plan(
+        config,
+        host_inputs,
+        route_table,
+        x,
+        route_weights,
+        w13,
+        w2,
+        implementation=SOURCE_PUSH_MLP_IMPLEMENTATION_PALLAS_MGPU,
+        execution_mode=source_push_mlp.FORWARD_EXECUTION_STAGED_HOST_SYNC,
+        mesh=None,
+    )
+
+    assert observed_h.shape == expected_h.shape
+    assert observed_h.shape[1:] == (
+        config.experts_per_rank,
+        route_table.expert_capacity,
+        2 * config.intermediate_dim,
+    )
+    np.testing.assert_allclose(np.asarray(observed_h), np.asarray(expected_h), atol=0, rtol=0)
 
 
 def test_source_push_moe_mlp_custom_vjp_residual_names_h_checkpoint():
@@ -284,7 +432,7 @@ def test_source_push_moe_mlp_h_route_weights_align_with_flat_h_rows():
         route_table,
         route_weights,
     )
-    h_route_weights = source_push_mlp.source_push_h_row_route_weights_jax(
+    h_route_weights = source_push_plan.source_push_h_row_route_weights_jax(
         route_weights,
         host_inputs.plan,
         host_inputs.send_meta,
@@ -1274,6 +1422,122 @@ def test_source_push_moe_mlp_dropped_routes_have_zero_route_weight_gradient():
     assert np.any(np.abs(d_route_weights[accepted_mask]) > 1e-8)
 
 
+def test_source_push_moe_mlp_from_plan_dropped_routes_match_accepted_route_reference_gradients():
+    ep_size = 2
+    experts_per_rank = 1
+    block_m = 2
+    capacity_factor = 0.25
+    x = jnp.array(
+        [
+            [[1.0, 2.0], [-0.5, 0.25]],
+            [[0.75, -1.5], [0.5, 0.5]],
+        ],
+        dtype=jnp.float32,
+    )
+    route_assignments = jnp.zeros((ep_size, 2, 2), dtype=jnp.int32)
+    route_weights = jnp.array(
+        [
+            [[0.2, 0.3], [0.4, 0.5]],
+            [[0.6, 0.7], [0.8, 0.9]],
+        ],
+        dtype=jnp.float32,
+    )
+    w13 = jnp.array(
+        [
+            [[[0.2, -0.4], [0.5, 0.3]]],
+            [[[-0.1, 0.6], [0.7, -0.2]]],
+        ],
+        dtype=jnp.float32,
+    )
+    w2 = jnp.array(
+        [
+            [[[1.25, -0.5]]],
+            [[[-0.75, 0.4]]],
+        ],
+        dtype=jnp.float32,
+    )
+    config = PushInboxConfig(
+        ep_size=ep_size,
+        entries_per_rank=4,
+        inbox_slots=2,
+        hidden_dim=2,
+        intermediate_dim=1,
+        block_m=block_m,
+        block_k=1,
+        block_n=1,
+        experts_per_rank=experts_per_rank,
+        send_worker_programs_per_peer=1,
+        worker_programs_per_peer=4,
+        send_pipeline_depth=1,
+        n_groups_per_job=1,
+        routing="balanced",
+        tokens_per_rank=2,
+        topk=2,
+        capacity_factor=capacity_factor,
+    )
+    host_inputs = source_push_forward.make_source_push_forward_inputs(
+        config,
+        x,
+        route_assignments,
+        route_weights,
+        w13,
+        w2,
+        input_mode="source_push_plan",
+    )
+    route_table = source_push_mlp_route_table_from_plan(
+        host_inputs.plan,
+        src_base_by_expert=host_inputs.src_base_by_expert,
+    )
+    accepted_mask = _accepted_route_mask(route_table, route_weights.shape)
+    assert int(host_inputs.plan.dropped_routes) == route_weights.size - int(np.sum(accepted_mask))
+    assert int(host_inputs.plan.dropped_routes) > 0
+
+    cotangent = jnp.array(
+        [
+            [[0.2, -0.3], [0.4, 0.1]],
+            [[-0.25, 0.5], [0.3, -0.2]],
+        ],
+        dtype=jnp.float32,
+    )
+
+    def reference_loss(x_arg, route_weights_arg, w13_arg, w2_arg):
+        y = source_push_moe_mlp_reference(route_table, x_arg, route_weights_arg, w13_arg, w2_arg)
+        return jnp.sum(y * cotangent)
+
+    def from_plan_loss(x_arg, route_weights_arg, w13_arg, w2_arg):
+        y, dropped_routes = source_push_moe_mlp_from_plan(
+            config,
+            host_inputs,
+            route_table,
+            x_arg,
+            route_weights_arg,
+            w13_arg,
+            w2_arg,
+            implementation=SOURCE_PUSH_MLP_IMPLEMENTATION_REFERENCE,
+        )
+        return jnp.sum(y * cotangent) + dropped_routes.astype(jnp.float32) * 0.0
+
+    reference_value, reference_grads = jax.value_and_grad(reference_loss, argnums=(0, 1, 2, 3))(
+        x,
+        route_weights,
+        w13,
+        w2,
+    )
+    from_plan_value, from_plan_grads = jax.value_and_grad(from_plan_loss, argnums=(0, 1, 2, 3))(
+        x,
+        route_weights,
+        w13,
+        w2,
+    )
+
+    np.testing.assert_allclose(np.asarray(from_plan_value), np.asarray(reference_value), atol=1e-6, rtol=1e-6)
+    for observed, expected in zip(from_plan_grads, reference_grads, strict=True):
+        np.testing.assert_allclose(np.asarray(observed), np.asarray(expected), atol=1e-6, rtol=1e-6)
+    d_route_weights = np.asarray(from_plan_grads[1])
+    np.testing.assert_array_equal(d_route_weights[~accepted_mask], np.zeros_like(d_route_weights[~accepted_mask]))
+    assert np.any(np.abs(d_route_weights[accepted_mask]) > 1e-8)
+
+
 def test_source_push_moe_mlp_api_gradients_do_not_capture_route_weights_in_plan():
     x, route_assignments, route_weights, w13, w2 = _small_mlp_inputs()
     route_table = _route_table(route_assignments, route_weights)
@@ -2002,6 +2266,202 @@ def test_source_push_moe_mlp_from_plan_backward_does_not_use_flat_return_bridge(
     assert float(jnp.max(jnp.abs(grads[1]))) > 0.0
 
 
+def test_source_push_moe_mlp_from_plan_pallas_backward_overrides_reach_custom_vjp(monkeypatch):
+    config, host_inputs, route_table, x, route_weights, w13, w2 = _small_forward_plan_inputs()
+    calls = []
+    _, reference_h = source_push_moe_mlp_reference_with_h(route_table, x, route_weights, w13, w2)
+
+    def fake_forward(
+        _config,
+        host_inputs_arg,
+        _route_table,
+        x_arg,
+        route_weights_arg,
+        w13_arg,
+        w2_arg,
+        *,
+        implementation,
+        execution_mode,
+        mesh,
+    ):
+        del implementation, execution_mode, mesh
+        y, h = source_push_moe_mlp_reference_with_h(route_table, x_arg, route_weights_arg, w13_arg, w2_arg)
+        assert int(host_inputs_arg.plan.dropped_routes) == 0
+        return y, h
+
+    def fake_backward(
+        _config,
+        host_inputs_arg,
+        route_table_arg,
+        x_arg,
+        expert_route_weights_arg,
+        w13_arg,
+        w2_arg,
+        h_arg,
+        dy_arg,
+        *,
+        return_implementation,
+        return_route_indices,
+        dy_route_implementation,
+        w2_implementation,
+        w2_matmul_implementation,
+        w2_swiglu_implementation,
+        w13_implementation,
+        mesh,
+    ):
+        calls.append(
+            {
+                "host_inputs": host_inputs_arg,
+                "route_table": route_table_arg,
+                "x_shape": x_arg.shape,
+                "expert_route_weights_shape": expert_route_weights_arg.shape,
+                "w13_shape": w13_arg.shape,
+                "w2_shape": w2_arg.shape,
+                "h": h_arg,
+                "dy_shape": dy_arg.shape,
+                "return_implementation": return_implementation,
+                "return_route_indices": return_route_indices,
+                "dy_route_implementation": dy_route_implementation,
+                "w2_implementation": w2_implementation,
+                "w2_matmul_implementation": w2_matmul_implementation,
+                "w2_swiglu_implementation": w2_swiglu_implementation,
+                "w13_implementation": w13_implementation,
+                "mesh": mesh,
+            }
+        )
+        return source_push_mlp._SourcePushMlpGradients(
+            dx=jnp.zeros_like(x_arg),
+            d_route_weights=jnp.zeros((EP_SIZE, TOKENS_PER_RANK, TOPK), dtype=expert_route_weights_arg.dtype),
+            dw13=jnp.zeros_like(w13_arg),
+            dw2=jnp.zeros_like(w2_arg),
+        )
+
+    monkeypatch.setattr(source_push_mlp, "source_push_moe_mlp_forward_with_compact_h_from_plan", fake_forward)
+    monkeypatch.setattr(source_push_mlp, "_source_push_moe_mlp_backward_from_plan_h_compact", fake_backward)
+
+    def loss(x_arg, route_weights_arg, w13_arg, w2_arg):
+        y, dropped_routes = source_push_moe_mlp_from_plan(
+            config,
+            host_inputs,
+            route_table,
+            x_arg,
+            route_weights_arg,
+            w13_arg,
+            w2_arg,
+            implementation=SOURCE_PUSH_MLP_IMPLEMENTATION_PALLAS_MGPU,
+            backward_dy_route_implementation="source_push_jax",
+            backward_w2_implementation="reference",
+            backward_w2_matmul_implementation="reference",
+            backward_w2_swiglu_implementation="reference",
+            backward_w13_implementation="tiled",
+            backward_return_implementation="pallas_mgpu",
+        )
+        assert int(dropped_routes) == 0
+        return jnp.sum(y.astype(jnp.float32))
+
+    jax.grad(loss, argnums=(0, 1, 2, 3))(x, route_weights, w13, w2)
+
+    assert len(calls) == 1
+    assert calls[0]["host_inputs"] is host_inputs
+    assert calls[0]["route_table"] is route_table
+    assert calls[0]["return_route_indices"] is not None
+    np.testing.assert_allclose(np.asarray(calls[0]["h"]), np.asarray(reference_h), atol=0, rtol=0)
+    assert calls[0]["return_implementation"] == "pallas_mgpu"
+    assert calls[0]["dy_route_implementation"] == "source_push_jax"
+    assert calls[0]["w2_implementation"] == "reference"
+    assert calls[0]["w2_matmul_implementation"] == "reference"
+    assert calls[0]["w2_swiglu_implementation"] == "reference"
+    assert calls[0]["w13_implementation"] == "tiled"
+
+
+def test_source_push_moe_mlp_from_plan_uses_precomputed_compact_return_indices(monkeypatch):
+    config, host_inputs, route_table, x, route_weights, w13, w2 = _small_forward_plan_inputs()
+    return_route_indices = source_push_backward_return.source_push_backward_return_route_indices_jax(
+        host_inputs.plan,
+        src_base_by_expert=host_inputs.src_base_by_expert,
+    )
+    calls = []
+
+    def fail_rebuild(*_args, **_kwargs):
+        raise AssertionError("preplanned compact-H MLP backward should reuse supplied return indices")
+
+    def fake_forward(
+        _config,
+        _host_inputs,
+        _route_table,
+        x_arg,
+        route_weights_arg,
+        w13_arg,
+        w2_arg,
+        *,
+        implementation,
+        execution_mode,
+        mesh,
+    ):
+        del implementation, execution_mode, mesh
+        return source_push_moe_mlp_reference_with_h(route_table, x_arg, route_weights_arg, w13_arg, w2_arg)
+
+    def fake_backward(
+        _config,
+        _host_inputs,
+        _route_table,
+        x_arg,
+        expert_route_weights_arg,
+        w13_arg,
+        w2_arg,
+        _h,
+        _dy,
+        *,
+        return_implementation,
+        return_route_indices,
+        dy_route_implementation,
+        w2_implementation,
+        w2_matmul_implementation,
+        w2_swiglu_implementation,
+        w13_implementation,
+        mesh,
+    ):
+        del (
+            return_implementation,
+            dy_route_implementation,
+            w2_implementation,
+            w2_matmul_implementation,
+            w2_swiglu_implementation,
+            w13_implementation,
+            mesh,
+        )
+        calls.append(return_route_indices)
+        return source_push_mlp._SourcePushMlpGradients(
+            dx=jnp.zeros_like(x_arg),
+            d_route_weights=jnp.zeros((EP_SIZE, TOKENS_PER_RANK, TOPK), dtype=expert_route_weights_arg.dtype),
+            dw13=jnp.zeros_like(w13_arg),
+            dw2=jnp.zeros_like(w2_arg),
+        )
+
+    monkeypatch.setattr(source_push_mlp, "source_push_backward_return_route_indices_jax", fail_rebuild)
+    monkeypatch.setattr(source_push_mlp, "source_push_moe_mlp_forward_with_compact_h_from_plan", fake_forward)
+    monkeypatch.setattr(source_push_mlp, "_source_push_moe_mlp_backward_from_plan_h_compact", fake_backward)
+
+    def loss(x_arg, route_weights_arg, w13_arg, w2_arg):
+        y, _ = source_push_moe_mlp_from_plan(
+            config,
+            host_inputs,
+            route_table,
+            x_arg,
+            route_weights_arg,
+            w13_arg,
+            w2_arg,
+            implementation=SOURCE_PUSH_MLP_IMPLEMENTATION_PALLAS_MGPU,
+            backward_return_implementation="pallas_mgpu",
+            return_route_indices=return_route_indices,
+        )
+        return jnp.sum(y.astype(jnp.float32))
+
+    jax.grad(loss, argnums=(0, 1, 2, 3))(x, route_weights, w13, w2)
+
+    assert calls == [return_route_indices]
+
+
 def test_source_push_moe_mlp_pallas_backward_selectors_avoid_full_output_pallas_stages(monkeypatch):
     assert (
         source_push_mlp._source_push_mlp_backward_dy_route_implementation(SOURCE_PUSH_MLP_IMPLEMENTATION_PALLAS_MGPU)
@@ -2028,7 +2488,7 @@ def test_source_push_moe_mlp_pallas_backward_selectors_avoid_full_output_pallas_
     )
     assert (
         source_push_mlp._source_push_mlp_backward_return_implementation(SOURCE_PUSH_MLP_IMPLEMENTATION_PALLAS_MGPU)
-        == source_push_mlp.SOURCE_PUSH_BACKWARD_RETURN_IMPLEMENTATION_PALLAS_MGPU
+        == source_push_mlp.SOURCE_PUSH_BACKWARD_RETURN_IMPLEMENTATION_JAX
     )
 
 
@@ -2064,6 +2524,171 @@ def test_source_push_moe_mlp_from_plan_exact_layout_matches_reference_gradients(
     for observed, expected in zip(from_plan_grads, reference_grads, strict=True):
         np.testing.assert_allclose(np.asarray(observed), np.asarray(expected), atol=1e-5, rtol=1e-5)
     assert float(jnp.max(jnp.abs(from_plan_grads[1]))) > 0.0
+
+
+def test_source_push_moe_mlp_from_plan_compact_backward_source_push_jax_dy_route_matches_reference():
+    config, host_inputs, route_table, x, route_weights, w13, w2 = _small_forward_plan_inputs(
+        use_exact_expert_major=True,
+    )
+    cotangent = jnp.linspace(-0.5, 0.7, x.size, dtype=jnp.float32).reshape(x.shape)
+    _, h = source_push_moe_mlp_reference_with_h(route_table, x, route_weights, w13, w2)
+    expert_route_weights = source_push_mlp._source_push_mlp_route_weights_to_all_expert_major(
+        route_table,
+        route_weights,
+    )
+
+    expected = source_push_mlp._source_push_moe_mlp_backward_from_plan_h_compact(
+        config,
+        host_inputs,
+        route_table,
+        x,
+        expert_route_weights,
+        w13,
+        w2,
+        h,
+        cotangent,
+    )
+    observed = source_push_mlp._source_push_moe_mlp_backward_from_plan_h_compact(
+        config,
+        host_inputs,
+        route_table,
+        x,
+        expert_route_weights,
+        w13,
+        w2,
+        h,
+        cotangent,
+        dy_route_implementation=source_push_mlp.SOURCE_PUSH_DY_ROUTE_IMPLEMENTATION_SOURCE_PUSH_JAX,
+    )
+
+    for actual, reference in zip(observed, expected, strict=True):
+        np.testing.assert_allclose(np.asarray(actual), np.asarray(reference), atol=0, rtol=0)
+
+
+def test_source_push_moe_mlp_from_plan_compact_backward_fuses_reference_dy_into_w2(monkeypatch):
+    config, host_inputs, route_table, x, route_weights, w13, w2 = _small_forward_plan_inputs(
+        use_exact_expert_major=True,
+    )
+    cotangent = jnp.linspace(-0.5, 0.7, x.size, dtype=jnp.float32).reshape(x.shape)
+    _, h = source_push_moe_mlp_reference_with_h(route_table, x, route_weights, w13, w2)
+    expert_route_weights = source_push_mlp._source_push_mlp_route_weights_to_all_expert_major(
+        route_table,
+        route_weights,
+    )
+    expected = source_push_mlp._source_push_moe_mlp_backward_from_plan_h_compact(
+        config,
+        host_inputs,
+        route_table,
+        x,
+        expert_route_weights,
+        w13,
+        w2,
+        h,
+        cotangent,
+    )
+
+    calls = []
+    original_w2_from_source_dy = source_push_mlp._source_push_w2_backward_expert_blocks_from_source_dy_reference
+
+    def wrapped_w2_from_source_dy(*args, **kwargs):
+        calls.append((args, kwargs))
+        return original_w2_from_source_dy(*args, **kwargs)
+
+    def fail_standalone_dy_route(*_args, **_kwargs):
+        raise AssertionError("reference compact backward should route dy inside W2")
+
+    monkeypatch.setattr(
+        source_push_mlp,
+        "_source_push_w2_backward_expert_blocks_from_source_dy_reference",
+        wrapped_w2_from_source_dy,
+    )
+    monkeypatch.setattr(source_push_mlp, "_source_push_backward_dy_to_expert_major", fail_standalone_dy_route)
+
+    observed = source_push_mlp._source_push_moe_mlp_backward_from_plan_h_compact(
+        config,
+        host_inputs,
+        route_table,
+        x,
+        expert_route_weights,
+        w13,
+        w2,
+        h,
+        cotangent,
+    )
+
+    assert len(calls) == 1
+    for actual, reference in zip(observed, expected, strict=True):
+        np.testing.assert_allclose(np.asarray(actual), np.asarray(reference), atol=0, rtol=0)
+
+
+def test_source_push_moe_mlp_from_plan_compact_backward_accepts_compact_pallas_w13(monkeypatch):
+    config, host_inputs, route_table, x, route_weights, w13, w2 = _small_forward_plan_inputs(
+        use_exact_expert_major=True,
+    )
+    cotangent = jnp.linspace(-0.5, 0.7, x.size, dtype=jnp.float32).reshape(x.shape)
+    _, h = source_push_moe_mlp_reference_with_h(route_table, x, route_weights, w13, w2)
+    expert_route_weights = source_push_mlp._source_push_mlp_route_weights_to_all_expert_major(
+        route_table,
+        route_weights,
+    )
+    calls = []
+    fake_dw13 = jnp.full(w13.shape, 0.125, dtype=jnp.float32)
+
+    def fake_compact_w13(x_arg, d_h_arg, w13_arg, source_rank_arg, token_id_arg, valid_arg, *, mesh):
+        calls.append((x_arg, d_h_arg, w13_arg, source_rank_arg, token_id_arg, valid_arg, mesh))
+        return SourcePushW13CompactBackwardOutput(
+            x_expert_major=jnp.zeros((0,), dtype=jnp.float32),
+            dx_expert_major=jnp.zeros(d_h_arg.shape[:3] + (x_arg.shape[-1],), dtype=jnp.float32),
+            dw13=fake_dw13,
+        )
+
+    monkeypatch.setattr(
+        source_push_mlp,
+        "_source_push_w13_backward_expert_blocks_pallas_mgpu",
+        fake_compact_w13,
+    )
+
+    observed = source_push_mlp._source_push_moe_mlp_backward_from_plan_h_compact(
+        config,
+        host_inputs,
+        route_table,
+        x,
+        expert_route_weights,
+        w13,
+        w2,
+        h,
+        cotangent,
+        w13_implementation=source_push_mlp.SOURCE_PUSH_W13_BACKWARD_IMPLEMENTATION_PALLAS_MGPU_COMPACT,
+    )
+
+    assert len(calls) == 1
+    np.testing.assert_allclose(np.asarray(observed.dw13), np.asarray(fake_dw13), atol=0, rtol=0)
+
+
+def test_source_push_moe_mlp_from_plan_compact_backward_rejects_unsupported_w13_mode():
+    config, host_inputs, route_table, x, route_weights, w13, w2 = _small_forward_plan_inputs(
+        use_exact_expert_major=True,
+    )
+    cotangent = jnp.linspace(-0.5, 0.7, x.size, dtype=jnp.float32).reshape(x.shape)
+    _, h = source_push_moe_mlp_reference_with_h(route_table, x, route_weights, w13, w2)
+    expert_route_weights = source_push_mlp._source_push_mlp_route_weights_to_all_expert_major(
+        route_table,
+        route_weights,
+    )
+
+    with pytest.raises(ValueError, match="compact-H from-plan MLP backward supports W13 implementations"):
+        source_push_mlp._source_push_moe_mlp_backward_from_plan_h_compact(
+            config,
+            host_inputs,
+            route_table,
+            x,
+            expert_route_weights,
+            w13,
+            w2,
+            h,
+            cotangent,
+            w13_implementation="pallas_mgpu_compact_dx_source_gather_dw13",
+        )
 
 
 def test_source_push_moe_mlp_flat_h_backward_matches_compact_h_backward():

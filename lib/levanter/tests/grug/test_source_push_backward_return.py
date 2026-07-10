@@ -304,34 +304,36 @@ def test_source_push_backward_return_pallas_uses_compact_route_indices(monkeypat
     )
 
 
-def test_source_push_backward_return_pallas_mesh_uses_compact_remote_route_buffer(monkeypatch):
+def test_source_push_backward_return_pallas_mesh_uses_compact_direct_gather(monkeypatch):
     plan = _duplicate_route_plan()
     _route_table, dx_expert_major, d_route_block = _expert_major_rows(plan)
-    expected_buffer = source_push_backward_return.source_push_backward_return_route_buffer_jax(
-        dx_expert_major,
-        d_route_block,
-        plan,
-    )
+    expected = source_push_backward_return.source_push_backward_return_reference(dx_expert_major, d_route_block, plan)
+    expected_indices = source_push_backward_return.source_push_backward_return_route_indices_jax(plan)
     calls = []
     fake_mesh = object()
 
-    def fail_rebuild(*args, **kwargs):
-        raise AssertionError("mesh return should use compact queue rows directly")
+    def fake_rebuild(*args, **kwargs):
+        calls.append(("rebuild", args, kwargs))
+        return expected_indices
 
-    def fake_remote_route_buffer(mesh, dx, d_route, route_rows, *, route_shape, block_sizes):
-        calls.append((mesh, dx.shape, d_route.shape, route_rows, route_shape, block_sizes))
-        return expected_buffer
+    def fake_direct_gather(mesh, dx, d_route, route_indices, *, block_sizes):
+        calls.append(("direct_gather", mesh, dx.shape, d_route.shape, route_indices, block_sizes))
+        return source_push_backward_return._source_push_backward_return_compact_from_indices_jax(
+            dx,
+            d_route,
+            route_indices,
+        )
 
     monkeypatch.setattr(jax, "default_backend", lambda: "gpu")
     monkeypatch.setattr(
         source_push_backward_return,
         "source_push_backward_return_route_indices_jax",
-        fail_rebuild,
+        fake_rebuild,
     )
     monkeypatch.setattr(
         source_push_backward_return,
-        "_source_push_backward_return_compact_remote_write_route_buffer_mgpu",
-        fake_remote_route_buffer,
+        "_source_push_backward_return_compact_direct_gather_mgpu",
+        fake_direct_gather,
     )
 
     observed = source_push_backward_return.source_push_backward_return(
@@ -343,17 +345,23 @@ def test_source_push_backward_return_pallas_mesh_uses_compact_remote_route_buffe
         mesh=fake_mesh,
     )
 
-    assert len(calls) == 1
-    mesh, dx_shape, d_route_shape, route_rows, route_shape, block_sizes = calls[0]
+    assert len(calls) == 2
+    rebuild_call, direct_call = calls
+    assert rebuild_call[0] == "rebuild"
+    assert direct_call[0] == "direct_gather"
+    _, mesh, dx_shape, d_route_shape, route_indices, block_sizes = direct_call
     assert mesh is fake_mesh
     assert dx_shape == dx_expert_major.shape
     assert d_route_shape == d_route_block.shape
-    assert route_rows.expert.shape == plan.valid_mask.shape
-    assert route_rows.row.shape == plan.valid_mask.shape
-    assert route_shape == (EP_SIZE, TOKENS_PER_RANK, TOPK)
+    assert route_indices is expected_indices
     assert block_sizes.hidden_block == 1
-    np.testing.assert_allclose(np.asarray(observed.dx), np.asarray(jnp.sum(expected_buffer.dx_routes, axis=2)))
-    np.testing.assert_allclose(np.asarray(observed.d_route_weights), np.asarray(expected_buffer.d_route_weights))
+    np.testing.assert_allclose(np.asarray(observed.dx), np.asarray(expected.dx), atol=0, rtol=0)
+    np.testing.assert_allclose(
+        np.asarray(observed.d_route_weights),
+        np.asarray(expected.d_route_weights),
+        atol=0,
+        rtol=0,
+    )
 
 
 def test_source_push_backward_return_compact_pallas_interpret_matches_reference():
@@ -374,6 +382,55 @@ def test_source_push_backward_return_compact_pallas_interpret_matches_reference(
         interpret=True,
     )
 
+    np.testing.assert_allclose(np.asarray(observed.dx), np.asarray(expected.dx), atol=0, rtol=0)
+    np.testing.assert_allclose(
+        np.asarray(observed.d_route_weights),
+        np.asarray(expected.d_route_weights),
+        atol=0,
+        rtol=0,
+    )
+
+
+def test_source_push_backward_return_compact_pallas_uses_int32_validity(monkeypatch):
+    plan = _duplicate_route_plan()
+    _route_table, dx_expert_major, d_route_block = _expert_major_rows(plan)
+    route_indices = source_push_backward_return.source_push_backward_return_route_indices_jax(plan)
+    valid_dtypes = []
+
+    def fake_pallas_call(
+        dx, d_route, route_dst, route_expert, route_row, route_valid, *, hidden_block, interpret, mesh
+    ):
+        del hidden_block, interpret, mesh
+        valid_dtypes.append(route_valid.dtype)
+        return source_push_backward_return._source_push_backward_return_compact_from_indices_reference(
+            dx,
+            d_route,
+            route_dst,
+            route_expert,
+            route_row,
+            route_valid,
+        )
+
+    monkeypatch.setattr(
+        source_push_backward_return,
+        "_source_push_backward_return_compact_pallas_call",
+        fake_pallas_call,
+    )
+
+    observed = source_push_backward_return._source_push_backward_return_compact_pallas_mgpu(
+        dx_expert_major,
+        d_route_block,
+        route_indices,
+        block_sizes=source_push_backward_return.SourcePushBackwardReturnPallasBlockSizes(hidden_block=1),
+        interpret=True,
+    )
+    expected = source_push_backward_return.source_push_backward_return_reference(
+        dx_expert_major,
+        d_route_block,
+        plan,
+    )
+
+    assert valid_dtypes == [jnp.dtype(jnp.int32)]
     np.testing.assert_allclose(np.asarray(observed.dx), np.asarray(expected.dx), atol=0, rtol=0)
     np.testing.assert_allclose(
         np.asarray(observed.d_route_weights),
@@ -685,6 +742,60 @@ def test_source_push_backward_return_flat_pallas_interpret_matches_reference():
         interpret=True,
     )
 
+    np.testing.assert_allclose(np.asarray(observed.dx), np.asarray(expected.dx), atol=0, rtol=0)
+    np.testing.assert_allclose(
+        np.asarray(observed.d_route_weights),
+        np.asarray(expected.d_route_weights),
+        atol=0,
+        rtol=0,
+    )
+
+
+def test_source_push_backward_return_flat_pallas_uses_int32_validity(monkeypatch):
+    plan = _duplicate_route_plan()
+    _compact_dx, _compact_d_route, flat_dx, flat_d_route, expert_base, src_base_by_expert = _source_padded_flat_rows(
+        plan,
+    )
+    route_indices = source_push_backward_return.source_push_backward_return_flat_route_indices_jax(
+        plan,
+        expert_base=jnp.asarray(expert_base, dtype=jnp.int32),
+        src_base_by_expert=jnp.asarray(src_base_by_expert, dtype=jnp.int32),
+    )
+    valid_dtypes = []
+
+    def fake_pallas_call(dx, d_route, route_dst, route_row, route_valid, *, hidden_block, interpret, mesh):
+        del hidden_block, interpret, mesh
+        valid_dtypes.append(route_valid.dtype)
+        return source_push_backward_return._source_push_backward_return_flat_from_indices_reference(
+            dx,
+            d_route,
+            route_dst,
+            route_row,
+            route_valid,
+        )
+
+    monkeypatch.setattr(
+        source_push_backward_return,
+        "_source_push_backward_return_flat_pallas_call",
+        fake_pallas_call,
+    )
+
+    observed = source_push_backward_return._source_push_backward_return_flat_pallas_mgpu(
+        jnp.asarray(flat_dx),
+        jnp.asarray(flat_d_route),
+        route_indices,
+        block_sizes=source_push_backward_return.SourcePushBackwardReturnPallasBlockSizes(hidden_block=1),
+        interpret=True,
+    )
+    expected = source_push_backward_return.source_push_backward_return_flat_reference(
+        jnp.asarray(flat_dx),
+        jnp.asarray(flat_d_route),
+        plan,
+        expert_base=jnp.asarray(expert_base, dtype=jnp.int32),
+        src_base_by_expert=jnp.asarray(src_base_by_expert, dtype=jnp.int32),
+    )
+
+    assert valid_dtypes == [jnp.dtype(jnp.int32)]
     np.testing.assert_allclose(np.asarray(observed.dx), np.asarray(expected.dx), atol=0, rtol=0)
     np.testing.assert_allclose(
         np.asarray(observed.d_route_weights),

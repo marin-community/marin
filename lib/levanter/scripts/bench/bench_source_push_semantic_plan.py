@@ -1,0 +1,9199 @@
+# Copyright The Levanter Authors
+# SPDX-License-Identifier: Apache-2.0
+
+"""Benchmark JAX-native source-push semantic metadata and reference kernels."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import math
+import os
+import time
+import traceback
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass, replace
+from statistics import median
+from typing import Any
+
+import jax
+import jax.numpy as jnp
+import numpy as np
+from jax.experimental.pallas import mosaic_gpu as mgpu
+from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P
+from jaxtyping import Array, Bool, Float, Int
+
+from levanter.grug._moe.source_push_plan import (
+    SOURCE_PUSH_MESH_AXIS,
+    SourcePushSemanticPlan,
+    SourcePushSemanticQueueMetadata,
+    build_source_push_semantic_plan_jax,
+    source_push_semantic_backward_source_expand_jax,
+    source_push_semantic_combine_jax,
+    source_push_semantic_dx_combine_jax,
+    source_push_semantic_forward_reference_jax,
+    source_push_semantic_gather_x_jax,
+    source_push_semantic_pair_to_expert_major_jax,
+    source_push_semantic_pair_expert_ids_jax,
+    source_push_semantic_queue_metadata_jax,
+    source_push_semantic_source_aligned_expert_offsets_jax,
+    source_push_semantic_route_weights_expert_major_jax,
+    source_push_semantic_swiglu_backward_reference_jax,
+    source_push_semantic_w13_backward_reference_jax,
+    source_push_semantic_w13_reference_jax,
+    source_push_semantic_x_to_expert_major_jax,
+    source_push_semantic_w2_backward_reference_jax,
+    source_push_semantic_w2_reference_jax,
+)
+from levanter.grug._moe.source_push_inbox import PushInboxConfig, source_push_inbox_profile
+from levanter.grug._moe.source_push_inbox_profiles import SOURCE_PUSH_PROFILE_STABLE_216
+from levanter.grug._moe.source_push_semantic_inbox_pallas import (
+    source_push_semantic_inbox_metadata_jax,
+    source_push_semantic_inbox_pack_pallas_mgpu,
+    source_push_semantic_inbox_w13_pallas_mgpu,
+)
+from levanter.grug._moe.source_push_backward_w2 import (
+    SOURCE_PUSH_W2_MATMUL_BACKWARD_IMPLEMENTATION_PALLAS_MGPU,
+    SOURCE_PUSH_W2_MATMUL_BACKWARD_IMPLEMENTATION_REFERENCE,
+)
+from levanter.grug._moe.source_push_semantic_forward_pallas import (
+    SourcePushSemanticGatherXPallasBlockSizes,
+    SourcePushSemanticW13ExpertMajorPallasBlockSizes,
+    SourcePushSemanticW13PallasBlockSizes,
+    source_push_semantic_gather_x_pallas_mgpu,
+    source_push_semantic_w13_expert_major_pallas_mgpu,
+    source_push_semantic_w13_from_x_expert_pallas_mgpu,
+    source_push_semantic_w13_pallas_scaffold_mgpu,
+    source_push_semantic_x_to_expert_major_lookup_pallas_mgpu,
+    source_push_semantic_x_to_expert_major_direct_pallas_mgpu,
+    source_push_semantic_x_to_expert_major_pallas_scaffold_mgpu,
+)
+from levanter.grug._moe.source_push_semantic_metadata_pallas import (
+    SourcePushSemanticMetadataPallasBlockSizes,
+    SourcePushSemanticTileMetadata,
+    build_source_push_semantic_plan_pallas_mgpu,
+    build_source_push_semantic_tile_metadata_pallas_mgpu,
+)
+from levanter.grug._moe.source_push_semantic_mlp import (
+    SourcePushSemanticMlpCapacity,
+    _source_push_moe_mlp_semantic_pallas_mgpu,
+    source_push_moe_mlp_semantic_pallas_mgpu,
+)
+from levanter.grug._moe.source_push_semantic_backward_pallas import (
+    DEFAULT_SEMANTIC_DX_RETURN_HIDDEN_BLOCK,
+    DEFAULT_SEMANTIC_DX_RETURN_ROW_BLOCK,
+    SourcePushSemanticBackwardPallasBlockSizes,
+    SourcePushSemanticDxReturnPallasBlockSizes,
+    source_push_semantic_backward_source_expand_from_return_queue_jax,
+    source_push_semantic_backward_source_expand_from_return_queue_pallas_mgpu,
+    source_push_semantic_backward_dcombine_source_gather_jax,
+    source_push_semantic_backward_dcombine_source_gather_pallas_mgpu,
+    source_push_semantic_backward_dy_route_expert_major_jax,
+    source_push_semantic_backward_dy_route_source_push_pallas_mgpu,
+    source_push_semantic_backward_source_expand_from_expert_major_jax,
+    source_push_semantic_backward_source_expand_from_expert_major_owner_sharded_dcombine_pallas_mgpu,
+    source_push_semantic_backward_source_expand_from_expert_major_pallas_mgpu,
+    source_push_semantic_backward_source_expand_from_expert_major_source_push_pallas_mgpu,
+    source_push_semantic_backward_source_expand_from_expert_major_source_gather_pallas_mgpu,
+    source_push_semantic_backward_source_expand_expert_major_jax,
+    source_push_semantic_backward_source_expand_pallas_mgpu,
+    source_push_semantic_backward_source_expand_pair_pallas_mgpu,
+    source_push_semantic_dx_combine_expert_major_jax,
+    source_push_semantic_dx_combine_pallas_mgpu,
+    source_push_semantic_dx_combine_pair_pallas_mgpu,
+    source_push_semantic_dx_combine_source_queue_pallas_mgpu,
+    source_push_semantic_dx_combine_source_queue_reference_jax,
+    source_push_semantic_dx_return_copy_only_pallas_mgpu,
+    source_push_semantic_dx_return_direct_to_source_combine_pallas_mgpu,
+    source_push_semantic_dx_return_direct_to_source_pallas_mgpu,
+    source_push_semantic_dx_return_direct_to_source_reference_jax,
+    source_push_semantic_dx_return_expert_major_jax,
+    source_push_semantic_dx_return_pallas_mgpu,
+    source_push_semantic_dx_return_remote_source_gather_pallas_mgpu,
+    source_push_semantic_dx_return_slot_reduce_pallas_mgpu,
+    source_push_semantic_dx_return_source_gather_owner_sharded_pallas_mgpu,
+    source_push_semantic_dx_return_source_gather_pallas_mgpu,
+    source_push_semantic_dx_return_sum_pallas_mgpu,
+    source_push_semantic_swiglu_backward_expert_major_jax,
+)
+from levanter.grug._moe.source_push_semantic_backward_w13_pallas import (
+    SourcePushSemanticW13BackwardPallasBlockSizes,
+    source_push_semantic_w13_backward_dx_route_expert_major_pallas_mgpu,
+    source_push_semantic_w13_backward_dw13_pallas_mgpu,
+    source_push_semantic_w13_backward_dw13_expert_major_pallas_mgpu,
+    source_push_semantic_w13_backward_dx_pair_pallas_mgpu,
+    source_push_semantic_w13_backward_expert_major_pallas_mgpu,
+    source_push_semantic_w13_backward_expert_major_reference_jax,
+    source_push_semantic_w13_backward_pallas_scaffold_mgpu,
+)
+from levanter.grug._moe.source_push_semantic_backward_w2_pallas import (
+    SourcePushSemanticW2BackwardExpertMajorPallasBlockSizes,
+    SourcePushSemanticW2BackwardPallasBlockSizes,
+    source_push_semantic_w2_backward_dh_pallas_mgpu,
+    source_push_semantic_w2_backward_dw2_pallas_mgpu,
+    source_push_semantic_w2_backward_expert_major_pallas_mgpu,
+    source_push_semantic_w2_backward_expert_major_reference_jax,
+    source_push_semantic_w2_backward_pallas_mgpu,
+)
+from levanter.grug._moe.source_push_semantic_w2_pallas import (
+    SourcePushSemanticForwardReturnQueueMetadata,
+    SourcePushSemanticForwardReturnPallasBlockSizes,
+    SourcePushSemanticW2ExpertMajorPallasBlockSizes,
+    SourcePushSemanticW2PallasBlockSizes,
+    source_push_semantic_forward_combine_source_gather_pallas_mgpu,
+    source_push_semantic_forward_combine_source_gather_reference_jax,
+    source_push_semantic_forward_expert_major_direct_return_combine_pallas_mgpu,
+    source_push_semantic_forward_return_direct_to_source_pallas_mgpu,
+    source_push_semantic_forward_return_direct_to_source_reference_jax,
+    source_push_semantic_forward_return_copy_only_pallas_mgpu,
+    source_push_semantic_forward_return_expert_major_pallas_mgpu,
+    source_push_semantic_forward_return_expert_major_reference_jax,
+    source_push_semantic_forward_return_queue_metadata_jax,
+    source_push_semantic_forward_return_remote_source_gather_pallas_mgpu,
+    source_push_semantic_forward_return_sum_lookup_owner_sharded_pallas_mgpu,
+    source_push_semantic_forward_return_sum_owner_sharded_pallas_mgpu,
+    source_push_semantic_forward_return_source_gather_pallas_mgpu,
+    source_push_semantic_forward_return_source_gather_reference_jax,
+    source_push_semantic_forward_return_slot_reduce_owner_sharded_pallas_mgpu,
+    source_push_semantic_forward_return_slot_reduce_pallas_mgpu,
+    source_push_semantic_forward_return_sum_pallas_mgpu,
+    source_push_semantic_w2_and_combine_pallas_scaffold_mgpu,
+    source_push_semantic_w2_expert_major_assume_zero_invalid_pallas_mgpu,
+    source_push_semantic_w2_expert_major_pallas_mgpu,
+    source_push_semantic_w2_expert_major_reference_jax,
+    source_push_semantic_w2_pallas_mgpu,
+)
+
+
+KERNEL_NAME = "source_push_semantic_plan"
+DIRECT_QUEUE_SOURCE_ROW_ALIGNMENT = 8
+SOURCE_PADDED_ROW_BLOCK = 64
+SOURCE_PADDED_ENTRIES_PER_RANK = 288
+SOURCE_PADDED_COMPARE_SAMPLE_COUNT = 4096
+SOURCE_PADDED_COMPARE_SAMPLE_ROWS = 64
+DIRECT_RETURN_COMPARE_SAMPLE_COUNT = 4096
+DIRECT_RETURN_COMPARE_SAMPLE_ROWS = 64
+
+MODE_METADATA = "metadata"
+MODE_METADATA_PALLAS = "metadata_pallas"
+MODE_METADATA_TILE_PALLAS = "metadata_tile_pallas"
+MODE_GATHER_X = "gather_x"
+MODE_GATHER_X_PALLAS = "gather_x_pallas"
+MODE_W13 = "w13"
+MODE_W13_PALLAS_SCAFFOLD = "w13_pallas_scaffold"
+MODE_W13_EXPERT_MAJOR_PACK = "w13_expert_major_pack"
+MODE_W13_EXPERT_MAJOR_PACK_PALLAS_SCAFFOLD = "w13_expert_major_pack_pallas_scaffold"
+MODE_W13_EXPERT_MAJOR_PACK_PALLAS_DIRECT = "w13_expert_major_pack_pallas_direct"
+MODE_W13_EXPERT_MAJOR_PACK_PALLAS_LOOKUP = "w13_expert_major_pack_pallas_lookup"
+MODE_W13_EXPERT_MAJOR_PACK_RESHARD = "w13_expert_major_pack_reshard"
+MODE_W13_EXPERT_MAJOR_PREPACKED = "w13_expert_major_prepacked"
+MODE_W13_EXPERT_MAJOR_PREPACKED_PALLAS = "w13_expert_major_prepacked_pallas"
+MODE_W13_EXPERT_MAJOR_PREPACKED_COMPARE = "w13_expert_major_prepacked_compare"
+MODE_W13_EXPERT_MAJOR_PALLAS = "w13_expert_major_pallas"
+MODE_W13_EXPERT_MAJOR_COMPARE = "w13_expert_major_compare"
+MODE_SOURCE_PADDED_INBOX_PACK_PALLAS = "source_padded_inbox_pack_pallas"
+MODE_W13_SOURCE_PADDED_INBOX_PALLAS = "w13_source_padded_inbox_pallas"
+MODE_W13_SOURCE_PADDED_INBOX_COMPARE = "w13_source_padded_inbox_compare"
+MODE_W13_SOURCE_PADDED_DIRECT_PACK_PALLAS = "w13_source_padded_direct_pack_pallas"
+MODE_W13_SOURCE_PADDED_DIRECT_PACK_COMPARE = "w13_source_padded_direct_pack_compare"
+MODE_W2 = "w2"
+MODE_W2_PALLAS = "w2_pallas"
+MODE_W2_COMBINE_PALLAS_SCAFFOLD = "w2_combine_pallas_scaffold"
+MODE_W2_EXPERT_MAJOR_PREPACKED = "w2_expert_major_prepacked"
+MODE_W2_EXPERT_MAJOR_PREPACKED_PALLAS = "w2_expert_major_prepacked_pallas"
+MODE_W2_EXPERT_MAJOR_PREPACKED_COMPARE = "w2_expert_major_prepacked_compare"
+MODE_W2_EXPERT_MAJOR_PREPACKED_PALLAS_ASSUME_ZERO_INVALID = "w2_expert_major_prepacked_pallas_assume_zero_invalid"
+MODE_W2_EXPERT_MAJOR_PREPACKED_ASSUME_ZERO_INVALID_COMPARE = "w2_expert_major_prepacked_assume_zero_invalid_compare"
+MODE_COMBINE = "combine"
+MODE_FORWARD = "forward"
+MODE_FORWARD_PALLAS_SCAFFOLD = "forward_pallas_scaffold"
+MODE_FORWARD_EXPERT_MAJOR_PALLAS = "forward_expert_major_pallas"
+MODE_FORWARD_EXPERT_MAJOR_COMPARE = "forward_expert_major_compare"
+MODE_FORWARD_EXPERT_MAJOR_PREPACKED_PALLAS = "forward_expert_major_prepacked_pallas"
+MODE_FORWARD_EXPERT_MAJOR_PREPACKED_COMPARE = "forward_expert_major_prepacked_compare"
+MODE_FORWARD_RETURN_EXPERT_MAJOR_PREPACKED_PALLAS = "forward_return_expert_major_prepacked_pallas"
+MODE_FORWARD_RETURN_EXPERT_MAJOR_PREPACKED_COMPARE = "forward_return_expert_major_prepacked_compare"
+MODE_FORWARD_RETURN_EXPERT_MAJOR_PREPACKED_SHARDED_PALLAS = "forward_return_expert_major_prepacked_sharded_pallas"
+MODE_FORWARD_RETURN_EXPERT_MAJOR_PREPACKED_SHARDED_COMPARE = "forward_return_expert_major_prepacked_sharded_compare"
+MODE_FORWARD_RETURN_SLOT_REDUCE_EXPERT_MAJOR_PREPACKED_SHARDED_PALLAS = (
+    "forward_return_slot_reduce_expert_major_prepacked_sharded_pallas"
+)
+MODE_FORWARD_RETURN_SLOT_REDUCE_EXPERT_MAJOR_PREPACKED_SHARDED_COMPARE = (
+    "forward_return_slot_reduce_expert_major_prepacked_sharded_compare"
+)
+MODE_FORWARD_RETURN_SLOT_REDUCE_EXPERT_MAJOR_PREPACKED_OWNER_SHARDED_PALLAS = (
+    "forward_return_slot_reduce_expert_major_prepacked_owner_sharded_pallas"
+)
+MODE_FORWARD_RETURN_SLOT_REDUCE_EXPERT_MAJOR_PREPACKED_OWNER_SHARDED_COMPARE = (
+    "forward_return_slot_reduce_expert_major_prepacked_owner_sharded_compare"
+)
+MODE_FORWARD_RETURN_SUM_EXPERT_MAJOR_PREPACKED_PALLAS = "forward_return_sum_expert_major_prepacked_pallas"
+MODE_FORWARD_RETURN_SUM_EXPERT_MAJOR_PREPACKED_COMPARE = "forward_return_sum_expert_major_prepacked_compare"
+MODE_FORWARD_RETURN_SUM_EXPERT_MAJOR_PREPACKED_SHARDED_PALLAS = (
+    "forward_return_sum_expert_major_prepacked_sharded_pallas"
+)
+MODE_FORWARD_RETURN_SUM_EXPERT_MAJOR_PREPACKED_SHARDED_COMPARE = (
+    "forward_return_sum_expert_major_prepacked_sharded_compare"
+)
+MODE_FORWARD_RETURN_SUM_EXPERT_MAJOR_PREPACKED_OWNER_SHARDED_PALLAS = (
+    "forward_return_sum_expert_major_prepacked_owner_sharded_pallas"
+)
+MODE_FORWARD_RETURN_SUM_EXPERT_MAJOR_PREPACKED_OWNER_SHARDED_COMPARE = (
+    "forward_return_sum_expert_major_prepacked_owner_sharded_compare"
+)
+MODE_FORWARD_RETURN_SUM_LOOKUP_EXPERT_MAJOR_PREPACKED_OWNER_SHARDED_PALLAS = (
+    "forward_return_sum_lookup_expert_major_prepacked_owner_sharded_pallas"
+)
+MODE_FORWARD_RETURN_SUM_LOOKUP_EXPERT_MAJOR_PREPACKED_OWNER_SHARDED_COMPARE = (
+    "forward_return_sum_lookup_expert_major_prepacked_owner_sharded_compare"
+)
+MODE_FORWARD_RETURN_REVERSE_ROUTE_SOURCE_GATHER_EXPERT_MAJOR_PREPACKED_PALLAS = (
+    "forward_return_reverse_route_source_gather_expert_major_prepacked_pallas"
+)
+MODE_FORWARD_RETURN_REVERSE_ROUTE_SOURCE_GATHER_EXPERT_MAJOR_PREPACKED_COMPARE = (
+    "forward_return_reverse_route_source_gather_expert_major_prepacked_compare"
+)
+MODE_FORWARD_RETURN_REMOTE_SOURCE_GATHER_EXPERT_MAJOR_PREPACKED_PALLAS = (
+    "forward_return_remote_source_gather_expert_major_prepacked_pallas"
+)
+MODE_FORWARD_RETURN_REMOTE_SOURCE_GATHER_EXPERT_MAJOR_PREPACKED_COMPARE = (
+    "forward_return_remote_source_gather_expert_major_prepacked_compare"
+)
+MODE_FORWARD_RETURN_COPY_ONLY_EXPERT_MAJOR_PREPACKED_PALLAS = "forward_return_copy_only_expert_major_prepacked_pallas"
+MODE_FORWARD_RETURN_COPY_ONLY_EXPERT_MAJOR_PREPACKED_COMPARE = (
+    "forward_return_copy_only_expert_major_prepacked_compare"
+)
+MODE_FORWARD_RETURN_DIRECT_TO_SOURCE_PALLAS = "forward_return_direct_to_source_pallas"
+MODE_FORWARD_RETURN_DIRECT_TO_SOURCE_COMPARE = "forward_return_direct_to_source_compare"
+MODE_FORWARD_COMBINE_SOURCE_GATHER_PALLAS = "forward_combine_source_gather_pallas"
+MODE_FORWARD_COMBINE_SOURCE_GATHER_COMPARE = "forward_combine_source_gather_compare"
+MODE_FORWARD_EXPERT_MAJOR_DIRECT_RETURN_COMBINE_PALLAS = "forward_expert_major_direct_return_combine_pallas"
+MODE_FORWARD_EXPERT_MAJOR_DIRECT_RETURN_COMBINE_COMPARE = "forward_expert_major_direct_return_combine_compare"
+MODE_FORWARD_EXPERT_MAJOR_DIRECT_PACK_DIRECT_RETURN_COMBINE_PALLAS = (
+    "forward_expert_major_direct_pack_direct_return_combine_pallas"
+)
+MODE_FORWARD_EXPERT_MAJOR_DIRECT_PACK_DIRECT_RETURN_COMBINE_COMPARE = (
+    "forward_expert_major_direct_pack_direct_return_combine_compare"
+)
+MODE_FORWARD_SOURCE_PADDED_INBOX_DIRECT_RETURN_COMBINE_PALLAS = (
+    "forward_source_padded_inbox_direct_return_combine_pallas"
+)
+MODE_FORWARD_SOURCE_PADDED_INBOX_DIRECT_RETURN_COMBINE_COMPARE = (
+    "forward_source_padded_inbox_direct_return_combine_compare"
+)
+MODE_FORWARD_SOURCE_PADDED_DIRECT_PACK_DIRECT_RETURN_COMBINE_PALLAS = (
+    "forward_source_padded_direct_pack_direct_return_combine_pallas"
+)
+MODE_FORWARD_SOURCE_PADDED_DIRECT_PACK_DIRECT_RETURN_COMBINE_COMPARE = (
+    "forward_source_padded_direct_pack_direct_return_combine_compare"
+)
+MODE_FORWARD_EXPERT_MAJOR_PREPACKED_RETURN_PALLAS = "forward_expert_major_prepacked_return_pallas"
+MODE_FORWARD_EXPERT_MAJOR_PREPACKED_RETURN_COMPARE = "forward_expert_major_prepacked_return_compare"
+MODE_FORWARD_EXPERT_MAJOR_RETURN_SUM_PALLAS = "forward_expert_major_return_sum_pallas"
+MODE_FORWARD_EXPERT_MAJOR_RETURN_SUM_COMPARE = "forward_expert_major_return_sum_compare"
+MODE_FORWARD_EXPERT_MAJOR_DIRECT_PACK_OWNER_SHARDED_Y_STOP_PALLAS = (
+    "forward_expert_major_direct_pack_owner_sharded_y_stop_pallas"
+)
+MODE_FORWARD_EXPERT_MAJOR_DIRECT_PACK_REMOTE_Y_STOP_PALLAS = "forward_expert_major_direct_pack_remote_y_stop_pallas"
+MODE_FORWARD_SOURCE_EXPAND_DIRECT_PACK_OWNER_SHARDED_Y_PALLAS = (
+    "forward_source_expand_direct_pack_owner_sharded_y_pallas"
+)
+MODE_FORWARD_SOURCE_EXPAND_DIRECT_PACK_REMOTE_Y_PALLAS = "forward_source_expand_direct_pack_remote_y_pallas"
+MODE_FORWARD_W2_BACKWARD_DIRECT_PACK_OWNER_SHARDED_Y_PALLAS = "forward_w2_backward_direct_pack_owner_sharded_y_pallas"
+MODE_FORWARD_W2_BACKWARD_DIRECT_PACK_REMOTE_Y_PALLAS = "forward_w2_backward_direct_pack_remote_y_pallas"
+MODE_FORWARD_W13_BACKWARD_DIRECT_PACK_OWNER_SHARDED_Y_PALLAS = (
+    "forward_w13_backward_direct_pack_owner_sharded_y_pallas"
+)
+MODE_FORWARD_W13_BACKWARD_DIRECT_PACK_REMOTE_Y_PALLAS = "forward_w13_backward_direct_pack_remote_y_pallas"
+MODE_FORWARD_W13_BACKWARD_DIGEST_DIRECT_PACK_OWNER_SHARDED_Y_PALLAS = (
+    "forward_w13_backward_digest_direct_pack_owner_sharded_y_pallas"
+)
+MODE_FORWARD_W13_BACKWARD_DIGEST_DIRECT_PACK_REMOTE_Y_PALLAS = (
+    "forward_w13_backward_digest_direct_pack_remote_y_pallas"
+)
+MODE_FORWARD_W13_BACKWARD_BARRIER_DIGEST_DIRECT_PACK_OWNER_SHARDED_Y_PALLAS = (
+    "forward_w13_backward_barrier_digest_direct_pack_owner_sharded_y_pallas"
+)
+MODE_FORWARD_W13_BACKWARD_BARRIER_DIGEST_DIRECT_PACK_REMOTE_Y_PALLAS = (
+    "forward_w13_backward_barrier_digest_direct_pack_remote_y_pallas"
+)
+MODE_FORWARD_SWIGLU_BACKWARD_DIGEST_DIRECT_PACK_OWNER_SHARDED_Y_PALLAS = (
+    "forward_swiglu_backward_digest_direct_pack_owner_sharded_y_pallas"
+)
+MODE_FORWARD_SWIGLU_BACKWARD_DIGEST_DIRECT_PACK_REMOTE_Y_PALLAS = (
+    "forward_swiglu_backward_digest_direct_pack_remote_y_pallas"
+)
+MODE_FORWARD_W13_DX_BACKWARD_DIGEST_DIRECT_PACK_OWNER_SHARDED_Y_PALLAS = (
+    "forward_w13_dx_backward_digest_direct_pack_owner_sharded_y_pallas"
+)
+MODE_FORWARD_W13_DX_BACKWARD_DIGEST_DIRECT_PACK_REMOTE_Y_PALLAS = (
+    "forward_w13_dx_backward_digest_direct_pack_remote_y_pallas"
+)
+MODE_FORWARD_W13_DW13_BACKWARD_DIGEST_DIRECT_PACK_OWNER_SHARDED_Y_PALLAS = (
+    "forward_w13_dw13_backward_digest_direct_pack_owner_sharded_y_pallas"
+)
+MODE_FORWARD_W13_DW13_BACKWARD_DIGEST_DIRECT_PACK_REMOTE_Y_PALLAS = (
+    "forward_w13_dw13_backward_digest_direct_pack_remote_y_pallas"
+)
+MODE_BACKWARD_SOURCE_EXPAND = "backward_source_expand"
+MODE_BACKWARD_SOURCE_EXPAND_PALLAS = "backward_source_expand_pallas"
+MODE_BACKWARD_SOURCE_EXPAND_EXPERT_MAJOR_PALLAS = "backward_source_expand_expert_major_pallas"
+MODE_BACKWARD_SOURCE_EXPAND_EXPERT_MAJOR_COMPARE = "backward_source_expand_expert_major_compare"
+MODE_BACKWARD_SOURCE_EXPAND_FROM_EXPERT_MAJOR_PALLAS = "backward_source_expand_from_expert_major_pallas"
+MODE_BACKWARD_SOURCE_EXPAND_FROM_EXPERT_MAJOR_COMPARE = "backward_source_expand_from_expert_major_compare"
+MODE_BACKWARD_SOURCE_EXPAND_FROM_SAVED_RETURN_QUEUE_PALLAS = "backward_source_expand_from_saved_return_queue_pallas"
+MODE_BACKWARD_SOURCE_EXPAND_FROM_SAVED_RETURN_QUEUE_COMPARE = "backward_source_expand_from_saved_return_queue_compare"
+MODE_BACKWARD_SOURCE_EXPAND_FROM_EXPERT_MAJOR_OWNER_SHARDED_DCOMBINE_PALLAS = (
+    "backward_source_expand_from_expert_major_owner_sharded_dcombine_pallas"
+)
+MODE_BACKWARD_SOURCE_EXPAND_FROM_EXPERT_MAJOR_OWNER_SHARDED_DCOMBINE_COMPARE = (
+    "backward_source_expand_from_expert_major_owner_sharded_dcombine_compare"
+)
+MODE_BACKWARD_DY_ROUTE_SOURCE_PUSH_EXPERT_MAJOR_PALLAS = "backward_dy_route_source_push_expert_major_pallas"
+MODE_BACKWARD_DY_ROUTE_SOURCE_PUSH_EXPERT_MAJOR_COMPARE = "backward_dy_route_source_push_expert_major_compare"
+MODE_BACKWARD_SOURCE_EXPAND_FROM_EXPERT_MAJOR_SOURCE_PUSH_PALLAS = (
+    "backward_source_expand_from_expert_major_source_push_pallas"
+)
+MODE_BACKWARD_SOURCE_EXPAND_FROM_EXPERT_MAJOR_SOURCE_PUSH_COMPARE = (
+    "backward_source_expand_from_expert_major_source_push_compare"
+)
+MODE_BACKWARD_DCOMBINE_SOURCE_GATHER_EXPERT_MAJOR_PALLAS = "backward_dcombine_source_gather_expert_major_pallas"
+MODE_BACKWARD_DCOMBINE_SOURCE_GATHER_EXPERT_MAJOR_COMPARE = "backward_dcombine_source_gather_expert_major_compare"
+MODE_BACKWARD_SOURCE_EXPAND_FROM_EXPERT_MAJOR_SOURCE_GATHER_PALLAS = (
+    "backward_source_expand_from_expert_major_source_gather_pallas"
+)
+MODE_BACKWARD_SOURCE_EXPAND_FROM_EXPERT_MAJOR_SOURCE_GATHER_COMPARE = (
+    "backward_source_expand_from_expert_major_source_gather_compare"
+)
+MODE_BACKWARD_W2 = "backward_w2"
+MODE_BACKWARD_W2_EXPERT_MAJOR = "backward_w2_expert_major"
+MODE_BACKWARD_W2_EXPERT_MAJOR_PALLAS = "backward_w2_expert_major_pallas"
+MODE_BACKWARD_W2_EXPERT_MAJOR_COMPARE = "backward_w2_expert_major_compare"
+MODE_BACKWARD_W2_EXPERT_MAJOR_PACK = "backward_w2_expert_major_pack"
+MODE_BACKWARD_W2_EXPERT_MAJOR_PACK_RESHARD = "backward_w2_expert_major_pack_reshard"
+MODE_BACKWARD_W2_EXPERT_MAJOR_PREPACKED = "backward_w2_expert_major_prepacked"
+MODE_BACKWARD_W2_EXPERT_MAJOR_PREPACKED_PALLAS = "backward_w2_expert_major_prepacked_pallas"
+MODE_BACKWARD_W2_EXPERT_MAJOR_PREPACKED_COMPARE = "backward_w2_expert_major_prepacked_compare"
+MODE_BACKWARD_W2_DH_PALLAS = "backward_w2_dh_pallas"
+MODE_BACKWARD_W2_DW2_PALLAS = "backward_w2_dw2_pallas"
+MODE_BACKWARD_W2_PALLAS_SCAFFOLD = "backward_w2_pallas_scaffold"
+MODE_BACKWARD_SWIGLU = "backward_swiglu"
+MODE_BACKWARD_W13 = "backward_w13"
+MODE_BACKWARD_W13_EXPERT_MAJOR_PREPACKED = "backward_w13_expert_major_prepacked"
+MODE_BACKWARD_W13_EXPERT_MAJOR_PREPACKED_PALLAS = "backward_w13_expert_major_prepacked_pallas"
+MODE_BACKWARD_W13_EXPERT_MAJOR_PREPACKED_COMPARE = "backward_w13_expert_major_prepacked_compare"
+MODE_BACKWARD_W13_DX_ROUTE_EXPERT_MAJOR_PREPACKED_PALLAS = "backward_w13_dx_route_expert_major_prepacked_pallas"
+MODE_BACKWARD_W13_DW13_EXPERT_MAJOR_PREPACKED_PALLAS = "backward_w13_dw13_expert_major_prepacked_pallas"
+MODE_BACKWARD_W13_DX_PAIR_PALLAS = "backward_w13_dx_pair_pallas"
+MODE_BACKWARD_W13_DW13_PALLAS = "backward_w13_dw13_pallas"
+MODE_BACKWARD_W13_PALLAS_SCAFFOLD = "backward_w13_pallas_scaffold"
+MODE_DX_COMBINE = "dx_combine"
+MODE_DX_COMBINE_PALLAS = "dx_combine_pallas"
+MODE_DX_COMBINE_EXPERT_MAJOR_PALLAS = "dx_combine_expert_major_pallas"
+MODE_DX_COMBINE_EXPERT_MAJOR_COMPARE = "dx_combine_expert_major_compare"
+MODE_DX_RETURN_EXPERT_MAJOR_PALLAS = "dx_return_expert_major_pallas"
+MODE_DX_RETURN_EXPERT_MAJOR_COMPARE = "dx_return_expert_major_compare"
+MODE_DX_RETURN_EXPERT_MAJOR_PREPACKED_PALLAS = "dx_return_expert_major_prepacked_pallas"
+MODE_DX_RETURN_EXPERT_MAJOR_PREPACKED_COMPARE = "dx_return_expert_major_prepacked_compare"
+MODE_DX_RETURN_SLOT_REDUCE_EXPERT_MAJOR_PREPACKED_PALLAS = "dx_return_slot_reduce_expert_major_prepacked_pallas"
+MODE_DX_RETURN_SLOT_REDUCE_EXPERT_MAJOR_PREPACKED_COMPARE = "dx_return_slot_reduce_expert_major_prepacked_compare"
+MODE_DX_RETURN_SUM_EXPERT_MAJOR_PREPACKED_PALLAS = "dx_return_sum_expert_major_prepacked_pallas"
+MODE_DX_RETURN_SUM_EXPERT_MAJOR_PREPACKED_COMPARE = "dx_return_sum_expert_major_prepacked_compare"
+MODE_DX_RETURN_SOURCE_GATHER_EXPERT_MAJOR_PREPACKED_PALLAS = "dx_return_source_gather_expert_major_prepacked_pallas"
+MODE_DX_RETURN_SOURCE_GATHER_EXPERT_MAJOR_PREPACKED_COMPARE = "dx_return_source_gather_expert_major_prepacked_compare"
+MODE_DX_RETURN_SOURCE_GATHER_EXPERT_MAJOR_PREPACKED_OWNER_SHARDED_PALLAS = (
+    "dx_return_source_gather_expert_major_prepacked_owner_sharded_pallas"
+)
+MODE_DX_RETURN_SOURCE_GATHER_EXPERT_MAJOR_PREPACKED_OWNER_SHARDED_COMPARE = (
+    "dx_return_source_gather_expert_major_prepacked_owner_sharded_compare"
+)
+MODE_DX_RETURN_REMOTE_SOURCE_GATHER_EXPERT_MAJOR_PREPACKED_PALLAS = (
+    "dx_return_remote_source_gather_expert_major_prepacked_pallas"
+)
+MODE_DX_RETURN_REMOTE_SOURCE_GATHER_EXPERT_MAJOR_PREPACKED_COMPARE = (
+    "dx_return_remote_source_gather_expert_major_prepacked_compare"
+)
+MODE_DX_RETURN_COPY_ONLY_EXPERT_MAJOR_PREPACKED_PALLAS = "dx_return_copy_only_expert_major_prepacked_pallas"
+MODE_DX_RETURN_COPY_ONLY_EXPERT_MAJOR_PREPACKED_COMPARE = "dx_return_copy_only_expert_major_prepacked_compare"
+MODE_DX_RETURN_DIRECT_TO_SOURCE_COMBINE_PALLAS = "dx_return_direct_to_source_combine_pallas"
+MODE_DX_RETURN_DIRECT_TO_SOURCE_COMBINE_COMPARE = "dx_return_direct_to_source_combine_compare"
+MODE_BACKWARD = "backward"
+MODE_BACKWARD_PALLAS_SCAFFOLD = "backward_pallas_scaffold"
+MODE_FORWARD_BACKWARD = "forward_backward"
+MODE_FORWARD_BACKWARD_PALLAS_SCAFFOLD = "forward_backward_pallas_scaffold"
+MODE_FORWARD_BACKWARD_EXPERT_MAJOR_PALLAS = "forward_backward_expert_major_pallas"
+MODE_FORWARD_BACKWARD_EXPERT_MAJOR_COMPARE = "forward_backward_expert_major_compare"
+MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_PALLAS = "forward_backward_expert_major_saved_x_pallas"
+MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_PALLAS = (
+    "forward_backward_expert_major_saved_x_direct_pack_pallas"
+)
+MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_LOOKUP_PACK_PALLAS = (
+    "forward_backward_expert_major_saved_x_lookup_pack_pallas"
+)
+MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_LOOKUP_PACK_COMPARE = (
+    "forward_backward_expert_major_saved_x_lookup_pack_compare"
+)
+MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_SOURCE_GATHER_PALLAS = (
+    "forward_backward_expert_major_saved_x_direct_pack_source_gather_pallas"
+)
+MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_SOURCE_GATHER_COMPARE = (
+    "forward_backward_expert_major_saved_x_direct_pack_source_gather_compare"
+)
+MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_OWNER_SHARDED_PALLAS = (
+    "forward_backward_expert_major_saved_x_direct_pack_owner_sharded_pallas"
+)
+MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_OWNER_SHARDED_COMPARE = (
+    "forward_backward_expert_major_saved_x_direct_pack_owner_sharded_compare"
+)
+MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_OWNER_SHARDED_Y_PALLAS = (
+    "forward_backward_expert_major_saved_x_direct_pack_owner_sharded_y_pallas"
+)
+MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_DIRECT_RETURN_COMBINE_DUPLICATE_W2_PALLAS = (
+    "forward_backward_expert_major_saved_x_direct_pack_direct_return_combine_duplicate_w2_pallas"
+)
+MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_DIRECT_RETURN_COMBINE_DUPLICATE_W2_COMPARE = (
+    "forward_backward_expert_major_saved_x_direct_pack_direct_return_combine_duplicate_w2_compare"
+)
+MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_DIRECT_QUEUE_PALLAS = (
+    "forward_backward_expert_major_saved_x_direct_pack_direct_queue_pallas"
+)
+MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_DIRECT_QUEUE_WITH_METADATA_PALLAS = (
+    "forward_backward_expert_major_saved_x_direct_pack_direct_queue_with_metadata_pallas"
+)
+MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_DIRECT_QUEUE_COMPARE = (
+    "forward_backward_expert_major_saved_x_direct_pack_direct_queue_compare"
+)
+MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_OWNER_SHARDED_Y_SLOT_REDUCE_PALLAS = (
+    "forward_backward_expert_major_saved_x_direct_pack_owner_sharded_y_slot_reduce_pallas"
+)
+MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_NO_Y_PALLAS = (
+    "forward_backward_expert_major_saved_x_direct_pack_no_y_pallas"
+)
+MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_REMOTE_Y_PALLAS = (
+    "forward_backward_expert_major_saved_x_direct_pack_remote_y_pallas"
+)
+MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_REMOTE_Y_DELAYED_PALLAS = (
+    "forward_backward_expert_major_saved_x_direct_pack_remote_y_delayed_pallas"
+)
+MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_OWNER_SHARDED_DX_PALLAS = (
+    "forward_backward_expert_major_saved_x_direct_pack_owner_sharded_dx_pallas"
+)
+MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_REMOTE_DX_PALLAS = (
+    "forward_backward_expert_major_saved_x_direct_pack_remote_dx_pallas"
+)
+MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_OWNER_SHARDED_Y_WITH_METADATA_PALLAS = (
+    "forward_backward_expert_major_saved_x_direct_pack_owner_sharded_y_with_metadata_pallas"
+)
+MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_OWNER_SHARDED_Y_WITH_PALLAS_METADATA_PALLAS = (
+    "forward_backward_expert_major_saved_x_direct_pack_owner_sharded_y_with_pallas_metadata_pallas"
+)
+MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_COMPARE = "forward_backward_expert_major_saved_x_compare"
+MODE_FORWARD_BACKWARD_SOURCE_PADDED_INBOX_DIRECT_QUEUE_PALLAS = (
+    "forward_backward_source_padded_inbox_direct_queue_pallas"
+)
+MODE_FORWARD_BACKWARD_SOURCE_PADDED_INBOX_DIRECT_QUEUE_COMPARE = (
+    "forward_backward_source_padded_inbox_direct_queue_compare"
+)
+MODE_FORWARD_BACKWARD_SOURCE_PADDED_DIRECT_PACK_DIRECT_QUEUE_PALLAS = (
+    "forward_backward_source_padded_direct_pack_direct_queue_pallas"
+)
+MODE_FORWARD_BACKWARD_SOURCE_PADDED_DIRECT_PACK_DIRECT_QUEUE_COMPARE = (
+    "forward_backward_source_padded_direct_pack_direct_queue_compare"
+)
+MODE_FORWARD_BACKWARD_SOURCE_PADDED_DIRECT_PACK_DIRECT_QUEUE_WITH_METADATA_PALLAS = (
+    "forward_backward_source_padded_direct_pack_direct_queue_with_metadata_pallas"
+)
+
+MODES = (
+    MODE_METADATA,
+    MODE_METADATA_PALLAS,
+    MODE_METADATA_TILE_PALLAS,
+    MODE_GATHER_X,
+    MODE_GATHER_X_PALLAS,
+    MODE_W13,
+    MODE_W13_PALLAS_SCAFFOLD,
+    MODE_W13_EXPERT_MAJOR_PACK,
+    MODE_W13_EXPERT_MAJOR_PACK_PALLAS_SCAFFOLD,
+    MODE_W13_EXPERT_MAJOR_PACK_PALLAS_DIRECT,
+    MODE_W13_EXPERT_MAJOR_PACK_PALLAS_LOOKUP,
+    MODE_W13_EXPERT_MAJOR_PACK_RESHARD,
+    MODE_W13_EXPERT_MAJOR_PREPACKED,
+    MODE_W13_EXPERT_MAJOR_PREPACKED_PALLAS,
+    MODE_W13_EXPERT_MAJOR_PREPACKED_COMPARE,
+    MODE_W13_EXPERT_MAJOR_PALLAS,
+    MODE_W13_EXPERT_MAJOR_COMPARE,
+    MODE_SOURCE_PADDED_INBOX_PACK_PALLAS,
+    MODE_W13_SOURCE_PADDED_INBOX_PALLAS,
+    MODE_W13_SOURCE_PADDED_INBOX_COMPARE,
+    MODE_W13_SOURCE_PADDED_DIRECT_PACK_PALLAS,
+    MODE_W13_SOURCE_PADDED_DIRECT_PACK_COMPARE,
+    MODE_W2,
+    MODE_W2_PALLAS,
+    MODE_W2_COMBINE_PALLAS_SCAFFOLD,
+    MODE_W2_EXPERT_MAJOR_PREPACKED,
+    MODE_W2_EXPERT_MAJOR_PREPACKED_PALLAS,
+    MODE_W2_EXPERT_MAJOR_PREPACKED_COMPARE,
+    MODE_W2_EXPERT_MAJOR_PREPACKED_PALLAS_ASSUME_ZERO_INVALID,
+    MODE_W2_EXPERT_MAJOR_PREPACKED_ASSUME_ZERO_INVALID_COMPARE,
+    MODE_COMBINE,
+    MODE_FORWARD,
+    MODE_FORWARD_PALLAS_SCAFFOLD,
+    MODE_FORWARD_EXPERT_MAJOR_PALLAS,
+    MODE_FORWARD_EXPERT_MAJOR_COMPARE,
+    MODE_FORWARD_EXPERT_MAJOR_PREPACKED_PALLAS,
+    MODE_FORWARD_EXPERT_MAJOR_PREPACKED_COMPARE,
+    MODE_FORWARD_RETURN_EXPERT_MAJOR_PREPACKED_PALLAS,
+    MODE_FORWARD_RETURN_EXPERT_MAJOR_PREPACKED_COMPARE,
+    MODE_FORWARD_RETURN_EXPERT_MAJOR_PREPACKED_SHARDED_PALLAS,
+    MODE_FORWARD_RETURN_EXPERT_MAJOR_PREPACKED_SHARDED_COMPARE,
+    MODE_FORWARD_RETURN_SLOT_REDUCE_EXPERT_MAJOR_PREPACKED_SHARDED_PALLAS,
+    MODE_FORWARD_RETURN_SLOT_REDUCE_EXPERT_MAJOR_PREPACKED_SHARDED_COMPARE,
+    MODE_FORWARD_RETURN_SLOT_REDUCE_EXPERT_MAJOR_PREPACKED_OWNER_SHARDED_PALLAS,
+    MODE_FORWARD_RETURN_SLOT_REDUCE_EXPERT_MAJOR_PREPACKED_OWNER_SHARDED_COMPARE,
+    MODE_FORWARD_RETURN_SUM_EXPERT_MAJOR_PREPACKED_PALLAS,
+    MODE_FORWARD_RETURN_SUM_EXPERT_MAJOR_PREPACKED_COMPARE,
+    MODE_FORWARD_RETURN_SUM_EXPERT_MAJOR_PREPACKED_SHARDED_PALLAS,
+    MODE_FORWARD_RETURN_SUM_EXPERT_MAJOR_PREPACKED_SHARDED_COMPARE,
+    MODE_FORWARD_RETURN_SUM_EXPERT_MAJOR_PREPACKED_OWNER_SHARDED_PALLAS,
+    MODE_FORWARD_RETURN_SUM_EXPERT_MAJOR_PREPACKED_OWNER_SHARDED_COMPARE,
+    MODE_FORWARD_RETURN_SUM_LOOKUP_EXPERT_MAJOR_PREPACKED_OWNER_SHARDED_PALLAS,
+    MODE_FORWARD_RETURN_SUM_LOOKUP_EXPERT_MAJOR_PREPACKED_OWNER_SHARDED_COMPARE,
+    MODE_FORWARD_RETURN_REMOTE_SOURCE_GATHER_EXPERT_MAJOR_PREPACKED_PALLAS,
+    MODE_FORWARD_RETURN_REMOTE_SOURCE_GATHER_EXPERT_MAJOR_PREPACKED_COMPARE,
+    MODE_FORWARD_RETURN_REVERSE_ROUTE_SOURCE_GATHER_EXPERT_MAJOR_PREPACKED_PALLAS,
+    MODE_FORWARD_RETURN_REVERSE_ROUTE_SOURCE_GATHER_EXPERT_MAJOR_PREPACKED_COMPARE,
+    MODE_FORWARD_RETURN_COPY_ONLY_EXPERT_MAJOR_PREPACKED_PALLAS,
+    MODE_FORWARD_RETURN_COPY_ONLY_EXPERT_MAJOR_PREPACKED_COMPARE,
+    MODE_FORWARD_RETURN_DIRECT_TO_SOURCE_PALLAS,
+    MODE_FORWARD_RETURN_DIRECT_TO_SOURCE_COMPARE,
+    MODE_FORWARD_COMBINE_SOURCE_GATHER_PALLAS,
+    MODE_FORWARD_COMBINE_SOURCE_GATHER_COMPARE,
+    MODE_FORWARD_EXPERT_MAJOR_DIRECT_RETURN_COMBINE_PALLAS,
+    MODE_FORWARD_EXPERT_MAJOR_DIRECT_RETURN_COMBINE_COMPARE,
+    MODE_FORWARD_EXPERT_MAJOR_DIRECT_PACK_DIRECT_RETURN_COMBINE_PALLAS,
+    MODE_FORWARD_EXPERT_MAJOR_DIRECT_PACK_DIRECT_RETURN_COMBINE_COMPARE,
+    MODE_FORWARD_SOURCE_PADDED_INBOX_DIRECT_RETURN_COMBINE_PALLAS,
+    MODE_FORWARD_SOURCE_PADDED_INBOX_DIRECT_RETURN_COMBINE_COMPARE,
+    MODE_FORWARD_SOURCE_PADDED_DIRECT_PACK_DIRECT_RETURN_COMBINE_PALLAS,
+    MODE_FORWARD_SOURCE_PADDED_DIRECT_PACK_DIRECT_RETURN_COMBINE_COMPARE,
+    MODE_FORWARD_EXPERT_MAJOR_PREPACKED_RETURN_PALLAS,
+    MODE_FORWARD_EXPERT_MAJOR_PREPACKED_RETURN_COMPARE,
+    MODE_FORWARD_EXPERT_MAJOR_RETURN_SUM_PALLAS,
+    MODE_FORWARD_EXPERT_MAJOR_RETURN_SUM_COMPARE,
+    MODE_FORWARD_EXPERT_MAJOR_DIRECT_PACK_OWNER_SHARDED_Y_STOP_PALLAS,
+    MODE_FORWARD_EXPERT_MAJOR_DIRECT_PACK_REMOTE_Y_STOP_PALLAS,
+    MODE_FORWARD_SOURCE_EXPAND_DIRECT_PACK_OWNER_SHARDED_Y_PALLAS,
+    MODE_FORWARD_SOURCE_EXPAND_DIRECT_PACK_REMOTE_Y_PALLAS,
+    MODE_FORWARD_W2_BACKWARD_DIRECT_PACK_OWNER_SHARDED_Y_PALLAS,
+    MODE_FORWARD_W2_BACKWARD_DIRECT_PACK_REMOTE_Y_PALLAS,
+    MODE_FORWARD_W13_BACKWARD_DIRECT_PACK_OWNER_SHARDED_Y_PALLAS,
+    MODE_FORWARD_W13_BACKWARD_DIRECT_PACK_REMOTE_Y_PALLAS,
+    MODE_FORWARD_W13_BACKWARD_DIGEST_DIRECT_PACK_OWNER_SHARDED_Y_PALLAS,
+    MODE_FORWARD_W13_BACKWARD_DIGEST_DIRECT_PACK_REMOTE_Y_PALLAS,
+    MODE_FORWARD_W13_BACKWARD_BARRIER_DIGEST_DIRECT_PACK_OWNER_SHARDED_Y_PALLAS,
+    MODE_FORWARD_W13_BACKWARD_BARRIER_DIGEST_DIRECT_PACK_REMOTE_Y_PALLAS,
+    MODE_FORWARD_SWIGLU_BACKWARD_DIGEST_DIRECT_PACK_OWNER_SHARDED_Y_PALLAS,
+    MODE_FORWARD_SWIGLU_BACKWARD_DIGEST_DIRECT_PACK_REMOTE_Y_PALLAS,
+    MODE_FORWARD_W13_DX_BACKWARD_DIGEST_DIRECT_PACK_OWNER_SHARDED_Y_PALLAS,
+    MODE_FORWARD_W13_DX_BACKWARD_DIGEST_DIRECT_PACK_REMOTE_Y_PALLAS,
+    MODE_FORWARD_W13_DW13_BACKWARD_DIGEST_DIRECT_PACK_OWNER_SHARDED_Y_PALLAS,
+    MODE_FORWARD_W13_DW13_BACKWARD_DIGEST_DIRECT_PACK_REMOTE_Y_PALLAS,
+    MODE_BACKWARD_SOURCE_EXPAND,
+    MODE_BACKWARD_SOURCE_EXPAND_PALLAS,
+    MODE_BACKWARD_SOURCE_EXPAND_EXPERT_MAJOR_PALLAS,
+    MODE_BACKWARD_SOURCE_EXPAND_EXPERT_MAJOR_COMPARE,
+    MODE_BACKWARD_SOURCE_EXPAND_FROM_EXPERT_MAJOR_PALLAS,
+    MODE_BACKWARD_SOURCE_EXPAND_FROM_EXPERT_MAJOR_COMPARE,
+    MODE_BACKWARD_SOURCE_EXPAND_FROM_SAVED_RETURN_QUEUE_PALLAS,
+    MODE_BACKWARD_SOURCE_EXPAND_FROM_SAVED_RETURN_QUEUE_COMPARE,
+    MODE_BACKWARD_SOURCE_EXPAND_FROM_EXPERT_MAJOR_OWNER_SHARDED_DCOMBINE_PALLAS,
+    MODE_BACKWARD_SOURCE_EXPAND_FROM_EXPERT_MAJOR_OWNER_SHARDED_DCOMBINE_COMPARE,
+    MODE_BACKWARD_DY_ROUTE_SOURCE_PUSH_EXPERT_MAJOR_PALLAS,
+    MODE_BACKWARD_DY_ROUTE_SOURCE_PUSH_EXPERT_MAJOR_COMPARE,
+    MODE_BACKWARD_SOURCE_EXPAND_FROM_EXPERT_MAJOR_SOURCE_PUSH_PALLAS,
+    MODE_BACKWARD_SOURCE_EXPAND_FROM_EXPERT_MAJOR_SOURCE_PUSH_COMPARE,
+    MODE_BACKWARD_DCOMBINE_SOURCE_GATHER_EXPERT_MAJOR_PALLAS,
+    MODE_BACKWARD_DCOMBINE_SOURCE_GATHER_EXPERT_MAJOR_COMPARE,
+    MODE_BACKWARD_SOURCE_EXPAND_FROM_EXPERT_MAJOR_SOURCE_GATHER_PALLAS,
+    MODE_BACKWARD_SOURCE_EXPAND_FROM_EXPERT_MAJOR_SOURCE_GATHER_COMPARE,
+    MODE_BACKWARD_W2,
+    MODE_BACKWARD_W2_EXPERT_MAJOR,
+    MODE_BACKWARD_W2_EXPERT_MAJOR_PALLAS,
+    MODE_BACKWARD_W2_EXPERT_MAJOR_COMPARE,
+    MODE_BACKWARD_W2_EXPERT_MAJOR_PACK,
+    MODE_BACKWARD_W2_EXPERT_MAJOR_PACK_RESHARD,
+    MODE_BACKWARD_W2_EXPERT_MAJOR_PREPACKED,
+    MODE_BACKWARD_W2_EXPERT_MAJOR_PREPACKED_PALLAS,
+    MODE_BACKWARD_W2_EXPERT_MAJOR_PREPACKED_COMPARE,
+    MODE_BACKWARD_W2_DH_PALLAS,
+    MODE_BACKWARD_W2_DW2_PALLAS,
+    MODE_BACKWARD_W2_PALLAS_SCAFFOLD,
+    MODE_BACKWARD_SWIGLU,
+    MODE_BACKWARD_W13,
+    MODE_BACKWARD_W13_EXPERT_MAJOR_PREPACKED,
+    MODE_BACKWARD_W13_EXPERT_MAJOR_PREPACKED_PALLAS,
+    MODE_BACKWARD_W13_EXPERT_MAJOR_PREPACKED_COMPARE,
+    MODE_BACKWARD_W13_DX_ROUTE_EXPERT_MAJOR_PREPACKED_PALLAS,
+    MODE_BACKWARD_W13_DW13_EXPERT_MAJOR_PREPACKED_PALLAS,
+    MODE_BACKWARD_W13_DX_PAIR_PALLAS,
+    MODE_BACKWARD_W13_DW13_PALLAS,
+    MODE_BACKWARD_W13_PALLAS_SCAFFOLD,
+    MODE_DX_COMBINE,
+    MODE_DX_COMBINE_PALLAS,
+    MODE_DX_COMBINE_EXPERT_MAJOR_PALLAS,
+    MODE_DX_COMBINE_EXPERT_MAJOR_COMPARE,
+    MODE_DX_RETURN_EXPERT_MAJOR_PALLAS,
+    MODE_DX_RETURN_EXPERT_MAJOR_COMPARE,
+    MODE_DX_RETURN_EXPERT_MAJOR_PREPACKED_PALLAS,
+    MODE_DX_RETURN_EXPERT_MAJOR_PREPACKED_COMPARE,
+    MODE_DX_RETURN_SLOT_REDUCE_EXPERT_MAJOR_PREPACKED_PALLAS,
+    MODE_DX_RETURN_SLOT_REDUCE_EXPERT_MAJOR_PREPACKED_COMPARE,
+    MODE_DX_RETURN_SUM_EXPERT_MAJOR_PREPACKED_PALLAS,
+    MODE_DX_RETURN_SUM_EXPERT_MAJOR_PREPACKED_COMPARE,
+    MODE_DX_RETURN_SOURCE_GATHER_EXPERT_MAJOR_PREPACKED_PALLAS,
+    MODE_DX_RETURN_SOURCE_GATHER_EXPERT_MAJOR_PREPACKED_COMPARE,
+    MODE_DX_RETURN_SOURCE_GATHER_EXPERT_MAJOR_PREPACKED_OWNER_SHARDED_PALLAS,
+    MODE_DX_RETURN_SOURCE_GATHER_EXPERT_MAJOR_PREPACKED_OWNER_SHARDED_COMPARE,
+    MODE_DX_RETURN_REMOTE_SOURCE_GATHER_EXPERT_MAJOR_PREPACKED_PALLAS,
+    MODE_DX_RETURN_REMOTE_SOURCE_GATHER_EXPERT_MAJOR_PREPACKED_COMPARE,
+    MODE_DX_RETURN_COPY_ONLY_EXPERT_MAJOR_PREPACKED_PALLAS,
+    MODE_DX_RETURN_COPY_ONLY_EXPERT_MAJOR_PREPACKED_COMPARE,
+    MODE_DX_RETURN_DIRECT_TO_SOURCE_COMBINE_PALLAS,
+    MODE_DX_RETURN_DIRECT_TO_SOURCE_COMBINE_COMPARE,
+    MODE_BACKWARD,
+    MODE_BACKWARD_PALLAS_SCAFFOLD,
+    MODE_FORWARD_BACKWARD,
+    MODE_FORWARD_BACKWARD_PALLAS_SCAFFOLD,
+    MODE_FORWARD_BACKWARD_EXPERT_MAJOR_PALLAS,
+    MODE_FORWARD_BACKWARD_EXPERT_MAJOR_COMPARE,
+    MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_PALLAS,
+    MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_PALLAS,
+    MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_LOOKUP_PACK_PALLAS,
+    MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_LOOKUP_PACK_COMPARE,
+    MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_SOURCE_GATHER_PALLAS,
+    MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_SOURCE_GATHER_COMPARE,
+    MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_OWNER_SHARDED_PALLAS,
+    MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_OWNER_SHARDED_COMPARE,
+    MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_OWNER_SHARDED_Y_PALLAS,
+    MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_DIRECT_RETURN_COMBINE_DUPLICATE_W2_PALLAS,
+    MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_DIRECT_RETURN_COMBINE_DUPLICATE_W2_COMPARE,
+    MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_DIRECT_QUEUE_PALLAS,
+    MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_DIRECT_QUEUE_WITH_METADATA_PALLAS,
+    MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_DIRECT_QUEUE_COMPARE,
+    MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_OWNER_SHARDED_Y_SLOT_REDUCE_PALLAS,
+    MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_NO_Y_PALLAS,
+    MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_REMOTE_Y_PALLAS,
+    MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_REMOTE_Y_DELAYED_PALLAS,
+    MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_OWNER_SHARDED_DX_PALLAS,
+    MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_REMOTE_DX_PALLAS,
+    MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_OWNER_SHARDED_Y_WITH_METADATA_PALLAS,
+    MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_OWNER_SHARDED_Y_WITH_PALLAS_METADATA_PALLAS,
+    MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_COMPARE,
+    MODE_FORWARD_BACKWARD_SOURCE_PADDED_INBOX_DIRECT_QUEUE_PALLAS,
+    MODE_FORWARD_BACKWARD_SOURCE_PADDED_INBOX_DIRECT_QUEUE_COMPARE,
+    MODE_FORWARD_BACKWARD_SOURCE_PADDED_DIRECT_PACK_DIRECT_QUEUE_PALLAS,
+    MODE_FORWARD_BACKWARD_SOURCE_PADDED_DIRECT_PACK_DIRECT_QUEUE_COMPARE,
+    MODE_FORWARD_BACKWARD_SOURCE_PADDED_DIRECT_PACK_DIRECT_QUEUE_WITH_METADATA_PALLAS,
+)
+
+SOURCE_DRIVEN_EXPLICIT_MODES = (
+    MODE_W13_EXPERT_MAJOR_PALLAS,
+    MODE_W13_EXPERT_MAJOR_COMPARE,
+    MODE_FORWARD_EXPERT_MAJOR_PALLAS,
+    MODE_FORWARD_EXPERT_MAJOR_COMPARE,
+    MODE_FORWARD_EXPERT_MAJOR_RETURN_SUM_PALLAS,
+    MODE_FORWARD_EXPERT_MAJOR_RETURN_SUM_COMPARE,
+    MODE_FORWARD_BACKWARD_EXPERT_MAJOR_PALLAS,
+    MODE_FORWARD_BACKWARD_EXPERT_MAJOR_COMPARE,
+)
+
+DEFAULT_ALL_MODES = tuple(mode for mode in MODES if mode not in SOURCE_DRIVEN_EXPLICIT_MODES)
+MODE_ALIASES = {
+    "source_padded_pack": (MODE_SOURCE_PADDED_INBOX_PACK_PALLAS,),
+    "source_padded_w13": (MODE_W13_SOURCE_PADDED_INBOX_PALLAS,),
+    "source_padded_w13_compare": (MODE_W13_SOURCE_PADDED_INBOX_COMPARE,),
+    "source_padded_forward": (MODE_FORWARD_SOURCE_PADDED_INBOX_DIRECT_RETURN_COMBINE_PALLAS,),
+    "source_padded_forward_compare": (MODE_FORWARD_SOURCE_PADDED_INBOX_DIRECT_RETURN_COMBINE_COMPARE,),
+    "source_padded_fwd_bwd": (MODE_FORWARD_BACKWARD_SOURCE_PADDED_INBOX_DIRECT_QUEUE_PALLAS,),
+    "source_padded_fwd_bwd_compare": (MODE_FORWARD_BACKWARD_SOURCE_PADDED_INBOX_DIRECT_QUEUE_COMPARE,),
+    "source_padded_direct_w13": (MODE_W13_SOURCE_PADDED_DIRECT_PACK_PALLAS,),
+    "source_padded_direct_w13_compare": (MODE_W13_SOURCE_PADDED_DIRECT_PACK_COMPARE,),
+    "source_padded_direct_forward": (MODE_FORWARD_SOURCE_PADDED_DIRECT_PACK_DIRECT_RETURN_COMBINE_PALLAS,),
+    "source_padded_direct_forward_compare": (MODE_FORWARD_SOURCE_PADDED_DIRECT_PACK_DIRECT_RETURN_COMBINE_COMPARE,),
+    "source_padded_direct_fwd_bwd": (MODE_FORWARD_BACKWARD_SOURCE_PADDED_DIRECT_PACK_DIRECT_QUEUE_PALLAS,),
+    "source_padded_direct_fwd_bwd_compare": (MODE_FORWARD_BACKWARD_SOURCE_PADDED_DIRECT_PACK_DIRECT_QUEUE_COMPARE,),
+    "source_padded_direct_fwd_bwd_with_metadata": (
+        MODE_FORWARD_BACKWARD_SOURCE_PADDED_DIRECT_PACK_DIRECT_QUEUE_WITH_METADATA_PALLAS,
+    ),
+    "integrated_forward": (MODE_FORWARD_EXPERT_MAJOR_DIRECT_PACK_DIRECT_RETURN_COMBINE_PALLAS,),
+    "integrated_forward_compare": (MODE_FORWARD_EXPERT_MAJOR_DIRECT_PACK_DIRECT_RETURN_COMBINE_COMPARE,),
+    "diagnostic_fwd_bwd_duplicate_w2": (
+        MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_DIRECT_RETURN_COMBINE_DUPLICATE_W2_PALLAS,
+    ),
+    "diagnostic_fwd_bwd_duplicate_w2_compare": (
+        MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_DIRECT_RETURN_COMBINE_DUPLICATE_W2_COMPARE,
+    ),
+    "direct_queue_fwd_bwd": (MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_DIRECT_QUEUE_PALLAS,),
+    "direct_queue_fwd_bwd_with_metadata": (
+        MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_DIRECT_QUEUE_WITH_METADATA_PALLAS,
+    ),
+    "direct_queue_fwd_bwd_compare": (MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_DIRECT_QUEUE_COMPARE,),
+    "current_best_fwd_bwd": (MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_OWNER_SHARDED_Y_PALLAS,),
+    "current_best_fwd_bwd_with_metadata": (
+        MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_OWNER_SHARDED_Y_WITH_METADATA_PALLAS,
+    ),
+    "current_best_fwd_bwd_with_pallas_metadata": (
+        MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_OWNER_SHARDED_Y_WITH_PALLAS_METADATA_PALLAS,
+    ),
+}
+
+SOURCE_PADDED_MODES = (
+    MODE_SOURCE_PADDED_INBOX_PACK_PALLAS,
+    MODE_W13_SOURCE_PADDED_INBOX_PALLAS,
+    MODE_W13_SOURCE_PADDED_INBOX_COMPARE,
+    MODE_FORWARD_SOURCE_PADDED_INBOX_DIRECT_RETURN_COMBINE_PALLAS,
+    MODE_FORWARD_SOURCE_PADDED_INBOX_DIRECT_RETURN_COMBINE_COMPARE,
+    MODE_FORWARD_BACKWARD_SOURCE_PADDED_INBOX_DIRECT_QUEUE_PALLAS,
+    MODE_FORWARD_BACKWARD_SOURCE_PADDED_INBOX_DIRECT_QUEUE_COMPARE,
+    MODE_W13_SOURCE_PADDED_DIRECT_PACK_PALLAS,
+    MODE_W13_SOURCE_PADDED_DIRECT_PACK_COMPARE,
+    MODE_FORWARD_SOURCE_PADDED_DIRECT_PACK_DIRECT_RETURN_COMBINE_PALLAS,
+    MODE_FORWARD_SOURCE_PADDED_DIRECT_PACK_DIRECT_RETURN_COMBINE_COMPARE,
+    MODE_FORWARD_BACKWARD_SOURCE_PADDED_DIRECT_PACK_DIRECT_QUEUE_PALLAS,
+    MODE_FORWARD_BACKWARD_SOURCE_PADDED_DIRECT_PACK_DIRECT_QUEUE_COMPARE,
+    MODE_FORWARD_BACKWARD_SOURCE_PADDED_DIRECT_PACK_DIRECT_QUEUE_WITH_METADATA_PALLAS,
+)
+
+SUMMARY_METRICS = (
+    "steady_state_time",
+    "compile_time",
+    "lower_compile_time",
+    "first_run_time",
+    "useful_tflops_per_rank",
+    "rounded_tflops_per_rank",
+)
+
+
+@jax.tree_util.register_dataclass
+@dataclass(frozen=True)
+class SemanticBenchInputs:
+    selected_experts: Int[Array, "S T K"]
+    route_weights: Float[Array, "S T K"]
+    x: Float[Array, "S T H"]
+    w_gate_up: Float[Array, "Dst E H twoI"]
+    w_down: Float[Array, "Dst E I H"]
+    dy: Float[Array, "S T H"]
+    h_pair: Float[Array, "S Dst R I"]
+    z_pair: Float[Array, "S Dst R twoI"]
+    route_y: Float[Array, "S Dst R H"]
+    dy_route: Float[Array, "S Dst R H"]
+    dh_pair: Float[Array, "S Dst R I"]
+    dz_pair: Float[Array, "S Dst R twoI"]
+    dx_pair: Float[Array, "S Dst R H"]
+
+
+@jax.tree_util.register_dataclass
+@dataclass(frozen=True)
+class SemanticW2ExpertBenchInputs:
+    w_down: Float[Array, "Dst E I H"]
+    h_expert: Float[Array, "Dst E C I"]
+    dy_expert: Float[Array, "Dst E C H"]
+    valid: Bool[Array, "Dst E C"]
+
+
+@jax.tree_util.register_dataclass
+@dataclass(frozen=True)
+class SemanticReturnQueueBenchInputs:
+    return_y: Float[Array, "S DstOrd Q M H"]
+
+
+@jax.tree_util.register_dataclass
+@dataclass(frozen=True)
+class SemanticBackwardReturnQueueBenchInputs:
+    dy: Float[Array, "S T H"]
+    return_y: Float[Array, "S DstOrd Q M H"]
+
+
+@jax.tree_util.register_dataclass
+@dataclass(frozen=True)
+class SemanticW13ExpertBenchInputs:
+    w_gate_up: Float[Array, "Dst E H twoI"]
+    x_expert: Float[Array, "Dst E C H"]
+    valid: Bool[Array, "Dst E C"]
+
+
+@jax.tree_util.register_dataclass
+@dataclass(frozen=True)
+class SemanticW13BackwardExpertBenchInputs:
+    x_expert: Float[Array, "Dst E C H"]
+    dz13: Float[Array, "Dst E C twoI"]
+    w_gate_up: Float[Array, "Dst E H twoI"]
+    valid: Bool[Array, "Dst E C"]
+
+
+@jax.tree_util.register_dataclass
+@dataclass(frozen=True)
+class SemanticForwardExpertBenchInputs:
+    w_gate_up: Float[Array, "Dst E H twoI"]
+    w_down: Float[Array, "Dst E I H"]
+    x_expert: Float[Array, "Dst E C H"]
+    valid: Bool[Array, "Dst E C"]
+
+
+@jax.tree_util.register_dataclass
+@dataclass(frozen=True)
+class SemanticBackwardSourceExpandExpertBenchInputs:
+    dy: Float[Array, "S T H"]
+    route_y_expert: Float[Array, "Dst E C H"]
+
+
+@jax.tree_util.register_dataclass
+@dataclass(frozen=True)
+class SemanticDxReturnExpertBenchInputs:
+    dx_route: Float[Array, "Dst E C H"]
+
+
+@dataclass(frozen=True)
+class Timing:
+    compile_time: float | None
+    lower_compile_time: float | None
+    first_run_time: float
+    first_call_time: float
+    steady_state_times: list[float]
+    output: Any
+
+
+def _parse_csv(value: str) -> tuple[str, ...]:
+    parts = tuple(part.strip() for part in value.split(",") if part.strip())
+    if not parts:
+        raise argparse.ArgumentTypeError("expected a comma-separated list")
+    return parts
+
+
+def _parse_modes(value: str) -> tuple[str, ...]:
+    modes = _parse_csv(value)
+    expanded_modes = tuple(alias_mode for mode in modes for alias_mode in MODE_ALIASES.get(mode, (mode,)))
+    unknown = set(expanded_modes) - set(MODES) - {"all"}
+    if unknown:
+        raise argparse.ArgumentTypeError(f"unknown modes: {sorted(unknown)}")
+    if expanded_modes == ("all",):
+        return DEFAULT_ALL_MODES
+    return expanded_modes
+
+
+def _parse_rows_per_pair(value: str, *, tokens_per_rank: int, topk: int, ep_size: int, capacity_factor: float) -> int:
+    assignments_per_source = tokens_per_rank * topk
+    if value == "exact":
+        return assignments_per_source
+    if value == "auto":
+        return int(math.ceil(assignments_per_source * capacity_factor / ep_size))
+    rows_per_pair = int(value)
+    if rows_per_pair <= 0:
+        raise argparse.ArgumentTypeError(f"rows-per-src-dst-capacity must be positive, got {rows_per_pair}")
+    return rows_per_pair
+
+
+def _block_until_ready(value: Any) -> Any:
+    return jax.tree_util.tree_map(
+        lambda leaf: leaf.block_until_ready() if hasattr(leaf, "block_until_ready") else leaf, value
+    )
+
+
+def _backend_env() -> dict[str, str | None]:
+    keys = (
+        "JAX_PLATFORMS",
+        "JAX_PLATFORM_NAME",
+        "XLA_FLAGS",
+        "XLA_PYTHON_CLIENT_MEM_FRACTION",
+        "XLA_PYTHON_CLIENT_PREALLOCATE",
+    )
+    return {key: os.environ.get(key) for key in keys}
+
+
+def _shape_config(args: argparse.Namespace, rows_per_src_dst_capacity: int) -> dict[str, Any]:
+    return {
+        "ep_size": args.ep_size,
+        "tokens_per_rank": args.tokens_per_rank,
+        "topk": args.topk,
+        "experts_per_rank": args.experts_per_rank,
+        "hidden_dim": args.hidden_dim,
+        "intermediate_dim": args.intermediate_dim,
+        "capacity_factor": args.capacity_factor,
+        "rows_per_src_dst_capacity": rows_per_src_dst_capacity,
+        "routing": args.routing,
+        "routing_seed": args.routing_seed,
+        "dtype": args.dtype,
+        "plan_builder": args.plan_builder,
+    }
+
+
+def _device_summary() -> dict[str, Any]:
+    devices = jax.devices()
+    return {
+        "backend": jax.default_backend(),
+        "device_type": devices[0].device_kind if devices else None,
+        "device_count": len(devices),
+    }
+
+
+def _make_routing(
+    *,
+    ep_size: int,
+    tokens_per_rank: int,
+    topk: int,
+    experts_per_rank: int,
+    routing: str,
+    seed: int,
+) -> tuple[Int[Array, "S T K"], Float[Array, "S T K"]]:
+    global_experts = ep_size * experts_per_rank
+    shape = (ep_size, tokens_per_rank, topk)
+    if routing == "balanced":
+        assignment = jnp.arange(ep_size * tokens_per_rank * topk, dtype=jnp.int32).reshape(shape)
+        source_offset = jnp.arange(ep_size, dtype=jnp.int32)[:, None, None] * experts_per_rank
+        selected_experts = (assignment + source_offset) % global_experts
+    elif routing == "random":
+        key = jax.random.PRNGKey(seed)
+        selected_experts = jax.random.randint(key, shape, minval=0, maxval=global_experts, dtype=jnp.int32)
+    else:
+        raise ValueError(f"unknown routing {routing!r}")
+    route_weights = jnp.full(shape, 1.0 / topk, dtype=jnp.float32)
+    return selected_experts, route_weights
+
+
+def _make_array(shape: tuple[int, ...], dtype: jnp.dtype, *, seed: int, scale: float = 0.01) -> jax.Array:
+    size = math.prod(shape)
+    values = (jnp.arange(size, dtype=jnp.float32).reshape(shape) % 257.0 - 128.0) * scale
+    values = values + jnp.asarray(seed % 17, dtype=jnp.float32) * (scale / 8.0)
+    return values.astype(dtype)
+
+
+def _make_inputs(args: argparse.Namespace, plan: SourcePushSemanticPlan) -> SemanticBenchInputs:
+    dtype = jnp.dtype(args.dtype)
+    selected_experts, route_weights = _make_routing(
+        ep_size=args.ep_size,
+        tokens_per_rank=args.tokens_per_rank,
+        topk=args.topk,
+        experts_per_rank=args.experts_per_rank,
+        routing=args.routing,
+        seed=args.routing_seed,
+    )
+    pair_shape = (args.ep_size, args.ep_size, plan.assignment_ids.shape[-1])
+    x = _make_array((args.ep_size, args.tokens_per_rank, args.hidden_dim), dtype, seed=1)
+    w_gate_up = _make_array(
+        (args.ep_size, args.experts_per_rank, args.hidden_dim, args.intermediate_dim * 2),
+        dtype,
+        seed=2,
+    )
+    w_down = _make_array(
+        (args.ep_size, args.experts_per_rank, args.intermediate_dim, args.hidden_dim),
+        dtype,
+        seed=3,
+    )
+    dy = _make_array((args.ep_size, args.tokens_per_rank, args.hidden_dim), dtype, seed=4)
+    h_pair = _make_array((*pair_shape, args.intermediate_dim), dtype, seed=5)
+    z_pair = _make_array((*pair_shape, args.intermediate_dim * 2), dtype, seed=6)
+    route_y = _make_array((*pair_shape, args.hidden_dim), dtype, seed=7)
+    dy_route = _make_array((*pair_shape, args.hidden_dim), dtype, seed=8)
+    dh_pair = _make_array((*pair_shape, args.intermediate_dim), dtype, seed=9)
+    dz_pair = _make_array((*pair_shape, args.intermediate_dim * 2), dtype, seed=10)
+    dx_pair = _make_array((*pair_shape, args.hidden_dim), dtype, seed=11)
+    return SemanticBenchInputs(
+        selected_experts=selected_experts,
+        route_weights=route_weights,
+        x=x,
+        w_gate_up=w_gate_up,
+        w_down=w_down,
+        dy=dy,
+        h_pair=h_pair,
+        z_pair=z_pair,
+        route_y=route_y,
+        dy_route=dy_route,
+        dh_pair=dh_pair,
+        dz_pair=dz_pair,
+        dx_pair=dx_pair,
+    )
+
+
+def _make_w2_expert_inputs(args: argparse.Namespace, plan: SourcePushSemanticPlan) -> SemanticW2ExpertBenchInputs:
+    dtype = jnp.dtype(args.dtype)
+    rows_per_expert_capacity = _rows_per_expert_capacity(
+        plan,
+        row_multiple=_expert_capacity_row_multiple(args),
+    )
+    w_down = _make_array(
+        (args.ep_size, args.experts_per_rank, args.intermediate_dim, args.hidden_dim),
+        dtype,
+        seed=3,
+    )
+    h_expert = _make_array(
+        (args.ep_size, args.experts_per_rank, rows_per_expert_capacity, args.intermediate_dim),
+        dtype,
+        seed=5,
+    )
+    dy_expert = _make_array(
+        (args.ep_size, args.experts_per_rank, rows_per_expert_capacity, args.hidden_dim),
+        dtype,
+        seed=8,
+    )
+    _route_weights, valid = source_push_semantic_route_weights_expert_major_jax(
+        plan,
+        rows_per_expert_capacity=rows_per_expert_capacity,
+    )
+    return SemanticW2ExpertBenchInputs(
+        w_down=w_down,
+        h_expert=h_expert,
+        dy_expert=dy_expert,
+        valid=valid,
+    )
+
+
+def _make_return_queue_inputs(
+    args: argparse.Namespace, plan: SourcePushSemanticPlan
+) -> SemanticReturnQueueBenchInputs:
+    w2_inputs = _make_w2_expert_inputs(args, plan)
+    return_y = source_push_semantic_forward_return_direct_to_source_reference_jax(
+        w2_inputs.dy_expert,
+        plan,
+        block_sizes=_forward_return_block_sizes(args),
+        route_buffer_dtype=jnp.bfloat16,
+    )
+    return SemanticReturnQueueBenchInputs(return_y=return_y)
+
+
+def _make_backward_return_queue_inputs(
+    args: argparse.Namespace,
+    plan: SourcePushSemanticPlan,
+) -> SemanticBackwardReturnQueueBenchInputs:
+    inputs = _make_inputs(args, plan)
+    w2_inputs = _make_w2_expert_inputs(args, plan)
+    return_y = source_push_semantic_forward_return_direct_to_source_reference_jax(
+        w2_inputs.dy_expert,
+        plan,
+        block_sizes=_forward_return_block_sizes(args),
+        route_buffer_dtype=jnp.bfloat16,
+    )
+    return SemanticBackwardReturnQueueBenchInputs(dy=inputs.dy, return_y=return_y)
+
+
+def _make_w13_expert_inputs(args: argparse.Namespace, plan: SourcePushSemanticPlan) -> SemanticW13ExpertBenchInputs:
+    dtype = jnp.dtype(args.dtype)
+    rows_per_expert_capacity = _rows_per_expert_capacity(
+        plan,
+        row_multiple=_expert_capacity_row_multiple(args),
+    )
+    w_gate_up = _make_array(
+        (args.ep_size, args.experts_per_rank, args.hidden_dim, args.intermediate_dim * 2),
+        dtype,
+        seed=2,
+    )
+    x_expert = _make_array(
+        (args.ep_size, args.experts_per_rank, rows_per_expert_capacity, args.hidden_dim),
+        dtype,
+        seed=1,
+    )
+    _route_weights, valid = source_push_semantic_route_weights_expert_major_jax(
+        plan,
+        rows_per_expert_capacity=rows_per_expert_capacity,
+    )
+    return SemanticW13ExpertBenchInputs(
+        w_gate_up=w_gate_up,
+        x_expert=x_expert,
+        valid=valid,
+    )
+
+
+def _make_w13_backward_expert_inputs(
+    args: argparse.Namespace,
+    plan: SourcePushSemanticPlan,
+) -> SemanticW13BackwardExpertBenchInputs:
+    dtype = jnp.dtype(args.dtype)
+    rows_per_expert_capacity = _rows_per_expert_capacity(
+        plan,
+        row_multiple=_expert_capacity_row_multiple(args),
+    )
+    x_expert = _make_array(
+        (args.ep_size, args.experts_per_rank, rows_per_expert_capacity, args.hidden_dim),
+        dtype,
+        seed=1,
+    )
+    dz13 = _make_array(
+        (args.ep_size, args.experts_per_rank, rows_per_expert_capacity, args.intermediate_dim * 2),
+        dtype,
+        seed=10,
+    )
+    w_gate_up = _make_array(
+        (args.ep_size, args.experts_per_rank, args.hidden_dim, args.intermediate_dim * 2),
+        dtype,
+        seed=2,
+    )
+    _route_weights, valid = source_push_semantic_route_weights_expert_major_jax(
+        plan,
+        rows_per_expert_capacity=rows_per_expert_capacity,
+    )
+    return SemanticW13BackwardExpertBenchInputs(
+        x_expert=x_expert,
+        dz13=dz13,
+        w_gate_up=w_gate_up,
+        valid=valid,
+    )
+
+
+def _make_forward_expert_inputs(
+    args: argparse.Namespace, plan: SourcePushSemanticPlan
+) -> SemanticForwardExpertBenchInputs:
+    dtype = jnp.dtype(args.dtype)
+    rows_per_expert_capacity = _rows_per_expert_capacity(
+        plan,
+        row_multiple=_expert_capacity_row_multiple(args),
+    )
+    w_gate_up = _make_array(
+        (args.ep_size, args.experts_per_rank, args.hidden_dim, args.intermediate_dim * 2),
+        dtype,
+        seed=2,
+    )
+    w_down = _make_array(
+        (args.ep_size, args.experts_per_rank, args.intermediate_dim, args.hidden_dim),
+        dtype,
+        seed=3,
+    )
+    x_expert = _make_array(
+        (args.ep_size, args.experts_per_rank, rows_per_expert_capacity, args.hidden_dim),
+        dtype,
+        seed=1,
+    )
+    _route_weights, valid = source_push_semantic_route_weights_expert_major_jax(
+        plan,
+        rows_per_expert_capacity=rows_per_expert_capacity,
+    )
+    return SemanticForwardExpertBenchInputs(
+        w_gate_up=w_gate_up,
+        w_down=w_down,
+        x_expert=x_expert,
+        valid=valid,
+    )
+
+
+def _make_backward_source_expand_expert_inputs(
+    args: argparse.Namespace,
+    plan: SourcePushSemanticPlan,
+) -> SemanticBackwardSourceExpandExpertBenchInputs:
+    dtype = jnp.dtype(args.dtype)
+    rows_per_expert_capacity = _rows_per_expert_capacity(
+        plan,
+        row_multiple=_expert_capacity_row_multiple(args),
+    )
+    dy = _make_array((args.ep_size, args.tokens_per_rank, args.hidden_dim), dtype, seed=7)
+    route_y_expert = _make_array(
+        (args.ep_size, args.experts_per_rank, rows_per_expert_capacity, args.hidden_dim),
+        dtype,
+        seed=8,
+    )
+    return SemanticBackwardSourceExpandExpertBenchInputs(
+        dy=dy,
+        route_y_expert=route_y_expert,
+    )
+
+
+def _make_dx_return_expert_inputs(
+    args: argparse.Namespace,
+    plan: SourcePushSemanticPlan,
+    *,
+    source_row_alignment: int = 1,
+) -> SemanticDxReturnExpertBenchInputs:
+    dtype = jnp.dtype(args.dtype)
+    row_multiple = _expert_capacity_row_multiple(args)
+    rows_per_expert_capacity = _rows_per_expert_capacity(
+        plan,
+        row_multiple=row_multiple,
+        source_row_alignment=source_row_alignment,
+        tail_guard_rows=row_multiple - 1 if source_row_alignment != 1 else 0,
+    )
+    dx_route = _make_array(
+        (args.ep_size, args.experts_per_rank, rows_per_expert_capacity, args.hidden_dim),
+        dtype,
+        seed=11,
+    )
+    return SemanticDxReturnExpertBenchInputs(dx_route=dx_route)
+
+
+def _shard_w2_expert_inputs(inputs: SemanticW2ExpertBenchInputs, mesh: Mesh) -> SemanticW2ExpertBenchInputs:
+    sharding_4d = NamedSharding(mesh, P(SOURCE_PUSH_MESH_AXIS, None, None, None))
+    sharding_3d = NamedSharding(mesh, P(SOURCE_PUSH_MESH_AXIS, None, None))
+    return SemanticW2ExpertBenchInputs(
+        w_down=jax.device_put(inputs.w_down, sharding_4d),
+        h_expert=jax.device_put(inputs.h_expert, sharding_4d),
+        dy_expert=jax.device_put(inputs.dy_expert, sharding_4d),
+        valid=jax.device_put(inputs.valid, sharding_3d),
+    )
+
+
+def _shard_return_queue_inputs(inputs: SemanticReturnQueueBenchInputs, mesh: Mesh) -> SemanticReturnQueueBenchInputs:
+    sharding_5d = jax.sharding.NamedSharding(mesh, P(SOURCE_PUSH_MESH_AXIS, None, None, None, None))
+    return SemanticReturnQueueBenchInputs(return_y=jax.device_put(inputs.return_y, sharding_5d))
+
+
+def _shard_backward_return_queue_inputs(
+    inputs: SemanticBackwardReturnQueueBenchInputs,
+    mesh: Mesh,
+) -> SemanticBackwardReturnQueueBenchInputs:
+    source_sharding_3d = NamedSharding(mesh, P(SOURCE_PUSH_MESH_AXIS, None, None))
+    source_sharding_5d = NamedSharding(mesh, P(SOURCE_PUSH_MESH_AXIS, None, None, None, None))
+    return SemanticBackwardReturnQueueBenchInputs(
+        dy=jax.device_put(inputs.dy, source_sharding_3d),
+        return_y=jax.device_put(inputs.return_y, source_sharding_5d),
+    )
+
+
+def _shard_w13_expert_inputs(inputs: SemanticW13ExpertBenchInputs, mesh: Mesh) -> SemanticW13ExpertBenchInputs:
+    sharding_4d = NamedSharding(mesh, P(SOURCE_PUSH_MESH_AXIS, None, None, None))
+    sharding_3d = NamedSharding(mesh, P(SOURCE_PUSH_MESH_AXIS, None, None))
+    return SemanticW13ExpertBenchInputs(
+        w_gate_up=jax.device_put(inputs.w_gate_up, sharding_4d),
+        x_expert=jax.device_put(inputs.x_expert, sharding_4d),
+        valid=jax.device_put(inputs.valid, sharding_3d),
+    )
+
+
+def _shard_forward_expert_inputs(
+    inputs: SemanticForwardExpertBenchInputs, mesh: Mesh
+) -> SemanticForwardExpertBenchInputs:
+    sharding_4d = NamedSharding(mesh, P(SOURCE_PUSH_MESH_AXIS, None, None, None))
+    sharding_3d = NamedSharding(mesh, P(SOURCE_PUSH_MESH_AXIS, None, None))
+    return SemanticForwardExpertBenchInputs(
+        w_gate_up=jax.device_put(inputs.w_gate_up, sharding_4d),
+        w_down=jax.device_put(inputs.w_down, sharding_4d),
+        x_expert=jax.device_put(inputs.x_expert, sharding_4d),
+        valid=jax.device_put(inputs.valid, sharding_3d),
+    )
+
+
+def _shard_w13_backward_expert_inputs(
+    inputs: SemanticW13BackwardExpertBenchInputs,
+    mesh: Mesh,
+) -> SemanticW13BackwardExpertBenchInputs:
+    sharding_4d = NamedSharding(mesh, P(SOURCE_PUSH_MESH_AXIS, None, None, None))
+    sharding_3d = NamedSharding(mesh, P(SOURCE_PUSH_MESH_AXIS, None, None))
+    return SemanticW13BackwardExpertBenchInputs(
+        x_expert=jax.device_put(inputs.x_expert, sharding_4d),
+        dz13=jax.device_put(inputs.dz13, sharding_4d),
+        w_gate_up=jax.device_put(inputs.w_gate_up, sharding_4d),
+        valid=jax.device_put(inputs.valid, sharding_3d),
+    )
+
+
+def _shard_dx_return_expert_inputs(
+    inputs: SemanticDxReturnExpertBenchInputs,
+    mesh: Mesh,
+) -> SemanticDxReturnExpertBenchInputs:
+    sharding_4d = NamedSharding(mesh, P(SOURCE_PUSH_MESH_AXIS, None, None, None))
+    return SemanticDxReturnExpertBenchInputs(dx_route=jax.device_put(inputs.dx_route, sharding_4d))
+
+
+def _shard_backward_source_expand_expert_inputs(
+    inputs: SemanticBackwardSourceExpandExpertBenchInputs,
+    mesh: Mesh,
+) -> SemanticBackwardSourceExpandExpertBenchInputs:
+    replicated_3d = NamedSharding(mesh, P(None, None, None))
+    destination_sharding = NamedSharding(mesh, P(SOURCE_PUSH_MESH_AXIS, None, None, None))
+    return SemanticBackwardSourceExpandExpertBenchInputs(
+        dy=jax.device_put(inputs.dy, replicated_3d),
+        route_y_expert=jax.device_put(inputs.route_y_expert, destination_sharding),
+    )
+
+
+def _shard_w13_expert_major_inputs(inputs: SemanticBenchInputs, mesh: Mesh) -> SemanticBenchInputs:
+    replicated_3d = NamedSharding(mesh, P(None, None, None))
+    replicated_4d = NamedSharding(mesh, P(None, None, None, None))
+    destination_major_4d = NamedSharding(mesh, P(SOURCE_PUSH_MESH_AXIS, None, None, None))
+    return replace(
+        inputs,
+        x=jax.device_put(inputs.x, replicated_3d),
+        dy=jax.device_put(inputs.dy, replicated_3d),
+        w_gate_up=jax.device_put(inputs.w_gate_up, destination_major_4d),
+        w_down=jax.device_put(inputs.w_down, destination_major_4d),
+        z_pair=jax.device_put(inputs.z_pair, replicated_4d),
+        h_pair=jax.device_put(inputs.h_pair, replicated_4d),
+        route_y=jax.device_put(inputs.route_y, replicated_4d),
+    )
+
+
+def _constrain_destination_major(value: Array, mesh: Mesh | None) -> Array:
+    if mesh is None:
+        return value
+    spec = P(SOURCE_PUSH_MESH_AXIS, *(None for _ in range(value.ndim - 1)))
+    if jax.sharding.get_abstract_mesh().are_all_axes_explicit:
+        return jax.sharding.reshard(value, spec)
+    return jax.sharding.reshard(value, NamedSharding(mesh, spec))
+
+
+def _constrain_replicated(value: Array, mesh: Mesh | None) -> Array:
+    if mesh is None:
+        return value
+    spec = P(*(None for _ in range(value.ndim)))
+    if jax.sharding.get_abstract_mesh().are_all_axes_explicit:
+        return jax.sharding.reshard(value, spec)
+    return jax.sharding.reshard(value, NamedSharding(mesh, spec))
+
+
+def _constrain_w13_backward_expert_major_inputs(
+    inputs: SemanticW13BackwardExpertBenchInputs,
+    mesh: Mesh | None,
+) -> SemanticW13BackwardExpertBenchInputs:
+    return SemanticW13BackwardExpertBenchInputs(
+        x_expert=_constrain_destination_major(inputs.x_expert, mesh),
+        dz13=_constrain_destination_major(inputs.dz13, mesh),
+        w_gate_up=_constrain_destination_major(inputs.w_gate_up, mesh),
+        valid=_constrain_destination_major(inputs.valid, mesh),
+    )
+
+
+def _shard_w13_expert_major_plan(plan: SourcePushSemanticPlan, mesh: Mesh) -> SourcePushSemanticPlan:
+    source_destination_rows = NamedSharding(mesh, P(None, SOURCE_PUSH_MESH_AXIS, None))
+    source_destination_expert = NamedSharding(mesh, P(None, SOURCE_PUSH_MESH_AXIS, None))
+    destination_expert = NamedSharding(mesh, P(SOURCE_PUSH_MESH_AXIS, None))
+    destination_source_expert = NamedSharding(mesh, P(SOURCE_PUSH_MESH_AXIS, None, None))
+    scalar = NamedSharding(mesh, P())
+    return replace(
+        plan,
+        assignment_ids=jax.device_put(plan.assignment_ids, source_destination_rows),
+        token_ids=jax.device_put(plan.token_ids, source_destination_rows),
+        route_slots=jax.device_put(plan.route_slots, source_destination_rows),
+        route_weights=jax.device_put(plan.route_weights, source_destination_rows),
+        valid_mask=jax.device_put(plan.valid_mask, source_destination_rows),
+        xcounts=jax.device_put(plan.xcounts, source_destination_expert),
+        pair_expert_base=jax.device_put(plan.pair_expert_base, source_destination_expert),
+        rows_per_local_expert=jax.device_put(plan.rows_per_local_expert, destination_expert),
+        expert_base=jax.device_put(plan.expert_base, destination_expert),
+        src_base_by_expert=jax.device_put(plan.src_base_by_expert, destination_source_expert),
+        routing_dropped_routes=jax.device_put(plan.routing_dropped_routes, scalar),
+        metadata_overflow_routes=jax.device_put(plan.metadata_overflow_routes, scalar),
+        dropped_routes=jax.device_put(plan.dropped_routes, scalar),
+    )
+
+
+def _plan_stats(plan: SourcePushSemanticPlan) -> dict[str, Any]:
+    useful_rows = int(jax.device_get(jnp.sum(plan.xcounts, dtype=jnp.int32)))
+    rounded_rows = int(plan.assignment_ids.shape[0] * plan.assignment_ids.shape[1] * plan.assignment_ids.shape[2])
+    live_pairs = int(jax.device_get(jnp.sum(jnp.sum(plan.xcounts, axis=2) > 0)))
+    return {
+        "semantic_useful_rows": useful_rows,
+        "semantic_rounded_rows": rounded_rows,
+        "semantic_live_pairs": live_pairs,
+        "semantic_row_efficiency": useful_rows / rounded_rows if rounded_rows else 1.0,
+        "semantic_masked_row_fraction": 1.0 - useful_rows / rounded_rows if rounded_rows else 0.0,
+        "routing_dropped_routes": int(jax.device_get(plan.routing_dropped_routes)),
+        "metadata_overflow_routes": int(jax.device_get(plan.metadata_overflow_routes)),
+        "dropped_routes": int(jax.device_get(plan.dropped_routes)),
+    }
+
+
+def _tile_metadata_stats(tile_metadata: SourcePushSemanticTileMetadata) -> dict[str, Any]:
+    useful_rows = int(jax.device_get(jnp.sum(tile_metadata.xcounts, dtype=jnp.int32)))
+    live_pairs = int(jax.device_get(jnp.sum(jnp.sum(tile_metadata.xcounts, axis=2) > 0)))
+    tile_count = int(tile_metadata.tile_counts.shape[1])
+    tile_slots = int(math.prod(tile_metadata.tile_counts.shape))
+    nonzero_tile_slots = int(jax.device_get(jnp.sum(tile_metadata.tile_counts > 0)))
+    return {
+        "semantic_useful_rows": useful_rows,
+        "semantic_rounded_rows": useful_rows,
+        "semantic_live_pairs": live_pairs,
+        "semantic_row_efficiency": None,
+        "semantic_masked_row_fraction": None,
+        "routing_dropped_routes": int(jax.device_get(tile_metadata.routing_dropped_routes)),
+        "metadata_overflow_routes": None,
+        "dropped_routes": int(jax.device_get(tile_metadata.routing_dropped_routes)),
+        "metadata_tile_count": tile_count,
+        "metadata_tile_slots": tile_slots,
+        "metadata_nonzero_tile_slots": nonzero_tile_slots,
+        "metadata_nonzero_tile_slot_fraction": nonzero_tile_slots / tile_slots if tile_slots else 0.0,
+    }
+
+
+def _mode_flops_per_rank(
+    mode: str,
+    *,
+    useful_rows_total: int,
+    rounded_rows_total: int,
+    hidden_dim: int,
+    intermediate_dim: int,
+    ep_size: int,
+) -> tuple[float | None, float | None]:
+    w13_per_row = 2.0 * hidden_dim * intermediate_dim * 2.0
+    w2_per_row = 2.0 * intermediate_dim * hidden_dim
+    swiglu_per_row = 8.0 * intermediate_dim
+    if mode in (
+        MODE_W13,
+        MODE_W13_PALLAS_SCAFFOLD,
+        MODE_W13_EXPERT_MAJOR_PREPACKED,
+        MODE_W13_EXPERT_MAJOR_PREPACKED_PALLAS,
+        MODE_W13_EXPERT_MAJOR_PREPACKED_COMPARE,
+        MODE_W13_EXPERT_MAJOR_PALLAS,
+        MODE_W13_EXPERT_MAJOR_COMPARE,
+        MODE_W13_SOURCE_PADDED_INBOX_PALLAS,
+        MODE_W13_SOURCE_PADDED_INBOX_COMPARE,
+        MODE_W13_SOURCE_PADDED_DIRECT_PACK_PALLAS,
+        MODE_W13_SOURCE_PADDED_DIRECT_PACK_COMPARE,
+    ):
+        useful = useful_rows_total * w13_per_row
+        rounded = rounded_rows_total * w13_per_row
+    elif mode in (
+        MODE_W2,
+        MODE_W2_PALLAS,
+        MODE_W2_COMBINE_PALLAS_SCAFFOLD,
+        MODE_W2_EXPERT_MAJOR_PREPACKED,
+        MODE_W2_EXPERT_MAJOR_PREPACKED_PALLAS,
+        MODE_W2_EXPERT_MAJOR_PREPACKED_COMPARE,
+        MODE_W2_EXPERT_MAJOR_PREPACKED_PALLAS_ASSUME_ZERO_INVALID,
+        MODE_W2_EXPERT_MAJOR_PREPACKED_ASSUME_ZERO_INVALID_COMPARE,
+        MODE_FORWARD_RETURN_DIRECT_TO_SOURCE_PALLAS,
+        MODE_FORWARD_RETURN_DIRECT_TO_SOURCE_COMPARE,
+        MODE_FORWARD_EXPERT_MAJOR_DIRECT_RETURN_COMBINE_PALLAS,
+        MODE_FORWARD_EXPERT_MAJOR_DIRECT_RETURN_COMBINE_COMPARE,
+    ):
+        useful = useful_rows_total * w2_per_row
+        rounded = rounded_rows_total * w2_per_row
+    elif mode in (
+        MODE_FORWARD,
+        MODE_FORWARD_PALLAS_SCAFFOLD,
+        MODE_FORWARD_EXPERT_MAJOR_PALLAS,
+        MODE_FORWARD_EXPERT_MAJOR_COMPARE,
+        MODE_FORWARD_EXPERT_MAJOR_PREPACKED_PALLAS,
+        MODE_FORWARD_EXPERT_MAJOR_PREPACKED_COMPARE,
+        MODE_FORWARD_EXPERT_MAJOR_PREPACKED_RETURN_PALLAS,
+        MODE_FORWARD_EXPERT_MAJOR_PREPACKED_RETURN_COMPARE,
+        MODE_FORWARD_EXPERT_MAJOR_RETURN_SUM_PALLAS,
+        MODE_FORWARD_EXPERT_MAJOR_RETURN_SUM_COMPARE,
+        MODE_FORWARD_EXPERT_MAJOR_DIRECT_PACK_DIRECT_RETURN_COMBINE_PALLAS,
+        MODE_FORWARD_EXPERT_MAJOR_DIRECT_PACK_DIRECT_RETURN_COMBINE_COMPARE,
+        MODE_FORWARD_SOURCE_PADDED_INBOX_DIRECT_RETURN_COMBINE_PALLAS,
+        MODE_FORWARD_SOURCE_PADDED_INBOX_DIRECT_RETURN_COMBINE_COMPARE,
+        MODE_FORWARD_SOURCE_PADDED_DIRECT_PACK_DIRECT_RETURN_COMBINE_PALLAS,
+        MODE_FORWARD_SOURCE_PADDED_DIRECT_PACK_DIRECT_RETURN_COMBINE_COMPARE,
+        MODE_FORWARD_EXPERT_MAJOR_DIRECT_PACK_OWNER_SHARDED_Y_STOP_PALLAS,
+        MODE_FORWARD_EXPERT_MAJOR_DIRECT_PACK_REMOTE_Y_STOP_PALLAS,
+        MODE_FORWARD_SOURCE_EXPAND_DIRECT_PACK_OWNER_SHARDED_Y_PALLAS,
+        MODE_FORWARD_SOURCE_EXPAND_DIRECT_PACK_REMOTE_Y_PALLAS,
+    ):
+        useful = useful_rows_total * (w13_per_row + w2_per_row + swiglu_per_row)
+        rounded = rounded_rows_total * (w13_per_row + w2_per_row + swiglu_per_row)
+    elif mode in (
+        MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_DIRECT_RETURN_COMBINE_DUPLICATE_W2_PALLAS,
+        MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_DIRECT_RETURN_COMBINE_DUPLICATE_W2_COMPARE,
+    ):
+        useful = useful_rows_total * (3.0 * w13_per_row + 4.0 * w2_per_row + 3.0 * swiglu_per_row)
+        rounded = rounded_rows_total * (3.0 * w13_per_row + 4.0 * w2_per_row + 3.0 * swiglu_per_row)
+    elif mode in (
+        MODE_FORWARD_W2_BACKWARD_DIRECT_PACK_OWNER_SHARDED_Y_PALLAS,
+        MODE_FORWARD_W2_BACKWARD_DIRECT_PACK_REMOTE_Y_PALLAS,
+    ):
+        useful = useful_rows_total * (w13_per_row + 3.0 * w2_per_row + swiglu_per_row)
+        rounded = rounded_rows_total * (w13_per_row + 3.0 * w2_per_row + swiglu_per_row)
+    elif mode in (
+        MODE_FORWARD_SWIGLU_BACKWARD_DIGEST_DIRECT_PACK_OWNER_SHARDED_Y_PALLAS,
+        MODE_FORWARD_SWIGLU_BACKWARD_DIGEST_DIRECT_PACK_REMOTE_Y_PALLAS,
+    ):
+        useful = useful_rows_total * (w13_per_row + 3.0 * w2_per_row + 3.0 * swiglu_per_row)
+        rounded = rounded_rows_total * (w13_per_row + 3.0 * w2_per_row + 3.0 * swiglu_per_row)
+    elif mode in (
+        MODE_FORWARD_W13_DX_BACKWARD_DIGEST_DIRECT_PACK_OWNER_SHARDED_Y_PALLAS,
+        MODE_FORWARD_W13_DX_BACKWARD_DIGEST_DIRECT_PACK_REMOTE_Y_PALLAS,
+        MODE_FORWARD_W13_DW13_BACKWARD_DIGEST_DIRECT_PACK_OWNER_SHARDED_Y_PALLAS,
+        MODE_FORWARD_W13_DW13_BACKWARD_DIGEST_DIRECT_PACK_REMOTE_Y_PALLAS,
+    ):
+        useful = useful_rows_total * (2.0 * w13_per_row + 3.0 * w2_per_row + 3.0 * swiglu_per_row)
+        rounded = rounded_rows_total * (2.0 * w13_per_row + 3.0 * w2_per_row + 3.0 * swiglu_per_row)
+    elif mode in (
+        MODE_FORWARD_W13_BACKWARD_DIRECT_PACK_OWNER_SHARDED_Y_PALLAS,
+        MODE_FORWARD_W13_BACKWARD_DIRECT_PACK_REMOTE_Y_PALLAS,
+        MODE_FORWARD_W13_BACKWARD_DIGEST_DIRECT_PACK_OWNER_SHARDED_Y_PALLAS,
+        MODE_FORWARD_W13_BACKWARD_DIGEST_DIRECT_PACK_REMOTE_Y_PALLAS,
+        MODE_FORWARD_W13_BACKWARD_BARRIER_DIGEST_DIRECT_PACK_OWNER_SHARDED_Y_PALLAS,
+        MODE_FORWARD_W13_BACKWARD_BARRIER_DIGEST_DIRECT_PACK_REMOTE_Y_PALLAS,
+        MODE_FORWARD_SWIGLU_BACKWARD_DIGEST_DIRECT_PACK_OWNER_SHARDED_Y_PALLAS,
+        MODE_FORWARD_SWIGLU_BACKWARD_DIGEST_DIRECT_PACK_REMOTE_Y_PALLAS,
+        MODE_FORWARD_W13_DX_BACKWARD_DIGEST_DIRECT_PACK_OWNER_SHARDED_Y_PALLAS,
+        MODE_FORWARD_W13_DX_BACKWARD_DIGEST_DIRECT_PACK_REMOTE_Y_PALLAS,
+        MODE_FORWARD_W13_DW13_BACKWARD_DIGEST_DIRECT_PACK_OWNER_SHARDED_Y_PALLAS,
+        MODE_FORWARD_W13_DW13_BACKWARD_DIGEST_DIRECT_PACK_REMOTE_Y_PALLAS,
+    ):
+        useful = useful_rows_total * (3.0 * w13_per_row + 3.0 * w2_per_row + 3.0 * swiglu_per_row)
+        rounded = rounded_rows_total * (3.0 * w13_per_row + 3.0 * w2_per_row + 3.0 * swiglu_per_row)
+    elif mode in (
+        MODE_BACKWARD_W2,
+        MODE_BACKWARD_W2_EXPERT_MAJOR,
+        MODE_BACKWARD_W2_EXPERT_MAJOR_PALLAS,
+        MODE_BACKWARD_W2_EXPERT_MAJOR_PREPACKED,
+        MODE_BACKWARD_W2_EXPERT_MAJOR_PREPACKED_PALLAS,
+        MODE_BACKWARD_W2_EXPERT_MAJOR_PREPACKED_COMPARE,
+        MODE_BACKWARD_W2_PALLAS_SCAFFOLD,
+    ):
+        useful = useful_rows_total * (2.0 * w2_per_row)
+        rounded = rounded_rows_total * (2.0 * w2_per_row)
+    elif mode in (MODE_BACKWARD_W2_DH_PALLAS, MODE_BACKWARD_W2_DW2_PALLAS):
+        useful = useful_rows_total * w2_per_row
+        rounded = rounded_rows_total * w2_per_row
+    elif mode == MODE_BACKWARD_SWIGLU:
+        useful = useful_rows_total * (2.0 * swiglu_per_row)
+        rounded = rounded_rows_total * (2.0 * swiglu_per_row)
+    elif mode in (MODE_BACKWARD_W13, MODE_BACKWARD_W13_PALLAS_SCAFFOLD):
+        useful = useful_rows_total * (2.0 * w13_per_row)
+        rounded = rounded_rows_total * (2.0 * w13_per_row)
+    elif mode in (
+        MODE_BACKWARD_W13_EXPERT_MAJOR_PREPACKED,
+        MODE_BACKWARD_W13_EXPERT_MAJOR_PREPACKED_PALLAS,
+        MODE_BACKWARD_W13_EXPERT_MAJOR_PREPACKED_COMPARE,
+    ):
+        useful = useful_rows_total * (2.0 * w13_per_row)
+        rounded = rounded_rows_total * (2.0 * w13_per_row)
+    elif mode in (
+        MODE_BACKWARD_W13_DX_ROUTE_EXPERT_MAJOR_PREPACKED_PALLAS,
+        MODE_BACKWARD_W13_DW13_EXPERT_MAJOR_PREPACKED_PALLAS,
+        MODE_BACKWARD_W13_DX_PAIR_PALLAS,
+        MODE_BACKWARD_W13_DW13_PALLAS,
+    ):
+        useful = useful_rows_total * w13_per_row
+        rounded = rounded_rows_total * w13_per_row
+    elif mode in (MODE_BACKWARD, MODE_BACKWARD_PALLAS_SCAFFOLD):
+        useful = useful_rows_total * (2.0 * w2_per_row + 2.0 * w13_per_row + 2.0 * swiglu_per_row)
+        rounded = rounded_rows_total * (2.0 * w2_per_row + 2.0 * w13_per_row + 2.0 * swiglu_per_row)
+    elif mode in (
+        MODE_FORWARD_BACKWARD,
+        MODE_FORWARD_BACKWARD_PALLAS_SCAFFOLD,
+        MODE_FORWARD_BACKWARD_EXPERT_MAJOR_PALLAS,
+        MODE_FORWARD_BACKWARD_EXPERT_MAJOR_COMPARE,
+        MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_PALLAS,
+        MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_PALLAS,
+        MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_LOOKUP_PACK_PALLAS,
+        MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_LOOKUP_PACK_COMPARE,
+        MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_SOURCE_GATHER_PALLAS,
+        MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_SOURCE_GATHER_COMPARE,
+        MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_OWNER_SHARDED_PALLAS,
+        MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_OWNER_SHARDED_COMPARE,
+        MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_OWNER_SHARDED_Y_PALLAS,
+        MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_DIRECT_RETURN_COMBINE_DUPLICATE_W2_PALLAS,
+        MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_DIRECT_RETURN_COMBINE_DUPLICATE_W2_COMPARE,
+        MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_DIRECT_QUEUE_PALLAS,
+        MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_DIRECT_QUEUE_WITH_METADATA_PALLAS,
+        MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_DIRECT_QUEUE_COMPARE,
+        MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_OWNER_SHARDED_Y_SLOT_REDUCE_PALLAS,
+        MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_NO_Y_PALLAS,
+        MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_REMOTE_Y_PALLAS,
+        MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_REMOTE_Y_DELAYED_PALLAS,
+        MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_OWNER_SHARDED_DX_PALLAS,
+        MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_REMOTE_DX_PALLAS,
+        MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_OWNER_SHARDED_Y_WITH_METADATA_PALLAS,
+        MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_OWNER_SHARDED_Y_WITH_PALLAS_METADATA_PALLAS,
+        MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_COMPARE,
+        MODE_FORWARD_BACKWARD_SOURCE_PADDED_INBOX_DIRECT_QUEUE_PALLAS,
+        MODE_FORWARD_BACKWARD_SOURCE_PADDED_INBOX_DIRECT_QUEUE_COMPARE,
+        MODE_FORWARD_BACKWARD_SOURCE_PADDED_DIRECT_PACK_DIRECT_QUEUE_PALLAS,
+        MODE_FORWARD_BACKWARD_SOURCE_PADDED_DIRECT_PACK_DIRECT_QUEUE_COMPARE,
+        MODE_FORWARD_BACKWARD_SOURCE_PADDED_DIRECT_PACK_DIRECT_QUEUE_WITH_METADATA_PALLAS,
+    ):
+        useful = useful_rows_total * (3.0 * w13_per_row + 3.0 * w2_per_row + 3.0 * swiglu_per_row)
+        rounded = rounded_rows_total * (3.0 * w13_per_row + 3.0 * w2_per_row + 3.0 * swiglu_per_row)
+    else:
+        return None, None
+    return useful / ep_size, rounded / ep_size
+
+
+def _checksum(value: Any) -> jax.Array:
+    leaves = jax.tree_util.tree_leaves(value)
+    total = jnp.asarray(0.0, dtype=jnp.float32)
+    for leaf in leaves:
+        if hasattr(leaf, "dtype") and jnp.issubdtype(leaf.dtype, jnp.number):
+            total = total + jnp.sum(leaf.astype(jnp.float32))
+    return total
+
+
+def _sample_digest(value: Any) -> jax.Array:
+    leaves = jax.tree_util.tree_leaves(value)
+    total = jnp.asarray(0.0, dtype=jnp.float32)
+    for leaf in leaves:
+        if hasattr(leaf, "dtype") and jnp.issubdtype(leaf.dtype, jnp.number):
+            total = total + jnp.sum(leaf.astype(jnp.float32))
+    return total
+
+
+def _scalar_output_metrics(value: Any) -> dict[str, float]:
+    if not isinstance(value, dict):
+        return {}
+    metrics = {}
+    for key, scalar in value.items():
+        if hasattr(scalar, "shape") and scalar.shape == ():
+            metrics[key] = float(jax.device_get(scalar))
+    return metrics
+
+
+def _nonfinite_error_count(value: Array) -> Int[Array, ""]:
+    return jnp.sum(~jnp.isfinite(value.astype(jnp.float32)), dtype=jnp.int32)
+
+
+def _comparison_metrics(prefix: str, observed: Array, expected: Array) -> dict[str, Array]:
+    diff = observed.astype(jnp.float32) - expected.astype(jnp.float32)
+    return {
+        f"{prefix}_max_abs_diff": jnp.max(jnp.abs(diff)),
+        f"{prefix}_mean_abs_diff": jnp.mean(jnp.abs(diff)),
+        f"expected_{prefix}_nonfinite_error_count": _nonfinite_error_count(expected),
+        f"observed_{prefix}_nonfinite_error_count": _nonfinite_error_count(observed),
+    }
+
+
+def _masked_comparison_metrics(
+    prefix: str,
+    observed: Array,
+    expected: Array,
+    live_rows: Bool[Array, "..."],
+) -> dict[str, Array]:
+    live = live_rows
+    while live.ndim < observed.ndim:
+        live = live[..., None]
+    live = jnp.broadcast_to(live, observed.shape)
+    diff = jnp.where(live, observed.astype(jnp.float32) - expected.astype(jnp.float32), 0.0)
+    live_element_count = jnp.sum(live, dtype=jnp.float32)
+    expected_nonfinite = jnp.sum(live & ~jnp.isfinite(expected.astype(jnp.float32)), dtype=jnp.int32)
+    observed_nonfinite = jnp.sum(live & ~jnp.isfinite(observed.astype(jnp.float32)), dtype=jnp.int32)
+    return {
+        f"{prefix}_max_abs_diff": jnp.max(jnp.abs(diff)),
+        f"{prefix}_mean_abs_diff": jnp.sum(jnp.abs(diff)) / jnp.maximum(live_element_count, 1.0),
+        f"{prefix}_live_element_count": live_element_count,
+        f"expected_{prefix}_nonfinite_error_count": expected_nonfinite,
+        f"observed_{prefix}_nonfinite_error_count": observed_nonfinite,
+    }
+
+
+def _sample_axis_indices(size: int, count: int) -> Int[Array, "sample"]:
+    count = min(size, count)
+    return jnp.asarray(np.linspace(0, size - 1, num=count, dtype=np.int32))
+
+
+def _sample_flat_coordinates(shape: tuple[int, ...], count: int) -> tuple[Int[Array, "sample"], ...]:
+    flat_count = math.prod(shape)
+    flat_indices = np.linspace(0, flat_count - 1, num=min(flat_count, count), dtype=np.int64)
+    return tuple(jnp.asarray(index, dtype=jnp.int32) for index in np.unravel_index(flat_indices, shape))
+
+
+def _sampled_metrics(prefix: str, observed: Array, expected: Array, live_rows: Bool[Array, "sample"]):
+    metrics = _masked_comparison_metrics(prefix, observed, expected, live_rows)
+    metrics[f"{prefix}_sampled_element_count"] = jnp.asarray(observed.size, dtype=jnp.int32)
+    return metrics
+
+
+def _replicated_gather_out_sharding(value: Array, *, rank: int):
+    spec = P(*(None for _ in range(rank)))
+    if jax.sharding.get_abstract_mesh().are_all_axes_explicit:
+        return spec
+    sharding = getattr(value, "sharding", None)
+    if not isinstance(sharding, NamedSharding):
+        return None
+    return NamedSharding(sharding.mesh, spec)
+
+
+def _sample_gather(value: Array, *indices: Int[Array, "sample"]) -> Array:
+    gather = value.at[indices]
+    output_rank = value.ndim - len(indices) + 1
+    out_sharding = _replicated_gather_out_sharding(value, rank=output_rank)
+    if out_sharding is None:
+        return gather.get()
+    return gather.get(out_sharding=out_sharding)
+
+
+def _scalar_gather(value: Array, *indices: Int[Array, ""]) -> Array:
+    # Scalar advanced indexing is rewritten to dynamic_slice before JAX applies
+    # out_sharding. A size-one dynamic slice cannot preserve an eight-way
+    # destination sharding, so keep a rank-one sample axis to force gather.
+    gather_indices = tuple(jnp.reshape(index, (1,)) for index in indices)
+    gather = value.at[gather_indices]
+    output_rank = value.ndim - len(indices) + 1
+    out_sharding = _replicated_gather_out_sharding(value, rank=output_rank)
+    if out_sharding is None:
+        return gather.get()[0]
+    return gather.get(out_sharding=out_sharding)[0]
+
+
+def _scalar_gather_w2_columns(
+    value: Float[Array, "Dst E I H"],
+    destination: Int[Array, ""],
+    expert: Int[Array, ""],
+    hidden_indices: Int[Array, "sample"],
+) -> Float[Array, "I sample"]:
+    destination_indices = jnp.broadcast_to(destination, hidden_indices.shape)
+    expert_indices = jnp.broadcast_to(expert, hidden_indices.shape)
+    gather = value.at[destination_indices, expert_indices, :, hidden_indices]
+    out_sharding = _replicated_gather_out_sharding(value, rank=2)
+    if out_sharding is None:
+        return gather.get().T
+    columns = gather.get(out_sharding=out_sharding)
+    return columns.T
+
+
+def _sample_array(value: Array, *, sample_count: int) -> Array:
+    """Post-hoc sampler retained for legacy non-target backward diagnostics."""
+
+    per_axis = max(1, int(sample_count ** (1.0 / value.ndim)))
+    sampled = value
+    for axis, axis_size in enumerate(value.shape):
+        sampled = jnp.take(sampled, _sample_axis_indices(axis_size, per_axis), axis=axis)
+    return sampled
+
+
+def _sampled_comparison_metrics(prefix: str, observed: Array, expected: Array) -> dict[str, Array]:
+    sampled_observed = _sample_array(observed, sample_count=SOURCE_PADDED_COMPARE_SAMPLE_COUNT)
+    sampled_expected = _sample_array(expected, sample_count=SOURCE_PADDED_COMPARE_SAMPLE_COUNT)
+    metrics = _comparison_metrics(prefix, sampled_observed, sampled_expected)
+    metrics[f"{prefix}_sampled_element_count"] = jnp.asarray(sampled_observed.size, dtype=jnp.int32)
+    return metrics
+
+
+def _sampled_masked_comparison_metrics(
+    prefix: str,
+    observed: Array,
+    expected: Array,
+    live_rows: Bool[Array, "..."],
+) -> dict[str, Array]:
+    live = live_rows
+    while live.ndim < observed.ndim:
+        live = live[..., None]
+    live = jnp.broadcast_to(live, observed.shape)
+    sampled_observed = _sample_array(observed, sample_count=SOURCE_PADDED_COMPARE_SAMPLE_COUNT)
+    sampled_expected = _sample_array(expected, sample_count=SOURCE_PADDED_COMPARE_SAMPLE_COUNT)
+    sampled_live = _sample_array(live, sample_count=SOURCE_PADDED_COMPARE_SAMPLE_COUNT)
+    metrics = _masked_comparison_metrics(prefix, sampled_observed, sampled_expected, sampled_live)
+    metrics[f"{prefix}_sampled_element_count"] = jnp.asarray(sampled_observed.size, dtype=jnp.int32)
+    return metrics
+
+
+def _source_padded_layout_metadata_jax(
+    plan: SourcePushSemanticPlan,
+    *,
+    rows_per_expert_capacity: int,
+) -> tuple[Int[Array, "Dst S E"], Int[Array, ""]]:
+    rounded_counts = (plan.xcounts + SOURCE_PADDED_ROW_BLOCK - 1) // SOURCE_PADDED_ROW_BLOCK * SOURCE_PADDED_ROW_BLOCK
+    source_row_base_by_expert = jnp.transpose(
+        jnp.cumsum(rounded_counts, axis=0, dtype=jnp.int32) - rounded_counts,
+        (1, 0, 2),
+    )
+    rounded_rows_per_expert = jnp.sum(rounded_counts, axis=0, dtype=jnp.int32)
+    overflow_rows = jnp.sum(
+        jnp.maximum(rounded_rows_per_expert - rows_per_expert_capacity, 0),
+        dtype=jnp.int32,
+    )
+    return source_row_base_by_expert, overflow_rows
+
+
+def _source_padded_expert_lookup_metadata_jax(
+    plan: SourcePushSemanticPlan,
+    source_row_base_by_expert: Int[Array, "Dst S E"],
+    *,
+    rows_per_expert_capacity: int,
+) -> tuple[Int[Array, "Dst E C"], Int[Array, "Dst E C"], Bool[Array, "Dst E C"]]:
+    """Build the compact inverse metadata needed by sampled target references."""
+
+    expert = source_push_semantic_pair_expert_ids_jax(plan)
+    safe_expert = jnp.maximum(expert, 0)
+    source_index = jnp.arange(plan.xcounts.shape[0], dtype=jnp.int32)[:, None, None]
+    destination_index = jnp.arange(plan.xcounts.shape[1], dtype=jnp.int32)[None, :, None]
+    pair_row = jnp.arange(plan.assignment_ids.shape[-1], dtype=jnp.int32)[None, None, :]
+    local_row = pair_row - plan.pair_expert_base.at[source_index, destination_index, safe_expert].get()
+    expert_row = source_row_base_by_expert.at[destination_index, source_index, safe_expert].get() + local_row
+    pair_valid = plan.valid_mask & (expert_row >= 0) & (expert_row < rows_per_expert_capacity)
+    scatter_row = jnp.where(pair_valid, expert_row, rows_per_expert_capacity)
+    shape = (plan.xcounts.shape[1], plan.xcounts.shape[2], rows_per_expert_capacity)
+    source_lookup = (
+        jnp.zeros(shape, dtype=jnp.int32)
+        .at[destination_index, safe_expert, scatter_row]
+        .set(
+            jnp.where(pair_valid, source_index, 0),
+            mode="drop",
+        )
+    )
+    token_lookup = (
+        jnp.zeros(shape, dtype=jnp.int32)
+        .at[destination_index, safe_expert, scatter_row]
+        .set(
+            jnp.where(pair_valid, jnp.maximum(plan.token_ids, 0), 0),
+            mode="drop",
+        )
+    )
+    valid = (
+        jnp.zeros(shape, dtype=jnp.bool_)
+        .at[destination_index, safe_expert, scatter_row]
+        .set(
+            pair_valid,
+            mode="drop",
+        )
+    )
+    return source_lookup, token_lookup, valid
+
+
+def _source_padded_expert_sample_metrics(
+    x: Float[Array, "S T H"],
+    w_gate_up: Float[Array, "Dst E H twoI"],
+    observed_z: Float[Array, "Dst E C twoI"],
+    observed_h: Float[Array, "Dst E C I"],
+    observed_valid: Bool[Array, "Dst E C"],
+    source_lookup: Int[Array, "Dst E C"],
+    token_lookup: Int[Array, "Dst E C"],
+    expected_valid: Bool[Array, "Dst E C"],
+    *,
+    observed_x: Float[Array, "Dst E C H"] | None = None,
+) -> dict[str, Array]:
+    """Compare fixed-size expert-row probes without materializing full reference activations."""
+
+    destination, expert, row = _sample_flat_coordinates(expected_valid.shape, SOURCE_PADDED_COMPARE_SAMPLE_ROWS)
+    hidden_indices = _sample_axis_indices(x.shape[-1], SOURCE_PADDED_COMPARE_SAMPLE_COUNT // destination.size)
+    output_indices = _sample_axis_indices(observed_z.shape[-1], SOURCE_PADDED_COMPARE_SAMPLE_COUNT // destination.size)
+    intermediate_indices = _sample_axis_indices(
+        observed_h.shape[-1], SOURCE_PADDED_COMPARE_SAMPLE_COUNT // destination.size
+    )
+    probe_indices = jnp.stack((destination, expert, row), axis=1)
+
+    def reference_row(index):
+        dst, local_expert, expert_row = index
+        live = expected_valid[dst, local_expert, expert_row]
+        source = source_lookup[dst, local_expert, expert_row]
+        token = token_lookup[dst, local_expert, expert_row]
+        x_row = _scalar_gather(x, source, token).astype(jnp.float32)
+        expert_weight = _scalar_gather(w_gate_up, dst, local_expert)
+        z_row = jnp.dot(
+            x_row,
+            expert_weight.astype(jnp.float32),
+            preferred_element_type=jnp.float32,
+        )
+        stored_z = z_row.astype(observed_z.dtype)
+        gate, up = jnp.split(stored_z.astype(jnp.float32), 2)
+        stored_h = (jax.nn.silu(gate) * up).astype(observed_h.dtype)
+        return (
+            jnp.where(live, x_row[hidden_indices], 0.0),
+            jnp.where(live, stored_z[output_indices], 0.0),
+            jnp.where(live, stored_h[intermediate_indices], 0.0),
+        )
+
+    expected_x, expected_z, expected_h = jax.lax.map(reference_row, probe_indices)
+    live_rows = expected_valid[destination, expert, row]
+    sampled_z = _sample_gather(observed_z, destination, expert, row)
+    sampled_h = _sample_gather(observed_h, destination, expert, row)
+    metrics = {
+        **_sampled_metrics(
+            "z",
+            sampled_z[:, output_indices],
+            expected_z,
+            live_rows,
+        ),
+        **_sampled_metrics(
+            "h",
+            sampled_h[:, intermediate_indices],
+            expected_h,
+            live_rows,
+        ),
+        "valid_error_count": jnp.sum(observed_valid != expected_valid, dtype=jnp.int32),
+    }
+    if observed_x is not None:
+        sampled_x = _sample_gather(observed_x, destination, expert, row)
+        metrics.update(
+            _sampled_metrics(
+                "x",
+                sampled_x[:, hidden_indices],
+                expected_x.astype(observed_x.dtype),
+                live_rows,
+            )
+        )
+    return metrics
+
+
+def _source_padded_forward_sample_metrics(
+    inputs: SemanticBenchInputs,
+    observed_y: Float[Array, "S T H"],
+    observed_return_y: Float[Array, "S DstOrd Q M H"],
+    plan: SourcePushSemanticPlan,
+    queue,
+) -> dict[str, Array]:
+    """Sample direct-return and final output against route-local matvec references."""
+
+    hidden_indices = _sample_axis_indices(
+        observed_y.shape[-1],
+        SOURCE_PADDED_COMPARE_SAMPLE_COUNT // SOURCE_PADDED_COMPARE_SAMPLE_ROWS,
+    )
+    queue_shape = (
+        observed_return_y.shape[0],
+        observed_return_y.shape[1],
+        min(observed_return_y.shape[2], plan.xcounts.shape[-1]),
+        observed_return_y.shape[3],
+    )
+    source, destination_ordinal, entry, queue_row = _sample_flat_coordinates(
+        queue_shape,
+        SOURCE_PADDED_COMPARE_SAMPLE_ROWS,
+    )
+    return_probe_indices = jnp.stack((source, destination_ordinal, entry, queue_row), axis=1)
+
+    def route_reference(index):
+        src, dst_ordinal, queue_entry, row = index
+        dst = (src + dst_ordinal) % plan.xcounts.shape[1]
+        local_expert = jnp.maximum(queue.local_expert[src, dst_ordinal, queue_entry], 0)
+        local_row = queue.local_row_start[src, dst_ordinal, queue_entry] + row
+        pair_row = plan.pair_expert_base[src, dst, local_expert] + local_row
+        safe_pair_row = jnp.minimum(pair_row, plan.assignment_ids.shape[-1] - 1)
+        live = row < queue.valid_rows[src, dst_ordinal, queue_entry]
+        live = live & plan.valid_mask[src, dst, safe_pair_row]
+        token = jnp.maximum(plan.token_ids[src, dst, safe_pair_row], 0)
+        x_row = _scalar_gather(inputs.x, src, token).astype(jnp.float32)
+        gate_up_weight = _scalar_gather(inputs.w_gate_up, dst, local_expert)
+        z_row = jnp.dot(
+            x_row,
+            gate_up_weight.astype(jnp.float32),
+            preferred_element_type=jnp.float32,
+        )
+        stored_z = z_row.astype(jnp.bfloat16)
+        gate, up = jnp.split(stored_z.astype(jnp.float32), 2)
+        activation = (jax.nn.silu(gate) * up).astype(inputs.w_down.dtype)
+        down_weight = _scalar_gather(inputs.w_down, dst, local_expert)
+        route_y = jnp.dot(
+            activation,
+            jnp.take(down_weight, hidden_indices, axis=1).astype(jnp.float32),
+            preferred_element_type=jnp.float32,
+        )
+        return jnp.where(live, route_y, 0.0).astype(observed_return_y.dtype), live
+
+    expected_return_y, live_return_rows = jax.lax.map(route_reference, return_probe_indices)
+    sampled_return_y = _sample_gather(
+        observed_return_y,
+        source,
+        destination_ordinal,
+        entry,
+        queue_row,
+    )[:, hidden_indices]
+
+    token_source, token = _sample_flat_coordinates(
+        observed_y.shape[:2],
+        min(SOURCE_PADDED_COMPARE_SAMPLE_ROWS, 16),
+    )
+    token_probe_indices = jnp.stack((token_source, token), axis=1)
+
+    def token_reference(index):
+        src, token_id = index
+        x_row = _scalar_gather(inputs.x, src, token_id).astype(jnp.float32)
+
+        def add_route(route_slot, accumulator):
+            global_expert = inputs.selected_experts[src, token_id, route_slot]
+            dst = global_expert // plan.xcounts.shape[-1]
+            local_expert = global_expert % plan.xcounts.shape[-1]
+            gate_up_weight = _scalar_gather(inputs.w_gate_up, dst, local_expert)
+            z_row = jnp.dot(
+                x_row,
+                gate_up_weight.astype(jnp.float32),
+                preferred_element_type=jnp.float32,
+            )
+            stored_z = z_row.astype(jnp.bfloat16)
+            gate, up = jnp.split(stored_z.astype(jnp.float32), 2)
+            activation = (jax.nn.silu(gate) * up).astype(inputs.w_down.dtype)
+            down_weight = _scalar_gather(inputs.w_down, dst, local_expert)
+            route_y = jnp.dot(
+                activation,
+                jnp.take(down_weight, hidden_indices, axis=1).astype(jnp.float32),
+                preferred_element_type=jnp.float32,
+            )
+            stored_route_y = route_y.astype(observed_return_y.dtype)
+            weighted = stored_route_y.astype(jnp.float32) * inputs.route_weights[src, token_id, route_slot].astype(
+                jnp.float32
+            )
+            return accumulator + jnp.where(queue.route_valid[src, token_id, route_slot], weighted, 0.0)
+
+        return jax.lax.fori_loop(0, plan.topk, add_route, jnp.zeros(hidden_indices.shape, dtype=jnp.float32))
+
+    expected_y = jax.lax.map(token_reference, token_probe_indices)
+    sampled_y = _sample_gather(observed_y, token_source, token)[:, hidden_indices]
+    return {
+        **_sampled_metrics("return_y", sampled_return_y, expected_return_y, live_return_rows),
+        **_sampled_metrics(
+            "y",
+            sampled_y,
+            expected_y,
+            jnp.ones(token_source.shape, dtype=jnp.bool_),
+        ),
+    }
+
+
+def _direct_return_combine_sample_metrics(
+    observed_y: Float[Array, "S T H"],
+    observed_return_y: Float[Array, "S DstOrd Q M H"],
+    observed_h: Float[Array, "Dst E C I"],
+    w_down: Float[Array, "Dst E I H"],
+    source_row_base_by_expert: Int[Array, "Dst S E"],
+    queue_metadata: SourcePushSemanticForwardReturnQueueMetadata,
+) -> dict[str, Array]:
+    """Compare bounded deterministic probes of direct W2 return and source combine."""
+
+    route_source, route_token, route_slot = _sample_flat_coordinates(
+        queue_metadata.route_valid.shape,
+        DIRECT_RETURN_COMPARE_SAMPLE_ROWS,
+    )
+    hidden_indices = _sample_axis_indices(
+        observed_return_y.shape[-1],
+        DIRECT_RETURN_COMPARE_SAMPLE_COUNT // route_source.size,
+    )
+    route_probe_indices = jnp.stack((route_source, route_token, route_slot), axis=1)
+
+    def return_y_reference(index):
+        source, token, route_slot = index
+        destination_ordinal = queue_metadata.queue_dst_ord[source, token, route_slot]
+        entry = queue_metadata.queue_entry[source, token, route_slot]
+        queue_row = queue_metadata.queue_row[source, token, route_slot]
+        destination = (source + destination_ordinal) % observed_h.shape[0]
+        local_expert = jnp.maximum(
+            queue_metadata.queue_local_expert[source, destination_ordinal, entry],
+            0,
+        )
+        expert_row = (
+            source_row_base_by_expert[destination, source, local_expert]
+            + queue_metadata.queue_local_row_start[source, destination_ordinal, entry]
+            + queue_row
+        )
+        expert_row = jnp.clip(expert_row, 0, observed_h.shape[2] - 1)
+        h_row = _scalar_gather(observed_h, destination, local_expert, expert_row)
+        w2_columns = _scalar_gather_w2_columns(w_down, destination, local_expert, hidden_indices)
+        expected = jnp.dot(
+            h_row.astype(w_down.dtype).astype(jnp.float32),
+            w2_columns.astype(jnp.float32),
+            preferred_element_type=jnp.float32,
+        )
+        return expected.astype(observed_return_y.dtype)
+
+    expected_return_y = jax.lax.map(return_y_reference, route_probe_indices)
+    sampled_return_y = _sample_gather(
+        observed_return_y,
+        route_source,
+        queue_metadata.queue_dst_ord[route_source, route_token, route_slot],
+        queue_metadata.queue_entry[route_source, route_token, route_slot],
+        queue_metadata.queue_row[route_source, route_token, route_slot],
+    )[:, hidden_indices]
+    live_return_rows = queue_metadata.route_valid[route_source, route_token, route_slot]
+
+    y_source, y_token = _sample_flat_coordinates(
+        observed_y.shape[:2],
+        min(DIRECT_RETURN_COMPARE_SAMPLE_ROWS, 16),
+    )
+    y_hidden_indices = _sample_axis_indices(
+        observed_y.shape[-1],
+        DIRECT_RETURN_COMPARE_SAMPLE_COUNT // y_source.size,
+    )
+    y_probe_indices = jnp.stack((y_source, y_token), axis=1)
+
+    def y_reference(index):
+        source, token = index
+
+        def add_route(route_slot, accumulator):
+            destination_ordinal = queue_metadata.queue_dst_ord[source, token, route_slot]
+            entry = queue_metadata.queue_entry[source, token, route_slot]
+            queue_row = queue_metadata.queue_row[source, token, route_slot]
+            route_value = _scalar_gather(
+                observed_return_y,
+                source,
+                destination_ordinal,
+                entry,
+                queue_row,
+            )[y_hidden_indices]
+            weighted = route_value.astype(jnp.float32) * queue_metadata.route_weight[source, token, route_slot].astype(
+                jnp.float32
+            )
+            return accumulator + jnp.where(
+                queue_metadata.route_valid[source, token, route_slot],
+                weighted,
+                0.0,
+            )
+
+        return jax.lax.fori_loop(
+            0,
+            queue_metadata.route_valid.shape[-1],
+            add_route,
+            jnp.zeros(y_hidden_indices.shape, dtype=jnp.float32),
+        )
+
+    expected_y = jax.lax.map(y_reference, y_probe_indices)
+    sampled_y = _sample_gather(observed_y, y_source, y_token)[:, y_hidden_indices]
+    return {
+        **_sampled_metrics("return_y", sampled_return_y, expected_return_y, live_return_rows),
+        **_sampled_metrics(
+            "y",
+            sampled_y,
+            expected_y,
+            jnp.ones(y_source.shape, dtype=jnp.bool_),
+        ),
+    }
+
+
+def _direct_dx_queue_reference_samples(
+    dx_route: Float[Array, "Dst E C H"],
+    source_row_base_by_expert: Int[Array, "Dst S E"],
+    queue_metadata: SourcePushSemanticQueueMetadata,
+    route_source: Int[Array, "sample"],
+    route_token: Int[Array, "sample"],
+    route_slot: Int[Array, "sample"],
+    hidden_indices: Int[Array, "hidden_sample"],
+    *,
+    route_buffer_dtype: jnp.dtype,
+) -> Float[Array, "sample hidden_sample"]:
+    destination_ordinal = queue_metadata.route_dst_ordinal[route_source, route_token, route_slot]
+    entry = queue_metadata.route_entry[route_source, route_token, route_slot]
+    queue_row = queue_metadata.route_queue_row[route_source, route_token, route_slot]
+    destination = (route_source + destination_ordinal) % dx_route.shape[0]
+    local_expert = jnp.maximum(
+        queue_metadata.local_expert[route_source, destination_ordinal, entry],
+        0,
+    )
+    expert_row = (
+        source_row_base_by_expert[destination, route_source, local_expert]
+        + queue_metadata.local_row_start[route_source, destination_ordinal, entry]
+        + queue_row
+    )
+    expert_row = jnp.clip(expert_row, 0, dx_route.shape[2] - 1)
+    return _sample_gather(dx_route, destination, local_expert, expert_row)[:, hidden_indices].astype(
+        route_buffer_dtype
+    )
+
+
+def _direct_dx_observed_queue_samples(
+    return_dx: Float[Array, "S DstOrd Q M H"],
+    queue_metadata: SourcePushSemanticQueueMetadata,
+    route_source: Int[Array, "sample"],
+    route_token: Int[Array, "sample"],
+    route_slot: Int[Array, "sample"],
+    hidden_indices: Int[Array, "hidden_sample"],
+) -> Float[Array, "sample hidden_sample"]:
+    return _sample_gather(
+        return_dx,
+        route_source,
+        queue_metadata.route_dst_ordinal[route_source, route_token, route_slot],
+        queue_metadata.route_entry[route_source, route_token, route_slot],
+        queue_metadata.route_queue_row[route_source, route_token, route_slot],
+    )[:, hidden_indices]
+
+
+def _direct_dx_queue_sample_metrics(
+    observed_return_dx: Float[Array, "S DstOrd Q M H"],
+    dx_route: Float[Array, "Dst E C H"],
+    source_row_base_by_expert: Int[Array, "Dst S E"],
+    queue_metadata: SourcePushSemanticQueueMetadata,
+) -> dict[str, Array]:
+    """Compare bounded live direct-dX queue probes, including destination buckets."""
+
+    route_source, route_token, route_slot = _sample_flat_coordinates(
+        queue_metadata.route_valid.shape,
+        DIRECT_RETURN_COMPARE_SAMPLE_ROWS,
+    )
+    hidden_indices = _sample_axis_indices(
+        observed_return_dx.shape[-1],
+        max(1, DIRECT_RETURN_COMPARE_SAMPLE_COUNT // route_source.size),
+    )
+    expected_return_dx = _direct_dx_queue_reference_samples(
+        dx_route,
+        source_row_base_by_expert,
+        queue_metadata,
+        route_source,
+        route_token,
+        route_slot,
+        hidden_indices,
+        route_buffer_dtype=observed_return_dx.dtype,
+    )
+    sampled_return_dx = _direct_dx_observed_queue_samples(
+        observed_return_dx,
+        queue_metadata,
+        route_source,
+        route_token,
+        route_slot,
+        hidden_indices,
+    )
+    destination_ordinal = queue_metadata.route_dst_ordinal[route_source, route_token, route_slot]
+    live_routes = queue_metadata.route_valid[route_source, route_token, route_slot]
+    metrics = _sampled_metrics(
+        "producer_return_dx",
+        sampled_return_dx,
+        expected_return_dx,
+        live_routes,
+    )
+    for ordinal in range(observed_return_dx.shape[1]):
+        metrics.update(
+            _sampled_metrics(
+                f"producer_return_dx_dst_ordinal_{ordinal}",
+                sampled_return_dx,
+                expected_return_dx,
+                live_routes & (destination_ordinal == ordinal),
+            )
+        )
+    entry = queue_metadata.route_entry[route_source, route_token, route_slot]
+    queue_row = queue_metadata.route_queue_row[route_source, route_token, route_slot]
+    for expected_ordinal in range(observed_return_dx.shape[1]):
+        ordinal_live = live_routes & (destination_ordinal == expected_ordinal)
+        for stored_axis in range(observed_return_dx.shape[1]):
+            candidate = _sample_gather(
+                observed_return_dx,
+                route_source,
+                jnp.full(route_source.shape, stored_axis, dtype=jnp.int32),
+                entry,
+                queue_row,
+            )[:, hidden_indices]
+            candidate_diff = jnp.where(
+                ordinal_live[:, None],
+                candidate.astype(jnp.float32) - expected_return_dx.astype(jnp.float32),
+                0.0,
+            )
+            live_element_count = jnp.sum(ordinal_live, dtype=jnp.float32) * hidden_indices.size
+            prefix = f"producer_return_dx_expected_ordinal_{expected_ordinal}_stored_axis_{stored_axis}"
+            metrics[f"{prefix}_max_abs_diff"] = jnp.max(jnp.abs(candidate_diff))
+            metrics[f"{prefix}_mean_abs_diff"] = jnp.sum(jnp.abs(candidate_diff)) / jnp.maximum(
+                live_element_count,
+                1.0,
+            )
+    return metrics
+
+
+def _direct_dx_combine_sample_metrics(
+    observed_dx: Float[Array, "S T H"],
+    observed_return_dx: Float[Array, "S DstOrd Q M H"],
+    dx_route: Float[Array, "Dst E C H"],
+    source_row_base_by_expert: Int[Array, "Dst S E"],
+    queue_metadata: SourcePushSemanticQueueMetadata,
+) -> dict[str, Array]:
+    """Compare bounded dX output probes to observed and reference queue reductions."""
+
+    source, token = _sample_flat_coordinates(
+        observed_dx.shape[:2],
+        min(DIRECT_RETURN_COMPARE_SAMPLE_ROWS, 16),
+    )
+    hidden_indices = _sample_axis_indices(
+        observed_dx.shape[-1],
+        max(1, DIRECT_RETURN_COMPARE_SAMPLE_COUNT // source.size),
+    )
+    topk = queue_metadata.route_valid.shape[-1]
+    route_source = jnp.repeat(source, topk)
+    route_token = jnp.repeat(token, topk)
+    route_slot = jnp.tile(jnp.arange(topk, dtype=jnp.int32), source.size)
+    sample_shape = (source.size, topk, hidden_indices.size)
+    observed_queue_routes = _direct_dx_observed_queue_samples(
+        observed_return_dx,
+        queue_metadata,
+        route_source,
+        route_token,
+        route_slot,
+        hidden_indices,
+    ).reshape(sample_shape)
+    reference_queue_routes = _direct_dx_queue_reference_samples(
+        dx_route,
+        source_row_base_by_expert,
+        queue_metadata,
+        route_source,
+        route_token,
+        route_slot,
+        hidden_indices,
+        route_buffer_dtype=observed_return_dx.dtype,
+    ).reshape(sample_shape)
+    route_valid = queue_metadata.route_valid[source, token]
+    observed_queue_dx = jnp.sum(
+        jnp.where(route_valid[..., None], observed_queue_routes.astype(jnp.float32), 0.0),
+        axis=1,
+        dtype=jnp.float32,
+    )
+    reference_queue_dx = jnp.sum(
+        jnp.where(route_valid[..., None], reference_queue_routes.astype(jnp.float32), 0.0),
+        axis=1,
+        dtype=jnp.float32,
+    )
+    sampled_dx = _sample_gather(observed_dx, source, token)[:, hidden_indices]
+    live_outputs = jnp.ones(source.shape, dtype=jnp.bool_)
+    return {
+        **_sampled_metrics(
+            "combine_from_observed_queue_dx",
+            sampled_dx,
+            observed_queue_dx,
+            live_outputs,
+        ),
+        **_sampled_metrics("dx", sampled_dx, reference_queue_dx, live_outputs),
+    }
+
+
+def _sampled_source_output_metrics(prefix: str, observed: Array, expected: Array) -> dict[str, Array]:
+    source, token = _sample_flat_coordinates(
+        observed.shape[:2],
+        min(DIRECT_RETURN_COMPARE_SAMPLE_ROWS, 16),
+    )
+    hidden_indices = _sample_axis_indices(
+        observed.shape[-1],
+        max(1, DIRECT_RETURN_COMPARE_SAMPLE_COUNT // source.size),
+    )
+    sampled_observed = _sample_gather(observed, source, token)[:, hidden_indices]
+    sampled_expected = _sample_gather(expected, source, token)[:, hidden_indices]
+    return _sampled_metrics(
+        prefix,
+        sampled_observed,
+        sampled_expected,
+        jnp.ones(source.shape, dtype=jnp.bool_),
+    )
+
+
+def _source_padded_reference_jax(
+    x: Float[Array, "S T H"],
+    w_gate_up: Float[Array, "Dst E H twoI"],
+    plan: SourcePushSemanticPlan,
+    *,
+    rows_per_expert_capacity: int,
+) -> tuple[
+    Float[Array, "Dst E C H"],
+    Float[Array, "Dst E C twoI"],
+    Float[Array, "Dst E C I"],
+    Bool[Array, "Dst E C"],
+    Int[Array, "Dst S E"],
+    Int[Array, ""],
+]:
+    source_row_base_by_expert, overflow_rows = _source_padded_layout_metadata_jax(
+        plan,
+        rows_per_expert_capacity=rows_per_expert_capacity,
+    )
+
+    z_pair, _h_pair = source_push_semantic_w13_reference_jax(x, w_gate_up, plan)
+    expert = source_push_semantic_pair_expert_ids_jax(plan)
+    safe_expert = jnp.maximum(expert, 0)
+    source_index = jnp.arange(plan.xcounts.shape[0], dtype=jnp.int32)[:, None, None]
+    destination_index = jnp.arange(plan.xcounts.shape[1], dtype=jnp.int32)[None, :, None]
+    pair_row = jnp.arange(plan.assignment_ids.shape[-1], dtype=jnp.int32)[None, None, :]
+    local_row = pair_row - plan.pair_expert_base.at[source_index, destination_index, safe_expert].get()
+    padded_row = source_row_base_by_expert.at[destination_index, source_index, safe_expert].get() + local_row
+    pair_valid = plan.valid_mask & (padded_row >= 0) & (padded_row < rows_per_expert_capacity)
+    scatter_row = jnp.where(pair_valid, padded_row, rows_per_expert_capacity)
+
+    x_pair = source_push_semantic_gather_x_jax(x, plan)
+    x_expert = jnp.zeros(
+        (
+            plan.xcounts.shape[1],
+            plan.xcounts.shape[2],
+            rows_per_expert_capacity,
+            x.shape[-1],
+        ),
+        dtype=x.dtype,
+    )
+    x_expert = x_expert.at[destination_index, safe_expert, scatter_row].set(
+        jnp.where(pair_valid[..., None], x_pair, 0),
+        mode="drop",
+    )
+    z_expert = jnp.zeros(
+        (
+            plan.xcounts.shape[1],
+            plan.xcounts.shape[2],
+            rows_per_expert_capacity,
+            w_gate_up.shape[-1],
+        ),
+        dtype=jnp.bfloat16,
+    )
+    z_expert = z_expert.at[destination_index, safe_expert, scatter_row].set(
+        jnp.where(pair_valid[..., None], z_pair.astype(jnp.bfloat16), 0),
+        mode="drop",
+    )
+    valid = jnp.zeros(z_expert.shape[:-1], dtype=jnp.bool_)
+    valid = valid.at[destination_index, safe_expert, scatter_row].set(pair_valid, mode="drop")
+    gate, up = jnp.split(z_expert.astype(jnp.float32), 2, axis=-1)
+    h_expert = jnp.where(valid[..., None], jax.nn.silu(gate) * up, 0.0)
+    return x_expert, z_expert, h_expert, valid, source_row_base_by_expert, overflow_rows
+
+
+def _round_up_to_multiple(value: int, multiple: int) -> int:
+    if multiple <= 0:
+        raise ValueError(f"multiple must be positive, got {multiple}")
+    return ((value + multiple - 1) // multiple) * multiple
+
+
+def _expert_capacity_row_multiple(args: argparse.Namespace) -> int:
+    return math.lcm(
+        max(1, args.gather_row_block),
+        max(1, args.w13_expert_major_row_block),
+        max(1, args.w2_expert_major_row_block),
+        max(1, args.backward_row_block),
+        max(1, args.dx_return_row_block),
+        max(1, args.w2_backward_row_block),
+        max(1, args.w13_backward_row_block),
+    )
+
+
+def _rows_per_expert_capacity(
+    plan: SourcePushSemanticPlan,
+    *,
+    row_multiple: int = 1,
+    source_row_alignment: int = 1,
+    tail_guard_rows: int = 0,
+) -> int:
+    if tail_guard_rows < 0:
+        raise ValueError(f"tail_guard_rows must be non-negative, got {tail_guard_rows}")
+    if source_row_alignment == 1:
+        rows_per_local_expert = plan.rows_per_local_expert
+    else:
+        rows_per_local_expert, _source_bases = source_push_semantic_source_aligned_expert_offsets_jax(
+            plan,
+            row_alignment=source_row_alignment,
+        )
+    live_rows = max(1, int(jax.device_get(jnp.max(rows_per_local_expert))))
+    return _round_up_to_multiple(live_rows + tail_guard_rows, row_multiple)
+
+
+def _metadata_fn(
+    selected_experts: Int[Array, "S T K"],
+    route_weights: Float[Array, "S T K"],
+    *,
+    ep_size: int,
+    experts_per_rank: int,
+    rows_per_src_dst_capacity: int,
+    rows_per_expert_capacity: int | None = None,
+    capacity_factor: float,
+) -> SourcePushSemanticPlan:
+    return build_source_push_semantic_plan_jax(
+        selected_experts,
+        route_weights,
+        ep_size=ep_size,
+        experts_per_rank=experts_per_rank,
+        rows_per_src_dst_capacity=rows_per_src_dst_capacity,
+        rows_per_expert_capacity=rows_per_expert_capacity,
+        capacity_factor=capacity_factor,
+    )
+
+
+def _gather_block_sizes(args: argparse.Namespace) -> SourcePushSemanticGatherXPallasBlockSizes:
+    return SourcePushSemanticGatherXPallasBlockSizes(
+        row_block=args.gather_row_block,
+        hidden_block=args.gather_hidden_block,
+    )
+
+
+def _w13_block_sizes(args: argparse.Namespace) -> SourcePushSemanticW13PallasBlockSizes:
+    return SourcePushSemanticW13PallasBlockSizes(
+        row_block=args.w13_row_block,
+        hidden_block=args.w13_hidden_block,
+        intermediate_block=args.w13_intermediate_block,
+    )
+
+
+def _w13_expert_major_block_sizes(args: argparse.Namespace) -> SourcePushSemanticW13ExpertMajorPallasBlockSizes:
+    return SourcePushSemanticW13ExpertMajorPallasBlockSizes(
+        row_block=args.w13_expert_major_row_block,
+        hidden_block=args.w13_expert_major_hidden_block,
+        intermediate_block=args.w13_expert_major_intermediate_block,
+    )
+
+
+def _source_padded_inbox_config(args: argparse.Namespace, plan: SourcePushSemanticPlan) -> PushInboxConfig:
+    profile, _run_settings = source_push_inbox_profile(SOURCE_PUSH_PROFILE_STABLE_216)
+    conservative_entries = (
+        (plan.assignment_ids.shape[-1] + SOURCE_PADDED_ROW_BLOCK - 1) // SOURCE_PADDED_ROW_BLOCK
+        + plan.xcounts.shape[-1]
+        - 1
+    )
+    entries_per_rank = min(
+        SOURCE_PADDED_ENTRIES_PER_RANK,
+        _round_up_to_multiple(conservative_entries, 2),
+    )
+    block_k = min(profile.block_k, args.hidden_dim)
+    block_n = min(profile.block_n, args.intermediate_dim)
+    n_tiles = args.intermediate_dim // block_n
+    n_groups_per_job = min(profile.n_groups_per_job, max(1, n_tiles // profile.n_group))
+    config = replace(
+        profile,
+        ep_size=args.ep_size,
+        entries_per_rank=entries_per_rank,
+        hidden_dim=args.hidden_dim,
+        intermediate_dim=args.intermediate_dim,
+        block_m=SOURCE_PADDED_ROW_BLOCK,
+        block_k=block_k,
+        block_n=block_n,
+        n_groups_per_job=n_groups_per_job,
+        experts_per_rank=args.experts_per_rank,
+        tokens_per_rank=args.tokens_per_rank,
+        topk=args.topk,
+        routing_seed=args.routing_seed,
+        capacity_factor=args.capacity_factor,
+    )
+    config.validate()
+    return config
+
+
+def _source_padded_w2_block_sizes(args: argparse.Namespace) -> SourcePushSemanticW2ExpertMajorPallasBlockSizes:
+    return replace(_w2_forward_expert_major_block_sizes(args), row_block=SOURCE_PADDED_ROW_BLOCK)
+
+
+def _source_padded_w13_block_sizes(args: argparse.Namespace) -> SourcePushSemanticW13ExpertMajorPallasBlockSizes:
+    return _w13_expert_major_block_sizes(args)
+
+
+def _source_padded_w2_backward_block_sizes(
+    args: argparse.Namespace,
+) -> SourcePushSemanticW2BackwardExpertMajorPallasBlockSizes:
+    return replace(_w2_backward_expert_major_block_sizes(args), row_block=SOURCE_PADDED_ROW_BLOCK)
+
+
+def _source_padded_backward_block_sizes(args: argparse.Namespace) -> SourcePushSemanticBackwardPallasBlockSizes:
+    return replace(_backward_block_sizes(args), row_block=SOURCE_PADDED_ROW_BLOCK)
+
+
+def _source_padded_w13_backward_block_sizes(
+    args: argparse.Namespace,
+) -> SourcePushSemanticW13BackwardPallasBlockSizes:
+    return replace(_w13_backward_block_sizes(args), row_block=SOURCE_PADDED_ROW_BLOCK)
+
+
+def _source_padded_return_block_sizes(args: argparse.Namespace) -> SourcePushSemanticForwardReturnPallasBlockSizes:
+    return replace(_forward_return_block_sizes(args), row_block=SOURCE_PADDED_ROW_BLOCK)
+
+
+def _source_padded_dx_queue_block_sizes(args: argparse.Namespace) -> SourcePushSemanticDxReturnPallasBlockSizes:
+    return SourcePushSemanticDxReturnPallasBlockSizes(
+        row_block=SOURCE_PADDED_ROW_BLOCK,
+        hidden_block=args.dx_return_hidden_block,
+    )
+
+
+def _metadata_block_sizes(args: argparse.Namespace) -> SourcePushSemanticMetadataPallasBlockSizes:
+    return SourcePushSemanticMetadataPallasBlockSizes(tile_assignments=args.metadata_tile_assignments)
+
+
+def _w2_block_sizes(args: argparse.Namespace) -> SourcePushSemanticW2PallasBlockSizes:
+    return SourcePushSemanticW2PallasBlockSizes(
+        row_block=args.w2_row_block,
+        intermediate_block=args.w2_intermediate_block,
+        hidden_block=args.w2_hidden_block,
+    )
+
+
+def _backward_block_sizes(args: argparse.Namespace) -> SourcePushSemanticBackwardPallasBlockSizes:
+    return SourcePushSemanticBackwardPallasBlockSizes(
+        row_block=args.backward_row_block,
+        hidden_block=args.backward_hidden_block,
+    )
+
+
+def _dx_return_block_sizes(args: argparse.Namespace) -> SourcePushSemanticBackwardPallasBlockSizes:
+    return SourcePushSemanticBackwardPallasBlockSizes(
+        row_block=args.dx_return_row_block,
+        hidden_block=args.dx_return_hidden_block,
+    )
+
+
+def _dx_queue_return_block_sizes(args: argparse.Namespace) -> SourcePushSemanticDxReturnPallasBlockSizes:
+    return SourcePushSemanticDxReturnPallasBlockSizes(
+        row_block=args.dx_return_row_block,
+        hidden_block=args.dx_return_hidden_block,
+    )
+
+
+def _w2_backward_block_sizes(args: argparse.Namespace) -> SourcePushSemanticW2BackwardPallasBlockSizes:
+    return SourcePushSemanticW2BackwardPallasBlockSizes(
+        row_block=args.w2_backward_row_block,
+        intermediate_block=args.w2_backward_intermediate_block,
+        hidden_block=args.w2_backward_hidden_block,
+    )
+
+
+def _w2_forward_expert_major_block_sizes(args: argparse.Namespace) -> SourcePushSemanticW2ExpertMajorPallasBlockSizes:
+    return SourcePushSemanticW2ExpertMajorPallasBlockSizes(
+        row_block=args.w2_expert_major_row_block,
+        intermediate_block=args.w2_expert_major_intermediate_block,
+        hidden_block=args.w2_expert_major_hidden_block,
+    )
+
+
+def _w2_backward_expert_major_block_sizes(
+    args: argparse.Namespace,
+) -> SourcePushSemanticW2BackwardExpertMajorPallasBlockSizes:
+    return SourcePushSemanticW2BackwardExpertMajorPallasBlockSizes(
+        row_block=args.w2_expert_major_row_block,
+        intermediate_block=args.w2_expert_major_intermediate_block,
+        hidden_block=args.w2_expert_major_hidden_block,
+    )
+
+
+def _forward_return_block_sizes(args: argparse.Namespace) -> SourcePushSemanticForwardReturnPallasBlockSizes:
+    return SourcePushSemanticForwardReturnPallasBlockSizes(
+        row_block=args.forward_return_row_block,
+        hidden_block=args.forward_return_hidden_block,
+    )
+
+
+def _w13_backward_block_sizes(args: argparse.Namespace) -> SourcePushSemanticW13BackwardPallasBlockSizes:
+    return SourcePushSemanticW13BackwardPallasBlockSizes(
+        row_block=args.w13_backward_row_block,
+        hidden_block=args.w13_backward_hidden_block,
+        output_block=args.w13_backward_output_block,
+    )
+
+
+def _lowering_semantics(value: str) -> mgpu.LoweringSemantics:
+    if value == "lane":
+        return mgpu.LoweringSemantics.Lane
+    if value == "warpgroup":
+        return mgpu.LoweringSemantics.Warpgroup
+    raise ValueError(f"unknown lowering semantics: {value}")
+
+
+def _make_mesh(ep_size: int) -> Mesh:
+    devices = np.asarray(jax.devices()[:ep_size])
+    if devices.size < ep_size:
+        raise RuntimeError(f"Need {ep_size} visible JAX devices, got {devices.size}")
+    return Mesh(devices, (SOURCE_PUSH_MESH_AXIS,), axis_types=(AxisType.Explicit,))
+
+
+def _is_pallas_mode(mode: str) -> bool:
+    return mode in (
+        MODE_METADATA_PALLAS,
+        MODE_METADATA_TILE_PALLAS,
+        MODE_GATHER_X_PALLAS,
+        MODE_W13_PALLAS_SCAFFOLD,
+        MODE_W13_EXPERT_MAJOR_PACK_PALLAS_SCAFFOLD,
+        MODE_W13_EXPERT_MAJOR_PACK_PALLAS_DIRECT,
+        MODE_W13_EXPERT_MAJOR_PACK_PALLAS_LOOKUP,
+        MODE_W13_EXPERT_MAJOR_PREPACKED_PALLAS,
+        MODE_W13_EXPERT_MAJOR_PREPACKED_COMPARE,
+        MODE_W13_EXPERT_MAJOR_PALLAS,
+        MODE_W13_EXPERT_MAJOR_COMPARE,
+        MODE_SOURCE_PADDED_INBOX_PACK_PALLAS,
+        MODE_W13_SOURCE_PADDED_INBOX_PALLAS,
+        MODE_W13_SOURCE_PADDED_INBOX_COMPARE,
+        MODE_W13_SOURCE_PADDED_DIRECT_PACK_PALLAS,
+        MODE_W13_SOURCE_PADDED_DIRECT_PACK_COMPARE,
+        MODE_W2_PALLAS,
+        MODE_W2_COMBINE_PALLAS_SCAFFOLD,
+        MODE_W2_EXPERT_MAJOR_PREPACKED_PALLAS,
+        MODE_W2_EXPERT_MAJOR_PREPACKED_COMPARE,
+        MODE_W2_EXPERT_MAJOR_PREPACKED_PALLAS_ASSUME_ZERO_INVALID,
+        MODE_W2_EXPERT_MAJOR_PREPACKED_ASSUME_ZERO_INVALID_COMPARE,
+        MODE_FORWARD_EXPERT_MAJOR_PALLAS,
+        MODE_FORWARD_EXPERT_MAJOR_COMPARE,
+        MODE_FORWARD_EXPERT_MAJOR_PREPACKED_PALLAS,
+        MODE_FORWARD_EXPERT_MAJOR_PREPACKED_COMPARE,
+        MODE_FORWARD_RETURN_EXPERT_MAJOR_PREPACKED_PALLAS,
+        MODE_FORWARD_RETURN_EXPERT_MAJOR_PREPACKED_COMPARE,
+        MODE_FORWARD_RETURN_EXPERT_MAJOR_PREPACKED_SHARDED_PALLAS,
+        MODE_FORWARD_RETURN_EXPERT_MAJOR_PREPACKED_SHARDED_COMPARE,
+        MODE_FORWARD_RETURN_SLOT_REDUCE_EXPERT_MAJOR_PREPACKED_SHARDED_PALLAS,
+        MODE_FORWARD_RETURN_SLOT_REDUCE_EXPERT_MAJOR_PREPACKED_SHARDED_COMPARE,
+        MODE_FORWARD_RETURN_SLOT_REDUCE_EXPERT_MAJOR_PREPACKED_OWNER_SHARDED_PALLAS,
+        MODE_FORWARD_RETURN_SLOT_REDUCE_EXPERT_MAJOR_PREPACKED_OWNER_SHARDED_COMPARE,
+        MODE_FORWARD_RETURN_SUM_EXPERT_MAJOR_PREPACKED_PALLAS,
+        MODE_FORWARD_RETURN_SUM_EXPERT_MAJOR_PREPACKED_COMPARE,
+        MODE_FORWARD_RETURN_SUM_EXPERT_MAJOR_PREPACKED_SHARDED_PALLAS,
+        MODE_FORWARD_RETURN_SUM_EXPERT_MAJOR_PREPACKED_SHARDED_COMPARE,
+        MODE_FORWARD_RETURN_SUM_EXPERT_MAJOR_PREPACKED_OWNER_SHARDED_PALLAS,
+        MODE_FORWARD_RETURN_SUM_EXPERT_MAJOR_PREPACKED_OWNER_SHARDED_COMPARE,
+        MODE_FORWARD_RETURN_SUM_LOOKUP_EXPERT_MAJOR_PREPACKED_OWNER_SHARDED_PALLAS,
+        MODE_FORWARD_RETURN_SUM_LOOKUP_EXPERT_MAJOR_PREPACKED_OWNER_SHARDED_COMPARE,
+        MODE_FORWARD_RETURN_REMOTE_SOURCE_GATHER_EXPERT_MAJOR_PREPACKED_PALLAS,
+        MODE_FORWARD_RETURN_REMOTE_SOURCE_GATHER_EXPERT_MAJOR_PREPACKED_COMPARE,
+        MODE_FORWARD_RETURN_REVERSE_ROUTE_SOURCE_GATHER_EXPERT_MAJOR_PREPACKED_PALLAS,
+        MODE_FORWARD_RETURN_REVERSE_ROUTE_SOURCE_GATHER_EXPERT_MAJOR_PREPACKED_COMPARE,
+        MODE_FORWARD_RETURN_COPY_ONLY_EXPERT_MAJOR_PREPACKED_PALLAS,
+        MODE_FORWARD_RETURN_COPY_ONLY_EXPERT_MAJOR_PREPACKED_COMPARE,
+        MODE_FORWARD_RETURN_DIRECT_TO_SOURCE_PALLAS,
+        MODE_FORWARD_RETURN_DIRECT_TO_SOURCE_COMPARE,
+        MODE_FORWARD_COMBINE_SOURCE_GATHER_PALLAS,
+        MODE_FORWARD_COMBINE_SOURCE_GATHER_COMPARE,
+        MODE_FORWARD_EXPERT_MAJOR_DIRECT_RETURN_COMBINE_PALLAS,
+        MODE_FORWARD_EXPERT_MAJOR_DIRECT_RETURN_COMBINE_COMPARE,
+        MODE_FORWARD_EXPERT_MAJOR_PREPACKED_RETURN_PALLAS,
+        MODE_FORWARD_EXPERT_MAJOR_PREPACKED_RETURN_COMPARE,
+        MODE_FORWARD_EXPERT_MAJOR_RETURN_SUM_PALLAS,
+        MODE_FORWARD_EXPERT_MAJOR_RETURN_SUM_COMPARE,
+        MODE_FORWARD_EXPERT_MAJOR_DIRECT_PACK_DIRECT_RETURN_COMBINE_PALLAS,
+        MODE_FORWARD_EXPERT_MAJOR_DIRECT_PACK_DIRECT_RETURN_COMBINE_COMPARE,
+        MODE_FORWARD_SOURCE_PADDED_INBOX_DIRECT_RETURN_COMBINE_PALLAS,
+        MODE_FORWARD_SOURCE_PADDED_INBOX_DIRECT_RETURN_COMBINE_COMPARE,
+        MODE_FORWARD_SOURCE_PADDED_DIRECT_PACK_DIRECT_RETURN_COMBINE_PALLAS,
+        MODE_FORWARD_SOURCE_PADDED_DIRECT_PACK_DIRECT_RETURN_COMBINE_COMPARE,
+        MODE_FORWARD_BACKWARD_SOURCE_PADDED_INBOX_DIRECT_QUEUE_PALLAS,
+        MODE_FORWARD_BACKWARD_SOURCE_PADDED_INBOX_DIRECT_QUEUE_COMPARE,
+        MODE_FORWARD_BACKWARD_SOURCE_PADDED_DIRECT_PACK_DIRECT_QUEUE_PALLAS,
+        MODE_FORWARD_BACKWARD_SOURCE_PADDED_DIRECT_PACK_DIRECT_QUEUE_COMPARE,
+        MODE_FORWARD_BACKWARD_SOURCE_PADDED_DIRECT_PACK_DIRECT_QUEUE_WITH_METADATA_PALLAS,
+        MODE_FORWARD_EXPERT_MAJOR_DIRECT_PACK_OWNER_SHARDED_Y_STOP_PALLAS,
+        MODE_FORWARD_EXPERT_MAJOR_DIRECT_PACK_REMOTE_Y_STOP_PALLAS,
+        MODE_FORWARD_SOURCE_EXPAND_DIRECT_PACK_OWNER_SHARDED_Y_PALLAS,
+        MODE_FORWARD_SOURCE_EXPAND_DIRECT_PACK_REMOTE_Y_PALLAS,
+        MODE_FORWARD_W2_BACKWARD_DIRECT_PACK_OWNER_SHARDED_Y_PALLAS,
+        MODE_FORWARD_W2_BACKWARD_DIRECT_PACK_REMOTE_Y_PALLAS,
+        MODE_FORWARD_W13_BACKWARD_DIRECT_PACK_OWNER_SHARDED_Y_PALLAS,
+        MODE_FORWARD_W13_BACKWARD_DIRECT_PACK_REMOTE_Y_PALLAS,
+        MODE_FORWARD_W13_BACKWARD_DIGEST_DIRECT_PACK_OWNER_SHARDED_Y_PALLAS,
+        MODE_FORWARD_W13_BACKWARD_DIGEST_DIRECT_PACK_REMOTE_Y_PALLAS,
+        MODE_FORWARD_W13_BACKWARD_BARRIER_DIGEST_DIRECT_PACK_OWNER_SHARDED_Y_PALLAS,
+        MODE_FORWARD_W13_BACKWARD_BARRIER_DIGEST_DIRECT_PACK_REMOTE_Y_PALLAS,
+        MODE_FORWARD_SWIGLU_BACKWARD_DIGEST_DIRECT_PACK_OWNER_SHARDED_Y_PALLAS,
+        MODE_FORWARD_SWIGLU_BACKWARD_DIGEST_DIRECT_PACK_REMOTE_Y_PALLAS,
+        MODE_FORWARD_W13_DX_BACKWARD_DIGEST_DIRECT_PACK_OWNER_SHARDED_Y_PALLAS,
+        MODE_FORWARD_W13_DX_BACKWARD_DIGEST_DIRECT_PACK_REMOTE_Y_PALLAS,
+        MODE_FORWARD_W13_DW13_BACKWARD_DIGEST_DIRECT_PACK_OWNER_SHARDED_Y_PALLAS,
+        MODE_FORWARD_W13_DW13_BACKWARD_DIGEST_DIRECT_PACK_REMOTE_Y_PALLAS,
+        MODE_FORWARD_PALLAS_SCAFFOLD,
+        MODE_BACKWARD_SOURCE_EXPAND_PALLAS,
+        MODE_BACKWARD_SOURCE_EXPAND_EXPERT_MAJOR_PALLAS,
+        MODE_BACKWARD_SOURCE_EXPAND_EXPERT_MAJOR_COMPARE,
+        MODE_BACKWARD_SOURCE_EXPAND_FROM_EXPERT_MAJOR_PALLAS,
+        MODE_BACKWARD_SOURCE_EXPAND_FROM_EXPERT_MAJOR_COMPARE,
+        MODE_BACKWARD_SOURCE_EXPAND_FROM_SAVED_RETURN_QUEUE_PALLAS,
+        MODE_BACKWARD_SOURCE_EXPAND_FROM_SAVED_RETURN_QUEUE_COMPARE,
+        MODE_BACKWARD_SOURCE_EXPAND_FROM_EXPERT_MAJOR_OWNER_SHARDED_DCOMBINE_PALLAS,
+        MODE_BACKWARD_SOURCE_EXPAND_FROM_EXPERT_MAJOR_OWNER_SHARDED_DCOMBINE_COMPARE,
+        MODE_BACKWARD_DY_ROUTE_SOURCE_PUSH_EXPERT_MAJOR_PALLAS,
+        MODE_BACKWARD_DY_ROUTE_SOURCE_PUSH_EXPERT_MAJOR_COMPARE,
+        MODE_BACKWARD_SOURCE_EXPAND_FROM_EXPERT_MAJOR_SOURCE_PUSH_PALLAS,
+        MODE_BACKWARD_SOURCE_EXPAND_FROM_EXPERT_MAJOR_SOURCE_PUSH_COMPARE,
+        MODE_BACKWARD_DCOMBINE_SOURCE_GATHER_EXPERT_MAJOR_PALLAS,
+        MODE_BACKWARD_DCOMBINE_SOURCE_GATHER_EXPERT_MAJOR_COMPARE,
+        MODE_BACKWARD_SOURCE_EXPAND_FROM_EXPERT_MAJOR_SOURCE_GATHER_PALLAS,
+        MODE_BACKWARD_SOURCE_EXPAND_FROM_EXPERT_MAJOR_SOURCE_GATHER_COMPARE,
+        MODE_BACKWARD_W2_EXPERT_MAJOR_PALLAS,
+        MODE_BACKWARD_W2_EXPERT_MAJOR_COMPARE,
+        MODE_BACKWARD_W2_EXPERT_MAJOR_PREPACKED_PALLAS,
+        MODE_BACKWARD_W2_EXPERT_MAJOR_PREPACKED_COMPARE,
+        MODE_BACKWARD_W13_EXPERT_MAJOR_PREPACKED_PALLAS,
+        MODE_BACKWARD_W13_EXPERT_MAJOR_PREPACKED_COMPARE,
+        MODE_BACKWARD_W13_DX_ROUTE_EXPERT_MAJOR_PREPACKED_PALLAS,
+        MODE_BACKWARD_W13_DW13_EXPERT_MAJOR_PREPACKED_PALLAS,
+        MODE_BACKWARD_W2_DH_PALLAS,
+        MODE_BACKWARD_W2_DW2_PALLAS,
+        MODE_BACKWARD_W2_PALLAS_SCAFFOLD,
+        MODE_BACKWARD_W13_DX_PAIR_PALLAS,
+        MODE_BACKWARD_W13_DW13_PALLAS,
+        MODE_BACKWARD_W13_PALLAS_SCAFFOLD,
+        MODE_DX_COMBINE_PALLAS,
+        MODE_DX_COMBINE_EXPERT_MAJOR_PALLAS,
+        MODE_DX_COMBINE_EXPERT_MAJOR_COMPARE,
+        MODE_DX_RETURN_EXPERT_MAJOR_PALLAS,
+        MODE_DX_RETURN_EXPERT_MAJOR_COMPARE,
+        MODE_DX_RETURN_EXPERT_MAJOR_PREPACKED_PALLAS,
+        MODE_DX_RETURN_EXPERT_MAJOR_PREPACKED_COMPARE,
+        MODE_DX_RETURN_SLOT_REDUCE_EXPERT_MAJOR_PREPACKED_PALLAS,
+        MODE_DX_RETURN_SLOT_REDUCE_EXPERT_MAJOR_PREPACKED_COMPARE,
+        MODE_DX_RETURN_SUM_EXPERT_MAJOR_PREPACKED_PALLAS,
+        MODE_DX_RETURN_SUM_EXPERT_MAJOR_PREPACKED_COMPARE,
+        MODE_DX_RETURN_SOURCE_GATHER_EXPERT_MAJOR_PREPACKED_PALLAS,
+        MODE_DX_RETURN_SOURCE_GATHER_EXPERT_MAJOR_PREPACKED_COMPARE,
+        MODE_DX_RETURN_SOURCE_GATHER_EXPERT_MAJOR_PREPACKED_OWNER_SHARDED_PALLAS,
+        MODE_DX_RETURN_SOURCE_GATHER_EXPERT_MAJOR_PREPACKED_OWNER_SHARDED_COMPARE,
+        MODE_DX_RETURN_REMOTE_SOURCE_GATHER_EXPERT_MAJOR_PREPACKED_PALLAS,
+        MODE_DX_RETURN_REMOTE_SOURCE_GATHER_EXPERT_MAJOR_PREPACKED_COMPARE,
+        MODE_DX_RETURN_COPY_ONLY_EXPERT_MAJOR_PREPACKED_PALLAS,
+        MODE_DX_RETURN_COPY_ONLY_EXPERT_MAJOR_PREPACKED_COMPARE,
+        MODE_DX_RETURN_DIRECT_TO_SOURCE_COMBINE_PALLAS,
+        MODE_DX_RETURN_DIRECT_TO_SOURCE_COMBINE_COMPARE,
+        MODE_BACKWARD_PALLAS_SCAFFOLD,
+        MODE_FORWARD_BACKWARD_PALLAS_SCAFFOLD,
+        MODE_FORWARD_BACKWARD_EXPERT_MAJOR_PALLAS,
+        MODE_FORWARD_BACKWARD_EXPERT_MAJOR_COMPARE,
+        MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_PALLAS,
+        MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_PALLAS,
+        MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_LOOKUP_PACK_PALLAS,
+        MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_LOOKUP_PACK_COMPARE,
+        MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_SOURCE_GATHER_PALLAS,
+        MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_SOURCE_GATHER_COMPARE,
+        MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_OWNER_SHARDED_PALLAS,
+        MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_OWNER_SHARDED_COMPARE,
+        MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_OWNER_SHARDED_Y_PALLAS,
+        MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_DIRECT_RETURN_COMBINE_DUPLICATE_W2_PALLAS,
+        MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_DIRECT_RETURN_COMBINE_DUPLICATE_W2_COMPARE,
+        MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_DIRECT_QUEUE_PALLAS,
+        MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_DIRECT_QUEUE_WITH_METADATA_PALLAS,
+        MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_DIRECT_QUEUE_COMPARE,
+        MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_OWNER_SHARDED_Y_SLOT_REDUCE_PALLAS,
+        MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_NO_Y_PALLAS,
+        MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_REMOTE_Y_PALLAS,
+        MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_REMOTE_Y_DELAYED_PALLAS,
+        MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_OWNER_SHARDED_DX_PALLAS,
+        MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_REMOTE_DX_PALLAS,
+        MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_OWNER_SHARDED_Y_WITH_METADATA_PALLAS,
+        MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_OWNER_SHARDED_Y_WITH_PALLAS_METADATA_PALLAS,
+        MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_COMPARE,
+    )
+
+
+def _block_sizes_for_mode(args: argparse.Namespace, mode: str) -> dict[str, Any]:
+    if mode in (MODE_METADATA_PALLAS, MODE_METADATA_TILE_PALLAS):
+        return {"tile_assignments": args.metadata_tile_assignments}
+    if mode == MODE_GATHER_X_PALLAS:
+        return {"row_block": args.gather_row_block, "hidden_block": args.gather_hidden_block}
+    if mode == MODE_W13_PALLAS_SCAFFOLD:
+        return {
+            "gather_row_block": args.gather_row_block,
+            "gather_hidden_block": args.gather_hidden_block,
+            "w13_row_block": args.w13_row_block,
+            "w13_hidden_block": args.w13_hidden_block,
+            "w13_intermediate_block": args.w13_intermediate_block,
+        }
+    if mode in (
+        MODE_SOURCE_PADDED_INBOX_PACK_PALLAS,
+        MODE_W13_SOURCE_PADDED_INBOX_PALLAS,
+        MODE_W13_SOURCE_PADDED_INBOX_COMPARE,
+    ):
+        return {
+            "source_push_profile": SOURCE_PUSH_PROFILE_STABLE_216,
+            "block_m": SOURCE_PADDED_ROW_BLOCK,
+            "entries_per_rank": SOURCE_PADDED_ENTRIES_PER_RANK,
+        }
+    if mode in (MODE_W13_SOURCE_PADDED_DIRECT_PACK_PALLAS, MODE_W13_SOURCE_PADDED_DIRECT_PACK_COMPARE):
+        return {
+            "gather_row_block": args.gather_row_block,
+            "gather_hidden_block": args.gather_hidden_block,
+            "w13_row_block": SOURCE_PADDED_ROW_BLOCK,
+            "w13_hidden_block": args.w13_expert_major_hidden_block,
+            "w13_intermediate_block": args.w13_expert_major_intermediate_block,
+        }
+    if mode in (
+        MODE_FORWARD_SOURCE_PADDED_INBOX_DIRECT_RETURN_COMBINE_PALLAS,
+        MODE_FORWARD_SOURCE_PADDED_INBOX_DIRECT_RETURN_COMBINE_COMPARE,
+    ):
+        return {
+            "source_push_profile": SOURCE_PUSH_PROFILE_STABLE_216,
+            "inbox_block_m": SOURCE_PADDED_ROW_BLOCK,
+            "entries_per_rank": SOURCE_PADDED_ENTRIES_PER_RANK,
+            "w2_row_block": SOURCE_PADDED_ROW_BLOCK,
+            "w2_intermediate_block": args.w2_expert_major_intermediate_block,
+            "w2_hidden_block": args.w2_expert_major_hidden_block,
+            "return_row_block": SOURCE_PADDED_ROW_BLOCK,
+            "return_hidden_block": args.forward_return_hidden_block,
+        }
+    if mode in (
+        MODE_FORWARD_SOURCE_PADDED_DIRECT_PACK_DIRECT_RETURN_COMBINE_PALLAS,
+        MODE_FORWARD_SOURCE_PADDED_DIRECT_PACK_DIRECT_RETURN_COMBINE_COMPARE,
+    ):
+        return {
+            "gather_row_block": args.gather_row_block,
+            "gather_hidden_block": args.gather_hidden_block,
+            "w13_row_block": SOURCE_PADDED_ROW_BLOCK,
+            "w13_hidden_block": args.w13_expert_major_hidden_block,
+            "w13_intermediate_block": args.w13_expert_major_intermediate_block,
+            "w2_row_block": SOURCE_PADDED_ROW_BLOCK,
+            "w2_intermediate_block": args.w2_expert_major_intermediate_block,
+            "w2_hidden_block": args.w2_expert_major_hidden_block,
+            "return_row_block": SOURCE_PADDED_ROW_BLOCK,
+            "return_hidden_block": args.forward_return_hidden_block,
+        }
+    if mode in (
+        MODE_FORWARD_BACKWARD_SOURCE_PADDED_INBOX_DIRECT_QUEUE_PALLAS,
+        MODE_FORWARD_BACKWARD_SOURCE_PADDED_INBOX_DIRECT_QUEUE_COMPARE,
+    ):
+        return {
+            "source_push_profile": SOURCE_PUSH_PROFILE_STABLE_216,
+            "inbox_block_m": SOURCE_PADDED_ROW_BLOCK,
+            "entries_per_rank": SOURCE_PADDED_ENTRIES_PER_RANK,
+            "gather_row_block": args.gather_row_block,
+            "gather_hidden_block": args.gather_hidden_block,
+            "w2_row_block": SOURCE_PADDED_ROW_BLOCK,
+            "w2_intermediate_block": args.w2_expert_major_intermediate_block,
+            "w2_hidden_block": args.w2_expert_major_hidden_block,
+            "return_row_block": SOURCE_PADDED_ROW_BLOCK,
+            "return_hidden_block": args.forward_return_hidden_block,
+            "source_expand_row_block": SOURCE_PADDED_ROW_BLOCK,
+            "source_expand_hidden_block": args.backward_hidden_block,
+            "w13_backward_row_block": SOURCE_PADDED_ROW_BLOCK,
+            "w13_backward_hidden_block": args.w13_backward_hidden_block,
+            "w13_backward_output_block": args.w13_backward_output_block,
+            "w13_backward_lowering": args.w13_backward_lowering,
+            "dx_return_row_block": SOURCE_PADDED_ROW_BLOCK,
+            "dx_return_hidden_block": args.dx_return_hidden_block,
+        }
+    if mode in (
+        MODE_FORWARD_BACKWARD_SOURCE_PADDED_DIRECT_PACK_DIRECT_QUEUE_PALLAS,
+        MODE_FORWARD_BACKWARD_SOURCE_PADDED_DIRECT_PACK_DIRECT_QUEUE_COMPARE,
+        MODE_FORWARD_BACKWARD_SOURCE_PADDED_DIRECT_PACK_DIRECT_QUEUE_WITH_METADATA_PALLAS,
+    ):
+        return {
+            "gather_row_block": args.gather_row_block,
+            "gather_hidden_block": args.gather_hidden_block,
+            "w13_row_block": SOURCE_PADDED_ROW_BLOCK,
+            "w13_hidden_block": args.w13_expert_major_hidden_block,
+            "w13_intermediate_block": args.w13_expert_major_intermediate_block,
+            "w2_row_block": SOURCE_PADDED_ROW_BLOCK,
+            "w2_intermediate_block": args.w2_expert_major_intermediate_block,
+            "w2_hidden_block": args.w2_expert_major_hidden_block,
+            "return_row_block": SOURCE_PADDED_ROW_BLOCK,
+            "return_hidden_block": args.forward_return_hidden_block,
+            "source_expand_row_block": SOURCE_PADDED_ROW_BLOCK,
+            "source_expand_hidden_block": args.backward_hidden_block,
+            "w13_backward_row_block": SOURCE_PADDED_ROW_BLOCK,
+            "w13_backward_hidden_block": args.w13_backward_hidden_block,
+            "w13_backward_output_block": args.w13_backward_output_block,
+            "w13_backward_lowering": args.w13_backward_lowering,
+            "dx_return_row_block": SOURCE_PADDED_ROW_BLOCK,
+            "dx_return_hidden_block": args.dx_return_hidden_block,
+        }
+    if mode == MODE_W13_EXPERT_MAJOR_PACK:
+        return {}
+    if mode in (
+        MODE_W13_EXPERT_MAJOR_PACK_PALLAS_SCAFFOLD,
+        MODE_W13_EXPERT_MAJOR_PACK_PALLAS_DIRECT,
+        MODE_W13_EXPERT_MAJOR_PACK_PALLAS_LOOKUP,
+    ):
+        return {"row_block": args.gather_row_block, "hidden_block": args.gather_hidden_block}
+    if mode == MODE_W13_EXPERT_MAJOR_PACK_RESHARD:
+        return {}
+    if mode in (
+        MODE_FORWARD_EXPERT_MAJOR_PALLAS,
+        MODE_FORWARD_EXPERT_MAJOR_COMPARE,
+        MODE_FORWARD_EXPERT_MAJOR_PREPACKED_PALLAS,
+        MODE_FORWARD_EXPERT_MAJOR_PREPACKED_COMPARE,
+        MODE_FORWARD_EXPERT_MAJOR_PREPACKED_RETURN_PALLAS,
+        MODE_FORWARD_EXPERT_MAJOR_PREPACKED_RETURN_COMPARE,
+        MODE_FORWARD_EXPERT_MAJOR_RETURN_SUM_PALLAS,
+        MODE_FORWARD_EXPERT_MAJOR_RETURN_SUM_COMPARE,
+        MODE_FORWARD_EXPERT_MAJOR_DIRECT_PACK_DIRECT_RETURN_COMBINE_PALLAS,
+        MODE_FORWARD_EXPERT_MAJOR_DIRECT_PACK_DIRECT_RETURN_COMBINE_COMPARE,
+        MODE_FORWARD_EXPERT_MAJOR_DIRECT_PACK_OWNER_SHARDED_Y_STOP_PALLAS,
+        MODE_FORWARD_EXPERT_MAJOR_DIRECT_PACK_REMOTE_Y_STOP_PALLAS,
+        MODE_FORWARD_SOURCE_EXPAND_DIRECT_PACK_OWNER_SHARDED_Y_PALLAS,
+        MODE_FORWARD_SOURCE_EXPAND_DIRECT_PACK_REMOTE_Y_PALLAS,
+        MODE_FORWARD_W2_BACKWARD_DIRECT_PACK_OWNER_SHARDED_Y_PALLAS,
+        MODE_FORWARD_W2_BACKWARD_DIRECT_PACK_REMOTE_Y_PALLAS,
+        MODE_FORWARD_W13_BACKWARD_DIRECT_PACK_OWNER_SHARDED_Y_PALLAS,
+        MODE_FORWARD_W13_BACKWARD_DIRECT_PACK_REMOTE_Y_PALLAS,
+        MODE_FORWARD_W13_BACKWARD_DIGEST_DIRECT_PACK_OWNER_SHARDED_Y_PALLAS,
+        MODE_FORWARD_W13_BACKWARD_DIGEST_DIRECT_PACK_REMOTE_Y_PALLAS,
+        MODE_FORWARD_W13_BACKWARD_BARRIER_DIGEST_DIRECT_PACK_OWNER_SHARDED_Y_PALLAS,
+        MODE_FORWARD_W13_BACKWARD_BARRIER_DIGEST_DIRECT_PACK_REMOTE_Y_PALLAS,
+    ):
+        block_sizes = {
+            "w13_row_block": args.w13_expert_major_row_block,
+            "w13_hidden_block": args.w13_expert_major_hidden_block,
+            "w13_intermediate_block": args.w13_expert_major_intermediate_block,
+            "w2_row_block": args.w2_expert_major_row_block,
+            "w2_intermediate_block": args.w2_expert_major_intermediate_block,
+            "w2_hidden_block": args.w2_expert_major_hidden_block,
+            "return_row_block": args.forward_return_row_block,
+            "return_hidden_block": args.forward_return_hidden_block,
+        }
+        if mode in (
+            MODE_FORWARD_EXPERT_MAJOR_DIRECT_PACK_DIRECT_RETURN_COMBINE_PALLAS,
+            MODE_FORWARD_EXPERT_MAJOR_DIRECT_PACK_DIRECT_RETURN_COMBINE_COMPARE,
+            MODE_FORWARD_SOURCE_PADDED_INBOX_DIRECT_RETURN_COMBINE_PALLAS,
+            MODE_FORWARD_SOURCE_PADDED_INBOX_DIRECT_RETURN_COMBINE_COMPARE,
+        ):
+            block_sizes.update(
+                {
+                    "gather_row_block": args.gather_row_block,
+                    "gather_hidden_block": args.gather_hidden_block,
+                }
+            )
+        if mode in (
+            MODE_FORWARD_SOURCE_EXPAND_DIRECT_PACK_OWNER_SHARDED_Y_PALLAS,
+            MODE_FORWARD_SOURCE_EXPAND_DIRECT_PACK_REMOTE_Y_PALLAS,
+            MODE_FORWARD_W2_BACKWARD_DIRECT_PACK_OWNER_SHARDED_Y_PALLAS,
+            MODE_FORWARD_W2_BACKWARD_DIRECT_PACK_REMOTE_Y_PALLAS,
+            MODE_FORWARD_W13_BACKWARD_DIRECT_PACK_OWNER_SHARDED_Y_PALLAS,
+            MODE_FORWARD_W13_BACKWARD_DIRECT_PACK_REMOTE_Y_PALLAS,
+            MODE_FORWARD_W13_BACKWARD_DIGEST_DIRECT_PACK_OWNER_SHARDED_Y_PALLAS,
+            MODE_FORWARD_W13_BACKWARD_DIGEST_DIRECT_PACK_REMOTE_Y_PALLAS,
+            MODE_FORWARD_W13_BACKWARD_BARRIER_DIGEST_DIRECT_PACK_OWNER_SHARDED_Y_PALLAS,
+            MODE_FORWARD_W13_BACKWARD_BARRIER_DIGEST_DIRECT_PACK_REMOTE_Y_PALLAS,
+            MODE_FORWARD_SWIGLU_BACKWARD_DIGEST_DIRECT_PACK_OWNER_SHARDED_Y_PALLAS,
+            MODE_FORWARD_SWIGLU_BACKWARD_DIGEST_DIRECT_PACK_REMOTE_Y_PALLAS,
+            MODE_FORWARD_W13_DX_BACKWARD_DIGEST_DIRECT_PACK_OWNER_SHARDED_Y_PALLAS,
+            MODE_FORWARD_W13_DX_BACKWARD_DIGEST_DIRECT_PACK_REMOTE_Y_PALLAS,
+            MODE_FORWARD_W13_DW13_BACKWARD_DIGEST_DIRECT_PACK_OWNER_SHARDED_Y_PALLAS,
+            MODE_FORWARD_W13_DW13_BACKWARD_DIGEST_DIRECT_PACK_REMOTE_Y_PALLAS,
+        ):
+            block_sizes.update(
+                {
+                    "source_expand_row_block": args.backward_row_block,
+                    "source_expand_hidden_block": args.backward_hidden_block,
+                }
+            )
+        if mode in (
+            MODE_FORWARD_W13_BACKWARD_DIRECT_PACK_OWNER_SHARDED_Y_PALLAS,
+            MODE_FORWARD_W13_BACKWARD_DIRECT_PACK_REMOTE_Y_PALLAS,
+            MODE_FORWARD_W13_BACKWARD_DIGEST_DIRECT_PACK_OWNER_SHARDED_Y_PALLAS,
+            MODE_FORWARD_W13_BACKWARD_DIGEST_DIRECT_PACK_REMOTE_Y_PALLAS,
+            MODE_FORWARD_W13_BACKWARD_BARRIER_DIGEST_DIRECT_PACK_OWNER_SHARDED_Y_PALLAS,
+            MODE_FORWARD_W13_BACKWARD_BARRIER_DIGEST_DIRECT_PACK_REMOTE_Y_PALLAS,
+            MODE_FORWARD_W13_DX_BACKWARD_DIGEST_DIRECT_PACK_OWNER_SHARDED_Y_PALLAS,
+            MODE_FORWARD_W13_DX_BACKWARD_DIGEST_DIRECT_PACK_REMOTE_Y_PALLAS,
+            MODE_FORWARD_W13_DW13_BACKWARD_DIGEST_DIRECT_PACK_OWNER_SHARDED_Y_PALLAS,
+            MODE_FORWARD_W13_DW13_BACKWARD_DIGEST_DIRECT_PACK_REMOTE_Y_PALLAS,
+        ):
+            block_sizes.update(
+                {
+                    "w13_backward_row_block": args.w13_backward_row_block,
+                    "w13_backward_hidden_block": args.w13_backward_hidden_block,
+                    "w13_backward_output_block": args.w13_backward_output_block,
+                    "w13_backward_lowering": args.w13_backward_lowering,
+                }
+            )
+        return block_sizes
+    if mode in (
+        MODE_FORWARD_RETURN_EXPERT_MAJOR_PREPACKED_PALLAS,
+        MODE_FORWARD_RETURN_EXPERT_MAJOR_PREPACKED_COMPARE,
+        MODE_FORWARD_RETURN_EXPERT_MAJOR_PREPACKED_SHARDED_PALLAS,
+        MODE_FORWARD_RETURN_EXPERT_MAJOR_PREPACKED_SHARDED_COMPARE,
+        MODE_FORWARD_RETURN_SLOT_REDUCE_EXPERT_MAJOR_PREPACKED_SHARDED_PALLAS,
+        MODE_FORWARD_RETURN_SLOT_REDUCE_EXPERT_MAJOR_PREPACKED_SHARDED_COMPARE,
+        MODE_FORWARD_RETURN_SLOT_REDUCE_EXPERT_MAJOR_PREPACKED_OWNER_SHARDED_PALLAS,
+        MODE_FORWARD_RETURN_SLOT_REDUCE_EXPERT_MAJOR_PREPACKED_OWNER_SHARDED_COMPARE,
+        MODE_FORWARD_RETURN_SUM_EXPERT_MAJOR_PREPACKED_PALLAS,
+        MODE_FORWARD_RETURN_SUM_EXPERT_MAJOR_PREPACKED_COMPARE,
+        MODE_FORWARD_RETURN_SUM_EXPERT_MAJOR_PREPACKED_SHARDED_PALLAS,
+        MODE_FORWARD_RETURN_SUM_EXPERT_MAJOR_PREPACKED_SHARDED_COMPARE,
+        MODE_FORWARD_RETURN_SUM_EXPERT_MAJOR_PREPACKED_OWNER_SHARDED_PALLAS,
+        MODE_FORWARD_RETURN_SUM_EXPERT_MAJOR_PREPACKED_OWNER_SHARDED_COMPARE,
+        MODE_FORWARD_RETURN_SUM_LOOKUP_EXPERT_MAJOR_PREPACKED_OWNER_SHARDED_PALLAS,
+        MODE_FORWARD_RETURN_SUM_LOOKUP_EXPERT_MAJOR_PREPACKED_OWNER_SHARDED_COMPARE,
+        MODE_FORWARD_RETURN_REMOTE_SOURCE_GATHER_EXPERT_MAJOR_PREPACKED_PALLAS,
+        MODE_FORWARD_RETURN_REMOTE_SOURCE_GATHER_EXPERT_MAJOR_PREPACKED_COMPARE,
+        MODE_FORWARD_RETURN_REVERSE_ROUTE_SOURCE_GATHER_EXPERT_MAJOR_PREPACKED_PALLAS,
+        MODE_FORWARD_RETURN_REVERSE_ROUTE_SOURCE_GATHER_EXPERT_MAJOR_PREPACKED_COMPARE,
+        MODE_FORWARD_RETURN_COPY_ONLY_EXPERT_MAJOR_PREPACKED_PALLAS,
+        MODE_FORWARD_RETURN_COPY_ONLY_EXPERT_MAJOR_PREPACKED_COMPARE,
+        MODE_FORWARD_COMBINE_SOURCE_GATHER_PALLAS,
+        MODE_FORWARD_COMBINE_SOURCE_GATHER_COMPARE,
+    ):
+        return {
+            "row_block": args.forward_return_row_block,
+            "hidden_block": args.forward_return_hidden_block,
+        }
+    if mode in (
+        MODE_FORWARD_RETURN_DIRECT_TO_SOURCE_PALLAS,
+        MODE_FORWARD_RETURN_DIRECT_TO_SOURCE_COMPARE,
+        MODE_FORWARD_EXPERT_MAJOR_DIRECT_RETURN_COMBINE_PALLAS,
+        MODE_FORWARD_EXPERT_MAJOR_DIRECT_RETURN_COMBINE_COMPARE,
+    ):
+        return {
+            "w2_row_block": args.w2_expert_major_row_block,
+            "w2_intermediate_block": args.w2_expert_major_intermediate_block,
+            "w2_hidden_block": args.w2_expert_major_hidden_block,
+            "return_row_block": args.forward_return_row_block,
+            "return_hidden_block": args.forward_return_hidden_block,
+        }
+    if mode in (
+        MODE_W13_EXPERT_MAJOR_PREPACKED,
+        MODE_W13_EXPERT_MAJOR_PREPACKED_PALLAS,
+        MODE_W13_EXPERT_MAJOR_PREPACKED_COMPARE,
+    ):
+        return {
+            "row_block": args.w13_expert_major_row_block,
+            "hidden_block": args.w13_expert_major_hidden_block,
+            "intermediate_block": args.w13_expert_major_intermediate_block,
+        }
+    if mode in (MODE_W13_EXPERT_MAJOR_PALLAS, MODE_W13_EXPERT_MAJOR_COMPARE):
+        return {
+            "row_block": args.w13_expert_major_row_block,
+            "hidden_block": args.w13_expert_major_hidden_block,
+            "intermediate_block": args.w13_expert_major_intermediate_block,
+        }
+    if mode in (MODE_W2_PALLAS, MODE_W2_COMBINE_PALLAS_SCAFFOLD):
+        return {
+            "row_block": args.w2_row_block,
+            "intermediate_block": args.w2_intermediate_block,
+            "hidden_block": args.w2_hidden_block,
+        }
+    if mode in (
+        MODE_W2_EXPERT_MAJOR_PREPACKED,
+        MODE_W2_EXPERT_MAJOR_PREPACKED_PALLAS,
+        MODE_W2_EXPERT_MAJOR_PREPACKED_COMPARE,
+        MODE_W2_EXPERT_MAJOR_PREPACKED_PALLAS_ASSUME_ZERO_INVALID,
+        MODE_W2_EXPERT_MAJOR_PREPACKED_ASSUME_ZERO_INVALID_COMPARE,
+    ):
+        return {
+            "row_block": args.w2_expert_major_row_block,
+            "intermediate_block": args.w2_expert_major_intermediate_block,
+            "hidden_block": args.w2_expert_major_hidden_block,
+        }
+    if mode in (
+        MODE_BACKWARD_SOURCE_EXPAND_PALLAS,
+        MODE_BACKWARD_SOURCE_EXPAND_EXPERT_MAJOR_PALLAS,
+        MODE_BACKWARD_SOURCE_EXPAND_EXPERT_MAJOR_COMPARE,
+        MODE_BACKWARD_SOURCE_EXPAND_FROM_EXPERT_MAJOR_PALLAS,
+        MODE_BACKWARD_SOURCE_EXPAND_FROM_EXPERT_MAJOR_COMPARE,
+        MODE_BACKWARD_SOURCE_EXPAND_FROM_SAVED_RETURN_QUEUE_PALLAS,
+        MODE_BACKWARD_SOURCE_EXPAND_FROM_SAVED_RETURN_QUEUE_COMPARE,
+        MODE_BACKWARD_SOURCE_EXPAND_FROM_EXPERT_MAJOR_OWNER_SHARDED_DCOMBINE_PALLAS,
+        MODE_BACKWARD_SOURCE_EXPAND_FROM_EXPERT_MAJOR_OWNER_SHARDED_DCOMBINE_COMPARE,
+        MODE_BACKWARD_DY_ROUTE_SOURCE_PUSH_EXPERT_MAJOR_PALLAS,
+        MODE_BACKWARD_DY_ROUTE_SOURCE_PUSH_EXPERT_MAJOR_COMPARE,
+        MODE_BACKWARD_SOURCE_EXPAND_FROM_EXPERT_MAJOR_SOURCE_PUSH_PALLAS,
+        MODE_BACKWARD_SOURCE_EXPAND_FROM_EXPERT_MAJOR_SOURCE_PUSH_COMPARE,
+        MODE_BACKWARD_DCOMBINE_SOURCE_GATHER_EXPERT_MAJOR_PALLAS,
+        MODE_BACKWARD_DCOMBINE_SOURCE_GATHER_EXPERT_MAJOR_COMPARE,
+        MODE_BACKWARD_SOURCE_EXPAND_FROM_EXPERT_MAJOR_SOURCE_GATHER_PALLAS,
+        MODE_BACKWARD_SOURCE_EXPAND_FROM_EXPERT_MAJOR_SOURCE_GATHER_COMPARE,
+        MODE_DX_COMBINE_PALLAS,
+        MODE_DX_COMBINE_EXPERT_MAJOR_PALLAS,
+        MODE_DX_COMBINE_EXPERT_MAJOR_COMPARE,
+    ):
+        return {"row_block": args.backward_row_block, "hidden_block": args.backward_hidden_block}
+    if mode in (
+        MODE_DX_RETURN_EXPERT_MAJOR_PALLAS,
+        MODE_DX_RETURN_EXPERT_MAJOR_COMPARE,
+        MODE_DX_RETURN_EXPERT_MAJOR_PREPACKED_PALLAS,
+        MODE_DX_RETURN_EXPERT_MAJOR_PREPACKED_COMPARE,
+        MODE_DX_RETURN_SLOT_REDUCE_EXPERT_MAJOR_PREPACKED_PALLAS,
+        MODE_DX_RETURN_SLOT_REDUCE_EXPERT_MAJOR_PREPACKED_COMPARE,
+        MODE_DX_RETURN_SUM_EXPERT_MAJOR_PREPACKED_PALLAS,
+        MODE_DX_RETURN_SUM_EXPERT_MAJOR_PREPACKED_COMPARE,
+        MODE_DX_RETURN_SOURCE_GATHER_EXPERT_MAJOR_PREPACKED_PALLAS,
+        MODE_DX_RETURN_SOURCE_GATHER_EXPERT_MAJOR_PREPACKED_COMPARE,
+        MODE_DX_RETURN_SOURCE_GATHER_EXPERT_MAJOR_PREPACKED_OWNER_SHARDED_PALLAS,
+        MODE_DX_RETURN_SOURCE_GATHER_EXPERT_MAJOR_PREPACKED_OWNER_SHARDED_COMPARE,
+        MODE_DX_RETURN_REMOTE_SOURCE_GATHER_EXPERT_MAJOR_PREPACKED_PALLAS,
+        MODE_DX_RETURN_REMOTE_SOURCE_GATHER_EXPERT_MAJOR_PREPACKED_COMPARE,
+        MODE_DX_RETURN_COPY_ONLY_EXPERT_MAJOR_PREPACKED_PALLAS,
+        MODE_DX_RETURN_COPY_ONLY_EXPERT_MAJOR_PREPACKED_COMPARE,
+        MODE_DX_RETURN_DIRECT_TO_SOURCE_COMBINE_PALLAS,
+        MODE_DX_RETURN_DIRECT_TO_SOURCE_COMBINE_COMPARE,
+    ):
+        return {"row_block": args.dx_return_row_block, "hidden_block": args.dx_return_hidden_block}
+    if mode in (
+        MODE_BACKWARD_W2_EXPERT_MAJOR,
+        MODE_BACKWARD_W2_EXPERT_MAJOR_PALLAS,
+        MODE_BACKWARD_W2_EXPERT_MAJOR_COMPARE,
+        MODE_BACKWARD_W2_EXPERT_MAJOR_PACK_RESHARD,
+        MODE_BACKWARD_W2_EXPERT_MAJOR_PREPACKED,
+        MODE_BACKWARD_W2_EXPERT_MAJOR_PREPACKED_PALLAS,
+        MODE_BACKWARD_W2_EXPERT_MAJOR_PREPACKED_COMPARE,
+    ):
+        return {
+            "row_block": args.w2_expert_major_row_block,
+            "intermediate_block": args.w2_expert_major_intermediate_block,
+            "hidden_block": args.w2_expert_major_hidden_block,
+        }
+    if mode in (MODE_BACKWARD_W2_DH_PALLAS, MODE_BACKWARD_W2_DW2_PALLAS, MODE_BACKWARD_W2_PALLAS_SCAFFOLD):
+        return {
+            "row_block": args.w2_backward_row_block,
+            "intermediate_block": args.w2_backward_intermediate_block,
+            "hidden_block": args.w2_backward_hidden_block,
+            "lowering": args.w2_backward_lowering,
+        }
+    if mode in (
+        MODE_BACKWARD_W13_EXPERT_MAJOR_PREPACKED,
+        MODE_BACKWARD_W13_EXPERT_MAJOR_PREPACKED_PALLAS,
+        MODE_BACKWARD_W13_EXPERT_MAJOR_PREPACKED_COMPARE,
+        MODE_BACKWARD_W13_DX_ROUTE_EXPERT_MAJOR_PREPACKED_PALLAS,
+        MODE_BACKWARD_W13_DW13_EXPERT_MAJOR_PREPACKED_PALLAS,
+        MODE_BACKWARD_W13_DX_PAIR_PALLAS,
+        MODE_BACKWARD_W13_DW13_PALLAS,
+        MODE_BACKWARD_W13_PALLAS_SCAFFOLD,
+    ):
+        return {
+            "row_block": args.w13_backward_row_block,
+            "hidden_block": args.w13_backward_hidden_block,
+            "output_block": args.w13_backward_output_block,
+            "lowering": args.w13_backward_lowering,
+        }
+    if mode in (MODE_FORWARD_PALLAS_SCAFFOLD, MODE_FORWARD_BACKWARD_PALLAS_SCAFFOLD):
+        return {
+            "gather_row_block": args.gather_row_block,
+            "gather_hidden_block": args.gather_hidden_block,
+            "w13_row_block": args.w13_row_block,
+            "w13_hidden_block": args.w13_hidden_block,
+            "w13_intermediate_block": args.w13_intermediate_block,
+            "w2_row_block": args.w2_row_block,
+            "w2_intermediate_block": args.w2_intermediate_block,
+            "w2_hidden_block": args.w2_hidden_block,
+        }
+    if mode in (
+        MODE_FORWARD_BACKWARD_EXPERT_MAJOR_PALLAS,
+        MODE_FORWARD_BACKWARD_EXPERT_MAJOR_COMPARE,
+        MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_PALLAS,
+        MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_PALLAS,
+        MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_LOOKUP_PACK_PALLAS,
+        MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_LOOKUP_PACK_COMPARE,
+        MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_SOURCE_GATHER_PALLAS,
+        MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_SOURCE_GATHER_COMPARE,
+        MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_OWNER_SHARDED_PALLAS,
+        MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_OWNER_SHARDED_COMPARE,
+        MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_OWNER_SHARDED_Y_PALLAS,
+        MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_DIRECT_RETURN_COMBINE_DUPLICATE_W2_PALLAS,
+        MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_DIRECT_RETURN_COMBINE_DUPLICATE_W2_COMPARE,
+        MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_DIRECT_QUEUE_PALLAS,
+        MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_DIRECT_QUEUE_WITH_METADATA_PALLAS,
+        MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_DIRECT_QUEUE_COMPARE,
+        MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_REMOTE_Y_PALLAS,
+        MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_REMOTE_Y_DELAYED_PALLAS,
+        MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_OWNER_SHARDED_DX_PALLAS,
+        MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_REMOTE_DX_PALLAS,
+        MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_OWNER_SHARDED_Y_WITH_METADATA_PALLAS,
+        MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_OWNER_SHARDED_Y_WITH_PALLAS_METADATA_PALLAS,
+        MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_COMPARE,
+    ):
+        return {
+            "gather_row_block": args.gather_row_block,
+            "gather_hidden_block": args.gather_hidden_block,
+            "w13_row_block": args.w13_expert_major_row_block,
+            "w13_hidden_block": args.w13_expert_major_hidden_block,
+            "w13_intermediate_block": args.w13_expert_major_intermediate_block,
+            "w2_row_block": args.w2_expert_major_row_block,
+            "w2_intermediate_block": args.w2_expert_major_intermediate_block,
+            "w2_hidden_block": args.w2_expert_major_hidden_block,
+            "source_expand_row_block": args.backward_row_block,
+            "source_expand_hidden_block": args.backward_hidden_block,
+            "w13_backward_row_block": args.w13_backward_row_block,
+            "w13_backward_hidden_block": args.w13_backward_hidden_block,
+            "w13_backward_output_block": args.w13_backward_output_block,
+            "w13_backward_lowering": args.w13_backward_lowering,
+            "dx_return_row_block": args.dx_return_row_block,
+            "dx_return_hidden_block": args.dx_return_hidden_block,
+        }
+    if mode == MODE_BACKWARD_PALLAS_SCAFFOLD:
+        return {
+            "source_expand_row_block": args.backward_row_block,
+            "source_expand_hidden_block": args.backward_hidden_block,
+            "w2_backward_row_block": args.w2_backward_row_block,
+            "w2_backward_intermediate_block": args.w2_backward_intermediate_block,
+            "w2_backward_hidden_block": args.w2_backward_hidden_block,
+            "w2_backward_lowering": args.w2_backward_lowering,
+            "w13_backward_row_block": args.w13_backward_row_block,
+            "w13_backward_hidden_block": args.w13_backward_hidden_block,
+            "w13_backward_output_block": args.w13_backward_output_block,
+            "w13_backward_lowering": args.w13_backward_lowering,
+            "dx_combine_row_block": args.backward_row_block,
+            "dx_combine_hidden_block": args.backward_hidden_block,
+        }
+    return {}
+
+
+def _mode_callable(mode: str, plan: SourcePushSemanticPlan, args: argparse.Namespace) -> Callable[..., Any]:
+    rows_per_expert_capacity = _rows_per_expert_capacity(
+        plan,
+        row_multiple=_expert_capacity_row_multiple(args),
+    )
+    direct_queue_rows_per_expert_capacity = _rows_per_expert_capacity(
+        plan,
+        row_multiple=_expert_capacity_row_multiple(args),
+        source_row_alignment=DIRECT_QUEUE_SOURCE_ROW_ALIGNMENT,
+        tail_guard_rows=_expert_capacity_row_multiple(args) - 1,
+    )
+    expert_mesh = (
+        _make_mesh(args.ep_size)
+        if mode
+        in (
+            MODE_W13_EXPERT_MAJOR_PREPACKED,
+            MODE_W13_EXPERT_MAJOR_PREPACKED_COMPARE,
+            MODE_W13_EXPERT_MAJOR_PREPACKED_PALLAS,
+            MODE_FORWARD_EXPERT_MAJOR_PREPACKED_PALLAS,
+            MODE_FORWARD_EXPERT_MAJOR_PREPACKED_COMPARE,
+            MODE_FORWARD_RETURN_EXPERT_MAJOR_PREPACKED_SHARDED_PALLAS,
+            MODE_FORWARD_RETURN_EXPERT_MAJOR_PREPACKED_SHARDED_COMPARE,
+            MODE_FORWARD_RETURN_SLOT_REDUCE_EXPERT_MAJOR_PREPACKED_SHARDED_PALLAS,
+            MODE_FORWARD_RETURN_SLOT_REDUCE_EXPERT_MAJOR_PREPACKED_SHARDED_COMPARE,
+            MODE_FORWARD_RETURN_SUM_EXPERT_MAJOR_PREPACKED_SHARDED_PALLAS,
+            MODE_FORWARD_RETURN_SUM_EXPERT_MAJOR_PREPACKED_SHARDED_COMPARE,
+            MODE_FORWARD_RETURN_SUM_EXPERT_MAJOR_PREPACKED_OWNER_SHARDED_PALLAS,
+            MODE_FORWARD_RETURN_SUM_EXPERT_MAJOR_PREPACKED_OWNER_SHARDED_COMPARE,
+            MODE_FORWARD_RETURN_SUM_LOOKUP_EXPERT_MAJOR_PREPACKED_OWNER_SHARDED_PALLAS,
+            MODE_FORWARD_RETURN_SUM_LOOKUP_EXPERT_MAJOR_PREPACKED_OWNER_SHARDED_COMPARE,
+            MODE_FORWARD_RETURN_REMOTE_SOURCE_GATHER_EXPERT_MAJOR_PREPACKED_PALLAS,
+            MODE_FORWARD_RETURN_REMOTE_SOURCE_GATHER_EXPERT_MAJOR_PREPACKED_COMPARE,
+            MODE_FORWARD_RETURN_COPY_ONLY_EXPERT_MAJOR_PREPACKED_PALLAS,
+            MODE_FORWARD_RETURN_COPY_ONLY_EXPERT_MAJOR_PREPACKED_COMPARE,
+            MODE_FORWARD_RETURN_DIRECT_TO_SOURCE_PALLAS,
+            MODE_FORWARD_RETURN_DIRECT_TO_SOURCE_COMPARE,
+            MODE_FORWARD_EXPERT_MAJOR_DIRECT_RETURN_COMBINE_PALLAS,
+            MODE_FORWARD_EXPERT_MAJOR_DIRECT_RETURN_COMBINE_COMPARE,
+            MODE_FORWARD_EXPERT_MAJOR_DIRECT_PACK_DIRECT_RETURN_COMBINE_PALLAS,
+            MODE_FORWARD_EXPERT_MAJOR_DIRECT_PACK_DIRECT_RETURN_COMBINE_COMPARE,
+            MODE_FORWARD_EXPERT_MAJOR_PREPACKED_RETURN_PALLAS,
+            MODE_FORWARD_EXPERT_MAJOR_PREPACKED_RETURN_COMPARE,
+            MODE_FORWARD_EXPERT_MAJOR_DIRECT_PACK_OWNER_SHARDED_Y_STOP_PALLAS,
+            MODE_FORWARD_EXPERT_MAJOR_DIRECT_PACK_REMOTE_Y_STOP_PALLAS,
+            MODE_FORWARD_SOURCE_EXPAND_DIRECT_PACK_OWNER_SHARDED_Y_PALLAS,
+            MODE_FORWARD_SOURCE_EXPAND_DIRECT_PACK_REMOTE_Y_PALLAS,
+            MODE_FORWARD_W2_BACKWARD_DIRECT_PACK_OWNER_SHARDED_Y_PALLAS,
+            MODE_FORWARD_W2_BACKWARD_DIRECT_PACK_REMOTE_Y_PALLAS,
+            MODE_FORWARD_W13_BACKWARD_DIRECT_PACK_OWNER_SHARDED_Y_PALLAS,
+            MODE_FORWARD_W13_BACKWARD_DIRECT_PACK_REMOTE_Y_PALLAS,
+            MODE_FORWARD_W13_BACKWARD_DIGEST_DIRECT_PACK_OWNER_SHARDED_Y_PALLAS,
+            MODE_FORWARD_W13_BACKWARD_DIGEST_DIRECT_PACK_REMOTE_Y_PALLAS,
+            MODE_FORWARD_W13_BACKWARD_BARRIER_DIGEST_DIRECT_PACK_OWNER_SHARDED_Y_PALLAS,
+            MODE_FORWARD_W13_BACKWARD_BARRIER_DIGEST_DIRECT_PACK_REMOTE_Y_PALLAS,
+            MODE_FORWARD_SWIGLU_BACKWARD_DIGEST_DIRECT_PACK_OWNER_SHARDED_Y_PALLAS,
+            MODE_FORWARD_SWIGLU_BACKWARD_DIGEST_DIRECT_PACK_REMOTE_Y_PALLAS,
+            MODE_FORWARD_W13_DX_BACKWARD_DIGEST_DIRECT_PACK_OWNER_SHARDED_Y_PALLAS,
+            MODE_FORWARD_W13_DX_BACKWARD_DIGEST_DIRECT_PACK_REMOTE_Y_PALLAS,
+            MODE_FORWARD_W13_DW13_BACKWARD_DIGEST_DIRECT_PACK_OWNER_SHARDED_Y_PALLAS,
+            MODE_FORWARD_W13_DW13_BACKWARD_DIGEST_DIRECT_PACK_REMOTE_Y_PALLAS,
+            MODE_W2_EXPERT_MAJOR_PREPACKED_PALLAS_ASSUME_ZERO_INVALID,
+            MODE_W2_EXPERT_MAJOR_PREPACKED_ASSUME_ZERO_INVALID_COMPARE,
+            MODE_W13_EXPERT_MAJOR_PACK_RESHARD,
+            MODE_W13_EXPERT_MAJOR_PALLAS,
+            MODE_SOURCE_PADDED_INBOX_PACK_PALLAS,
+            MODE_W13_SOURCE_PADDED_INBOX_PALLAS,
+            MODE_W13_SOURCE_PADDED_INBOX_COMPARE,
+            MODE_W13_SOURCE_PADDED_DIRECT_PACK_PALLAS,
+            MODE_W13_SOURCE_PADDED_DIRECT_PACK_COMPARE,
+            MODE_FORWARD_SOURCE_PADDED_INBOX_DIRECT_RETURN_COMBINE_PALLAS,
+            MODE_FORWARD_SOURCE_PADDED_INBOX_DIRECT_RETURN_COMBINE_COMPARE,
+            MODE_FORWARD_SOURCE_PADDED_DIRECT_PACK_DIRECT_RETURN_COMBINE_PALLAS,
+            MODE_FORWARD_SOURCE_PADDED_DIRECT_PACK_DIRECT_RETURN_COMBINE_COMPARE,
+            MODE_FORWARD_BACKWARD_SOURCE_PADDED_INBOX_DIRECT_QUEUE_PALLAS,
+            MODE_FORWARD_BACKWARD_SOURCE_PADDED_INBOX_DIRECT_QUEUE_COMPARE,
+            MODE_FORWARD_BACKWARD_SOURCE_PADDED_DIRECT_PACK_DIRECT_QUEUE_PALLAS,
+            MODE_FORWARD_BACKWARD_SOURCE_PADDED_DIRECT_PACK_DIRECT_QUEUE_COMPARE,
+            MODE_FORWARD_BACKWARD_SOURCE_PADDED_DIRECT_PACK_DIRECT_QUEUE_WITH_METADATA_PALLAS,
+            MODE_BACKWARD_W2_EXPERT_MAJOR_PALLAS,
+            MODE_BACKWARD_W2_EXPERT_MAJOR_COMPARE,
+            MODE_BACKWARD_W2_EXPERT_MAJOR_PACK_RESHARD,
+            MODE_BACKWARD_W2_EXPERT_MAJOR_PREPACKED_PALLAS,
+            MODE_BACKWARD_W2_EXPERT_MAJOR_PREPACKED_COMPARE,
+            MODE_BACKWARD_W13_EXPERT_MAJOR_PREPACKED_PALLAS,
+            MODE_BACKWARD_W13_EXPERT_MAJOR_PREPACKED_COMPARE,
+            MODE_BACKWARD_W13_DX_ROUTE_EXPERT_MAJOR_PREPACKED_PALLAS,
+            MODE_BACKWARD_W13_DW13_EXPERT_MAJOR_PREPACKED_PALLAS,
+            MODE_BACKWARD_W13_DX_PAIR_PALLAS,
+            MODE_BACKWARD_W13_DW13_PALLAS,
+            MODE_BACKWARD_W13_PALLAS_SCAFFOLD,
+            MODE_BACKWARD_SOURCE_EXPAND_FROM_EXPERT_MAJOR_PALLAS,
+            MODE_BACKWARD_SOURCE_EXPAND_FROM_EXPERT_MAJOR_COMPARE,
+            MODE_BACKWARD_SOURCE_EXPAND_FROM_SAVED_RETURN_QUEUE_PALLAS,
+            MODE_BACKWARD_SOURCE_EXPAND_FROM_SAVED_RETURN_QUEUE_COMPARE,
+            MODE_BACKWARD_SOURCE_EXPAND_FROM_EXPERT_MAJOR_OWNER_SHARDED_DCOMBINE_PALLAS,
+            MODE_BACKWARD_SOURCE_EXPAND_FROM_EXPERT_MAJOR_OWNER_SHARDED_DCOMBINE_COMPARE,
+            MODE_BACKWARD_DY_ROUTE_SOURCE_PUSH_EXPERT_MAJOR_PALLAS,
+            MODE_BACKWARD_DY_ROUTE_SOURCE_PUSH_EXPERT_MAJOR_COMPARE,
+            MODE_BACKWARD_SOURCE_EXPAND_FROM_EXPERT_MAJOR_SOURCE_PUSH_PALLAS,
+            MODE_BACKWARD_SOURCE_EXPAND_FROM_EXPERT_MAJOR_SOURCE_PUSH_COMPARE,
+            MODE_BACKWARD_DCOMBINE_SOURCE_GATHER_EXPERT_MAJOR_PALLAS,
+            MODE_BACKWARD_DCOMBINE_SOURCE_GATHER_EXPERT_MAJOR_COMPARE,
+            MODE_BACKWARD_SOURCE_EXPAND_FROM_EXPERT_MAJOR_SOURCE_GATHER_PALLAS,
+            MODE_BACKWARD_SOURCE_EXPAND_FROM_EXPERT_MAJOR_SOURCE_GATHER_COMPARE,
+            MODE_DX_RETURN_EXPERT_MAJOR_PREPACKED_PALLAS,
+            MODE_DX_RETURN_EXPERT_MAJOR_PREPACKED_COMPARE,
+            MODE_DX_RETURN_SLOT_REDUCE_EXPERT_MAJOR_PREPACKED_PALLAS,
+            MODE_DX_RETURN_SLOT_REDUCE_EXPERT_MAJOR_PREPACKED_COMPARE,
+            MODE_DX_RETURN_SUM_EXPERT_MAJOR_PREPACKED_PALLAS,
+            MODE_DX_RETURN_SUM_EXPERT_MAJOR_PREPACKED_COMPARE,
+            MODE_DX_RETURN_SOURCE_GATHER_EXPERT_MAJOR_PREPACKED_PALLAS,
+            MODE_DX_RETURN_SOURCE_GATHER_EXPERT_MAJOR_PREPACKED_COMPARE,
+            MODE_DX_RETURN_SOURCE_GATHER_EXPERT_MAJOR_PREPACKED_OWNER_SHARDED_PALLAS,
+            MODE_DX_RETURN_SOURCE_GATHER_EXPERT_MAJOR_PREPACKED_OWNER_SHARDED_COMPARE,
+            MODE_DX_RETURN_REMOTE_SOURCE_GATHER_EXPERT_MAJOR_PREPACKED_PALLAS,
+            MODE_DX_RETURN_REMOTE_SOURCE_GATHER_EXPERT_MAJOR_PREPACKED_COMPARE,
+            MODE_DX_RETURN_COPY_ONLY_EXPERT_MAJOR_PREPACKED_PALLAS,
+            MODE_DX_RETURN_COPY_ONLY_EXPERT_MAJOR_PREPACKED_COMPARE,
+            MODE_DX_RETURN_DIRECT_TO_SOURCE_COMBINE_PALLAS,
+            MODE_DX_RETURN_DIRECT_TO_SOURCE_COMBINE_COMPARE,
+            MODE_BACKWARD_PALLAS_SCAFFOLD,
+            MODE_FORWARD_BACKWARD_PALLAS_SCAFFOLD,
+            MODE_FORWARD_BACKWARD_EXPERT_MAJOR_PALLAS,
+            MODE_FORWARD_BACKWARD_EXPERT_MAJOR_COMPARE,
+            MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_PALLAS,
+            MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_PALLAS,
+            MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_LOOKUP_PACK_PALLAS,
+            MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_LOOKUP_PACK_COMPARE,
+            MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_SOURCE_GATHER_PALLAS,
+            MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_SOURCE_GATHER_COMPARE,
+            MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_OWNER_SHARDED_PALLAS,
+            MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_OWNER_SHARDED_COMPARE,
+            MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_OWNER_SHARDED_Y_PALLAS,
+            MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_DIRECT_RETURN_COMBINE_DUPLICATE_W2_PALLAS,
+            MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_DIRECT_RETURN_COMBINE_DUPLICATE_W2_COMPARE,
+            MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_DIRECT_QUEUE_PALLAS,
+            MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_DIRECT_QUEUE_WITH_METADATA_PALLAS,
+            MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_DIRECT_QUEUE_COMPARE,
+            MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_NO_Y_PALLAS,
+            MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_REMOTE_Y_PALLAS,
+            MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_REMOTE_Y_DELAYED_PALLAS,
+            MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_OWNER_SHARDED_DX_PALLAS,
+            MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_REMOTE_DX_PALLAS,
+            MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_OWNER_SHARDED_Y_WITH_METADATA_PALLAS,
+            MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_OWNER_SHARDED_Y_WITH_PALLAS_METADATA_PALLAS,
+            MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_COMPARE,
+        )
+        and jax.default_backend() == "gpu"
+        and not args.pallas_interpret
+        else None
+    )
+    source_padded_config = _source_padded_inbox_config(args, plan) if mode in SOURCE_PADDED_MODES else None
+
+    def w13_expert_major_reference_from_prepacked(
+        inputs: SemanticW13ExpertBenchInputs,
+    ) -> tuple[Float[Array, "Dst E C twoI"], Float[Array, "Dst E C I"]]:
+        z_expert = jnp.einsum(
+            "dech,deho->deco",
+            inputs.x_expert.astype(jnp.float32),
+            inputs.w_gate_up.astype(jnp.float32),
+            preferred_element_type=jnp.float32,
+        )
+        z_expert = jnp.where(inputs.valid[..., None], z_expert, jnp.zeros((), dtype=z_expert.dtype))
+        gate, up = jnp.split(z_expert, 2, axis=-1)
+        h_expert = jax.nn.silu(gate) * up
+        return z_expert, h_expert
+
+    def w2_expert_major_backward(
+        inputs: SemanticBenchInputs,
+        *,
+        implementation: str,
+    ):
+        h_expert, valid = source_push_semantic_pair_to_expert_major_jax(
+            inputs.h_pair,
+            plan,
+            rows_per_expert_capacity=rows_per_expert_capacity,
+        )
+        dy_expert, _dy_valid = source_push_semantic_pair_to_expert_major_jax(
+            inputs.dy_route,
+            plan,
+            rows_per_expert_capacity=rows_per_expert_capacity,
+        )
+        if expert_mesh is not None:
+            sharding_4d = NamedSharding(expert_mesh, P(SOURCE_PUSH_MESH_AXIS, None, None, None))
+            sharding_3d = NamedSharding(expert_mesh, P(SOURCE_PUSH_MESH_AXIS, None, None))
+            h_expert = jax.sharding.reshard(h_expert, sharding_4d)
+            dy_expert = jax.sharding.reshard(dy_expert, sharding_4d)
+            valid = jax.sharding.reshard(valid, sharding_3d)
+            w_down = jax.sharding.reshard(inputs.w_down, sharding_4d)
+        else:
+            w_down = inputs.w_down
+        if implementation == SOURCE_PUSH_W2_MATMUL_BACKWARD_IMPLEMENTATION_REFERENCE:
+            return source_push_semantic_w2_backward_expert_major_reference_jax(
+                h_expert,
+                dy_expert,
+                w_down,
+                valid,
+            )
+        if implementation == SOURCE_PUSH_W2_MATMUL_BACKWARD_IMPLEMENTATION_PALLAS_MGPU:
+            return source_push_semantic_w2_backward_expert_major_pallas_mgpu(
+                h_expert,
+                dy_expert,
+                w_down,
+                valid,
+                block_sizes=_w2_backward_expert_major_block_sizes(args),
+                interpret=args.pallas_interpret,
+                lowering_semantics=_lowering_semantics(args.w2_backward_lowering),
+                mesh=expert_mesh,
+            )
+        raise ValueError(f"unsupported W2 expert-major backward implementation: {implementation!r}")
+
+    def w2_expert_major_prepacked_backward(
+        inputs: SemanticW2ExpertBenchInputs,
+        *,
+        implementation: str,
+        block_sizes: SourcePushSemanticW2BackwardExpertMajorPallasBlockSizes | None = None,
+    ):
+        if expert_mesh is not None:
+            sharding_4d = NamedSharding(expert_mesh, P(SOURCE_PUSH_MESH_AXIS, None, None, None))
+            sharding_3d = NamedSharding(expert_mesh, P(SOURCE_PUSH_MESH_AXIS, None, None))
+            h_expert = jax.sharding.reshard(inputs.h_expert, sharding_4d)
+            dy_expert = jax.sharding.reshard(inputs.dy_expert, sharding_4d)
+            valid = jax.sharding.reshard(inputs.valid, sharding_3d)
+            w_down = jax.sharding.reshard(inputs.w_down, sharding_4d)
+        else:
+            h_expert = inputs.h_expert
+            dy_expert = inputs.dy_expert
+            valid = inputs.valid
+            w_down = inputs.w_down
+        if implementation == SOURCE_PUSH_W2_MATMUL_BACKWARD_IMPLEMENTATION_REFERENCE:
+            return source_push_semantic_w2_backward_expert_major_reference_jax(
+                h_expert,
+                dy_expert,
+                w_down,
+                valid,
+            )
+        if implementation == SOURCE_PUSH_W2_MATMUL_BACKWARD_IMPLEMENTATION_PALLAS_MGPU:
+            return source_push_semantic_w2_backward_expert_major_pallas_mgpu(
+                h_expert,
+                dy_expert,
+                w_down,
+                valid,
+                block_sizes=_w2_backward_expert_major_block_sizes(args) if block_sizes is None else block_sizes,
+                interpret=args.pallas_interpret,
+                lowering_semantics=_lowering_semantics(args.w2_backward_lowering),
+                mesh=expert_mesh,
+            )
+        raise ValueError(f"unsupported W2 expert-major backward implementation: {implementation!r}")
+
+    def backward_w2_expert_major_pack(inputs: SemanticBenchInputs):
+        h_expert, valid = source_push_semantic_pair_to_expert_major_jax(
+            inputs.h_pair,
+            plan,
+            rows_per_expert_capacity=rows_per_expert_capacity,
+        )
+        dy_expert, _dy_valid = source_push_semantic_pair_to_expert_major_jax(
+            inputs.dy_route,
+            plan,
+            rows_per_expert_capacity=rows_per_expert_capacity,
+        )
+        return h_expert, dy_expert, valid
+
+    def backward_w2_expert_major_pack_reshard(inputs: SemanticBenchInputs):
+        h_expert, dy_expert, valid = backward_w2_expert_major_pack(inputs)
+        sharding_4d = NamedSharding(expert_mesh, P(SOURCE_PUSH_MESH_AXIS, None, None, None))
+        sharding_3d = NamedSharding(expert_mesh, P(SOURCE_PUSH_MESH_AXIS, None, None))
+        return (
+            jax.sharding.reshard(h_expert, sharding_4d),
+            jax.sharding.reshard(dy_expert, sharding_4d),
+            jax.sharding.reshard(valid, sharding_3d),
+        )
+
+    def backward_w2_expert_major_compare(inputs: SemanticBenchInputs):
+        h_expert, valid = source_push_semantic_pair_to_expert_major_jax(
+            inputs.h_pair,
+            plan,
+            rows_per_expert_capacity=rows_per_expert_capacity,
+        )
+        dy_expert, _dy_valid = source_push_semantic_pair_to_expert_major_jax(
+            inputs.dy_route,
+            plan,
+            rows_per_expert_capacity=rows_per_expert_capacity,
+        )
+        sharding_4d = NamedSharding(expert_mesh, P(SOURCE_PUSH_MESH_AXIS, None, None, None))
+        sharding_3d = NamedSharding(expert_mesh, P(SOURCE_PUSH_MESH_AXIS, None, None))
+        h_expert = jax.sharding.reshard(h_expert, sharding_4d)
+        dy_expert = jax.sharding.reshard(dy_expert, sharding_4d)
+        valid = jax.sharding.reshard(valid, sharding_3d)
+        w_down = jax.sharding.reshard(inputs.w_down, sharding_4d)
+        reference_d_weighted_activation, reference_dw2 = source_push_semantic_w2_backward_expert_major_reference_jax(
+            h_expert,
+            dy_expert,
+            w_down,
+            valid,
+        )
+        pallas_d_weighted_activation, pallas_dw2 = source_push_semantic_w2_backward_expert_major_pallas_mgpu(
+            h_expert,
+            dy_expert,
+            w_down,
+            valid,
+            block_sizes=_w2_backward_expert_major_block_sizes(args),
+            interpret=args.pallas_interpret,
+            lowering_semantics=_lowering_semantics(args.w2_backward_lowering),
+            mesh=expert_mesh,
+        )
+        d_weighted_activation_diff = pallas_d_weighted_activation.astype(
+            jnp.float32
+        ) - reference_d_weighted_activation.astype(jnp.float32)
+        dw2_diff = pallas_dw2.astype(jnp.float32) - reference_dw2.astype(jnp.float32)
+        return {
+            "d_weighted_activation_max_abs_diff": jnp.max(jnp.abs(d_weighted_activation_diff)),
+            "d_weighted_activation_mean_abs_diff": jnp.mean(jnp.abs(d_weighted_activation_diff)),
+            "dw2_max_abs_diff": jnp.max(jnp.abs(dw2_diff)),
+            "dw2_mean_abs_diff": jnp.mean(jnp.abs(dw2_diff)),
+        }
+
+    def gather_x(inputs: SemanticBenchInputs):
+        return source_push_semantic_gather_x_jax(inputs.x, plan)
+
+    def w13(inputs: SemanticBenchInputs):
+        return source_push_semantic_w13_reference_jax(inputs.x, inputs.w_gate_up, plan)
+
+    def source_padded_inbox(inputs: SemanticBenchInputs):
+        assert source_padded_config is not None
+        queue = source_push_semantic_queue_metadata_jax(
+            plan,
+            return_row_block=SOURCE_PADDED_ROW_BLOCK,
+            entries_per_dst=source_padded_config.entries_per_rank,
+        )
+        result = source_push_semantic_inbox_w13_pallas_mgpu(
+            inputs.x,
+            inputs.w_gate_up,
+            plan,
+            queue,
+            config=source_padded_config,
+            mesh=expert_mesh,
+            interpret=args.pallas_interpret,
+        )
+        return result, queue
+
+    def source_padded_inbox_pack_pallas(inputs: SemanticBenchInputs):
+        assert source_padded_config is not None
+        queue = source_push_semantic_queue_metadata_jax(
+            plan,
+            return_row_block=SOURCE_PADDED_ROW_BLOCK,
+            entries_per_dst=source_padded_config.entries_per_rank,
+        )
+        rows_per_expert_capacity = source_padded_config.hidden_rows_per_rank // source_padded_config.experts_per_rank
+        metadata = source_push_semantic_inbox_metadata_jax(
+            inputs.x,
+            plan,
+            queue,
+            rows_per_expert_capacity=rows_per_expert_capacity,
+        )
+        packed_x = source_push_semantic_inbox_pack_pallas_mgpu(
+            inputs.x,
+            metadata.token_ids,
+            metadata.valid_mask,
+            mesh=expert_mesh,
+            interpret=args.pallas_interpret,
+        )
+        return {
+            "packed_x": packed_x,
+            "queue_overflow_entry_error_count": queue.overflow_entries,
+            "queue_overflow_route_error_count": queue.overflow_routes,
+            "layout_overflow_row_error_count": metadata.layout.overflow_rows,
+            "queue_entries_per_rank": queue.entries_per_dst,
+        }
+
+    def source_padded_overflow_metrics(result, queue) -> dict[str, Array]:
+        return {
+            "queue_overflow_entry_error_count": queue.overflow_entries,
+            "queue_overflow_route_error_count": queue.overflow_routes,
+            "layout_overflow_row_error_count": result.layout.overflow_rows,
+            "queue_entries_per_rank": queue.entries_per_dst,
+        }
+
+    def w13_source_padded_inbox_pallas(inputs: SemanticBenchInputs):
+        result, queue = source_padded_inbox(inputs)
+        return {
+            "z": result.z,
+            "h": result.h,
+            "valid": result.valid,
+            **source_padded_overflow_metrics(result, queue),
+        }
+
+    def w13_source_padded_inbox_compare(inputs: SemanticBenchInputs):
+        result, queue = source_padded_inbox(inputs)
+        expected_source_bases, expected_overflow = _source_padded_layout_metadata_jax(
+            plan,
+            rows_per_expert_capacity=result.layout.rows_per_expert_capacity,
+        )
+        source_lookup, token_lookup, expected_valid = _source_padded_expert_lookup_metadata_jax(
+            plan,
+            expected_source_bases,
+            rows_per_expert_capacity=result.layout.rows_per_expert_capacity,
+        )
+        metrics = {
+            **_source_padded_expert_sample_metrics(
+                inputs.x,
+                inputs.w_gate_up,
+                result.z,
+                result.h,
+                result.valid,
+                source_lookup,
+                token_lookup,
+                expected_valid,
+            ),
+            "source_row_base_error_count": jnp.sum(
+                result.layout.src_base_by_expert != expected_source_bases,
+                dtype=jnp.int32,
+            ),
+            "layout_overflow_mismatch_error_count": jnp.abs(result.layout.overflow_rows - expected_overflow),
+        }
+        metrics.update(source_padded_overflow_metrics(result, queue))
+        return metrics
+
+    def forward_source_padded_components(inputs: SemanticBenchInputs, *, output_dtype: jnp.dtype):
+        result, queue = source_padded_inbox(inputs)
+        return_block_sizes = _source_padded_return_block_sizes(args)
+        return_y = source_push_semantic_forward_return_direct_to_source_pallas_mgpu(
+            result.h.astype(inputs.w_down.dtype),
+            inputs.w_down,
+            result.valid,
+            plan,
+            w2_block_sizes=_source_padded_w2_block_sizes(args),
+            return_block_sizes=return_block_sizes,
+            route_buffer_dtype=jnp.bfloat16,
+            source_row_base_by_expert=result.layout.src_base_by_expert,
+            queue=queue,
+            interpret=args.pallas_interpret,
+            mesh=expert_mesh,
+        )
+        y = source_push_semantic_forward_combine_source_gather_pallas_mgpu(
+            return_y,
+            plan,
+            block_sizes=return_block_sizes,
+            output_dtype=output_dtype,
+            queue=queue,
+            interpret=args.pallas_interpret,
+            mesh=expert_mesh,
+        )
+        return y, return_y, result, queue
+
+    def forward_source_padded_inbox_direct_return_combine_pallas(inputs: SemanticBenchInputs):
+        y, return_y, result, queue = forward_source_padded_components(inputs, output_dtype=inputs.x.dtype)
+        return {
+            "y": y,
+            "return_y": return_y,
+            "z": result.z,
+            "h": result.h,
+            "valid": result.valid,
+            **source_padded_overflow_metrics(result, queue),
+        }
+
+    def forward_source_padded_inbox_direct_return_combine_compare(inputs: SemanticBenchInputs):
+        observed_y, observed_return_y, result, queue = forward_source_padded_components(
+            inputs,
+            output_dtype=jnp.float32,
+        )
+        expected_source_bases, expected_overflow = _source_padded_layout_metadata_jax(
+            plan,
+            rows_per_expert_capacity=result.layout.rows_per_expert_capacity,
+        )
+        source_lookup, token_lookup, expected_valid = _source_padded_expert_lookup_metadata_jax(
+            plan,
+            source_row_base_by_expert=expected_source_bases,
+            rows_per_expert_capacity=result.layout.rows_per_expert_capacity,
+        )
+        metrics = {
+            **_source_padded_expert_sample_metrics(
+                inputs.x,
+                inputs.w_gate_up,
+                result.z,
+                result.h,
+                result.valid,
+                source_lookup,
+                token_lookup,
+                expected_valid,
+            ),
+            **_source_padded_forward_sample_metrics(
+                inputs,
+                observed_y,
+                observed_return_y,
+                plan,
+                queue,
+            ),
+            "source_row_base_error_count": jnp.sum(
+                result.layout.src_base_by_expert != expected_source_bases,
+                dtype=jnp.int32,
+            ),
+            "layout_overflow_mismatch_error_count": jnp.abs(result.layout.overflow_rows - expected_overflow),
+        }
+        metrics.update(source_padded_overflow_metrics(result, queue))
+        return metrics
+
+    def source_padded_direct_w13_components(
+        inputs: SemanticBenchInputs,
+        semantic_plan: SourcePushSemanticPlan,
+    ):
+        assert source_padded_config is not None
+        rows_per_expert_capacity = source_padded_config.hidden_rows_per_rank // source_padded_config.experts_per_rank
+        source_row_bases, layout_overflow_rows = _source_padded_layout_metadata_jax(
+            semantic_plan,
+            rows_per_expert_capacity=rows_per_expert_capacity,
+        )
+        x_expert, valid = source_push_semantic_x_to_expert_major_direct_pallas_mgpu(
+            inputs.x,
+            semantic_plan,
+            rows_per_expert_capacity=rows_per_expert_capacity,
+            source_row_base_by_expert=source_row_bases,
+            block_sizes=_gather_block_sizes(args),
+            interpret=args.pallas_interpret,
+        )
+        packed_inputs = SemanticForwardExpertBenchInputs(
+            w_gate_up=inputs.w_gate_up,
+            w_down=inputs.w_down,
+            x_expert=x_expert,
+            valid=valid,
+        )
+        if expert_mesh is not None:
+            packed_inputs = _shard_forward_expert_inputs(packed_inputs, expert_mesh)
+        z, h = source_push_semantic_w13_from_x_expert_pallas_mgpu(
+            packed_inputs.x_expert,
+            packed_inputs.w_gate_up,
+            packed_inputs.valid,
+            block_sizes=_source_padded_w13_block_sizes(args),
+            interpret=args.pallas_interpret,
+            mesh=expert_mesh,
+        )
+        return packed_inputs, z, h, source_row_bases, layout_overflow_rows
+
+    def source_padded_direct_overflow_metrics(
+        queue,
+        layout_overflow_rows: Int[Array, ""],
+    ) -> dict[str, Array]:
+        return {
+            "queue_overflow_entry_error_count": queue.overflow_entries,
+            "queue_overflow_route_error_count": queue.overflow_routes,
+            "layout_overflow_row_error_count": layout_overflow_rows,
+            "queue_entries_per_rank": queue.entries_per_dst,
+        }
+
+    def source_padded_direct_reference_components(
+        inputs: SemanticBenchInputs,
+        semantic_plan: SourcePushSemanticPlan,
+        *,
+        rows_per_expert_capacity: int,
+    ):
+        """Legacy full reference used only by small-shape backward diagnostics."""
+
+        source_row_bases, overflow = _source_padded_layout_metadata_jax(
+            semantic_plan,
+            rows_per_expert_capacity=rows_per_expert_capacity,
+        )
+        x_expert, valid = source_push_semantic_x_to_expert_major_direct_pallas_mgpu(
+            inputs.x,
+            semantic_plan,
+            rows_per_expert_capacity=rows_per_expert_capacity,
+            source_row_base_by_expert=source_row_bases,
+            block_sizes=_gather_block_sizes(args),
+            interpret=True,
+        )
+        packed_inputs = SemanticForwardExpertBenchInputs(
+            w_gate_up=inputs.w_gate_up,
+            w_down=inputs.w_down,
+            x_expert=x_expert,
+            valid=valid,
+        )
+        if expert_mesh is not None:
+            packed_inputs = _shard_forward_expert_inputs(packed_inputs, expert_mesh)
+        z, h = w13_expert_major_reference_from_prepacked(
+            SemanticW13ExpertBenchInputs(
+                w_gate_up=packed_inputs.w_gate_up,
+                x_expert=packed_inputs.x_expert,
+                valid=packed_inputs.valid,
+            )
+        )
+        return packed_inputs, z, h, source_row_bases, overflow
+
+    def w13_source_padded_direct_pack_pallas(inputs: SemanticBenchInputs):
+        packed_inputs, z, h, _source_row_bases, layout_overflow_rows = source_padded_direct_w13_components(
+            inputs,
+            plan,
+        )
+        return {
+            "x_expert": packed_inputs.x_expert,
+            "z": z,
+            "h": h,
+            "valid": packed_inputs.valid,
+            "layout_overflow_row_error_count": layout_overflow_rows,
+        }
+
+    def w13_source_padded_direct_pack_compare(inputs: SemanticBenchInputs):
+        packed_inputs, observed_z, observed_h, expected_source_bases, observed_overflow = (
+            source_padded_direct_w13_components(inputs, plan)
+        )
+        reference_source_bases, expected_overflow = _source_padded_layout_metadata_jax(
+            plan,
+            rows_per_expert_capacity=packed_inputs.x_expert.shape[2],
+        )
+        source_lookup, token_lookup, expected_valid = _source_padded_expert_lookup_metadata_jax(
+            plan,
+            reference_source_bases,
+            rows_per_expert_capacity=packed_inputs.x_expert.shape[2],
+        )
+        return {
+            **_source_padded_expert_sample_metrics(
+                inputs.x,
+                inputs.w_gate_up,
+                observed_z,
+                observed_h,
+                packed_inputs.valid,
+                source_lookup,
+                token_lookup,
+                expected_valid,
+                observed_x=packed_inputs.x_expert,
+            ),
+            "source_row_base_error_count": jnp.sum(
+                expected_source_bases != reference_source_bases,
+                dtype=jnp.int32,
+            ),
+            "layout_overflow_mismatch_error_count": jnp.abs(observed_overflow - expected_overflow),
+            "layout_overflow_row_error_count": observed_overflow,
+        }
+
+    def forward_source_padded_direct_pack_components(
+        inputs: SemanticBenchInputs,
+        semantic_plan: SourcePushSemanticPlan,
+        *,
+        output_dtype: jnp.dtype,
+    ):
+        assert source_padded_config is not None
+        packed_inputs, z, h, source_row_bases, layout_overflow_rows = source_padded_direct_w13_components(
+            inputs,
+            semantic_plan,
+        )
+        queue = source_push_semantic_queue_metadata_jax(
+            semantic_plan,
+            return_row_block=SOURCE_PADDED_ROW_BLOCK,
+            entries_per_dst=source_padded_config.entries_per_rank,
+        )
+        return_block_sizes = _source_padded_return_block_sizes(args)
+        return_y = source_push_semantic_forward_return_direct_to_source_pallas_mgpu(
+            h.astype(packed_inputs.w_down.dtype),
+            packed_inputs.w_down,
+            packed_inputs.valid,
+            semantic_plan,
+            w2_block_sizes=_source_padded_w2_block_sizes(args),
+            return_block_sizes=return_block_sizes,
+            route_buffer_dtype=jnp.bfloat16,
+            source_row_base_by_expert=source_row_bases,
+            queue=queue,
+            interpret=args.pallas_interpret,
+            mesh=expert_mesh,
+        )
+        y = source_push_semantic_forward_combine_source_gather_pallas_mgpu(
+            return_y,
+            semantic_plan,
+            block_sizes=return_block_sizes,
+            output_dtype=output_dtype,
+            queue=queue,
+            interpret=args.pallas_interpret,
+            mesh=expert_mesh,
+        )
+        return y, return_y, packed_inputs, z, h, source_row_bases, layout_overflow_rows, queue
+
+    def forward_source_padded_direct_pack_direct_return_combine_pallas(inputs: SemanticBenchInputs):
+        y, return_y, packed_inputs, z, h, _source_row_bases, layout_overflow_rows, queue = (
+            forward_source_padded_direct_pack_components(inputs, plan, output_dtype=inputs.x.dtype)
+        )
+        return {
+            "y": y,
+            "return_y": return_y,
+            "x_expert": packed_inputs.x_expert,
+            "z": z,
+            "h": h,
+            "valid": packed_inputs.valid,
+            **source_padded_direct_overflow_metrics(queue, layout_overflow_rows),
+        }
+
+    def forward_source_padded_direct_pack_direct_return_combine_compare(inputs: SemanticBenchInputs):
+        observed_y, observed_return_y, packed_inputs, observed_z, observed_h, source_row_bases, overflow, queue = (
+            forward_source_padded_direct_pack_components(inputs, plan, output_dtype=jnp.float32)
+        )
+        expected_source_bases, expected_overflow = _source_padded_layout_metadata_jax(
+            plan,
+            rows_per_expert_capacity=packed_inputs.x_expert.shape[2],
+        )
+        source_lookup, token_lookup, expected_valid = _source_padded_expert_lookup_metadata_jax(
+            plan,
+            source_row_base_by_expert=expected_source_bases,
+            rows_per_expert_capacity=packed_inputs.x_expert.shape[2],
+        )
+        metrics = {
+            **_source_padded_expert_sample_metrics(
+                inputs.x,
+                inputs.w_gate_up,
+                observed_z,
+                observed_h,
+                packed_inputs.valid,
+                source_lookup,
+                token_lookup,
+                expected_valid,
+                observed_x=packed_inputs.x_expert,
+            ),
+            **_source_padded_forward_sample_metrics(
+                inputs,
+                observed_y,
+                observed_return_y,
+                plan,
+                queue,
+            ),
+            "source_row_base_error_count": jnp.sum(source_row_bases != expected_source_bases, dtype=jnp.int32),
+            "layout_overflow_mismatch_error_count": jnp.abs(overflow - expected_overflow),
+        }
+        metrics.update(source_padded_direct_overflow_metrics(queue, overflow))
+        return metrics
+
+    def forward_backward_source_padded_components(inputs: SemanticBenchInputs, *, output_dtype: jnp.dtype):
+        y, return_y, result, queue = forward_source_padded_components(inputs, output_dtype=output_dtype)
+        source_row_bases = result.layout.src_base_by_expert
+        rows_per_expert_capacity = result.layout.rows_per_expert_capacity
+        dy_route, dcombine = source_push_semantic_backward_source_expand_from_return_queue_pallas_mgpu(
+            inputs.dy,
+            return_y,
+            plan,
+            rows_per_expert_capacity=rows_per_expert_capacity,
+            source_row_base_by_expert=source_row_bases,
+            queue=queue,
+            block_sizes=_source_padded_backward_block_sizes(args),
+            interpret=args.pallas_interpret,
+            mesh=expert_mesh,
+        )
+        dh, dw2 = w2_expert_major_prepacked_backward(
+            SemanticW2ExpertBenchInputs(
+                w_down=inputs.w_down,
+                h_expert=result.h.astype(inputs.w_down.dtype),
+                dy_expert=dy_route.astype(inputs.w_down.dtype),
+                valid=result.valid,
+            ),
+            implementation=SOURCE_PUSH_W2_MATMUL_BACKWARD_IMPLEMENTATION_PALLAS_MGPU,
+            block_sizes=_source_padded_w2_backward_block_sizes(args),
+        )
+        dz = source_push_semantic_swiglu_backward_expert_major_jax(dh, result.z, result.valid)
+        x_expert, x_valid = source_push_semantic_x_to_expert_major_direct_pallas_mgpu(
+            inputs.x,
+            plan,
+            rows_per_expert_capacity=rows_per_expert_capacity,
+            source_row_base_by_expert=source_row_bases,
+            block_sizes=_gather_block_sizes(args),
+            interpret=args.pallas_interpret,
+        )
+        w13_backward_inputs = _constrain_w13_backward_expert_major_inputs(
+            SemanticW13BackwardExpertBenchInputs(
+                x_expert=x_expert.astype(inputs.w_gate_up.dtype),
+                dz13=dz.astype(inputs.w_gate_up.dtype),
+                w_gate_up=inputs.w_gate_up,
+                valid=result.valid,
+            ),
+            expert_mesh,
+        )
+        dx_route, dw13 = source_push_semantic_w13_backward_expert_major_pallas_mgpu(
+            w13_backward_inputs.x_expert,
+            w13_backward_inputs.dz13,
+            w13_backward_inputs.w_gate_up,
+            w13_backward_inputs.valid,
+            block_sizes=_source_padded_w13_backward_block_sizes(args),
+            interpret=args.pallas_interpret,
+            lowering_semantics=_lowering_semantics(args.w13_backward_lowering),
+            mesh=expert_mesh,
+        )
+        dx = source_push_semantic_dx_return_direct_to_source_combine_pallas_mgpu(
+            dx_route,
+            plan,
+            source_row_base_by_expert=source_row_bases,
+            queue=queue,
+            block_sizes=_source_padded_dx_queue_block_sizes(args),
+            output_dtype=output_dtype,
+            interpret=args.pallas_interpret,
+            mesh=expert_mesh,
+        )
+        return (
+            y,
+            return_y,
+            dy_route,
+            dcombine,
+            dh,
+            dz,
+            dw2,
+            x_expert,
+            x_valid,
+            dx_route,
+            dw13,
+            dx,
+            result,
+            queue,
+        )
+
+    def forward_backward_source_padded_inbox_direct_queue_pallas(inputs: SemanticBenchInputs):
+        y, return_y, _dy_route, dcombine, _dh, _dz, dw2, _x_expert, _x_valid, _dx_route, dw13, dx, result, queue = (
+            forward_backward_source_padded_components(inputs, output_dtype=inputs.x.dtype)
+        )
+        return {
+            "y": y,
+            "return_y": return_y,
+            "dcombine": dcombine,
+            "dw2": dw2,
+            "dw13": dw13,
+            "dx": dx,
+            **source_padded_overflow_metrics(result, queue),
+        }
+
+    def forward_backward_source_padded_inbox_direct_queue_compare(inputs: SemanticBenchInputs):
+        (
+            observed_y,
+            observed_return_y,
+            observed_dy_route,
+            observed_dcombine,
+            observed_dh,
+            observed_dz,
+            observed_dw2,
+            _observed_x_expert,
+            observed_x_valid,
+            observed_dx_route,
+            observed_dw13,
+            observed_dx,
+            result,
+            queue,
+        ) = forward_backward_source_padded_components(inputs, output_dtype=jnp.float32)
+        (
+            expected_x_expert,
+            expected_z,
+            expected_h,
+            expected_valid,
+            expected_source_bases,
+            expected_overflow,
+        ) = _source_padded_reference_jax(
+            inputs.x,
+            inputs.w_gate_up,
+            plan,
+            rows_per_expert_capacity=result.layout.rows_per_expert_capacity,
+        )
+        expected_route_y = source_push_semantic_w2_expert_major_reference_jax(
+            expected_h.astype(inputs.w_down.dtype),
+            inputs.w_down,
+            expected_valid,
+        )
+        return_block_sizes = _source_padded_return_block_sizes(args)
+        expected_return_y = source_push_semantic_forward_return_direct_to_source_reference_jax(
+            expected_route_y,
+            plan,
+            block_sizes=return_block_sizes,
+            route_buffer_dtype=jnp.bfloat16,
+            source_row_base_by_expert=expected_source_bases,
+            queue=queue,
+        )
+        return_metadata = source_push_semantic_forward_return_queue_metadata_jax(
+            plan,
+            rows_per_expert_capacity=result.layout.rows_per_expert_capacity,
+            return_row_block=SOURCE_PADDED_ROW_BLOCK,
+            source_row_base_by_expert=expected_source_bases,
+            queue=queue,
+        )
+        queue_row = jnp.arange(SOURCE_PADDED_ROW_BLOCK, dtype=jnp.int32)[None, None, None, :]
+        live_return_rows = queue_row < return_metadata.queue_valid_rows[..., None]
+        expected_y = source_push_semantic_forward_combine_source_gather_reference_jax(
+            expected_return_y,
+            return_metadata,
+            output_dtype=jnp.float32,
+        )
+        expected_dy_route, expected_dcombine = source_push_semantic_backward_source_expand_from_return_queue_jax(
+            inputs.dy,
+            expected_return_y,
+            plan,
+            rows_per_expert_capacity=result.layout.rows_per_expert_capacity,
+            source_row_base_by_expert=expected_source_bases,
+            queue=queue,
+        )
+        expected_dh, expected_dw2 = source_push_semantic_w2_backward_expert_major_reference_jax(
+            expected_h.astype(inputs.w_down.dtype),
+            expected_dy_route.astype(inputs.w_down.dtype),
+            inputs.w_down,
+            expected_valid,
+        )
+        expected_dz = source_push_semantic_swiglu_backward_expert_major_jax(
+            expected_dh,
+            expected_z,
+            expected_valid,
+        )
+        expected_dx_route, expected_dw13 = source_push_semantic_w13_backward_expert_major_reference_jax(
+            expected_x_expert,
+            expected_dz,
+            inputs.w_gate_up,
+            expected_valid,
+        )
+        dx_queue_block_sizes = _source_padded_dx_queue_block_sizes(args)
+        expected_return_dx = source_push_semantic_dx_return_direct_to_source_reference_jax(
+            expected_dx_route,
+            plan,
+            source_row_base_by_expert=expected_source_bases,
+            queue=queue,
+            block_sizes=dx_queue_block_sizes,
+            route_buffer_dtype=jnp.bfloat16,
+        )
+        expected_dx = source_push_semantic_dx_combine_source_queue_reference_jax(
+            expected_return_dx,
+            queue,
+            output_dtype=jnp.float32,
+        )
+        metrics = {
+            **_comparison_metrics("y_stage", observed_y, expected_y),
+            **_masked_comparison_metrics("return_y_stage", observed_return_y, expected_return_y, live_return_rows),
+            **_masked_comparison_metrics("dy_route_stage", observed_dy_route, expected_dy_route, expected_valid),
+            **_comparison_metrics("dcombine_stage", observed_dcombine, expected_dcombine),
+            **_masked_comparison_metrics("dh_stage", observed_dh, expected_dh, expected_valid),
+            **_masked_comparison_metrics("dz_stage", observed_dz, expected_dz, expected_valid),
+            **_comparison_metrics("dw2_stage", observed_dw2, expected_dw2),
+            **_masked_comparison_metrics("dx_route_stage", observed_dx_route, expected_dx_route, expected_valid),
+            **_comparison_metrics("dw13_stage", observed_dw13, expected_dw13),
+            **_comparison_metrics("dx_stage", observed_dx, expected_dx),
+            "valid_error_count": jnp.sum(result.valid != expected_valid, dtype=jnp.int32),
+            "x_residual_valid_error_count": jnp.sum(observed_x_valid != expected_valid, dtype=jnp.int32),
+            "source_row_base_error_count": jnp.sum(
+                result.layout.src_base_by_expert != expected_source_bases,
+                dtype=jnp.int32,
+            ),
+            "layout_overflow_mismatch_error_count": jnp.abs(result.layout.overflow_rows - expected_overflow),
+        }
+        metrics.update(source_padded_overflow_metrics(result, queue))
+        return metrics
+
+    def forward_backward_source_padded_direct_pack_components(
+        inputs: SemanticBenchInputs,
+        semantic_plan: SourcePushSemanticPlan,
+        *,
+        output_dtype: jnp.dtype,
+    ):
+        y, return_y, packed_inputs, z, h, source_row_bases, overflow, queue = (
+            forward_source_padded_direct_pack_components(
+                inputs,
+                semantic_plan,
+                output_dtype=output_dtype,
+            )
+        )
+        rows_per_expert_capacity = packed_inputs.x_expert.shape[2]
+        dy_route, dcombine = source_push_semantic_backward_source_expand_from_return_queue_pallas_mgpu(
+            inputs.dy,
+            return_y,
+            semantic_plan,
+            rows_per_expert_capacity=rows_per_expert_capacity,
+            source_row_base_by_expert=source_row_bases,
+            queue=queue,
+            block_sizes=_source_padded_backward_block_sizes(args),
+            interpret=args.pallas_interpret,
+            mesh=expert_mesh,
+        )
+        dh, dw2 = w2_expert_major_prepacked_backward(
+            SemanticW2ExpertBenchInputs(
+                w_down=packed_inputs.w_down,
+                h_expert=h.astype(packed_inputs.w_down.dtype),
+                dy_expert=dy_route.astype(packed_inputs.w_down.dtype),
+                valid=packed_inputs.valid,
+            ),
+            implementation=SOURCE_PUSH_W2_MATMUL_BACKWARD_IMPLEMENTATION_PALLAS_MGPU,
+            block_sizes=_source_padded_w2_backward_block_sizes(args),
+        )
+        dz = source_push_semantic_swiglu_backward_expert_major_jax(dh, z, packed_inputs.valid)
+        w13_backward_inputs = _constrain_w13_backward_expert_major_inputs(
+            SemanticW13BackwardExpertBenchInputs(
+                x_expert=packed_inputs.x_expert.astype(packed_inputs.w_gate_up.dtype),
+                dz13=dz.astype(packed_inputs.w_gate_up.dtype),
+                w_gate_up=packed_inputs.w_gate_up,
+                valid=packed_inputs.valid,
+            ),
+            expert_mesh,
+        )
+        dx_route, dw13 = source_push_semantic_w13_backward_expert_major_pallas_mgpu(
+            w13_backward_inputs.x_expert,
+            w13_backward_inputs.dz13,
+            w13_backward_inputs.w_gate_up,
+            w13_backward_inputs.valid,
+            block_sizes=_source_padded_w13_backward_block_sizes(args),
+            interpret=args.pallas_interpret,
+            lowering_semantics=_lowering_semantics(args.w13_backward_lowering),
+            mesh=expert_mesh,
+        )
+        dx = source_push_semantic_dx_return_direct_to_source_combine_pallas_mgpu(
+            dx_route,
+            semantic_plan,
+            source_row_base_by_expert=source_row_bases,
+            queue=queue,
+            block_sizes=_source_padded_dx_queue_block_sizes(args),
+            output_dtype=output_dtype,
+            interpret=args.pallas_interpret,
+            mesh=expert_mesh,
+        )
+        return (
+            y,
+            return_y,
+            dy_route,
+            dcombine,
+            dh,
+            dz,
+            dw2,
+            dx_route,
+            dw13,
+            dx,
+            packed_inputs,
+            z,
+            h,
+            source_row_bases,
+            overflow,
+            queue,
+        )
+
+    def source_padded_direct_fwd_bwd_output(inputs: SemanticBenchInputs, semantic_plan: SourcePushSemanticPlan):
+        (
+            y,
+            _return_y,
+            _dy_route,
+            dcombine,
+            _dh,
+            _dz,
+            dw2,
+            _dx_route,
+            dw13,
+            dx,
+            _packed_inputs,
+            _z,
+            _h,
+            _source_row_bases,
+            overflow,
+            queue,
+        ) = forward_backward_source_padded_direct_pack_components(
+            inputs,
+            semantic_plan,
+            output_dtype=inputs.x.dtype,
+        )
+        return {
+            "y": y,
+            "dcombine": dcombine,
+            "dw2": dw2,
+            "dw13": dw13,
+            "dx": dx,
+            **source_padded_direct_overflow_metrics(queue, overflow),
+        }
+
+    def forward_backward_source_padded_direct_pack_direct_queue_pallas(inputs: SemanticBenchInputs):
+        return source_padded_direct_fwd_bwd_output(inputs, plan)
+
+    def forward_backward_source_padded_direct_pack_direct_queue_with_metadata_pallas(inputs: SemanticBenchInputs):
+        runtime_plan = _metadata_fn(
+            inputs.selected_experts,
+            inputs.route_weights,
+            ep_size=args.ep_size,
+            experts_per_rank=args.experts_per_rank,
+            rows_per_src_dst_capacity=plan.assignment_ids.shape[-1],
+            capacity_factor=args.capacity_factor,
+        )
+        return source_padded_direct_fwd_bwd_output(inputs, runtime_plan)
+
+    def forward_backward_source_padded_direct_pack_direct_queue_compare(inputs: SemanticBenchInputs):
+        (
+            observed_y,
+            observed_return_y,
+            observed_dy_route,
+            observed_dcombine,
+            observed_dh,
+            observed_dz,
+            observed_dw2,
+            observed_dx_route,
+            observed_dw13,
+            observed_dx,
+            packed_inputs,
+            observed_z,
+            observed_h,
+            source_row_bases,
+            overflow,
+            queue,
+        ) = forward_backward_source_padded_direct_pack_components(inputs, plan, output_dtype=jnp.float32)
+        expected_inputs, expected_z, expected_h, expected_source_bases, expected_overflow = (
+            source_padded_direct_reference_components(
+                inputs,
+                plan,
+                rows_per_expert_capacity=packed_inputs.x_expert.shape[2],
+            )
+        )
+        expected_route_y = source_push_semantic_w2_expert_major_reference_jax(
+            expected_h.astype(expected_inputs.w_down.dtype),
+            expected_inputs.w_down,
+            expected_inputs.valid,
+        )
+        expected_return_y = source_push_semantic_forward_return_direct_to_source_reference_jax(
+            expected_route_y,
+            plan,
+            block_sizes=_source_padded_return_block_sizes(args),
+            route_buffer_dtype=jnp.bfloat16,
+            source_row_base_by_expert=expected_source_bases,
+            queue=queue,
+        )
+        return_metadata = source_push_semantic_forward_return_queue_metadata_jax(
+            plan,
+            rows_per_expert_capacity=packed_inputs.x_expert.shape[2],
+            return_row_block=SOURCE_PADDED_ROW_BLOCK,
+            source_row_base_by_expert=expected_source_bases,
+            queue=queue,
+        )
+        queue_row = jnp.arange(SOURCE_PADDED_ROW_BLOCK, dtype=jnp.int32)[None, None, None, :]
+        live_return_rows = queue_row < return_metadata.queue_valid_rows[..., None]
+        expected_y = source_push_semantic_forward_combine_source_gather_reference_jax(
+            expected_return_y,
+            return_metadata,
+            output_dtype=jnp.float32,
+        )
+        expected_dy_route, expected_dcombine = source_push_semantic_backward_source_expand_from_return_queue_jax(
+            inputs.dy,
+            expected_return_y,
+            plan,
+            rows_per_expert_capacity=packed_inputs.x_expert.shape[2],
+            source_row_base_by_expert=expected_source_bases,
+            queue=queue,
+        )
+        expected_dh, expected_dw2 = source_push_semantic_w2_backward_expert_major_reference_jax(
+            expected_h.astype(expected_inputs.w_down.dtype),
+            expected_dy_route.astype(expected_inputs.w_down.dtype),
+            expected_inputs.w_down,
+            expected_inputs.valid,
+        )
+        expected_dz = source_push_semantic_swiglu_backward_expert_major_jax(
+            expected_dh,
+            expected_z,
+            expected_inputs.valid,
+        )
+        expected_dx_route, expected_dw13 = source_push_semantic_w13_backward_expert_major_reference_jax(
+            expected_inputs.x_expert,
+            expected_dz,
+            expected_inputs.w_gate_up,
+            expected_inputs.valid,
+        )
+        expected_return_dx = source_push_semantic_dx_return_direct_to_source_reference_jax(
+            expected_dx_route,
+            plan,
+            source_row_base_by_expert=expected_source_bases,
+            queue=queue,
+            block_sizes=_source_padded_dx_queue_block_sizes(args),
+            route_buffer_dtype=jnp.bfloat16,
+        )
+        expected_dx = source_push_semantic_dx_combine_source_queue_reference_jax(
+            expected_return_dx,
+            queue,
+            output_dtype=jnp.float32,
+        )
+        metrics = {
+            **_sampled_masked_comparison_metrics(
+                "x_stage", packed_inputs.x_expert, expected_inputs.x_expert, expected_inputs.valid
+            ),
+            **_sampled_masked_comparison_metrics("z_stage", observed_z, expected_z, expected_inputs.valid),
+            **_sampled_masked_comparison_metrics("h_stage", observed_h, expected_h, expected_inputs.valid),
+            **_sampled_comparison_metrics("y_stage", observed_y, expected_y),
+            **_sampled_masked_comparison_metrics(
+                "return_y_stage", observed_return_y, expected_return_y, live_return_rows
+            ),
+            **_sampled_masked_comparison_metrics(
+                "dy_route_stage", observed_dy_route, expected_dy_route, expected_inputs.valid
+            ),
+            **_sampled_comparison_metrics("dcombine_stage", observed_dcombine, expected_dcombine),
+            **_sampled_masked_comparison_metrics("dh_stage", observed_dh, expected_dh, expected_inputs.valid),
+            **_sampled_masked_comparison_metrics("dz_stage", observed_dz, expected_dz, expected_inputs.valid),
+            **_sampled_comparison_metrics("dw2_stage", observed_dw2, expected_dw2),
+            **_sampled_masked_comparison_metrics(
+                "dx_route_stage", observed_dx_route, expected_dx_route, expected_inputs.valid
+            ),
+            **_sampled_comparison_metrics("dw13_stage", observed_dw13, expected_dw13),
+            **_sampled_comparison_metrics("dx_stage", observed_dx, expected_dx),
+            "valid_error_count": jnp.sum(packed_inputs.valid != expected_inputs.valid, dtype=jnp.int32),
+            "source_row_base_error_count": jnp.sum(source_row_bases != expected_source_bases, dtype=jnp.int32),
+            "layout_overflow_mismatch_error_count": jnp.abs(overflow - expected_overflow),
+        }
+        metrics.update(source_padded_direct_overflow_metrics(queue, overflow))
+        return metrics
+
+    def gather_x_pallas(inputs: SemanticBenchInputs):
+        return source_push_semantic_gather_x_pallas_mgpu(
+            inputs.x,
+            plan,
+            block_sizes=_gather_block_sizes(args),
+            interpret=args.pallas_interpret,
+        )
+
+    def w13_pallas_scaffold(inputs: SemanticBenchInputs):
+        return source_push_semantic_w13_pallas_scaffold_mgpu(
+            inputs.x,
+            inputs.w_gate_up,
+            plan,
+            block_sizes=_gather_block_sizes(args),
+            w13_block_sizes=_w13_block_sizes(args),
+            interpret=args.pallas_interpret,
+        )
+
+    def w13_expert_major_pallas(inputs: SemanticBenchInputs):
+        z_expert, h_expert, valid = source_push_semantic_w13_expert_major_pallas_mgpu(
+            inputs.x,
+            inputs.w_gate_up,
+            plan,
+            rows_per_expert_capacity=rows_per_expert_capacity,
+            block_sizes=_w13_expert_major_block_sizes(args),
+            interpret=args.pallas_interpret,
+        )
+        if expert_mesh is None:
+            return z_expert, h_expert, valid
+        sharding_4d = NamedSharding(expert_mesh, P(SOURCE_PUSH_MESH_AXIS, None, None, None))
+        sharding_3d = NamedSharding(expert_mesh, P(SOURCE_PUSH_MESH_AXIS, None, None))
+        return (
+            jax.sharding.reshard(z_expert, sharding_4d),
+            jax.sharding.reshard(h_expert, sharding_4d),
+            jax.sharding.reshard(valid, sharding_3d),
+        )
+
+    def w13_expert_major_pack(inputs: SemanticBenchInputs):
+        return source_push_semantic_x_to_expert_major_jax(
+            inputs.x,
+            plan,
+            rows_per_expert_capacity=rows_per_expert_capacity,
+        )
+
+    def w13_expert_major_pack_pallas_scaffold(inputs: SemanticBenchInputs):
+        return source_push_semantic_x_to_expert_major_pallas_scaffold_mgpu(
+            inputs.x,
+            plan,
+            rows_per_expert_capacity=rows_per_expert_capacity,
+            block_sizes=_gather_block_sizes(args),
+            interpret=args.pallas_interpret,
+        )
+
+    def w13_expert_major_pack_pallas_direct(inputs: SemanticBenchInputs):
+        return source_push_semantic_x_to_expert_major_direct_pallas_mgpu(
+            inputs.x,
+            plan,
+            rows_per_expert_capacity=rows_per_expert_capacity,
+            block_sizes=_gather_block_sizes(args),
+            interpret=args.pallas_interpret,
+        )
+
+    def w13_expert_major_pack_pallas_lookup(inputs: SemanticBenchInputs):
+        return source_push_semantic_x_to_expert_major_lookup_pallas_mgpu(
+            inputs.x,
+            plan,
+            rows_per_expert_capacity=rows_per_expert_capacity,
+            block_sizes=_gather_block_sizes(args),
+            interpret=args.pallas_interpret,
+        )
+
+    def w13_expert_major_pack_reshard(inputs: SemanticBenchInputs):
+        x_expert, valid = w13_expert_major_pack(inputs)
+        if expert_mesh is None:
+            return x_expert, valid
+        sharding_4d = NamedSharding(expert_mesh, P(SOURCE_PUSH_MESH_AXIS, None, None, None))
+        sharding_3d = NamedSharding(expert_mesh, P(SOURCE_PUSH_MESH_AXIS, None, None))
+        return (
+            jax.sharding.reshard(x_expert, sharding_4d),
+            jax.sharding.reshard(valid, sharding_3d),
+        )
+
+    def w13_expert_major_prepacked(inputs: SemanticW13ExpertBenchInputs):
+        if expert_mesh is None:
+            return w13_expert_major_reference_from_prepacked(inputs)
+        sharding_4d = NamedSharding(expert_mesh, P(SOURCE_PUSH_MESH_AXIS, None, None, None))
+        sharding_3d = NamedSharding(expert_mesh, P(SOURCE_PUSH_MESH_AXIS, None, None))
+        expert_inputs = SemanticW13ExpertBenchInputs(
+            w_gate_up=jax.sharding.reshard(inputs.w_gate_up, sharding_4d),
+            x_expert=jax.sharding.reshard(inputs.x_expert, sharding_4d),
+            valid=jax.sharding.reshard(inputs.valid, sharding_3d),
+        )
+        return w13_expert_major_reference_from_prepacked(expert_inputs)
+
+    def w13_expert_major_prepacked_pallas(inputs: SemanticW13ExpertBenchInputs):
+        return source_push_semantic_w13_from_x_expert_pallas_mgpu(
+            inputs.x_expert,
+            inputs.w_gate_up,
+            inputs.valid,
+            block_sizes=_w13_expert_major_block_sizes(args),
+            interpret=args.pallas_interpret,
+            mesh=expert_mesh,
+        )
+
+    def w13_expert_major_prepacked_compare(inputs: SemanticW13ExpertBenchInputs):
+        expected_z, expected_h = w13_expert_major_reference_from_prepacked(inputs)
+        observed_z, observed_h = source_push_semantic_w13_from_x_expert_pallas_mgpu(
+            inputs.x_expert,
+            inputs.w_gate_up,
+            inputs.valid,
+            block_sizes=_w13_expert_major_block_sizes(args),
+            interpret=args.pallas_interpret,
+            mesh=expert_mesh,
+        )
+        z_diff = observed_z.astype(jnp.float32) - expected_z.astype(jnp.float32)
+        h_diff = observed_h.astype(jnp.float32) - expected_h.astype(jnp.float32)
+        return {
+            "z_max_abs_diff": jnp.max(jnp.abs(z_diff)),
+            "z_mean_abs_diff": jnp.mean(jnp.abs(z_diff)),
+            "h_max_abs_diff": jnp.max(jnp.abs(h_diff)),
+            "h_mean_abs_diff": jnp.mean(jnp.abs(h_diff)),
+        }
+
+    def backward_w13_expert_major_prepacked(inputs: SemanticW13BackwardExpertBenchInputs):
+        return source_push_semantic_w13_backward_expert_major_reference_jax(
+            inputs.x_expert,
+            inputs.dz13,
+            inputs.w_gate_up,
+            inputs.valid,
+        )
+
+    def backward_w13_expert_major_prepacked_pallas(inputs: SemanticW13BackwardExpertBenchInputs):
+        return source_push_semantic_w13_backward_expert_major_pallas_mgpu(
+            inputs.x_expert,
+            inputs.dz13,
+            inputs.w_gate_up,
+            inputs.valid,
+            block_sizes=_w13_backward_block_sizes(args),
+            interpret=args.pallas_interpret,
+            lowering_semantics=_lowering_semantics(args.w13_backward_lowering),
+            mesh=expert_mesh,
+        )
+
+    def backward_w13_dx_route_expert_major_prepacked_pallas(inputs: SemanticW13BackwardExpertBenchInputs):
+        return source_push_semantic_w13_backward_dx_route_expert_major_pallas_mgpu(
+            inputs.dz13,
+            inputs.w_gate_up,
+            inputs.valid,
+            block_sizes=_w13_backward_block_sizes(args),
+            interpret=args.pallas_interpret,
+            lowering_semantics=_lowering_semantics(args.w13_backward_lowering),
+            mesh=expert_mesh,
+        )
+
+    def backward_w13_dw13_expert_major_prepacked_pallas(inputs: SemanticW13BackwardExpertBenchInputs):
+        return source_push_semantic_w13_backward_dw13_expert_major_pallas_mgpu(
+            inputs.x_expert,
+            inputs.dz13,
+            inputs.valid,
+            block_sizes=_w13_backward_block_sizes(args),
+            interpret=args.pallas_interpret,
+            lowering_semantics=_lowering_semantics(args.w13_backward_lowering),
+            mesh=expert_mesh,
+        )
+
+    def backward_w13_expert_major_prepacked_compare(inputs: SemanticW13BackwardExpertBenchInputs):
+        expected_dx, expected_dw13 = source_push_semantic_w13_backward_expert_major_reference_jax(
+            inputs.x_expert,
+            inputs.dz13,
+            inputs.w_gate_up,
+            inputs.valid,
+        )
+        observed_dx, observed_dw13 = source_push_semantic_w13_backward_expert_major_pallas_mgpu(
+            inputs.x_expert,
+            inputs.dz13,
+            inputs.w_gate_up,
+            inputs.valid,
+            block_sizes=_w13_backward_block_sizes(args),
+            interpret=args.pallas_interpret,
+            lowering_semantics=_lowering_semantics(args.w13_backward_lowering),
+            mesh=expert_mesh,
+        )
+        dx_diff = observed_dx.astype(jnp.float32) - expected_dx.astype(jnp.float32)
+        dw13_diff = observed_dw13.astype(jnp.float32) - expected_dw13.astype(jnp.float32)
+        return {
+            "dx_route_max_abs_diff": jnp.max(jnp.abs(dx_diff)),
+            "dx_route_mean_abs_diff": jnp.mean(jnp.abs(dx_diff)),
+            "dw13_max_abs_diff": jnp.max(jnp.abs(dw13_diff)),
+            "dw13_mean_abs_diff": jnp.mean(jnp.abs(dw13_diff)),
+        }
+
+    def w13_expert_major_compare(inputs: SemanticBenchInputs):
+        z_pair, h_pair = source_push_semantic_w13_reference_jax(inputs.x, inputs.w_gate_up, plan)
+        expected_z, expected_valid = source_push_semantic_pair_to_expert_major_jax(
+            z_pair,
+            plan,
+            rows_per_expert_capacity=rows_per_expert_capacity,
+        )
+        expected_h, _ = source_push_semantic_pair_to_expert_major_jax(
+            h_pair,
+            plan,
+            rows_per_expert_capacity=rows_per_expert_capacity,
+        )
+        observed_z, observed_h, observed_valid = source_push_semantic_w13_expert_major_pallas_mgpu(
+            inputs.x,
+            inputs.w_gate_up,
+            plan,
+            rows_per_expert_capacity=rows_per_expert_capacity,
+            block_sizes=_w13_expert_major_block_sizes(args),
+            interpret=args.pallas_interpret,
+        )
+        if expert_mesh is not None:
+            sharding_4d = NamedSharding(expert_mesh, P(SOURCE_PUSH_MESH_AXIS, None, None, None))
+            sharding_3d = NamedSharding(expert_mesh, P(SOURCE_PUSH_MESH_AXIS, None, None))
+            expected_z = jax.sharding.reshard(expected_z, sharding_4d)
+            expected_h = jax.sharding.reshard(expected_h, sharding_4d)
+            expected_valid = jax.sharding.reshard(expected_valid, sharding_3d)
+            observed_z = jax.sharding.reshard(observed_z, sharding_4d)
+            observed_h = jax.sharding.reshard(observed_h, sharding_4d)
+            observed_valid = jax.sharding.reshard(observed_valid, sharding_3d)
+        z_diff = observed_z.astype(jnp.float32) - expected_z.astype(jnp.float32)
+        h_diff = observed_h.astype(jnp.float32) - expected_h.astype(jnp.float32)
+        valid_diff = observed_valid.astype(jnp.int32) - expected_valid.astype(jnp.int32)
+        return {
+            "z_max_abs_diff": jnp.max(jnp.abs(z_diff)),
+            "z_mean_abs_diff": jnp.mean(jnp.abs(z_diff)),
+            "h_max_abs_diff": jnp.max(jnp.abs(h_diff)),
+            "h_mean_abs_diff": jnp.mean(jnp.abs(h_diff)),
+            "valid_error_count": jnp.sum(jnp.abs(valid_diff), dtype=jnp.int32),
+        }
+
+    def w2(inputs: SemanticBenchInputs):
+        return source_push_semantic_w2_reference_jax(inputs.h_pair, inputs.w_down, plan)
+
+    def w2_pallas(inputs: SemanticBenchInputs):
+        return source_push_semantic_w2_pallas_mgpu(
+            inputs.h_pair,
+            inputs.w_down,
+            plan,
+            block_sizes=_w2_block_sizes(args),
+            interpret=args.pallas_interpret,
+        )
+
+    def w2_combine_pallas_scaffold(inputs: SemanticBenchInputs):
+        return source_push_semantic_w2_and_combine_pallas_scaffold_mgpu(
+            inputs.h_pair,
+            inputs.w_down,
+            plan,
+            block_sizes=_w2_block_sizes(args),
+            interpret=args.pallas_interpret,
+        )
+
+    def w2_expert_major_prepacked(inputs: SemanticW2ExpertBenchInputs):
+        return source_push_semantic_w2_expert_major_reference_jax(
+            inputs.h_expert,
+            inputs.w_down,
+            inputs.valid,
+        )
+
+    def w2_expert_major_prepacked_pallas(inputs: SemanticW2ExpertBenchInputs):
+        return source_push_semantic_w2_expert_major_pallas_mgpu(
+            inputs.h_expert,
+            inputs.w_down,
+            inputs.valid,
+            block_sizes=_w2_forward_expert_major_block_sizes(args),
+            interpret=args.pallas_interpret,
+            mesh=expert_mesh,
+        )
+
+    def w2_expert_major_prepacked_compare(inputs: SemanticW2ExpertBenchInputs):
+        expected = source_push_semantic_w2_expert_major_reference_jax(
+            inputs.h_expert,
+            inputs.w_down,
+            inputs.valid,
+        )
+        observed = source_push_semantic_w2_expert_major_pallas_mgpu(
+            inputs.h_expert,
+            inputs.w_down,
+            inputs.valid,
+            block_sizes=_w2_forward_expert_major_block_sizes(args),
+            interpret=args.pallas_interpret,
+            mesh=expert_mesh,
+        )
+        diff = observed.astype(jnp.float32) - expected.astype(jnp.float32)
+        return {
+            "route_y_max_abs_diff": jnp.max(jnp.abs(diff)),
+            "route_y_mean_abs_diff": jnp.mean(jnp.abs(diff)),
+        }
+
+    def w2_expert_major_prepacked_pallas_assume_zero_invalid(inputs: SemanticW2ExpertBenchInputs):
+        return source_push_semantic_w2_expert_major_assume_zero_invalid_pallas_mgpu(
+            inputs.h_expert,
+            inputs.w_down,
+            block_sizes=_w2_forward_expert_major_block_sizes(args),
+            interpret=args.pallas_interpret,
+            mesh=expert_mesh,
+        )
+
+    def w2_expert_major_prepacked_assume_zero_invalid_compare(inputs: SemanticW2ExpertBenchInputs):
+        h_expert = jnp.where(inputs.valid[..., None], inputs.h_expert, jnp.zeros((), dtype=inputs.h_expert.dtype))
+        expected = source_push_semantic_w2_expert_major_reference_jax(
+            h_expert,
+            inputs.w_down,
+            inputs.valid,
+        )
+        observed = source_push_semantic_w2_expert_major_assume_zero_invalid_pallas_mgpu(
+            h_expert,
+            inputs.w_down,
+            block_sizes=_w2_forward_expert_major_block_sizes(args),
+            interpret=args.pallas_interpret,
+            mesh=expert_mesh,
+        )
+        diff = observed.astype(jnp.float32) - expected.astype(jnp.float32)
+        return {
+            "route_y_max_abs_diff": jnp.max(jnp.abs(diff)),
+            "route_y_mean_abs_diff": jnp.mean(jnp.abs(diff)),
+        }
+
+    def combine(inputs: SemanticBenchInputs):
+        return source_push_semantic_combine_jax(inputs.route_y, plan)
+
+    def forward(inputs: SemanticBenchInputs):
+        return source_push_semantic_forward_reference_jax(inputs.x, inputs.w_gate_up, inputs.w_down, plan)
+
+    def forward_pallas_scaffold(inputs: SemanticBenchInputs):
+        z_pair, h_pair = source_push_semantic_w13_pallas_scaffold_mgpu(
+            inputs.x,
+            inputs.w_gate_up,
+            plan,
+            block_sizes=_gather_block_sizes(args),
+            w13_block_sizes=_w13_block_sizes(args),
+            interpret=args.pallas_interpret,
+        )
+        y, route_y = source_push_semantic_w2_and_combine_pallas_scaffold_mgpu(
+            h_pair,
+            inputs.w_down,
+            plan,
+            block_sizes=_w2_block_sizes(args),
+            interpret=args.pallas_interpret,
+        )
+        return y, z_pair, h_pair, route_y
+
+    def forward_expert_major_pallas(inputs: SemanticBenchInputs):
+        z_expert, h_expert, valid = source_push_semantic_w13_expert_major_pallas_mgpu(
+            inputs.x,
+            inputs.w_gate_up,
+            plan,
+            rows_per_expert_capacity=rows_per_expert_capacity,
+            block_sizes=_w13_expert_major_block_sizes(args),
+            interpret=args.pallas_interpret,
+        )
+        z_expert = _constrain_destination_major(z_expert, expert_mesh)
+        h_expert = _constrain_destination_major(h_expert, expert_mesh)
+        valid = _constrain_destination_major(valid, expert_mesh)
+        route_y = source_push_semantic_w2_expert_major_assume_zero_invalid_pallas_mgpu(
+            h_expert.astype(inputs.w_down.dtype),
+            inputs.w_down,
+            block_sizes=_w2_forward_expert_major_block_sizes(args),
+            interpret=args.pallas_interpret,
+            mesh=expert_mesh,
+        )
+        return z_expert, h_expert, route_y, valid
+
+    def forward_expert_major_compare(inputs: SemanticBenchInputs):
+        expected_z_pair, expected_h_pair = source_push_semantic_w13_reference_jax(
+            inputs.x,
+            inputs.w_gate_up,
+            plan,
+        )
+        expected_z, expected_valid = source_push_semantic_pair_to_expert_major_jax(
+            expected_z_pair,
+            plan,
+            rows_per_expert_capacity=rows_per_expert_capacity,
+        )
+        expected_h, _ = source_push_semantic_pair_to_expert_major_jax(
+            expected_h_pair,
+            plan,
+            rows_per_expert_capacity=rows_per_expert_capacity,
+        )
+        expected_route_y = source_push_semantic_w2_expert_major_reference_jax(
+            expected_h.astype(inputs.w_down.dtype),
+            inputs.w_down,
+            expected_valid,
+        )
+        observed_z, observed_h, observed_route_y, observed_valid = forward_expert_major_pallas(inputs)
+        expected_route_y_from_observed_h = source_push_semantic_w2_expert_major_reference_jax(
+            observed_h.astype(inputs.w_down.dtype),
+            inputs.w_down,
+            observed_valid,
+        )
+        z_diff = observed_z.astype(jnp.float32) - expected_z.astype(jnp.float32)
+        h_diff = observed_h.astype(jnp.float32) - expected_h.astype(jnp.float32)
+        route_y_diff = observed_route_y.astype(jnp.float32) - expected_route_y.astype(jnp.float32)
+        route_y_w2_only_diff = observed_route_y.astype(jnp.float32) - expected_route_y_from_observed_h.astype(
+            jnp.float32
+        )
+        valid_diff = observed_valid.astype(jnp.int32) - expected_valid.astype(jnp.int32)
+        return {
+            "z_max_abs_diff": jnp.max(jnp.abs(z_diff)),
+            "z_mean_abs_diff": jnp.mean(jnp.abs(z_diff)),
+            "h_max_abs_diff": jnp.max(jnp.abs(h_diff)),
+            "h_mean_abs_diff": jnp.mean(jnp.abs(h_diff)),
+            "route_y_max_abs_diff": jnp.max(jnp.abs(route_y_diff)),
+            "route_y_mean_abs_diff": jnp.mean(jnp.abs(route_y_diff)),
+            "route_y_w2_only_max_abs_diff": jnp.max(jnp.abs(route_y_w2_only_diff)),
+            "route_y_w2_only_mean_abs_diff": jnp.mean(jnp.abs(route_y_w2_only_diff)),
+            "valid_error_count": jnp.sum(jnp.abs(valid_diff), dtype=jnp.int32),
+            "expected_route_y_nonfinite_error_count": _nonfinite_error_count(expected_route_y),
+            "observed_route_y_nonfinite_error_count": _nonfinite_error_count(observed_route_y),
+        }
+
+    def forward_expert_major_prepacked_pallas(inputs: SemanticForwardExpertBenchInputs):
+        z_expert, h_expert = source_push_semantic_w13_from_x_expert_pallas_mgpu(
+            inputs.x_expert,
+            inputs.w_gate_up,
+            inputs.valid,
+            block_sizes=_w13_expert_major_block_sizes(args),
+            interpret=args.pallas_interpret,
+            mesh=expert_mesh,
+        )
+        route_y = source_push_semantic_w2_expert_major_assume_zero_invalid_pallas_mgpu(
+            h_expert.astype(inputs.w_down.dtype),
+            inputs.w_down,
+            block_sizes=_w2_forward_expert_major_block_sizes(args),
+            interpret=args.pallas_interpret,
+            mesh=expert_mesh,
+        )
+        return z_expert, h_expert, route_y
+
+    def forward_expert_major_prepacked_compare(inputs: SemanticForwardExpertBenchInputs):
+        expected_z, expected_h = w13_expert_major_reference_from_prepacked(
+            SemanticW13ExpertBenchInputs(
+                w_gate_up=inputs.w_gate_up,
+                x_expert=inputs.x_expert,
+                valid=inputs.valid,
+            )
+        )
+        expected_route_y = source_push_semantic_w2_expert_major_reference_jax(
+            expected_h.astype(inputs.w_down.dtype),
+            inputs.w_down,
+            inputs.valid,
+        )
+        observed_z, observed_h, observed_route_y = forward_expert_major_prepacked_pallas(inputs)
+        expected_route_y_from_observed_h = source_push_semantic_w2_expert_major_reference_jax(
+            observed_h.astype(inputs.w_down.dtype),
+            inputs.w_down,
+            inputs.valid,
+        )
+        z_diff = observed_z.astype(jnp.float32) - expected_z.astype(jnp.float32)
+        h_diff = observed_h.astype(jnp.float32) - expected_h.astype(jnp.float32)
+        route_y_diff = observed_route_y.astype(jnp.float32) - expected_route_y.astype(jnp.float32)
+        route_y_w2_only_diff = observed_route_y.astype(jnp.float32) - expected_route_y_from_observed_h.astype(
+            jnp.float32
+        )
+        return {
+            "z_max_abs_diff": jnp.max(jnp.abs(z_diff)),
+            "z_mean_abs_diff": jnp.mean(jnp.abs(z_diff)),
+            "h_max_abs_diff": jnp.max(jnp.abs(h_diff)),
+            "h_mean_abs_diff": jnp.mean(jnp.abs(h_diff)),
+            "route_y_max_abs_diff": jnp.max(jnp.abs(route_y_diff)),
+            "route_y_mean_abs_diff": jnp.mean(jnp.abs(route_y_diff)),
+            "route_y_w2_only_max_abs_diff": jnp.max(jnp.abs(route_y_w2_only_diff)),
+            "route_y_w2_only_mean_abs_diff": jnp.mean(jnp.abs(route_y_w2_only_diff)),
+        }
+
+    def forward_return_expert_major_prepacked_pallas(inputs: SemanticW2ExpertBenchInputs):
+        return source_push_semantic_forward_return_expert_major_pallas_mgpu(
+            inputs.dy_expert,
+            plan,
+            block_sizes=_forward_return_block_sizes(args),
+            interpret=args.pallas_interpret,
+        )
+
+    def forward_return_expert_major_prepacked_compare(inputs: SemanticW2ExpertBenchInputs):
+        expected_y, expected_route_by_slot = source_push_semantic_forward_return_expert_major_reference_jax(
+            inputs.dy_expert,
+            plan,
+        )
+        observed_y, observed_route_by_slot = source_push_semantic_forward_return_expert_major_pallas_mgpu(
+            inputs.dy_expert,
+            plan,
+            block_sizes=_forward_return_block_sizes(args),
+            interpret=args.pallas_interpret,
+        )
+        y_diff = observed_y.astype(jnp.float32) - expected_y.astype(jnp.float32)
+        route_by_slot_diff = observed_route_by_slot.astype(jnp.float32) - expected_route_by_slot.astype(jnp.float32)
+        return {
+            "y_max_abs_diff": jnp.max(jnp.abs(y_diff)),
+            "y_mean_abs_diff": jnp.mean(jnp.abs(y_diff)),
+            "route_by_slot_max_abs_diff": jnp.max(jnp.abs(route_by_slot_diff)),
+            "route_by_slot_mean_abs_diff": jnp.mean(jnp.abs(route_by_slot_diff)),
+            "expected_y_nonfinite_error_count": _nonfinite_error_count(expected_y),
+            "observed_y_nonfinite_error_count": _nonfinite_error_count(observed_y),
+            "expected_route_by_slot_nonfinite_error_count": _nonfinite_error_count(expected_route_by_slot),
+            "observed_route_by_slot_nonfinite_error_count": _nonfinite_error_count(observed_route_by_slot),
+        }
+
+    def forward_return_expert_major_prepacked_sharded_pallas(inputs: SemanticW2ExpertBenchInputs):
+        route_y_expert = _constrain_destination_major(inputs.dy_expert, expert_mesh)
+        return source_push_semantic_forward_return_expert_major_pallas_mgpu(
+            route_y_expert,
+            plan,
+            block_sizes=_forward_return_block_sizes(args),
+            interpret=args.pallas_interpret,
+            mesh=expert_mesh,
+        )
+
+    def forward_return_expert_major_prepacked_sharded_compare(inputs: SemanticW2ExpertBenchInputs):
+        route_y_reference = _constrain_replicated(inputs.dy_expert, expert_mesh)
+        route_y_observed = _constrain_destination_major(inputs.dy_expert, expert_mesh)
+        expected_y, expected_route_by_slot = source_push_semantic_forward_return_expert_major_reference_jax(
+            route_y_reference,
+            plan,
+        )
+        observed_y, observed_route_by_slot = source_push_semantic_forward_return_expert_major_pallas_mgpu(
+            route_y_observed,
+            plan,
+            block_sizes=_forward_return_block_sizes(args),
+            interpret=args.pallas_interpret,
+            mesh=expert_mesh,
+        )
+        y_diff = observed_y.astype(jnp.float32) - expected_y.astype(jnp.float32)
+        route_by_slot_diff = observed_route_by_slot.astype(jnp.float32) - expected_route_by_slot.astype(jnp.float32)
+        return {
+            "y_max_abs_diff": jnp.max(jnp.abs(y_diff)),
+            "y_mean_abs_diff": jnp.mean(jnp.abs(y_diff)),
+            "route_by_slot_max_abs_diff": jnp.max(jnp.abs(route_by_slot_diff)),
+            "route_by_slot_mean_abs_diff": jnp.mean(jnp.abs(route_by_slot_diff)),
+            "expected_y_nonfinite_error_count": _nonfinite_error_count(expected_y),
+            "observed_y_nonfinite_error_count": _nonfinite_error_count(observed_y),
+            "expected_route_by_slot_nonfinite_error_count": _nonfinite_error_count(expected_route_by_slot),
+            "observed_route_by_slot_nonfinite_error_count": _nonfinite_error_count(observed_route_by_slot),
+        }
+
+    def forward_return_slot_reduce_expert_major_prepacked_sharded_pallas(inputs: SemanticW2ExpertBenchInputs):
+        route_y_expert = _constrain_destination_major(inputs.dy_expert, expert_mesh)
+        return source_push_semantic_forward_return_slot_reduce_pallas_mgpu(
+            route_y_expert,
+            plan,
+            block_sizes=_forward_return_block_sizes(args),
+            interpret=args.pallas_interpret,
+            mesh=expert_mesh,
+        )
+
+    def forward_return_slot_reduce_expert_major_prepacked_sharded_compare(inputs: SemanticW2ExpertBenchInputs):
+        route_y_reference = _constrain_replicated(inputs.dy_expert, expert_mesh)
+        route_y_observed = _constrain_destination_major(inputs.dy_expert, expert_mesh)
+        expected_y, _expected_route_by_slot = source_push_semantic_forward_return_expert_major_reference_jax(
+            route_y_reference,
+            plan,
+        )
+        observed_y = source_push_semantic_forward_return_slot_reduce_pallas_mgpu(
+            route_y_observed,
+            plan,
+            block_sizes=_forward_return_block_sizes(args),
+            interpret=args.pallas_interpret,
+            mesh=expert_mesh,
+        )
+        y_diff = observed_y.astype(jnp.float32) - expected_y.astype(jnp.float32)
+        return {
+            "y_max_abs_diff": jnp.max(jnp.abs(y_diff)),
+            "y_mean_abs_diff": jnp.mean(jnp.abs(y_diff)),
+            "expected_y_nonfinite_error_count": _nonfinite_error_count(expected_y),
+            "observed_y_nonfinite_error_count": _nonfinite_error_count(observed_y),
+        }
+
+    def forward_return_slot_reduce_expert_major_prepacked_owner_sharded_pallas(
+        inputs: SemanticW2ExpertBenchInputs,
+    ):
+        route_y_expert = _constrain_destination_major(inputs.dy_expert, expert_mesh)
+        return source_push_semantic_forward_return_slot_reduce_owner_sharded_pallas_mgpu(
+            route_y_expert,
+            plan,
+            block_sizes=_forward_return_block_sizes(args),
+            interpret=args.pallas_interpret,
+            mesh=expert_mesh,
+        )
+
+    def forward_return_slot_reduce_expert_major_prepacked_owner_sharded_compare(
+        inputs: SemanticW2ExpertBenchInputs,
+    ):
+        route_y_reference = _constrain_replicated(inputs.dy_expert, expert_mesh)
+        route_y_observed = _constrain_destination_major(inputs.dy_expert, expert_mesh)
+        expected_y, _expected_route_by_slot = source_push_semantic_forward_return_expert_major_reference_jax(
+            route_y_reference,
+            plan,
+        )
+        observed_y = source_push_semantic_forward_return_slot_reduce_owner_sharded_pallas_mgpu(
+            route_y_observed,
+            plan,
+            block_sizes=_forward_return_block_sizes(args),
+            interpret=args.pallas_interpret,
+            mesh=expert_mesh,
+        )
+        y_diff = observed_y.astype(jnp.float32) - expected_y.astype(jnp.float32)
+        return {
+            "y_max_abs_diff": jnp.max(jnp.abs(y_diff)),
+            "y_mean_abs_diff": jnp.mean(jnp.abs(y_diff)),
+            "expected_y_nonfinite_error_count": _nonfinite_error_count(expected_y),
+            "observed_y_nonfinite_error_count": _nonfinite_error_count(observed_y),
+        }
+
+    def forward_return_sum_expert_major_prepacked_pallas(inputs: SemanticW2ExpertBenchInputs):
+        return source_push_semantic_forward_return_sum_pallas_mgpu(
+            inputs.dy_expert,
+            plan,
+            block_sizes=_forward_return_block_sizes(args),
+            interpret=args.pallas_interpret,
+        )
+
+    def forward_return_sum_expert_major_prepacked_compare(inputs: SemanticW2ExpertBenchInputs):
+        expected_y, _expected_route_by_slot = source_push_semantic_forward_return_expert_major_reference_jax(
+            inputs.dy_expert,
+            plan,
+        )
+        observed_y = source_push_semantic_forward_return_sum_pallas_mgpu(
+            inputs.dy_expert,
+            plan,
+            block_sizes=_forward_return_block_sizes(args),
+            interpret=args.pallas_interpret,
+        )
+        y_diff = observed_y.astype(jnp.float32) - expected_y.astype(jnp.float32)
+        return {
+            "y_max_abs_diff": jnp.max(jnp.abs(y_diff)),
+            "y_mean_abs_diff": jnp.mean(jnp.abs(y_diff)),
+            "expected_y_nonfinite_error_count": _nonfinite_error_count(expected_y),
+            "observed_y_nonfinite_error_count": _nonfinite_error_count(observed_y),
+        }
+
+    def forward_return_sum_expert_major_prepacked_sharded_pallas(inputs: SemanticW2ExpertBenchInputs):
+        route_y_expert = _constrain_destination_major(inputs.dy_expert, expert_mesh)
+        return source_push_semantic_forward_return_sum_pallas_mgpu(
+            route_y_expert,
+            plan,
+            block_sizes=_forward_return_block_sizes(args),
+            interpret=args.pallas_interpret,
+            mesh=expert_mesh,
+        )
+
+    def forward_return_sum_expert_major_prepacked_sharded_compare(inputs: SemanticW2ExpertBenchInputs):
+        route_y_reference = _constrain_replicated(inputs.dy_expert, expert_mesh)
+        route_y_observed = _constrain_destination_major(inputs.dy_expert, expert_mesh)
+        expected_y, _expected_route_by_slot = source_push_semantic_forward_return_expert_major_reference_jax(
+            route_y_reference,
+            plan,
+        )
+        observed_y = source_push_semantic_forward_return_sum_pallas_mgpu(
+            route_y_observed,
+            plan,
+            block_sizes=_forward_return_block_sizes(args),
+            interpret=args.pallas_interpret,
+            mesh=expert_mesh,
+        )
+        y_diff = observed_y.astype(jnp.float32) - expected_y.astype(jnp.float32)
+        return {
+            "y_max_abs_diff": jnp.max(jnp.abs(y_diff)),
+            "y_mean_abs_diff": jnp.mean(jnp.abs(y_diff)),
+            "expected_y_nonfinite_error_count": _nonfinite_error_count(expected_y),
+            "observed_y_nonfinite_error_count": _nonfinite_error_count(observed_y),
+        }
+
+    def forward_return_sum_expert_major_prepacked_owner_sharded_pallas(inputs: SemanticW2ExpertBenchInputs):
+        route_y_expert = _constrain_destination_major(inputs.dy_expert, expert_mesh)
+        return source_push_semantic_forward_return_sum_owner_sharded_pallas_mgpu(
+            route_y_expert,
+            plan,
+            block_sizes=_forward_return_block_sizes(args),
+            interpret=args.pallas_interpret,
+            mesh=expert_mesh,
+        )
+
+    def forward_return_sum_expert_major_prepacked_owner_sharded_compare(inputs: SemanticW2ExpertBenchInputs):
+        route_y_reference = _constrain_replicated(inputs.dy_expert, expert_mesh)
+        route_y_observed = _constrain_destination_major(inputs.dy_expert, expert_mesh)
+        expected_y, _expected_route_by_slot = source_push_semantic_forward_return_expert_major_reference_jax(
+            route_y_reference,
+            plan,
+        )
+        observed_y = source_push_semantic_forward_return_sum_owner_sharded_pallas_mgpu(
+            route_y_observed,
+            plan,
+            block_sizes=_forward_return_block_sizes(args),
+            interpret=args.pallas_interpret,
+            mesh=expert_mesh,
+        )
+        y_diff = observed_y.astype(jnp.float32) - expected_y.astype(jnp.float32)
+        return {
+            "y_max_abs_diff": jnp.max(jnp.abs(y_diff)),
+            "y_mean_abs_diff": jnp.mean(jnp.abs(y_diff)),
+            "expected_y_nonfinite_error_count": _nonfinite_error_count(expected_y),
+            "observed_y_nonfinite_error_count": _nonfinite_error_count(observed_y),
+        }
+
+    def forward_return_sum_lookup_expert_major_prepacked_owner_sharded_pallas(
+        inputs: SemanticW2ExpertBenchInputs,
+    ):
+        route_y_expert = _constrain_destination_major(inputs.dy_expert, expert_mesh)
+        return source_push_semantic_forward_return_sum_lookup_owner_sharded_pallas_mgpu(
+            route_y_expert,
+            plan,
+            block_sizes=_forward_return_block_sizes(args),
+            interpret=args.pallas_interpret,
+            mesh=expert_mesh,
+        )
+
+    def forward_return_sum_lookup_expert_major_prepacked_owner_sharded_compare(
+        inputs: SemanticW2ExpertBenchInputs,
+    ):
+        route_y_reference = _constrain_replicated(inputs.dy_expert, expert_mesh)
+        route_y_observed = _constrain_destination_major(inputs.dy_expert, expert_mesh)
+        expected_y, _expected_route_by_slot = source_push_semantic_forward_return_expert_major_reference_jax(
+            route_y_reference,
+            plan,
+        )
+        observed_y = source_push_semantic_forward_return_sum_lookup_owner_sharded_pallas_mgpu(
+            route_y_observed,
+            plan,
+            block_sizes=_forward_return_block_sizes(args),
+            interpret=args.pallas_interpret,
+            mesh=expert_mesh,
+        )
+        y_diff = observed_y.astype(jnp.float32) - expected_y.astype(jnp.float32)
+        return {
+            "y_max_abs_diff": jnp.max(jnp.abs(y_diff)),
+            "y_mean_abs_diff": jnp.mean(jnp.abs(y_diff)),
+            "expected_y_nonfinite_error_count": _nonfinite_error_count(expected_y),
+            "observed_y_nonfinite_error_count": _nonfinite_error_count(observed_y),
+        }
+
+    def forward_return_reverse_route_source_gather_expert_major_prepacked_pallas(
+        inputs: SemanticW2ExpertBenchInputs,
+    ):
+        return source_push_semantic_forward_return_source_gather_pallas_mgpu(
+            inputs.dy_expert,
+            plan,
+            block_sizes=_forward_return_block_sizes(args),
+            interpret=args.pallas_interpret,
+            mesh=expert_mesh,
+        )
+
+    def forward_return_reverse_route_source_gather_expert_major_prepacked_compare(
+        inputs: SemanticW2ExpertBenchInputs,
+    ):
+        expected_y = source_push_semantic_forward_return_source_gather_reference_jax(
+            inputs.dy_expert,
+            plan,
+        )
+        observed_y = source_push_semantic_forward_return_source_gather_pallas_mgpu(
+            inputs.dy_expert,
+            plan,
+            block_sizes=_forward_return_block_sizes(args),
+            interpret=args.pallas_interpret,
+            mesh=expert_mesh,
+        )
+        y_diff = observed_y.astype(jnp.float32) - expected_y.astype(jnp.float32)
+        return {
+            "y_max_abs_diff": jnp.max(jnp.abs(y_diff)),
+            "y_mean_abs_diff": jnp.mean(jnp.abs(y_diff)),
+            "expected_y_nonfinite_error_count": _nonfinite_error_count(expected_y),
+            "observed_y_nonfinite_error_count": _nonfinite_error_count(observed_y),
+        }
+
+    def forward_return_remote_source_gather_expert_major_prepacked_pallas(
+        inputs: SemanticW2ExpertBenchInputs,
+    ):
+        route_y_expert = _constrain_destination_major(inputs.dy_expert, expert_mesh)
+        return source_push_semantic_forward_return_remote_source_gather_pallas_mgpu(
+            route_y_expert,
+            plan,
+            block_sizes=_forward_return_block_sizes(args),
+            interpret=args.pallas_interpret,
+            mesh=expert_mesh,
+        )
+
+    def forward_return_remote_source_gather_expert_major_prepacked_compare(
+        inputs: SemanticW2ExpertBenchInputs,
+    ):
+        route_y_reference = _constrain_replicated(inputs.dy_expert, expert_mesh)
+        route_y_observed = _constrain_destination_major(inputs.dy_expert, expert_mesh)
+        expected_y = source_push_semantic_forward_return_source_gather_reference_jax(
+            route_y_reference,
+            plan,
+        )
+        observed_y = source_push_semantic_forward_return_remote_source_gather_pallas_mgpu(
+            route_y_observed,
+            plan,
+            block_sizes=_forward_return_block_sizes(args),
+            interpret=args.pallas_interpret,
+            mesh=expert_mesh,
+        )
+        y_diff = observed_y.astype(jnp.float32) - expected_y.astype(jnp.float32)
+        return {
+            "y_max_abs_diff": jnp.max(jnp.abs(y_diff)),
+            "y_mean_abs_diff": jnp.mean(jnp.abs(y_diff)),
+            "expected_y_nonfinite_error_count": _nonfinite_error_count(expected_y),
+            "observed_y_nonfinite_error_count": _nonfinite_error_count(observed_y),
+        }
+
+    def forward_return_copy_only_expert_major_prepacked_pallas(inputs: SemanticW2ExpertBenchInputs):
+        route_y_expert = _constrain_destination_major(inputs.dy_expert, expert_mesh)
+        return source_push_semantic_forward_return_copy_only_pallas_mgpu(
+            route_y_expert,
+            plan,
+            block_sizes=_forward_return_block_sizes(args),
+            interpret=args.pallas_interpret,
+            mesh=expert_mesh,
+        )
+
+    def forward_return_copy_only_expert_major_prepacked_compare(inputs: SemanticW2ExpertBenchInputs):
+        route_y_expert = _constrain_destination_major(inputs.dy_expert, expert_mesh)
+        route_weights_expert, valid = source_push_semantic_route_weights_expert_major_jax(
+            plan,
+            rows_per_expert_capacity=inputs.dy_expert.shape[2],
+        )
+        route_weights_expert = _constrain_destination_major(route_weights_expert, expert_mesh)
+        valid = _constrain_destination_major(valid, expert_mesh)
+        expected = route_y_expert.astype(jnp.float32) * route_weights_expert.astype(jnp.float32)[..., None]
+        expected = jnp.where(valid[..., None], expected, jnp.zeros((), dtype=expected.dtype))
+        observed = source_push_semantic_forward_return_copy_only_pallas_mgpu(
+            route_y_expert,
+            plan,
+            block_sizes=_forward_return_block_sizes(args),
+            interpret=args.pallas_interpret,
+            mesh=expert_mesh,
+        )
+        diff = observed.astype(jnp.float32) - expected.astype(jnp.float32)
+        return {
+            "weighted_route_max_abs_diff": jnp.max(jnp.abs(diff)),
+            "weighted_route_mean_abs_diff": jnp.mean(jnp.abs(diff)),
+            "expected_weighted_route_nonfinite_error_count": _nonfinite_error_count(expected),
+            "observed_weighted_route_nonfinite_error_count": _nonfinite_error_count(observed),
+        }
+
+    def forward_return_direct_to_source_pallas(inputs: SemanticW2ExpertBenchInputs):
+        return source_push_semantic_forward_return_direct_to_source_pallas_mgpu(
+            inputs.h_expert,
+            inputs.w_down,
+            inputs.valid,
+            plan,
+            w2_block_sizes=_w2_forward_expert_major_block_sizes(args),
+            return_block_sizes=_forward_return_block_sizes(args),
+            route_buffer_dtype=jnp.bfloat16,
+            interpret=args.pallas_interpret,
+            mesh=expert_mesh,
+        )
+
+    def forward_return_direct_to_source_compare(inputs: SemanticW2ExpertBenchInputs):
+        observed_return_y = forward_return_direct_to_source_pallas(inputs)
+        observed_y = source_push_semantic_forward_combine_source_gather_pallas_mgpu(
+            observed_return_y,
+            plan,
+            block_sizes=_forward_return_block_sizes(args),
+            output_dtype=jnp.float32,
+            interpret=args.pallas_interpret,
+            mesh=expert_mesh,
+        )
+        h_reference = _constrain_replicated(inputs.h_expert, expert_mesh)
+        w_reference = _constrain_replicated(inputs.w_down, expert_mesh)
+        valid_reference = _constrain_replicated(inputs.valid, expert_mesh)
+        route_y_reference = source_push_semantic_w2_expert_major_reference_jax(
+            h_reference,
+            w_reference,
+            valid_reference,
+        )
+        expected_y, _expected_route_by_slot = source_push_semantic_forward_return_expert_major_reference_jax(
+            route_y_reference,
+            plan,
+        )
+        y_diff = observed_y.astype(jnp.float32) - expected_y.astype(jnp.float32)
+        return {
+            "y_max_abs_diff": jnp.max(jnp.abs(y_diff)),
+            "y_mean_abs_diff": jnp.mean(jnp.abs(y_diff)),
+            "expected_y_nonfinite_error_count": _nonfinite_error_count(expected_y),
+            "observed_y_nonfinite_error_count": _nonfinite_error_count(observed_y),
+        }
+
+    def forward_combine_source_gather_pallas(inputs: SemanticReturnQueueBenchInputs):
+        return source_push_semantic_forward_combine_source_gather_pallas_mgpu(
+            inputs.return_y,
+            plan,
+            block_sizes=_forward_return_block_sizes(args),
+            output_dtype=jnp.bfloat16,
+            interpret=args.pallas_interpret,
+            mesh=expert_mesh,
+        )
+
+    def forward_combine_source_gather_compare(inputs: SemanticReturnQueueBenchInputs):
+        metadata = source_push_semantic_forward_return_queue_metadata_jax(
+            plan,
+            rows_per_expert_capacity=1,
+            return_row_block=_forward_return_block_sizes(args).row_block,
+        )
+        expected_y = source_push_semantic_forward_combine_source_gather_reference_jax(
+            _constrain_replicated(inputs.return_y, expert_mesh),
+            metadata,
+            output_dtype=jnp.float32,
+        )
+        observed_y = source_push_semantic_forward_combine_source_gather_pallas_mgpu(
+            inputs.return_y,
+            plan,
+            block_sizes=_forward_return_block_sizes(args),
+            output_dtype=jnp.float32,
+            interpret=args.pallas_interpret,
+            mesh=expert_mesh,
+        )
+        y_diff = observed_y.astype(jnp.float32) - expected_y.astype(jnp.float32)
+        return {
+            "y_max_abs_diff": jnp.max(jnp.abs(y_diff)),
+            "y_mean_abs_diff": jnp.mean(jnp.abs(y_diff)),
+            "expected_y_nonfinite_error_count": _nonfinite_error_count(expected_y),
+            "observed_y_nonfinite_error_count": _nonfinite_error_count(observed_y),
+        }
+
+    def forward_expert_major_direct_return_combine_pallas(inputs: SemanticW2ExpertBenchInputs):
+        return source_push_semantic_forward_expert_major_direct_return_combine_pallas_mgpu(
+            inputs.h_expert,
+            inputs.w_down,
+            inputs.valid,
+            plan,
+            w2_block_sizes=_w2_forward_expert_major_block_sizes(args),
+            return_block_sizes=_forward_return_block_sizes(args),
+            route_buffer_dtype=jnp.bfloat16,
+            output_dtype=jnp.bfloat16,
+            interpret=args.pallas_interpret,
+            mesh=expert_mesh,
+        )
+
+    def forward_expert_major_direct_return_combine_compare(inputs: SemanticW2ExpertBenchInputs):
+        observed_y = source_push_semantic_forward_expert_major_direct_return_combine_pallas_mgpu(
+            inputs.h_expert,
+            inputs.w_down,
+            inputs.valid,
+            plan,
+            w2_block_sizes=_w2_forward_expert_major_block_sizes(args),
+            return_block_sizes=_forward_return_block_sizes(args),
+            route_buffer_dtype=jnp.bfloat16,
+            output_dtype=jnp.float32,
+            interpret=args.pallas_interpret,
+            mesh=expert_mesh,
+        )
+        h_reference = _constrain_replicated(inputs.h_expert, expert_mesh)
+        w_reference = _constrain_replicated(inputs.w_down, expert_mesh)
+        valid_reference = _constrain_replicated(inputs.valid, expert_mesh)
+        route_y_reference = source_push_semantic_w2_expert_major_reference_jax(
+            h_reference,
+            w_reference,
+            valid_reference,
+        )
+        expected_y, _expected_route_by_slot = source_push_semantic_forward_return_expert_major_reference_jax(
+            route_y_reference,
+            plan,
+        )
+        y_diff = observed_y.astype(jnp.float32) - expected_y.astype(jnp.float32)
+        return {
+            "y_max_abs_diff": jnp.max(jnp.abs(y_diff)),
+            "y_mean_abs_diff": jnp.mean(jnp.abs(y_diff)),
+            "expected_y_nonfinite_error_count": _nonfinite_error_count(expected_y),
+            "observed_y_nonfinite_error_count": _nonfinite_error_count(observed_y),
+        }
+
+    def forward_expert_major_return_sum_pallas(inputs: SemanticBenchInputs):
+        z_expert, h_expert, route_y_expert, valid = forward_expert_major_pallas(inputs)
+        y = source_push_semantic_forward_return_sum_pallas_mgpu(
+            route_y_expert,
+            plan,
+            block_sizes=_forward_return_block_sizes(args),
+            interpret=args.pallas_interpret,
+            mesh=expert_mesh,
+        )
+        return y, z_expert, h_expert, route_y_expert, valid
+
+    def forward_expert_major_return_sum_compare(inputs: SemanticBenchInputs):
+        expected_y, expected_z_pair, expected_h_pair, expected_route_y_pair = (
+            source_push_semantic_forward_reference_jax(
+                inputs.x,
+                inputs.w_gate_up,
+                inputs.w_down,
+                plan,
+            )
+        )
+        expected_z, expected_valid = source_push_semantic_pair_to_expert_major_jax(
+            expected_z_pair,
+            plan,
+            rows_per_expert_capacity=rows_per_expert_capacity,
+        )
+        expected_h, _ = source_push_semantic_pair_to_expert_major_jax(
+            expected_h_pair,
+            plan,
+            rows_per_expert_capacity=rows_per_expert_capacity,
+        )
+        expected_route_y, _ = source_push_semantic_pair_to_expert_major_jax(
+            expected_route_y_pair,
+            plan,
+            rows_per_expert_capacity=rows_per_expert_capacity,
+        )
+        observed_y, observed_z, observed_h, observed_route_y, observed_valid = forward_expert_major_return_sum_pallas(
+            inputs
+        )
+        expected_route_y_from_observed_h = source_push_semantic_w2_expert_major_reference_jax(
+            observed_h.astype(inputs.w_down.dtype),
+            inputs.w_down,
+            observed_valid,
+        )
+        expected_y_from_observed_h = source_push_semantic_forward_return_sum_pallas_mgpu(
+            expected_route_y_from_observed_h,
+            plan,
+            block_sizes=_forward_return_block_sizes(args),
+            interpret=args.pallas_interpret,
+            mesh=expert_mesh,
+        )
+        z_diff = observed_z.astype(jnp.float32) - expected_z.astype(jnp.float32)
+        h_diff = observed_h.astype(jnp.float32) - expected_h.astype(jnp.float32)
+        route_y_diff = observed_route_y.astype(jnp.float32) - expected_route_y.astype(jnp.float32)
+        route_y_w2_only_diff = observed_route_y.astype(jnp.float32) - expected_route_y_from_observed_h.astype(
+            jnp.float32
+        )
+        y_diff = observed_y.astype(jnp.float32) - expected_y.astype(jnp.float32)
+        y_w2_return_only_diff = observed_y.astype(jnp.float32) - expected_y_from_observed_h.astype(jnp.float32)
+        valid_diff = observed_valid.astype(jnp.int32) - expected_valid.astype(jnp.int32)
+        return {
+            "z_max_abs_diff": jnp.max(jnp.abs(z_diff)),
+            "z_mean_abs_diff": jnp.mean(jnp.abs(z_diff)),
+            "h_max_abs_diff": jnp.max(jnp.abs(h_diff)),
+            "h_mean_abs_diff": jnp.mean(jnp.abs(h_diff)),
+            "route_y_max_abs_diff": jnp.max(jnp.abs(route_y_diff)),
+            "route_y_mean_abs_diff": jnp.mean(jnp.abs(route_y_diff)),
+            "route_y_w2_only_max_abs_diff": jnp.max(jnp.abs(route_y_w2_only_diff)),
+            "route_y_w2_only_mean_abs_diff": jnp.mean(jnp.abs(route_y_w2_only_diff)),
+            "y_max_abs_diff": jnp.max(jnp.abs(y_diff)),
+            "y_mean_abs_diff": jnp.mean(jnp.abs(y_diff)),
+            "y_w2_return_only_max_abs_diff": jnp.max(jnp.abs(y_w2_return_only_diff)),
+            "y_w2_return_only_mean_abs_diff": jnp.mean(jnp.abs(y_w2_return_only_diff)),
+            "valid_error_count": jnp.sum(jnp.abs(valid_diff), dtype=jnp.int32),
+            "expected_route_y_nonfinite_error_count": _nonfinite_error_count(expected_route_y),
+            "observed_route_y_nonfinite_error_count": _nonfinite_error_count(observed_route_y),
+            "expected_y_nonfinite_error_count": _nonfinite_error_count(expected_y),
+            "observed_y_nonfinite_error_count": _nonfinite_error_count(observed_y),
+        }
+
+    def forward_expert_major_direct_pack_direct_return_combine_components(
+        inputs: SemanticBenchInputs,
+        *,
+        output_dtype: jnp.dtype,
+    ):
+        _aligned_rows, source_row_bases = source_push_semantic_source_aligned_expert_offsets_jax(
+            plan,
+            row_alignment=DIRECT_QUEUE_SOURCE_ROW_ALIGNMENT,
+        )
+        x_expert, valid = source_push_semantic_x_to_expert_major_direct_pallas_mgpu(
+            inputs.x,
+            plan,
+            rows_per_expert_capacity=direct_queue_rows_per_expert_capacity,
+            source_row_base_by_expert=source_row_bases,
+            block_sizes=_gather_block_sizes(args),
+            interpret=args.pallas_interpret,
+        )
+        packed_inputs = SemanticForwardExpertBenchInputs(
+            w_gate_up=inputs.w_gate_up,
+            w_down=inputs.w_down,
+            x_expert=x_expert,
+            valid=valid,
+        )
+        if expert_mesh is not None:
+            packed_inputs = _shard_forward_expert_inputs(packed_inputs, expert_mesh)
+        z_expert, h_expert = source_push_semantic_w13_from_x_expert_pallas_mgpu(
+            packed_inputs.x_expert,
+            packed_inputs.w_gate_up,
+            packed_inputs.valid,
+            block_sizes=_w13_expert_major_block_sizes(args),
+            interpret=args.pallas_interpret,
+            mesh=expert_mesh,
+        )
+        return_y = source_push_semantic_forward_return_direct_to_source_pallas_mgpu(
+            h_expert.astype(packed_inputs.w_down.dtype),
+            packed_inputs.w_down,
+            packed_inputs.valid,
+            plan,
+            w2_block_sizes=_w2_forward_expert_major_block_sizes(args),
+            return_block_sizes=_forward_return_block_sizes(args),
+            route_buffer_dtype=jnp.bfloat16,
+            source_row_base_by_expert=source_row_bases,
+            interpret=args.pallas_interpret,
+            mesh=expert_mesh,
+        )
+        y = source_push_semantic_forward_combine_source_gather_pallas_mgpu(
+            return_y,
+            plan,
+            block_sizes=_forward_return_block_sizes(args),
+            output_dtype=output_dtype,
+            interpret=args.pallas_interpret,
+            mesh=expert_mesh,
+        )
+        return y, return_y, z_expert, h_expert, packed_inputs
+
+    def forward_expert_major_direct_pack_direct_return_combine_pallas(inputs: SemanticBenchInputs):
+        y, _return_y, _z_expert, _h_expert, _packed_inputs = (
+            forward_expert_major_direct_pack_direct_return_combine_components(
+                inputs,
+                output_dtype=inputs.x.dtype,
+            )
+        )
+        return y
+
+    def forward_expert_major_direct_pack_direct_return_combine_compare(inputs: SemanticBenchInputs):
+        observed_y, observed_return_y, _observed_z, observed_h, packed_inputs = (
+            forward_expert_major_direct_pack_direct_return_combine_components(
+                inputs,
+                output_dtype=jnp.float32,
+            )
+        )
+        _aligned_rows, source_row_bases = source_push_semantic_source_aligned_expert_offsets_jax(
+            plan,
+            row_alignment=DIRECT_QUEUE_SOURCE_ROW_ALIGNMENT,
+        )
+        queue_metadata = source_push_semantic_forward_return_queue_metadata_jax(
+            plan,
+            rows_per_expert_capacity=observed_h.shape[2],
+            return_row_block=_forward_return_block_sizes(args).row_block,
+            source_row_base_by_expert=source_row_bases,
+        )
+        return _direct_return_combine_sample_metrics(
+            observed_y,
+            observed_return_y,
+            observed_h,
+            packed_inputs.w_down,
+            source_row_bases,
+            queue_metadata,
+        )
+
+    def forward_expert_major_direct_pack_y_prefix(
+        inputs: SemanticBenchInputs,
+        *,
+        use_remote_source_gather_y_return: bool,
+    ):
+        x_expert, valid = source_push_semantic_x_to_expert_major_direct_pallas_mgpu(
+            inputs.x,
+            plan,
+            rows_per_expert_capacity=rows_per_expert_capacity,
+            block_sizes=_gather_block_sizes(args),
+            interpret=args.pallas_interpret,
+        )
+        packed_inputs = SemanticForwardExpertBenchInputs(
+            w_gate_up=inputs.w_gate_up,
+            w_down=inputs.w_down,
+            x_expert=x_expert,
+            valid=valid,
+        )
+        if expert_mesh is not None:
+            packed_inputs = _shard_forward_expert_inputs(packed_inputs, expert_mesh)
+        z_expert, h_expert = source_push_semantic_w13_from_x_expert_pallas_mgpu(
+            packed_inputs.x_expert,
+            packed_inputs.w_gate_up,
+            packed_inputs.valid,
+            block_sizes=_w13_expert_major_block_sizes(args),
+            interpret=args.pallas_interpret,
+            mesh=expert_mesh,
+        )
+        route_y_expert = source_push_semantic_w2_expert_major_assume_zero_invalid_pallas_mgpu(
+            h_expert.astype(packed_inputs.w_down.dtype),
+            packed_inputs.w_down,
+            block_sizes=_w2_forward_expert_major_block_sizes(args),
+            interpret=args.pallas_interpret,
+            mesh=expert_mesh,
+        )
+        if use_remote_source_gather_y_return:
+            y = source_push_semantic_forward_return_remote_source_gather_pallas_mgpu(
+                route_y_expert,
+                plan,
+                block_sizes=_forward_return_block_sizes(args),
+                interpret=args.pallas_interpret,
+                mesh=expert_mesh,
+            )
+        else:
+            y = source_push_semantic_forward_return_sum_owner_sharded_pallas_mgpu(
+                route_y_expert,
+                plan,
+                block_sizes=_forward_return_block_sizes(args),
+                interpret=args.pallas_interpret,
+                mesh=expert_mesh,
+            )
+        return y, route_y_expert, z_expert, h_expert, packed_inputs
+
+    def forward_expert_major_direct_pack_y_stop(
+        inputs: SemanticBenchInputs,
+        *,
+        use_remote_source_gather_y_return: bool,
+    ):
+        y, route_y_expert, _z_expert, _h_expert, _packed_inputs = forward_expert_major_direct_pack_y_prefix(
+            inputs,
+            use_remote_source_gather_y_return=use_remote_source_gather_y_return,
+        )
+        return y, route_y_expert
+
+    def forward_expert_major_direct_pack_owner_sharded_y_stop_pallas(inputs: SemanticBenchInputs):
+        return forward_expert_major_direct_pack_y_stop(inputs, use_remote_source_gather_y_return=False)
+
+    def forward_expert_major_direct_pack_remote_y_stop_pallas(inputs: SemanticBenchInputs):
+        return forward_expert_major_direct_pack_y_stop(inputs, use_remote_source_gather_y_return=True)
+
+    def forward_source_expand_direct_pack_y_pallas(
+        inputs: SemanticBenchInputs,
+        *,
+        use_remote_source_gather_y_return: bool,
+    ):
+        y, route_y_expert, _z_expert, _h_expert, _packed_inputs = forward_expert_major_direct_pack_y_prefix(
+            inputs,
+            use_remote_source_gather_y_return=use_remote_source_gather_y_return,
+        )
+        dy_route_expert, dcombine = source_push_semantic_backward_source_expand_from_expert_major_pallas_mgpu(
+            inputs.dy,
+            route_y_expert,
+            plan,
+            block_sizes=_backward_block_sizes(args),
+            interpret=args.pallas_interpret,
+            mesh=expert_mesh,
+        )
+        return y, dy_route_expert, dcombine, route_y_expert
+
+    def forward_source_expand_direct_pack_owner_sharded_y_pallas(inputs: SemanticBenchInputs):
+        return forward_source_expand_direct_pack_y_pallas(inputs, use_remote_source_gather_y_return=False)
+
+    def forward_source_expand_direct_pack_remote_y_pallas(inputs: SemanticBenchInputs):
+        return forward_source_expand_direct_pack_y_pallas(inputs, use_remote_source_gather_y_return=True)
+
+    def forward_w2_backward_direct_pack_y_pallas(
+        inputs: SemanticBenchInputs,
+        *,
+        use_remote_source_gather_y_return: bool,
+    ):
+        y, route_y_expert, _z_expert, h_expert, packed_inputs = forward_expert_major_direct_pack_y_prefix(
+            inputs,
+            use_remote_source_gather_y_return=use_remote_source_gather_y_return,
+        )
+        dy_route_expert, dcombine = source_push_semantic_backward_source_expand_from_expert_major_pallas_mgpu(
+            inputs.dy,
+            route_y_expert,
+            plan,
+            block_sizes=_backward_block_sizes(args),
+            interpret=args.pallas_interpret,
+            mesh=expert_mesh,
+        )
+        dh_expert, dw2 = w2_expert_major_prepacked_backward(
+            SemanticW2ExpertBenchInputs(
+                w_down=packed_inputs.w_down,
+                h_expert=h_expert.astype(packed_inputs.w_down.dtype),
+                dy_expert=dy_route_expert.astype(packed_inputs.w_down.dtype),
+                valid=packed_inputs.valid,
+            ),
+            implementation=SOURCE_PUSH_W2_MATMUL_BACKWARD_IMPLEMENTATION_PALLAS_MGPU,
+        )
+        return y, dcombine, route_y_expert, dy_route_expert, dh_expert, dw2
+
+    def forward_w2_backward_direct_pack_owner_sharded_y_pallas(inputs: SemanticBenchInputs):
+        return forward_w2_backward_direct_pack_y_pallas(inputs, use_remote_source_gather_y_return=False)
+
+    def forward_w2_backward_direct_pack_remote_y_pallas(inputs: SemanticBenchInputs):
+        return forward_w2_backward_direct_pack_y_pallas(inputs, use_remote_source_gather_y_return=True)
+
+    def forward_w13_backward_prepare_direct_pack_y_pallas(
+        inputs: SemanticBenchInputs,
+        *,
+        use_remote_source_gather_y_return: bool,
+    ):
+        y, route_y_expert, z_expert, h_expert, packed_inputs = forward_expert_major_direct_pack_y_prefix(
+            inputs,
+            use_remote_source_gather_y_return=use_remote_source_gather_y_return,
+        )
+        dy_route_expert, dcombine = source_push_semantic_backward_source_expand_from_expert_major_pallas_mgpu(
+            inputs.dy,
+            route_y_expert,
+            plan,
+            block_sizes=_backward_block_sizes(args),
+            interpret=args.pallas_interpret,
+            mesh=expert_mesh,
+        )
+        dh_expert, dw2 = w2_expert_major_prepacked_backward(
+            SemanticW2ExpertBenchInputs(
+                w_down=packed_inputs.w_down,
+                h_expert=h_expert.astype(packed_inputs.w_down.dtype),
+                dy_expert=dy_route_expert.astype(packed_inputs.w_down.dtype),
+                valid=packed_inputs.valid,
+            ),
+            implementation=SOURCE_PUSH_W2_MATMUL_BACKWARD_IMPLEMENTATION_PALLAS_MGPU,
+        )
+        dz13 = source_push_semantic_swiglu_backward_expert_major_jax(
+            dh_expert,
+            z_expert,
+            packed_inputs.valid,
+        )
+        w13_backward_inputs = _constrain_w13_backward_expert_major_inputs(
+            SemanticW13BackwardExpertBenchInputs(
+                x_expert=packed_inputs.x_expert.astype(packed_inputs.w_gate_up.dtype),
+                dz13=dz13.astype(packed_inputs.w_gate_up.dtype),
+                w_gate_up=packed_inputs.w_gate_up,
+                valid=packed_inputs.valid,
+            ),
+            expert_mesh,
+        )
+        return y, dcombine, route_y_expert, dy_route_expert, dh_expert, dw2, dz13, w13_backward_inputs
+
+    def barrier_w13_backward_inputs(
+        inputs: SemanticW13BackwardExpertBenchInputs,
+    ) -> SemanticW13BackwardExpertBenchInputs:
+        return SemanticW13BackwardExpertBenchInputs(
+            x_expert=jax.lax.optimization_barrier(inputs.x_expert),
+            dz13=jax.lax.optimization_barrier(inputs.dz13),
+            w_gate_up=jax.lax.optimization_barrier(inputs.w_gate_up),
+            valid=jax.lax.optimization_barrier(inputs.valid),
+        )
+
+    def forward_w13_backward_direct_pack_y_pallas(
+        inputs: SemanticBenchInputs,
+        *,
+        use_remote_source_gather_y_return: bool,
+        barrier_w13_inputs: bool = False,
+    ):
+        (
+            y,
+            dcombine,
+            route_y_expert,
+            dy_route_expert,
+            dh_expert,
+            dw2,
+            dz13,
+            w13_backward_inputs,
+        ) = forward_w13_backward_prepare_direct_pack_y_pallas(
+            inputs,
+            use_remote_source_gather_y_return=use_remote_source_gather_y_return,
+        )
+        if barrier_w13_inputs:
+            w13_backward_inputs = barrier_w13_backward_inputs(w13_backward_inputs)
+        dx_route, dw13 = source_push_semantic_w13_backward_expert_major_pallas_mgpu(
+            w13_backward_inputs.x_expert,
+            w13_backward_inputs.dz13,
+            w13_backward_inputs.w_gate_up,
+            w13_backward_inputs.valid,
+            block_sizes=_w13_backward_block_sizes(args),
+            interpret=args.pallas_interpret,
+            lowering_semantics=_lowering_semantics(args.w13_backward_lowering),
+            mesh=expert_mesh,
+        )
+        return y, dcombine, route_y_expert, dy_route_expert, dh_expert, dz13, dx_route, dw2, dw13
+
+    def forward_w13_backward_direct_pack_owner_sharded_y_pallas(inputs: SemanticBenchInputs):
+        return forward_w13_backward_direct_pack_y_pallas(inputs, use_remote_source_gather_y_return=False)
+
+    def forward_w13_backward_direct_pack_remote_y_pallas(inputs: SemanticBenchInputs):
+        return forward_w13_backward_direct_pack_y_pallas(inputs, use_remote_source_gather_y_return=True)
+
+    def forward_w13_backward_digest_direct_pack_y_pallas(
+        inputs: SemanticBenchInputs,
+        *,
+        use_remote_source_gather_y_return: bool,
+        barrier_w13_inputs: bool = False,
+    ):
+        outputs = forward_w13_backward_direct_pack_y_pallas(
+            inputs,
+            use_remote_source_gather_y_return=use_remote_source_gather_y_return,
+            barrier_w13_inputs=barrier_w13_inputs,
+        )
+        return {"sample_digest": _sample_digest(outputs)}
+
+    def forward_w13_backward_digest_direct_pack_owner_sharded_y_pallas(inputs: SemanticBenchInputs):
+        return forward_w13_backward_digest_direct_pack_y_pallas(inputs, use_remote_source_gather_y_return=False)
+
+    def forward_w13_backward_digest_direct_pack_remote_y_pallas(inputs: SemanticBenchInputs):
+        return forward_w13_backward_digest_direct_pack_y_pallas(inputs, use_remote_source_gather_y_return=True)
+
+    def forward_w13_backward_barrier_digest_direct_pack_owner_sharded_y_pallas(inputs: SemanticBenchInputs):
+        return forward_w13_backward_digest_direct_pack_y_pallas(
+            inputs,
+            use_remote_source_gather_y_return=False,
+            barrier_w13_inputs=True,
+        )
+
+    def forward_w13_backward_barrier_digest_direct_pack_remote_y_pallas(inputs: SemanticBenchInputs):
+        return forward_w13_backward_digest_direct_pack_y_pallas(
+            inputs,
+            use_remote_source_gather_y_return=True,
+            barrier_w13_inputs=True,
+        )
+
+    def forward_swiglu_backward_digest_direct_pack_y_pallas(
+        inputs: SemanticBenchInputs,
+        *,
+        use_remote_source_gather_y_return: bool,
+    ):
+        y, dcombine, route_y_expert, dy_route_expert, dh_expert, dw2, dz13, _w13_inputs = (
+            forward_w13_backward_prepare_direct_pack_y_pallas(
+                inputs,
+                use_remote_source_gather_y_return=use_remote_source_gather_y_return,
+            )
+        )
+        return {"sample_digest": _sample_digest((y, dcombine, route_y_expert, dy_route_expert, dh_expert, dw2, dz13))}
+
+    def forward_swiglu_backward_digest_direct_pack_owner_sharded_y_pallas(inputs: SemanticBenchInputs):
+        return forward_swiglu_backward_digest_direct_pack_y_pallas(inputs, use_remote_source_gather_y_return=False)
+
+    def forward_swiglu_backward_digest_direct_pack_remote_y_pallas(inputs: SemanticBenchInputs):
+        return forward_swiglu_backward_digest_direct_pack_y_pallas(inputs, use_remote_source_gather_y_return=True)
+
+    def forward_w13_dx_backward_digest_direct_pack_y_pallas(
+        inputs: SemanticBenchInputs,
+        *,
+        use_remote_source_gather_y_return: bool,
+    ):
+        y, dcombine, route_y_expert, dy_route_expert, dh_expert, dw2, dz13, w13_backward_inputs = (
+            forward_w13_backward_prepare_direct_pack_y_pallas(
+                inputs,
+                use_remote_source_gather_y_return=use_remote_source_gather_y_return,
+            )
+        )
+        dx_route = source_push_semantic_w13_backward_dx_route_expert_major_pallas_mgpu(
+            w13_backward_inputs.dz13,
+            w13_backward_inputs.w_gate_up,
+            w13_backward_inputs.valid,
+            block_sizes=_w13_backward_block_sizes(args),
+            interpret=args.pallas_interpret,
+            lowering_semantics=_lowering_semantics(args.w13_backward_lowering),
+            mesh=expert_mesh,
+        )
+        return {
+            "sample_digest": _sample_digest(
+                (y, dcombine, route_y_expert, dy_route_expert, dh_expert, dw2, dz13, dx_route)
+            )
+        }
+
+    def forward_w13_dx_backward_digest_direct_pack_owner_sharded_y_pallas(inputs: SemanticBenchInputs):
+        return forward_w13_dx_backward_digest_direct_pack_y_pallas(inputs, use_remote_source_gather_y_return=False)
+
+    def forward_w13_dx_backward_digest_direct_pack_remote_y_pallas(inputs: SemanticBenchInputs):
+        return forward_w13_dx_backward_digest_direct_pack_y_pallas(inputs, use_remote_source_gather_y_return=True)
+
+    def forward_w13_dw13_backward_digest_direct_pack_y_pallas(
+        inputs: SemanticBenchInputs,
+        *,
+        use_remote_source_gather_y_return: bool,
+    ):
+        y, dcombine, route_y_expert, dy_route_expert, dh_expert, dw2, dz13, w13_backward_inputs = (
+            forward_w13_backward_prepare_direct_pack_y_pallas(
+                inputs,
+                use_remote_source_gather_y_return=use_remote_source_gather_y_return,
+            )
+        )
+        dw13 = source_push_semantic_w13_backward_dw13_expert_major_pallas_mgpu(
+            w13_backward_inputs.x_expert,
+            w13_backward_inputs.dz13,
+            w13_backward_inputs.valid,
+            block_sizes=_w13_backward_block_sizes(args),
+            interpret=args.pallas_interpret,
+            lowering_semantics=_lowering_semantics(args.w13_backward_lowering),
+            mesh=expert_mesh,
+        )
+        return {
+            "sample_digest": _sample_digest((y, dcombine, route_y_expert, dy_route_expert, dh_expert, dw2, dz13, dw13))
+        }
+
+    def forward_w13_dw13_backward_digest_direct_pack_owner_sharded_y_pallas(inputs: SemanticBenchInputs):
+        return forward_w13_dw13_backward_digest_direct_pack_y_pallas(inputs, use_remote_source_gather_y_return=False)
+
+    def forward_w13_dw13_backward_digest_direct_pack_remote_y_pallas(inputs: SemanticBenchInputs):
+        return forward_w13_dw13_backward_digest_direct_pack_y_pallas(inputs, use_remote_source_gather_y_return=True)
+
+    def forward_expert_major_prepacked_return_pallas(inputs: SemanticForwardExpertBenchInputs):
+        z_expert, h_expert, route_y_expert = forward_expert_major_prepacked_pallas(inputs)
+        y, route_by_slot = source_push_semantic_forward_return_expert_major_pallas_mgpu(
+            route_y_expert,
+            plan,
+            block_sizes=_forward_return_block_sizes(args),
+            interpret=args.pallas_interpret,
+            mesh=expert_mesh,
+        )
+        return y, z_expert, h_expert, route_y_expert, route_by_slot
+
+    def forward_expert_major_prepacked_return_compare(inputs: SemanticForwardExpertBenchInputs):
+        def return_reference(route_y_expert: Float[Array, "Dst E C H"]):
+            if expert_mesh is None:
+                return source_push_semantic_forward_return_expert_major_reference_jax(route_y_expert, plan)
+            return source_push_semantic_forward_return_expert_major_pallas_mgpu(
+                route_y_expert,
+                plan,
+                block_sizes=_forward_return_block_sizes(args),
+                interpret=args.pallas_interpret,
+                mesh=expert_mesh,
+            )
+
+        expected_z, expected_h = w13_expert_major_reference_from_prepacked(
+            SemanticW13ExpertBenchInputs(
+                w_gate_up=inputs.w_gate_up,
+                x_expert=inputs.x_expert,
+                valid=inputs.valid,
+            )
+        )
+        expected_route_y = source_push_semantic_w2_expert_major_reference_jax(
+            expected_h.astype(inputs.w_down.dtype),
+            inputs.w_down,
+            inputs.valid,
+        )
+        expected_y, expected_route_by_slot = return_reference(expected_route_y)
+        observed_y, observed_z, observed_h, observed_route_y, observed_route_by_slot = (
+            forward_expert_major_prepacked_return_pallas(inputs)
+        )
+        expected_route_y_from_observed_h = source_push_semantic_w2_expert_major_reference_jax(
+            observed_h.astype(inputs.w_down.dtype),
+            inputs.w_down,
+            inputs.valid,
+        )
+        expected_y_from_observed_h, expected_route_by_slot_from_observed_h = return_reference(
+            expected_route_y_from_observed_h
+        )
+        z_diff = observed_z.astype(jnp.float32) - expected_z.astype(jnp.float32)
+        h_diff = observed_h.astype(jnp.float32) - expected_h.astype(jnp.float32)
+        route_y_diff = observed_route_y.astype(jnp.float32) - expected_route_y.astype(jnp.float32)
+        route_y_w2_only_diff = observed_route_y.astype(jnp.float32) - expected_route_y_from_observed_h.astype(
+            jnp.float32
+        )
+        y_diff = observed_y.astype(jnp.float32) - expected_y.astype(jnp.float32)
+        y_w2_return_only_diff = observed_y.astype(jnp.float32) - expected_y_from_observed_h.astype(jnp.float32)
+        route_by_slot_diff = observed_route_by_slot.astype(jnp.float32) - expected_route_by_slot.astype(jnp.float32)
+        route_by_slot_w2_return_only_diff = observed_route_by_slot.astype(
+            jnp.float32
+        ) - expected_route_by_slot_from_observed_h.astype(jnp.float32)
+        return {
+            "z_max_abs_diff": jnp.max(jnp.abs(z_diff)),
+            "z_mean_abs_diff": jnp.mean(jnp.abs(z_diff)),
+            "h_max_abs_diff": jnp.max(jnp.abs(h_diff)),
+            "h_mean_abs_diff": jnp.mean(jnp.abs(h_diff)),
+            "route_y_max_abs_diff": jnp.max(jnp.abs(route_y_diff)),
+            "route_y_mean_abs_diff": jnp.mean(jnp.abs(route_y_diff)),
+            "route_y_w2_only_max_abs_diff": jnp.max(jnp.abs(route_y_w2_only_diff)),
+            "route_y_w2_only_mean_abs_diff": jnp.mean(jnp.abs(route_y_w2_only_diff)),
+            "y_max_abs_diff": jnp.max(jnp.abs(y_diff)),
+            "y_mean_abs_diff": jnp.mean(jnp.abs(y_diff)),
+            "y_w2_return_only_max_abs_diff": jnp.max(jnp.abs(y_w2_return_only_diff)),
+            "y_w2_return_only_mean_abs_diff": jnp.mean(jnp.abs(y_w2_return_only_diff)),
+            "route_by_slot_max_abs_diff": jnp.max(jnp.abs(route_by_slot_diff)),
+            "route_by_slot_mean_abs_diff": jnp.mean(jnp.abs(route_by_slot_diff)),
+            "route_by_slot_w2_return_only_max_abs_diff": jnp.max(jnp.abs(route_by_slot_w2_return_only_diff)),
+            "route_by_slot_w2_return_only_mean_abs_diff": jnp.mean(jnp.abs(route_by_slot_w2_return_only_diff)),
+            "expected_route_y_nonfinite_error_count": _nonfinite_error_count(expected_route_y),
+            "observed_route_y_nonfinite_error_count": _nonfinite_error_count(observed_route_y),
+            "expected_y_nonfinite_error_count": _nonfinite_error_count(expected_y),
+            "observed_y_nonfinite_error_count": _nonfinite_error_count(observed_y),
+            "expected_route_by_slot_nonfinite_error_count": _nonfinite_error_count(expected_route_by_slot),
+            "observed_route_by_slot_nonfinite_error_count": _nonfinite_error_count(observed_route_by_slot),
+        }
+
+    def backward_source_expand(inputs: SemanticBenchInputs):
+        return source_push_semantic_backward_source_expand_jax(inputs.dy, inputs.route_y, plan)
+
+    def backward_source_expand_pallas(inputs: SemanticBenchInputs):
+        return source_push_semantic_backward_source_expand_pair_pallas_mgpu(
+            inputs.dy,
+            inputs.route_y,
+            plan,
+            block_sizes=_backward_block_sizes(args),
+            interpret=args.pallas_interpret,
+        )
+
+    def backward_source_expand_expert_major_pallas(inputs: SemanticBenchInputs):
+        return source_push_semantic_backward_source_expand_pallas_mgpu(
+            inputs.dy,
+            inputs.route_y,
+            plan,
+            rows_per_expert_capacity=rows_per_expert_capacity,
+            block_sizes=_backward_block_sizes(args),
+            interpret=args.pallas_interpret,
+        )
+
+    def backward_source_expand_expert_major_compare(inputs: SemanticBenchInputs):
+        expected_dy_route, expected_dcombine = source_push_semantic_backward_source_expand_expert_major_jax(
+            inputs.dy,
+            inputs.route_y,
+            plan,
+            rows_per_expert_capacity=rows_per_expert_capacity,
+        )
+        observed_dy_route, observed_dcombine = source_push_semantic_backward_source_expand_pallas_mgpu(
+            inputs.dy,
+            inputs.route_y,
+            plan,
+            rows_per_expert_capacity=rows_per_expert_capacity,
+            block_sizes=_backward_block_sizes(args),
+            interpret=args.pallas_interpret,
+        )
+        dy_route_diff = observed_dy_route.astype(jnp.float32) - expected_dy_route.astype(jnp.float32)
+        dcombine_diff = observed_dcombine.astype(jnp.float32) - expected_dcombine.astype(jnp.float32)
+        return {
+            "dy_route_max_abs_diff": jnp.max(jnp.abs(dy_route_diff)),
+            "dy_route_mean_abs_diff": jnp.mean(jnp.abs(dy_route_diff)),
+            "dcombine_max_abs_diff": jnp.max(jnp.abs(dcombine_diff)),
+            "dcombine_mean_abs_diff": jnp.mean(jnp.abs(dcombine_diff)),
+        }
+
+    def backward_source_expand_from_expert_major_pallas(inputs: SemanticBackwardSourceExpandExpertBenchInputs):
+        return source_push_semantic_backward_source_expand_from_expert_major_pallas_mgpu(
+            inputs.dy,
+            inputs.route_y_expert,
+            plan,
+            block_sizes=_backward_block_sizes(args),
+            interpret=args.pallas_interpret,
+            mesh=expert_mesh,
+        )
+
+    def backward_source_expand_from_expert_major_compare(inputs: SemanticBackwardSourceExpandExpertBenchInputs):
+        expected_dy_route, expected_dcombine = source_push_semantic_backward_source_expand_from_expert_major_jax(
+            inputs.dy,
+            inputs.route_y_expert,
+            plan,
+        )
+        observed_dy_route, observed_dcombine = backward_source_expand_from_expert_major_pallas(inputs)
+        dy_route_diff = observed_dy_route.astype(jnp.float32) - expected_dy_route.astype(jnp.float32)
+        dcombine_diff = observed_dcombine.astype(jnp.float32) - expected_dcombine.astype(jnp.float32)
+        return {
+            "dy_route_max_abs_diff": jnp.max(jnp.abs(dy_route_diff)),
+            "dy_route_mean_abs_diff": jnp.mean(jnp.abs(dy_route_diff)),
+            "dcombine_max_abs_diff": jnp.max(jnp.abs(dcombine_diff)),
+            "dcombine_mean_abs_diff": jnp.mean(jnp.abs(dcombine_diff)),
+        }
+
+    def backward_source_expand_from_saved_return_queue_pallas(
+        inputs: SemanticBackwardReturnQueueBenchInputs,
+    ):
+        return source_push_semantic_backward_source_expand_from_return_queue_pallas_mgpu(
+            inputs.dy,
+            inputs.return_y,
+            plan,
+            rows_per_expert_capacity=rows_per_expert_capacity,
+            block_sizes=_backward_block_sizes(args),
+            interpret=args.pallas_interpret,
+            mesh=expert_mesh,
+        )
+
+    def backward_source_expand_from_saved_return_queue_compare(
+        inputs: SemanticBackwardReturnQueueBenchInputs,
+    ):
+        expected_dy_route, expected_dcombine = source_push_semantic_backward_source_expand_from_return_queue_jax(
+            inputs.dy,
+            inputs.return_y,
+            plan,
+            rows_per_expert_capacity=rows_per_expert_capacity,
+        )
+        observed_dy_route, observed_dcombine = backward_source_expand_from_saved_return_queue_pallas(inputs)
+        return {
+            **_comparison_metrics("dy_route", observed_dy_route, expected_dy_route),
+            **_comparison_metrics("dcombine", observed_dcombine, expected_dcombine),
+        }
+
+    def backward_source_expand_from_expert_major_owner_sharded_dcombine_pallas(
+        inputs: SemanticBackwardSourceExpandExpertBenchInputs,
+    ):
+        return source_push_semantic_backward_source_expand_from_expert_major_owner_sharded_dcombine_pallas_mgpu(
+            inputs.dy,
+            inputs.route_y_expert,
+            plan,
+            block_sizes=_backward_block_sizes(args),
+            interpret=args.pallas_interpret,
+            mesh=expert_mesh,
+        )
+
+    def backward_source_expand_from_expert_major_owner_sharded_dcombine_compare(
+        inputs: SemanticBackwardSourceExpandExpertBenchInputs,
+    ):
+        expected_dy_route, expected_dcombine = source_push_semantic_backward_source_expand_from_expert_major_jax(
+            inputs.dy,
+            inputs.route_y_expert,
+            plan,
+        )
+        observed_dy_route, observed_dcombine = backward_source_expand_from_expert_major_owner_sharded_dcombine_pallas(
+            inputs
+        )
+        dy_route_diff = observed_dy_route.astype(jnp.float32) - expected_dy_route.astype(jnp.float32)
+        dcombine_diff = observed_dcombine.astype(jnp.float32) - expected_dcombine.astype(jnp.float32)
+        return {
+            "dy_route_max_abs_diff": jnp.max(jnp.abs(dy_route_diff)),
+            "dy_route_mean_abs_diff": jnp.mean(jnp.abs(dy_route_diff)),
+            "dcombine_max_abs_diff": jnp.max(jnp.abs(dcombine_diff)),
+            "dcombine_mean_abs_diff": jnp.mean(jnp.abs(dcombine_diff)),
+        }
+
+    def backward_dy_route_source_push_expert_major_pallas(
+        inputs: SemanticBackwardSourceExpandExpertBenchInputs,
+    ):
+        return source_push_semantic_backward_dy_route_source_push_pallas_mgpu(
+            inputs.dy,
+            plan,
+            rows_per_expert_capacity=inputs.route_y_expert.shape[2],
+            block_sizes=_backward_block_sizes(args),
+            interpret=args.pallas_interpret,
+            mesh=expert_mesh,
+        )
+
+    def backward_dy_route_source_push_expert_major_compare(
+        inputs: SemanticBackwardSourceExpandExpertBenchInputs,
+    ):
+        expected = source_push_semantic_backward_dy_route_expert_major_jax(
+            inputs.dy,
+            plan,
+            rows_per_expert_capacity=inputs.route_y_expert.shape[2],
+        )
+        observed = backward_dy_route_source_push_expert_major_pallas(inputs)
+        diff = observed.astype(jnp.float32) - expected.astype(jnp.float32)
+        return {
+            "dy_route_max_abs_diff": jnp.max(jnp.abs(diff)),
+            "dy_route_mean_abs_diff": jnp.mean(jnp.abs(diff)),
+        }
+
+    def backward_source_expand_from_expert_major_source_push_pallas(
+        inputs: SemanticBackwardSourceExpandExpertBenchInputs,
+    ):
+        return source_push_semantic_backward_source_expand_from_expert_major_source_push_pallas_mgpu(
+            inputs.dy,
+            inputs.route_y_expert,
+            plan,
+            block_sizes=_backward_block_sizes(args),
+            interpret=args.pallas_interpret,
+            mesh=expert_mesh,
+        )
+
+    def backward_source_expand_from_expert_major_source_push_compare(
+        inputs: SemanticBackwardSourceExpandExpertBenchInputs,
+    ):
+        expected_dy_route, expected_dcombine = source_push_semantic_backward_source_expand_from_expert_major_jax(
+            inputs.dy,
+            inputs.route_y_expert,
+            plan,
+        )
+        observed_dy_route, observed_dcombine = backward_source_expand_from_expert_major_source_push_pallas(inputs)
+        dy_route_diff = observed_dy_route.astype(jnp.float32) - expected_dy_route.astype(jnp.float32)
+        dcombine_diff = observed_dcombine.astype(jnp.float32) - expected_dcombine.astype(jnp.float32)
+        return {
+            "dy_route_max_abs_diff": jnp.max(jnp.abs(dy_route_diff)),
+            "dy_route_mean_abs_diff": jnp.mean(jnp.abs(dy_route_diff)),
+            "dcombine_max_abs_diff": jnp.max(jnp.abs(dcombine_diff)),
+            "dcombine_mean_abs_diff": jnp.mean(jnp.abs(dcombine_diff)),
+        }
+
+    def backward_dcombine_source_gather_expert_major_pallas(
+        inputs: SemanticBackwardSourceExpandExpertBenchInputs,
+    ):
+        return source_push_semantic_backward_dcombine_source_gather_pallas_mgpu(
+            inputs.dy,
+            inputs.route_y_expert,
+            plan,
+            block_sizes=_backward_block_sizes(args),
+            interpret=args.pallas_interpret,
+            mesh=expert_mesh,
+        )
+
+    def backward_dcombine_source_gather_expert_major_compare(
+        inputs: SemanticBackwardSourceExpandExpertBenchInputs,
+    ):
+        expected = source_push_semantic_backward_dcombine_source_gather_jax(
+            inputs.dy,
+            inputs.route_y_expert,
+            plan,
+        )
+        observed = backward_dcombine_source_gather_expert_major_pallas(inputs)
+        diff = observed.astype(jnp.float32) - expected.astype(jnp.float32)
+        return {
+            "dcombine_max_abs_diff": jnp.max(jnp.abs(diff)),
+            "dcombine_mean_abs_diff": jnp.mean(jnp.abs(diff)),
+        }
+
+    def backward_source_expand_from_expert_major_source_gather_pallas(
+        inputs: SemanticBackwardSourceExpandExpertBenchInputs,
+    ):
+        return source_push_semantic_backward_source_expand_from_expert_major_source_gather_pallas_mgpu(
+            inputs.dy,
+            inputs.route_y_expert,
+            plan,
+            block_sizes=_backward_block_sizes(args),
+            interpret=args.pallas_interpret,
+            mesh=expert_mesh,
+        )
+
+    def backward_source_expand_from_expert_major_source_gather_compare(
+        inputs: SemanticBackwardSourceExpandExpertBenchInputs,
+    ):
+        expected_dy_route, expected_dcombine = source_push_semantic_backward_source_expand_from_expert_major_jax(
+            inputs.dy,
+            inputs.route_y_expert,
+            plan,
+        )
+        observed_dy_route, observed_dcombine = backward_source_expand_from_expert_major_source_gather_pallas(inputs)
+        dy_route_diff = observed_dy_route.astype(jnp.float32) - expected_dy_route.astype(jnp.float32)
+        dcombine_diff = observed_dcombine.astype(jnp.float32) - expected_dcombine.astype(jnp.float32)
+        return {
+            "dy_route_max_abs_diff": jnp.max(jnp.abs(dy_route_diff)),
+            "dy_route_mean_abs_diff": jnp.mean(jnp.abs(dy_route_diff)),
+            "dcombine_max_abs_diff": jnp.max(jnp.abs(dcombine_diff)),
+            "dcombine_mean_abs_diff": jnp.mean(jnp.abs(dcombine_diff)),
+        }
+
+    def backward_w2(inputs: SemanticBenchInputs):
+        return source_push_semantic_w2_backward_reference_jax(inputs.h_pair, inputs.dy_route, inputs.w_down, plan)
+
+    def backward_w2_expert_major(inputs: SemanticBenchInputs):
+        return w2_expert_major_backward(
+            inputs,
+            implementation=SOURCE_PUSH_W2_MATMUL_BACKWARD_IMPLEMENTATION_REFERENCE,
+        )
+
+    def backward_w2_expert_major_pallas(inputs: SemanticBenchInputs):
+        return w2_expert_major_backward(
+            inputs,
+            implementation=SOURCE_PUSH_W2_MATMUL_BACKWARD_IMPLEMENTATION_PALLAS_MGPU,
+        )
+
+    def backward_w2_expert_major_prepacked(inputs: SemanticW2ExpertBenchInputs):
+        return w2_expert_major_prepacked_backward(
+            inputs,
+            implementation=SOURCE_PUSH_W2_MATMUL_BACKWARD_IMPLEMENTATION_REFERENCE,
+        )
+
+    def backward_w2_expert_major_prepacked_pallas(inputs: SemanticW2ExpertBenchInputs):
+        return w2_expert_major_prepacked_backward(
+            inputs,
+            implementation=SOURCE_PUSH_W2_MATMUL_BACKWARD_IMPLEMENTATION_PALLAS_MGPU,
+        )
+
+    def backward_w2_expert_major_prepacked_compare(inputs: SemanticW2ExpertBenchInputs):
+        reference_d_weighted_activation, reference_dw2 = w2_expert_major_prepacked_backward(
+            inputs,
+            implementation=SOURCE_PUSH_W2_MATMUL_BACKWARD_IMPLEMENTATION_REFERENCE,
+        )
+        pallas_d_weighted_activation, pallas_dw2 = w2_expert_major_prepacked_backward(
+            inputs,
+            implementation=SOURCE_PUSH_W2_MATMUL_BACKWARD_IMPLEMENTATION_PALLAS_MGPU,
+        )
+        d_weighted_activation_diff = pallas_d_weighted_activation.astype(
+            jnp.float32
+        ) - reference_d_weighted_activation.astype(jnp.float32)
+        dw2_diff = pallas_dw2.astype(jnp.float32) - reference_dw2.astype(jnp.float32)
+        return {
+            "d_weighted_activation_max_abs_diff": jnp.max(jnp.abs(d_weighted_activation_diff)),
+            "d_weighted_activation_mean_abs_diff": jnp.mean(jnp.abs(d_weighted_activation_diff)),
+            "dw2_max_abs_diff": jnp.max(jnp.abs(dw2_diff)),
+            "dw2_mean_abs_diff": jnp.mean(jnp.abs(dw2_diff)),
+        }
+
+    def backward_w2_dh_pallas(inputs: SemanticBenchInputs):
+        return source_push_semantic_w2_backward_dh_pallas_mgpu(
+            inputs.dy_route,
+            inputs.w_down,
+            plan,
+            block_sizes=_w2_backward_block_sizes(args),
+            interpret=args.pallas_interpret,
+            lowering_semantics=_lowering_semantics(args.w2_backward_lowering),
+        )
+
+    def backward_w2_dw2_pallas(inputs: SemanticBenchInputs):
+        return source_push_semantic_w2_backward_dw2_pallas_mgpu(
+            inputs.h_pair,
+            inputs.dy_route,
+            plan,
+            w_down_shape=inputs.w_down.shape,
+            block_sizes=_w2_backward_block_sizes(args),
+            interpret=args.pallas_interpret,
+            lowering_semantics=_lowering_semantics(args.w2_backward_lowering),
+        )
+
+    def backward_w2_pallas_scaffold(inputs: SemanticBenchInputs):
+        return source_push_semantic_w2_backward_pallas_mgpu(
+            inputs.h_pair,
+            inputs.dy_route,
+            inputs.w_down,
+            plan,
+            block_sizes=_w2_backward_block_sizes(args),
+            interpret=args.pallas_interpret,
+            lowering_semantics=_lowering_semantics(args.w2_backward_lowering),
+        )
+
+    def backward_swiglu(inputs: SemanticBenchInputs):
+        return source_push_semantic_swiglu_backward_reference_jax(inputs.dh_pair, inputs.z_pair, plan)
+
+    def backward_w13(inputs: SemanticBenchInputs):
+        return source_push_semantic_w13_backward_reference_jax(inputs.x, inputs.dz_pair, inputs.w_gate_up, plan)
+
+    def backward_w13_dx_pair_pallas(inputs: SemanticBenchInputs):
+        return source_push_semantic_w13_backward_dx_pair_pallas_mgpu(
+            inputs.dz_pair,
+            inputs.w_gate_up,
+            plan,
+            block_sizes=_w13_backward_block_sizes(args),
+            interpret=args.pallas_interpret,
+            lowering_semantics=_lowering_semantics(args.w13_backward_lowering),
+            rows_per_expert_capacity=rows_per_expert_capacity,
+            mesh=expert_mesh,
+        )
+
+    def backward_w13_dw13_pallas(inputs: SemanticBenchInputs):
+        return source_push_semantic_w13_backward_dw13_pallas_mgpu(
+            inputs.x,
+            inputs.dz_pair,
+            plan,
+            block_sizes=_w13_backward_block_sizes(args),
+            interpret=args.pallas_interpret,
+            lowering_semantics=_lowering_semantics(args.w13_backward_lowering),
+            rows_per_expert_capacity=rows_per_expert_capacity,
+            mesh=expert_mesh,
+        )
+
+    def backward_w13_pallas_scaffold(inputs: SemanticBenchInputs):
+        return source_push_semantic_w13_backward_pallas_scaffold_mgpu(
+            inputs.x,
+            inputs.dz_pair,
+            inputs.w_gate_up,
+            plan,
+            block_sizes=_w13_backward_block_sizes(args),
+            interpret=args.pallas_interpret,
+            lowering_semantics=_lowering_semantics(args.w13_backward_lowering),
+            rows_per_expert_capacity=rows_per_expert_capacity,
+            mesh=expert_mesh,
+        )
+
+    def dx_combine(inputs: SemanticBenchInputs):
+        return source_push_semantic_dx_combine_jax(inputs.dx_pair, plan)
+
+    def dx_combine_pallas(inputs: SemanticBenchInputs):
+        return source_push_semantic_dx_combine_pair_pallas_mgpu(
+            inputs.dx_pair,
+            plan,
+            block_sizes=_backward_block_sizes(args),
+            interpret=args.pallas_interpret,
+        )
+
+    def dx_combine_expert_major_pallas(inputs: SemanticBenchInputs):
+        dx_route, _valid = source_push_semantic_pair_to_expert_major_jax(
+            inputs.dx_pair,
+            plan,
+            rows_per_expert_capacity=rows_per_expert_capacity,
+        )
+        return source_push_semantic_dx_combine_pallas_mgpu(
+            dx_route,
+            plan,
+            block_sizes=_backward_block_sizes(args),
+            interpret=args.pallas_interpret,
+        )
+
+    def dx_combine_expert_major_compare(inputs: SemanticBenchInputs):
+        dx_route, _valid = source_push_semantic_pair_to_expert_major_jax(
+            inputs.dx_pair,
+            plan,
+            rows_per_expert_capacity=rows_per_expert_capacity,
+        )
+        expected = source_push_semantic_dx_combine_expert_major_jax(dx_route, plan)
+        observed = source_push_semantic_dx_combine_pallas_mgpu(
+            dx_route,
+            plan,
+            block_sizes=_backward_block_sizes(args),
+            interpret=args.pallas_interpret,
+        )
+        dx_diff = observed.astype(jnp.float32) - expected.astype(jnp.float32)
+        return {
+            "dx_max_abs_diff": jnp.max(jnp.abs(dx_diff)),
+            "dx_mean_abs_diff": jnp.mean(jnp.abs(dx_diff)),
+        }
+
+    def dx_return_expert_major_pallas(inputs: SemanticBenchInputs):
+        dx_route, _valid = source_push_semantic_pair_to_expert_major_jax(
+            inputs.dx_pair,
+            plan,
+            rows_per_expert_capacity=rows_per_expert_capacity,
+        )
+        return source_push_semantic_dx_return_pallas_mgpu(
+            dx_route,
+            plan,
+            block_sizes=_dx_return_block_sizes(args),
+            interpret=args.pallas_interpret,
+        )
+
+    def dx_return_expert_major_compare(inputs: SemanticBenchInputs):
+        dx_route, _valid = source_push_semantic_pair_to_expert_major_jax(
+            inputs.dx_pair,
+            plan,
+            rows_per_expert_capacity=rows_per_expert_capacity,
+        )
+        expected_dx, expected_dx_by_slot = source_push_semantic_dx_return_expert_major_jax(dx_route, plan)
+        observed_dx, observed_dx_by_slot = source_push_semantic_dx_return_pallas_mgpu(
+            dx_route,
+            plan,
+            block_sizes=_dx_return_block_sizes(args),
+            interpret=args.pallas_interpret,
+        )
+        dx_diff = observed_dx.astype(jnp.float32) - expected_dx.astype(jnp.float32)
+        dx_by_slot_diff = observed_dx_by_slot.astype(jnp.float32) - expected_dx_by_slot.astype(jnp.float32)
+        return {
+            "dx_max_abs_diff": jnp.max(jnp.abs(dx_diff)),
+            "dx_mean_abs_diff": jnp.mean(jnp.abs(dx_diff)),
+            "dx_by_slot_max_abs_diff": jnp.max(jnp.abs(dx_by_slot_diff)),
+            "dx_by_slot_mean_abs_diff": jnp.mean(jnp.abs(dx_by_slot_diff)),
+            "expected_dx_nonfinite_error_count": _nonfinite_error_count(expected_dx),
+            "observed_dx_nonfinite_error_count": _nonfinite_error_count(observed_dx),
+            "expected_dx_by_slot_nonfinite_error_count": _nonfinite_error_count(expected_dx_by_slot),
+            "observed_dx_by_slot_nonfinite_error_count": _nonfinite_error_count(observed_dx_by_slot),
+        }
+
+    def dx_return_expert_major_prepacked_pallas(inputs: SemanticDxReturnExpertBenchInputs):
+        return source_push_semantic_dx_return_pallas_mgpu(
+            inputs.dx_route,
+            plan,
+            block_sizes=_dx_return_block_sizes(args),
+            interpret=args.pallas_interpret,
+            mesh=expert_mesh,
+        )
+
+    def dx_return_expert_major_prepacked_compare(inputs: SemanticDxReturnExpertBenchInputs):
+        expected_dx, expected_dx_by_slot = source_push_semantic_dx_return_expert_major_jax(inputs.dx_route, plan)
+        observed_dx, observed_dx_by_slot = source_push_semantic_dx_return_pallas_mgpu(
+            inputs.dx_route,
+            plan,
+            block_sizes=_dx_return_block_sizes(args),
+            interpret=args.pallas_interpret,
+            mesh=expert_mesh,
+        )
+        dx_diff = observed_dx.astype(jnp.float32) - expected_dx.astype(jnp.float32)
+        dx_by_slot_diff = observed_dx_by_slot.astype(jnp.float32) - expected_dx_by_slot.astype(jnp.float32)
+        return {
+            "dx_max_abs_diff": jnp.max(jnp.abs(dx_diff)),
+            "dx_mean_abs_diff": jnp.mean(jnp.abs(dx_diff)),
+            "dx_by_slot_max_abs_diff": jnp.max(jnp.abs(dx_by_slot_diff)),
+            "dx_by_slot_mean_abs_diff": jnp.mean(jnp.abs(dx_by_slot_diff)),
+            "expected_dx_nonfinite_error_count": _nonfinite_error_count(expected_dx),
+            "observed_dx_nonfinite_error_count": _nonfinite_error_count(observed_dx),
+            "expected_dx_by_slot_nonfinite_error_count": _nonfinite_error_count(expected_dx_by_slot),
+            "observed_dx_by_slot_nonfinite_error_count": _nonfinite_error_count(observed_dx_by_slot),
+        }
+
+    def dx_return_slot_reduce_expert_major_prepacked_pallas(inputs: SemanticDxReturnExpertBenchInputs):
+        return source_push_semantic_dx_return_slot_reduce_pallas_mgpu(
+            inputs.dx_route,
+            plan,
+            block_sizes=_dx_return_block_sizes(args),
+            interpret=args.pallas_interpret,
+            mesh=expert_mesh,
+        )
+
+    def dx_return_slot_reduce_expert_major_prepacked_compare(inputs: SemanticDxReturnExpertBenchInputs):
+        expected_dx, _expected_dx_by_slot = source_push_semantic_dx_return_expert_major_jax(inputs.dx_route, plan)
+        observed_dx = source_push_semantic_dx_return_slot_reduce_pallas_mgpu(
+            inputs.dx_route,
+            plan,
+            block_sizes=_dx_return_block_sizes(args),
+            interpret=args.pallas_interpret,
+            mesh=expert_mesh,
+        )
+        dx_diff = observed_dx.astype(jnp.float32) - expected_dx.astype(jnp.float32)
+        return {
+            "dx_max_abs_diff": jnp.max(jnp.abs(dx_diff)),
+            "dx_mean_abs_diff": jnp.mean(jnp.abs(dx_diff)),
+            "expected_dx_nonfinite_error_count": _nonfinite_error_count(expected_dx),
+            "observed_dx_nonfinite_error_count": _nonfinite_error_count(observed_dx),
+        }
+
+    def dx_return_sum_expert_major_prepacked_pallas(inputs: SemanticDxReturnExpertBenchInputs):
+        return source_push_semantic_dx_return_sum_pallas_mgpu(
+            inputs.dx_route,
+            plan,
+            block_sizes=_dx_return_block_sizes(args),
+            interpret=args.pallas_interpret,
+            mesh=expert_mesh,
+        )
+
+    def dx_return_sum_expert_major_prepacked_compare(inputs: SemanticDxReturnExpertBenchInputs):
+        expected_dx, _expected_dx_by_slot = source_push_semantic_dx_return_expert_major_jax(inputs.dx_route, plan)
+        observed_dx = source_push_semantic_dx_return_sum_pallas_mgpu(
+            inputs.dx_route,
+            plan,
+            block_sizes=_dx_return_block_sizes(args),
+            interpret=args.pallas_interpret,
+            mesh=expert_mesh,
+        )
+        dx_diff = observed_dx.astype(jnp.float32) - expected_dx.astype(jnp.float32)
+        return {
+            "dx_max_abs_diff": jnp.max(jnp.abs(dx_diff)),
+            "dx_mean_abs_diff": jnp.mean(jnp.abs(dx_diff)),
+            "expected_dx_nonfinite_error_count": _nonfinite_error_count(expected_dx),
+            "observed_dx_nonfinite_error_count": _nonfinite_error_count(observed_dx),
+        }
+
+    def dx_return_source_gather_expert_major_prepacked_pallas(inputs: SemanticDxReturnExpertBenchInputs):
+        return source_push_semantic_dx_return_source_gather_pallas_mgpu(
+            inputs.dx_route,
+            plan,
+            block_sizes=_dx_return_block_sizes(args),
+            interpret=args.pallas_interpret,
+            mesh=expert_mesh,
+        )
+
+    def dx_return_source_gather_expert_major_prepacked_compare(inputs: SemanticDxReturnExpertBenchInputs):
+        expected_dx, _expected_dx_by_slot = source_push_semantic_dx_return_expert_major_jax(inputs.dx_route, plan)
+        observed_dx = source_push_semantic_dx_return_source_gather_pallas_mgpu(
+            inputs.dx_route,
+            plan,
+            block_sizes=_dx_return_block_sizes(args),
+            interpret=args.pallas_interpret,
+            mesh=expert_mesh,
+        )
+        dx_diff = observed_dx.astype(jnp.float32) - expected_dx.astype(jnp.float32)
+        return {
+            "dx_max_abs_diff": jnp.max(jnp.abs(dx_diff)),
+            "dx_mean_abs_diff": jnp.mean(jnp.abs(dx_diff)),
+            "expected_dx_nonfinite_error_count": _nonfinite_error_count(expected_dx),
+            "observed_dx_nonfinite_error_count": _nonfinite_error_count(observed_dx),
+        }
+
+    def dx_return_source_gather_expert_major_prepacked_owner_sharded_pallas(
+        inputs: SemanticDxReturnExpertBenchInputs,
+    ):
+        return source_push_semantic_dx_return_source_gather_owner_sharded_pallas_mgpu(
+            inputs.dx_route,
+            plan,
+            block_sizes=_dx_return_block_sizes(args),
+            interpret=args.pallas_interpret,
+            mesh=expert_mesh,
+        )
+
+    def dx_return_source_gather_expert_major_prepacked_owner_sharded_compare(
+        inputs: SemanticDxReturnExpertBenchInputs,
+    ):
+        expected_dx, _expected_dx_by_slot = source_push_semantic_dx_return_expert_major_jax(inputs.dx_route, plan)
+        observed_dx = source_push_semantic_dx_return_source_gather_owner_sharded_pallas_mgpu(
+            inputs.dx_route,
+            plan,
+            block_sizes=_dx_return_block_sizes(args),
+            interpret=args.pallas_interpret,
+            mesh=expert_mesh,
+        )
+        dx_diff = observed_dx.astype(jnp.float32) - expected_dx.astype(jnp.float32)
+        return {
+            "dx_max_abs_diff": jnp.max(jnp.abs(dx_diff)),
+            "dx_mean_abs_diff": jnp.mean(jnp.abs(dx_diff)),
+            "expected_dx_nonfinite_error_count": _nonfinite_error_count(expected_dx),
+            "observed_dx_nonfinite_error_count": _nonfinite_error_count(observed_dx),
+        }
+
+    def dx_return_remote_source_gather_expert_major_prepacked_pallas(
+        inputs: SemanticDxReturnExpertBenchInputs,
+    ):
+        return source_push_semantic_dx_return_remote_source_gather_pallas_mgpu(
+            inputs.dx_route,
+            plan,
+            block_sizes=_dx_return_block_sizes(args),
+            interpret=args.pallas_interpret,
+            mesh=expert_mesh,
+        )
+
+    def dx_return_remote_source_gather_expert_major_prepacked_compare(
+        inputs: SemanticDxReturnExpertBenchInputs,
+    ):
+        expected_dx, _expected_dx_by_slot = source_push_semantic_dx_return_expert_major_jax(inputs.dx_route, plan)
+        observed_dx = source_push_semantic_dx_return_remote_source_gather_pallas_mgpu(
+            inputs.dx_route,
+            plan,
+            block_sizes=_dx_return_block_sizes(args),
+            interpret=args.pallas_interpret,
+            mesh=expert_mesh,
+        )
+        dx_diff = observed_dx.astype(jnp.float32) - expected_dx.astype(jnp.float32)
+        return {
+            "dx_max_abs_diff": jnp.max(jnp.abs(dx_diff)),
+            "dx_mean_abs_diff": jnp.mean(jnp.abs(dx_diff)),
+            "expected_dx_nonfinite_error_count": _nonfinite_error_count(expected_dx),
+            "observed_dx_nonfinite_error_count": _nonfinite_error_count(observed_dx),
+        }
+
+    def dx_return_copy_only_expert_major_prepacked_pallas(inputs: SemanticDxReturnExpertBenchInputs):
+        return source_push_semantic_dx_return_copy_only_pallas_mgpu(
+            inputs.dx_route,
+            plan,
+            block_sizes=_dx_return_block_sizes(args),
+            interpret=args.pallas_interpret,
+            mesh=expert_mesh,
+        )
+
+    def dx_return_copy_only_expert_major_prepacked_compare(inputs: SemanticDxReturnExpertBenchInputs):
+        _route_weights, valid = source_push_semantic_route_weights_expert_major_jax(
+            plan,
+            rows_per_expert_capacity=inputs.dx_route.shape[2],
+        )
+        valid = _constrain_destination_major(valid, expert_mesh)
+        expected = jnp.where(
+            valid[..., None],
+            inputs.dx_route.astype(jnp.float32),
+            jnp.zeros((), dtype=jnp.float32),
+        )
+        observed = source_push_semantic_dx_return_copy_only_pallas_mgpu(
+            inputs.dx_route,
+            plan,
+            block_sizes=_dx_return_block_sizes(args),
+            interpret=args.pallas_interpret,
+            mesh=expert_mesh,
+        )
+        diff = observed.astype(jnp.float32) - expected.astype(jnp.float32)
+        return {
+            "dx_route_copy_max_abs_diff": jnp.max(jnp.abs(diff)),
+            "dx_route_copy_mean_abs_diff": jnp.mean(jnp.abs(diff)),
+            "expected_dx_route_copy_nonfinite_error_count": _nonfinite_error_count(expected),
+            "observed_dx_route_copy_nonfinite_error_count": _nonfinite_error_count(observed),
+        }
+
+    def dx_return_direct_to_source_combine_pallas(inputs: SemanticDxReturnExpertBenchInputs):
+        _aligned_rows, source_row_bases = source_push_semantic_source_aligned_expert_offsets_jax(
+            plan,
+            row_alignment=DIRECT_QUEUE_SOURCE_ROW_ALIGNMENT,
+        )
+        return source_push_semantic_dx_return_direct_to_source_combine_pallas_mgpu(
+            inputs.dx_route,
+            plan,
+            source_row_base_by_expert=source_row_bases,
+            block_sizes=_dx_queue_return_block_sizes(args),
+            output_dtype=inputs.dx_route.dtype,
+            interpret=args.pallas_interpret,
+            mesh=expert_mesh,
+        )
+
+    def dx_return_direct_to_source_combine_compare(inputs: SemanticDxReturnExpertBenchInputs):
+        _aligned_rows, source_row_bases = source_push_semantic_source_aligned_expert_offsets_jax(
+            plan,
+            row_alignment=DIRECT_QUEUE_SOURCE_ROW_ALIGNMENT,
+        )
+        block_sizes = _dx_queue_return_block_sizes(args)
+        observed_return_dx = source_push_semantic_dx_return_direct_to_source_pallas_mgpu(
+            inputs.dx_route,
+            plan,
+            source_row_base_by_expert=source_row_bases,
+            block_sizes=block_sizes,
+            route_buffer_dtype=jnp.bfloat16,
+            interpret=args.pallas_interpret,
+            mesh=expert_mesh,
+        )
+        metadata = source_push_semantic_queue_metadata_jax(
+            plan,
+            return_row_block=block_sizes.row_block,
+            entries_per_dst=observed_return_dx.shape[2],
+        )
+        observed_dx = source_push_semantic_dx_combine_source_queue_pallas_mgpu(
+            observed_return_dx,
+            plan,
+            block_sizes=block_sizes,
+            output_dtype=jnp.float32,
+            queue=metadata,
+            interpret=args.pallas_interpret,
+            mesh=expert_mesh,
+        )
+        trusted_dx = source_push_semantic_dx_return_source_gather_pallas_mgpu(
+            inputs.dx_route,
+            plan,
+            source_row_base_by_expert=source_row_bases,
+            block_sizes=_backward_block_sizes(args),
+            interpret=args.pallas_interpret,
+            mesh=expert_mesh,
+        )
+        return {
+            **_direct_dx_queue_sample_metrics(
+                observed_return_dx,
+                inputs.dx_route,
+                source_row_bases,
+                metadata,
+            ),
+            **_direct_dx_combine_sample_metrics(
+                observed_dx,
+                observed_return_dx,
+                inputs.dx_route,
+                source_row_bases,
+                metadata,
+            ),
+            **_sampled_source_output_metrics("dx_vs_source_gather", observed_dx, trusted_dx),
+        }
+
+    def backward(inputs: SemanticBenchInputs):
+        dy_route, dcombine = source_push_semantic_backward_source_expand_jax(inputs.dy, inputs.route_y, plan)
+        dh_pair, dw2 = source_push_semantic_w2_backward_reference_jax(inputs.h_pair, dy_route, inputs.w_down, plan)
+        dz_pair = source_push_semantic_swiglu_backward_reference_jax(dh_pair, inputs.z_pair, plan)
+        dx_pair, dw13 = source_push_semantic_w13_backward_reference_jax(inputs.x, dz_pair, inputs.w_gate_up, plan)
+        dx = source_push_semantic_dx_combine_jax(dx_pair, plan)
+        return dx, dcombine, dw2, dw13
+
+    def backward_pallas_scaffold(inputs: SemanticBenchInputs):
+        dy_route, dcombine = source_push_semantic_backward_source_expand_pair_pallas_mgpu(
+            inputs.dy,
+            inputs.route_y,
+            plan,
+            block_sizes=_backward_block_sizes(args),
+            interpret=args.pallas_interpret,
+        )
+        dh_pair, dw2 = source_push_semantic_w2_backward_pallas_mgpu(
+            inputs.h_pair,
+            dy_route,
+            inputs.w_down,
+            plan,
+            block_sizes=_w2_backward_block_sizes(args),
+            interpret=args.pallas_interpret,
+            lowering_semantics=_lowering_semantics(args.w2_backward_lowering),
+        )
+        dz_pair = source_push_semantic_swiglu_backward_reference_jax(dh_pair, inputs.z_pair, plan)
+        dx_pair, dw13 = source_push_semantic_w13_backward_pallas_scaffold_mgpu(
+            inputs.x,
+            dz_pair,
+            inputs.w_gate_up,
+            plan,
+            block_sizes=_w13_backward_block_sizes(args),
+            interpret=args.pallas_interpret,
+            lowering_semantics=_lowering_semantics(args.w13_backward_lowering),
+        )
+        dx = source_push_semantic_dx_combine_pair_pallas_mgpu(
+            dx_pair,
+            plan,
+            block_sizes=_backward_block_sizes(args),
+            interpret=args.pallas_interpret,
+        )
+        return dx, dcombine, dw2, dw13
+
+    def forward_backward(inputs: SemanticBenchInputs):
+        y, z_pair, h_pair, route_y = source_push_semantic_forward_reference_jax(
+            inputs.x,
+            inputs.w_gate_up,
+            inputs.w_down,
+            plan,
+        )
+        dy_route, dcombine = source_push_semantic_backward_source_expand_jax(inputs.dy, route_y, plan)
+        dh_pair, dw2 = source_push_semantic_w2_backward_reference_jax(h_pair, dy_route, inputs.w_down, plan)
+        dz_pair = source_push_semantic_swiglu_backward_reference_jax(dh_pair, z_pair, plan)
+        dx_pair, dw13 = source_push_semantic_w13_backward_reference_jax(inputs.x, dz_pair, inputs.w_gate_up, plan)
+        dx = source_push_semantic_dx_combine_jax(dx_pair, plan)
+        return y, dx, dcombine, dw2, dw13
+
+    def forward_backward_pallas_scaffold(inputs: SemanticBenchInputs):
+        y, z_pair, h_pair, route_y = forward_pallas_scaffold(inputs)
+        dy_route, dcombine = source_push_semantic_backward_source_expand_pair_pallas_mgpu(
+            inputs.dy,
+            route_y,
+            plan,
+            block_sizes=_backward_block_sizes(args),
+            interpret=args.pallas_interpret,
+        )
+        dh_pair, dw2 = source_push_semantic_w2_backward_pallas_mgpu(
+            h_pair,
+            dy_route,
+            inputs.w_down,
+            plan,
+            block_sizes=_w2_backward_block_sizes(args),
+            interpret=args.pallas_interpret,
+            lowering_semantics=_lowering_semantics(args.w2_backward_lowering),
+        )
+        dz_pair = source_push_semantic_swiglu_backward_reference_jax(dh_pair, z_pair, plan)
+        dx_pair, dw13 = source_push_semantic_w13_backward_pallas_scaffold_mgpu(
+            inputs.x,
+            dz_pair,
+            inputs.w_gate_up,
+            plan,
+            block_sizes=_w13_backward_block_sizes(args),
+            interpret=args.pallas_interpret,
+            lowering_semantics=_lowering_semantics(args.w13_backward_lowering),
+        )
+        dx = source_push_semantic_dx_combine_pair_pallas_mgpu(
+            dx_pair,
+            plan,
+            block_sizes=_backward_block_sizes(args),
+            interpret=args.pallas_interpret,
+        )
+        return y, dx, dcombine, dw2, dw13
+
+    def forward_backward_expert_major_components(inputs: SemanticBenchInputs):
+        y, z_expert, h_expert, route_y_expert, valid = forward_expert_major_return_sum_pallas(inputs)
+        dy_route_expert, dcombine = source_push_semantic_backward_source_expand_from_expert_major_pallas_mgpu(
+            inputs.dy,
+            route_y_expert,
+            plan,
+            block_sizes=_backward_block_sizes(args),
+            interpret=args.pallas_interpret,
+            mesh=expert_mesh,
+        )
+        dh_expert, dw2 = w2_expert_major_prepacked_backward(
+            SemanticW2ExpertBenchInputs(
+                w_down=inputs.w_down,
+                h_expert=h_expert.astype(inputs.w_down.dtype),
+                dy_expert=dy_route_expert.astype(inputs.w_down.dtype),
+                valid=valid,
+            ),
+            implementation=SOURCE_PUSH_W2_MATMUL_BACKWARD_IMPLEMENTATION_PALLAS_MGPU,
+        )
+        dz13 = source_push_semantic_swiglu_backward_expert_major_jax(dh_expert, z_expert, valid)
+        x_expert, x_valid = source_push_semantic_x_to_expert_major_jax(
+            inputs.x,
+            plan,
+            rows_per_expert_capacity=rows_per_expert_capacity,
+        )
+        w13_backward_inputs = _constrain_w13_backward_expert_major_inputs(
+            SemanticW13BackwardExpertBenchInputs(
+                x_expert=x_expert.astype(inputs.w_gate_up.dtype),
+                dz13=dz13.astype(inputs.w_gate_up.dtype),
+                w_gate_up=inputs.w_gate_up,
+                valid=x_valid,
+            ),
+            expert_mesh,
+        )
+        dx_route, dw13 = source_push_semantic_w13_backward_expert_major_pallas_mgpu(
+            w13_backward_inputs.x_expert,
+            w13_backward_inputs.dz13,
+            w13_backward_inputs.w_gate_up,
+            w13_backward_inputs.valid,
+            block_sizes=_w13_backward_block_sizes(args),
+            interpret=args.pallas_interpret,
+            lowering_semantics=_lowering_semantics(args.w13_backward_lowering),
+            mesh=expert_mesh,
+        )
+        dx = source_push_semantic_dx_return_source_gather_pallas_mgpu(
+            dx_route,
+            plan,
+            block_sizes=_dx_return_block_sizes(args),
+            interpret=args.pallas_interpret,
+            mesh=expert_mesh,
+        )
+        return y, dx, dcombine, dw2, dw13, z_expert, h_expert, route_y_expert, dy_route_expert, dh_expert, dz13
+
+    def forward_backward_expert_major_pallas(inputs: SemanticBenchInputs):
+        y, dx, dcombine, dw2, dw13, *_intermediates = forward_backward_expert_major_components(inputs)
+        return y, dx, dcombine, dw2, dw13
+
+    def forward_backward_expert_major_compare(inputs: SemanticBenchInputs):
+        (
+            observed_y,
+            observed_dx,
+            observed_dcombine,
+            observed_dw2,
+            observed_dw13,
+            observed_z,
+            observed_h,
+            observed_route_y,
+            observed_dy_route,
+            observed_dh,
+            observed_dz13,
+        ) = forward_backward_expert_major_components(inputs)
+        expected_dy_route, expected_dcombine = source_push_semantic_backward_source_expand_from_expert_major_jax(
+            inputs.dy,
+            observed_route_y,
+            plan,
+        )
+        x_expert, valid = source_push_semantic_x_to_expert_major_jax(
+            inputs.x,
+            plan,
+            rows_per_expert_capacity=rows_per_expert_capacity,
+        )
+        expected_dh, expected_dw2 = w2_expert_major_prepacked_backward(
+            SemanticW2ExpertBenchInputs(
+                w_down=inputs.w_down,
+                h_expert=observed_h.astype(inputs.w_down.dtype),
+                dy_expert=expected_dy_route.astype(inputs.w_down.dtype),
+                valid=valid,
+            ),
+            implementation=SOURCE_PUSH_W2_MATMUL_BACKWARD_IMPLEMENTATION_REFERENCE,
+        )
+        expected_dz13 = source_push_semantic_swiglu_backward_expert_major_jax(expected_dh, observed_z, valid)
+        expected_dx_route, expected_dw13 = source_push_semantic_w13_backward_expert_major_reference_jax(
+            x_expert,
+            expected_dz13,
+            inputs.w_gate_up,
+            valid,
+        )
+        expected_dx, _expected_dx_by_slot = source_push_semantic_dx_return_expert_major_jax(expected_dx_route, plan)
+        expected_y, _expected_route_by_slot = source_push_semantic_forward_return_expert_major_reference_jax(
+            observed_route_y,
+            plan,
+        )
+        y_diff = observed_y.astype(jnp.float32) - expected_y.astype(jnp.float32)
+        dx_diff = observed_dx.astype(jnp.float32) - expected_dx.astype(jnp.float32)
+        dcombine_diff = observed_dcombine.astype(jnp.float32) - expected_dcombine.astype(jnp.float32)
+        dy_route_diff = observed_dy_route.astype(jnp.float32) - expected_dy_route.astype(jnp.float32)
+        dh_diff = observed_dh.astype(jnp.float32) - expected_dh.astype(jnp.float32)
+        dz13_diff = observed_dz13.astype(jnp.float32) - expected_dz13.astype(jnp.float32)
+        dw2_diff = observed_dw2.astype(jnp.float32) - expected_dw2.astype(jnp.float32)
+        dw13_diff = observed_dw13.astype(jnp.float32) - expected_dw13.astype(jnp.float32)
+        return {
+            "y_stage_max_abs_diff": jnp.max(jnp.abs(y_diff)),
+            "dx_stage_max_abs_diff": jnp.max(jnp.abs(dx_diff)),
+            "dcombine_stage_max_abs_diff": jnp.max(jnp.abs(dcombine_diff)),
+            "dy_route_stage_max_abs_diff": jnp.max(jnp.abs(dy_route_diff)),
+            "dh_stage_max_abs_diff": jnp.max(jnp.abs(dh_diff)),
+            "dz13_stage_max_abs_diff": jnp.max(jnp.abs(dz13_diff)),
+            "dw2_stage_max_abs_diff": jnp.max(jnp.abs(dw2_diff)),
+            "dw13_stage_max_abs_diff": jnp.max(jnp.abs(dw13_diff)),
+            "expected_dx_nonfinite_error_count": _nonfinite_error_count(expected_dx),
+            "observed_dx_nonfinite_error_count": _nonfinite_error_count(observed_dx),
+        }
+
+    def forward_backward_expert_major_saved_x_direct_pack_direct_queue_components(
+        inputs: SemanticBenchInputs,
+        active_plan: SourcePushSemanticPlan,
+        *,
+        rows_per_expert_capacity_override: int,
+        output_dtype: jnp.dtype,
+    ):
+        _aligned_rows, source_row_bases = source_push_semantic_source_aligned_expert_offsets_jax(
+            active_plan,
+            row_alignment=DIRECT_QUEUE_SOURCE_ROW_ALIGNMENT,
+        )
+        x_expert, valid = source_push_semantic_x_to_expert_major_direct_pallas_mgpu(
+            inputs.x,
+            active_plan,
+            rows_per_expert_capacity=rows_per_expert_capacity_override,
+            source_row_base_by_expert=source_row_bases,
+            block_sizes=_gather_block_sizes(args),
+            interpret=args.pallas_interpret,
+        )
+        packed_inputs = SemanticForwardExpertBenchInputs(
+            w_gate_up=inputs.w_gate_up,
+            w_down=inputs.w_down,
+            x_expert=x_expert,
+            valid=valid,
+        )
+        if expert_mesh is not None:
+            packed_inputs = _shard_forward_expert_inputs(packed_inputs, expert_mesh)
+        z_expert, h_expert = source_push_semantic_w13_from_x_expert_pallas_mgpu(
+            packed_inputs.x_expert,
+            packed_inputs.w_gate_up,
+            packed_inputs.valid,
+            block_sizes=_w13_expert_major_block_sizes(args),
+            interpret=args.pallas_interpret,
+            mesh=expert_mesh,
+        )
+        return_y = source_push_semantic_forward_return_direct_to_source_pallas_mgpu(
+            h_expert.astype(packed_inputs.w_down.dtype),
+            packed_inputs.w_down,
+            packed_inputs.valid,
+            active_plan,
+            w2_block_sizes=_w2_forward_expert_major_block_sizes(args),
+            return_block_sizes=_forward_return_block_sizes(args),
+            route_buffer_dtype=jnp.bfloat16,
+            source_row_base_by_expert=source_row_bases,
+            interpret=args.pallas_interpret,
+            mesh=expert_mesh,
+        )
+        y = source_push_semantic_forward_combine_source_gather_pallas_mgpu(
+            return_y,
+            active_plan,
+            block_sizes=_forward_return_block_sizes(args),
+            output_dtype=output_dtype,
+            interpret=args.pallas_interpret,
+            mesh=expert_mesh,
+        )
+        dy_route_expert, dcombine = source_push_semantic_backward_source_expand_from_return_queue_pallas_mgpu(
+            inputs.dy,
+            return_y,
+            active_plan,
+            rows_per_expert_capacity=rows_per_expert_capacity_override,
+            source_row_base_by_expert=source_row_bases,
+            block_sizes=_backward_block_sizes(args),
+            interpret=args.pallas_interpret,
+            mesh=expert_mesh,
+        )
+        dh_expert, dw2 = w2_expert_major_prepacked_backward(
+            SemanticW2ExpertBenchInputs(
+                w_down=packed_inputs.w_down,
+                h_expert=h_expert.astype(packed_inputs.w_down.dtype),
+                dy_expert=dy_route_expert.astype(packed_inputs.w_down.dtype),
+                valid=packed_inputs.valid,
+            ),
+            implementation=SOURCE_PUSH_W2_MATMUL_BACKWARD_IMPLEMENTATION_PALLAS_MGPU,
+        )
+        dz13 = source_push_semantic_swiglu_backward_expert_major_jax(
+            dh_expert,
+            z_expert,
+            packed_inputs.valid,
+        )
+        w13_backward_inputs = _constrain_w13_backward_expert_major_inputs(
+            SemanticW13BackwardExpertBenchInputs(
+                x_expert=packed_inputs.x_expert.astype(packed_inputs.w_gate_up.dtype),
+                dz13=dz13.astype(packed_inputs.w_gate_up.dtype),
+                w_gate_up=packed_inputs.w_gate_up,
+                valid=packed_inputs.valid,
+            ),
+            expert_mesh,
+        )
+        dx_route, dw13 = source_push_semantic_w13_backward_expert_major_pallas_mgpu(
+            w13_backward_inputs.x_expert,
+            w13_backward_inputs.dz13,
+            w13_backward_inputs.w_gate_up,
+            w13_backward_inputs.valid,
+            block_sizes=_w13_backward_block_sizes(args),
+            interpret=args.pallas_interpret,
+            lowering_semantics=_lowering_semantics(args.w13_backward_lowering),
+            mesh=expert_mesh,
+        )
+        dx = source_push_semantic_dx_return_direct_to_source_combine_pallas_mgpu(
+            dx_route,
+            active_plan,
+            source_row_base_by_expert=source_row_bases,
+            block_sizes=_dx_queue_return_block_sizes(args),
+            output_dtype=output_dtype,
+            interpret=args.pallas_interpret,
+            mesh=expert_mesh,
+        )
+        return (
+            y,
+            dx,
+            dcombine,
+            dw2,
+            dw13,
+            packed_inputs.x_expert,
+            packed_inputs.valid,
+            z_expert,
+            h_expert,
+            return_y,
+            dy_route_expert,
+            dh_expert,
+            dz13,
+            dx_route,
+        )
+
+    def forward_backward_expert_major_saved_x_direct_pack_direct_queue_pallas(inputs: SemanticBenchInputs):
+        y, dx, dcombine, dw2, dw13, *_residuals = (
+            forward_backward_expert_major_saved_x_direct_pack_direct_queue_components(
+                inputs,
+                plan,
+                rows_per_expert_capacity_override=direct_queue_rows_per_expert_capacity,
+                output_dtype=inputs.x.dtype,
+            )
+        )
+        return y, dx, dcombine, dw2, dw13
+
+    def forward_backward_expert_major_saved_x_direct_pack_direct_queue_with_metadata_pallas(
+        inputs: SemanticBenchInputs,
+    ):
+        active_plan = _metadata_fn(
+            inputs.selected_experts,
+            inputs.route_weights,
+            ep_size=args.ep_size,
+            experts_per_rank=args.experts_per_rank,
+            rows_per_src_dst_capacity=plan.assignment_ids.shape[-1],
+            rows_per_expert_capacity=direct_queue_rows_per_expert_capacity,
+            capacity_factor=args.capacity_factor,
+        )
+        y, dx, dcombine, dw2, dw13, *_residuals = (
+            forward_backward_expert_major_saved_x_direct_pack_direct_queue_components(
+                inputs,
+                active_plan,
+                rows_per_expert_capacity_override=direct_queue_rows_per_expert_capacity,
+                output_dtype=inputs.x.dtype,
+            )
+        )
+        return y, dx, dcombine, dw2, dw13
+
+    def forward_backward_expert_major_saved_x_direct_pack_direct_queue_compare(inputs: SemanticBenchInputs):
+        (
+            observed_y,
+            observed_dx,
+            observed_dcombine,
+            observed_dw2,
+            observed_dw13,
+            observed_x_expert,
+            observed_valid,
+            observed_z,
+            observed_h,
+            observed_return_y,
+            observed_dy_route,
+            observed_dh,
+            observed_dz13,
+            observed_dx_route,
+        ) = forward_backward_expert_major_saved_x_direct_pack_direct_queue_components(
+            inputs,
+            plan,
+            rows_per_expert_capacity_override=direct_queue_rows_per_expert_capacity,
+            output_dtype=jnp.float32,
+        )
+        _aligned_rows, source_row_bases = source_push_semantic_source_aligned_expert_offsets_jax(
+            plan,
+            row_alignment=DIRECT_QUEUE_SOURCE_ROW_ALIGNMENT,
+        )
+        expected_x_expert, expected_valid = source_push_semantic_x_to_expert_major_direct_pallas_mgpu(
+            inputs.x,
+            plan,
+            rows_per_expert_capacity=direct_queue_rows_per_expert_capacity,
+            source_row_base_by_expert=source_row_bases,
+            block_sizes=_gather_block_sizes(args),
+            interpret=True,
+        )
+        expected_z, expected_h = w13_expert_major_reference_from_prepacked(
+            SemanticW13ExpertBenchInputs(
+                w_gate_up=inputs.w_gate_up,
+                x_expert=observed_x_expert,
+                valid=observed_valid,
+            )
+        )
+        route_y_reference = source_push_semantic_w2_expert_major_reference_jax(
+            _constrain_replicated(observed_h.astype(inputs.w_down.dtype), expert_mesh),
+            _constrain_replicated(inputs.w_down, expert_mesh),
+            _constrain_replicated(observed_valid, expert_mesh),
+        )
+        expected_return_y = source_push_semantic_forward_return_direct_to_source_reference_jax(
+            route_y_reference,
+            plan,
+            block_sizes=_forward_return_block_sizes(args),
+            route_buffer_dtype=jnp.bfloat16,
+            source_row_base_by_expert=source_row_bases,
+        )
+        expected_return_y = _constrain_destination_major(expected_return_y, expert_mesh)
+        forward_queue_metadata = source_push_semantic_forward_return_queue_metadata_jax(
+            plan,
+            rows_per_expert_capacity=direct_queue_rows_per_expert_capacity,
+            return_row_block=_forward_return_block_sizes(args).row_block,
+            source_row_base_by_expert=source_row_bases,
+        )
+        expected_y = source_push_semantic_forward_combine_source_gather_reference_jax(
+            expected_return_y,
+            forward_queue_metadata,
+            output_dtype=jnp.float32,
+        )
+        expected_dy_route, expected_dcombine = source_push_semantic_backward_source_expand_from_return_queue_jax(
+            inputs.dy,
+            observed_return_y,
+            plan,
+            rows_per_expert_capacity=direct_queue_rows_per_expert_capacity,
+            source_row_base_by_expert=source_row_bases,
+        )
+        expected_dh, expected_dw2 = w2_expert_major_prepacked_backward(
+            SemanticW2ExpertBenchInputs(
+                w_down=inputs.w_down,
+                h_expert=observed_h.astype(inputs.w_down.dtype),
+                dy_expert=expected_dy_route.astype(inputs.w_down.dtype),
+                valid=observed_valid,
+            ),
+            implementation=SOURCE_PUSH_W2_MATMUL_BACKWARD_IMPLEMENTATION_REFERENCE,
+        )
+        expected_dz13 = source_push_semantic_swiglu_backward_expert_major_jax(
+            expected_dh,
+            observed_z,
+            observed_valid,
+        )
+        expected_dx_route, expected_dw13 = source_push_semantic_w13_backward_expert_major_reference_jax(
+            observed_x_expert,
+            expected_dz13,
+            inputs.w_gate_up,
+            observed_valid,
+        )
+        expected_return_dx = source_push_semantic_dx_return_direct_to_source_reference_jax(
+            expected_dx_route,
+            plan,
+            block_sizes=_dx_queue_return_block_sizes(args),
+            route_buffer_dtype=jnp.bfloat16,
+            source_row_base_by_expert=source_row_bases,
+        )
+        dx_queue_metadata = source_push_semantic_queue_metadata_jax(
+            plan,
+            return_row_block=_dx_queue_return_block_sizes(args).row_block,
+            entries_per_dst=expected_return_dx.shape[2],
+        )
+        expected_dx = source_push_semantic_dx_combine_source_queue_reference_jax(
+            expected_return_dx,
+            dx_queue_metadata,
+            output_dtype=jnp.float32,
+        )
+        return_queue_metadata = source_push_semantic_queue_metadata_jax(
+            plan,
+            return_row_block=observed_return_y.shape[3],
+            entries_per_dst=observed_return_y.shape[2],
+        )
+        queue_row = jnp.arange(observed_return_y.shape[3], dtype=jnp.int32)
+        live_return_y = queue_row[None, None, None, :, None] < return_queue_metadata.valid_rows[..., None, None]
+        observed_live_return_y = jnp.where(
+            live_return_y,
+            observed_return_y,
+            jnp.zeros((), dtype=observed_return_y.dtype),
+        )
+        expected_live_return_y = jnp.where(
+            live_return_y,
+            expected_return_y,
+            jnp.zeros((), dtype=expected_return_y.dtype),
+        )
+        return_y_diff = observed_live_return_y.astype(jnp.float32) - expected_live_return_y.astype(jnp.float32)
+        live_return_y_element_count = jnp.sum(live_return_y.astype(jnp.float32)) * observed_return_y.shape[-1]
+
+        metrics = {
+            **_comparison_metrics("x_expert_stage", observed_x_expert, expected_x_expert),
+            **_comparison_metrics("z_stage", observed_z, expected_z),
+            **_comparison_metrics("h_stage", observed_h, expected_h),
+            **_comparison_metrics("y_stage", observed_y, expected_y),
+            **_comparison_metrics("dy_route_stage", observed_dy_route, expected_dy_route),
+            **_comparison_metrics("dcombine_stage", observed_dcombine, expected_dcombine),
+            **_comparison_metrics("dh_stage", observed_dh, expected_dh),
+            **_comparison_metrics("dz13_stage", observed_dz13, expected_dz13),
+            **_comparison_metrics("dw2_stage", observed_dw2, expected_dw2),
+            **_comparison_metrics("dx_route_stage", observed_dx_route, expected_dx_route),
+            **_comparison_metrics("dw13_stage", observed_dw13, expected_dw13),
+            **_comparison_metrics("dx_stage", observed_dx, expected_dx),
+            "valid_stage_error_count": jnp.sum(observed_valid != expected_valid, dtype=jnp.int32),
+            "return_y_stage_max_abs_diff": jnp.max(jnp.abs(return_y_diff)),
+            "return_y_stage_mean_abs_diff": jnp.sum(jnp.abs(return_y_diff))
+            / jnp.maximum(live_return_y_element_count, 1.0),
+            "return_y_stage_live_element_count": live_return_y_element_count,
+            "expected_return_y_stage_nonfinite_error_count": _nonfinite_error_count(expected_live_return_y),
+            "observed_return_y_stage_nonfinite_error_count": _nonfinite_error_count(observed_live_return_y),
+        }
+        return metrics
+
+    def forward_backward_expert_major_saved_x_components(
+        inputs: SemanticBenchInputs,
+        *,
+        use_direct_pack: bool = False,
+        use_lookup_pack: bool = False,
+        use_forward_source_gather: bool = False,
+        use_owner_sharded_return: bool = False,
+        use_owner_sharded_y_return: bool = False,
+        use_owner_sharded_slot_reduce_y_return: bool = False,
+        use_remote_source_gather_y_return: bool = False,
+        use_direct_return_combine_y: bool = False,
+        skip_y_return: bool = False,
+        delay_y_return: bool = False,
+        use_owner_sharded_dx_return: bool = False,
+        use_remote_source_gather_dx_return: bool = False,
+        semantic_plan: SourcePushSemanticPlan | None = None,
+        rows_per_expert_capacity_override: int | None = None,
+    ):
+        active_plan = plan if semantic_plan is None else semantic_plan
+        active_rows_per_expert_capacity = (
+            rows_per_expert_capacity
+            if rows_per_expert_capacity_override is None
+            else rows_per_expert_capacity_override
+        )
+        if use_direct_pack and use_lookup_pack:
+            raise ValueError("use_direct_pack and use_lookup_pack are mutually exclusive")
+        use_owner_sharded_y_return = use_owner_sharded_y_return or use_owner_sharded_return
+        use_owner_sharded_dx_return = use_owner_sharded_dx_return or use_owner_sharded_return
+        y_return_modes = (
+            use_forward_source_gather,
+            use_owner_sharded_y_return,
+            use_owner_sharded_slot_reduce_y_return,
+            use_remote_source_gather_y_return,
+            use_direct_return_combine_y,
+        )
+        if sum(bool(mode_enabled) for mode_enabled in y_return_modes) > 1:
+            raise ValueError("y-return variants are mutually exclusive")
+        if skip_y_return and any(y_return_modes):
+            raise ValueError("skip_y_return is mutually exclusive with y-return variants")
+        if delay_y_return and not use_remote_source_gather_y_return:
+            raise ValueError("delay_y_return is only implemented for remote source-gather y-return")
+        if use_owner_sharded_dx_return and use_remote_source_gather_dx_return:
+            raise ValueError("dx-return variants are mutually exclusive")
+        if use_lookup_pack:
+            x_expert, valid = source_push_semantic_x_to_expert_major_lookup_pallas_mgpu(
+                inputs.x,
+                active_plan,
+                rows_per_expert_capacity=active_rows_per_expert_capacity,
+                block_sizes=_gather_block_sizes(args),
+                interpret=args.pallas_interpret,
+            )
+        elif use_direct_pack:
+            x_expert, valid = source_push_semantic_x_to_expert_major_direct_pallas_mgpu(
+                inputs.x,
+                active_plan,
+                rows_per_expert_capacity=active_rows_per_expert_capacity,
+                block_sizes=_gather_block_sizes(args),
+                interpret=args.pallas_interpret,
+            )
+        else:
+            x_expert, valid = source_push_semantic_x_to_expert_major_jax(
+                inputs.x,
+                active_plan,
+                rows_per_expert_capacity=active_rows_per_expert_capacity,
+            )
+        packed_inputs = SemanticForwardExpertBenchInputs(
+            w_gate_up=inputs.w_gate_up,
+            w_down=inputs.w_down,
+            x_expert=x_expert,
+            valid=valid,
+        )
+        if expert_mesh is not None:
+            packed_inputs = _shard_forward_expert_inputs(packed_inputs, expert_mesh)
+        z_expert, h_expert = source_push_semantic_w13_from_x_expert_pallas_mgpu(
+            packed_inputs.x_expert,
+            packed_inputs.w_gate_up,
+            packed_inputs.valid,
+            block_sizes=_w13_expert_major_block_sizes(args),
+            interpret=args.pallas_interpret,
+            mesh=expert_mesh,
+        )
+        route_y_expert = source_push_semantic_w2_expert_major_assume_zero_invalid_pallas_mgpu(
+            h_expert.astype(packed_inputs.w_down.dtype),
+            packed_inputs.w_down,
+            block_sizes=_w2_forward_expert_major_block_sizes(args),
+            interpret=args.pallas_interpret,
+            mesh=expert_mesh,
+        )
+        saved_return_y = None
+        if skip_y_return:
+            y = None
+        elif use_direct_return_combine_y:
+            saved_return_y = source_push_semantic_forward_return_direct_to_source_pallas_mgpu(
+                h_expert.astype(packed_inputs.w_down.dtype),
+                packed_inputs.w_down,
+                packed_inputs.valid,
+                active_plan,
+                w2_block_sizes=_w2_forward_expert_major_block_sizes(args),
+                return_block_sizes=_forward_return_block_sizes(args),
+                route_buffer_dtype=jnp.bfloat16,
+                interpret=args.pallas_interpret,
+                mesh=expert_mesh,
+            )
+            y = source_push_semantic_forward_combine_source_gather_pallas_mgpu(
+                saved_return_y,
+                active_plan,
+                block_sizes=_forward_return_block_sizes(args),
+                output_dtype=inputs.x.dtype,
+                interpret=args.pallas_interpret,
+                mesh=expert_mesh,
+            )
+        elif use_forward_source_gather:
+            y = source_push_semantic_forward_return_source_gather_pallas_mgpu(
+                route_y_expert,
+                active_plan,
+                block_sizes=_forward_return_block_sizes(args),
+                interpret=args.pallas_interpret,
+                mesh=expert_mesh,
+            )
+        elif use_owner_sharded_y_return:
+            y = source_push_semantic_forward_return_sum_owner_sharded_pallas_mgpu(
+                route_y_expert,
+                active_plan,
+                block_sizes=_forward_return_block_sizes(args),
+                interpret=args.pallas_interpret,
+                mesh=expert_mesh,
+            )
+        elif use_owner_sharded_slot_reduce_y_return:
+            y = source_push_semantic_forward_return_slot_reduce_owner_sharded_pallas_mgpu(
+                route_y_expert,
+                active_plan,
+                block_sizes=_forward_return_block_sizes(args),
+                interpret=args.pallas_interpret,
+                mesh=expert_mesh,
+            )
+        elif use_remote_source_gather_y_return and not delay_y_return:
+            y = source_push_semantic_forward_return_remote_source_gather_pallas_mgpu(
+                route_y_expert,
+                active_plan,
+                block_sizes=_forward_return_block_sizes(args),
+                interpret=args.pallas_interpret,
+                mesh=expert_mesh,
+            )
+        elif delay_y_return:
+            y = None
+        else:
+            y = source_push_semantic_forward_return_sum_pallas_mgpu(
+                route_y_expert,
+                active_plan,
+                block_sizes=_forward_return_block_sizes(args),
+                interpret=args.pallas_interpret,
+                mesh=expert_mesh,
+            )
+        dy_route_expert, dcombine = source_push_semantic_backward_source_expand_from_expert_major_pallas_mgpu(
+            inputs.dy,
+            route_y_expert,
+            active_plan,
+            block_sizes=_backward_block_sizes(args),
+            interpret=args.pallas_interpret,
+            mesh=expert_mesh,
+        )
+        dh_expert, dw2 = w2_expert_major_prepacked_backward(
+            SemanticW2ExpertBenchInputs(
+                w_down=packed_inputs.w_down,
+                h_expert=h_expert.astype(packed_inputs.w_down.dtype),
+                dy_expert=dy_route_expert.astype(packed_inputs.w_down.dtype),
+                valid=packed_inputs.valid,
+            ),
+            implementation=SOURCE_PUSH_W2_MATMUL_BACKWARD_IMPLEMENTATION_PALLAS_MGPU,
+        )
+        dz13 = source_push_semantic_swiglu_backward_expert_major_jax(
+            dh_expert,
+            z_expert,
+            packed_inputs.valid,
+        )
+        w13_backward_inputs = _constrain_w13_backward_expert_major_inputs(
+            SemanticW13BackwardExpertBenchInputs(
+                x_expert=packed_inputs.x_expert.astype(packed_inputs.w_gate_up.dtype),
+                dz13=dz13.astype(packed_inputs.w_gate_up.dtype),
+                w_gate_up=packed_inputs.w_gate_up,
+                valid=packed_inputs.valid,
+            ),
+            expert_mesh,
+        )
+        dx_route, dw13 = source_push_semantic_w13_backward_expert_major_pallas_mgpu(
+            w13_backward_inputs.x_expert,
+            w13_backward_inputs.dz13,
+            w13_backward_inputs.w_gate_up,
+            w13_backward_inputs.valid,
+            block_sizes=_w13_backward_block_sizes(args),
+            interpret=args.pallas_interpret,
+            lowering_semantics=_lowering_semantics(args.w13_backward_lowering),
+            mesh=expert_mesh,
+        )
+        if use_owner_sharded_dx_return:
+            dx = source_push_semantic_dx_return_source_gather_owner_sharded_pallas_mgpu(
+                _constrain_destination_major(dx_route, expert_mesh),
+                active_plan,
+                block_sizes=_dx_return_block_sizes(args),
+                interpret=args.pallas_interpret,
+                mesh=expert_mesh,
+            )
+        elif use_remote_source_gather_dx_return:
+            dx = source_push_semantic_dx_return_remote_source_gather_pallas_mgpu(
+                dx_route,
+                active_plan,
+                block_sizes=_dx_return_block_sizes(args),
+                interpret=args.pallas_interpret,
+                mesh=expert_mesh,
+            )
+        else:
+            dx = source_push_semantic_dx_return_source_gather_pallas_mgpu(
+                dx_route,
+                active_plan,
+                block_sizes=_dx_return_block_sizes(args),
+                interpret=args.pallas_interpret,
+                mesh=expert_mesh,
+            )
+        if delay_y_return:
+            y = source_push_semantic_forward_return_remote_source_gather_pallas_mgpu(
+                route_y_expert,
+                active_plan,
+                block_sizes=_forward_return_block_sizes(args),
+                interpret=args.pallas_interpret,
+                mesh=expert_mesh,
+            )
+        return (
+            y,
+            dx,
+            dcombine,
+            dw2,
+            dw13,
+            x_expert,
+            valid,
+            z_expert,
+            h_expert,
+            route_y_expert,
+            dy_route_expert,
+            dh_expert,
+            dz13,
+            saved_return_y,
+        )
+
+    def forward_backward_expert_major_saved_x_pallas(inputs: SemanticBenchInputs):
+        y, dx, dcombine, dw2, dw13, *_intermediates = forward_backward_expert_major_saved_x_components(inputs)
+        return y, dx, dcombine, dw2, dw13
+
+    def forward_backward_expert_major_saved_x_direct_pack_pallas(inputs: SemanticBenchInputs):
+        y, dx, dcombine, dw2, dw13, *_intermediates = forward_backward_expert_major_saved_x_components(
+            inputs,
+            use_direct_pack=True,
+        )
+        return y, dx, dcombine, dw2, dw13
+
+    def forward_backward_expert_major_saved_x_lookup_pack_pallas(inputs: SemanticBenchInputs):
+        y, dx, dcombine, dw2, dw13, *_intermediates = forward_backward_expert_major_saved_x_components(
+            inputs,
+            use_lookup_pack=True,
+        )
+        return y, dx, dcombine, dw2, dw13
+
+    def forward_backward_expert_major_saved_x_direct_pack_source_gather_pallas(inputs: SemanticBenchInputs):
+        y, dx, dcombine, dw2, dw13, *_intermediates = forward_backward_expert_major_saved_x_components(
+            inputs,
+            use_direct_pack=True,
+            use_forward_source_gather=True,
+        )
+        return y, dx, dcombine, dw2, dw13
+
+    def forward_backward_expert_major_saved_x_direct_pack_owner_sharded_pallas(inputs: SemanticBenchInputs):
+        y, dx, dcombine, dw2, dw13, *_intermediates = forward_backward_expert_major_saved_x_components(
+            inputs,
+            use_direct_pack=True,
+            use_owner_sharded_return=True,
+        )
+        return y, dx, dcombine, dw2, dw13
+
+    def forward_backward_expert_major_saved_x_direct_pack_owner_sharded_y_pallas(inputs: SemanticBenchInputs):
+        y, dx, dcombine, dw2, dw13, *_intermediates = forward_backward_expert_major_saved_x_components(
+            inputs,
+            use_direct_pack=True,
+            use_owner_sharded_y_return=True,
+        )
+        return y, dx, dcombine, dw2, dw13
+
+    def forward_backward_expert_major_saved_x_direct_pack_direct_return_combine_duplicate_w2_pallas(
+        inputs: SemanticBenchInputs,
+    ):
+        y, dx, dcombine, dw2, dw13, *_intermediates = forward_backward_expert_major_saved_x_components(
+            inputs,
+            use_direct_pack=True,
+            use_direct_return_combine_y=True,
+        )
+        return y, dx, dcombine, dw2, dw13
+
+    def forward_backward_expert_major_saved_x_direct_pack_owner_sharded_y_slot_reduce_pallas(
+        inputs: SemanticBenchInputs,
+    ):
+        y, dx, dcombine, dw2, dw13, *_intermediates = forward_backward_expert_major_saved_x_components(
+            inputs,
+            use_direct_pack=True,
+            use_owner_sharded_slot_reduce_y_return=True,
+        )
+        return y, dx, dcombine, dw2, dw13
+
+    def forward_backward_expert_major_saved_x_direct_pack_no_y_pallas(inputs: SemanticBenchInputs):
+        _y, dx, dcombine, dw2, dw13, *_intermediates = forward_backward_expert_major_saved_x_components(
+            inputs,
+            use_direct_pack=True,
+            skip_y_return=True,
+        )
+        return dx, dcombine, dw2, dw13
+
+    def forward_backward_expert_major_saved_x_direct_pack_remote_y_pallas(inputs: SemanticBenchInputs):
+        y, dx, dcombine, dw2, dw13, *_intermediates = forward_backward_expert_major_saved_x_components(
+            inputs,
+            use_direct_pack=True,
+            use_remote_source_gather_y_return=True,
+        )
+        return y, dx, dcombine, dw2, dw13
+
+    def forward_backward_expert_major_saved_x_direct_pack_remote_y_delayed_pallas(inputs: SemanticBenchInputs):
+        y, dx, dcombine, dw2, dw13, *_intermediates = forward_backward_expert_major_saved_x_components(
+            inputs,
+            use_direct_pack=True,
+            use_remote_source_gather_y_return=True,
+            delay_y_return=True,
+        )
+        return y, dx, dcombine, dw2, dw13
+
+    def forward_backward_expert_major_saved_x_direct_pack_owner_sharded_y_with_metadata_pallas(
+        inputs: SemanticBenchInputs,
+    ):
+        capacity = SourcePushSemanticMlpCapacity(
+            rows_per_src_dst=plan.assignment_ids.shape[-1],
+            rows_per_expert=rows_per_expert_capacity,
+        )
+
+        def loss(x_arg, route_weights_arg, w13_arg, w2_arg):
+            if args.pallas_interpret:
+                y, dropped_routes = _source_push_moe_mlp_semantic_pallas_mgpu(
+                    inputs.selected_experts,
+                    x_arg,
+                    route_weights_arg,
+                    w13_arg,
+                    w2_arg,
+                    capacity=capacity,
+                    capacity_factor=args.capacity_factor,
+                    mesh=expert_mesh,
+                    interpret=True,
+                )
+            else:
+                assert expert_mesh is not None
+                y, dropped_routes = source_push_moe_mlp_semantic_pallas_mgpu(
+                    inputs.selected_experts,
+                    x_arg,
+                    route_weights_arg,
+                    w13_arg,
+                    w2_arg,
+                    capacity=capacity,
+                    capacity_factor=args.capacity_factor,
+                    mesh=expert_mesh,
+                )
+            return jnp.sum(y * inputs.dy), (y, dropped_routes)
+
+        (_loss, (y, _dropped_routes)), (dx, dcombine, dw13, dw2) = jax.value_and_grad(
+            loss,
+            argnums=(0, 1, 2, 3),
+            has_aux=True,
+        )(
+            inputs.x,
+            inputs.route_weights,
+            inputs.w_gate_up,
+            inputs.w_down,
+        )
+        return y, dx, dcombine, dw2, dw13
+
+    def forward_backward_expert_major_saved_x_direct_pack_owner_sharded_y_with_pallas_metadata_pallas(
+        inputs: SemanticBenchInputs,
+    ):
+        active_plan = build_source_push_semantic_plan_pallas_mgpu(
+            inputs.selected_experts,
+            inputs.route_weights,
+            ep_size=args.ep_size,
+            experts_per_rank=args.experts_per_rank,
+            rows_per_src_dst_capacity=plan.assignment_ids.shape[-1],
+            capacity_factor=args.capacity_factor,
+            block_sizes=_metadata_block_sizes(args),
+            interpret=args.pallas_interpret,
+        )
+        y, dx, dcombine, dw2, dw13, *_intermediates = forward_backward_expert_major_saved_x_components(
+            inputs,
+            use_direct_pack=True,
+            use_owner_sharded_y_return=True,
+            semantic_plan=active_plan,
+            rows_per_expert_capacity_override=rows_per_expert_capacity,
+        )
+        return y, dx, dcombine, dw2, dw13
+
+    def forward_backward_expert_major_saved_x_direct_pack_owner_sharded_dx_pallas(inputs: SemanticBenchInputs):
+        y, dx, dcombine, dw2, dw13, *_intermediates = forward_backward_expert_major_saved_x_components(
+            inputs,
+            use_direct_pack=True,
+            use_owner_sharded_dx_return=True,
+        )
+        return y, dx, dcombine, dw2, dw13
+
+    def forward_backward_expert_major_saved_x_direct_pack_remote_dx_pallas(inputs: SemanticBenchInputs):
+        y, dx, dcombine, dw2, dw13, *_intermediates = forward_backward_expert_major_saved_x_components(
+            inputs,
+            use_direct_pack=True,
+            use_remote_source_gather_dx_return=True,
+        )
+        return y, dx, dcombine, dw2, dw13
+
+    def forward_backward_expert_major_saved_x_compare_impl(
+        inputs: SemanticBenchInputs,
+        *,
+        use_direct_pack: bool = False,
+        use_lookup_pack: bool = False,
+        use_forward_source_gather: bool = False,
+        use_owner_sharded_return: bool = False,
+        use_owner_sharded_y_return: bool = False,
+        use_owner_sharded_dx_return: bool = False,
+        use_direct_return_combine_y: bool = False,
+    ):
+        (
+            observed_y,
+            observed_dx,
+            observed_dcombine,
+            observed_dw2,
+            observed_dw13,
+            x_expert,
+            valid,
+            observed_z,
+            observed_h,
+            observed_route_y,
+            observed_dy_route,
+            observed_dh,
+            observed_dz13,
+            _observed_return_y,
+        ) = forward_backward_expert_major_saved_x_components(
+            inputs,
+            use_direct_pack=use_direct_pack,
+            use_lookup_pack=use_lookup_pack,
+            use_forward_source_gather=use_forward_source_gather,
+            use_owner_sharded_return=use_owner_sharded_return,
+            use_owner_sharded_y_return=use_owner_sharded_y_return,
+            use_owner_sharded_dx_return=use_owner_sharded_dx_return,
+            use_direct_return_combine_y=use_direct_return_combine_y,
+        )
+        expected_dy_route, expected_dcombine = source_push_semantic_backward_source_expand_from_expert_major_jax(
+            inputs.dy,
+            observed_route_y,
+            plan,
+        )
+        expected_dh, expected_dw2 = w2_expert_major_prepacked_backward(
+            SemanticW2ExpertBenchInputs(
+                w_down=inputs.w_down,
+                h_expert=observed_h.astype(inputs.w_down.dtype),
+                dy_expert=expected_dy_route.astype(inputs.w_down.dtype),
+                valid=valid,
+            ),
+            implementation=SOURCE_PUSH_W2_MATMUL_BACKWARD_IMPLEMENTATION_REFERENCE,
+        )
+        expected_dz13 = source_push_semantic_swiglu_backward_expert_major_jax(expected_dh, observed_z, valid)
+        expected_dx_route, expected_dw13 = source_push_semantic_w13_backward_expert_major_reference_jax(
+            x_expert,
+            expected_dz13,
+            inputs.w_gate_up,
+            valid,
+        )
+        expected_dx, _expected_dx_by_slot = source_push_semantic_dx_return_expert_major_jax(expected_dx_route, plan)
+        expected_y, _expected_route_by_slot = source_push_semantic_forward_return_expert_major_reference_jax(
+            observed_route_y,
+            plan,
+        )
+        y_diff = observed_y.astype(jnp.float32) - expected_y.astype(jnp.float32)
+        dx_diff = observed_dx.astype(jnp.float32) - expected_dx.astype(jnp.float32)
+        dcombine_diff = observed_dcombine.astype(jnp.float32) - expected_dcombine.astype(jnp.float32)
+        dy_route_diff = observed_dy_route.astype(jnp.float32) - expected_dy_route.astype(jnp.float32)
+        dh_diff = observed_dh.astype(jnp.float32) - expected_dh.astype(jnp.float32)
+        dz13_diff = observed_dz13.astype(jnp.float32) - expected_dz13.astype(jnp.float32)
+        dw2_diff = observed_dw2.astype(jnp.float32) - expected_dw2.astype(jnp.float32)
+        dw13_diff = observed_dw13.astype(jnp.float32) - expected_dw13.astype(jnp.float32)
+        return {
+            "y_stage_max_abs_diff": jnp.max(jnp.abs(y_diff)),
+            "dx_stage_max_abs_diff": jnp.max(jnp.abs(dx_diff)),
+            "dcombine_stage_max_abs_diff": jnp.max(jnp.abs(dcombine_diff)),
+            "dy_route_stage_max_abs_diff": jnp.max(jnp.abs(dy_route_diff)),
+            "dh_stage_max_abs_diff": jnp.max(jnp.abs(dh_diff)),
+            "dz13_stage_max_abs_diff": jnp.max(jnp.abs(dz13_diff)),
+            "dw2_stage_max_abs_diff": jnp.max(jnp.abs(dw2_diff)),
+            "dw13_stage_max_abs_diff": jnp.max(jnp.abs(dw13_diff)),
+            "expected_dx_nonfinite_error_count": _nonfinite_error_count(expected_dx),
+            "observed_dx_nonfinite_error_count": _nonfinite_error_count(observed_dx),
+            "expected_y_nonfinite_error_count": _nonfinite_error_count(expected_y),
+            "observed_y_nonfinite_error_count": _nonfinite_error_count(observed_y),
+        }
+
+    def forward_backward_expert_major_saved_x_compare(inputs: SemanticBenchInputs):
+        return forward_backward_expert_major_saved_x_compare_impl(inputs)
+
+    def forward_backward_expert_major_saved_x_lookup_pack_compare(inputs: SemanticBenchInputs):
+        return forward_backward_expert_major_saved_x_compare_impl(inputs, use_lookup_pack=True)
+
+    def forward_backward_expert_major_saved_x_direct_pack_source_gather_compare(inputs: SemanticBenchInputs):
+        return forward_backward_expert_major_saved_x_compare_impl(
+            inputs,
+            use_direct_pack=True,
+            use_forward_source_gather=True,
+        )
+
+    def forward_backward_expert_major_saved_x_direct_pack_owner_sharded_compare(inputs: SemanticBenchInputs):
+        return forward_backward_expert_major_saved_x_compare_impl(
+            inputs,
+            use_direct_pack=True,
+            use_owner_sharded_return=True,
+        )
+
+    def forward_backward_expert_major_saved_x_direct_pack_direct_return_combine_duplicate_w2_compare(
+        inputs: SemanticBenchInputs,
+    ):
+        return forward_backward_expert_major_saved_x_compare_impl(
+            inputs,
+            use_direct_pack=True,
+            use_direct_return_combine_y=True,
+        )
+
+    table: dict[str, Callable[[SemanticBenchInputs], Any]] = {
+        MODE_GATHER_X: gather_x,
+        MODE_GATHER_X_PALLAS: gather_x_pallas,
+        MODE_W13: w13,
+        MODE_W13_PALLAS_SCAFFOLD: w13_pallas_scaffold,
+        MODE_W13_EXPERT_MAJOR_PACK: w13_expert_major_pack,
+        MODE_W13_EXPERT_MAJOR_PACK_PALLAS_SCAFFOLD: w13_expert_major_pack_pallas_scaffold,
+        MODE_W13_EXPERT_MAJOR_PACK_PALLAS_DIRECT: w13_expert_major_pack_pallas_direct,
+        MODE_W13_EXPERT_MAJOR_PACK_PALLAS_LOOKUP: w13_expert_major_pack_pallas_lookup,
+        MODE_W13_EXPERT_MAJOR_PACK_RESHARD: w13_expert_major_pack_reshard,
+        MODE_W13_EXPERT_MAJOR_PREPACKED: w13_expert_major_prepacked,
+        MODE_W13_EXPERT_MAJOR_PREPACKED_PALLAS: w13_expert_major_prepacked_pallas,
+        MODE_W13_EXPERT_MAJOR_PREPACKED_COMPARE: w13_expert_major_prepacked_compare,
+        MODE_W13_EXPERT_MAJOR_PALLAS: w13_expert_major_pallas,
+        MODE_W13_EXPERT_MAJOR_COMPARE: w13_expert_major_compare,
+        MODE_SOURCE_PADDED_INBOX_PACK_PALLAS: source_padded_inbox_pack_pallas,
+        MODE_W13_SOURCE_PADDED_INBOX_PALLAS: w13_source_padded_inbox_pallas,
+        MODE_W13_SOURCE_PADDED_INBOX_COMPARE: w13_source_padded_inbox_compare,
+        MODE_W13_SOURCE_PADDED_DIRECT_PACK_PALLAS: w13_source_padded_direct_pack_pallas,
+        MODE_W13_SOURCE_PADDED_DIRECT_PACK_COMPARE: w13_source_padded_direct_pack_compare,
+        MODE_W2: w2,
+        MODE_W2_PALLAS: w2_pallas,
+        MODE_W2_COMBINE_PALLAS_SCAFFOLD: w2_combine_pallas_scaffold,
+        MODE_W2_EXPERT_MAJOR_PREPACKED: w2_expert_major_prepacked,
+        MODE_W2_EXPERT_MAJOR_PREPACKED_PALLAS: w2_expert_major_prepacked_pallas,
+        MODE_W2_EXPERT_MAJOR_PREPACKED_COMPARE: w2_expert_major_prepacked_compare,
+        MODE_W2_EXPERT_MAJOR_PREPACKED_PALLAS_ASSUME_ZERO_INVALID: (
+            w2_expert_major_prepacked_pallas_assume_zero_invalid
+        ),
+        MODE_W2_EXPERT_MAJOR_PREPACKED_ASSUME_ZERO_INVALID_COMPARE: (
+            w2_expert_major_prepacked_assume_zero_invalid_compare
+        ),
+        MODE_COMBINE: combine,
+        MODE_FORWARD: forward,
+        MODE_FORWARD_PALLAS_SCAFFOLD: forward_pallas_scaffold,
+        MODE_FORWARD_EXPERT_MAJOR_PALLAS: forward_expert_major_pallas,
+        MODE_FORWARD_EXPERT_MAJOR_COMPARE: forward_expert_major_compare,
+        MODE_FORWARD_SOURCE_PADDED_INBOX_DIRECT_RETURN_COMBINE_PALLAS: (
+            forward_source_padded_inbox_direct_return_combine_pallas
+        ),
+        MODE_FORWARD_SOURCE_PADDED_INBOX_DIRECT_RETURN_COMBINE_COMPARE: (
+            forward_source_padded_inbox_direct_return_combine_compare
+        ),
+        MODE_FORWARD_SOURCE_PADDED_DIRECT_PACK_DIRECT_RETURN_COMBINE_PALLAS: (
+            forward_source_padded_direct_pack_direct_return_combine_pallas
+        ),
+        MODE_FORWARD_SOURCE_PADDED_DIRECT_PACK_DIRECT_RETURN_COMBINE_COMPARE: (
+            forward_source_padded_direct_pack_direct_return_combine_compare
+        ),
+        MODE_FORWARD_BACKWARD_SOURCE_PADDED_INBOX_DIRECT_QUEUE_PALLAS: (
+            forward_backward_source_padded_inbox_direct_queue_pallas
+        ),
+        MODE_FORWARD_BACKWARD_SOURCE_PADDED_INBOX_DIRECT_QUEUE_COMPARE: (
+            forward_backward_source_padded_inbox_direct_queue_compare
+        ),
+        MODE_FORWARD_BACKWARD_SOURCE_PADDED_DIRECT_PACK_DIRECT_QUEUE_PALLAS: (
+            forward_backward_source_padded_direct_pack_direct_queue_pallas
+        ),
+        MODE_FORWARD_BACKWARD_SOURCE_PADDED_DIRECT_PACK_DIRECT_QUEUE_COMPARE: (
+            forward_backward_source_padded_direct_pack_direct_queue_compare
+        ),
+        MODE_FORWARD_BACKWARD_SOURCE_PADDED_DIRECT_PACK_DIRECT_QUEUE_WITH_METADATA_PALLAS: (
+            forward_backward_source_padded_direct_pack_direct_queue_with_metadata_pallas
+        ),
+        MODE_FORWARD_EXPERT_MAJOR_PREPACKED_PALLAS: forward_expert_major_prepacked_pallas,
+        MODE_FORWARD_EXPERT_MAJOR_PREPACKED_COMPARE: forward_expert_major_prepacked_compare,
+        MODE_FORWARD_EXPERT_MAJOR_DIRECT_PACK_OWNER_SHARDED_Y_STOP_PALLAS: (
+            forward_expert_major_direct_pack_owner_sharded_y_stop_pallas
+        ),
+        MODE_FORWARD_EXPERT_MAJOR_DIRECT_PACK_REMOTE_Y_STOP_PALLAS: forward_expert_major_direct_pack_remote_y_stop_pallas,
+        MODE_FORWARD_SOURCE_EXPAND_DIRECT_PACK_OWNER_SHARDED_Y_PALLAS: (
+            forward_source_expand_direct_pack_owner_sharded_y_pallas
+        ),
+        MODE_FORWARD_SOURCE_EXPAND_DIRECT_PACK_REMOTE_Y_PALLAS: forward_source_expand_direct_pack_remote_y_pallas,
+        MODE_FORWARD_W2_BACKWARD_DIRECT_PACK_OWNER_SHARDED_Y_PALLAS: (
+            forward_w2_backward_direct_pack_owner_sharded_y_pallas
+        ),
+        MODE_FORWARD_W2_BACKWARD_DIRECT_PACK_REMOTE_Y_PALLAS: forward_w2_backward_direct_pack_remote_y_pallas,
+        MODE_FORWARD_W13_BACKWARD_DIRECT_PACK_OWNER_SHARDED_Y_PALLAS: (
+            forward_w13_backward_direct_pack_owner_sharded_y_pallas
+        ),
+        MODE_FORWARD_W13_BACKWARD_DIRECT_PACK_REMOTE_Y_PALLAS: forward_w13_backward_direct_pack_remote_y_pallas,
+        MODE_FORWARD_W13_BACKWARD_DIGEST_DIRECT_PACK_OWNER_SHARDED_Y_PALLAS: (
+            forward_w13_backward_digest_direct_pack_owner_sharded_y_pallas
+        ),
+        MODE_FORWARD_W13_BACKWARD_DIGEST_DIRECT_PACK_REMOTE_Y_PALLAS: (
+            forward_w13_backward_digest_direct_pack_remote_y_pallas
+        ),
+        MODE_FORWARD_W13_BACKWARD_BARRIER_DIGEST_DIRECT_PACK_OWNER_SHARDED_Y_PALLAS: (
+            forward_w13_backward_barrier_digest_direct_pack_owner_sharded_y_pallas
+        ),
+        MODE_FORWARD_W13_BACKWARD_BARRIER_DIGEST_DIRECT_PACK_REMOTE_Y_PALLAS: (
+            forward_w13_backward_barrier_digest_direct_pack_remote_y_pallas
+        ),
+        MODE_FORWARD_SWIGLU_BACKWARD_DIGEST_DIRECT_PACK_OWNER_SHARDED_Y_PALLAS: (
+            forward_swiglu_backward_digest_direct_pack_owner_sharded_y_pallas
+        ),
+        MODE_FORWARD_SWIGLU_BACKWARD_DIGEST_DIRECT_PACK_REMOTE_Y_PALLAS: (
+            forward_swiglu_backward_digest_direct_pack_remote_y_pallas
+        ),
+        MODE_FORWARD_W13_DX_BACKWARD_DIGEST_DIRECT_PACK_OWNER_SHARDED_Y_PALLAS: (
+            forward_w13_dx_backward_digest_direct_pack_owner_sharded_y_pallas
+        ),
+        MODE_FORWARD_W13_DX_BACKWARD_DIGEST_DIRECT_PACK_REMOTE_Y_PALLAS: (
+            forward_w13_dx_backward_digest_direct_pack_remote_y_pallas
+        ),
+        MODE_FORWARD_W13_DW13_BACKWARD_DIGEST_DIRECT_PACK_OWNER_SHARDED_Y_PALLAS: (
+            forward_w13_dw13_backward_digest_direct_pack_owner_sharded_y_pallas
+        ),
+        MODE_FORWARD_W13_DW13_BACKWARD_DIGEST_DIRECT_PACK_REMOTE_Y_PALLAS: (
+            forward_w13_dw13_backward_digest_direct_pack_remote_y_pallas
+        ),
+        MODE_FORWARD_RETURN_EXPERT_MAJOR_PREPACKED_PALLAS: forward_return_expert_major_prepacked_pallas,
+        MODE_FORWARD_RETURN_EXPERT_MAJOR_PREPACKED_COMPARE: forward_return_expert_major_prepacked_compare,
+        MODE_FORWARD_RETURN_EXPERT_MAJOR_PREPACKED_SHARDED_PALLAS: (
+            forward_return_expert_major_prepacked_sharded_pallas
+        ),
+        MODE_FORWARD_RETURN_EXPERT_MAJOR_PREPACKED_SHARDED_COMPARE: (
+            forward_return_expert_major_prepacked_sharded_compare
+        ),
+        MODE_FORWARD_RETURN_SLOT_REDUCE_EXPERT_MAJOR_PREPACKED_SHARDED_PALLAS: (
+            forward_return_slot_reduce_expert_major_prepacked_sharded_pallas
+        ),
+        MODE_FORWARD_RETURN_SLOT_REDUCE_EXPERT_MAJOR_PREPACKED_SHARDED_COMPARE: (
+            forward_return_slot_reduce_expert_major_prepacked_sharded_compare
+        ),
+        MODE_FORWARD_RETURN_SLOT_REDUCE_EXPERT_MAJOR_PREPACKED_OWNER_SHARDED_PALLAS: (
+            forward_return_slot_reduce_expert_major_prepacked_owner_sharded_pallas
+        ),
+        MODE_FORWARD_RETURN_SLOT_REDUCE_EXPERT_MAJOR_PREPACKED_OWNER_SHARDED_COMPARE: (
+            forward_return_slot_reduce_expert_major_prepacked_owner_sharded_compare
+        ),
+        MODE_FORWARD_RETURN_SUM_EXPERT_MAJOR_PREPACKED_PALLAS: forward_return_sum_expert_major_prepacked_pallas,
+        MODE_FORWARD_RETURN_SUM_EXPERT_MAJOR_PREPACKED_COMPARE: forward_return_sum_expert_major_prepacked_compare,
+        MODE_FORWARD_RETURN_SUM_EXPERT_MAJOR_PREPACKED_SHARDED_PALLAS: (
+            forward_return_sum_expert_major_prepacked_sharded_pallas
+        ),
+        MODE_FORWARD_RETURN_SUM_EXPERT_MAJOR_PREPACKED_SHARDED_COMPARE: (
+            forward_return_sum_expert_major_prepacked_sharded_compare
+        ),
+        MODE_FORWARD_RETURN_SUM_EXPERT_MAJOR_PREPACKED_OWNER_SHARDED_PALLAS: (
+            forward_return_sum_expert_major_prepacked_owner_sharded_pallas
+        ),
+        MODE_FORWARD_RETURN_SUM_EXPERT_MAJOR_PREPACKED_OWNER_SHARDED_COMPARE: (
+            forward_return_sum_expert_major_prepacked_owner_sharded_compare
+        ),
+        MODE_FORWARD_RETURN_SUM_LOOKUP_EXPERT_MAJOR_PREPACKED_OWNER_SHARDED_PALLAS: (
+            forward_return_sum_lookup_expert_major_prepacked_owner_sharded_pallas
+        ),
+        MODE_FORWARD_RETURN_SUM_LOOKUP_EXPERT_MAJOR_PREPACKED_OWNER_SHARDED_COMPARE: (
+            forward_return_sum_lookup_expert_major_prepacked_owner_sharded_compare
+        ),
+        MODE_FORWARD_RETURN_REVERSE_ROUTE_SOURCE_GATHER_EXPERT_MAJOR_PREPACKED_PALLAS: (
+            forward_return_reverse_route_source_gather_expert_major_prepacked_pallas
+        ),
+        MODE_FORWARD_RETURN_REVERSE_ROUTE_SOURCE_GATHER_EXPERT_MAJOR_PREPACKED_COMPARE: (
+            forward_return_reverse_route_source_gather_expert_major_prepacked_compare
+        ),
+        MODE_FORWARD_RETURN_REMOTE_SOURCE_GATHER_EXPERT_MAJOR_PREPACKED_PALLAS: (
+            forward_return_remote_source_gather_expert_major_prepacked_pallas
+        ),
+        MODE_FORWARD_RETURN_REMOTE_SOURCE_GATHER_EXPERT_MAJOR_PREPACKED_COMPARE: (
+            forward_return_remote_source_gather_expert_major_prepacked_compare
+        ),
+        MODE_FORWARD_RETURN_COPY_ONLY_EXPERT_MAJOR_PREPACKED_PALLAS: (
+            forward_return_copy_only_expert_major_prepacked_pallas
+        ),
+        MODE_FORWARD_RETURN_COPY_ONLY_EXPERT_MAJOR_PREPACKED_COMPARE: (
+            forward_return_copy_only_expert_major_prepacked_compare
+        ),
+        MODE_FORWARD_RETURN_DIRECT_TO_SOURCE_PALLAS: forward_return_direct_to_source_pallas,
+        MODE_FORWARD_RETURN_DIRECT_TO_SOURCE_COMPARE: forward_return_direct_to_source_compare,
+        MODE_FORWARD_COMBINE_SOURCE_GATHER_PALLAS: forward_combine_source_gather_pallas,
+        MODE_FORWARD_COMBINE_SOURCE_GATHER_COMPARE: forward_combine_source_gather_compare,
+        MODE_FORWARD_EXPERT_MAJOR_DIRECT_RETURN_COMBINE_PALLAS: forward_expert_major_direct_return_combine_pallas,
+        MODE_FORWARD_EXPERT_MAJOR_DIRECT_RETURN_COMBINE_COMPARE: forward_expert_major_direct_return_combine_compare,
+        MODE_FORWARD_EXPERT_MAJOR_DIRECT_PACK_DIRECT_RETURN_COMBINE_PALLAS: (
+            forward_expert_major_direct_pack_direct_return_combine_pallas
+        ),
+        MODE_FORWARD_EXPERT_MAJOR_DIRECT_PACK_DIRECT_RETURN_COMBINE_COMPARE: (
+            forward_expert_major_direct_pack_direct_return_combine_compare
+        ),
+        MODE_FORWARD_EXPERT_MAJOR_PREPACKED_RETURN_PALLAS: forward_expert_major_prepacked_return_pallas,
+        MODE_FORWARD_EXPERT_MAJOR_PREPACKED_RETURN_COMPARE: forward_expert_major_prepacked_return_compare,
+        MODE_FORWARD_EXPERT_MAJOR_RETURN_SUM_PALLAS: forward_expert_major_return_sum_pallas,
+        MODE_FORWARD_EXPERT_MAJOR_RETURN_SUM_COMPARE: forward_expert_major_return_sum_compare,
+        MODE_BACKWARD_SOURCE_EXPAND: backward_source_expand,
+        MODE_BACKWARD_SOURCE_EXPAND_PALLAS: backward_source_expand_pallas,
+        MODE_BACKWARD_SOURCE_EXPAND_EXPERT_MAJOR_PALLAS: backward_source_expand_expert_major_pallas,
+        MODE_BACKWARD_SOURCE_EXPAND_EXPERT_MAJOR_COMPARE: backward_source_expand_expert_major_compare,
+        MODE_BACKWARD_SOURCE_EXPAND_FROM_EXPERT_MAJOR_PALLAS: backward_source_expand_from_expert_major_pallas,
+        MODE_BACKWARD_SOURCE_EXPAND_FROM_EXPERT_MAJOR_COMPARE: backward_source_expand_from_expert_major_compare,
+        MODE_BACKWARD_SOURCE_EXPAND_FROM_SAVED_RETURN_QUEUE_PALLAS: (
+            backward_source_expand_from_saved_return_queue_pallas
+        ),
+        MODE_BACKWARD_SOURCE_EXPAND_FROM_SAVED_RETURN_QUEUE_COMPARE: (
+            backward_source_expand_from_saved_return_queue_compare
+        ),
+        MODE_BACKWARD_SOURCE_EXPAND_FROM_EXPERT_MAJOR_OWNER_SHARDED_DCOMBINE_PALLAS: (
+            backward_source_expand_from_expert_major_owner_sharded_dcombine_pallas
+        ),
+        MODE_BACKWARD_SOURCE_EXPAND_FROM_EXPERT_MAJOR_OWNER_SHARDED_DCOMBINE_COMPARE: (
+            backward_source_expand_from_expert_major_owner_sharded_dcombine_compare
+        ),
+        MODE_BACKWARD_DY_ROUTE_SOURCE_PUSH_EXPERT_MAJOR_PALLAS: (backward_dy_route_source_push_expert_major_pallas),
+        MODE_BACKWARD_DY_ROUTE_SOURCE_PUSH_EXPERT_MAJOR_COMPARE: (backward_dy_route_source_push_expert_major_compare),
+        MODE_BACKWARD_SOURCE_EXPAND_FROM_EXPERT_MAJOR_SOURCE_PUSH_PALLAS: (
+            backward_source_expand_from_expert_major_source_push_pallas
+        ),
+        MODE_BACKWARD_SOURCE_EXPAND_FROM_EXPERT_MAJOR_SOURCE_PUSH_COMPARE: (
+            backward_source_expand_from_expert_major_source_push_compare
+        ),
+        MODE_BACKWARD_DCOMBINE_SOURCE_GATHER_EXPERT_MAJOR_PALLAS: (
+            backward_dcombine_source_gather_expert_major_pallas
+        ),
+        MODE_BACKWARD_DCOMBINE_SOURCE_GATHER_EXPERT_MAJOR_COMPARE: (
+            backward_dcombine_source_gather_expert_major_compare
+        ),
+        MODE_BACKWARD_SOURCE_EXPAND_FROM_EXPERT_MAJOR_SOURCE_GATHER_PALLAS: (
+            backward_source_expand_from_expert_major_source_gather_pallas
+        ),
+        MODE_BACKWARD_SOURCE_EXPAND_FROM_EXPERT_MAJOR_SOURCE_GATHER_COMPARE: (
+            backward_source_expand_from_expert_major_source_gather_compare
+        ),
+        MODE_BACKWARD_W2: backward_w2,
+        MODE_BACKWARD_W2_EXPERT_MAJOR: backward_w2_expert_major,
+        MODE_BACKWARD_W2_EXPERT_MAJOR_PALLAS: backward_w2_expert_major_pallas,
+        MODE_BACKWARD_W2_EXPERT_MAJOR_COMPARE: backward_w2_expert_major_compare,
+        MODE_BACKWARD_W2_EXPERT_MAJOR_PACK: backward_w2_expert_major_pack,
+        MODE_BACKWARD_W2_EXPERT_MAJOR_PACK_RESHARD: backward_w2_expert_major_pack_reshard,
+        MODE_BACKWARD_W2_EXPERT_MAJOR_PREPACKED: backward_w2_expert_major_prepacked,
+        MODE_BACKWARD_W2_EXPERT_MAJOR_PREPACKED_PALLAS: backward_w2_expert_major_prepacked_pallas,
+        MODE_BACKWARD_W2_EXPERT_MAJOR_PREPACKED_COMPARE: backward_w2_expert_major_prepacked_compare,
+        MODE_BACKWARD_W2_DH_PALLAS: backward_w2_dh_pallas,
+        MODE_BACKWARD_W2_DW2_PALLAS: backward_w2_dw2_pallas,
+        MODE_BACKWARD_W2_PALLAS_SCAFFOLD: backward_w2_pallas_scaffold,
+        MODE_BACKWARD_SWIGLU: backward_swiglu,
+        MODE_BACKWARD_W13: backward_w13,
+        MODE_BACKWARD_W13_EXPERT_MAJOR_PREPACKED: backward_w13_expert_major_prepacked,
+        MODE_BACKWARD_W13_EXPERT_MAJOR_PREPACKED_PALLAS: backward_w13_expert_major_prepacked_pallas,
+        MODE_BACKWARD_W13_EXPERT_MAJOR_PREPACKED_COMPARE: backward_w13_expert_major_prepacked_compare,
+        MODE_BACKWARD_W13_DX_ROUTE_EXPERT_MAJOR_PREPACKED_PALLAS: (
+            backward_w13_dx_route_expert_major_prepacked_pallas
+        ),
+        MODE_BACKWARD_W13_DW13_EXPERT_MAJOR_PREPACKED_PALLAS: (backward_w13_dw13_expert_major_prepacked_pallas),
+        MODE_BACKWARD_W13_DX_PAIR_PALLAS: backward_w13_dx_pair_pallas,
+        MODE_BACKWARD_W13_DW13_PALLAS: backward_w13_dw13_pallas,
+        MODE_BACKWARD_W13_PALLAS_SCAFFOLD: backward_w13_pallas_scaffold,
+        MODE_DX_COMBINE: dx_combine,
+        MODE_DX_COMBINE_PALLAS: dx_combine_pallas,
+        MODE_DX_COMBINE_EXPERT_MAJOR_PALLAS: dx_combine_expert_major_pallas,
+        MODE_DX_COMBINE_EXPERT_MAJOR_COMPARE: dx_combine_expert_major_compare,
+        MODE_DX_RETURN_EXPERT_MAJOR_PALLAS: dx_return_expert_major_pallas,
+        MODE_DX_RETURN_EXPERT_MAJOR_COMPARE: dx_return_expert_major_compare,
+        MODE_DX_RETURN_EXPERT_MAJOR_PREPACKED_PALLAS: dx_return_expert_major_prepacked_pallas,
+        MODE_DX_RETURN_EXPERT_MAJOR_PREPACKED_COMPARE: dx_return_expert_major_prepacked_compare,
+        MODE_DX_RETURN_SLOT_REDUCE_EXPERT_MAJOR_PREPACKED_PALLAS: (
+            dx_return_slot_reduce_expert_major_prepacked_pallas
+        ),
+        MODE_DX_RETURN_SLOT_REDUCE_EXPERT_MAJOR_PREPACKED_COMPARE: (
+            dx_return_slot_reduce_expert_major_prepacked_compare
+        ),
+        MODE_DX_RETURN_SUM_EXPERT_MAJOR_PREPACKED_PALLAS: dx_return_sum_expert_major_prepacked_pallas,
+        MODE_DX_RETURN_SUM_EXPERT_MAJOR_PREPACKED_COMPARE: dx_return_sum_expert_major_prepacked_compare,
+        MODE_DX_RETURN_SOURCE_GATHER_EXPERT_MAJOR_PREPACKED_PALLAS: (
+            dx_return_source_gather_expert_major_prepacked_pallas
+        ),
+        MODE_DX_RETURN_SOURCE_GATHER_EXPERT_MAJOR_PREPACKED_COMPARE: (
+            dx_return_source_gather_expert_major_prepacked_compare
+        ),
+        MODE_DX_RETURN_SOURCE_GATHER_EXPERT_MAJOR_PREPACKED_OWNER_SHARDED_PALLAS: (
+            dx_return_source_gather_expert_major_prepacked_owner_sharded_pallas
+        ),
+        MODE_DX_RETURN_SOURCE_GATHER_EXPERT_MAJOR_PREPACKED_OWNER_SHARDED_COMPARE: (
+            dx_return_source_gather_expert_major_prepacked_owner_sharded_compare
+        ),
+        MODE_DX_RETURN_REMOTE_SOURCE_GATHER_EXPERT_MAJOR_PREPACKED_PALLAS: (
+            dx_return_remote_source_gather_expert_major_prepacked_pallas
+        ),
+        MODE_DX_RETURN_REMOTE_SOURCE_GATHER_EXPERT_MAJOR_PREPACKED_COMPARE: (
+            dx_return_remote_source_gather_expert_major_prepacked_compare
+        ),
+        MODE_DX_RETURN_COPY_ONLY_EXPERT_MAJOR_PREPACKED_PALLAS: dx_return_copy_only_expert_major_prepacked_pallas,
+        MODE_DX_RETURN_COPY_ONLY_EXPERT_MAJOR_PREPACKED_COMPARE: dx_return_copy_only_expert_major_prepacked_compare,
+        MODE_DX_RETURN_DIRECT_TO_SOURCE_COMBINE_PALLAS: dx_return_direct_to_source_combine_pallas,
+        MODE_DX_RETURN_DIRECT_TO_SOURCE_COMBINE_COMPARE: dx_return_direct_to_source_combine_compare,
+        MODE_BACKWARD: backward,
+        MODE_BACKWARD_PALLAS_SCAFFOLD: backward_pallas_scaffold,
+        MODE_FORWARD_BACKWARD: forward_backward,
+        MODE_FORWARD_BACKWARD_PALLAS_SCAFFOLD: forward_backward_pallas_scaffold,
+        MODE_FORWARD_BACKWARD_EXPERT_MAJOR_PALLAS: forward_backward_expert_major_pallas,
+        MODE_FORWARD_BACKWARD_EXPERT_MAJOR_COMPARE: forward_backward_expert_major_compare,
+        MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_PALLAS: forward_backward_expert_major_saved_x_pallas,
+        MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_PALLAS: (
+            forward_backward_expert_major_saved_x_direct_pack_pallas
+        ),
+        MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_LOOKUP_PACK_PALLAS: (
+            forward_backward_expert_major_saved_x_lookup_pack_pallas
+        ),
+        MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_LOOKUP_PACK_COMPARE: (
+            forward_backward_expert_major_saved_x_lookup_pack_compare
+        ),
+        MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_SOURCE_GATHER_PALLAS: (
+            forward_backward_expert_major_saved_x_direct_pack_source_gather_pallas
+        ),
+        MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_SOURCE_GATHER_COMPARE: (
+            forward_backward_expert_major_saved_x_direct_pack_source_gather_compare
+        ),
+        MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_OWNER_SHARDED_PALLAS: (
+            forward_backward_expert_major_saved_x_direct_pack_owner_sharded_pallas
+        ),
+        MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_OWNER_SHARDED_Y_PALLAS: (
+            forward_backward_expert_major_saved_x_direct_pack_owner_sharded_y_pallas
+        ),
+        MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_DIRECT_RETURN_COMBINE_DUPLICATE_W2_PALLAS: (
+            forward_backward_expert_major_saved_x_direct_pack_direct_return_combine_duplicate_w2_pallas
+        ),
+        MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_DIRECT_RETURN_COMBINE_DUPLICATE_W2_COMPARE: (
+            forward_backward_expert_major_saved_x_direct_pack_direct_return_combine_duplicate_w2_compare
+        ),
+        MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_DIRECT_QUEUE_PALLAS: (
+            forward_backward_expert_major_saved_x_direct_pack_direct_queue_pallas
+        ),
+        MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_DIRECT_QUEUE_WITH_METADATA_PALLAS: (
+            forward_backward_expert_major_saved_x_direct_pack_direct_queue_with_metadata_pallas
+        ),
+        MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_DIRECT_QUEUE_COMPARE: (
+            forward_backward_expert_major_saved_x_direct_pack_direct_queue_compare
+        ),
+        MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_OWNER_SHARDED_Y_SLOT_REDUCE_PALLAS: (
+            forward_backward_expert_major_saved_x_direct_pack_owner_sharded_y_slot_reduce_pallas
+        ),
+        MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_NO_Y_PALLAS: (
+            forward_backward_expert_major_saved_x_direct_pack_no_y_pallas
+        ),
+        MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_REMOTE_Y_PALLAS: (
+            forward_backward_expert_major_saved_x_direct_pack_remote_y_pallas
+        ),
+        MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_REMOTE_Y_DELAYED_PALLAS: (
+            forward_backward_expert_major_saved_x_direct_pack_remote_y_delayed_pallas
+        ),
+        MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_OWNER_SHARDED_DX_PALLAS: (
+            forward_backward_expert_major_saved_x_direct_pack_owner_sharded_dx_pallas
+        ),
+        MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_REMOTE_DX_PALLAS: (
+            forward_backward_expert_major_saved_x_direct_pack_remote_dx_pallas
+        ),
+        MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_OWNER_SHARDED_Y_WITH_METADATA_PALLAS: (
+            forward_backward_expert_major_saved_x_direct_pack_owner_sharded_y_with_metadata_pallas
+        ),
+        MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_OWNER_SHARDED_Y_WITH_PALLAS_METADATA_PALLAS: (
+            forward_backward_expert_major_saved_x_direct_pack_owner_sharded_y_with_pallas_metadata_pallas
+        ),
+        MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_OWNER_SHARDED_COMPARE: (
+            forward_backward_expert_major_saved_x_direct_pack_owner_sharded_compare
+        ),
+        MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_COMPARE: forward_backward_expert_major_saved_x_compare,
+    }
+    return table[mode]
+
+
+def _time_callable(
+    fn: Callable[..., Any],
+    *args: Any,
+    warmup: int,
+    steps: int,
+    repeat_runs: int,
+    separate_compile: bool,
+) -> Timing:
+    call = jax.jit(fn)
+    lower_compile_time = None
+    if separate_compile:
+        lowered = call.lower(*args)
+        start = time.perf_counter()
+        compiled = lowered.compile()
+        lower_compile_time = time.perf_counter() - start
+        start = time.perf_counter()
+        output = compiled(*args)
+        _block_until_ready(output)
+        first_run_time = time.perf_counter() - start
+        timed_call = compiled
+        first_call_time = lower_compile_time + first_run_time
+    else:
+        start = time.perf_counter()
+        output = call(*args)
+        _block_until_ready(output)
+        first_call_time = time.perf_counter() - start
+        first_run_time = first_call_time
+        timed_call = call
+
+    for _ in range(warmup):
+        output = timed_call(*args)
+        _block_until_ready(output)
+
+    steady_state_times = []
+    for _ in range(repeat_runs):
+        start = time.perf_counter()
+        for _ in range(steps):
+            output = timed_call(*args)
+            _block_until_ready(output)
+        steady_state_times.append((time.perf_counter() - start) / steps)
+
+    return Timing(
+        compile_time=first_call_time,
+        lower_compile_time=lower_compile_time,
+        first_run_time=first_run_time,
+        first_call_time=first_call_time,
+        steady_state_times=steady_state_times,
+        output=output,
+    )
+
+
+def _summary_row(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    valid_rows = [row for row in rows if row.get("steady_state_time") is not None and row.get("error") is None]
+    first = rows[0]
+    summary = {
+        "row_type": "summary",
+        "kernel": KERNEL_NAME,
+        "implementation": first["implementation"],
+        "mode": first["mode"],
+        "shape": first["shape"],
+        "dtype": first["dtype"],
+        "backend": first["backend"],
+        "device_type": first["device_type"],
+        "device_count": first["device_count"],
+        "block_sizes": first["block_sizes"],
+        "config": first["config"],
+        "repeat_rows": len(valid_rows),
+        "error_rows": len(rows) - len(valid_rows),
+        "error": None,
+    }
+    if not valid_rows:
+        summary["error"] = "all repeats failed"
+        return summary
+    for field in SUMMARY_METRICS:
+        values = [row[field] for row in valid_rows if row.get(field) is not None]
+        summary[f"median_{field}"] = median(values) if values else None
+    scalar_metric_suffixes = ("_max_abs_diff", "_mean_abs_diff", "_error_count", "_element_count")
+    for field in sorted({key for row in valid_rows for key in row if key.endswith(scalar_metric_suffixes)}):
+        values = [row[field] for row in valid_rows if row.get(field) is not None]
+        summary[f"median_{field}"] = median(values) if values else None
+    summary.update(
+        {
+            "min_steady_state_time": min(row["steady_state_time"] for row in valid_rows),
+            "max_steady_state_time": max(row["steady_state_time"] for row in valid_rows),
+            "dropped_routes": first.get("dropped_routes"),
+            "routing_dropped_routes": first.get("routing_dropped_routes"),
+            "metadata_overflow_routes": first.get("metadata_overflow_routes"),
+            "semantic_useful_rows": first.get("semantic_useful_rows"),
+            "semantic_rounded_rows": first.get("semantic_rounded_rows"),
+            "semantic_row_efficiency": first.get("semantic_row_efficiency"),
+        }
+    )
+    return summary
+
+
+def _row_base(
+    *,
+    mode: str,
+    implementation: str,
+    shape_config: dict[str, Any],
+    git_sha: str | None,
+    plan_stats: dict[str, Any] | None,
+    block_sizes: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    device = _device_summary()
+    row = {
+        "kernel": KERNEL_NAME,
+        "implementation": implementation,
+        "mode": mode,
+        "shape": shape_config,
+        "dtype": shape_config["dtype"],
+        "backend": device["backend"],
+        "device_type": device["device_type"],
+        "device_count": device["device_count"],
+        "block_sizes": {} if block_sizes is None else block_sizes,
+        "config": shape_config,
+        "git_sha": git_sha,
+        "xla_flags": os.environ.get("XLA_FLAGS"),
+        "backend_env": _backend_env(),
+    }
+    if plan_stats is not None:
+        row.update(plan_stats)
+    return row
+
+
+def _repeat_rows(
+    *,
+    mode: str,
+    timing: Timing,
+    implementation: str,
+    shape_config: dict[str, Any],
+    git_sha: str | None,
+    plan_stats: dict[str, Any],
+    block_sizes: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    useful_flops, rounded_flops = _mode_flops_per_rank(
+        mode,
+        useful_rows_total=plan_stats["semantic_useful_rows"],
+        rounded_rows_total=plan_stats["semantic_rounded_rows"],
+        hidden_dim=shape_config["hidden_dim"],
+        intermediate_dim=shape_config["intermediate_dim"],
+        ep_size=shape_config["ep_size"],
+    )
+    rows = []
+    for repeat_run, steady_state_time in enumerate(timing.steady_state_times):
+        row = {
+            **_row_base(
+                mode=mode,
+                implementation=implementation,
+                shape_config=shape_config,
+                git_sha=git_sha,
+                plan_stats=plan_stats,
+                block_sizes=block_sizes,
+            ),
+            "row_type": "repeat",
+            "repeat_run": repeat_run,
+            "repeat_runs": len(timing.steady_state_times),
+            "compile_time": timing.compile_time,
+            "lower_compile_time": timing.lower_compile_time,
+            "first_run_time": timing.first_run_time,
+            "first_call_time": timing.first_call_time,
+            "steady_state_time": steady_state_time,
+            "useful_tflops_per_rank": None if useful_flops is None else useful_flops / steady_state_time / 1e12,
+            "rounded_tflops_per_rank": None if rounded_flops is None else rounded_flops / steady_state_time / 1e12,
+            "output_checksum": float(jax.device_get(_checksum(timing.output))),
+            "error": None,
+            "error_type": None,
+            "error_message": None,
+        }
+        row.update(_scalar_output_metrics(timing.output))
+        rows.append(row)
+    return rows
+
+
+def _error_row(
+    *,
+    mode: str,
+    implementation: str,
+    shape_config: dict[str, Any],
+    git_sha: str | None,
+    plan_stats: dict[str, Any] | None,
+    exc: BaseException,
+    debug_exceptions: bool,
+    block_sizes: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    row = {
+        **_row_base(
+            mode=mode,
+            implementation=implementation,
+            shape_config=shape_config,
+            git_sha=git_sha,
+            plan_stats=plan_stats,
+            block_sizes=block_sizes,
+        ),
+        "row_type": "error",
+        "compile_time": None,
+        "lower_compile_time": None,
+        "first_run_time": None,
+        "first_call_time": None,
+        "steady_state_time": None,
+        "useful_tflops_per_rank": None,
+        "rounded_tflops_per_rank": None,
+        "output_checksum": None,
+        "error": str(exc),
+        "error_type": type(exc).__name__,
+        "error_message": str(exc),
+    }
+    if debug_exceptions:
+        row["traceback"] = traceback.format_exc()
+    return row
+
+
+def _write_row(row: dict[str, Any], jsonl_path: str | None) -> None:
+    line = json.dumps(row, sort_keys=True)
+    print(line, flush=True)
+    if jsonl_path is not None:
+        with open(jsonl_path, "a", encoding="utf-8") as f:
+            print(line, file=f, flush=True)
+
+
+def _run_metadata(
+    args: argparse.Namespace,
+    *,
+    rows_per_src_dst_capacity: int,
+    shape_config: dict[str, Any],
+) -> tuple[SourcePushSemanticPlan | None, list[dict[str, Any]]]:
+    selected_experts, route_weights = _make_routing(
+        ep_size=args.ep_size,
+        tokens_per_rank=args.tokens_per_rank,
+        topk=args.topk,
+        experts_per_rank=args.experts_per_rank,
+        routing=args.routing,
+        seed=args.routing_seed,
+    )
+
+    def metadata_fn(selected, weights):
+        return _metadata_fn(
+            selected,
+            weights,
+            ep_size=args.ep_size,
+            experts_per_rank=args.experts_per_rank,
+            rows_per_src_dst_capacity=rows_per_src_dst_capacity,
+            capacity_factor=args.capacity_factor,
+        )
+
+    try:
+        timing = _time_callable(
+            metadata_fn,
+            selected_experts,
+            route_weights,
+            warmup=args.warmup,
+            steps=args.steps,
+            repeat_runs=args.repeat_runs,
+            separate_compile=args.separate_compile,
+        )
+        plan = timing.output
+        plan_stats = _plan_stats(plan)
+        rows = _repeat_rows(
+            mode=MODE_METADATA,
+            timing=timing,
+            implementation="jax",
+            shape_config=shape_config,
+            git_sha=args.git_sha,
+            plan_stats=plan_stats,
+        )
+        return plan, rows
+    except Exception as exc:
+        row = _error_row(
+            mode=MODE_METADATA,
+            implementation="jax",
+            shape_config=shape_config,
+            git_sha=args.git_sha,
+            plan_stats=None,
+            exc=exc,
+            debug_exceptions=args.debug_exceptions,
+        )
+        return None, [row]
+
+
+def _run_metadata_tile_pallas(
+    args: argparse.Namespace,
+    *,
+    shape_config: dict[str, Any],
+) -> list[dict[str, Any]]:
+    selected_experts, _route_weights = _make_routing(
+        ep_size=args.ep_size,
+        tokens_per_rank=args.tokens_per_rank,
+        topk=args.topk,
+        experts_per_rank=args.experts_per_rank,
+        routing=args.routing,
+        seed=args.routing_seed,
+    )
+    block_sizes = _block_sizes_for_mode(args, MODE_METADATA_TILE_PALLAS)
+
+    def metadata_tile_fn(selected):
+        return build_source_push_semantic_tile_metadata_pallas_mgpu(
+            selected,
+            ep_size=args.ep_size,
+            experts_per_rank=args.experts_per_rank,
+            capacity_factor=args.capacity_factor,
+            block_sizes=_metadata_block_sizes(args),
+            interpret=args.pallas_interpret,
+        )
+
+    try:
+        timing = _time_callable(
+            metadata_tile_fn,
+            selected_experts,
+            warmup=args.warmup,
+            steps=args.steps,
+            repeat_runs=args.repeat_runs,
+            separate_compile=args.separate_compile,
+        )
+        stats = _tile_metadata_stats(timing.output)
+        return _repeat_rows(
+            mode=MODE_METADATA_TILE_PALLAS,
+            timing=timing,
+            implementation="pallas_mgpu",
+            shape_config=shape_config,
+            git_sha=args.git_sha,
+            plan_stats=stats,
+            block_sizes=block_sizes,
+        )
+    except Exception as exc:
+        return [
+            _error_row(
+                mode=MODE_METADATA_TILE_PALLAS,
+                implementation="pallas_mgpu",
+                shape_config=shape_config,
+                git_sha=args.git_sha,
+                plan_stats=None,
+                exc=exc,
+                debug_exceptions=args.debug_exceptions,
+                block_sizes=block_sizes,
+            )
+        ]
+
+
+def _run_metadata_pallas(
+    args: argparse.Namespace,
+    *,
+    rows_per_src_dst_capacity: int,
+    shape_config: dict[str, Any],
+) -> tuple[SourcePushSemanticPlan | None, list[dict[str, Any]]]:
+    selected_experts, route_weights = _make_routing(
+        ep_size=args.ep_size,
+        tokens_per_rank=args.tokens_per_rank,
+        topk=args.topk,
+        experts_per_rank=args.experts_per_rank,
+        routing=args.routing,
+        seed=args.routing_seed,
+    )
+    block_sizes = _block_sizes_for_mode(args, MODE_METADATA_PALLAS)
+
+    def metadata_pallas_fn(selected, weights):
+        return build_source_push_semantic_plan_pallas_mgpu(
+            selected,
+            weights,
+            ep_size=args.ep_size,
+            experts_per_rank=args.experts_per_rank,
+            rows_per_src_dst_capacity=rows_per_src_dst_capacity,
+            capacity_factor=args.capacity_factor,
+            block_sizes=_metadata_block_sizes(args),
+            interpret=args.pallas_interpret,
+        )
+
+    try:
+        timing = _time_callable(
+            metadata_pallas_fn,
+            selected_experts,
+            route_weights,
+            warmup=args.warmup,
+            steps=args.steps,
+            repeat_runs=args.repeat_runs,
+            separate_compile=args.separate_compile,
+        )
+        plan = timing.output
+        stats = _plan_stats(plan)
+        rows = _repeat_rows(
+            mode=MODE_METADATA_PALLAS,
+            timing=timing,
+            implementation="pallas_mgpu",
+            shape_config=shape_config,
+            git_sha=args.git_sha,
+            plan_stats=stats,
+            block_sizes=block_sizes,
+        )
+        return plan, rows
+    except Exception as exc:
+        row = _error_row(
+            mode=MODE_METADATA_PALLAS,
+            implementation="pallas_mgpu",
+            shape_config=shape_config,
+            git_sha=args.git_sha,
+            plan_stats=None,
+            exc=exc,
+            debug_exceptions=args.debug_exceptions,
+            block_sizes=block_sizes,
+        )
+        return None, [row]
+
+
+def _build_plan_once(args: argparse.Namespace, rows_per_src_dst_capacity: int) -> SourcePushSemanticPlan:
+    selected_experts, route_weights = _make_routing(
+        ep_size=args.ep_size,
+        tokens_per_rank=args.tokens_per_rank,
+        topk=args.topk,
+        experts_per_rank=args.experts_per_rank,
+        routing=args.routing,
+        seed=args.routing_seed,
+    )
+    if args.plan_builder == "jax":
+        plan_fn = lambda selected, weights: _metadata_fn(
+            selected,
+            weights,
+            ep_size=args.ep_size,
+            experts_per_rank=args.experts_per_rank,
+            rows_per_src_dst_capacity=rows_per_src_dst_capacity,
+            capacity_factor=args.capacity_factor,
+        )
+    elif args.plan_builder == "pallas":
+        plan_fn = lambda selected, weights: build_source_push_semantic_plan_pallas_mgpu(
+            selected,
+            weights,
+            ep_size=args.ep_size,
+            experts_per_rank=args.experts_per_rank,
+            rows_per_src_dst_capacity=rows_per_src_dst_capacity,
+            capacity_factor=args.capacity_factor,
+            block_sizes=_metadata_block_sizes(args),
+            interpret=args.pallas_interpret,
+        )
+    else:
+        raise ValueError(f"unknown plan builder {args.plan_builder!r}")
+    plan = jax.jit(plan_fn)(selected_experts, route_weights)
+    return _block_until_ready(plan)
+
+
+def _run_stage_mode(
+    args: argparse.Namespace,
+    *,
+    mode: str,
+    plan: SourcePushSemanticPlan,
+    shape_config: dict[str, Any],
+    plan_stats: dict[str, Any],
+) -> list[dict[str, Any]]:
+    try:
+        expert_mesh = (
+            _make_mesh(args.ep_size)
+            if mode
+            in (
+                MODE_W13_EXPERT_MAJOR_PREPACKED,
+                MODE_W13_EXPERT_MAJOR_PREPACKED_PALLAS,
+                MODE_W13_EXPERT_MAJOR_PREPACKED_COMPARE,
+                MODE_W13_EXPERT_MAJOR_PALLAS,
+                MODE_W13_EXPERT_MAJOR_COMPARE,
+                MODE_SOURCE_PADDED_INBOX_PACK_PALLAS,
+                MODE_W13_SOURCE_PADDED_DIRECT_PACK_PALLAS,
+                MODE_W13_SOURCE_PADDED_DIRECT_PACK_COMPARE,
+                MODE_W13_SOURCE_PADDED_INBOX_PALLAS,
+                MODE_W13_SOURCE_PADDED_INBOX_COMPARE,
+                MODE_W2_EXPERT_MAJOR_PREPACKED_PALLAS,
+                MODE_W2_EXPERT_MAJOR_PREPACKED_COMPARE,
+                MODE_W2_EXPERT_MAJOR_PREPACKED_PALLAS_ASSUME_ZERO_INVALID,
+                MODE_W2_EXPERT_MAJOR_PREPACKED_ASSUME_ZERO_INVALID_COMPARE,
+                MODE_FORWARD_EXPERT_MAJOR_PALLAS,
+                MODE_FORWARD_EXPERT_MAJOR_COMPARE,
+                MODE_FORWARD_EXPERT_MAJOR_PREPACKED_PALLAS,
+                MODE_FORWARD_EXPERT_MAJOR_PREPACKED_COMPARE,
+                MODE_FORWARD_RETURN_EXPERT_MAJOR_PREPACKED_SHARDED_PALLAS,
+                MODE_FORWARD_RETURN_EXPERT_MAJOR_PREPACKED_SHARDED_COMPARE,
+                MODE_FORWARD_RETURN_SLOT_REDUCE_EXPERT_MAJOR_PREPACKED_SHARDED_PALLAS,
+                MODE_FORWARD_RETURN_SLOT_REDUCE_EXPERT_MAJOR_PREPACKED_SHARDED_COMPARE,
+                MODE_FORWARD_RETURN_SUM_EXPERT_MAJOR_PREPACKED_SHARDED_PALLAS,
+                MODE_FORWARD_RETURN_SUM_EXPERT_MAJOR_PREPACKED_SHARDED_COMPARE,
+                MODE_FORWARD_RETURN_SUM_EXPERT_MAJOR_PREPACKED_OWNER_SHARDED_PALLAS,
+                MODE_FORWARD_RETURN_SUM_EXPERT_MAJOR_PREPACKED_OWNER_SHARDED_COMPARE,
+                MODE_FORWARD_RETURN_SUM_LOOKUP_EXPERT_MAJOR_PREPACKED_OWNER_SHARDED_PALLAS,
+                MODE_FORWARD_RETURN_SUM_LOOKUP_EXPERT_MAJOR_PREPACKED_OWNER_SHARDED_COMPARE,
+                MODE_FORWARD_RETURN_REMOTE_SOURCE_GATHER_EXPERT_MAJOR_PREPACKED_PALLAS,
+                MODE_FORWARD_RETURN_REMOTE_SOURCE_GATHER_EXPERT_MAJOR_PREPACKED_COMPARE,
+                MODE_FORWARD_RETURN_REVERSE_ROUTE_SOURCE_GATHER_EXPERT_MAJOR_PREPACKED_PALLAS,
+                MODE_FORWARD_RETURN_REVERSE_ROUTE_SOURCE_GATHER_EXPERT_MAJOR_PREPACKED_COMPARE,
+                MODE_FORWARD_RETURN_COPY_ONLY_EXPERT_MAJOR_PREPACKED_PALLAS,
+                MODE_FORWARD_RETURN_COPY_ONLY_EXPERT_MAJOR_PREPACKED_COMPARE,
+                MODE_FORWARD_RETURN_DIRECT_TO_SOURCE_PALLAS,
+                MODE_FORWARD_RETURN_DIRECT_TO_SOURCE_COMPARE,
+                MODE_FORWARD_EXPERT_MAJOR_DIRECT_RETURN_COMBINE_PALLAS,
+                MODE_FORWARD_EXPERT_MAJOR_DIRECT_RETURN_COMBINE_COMPARE,
+                MODE_FORWARD_EXPERT_MAJOR_DIRECT_PACK_DIRECT_RETURN_COMBINE_PALLAS,
+                MODE_FORWARD_EXPERT_MAJOR_DIRECT_PACK_DIRECT_RETURN_COMBINE_COMPARE,
+                MODE_FORWARD_SOURCE_PADDED_DIRECT_PACK_DIRECT_RETURN_COMBINE_PALLAS,
+                MODE_FORWARD_SOURCE_PADDED_DIRECT_PACK_DIRECT_RETURN_COMBINE_COMPARE,
+                MODE_FORWARD_SOURCE_PADDED_INBOX_DIRECT_RETURN_COMBINE_PALLAS,
+                MODE_FORWARD_SOURCE_PADDED_INBOX_DIRECT_RETURN_COMBINE_COMPARE,
+                MODE_FORWARD_BACKWARD_SOURCE_PADDED_INBOX_DIRECT_QUEUE_PALLAS,
+                MODE_FORWARD_BACKWARD_SOURCE_PADDED_INBOX_DIRECT_QUEUE_COMPARE,
+                MODE_FORWARD_BACKWARD_SOURCE_PADDED_DIRECT_PACK_DIRECT_QUEUE_PALLAS,
+                MODE_FORWARD_BACKWARD_SOURCE_PADDED_DIRECT_PACK_DIRECT_QUEUE_COMPARE,
+                MODE_FORWARD_BACKWARD_SOURCE_PADDED_DIRECT_PACK_DIRECT_QUEUE_WITH_METADATA_PALLAS,
+                MODE_FORWARD_EXPERT_MAJOR_PREPACKED_RETURN_PALLAS,
+                MODE_FORWARD_EXPERT_MAJOR_PREPACKED_RETURN_COMPARE,
+                MODE_FORWARD_EXPERT_MAJOR_RETURN_SUM_PALLAS,
+                MODE_FORWARD_EXPERT_MAJOR_RETURN_SUM_COMPARE,
+                MODE_FORWARD_EXPERT_MAJOR_DIRECT_PACK_OWNER_SHARDED_Y_STOP_PALLAS,
+                MODE_FORWARD_EXPERT_MAJOR_DIRECT_PACK_REMOTE_Y_STOP_PALLAS,
+                MODE_FORWARD_SOURCE_EXPAND_DIRECT_PACK_OWNER_SHARDED_Y_PALLAS,
+                MODE_FORWARD_SOURCE_EXPAND_DIRECT_PACK_REMOTE_Y_PALLAS,
+                MODE_FORWARD_W2_BACKWARD_DIRECT_PACK_OWNER_SHARDED_Y_PALLAS,
+                MODE_FORWARD_W2_BACKWARD_DIRECT_PACK_REMOTE_Y_PALLAS,
+                MODE_FORWARD_W13_BACKWARD_DIRECT_PACK_OWNER_SHARDED_Y_PALLAS,
+                MODE_FORWARD_W13_BACKWARD_DIRECT_PACK_REMOTE_Y_PALLAS,
+                MODE_FORWARD_W13_BACKWARD_DIGEST_DIRECT_PACK_OWNER_SHARDED_Y_PALLAS,
+                MODE_FORWARD_W13_BACKWARD_DIGEST_DIRECT_PACK_REMOTE_Y_PALLAS,
+                MODE_FORWARD_W13_BACKWARD_BARRIER_DIGEST_DIRECT_PACK_OWNER_SHARDED_Y_PALLAS,
+                MODE_FORWARD_W13_BACKWARD_BARRIER_DIGEST_DIRECT_PACK_REMOTE_Y_PALLAS,
+                MODE_FORWARD_SWIGLU_BACKWARD_DIGEST_DIRECT_PACK_OWNER_SHARDED_Y_PALLAS,
+                MODE_FORWARD_SWIGLU_BACKWARD_DIGEST_DIRECT_PACK_REMOTE_Y_PALLAS,
+                MODE_FORWARD_W13_DX_BACKWARD_DIGEST_DIRECT_PACK_OWNER_SHARDED_Y_PALLAS,
+                MODE_FORWARD_W13_DX_BACKWARD_DIGEST_DIRECT_PACK_REMOTE_Y_PALLAS,
+                MODE_FORWARD_W13_DW13_BACKWARD_DIGEST_DIRECT_PACK_OWNER_SHARDED_Y_PALLAS,
+                MODE_FORWARD_W13_DW13_BACKWARD_DIGEST_DIRECT_PACK_REMOTE_Y_PALLAS,
+                MODE_W13_EXPERT_MAJOR_PACK_RESHARD,
+                MODE_BACKWARD_W2_EXPERT_MAJOR_PALLAS,
+                MODE_BACKWARD_W2_EXPERT_MAJOR_COMPARE,
+                MODE_BACKWARD_W2_EXPERT_MAJOR_PACK_RESHARD,
+                MODE_BACKWARD_W2_EXPERT_MAJOR_PREPACKED_PALLAS,
+                MODE_BACKWARD_W2_EXPERT_MAJOR_PREPACKED_COMPARE,
+                MODE_BACKWARD_W13_EXPERT_MAJOR_PREPACKED_PALLAS,
+                MODE_BACKWARD_W13_EXPERT_MAJOR_PREPACKED_COMPARE,
+                MODE_BACKWARD_W13_DX_ROUTE_EXPERT_MAJOR_PREPACKED_PALLAS,
+                MODE_BACKWARD_W13_DW13_EXPERT_MAJOR_PREPACKED_PALLAS,
+                MODE_BACKWARD_SOURCE_EXPAND_FROM_EXPERT_MAJOR_PALLAS,
+                MODE_BACKWARD_SOURCE_EXPAND_FROM_EXPERT_MAJOR_COMPARE,
+                MODE_BACKWARD_SOURCE_EXPAND_FROM_SAVED_RETURN_QUEUE_PALLAS,
+                MODE_BACKWARD_SOURCE_EXPAND_FROM_SAVED_RETURN_QUEUE_COMPARE,
+                MODE_BACKWARD_SOURCE_EXPAND_FROM_EXPERT_MAJOR_OWNER_SHARDED_DCOMBINE_PALLAS,
+                MODE_BACKWARD_SOURCE_EXPAND_FROM_EXPERT_MAJOR_OWNER_SHARDED_DCOMBINE_COMPARE,
+                MODE_BACKWARD_DY_ROUTE_SOURCE_PUSH_EXPERT_MAJOR_PALLAS,
+                MODE_BACKWARD_DY_ROUTE_SOURCE_PUSH_EXPERT_MAJOR_COMPARE,
+                MODE_BACKWARD_SOURCE_EXPAND_FROM_EXPERT_MAJOR_SOURCE_PUSH_PALLAS,
+                MODE_BACKWARD_SOURCE_EXPAND_FROM_EXPERT_MAJOR_SOURCE_PUSH_COMPARE,
+                MODE_BACKWARD_DCOMBINE_SOURCE_GATHER_EXPERT_MAJOR_PALLAS,
+                MODE_BACKWARD_DCOMBINE_SOURCE_GATHER_EXPERT_MAJOR_COMPARE,
+                MODE_BACKWARD_SOURCE_EXPAND_FROM_EXPERT_MAJOR_SOURCE_GATHER_PALLAS,
+                MODE_BACKWARD_SOURCE_EXPAND_FROM_EXPERT_MAJOR_SOURCE_GATHER_COMPARE,
+                MODE_DX_RETURN_EXPERT_MAJOR_PREPACKED_PALLAS,
+                MODE_DX_RETURN_EXPERT_MAJOR_PREPACKED_COMPARE,
+                MODE_DX_RETURN_SLOT_REDUCE_EXPERT_MAJOR_PREPACKED_PALLAS,
+                MODE_DX_RETURN_SLOT_REDUCE_EXPERT_MAJOR_PREPACKED_COMPARE,
+                MODE_DX_RETURN_SUM_EXPERT_MAJOR_PREPACKED_PALLAS,
+                MODE_DX_RETURN_SUM_EXPERT_MAJOR_PREPACKED_COMPARE,
+                MODE_DX_RETURN_SOURCE_GATHER_EXPERT_MAJOR_PREPACKED_PALLAS,
+                MODE_DX_RETURN_SOURCE_GATHER_EXPERT_MAJOR_PREPACKED_COMPARE,
+                MODE_DX_RETURN_SOURCE_GATHER_EXPERT_MAJOR_PREPACKED_OWNER_SHARDED_PALLAS,
+                MODE_DX_RETURN_SOURCE_GATHER_EXPERT_MAJOR_PREPACKED_OWNER_SHARDED_COMPARE,
+                MODE_DX_RETURN_COPY_ONLY_EXPERT_MAJOR_PREPACKED_PALLAS,
+                MODE_DX_RETURN_COPY_ONLY_EXPERT_MAJOR_PREPACKED_COMPARE,
+                MODE_DX_RETURN_DIRECT_TO_SOURCE_COMBINE_PALLAS,
+                MODE_DX_RETURN_DIRECT_TO_SOURCE_COMBINE_COMPARE,
+                MODE_FORWARD_BACKWARD_EXPERT_MAJOR_PALLAS,
+                MODE_FORWARD_BACKWARD_EXPERT_MAJOR_COMPARE,
+                MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_PALLAS,
+                MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_PALLAS,
+                MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_LOOKUP_PACK_PALLAS,
+                MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_LOOKUP_PACK_COMPARE,
+                MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_SOURCE_GATHER_PALLAS,
+                MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_SOURCE_GATHER_COMPARE,
+                MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_OWNER_SHARDED_PALLAS,
+                MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_OWNER_SHARDED_COMPARE,
+                MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_OWNER_SHARDED_Y_PALLAS,
+                MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_DIRECT_RETURN_COMBINE_DUPLICATE_W2_PALLAS,
+                MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_DIRECT_RETURN_COMBINE_DUPLICATE_W2_COMPARE,
+                MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_DIRECT_QUEUE_PALLAS,
+                MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_DIRECT_QUEUE_WITH_METADATA_PALLAS,
+                MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_DIRECT_QUEUE_COMPARE,
+                MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_OWNER_SHARDED_Y_SLOT_REDUCE_PALLAS,
+                MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_NO_Y_PALLAS,
+                MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_REMOTE_Y_PALLAS,
+                MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_REMOTE_Y_DELAYED_PALLAS,
+                MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_OWNER_SHARDED_DX_PALLAS,
+                MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_REMOTE_DX_PALLAS,
+                MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_OWNER_SHARDED_Y_WITH_METADATA_PALLAS,
+                MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_OWNER_SHARDED_Y_WITH_PALLAS_METADATA_PALLAS,
+                MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_COMPARE,
+            )
+            and jax.default_backend() == "gpu"
+            and not args.pallas_interpret
+            else None
+        )
+        inputs = (
+            _make_w13_expert_inputs(args, plan)
+            if mode
+            in (
+                MODE_W13_EXPERT_MAJOR_PREPACKED,
+                MODE_W13_EXPERT_MAJOR_PREPACKED_PALLAS,
+                MODE_W13_EXPERT_MAJOR_PREPACKED_COMPARE,
+            )
+            else (
+                _make_return_queue_inputs(args, plan)
+                if mode
+                in (
+                    MODE_FORWARD_COMBINE_SOURCE_GATHER_PALLAS,
+                    MODE_FORWARD_COMBINE_SOURCE_GATHER_COMPARE,
+                )
+                else (
+                    _make_backward_return_queue_inputs(args, plan)
+                    if mode
+                    in (
+                        MODE_BACKWARD_SOURCE_EXPAND_FROM_SAVED_RETURN_QUEUE_PALLAS,
+                        MODE_BACKWARD_SOURCE_EXPAND_FROM_SAVED_RETURN_QUEUE_COMPARE,
+                    )
+                    else (
+                        _make_forward_expert_inputs(args, plan)
+                        if mode
+                        in (
+                            MODE_FORWARD_EXPERT_MAJOR_PREPACKED_PALLAS,
+                            MODE_FORWARD_EXPERT_MAJOR_PREPACKED_COMPARE,
+                            MODE_FORWARD_EXPERT_MAJOR_PREPACKED_RETURN_PALLAS,
+                            MODE_FORWARD_EXPERT_MAJOR_PREPACKED_RETURN_COMPARE,
+                        )
+                        else (
+                            _make_w13_backward_expert_inputs(args, plan)
+                            if mode
+                            in (
+                                MODE_BACKWARD_W13_EXPERT_MAJOR_PREPACKED,
+                                MODE_BACKWARD_W13_EXPERT_MAJOR_PREPACKED_PALLAS,
+                                MODE_BACKWARD_W13_EXPERT_MAJOR_PREPACKED_COMPARE,
+                                MODE_BACKWARD_W13_DX_ROUTE_EXPERT_MAJOR_PREPACKED_PALLAS,
+                                MODE_BACKWARD_W13_DW13_EXPERT_MAJOR_PREPACKED_PALLAS,
+                            )
+                            else (
+                                _make_w2_expert_inputs(args, plan)
+                                if mode
+                                in (
+                                    MODE_W2_EXPERT_MAJOR_PREPACKED,
+                                    MODE_W2_EXPERT_MAJOR_PREPACKED_PALLAS,
+                                    MODE_W2_EXPERT_MAJOR_PREPACKED_COMPARE,
+                                    MODE_W2_EXPERT_MAJOR_PREPACKED_PALLAS_ASSUME_ZERO_INVALID,
+                                    MODE_W2_EXPERT_MAJOR_PREPACKED_ASSUME_ZERO_INVALID_COMPARE,
+                                    MODE_FORWARD_RETURN_EXPERT_MAJOR_PREPACKED_PALLAS,
+                                    MODE_FORWARD_RETURN_EXPERT_MAJOR_PREPACKED_COMPARE,
+                                    MODE_FORWARD_RETURN_EXPERT_MAJOR_PREPACKED_SHARDED_PALLAS,
+                                    MODE_FORWARD_RETURN_EXPERT_MAJOR_PREPACKED_SHARDED_COMPARE,
+                                    MODE_FORWARD_RETURN_SLOT_REDUCE_EXPERT_MAJOR_PREPACKED_SHARDED_PALLAS,
+                                    MODE_FORWARD_RETURN_SLOT_REDUCE_EXPERT_MAJOR_PREPACKED_SHARDED_COMPARE,
+                                    MODE_FORWARD_RETURN_SLOT_REDUCE_EXPERT_MAJOR_PREPACKED_OWNER_SHARDED_PALLAS,
+                                    MODE_FORWARD_RETURN_SLOT_REDUCE_EXPERT_MAJOR_PREPACKED_OWNER_SHARDED_COMPARE,
+                                    MODE_FORWARD_RETURN_SUM_EXPERT_MAJOR_PREPACKED_PALLAS,
+                                    MODE_FORWARD_RETURN_SUM_EXPERT_MAJOR_PREPACKED_COMPARE,
+                                    MODE_FORWARD_RETURN_SUM_EXPERT_MAJOR_PREPACKED_SHARDED_PALLAS,
+                                    MODE_FORWARD_RETURN_SUM_EXPERT_MAJOR_PREPACKED_SHARDED_COMPARE,
+                                    MODE_FORWARD_RETURN_SUM_EXPERT_MAJOR_PREPACKED_OWNER_SHARDED_PALLAS,
+                                    MODE_FORWARD_RETURN_SUM_EXPERT_MAJOR_PREPACKED_OWNER_SHARDED_COMPARE,
+                                    MODE_FORWARD_RETURN_SUM_LOOKUP_EXPERT_MAJOR_PREPACKED_OWNER_SHARDED_PALLAS,
+                                    MODE_FORWARD_RETURN_SUM_LOOKUP_EXPERT_MAJOR_PREPACKED_OWNER_SHARDED_COMPARE,
+                                    MODE_FORWARD_RETURN_REMOTE_SOURCE_GATHER_EXPERT_MAJOR_PREPACKED_PALLAS,
+                                    MODE_FORWARD_RETURN_REMOTE_SOURCE_GATHER_EXPERT_MAJOR_PREPACKED_COMPARE,
+                                    MODE_FORWARD_RETURN_REVERSE_ROUTE_SOURCE_GATHER_EXPERT_MAJOR_PREPACKED_PALLAS,
+                                    MODE_FORWARD_RETURN_REVERSE_ROUTE_SOURCE_GATHER_EXPERT_MAJOR_PREPACKED_COMPARE,
+                                    MODE_FORWARD_RETURN_COPY_ONLY_EXPERT_MAJOR_PREPACKED_PALLAS,
+                                    MODE_FORWARD_RETURN_COPY_ONLY_EXPERT_MAJOR_PREPACKED_COMPARE,
+                                    MODE_FORWARD_RETURN_DIRECT_TO_SOURCE_PALLAS,
+                                    MODE_FORWARD_RETURN_DIRECT_TO_SOURCE_COMPARE,
+                                    MODE_FORWARD_EXPERT_MAJOR_DIRECT_RETURN_COMBINE_PALLAS,
+                                    MODE_FORWARD_EXPERT_MAJOR_DIRECT_RETURN_COMBINE_COMPARE,
+                                    MODE_BACKWARD_W2_EXPERT_MAJOR_PREPACKED,
+                                    MODE_BACKWARD_W2_EXPERT_MAJOR_PREPACKED_PALLAS,
+                                    MODE_BACKWARD_W2_EXPERT_MAJOR_PREPACKED_COMPARE,
+                                )
+                                else (
+                                    _make_backward_source_expand_expert_inputs(args, plan)
+                                    if mode
+                                    in (
+                                        MODE_BACKWARD_SOURCE_EXPAND_FROM_EXPERT_MAJOR_PALLAS,
+                                        MODE_BACKWARD_SOURCE_EXPAND_FROM_EXPERT_MAJOR_COMPARE,
+                                        MODE_BACKWARD_SOURCE_EXPAND_FROM_EXPERT_MAJOR_OWNER_SHARDED_DCOMBINE_PALLAS,
+                                        MODE_BACKWARD_SOURCE_EXPAND_FROM_EXPERT_MAJOR_OWNER_SHARDED_DCOMBINE_COMPARE,
+                                        MODE_BACKWARD_DY_ROUTE_SOURCE_PUSH_EXPERT_MAJOR_PALLAS,
+                                        MODE_BACKWARD_DY_ROUTE_SOURCE_PUSH_EXPERT_MAJOR_COMPARE,
+                                        MODE_BACKWARD_SOURCE_EXPAND_FROM_EXPERT_MAJOR_SOURCE_PUSH_PALLAS,
+                                        MODE_BACKWARD_SOURCE_EXPAND_FROM_EXPERT_MAJOR_SOURCE_PUSH_COMPARE,
+                                        MODE_BACKWARD_DCOMBINE_SOURCE_GATHER_EXPERT_MAJOR_PALLAS,
+                                        MODE_BACKWARD_DCOMBINE_SOURCE_GATHER_EXPERT_MAJOR_COMPARE,
+                                        MODE_BACKWARD_SOURCE_EXPAND_FROM_EXPERT_MAJOR_SOURCE_GATHER_PALLAS,
+                                        MODE_BACKWARD_SOURCE_EXPAND_FROM_EXPERT_MAJOR_SOURCE_GATHER_COMPARE,
+                                    )
+                                    else (
+                                        _make_dx_return_expert_inputs(
+                                            args,
+                                            plan,
+                                            source_row_alignment=(
+                                                DIRECT_QUEUE_SOURCE_ROW_ALIGNMENT
+                                                if mode
+                                                in (
+                                                    MODE_DX_RETURN_DIRECT_TO_SOURCE_COMBINE_PALLAS,
+                                                    MODE_DX_RETURN_DIRECT_TO_SOURCE_COMBINE_COMPARE,
+                                                )
+                                                else 1
+                                            ),
+                                        )
+                                        if mode
+                                        in (
+                                            MODE_DX_RETURN_EXPERT_MAJOR_PREPACKED_PALLAS,
+                                            MODE_DX_RETURN_EXPERT_MAJOR_PREPACKED_COMPARE,
+                                            MODE_DX_RETURN_SLOT_REDUCE_EXPERT_MAJOR_PREPACKED_PALLAS,
+                                            MODE_DX_RETURN_SLOT_REDUCE_EXPERT_MAJOR_PREPACKED_COMPARE,
+                                            MODE_DX_RETURN_SUM_EXPERT_MAJOR_PREPACKED_PALLAS,
+                                            MODE_DX_RETURN_SUM_EXPERT_MAJOR_PREPACKED_COMPARE,
+                                            MODE_DX_RETURN_SOURCE_GATHER_EXPERT_MAJOR_PREPACKED_PALLAS,
+                                            MODE_DX_RETURN_SOURCE_GATHER_EXPERT_MAJOR_PREPACKED_COMPARE,
+                                            MODE_DX_RETURN_SOURCE_GATHER_EXPERT_MAJOR_PREPACKED_OWNER_SHARDED_PALLAS,
+                                            MODE_DX_RETURN_SOURCE_GATHER_EXPERT_MAJOR_PREPACKED_OWNER_SHARDED_COMPARE,
+                                            MODE_DX_RETURN_REMOTE_SOURCE_GATHER_EXPERT_MAJOR_PREPACKED_PALLAS,
+                                            MODE_DX_RETURN_REMOTE_SOURCE_GATHER_EXPERT_MAJOR_PREPACKED_COMPARE,
+                                            MODE_DX_RETURN_COPY_ONLY_EXPERT_MAJOR_PREPACKED_PALLAS,
+                                            MODE_DX_RETURN_COPY_ONLY_EXPERT_MAJOR_PREPACKED_COMPARE,
+                                            MODE_DX_RETURN_DIRECT_TO_SOURCE_COMBINE_PALLAS,
+                                            MODE_DX_RETURN_DIRECT_TO_SOURCE_COMBINE_COMPARE,
+                                        )
+                                        else _make_inputs(args, plan)
+                                    )
+                                )
+                            )
+                        )
+                    )
+                )
+            )
+        )
+        if (
+            mode
+            in (
+                MODE_W13_EXPERT_MAJOR_PREPACKED,
+                MODE_W13_EXPERT_MAJOR_PREPACKED_PALLAS,
+                MODE_W13_EXPERT_MAJOR_PREPACKED_COMPARE,
+            )
+            and expert_mesh is not None
+        ):
+            inputs = _shard_w13_expert_inputs(inputs, expert_mesh)
+        if (
+            mode
+            in (
+                MODE_W13_EXPERT_MAJOR_PALLAS,
+                MODE_W13_EXPERT_MAJOR_COMPARE,
+                MODE_W13_SOURCE_PADDED_DIRECT_PACK_PALLAS,
+                MODE_W13_SOURCE_PADDED_DIRECT_PACK_COMPARE,
+                MODE_FORWARD_EXPERT_MAJOR_PALLAS,
+                MODE_FORWARD_EXPERT_MAJOR_COMPARE,
+                MODE_FORWARD_EXPERT_MAJOR_RETURN_SUM_PALLAS,
+                MODE_FORWARD_EXPERT_MAJOR_RETURN_SUM_COMPARE,
+                MODE_FORWARD_EXPERT_MAJOR_DIRECT_PACK_DIRECT_RETURN_COMBINE_PALLAS,
+                MODE_FORWARD_EXPERT_MAJOR_DIRECT_PACK_DIRECT_RETURN_COMBINE_COMPARE,
+                MODE_FORWARD_SOURCE_PADDED_DIRECT_PACK_DIRECT_RETURN_COMBINE_PALLAS,
+                MODE_FORWARD_SOURCE_PADDED_DIRECT_PACK_DIRECT_RETURN_COMBINE_COMPARE,
+                MODE_FORWARD_EXPERT_MAJOR_DIRECT_PACK_OWNER_SHARDED_Y_STOP_PALLAS,
+                MODE_FORWARD_EXPERT_MAJOR_DIRECT_PACK_REMOTE_Y_STOP_PALLAS,
+                MODE_FORWARD_SOURCE_EXPAND_DIRECT_PACK_OWNER_SHARDED_Y_PALLAS,
+                MODE_FORWARD_SOURCE_EXPAND_DIRECT_PACK_REMOTE_Y_PALLAS,
+                MODE_FORWARD_W2_BACKWARD_DIRECT_PACK_OWNER_SHARDED_Y_PALLAS,
+                MODE_FORWARD_W2_BACKWARD_DIRECT_PACK_REMOTE_Y_PALLAS,
+                MODE_FORWARD_W13_BACKWARD_DIRECT_PACK_OWNER_SHARDED_Y_PALLAS,
+                MODE_FORWARD_W13_BACKWARD_DIRECT_PACK_REMOTE_Y_PALLAS,
+                MODE_FORWARD_W13_BACKWARD_DIGEST_DIRECT_PACK_OWNER_SHARDED_Y_PALLAS,
+                MODE_FORWARD_W13_BACKWARD_DIGEST_DIRECT_PACK_REMOTE_Y_PALLAS,
+                MODE_FORWARD_W13_BACKWARD_BARRIER_DIGEST_DIRECT_PACK_OWNER_SHARDED_Y_PALLAS,
+                MODE_FORWARD_W13_BACKWARD_BARRIER_DIGEST_DIRECT_PACK_REMOTE_Y_PALLAS,
+                MODE_FORWARD_SWIGLU_BACKWARD_DIGEST_DIRECT_PACK_OWNER_SHARDED_Y_PALLAS,
+                MODE_FORWARD_SWIGLU_BACKWARD_DIGEST_DIRECT_PACK_REMOTE_Y_PALLAS,
+                MODE_FORWARD_W13_DX_BACKWARD_DIGEST_DIRECT_PACK_OWNER_SHARDED_Y_PALLAS,
+                MODE_FORWARD_W13_DX_BACKWARD_DIGEST_DIRECT_PACK_REMOTE_Y_PALLAS,
+                MODE_FORWARD_W13_DW13_BACKWARD_DIGEST_DIRECT_PACK_OWNER_SHARDED_Y_PALLAS,
+                MODE_FORWARD_W13_DW13_BACKWARD_DIGEST_DIRECT_PACK_REMOTE_Y_PALLAS,
+                MODE_FORWARD_BACKWARD_EXPERT_MAJOR_PALLAS,
+                MODE_FORWARD_BACKWARD_EXPERT_MAJOR_COMPARE,
+                MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_PALLAS,
+                MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_PALLAS,
+                MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_LOOKUP_PACK_PALLAS,
+                MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_LOOKUP_PACK_COMPARE,
+                MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_SOURCE_GATHER_PALLAS,
+                MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_SOURCE_GATHER_COMPARE,
+                MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_OWNER_SHARDED_PALLAS,
+                MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_OWNER_SHARDED_COMPARE,
+                MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_OWNER_SHARDED_Y_PALLAS,
+                MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_DIRECT_RETURN_COMBINE_DUPLICATE_W2_PALLAS,
+                MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_DIRECT_RETURN_COMBINE_DUPLICATE_W2_COMPARE,
+                MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_DIRECT_QUEUE_PALLAS,
+                MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_DIRECT_QUEUE_WITH_METADATA_PALLAS,
+                MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_DIRECT_QUEUE_COMPARE,
+                MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_OWNER_SHARDED_Y_SLOT_REDUCE_PALLAS,
+                MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_NO_Y_PALLAS,
+                MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_REMOTE_Y_PALLAS,
+                MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_REMOTE_Y_DELAYED_PALLAS,
+                MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_OWNER_SHARDED_DX_PALLAS,
+                MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_REMOTE_DX_PALLAS,
+                MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_OWNER_SHARDED_Y_WITH_METADATA_PALLAS,
+                MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_DIRECT_PACK_OWNER_SHARDED_Y_WITH_PALLAS_METADATA_PALLAS,
+                MODE_FORWARD_BACKWARD_EXPERT_MAJOR_SAVED_X_COMPARE,
+                MODE_FORWARD_BACKWARD_SOURCE_PADDED_DIRECT_PACK_DIRECT_QUEUE_PALLAS,
+                MODE_FORWARD_BACKWARD_SOURCE_PADDED_DIRECT_PACK_DIRECT_QUEUE_COMPARE,
+                MODE_FORWARD_BACKWARD_SOURCE_PADDED_DIRECT_PACK_DIRECT_QUEUE_WITH_METADATA_PALLAS,
+            )
+            and expert_mesh is not None
+        ):
+            inputs = _shard_w13_expert_major_inputs(inputs, expert_mesh)
+        if (
+            mode
+            in (
+                MODE_FORWARD_EXPERT_MAJOR_PREPACKED_PALLAS,
+                MODE_FORWARD_EXPERT_MAJOR_PREPACKED_COMPARE,
+                MODE_FORWARD_EXPERT_MAJOR_PREPACKED_RETURN_PALLAS,
+                MODE_FORWARD_EXPERT_MAJOR_PREPACKED_RETURN_COMPARE,
+            )
+            and expert_mesh is not None
+        ):
+            inputs = _shard_forward_expert_inputs(inputs, expert_mesh)
+        if (
+            mode
+            in (
+                MODE_W2_EXPERT_MAJOR_PREPACKED_PALLAS,
+                MODE_W2_EXPERT_MAJOR_PREPACKED_COMPARE,
+                MODE_W2_EXPERT_MAJOR_PREPACKED_PALLAS_ASSUME_ZERO_INVALID,
+                MODE_W2_EXPERT_MAJOR_PREPACKED_ASSUME_ZERO_INVALID_COMPARE,
+                MODE_FORWARD_RETURN_EXPERT_MAJOR_PREPACKED_SHARDED_PALLAS,
+                MODE_FORWARD_RETURN_EXPERT_MAJOR_PREPACKED_SHARDED_COMPARE,
+                MODE_FORWARD_RETURN_SLOT_REDUCE_EXPERT_MAJOR_PREPACKED_SHARDED_PALLAS,
+                MODE_FORWARD_RETURN_SLOT_REDUCE_EXPERT_MAJOR_PREPACKED_SHARDED_COMPARE,
+                MODE_FORWARD_RETURN_SUM_EXPERT_MAJOR_PREPACKED_SHARDED_PALLAS,
+                MODE_FORWARD_RETURN_SUM_EXPERT_MAJOR_PREPACKED_SHARDED_COMPARE,
+                MODE_FORWARD_RETURN_SUM_EXPERT_MAJOR_PREPACKED_OWNER_SHARDED_PALLAS,
+                MODE_FORWARD_RETURN_SUM_EXPERT_MAJOR_PREPACKED_OWNER_SHARDED_COMPARE,
+                MODE_FORWARD_RETURN_SUM_LOOKUP_EXPERT_MAJOR_PREPACKED_OWNER_SHARDED_PALLAS,
+                MODE_FORWARD_RETURN_SUM_LOOKUP_EXPERT_MAJOR_PREPACKED_OWNER_SHARDED_COMPARE,
+                MODE_FORWARD_RETURN_REMOTE_SOURCE_GATHER_EXPERT_MAJOR_PREPACKED_PALLAS,
+                MODE_FORWARD_RETURN_REMOTE_SOURCE_GATHER_EXPERT_MAJOR_PREPACKED_COMPARE,
+                MODE_FORWARD_RETURN_REVERSE_ROUTE_SOURCE_GATHER_EXPERT_MAJOR_PREPACKED_PALLAS,
+                MODE_FORWARD_RETURN_REVERSE_ROUTE_SOURCE_GATHER_EXPERT_MAJOR_PREPACKED_COMPARE,
+                MODE_FORWARD_RETURN_COPY_ONLY_EXPERT_MAJOR_PREPACKED_PALLAS,
+                MODE_FORWARD_RETURN_COPY_ONLY_EXPERT_MAJOR_PREPACKED_COMPARE,
+                MODE_FORWARD_RETURN_DIRECT_TO_SOURCE_PALLAS,
+                MODE_FORWARD_RETURN_DIRECT_TO_SOURCE_COMPARE,
+                MODE_FORWARD_EXPERT_MAJOR_DIRECT_RETURN_COMBINE_PALLAS,
+                MODE_FORWARD_EXPERT_MAJOR_DIRECT_RETURN_COMBINE_COMPARE,
+                MODE_BACKWARD_W2_EXPERT_MAJOR_PREPACKED_PALLAS,
+                MODE_BACKWARD_W2_EXPERT_MAJOR_PREPACKED_COMPARE,
+            )
+            and expert_mesh is not None
+        ):
+            inputs = _shard_w2_expert_inputs(inputs, expert_mesh)
+        if (
+            mode
+            in (
+                MODE_FORWARD_COMBINE_SOURCE_GATHER_PALLAS,
+                MODE_FORWARD_COMBINE_SOURCE_GATHER_COMPARE,
+            )
+            and expert_mesh is not None
+        ):
+            inputs = _shard_return_queue_inputs(inputs, expert_mesh)
+        if (
+            mode
+            in (
+                MODE_BACKWARD_SOURCE_EXPAND_FROM_SAVED_RETURN_QUEUE_PALLAS,
+                MODE_BACKWARD_SOURCE_EXPAND_FROM_SAVED_RETURN_QUEUE_COMPARE,
+            )
+            and expert_mesh is not None
+        ):
+            inputs = _shard_backward_return_queue_inputs(inputs, expert_mesh)
+        if (
+            mode
+            in (
+                MODE_BACKWARD_W13_EXPERT_MAJOR_PREPACKED_PALLAS,
+                MODE_BACKWARD_W13_EXPERT_MAJOR_PREPACKED_COMPARE,
+                MODE_BACKWARD_W13_DX_ROUTE_EXPERT_MAJOR_PREPACKED_PALLAS,
+                MODE_BACKWARD_W13_DW13_EXPERT_MAJOR_PREPACKED_PALLAS,
+            )
+            and expert_mesh is not None
+        ):
+            inputs = _shard_w13_backward_expert_inputs(inputs, expert_mesh)
+        if (
+            mode
+            in (
+                MODE_BACKWARD_SOURCE_EXPAND_FROM_EXPERT_MAJOR_PALLAS,
+                MODE_BACKWARD_SOURCE_EXPAND_FROM_EXPERT_MAJOR_COMPARE,
+                MODE_BACKWARD_SOURCE_EXPAND_FROM_EXPERT_MAJOR_OWNER_SHARDED_DCOMBINE_PALLAS,
+                MODE_BACKWARD_SOURCE_EXPAND_FROM_EXPERT_MAJOR_OWNER_SHARDED_DCOMBINE_COMPARE,
+                MODE_BACKWARD_DY_ROUTE_SOURCE_PUSH_EXPERT_MAJOR_PALLAS,
+                MODE_BACKWARD_DY_ROUTE_SOURCE_PUSH_EXPERT_MAJOR_COMPARE,
+                MODE_BACKWARD_SOURCE_EXPAND_FROM_EXPERT_MAJOR_SOURCE_PUSH_PALLAS,
+                MODE_BACKWARD_SOURCE_EXPAND_FROM_EXPERT_MAJOR_SOURCE_PUSH_COMPARE,
+                MODE_BACKWARD_DCOMBINE_SOURCE_GATHER_EXPERT_MAJOR_PALLAS,
+                MODE_BACKWARD_DCOMBINE_SOURCE_GATHER_EXPERT_MAJOR_COMPARE,
+                MODE_BACKWARD_SOURCE_EXPAND_FROM_EXPERT_MAJOR_SOURCE_GATHER_PALLAS,
+                MODE_BACKWARD_SOURCE_EXPAND_FROM_EXPERT_MAJOR_SOURCE_GATHER_COMPARE,
+            )
+            and expert_mesh is not None
+        ):
+            inputs = _shard_backward_source_expand_expert_inputs(inputs, expert_mesh)
+        if (
+            mode
+            in (
+                MODE_DX_RETURN_EXPERT_MAJOR_PREPACKED_PALLAS,
+                MODE_DX_RETURN_EXPERT_MAJOR_PREPACKED_COMPARE,
+                MODE_DX_RETURN_SLOT_REDUCE_EXPERT_MAJOR_PREPACKED_PALLAS,
+                MODE_DX_RETURN_SLOT_REDUCE_EXPERT_MAJOR_PREPACKED_COMPARE,
+                MODE_DX_RETURN_SUM_EXPERT_MAJOR_PREPACKED_PALLAS,
+                MODE_DX_RETURN_SUM_EXPERT_MAJOR_PREPACKED_COMPARE,
+                MODE_DX_RETURN_SOURCE_GATHER_EXPERT_MAJOR_PREPACKED_PALLAS,
+                MODE_DX_RETURN_SOURCE_GATHER_EXPERT_MAJOR_PREPACKED_COMPARE,
+                MODE_DX_RETURN_SOURCE_GATHER_EXPERT_MAJOR_PREPACKED_OWNER_SHARDED_PALLAS,
+                MODE_DX_RETURN_SOURCE_GATHER_EXPERT_MAJOR_PREPACKED_OWNER_SHARDED_COMPARE,
+                MODE_DX_RETURN_REMOTE_SOURCE_GATHER_EXPERT_MAJOR_PREPACKED_PALLAS,
+                MODE_DX_RETURN_REMOTE_SOURCE_GATHER_EXPERT_MAJOR_PREPACKED_COMPARE,
+                MODE_DX_RETURN_COPY_ONLY_EXPERT_MAJOR_PREPACKED_PALLAS,
+                MODE_DX_RETURN_COPY_ONLY_EXPERT_MAJOR_PREPACKED_COMPARE,
+                MODE_DX_RETURN_DIRECT_TO_SOURCE_COMBINE_PALLAS,
+                MODE_DX_RETURN_DIRECT_TO_SOURCE_COMBINE_COMPARE,
+            )
+            and expert_mesh is not None
+        ):
+            inputs = _shard_dx_return_expert_inputs(inputs, expert_mesh)
+        fn = _mode_callable(mode, plan, args)
+        implementation = "pallas_mgpu" if _is_pallas_mode(mode) else "jax_reference"
+        block_sizes = _block_sizes_for_mode(args, mode)
+        if expert_mesh is not None:
+            with jax.set_mesh(expert_mesh):
+                timing = _time_callable(
+                    fn,
+                    inputs,
+                    warmup=args.warmup,
+                    steps=args.steps,
+                    repeat_runs=args.repeat_runs,
+                    separate_compile=args.separate_compile,
+                )
+        else:
+            timing = _time_callable(
+                fn,
+                inputs,
+                warmup=args.warmup,
+                steps=args.steps,
+                repeat_runs=args.repeat_runs,
+                separate_compile=args.separate_compile,
+            )
+        return _repeat_rows(
+            mode=mode,
+            timing=timing,
+            implementation=implementation,
+            shape_config=shape_config,
+            git_sha=args.git_sha,
+            plan_stats=plan_stats,
+            block_sizes=block_sizes,
+        )
+    except Exception as exc:
+        return [
+            _error_row(
+                mode=mode,
+                implementation=("pallas_mgpu" if _is_pallas_mode(mode) else "jax_reference"),
+                shape_config=shape_config,
+                git_sha=args.git_sha,
+                plan_stats=plan_stats,
+                exc=exc,
+                debug_exceptions=args.debug_exceptions,
+                block_sizes=_block_sizes_for_mode(args, mode),
+            )
+        ]
+
+
+def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--ep-size", type=int, default=8)
+    parser.add_argument("--tokens-per-rank", type=int, default=32768)
+    parser.add_argument("--topk", type=int, default=4)
+    parser.add_argument("--experts-per-rank", type=int, default=32)
+    parser.add_argument("--hidden-dim", type=int, default=2560)
+    parser.add_argument("--intermediate-dim", type=int, default=1280)
+    parser.add_argument("--capacity-factor", type=float, default=1.25)
+    parser.add_argument("--rows-per-src-dst-capacity", default="auto")
+    parser.add_argument("--routing", choices=("balanced", "random"), default="balanced")
+    parser.add_argument("--routing-seed", type=int, default=0)
+    parser.add_argument("--dtype", choices=("bfloat16", "float32"), default="bfloat16")
+    parser.add_argument(
+        "--modes",
+        type=_parse_modes,
+        default=(MODE_METADATA,),
+        metavar="MODE[,MODE...]",
+        help=f"Comma-separated benchmark modes or aliases ({', '.join(MODE_ALIASES)}); use 'all' for the default suite.",
+    )
+    parser.add_argument("--plan-builder", choices=("jax", "pallas"), default="jax")
+    parser.add_argument("--metadata-tile-assignments", type=int, default=128)
+    parser.add_argument("--gather-row-block", type=int, default=16)
+    parser.add_argument("--gather-hidden-block", type=int, default=512)
+    parser.add_argument("--w13-row-block", type=int, default=1)
+    parser.add_argument("--w13-hidden-block", type=int, default=128)
+    parser.add_argument("--w13-intermediate-block", type=int, default=128)
+    parser.add_argument("--w13-expert-major-row-block", type=int, default=64)
+    parser.add_argument("--w13-expert-major-hidden-block", type=int, default=128)
+    parser.add_argument("--w13-expert-major-intermediate-block", type=int, default=128)
+    parser.add_argument("--w2-row-block", type=int, default=1)
+    parser.add_argument("--w2-intermediate-block", type=int, default=128)
+    parser.add_argument("--w2-hidden-block", type=int, default=128)
+    parser.add_argument("--backward-row-block", type=int, default=128)
+    parser.add_argument("--backward-hidden-block", type=int, default=128)
+    parser.add_argument("--dx-return-row-block", type=int, default=DEFAULT_SEMANTIC_DX_RETURN_ROW_BLOCK)
+    parser.add_argument("--dx-return-hidden-block", type=int, default=DEFAULT_SEMANTIC_DX_RETURN_HIDDEN_BLOCK)
+    parser.add_argument("--w2-backward-row-block", type=int, default=1)
+    parser.add_argument("--w2-backward-intermediate-block", type=int, default=128)
+    parser.add_argument("--w2-backward-hidden-block", type=int, default=128)
+    parser.add_argument("--w2-backward-lowering", choices=("warpgroup", "lane"), default="warpgroup")
+    parser.add_argument("--w2-expert-major-row-block", type=int, default=64)
+    parser.add_argument("--w2-expert-major-intermediate-block", type=int, default=128)
+    parser.add_argument("--w2-expert-major-hidden-block", type=int, default=128)
+    parser.add_argument("--forward-return-row-block", type=int, default=64)
+    parser.add_argument("--forward-return-hidden-block", type=int, default=256)
+    parser.add_argument("--w13-backward-row-block", type=int, default=64)
+    parser.add_argument("--w13-backward-hidden-block", type=int, default=256)
+    parser.add_argument("--w13-backward-output-block", type=int, default=64)
+    parser.add_argument("--w13-backward-lowering", choices=("warpgroup", "lane"), default="warpgroup")
+    parser.add_argument("--pallas-interpret", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument("--warmup", type=int, default=1)
+    parser.add_argument("--steps", type=int, default=3)
+    parser.add_argument("--repeat-runs", type=int, default=1)
+    parser.add_argument("--separate-compile", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument("--debug-exceptions", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument("--git-sha", type=str, default=None)
+    parser.add_argument("--jsonl", type=str, default=None)
+    return parser.parse_args(argv)
+
+
+def main(argv: Sequence[str] | None = None) -> None:
+    args = parse_args(argv)
+    if args.jsonl:
+        jsonl_dir = os.path.dirname(args.jsonl)
+        if jsonl_dir:
+            os.makedirs(jsonl_dir, exist_ok=True)
+
+    rows_per_src_dst_capacity = _parse_rows_per_pair(
+        args.rows_per_src_dst_capacity,
+        tokens_per_rank=args.tokens_per_rank,
+        topk=args.topk,
+        ep_size=args.ep_size,
+        capacity_factor=args.capacity_factor,
+    )
+    shape_config = _shape_config(args, rows_per_src_dst_capacity)
+
+    plan: SourcePushSemanticPlan | None = None
+    plan_stats: dict[str, Any] | None = None
+    for mode in args.modes:
+        if mode == MODE_METADATA:
+            plan, rows = _run_metadata(
+                args,
+                rows_per_src_dst_capacity=rows_per_src_dst_capacity,
+                shape_config=shape_config,
+            )
+            if plan is not None:
+                plan_stats = _plan_stats(plan)
+        elif mode == MODE_METADATA_PALLAS:
+            plan, rows = _run_metadata_pallas(
+                args,
+                rows_per_src_dst_capacity=rows_per_src_dst_capacity,
+                shape_config=shape_config,
+            )
+            if plan is not None:
+                plan_stats = _plan_stats(plan)
+        elif mode == MODE_METADATA_TILE_PALLAS:
+            rows = _run_metadata_tile_pallas(args, shape_config=shape_config)
+        else:
+            if plan is None:
+                plan = _build_plan_once(args, rows_per_src_dst_capacity)
+                plan_stats = _plan_stats(plan)
+            assert plan_stats is not None
+            rows = _run_stage_mode(
+                args,
+                mode=mode,
+                plan=plan,
+                shape_config=shape_config,
+                plan_stats=plan_stats,
+            )
+
+        for row in rows:
+            _write_row(row, args.jsonl)
+        if rows:
+            _write_row(_summary_row(rows), args.jsonl)
+
+
+if __name__ == "__main__":
+    main()

@@ -35,7 +35,13 @@ from levanter.kernels.pallas.cost_estimate_utils import with_io_bytes_accessed
 SOURCE_PUSH_DY_ROUTE_IMPLEMENTATION_REFERENCE = "reference"
 SOURCE_PUSH_DY_ROUTE_IMPLEMENTATION_PALLAS_MGPU = "pallas_mgpu"
 SOURCE_PUSH_DY_ROUTE_IMPLEMENTATION_SOURCE_PUSH_PALLAS_MGPU = "source_push_pallas_mgpu"
-SourcePushDyRouteImplementation: TypeAlias = Literal["reference", "pallas_mgpu", "source_push_pallas_mgpu"]
+SOURCE_PUSH_DY_ROUTE_IMPLEMENTATION_SOURCE_PUSH_JAX = "source_push_jax"
+SourcePushDyRouteImplementation: TypeAlias = Literal[
+    "reference",
+    "pallas_mgpu",
+    "source_push_pallas_mgpu",
+    "source_push_jax",
+]
 MIN_SOURCE_PUSH_DY_ROUTE_GPU_ROW_BLOCK = 128
 DEFAULT_SOURCE_PUSH_DY_ROUTE_ROW_BLOCK = MIN_SOURCE_PUSH_DY_ROUTE_GPU_ROW_BLOCK
 DEFAULT_SOURCE_PUSH_DY_ROUTE_HIDDEN_BLOCK = 128
@@ -97,12 +103,15 @@ def _source_push_backward_dy_to_expert_major(
         )
     if implementation == SOURCE_PUSH_DY_ROUTE_IMPLEMENTATION_SOURCE_PUSH_PALLAS_MGPU:
         raise NotImplementedError("compact source-push dy route requires SourcePushPlan metadata at the call site")
+    if implementation == SOURCE_PUSH_DY_ROUTE_IMPLEMENTATION_SOURCE_PUSH_JAX:
+        raise NotImplementedError("compact source-push JAX dy route requires SourcePushPlan metadata at the call site")
     raise ValueError(
         "source-push backward compact dy route implementation must be one of "
         f"{(
             SOURCE_PUSH_DY_ROUTE_IMPLEMENTATION_REFERENCE,
             SOURCE_PUSH_DY_ROUTE_IMPLEMENTATION_PALLAS_MGPU,
             SOURCE_PUSH_DY_ROUTE_IMPLEMENTATION_SOURCE_PUSH_PALLAS_MGPU,
+            SOURCE_PUSH_DY_ROUTE_IMPLEMENTATION_SOURCE_PUSH_JAX,
         )}, "
         f"got {implementation!r}"
     )
@@ -171,12 +180,15 @@ def _source_push_backward_dy_to_h_rows(
             block_sizes=block_sizes,
             mesh=mesh,
         )
+    if implementation == SOURCE_PUSH_DY_ROUTE_IMPLEMENTATION_SOURCE_PUSH_JAX:
+        raise NotImplementedError("flat-H source-push JAX dy route is only defined for compact expert-major H")
     raise ValueError(
         "source-push backward dy route implementation must be one of "
         f"{(
             SOURCE_PUSH_DY_ROUTE_IMPLEMENTATION_REFERENCE,
             SOURCE_PUSH_DY_ROUTE_IMPLEMENTATION_PALLAS_MGPU,
             SOURCE_PUSH_DY_ROUTE_IMPLEMENTATION_SOURCE_PUSH_PALLAS_MGPU,
+            SOURCE_PUSH_DY_ROUTE_IMPLEMENTATION_SOURCE_PUSH_JAX,
         )}, "
         f"got {implementation!r}"
     )
@@ -311,6 +323,90 @@ def _source_push_dy_route_inverse_indices(
     )
 
 
+def _source_push_compact_h_indices_from_plan(
+    plan: SourcePushPlan,
+    send_meta: Int[Array, "S Dst Q F"],
+    expert_base: Int[Array, "Dst E"],
+    src_base_by_expert: Int[Array, "Dst S E"],
+    *,
+    use_exact_expert_major: bool,
+) -> tuple[Int[Array, "S Dst Q M"], Int[Array, "S Dst Q M"], Int[Array, "S Dst Q M"], Bool[Array, "S Dst Q M"]]:
+    """Return direct compact-H indices for every source-push queue row.
+
+    The compact MLP residual is ``[dst, expert, row, hidden]``. Rows from
+    different source ranks that target the same destination expert are laid out
+    by ``src_base_by_expert``. In exact mode, ``send_meta`` row starts are
+    source-local inside the source/expert segment. In source-padded mode, row
+    starts are flat destination rows and must be converted back to expert rows.
+    """
+
+    send_meta = jnp.asarray(send_meta, dtype=jnp.int32)
+    expert_base = jnp.asarray(expert_base, dtype=jnp.int32)
+    src_base_by_expert = jnp.asarray(src_base_by_expert, dtype=jnp.int32)
+    valid_mask = jnp.asarray(plan.valid_mask, dtype=jnp.bool_)
+
+    ep_size, _, entries_per_dst, block_m = valid_mask.shape
+    src = jnp.arange(ep_size, dtype=jnp.int32)[:, None, None]
+    dst_ordinal = jnp.arange(ep_size, dtype=jnp.int32)[None, :, None]
+    src = jnp.broadcast_to(src, (ep_size, ep_size, entries_per_dst))
+    dst = (src + dst_ordinal) % ep_size
+
+    expert = jnp.maximum(send_meta[..., SOURCE_PUSH_META_LOCAL_EXPERT], 0)
+    metadata_row_start = send_meta[..., SOURCE_PUSH_META_LOCAL_ROW_START]
+    if use_exact_expert_major:
+        src_base = src_base_by_expert.at[dst, src, expert].get()
+        row_start = src_base + metadata_row_start
+    else:
+        row_start = metadata_row_start - expert_base.at[dst, expert].get()
+    row_offsets = jnp.arange(block_m, dtype=jnp.int32)[None, None, None, :]
+    compact_row = row_start[..., None] + row_offsets
+    compact_expert = jnp.broadcast_to(expert[..., None], compact_row.shape)
+    compact_dst = jnp.broadcast_to(dst[..., None], compact_row.shape)
+    safe_dst = jnp.where(valid_mask, compact_dst, jnp.zeros((), dtype=jnp.int32))
+    safe_expert = jnp.where(valid_mask, compact_expert, jnp.zeros((), dtype=jnp.int32))
+    safe_row = jnp.where(valid_mask, compact_row, jnp.zeros((), dtype=jnp.int32))
+    return safe_dst, safe_expert, safe_row, valid_mask
+
+
+def _source_push_backward_dy_to_expert_major_from_plan_source_push_jax(
+    dy: Float[Array, "S T D"],
+    plan: SourcePushPlan,
+    send_meta: Int[Array, "S Dst Q F"],
+    expert_base: Int[Array, "Dst E"],
+    src_base_by_expert: Int[Array, "Dst S E"],
+    *,
+    experts_per_rank: int,
+    expert_capacity: int,
+    use_exact_expert_major: bool,
+) -> Float[Array, "Dst E C D"]:
+    """Route ``dy`` into compact expert-major rows using source-push queue order.
+
+    This is a correctness-first bridge for the production compact-H backward
+    shape. It avoids destination-owned arbitrary gathers by first aligning
+    ``dy`` to source queue order, then performs one scatter into the direct
+    compact H layout ``[Dst, E, C, D]``.
+    """
+
+    queue_dy = _source_push_queue_dy_rows(dy, plan)
+    compact_dst, compact_expert, compact_row, valid_mask = _source_push_compact_h_indices_from_plan(
+        plan,
+        send_meta,
+        expert_base,
+        src_base_by_expert,
+        use_exact_expert_major=use_exact_expert_major,
+    )
+    routed_rows = jnp.where(valid_mask[..., None], queue_dy, jnp.zeros((), dtype=queue_dy.dtype))
+    out = jnp.zeros(
+        (plan.assignment_ids.shape[0], experts_per_rank, expert_capacity, dy.shape[-1]),
+        dtype=jnp.float32,
+    )
+    routed = out.at[compact_dst, compact_expert, compact_row].add(
+        routed_rows,
+        out_sharding=_source_push_out_sharding(SOURCE_PUSH_MESH_AXIS, None, None, None),
+    )
+    return _with_source_push_sharding(routed, SOURCE_PUSH_MESH_AXIS, None, None, None)
+
+
 def _source_push_backward_dy_to_expert_major_reference(
     dy: Float[Array, "S T D"],
     source_rank_by_expert: Int[Array, "Dst E C"],
@@ -319,10 +415,11 @@ def _source_push_backward_dy_to_expert_major_reference(
 ) -> Float[Array, "Dst E C D"]:
     """Readable compact JAX reference for the backward dy route."""
 
-    safe_src = jnp.where(valid_by_expert, source_rank_by_expert, jnp.zeros((), dtype=jnp.int32))
-    safe_token = jnp.where(valid_by_expert, token_id_by_expert, jnp.zeros((), dtype=jnp.int32))
-    routed = dy.at[safe_src, safe_token].get(
-        out_sharding=_source_push_out_sharding(SOURCE_PUSH_MESH_AXIS, None, None, None)
+    routed = dy.at[source_rank_by_expert, token_id_by_expert].get(
+        mode="fill",
+        fill_value=0,
+        wrap_negative_indices=False,
+        out_sharding=_source_push_out_sharding(SOURCE_PUSH_MESH_AXIS, None, None, None),
     )
     return jnp.where(valid_by_expert[..., None], routed.astype(jnp.float32), jnp.zeros((), dtype=jnp.float32))
 

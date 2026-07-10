@@ -12,15 +12,16 @@ metadata rather than saved packed/recv-x residuals.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Literal, NamedTuple, TypeAlias
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 from jax import lax, shard_map
 from jax.experimental import pallas as pl
 from jax.experimental.pallas import mosaic_gpu as mgpu
-from jax.sharding import AbstractMesh, Mesh, PartitionSpec as P
+from jax.sharding import AbstractMesh, Mesh, NamedSharding, PartitionSpec as P
 from jaxtyping import Array, Bool, Float, Int
 
 from levanter.grug._moe.source_push_plan import (
@@ -37,16 +38,69 @@ SOURCE_PUSH_W13_BACKWARD_IMPLEMENTATION_REFERENCE = "reference"
 SOURCE_PUSH_W13_BACKWARD_IMPLEMENTATION_TILED = "tiled"
 SOURCE_PUSH_W13_BACKWARD_IMPLEMENTATION_PALLAS_MGPU = "pallas_mgpu"
 SOURCE_PUSH_W13_BACKWARD_IMPLEMENTATION_PALLAS_MGPU_COMPACT = "pallas_mgpu_compact"
+SOURCE_PUSH_W13_BACKWARD_EXPERIMENT_COMPACT_DX_SOURCE_GATHER_DW13 = "pallas_mgpu_compact_dx_source_gather_dw13"
 SOURCE_PUSH_W13_BACKWARD_DIAGNOSTIC_PALLAS_MGPU_COMPACT_DX_ONLY = "pallas_mgpu_compact_dx_only"
+SOURCE_PUSH_W13_BACKWARD_DIAGNOSTIC_PALLAS_MGPU_COMPACT_DW13_ONLY = "pallas_mgpu_compact_dw13_only"
+SOURCE_PUSH_W13_BACKWARD_DIAGNOSTIC_PALLAS_MGPU_PREFILLED_X_DW13_ONLY = "pallas_mgpu_prefilled_x_dw13_only"
+SOURCE_PUSH_W13_BACKWARD_DIAGNOSTIC_PALLAS_MGPU_EXACT_FLAT_DW13_ONLY = "pallas_mgpu_exact_flat_dw13_only"
+SOURCE_PUSH_W13_BACKWARD_DIAGNOSTIC_XLA_COMPACT_DW13_ONLY = "xla_compact_dw13_only"
+SOURCE_PUSH_W13_BACKWARD_DIAGNOSTIC_XLA_SOURCE_PADDED_DW13_ONLY = "xla_source_padded_dw13_only"
+SOURCE_PUSH_W13_BACKWARD_DIAGNOSTIC_XLA_LOCAL_SWIGLU_DW13_ONLY = "xla_local_swiglu_dw13_only"
+SOURCE_PUSH_W13_BACKWARD_DIAGNOSTIC_PALLAS_MGPU_SOURCE_PADDED_PARTIALS_DW13_ONLY = (
+    "pallas_mgpu_source_padded_partials_dw13_only"
+)
+SOURCE_PUSH_W13_BACKWARD_DIAGNOSTIC_PALLAS_MGPU_LOCAL_SWIGLU_DW13_ONLY = "pallas_mgpu_local_swiglu_dw13_only"
+SOURCE_PUSH_W13_BACKWARD_DIAGNOSTIC_PALLAS_MGPU_LOCAL_SWIGLU_PERSISTENT_DW13_ONLY = (
+    "pallas_mgpu_local_swiglu_persistent_dw13_only"
+)
+SOURCE_PUSH_W13_BACKWARD_DIAGNOSTIC_PALLAS_MGPU_LOCAL_LINEAR_DW13_ONLY = "pallas_mgpu_local_linear_dw13_only"
+SOURCE_PUSH_W13_BACKWARD_DIAGNOSTIC_PALLAS_MGPU_LOCAL_SWIGLU_GATE_DW13_ONLY = "pallas_mgpu_local_swiglu_gate_dw13_only"
+SOURCE_PUSH_W13_BACKWARD_DIAGNOSTIC_PALLAS_MGPU_LOCAL_SWIGLU_UP_DW13_ONLY = "pallas_mgpu_local_swiglu_up_dw13_only"
+SOURCE_PUSH_W13_BACKWARD_DIAGNOSTIC_PALLAS_MGPU_LOCAL_SWIGLU_SPLIT_DW13_ONLY = (
+    "pallas_mgpu_local_swiglu_split_dw13_only"
+)
 SOURCE_PUSH_W13_BACKWARD_DIAGNOSTIC_SOURCE_GATHER_DW13_ONLY = "source_gather_dw13_only"
+SOURCE_PUSH_W13_BACKWARD_DIAGNOSTIC_IMPLEMENTATIONS = (
+    SOURCE_PUSH_W13_BACKWARD_DIAGNOSTIC_PALLAS_MGPU_COMPACT_DX_ONLY,
+    SOURCE_PUSH_W13_BACKWARD_DIAGNOSTIC_PALLAS_MGPU_COMPACT_DW13_ONLY,
+    SOURCE_PUSH_W13_BACKWARD_DIAGNOSTIC_PALLAS_MGPU_EXACT_FLAT_DW13_ONLY,
+    SOURCE_PUSH_W13_BACKWARD_DIAGNOSTIC_PALLAS_MGPU_LOCAL_SWIGLU_DW13_ONLY,
+    SOURCE_PUSH_W13_BACKWARD_DIAGNOSTIC_PALLAS_MGPU_LOCAL_SWIGLU_PERSISTENT_DW13_ONLY,
+    SOURCE_PUSH_W13_BACKWARD_DIAGNOSTIC_PALLAS_MGPU_LOCAL_LINEAR_DW13_ONLY,
+    SOURCE_PUSH_W13_BACKWARD_DIAGNOSTIC_PALLAS_MGPU_LOCAL_SWIGLU_GATE_DW13_ONLY,
+    SOURCE_PUSH_W13_BACKWARD_DIAGNOSTIC_PALLAS_MGPU_LOCAL_SWIGLU_UP_DW13_ONLY,
+    SOURCE_PUSH_W13_BACKWARD_DIAGNOSTIC_PALLAS_MGPU_LOCAL_SWIGLU_SPLIT_DW13_ONLY,
+    SOURCE_PUSH_W13_BACKWARD_DIAGNOSTIC_PALLAS_MGPU_PREFILLED_X_DW13_ONLY,
+    SOURCE_PUSH_W13_BACKWARD_DIAGNOSTIC_XLA_COMPACT_DW13_ONLY,
+    SOURCE_PUSH_W13_BACKWARD_DIAGNOSTIC_XLA_SOURCE_PADDED_DW13_ONLY,
+    SOURCE_PUSH_W13_BACKWARD_DIAGNOSTIC_XLA_LOCAL_SWIGLU_DW13_ONLY,
+    SOURCE_PUSH_W13_BACKWARD_DIAGNOSTIC_PALLAS_MGPU_SOURCE_PADDED_PARTIALS_DW13_ONLY,
+    SOURCE_PUSH_W13_BACKWARD_DIAGNOSTIC_SOURCE_GATHER_DW13_ONLY,
+)
+SOURCE_PUSH_W13_BACKWARD_LOCAL_DW13_TILE_DIAGNOSTICS = (
+    SOURCE_PUSH_W13_BACKWARD_DIAGNOSTIC_PALLAS_MGPU_COMPACT_DW13_ONLY,
+    SOURCE_PUSH_W13_BACKWARD_DIAGNOSTIC_PALLAS_MGPU_PREFILLED_X_DW13_ONLY,
+    SOURCE_PUSH_W13_BACKWARD_DIAGNOSTIC_PALLAS_MGPU_LOCAL_SWIGLU_DW13_ONLY,
+    SOURCE_PUSH_W13_BACKWARD_DIAGNOSTIC_PALLAS_MGPU_LOCAL_SWIGLU_PERSISTENT_DW13_ONLY,
+    SOURCE_PUSH_W13_BACKWARD_DIAGNOSTIC_PALLAS_MGPU_LOCAL_LINEAR_DW13_ONLY,
+    SOURCE_PUSH_W13_BACKWARD_DIAGNOSTIC_PALLAS_MGPU_LOCAL_SWIGLU_GATE_DW13_ONLY,
+    SOURCE_PUSH_W13_BACKWARD_DIAGNOSTIC_PALLAS_MGPU_LOCAL_SWIGLU_UP_DW13_ONLY,
+    SOURCE_PUSH_W13_BACKWARD_DIAGNOSTIC_PALLAS_MGPU_LOCAL_SWIGLU_SPLIT_DW13_ONLY,
+)
 SOURCE_PUSH_X_TO_W13_ROWS_IMPLEMENTATION_REFERENCE = "reference"
 SOURCE_PUSH_X_TO_W13_ROWS_IMPLEMENTATION_PALLAS_MGPU = "pallas_mgpu_x_remat"
 SourcePushW13BackwardImplementation: TypeAlias = Literal["reference", "tiled", "pallas_mgpu"]
 SourcePushXToW13RowsImplementation: TypeAlias = Literal["reference", "pallas_mgpu_x_remat"]
+SourcePushW13LocalDzBranch: TypeAlias = Literal["both", "gate", "up"]
 DEFAULT_X_REMAT_HIDDEN_BLOCK = 128
 DEFAULT_W13_DX_ROW_BLOCK = 64
 DEFAULT_W13_DX_HIDDEN_BLOCK = 128
 DEFAULT_W13_DX_OUTPUT_BLOCK = 64
+DEFAULT_W13_DW13_ROW_BLOCK = 64
+DEFAULT_W13_DW13_HIDDEN_BLOCK = 128
+DEFAULT_W13_DW13_OUTPUT_BLOCK = 64
+DEFAULT_W13_DW13_LOWERING_SEMANTICS = mgpu.LoweringSemantics.Warpgroup
+MIN_MOSAIC_INT32_TRANSFER_ELEMENTS = 128
 W13_WGMMA_SWIZZLE_BYTES = 128
 W13_WGMMA_TILE_M = 8
 
@@ -94,10 +148,59 @@ class _SourcePushW13RowIndices(NamedTuple):
     safe_expert: Int[Array, "S Dst Q M"]
 
 
+def _source_push_destination_named_sharding(value: Array, ndim: int) -> NamedSharding | None:
+    """Return destination-rank sharding using the mesh already attached to ``value``."""
+
+    sharding = getattr(value, "sharding", None)
+    if not isinstance(sharding, NamedSharding):
+        return None
+    if SOURCE_PUSH_MESH_AXIS not in sharding.mesh.axis_names:
+        return None
+    return NamedSharding(sharding.mesh, P(SOURCE_PUSH_MESH_AXIS, *(None for _ in range(ndim - 1))))
+
+
+def _with_source_push_destination_sharding(
+    value: Array,
+    *,
+    mesh: Mesh | AbstractMesh | None = None,
+    like: Array | None = None,
+) -> Array:
+    """Constrain eager compact W13 arrays to destination-major source-push layout."""
+
+    if isinstance(mesh, Mesh):
+        return jax.device_put(
+            value,
+            NamedSharding(mesh, P(SOURCE_PUSH_MESH_AXIS, *(None for _ in range(value.ndim - 1)))),
+        )
+    sharding = _source_push_destination_named_sharding(value, value.ndim)
+    if sharding is None and like is not None:
+        sharding = _source_push_destination_named_sharding(like, value.ndim)
+    if sharding is not None:
+        return jax.device_put(value, sharding)
+
+    abstract_sharding = _source_push_out_sharding(SOURCE_PUSH_MESH_AXIS, *(None for _ in range(value.ndim - 1)))
+    if abstract_sharding is None:
+        return value
+    if jax.sharding.get_abstract_mesh().are_all_axes_explicit:
+        return jax.sharding.reshard(value, abstract_sharding)
+    return lax.with_sharding_constraint(value, abstract_sharding)
+
+
+def _source_push_destination_or_replicated_spec(value: Array, ndim: int) -> P:
+    """Return the shard_map spec matching an array's destination-axis layout."""
+
+    destination_spec = P(SOURCE_PUSH_MESH_AXIS, *(None for _ in range(ndim - 1)))
+    sharding = getattr(value, "sharding", None)
+    if isinstance(sharding, NamedSharding) and sharding.spec == destination_spec:
+        return destination_spec
+    return P(*(None for _ in range(ndim)))
+
+
 @dataclass(frozen=True, slots=True)
 class SourcePushXToW13RowsPallasBlockSizes:
     """Tile sizes for the source-token-to-W13-row rematerialization kernel."""
 
+    row_block: int = MIN_MOSAIC_INT32_TRANSFER_ELEMENTS
     hidden_block: int = DEFAULT_X_REMAT_HIDDEN_BLOCK
 
     @classmethod
@@ -116,6 +219,43 @@ class SourcePushW13BackwardTiledBlockSizes:
     @classmethod
     def get_default(cls) -> "SourcePushW13BackwardTiledBlockSizes":
         return cls()
+
+
+def source_push_w13_dw13_default_block_sizes() -> SourcePushW13BackwardTiledBlockSizes:
+    """Return the tuned default tile for local compact DW13 diagnostics."""
+
+    return SourcePushW13BackwardTiledBlockSizes(
+        row_block=DEFAULT_W13_DW13_ROW_BLOCK,
+        hidden_block=DEFAULT_W13_DW13_HIDDEN_BLOCK,
+        output_block=DEFAULT_W13_DW13_OUTPUT_BLOCK,
+    )
+
+
+def source_push_w13_backward_diagnostic_component(implementation: str) -> str | None:
+    """Return the partial W13 component produced by benchmark-only diagnostics."""
+
+    if implementation == SOURCE_PUSH_W13_BACKWARD_DIAGNOSTIC_PALLAS_MGPU_COMPACT_DX_ONLY:
+        return "dx"
+    if implementation in (
+        SOURCE_PUSH_W13_BACKWARD_DIAGNOSTIC_PALLAS_MGPU_LOCAL_SWIGLU_GATE_DW13_ONLY,
+        SOURCE_PUSH_W13_BACKWARD_DIAGNOSTIC_PALLAS_MGPU_LOCAL_SWIGLU_UP_DW13_ONLY,
+    ):
+        return "dw13_half"
+    if implementation in SOURCE_PUSH_W13_BACKWARD_DIAGNOSTIC_IMPLEMENTATIONS:
+        return "dw13"
+    return None
+
+
+def source_push_w13_backward_is_diagnostic_only(implementation: str) -> bool:
+    """Return whether an implementation is a benchmark-only partial W13 diagnostic."""
+
+    return source_push_w13_backward_diagnostic_component(implementation) is not None
+
+
+def source_push_w13_backward_uses_local_dw13_default_block_sizes(implementation: str) -> bool:
+    """Return whether a diagnostic should use the local DW13 default tile."""
+
+    return implementation in SOURCE_PUSH_W13_BACKWARD_LOCAL_DW13_TILE_DIAGNOSTICS
 
 
 @dataclass(frozen=True)
@@ -373,6 +513,7 @@ def source_push_w13_backward_expert_blocks_reference(
     w13 = w13.astype(jnp.float32)
     dx_expert_major = jnp.einsum("deco,deho->dech", d_h_clean, w13)
     dw13 = jnp.einsum("dech,deco->deho", x_expert_major, d_h_clean)
+    dx_expert_major = _with_source_push_destination_sharding(dx_expert_major, like=d_h)
     return SourcePushW13CompactBackwardOutput(x_expert_major, dx_expert_major, dw13)
 
 
@@ -422,8 +563,10 @@ def source_push_w13_backward_expert_blocks_tiled_reference(
             out_sharding=_source_push_out_sharding(SOURCE_PUSH_MESH_AXIS, None, None, None)
         )
         x_expert_major = x_expert_major.astype(jnp.float32) * valid_by_expert[..., None].astype(jnp.float32)
+        x_expert_major = _with_source_push_destination_sharding(x_expert_major, like=d_h)
     else:
         x_expert_major = jnp.zeros((0,), dtype=jnp.float32)
+    dx_expert_major = _with_source_push_destination_sharding(dx_expert_major, like=d_h)
     return SourcePushW13CompactBackwardOutput(
         x_expert_major=x_expert_major,
         dx_expert_major=dx_expert_major,
@@ -489,6 +632,445 @@ def source_push_w13_dw13_expert_blocks_source_gather_tiled_reference(
     )
 
 
+def source_push_w13_dw13_local_swiglu_reference(
+    x_expert_major: Float[Array, "Dst E C D"],
+    d_activation: Float[Array, "Dst E C I"],
+    z: Float[Array, "Dst E C twoI"],
+    valid_by_expert: Bool[Array, "Dst E C"],
+) -> Float[Array, "Dst E D twoI"]:
+    """Local expert-owner ``dw13 = X.T @ dZ`` without requiring materialized ``dZ``.
+
+    ``d_activation`` is the W2 activation gradient, and ``z`` is the saved W13
+    preactivation ``[gate, up]``. The SwiGLU derivative is recomputed from those
+    local tiles before accumulation.
+    """
+
+    _validate_w13_local_swiglu_dw13_request(x_expert_major, d_activation, z, valid_by_expert)
+    d_z = _source_push_w13_local_dz_from_swiglu(d_activation, z, valid_by_expert)
+    x_clean = jnp.where(
+        valid_by_expert[..., None],
+        x_expert_major.astype(jnp.float32),
+        jnp.zeros(x_expert_major.shape, dtype=jnp.float32),
+    )
+    return jnp.einsum("dech,deco->deho", x_clean, d_z)
+
+
+def source_push_w13_dw13_local_linear_reference(
+    x_expert_major: Float[Array, "Dst E C D"],
+    d_activation: Float[Array, "Dst E C I"],
+    z: Float[Array, "Dst E C twoI"],
+    valid_by_expert: Bool[Array, "Dst E C"],
+) -> Float[Array, "Dst E D twoI"]:
+    """Diagnostic local ``dw13`` with cheap dSwiGLU replacement.
+
+    This is not a correctness model for W13 backward. It preserves the same
+    two-output DW13 schedule as ``source_push_w13_dw13_local_swiglu_reference``
+    while replacing sigmoid/silu derivative work with linear pointwise math, so
+    benchmarks can isolate activation-recompute cost.
+    """
+
+    _validate_w13_local_swiglu_dw13_request(x_expert_major, d_activation, z, valid_by_expert)
+    d_z = _source_push_w13_local_dz_linear_diagnostic(d_activation, z, valid_by_expert)
+    x_clean = jnp.where(
+        valid_by_expert[..., None],
+        x_expert_major.astype(jnp.float32),
+        jnp.zeros(x_expert_major.shape, dtype=jnp.float32),
+    )
+    return jnp.einsum("dech,deco->deho", x_clean, d_z)
+
+
+def source_push_w13_dw13_local_swiglu_branch_reference(
+    x_expert_major: Float[Array, "Dst E C D"],
+    d_activation: Float[Array, "Dst E C I"],
+    z: Float[Array, "Dst E C twoI"],
+    valid_by_expert: Bool[Array, "Dst E C"],
+    *,
+    branch: Literal["gate", "up"],
+) -> Float[Array, "Dst E D I"]:
+    """Diagnostic one-branch local ``dw13`` reference for accumulator-pressure probes."""
+
+    _validate_w13_local_swiglu_dw13_request(x_expert_major, d_activation, z, valid_by_expert)
+    d_z = _source_push_w13_local_dz_from_swiglu(d_activation, z, valid_by_expert)
+    intermediate_dim = d_activation.shape[-1]
+    if branch == "gate":
+        d_branch = d_z[..., :intermediate_dim]
+    elif branch == "up":
+        d_branch = d_z[..., intermediate_dim:]
+    else:
+        raise ValueError(f"branch must be 'gate' or 'up'; got {branch!r}")
+    x_clean = jnp.where(
+        valid_by_expert[..., None],
+        x_expert_major.astype(jnp.float32),
+        jnp.zeros(x_expert_major.shape, dtype=jnp.float32),
+    )
+    return jnp.einsum("dech,deco->deho", x_clean, d_branch)
+
+
+def _source_push_w13_local_dz_from_swiglu(
+    d_activation: Float[Array, "Dst E C I"],
+    z: Float[Array, "Dst E C twoI"],
+    valid_by_expert: Bool[Array, "Dst E C"],
+) -> Float[Array, "Dst E C twoI"]:
+    """Recompute ``dZ=[dgate, dup]`` from local W2 activation gradients."""
+
+    intermediate_dim = d_activation.shape[-1]
+    valid_mask = valid_by_expert[..., None]
+    gate = jnp.where(
+        valid_mask,
+        z[..., :intermediate_dim].astype(jnp.float32),
+        jnp.zeros(z.shape[:-1] + (intermediate_dim,), dtype=jnp.float32),
+    )
+    up = jnp.where(
+        valid_mask,
+        z[..., intermediate_dim:].astype(jnp.float32),
+        jnp.zeros(z.shape[:-1] + (intermediate_dim,), dtype=jnp.float32),
+    )
+    d_activation = jnp.where(
+        valid_mask,
+        d_activation.astype(jnp.float32),
+        jnp.zeros(d_activation.shape, dtype=jnp.float32),
+    )
+    silu_gate = jax.nn.silu(gate)
+    sigmoid_gate = jax.nn.sigmoid(gate)
+    d_silu_gate = sigmoid_gate * (1.0 + gate * (1.0 - sigmoid_gate))
+    d_gate = d_activation * up * d_silu_gate
+    d_up = d_activation * silu_gate
+    return jnp.concatenate([d_gate, d_up], axis=-1)
+
+
+def _source_push_w13_local_dz_linear_diagnostic(
+    d_activation: Float[Array, "Dst E C I"],
+    z: Float[Array, "Dst E C twoI"],
+    valid_by_expert: Bool[Array, "Dst E C"],
+) -> Float[Array, "Dst E C twoI"]:
+    """Cheap diagnostic replacement for dSwiGLU used only in perf probes."""
+
+    intermediate_dim = d_activation.shape[-1]
+    valid_mask = valid_by_expert[..., None]
+    gate = jnp.where(
+        valid_mask,
+        z[..., :intermediate_dim].astype(jnp.float32),
+        jnp.zeros(z.shape[:-1] + (intermediate_dim,), dtype=jnp.float32),
+    )
+    up = jnp.where(
+        valid_mask,
+        z[..., intermediate_dim:].astype(jnp.float32),
+        jnp.zeros(z.shape[:-1] + (intermediate_dim,), dtype=jnp.float32),
+    )
+    d_activation = jnp.where(
+        valid_mask,
+        d_activation.astype(jnp.float32),
+        jnp.zeros(d_activation.shape, dtype=jnp.float32),
+    )
+    return jnp.concatenate([d_activation * up, d_activation * gate], axis=-1)
+
+
+def _source_push_w13_backward_expert_blocks_local_swiglu_dw13_only_pallas_mgpu(
+    x_expert_major: Float[Array, "Dst E C D"],
+    d_activation: Float[Array, "Dst E C I"],
+    z: Float[Array, "Dst E C twoI"],
+    valid_by_expert: Bool[Array, "Dst E C"],
+    *,
+    block_sizes: SourcePushW13BackwardTiledBlockSizes | None = None,
+    lowering_semantics: mgpu.LoweringSemantics | None = None,
+    interpret: bool = False,
+    mesh: Mesh | AbstractMesh | None = None,
+) -> SourcePushW13CompactBackwardOutput:
+    """Benchmark-only local ``dw13`` diagnostic that recomputes dSwiGLU inside WGMMA tiles."""
+
+    return _source_push_w13_backward_expert_blocks_local_dz_dw13_only_pallas_mgpu(
+        x_expert_major,
+        d_activation,
+        z,
+        valid_by_expert,
+        block_sizes=block_sizes,
+        lowering_semantics=lowering_semantics,
+        interpret=interpret,
+        mesh=mesh,
+        use_linear_derivative=False,
+        branch="both",
+        preclean_inputs=True,
+    )
+
+
+def source_push_w13_backward_expert_blocks_local_swiglu_dw13_only_xla(
+    x_expert_major: Float[Array, "Dst E C D"],
+    d_activation: Float[Array, "Dst E C I"],
+    z: Float[Array, "Dst E C twoI"],
+    valid_by_expert: Bool[Array, "Dst E C"],
+) -> SourcePushW13CompactBackwardOutput:
+    """Benchmark-only XLA floor for local expert-owner SwiGLU ``dw13``."""
+
+    dw13 = source_push_w13_dw13_local_swiglu_reference(
+        x_expert_major,
+        d_activation,
+        z,
+        valid_by_expert,
+    )
+    return SourcePushW13CompactBackwardOutput(
+        x_expert_major=jnp.zeros((0,), dtype=jnp.float32),
+        dx_expert_major=jnp.zeros((0,), dtype=jnp.float32),
+        dw13=dw13,
+    )
+
+
+def _source_push_w13_backward_expert_blocks_local_swiglu_persistent_dw13_only_pallas_mgpu(
+    x_expert_major: Float[Array, "Dst E C D"],
+    d_activation: Float[Array, "Dst E C I"],
+    z: Float[Array, "Dst E C twoI"],
+    valid_by_expert: Bool[Array, "Dst E C"],
+    *,
+    block_sizes: SourcePushW13BackwardTiledBlockSizes | None = None,
+    lowering_semantics: mgpu.LoweringSemantics | None = None,
+    interpret: bool = False,
+    mesh: Mesh | AbstractMesh | None = None,
+) -> SourcePushW13CompactBackwardOutput:
+    """Local-only persistent DW13 diagnostic with tile-local dSwiGLU.
+
+    This variant keeps the intended local expert-owner schedule explicit: one
+    program owns one ``(expert, hidden_tile, intermediate_tile)`` output tile,
+    loops over all token blocks for that expert, derives ``dgate``/``dup`` from
+    ``d_activation`` and saved W13 preactivation ``z`` inside the tile loop, and
+    accumulates the two W13 halves in fp32. Unlike the older local diagnostic it
+    does not materialize cleaned full-size compact inputs before launch; callers
+    should provide finite invalid rows, with invalid ``x`` rows already zeroed.
+    """
+
+    return _source_push_w13_backward_expert_blocks_local_dz_dw13_only_pallas_mgpu(
+        x_expert_major,
+        d_activation,
+        z,
+        valid_by_expert,
+        block_sizes=block_sizes,
+        lowering_semantics=lowering_semantics,
+        interpret=interpret,
+        mesh=mesh,
+        use_linear_derivative=False,
+        branch="both",
+        preclean_inputs=False,
+    )
+
+
+def _source_push_w13_backward_expert_blocks_local_linear_dw13_only_pallas_mgpu(
+    x_expert_major: Float[Array, "Dst E C D"],
+    d_activation: Float[Array, "Dst E C I"],
+    z: Float[Array, "Dst E C twoI"],
+    valid_by_expert: Bool[Array, "Dst E C"],
+    *,
+    block_sizes: SourcePushW13BackwardTiledBlockSizes | None = None,
+    lowering_semantics: mgpu.LoweringSemantics | None = None,
+    interpret: bool = False,
+    mesh: Mesh | AbstractMesh | None = None,
+) -> SourcePushW13CompactBackwardOutput:
+    """Benchmark-only local DW13 diagnostic with cheap linear dSwiGLU replacement."""
+
+    return _source_push_w13_backward_expert_blocks_local_dz_dw13_only_pallas_mgpu(
+        x_expert_major,
+        d_activation,
+        z,
+        valid_by_expert,
+        block_sizes=block_sizes,
+        lowering_semantics=lowering_semantics,
+        interpret=interpret,
+        mesh=mesh,
+        use_linear_derivative=True,
+        branch="both",
+        preclean_inputs=True,
+    )
+
+
+def _source_push_w13_backward_expert_blocks_local_swiglu_gate_dw13_only_pallas_mgpu(
+    x_expert_major: Float[Array, "Dst E C D"],
+    d_activation: Float[Array, "Dst E C I"],
+    z: Float[Array, "Dst E C twoI"],
+    valid_by_expert: Bool[Array, "Dst E C"],
+    *,
+    block_sizes: SourcePushW13BackwardTiledBlockSizes | None = None,
+    lowering_semantics: mgpu.LoweringSemantics | None = None,
+    interpret: bool = False,
+    mesh: Mesh | AbstractMesh | None = None,
+) -> SourcePushW13CompactBackwardOutput:
+    """Benchmark-only local DW13 diagnostic that computes only the gate half."""
+
+    return _source_push_w13_backward_expert_blocks_local_dz_dw13_only_pallas_mgpu(
+        x_expert_major,
+        d_activation,
+        z,
+        valid_by_expert,
+        block_sizes=block_sizes,
+        lowering_semantics=lowering_semantics,
+        interpret=interpret,
+        mesh=mesh,
+        use_linear_derivative=False,
+        branch="gate",
+        preclean_inputs=True,
+    )
+
+
+def _source_push_w13_backward_expert_blocks_local_swiglu_up_dw13_only_pallas_mgpu(
+    x_expert_major: Float[Array, "Dst E C D"],
+    d_activation: Float[Array, "Dst E C I"],
+    z: Float[Array, "Dst E C twoI"],
+    valid_by_expert: Bool[Array, "Dst E C"],
+    *,
+    block_sizes: SourcePushW13BackwardTiledBlockSizes | None = None,
+    lowering_semantics: mgpu.LoweringSemantics | None = None,
+    interpret: bool = False,
+    mesh: Mesh | AbstractMesh | None = None,
+) -> SourcePushW13CompactBackwardOutput:
+    """Benchmark-only local DW13 diagnostic that computes only the up half."""
+
+    return _source_push_w13_backward_expert_blocks_local_dz_dw13_only_pallas_mgpu(
+        x_expert_major,
+        d_activation,
+        z,
+        valid_by_expert,
+        block_sizes=block_sizes,
+        lowering_semantics=lowering_semantics,
+        interpret=interpret,
+        mesh=mesh,
+        use_linear_derivative=False,
+        branch="up",
+        preclean_inputs=True,
+    )
+
+
+def _source_push_w13_backward_expert_blocks_local_swiglu_split_dw13_only_pallas_mgpu(
+    x_expert_major: Float[Array, "Dst E C D"],
+    d_activation: Float[Array, "Dst E C I"],
+    z: Float[Array, "Dst E C twoI"],
+    valid_by_expert: Bool[Array, "Dst E C"],
+    *,
+    block_sizes: SourcePushW13BackwardTiledBlockSizes | None = None,
+    lowering_semantics: mgpu.LoweringSemantics | None = None,
+    interpret: bool = False,
+    mesh: Mesh | AbstractMesh | None = None,
+) -> SourcePushW13CompactBackwardOutput:
+    """Benchmark-only full DW13 diagnostic built from serial one-branch kernels.
+
+    This keeps only one ``(hidden_block, output_block)`` accumulator live per
+    Pallas launch. It is a pressure probe for the existing two-accumulator local
+    SwiGLU kernel, not a production implementation.
+    """
+
+    gate_output = _source_push_w13_backward_expert_blocks_local_swiglu_gate_dw13_only_pallas_mgpu(
+        x_expert_major,
+        d_activation,
+        z,
+        valid_by_expert,
+        block_sizes=block_sizes,
+        lowering_semantics=lowering_semantics,
+        interpret=interpret,
+        mesh=mesh,
+    )
+    up_output = _source_push_w13_backward_expert_blocks_local_swiglu_up_dw13_only_pallas_mgpu(
+        x_expert_major,
+        d_activation,
+        z,
+        valid_by_expert,
+        block_sizes=block_sizes,
+        lowering_semantics=lowering_semantics,
+        interpret=interpret,
+        mesh=mesh,
+    )
+    return SourcePushW13CompactBackwardOutput(
+        x_expert_major=jnp.zeros((0,), dtype=jnp.float32),
+        dx_expert_major=jnp.zeros((0,), dtype=jnp.float32),
+        dw13=jnp.concatenate((gate_output.dw13, up_output.dw13), axis=-1),
+    )
+
+
+def _source_push_w13_backward_expert_blocks_local_dz_dw13_only_pallas_mgpu(
+    x_expert_major: Float[Array, "Dst E C D"],
+    d_activation: Float[Array, "Dst E C I"],
+    z: Float[Array, "Dst E C twoI"],
+    valid_by_expert: Bool[Array, "Dst E C"],
+    *,
+    block_sizes: SourcePushW13BackwardTiledBlockSizes | None = None,
+    lowering_semantics: mgpu.LoweringSemantics | None = None,
+    interpret: bool = False,
+    mesh: Mesh | AbstractMesh | None = None,
+    use_linear_derivative: bool,
+    branch: SourcePushW13LocalDzBranch,
+    preclean_inputs: bool,
+) -> SourcePushW13CompactBackwardOutput:
+    """Shared implementation for local DW13 diagnostics that derive dZ inside the kernel."""
+
+    block_sizes = source_push_w13_dw13_default_block_sizes() if block_sizes is None else block_sizes
+    lowering_semantics = DEFAULT_W13_DW13_LOWERING_SEMANTICS if lowering_semantics is None else lowering_semantics
+    _validate_w13_local_swiglu_dw13_request(x_expert_major, d_activation, z, valid_by_expert)
+    if interpret:
+        if branch == "gate":
+            dw13 = source_push_w13_dw13_local_swiglu_branch_reference(
+                x_expert_major,
+                d_activation,
+                z,
+                valid_by_expert,
+                branch="gate",
+            )
+        elif branch == "up":
+            dw13 = source_push_w13_dw13_local_swiglu_branch_reference(
+                x_expert_major,
+                d_activation,
+                z,
+                valid_by_expert,
+                branch="up",
+            )
+        elif use_linear_derivative:
+            dw13 = source_push_w13_dw13_local_linear_reference(x_expert_major, d_activation, z, valid_by_expert)
+        else:
+            dw13 = source_push_w13_dw13_local_swiglu_reference(x_expert_major, d_activation, z, valid_by_expert)
+        return SourcePushW13CompactBackwardOutput(
+            x_expert_major=jnp.zeros((0,), dtype=jnp.float32),
+            dx_expert_major=jnp.zeros((0,), dtype=jnp.float32),
+            dw13=dw13,
+        )
+    if jax.default_backend() != "gpu":
+        raise NotImplementedError("Pallas/MGPU local SwiGLU dw13 diagnostic requires a GPU backend")
+    if mesh is None:
+        raise ValueError("Pallas/MGPU local SwiGLU dw13 diagnostic requires a mesh")
+
+    original_rows = x_expert_major.shape[2]
+    padded_rows = _round_up_to_multiple(original_rows, block_sizes.row_block)
+    if padded_rows != original_rows:
+        row_pad = ((0, 0), (0, 0), (0, padded_rows - original_rows))
+        x_expert_major = jnp.pad(x_expert_major, (*row_pad, (0, 0)))
+        d_activation = jnp.pad(d_activation, (*row_pad, (0, 0)))
+        z = jnp.pad(z, (*row_pad, (0, 0)))
+        valid_by_expert = jnp.pad(valid_by_expert, row_pad, constant_values=False)
+
+    if preclean_inputs:
+        valid_mask = valid_by_expert[..., None]
+        x_expert_major = jnp.where(valid_mask, x_expert_major, jnp.zeros_like(x_expert_major))
+        d_activation = jnp.where(valid_mask, d_activation, jnp.zeros_like(d_activation))
+        z = jnp.where(valid_mask, z, jnp.zeros_like(z))
+    _validate_w13_local_swiglu_dw13_pallas_request(
+        x_expert_major,
+        d_activation,
+        z,
+        valid_by_expert,
+        block_sizes,
+    )
+    dw13 = _source_push_w13_dw13_local_swiglu_sharded_mgpu_kernel(
+        mesh,
+        x_expert_major,
+        d_activation,
+        z,
+        valid_by_expert,
+        row_block=block_sizes.row_block,
+        hidden_block=block_sizes.hidden_block,
+        output_block=block_sizes.output_block,
+        lowering_semantics=lowering_semantics,
+        use_linear_derivative=use_linear_derivative,
+        branch=branch,
+    )
+    return SourcePushW13CompactBackwardOutput(
+        x_expert_major=jnp.zeros((0,), dtype=jnp.float32),
+        dx_expert_major=jnp.zeros((0,), dtype=jnp.float32),
+        dw13=dw13,
+    )
+
+
 def _source_push_w13_backward_expert_blocks_dx_only_pallas_mgpu(
     d_h: Float[Array, "Dst E C twoI"],
     w13: Float[Array, "Dst E D twoI"],
@@ -503,6 +1085,7 @@ def _source_push_w13_backward_expert_blocks_dx_only_pallas_mgpu(
     block_sizes = SourcePushW13BackwardTiledBlockSizes.get_default() if block_sizes is None else block_sizes
     if interpret:
         dx_expert_major = source_push_w13_dx_expert_blocks_reference(d_h, w13, valid_by_expert)
+        dx_expert_major = _with_source_push_destination_sharding(dx_expert_major, mesh=mesh, like=d_h)
         return SourcePushW13CompactBackwardOutput(
             x_expert_major=jnp.zeros((0,), dtype=jnp.float32),
             dx_expert_major=dx_expert_major,
@@ -534,11 +1117,521 @@ def _source_push_w13_backward_expert_blocks_dx_only_pallas_mgpu(
         hidden_block=block_sizes.hidden_block,
         output_block=block_sizes.output_block,
     )
+    dx_expert_major = dx_expert_major[:, :, :original_rows, :]
+    dx_expert_major = _with_source_push_destination_sharding(
+        dx_expert_major,
+        mesh=mesh,
+        like=d_h,
+    )
     return SourcePushW13CompactBackwardOutput(
         x_expert_major=jnp.zeros((0,), dtype=jnp.float32),
-        dx_expert_major=dx_expert_major[:, :, :original_rows, :],
+        dx_expert_major=dx_expert_major,
         dw13=jnp.zeros(w13.shape, dtype=jnp.float32),
     )
+
+
+def _source_push_w13_backward_expert_blocks_dw13_only_pallas_mgpu(
+    x: Float[Array, "S T D"],
+    d_h: Float[Array, "Dst E C twoI"],
+    w13: Float[Array, "Dst E D twoI"],
+    source_rank_by_expert: Int[Array, "Dst E C"],
+    token_id_by_expert: Int[Array, "Dst E C"],
+    valid_by_expert: Bool[Array, "Dst E C"],
+    *,
+    block_sizes: SourcePushW13BackwardTiledBlockSizes | None = None,
+    interpret: bool = False,
+    mesh: Mesh | AbstractMesh | None = None,
+    lowering_semantics: mgpu.LoweringSemantics | None = None,
+) -> SourcePushW13CompactBackwardOutput:
+    """Benchmark-only compact W13 ``dw13`` diagnostic using compact x staging."""
+
+    block_sizes = source_push_w13_dw13_default_block_sizes() if block_sizes is None else block_sizes
+    lowering_semantics = DEFAULT_W13_DW13_LOWERING_SEMANTICS if lowering_semantics is None else lowering_semantics
+    _validate_w13_backward_expert_blocks_tiled_request(
+        x,
+        d_h,
+        w13,
+        source_rank_by_expert,
+        token_id_by_expert,
+        valid_by_expert,
+        block_sizes,
+    )
+    if interpret:
+        dw13 = source_push_w13_backward_expert_blocks_tiled_reference(
+            x,
+            d_h,
+            w13,
+            source_rank_by_expert,
+            token_id_by_expert,
+            valid_by_expert,
+            block_sizes=block_sizes,
+        ).dw13
+        return SourcePushW13CompactBackwardOutput(
+            x_expert_major=jnp.zeros((0,), dtype=jnp.float32),
+            dx_expert_major=jnp.zeros((0,), dtype=jnp.float32),
+            dw13=dw13,
+        )
+    if jax.default_backend() != "gpu":
+        raise NotImplementedError("Pallas/MGPU compact W13 dw13-only diagnostic requires a GPU backend")
+    if mesh is None:
+        raise ValueError("Pallas/MGPU compact W13 dw13-only diagnostic requires a mesh")
+
+    original_rows = d_h.shape[2]
+    padded_rows = _round_up_to_multiple(original_rows, block_sizes.row_block)
+    if padded_rows != original_rows:
+        row_pad = ((0, 0), (0, 0), (0, padded_rows - original_rows))
+        d_h = jnp.pad(d_h, (*row_pad, (0, 0)))
+        source_rank_by_expert = jnp.pad(source_rank_by_expert, row_pad, constant_values=0)
+        token_id_by_expert = jnp.pad(token_id_by_expert, row_pad, constant_values=0)
+        valid_by_expert = jnp.pad(valid_by_expert, row_pad, constant_values=False)
+
+    safe_src = jnp.where(valid_by_expert, source_rank_by_expert, 0)
+    safe_token = jnp.where(valid_by_expert, token_id_by_expert, 0)
+    x_expert_major = x.at[safe_src, safe_token].get(
+        out_sharding=_source_push_out_sharding(SOURCE_PUSH_MESH_AXIS, None, None, None)
+    )
+    valid_f = valid_by_expert.astype(jnp.float32)
+    x_expert_major = x_expert_major.astype(jnp.float32) * valid_f[..., None]
+    d_h_clean = d_h.astype(jnp.float32) * valid_f[..., None]
+    dw13 = _source_push_w13_dw13_expert_blocks_sharded_mgpu_kernel(
+        mesh,
+        x_expert_major.astype(w13.dtype),
+        d_h_clean.astype(w13.dtype),
+        valid_by_expert,
+        row_block=block_sizes.row_block,
+        hidden_block=block_sizes.hidden_block,
+        output_block=block_sizes.output_block,
+        lowering_semantics=lowering_semantics,
+    )
+    return SourcePushW13CompactBackwardOutput(
+        x_expert_major=jnp.zeros((0,), dtype=jnp.float32),
+        dx_expert_major=jnp.zeros((0,), dtype=jnp.float32),
+        dw13=dw13,
+    )
+
+
+def _source_push_w13_backward_expert_blocks_prefilled_x_dw13_only_pallas_mgpu(
+    x_expert_major: Float[Array, "Dst E C D"],
+    d_h: Float[Array, "Dst E C twoI"],
+    w13: Float[Array, "Dst E D twoI"],
+    valid_by_expert: Bool[Array, "Dst E C"],
+    *,
+    block_sizes: SourcePushW13BackwardTiledBlockSizes | None = None,
+    interpret: bool = False,
+    mesh: Mesh | AbstractMesh | None = None,
+    lowering_semantics: mgpu.LoweringSemantics | None = None,
+) -> SourcePushW13CompactBackwardOutput:
+    """Benchmark-only compact ``dw13`` diagnostic with prefilled expert-major ``x``.
+
+    The regular compact DW13 diagnostic includes the ``x[source, token]`` gather
+    in the timed path. This variant takes already-materialized expert-major ``x``
+    so the benchmark can isolate the local ``X.T @ dZ`` kernel cost.
+    """
+
+    block_sizes = source_push_w13_dw13_default_block_sizes() if block_sizes is None else block_sizes
+    lowering_semantics = DEFAULT_W13_DW13_LOWERING_SEMANTICS if lowering_semantics is None else lowering_semantics
+    _validate_w13_prefilled_x_dw13_request(x_expert_major, d_h, w13, valid_by_expert, block_sizes)
+    if interpret:
+        valid_f = valid_by_expert.astype(jnp.float32)
+        dw13 = jnp.einsum(
+            "dech,deco->deho",
+            x_expert_major.astype(jnp.float32) * valid_f[..., None],
+            d_h.astype(jnp.float32) * valid_f[..., None],
+        )
+        return SourcePushW13CompactBackwardOutput(
+            x_expert_major=jnp.zeros((0,), dtype=jnp.float32),
+            dx_expert_major=jnp.zeros((0,), dtype=jnp.float32),
+            dw13=dw13,
+        )
+    if jax.default_backend() != "gpu":
+        raise NotImplementedError("Pallas/MGPU prefilled-X W13 dw13-only diagnostic requires a GPU backend")
+    if mesh is None:
+        raise ValueError("Pallas/MGPU prefilled-X W13 dw13-only diagnostic requires a mesh")
+
+    original_rows = d_h.shape[2]
+    padded_rows = _round_up_to_multiple(original_rows, block_sizes.row_block)
+    if padded_rows != original_rows:
+        row_pad = ((0, 0), (0, 0), (0, padded_rows - original_rows))
+        x_expert_major = jnp.pad(x_expert_major, (*row_pad, (0, 0)))
+        d_h = jnp.pad(d_h, (*row_pad, (0, 0)))
+        valid_by_expert = jnp.pad(valid_by_expert, row_pad, constant_values=False)
+
+    valid_f = valid_by_expert.astype(jnp.float32)
+    x_clean = x_expert_major.astype(jnp.float32) * valid_f[..., None]
+    d_h_clean = d_h.astype(jnp.float32) * valid_f[..., None]
+    dw13 = _source_push_w13_dw13_expert_blocks_sharded_mgpu_kernel(
+        mesh,
+        x_clean.astype(w13.dtype),
+        d_h_clean.astype(w13.dtype),
+        valid_by_expert,
+        row_block=block_sizes.row_block,
+        hidden_block=block_sizes.hidden_block,
+        output_block=block_sizes.output_block,
+        lowering_semantics=lowering_semantics,
+    )
+    return SourcePushW13CompactBackwardOutput(
+        x_expert_major=jnp.zeros((0,), dtype=jnp.float32),
+        dx_expert_major=jnp.zeros((0,), dtype=jnp.float32),
+        dw13=dw13,
+    )
+
+
+def _source_push_w13_backward_expert_blocks_dw13_only_exact_flat_pallas_mgpu(
+    x: Float[Array, "S T D"],
+    d_h: Float[Array, "Dst E C twoI"],
+    w13: Float[Array, "Dst E D twoI"],
+    source_rank_by_expert: Int[Array, "Dst E C"],
+    token_id_by_expert: Int[Array, "Dst E C"],
+    valid_by_expert: Bool[Array, "Dst E C"],
+    *,
+    block_sizes: SourcePushW13BackwardTiledBlockSizes | None = None,
+    interpret: bool = False,
+    mesh: Mesh | AbstractMesh | None = None,
+) -> SourcePushW13CompactBackwardOutput:
+    """Benchmark-only compact DW13 diagnostic using the exact-flat Pallas schedule."""
+
+    block_sizes = SourcePushW13BackwardTiledBlockSizes.get_default() if block_sizes is None else block_sizes
+    if not interpret and block_sizes.row_block < MIN_MOSAIC_INT32_TRANSFER_ELEMENTS:
+        block_sizes = replace(block_sizes, row_block=MIN_MOSAIC_INT32_TRANSFER_ELEMENTS)
+    _validate_w13_backward_expert_blocks_tiled_request(
+        x,
+        d_h,
+        w13,
+        source_rank_by_expert,
+        token_id_by_expert,
+        valid_by_expert,
+        block_sizes,
+    )
+    if interpret:
+        dw13 = source_push_w13_backward_expert_blocks_tiled_reference(
+            x,
+            d_h,
+            w13,
+            source_rank_by_expert,
+            token_id_by_expert,
+            valid_by_expert,
+            block_sizes=block_sizes,
+        ).dw13
+        return SourcePushW13CompactBackwardOutput(
+            x_expert_major=jnp.zeros((0,), dtype=jnp.float32),
+            dx_expert_major=jnp.zeros((0,), dtype=jnp.float32),
+            dw13=dw13,
+        )
+    if jax.default_backend() != "gpu":
+        raise NotImplementedError("Pallas/MGPU exact-flat W13 dw13-only diagnostic requires a GPU backend")
+    if mesh is None:
+        raise ValueError("Pallas/MGPU exact-flat W13 dw13-only diagnostic requires a mesh")
+
+    original_rows = d_h.shape[2]
+    padded_rows = _round_up_to_multiple(original_rows, block_sizes.row_block)
+    if padded_rows != original_rows:
+        row_pad = ((0, 0), (0, 0), (0, padded_rows - original_rows))
+        d_h = jnp.pad(d_h, (*row_pad, (0, 0)))
+        source_rank_by_expert = jnp.pad(source_rank_by_expert, row_pad, constant_values=0)
+        token_id_by_expert = jnp.pad(token_id_by_expert, row_pad, constant_values=0)
+        valid_by_expert = jnp.pad(valid_by_expert, row_pad, constant_values=False)
+
+    safe_src = jnp.where(valid_by_expert, source_rank_by_expert, 0)
+    safe_token = jnp.where(valid_by_expert, token_id_by_expert, 0)
+    x_expert_major = x.at[safe_src, safe_token].get(
+        out_sharding=_source_push_out_sharding(SOURCE_PUSH_MESH_AXIS, None, None, None)
+    )
+    valid_f = valid_by_expert.astype(jnp.float32)
+    x_clean = x_expert_major.astype(jnp.float32) * valid_f[..., None]
+    d_h_clean = d_h.astype(jnp.float32) * valid_f[..., None]
+    dst_count, local_experts, rows, hidden_dim = x_clean.shape
+    output_dim = d_h_clean.shape[-1]
+    x_flat = x_clean.reshape((dst_count, local_experts * rows, hidden_dim)).astype(w13.dtype)
+    d_h_flat = d_h_clean.reshape((dst_count, local_experts * rows, output_dim)).astype(w13.dtype)
+    valid_flat = valid_by_expert.reshape((dst_count, local_experts * rows))
+    row_expert = jnp.broadcast_to(
+        jnp.arange(local_experts, dtype=jnp.int32)[None, :, None],
+        valid_by_expert.shape,
+    ).reshape((dst_count, local_experts * rows))
+    dw13 = _source_push_w13_dw13_exact_expert_major_pallas_mgpu(
+        x_flat,
+        d_h_flat,
+        w13,
+        valid_flat,
+        row_expert,
+        block_sizes=block_sizes,
+        mesh=mesh,
+    )
+    return SourcePushW13CompactBackwardOutput(
+        x_expert_major=jnp.zeros((0,), dtype=jnp.float32),
+        dx_expert_major=jnp.zeros((0,), dtype=jnp.float32),
+        dw13=dw13,
+    )
+
+
+def source_push_w13_backward_expert_blocks_dw13_only_xla(
+    x: Float[Array, "S T D"],
+    d_h: Float[Array, "Dst E C twoI"],
+    w13: Float[Array, "Dst E D twoI"],
+    source_rank_by_expert: Int[Array, "Dst E C"],
+    token_id_by_expert: Int[Array, "Dst E C"],
+    valid_by_expert: Bool[Array, "Dst E C"],
+    *,
+    block_sizes: SourcePushW13BackwardTiledBlockSizes | None = None,
+) -> SourcePushW13CompactBackwardOutput:
+    """Benchmark-only compact W13 ``dw13`` diagnostic using XLA GEMM lowering."""
+
+    block_sizes = SourcePushW13BackwardTiledBlockSizes.get_default() if block_sizes is None else block_sizes
+    _validate_w13_backward_expert_blocks_tiled_request(
+        x,
+        d_h,
+        w13,
+        source_rank_by_expert,
+        token_id_by_expert,
+        valid_by_expert,
+        block_sizes,
+    )
+    safe_src = jnp.where(valid_by_expert, source_rank_by_expert, 0)
+    safe_token = jnp.where(valid_by_expert, token_id_by_expert, 0)
+    x_expert_major = x.at[safe_src, safe_token].get(
+        out_sharding=_source_push_out_sharding(SOURCE_PUSH_MESH_AXIS, None, None, None)
+    )
+    valid_f = valid_by_expert.astype(jnp.float32)
+    x_clean = x_expert_major.astype(jnp.float32) * valid_f[..., None]
+    d_h_clean = d_h.astype(jnp.float32) * valid_f[..., None]
+    dw13 = jnp.einsum("dech,deco->deho", x_clean, d_h_clean)
+    return SourcePushW13CompactBackwardOutput(
+        x_expert_major=jnp.zeros((0,), dtype=jnp.float32),
+        dx_expert_major=jnp.zeros((0,), dtype=jnp.float32),
+        dw13=dw13,
+    )
+
+
+def source_push_w13_backward_expert_blocks_source_padded_dw13_only_xla(
+    x: Float[Array, "S T D"],
+    d_h: Float[Array, "Dst E C twoI"],
+    source_rank_by_expert: Int[Array, "Dst E C"],
+    token_id_by_expert: Int[Array, "Dst E C"],
+    valid_by_expert: Bool[Array, "Dst E C"],
+    src_base_by_expert: Int[Array, "Dst S E"] | np.ndarray,
+    *,
+    block_sizes: SourcePushW13BackwardTiledBlockSizes | None = None,
+) -> SourcePushW13CompactBackwardOutput:
+    """Diagnostic ``dw13`` as a reduce over source-padded transpose GMMs.
+
+    Source-padded H rows are laid out as contiguous source chunks within each
+    destination-local expert. This diagnostic preserves that structure:
+    for each source rank it gathers only that static source's token rows,
+    computes ``x_src.T @ dH_src`` over the dense padded source chunk, then sums
+    the partials into ``dw13``. It is intentionally XLA-only and exists to test
+    the shape we want a production WGMMA kernel to implement.
+    """
+
+    block_sizes = SourcePushW13BackwardTiledBlockSizes.get_default() if block_sizes is None else block_sizes
+    _validate_w13_dw13_source_gather_request(
+        x,
+        d_h,
+        source_rank_by_expert,
+        token_id_by_expert,
+        valid_by_expert,
+        block_sizes,
+    )
+    partials = source_push_w13_dw13_source_padded_partials_reference(
+        x,
+        d_h,
+        source_rank_by_expert,
+        token_id_by_expert,
+        valid_by_expert,
+        src_base_by_expert,
+        block_sizes=block_sizes,
+    )
+    dw13 = jnp.sum(partials, axis=0)
+    return SourcePushW13CompactBackwardOutput(
+        x_expert_major=jnp.zeros((0,), dtype=jnp.float32),
+        dx_expert_major=jnp.zeros((0,), dtype=jnp.float32),
+        dw13=dw13,
+    )
+
+
+def source_push_w13_dw13_source_padded_partials_reference(
+    x: Float[Array, "S T D"],
+    d_h: Float[Array, "Dst E C twoI"],
+    source_rank_by_expert: Int[Array, "Dst E C"],
+    token_id_by_expert: Int[Array, "Dst E C"],
+    valid_by_expert: Bool[Array, "Dst E C"],
+    src_base_by_expert: Int[Array, "Dst S E"] | np.ndarray,
+    *,
+    block_sizes: SourcePushW13BackwardTiledBlockSizes,
+) -> Float[Array, "S Dst E D twoI"]:
+    """Reference partials for source-padded ``dw13``.
+
+    Each output slice is one dense source chunk contribution:
+    ``partials[src, dst, expert] = x_src.T @ dH_src``. A production Pallas
+    version should implement this contract with source-specialized WGMMA
+    programs, then reduce the leading source axis outside the kernel.
+    """
+
+    src_base_host, source_lengths = _source_padded_dw13_source_spans(
+        src_base_by_expert,
+        source_rank_by_expert,
+        valid_by_expert,
+        row_block=block_sizes.row_block,
+        expert_capacity=d_h.shape[2],
+        ep_size=x.shape[0],
+        local_experts=d_h.shape[1],
+    )
+    dst_count, local_experts, expert_capacity, _ = d_h.shape
+    ep_size = x.shape[0]
+    max_source_rows = int(np.max(source_lengths)) if source_lengths.size else 0
+    if max_source_rows == 0:
+        return jnp.zeros((ep_size, dst_count, local_experts, x.shape[-1], d_h.shape[-1]), dtype=jnp.float32)
+
+    dst_idx = jnp.arange(dst_count, dtype=jnp.int32)[:, None, None]
+    expert_idx = jnp.arange(local_experts, dtype=jnp.int32)[None, :, None]
+    offsets = jnp.arange(max_source_rows, dtype=jnp.int32)[None, None, :]
+    src_base = jnp.asarray(src_base_host, dtype=jnp.int32)
+    src_lengths = jnp.asarray(source_lengths, dtype=jnp.int32)
+    partials = []
+
+    for src in range(ep_size):
+        rows = src_base[:, src, :, None] + offsets
+        in_source_chunk = offsets < src_lengths[:, src, :, None]
+        safe_rows = jnp.minimum(rows, expert_capacity - 1)
+        valid_rows = valid_by_expert.at[dst_idx, expert_idx, safe_rows].get(
+            out_sharding=_source_push_out_sharding(None, None, None)
+        )
+        row_sources = source_rank_by_expert.at[dst_idx, expert_idx, safe_rows].get(
+            out_sharding=_source_push_out_sharding(None, None, None)
+        )
+        valid = in_source_chunk & valid_rows & (row_sources == src)
+        token_rows = token_id_by_expert.at[dst_idx, expert_idx, safe_rows].get(
+            out_sharding=_source_push_out_sharding(None, None, None)
+        )
+        safe_token = jnp.where(valid, token_rows, 0)
+        valid_f = valid.astype(jnp.float32)
+        x_rows = (
+            x.at[src, safe_token, :]
+            .get(out_sharding=_source_push_out_sharding(None, None, None, None))
+            .astype(jnp.float32)
+            * valid_f[..., None]
+        )
+        d_h_rows = (
+            d_h.at[dst_idx, expert_idx, safe_rows, :]
+            .get(out_sharding=_source_push_out_sharding(None, None, None, None))
+            .astype(jnp.float32)
+            * valid_f[..., None]
+        )
+        partials.append(jnp.einsum("dech,deco->deho", x_rows, d_h_rows))
+
+    return jnp.stack(partials, axis=0)
+
+
+def _source_push_w13_dw13_source_padded_partials_pallas_mgpu(
+    x: Float[Array, "S T D"],
+    d_h: Float[Array, "Dst E C twoI"],
+    source_rank_by_expert: Int[Array, "Dst E C"],
+    token_id_by_expert: Int[Array, "Dst E C"],
+    valid_by_expert: Bool[Array, "Dst E C"],
+    src_base_by_expert: Int[Array, "Dst S E"] | np.ndarray,
+    *,
+    block_sizes: SourcePushW13BackwardTiledBlockSizes | None = None,
+    interpret: bool = False,
+    mesh: Mesh | AbstractMesh | None = None,
+) -> Float[Array, "S Dst E D twoI"]:
+    """Source-padded partial ``dw13`` Pallas diagnostic.
+
+    The interpreter path pins the intended contract. GPU lowering should use
+    source-specialized WGMMA programs that emit per-source partials, avoiding
+    compact ``x_expert_major`` staging and avoiding per-row remote-ref switches.
+    """
+
+    _ = mesh
+    block_sizes = SourcePushW13BackwardTiledBlockSizes.get_default() if block_sizes is None else block_sizes
+    _validate_w13_dw13_source_gather_request(
+        x,
+        d_h,
+        source_rank_by_expert,
+        token_id_by_expert,
+        valid_by_expert,
+        block_sizes,
+    )
+    if interpret:
+        return source_push_w13_dw13_source_padded_partials_reference(
+            x,
+            d_h,
+            source_rank_by_expert,
+            token_id_by_expert,
+            valid_by_expert,
+            src_base_by_expert,
+            block_sizes=block_sizes,
+        )
+    if jax.default_backend() != "gpu":
+        raise NotImplementedError("Pallas/MGPU source-padded partial dw13 requires a GPU backend")
+    if mesh is None:
+        raise ValueError("Pallas/MGPU source-padded partial dw13 requires a mesh")
+
+    original_rows = d_h.shape[2]
+    padded_rows = _round_up_to_multiple(original_rows, block_sizes.row_block)
+    if padded_rows != original_rows:
+        row_pad = ((0, 0), (0, 0), (0, padded_rows - original_rows))
+        d_h = jnp.pad(d_h, (*row_pad, (0, 0)), constant_values=0)
+        source_rank_by_expert = jnp.pad(source_rank_by_expert, row_pad, constant_values=0)
+        token_id_by_expert = jnp.pad(token_id_by_expert, row_pad, constant_values=0)
+        valid_by_expert = jnp.pad(valid_by_expert, row_pad, constant_values=False)
+
+    src_base_host, source_lengths = _source_padded_dw13_source_spans(
+        src_base_by_expert,
+        source_rank_by_expert,
+        valid_by_expert,
+        row_block=block_sizes.row_block,
+        expert_capacity=d_h.shape[2],
+        ep_size=x.shape[0],
+        local_experts=d_h.shape[1],
+    )
+    src_base = jnp.asarray(src_base_host, dtype=jnp.int32)
+    source_lengths = jnp.asarray(source_lengths, dtype=jnp.int32)
+    return _source_push_w13_dw13_source_padded_partials_sharded_mgpu_kernel(
+        mesh,
+        x,
+        d_h,
+        token_id_by_expert,
+        valid_by_expert,
+        src_base,
+        source_lengths,
+        row_block=block_sizes.row_block,
+        hidden_block=block_sizes.hidden_block,
+        output_block=block_sizes.output_block,
+    )
+
+
+def _source_padded_dw13_source_spans(
+    src_base_by_expert: Int[Array, "Dst S E"] | np.ndarray,
+    source_rank_by_expert: Int[Array, "Dst E C"],
+    valid_by_expert: Bool[Array, "Dst E C"],
+    *,
+    row_block: int,
+    expert_capacity: int,
+    ep_size: int,
+    local_experts: int,
+) -> tuple[np.ndarray, np.ndarray]:
+    src_base_host = np.asarray(jax.device_get(src_base_by_expert), dtype=np.int32)
+    dst_count = src_base_host.shape[0]
+    if src_base_host.shape != (dst_count, ep_size, local_experts):
+        raise ValueError(
+            f"src_base_by_expert shape {src_base_host.shape} must be {(dst_count, ep_size, local_experts)}"
+        )
+
+    source_rank_host = np.asarray(jax.device_get(source_rank_by_expert), dtype=np.int32)
+    valid_host = np.asarray(jax.device_get(valid_by_expert), dtype=np.bool_)
+    source_lengths = np.zeros_like(src_base_host)
+    for dst in range(dst_count):
+        for expert in range(local_experts):
+            for src in range(ep_size):
+                if src + 1 < ep_size:
+                    next_base = int(src_base_host[dst, src + 1, expert])
+                    source_lengths[dst, src, expert] = max(0, next_base - int(src_base_host[dst, src, expert]))
+                    continue
+
+                live_rows = int(np.sum(valid_host[dst, expert] & (source_rank_host[dst, expert] == src)))
+                source_lengths[dst, src, expert] = _round_up_to_multiple(live_rows, row_block)
+                if int(src_base_host[dst, src, expert]) + int(source_lengths[dst, src, expert]) > expert_capacity:
+                    source_lengths[dst, src, expert] = max(0, expert_capacity - int(src_base_host[dst, src, expert]))
+    return src_base_host, source_lengths
 
 
 def _pad_w13_compact_dh_for_row_block(
@@ -581,6 +1674,128 @@ def source_push_w13_backward_expert_blocks_source_gather_dw13_only(
     )
 
 
+def _source_push_w13_dw13_expert_blocks_source_gather_pallas_mgpu(
+    x: Float[Array, "S T D"],
+    d_h: Float[Array, "Dst E C twoI"],
+    source_rank_by_expert: Int[Array, "Dst E C"],
+    token_id_by_expert: Int[Array, "Dst E C"],
+    valid_by_expert: Bool[Array, "Dst E C"],
+    *,
+    block_sizes: SourcePushW13BackwardTiledBlockSizes | None = None,
+    interpret: bool = False,
+    mesh: Mesh | AbstractMesh | None = None,
+) -> Float[Array, "Dst E D twoI"]:
+    """Experimental WGMMA ``dw13`` path that gathers source ``x`` rows by tile.
+
+    This is the narrow production-facing half of compact W13 backward: each
+    destination rank keeps compact ``dH`` local, gathers only the source-token
+    ``x`` rows needed for the current WGMMA row tile, and accumulates
+    ``x.T @ dH`` without staging compact ``x_expert_major`` in GMEM.
+    """
+
+    block_sizes = SourcePushW13BackwardTiledBlockSizes.get_default() if block_sizes is None else block_sizes
+    _validate_w13_dw13_source_gather_request(
+        x,
+        d_h,
+        source_rank_by_expert,
+        token_id_by_expert,
+        valid_by_expert,
+        block_sizes,
+    )
+    if interpret:
+        return source_push_w13_dw13_expert_blocks_source_gather_tiled_reference(
+            x,
+            d_h,
+            source_rank_by_expert,
+            token_id_by_expert,
+            valid_by_expert,
+            block_sizes=block_sizes,
+        )
+    if jax.default_backend() != "gpu":
+        raise NotImplementedError("Pallas/MGPU source-gather W13 dw13 requires a GPU backend")
+    if mesh is None:
+        raise ValueError("Pallas/MGPU source-gather W13 dw13 requires a mesh")
+
+    padded_rows = _round_up_to_multiple(d_h.shape[2], block_sizes.row_block)
+    if padded_rows != d_h.shape[2]:
+        row_pad = ((0, 0), (0, 0), (0, padded_rows - d_h.shape[2]))
+        d_h = jnp.pad(d_h, (*row_pad, (0, 0)), constant_values=0)
+        source_rank_by_expert = jnp.pad(source_rank_by_expert, row_pad, constant_values=0)
+        token_id_by_expert = jnp.pad(token_id_by_expert, row_pad, constant_values=0)
+        valid_by_expert = jnp.pad(valid_by_expert, row_pad, constant_values=False)
+
+    valid_f = valid_by_expert.astype(jnp.float32)
+    d_h_clean = d_h.astype(jnp.float32) * valid_f[..., None]
+    d_h_for_wgmma = d_h_clean.astype(x.dtype)
+
+    return _source_push_w13_dw13_expert_blocks_source_gather_sharded_mgpu_kernel(
+        mesh,
+        x,
+        d_h_for_wgmma,
+        source_rank_by_expert,
+        token_id_by_expert,
+        valid_by_expert,
+        row_block=block_sizes.row_block,
+        hidden_block=block_sizes.hidden_block,
+        output_block=block_sizes.output_block,
+    )
+
+
+def _source_push_w13_backward_expert_blocks_compact_dx_source_gather_dw13(
+    x: Float[Array, "S T D"],
+    d_h: Float[Array, "Dst E C twoI"],
+    w13: Float[Array, "Dst E D twoI"],
+    source_rank_by_expert: Int[Array, "Dst E C"],
+    token_id_by_expert: Int[Array, "Dst E C"],
+    valid_by_expert: Bool[Array, "Dst E C"],
+    *,
+    block_sizes: SourcePushW13BackwardTiledBlockSizes | None = None,
+    interpret: bool = False,
+    mesh: Mesh | AbstractMesh | None = None,
+) -> SourcePushW13CompactBackwardOutput:
+    """Compact W13 backward experiment without staging compact ``x``.
+
+    ``dx`` uses the existing destination-local compact WGMMA path. ``dw13``
+    uses the source-gather MGPU path, gathering source-major ``x`` into each
+    WGMMA tile instead of first materializing ``x_expert_major``. This is an
+    explicit experiment, not a saved-residual or public VJP boundary.
+    """
+
+    block_sizes = SourcePushW13BackwardTiledBlockSizes.get_default() if block_sizes is None else block_sizes
+    _validate_w13_backward_expert_blocks_tiled_request(
+        x,
+        d_h,
+        w13,
+        source_rank_by_expert,
+        token_id_by_expert,
+        valid_by_expert,
+        block_sizes,
+    )
+    dx_output = _source_push_w13_backward_expert_blocks_dx_only_pallas_mgpu(
+        d_h,
+        w13,
+        valid_by_expert,
+        block_sizes=block_sizes,
+        interpret=interpret,
+        mesh=mesh,
+    )
+    dw13 = _source_push_w13_dw13_expert_blocks_source_gather_pallas_mgpu(
+        x,
+        d_h,
+        source_rank_by_expert,
+        token_id_by_expert,
+        valid_by_expert,
+        block_sizes=block_sizes,
+        interpret=interpret,
+        mesh=mesh,
+    )
+    return SourcePushW13CompactBackwardOutput(
+        x_expert_major=jnp.zeros((0,), dtype=jnp.float32),
+        dx_expert_major=dx_output.dx_expert_major,
+        dw13=dw13,
+    )
+
+
 def _source_push_w13_backward_expert_blocks_pallas_mgpu(
     x: Float[Array, "S T D"],
     d_h: Float[Array, "Dst E C twoI"],
@@ -591,6 +1806,7 @@ def _source_push_w13_backward_expert_blocks_pallas_mgpu(
     *,
     block_sizes: SourcePushW13BackwardTiledBlockSizes | None = None,
     interpret: bool = False,
+    return_x_expert_major: bool = False,
     mesh: Mesh | AbstractMesh | None = None,
 ) -> SourcePushW13CompactBackwardOutput:
     """Compact expert-block W13 backward using destination-local WGMMA kernels.
@@ -620,7 +1836,7 @@ def _source_push_w13_backward_expert_blocks_pallas_mgpu(
             token_id_by_expert,
             valid_by_expert,
             block_sizes=block_sizes,
-            return_x_expert_major=True,
+            return_x_expert_major=return_x_expert_major,
         )
     if jax.default_backend() != "gpu":
         raise NotImplementedError("Pallas/MGPU compact W13 backward requires a GPU backend; use the reference on CPU")
@@ -665,9 +1881,22 @@ def _source_push_w13_backward_expert_blocks_pallas_mgpu(
         hidden_block=block_sizes.hidden_block,
         output_block=block_sizes.output_block,
     )
+    if return_x_expert_major:
+        x_expert_major = _with_source_push_destination_sharding(
+            x_expert_major[:, :, :original_rows, :],
+            mesh=mesh,
+            like=d_h,
+        )
+    else:
+        x_expert_major = jnp.zeros((0,), dtype=jnp.float32)
+    dx_expert_major = _with_source_push_destination_sharding(
+        dx_expert_major[:, :, :original_rows, :],
+        mesh=mesh,
+        like=d_h,
+    )
     return SourcePushW13CompactBackwardOutput(
-        x_expert_major=x_expert_major[:, :, :original_rows, :],
-        dx_expert_major=dx_expert_major[:, :, :original_rows, :],
+        x_expert_major=x_expert_major,
+        dx_expert_major=dx_expert_major,
         dw13=dw13,
     )
 
@@ -693,6 +1922,7 @@ def _source_push_x_to_w13_rows_pallas_mgpu(
         flat_row_map.src,
         flat_row_map.token,
         flat_row_map.valid,
+        row_block=block_sizes.row_block,
         hidden_block=block_sizes.hidden_block,
         interpret=interpret,
         mesh=mesh,
@@ -705,6 +1935,7 @@ def _source_push_x_to_w13_rows_pallas_call(
     row_token: Int[Array, "Dst rows"],
     row_valid: Bool[Array, "Dst rows"],
     *,
+    row_block: int,
     hidden_block: int,
     interpret: bool,
     mesh: Mesh | AbstractMesh | None = None,
@@ -718,6 +1949,7 @@ def _source_push_x_to_w13_rows_pallas_call(
             row_src,
             row_token,
             row_valid,
+            row_block=row_block,
             hidden_block=hidden_block,
         )
     if shard_if_needed and not interpret and not abstract_mesh.empty:
@@ -727,6 +1959,7 @@ def _source_push_x_to_w13_rows_pallas_call(
             row_src,
             row_token,
             row_valid,
+            row_block=row_block,
             hidden_block=hidden_block,
         )
 
@@ -735,15 +1968,19 @@ def _source_push_x_to_w13_rows_pallas_call(
     output_shape = jax.ShapeDtypeStruct((dst_count, hidden_rows_per_rank, hidden_dim), jnp.float32)
     row_valid_i = row_valid.astype(jnp.int32)
     cost_estimate = _source_push_x_to_w13_rows_pallas_cost_estimate(x, row_src, row_token, row_valid, output_shape)
-    kernel = _make_source_push_x_to_w13_rows_kernel(hidden_block=hidden_block)
+    kernel = _make_source_push_x_to_w13_rows_kernel(
+        row_block=row_block,
+        hidden_block=hidden_block,
+        use_tiled_offsets=not interpret,
+    )
     compiler_params = mgpu.CompilerParams(lowering_semantics=mgpu.LoweringSemantics.Lane)
-    in_specs, out_specs = _source_push_x_to_w13_rows_block_specs(hidden_block=hidden_block)
+    in_specs, out_specs = _source_push_x_to_w13_rows_block_specs(row_block=row_block, hidden_block=hidden_block)
     return pl.pallas_call(
         kernel,
         in_specs=in_specs,
         out_specs=out_specs,
         out_shape=output_shape,
-        grid=(dst_count, hidden_rows_per_rank, hidden_dim // hidden_block),
+        grid=(dst_count, hidden_rows_per_rank // row_block, hidden_dim // hidden_block),
         interpret=interpret,
         name="source_push_x_to_w13_rows_pallas_mgpu_x_remat",
         compiler_params=compiler_params,
@@ -758,6 +1995,7 @@ def _source_push_x_to_w13_rows_sharded_pallas_call(
     row_token: Int[Array, "Dst rows"],
     row_valid: Bool[Array, "Dst rows"],
     *,
+    row_block: int,
     hidden_block: int,
 ) -> Float[Array, "Dst rows D"]:
     """Run x-rematerialization with destination-local metadata refs.
@@ -781,6 +2019,7 @@ def _source_push_x_to_w13_rows_sharded_pallas_call(
             row_src_local,
             row_token_local,
             row_valid_local,
+            row_block=row_block,
             hidden_block=hidden_block,
             interpret=False,
             shard_if_needed=False,
@@ -802,34 +2041,41 @@ def _source_push_x_to_w13_rows_sharded_pallas_call(
 
 def _source_push_x_to_w13_rows_block_specs(
     *,
+    row_block: int,
     hidden_block: int,
 ) -> tuple[tuple[pl.BlockSpec, pl.BlockSpec, pl.BlockSpec, pl.BlockSpec], pl.BlockSpec]:
+    gmem_spec = pl.BlockSpec(memory_space=mgpu.GMEM)
     out_spec = pl.BlockSpec(
-        (None, None, hidden_block),
-        lambda dst, row, hidden_tile: (dst, row, hidden_tile),
+        (None, row_block, hidden_block),
+        lambda dst, row_tile, hidden_tile: (dst, row_tile, hidden_tile),
     )
-    return (pl.BlockSpec(), pl.BlockSpec(), pl.BlockSpec(), pl.BlockSpec()), out_spec
+    return (gmem_spec, gmem_spec, gmem_spec, gmem_spec), out_spec
 
 
-def _make_source_push_x_to_w13_rows_kernel(*, hidden_block: int):
+def _make_source_push_x_to_w13_rows_kernel(*, row_block: int, hidden_block: int, use_tiled_offsets: bool):
     def kernel(
         x_ref: Float[pl.Ref, "S T D"],
         row_src_ref: Int[pl.Ref, "Dst rows"],
         row_token_ref: Int[pl.Ref, "Dst rows"],
         row_valid_ref: Int[pl.Ref, "Dst rows"],
-        x_out_ref: Float[pl.Ref, "D"],
+        x_out_ref: Float[pl.Ref, "rows D"],
     ) -> None:
         dst = pl.program_id(0)
-        row = pl.program_id(1)
+        row_tile = pl.program_id(1)
         hidden_tile = pl.program_id(2)
+        row_start = row_tile * row_block
         hidden_start = hidden_tile * hidden_block
-        valid = row_valid_ref[pl.ds(dst, 1), pl.ds(row, 1)][0, 0]
-        src = row_src_ref[pl.ds(dst, 1), pl.ds(row, 1)][0, 0]
-        token = row_token_ref[pl.ds(dst, 1), pl.ds(row, 1)][0, 0]
-        x_tile = x_ref[pl.ds(src, 1), pl.ds(token, 1), pl.ds(hidden_start, hidden_block)][0, 0, :]
-        zero_tile = jnp.zeros((hidden_block,), dtype=jnp.float32)
-        out_tile = jnp.where(valid, x_tile.astype(jnp.float32), zero_tile)
-        x_out_ref[pl.ds(0, hidden_block)] = out_tile
+        hidden_offsets = jnp.arange(hidden_block, dtype=jnp.int32)
+        if use_tiled_offsets:
+            hidden_offsets = mgpu.layout_cast(hidden_offsets, mgpu.Layout.TILED)
+        hidden_offsets = hidden_start + hidden_offsets
+        valid = row_valid_ref[dst, pl.ds(row_start, row_block)]
+        src = row_src_ref[dst, pl.ds(row_start, row_block)]
+        token = row_token_ref[dst, pl.ds(row_start, row_block)]
+        x_tile = x_ref[src[:, None], token[:, None], hidden_offsets[None, :]]
+        zero_tile = jnp.zeros((row_block, hidden_block), dtype=jnp.float32)
+        out_tile = jnp.where(valid[:, None], x_tile.astype(jnp.float32), zero_tile)
+        x_out_ref[pl.ds(0, row_block), pl.ds(0, hidden_block)] = out_tile
 
     return kernel
 
@@ -888,6 +2134,12 @@ def _validate_x_remat_pallas_request(
         raise ValueError(f"flat row map must have shape [destination, rows], got {flat_row_map.valid.shape}")
     if block_sizes.hidden_block <= 0:
         raise ValueError(f"hidden_block must be positive, got {block_sizes.hidden_block}")
+    if block_sizes.row_block <= 0:
+        raise ValueError(f"row_block must be positive, got {block_sizes.row_block}")
+    if flat_row_map.valid.shape[-1] % block_sizes.row_block:
+        raise ValueError(
+            f"flat rows {flat_row_map.valid.shape[-1]} must be divisible by row_block={block_sizes.row_block}"
+        )
     if x.shape[-1] % block_sizes.hidden_block:
         raise ValueError(f"x hidden dim {x.shape[-1]} must be divisible by hidden_block={block_sizes.hidden_block}")
 
@@ -1199,13 +2451,35 @@ def _source_push_w13_backward_tiled_from_expert_blocks(
         output_start = output_tile * block_sizes.output_block
         output = output_start + output_offsets
 
-        valid = valid_by_expert[dst, expert, rows]
+        valid = valid_by_expert.at[dst, expert, rows].get(out_sharding=_source_push_out_sharding(None))
         valid_f = valid.astype(jnp.float32)
-        src = jnp.where(valid, source_rank_by_expert[dst, expert, rows], 0)
-        token = jnp.where(valid, token_id_by_expert[dst, expert, rows], 0)
-        x_tile = x[src[:, None], token[:, None], hidden[None, :]].astype(jnp.float32) * valid_f[:, None]
-        d_h_tile = d_h[dst, expert, rows[:, None], output[None, :]].astype(jnp.float32) * valid_f[:, None]
-        w13_tile = w13[dst, expert, hidden[:, None], output[None, :]].astype(jnp.float32)
+        src = jnp.where(
+            valid,
+            source_rank_by_expert.at[dst, expert, rows].get(out_sharding=_source_push_out_sharding(None)),
+            0,
+        )
+        token = jnp.where(
+            valid,
+            token_id_by_expert.at[dst, expert, rows].get(out_sharding=_source_push_out_sharding(None)),
+            0,
+        )
+        x_tile = (
+            x.at[src[:, None], token[:, None], hidden[None, :]]
+            .get(out_sharding=_source_push_out_sharding(None, None))
+            .astype(jnp.float32)
+            * valid_f[:, None]
+        )
+        d_h_tile = (
+            d_h.at[dst, expert, rows[:, None], output[None, :]]
+            .get(out_sharding=_source_push_out_sharding(None, None))
+            .astype(jnp.float32)
+            * valid_f[:, None]
+        )
+        w13_tile = (
+            w13.at[dst, expert, hidden[:, None], output[None, :]]
+            .get(out_sharding=_source_push_out_sharding(None, None))
+            .astype(jnp.float32)
+        )
 
         dx_update = jnp.einsum("mo,ho->mh", d_h_tile, w13_tile)
         dx_old = lax.dynamic_slice(
@@ -1299,12 +2573,30 @@ def _source_push_w13_dw13_tiled_from_expert_blocks(
         output_start = output_tile * block_sizes.output_block
         output = output_start + output_offsets
 
-        valid = valid_by_expert[dst, expert, rows]
+        valid = valid_by_expert.at[dst, expert, rows].get(out_sharding=_source_push_out_sharding(None))
         valid_f = valid.astype(jnp.float32)
-        src = jnp.where(valid, source_rank_by_expert[dst, expert, rows], 0)
-        token = jnp.where(valid, token_id_by_expert[dst, expert, rows], 0)
-        x_tile = x[src[:, None], token[:, None], hidden[None, :]].astype(jnp.float32) * valid_f[:, None]
-        d_h_tile = d_h[dst, expert, rows[:, None], output[None, :]].astype(jnp.float32) * valid_f[:, None]
+        src = jnp.where(
+            valid,
+            source_rank_by_expert.at[dst, expert, rows].get(out_sharding=_source_push_out_sharding(None)),
+            0,
+        )
+        token = jnp.where(
+            valid,
+            token_id_by_expert.at[dst, expert, rows].get(out_sharding=_source_push_out_sharding(None)),
+            0,
+        )
+        x_tile = (
+            x.at[src[:, None], token[:, None], hidden[None, :]]
+            .get(out_sharding=_source_push_out_sharding(None, None))
+            .astype(jnp.float32)
+            * valid_f[:, None]
+        )
+        d_h_tile = (
+            d_h.at[dst, expert, rows[:, None], output[None, :]]
+            .get(out_sharding=_source_push_out_sharding(None, None))
+            .astype(jnp.float32)
+            * valid_f[:, None]
+        )
 
         dw13_update = jnp.einsum("mh,mo->ho", x_tile, d_h_tile)
         dw13_old = lax.dynamic_slice(
@@ -1408,6 +2700,46 @@ def _validate_w13_backward_expert_blocks_tiled_request(
         )
 
 
+def _validate_w13_prefilled_x_dw13_request(
+    x_expert_major: Array,
+    d_h: Array,
+    w13: Array,
+    valid_by_expert: Array,
+    block_sizes: SourcePushW13BackwardTiledBlockSizes,
+) -> None:
+    if x_expert_major.ndim != 4:
+        raise ValueError(f"x_expert_major must have shape [dst, expert, capacity, D], got {x_expert_major.shape}")
+    if d_h.ndim != 4:
+        raise ValueError(f"d_h must have shape [dst, expert, capacity, twoI], got {d_h.shape}")
+    if w13.ndim != 4:
+        raise ValueError(f"w13 must have shape [dst, expert, D, twoI], got {w13.shape}")
+    if x_expert_major.shape[:3] != d_h.shape[:3]:
+        raise ValueError(f"x_expert_major leading shape {x_expert_major.shape[:3]} must match d_h {d_h.shape[:3]}")
+    if valid_by_expert.shape != d_h.shape[:3]:
+        raise ValueError(f"valid_by_expert shape {valid_by_expert.shape} must match d_h blocks {d_h.shape[:3]}")
+    if w13.shape[:2] != d_h.shape[:2]:
+        raise ValueError(f"w13 destination/expert shape {w13.shape[:2]} must match d_h {d_h.shape[:2]}")
+    if w13.shape[-2] != x_expert_major.shape[-1]:
+        raise ValueError(f"w13 hidden dim {w13.shape[-2]} must match x hidden dim {x_expert_major.shape[-1]}")
+    if w13.shape[-1] != d_h.shape[-1]:
+        raise ValueError(f"w13 output dim {w13.shape[-1]} must match d_h output dim {d_h.shape[-1]}")
+    if block_sizes.row_block <= 0:
+        raise ValueError(f"row_block must be positive, got {block_sizes.row_block}")
+    if block_sizes.hidden_block <= 0:
+        raise ValueError(f"hidden_block must be positive, got {block_sizes.hidden_block}")
+    if block_sizes.output_block <= 0:
+        raise ValueError(f"output_block must be positive, got {block_sizes.output_block}")
+    if x_expert_major.shape[-1] % block_sizes.hidden_block:
+        raise ValueError(
+            f"x_expert_major hidden dim {x_expert_major.shape[-1]} must be divisible by "
+            f"hidden_block={block_sizes.hidden_block}"
+        )
+    if d_h.shape[-1] % block_sizes.output_block:
+        raise ValueError(
+            f"d_h output dim {d_h.shape[-1]} must be divisible by output_block={block_sizes.output_block}"
+        )
+
+
 def _validate_w13_dw13_source_gather_request(
     x: Array,
     d_h: Array,
@@ -1494,6 +2826,7 @@ def _source_push_w13_backward_pallas_mgpu(
             w13,
             flat_row_map.valid,
             flat_row_map.expert,
+            block_sizes=block_sizes,
             interpret=interpret,
             mesh=mesh,
         )
@@ -1564,11 +2897,13 @@ def _source_push_w13_dw13_exact_expert_major_pallas_mgpu(
     valid: Bool[Array, "Dst rows"],
     row_expert: Int[Array, "Dst rows"],
     *,
+    block_sizes: SourcePushW13BackwardTiledBlockSizes | None = None,
     interpret: bool = False,
     mesh: Mesh | AbstractMesh | None = None,
 ) -> Float[Array, "Dst E D twoI"]:
     """Compute W13 weight gradients for exact expert-major rows."""
 
+    block_sizes = SourcePushW13BackwardTiledBlockSizes.get_default() if block_sizes is None else block_sizes
     if interpret:
         return _source_push_w13_dw13_from_flat_x_rows_reference(
             x_expert_major,
@@ -1590,18 +2925,18 @@ def _source_push_w13_dw13_exact_expert_major_pallas_mgpu(
             d_h,
             w13,
             valid,
-            row_block=DEFAULT_W13_DX_ROW_BLOCK,
-            hidden_block=DEFAULT_W13_DX_HIDDEN_BLOCK,
-            output_block=DEFAULT_W13_DX_OUTPUT_BLOCK,
+            row_block=block_sizes.row_block,
+            hidden_block=block_sizes.hidden_block,
+            output_block=block_sizes.output_block,
         )
     return _source_push_w13_dw13_exact_expert_major_pallas_call(
         x_expert_major,
         d_h,
         w13,
         valid,
-        row_block=DEFAULT_W13_DX_ROW_BLOCK,
-        hidden_block=DEFAULT_W13_DX_HIDDEN_BLOCK,
-        output_block=DEFAULT_W13_DX_OUTPUT_BLOCK,
+        row_block=block_sizes.row_block,
+        hidden_block=block_sizes.hidden_block,
+        output_block=block_sizes.output_block,
     )
 
 
@@ -2029,6 +3364,7 @@ def _source_push_w13_dw13_expert_blocks_sharded_mgpu_kernel(
     row_block: int,
     hidden_block: int,
     output_block: int,
+    lowering_semantics: mgpu.LoweringSemantics = mgpu.LoweringSemantics.Lane,
 ) -> Float[Array, "Dst E D twoI"]:
     if x_expert_major.ndim != 4:
         raise ValueError(f"x_expert_major must have shape [dst, expert, capacity, D], got {x_expert_major.shape}")
@@ -2051,6 +3387,7 @@ def _source_push_w13_dw13_expert_blocks_sharded_mgpu_kernel(
         rows=d_h.shape[2],
         hidden_dim=x_expert_major.shape[-1],
         output_dim=d_h.shape[-1],
+        lowering_semantics=lowering_semantics,
     )
 
     def local_fn(
@@ -2071,6 +3408,254 @@ def _source_push_w13_dw13_expert_blocks_sharded_mgpu_kernel(
         out_specs=P(SOURCE_PUSH_MESH_AXIS, None, None, None),
         check_vma=False,
     )(x_expert_major, d_h, valid)
+
+
+def _source_push_w13_dw13_local_swiglu_sharded_mgpu_kernel(
+    mesh: Mesh | AbstractMesh,
+    x_expert_major: Float[Array, "Dst E C D"],
+    d_activation: Float[Array, "Dst E C I"],
+    z: Float[Array, "Dst E C twoI"],
+    valid: Bool[Array, "Dst E C"],
+    *,
+    row_block: int,
+    hidden_block: int,
+    output_block: int,
+    lowering_semantics: mgpu.LoweringSemantics = DEFAULT_W13_DW13_LOWERING_SEMANTICS,
+    use_linear_derivative: bool = False,
+    branch: SourcePushW13LocalDzBranch = "both",
+) -> Float[Array, "Dst E D twoI"]:
+    block_sizes = SourcePushW13BackwardTiledBlockSizes(
+        row_block=row_block,
+        hidden_block=hidden_block,
+        output_block=output_block,
+    )
+    _validate_w13_local_swiglu_dw13_pallas_request(x_expert_major, d_activation, z, valid, block_sizes)
+    kernel = _make_source_push_w13_dw13_local_swiglu_mgpu_kernel(
+        row_block=row_block,
+        hidden_block=hidden_block,
+        output_block=output_block,
+        experts_per_rank=x_expert_major.shape[1],
+        rows=x_expert_major.shape[2],
+        hidden_dim=x_expert_major.shape[-1],
+        intermediate_dim=d_activation.shape[-1],
+        lowering_semantics=lowering_semantics,
+        use_linear_derivative=use_linear_derivative,
+        branch=branch,
+    )
+
+    def local_fn(
+        x_local: Float[Array, "1 E C D"],
+        d_activation_local: Float[Array, "1 E C I"],
+        z_local: Float[Array, "1 E C twoI"],
+        valid_local: Bool[Array, "1 E C"],
+    ) -> Float[Array, "1 E D twoI"]:
+        _ = valid_local
+        return kernel(x_local[0], d_activation_local[0], z_local[0])[None, ...]
+
+    return shard_map(
+        local_fn,
+        mesh=mesh,
+        in_specs=(
+            P(SOURCE_PUSH_MESH_AXIS, None, None, None),
+            P(SOURCE_PUSH_MESH_AXIS, None, None, None),
+            P(SOURCE_PUSH_MESH_AXIS, None, None, None),
+            P(SOURCE_PUSH_MESH_AXIS, None, None),
+        ),
+        out_specs=P(SOURCE_PUSH_MESH_AXIS, None, None, None),
+        check_vma=False,
+    )(x_expert_major, d_activation, z, valid)
+
+
+def _source_push_w13_dw13_expert_blocks_source_gather_sharded_mgpu_kernel(
+    mesh: Mesh | AbstractMesh,
+    x: Float[Array, "S T D"],
+    d_h: Float[Array, "Dst E C twoI"],
+    source_rank_by_expert: Int[Array, "Dst E C"],
+    token_id_by_expert: Int[Array, "Dst E C"],
+    valid: Bool[Array, "Dst E C"],
+    *,
+    row_block: int,
+    hidden_block: int,
+    output_block: int,
+) -> Float[Array, "Dst E D twoI"]:
+    _validate_w13_dw13_source_gather_request(
+        x,
+        d_h,
+        source_rank_by_expert,
+        token_id_by_expert,
+        valid,
+        SourcePushW13BackwardTiledBlockSizes(
+            row_block=row_block,
+            hidden_block=hidden_block,
+            output_block=output_block,
+        ),
+    )
+    if d_h.shape[2] % row_block:
+        raise ValueError(f"d_h capacity {d_h.shape[2]} must be divisible by row_block={row_block}")
+    _validate_w13_wgmma_smem_shape((row_block, hidden_block), x.dtype)
+    _validate_w13_wgmma_smem_shape((row_block, output_block), d_h.dtype)
+
+    kernel = _make_source_push_w13_dw13_source_gather_expert_blocks_mgpu_kernel(
+        ep_size=x.shape[0],
+        row_block=row_block,
+        hidden_block=hidden_block,
+        output_block=output_block,
+        experts_per_rank=d_h.shape[1],
+        rows=d_h.shape[2],
+        hidden_dim=x.shape[-1],
+        output_dim=d_h.shape[-1],
+    )
+    source_rank_spec = _source_push_destination_or_replicated_spec(source_rank_by_expert, 3)
+    token_id_spec = _source_push_destination_or_replicated_spec(token_id_by_expert, 3)
+    valid_spec = _source_push_destination_or_replicated_spec(valid, 3)
+    destination_spec = P(SOURCE_PUSH_MESH_AXIS, None, None)
+
+    def local_fn(
+        x_local: Float[Array, "1 T D"],
+        d_h_local: Float[Array, "1 E C twoI"],
+        source_rank_arg: Int[Array, "Dst E C"],
+        token_id_arg: Int[Array, "Dst E C"],
+        valid_arg: Bool[Array, "Dst E C"],
+    ) -> Float[Array, "1 E D twoI"]:
+        dst = lax.axis_index(SOURCE_PUSH_MESH_AXIS)
+        if source_rank_spec == destination_spec:
+            source_rank_local = source_rank_arg
+        else:
+            source_rank_local = lax.dynamic_slice_in_dim(source_rank_arg, dst, 1, axis=0)
+        if token_id_spec == destination_spec:
+            token_id_local = token_id_arg
+        else:
+            token_id_local = lax.dynamic_slice_in_dim(token_id_arg, dst, 1, axis=0)
+        if valid_spec == destination_spec:
+            valid_local = valid_arg
+        else:
+            valid_local = lax.dynamic_slice_in_dim(valid_arg, dst, 1, axis=0)
+        return kernel(
+            x_local[0],
+            d_h_local[0],
+            source_rank_local[0],
+            token_id_local[0],
+            valid_local[0].astype(jnp.int32),
+        )[None, ...]
+
+    return shard_map(
+        local_fn,
+        mesh=mesh,
+        in_specs=(
+            P(SOURCE_PUSH_MESH_AXIS, None, None),
+            P(SOURCE_PUSH_MESH_AXIS, None, None, None),
+            source_rank_spec,
+            token_id_spec,
+            valid_spec,
+        ),
+        out_specs=P(SOURCE_PUSH_MESH_AXIS, None, None, None),
+        check_vma=False,
+    )(x, d_h, source_rank_by_expert, token_id_by_expert, valid)
+
+
+def _source_push_w13_dw13_source_padded_partials_sharded_mgpu_kernel(
+    mesh: Mesh | AbstractMesh,
+    x: Float[Array, "S T D"],
+    d_h: Float[Array, "Dst E C twoI"],
+    token_id_by_expert: Int[Array, "Dst E C"],
+    valid: Bool[Array, "Dst E C"],
+    src_base_by_expert: Int[Array, "Dst S E"],
+    source_lengths: Int[Array, "Dst S E"],
+    *,
+    row_block: int,
+    hidden_block: int,
+    output_block: int,
+) -> Float[Array, "S Dst E D twoI"]:
+    _validate_w13_dw13_source_gather_request(
+        x,
+        d_h,
+        jnp.zeros_like(token_id_by_expert),
+        token_id_by_expert,
+        valid,
+        SourcePushW13BackwardTiledBlockSizes(
+            row_block=row_block,
+            hidden_block=hidden_block,
+            output_block=output_block,
+        ),
+    )
+    if d_h.shape[2] % row_block:
+        raise ValueError(f"d_h capacity {d_h.shape[2]} must be divisible by row_block={row_block}")
+    if src_base_by_expert.shape != (d_h.shape[0], x.shape[0], d_h.shape[1]):
+        raise ValueError(
+            f"src_base_by_expert shape {src_base_by_expert.shape} must be {(d_h.shape[0], x.shape[0], d_h.shape[1])}"
+        )
+    if source_lengths.shape != src_base_by_expert.shape:
+        raise ValueError(f"source_lengths shape {source_lengths.shape} must match {src_base_by_expert.shape}")
+    _validate_w13_wgmma_smem_shape((row_block, hidden_block), x.dtype)
+    _validate_w13_wgmma_smem_shape((row_block, output_block), d_h.dtype)
+
+    max_source_rows = int(np.max(np.asarray(jax.device_get(source_lengths), dtype=np.int32)))
+    max_source_rows = _round_up_to_multiple(max_source_rows, row_block)
+    kernel = _make_source_push_w13_dw13_source_padded_partials_mgpu_kernel(
+        ep_size=x.shape[0],
+        row_block=row_block,
+        hidden_block=hidden_block,
+        output_block=output_block,
+        experts_per_rank=d_h.shape[1],
+        rows=d_h.shape[2],
+        max_source_rows=max_source_rows,
+        hidden_dim=x.shape[-1],
+        output_dim=d_h.shape[-1],
+    )
+    token_id_spec = _source_push_destination_or_replicated_spec(token_id_by_expert, 3)
+    valid_spec = _source_push_destination_or_replicated_spec(valid, 3)
+    src_base_spec = _source_push_destination_or_replicated_spec(src_base_by_expert, 3)
+    source_lengths_spec = _source_push_destination_or_replicated_spec(source_lengths, 3)
+    destination_spec = P(SOURCE_PUSH_MESH_AXIS, None, None)
+
+    def local_fn(
+        x_local: Float[Array, "1 T D"],
+        d_h_local: Float[Array, "1 E C twoI"],
+        token_id_arg: Int[Array, "Dst E C"],
+        valid_arg: Bool[Array, "Dst E C"],
+        src_base_arg: Int[Array, "Dst S E"],
+        source_lengths_arg: Int[Array, "Dst S E"],
+    ) -> Float[Array, "S 1 E D twoI"]:
+        dst = lax.axis_index(SOURCE_PUSH_MESH_AXIS)
+        if token_id_spec == destination_spec:
+            token_id_local = token_id_arg
+        else:
+            token_id_local = lax.dynamic_slice_in_dim(token_id_arg, dst, 1, axis=0)
+        if valid_spec == destination_spec:
+            valid_local = valid_arg
+        else:
+            valid_local = lax.dynamic_slice_in_dim(valid_arg, dst, 1, axis=0)
+        if src_base_spec == P(SOURCE_PUSH_MESH_AXIS, None, None):
+            src_base_local = src_base_arg
+        else:
+            src_base_local = lax.dynamic_slice_in_dim(src_base_arg, dst, 1, axis=0)
+        if source_lengths_spec == P(SOURCE_PUSH_MESH_AXIS, None, None):
+            source_lengths_local = source_lengths_arg
+        else:
+            source_lengths_local = lax.dynamic_slice_in_dim(source_lengths_arg, dst, 1, axis=0)
+        return kernel(
+            x_local[0],
+            d_h_local[0],
+            token_id_local[0],
+            valid_local[0].astype(jnp.int32),
+            src_base_local[0],
+            source_lengths_local[0],
+        )[:, None, ...]
+
+    return shard_map(
+        local_fn,
+        mesh=mesh,
+        in_specs=(
+            P(SOURCE_PUSH_MESH_AXIS, None, None),
+            P(SOURCE_PUSH_MESH_AXIS, None, None, None),
+            token_id_spec,
+            valid_spec,
+            src_base_spec,
+            source_lengths_spec,
+        ),
+        out_specs=P(None, SOURCE_PUSH_MESH_AXIS, None, None, None),
+        check_vma=False,
+    )(x, d_h, token_id_by_expert, valid, src_base_by_expert, source_lengths)
 
 
 def _make_source_push_w13_dx_expert_blocks_mgpu_kernel(
@@ -2161,6 +3746,7 @@ def _make_source_push_w13_dw13_expert_blocks_mgpu_kernel(
     rows: int,
     hidden_dim: int,
     output_dim: int,
+    lowering_semantics: mgpu.LoweringSemantics,
 ):
     row_tiles = rows // row_block
     hidden_tiles = hidden_dim // hidden_block
@@ -2222,12 +3808,521 @@ def _make_source_push_w13_dw13_expert_blocks_mgpu_kernel(
         ] = output
 
     out_shape = jax.ShapeDtypeStruct((experts_per_rank, hidden_dim, output_dim), jnp.float32)
+    compiler_params = mgpu.CompilerParams(lowering_semantics=lowering_semantics)
+    return mgpu.kernel(
+        body,
+        out_shape=out_shape,
+        grid=(experts_per_rank, hidden_tiles, output_tiles),
+        grid_names=("expert", "hidden_tile", "output_tile"),
+        compiler_params=compiler_params,
+    )
+
+
+def _make_source_push_w13_dw13_local_swiglu_mgpu_kernel(
+    *,
+    row_block: int,
+    hidden_block: int,
+    output_block: int,
+    experts_per_rank: int,
+    rows: int,
+    hidden_dim: int,
+    intermediate_dim: int,
+    lowering_semantics: mgpu.LoweringSemantics,
+    use_linear_derivative: bool,
+    branch: SourcePushW13LocalDzBranch,
+):
+    row_tiles = rows // row_block
+    hidden_tiles = hidden_dim // hidden_block
+    output_tiles = intermediate_dim // output_block
+
+    def body(
+        x_ref: Float[pl.Ref, "E C D"],
+        d_activation_ref: Float[pl.Ref, "E C I"],
+        z_ref: Float[pl.Ref, "E C twoI"],
+        dw13_ref: Float[pl.Ref, "E D twoI"],
+    ) -> None:
+        expert = pl.program_id(0)
+        hidden_tile = pl.program_id(1)
+        output_tile = pl.program_id(2)
+        hidden_start = hidden_tile * hidden_block
+        output_start = output_tile * output_block
+
+        def both_acc_scope(gate_acc_ref, up_acc_ref) -> None:
+            def smem_scope(
+                x_smem,
+                gate_smem,
+                up_smem,
+                d_activation_smem,
+                d_gate_smem,
+                d_up_smem,
+                ready_barrier,
+            ) -> None:
+                @pl.loop(0, row_tiles)
+                def _row_loop(row_tile) -> None:
+                    row_start = row_tile * row_block
+                    row_slice = pl.ds(row_start, row_block)
+                    output_slice = pl.ds(output_start, output_block)
+                    up_slice = pl.ds(intermediate_dim + output_start, output_block)
+
+                    mgpu.copy_gmem_to_smem(
+                        x_ref.at[
+                            expert,
+                            row_slice,
+                            pl.ds(hidden_start, hidden_block),
+                        ],
+                        x_smem,
+                        ready_barrier,
+                    )
+                    mgpu.copy_gmem_to_smem(
+                        z_ref.at[expert, row_slice, output_slice],
+                        gate_smem,
+                        ready_barrier,
+                    )
+                    mgpu.copy_gmem_to_smem(
+                        z_ref.at[expert, row_slice, up_slice],
+                        up_smem,
+                        ready_barrier,
+                    )
+                    mgpu.copy_gmem_to_smem(
+                        d_activation_ref.at[expert, row_slice, output_slice],
+                        d_activation_smem,
+                        ready_barrier,
+                    )
+                    mgpu.barrier_wait(ready_barrier)
+                    gate = gate_smem[:, :].astype(jnp.float32)
+                    up = up_smem[:, :].astype(jnp.float32)
+                    d_activation = d_activation_smem[:, :].astype(jnp.float32)
+                    if use_linear_derivative:
+                        d_gate = d_activation * up
+                        d_up = d_activation * gate
+                    else:
+                        silu_gate = jax.nn.silu(gate)
+                        sigmoid_gate = jax.nn.sigmoid(gate)
+                        d_silu_gate = sigmoid_gate * (1.0 + gate * (1.0 - sigmoid_gate))
+                        d_gate = d_activation * up * d_silu_gate
+                        d_up = d_activation * silu_gate
+                    d_gate_smem[:, :] = d_gate.astype(d_gate_smem.dtype)
+                    d_up_smem[:, :] = d_up.astype(d_up_smem.dtype)
+                    mgpu.commit_smem()
+                    mgpu.wgmma(gate_acc_ref, mgpu.transpose_ref(x_smem, (1, 0)), d_gate_smem)
+                    mgpu.wgmma(up_acc_ref, mgpu.transpose_ref(x_smem, (1, 0)), d_up_smem)
+                    mgpu.wgmma_wait(0)
+
+            pl.run_scoped(
+                smem_scope,
+                x_smem=_w13_wgmma_smem((row_block, hidden_block), x_ref.dtype),
+                gate_smem=_w13_wgmma_smem((row_block, output_block), z_ref.dtype),
+                up_smem=_w13_wgmma_smem((row_block, output_block), z_ref.dtype),
+                d_activation_smem=_w13_wgmma_smem((row_block, output_block), d_activation_ref.dtype),
+                d_gate_smem=_w13_wgmma_smem((row_block, output_block), z_ref.dtype),
+                d_up_smem=_w13_wgmma_smem((row_block, output_block), z_ref.dtype),
+                ready_barrier=mgpu.Barrier(num_arrivals=4),
+            )
+
+            dw13_ref[
+                expert,
+                pl.ds(hidden_start, hidden_block),
+                pl.ds(output_start, output_block),
+            ] = gate_acc_ref[...]
+            dw13_ref[
+                expert,
+                pl.ds(hidden_start, hidden_block),
+                pl.ds(intermediate_dim + output_start, output_block),
+            ] = up_acc_ref[...]
+
+        pl.run_scoped(
+            both_acc_scope,
+            gate_acc_ref=mgpu.ACC((hidden_block, output_block)),
+            up_acc_ref=mgpu.ACC((hidden_block, output_block)),
+        )
+
+    def branch_body(
+        x_ref: Float[pl.Ref, "E C D"],
+        d_activation_ref: Float[pl.Ref, "E C I"],
+        z_ref: Float[pl.Ref, "E C twoI"],
+        dw13_ref: Float[pl.Ref, "E D I"],
+    ) -> None:
+        expert = pl.program_id(0)
+        hidden_tile = pl.program_id(1)
+        output_tile = pl.program_id(2)
+        hidden_start = hidden_tile * hidden_block
+        output_start = output_tile * output_block
+
+        def acc_scope(acc_ref) -> None:
+            def gate_smem_scope(
+                x_smem,
+                gate_smem,
+                up_smem,
+                d_activation_smem,
+                d_branch_smem,
+                ready_barrier,
+            ) -> None:
+                @pl.loop(0, row_tiles)
+                def _row_loop(row_tile) -> None:
+                    row_start = row_tile * row_block
+                    row_slice = pl.ds(row_start, row_block)
+                    output_slice = pl.ds(output_start, output_block)
+                    up_slice = pl.ds(intermediate_dim + output_start, output_block)
+
+                    mgpu.copy_gmem_to_smem(
+                        x_ref.at[
+                            expert,
+                            row_slice,
+                            pl.ds(hidden_start, hidden_block),
+                        ],
+                        x_smem,
+                        ready_barrier,
+                    )
+                    mgpu.copy_gmem_to_smem(
+                        z_ref.at[expert, row_slice, output_slice],
+                        gate_smem,
+                        ready_barrier,
+                    )
+                    mgpu.copy_gmem_to_smem(
+                        z_ref.at[expert, row_slice, up_slice],
+                        up_smem,
+                        ready_barrier,
+                    )
+                    mgpu.copy_gmem_to_smem(
+                        d_activation_ref.at[expert, row_slice, output_slice],
+                        d_activation_smem,
+                        ready_barrier,
+                    )
+                    mgpu.barrier_wait(ready_barrier)
+                    gate = gate_smem[:, :].astype(jnp.float32)
+                    up = up_smem[:, :].astype(jnp.float32)
+                    d_activation = d_activation_smem[:, :].astype(jnp.float32)
+                    if use_linear_derivative:
+                        d_branch = d_activation * up
+                    else:
+                        sigmoid_gate = jax.nn.sigmoid(gate)
+                        d_silu_gate = sigmoid_gate * (1.0 + gate * (1.0 - sigmoid_gate))
+                        d_branch = d_activation * up * d_silu_gate
+                    d_branch_smem[:, :] = d_branch.astype(d_branch_smem.dtype)
+                    mgpu.commit_smem()
+                    mgpu.wgmma(acc_ref, mgpu.transpose_ref(x_smem, (1, 0)), d_branch_smem)
+                    mgpu.wgmma_wait(0)
+
+            def up_smem_scope(
+                x_smem,
+                gate_smem,
+                d_activation_smem,
+                d_branch_smem,
+                ready_barrier,
+            ) -> None:
+                @pl.loop(0, row_tiles)
+                def _row_loop(row_tile) -> None:
+                    row_start = row_tile * row_block
+                    row_slice = pl.ds(row_start, row_block)
+                    output_slice = pl.ds(output_start, output_block)
+
+                    mgpu.copy_gmem_to_smem(
+                        x_ref.at[
+                            expert,
+                            row_slice,
+                            pl.ds(hidden_start, hidden_block),
+                        ],
+                        x_smem,
+                        ready_barrier,
+                    )
+                    mgpu.copy_gmem_to_smem(
+                        z_ref.at[expert, row_slice, output_slice],
+                        gate_smem,
+                        ready_barrier,
+                    )
+                    mgpu.copy_gmem_to_smem(
+                        d_activation_ref.at[expert, row_slice, output_slice],
+                        d_activation_smem,
+                        ready_barrier,
+                    )
+                    mgpu.barrier_wait(ready_barrier)
+                    gate = gate_smem[:, :].astype(jnp.float32)
+                    d_activation = d_activation_smem[:, :].astype(jnp.float32)
+                    if use_linear_derivative:
+                        d_branch = d_activation * gate
+                    else:
+                        d_branch = d_activation * jax.nn.silu(gate)
+                    d_branch_smem[:, :] = d_branch.astype(d_branch_smem.dtype)
+                    mgpu.commit_smem()
+                    mgpu.wgmma(acc_ref, mgpu.transpose_ref(x_smem, (1, 0)), d_branch_smem)
+                    mgpu.wgmma_wait(0)
+
+            if branch == "gate":
+                pl.run_scoped(
+                    gate_smem_scope,
+                    x_smem=_w13_wgmma_smem((row_block, hidden_block), x_ref.dtype),
+                    gate_smem=_w13_wgmma_smem((row_block, output_block), z_ref.dtype),
+                    up_smem=_w13_wgmma_smem((row_block, output_block), z_ref.dtype),
+                    d_activation_smem=_w13_wgmma_smem((row_block, output_block), d_activation_ref.dtype),
+                    d_branch_smem=_w13_wgmma_smem((row_block, output_block), z_ref.dtype),
+                    ready_barrier=mgpu.Barrier(num_arrivals=4),
+                )
+            else:
+                pl.run_scoped(
+                    up_smem_scope,
+                    x_smem=_w13_wgmma_smem((row_block, hidden_block), x_ref.dtype),
+                    gate_smem=_w13_wgmma_smem((row_block, output_block), z_ref.dtype),
+                    d_activation_smem=_w13_wgmma_smem((row_block, output_block), d_activation_ref.dtype),
+                    d_branch_smem=_w13_wgmma_smem((row_block, output_block), z_ref.dtype),
+                    ready_barrier=mgpu.Barrier(num_arrivals=3),
+                )
+
+            dw13_ref[
+                expert,
+                pl.ds(hidden_start, hidden_block),
+                pl.ds(output_start, output_block),
+            ] = acc_ref[...]
+
+        pl.run_scoped(acc_scope, acc_ref=mgpu.ACC((hidden_block, output_block)))
+
+    if branch == "both":
+        out_shape = jax.ShapeDtypeStruct((experts_per_rank, hidden_dim, 2 * intermediate_dim), jnp.float32)
+        kernel_body = body
+    elif branch in ("gate", "up"):
+        out_shape = jax.ShapeDtypeStruct((experts_per_rank, hidden_dim, intermediate_dim), jnp.float32)
+        kernel_body = branch_body
+    else:
+        raise ValueError(f"branch must be one of 'both', 'gate', or 'up'; got {branch!r}")
+    compiler_params = mgpu.CompilerParams(lowering_semantics=lowering_semantics)
+    return mgpu.kernel(
+        kernel_body,
+        out_shape=out_shape,
+        grid=(experts_per_rank, hidden_tiles, output_tiles),
+        grid_names=("expert", "hidden_tile", "output_tile"),
+        compiler_params=compiler_params,
+    )
+
+
+def _make_source_push_w13_dw13_source_gather_expert_blocks_mgpu_kernel(
+    *,
+    ep_size: int,
+    row_block: int,
+    hidden_block: int,
+    output_block: int,
+    experts_per_rank: int,
+    rows: int,
+    hidden_dim: int,
+    output_dim: int,
+):
+    row_tiles = rows // row_block
+    hidden_tiles = hidden_dim // hidden_block
+    output_tiles = output_dim // output_block
+
+    def body(
+        x_ref: Float[pl.Ref, "T D"],
+        d_h_ref: Float[pl.Ref, "E C O"],
+        source_rank_ref: Int[pl.Ref, "E C"],
+        token_id_ref: Int[pl.Ref, "E C"],
+        valid_ref: Int[pl.Ref, "E C"],
+        dw13_ref: Float[pl.Ref, "E D O"],
+    ) -> None:
+        expert = pl.program_id(0)
+        hidden_tile = pl.program_id(1)
+        output_tile = pl.program_id(2)
+        hidden_start = hidden_tile * hidden_block
+        output_start = output_tile * output_block
+
+        def acc_scope(acc_ref) -> jax.Array:
+            def smem_scope(x_smem, d_h_smem, ready_barrier) -> None:
+                @pl.loop(0, row_tiles)
+                def _row_tile_loop(row_tile) -> None:
+                    row_start = row_tile * row_block
+                    row_offsets = jnp.arange(row_block, dtype=jnp.int32)
+                    rows_i = row_start + row_offsets
+                    valid = valid_ref[expert, rows_i] != 0
+                    src = source_rank_ref[expert, rows_i]
+                    token = token_id_ref[expert, rows_i]
+                    safe_src = jnp.where(valid, src, jnp.zeros((row_block,), dtype=src.dtype))
+                    safe_token = jnp.where(valid, token, jnp.zeros((row_block,), dtype=token.dtype))
+                    x_tile = jnp.zeros((row_block, hidden_block), dtype=x_ref.dtype)
+
+                    @pl.loop(0, row_block)
+                    def _source_row_loop(row) -> None:
+                        row_valid = valid[row]
+                        row_src = safe_src[row]
+                        row_token = safe_token[row]
+
+                        def _source_branch(static_src: int):
+                            def _load_source_row(_) -> jax.Array:
+                                source_x_ref = mgpu.remote_ref(
+                                    x_ref,
+                                    static_src,
+                                    device_id_type=pl.DeviceIdType.LOGICAL,
+                                )
+                                return source_x_ref[row_token, pl.ds(hidden_start, hidden_block)]
+
+                            return _load_source_row
+
+                        x_row = lax.switch(row_src, tuple(_source_branch(src_id) for src_id in range(ep_size)), None)
+                        x_row = jnp.where(
+                            row_valid,
+                            x_row,
+                            jnp.zeros((hidden_block,), dtype=x_ref.dtype),
+                        )
+                        nonlocal x_tile
+                        x_tile = lax.dynamic_update_slice(x_tile, x_row[None, :], (row, 0))
+
+                    x_smem[:, :] = x_tile
+
+                    mgpu.copy_gmem_to_smem(
+                        d_h_ref.at[
+                            expert,
+                            pl.ds(row_start, row_block),
+                            pl.ds(output_start, output_block),
+                        ],
+                        d_h_smem,
+                        ready_barrier,
+                    )
+                    mgpu.barrier_wait(ready_barrier)
+                    mgpu.commit_smem()
+                    mgpu.wgmma(acc_ref, mgpu.transpose_ref(x_smem, (1, 0)), d_h_smem)
+                    mgpu.wgmma_wait(0)
+
+            pl.run_scoped(
+                smem_scope,
+                x_smem=_w13_wgmma_smem((row_block, hidden_block), x_ref.dtype),
+                d_h_smem=_w13_wgmma_smem((row_block, output_block), d_h_ref.dtype),
+                ready_barrier=mgpu.Barrier(num_arrivals=1),
+            )
+            return acc_ref[...]
+
+        output = pl.run_scoped(acc_scope, acc_ref=mgpu.ACC((hidden_block, output_block)))
+        dw13_ref[
+            expert,
+            pl.ds(hidden_start, hidden_block),
+            pl.ds(output_start, output_block),
+        ] = output
+
+    out_shape = jax.ShapeDtypeStruct((experts_per_rank, hidden_dim, output_dim), jnp.float32)
     compiler_params = mgpu.CompilerParams(lowering_semantics=mgpu.LoweringSemantics.Lane)
     return mgpu.kernel(
         body,
         out_shape=out_shape,
         grid=(experts_per_rank, hidden_tiles, output_tiles),
         grid_names=("expert", "hidden_tile", "output_tile"),
+        compiler_params=compiler_params,
+    )
+
+
+def _make_source_push_w13_dw13_source_padded_partials_mgpu_kernel(
+    *,
+    ep_size: int,
+    row_block: int,
+    hidden_block: int,
+    output_block: int,
+    experts_per_rank: int,
+    rows: int,
+    max_source_rows: int,
+    hidden_dim: int,
+    output_dim: int,
+):
+    row_tiles = max_source_rows // row_block
+    hidden_tiles = hidden_dim // hidden_block
+    output_tiles = output_dim // output_block
+
+    def body(
+        x_ref: Float[pl.Ref, "T D"],
+        d_h_ref: Float[pl.Ref, "E C O"],
+        token_id_ref: Int[pl.Ref, "E C"],
+        valid_ref: Int[pl.Ref, "E C"],
+        src_base_ref: Int[pl.Ref, "S E"],
+        source_lengths_ref: Int[pl.Ref, "S E"],
+        partial_ref: Float[pl.Ref, "S E D O"],
+    ) -> None:
+        src = pl.program_id(0)
+        expert = pl.program_id(1)
+        hidden_tile = pl.program_id(2)
+        output_tile = pl.program_id(3)
+        hidden_start = hidden_tile * hidden_block
+        output_start = output_tile * output_block
+
+        def _source_branch(static_src: int):
+            def _body(_) -> jax.Array:
+                source_x_ref = mgpu.remote_ref(
+                    x_ref,
+                    static_src,
+                    device_id_type=pl.DeviceIdType.LOGICAL,
+                )
+                source_base = src_base_ref[static_src, expert]
+                source_length = source_lengths_ref[static_src, expert]
+
+                def acc_scope(acc_ref) -> jax.Array:
+                    def smem_scope(x_smem, d_h_smem, ready_barrier) -> None:
+                        @pl.loop(0, row_tiles)
+                        def _row_tile_loop(row_tile) -> None:
+                            source_row_start = row_tile * row_block
+                            row_start = source_base + source_row_start
+                            safe_row_start = jnp.minimum(
+                                row_start,
+                                jnp.asarray(rows - row_block, dtype=row_start.dtype),
+                            )
+                            row_offsets = jnp.arange(row_block, dtype=jnp.int32)
+                            rows_i = safe_row_start + row_offsets
+                            active = source_row_start + row_offsets < source_length
+                            valid = (valid_ref[expert, rows_i] != 0) & active
+                            safe_token = jnp.where(
+                                valid,
+                                token_id_ref[expert, rows_i],
+                                jnp.zeros((row_block,), dtype=jnp.int32),
+                            )
+                            x_tile = jnp.zeros((row_block, hidden_block), dtype=x_ref.dtype)
+
+                            @pl.loop(0, row_block)
+                            def _source_row_loop(row) -> None:
+                                row_valid = valid[row]
+                                row_token = safe_token[row]
+                                x_row = source_x_ref[row_token, pl.ds(hidden_start, hidden_block)]
+                                x_row = jnp.where(
+                                    row_valid,
+                                    x_row,
+                                    jnp.zeros((hidden_block,), dtype=x_ref.dtype),
+                                )
+                                nonlocal x_tile
+                                x_tile = lax.dynamic_update_slice(x_tile, x_row[None, :], (row, 0))
+
+                            x_smem[:, :] = x_tile
+
+                            mgpu.copy_gmem_to_smem(
+                                d_h_ref.at[
+                                    expert,
+                                    pl.ds(safe_row_start, row_block),
+                                    pl.ds(output_start, output_block),
+                                ],
+                                d_h_smem,
+                                ready_barrier,
+                            )
+                            mgpu.barrier_wait(ready_barrier)
+                            mgpu.commit_smem()
+                            mgpu.wgmma(acc_ref, mgpu.transpose_ref(x_smem, (1, 0)), d_h_smem)
+                            mgpu.wgmma_wait(0)
+
+                    pl.run_scoped(
+                        smem_scope,
+                        x_smem=_w13_wgmma_smem((row_block, hidden_block), x_ref.dtype),
+                        d_h_smem=_w13_wgmma_smem((row_block, output_block), d_h_ref.dtype),
+                        ready_barrier=mgpu.Barrier(num_arrivals=1),
+                    )
+                    return acc_ref[...]
+
+                return pl.run_scoped(acc_scope, acc_ref=mgpu.ACC((hidden_block, output_block)))
+
+            return _body
+
+        output = lax.switch(src, tuple(_source_branch(src_id) for src_id in range(ep_size)), None)
+        partial_ref[
+            src,
+            expert,
+            pl.ds(hidden_start, hidden_block),
+            pl.ds(output_start, output_block),
+        ] = output
+
+    out_shape = jax.ShapeDtypeStruct((ep_size, experts_per_rank, hidden_dim, output_dim), jnp.float32)
+    compiler_params = mgpu.CompilerParams(lowering_semantics=mgpu.LoweringSemantics.Lane)
+    return mgpu.kernel(
+        body,
+        out_shape=out_shape,
+        grid=(ep_size, experts_per_rank, hidden_tiles, output_tiles),
+        grid_names=("source", "expert", "hidden_tile", "output_tile"),
         compiler_params=compiler_params,
     )
 
@@ -2262,15 +4357,70 @@ def _validate_w13_expert_blocks_pallas_request(
     _validate_w13_wgmma_smem_shape((row_block, hidden_block), w13.dtype)
 
 
+def _validate_w13_local_swiglu_dw13_request(
+    x_expert_major: Array,
+    d_activation: Array,
+    z: Array,
+    valid: Array,
+) -> None:
+    if x_expert_major.ndim != 4:
+        raise ValueError(f"x_expert_major must have shape [dst, expert, capacity, D], got {x_expert_major.shape}")
+    if d_activation.ndim != 4:
+        raise ValueError(f"d_activation must have shape [dst, expert, capacity, I], got {d_activation.shape}")
+    if z.ndim != 4:
+        raise ValueError(f"z must have shape [dst, expert, capacity, twoI], got {z.shape}")
+    if d_activation.shape[:3] != x_expert_major.shape[:3]:
+        raise ValueError(
+            f"d_activation leading shape {d_activation.shape[:3]} must match x_expert_major {x_expert_major.shape[:3]}"
+        )
+    if z.shape[:3] != x_expert_major.shape[:3]:
+        raise ValueError(f"z leading shape {z.shape[:3]} must match x_expert_major {x_expert_major.shape[:3]}")
+    if z.shape[-1] != 2 * d_activation.shape[-1]:
+        raise ValueError(f"z output dim {z.shape[-1]} must be 2 * d_activation dim {d_activation.shape[-1]}")
+    if valid.shape != x_expert_major.shape[:3]:
+        raise ValueError(f"valid shape {valid.shape} must match expert rows {x_expert_major.shape[:3]}")
+
+
+def _validate_w13_local_swiglu_dw13_pallas_request(
+    x_expert_major: Array,
+    d_activation: Array,
+    z: Array,
+    valid: Array,
+    block_sizes: SourcePushW13BackwardTiledBlockSizes,
+) -> None:
+    _validate_w13_local_swiglu_dw13_request(x_expert_major, d_activation, z, valid)
+    if x_expert_major.shape[2] % block_sizes.row_block:
+        raise ValueError(
+            f"x_expert_major capacity {x_expert_major.shape[2]} must be divisible by row_block={block_sizes.row_block}"
+        )
+    if x_expert_major.shape[-1] % block_sizes.hidden_block:
+        raise ValueError(
+            f"x_expert_major hidden dim {x_expert_major.shape[-1]} must be divisible by "
+            f"hidden_block={block_sizes.hidden_block}"
+        )
+    if d_activation.shape[-1] % block_sizes.output_block:
+        raise ValueError(
+            f"d_activation dim {d_activation.shape[-1]} must be divisible by output_block={block_sizes.output_block}"
+        )
+    if z.shape[-1] % block_sizes.output_block:
+        raise ValueError(f"z output dim {z.shape[-1]} must be divisible by output_block={block_sizes.output_block}")
+    _validate_w13_wgmma_smem_shape((block_sizes.row_block, block_sizes.output_block), z.dtype)
+    _validate_w13_wgmma_smem_shape((block_sizes.row_block, block_sizes.hidden_block), x_expert_major.dtype)
+
+
+def _w13_wgmma_transforms(dtype):
+    return (
+        mgpu.TilingTransform((W13_WGMMA_TILE_M, W13_WGMMA_SWIZZLE_BYTES // jnp.dtype(dtype).itemsize)),
+        mgpu.SwizzleTransform(W13_WGMMA_SWIZZLE_BYTES),
+    )
+
+
 def _w13_wgmma_smem(shape: tuple[int, int], dtype):
     _validate_w13_wgmma_smem_shape(shape, dtype)
     return mgpu.SMEM(
         shape,
         dtype=dtype,
-        transforms=(
-            mgpu.TilingTransform((W13_WGMMA_TILE_M, W13_WGMMA_SWIZZLE_BYTES // jnp.dtype(dtype).itemsize)),
-            mgpu.SwizzleTransform(W13_WGMMA_SWIZZLE_BYTES),
-        ),
+        transforms=_w13_wgmma_transforms(dtype),
     )
 
 

@@ -6,6 +6,7 @@ import json
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import jax
 import numpy as np
@@ -189,6 +190,194 @@ def test_source_push_mlp_benchmark_accepts_direct_compact_w13_mode():
     assert "forward_w13_direct_compact_compute_only_local" in source_push_mlp_fwd_bwd_cli.MODES
 
 
+def test_source_push_mlp_benchmark_target_kernel_suite_sets_target_shape_and_modes():
+    args = source_push_mlp_fwd_bwd_cli.parse_source_push_mlp_fwd_bwd_args(["--target-kernel-suite"])
+
+    assert args.ep_size == 8
+    assert args.tokens_per_rank == 32768
+    assert args.hidden_dim == 2560
+    assert args.intermediate_dim == 1280
+    assert args.experts_per_rank == 32
+    assert args.topk == 4
+    assert args.capacity_factor == 1.25
+    assert args.backends == "source_push_pallas_mgpu"
+    assert args.routing == "roughly_balanced"
+    assert args.entries_per_rank == 288
+    assert args.inbox_slots == 12
+    assert args.send_worker_programs_per_peer == 2
+    assert args.worker_programs_per_peer == 32
+    assert args.send_pipeline_depth == 1
+    assert args.n_groups_per_job == 2
+    assert args.modes == ",".join(source_push_mlp_fwd_bwd_cli.TARGET_KERNEL_SUITE_MODES)
+
+
+def test_source_push_mlp_benchmark_accepts_source_push_jax_dy_route_selector():
+    args = source_push_mlp_fwd_bwd_cli.parse_source_push_mlp_fwd_bwd_args(
+        [
+            "--modes",
+            "backward_staged_blocks",
+            "--backends",
+            "source_push_pallas_mgpu",
+            "--backward-dy-route-implementation",
+            "source_push_jax",
+            "--backward-stop-after-stage",
+            "dy_route",
+        ]
+    )
+
+    assert args.backward_dy_route_implementation == "source_push_jax"
+    assert args.backward_stop_after_stage == "dy_route"
+
+
+def test_source_push_mlp_benchmark_accepts_split_dx13_dw13_selector():
+    selector = source_push_mlp_fwd_bwd_cli.SOURCE_PUSH_W13_BACKWARD_EXPERIMENT_COMPACT_DX_SOURCE_GATHER_DW13
+    args = source_push_mlp_fwd_bwd_cli.parse_source_push_mlp_fwd_bwd_args(
+        [
+            "--modes",
+            "forward_backward_reduced",
+            "--backends",
+            "source_push_pallas_mgpu",
+            "--backward-w13-implementation",
+            selector,
+        ]
+    )
+
+    assert args.backward_w13_implementation == selector
+
+
+def test_source_push_mlp_benchmark_reduced_mode_passes_compact_pallas_w13_selector(monkeypatch):
+    selector = source_push_mlp_fwd_bwd_cli.SOURCE_PUSH_W13_BACKWARD_IMPLEMENTATION_PALLAS_MGPU_COMPACT
+    config, host_inputs, route_table, x, route_weights, w13, w2 = _small_source_push_mlp_gradient_case()
+    mesh = Mesh(np.asarray(jax.devices()[:1]), (source_push_inbox.AXIS,), axis_types=(AxisType.Explicit,))
+    calls = []
+
+    def fake_reduced(
+        config_arg,
+        mesh_arg,
+        host_inputs_arg,
+        route_table_arg,
+        implementation_arg,
+        dy_route_arg,
+        w2_arg,
+        w2_matmul_arg,
+        w2_swiglu_arg,
+        w13_arg,
+        return_arg,
+        return_route_indices_arg,
+        x_arg,
+        route_weights_arg,
+        w13_weights_arg,
+        w2_weights_arg,
+    ):
+        calls.append(
+            (
+                config_arg,
+                mesh_arg,
+                host_inputs_arg,
+                route_table_arg,
+                implementation_arg,
+                dy_route_arg,
+                w2_arg,
+                w2_matmul_arg,
+                w2_swiglu_arg,
+                w13_arg,
+                return_arg,
+                return_route_indices_arg,
+                x_arg.shape,
+                route_weights_arg.shape,
+                w13_weights_arg.shape,
+                w2_weights_arg.shape,
+            )
+        )
+        return jnp.array(0.0), jnp.array(0, dtype=jnp.int32), jnp.array(0.0)
+
+    monkeypatch.setattr(source_push_mlp_fwd_bwd_cli, "_preplanned_source_push_fwd_bwd_reduced", fake_reduced)
+
+    fn, args = source_push_mlp_fwd_bwd_cli._make_benchmark_callable(
+        config,
+        backend="source_push_pallas_mgpu",
+        mode="forward_backward_reduced",
+        mesh=mesh,
+        host_inputs=host_inputs,
+        route_table=route_table,
+        inputs={
+            "x_source": x,
+            "combine_source": route_weights,
+            "w13_source": w13,
+            "w2_source": w2,
+        },
+        backward_w13_implementation=selector,
+        backward_return_implementation="pallas_mgpu",
+    )
+
+    output = fn(*args)
+
+    assert output[1].shape == ()
+    assert len(calls) == 1
+    assert calls[0][0] is config
+    assert calls[0][1] is mesh
+    assert calls[0][2] is host_inputs
+    assert calls[0][3] is route_table
+    assert calls[0][4] == "pallas_mgpu"
+    assert calls[0][9] == selector
+    assert calls[0][10] == "pallas_mgpu"
+    assert calls[0][11] is not None
+    assert calls[0][12:] == (x.shape, route_weights.shape, w13.shape, w2.shape)
+
+
+def test_source_push_mlp_backward_w13_local_swiglu_prefills_x_before_timed_call(monkeypatch):
+    selector = source_push_mlp_fwd_bwd_cli.SOURCE_PUSH_W13_BACKWARD_DIAGNOSTIC_PALLAS_MGPU_LOCAL_SWIGLU_DW13_ONLY
+    config, host_inputs, route_table, x, _route_weights, w13, w2 = _small_source_push_mlp_gradient_case()
+    mesh = Mesh(np.asarray(jax.devices()[:1]), (source_push_inbox.AXIS,), axis_types=(AxisType.Explicit,))
+    captured_x = []
+
+    def fake_local_swiglu_dw13(x_expert_major, d_activation, z, valid, **_kwargs):
+        captured_x.append(np.asarray(jax.device_get(x_expert_major)))
+        return source_push_mlp_fwd_bwd_cli.SourcePushW13CompactBackwardOutput(
+            x_expert_major=jnp.zeros((0,), dtype=jnp.float32),
+            dx_expert_major=jnp.zeros((0,), dtype=jnp.float32),
+            dw13=jnp.zeros(
+                (config.ep_size, config.experts_per_rank, config.hidden_dim, 2 * config.intermediate_dim),
+                dtype=jnp.float32,
+            ),
+        )
+
+    monkeypatch.setattr(
+        source_push_mlp_fwd_bwd_cli,
+        "_source_push_w13_backward_expert_blocks_local_swiglu_dw13_only_pallas_mgpu",
+        fake_local_swiglu_dw13,
+    )
+
+    rows = source_push_mlp_fwd_bwd_cli._run_source_push_backward_w13_only(
+        config,
+        mesh=mesh,
+        host_inputs=host_inputs,
+        route_table=route_table,
+        inputs={
+            "x_source": x,
+            "w13_source": w13,
+            "w2_source": w2,
+        },
+        warmup=0,
+        steps=1,
+        repeat_runs=1,
+        backward_w13_implementation=selector,
+        backward_w13_block_sizes=None,
+        backward_w13_lowering_semantics="auto",
+    )
+
+    safe_src = jnp.where(route_table.valid_by_expert, route_table.source_rank_by_expert, 0)
+    safe_token = jnp.where(route_table.valid_by_expert, route_table.token_id_by_expert, 0)
+    expected_x = x.at[safe_src, safe_token].get()
+    expected_x = jnp.where(route_table.valid_by_expert[..., None], expected_x, jnp.zeros_like(expected_x))
+
+    assert captured_x
+    for observed_x in captured_x:
+        np.testing.assert_allclose(observed_x, np.asarray(expected_x), atol=0, rtol=0)
+    assert rows[-1]["resolved_backward_w13_implementation"] == selector
+    assert rows[-1]["w13_backward_component"] == "dw13"
+
+
 def test_source_push_mlp_benchmark_accepts_refill_sweep_flags():
     args = source_push_mlp_fwd_bwd_cli.parse_source_push_mlp_fwd_bwd_args(
         [
@@ -353,6 +542,16 @@ def test_source_push_mlp_benchmark_staged_block_stop_stage_reports_reached_stage
 
     for stop_stage, expected in stage_sets.items():
         assert source_push_mlp_fwd_bwd_cli._backward_staged_block_timed_stages(stop_stage) == expected
+
+    assert source_push_mlp_fwd_bwd_cli._backward_staged_block_timed_stages(
+        source_push_mlp_fwd_bwd_cli.BACKWARD_STAGE_W13,
+        source_push_mlp_fwd_bwd_cli.SOURCE_PUSH_W13_BACKWARD_DIAGNOSTIC_PALLAS_MGPU_LOCAL_SWIGLU_DW13_ONLY,
+    ) == (
+        source_push_mlp_fwd_bwd_cli.BACKWARD_STAGE_DY_ROUTE,
+        source_push_mlp_fwd_bwd_cli.BACKWARD_STAGE_W2,
+        source_push_mlp_fwd_bwd_cli.BACKWARD_STAGE_X_REMAT,
+        source_push_mlp_fwd_bwd_cli.BACKWARD_STAGE_W13,
+    )
 
 
 def test_source_push_profile_defaults_are_copied():
@@ -2206,6 +2405,47 @@ def test_source_push_mlp_backward_staged_blocks_uses_compact_h_forward(monkeypat
     assert rows[-1]["stage"] == source_push_mlp_fwd_bwd_cli.BACKWARD_STAGE_DY_ROUTE
 
 
+def test_source_push_mlp_backward_w13_diagnostic_flops_use_component_work():
+    config = SimpleNamespace(hidden_dim=8, intermediate_dim=4)
+    queue_stats = {
+        "valid_rows_per_rank_mean": 10,
+        "rounded_rows_per_rank_mean": 12,
+    }
+
+    full_useful, full_rounded = source_push_mlp_fwd_bwd_cli._backward_stage_flops_per_rank(
+        config,
+        queue_stats,
+        source_push_mlp_fwd_bwd_cli.BACKWARD_STAGE_W13,
+    )
+    dx_useful, dx_rounded = source_push_mlp_fwd_bwd_cli._backward_stage_flops_per_rank(
+        config,
+        queue_stats,
+        source_push_mlp_fwd_bwd_cli.BACKWARD_STAGE_W13,
+        w13_backward_component="dx",
+    )
+    dw13_useful, dw13_rounded = source_push_mlp_fwd_bwd_cli._backward_stage_flops_per_rank(
+        config,
+        queue_stats,
+        source_push_mlp_fwd_bwd_cli.BACKWARD_STAGE_W13,
+        w13_backward_component="dw13",
+    )
+
+    assert (dx_useful, dx_rounded) == (full_useful / 2, full_rounded / 2)
+    assert (dw13_useful, dw13_rounded) == (full_useful / 2, full_rounded / 2)
+    assert (
+        source_push_mlp_fwd_bwd_cli._w13_backward_component(
+            source_push_mlp_fwd_bwd_cli.SOURCE_PUSH_W13_BACKWARD_DIAGNOSTIC_PALLAS_MGPU_COMPACT_DX_ONLY
+        )
+        == "dx"
+    )
+    assert (
+        source_push_mlp_fwd_bwd_cli._w13_backward_component(
+            source_push_mlp_fwd_bwd_cli.SOURCE_PUSH_W13_BACKWARD_DIAGNOSTIC_SOURCE_GATHER_DW13_ONLY
+        )
+        == "dw13"
+    )
+
+
 def _naive_source_push_forward(
     config: source_push_inbox.PushInboxConfig,
     x: np.ndarray,
@@ -2481,8 +2721,14 @@ def test_source_push_cli_runs_every_send_pipeline_depth_sweep_value(monkeypatch,
     calls = []
 
     def fake_run_source_push_inbox(config, **kwargs):
-        calls.append((config.send_pipeline_depth, kwargs["repeat_runs"]))
-        return [{"send_pipeline_depth": config.send_pipeline_depth, "repeat_runs": kwargs["repeat_runs"]}]
+        calls.append((config.send_pipeline_depth, config.worker_programs_per_peer, kwargs["repeat_runs"]))
+        return [
+            {
+                "send_pipeline_depth": config.send_pipeline_depth,
+                "worker_programs_per_peer": config.worker_programs_per_peer,
+                "repeat_runs": kwargs["repeat_runs"],
+            }
+        ]
 
     monkeypatch.setattr(source_push_cli, "run_source_push_inbox", fake_run_source_push_inbox)
 
@@ -2490,14 +2736,21 @@ def test_source_push_cli_runs_every_send_pipeline_depth_sweep_value(monkeypatch,
         [
             "--sweep-send-pipeline-depth",
             "1,2",
+            "--sweep-worker-programs-per-peer",
+            "16,32",
             "--repeat-runs",
             "1",
         ]
     )
 
     rows = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
-    assert calls == [(1, 1), (2, 1)]
-    assert [row["send_pipeline_depth"] for row in rows] == [1, 2]
+    assert calls == [(1, 16, 1), (2, 16, 1), (1, 32, 1), (2, 32, 1)]
+    assert [(row["send_pipeline_depth"], row["worker_programs_per_peer"]) for row in rows] == [
+        (1, 16),
+        (2, 16),
+        (1, 32),
+        (2, 32),
+    ]
 
 
 def test_source_push_cli_selects_source_push_plan_input_mode(monkeypatch, capsys):
@@ -3106,7 +3359,18 @@ def test_source_push_mlp_fwd_bwd_cli_accepts_forward_pack_probe_modes(monkeypatc
     ]
 
 
-@pytest.mark.parametrize("mode", ["backward_decomposed", "backward_staged_flat"])
+@pytest.mark.parametrize(
+    "mode",
+    [
+        "backward_decomposed",
+        "backward_staged_flat",
+        "backward_dy_route_only",
+        "backward_w2_only",
+        "backward_dx13_only",
+        "backward_dx13_push_contrib_only",
+        "backward_dx13_xla_route_buffer_direct_only",
+    ],
+)
 def test_source_push_mlp_fwd_bwd_cli_accepts_backward_modes(monkeypatch, capsys, mode):
     calls = []
 

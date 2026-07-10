@@ -8,6 +8,7 @@ import pytest
 from jax.sharding import Mesh, NamedSharding, PartitionSpec as P
 
 import levanter.grug._moe.source_push_mlp as source_push_mlp
+from levanter.grug._moe.source_push_backward_dy_route import _source_push_backward_dy_to_expert_major_reference
 from levanter.grug._moe.source_push_backward_w2 import (
     SOURCE_PUSH_W2_BACKWARD_IMPLEMENTATION_REFERENCE_MATMUL_PALLAS_MGPU_SWIGLU,
     SOURCE_PUSH_W2_MATMUL_BACKWARD_IMPLEMENTATION_PALLAS_MGPU,
@@ -20,6 +21,7 @@ from levanter.grug._moe.source_push_backward_w2 import (
     _expert_flat_rows,
     _source_push_w2_activation_and_weighted_activation_reference,
     _source_push_w2_backward_expert_blocks,
+    _source_push_w2_backward_expert_blocks_from_source_dy_reference,
     _source_push_w2_backward_for_expert_block_reference,
     _source_push_w2_backward_expert_blocks_reference,
     _source_push_w2_backward_from_flat_h,
@@ -91,6 +93,26 @@ def _flat_w2_backward_inputs():
     return h_blocks, route_blocks, dy_blocks, w2, valid, expert_base, flat_rows, dst_index, h, route_weight, dy
 
 
+def _w2_source_dy_route_inputs(dtype=jnp.float32):
+    h, route_weight, _dy_blocks, w2, valid = _w2_backward_inputs(dtype)
+    dy_source = jnp.linspace(-0.8, 1.1, 3 * 7 * HIDDEN_DIM, dtype=jnp.float32).reshape(3, 7, HIDDEN_DIM)
+    source_rank_by_expert = jnp.array(
+        [
+            [[0, 2, 1], [1, 0, 2]],
+            [[2, 1, 0], [0, 2, 1]],
+        ],
+        dtype=jnp.int32,
+    )
+    token_id_by_expert = jnp.array(
+        [
+            [[0, 6, 2], [5, 1, 4]],
+            [[3, 0, 6], [2, 5, 1]],
+        ],
+        dtype=jnp.int32,
+    )
+    return h, route_weight, dy_source.astype(dtype), w2, valid, source_rank_by_expert, token_id_by_expert
+
+
 @pytest.mark.parametrize("dtype,atol", [(jnp.float32, 1e-6), (jnp.bfloat16, 2e-2)])
 def test_source_push_w2_backward_expert_blocks_matches_existing_helper(dtype, atol):
     h, route_weight, dy, w2, valid = _w2_backward_inputs(dtype)
@@ -157,6 +179,91 @@ def test_source_push_w2_backward_expert_blocks_matches_existing_helper(dtype, at
     np.testing.assert_array_equal(np.asarray(observed.d_route_weight)[invalid], np.zeros(invalid.sum()))
 
 
+def test_source_push_w2_backward_from_source_dy_matches_separately_routed_dy_blocks():
+    h, route_weight, dy_source, w2, valid, source_rank_by_expert, token_id_by_expert = _w2_source_dy_route_inputs()
+    dy_blocks = _source_push_backward_dy_to_expert_major_reference(
+        dy_source,
+        source_rank_by_expert,
+        token_id_by_expert,
+        valid,
+    )
+
+    expected = _source_push_w2_backward_expert_blocks_reference(h, route_weight, dy_blocks, w2, valid)
+    observed = _source_push_w2_backward_expert_blocks_from_source_dy_reference(
+        h,
+        route_weight,
+        dy_source,
+        w2,
+        valid,
+        source_rank_by_expert,
+        token_id_by_expert,
+    )
+
+    np.testing.assert_allclose(np.asarray(observed.d_h), np.asarray(expected.d_h), atol=0, rtol=0)
+    np.testing.assert_allclose(
+        np.asarray(observed.d_route_weight),
+        np.asarray(expected.d_route_weight),
+        atol=0,
+        rtol=0,
+    )
+    np.testing.assert_allclose(np.asarray(observed.dw2), np.asarray(expected.dw2), atol=0, rtol=0)
+
+
+def test_source_push_w2_backward_from_source_dy_masks_invalid_rows():
+    h, route_weight, dy_source, w2, valid, source_rank_by_expert, token_id_by_expert = _w2_source_dy_route_inputs()
+    observed = _source_push_w2_backward_expert_blocks_from_source_dy_reference(
+        h,
+        route_weight,
+        dy_source,
+        w2,
+        valid,
+        source_rank_by_expert,
+        token_id_by_expert,
+    )
+
+    invalid = np.logical_not(np.asarray(valid))
+    np.testing.assert_array_equal(
+        np.asarray(observed.d_h)[invalid],
+        np.zeros((invalid.sum(), 2 * INTERMEDIATE_DIM)),
+    )
+    np.testing.assert_array_equal(np.asarray(observed.d_route_weight)[invalid], np.zeros(invalid.sum()))
+
+
+def test_source_push_w2_backward_from_source_dy_dtype_matches_routed_reference():
+    h, route_weight, dy_source, w2, valid, source_rank_by_expert, token_id_by_expert = _w2_source_dy_route_inputs(
+        jnp.bfloat16
+    )
+    dy_blocks = _source_push_backward_dy_to_expert_major_reference(
+        dy_source,
+        source_rank_by_expert,
+        token_id_by_expert,
+        valid,
+    )
+
+    expected = _source_push_w2_backward_expert_blocks_reference(h, route_weight, dy_blocks, w2, valid)
+    observed = _source_push_w2_backward_expert_blocks_from_source_dy_reference(
+        h,
+        route_weight,
+        dy_source,
+        w2,
+        valid,
+        source_rank_by_expert,
+        token_id_by_expert,
+    )
+
+    assert observed.d_h.dtype == expected.d_h.dtype
+    assert observed.d_route_weight.dtype == expected.d_route_weight.dtype
+    assert observed.dw2.dtype == expected.dw2.dtype
+    np.testing.assert_allclose(np.asarray(observed.d_h), np.asarray(expected.d_h), atol=0, rtol=0)
+    np.testing.assert_allclose(
+        np.asarray(observed.d_route_weight),
+        np.asarray(expected.d_route_weight),
+        atol=0,
+        rtol=0,
+    )
+    np.testing.assert_allclose(np.asarray(observed.dw2), np.asarray(expected.dw2), atol=0, rtol=0)
+
+
 def test_source_push_w2_backward_default_boundary_matches_reference():
     h, route_weight, dy, w2, valid = _w2_backward_inputs()
 
@@ -171,6 +278,23 @@ def test_source_push_w2_backward_default_boundary_matches_reference():
         rtol=0,
     )
     np.testing.assert_allclose(np.asarray(observed.dw2), np.asarray(expected.dw2), atol=0, rtol=0)
+
+
+def test_source_push_w2_backward_exposes_d_activation_for_dx13_boundary():
+    h, route_weight, dy, w2, valid = _w2_backward_inputs()
+    _activation, weighted_activation = _source_push_w2_activation_and_weighted_activation_reference(
+        h,
+        route_weight,
+        valid,
+    )
+    matmul_output = _source_push_w2_matmul_backward_reference(weighted_activation, dy, w2, valid)
+
+    observed = _source_push_w2_backward_expert_blocks_reference(h, route_weight, dy, w2, valid)
+    expected = matmul_output.d_weighted_activation * route_weight.astype(jnp.float32)[..., None]
+    expected = jnp.where(valid[..., None], expected, jnp.zeros_like(expected))
+
+    assert observed.d_activation is not None
+    np.testing.assert_allclose(np.asarray(observed.d_activation), np.asarray(expected), atol=1e-6, rtol=1e-6)
 
 
 def test_source_push_w2_swiglu_backward_pallas_interpret_matches_reference():
@@ -471,6 +595,14 @@ def test_source_push_w2_backward_stage_selectors_match_combined_implementations(
     )
 
     np.testing.assert_allclose(np.asarray(observed_reference.d_h), np.asarray(expected_reference.d_h), atol=0, rtol=0)
+    assert observed_reference.d_activation is not None
+    assert expected_reference.d_activation is not None
+    np.testing.assert_allclose(
+        np.asarray(observed_reference.d_activation),
+        np.asarray(expected_reference.d_activation),
+        atol=0,
+        rtol=0,
+    )
     np.testing.assert_allclose(
         np.asarray(observed_reference.d_route_weight),
         np.asarray(expected_reference.d_route_weight),
@@ -502,6 +634,14 @@ def test_source_push_w2_backward_stage_selectors_match_combined_implementations(
     )
 
     np.testing.assert_allclose(np.asarray(observed_partial.d_h), np.asarray(expected_partial.d_h), atol=0, rtol=0)
+    assert observed_partial.d_activation is not None
+    assert expected_partial.d_activation is not None
+    np.testing.assert_allclose(
+        np.asarray(observed_partial.d_activation),
+        np.asarray(expected_partial.d_activation),
+        atol=0,
+        rtol=0,
+    )
     np.testing.assert_allclose(
         np.asarray(observed_partial.d_route_weight),
         np.asarray(expected_partial.d_route_weight),

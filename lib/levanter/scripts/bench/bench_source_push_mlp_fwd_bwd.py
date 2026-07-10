@@ -11,10 +11,11 @@ import argparse
 import json
 import math
 import os
+import sys
 import time
 import traceback
-from collections.abc import Callable, Sequence
-from dataclasses import asdict
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import asdict, replace
 from itertools import product
 from statistics import median
 from typing import Any, NamedTuple
@@ -22,14 +23,37 @@ from typing import Any, NamedTuple
 import jax
 import jax.numpy as jnp
 import numpy as np
+from jax.experimental.pallas import mosaic_gpu as mgpu
 from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P
 
 import levanter.grug._moe.source_push_mlp as source_push_mlp
 from levanter.grug._moe.source_push_backward_dy_route import (
+    SOURCE_PUSH_DY_ROUTE_IMPLEMENTATION_SOURCE_PUSH_JAX,
     SOURCE_PUSH_DY_ROUTE_IMPLEMENTATION_SOURCE_PUSH_PALLAS_MGPU,
     _source_push_backward_dy_to_expert_major,
+    _source_push_backward_dy_to_expert_major_from_plan_source_push_jax,
     _source_push_backward_dy_to_expert_major_source_push_pallas_call,
     _source_push_backward_dy_to_h_rows,
+)
+from levanter.grug._moe.source_push_backward_dx13 import (
+    SOURCE_PUSH_DX13_IMPLEMENTATION_PALLAS_MGPU,
+    SourcePushDx13PallasBlockSizes,
+    SourcePushDx13SourceCompactOutput,
+    _dx13_max_source_group_rows,
+    _source_push_dx13_source_grouped_sharded_mgpu_kernel,
+    source_push_dx13_pallas_resolved_block_sizes,
+    source_push_dx13_compact_assignment_slots_from_fields,
+    source_push_dx13_contrib_buffer_from_expert_reference,
+    source_push_dx13_expert_major_store_zero_pallas_mgpu,
+    source_push_dx13_push_compact,
+    source_push_dx13_push_compact_contrib,
+    source_push_dx13_push_compact_xla,
+    source_push_dx13_push_contrib,
+    source_push_dx13_push_contrib_block_contiguous_pallas_mgpu,
+    source_push_dx13_push_route_buffer,
+    source_push_dx13_source_route_buffer_reference,
+    source_push_dx13_source_compact_combine_reference,
+    source_push_dx13_source_compact_to_route_buffer_reference,
 )
 from levanter.grug._moe.source_push_backward_return import (
     source_push_backward_return,
@@ -38,14 +62,53 @@ from levanter.grug._moe.source_push_backward_return import (
     source_push_backward_return_route_indices_jax,
 )
 from levanter.grug._moe.source_push_backward_w13 import (
+    SOURCE_PUSH_X_TO_W13_ROWS_IMPLEMENTATION_PALLAS_MGPU,
+    SOURCE_PUSH_W13_BACKWARD_DIAGNOSTIC_PALLAS_MGPU_COMPACT_DW13_ONLY,
     SOURCE_PUSH_W13_BACKWARD_DIAGNOSTIC_PALLAS_MGPU_COMPACT_DX_ONLY,
+    SOURCE_PUSH_W13_BACKWARD_DIAGNOSTIC_PALLAS_MGPU_EXACT_FLAT_DW13_ONLY,
+    SOURCE_PUSH_W13_BACKWARD_DIAGNOSTIC_PALLAS_MGPU_LOCAL_SWIGLU_GATE_DW13_ONLY,
+    SOURCE_PUSH_W13_BACKWARD_DIAGNOSTIC_PALLAS_MGPU_LOCAL_LINEAR_DW13_ONLY,
+    SOURCE_PUSH_W13_BACKWARD_DIAGNOSTIC_PALLAS_MGPU_LOCAL_SWIGLU_DW13_ONLY,
+    SOURCE_PUSH_W13_BACKWARD_DIAGNOSTIC_PALLAS_MGPU_LOCAL_SWIGLU_PERSISTENT_DW13_ONLY,
+    SOURCE_PUSH_W13_BACKWARD_DIAGNOSTIC_PALLAS_MGPU_LOCAL_SWIGLU_SPLIT_DW13_ONLY,
+    SOURCE_PUSH_W13_BACKWARD_DIAGNOSTIC_PALLAS_MGPU_LOCAL_SWIGLU_UP_DW13_ONLY,
+    SOURCE_PUSH_W13_BACKWARD_DIAGNOSTIC_PALLAS_MGPU_PREFILLED_X_DW13_ONLY,
+    SOURCE_PUSH_W13_BACKWARD_DIAGNOSTIC_PALLAS_MGPU_SOURCE_PADDED_PARTIALS_DW13_ONLY,
     SOURCE_PUSH_W13_BACKWARD_DIAGNOSTIC_SOURCE_GATHER_DW13_ONLY,
+    SOURCE_PUSH_W13_BACKWARD_DIAGNOSTIC_XLA_COMPACT_DW13_ONLY,
+    SOURCE_PUSH_W13_BACKWARD_DIAGNOSTIC_XLA_LOCAL_SWIGLU_DW13_ONLY,
+    SOURCE_PUSH_W13_BACKWARD_DIAGNOSTIC_XLA_SOURCE_PADDED_DW13_ONLY,
+    SOURCE_PUSH_W13_BACKWARD_DIAGNOSTIC_IMPLEMENTATIONS,
+    SOURCE_PUSH_W13_BACKWARD_EXPERIMENT_COMPACT_DX_SOURCE_GATHER_DW13,
     SOURCE_PUSH_W13_BACKWARD_IMPLEMENTATION_PALLAS_MGPU_COMPACT,
     SOURCE_PUSH_W13_BACKWARD_IMPLEMENTATION_TILED,
+    MIN_MOSAIC_INT32_TRANSFER_ELEMENTS,
+    SourcePushXToW13RowsPallasBlockSizes,
+    SourcePushW13CompactBackwardOutput,
+    SourcePushW13BackwardTiledBlockSizes,
+    _source_push_w13_backward_expert_blocks_compact_dx_source_gather_dw13,
+    _source_push_w13_backward_expert_blocks_dw13_only_pallas_mgpu,
+    _source_push_w13_backward_expert_blocks_dw13_only_exact_flat_pallas_mgpu,
     _source_push_w13_backward_expert_blocks_dx_only_pallas_mgpu,
+    _source_push_w13_backward_expert_blocks_local_swiglu_gate_dw13_only_pallas_mgpu,
+    _source_push_w13_backward_expert_blocks_local_swiglu_dw13_only_pallas_mgpu,
+    _source_push_w13_backward_expert_blocks_local_swiglu_persistent_dw13_only_pallas_mgpu,
+    _source_push_w13_backward_expert_blocks_local_swiglu_split_dw13_only_pallas_mgpu,
+    _source_push_w13_backward_expert_blocks_local_linear_dw13_only_pallas_mgpu,
+    _source_push_w13_backward_expert_blocks_local_swiglu_up_dw13_only_pallas_mgpu,
     _source_push_w13_backward_expert_blocks_pallas_mgpu,
+    _source_push_w13_backward_expert_blocks_prefilled_x_dw13_only_pallas_mgpu,
+    _source_push_w13_dw13_source_padded_partials_pallas_mgpu,
+    source_push_w13_dw13_default_block_sizes,
+    source_push_x_to_w13_rows,
+    source_push_w13_backward_expert_blocks_dw13_only_xla,
+    source_push_w13_backward_expert_blocks_local_swiglu_dw13_only_xla,
     source_push_w13_backward,
+    source_push_w13_backward_diagnostic_component,
     source_push_w13_backward_expert_blocks_source_gather_dw13_only,
+    source_push_w13_backward_expert_blocks_source_padded_dw13_only_xla,
+    source_push_w13_backward_is_diagnostic_only,
+    source_push_w13_backward_uses_local_dw13_default_block_sizes,
     source_push_w13_backward_expert_blocks_tiled_reference,
 )
 from levanter.grug._moe.source_push_backward_w2 import (
@@ -97,7 +160,11 @@ from levanter.grug._moe.source_push_inbox import (
     _sharded_raw_token_w13_h_kernel,
     _sharded_raw_token_w13_h_compact_kernel,
 )
-from levanter.grug._moe.source_push_inbox_profiles import SOURCE_PUSH_PROFILES, source_push_profile_defaults
+from levanter.grug._moe.source_push_inbox_profiles import (
+    SOURCE_PUSH_PROFILE_STABLE_216,
+    SOURCE_PUSH_PROFILES,
+    source_push_profile_defaults,
+)
 from levanter.grug._moe.source_push_mlp import (
     SOURCE_PUSH_MLP_IMPLEMENTATION_PALLAS_MGPU,
     SOURCE_PUSH_MLP_IMPLEMENTATION_REFERENCE,
@@ -122,6 +189,11 @@ KERNEL_NAME = "source_push_mlp_fwd_bwd"
 SOURCE_PUSH_W13_STABLE_BASELINE_TFLOPS_PER_RANK = 216.949
 MODE_FORWARD = "forward"
 MODE_FORWARD_BACKWARD = "forward_backward"
+MODE_FORWARD_BACKWARD_REDUCED = "forward_backward_reduced"
+MODE_FORWARD_BACKWARD_DX_CHECKSUM = "forward_backward_dx_checksum"
+MODE_FORWARD_BACKWARD_DROUTE_CHECKSUM = "forward_backward_droute_checksum"
+MODE_FORWARD_BACKWARD_DW13_CHECKSUM = "forward_backward_dw13_checksum"
+MODE_FORWARD_BACKWARD_DW2_CHECKSUM = "forward_backward_dw2_checksum"
 MODE_FORWARD_DECOMPOSED = "forward_decomposed"
 MODE_FORWARD_DECOMPOSED_RAW_TOKENS = "forward_decomposed_raw_tokens"
 MODE_FORWARD_W13_DIRECT_COMPACT = "forward_w13_direct_compact"
@@ -139,6 +211,21 @@ MODE_FORWARD_PACK_STATIC_SHARD = "forward_pack_static_shard"
 MODE_BACKWARD_DECOMPOSED = "backward_decomposed"
 MODE_BACKWARD_STAGED_FLAT = "backward_staged_flat"
 MODE_BACKWARD_STAGED_BLOCKS = "backward_staged_blocks"
+MODE_BACKWARD_DY_ROUTE_ONLY = "backward_dy_route_only"
+MODE_BACKWARD_W2_ONLY = "backward_w2_only"
+MODE_BACKWARD_W13_ONLY = "backward_w13_only"
+MODE_BACKWARD_DX13_ONLY = "backward_dx13_only"
+MODE_BACKWARD_DX13_STORE_ZERO_ONLY = "backward_dx13_store_zero_only"
+MODE_BACKWARD_DX13_ROUTE_BUFFER_ONLY = "backward_dx13_route_buffer_only"
+MODE_BACKWARD_DX13_PUSH_CONTRIB_ONLY = "backward_dx13_push_contrib_only"
+MODE_BACKWARD_DX13_SOURCE_COMPACT_ONLY = "backward_dx13_source_compact_only"
+MODE_BACKWARD_DX13_SOURCE_COMPACT_BLOCK_ONLY = "backward_dx13_source_compact_block_only"
+MODE_BACKWARD_DX13_SOURCE_COMPACT_COMBINE_ONLY = "backward_dx13_source_compact_combine_only"
+MODE_BACKWARD_DX13_XLA_SOURCE_COMPACT_DIRECT_ONLY = "backward_dx13_xla_source_compact_direct_only"
+MODE_BACKWARD_DX13_XLA_ROUTE_BUFFER_DIRECT_ONLY = "backward_dx13_xla_route_buffer_direct_only"
+MODE_BACKWARD_DX13_SOURCE_GROUPED_ONLY = "backward_dx13_source_grouped_only"
+MODE_BACKWARD_RETURN_ONLY = "backward_return_only"
+MODE_BACKWARD_RETURN_COMPONENTS_ONLY = "backward_return_components_only"
 FORWARD_DECOMPOSED_STAGE_PACK_INPUTS = "pack_inputs"
 FORWARD_DECOMPOSED_STAGE_PACK_INPUTS_TOKEN_PACK = "pack_inputs_token_pack"
 FORWARD_DECOMPOSED_STAGE_PACK_INPUTS_H_ROUTE_WEIGHTS = "pack_inputs_h_route_weights"
@@ -162,6 +249,8 @@ BACKWARD_STAGE_W2_SCATTER = "w2_scatter"
 BACKWARD_STAGE_SWIGLU = "swiglu_backward"
 BACKWARD_STAGE_X_REMAT = "x_rematerialization"
 BACKWARD_STAGE_W13 = "w13_backward"
+BACKWARD_STAGE_DX13_PUSH = "dx13_push_compact"
+BACKWARD_STAGE_DX13_SOURCE_GROUPED = "dx13_source_grouped"
 BACKWARD_STAGE_DX_COMBINE = "dx_return_combine"
 BACKWARD_IMPLEMENTATION_DEFAULT = "default"
 BACKWARD_STOP_AFTER_NONE = "none"
@@ -177,6 +266,7 @@ BACKWARD_DY_ROUTE_IMPLEMENTATIONS = (
     "reference",
     "pallas_mgpu",
     "source_push_pallas_mgpu",
+    SOURCE_PUSH_DY_ROUTE_IMPLEMENTATION_SOURCE_PUSH_JAX,
 )
 BACKWARD_W2_IMPLEMENTATIONS = (
     BACKWARD_IMPLEMENTATION_DEFAULT,
@@ -191,9 +281,34 @@ BACKWARD_W13_IMPLEMENTATIONS = (
     "tiled",
     "pallas_mgpu",
     SOURCE_PUSH_W13_BACKWARD_IMPLEMENTATION_PALLAS_MGPU_COMPACT,
-    SOURCE_PUSH_W13_BACKWARD_DIAGNOSTIC_PALLAS_MGPU_COMPACT_DX_ONLY,
-    SOURCE_PUSH_W13_BACKWARD_DIAGNOSTIC_SOURCE_GATHER_DW13_ONLY,
+    SOURCE_PUSH_W13_BACKWARD_EXPERIMENT_COMPACT_DX_SOURCE_GATHER_DW13,
+    *SOURCE_PUSH_W13_BACKWARD_DIAGNOSTIC_IMPLEMENTATIONS,
 )
+BACKWARD_W13_IMPLEMENTATION_PALLAS_MGPU_LOCAL_SWIGLU_DX13_DW13 = "pallas_mgpu_local_swiglu_dx13_dw13"
+BACKWARD_W13_IMPLEMENTATION_PALLAS_MGPU_DX13_XLA_LOCAL_SWIGLU_DW13 = "pallas_mgpu_dx13_xla_local_swiglu_dw13"
+BACKWARD_W13_IMPLEMENTATION_PALLAS_MGPU_DX13_SPLIT_LOCAL_SWIGLU_DW13 = "pallas_mgpu_dx13_split_local_swiglu_dw13"
+BACKWARD_W13_IMPLEMENTATION_XLA_DX13_XLA_LOCAL_SWIGLU_DW13 = "xla_dx13_xla_local_swiglu_dw13"
+BACKWARD_W13_IMPLEMENTATION_XLA_DX13_ROUTE_BUFFER_XLA_LOCAL_SWIGLU_DW13 = "xla_dx13_route_buffer_xla_local_swiglu_dw13"
+BACKWARD_W13_IMPLEMENTATION_XLA_DX13_SOURCE_GATHER_DW13 = "xla_dx13_source_gather_dw13"
+BACKWARD_W13_IMPLEMENTATION_XLA_DX13_PALLAS_X_REMAT_XLA_LOCAL_SWIGLU_DW13 = (
+    "xla_dx13_pallas_x_remat_xla_local_swiglu_dw13"
+)
+BACKWARD_W13_IMPLEMENTATIONS = (
+    *BACKWARD_W13_IMPLEMENTATIONS,
+    BACKWARD_W13_IMPLEMENTATION_PALLAS_MGPU_LOCAL_SWIGLU_DX13_DW13,
+    BACKWARD_W13_IMPLEMENTATION_PALLAS_MGPU_DX13_XLA_LOCAL_SWIGLU_DW13,
+    BACKWARD_W13_IMPLEMENTATION_PALLAS_MGPU_DX13_SPLIT_LOCAL_SWIGLU_DW13,
+    BACKWARD_W13_IMPLEMENTATION_XLA_DX13_XLA_LOCAL_SWIGLU_DW13,
+    BACKWARD_W13_IMPLEMENTATION_XLA_DX13_ROUTE_BUFFER_XLA_LOCAL_SWIGLU_DW13,
+    BACKWARD_W13_IMPLEMENTATION_XLA_DX13_SOURCE_GATHER_DW13,
+    BACKWARD_W13_IMPLEMENTATION_XLA_DX13_PALLAS_X_REMAT_XLA_LOCAL_SWIGLU_DW13,
+)
+BACKWARD_DX13_IMPLEMENTATION_XLA_EXPERT_MAJOR = "xla_expert_major"
+BACKWARD_DX13_IMPLEMENTATIONS = (
+    SOURCE_PUSH_DX13_IMPLEMENTATION_PALLAS_MGPU,
+    BACKWARD_DX13_IMPLEMENTATION_XLA_EXPERT_MAJOR,
+)
+BACKWARD_W13_LOWERING_SEMANTICS = ("auto", "lane", "warpgroup")
 BACKWARD_RETURN_IMPLEMENTATIONS = (
     BACKWARD_IMPLEMENTATION_DEFAULT,
     "jax",
@@ -220,7 +335,25 @@ BACKWARD_W2_SPLIT_STAGES = (
 )
 
 
-def _backward_staged_block_timed_stages(stop_after_stage: str) -> tuple[str, ...]:
+def _w13_implementation_uses_separate_x_remat(w13_implementation: str) -> bool:
+    return w13_implementation in (
+        SOURCE_PUSH_W13_BACKWARD_DIAGNOSTIC_PALLAS_MGPU_LOCAL_SWIGLU_DW13_ONLY,
+        SOURCE_PUSH_W13_BACKWARD_DIAGNOSTIC_PALLAS_MGPU_LOCAL_SWIGLU_PERSISTENT_DW13_ONLY,
+        SOURCE_PUSH_W13_BACKWARD_DIAGNOSTIC_PALLAS_MGPU_LOCAL_SWIGLU_SPLIT_DW13_ONLY,
+        SOURCE_PUSH_W13_BACKWARD_DIAGNOSTIC_XLA_LOCAL_SWIGLU_DW13_ONLY,
+        BACKWARD_W13_IMPLEMENTATION_PALLAS_MGPU_LOCAL_SWIGLU_DX13_DW13,
+        BACKWARD_W13_IMPLEMENTATION_PALLAS_MGPU_DX13_XLA_LOCAL_SWIGLU_DW13,
+        BACKWARD_W13_IMPLEMENTATION_PALLAS_MGPU_DX13_SPLIT_LOCAL_SWIGLU_DW13,
+        BACKWARD_W13_IMPLEMENTATION_XLA_DX13_XLA_LOCAL_SWIGLU_DW13,
+        BACKWARD_W13_IMPLEMENTATION_XLA_DX13_ROUTE_BUFFER_XLA_LOCAL_SWIGLU_DW13,
+        BACKWARD_W13_IMPLEMENTATION_XLA_DX13_PALLAS_X_REMAT_XLA_LOCAL_SWIGLU_DW13,
+    )
+
+
+def _backward_staged_block_timed_stages(
+    stop_after_stage: str,
+    w13_implementation: str = BACKWARD_IMPLEMENTATION_DEFAULT,
+) -> tuple[str, ...]:
     stages = (BACKWARD_STAGE_DY_ROUTE,)
     if stop_after_stage in (
         BACKWARD_STAGE_W2,
@@ -230,6 +363,8 @@ def _backward_staged_block_timed_stages(stop_after_stage: str) -> tuple[str, ...
     ):
         stages = (*stages, BACKWARD_STAGE_W2)
     if stop_after_stage in (BACKWARD_STAGE_W13, BACKWARD_STAGE_DX_COMBINE, BACKWARD_STOP_AFTER_NONE):
+        if _w13_implementation_uses_separate_x_remat(w13_implementation):
+            stages = (*stages, BACKWARD_STAGE_X_REMAT)
         stages = (*stages, BACKWARD_STAGE_W13)
     if stop_after_stage in (BACKWARD_STAGE_DX_COMBINE, BACKWARD_STOP_AFTER_NONE):
         stages = (*stages, BACKWARD_STAGE_DX_COMBINE)
@@ -239,6 +374,11 @@ def _backward_staged_block_timed_stages(stop_after_stage: str) -> tuple[str, ...
 MODES = (
     MODE_FORWARD,
     MODE_FORWARD_BACKWARD,
+    MODE_FORWARD_BACKWARD_REDUCED,
+    MODE_FORWARD_BACKWARD_DX_CHECKSUM,
+    MODE_FORWARD_BACKWARD_DROUTE_CHECKSUM,
+    MODE_FORWARD_BACKWARD_DW13_CHECKSUM,
+    MODE_FORWARD_BACKWARD_DW2_CHECKSUM,
     MODE_FORWARD_DECOMPOSED,
     MODE_FORWARD_DECOMPOSED_RAW_TOKENS,
     MODE_FORWARD_W13_DIRECT_COMPACT,
@@ -256,7 +396,66 @@ MODES = (
     MODE_BACKWARD_DECOMPOSED,
     MODE_BACKWARD_STAGED_FLAT,
     MODE_BACKWARD_STAGED_BLOCKS,
+    MODE_BACKWARD_DY_ROUTE_ONLY,
+    MODE_BACKWARD_W2_ONLY,
+    MODE_BACKWARD_W13_ONLY,
+    MODE_BACKWARD_DX13_ONLY,
+    MODE_BACKWARD_DX13_STORE_ZERO_ONLY,
+    MODE_BACKWARD_DX13_ROUTE_BUFFER_ONLY,
+    MODE_BACKWARD_DX13_PUSH_CONTRIB_ONLY,
+    MODE_BACKWARD_DX13_SOURCE_COMPACT_ONLY,
+    MODE_BACKWARD_DX13_SOURCE_COMPACT_BLOCK_ONLY,
+    MODE_BACKWARD_DX13_SOURCE_COMPACT_COMBINE_ONLY,
+    MODE_BACKWARD_DX13_XLA_SOURCE_COMPACT_DIRECT_ONLY,
+    MODE_BACKWARD_DX13_XLA_ROUTE_BUFFER_DIRECT_ONLY,
+    MODE_BACKWARD_DX13_SOURCE_GROUPED_ONLY,
+    MODE_BACKWARD_RETURN_ONLY,
+    MODE_BACKWARD_RETURN_COMPONENTS_ONLY,
 )
+TARGET_KERNEL_SUITE_MODES = (
+    MODE_FORWARD,
+    MODE_FORWARD_DECOMPOSED,
+    MODE_FORWARD_W13_DIRECT_COMPACT,
+    MODE_FORWARD_COMPACT_H_DECOMPOSED,
+    MODE_BACKWARD_DY_ROUTE_ONLY,
+    MODE_BACKWARD_W2_ONLY,
+    MODE_BACKWARD_W13_ONLY,
+    MODE_BACKWARD_DX13_ONLY,
+    MODE_BACKWARD_DX13_PUSH_CONTRIB_ONLY,
+    MODE_BACKWARD_RETURN_ONLY,
+    MODE_BACKWARD_RETURN_COMPONENTS_ONLY,
+    MODE_BACKWARD_STAGED_BLOCKS,
+    MODE_FORWARD_BACKWARD_REDUCED,
+)
+TARGET_KERNEL_SUITE_PROFILE_KEYS = (
+    "entries_per_rank",
+    "inbox_slots",
+    "block_m",
+    "block_n",
+    "block_k",
+    "n_group",
+    "n_groups_per_job",
+    "send_worker_programs_per_peer",
+    "worker_programs_per_peer",
+    "send_pipeline_depth",
+    "routing",
+    "separate_compile",
+)
+TARGET_KERNEL_SUITE_TARGET_SHAPE = {
+    "ep_size": 8,
+    "tokens_per_rank": 32768,
+    "hidden_dim": 2560,
+    "intermediate_dim": 1280,
+    "experts_per_rank": 32,
+    "topk": 4,
+    "capacity_factor": 1.25,
+}
+FORWARD_BACKWARD_GRAD_CHECKSUM_ARGNUM = {
+    MODE_FORWARD_BACKWARD_DX_CHECKSUM: 0,
+    MODE_FORWARD_BACKWARD_DROUTE_CHECKSUM: 1,
+    MODE_FORWARD_BACKWARD_DW13_CHECKSUM: 2,
+    MODE_FORWARD_BACKWARD_DW2_CHECKSUM: 3,
+}
 FORWARD_PACK_PROBE_MODE_TO_STAGE = {
     MODE_FORWARD_PACK_TOTAL: FORWARD_DECOMPOSED_STAGE_PACK_INPUTS,
     MODE_FORWARD_PACK_TOKEN_PACK: FORWARD_DECOMPOSED_STAGE_PACK_INPUTS_TOKEN_PACK,
@@ -403,9 +602,35 @@ def _profile_defaults(argv: Sequence[str] | None = None) -> dict[str, Any]:
     return source_push_profile_defaults(args.source_push_profile)
 
 
+def _cli_flag_present(argv: Sequence[str], flag: str) -> bool:
+    return any(item == flag or item.startswith(f"{flag}=") for item in argv)
+
+
+def _apply_target_kernel_suite_defaults(args: argparse.Namespace, argv: Sequence[str]) -> None:
+    if not _cli_flag_present(argv, "--source-push-profile"):
+        args.source_push_profile = SOURCE_PUSH_PROFILE_STABLE_216
+
+    profile_defaults = source_push_profile_defaults(SOURCE_PUSH_PROFILE_STABLE_216)
+    for name in TARGET_KERNEL_SUITE_PROFILE_KEYS:
+        flag = f"--{name.replace('_', '-')}"
+        if name in profile_defaults and not _cli_flag_present(argv, flag):
+            setattr(args, name, profile_defaults[name])
+
+    for name, value in TARGET_KERNEL_SUITE_TARGET_SHAPE.items():
+        flag = f"--{name.replace('_', '-')}"
+        if not _cli_flag_present(argv, flag):
+            setattr(args, name, value)
+
+    if not _cli_flag_present(argv, "--backends"):
+        args.backends = BACKEND_SOURCE_PUSH_PALLAS
+    if not _cli_flag_present(argv, "--modes"):
+        args.modes = ",".join(TARGET_KERNEL_SUITE_MODES)
+
+
 def parse_source_push_mlp_fwd_bwd_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     """Parse the source-push MLP forward/backward benchmark arguments."""
 
+    raw_argv = tuple(sys.argv[1:] if argv is None else argv)
     profile_defaults = _profile_defaults(argv)
 
     def default(name: str, fallback: Any) -> Any:
@@ -451,6 +676,15 @@ def parse_source_push_mlp_fwd_bwd_args(argv: Sequence[str] | None = None) -> arg
     parser.add_argument("--backends", default=BACKEND_SOURCE_PUSH_PALLAS)
     parser.add_argument("--modes", default=f"{MODE_FORWARD},{MODE_FORWARD_BACKWARD}")
     parser.add_argument(
+        "--target-kernel-suite",
+        action="store_true",
+        help=(
+            "Apply the target-shape source-push kernel isolation suite. This sets the stable Hopper "
+            "source-push profile knobs, target MoE shape, source-push backend, and curated modes unless "
+            "those flags are explicitly provided."
+        ),
+    )
+    parser.add_argument(
         "--use-exact-expert-major",
         action=argparse.BooleanOptionalAction,
         default=False,
@@ -466,8 +700,41 @@ def parse_source_push_mlp_fwd_bwd_args(argv: Sequence[str] | None = None) -> arg
         default=False,
         help="Benchmark-only: split staged-flat W2 timing into gather, activation, matmul, SwiGLU, and scatter.",
     )
+    parser.add_argument(
+        "--backward-dx13-implementation",
+        choices=BACKWARD_DX13_IMPLEMENTATIONS,
+        default=SOURCE_PUSH_DX13_IMPLEMENTATION_PALLAS_MGPU,
+        help="Benchmark-only implementation selector for backward_dx13_only.",
+    )
+    parser.add_argument(
+        "--sweep-backward-dx13-implementation",
+        default=None,
+        help="Comma-separated DX13 implementations to benchmark with otherwise identical config.",
+    )
     parser.add_argument("--backward-w13-implementation", choices=BACKWARD_W13_IMPLEMENTATIONS, default="default")
+    parser.add_argument(
+        "--sweep-backward-w13-implementation",
+        default=None,
+        help="Comma-separated W13 backward implementations to benchmark with otherwise identical config.",
+    )
+    parser.add_argument("--backward-w13-row-block", type=int, default=None)
+    parser.add_argument("--backward-w13-hidden-block", type=int, default=None)
+    parser.add_argument("--backward-w13-output-block", type=int, default=None)
+    parser.add_argument("--sweep-backward-w13-row-block", type=_parse_int_csv, default=None)
+    parser.add_argument("--sweep-backward-w13-hidden-block", type=_parse_int_csv, default=None)
+    parser.add_argument("--sweep-backward-w13-output-block", type=_parse_int_csv, default=None)
+    parser.add_argument(
+        "--backward-w13-lowering-semantics",
+        choices=BACKWARD_W13_LOWERING_SEMANTICS,
+        default="auto",
+        help="Benchmark-only: lowering semantics for local compact W13 DW13 MGPU diagnostics.",
+    )
     parser.add_argument("--backward-return-implementation", choices=BACKWARD_RETURN_IMPLEMENTATIONS, default="default")
+    parser.add_argument(
+        "--sweep-backward-return-implementation",
+        default=None,
+        help="Comma-separated backward return implementations to benchmark with otherwise identical config.",
+    )
     parser.add_argument(
         "--backward-stop-after-stage",
         choices=BACKWARD_STOP_AFTER_STAGES,
@@ -484,7 +751,50 @@ def parse_source_push_mlp_fwd_bwd_args(argv: Sequence[str] | None = None) -> arg
     parser.add_argument("--debug-exceptions", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--git-sha", type=str, default=None)
     parser.add_argument("--jsonl", type=str, default=None)
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+    if args.target_kernel_suite:
+        _apply_target_kernel_suite_defaults(args, raw_argv)
+    return args
+
+
+def _source_push_w13_backward_block_sizes_from_args(
+    *,
+    row_block: int | None,
+    hidden_block: int | None,
+    output_block: int | None,
+) -> SourcePushW13BackwardTiledBlockSizes | None:
+    if row_block is None and hidden_block is None and output_block is None:
+        return None
+    defaults = SourcePushW13BackwardTiledBlockSizes.get_default()
+    return SourcePushW13BackwardTiledBlockSizes(
+        row_block=defaults.row_block if row_block is None else row_block,
+        hidden_block=defaults.hidden_block if hidden_block is None else hidden_block,
+        output_block=defaults.output_block if output_block is None else output_block,
+    )
+
+
+def _source_push_w13_lowering_semantics_from_arg(value: str) -> mgpu.LoweringSemantics | None:
+    if value == "auto":
+        return None
+    if value == "lane":
+        return mgpu.LoweringSemantics.Lane
+    if value == "warpgroup":
+        return mgpu.LoweringSemantics.Warpgroup
+    raise ValueError(f"unknown W13 lowering semantics {value!r}")
+
+
+def _resolved_w13_only_block_sizes(
+    w13_implementation: str,
+    block_sizes: SourcePushW13BackwardTiledBlockSizes | None,
+) -> SourcePushW13BackwardTiledBlockSizes:
+    if block_sizes is not None:
+        return block_sizes
+    if source_push_w13_backward_uses_local_dw13_default_block_sizes(w13_implementation):
+        return source_push_w13_dw13_default_block_sizes()
+    if w13_implementation == SOURCE_PUSH_W13_BACKWARD_DIAGNOSTIC_PALLAS_MGPU_EXACT_FLAT_DW13_ONLY:
+        defaults = SourcePushW13BackwardTiledBlockSizes.get_default()
+        return replace(defaults, row_block=max(defaults.row_block, MIN_MOSAIC_INT32_TRANSFER_ELEMENTS))
+    return SourcePushW13BackwardTiledBlockSizes.get_default()
 
 
 def main(argv: Sequence[str] | None = None) -> None:
@@ -501,6 +811,36 @@ def main(argv: Sequence[str] | None = None) -> None:
     worker_programs_per_peer_values = args.sweep_worker_programs_per_peer or (args.worker_programs_per_peer,)
     send_pipeline_depth_values = args.sweep_send_pipeline_depth or (args.send_pipeline_depth,)
     n_groups_per_job_values = args.sweep_n_groups_per_job or (args.n_groups_per_job,)
+    backward_dx13_implementation_values = (
+        _parse_csv_choices(
+            args.sweep_backward_dx13_implementation,
+            BACKWARD_DX13_IMPLEMENTATIONS,
+            flag="--sweep-backward-dx13-implementation",
+        )
+        if args.sweep_backward_dx13_implementation is not None
+        else (args.backward_dx13_implementation,)
+    )
+    backward_w13_row_block_values = args.sweep_backward_w13_row_block or (args.backward_w13_row_block,)
+    backward_w13_hidden_block_values = args.sweep_backward_w13_hidden_block or (args.backward_w13_hidden_block,)
+    backward_w13_output_block_values = args.sweep_backward_w13_output_block or (args.backward_w13_output_block,)
+    backward_w13_implementation_values = (
+        _parse_csv_choices(
+            args.sweep_backward_w13_implementation,
+            BACKWARD_W13_IMPLEMENTATIONS,
+            flag="--sweep-backward-w13-implementation",
+        )
+        if args.sweep_backward_w13_implementation is not None
+        else (args.backward_w13_implementation,)
+    )
+    backward_return_implementation_values = (
+        _parse_csv_choices(
+            args.sweep_backward_return_implementation,
+            BACKWARD_RETURN_IMPLEMENTATIONS,
+            flag="--sweep-backward-return-implementation",
+        )
+        if args.sweep_backward_return_implementation is not None
+        else (args.backward_return_implementation,)
+    )
     backends = _parse_csv_choices(args.backends, BACKENDS, flag="--backends")
     modes = _parse_csv_choices(args.modes, MODES, flag="--modes")
 
@@ -510,12 +850,24 @@ def main(argv: Sequence[str] | None = None) -> None:
         worker_programs_per_peer,
         send_pipeline_depth,
         n_groups_per_job,
+        backward_dx13_implementation,
+        backward_w13_row_block,
+        backward_w13_hidden_block,
+        backward_w13_output_block,
+        backward_w13_implementation,
+        backward_return_implementation,
     ) in product(
         inbox_slots_values,
         send_worker_programs_per_peer_values,
         worker_programs_per_peer_values,
         send_pipeline_depth_values,
         n_groups_per_job_values,
+        backward_dx13_implementation_values,
+        backward_w13_row_block_values,
+        backward_w13_hidden_block_values,
+        backward_w13_output_block_values,
+        backward_w13_implementation_values,
+        backward_return_implementation_values,
     ):
         config = PushInboxConfig(
             ep_size=args.ep_size,
@@ -538,6 +890,11 @@ def main(argv: Sequence[str] | None = None) -> None:
             routing_seed=args.routing_seed,
             capacity_factor=args.capacity_factor,
         )
+        backward_w13_block_sizes = _source_push_w13_backward_block_sizes_from_args(
+            row_block=backward_w13_row_block,
+            hidden_block=backward_w13_hidden_block,
+            output_block=backward_w13_output_block,
+        )
         rows = run_source_push_mlp_fwd_bwd(
             config,
             backends=backends,
@@ -552,8 +909,11 @@ def main(argv: Sequence[str] | None = None) -> None:
             backward_dy_route_implementation=args.backward_dy_route_implementation,
             backward_w2_implementation=args.backward_w2_implementation,
             backward_w2_split_timing=args.backward_w2_split_timing,
-            backward_w13_implementation=args.backward_w13_implementation,
-            backward_return_implementation=args.backward_return_implementation,
+            backward_dx13_implementation=backward_dx13_implementation,
+            backward_w13_implementation=backward_w13_implementation,
+            backward_w13_block_sizes=backward_w13_block_sizes,
+            backward_w13_lowering_semantics=args.backward_w13_lowering_semantics,
+            backward_return_implementation=backward_return_implementation,
             backward_stop_after_stage=args.backward_stop_after_stage,
         )
         for row in rows:
@@ -581,7 +941,10 @@ def run_source_push_mlp_fwd_bwd(
     backward_dy_route_implementation: str = BACKWARD_IMPLEMENTATION_DEFAULT,
     backward_w2_implementation: str = BACKWARD_IMPLEMENTATION_DEFAULT,
     backward_w2_split_timing: bool = False,
+    backward_dx13_implementation: str = SOURCE_PUSH_DX13_IMPLEMENTATION_PALLAS_MGPU,
     backward_w13_implementation: str = BACKWARD_IMPLEMENTATION_DEFAULT,
+    backward_w13_block_sizes: SourcePushW13BackwardTiledBlockSizes | None = None,
+    backward_w13_lowering_semantics: str = "lane",
     backward_return_implementation: str = BACKWARD_IMPLEMENTATION_DEFAULT,
     backward_stop_after_stage: str = BACKWARD_STOP_AFTER_NONE,
 ) -> list[dict[str, Any]]:
@@ -605,7 +968,10 @@ def run_source_push_mlp_fwd_bwd(
                     backward_dy_route_implementation=backward_dy_route_implementation,
                     backward_w2_implementation=backward_w2_implementation,
                     backward_w2_split_timing=backward_w2_split_timing,
+                    backward_dx13_implementation=backward_dx13_implementation,
                     backward_w13_implementation=backward_w13_implementation,
+                    backward_w13_block_sizes=backward_w13_block_sizes,
+                    backward_w13_lowering_semantics=backward_w13_lowering_semantics,
                     backward_return_implementation=backward_return_implementation,
                     backward_stop_after_stage=backward_stop_after_stage,
                 )
@@ -628,7 +994,10 @@ def _run_one(
     backward_dy_route_implementation: str,
     backward_w2_implementation: str,
     backward_w2_split_timing: bool,
+    backward_dx13_implementation: str,
     backward_w13_implementation: str,
+    backward_w13_block_sizes: SourcePushW13BackwardTiledBlockSizes | None,
+    backward_w13_lowering_semantics: str,
     backward_return_implementation: str,
     backward_stop_after_stage: str,
 ) -> list[dict[str, Any]]:
@@ -706,6 +1075,186 @@ def _run_one(
                 backward_w13_implementation=backward_w13_implementation,
                 backward_return_implementation=backward_return_implementation,
                 backward_stop_after_stage=backward_stop_after_stage,
+            )
+        if mode in (MODE_BACKWARD_DY_ROUTE_ONLY, MODE_BACKWARD_W2_ONLY):
+            if backend != BACKEND_SOURCE_PUSH_PALLAS:
+                raise ValueError(f"{mode!r} only supports backend={BACKEND_SOURCE_PUSH_PALLAS!r}")
+            stop_after_stage = BACKWARD_STAGE_DY_ROUTE if mode == MODE_BACKWARD_DY_ROUTE_ONLY else BACKWARD_STAGE_W2
+            rows = _run_source_push_backward_staged_blocks(
+                config,
+                mesh=mesh,
+                host_inputs=host_inputs,
+                route_table=route_table,
+                inputs=inputs,
+                warmup=warmup,
+                steps=steps,
+                repeat_runs=repeat_runs,
+                backward_dy_route_implementation=backward_dy_route_implementation,
+                backward_w2_implementation=backward_w2_implementation,
+                backward_w13_implementation=backward_w13_implementation,
+                backward_return_implementation=backward_return_implementation,
+                backward_stop_after_stage=stop_after_stage,
+            )
+            for row in rows:
+                row["mode"] = mode
+            return rows
+        if mode == MODE_BACKWARD_W13_ONLY:
+            if backend != BACKEND_SOURCE_PUSH_PALLAS:
+                raise ValueError(f"{mode!r} only supports backend={BACKEND_SOURCE_PUSH_PALLAS!r}")
+            return _run_source_push_backward_w13_only(
+                config,
+                mesh=mesh,
+                host_inputs=host_inputs,
+                route_table=route_table,
+                inputs=inputs,
+                warmup=warmup,
+                steps=steps,
+                repeat_runs=repeat_runs,
+                backward_w13_implementation=backward_w13_implementation,
+                backward_w13_block_sizes=backward_w13_block_sizes,
+                backward_w13_lowering_semantics=backward_w13_lowering_semantics,
+            )
+        if mode == MODE_BACKWARD_DX13_ONLY:
+            if backend != BACKEND_SOURCE_PUSH_PALLAS:
+                raise ValueError(f"{mode!r} only supports backend={BACKEND_SOURCE_PUSH_PALLAS!r}")
+            return _run_source_push_backward_dx13_only(
+                config,
+                mesh=mesh,
+                host_inputs=host_inputs,
+                route_table=route_table,
+                inputs=inputs,
+                warmup=warmup,
+                steps=steps,
+                repeat_runs=repeat_runs,
+                backward_dx13_implementation=backward_dx13_implementation,
+            )
+        if mode == MODE_BACKWARD_DX13_STORE_ZERO_ONLY:
+            if backend != BACKEND_SOURCE_PUSH_PALLAS:
+                raise ValueError(f"{mode!r} only supports backend={BACKEND_SOURCE_PUSH_PALLAS!r}")
+            return _run_source_push_backward_dx13_store_zero_only(
+                config,
+                mesh=mesh,
+                host_inputs=host_inputs,
+                route_table=route_table,
+                inputs=inputs,
+                warmup=warmup,
+                steps=steps,
+                repeat_runs=repeat_runs,
+            )
+        if mode == MODE_BACKWARD_DX13_ROUTE_BUFFER_ONLY:
+            if backend != BACKEND_SOURCE_PUSH_PALLAS:
+                raise ValueError(f"{mode!r} only supports backend={BACKEND_SOURCE_PUSH_PALLAS!r}")
+            return _run_source_push_backward_dx13_route_buffer_only(
+                config,
+                mesh=mesh,
+                host_inputs=host_inputs,
+                route_table=route_table,
+                inputs=inputs,
+                warmup=warmup,
+                steps=steps,
+                repeat_runs=repeat_runs,
+            )
+        if mode in (MODE_BACKWARD_DX13_PUSH_CONTRIB_ONLY, MODE_BACKWARD_DX13_SOURCE_COMPACT_ONLY):
+            if backend != BACKEND_SOURCE_PUSH_PALLAS:
+                raise ValueError(f"{mode!r} only supports backend={BACKEND_SOURCE_PUSH_PALLAS!r}")
+            return _run_source_push_backward_dx13_source_compact_only(
+                config,
+                mesh=mesh,
+                host_inputs=host_inputs,
+                route_table=route_table,
+                inputs=inputs,
+                warmup=warmup,
+                steps=steps,
+                repeat_runs=repeat_runs,
+                mode=mode,
+            )
+        if mode == MODE_BACKWARD_DX13_SOURCE_COMPACT_BLOCK_ONLY:
+            if backend != BACKEND_SOURCE_PUSH_PALLAS:
+                raise ValueError(f"{mode!r} only supports backend={BACKEND_SOURCE_PUSH_PALLAS!r}")
+            return _run_source_push_backward_dx13_source_compact_only(
+                config,
+                mesh=mesh,
+                host_inputs=host_inputs,
+                route_table=route_table,
+                inputs=inputs,
+                warmup=warmup,
+                steps=steps,
+                repeat_runs=repeat_runs,
+                block_contiguous=True,
+            )
+        if mode == MODE_BACKWARD_DX13_SOURCE_COMPACT_COMBINE_ONLY:
+            if backend != BACKEND_SOURCE_PUSH_PALLAS:
+                raise ValueError(f"{mode!r} only supports backend={BACKEND_SOURCE_PUSH_PALLAS!r}")
+            return _run_source_push_backward_dx13_source_compact_combine_only(
+                config,
+                mesh=mesh,
+                host_inputs=host_inputs,
+                warmup=warmup,
+                steps=steps,
+                repeat_runs=repeat_runs,
+            )
+        if mode == MODE_BACKWARD_DX13_XLA_SOURCE_COMPACT_DIRECT_ONLY:
+            if backend != BACKEND_SOURCE_PUSH_PALLAS:
+                raise ValueError(f"{mode!r} only supports backend={BACKEND_SOURCE_PUSH_PALLAS!r}")
+            return _run_source_push_backward_dx13_xla_source_compact_direct_only(
+                config,
+                mesh=mesh,
+                host_inputs=host_inputs,
+                route_table=route_table,
+                inputs=inputs,
+                warmup=warmup,
+                steps=steps,
+                repeat_runs=repeat_runs,
+            )
+        if mode == MODE_BACKWARD_DX13_XLA_ROUTE_BUFFER_DIRECT_ONLY:
+            if backend != BACKEND_SOURCE_PUSH_PALLAS:
+                raise ValueError(f"{mode!r} only supports backend={BACKEND_SOURCE_PUSH_PALLAS!r}")
+            return _run_source_push_backward_dx13_xla_route_buffer_direct_only(
+                config,
+                mesh=mesh,
+                host_inputs=host_inputs,
+                route_table=route_table,
+                inputs=inputs,
+                warmup=warmup,
+                steps=steps,
+                repeat_runs=repeat_runs,
+            )
+        if mode == MODE_BACKWARD_DX13_SOURCE_GROUPED_ONLY:
+            if backend != BACKEND_SOURCE_PUSH_PALLAS:
+                raise ValueError(f"{mode!r} only supports backend={BACKEND_SOURCE_PUSH_PALLAS!r}")
+            return _run_source_push_backward_dx13_source_grouped_only(
+                config,
+                mesh=mesh,
+                host_inputs=host_inputs,
+                route_table=route_table,
+                warmup=warmup,
+                steps=steps,
+                repeat_runs=repeat_runs,
+            )
+        if mode == MODE_BACKWARD_RETURN_ONLY:
+            if backend != BACKEND_SOURCE_PUSH_PALLAS:
+                raise ValueError(f"{mode!r} only supports backend={BACKEND_SOURCE_PUSH_PALLAS!r}")
+            return _run_source_push_backward_return_only(
+                config,
+                mesh=mesh,
+                host_inputs=host_inputs,
+                route_table=route_table,
+                warmup=warmup,
+                steps=steps,
+                repeat_runs=repeat_runs,
+                backward_return_implementation=backward_return_implementation,
+            )
+        if mode == MODE_BACKWARD_RETURN_COMPONENTS_ONLY:
+            if backend != BACKEND_SOURCE_PUSH_PALLAS:
+                raise ValueError(f"{mode!r} only supports backend={BACKEND_SOURCE_PUSH_PALLAS!r}")
+            return _run_source_push_backward_return_components_only(
+                config,
+                mesh=mesh,
+                host_inputs=host_inputs,
+                route_table=route_table,
+                warmup=warmup,
+                steps=steps,
+                repeat_runs=repeat_runs,
             )
         if mode in FORWARD_PACK_PROBE_MODE_TO_STAGE:
             if backend != BACKEND_SOURCE_PUSH_PALLAS:
@@ -809,6 +1358,10 @@ def _run_one(
             host_inputs=host_inputs,
             route_table=route_table,
             inputs=inputs,
+            backward_dy_route_implementation=backward_dy_route_implementation,
+            backward_w2_implementation=backward_w2_implementation,
+            backward_w13_implementation=backward_w13_implementation,
+            backward_return_implementation=backward_return_implementation,
         )
         timing = _time_callable(
             fn,
@@ -1574,12 +2127,30 @@ def _run_source_push_backward_staged_flat(
     dy = jnp.ones_like(out, dtype=jnp.float32)
     expert_base = jnp.asarray(host_inputs.expert_base, dtype=jnp.int32)
     with jax.set_mesh(mesh):
-        return_route_indices = source_push_backward_return_flat_route_indices_jax(
-            host_inputs.plan,
-            expert_base=expert_base,
-            src_base_by_expert=host_inputs.src_base_by_expert,
-        )
-        _block_until_ready(return_route_indices)
+        return_route_indices = None
+        if backward_stop_after_stage == BACKWARD_STOP_AFTER_NONE:
+            resolved_w13_for_return_indices = _resolve_backward_stage_implementation(
+                backward_w13_implementation,
+                source_push_mlp._source_push_mlp_backward_w13_implementation(
+                    SOURCE_PUSH_MLP_IMPLEMENTATION_PALLAS_MGPU
+                ),
+            )
+            if resolved_w13_for_return_indices in (
+                SOURCE_PUSH_W13_BACKWARD_IMPLEMENTATION_PALLAS_MGPU_COMPACT,
+                SOURCE_PUSH_W13_BACKWARD_EXPERIMENT_COMPACT_DX_SOURCE_GATHER_DW13,
+                SOURCE_PUSH_W13_BACKWARD_DIAGNOSTIC_PALLAS_MGPU_COMPACT_DX_ONLY,
+            ):
+                return_route_indices = source_push_backward_return_route_indices_jax(
+                    host_inputs.plan,
+                    src_base_by_expert=host_inputs.src_base_by_expert,
+                )
+            else:
+                return_route_indices = source_push_backward_return_flat_route_indices_jax(
+                    host_inputs.plan,
+                    expert_base=expert_base,
+                    src_base_by_expert=host_inputs.src_base_by_expert,
+                )
+            _block_until_ready(return_route_indices)
         timing = _time_source_push_backward_staged_flat(
             config,
             host_inputs,
@@ -1616,6 +2187,7 @@ def _run_source_push_backward_staged_flat(
         forward_h_times=forward_h_times,
         mode=MODE_BACKWARD_STAGED_FLAT,
         stages=stages,
+        w13_backward_component=_w13_backward_component(backward_w13_implementation),
     )
     resolved_w2_implementation, resolved_w2_matmul_implementation, resolved_w2_swiglu_implementation = (
         _resolve_w2_backward_implementations(
@@ -1637,6 +2209,7 @@ def _run_source_push_backward_staged_flat(
         row["resolved_backward_w2_matmul_implementation"] = resolved_w2_matmul_implementation
         row["resolved_backward_w2_swiglu_implementation"] = resolved_w2_swiglu_implementation
         row["backward_w13_implementation"] = backward_w13_implementation
+        row["w13_backward_component"] = _row_w13_backward_component(row, backward_w13_implementation)
         row["backward_return_implementation"] = backward_return_implementation
         row["backward_stop_after_stage"] = backward_stop_after_stage
     return rows
@@ -1725,6 +2298,15 @@ def _run_source_push_backward_staged_blocks(
             if resolved_w13_for_return_indices in (
                 SOURCE_PUSH_W13_BACKWARD_IMPLEMENTATION_TILED,
                 SOURCE_PUSH_W13_BACKWARD_IMPLEMENTATION_PALLAS_MGPU_COMPACT,
+                SOURCE_PUSH_W13_BACKWARD_EXPERIMENT_COMPACT_DX_SOURCE_GATHER_DW13,
+                SOURCE_PUSH_W13_BACKWARD_DIAGNOSTIC_PALLAS_MGPU_COMPACT_DX_ONLY,
+                BACKWARD_W13_IMPLEMENTATION_PALLAS_MGPU_LOCAL_SWIGLU_DX13_DW13,
+                BACKWARD_W13_IMPLEMENTATION_PALLAS_MGPU_DX13_XLA_LOCAL_SWIGLU_DW13,
+                BACKWARD_W13_IMPLEMENTATION_PALLAS_MGPU_DX13_SPLIT_LOCAL_SWIGLU_DW13,
+                BACKWARD_W13_IMPLEMENTATION_XLA_DX13_XLA_LOCAL_SWIGLU_DW13,
+                BACKWARD_W13_IMPLEMENTATION_XLA_DX13_ROUTE_BUFFER_XLA_LOCAL_SWIGLU_DW13,
+                BACKWARD_W13_IMPLEMENTATION_XLA_DX13_SOURCE_GATHER_DW13,
+                BACKWARD_W13_IMPLEMENTATION_XLA_DX13_PALLAS_X_REMAT_XLA_LOCAL_SWIGLU_DW13,
             ):
                 return_route_indices = source_push_backward_return_route_indices_jax(
                     host_inputs.plan,
@@ -1759,7 +2341,11 @@ def _run_source_push_backward_staged_blocks(
             backward_stop_after_stage=backward_stop_after_stage,
             return_route_indices=return_route_indices,
         )
-    stages = _backward_staged_block_timed_stages(backward_stop_after_stage)
+    resolved_w13_implementation = _resolve_backward_stage_implementation(
+        backward_w13_implementation,
+        source_push_mlp._source_push_mlp_backward_w13_implementation(SOURCE_PUSH_MLP_IMPLEMENTATION_PALLAS_MGPU),
+    )
+    stages = _backward_staged_block_timed_stages(backward_stop_after_stage, resolved_w13_implementation)
     rows = _decomposed_backward_rows(
         config,
         timing=timing,
@@ -1770,6 +2356,7 @@ def _run_source_push_backward_staged_blocks(
         forward_h_times=forward_h_times,
         mode=MODE_BACKWARD_STAGED_BLOCKS,
         stages=stages,
+        w13_backward_component=_w13_backward_component(backward_w13_implementation),
     )
     resolved_w2_implementation, resolved_w2_matmul_implementation, resolved_w2_swiglu_implementation = (
         _resolve_w2_backward_implementations(
@@ -1791,9 +2378,1562 @@ def _run_source_push_backward_staged_blocks(
         row["resolved_backward_w2_matmul_implementation"] = resolved_w2_matmul_implementation
         row["resolved_backward_w2_swiglu_implementation"] = resolved_w2_swiglu_implementation
         row["backward_w13_implementation"] = backward_w13_implementation
+        row["w13_backward_component"] = _row_w13_backward_component(row, backward_w13_implementation)
         row["backward_return_implementation"] = backward_return_implementation
         row["backward_stop_after_stage"] = backward_stop_after_stage
     return rows
+
+
+def _run_source_push_backward_w13_only(
+    config: PushInboxConfig,
+    *,
+    mesh: Mesh,
+    host_inputs,
+    route_table,
+    inputs: dict[str, jax.Array],
+    warmup: int,
+    steps: int,
+    repeat_runs: int,
+    backward_w13_implementation: str,
+    backward_w13_block_sizes: SourcePushW13BackwardTiledBlockSizes | None,
+    backward_w13_lowering_semantics: str,
+) -> list[dict[str, Any]]:
+    """Benchmark W13 backward in isolation from forward H, dy routing, and W2."""
+
+    w13_implementation = _resolve_backward_stage_implementation(
+        backward_w13_implementation,
+        source_push_mlp._source_push_mlp_backward_w13_implementation(SOURCE_PUSH_MLP_IMPLEMENTATION_PALLAS_MGPU),
+    )
+    w13_block_sizes = backward_w13_block_sizes
+    resolved_w13_block_sizes = _resolved_w13_only_block_sizes(w13_implementation, w13_block_sizes)
+    w13_lowering_semantics = _source_push_w13_lowering_semantics_from_arg(backward_w13_lowering_semantics)
+    compact_capacity = route_table.valid_by_expert.shape[-1]
+    output_dim = 2 * config.intermediate_dim
+    compact_block_sharding = NamedSharding(mesh, P(SOURCE_PUSH_MESH_AXIS, None, None, None))
+    compact_meta_sharding = NamedSharding(mesh, P(SOURCE_PUSH_MESH_AXIS, None, None))
+    d_h_blocks = jax.device_put(
+        np.ones(
+            (config.ep_size, config.experts_per_rank, compact_capacity, output_dim),
+            dtype=inputs["w13_source"].dtype,
+        ),
+        compact_block_sharding,
+    )
+    z_blocks = jax.device_put(
+        np.ones(
+            (config.ep_size, config.experts_per_rank, compact_capacity, output_dim),
+            dtype=inputs["w13_source"].dtype,
+        ),
+        compact_block_sharding,
+    )
+    d_activation_blocks = jax.device_put(
+        np.ones(
+            (config.ep_size, config.experts_per_rank, compact_capacity, config.intermediate_dim),
+            dtype=inputs["w13_source"].dtype,
+        ),
+        compact_block_sharding,
+    )
+    valid = jax.device_put(route_table.valid_by_expert, compact_meta_sharding)
+    source_rank_by_expert = jax.device_put(route_table.source_rank_by_expert, compact_meta_sharding)
+    token_id_by_expert = jax.device_put(route_table.token_id_by_expert, compact_meta_sharding)
+    expert_base = jnp.asarray(host_inputs.expert_base, dtype=jnp.int32)
+    prefilled_x_expert_major = None
+    if w13_implementation in (
+        SOURCE_PUSH_W13_BACKWARD_DIAGNOSTIC_PALLAS_MGPU_PREFILLED_X_DW13_ONLY,
+        SOURCE_PUSH_W13_BACKWARD_DIAGNOSTIC_PALLAS_MGPU_LOCAL_SWIGLU_DW13_ONLY,
+        SOURCE_PUSH_W13_BACKWARD_DIAGNOSTIC_PALLAS_MGPU_LOCAL_SWIGLU_PERSISTENT_DW13_ONLY,
+        SOURCE_PUSH_W13_BACKWARD_DIAGNOSTIC_PALLAS_MGPU_LOCAL_LINEAR_DW13_ONLY,
+        SOURCE_PUSH_W13_BACKWARD_DIAGNOSTIC_PALLAS_MGPU_LOCAL_SWIGLU_GATE_DW13_ONLY,
+        SOURCE_PUSH_W13_BACKWARD_DIAGNOSTIC_PALLAS_MGPU_LOCAL_SWIGLU_UP_DW13_ONLY,
+        SOURCE_PUSH_W13_BACKWARD_DIAGNOSTIC_PALLAS_MGPU_LOCAL_SWIGLU_SPLIT_DW13_ONLY,
+        SOURCE_PUSH_W13_BACKWARD_DIAGNOSTIC_XLA_LOCAL_SWIGLU_DW13_ONLY,
+    ):
+        safe_src = jnp.where(valid, source_rank_by_expert, 0)
+        safe_token = jnp.where(valid, token_id_by_expert, 0)
+        prefilled_x_expert_major = inputs["x_source"].at[safe_src, safe_token].get(out_sharding=compact_block_sharding)
+        prefilled_x_expert_major = jnp.where(
+            valid[..., None],
+            prefilled_x_expert_major,
+            jnp.zeros_like(prefilled_x_expert_major),
+        )
+        _block_until_ready(prefilled_x_expert_major)
+
+    def call_w13():
+        with jax.set_mesh(mesh):
+            if w13_implementation == SOURCE_PUSH_W13_BACKWARD_IMPLEMENTATION_TILED:
+                w13_grads = source_push_w13_backward_expert_blocks_tiled_reference(
+                    inputs["x_source"],
+                    d_h_blocks,
+                    inputs["w13_source"],
+                    source_rank_by_expert,
+                    token_id_by_expert,
+                    valid,
+                    block_sizes=resolved_w13_block_sizes,
+                )
+            elif w13_implementation == SOURCE_PUSH_W13_BACKWARD_IMPLEMENTATION_PALLAS_MGPU_COMPACT:
+                w13_grads = _source_push_w13_backward_expert_blocks_pallas_mgpu(
+                    inputs["x_source"],
+                    d_h_blocks,
+                    inputs["w13_source"],
+                    source_rank_by_expert,
+                    token_id_by_expert,
+                    valid,
+                    block_sizes=resolved_w13_block_sizes,
+                    mesh=mesh,
+                )
+            elif w13_implementation == SOURCE_PUSH_W13_BACKWARD_EXPERIMENT_COMPACT_DX_SOURCE_GATHER_DW13:
+                w13_grads = _source_push_w13_backward_expert_blocks_compact_dx_source_gather_dw13(
+                    inputs["x_source"],
+                    d_h_blocks,
+                    inputs["w13_source"],
+                    source_rank_by_expert,
+                    token_id_by_expert,
+                    valid,
+                    block_sizes=resolved_w13_block_sizes,
+                    mesh=mesh,
+                )
+            elif w13_implementation == SOURCE_PUSH_W13_BACKWARD_DIAGNOSTIC_PALLAS_MGPU_COMPACT_DX_ONLY:
+                w13_grads = _source_push_w13_backward_expert_blocks_dx_only_pallas_mgpu(
+                    d_h_blocks,
+                    inputs["w13_source"],
+                    valid,
+                    block_sizes=resolved_w13_block_sizes,
+                    mesh=mesh,
+                )
+            elif w13_implementation == SOURCE_PUSH_W13_BACKWARD_DIAGNOSTIC_PALLAS_MGPU_COMPACT_DW13_ONLY:
+                w13_grads = _source_push_w13_backward_expert_blocks_dw13_only_pallas_mgpu(
+                    inputs["x_source"],
+                    d_h_blocks,
+                    inputs["w13_source"],
+                    source_rank_by_expert,
+                    token_id_by_expert,
+                    valid,
+                    block_sizes=w13_block_sizes,
+                    lowering_semantics=w13_lowering_semantics,
+                    mesh=mesh,
+                )
+            elif w13_implementation == SOURCE_PUSH_W13_BACKWARD_DIAGNOSTIC_PALLAS_MGPU_PREFILLED_X_DW13_ONLY:
+                if prefilled_x_expert_major is None:
+                    raise ValueError("prefilled x_expert_major was not prepared")
+                w13_grads = _source_push_w13_backward_expert_blocks_prefilled_x_dw13_only_pallas_mgpu(
+                    prefilled_x_expert_major,
+                    d_h_blocks,
+                    inputs["w13_source"],
+                    valid,
+                    block_sizes=w13_block_sizes,
+                    lowering_semantics=w13_lowering_semantics,
+                    mesh=mesh,
+                )
+            elif w13_implementation == SOURCE_PUSH_W13_BACKWARD_DIAGNOSTIC_PALLAS_MGPU_EXACT_FLAT_DW13_ONLY:
+                w13_grads = _source_push_w13_backward_expert_blocks_dw13_only_exact_flat_pallas_mgpu(
+                    inputs["x_source"],
+                    d_h_blocks,
+                    inputs["w13_source"],
+                    source_rank_by_expert,
+                    token_id_by_expert,
+                    valid,
+                    block_sizes=resolved_w13_block_sizes,
+                    mesh=mesh,
+                )
+            elif w13_implementation == SOURCE_PUSH_W13_BACKWARD_DIAGNOSTIC_PALLAS_MGPU_LOCAL_SWIGLU_DW13_ONLY:
+                if prefilled_x_expert_major is None:
+                    raise ValueError("prefilled x_expert_major was not prepared")
+                w13_grads = _source_push_w13_backward_expert_blocks_local_swiglu_dw13_only_pallas_mgpu(
+                    prefilled_x_expert_major,
+                    d_activation_blocks,
+                    z_blocks,
+                    valid,
+                    block_sizes=resolved_w13_block_sizes,
+                    lowering_semantics=w13_lowering_semantics,
+                    mesh=mesh,
+                )
+            elif (
+                w13_implementation == SOURCE_PUSH_W13_BACKWARD_DIAGNOSTIC_PALLAS_MGPU_LOCAL_SWIGLU_PERSISTENT_DW13_ONLY
+            ):
+                if prefilled_x_expert_major is None:
+                    raise ValueError("prefilled x_expert_major was not prepared")
+                w13_grads = _source_push_w13_backward_expert_blocks_local_swiglu_persistent_dw13_only_pallas_mgpu(
+                    prefilled_x_expert_major,
+                    d_activation_blocks,
+                    z_blocks,
+                    valid,
+                    block_sizes=resolved_w13_block_sizes,
+                    lowering_semantics=w13_lowering_semantics,
+                    mesh=mesh,
+                )
+            elif w13_implementation == SOURCE_PUSH_W13_BACKWARD_DIAGNOSTIC_PALLAS_MGPU_LOCAL_LINEAR_DW13_ONLY:
+                if prefilled_x_expert_major is None:
+                    raise ValueError("prefilled x_expert_major was not prepared")
+                w13_grads = _source_push_w13_backward_expert_blocks_local_linear_dw13_only_pallas_mgpu(
+                    prefilled_x_expert_major,
+                    d_activation_blocks,
+                    z_blocks,
+                    valid,
+                    block_sizes=resolved_w13_block_sizes,
+                    lowering_semantics=w13_lowering_semantics,
+                    mesh=mesh,
+                )
+            elif w13_implementation == SOURCE_PUSH_W13_BACKWARD_DIAGNOSTIC_XLA_LOCAL_SWIGLU_DW13_ONLY:
+                if prefilled_x_expert_major is None:
+                    raise ValueError("prefilled x_expert_major was not prepared")
+                w13_grads = source_push_w13_backward_expert_blocks_local_swiglu_dw13_only_xla(
+                    prefilled_x_expert_major,
+                    d_activation_blocks,
+                    z_blocks,
+                    valid,
+                )
+            elif w13_implementation == SOURCE_PUSH_W13_BACKWARD_DIAGNOSTIC_PALLAS_MGPU_LOCAL_SWIGLU_SPLIT_DW13_ONLY:
+                if prefilled_x_expert_major is None:
+                    raise ValueError("prefilled x_expert_major was not prepared")
+                w13_grads = _source_push_w13_backward_expert_blocks_local_swiglu_split_dw13_only_pallas_mgpu(
+                    prefilled_x_expert_major,
+                    d_activation_blocks,
+                    z_blocks,
+                    valid,
+                    block_sizes=resolved_w13_block_sizes,
+                    lowering_semantics=w13_lowering_semantics,
+                    mesh=mesh,
+                )
+            elif w13_implementation == SOURCE_PUSH_W13_BACKWARD_DIAGNOSTIC_PALLAS_MGPU_LOCAL_SWIGLU_GATE_DW13_ONLY:
+                if prefilled_x_expert_major is None:
+                    raise ValueError("prefilled x_expert_major was not prepared")
+                w13_grads = _source_push_w13_backward_expert_blocks_local_swiglu_gate_dw13_only_pallas_mgpu(
+                    prefilled_x_expert_major,
+                    d_activation_blocks,
+                    z_blocks,
+                    valid,
+                    block_sizes=resolved_w13_block_sizes,
+                    lowering_semantics=w13_lowering_semantics,
+                    mesh=mesh,
+                )
+            elif w13_implementation == SOURCE_PUSH_W13_BACKWARD_DIAGNOSTIC_PALLAS_MGPU_LOCAL_SWIGLU_UP_DW13_ONLY:
+                if prefilled_x_expert_major is None:
+                    raise ValueError("prefilled x_expert_major was not prepared")
+                w13_grads = _source_push_w13_backward_expert_blocks_local_swiglu_up_dw13_only_pallas_mgpu(
+                    prefilled_x_expert_major,
+                    d_activation_blocks,
+                    z_blocks,
+                    valid,
+                    block_sizes=resolved_w13_block_sizes,
+                    lowering_semantics=w13_lowering_semantics,
+                    mesh=mesh,
+                )
+            elif w13_implementation in (
+                BACKWARD_W13_IMPLEMENTATION_PALLAS_MGPU_LOCAL_SWIGLU_DX13_DW13,
+                BACKWARD_W13_IMPLEMENTATION_PALLAS_MGPU_DX13_XLA_LOCAL_SWIGLU_DW13,
+                BACKWARD_W13_IMPLEMENTATION_PALLAS_MGPU_DX13_SPLIT_LOCAL_SWIGLU_DW13,
+                BACKWARD_W13_IMPLEMENTATION_XLA_DX13_XLA_LOCAL_SWIGLU_DW13,
+                BACKWARD_W13_IMPLEMENTATION_XLA_DX13_ROUTE_BUFFER_XLA_LOCAL_SWIGLU_DW13,
+                BACKWARD_W13_IMPLEMENTATION_XLA_DX13_SOURCE_GATHER_DW13,
+                BACKWARD_W13_IMPLEMENTATION_XLA_DX13_PALLAS_X_REMAT_XLA_LOCAL_SWIGLU_DW13,
+            ):
+                raise ValueError(
+                    f"{w13_implementation!r} requires real W2 "
+                    f"`d_activation` and saved W13 preactivation; use {MODE_BACKWARD_STAGED_BLOCKS!r}."
+                )
+            elif w13_implementation == SOURCE_PUSH_W13_BACKWARD_DIAGNOSTIC_XLA_COMPACT_DW13_ONLY:
+                w13_grads = source_push_w13_backward_expert_blocks_dw13_only_xla(
+                    inputs["x_source"],
+                    d_h_blocks,
+                    inputs["w13_source"],
+                    source_rank_by_expert,
+                    token_id_by_expert,
+                    valid,
+                    block_sizes=resolved_w13_block_sizes,
+                )
+            elif w13_implementation == SOURCE_PUSH_W13_BACKWARD_DIAGNOSTIC_XLA_SOURCE_PADDED_DW13_ONLY:
+                w13_grads = source_push_w13_backward_expert_blocks_source_padded_dw13_only_xla(
+                    inputs["x_source"],
+                    d_h_blocks,
+                    source_rank_by_expert,
+                    token_id_by_expert,
+                    valid,
+                    host_inputs.src_base_by_expert,
+                    block_sizes=resolved_w13_block_sizes,
+                )
+            elif (
+                w13_implementation == SOURCE_PUSH_W13_BACKWARD_DIAGNOSTIC_PALLAS_MGPU_SOURCE_PADDED_PARTIALS_DW13_ONLY
+            ):
+                partials = _source_push_w13_dw13_source_padded_partials_pallas_mgpu(
+                    inputs["x_source"],
+                    d_h_blocks,
+                    source_rank_by_expert,
+                    token_id_by_expert,
+                    valid,
+                    host_inputs.src_base_by_expert,
+                    block_sizes=resolved_w13_block_sizes,
+                    mesh=mesh,
+                )
+                w13_grads = SourcePushW13CompactBackwardOutput(
+                    x_expert_major=jnp.zeros((0,), dtype=jnp.float32),
+                    dx_expert_major=jnp.zeros((0,), dtype=jnp.float32),
+                    dw13=jnp.sum(partials, axis=0),
+                )
+            elif w13_implementation == SOURCE_PUSH_W13_BACKWARD_DIAGNOSTIC_SOURCE_GATHER_DW13_ONLY:
+                w13_grads = source_push_w13_backward_expert_blocks_source_gather_dw13_only(
+                    inputs["x_source"],
+                    d_h_blocks,
+                    source_rank_by_expert,
+                    token_id_by_expert,
+                    valid,
+                    block_sizes=resolved_w13_block_sizes,
+                )
+            else:
+                d_h_flat = _flatten_expert_blocks_to_flat_rows(
+                    expert_base,
+                    d_h_blocks,
+                    flat_rows_per_rank=config.hidden_rows_per_rank,
+                    valid=valid,
+                )
+                w13_grads = source_push_w13_backward(
+                    inputs["x_source"],
+                    d_h_flat,
+                    inputs["w13_source"],
+                    host_inputs.plan,
+                    host_inputs.send_meta,
+                    expert_base,
+                    host_inputs.src_base_by_expert,
+                    use_exact_expert_major=host_inputs.use_exact_expert_major,
+                    implementation=w13_implementation,
+                    mesh=mesh,
+                )
+        _block_until_ready(w13_grads)
+        return w13_grads
+
+    start = time.perf_counter()
+    output = call_w13()
+    first_call_time = time.perf_counter() - start
+
+    for _ in range(warmup):
+        output = call_w13()
+
+    steady_state_times = []
+    for _ in range(repeat_runs):
+        start = time.perf_counter()
+        for _ in range(steps):
+            output = call_w13()
+        steady_state_times.append((time.perf_counter() - start) / steps)
+
+    _block_until_ready(output)
+    stage_useful_flops, stage_rounded_flops = _backward_stage_flops_per_rank(
+        config,
+        host_inputs.queue_stats,
+        BACKWARD_STAGE_W13,
+        w13_backward_component=_w13_backward_component(w13_implementation),
+    )
+    dropped_routes = int(jax.device_get(host_inputs.plan.dropped_routes))
+    rows = [
+        _decomposed_backward_row(
+            config,
+            queue_stats=host_inputs.queue_stats,
+            repeat_run=repeat_run,
+            repeat_runs=repeat_runs,
+            stage=BACKWARD_STAGE_W13,
+            steady_state_time=steady_state_time,
+            first_call_time=first_call_time,
+            useful_backward_flops=stage_useful_flops,
+            rounded_backward_flops=stage_rounded_flops,
+            dropped_routes=dropped_routes,
+            mode=MODE_BACKWARD_W13_ONLY,
+        )
+        for repeat_run, steady_state_time in enumerate(steady_state_times)
+    ]
+    rows.append(_summary_row(rows))
+    for row in rows:
+        row["backward_w13_implementation"] = backward_w13_implementation
+        row["resolved_backward_w13_implementation"] = w13_implementation
+        row["backward_w13_row_block"] = resolved_w13_block_sizes.row_block
+        row["backward_w13_hidden_block"] = resolved_w13_block_sizes.hidden_block
+        row["backward_w13_output_block"] = resolved_w13_block_sizes.output_block
+        row["backward_w13_lowering_semantics"] = backward_w13_lowering_semantics
+        row["w13_backward_component"] = _row_w13_backward_component(row, w13_implementation)
+        row["backward_stop_after_stage"] = BACKWARD_STAGE_W13
+    return rows
+
+
+def _run_source_push_backward_dx13_only(
+    config: PushInboxConfig,
+    *,
+    mesh: Mesh,
+    host_inputs,
+    route_table,
+    inputs: dict[str, jax.Array],
+    warmup: int,
+    steps: int,
+    repeat_runs: int,
+    backward_dx13_implementation: str,
+) -> list[dict[str, Any]]:
+    """Benchmark local DX13 compact contribution generation in isolation.
+
+    This covers the structural target from the backward notes:
+    recompute dSwiGLU from local W2 activation gradients plus saved W13
+    preactivation, multiply by ``W13.T``, and return compact contribution rows
+    with source-return metadata.  It deliberately excludes source-side combine.
+    """
+
+    compact_capacity = route_table.valid_by_expert.shape[-1]
+    compact_block_sharding = NamedSharding(mesh, P(SOURCE_PUSH_MESH_AXIS, None, None, None))
+    compact_meta_sharding = NamedSharding(mesh, P(SOURCE_PUSH_MESH_AXIS, None, None))
+    block_sizes = source_push_dx13_pallas_resolved_block_sizes(SourcePushDx13PallasBlockSizes.get_default())
+    d_activation_blocks = jax.device_put(
+        np.ones(
+            (config.ep_size, config.experts_per_rank, compact_capacity, config.intermediate_dim),
+            dtype=inputs["w13_source"].dtype,
+        ),
+        compact_block_sharding,
+    )
+    z_blocks = jax.device_put(
+        np.ones(
+            (config.ep_size, config.experts_per_rank, compact_capacity, 2 * config.intermediate_dim),
+            dtype=inputs["w13_source"].dtype,
+        ),
+        compact_block_sharding,
+    )
+    valid = jax.device_put(route_table.valid_by_expert, compact_meta_sharding)
+    source_rank_by_expert = jax.device_put(route_table.source_rank_by_expert, compact_meta_sharding)
+    token_id_by_expert = jax.device_put(route_table.token_id_by_expert, compact_meta_sharding)
+    route_slot_by_expert = jax.device_put(route_table.route_slot_by_expert, compact_meta_sharding)
+
+    def call_dx13():
+        with jax.set_mesh(mesh):
+            if backward_dx13_implementation == SOURCE_PUSH_DX13_IMPLEMENTATION_PALLAS_MGPU:
+                output = source_push_dx13_push_compact(
+                    d_activation_blocks,
+                    z_blocks,
+                    inputs["w13_source"],
+                    source_rank_by_expert,
+                    token_id_by_expert,
+                    route_slot_by_expert,
+                    valid,
+                    implementation=SOURCE_PUSH_DX13_IMPLEMENTATION_PALLAS_MGPU,
+                    block_sizes=block_sizes,
+                    mesh=mesh,
+                )
+            elif backward_dx13_implementation == BACKWARD_DX13_IMPLEMENTATION_XLA_EXPERT_MAJOR:
+                output = source_push_dx13_push_compact_xla(
+                    d_activation_blocks,
+                    z_blocks,
+                    inputs["w13_source"],
+                    source_rank_by_expert,
+                    token_id_by_expert,
+                    route_slot_by_expert,
+                    valid,
+                )
+            else:
+                raise ValueError(f"unsupported backward DX13 implementation {backward_dx13_implementation!r}")
+        _block_until_ready(output)
+        return output
+
+    start = time.perf_counter()
+    output = call_dx13()
+    first_call_time = time.perf_counter() - start
+
+    for _ in range(warmup):
+        output = call_dx13()
+
+    steady_state_times = []
+    for _ in range(repeat_runs):
+        start = time.perf_counter()
+        for _ in range(steps):
+            output = call_dx13()
+        steady_state_times.append((time.perf_counter() - start) / steps)
+
+    _block_until_ready(output)
+    stage_useful_flops, stage_rounded_flops = _backward_stage_flops_per_rank(
+        config,
+        host_inputs.queue_stats,
+        BACKWARD_STAGE_DX13_PUSH,
+    )
+    dropped_routes = int(jax.device_get(host_inputs.plan.dropped_routes))
+    rows = [
+        _decomposed_backward_row(
+            config,
+            queue_stats=host_inputs.queue_stats,
+            repeat_run=repeat_run,
+            repeat_runs=repeat_runs,
+            stage=BACKWARD_STAGE_DX13_PUSH,
+            steady_state_time=steady_state_time,
+            first_call_time=first_call_time,
+            useful_backward_flops=stage_useful_flops,
+            rounded_backward_flops=stage_rounded_flops,
+            dropped_routes=dropped_routes,
+            mode=MODE_BACKWARD_DX13_ONLY,
+        )
+        for repeat_run, steady_state_time in enumerate(steady_state_times)
+    ]
+    rows.append(_summary_row(rows))
+    for row in rows:
+        row["backward_dx13_implementation"] = backward_dx13_implementation
+        row["backward_dx13_boundary"] = (
+            "xla_expert_major_materialization"
+            if backward_dx13_implementation == BACKWARD_DX13_IMPLEMENTATION_XLA_EXPERT_MAJOR
+            else "expert_major_materialization_with_source_route_buffer_contract"
+        )
+        row["backward_dx13_row_block"] = block_sizes.row_block
+        row["backward_dx13_hidden_block"] = block_sizes.hidden_block
+        row["backward_dx13_output_block"] = block_sizes.output_block
+        row["backward_stop_after_stage"] = BACKWARD_STAGE_DX13_PUSH
+    return rows
+
+
+def _run_source_push_backward_dx13_store_zero_only(
+    config: PushInboxConfig,
+    *,
+    mesh: Mesh,
+    host_inputs,
+    route_table,
+    inputs: dict[str, jax.Array],
+    warmup: int,
+    steps: int,
+    repeat_runs: int,
+) -> list[dict[str, Any]]:
+    """Benchmark the DX13 expert-major output write/allocation floor."""
+
+    compact_capacity = route_table.valid_by_expert.shape[-1]
+    compact_block_sharding = NamedSharding(mesh, P(SOURCE_PUSH_MESH_AXIS, None, None, None))
+    compact_meta_sharding = NamedSharding(mesh, P(SOURCE_PUSH_MESH_AXIS, None, None))
+    block_sizes = source_push_dx13_pallas_resolved_block_sizes(SourcePushDx13PallasBlockSizes.get_default())
+    d_activation_blocks = jax.device_put(
+        np.ones(
+            (config.ep_size, config.experts_per_rank, compact_capacity, config.intermediate_dim),
+            dtype=inputs["w13_source"].dtype,
+        ),
+        compact_block_sharding,
+    )
+    z_blocks = jax.device_put(
+        np.ones(
+            (config.ep_size, config.experts_per_rank, compact_capacity, 2 * config.intermediate_dim),
+            dtype=inputs["w13_source"].dtype,
+        ),
+        compact_block_sharding,
+    )
+    valid = jax.device_put(route_table.valid_by_expert, compact_meta_sharding)
+
+    def call_dx13_store_zero():
+        with jax.set_mesh(mesh):
+            output = source_push_dx13_expert_major_store_zero_pallas_mgpu(
+                d_activation_blocks,
+                z_blocks,
+                inputs["w13_source"],
+                valid,
+                block_sizes=block_sizes,
+                mesh=mesh,
+            )
+        _block_until_ready(output)
+        return output
+
+    start = time.perf_counter()
+    output = call_dx13_store_zero()
+    first_call_time = time.perf_counter() - start
+
+    for _ in range(warmup):
+        output = call_dx13_store_zero()
+
+    steady_state_times = []
+    for _ in range(repeat_runs):
+        start = time.perf_counter()
+        for _ in range(steps):
+            output = call_dx13_store_zero()
+        steady_state_times.append((time.perf_counter() - start) / steps)
+
+    _block_until_ready(output)
+    dropped_routes = int(jax.device_get(host_inputs.plan.dropped_routes))
+    output_bytes_per_rank = output.shape[1] * output.shape[2] * output.shape[3] * output.dtype.itemsize
+    rows = [
+        _decomposed_backward_row(
+            config,
+            queue_stats=host_inputs.queue_stats,
+            repeat_run=repeat_run,
+            repeat_runs=repeat_runs,
+            stage=BACKWARD_STAGE_DX13_PUSH,
+            steady_state_time=steady_state_time,
+            first_call_time=first_call_time,
+            useful_backward_flops=0.0,
+            rounded_backward_flops=0.0,
+            dropped_routes=dropped_routes,
+            mode=MODE_BACKWARD_DX13_STORE_ZERO_ONLY,
+        )
+        for repeat_run, steady_state_time in enumerate(steady_state_times)
+    ]
+    rows.append(_summary_row(rows))
+    for row in rows:
+        steady = row.get("steady_state_time") or row.get("median_steady_state_time")
+        row["backward_dx13_implementation"] = SOURCE_PUSH_DX13_IMPLEMENTATION_PALLAS_MGPU
+        row["backward_dx13_boundary"] = "expert_major_store_zero"
+        row["backward_dx13_row_block"] = block_sizes.row_block
+        row["backward_dx13_hidden_block"] = block_sizes.hidden_block
+        row["backward_dx13_output_block"] = block_sizes.output_block
+        row["backward_stop_after_stage"] = BACKWARD_STAGE_DX13_PUSH
+        row["dx13_output_bytes_per_rank"] = output_bytes_per_rank
+        row["dx13_output_gbps_per_rank"] = None if steady is None else output_bytes_per_rank / steady / 1e9
+    return rows
+
+
+def _run_source_push_backward_dx13_route_buffer_only(
+    config: PushInboxConfig,
+    *,
+    mesh: Mesh,
+    host_inputs,
+    route_table,
+    inputs: dict[str, jax.Array],
+    warmup: int,
+    steps: int,
+    repeat_runs: int,
+) -> list[dict[str, Any]]:
+    """Benchmark DX13 direct source route-buffer contribution generation."""
+
+    compact_capacity = route_table.valid_by_expert.shape[-1]
+    compact_block_sharding = NamedSharding(mesh, P(SOURCE_PUSH_MESH_AXIS, None, None, None))
+    compact_meta_sharding = NamedSharding(mesh, P(SOURCE_PUSH_MESH_AXIS, None, None))
+    block_sizes = source_push_dx13_pallas_resolved_block_sizes(SourcePushDx13PallasBlockSizes.get_default())
+    d_activation_blocks = jax.device_put(
+        np.ones(
+            (config.ep_size, config.experts_per_rank, compact_capacity, config.intermediate_dim),
+            dtype=inputs["w13_source"].dtype,
+        ),
+        compact_block_sharding,
+    )
+    z_blocks = jax.device_put(
+        np.ones(
+            (config.ep_size, config.experts_per_rank, compact_capacity, 2 * config.intermediate_dim),
+            dtype=inputs["w13_source"].dtype,
+        ),
+        compact_block_sharding,
+    )
+    valid = jax.device_put(route_table.valid_by_expert, compact_meta_sharding)
+    source_rank_by_expert = jax.device_put(route_table.source_rank_by_expert, compact_meta_sharding)
+    token_id_by_expert = jax.device_put(route_table.token_id_by_expert, compact_meta_sharding)
+    route_slot_by_expert = jax.device_put(route_table.route_slot_by_expert, compact_meta_sharding)
+
+    def call_dx13_route_buffer():
+        with jax.set_mesh(mesh):
+            output = source_push_dx13_push_route_buffer(
+                d_activation_blocks,
+                z_blocks,
+                inputs["w13_source"],
+                source_rank_by_expert,
+                token_id_by_expert,
+                route_slot_by_expert,
+                valid,
+                tokens_per_source=config.tokens_per_rank,
+                topk=config.topk,
+                implementation=SOURCE_PUSH_DX13_IMPLEMENTATION_PALLAS_MGPU,
+                block_sizes=block_sizes,
+                mesh=mesh,
+            )
+        _block_until_ready(output)
+        return output
+
+    start = time.perf_counter()
+    output = call_dx13_route_buffer()
+    first_call_time = time.perf_counter() - start
+
+    for _ in range(warmup):
+        output = call_dx13_route_buffer()
+
+    steady_state_times = []
+    for _ in range(repeat_runs):
+        start = time.perf_counter()
+        for _ in range(steps):
+            output = call_dx13_route_buffer()
+        steady_state_times.append((time.perf_counter() - start) / steps)
+
+    _block_until_ready(output)
+    stage_useful_flops, stage_rounded_flops = _backward_stage_flops_per_rank(
+        config,
+        host_inputs.queue_stats,
+        BACKWARD_STAGE_DX13_PUSH,
+    )
+    dropped_routes = int(jax.device_get(host_inputs.plan.dropped_routes))
+    rows = [
+        _decomposed_backward_row(
+            config,
+            queue_stats=host_inputs.queue_stats,
+            repeat_run=repeat_run,
+            repeat_runs=repeat_runs,
+            stage=BACKWARD_STAGE_DX13_PUSH,
+            steady_state_time=steady_state_time,
+            first_call_time=first_call_time,
+            useful_backward_flops=stage_useful_flops,
+            rounded_backward_flops=stage_rounded_flops,
+            dropped_routes=dropped_routes,
+            mode=MODE_BACKWARD_DX13_ROUTE_BUFFER_ONLY,
+        )
+        for repeat_run, steady_state_time in enumerate(steady_state_times)
+    ]
+    rows.append(_summary_row(rows))
+    for row in rows:
+        row["backward_dx13_implementation"] = SOURCE_PUSH_DX13_IMPLEMENTATION_PALLAS_MGPU
+        row["backward_dx13_boundary"] = "direct_source_route_buffer_remote_write"
+        row["backward_dx13_row_block"] = block_sizes.row_block
+        row["backward_dx13_hidden_block"] = block_sizes.hidden_block
+        row["backward_dx13_output_block"] = block_sizes.output_block
+        row["backward_stop_after_stage"] = BACKWARD_STAGE_DX13_PUSH
+    return rows
+
+
+def _run_source_push_backward_dx13_source_compact_only(
+    config: PushInboxConfig,
+    *,
+    mesh: Mesh,
+    host_inputs,
+    route_table,
+    inputs: dict[str, jax.Array],
+    warmup: int,
+    steps: int,
+    repeat_runs: int,
+    block_contiguous: bool = False,
+    mode: str = MODE_BACKWARD_DX13_SOURCE_COMPACT_ONLY,
+) -> list[dict[str, Any]]:
+    """Benchmark expert-owner DX13 plus source-compact contribution return."""
+
+    compact_capacity = route_table.valid_by_expert.shape[-1]
+    compact_block_sharding = NamedSharding(mesh, P(SOURCE_PUSH_MESH_AXIS, None, None, None))
+    compact_meta_sharding = NamedSharding(mesh, P(SOURCE_PUSH_MESH_AXIS, None, None))
+    if block_contiguous:
+        block_defaults = SourcePushDx13PallasBlockSizes.get_default()
+        block_sizes = SourcePushDx13PallasBlockSizes(
+            row_block=config.block_m,
+            hidden_block=block_defaults.hidden_block,
+            output_block=block_defaults.output_block,
+        )
+    else:
+        block_sizes = source_push_dx13_pallas_resolved_block_sizes(SourcePushDx13PallasBlockSizes.get_default())
+    d_activation_blocks = jax.device_put(
+        np.ones(
+            (config.ep_size, config.experts_per_rank, compact_capacity, config.intermediate_dim),
+            dtype=inputs["w13_source"].dtype,
+        ),
+        compact_block_sharding,
+    )
+    z_blocks = jax.device_put(
+        np.ones(
+            (config.ep_size, config.experts_per_rank, compact_capacity, 2 * config.intermediate_dim),
+            dtype=inputs["w13_source"].dtype,
+        ),
+        compact_block_sharding,
+    )
+    compact_slots = source_push_dx13_compact_assignment_slots_from_fields(
+        jax.device_put(route_table.source_rank_by_expert, compact_meta_sharding),
+        jax.device_put(route_table.dst_ordinal_by_expert, compact_meta_sharding),
+        jax.device_put(route_table.entry_by_expert, compact_meta_sharding),
+        jax.device_put(route_table.row_in_entry_by_expert, compact_meta_sharding),
+        jax.device_put(route_table.valid_by_expert, compact_meta_sharding),
+    )
+    queue_shape = tuple(int(dim) for dim in host_inputs.plan.valid_mask.shape)
+
+    def call_dx13_source_compact():
+        with jax.set_mesh(mesh):
+            if block_contiguous:
+                output = source_push_dx13_push_contrib_block_contiguous_pallas_mgpu(
+                    d_activation_blocks,
+                    z_blocks,
+                    inputs["w13_source"],
+                    compact_slots,
+                    queue_shape=queue_shape,
+                    block_sizes=block_sizes,
+                    mesh=mesh,
+                )
+            else:
+                push_contrib = (
+                    source_push_dx13_push_compact_contrib
+                    if mode == MODE_BACKWARD_DX13_PUSH_CONTRIB_ONLY
+                    else source_push_dx13_push_contrib
+                )
+                output = push_contrib(
+                    d_activation_blocks,
+                    z_blocks,
+                    inputs["w13_source"],
+                    compact_slots,
+                    queue_shape=queue_shape,
+                    implementation=SOURCE_PUSH_DX13_IMPLEMENTATION_PALLAS_MGPU,
+                    block_sizes=block_sizes,
+                    mesh=mesh,
+                )
+        _block_until_ready(output)
+        return output
+
+    start = time.perf_counter()
+    output = call_dx13_source_compact()
+    first_call_time = time.perf_counter() - start
+
+    for _ in range(warmup):
+        output = call_dx13_source_compact()
+
+    steady_state_times = []
+    for _ in range(repeat_runs):
+        start = time.perf_counter()
+        for _ in range(steps):
+            output = call_dx13_source_compact()
+        steady_state_times.append((time.perf_counter() - start) / steps)
+
+    _block_until_ready(output)
+    stage_useful_flops, stage_rounded_flops = _backward_stage_flops_per_rank(
+        config,
+        host_inputs.queue_stats,
+        BACKWARD_STAGE_DX13_PUSH,
+    )
+    dropped_routes = int(jax.device_get(host_inputs.plan.dropped_routes))
+    output_bytes_per_rank = (
+        output.dx_contrib.shape[1]
+        * output.dx_contrib.shape[2]
+        * output.dx_contrib.shape[3]
+        * output.dx_contrib.shape[4]
+        * output.dx_contrib.dtype.itemsize
+    )
+    rows = [
+        _decomposed_backward_row(
+            config,
+            queue_stats=host_inputs.queue_stats,
+            repeat_run=repeat_run,
+            repeat_runs=repeat_runs,
+            stage=BACKWARD_STAGE_DX13_PUSH,
+            steady_state_time=steady_state_time,
+            first_call_time=first_call_time,
+            useful_backward_flops=stage_useful_flops,
+            rounded_backward_flops=stage_rounded_flops,
+            dropped_routes=dropped_routes,
+            mode=(MODE_BACKWARD_DX13_SOURCE_COMPACT_BLOCK_ONLY if block_contiguous else mode),
+        )
+        for repeat_run, steady_state_time in enumerate(steady_state_times)
+    ]
+    rows.append(_summary_row(rows))
+    for row in rows:
+        steady = row.get("steady_state_time") or row.get("median_steady_state_time")
+        row["backward_dx13_implementation"] = SOURCE_PUSH_DX13_IMPLEMENTATION_PALLAS_MGPU
+        row["backward_dx13_boundary"] = (
+            "source_compact_queue_block_contiguous_remote_write"
+            if block_contiguous
+            else (
+                "expert_owner_dx13_to_source_compact_contrib_remote_write"
+                if mode == MODE_BACKWARD_DX13_PUSH_CONTRIB_ONLY
+                else "source_compact_queue_remote_write"
+            )
+        )
+        row["backward_dx13_block_contiguous"] = block_contiguous
+        row["backward_dx13_row_block"] = block_sizes.row_block
+        row["backward_dx13_hidden_block"] = block_sizes.hidden_block
+        row["backward_dx13_output_block"] = block_sizes.output_block
+        row["backward_stop_after_stage"] = BACKWARD_STAGE_DX13_PUSH
+        row["source_compact_output_bytes_per_rank"] = output_bytes_per_rank
+        row["source_compact_output_gbps_per_rank"] = None if steady is None else output_bytes_per_rank / steady / 1e9
+    return rows
+
+
+def _run_source_push_backward_dx13_source_compact_combine_only(
+    config: PushInboxConfig,
+    *,
+    mesh: Mesh,
+    host_inputs,
+    warmup: int,
+    steps: int,
+    repeat_runs: int,
+) -> list[dict[str, Any]]:
+    """Benchmark source-local combine from source-compact DX13 contributions."""
+
+    queue_shape = tuple(int(dim) for dim in host_inputs.plan.valid_mask.shape)
+    dx_contrib = jax.device_put(
+        jnp.ones((*queue_shape, config.hidden_dim), dtype=jnp.bfloat16),
+        NamedSharding(mesh, P(SOURCE_PUSH_MESH_AXIS, None, None, None, None)),
+    )
+    compact_output = SourcePushDx13SourceCompactOutput(dx_contrib=dx_contrib)
+    _block_until_ready(compact_output)
+
+    def call_route_buffer_then_sum():
+        with jax.set_mesh(mesh):
+            output = source_push_dx13_source_compact_to_route_buffer_reference(compact_output, host_inputs.plan)
+        _block_until_ready(output)
+        return output
+
+    def call_direct_token_sum():
+        with jax.set_mesh(mesh):
+            output = source_push_dx13_source_compact_combine_reference(compact_output, host_inputs.plan)
+        _block_until_ready(output)
+        return output
+
+    variants = (
+        ("route_buffer_then_sum", call_route_buffer_then_sum),
+        ("direct_token_sum", call_direct_token_sum),
+    )
+    rows: list[dict[str, Any]] = []
+    dropped_routes = int(jax.device_get(host_inputs.plan.dropped_routes))
+    input_bytes_per_rank = (
+        dx_contrib.shape[1]
+        * dx_contrib.shape[2]
+        * dx_contrib.shape[3]
+        * dx_contrib.shape[4]
+        * dx_contrib.dtype.itemsize
+    )
+    for variant, call_combine in variants:
+        start = time.perf_counter()
+        output = call_combine()
+        first_call_time = time.perf_counter() - start
+
+        for _ in range(warmup):
+            output = call_combine()
+
+        steady_state_times = []
+        for _ in range(repeat_runs):
+            start = time.perf_counter()
+            for _ in range(steps):
+                output = call_combine()
+            steady_state_times.append((time.perf_counter() - start) / steps)
+
+        _block_until_ready(output)
+        variant_rows = [
+            _decomposed_backward_row(
+                config,
+                queue_stats=host_inputs.queue_stats,
+                repeat_run=repeat_run,
+                repeat_runs=repeat_runs,
+                stage=BACKWARD_STAGE_DX_COMBINE,
+                steady_state_time=steady_state_time,
+                first_call_time=first_call_time,
+                useful_backward_flops=None,
+                rounded_backward_flops=None,
+                dropped_routes=dropped_routes,
+                mode=MODE_BACKWARD_DX13_SOURCE_COMPACT_COMBINE_ONLY,
+            )
+            for repeat_run, steady_state_time in enumerate(steady_state_times)
+        ]
+        variant_rows.append(_summary_row(variant_rows))
+        for row in variant_rows:
+            steady = row.get("steady_state_time") or row.get("median_steady_state_time")
+            row["backward_dx13_boundary"] = "source_compact_queue_combine"
+            row["source_compact_combine_variant"] = variant
+            row["source_compact_input_bytes_per_rank"] = input_bytes_per_rank
+            row["source_compact_input_gbps_per_rank"] = None if steady is None else input_bytes_per_rank / steady / 1e9
+        rows.extend(variant_rows)
+    return rows
+
+
+def _run_source_push_backward_dx13_xla_source_compact_direct_only(
+    config: PushInboxConfig,
+    *,
+    mesh: Mesh,
+    host_inputs,
+    route_table,
+    inputs: dict[str, jax.Array],
+    warmup: int,
+    steps: int,
+    repeat_runs: int,
+) -> list[dict[str, Any]]:
+    """Benchmark XLA DX13 math plus source-compact scatter and direct combine."""
+
+    compact_capacity = route_table.valid_by_expert.shape[-1]
+    compact_block_sharding = NamedSharding(mesh, P(SOURCE_PUSH_MESH_AXIS, None, None, None))
+    compact_meta_sharding = NamedSharding(mesh, P(SOURCE_PUSH_MESH_AXIS, None, None))
+    d_activation_blocks = jax.device_put(
+        np.ones(
+            (config.ep_size, config.experts_per_rank, compact_capacity, config.intermediate_dim),
+            dtype=inputs["w13_source"].dtype,
+        ),
+        compact_block_sharding,
+    )
+    z_blocks = jax.device_put(
+        np.ones(
+            (config.ep_size, config.experts_per_rank, compact_capacity, 2 * config.intermediate_dim),
+            dtype=inputs["w13_source"].dtype,
+        ),
+        compact_block_sharding,
+    )
+    valid = jax.device_put(route_table.valid_by_expert, compact_meta_sharding)
+    source_rank_by_expert = jax.device_put(route_table.source_rank_by_expert, compact_meta_sharding)
+    token_id_by_expert = jax.device_put(route_table.token_id_by_expert, compact_meta_sharding)
+    route_slot_by_expert = jax.device_put(route_table.route_slot_by_expert, compact_meta_sharding)
+    compact_slots = source_push_dx13_compact_assignment_slots_from_fields(
+        jax.device_put(route_table.source_rank_by_expert, compact_meta_sharding),
+        jax.device_put(route_table.dst_ordinal_by_expert, compact_meta_sharding),
+        jax.device_put(route_table.entry_by_expert, compact_meta_sharding),
+        jax.device_put(route_table.row_in_entry_by_expert, compact_meta_sharding),
+        valid,
+    )
+    queue_shape = tuple(int(dim) for dim in host_inputs.plan.valid_mask.shape)
+
+    def call_dx13_source_compact_direct():
+        with jax.set_mesh(mesh):
+            dx13_output = source_push_dx13_push_compact_xla(
+                d_activation_blocks,
+                z_blocks,
+                inputs["w13_source"],
+                source_rank_by_expert,
+                token_id_by_expert,
+                route_slot_by_expert,
+                valid,
+            )
+            source_compact = source_push_dx13_contrib_buffer_from_expert_reference(
+                dx13_output.dx_expert_major,
+                compact_slots,
+                queue_shape=queue_shape,
+            )
+            dx = source_push_dx13_source_compact_combine_reference(source_compact, host_inputs.plan)
+        _block_until_ready(dx)
+        return dx
+
+    start = time.perf_counter()
+    output = call_dx13_source_compact_direct()
+    first_call_time = time.perf_counter() - start
+
+    for _ in range(warmup):
+        output = call_dx13_source_compact_direct()
+
+    steady_state_times = []
+    for _ in range(repeat_runs):
+        start = time.perf_counter()
+        for _ in range(steps):
+            output = call_dx13_source_compact_direct()
+        steady_state_times.append((time.perf_counter() - start) / steps)
+
+    _block_until_ready(output)
+    stage_useful_flops, stage_rounded_flops = _backward_stage_flops_per_rank(
+        config,
+        host_inputs.queue_stats,
+        BACKWARD_STAGE_DX13_PUSH,
+    )
+    dropped_routes = int(jax.device_get(host_inputs.plan.dropped_routes))
+    source_compact_bytes_per_rank = (
+        queue_shape[1] * queue_shape[2] * queue_shape[3] * config.hidden_dim * jnp.dtype(jnp.bfloat16).itemsize
+    )
+    dx_bytes_per_rank = config.tokens_per_rank * config.hidden_dim * jnp.dtype(jnp.bfloat16).itemsize
+    rows = [
+        _decomposed_backward_row(
+            config,
+            queue_stats=host_inputs.queue_stats,
+            repeat_run=repeat_run,
+            repeat_runs=repeat_runs,
+            stage=BACKWARD_STAGE_DX13_PUSH,
+            steady_state_time=steady_state_time,
+            first_call_time=first_call_time,
+            useful_backward_flops=stage_useful_flops,
+            rounded_backward_flops=stage_rounded_flops,
+            dropped_routes=dropped_routes,
+            mode=MODE_BACKWARD_DX13_XLA_SOURCE_COMPACT_DIRECT_ONLY,
+        )
+        for repeat_run, steady_state_time in enumerate(steady_state_times)
+    ]
+    rows.append(_summary_row(rows))
+    for row in rows:
+        steady = row.get("steady_state_time") or row.get("median_steady_state_time")
+        row["backward_dx13_implementation"] = BACKWARD_DX13_IMPLEMENTATION_XLA_EXPERT_MAJOR
+        row["backward_dx13_boundary"] = "xla_expert_major_to_source_compact_direct_combine"
+        row["backward_stop_after_stage"] = BACKWARD_STAGE_DX13_PUSH
+        row["source_compact_output_bytes_per_rank"] = source_compact_bytes_per_rank
+        row["dx_output_bytes_per_rank"] = dx_bytes_per_rank
+        row["source_compact_output_gbps_per_rank"] = (
+            None if steady is None else source_compact_bytes_per_rank / steady / 1e9
+        )
+    return rows
+
+
+def _run_source_push_backward_dx13_xla_route_buffer_direct_only(
+    config: PushInboxConfig,
+    *,
+    mesh: Mesh,
+    host_inputs,
+    route_table,
+    inputs: dict[str, jax.Array],
+    warmup: int,
+    steps: int,
+    repeat_runs: int,
+) -> list[dict[str, Any]]:
+    """Benchmark XLA DX13 math plus direct scatter into source route slots."""
+
+    compact_capacity = route_table.valid_by_expert.shape[-1]
+    compact_block_sharding = NamedSharding(mesh, P(SOURCE_PUSH_MESH_AXIS, None, None, None))
+    compact_meta_sharding = NamedSharding(mesh, P(SOURCE_PUSH_MESH_AXIS, None, None))
+    d_activation_blocks = jax.device_put(
+        np.ones(
+            (config.ep_size, config.experts_per_rank, compact_capacity, config.intermediate_dim),
+            dtype=inputs["w13_source"].dtype,
+        ),
+        compact_block_sharding,
+    )
+    z_blocks = jax.device_put(
+        np.ones(
+            (config.ep_size, config.experts_per_rank, compact_capacity, 2 * config.intermediate_dim),
+            dtype=inputs["w13_source"].dtype,
+        ),
+        compact_block_sharding,
+    )
+    valid = jax.device_put(route_table.valid_by_expert, compact_meta_sharding)
+    source_rank_by_expert = jax.device_put(route_table.source_rank_by_expert, compact_meta_sharding)
+    token_id_by_expert = jax.device_put(route_table.token_id_by_expert, compact_meta_sharding)
+    route_slot_by_expert = jax.device_put(route_table.route_slot_by_expert, compact_meta_sharding)
+
+    def call_dx13_route_buffer_direct():
+        with jax.set_mesh(mesh):
+            dx13_output = source_push_dx13_push_compact_xla(
+                d_activation_blocks,
+                z_blocks,
+                inputs["w13_source"],
+                source_rank_by_expert,
+                token_id_by_expert,
+                route_slot_by_expert,
+                valid,
+            )
+            dx_routes = source_push_dx13_source_route_buffer_reference(
+                dx13_output.dx_expert_major,
+                dx13_output.source_rank_by_expert,
+                dx13_output.token_id_by_expert,
+                dx13_output.route_slot_by_expert,
+                dx13_output.valid_by_expert,
+                tokens_per_source=config.tokens_per_rank,
+                topk=config.topk,
+            )
+            dx = jnp.sum(dx_routes, axis=2)
+        _block_until_ready(dx)
+        return dx
+
+    start = time.perf_counter()
+    output = call_dx13_route_buffer_direct()
+    first_call_time = time.perf_counter() - start
+
+    for _ in range(warmup):
+        output = call_dx13_route_buffer_direct()
+
+    steady_state_times = []
+    for _ in range(repeat_runs):
+        start = time.perf_counter()
+        for _ in range(steps):
+            output = call_dx13_route_buffer_direct()
+        steady_state_times.append((time.perf_counter() - start) / steps)
+
+    _block_until_ready(output)
+    stage_useful_flops, stage_rounded_flops = _backward_stage_flops_per_rank(
+        config,
+        host_inputs.queue_stats,
+        BACKWARD_STAGE_DX13_PUSH,
+    )
+    dropped_routes = int(jax.device_get(host_inputs.plan.dropped_routes))
+    route_buffer_bytes_per_rank = (
+        config.tokens_per_rank * config.topk * config.hidden_dim * jnp.dtype(jnp.bfloat16).itemsize
+    )
+    dx_bytes_per_rank = config.tokens_per_rank * config.hidden_dim * jnp.dtype(jnp.bfloat16).itemsize
+    rows = [
+        _decomposed_backward_row(
+            config,
+            queue_stats=host_inputs.queue_stats,
+            repeat_run=repeat_run,
+            repeat_runs=repeat_runs,
+            stage=BACKWARD_STAGE_DX13_PUSH,
+            steady_state_time=steady_state_time,
+            first_call_time=first_call_time,
+            useful_backward_flops=stage_useful_flops,
+            rounded_backward_flops=stage_rounded_flops,
+            dropped_routes=dropped_routes,
+            mode=MODE_BACKWARD_DX13_XLA_ROUTE_BUFFER_DIRECT_ONLY,
+        )
+        for repeat_run, steady_state_time in enumerate(steady_state_times)
+    ]
+    rows.append(_summary_row(rows))
+    for row in rows:
+        steady = row.get("steady_state_time") or row.get("median_steady_state_time")
+        row["backward_dx13_implementation"] = BACKWARD_DX13_IMPLEMENTATION_XLA_EXPERT_MAJOR
+        row["backward_dx13_boundary"] = "xla_expert_major_to_route_buffer_direct_sum"
+        row["backward_stop_after_stage"] = BACKWARD_STAGE_DX13_PUSH
+        row["route_buffer_output_bytes_per_rank"] = route_buffer_bytes_per_rank
+        row["dx_output_bytes_per_rank"] = dx_bytes_per_rank
+        row["route_buffer_output_gbps_per_rank"] = (
+            None if steady is None else route_buffer_bytes_per_rank / steady / 1e9
+        )
+    return rows
+
+
+def _gather_compact_d_route_weights_only(
+    d_route_block: jax.Array,
+    route_indices,
+) -> jax.Array:
+    valid = route_indices.valid
+    safe_dst = jnp.where(valid, route_indices.dst, 0)
+    safe_expert = jnp.where(valid, route_indices.expert, 0)
+    safe_row = jnp.where(valid, route_indices.row, 0)
+    d_route_weights = d_route_block.at[safe_dst, safe_expert, safe_row].get(
+        out_sharding=_source_push_out_sharding(SOURCE_PUSH_MESH_AXIS, None, None)
+    )
+    return jnp.where(valid, d_route_weights, jnp.zeros((), dtype=d_route_weights.dtype))
+
+
+def _run_source_push_backward_dx13_source_grouped_only(
+    config: PushInboxConfig,
+    *,
+    mesh: Mesh,
+    host_inputs,
+    route_table,
+    warmup: int,
+    steps: int,
+    repeat_runs: int,
+) -> list[dict[str, Any]]:
+    """Benchmark the source-grouped DX13 copy epilogue in isolation."""
+
+    compact_capacity = route_table.valid_by_expert.shape[-1]
+    compact_block_sharding = NamedSharding(mesh, P(SOURCE_PUSH_MESH_AXIS, None, None, None))
+    compact_meta_sharding = NamedSharding(mesh, P(SOURCE_PUSH_MESH_AXIS, None, None))
+    src_base_sharding = NamedSharding(mesh, P(SOURCE_PUSH_MESH_AXIS, None, None))
+    block_sizes = source_push_dx13_pallas_resolved_block_sizes(SourcePushDx13PallasBlockSizes.get_default())
+    dx_expert_major = jax.device_put(
+        jnp.ones(
+            (config.ep_size, config.experts_per_rank, compact_capacity, config.hidden_dim),
+            dtype=jnp.bfloat16,
+        ),
+        compact_block_sharding,
+    )
+    valid = jax.device_put(route_table.valid_by_expert, compact_meta_sharding)
+    source_rank_by_expert = jax.device_put(route_table.source_rank_by_expert, compact_meta_sharding)
+    token_id_by_expert = jax.device_put(route_table.token_id_by_expert, compact_meta_sharding)
+    route_slot_by_expert = jax.device_put(route_table.route_slot_by_expert, compact_meta_sharding)
+    src_base_by_expert = jax.device_put(
+        jnp.asarray(host_inputs.src_base_by_expert, dtype=jnp.int32), src_base_sharding
+    )
+    source_rows = _dx13_max_source_group_rows(
+        route_table.source_rank_by_expert,
+        route_table.valid_by_expert,
+        jnp.asarray(host_inputs.src_base_by_expert, dtype=jnp.int32),
+    )
+    original_rows = dx_expert_major.shape[2]
+    padded_rows = math.ceil(original_rows / block_sizes.row_block) * block_sizes.row_block
+    if padded_rows != original_rows:
+        row_pad = ((0, 0), (0, 0), (0, padded_rows - original_rows))
+        dx_expert_major = jnp.pad(dx_expert_major, (*row_pad, (0, 0)))
+        source_rank_by_expert = jnp.pad(source_rank_by_expert, row_pad, constant_values=0)
+        valid = jnp.pad(valid, row_pad, constant_values=False)
+
+    def call_dx13_source_grouped():
+        with jax.set_mesh(mesh):
+            output = _source_push_dx13_source_grouped_sharded_mgpu_kernel(
+                mesh,
+                dx_expert_major,
+                source_rank_by_expert,
+                valid,
+                src_base_by_expert,
+                source_rows=source_rows,
+                row_block=block_sizes.row_block,
+                hidden_block=block_sizes.hidden_block,
+            )
+        _block_until_ready(output)
+        return output
+
+    start = time.perf_counter()
+    output = call_dx13_source_grouped()
+    first_call_time = time.perf_counter() - start
+    output_bytes_per_rank = (
+        output.shape[1] * output.shape[2] * output.shape[3] * output.shape[4] * output.dtype.itemsize
+    )
+    _ = (token_id_by_expert, route_slot_by_expert)
+
+    for _ in range(warmup):
+        output = call_dx13_source_grouped()
+
+    steady_state_times = []
+    for _ in range(repeat_runs):
+        start = time.perf_counter()
+        for _ in range(steps):
+            output = call_dx13_source_grouped()
+        steady_state_times.append((time.perf_counter() - start) / steps)
+
+    _block_until_ready(output)
+    dropped_routes = int(jax.device_get(host_inputs.plan.dropped_routes))
+    rows = [
+        _decomposed_backward_row(
+            config,
+            queue_stats=host_inputs.queue_stats,
+            repeat_run=repeat_run,
+            repeat_runs=repeat_runs,
+            stage=BACKWARD_STAGE_DX13_SOURCE_GROUPED,
+            steady_state_time=steady_state_time,
+            first_call_time=first_call_time,
+            useful_backward_flops=None,
+            rounded_backward_flops=None,
+            dropped_routes=dropped_routes,
+            mode=MODE_BACKWARD_DX13_SOURCE_GROUPED_ONLY,
+        )
+        for repeat_run, steady_state_time in enumerate(steady_state_times)
+    ]
+    rows.append(_summary_row(rows))
+    for row in rows:
+        steady = row.get("steady_state_time") or row.get("median_steady_state_time")
+        row["backward_dx13_implementation"] = SOURCE_PUSH_DX13_IMPLEMENTATION_PALLAS_MGPU
+        row["backward_dx13_boundary"] = "source_grouped_remote_write_copy_only"
+        row["backward_dx13_row_block"] = block_sizes.row_block
+        row["backward_dx13_hidden_block"] = block_sizes.hidden_block
+        row["backward_dx13_output_block"] = block_sizes.output_block
+        row["backward_stop_after_stage"] = BACKWARD_STAGE_DX13_SOURCE_GROUPED
+        row["source_grouped_output_bytes_per_rank"] = output_bytes_per_rank
+        row["source_grouped_output_gbps_per_rank"] = None if steady is None else output_bytes_per_rank / steady / 1e9
+    return rows
+
+
+def _run_source_push_backward_return_only(
+    config: PushInboxConfig,
+    *,
+    mesh: Mesh,
+    host_inputs,
+    route_table,
+    warmup: int,
+    steps: int,
+    repeat_runs: int,
+    backward_return_implementation: str,
+) -> list[dict[str, Any]]:
+    """Benchmark compact backward return/combine in isolation.
+
+    This diagnostic isolates source-local direct gather from W2/W13 backward
+    inputs. It intentionally lives in the benchmark harness, not production
+    config, because it is a failure-localization tool.
+    """
+
+    return_implementation = _resolve_backward_stage_implementation(
+        backward_return_implementation,
+        source_push_mlp._source_push_mlp_backward_return_implementation(SOURCE_PUSH_MLP_IMPLEMENTATION_PALLAS_MGPU),
+    )
+    compact_capacity = route_table.valid_by_expert.shape[-1]
+    if return_implementation == "pallas_mgpu":
+        output_sharding = NamedSharding(mesh, P(SOURCE_PUSH_MESH_AXIS, None, None, None))
+        route_sharding = NamedSharding(mesh, P(SOURCE_PUSH_MESH_AXIS, None, None))
+        dx_expert_major = jax.device_put(
+            jnp.ones(
+                (config.ep_size, config.experts_per_rank, compact_capacity, config.hidden_dim),
+                dtype=jnp.bfloat16,
+            ),
+            output_sharding,
+        )
+        d_route_block = jax.device_put(
+            jnp.ones((config.ep_size, config.experts_per_rank, compact_capacity), dtype=jnp.float32),
+            route_sharding,
+        )
+    else:
+        dx_expert_major = jnp.ones(
+            (config.ep_size, config.experts_per_rank, compact_capacity, config.hidden_dim),
+            dtype=jnp.bfloat16,
+        )
+        d_route_block = jnp.ones((config.ep_size, config.experts_per_rank, compact_capacity), dtype=jnp.float32)
+    with jax.set_mesh(mesh):
+        return_route_indices = source_push_backward_return_route_indices_jax(
+            host_inputs.plan,
+            src_base_by_expert=host_inputs.src_base_by_expert,
+        )
+        _block_until_ready((dx_expert_major, d_route_block, return_route_indices))
+
+    route_bounds = _compact_return_route_index_bounds(
+        return_route_indices,
+        compact_capacity,
+        experts_per_rank=config.experts_per_rank,
+    )
+
+    def call_return():
+        with jax.set_mesh(mesh):
+            returned = source_push_backward_return(
+                dx_expert_major,
+                d_route_block,
+                host_inputs.plan,
+                src_base_by_expert=host_inputs.src_base_by_expert,
+                route_indices=return_route_indices,
+                implementation=return_implementation,
+                mesh=mesh if return_implementation == "pallas_mgpu" else None,
+            )
+        _block_until_ready(returned)
+        return returned
+
+    start = time.perf_counter()
+    output = call_return()
+    first_call_time = time.perf_counter() - start
+
+    for _ in range(warmup):
+        output = call_return()
+
+    steady_state_times = []
+    for _ in range(repeat_runs):
+        start = time.perf_counter()
+        for _ in range(steps):
+            output = call_return()
+        steady_state_times.append((time.perf_counter() - start) / steps)
+
+    rows = [
+        _decomposed_backward_row(
+            config,
+            queue_stats=host_inputs.queue_stats,
+            repeat_run=repeat_run,
+            repeat_runs=repeat_runs,
+            stage=BACKWARD_STAGE_DX_COMBINE,
+            steady_state_time=steady_state_time,
+            first_call_time=first_call_time,
+            useful_backward_flops=None,
+            rounded_backward_flops=None,
+            dropped_routes=int(jax.device_get(host_inputs.plan.dropped_routes)),
+            mode=MODE_BACKWARD_RETURN_ONLY,
+        )
+        for repeat_run, steady_state_time in enumerate(steady_state_times)
+    ]
+    for row in rows:
+        row["backward_return_implementation"] = backward_return_implementation
+        row["resolved_backward_return_implementation"] = return_implementation
+        row["compact_expert_capacity"] = compact_capacity
+        row.update(route_bounds)
+    summary = _summary_row(rows)
+    summary["backward_return_implementation"] = backward_return_implementation
+    summary["resolved_backward_return_implementation"] = return_implementation
+    summary["compact_expert_capacity"] = compact_capacity
+    summary.update(route_bounds)
+    _ = output
+    return [*rows, summary]
+
+
+def _run_source_push_backward_return_components_only(
+    config: PushInboxConfig,
+    *,
+    mesh: Mesh,
+    host_inputs,
+    route_table,
+    warmup: int,
+    steps: int,
+    repeat_runs: int,
+) -> list[dict[str, Any]]:
+    """Benchmark the main JAX compact return gathers separately."""
+
+    compact_capacity = route_table.valid_by_expert.shape[-1]
+    dx_expert_major = jnp.ones(
+        (config.ep_size, config.experts_per_rank, compact_capacity, config.hidden_dim),
+        dtype=jnp.bfloat16,
+    )
+    d_route_block = jnp.ones((config.ep_size, config.experts_per_rank, compact_capacity), dtype=jnp.float32)
+    route_dx_for_sum = jax.device_put(
+        jnp.ones(
+            (config.ep_size, config.tokens_per_rank, config.topk, config.hidden_dim),
+            dtype=jnp.bfloat16,
+        ),
+        NamedSharding(mesh, P(SOURCE_PUSH_MESH_AXIS, None, None, None)),
+    )
+    with jax.set_mesh(mesh):
+        return_route_indices = source_push_backward_return_route_indices_jax(
+            host_inputs.plan,
+            src_base_by_expert=host_inputs.src_base_by_expert,
+        )
+        _block_until_ready((dx_expert_major, d_route_block, return_route_indices, route_dx_for_sum))
+
+    route_bounds = _compact_return_route_index_bounds(
+        return_route_indices,
+        compact_capacity,
+        experts_per_rank=config.experts_per_rank,
+    )
+
+    valid = return_route_indices.valid
+    safe_dst = jnp.where(valid, return_route_indices.dst, 0)
+    safe_expert = jnp.where(valid, return_route_indices.expert, 0)
+    safe_row = jnp.where(valid, return_route_indices.row, 0)
+
+    def call_dx_gather_sum():
+        with jax.set_mesh(mesh):
+            route_dx = dx_expert_major.at[safe_dst, safe_expert, safe_row].get(
+                out_sharding=_source_push_out_sharding(SOURCE_PUSH_MESH_AXIS, None, None, None)
+            )
+            route_dx = jnp.where(valid[..., None], route_dx, jnp.zeros((), dtype=route_dx.dtype))
+            dx = jnp.sum(route_dx, axis=2)
+        _block_until_ready(dx)
+        return dx
+
+    def call_droute_gather():
+        with jax.set_mesh(mesh):
+            d_route_weights = d_route_block.at[safe_dst, safe_expert, safe_row].get(
+                out_sharding=_source_push_out_sharding(SOURCE_PUSH_MESH_AXIS, None, None)
+            )
+            d_route_weights = jnp.where(valid, d_route_weights, jnp.zeros((), dtype=d_route_weights.dtype))
+        _block_until_ready(d_route_weights)
+        return d_route_weights
+
+    def call_dx_sum_only():
+        with jax.set_mesh(mesh):
+            dx = jnp.sum(route_dx_for_sum, axis=2)
+        _block_until_ready(dx)
+        return dx
+
+    variants = (
+        ("dx_gather_sum", call_dx_gather_sum),
+        ("dx_sum_only", call_dx_sum_only),
+        ("droute_gather", call_droute_gather),
+    )
+    dropped_routes = int(jax.device_get(host_inputs.plan.dropped_routes))
+    rows: list[dict[str, Any]] = []
+    dx_route_bytes_per_rank = config.tokens_per_rank * config.topk * config.hidden_dim * BYTES_PER_BF16
+    droute_bytes_per_rank = config.tokens_per_rank * config.topk * jnp.dtype(jnp.float32).itemsize
+    for variant, call_component in variants:
+        start = time.perf_counter()
+        output = call_component()
+        first_call_time = time.perf_counter() - start
+
+        for _ in range(warmup):
+            output = call_component()
+
+        steady_state_times = []
+        for _ in range(repeat_runs):
+            start = time.perf_counter()
+            for _ in range(steps):
+                output = call_component()
+            steady_state_times.append((time.perf_counter() - start) / steps)
+
+        _block_until_ready(output)
+        variant_rows = [
+            _decomposed_backward_row(
+                config,
+                queue_stats=host_inputs.queue_stats,
+                repeat_run=repeat_run,
+                repeat_runs=repeat_runs,
+                stage=BACKWARD_STAGE_DX_COMBINE,
+                steady_state_time=steady_state_time,
+                first_call_time=first_call_time,
+                useful_backward_flops=None,
+                rounded_backward_flops=None,
+                dropped_routes=dropped_routes,
+                mode=MODE_BACKWARD_RETURN_COMPONENTS_ONLY,
+            )
+            for repeat_run, steady_state_time in enumerate(steady_state_times)
+        ]
+        variant_rows.append(_summary_row(variant_rows))
+        component_bytes = droute_bytes_per_rank if variant == "droute_gather" else dx_route_bytes_per_rank
+        for row in variant_rows:
+            steady = row.get("steady_state_time") or row.get("median_steady_state_time")
+            row["backward_return_component"] = variant
+            row["component_bytes_per_rank"] = component_bytes
+            row["component_gbps_per_rank"] = None if steady is None else component_bytes / steady / 1e9
+            row.update(route_bounds)
+        rows.extend(variant_rows)
+    return rows
+
+
+def _compact_return_route_index_bounds(
+    return_route_indices,
+    compact_capacity: int,
+    *,
+    experts_per_rank: int,
+) -> dict[str, Any]:
+    valid = np.asarray(jax.device_get(return_route_indices.valid), dtype=np.bool_)
+    dst = np.asarray(jax.device_get(return_route_indices.dst), dtype=np.int32)
+    expert = np.asarray(jax.device_get(return_route_indices.expert), dtype=np.int32)
+    row = np.asarray(jax.device_get(return_route_indices.row), dtype=np.int32)
+    live_routes = int(np.sum(valid))
+    if live_routes == 0:
+        return {
+            "return_live_routes": 0,
+            "return_max_dst": None,
+            "return_max_expert": None,
+            "return_max_row": None,
+            "return_indices_in_bounds": True,
+        }
+    live_dst = dst[valid]
+    live_expert = expert[valid]
+    live_row = row[valid]
+    in_bounds = (
+        np.all(live_dst >= 0)
+        and np.all(live_dst < valid.shape[0])
+        and np.all(live_expert >= 0)
+        and np.all(live_expert < experts_per_rank)
+        and np.all(live_row >= 0)
+        and np.all(live_row < compact_capacity)
+    )
+    expert_bound = int(np.max(live_expert))
+    return {
+        "return_live_routes": live_routes,
+        "return_max_dst": int(np.max(live_dst)),
+        "return_max_expert": expert_bound,
+        "return_max_row": int(np.max(live_row)),
+        "return_indices_in_bounds": bool(in_bounds),
+    }
 
 
 def _time_source_push_backward_decomposed(
@@ -2014,10 +4154,7 @@ def _time_source_push_backward_staged_flat(
         backward_w13_implementation,
         source_push_mlp._source_push_mlp_backward_w13_implementation(SOURCE_PUSH_MLP_IMPLEMENTATION_PALLAS_MGPU),
     )
-    w13_diagnostic_only = w13_implementation in (
-        SOURCE_PUSH_W13_BACKWARD_DIAGNOSTIC_PALLAS_MGPU_COMPACT_DX_ONLY,
-        SOURCE_PUSH_W13_BACKWARD_DIAGNOSTIC_SOURCE_GATHER_DW13_ONLY,
-    )
+    w13_diagnostic_only = source_push_w13_backward_is_diagnostic_only(w13_implementation)
     if w13_diagnostic_only and backward_stop_after_stage != BACKWARD_STAGE_W13:
         raise ValueError(
             "W13 dx-only/dw13-only diagnostics produce partial gradients and require "
@@ -2038,6 +4175,10 @@ def _time_source_push_backward_staged_flat(
         backward_return_implementation,
         source_push_mlp._source_push_mlp_backward_return_implementation(SOURCE_PUSH_MLP_IMPLEMENTATION_PALLAS_MGPU),
     )
+    valid = _source_push_w2_valid_blocks_sharded(route_table.valid_by_expert)
+    compact_meta_sharding = NamedSharding(mesh, P(SOURCE_PUSH_MESH_AXIS, None, None))
+    source_rank_by_expert = jax.device_put(route_table.source_rank_by_expert, compact_meta_sharding)
+    token_id_by_expert = jax.device_put(route_table.token_id_by_expert, compact_meta_sharding)
     flat_stages = _staged_flat_backward_stages(backward_stop_after_stage)
     timed_stages = BACKWARD_STAGES
     if backward_w2_split_timing and BACKWARD_STAGE_W2 in flat_stages:
@@ -2118,18 +4259,142 @@ def _time_source_push_backward_staged_flat(
             return w2_grads, stage_times
 
         stage_start = time.perf_counter()
-        w13_grads = source_push_w13_backward(
-            x,
-            w2_grads.d_h,
-            w13,
-            host_inputs.plan,
-            host_inputs.send_meta,
-            expert_base,
-            host_inputs.src_base_by_expert,
-            use_exact_expert_major=host_inputs.use_exact_expert_major,
-            implementation=w13_implementation,
-            mesh=mesh,
-        )
+        if w13_implementation in (
+            SOURCE_PUSH_W13_BACKWARD_IMPLEMENTATION_PALLAS_MGPU_COMPACT,
+            SOURCE_PUSH_W13_BACKWARD_EXPERIMENT_COMPACT_DX_SOURCE_GATHER_DW13,
+            SOURCE_PUSH_W13_BACKWARD_DIAGNOSTIC_PALLAS_MGPU_COMPACT_DX_ONLY,
+            SOURCE_PUSH_W13_BACKWARD_DIAGNOSTIC_PALLAS_MGPU_COMPACT_DW13_ONLY,
+            SOURCE_PUSH_W13_BACKWARD_DIAGNOSTIC_PALLAS_MGPU_EXACT_FLAT_DW13_ONLY,
+            SOURCE_PUSH_W13_BACKWARD_DIAGNOSTIC_PALLAS_MGPU_LOCAL_SWIGLU_PERSISTENT_DW13_ONLY,
+            SOURCE_PUSH_W13_BACKWARD_DIAGNOSTIC_XLA_COMPACT_DW13_ONLY,
+            SOURCE_PUSH_W13_BACKWARD_DIAGNOSTIC_XLA_SOURCE_PADDED_DW13_ONLY,
+            SOURCE_PUSH_W13_BACKWARD_DIAGNOSTIC_PALLAS_MGPU_SOURCE_PADDED_PARTIALS_DW13_ONLY,
+            SOURCE_PUSH_W13_BACKWARD_DIAGNOSTIC_SOURCE_GATHER_DW13_ONLY,
+        ):
+            d_h_blocks = _gather_flat_rows_by_expert_slice(w2_grads.d_h, expert_base, valid.shape[-1])
+            if w13_implementation == SOURCE_PUSH_W13_BACKWARD_IMPLEMENTATION_PALLAS_MGPU_COMPACT:
+                w13_grads = _source_push_w13_backward_expert_blocks_pallas_mgpu(
+                    x,
+                    d_h_blocks,
+                    w13,
+                    source_rank_by_expert,
+                    token_id_by_expert,
+                    valid,
+                    mesh=mesh,
+                )
+            elif w13_implementation == SOURCE_PUSH_W13_BACKWARD_EXPERIMENT_COMPACT_DX_SOURCE_GATHER_DW13:
+                w13_grads = _source_push_w13_backward_expert_blocks_compact_dx_source_gather_dw13(
+                    x,
+                    d_h_blocks,
+                    w13,
+                    source_rank_by_expert,
+                    token_id_by_expert,
+                    valid,
+                    mesh=mesh,
+                )
+            elif w13_implementation == SOURCE_PUSH_W13_BACKWARD_DIAGNOSTIC_PALLAS_MGPU_COMPACT_DX_ONLY:
+                w13_grads = _source_push_w13_backward_expert_blocks_dx_only_pallas_mgpu(
+                    d_h_blocks,
+                    w13,
+                    valid,
+                    mesh=mesh,
+                )
+            elif w13_implementation == SOURCE_PUSH_W13_BACKWARD_DIAGNOSTIC_PALLAS_MGPU_COMPACT_DW13_ONLY:
+                w13_grads = _source_push_w13_backward_expert_blocks_dw13_only_pallas_mgpu(
+                    x,
+                    d_h_blocks,
+                    w13,
+                    source_rank_by_expert,
+                    token_id_by_expert,
+                    valid,
+                    mesh=mesh,
+                )
+            elif w13_implementation == SOURCE_PUSH_W13_BACKWARD_DIAGNOSTIC_PALLAS_MGPU_EXACT_FLAT_DW13_ONLY:
+                w13_grads = _source_push_w13_backward_expert_blocks_dw13_only_exact_flat_pallas_mgpu(
+                    x,
+                    d_h_blocks,
+                    w13,
+                    source_rank_by_expert,
+                    token_id_by_expert,
+                    valid,
+                    mesh=mesh,
+                )
+            elif w13_implementation == SOURCE_PUSH_W13_BACKWARD_DIAGNOSTIC_XLA_COMPACT_DW13_ONLY:
+                w13_grads = source_push_w13_backward_expert_blocks_dw13_only_xla(
+                    x,
+                    d_h_blocks,
+                    w13,
+                    source_rank_by_expert,
+                    token_id_by_expert,
+                    valid,
+                )
+            elif w13_implementation == SOURCE_PUSH_W13_BACKWARD_DIAGNOSTIC_XLA_SOURCE_PADDED_DW13_ONLY:
+                w13_grads = source_push_w13_backward_expert_blocks_source_padded_dw13_only_xla(
+                    x,
+                    d_h_blocks,
+                    source_rank_by_expert,
+                    token_id_by_expert,
+                    valid,
+                    host_inputs.src_base_by_expert,
+                )
+            elif (
+                w13_implementation == SOURCE_PUSH_W13_BACKWARD_DIAGNOSTIC_PALLAS_MGPU_SOURCE_PADDED_PARTIALS_DW13_ONLY
+            ):
+                partials = _source_push_w13_dw13_source_padded_partials_pallas_mgpu(
+                    x,
+                    d_h_blocks,
+                    source_rank_by_expert,
+                    token_id_by_expert,
+                    valid,
+                    host_inputs.src_base_by_expert,
+                    mesh=mesh,
+                )
+                w13_grads = SourcePushW13CompactBackwardOutput(
+                    x_expert_major=jnp.zeros((0,), dtype=jnp.float32),
+                    dx_expert_major=jnp.zeros((0,), dtype=jnp.float32),
+                    dw13=jnp.sum(partials, axis=0),
+                )
+            elif w13_implementation in (
+                BACKWARD_W13_IMPLEMENTATION_PALLAS_MGPU_LOCAL_SWIGLU_DX13_DW13,
+                BACKWARD_W13_IMPLEMENTATION_PALLAS_MGPU_DX13_XLA_LOCAL_SWIGLU_DW13,
+                BACKWARD_W13_IMPLEMENTATION_PALLAS_MGPU_DX13_SPLIT_LOCAL_SWIGLU_DW13,
+                BACKWARD_W13_IMPLEMENTATION_XLA_DX13_SOURCE_GATHER_DW13,
+                BACKWARD_W13_IMPLEMENTATION_XLA_DX13_PALLAS_X_REMAT_XLA_LOCAL_SWIGLU_DW13,
+            ):
+                raise ValueError(
+                    f"{w13_implementation!r} requires compact-H "
+                    f"`d_activation` and saved W13 preactivation; use {MODE_BACKWARD_STAGED_BLOCKS!r}."
+                )
+            elif w13_implementation in (
+                SOURCE_PUSH_W13_BACKWARD_DIAGNOSTIC_PALLAS_MGPU_LOCAL_SWIGLU_PERSISTENT_DW13_ONLY,
+                SOURCE_PUSH_W13_BACKWARD_DIAGNOSTIC_PALLAS_MGPU_LOCAL_SWIGLU_SPLIT_DW13_ONLY,
+            ):
+                raise ValueError(
+                    f"{w13_implementation!r} "
+                    f"requires compact-H `d_activation` and saved W13 preactivation; use {MODE_BACKWARD_STAGED_BLOCKS!r} "
+                    f"or {MODE_BACKWARD_W13_ONLY!r}."
+                )
+            else:
+                w13_grads = source_push_w13_backward_expert_blocks_source_gather_dw13_only(
+                    x,
+                    d_h_blocks,
+                    source_rank_by_expert,
+                    token_id_by_expert,
+                    valid,
+                )
+        else:
+            w13_grads = source_push_w13_backward(
+                x,
+                w2_grads.d_h,
+                w13,
+                host_inputs.plan,
+                host_inputs.send_meta,
+                expert_base,
+                host_inputs.src_base_by_expert,
+                use_exact_expert_major=host_inputs.use_exact_expert_major,
+                implementation=w13_implementation,
+                mesh=mesh,
+            )
         _block_until_ready(w13_grads)
         if record_stage_times:
             stage_times[BACKWARD_STAGE_W13] = time.perf_counter() - stage_start
@@ -2137,16 +4402,36 @@ def _time_source_push_backward_staged_flat(
             return w13_grads, stage_times
 
         stage_start = time.perf_counter()
-        returned = source_push_backward_return_flat(
-            w13_grads.dx_expert_major,
-            w2_grads.d_route_weight,
-            host_inputs.plan,
-            expert_base=expert_base,
-            src_base_by_expert=host_inputs.src_base_by_expert,
-            route_indices=return_route_indices,
-            implementation=return_implementation,
-            mesh=mesh,
-        )
+        if w13_implementation in (
+            SOURCE_PUSH_W13_BACKWARD_IMPLEMENTATION_PALLAS_MGPU_COMPACT,
+            SOURCE_PUSH_W13_BACKWARD_EXPERIMENT_COMPACT_DX_SOURCE_GATHER_DW13,
+            SOURCE_PUSH_W13_BACKWARD_DIAGNOSTIC_PALLAS_MGPU_COMPACT_DX_ONLY,
+        ):
+            d_route_weight_blocks = _gather_flat_rows_by_expert_slice(
+                w2_grads.d_route_weight,
+                expert_base,
+                valid.shape[-1],
+            )
+            returned = source_push_backward_return(
+                w13_grads.dx_expert_major,
+                d_route_weight_blocks,
+                host_inputs.plan,
+                src_base_by_expert=host_inputs.src_base_by_expert,
+                route_indices=return_route_indices,
+                implementation=return_implementation,
+                mesh=mesh,
+            )
+        else:
+            returned = source_push_backward_return_flat(
+                w13_grads.dx_expert_major,
+                w2_grads.d_route_weight,
+                host_inputs.plan,
+                expert_base=expert_base,
+                src_base_by_expert=host_inputs.src_base_by_expert,
+                route_indices=return_route_indices,
+                implementation=return_implementation,
+                mesh=mesh,
+            )
         output = (
             returned.dx.astype(x.dtype),
             returned.d_route_weights.astype(h_route_weights.dtype),
@@ -2258,12 +4543,68 @@ def _time_source_push_backward_staged_blocks(
     jitted_w2_backward = jax.jit(call_w2_backward)
     valid = _source_push_w2_valid_blocks_sharded(route_table.valid_by_expert)
     compact_meta_sharding = NamedSharding(mesh, P(SOURCE_PUSH_MESH_AXIS, None, None))
+    compact_block_sharding = NamedSharding(mesh, P(SOURCE_PUSH_MESH_AXIS, None, None, None))
     source_rank_by_expert = jax.device_put(route_table.source_rank_by_expert, compact_meta_sharding)
     token_id_by_expert = jax.device_put(route_table.token_id_by_expert, compact_meta_sharding)
-    stages = _backward_staged_block_timed_stages(backward_stop_after_stage)
+    route_slot_by_expert = jax.device_put(route_table.route_slot_by_expert, compact_meta_sharding)
+    stages = _backward_staged_block_timed_stages(backward_stop_after_stage, w13_implementation)
+
+    def rematerialize_x_expert_major() -> jax.Array:
+        safe_src = jnp.where(valid, source_rank_by_expert, 0)
+        safe_token = jnp.where(valid, token_id_by_expert, 0)
+        x_expert_major = x.at[safe_src, safe_token].get(out_sharding=compact_block_sharding)
+        return jnp.where(valid[..., None], x_expert_major, jnp.zeros_like(x_expert_major))
+
+    def rematerialize_x_expert_major_pallas_flat() -> jax.Array:
+        rows_per_expert = valid.shape[-1]
+        expected_rows = config.experts_per_rank * rows_per_expert
+        if config.hidden_rows_per_rank != expected_rows:
+            raise ValueError(
+                "Pallas flat x-remat diagnostic requires flat W13 rows to reshape to compact expert blocks; "
+                f"got hidden_rows_per_rank={config.hidden_rows_per_rank}, "
+                f"experts_per_rank={config.experts_per_rank}, rows_per_expert={rows_per_expert}"
+            )
+        x_rows = source_push_x_to_w13_rows(
+            x,
+            host_inputs.plan,
+            host_inputs.send_meta,
+            expert_base,
+            host_inputs.src_base_by_expert,
+            hidden_rows_per_rank=config.hidden_rows_per_rank,
+            use_exact_expert_major=host_inputs.use_exact_expert_major,
+            implementation=SOURCE_PUSH_X_TO_W13_ROWS_IMPLEMENTATION_PALLAS_MGPU,
+            block_sizes=SourcePushXToW13RowsPallasBlockSizes(hidden_block=128),
+            mesh=mesh,
+        )
+        x_expert_major = x_rows.reshape((config.ep_size, config.experts_per_rank, rows_per_expert, config.hidden_dim))
+        return jax.device_put(x_expert_major, compact_block_sharding)
 
     def call_backward(*, record_stage_times: bool = False):
         stage_times = {stage: 0.0 for stage in stages}
+        x_remat_stage_time = 0.0
+        dx_direct = None
+
+        def timed_rematerialize_x_expert_major() -> jax.Array:
+            nonlocal x_remat_stage_time
+            remat_start = time.perf_counter()
+            x_expert_major = rematerialize_x_expert_major()
+            if record_stage_times:
+                _block_until_ready(x_expert_major)
+                x_remat_stage_time += time.perf_counter() - remat_start
+                if BACKWARD_STAGE_X_REMAT in stage_times:
+                    stage_times[BACKWARD_STAGE_X_REMAT] = x_remat_stage_time
+            return x_expert_major
+
+        def timed_rematerialize_x_expert_major_pallas_flat() -> jax.Array:
+            nonlocal x_remat_stage_time
+            remat_start = time.perf_counter()
+            x_expert_major = rematerialize_x_expert_major_pallas_flat()
+            if record_stage_times:
+                _block_until_ready(x_expert_major)
+                x_remat_stage_time += time.perf_counter() - remat_start
+                if BACKWARD_STAGE_X_REMAT in stage_times:
+                    stage_times[BACKWARD_STAGE_X_REMAT] = x_remat_stage_time
+            return x_expert_major
 
         stage_start = time.perf_counter()
         if dy_route_implementation == SOURCE_PUSH_DY_ROUTE_IMPLEMENTATION_SOURCE_PUSH_PALLAS_MGPU:
@@ -2279,6 +4620,17 @@ def _time_source_push_backward_staged_blocks(
                 expert_capacity=route_table.valid_by_expert.shape[-1],
                 row_block=config.block_m,
                 hidden_block=128,
+            )
+        elif dy_route_implementation == SOURCE_PUSH_DY_ROUTE_IMPLEMENTATION_SOURCE_PUSH_JAX:
+            dy_blocks = _source_push_backward_dy_to_expert_major_from_plan_source_push_jax(
+                dy,
+                host_inputs.plan,
+                host_inputs.send_meta,
+                host_inputs.expert_base,
+                host_inputs.src_base_by_expert,
+                experts_per_rank=config.experts_per_rank,
+                expert_capacity=route_table.valid_by_expert.shape[-1],
+                use_exact_expert_major=host_inputs.use_exact_expert_major,
             )
         else:
             dy_blocks = _source_push_backward_dy_to_expert_major(
@@ -2323,12 +4675,292 @@ def _time_source_push_backward_staged_blocks(
                 valid,
                 mesh=mesh,
             )
+        elif w13_implementation == SOURCE_PUSH_W13_BACKWARD_EXPERIMENT_COMPACT_DX_SOURCE_GATHER_DW13:
+            w13_grads = _source_push_w13_backward_expert_blocks_compact_dx_source_gather_dw13(
+                x,
+                w2_grads.d_h,
+                w13,
+                source_rank_by_expert,
+                token_id_by_expert,
+                valid,
+                mesh=mesh,
+            )
         elif w13_implementation == SOURCE_PUSH_W13_BACKWARD_DIAGNOSTIC_PALLAS_MGPU_COMPACT_DX_ONLY:
             w13_grads = _source_push_w13_backward_expert_blocks_dx_only_pallas_mgpu(
                 w2_grads.d_h,
                 w13,
                 valid,
                 mesh=mesh,
+            )
+        elif w13_implementation == SOURCE_PUSH_W13_BACKWARD_DIAGNOSTIC_PALLAS_MGPU_COMPACT_DW13_ONLY:
+            w13_grads = _source_push_w13_backward_expert_blocks_dw13_only_pallas_mgpu(
+                x,
+                w2_grads.d_h,
+                w13,
+                source_rank_by_expert,
+                token_id_by_expert,
+                valid,
+                mesh=mesh,
+            )
+        elif w13_implementation == SOURCE_PUSH_W13_BACKWARD_DIAGNOSTIC_PALLAS_MGPU_PREFILLED_X_DW13_ONLY:
+            raise ValueError(
+                f"{SOURCE_PUSH_W13_BACKWARD_DIAGNOSTIC_PALLAS_MGPU_PREFILLED_X_DW13_ONLY!r} is a W13-only "
+                "diagnostic because it pre-materializes x outside the timed W13 call."
+            )
+        elif w13_implementation == SOURCE_PUSH_W13_BACKWARD_DIAGNOSTIC_PALLAS_MGPU_EXACT_FLAT_DW13_ONLY:
+            w13_grads = _source_push_w13_backward_expert_blocks_dw13_only_exact_flat_pallas_mgpu(
+                x,
+                w2_grads.d_h,
+                w13,
+                source_rank_by_expert,
+                token_id_by_expert,
+                valid,
+                mesh=mesh,
+            )
+        elif w13_implementation == SOURCE_PUSH_W13_BACKWARD_DIAGNOSTIC_PALLAS_MGPU_LOCAL_SWIGLU_DW13_ONLY:
+            if backward_stop_after_stage != BACKWARD_STAGE_W13:
+                raise ValueError(
+                    f"{SOURCE_PUSH_W13_BACKWARD_DIAGNOSTIC_PALLAS_MGPU_LOCAL_SWIGLU_DW13_ONLY!r} only produces "
+                    f"`dw13`; use {BACKWARD_W13_IMPLEMENTATION_PALLAS_MGPU_LOCAL_SWIGLU_DX13_DW13!r} for a "
+                    "full staged-block backward."
+                )
+            w13_grads = _source_push_w13_backward_expert_blocks_local_swiglu_dw13_only_pallas_mgpu(
+                timed_rematerialize_x_expert_major(),
+                w2_grads.d_activation,
+                h_blocks,
+                valid,
+                mesh=mesh,
+            )
+        elif w13_implementation == SOURCE_PUSH_W13_BACKWARD_DIAGNOSTIC_PALLAS_MGPU_LOCAL_SWIGLU_PERSISTENT_DW13_ONLY:
+            if backward_stop_after_stage != BACKWARD_STAGE_W13:
+                raise ValueError(
+                    f"{SOURCE_PUSH_W13_BACKWARD_DIAGNOSTIC_PALLAS_MGPU_LOCAL_SWIGLU_PERSISTENT_DW13_ONLY!r} only "
+                    "produces `dw13`."
+                )
+            w13_grads = _source_push_w13_backward_expert_blocks_local_swiglu_persistent_dw13_only_pallas_mgpu(
+                timed_rematerialize_x_expert_major(),
+                w2_grads.d_activation,
+                h_blocks,
+                valid,
+                mesh=mesh,
+            )
+        elif w13_implementation == SOURCE_PUSH_W13_BACKWARD_DIAGNOSTIC_PALLAS_MGPU_LOCAL_SWIGLU_SPLIT_DW13_ONLY:
+            if backward_stop_after_stage != BACKWARD_STAGE_W13:
+                raise ValueError(
+                    f"{SOURCE_PUSH_W13_BACKWARD_DIAGNOSTIC_PALLAS_MGPU_LOCAL_SWIGLU_SPLIT_DW13_ONLY!r} only "
+                    "produces `dw13`."
+                )
+            w13_grads = _source_push_w13_backward_expert_blocks_local_swiglu_split_dw13_only_pallas_mgpu(
+                timed_rematerialize_x_expert_major(),
+                w2_grads.d_activation,
+                h_blocks,
+                valid,
+                mesh=mesh,
+            )
+        elif w13_implementation == SOURCE_PUSH_W13_BACKWARD_DIAGNOSTIC_PALLAS_MGPU_LOCAL_LINEAR_DW13_ONLY:
+            raise ValueError(
+                f"{SOURCE_PUSH_W13_BACKWARD_DIAGNOSTIC_PALLAS_MGPU_LOCAL_LINEAR_DW13_ONLY!r} is a W13-only "
+                "diagnostic for isolating dSwiGLU pointwise cost; it is not a correct staged backward."
+            )
+        elif w13_implementation == SOURCE_PUSH_W13_BACKWARD_DIAGNOSTIC_XLA_LOCAL_SWIGLU_DW13_ONLY:
+            if backward_stop_after_stage != BACKWARD_STAGE_W13:
+                raise ValueError(
+                    f"{SOURCE_PUSH_W13_BACKWARD_DIAGNOSTIC_XLA_LOCAL_SWIGLU_DW13_ONLY!r} only produces `dw13`."
+                )
+            w13_grads = source_push_w13_backward_expert_blocks_local_swiglu_dw13_only_xla(
+                timed_rematerialize_x_expert_major(),
+                w2_grads.d_activation,
+                h_blocks,
+                valid,
+            )
+        elif w13_implementation in (
+            SOURCE_PUSH_W13_BACKWARD_DIAGNOSTIC_PALLAS_MGPU_LOCAL_SWIGLU_GATE_DW13_ONLY,
+            SOURCE_PUSH_W13_BACKWARD_DIAGNOSTIC_PALLAS_MGPU_LOCAL_SWIGLU_UP_DW13_ONLY,
+        ):
+            raise ValueError(f"{w13_implementation!r} is a W13-only half-DW13 diagnostic.")
+        elif w13_implementation == BACKWARD_W13_IMPLEMENTATION_PALLAS_MGPU_LOCAL_SWIGLU_DX13_DW13:
+            dx13_output = _source_push_w13_backward_expert_blocks_dx_only_pallas_mgpu(
+                w2_grads.d_h,
+                w13,
+                valid,
+                mesh=mesh,
+            )
+            dw13_output = _source_push_w13_backward_expert_blocks_local_swiglu_dw13_only_pallas_mgpu(
+                timed_rematerialize_x_expert_major(),
+                w2_grads.d_activation,
+                h_blocks,
+                valid,
+                mesh=mesh,
+            )
+            w13_grads = SourcePushW13CompactBackwardOutput(
+                x_expert_major=jnp.zeros((0,), dtype=jnp.float32),
+                dx_expert_major=dx13_output.dx_expert_major,
+                dw13=dw13_output.dw13,
+            )
+        elif w13_implementation == BACKWARD_W13_IMPLEMENTATION_PALLAS_MGPU_DX13_XLA_LOCAL_SWIGLU_DW13:
+            dx13_output = _source_push_w13_backward_expert_blocks_dx_only_pallas_mgpu(
+                w2_grads.d_h,
+                w13,
+                valid,
+                mesh=mesh,
+            )
+            dw13_output = source_push_w13_backward_expert_blocks_local_swiglu_dw13_only_xla(
+                timed_rematerialize_x_expert_major(),
+                w2_grads.d_activation,
+                h_blocks,
+                valid,
+            )
+            w13_grads = SourcePushW13CompactBackwardOutput(
+                x_expert_major=jnp.zeros((0,), dtype=jnp.float32),
+                dx_expert_major=dx13_output.dx_expert_major,
+                dw13=dw13_output.dw13,
+            )
+        elif w13_implementation == BACKWARD_W13_IMPLEMENTATION_XLA_DX13_XLA_LOCAL_SWIGLU_DW13:
+            dx13_output = source_push_dx13_push_compact_xla(
+                w2_grads.d_activation,
+                h_blocks,
+                w13,
+                source_rank_by_expert,
+                token_id_by_expert,
+                route_slot_by_expert,
+                valid,
+            )
+            dw13_output = source_push_w13_backward_expert_blocks_local_swiglu_dw13_only_xla(
+                timed_rematerialize_x_expert_major(),
+                w2_grads.d_activation,
+                h_blocks,
+                valid,
+            )
+            w13_grads = SourcePushW13CompactBackwardOutput(
+                x_expert_major=jnp.zeros((0,), dtype=jnp.float32),
+                dx_expert_major=dx13_output.dx_expert_major,
+                dw13=dw13_output.dw13,
+            )
+        elif w13_implementation == BACKWARD_W13_IMPLEMENTATION_XLA_DX13_PALLAS_X_REMAT_XLA_LOCAL_SWIGLU_DW13:
+            dx13_output = source_push_dx13_push_compact_xla(
+                w2_grads.d_activation,
+                h_blocks,
+                w13,
+                source_rank_by_expert,
+                token_id_by_expert,
+                route_slot_by_expert,
+                valid,
+            )
+            dw13_output = source_push_w13_backward_expert_blocks_local_swiglu_dw13_only_xla(
+                timed_rematerialize_x_expert_major_pallas_flat(),
+                w2_grads.d_activation,
+                h_blocks,
+                valid,
+            )
+            w13_grads = SourcePushW13CompactBackwardOutput(
+                x_expert_major=jnp.zeros((0,), dtype=jnp.float32),
+                dx_expert_major=dx13_output.dx_expert_major,
+                dw13=dw13_output.dw13,
+            )
+        elif w13_implementation == BACKWARD_W13_IMPLEMENTATION_XLA_DX13_ROUTE_BUFFER_XLA_LOCAL_SWIGLU_DW13:
+            dx13_output = source_push_dx13_push_compact_xla(
+                w2_grads.d_activation,
+                h_blocks,
+                w13,
+                source_rank_by_expert,
+                token_id_by_expert,
+                route_slot_by_expert,
+                valid,
+            )
+            dx_routes = source_push_dx13_source_route_buffer_reference(
+                dx13_output.dx_expert_major,
+                dx13_output.source_rank_by_expert,
+                dx13_output.token_id_by_expert,
+                dx13_output.route_slot_by_expert,
+                dx13_output.valid_by_expert,
+                tokens_per_source=config.tokens_per_rank,
+                topk=config.topk,
+            )
+            dx_direct = jnp.sum(dx_routes, axis=2)
+            dw13_output = source_push_w13_backward_expert_blocks_local_swiglu_dw13_only_xla(
+                timed_rematerialize_x_expert_major(),
+                w2_grads.d_activation,
+                h_blocks,
+                valid,
+            )
+            w13_grads = SourcePushW13CompactBackwardOutput(
+                x_expert_major=jnp.zeros((0,), dtype=jnp.float32),
+                dx_expert_major=jnp.zeros((0,), dtype=jnp.float32),
+                dw13=dw13_output.dw13,
+            )
+        elif w13_implementation == BACKWARD_W13_IMPLEMENTATION_XLA_DX13_SOURCE_GATHER_DW13:
+            dx13_output = source_push_dx13_push_compact_xla(
+                w2_grads.d_activation,
+                h_blocks,
+                w13,
+                source_rank_by_expert,
+                token_id_by_expert,
+                route_slot_by_expert,
+                valid,
+            )
+            dw13_output = source_push_w13_backward_expert_blocks_source_gather_dw13_only(
+                x,
+                w2_grads.d_h,
+                source_rank_by_expert,
+                token_id_by_expert,
+                valid,
+            )
+            w13_grads = SourcePushW13CompactBackwardOutput(
+                x_expert_major=jnp.zeros((0,), dtype=jnp.float32),
+                dx_expert_major=dx13_output.dx_expert_major,
+                dw13=dw13_output.dw13,
+            )
+        elif w13_implementation == BACKWARD_W13_IMPLEMENTATION_PALLAS_MGPU_DX13_SPLIT_LOCAL_SWIGLU_DW13:
+            dx13_output = _source_push_w13_backward_expert_blocks_dx_only_pallas_mgpu(
+                w2_grads.d_h,
+                w13,
+                valid,
+                mesh=mesh,
+            )
+            dw13_output = _source_push_w13_backward_expert_blocks_local_swiglu_split_dw13_only_pallas_mgpu(
+                timed_rematerialize_x_expert_major(),
+                w2_grads.d_activation,
+                h_blocks,
+                valid,
+                mesh=mesh,
+            )
+            w13_grads = SourcePushW13CompactBackwardOutput(
+                x_expert_major=jnp.zeros((0,), dtype=jnp.float32),
+                dx_expert_major=dx13_output.dx_expert_major,
+                dw13=dw13_output.dw13,
+            )
+        elif w13_implementation == SOURCE_PUSH_W13_BACKWARD_DIAGNOSTIC_XLA_COMPACT_DW13_ONLY:
+            w13_grads = source_push_w13_backward_expert_blocks_dw13_only_xla(
+                x,
+                w2_grads.d_h,
+                w13,
+                source_rank_by_expert,
+                token_id_by_expert,
+                valid,
+            )
+        elif w13_implementation == SOURCE_PUSH_W13_BACKWARD_DIAGNOSTIC_XLA_SOURCE_PADDED_DW13_ONLY:
+            w13_grads = source_push_w13_backward_expert_blocks_source_padded_dw13_only_xla(
+                x,
+                w2_grads.d_h,
+                source_rank_by_expert,
+                token_id_by_expert,
+                valid,
+                host_inputs.src_base_by_expert,
+            )
+        elif w13_implementation == SOURCE_PUSH_W13_BACKWARD_DIAGNOSTIC_PALLAS_MGPU_SOURCE_PADDED_PARTIALS_DW13_ONLY:
+            partials = _source_push_w13_dw13_source_padded_partials_pallas_mgpu(
+                x,
+                w2_grads.d_h,
+                source_rank_by_expert,
+                token_id_by_expert,
+                valid,
+                host_inputs.src_base_by_expert,
+                mesh=mesh,
+            )
+            w13_grads = SourcePushW13CompactBackwardOutput(
+                x_expert_major=jnp.zeros((0,), dtype=jnp.float32),
+                dx_expert_major=jnp.zeros((0,), dtype=jnp.float32),
+                dw13=jnp.sum(partials, axis=0),
             )
         elif w13_implementation == SOURCE_PUSH_W13_BACKWARD_DIAGNOSTIC_SOURCE_GATHER_DW13_ONLY:
             w13_grads = source_push_w13_backward_expert_blocks_source_gather_dw13_only(
@@ -2357,16 +4989,36 @@ def _time_source_push_backward_staged_blocks(
                 implementation=w13_implementation,
                 mesh=mesh,
             )
-        _block_until_ready(w13_grads)
+        _block_until_ready((w13_grads, dx_direct) if dx_direct is not None else w13_grads)
         if record_stage_times:
-            stage_times[BACKWARD_STAGE_W13] = time.perf_counter() - stage_start
+            stage_times[BACKWARD_STAGE_W13] = time.perf_counter() - stage_start - x_remat_stage_time
         if backward_stop_after_stage == BACKWARD_STAGE_W13:
             return w13_grads, stage_times
 
         stage_start = time.perf_counter()
+        if w13_implementation == BACKWARD_W13_IMPLEMENTATION_XLA_DX13_ROUTE_BUFFER_XLA_LOCAL_SWIGLU_DW13:
+            d_route_weights = _gather_compact_d_route_weights_only(w2_grads.d_route_weight, return_route_indices)
+            output = (
+                dx_direct.astype(x.dtype),
+                d_route_weights.astype(expert_route_weights.dtype),
+                w13_grads.dw13.astype(w13.dtype),
+                w2_grads.dw2.astype(w2.dtype),
+            )
+            _block_until_ready(output)
+            if record_stage_times:
+                stage_times[BACKWARD_STAGE_DX_COMBINE] = time.perf_counter() - stage_start
+            return output, stage_times
         if w13_implementation in (
             SOURCE_PUSH_W13_BACKWARD_IMPLEMENTATION_TILED,
             SOURCE_PUSH_W13_BACKWARD_IMPLEMENTATION_PALLAS_MGPU_COMPACT,
+            SOURCE_PUSH_W13_BACKWARD_EXPERIMENT_COMPACT_DX_SOURCE_GATHER_DW13,
+            SOURCE_PUSH_W13_BACKWARD_DIAGNOSTIC_PALLAS_MGPU_COMPACT_DX_ONLY,
+            BACKWARD_W13_IMPLEMENTATION_PALLAS_MGPU_LOCAL_SWIGLU_DX13_DW13,
+            BACKWARD_W13_IMPLEMENTATION_PALLAS_MGPU_DX13_XLA_LOCAL_SWIGLU_DW13,
+            BACKWARD_W13_IMPLEMENTATION_PALLAS_MGPU_DX13_SPLIT_LOCAL_SWIGLU_DW13,
+            BACKWARD_W13_IMPLEMENTATION_XLA_DX13_XLA_LOCAL_SWIGLU_DW13,
+            BACKWARD_W13_IMPLEMENTATION_XLA_DX13_PALLAS_X_REMAT_XLA_LOCAL_SWIGLU_DW13,
+            BACKWARD_W13_IMPLEMENTATION_XLA_DX13_SOURCE_GATHER_DW13,
         ):
             returned = source_push_backward_return(
                 w13_grads.dx_expert_major,
@@ -2561,7 +5213,12 @@ def _source_push_w2_backward_from_flat_h_split_timing(
         swiglu_output.d_route_weight * valid_f,
         out_sharding=_source_push_out_sharding(SOURCE_PUSH_MESH_AXIS, None),
     )
-    output = _SourcePushW2BackwardOutput(d_h=d_h, d_route_weight=d_route_weight, dw2=matmul_output.dw2)
+    output = _SourcePushW2BackwardOutput(
+        d_h=d_h,
+        d_route_weight=d_route_weight,
+        dw2=matmul_output.dw2,
+        d_activation=swiglu_output.d_activation,
+    )
     if record_stage_times:
         _block_until_ready(output)
         stage_times[BACKWARD_STAGE_W2_SCATTER] = time.perf_counter() - stage_start
@@ -3791,6 +6448,7 @@ def _decomposed_backward_rows(
     forward_h_times: list[float],
     mode: str = MODE_BACKWARD_DECOMPOSED,
     stages: Sequence[str] = BACKWARD_STAGES,
+    w13_backward_component: str | None = None,
 ) -> list[dict[str, Any]]:
     useful_backward_flops, rounded_backward_flops = _backward_flops_per_rank(config, queue_stats)
     rows = []
@@ -3827,7 +6485,12 @@ def _decomposed_backward_rows(
         )
         for stage in stages:
             stage_time = timing.stage_steady_state_times[stage][repeat_run]
-            stage_useful_flops, stage_rounded_flops = _backward_stage_flops_per_rank(config, queue_stats, stage)
+            stage_useful_flops, stage_rounded_flops = _backward_stage_flops_per_rank(
+                config,
+                queue_stats,
+                stage,
+                w13_backward_component=w13_backward_component,
+            )
             rows.append(
                 _decomposed_backward_row(
                     config,
@@ -3854,6 +6517,16 @@ def _decomposed_backward_rows(
         grouped_rows.extend(stage_rows)
         grouped_rows.append(_summary_row(stage_rows))
     return grouped_rows
+
+
+def _w13_backward_component(w13_implementation: str) -> str | None:
+    return source_push_w13_backward_diagnostic_component(w13_implementation)
+
+
+def _row_w13_backward_component(row: Mapping[str, Any], w13_implementation: str) -> str | None:
+    if row["stage"] != BACKWARD_STAGE_W13:
+        return None
+    return _w13_backward_component(w13_implementation)
 
 
 def _decomposed_backward_row(
@@ -3918,6 +6591,10 @@ def _make_benchmark_callable(
     host_inputs,
     route_table,
     inputs: dict[str, jax.Array],
+    backward_dy_route_implementation: str = BACKWARD_IMPLEMENTATION_DEFAULT,
+    backward_w2_implementation: str = BACKWARD_IMPLEMENTATION_DEFAULT,
+    backward_w13_implementation: str = BACKWARD_IMPLEMENTATION_DEFAULT,
+    backward_return_implementation: str = BACKWARD_IMPLEMENTATION_DEFAULT,
 ) -> tuple[Callable[..., Any], tuple[jax.Array, ...]]:
     if backend in PUBLIC_BACKEND_TO_IMPLEMENTATION:
         implementation = PUBLIC_BACKEND_TO_IMPLEMENTATION[backend]
@@ -3956,15 +6633,129 @@ def _make_benchmark_callable(
         if mode == MODE_FORWARD:
             return (
                 lambda x, combine, w13, w2: _preplanned_source_push_forward(
-                    config, mesh, host_inputs, route_table, implementation, x, combine, w13, w2
+                    config,
+                    mesh,
+                    host_inputs,
+                    route_table,
+                    implementation,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    x,
+                    combine,
+                    w13,
+                    w2,
                 ),
                 (inputs["x_source"], inputs["combine_source"], inputs["w13_source"], inputs["w2_source"]),
             )
-        if mode == MODE_FORWARD_BACKWARD:
+        if mode in (
+            MODE_FORWARD_BACKWARD,
+            MODE_FORWARD_BACKWARD_REDUCED,
+            *FORWARD_BACKWARD_GRAD_CHECKSUM_ARGNUM,
+        ):
+            resolved_dy_route_implementation = _resolve_backward_stage_implementation(
+                backward_dy_route_implementation,
+                source_push_mlp._source_push_mlp_backward_dy_route_implementation(implementation),
+            )
+            (
+                resolved_w2_implementation,
+                resolved_w2_matmul_implementation,
+                resolved_w2_swiglu_implementation,
+            ) = _resolve_w2_backward_implementations(
+                backward_w2_implementation,
+                source_push_mlp._source_push_mlp_backward_w2_implementation(implementation),
+            )
+            if backward_w2_implementation == BACKWARD_IMPLEMENTATION_DEFAULT:
+                resolved_w2_matmul_implementation = source_push_mlp._source_push_mlp_backward_w2_matmul_implementation(
+                    implementation
+                )
+                resolved_w2_swiglu_implementation = source_push_mlp._source_push_mlp_backward_w2_swiglu_implementation(
+                    implementation
+                )
+            resolved_w13_implementation = _resolve_backward_stage_implementation(
+                backward_w13_implementation,
+                source_push_mlp._source_push_mlp_backward_w13_implementation(implementation),
+            )
+            resolved_return_implementation = _resolve_backward_stage_implementation(
+                backward_return_implementation,
+                source_push_mlp._source_push_mlp_backward_return_implementation(implementation),
+            )
+            return_route_indices = None
+            if resolved_return_implementation == "pallas_mgpu":
+                with jax.set_mesh(mesh):
+                    return_route_indices = source_push_backward_return_route_indices_jax(
+                        host_inputs.plan,
+                        src_base_by_expert=host_inputs.src_base_by_expert,
+                    )
+                    _block_until_ready(return_route_indices)
+            if mode == MODE_FORWARD_BACKWARD_REDUCED:
+                return (
+                    lambda x, combine, w13, w2: _preplanned_source_push_fwd_bwd_reduced(
+                        config,
+                        mesh,
+                        host_inputs,
+                        route_table,
+                        implementation,
+                        resolved_dy_route_implementation,
+                        resolved_w2_implementation,
+                        resolved_w2_matmul_implementation,
+                        resolved_w2_swiglu_implementation,
+                        resolved_w13_implementation,
+                        resolved_return_implementation,
+                        return_route_indices,
+                        x,
+                        combine,
+                        w13,
+                        w2,
+                    ),
+                    (inputs["x_source"], inputs["combine_source"], inputs["w13_source"], inputs["w2_source"]),
+                )
+            if mode in FORWARD_BACKWARD_GRAD_CHECKSUM_ARGNUM:
+                return (
+                    lambda x, combine, w13, w2: _preplanned_source_push_fwd_bwd_grad_checksum(
+                        config,
+                        mesh,
+                        host_inputs,
+                        route_table,
+                        implementation,
+                        resolved_dy_route_implementation,
+                        resolved_w2_implementation,
+                        resolved_w2_matmul_implementation,
+                        resolved_w2_swiglu_implementation,
+                        resolved_w13_implementation,
+                        resolved_return_implementation,
+                        return_route_indices,
+                        FORWARD_BACKWARD_GRAD_CHECKSUM_ARGNUM[mode],
+                        x,
+                        combine,
+                        w13,
+                        w2,
+                    ),
+                    (inputs["x_source"], inputs["combine_source"], inputs["w13_source"], inputs["w2_source"]),
+                )
             return (
                 jax.value_and_grad(
                     lambda x, combine, w13, w2: _preplanned_source_push_loss_aux(
-                        config, mesh, host_inputs, route_table, implementation, x, combine, w13, w2
+                        config,
+                        mesh,
+                        host_inputs,
+                        route_table,
+                        implementation,
+                        resolved_dy_route_implementation,
+                        resolved_w2_implementation,
+                        resolved_w2_matmul_implementation,
+                        resolved_w2_swiglu_implementation,
+                        resolved_w13_implementation,
+                        resolved_return_implementation,
+                        return_route_indices,
+                        x,
+                        combine,
+                        w13,
+                        w2,
                     ),
                     argnums=(0, 1, 2, 3),
                     has_aux=True,
@@ -4000,6 +6791,13 @@ def _preplanned_source_push_forward(
     host_inputs,
     route_table,
     implementation: str,
+    backward_dy_route_implementation: str | None,
+    backward_w2_implementation: str | None,
+    backward_w2_matmul_implementation: str | None,
+    backward_w2_swiglu_implementation: str | None,
+    backward_w13_implementation: str | None,
+    backward_return_implementation: str | None,
+    return_route_indices,
     x,
     combine,
     w13,
@@ -4015,6 +6813,13 @@ def _preplanned_source_push_forward(
         w2,
         implementation=implementation,
         execution_mode=FORWARD_EXECUTION_STAGED_HOST_SYNC,
+        backward_dy_route_implementation=backward_dy_route_implementation,
+        backward_w2_implementation=backward_w2_implementation,
+        backward_w2_matmul_implementation=backward_w2_matmul_implementation,
+        backward_w2_swiglu_implementation=backward_w2_swiglu_implementation,
+        backward_w13_implementation=backward_w13_implementation,
+        backward_return_implementation=backward_return_implementation,
+        return_route_indices=return_route_indices,
         mesh=mesh,
     )
 
@@ -4025,6 +6830,13 @@ def _preplanned_source_push_loss_aux(
     host_inputs,
     route_table,
     implementation: str,
+    backward_dy_route_implementation: str | None,
+    backward_w2_implementation: str | None,
+    backward_w2_matmul_implementation: str | None,
+    backward_w2_swiglu_implementation: str | None,
+    backward_w13_implementation: str | None,
+    backward_return_implementation: str | None,
+    return_route_indices,
     x,
     combine,
     w13,
@@ -4036,12 +6848,115 @@ def _preplanned_source_push_loss_aux(
         host_inputs,
         route_table,
         implementation,
+        backward_dy_route_implementation,
+        backward_w2_implementation,
+        backward_w2_matmul_implementation,
+        backward_w2_swiglu_implementation,
+        backward_w13_implementation,
+        backward_return_implementation,
+        return_route_indices,
         x,
         combine,
         w13,
         w2,
     )
     return jnp.sum(out.astype(jnp.float32)), dropped
+
+
+def _preplanned_source_push_fwd_bwd_reduced(
+    config: PushInboxConfig,
+    mesh: Mesh,
+    host_inputs,
+    route_table,
+    implementation: str,
+    backward_dy_route_implementation: str | None,
+    backward_w2_implementation: str | None,
+    backward_w2_matmul_implementation: str | None,
+    backward_w2_swiglu_implementation: str | None,
+    backward_w13_implementation: str | None,
+    backward_return_implementation: str | None,
+    return_route_indices,
+    x,
+    combine,
+    w13,
+    w2,
+):
+    """Run source-push fwd+bwd but return scalar gradient checksums only."""
+
+    (loss, dropped), grads = jax.value_and_grad(
+        lambda x_arg, combine_arg, w13_arg, w2_arg: _preplanned_source_push_loss_aux(
+            config,
+            mesh,
+            host_inputs,
+            route_table,
+            implementation,
+            backward_dy_route_implementation,
+            backward_w2_implementation,
+            backward_w2_matmul_implementation,
+            backward_w2_swiglu_implementation,
+            backward_w13_implementation,
+            backward_return_implementation,
+            return_route_indices,
+            x_arg,
+            combine_arg,
+            w13_arg,
+            w2_arg,
+        ),
+        argnums=(0, 1, 2, 3),
+        has_aux=True,
+    )(x, combine, w13, w2)
+    # Cast after the reduction. Casting the full gradient leaves to fp32 here
+    # recreates the target-shape materialization pressure this mode is meant to
+    # avoid.
+    grad_checksum = sum(jnp.sum(grad).astype(jnp.float32) for grad in jax.tree.leaves(grads))
+    return loss, dropped, grad_checksum
+
+
+def _preplanned_source_push_fwd_bwd_grad_checksum(
+    config: PushInboxConfig,
+    mesh: Mesh,
+    host_inputs,
+    route_table,
+    implementation: str,
+    backward_dy_route_implementation: str | None,
+    backward_w2_implementation: str | None,
+    backward_w2_matmul_implementation: str | None,
+    backward_w2_swiglu_implementation: str | None,
+    backward_w13_implementation: str | None,
+    backward_return_implementation: str | None,
+    return_route_indices,
+    grad_argnum: int,
+    x,
+    combine,
+    w13,
+    w2,
+):
+    """Run source-push fwd+bwd for one selected gradient output."""
+
+    (loss, dropped), grad = jax.value_and_grad(
+        lambda x_arg, combine_arg, w13_arg, w2_arg: _preplanned_source_push_loss_aux(
+            config,
+            mesh,
+            host_inputs,
+            route_table,
+            implementation,
+            backward_dy_route_implementation,
+            backward_w2_implementation,
+            backward_w2_matmul_implementation,
+            backward_w2_swiglu_implementation,
+            backward_w13_implementation,
+            backward_return_implementation,
+            return_route_indices,
+            x_arg,
+            combine_arg,
+            w13_arg,
+            w2_arg,
+        ),
+        argnums=grad_argnum,
+        has_aux=True,
+    )(x, combine, w13, w2)
+    grad_checksum = jnp.sum(grad).astype(jnp.float32)
+    return loss, dropped, grad_checksum
 
 
 def _time_callable(
@@ -4118,8 +7033,13 @@ def _timing_rows(
     useful_forward_flops, rounded_forward_flops = _forward_flops_per_rank(config, queue_stats)
     useful_fwd_bwd_flops = useful_forward_flops * 3
     rounded_fwd_bwd_flops = rounded_forward_flops * 3
-    useful_mode_flops = useful_fwd_bwd_flops if mode == MODE_FORWARD_BACKWARD else useful_forward_flops
-    rounded_mode_flops = rounded_fwd_bwd_flops if mode == MODE_FORWARD_BACKWARD else rounded_forward_flops
+    mode_is_fwd_bwd = mode in (
+        MODE_FORWARD_BACKWARD,
+        MODE_FORWARD_BACKWARD_REDUCED,
+        *FORWARD_BACKWARD_GRAD_CHECKSUM_ARGNUM,
+    )
+    useful_mode_flops = useful_fwd_bwd_flops if mode_is_fwd_bwd else useful_forward_flops
+    rounded_mode_flops = rounded_fwd_bwd_flops if mode_is_fwd_bwd else rounded_forward_flops
     bytes_per_rank = _forward_bytes_per_rank(config, queue_stats)
     dropped_routes = _dropped_routes_from_output(mode, timing.output)
 
@@ -4290,7 +7210,11 @@ def _backward_flops_per_rank(config: PushInboxConfig, queue_stats: dict[str, Any
 
 
 def _backward_stage_flops_per_rank(
-    config: PushInboxConfig, queue_stats: dict[str, Any], stage: str
+    config: PushInboxConfig,
+    queue_stats: dict[str, Any],
+    stage: str,
+    *,
+    w13_backward_component: str | None = None,
 ) -> tuple[float | None, float | None]:
     useful_rows = queue_stats["valid_rows_per_rank_mean"]
     rounded_rows = queue_stats["rounded_rows_per_rank_mean"]
@@ -4299,8 +7223,16 @@ def _backward_stage_flops_per_rank(
         rounded = rounded_rows * config.hidden_dim * config.intermediate_dim * 4
         return float(useful), float(rounded)
     if stage == BACKWARD_STAGE_W13:
-        useful = useful_rows * config.hidden_dim * config.intermediate_dim * 8
-        rounded = rounded_rows * config.hidden_dim * config.intermediate_dim * 8
+        if w13_backward_component == "dw13_half":
+            flop_multiplier = 2
+        else:
+            flop_multiplier = 4 if w13_backward_component in ("dx", "dw13") else 8
+        useful = useful_rows * config.hidden_dim * config.intermediate_dim * flop_multiplier
+        rounded = rounded_rows * config.hidden_dim * config.intermediate_dim * flop_multiplier
+        return float(useful), float(rounded)
+    if stage == BACKWARD_STAGE_DX13_PUSH:
+        useful = useful_rows * config.hidden_dim * config.intermediate_dim * 4
+        rounded = rounded_rows * config.hidden_dim * config.intermediate_dim * 4
         return float(useful), float(rounded)
     return None, None
 
@@ -4344,6 +7276,8 @@ def _stage_rounded_flops_per_rank(config: PushInboxConfig, queue_stats: dict[str
 
 def _dropped_routes_from_output(mode: str, output: Any) -> int:
     if mode == MODE_FORWARD:
+        dropped = output[1]
+    elif mode == MODE_FORWARD_BACKWARD_REDUCED or mode in FORWARD_BACKWARD_GRAD_CHECKSUM_ARGNUM:
         dropped = output[1]
     else:
         dropped = output[0][1]

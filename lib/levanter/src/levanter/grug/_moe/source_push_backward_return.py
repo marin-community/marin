@@ -18,12 +18,21 @@ from jax.sharding import Mesh, PartitionSpec as P
 from jaxtyping import Array, Bool, Float, Int
 
 from levanter.kernels.pallas.cost_estimate_utils import with_io_bytes_accessed
-from levanter.grug._moe.source_push_plan import SOURCE_PUSH_MESH_AXIS, SourcePushPlan, _source_push_out_sharding
+from levanter.grug._moe.source_push_plan import (
+    SOURCE_PUSH_MESH_AXIS,
+    SourcePushPlan,
+    _source_push_out_sharding,
+    _with_source_push_sharding,
+)
 
 
 SOURCE_PUSH_BACKWARD_RETURN_IMPLEMENTATION_JAX = "jax"
 SOURCE_PUSH_BACKWARD_RETURN_IMPLEMENTATION_PALLAS_MGPU = "pallas_mgpu"
 SourcePushBackwardReturnImplementation: TypeAlias = Literal["jax", "pallas_mgpu"]
+SOURCE_PUSH_BACKWARD_RETURN_IMPLEMENTATIONS = (
+    SOURCE_PUSH_BACKWARD_RETURN_IMPLEMENTATION_JAX,
+    SOURCE_PUSH_BACKWARD_RETURN_IMPLEMENTATION_PALLAS_MGPU,
+)
 DEFAULT_BACKWARD_RETURN_HIDDEN_BLOCK = 128
 
 
@@ -93,13 +102,15 @@ def source_push_backward_return(
         if mesh is not None:
             if route_indices is not None:
                 _validate_compact_index_request(dx_expert_major, d_route_block, route_indices)
-            route_rows = _compact_route_rows(plan, src_base_by_expert)
+            else:
+                route_indices = source_push_backward_return_route_indices_jax(
+                    plan,
+                    src_base_by_expert=src_base_by_expert,
+                )
             return _source_push_backward_return_compact_pallas_mgpu(
                 dx_expert_major,
                 d_route_block,
                 route_indices,
-                route_rows=route_rows,
-                route_shape=(plan.valid_mask.shape[0], plan.tokens_per_source, plan.topk),
                 block_sizes=block_sizes,
                 mesh=mesh,
             )
@@ -117,7 +128,7 @@ def source_push_backward_return(
     if implementation != SOURCE_PUSH_BACKWARD_RETURN_IMPLEMENTATION_JAX:
         raise ValueError(
             "source-push backward return implementation must be one of "
-            f"{(SOURCE_PUSH_BACKWARD_RETURN_IMPLEMENTATION_JAX, SOURCE_PUSH_BACKWARD_RETURN_IMPLEMENTATION_PALLAS_MGPU)}, "
+            f"{SOURCE_PUSH_BACKWARD_RETURN_IMPLEMENTATIONS}, "
             f"got {implementation!r}"
         )
     return source_push_backward_return_jax(
@@ -237,7 +248,7 @@ def _source_push_backward_return_compact_from_indices_jax(
         route_indices.dst,
         route_indices.expert,
         route_indices.row,
-        route_indices.valid,
+        route_indices.valid.astype(jnp.int32),
     )
     return SourcePushBackwardReturnOutput(dx=dx, d_route_weights=d_route_weights)
 
@@ -314,7 +325,7 @@ def source_push_backward_return_flat(
     if implementation != SOURCE_PUSH_BACKWARD_RETURN_IMPLEMENTATION_JAX:
         raise ValueError(
             "source-push backward return implementation must be one of "
-            f"{(SOURCE_PUSH_BACKWARD_RETURN_IMPLEMENTATION_JAX, SOURCE_PUSH_BACKWARD_RETURN_IMPLEMENTATION_PALLAS_MGPU)}, "
+            f"{SOURCE_PUSH_BACKWARD_RETURN_IMPLEMENTATIONS}, "
             f"got {implementation!r}"
         )
     return source_push_backward_return_flat_jax(
@@ -409,7 +420,7 @@ def _source_push_backward_return_flat_from_indices_jax(
         d_route_block,
         route_indices.dst,
         route_indices.row,
-        route_indices.valid,
+        route_indices.valid.astype(jnp.int32),
     )
     return SourcePushBackwardReturnOutput(dx=dx, d_route_weights=d_route_weights)
 
@@ -435,26 +446,15 @@ def _source_push_backward_return_compact_pallas_mgpu(
         raise NotImplementedError("Pallas/MGPU backward return requires a GPU backend; use the JAX reference on CPU")
     block_sizes = SourcePushBackwardReturnPallasBlockSizes.get_default() if block_sizes is None else block_sizes
     if mesh is not None and not interpret:
-        if route_rows is None:
-            raise ValueError("route_rows are required for sharded remote-write backward return")
-        if route_shape is None:
-            if route_indices is None:
-                raise ValueError("route_shape is required when route_indices are not supplied")
-            route_shape = _route_shape_from_indices(route_indices)
-        if route_indices is not None:
-            _validate_compact_pallas_request(dx_expert_major, d_route_block, route_indices, block_sizes)
-        _validate_compact_remote_write_request(dx_expert_major, d_route_block, route_rows, block_sizes)
-        buffers = _source_push_backward_return_compact_remote_write_route_buffer_mgpu(
+        if route_indices is None:
+            raise ValueError("route_indices are required for sharded compact Pallas backward return")
+        _validate_compact_pallas_request(dx_expert_major, d_route_block, route_indices, block_sizes)
+        return _source_push_backward_return_compact_direct_gather_mgpu(
             mesh,
             dx_expert_major,
             d_route_block,
-            route_rows,
-            route_shape=route_shape,
+            route_indices,
             block_sizes=block_sizes,
-        )
-        return SourcePushBackwardReturnOutput(
-            dx=jnp.sum(buffers.dx_routes, axis=2),
-            d_route_weights=buffers.d_route_weights,
         )
     if route_indices is None:
         raise ValueError("route_indices are required for non-sharded Pallas backward return")
@@ -465,7 +465,7 @@ def _source_push_backward_return_compact_pallas_mgpu(
         route_indices.dst,
         route_indices.expert,
         route_indices.row,
-        route_indices.valid,
+        route_indices.valid.astype(jnp.int32),
         hidden_block=block_sizes.hidden_block,
         interpret=interpret,
         mesh=mesh,
@@ -485,12 +485,9 @@ def _source_push_backward_return_compact_remote_write_route_buffer_mgpu(
     """Write destination-local compact rows directly into source-owned route buffers."""
 
     _validate_compact_remote_write_request(dx_expert_major, d_route_block, route_rows, block_sizes)
-    source_count, tokens_per_source, topk = route_shape
-    dx_routes_init = jnp.zeros(
-        (source_count, tokens_per_source, topk, dx_expert_major.shape[-1]),
-        dtype=dx_expert_major.dtype,
-    )
-    d_route_init = jnp.zeros((source_count, tokens_per_source, topk), dtype=d_route_block.dtype)
+    source_count, _, _ = route_shape
+    route_slot_valid = _source_route_slot_valid_mask(route_rows, route_shape)
+    route_slot_valid = _with_source_push_sharding(route_slot_valid, SOURCE_PUSH_MESH_AXIS, None, None)
 
     def local_fn(
         dx_local: Float[Array, "1 E C D"],
@@ -500,8 +497,6 @@ def _source_push_backward_return_compact_remote_write_route_buffer_mgpu(
         route_token: Int[Array, "S Dst Q M"],
         route_slot: Int[Array, "S Dst Q M"],
         route_valid: Bool[Array, "S Dst Q M"],
-        dx_routes_local: Float[Array, "1 T K D"],
-        d_route_local_out: Float[Array, "1 T K"],
     ) -> tuple[Float[Array, "1 T K D"], Float[Array, "1 T K"]]:
         dx_routes, d_route_weights = _source_push_backward_return_compact_remote_write_route_buffer_pallas_call(
             dx_local[0],
@@ -510,9 +505,8 @@ def _source_push_backward_return_compact_remote_write_route_buffer_mgpu(
             route_row,
             route_token,
             route_slot,
-            route_valid,
-            dx_routes_local[0],
-            d_route_local_out[0],
+            route_valid.astype(jnp.int32),
+            route_shape=route_shape,
             hidden_block=block_sizes.hidden_block,
         )
         return dx_routes[None, ...], d_route_weights[None, ...]
@@ -528,8 +522,6 @@ def _source_push_backward_return_compact_remote_write_route_buffer_mgpu(
             P(None, None, None, None),
             P(None, None, None, None),
             P(None, None, None, None),
-            P(SOURCE_PUSH_MESH_AXIS, None, None, None),
-            P(SOURCE_PUSH_MESH_AXIS, None, None),
         ),
         out_specs=(
             P(SOURCE_PUSH_MESH_AXIS, None, None, None),
@@ -544,14 +536,188 @@ def _source_push_backward_return_compact_remote_write_route_buffer_mgpu(
         route_rows.token,
         route_rows.slot,
         route_rows.valid,
-        dx_routes_init,
-        d_route_init,
     )
     dx_routes, d_route_weights = _sharded_backward_return_remote_write_completion_barrier(mesh)(
         dx_routes,
         d_route_weights,
     )
+    dx_routes = jnp.where(route_slot_valid[..., None], dx_routes, jnp.zeros((), dtype=dx_routes.dtype))
+    d_route_weights = jnp.where(route_slot_valid, d_route_weights, jnp.zeros((), dtype=d_route_weights.dtype))
     return SourcePushBackwardReturnRouteBuffer(dx_routes=dx_routes, d_route_weights=d_route_weights)
+
+
+def _source_push_backward_return_compact_direct_gather_mgpu(
+    mesh: Mesh,
+    dx_expert_major: Float[Array, "Dst E C D"],
+    d_route_block: Float[Array, "Dst E C"],
+    route_indices: SourcePushBackwardCompactRouteIndices,
+    *,
+    block_sizes: SourcePushBackwardReturnPallasBlockSizes,
+) -> SourcePushBackwardReturnOutput:
+    """Gather compact destination rows directly into source-owned gradients."""
+
+    _validate_compact_pallas_request(dx_expert_major, d_route_block, route_indices, block_sizes)
+    route_dst = _with_source_push_sharding(route_indices.dst, SOURCE_PUSH_MESH_AXIS, None, None)
+    route_expert = _with_source_push_sharding(route_indices.expert, SOURCE_PUSH_MESH_AXIS, None, None)
+    route_row = _with_source_push_sharding(route_indices.row, SOURCE_PUSH_MESH_AXIS, None, None)
+    route_valid = _with_source_push_sharding(route_indices.valid.astype(jnp.int32), SOURCE_PUSH_MESH_AXIS, None, None)
+
+    def local_fn(
+        dx_local: Float[Array, "1 E C D"],
+        d_route_local: Float[Array, "1 E C"],
+        route_dst_local: Int[Array, "1 T K"],
+        route_expert_local: Int[Array, "1 T K"],
+        route_row_local: Int[Array, "1 T K"],
+        route_valid_local: Int[Array, "1 T K"],
+    ) -> tuple[Float[Array, "1 T D"], Float[Array, "1 T K"]]:
+        dx, d_route_weights = _source_push_backward_return_compact_direct_gather_pallas_call(
+            dx_local[0],
+            d_route_local[0],
+            route_dst_local[0],
+            route_expert_local[0],
+            route_row_local[0],
+            route_valid_local[0],
+            source_count=dx_expert_major.shape[0],
+            hidden_block=block_sizes.hidden_block,
+        )
+        return dx[None, ...], d_route_weights[None, ...]
+
+    dx, d_route_weights = shard_map(
+        local_fn,
+        mesh=mesh,
+        in_specs=(
+            P(SOURCE_PUSH_MESH_AXIS, None, None, None),
+            P(SOURCE_PUSH_MESH_AXIS, None, None),
+            P(SOURCE_PUSH_MESH_AXIS, None, None),
+            P(SOURCE_PUSH_MESH_AXIS, None, None),
+            P(SOURCE_PUSH_MESH_AXIS, None, None),
+            P(SOURCE_PUSH_MESH_AXIS, None, None),
+        ),
+        out_specs=(
+            P(SOURCE_PUSH_MESH_AXIS, None, None),
+            P(SOURCE_PUSH_MESH_AXIS, None, None),
+        ),
+        check_vma=False,
+    )(
+        dx_expert_major,
+        d_route_block,
+        route_dst,
+        route_expert,
+        route_row,
+        route_valid,
+    )
+    return SourcePushBackwardReturnOutput(dx=dx, d_route_weights=d_route_weights)
+
+
+def _source_push_backward_return_compact_direct_gather_pallas_call(
+    dx_local: Float[Array, "E C D"],
+    d_route_local: Float[Array, "E C"],
+    route_dst: Int[Array, "T K"],
+    route_expert: Int[Array, "T K"],
+    route_row: Int[Array, "T K"],
+    route_valid: Int[Array, "T K"],
+    *,
+    source_count: int,
+    hidden_block: int,
+) -> tuple[Float[Array, "T D"], Float[Array, "T K"]]:
+    tokens_per_source, topk = route_valid.shape
+    hidden_dim = dx_local.shape[-1]
+    output_shape = (
+        jax.ShapeDtypeStruct((tokens_per_source, hidden_dim), dx_local.dtype),
+        jax.ShapeDtypeStruct((tokens_per_source, topk), d_route_local.dtype),
+    )
+    kernel = _make_source_push_backward_return_compact_direct_gather_kernel(
+        source_count=source_count,
+        topk=topk,
+        hidden_block=hidden_block,
+    )
+    compiler_params = mgpu.CompilerParams(lowering_semantics=mgpu.LoweringSemantics.Lane)
+    return mgpu.kernel(
+        kernel,
+        out_shape=output_shape,
+        grid=(tokens_per_source, hidden_dim // hidden_block),
+        grid_names=("token", "hidden_tile"),
+        compiler_params=compiler_params,
+    )(
+        dx_local,
+        d_route_local,
+        route_dst,
+        route_expert,
+        route_row,
+        route_valid,
+    )
+
+
+def _make_source_push_backward_return_compact_direct_gather_kernel(
+    *,
+    source_count: int,
+    topk: int,
+    hidden_block: int,
+):
+    dst_offsets = tuple(range(source_count))
+
+    def kernel(
+        dx_ref: Float[pl.Ref, "E C D"],
+        d_route_ref: Float[pl.Ref, "E C"],
+        route_dst_ref: Int[pl.Ref, "T K"],
+        route_expert_ref: Int[pl.Ref, "T K"],
+        route_row_ref: Int[pl.Ref, "T K"],
+        route_valid_ref: Int[pl.Ref, "T K"],
+        dx_out_ref: Float[pl.Ref, "T D"],
+        d_route_out_ref: Float[pl.Ref, "T K"],
+    ) -> None:
+        rank = lax.axis_index(SOURCE_PUSH_MESH_AXIS)
+        token = pl.program_id(0)
+        hidden_tile = pl.program_id(1)
+        hidden_start = hidden_tile * hidden_block
+        dx_acc = jnp.zeros((hidden_block,), dtype=jnp.float32)
+
+        def _read_slot(slot: int):
+            valid = route_valid_ref[token, slot] != 0
+            dst = route_dst_ref[token, slot]
+            expert = route_expert_ref[token, slot]
+            row = route_row_ref[token, slot]
+            dst_ordinal = (dst - rank) % source_count
+
+            def _branch(static_dst_ordinal: int):
+                def _read_branch(_) -> tuple[jax.Array, jax.Array]:
+                    static_dst = (rank + static_dst_ordinal) % source_count
+                    if static_dst_ordinal == 0:
+                        dx_tile = dx_ref[expert, row, pl.ds(hidden_start, hidden_block)]
+                        d_route = d_route_ref[expert, row]
+                    else:
+                        remote_dx_ref = mgpu.remote_ref(
+                            dx_ref,
+                            static_dst,
+                            device_id_type=pl.DeviceIdType.LOGICAL,
+                        )
+                        remote_d_route_ref = mgpu.remote_ref(
+                            d_route_ref,
+                            static_dst,
+                            device_id_type=pl.DeviceIdType.LOGICAL,
+                        )
+                        dx_tile = remote_dx_ref[expert, row, pl.ds(hidden_start, hidden_block)]
+                        d_route = remote_d_route_ref[expert, row]
+                    dx_tile = jnp.where(valid, dx_tile, jnp.zeros((hidden_block,), dtype=dx_ref.dtype))
+                    d_route = jnp.where(valid, d_route, jnp.zeros((), dtype=d_route_ref.dtype))
+                    return dx_tile, d_route
+
+                return _read_branch
+
+            branches = tuple(_branch(static_dst_ordinal) for static_dst_ordinal in dst_offsets)
+            return lax.switch(dst_ordinal, branches, None)
+
+        for slot in range(topk):
+            dx_tile, d_route = _read_slot(slot)
+            dx_acc += dx_tile.astype(jnp.float32)
+
+            @pl.when(hidden_tile == 0)
+            def _write_d_route() -> None:
+                d_route_out_ref[token, slot] = d_route
+
+        dx_out_ref[token, pl.ds(hidden_start, hidden_block)] = dx_acc.astype(dx_out_ref.dtype)
+
+    return kernel
 
 
 def _source_push_backward_return_compact_remote_write_route_buffer_pallas_call(
@@ -561,43 +727,31 @@ def _source_push_backward_return_compact_remote_write_route_buffer_pallas_call(
     route_row: Int[Array, "S Dst Q M"],
     route_token: Int[Array, "S Dst Q M"],
     route_slot: Int[Array, "S Dst Q M"],
-    route_valid: Bool[Array, "S Dst Q M"],
-    dx_routes_init: Float[Array, "T K D"],
-    d_route_init: Float[Array, "T K"],
+    route_valid: Int[Array, "S Dst Q M"],
     *,
+    route_shape: tuple[int, int, int],
     hidden_block: int,
 ) -> tuple[Float[Array, "T K D"], Float[Array, "T K"]]:
     source_count = route_valid.shape[0]
     entries_per_dst = route_valid.shape[2]
     block_m = route_valid.shape[3]
     hidden_dim = dx_local.shape[-1]
+    _, tokens_per_source, topk = route_shape
     output_shape = (
-        jax.ShapeDtypeStruct(dx_routes_init.shape, dx_routes_init.dtype),
-        jax.ShapeDtypeStruct(d_route_init.shape, d_route_init.dtype),
-    )
-    cost_estimate = _source_push_backward_return_compact_remote_write_route_buffer_cost_estimate(
-        dx_local,
-        d_route_local,
-        route_expert,
-        route_row,
-        route_token,
-        route_slot,
-        route_valid,
-        output_shape,
+        jax.ShapeDtypeStruct((tokens_per_source, topk, hidden_dim), dx_local.dtype),
+        jax.ShapeDtypeStruct((tokens_per_source, topk), d_route_local.dtype),
     )
     kernel = _make_source_push_backward_return_compact_remote_write_route_buffer_kernel(
         source_count=source_count,
         hidden_block=hidden_block,
     )
     compiler_params = mgpu.CompilerParams(lowering_semantics=mgpu.LoweringSemantics.Lane)
-    return pl.pallas_call(
+    return mgpu.kernel(
         kernel,
         out_shape=output_shape,
         grid=(source_count, entries_per_dst, block_m, hidden_dim // hidden_block),
-        input_output_aliases={7: 0, 8: 1},
-        name="source_push_backward_return_compact_remote_write_route_buffer_mgpu",
+        grid_names=("src_ordinal", "entry", "row_in_block", "hidden_tile"),
         compiler_params=compiler_params,
-        cost_estimate=cost_estimate,
     )(
         dx_local,
         d_route_local,
@@ -606,8 +760,6 @@ def _source_push_backward_return_compact_remote_write_route_buffer_pallas_call(
         route_token,
         route_slot,
         route_valid,
-        dx_routes_init,
-        d_route_init,
     )
 
 
@@ -625,13 +777,10 @@ def _make_source_push_backward_return_compact_remote_write_route_buffer_kernel(
         route_row_ref: Int[pl.Ref, "S Dst Q M"],
         route_token_ref: Int[pl.Ref, "S Dst Q M"],
         route_slot_ref: Int[pl.Ref, "S Dst Q M"],
-        route_valid_ref: Bool[pl.Ref, "S Dst Q M"],
-        dx_routes_init_ref: Float[pl.Ref, "T K D"],
-        d_route_init_ref: Float[pl.Ref, "T K"],
+        route_valid_ref: Int[pl.Ref, "S Dst Q M"],
         dx_routes_ref: Float[pl.Ref, "T K D"],
         d_route_ref_out: Float[pl.Ref, "T K"],
     ) -> None:
-        del dx_routes_init_ref, d_route_init_ref
         rank = lax.axis_index(SOURCE_PUSH_MESH_AXIS)
         src_ordinal = pl.program_id(0)
         entry = pl.program_id(1)
@@ -643,7 +792,7 @@ def _make_source_push_backward_return_compact_remote_write_route_buffer_kernel(
             src = (rank + static_src_ordinal) % source_count
             dst_ordinal = (-static_src_ordinal) % source_count
 
-            valid = route_valid_ref[src, dst_ordinal, entry, row_in_block]
+            valid = route_valid_ref[src, dst_ordinal, entry, row_in_block] != 0
 
             @pl.when(valid)
             def _copy_route_slot() -> None:
@@ -767,7 +916,7 @@ def _source_push_backward_return_flat_pallas_mgpu(
         d_route_block,
         route_indices.dst,
         route_indices.row,
-        route_indices.valid,
+        route_indices.valid.astype(jnp.int32),
         hidden_block=block_sizes.hidden_block,
         interpret=interpret,
         mesh=mesh,
@@ -787,12 +936,9 @@ def _source_push_backward_return_flat_remote_write_route_buffer_mgpu(
     """Write destination-local flat rows directly into source-owned route buffers."""
 
     _validate_flat_remote_write_request(dx_expert_major, d_route_block, route_rows, block_sizes)
-    source_count, tokens_per_source, topk = route_shape
-    dx_routes_init = jnp.zeros(
-        (source_count, tokens_per_source, topk, dx_expert_major.shape[-1]),
-        dtype=dx_expert_major.dtype,
-    )
-    d_route_init = jnp.zeros((source_count, tokens_per_source, topk), dtype=d_route_block.dtype)
+    source_count, _, _ = route_shape
+    route_slot_valid = _source_route_slot_valid_mask(route_rows, route_shape)
+    route_slot_valid = _with_source_push_sharding(route_slot_valid, SOURCE_PUSH_MESH_AXIS, None, None)
 
     def local_fn(
         dx_local: Float[Array, "1 rows D"],
@@ -801,8 +947,6 @@ def _source_push_backward_return_flat_remote_write_route_buffer_mgpu(
         route_token: Int[Array, "S Dst Q M"],
         route_slot: Int[Array, "S Dst Q M"],
         route_valid: Bool[Array, "S Dst Q M"],
-        dx_routes_local: Float[Array, "1 T K D"],
-        d_route_local_out: Float[Array, "1 T K"],
     ) -> tuple[Float[Array, "1 T K D"], Float[Array, "1 T K"]]:
         dx_routes, d_route_weights = _source_push_backward_return_flat_remote_write_route_buffer_pallas_call(
             dx_local[0],
@@ -810,9 +954,8 @@ def _source_push_backward_return_flat_remote_write_route_buffer_mgpu(
             route_row,
             route_token,
             route_slot,
-            route_valid,
-            dx_routes_local[0],
-            d_route_local_out[0],
+            route_valid.astype(jnp.int32),
+            route_shape=route_shape,
             hidden_block=block_sizes.hidden_block,
         )
         return dx_routes[None, ...], d_route_weights[None, ...]
@@ -827,8 +970,6 @@ def _source_push_backward_return_flat_remote_write_route_buffer_mgpu(
             P(None, None, None, None),
             P(None, None, None, None),
             P(None, None, None, None),
-            P(SOURCE_PUSH_MESH_AXIS, None, None, None),
-            P(SOURCE_PUSH_MESH_AXIS, None, None),
         ),
         out_specs=(
             P(SOURCE_PUSH_MESH_AXIS, None, None, None),
@@ -842,13 +983,13 @@ def _source_push_backward_return_flat_remote_write_route_buffer_mgpu(
         route_rows.token,
         route_rows.slot,
         route_rows.valid,
-        dx_routes_init,
-        d_route_init,
     )
     dx_routes, d_route_weights = _sharded_backward_return_remote_write_completion_barrier(mesh)(
         dx_routes,
         d_route_weights,
     )
+    dx_routes = jnp.where(route_slot_valid[..., None], dx_routes, jnp.zeros((), dtype=dx_routes.dtype))
+    d_route_weights = jnp.where(route_slot_valid, d_route_weights, jnp.zeros((), dtype=d_route_weights.dtype))
     return SourcePushBackwardReturnRouteBuffer(dx_routes=dx_routes, d_route_weights=d_route_weights)
 
 
@@ -858,42 +999,31 @@ def _source_push_backward_return_flat_remote_write_route_buffer_pallas_call(
     route_row: Int[Array, "S Dst Q M"],
     route_token: Int[Array, "S Dst Q M"],
     route_slot: Int[Array, "S Dst Q M"],
-    route_valid: Bool[Array, "S Dst Q M"],
-    dx_routes_init: Float[Array, "T K D"],
-    d_route_init: Float[Array, "T K"],
+    route_valid: Int[Array, "S Dst Q M"],
     *,
+    route_shape: tuple[int, int, int],
     hidden_block: int,
 ) -> tuple[Float[Array, "T K D"], Float[Array, "T K"]]:
     source_count = route_valid.shape[0]
     entries_per_dst = route_valid.shape[2]
     block_m = route_valid.shape[3]
     hidden_dim = dx_local.shape[-1]
+    _, tokens_per_source, topk = route_shape
     output_shape = (
-        jax.ShapeDtypeStruct(dx_routes_init.shape, dx_routes_init.dtype),
-        jax.ShapeDtypeStruct(d_route_init.shape, d_route_init.dtype),
-    )
-    cost_estimate = _source_push_backward_return_remote_write_route_buffer_cost_estimate(
-        dx_local,
-        d_route_local,
-        route_row,
-        route_token,
-        route_slot,
-        route_valid,
-        output_shape,
+        jax.ShapeDtypeStruct((tokens_per_source, topk, hidden_dim), dx_local.dtype),
+        jax.ShapeDtypeStruct((tokens_per_source, topk), d_route_local.dtype),
     )
     kernel = _make_source_push_backward_return_flat_remote_write_route_buffer_kernel(
         source_count=source_count,
         hidden_block=hidden_block,
     )
     compiler_params = mgpu.CompilerParams(lowering_semantics=mgpu.LoweringSemantics.Lane)
-    return pl.pallas_call(
+    return mgpu.kernel(
         kernel,
         out_shape=output_shape,
         grid=(source_count, entries_per_dst, block_m, hidden_dim // hidden_block),
-        input_output_aliases={6: 0, 7: 1},
-        name="source_push_backward_return_flat_remote_write_route_buffer_mgpu",
+        grid_names=("src_ordinal", "entry", "row_in_block", "hidden_tile"),
         compiler_params=compiler_params,
-        cost_estimate=cost_estimate,
     )(
         dx_local,
         d_route_local,
@@ -901,8 +1031,6 @@ def _source_push_backward_return_flat_remote_write_route_buffer_pallas_call(
         route_token,
         route_slot,
         route_valid,
-        dx_routes_init,
-        d_route_init,
     )
 
 
@@ -919,13 +1047,10 @@ def _make_source_push_backward_return_flat_remote_write_route_buffer_kernel(
         route_row_ref: Int[pl.Ref, "S Dst Q M"],
         route_token_ref: Int[pl.Ref, "S Dst Q M"],
         route_slot_ref: Int[pl.Ref, "S Dst Q M"],
-        route_valid_ref: Bool[pl.Ref, "S Dst Q M"],
-        dx_routes_init_ref: Float[pl.Ref, "T K D"],
-        d_route_init_ref: Float[pl.Ref, "T K"],
+        route_valid_ref: Int[pl.Ref, "S Dst Q M"],
         dx_routes_ref: Float[pl.Ref, "T K D"],
         d_route_ref_out: Float[pl.Ref, "T K"],
     ) -> None:
-        del dx_routes_init_ref, d_route_init_ref
         rank = lax.axis_index(SOURCE_PUSH_MESH_AXIS)
         src_ordinal = pl.program_id(0)
         entry = pl.program_id(1)
@@ -937,7 +1062,7 @@ def _make_source_push_backward_return_flat_remote_write_route_buffer_kernel(
             src = (rank + static_src_ordinal) % source_count
             dst_ordinal = (-static_src_ordinal) % source_count
 
-            valid = route_valid_ref[src, dst_ordinal, entry, row_in_block]
+            valid = route_valid_ref[src, dst_ordinal, entry, row_in_block] != 0
 
             @pl.when(valid)
             def _copy_route_slot() -> None:
@@ -1102,7 +1227,7 @@ def _source_push_backward_return_compact_pallas_call(
     route_dst: Int[Array, "S T K"],
     route_expert: Int[Array, "S T K"],
     route_row: Int[Array, "S T K"],
-    route_valid: Bool[Array, "S T K"],
+    route_valid: Int[Array, "S T K"],
     *,
     hidden_block: int,
     interpret: bool,
@@ -1150,7 +1275,7 @@ def _make_source_push_backward_return_compact_kernel(*, topk: int, hidden_block:
         route_dst_ref: Int[pl.Ref, "S T K"],
         route_expert_ref: Int[pl.Ref, "S T K"],
         route_row_ref: Int[pl.Ref, "S T K"],
-        route_valid_ref: Bool[pl.Ref, "S T K"],
+        route_valid_ref: Int[pl.Ref, "S T K"],
         dx_out_ref: Float[pl.Ref, "S T D"],
         d_route_out_ref: Float[pl.Ref, "S T K"],
     ) -> None:
@@ -1170,7 +1295,7 @@ def _make_source_push_backward_return_compact_kernel(*, topk: int, hidden_block:
                 )
 
         for slot in range(topk):
-            valid = route_valid_ref[src, token, slot]
+            valid = route_valid_ref[src, token, slot] != 0
             dst = route_dst_ref[src, token, slot]
             expert = route_expert_ref[src, token, slot]
             row = route_row_ref[src, token, slot]
@@ -1189,19 +1314,20 @@ def _source_push_backward_return_compact_pallas_reference(
     route_dst: Int[Array, "S T K"],
     route_expert: Int[Array, "S T K"],
     route_row: Int[Array, "S T K"],
-    route_valid: Bool[Array, "S T K"],
+    route_valid: Int[Array, "S T K"],
 ) -> tuple[Float[Array, "S T D"], Float[Array, "S T K"]]:
-    safe_dst = jnp.where(route_valid, route_dst, 0)
-    safe_expert = jnp.where(route_valid, route_expert, 0)
-    safe_row = jnp.where(route_valid, route_row, 0)
+    valid = route_valid != 0
+    safe_dst = jnp.where(valid, route_dst, 0)
+    safe_expert = jnp.where(valid, route_expert, 0)
+    safe_row = jnp.where(valid, route_row, 0)
     route_dx = dx_expert_major.at[safe_dst, safe_expert, safe_row].get(
         out_sharding=_source_push_out_sharding(SOURCE_PUSH_MESH_AXIS, None, None, None)
     )
-    route_dx = jnp.where(route_valid[..., None], route_dx, jnp.zeros((), dtype=route_dx.dtype))
+    route_dx = jnp.where(valid[..., None], route_dx, jnp.zeros((), dtype=route_dx.dtype))
     route_d = d_route_block.at[safe_dst, safe_expert, safe_row].get(
         out_sharding=_source_push_out_sharding(SOURCE_PUSH_MESH_AXIS, None, None)
     )
-    route_d = jnp.where(route_valid, route_d, jnp.zeros((), dtype=route_d.dtype))
+    route_d = jnp.where(valid, route_d, jnp.zeros((), dtype=route_d.dtype))
     return jnp.sum(route_dx, axis=2), route_d
 
 
@@ -1211,7 +1337,7 @@ def _source_push_backward_return_compact_from_indices_reference(
     route_dst: Int[Array, "S T K"],
     route_expert: Int[Array, "S T K"],
     route_row: Int[Array, "S T K"],
-    route_valid: Bool[Array, "S T K"],
+    route_valid: Int[Array, "S T K"],
 ) -> tuple[Float[Array, "S T D"], Float[Array, "S T K"]]:
     return _source_push_backward_return_compact_pallas_reference(
         dx_expert_major,
@@ -1253,7 +1379,7 @@ def _source_push_backward_return_flat_pallas_call(
     d_route_block: Float[Array, "Dst rows"],
     route_dst: Int[Array, "S T K"],
     route_row: Int[Array, "S T K"],
-    route_valid: Bool[Array, "S T K"],
+    route_valid: Int[Array, "S T K"],
     *,
     hidden_block: int,
     interpret: bool,
@@ -1299,7 +1425,7 @@ def _make_source_push_backward_return_flat_kernel(*, topk: int, hidden_block: in
         d_route_ref: Float[pl.Ref, "Dst rows"],
         route_dst_ref: Int[pl.Ref, "S T K"],
         route_row_ref: Int[pl.Ref, "S T K"],
-        route_valid_ref: Bool[pl.Ref, "S T K"],
+        route_valid_ref: Int[pl.Ref, "S T K"],
         dx_out_ref: Float[pl.Ref, "S T D"],
         d_route_out_ref: Float[pl.Ref, "S T K"],
     ) -> None:
@@ -1319,7 +1445,7 @@ def _make_source_push_backward_return_flat_kernel(*, topk: int, hidden_block: in
                 )
 
         for slot in range(topk):
-            valid = route_valid_ref[src, token, slot]
+            valid = route_valid_ref[src, token, slot] != 0
             dst = route_dst_ref[src, token, slot]
             row = route_row_ref[src, token, slot]
             dx_tile = dx_ref[dst, row, pl.ds(hidden_start, hidden_block)]
@@ -1336,18 +1462,19 @@ def _source_push_backward_return_flat_pallas_reference(
     d_route_block: Float[Array, "Dst rows"],
     route_dst: Int[Array, "S T K"],
     route_row: Int[Array, "S T K"],
-    route_valid: Bool[Array, "S T K"],
+    route_valid: Int[Array, "S T K"],
 ) -> tuple[Float[Array, "S T D"], Float[Array, "S T K"]]:
-    safe_dst = jnp.where(route_valid, route_dst, 0)
-    safe_row = jnp.where(route_valid, route_row, 0)
+    valid = route_valid != 0
+    safe_dst = jnp.where(valid, route_dst, 0)
+    safe_row = jnp.where(valid, route_row, 0)
     route_dx = dx_expert_major.at[safe_dst, safe_row].get(
         out_sharding=_source_push_out_sharding(SOURCE_PUSH_MESH_AXIS, None, None, None)
     )
-    route_dx = jnp.where(route_valid[..., None], route_dx, jnp.zeros((), dtype=route_dx.dtype))
+    route_dx = jnp.where(valid[..., None], route_dx, jnp.zeros((), dtype=route_dx.dtype))
     route_d = d_route_block.at[safe_dst, safe_row].get(
         out_sharding=_source_push_out_sharding(SOURCE_PUSH_MESH_AXIS, None, None)
     )
-    route_d = jnp.where(route_valid, route_d, jnp.zeros((), dtype=route_d.dtype))
+    route_d = jnp.where(valid, route_d, jnp.zeros((), dtype=route_d.dtype))
     return jnp.sum(route_dx, axis=2), route_d
 
 
@@ -1356,7 +1483,7 @@ def _source_push_backward_return_flat_from_indices_reference(
     d_route_block: Float[Array, "Dst rows"],
     route_dst: Int[Array, "S T K"],
     route_row: Int[Array, "S T K"],
-    route_valid: Bool[Array, "S T K"],
+    route_valid: Int[Array, "S T K"],
 ) -> tuple[Float[Array, "S T D"], Float[Array, "S T K"]]:
     return _source_push_backward_return_flat_pallas_reference(
         dx_expert_major,
@@ -1481,6 +1608,18 @@ def _source_route_buffer_from_queue_rows(
     return SourcePushBackwardReturnRouteBuffer(dx_routes, d_route_weights)
 
 
+def _source_route_slot_valid_mask(
+    route_rows: _RouteRows,
+    route_shape: tuple[int, int, int],
+) -> Bool[Array, "S T K"]:
+    route_slot_valid = jnp.zeros(route_shape, dtype=jnp.int32)
+    route_slot_valid = route_slot_valid.at[route_rows.src, route_rows.token, route_rows.slot].add(
+        route_rows.valid.astype(jnp.int32),
+        out_sharding=_source_push_out_sharding(SOURCE_PUSH_MESH_AXIS, None, None),
+    )
+    return route_slot_valid > 0
+
+
 def _validate_compact_shapes(
     dx_expert_major: Array,
     d_route_block: Array,
@@ -1493,6 +1632,16 @@ def _validate_compact_shapes(
         raise ValueError(
             f"d_route_block shape {d_route_block.shape} must match dx_expert_major rows {dx_expert_major.shape[:3]}"
         )
+    _validate_plan_layout_shapes(plan, dx_expert_major.shape[0], dx_expert_major.shape[1], src_base_by_expert)
+
+
+def _validate_compact_dx_shape(
+    dx_expert_major: Array,
+    plan: SourcePushPlan,
+    src_base_by_expert: Array | None,
+) -> None:
+    if dx_expert_major.ndim != 4:
+        raise ValueError(f"dx_expert_major must have shape [dst, expert, row, D], got {dx_expert_major.shape}")
     _validate_plan_layout_shapes(plan, dx_expert_major.shape[0], dx_expert_major.shape[1], src_base_by_expert)
 
 
