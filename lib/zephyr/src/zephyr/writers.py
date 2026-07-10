@@ -208,8 +208,8 @@ def _parquet_sink(temp_path: str):
     GCS and local paths are handed to pyarrow raw so it streams through its
     native client with flat memory. Routing them through a buffered fsspec
     handle instead holds ~2-3 transient copies of the largest single write
-    (``buffer.getvalue()`` plus a chunk slice per flush), which OOM-killed
-    consolidate workers on mega-doc shards (#7053).
+    (``buffer.getvalue()`` plus a chunk slice per flush), which can OOM
+    workers on shards holding mega documents.
 
     Everything else goes through fsspec: pyarrow's native S3 client uses
     path-style addressing (CoreWeave object storage rejects it with HTTP 400)
