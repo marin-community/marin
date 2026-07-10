@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-import rigging.filesystem as fs
+import rigging.filesystem.cluster_config as cluster_config
 from rigging.config_discovery import find_project_root
 
 
@@ -17,14 +17,19 @@ def _hermetic_cluster_config(monkeypatch):
     from under any test that expects the committed cluster layout — the same
     class of host-dependent flake as an unmocked GCE metadata lookup. Tests see
     only the repo-committed and bundled config dirs.
+
+    Patch the ``cluster_config`` submodule, not the ``rigging.filesystem``
+    package: ``load_cluster_config`` reads ``MARIN_CLUSTER_CONFIG_DIRS`` as a
+    module global there, so patching the package re-export would leave the real
+    read untouched.
     """
     monkeypatch.setattr(
-        fs,
+        cluster_config,
         "MARIN_CLUSTER_CONFIG_DIRS",
-        tuple(p for p in fs.MARIN_CLUSTER_CONFIG_DIRS if p != fs.PER_USER_CLUSTER_CONFIG_DIR),
+        tuple(p for p in cluster_config.MARIN_CLUSTER_CONFIG_DIRS if p != cluster_config.PER_USER_CLUSTER_CONFIG_DIR),
     )
     find_project_root.cache_clear()
-    fs.reset_data_config_cache()
+    cluster_config.reset_data_config_cache()
     yield
     find_project_root.cache_clear()
-    fs.reset_data_config_cache()
+    cluster_config.reset_data_config_cache()
