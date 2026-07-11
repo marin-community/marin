@@ -14,10 +14,18 @@ import logging
 
 from rigging.timing import Timestamp
 
+from iris.cluster.constraints import (
+    Constraint,
+    peer_availability_gate,
+    routing_constraints,
+    strip_backend_constraints,
+    strip_cluster_constraints,
+)
 from iris.cluster.controller import ops, reads, writes
 from iris.cluster.controller.codec import reconstruct_launch_job_request
 from iris.cluster.controller.db import ControllerDB, Tx
 from iris.cluster.controller.projections.attempt_counts import AttemptCountsProjection
+from iris.cluster.federation.availability import QueuedCandidate
 from iris.cluster.federation.store import (
     CancelTarget,
     HandoffAdmission,
@@ -25,9 +33,46 @@ from iris.cluster.federation.store import (
     HandoffState,
 )
 from iris.cluster.types import JobName
+from iris.rpc import job_pb2
 from iris.time_proto import timestamp_from_proto
 
 logger = logging.getLogger(__name__)
+
+
+def build_queued_candidates(tx: Tx) -> list[QueuedCandidate]:
+    """Read the queued federated jobs into candidates for the tick's federation pass.
+
+    Each candidate carries its shape (routing constraints) and its
+    ``ge(available:<token>, amount)`` availability gate, derived from the job's stored
+    request. Ordered by priority band ascending (lower band = higher priority, with
+    UNSPECIFIED treated as INTERACTIVE), then oldest submission first — the order the
+    assignment pass consumes them in.
+    """
+    candidates: list[QueuedCandidate] = []
+    for handle in reads.queued_handoff_handles(tx):
+        job = reads.get_job_detail(tx, handle.job_id)
+        if job is None:
+            continue
+        request = reconstruct_launch_job_request(job)
+        constraints = [Constraint.from_proto(c) for c in request.constraints]
+        shape = routing_constraints(strip_cluster_constraints(strip_backend_constraints(constraints)))
+        band = (
+            job.priority_band
+            if job.priority_band != job_pb2.PRIORITY_BAND_UNSPECIFIED
+            else job_pb2.PRIORITY_BAND_INTERACTIVE
+        )
+        candidates.append(
+            QueuedCandidate(
+                job_id=handle.job_id,
+                pinned_peer_id=handle.peer_id,
+                priority_band=band,
+                submitted_at_ms=job.submitted_at_ms.epoch_ms() if job.submitted_at_ms is not None else 0,
+                shape_constraints=shape,
+                availability_gate=peer_availability_gate(request.resources.device, request.replicas),
+            )
+        )
+    candidates.sort(key=lambda c: (c.priority_band, c.submitted_at_ms))
+    return candidates
 
 
 def _proto_ms(has: bool, ts) -> int | None:
@@ -46,13 +91,17 @@ class ControllerFederationStore:
 
     # -- handoff -------------------------------------------------------------
 
-    def admit_and_persist_handoff(self, spec: HandoffSpec) -> HandoffAdmission:
+    def admit_and_persist_queued(self, spec: HandoffSpec) -> HandoffAdmission:
         now = Timestamp.now()
         with self._db.transaction() as cur:
             if reads.get_job_state(cur, spec.local_job_id) is not None:
-                # A handle already exists — a retried/idempotent resubmit.
                 return HandoffAdmission.ALREADY_EXISTS
 
+            # A pinned candidate names its peer as the cluster coordinate up front (so
+            # status reads surface "queued for peer X"); an unpinned one has no peer yet,
+            # so cluster is "" until the tick's promotion stamps the chosen peer. Both are
+            # is_federated (!= LOCAL_CLUSTER), so a queued job is never folded into local
+            # scheduling — it owns no task rows and waits for a peer.
             ops.job.insert_job_and_config(
                 cur,
                 job_id=spec.local_job_id,
@@ -66,7 +115,7 @@ class ControllerFederationStore:
                 job_id=spec.local_job_id,
                 peer_id=spec.peer_id,
                 owner_principal=spec.owner_principal,
-                handoff_state=int(HandoffState.PENDING_HANDOFF),
+                handoff_state=int(HandoffState.QUEUED_HANDOFF),
             )
         return HandoffAdmission.ADMITTED
 
@@ -114,10 +163,20 @@ class ControllerFederationStore:
             if handle is None:
                 return None
             writes.bump_cancel_intent(cur, local_job_id)
-            if handle.handoff_state == int(HandoffState.PENDING_HANDOFF):
+            # A handle the peer has not yet accepted — QUEUED_HANDOFF (before the tick
+            # promotes it) or PENDING_HANDOFF (before the peer acks) — owns no peer-side
+            # job, so it is terminated locally; the bumped intent makes the promotion CAS
+            # / re-drive skip it, so no sync ever mirrors it terminal.
+            not_yet_delivered = (int(HandoffState.QUEUED_HANDOFF), int(HandoffState.PENDING_HANDOFF))
+            if handle.handoff_state in not_yet_delivered:
                 writes.mark_federated_job_killed(
                     cur, local_job_id, now_ms=Timestamp.now().epoch_ms(), error="Cancelled before handoff"
                 )
+            # A QUEUED handle has no peer yet (peer_id may be ""), so there is nothing to
+            # route a TerminateJob to. A PENDING or delivered handle names its peer, so a
+            # routed cancel drives it terminal on the peer as a best effort against a race.
+            if handle.handoff_state == int(HandoffState.QUEUED_HANDOFF):
+                return None
             return CancelTarget(local_job_id=local_job_id, peer_id=handle.peer_id)
 
     def pending_cancels(self) -> list[CancelTarget]:

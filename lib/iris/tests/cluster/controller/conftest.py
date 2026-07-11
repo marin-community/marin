@@ -40,7 +40,7 @@ from iris.cluster.constraints import (
     region_constraint,
     zone_constraint,
 )
-from iris.cluster.controller import ops, reads
+from iris.cluster.controller import ops, reads, writes
 from iris.cluster.controller.autoscaler import Autoscaler
 from iris.cluster.controller.autoscaler.models import DemandEntry
 from iris.cluster.controller.autoscaler.scaling_group import ScalingGroup
@@ -64,6 +64,7 @@ from iris.cluster.controller.backend_store import BackendWorkerStore, DbBackendW
 from iris.cluster.controller.controller import Controller, ControllerConfig
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.endpoint_service import EndpointServiceImpl
+from iris.cluster.controller.federation_store import build_queued_candidates
 from iris.cluster.controller.log_stack import build_log_stack
 from iris.cluster.controller.ops.task import Assignment
 from iris.cluster.controller.ops.worker import apply_reconcile
@@ -649,6 +650,30 @@ def query_tasks_for_job(state: ControllerTestState, job_id: JobName) -> list:
         return tx.execute(
             select(tasks_table).where(tasks_table.c.job_id == job_id).order_by(tasks_table.c.task_index)
         ).all()
+
+
+def promote_queued_federation(manager: FederationManager, state: ControllerTestState) -> None:
+    """Drive the control tick's federation pass + delivery in-process.
+
+    A submitted federated job is admitted to the queue (``QUEUED_HANDOFF``); the live
+    controller promotes it on its next tick, and the sync loop delivers it. Service-level
+    tests have no tick or sync loop, so this reproduces both steps without a peer *pull*:
+    build the queued candidates, plan promotions against peer availability + the reservation
+    ledger, apply each as the conditional CAS the commit does, then redrive the newly
+    ``PENDING_HANDOFF`` handles to the peer. After this a placeable, reachable handle is
+    ``HANDED_OFF`` with no tasks mirrored yet — exactly the post-launch state the old
+    synchronous handoff produced.
+    """
+    with state._db.read_snapshot() as tx:
+        candidates = build_queued_candidates(tx)
+    promotions = manager.plan_federation(candidates)
+    confirmed = []
+    with state._db.transaction() as cur:
+        for promotion in promotions:
+            if writes.promote_queued_handoff(cur, promotion.job_id, promotion.peer_id):
+                confirmed.append(promotion)
+    manager.confirm_promotions(confirmed)
+    manager._redrive_pending_handoffs()  # deliver, without a peer pull (keeps pre-sync postures)
 
 
 def schedulable_tasks(state: ControllerTestState) -> list:

@@ -7,19 +7,59 @@ every job to `marin` and GPU work lands on CoreWeave.
 This page is the job model. For the auth, networking, and DNS that carry a handoff, see
 [`coreweave.md`](coreweave.md).
 
-## Routing: one decision, at submit
+## Routing: classify at submit, place on the tick
 
-`PeerRouter.decide` (`cluster/federation/router.py`) runs once per submission, in order:
+Peer placement is not decided at submit. Submit only *classifies* a job; the controller's
+single scheduling tick decides which peer a queued job lands on, alongside every local
+scheduling decision. This keeps one thread of control for all placement and lets a job wait
+for a peer to report free capacity instead of piling onto the first peer that merely *could*
+host it.
 
-1. **A `cluster=<peer>` pin wins.** `iris job run --target-cluster <peer>` sets it. The job
-   goes to that peer even when it could run locally.
-2. **Otherwise local, if the shape is locally feasible.** `job_feasibility` asks whether any
-   local scaling group could in principle host the job.
-3. **Otherwise the first peer that can host it**, by peer id, ascending.
-4. **Otherwise local**, so the job fails as locally unschedulable rather than wedging.
+`PeerRouter.classify` (`cluster/federation/router.py`) runs once per submission and returns one
+of three dispositions:
 
-A peer "can host" a job when its last capability heartbeat (a 30s `ListBackends` probe) shows
-a backend whose advertised attributes satisfy **every routing constraint** on the job.
+1. **`QUEUE` on a `cluster=<peer>` pin.** `iris job run --target-cluster <peer>` sets it. The
+   job queues for that peer even when it could run locally.
+2. **`LOCAL` if the shape is locally feasible.** `job_feasibility` asks whether any local
+   scaling group could in principle host the job.
+3. **`QUEUE` if some reachable peer could host it** — its last capability heartbeat shows a
+   backend whose advertised attributes satisfy **every routing constraint** on the job.
+4. **`REJECT` otherwise**, so the job fails fast as unschedulable rather than wedging.
+
+A `QUEUE` disposition parks the job in the parent's `federated_jobs` table in the
+`QUEUED_HANDOFF` state. It is *not* yet assigned to a peer.
+
+## Placement: the control tick drains the queue against availability
+
+Each control tick, `FederationManager.plan_federation` (`cluster/federation/manager.py`) runs
+the pure pass in `cluster/federation/availability.py` over the queued jobs and the peers' most
+recent availability, and emits `(job → peer, backend)` promotions. A promotion is applied as a
+conditional CAS (`promote_queued_handoff`): it advances the job to a pending handoff only if the
+job is still queued, not cancelled, and non-terminal — so a cancel or terminalize racing the
+tick can never be overtaken by a promotion. A confirmed promotion then delivers over the same
+handoff machinery as before.
+
+Placement translates a job's device request into an **availability gate**: N replicas of an
+8×`h100` job becomes `ge(available:h100, N*8)`, and a peer backend hosts the job only when its
+advertised free capacity meets the gate. This mirrors the `availability:<variant>` *EXISTS*
+constraints the scheduler already uses for reservations, but the `available:<token>` metric is
+*numeric* (a count), not a boolean.
+
+Two properties keep placement honest without pretending to be exact:
+
+- **Never summed across backends.** A job pins to one backend, so 6 free on one backend plus 4
+  on another does not host an 8-GPU job. Availability is evaluated per backend.
+- **A reservation ledger bounds cross-tick over-assignment.** The tick runs on every submit
+  wake — far more often than the 30s heartbeat — so a naive per-tick read would re-spend the
+  same advertised number every tick. The ledger records capacity already promoted against a
+  peer backend *since its last heartbeat* (keyed on the heartbeat's `observation_epoch_ms`), and
+  effective availability is `advertised − reserved`. A strictly newer heartbeat — whose number
+  already reflects the delivered jobs — resets the ledger. Over-assignment is thus bounded to a
+  peer's advertised free capacity per observation, which the issue explicitly tolerates; the
+  peer's own scheduler (and a requeue) is the backstop.
+
+`max_federation_handoffs_per_cycle` (controller config) caps promotions per tick, a second
+bound on a burst against stale metrics.
 
 ## What the router matches on
 

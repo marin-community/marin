@@ -39,6 +39,11 @@ class HandoffState(IntEnum):
     PENDING_HANDOFF = 0  # persisted locally, peer has not yet acked LaunchJob
     HANDED_OFF = 1  # peer acked; the sync loop now mirrors its state
     HANDOFF_REJECTED = 2  # peer rejected the handoff (ALREADY_EXISTS collision); terminal
+    # Queued on the parent (no peer chosen, nothing delivered) waiting for a peer to
+    # report enough free capacity. The control tick promotes it to PENDING_HANDOFF
+    # (stamping the chosen peer) via a conditional CAS. Appended as 3 so existing
+    # persisted rows keep their meaning; older readers must tolerate an unknown state.
+    QUEUED_HANDOFF = 3
 
 
 class HandoffAdmission(Enum):
@@ -75,14 +80,6 @@ class CancelTarget:
 class FederationStore(Protocol):
     """Durable operations the federation manager performs against the parent DB."""
 
-    def admit_and_persist_handoff(self, spec: HandoffSpec) -> HandoffAdmission:
-        """In one transaction: re-check existence (idempotent resubmit) and persist
-        the ``jobs`` row (``cluster`` set to the peer, no tasks) + ``job_config`` +
-        the SENT ``federated_jobs`` handle in ``PENDING_HANDOFF``. Returns
-        ``ADMITTED`` for a freshly-persisted handle, ``ALREADY_EXISTS`` for an
-        idempotent resubmit."""
-        ...
-
     def mark_handed_off(self, local_job_id: JobName) -> None:
         """Flip a handle to ``HANDED_OFF`` after the peer acks its ``LaunchJob``."""
         ...
@@ -93,6 +90,17 @@ class FederationStore(Protocol):
         Flips the handle to ``HANDOFF_REJECTED`` (so it drops from
         :meth:`pending_handoffs` and the re-drive stops) and marks the local job
         failed/killed with ``reason`` so the user sees the peer's answer."""
+        ...
+
+    def admit_and_persist_queued(self, spec: HandoffSpec) -> HandoffAdmission:
+        """In one transaction: re-check existence (idempotent resubmit) and persist the
+        ``jobs`` row (no tasks) + ``job_config`` + a SENT ``federated_jobs`` handle in
+        ``QUEUED_HANDOFF``. The job waits on the parent for a peer to report free
+        capacity; nothing is delivered until the control tick promotes it. The job
+        row's ``cluster`` is stamped with ``spec.peer_id`` — the pinned peer for a
+        pinned candidate, or "" for an unpinned one whose peer the tick's promotion
+        fills in later. Returns ``ADMITTED`` for a freshly-persisted handle,
+        ``ALREADY_EXISTS`` for a resubmit."""
         ...
 
     def pending_handoffs(self) -> list[HandoffSpec]:

@@ -26,12 +26,19 @@ from rigging.timing import Duration, Timestamp
 
 from iris.cluster.bundle import BundleStore
 from iris.cluster.constraints import BACKEND_CONSTRAINT_KEY, CLUSTER_CONSTRAINT_KEY
+from iris.cluster.federation.availability import (
+    BackendAvailability,
+    PeerAvailability,
+    Promotion,
+    QueuedCandidate,
+    ReservationLedger,
+    assign_queued,
+)
 from iris.cluster.federation.peer import FederationPeer
-from iris.cluster.federation.router import PeerRouter, RoutingRequest, SubmitRouting
+from iris.cluster.federation.router import PeerRouter, RoutingRequest, SubmitPlan
 from iris.cluster.federation.store import (
     CancelTarget,
     FederationStore,
-    HandoffAdmission,
     HandoffSpec,
 )
 from iris.cluster.types import JobName
@@ -42,6 +49,11 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_HEARTBEAT_INTERVAL = Duration.from_seconds(30)
 DEFAULT_SYNC_INTERVAL = Duration.from_seconds(3)
+# Safety cap on federation queue promotions per peer per control tick, on top of
+# the reservation ledger. Consume up to a peer's advertised free capacity per
+# heartbeat, but never promote more than this many jobs to one peer in a single
+# tick, so a burst can't over-commit a peer against one stale observation.
+DEFAULT_MAX_HANDOFFS_PER_CYCLE = 8
 _JOIN_TIMEOUT = Duration.from_seconds(5.0)
 
 _PEER_RPC_ERRORS = (ConnectError, ConnectionError, OSError)
@@ -67,6 +79,7 @@ class FederationManager:
         cluster_id: str = "",
         heartbeat_interval: Duration = DEFAULT_HEARTBEAT_INTERVAL,
         sync_interval: Duration = DEFAULT_SYNC_INTERVAL,
+        max_handoffs_per_cycle: int = DEFAULT_MAX_HANDOFFS_PER_CYCLE,
     ):
         self._peers = {peer.peer_id: peer for peer in peers}
         self._threads = threads
@@ -75,7 +88,12 @@ class FederationManager:
         self._cluster_id = cluster_id
         self._heartbeat_interval = heartbeat_interval
         self._sync_interval = sync_interval
+        self._max_handoffs_per_cycle = max_handoffs_per_cycle
         self._router = PeerRouter(peers)
+        # In-memory reservation ledger for the control-tick federation pass: capacity
+        # already promoted against each peer backend since its last heartbeat, so
+        # successive ticks between heartbeats do not each re-spend the same number.
+        self._ledger = ReservationLedger()
         self._heartbeat_thread: ManagedThread | None = None
         self._sync_thread: ManagedThread | None = None
 
@@ -106,9 +124,13 @@ class FederationManager:
 
     # -- routing / views -----------------------------------------------------
 
-    def route_submit(self, request: RoutingRequest) -> SubmitRouting:
-        """Route a submission to local execution or a peer."""
-        return self._router.decide(request)
+    def classify_submit(self, request: RoutingRequest) -> SubmitPlan:
+        """Classify a submission as local, federation-queued, or unschedulable.
+
+        Submit never selects a peer — that is a control-tick decision. See
+        :class:`~iris.cluster.federation.router.PeerRouter`.
+        """
+        return self._router.classify(request)
 
     def has_peer(self, peer_id: str) -> bool:
         """Whether ``peer_id`` names a configured federation peer."""
@@ -118,45 +140,91 @@ class FederationManager:
         """A ``PeerSummary`` for every configured peer, ordered by peer id."""
         return [self._build_summary(peer) for _, peer in sorted(self._peers.items())]
 
-    # -- handoff (parent side, synchronous) ----------------------------------
+    # -- queue admission (parent side) ---------------------------------------
 
-    def submit_federated_handle(
+    def queue_federated(
         self,
         *,
         local_job_id: JobName,
         request: controller_pb2.Controller.LaunchJobRequest,
-        peer_id: str,
+        pinned_peer_id: str,
         owner_principal: str,
         submitting_user: str,
     ) -> None:
-        """Persist a federated handle and synchronously hand the job to its peer.
+        """Admit a job to the federation queue (``QUEUED_HANDOFF``), choosing no peer.
 
-        In one local transaction the store persists the
-        ``jobs``/``job_config``/``federated_jobs`` handle (no task rows) in
-        ``PENDING_HANDOFF``. When freshly admitted it then calls the peer's
-        ``LaunchJob`` — the peer runs the job under the same, cluster-invariant
-        ``local_job_id`` — and flips the handle to ``HANDED_OFF``; an idempotent
-        resubmit skips delivery. A transient delivery failure is not fatal — the handle
-        persists and the sync loop re-drives it. A rejection the peer will repeat (it
-        refuses the submitter, or already runs that job) terminalizes the handle and
-        raises, so the submitter sees the peer's own answer rather than a job that
-        silently never lands.
+        In one local transaction the store persists the ``jobs``/``job_config``/
+        ``federated_jobs`` handle (no task rows, no cluster) queued on the parent. The
+        control tick's federation pass later picks a peer that has room and promotes
+        the handle to ``PENDING_HANDOFF``, and the sync loop delivers it. ``pinned_peer_id``
+        is "" for an unpinned candidate, or the peer a ``cluster=<peer>`` pin named (the
+        tick then only ever assigns it there). An idempotent resubmit is a no-op.
+
+        A peer's own rejection (e.g. its allowlist) is not visible at admission: it
+        arrives later as a failed job once the tick promotes the handle and delivery is
+        attempted.
         """
         if self._store is None:
-            raise RuntimeError("federation handoff requires a store")
-        self._require_peer(peer_id)
-
-        spec = HandoffSpec(
-            local_job_id=local_job_id,
-            peer_id=peer_id,
-            owner_principal=owner_principal,
-            submitting_user=submitting_user,
-            request=request,
+            raise RuntimeError("federation queueing requires a store")
+        if pinned_peer_id:
+            self._require_peer(pinned_peer_id)
+        self._store.admit_and_persist_queued(
+            HandoffSpec(
+                local_job_id=local_job_id,
+                peer_id=pinned_peer_id,
+                owner_principal=owner_principal,
+                submitting_user=submitting_user,
+                request=request,
+            )
         )
-        if self._store.admit_and_persist_handoff(spec) is HandoffAdmission.ADMITTED:
-            rejection = self._deliver_handoff(spec)
-            if rejection is not None:
-                raise rejection
+
+    # -- control-tick federation pass (peer selection) -----------------------
+
+    def peer_availability(self) -> list[PeerAvailability]:
+        """Each configured peer's reachability + per-backend advertised availability.
+
+        Read off the latest capability heartbeat. A backend that set the availability
+        wrapper supplies a free-capacity metric (``supplies_metric``); a legacy backend
+        that did not is matched on shape alone.
+        """
+        result: list[PeerAvailability] = []
+        for peer_id, peer in sorted(self._peers.items()):
+            heartbeat = peer.heartbeat()
+            backends = [
+                BackendAvailability(
+                    backend_id=backend.backend_id,
+                    supplies_metric=backend.HasField("availability"),
+                    generation=backend.availability.observation_epoch_ms,
+                    amounts=dict(backend.availability.amounts),
+                    advertised_shape={key: list(values.values) for key, values in backend.advertised_attributes.items()},
+                )
+                for backend in heartbeat.backends
+            ]
+            result.append(PeerAvailability(peer_id=peer_id, reachable=heartbeat.reachable, backends=backends))
+        return result
+
+    def plan_federation(self, candidates: list[QueuedCandidate]) -> list[Promotion]:
+        """Decide which queued candidates to promote to which peer this tick (pure).
+
+        Snapshots peer availability, runs the availability-gated assignment against the
+        reservation ledger, and returns the promotions. Does not mutate the ledger — the
+        controller applies each promotion as a conditional CAS and calls
+        :meth:`confirm_promotions` for the ones that actually committed.
+        """
+        if not self._peers or not candidates:
+            return []
+        self._ledger.drop_peers(set(self._peers))
+        return assign_queued(
+            candidates,
+            self.peer_availability(),
+            self._ledger,
+            max_per_peer_per_cycle=self._max_handoffs_per_cycle,
+        )
+
+    def confirm_promotions(self, promotions: list[Promotion]) -> None:
+        """Charge the reservation ledger for promotions whose CAS committed this tick."""
+        for promotion in promotions:
+            self._ledger.commit(promotion)
 
     # -- cancel (parent side) ------------------------------------------------
 
@@ -293,12 +361,11 @@ class FederationManager:
         for target in self._store.pending_cancels():
             self._deliver_cancel(target)
 
-    def _deliver_handoff(self, spec: HandoffSpec) -> ConnectError | None:
+    def _deliver_handoff(self, spec: HandoffSpec) -> None:
         """Deliver one handle to its peer, terminalizing a rejection the peer will repeat.
 
-        Returns that rejection — the handle already marked ``HANDOFF_REJECTED`` — so the
-        submit path can answer its caller with the peer's own verdict. Returns ``None``
-        when the handle landed or is still worth re-driving. It never raises on a peer's
+        A rejection marks the handle ``HANDOFF_REJECTED`` so the re-drive stops; the
+        user learns the peer's verdict from the failed job. Never raises on a peer's
         answer: the re-drive loop calls this on the sync thread, which dies on an
         uncaught exception.
         """
@@ -306,7 +373,7 @@ class FederationManager:
         peer = self._peers.get(spec.peer_id)
         if peer is None:
             logger.warning("Cannot hand off %s: peer %s is not configured", spec.local_job_id, spec.peer_id)
-            return None
+            return
         try:
             handoff = self._build_handoff_request(
                 spec.request, spec.local_job_id, spec.owner_principal, spec.submitting_user
@@ -320,19 +387,18 @@ class FederationManager:
             # succeed on a later attempt and stays pending.
             if exc.code not in _TERMINAL_HANDOFF_CODES:
                 logger.warning("Handoff of %s to peer %s failed (will retry): %s", spec.local_job_id, spec.peer_id, exc)
-                return None
+                return
             self._store.mark_handoff_rejected(
                 spec.local_job_id,
                 reason=f"Peer {spec.peer_id} rejected the handoff: {exc.message}",
             )
-            return exc
+            return
         except (ConnectionError, OSError) as exc:
             # Also covers a blob this cluster's bundle store could not read back for
             # the handoff; a later attempt can still succeed.
             logger.warning("Handoff of %s to peer %s failed (will retry): %s", spec.local_job_id, spec.peer_id, exc)
-            return None
+            return
         self._store.mark_handed_off(spec.local_job_id)
-        return None
 
     def _sync_peer(self, peer: FederationPeer) -> None:
         assert self._store is not None

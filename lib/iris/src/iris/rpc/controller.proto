@@ -658,6 +658,25 @@ message Controller {
     }
   }
 
+  // How much of each consumable resource a backend has free right now. Wrapped in
+  // a message (not a bare map on BackendSummary) so a peer that predates the field
+  // is distinguishable from one reporting an authoritative zero: proto3 cannot tell
+  // an omitted map from an empty one, but it CAN tell an unset message from a set
+  // one. UNSET => legacy peer, the parent falls back to shape-only federation for
+  // that backend; SET with empty amounts => authoritative "nothing free".
+  message ResourceAvailability {
+    // Metric-semantics version. A parent that does not recognize the version treats
+    // the availability as unknown rather than trusting the amounts.
+    uint32 version = 1;
+    // When the serving peer computed these amounts, ms since epoch. The parent's
+    // reservation ledger keys on this as the observation GENERATION: reservations
+    // made against one observation are held until a strictly newer one arrives.
+    int64 observation_epoch_ms = 2;
+    // Free amount per resource token, in the token's natural unit (accelerator
+    // variant -> free chips, e.g. {"h100": 8}). Keys are lowercased device-variants.
+    map<string, int64> amounts = 3;
+  }
+
   message BackendSummary {
     string backend_id = 1;
     string name = 2;
@@ -673,6 +692,8 @@ message Controller {
     map<string, int32> capacity_health = 13;
     // Expanded per-backend status for the always-on Backends tab's detail panel.
     BackendStatus detail = 14;
+    // Free consumable capacity for federation queueing; unset on a legacy peer.
+    ResourceAvailability availability = 15;
   }
 
   message UnroutableJob {
