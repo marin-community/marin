@@ -221,21 +221,27 @@ def _loss_with_aux(
 
 
 def _sampled_quantiles(difference: jax.Array) -> dict[str, Any]:
-    flat = difference.reshape(-1)
-    sample_size = min(flat.size, _QUANTILE_SAMPLE_SIZE)
-    if sample_size < flat.size:
-        indices = jnp.linspace(0, flat.size - 1, sample_size, dtype=jnp.int32)
-        sample = jnp.take(flat, indices)
-    else:
-        sample = flat
-    values = np.asarray(jax.device_get(jnp.quantile(sample, jnp.asarray(_ERROR_QUANTILES, dtype=jnp.float32))))
+    shards = difference.addressable_shards
+    samples_per_shard = max(1, _QUANTILE_SAMPLE_SIZE // len(shards))
+    samples = []
+    for shard in shards:
+        flat_shard = shard.data.reshape(-1)
+        shard_sample_size = min(flat_shard.size, samples_per_shard)
+        if shard_sample_size < flat_shard.size:
+            indices = jnp.linspace(0, flat_shard.size - 1, shard_sample_size, dtype=jnp.int32)
+            shard_sample = jnp.take(flat_shard, indices)
+        else:
+            shard_sample = flat_shard
+        samples.append(np.asarray(jax.device_get(shard_sample)))
+    sample = np.concatenate(samples)
+    values = np.quantile(sample, _ERROR_QUANTILES)
     return {
         "values": {
             f"p{100 * quantile:g}": float(value) for quantile, value in zip(_ERROR_QUANTILES, values, strict=True)
         },
-        "sample_size": sample_size,
-        "total_size": flat.size,
-        "exact": sample_size == flat.size,
+        "sample_size": sample.size,
+        "total_size": difference.size,
+        "exact": sample.size == difference.size,
     }
 
 
@@ -306,20 +312,22 @@ def _parity_metrics(
     mismatches = jnp.logical_not(difference <= _BF16_ATOL + _BF16_RTOL * jnp.abs(expected_f32))
     mismatch_count = jnp.sum(mismatches)
     worst_flat_index = jnp.argmax(difference)
+    max_abs = jnp.max(difference)
+    worst_mask = difference == max_abs
     reference_l2 = jnp.linalg.norm(expected_f32.reshape(-1))
     candidate_l2 = jnp.linalg.norm(actual_f32.reshape(-1))
     error_l2 = jnp.linalg.norm(difference.reshape(-1))
     scalars = jax.device_get(
         (
-            jnp.max(difference),
+            max_abs,
             jnp.mean(difference),
             mismatch_count,
             reference_l2,
             candidate_l2,
             error_l2,
             worst_flat_index,
-            jnp.take(expected_f32.reshape(-1), worst_flat_index),
-            jnp.take(actual_f32.reshape(-1), worst_flat_index),
+            jnp.max(jnp.where(worst_mask, jnp.abs(expected_f32), 0)),
+            jnp.max(jnp.where(worst_mask, jnp.abs(actual_f32), 0)),
         )
     )
     reference_l2_value = float(scalars[3])
