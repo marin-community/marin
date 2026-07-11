@@ -2083,3 +2083,30 @@ boundary tests passed (`10 passed`), and the changed source passed the required
 Marin pre-commit checks. Next action: rerun the target integrated forward and
 backward mode at `4a3922ad1f`; if it reaches the kernels, use its first numeric
 row or first kernel-specific failure as the next integration decision.
+
+## 2026-07-10 FUSED-MOE-071 - First complete fused semantic forward and backward boundary
+
+Job `/dlwh/bench-semantic-fused-76698-fwd-bwd-20260710-2130` at
+`76698c304a` completed the selected fused semantic custom-VJP boundary on the
+target H100x8 shape. Iris state was `succeeded`, exit 0, with one successful
+task, zero failures, and zero preemptions. The three steady-state rows were:
+
+| Repeat | Time (ms) | Useful TFLOP/s/rank | Rounded TFLOP/s/rank |
+|---:|---:|---:|---:|
+| 0 | 242.277932 | 31.926010 | 39.907512 |
+| 1 | 242.826982 | 31.853823 | 39.817278 |
+| 2 | 242.802626 | 31.857018 | 39.821273 |
+
+The median is `242.802626 ms`, `31.857018` useful TFLOP/s/rank, and
+`39.821273` capacity-rounded TFLOP/s/rank. Routing counters were exactly zero:
+`dropped_routes=0`, `routing_dropped_routes=0`, and
+`metadata_overflow_routes=0`. The output checksum was stable at
+`-1.1766269542473693e+26` across all repeats.
+
+This proves that the selected four fused-stage implementations compose through
+one custom VJP with consistent shardings. It is not a performance milestone:
+the result is 7.85x slower than the `250` useful TFLOP/s/rank target. The
+dominant next work remains physical schedule replacement, beginning with the
+forward W13 path: preserve semantic metadata, but restore the proven inbox
+shape with two aggregated send producers, approximately 30 WGMMA consumers,
+B256 allocation, and independent B64 readiness.
