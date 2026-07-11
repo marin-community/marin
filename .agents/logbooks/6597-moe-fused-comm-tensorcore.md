@@ -2499,3 +2499,41 @@ production schedule.
 The process emitted recoverable 12.5 GiB BFC allocation warnings and FABRIC
 handle VMM fallbacks before producing all requested rows. There was no Mosaic
 lowering error, benchmark error row, or runtime correctness counter failure.
+
+## 2026-07-10 FUSED-MOE-085 - Three-winner forward sets a new boundary; backward config is stale
+
+Job `/dlwh/bench-semantic-integrated-three-winners-20260710-2310` at
+`8cc14a507b` completed on `cw-rno2a` with Iris state `succeeded`, exit 0, one
+task, and a 2m44s task duration. The integrated candidate combines the
+cohort-local W2 return/combine schedule, the two-buffer K512 W13 helper
+transport, and the selected pipelined W13 backward kernel.
+
+| Mode | Repeat times (ms) | Median ms | Useful TFLOP/s/rank | Rounded TFLOP/s/rank | Result |
+|---|---|---:|---:|---:|---|
+| Integrated forward | 29.300053, 29.336042, 30.173681 | 29.336042 | 87.889243 | 109.861554 | New selected forward candidate |
+| Integrated fwd+bwd | none | none | none | none | Failed before compilation: backward rebuilt W13 metadata with `send_k=256`, but the selected Hopper lowering requires 512 |
+
+Against the W2-cohort/K256 integrated forward baseline of 30.669469 ms and
+84.068053 useful TFLOP/s/rank, the K512 helper saves 1.333427 ms or 4.35% and
+raises useful throughput by 4.55%. Against the original complete forward
+baseline of 49.051833 ms, the three-winner forward saves 19.715791 ms or
+40.19%.
+
+All three forward repeats reported zero dropped routes, zero routing-policy
+drops, and zero metadata-overflow routes. The output checksum was `Infinity`
+on every repeat, matching the prior integrated forward boundary but remaining
+non-diagnostic; the separate finite direct W2 comparison in FUSED-MOE-082 is
+still the available numerical evidence. The integrated repeat schema did not
+emit separate queue-entry, route, or layout-overflow counters.
+
+The fwd+bwd mode produced one error row and no repeat rows, checksum, drop
+counters, or throughput. The failure is a configuration-plumbing mismatch in
+`source_push_semantic_fused_w13_backward_metadata_jax`: it constructs the
+shared forward metadata path with `send_k=256`, which now fails the K512 Hopper
+validation. This run therefore does not measure the aggregate effect of all
+three winners. Do not compare it to the selected 218.166632 ms fwd+bwd boundary
+until the backward metadata uses the selected W13 transport configuration.
+
+The process emitted the same recoverable 12.5 GiB BFC allocation warnings and
+FABRIC-handle VMM fallbacks as earlier integrated runs. No retry or kernel
+change was made while babysitting this job.
