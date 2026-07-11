@@ -296,7 +296,7 @@ def test_fused_w2_backward_reports_queue_and_layout_overflow_and_masks_outputs()
     np.testing.assert_array_equal(np.asarray(metadata.route_weights)[~np.asarray(metadata.row_valid)], 0)
 
 
-def test_fused_w2_backward_kernel_contract_streams_compact_rows_to_owned_dw2_tiles():
+def test_fused_w2_backward_kernel_contract_fuses_b64_dh_and_dw2_consumption():
     source = inspect.getsource(_make_source_push_semantic_fused_w2_backward_kernel)
 
     assert "mgpu.remote_ref" in source
@@ -311,9 +311,11 @@ def test_fused_w2_backward_kernel_contract_streams_compact_rows_to_owned_dw2_til
     assert "prepare_sem.at[dst]" in source
     assert "value=(chunk + 1) * helper_tiles" in source
     assert "mgpu.SemaphoreType.REGULAR((experts_per_rank, compact_m_blocks))" in source
+    assert "mgpu.SemaphoreType.REGULAR((experts_per_rank, intermediate_tiles, hidden_tiles))" in source
     assert "producer_programs_per_peer = consumer_start" in source
     assert "producer_programs = ep_size * producer_programs_per_peer" in source
-    assert "total_programs = producer_programs + dw2_owner_programs" in source
+    assert "consumer_programs = ep_size * config.consumer_programs_per_peer" in source
+    assert "total_programs = producer_programs + consumer_programs" in source
     assert "is_producer = physical_program < producer_programs" in source
     assert "physical_program // producer_programs_per_peer" in source
     assert "(physical_program - producer_programs) // config.consumer_programs_per_peer" in source
@@ -328,14 +330,22 @@ def test_fused_w2_backward_kernel_contract_streams_compact_rows_to_owned_dw2_til
     assert "_signal_remote_compact_block(compact_ready_sem, peer, expert, compact_block)" in source
     assert "pl.semaphore_signal(helper_done_sem.at[peer])" in source
     assert "@pl.when(worker >= consumer_start)" in source
-    assert source.count("compact_ready_sem.at[expert, compact_block]") >= 3
-    assert source.count("value=send_hidden_tiles") == 2
-    assert "global_owner = peer_ordinal * config.consumer_programs_per_peer + consumer" in source
-    assert "tile = global_owner + tile_iteration * dw2_owner_programs" in source
-    assert "@pl.loop(0, compact_m_blocks)" in source
-    assert "valid_ref[expert, row_start]" in source
-    assert "] = acc_ref[...]" in source
-    assert "mgpu.atomic_add" not in source
-    assert "jax.nn.silu(gate_smem[:, :].astype(jnp.float32))" in source
+    assert "consumer_jobs = send_chunks_per_dst * blocks * intermediate_tiles" in source
+    assert "recv_block = job // intermediate_tiles" in source
+    assert "block = recv_block % blocks" in source
+    assert source.count("compact_ready_sem.at[expert, compact_block]") == 2
+    assert source.count("value=send_hidden_tiles") == 1
+    assert "@pl.loop(0, hidden_tiles)" in source
+    assert source.count("jax.nn.silu") == 1
+    assert source.count("mgpu.wgmma(") == 2
+    first_wgmma = source.index("mgpu.wgmma(")
+    second_wgmma = source.index("mgpu.wgmma(", first_wgmma + 1)
+    wait = source.index("mgpu.wgmma_wait(0)", second_wgmma)
+    assert first_wgmma < second_wgmma < wait
+    assert "mgpu.atomic_add" in source
+    assert "dw2_initialized_sem.at[expert, i_tile, h_tile]" in source
+    assert "global_owner" not in source
+    assert "@pl.loop(0, compact_m_blocks)" not in source
+    assert "jax.nn.silu(gate) * up" in source
     assert "d_z13_ref" in source
     assert "d_h_ref" not in source

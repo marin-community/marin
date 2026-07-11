@@ -545,16 +545,16 @@ def _make_source_push_semantic_fused_w2_backward_kernel(
     hidden_tiles = hidden_dim // config.hidden_block
     compact_m_blocks = rows_per_expert_capacity // config.compute_m
     helper_iterations = (helper_tiles + config.helper_programs_per_peer - 1) // config.helper_programs_per_peer
-    dz13_jobs = send_chunks_per_dst * blocks * intermediate_tiles
-    dz13_iterations = (dz13_jobs + config.consumer_programs_per_peer - 1) // config.consumer_programs_per_peer
+    consumer_jobs = send_chunks_per_dst * blocks * intermediate_tiles
+    consumer_iterations = (consumer_jobs + config.consumer_programs_per_peer - 1) // config.consumer_programs_per_peer
     dw2_output_tiles = experts_per_rank * intermediate_tiles * hidden_tiles
-    dw2_owner_programs = ep_size * config.consumer_programs_per_peer
-    dw2_iterations = (dw2_output_tiles + dw2_owner_programs - 1) // dw2_owner_programs
     helper_start = config.chunk_owner_programs_per_peer
     consumer_start = helper_start + config.helper_programs_per_peer
     producer_programs_per_peer = consumer_start
     producer_programs = ep_size * producer_programs_per_peer
-    total_programs = producer_programs + dw2_owner_programs
+    consumer_programs = ep_size * config.consumer_programs_per_peer
+    total_programs = producer_programs + consumer_programs
+    dw2_init_iterations = (dw2_output_tiles + producer_programs - 1) // producer_programs
 
     def body(
         dy_ref,
@@ -567,7 +567,7 @@ def _make_source_push_semantic_fused_w2_backward_kernel(
         recv_expert_ref,
         recv_row_ref,
         recv_valid_ref,
-        valid_ref,
+        _valid_ref,
         z13_ref,
         w_ref,
         dy_expert_ref,
@@ -578,6 +578,9 @@ def _make_source_push_semantic_fused_w2_backward_kernel(
         prepare_sem = pl.get_global(mgpu.SemaphoreType.REGULAR((ep_size,)))
         helper_done_sem = pl.get_global(mgpu.SemaphoreType.REGULAR((ep_size,)))
         compact_ready_sem = pl.get_global(mgpu.SemaphoreType.REGULAR((experts_per_rank, compact_m_blocks)))
+        dw2_initialized_sem = pl.get_global(
+            mgpu.SemaphoreType.REGULAR((experts_per_rank, intermediate_tiles, hidden_tiles))
+        )
         rank = lax.axis_index(SOURCE_PUSH_MESH_AXIS)
         physical_program = pl.program_id(0)
         is_producer = physical_program < producer_programs
@@ -591,6 +594,25 @@ def _make_source_push_semantic_fused_w2_backward_kernel(
             physical_program % producer_programs_per_peer,
             consumer_start + (physical_program - producer_programs) % config.consumer_programs_per_peer,
         )
+
+        @pl.when(is_producer)
+        def _initialize_dw2() -> None:
+            @pl.loop(0, dw2_init_iterations)
+            def _initialize_tile_loop(iteration) -> None:
+                tile = physical_program + iteration * producer_programs
+
+                @pl.when(tile < dw2_output_tiles)
+                def _initialize_tile() -> None:
+                    expert = tile // (intermediate_tiles * hidden_tiles)
+                    remainder = tile % (intermediate_tiles * hidden_tiles)
+                    i_tile = remainder // hidden_tiles
+                    h_tile = remainder % hidden_tiles
+                    d_w2_ref[
+                        expert,
+                        pl.ds(i_tile * config.intermediate_block, config.intermediate_block),
+                        pl.ds(h_tile * config.hidden_block, config.hidden_block),
+                    ] = jnp.zeros((config.intermediate_block, config.hidden_block), dtype=jnp.float32)
+                    pl.semaphore_signal(dw2_initialized_sem.at[expert, i_tile, h_tile])
 
         def _signal_remote_compact_block(sem, peer, expert, compact_block) -> None:
             pl.semaphore_signal(
@@ -712,12 +734,12 @@ def _make_source_push_semantic_fused_w2_backward_kernel(
             consumer = worker - consumer_start
 
             def _consume_peer(static_peer_ordinal: int) -> None:
-                @pl.loop(0, dz13_iterations)
-                def _dz13_job_loop(job_iteration) -> None:
+                @pl.loop(0, consumer_iterations)
+                def _consumer_job_loop(job_iteration) -> None:
                     job = consumer + job_iteration * config.consumer_programs_per_peer
 
-                    @pl.when(job < dz13_jobs)
-                    def _compute_dz13() -> None:
+                    @pl.when(job < consumer_jobs)
+                    def _consume_compact_block() -> None:
                         recv_block = job // intermediate_tiles
                         i_tile = job % intermediate_tiles
                         chunk = recv_block // blocks
@@ -725,7 +747,7 @@ def _make_source_push_semantic_fused_w2_backward_kernel(
                         valid_rows = recv_valid_ref[static_peer_ordinal, chunk, block]
 
                         @pl.when(valid_rows > 0)
-                        def _compute_live_dz13() -> None:
+                        def _consume_live_compact_block() -> None:
                             expert = recv_expert_ref[static_peer_ordinal, chunk, block]
                             row_start = recv_row_ref[static_peer_ordinal, chunk, block]
                             compact_block = row_start // config.compute_m
@@ -735,12 +757,13 @@ def _make_source_push_semantic_fused_w2_backward_kernel(
                                 decrement=False,
                             )
 
-                            def _acc_scope(acc_ref) -> None:
+                            def _dh_acc_scope(dh_acc_ref) -> None:
                                 def _smem_scope(
                                     dy_smem,
                                     w_smem,
                                     gate_smem,
                                     up_smem,
+                                    h_smem,
                                     matmul_barrier,
                                     z13_barrier,
                                 ) -> None:
@@ -766,40 +789,69 @@ def _make_source_push_semantic_fused_w2_backward_kernel(
                                         up_smem,
                                         z13_barrier,
                                     )
+                                    mgpu.barrier_wait(z13_barrier)
+                                    gate = gate_smem[:, :].astype(jnp.float32)
+                                    up = up_smem[:, :].astype(jnp.float32)
+                                    h_smem[:, :] = (jax.nn.silu(gate) * up).astype(dtype)
+                                    mgpu.commit_smem()
 
                                     @pl.loop(0, hidden_tiles)
                                     def _hidden_loop(h_tile) -> None:
                                         h_start = h_tile * config.hidden_block
-                                        mgpu.copy_gmem_to_smem(
-                                            dy_expert_ref.at[
-                                                expert,
-                                                pl.ds(row_start, config.compute_m),
-                                                pl.ds(h_start, config.hidden_block),
-                                            ],
-                                            dy_smem,
-                                            matmul_barrier,
-                                        )
-                                        mgpu.copy_gmem_to_smem(
-                                            w_ref.at[
-                                                expert,
-                                                pl.ds(
-                                                    i_tile * config.intermediate_block,
-                                                    config.intermediate_block,
-                                                ),
-                                                pl.ds(h_start, config.hidden_block),
-                                            ],
-                                            w_smem,
-                                            matmul_barrier,
-                                        )
-                                        mgpu.barrier_wait(matmul_barrier)
-                                        mgpu.commit_smem()
-                                        mgpu.wgmma(acc_ref, dy_smem, mgpu.transpose_ref(w_smem, (1, 0)))
-                                        mgpu.wgmma_wait(0)
 
-                                    mgpu.barrier_wait(z13_barrier)
-                                    gate = gate_smem[:, :].astype(jnp.float32)
-                                    up = up_smem[:, :].astype(jnp.float32)
-                                    d_h = acc_ref[...]
+                                        def _dw2_acc_scope(dw2_acc_ref) -> Array:
+                                            mgpu.copy_gmem_to_smem(
+                                                dy_expert_ref.at[
+                                                    expert,
+                                                    pl.ds(row_start, config.compute_m),
+                                                    pl.ds(h_start, config.hidden_block),
+                                                ],
+                                                dy_smem,
+                                                matmul_barrier,
+                                            )
+                                            mgpu.copy_gmem_to_smem(
+                                                w_ref.at[
+                                                    expert,
+                                                    pl.ds(intermediate_start, config.intermediate_block),
+                                                    pl.ds(h_start, config.hidden_block),
+                                                ],
+                                                w_smem,
+                                                matmul_barrier,
+                                            )
+                                            mgpu.barrier_wait(matmul_barrier)
+                                            mgpu.commit_smem()
+                                            mgpu.wgmma(
+                                                dh_acc_ref,
+                                                dy_smem,
+                                                mgpu.transpose_ref(w_smem, (1, 0)),
+                                            )
+                                            mgpu.wgmma(
+                                                dw2_acc_ref,
+                                                mgpu.transpose_ref(h_smem, (1, 0)),
+                                                dy_smem,
+                                            )
+                                            mgpu.wgmma_wait(0)
+                                            return dw2_acc_ref[...]
+
+                                        dw2_partial = pl.run_scoped(
+                                            _dw2_acc_scope,
+                                            dw2_acc_ref=mgpu.ACC((config.intermediate_block, config.hidden_block)),
+                                        )
+                                        pl.semaphore_wait(
+                                            dw2_initialized_sem.at[expert, i_tile, h_tile],
+                                            value=1,
+                                            decrement=False,
+                                        )
+                                        mgpu.atomic_add(
+                                            d_w2_ref.at[
+                                                expert,
+                                                pl.ds(intermediate_start, config.intermediate_block),
+                                                pl.ds(h_start, config.hidden_block),
+                                            ],
+                                            dw2_partial,
+                                        )
+
+                                    d_h = dh_acc_ref[...]
                                     sigmoid_gate = jax.nn.sigmoid(gate)
                                     silu_gate = gate * sigmoid_gate
                                     d_silu_gate = sigmoid_gate * (1.0 + gate * (1.0 - sigmoid_gate))
@@ -823,109 +875,18 @@ def _make_source_push_semantic_fused_w2_backward_kernel(
                                     w_smem=_wgmma_smem((config.intermediate_block, config.hidden_block), dtype),
                                     gate_smem=_wgmma_smem((config.compute_m, config.intermediate_block), dtype),
                                     up_smem=_wgmma_smem((config.compute_m, config.intermediate_block), dtype),
+                                    h_smem=_wgmma_smem((config.compute_m, config.intermediate_block), dtype),
                                     matmul_barrier=mgpu.Barrier(num_arrivals=2),
                                     z13_barrier=mgpu.Barrier(num_arrivals=2),
                                 )
 
                             pl.run_scoped(
-                                _acc_scope,
-                                acc_ref=mgpu.ACC((config.compute_m, config.intermediate_block)),
+                                _dh_acc_scope,
+                                dh_acc_ref=mgpu.ACC((config.compute_m, config.intermediate_block)),
                             )
 
             branches = tuple((lambda ordinal: lambda _: _consume_peer(ordinal))(i) for i in range(ep_size))
             lax.switch(peer_ordinal, branches, None)
-
-            global_owner = peer_ordinal * config.consumer_programs_per_peer + consumer
-
-            @pl.loop(0, dw2_iterations)
-            def _dw2_tile_loop(tile_iteration) -> None:
-                tile = global_owner + tile_iteration * dw2_owner_programs
-
-                @pl.when(tile < dw2_output_tiles)
-                def _compute_owned_dw2_tile() -> None:
-                    expert = tile // (intermediate_tiles * hidden_tiles)
-                    rem = tile % (intermediate_tiles * hidden_tiles)
-                    i_tile = rem // hidden_tiles
-                    h_tile = rem % hidden_tiles
-
-                    def _acc_scope(acc_ref) -> None:
-                        @pl.loop(0, compact_m_blocks)
-                        def _compact_m_loop(compact_block) -> None:
-                            row_start = compact_block * config.compute_m
-
-                            @pl.when(valid_ref[expert, row_start])
-                            def _accumulate_live_block() -> None:
-                                pl.semaphore_wait(
-                                    compact_ready_sem.at[expert, compact_block],
-                                    value=send_hidden_tiles,
-                                    decrement=False,
-                                )
-
-                                def _smem_scope(gate_smem, up_smem, h_smem, dy_smem, barrier) -> None:
-                                    mgpu.copy_gmem_to_smem(
-                                        z13_ref.at[
-                                            expert,
-                                            pl.ds(row_start, config.compute_m),
-                                            pl.ds(
-                                                i_tile * config.intermediate_block,
-                                                config.intermediate_block,
-                                            ),
-                                        ],
-                                        gate_smem,
-                                        barrier,
-                                    )
-                                    mgpu.copy_gmem_to_smem(
-                                        z13_ref.at[
-                                            expert,
-                                            pl.ds(row_start, config.compute_m),
-                                            pl.ds(
-                                                intermediate_dim + i_tile * config.intermediate_block,
-                                                config.intermediate_block,
-                                            ),
-                                        ],
-                                        up_smem,
-                                        barrier,
-                                    )
-                                    mgpu.copy_gmem_to_smem(
-                                        dy_expert_ref.at[
-                                            expert,
-                                            pl.ds(row_start, config.compute_m),
-                                            pl.ds(
-                                                h_tile * config.hidden_block,
-                                                config.hidden_block,
-                                            ),
-                                        ],
-                                        dy_smem,
-                                        barrier,
-                                    )
-                                    mgpu.barrier_wait(barrier)
-                                    h_smem[:, :] = (
-                                        jax.nn.silu(gate_smem[:, :].astype(jnp.float32))
-                                        * up_smem[:, :].astype(jnp.float32)
-                                    ).astype(dtype)
-                                    mgpu.commit_smem()
-                                    mgpu.wgmma(acc_ref, mgpu.transpose_ref(h_smem, (1, 0)), dy_smem)
-                                    mgpu.wgmma_wait(0)
-
-                                pl.run_scoped(
-                                    _smem_scope,
-                                    gate_smem=_wgmma_smem((config.compute_m, config.intermediate_block), dtype),
-                                    up_smem=_wgmma_smem((config.compute_m, config.intermediate_block), dtype),
-                                    h_smem=_wgmma_smem((config.compute_m, config.intermediate_block), dtype),
-                                    dy_smem=_wgmma_smem((config.compute_m, config.hidden_block), dtype),
-                                    barrier=mgpu.Barrier(num_arrivals=3),
-                                )
-
-                        d_w2_ref[
-                            expert,
-                            pl.ds(i_tile * config.intermediate_block, config.intermediate_block),
-                            pl.ds(h_tile * config.hidden_block, config.hidden_block),
-                        ] = acc_ref[...]
-
-                    pl.run_scoped(
-                        _acc_scope,
-                        acc_ref=mgpu.ACC((config.intermediate_block, config.hidden_block)),
-                    )
 
     return mgpu.kernel(
         body,

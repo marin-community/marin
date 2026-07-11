@@ -1899,3 +1899,69 @@ atomically accumulate the B64 dW2 partial. This intentionally trades back some
 destination-local atomic cost to remove the much larger phase split and
 recomputation tax. Target H100 runs for compact W13 backward and the concrete
 8-row W13 forward gather layouts are active and separately babysat.
+
+## 2026-07-10 FUSED-MOE-063 - Compact W13 backward target benchmark
+
+Launched exactly one H100x8 benchmark on `cw-rno2a` for commit
+`e6b8aad7b9`. Job:
+`/dlwh/bench-semantic-fused-e6b8-w13b-compact-20260710-1758`.
+
+Exact command:
+
+```bash
+uv run --project /Users/dlwh/src/marin iris --cluster=cw-rno2a job run --no-wait --job-name bench-semantic-fused-e6b8-w13b-compact-20260710-1758 --cpu 16 --memory 128GB --disk 16GB --gpu H100x8 --reserve H100x8 --enable-extra-resources --extra gpu -- timeout 3600s bash -lc 'set -euo pipefail; uv pip install --reinstall nvidia-cudnn-cu13==9.19.0.56; exec uv run --no-sync --package marin-levanter --extra gpu --group test python lib/levanter/scripts/bench/bench_source_push_semantic_plan.py --ep-size 8 --tokens-per-rank 32768 --hidden-dim 2560 --intermediate-dim 1280 --experts-per-rank 32 --topk 4 --capacity-factor 1.25 --rows-per-src-dst-capacity auto --routing random --routing-seed 0 --dtype bfloat16 --plan-builder jax --modes semantic_fused_w13_backward_pallas --warmup 1 --steps 3 --repeat-runs 3 --separate-compile --debug-exceptions --git-sha e6b8aad7b9 --jsonl scratch/bench-semantic-fused-e6b8-w13b-compact.jsonl'
+```
+
+Iris reached terminal `succeeded`: exit 0, zero failures, zero preemptions,
+and one task completed in 1 minute and 49.97 seconds. All rows arrived at
+`2026-07-11T00:59:18Z`, inside the 10-minute no-progress cutoff. No
+duplicate, resubmit, restart, stop, task kick, or cluster bounce was issued.
+The 12.50 GiB BFC allocation attempts and CUDA VMM fallback warnings were
+non-fatal.
+
+Exact numeric rows:
+
+```jsonl
+{"backend": "gpu", "backend_env": {"JAX_PLATFORMS": null, "JAX_PLATFORM_NAME": null, "XLA_FLAGS": null, "XLA_PYTHON_CLIENT_MEM_FRACTION": null, "XLA_PYTHON_CLIENT_PREALLOCATE": null}, "block_sizes": {"block_hidden": 128, "block_output": 128, "compute_m": 64, "inbox_slots": 12, "send_k": 256, "send_m": 256}, "compile_time": 5.879103085986571, "config": {"capacity_factor": 1.25, "dtype": "bfloat16", "ep_size": 8, "experts_per_rank": 32, "hidden_dim": 2560, "intermediate_dim": 1280, "plan_builder": "jax", "routing": "random", "routing_seed": 0, "rows_per_src_dst_capacity": 20480, "tokens_per_rank": 32768, "topk": 4}, "device_count": 8, "device_type": "NVIDIA H100 80GB HBM3", "dropped_routes": 0, "dtype": "bfloat16", "error": null, "error_message": null, "error_type": null, "first_call_time": 5.879103085986571, "first_run_time": 2.063109170005191, "git_sha": "e6b8aad7b9", "implementation": "pallas_mgpu", "kernel": "source_push_semantic_plan", "layout_overflow_row_error_count": 0.0, "lower_compile_time": 3.8159939159813803, "metadata_overflow_routes": 0, "mode": "semantic_fused_w13_backward_pallas", "output_checksum": 20131262464.0, "queue_overflow_route_error_count": 0.0, "repeat_run": 0, "repeat_runs": 3, "rounded_tflops_per_rank": 59.26884179539688, "routing_dropped_routes": 0, "row_type": "repeat", "semantic_live_pairs": 64, "semantic_masked_row_fraction": 0.19999999999999996, "semantic_rounded_rows": 1310720, "semantic_row_efficiency": 0.8, "semantic_useful_rows": 1048576, "shape": {"capacity_factor": 1.25, "dtype": "bfloat16", "ep_size": 8, "experts_per_rank": 32, "hidden_dim": 2560, "intermediate_dim": 1280, "plan_builder": "jax", "routing": "random", "routing_seed": 0, "rows_per_src_dst_capacity": 20480, "tokens_per_rank": 32768, "topk": 4}, "steady_state_time": 0.07246585500737031, "useful_tflops_per_rank": 47.415073436317506, "xla_flags": null}
+{"backend": "gpu", "backend_env": {"JAX_PLATFORMS": null, "JAX_PLATFORM_NAME": null, "XLA_FLAGS": null, "XLA_PYTHON_CLIENT_MEM_FRACTION": null, "XLA_PYTHON_CLIENT_PREALLOCATE": null}, "block_sizes": {"block_hidden": 128, "block_output": 128, "compute_m": 64, "inbox_slots": 12, "send_k": 256, "send_m": 256}, "compile_time": 5.879103085986571, "config": {"capacity_factor": 1.25, "dtype": "bfloat16", "ep_size": 8, "experts_per_rank": 32, "hidden_dim": 2560, "intermediate_dim": 1280, "plan_builder": "jax", "routing": "random", "routing_seed": 0, "rows_per_src_dst_capacity": 20480, "tokens_per_rank": 32768, "topk": 4}, "device_count": 8, "device_type": "NVIDIA H100 80GB HBM3", "dropped_routes": 0, "dtype": "bfloat16", "error": null, "error_message": null, "error_type": null, "first_call_time": 5.879103085986571, "first_run_time": 2.063109170005191, "git_sha": "e6b8aad7b9", "implementation": "pallas_mgpu", "kernel": "source_push_semantic_plan", "layout_overflow_row_error_count": 0.0, "lower_compile_time": 3.8159939159813803, "metadata_overflow_routes": 0, "mode": "semantic_fused_w13_backward_pallas", "output_checksum": 20131262464.0, "queue_overflow_route_error_count": 0.0, "repeat_run": 1, "repeat_runs": 3, "rounded_tflops_per_rank": 58.763489323937776, "routing_dropped_routes": 0, "row_type": "repeat", "semantic_live_pairs": 64, "semantic_masked_row_fraction": 0.19999999999999996, "semantic_rounded_rows": 1310720, "semantic_row_efficiency": 0.8, "semantic_useful_rows": 1048576, "shape": {"capacity_factor": 1.25, "dtype": "bfloat16", "ep_size": 8, "experts_per_rank": 32, "hidden_dim": 2560, "intermediate_dim": 1280, "plan_builder": "jax", "routing": "random", "routing_seed": 0, "rows_per_src_dst_capacity": 20480, "tokens_per_rank": 32768, "topk": 4}, "steady_state_time": 0.07308904466723713, "useful_tflops_per_rank": 47.01079145915022, "xla_flags": null}
+{"backend": "gpu", "backend_env": {"JAX_PLATFORMS": null, "JAX_PLATFORM_NAME": null, "XLA_FLAGS": null, "XLA_PYTHON_CLIENT_MEM_FRACTION": null, "XLA_PYTHON_CLIENT_PREALLOCATE": null}, "block_sizes": {"block_hidden": 128, "block_output": 128, "compute_m": 64, "inbox_slots": 12, "send_k": 256, "send_m": 256}, "compile_time": 5.879103085986571, "config": {"capacity_factor": 1.25, "dtype": "bfloat16", "ep_size": 8, "experts_per_rank": 32, "hidden_dim": 2560, "intermediate_dim": 1280, "plan_builder": "jax", "routing": "random", "routing_seed": 0, "rows_per_src_dst_capacity": 20480, "tokens_per_rank": 32768, "topk": 4}, "device_count": 8, "device_type": "NVIDIA H100 80GB HBM3", "dropped_routes": 0, "dtype": "bfloat16", "error": null, "error_message": null, "error_type": null, "first_call_time": 5.879103085986571, "first_run_time": 2.063109170005191, "git_sha": "e6b8aad7b9", "implementation": "pallas_mgpu", "kernel": "source_push_semantic_plan", "layout_overflow_row_error_count": 0.0, "lower_compile_time": 3.8159939159813803, "metadata_overflow_routes": 0, "mode": "semantic_fused_w13_backward_pallas", "output_checksum": 20131262464.0, "queue_overflow_route_error_count": 0.0, "repeat_run": 2, "repeat_runs": 3, "rounded_tflops_per_rank": 59.33272125962285, "routing_dropped_routes": 0, "row_type": "repeat", "semantic_live_pairs": 64, "semantic_masked_row_fraction": 0.19999999999999996, "semantic_rounded_rows": 1310720, "semantic_row_efficiency": 0.8, "semantic_useful_rows": 1048576, "shape": {"capacity_factor": 1.25, "dtype": "bfloat16", "ep_size": 8, "experts_per_rank": 32, "hidden_dim": 2560, "intermediate_dim": 1280, "plan_builder": "jax", "routing": "random", "routing_seed": 0, "rows_per_src_dst_capacity": 20480, "tokens_per_rank": 32768, "topk": 4}, "steady_state_time": 0.07238783600041643, "useful_tflops_per_rank": 47.466177007698285, "xla_flags": null}
+{"backend": "gpu", "block_sizes": {"block_hidden": 128, "block_output": 128, "compute_m": 64, "inbox_slots": 12, "send_k": 256, "send_m": 256}, "config": {"capacity_factor": 1.25, "dtype": "bfloat16", "ep_size": 8, "experts_per_rank": 32, "hidden_dim": 2560, "intermediate_dim": 1280, "plan_builder": "jax", "routing": "random", "routing_seed": 0, "rows_per_src_dst_capacity": 20480, "tokens_per_rank": 32768, "topk": 4}, "device_count": 8, "device_type": "NVIDIA H100 80GB HBM3", "dropped_routes": 0, "dtype": "bfloat16", "error": null, "error_rows": 0, "implementation": "pallas_mgpu", "kernel": "source_push_semantic_plan", "max_steady_state_time": 0.07308904466723713, "median_compile_time": 5.879103085986571, "median_first_run_time": 2.063109170005191, "median_layout_overflow_row_error_count": 0.0, "median_lower_compile_time": 3.8159939159813803, "median_queue_overflow_route_error_count": 0.0, "median_rounded_tflops_per_rank": 59.26884179539688, "median_steady_state_time": 0.07246585500737031, "median_useful_tflops_per_rank": 47.415073436317506, "metadata_overflow_routes": 0, "min_steady_state_time": 0.07238783600041643, "mode": "semantic_fused_w13_backward_pallas", "repeat_rows": 3, "routing_dropped_routes": 0, "row_type": "summary", "semantic_rounded_rows": 1310720, "semantic_row_efficiency": 0.8, "semantic_useful_rows": 1048576, "shape": {"capacity_factor": 1.25, "dtype": "bfloat16", "ep_size": 8, "experts_per_rank": 32, "hidden_dim": 2560, "intermediate_dim": 1280, "plan_builder": "jax", "routing": "random", "routing_seed": 0, "rows_per_src_dst_capacity": 20480, "tokens_per_rank": 32768, "topk": 4}}
+```
+
+## 2026-07-10 FUSED-MOE-064 - Decoupled W13 transport target failure
+
+Exactly one target H100x8 benchmark was launched on `cw-rno2a` for commit
+`f7c77d78ea` as job
+`/dlwh/bench-semantic-fused-f7c7-w13f-gather8-20260710-1759`. The requested
+conceptual mode `semantic_fused_w13_pallas` is spelled
+`semantic_permute_w13_pallas` in the benchmark harness at this commit. The
+exact launch command was:
+
+```bash
+uv run --project /Users/dlwh/src/marin iris --cluster=cw-rno2a job run --no-wait --job-name bench-semantic-fused-f7c7-w13f-gather8-20260710-1759 --cpu 16 --memory 128GB --disk 16GB --gpu H100x8 --reserve H100x8 --enable-extra-resources --extra gpu --sync-package marin-levanter -- timeout 3600s uv run --package marin-levanter --group test python lib/levanter/scripts/bench/bench_source_push_semantic_plan.py --ep-size 8 --tokens-per-rank 32768 --topk 4 --experts-per-rank 32 --hidden-dim 2560 --intermediate-dim 1280 --capacity-factor 1.25 --routing random --modes semantic_permute_w13_pallas --warmup 1 --steps 3 --repeat-runs 3 --separate-compile --debug-exceptions --git-sha f7c77d78ea --jsonl scratch/bench-semantic-fused-f7c7-w13f-gather8.jsonl
+```
+
+Iris reached terminal state `succeeded`; its single task exited 0 after
+1 minute and 23.53 seconds, with zero Iris failures and preemptions. No
+duplicate, resubmit, restart, cluster bounce, task kick, or kernel edit was
+issued.
+
+The benchmark failed before producing a numeric repeat row. Its first
+structured error row arrived at `2026-07-11T01:00:43Z` with exact error type
+`ValueError` and exact error text
+`memref<8xi32, strided<[1], offset: ?>> must have a number of elements that is a multiple of 128 (got 8)`.
+The traceback identifies
+`lib/levanter/src/levanter/grug/_moe/source_push_semantic_fused_w13.py:550`,
+where the 8-row gather loads `token_ids_ref`. The structured summary reported
+exact `repeat_rows: 0`, `error_rows: 1`, and `error: "all repeats failed"`.
+
+For the error row, `compile_time`, `lower_compile_time`, `first_call_time`,
+`first_run_time`, `steady_state_time`, `useful_tflops_per_rank`,
+`rounded_tflops_per_rank`, and `output_checksum` were all `null`. Exact
+counters were `dropped_routes: 0`, `routing_dropped_routes: 0`, and
+`metadata_overflow_routes: 0`. The mode reported 64 live pairs, 1,048,576
+useful rows, 1,310,720 rounded rows, 0.8 row efficiency, and
+0.19999999999999996 masked-row fraction. Failed 12.50 GiB BFC allocator
+attempts were logged at `2026-07-11T01:00:32.175519Z` and
+`2026-07-11T01:00:42.176949Z` before the structured failure, well inside the
+10-minute no-progress cutoff.
