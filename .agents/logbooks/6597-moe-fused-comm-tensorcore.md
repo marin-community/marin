@@ -2686,3 +2686,35 @@ correctness proof. Keep the fast helper4 schedule quarantined until a comparison
 that isolates reference and candidate execution produces finite
 `d_z13`/`d_w2`/route-weight metrics. No retry or kernel edit was made during
 this bounded diagnostic.
+
+## 2026-07-10 FUSED-MOE-091 - Split W2-backward comparison passes exactly
+
+Job `/dlwh/compare-split-w2b-helper4-20260710-2350` at `e4abeea048`
+completed on `cw-rno2a` with Iris state `succeeded`, exit 0, one of one task
+succeeded, and a 50.17s task duration. The comparison ran the interpreted
+reference and four-helper K512 Pallas candidate in separate executions, copied
+each result to host, released device arrays between executions, and compared
+the resulting gradients on host. This avoids the composed executable and
+device-memory interaction that produced the illegal addresses in
+FUSED-MOE-088 and FUSED-MOE-090.
+
+| Gradient | Max abs error | Mean abs error | Expected nonfinite | Observed nonfinite |
+|---|---:|---:|---:|---:|
+| `d_z13` | 0.0 | 0.0 | 0 | 0 |
+| `d_w2` | 0.0 | 0.0 | 0 | 0 |
+| `d_route_weight` | 0.0 | 0.0 | 0 | 0 |
+
+The reduced no-drop comparison shape used T512, E4/rank, top-k 2, capacity
+factor 4.0, random routing, B64 compute, and logical K512 producer transport.
+It reported zero dropped routes, zero routing-policy drops, zero
+metadata-overflow routes, zero validity errors, zero queue-overflow route
+errors, and zero layout-overflow row errors. The benchmark emitted one repeat
+row and one summary row with no error.
+
+This exact finite comparison clears the correctness quarantine on the
+four-helper K512 W2-backward schedule. The earlier illegal addresses were a
+comparison-composition problem rather than evidence of a faulty standalone
+kernel. Keep the target-shape FUSED-MOE-089 result as its performance evidence:
+39.913566 ms and 43.042682 useful TFLOP/s/rank, 66.44% faster than the original
+118.949477 ms W2-backward baseline. No retry or kernel edit was made during
+this bounded babysitting run.
