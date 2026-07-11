@@ -223,10 +223,9 @@ def _request_has_body(request: Request) -> bool:
 
 
 class _UpstreamError(Exception):
-    """A forwarded request the caller must answer with ``status_code`` and this message.
+    """A forwarded request that the caller answers with ``status_code`` and this message.
 
-    Raised by :func:`_send_upstream` for a transport failure (502/504) or an upstream 401
-    folded to 502, so both proxies share one transport-error contract.
+    Carries a transport failure (502/504) or an upstream 401 folded to 502.
     """
 
     def __init__(self, message: str, *, status_code: int):
