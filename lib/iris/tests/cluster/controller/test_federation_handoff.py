@@ -33,6 +33,7 @@ from iris.managed_thread import get_thread_container
 from iris.rpc import controller_pb2, job_pb2
 from iris.rpc.auth import FEDERATION_PEER_ROLE
 from rigging.server_auth import VerifiedIdentity, identity_scope
+from rigging.timing import Timestamp
 
 from ._test_support import ControllerTestState
 from .conftest import (
@@ -694,6 +695,49 @@ def test_cancel_while_queued_is_never_promoted_or_delivered(tmp_path, log_client
         promote_queued_federation(manager, parent_state)
         assert connection.launch_calls == 0  # never promoted, never delivered
         assert query_job(parent_state, parent_job_id).state == job_pb2.JOB_STATE_KILLED
+
+
+def test_a_queued_job_past_its_scheduling_deadline_fails_unschedulable(tmp_path, log_client):
+    with ExitStack() as stack:
+        parent_service, parent_state = _make_service(stack, "parent", tmp_path, log_client)
+        peer_service, _peer_state = _make_service(stack, "peer", tmp_path, log_client)
+        connection = _InProcessPeerConnection(peer_service)
+        manager = _attach_federation(parent_service, connection)
+
+        # A queued handoff owns no task rows, so the task-level scheduling-timeout scan
+        # never sees it; the tick's own expiry pass must fail it once its deadline lapses.
+        request = _cluster_pinned_request("fed-job")
+        request.scheduling_timeout.milliseconds = 1
+        response = parent_service.launch_job(request, None)
+        parent_job_id = JobName.from_wire(response.job_id)
+        assert _handle(parent_state, parent_job_id).handoff_state == int(HandoffState.QUEUED_HANDOFF)
+
+        # Run the tick's expiry well past the 1 ms deadline: the job flips UNSCHEDULABLE.
+        future_ms = Timestamp.now().epoch_ms() + 60_000
+        with parent_state._db.read_snapshot() as tx:
+            assert reads.expired_queued_handoffs(tx, future_ms) == [parent_job_id]
+        with parent_state._db.transaction() as cur:
+            writes.mark_federated_job_unschedulable(cur, parent_job_id, now_ms=future_ms, error="deadline")
+
+        # The promotion pass then skips the terminalized job — it is never handed to a peer.
+        promote_queued_federation(manager, parent_state)
+        assert connection.launch_calls == 0
+        assert query_job(parent_state, parent_job_id).state == job_pb2.JOB_STATE_UNSCHEDULABLE
+
+
+def test_a_queued_job_without_a_deadline_is_never_swept_as_expired(tmp_path, log_client):
+    with ExitStack() as stack:
+        parent_service, parent_state = _make_service(stack, "parent", tmp_path, log_client)
+        peer_service, _peer_state = _make_service(stack, "peer", tmp_path, log_client)
+        _attach_federation(parent_service, _InProcessPeerConnection(peer_service))
+
+        response = parent_service.launch_job(_cluster_pinned_request("fed-job"), None)
+        parent_job_id = JobName.from_wire(response.job_id)
+        assert _handle(parent_state, parent_job_id).handoff_state == int(HandoffState.QUEUED_HANDOFF)
+
+        # No scheduling_timeout -> no deadline row, so it never expires however far ahead we look.
+        with parent_state._db.read_snapshot() as tx:
+            assert reads.expired_queued_handoffs(tx, Timestamp.now().epoch_ms() + 10**9) == []
 
 
 def test_redrive_of_a_handle_the_peer_already_has_is_idempotent(tmp_path, log_client):

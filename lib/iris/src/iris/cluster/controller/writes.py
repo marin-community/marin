@@ -847,6 +847,20 @@ def mark_federated_job_killed(tx: Tx, job_id: JobName, *, now_ms: int, error: st
 
 
 @writes_to(jobs_table)
+def mark_federated_job_unschedulable(tx: Tx, job_id: JobName, *, now_ms: int, error: str) -> None:
+    """Fail a queued federated job whose scheduling deadline elapsed before promotion.
+
+    A queued handle owns no tasks, so the jobs row alone flips to ``UNSCHEDULABLE`` —
+    the same terminal state a locally scheduled job reaches on a scheduling timeout.
+    """
+    tx.execute(
+        update(jobs_table)
+        .where(jobs_table.c.job_id == job_id)
+        .values(state=job_pb2.JOB_STATE_UNSCHEDULABLE, finished_at_ms=now_ms, error=error)
+    )
+
+
+@writes_to(jobs_table)
 def mirror_federated_job(
     tx: Tx,
     *,

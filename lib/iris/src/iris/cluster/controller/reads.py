@@ -1884,6 +1884,29 @@ def queued_handoff_handles(tx: Tx) -> list[FederatedHandle]:
     return _uncancelled_sent_handles(tx, HandoffState.QUEUED_HANDOFF)
 
 
+def expired_queued_handoffs(tx: Tx, now_ms: int) -> list[JobName]:
+    """Queued federated jobs whose scheduling deadline has passed, to fail this tick.
+
+    A queued handoff owns no task rows, so the task-level scheduling-timeout scan never
+    sees it; without this a job with a ``scheduling_timeout`` would wait in the queue
+    past its deadline. Returns the nonterminal ``QUEUED_HANDOFF`` jobs whose stored
+    ``scheduling_deadline_epoch_ms`` is set and already elapsed; the tick marks them
+    ``UNSCHEDULABLE``.
+    """
+    rows = tx.execute(
+        select(federated_jobs_table.c.job_id)
+        .select_from(federated_jobs_table.join(jobs_table, federated_jobs_table.c.job_id == jobs_table.c.job_id))
+        .where(
+            federated_jobs_table.c.direction == int(FederationDirection.SENT),
+            federated_jobs_table.c.handoff_state == int(HandoffState.QUEUED_HANDOFF),
+            jobs_table.c.state.notin_(list(TERMINAL_JOB_STATES)),
+            jobs_table.c.scheduling_deadline_epoch_ms.isnot(None),
+            jobs_table.c.scheduling_deadline_epoch_ms < now_ms,
+        )
+    ).all()
+    return [r.job_id for r in rows]
+
+
 def pending_cancel_handles(tx: Tx) -> list[FederatedHandle]:
     """SENT handles with a cancel intent set whose local mirrored job is not terminal.
 

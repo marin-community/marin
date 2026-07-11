@@ -353,11 +353,21 @@ calls a store method that opens a nested/separate one.
 
 Each tick re-evaluates queued jobs against current peer availability, so a job
 naturally waits out a temporarily-full or briefly-unreachable peer. A queued job
-is terminalized `UNSCHEDULABLE` (with a specific reason) when its **only** viable
-target is gone for good: an unpinned candidate whose shape no reachable peer has
-advertised for longer than a configurable staleness window, or a pinned peer
-removed from config. Heartbeat staleness beyond a threshold makes a peer's
-availability "unknown," not "infinitely available."
+does **not** wait forever, though: a queued handoff owns no task rows, so the
+task-level scheduling-timeout scan never sees it, and without special handling a
+job submitted with a `scheduling_timeout` would sit in `QUEUED_HANDOFF` past its
+deadline. So the tick runs its own expiry pass — `reads.expired_queued_handoffs`
+returns nonterminal queued jobs whose stored `scheduling_deadline_epoch_ms` has
+elapsed, and `_commit_tick` fails them `UNSCHEDULABLE` (the same terminal state a
+locally scheduled job reaches on a scheduling timeout) **before** the promotion
+CAS, so a just-expired job cannot also be promoted. `build_queued_candidates`
+additionally skips any already-terminal job, so a terminalized handle never
+re-enters the pass.
+
+Deeper wedge avoidance — terminalizing an unpinned job whose shape no reachable
+peer has advertised for longer than a staleness window, or a job pinned to a peer
+removed from config, and treating heartbeat staleness as "unknown" rather than
+"infinitely available" — is a documented follow-up, not in v1.
 
 ## Flow diagrams
 

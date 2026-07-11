@@ -32,7 +32,7 @@ from iris.cluster.federation.store import (
     HandoffSpec,
     HandoffState,
 )
-from iris.cluster.types import JobName
+from iris.cluster.types import TERMINAL_JOB_STATES, JobName
 from iris.rpc import job_pb2
 from iris.time_proto import timestamp_from_proto
 
@@ -51,7 +51,10 @@ def build_queued_candidates(tx: Tx) -> list[QueuedCandidate]:
     candidates: list[QueuedCandidate] = []
     for handle in reads.queued_handoff_handles(tx):
         job = reads.get_job_detail(tx, handle.job_id)
-        if job is None:
+        # Skip a job the tick already terminalized this pass (scheduling timeout, cancel,
+        # or a parent cascade): its handle still reads QUEUED_HANDOFF but it must not be
+        # promoted — the promotion CAS would reject it anyway.
+        if job is None or job.state in TERMINAL_JOB_STATES:
             continue
         request = reconstruct_launch_job_request(job)
         constraints = [Constraint.from_proto(c) for c in request.constraints]

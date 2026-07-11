@@ -164,6 +164,10 @@ class _TickInputs:
     # Federated jobs queued on this parent awaiting a peer with free capacity, in
     # priority-then-age order. The tick's federation pass assigns them to peers.
     queued_federation: list[QueuedCandidate] = field(default_factory=list)
+    # Queued federated jobs whose scheduling deadline has elapsed while waiting for a
+    # peer; the tick fails them UNSCHEDULABLE (they own no task rows, so the task-level
+    # timeout scan never sees them).
+    expired_queued_federation: list[JobName] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -852,6 +856,7 @@ class Controller:
         scan_timeouts = run_reconcile and self._timeout_rate_limiter.should_run()
 
         inputs = self._build_tick_inputs(
+            now=now,
             run_schedule=run_schedule,
             run_reconcile=run_reconcile,
             run_autoscale=run_autoscale,
@@ -904,6 +909,7 @@ class Controller:
             pending_kicks=pending_kicks,
             auto_results=auto_results,
             federation_promotions=federation_promotions,
+            expired_queued_federation=inputs.expired_queued_federation,
             now=now,
         )
 
@@ -944,6 +950,7 @@ class Controller:
     def _build_tick_inputs(
         self,
         *,
+        now: Timestamp,
         run_schedule: bool,
         run_reconcile: bool,
         run_autoscale: bool,
@@ -976,6 +983,7 @@ class Controller:
                 inputs.routing = build_routing_inputs(snap, self._config.user_budget_defaults)
                 if self._config.peers:
                     inputs.queued_federation = build_queued_candidates(snap)
+                    inputs.expired_queued_federation = reads.expired_queued_handoffs(snap, now.epoch_ms())
             # Execution-timeout finalization is controller-owned and global; it
             # runs alongside the worker-daemon reconcile.
             if run_reconcile and scan_timeouts and worker_daemon_backends:
@@ -1181,15 +1189,17 @@ class Controller:
         pending_kicks: list[PendingKick],
         auto_results: dict[str, AutoscaleResult],
         federation_promotions: list[Promotion],
+        expired_queued_federation: list[JobName],
         now: Timestamp,
     ) -> list[Promotion]:
         """Apply this tick's merged decisions and authored effects in one write transaction.
 
         Order within the txn: schedule decisions (incl. backend pins + routing
-        UNSCHEDULABLE), federation queue promotions, each backend's reconcile effects,
-        execution-timeout finalizations, administrative kicks, per-backend autoscaler
-        state. Each backend already authored its own ``effects`` during reconcile; the
-        controller just commits them uniformly. A no-op tick opens no transaction.
+        UNSCHEDULABLE), queued-handoff scheduling-timeout failures, federation queue
+        promotions, each backend's reconcile effects, execution-timeout finalizations,
+        administrative kicks, per-backend autoscaler state. Each backend already authored
+        its own ``effects`` during reconcile; the controller just commits them uniformly.
+        A no-op tick opens no transaction.
 
         Returns the federation promotions whose conditional CAS actually committed (a
         concurrent cancel/terminalize between the tick's read and this write drops the
@@ -1205,7 +1215,15 @@ class Controller:
             or routing_unschedulable
         )
         has_recon = any(not result.effects.is_empty for result in recon_results.values())
-        if not (has_sched or has_recon or timeout_decisions or pending_kicks or states or federation_promotions):
+        if not (
+            has_sched
+            or has_recon
+            or timeout_decisions
+            or pending_kicks
+            or states
+            or federation_promotions
+            or expired_queued_federation
+        ):
             return []
 
         confirmed: list[Promotion] = []
@@ -1213,6 +1231,15 @@ class Controller:
             if sched_result is not None:
                 self._commit_schedule_decisions(
                     cur, sched_result, sched_results, now, backend_pins, routing_unschedulable
+                )
+            # Fail queued handoffs past their scheduling deadline before promoting, so a
+            # just-expired job's promotion CAS (guarded on job-nonterminal) rejects it.
+            for job_id in expired_queued_federation:
+                writes.mark_federated_job_unschedulable(
+                    cur,
+                    job_id,
+                    now_ms=now.epoch_ms(),
+                    error="Scheduling timeout exceeded while queued for a federation peer",
                 )
             for promotion in federation_promotions:
                 if writes.promote_queued_handoff(cur, promotion.job_id, promotion.peer_id):
