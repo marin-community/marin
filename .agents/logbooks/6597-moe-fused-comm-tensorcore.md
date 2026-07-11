@@ -3491,3 +3491,29 @@ layout-overflow rows were all zero. This proves the reduced illegal address was
 caused by the production output-liveness contract rather than WGMMA arithmetic
 or route metadata. The target-shape timing run is the next gate; restoring
 combine/dW overlap remains separate work after the correct baseline is measured.
+
+## 2026-07-11 FUSED-MOE-113 - Serialized target baseline is correct but slow
+
+Job `/dlwh/w13b-scratch-live-target-b362` tested commit `b36296e1b7` on the
+target EP8, T32768/rank, H2560, I1280, E32/rank, top-k 4,
+capacity-factor 1.25 random-routing geometry. Iris and its only task succeeded
+with exit 0 in 104.3s. All three repeats completed with a stable checksum of
+`20131794944` and zero drop, metadata-overflow, queue-overflow, and
+layout-overflow counters.
+
+| Repeat | Time (ms) | Useful TFLOP/s/rank | Rounded TFLOP/s/rank |
+|---:|---:|---:|---:|
+| 0 | 83.343990 | 41.226414 | 51.533017 |
+| 1 | 84.130013 | 40.841237 | 51.051547 |
+| 2 | 83.379320 | 41.208945 | 51.511182 |
+
+The median was `83.379320 ms`, `41.208945` useful and `51.511182` rounded
+TFLOP/s/rank, with a min/max of `83.343990/84.130013 ms`. This is 31.4% slower
+than the earlier unvalidated concurrent target timing of `63.478141 ms`.
+
+The prior isolation confounded ordering with output liveness: every successful
+diagnostic exported `x_expert`, while the failing production path discarded it.
+The next candidate therefore restores concurrent combine/dW execution while
+retaining only the scalar `x_expert` liveness dependency that made the reduced
+finite comparison bit-exact. If it passes, serialization was unnecessary and
+the original overlap schedule can be recovered safely.
