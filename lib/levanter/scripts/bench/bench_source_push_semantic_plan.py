@@ -216,6 +216,7 @@ MODE_SEMANTIC_FUSED_W13_BACKWARD_STAGING_DX_DW_NO_COMBINE_PALLAS = (
 MODE_SEMANTIC_FUSED_W13_BACKWARD_FULL_SERIAL_COMBINE_PALLAS = "semantic_fused_w13_backward_full_serial_combine_pallas"
 MODE_SEMANTIC_FUSED_MLP_FORWARD_PALLAS = "semantic_fused_mlp_forward_pallas"
 MODE_SEMANTIC_FUSED_MLP_FORWARD_COMPARE = "semantic_fused_mlp_forward_compare"
+MODE_SEMANTIC_FUSED_MLP_STOP_AFTER_W2_BACKWARD_PALLAS = "semantic_fused_mlp_stop_after_w2_backward_pallas"
 MODE_SEMANTIC_FUSED_MLP_FORWARD_BACKWARD_PALLAS = "semantic_fused_mlp_forward_backward_pallas"
 MODE_SEMANTIC_FUSED_MLP_FORWARD_BACKWARD_COMPARE = "semantic_fused_mlp_forward_backward_compare"
 SEMANTIC_FUSED_STAGE_MODES = (
@@ -229,6 +230,7 @@ SEMANTIC_FUSED_STAGE_MODES = (
 SEMANTIC_FUSED_MLP_MODES = (
     MODE_SEMANTIC_FUSED_MLP_FORWARD_PALLAS,
     MODE_SEMANTIC_FUSED_MLP_FORWARD_COMPARE,
+    MODE_SEMANTIC_FUSED_MLP_STOP_AFTER_W2_BACKWARD_PALLAS,
     MODE_SEMANTIC_FUSED_MLP_FORWARD_BACKWARD_PALLAS,
     MODE_SEMANTIC_FUSED_MLP_FORWARD_BACKWARD_COMPARE,
 )
@@ -586,6 +588,7 @@ MODES = (
     MODE_SEMANTIC_FUSED_W13_BACKWARD_FULL_SERIAL_COMBINE_PALLAS,
     MODE_SEMANTIC_FUSED_MLP_FORWARD_PALLAS,
     MODE_SEMANTIC_FUSED_MLP_FORWARD_COMPARE,
+    MODE_SEMANTIC_FUSED_MLP_STOP_AFTER_W2_BACKWARD_PALLAS,
     MODE_SEMANTIC_FUSED_MLP_FORWARD_BACKWARD_PALLAS,
     MODE_SEMANTIC_FUSED_MLP_FORWARD_BACKWARD_COMPARE,
     MODE_W13_SOURCE_PADDED_DIRECT_PACK_PALLAS,
@@ -4406,6 +4409,53 @@ def _mode_callable(
     def semantic_fused_mlp_forward_reference(inputs: SemanticBenchInputs):
         y, dropped_routes = semantic_fused_mlp_forward(inputs, interpret=True, mesh=None)
         return {"y": y, "dropped_routes": dropped_routes}
+
+    def semantic_fused_mlp_stop_after_w2_backward_pallas(inputs: SemanticBenchInputs):
+        send_chunks_per_dst, entries_per_dst, fused_rows_per_expert = semantic_fused_queue_shape()
+        fused_w13 = source_push_semantic_fused_w13.source_push_semantic_fused_w13(
+            inputs.x,
+            inputs.w_gate_up,
+            plan,
+            send_chunks_per_dst=send_chunks_per_dst,
+            rows_per_expert_capacity=fused_rows_per_expert,
+            mesh=expert_mesh,
+            interpret=args.pallas_interpret,
+        )
+        fused_w2 = source_push_semantic_fused_w2_return.source_push_semantic_fused_w2_return(
+            fused_w13.z,
+            inputs.w_down,
+            plan,
+            entries_per_dst=entries_per_dst,
+            mesh=expert_mesh,
+            interpret=args.pallas_interpret,
+        )
+        fused_w2_backward = source_push_semantic_fused_w2_backward.source_push_semantic_fused_w2_backward(
+            inputs.dy.astype(jnp.bfloat16),
+            fused_w2.return_y,
+            fused_w13.z,
+            inputs.w_down,
+            plan,
+            send_chunks_per_dst=send_chunks_per_dst,
+            rows_per_expert_capacity=fused_rows_per_expert,
+            mesh=expert_mesh,
+            interpret=args.pallas_interpret,
+        )
+        return {
+            "y": fused_w2.y,
+            "z13": fused_w13.z,
+            "return_y": fused_w2.return_y,
+            "d_z13": fused_w2_backward.d_z13,
+            "d_w2": fused_w2_backward.d_w2,
+            "d_route_weight": fused_w2_backward.d_route_weight,
+            "queue_overflow_route_error_count": jnp.maximum(
+                fused_w13.queue_overflow_routes,
+                jnp.maximum(fused_w2.queue_overflow_routes, fused_w2_backward.queue_overflow_routes),
+            ),
+            "layout_overflow_row_error_count": jnp.maximum(
+                fused_w13.layout_overflow_rows,
+                jnp.maximum(fused_w2.layout_overflow_rows, fused_w2_backward.layout_overflow_rows),
+            ),
+        }
 
     def semantic_fused_mlp_forward_backward(
         inputs: SemanticBenchInputs,
@@ -8615,6 +8665,7 @@ def _mode_callable(
             host_metrics=_semantic_fused_mlp_forward_host_metrics,
             prepare_reference_args=semantic_fused_mlp_reference_args,
         ),
+        MODE_SEMANTIC_FUSED_MLP_STOP_AFTER_W2_BACKWARD_PALLAS: semantic_fused_mlp_stop_after_w2_backward_pallas,
         MODE_SEMANTIC_FUSED_MLP_FORWARD_BACKWARD_PALLAS: semantic_fused_mlp_forward_backward_pallas,
         MODE_SEMANTIC_FUSED_MLP_FORWARD_BACKWARD_COMPARE: SplitComparison(
             reference=semantic_fused_mlp_forward_backward_reference,

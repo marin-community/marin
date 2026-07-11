@@ -3642,3 +3642,19 @@ standalone Pallas combine adds only `0.526359 ms` over the `62.170948 ms`
 no-combine kernel. This correct path is `20.682013 ms` faster than the
 serialized in-kernel baseline and `0.780834 ms` faster than the previous
 unvalidated 48/40/40 target timing. It is the selected W13-backward path.
+
+## 2026-07-11 FUSED-MOE-120 - Integrated graph still faults after W13 fix
+
+Job `/dlwh/mlp-fwd-bwd-split-w13-compare-d2a4` tested commit `d2a421fc55` at
+the reduced integrated forward+backward comparison geometry. Iris and its only
+task succeeded at the orchestration level, but the observed monolithic graph
+raised `CUDA_ERROR_ILLEGAL_ADDRESS` during `jax.device_get`. No y, dX,
+weight-gradient, or route-gradient metrics were produced, and the first failing
+kernel could not be identified from asynchronous cleanup logs.
+
+Forward, W2 backward, and the selected W13 backward are independently
+validated. A benchmark-only `semantic_fused_mlp_stop_after_w2_backward_pallas`
+mode now composes fused W13 forward, fused W2 return/combine, and fused W2
+backward while returning every intermediate. This isolates whether the
+remaining liveness fault occurs before W13 backward or specifically at the
+W2-to-W13 boundary.
