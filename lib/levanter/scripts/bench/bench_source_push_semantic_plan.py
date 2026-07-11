@@ -1561,6 +1561,22 @@ def _replicate_semantic_fused_mlp_reference_inputs(
     )
 
 
+def _replicate_semantic_fused_w13_backward_reference_inputs(
+    inputs: SemanticFusedW13BackwardBenchInputs,
+    mesh: Mesh,
+) -> SemanticFusedW13BackwardBenchInputs:
+    def replicate(value: Array) -> Array:
+        sharding = NamedSharding(mesh, P(*(None for _ in range(value.ndim))))
+        return jax.device_put(jax.device_get(value), sharding)
+
+    return replace(
+        inputs,
+        x=replicate(inputs.x),
+        dz13=replicate(inputs.dz13),
+        w_gate_up=replicate(inputs.w_gate_up),
+    )
+
+
 def _constrain_destination_major(value: Array, mesh: Mesh | None) -> Array:
     if mesh is None:
         return value
@@ -4252,6 +4268,10 @@ def _mode_callable(
 
     def semantic_fused_w13_backward_observed(inputs: SemanticFusedW13BackwardBenchInputs):
         return semantic_fused_w13_backward(inputs, interpret=args.pallas_interpret)
+
+    def semantic_fused_w13_backward_reference_args(inputs: SemanticFusedW13BackwardBenchInputs):
+        assert expert_mesh is not None
+        return (_replicate_semantic_fused_w13_backward_reference_inputs(inputs, expert_mesh),)
 
     def semantic_fused_mlp_forward(
         inputs: SemanticBenchInputs,
@@ -8490,6 +8510,7 @@ def _mode_callable(
             reference=semantic_fused_w13_backward_reference,
             observed=semantic_fused_w13_backward_observed,
             host_metrics=_semantic_fused_w13_backward_host_metrics,
+            prepare_reference_args=semantic_fused_w13_backward_reference_args,
         ),
         MODE_SEMANTIC_FUSED_MLP_FORWARD_PALLAS: semantic_fused_mlp_forward_pallas,
         MODE_SEMANTIC_FUSED_MLP_FORWARD_COMPARE: SplitComparison(

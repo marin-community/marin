@@ -403,6 +403,28 @@ def test_source_push_semantic_plan_fused_mlp_reference_inputs_are_replicated():
     assert production.w_down.sharding.spec == bench.P(bench.SOURCE_PUSH_MESH_AXIS, None, None, None)
 
 
+def test_source_push_semantic_plan_fused_w13_backward_reference_inputs_are_replicated():
+    bench = _bench_module()
+    mesh = bench._make_mesh(1)
+    source = bench.NamedSharding(mesh, bench.P(bench.SOURCE_PUSH_MESH_AXIS, None, None))
+    destination = bench.NamedSharding(mesh, bench.P(bench.SOURCE_PUSH_MESH_AXIS, None, None, None))
+    inputs = bench.SemanticFusedW13BackwardBenchInputs(
+        x=jax.device_put(jnp.ones((1, 2, 4), dtype=jnp.bfloat16), source),
+        dz13=jax.device_put(jnp.ones((1, 1, 2, 4), dtype=jnp.bfloat16), destination),
+        w_gate_up=jax.device_put(jnp.ones((1, 1, 4, 4), dtype=jnp.bfloat16), destination),
+    )
+
+    reference = bench._replicate_semantic_fused_w13_backward_reference_inputs(inputs, mesh)
+
+    for field in ("x", "dz13", "w_gate_up"):
+        reference_value = getattr(reference, field)
+        assert reference_value.sharding == bench.NamedSharding(
+            mesh,
+            bench.P(*(None for _ in range(reference_value.ndim))),
+        )
+        np.testing.assert_array_equal(np.asarray(reference_value), np.asarray(getattr(inputs, field)))
+
+
 def test_source_push_semantic_plan_split_fused_mlp_metrics_preserve_schema():
     bench = _bench_module()
     expected = {
