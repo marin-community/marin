@@ -3,7 +3,7 @@
 
 import json
 import threading
-from collections.abc import Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -25,6 +25,7 @@ class OpenAIStubState:
     requests: list[OpenAIStubRequest] = field(default_factory=list)
     # Lets tests keep selected prompt requests in flight until the event is set.
     prompt_pauses: Mapping[str, threading.Event] = field(default_factory=dict)
+    completion_callbacks: Mapping[str, Callable[[], None]] = field(default_factory=dict)
     completion_top_logprobs: Mapping[str, Mapping[str, float]] | None = None
     completion_finish_reasons: Mapping[str, str] = field(default_factory=dict)
 
@@ -87,6 +88,9 @@ class _DeterministicOpenAIHandler(BaseHTTPRequestHandler):
         pause = self._stub_server.state.prompt_pauses.get(prompt)
         if pause is not None:
             pause.wait()
+        callback = self._stub_server.state.completion_callbacks.get(prompt)
+        if callback is not None:
+            callback()
         if self._stub_server.state.completion_top_logprobs is not None:
             self._handle_logprob_completion(prompt)
             return
@@ -194,11 +198,13 @@ def serve_deterministic_openai_stub(
     *,
     model: str = "gpt2",
     prompt_pauses: Mapping[str, threading.Event] | None = None,
+    completion_callbacks: Mapping[str, Callable[[], None]] | None = None,
     completion_top_logprobs: Mapping[str, Mapping[str, float]] | None = None,
     completion_finish_reasons: Mapping[str, str] | None = None,
 ) -> Iterator[DeterministicOpenAIStub]:
     state = OpenAIStubState(
         prompt_pauses={} if prompt_pauses is None else prompt_pauses,
+        completion_callbacks={} if completion_callbacks is None else completion_callbacks,
         completion_top_logprobs=completion_top_logprobs,
         completion_finish_reasons={} if completion_finish_reasons is None else completion_finish_reasons,
     )

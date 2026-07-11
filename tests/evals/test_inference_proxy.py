@@ -35,7 +35,7 @@ from marin.inference.vllm import (
     start_iris_brokered_vllm,
     start_local_brokered_vllm,
 )
-from marin.inference.worker import InferenceWorker, run_inference_worker
+from marin.inference.worker import ForwardingInferenceHandler, InferenceWorker, run_inference_worker
 from rigging.timing import ExponentialBackoff
 
 from tests.evals.openai_stub import (
@@ -60,7 +60,11 @@ def mock_cluster() -> Iterator[MockInferenceCluster]:
     broker = InferenceBroker(request_lease_timeout_seconds=BROKER_LEASE_TIMEOUT_SECONDS)
     with serve_deterministic_openai_stub() as upstream_stub:
         upstream = RunningModel(endpoint=OpenAIEndpoint(base_url=upstream_stub.base_url, model=upstream_stub.model))
-        worker = InferenceWorker(broker=broker, upstream=upstream, request_timeout_seconds=5)
+        worker = InferenceWorker(
+            broker=broker,
+            handler=ForwardingInferenceHandler(upstream),
+            request_timeout_seconds=5,
+        )
         with (
             _serve_inference_proxy(
                 broker=broker,
@@ -237,7 +241,7 @@ async def test_inference_worker_refills_slots_while_slow_request_is_in_flight() 
         upstream = RunningModel(endpoint=OpenAIEndpoint(base_url=upstream_stub.base_url, model=upstream_stub.model))
         worker = InferenceWorker(
             broker=broker,
-            upstream=upstream,
+            handler=ForwardingInferenceHandler(upstream),
             request_timeout_seconds=5,
         )
         with run_inference_worker(
@@ -262,7 +266,7 @@ async def test_inference_worker_returns_504_for_upstream_timeout() -> None:
         upstream = RunningModel(endpoint=OpenAIEndpoint(base_url=upstream_stub.base_url, model=upstream_stub.model))
         worker = InferenceWorker(
             broker=broker,
-            upstream=upstream,
+            handler=ForwardingInferenceHandler(upstream),
             request_timeout_seconds=0.05,
         )
         with run_inference_worker(
@@ -287,7 +291,7 @@ async def test_inference_worker_returns_502_for_upstream_connection_failure() ->
     upstream = RunningModel(endpoint=OpenAIEndpoint(base_url=f"http://127.0.0.1:{_closed_port()}/v1", model="gpt2"))
     worker = InferenceWorker(
         broker=broker,
-        upstream=upstream,
+        handler=ForwardingInferenceHandler(upstream),
         request_timeout_seconds=1,
     )
     with run_inference_worker(
@@ -309,7 +313,7 @@ async def test_inference_worker_preserves_status_for_non_json_upstream_response(
     with _serve_text_upstream(status_code=503, body="temporarily unavailable") as upstream:
         worker = InferenceWorker(
             broker=broker,
-            upstream=upstream,
+            handler=ForwardingInferenceHandler(upstream),
             request_timeout_seconds=1,
         )
         with run_inference_worker(
