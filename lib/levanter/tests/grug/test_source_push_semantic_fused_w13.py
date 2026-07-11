@@ -155,6 +155,7 @@ def test_fused_w13_raw_gather_groups_eight_rows_without_serial_row_loop():
     assert re.search(r"pl\.loop\(0,\s*config\.compute_m\)", source) is None
     assert TOKEN_TRANSFER_ROWS == 128
     assert "token_smem=mgpu.SMEM((TOKEN_TRANSFER_ROWS,), dtype=jnp.int32)" in source
+    assert "tuple(token_smem[row_start + row] for row in range(RAW_GATHER_ROWS))" in source
 
     assert RAW_GATHER_HIDDEN_LAYOUT.to_mgpu().registers_shape((CONFIG.send_k,)) == (1,)
     assert RAW_GATHER_ROW_LAYOUT.to_mgpu().registers_shape((RAW_GATHER_ROWS,)) == (1, 1)

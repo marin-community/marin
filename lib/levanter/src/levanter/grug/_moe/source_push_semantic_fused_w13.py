@@ -564,7 +564,7 @@ def _make_source_push_semantic_fused_w13_kernel(
                                 )
                                 row_valid = row_start + row_offsets < valid_rows
                                 tokens = mgpu.layout_cast(
-                                    token_smem[pl.ds(row_start, RAW_GATHER_ROWS)],
+                                    jnp.stack(tuple(token_smem[row_start + row] for row in range(RAW_GATHER_ROWS))),
                                     RAW_GATHER_ROW_LAYOUT,
                                 )
                                 safe_tokens = jnp.where(row_valid, tokens, 0)

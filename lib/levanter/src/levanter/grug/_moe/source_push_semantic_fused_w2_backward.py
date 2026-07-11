@@ -842,9 +842,12 @@ def _make_source_push_semantic_fused_w2_backward_kernel(
                                             ],
                                             dw2_acc_ref[...],
                                         )
-                                        dw2_acc_ref[...] = jnp.zeros(
-                                            (config.intermediate_block, config.hidden_block),
-                                            dtype=jnp.float32,
+                                        dw2_acc_ref[...] = mgpu.layout_cast(
+                                            jnp.zeros(
+                                                (config.intermediate_block, config.hidden_block),
+                                                dtype=jnp.float32,
+                                            ),
+                                            mgpu.Layout.WGMMA,
                                         )
 
                                     d_h = dh_acc_ref[...]
